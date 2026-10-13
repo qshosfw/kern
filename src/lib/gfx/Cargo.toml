@@ -1,0 +1,9 @@
+[package]
+name = "gfx"
+version = "0.1.0"
+edition = "2024"
+description = "Graphics library and font rendering for kern firmware"
+
+[dependencies]
+kernel = { path = "../../kern" }
+heapless = "0.8.0"

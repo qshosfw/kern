@@ -1,0 +1,74 @@
+#       _  __                 
+#      | |/ /___  _________   
+#      |   // _ \/ ___/ __ \  
+#     /   |/  __/ /  / / / /  
+#    /_/|_|\___/_/  /_/ /_/   
+#   kern microkernel configuration
+
+[project]
+name = "kern"
+version = "0.1.0"
+authors = ["kern-team"]
+edition_string = "Kern OS"
+chip = "PY32F071xB"
+flash_budget = 120832   # 118 KB (safe margin below 128KB)
+ram_budget = 16384      # 16 KB SRAM
+
+[target]
+device = "UV-K1"        # Options: "UV-K1", "UV-K5v3", "Custom"
+cpu_clock = 48          # Options: 48, 72 (MHz)
+nav_layout = "k1"       # Options: "k1", "k5"
+
+# =============================================================================
+# ⚙️  Granular Feature Gates
+# =============================================================================
+# Set any feature to false to completely eliminate its code and RAM footprint.
+
+[features.hardware]
+radio = true            # 📡 BK4819 RF transceiver driver and radio services
+fm_radio = true         # 📻 BK1080 broadcast FM receiver (64-108 MHz)
+audio = true            # 🔊 Hardware audio amplifier and melody engine
+uart = true             # 🔌 USART serial debug console and telemetry
+usb = true             # 💻 Native USB 2.0 Full-Speed core controller
+usb_cdc = true         # 🔌 USB CDC ACM Virtual COM Port (Serial console)
+
+# ── USB Mass Storage (MSC) & Virtual FAT: DISABLED BY DEFAULT ────────────────
+# Architectural Rationale:
+# 1. Flash & RAM Footprint: MSC + FAT emulation costs ~5 KB Flash and 512-1024B
+#    SRAM sector buffers (~6% of total 16KB MCU SRAM).
+# 2. Host Cache Desynchronization: Windows/macOS/Linux cache FAT tables in host RAM;
+#    internal flash writes by radio firmware cause silent desync and data corruption.
+# 3. OS Metadata Junk: Host OSes write .DS_Store, System Volume Information, and
+#    hidden files that waste raw NOR flash space and inodes.
+# 4. Write Amplification: Repeated FAT cluster and directory updates wear raw flash.
+# 5. Unified CDC Strategy: Retained in framework for modularity, but filesystem
+#    access is standardly integrated into our lightweight framing CDC protocol.
+usb_msc = false         # 💾 USB Mass Storage Class (Disabled - prefer CDC protocol)
+usb_msc_fat = false     # 📁 Virtual FAT16 filesystem (Disabled - prefer CDC protocol)
+dma = true              # ⚡ Direct Memory Access controller support
+hw_crc = true           # 🛡️ Hardware CRC32 calculation unit (zero-CPU)
+rtc = true              # ⏰ Hardware Real-Time Clock, calendar & backup registers
+internal_flash = true   # 💾 Internal MCU flash page erase & programming
+
+[features.storage_security]
+filesystem = true       # 📂 KernFS flash virtual filesystem
+secure_vfs = true       # 🔒 ChaCha20-Poly1305 encrypted storage
+passcode = true         # 🔑 Security enclave boot PIN lock & KDF stretching
+
+[features.audio_signaling]
+boot_jingle = true      # 🎵 Polyphonic boot jingles & melody previews
+extra_rogers = true     # 📢 Extended roger beep collection (Apollo 11, etc.)
+mdc1200 = true          # 📟 MDC-1200 digital burst ANI signaling
+cw_keyer = true         # 📻 CW Morse code keyer support
+
+[features.ui_customization]
+boot_assets = true      # 🎨 Embedded ROM splash screens (Quansheng, Mini-Kong)
+inverted_lcd = true     # 🌓 ST7565 hardware display inversion support
+flashlight = true       # 🔦 Hardware flashlight LED control
+panic_gui = true        # 🚨 On-screen recovery GUI and fault register display
+
+[features.diagnostics]
+flight_recorder = true  # 📊 Circular crash telemetry and reboot logging
+settings_calib = true   # 🎛️ Radio frequency and battery calibration submenu
+settings_debug = true   # 🛠️ Deep hardware register and memory debug submenu
+overclock_72mhz = true  # ⚡ Dynamic 72 MHz CPU overclocking menu option

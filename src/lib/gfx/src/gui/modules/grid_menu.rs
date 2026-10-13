@@ -1,0 +1,321 @@
+//! Grid Menu View Module optimized for 1.7:1 tall pixels on 128x64 display.
+//! Features 2D wrap navigation, key hold acceleration, and zero allocation rendering.
+
+use crate::fonts::tomthumb::FONT;
+use crate::gui::view::View;
+use crate::text;
+use crate::{Canvas, Color};
+use kernel::event::{Event, KeyCode, KeyState};
+
+/// Abstract trait for any item displayed in the grid menu.
+pub trait GridItem {
+    fn title(&self) -> &'static str;
+    fn icon(&self) -> &'static [u8; 32];
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GridMenuItem {
+    pub title: &'static str,
+    pub icon_bmp: &'static [u8; 32],
+}
+
+impl GridItem for GridMenuItem {
+    #[inline(always)]
+    fn title(&self) -> &'static str {
+        self.title
+    }
+    #[inline(always)]
+    fn icon(&self) -> &'static [u8; 32] {
+        self.icon_bmp
+    }
+}
+
+pub struct GridMenuModel<T: GridItem + 'static = GridMenuItem> {
+    pub items: &'static [T],
+    pub selected_idx: usize,
+    pub title: &'static str,
+    pub nav_layout: u8,
+    pub tick_counter: u8,
+    pub show_numbers: bool,
+    pub show_labels: bool,
+}
+
+impl<T: GridItem + 'static> GridMenuModel<T> {
+    pub const fn new(items: &'static [T], title: &'static str) -> Self {
+        Self {
+            items,
+            selected_idx: 0,
+            title,
+            nav_layout: 0,
+            tick_counter: 0,
+            show_numbers: true,
+            show_labels: true,
+        }
+    }
+
+    pub fn selected_item(&self) -> Option<&T> {
+        if self.selected_idx < self.items.len() {
+            Some(&self.items[self.selected_idx])
+        } else {
+            None
+        }
+    }
+}
+
+pub struct GridMenuView {
+    pub repeater: crate::gui::repeater::KeyRepeater,
+}
+
+impl GridMenuView {
+    pub const fn new() -> Self {
+        Self {
+            repeater: crate::gui::repeater::KeyRepeater::new(6, 2),
+        }
+    }
+
+    fn navigate_left<T: GridItem>(model: &mut GridMenuModel<T>) {
+        let len = model.items.len();
+        if len == 0 {
+            return;
+        }
+        if model.selected_idx > 0 {
+            model.selected_idx -= 1;
+        } else {
+            model.selected_idx = len - 1;
+        }
+    }
+
+    fn navigate_right<T: GridItem>(model: &mut GridMenuModel<T>) {
+        let len = model.items.len();
+        if len == 0 {
+            return;
+        }
+        model.selected_idx = (model.selected_idx + 1) % len;
+    }
+
+    fn navigate_up<T: GridItem>(model: &mut GridMenuModel<T>) {
+        let len = model.items.len();
+        if len == 0 {
+            return;
+        }
+        if model.selected_idx >= 3 {
+            model.selected_idx -= 3;
+        } else {
+            // Wrap to bottom row
+            let target = model.selected_idx + 3;
+            if target < len {
+                model.selected_idx = target;
+            } else {
+                model.selected_idx = len - 1;
+            }
+        }
+    }
+
+    fn navigate_down<T: GridItem>(model: &mut GridMenuModel<T>) {
+        let len = model.items.len();
+        if len == 0 {
+            return;
+        }
+        if model.selected_idx + 3 < len {
+            model.selected_idx += 3;
+        } else {
+            // Wrap to top row
+            model.selected_idx = model.selected_idx % 3;
+        }
+    }
+
+    fn handle_nav_key<T: GridItem>(model: &mut GridMenuModel<T>, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Up => {
+                if model.nav_layout == 0 {
+                    Self::navigate_left(model);
+                } else {
+                    Self::navigate_right(model);
+                }
+                true
+            }
+            KeyCode::Down => {
+                if model.nav_layout == 0 {
+                    Self::navigate_right(model);
+                } else {
+                    Self::navigate_left(model);
+                }
+                true
+            }
+            KeyCode::Key2 => {
+                Self::navigate_up(model);
+                true
+            }
+            KeyCode::Key8 => {
+                Self::navigate_down(model);
+                true
+            }
+            KeyCode::Key4 | KeyCode::Key1 => {
+                Self::navigate_left(model);
+                true
+            }
+            KeyCode::Key6 | KeyCode::Key3 => {
+                Self::navigate_right(model);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_nav_key(code: KeyCode) -> bool {
+        matches!(
+            code,
+            KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Key2
+                | KeyCode::Key8
+                | KeyCode::Key4
+                | KeyCode::Key1
+                | KeyCode::Key6
+                | KeyCode::Key3
+        )
+    }
+
+    pub fn on_event<T: GridItem + 'static>(
+        &mut self,
+        model: &mut GridMenuModel<T>,
+        event: &Event,
+    ) -> bool {
+        <Self as View<GridMenuModel<T>>>::on_event(self, model, event)
+    }
+}
+
+impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
+    fn on_event(&mut self, model: &mut GridMenuModel<T>, event: &Event) -> bool {
+        if model.items.is_empty() {
+            return false;
+        }
+
+        if let Event::Tick = event {
+            model.tick_counter = model.tick_counter.wrapping_add(1);
+            return self
+                .repeater
+                .tick()
+                .map_or(false, |code| Self::handle_nav_key(model, code));
+        }
+
+        if let Event::Key { code, state } = event {
+            self.repeater.handle_key(*code, *state);
+            if *state == KeyState::Pressed {
+                return Self::handle_nav_key(model, *code);
+            } else if *state == KeyState::Released && Self::is_nav_key(*code) {
+                return true; // Consume release of navigation keys to prevent leaking into global shortcuts
+            }
+        }
+        false
+    }
+
+    fn render(&self, canvas: &mut Canvas, model: &GridMenuModel<T>) {
+        let total_items = model.items.len();
+        if total_items == 0 {
+            text::draw_str_align(
+                canvas,
+                64,
+                32,
+                "No Applications",
+                &FONT,
+                Color::Fill,
+                text::Align::Center,
+            );
+            return;
+        }
+
+        // 3x2 Grid (Tiles are 40x26 pixels, physically square on 1.7:1 tall pixels)
+        let items_per_page = 6;
+        let page = model.selected_idx / items_per_page;
+        let start_idx = page * items_per_page;
+        let end_idx = (start_idx + items_per_page).min(total_items);
+
+        let col_widths = [2u8, 44, 86]; // x coordinates for 3 columns (width 40px, margin 2px)
+        let row_heights = [8u8, 36]; // y coordinates for 2 rows (height 26px, margin 2px)
+
+        // Micro-motion animation state: gentle 1px hop at ~3-4 Hz
+        let anim_hop = if (model.tick_counter >> 3) & 1 == 1 {
+            1i16
+        } else {
+            0i16
+        };
+
+        for idx in start_idx..end_idx {
+            let page_rel = idx - start_idx;
+            let (col_idx, row_idx) = if page_rel >= 3 {
+                (page_rel - 3, 1)
+            } else {
+                (page_rel, 0)
+            };
+            let tx = col_widths[col_idx];
+            let ty = row_heights[row_idx];
+            let is_selected = idx == model.selected_idx;
+            let item = &model.items[idx];
+
+            let fg_color = if is_selected {
+                canvas.fill_rect(tx, ty, 40, 26, Color::Fill);
+                canvas.draw_pixel(tx, ty, Color::Clear);
+                canvas.draw_pixel(tx + 39, ty, Color::Clear);
+                canvas.draw_pixel(tx, ty + 25, Color::Clear);
+                canvas.draw_pixel(tx + 39, ty + 25, Color::Clear);
+                Color::Clear
+            } else {
+                Color::Fill
+            };
+
+            // Minimalist 1-touch numeric keypad index in top-left
+            if model.show_numbers && page_rel < 9 {
+                let badge_char = (b'1' + page_rel as u8) as char;
+                text::draw_char(
+                    canvas,
+                    (tx + 2) as i16,
+                    (ty + 6) as i16,
+                    badge_char,
+                    &FONT,
+                    fg_color,
+                );
+            }
+
+            // Icon position: Centered vertically if labels hidden (ty+5), else at ty+2 with micro-hop
+            let base_icon_y = if model.show_labels { ty + 2 } else { ty + 5 };
+            let icon_y = if is_selected {
+                base_icon_y as i16 - anim_hop
+            } else {
+                base_icon_y as i16
+            };
+
+            crate::icons::draw_icon_16(canvas, (tx + 12) as i16, icon_y, item.icon(), fg_color);
+
+            // Centered title below icon (if enabled)
+            if model.show_labels {
+                text::draw_str_align(
+                    canvas,
+                    (tx + 20) as i16,
+                    (ty + 24) as i16,
+                    item.title(),
+                    &FONT,
+                    fg_color,
+                    text::Align::Center,
+                );
+            }
+        }
+
+        // Page Indicator Dots (only shown when multiple pages exist)
+        let total_pages = (total_items + items_per_page - 1) / items_per_page;
+        if total_pages > 1 {
+            let dot_spacing = 6u8;
+            let dots_total_width = (total_pages as u8 - 1) * dot_spacing;
+            let dots_start_x = 64u8 - (dots_total_width >> 1);
+            for p in 0..total_pages {
+                let dx = dots_start_x + (p as u8 * dot_spacing);
+                if p == page {
+                    canvas.fill_rect(dx, 62, 3, 2, Color::Fill);
+                } else {
+                    canvas.draw_pixel(dx + 1, 62, Color::Fill);
+                }
+            }
+        }
+    }
+}

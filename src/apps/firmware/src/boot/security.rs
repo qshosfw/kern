@@ -1,0 +1,279 @@
+//! Boot Security, Passcode Verification & Safe-Mode Lockout Routines.
+
+use crate::config::MasterConfig;
+use crate::security::PasscodeState;
+use crate::services::SystemStorage;
+use crate::services::radio::RadioMelodyExt;
+use drivers::backlight::BacklightController;
+use drivers::bk4829::Bk4829;
+use drivers::st7565::St7565;
+
+pub fn draw_locked_screen(canvas: &mut gfx::Canvas, sub_msg: &str) {
+    canvas.clear();
+    gfx::widgets::draw_negated_header(canvas, 0, "Locked");
+    gfx::text::draw_str_align(
+        canvas,
+        64,
+        26,
+        "Too Many Attempts",
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+        gfx::text::Align::Center,
+    );
+    gfx::text::draw_str_align(
+        canvas,
+        64,
+        40,
+        sub_msg,
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+        gfx::text::Align::Center,
+    );
+}
+
+pub fn handle_lockout_penalty(
+    lcd: &mut St7565,
+    radio: &mut Bk4829<drivers::bk4829::Disabled>,
+    storage: &mut SystemStorage,
+    failed: u8,
+    max_tries: u8,
+) {
+    if failed < max_tries {
+        return;
+    }
+    lcd.turn_on();
+    let wait_secs = ((failed - max_tries + 1) as u32) * 30;
+    radio.set_status_led(bsp::StatusLed::Red);
+    let canvas = crate::system_canvas();
+    for remaining in (1..=wait_secs).rev() {
+        let mut sec_buf = [0u8; 32];
+        let s = gfx::text::format_num_msg(&mut sec_buf, "Try again in ", remaining, "s");
+        draw_locked_screen(canvas, s);
+        lcd.blit(canvas);
+        for _ in 0..100 {
+            py32_hal::wdt::Watchdog::feed();
+            py32_hal::delay::delay_ms(10);
+        }
+    }
+    crate::security::passcode::reset_lockout_penalty(storage);
+    radio.set_status_led(bsp::StatusLed::Off);
+}
+
+pub fn flash_error_and_pause(radio: &mut Bk4829<drivers::bk4829::Disabled>) {
+    radio.play_beep(crate::services::melody::BeepType::Warning);
+    for _ in 0..3 {
+        radio.set_status_led(bsp::StatusLed::Red);
+        py32_hal::delay::delay_ms(100);
+        radio.set_status_led(bsp::StatusLed::Off);
+        py32_hal::delay::delay_ms(100);
+    }
+    py32_hal::delay::delay_ms(600);
+}
+
+pub fn render_verify_modal(lcd: &mut St7565, pct: u8) {
+    let canvas = crate::system_canvas();
+    gfx::widgets::draw_modal_progress(canvas, "", "Verifying...", pct);
+    lcd.blit(canvas);
+}
+
+#[inline(always)]
+pub fn handle_unlock_success(
+    backlight: &mut BacklightController,
+    radio: &mut Bk4829<drivers::bk4829::Disabled>,
+    master_cfg: &MasterConfig,
+    stealth: bool,
+) {
+    if !stealth {
+        radio.set_status_led(bsp::StatusLed::Green);
+    }
+    if stealth {
+        master_cfg.display.apply_to_backlight(backlight);
+        backlight.wake();
+    }
+    if !stealth && master_cfg.audio.key_beep != 0 {
+        radio.play_beep(crate::services::melody::BeepType::Tone);
+    }
+    radio.set_status_led(bsp::StatusLed::Off);
+}
+
+pub fn handle_unlock_failure(
+    lcd: &mut St7565,
+    radio: &mut Bk4829<drivers::bk4829::Disabled>,
+    storage: &mut SystemStorage,
+    text_view: &gfx::gui::modules::text_input::TextInputView,
+    text_model: &gfx::gui::modules::text_input::TextInputModel,
+    stealth: bool,
+) {
+    let pcfg = crate::security::passcode::get_passcode_config(storage);
+    let canvas = crate::system_canvas();
+    if pcfg.failed_attempts >= pcfg.max_tries {
+        draw_locked_screen(canvas, "Restarting...");
+        lcd.blit(canvas);
+        radio.set_status_led(bsp::StatusLed::Red);
+        radio.play_beep(crate::services::melody::BeepType::Warning);
+        py32_hal::delay::delay_ms(1500);
+        cortex_m::peripheral::SCB::sys_reset();
+    }
+
+    let mut msg_buf = [0u8; 32];
+    let msg = if stealth {
+        "Wrong Passcode"
+    } else {
+        crate::security::passcode::format_wrong_passcode_msg(
+            pcfg.failed_attempts,
+            pcfg.max_tries,
+            &mut msg_buf,
+        )
+    };
+    use gfx::gui::view::View;
+    text_view.render(canvas, text_model);
+    gfx::widgets::draw_modal_popup(canvas, None, msg);
+    lcd.blit(canvas);
+
+    flash_error_and_pause(radio);
+}
+
+#[inline(never)]
+pub fn run_boot_unlock_prompt(
+    hw: &mut crate::boot::BootHardware,
+    passcode_state: &mut PasscodeState,
+    master_cfg: &MasterConfig,
+    adc: &py32_hal::adc::Adc,
+) {
+    use gfx::gui::modules::text_input::{TextInputModel, TextInputView};
+    use gfx::gui::view::View;
+
+    let cfg = crate::security::passcode::get_passcode_config(hw.vfs);
+    if !cfg.is_set {
+        return;
+    }
+
+    let stealth = cfg.stealth;
+
+    // Ensure high performance 72 MHz clock is active for unlock prompt, stealth mode and KDF
+    py32_hal::rcc::set_sysclk_72mhz();
+
+    // 1. Initial Lockout check if device rebooted while locked out
+    handle_lockout_penalty(hw.lcd, hw.radio, hw.vfs, cfg.failed_attempts, cfg.max_tries);
+
+    hw.lcd.turn_on();
+
+    if stealth {
+        hw.backlight
+            .set_mode(drivers::backlight::BacklightMode::Off);
+        hw.backlight.turn_off();
+    } else {
+        master_cfg.display.apply_to_backlight(hw.backlight);
+        hw.backlight.wake();
+    }
+
+    let input_len = if cfg.expose_len && cfg.passcode_len > 0 {
+        cfg.passcode_len as usize
+    } else {
+        16
+    };
+    let mut text_model = TextInputModel::new(input_len);
+    text_model.title = "Enter Passcode";
+    text_model.is_passcode = true;
+    text_model.expose_len = cfg.expose_len;
+    text_model.digits_only = cfg.digits_only;
+    text_model.charset = if cfg.digits_only {
+        gfx::gui::modules::text_input::Charset::Numbers
+    } else {
+        gfx::gui::modules::text_input::Charset::Upper
+    };
+    text_model.is_k1 = master_cfg.is_k1();
+    text_model.show_header = true;
+    let mut text_view = TextInputView::new();
+
+    loop {
+        py32_hal::wdt::Watchdog::feed();
+
+        #[cfg(feature = "usb")]
+        let _ = hw.usb.poll();
+
+        // 1. Scan keyboard (10ms polling)
+        if let Some((code, state)) = hw.key_scanner.scan() {
+            let ev = kernel::event::Event::Key { code, state };
+            let _ = text_view.on_event(&mut text_model, &ev);
+            if !stealth && state == kernel::event::KeyState::Pressed {
+                hw.backlight.wake();
+                if master_cfg.audio.key_beep != 0 {
+                    hw.radio
+                        .play_beep(crate::services::melody::BeepType::from_u8(
+                            master_cfg.audio.key_beep,
+                        ));
+                }
+            }
+        }
+        let _ = text_view.on_event(&mut text_model, &kernel::event::Event::Tick);
+        if !stealth {
+            hw.backlight.tick(10);
+        }
+
+        if (text_model.ticks & 63) == 0 {
+            crate::services::telemetry::sample_battery_and_system(adc, false);
+        }
+
+        // 2. Render input screen with inverted right status bar items on header
+        let canvas = crate::system_canvas();
+        text_view.render(canvas, &text_model);
+        #[cfg(feature = "usb")]
+        let is_usb = hw.usb.is_connected();
+        #[cfg(not(feature = "usb"))]
+        let is_usb = false;
+        crate::services::draw_boot_status_right(canvas, master_cfg.battery.battery_format, is_usb);
+        hw.lcd.blit(canvas);
+
+        // 3. Process submission
+        if text_model.is_done && !text_model.buffer.is_empty() {
+            fn on_verify_progress(ctx: *mut (), pct: u8) {
+                let lcd = unsafe { &mut *(ctx as *mut drivers::st7565::St7565) };
+                py32_hal::wdt::Watchdog::feed();
+                render_verify_modal(lcd, pct);
+            }
+            let hook =
+                crate::security::ProgressHook::new(hw.lcd as *mut _ as *mut (), on_verify_progress);
+            let res = crate::security::passcode::verify_passcode(
+                hw.vfs,
+                text_model.buffer.as_bytes(),
+                passcode_state,
+                Some(hook),
+            );
+
+            match res {
+                Ok(true) => {
+                    handle_unlock_success(hw.backlight, hw.radio, master_cfg, stealth);
+                    break;
+                }
+                Ok(false) => {
+                    handle_unlock_failure(
+                        hw.lcd,
+                        hw.radio,
+                        hw.vfs,
+                        &text_view,
+                        &text_model,
+                        stealth,
+                    );
+                }
+                Err(crate::security::passcode::PasscodeError::LockedOut) => {
+                    hw.radio
+                        .play_beep(crate::services::melody::BeepType::Warning);
+                    let pcfg = crate::security::passcode::get_passcode_config(hw.vfs);
+                    handle_lockout_penalty(
+                        hw.lcd,
+                        hw.radio,
+                        hw.vfs,
+                        pcfg.failed_attempts,
+                        pcfg.max_tries,
+                    );
+                }
+                _ => {}
+            }
+            text_model.buffer.clear();
+            text_model.is_done = false;
+        }
+
+        py32_hal::delay::delay_ms(10);
+    }
+}

@@ -1,0 +1,94 @@
+[package]
+name = "firmware"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+py32-pac = { path = "../../platform/pac", package = "py32f071-pac" }
+py32-hal = { path = "../../platform/hal" }
+bsp = { path = "../../platform/bsp" }
+drivers = { path = "../../driver" }
+kernel = { path = "../../kern" }
+gfx = { path = "../../lib/gfx" }
+cortex-m = { workspace = true }
+cortex-m-rt = { workspace = true }
+heapless = { workspace = true }
+kernfs = { path = "../../lib/kernfs" }
+crypto = { path = "../../lib/crypto" }
+utils = { path = "../../lib/utils" }
+
+[features]
+default = [
+    "radio",
+    "fm_radio",
+    "audio",
+    "filesystem",
+    "secure_vfs",
+    "uart",
+    "usb",
+    "usb_cdc",
+    "dma",
+    "hw_crc",
+    "rtc",
+    "internal_flash",
+    "boot_jingle",
+    "flight_recorder",
+    "passcode",
+    "panic_gui",
+    "boot_assets",
+    "extra_rogers",
+    "mdc1200",
+    "cw_keyer",
+    "inverted_lcd",
+    "flashlight",
+    "settings_calib",
+    "settings_debug",
+    "overclock_72mhz",
+]
+
+# ⚙️ Granular Settings & Diagnostics
+settings_calib = []
+settings_debug = []
+overclock_72mhz = []
+
+# 📡 Hardware Peripheral & RF Subsystems
+radio = ["drivers/radio"]
+fm_radio = ["drivers/fm_radio"]
+audio = ["drivers/audio", "kernel/audio"]
+uart = ["drivers/uart", "kernel/uart"]
+usb = ["drivers/usb"]
+usb_cdc = ["usb", "drivers/usb_cdc"]
+# USB MSC & Virtual FAT are preserved in framework for modularity but left disabled:
+# Costs ~5KB Flash + 512B RAM buffers, risks host FAT cache desynchronization,
+# and causes OS metadata pollution. Filesystem is accessed directly via CDC serial protocol instead.
+usb_msc = ["usb", "drivers/usb_msc"]
+usb_msc_fat = ["usb_msc", "drivers/usb_msc_fat"]
+dma = []
+hw_crc = []
+rtc = []
+internal_flash = []
+
+# 💾 Storage & Cryptographic Security
+filesystem = ["drivers/filesystem", "kernel/filesystem"]
+secure_vfs = ["drivers/secure_vfs", "kernel/secure_vfs"]
+passcode = ["secure_vfs"]
+
+# 🎨 Customization, Sound & Asset Bundles
+boot_assets = []
+boot_jingle = []
+extra_rogers = []
+inverted_lcd = []
+flashlight = []
+
+# 📶 Signaling & Data Protocols
+mdc1200 = []
+cw_keyer = []
+
+# 🛡️ Diagnostics, Telemetry & Diagnostics
+flight_recorder = []
+panic_gui = []
+
+# 📦 Feature Bundles & Group Configurations
+full = ["default", "passcode", "panic_gui"]
+security = ["filesystem", "secure_vfs", "passcode"]
+lean = ["radio", "audio"]

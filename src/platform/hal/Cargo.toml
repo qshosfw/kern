@@ -1,0 +1,11 @@
+[package]
+name = "py32-hal"
+version = "0.1.0"
+edition = "2024"
+description = "Hardware Abstraction Layer for PY32F071 — thin, safe wrappers over PAC registers"
+
+[dependencies]
+pac = { path = "../pac", package = "py32f071-pac" }
+cortex-m = { workspace = true }
+embedded-hal = { workspace = true }
+portable-atomic = { workspace = true }
