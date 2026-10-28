@@ -29,11 +29,16 @@ impl LineCoding {
     }
 }
 
+pub const CDC_RX_BUF_SIZE: usize = 128;
+
 pub struct CdcEngine {
     line_coding: LineCoding,
     dtr: bool,
     rts: bool,
     tx_ready: bool,
+    rx_buf: [u8; CDC_RX_BUF_SIZE],
+    rx_head: usize,
+    rx_tail: usize,
 }
 
 impl CdcEngine {
@@ -43,6 +48,9 @@ impl CdcEngine {
             dtr: false,
             rts: false,
             tx_ready: true,
+            rx_buf: [0u8; CDC_RX_BUF_SIZE],
+            rx_head: 0,
+            rx_tail: 0,
         }
     }
 
@@ -50,6 +58,36 @@ impl CdcEngine {
         self.dtr = false;
         self.rts = false;
         self.tx_ready = true;
+        self.rx_head = 0;
+        self.rx_tail = 0;
+    }
+
+    pub fn push_rx(&mut self, data: &[u8]) {
+        for &b in data {
+            let next_head = (self.rx_head + 1) % CDC_RX_BUF_SIZE;
+            if next_head != self.rx_tail {
+                self.rx_buf[self.rx_head] = b;
+                self.rx_head = next_head;
+            }
+        }
+    }
+
+    pub fn pop_rx(&mut self, buf: &mut [u8]) -> usize {
+        let mut count = 0;
+        while self.rx_head != self.rx_tail && count < buf.len() {
+            buf[count] = self.rx_buf[self.rx_tail];
+            self.rx_tail = (self.rx_tail + 1) % CDC_RX_BUF_SIZE;
+            count += 1;
+        }
+        count
+    }
+
+    pub fn rx_available(&self) -> usize {
+        if self.rx_head >= self.rx_tail {
+            self.rx_head - self.rx_tail
+        } else {
+            CDC_RX_BUF_SIZE - (self.rx_tail - self.rx_head)
+        }
     }
 
     #[inline(always)]

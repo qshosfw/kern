@@ -1,0 +1,9 @@
+[package]
+name = "py32f071-pac"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal hand-rolled PAC for PY32F071xB (ARM Cortex-M0+)"
+
+[dependencies]
+cortex-m = { workspace = true }
+PY32f071xx-pac = { workspace = true }

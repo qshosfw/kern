@@ -9,7 +9,9 @@
 pub const UID_BASE_ADDR: usize = 0x1FFF_3000;
 pub const FLASH_SIZE_REG: usize = 0x1FFF_31FC;
 pub const VREFINT_CAL_ADDR: usize = 0x1FFF_0F04;
-pub const TSENSOR_CAL_ADDR: usize = 0x1FFF_0F14;
+pub const TSENSOR_CAL1_ADDR: usize = 0x1FFF_3228;
+pub const TSENSOR_CAL2_ADDR: usize = 0x1FFF_3230;
+pub const TSENSOR_CAL_ADDR: usize = TSENSOR_CAL1_ADDR;
 
 pub struct SystemInfo;
 

@@ -187,19 +187,84 @@ pub enum StatusLed {
     Off,
     Red,
     Green,
-    Yellow,
+    Orange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedPattern {
+    Off,
+    Solid(StatusLed),
+    BlinkFast(StatusLed),
+    BlinkMedium(StatusLed),
+    BlinkSlow(StatusLed),
+    Pulse(StatusLed),
+    Alternate(StatusLed, StatusLed),
+}
+
+impl LedPattern {
+    #[inline(always)]
+    pub fn evaluate(&self, now_ms: u32) -> StatusLed {
+        match self {
+            Self::Off => StatusLed::Off,
+            Self::Solid(c) => *c,
+            Self::BlinkFast(c) => {
+                if (now_ms / 100) & 1 == 0 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::BlinkMedium(c) => {
+                if (now_ms / 250) & 1 == 0 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::BlinkSlow(c) => {
+                if (now_ms / 500) & 1 == 0 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::Pulse(c) => {
+                if (now_ms % 1000) < 50 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::Alternate(c1, c2) => {
+                if (now_ms / 250) & 1 == 0 {
+                    *c1
+                } else {
+                    *c2
+                }
+            }
+        }
+    }
 }
 
 impl Board {
     pub fn set_status_led(bus: &mut RadioBus, led: StatusLed) {
         use crate::hw::Bk4829Bus;
-        let reg0d = match led {
-            StatusLed::Off => 0x0000,
-            StatusLed::Red => 1 << 5,
-            StatusLed::Green => 1 << 6,
-            StatusLed::Yellow => (1 << 5) | (1 << 6),
-        };
-        bus.write_reg(0x0D, reg0d);
+        board_pins::BK_CSN.configure_output(py32_pac::gpio::SPEED_LOW);
+        board_pins::BK_SCL.configure_output(py32_pac::gpio::SPEED_MEDIUM);
+        board_pins::BK_SDA.configure_output(py32_pac::gpio::SPEED_LOW);
+
+        let mut reg33 = bus.read_reg(0x33);
+        if reg33 == 0xFFFF || (reg33 & 0x9000) != 0x9000 {
+            reg33 = 0x9000;
+        }
+        reg33 &= !0x0003;
+        match led {
+            StatusLed::Off => {}
+            StatusLed::Red => reg33 |= 0x0001,
+            StatusLed::Green => reg33 |= 0x0002,
+            StatusLed::Orange => reg33 |= 0x0003,
+        }
+        bus.write_reg(0x33, reg33);
     }
 
     pub fn wdt_feed() {
@@ -214,6 +279,10 @@ impl Board {
         hal::uart::try_read_byte()
     }
 
+    pub fn uart_set_baud(baud: u32) {
+        hal::uart::set_baud(baud);
+    }
+
     pub fn init() -> Self {
         // Disable unused timers & DAC to prevent dynamic clock power leakage
         unsafe {
@@ -223,8 +292,9 @@ impl Board {
                 .write_volatile(val & !(py32_pac::rcc::APB1ENR_TIM3 | py32_pac::rcc::APB1ENR_TIM6));
         }
 
-        // 1. Clock tree & GPIO clock gating
+        // 1. Clock tree & GPIO clock gating (explicitly establish 48 MHz PLL & 1WS flash latency)
         hal::rcc::init();
+        hal::rcc::set_sysclk_48mhz();
 
         // 2. Board GPIO initialization
         board_pins::init();
@@ -255,6 +325,12 @@ impl Board {
             },
         }
     }
+}
+
+/// Standalone zero-cost helper to control board status LEDs via BK4819/BK4829 bus.
+pub fn set_status_led(led: StatusLed) {
+    let mut bus = RadioBus;
+    Board::set_status_led(&mut bus, led);
 }
 
 pub struct BspAudioPa;

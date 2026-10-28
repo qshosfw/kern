@@ -1,6 +1,5 @@
-//! Text rendering engine for GfxFont bitmaps.
-
 use crate::{Canvas, Color, GfxFont};
+pub use utils::format::*;
 
 /// Draw a single ASCII character using the provided GfxFont.
 pub fn draw_char(
@@ -144,28 +143,16 @@ pub fn draw_str_align(
     draw_str(canvas, start_x, y, text, font, color);
 }
 
-/// Stack-allocated zero-copy u32 formatter for `no_std` text rendering.
-#[inline(always)]
-pub fn format_u32(val: u32, buf: &mut [u8]) -> &str {
-    format_int_fixed(val as i32, 0, "", "", buf)
-}
-
 /// Stack-allocated zero-copy u8 formatter for `no_std` text rendering.
 #[inline(always)]
-pub fn format_u8(val: u8, buf: &mut [u8]) -> &str {
-    format_int_fixed(val as i32, 0, "", "", buf)
-}
-
-/// Stack-allocated zero-copy i32 formatter for `no_std` text rendering.
-#[inline(always)]
-pub fn format_i32(val: i32, buf: &mut [u8]) -> &str {
-    format_int_fixed(val, 0, "", "", buf)
+pub fn format_u8<'a>(val: u8, buf: &'a mut [u8]) -> &'a str {
+    format_u32(val as u32, buf)
 }
 
 /// Stack-allocated zero-copy i32 formatter for range values.
 /// When `min < 0` and `val > 0`, prepends a `+` symbol for clear signed indication.
 #[inline(always)]
-pub fn format_i32_range(val: i32, min: i32, buf: &mut [u8]) -> &str {
+pub fn format_i32_range<'a>(val: i32, min: i32, buf: &'a mut [u8]) -> &'a str {
     let pfx = if min < 0 && val > 0 { "+" } else { "" };
     format_int_fixed(val, 0, pfx, "", buf)
 }
@@ -230,77 +217,6 @@ pub fn from_ascii_bytes(bytes: &[u8]) -> Option<&str> {
     }
 }
 
-/// Standard uppercase hexadecimal characters (0-9, A-F)
-pub const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-
-/// Format u32 as 8-character uppercase hexadecimal string into `buf`.
-pub fn format_hex32(val: u32, buf: &mut [u8; 8]) -> &str {
-    for i in 0..8 {
-        buf[7 - i] = HEX_CHARS[((val >> (i * 4)) & 0x0F) as usize];
-    }
-    unsafe { core::str::from_utf8_unchecked(buf) }
-}
-
-/// Unified zero-alloc integer formatter supporting fixed-point decimals, prefix, and suffix.
-pub fn format_int_fixed<'a>(
-    val: i32,
-    decimals: u8,
-    prefix: &str,
-    suffix: &str,
-    buf: &'a mut [u8],
-) -> &'a str {
-    let mut i = buf.len();
-
-    let s_bytes = suffix.as_bytes();
-    if s_bytes.len() <= i {
-        i -= s_bytes.len();
-        buf[i..i + s_bytes.len()].copy_from_slice(s_bytes);
-    }
-
-    let is_negative = val < 0;
-    let mut n = val.unsigned_abs();
-    let mut digit_count = 0u8;
-
-    loop {
-        if decimals > 0 && digit_count == decimals {
-            if i > 0 {
-                i -= 1;
-                buf[i] = b'.';
-            }
-        }
-        let digit = (n % 10) as u8;
-        n /= 10;
-        if i > 0 {
-            i -= 1;
-            buf[i] = b'0' + digit;
-        }
-        digit_count += 1;
-        if n == 0 && digit_count >= decimals {
-            if digit_count == decimals && i > 0 {
-                i -= 1;
-                buf[i] = b'.';
-                if i > 0 {
-                    i -= 1;
-                    buf[i] = b'0';
-                }
-            }
-            break;
-        }
-    }
-
-    if is_negative && i > 0 {
-        i -= 1;
-        buf[i] = b'-';
-    }
-    let p_bytes = prefix.as_bytes();
-    if p_bytes.len() <= i {
-        i -= p_bytes.len();
-        buf[i..i + p_bytes.len()].copy_from_slice(p_bytes);
-    }
-
-    unsafe { core::str::from_utf8_unchecked(&buf[i..]) }
-}
-
 /// Format a message with prefix, number, and suffix without heap or formatting machinery.
 pub fn format_num_msg<'a>(buf: &'a mut [u8], prefix: &str, val: u32, suffix: &str) -> &'a str {
     format_int_fixed(val as i32, 0, prefix, suffix, buf)
@@ -339,71 +255,71 @@ pub fn format_range_val<'a>(val: i32, min: i32, unit: &str, buf: &'a mut [u8]) -
     format_int_fixed(val, 0, pfx, unit, buf)
 }
 
-/// Lightweight ASCII case-insensitive string equality without core unicode tables
-pub fn ascii_eq_ignore_case(a: &str, b: &str) -> bool {
-    let (a_bytes, b_bytes) = (a.as_bytes(), b.as_bytes());
-    if a_bytes.len() != b_bytes.len() {
-        return false;
-    }
-    for i in 0..a_bytes.len() {
-        let ba = if (b'A'..=b'Z').contains(&a_bytes[i]) {
-            a_bytes[i] + 32
-        } else {
-            a_bytes[i]
-        };
-        let bb = if (b'A'..=b'Z').contains(&b_bytes[i]) {
-            b_bytes[i] + 32
-        } else {
-            b_bytes[i]
-        };
-        if ba != bb {
-            return false;
-        }
-    }
-    true
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Strip trailing slashes from path without core pattern iterator
-pub fn trim_trailing_slashes(s: &str) -> &str {
-    let bytes = s.as_bytes();
-    let mut end = bytes.len();
-    while end > 0 && bytes[end - 1] == b'/' {
-        end -= 1;
-    }
-    &s[..end]
-}
+    #[test]
+    fn test_format_u32_and_i32() {
+        let mut buf = [0u8; 16];
+        assert_eq!(format_u32(0, &mut buf), "0");
+        assert_eq!(format_u32(145000, &mut buf), "145000");
+        assert_eq!(format_u32(4294967295, &mut buf), "4294967295");
 
-/// Format 6-byte MAC address into "XX:XX:XX:XX:XX:XX" uppercase hex string without formatting tables.
-pub fn format_mac_address<'a>(mac: &[u8; 6], out: &'a mut [u8; 17]) -> &'a str {
-    let mut idx = 0;
-    for (i, &b) in mac.iter().enumerate() {
-        out[idx] = HEX_CHARS[(b >> 4) as usize];
-        out[idx + 1] = HEX_CHARS[(b & 0x0F) as usize];
-        idx += 2;
-        if i < 5 {
-            out[idx] = b':';
-            idx += 1;
-        }
-    }
-    unsafe { core::str::from_utf8_unchecked(out) }
-}
+        assert_eq!(format_i32(0, &mut buf), "0");
+        assert_eq!(format_i32(-42, &mut buf), "-42");
+        assert_eq!(format_i32(1234, &mut buf), "1234");
 
-/// Format uptime seconds into "HH:MM:SS" (hours clamped at 99) without core formatting tables.
-pub fn format_uptime_hms<'a>(secs: u32, out: &'a mut [u8; 8]) -> &'a str {
-    let s = (secs % 60) as u8;
-    let mins = secs / 60;
-    let m = (mins % 60) as u8;
-    let h = (mins / 60).min(99) as u8;
-    let d0 = h / 10;
-    out[0] = b'0' + d0;
-    out[1] = b'0' + (h - d0 * 10);
-    out[2] = b':';
-    let d1 = m / 10;
-    out[3] = b'0' + d1;
-    out[4] = b'0' + (m - d1 * 10);
-    out[5] = b':';
-    let d2 = s / 10;
-    out[6] = b'0' + d2;
-    out[7] = b'0' + (s - d2 * 10);
-    unsafe { core::str::from_utf8_unchecked(out) }
+        assert_eq!(format_i32_range(5, -10, &mut buf), "+5");
+        assert_eq!(format_i32_range(0, -10, &mut buf), "0");
+        assert_eq!(format_i32_range(-5, -10, &mut buf), "-5");
+    }
+
+    #[test]
+    fn test_format_int_fixed_decimals() {
+        let mut buf = [0u8; 16];
+        assert_eq!(format_int_fixed(824, 2, "", "v", &mut buf), "8.24v");
+        assert_eq!(format_int_fixed(50, 1, "", " MHz", &mut buf), "5.0 MHz");
+        assert_eq!(format_int_fixed(-125, 2, "dB ", "m", &mut buf), "dB -1.25m");
+    }
+
+    #[test]
+    fn test_format_hex() {
+        let mut b8 = [0u8; 8];
+        assert_eq!(format_hex32(0x1234ABCD, &mut b8), "1234ABCD");
+        assert_eq!(format_hex32(0, &mut b8), "00000000");
+
+        let mut b4 = [0u8; 4];
+        assert_eq!(format_hex16(0x00FF, &mut b4), "00FF");
+        assert_eq!(format_hex16(0xBEEF, &mut b4), "BEEF");
+    }
+
+    #[test]
+    fn test_format_mac_and_uptime() {
+        let mac = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC];
+        let mut mac_buf = [0u8; 17];
+        assert_eq!(format_mac_address(&mac, &mut mac_buf), "12:34:56:78:9A:BC");
+
+        let mut up_buf = [0u8; 8];
+        assert_eq!(format_uptime_hms(0, &mut up_buf), "00:00:00");
+        assert_eq!(format_uptime_hms(3661, &mut up_buf), "01:01:01");
+        assert_eq!(format_uptime_hms(359999, &mut up_buf), "99:59:59");
+    }
+
+    #[test]
+    fn test_ascii_eq_ignore_case() {
+        assert!(ascii_eq_ignore_case("RADIO", "radio"));
+        assert!(ascii_eq_ignore_case("Vfo_A.vfo", "vfo_a.vfo"));
+        assert!(!ascii_eq_ignore_case("abc", "abd"));
+        assert!(!ascii_eq_ignore_case("abc", "abcd"));
+        assert!(!ascii_eq_ignore_case("abcd", "abc"));
+    }
+
+    #[test]
+    fn test_trim_trailing_slashes() {
+        assert_eq!(trim_trailing_slashes("/apps///"), "/apps");
+        assert_eq!(trim_trailing_slashes("/apps/"), "/apps");
+        assert_eq!(trim_trailing_slashes("test.krx"), "test.krx");
+        assert_eq!(trim_trailing_slashes("///"), "");
+    }
 }

@@ -1,0 +1,9 @@
+[app]
+id = "launcher"
+name = "Launcher"
+version = "1.0.0"
+execution = "static"
+entry = "LauncherApp"
+icon = "none"
+
+[capabilities]

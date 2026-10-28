@@ -2,6 +2,7 @@
 
 use bsp::Board;
 
+#[derive(Clone, Copy, Default)]
 pub struct HardwareUart;
 
 impl HardwareUart {
@@ -29,7 +30,7 @@ impl HardwareUart {
     }
 }
 
-impl kernel::service::UartService for HardwareUart {
+impl kernel::service::SerialPort for HardwareUart {
     fn write(&mut self, data: &[u8]) {
         py32_hal::uart::mark_activity();
         self.write(data);
@@ -43,3 +44,5 @@ impl kernel::service::UartService for HardwareUart {
         count
     }
 }
+
+impl kernel::service::UartService for HardwareUart {}

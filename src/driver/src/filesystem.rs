@@ -2,20 +2,19 @@
 //!
 //! Provides `StorageService` on top of pure Rust `#![no_std]` `kernfs`.
 //! Integrates transparent attributes (Read-Only, System, Hidden, Encrypted) via `FileAttributes`.
-//! Implements ChaCha20 AEAD stream cipher encryption for `PERM_ENCRYPTED` files.
+//! Implements Ascon-128 stream cipher encryption for `PERM_ENCRYPTED` files.
 
 pub use kernel::service::{
     ATTR_COMPRESSED, ATTR_ENCRYPTED, ATTR_HIDDEN, ATTR_READ_ONLY, ATTR_SYSTEM, ATTR_UNENCRYPTED,
-    DirEntryInfo, FileAttributes, PERM_ENCRYPTED, PERM_HIDDEN, PERM_READ_ONLY, PERM_SYSTEM,
-    StorageError,
+    DirEntryInfo, FileAttributes, StorageError,
 };
 use kernfs::{BlockDevice, FsError, KernFS};
 
-#[cfg(feature = "secure_vfs")]
-use crypto::chacha20poly1305::ChaCha20Poly1305;
+#[cfg(feature = "secure_fs")]
+use crypto::ascon::Ascon128;
 
 pub struct FileSystemDriver<'a, D: BlockDevice> {
-    fs: KernFS<'a, D>,
+    pub fs: KernFS<'a, D>,
     session_unlocked: bool,
 }
 
@@ -66,13 +65,13 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         }
     }
 
-    #[cfg(feature = "secure_vfs")]
-    fn derive_path_nonce(path: &str) -> [u8; 12] {
-        let mut nonce = [0u8; 12];
+    #[cfg(feature = "secure_fs")]
+    fn derive_path_nonce(path: &str) -> [u8; 16] {
+        let mut nonce = [0u8; 16];
         let mut hash: u32 = 5381;
         for (i, &b) in path.as_bytes().iter().enumerate() {
             hash = hash.wrapping_mul(33).wrapping_add(b as u32);
-            nonce[i % 12] ^= b;
+            nonce[i % 16] ^= b;
         }
         let hash_bytes = hash.to_le_bytes();
         nonce[0] ^= hash_bytes[0];
@@ -82,29 +81,17 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         nonce
     }
 
-    #[cfg(feature = "secure_vfs")]
+    #[cfg(feature = "secure_fs")]
     fn crypt_payload(path: &str, data: &mut [u8]) {
-        const SYSTEM_KEY: [u8; 32] = [
+        const SYSTEM_KEY: [u8; 16] = [
             0x4B, 0x45, 0x52, 0x4E, 0x5F, 0x53, 0x45, 0x43, 0x55, 0x52, 0x45, 0x5F, 0x56, 0x46,
-            0x53, 0x5F, 0x4B, 0x45, 0x59, 0x5F, 0x32, 0x30, 0x32, 0x36, 0x5F, 0x50, 0x59, 0x33,
-            0x32, 0x46, 0x30, 0x37,
+            0x53, 0x21,
         ];
         let nonce = Self::derive_path_nonce(path);
-        let cipher = ChaCha20Poly1305::new(SYSTEM_KEY);
-
-        let mut block = [0u8; 64];
-        let mut counter = 1u32;
-
-        for chunk in data.chunks_mut(64) {
-            cipher.block(&nonce, counter, &mut block);
-            counter = counter.wrapping_add(1);
-            for (b, k) in chunk.iter_mut().zip(block.iter()) {
-                *b ^= *k;
-            }
-        }
+        Ascon128::new(SYSTEM_KEY).apply_keystream(&nonce, data);
     }
 
-    #[cfg(not(feature = "secure_vfs"))]
+    #[cfg(not(feature = "secure_fs"))]
     fn crypt_payload(_path: &str, _data: &mut [u8]) {}
 }
 
@@ -115,7 +102,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
 
     pub fn remove(&mut self, path: &str) -> Result<(), StorageError> {
         let perm = self.fs.get_permission(path).unwrap_or(0);
-        if (perm & PERM_READ_ONLY) != 0 || (perm & PERM_SYSTEM) != 0 {
+        if (perm & ATTR_READ_ONLY) != 0 || (perm & ATTR_SYSTEM) != 0 {
             return Err(StorageError::AccessDenied);
         }
         self.fs.remove(path).map_err(Self::map_error)
@@ -145,17 +132,17 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         Self::sanitize_path(path)?;
         let perm = self.fs.get_permission(path).unwrap_or(0);
         if (perm & ATTR_ENCRYPTED) != 0 {
-            #[cfg(feature = "secure_vfs")]
+            #[cfg(feature = "secure_fs")]
             if !self.session_unlocked {
                 return Err(StorageError::EncryptedNoKey);
             }
-            #[cfg(not(feature = "secure_vfs"))]
+            #[cfg(not(feature = "secure_fs"))]
             return Err(StorageError::EncryptedNoKey);
         }
 
         let len = self.fs.read_file(path, buf).map_err(Self::map_error)?;
 
-        #[cfg(feature = "secure_vfs")]
+        #[cfg(feature = "secure_fs")]
         if (perm & ATTR_ENCRYPTED) != 0 && len > 0 {
             Self::crypt_payload(path, &mut buf[..len]);
         }
@@ -170,7 +157,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             return Err(StorageError::AccessDenied);
         }
         if (perm & ATTR_ENCRYPTED) != 0 {
-            #[cfg(feature = "secure_vfs")]
+            #[cfg(feature = "secure_fs")]
             {
                 if !self.session_unlocked {
                     return Err(StorageError::EncryptedNoKey);
@@ -186,10 +173,13 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
                     .write_file(path, &tmp_buf[..data.len()])
                     .map_err(Self::map_error);
             }
-            #[cfg(not(feature = "secure_vfs"))]
+            #[cfg(not(feature = "secure_fs"))]
             {
-                // In Guest/non-secure mode, strictly forbid overwriting encrypted files with plaintext!
-                return Err(StorageError::EncryptedNoKey);
+                // When compiled without `secure_fs`, allow non-system, writable files (e.g. `.cfg`)
+                // to be overwritten cleanly as plaintext and clear the `ATTR_ENCRYPTED` bit.
+                self.fs.write_file(path, data).map_err(Self::map_error)?;
+                let _ = self.fs.set_permission(path, perm & !ATTR_ENCRYPTED);
+                return Ok(());
             }
         }
 
@@ -233,7 +223,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
 
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), StorageError> {
         if let Ok(attrs) = self.get_attributes(old_path) {
-            if (attrs.permission & (PERM_SYSTEM | PERM_READ_ONLY)) != 0
+            if (attrs.permission & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0
                 || old_path.starts_with("/sys/calib.")
             {
                 return Err(StorageError::AccessDenied);

@@ -10,9 +10,6 @@ use crate::rcc;
 use pac::gpio;
 use pac::usart;
 
-/// System clock frequency for baud rate calculation.
-const PCLK: u32 = 48_000_000;
-
 /// Initialize USART1 at 115200 baud, 8N1.
 pub fn init() {
     rcc::enable_usart1();
@@ -28,12 +25,13 @@ pub fn init() {
     rx.set_pull(pac::gpio::PULL_UP);
     rx.configure_af(pac::gpio::AF1, pac::gpio::SPEED_MEDIUM);
 
+    let pclk = rcc::sysclk_hz();
     unsafe {
         // Disable USART before configuration
         usart::USART_CR1.write_volatile(0);
 
-        // Baud rate: BRR = PCLK / baud = 48000000 / 115200 = 416 (0x1A0)
-        let brr = (PCLK + 115200 / 2) / 115200;
+        // Baud rate: BRR = PCLK / baud (e.g. 48000000 / 115200 = 417, 48000000 / 38400 = 1250)
+        let brr = (pclk + 115200 / 2) / 115200;
         usart::USART_BRR.write_volatile(brr);
 
         // CR2: 1 stop bit (default 0)
@@ -43,6 +41,19 @@ pub fn init() {
 
         // CR1: Enable USART, TX, RX (8-bit word, no parity)
         usart::USART_CR1.write_volatile(usart::CR1_UE | usart::CR1_TE | usart::CR1_RE);
+    }
+}
+
+/// Dynamically update USART1 baud rate (e.g. 115200 or 38400)
+pub fn set_baud(baud: u32) {
+    let baud = if baud == 0 { 115200 } else { baud };
+    let pclk = rcc::sysclk_hz();
+    unsafe {
+        let cr1 = usart::USART_CR1.read_volatile();
+        usart::USART_CR1.write_volatile(0);
+        let brr = (pclk + baud / 2) / baud;
+        usart::USART_BRR.write_volatile(brr);
+        usart::USART_CR1.write_volatile(cr1);
     }
 }
 

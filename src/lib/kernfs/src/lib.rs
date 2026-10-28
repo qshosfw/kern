@@ -9,4 +9,4 @@ pub mod device;
 pub mod fs;
 
 pub use device::{BlockDevice, FsError};
-pub use fs::{FsStats, KernFS, HEADER_SIZE, MAGIC_KERNFS};
+pub use fs::{FsStats, HEADER_SIZE, KernFS, MAGIC_KERNFS};

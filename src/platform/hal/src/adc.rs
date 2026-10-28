@@ -129,22 +129,56 @@ impl Adc {
     /// Returns temperature in deci-Celsius (e.g. 250 = 25.0°C).
     pub fn read_mcu_temp_deci_c(&self, vdda_mv: u16) -> i16 {
         unsafe {
-            let ts_cal1 = TS_CAL1.read_volatile(); // 30°C
-            let ts_cal2 = TS_CAL2.read_volatile(); // 105°C
-            let ts_data = self.read_channel_averaged(16, 4);
+            // Validate VDDA reference: if out of range, assume typical 3.3V
+            let vdda = if vdda_mv < 1800 || vdda_mv > 3800 {
+                3300u32
+            } else {
+                vdda_mv as u32
+            };
 
-            // Normalize to 3.3V baseline
-            let ts_data_norm = (ts_data as u32 * vdda_mv as u32) / 3300;
+            // 1. Primary factory calibration at 0x1FFF_3228 (30°C) and 0x1FFF_3230 (105°C)
+            let c1 = TS_CAL1.read_volatile();
+            let c2 = TS_CAL2.read_volatile();
 
-            if ts_cal2 <= ts_cal1 || ts_cal1 == 0xFFFF || ts_cal1 == 0 {
-                // Unprogrammed fallback
+            let (cal1, cal2) = if c1 >= 200
+                && c1 <= 3800
+                && c2 > c1
+                && c2 <= 4000
+                && (c2 - c1) >= 50
+            {
+                (c1, c2)
+            } else {
+                // Try secondary factory calibration at 0x1FFF_0F14 / 0x1FFF_0F18
+                let alt1 = (0x1FFF_0F14 as *const u16).read_volatile();
+                let alt2 = (0x1FFF_0F18 as *const u16).read_volatile();
+                if alt1 >= 200 && alt1 <= 3800 && alt2 > alt1 && alt2 <= 4000 && (alt2 - alt1) >= 50
+                {
+                    (alt1, alt2)
+                } else {
+                    (0xFFFF, 0xFFFF)
+                }
+            };
+
+            // 8-sample software average for high thermal resolution
+            let ts_data = self.read_channel_averaged(16, 8);
+
+            // Normalize raw counts to 3.3V factory calibration baseline
+            let ts_data_norm = (ts_data as u32 * vdda) / 3300;
+
+            let deci_c = if cal1 == 0xFFFF {
+                // Unprogrammed fallback to typical silicon values:
+                // V_30 = 0.75V (750 mV), Slope = 2.5 mV/°C (4 deci-°C per mV)
                 let mv = (ts_data_norm * 3300) / 4095;
-                return 300 + ((mv as i32 - 750) * 4) as i16;
-            }
+                300 + ((mv as i32 - 750) * 4) as i16
+            } else {
+                // Two-point linear interpolation between 30°C (300 dC) and 105°C (1050 dC):
+                // delta_T = 1050 - 300 = 750 deci-Celsius
+                300 + (((ts_data_norm as i32 - cal1 as i32) * 750) / (cal2 as i32 - cal1 as i32))
+                    as i16
+            };
 
-            // Linear interpolation
-            300 + (((ts_data_norm as i32 - ts_cal1 as i32) * 750)
-                / (ts_cal2 as i32 - ts_cal1 as i32)) as i16
+            // Clamp to physical silicon operating bounds (-40.0°C to +125.0°C)
+            deci_c.clamp(-400, 1250)
         }
     }
 }

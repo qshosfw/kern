@@ -69,7 +69,7 @@ Every component, interface, driver, and application in Kern must strictly embody
   - `/pref/`: Domain-separated configuration files (`display.cfg`, `audio.cfg`, `keys.cfg`, `battery.cfg`, `system.cfg`).
   - `/sys/`: Factory and hardware calibration:
     - `/sys/calib.dat` (512-byte raw calibration payload)
-    - `/sys/calib.sig` (32-byte Poly1305 hardware authentication MAC)
+    - `/sys/calib.sig` (32-byte Ascon-128 hardware authentication MAC)
     - `/sys/hw.cfg` (Hardware revision manifest)
 - **Geometry Rules**:
   - Headers: 16 bytes.
@@ -109,3 +109,18 @@ Always use the `./kern` CLI for project tasks:
 - `./kern disasm`: Disassemble compiled Cortex-M0+ release binary.
 - `./kern flash`: Flash firmware image to connected radio via serial bootloader.
 - `./kern clean`: Clean build artifacts.
+
+---
+
+## 5. Agent Operational Directives & Invariants
+
+1. **Plan & Architectural Preservation**:
+   - Never truncate, simplify, or overwrite master implementation plans or architecture specifications with less detail. Always preserve historical design rationale, silicon-level Cortex-M0+ details, and system roadmaps.
+2. **State & Lifecycle Test Coverage**:
+   - Any modifications affecting app switching, navigation transitions (e.g. VFO to Launcher, Settings to Launcher), or view context preservation MUST be guarded by automated unit tests in `src/firmware` or `src/kernel`. Tests must explicitly verify that state and focus are not discarded or cleared unintentionally on exit.
+3. **Zero UI/Navigation Lag Invariant**:
+   - Navigation must feel instantaneous (sub-30ms response). Peripheral operations (e.g. audio amplifier warm-up, key pip tone synthesis, disk metadata reads) must never introduce blocking delays into the interactive event dispatch loop. File catalogs and package scans must be cached in memory rather than re-queried during UI transitions.
+4. **Dependency Hygiene**:
+   - Strictly zero redundant, duplicate, or unused crates in any `Cargo.toml`. Standardize workspace editions to Rust 2024.
+5. **Multi-Agent File Isolation**:
+   - When another agent is actively modifying a designated subsystem (such as boot splash orchestration in `splash.rs` / `orchestration.rs`), strictly avoid touching those files to prevent merge collisions.

@@ -1,27 +1,34 @@
 //! SysTick-based blocking delays for PY32F071.
 //!
-//! Uses the ARM Cortex-M0+ SysTick timer configured for 1ms ticks.
-//! The SysTick interrupt increments a global millisecond counter.
+//! Uses the ARM Cortex-M0+ SysTick timer configured for 10 kHz (100 µs) ticks.
+//! This drives a 1000 Hz software PWM for LCD/keyboard backlight to eliminate
+//! low-frequency beating against the ST7565 LCD panel multiplex rate (~70 Hz).
 //!
-//! For microsecond-precision delays, we use the SysTick countdown
-//! register directly (polling mode, no interrupt needed).
+//! A 10-count sub-millisecond accumulator maintains the global millisecond counter.
 
-use portable_atomic::{AtomicU32, Ordering};
+use portable_atomic::{AtomicU8, AtomicU32, Ordering};
 
-/// Global millisecond counter, incremented by the SysTick ISR.
+/// Global millisecond counter, incremented every 10 SysTick ticks (1ms).
 static MILLIS: AtomicU32 = AtomicU32::new(0);
+
+/// Sub-millisecond tick accumulator (0..9 at 10 kHz).
+static SUB_MS_COUNT: AtomicU8 = AtomicU8::new(0);
+
+/// SysTick interrupt frequency in Hz (10 kHz = 100 µs interval).
+pub const SYSTICK_HZ: u32 = 10_000;
+pub const TICKS_PER_MS: u8 = 10;
 
 /// Ticks per microsecond (48 at 48 MHz, 72 at 72 MHz).
 static TICKS_PER_US: AtomicU32 = AtomicU32::new(48);
 
-/// Initialize SysTick for 1ms interrupts.
+/// Initialize SysTick for 100 µs (10 kHz) interrupts.
 pub fn init() {
     update_systick_freq(crate::rcc::sysclk_hz());
 }
 
 /// Update SysTick reload register and tick scaling for a new system clock frequency.
 pub fn update_systick_freq(sysclk_hz: u32) {
-    let reload = (sysclk_hz / 1000).saturating_sub(1);
+    let reload = (sysclk_hz / SYSTICK_HZ).saturating_sub(1);
     let ticks_us = (sysclk_hz / 1_000_000).max(1);
     TICKS_PER_US.store(ticks_us, Ordering::Relaxed);
 
@@ -36,16 +43,28 @@ pub fn update_systick_freq(sysclk_hz: u32) {
     }
 }
 
-/// Called by the SysTick exception handler to increment the ms counter.
+/// Called by the SysTick exception handler at 10 kHz to increment the ms counter every 1ms.
 #[inline(always)]
 pub fn on_systick() {
-    MILLIS.fetch_add(1, Ordering::Relaxed);
+    let count = SUB_MS_COUNT.load(Ordering::Relaxed);
+    if count >= TICKS_PER_MS - 1 {
+        SUB_MS_COUNT.store(0, Ordering::Relaxed);
+        MILLIS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        SUB_MS_COUNT.store(count + 1, Ordering::Relaxed);
+    }
 }
 
 /// Get the current millisecond count since boot.
 #[inline(always)]
 pub fn millis() -> u32 {
     MILLIS.load(Ordering::Relaxed)
+}
+
+/// Get the current microsecond count since boot with hardware TIM2 resolution.
+#[inline(always)]
+pub fn micros() -> u32 {
+    crate::time::now_us()
 }
 
 /// Blocking delay for `ms` milliseconds using hardware-synchronized SysTick.
@@ -58,9 +77,12 @@ pub fn delay_ms(ms: u32) {
         return;
     }
 
-    // If interrupts are disabled (PRIMASK bit is set), SysTick ISR cannot fire.
+    // If interrupts are disabled (PRIMASK bit is set) or executing inside an exception handler
+    // (where SysTick cannot preempt), SysTick ISR cannot fire.
     // Use hardware register-polled countdown loops to avoid deadlock.
-    if cortex_m::register::primask::read().is_active() {
+    let in_exception = cortex_m::peripheral::SCB::vect_active()
+        != cortex_m::peripheral::scb::VectActive::ThreadMode;
+    if cortex_m::register::primask::read().is_active() || in_exception {
         let mut rem = ms;
         while rem > 0 {
             let chunk = rem.min(25);

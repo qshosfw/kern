@@ -1,0 +1,4378 @@
+/*
+ * Puya PY32F071 SoC and a machine for the Quansheng UV-K5 V3 / UV-K1 radio.
+ *
+ * Cortex-M0+, 128 KB flash at 0x08000000, 16 KB SRAM at 0x20000000.
+ * The memory map is taken from the vendor CMSIS header shipped with the
+ * firmware (Drivers/CMSIS/Device/PY32F071/Include/py32f071xB.h), so the
+ * addresses here are the vendor's, not guesses.
+ *
+ * Scope of this file: enough of the SoC for the radio firmware to boot and
+ * reach its main loop. Peripherals are modelled at the level the firmware
+ * actually needs -- clock-ready flags it polls, GPIO state it drives and reads,
+ * SPI transfers it clocks out. Device-specific behaviour behind the SPI buses
+ * (the ST7565 display, the PY25Q16 flash, the BK4829 transceiver) lives in
+ * separate models; this file only wires the buses up.
+ *
+ * This code is licensed under the GPL version 2 or later.
+ */
+
+#include "qemu/osdep.h"
+/* g_rename(), for the flash write-back: the C library's rename does not replace an
+ * existing file on Windows, and g_rename maps to the POSIX behaviour there. */
+#include <glib/gstdio.h>
+#include "qapi/error.h"
+/* visit_type_uint64(), used by the BK4819 register property getters. Declared
+ * here rather than reached transitively: qom/object.h does not pull it in, and
+ * without it the file does not compile against a stock QEMU 7.2 tree. */
+#include "qapi/visitor.h"
+#include "qemu/log.h"
+#include "qemu/module.h"
+#include "qemu/units.h"
+#include "hw/irq.h"
+#include "hw/clock.h"
+#include "hw/qdev-clock.h"
+#include "hw/arm/boot.h"
+#include "hw/arm/armv7m.h"
+#include "hw/boards.h"
+#include "hw/qdev-properties.h"
+/* Serial receive: USART1 takes a chardev so a host tool can drive the firmware. */
+#include "hw/qdev-properties-system.h"
+#include "chardev/char-fe.h"
+#include "sysemu/sysemu.h"
+#include "hw/sysbus.h"
+#include "exec/address-spaces.h"
+#include "qom/object.h"
+
+/* ---------------------------------------------------------------- memory map */
+
+#define PY32_FLASH_BASE   0x08000000
+#define PY32_FLASH_SIZE   (128 * KiB)
+#define PY32_SRAM_BASE    0x20000000
+#define PY32_SRAM_SIZE    (16 * KiB)
+
+/* The application image starts after the 10 KB bootloader region. Loading it at
+ * PY32_FLASH_BASE instead would put the vector table in the wrong place and the
+ * machine faults on the first fetch. */
+#define PY32_APP_OFFSET   0x2800
+
+#define PY32_APB_BASE     0x40000000
+#define PY32_AHB_BASE     0x40020000
+#define PY32_IOPORT_BASE  0x50000000
+
+#define PY32_RCC_BASE     0x40021000
+#define PY32_FLASH_R_BASE 0x40022000
+#define PY32_PWR_BASE     0x40007000
+#define PY32_SYSCFG_BASE  0x40010000
+#define PY32_EXTI_BASE    0x40021800
+#define PY32_CRC_BASE     0x40023000
+#define PY32_DMA1_BASE    0x40020000
+
+#define PY32_GPIO_STRIDE  0x400
+#define PY32_GPIOA_BASE   0x50000000
+#define PY32_GPIOB_BASE   0x50000400
+#define PY32_GPIOC_BASE   0x50000800
+#define PY32_GPIOF_BASE   0x50001400
+
+#define PY32_SPI1_BASE    0x40013000
+#define PY32_SPI2_BASE    0x40003800
+#define PY32_ADC1_BASE    0x40012400
+#define PY32_USART1_BASE  0x40013800
+#define PY32_USART2_BASE  0x40004400
+#define PY32_I2C1_BASE    0x40005400
+#define PY32_TIM1_BASE    0x40012c00
+#define PY32_TIM3_BASE    0x40000400
+#define PY32_TIM2_BASE    0x40000000
+#define PY32_TIM6_BASE    0x40001000
+#define PY32_TIM7_BASE    0x40001400
+#define PY32_TIM14_BASE   0x40002000
+#define PY32_TIM15_BASE   0x40014000
+#define PY32_TIM16_BASE   0x40014400
+#define PY32_TIM17_BASE   0x40014800
+#define PY32_USB_BASE     0x40005c00
+#define PY32_RTC_BASE     0x40002800
+#define PY32_IWDG_BASE    0x40003000
+#define PY32_WWDG_BASE    0x40002c00
+#define PY32_USART3_BASE  0x40004800
+#define PY32_USART4_BASE  0x40004c00
+#define PY32_I2C2_BASE    0x40005800
+#define PY32_DBGMCU_BASE  0x40015800
+#define PY32_LCD_BASE     0x40002400
+
+#define PY32_NUM_IRQ      32
+
+/* --------------------------------------------------------------- RCC model */
+
+/*
+ * Clock control. The firmware switches to HSI/PLL and then polls ready flags,
+ * so those have to read back as set or BOARD_Init spins forever. Everything
+ * else is stored and echoed: nothing downstream depends on the values, and
+ * inventing behaviour would be guesswork.
+ */
+#define TYPE_PY32_RCC "py32-rcc"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32RccState, PY32_RCC)
+
+struct PY32RccState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    uint32_t regs[0x40];
+};
+
+/* Register offsets that carry ready/lock bits the firmware waits on. */
+#define RCC_CR      0x00
+#define RCC_ICSCR   0x04
+#define RCC_CFGR    0x08
+#define RCC_CFGR_SW_Msk   0x7u     /* SW[2:0]:   system clock switch */
+#define RCC_CFGR_SWS_Msk  0x38u    /* SWS[5:3]:  ... and its status (PY32 packs it
+                                    * three bits up; an STM32 puts it at bit 2) */
+#define RCC_CIER    0x18
+#define RCC_CIFR    0x1c
+
+static uint64_t py32_rcc_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32RccState *s = opaque;
+    const unsigned idx = addr >> 2;
+
+    if (idx >= ARRAY_SIZE(s->regs)) {
+        qemu_log_mask(LOG_GUEST_ERROR, "py32-rcc: read out of range 0x%" HWADDR_PRIx "\n", addr);
+        return 0;
+    }
+
+    uint32_t value = s->regs[idx];
+
+    if (addr == RCC_CR) {
+        /*
+         * Mirror every enable bit into its ready bit. On this part the pairs sit
+         * one bit apart (HSION/HSIRDY, HSEON/HSERDY, PLLON/PLLRDY), so echoing
+         * "enabled" as "ready" satisfies the firmware's spin loops without
+         * pretending to model the PLL.
+         * Crucial: clear ready bits first so clearing PLLON also clears PLLRDY.
+         */
+        value &= ~((1u << 10) | (1u << 17) | (1u << 25));
+        if (value & (1u << 8))  value |= (1u << 10); /* HSI  */
+        if (value & (1u << 16)) value |= (1u << 17); /* HSE  */
+        if (value & (1u << 24)) value |= (1u << 25); /* PLL  */
+        value |= (1u << 1);                          /* LSI ready */
+    } else if (addr == RCC_CFGR) {
+        /*
+         * Mirror the requested switch into its status field, the same idea as the
+         * ready bits above. This is where the real bootloader stopped: it writes
+         * SW = PLL and spins on "(CFGR & 0x38) == 0x10", and an unmirrored CFGR
+         * reads back zeros forever, so the machine never leaves clock setup.
+         */
+        value = (value & ~RCC_CFGR_SWS_Msk)
+              | ((value & RCC_CFGR_SW_Msk) << 3);
+    }
+
+    return value;
+}
+
+static void py32_rcc_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32RccState *s = opaque;
+    const unsigned idx = addr >> 2;
+
+    if (idx >= ARRAY_SIZE(s->regs)) {
+        qemu_log_mask(LOG_GUEST_ERROR, "py32-rcc: write out of range 0x%" HWADDR_PRIx "\n", addr);
+        return;
+    }
+    s->regs[idx] = value;
+}
+
+static const MemoryRegionOps py32_rcc_ops = {
+    .read = py32_rcc_read,
+    .write = py32_rcc_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
+static void py32_rcc_reset(DeviceState *dev)
+{
+    PY32RccState *s = PY32_RCC(dev);
+    memset(s->regs, 0, sizeof(s->regs));
+    s->regs[RCC_CR >> 2] = (1u << 8) | (1u << 10);  /* HSI on and ready */
+}
+
+static void py32_rcc_init(Object *obj)
+{
+    PY32RccState *s = PY32_RCC(obj);
+    memory_region_init_io(&s->iomem, obj, &py32_rcc_ops, s, TYPE_PY32_RCC, 0x400);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+}
+
+static void py32_rcc_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->reset = py32_rcc_reset;
+    dc->desc = "PY32F071 reset and clock control";
+}
+
+/* -------------------------------------------------------------- GPIO model */
+
+/*
+ * One instance per port. Output state is exported as qemu_irq lines so board
+ * models (display chip-select, keypad rows) can watch them, and input state is
+ * settable the same way, which is how key presses get injected.
+ */
+#define TYPE_PY32_GPIO "py32-gpio"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32GpioState, PY32_GPIO)
+
+#define PY32_GPIO_PINS 16
+
+struct PY32GpioState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    char        *port_name;
+
+    uint32_t moder, otyper, ospeedr, pupdr, odr, lckr, afrl, afrh;
+    uint32_t idr;          /* driven by the board, not the guest */
+
+    qemu_irq out[PY32_GPIO_PINS];
+};
+
+#define GPIO_MODER   0x00
+#define GPIO_OTYPER  0x04
+#define GPIO_OSPEEDR 0x08
+#define GPIO_PUPDR   0x0c
+#define GPIO_IDR     0x10
+#define GPIO_ODR     0x14
+#define GPIO_BSRR    0x18
+#define GPIO_LCKR    0x1c
+#define GPIO_AFRL    0x20
+#define GPIO_AFRH    0x24
+#define GPIO_BRR     0x28
+
+static void py32_gpio_update(PY32GpioState *s, uint32_t old_odr)
+{
+    const uint32_t changed = old_odr ^ s->odr;
+
+    for (int i = 0; i < PY32_GPIO_PINS; i++) {
+        if (changed & (1u << i)) {
+            qemu_set_irq(s->out[i], !!(s->odr & (1u << i)));
+        }
+    }
+}
+
+static uint64_t py32_gpio_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32GpioState *s = opaque;
+
+    switch (addr) {
+    case GPIO_MODER:   return s->moder;
+    case GPIO_OTYPER:  return s->otyper;
+    case GPIO_OSPEEDR: return s->ospeedr;
+    case GPIO_PUPDR:   return s->pupdr;
+    case GPIO_ODR:     return s->odr;
+    case GPIO_LCKR:    return s->lckr;
+    case GPIO_AFRL:    return s->afrl;
+    case GPIO_AFRH:    return s->afrh;
+    case GPIO_IDR:
+        /*
+         * Pins configured as outputs read back their own driven level; inputs
+         * read what the board drives, and default high because the firmware
+         * configures pull-ups for the keypad and paddle contacts (active low).
+         */
+        {
+            uint32_t out_mask = 0;
+            for (int i = 0; i < PY32_GPIO_PINS; i++) {
+                if (((s->moder >> (i * 2)) & 3u) == 1u) {
+                    out_mask |= (1u << i);
+                }
+            }
+            {
+                uint32_t v = (s->odr & out_mask) | (s->idr & ~out_mask);
+                /* ROUND 102-103: only when a row line is actually low -- that is what
+                 * read_rows() would return non-idle. Bounded on purpose; see round 98. */
+                static int idle_env = -1, hits = 0;
+                /* Sanity: count IDR reads per port, and log the keypad port's first few. */
+                {
+                    static int seenb = 0;
+                    static unsigned long readsb = 0, reads_other = 0;
+                    if (s->port_name && (s->port_name[0] == 'b' || s->port_name[0] == 'B')) {
+                        readsb++;
+                        if (seenb < 5) {
+                            seenb++;
+                            fprintf(stderr, "ROWSEENB n=%d readsb=%lu moder=0x%08x idr=0x%08x odr=0x%08x v=0x%08x\n",
+                                    seenb, readsb, s->moder, s->idr, s->odr, v);
+                        }
+                    } else {
+                        reads_other++;
+                    }
+                    if (((readsb + reads_other) % 1000000UL) == 0 && readsb) {
+                        fprintf(stderr, "ROWCOUNT idr_reads_b=%lu idr_reads_other=%lu\n", readsb, reads_other);
+                    }
+                }
+                if (idle_env < 0) idle_env = getenv("UVK5_ROW_PROBE") ? 1 : 0;
+                if (idle_env && (v & 0xf000u) != 0xf000u) {
+                    hits++;
+                    /* Rate-limit rather than cap: every 200th such read, and its running
+                     * total, so a later phase cannot be hidden behind an earlier one. */
+                    if ((hits % 200) == 1) {
+                        fprintf(stderr, "ROWREAD hits=%d idr=0x%08x rows=0x%x colsel=0x%x\n",
+                                hits, v, (v >> 12) & 0xf, s->odr & 0x78u);
+                    }
+                }
+                return v;
+            }
+        }
+    default:
+        qemu_log_mask(LOG_UNIMP, "py32-gpio%s: read 0x%" HWADDR_PRIx "\n",
+                      s->port_name ?: "", addr);
+        return 0;
+    }
+}
+
+static void py32_gpio_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32GpioState *s = opaque;
+    /* ROUND 109: unguarded. Log every change to port B's column bits, whatever
+     * else is happening, so a change that precedes a keypress is not filtered out. */
+    if (s->port_name && (s->port_name[0] == 'b' || s->port_name[0] == 'B')) {
+        /* ROUND 110: count every change to bits 3..6 over the whole run, and print
+         * the first ten. No cap on the counting itself -- see round 108. */
+        static unsigned long cols_written = 0, writes_b = 0, printed = 0;
+        const uint32_t before = s->odr & 0x78u;
+        uint32_t after = before;
+        if (addr == GPIO_BSRR)      after = (before | ((uint32_t)value & 0x78u)) & 0x78u;
+        else if (addr == GPIO_BRR)  after = (before & ~((uint32_t)value & 0x78u)) & 0x78u;
+        else if (addr == GPIO_ODR)  after = (uint32_t)value & 0x78u;
+        writes_b++;
+        if (after != before) {
+            cols_written++;
+            if (printed < 10) {
+                printed++;
+                fprintf(stderr, "GPIOCOLCHG n=%lu addr=0x%x value=0x%x cols %02x -> %02x (port-writes so far %lu)\n",
+                        cols_written, (unsigned)addr, (unsigned)value, before, after, writes_b);
+            }
+        }
+        if ((writes_b % 200000UL) == 0) {
+            fprintf(stderr, "GPIOCOUNTS port_b_writes=%lu column_changes=%lu\n", writes_b, cols_written);
+        }
+    }
+    const uint32_t old_odr = s->odr;
+
+    switch (addr) {
+    case GPIO_MODER:   s->moder = value;   break;
+    case GPIO_OTYPER:  s->otyper = value;  break;
+    case GPIO_OSPEEDR: s->ospeedr = value; break;
+    case GPIO_PUPDR:   s->pupdr = value;   break;
+    case GPIO_LCKR:    s->lckr = value;    break;
+    case GPIO_AFRL:    s->afrl = value;    break;
+    case GPIO_AFRH:    s->afrh = value;    break;
+    case GPIO_ODR:
+        s->odr = value;
+        py32_gpio_update(s, old_odr);
+        break;
+    case GPIO_BSRR:
+        /* Low half sets, high half resets; reset wins on a conflict. */
+        s->odr |= value & 0xffff;
+        s->odr &= ~(value >> 16);
+        py32_gpio_update(s, old_odr);
+        break;
+    case GPIO_BRR:
+        s->odr &= ~(value & 0xffff);
+        py32_gpio_update(s, old_odr);
+        break;
+    default:
+        qemu_log_mask(LOG_UNIMP, "py32-gpio%s: write 0x%" HWADDR_PRIx " = 0x%" PRIx64 "\n",
+                      s->port_name ?: "", addr, value);
+        break;
+    }
+}
+
+static const MemoryRegionOps py32_gpio_ops = {
+    .read = py32_gpio_read,
+    .write = py32_gpio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
+/* Board-side entry point for driving an input pin. */
+static void py32_gpio_set_input(void *opaque, int line, int level)
+{
+    PY32GpioState *s = opaque;
+
+    if (line < 0 || line >= PY32_GPIO_PINS) {
+        return;
+    }
+    if (level) {
+        s->idr |= (1u << line);
+    } else {
+        s->idr &= ~(1u << line);
+    }
+}
+
+static void py32_gpio_reset(DeviceState *dev)
+{
+    PY32GpioState *s = PY32_GPIO(dev);
+
+    s->moder = 0;
+    s->otyper = 0;
+    s->ospeedr = 0;
+    s->pupdr = 0;
+    s->odr = 0;
+    s->lckr = 0;
+    s->afrl = 0;
+    s->afrh = 0;
+    /*
+     * Unconnected inputs idle high: the keypad, PTT and paddle contacts are all
+     * active low, so a floating pin has to read as "not pressed".
+     *
+     * Exception: PB9 is the bidirectional data line of the software-driven
+     * three-wire bus to the BK4819 transceiver, which now has a device model
+     * driving it (see TYPE_UVK5_BK4819). Idle it low anyway, for the window
+     * between reset and the bus being wired up: a high idle makes reads return
+     * 0xFFFF, and RADIO_SetupRegisters spins on bit 0 of REG_0C with no timeout,
+     * so it would hang outright rather than degrade.
+     */
+    s->idr = 0xffff;
+    if (s->port_name && s->port_name[0] == 'b') {
+        s->idr &= ~(1u << 9);
+    }
+}
+
+static void py32_gpio_init(Object *obj)
+{
+    PY32GpioState *s = PY32_GPIO(obj);
+
+    memory_region_init_io(&s->iomem, obj, &py32_gpio_ops, s, TYPE_PY32_GPIO, PY32_GPIO_STRIDE);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    /*
+     * Name both directions. Unnamed in and out lines share one namespace in
+     * qdev, so an unnamed pair on the same device makes qdev_get_gpio_in()
+     * ambiguous -- board wiring then silently attaches to the wrong line and
+     * signals go nowhere.
+     */
+    qdev_init_gpio_out_named(DEVICE(obj), s->out, "pin-out", PY32_GPIO_PINS);
+    qdev_init_gpio_in_named(DEVICE(obj), py32_gpio_set_input, "pin-in",
+                            PY32_GPIO_PINS);
+}
+
+static Property py32_gpio_properties[] = {
+    DEFINE_PROP_STRING("port-name", PY32GpioState, port_name),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void py32_gpio_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->reset = py32_gpio_reset;
+    dc->desc = "PY32F071 GPIO port";
+    device_class_set_props(dc, py32_gpio_properties);
+}
+
+/* ------------------------------------------------- catch-all for the rest */
+
+/* ------------------------------------------------------------ keypad matrix */
+
+/*
+ * Wiring from App/driver/keyboard.c: columns are GPIOB pins 6..3 driven as
+ * outputs, rows are GPIOB pins 15..12 read as inputs, both active low. The
+ * driver pulls one column low at a time and reads the row bits.
+ *
+ * Column 0 is a pseudo column: the firmware reads the two side keys in the
+ * state where no column is pulled down, so they sit at rows 0 and 1 of it.
+ *
+ * The model owns no GPIO of its own -- it watches the column outputs and drives
+ * the row inputs, which is what the matrix does electrically.
+ */
+#define TYPE_UVK5_KEYPAD "uvk5-keypad"
+OBJECT_DECLARE_SIMPLE_TYPE(UVK5KeypadState, UVK5_KEYPAD)
+
+#define KEYPAD_COLS 5
+#define KEYPAD_ROWS 4
+/*
+ * Column c of the keyboard[5][4] table is driven by PIN_COL(c - 1) in
+ * App/driver/keyboard.c, and PIN_COL(n) is pin 6 - n. So table column 1 uses
+ * pin 6, column 2 pin 5, and so on -- the off-by-one in the driver's indexing
+ * has to be reproduced here or the columns are shifted by one and every key
+ * reads as its neighbour.
+ */
+#define KEYPAD_COL_PIN(c) (6 - ((c) - 1))
+#define KEYPAD_ROW_PIN(r) (15 - (r))
+
+struct UVK5KeypadState {
+    DeviceState parent_obj;
+
+    bool pressed[KEYPAD_COLS][KEYPAD_ROWS];
+    bool col_high[KEYPAD_COLS];
+    /*
+     * volatile is required, not decorative. qdev_init_gpio_out_named() is
+     * inlinable and only records this array; the lines are filled in later by
+     * qdev_connect_gpio_out_named() from the board, which GCC cannot see. Left
+     * plain, GCC at -O2 proves every element is still NULL, notices that
+     * qemu_set_irq() returns immediately on a NULL irq, and deletes the whole
+     * body of keypad_update_rows() along with all five calls to it -- so no row
+     * line is ever driven and the firmware's keypad scan reads nothing. That
+     * failure is silent and looks exactly like a broken keypad model.
+     *
+     * Verified from the object code: without volatile, keypad_col_changed
+     * compiles to a store and a ret with no call at all; with it, the call is
+     * emitted. See AGENTS.md.
+     */
+    qemu_irq volatile row_out[KEYPAD_ROWS];
+
+    /*
+     * PTT, which is not part of the matrix: GPIO_IsPttPressed reads its own pin
+     * (PB10, active low), so it needs its own line. volatile for the same reason as
+     * row_out -- the board fills this in after init, invisibly to the compiler.
+     */
+    qemu_irq volatile ptt_out;
+    bool ptt;
+};
+
+/*
+ * A row reads low when a held key sits on a column that is currently pulled
+ * low. Side keys read low whenever every real column is high, matching how the
+ * driver samples them.
+ */
+/* ROUND 112: how many more keypad_update_rows calls should report entry state. */
+int keypad_debug_arm = 0;
+
+static void keypad_update_rows(UVK5KeypadState *s)
+{
+    bool all_cols_high = true;
+    /* ROUND 112 upd: what does the row rule see at entry, right after a press? */
+    if (keypad_debug_arm > 0) {
+        keypad_debug_arm--;
+        fprintf(stderr, "UPD %s[4][3]=%d [4][2]=%d colhigh4=%d colhigh1=%d\n",
+                keypad_debug_arm == 0 ? "last " : "",
+                s->pressed[4][3], s->pressed[4][2], s->col_high[4], s->col_high[1]);
+    }    /* ROUND 98 PROBE: is the model asked at all, and what does it compute? */
+    {
+        static unsigned long calls = 0;
+        static bool probing = false, probed_env = false;
+        if (!probed_env) { probing = getenv("UVK5_KEYPAD_PROBE") != NULL; probed_env = true; }
+        calls++;
+        if (probing && (calls % 20000) == 0) {
+            unsigned cols = 0;
+            for (int pc = 0; pc < KEYPAD_COLS; pc++)
+                if (s->col_high[pc]) cols |= (1u << pc);
+            unsigned held = 0;
+            for (int pc = 0; pc < KEYPAD_COLS; pc++)
+                for (int pr = 0; pr < KEYPAD_ROWS; pr++)
+                    if (s->pressed[pc][pr]) held |= (1u << (pc * KEYPAD_ROWS + pr));
+            fprintf(stderr, "KEYPADUPD calls=%lu colhigh=0x%02x pressed=0x%05x\n", calls, cols, held);
+        }
+    }
+    for (int c = 1; c < KEYPAD_COLS; c++) {
+        if (!s->col_high[c]) {
+            all_cols_high = false;
+        }
+    }
+
+    for (int r = 0; r < KEYPAD_ROWS; r++) {
+        bool low = false;
+
+        for (int c = 1; c < KEYPAD_COLS; c++) {
+            if (s->pressed[c][r] && !s->col_high[c]) {
+                low = true;
+            }
+        }
+        if (all_cols_high && s->pressed[0][r]) {
+            low = true;
+        }
+        qemu_set_irq(s->row_out[r], low ? 0 : 1);
+    }
+}
+
+/* ROUND 111: sticky flag -- has any key ever been pressed? */
+int ever_pressed_global = 0;
+
+static void keypad_col_changed(void *opaque, int line, int level)
+{
+    UVK5KeypadState *s = opaque;
+
+    if (line < 1 || line >= KEYPAD_COLS) {
+        return;
+    }
+    s->col_high[line] = level != 0;
+    keypad_update_rows(s);
+}
+
+/* Key index is column * KEYPAD_ROWS + row. */
+static void keypad_key_changed(void *opaque, int line, int level)
+{
+    UVK5KeypadState *s = opaque;
+    const int col = line / KEYPAD_ROWS;
+    const int row = line % KEYPAD_ROWS;
+
+    if (col >= KEYPAD_COLS || row >= KEYPAD_ROWS) {
+        return;
+    }
+    s->pressed[col][row] = level != 0;
+    if (level != 0) {
+        extern int ever_pressed_global;
+        ever_pressed_global = 1;
+        fprintf(stderr, "KEYDOWN col=%d row=%d line=%d\n", col, row, line);
+    }
+    keypad_update_rows(s);
+}
+
+static void keypad_reset(DeviceState *dev)
+{
+    UVK5KeypadState *s = UVK5_KEYPAD(dev);
+
+    s->ptt = false;
+    qemu_set_irq(s->ptt_out, 1);      /* released: idle high */
+
+    memset(s->pressed, 0, sizeof(s->pressed));
+    for (int c = 0; c < KEYPAD_COLS; c++) {
+        s->col_high[c] = true;
+    }
+    keypad_update_rows(s);
+}
+
+static void keypad_init(Object *obj)
+{
+    DeviceState *dev = DEVICE(obj);
+    UVK5KeypadState *s = UVK5_KEYPAD(obj);
+
+    qdev_init_gpio_in_named(dev, keypad_col_changed, "col", KEYPAD_COLS);
+    qdev_init_gpio_in_named(dev, keypad_key_changed, "key",
+                            KEYPAD_COLS * KEYPAD_ROWS);
+    /*
+     * Cast away volatile for the registration call only. row_out is declared
+     * volatile so GCC cannot conclude the lines stay NULL and delete
+     * keypad_update_rows() -- see the comment on the field. qdev only stores the
+     * pointer here, so dropping the qualifier for this one call is safe and
+     * keeps -Wdiscarded-qualifiers quiet.
+     */
+    qdev_init_gpio_out_named(dev, (qemu_irq *)s->row_out, "row", KEYPAD_ROWS);
+
+    /*
+     * PTT is not part of the matrix. GPIO_IsPttPressed reads its own pin, so it gets
+     * its own line rather than a column/row intersection.
+     */
+    qdev_init_gpio_out_named(dev, (qemu_irq *)&s->ptt_out, "ptt", 1);
+}
+
+/*
+ * Key names as they appear on the radio, indexed the same way as the matrix
+ * (column * KEYPAD_ROWS + row) so a test can say "press MENU" rather than
+ * compute coordinates. Order follows the keyboard[5][4] table in
+ * App/driver/keyboard.c.
+ */
+static const char *const keypad_key_names[KEYPAD_COLS * KEYPAD_ROWS] = {
+    /* pseudo column 0: side keys, readable with every column released */
+    "SIDE1", "SIDE2", NULL, NULL,
+    /* column 1 */ "MENU", "1", "4", "7",
+    /* column 2 */ "UP",   "2", "5", "8",
+    /* column 3 */ "DOWN", "3", "6", "9",
+    /* column 4 */ "EXIT", "STAR", "0", "F",
+};
+
+/* Resolves a key name to its matrix index, or -1 when unknown. */
+static int keypad_index_for_name(const char *name)
+{
+    for (int i = 0; i < KEYPAD_COLS * KEYPAD_ROWS; i++) {
+        if (keypad_key_names[i] && g_ascii_strcasecmp(keypad_key_names[i], name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Write-only "press" property: setting it to a key name holds that key, and
+ * setting it to an empty string releases everything. Driving the matrix through
+ * a property means keys can be injected over the QMP/HMP monitor without a
+ * display backend, which suits this headless setup.
+ */
+static void keypad_set_press(Object *obj, const char *value, Error **errp)
+{
+    UVK5KeypadState *s = UVK5_KEYPAD(obj);
+
+    if (!value || !*value) {
+        memset(s->pressed, 0, sizeof(s->pressed));
+        keypad_update_rows(s);
+        return;
+    }
+
+    const int index = keypad_index_for_name(value);
+    if (index < 0) {
+        error_setg(errp, "unknown key '%s'", value);
+        return;
+    }
+
+    memset(s->pressed, 0, sizeof(s->pressed));
+    s->pressed[index / KEYPAD_ROWS][index % KEYPAD_ROWS] = true;
+    fprintf(stderr, "SET name=%s index=%d -> pressed[%d][%d]=%d\n",
+            value, index, index / KEYPAD_ROWS, index % KEYPAD_ROWS, s->pressed[index / KEYPAD_ROWS][index % KEYPAD_ROWS]);
+    keypad_debug_arm = 3;
+    keypad_update_rows(s);}
+
+static char *keypad_get_press(Object *obj, Error **errp)
+{
+    UVK5KeypadState *s = UVK5_KEYPAD(obj);
+
+    for (int i = 0; i < KEYPAD_COLS * KEYPAD_ROWS; i++) {
+        if (s->pressed[i / KEYPAD_ROWS][i % KEYPAD_ROWS]) {
+            return g_strdup(keypad_key_names[i] ?: "");
+        }
+    }
+    return g_strdup("");
+}
+
+static bool keypad_get_ptt(Object *obj, Error **errp)
+{
+    return UVK5_KEYPAD(obj)->ptt;
+}
+
+static void keypad_set_ptt(Object *obj, bool value, Error **errp)
+{
+    UVK5KeypadState *s = UVK5_KEYPAD(obj);
+
+    s->ptt = value;
+    /* Active low: pressed pulls the pin down. */
+    qemu_set_irq(s->ptt_out, value ? 0 : 1);
+}
+
+static void keypad_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->reset = keypad_reset;
+    dc->desc = "UV-K5 keypad matrix";
+
+    object_class_property_add_str(klass, "press",
+                                  keypad_get_press, keypad_set_press);
+    object_class_property_set_description(klass, "press",
+        "hold the named key (MENU, UP, DOWN, EXIT, F, STAR, 0-9, SIDE1, SIDE2); "
+        "empty string releases");
+
+    object_class_property_add_bool(klass, "ptt",
+                                   keypad_get_ptt, keypad_set_ptt);
+    object_class_property_set_description(klass, "ptt",
+        "hold the push-to-talk key, which puts the radio into transmit");
+}
+
+/* -------------------------------------------------------------- audio path */
+
+/*
+ * The speaker enable line, and why there is no audio stream here.
+ *
+ * On the real radio neither the microphone nor the speaker passes through the MCU.
+ * Receive audio is demodulated inside the BK4819 and leaves it as analogue on its AF
+ * output; transmit audio goes from the microphone into the chip's own ADC. The
+ * firmware's entire involvement is:
+ *
+ *   - PA8 high or low, the amplifier enable (GPIO_EnableAudioPath, driver/gpio.h:34)
+ *   - REG_47, which AF source the chip routes
+ *   - REG_64, a read-only level the firmware displays
+ *
+ * There are no samples anywhere in the MCU's address space, so there is nothing for a
+ * device model to capture or play. Modelling "a speaker" would mean synthesising audio
+ * the firmware never produced, which would be invention rather than emulation.
+ *
+ * What is real and worth exposing is the *intent*: whether the firmware currently wants
+ * sound, which is exactly what PA8 says. A test can assert that receiving with the
+ * squelch open turns the amplifier on, and a UI can show a speaker icon, without either
+ * pretending to carry audio.
+ */
+#define TYPE_UVK5_AUDIO "uvk5-audio"
+OBJECT_DECLARE_SIMPLE_TYPE(UVK5AudioState, UVK5_AUDIO)
+
+struct UVK5AudioState {
+    DeviceState parent_obj;
+
+    bool     path_on;      /* PA8: the amplifier is enabled */
+    unsigned transitions;  /* how many times it has changed, for tests */
+};
+
+static void audio_set_path(void *opaque, int line, int level)
+{
+    UVK5AudioState *s = opaque;
+    const bool on = !!level;
+
+    if (on != s->path_on) {
+        s->path_on = on;
+        s->transitions++;
+    }
+}
+
+static bool audio_get_path_on(Object *obj, Error **errp)
+{
+    return UVK5_AUDIO(obj)->path_on;
+}
+
+static void audio_reset(DeviceState *dev)
+{
+    UVK5AudioState *s = UVK5_AUDIO(dev);
+
+    s->path_on = false;
+    s->transitions = 0;
+}
+
+static void audio_init(Object *obj)
+{
+    qdev_init_gpio_in_named(DEVICE(obj), audio_set_path, "path", 1);
+}
+
+static void audio_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->reset = audio_reset;
+    dc->desc = "UV-K5 audio amplifier enable";
+
+    /*
+     * Read-only on purpose. This reflects what the firmware decided; letting a test
+     * write it would only let the test lie to itself.
+     */
+    object_class_property_add_bool(klass, "speaker-on", audio_get_path_on, NULL);
+    object_class_property_set_description(klass, "speaker-on",
+        "whether the firmware has enabled the audio amplifier (PA8)");
+}
+
+/* ------------------------------------------------------------ ST7565 panel */
+
+/*
+ * The display controller, as far as it can honestly be modelled.
+ *
+ * Nothing here draws anything: the firmware keeps the image in gStatusLine and
+ * gFrameBuffer, and the UI reads those straight out of guest RAM. What the panel
+ * *adds* is the handful of settings that live in the controller rather than in the
+ * framebuffer -- and those are exactly the ones a framebuffer-only view cannot show
+ * at all:
+ *
+ *   0xA6 / 0xA7   display inversion   (menu "SetInv")
+ *   0xAE / 0xAF   display on / off    (sleep, power save)
+ *   0x81 <value>  electronic volume   (menu "SetCtr", the contrast)
+ *
+ * Without this, changing either menu entry looks like it did nothing: the bytes go
+ * out on SPI1 and land nowhere. With it, inversion is directly observable -- the
+ * panel really does invert the image -- while contrast is reported as the number it
+ * is, because how dark the glass gets is analogue and cannot be rendered.
+ *
+ * Commands and pixel data share one wire, so the A0 pin says which is which. Board
+ * wiring follows the driver: PIN_CS is GPIOB pin 2, PIN_A0 is GPIOA pin 6
+ * (App/driver/st7565.c).
+ */
+#define TYPE_ST7565 "st7565"
+OBJECT_DECLARE_SIMPLE_TYPE(ST7565State, ST7565)
+
+struct ST7565State {
+    DeviceState parent_obj;
+
+    bool    a0;              /* PA6: 0 = command, 1 = pixel data */
+    bool    selected;        /* PB2, active low */
+    bool    invert;          /* last of 0xA6 / 0xA7 */
+    bool    display_on;      /* last of 0xAE / 0xAF */
+    uint8_t contrast;        /* value following 0x81 */
+    bool    expect_contrast;
+
+    /*
+     * The controller's own display RAM: what the glass is actually being shown.
+     *
+     * This is here because "read gFrameBuffer out of guest RAM" only works for the
+     * firmware whose addresses you happen to know, and the display logic differs
+     * between builds that share an ancestor -- a multi-system release keeps its
+     * image somewhere else entirely. Every one of them still has to push pixels
+     * through this controller, so the panel's view is the one that is always right.
+     *
+     * Addressed as the driver does it: page (0xB0..0xB7) selects the 8-pixel band,
+     * a column split across 0x00..0x0F and 0x10..0x1F, and each data byte lands at
+     * (page, column) and advances the column. The visible window is columns 4..131
+     * -- the driver's column commands carry a +4 offset -- so the low four columns
+     * are that margin and are not stored.
+     */
+    uint8_t gram[8][128];
+    uint8_t page;
+    uint8_t col;
+    bool    seg_reverse;     /* 0xA1: columns mirrored on the glass */
+    bool    com_reverse;     /* 0xC8: rows mirrored */
+};
+
+static void st7565_set_a0(void *opaque, int line, int level)
+{
+    ST7565State *s = opaque;
+
+    s->a0 = !!level;
+}
+
+static void st7565_set_cs(void *opaque, int line, int level)
+{
+    ST7565State *s = opaque;
+
+    s->selected = !level;
+}
+
+/*
+ * The panel probe, accumulated in memory and written a buffer at a time.
+ *
+ * It used to open, write and close the file once per byte. That ran on the vCPU thread,
+ * so the probe was slow enough to change the timing of the very thing it was watching --
+ * and the transfer counts it reported could not be reconciled with the panel's own
+ * memory (which is written only through this same function). Nothing here touches a file
+ * until a buffer fills, and the tail is dumped at exit.
+ */
+static char    *panel_probe_buf;
+static size_t   panel_probe_len;
+static unsigned panel_probe_n;
+static const char *panel_probe_path;
+
+static void panel_probe_flush(void)
+{
+    FILE *f;
+
+    if (!panel_probe_path || !panel_probe_len) {
+        return;
+    }
+    f = fopen(panel_probe_path, "ab");
+    if (f) {
+        fwrite(panel_probe_buf, 1, panel_probe_len, f);
+        fclose(f);
+    }
+    panel_probe_len = 0;
+}
+
+static void panel_probe_add(int a0, int cs, int page, int col, uint8_t out)
+{
+    if (!panel_probe_path) {
+        panel_probe_path = g_getenv("UVK5_PANEL_PROBE");
+        if (!panel_probe_path) {
+            return;
+        }
+        panel_probe_buf = g_malloc(1 << 20);
+        atexit(panel_probe_flush);
+    }
+    if (panel_probe_n >= 2000000u) {
+        return;
+    }
+    if (panel_probe_len + 64 > (1 << 20)) {
+        panel_probe_flush();
+    }
+    panel_probe_len += snprintf(panel_probe_buf + panel_probe_len,
+                                (1 << 20) - panel_probe_len,
+                                "PANEL a0=%d cs=%d page=%d col=%d byte=%02x\n",
+                                a0, cs, page, col, out);
+    panel_probe_n++;
+}
+static uint8_t st7565_xfer(void *opaque, uint8_t out)
+{
+    ST7565State *s = opaque;
+    /* Diagnostic probe (UVK5_PANEL_PROBE): what the driver actually tells the
+     * controller, bounded, but high enough that a boot plus a launch is not cut off (2000000 transfers; the old value, 40000, was reached about forty seconds after boot, so anything measured after a launch was invisible). Two firmware builds that
+     * disagree about the column offset or the scan direction render differently, and
+     * this is how that is measured rather than guessed. */
+    /* In memory, flushed a buffer at a time -- see panel_probe_add. */
+    panel_probe_add(s->a0, s->selected, s->page, s->col, out);
+
+    if (!s->selected) {
+        return 0xff;
+    }
+    if (s->a0) {
+        /* Pixel data: latch it into the panel's own memory, then advance. */
+        if (s->col >= 4 && s->col < 132) {
+            s->gram[s->page & 7][s->col - 4] = out;
+        }
+        /*
+         * The controller's column counter runs 0..131 -- it has 132 column drivers,
+         * and the glass shows 128 of them starting at 4, which is why the store above
+         * subtracts 4. Masking the counter to seven bits made it wrap at 128 instead:
+         * the four bytes addressed 128..131 were then re-read as 0..3, fell outside
+         * the store, and were dropped. Every row lost its last four pixels -- and the
+         * battery icon lives in the rightmost columns, so the symptom was a wrong
+         * battery and a picture that looked shifted, on builds that draw to column
+         * 127. Measured: filling a whole page with 0xFF left columns 124..127 blank.
+         */
+        s->col = (s->col + 1) % 132;
+        return 0xff;
+    }
+
+    if (s->expect_contrast) {
+        s->contrast = out;
+        s->expect_contrast = false;
+        return 0xff;
+    }
+
+    /* Addressing first: these share the 0x00..0x1f and 0xb0..0xb7 opcode space. */
+    if (out >= 0xb0 && out <= 0xb7) {
+        s->page = out & 7;
+        return 0xff;
+    }
+    if (out <= 0x0f) {
+        s->col = (s->col & 0xf0) | out;
+        return 0xff;
+    }
+    if (out >= 0x10 && out <= 0x1f) {
+        s->col = (s->col & 0x0f) | ((out & 0x0f) << 4);
+        return 0xff;
+    }
+
+    switch (out) {
+    case 0xa6: s->invert = false;     break;
+    case 0xa7: s->invert = true;      break;
+    case 0xa0: s->seg_reverse = false; break;
+    case 0xa1: s->seg_reverse = true;  break;
+    case 0xc0: s->com_reverse = false; break;
+    case 0xc8: s->com_reverse = true;  break;
+    case 0xae: s->display_on = false; break;
+    case 0xaf: s->display_on = true;  break;
+    case 0x81: s->expect_contrast = true; break;
+    case 0xe2:  /* software reset: the controller's registers go back to defaults */
+        s->invert = false;
+        s->display_on = false;
+        s->contrast = 0;
+        s->expect_contrast = false;
+        break;
+    default:
+        break;
+    }
+    return 0xff;
+}
+
+static bool st7565_get_invert(Object *obj, Error **errp)
+{
+    return ST7565(obj)->invert;
+}
+
+static bool st7565_get_display_on(Object *obj, Error **errp)
+{
+    return ST7565(obj)->display_on;
+}
+
+static void st7565_get_contrast(Object *obj, Visitor *v, const char *name,
+                                void *opaque, Error **errp)
+{
+    uint8_t value = ST7565(obj)->contrast;
+
+    visit_type_uint8(v, name, &value, errp);
+}
+
+static bool st7565_get_seg_reverse(Object *obj, Error **errp)
+{
+    return ST7565(obj)->seg_reverse;
+}
+
+static bool st7565_get_com_reverse(Object *obj, Error **errp)
+{
+    return ST7565(obj)->com_reverse;
+}
+
+static void st7565_reset(DeviceState *dev)
+{
+    ST7565State *s = ST7565(dev);
+
+    s->a0 = false;
+    s->selected = false;
+    s->invert = false;
+    s->display_on = false;
+    s->contrast = 0;
+    s->expect_contrast = false;
+    s->page = 0;
+    s->col = 0;
+    s->seg_reverse = false;
+    s->com_reverse = false;
+    memset(s->gram, 0, sizeof(s->gram));
+}
+
+/*
+ * The panel's display RAM as hex, for the host to render. A string rather than a
+ * memory region on purpose: it keeps emulator bookkeeping out of the guest's
+ * address space, where a stray firmware read would be indistinguishable from
+ * hardware.
+ */
+static void st7565_get_gram(Object *obj, Visitor *v, const char *name,
+                            void *opaque, Error **errp)
+{
+    ST7565State *s = ST7565(obj);
+    g_autofree char *hex = g_malloc(8 * 128 * 2 + 1);
+    char *p = hex;
+
+    for (int page = 0; page < 8; page++) {
+        for (int col = 0; col < 128; col++) {
+            p += sprintf(p, "%02x", s->gram[page][col]);
+        }
+    }
+    char *value = hex;
+
+    visit_type_str(v, name, &value, errp);
+}
+
+static void st7565_init(Object *obj)
+{
+    qdev_init_gpio_in_named(DEVICE(obj), st7565_set_a0, "a0", 1);
+    qdev_init_gpio_in_named(DEVICE(obj), st7565_set_cs, "cs", 1);
+}
+
+static void st7565_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->reset = st7565_reset;
+    dc->desc = "ST7565 LCD controller (panel settings only)";
+
+    /* Read-only: these reflect what the firmware asked the panel for. */
+    object_class_property_add_bool(klass, "invert", st7565_get_invert, NULL);
+    object_class_property_set_description(klass, "invert",
+        "whether the panel is inverting the display (0xA6/0xA7)");
+    object_class_property_add_bool(klass, "display-on", st7565_get_display_on, NULL);
+    object_class_property_set_description(klass, "display-on",
+        "whether the panel is driving the glass (0xAE/0xAF)");
+    object_class_property_add(klass, "contrast", "uint8",
+                              st7565_get_contrast, NULL, NULL, NULL);
+    object_class_property_set_description(klass, "contrast",
+        "electronic volume the firmware set (the value after 0x81)");
+
+    object_class_property_add(klass, "gram", "string",
+                              st7565_get_gram, NULL, NULL, NULL);
+    object_class_property_set_description(klass, "gram",
+        "the controller's display RAM as hex, 8 pages of 128 columns");
+    object_class_property_add_bool(klass, "segment-reverse",
+                                   st7565_get_seg_reverse, NULL);
+    object_class_property_set_description(klass, "segment-reverse",
+        "0xA1: the driver mirrors the columns before they reach the glass");
+    object_class_property_add_bool(klass, "com-reverse",
+                                   st7565_get_com_reverse, NULL);
+    object_class_property_set_description(klass, "com-reverse",
+        "0xC8: the driver mirrors the rows before they reach the glass");
+}
+
+/* ---------------------------------------------------- BK4819 transceiver */
+
+/*
+ * The BK4819/BK4829 radio chip, on a software-driven three-wire bus.
+ *
+ * Scope, stated plainly: this models the *register interface*, not the radio. The
+ * chip has no public datasheet, so App/driver/bk4819.c is the only specification
+ * available, and a driver only ever tells you which registers were written -- never
+ * what left the antenna. Keying envelopes, spurious emissions and sensitivity need a
+ * real radio and a spectrum analyser. Do not read a passing test here as evidence
+ * about RF behaviour.
+ *
+ * What it does buy: register reads return what was written instead of zero, and the
+ * few registers the firmware reads *without* having written them return plausible
+ * values. That is the difference between control flow that works and control flow
+ * that silently takes the wrong branch -- RSSI was hard zero at 18 call sites, so
+ * the S-meter read empty and scan logic could not evaluate a channel.
+ *
+ * Wiring, from App/driver/bk4819.c: CS is PF9, SCL PB8, SDA PB9, all bit-banged.
+ * A transfer is CS low, eight bits of register number MSB first with bit 7 set for a
+ * read, then sixteen bits of data in whichever direction.
+ */
+#define TYPE_UVK5_BK4819 "uvk5-bk4819"
+OBJECT_DECLARE_SIMPLE_TYPE(BK4819State, UVK5_BK4819)
+
+/* Registers the firmware reads back. Kept as named constants for the comments. */
+#define BK4819_REG_INTERRUPT   0x0C   /* bit 0 = request pending */
+#define BK4819_REG_RSSI        0x67
+#define BK4819_REG_GLITCH      0x63
+#define BK4819_REG_NOISE       0x65
+#define BK4819_REG_REVISION    0x00
+#define BK4819_REG_INT_FLAGS   0x02   /* which interrupts; written to acknowledge */
+#define BK4819_REG_INT_ENABLE  0x3F   /* which interrupts the firmware wants */
+#define BK4819_REG_AUDIO_AMP   0x64   /* TX audio amplitude, drives the audio bar */
+#define BK4819_REG_RX_ENABLE   0x30
+#define BK4819_REG_RSSI_THRESH 0x78   /* open level in 15:8, 0.5 dB/step */
+
+/*
+ * Interrupt bits, from App/driver/bk4819-regs.h:290-291.
+ *
+ * The names inverted my intuition and cost several attempts. Per the firmware's own
+ * handling in app/app.c:
+ *
+ *   :1027  if (interrupts.sqlLost)  g_SquelchLost = true;   <- a signal is present
+ *   :1035  if (interrupts.sqlFound) g_SquelchLost = false;  <- the channel went quiet
+ *
+ * "squelch lost" means the squelch has been lost, i.e. it opened. Reporting
+ * SQUELCH_FOUND -- which reads like "found a signal" -- tells the firmware the
+ * opposite, and CheckForIncoming returns immediately on !g_SquelchLost.
+ */
+#define BK4819_INT_SQUELCH_LOST  (1u << 2)   /* squelch opened: signal there */
+#define BK4819_INT_SQUELCH_FOUND (1u << 3)   /* squelch closed again */
+
+/* REG_30 bits, same header, :240. */
+#define BK4819_REG_30_ENABLE_RX_DSP  (1u << 0)
+
+struct BK4819State {
+    DeviceState parent_obj;
+
+    /* Bus state. */
+    bool     cs;              /* true while selected (CS is active low) */
+    bool     scl, sda_out;
+    unsigned bit_count;
+    uint32_t shift_in;        /* bits clocked in from the guest */
+    uint8_t  cmd;             /* register number, once known */
+    bool     have_cmd;
+    bool     reading;
+    bool     skip_falling;    /* the command byte's trailing edge, not a data bit */
+
+    /*
+     * Diagnostic probe (UVK5_BK4819_PROBE) -- what this read presents, reassembled from
+     * the bits clocked out, because the model's own register file is right by
+     * construction and says nothing about what the guest was handed.
+     *
+     * It logs "sent" (the sixteen bits clocked out) against "reg" (the register). On the
+     * working model every read agrees: 1566 of 1566. That agreement is *not* proof that it
+     * would catch the historical left-shift -- removing the skip_falling fix below leaves
+     * the reassembled word unchanged, so this is not the point the guest samples at. Until
+     * that is understood, tools/test_bk4819_readback.sh remains the guard and
+     * tools/test_bk4819_readback.py is a draft.
+     */
+    uint32_t out_seen;
+    unsigned out_bits;
+
+    /*
+     * Interrupt flags awaiting collection, held apart from REG_02 because the firmware
+     * writes that register to acknowledge and then reads it back for the flags, so the
+     * value it reads has to survive its own clearing write.
+     */
+    uint16_t pending_int;
+    bool     squelch_open;
+    unsigned tick;            /* so the meters move instead of sitting flat */
+    uint16_t shift_out;       /* bits being clocked out to the guest */
+
+    /* Register file. 128 registers is enough: the number field is seven bits. */
+    uint16_t regs[128];
+
+    qemu_irq sda_in;          /* drives the guest's SDA input */
+};
+
+/*
+ * Values for the registers hardware keeps updating and the firmware only ever reads.
+ * Applied at reset and again after a soft reset, since the chip would carry on
+ * measuring where this model would otherwise be left holding zeros.
+ */
+static void bk4819_seed_measurements(BK4819State *s)
+{
+    /*
+     * REG_0C bit 0 must stay clear. App/app/app.c:910 and :1417 spin on it with no
+     * timeout at all -- `while (BK4819_ReadRegister(BK4819_REG_0C) & 1u)` -- so a
+     * stuck bit hangs the guest rather than degrading gracefully. This is why the
+     * GPIO model idled PB9 low before this device existed: with the line high every
+     * read returned 0xFFFF and RADIO_SetupRegisters never returned.
+     */
+    s->regs[BK4819_REG_INTERRUPT] = 0x0000;
+
+    /*
+     * RSSI, in quarter-dB above -160 dBm, so 0x1E0 is about -40 dBm: a clear signal
+     * that is not saturating. Zero reads as -160 dBm, which made the S-meter show
+     * empty and gave squelch and scan logic a dead band at all 18 call sites.
+     */
+    s->regs[BK4819_REG_RSSI] = 0x01E0;
+
+    /* Glitch and noise counters. Low means a clean channel. */
+    s->regs[BK4819_REG_GLITCH] = 0x0010;
+    s->regs[BK4819_REG_NOISE] = 0x0010;
+}
+
+/*
+ * Report a receiver that is hearing something, so the firmware's meters have data.
+ *
+ * Evaluated when the firmware polls REG_0C -- the moment it is actually asking. Doing
+ * this at configuration time instead is a trap: the firmware writes REG_3F to 0 and
+ * back to 0x0C0C repeatedly during setup, so a flag raised there is disabled again
+ * before anything collects it.
+ *
+ * This is not radio simulation. The levels are plausible numbers that move, not the
+ * result of modelling a signal. What they buy is firmware control flow running on live
+ * values rather than on zero -- squelch can open, the S-meter has something to draw,
+ * and a scan can evaluate a channel.
+ */
+/*
+ * The tuned frequency, in units of 10 Hz, as the firmware programmed it.
+ *
+ * BK4819_SetFrequency splits it across two registers (driver/bk4819.c:743):
+ *
+ *     REG_38 = Frequency        & 0xFFFF
+ *     REG_39 = (Frequency >> 16) & 0xFFFF
+ *
+ * Verified against a live guest: 0x0262 / 0x5A00 reads back as 40,000,000 -> 400.00000
+ * MHz, matching the frequency on screen.
+ */
+static uint32_t bk4819_tuned_hz10(BK4819State *s)
+{
+    return ((uint32_t)s->regs[0x39] << 16) | s->regs[0x38];
+}
+
+/*
+ * Signal strength for a tuned frequency, from a small table of virtual stations.
+ *
+ * This replaces a constant. A fixed RSSI comfortably above squelch meant the meter had
+ * a number to draw, but scanning, squelch and any "is this channel busy" decision faced
+ * a band that was uniformly and permanently occupied -- so none of that logic was
+ * really being exercised.
+ *
+ * What is honest here and what is not, stated plainly. The *shape* is real physics:
+ * received power falls off away from a carrier, and there is a noise floor underneath.
+ * The station list is invented -- these transmitters do not exist. So this reproduces
+ * "the firmware handles a band with signals in some places and not others", which is
+ * genuine behaviour coverage, and it does not reproduce any actual radio environment.
+ * Do not read a dBm figure here as a claim about the real world.
+ */
+struct BK4819Station {
+    uint32_t hz10;        /* centre frequency, units of 10 Hz */
+    uint16_t peak_rssi;   /* REG_67 counts at the centre; 0.25 dB/step from -160 dBm */
+};
+
+static const struct BK4819Station bk4819_stations[] = {
+    { 40000000, 0x01E0 },   /* 400.000 MHz, strong  -- about -40 dBm */
+    { 40012500, 0x0170 },   /* 400.125 MHz, medium  -- about -67 dBm */
+    { 43550000, 0x01A8 },   /* 435.500 MHz, strong  -- the satellite end of 70 cm */
+    { 14550000, 0x0150 },   /* 145.500 MHz, medium  -- 2 m */
+};
+
+/* Noise floor in REG_67 counts: about -125 dBm, well below any squelch threshold. */
+#define BK4819_NOISE_FLOOR 0x008C
+
+/*
+ * How quickly a station fades either side of centre. 12.5 kHz per step means a signal
+ * is gone within a few channel spacings, so adjacent channels are genuinely quiet and a
+ * scan has somewhere to stop and somewhere to move on from.
+ */
+#define BK4819_FADE_STEP_HZ10 1250
+#define BK4819_FADE_PER_STEP  0x30
+
+static uint16_t bk4819_rssi_for(BK4819State *s)
+{
+    const uint32_t tuned = bk4819_tuned_hz10(s);
+    uint16_t best = BK4819_NOISE_FLOOR;
+
+    if (tuned == 0) {
+        return best;    /* nothing programmed yet */
+    }
+
+    for (unsigned i = 0; i < ARRAY_SIZE(bk4819_stations); i++) {
+        const uint32_t centre = bk4819_stations[i].hz10;
+        const uint32_t offset = tuned > centre ? tuned - centre : centre - tuned;
+        const uint32_t steps = offset / BK4819_FADE_STEP_HZ10;
+        const uint32_t fade = steps * BK4819_FADE_PER_STEP;
+
+        if (fade >= bk4819_stations[i].peak_rssi) {
+            continue;   /* faded into the noise */
+        }
+        const uint16_t level = bk4819_stations[i].peak_rssi - fade;
+        if (level > best) {
+            best = level;
+        }
+    }
+    return best;
+}
+
+static void bk4819_eval_receiver(BK4819State *s)
+{
+    s->tick++;
+
+    /*
+     * RSSI now depends on where the radio is tuned, plus a little jitter so the meter
+     * does not look painted on. REG_67 counts 0.25 dB/step up from -160 dBm.
+     */
+    const uint16_t base = bk4819_rssi_for(s);
+    const uint16_t rssi = base + ((s->tick * 7) & 0x07);
+    s->regs[BK4819_REG_RSSI] = rssi;
+
+    /* Transmit audio amplitude, which UI_DisplayAudioBar reads via REG_64. */
+    s->regs[BK4819_REG_AUDIO_AMP] = 0x0400 + ((s->tick * 23) & 0x07FF);
+
+    /*
+     * A receiver with its DSP off hears nothing. Bit 0 of REG_30 is ENABLE_RX_DSP;
+     * BK4819_Sleep clears the register and waking sets 0xC1FE | ENABLE_RX_DSP. Testing
+     * the whole register against zero would be wrong, because TX and tone paths leave
+     * other bits set with RX_DSP clear.
+     *
+     * Any already-raised flag stays raised: real hardware does not withdraw an
+     * interrupt because the receiver was later powered down, and withdrawing it here
+     * meant the firmware's brief awake windows never lined up with an asserted flag.
+     */
+    if (!(s->regs[BK4819_REG_RX_ENABLE] & BK4819_REG_30_ENABLE_RX_DSP)) {
+        s->squelch_open = false;
+        return;
+    }
+
+    /* Say nothing about an interrupt the firmware has not asked for. */
+    if (!(s->regs[BK4819_REG_INT_ENABLE] & BK4819_INT_SQUELCH_LOST)) {
+        s->squelch_open = false;
+        return;
+    }
+
+    /*
+     * Compare against the threshold the firmware programmed. REG_78 bits 15:8 hold the
+     * open level at 0.5 dB/step against REG_67's 0.25, so it doubles. REG_4E's low bits
+     * are the *glitch* threshold, not this -- using those meant squelch never opened.
+     */
+    const uint16_t open_thresh = ((s->regs[BK4819_REG_RSSI_THRESH] >> 8) & 0xff) * 2;
+
+    /*
+     * Only consider raising every so often.
+     *
+     * This is the crux of the whole exercise. The firmware's collection loop re-reads
+     * REG_0C as its condition, and this function runs on every read -- so raising a new
+     * flag whenever the signal is present means the loop re-arms the very bit it is
+     * trying to clear and spins forever, with no timeout to save it. Announcing only
+     * once has the opposite failure: the news lands during startup, before
+     * g_SquelchLost leads anywhere, and is never repeated.
+     *
+     * Announcing periodically satisfies both. The loop always drains, because the
+     * intervening polls report nothing, and the firmware still hears about an open
+     * squelch again and again until it is in a state where that matters.
+     */
+    const bool may_announce = (s->tick % 64) == 0;
+
+    if (may_announce && open_thresh && rssi >= open_thresh) {
+        /*
+         * Re-announce on every poll while the signal is there, rather than only on the
+         * transition.
+         *
+         * Announcing once looks right and is not: the firmware collected that single
+         * flag during startup, before it had entered a state where g_SquelchLost leads
+         * anywhere, and then squelch_open suppressed every later attempt. Measured as 1
+         * raise, 1 acknowledge, and g_SquelchLost still 0 -- the news arrived while
+         * nobody was listening for it.
+         *
+         * A real chip re-raises for as long as the condition holds, so the firmware
+         * finds out whenever it next gets round to asking.
+         */
+        s->pending_int |= BK4819_INT_SQUELCH_LOST;
+        s->squelch_open = true;
+    } else if (s->squelch_open) {
+        /* Signal gone: tell the firmware to close up again. */
+        s->pending_int |= BK4819_INT_SQUELCH_FOUND;
+        s->squelch_open = false;
+    }
+
+    /*
+     * Assert the request only when something is genuinely waiting, and only once per
+     * poll -- never continuously.
+     *
+     * The distinction matters more than it looks. Holding the line high for as long as
+     * the condition persists is what hardware does, but the firmware's collection loop
+     *
+     *     while (ReadRegister(REG_0C) & 1) { ... }
+     *
+     * has no timeout, so a permanently asserted bit is an unbreakable loop rather than
+     * a busy receiver. Raising a fresh flag per poll gives the firmware the news
+     * repeatedly while still letting the loop exit every time.
+     */
+    if (s->pending_int) {
+        s->regs[BK4819_REG_INTERRUPT] |= 1u;
+    }
+}
+
+static void bk4819_reset(DeviceState *dev)
+{
+    BK4819State *s = UVK5_BK4819(dev);
+
+    memset(s->regs, 0, sizeof(s->regs));
+    s->cs = false;
+    s->scl = false;
+    s->bit_count = 0;
+    s->shift_in = 0;
+    s->have_cmd = false;
+    s->reading = false;
+    s->shift_out = 0;
+    s->skip_falling = false;
+    s->pending_int = 0;
+    s->squelch_open = false;
+    s->tick = 0;
+
+    bk4819_seed_measurements(s);
+}
+
+static void bk4819_update_sda(BK4819State *s)
+{
+    /*
+     * Drive the line only during a read.
+     *
+     * No need to check whether the guest has switched SDA to an input: the GPIO
+     * model keeps output and input state separate, so driving pin-in never fights
+     * the guest's own output value. Watching MODER would mean the GPIO model having
+     * to report direction changes, which it does not do.
+     */
+    if (s->cs && s->reading) {
+        qemu_set_irq(s->sda_in, (s->shift_out & 0x8000) ? 1 : 0);
+    }
+}
+
+static void bk4819_set_cs(void *opaque, int line, int level)
+{
+    BK4819State *s = opaque;
+    const bool selected = !level;      /* active low */
+
+    if (!selected && s->cs) {
+        /* Deselect ends the transfer, whatever state it reached. */
+        s->bit_count = 0;
+        s->shift_in = 0;
+        s->have_cmd = false;
+        s->reading = false;
+        s->skip_falling = false;
+    }
+    s->cs = selected;
+}
+
+static void bk4819_set_scl(void *opaque, int line, int level)
+{
+    BK4819State *s = opaque;
+    const bool rising = level && !s->scl;
+    const bool falling = !level && s->scl;
+
+    s->scl = level;
+
+    if (!s->cs) {
+        return;
+    }
+
+    if (rising) {
+        if (!s->have_cmd) {
+            /* Command phase: eight bits, MSB first. */
+            s->shift_in = (s->shift_in << 1) | (s->sda_out ? 1 : 0);
+            if (++s->bit_count == 8) {
+                s->reading = (s->shift_in & 0x80) != 0;
+                s->cmd = s->shift_in & 0x7f;
+                s->have_cmd = true;
+                s->bit_count = 0;
+                s->shift_in = 0;
+                if (s->reading) {
+                    /* Refresh the meters at the moment the firmware asks. */
+                    if (s->cmd == BK4819_REG_INTERRUPT) {
+                        bk4819_eval_receiver(s);
+                    }
+                    s->shift_out = s->regs[s->cmd];
+                    s->out_seen = 0;
+                    s->out_bits = 0;
+                    /*
+                     * The command byte's own trailing falling edge must not consume
+                     * bit 15. Each firmware bit is read/raise/lower, so the eighth
+                     * command bit is followed by a falling edge before the data loop
+                     * begins -- and the advance below would shift bit 15 away before
+                     * the guest ever sampled it, delivering the whole word one place
+                     * too high (0x0001 arrived as 0x0002).
+                     */
+                    s->skip_falling = true;
+                    bk4819_update_sda(s);
+                }
+            }
+        } else if (!s->reading) {
+            /* Write phase: sixteen bits of data. */
+            s->shift_in = (s->shift_in << 1) | (s->sda_out ? 1 : 0);
+            if (++s->bit_count == 16) {
+                const uint16_t data = s->shift_in & 0xffff;
+                s->regs[s->cmd] = data;
+                s->bit_count = 0;
+                s->shift_in = 0;
+                s->have_cmd = false;
+
+                /*
+                 * REG_00 bit 15 is a soft reset, which BK4819_Init issues first
+                 * thing. On the real chip the measurement registers keep being
+                 * updated by hardware afterwards; here they have to be re-seeded,
+                 * or the reset leaves RSSI reading 0 -- i.e. -160 dBm -- and every
+                 * squelch and scan decision sees a dead band. This is exactly what
+                 * happened on the first run: 48 registers had been decoded fine and
+                 * RSSI was still zero.
+                 */
+                if (s->cmd == BK4819_REG_REVISION && (data & 0x8000)) {
+                    bk4819_seed_measurements(s);
+                }
+
+                /*
+                 * Writing REG_02 acknowledges. The firmware's loop is
+                 *
+                 *     while (ReadRegister(REG_0C) & 1) {
+                 *         WriteRegister(REG_02, 0);      // clear
+                 *         flags = ReadRegister(REG_02);  // then collect
+                 *     }
+                 *
+                 * so the flags must appear in REG_02 as a result of the write, and the
+                 * request bit has to drop here. That loop has no timeout at all
+                 * (app/app.c:910, :1417), so leaving the bit set hangs the guest.
+                 */
+                if (s->cmd == BK4819_REG_INT_FLAGS) {
+                    s->regs[BK4819_REG_INT_FLAGS] = s->pending_int;
+                    s->pending_int = 0;
+                    s->regs[BK4819_REG_INTERRUPT] &= ~1u;
+                }
+            }
+        }
+    }
+
+    if (falling && s->skip_falling) {
+        s->skip_falling = false;
+    } else if (falling && s->have_cmd && s->reading) {
+        /*
+         * The bit being presented right now is what the guest samples. Reassemble the
+         * sixteen of them so the probe can report the word the guest received.
+         */
+        s->out_seen = (s->out_seen << 1) | ((s->shift_out >> 15) & 1u);
+        s->out_bits++;
+        if (s->out_bits == 16) {
+            const char *bk_probe = g_getenv("UVK5_BK4819_PROBE");
+            if (bk_probe) {
+                FILE *bf = fopen(bk_probe, "a");
+                if (bf) {
+                    fprintf(bf, "READ cmd=%02x sent=%04x reg=%04x skip=%d\n",
+                            s->cmd, (unsigned)s->out_seen, s->regs[s->cmd],
+                            s->skip_falling ? 1 : 0);
+                    fclose(bf);
+                }
+            }
+            s->out_bits = 0;
+        }
+        /*
+         * Advance on the falling edge so the next bit is settled before the guest
+         * samples it. BK4819_ReadU16 sets SCL low, reads, then sets it high.
+         */
+        s->shift_out <<= 1;
+        s->bit_count++;
+        bk4819_update_sda(s);
+        if (s->bit_count >= 16) {
+            s->bit_count = 0;
+            s->have_cmd = false;
+            s->reading = false;
+        }
+    }
+}
+
+static void bk4819_set_sda(void *opaque, int line, int level)
+{
+    BK4819State *s = opaque;
+    s->sda_out = level;
+}
+
+static void bk4819_init(Object *obj)
+{
+    BK4819State *s = UVK5_BK4819(obj);
+    DeviceState *dev = DEVICE(obj);
+
+    qdev_init_gpio_in_named(dev, bk4819_set_cs, "cs", 1);
+    qdev_init_gpio_in_named(dev, bk4819_set_scl, "scl", 1);
+    qdev_init_gpio_in_named(dev, bk4819_set_sda, "sda", 1);
+    qdev_init_gpio_out_named(dev, &s->sda_in, "sda-in", 1);
+}
+
+/*
+ * Expose the register file over QOM as regNN, so a test can see what the firmware
+ * programmed without attaching a debugger.
+ *
+ * Reading state this way matters here: gdb pauses the guest, and the firmware's
+ * timing-sensitive paths (keypad debounce, the frequency input timeout) then behave
+ * differently, which has repeatedly produced conclusions that were artefacts of the
+ * measurement. QMP reads do not stop the guest.
+ */
+static void bk4819_get_reg(Object *obj, Visitor *v, const char *name,
+                           void *opaque, Error **errp)
+{
+    BK4819State *s = UVK5_BK4819(obj);
+    const unsigned num = (uintptr_t)opaque;
+    uint64_t value = num < ARRAY_SIZE(s->regs) ? s->regs[num] : 0;
+
+    visit_type_uint64(v, name, &value, errp);
+}
+
+static void bk4819_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->reset = bk4819_reset;
+    dc->desc = "BK4819 transceiver register interface";
+
+    for (unsigned num = 0; num < 0x80; num++) {
+        char *prop = g_strdup_printf("reg%02x", num);
+        object_class_property_add(klass, prop, "uint64", bk4819_get_reg, NULL,
+                                  NULL, (void *)(uintptr_t)num);
+        g_free(prop);
+    }
+}
+
+/* ---------------------------------------------------------------- SPI model */
+
+/*
+ * Both SPI controllers, modelled as immediate full-duplex transfers.
+ *
+ * SPI_WriteByte() in the firmware waits on TXE, writes DR, then waits on RXNE
+ * and reads DR, so both flags have to move or display and flash init deadlock.
+ * Because a transfer completes within the register write, TXE can stay asserted
+ * and RXNE is raised by the write itself.
+ *
+ * Bytes are handed to a callback so board-level device models (ST7565 display,
+ * PY25Q16 flash) can interpret the stream; the chip-select GPIOs decide which
+ * device is listening. Layout from py32f071xB.h: CR1 0x00, SR 0x08, DR 0x0C.
+ */
+#define TYPE_PY32_SPI "py32-spi"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32SpiState, PY32_SPI)
+
+typedef uint8_t (*PY32SpiXferFn)(void *opaque, uint8_t out);
+
+struct PY32SpiState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    char        *bus_name;
+
+    uint32_t cr1, cr2, sr;
+    uint8_t  rx;
+
+    PY32SpiXferFn xfer;
+    void         *xfer_opaque;
+
+    /*
+     * Set by the DMA model so SPI can kick armed channels when the guest asserts
+     * a DMA request. Without this the request is invisible to DMA and the
+     * transfer has to be started at arm time, which is too early.
+     */
+    void (*dma_kick)(void *dma, PY32SpiState *spi);
+    void  *dma;
+};
+
+#define SPI_CR1  0x00
+#define SPI_CR2  0x04
+#define SPI_SR   0x08
+#define SPI_DR   0x0c
+
+#define SPI_SR_RXNE (1u << 0)
+#define SPI_SR_TXE  (1u << 1)
+#define SPI_SR_BSY  (1u << 7)
+
+#define SPI_CR1_SPE     (1u << 6)   /* SPI enable */
+#define SPI_CR2_RXDMAEN (1u << 0)   /* RX DMA request enable */
+#define SPI_CR2_TXDMAEN (1u << 1)   /* TX DMA request enable */
+
+void py32_spi_set_xfer(PY32SpiState *s, PY32SpiXferFn fn, void *opaque);
+
+void py32_spi_set_xfer(PY32SpiState *s, PY32SpiXferFn fn, void *opaque)
+{
+    s->xfer = fn;
+    s->xfer_opaque = opaque;
+}
+
+/* Clock one byte through whatever device is attached. Used by the DMA model,
+ * which bypasses the data register entirely. */
+uint8_t py32_spi_xfer_byte(PY32SpiState *s, uint8_t out);
+
+uint8_t py32_spi_xfer_byte(PY32SpiState *s, uint8_t out)
+{
+    return s->xfer ? s->xfer(s->xfer_opaque, out) : 0xff;
+}
+
+static uint64_t py32_spi_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32SpiState *s = opaque;
+
+    switch (addr) {
+    case SPI_CR1: return s->cr1;
+    case SPI_CR2: return s->cr2;
+    case SPI_SR:
+        /* Diagnostic probe, off unless UVK5_READ_PROBE names a file: what a polling program
+ * actually sees. Left in place because it is how the hang above was found. */
+        {
+            const char *p = g_getenv("UVK5_SPI_PROBE");
+            if (p) { FILE *f = fopen(p, "a"); if (f) { fprintf(f, "SR %s = %02x\n", s->bus_name ?: "?", s->sr); fclose(f); } }
+        }
+        return s->sr;
+    case SPI_DR:
+        {
+            const char *p = g_getenv("UVK5_SPI_PROBE");
+            if (p) { FILE *f = fopen(p, "a"); if (f) { fprintf(f, "DRREAD %s = %02x\n", s->bus_name ?: "?", s->rx); fclose(f); } }
+        }
+        s->sr &= ~SPI_SR_RXNE;
+        return s->rx;
+    default:
+        return 0;
+    }
+}
+
+static void py32_spi_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32SpiState *s = opaque;
+
+    switch (addr) {
+    /*
+     * A DMA-driven transfer starts only once SPE and TXDMAEN are both set.
+     *
+     * TXDMAEN specifically, not "either direction": TX is what clocks the bus, so
+     * it is the gate. Both driver paths set it last:
+     *
+     *     arm RX, arm TX, RXDMAEN, SPE, TXDMAEN
+     *
+     * Starting at SPE, when only RXDMAEN was set, ran the whole transfer while the
+     * TX channel was armed but not yet requesting. On the sector write-back that
+     * meant sending 4096 bytes read from BlackHole (0x200003D4, four zero bytes,
+     * no address increment) instead of SectorCache (0x200003D8), so the sector was
+     * programmed with zeros -- wiping the per-band VFO frequencies at 0x9000 and
+     * with them any frequency the user typed.
+     */
+    case SPI_CR1:
+        s->cr1 = value;
+        if ((value & SPI_CR1_SPE) && (s->cr2 & SPI_CR2_TXDMAEN) && s->dma_kick) {
+            s->dma_kick(s->dma, s);
+        }
+        break;
+    case SPI_CR2:
+        s->cr2 = value;
+        if ((value & SPI_CR2_TXDMAEN) && (s->cr1 & SPI_CR1_SPE) && s->dma_kick) {
+            s->dma_kick(s->dma, s);
+        }
+        break;
+    case SPI_SR:
+        /* Flags are mostly hardware-driven; keep TXE asserted. */
+        s->sr = (value & ~SPI_SR_TXE) | SPI_SR_TXE;
+        break;
+    case SPI_DR:
+        /*
+         * The transfer happens here, in zero guest time. Whatever the attached
+         * device returns becomes the received byte.
+         */
+        {
+            const char *p = g_getenv("UVK5_SPI_PROBE");
+            if (p) { FILE *f = fopen(p, "a"); if (f) { fprintf(f, "DRWRITE %s = %02x\n", s->bus_name ?: "?", (unsigned)(value & 0xff)); fclose(f); } }
+        }
+        s->rx = s->xfer ? s->xfer(s->xfer_opaque, value & 0xff) : 0xff;
+        s->sr |= SPI_SR_RXNE | SPI_SR_TXE;
+        s->sr &= ~SPI_SR_BSY;
+        break;
+    default:
+        qemu_log_mask(LOG_UNIMP, "py32-spi%s: write 0x%" HWADDR_PRIx " = 0x%" PRIx64 "\n",
+                      s->bus_name ?: "", addr, value);
+        break;
+    }
+}
+
+static const MemoryRegionOps py32_spi_ops = {
+    .read = py32_spi_read,
+    .write = py32_spi_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+};
+
+static void py32_spi_reset(DeviceState *dev)
+{
+    PY32SpiState *s = PY32_SPI(dev);
+    s->cr1 = 0;
+    s->cr2 = 0;
+    /* Transmit buffer starts empty: the firmware's first wait must pass. */
+    s->sr = SPI_SR_TXE;
+    s->rx = 0xff;
+}
+
+static void py32_spi_init(Object *obj)
+{
+    PY32SpiState *s = PY32_SPI(obj);
+    memory_region_init_io(&s->iomem, obj, &py32_spi_ops, s, TYPE_PY32_SPI, 0x400);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+}
+
+static Property py32_spi_properties[] = {
+    DEFINE_PROP_STRING("bus-name", PY32SpiState, bus_name),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void py32_spi_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->reset = py32_spi_reset;
+    dc->desc = "PY32F071 SPI controller";
+    device_class_set_props(dc, py32_spi_properties);
+}
+
+/* ---------------------------------------------------------------- ADC model */
+
+/* ------------------------------------------------- PY25Q16 SPI NOR flash */
+
+/* ---------------------------------------------------------------- DMA model */
+
+/*
+ * DMA1. The SPI flash driver does not poll the data register -- it configures a
+ * pair of channels (4 for RX, 5 for TX), enables the transfer-complete
+ * interrupt and then spins on a flag its ISR sets. So a register-only stub
+ * deadlocks in PY25Q16_ReadBuffer, which is exactly where the machine stopped.
+ *
+ * The model performs the whole transfer inside the write that enables a channel:
+ * for each byte it clocks the attached SPI device, honouring the increment and
+ * direction bits, then raises the transfer-complete flag and the interrupt.
+ * Zero guest time is not how hardware behaves, but the firmware only ever waits
+ * for completion, never for a partial count.
+ *
+ * Layout from py32f071xB.h: ISR 0x00, IFCR 0x04, then per-channel blocks of
+ * 0x14 starting at 0x08 (CCR, CNDTR, CPAR, CMAR).
+ */
+/* The DMA model clocks bytes through an SPI controller. Both PY32SpiState and
+ * py32_spi_xfer_byte() are already defined above, so no redeclaration here. */
+
+#define TYPE_PY32_DMA "py32-dma"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32DmaState, PY32_DMA)
+
+#define PY32_DMA_CHANNELS 7
+#define DMA_ISR   0x00
+#define DMA_IFCR  0x04
+#define DMA_CH_BASE   0x08
+#define DMA_CH_STRIDE 0x14
+#define DMA_CCR   0x00
+#define DMA_CNDTR 0x04
+#define DMA_CPAR  0x08
+#define DMA_CMAR  0x0c
+
+#define DMA_CCR_EN      (1u << 0)
+#define DMA_CCR_TCIE    (1u << 1)
+#define DMA_CCR_DIR     (1u << 4)   /* 1 = read from memory */
+#define DMA_CCR_CIRC    (1u << 5)
+#define DMA_CCR_PINC    (1u << 6)
+#define DMA_CCR_MINC    (1u << 7)
+
+/* Per-channel flags occupy four bits each in ISR/IFCR: GIF, TCIF, HTIF, TEIF. */
+#define DMA_FLAG_GIF(ch)  (1u << ((ch) * 4 + 0))
+#define DMA_FLAG_TCIF(ch) (1u << ((ch) * 4 + 1))
+#define DMA_FLAG_HTIF(ch) (1u << ((ch) * 4 + 2))
+
+typedef struct {
+    uint32_t ccr, cndtr, cpar, cmar;
+    /*
+     * The length the guest programmed, kept separately because cndtr counts down.
+     * Needed to derive how far into the buffer a transfer has got, and to reload
+     * the count in circular mode.
+     */
+    uint32_t total;
+} PY32DmaChannel;
+
+/* Defined further down; DMA drains its receive queue. */
+typedef struct PY32StubState PY32StubState;
+static bool py32_stub_rx_empty(PY32StubState *s);
+static bool py32_stub_rx_pop(PY32StubState *s, uint8_t *out);
+
+struct PY32DmaState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+
+    uint32_t       isr;
+    PY32DmaChannel ch[PY32_DMA_CHANNELS];
+
+    /* Channels 1-3 and 4-7 share one interrupt line each on this part. */
+    qemu_irq irq_1_2_3;
+    qemu_irq irq_4_5_6_7;
+
+    /* Set by the SoC: lets the DMA clock bytes through an SPI controller. */
+    PY32SpiState *spi[2];
+
+    /*
+     * Set by the SoC. USART1's receive queue is drained from here because the
+     * firmware's UART driver never reads DR -- it watches the DMA count instead.
+     */
+    PY32StubState *usart1;
+
+    /*
+     * The address space DMA transfers move bytes through.
+     *
+     * Must be the CPU's, not address_space_memory. This SoC builds its own
+     * container region and hands that to the ARMv7M core, and never registers it
+     * with the global system memory, so address_space_memory cannot decode SRAM at
+     * all: reads returned MEMTX_DECODE_ERROR with all-zero data and writes went
+     * nowhere.
+     *
+     * That single mistake accounted for every "flash forgets things" symptom.
+     * PY25Q16_WriteBuffer reads a 4 KB sector into SectorCache, patches it, and
+     * programs the whole sector back. The read appeared to work -- the model
+     * returned real 0xFF bytes -- but DMA dropped them on the floor, so the
+     * write-back sourced 4096 zeros and cleared the sector, VFO frequencies at
+     * 0x9000 included. Hence a typed frequency reverting to 18 MHz, which is
+     * simply BX4819_band1_lower after RADIO_ConfigureChannel read a zero.
+     */
+    AddressSpace *as;
+};
+
+static void py32_dma_update_irq(PY32DmaState *s)
+{
+    bool low = false, high = false;
+
+    for (int ch = 0; ch < PY32_DMA_CHANNELS; ch++) {
+        if (!(s->ch[ch].ccr & DMA_CCR_TCIE)) {
+            continue;
+        }
+        if (s->isr & DMA_FLAG_TCIF(ch)) {
+            if (ch < 3) {
+                low = true;
+            } else {
+                high = true;
+            }
+        }
+    }
+    qemu_set_irq(s->irq_1_2_3, low);
+    qemu_set_irq(s->irq_4_5_6_7, high);
+}
+
+/* Which SPI controller a peripheral address belongs to, or NULL. */
+static PY32SpiState *py32_dma_spi_for(PY32DmaState *s, uint32_t paddr)
+{
+    if ((paddr & ~0x3ffu) == PY32_SPI1_BASE) {
+        return s->spi[0];
+    }
+    if ((paddr & ~0x3ffu) == PY32_SPI2_BASE) {
+        return s->spi[1];
+    }
+    return NULL;
+}
+
+/*
+ * Run the armed channels for one SPI peripheral.
+ *
+ * SPI is inherently duplex: every clocked byte simultaneously sends one byte and
+ * receives one. The firmware exploits this, arming a memory-to-peripheral channel
+ * that feeds dummy bytes and a peripheral-to-memory channel that collects the
+ * reply, both over the same transfer.
+ *
+ * So the two channels have to be stepped together, one byte at a time. Running
+ * them one after another -- as this did when each channel started on its own
+ * enable -- means the TX channel clocks the entire transfer out before the RX
+ * channel ever looks at the bus, and RX collects nothing.
+ */
+static void py32_dma_run_for_spi(PY32DmaState *s, PY32SpiState *spi)
+{
+    AddressSpace *as = s->as;
+    int tx = -1, rx = -1;
+
+    if (!as) {
+        /* Fail loudly rather than silently transferring zeros. */
+        qemu_log_mask(LOG_GUEST_ERROR, "py32-dma: no address space configured\n");
+        return;
+    }
+
+    for (int ch = 0; ch < PY32_DMA_CHANNELS; ch++) {
+        PY32DmaChannel *c = &s->ch[ch];
+        if (!(c->ccr & DMA_CCR_EN) || c->cndtr == 0) {
+            continue;
+        }
+        if (py32_dma_spi_for(s, c->cpar) != spi) {
+            continue;
+        }
+        if (c->ccr & DMA_CCR_DIR) {
+            tx = ch;
+        } else {
+            rx = ch;
+        }
+    }
+
+    if (tx < 0 && rx < 0) {
+        return;
+    }
+
+    /* Length is whichever side is armed; when both are, they match. */
+    uint32_t count = tx >= 0 ? s->ch[tx].cndtr : s->ch[rx].cndtr;
+    uint32_t tx_addr = tx >= 0 ? s->ch[tx].cmar : 0;
+    uint32_t rx_addr = rx >= 0 ? s->ch[rx].cmar : 0;
+    const bool tx_inc = tx >= 0 && (s->ch[tx].ccr & DMA_CCR_MINC);
+    const bool rx_inc = rx >= 0 && (s->ch[rx].ccr & DMA_CCR_MINC);
+
+    /* Diagnostic, UVK5_DMA_PROBE: a long run is the app load, and the tail of the
+     * loaded data has been arriving wrong. Print what this run is actually told. */
+    {
+        const char *p = g_getenv("UVK5_DMA_PROBE");
+        if (p && count > 512u) {
+            FILE *f = fopen(p, "a");
+            if (f) {
+                fprintf(f, "DMA tx=%d rx=%d count=%u tx_addr=0x%08x rx_addr=0x%08x tx_inc=%d rx_inc=%d tx_cndtr=%u rx_cndtr=%u\n",
+                        tx, rx, count, tx_addr, rx_addr, (int)(tx >= 0 && (s->ch[tx].ccr & DMA_CCR_MINC)),
+                        (int)(rx >= 0 && (s->ch[rx].ccr & DMA_CCR_MINC)),
+                        tx >= 0 ? s->ch[tx].cndtr : 0, rx >= 0 ? s->ch[rx].cndtr : 0);
+                fclose(f);
+            }
+        }
+    }
+
+    const char *wp = g_getenv("UVK5_DMA_WINDOW");
+    uint32_t wi = 0;
+
+    while (count > 0) {
+        uint8_t out = 0xff;
+
+        if (tx >= 0) {
+            address_space_read(as, tx_addr, MEMTXATTRS_UNSPECIFIED, &out, 1);
+        }
+
+        const uint8_t in = py32_spi_xfer_byte(spi, out);
+
+        /* Diagnostic (UVK5_DMA_WINDOW): the bytes this transfer actually carried, in the
+         * window where the overlay ends up wrong. Separates "the transfer wrote them"
+         * from "something wrote them afterwards". */
+        if (wp && (wi == 0u || wi == 1u || wi == 2444u || wi == 2445u || wi == (count - 1u))) {
+            FILE *f = fopen(wp, "a");
+            if (f) { fprintf(f, "idx=%u in=%02x rx=0x%08x\n", wi, in, rx_addr); fclose(f); }
+        }
+        wi++;
+
+        if (rx >= 0) {
+            address_space_write(as, rx_addr, MEMTXATTRS_UNSPECIFIED, &in, 1);
+        }
+
+        if (tx_inc) {
+            tx_addr++;
+        }
+        if (rx_inc) {
+            rx_addr++;
+        }
+        count--;
+    }
+
+    for (int ch = 0; ch < PY32_DMA_CHANNELS; ch++) {
+        if (ch == tx || ch == rx) {
+            s->ch[ch].cndtr = 0;
+            s->isr |= DMA_FLAG_TCIF(ch) | DMA_FLAG_GIF(ch);
+        }
+    }
+    py32_dma_update_irq(s);
+}
+
+/* Thin adaptor so SPI can call into DMA without knowing its type. */
+static void py32_dma_kick(void *dma, PY32SpiState *spi)
+{
+    py32_dma_run_for_spi((PY32DmaState *)dma, spi);
+}
+
+/*
+ * Move queued USART bytes into the guest buffer, one at a time, decrementing the
+ * channel's remaining count.
+ *
+ * The count is the whole point. App/driver/uart.c configures a circular
+ * peripheral-to-memory channel and never reads DR; it locates new data with
+ *
+ *     write_ptr = sizeof(UART_DMA_Buffer) - LL_DMA_GetDataLength(...)
+ *
+ * so a model that leaves CNDTR at its initial value reports an empty buffer
+ * forever, no matter how many bytes arrived. Serial receive was dead for exactly
+ * that reason, and with it the whole UV-K5 programming protocol.
+ *
+ * Circular mode reloads the count and wraps the address on completion rather than
+ * stopping, which is what makes the firmware's pointer arithmetic work across the
+ * end of the buffer.
+ */
+static void py32_dma_service_usart_rx(PY32DmaState *s)
+{
+    AddressSpace *as = s->as;
+
+    if (!as || !s->usart1) {
+        return;
+    }
+
+    for (int ch = 0; ch < PY32_DMA_CHANNELS; ch++) {
+        PY32DmaChannel *c = &s->ch[ch];
+
+        if (!(c->ccr & DMA_CCR_EN) || (c->ccr & DMA_CCR_DIR)) {
+            continue;                 /* disabled, or memory-to-peripheral */
+        }
+        if ((c->cpar & ~0x3ffu) != PY32_USART1_BASE) {
+            continue;
+        }
+        if (c->total == 0) {
+            continue;                 /* never configured with a length */
+        }
+
+        while (!py32_stub_rx_empty(s->usart1)) {
+            uint8_t byte;
+            if (!py32_stub_rx_pop(s->usart1, &byte)) {
+                break;
+            }
+
+            const uint32_t done = c->total - c->cndtr;
+            const uint32_t dest = c->cmar + ((c->ccr & DMA_CCR_MINC) ? done : 0);
+            address_space_write(as, dest, MEMTXATTRS_UNSPECIFIED, &byte, 1);
+
+            if (c->cndtr > 0) {
+                c->cndtr--;
+            }
+
+            if (c->cndtr == 0) {
+                if (c->ccr & DMA_CCR_CIRC) {
+                    c->cndtr = c->total;      /* wrap, keep running */
+                } else {
+                    c->ccr &= ~DMA_CCR_EN;
+                    break;
+                }
+            }
+        }
+
+        s->isr |= DMA_FLAG_GIF(ch);
+        py32_dma_update_irq(s);
+    }
+}
+
+static uint64_t py32_dma_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32DmaState *s = opaque;
+
+    if (addr == DMA_ISR) {
+        return s->isr;
+    }
+    if (addr == DMA_IFCR) {
+        return 0;
+    }
+    if (addr >= DMA_CH_BASE) {
+        const unsigned ch = (addr - DMA_CH_BASE) / DMA_CH_STRIDE;
+        const unsigned reg = (addr - DMA_CH_BASE) % DMA_CH_STRIDE;
+        if (ch < PY32_DMA_CHANNELS) {
+            switch (reg) {
+            case DMA_CCR:   return s->ch[ch].ccr;
+            case DMA_CNDTR:
+                /*
+                 * Deliver any pending serial bytes before answering. This read is
+                 * precisely how App/driver/uart.c discovers new data -- it computes
+                 * a write pointer from the remaining count -- so servicing here
+                 * needs no timer and cannot deliver bytes the guest has not asked
+                 * about yet.
+                 */
+                py32_dma_service_usart_rx(s);
+                return s->ch[ch].cndtr;
+            case DMA_CPAR:  return s->ch[ch].cpar;
+            case DMA_CMAR:  return s->ch[ch].cmar;
+            default: break;
+            }
+        }
+    }
+    return 0;
+}
+
+static void py32_dma_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32DmaState *s = opaque;
+
+    if (addr == DMA_IFCR) {
+        s->isr &= ~(uint32_t)value;
+        py32_dma_update_irq(s);
+        return;
+    }
+    if (addr < DMA_CH_BASE) {
+        return;  /* ISR is read-only */
+    }
+
+    const unsigned ch = (addr - DMA_CH_BASE) / DMA_CH_STRIDE;
+    const unsigned reg = (addr - DMA_CH_BASE) % DMA_CH_STRIDE;
+    if (ch >= PY32_DMA_CHANNELS) {
+        return;
+    }
+
+    switch (reg) {
+    case DMA_CNDTR:
+        s->ch[ch].cndtr = value;
+        s->ch[ch].total = value;      /* remember it; cndtr counts down */
+        break;
+    case DMA_CPAR:  s->ch[ch].cpar = value;  break;
+    case DMA_CMAR:  s->ch[ch].cmar = value;  break;
+    case DMA_CCR: {
+      s->ch[ch].ccr = value;
+      /*
+       * Enabling a channel only arms it. On real hardware the transfer starts
+       * when the peripheral raises its DMA request, which for SPI means
+       * SPI_CR2's TXDMAEN. Running it here instead broke duplex reads: the
+       * firmware's SPI_ReadBuf arms RX then TX and only then enables SPI, so a
+       * transfer that fired at arm time clocked the bus before the read command
+       * had been sent, and the destination buffer came back as zeros.
+       *
+       * That is what wiped the VFO frequency area. PY25Q16_WriteBuffer reads the
+       * whole 4 KB sector into SectorCache, patches it, and writes it back; the
+       * read returned zeros, so the write-back filled the sector with zeros --
+       * including the per-band frequencies at 0x9000.
+       */
+      break;
+    }
+    default:
+        break;
+    }
+}
+
+static const MemoryRegionOps py32_dma_ops = {
+    .read = py32_dma_read,
+    .write = py32_dma_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
+static void py32_dma_reset(DeviceState *dev)
+{
+    PY32DmaState *s = PY32_DMA(dev);
+    s->isr = 0;
+    memset(s->ch, 0, sizeof(s->ch));
+}
+
+static void py32_dma_init(Object *obj)
+{
+    PY32DmaState *s = PY32_DMA(obj);
+    memory_region_init_io(&s->iomem, obj, &py32_dma_ops, s, TYPE_PY32_DMA, 0x400);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq_1_2_3);
+    sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq_4_5_6_7);
+}
+
+static void py32_dma_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->reset = py32_dma_reset;
+    dc->desc = "PY32F071 DMA controller";
+}
+
+/*
+ * 2 MB SPI NOR, backed by a host file so settings and calibration persist
+ * across runs. Only the commands the firmware issues are implemented; the
+ * driver in App/driver/py25q16.c is the reference for which those are.
+ *
+ * Chip select comes from a GPIO, and the firmware also drives the display from
+ * the same SPI bus, so the model must ignore traffic while deselected --
+ * otherwise display bytes would be parsed as flash commands.
+ */
+#define TYPE_PY25Q16 "py25q16"
+OBJECT_DECLARE_SIMPLE_TYPE(PY25Q16State, PY25Q16)
+
+#define PY25Q16_SIZE (2 * MiB)
+
+/* Page-program buffer size. Programming wraps within a page; see PY25Q16_CMD_PP. */
+#define PY25Q16_PAGE_SIZE 0x100
+
+enum {
+    PY25Q16_CMD_NONE = 0,
+    PY25Q16_CMD_READ = 0x03,
+    PY25Q16_CMD_PP   = 0x02,   /* page program */
+    PY25Q16_CMD_WREN = 0x06,
+    PY25Q16_CMD_WRDI = 0x04,
+    PY25Q16_CMD_RDSR = 0x05,
+    PY25Q16_CMD_SE   = 0x20,   /* sector erase, 4 KB */
+    PY25Q16_CMD_JEDEC = 0x9f,
+};
+
+struct PY25Q16State {
+    DeviceState parent_obj;
+
+    uint8_t *data;
+    char    *image_path;
+
+    bool     selected;
+    /* Diagnostic probe (UVK5_FLASH_PROBE): per-transaction log of what the firmware asks
+ * the flash for. */
+    uint8_t  probe_cmd;
+    uint32_t probe_addr;
+    uint32_t probe_len;
+    uint8_t  probe_first[8];
+    bool     probe_active;
+    uint8_t  cmd;
+    uint32_t addr;
+    unsigned phase;      /* bytes consumed since the command byte */
+    bool     write_enabled;
+
+    /*
+     * Writes have to reach the backing file or nothing the firmware saves
+     * survives: settings, edited frequencies and channel data all live here, and
+     * on real hardware this is a physical part that keeps its contents with the
+     * power off.
+     *
+     * Flushing on every programmed byte would mean thousands of writes for one
+     * settings save, so a dirty flag is set here and the image is written out
+     * when the chip is deselected -- by which point the firmware's driver has
+     * finished the whole erase-and-program sequence.
+     */
+    bool     dirty;
+    /*
+     * The byte range changed since the last write-back, so a flush writes those
+     * bytes rather than the whole 2 MB image.
+     */
+    uint32_t dirty_lo, dirty_hi;
+    Notifier exit_notifier;
+};
+
+static void py25q16_exit_notify(Notifier *n, void *data);
+
+static void py25q16_mark_dirty(PY25Q16State *s, uint32_t addr, uint32_t len);
+
+static uint8_t py25q16_xfer(void *opaque, uint8_t out)
+{
+    PY25Q16State *s = opaque;
+
+    /* Diagnostic probe (UVK5_CALL_PROBE): one line per call, independent of the frame
+ * machinery. */
+    {
+        const char *p = g_getenv("UVK5_CALL_PROBE");
+        if (p) {
+            FILE *f = fopen(p, "a");
+            if (f) { fprintf(f, "call sel=%d cmd=%02x out=%02x phase=%u\n", s->selected, s->cmd, out, s->phase); fclose(f); }
+        }
+    }
+
+    if (!s->selected) {
+        /* Diagnostic probe (UVK5_FLASH_PROBE): a byte arriving while deselected means the
+ * chip-select line
+         * this code drives is not the one the model watches. */
+        const char *p = g_getenv("UVK5_FLASH_PROBE");
+        if (p) {
+            FILE *f = fopen(p, "a");
+            if (f) {
+                fprintf(f, "DESELECTED byte=%02x cmd=%02x addr=%06x\n", out, s->cmd, s->addr);
+                fclose(f);
+            }
+        }
+        return 0xff;
+    }
+
+    if (s->cmd == PY25Q16_CMD_NONE) {
+        s->cmd = out;
+        s->phase = 0;
+        s->addr = 0;
+        s->probe_cmd = out;
+        s->probe_addr = 0;
+        s->probe_len = 0;
+        memset(s->probe_first, 0, sizeof(s->probe_first));
+        s->probe_active = true;   /* every frame, whatever the command */
+
+        switch (s->cmd) {
+        case PY25Q16_CMD_WREN: s->write_enabled = true;  s->cmd = PY25Q16_CMD_NONE; break;
+        case PY25Q16_CMD_WRDI: s->write_enabled = false; s->cmd = PY25Q16_CMD_NONE; break;
+        default: break;
+        }
+        return 0xff;
+    }
+
+    s->phase++;
+
+    switch (s->cmd) {
+    case PY25Q16_CMD_READ:
+        if (s->phase <= 3) {
+            s->addr = (s->addr << 8) | out;   /* 24-bit address, MSB first */
+            if (s->phase == 3) s->probe_addr = s->addr;
+            return 0xff;
+        }
+        if (s->probe_active) {
+            if (s->probe_len < sizeof(s->probe_first)) {
+                s->probe_first[s->probe_len] = s->data[s->addr % PY25Q16_SIZE];
+            }
+            s->probe_len++;
+        }
+        return s->data[(s->addr++) % PY25Q16_SIZE];
+
+
+    case PY25Q16_CMD_PP:
+        if (s->phase <= 3) {
+            s->addr = (s->addr << 8) | out;
+            if (s->phase == 3) s->probe_addr = s->addr;
+            return 0xff;
+        }
+        if (s->write_enabled) {
+            /* NOR can only clear bits without an erase. */
+            s->data[s->addr % PY25Q16_SIZE] &= out;
+            py25q16_mark_dirty(s, s->addr % PY25Q16_SIZE, 1);
+        }
+        /*
+         * Page program wraps within its 256-byte page: a burst that runs past the
+         * page boundary continues at the start of the same page rather than
+         * spilling into the next one. Real SPI NOR works this way because the
+         * chip latches only the low address bits into its page buffer.
+         *
+         * Without this the model let one transaction walk straight through, and a
+         * 512-byte burst at 0x008F00 overwrote 0x009000 -- which is the VFO
+         * frequency area in eeprom_compat.c's map. The stored frequency became
+         * zero, RADIO_ConfigureChannel only substitutes the band's lower limit for
+         * 0xFFFFFFFF, so the frequency was taken as 0 and clamped to
+         * BX4819_band1_lower. That is why a typed frequency always reverted to
+         * 18 MHz.
+         *
+         * Measured: the firmware really does send 512 bytes inside a single CS
+         * assertion here, so the wrap has to be modelled rather than assumed away.
+         */
+        s->addr = (s->addr & ~(PY25Q16_PAGE_SIZE - 1))
+                | ((s->addr + 1) & (PY25Q16_PAGE_SIZE - 1));
+        return 0xff;
+
+    case PY25Q16_CMD_SE:
+        if (s->phase <= 3) {
+            s->addr = (s->addr << 8) | out;
+            if (s->phase == 3) s->probe_addr = s->addr;
+            if (s->phase == 3 && s->write_enabled) {
+                const uint32_t sector = (s->addr / 0x1000) * 0x1000;
+                memset(s->data + (sector % PY25Q16_SIZE), 0xff, 0x1000);
+                py25q16_mark_dirty(s, sector % PY25Q16_SIZE, 0x1000);
+            }
+        }
+        return 0xff;
+
+    case PY25Q16_CMD_RDSR:
+        /* Never busy: erases and writes complete within the transfer above. */
+        return s->write_enabled ? 0x02 : 0x00;
+
+    case PY25Q16_CMD_JEDEC:
+        /* Puya manufacturer 0x85, memory type 0x60, capacity 0x15 = 2 MB. */
+        switch (s->phase) {
+        case 1: return 0x85;
+        case 2: return 0x60;
+        case 3: return 0x15;
+        default: return 0xff;
+        }
+
+    default:
+        qemu_log_mask(LOG_UNIMP, "py25q16: unhandled command 0x%02x\n", s->cmd);
+        /* Count it too: a firmware using an unmodelled command would otherwise
+         * look exactly like a firmware that never touched the flash. */
+        if (s->probe_active) s->probe_len++;
+        return 0xff;
+    }
+}
+
+/*
+ * Write the image back to its file.
+ *
+ * Whole-file rather than a partial update: 2 MB is nothing on a host, and the
+ * alternative means tracking which sectors changed, which is more code and more to
+ * get wrong for no benefit here.
+ *
+ * Via a temporary file and rename so an interrupted flush cannot leave a truncated
+ * image behind -- the file is the only copy of the radio's settings, and losing it
+ * to a half-finished write would be worse than not persisting at all.
+ *
+ * Only the bytes that changed, not the whole image: it used to write all 2 MB per
+ * chip-select release, which is ruinous when something programs in small chunks.
+ * The multi-system host interface writes a slot 200 bytes at a time (App/app/uart.c,
+ * 0x0724), so one 114 KB firmware became ~600 full rewrites -- on the vCPU thread,
+ * where the guest and every host tool talking to it wait for each one. Measured: the
+ * slot writer's own reads started timing out mid-transfer because of it.
+ *
+ * Writing the changed range in place is also the more faithful model. A whole-file
+ * temp-and-rename makes an interrupted write atomic, which real NOR is not: yank power
+ * mid-program and the sector is half-written. What must not happen is a *truncated*
+ * file, and an in-place range write cannot truncate anything.
+ */
+static void py25q16_mark_dirty(PY25Q16State *s, uint32_t addr, uint32_t len)
+{
+    if (addr >= PY25Q16_SIZE) {
+        addr %= PY25Q16_SIZE;
+    }
+    if (len > PY25Q16_SIZE) {
+        len = PY25Q16_SIZE;
+    }
+    if (addr + len > PY25Q16_SIZE) {
+        len = PY25Q16_SIZE - addr;
+    }
+    if (!s->dirty || addr < s->dirty_lo) {
+        s->dirty_lo = addr;
+    }
+    if (!s->dirty || addr + len > s->dirty_hi) {
+        s->dirty_hi = addr + len;
+    }
+    s->dirty = true;
+}
+
+static void py25q16_flush(PY25Q16State *s)
+{
+    char *tmp_path;
+    FILE *fh;
+
+    if (!s->dirty || !s->image_path || !*s->image_path) {
+        return;
+    }
+
+    /* In place, which is enough: only the programmed range is touched. */
+    fh = fopen(s->image_path, "r+b");
+    if (fh) {
+        const uint32_t len = s->dirty_hi - s->dirty_lo;
+        bool wrote = fseek(fh, (long)s->dirty_lo, SEEK_SET) == 0 &&
+                     fwrite(s->data + s->dirty_lo, 1, len, fh) == len;
+        if (fclose(fh) != 0) {
+            wrote = false;
+        }
+        if (wrote) {
+            s->dirty = false;
+            s->dirty_lo = s->dirty_hi = 0;
+            return;
+        }
+        warn_report("py25q16: short write to %s, keeping the image as it is",
+                    s->image_path);
+        return;
+    }
+
+    tmp_path = g_strdup_printf("%s.tmp", s->image_path);
+    fh = fopen(tmp_path, "wb");
+    if (!fh) {
+        warn_report("py25q16: cannot write %s, changes will be lost", tmp_path);
+        g_free(tmp_path);
+        return;
+    }
+    if (fwrite(s->data, 1, PY25Q16_SIZE, fh) != PY25Q16_SIZE) {
+        warn_report("py25q16: short write to %s, keeping the previous image",
+                    tmp_path);
+        fclose(fh);
+        unlink(tmp_path);
+        g_free(tmp_path);
+        return;
+    }
+    fclose(fh);
+    /*
+     * g_rename, not rename: on Windows the C library's rename does not replace an
+     * existing file, so every write-back failed with "cannot replace" while the
+     * settings stayed in RAM. GLib's maps to MoveFileEx with MOVEFILE_REPLACE_EXISTING,
+     * which is the POSIX behaviour the temp-file-then-rename dance depends on.
+     */
+    if (g_rename(tmp_path, s->image_path) != 0) {
+        warn_report("py25q16: cannot replace %s", s->image_path);
+        unlink(tmp_path);
+    } else {
+        s->dirty = false;
+    }
+    g_free(tmp_path);
+}
+
+/* Chip select is active low. */
+static void py25q16_set_cs(void *opaque, int line, int level)
+{
+    PY25Q16State *s = opaque;
+    const bool selected = !level;
+    {
+        const char *p = g_getenv("UVK5_CS_PROBE");
+        if (p) { FILE *f = fopen(p, "a"); if (f) { fprintf(f, "CS level=%d selected=%d\n", level, selected); fclose(f); } }
+    }
+
+    /* Diagnostic probe (UVK5_FLASH_PROBE): one line per chip-select frame, so a 128 KiB
+     * streaming read is one line rather than 131072 of them. */
+    if (s->selected && !selected && s->probe_active) {
+        const char *probe_path = g_getenv("UVK5_FLASH_PROBE");
+        FILE *probe = probe_path ? fopen(probe_path, "a") : NULL;
+        if (probe) {
+            fprintf(probe, "FLASH %02x addr=%06x len=%u first=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                s->probe_cmd, s->probe_addr, s->probe_len,
+                s->probe_first[0], s->probe_first[1], s->probe_first[2],
+                    s->probe_first[3], s->probe_first[4], s->probe_first[5],
+                    s->probe_first[6], s->probe_first[7]);
+            fclose(probe);
+        }
+        s->probe_active = false;
+    }
+
+    /*
+     * A chip-select edge ends the command in progress: the falling edge starts a
+     * fresh one, the rising edge finishes the current. Real NOR latches its opcode
+     * from the first clocks after CS goes low, so both edges matter.
+     *
+     * Only the rising edge used to reset this, which was invisible while every
+     * caller held CS for a whole transaction and then let go. The multiboot code
+     * is different: it pulses CS per operation, so the model sat inside the first
+     * read it ever saw (cmd=03, phase climbing) and interpreted a later WREN and
+     * page-program as more read data -- which is why the marker write disappeared
+     * without a trace.
+     */
+    if (!s->selected && selected) {
+        s->cmd = PY25Q16_CMD_NONE;
+        s->phase = 0;
+    }
+
+    if (s->selected && !selected) {
+        /* Deselect ends the command. */
+        s->cmd = PY25Q16_CMD_NONE;
+        s->phase = 0;
+        /*
+         * Flush here rather than per byte. The firmware's driver holds CS for a
+         * whole erase-and-program sequence, so this is once per settings save
+         * instead of once per programmed byte.
+         */
+        py25q16_flush(s);
+    }
+    s->selected = selected;
+}
+
+static void py25q16_realize(DeviceState *dev, Error **errp)
+{
+    PY25Q16State *s = PY25Q16(dev);
+
+    s->data = g_malloc(PY25Q16_SIZE);
+    memset(s->data, 0xff, PY25Q16_SIZE);
+
+    if (s->image_path && *s->image_path) {
+        FILE *fh = fopen(s->image_path, "rb");
+        if (fh) {
+            const size_t got = fread(s->data, 1, PY25Q16_SIZE, fh);
+            fclose(fh);
+            info_report("py25q16: loaded %zu bytes from %s", got, s->image_path);
+        } else {
+            warn_report("py25q16: cannot open %s, starting from erased flash",
+                        s->image_path);
+        }
+    }
+
+    qdev_init_gpio_in_named(dev, py25q16_set_cs, "cs", 1);
+
+    /*
+     * Also flush at exit. Deselect covers the normal case, but QMP `quit` -- which
+     * is what the web UI's power off sends -- can arrive with the chip still
+     * selected, and the last write would be dropped.
+     */
+    s->exit_notifier.notify = py25q16_exit_notify;
+    qemu_add_exit_notifier(&s->exit_notifier);
+}
+
+static void py25q16_exit_notify(Notifier *n, void *data)
+{
+    PY25Q16State *s = container_of(n, PY25Q16State, exit_notifier);
+    if (s->dirty) {
+        /* Everything, on the way out: the range is only an optimisation. */
+        s->dirty_lo = 0;
+        s->dirty_hi = PY25Q16_SIZE;
+    }
+    py25q16_flush(s);
+}
+
+static Property py25q16_properties[] = {
+    DEFINE_PROP_STRING("image", PY25Q16State, image_path),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void py25q16_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->realize = py25q16_realize;
+    dc->desc = "PY25Q16 2MB SPI NOR flash";
+    device_class_set_props(dc, py25q16_properties);
+}
+
+/*
+ * The firmware spins on three ADC conditions during BOARD_ADC_Init, so a
+ * store-and-echo stub deadlocks there:
+ *
+ *   while (LL_ADC_IsCalibrationOnGoing(ADC1))   -- CR2.CAL must self-clear
+ *   LL_ADC_Enable(ADC1)                         -- CR2.ADON
+ *   while (!LL_ADC_IsActiveFlag_EOS(ADC1))      -- SR.EOC must rise
+ *
+ * Register layout and bit positions come from the vendor headers
+ * (py32f071xB.h ADC_TypeDef, py32f071_ll_adc.h), including the detail that
+ * LL_ADC_FLAG_EOS is really ADC_SR_EOC on this part.
+ *
+ * The conversion result is a fixed value for now. It feeds battery voltage and
+ * the CEC-cable key detection; a flat reading is enough to boot, and the value
+ * can be made settable once those paths are being tested.
+ */
+#define TYPE_PY32_ADC "py32-adc"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32AdcState, PY32_ADC)
+
+struct PY32AdcState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    uint32_t regs[0x20];
+    uint32_t result;          /* what a conversion returns; see PY32_ADC_RESULT */
+};
+
+#define ADC_SR    0x00
+#define ADC_CR1   0x04
+#define ADC_CR2   0x08
+#define ADC_DR    0x50
+
+#define ADC_SR_AWD    (1u << 0)
+#define ADC_SR_EOC    (1u << 1)   /* what LL calls EOS on this part */
+#define ADC_SR_JEOC   (1u << 2)
+#define ADC_SR_JSTRT  (1u << 3)
+#define ADC_SR_STRT   (1u << 4)
+
+#define ADC_CR2_ADON   (1u << 0)
+#define ADC_CR2_CAL    (1u << 2)
+#define ADC_CR2_RSTCAL (1u << 3)
+#define ADC_CR2_SWSTART (1u << 22)
+
+/*
+ * Battery sits around 7.4 V; the calibration table in flash maps raw counts to volts,
+ * and 2200 lands mid-scale on a real dump.
+ *
+ * Settable at runtime via the "adc-result" property, because a fixed reading cannot
+ * exercise anything interesting. The firmware derives gBatteryDisplayLevel from this
+ * and raises gLowBattery plus a warning popup below a threshold -- none of which can be
+ * reached, let alone tested, while the value never moves.
+ */
+#define PY32_ADC_RESULT 2200
+
+static uint64_t py32_adc_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32AdcState *s = opaque;
+    const unsigned idx = addr >> 2;
+
+    if (idx >= ARRAY_SIZE(s->regs)) {
+        return 0;
+    }
+
+    if (addr == ADC_DR) {
+        /* Reading the result clears end-of-conversion, as on hardware. */
+        s->regs[ADC_SR >> 2] &= ~ADC_SR_EOC;
+        return s->result;
+    }
+    return s->regs[idx];
+}
+
+static void py32_adc_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32AdcState *s = opaque;
+    const unsigned idx = addr >> 2;
+
+    if (idx >= ARRAY_SIZE(s->regs)) {
+        return;
+    }
+
+    if (addr == ADC_CR2) {
+        /*
+         * Calibration and reset-calibration complete instantly: the bits are
+         * write-1-to-start and hardware-cleared, so never store them set or the
+         * firmware's wait loop never exits.
+         */
+        s->regs[idx] = value & ~(ADC_CR2_CAL | ADC_CR2_RSTCAL);
+
+        if (value & ADC_CR2_ADON) {
+            /* Enabled: report a finished conversion so the init sequence and
+             * later polled reads both make progress. */
+            s->regs[ADC_SR >> 2] |= ADC_SR_EOC | ADC_SR_STRT;
+        }
+        return;
+    }
+
+    if (addr == ADC_SR) {
+        /* Flags are cleared by writing 0 to them. */
+        s->regs[idx] &= value;
+        return;
+    }
+
+    s->regs[idx] = value;
+}
+
+static const MemoryRegionOps py32_adc_ops = {
+    .read = py32_adc_read,
+    .write = py32_adc_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
+static void py32_adc_reset(DeviceState *dev)
+{
+    PY32AdcState *s = PY32_ADC(dev);
+    memset(s->regs, 0, sizeof(s->regs));
+    s->result = PY32_ADC_RESULT;
+}
+
+static void py32_adc_get_result(Object *obj, Visitor *v, const char *name,
+                                void *opaque, Error **errp)
+{
+    uint64_t value = PY32_ADC(obj)->result;
+    visit_type_uint64(v, name, &value, errp);
+}
+
+static void py32_adc_set_result(Object *obj, Visitor *v, const char *name,
+                                void *opaque, Error **errp)
+{
+    PY32AdcState *s = PY32_ADC(obj);
+    uint64_t value;
+
+    if (!visit_type_uint64(v, name, &value, errp)) {
+        return;
+    }
+    /* 12-bit converter: clamp rather than wrap, so a silly value is obvious. */
+    s->result = value > 0xfff ? 0xfff : value;
+}
+
+static void py32_adc_init(Object *obj)
+{
+    PY32AdcState *s = PY32_ADC(obj);
+    memory_region_init_io(&s->iomem, obj, &py32_adc_ops, s, TYPE_PY32_ADC, 0x400);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+}
+
+static void py32_adc_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->reset = py32_adc_reset;
+    dc->desc = "PY32F071 ADC";
+
+    /*
+     * Settable so battery behaviour can be exercised. The firmware turns this raw
+     * count into gBatteryDisplayLevel via the calibration table in flash, and raises
+     * gLowBattery with a warning popup below a threshold; with a fixed reading none of
+     * that is reachable.
+     */
+    object_class_property_add(klass, "adc-result", "uint64",
+                              py32_adc_get_result, py32_adc_set_result,
+                              NULL, NULL);
+    object_class_property_set_description(klass, "adc-result",
+        "raw 12-bit ADC conversion result, which the firmware reads as battery voltage");
+}
+
+/* ------------------------------------------------------------------ TIM2 */
+
+/*
+ * TIM2 as a free-running counter, which is what the firmware's millis() reads.
+ *
+ * driver/millis.c programs a prescaler of SystemCoreClock/1000 and an auto-reload of
+ * 0xFFFFFFFF, then reads CNT directly:
+ *
+ *     uint32_t millis(void) { return LL_TIM_GetCounter(TIM2); }
+ *
+ * A stub returns whatever was last written, so millis() sat at 0 forever and every
+ * timeout built on it -- 17 call sites -- could never expire. That is a silent wrong
+ * answer rather than a hang, which is the harder kind to notice.
+ *
+ * The count comes from the host clock rather than guest cycles. Guest time here is not
+ * proportional to wall time anyway (see the SysTick note in README.md), and code that
+ * measures elapsed milliseconds wants something that advances at roughly the rate a
+ * human observes. Do not use this to check anything that needs cycle accuracy.
+ */
+#define TYPE_PY32_TIM2 "py32-tim2"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32Tim2State, PY32_TIM2)
+
+struct PY32Tim2State {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    uint32_t regs[0x20];
+    int64_t  started_ms;      /* host time at which the counter was enabled */
+    uint32_t offset;          /* what CNT was set to when that happened */
+    bool     running;
+};
+
+#define TIM_CR1  0x00
+#define TIM_CNT  0x24
+#define TIM_PSC  0x28
+#define TIM_ARR  0x2C
+
+#define TIM_CR1_CEN (1u << 0)
+
+static uint32_t py32_tim2_count(PY32Tim2State *s)
+{
+    if (!s->running) {
+        return s->offset;
+    }
+    const int64_t now = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+    return s->offset + (uint32_t)(now - s->started_ms);
+}
+
+static uint64_t py32_tim2_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32Tim2State *s = opaque;
+    const unsigned idx = addr >> 2;
+
+    if (addr == TIM_CNT) {
+        return py32_tim2_count(s);
+    }
+    return idx < ARRAY_SIZE(s->regs) ? s->regs[idx] : 0;
+}
+
+static void py32_tim2_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32Tim2State *s = opaque;
+    const unsigned idx = addr >> 2;
+
+    if (idx >= ARRAY_SIZE(s->regs)) {
+        return;
+    }
+
+    switch (addr) {
+    case TIM_CNT:
+        /* Writing CNT rebases the count, so millis() can be reset. */
+        s->offset = value;
+        s->started_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+        break;
+    case TIM_CR1:
+        if ((value & TIM_CR1_CEN) && !s->running) {
+            s->offset = py32_tim2_count(s);
+            s->started_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
+            s->running = true;
+        } else if (!(value & TIM_CR1_CEN) && s->running) {
+            /* Freeze at the current value rather than snapping back to zero. */
+            s->offset = py32_tim2_count(s);
+            s->running = false;
+        }
+        break;
+    }
+    s->regs[idx] = value;
+}
+
+static const MemoryRegionOps py32_tim2_ops = {
+    .read = py32_tim2_read,
+    .write = py32_tim2_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
+static void py32_tim2_reset(DeviceState *dev)
+{
+    PY32Tim2State *s = PY32_TIM2(dev);
+
+    memset(s->regs, 0, sizeof(s->regs));
+    s->offset = 0;
+    s->started_ms = 0;
+    s->running = false;
+}
+
+static void py32_tim2_init(Object *obj)
+{
+    PY32Tim2State *s = PY32_TIM2(obj);
+
+    memory_region_init_io(&s->iomem, obj, &py32_tim2_ops, s, TYPE_PY32_TIM2, 0x400);
+    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+}
+
+static void py32_tim2_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->reset = py32_tim2_reset;
+    dc->desc = "PY32F071 TIM2, the millisecond counter behind millis()";
+}
+
+/*
+ * Peripherals the firmware touches during init but whose behaviour it does not
+ * depend on yet (FLASH latency, PWR, SYSCFG, EXTI, CRC, timers, I2C, ADC).
+ * Reads return the last written value so read-modify-write sequences behave,
+ * and everything is logged so it is visible which ones actually get used --
+ * that log is how the next tier of models gets prioritised.
+ */
+#define TYPE_PY32_STUB "py32-stub"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32StubState, PY32_STUB)
+
+struct PY32StubState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    char        *stub_name;
+    uint32_t     size;
+    uint32_t     regs[0x100];
+
+    /*
+     * Receive path, USART1 only.
+     *
+     * A chardev supplies bytes; DR hands them to the guest. The DMA model drains
+     * this queue on behalf of the circular receive channel, because
+     * App/driver/uart.c never reads DR directly -- it derives a write pointer from
+     * the channel's remaining count.
+     */
+    CharBackend  chr;
+    uint8_t      rx_fifo[256];
+    unsigned     rx_head, rx_tail;
+
+    /*
+     * FLASH controller state, for the stub named "flash-ctl".
+     *
+     * The register file is from py32f071xB.h: ACR 0x00, KEYR 0x04, OPTKEYR 0x08,
+     * SR 0x0C, CR 0x10, AR 0x14. Only what the firmware drives is modelled: KEYR
+     * unlock, PG, PER/MER plus STRT, and an SR that reports EOP and never BSY.
+     *
+     * It has to actually program: the multi-system restore writes the slot image
+     * here, and a controller that only echoes its registers leaves the firmware
+     * believing it reflashed while the old image keeps running -- which is
+     * exactly what it did before this existed.
+     */
+    MemoryRegion *int_flash;
+    uint32_t      flash_cr;
+    uint32_t      flash_ar;
+    uint32_t      flash_sr;
+    bool          flash_key1;
+};
+
+/* USART_SR flags, from the vendor header. */
+#define PY32_USART_SR_RXNE (1u << 5)
+#define PY32_USART_SR_TC   (1u << 6)
+#define PY32_USART_SR_TXE  (1u << 7)
+
+static bool py32_stub_rx_empty(PY32StubState *s)
+{
+    return s->rx_head == s->rx_tail;
+}
+
+/* Pull one received byte, or return false when nothing is queued. */
+static bool py32_stub_rx_pop(PY32StubState *s, uint8_t *out)
+{
+    if (py32_stub_rx_empty(s)) {
+        return false;
+    }
+    *out = s->rx_fifo[s->rx_tail];
+    s->rx_tail = (s->rx_tail + 1) % sizeof(s->rx_fifo);
+    return true;
+}
+
+static int py32_stub_can_receive(void *opaque)
+{
+    PY32StubState *s = opaque;
+    const unsigned used = (s->rx_head - s->rx_tail) % sizeof(s->rx_fifo);
+    return sizeof(s->rx_fifo) - 1 - used;
+}
+
+static void py32_stub_receive(void *opaque, const uint8_t *buf, int size)
+{
+    PY32StubState *s = opaque;
+
+    for (int i = 0; i < size; i++) {
+        const unsigned next = (s->rx_head + 1) % sizeof(s->rx_fifo);
+        if (next == s->rx_tail) {
+            break;                    /* full; drop rather than overwrite */
+        }
+        s->rx_fifo[s->rx_head] = buf[i];
+        s->rx_head = next;
+    }
+}
+
+#define PY32_FLASH_CR_PG    (1u << 0)
+#define PY32_FLASH_CR_PER   (1u << 1)
+#define PY32_FLASH_CR_MER   (1u << 2)
+#define PY32_FLASH_CR_STRT  (1u << 6)
+#define PY32_FLASH_CR_LOCK  (1u << 7)
+#define PY32_FLASH_SR_EOP   (1u << 0)
+#define PY32_FLASH_KEY1     0x45670123u
+#define PY32_FLASH_KEY2     0xCDEF89ABu
+#define PY32_FLASH_PAGE     0x100u
+
+/* True for the stub that stands in for the FLASH controller. */
+static bool py32_stub_is_flash_ctl(PY32StubState *s)
+{
+    return s->stub_name != NULL && strcmp(s->stub_name, "flash-ctl") == 0;
+}
+
+static void py32_flash_ctl_erase(PY32StubState *s, bool whole)
+{
+    if (s->int_flash == NULL) {
+        return;
+    }
+    uint8_t *base = memory_region_get_ram_ptr(s->int_flash);
+    if (base == NULL) {
+        return;
+    }
+    if (whole) {
+        memset(base, 0xff, PY32_FLASH_SIZE);
+    } else {
+        const uint32_t off = s->flash_ar - PY32_FLASH_BASE;
+        if (off + PY32_FLASH_PAGE <= PY32_FLASH_SIZE) {
+            memset(base + off, 0xff, PY32_FLASH_PAGE);
+        }
+    }
+    s->flash_sr |= PY32_FLASH_SR_EOP;
+}
+
+static bool py32_flash_ctl_write(PY32StubState *s, hwaddr addr, uint64_t value)
+{
+    switch (addr) {
+    case 0x04:   /* KEYR */
+        if ((uint32_t)value == PY32_FLASH_KEY1) {
+            s->flash_key1 = true;
+        } else if ((uint32_t)value == PY32_FLASH_KEY2 && s->flash_key1) {
+            s->flash_cr &= ~PY32_FLASH_CR_LOCK;
+            s->flash_key1 = false;
+        }
+        return true;
+    case 0x0c:   /* SR: EOP is write-1-to-clear */
+        s->flash_sr &= ~(uint32_t)value;
+        return true;
+    case 0x10:   /* CR */
+        s->flash_cr = (uint32_t)value;
+        if (!(s->flash_cr & PY32_FLASH_CR_LOCK) && (s->flash_cr & PY32_FLASH_CR_STRT)) {
+            if (s->flash_cr & PY32_FLASH_CR_MER) {
+                py32_flash_ctl_erase(s, true);
+            } else if (s->flash_cr & PY32_FLASH_CR_PER) {
+                py32_flash_ctl_erase(s, false);
+            }
+            s->flash_cr &= ~PY32_FLASH_CR_STRT;   /* self-clearing */
+        }
+        return true;
+    case 0x14:   /* AR */
+        s->flash_ar = (uint32_t)value;
+        return true;
+    case 0x00:   /* ACR */
+    case 0x08:   /* OPTKEYR */
+        /*
+         * Stored, not swallowed. The bootloader's first loop is
+         *
+         *     ldr r2, [r1]      ; r1 = 0x40022000, the flash controller
+         *     lsls r2, r2, #30
+         *     lsrs r2, r2, #30  ; r2 = ACR & 3, the LATENCY field
+         *     cmp  r2, #1       ; waiting for one wait state
+         *     bne  -6
+         *
+         * so a write of 1 that is dropped here leaves ACR reading 0 forever and the
+         * bootloader spins before it ever configures its UART. That is exactly what it
+         * did: power-on produced no serial at all and the PC sampled 0x08000f38, the
+         * load inside that loop, on every sample. Returning false lets the generic
+         * path keep the value, which is what the register does.
+         */
+        return false;
+    default:
+        return false;
+    }
+}
+
+static uint64_t py32_stub_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32StubState *s = opaque;
+    const unsigned idx = addr >> 2;
+    uint32_t value = idx < ARRAY_SIZE(s->regs) ? s->regs[idx] : 0;
+
+    if (py32_stub_is_flash_ctl(s)) {
+        switch (addr) {
+        case 0x0c: value = s->flash_sr; break;
+        case 0x10: value = s->flash_cr; break;
+        case 0x14: value = s->flash_ar; break;
+        default: break;
+        }
+    }
+    /* Diagnostic probe (UVK5_USART_PROBE): reads matter as much as writes here. A program
+ * that
+     * never touches the USART is not waiting for a frame, and one that polls it is
+     * telling us the bytes are not arriving. */
+    if (s->stub_name && !strcmp(s->stub_name, "usart1")) {
+        const char *probe_path = g_getenv("UVK5_USART_PROBE");
+        if (probe_path) {
+            FILE *probe = fopen(probe_path, "a");
+            if (probe) {
+                fprintf(probe, "USART1 read  0x%02x -> 0x%08x\n", (unsigned)addr, value);
+                fclose(probe);
+            }
+        }
+    }
+
+    /*
+     * USART1 SR must report the transmitter as ready, or the firmware discards
+     * everything it tries to print.
+     *
+     * UART_Send() in App/driver/uart.c spins on LL_USART_IsActiveFlag_TXE() with
+     * a bounded timeout and *skips the byte* when the flag never sets. A stub
+     * that returns 0 for SR therefore silently loses all serial output: the only
+     * write reaching DR is UART_Init()'s priming zero. Reporting TXE|TC keeps the
+     * transmitter permanently ready, which is exactly right for a model that
+     * consumes bytes instantly.
+     */
+    if (addr == 0x00 && s->stub_name && !strcmp(s->stub_name, "usart1")) {
+        value |= PY32_USART_SR_TXE | PY32_USART_SR_TC;
+        /* RXNE so a firmware that polls instead of using DMA also works. */
+        if (!py32_stub_rx_empty(s)) {
+            value |= PY32_USART_SR_RXNE;
+        }
+    }
+
+    /* Reading DR consumes a received byte, as on hardware. */
+    if (addr == 0x04 && s->stub_name && !strcmp(s->stub_name, "usart1")) {
+        uint8_t byte;
+        if (py32_stub_rx_pop(s, &byte)) {
+            return byte;
+        }
+        return 0;
+    }
+
+    qemu_log_mask(LOG_UNIMP, "py32-%s: read 0x%03" HWADDR_PRIx " -> 0x%08x\n",
+                  s->stub_name ?: "stub", addr, value);
+    return value;
+}
+
+/*
+ * USART1 DR is the firmware's log output, so print it rather than dropping it.
+ *
+ * App/driver/uart.c drives USART1 at 38400 baud through UART_Send(), Main() sends
+ * UART_Version at boot, and _putchar() routes every printf_ there. USART1 has no
+ * real model here -- it is one of the logging catch-alls below -- so without this
+ * the bytes vanish and the firmware appears to print nothing at all.
+ *
+ * DR is at +0x04: the vendor CMSIS header (py32f071xB.h) lays USART_TypeDef out as
+ * SR at +0x00 then DR at +0x04. Buffered into a line so the output is readable
+ * instead of one message per character.
+ */
+static void py32_stub_serial_byte(char ch)
+{
+    static char line[256];
+    static unsigned len;
+
+    /*
+     * Drop NULs rather than buffering them. UART_Init() primes the transmitter
+     * with LL_USART_TransmitData8(USARTx, 0), so the very first byte of the
+     * session is 0x00; storing it made fprintf("%s") stop right there and print
+     * an empty line, even though the 46 bytes of UART_Version arrived fine.
+     */
+    if (ch == '\0') {
+        return;
+    }
+    /* Flush on either terminator: the firmware sends CRLF, and a lone CR should
+     * not hold a finished line hostage. */
+    if (ch == '\n' || ch == '\r' || len >= sizeof(line) - 1) {
+        line[len] = '\0';
+        if (len > 0) {
+            fprintf(stderr, "SERIAL %s\n", line);
+        }
+        len = 0;
+        return;
+    }
+    line[len++] = ch;
+}
+
+static void py32_stub_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32StubState *s = opaque;
+    const unsigned idx = addr >> 2;
+
+    /*
+     * Diagnostic probe (UVK5_USART_PROBE): what the bootloader asks the USART
+     * for, including the interrupt enables: a program that receives in an ISR cannot
+     * see anything from a stub that never raises one, and the application side would
+     * never reveal that because its driver polls DMA instead.
+     */
+    if (s->stub_name && !strcmp(s->stub_name, "usart1")) {
+        const char *probe_path = g_getenv("UVK5_USART_PROBE");
+        if (probe_path) {
+            FILE *probe = fopen(probe_path, "a");
+            if (probe) {
+                fprintf(probe, "USART1 write 0x%02x = 0x%08x%s\n",
+                        (unsigned)addr, (unsigned)value,
+                        (addr == 0x0c && (value & 0x20)) ? "   RXNEIE" : "");
+                fclose(probe);
+            }
+        }
+    }
+
+    if (py32_stub_is_flash_ctl(s) && py32_flash_ctl_write(s, addr, value)) {
+        return;
+    }
+
+    if (idx < ARRAY_SIZE(s->regs)) {
+        s->regs[idx] = value;
+    }
+    if (addr == 0x04 && s->stub_name && !strcmp(s->stub_name, "usart1")) {
+        const uint8_t byte = value & 0xff;
+
+        /* Human-readable copy on stderr, which is what the web UI log reads. */
+        py32_stub_serial_byte((char)byte);
+
+        /*
+         * And the raw byte to the chardev, if one is attached. Without this the
+         * transmit side is invisible to anything on the other end of the port: a
+         * host tool sends a command, the firmware answers, and the answer only ever
+         * reaches stderr -- which looks exactly like the firmware ignoring it.
+         */
+        if (qemu_chr_fe_backend_connected(&s->chr)) {
+            qemu_chr_fe_write_all(&s->chr, &byte, 1);
+        }
+    }
+    qemu_log_mask(LOG_UNIMP, "py32-%s: write 0x%03" HWADDR_PRIx " = 0x%08" PRIx64 "\n",
+                  s->stub_name ?: "stub", addr, value);
+}
+
+static const MemoryRegionOps py32_stub_ops = {
+    .read = py32_stub_read,
+    .write = py32_stub_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 1,
+    .valid.max_access_size = 4,
+};
+
+static void py32_stub_realize(DeviceState *dev, Error **errp)
+{
+    PY32StubState *s = PY32_STUB(dev);
+
+    memory_region_init_io(&s->iomem, OBJECT(dev), &py32_stub_ops, s,
+                          s->stub_name ?: TYPE_PY32_STUB,
+                          s->size ? s->size : 0x400);
+    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
+
+    /*
+     * Only USART1 takes a chardev: it is the firmware's console and the port the
+     * UV-K5 programming protocol speaks over. Harmless when unset -- without a
+     * backend the receive queue simply stays empty, which is the old behaviour.
+     */
+    if (s->stub_name && !strcmp(s->stub_name, "usart1")) {
+        qemu_chr_fe_set_handlers(&s->chr, py32_stub_can_receive,
+                                 py32_stub_receive, NULL, NULL, s, NULL, true);
+    }
+}
+
+static Property py32_stub_properties[] = {
+    DEFINE_PROP_STRING("stub-name", PY32StubState, stub_name),
+    DEFINE_PROP_UINT32("size", PY32StubState, size, 0x400),
+    DEFINE_PROP_CHR("chardev", PY32StubState, chr),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void py32_stub_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->realize = py32_stub_realize;
+    dc->desc = "PY32F071 unimplemented peripheral";
+    device_class_set_props(dc, py32_stub_properties);
+}
+
+/* ------------------------------------------------------------ SoC container */
+
+#define TYPE_PY32F071_SOC "py32f071-soc"
+OBJECT_DECLARE_SIMPLE_TYPE(PY32F071State, PY32F071_SOC)
+
+#define PY32_NUM_GPIO 4
+#define PY32_NUM_STUB 28
+
+struct PY32F071State {
+    DeviceState parent_obj;
+
+    ARMv7MState   armv7m;
+    PY32RccState  rcc;
+    PY32GpioState gpio[PY32_NUM_GPIO];
+    PY32AdcState  adc;
+    PY32Tim2State tim2;
+    PY32SpiState  spi[2];
+    PY32DmaState  dma;
+    PY32StubState stub[PY32_NUM_STUB];
+
+    Clock *sysclk;
+
+    MemoryRegion flash;
+    MemoryRegion flash_alias;
+    MemoryRegion sram;
+    MemoryRegion *board_memory;
+    /*
+     * Where the application image begins in flash, and therefore what address 0
+     * aliases. 0 means "the image *is* the whole flash", which is how a bootloader
+     * or multi-system release ships -- see the machine's app-offset property.
+     */
+    uint32_t app_offset;
+    MemoryRegion container;
+    /* Diagnostic write probe over eight bytes of SRAM; see py32_ram_probe_write. */
+    MemoryRegion ram_probe;
+    bool ram_probe_active;
+    /* Base address of the write probe and its own backing store for those bytes. */
+    uint32_t ram_probe_base;
+    uint8_t ram_probe_buf[1024];
+    /* An address space over `container`, so DMA sees the same map as the CPU. */
+    AddressSpace dma_as;
+};
+
+/* Peripherals covered by the catch-all, in map order. */
+static const struct { const char *name; hwaddr base; uint32_t size; } py32_stubs[] = {
+    { "flash-ctl", PY32_FLASH_R_BASE, 0x400 },
+    { "pwr",       PY32_PWR_BASE,     0x400 },
+    { "syscfg",    PY32_SYSCFG_BASE,  0x400 },
+    { "exti",      PY32_EXTI_BASE,    0x400 },
+    { "crc",       PY32_CRC_BASE,     0x400 },
+    { "usart1",    PY32_USART1_BASE,  0x400 },
+    { "usart2",    PY32_USART2_BASE,  0x400 },
+    { "i2c1",      PY32_I2C1_BASE,    0x400 },
+    { "i2c2",      PY32_I2C2_BASE,    0x400 },
+    { "tim1",      PY32_TIM1_BASE,    0x400 },
+    { "tim3",      PY32_TIM3_BASE,    0x400 },
+    { "tim6",      PY32_TIM6_BASE,    0x400 },
+    { "tim7",      PY32_TIM7_BASE,    0x400 },
+    { "tim14",     PY32_TIM14_BASE,   0x400 },
+    { "tim15",     PY32_TIM15_BASE,   0x400 },
+    { "tim16",     PY32_TIM16_BASE,   0x400 },
+    { "tim17",     PY32_TIM17_BASE,   0x400 },
+    { "usb",       PY32_USB_BASE,     0x400 },
+    { "rtc",       PY32_RTC_BASE,     0x400 },
+    { "iwdg",      PY32_IWDG_BASE,    0x400 },
+    { "wwdg",      PY32_WWDG_BASE,    0x400 },
+    { "usart3",    PY32_USART3_BASE,  0x400 },
+    { "usart4",    PY32_USART4_BASE,  0x400 },
+    { "dbgmcu",    PY32_DBGMCU_BASE,  0x400 },
+    { "lcd-ctl",   PY32_LCD_BASE,     0x400 },
+    /*
+     * 0x30000000 is not in the vendor CMSIS header and not in this SoC's documented
+     * map, but the multi-system release ("原厂7.02.07转换成三方刷机模式") opens with a
+     * read-modify-write there -- clear bits 3..5, then bit 1 -- and hard-faults
+     * without an answer. Real hardware evidently answers it, so a stub is the
+     * faithful minimum. Found by reading the exception frame: the stacked PC was
+     * 0x0800f7aa, an "ldr r0, [r4]" with r4 = 0x30000000.
+     */
+    { "unk-30000000", 0x30000000, 0x1000 },
+    /*
+     * The whole APB/AHB peripheral space, at the lowest priority, so a register the
+     * table above does not name still answers instead of aborting. This is not
+     * laziness: a real PY32F071 has more peripherals than the header lists blocks
+     * for here, and the firmware is the reference. The multi-system release died on
+     * "Data Abort at 0x40007400" -- DAC1_BASE, defined in the vendor header but with
+     * no model and no stub -- and a missing register is indistinguishable from
+     * broken hardware once it aborts. Accessing one logs (LOG_UNIMP), which is how
+     * the next thing worth modelling gets identified.
+     */
+    { "catchall",  0x40000000, 0x80000 },
+    /*
+     * The factory information block: unique device ID at 0x1FFF3000, option bytes at
+     * 0x1FFF3100, flash size at 0x1FFF31FC (py32f071xB.h). The multi-system release
+     * reads the UID early -- "Data Abort at 0x1fff3000" -- and on real silicon it
+     * answers. There is no way to invent a real serial number, and nothing here
+     * should depend on one, so zeros it is.
+     */
+    { "info-block", 0x1FFF3000, 0x400 },
+};
+
+/*
+ * The array of stub devices is sized by PY32_NUM_STUB, which is declared before the
+ * table can be counted. Adding an entry without bumping the constant used to be
+ * silent: the extra device was never realized and the address stayed unmapped, so a
+ * read there still hard-faulted and the only clue was that nothing changed. Four
+ * words of build-time check instead.
+ */
+QEMU_BUILD_BUG_ON(ARRAY_SIZE(py32_stubs) != PY32_NUM_STUB);
+
+static const hwaddr py32_gpio_bases[PY32_NUM_GPIO] = {
+    PY32_GPIOA_BASE, PY32_GPIOB_BASE, PY32_GPIOC_BASE, PY32_GPIOF_BASE,
+};
+static const char *py32_gpio_names[PY32_NUM_GPIO] = { "a", "b", "c", "f" };
+
+static void py32f071_soc_init(Object *obj)
+{
+    PY32F071State *s = PY32F071_SOC(obj);
+
+    object_initialize_child(obj, "armv7m", &s->armv7m, TYPE_ARMV7M);
+    object_initialize_child(obj, "rcc", &s->rcc, TYPE_PY32_RCC);
+    object_initialize_child(obj, "adc", &s->adc, TYPE_PY32_ADC);
+    object_initialize_child(obj, "tim2", &s->tim2, TYPE_PY32_TIM2);
+    object_initialize_child(obj, "spi1", &s->spi[0], TYPE_PY32_SPI);
+    object_initialize_child(obj, "spi2", &s->spi[1], TYPE_PY32_SPI);
+    object_initialize_child(obj, "dma1", &s->dma, TYPE_PY32_DMA);
+
+    /* The firmware runs the core at 48 MHz (SystemInit configures HSI+PLL). */
+    s->sysclk = qdev_init_clock_in(DEVICE(obj), "sysclk", NULL, NULL, 0);
+
+    for (int i = 0; i < PY32_NUM_GPIO; i++) {
+        object_initialize_child(obj, py32_gpio_names[i], &s->gpio[i], TYPE_PY32_GPIO);
+    }
+    for (int i = 0; i < PY32_NUM_STUB; i++) {
+        object_initialize_child(obj, py32_stubs[i].name, &s->stub[i], TYPE_PY32_STUB);
+    }
+}
+
+/*
+ * Diagnostic write probe (UVK5_RAM_PROBE=0xADDR): log every CPU store into the
+ * eight bytes at ADDR together with the PC that made it, then forward the write
+ * to the real RAM so nothing changes for the guest.
+ *
+ * It exists because a gdb watchpoint on the same address halts the guest on every
+ * hit, and the address under study sits inside a region the firmware memsets about
+ * a hundred times a second -- so the watchpoint stopped the very launch being
+ * measured (rounds 63-66). The guest never stops here.
+ */
+static void py32_ram_probe_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+    PY32F071State *s = opaque;
+    CPUState *cpu = current_cpu;
+    uint32_t pc = 0;
+
+    if (cpu) {
+        pc = (uint32_t)ARM_CPU(cpu)->env.regs[15];
+    }
+    fprintf(stderr, "RAMPW pc=%08x off=%u val=%0*" PRIx64 " size=%u\n",
+            pc, (unsigned)addr, (int)(size * 2), value, size);
+
+    if (addr + size <= sizeof(s->ram_probe_buf)) {
+        memcpy(&s->ram_probe_buf[addr], &value, size);
+    } else {
+        qemu_log_mask(LOG_GUEST_ERROR, "py32-ram-probe: write 0x%" HWADDR_PRIx " +%u out of range\n", addr, size);
+    }
+}
+
+/*
+ * The probe region is an io region overlapped over RAM, so it intercepts reads as
+ * well as writes. Without this handler every read of those bytes returned zero, the
+ * firmware read zeros where it expected its own data, and the guest died -- the first
+ * version of the probe had exactly that bug.
+ */
+static uint64_t py32_ram_probe_read(void *opaque, hwaddr addr, unsigned size)
+{
+    PY32F071State *s = opaque;
+    uint64_t value = 0;
+
+    /*
+     * The probe keeps its own copy of these bytes rather than dispatching into the
+     * SRAM region. The first version forwarded with memory_region_dispatch_read and
+     * memory_region_dispatch_write, which is a re-entrant access into the same address
+     * space; with the probe aimed at gFrameBuffer the radio then never drew at all, so
+     * the instrument was changing what it measured. Owning the bytes avoids that.
+     */
+    if (addr + size <= sizeof(s->ram_probe_buf)) {
+        memcpy(&value, &s->ram_probe_buf[addr], size);
+    } else {
+        qemu_log_mask(LOG_GUEST_ERROR, "py32-ram-probe: read 0x%" HWADDR_PRIx " +%u out of range\n", addr, size);
+    }
+    return value;
+}
+
+/*
+ * The size limits matter. With an eight-byte region and max_access_size 8, aiming the
+ * probe at gFrameBuffer made the radio stop drawing entirely: the display path reaches
+ * that buffer with accesses the region could not serve, and an access that does not fit
+ * is a guest error rather than a forwarding. A kilobyte of region is enough for anything
+ * the firmware does to a buffer, and a guest access is served by copying it whole.
+ */
+static const MemoryRegionOps py32_ram_probe_ops = {
+    .read = py32_ram_probe_read,
+    .write = py32_ram_probe_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = { .min_access_size = 1, .max_access_size = 1024 },
+    .impl = { .min_access_size = 1, .max_access_size = 1024 },
+};
+
+static void py32f071_soc_realize(DeviceState *dev_soc, Error **errp)
+{
+    PY32F071State *s = PY32F071_SOC(dev_soc);
+    Object *obj = OBJECT(dev_soc);
+
+    if (!s->board_memory) {
+        error_setg(errp, "memory property was not set");
+        return;
+    }
+
+    memory_region_init(&s->container, obj, "py32f071-container", 0x60000000);
+
+        /*
+     * RAM, not ROM: the multi-system release reprograms the application region
+     * through the FLASH controller (MB_RestoreSlot), so the region has to be
+     * writable. The loader still fills it with the kernel image.
+     */
+    memory_region_init_ram(&s->flash, obj, "py32f071.flash", PY32_FLASH_SIZE, errp);
+    if (*errp) {
+        return;
+    }
+    memory_region_add_subregion(&s->container, PY32_FLASH_BASE, &s->flash);
+
+    memory_region_init_ram(&s->sram, obj, "py32f071.sram", PY32_SRAM_SIZE, errp);
+    if (*errp) {
+        return;
+    }
+    memory_region_add_subregion(&s->container, PY32_SRAM_BASE, &s->sram);
+
+    /*
+     * Optional write probe over eight bytes of SRAM. Overlaps the SRAM at a higher
+     * priority, logs the store, and forwards it, so the guest is never halted --
+     * which a gdb watchpoint cannot promise. Off unless UVK5_RAM_PROBE names an
+     * address inside SRAM.
+     */
+    const char *probe = g_getenv("UVK5_RAM_PROBE");
+    if (probe && *probe) {
+        uint32_t want = (uint32_t)strtoul(probe, NULL, 0);
+        /*
+         * A memory region's alignment is its size, and the offset a subregion is added
+         * at must respect it. Asking for 0x20001342 with an eight-byte probe therefore
+         * placed the region at 0x20001340 and watched the wrong bytes, silently; aimed
+         * at the framebuffer it covered something the display path needed and the radio
+         * stopped drawing. Align the request down and say so.
+         */
+        uint32_t at = want & ~(uint32_t)(sizeof(s->ram_probe_buf) - 1);
+
+        if (at != want) {
+            fprintf(stderr, "UVK5_RAM_PROBE=0x%08x is not aligned to the %u-byte probe; "
+                            "watching 0x%08x instead\n",
+                    want, (unsigned)sizeof(s->ram_probe_buf), at);
+        }
+
+        if (at >= PY32_SRAM_BASE && at + sizeof(s->ram_probe_buf) <= PY32_SRAM_BASE + PY32_SRAM_SIZE) {
+            memory_region_init_io(&s->ram_probe, obj, &py32_ram_probe_ops, s,
+                                  "py32f071.ram-probe", sizeof(s->ram_probe_buf));
+            memory_region_add_subregion_overlap(&s->container, at, &s->ram_probe, 1);
+            s->ram_probe_base = at;
+            s->ram_probe_active = true;
+            fprintf(stderr, "RAM probe watching %u bytes at 0x%08x\n",
+                    (unsigned)sizeof(s->ram_probe_buf), at);
+        } else {
+            fprintf(stderr, "UVK5_RAM_PROBE=0x%08x is outside SRAM; probe disabled\n", at);
+        }
+    }
+
+    /* Core. The firmware's vector table has 53 entries; round up for the NVIC. */
+    qdev_prop_set_uint32(DEVICE(&s->armv7m), "num-irq", PY32_NUM_IRQ + 16);
+    qdev_prop_set_string(DEVICE(&s->armv7m), "cpu-type", ARM_CPU_TYPE_NAME("cortex-m0"));
+    qdev_prop_set_bit(DEVICE(&s->armv7m), "enable-bitband", false);
+    qdev_connect_clock_in(DEVICE(&s->armv7m), "cpuclk", s->sysclk);
+    /*
+     * Accelerate SysTick polling. SYSTICK_DelayUs busy-reads the current-value
+     * register and accumulates differences; under emulation the counter barely
+     * moves between reads, and a measured 120 ms delay needed about 7.7 hours of
+     * wall time. Advancing the timer on each read makes those loops converge.
+     *
+     * Guest time therefore runs fast during a delay: the right trade for
+     * exercising the UI and control flow, the wrong tool for signal timing.
+     */
+    qdev_prop_set_uint32(DEVICE(&s->armv7m.systick[0]), "poll-boost", 24000);
+    object_property_set_link(OBJECT(&s->armv7m), "memory", OBJECT(&s->container),
+                             &error_abort);
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->armv7m), errp)) {
+        return;
+    }
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->rcc), errp)) {
+        return;
+    }
+    memory_region_add_subregion(&s->container, PY32_RCC_BASE,
+                                sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->rcc), 0));
+
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->adc), errp)) {
+        return;
+    }
+    memory_region_add_subregion(&s->container, PY32_ADC1_BASE,
+                                sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->adc), 0));
+
+    /*
+     * TIM2 gets a real model rather than the catch-all stub: millis() reads its counter
+     * directly, and a stub left that at 0 forever.
+     */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->tim2), errp)) {
+        return;
+    }
+    memory_region_add_subregion(&s->container, PY32_TIM2_BASE,
+                                sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->tim2), 0));
+
+    static const hwaddr spi_bases[2] = { PY32_SPI1_BASE, PY32_SPI2_BASE };
+    static const char *spi_names[2] = { "1", "2" };
+    for (int i = 0; i < 2; i++) {
+        qdev_prop_set_string(DEVICE(&s->spi[i]), "bus-name", spi_names[i]);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->spi[i]), errp)) {
+            return;
+        }
+        memory_region_add_subregion(&s->container, spi_bases[i],
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->spi[i]), 0));
+    }
+
+    /*
+     * DMA needs to reach the SPI controllers directly: the flash driver drives
+     * transfers entirely through DMA channels 4 and 5 and never touches the data
+     * register, so routing has to exist before it runs.
+     */
+    s->dma.spi[0] = &s->spi[0];
+    s->dma.spi[1] = &s->spi[1];
+
+    /* And the reverse link, so a DMA request from SPI can start the transfer. */
+    for (int i = 0; i < 2; i++) {
+        s->spi[i].dma = &s->dma;
+        s->spi[i].dma_kick = py32_dma_kick;
+    }
+
+    /*
+     * DMA must move bytes through the CPU's address space. The container above is
+     * this SoC's whole memory map and is given only to the core, so the global
+     * address_space_memory cannot see SRAM -- reads through it fail with
+     * MEMTX_DECODE_ERROR and yield zeros.
+     */
+    s->dma.as = &s->dma_as;
+    address_space_init(&s->dma_as, &s->container, "py32f071-dma");
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->dma), errp)) {
+        return;
+    }
+    memory_region_add_subregion(&s->container, PY32_DMA1_BASE,
+                                sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->dma), 0));
+    /* Vector 10 covers channels 1-3, vector 11 covers 4-7 (py32f071xB.h). */
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->dma), 0,
+                       qdev_get_gpio_in(DEVICE(&s->armv7m), 10));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->dma), 1,
+                       qdev_get_gpio_in(DEVICE(&s->armv7m), 11));
+
+    for (int i = 0; i < PY32_NUM_GPIO; i++) {
+        qdev_prop_set_string(DEVICE(&s->gpio[i]), "port-name", py32_gpio_names[i]);
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->gpio[i]), errp)) {
+            return;
+        }
+        memory_region_add_subregion(&s->container, py32_gpio_bases[i],
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->gpio[i]), 0));
+    }
+
+    for (int i = 0; i < PY32_NUM_STUB; i++) {
+        qdev_prop_set_string(DEVICE(&s->stub[i]), "stub-name", py32_stubs[i].name);
+        qdev_prop_set_uint32(DEVICE(&s->stub[i]), "size", py32_stubs[i].size);
+
+        /*
+         * Give USART1 a chardev so something can talk *to* the firmware. This is
+         * the port the UV-K5 programming protocol runs over (App/app/uart.c:
+         * 0x0514 handshake, 0x051B/0x051D EEPROM read and write, 0x05DD reset).
+         * Defaults to "serial0", so -serial on the command line just works.
+         */
+        if (!strcmp(py32_stubs[i].name, "usart1")) {
+            Chardev *chr = serial_hd(0);
+            if (chr) {
+                qdev_prop_set_chr(DEVICE(&s->stub[i]), "chardev", chr);
+            }
+        }
+
+        if (!sysbus_realize(SYS_BUS_DEVICE(&s->stub[i]), errp)) {
+            return;
+        }
+        if (!strcmp(py32_stubs[i].name, "flash-ctl")) {
+            /* The controller programs the array the CPU executes from. */
+            s->stub[i].int_flash = &s->flash;
+        }
+        if (!strcmp(py32_stubs[i].name, "catchall")) {
+            /* Priority -1: every named device above still wins its own window. */
+            memory_region_add_subregion_overlap(&s->container, py32_stubs[i].base,
+                sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->stub[i]), 0), -1);
+            continue;
+        }
+        memory_region_add_subregion(&s->container, py32_stubs[i].base,
+                                    sysbus_mmio_get_region(SYS_BUS_DEVICE(&s->stub[i]), 0));
+
+        /* DMA drains USART1's receive queue; see py32_dma_service_usart_rx. */
+        if (!strcmp(py32_stubs[i].name, "usart1")) {
+            s->dma.usart1 = &s->stub[i];
+        }
+    }
+
+    /*
+     * The container is handed to the ARMv7M core as its address space, so it
+     * must not also be mounted into the board's system memory: a memory region
+     * can only have one container. Aliasing flash at 0 is what the hardware
+     * does -- the M0+ fetches its vector table from 0x00000000, and on this part
+     * the boot mapping points that at flash.
+     */
+    /*
+     * The alias starts at the application offset, not at the flash base: the
+     * core fetches its initial SP and PC from address 0, and the image is loaded
+     * at 0x08002800 (past the bootloader), so 0 has to line up with the
+     * application's vector table rather than the bootloader's.
+     */
+    memory_region_init_alias(&s->flash_alias, obj, "py32f071.flash.alias",
+                             &s->flash, s->app_offset,
+                             PY32_FLASH_SIZE - s->app_offset);
+    memory_region_add_subregion(&s->container, 0, &s->flash_alias);
+}
+
+static Property py32f071_soc_properties[] = {
+    DEFINE_PROP_LINK("memory", PY32F071State, board_memory, TYPE_MEMORY_REGION,
+                     MemoryRegion *),
+    DEFINE_PROP_UINT32("app-offset", PY32F071State, app_offset, PY32_APP_OFFSET),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
+static void py32f071_soc_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    dc->realize = py32f071_soc_realize;
+    dc->desc = "Puya PY32F071 SoC";
+    device_class_set_props(dc, py32f071_soc_properties);
+}
+
+/* ------------------------------------------------------------------ machine */
+
+struct UVK5MachineState {
+    MachineState parent;
+    PY32F071State soc;
+    PY25Q16State  flash;
+    UVK5KeypadState keypad;
+    BK4819State     bk4819;
+    UVK5AudioState  audio;
+    ST7565State     panel;
+    Clock *sysclk;
+    char  *flash_image;
+    uint32_t app_offset;
+    bool app_offset_set;   /* an explicit app-offset wins over the sniffed one */
+
+    /*
+     * A key held from reset, so the firmware's boot-time key sampling sees it.
+     * Without this, entering a boot mode means pausing the VM, setting the keypad
+     * over QMP and continuing -- fine for a script, unusable from the page.
+     * The hold is measured in guest time and released by a timer, which is what
+     * the firmware itself measures.
+     */
+    char      *boot_key;
+    uint32_t   boot_key_hold_ms;
+    QEMUTimer *boot_key_timer;
+    QEMUTimer *pc_probe_timer;
+    bool       boot_key_ptt;
+};
+
+#define TYPE_UVK5_MACHINE MACHINE_TYPE_NAME("uv-k5-v3")
+OBJECT_DECLARE_SIMPLE_TYPE(UVK5MachineState, UVK5_MACHINE)
+
+/*
+ * A release .bin carries no headers, so which shape it is has to be read out of the
+ * image: the first two words are the initial SP and the reset handler, and where the
+ * handler sits decides the rest. A bootloader's entry point lives inside the
+ * bootloader region, ahead of the application; anything else is an application
+ * linked for PY32_APP_OFFSET.
+ *
+ * This is done here rather than by the caller because getting it wrong is silent: the
+ * image lands 0x2800 bytes off and the first fetch reads whatever data is there. An
+ * .elf needs none of it -- it carries its own program headers.
+ */
+static uint32_t uvk5_sniff_app_offset(const char *path)
+{
+    g_autofree char *data = NULL;
+    gsize len = 0;
+    uint32_t sp, reset;
+
+    if (path == NULL || !g_file_get_contents(path, &data, &len, NULL) || len < 8) {
+        return PY32_APP_OFFSET;
+    }
+    if (memcmp(data, "\x7f" "ELF", 4) == 0) {
+        return PY32_APP_OFFSET;
+    }
+    sp = ldl_le_p(data);
+    reset = ldl_le_p(data + 4);
+    if (sp <= PY32_SRAM_BASE || sp > PY32_SRAM_BASE + PY32_SRAM_SIZE) {
+        return PY32_APP_OFFSET;
+    }
+    if (reset >= PY32_FLASH_BASE && reset < PY32_FLASH_BASE + PY32_APP_OFFSET) {
+        return 0;   /* bootloader entry: a full-flash image */
+    }
+    return PY32_APP_OFFSET;
+}
+
+/*
+ * Diagnostic probe (UVK5_PC_PROBE): samples the guest's PC into a file so a hang
+ * can be located without a debugger (a gdb attach stops the guest, which is the
+ * one thing that must not happen while working out where it stopped).
+ */
+/*
+ * How often the PC probe samples. 100 ms is fine for finding a hang, but an overlay
+ * app's whole life can be shorter than that -- the launcher takes the screen and the app
+ * is gone again before the next tick -- so UVK5_PC_PROBE_MS lets a run ask for a real
+ * trace instead of a few points. The default keeps every existing probe run identical.
+ */
+static int uvk5_pc_probe_interval_ms(void)
+{
+    const char *v = g_getenv("UVK5_PC_PROBE_MS");
+    int ms = v ? atoi(v) : 0;
+    return ms > 0 ? ms : 100;
+}
+
+static void uvk5_pc_probe_tick(void *opaque)
+{
+    UVK5MachineState *s = opaque;
+    const char *path = g_getenv("UVK5_PC_PROBE");
+    if (path) {
+        FILE *f = fopen(path, "a");
+        if (f) {
+            fprintf(f, "PC %08x\n", (unsigned)s->soc.armv7m.cpu->env.regs[15]);
+            fclose(f);
+        }
+    }
+    timer_mod(s->pc_probe_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + uvk5_pc_probe_interval_ms());
+}
+
+static void uvk5_boot_key_release(void *opaque)
+{
+    UVK5MachineState *s = opaque;
+    Error *err = NULL;
+
+    object_property_set_str(OBJECT(&s->keypad), "press", "", &err);
+    object_property_set_bool(OBJECT(&s->keypad), "ptt", false, &err);
+    error_free(err);
+}
+
+/*
+ * Hold a key across reset. The property wins; the environment is the fallback,
+ * for the same reason the flash image uses one (a -machine property list is not
+ * always deliverable through the web UI's launcher).
+ */
+static void uvk5_arm_boot_key(UVK5MachineState *s)
+{
+    const char *key = s->boot_key ?: g_getenv("UVK5_BOOT_KEY");
+    uint32_t hold_ms = s->boot_key_hold_ms;
+    Error *err = NULL;
+
+    if (hold_ms == 0) {
+        const char *env_ms = g_getenv("UVK5_BOOT_KEY_MS");
+                /*
+         * 8 s by default, not 1.5 s: the multi-system boot path can spend ~20 s of
+         * guest time adopting the running firmware into slot 0 before the
+         * application samples the keypad at all, so a short hold is released long
+         * before anything looks at it. The selector waits for the release, so a
+         * long hold only delays the menu; a short one loses the boot mode entirely.
+         */
+        hold_ms = env_ms ? (uint32_t)g_ascii_strtoull(env_ms, NULL, 0) : 8000;
+    }
+    if (key == NULL || *key == '\0') {
+        return;
+    }
+    /*
+     * "+" holds more than one: the firmware's own BOOT_GetMode() reads PTT and a
+     * matrix key, and returns F_LOCK for PTT+SIDE1, AIRCOPY for PTT+SIDE2 and
+     * RESCUE_OPS for PTT plus the key named by the SET_KEY setting. A boot key that
+     * can only be one of those cannot reproduce any of the special boot modes, which
+     * is what made the bootloader look unreachable from here.
+     */
+    char **parts = g_strsplit(key, "+", -1);
+    for (char **part = parts; part != NULL && *part != NULL; part++) {
+        const char *one = g_strstrip(*part);
+        if (*one == '\0') {
+            continue;
+        }
+        if (g_ascii_strcasecmp(one, "PTT") == 0) {
+            s->boot_key_ptt = true;
+            object_property_set_bool(OBJECT(&s->keypad), "ptt", true, &err);
+        } else {
+            object_property_set_str(OBJECT(&s->keypad), "press", one, &err);
+        }
+        if (err != NULL) {
+            error_report("boot-key: %s", error_get_pretty(err));
+            error_free(err);
+            err = NULL;
+        }
+    }
+    g_strfreev(parts);
+    if (err) {
+        warn_report("boot-key %s: %s", key, error_get_pretty(err));
+        error_free(err);
+        return;
+    }
+    s->boot_key_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, uvk5_boot_key_release, s);
+    timer_mod(s->boot_key_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + hold_ms);
+    info_report("boot-key: holding %s for %u ms of guest time", key, hold_ms);
+}
+
+static void uvk5_machine_init(MachineState *machine)
+{
+    UVK5MachineState *s = UVK5_MACHINE(machine);
+
+    object_initialize_child(OBJECT(machine), "soc", &s->soc, TYPE_PY32F071_SOC);
+    object_property_set_link(OBJECT(&s->soc), "memory",
+                             OBJECT(get_system_memory()), &error_fatal);
+    if (!s->app_offset_set) {
+        s->app_offset = uvk5_sniff_app_offset(machine->kernel_filename);
+    }
+    qdev_prop_set_uint32(DEVICE(&s->soc), "app-offset", s->app_offset);
+
+    /*
+     * SysTick pacing, deliberately not the real 48 MHz.
+     *
+     * SYSTICK_DelayUs busy-reads SysTick->VAL and accumulates the difference
+     * until it reaches Delay * 48. On hardware each loop iteration advances the
+     * counter by tens of ticks. Under emulation an iteration costs far less
+     * wall-clock time, so at 48 MHz the counter barely moves between reads and a
+     * 1 ms delay takes about a minute -- measured, not assumed.
+     *
+     * Slowing the SysTick clock makes each read span more ticks, which is the
+     * ratio that loop actually depends on. The trade-off: guest time no longer
+     * matches real time, so anything timing-critical must be judged against the
+     * counter rather than a stopwatch.
+     */
+    s->sysclk = clock_new(OBJECT(machine), "SYSCLK");
+    clock_set_hz(s->sysclk, 48000000ULL);
+    qdev_connect_clock_in(DEVICE(&s->soc), "sysclk", s->sysclk);
+
+    sysbus_realize(SYS_BUS_DEVICE(&s->soc), &error_fatal);
+
+    /*
+     * External SPI NOR on SPI1, chip-selected by GPIOA pin 3 (CS_PIN in
+     * App/driver/py25q16.c). The image carries settings and the calibration
+     * block; -drive if=pflash,file=... overrides the default path.
+     */
+    object_initialize_child(OBJECT(machine), "flash", &s->flash, TYPE_PY25Q16);
+    {
+        /*
+         * Image path from -machine flash-image=..., falling back to -bios.
+         * Without one the flash reads as erased, which the firmware treats as a
+         * factory-fresh radio: it boots, but with no calibration data.
+         */
+        /*
+     * The -machine property, or UVK5_FLASH_IMAGE as a fallback. The fallback exists
+     * because a -machine property list is not always deliverable: through the web UI's
+     * launcher QEMU rejected the whole machine string with "unsupported machine type"
+     * while the identical argv started fine when run by hand, and the environment is
+     * one channel that demonstrably arrives intact.
+     */
+    const char *path = s->flash_image ?: g_getenv("UVK5_FLASH_IMAGE");
+        if (!path || !*path) {
+            path = machine->firmware;
+        }
+        if (path && *path) {
+            qdev_prop_set_string(DEVICE(&s->flash), "image", path);
+        }
+    }
+    qdev_realize(DEVICE(&s->flash), NULL, &error_fatal);
+
+    /* SPI2, not SPI1: App/driver/py25q16.c uses SPI2 and st7565.c uses SPI1. */
+    py32_spi_set_xfer(&s->soc.spi[1], py25q16_xfer, &s->flash);
+
+    /*
+     * Keypad matrix on GPIOB. The scan columns are outputs from the port into
+     * the matrix, and the matrix drives the row lines back as inputs, which is
+     * the same direction of travel as the real wiring.
+     */
+    object_initialize_child(OBJECT(machine), "keypad", &s->keypad,
+                            TYPE_UVK5_KEYPAD);
+    qdev_realize(DEVICE(&s->keypad), NULL, &error_fatal);
+
+    for (int c = 1; c < KEYPAD_COLS; c++) {
+        qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[1]), "pin-out",
+                                    KEYPAD_COL_PIN(c),
+                                    qdev_get_gpio_in_named(DEVICE(&s->keypad),
+                                                           "col", c));
+    }
+    for (int r = 0; r < KEYPAD_ROWS; r++) {
+        qdev_connect_gpio_out_named(DEVICE(&s->keypad), "row", r,
+                                    qdev_get_gpio_in_named(DEVICE(&s->soc.gpio[1]),
+                                                           "pin-in",
+                                                           KEYPAD_ROW_PIN(r)));
+    }
+
+    /*
+     * PTT on PB10, active low. Not a matrix key: GPIO_IsPttPressed reads the pin
+     * directly, so it is wired straight to the port.
+     */
+    qdev_connect_gpio_out_named(DEVICE(&s->keypad), "ptt", 0,
+                                qdev_get_gpio_in_named(DEVICE(&s->soc.gpio[1]),
+                                                       "pin-in", 10));
+    /* Released, now that the line exists to carry it. */
+    qemu_set_irq(qdev_get_gpio_in_named(DEVICE(&s->soc.gpio[1]), "pin-in", 10), 1);
+
+    /*
+     * Drive the initial row levels now that the lines exist. The device reset
+     * ran before wiring, so its qemu_set_irq calls went nowhere; without this
+     * the port keeps whatever it had, which read as every row low -- every key
+     * held at once, which the firmware discards as noise.
+     */
+    keypad_update_rows(&s->keypad);
+    uvk5_arm_boot_key(s);
+    if (g_getenv("UVK5_PC_PROBE")) {
+        s->pc_probe_timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, uvk5_pc_probe_tick, s);
+        timer_mod(s->pc_probe_timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + uvk5_pc_probe_interval_ms());
+    }
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[0]), "pin-out", 3,
+                                qdev_get_gpio_in_named(DEVICE(&s->flash),
+                                                       "cs", 0));
+
+    /*
+     * The display controller on SPI1, with the two control lines the driver uses:
+     * CS on PB2 and A0 on PA6 (App/driver/st7565.c). Only the panel's own settings
+     * are modelled -- they live in the controller, not in the framebuffer, which is
+     * why nothing else in the emulator can see a contrast or inversion change.
+     */
+    object_initialize_child(OBJECT(machine), "panel", &s->panel, TYPE_ST7565);
+    qdev_realize(DEVICE(&s->panel), NULL, &error_fatal);
+    py32_spi_set_xfer(&s->soc.spi[0], st7565_xfer, &s->panel);
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[1]), "pin-out", 2,
+                                qdev_get_gpio_in_named(DEVICE(&s->panel),
+                                                       "cs", 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[0]), "pin-out", 6,
+                                qdev_get_gpio_in_named(DEVICE(&s->panel),
+                                                       "a0", 0));
+
+    /*
+     * BK4819 on its bit-banged three-wire bus: CS is PF9, SCL PB8, SDA PB9.
+     *
+     * SDA is bidirectional, so it needs both directions wired: pin-out carries what
+     * the guest drives, and the chip drives pin-in when it is clocking a register
+     * value back. Without the device, PB9 had to be idled low as a workaround so
+     * that reads returned 0 and the untimed spin on REG_0C could terminate; with a
+     * real register file the values are meaningful instead of merely survivable.
+     */
+    object_initialize_child(OBJECT(machine), "bk4819", &s->bk4819,
+                            TYPE_UVK5_BK4819);
+    qdev_realize(DEVICE(&s->bk4819), NULL, &error_fatal);
+
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[3]), "pin-out", 9,
+                                qdev_get_gpio_in_named(DEVICE(&s->bk4819),
+                                                       "cs", 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[1]), "pin-out", 8,
+                                qdev_get_gpio_in_named(DEVICE(&s->bk4819),
+                                                       "scl", 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[1]), "pin-out", 9,
+                                qdev_get_gpio_in_named(DEVICE(&s->bk4819),
+                                                       "sda", 0));
+    qdev_connect_gpio_out_named(DEVICE(&s->bk4819), "sda-in", 0,
+                                qdev_get_gpio_in_named(DEVICE(&s->soc.gpio[1]),
+                                                       "pin-in", 9));
+
+    /*
+     * The audio amplifier enable, PA8. Watching it is the whole of what an audio model
+     * can honestly do here: the microphone and speaker are wired to the BK4819, not to
+     * the MCU, so no samples ever pass through the address space. See the comment on
+     * TYPE_UVK5_AUDIO.
+     */
+    object_initialize_child(OBJECT(machine), "audio", &s->audio,
+                            TYPE_UVK5_AUDIO);
+    qdev_realize(DEVICE(&s->audio), NULL, &error_fatal);
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.gpio[0]), "pin-out", 8,
+                                qdev_get_gpio_in_named(DEVICE(&s->audio),
+                                                       "path", 0));
+
+    /*
+     * The application lives at PY32_APP_OFFSET, past the bootloader.
+     *
+     * The raw-binary case is the one that bites. A .bin has no headers, so QEMU
+     * writes it at exactly the address it is handed, *in the CPU's address space*.
+     * Hand it app_offset (0x2800) and it lands at container 0x2800 -- inside the
+     * flash alias, which maps to flash offset 0x5000 -- so the image sits 0x2800
+     * bytes too high and the first fetch reads 0xFF and faults. A raw image belongs
+     * at the flash base plus the offset: PY32_FLASH_BASE + app_offset.
+     *
+     * An .elf carries its own program headers and ignores this base entirely, which
+     * is why wrapping the release .bin in an ELF used to be the workaround
+     * (tools/bin2elf.py). It is not needed for a plain application .bin any more.
+     */
+    armv7m_load_kernel(ARM_CPU(first_cpu), machine->kernel_filename,
+                       PY32_FLASH_BASE + s->app_offset,
+                       PY32_FLASH_SIZE - s->app_offset);
+}
+
+static char *uvk5_get_flash_image(Object *obj, Error **errp)
+{
+    UVK5MachineState *s = UVK5_MACHINE(obj);
+    return g_strdup(s->flash_image);
+}
+
+static void uvk5_set_flash_image(Object *obj, const char *value, Error **errp)
+{
+    UVK5MachineState *s = UVK5_MACHINE(obj);
+    g_free(s->flash_image);
+    s->flash_image = g_strdup(value);
+}
+
+static void uvk5_get_app_offset(Object *obj, Visitor *v, const char *name,
+                               void *opaque, Error **errp)
+{
+    uint32_t value = UVK5_MACHINE(obj)->app_offset;
+
+    visit_type_uint32(v, name, &value, errp);
+}
+
+static void uvk5_set_app_offset(Object *obj, Visitor *v, const char *name,
+                                void *opaque, Error **errp)
+{
+    UVK5MachineState *s = UVK5_MACHINE(obj);
+    uint32_t value;
+
+    if (!visit_type_uint32(v, name, &value, errp)) {
+        return;
+    }
+    s->app_offset = value;
+    s->app_offset_set = true;
+}
+
+static char *uvk5_get_boot_key(Object *obj, Error **errp)
+{
+    return g_strdup(UVK5_MACHINE(obj)->boot_key);
+}
+
+static void uvk5_set_boot_key(Object *obj, const char *value, Error **errp)
+{
+    UVK5MachineState *s = UVK5_MACHINE(obj);
+    g_free(s->boot_key);
+    s->boot_key = g_strdup(value);
+}
+
+static void uvk5_get_boot_key_hold(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
+{
+    uint32_t value = UVK5_MACHINE(obj)->boot_key_hold_ms;
+    visit_type_uint32(v, name, &value, errp);
+}
+
+static void uvk5_set_boot_key_hold(Object *obj, Visitor *v, const char *name,
+                                   void *opaque, Error **errp)
+{
+    UVK5MachineState *s = UVK5_MACHINE(obj);
+    uint32_t value;
+    if (visit_type_uint32(v, name, &value, errp)) {
+        s->boot_key_hold_ms = value;
+    }
+}
+
+static void uvk5_machine_class_init(ObjectClass *oc, void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+
+    object_class_property_add_str(oc, "flash-image",
+                                  uvk5_get_flash_image, uvk5_set_flash_image);
+    object_class_property_add_str(oc, "boot-key",
+                                  uvk5_get_boot_key, uvk5_set_boot_key);
+    object_class_property_set_description(oc, "boot-key",
+        "key held from reset (e.g. MENU), so boot-time key modes are reachable");
+    object_class_property_add(oc, "boot-key-hold-ms", "uint32",
+                              uvk5_get_boot_key_hold, uvk5_set_boot_key_hold,
+                              NULL, NULL);
+    object_class_property_set_description(oc, "boot-key-hold-ms",
+        "how long to hold it, in guest time (default 1500 ms)");
+    object_class_property_set_description(oc, "flash-image",
+        "2MB SPI NOR image holding settings and calibration data");
+
+    /*
+     * Firmware releases come in two shapes. An *application* image starts at its
+     * own vector table, linked for 0x08002800, and address 0 has to alias there. A
+     * *full* image -- a bootloader, or the multi-system release -- starts at
+     * 0x08000000 and address 0 has to alias the flash base instead. Getting this
+     * wrong is silent: the image loads 0x2800 bytes off and executes whatever data
+     * happens to be there.
+     */
+    object_class_property_add(oc, "app-offset", "uint32",
+                              uvk5_get_app_offset, uvk5_set_app_offset,
+                              NULL, NULL);
+    object_class_property_set_description(oc, "app-offset",
+        "where the loaded image sits in flash; 0 for a full-flash image");
+
+    mc->desc = "Quansheng UV-K5 V3 / UV-K1 (PY32F071, Cortex-M0+)";
+    mc->init = uvk5_machine_init;
+    mc->max_cpus = 1;
+    mc->default_cpus = 1;
+    mc->min_cpus = 1;
+    mc->default_ram_size = 0;
+    mc->no_floppy = 1;
+    mc->no_cdrom = 1;
+    mc->no_parallel = 1;
+}
+
+/* -------------------------------------------------------------- registration */
+
+static const TypeInfo py32_types[] = {
+    {
+        .name = TYPE_PY32_RCC,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32RccState),
+        .instance_init = py32_rcc_init,
+        .class_init = py32_rcc_class_init,
+    },
+    {
+        .name = TYPE_PY32_GPIO,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32GpioState),
+        .instance_init = py32_gpio_init,
+        .class_init = py32_gpio_class_init,
+    },
+    {
+        .name = TYPE_PY32_DMA,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32DmaState),
+        .instance_init = py32_dma_init,
+        .class_init = py32_dma_class_init,
+    },
+    {
+        .name = TYPE_UVK5_KEYPAD,
+        .parent = TYPE_DEVICE,
+        .instance_size = sizeof(UVK5KeypadState),
+        .instance_init = keypad_init,
+        .class_init = keypad_class_init,
+    },
+    {
+        .name = TYPE_UVK5_AUDIO,
+        .parent = TYPE_DEVICE,
+        .instance_size = sizeof(UVK5AudioState),
+        .instance_init = audio_init,
+        .class_init = audio_class_init,
+    },
+    {
+        .name = TYPE_UVK5_BK4819,
+        .parent = TYPE_DEVICE,
+        .instance_size = sizeof(BK4819State),
+        .instance_init = bk4819_init,
+        .class_init = bk4819_class_init,
+    },
+    {
+        .name = TYPE_ST7565,
+        .parent = TYPE_DEVICE,
+        .instance_size = sizeof(ST7565State),
+        .instance_init = st7565_init,
+        .class_init = st7565_class_init,
+    },
+    {
+        .name = TYPE_PY25Q16,
+        .parent = TYPE_DEVICE,
+        .instance_size = sizeof(PY25Q16State),
+        .class_init = py25q16_class_init,
+    },
+    {
+        .name = TYPE_PY32_SPI,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32SpiState),
+        .instance_init = py32_spi_init,
+        .class_init = py32_spi_class_init,
+    },
+    {
+        .name = TYPE_PY32_TIM2,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32Tim2State),
+        .instance_init = py32_tim2_init,
+        .class_init = py32_tim2_class_init,
+    },
+    {
+        .name = TYPE_PY32_ADC,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32AdcState),
+        .instance_init = py32_adc_init,
+        .class_init = py32_adc_class_init,
+    },
+    {
+        .name = TYPE_PY32_STUB,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32StubState),
+        .class_init = py32_stub_class_init,
+    },
+    {
+        .name = TYPE_PY32F071_SOC,
+        .parent = TYPE_SYS_BUS_DEVICE,
+        .instance_size = sizeof(PY32F071State),
+        .instance_init = py32f071_soc_init,
+        .class_init = py32f071_soc_class_init,
+    },
+    {
+        .name = TYPE_UVK5_MACHINE,
+        .parent = TYPE_MACHINE,
+        .instance_size = sizeof(UVK5MachineState),
+        .class_init = uvk5_machine_class_init,
+    },
+};
+
+DEFINE_TYPES(py32_types)

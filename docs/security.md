@@ -1,41 +1,49 @@
 # Security & Lightweight Cryptography Specification
 
-Security in resource-constrained microcontroller systems requires realistic threat modeling and fast, native 32-bit cryptographic primitives.
+Security in resource-constrained microcontroller systems requires realistic threat modeling, constant-time execution, and unified cryptographic primitives.
 
-`kern` adopts **ChaCha20-Poly1305 (RFC 8439)** as its single, unified cryptographic standard across the entire microkernel, bootloader, filesystem, and Rigwire wire protocol.
+`kern` adopts **Ascon-128 (NIST SP 800-232)** as its single, unified cryptographic standard across the entire microkernel, bootloader, filesystem, and wire protocol.
 
 ---
 
-## 1. Why ChaCha20-Poly1305 is the Optimal Solution for ARM Cortex-M0+
+## 1. Why Ascon-128 Wins on Cortex-M0+ and System Size
 
-| Metric | SHA-256 / AES-GCM | Ascon-128 | **ChaCha20-Poly1305 (kern standard)** |
+| Metric | SHA-256 / AES-GCM | ChaCha20 + Poly1305 + BLAKE2s | **Ascon-128 (kern standard - NIST SP 800-232)** |
 |---|---|---|---|
-| **Native Word Size** | 32-bit / Complex Tables | 64-bit (Slower on M0+) | **Pure 32-bit (`u32`)** |
-| **CPU Cycle Efficiency** | Slow (Table lookups) | Moderate (Emulated 64-bit math) | **Fastest (Native 32-bit ARM `ADD/EOR/ROR`)** |
-| **Flash Footprint** | ~12 KB | ~3.5 KB | **~1.8 KB total (`no_std`)** |
-| **SRAM / Stack Usage** | High (256-byte stack arrays) | 40-byte state | **Tiny (32-byte state, 0 alloc)** |
-| **Ecosystem Parity** | Universal | Emerging | **Universal (WireGuard, RFC 8439, Python, OpenSSL)** |
+| **Underlying Primitives** | 2 completely different structures | 2 distinct engines (stream + MAC) | **1 single 320-bit permutation sponge ($p$)** |
+| **Multiplier Dependency** | Table lookups / GF mult | Poly1305 requires 64-bit mults (timing leak on M0+) | **Zero multiplications (only `EOR`, `AND`, `BIC`, `ROR`)** |
+| **Constant-Time Security** | Cache/table timing vulnerabilities | Poly1305 software multiply timing leak risk | **Strictly constant-time across all silicon** |
+| **Total Flash Footprint** | ~12 KB | ~2.8 KB total (ChaCha20 + Poly1305) | **~1.1 KB total suite (AEAD, Hash, XOF, MAC, KDF)** |
+| **SRAM / Stack Usage** | High (256-byte stack arrays) | Multiple separate contexts | **40-byte compact state (0 heap alloc)** |
+| **NIST Standardization** | Legacy NIST FIPS | RFC 8439 | **Official NIST Lightweight Standard (SP 800-232)** |
 
-Because the ARM Cortex-M0+ is a native 32-bit processor, ChaCha20-Poly1305 executes significantly faster than 64-bit-oriented ciphers (Ascon) or hardware-heavy ciphers (AES without HW acceleration).
+### One Engine vs Three
+ChaCha20 (encryption), Poly1305 (MAC), and BLAKE2s/SHA (hashing) are three completely different mathematical structures. Putting all three into Cortex-M0+ requires compiling three distinct algorithms. Ascon is a sponge construction: Ascon-AEAD128, Ascon-Hash256, Ascon-XOF128, and Ascon-MAC all call the exact same 320-bit permutation function ($p$). The permutation is written once (~500 bytes of Thumb code), and Encryption, Decryption, Hashing, MAC, KDF, and TRNG are tiny loops around it.
+
+### The Cortex-M0+ Multiply Trap in Poly1305
+Poly1305 relies heavily on 32x32-bit multiplications modulo $2^{130}-5$. On Cortex-M0+ (which lacks the Cortex-M3/M4 1-cycle `UMULL` 64-bit multiply instruction), emulating 64-bit multiplication in Thumb-1 takes ~20 instructions per multiply, and if the silicon uses the 32-cycle multiplier option, Poly1305 leaks timing. Ascon uses **zero multiplications**—strictly bitwise `EOR`, `AND`, `BIC`, and `ROR`.
 
 ---
 
 ## 2. Universal Application Across `kern`
 
-By using **ChaCha20-Poly1305** as our sole cryptographic engine, we achieve zero code duplication:
+By using **Ascon-128** as our sole cryptographic engine, we achieve zero code duplication:
 
 1. **Rigwire Serial Bus Auth (`Rigwire`)**:
-   - Packets tagged with `SECURE` flag attach a 16-byte Poly1305 MAC tag calculated over the header and payload.
-   - Packets tagged with `ENCRYPTED` use ChaCha20 streaming encryption.
+   - Packets tagged with `SECURE` flag attach a 16-byte Ascon-128 MAC tag calculated over the header and payload.
+   - Packets tagged with `ENCRYPTED` use Ascon-128 streaming encryption.
 
 2. **LittleFS Filesystem Encryption (`fs/`)**:
-   - Files marked with `ATTR_FILE_FLAGS = 0x02` are encrypted using ChaCha20 with the 12-byte nonce stored in `ATTR_CRYPTO_NONCE`.
+   - Files marked with `ATTR_FILE_FLAGS = 0x02` are encrypted using Ascon-128 stream keystream with the 16-byte nonce.
 
 3. **SPI Flash Calibration Integrity**:
-   - Factory calibration and system settings stored on SPI Flash include a 16-byte Poly1305 MAC tag to prevent tampering or corrupted reads.
+   - Factory calibration and system settings stored on SPI Flash include a 16-byte Ascon-128 MAC tag in `/sys/calib.sig` to prevent tampering or corrupted reads.
 
-4. **Firmware Binary Authenticator (`bootloader/`)**:
-   - The Visual DFU bootloader validates new application binaries using Poly1305 MAC tags before jumping to main (`0x08002800`).
+4. **Security Enclave & Keychain (`/sys/device.key`, `/sys/passcode.key`, `/sys/storage.key`)**:
+   - Ascon permutation sponge stretches user passcodes over 8,192 rounds to derive key encryption keys, with 16-byte nonces and MAC verification.
+
+5. **Physical Hardware TRNG Seeding**:
+   - TRNG incorporates Ascon permutation sponge with continuous NIST SP 800-90B Repetition Count Test (RCT) and forward-secrecy key erasure.
 
 ---
 

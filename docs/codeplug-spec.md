@@ -133,7 +133,7 @@ pub struct TableFileHeader {
 
 ## 5. Channel Record Format (`ChannelRecord`, 64 Bytes)
 
-Channels represent memory channel slots (MR mode). Each record is strictly **64 bytes** ($2^6$).
+Channels represent memory channel slots (MR mode). Each record is strictly **64 bytes** ($2^6$), matching the normative Keel v0.5.0 specification.
 
 ### 5.1. Struct Definition & Wire Layout
 
@@ -145,36 +145,44 @@ pub struct ChannelRecord {
     pub tx_frequency_hz: u32,        // TX frequency in Hz (0 = Simplex: TX matches RX)
 
     // --- RF & Modulation Parameters (6 bytes) ---
-    pub step_khz_x100: u16,          // Raster step in 10 Hz units (e.g. 1250 = 12.5 kHz, 833 = 8.33 kHz)
-    pub bandwidth: u8,               // 0 = Narrow (12.5 kHz), 1 = Wide (25.0 kHz), 2 = Very Narrow (6.25 kHz)
-    pub modulation: u8,              // 0 = FM, 1 = AM, 2 = USB, 3 = LSB, 4 = CW, 5 = WFM, 6 = RAW
-    pub power_level: u8,             // 0 = Low (0.5W), 1 = Mid (2.0W), 2 = High (5.0W), 3 = Ultra-Low (10mW)
+    pub step_hz_x10: u16,            // Raster step in 10 Hz units (e.g. 1250 = 12.5 kHz, 833 = 8.33 kHz)
+    pub bandwidth_50hz: u16,         // IF bandwidth in 50 Hz units (0 = profile default, 25..4000)
+    pub modulation: u8,              // Mode enum: 0=FM, 1=AM, 2=AMB, 3=USB, 4=LSB, 5=DSB, 6=CW, 7=WFM, 8=DIG, 9=RAW, 10=BYP
     pub squelch_level: u8,           // Squelch sensitivity: 0 = Open / Carrier, 1..9 = Calibrated threshold
 
     // --- Subaudible Signaling (4 bytes) ---
     pub rx_subaudible: u16,          // RX CTCSS / DCS / Tone code (see Section 5.3)
     pub tx_subaudible: u16,          // TX CTCSS / DCS / Tone code
 
-    // --- Bank & Option Flags (4 bytes) ---
-    pub bank_mask: u16,              // 16-Zone membership bitmask (Bits 0..15 = Zones 1..16)
+    // --- Zone & Option Flags (4 bytes) ---
+    pub zone_mask: u16,              // 16-Zone membership bitmask (Bits 0..15 = Zones 1..16)
     pub flags: u16,                  // Operational flags (Scan Skip, TX Inhibit, BCLO, Reverse, etc.)
 
-    // --- Signaling & Voice Customization (6 bytes) ---
-    pub scrambler_code: u8,          // Voice inversion scrambler: 0 = Off, 1..10 = Inversion frequency
-    pub signaling_type: u8,          // Signaling protocol: 0 = None, 1 = SelCall, 2 = DTMF, 3 = MDC1200, 4 = M17, 5 = Hermes
-    pub signaling_id: u16,           // Associated Contact Index or Signaling ID
-    pub roger_beep: u8,              // Roger beep ID: 0 = Off, 1 = Standard, 2 = MDC, 3 = NASA, 4 = Custom
-    pub css_tail_mode: u8,           // Squelch Tail Elimination (STE): 0 = Off, 1 = 55Hz, 2 = 120Hz, 3 = 180Hz
+    // --- Power, Protocol Indirection & Identity (7 bytes) ---
+    pub power_mw: u16,               // TX power in mW (0 = profile default, e.g. 5000 mW)
+    pub proto: u8,                   // 0 none; 1..15 static; 16..127 persistent (.reg); 128..255 session
+    pub proto_ref: u16,              // Protocol-specific reference parameter
+    pub uid: u16,                    // Stable channel identity (1..65534; 0 = unassigned)
+
+    // --- Direct Hardware Audio Block (9 bytes, matching BK4829 physical controls) ---
+    pub scram_mode: u8,              // 0 off; 1 voice inversion; 2 rolling code
+    pub scram_param: u8,             // Inversion: freq/100 Hz in [20, 70] (2-7 kHz); Rolling: key 1-255
+    pub scram_hop: u8,               // Rolling hop rate 1-50 Hz (0 = radio default)
+    pub compand: u8,                 // Audio compander: 0 off, 1 on
+    pub mic_gain: u8,                // Microphone gain in half-dB units 1-72 (0 = radio default)
+    pub ste: u8,                     // Squelch Tail Elimination: 0 off, 1=55Hz, 2=120Hz, 3=180Hz
+    pub roger: u8,                   // Radio-local roger profile hint (0-15, 0 = default)
+    pub tx_limit: u8,                // TX deviation clamp in 50 Hz steps (0 = none, 10..100 = 0.5..5.0 kHz)
+    pub audio_flags: u8,             // bit 0 HPF, bit 1 pre-emphasis; bits 2-7 reserved zero
 
     // --- Name & Alphanumerics (16 bytes) ---
-    pub name: [u8; 16],              // Channel label (UTF-8 / ASCII, null-padded)
+    pub name: [u8; 16],              // Channel label (UTF-8, null-padded)
 
-    // --- Declarative Tagged Extension Block (16 bytes) ---
-    pub user_tag: [u8; 16],          // FourCC Tagged Extension Container (see Section 5.4)
+    // --- Declarative Tagged Extension Block (8 bytes) ---
+    pub user_tag: [u8; 8],           // FourCC Tagged Extension Container (FourCC + version + 3B payload)
 
-    // --- Padding & Integrity (4 bytes) ---
-    pub reserved: [u8; 2],           // Future expansion (must be 0)
-    pub record_crc: u16,             // Internal CRC-16 over first 62 bytes (optional fast integrity check)
+    // --- Record Integrity (2 bytes) ---
+    pub record_crc: u16,             // CRC-16/CCITT-FALSE over bytes [0..0x3E)
 }
 ```
 
@@ -189,13 +197,12 @@ impl ChannelFlags {
     pub const PRIORITY_1: u16      = 1 << 3;  // Primary priority channel for Dual/Triple watch
     pub const PRIORITY_2: u16      = 1 << 4;  // Secondary priority channel
     pub const TX_INHIBIT: u16      = 1 << 5;  // Receive-Only channel (PTT strictly disabled)
-    pub const COMPANDER: u16       = 1 << 6;  // Audio voice compander enabled
+    // Bit 6 retired (compander moved to audio block)
     pub const PTT_ID_START: u16    = 1 << 7;  // Send ANI/MDC1200 ID at start of transmission
     pub const PTT_ID_END: u16      = 1 << 8;  // Send ANI/MDC1200 ID at end of transmission
     pub const TALKAROUND: u16      = 1 << 9;  // Transmit on repeater output frequency (simplex bypass)
     pub const FAVORITE: u16        = 1 << 10; // Fast-access favorite mark
-    pub const HPF_ENABLE: u16      = 1 << 11; // Enable High-Pass Filter (cuts sub-300Hz hum)
-    pub const PRE_EMPHASIS: u16    = 1 << 12; // Standard FM pre-emphasis / de-emphasis active
+    // Bits 11-12 retired (HPF and pre-emphasis moved to audio block audio_flags)
     pub const WIDE_FILTER: u16     = 1 << 13; // Hardware IF filter selection override
 }
 ```

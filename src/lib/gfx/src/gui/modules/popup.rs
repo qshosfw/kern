@@ -18,6 +18,7 @@ pub struct PopupModel {
     pub confirm_label: Option<&'static str>,
     pub cancel_label: Option<&'static str>,
     pub repeater: crate::gui::repeater::KeyRepeater,
+    pub anim: crate::gui::animation::TransitionProgress,
 }
 
 impl PopupModel {
@@ -30,6 +31,7 @@ impl PopupModel {
             confirm_label: None,
             cancel_label: None,
             repeater: crate::gui::repeater::KeyRepeater::new(8, 2),
+            anim: crate::gui::animation::TransitionProgress::new(4),
         }
     }
 
@@ -52,6 +54,7 @@ impl PopupModel {
         self.confirm_label = confirm;
         self.cancel_label = cancel;
         self.repeater = crate::gui::repeater::KeyRepeater::new(8, 2);
+        self.anim.reset_in();
     }
 
     pub fn reset_msg(&mut self, title: &'static str, message: &'static str) {
@@ -62,6 +65,7 @@ impl PopupModel {
         self.confirm_label = None;
         self.cancel_label = None;
         self.repeater = crate::gui::repeater::KeyRepeater::new(8, 2);
+        self.anim.reset_in();
     }
 }
 
@@ -111,6 +115,7 @@ fn scroll_popup(model: &mut PopupModel, code: KeyCode) -> bool {
 }
 
 impl View<PopupModel> for PopupView {
+    #[inline(never)]
     fn render(&self, canvas: &mut Canvas, model: &PopupModel) {
         let has_badges = model.confirm_label.is_some() || model.cancel_label.is_some();
         let msg = if !model.custom_msg.is_empty() {
@@ -121,6 +126,7 @@ impl View<PopupModel> for PopupView {
         let total_lines = text::count_lines(msg);
 
         // Short unbadged notifications / alerts (e.g. "Passcode Set", "Wrong Passcode", "Mismatch"):
+        let anim_p = model.anim.progress();
         if !has_badges && total_lines <= 2 && msg.len() < 60 {
             let title_opt = if !model.title.is_empty()
                 && !text::ascii_eq_ignore_case(model.title, "passcode")
@@ -129,13 +135,18 @@ impl View<PopupModel> for PopupView {
             } else {
                 None
             };
-            widgets::draw_modal_popup(canvas, title_opt, msg);
+            widgets::draw_modal_popup_materialize(canvas, title_opt, msg, anim_p);
             return;
         }
 
         // Standard bottom sheet occupies Y=18 to Y=63 (46px high)
-        let sheet_y = 18i16;
         let sheet_h = 46u8;
+        let y_offset = if anim_p < 16 {
+            ((16 - anim_p) as i8) * 3
+        } else {
+            0
+        };
+        let sheet_y = 18i16 + y_offset as i16;
 
         let badges = match (model.confirm_label, model.cancel_label) {
             (Some(c), Some(x)) => Some((c, x)),
@@ -143,7 +154,7 @@ impl View<PopupModel> for PopupView {
             (None, Some(x)) => Some(("", x)),
             (None, None) => None,
         };
-        widgets::draw_sheet_frame(canvas, model.title, sheet_y, sheet_h, badges);
+        widgets::draw_sheet_slide_up(canvas, model.title, sheet_h, badges, y_offset);
 
         // Body text rendering (TomThumb, multi-line aware with padding)
         let visible_lines = popup_visible_lines(model);
@@ -153,17 +164,21 @@ impl View<PopupModel> for PopupView {
         let max_scroll = total_lines.saturating_sub(visible_lines);
         let scroll_offset = model.scroll_offset.min(max_scroll);
 
-        let mut idx = 0;
-        text::for_each_line(msg, |line| {
-            if idx >= scroll_offset && idx < scroll_offset + visible_lines {
-                let line_y = start_y + ((idx - scroll_offset) as i16 * line_height);
-                text::draw_str(canvas, 4, line_y, line, &TOMTHUMB, Color::Fill);
-            }
-            idx += 1;
-        });
+        if anim_p >= 8 {
+            let mut idx = 0;
+            text::for_each_line(msg, |line| {
+                if idx >= scroll_offset && idx < scroll_offset + visible_lines {
+                    let line_y = start_y + ((idx - scroll_offset) as i16 * line_height);
+                    if line_y < 64 {
+                        text::draw_str(canvas, 4, line_y, line, &TOMTHUMB, Color::Fill);
+                    }
+                }
+                idx += 1;
+            });
+        }
 
         // Integrated Scrollbar (X=124..125) when total lines exceed viewport
-        if total_lines > visible_lines {
+        if total_lines > visible_lines && anim_p >= 12 {
             let track_y = (sheet_y + 10) as u8;
             let track_h = if has_badges { 24u8 } else { 31u8 };
             widgets::draw_scrollbar(
@@ -180,10 +195,12 @@ impl View<PopupModel> for PopupView {
 
     fn on_event(&mut self, model: &mut PopupModel, event: &Event) -> bool {
         if let Event::Tick = event {
-            return model
+            let anim_tick = model.anim.tick();
+            let rep_tick = model
                 .repeater
                 .tick()
                 .map_or(false, |c| scroll_popup(model, c));
+            return anim_tick || rep_tick;
         }
 
         if let Event::Key { code, state } = event {

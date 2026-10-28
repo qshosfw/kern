@@ -1,12 +1,12 @@
 //! LCD & Keypad Backlight Controller for KERN
-//! Provides SysTick-driven 100 Hz 10-step software PWM with zero extra hardware interrupts.
+//! Provides SysTick-driven 1000 Hz 10-step software PWM with zero extra hardware interrupts.
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
 pub static BACKLIGHT_DUTY: AtomicU8 = AtomicU8::new(0);
 static BACKLIGHT_STEP: AtomicU8 = AtomicU8::new(0);
 
-/// SysTick 100 Hz Software PWM Tick (called inside 1ms SysTick interrupt handler)
+/// SysTick 1000 Hz Software PWM Tick (called inside 100 µs SysTick interrupt handler)
 #[inline(always)]
 pub fn systick_pwm_tick() {
     let duty = BACKLIGHT_DUTY.load(Ordering::Relaxed);
@@ -14,8 +14,12 @@ pub fn systick_pwm_tick() {
         bsp::pins::BACKLIGHT.set_low();
         return;
     }
-    let step = BACKLIGHT_STEP.load(Ordering::Relaxed);
+    if duty >= 10 {
+        bsp::pins::BACKLIGHT.set_high();
+        return;
+    }
 
+    let step = BACKLIGHT_STEP.load(Ordering::Relaxed);
     if step < duty {
         bsp::pins::BACKLIGHT.set_high();
     } else {
@@ -69,13 +73,21 @@ impl BacklightController {
     }
 
     pub fn set_mode(&mut self, mode: BacklightMode) {
+        if self.mode == mode {
+            return;
+        }
         self.mode = mode;
         match mode {
             BacklightMode::Off => {
                 self.turn_off();
             }
-            BacklightMode::On | BacklightMode::Auto(_) => {
+            BacklightMode::On => {
                 self.wake();
+            }
+            BacklightMode::Auto(_) => {
+                if self.is_active {
+                    self.elapsed_ms = 0;
+                }
             }
         }
     }
@@ -98,8 +110,13 @@ impl BacklightController {
     }
 
     pub fn set_levels(&mut self, max: u8, min: u8) {
-        self.backlight_max = max.clamp(1, 10);
-        self.backlight_min = min.clamp(0, 10);
+        let max_clamped = max.clamp(1, 10);
+        let min_clamped = min.clamp(0, 10);
+        if self.backlight_max == max_clamped && self.backlight_min == min_clamped {
+            return;
+        }
+        self.backlight_max = max_clamped;
+        self.backlight_min = min_clamped;
         if self.mode == BacklightMode::Off {
             self.target_level = 0;
             self.current_level = 0;

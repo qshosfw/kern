@@ -1,6 +1,6 @@
 use crate::{Canvas, Color};
 
-/// Draw DeltaFW-style inverted F-key badge (5x6 pixels with outer border and inverted 'F' inside)
+/// Draw DeltaFW-style inverted F-key badge (5x5 pixels with outer border and inverted 'F' inside)
 pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
     if x < 0 || y < 0 {
         return;
@@ -8,13 +8,13 @@ pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
     let ux = x as u8;
     let uy = y as u8;
 
-    canvas.fill_rect(ux, uy, 5, 6, Color::Fill);
+    canvas.fill_rect(ux, uy, 5, 5, Color::Fill);
     canvas.draw_horizontal_line(ux + 1, uy + 1, 3, Color::Clear);
-    canvas.draw_vertical_line(ux + 1, uy + 1, 4, Color::Clear);
-    canvas.draw_horizontal_line(ux + 1, uy + 3, 2, Color::Clear);
+    canvas.draw_vertical_line(ux + 1, uy + 1, 3, Color::Clear);
+    canvas.draw_horizontal_line(ux + 1, uy + 2, 2, Color::Clear);
 }
 
-/// Draw DeltaFW-style high precision battery icon with customizable foreground and background colors
+/// Draw DeltaFW-style high precision battery icon with customizable foreground, background, and shading mode
 pub fn draw_battery_colored(
     canvas: &mut Canvas,
     x: u8,
@@ -24,6 +24,7 @@ pub fn draw_battery_colored(
     anim_step: u8,
     fg: Color,
     bg: Color,
+    shading_mode: u8,
 ) {
     let start_x = x;
     let work_end_x = start_x + 11;
@@ -36,21 +37,61 @@ pub fn draw_battery_colored(
 
     canvas.fill_rect(start_x + 1, y + 1, 10, 3, bg);
 
-    let max_bars = (((percentage as u16 * 10) + 50) / 100).clamp(0, 10) as u8;
-
-    let fill_bars = if is_charging {
-        if max_bars < 10 {
-            let range = 10 - max_bars + 1;
-            max_bars + (anim_step % range)
+    if shading_mode == 2 {
+        // Pure Monochrome Mode (1-bit binary): 100% faithful to standard DeltaFW
+        let max_bars = (((percentage as u16 * 10) + 50) / 100).min(10) as u8;
+        let fill_bars = if is_charging {
+            if max_bars < 10 {
+                let range = 11 - max_bars;
+                let step = if range > 0 { anim_step % range } else { 0 };
+                max_bars + step
+            } else {
+                10
+            }
         } else {
-            10
+            max_bars
+        };
+
+        if fill_bars > 0 {
+            canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
         }
     } else {
-        max_bars
-    };
+        // High-Precision 30-Step Optical Grayscale / Dither Mode
+        let p = percentage.min(100) as u32;
+        let total_steps = (((p * 1229) + 614) >> 12).min(30) as u8;
+        let full_bars = ((total_steps as u16 * 86) >> 8).min(10) as u8;
+        let partial = total_steps - (full_bars * 3);
 
-    if fill_bars > 0 {
-        canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
+        if is_charging {
+            let fill_bars = if full_bars < 10 {
+                let range = 11 - full_bars;
+                let step = if range > 0 { anim_step % range } else { 0 };
+                full_bars + step
+            } else {
+                10
+            };
+
+            if fill_bars > 0 {
+                canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
+            }
+            if fill_bars < 10 && fill_bars > full_bars {
+                let lead_col = work_end_x - fill_bars;
+                canvas.draw_vertical_line(lead_col, y + 1, 3, Color::DarkGray);
+            }
+        } else {
+            if full_bars > 0 {
+                canvas.fill_rect(work_end_x - full_bars, y + 1, full_bars, 3, fg);
+            }
+            if partial > 0 && full_bars < 10 {
+                let partial_col = work_end_x - full_bars - 1;
+                let partial_color = if partial == 2 {
+                    Color::DarkGray
+                } else {
+                    Color::LightGray
+                };
+                canvas.draw_vertical_line(partial_col, y + 1, 3, partial_color);
+            }
+        }
     }
 }
 
@@ -72,6 +113,7 @@ pub fn draw_battery(
         anim_step,
         Color::Fill,
         Color::Clear,
+        1, // Dither by default
     );
 }
 
@@ -126,11 +168,11 @@ pub fn draw_badge(
     }
 
     if inverted {
-        canvas.fill_rect(x as u8, y as u8, (w + 2) as u8, 6, Color::Fill);
-        crate::text::draw_str(canvas, x + 1, y + 5, text, font, Color::Clear);
+        canvas.fill_rect(x as u8, y as u8, (w + 2) as u8, 5, Color::Fill);
+        crate::text::draw_str(canvas, x + 1, y + 4, text, font, Color::Clear);
         (w + 3) as u8
     } else {
-        crate::text::draw_str(canvas, x, y + 5, text, font, Color::Fill);
+        crate::text::draw_str(canvas, x, y + 4, text, font, Color::Fill);
         (w + 1) as u8
     }
 }

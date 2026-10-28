@@ -1,121 +1,12 @@
 //! Battery Driver, Multi-Chemistry Discharge Curves & Industry-Standard System Power Management.
 
+pub mod curve;
+pub mod power;
+
+pub use curve::*;
+pub use power::*;
+
 use core::cell::Cell;
-
-#[cfg(target_arch = "arm")]
-use cortex_m::asm;
-
-/// Battery chemistry / capacity type profiles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BatteryType {
-    Type1600mAh = 0,
-    Type2200mAh = 1,
-    Type3500mAh = 2,
-    Type1500mAhK1 = 3,
-    Type2500mAhK1 = 4,
-    TypeExternal = 5,
-}
-
-impl BatteryType {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => BatteryType::Type1600mAh,
-            1 => BatteryType::Type2200mAh,
-            2 => BatteryType::Type3500mAh,
-            3 => BatteryType::Type1500mAhK1,
-            4 => BatteryType::Type2500mAhK1,
-            5 => BatteryType::TypeExternal,
-            _ => BatteryType::Type1600mAh,
-        }
-    }
-}
-
-/// Power save profiles for MCU execution and peripherals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PowerProfile {
-    Balanced = 0,
-    Performance = 1,
-    PowerSave = 2,
-    DeepSleep = 3,
-}
-
-impl PowerProfile {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => PowerProfile::Balanced,
-            1 => PowerProfile::Performance,
-            2 => PowerProfile::PowerSave,
-            3 => PowerProfile::DeepSleep,
-            _ => PowerProfile::Balanced,
-        }
-    }
-}
-
-/// High-precision 2S Li-ion discharge curves (10mV resolution units -> Percentage 0..100)
-/// Modeled after industry 2S Li-ion cell characteristics (8.4V max, 7.4V nominal, 6.0V cutoff).
-const VOLTAGE_CURVES: [&[(u16, u8)]; 5] = [
-    // 1600 mAh Standard Pack (UV-K5)
-    &[
-        (838, 100),
-        (820, 95),
-        (780, 75),
-        (745, 45),
-        (715, 20),
-        (670, 7),
-        (600, 0),
-    ],
-    // 2200 mAh Extended Pack
-    &[
-        (839, 100),
-        (825, 96),
-        (785, 78),
-        (750, 50),
-        (720, 22),
-        (680, 8),
-        (600, 0),
-    ],
-    // 3500 mAh High Capacity Pack
-    &[
-        (840, 100),
-        (828, 97),
-        (790, 80),
-        (755, 55),
-        (725, 25),
-        (685, 9),
-        (600, 0),
-    ],
-    // 1500 mAh Compact Pack (K1)
-    &[
-        (836, 100),
-        (818, 94),
-        (778, 72),
-        (742, 42),
-        (712, 18),
-        (668, 6),
-        (600, 0),
-    ],
-    // 2500 mAh Extended Pack (K1)
-    &[
-        (839, 100),
-        (826, 96),
-        (788, 79),
-        (752, 52),
-        (722, 23),
-        (682, 8),
-        (600, 0),
-    ],
-];
-
-/// Peripheral operational state for real-time dynamic current estimation.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PeripheralState {
-    pub backlight_level: u8, // 0..10
-    pub tx_active: bool,
-    pub tx_power_level: u8, // 0=Low, 1=Mid, 2=High
-    pub rx_active: bool,
-    pub audio_active: bool,
-    pub keypad_led: bool,
-}
 
 /// Battery telemetry state representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,9 +116,7 @@ impl BatteryDriver {
         }
     }
 
-    /// Apply a user calibration offset. This is a reference-frame change, not a
-    /// physical voltage step, so every tracked voltage is shifted by the same delta
-    /// and the charge-edge detector observes zero relative change.
+    /// Apply a user calibration offset.
     pub fn set_calib_tweak(&mut self, mv: i16) {
         let delta = mv as i32 - self.calib_tweak_mv as i32;
         if delta == 0 {
@@ -278,37 +167,6 @@ impl BatteryDriver {
         base_mcu + backlight_ma + keypad_ma + audio_ma + rf_ma
     }
 
-    /// High-precision piecewise linear interpolation to convert OCV battery millivolts to percentage.
-    pub fn mv_to_percentage(mv: u16, bat_type: BatteryType) -> u8 {
-        if bat_type == BatteryType::TypeExternal {
-            return 100;
-        }
-        let v_10mv = mv / 10;
-        let curve = VOLTAGE_CURVES[bat_type as usize];
-
-        if v_10mv >= curve[0].0 {
-            return 100;
-        }
-
-        for i in 1..curve.len() {
-            let (v_prev, p_prev) = curve[i - 1];
-            let (v_curr, p_curr) = curve[i];
-
-            if v_10mv >= v_curr {
-                let v_range = (v_prev - v_curr) as u32;
-                if v_range == 0 {
-                    return p_curr;
-                }
-                let p_range = (p_prev - p_curr) as u32;
-                let v_diff = (v_10mv - v_curr) as u32;
-                let interpolated = (p_curr as u32) + (v_diff * p_range) / v_range;
-                return (interpolated.min(100)) as u8;
-            }
-        }
-
-        0
-    }
-
     /// Sample ADC with live responsive EMA filtering matching DeltaFW.
     pub fn sample(
         &mut self,
@@ -357,7 +215,6 @@ impl BatteryDriver {
             self.charge_counter = 0;
             self.base_mv = self.smoothed_mv;
         } else if periph.tx_active {
-            // Transmitting: record baseline resting voltage right before high current draw
             if self.tx_recovery_secs == 0 {
                 self.pre_tx_mv = self.smoothed_mv;
             }
@@ -366,16 +223,12 @@ impl BatteryDriver {
         } else if self.tx_recovery_secs > 0 {
             self.tx_recovery_secs -= 1;
             self.charge_counter = 0;
-            // Prevent post-TX cell rebound from being misinterpreted as charger insertion
             if self.smoothed_mv <= self.pre_tx_mv.saturating_add(20) {
                 self.base_mv = self.smoothed_mv;
             } else {
                 self.tx_recovery_secs = 0;
             }
         } else {
-            // Dual-threshold step tracking (DeltaFW proven):
-            // Insertion into charger steps battery terminal voltage up by >= 35mV.
-            // Unplugging drops voltage from charging peak by >= 50mV.
             const CHARGE_START_DELTA_MV: u16 = 35;
             const CHARGE_STOP_DROP_MV: u16 = 50;
 
@@ -383,17 +236,14 @@ impl BatteryDriver {
                 if self.smoothed_mv >= self.base_mv.saturating_add(CHARGE_START_DELTA_MV) {
                     self.charge_counter = self.charge_counter.saturating_add(1);
                     if self.charge_counter >= 3 {
-                        // Sustained rise for ~600ms: active charging started!
                         self.is_charging = true;
-                        self.base_mv = self.smoothed_mv; // Base now tracks highest charge voltage
+                        self.base_mv = self.smoothed_mv;
                     }
                 } else {
                     self.charge_counter = self.charge_counter.saturating_sub(1);
                     if self.smoothed_mv < self.base_mv {
-                        // Normal discharge: immediately follow baseline downward
                         self.base_mv = self.smoothed_mv;
                     } else {
-                        // Natural relaxation: slowly drift base up (1mV per 5 seconds: 25 * 200ms)
                         self.drift_counter = self.drift_counter.saturating_add(1);
                         if self.drift_counter >= 25 {
                             self.base_mv = self.base_mv.saturating_add(1);
@@ -402,11 +252,9 @@ impl BatteryDriver {
                     }
                 }
             } else {
-                // In active charge: track peak voltage achieved as cells fill towards 8.4V
                 if self.smoothed_mv > self.base_mv {
                     self.base_mv = self.smoothed_mv;
                 } else if self.smoothed_mv <= self.base_mv.saturating_sub(CHARGE_STOP_DROP_MV) {
-                    // Voltage dropped 50mV from peak: charger unplugged!
                     self.is_charging = false;
                     self.charge_counter = 0;
                     self.base_mv = self.smoothed_mv;
@@ -416,7 +264,7 @@ impl BatteryDriver {
 
         self.last_mv = self.smoothed_mv;
 
-        let percentage = Self::mv_to_percentage(self.smoothed_mv, self.battery_type.get());
+        let percentage = mv_to_percentage(self.smoothed_mv, self.battery_type.get());
         let is_low = !is_external && (self.smoothed_mv < 6500 || percentage < 15);
         let is_critical = !is_external && (self.smoothed_mv < 6000 || percentage == 0);
 
@@ -448,212 +296,5 @@ impl BatteryDriver {
         }
 
         self.finish_state(raw_adc, raw_mv, periph, profile)
-    }
-}
-
-pub struct SystemPower {
-    pub battery_pct: u8,
-    pub battery_mv: u16,
-    pub battery_ma: u16,
-    pub mcu_temp_deci_c: i16,
-    pub vdda_mv: u16,
-    pub uptime_secs: u32,
-    pub inactivity_secs: u32,
-    pub auto_power_off_min: u8,
-    pub apo_warning_active: bool,
-    pub apo_triggered: bool,
-    pub is_charging: bool,
-    pub charging_started: bool,
-    pub charging_stopped: bool,
-    pub is_low: bool,
-    pub is_critical: bool,
-    pub profile: PowerProfile,
-    pub battery_driver: BatteryDriver,
-}
-
-impl SystemPower {
-    pub const fn empty() -> Self {
-        Self {
-            battery_pct: 0,
-            battery_mv: 0,
-            battery_ma: 0,
-            mcu_temp_deci_c: 0,
-            vdda_mv: 0,
-            uptime_secs: 0,
-            inactivity_secs: 0,
-            auto_power_off_min: 0,
-            apo_warning_active: false,
-            apo_triggered: false,
-            is_charging: false,
-            charging_started: false,
-            charging_stopped: false,
-            is_low: false,
-            is_critical: false,
-            profile: PowerProfile::Balanced,
-            battery_driver: BatteryDriver::empty(),
-        }
-    }
-
-    pub const fn new() -> Self {
-        Self {
-            battery_pct: 100,
-            battery_mv: 8200,
-            battery_ma: 35,
-            mcu_temp_deci_c: 250,
-            vdda_mv: 3300,
-            uptime_secs: 0,
-            inactivity_secs: 0,
-            auto_power_off_min: 0,
-            apo_warning_active: false,
-            apo_triggered: false,
-            is_charging: false,
-            charging_started: false,
-            charging_stopped: false,
-            is_low: false,
-            is_critical: false,
-            profile: PowerProfile::Balanced,
-            battery_driver: BatteryDriver::new(),
-        }
-    }
-
-    pub fn set_battery_type(&self, bat_type: BatteryType) {
-        self.battery_driver.set_battery_type(bat_type);
-    }
-
-    pub fn load_calibration_data(&mut self, calib_data: &[u8]) {
-        self.battery_driver.load_calibration_data(calib_data);
-    }
-
-    pub fn notify_activity(&mut self) {
-        self.inactivity_secs = 0;
-        self.apo_warning_active = false;
-    }
-
-    fn apply_state(&mut self, state: &BatteryState) {
-        let prev_charging = self.is_charging;
-        self.battery_pct = state.percentage;
-        self.battery_mv = state.millivolts;
-        self.battery_ma = state.current_ma;
-        self.is_charging = state.is_charging;
-        self.is_low = state.is_low;
-        self.is_critical = state.is_critical;
-
-        if !prev_charging && self.is_charging {
-            self.charging_started = true;
-        } else if prev_charging && !self.is_charging {
-            self.charging_stopped = true;
-        }
-    }
-
-    /// Poll for charging state edge transitions.
-    /// Returns `Some(true)` if charging just started, `Some(false)` if charging just stopped,
-    /// or `None` if steady state.
-    pub fn poll_charging_transition(&mut self) -> Option<bool> {
-        if self.charging_started {
-            self.charging_started = false;
-            Some(true)
-        } else if self.charging_stopped {
-            self.charging_stopped = false;
-            Some(false)
-        } else {
-            None
-        }
-    }
-
-    /// Forces recalculation of battery percentage and voltage with current profile/calibration
-    pub fn force_refresh(&mut self) {
-        let periph = PeripheralState::default();
-        let state = self.battery_driver.recalculate(&periph, self.profile);
-        self.apply_state(&state);
-    }
-
-    /// Update power system metrics from raw hardware ADC readings and active peripheral states.
-    pub fn update_adc(
-        &mut self,
-        raw_adc: u16,
-        vdda_mv: u16,
-        mcu_temp_deci_c: i16,
-        periph: &PeripheralState,
-    ) -> BatteryState {
-        self.vdda_mv = vdda_mv;
-        self.mcu_temp_deci_c = mcu_temp_deci_c;
-
-        let state =
-            self.battery_driver
-                .sample(raw_adc, vdda_mv, mcu_temp_deci_c, periph, self.profile);
-
-        self.apply_state(&state);
-        state
-    }
-
-    /// Increment OS system uptime and evaluate Auto-Power-Off (APO) timeouts.
-    pub fn tick_second(&mut self) {
-        self.uptime_secs = self.uptime_secs.saturating_add(1);
-        self.inactivity_secs = self.inactivity_secs.saturating_add(1);
-
-        if self.auto_power_off_min > 0 {
-            let limit_secs = (self.auto_power_off_min as u32) * 60;
-            if self.inactivity_secs >= limit_secs {
-                self.apo_triggered = true;
-            } else if self.inactivity_secs >= limit_secs.saturating_sub(10) {
-                self.apo_warning_active = true;
-            }
-        }
-    }
-
-    /// Trigger Cortex-M0+ Wait-For-Interrupt (WFI) standby idle.
-    pub fn enter_standby(&self) {
-        #[cfg(target_arch = "arm")]
-        asm::wfi();
-    }
-
-    /// Transition to Deep Sleep power saving state.
-    pub fn enter_deep_sleep(&mut self) {
-        self.profile = PowerProfile::DeepSleep;
-        #[cfg(target_arch = "arm")]
-        asm::wfi();
-    }
-}
-
-impl kernel::service::PowerService for SystemPower {
-    fn battery_percentage(&self) -> u8 {
-        self.battery_pct
-    }
-    fn battery_voltage_mv(&self) -> u16 {
-        self.battery_mv
-    }
-    fn battery_current_ma(&self) -> u16 {
-        self.battery_ma
-    }
-    fn uptime_secs(&self) -> u32 {
-        self.uptime_secs
-    }
-    fn raw_battery_adc(&self) -> u16 {
-        self.battery_driver.last_raw_adc
-    }
-    fn mcu_temperature_deci_c(&self) -> i16 {
-        self.mcu_temp_deci_c
-    }
-    fn vdda_voltage_mv(&self) -> u16 {
-        self.vdda_mv
-    }
-    fn is_charging(&self) -> bool {
-        self.is_charging
-    }
-    fn is_low(&self) -> bool {
-        self.is_low
-    }
-    fn is_critical(&self) -> bool {
-        self.is_critical
-    }
-    fn poll_charging_transition(&mut self) -> Option<bool> {
-        self.poll_charging_transition()
-    }
-    fn set_battery_type(&mut self, bat_type: u8) {
-        self.battery_driver
-            .set_battery_type(BatteryType::from_u8(bat_type));
-    }
-    fn force_refresh(&mut self) {
-        Self::force_refresh(self);
     }
 }

@@ -50,7 +50,10 @@ def draw_bar(used, total, width=32, label=""):
     print(f"  {BOLD}{label:<8}{RESET} {color}[{bar}]{RESET} {BOLD}{pct:5.1f}%{RESET} ({used:,} / {total:,} bytes | {remaining:,} B free)")
 
 def run_cmd(cmd, cwd=None):
-    res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
+    env = os.environ.copy()
+    home = str(Path.home())
+    env["PATH"] = f"{home}/.cargo/bin:{env.get('PATH', '')}"
+    res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, env=env)
     return res.returncode, res.stdout, res.stderr
 
 def parse_cargo_size(output):
@@ -152,6 +155,7 @@ def main():
     parser.add_argument("--port", "-p", help="Serial port for flashing (e.g. /dev/ttyACM0, /dev/ttyUSB0)")
     parser.add_argument("--clean", action="store_true", help="Clean cargo build artifacts before compiling")
     parser.add_argument("--dev", action="store_true", help="Build or check using dev profile (optimized for flash)")
+    parser.add_argument("--size", action="store_true", help="Display memory section allocation breakdown")
 
     args = parser.parse_args()
 
@@ -194,8 +198,9 @@ def main():
 
     profile_flag = "" if args.dev else "--release"
     profile_name = "dev" if args.dev else "release"
+    std_flags = "-Zbuild-std=core,compiler_builtins -Zbuild-std-features=optimize_for_size"
 
-    cmd = f"cargo {'check' if args.check else 'build'} {profile_flag} -p firmware {feature_flags}".strip()
+    cmd = f"cargo {'check' if args.check else 'build'} {profile_flag} -p firmware {std_flags} {feature_flags}".strip()
     print(f"\n {BLUE}{INVERT} {action_label} {RESET} {action_verb} firmware {profile_name} profile...")
     print(f" {GRAY}$ {cmd}{RESET}")
 
@@ -221,29 +226,8 @@ def main():
         print(f"\n {GREEN}{BOLD}✨ Syntax and type check passed successfully!{RESET}")
         return
 
-    # Step 2: Objcopy Raw ARM Cortex-M0+ Binary
-    target_bin = "target/firmware.bin"
-    target_packed = "target/firmware_packed.bin"
-
-    print(f" {BLUE}{INVERT} BIN   {RESET} Extracting raw ARM Cortex-M0+ binary...")
-    code, stdout, stderr = run_cmd(f"cargo objcopy {profile_flag} -p firmware {feature_flags} -- -O binary {target_bin}".strip())
-    if code != 0:
-        print(f" {RED}{INVERT} ERROR {RESET} Objcopy failed: {stderr}")
-        sys.exit(1)
-
-    # Step 3: Pack Bootloader Image (XOR Obfuscation for Quansheng bootloader)
-    print(f" {BLUE}{INVERT} PACK  {RESET} XOR obfuscating image for bootloader flashing...")
-    pack_tool = root_dir / "tools" / "pack.py"
-    if pack_tool.exists():
-        code, stdout, stderr = run_cmd(f"python3 {pack_tool} {target_bin} {target_packed}")
-        if code != 0:
-            print(f" {RED}{INVERT} ERROR {RESET} Packing failed: {stderr}")
-            sys.exit(1)
-    else:
-        print(f" {YELLOW}{INVERT} SKIP  {RESET} tools/pack.py not found, skipping bootloader packaging.")
-
-    # Step 4: Size & Memory Allocation Analysis
-    size_cmd = f"cargo size {profile_flag} -p firmware {feature_flags} -- -A".strip()
+    # Step 2: Size & Memory Allocation Analysis
+    size_cmd = f"cargo size {profile_flag} -p firmware {std_flags} {feature_flags} -- -A".strip()
     code, stdout, stderr = run_cmd(size_cmd)
     sections = parse_cargo_size(stdout) if code == 0 else {}
 
@@ -252,9 +236,10 @@ def main():
     rodata_size = sections.get(".rodata", 0)
     data_size   = sections.get(".data", 0)
     bss_size    = sections.get(".bss", 0)
+    uninit_size = sections.get(".uninit", 0)
 
     total_flash = vec_size + text_size + rodata_size + data_size
-    total_ram   = data_size + bss_size
+    total_ram   = data_size + bss_size + uninit_size
 
     print(f"\n {BOLD}📊 Memory Allocation Summary{RESET}")
     print(f" ══════════════════════════════════════════════════════════════════")
@@ -262,7 +247,7 @@ def main():
     draw_bar(total_ram,   ram_budget,   label="SRAM")
     print(f" ──────────────────────────────────────────────────────────────────")
     print(f"  Vectors: {vec_size:>6} B | Text: {text_size:>6} B | Rodata: {rodata_size:>6} B")
-    print(f"  Data:    {data_size:>6} B | BSS:  {bss_size:>6} B")
+    print(f"  Data:    {data_size:>6} B | BSS:  {bss_size:>6} B | Uninit: {uninit_size:>6} B")
     print(f" ══════════════════════════════════════════════════════════════════")
 
     if total_flash > flash_budget:
@@ -273,10 +258,44 @@ def main():
         print(f"\n {RED}{INVERT} CRITICAL {RESET} SRAM budget exceeded by {total_ram - ram_budget:,} bytes!")
         sys.exit(1)
 
+    if args.size:
+        return
+
+    # Step 3: Objcopy Raw ARM Cortex-M0+ Binary
+    target_bin = "target/firmware.bin"
+    target_packed = "target/firmware_packed.bin"
+
+    print(f" {BLUE}{INVERT} BIN   {RESET} Extracting raw ARM Cortex-M0+ binary...")
+    code, stdout, stderr = run_cmd(f"cargo objcopy {profile_flag} -p firmware {std_flags} {feature_flags} -- -O binary {target_bin}".strip())
+    if code != 0:
+        print(f" {RED}{INVERT} ERROR {RESET} Objcopy failed: {stderr}")
+        sys.exit(1)
+
+    # Step 4: Pack Bootloader Image (XOR Obfuscation for Quansheng bootloader)
+    print(f" {BLUE}{INVERT} PACK  {RESET} XOR obfuscating image for bootloader flashing...")
+    pack_tool = root_dir / "tools" / "pack.py"
+    if pack_tool.exists():
+        code, stdout, stderr = run_cmd(f"python3 {pack_tool} {target_bin} {target_packed}")
+        if code != 0:
+            print(f" {RED}{INVERT} ERROR {RESET} Packing failed: {stderr}")
+            sys.exit(1)
+    else:
+        print(f" {YELLOW}{INVERT} SKIP  {RESET} tools/pack.py not found, skipping bootloader packaging.")
+
+    # Step 4.1: Wrap Raw Binary in ELF for QEMU Hardware Emulation
+    target_elf = "target/kern_firmware.elf"
+    bin2elf_tool = root_dir / "inspo" / "uv-k5-v3-emulator" / "tools" / "bin2elf.py"
+    if bin2elf_tool.exists():
+        code, stdout, stderr = run_cmd(f"python3 {bin2elf_tool} {target_bin} -o {target_elf}")
+        if code != 0:
+            print(f" {YELLOW}{INVERT} WARN  {RESET} bin2elf failed: {stderr.strip()}")
+
     print(f"\n {GREEN}{BOLD}✨ Build Artifacts Ready:{RESET}")
     print(f"   • Raw Binary:    {WHITE}{target_bin}{RESET} ({total_flash:,} bytes)")
     if Path(target_packed).exists():
         print(f"   • Packed Binary: {WHITE}{target_packed}{RESET} ({os.path.getsize(target_packed):,} bytes)")
+    if Path(target_elf).exists():
+        print(f"   • Emulator ELF:  {WHITE}{target_elf}{RESET} ({os.path.getsize(target_elf):,} bytes)")
 
     # Step 5: Optional Auto-Flash
     if args.flash:

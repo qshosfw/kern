@@ -1,0 +1,11 @@
+[app]
+id = "vfo"
+name = "Radio"
+version = "1.0.0"
+execution = "static"
+entry = "VfoApp"
+icon = "ICON_16_RADIO"
+
+[capabilities]
+radio_rx = true
+radio_tx = true

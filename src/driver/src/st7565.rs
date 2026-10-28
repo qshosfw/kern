@@ -8,6 +8,9 @@ pub struct St7565<'a> {
     spi: &'a mut dyn SpiDevice,
     cs: &'a mut dyn OutputPin,
     a0: &'a mut dyn OutputPin,
+    pub subframe: u8,
+    pub motion_bypass: bool,
+    pub shading_mode: u8,
 }
 
 impl<'a> St7565<'a> {
@@ -16,7 +19,14 @@ impl<'a> St7565<'a> {
         cs: &'a mut dyn OutputPin,
         a0: &'a mut dyn OutputPin,
     ) -> Self {
-        Self { spi, cs, a0 }
+        Self {
+            spi,
+            cs,
+            a0,
+            subframe: 0,
+            motion_bypass: false,
+            shading_mode: 1,
+        }
     }
 
     #[inline(always)]
@@ -84,10 +94,10 @@ impl<'a> St7565<'a> {
     }
 
     pub fn set_contrast(&mut self, contrast_percent: u8) {
-        // Map 0..=100% user setting to optimal ST7565 Electronic Volume (EV) range 21..=37.
-        // EV = 29..31 is the factory default optimum (50% user contrast).
-        // Hardware EV values > 40 cause liquid crystal over-drive and pixel ghosting on ST7565.
-        let ev = 21 + ((contrast_percent.min(100) as u16 * 16) / 100) as u8;
+        // Map 0..=100% user setting to optimal ST7565 Electronic Volume (EV) range 21..=41.
+        // EV = 31 is the factory default optimum (50% user contrast, 21 + 10 = 31 per DeltaFW).
+        // Hardware EV values > 45 cause liquid crystal over-drive and pixel ghosting on ST7565.
+        let ev = 21 + ((contrast_percent.min(100) as u16 * 20) / 100) as u8;
         self.cs.set_low();
         self.write_cmd(0x81);
         self.write_cmd(ev & 0x3F);
@@ -104,7 +114,42 @@ impl<'a> St7565<'a> {
         self.cs.set_high();
     }
 
+    /// Dynamically enable or disable motion bypass.
+    /// When true (e.g. during kinetic list scrolling or lateral transitions),
+    /// the driver switches to Turbo SPI (12 MHz) and transmits crisp 1-bit high-contrast
+    /// frames to prevent STN liquid crystal ghosting and smearing.
+    pub fn set_motion_bypass(&mut self, bypass: bool) {
+        self.motion_bypass = bypass;
+        if bypass {
+            py32_hal::spi::set_spi1_speed(py32_hal::spi::Spi1Speed::Turbo);
+        } else {
+            py32_hal::spi::set_spi1_speed(py32_hal::spi::Spi1Speed::Standard);
+        }
+    }
+
+    /// Explicitly set the SPI1 interface speed profile.
+    pub fn set_speed(&mut self, speed: py32_hal::spi::Spi1Speed) {
+        py32_hal::spi::set_spi1_speed(speed);
+    }
+
+    /// Transmit canvas data to ST7565 LCD over hardware SPI.
+    /// In grayscale mode with temporal FRC enabled and motion_bypass false,
+    /// transmits the spatio-temporal phase slice corresponding to `self.subframe`.
     pub fn blit(&mut self, canvas: &mut Canvas) {
+        let subframe = self.subframe;
+        self.blit_subframe(canvas, subframe);
+        #[cfg(feature = "grayscale")]
+        if self.shading_mode == 0 {
+            self.subframe = if self.subframe >= 2 {
+                0
+            } else {
+                self.subframe + 1
+            };
+        }
+    }
+
+    /// Blit an explicit subframe slice (0..3) to the ST7565 LCD.
+    pub fn blit_subframe(&mut self, canvas: &mut Canvas, #[allow(unused_variables)] subframe: u8) {
         if canvas.dirty == 0 {
             return;
         }
@@ -123,6 +168,23 @@ impl<'a> St7565<'a> {
 
                 // Transmit 128 data bytes for this page
                 self.a0.set_high();
+                #[cfg(feature = "grayscale")]
+                if self.shading_mode == 0 {
+                    for col in 0..LCD_WIDTH {
+                        let byte = canvas.get_subframe_byte(page, col, subframe);
+                        self.spi.write_byte(byte);
+                    }
+                } else if self.shading_mode == 1 {
+                    for col in 0..LCD_WIDTH {
+                        let byte = canvas.get_dither_byte(page, col);
+                        self.spi.write_byte(byte);
+                    }
+                } else {
+                    for &byte in &canvas.buffer[page] {
+                        self.spi.write_byte(byte);
+                    }
+                }
+                #[cfg(not(feature = "grayscale"))]
                 for &byte in &canvas.buffer[page] {
                     self.spi.write_byte(byte);
                 }

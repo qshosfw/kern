@@ -1,0 +1,23 @@
+//! Explorer Application Assets
+//! Monochromatic 16x16 and 8x8 icon bitmaps declared natively within the application.
+
+pub const ICON_16: [u8; 32] = [
+    0x3C, 0x00, //   ████
+    0x7E, 0x00, //  ██████
+    0x7F, 0xFC, //  ██████████████
+    0x40, 0x04, //  █            █
+    0x5F, 0xC4, //  █ ████████   █
+    0x50, 0x24, //  █ █      █   █
+    0x7F, 0xFC, //  ██████████████
+    0x3F, 0xFE, //   █████████████
+    0x20, 0x02, //   █           █
+    0x26, 0x02, //   █  ██       █
+    0x23, 0x02, //   █   ██      █
+    0x20, 0x02, //   █           █
+    0x20, 0x02, //   █           █
+    0x3F, 0xFE, //   █████████████
+    0x1F, 0xFC, //    ████████████
+    0x00, 0x00, //
+];
+
+pub const ICON_8: [u8; 8] = [0xF0, 0xFF, 0x81, 0xBD, 0xBD, 0xFF, 0x81, 0xFF];

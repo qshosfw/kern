@@ -142,3 +142,13 @@ The unified `./kern` script drives all development operations:
 ### Resource Budgets (PY32F071xB)
 - **Flash ROM**: 128 KB (120,832 bytes usable firmware budget; target < 80 KB used).
 - **SRAM**: 16 KB (16,384 bytes budget; target < 5 KB static used).
+
+---
+
+## 5. Operational Directives & Invariants
+
+- **Master Plan Fidelity**: Maintain all architecture specifications, Cortex-M0+ silicon guidelines, and memory maps without truncation or loss of detail.
+- **State & Transition Testing**: App exit, navigation switching, and view restoration logic must be backed by unit tests verifying zero state degradation.
+- **Sub-30ms UI Latency**: Audio tone warm-up and filesystem operations must never stall the UI loop; package and storage metadata must be cached in memory during navigation.
+- **Crate Hygiene**: Workspace crates must remain strictly deduplicated and up-to-date with Rust 2024 idioms.
+- **Subsystem Isolation**: Avoid modifying files actively owned by concurrent agents (e.g. boot splash files).

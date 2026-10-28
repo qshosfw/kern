@@ -25,25 +25,26 @@ pub fn init() {
     // Enable SPI1 clock
     rcc::enable_spi1();
 
-    // Configure PA5 as AF0 (SPI1_SCK)
+    // Configure PA5 as AF0 (SPI1_SCK) with Medium slew-rate to prevent RF harmonics
     let sck = Pin::new(gpio::GPIOA_BASE, 5);
     sck.set_pull(pac::gpio::PULL_UP);
-    sck.configure_af(pac::gpio::AF0, pac::gpio::SPEED_HIGH);
+    sck.configure_af(pac::gpio::AF0, pac::gpio::SPEED_MEDIUM);
 
-    // Configure PA7 as AF0 (SPI1_MOSI)
+    // Configure PA7 as AF0 (SPI1_MOSI) with Medium slew-rate
     let mosi = Pin::new(gpio::GPIOA_BASE, 7);
     mosi.set_pull(pac::gpio::PULL_NONE);
-    mosi.configure_af(pac::gpio::AF0, pac::gpio::SPEED_HIGH);
+    mosi.configure_af(pac::gpio::AF0, pac::gpio::SPEED_MEDIUM);
 
     // Configure SPI1 registers
     unsafe {
-        // CR1: Master, CPOL=1, CPHA=1, 8-bit MSB, SSM+SSI, BR=/16 (3 MHz matching fagci-k1-fw)
+        // CR1: Master, CPOL=1, CPHA=1, 8-bit MSB, SSM+SSI, BR=/4 (12 MHz @ 48 MHz PCLK)
+        // At 12 MHz, full 1024-byte screen transfer takes 0.68ms (4x faster blits, lower active power)
         let cr1 = spi::CR1_MSTR
             | spi::CR1_CPOL
             | spi::CR1_CPHA
             | spi::CR1_SSM
             | spi::CR1_SSI
-            | (0b011 << spi::CR1_BR_SHIFT); // /16 = 48MHz/16 = 3MHz
+            | (0b001 << spi::CR1_BR_SHIFT); // /4 = 48MHz/4 = 12MHz
         SPI1.cr1().write_volatile(cr1);
 
         // CR2: Clear to 0 (no DMA / SSOE / interrupts)
@@ -87,6 +88,41 @@ pub fn init_spi2() {
         SPI2.cr2().write_volatile(0);
         let val = SPI2.cr1().read_volatile();
         SPI2.cr1().write_volatile(val | spi::CR1_SPE);
+    }
+}
+
+/// Dynamic baud rate prescalers for SPI1 (LCD interface).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spi1Speed {
+    /// 750 kHz (/64): Whisper profile (deltafw standard), 144MHz is 192nd harmonic (>80dB down, zero RF desense)
+    Whisper = 0b101,
+    /// 1.5 MHz (/32): Low profile for receiver protection
+    Low = 0b100,
+    /// 3 MHz (/16): Ultra-low EMI, quiet RF operation, lowest active power
+    Quiet = 0b011,
+    /// 6 MHz (/8): Balanced standard profile
+    Standard = 0b010,
+    /// 12 MHz (/4): Turbo profile for high-speed animations & 180 Hz temporal FRC
+    Turbo = 0b001,
+}
+
+/// Dynamically adjust SPI1 baudrate prescaler without resetting peripheral state.
+pub fn set_spi1_speed(speed: Spi1Speed) {
+    unsafe {
+        // Wait for current transmission to finish
+        let mut timeout = 100_000;
+        while SPI1.sr().read_volatile() & spi::SR_BSY != 0 {
+            timeout -= 1;
+            if timeout == 0 {
+                break;
+            }
+        }
+        let mut cr1 = SPI1.cr1().read_volatile();
+        // SPE must be cleared before modifying BR bits
+        SPI1.cr1().write_volatile(cr1 & !spi::CR1_SPE);
+        cr1 &= !(0b111 << spi::CR1_BR_SHIFT);
+        cr1 |= (speed as u32) << spi::CR1_BR_SHIFT;
+        SPI1.cr1().write_volatile(cr1 | spi::CR1_SPE);
     }
 }
 

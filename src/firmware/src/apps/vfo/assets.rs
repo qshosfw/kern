@@ -1,0 +1,23 @@
+//! VFO / Radio Application Assets
+//! Monochromatic 16x16 and 8x8 icon bitmaps declared natively within the application.
+
+pub const ICON_16: [u8; 32] = [
+    0x02, 0x00, //      █
+    0x02, 0x00, //      █
+    0x02, 0x20, //      █   █
+    0x02, 0x70, //      █  ███
+    0x1F, 0xF0, //    ████ ████
+    0x1F, 0xF0, //    ████ ████
+    0x18, 0x10, //    ██      █
+    0x39, 0x90, //   ███  ██  █  (PTT button + LCD display)
+    0x38, 0x10, //   ███      █
+    0x1F, 0xF0, //    ████ ████
+    0x18, 0x10, //    ██      █
+    0x19, 0x90, //    ██  ██  █  (Speaker grille)
+    0x18, 0x10, //    ██      █
+    0x19, 0x90, //    ██  ██  █
+    0x1F, 0xF0, //    ████ ████
+    0x0F, 0xE0, //     ███████
+];
+
+pub const ICON_8: [u8; 8] = [0x63, 0x64, 0xFF, 0xC3, 0xDB, 0xFF, 0xDB, 0xFF];

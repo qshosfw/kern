@@ -59,8 +59,8 @@ pub const DEVICE_DESCRIPTOR: [u8; 18] = [
     EP0_SIZE, // bMaxPacketSize0 (64 bytes)
     0xB7,
     0x36, // idVendor (0x36B7 - Puya / Kern)
-    0x01,
-    0x00, // idProduct (0x0001)
+    0xFF,
+    0xFF, // idProduct (0xFFFF - matches DeltaFW & standard Puya CDC tools)
     0x00,
     0x01, // bcdDevice (1.00)
     1,    // iManufacturer (String index 1)

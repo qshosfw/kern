@@ -4,14 +4,15 @@ cargo-features = ["panic-immediate-abort"]
 members = [
     "src/platform/pac",
     "src/platform/hal",
-    "src/kern",
+    "src/kernel",
     "src/driver",
     "src/lib/gfx",
     "src/lib/crypto",
     "src/lib/utils",
     "src/lib/calib",
     "src/lib/kernfs",
-    "src/apps/firmware", "delog_patch", "src/platform/bsp",
+    "src/firmware",
+    "src/platform/bsp",
     "src/platform/traits",
 ]
 resolver = "2"
@@ -22,7 +23,7 @@ cortex-m-rt = "0.7.3"
 defmt = "0.3.5"
 heapless = "0.8.0"
 embedded-hal = "1.0.0"
-portable-atomic = { version = "1.6.0", features = ["unsafe-assume-single-core", "fallback"] }
+portable-atomic = { version = "1.6.0", features = ["fallback"] }
 PY32f071xx-pac = { version = "0.1.0", features = ["rt"] }
 
 [profile.release]
@@ -41,5 +42,3 @@ debug = 1
 lto = "thin"
 panic = "immediate-abort"
 
-[patch.crates-io]
-delog = { path = "delog_patch" }

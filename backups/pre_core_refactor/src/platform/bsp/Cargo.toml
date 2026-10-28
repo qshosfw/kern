@@ -1,0 +1,11 @@
+[package]
+name = "bsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cortex-m = { workspace = true }
+py32-hal = { path = "../hal" }
+py32-pac = { path = "../pac", package = "py32f071-pac" }
+utils = { path = "../../lib/utils" }
+kern-platform-traits = { path = "../traits" }

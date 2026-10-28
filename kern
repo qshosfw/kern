@@ -2,6 +2,8 @@
 # ⚡ kern - Developer CLI for Kern Microkernel & Firmware
 set -e
 
+export PATH="$HOME/.cargo/bin:$PATH"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$1" in
@@ -23,7 +25,8 @@ case "$1" in
         ;;
     test)
         shift
-        cargo test --workspace --exclude firmware "$@"
+        HOST_TARGET="$(rustc -vV | sed -n 's|host: ||p')"
+        cargo test --target "$HOST_TARGET" --workspace --exclude firmware "$@"
         ;;
     fmt)
         shift
@@ -39,8 +42,16 @@ case "$1" in
         echo "Clean complete."
         ;;
     size)
-        python3 "$DIR/tools/builder.py" --dry-run
-        cargo size --release -p firmware -- -A
+        shift
+        python3 "$DIR/tools/builder.py" --size "$@"
+        ;;
+    wire)
+        shift
+        python3 "$DIR/tools/rigwire.py" "$@"
+        ;;
+    emu|sim)
+        shift
+        python3 "$DIR/tools/emulator_helper.py" "$@"
         ;;
     help|--help|-h)
         echo "⚡ kern - Developer CLI"
@@ -51,12 +62,14 @@ case "$1" in
         echo "  build         Build firmware using kern.toml configuration (default)"
         echo "  check         Run fast type and syntax check without emitting binary"
         echo "  test          Run native host unit tests across workspace"
+        echo "  emu           Launch QEMU hardware emulator with interactive Web UI"
         echo "  fmt           Format all Rust code in the workspace"
         echo "  disasm        Disassemble compiled firmware image"
         echo "  flash         Build and flash firmware to radio via bootloader"
         echo "  info          Display target MCU, device, and active feature gates"
         echo "  clean         Clean target build directory"
         echo "  size          Display section memory allocation breakdown"
+        echo "  wire          RigWire serial host tool and file provisioning client"
         echo "  help          Show this help text"
         echo ""
         echo "Options forwarded to builder:"

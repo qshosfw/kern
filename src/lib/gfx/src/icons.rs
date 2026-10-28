@@ -9,6 +9,7 @@ pub const ICON_HEIGHT: u8 = 8;
 // 8x8 Bitmaps
 pub const ICON_ANTENNA: [u8; 8] = [0x00, 0x55, 0x2A, 0x1C, 0x08, 0x08, 0x08, 0x00];
 pub const ICON_LOCK: [u8; 8] = [0x00, 0x1C, 0x22, 0x22, 0x7F, 0x7F, 0x7F, 0x00];
+pub const ICON_UNLOCK: [u8; 8] = [0x00, 0x1C, 0x20, 0x20, 0x7F, 0x7F, 0x7F, 0x00];
 pub const ICON_SPEAKER: [u8; 8] = [0x00, 0x12, 0x36, 0x7E, 0x7E, 0x36, 0x12, 0x00];
 pub const ICON_SHIELD: [u8; 8] = [0x00, 0x7E, 0x7E, 0x3C, 0x3C, 0x18, 0x00, 0x00];
 pub const ICON_KEYPAD: [u8; 8] = [0x00, 0x6E, 0x6E, 0x00, 0x6E, 0x6E, 0x00, 0x00];
@@ -19,6 +20,7 @@ pub const ICON_BOLT: [u8; 8] = [0x0C, 0x18, 0x30, 0x7E, 0x0C, 0x18, 0x10, 0x00];
 
 // 5x5 Compact Status Bar Glyph Bitmaps (1 byte per row, top 5 bits used)
 pub const ICON_LOCK_5X5: [u8; 5] = [0b01110000, 0b10001000, 0b11111000, 0b11111000, 0b11111000];
+pub const ICON_UNLOCK_5X5: [u8; 5] = [0b01110000, 0b10000000, 0b11111000, 0b11111000, 0b11111000];
 pub const ICON_ANTENNA_5X5: [u8; 5] = [0b10101000, 0b01110000, 0b00100000, 0b00100000, 0b00100000];
 pub const ICON_SPEAKER_5X5: [u8; 5] = [0b00100000, 0b01101000, 0b11111000, 0b01101000, 0b00100000];
 pub const ICON_FLASHLIGHT_5X5: [u8; 5] =
@@ -78,6 +80,7 @@ pub const ICON_VFO: [u8; 8] = [0xA0, 0xA0, 0x48, 0x10, 0x1A, 0x15, 0x05, 0x02];
 pub enum Icon {
     Antenna,
     Lock,
+    Unlock,
     Speaker,
     Shield,
     Keypad,
@@ -112,6 +115,7 @@ pub fn draw_icon(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) 
     let bmp = match icon {
         Icon::Antenna => &ICON_ANTENNA,
         Icon::Lock => &ICON_LOCK,
+        Icon::Unlock => &ICON_UNLOCK,
         Icon::Speaker => &ICON_SPEAKER,
         Icon::Shield => &ICON_SHIELD,
         Icon::Keypad => &ICON_KEYPAD,
@@ -129,6 +133,7 @@ pub fn draw_icon_5x5(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Col
     let (bmp, w) = match icon {
         Icon::Antenna => (&ICON_ANTENNA_5X5[..], 5),
         Icon::Lock => (&ICON_LOCK_5X5[..], 5),
+        Icon::Unlock => (&ICON_UNLOCK_5X5[..], 5),
         Icon::Speaker => (&ICON_SPEAKER_5X5[..], 5),
         Icon::Flashlight => (&ICON_FLASHLIGHT_5X5[..], 5),
         Icon::Function => (&ICON_FUNCTION_5X5[..], 5),

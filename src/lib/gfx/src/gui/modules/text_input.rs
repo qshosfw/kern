@@ -193,38 +193,54 @@ impl TextInputView {
 
     #[inline(never)]
     fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16) {
-        if !model.digits_only {
-            let star_label = match model.charset {
-                Charset::Upper | Charset::Lower => "123",
-                Charset::Numbers => "SYM",
-                _ => "ABC",
-            };
-            widgets::draw_key_badge(canvas, 2, by, "*", star_label);
-        }
-
-        let is_act = model.is_k1 || model.is_passcode || model.digits_only;
-        let k = if model.is_k1 {
-            "M"
-        } else if is_act {
-            "Menu"
+        let menu_key = if model.is_k1 { "M" } else { "Menu" };
+        let exit_label = if model.buffer.is_empty() {
+            "Back"
         } else {
-            "0"
+            "Clear"
         };
-        let l = if is_act { "Enter" } else { "Space" };
-        widgets::draw_key_badge(canvas, 44, by, k, l);
 
         if model.digits_only {
-            if !model.is_passcode {
-                widgets::draw_key_badge(canvas, 86, by, "Exit", "Back");
-            }
-        } else {
-            let hash_key = if model.is_k1 { "F" } else { "#" };
-            let case_label = match model.charset {
-                Charset::Upper => "abc",
-                Charset::Lower => "ABC",
-                _ => "Case",
+            widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
+            widgets::draw_key_badge_right(canvas, 126, by, "EXIT", exit_label);
+            return;
+        }
+
+        let star_label = match model.charset {
+            Charset::Upper | Charset::Lower => "123",
+            Charset::Numbers => "SYM",
+            _ => "ABC",
+        };
+
+        let hash_key = if model.is_k1 { "F" } else { "#" };
+        let case_label = match model.charset {
+            Charset::Upper => "abc",
+            Charset::Lower => "ABC",
+            _ => "Case",
+        };
+
+        let show_grid = model.show_grid
+            || match model.charset {
+                Charset::Numbers => false,
+                Charset::Symbols => true,
+                Charset::Upper | Charset::Lower => !model.is_k1,
             };
+
+        if show_grid {
+            widgets::draw_key_badge(canvas, 2, by, "*", star_label);
+            widgets::draw_key_badge(canvas, 44, by, menu_key, "Enter");
             widgets::draw_key_badge(canvas, 86, by, hash_key, case_label);
+        } else {
+            widgets::draw_key_badge(canvas, 1, by, "*", star_label);
+            widgets::draw_key_badge(
+                canvas,
+                28,
+                by,
+                menu_key,
+                if model.is_k1 { "Enter" } else { "OK" },
+            );
+            widgets::draw_key_badge(canvas, 60, by, hash_key, case_label);
+            widgets::draw_key_badge_right(canvas, 126, by, "EXIT", exit_label);
         }
     }
 
@@ -259,7 +275,7 @@ impl TextInputView {
                     text::draw_str(
                         canvas,
                         cx + 3 - (w as i16) / 2,
-                        cy + 7,
+                        cy + 6,
                         last_char,
                         &MUMATRIX,
                         Color::Fill,
@@ -281,10 +297,9 @@ impl View<TextInputModel> for TextInputView {
             canvas.fill_rect(0, 8, 128, 56, Color::Clear);
         }
 
-        // 2. Mode & Length Indicator Bar
+        // 2. Mode & Length Indicator Bar (DeltaFW layout below header)
         let header_y = 15i16;
-        let can_switch_mode = !model.digits_only;
-        if can_switch_mode {
+        if !model.digits_only {
             let charset_name = match model.charset {
                 Charset::Upper => "ABC",
                 Charset::Lower => "abc",
@@ -294,7 +309,7 @@ impl View<TextInputModel> for TextInputView {
             text::draw_str(canvas, 3, header_y, charset_name, &TOMTHUMB, Color::Fill);
         }
 
-        if !(model.is_passcode && model.expose_len) {
+        if !model.is_passcode {
             let mut num_buf = [0u8; 12];
             let count_s = text::format_fraction_u32(
                 model.buffer.len() as u32,
@@ -328,7 +343,7 @@ impl View<TextInputModel> for TextInputView {
         let text_y = if show_grid { 27i16 } else { 33i16 };
 
         if model.is_passcode {
-            let cy = if show_grid { 22i16 } else { 32i16 };
+            let cy = if show_grid { 22i16 } else { 29i16 };
             Self::draw_passcode_dots(canvas, model, cy, is_cycling);
         } else {
             let text_x = 5i16;
@@ -376,10 +391,14 @@ impl View<TextInputModel> for TextInputView {
 
         if show_grid {
             Self::draw_t9_grid(canvas, model.charset);
+            Self::draw_bottom_badges(canvas, model, 55);
+        } else {
+            if !model.is_passcode {
+                canvas.draw_horizontal_line(0, 52, 128, Color::Fill);
+            }
+            let by = if model.is_passcode { 55 } else { 54 };
+            Self::draw_bottom_badges(canvas, model, by);
         }
-
-        let by = if show_grid { 55i16 } else { 56i16 };
-        Self::draw_bottom_badges(canvas, model, by);
     }
 
     fn on_event(&mut self, model: &mut TextInputModel, event: &Event) -> bool {
@@ -437,7 +456,7 @@ impl View<TextInputModel> for TextInputView {
                 }
             }
 
-            // 2. Key Release for Exit (Backspace ONLY on short tap release)
+            // 2. Key Release for Exit (Backspace ONLY on short tap release, or Back if empty)
             if is_released && *code == KeyCode::Exit {
                 if model.exit_pressed {
                     model.exit_pressed = false;
@@ -446,6 +465,9 @@ impl View<TextInputModel> for TextInputView {
                             Self::confirm_current_char(model);
                         } else if !model.buffer.is_empty() {
                             model.buffer.pop();
+                        } else {
+                            // Buffer is empty: short tap on Exit cancels immediately ("Back")!
+                            cancel_input(model);
                         }
                     }
                 }
@@ -552,4 +574,56 @@ fn cancel_input(model: &mut TextInputModel) {
     TextInputView::confirm_current_char(model);
     model.buffer.clear();
     model.is_canceled = true;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_text_input_empty_exit_cancels_immediately() {
+        let mut model = TextInputModel::new(16);
+        let mut view = TextInputView;
+
+        // Press Exit
+        let ev_press = Event::Key {
+            code: KeyCode::Exit,
+            state: KeyState::Pressed,
+        };
+        assert!(view.on_event(&mut model, &ev_press));
+        assert!(model.exit_pressed);
+        assert!(!model.is_canceled);
+
+        // Release Exit when buffer is empty -> cancels immediately
+        let ev_release = Event::Key {
+            code: KeyCode::Exit,
+            state: KeyState::Released,
+        };
+        assert!(view.on_event(&mut model, &ev_release));
+        assert!(!model.exit_pressed);
+        assert!(model.is_canceled);
+    }
+
+    #[test]
+    fn test_text_input_nonempty_exit_pops_character() {
+        let mut model = TextInputModel::new(16);
+        let mut view = TextInputView;
+        let _ = model.buffer.push('A');
+
+        // Press Exit
+        let ev_press = Event::Key {
+            code: KeyCode::Exit,
+            state: KeyState::Pressed,
+        };
+        assert!(view.on_event(&mut model, &ev_press));
+
+        // Release Exit when buffer has 'A' -> pops 'A', does NOT cancel
+        let ev_release = Event::Key {
+            code: KeyCode::Exit,
+            state: KeyState::Released,
+        };
+        assert!(view.on_event(&mut model, &ev_release));
+        assert!(!model.is_canceled);
+        assert!(model.buffer.is_empty());
+    }
 }

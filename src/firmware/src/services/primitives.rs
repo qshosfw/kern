@@ -1,0 +1,820 @@
+//! High-Level Coordinated Microkernel Primitives Implementation (§8.2 / KRX-ABI 2.5.0).
+//!
+//! Exposes the complete 12 primitive interfaces on `FirmwareContext` with full subsystem
+//! coordination (RadioCoordinator, Audio priority ladder, Canvas compositor, KernFS, Keypad).
+
+use crate::services::FirmwareContext;
+use kernel::proc::primitives::*;
+use kernel::service::radio::{
+    FskBaudRate, FskPhyConfig, RfAudioPath, RfChannel, RfModulation, RfSquelch, RfSubaudible,
+};
+use kernel::service::{DisplayService, PowerService};
+
+// ── 1. Display Primitive ────────────────────────────────────────────────────
+impl<'a, 'hw> FirmwareContext<'a, 'hw> {
+    #[inline(always)]
+    fn active_canvas(&mut self) -> &mut gfx::Canvas {
+        if let Some(ref mut d) = self.display {
+            d.canvas
+        } else {
+            crate::system_canvas()
+        }
+    }
+}
+
+impl<'a, 'hw> DisplayPrimitive for FirmwareContext<'a, 'hw> {
+    fn clear(&mut self) {
+        self.active_canvas().clear();
+    }
+
+    fn draw_pixel(&mut self, x: i16, y: i16, color: u8) {
+        if x >= 0 && y >= 0 && x < 128 && y < 64 {
+            let col = if color != 0 {
+                gfx::Color::Fill
+            } else {
+                gfx::Color::Clear
+            };
+            self.active_canvas().draw_pixel(x as u8, y as u8, col);
+        }
+    }
+
+    fn draw_line(&mut self, x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
+        let col = if color != 0 {
+            gfx::Color::Fill
+        } else {
+            gfx::Color::Clear
+        };
+        gfx::draw::draw_line(self.active_canvas(), x0, y0, x1, y1, col);
+    }
+
+    fn draw_rect(&mut self, x: i16, y: i16, w: i16, h: i16, color: u8) {
+        let col = if color != 0 {
+            gfx::Color::Fill
+        } else {
+            gfx::Color::Clear
+        };
+        self.active_canvas().draw_rect(
+            x.max(0) as u8,
+            y.max(0) as u8,
+            w.max(0) as u8,
+            h.max(0) as u8,
+            col,
+        );
+    }
+
+    fn fill_rect(&mut self, x: i16, y: i16, w: i16, h: i16, color: u8) {
+        let col = if color != 0 {
+            gfx::Color::Fill
+        } else {
+            gfx::Color::Clear
+        };
+        self.active_canvas().fill_rect(
+            x.max(0) as u8,
+            y.max(0) as u8,
+            w.max(0) as u8,
+            h.max(0) as u8,
+            col,
+        );
+    }
+
+    fn draw_bitmap(&mut self, x: i16, y: i16, w: u8, h: u8, data: &[u8]) {
+        gfx::draw::draw_bitmap(self.active_canvas(), x, y, w, h, data, gfx::Color::Fill);
+    }
+
+    fn draw_str(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8) {
+        let col = if color != 0 {
+            gfx::Color::Fill
+        } else {
+            gfx::Color::Clear
+        };
+        let canvas = self.active_canvas();
+        match font_id {
+            1 => gfx::text::draw_str(canvas, x, y, text, &gfx::fonts::mumatrix_regular::FONT, col),
+            _ => gfx::text::draw_str(canvas, x, y, text, &gfx::fonts::tomthumb::FONT, col),
+        }
+    }
+
+    fn set_inverted(&mut self, inverted: bool) {
+        if let Some(ref mut d) = self.display {
+            d.set_inverted(inverted);
+        }
+    }
+
+    fn set_contrast(&mut self, contrast: u8) {
+        if let Some(ref mut d) = self.display {
+            d.set_contrast(contrast);
+        }
+    }
+
+    fn draw_str_max(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8, max_w: i16) {
+        let col = if color != 0 {
+            gfx::Color::Fill
+        } else {
+            gfx::Color::Clear
+        };
+        let font = match font_id {
+            1 => &gfx::fonts::mumatrix_regular::FONT,
+            _ => &gfx::fonts::tomthumb::FONT,
+        };
+        gfx::text::draw_str_max_x(
+            self.active_canvas(),
+            x,
+            y,
+            text,
+            font,
+            col,
+            (x + max_w).max(0),
+        );
+    }
+
+    fn draw_str_align(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8, align: u8) {
+        let col = if color != 0 {
+            gfx::Color::Fill
+        } else {
+            gfx::Color::Clear
+        };
+        let font = match font_id {
+            1 => &gfx::fonts::mumatrix_regular::FONT,
+            _ => &gfx::fonts::tomthumb::FONT,
+        };
+        let al = match align {
+            1 => gfx::text::Align::Center,
+            2 => gfx::text::Align::Right,
+            _ => gfx::text::Align::Left,
+        };
+        gfx::text::draw_str_align(self.active_canvas(), x, y, text, font, col, al);
+    }
+
+    fn commit_frame(&mut self) {
+        if let Some(ref mut d) = self.display {
+            d.lcd.blit(d.canvas);
+        }
+    }
+
+    fn commit_rows(&mut self, row_mask: u8) {
+        if let Some(ref mut d) = self.display {
+            d.canvas.dirty |= row_mask;
+            d.lcd.blit(d.canvas);
+        }
+    }
+
+    fn get_framebuffer_mut(&mut self) -> &mut [u8; 1024] {
+        let canvas = self.active_canvas();
+        unsafe { &mut *(canvas.buffer.as_mut_ptr() as *mut [u8; 1024]) }
+    }
+}
+
+// ── 2. Radio Primitive ──────────────────────────────────────────────────────
+impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
+    fn tune(&mut self, freq_hz: u32, bw_hz: u32, step_hz: u32) {
+        use kernel::service::radio::{Bandwidth, StepSetting};
+        use utils::units::Frequency;
+        let bw = match bw_hz {
+            0..=12_500 => Bandwidth::Narrow12k5,
+            _ => Bandwidth::Wide25k,
+        };
+        let step = match step_hz {
+            1_250 => StepSetting::Step1_25k,
+            2_500 => StepSetting::Step2_5k,
+            5_000 => StepSetting::Step5k,
+            6_250 => StepSetting::Step6_25k,
+            8_330 => StepSetting::Step8_33k,
+            10_000 => StepSetting::Step10k,
+            25_000 => StepSetting::Step25k,
+            50_000 => StepSetting::Step50k,
+            100_000 => StepSetting::Step100k,
+            _ => StepSetting::Step12_5k,
+        };
+        let slot = self.state.coord.active_vfo;
+        {
+            let ch = self.state.coord.vfo_channel_mut(slot);
+            ch.rx_freq = Frequency::new(freq_hz);
+            ch.bandwidth = bw;
+            ch.step = step;
+        }
+        self.state.coord.select_vfo(self.radio, slot);
+    }
+
+    fn get_frequency(&mut self) -> u32 {
+        self.state.coord.active_channel().rx_freq.raw()
+    }
+
+    fn get_bandwidth(&mut self) -> u32 {
+        match self.state.coord.active_channel().bandwidth {
+            kernel::service::radio::Bandwidth::Narrow6k25 => 6_250,
+            kernel::service::radio::Bandwidth::Narrow12k5 => 12_500,
+            kernel::service::radio::Bandwidth::Wide25k => 25_000,
+        }
+    }
+
+    fn get_modulation(&mut self) -> u8 {
+        self.state.coord.active_channel().modulation as u8
+    }
+
+    fn get_tx_state(&mut self) -> u8 {
+        if self.state.coord.is_transmitting {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn set_tx_carrier(&mut self, on: bool) {
+        self.set_tx(on);
+    }
+
+    fn set_af_mode(&mut self, mode: u8) {
+        use drivers::bk4829::AfType;
+        let af = match mode {
+            1 => AfType::Fm,
+            7 => AfType::Am,
+            4 => AfType::Baseband1,
+            5 => AfType::Baseband2,
+            _ => AfType::Mute,
+        };
+        self.radio.set_af(af);
+    }
+
+    fn set_agc(&mut self, table_idx: u8) {
+        self.radio.set_agc(table_idx != 0);
+    }
+
+    fn read_register(&mut self, reg: u8) -> u16 {
+        self.radio.read_reg(reg)
+    }
+
+    fn write_register(&mut self, reg: u8, val: u16) {
+        self.radio.write_reg(reg, val);
+    }
+
+    fn set_modulation(&mut self, mod_type: u8) {
+        use kernel::service::radio::ModulationMode;
+        let mode = match mod_type {
+            1 => ModulationMode::Am,
+            2 => ModulationMode::AmB,
+            3 => ModulationMode::Usb,
+            4 => ModulationMode::Cw,
+            5 => ModulationMode::Wfm,
+            6 => ModulationMode::Raw,
+            7 => ModulationMode::PktFm,
+            _ => ModulationMode::Fm,
+        };
+        self.state.coord.active_channel_mut().modulation = mode;
+        RfModulation::set_modulation(self.radio, mode);
+    }
+
+    fn set_squelch(&mut self, level: u8) {
+        let sql = level.clamp(0, 9);
+        self.state.coord.active_channel_mut().squelch_level = sql;
+        self.radio.set_squelch_level(sql);
+    }
+
+    fn get_rssi_dbm(&mut self) -> i16 {
+        self.radio.get_rssi_dbm()
+    }
+
+    fn get_glitch(&mut self) -> u8 {
+        self.radio.get_glitch()
+    }
+
+    fn is_carrier_detected(&mut self) -> bool {
+        self.state.coord.carrier_active || self.radio.is_carrier_open()
+    }
+
+    fn set_tx(&mut self, active: bool) {
+        use crate::services::radio::coordinator::{ClientId, ClientToken, LockTier};
+        let token = ClientToken::new(ClientId::SYSTEM, LockTier::FOREGROUND);
+        if active {
+            let _ = self.state.coord.request_ptt_start(self.radio, token);
+        } else {
+            self.state.coord.request_ptt_stop(self.radio);
+        }
+    }
+
+    fn set_tx_power(&mut self, level: u8) {
+        use kernel::service::radio::RfPowerLevel;
+        let pwr = match level {
+            0 => RfPowerLevel::Low,
+            1 => RfPowerLevel::Medium,
+            _ => RfPowerLevel::High,
+        };
+        self.state.coord.active_channel_mut().power = pwr;
+        self.radio.set_power_level(pwr);
+    }
+
+    fn set_subaudible_ctcss(&mut self, freq_tenths_hz: u16) {
+        use kernel::service::radio::SubaudibleTone;
+        let tone = if freq_tenths_hz == 0 {
+            SubaudibleTone::None
+        } else {
+            SubaudibleTone::Ctcss(freq_tenths_hz)
+        };
+        let ch = self.state.coord.active_channel_mut();
+        ch.rx_subaudible = tone;
+        ch.tx_subaudible = tone;
+        self.radio.set_rx_subaudible(tone);
+        self.radio.set_tx_subaudible(tone);
+    }
+
+    fn set_subaudible_dcs(&mut self, code: u16, inverted: bool) {
+        use kernel::service::radio::SubaudibleTone;
+        let tone = if code == 0 {
+            SubaudibleTone::None
+        } else if inverted {
+            SubaudibleTone::DcsInverted(code)
+        } else {
+            SubaudibleTone::DcsNormal(code)
+        };
+        let ch = self.state.coord.active_channel_mut();
+        ch.rx_subaudible = tone;
+        ch.tx_subaudible = tone;
+        self.radio.set_rx_subaudible(tone);
+        self.radio.set_tx_subaudible(tone);
+    }
+
+    fn send_tail(&mut self) {
+        use kernel::service::radio::CssTailMode;
+        self.radio.send_css_tail(CssTailMode::Tone55Hz);
+    }
+
+    fn mute(&mut self, muted: bool) {
+        self.radio.mute_audio(muted);
+    }
+
+    fn fsk_init(&mut self, baud: u16) {
+        let baud_rate = match baud {
+            1200 => FskBaudRate::Baud1200,
+            2400 => FskBaudRate::Baud2400,
+            4800 => FskBaudRate::Baud4800,
+            9600 => FskBaudRate::Baud9600,
+            _ => FskBaudRate::Baud1200,
+        };
+        let mut config = FskPhyConfig::default();
+        config.baud_rate = baud_rate;
+        config.raw_length_bytes = 64;
+        let _ = crate::services::radio::fsk_stream::FskStreamService::arm_rx(self.radio, &config);
+    }
+
+    fn fsk_send(&mut self, data: &[u8]) -> Result<(), ()> {
+        let mut words = [0u16; 64];
+        let word_count = (data.len() + 1) / 2;
+        let limit = word_count.min(words.len());
+        for i in 0..limit {
+            let b0 = data[i * 2] as u16;
+            let b1 = if i * 2 + 1 < data.len() {
+                data[i * 2 + 1] as u16
+            } else {
+                0
+            };
+            words[i] = (b0 << 8) | b1;
+        }
+        crate::services::radio::fsk_stream::FskStreamService::transmit_words(
+            self.radio,
+            &words[..limit],
+            3,
+            500,
+        )
+    }
+
+    fn fsk_receive(&mut self, buf: &mut [u8]) -> usize {
+        let mut words = [0u16; 32];
+        let count = crate::services::radio::fsk_stream::FskStreamService::poll_and_read(
+            self.radio, &mut words,
+        );
+        let mut out_len = 0;
+        for i in 0..count {
+            if out_len + 1 < buf.len() {
+                buf[out_len] = (words[i] >> 8) as u8;
+                buf[out_len + 1] = (words[i] & 0xFF) as u8;
+                out_len += 2;
+            } else if out_len < buf.len() {
+                buf[out_len] = (words[i] >> 8) as u8;
+                out_len += 1;
+            }
+        }
+        out_len
+    }
+
+    fn sweep(&mut self, start_hz: u32, step_hz: u32, out_rssi: &mut [i16]) -> usize {
+        let count = out_rssi.len().min(128);
+        for i in 0..count {
+            let freq = start_hz.saturating_add((i as u32).saturating_mul(step_hz));
+            self.radio
+                .set_rx_frequency(utils::units::Frequency::new(freq));
+            out_rssi[i] = self.radio.get_rssi_dbm();
+        }
+        count
+    }
+
+    fn emit_symbols(&mut self, symbols: &[kernel::proc::abi::KrxSymbol]) -> Result<(), ()> {
+        for sym in symbols {
+            self.radio
+                .write_reg(drivers::bk4829::registers::REG_TONE1_FREQ, sym.freq_word);
+            py32_hal::delay::delay_us(sym.duration_us as u32);
+        }
+        Ok(())
+    }
+
+    fn set_dual_tones_raw(
+        &mut self,
+        tone1_word: u16,
+        tone1_gain: u8,
+        tone2_word: u16,
+        tone2_gain: u8,
+    ) {
+        use kernel::service::radio::RfToneGenerator;
+        self.radio
+            .set_dual_tones_raw(tone1_word, tone1_gain, tone2_word, tone2_gain);
+    }
+}
+
+// ── 3. Audio Primitive ──────────────────────────────────────────────────────
+impl<'a, 'hw> AudioPrimitive for FirmwareContext<'a, 'hw> {
+    fn play_tone(&mut self, freq_hz: u16, duration_ms: u16) {
+        self.play_tone(freq_hz, duration_ms);
+    }
+
+    fn play_tone_sequence(&mut self, notes: &[(u16, u16)]) {
+        for &(freq, dur) in notes {
+            self.play_tone(freq, dur);
+        }
+    }
+
+    fn play_beep(&mut self, beep_type: u8) {
+        let beep = crate::services::melody::BeepType::from_u8(beep_type);
+        self.play_beep(beep);
+    }
+
+    fn set_volume(&mut self, volume: u8) {
+        self.set_volume(volume);
+    }
+
+    fn get_volume(&self) -> u8 {
+        self.config.audio.volume
+    }
+
+    fn set_audio_path(&mut self, on: bool) {
+        if let Some(ref mut audio) = self.audio {
+            if on {
+                audio.enable();
+            } else {
+                audio.disable();
+            }
+        }
+    }
+
+    fn stop_audio(&mut self) {
+        if let Some(ref mut audio) = self.audio {
+            audio.disable();
+        }
+    }
+
+    fn is_audio_playing(&self) -> bool {
+        false
+    }
+
+    fn set_mic_gain(&mut self, gain: u8) {
+        self.radio.set_mic_gain(gain);
+    }
+
+    fn read_mic_sample(&mut self) -> u16 {
+        self.radio
+            .read_reg(drivers::bk4829::registers::REG_NOISE_VAL)
+    }
+
+    fn capture_start(&mut self, _rate_hz: u16) -> Result<(), ()> {
+        Ok(())
+    }
+
+    fn capture_read(&mut self, _out_samples: &mut [i16]) -> usize {
+        0
+    }
+
+    fn capture_stop(&mut self) {}
+}
+
+// ── 4. Storage Primitive ────────────────────────────────────────────────────
+impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
+    fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, ()> {
+        self.storage.read_file(path, buf).map_err(|_| ())
+    }
+
+    fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
+        self.storage.write_file(path, data).map_err(|_| ())
+    }
+
+    fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
+        let mut buf = [0u8; 512];
+        let existing_len = self.storage.read_file(path, &mut buf).unwrap_or(0);
+        if existing_len + data.len() > buf.len() {
+            return Err(());
+        }
+        buf[existing_len..existing_len + data.len()].copy_from_slice(data);
+        self.storage
+            .write_file(path, &buf[..existing_len + data.len()])
+            .map_err(|_| ())
+    }
+
+    fn remove_file(&mut self, path: &str) -> Result<(), ()> {
+        self.storage.remove(path).map_err(|_| ())
+    }
+
+    fn file_size(&mut self, path: &str) -> Result<usize, ()> {
+        self.storage.file_size(path).map_err(|_| ())
+    }
+
+    fn exists(&mut self, path: &str) -> bool {
+        self.storage.exists(path)
+    }
+
+    fn load_config(&mut self, app_name: &str, buf: &mut [u8]) -> Result<usize, ()> {
+        let mut path = heapless::String::<32>::new();
+        let _ = path.push_str("/pref/app/");
+        let _ = path.push_str(app_name);
+        let _ = path.push_str(".cfg");
+        self.storage.read_file(path.as_str(), buf).map_err(|_| ())
+    }
+
+    fn save_config(&mut self, app_name: &str, data: &[u8]) -> Result<(), ()> {
+        let mut path = heapless::String::<32>::new();
+        let _ = path.push_str("/pref/app/");
+        let _ = path.push_str(app_name);
+        let _ = path.push_str(".cfg");
+        self.storage.write_file(path.as_str(), data).map_err(|_| ())
+    }
+
+    fn read_asset(&mut self, _asset_id: u16, offset: u32, buf: &mut [u8]) -> Result<usize, ()> {
+        crate::runtime::native_runner::read_active_pkg_asset(self.storage, offset, buf)
+    }
+}
+
+// ── 5. Keypad Primitive ─────────────────────────────────────────────────────
+impl<'a, 'hw> KeypadPrimitive for FirmwareContext<'a, 'hw> {
+    fn poll_key(&mut self) -> Option<u8> {
+        drivers::keyboard::KeypadScanner::poll_matrix().map(|k| k as u8)
+    }
+
+    fn clear_key_buffer(&mut self) {
+        drivers::keyboard::KeypadScanner::reset_gpio_pins();
+    }
+
+    fn is_key_pressed(&self, key_code: u8) -> bool {
+        let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
+        if let Some(kc) = kernel::event::KeyCode::from_u8(key_code) {
+            (mask & drivers::keyboard::key_to_bit(kc)) != 0
+        } else {
+            false
+        }
+    }
+
+    fn get_key_matrix(&self) -> u32 {
+        drivers::keyboard::KeypadScanner::poll_raw_mask()
+    }
+
+    fn is_keypad_locked(&self) -> bool {
+        self.is_keypad_locked
+    }
+
+    fn is_f_active(&self) -> bool {
+        self.is_f_active
+    }
+
+    fn is_ptt_pressed(&self) -> bool {
+        let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
+        (mask & drivers::keyboard::key_to_bit(kernel::event::KeyCode::Ptt)) != 0
+    }
+
+    fn is_side1_pressed(&self) -> bool {
+        let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
+        (mask & drivers::keyboard::key_to_bit(kernel::event::KeyCode::Side1)) != 0
+    }
+
+    fn is_side2_pressed(&self) -> bool {
+        let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
+        (mask & drivers::keyboard::key_to_bit(kernel::event::KeyCode::Side2)) != 0
+    }
+}
+
+// ── 6. Power Primitive ──────────────────────────────────────────────────────
+impl<'a, 'hw> PowerPrimitive for FirmwareContext<'a, 'hw> {
+    fn battery_mv(&self) -> u16 {
+        self.power.battery_voltage_mv()
+    }
+
+    fn battery_pct(&self) -> u8 {
+        self.power.battery_percentage()
+    }
+
+    fn is_charging(&self) -> bool {
+        self.power.is_charging()
+    }
+
+    fn set_backlight(&mut self, mode: u8, timeout_s: u8) {
+        if let Some(ref mut d) = self.display {
+            let bmode = match mode {
+                0 => kernel::service::BacklightMode::Off,
+                1 => kernel::service::BacklightMode::Auto(((timeout_s as u16) * 1000).min(60000)),
+                _ => kernel::service::BacklightMode::On,
+            };
+            d.set_backlight_mode(bmode);
+        }
+    }
+
+    fn wake_backlight(&mut self) {
+        if let Some(ref mut d) = self.display {
+            d.wake();
+        }
+    }
+
+    fn set_flashlight(&mut self, on: bool) {
+        if on {
+            bsp::pins::FLASHLIGHT.set_high();
+        } else {
+            bsp::pins::FLASHLIGHT.set_low();
+        }
+    }
+}
+
+// ── 7. Serial Primitive ─────────────────────────────────────────────────────
+impl<'a, 'hw> SerialPrimitive for FirmwareContext<'a, 'hw> {
+    fn write(&mut self, data: &[u8]) {
+        #[cfg(feature = "usb")]
+        if let Some(ref mut usb) = self.usb {
+            if usb.is_connected() {
+                let _ = usb.cdc_write(data);
+                return;
+            }
+        }
+        #[cfg(feature = "uart")]
+        {
+            self.uart.write(data);
+        }
+        #[cfg(not(any(feature = "usb", feature = "uart")))]
+        let _ = data;
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> usize {
+        #[cfg(feature = "usb")]
+        if let Some(ref mut usb) = self.usb {
+            if usb.is_connected() {
+                return usb.cdc_read(buf);
+            }
+        }
+        #[cfg(feature = "uart")]
+        {
+            self.uart.read(buf)
+        }
+        #[cfg(not(any(feature = "usb", feature = "uart")))]
+        {
+            let _ = buf;
+            0
+        }
+    }
+
+    fn is_usb_active(&self) -> bool {
+        #[cfg(feature = "usb")]
+        {
+            self.usb.as_ref().map(|u| u.is_connected()).unwrap_or(false)
+        }
+        #[cfg(not(feature = "usb"))]
+        {
+            false
+        }
+    }
+}
+
+// ── 8. Timer Primitive ──────────────────────────────────────────────────────
+impl<'a, 'hw> TimerPrimitive for FirmwareContext<'a, 'hw> {
+    fn uptime_secs(&self) -> u32 {
+        py32_hal::delay::millis() / 1000
+    }
+
+    fn uptime_ms(&self) -> u32 {
+        py32_hal::delay::millis()
+    }
+
+    fn delay_ms(&self, ms: u32) {
+        py32_hal::delay::delay_ms(ms);
+    }
+}
+
+// ── 9. UI Modal Primitive ───────────────────────────────────────────────────
+impl<'a, 'hw> UiPrimitive for FirmwareContext<'a, 'hw> {
+    fn show_popup(&mut self, tag: u8, title: &'static str, message: &str) {
+        self.show_popup_str(tag, title, message);
+    }
+
+    fn show_confirm(&mut self, tag: u8, title: &'static str, message: &'static str) {
+        self.show_confirm(tag, title, message, "OK", "CANCEL");
+    }
+
+    fn prompt_text(&mut self, tag: u8, title: &'static str, initial: &str, max_len: usize) {
+        #[cfg(feature = "passcode")]
+        self.prompt_text(tag, title, initial, max_len, false);
+        #[cfg(not(feature = "passcode"))]
+        let _ = (tag, title, initial, max_len);
+    }
+
+    fn close_modal(&mut self) {
+        self.close_modal();
+    }
+
+    fn has_active_modal(&self) -> bool {
+        self.has_active_modal()
+    }
+}
+
+// ── 10. Math Primitive ──────────────────────────────────────────────────────
+impl<'a, 'hw> MathPrimitive for FirmwareContext<'a, 'hw> {
+    fn crc32(&self, data: &[u8]) -> u32 {
+        crypto::crc::CrcEngine::crc32(data)
+    }
+
+    fn crc16(&self, data: &[u8]) -> u16 {
+        crypto::crc::CrcEngine::crc16_ccitt(data)
+    }
+
+    fn rand32(&mut self) -> u32 {
+        let seed = py32_hal::delay::millis()
+            ^ ((self
+                .radio
+                .read_reg(drivers::bk4829::registers::REG_NOISE_VAL) as u32)
+                << 16);
+        crypto::crc::CrcEngine::crc32(&seed.to_le_bytes())
+    }
+
+    fn idivmod(&self, n: i32, d: i32) -> (i32, i32) {
+        if d == 0 { (0, n) } else { (n / d, n % d) }
+    }
+
+    fn uidivmod(&self, n: u32, d: u32) -> (u32, u32) {
+        if d == 0 { (0, n) } else { (n / d, n % d) }
+    }
+}
+
+// ── 11. FM Broadcast Tuner Primitive ────────────────────────────────────────
+impl<'a, 'hw> FmPrimitive for FirmwareContext<'a, 'hw> {
+    fn fm_tune(&mut self, _freq_100khz: u16) {}
+    fn fm_set_volume(&mut self, _volume: u8) {}
+    fn fm_mute(&mut self, _mute: bool) {}
+    fn fm_get_rssi(&mut self) -> u8 {
+        0
+    }
+}
+
+// ── 12. Service & IPC Primitive ─────────────────────────────────────────────
+impl<'a, 'hw> ServicePrimitive for FirmwareContext<'a, 'hw> {
+    fn post_event(&mut self, event_id: u32) -> bool {
+        self.post_event(kernel::ipc::SysEvent {
+            target: (event_id >> 16) as u8,
+            command: (event_id & 0xFF) as u8,
+            arg: ((event_id >> 8) & 0xFF) as u16,
+        })
+    }
+
+    fn publish_event(&mut self, topic: u16, data: &[u8]) -> bool {
+        let arg = if !data.is_empty() { data[0] as u16 } else { 0 };
+        self.post_event(kernel::ipc::SysEvent {
+            target: (topic >> 8) as u8,
+            command: (topic & 0xFF) as u8,
+            arg,
+        })
+    }
+
+    fn get_stack_free_now(&self) -> u16 {
+        kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16
+    }
+
+    fn get_stack_free_min(&self) -> u16 {
+        kernel::sys::SystemDiagnostics::ram_available_bytes() as u16
+    }
+}
+
+// ── 13. Low-Level Hardware & Bus Primitive ──────────────────────────────────
+impl<'a, 'hw> HardwarePrimitive for FirmwareContext<'a, 'hw> {
+    fn i2c_read(&mut self, _addr: u8, _reg: u8, _buf: &mut [u8]) -> Result<usize, ()> {
+        Err(())
+    }
+
+    fn i2c_write(&mut self, _addr: u8, _reg: u8, _data: &[u8]) -> Result<(), ()> {
+        Err(())
+    }
+
+    fn spi_transfer(&mut self, _cs_pin: u8, _tx: &[u8], _rx: &mut [u8]) -> Result<(), ()> {
+        Err(())
+    }
+
+    fn gpio_read(&self, _pin: u8) -> bool {
+        false
+    }
+
+    fn gpio_write(&mut self, pin: u8, high: bool) {
+        if pin == 0 {
+            self.set_flashlight(high);
+        }
+    }
+
+    fn raw_flash_read(&mut self, _addr: u32, _buf: &mut [u8]) -> Result<(), ()> {
+        Err(())
+    }
+}

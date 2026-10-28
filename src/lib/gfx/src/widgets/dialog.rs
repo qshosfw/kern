@@ -4,7 +4,7 @@ use crate::{Canvas, Color};
 
 /// Standard modal dialog viewport constants matching text input box
 pub const MODAL_BOX_X: u8 = 2;
-pub const MODAL_BOX_Y: u8 = 18;
+pub const MODAL_BOX_Y: u8 = 14;
 pub const MODAL_BOX_W: u8 = 124;
 pub const MODAL_BOX_H: u8 = 35;
 
@@ -20,71 +20,13 @@ pub fn draw_modal_box(canvas: &mut Canvas, w: u8, h: u8) -> (u8, u8) {
     };
     canvas.fill_rect(x, y, w, h, Color::Clear);
     canvas.draw_rect(x, y, w, h, Color::Fill);
-    canvas.draw_pixel(x, y, Color::Clear);
-    canvas.draw_pixel(x + w - 1, y, Color::Clear);
-    canvas.draw_pixel(x, y + h - 1, Color::Clear);
-    canvas.draw_pixel(x + w - 1, y + h - 1, Color::Clear);
+    canvas.clear_corners(x, y, w, h);
     (x, y)
 }
 
 /// Clean, non-cramped centered modal popup with generous padding
 pub fn draw_modal_popup(canvas: &mut Canvas, title: Option<&str>, msg: &str) {
-    let (bx, by) = draw_modal_box(canvas, MODAL_BOX_W, MODAL_BOX_H);
-    let center_x = (bx as i16) + (MODAL_BOX_W as i16 / 2);
-
-    if let Some(t) = title {
-        if !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode") {
-            text::draw_str_align(
-                canvas,
-                center_x,
-                (by + 11) as i16,
-                t,
-                &crate::fonts::tomthumb::FONT,
-                Color::Fill,
-                text::Align::Center,
-            );
-            let mut line_y = (by + 21) as i16;
-            crate::text::for_each_line(msg, |line| {
-                text::draw_str_align(
-                    canvas,
-                    center_x,
-                    line_y,
-                    line,
-                    &crate::fonts::tomthumb::FONT,
-                    Color::Fill,
-                    text::Align::Center,
-                );
-                line_y += 8;
-            });
-            return;
-        }
-    }
-
-    // No title: render 1 or 2 lines centered
-    let mut line_y = if crate::text::count_lines(msg) <= 1 {
-        (by + 20) as i16
-    } else {
-        (by + 14) as i16
-    };
-    let mut is_first = true;
-    crate::text::for_each_line(msg, |line| {
-        let font = if is_first {
-            &crate::fonts::mumatrix_regular::FONT
-        } else {
-            &crate::fonts::tomthumb::FONT
-        };
-        text::draw_str_align(
-            canvas,
-            center_x,
-            line_y,
-            line,
-            font,
-            Color::Fill,
-            text::Align::Center,
-        );
-        line_y += 12;
-        is_first = false;
-    });
+    draw_modal_popup_materialize(canvas, title, msg, 16);
 }
 
 /// Clean centered modal progress dialog box
@@ -136,41 +78,69 @@ pub fn draw_modal_progress(canvas: &mut Canvas, title: &str, subtitle: &str, pro
     draw_progress_bar(canvas, bar_x, bar_y, bar_w, bar_h, progress, true);
 }
 
-/// Animated 4-frame 5x5 rotating pixel loading spinner
-pub fn draw_loading_spinner(canvas: &mut Canvas, x: i16, y: i16, frame: u8, color: Color) {
-    let f = frame % 4;
-    let (dx1, dy1, dx2, dy2) = match f {
-        0 => (2i16, 0i16, 4i16, 2i16),
-        1 => (4i16, 2i16, 2i16, 4i16),
-        2 => (2i16, 4i16, 0i16, 2i16),
-        _ => (0i16, 2i16, 2i16, 0i16),
-    };
-    canvas.draw_pixel((x + 2) as u8, (y + 2) as u8, color); // Center axis dot
-    canvas.draw_pixel((x + dx1) as u8, (y + dy1) as u8, color);
-    canvas.draw_pixel((x + dx2) as u8, (y + dy2) as u8, color);
-}
-
 /// Draw an authentic KERN inverted filled key badge (e.g. [M] Format)
+#[inline(never)]
 pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label: &str) {
     let font = &crate::fonts::tomthumb::FONT;
-    let key_w = text::str_width(key_str, font) as u8;
-    let box_w = key_w + 4; // 2px padding on each side
+    let is_up = key_str == "^";
+    let is_down = key_str == "v" || key_str == "V";
+
+    let box_w = if is_up || is_down {
+        9u8
+    } else {
+        (text::str_width(key_str, font) as u8) + 4
+    };
+
     canvas.fill_rect(x as u8, y as u8, box_w, 7, Color::Fill);
-    text::draw_str(canvas, x + 2, y + 5, key_str, font, Color::Clear);
-    text::draw_str(
-        canvas,
-        x + (box_w as i16) + 2,
-        y + 5,
-        label,
-        font,
-        Color::Fill,
-    );
+
+    if is_up || is_down {
+        let pattern: [u8; 3] = if is_up {
+            [0b00100, 0b01010, 0b10001]
+        } else {
+            [0b10001, 0b01010, 0b00100]
+        };
+        for (row, &bits) in pattern.iter().enumerate() {
+            for col in 0..5 {
+                if (bits & (0x10 >> col)) != 0 {
+                    canvas.draw_pixel(
+                        (x + 2 + col) as u8,
+                        (y + 2 + row as i16) as u8,
+                        Color::Clear,
+                    );
+                }
+            }
+        }
+    } else {
+        text::draw_str(canvas, x + 2, y + 5, key_str, font, Color::Clear);
+    }
+
+    if !label.is_empty() {
+        text::draw_str(
+            canvas,
+            x + (box_w as i16) + 2,
+            y + 5,
+            label,
+            font,
+            Color::Fill,
+        );
+    }
 }
 
 /// Draw a right-aligned KERN inverted filled key badge
+#[inline(never)]
 pub fn draw_key_badge_right(canvas: &mut Canvas, right_x: i16, y: i16, key_str: &str, label: &str) {
     let font = &crate::fonts::tomthumb::FONT;
-    let total_w = text::str_width(key_str, font) + 6 + text::str_width(label, font);
+    let key_w = if key_str == "^" || key_str == "v" || key_str == "V" {
+        5
+    } else {
+        text::str_width(key_str, font)
+    };
+    let label_w = if label.is_empty() {
+        0
+    } else {
+        text::str_width(label, font) + 2
+    };
+    let total_w = key_w + 4 + label_w;
     draw_key_badge(canvas, right_x - total_w, y, key_str, label);
 }
 
@@ -191,13 +161,13 @@ pub fn draw_negated_header(canvas: &mut Canvas, y: i16, title: &str) {
     );
 }
 
-fn draw_dialog_header(canvas: &mut Canvas, big_title: &str, sub_title: &str) {
+fn draw_dialog_header(canvas: &mut Canvas, dy: i16, big_title: &str, sub_title: &str) {
     canvas.clear();
-    draw_negated_header(canvas, 0, "KERN");
+    draw_negated_header(canvas, dy, "KERN");
     text::draw_str(
         canvas,
         4,
-        22,
+        22 + dy,
         big_title,
         &crate::fonts::mumatrix_regular::FONT,
         Color::Fill,
@@ -206,7 +176,7 @@ fn draw_dialog_header(canvas: &mut Canvas, big_title: &str, sub_title: &str) {
         text::draw_str(
             canvas,
             4,
-            34,
+            34 + dy,
             sub_title,
             &crate::fonts::tomthumb::FONT,
             Color::Fill,
@@ -222,23 +192,7 @@ pub fn draw_dialog(
     hint: &str,
     has_btns: bool,
 ) {
-    draw_dialog_header(canvas, big_title, sub_title);
-
-    if !hint.is_empty() {
-        text::draw_str(
-            canvas,
-            4,
-            44,
-            hint,
-            &crate::fonts::tomthumb::FONT,
-            Color::Fill,
-        );
-    }
-
-    if has_btns {
-        draw_key_badge(canvas, 4, 55, "M", "Format");
-        draw_key_badge_right(canvas, 124, 55, "EXIT", "Cancel");
-    }
+    draw_dialog_slide_up(canvas, big_title, sub_title, hint, has_btns, 0);
 }
 
 /// System dialog with a Hawk5-style progress bar
@@ -248,7 +202,7 @@ pub fn draw_dialog_progress(
     sub_title: &str,
     progress_percent: u8,
 ) {
-    draw_dialog_header(canvas, big_title, sub_title);
+    draw_dialog_header(canvas, 0, big_title, sub_title);
     draw_progress_bar(canvas, 4, 44, 120, 8, progress_percent, true);
 }
 
@@ -260,21 +214,9 @@ pub fn draw_sheet_frame(
     sheet_h: u8,
     badges: Option<(&str, &str)>,
 ) {
-    let sy = sheet_y as u8;
-    canvas.fill_rect(0, sy, 128, sheet_h, Color::Clear);
-    canvas.draw_rect(0, sy, 128, sheet_h, Color::Fill);
-    canvas.draw_pixel(0, sy, Color::Clear);
-    canvas.draw_pixel(127, sy, Color::Clear);
-    let bottom_y = sy + sheet_h - 1;
-    canvas.draw_pixel(0, bottom_y, Color::Clear);
-    canvas.draw_pixel(127, bottom_y, Color::Clear);
-    draw_negated_header(canvas, sheet_y, title);
-
-    if let Some((confirm, cancel)) = badges {
-        let by = (sheet_y as u8 + sheet_h).saturating_sub(10) as i16;
-        draw_key_badge(canvas, 3, by, "M", confirm);
-        draw_key_badge_right(canvas, 125, by, "EXIT", cancel);
-    }
+    let base_y = 64i16.saturating_sub(sheet_h as i16);
+    let y_offset = (sheet_y - base_y).max(0) as i8;
+    draw_sheet_slide_up(canvas, title, sheet_h, badges, y_offset);
 }
 
 /// Shared ultra-compact scrollbar renderer
@@ -290,7 +232,7 @@ pub fn draw_scrollbar(
     if total <= visible || total == 0 {
         return;
     }
-    canvas.draw_vertical_line(track_x + 1, track_y, track_h, Color::Fill);
+    canvas.draw_vertical_line(track_x + 1, track_y, track_h, Color::DarkGray);
     let thumb_h = ((visible as u32 * track_h as u32) / total as u32).max(4) as u8;
     let max_scroll = total.saturating_sub(visible);
     let thumb_y = track_y
@@ -302,4 +244,145 @@ pub fn draw_scrollbar(
         };
     let thumb_y = thumb_y.min(track_y + track_h - thumb_h);
     canvas.fill_rect(track_x, thumb_y, 3, thumb_h, Color::Fill);
+}
+
+/// Dialog rendered with a vertical slide-up offset (y_offset = 0 is docked; y_offset > 0 shifts down)
+pub fn draw_dialog_slide_up(
+    canvas: &mut Canvas,
+    big_title: &str,
+    sub_title: &str,
+    hint: &str,
+    has_btns: bool,
+    y_offset: i8,
+) {
+    let dy = y_offset.max(0) as i16;
+    if dy >= 64 {
+        return;
+    }
+    draw_dialog_header(canvas, dy, big_title, sub_title);
+    if !hint.is_empty() && (44 + dy) < 64 {
+        text::draw_str(
+            canvas,
+            4,
+            44 + dy,
+            hint,
+            &crate::fonts::tomthumb::FONT,
+            Color::Fill,
+        );
+    }
+    if has_btns && (55 + dy) < 64 {
+        draw_key_badge(canvas, 4, 55 + dy, "M", "Format");
+        draw_key_badge_right(canvas, 124, 55 + dy, "EXIT", "Cancel");
+    }
+}
+
+/// Shared bottom-sheet modal frame rendered with a vertical slide-up offset
+pub fn draw_sheet_slide_up(
+    canvas: &mut Canvas,
+    title: &str,
+    sheet_h: u8,
+    badges: Option<(&str, &str)>,
+    y_offset: i8,
+) {
+    let base_y = 64i16.saturating_sub(sheet_h as i16);
+    let sheet_y = (base_y + y_offset.max(0) as i16).min(64);
+    if sheet_y >= 64 {
+        return;
+    }
+    let visible_h = (64 - sheet_y).min(sheet_h as i16) as u8;
+    let sy = sheet_y as u8;
+    canvas.fill_rect(0, sy, 128, visible_h, Color::Clear);
+    canvas.draw_rect(0, sy, 128, visible_h, Color::Fill);
+    canvas.clear_corners(0, sy, 128, visible_h);
+    draw_negated_header(canvas, sheet_y, title);
+
+    if let Some((confirm, cancel)) = badges {
+        let by = (sheet_y + sheet_h as i16).saturating_sub(10);
+        if by < 64 {
+            draw_key_badge(canvas, 3, by, "M", confirm);
+            draw_key_badge_right(canvas, 125, by, "EXIT", cancel);
+        }
+    }
+}
+
+/// Clean centered modal popup with zoom materialization (progress: 0..=16)
+pub fn draw_modal_popup_materialize(
+    canvas: &mut Canvas,
+    title: Option<&str>,
+    msg: &str,
+    progress: u8,
+) {
+    if progress == 0 {
+        return;
+    }
+    let p = progress.min(16);
+    let bw = (MODAL_BOX_W as u16 * p as u16 / 16) as u8;
+    let bh = (MODAL_BOX_H as u16 * p as u16 / 16) as u8;
+    let bx = (128 - bw) / 2;
+    let by = (64 - bh) / 2;
+
+    canvas.fill_rect(bx, by, bw, bh, Color::Clear);
+    canvas.draw_rect(bx, by, bw, bh, Color::Fill);
+    if bw > 4 && bh > 4 {
+        canvas.clear_corners(bx, by, bw, bh);
+    }
+
+    // High-contrast text reveals as materialization expands (>= 8)
+    if p >= 8 {
+        let center_x = 64i16;
+        let tc = Color::Fill;
+
+        if let Some(t) = title {
+            if !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode") {
+                text::draw_str_align(
+                    canvas,
+                    center_x,
+                    (by + 11) as i16,
+                    t,
+                    &crate::fonts::tomthumb::FONT,
+                    tc,
+                    text::Align::Center,
+                );
+                let mut line_y = (by + 21) as i16;
+                crate::text::for_each_line(msg, |line| {
+                    text::draw_str_align(
+                        canvas,
+                        center_x,
+                        line_y,
+                        line,
+                        &crate::fonts::tomthumb::FONT,
+                        tc,
+                        text::Align::Center,
+                    );
+                    line_y += 8;
+                });
+                return;
+            }
+        }
+
+        let mut line_y = if crate::text::count_lines(msg) <= 1 {
+            (by + 20) as i16
+        } else {
+            (by + 14) as i16
+        };
+        let mut is_first = true;
+        crate::text::for_each_line(msg, |line| {
+            let font = if is_first {
+                &crate::fonts::mumatrix_regular::FONT
+            } else {
+                &crate::fonts::tomthumb::FONT
+            };
+            text::draw_str_align(
+                canvas,
+                center_x,
+                line_y,
+                line,
+                font,
+                tc,
+                text::Align::Center,
+            );
+            line_y += 12;
+            is_first = false;
+        });
+    }
 }

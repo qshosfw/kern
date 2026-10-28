@@ -50,12 +50,37 @@ fn write_u32_le(buf: &mut [u8], offset: usize, val: u32) {
     buf[offset + 3] = b[3];
 }
 
+#[derive(Clone, Copy)]
+struct CacheEntry {
+    path_hash: u32,
+    payload_crc: u32,
+    sector: u16,
+    payload_len: u16,
+    perm: u8,
+    active: u8,
+}
+
+impl CacheEntry {
+    const EMPTY: Self = Self {
+        path_hash: 0,
+        payload_crc: 0,
+        sector: 0,
+        payload_len: 0,
+        perm: 0,
+        active: 0,
+    };
+}
+
+const CACHE_CAPACITY: usize = 24;
+
 pub struct KernFS<'a, D: BlockDevice> {
     pub dev: &'a mut D,
     next_alloc_sector: usize,
     global_seq: u32,
-    // Zero-alloc O(1) cache for active files: (Hash, Sector, Payload_Len, CRC, Permission)
-    cache: [Option<(u32, usize, usize, u32, u8)>; 32],
+    // Zero-alloc O(1) cache for active files (16B per entry)
+    cache: [CacheEntry; CACHE_CAPACITY],
+    cached_used: u16,
+    cached_deleted: u16,
 }
 
 impl<'a, D: BlockDevice> KernFS<'a, D> {
@@ -64,23 +89,30 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             dev,
             next_alloc_sector: 0,
             global_seq: 1,
-            cache: [None; 32],
+            cache: [CacheEntry::EMPTY; CACHE_CAPACITY],
+            cached_used: 0,
+            cached_deleted: 0,
         }
     }
 
     fn cache_insert(&mut self, path_hash: u32, sector: usize, len: usize, crc: u32, perm: u8) {
-        let entry_val = (path_hash, sector, len, crc, perm);
+        let entry_val = CacheEntry {
+            path_hash,
+            payload_crc: crc,
+            sector: sector as u16,
+            payload_len: len as u16,
+            perm,
+            active: 1,
+        };
         for entry in self.cache.iter_mut() {
-            if let Some((h, ..)) = entry {
-                if *h == path_hash {
-                    *entry = Some(entry_val);
-                    return;
-                }
+            if entry.active != 0 && entry.path_hash == path_hash {
+                *entry = entry_val;
+                return;
             }
         }
         for entry in self.cache.iter_mut() {
-            if entry.is_none() {
-                *entry = Some(entry_val);
+            if entry.active == 0 {
+                *entry = entry_val;
                 return;
             }
         }
@@ -88,11 +120,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     fn cache_remove(&mut self, path_hash: u32) {
         for entry in self.cache.iter_mut() {
-            if let Some((h, ..)) = entry {
-                if *h == path_hash {
-                    *entry = None;
-                    break;
-                }
+            if entry.active != 0 && entry.path_hash == path_hash {
+                *entry = CacheEntry::EMPTY;
+                break;
             }
         }
     }
@@ -102,6 +132,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let mut max_seq = 0u32;
         let mut found_valid = false;
         let mut header_buf = [0u8; HEADER_SIZE];
+        let mut used = 0u16;
+        let mut deleted = 0u16;
 
         for sector in 0..D::TOTAL_BLOCKS {
             let offset = sector * D::BLOCK_SIZE;
@@ -112,6 +144,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
                 if magic == MAGIC_KERNFS && (flags == 0x7F || flags == 0x01) {
                     found_valid = true;
+                    used += 1;
                     if seq > max_seq {
                         max_seq = seq;
                     }
@@ -125,10 +158,14 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
                         self.cache_insert(path_hash, sector, payload_len, crc, perm);
                     }
+                } else if flags == 0x00 {
+                    deleted += 1;
                 }
             }
         }
 
+        self.cached_used = used;
+        self.cached_deleted = deleted;
         self.global_seq = max_seq + 1;
         if found_valid {
             Ok(())
@@ -154,6 +191,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
         self.next_alloc_sector = 0;
         self.global_seq = 1;
+        self.cached_used = 0;
+        self.cached_deleted = 0;
+        self.cache = [CacheEntry::EMPTY; CACHE_CAPACITY];
         Ok(())
     }
 
@@ -256,6 +296,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             payload_crc,
             existing_perm,
         );
+        self.cached_used = self.cached_used.saturating_add(1);
 
         Ok(())
     }
@@ -274,6 +315,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
             let path_hash = CrcEngine::crc32(path.as_bytes());
             self.cache_remove(path_hash);
+            self.cached_used = self.cached_used.saturating_sub(1);
+            self.cached_deleted = self.cached_deleted.saturating_add(1);
 
             Ok(())
         } else {
@@ -288,10 +331,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
         // O(1) Cache fast-path
         for entry in &self.cache {
-            if let Some((h, sector, payload_len, crc, perm)) = entry {
-                if *h == path_hash {
-                    return Some((*sector, *payload_len, *crc, *perm));
-                }
+            if entry.active != 0 && entry.path_hash == path_hash {
+                return Some((
+                    entry.sector as usize,
+                    entry.payload_len as usize,
+                    entry.payload_crc,
+                    entry.perm,
+                ));
             }
         }
 
@@ -375,7 +421,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
                 if magic == MAGIC_KERNFS && (flags == 0x7F || flags == 0x01) {
                     if path_len == path_bytes.len() && &header_buf[6..6 + path_len] == path_bytes {
-                        let _ = self.dev.program(offset + 3, &[0x00u8]); // Mark deleted (all bits 0)
+                        if self.dev.program(offset + 3, &[0x00u8]).is_ok() {
+                            self.cached_used = self.cached_used.saturating_sub(1);
+                            self.cached_deleted = self.cached_deleted.saturating_add(1);
+                        }
                     }
                 }
             }
@@ -477,35 +526,18 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(count)
     }
 
-    /// Query dynamic filesystem wear leveling and storage statistics.
-    pub fn stats(&mut self) -> FsStats {
+    /// Query dynamic filesystem wear leveling and storage statistics in O(1) time without SPI reads.
+    pub fn stats(&self) -> FsStats {
         let mut active = 0u16;
         for entry in &self.cache {
-            if entry.is_some() {
+            if entry.active != 0 {
                 active += 1;
             }
         }
         let total = D::TOTAL_BLOCKS as u16;
-        let mut used = 0u16;
-        let mut deleted = 0u16;
-        let mut free = 0u16;
-        let mut header_buf = [0u8; 4];
-        for sector in 0..D::TOTAL_BLOCKS {
-            let offset = sector * D::BLOCK_SIZE;
-            if self.dev.read(offset, &mut header_buf).is_ok() {
-                let magic = read_u16_le(&header_buf, 0);
-                let flags = header_buf[3];
-                if magic == MAGIC_KERNFS && (flags == 0x7F || flags == 0x01) {
-                    used += 1;
-                } else if flags == 0x00 {
-                    deleted += 1;
-                } else {
-                    free += 1;
-                }
-            } else {
-                free += 1;
-            }
-        }
+        let used = self.cached_used;
+        let deleted = self.cached_deleted;
+        let free = total.saturating_sub(used.saturating_add(deleted));
         FsStats {
             active_files: active,
             used_sectors: used,

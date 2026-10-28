@@ -85,7 +85,7 @@ pub fn enable_syscfg() {
     }
 }
 
-/// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1) and reset PHY.
+/// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1).
 pub fn enable_usbd() {
     unsafe {
         // 1. Enable SYSCFG clock (APB2) - required for USB PHY routing on PY32F071
@@ -99,18 +99,6 @@ pub fn enable_usbd() {
         // 3. Enable USBD peripheral clock (APB1)
         let val = rcc::RCC_APB1ENR.read_volatile();
         rcc::RCC_APB1ENR.write_volatile(val | rcc::APB1ENR_USBD);
-
-        // 4. Force reset and release USBD peripheral to guarantee clean hardware PHY state
-        let rst_ptr = (rcc::RCC_BASE + 0x24) as *mut u32; // RCC_APBRSTR1
-        let rst = rst_ptr.read_volatile();
-        rst_ptr.write_volatile(rst | (1 << 23)); // RCC_APBRSTR1_USBDRST
-        for _ in 0..200 {
-            core::hint::spin_loop();
-        }
-        rst_ptr.write_volatile(rst & !(1 << 23));
-        for _ in 0..200 {
-            core::hint::spin_loop();
-        }
     }
 }
 
@@ -134,7 +122,13 @@ pub fn sysclk_hz() -> u32 {
                 };
                 let icscr = rcc::RCC_ICSCR.read_volatile();
                 let hsifs = ((icscr >> 13) & 0x07) as usize;
-                let hsi_base = HSI_TABLE.get(hsifs).copied().unwrap_or(24_000_000);
+                let hsi_base = if hsifs == 4 {
+                    24_000_000
+                } else if hsifs < HSI_TABLE.len() && HSI_TABLE[hsifs] >= 16_000_000 {
+                    HSI_TABLE[hsifs]
+                } else {
+                    24_000_000
+                };
                 pllmul * hsi_base
             }
             0x00000008 => {

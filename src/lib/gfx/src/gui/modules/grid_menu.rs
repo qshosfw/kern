@@ -38,6 +38,7 @@ pub struct GridMenuModel<T: GridItem + 'static = GridMenuItem> {
     pub tick_counter: u8,
     pub show_numbers: bool,
     pub show_labels: bool,
+    pub is_pressed: bool,
 }
 
 impl<T: GridItem + 'static> GridMenuModel<T> {
@@ -50,6 +51,7 @@ impl<T: GridItem + 'static> GridMenuModel<T> {
             tick_counter: 0,
             show_numbers: true,
             show_labels: true,
+            is_pressed: false,
         }
     }
 
@@ -255,12 +257,15 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
             let item = &model.items[idx];
 
             let fg_color = if is_selected {
-                canvas.fill_rect(tx, ty, 40, 26, Color::Fill);
-                canvas.draw_pixel(tx, ty, Color::Clear);
-                canvas.draw_pixel(tx + 39, ty, Color::Clear);
-                canvas.draw_pixel(tx, ty + 25, Color::Clear);
-                canvas.draw_pixel(tx + 39, ty + 25, Color::Clear);
-                Color::Clear
+                if model.is_pressed {
+                    canvas.draw_rect(tx, ty, 40, 26, Color::Fill);
+                    canvas.clear_corners(tx, ty, 40, 26);
+                    Color::Fill
+                } else {
+                    canvas.fill_rect(tx, ty, 40, 26, Color::Fill);
+                    canvas.clear_corners(tx, ty, 40, 26);
+                    Color::Clear
+                }
             } else {
                 Color::Fill
             };

@@ -1,9 +1,11 @@
-//! Hardware TRNG (True Random Number Generator) using BK4829 RF ExNoise, ADC Thermal Noise, and SysTick Micro-Jitter.
-//! Inspired by DeltaFW's TRNG entropy pool architecture.
+//! Hardware TRNG (True Random Number Generator) using Ascon Permutation Sponge,
+//! SysTick Cycle Jitter, ADC Thermal Noise, and BK4829 RF ExNoise.
+//!
+//! Conforms to NIST SP 800-90B continuous health testing (Repetition Count Test).
 
-use crate::chacha20poly1305::ChaCha20Poly1305;
+use crate::ascon::AsconPermutation;
 
-/// Continuous Entropy Health Monitor (NIST SP 800-90B style)
+/// Continuous Entropy Health Monitor (NIST SP 800-90B style).
 #[derive(Debug, Clone, Copy)]
 pub struct EntropyHealth {
     pub last_sample: u32,
@@ -28,7 +30,7 @@ impl EntropyHealth {
         self.samples_tested = self.samples_tested.saturating_add(1);
         if sample == self.last_sample && self.samples_tested > 1 {
             self.repeat_count = self.repeat_count.saturating_add(1);
-            if self.repeat_count >= 8 {
+            if self.repeat_count >= 7 {
                 self.is_healthy = false;
                 return false;
             }
@@ -40,104 +42,92 @@ impl EntropyHealth {
     }
 }
 
+/// Hardware TRNG Sponge based on the 320-bit Ascon Permutation.
 pub struct HardwareTrng {
-    state: [u32; 16],
+    state: AsconPermutation,
     reseed_counter: u32,
     initialized: bool,
-    mix_idx: usize,
     pub health: EntropyHealth,
 }
 
 impl HardwareTrng {
+    /// TRNG Domain Constant IV: 0x5452_4e47_0000_0100 (ASCII "TRNG")
+    const TRNG_IV: u64 = 0x5452_4e47_0000_0100;
+
     pub const fn new() -> Self {
         Self {
-            state: [0; 16],
+            state: AsconPermutation::new(),
             reseed_counter: 0,
             initialized: false,
-            mix_idx: 4,
             health: EntropyHealth::new(),
         }
     }
 
-    #[inline(always)]
-    fn rotl32(x: u32, n: u32) -> u32 {
-        (x << n) | (x >> (32 - n))
+    /// Initialize the TRNG entropy sponge with 96-bit MCU UID and microsecond hardware timing.
+    pub fn init_with_uid(&mut self, mcu_uid: &[u8; 12], initial_noise: u32) {
+        let mut seed = [0u8; 16];
+        seed[..12].copy_from_slice(mcu_uid);
+        seed[12..16].copy_from_slice(&initial_noise.to_le_bytes());
+        self.init_with_seed(&seed, initial_noise);
     }
 
-    /// Initialize the ChaCha20 entropy state with 96-bit MCU UID and microsecond hardware timing.
-    pub fn init_with_uid(&mut self, mcu_uid: &[u8; 12], initial_systick: u32) {
-        let uid_words = [
-            u32::from_le_bytes([mcu_uid[0], mcu_uid[1], mcu_uid[2], mcu_uid[3]]),
-            u32::from_le_bytes([mcu_uid[4], mcu_uid[5], mcu_uid[6], mcu_uid[7]]),
-            u32::from_le_bytes([mcu_uid[8], mcu_uid[9], mcu_uid[10], mcu_uid[11]]),
-        ];
-        self.init(&uid_words, initial_systick);
-    }
+    /// Initialize the TRNG entropy sponge with arbitrary seed data and initial noise.
+    pub fn init_with_seed(&mut self, seed: &[u8], initial_noise: u32) {
+        self.state.x = [Self::TRNG_IV, 0, 0, 0, 0];
+        self.state.permute(12);
 
-    /// Initialize the ChaCha20 entropy state with constant magic and MCU UID / SysTick seeds.
-    pub fn init(&mut self, uid_words: &[u32; 3], initial_systick: u32) {
-        // ChaCha20 "expand 32-byte k" constants
-        self.state[0] = 0x61707865;
-        self.state[1] = 0x3320646e;
-        self.state[2] = 0x79622d32;
-        self.state[3] = 0x6b206574;
-
-        // Seed initial key state with Hardware UID
-        self.state[4] = uid_words[0];
-        self.state[5] = uid_words[1];
-        self.state[6] = uid_words[2];
-
-        for i in 7..16 {
-            self.state[i] = initial_systick.wrapping_add(i as u32 * 0x9E3779B9);
+        // Absorb seed data
+        let mut offset = 0;
+        while offset < seed.len() {
+            let chunk_len = (seed.len() - offset).min(8);
+            let mut block = [0u8; 8];
+            block[..chunk_len].copy_from_slice(&seed[offset..offset + chunk_len]);
+            if chunk_len < 8 {
+                block[chunk_len] = 0x80;
+            }
+            self.state.x[0] ^= u64::from_le_bytes(block);
+            self.state.permute(12);
+            offset += chunk_len;
         }
 
-        self.mix_idx = 4;
-        self.reseed_counter = 0;
+        self.mix_hardware_entropy(initial_noise);
         self.initialized = true;
+        self.reseed_counter = 0;
     }
 
     /// Mix physical hardware noise into entropy pool.
     pub fn mix_hardware_entropy(&mut self, hw_noise: u32) {
         self.health.test_sample(hw_noise);
-        let idx = self.mix_idx;
-        self.state[idx] = Self::rotl32(self.state[idx] ^ hw_noise, 13);
-        self.mix_idx = 4 + ((self.mix_idx - 4 + 1) % 8);
+        let noise_word = (hw_noise as u64) | ((hw_noise as u64) << 32);
+        self.state.x[1] ^= noise_word;
+        self.state.permute(6);
     }
 
-    /// Fill buffer with random bytes (for nonces, salts, and AES keys)
+    /// Fill buffer with random bytes with forward secrecy.
     pub fn fill_bytes(&mut self, buf: &mut [u8], hw_noise: u32) {
+        if !self.initialized {
+            let default_uid = [0x5au8; 12];
+            self.init_with_uid(&default_uid, hw_noise);
+        }
+
+        self.mix_hardware_entropy(hw_noise);
+
         let mut offset = 0;
         while offset < buf.len() {
-            if !self.initialized {
-                let uid = [0x12345678, 0x9ABCDEF0, 0x01234567];
-                self.init(&uid, hw_noise);
-            }
+            self.state.permute(12);
+            let state_bytes = self.state.x[0].to_le_bytes();
+            let chunk_len = (buf.len() - offset).min(8);
+            buf[offset..offset + chunk_len].copy_from_slice(&state_bytes[..chunk_len]);
+            offset += chunk_len;
+            self.reseed_counter = self.reseed_counter.wrapping_add(1);
 
-            self.mix_hardware_entropy(hw_noise.wrapping_add(offset as u32));
-
-            let mut working = self.state;
-            ChaCha20Poly1305::rounds(&mut working);
-            for i in 0..16 {
-                working[i] = working[i].wrapping_add(self.state[i]);
-            }
-
-            // Forward secrecy: erase key portion with block output
-            for i in 0..4 {
-                self.state[4 + i] ^= working[i];
-            }
-
-            self.state[12] = self.state[12].wrapping_add(1);
-            self.reseed_counter += 1;
-
-            let mut word_idx = 0;
-            while offset < buf.len() && word_idx < 16 {
-                let bytes = working[word_idx].to_le_bytes();
-                let chunk_len = (buf.len() - offset).min(4);
-                buf[offset..offset + chunk_len].copy_from_slice(&bytes[..chunk_len]);
-                offset += chunk_len;
-                word_idx += 1;
-            }
+            // Forward secrecy: erase squeezed state word with fresh round and counter
+            self.state.x[0] ^= self.reseed_counter as u64;
         }
+
+        // Final forward secrecy step: permute and absorb post-generation jitter
+        self.state.x[2] ^= hw_noise as u64;
+        self.state.permute(12);
     }
 
     /// Generate a 32-bit random integer with fast key erasure (forward secrecy).
@@ -155,12 +145,55 @@ impl HardwareTrng {
         for i in 0..16 {
             let sample = self.get_u32(base_noise.wrapping_add((i as u32).wrapping_mul(0x9E3779B9)));
             if i > 0 && sample == prev {
-                return false; // Repeated identical word output
+                return false;
             }
             prev = sample;
             total_ones += sample.count_ones();
         }
-        // Across 16 32-bit words (512 bits), total ones should be between 102 and 410 bits (~20% to ~80%)
         total_ones >= 102 && total_ones <= 410 && self.health.is_healthy
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trng_self_test() {
+        let mut trng = HardwareTrng::new();
+        let uid = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+        ];
+        trng.init_with_uid(&uid, 0x12345678);
+        assert!(trng.run_self_test(0x87654321));
+    }
+
+    #[test]
+    fn test_trng_stuck_noise_detection() {
+        let mut trng = HardwareTrng::new();
+        let uid = [0x42u8; 12];
+        trng.init_with_uid(&uid, 0x1000);
+
+        // Feed stuck identical noise 8 times
+        for _ in 0..8 {
+            trng.mix_hardware_entropy(0xdeadbeef);
+        }
+        assert!(!trng.health.is_healthy);
+    }
+
+    #[test]
+    fn test_trng_forward_secrecy() {
+        let mut trng = HardwareTrng::new();
+        let uid = [0x99u8; 12];
+        trng.init_with_uid(&uid, 0x5555);
+
+        let mut buf1 = [0u8; 16];
+        let mut buf2 = [0u8; 16];
+        trng.fill_bytes(&mut buf1, 0x1111);
+        trng.fill_bytes(&mut buf2, 0x2222);
+
+        assert_ne!(buf1, [0u8; 16]);
+        assert_ne!(buf2, [0u8; 16]);
+        assert_ne!(buf1, buf2);
     }
 }

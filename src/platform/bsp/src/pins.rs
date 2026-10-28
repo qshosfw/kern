@@ -99,8 +99,6 @@ pub fn init() {
             | pac::gpio::PIN_4
             | pac::gpio::PIN_5
             | pac::gpio::PIN_7
-            | pac::gpio::PIN_11
-            | pac::gpio::PIN_12
             | pac::gpio::PIN_15,
     );
     py32_hal::gpio::set_pins_analog(

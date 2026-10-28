@@ -37,6 +37,8 @@ pub use kernel::service::ToneNote;
 
 // ── Audio Amplifier Hardware Control ────────────────────────────────────────
 
+static mut HANGOVER_MS: u16 = 0;
+
 /// Hardware driver for the external LN4898 Audio Power Amplifier on GPIOA Pin 8.
 pub struct AudioAmplifier {
     enabled: bool,
@@ -58,13 +60,42 @@ impl AudioAmplifier {
     /// Enable LN4898 power amplifier by driving PA8 High.
     pub fn enable(&mut self) {
         self.enabled = true;
+        unsafe {
+            HANGOVER_MS = 0;
+        }
         AUDIO_PA.set_high();
     }
 
     /// Disable LN4898 power amplifier by driving PA8 Low (ultra-low power shutdown).
     pub fn disable(&mut self) {
         self.enabled = false;
+        unsafe {
+            HANGOVER_MS = 0;
+        }
         AUDIO_PA.set_low();
+    }
+
+    /// Keep amplifier energized after tone playback to eliminate key repeat pops.
+    pub fn notify_tone_played() {
+        unsafe {
+            HANGOVER_MS = 150;
+        }
+    }
+
+    /// Periodic system tick to step hangover shutdown timer (called every 16ms).
+    pub fn tick(&mut self, elapsed_ms: u16) {
+        if !self.enabled {
+            unsafe {
+                if HANGOVER_MS > 0 {
+                    if elapsed_ms >= HANGOVER_MS {
+                        HANGOVER_MS = 0;
+                        AUDIO_PA.set_low();
+                    } else {
+                        HANGOVER_MS -= elapsed_ms;
+                    }
+                }
+            }
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -72,7 +103,7 @@ impl AudioAmplifier {
     }
 
     pub fn is_active(&self) -> bool {
-        self.enabled
+        self.enabled || unsafe { HANGOVER_MS > 0 } || AUDIO_PA.is_high()
     }
 
     pub fn volume(&self) -> u8 {
