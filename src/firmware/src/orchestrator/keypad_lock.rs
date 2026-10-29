@@ -32,6 +32,7 @@ pub struct KeypadLockManager {
     held_code: Option<KeyCode>,
     hold_elapsed_ms: u16,
     hold_target_ms: u16,
+    hold_start_threshold_ms: u16,
     is_long_press_triggered: bool,
 
     // Millisecond timing reference
@@ -54,6 +55,7 @@ impl KeypadLockManager {
             held_code: None,
             hold_elapsed_ms: 0,
             hold_target_ms: DEFAULT_HOLD_MS,
+            hold_start_threshold_ms: 300,
             is_long_press_triggered: false,
             last_tick_ms: 0,
             inactivity_ms: 0,
@@ -64,7 +66,8 @@ impl KeypadLockManager {
 
     #[inline(always)]
     pub fn is_animating(&self) -> bool {
-        self.held_code.is_some() || self.toast_remaining_ms > 0
+        (self.held_code.is_some() && self.hold_elapsed_ms >= self.hold_start_threshold_ms)
+            || self.toast_remaining_ms > 0
     }
 
     pub fn toggle_lock(&mut self) {
@@ -164,6 +167,12 @@ impl KeypadLockManager {
                         self.is_long_press_triggered = false;
                         self.last_tick_ms = py32_hal::delay::millis();
 
+                        // Deliberate hold threshold before showing hold dialog & progress bar (~250-350ms).
+                        // Normal key taps (< threshold) toggle functions with strictly ZERO UI popups or progress bars.
+                        let start_threshold =
+                            (base_hold_delay_ms as u32 * 3 / 4).clamp(250, 400) as u16;
+                        self.hold_start_threshold_ms = start_threshold;
+
                         // Asymmetric hold targets:
                         // - Hold-to-Lock: faster (~800ms) before pocketing
                         // - Hold-to-Unlock: deliberate (~1300ms) against pocket bumps
@@ -176,6 +185,11 @@ impl KeypadLockManager {
                             lock_target
                         };
 
+                        if !self.is_locked {
+                            self.toast = LockToast::None;
+                            self.toast_remaining_ms = 0;
+                        }
+
                         return true;
                     }
                     KeyState::Held => {
@@ -184,6 +198,8 @@ impl KeypadLockManager {
                     }
                     KeyState::Released => {
                         let was_long_press = self.is_long_press_triggered;
+                        let had_started_hold =
+                            self.hold_elapsed_ms >= self.hold_start_threshold_ms;
                         self.held_code = None;
                         self.hold_elapsed_ms = 0;
                         self.is_long_press_triggered = false;
@@ -195,8 +211,8 @@ impl KeypadLockManager {
                                 self.toast_remaining_ms = TOAST_DURATION_MS;
                             }
                         } else {
-                            // Short press of F toggles sticky F
-                            if !was_long_press && *code == KeyCode::KeyF {
+                            // Short press of F (released before hold threshold) toggles sticky F
+                            if !was_long_press && !had_started_hold && *code == KeyCode::KeyF {
                                 self.is_f_active = !self.is_f_active;
                                 self.f_key_remaining_ms = if self.is_f_active {
                                     f_timeout_ms.min(10000) as u16
@@ -233,8 +249,8 @@ impl KeypadLockManager {
     /// Renders an authentic centered notification modal dialog with lock/unlock padlock symbols,
     /// authentic inverted key badges for '#' and 'F', reusing standard system modal widgets.
     pub fn render_overlay(&self, canvas: &mut Canvas) {
-        // 1. Live hold-to-unlock / hold-to-lock progress bar takes precedence during active hold
-        if self.held_code.is_some() && self.hold_elapsed_ms > 0 {
+        // 1. Live hold-to-unlock / hold-to-lock progress bar takes precedence ONLY during deliberate long-press hold
+        if self.held_code.is_some() && self.hold_elapsed_ms >= self.hold_start_threshold_ms {
             let box_w = 108u8;
             let box_h = 30u8;
             let (bx, by) = gfx::widgets::dialog::draw_modal_box(canvas, box_w, box_h);
@@ -266,8 +282,12 @@ impl KeypadLockManager {
 
             let bar_w = 92u8;
             let bar_x = (center_x - (bar_w as i16) / 2) as i16;
-            let target_ms = self.hold_target_ms.max(100) as u32;
-            let pct = ((self.hold_elapsed_ms as u32 * 100) / target_ms).min(100) as u8;
+            let visible_elapsed = self.hold_elapsed_ms.saturating_sub(self.hold_start_threshold_ms);
+            let visible_target = self
+                .hold_target_ms
+                .saturating_sub(self.hold_start_threshold_ms)
+                .max(100) as u32;
+            let pct = ((visible_elapsed as u32 * 100) / visible_target).min(100) as u8;
             gfx::widgets::draw_progress_bar(canvas, bar_x, (by + 18) as i16, bar_w, 6, pct, true);
             return;
         }
