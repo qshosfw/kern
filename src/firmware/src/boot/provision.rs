@@ -36,8 +36,7 @@ const SYSINFO_PAYLOAD: &[u8] = &[
     // Item 3 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=4, target=0, value_ref=0x0107 (DYN_UPTIME)
     5, 1, 4, 0, 0, 0, 0x07, 0x01, 0, 0, 0, 0,
     // Item 4 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=5, target=0, value_ref=0x0108 (DYN_ACTIVE_PROCS)
-    5, 1, 5, 0, 0, 0, 0x08, 0x01, 0, 0, 0, 0,
-    // Length-prefixed string pool (6 strings)
+    5, 1, 5, 0, 0, 0, 0x08, 0x01, 0, 0, 0, 0, // Length-prefixed string pool (6 strings)
     4, b'L', b'i', b'v', b'e', 7, b'B', b'a', b't', b't', b'e', b'r', b'y', 9, b'C', b'P', b'U',
     b' ', b'C', b'l', b'o', b'c', b'k', 10, b'S', b't', b'a', b'c', b'k', b' ', b'F', b'r', b'e',
     b'e', 10, b'U', b'p', b't', b'i', b'm', b'e', b' ', b'(', b's', b')', 12, b'A', b'c', b't',
@@ -59,11 +58,9 @@ const RADIOINFO_PAYLOAD: &[u8] = &[
     // Item 3: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=4, target=0, value_ref=0x0101 (DYN_BATTERY_PCT)
     5, 1, 4, 0, 0, 0, 0x01, 0x01, 0, 0, 0, 0,
     // String pool: "Radio Info", "VFO A", "VFO B", "RSSI", "Battery"
-    10, b'R', b'a', b'd', b'i', b'o', b' ', b'I', b'n', b'f', b'o',
-    5, b'V', b'F', b'O', b' ', b'A',
-    5, b'V', b'F', b'O', b' ', b'B',
-    4, b'R', b'S', b'S', b'I',
-    7, b'B', b'a', b't', b't', b'e', b'r', b'y',
+    10, b'R', b'a', b'd', b'i', b'o', b' ', b'I', b'n', b'f', b'o', 5, b'V', b'F', b'O', b' ', b'A',
+    5, b'V', b'F', b'O', b' ', b'B', 4, b'R', b'S', b'S', b'I', 7, b'B', b'a', b't', b't', b'e',
+    b'r', b'y',
 ];
 
 // Declare 3.0 payload for `/apps/counter.krx` (1 node, 4 items, 3 actions, 5 labels)
@@ -128,12 +125,19 @@ fn write_krx_package(
     caps: u32,
     payload: &[u8],
 ) {
-    if filesystem.exists(path) {
-        return;
-    }
     let total_len = 128 + payload.len();
     if total_len > PROV_BUF_CAP {
         return;
+    }
+
+    if filesystem.exists(path) {
+        let buf = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
+        if let Ok(rlen) = filesystem.read_file(path, buf) {
+            if rlen == total_len && &buf[128..total_len] == payload {
+                return;
+            }
+        }
+        let _ = filesystem.remove(path);
     }
 
     let pkg = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];

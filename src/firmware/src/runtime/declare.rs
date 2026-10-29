@@ -11,11 +11,11 @@ use gfx::Color;
 use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::proc::declare::{
-    DeclareWalker, DYN_ACTIVE_PROCS, DYN_BATTERY_MV, DYN_BATTERY_PCT, DYN_CPU_CLOCK,
-    DYN_RADIO_FREQ_A, DYN_RADIO_FREQ_B, DYN_RADIO_RSSI, DYN_RAM_FREE, DYN_RAM_USED,
-    DYN_STACK_MARGIN, DYN_STACK_PEAK, DYN_STORAGE_FREE, DYN_SWAP_USAGE, DYN_UPTIME,
-    FLAG_DYNAMIC, ITEM_ACTION, ITEM_INFO, ITEM_LINK, ITEM_SUBMENU, ITEM_TOGGLE,
-    ITEM_VALUE, LAYOUT_FORM, LAYOUT_INFO_CARD, LAYOUT_MENU, LAYOUT_SCROLL_TEXT, TRIGGER_BOOT,
+    DYN_ACTIVE_PROCS, DYN_BATTERY_MV, DYN_BATTERY_PCT, DYN_CPU_CLOCK, DYN_RADIO_FREQ_A,
+    DYN_RADIO_FREQ_B, DYN_RADIO_RSSI, DYN_RAM_FREE, DYN_RAM_USED, DYN_STACK_MARGIN, DYN_STACK_PEAK,
+    DYN_STORAGE_FREE, DYN_SWAP_USAGE, DYN_UPTIME, DeclareWalker, FLAG_DYNAMIC, ITEM_ACTION,
+    ITEM_INFO, ITEM_LINK, ITEM_SUBMENU, ITEM_TOGGLE, ITEM_VALUE, LAYOUT_FORM, LAYOUT_INFO_CARD,
+    LAYOUT_MENU, LAYOUT_SCROLL_TEXT, TRIGGER_BOOT,
 };
 
 #[inline(never)]
@@ -366,7 +366,9 @@ pub unsafe fn walker_render(
         LAYOUT_SCROLL_TEXT => {
             // Text Document Reader View
             let start_item = node.first_item_offset as usize;
-            let display_count = total_items.saturating_sub(walker.scroll_top).min(visible_count);
+            let display_count = total_items
+                .saturating_sub(walker.scroll_top)
+                .min(visible_count);
             for i in 0..display_count {
                 let global_idx = start_item + walker.scroll_top + i;
                 if let Some(it) = walker.items.get(global_idx) {
@@ -383,7 +385,9 @@ pub unsafe fn walker_render(
         LAYOUT_MENU | LAYOUT_FORM | _ => {
             // LAYOUT_MENU and LAYOUT_FORM: standard interactive list with scrolling & selection
             let start_item = node.first_item_offset as usize;
-            let display_count = total_items.saturating_sub(walker.scroll_top).min(visible_count);
+            let display_count = total_items
+                .saturating_sub(walker.scroll_top)
+                .min(visible_count);
 
             for i in 0..display_count {
                 let global_idx = start_item + walker.scroll_top + i;
@@ -395,7 +399,8 @@ pub unsafe fn walker_render(
             // Minimalist vertical scrollbar when total items exceed 5 visible rows
             if total_items > visible_count {
                 let track_h = 42u8;
-                let thumb_h = ((visible_count as u32 * track_h as u32) / total_items as u32).max(4) as u8;
+                let thumb_h =
+                    ((visible_count as u32 * track_h as u32) / total_items as u32).max(4) as u8;
                 let max_scroll = (total_items - visible_count) as u32;
                 let thumb_offset = if max_scroll > 0 {
                     ((walker.scroll_top as u32 * (track_h - thumb_h) as u32) / max_scroll) as u8
@@ -414,7 +419,11 @@ pub unsafe fn walker_render(
 
     if node.layout != LAYOUT_INFO_CARD && node.layout != LAYOUT_SCROLL_TEXT {
         let sel_idx = (node.first_item_offset as usize) + walker.selected_item;
-        let sel_kind = walker.items.get(sel_idx).map(|it| it.kind).unwrap_or(ITEM_ACTION);
+        let sel_kind = walker
+            .items
+            .get(sel_idx)
+            .map(|it| it.kind)
+            .unwrap_or(ITEM_ACTION);
 
         let m_action = match sel_kind {
             ITEM_TOGGLE => "Toggle",
