@@ -146,8 +146,8 @@ impl RadioState {
 
         let is_tx = self.coord.is_transmitting;
         let tx_slot = self.coord.effective_tx_slot();
-        let app_lock_active = self.coord.app_lock.is_active();
-        let app_lock_slot = self.coord.app_lock.slot;
+        let app_lock_active = self.coord.arbitrator.is_locked();
+        let app_lock_slot = self.coord.arbitrator.locked_slot().unwrap_or(VfoSlot::VfoA);
         let listening = self.coord.listening_vfo;
         let carrier = self.coord.carrier_active;
 

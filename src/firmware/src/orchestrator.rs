@@ -545,9 +545,10 @@ impl Orchestrator {
                         }
                     } else {
                         crate::AppRegistry::on_modal_result(self.active_app_id, ctx, &res);
-                        if modal_mut.is_active() && modal_mut.tag == tag {
-                            modal_mut.dismiss();
-                        }
+                    }
+
+                    if modal_mut.is_active() && modal_mut.tag == tag {
+                        modal_mut.dismiss();
                     }
                 }
                 true

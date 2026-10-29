@@ -230,6 +230,233 @@ impl TxState {
     }
 }
 
+/// Event returned when an arbitration lock expires or is restored during a time tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArbitrationEvent {
+    /// Active lock expired and was released.
+    LockReleased {
+        client: ClientToken,
+        resources: RfResourceMask,
+        slot: VfoSlot,
+        was_muted: bool,
+    },
+    /// A previously preempted lock was restored to active status.
+    LockRestored {
+        client: ClientToken,
+        resources: RfResourceMask,
+        slot: VfoSlot,
+        needs_mute: bool,
+    },
+}
+
+/// System RF Hardware Resource Arbitrator.
+///
+/// Provides fine-grained conflict arbitration, priority-tiered lock preemption,
+/// and automatic stack restoration for multi-task radio operations (§1.1 / §1.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RadioArbitrator {
+    pub active_lock: VfoArbitrationLock,
+    pub saved_lock: Option<VfoArbitrationLock>,
+}
+
+impl RadioArbitrator {
+    pub const fn new() -> Self {
+        Self {
+            active_lock: VfoArbitrationLock::IDLE,
+            saved_lock: None,
+        }
+    }
+
+    /// Check if any client currently holds an active lock.
+    #[inline(always)]
+    pub fn is_locked(&self) -> bool {
+        self.active_lock.is_active()
+    }
+
+    /// The client currently holding the active lock.
+    #[inline(always)]
+    pub fn active_client(&self) -> ClientToken {
+        self.active_lock.client
+    }
+
+    /// The VFO slot currently locked, if any.
+    #[inline(always)]
+    pub fn locked_slot(&self) -> Option<VfoSlot> {
+        if self.active_lock.is_active() {
+            Some(self.active_lock.slot)
+        } else {
+            None
+        }
+    }
+
+    /// Current arbitration lock stack depth (0 = idle, 1 = active, 2 = active + preempted).
+    #[inline(always)]
+    pub fn lock_depth(&self) -> u8 {
+        if !self.active_lock.is_active() {
+            0
+        } else if self.saved_lock.is_some() {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// Check if a specific resource is locked by any client other than `exempt_client`.
+    #[inline]
+    pub fn is_resource_locked(
+        &self,
+        resources: RfResourceMask,
+        exempt_client: Option<ClientToken>,
+    ) -> bool {
+        if !self.active_lock.is_active() {
+            return false;
+        }
+        if let Some(exempt) = exempt_client {
+            if self.active_lock.client == exempt {
+                return false;
+            }
+        }
+        self.active_lock.resources.intersects(resources)
+    }
+
+    /// Request fine-grained resource locks with priority preemption.
+    pub fn request_lock(
+        &mut self,
+        client: ClientToken,
+        resources: RfResourceMask,
+        slot: VfoSlot,
+        timeout_ms: u16,
+        mute_audio: bool,
+        is_transmitting: bool,
+    ) -> bool {
+        if is_transmitting && resources.intersects(RfResourceMask::TRANSMITTER) {
+            return false;
+        }
+
+        if self.active_lock.is_active() && self.active_lock.client != client {
+            if self.active_lock.resources.intersects(resources) {
+                if client.priority() <= self.active_lock.client.priority() {
+                    return false; // Lower or equal priority cannot preempt
+                }
+                // Preempt active lock: stash into saved_lock
+                self.saved_lock = Some(self.active_lock);
+            }
+        }
+
+        self.active_lock = VfoArbitrationLock {
+            client,
+            resources,
+            slot,
+            remaining_ms: timeout_ms.max(10),
+            audio_muted: mute_audio,
+        };
+        true
+    }
+
+    /// Extend the active lock duration for the holding client.
+    pub fn extend_lock(&mut self, client: ClientToken, timeout_ms: u16) -> bool {
+        if self.active_lock.is_active() && self.active_lock.client == client {
+            self.active_lock.remaining_ms = timeout_ms.max(self.active_lock.remaining_ms);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Pop active lock and restore preempted saved lock, if any.
+    pub fn pop_and_restore(&mut self) -> Option<VfoArbitrationLock> {
+        if let Some(saved) = self.saved_lock.take() {
+            self.active_lock = saved;
+            Some(saved)
+        } else {
+            self.active_lock = VfoArbitrationLock::IDLE;
+            None
+        }
+    }
+
+    /// Explicitly release a lock held by a client.
+    pub fn release_lock(&mut self, client: ClientToken) -> bool {
+        if self.active_lock.client == client {
+            self.pop_and_restore();
+            true
+        } else if let Some(saved) = self.saved_lock {
+            if saved.client == client {
+                self.saved_lock = None;
+                return true;
+            }
+            false
+        } else {
+            false
+        }
+    }
+
+    /// Force-release all locks.
+    pub fn force_release_all(&mut self) {
+        self.active_lock = VfoArbitrationLock::IDLE;
+        self.saved_lock = None;
+    }
+
+    /// Step lock countdown by `delta_ms` and return an event if lock expired.
+    pub fn tick(&mut self, delta_ms: u16) -> Option<ArbitrationEvent> {
+        if !self.active_lock.is_active() {
+            return None;
+        }
+
+        if self.active_lock.remaining_ms <= delta_ms {
+            let client = self.active_lock.client;
+            let resources = self.active_lock.resources;
+            let slot = self.active_lock.slot;
+            let was_muted = self.active_lock.audio_muted;
+
+            let restored = self.pop_and_restore();
+            if let Some(res) = restored {
+                Some(ArbitrationEvent::LockRestored {
+                    client: res.client,
+                    resources: res.resources,
+                    slot: res.slot,
+                    needs_mute: res.audio_muted,
+                })
+            } else {
+                Some(ArbitrationEvent::LockReleased {
+                    client,
+                    resources,
+                    slot,
+                    was_muted,
+                })
+            }
+        } else {
+            self.active_lock.remaining_ms = self.active_lock.remaining_ms.saturating_sub(delta_ms);
+            None
+        }
+    }
+
+    /// Evaluate whether a client has permission to transmit on the target channel.
+    pub fn evaluate_tx_permission(
+        &self,
+        client: ClientToken,
+        bclo: BcloPolicy,
+        carrier_active: bool,
+        tx_inhibited: bool,
+        tot_locked_out: bool,
+    ) -> TxPermission {
+        if tot_locked_out {
+            return TxPermission::BlockedTotPenalty;
+        }
+        if tx_inhibited {
+            return TxPermission::BlockedTxInhibited;
+        }
+        if self.is_resource_locked(RfResourceMask::TRANSMITTER, Some(client))
+            && client.priority() < LockTier::EXCLUSIVE.0
+        {
+            return TxPermission::BlockedResourceLocked;
+        }
+        if carrier_active && bclo != BcloPolicy::Disabled {
+            return TxPermission::BlockedBusyChannel;
+        }
+        TxPermission::Granted
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +488,133 @@ mod tests {
         assert!(combo.intersects(RfResourceMask::AUDIO_OUTPUT));
         assert!(combo.intersects(RfResourceMask::VFO_A));
         assert!(!combo.intersects(vfo_b));
+    }
+
+    #[test]
+    fn test_arbitrator_lock_and_preemption() {
+        let mut arb = RadioArbitrator::new();
+        assert!(!arb.is_locked());
+        assert_eq!(arb.lock_depth(), 0);
+
+        let scanner = ClientToken::new(ClientId::SCANNER, LockTier::BACKGROUND);
+        let fsk = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::EXCLUSIVE);
+
+        // 1. Acquire background lock for Scanner on VFO A
+        assert!(arb.request_lock(scanner, RfResourceMask::VFO_A, VfoSlot::VfoA, 500, true, false));
+        assert!(arb.is_locked());
+        assert_eq!(arb.lock_depth(), 1);
+        assert_eq!(arb.active_client(), scanner);
+        assert_eq!(arb.locked_slot(), Some(VfoSlot::VfoA));
+
+        // 2. Reject lower/equal priority lock on overlapping resource
+        let mesh = ClientToken::new(ClientId::HERMES_MESH, LockTier::BACKGROUND);
+        assert!(!arb.request_lock(mesh, RfResourceMask::VFO_A, VfoSlot::VfoA, 300, false, false));
+        assert_eq!(arb.lock_depth(), 1);
+        assert_eq!(arb.active_client(), scanner);
+
+        // 3. Higher priority FSK sidecar preempts Scanner
+        assert!(arb.request_lock(fsk, RfResourceMask::VFO_A, VfoSlot::VfoA, 200, true, false));
+        assert_eq!(arb.lock_depth(), 2);
+        assert_eq!(arb.active_client(), fsk);
+        assert!(arb.saved_lock.is_some());
+        assert_eq!(arb.saved_lock.unwrap().client, scanner);
+
+        // 4. When FSK releases or expires, Scanner is restored
+        assert!(arb.release_lock(fsk));
+        assert_eq!(arb.lock_depth(), 1);
+        assert_eq!(arb.active_client(), scanner);
+        assert!(arb.saved_lock.is_none());
+
+        // 5. Release scanner
+        assert!(arb.release_lock(scanner));
+        assert_eq!(arb.lock_depth(), 0);
+        assert!(!arb.is_locked());
+    }
+
+    #[test]
+    fn test_arbitrator_tick_timeout_and_restoration() {
+        let mut arb = RadioArbitrator::new();
+        let bg = ClientToken::new(ClientId::SCANNER, LockTier::BACKGROUND);
+        let fg = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+
+        arb.request_lock(bg, RfResourceMask::VFO_B, VfoSlot::VfoB, 100, false, false);
+        arb.request_lock(fg, RfResourceMask::VFO_B, VfoSlot::VfoB, 50, true, false);
+        assert_eq!(arb.lock_depth(), 2);
+
+        // Step 20ms: no expiration yet
+        assert_eq!(arb.tick(20), None);
+        assert_eq!(arb.active_lock.remaining_ms, 30);
+
+        // Step 30ms: fg expires, restoring bg
+        let ev = arb.tick(30);
+        assert!(matches!(
+            ev,
+            Some(ArbitrationEvent::LockRestored {
+                client,
+                slot: VfoSlot::VfoB,
+                needs_mute: false,
+                ..
+            }) if client == bg
+        ));
+        assert_eq!(arb.lock_depth(), 1);
+        assert_eq!(arb.active_client(), bg);
+
+        // Step 100ms: bg expires, arbitration idle
+        let ev2 = arb.tick(100);
+        assert!(matches!(
+            ev2,
+            Some(ArbitrationEvent::LockReleased {
+                client,
+                slot: VfoSlot::VfoB,
+                was_muted: false,
+                ..
+            }) if client == bg
+        ));
+        assert_eq!(arb.lock_depth(), 0);
+        assert!(!arb.is_locked());
+    }
+
+    #[test]
+    fn test_arbitrator_tx_permissions() {
+        let mut arb = RadioArbitrator::new();
+        let user = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+        let sidecar = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::EXCLUSIVE);
+
+        // Standard idle permission
+        assert_eq!(
+            arb.evaluate_tx_permission(user, BcloPolicy::CarrierOnly, false, false, false),
+            TxPermission::Granted
+        );
+
+        // TOT lockout penalty
+        assert_eq!(
+            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, true),
+            TxPermission::BlockedTotPenalty
+        );
+
+        // TX Inhibited (RX-only)
+        assert_eq!(
+            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, true, false),
+            TxPermission::BlockedTxInhibited
+        );
+
+        // BCLO carrier active
+        assert_eq!(
+            arb.evaluate_tx_permission(user, BcloPolicy::CarrierOnly, true, false, false),
+            TxPermission::BlockedBusyChannel
+        );
+
+        // Resource locked by another client
+        arb.request_lock(sidecar, RfResourceMask::TRANSMITTER, VfoSlot::VfoA, 500, false, false);
+        assert_eq!(
+            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, false),
+            TxPermission::BlockedResourceLocked
+        );
+
+        // Holding client allowed to transmit
+        assert_eq!(
+            arb.evaluate_tx_permission(sidecar, BcloPolicy::Disabled, false, false, false),
+            TxPermission::Granted
+        );
     }
 }

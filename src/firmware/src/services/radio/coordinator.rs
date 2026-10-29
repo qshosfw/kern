@@ -122,9 +122,7 @@ pub struct RadioCoordinator {
     pub dual_watch: DualWatchMode,
     pub cross_band: CrossBandMode,
     pub fsk_config: FskSidecarConfig,
-    pub app_lock: VfoArbitrationLock,
-    /// Stashed background lock preempted by a higher-priority task.
-    pub saved_lock: Option<VfoArbitrationLock>,
+    pub arbitrator: RadioArbitrator,
     pub dwell: DwellController,
     pub audio_routing: AudioRoutingState,
     pub vfo_memory_index: [Option<u16>; 3],
@@ -175,8 +173,7 @@ impl RadioCoordinator {
             dual_watch: DualWatchMode::Off,
             cross_band: CrossBandMode::Off,
             fsk_config: FskSidecarConfig::DEFAULT,
-            app_lock: VfoArbitrationLock::IDLE,
-            saved_lock: None,
+            arbitrator: RadioArbitrator::new(),
             dwell: DwellController::new(),
             audio_routing: AudioRoutingState::NormalVoice,
             vfo_memory_index: [None, None, None],
@@ -256,18 +253,15 @@ impl RadioCoordinator {
 
     /// Pop the active lock and restore the preempted saved lock, if present.
     pub fn pop_and_restore_lock(&mut self) -> Option<VfoArbitrationLock> {
-        if let Some(saved) = self.saved_lock.take() {
-            self.app_lock = saved;
+        let restored = self.arbitrator.pop_and_restore();
+        if let Some(saved) = restored {
             self.listening_vfo = saved.slot;
             self.fsk_sync_active = saved.client.id == ClientId::FSK_SIDECAR;
-            self.dwell.reset_dwell();
-            Some(saved)
         } else {
-            self.app_lock = VfoArbitrationLock::IDLE;
             self.fsk_sync_active = false;
-            self.dwell.reset_dwell();
-            None
         }
+        self.dwell.reset_dwell();
+        restored
     }
 
     /// Request fine-grained resource locks on behalf of an application or subsystem.
@@ -279,30 +273,20 @@ impl RadioCoordinator {
         timeout_ms: u16,
         mute_audio: bool,
     ) -> bool {
-        if self.is_transmitting && resources.intersects(RfResourceMask::TRANSMITTER) {
-            return false;
-        }
-
-        if self.app_lock.is_active() && self.app_lock.client != client {
-            if self.app_lock.resources.intersects(resources) {
-                if client.priority() <= self.app_lock.client.priority() {
-                    return false; // Lower or equal priority cannot preempt
-                }
-                // Preempting active lock: stash into saved_lock
-                self.saved_lock = Some(self.app_lock);
-            }
-        }
-
-        self.app_lock = VfoArbitrationLock {
+        if self.arbitrator.request_lock(
             client,
             resources,
             slot,
-            remaining_ms: timeout_ms.max(10),
-            audio_muted: mute_audio,
-        };
-        self.listening_vfo = slot;
-        self.dwell.reset_dwell();
-        true
+            timeout_ms,
+            mute_audio,
+            self.is_transmitting,
+        ) {
+            self.listening_vfo = slot;
+            self.dwell.reset_dwell();
+            true
+        } else {
+            false
+        }
     }
 
     /// Request a standard VFO channel lock for an application.
@@ -325,25 +309,21 @@ impl RadioCoordinator {
 
     /// Extend the active lock duration for the current holding client.
     pub fn extend_vfo_lock(&mut self, client: ClientToken, timeout_ms: u16) -> bool {
-        if self.app_lock.is_active() && self.app_lock.client == client {
-            self.app_lock.remaining_ms = timeout_ms.max(self.app_lock.remaining_ms);
-            true
-        } else {
-            false
-        }
+        self.arbitrator.extend_lock(client, timeout_ms)
     }
 
     /// Explicitly release an RF resource lock held by a client.
     pub fn release_vfo_lock(&mut self, client: ClientToken) -> bool {
-        if self.app_lock.client == client {
-            self.pop_and_restore_lock();
-            true
-        } else if let Some(saved) = self.saved_lock {
-            if saved.client == client {
-                self.saved_lock = None;
-                return true;
+        if self.arbitrator.release_lock(client) {
+            if !self.arbitrator.is_locked() {
+                self.fsk_sync_active = false;
+            } else if let Some(slot) = self.arbitrator.locked_slot() {
+                self.listening_vfo = slot;
+                self.fsk_sync_active =
+                    self.arbitrator.active_client().id == ClientId::FSK_SIDECAR;
             }
-            false
+            self.dwell.reset_dwell();
+            true
         } else {
             false
         }
@@ -351,48 +331,37 @@ impl RadioCoordinator {
 
     /// Force-release all active locks (e.g. user pressed PTT or exit key).
     pub fn force_release_all_locks(&mut self) {
-        self.app_lock = VfoArbitrationLock::IDLE;
-        self.saved_lock = None;
+        self.arbitrator.force_release_all();
         self.fsk_sync_active = false;
         self.dwell.reset_dwell();
     }
 
     #[inline(always)]
     pub fn is_vfo_locked(&self) -> bool {
-        self.app_lock.is_active()
+        self.arbitrator.is_locked()
     }
 
     #[inline(always)]
     pub fn lock_client(&self) -> ClientToken {
-        self.app_lock.client
+        self.arbitrator.active_client()
     }
 
     #[inline(always)]
     pub fn locked_slot(&self) -> Option<VfoSlot> {
-        if self.app_lock.is_active() {
-            Some(self.app_lock.slot)
-        } else {
-            None
-        }
+        self.arbitrator.locked_slot()
     }
 
     /// Current arbitration lock depth (0 = none, 1 = active lock, 2 = active + stashed lock).
     #[inline(always)]
     pub fn lock_depth(&self) -> usize {
-        if !self.app_lock.is_active() {
-            0
-        } else if self.saved_lock.is_some() {
-            2
-        } else {
-            1
-        }
+        self.arbitrator.lock_depth() as usize
     }
 
     /// Reference to the active lock descriptor, if active.
     #[inline(always)]
     pub fn active_lock(&self) -> Option<&VfoArbitrationLock> {
-        if self.app_lock.is_active() {
-            Some(&self.app_lock)
+        if self.arbitrator.is_locked() {
+            Some(&self.arbitrator.active_lock)
         } else {
             None
         }
@@ -401,13 +370,13 @@ impl RadioCoordinator {
     /// Reference to the stashed preempted lock descriptor, if present.
     #[inline(always)]
     pub fn saved_lock(&self) -> Option<&VfoArbitrationLock> {
-        self.saved_lock.as_ref()
+        self.arbitrator.saved_lock.as_ref()
     }
 
     /// Check if a specific RF hardware resource is currently locked.
     #[inline(always)]
     pub fn is_resource_locked(&self, res: RfResourceMask) -> bool {
-        self.app_lock.is_active() && self.app_lock.resources.intersects(res)
+        self.arbitrator.is_resource_locked(res, None)
     }
 
     /// Verify whether a client is permitted to initiate RF transmission.
@@ -421,13 +390,15 @@ impl RadioCoordinator {
                 return false;
             }
         }
-        if self.app_lock.is_active()
+        if self.arbitrator.is_locked()
             && self
-                .app_lock
+                .arbitrator
+                .active_lock
                 .resources
                 .intersects(RfResourceMask::TRANSMITTER)
         {
-            return self.app_lock.client == client || client.priority() >= LockTier::EXCLUSIVE.0;
+            return self.arbitrator.active_client() == client
+                || client.priority() >= LockTier::EXCLUSIVE.0;
         }
         true
     }
@@ -458,17 +429,19 @@ impl RadioCoordinator {
         slot: VfoSlot,
     ) -> RadioEvent {
         self.fsk_sync_active = false;
-        if self.app_lock.client.id == ClientId::FSK_SIDECAR {
+        if self.arbitrator.active_client().id == ClientId::FSK_SIDECAR {
             // Keep locked for post-frame response/ACK window
-            self.app_lock.remaining_ms = self.fsk_config.post_frame_hold_ms;
+            let client = self.arbitrator.active_client();
+            self.arbitrator.extend_lock(client, self.fsk_config.post_frame_hold_ms);
         }
         RadioEvent::FskFrameFinished(slot)
     }
 
     /// Abort FSK sidecar hold on error or timeout.
     pub fn notify_fsk_error<R: RfAudioPath>(&mut self, radio: &mut R) {
-        if self.app_lock.client.id == ClientId::FSK_SIDECAR {
-            self.release_vfo_lock(self.app_lock.client);
+        if self.arbitrator.active_client().id == ClientId::FSK_SIDECAR {
+            let client = self.arbitrator.active_client();
+            self.release_vfo_lock(client);
             if self.audio_path_muted {
                 radio.mute_audio(false);
                 self.audio_path_muted = false;
@@ -483,7 +456,7 @@ impl RadioCoordinator {
             self.active_vfo = slot;
             if self.dual_watch == DualWatchMode::Off
                 && !self.is_transmitting
-                && !self.app_lock.is_active()
+                && !self.arbitrator.is_locked()
             {
                 self.listening_vfo = slot;
                 radio.configure_channel(&self.channels[slot.index()]);
@@ -532,46 +505,22 @@ impl RadioCoordinator {
 
     /// Check granular transmission permission for a specific VFO slot and client token.
     pub fn check_tx_permission(&self, slot: VfoSlot, client: ClientToken) -> TxPermission {
-        if self.tot_locked_out {
-            return TxPermission::BlockedTotPenalty;
-        }
-
         if self.is_transmitting && self.tx_state == TxState::Active {
             return TxPermission::BlockedResourceLocked;
         }
 
-        if self.app_lock.is_active()
-            && self
-                .app_lock
-                .resources
-                .intersects(RfResourceMask::TRANSMITTER)
-        {
-            if self.app_lock.client != client && client.priority() < LockTier::EXCLUSIVE.0 {
-                return TxPermission::BlockedResourceLocked;
-            }
-        }
-
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &self.channels[idx];
+        let tx_inhibited = ch.rx_freq.raw() == 0 || ch.effective_tx_freq().raw() == 0;
+        let carrier_active = ch.busy_lock && self.carrier_active && self.listening_vfo == slot;
 
-        if ch.rx_freq.raw() == 0 || ch.effective_tx_freq().raw() == 0 {
-            return TxPermission::BlockedTxInhibited;
-        }
-
-        if ch.busy_lock && self.carrier_active && self.listening_vfo == slot {
-            match self.bclo_policy {
-                BcloPolicy::Disabled => {}
-                BcloPolicy::CarrierOnly => return TxPermission::BlockedBusyChannel,
-                BcloPolicy::ToneMismatchOnly => {
-                    if ch.rx_subaudible.is_ctcss() || ch.rx_subaudible.is_dcs() {
-                        return TxPermission::BlockedBusyChannel;
-                    }
-                    return TxPermission::BlockedBusyChannel;
-                }
-            }
-        }
-
-        TxPermission::Granted
+        self.arbitrator.evaluate_tx_permission(
+            client,
+            self.bclo_policy,
+            carrier_active,
+            tx_inhibited,
+            self.tot_locked_out,
+        )
     }
 
     /// Check whether transmission is allowed on the specified VFO slot.
@@ -693,7 +642,7 @@ impl RadioCoordinator {
     /// Query channel telemetry for display UI widgets and background services.
     pub fn channel_telemetry(&self, slot: VfoSlot) -> ChannelTelemetry {
         let idx = slot.index().min(self.channels.len() - 1);
-        let is_locked = self.app_lock.is_active() && self.app_lock.slot == slot;
+        let is_locked = self.arbitrator.locked_slot() == Some(slot);
         ChannelTelemetry {
             slot,
             rssi_dbm: self.rssi_moving_avg[idx],
@@ -701,7 +650,7 @@ impl RadioCoordinator {
             is_carrier_open: self.carrier_active && self.listening_vfo == slot,
             is_locked,
             lock_client: if is_locked {
-                self.app_lock.client.id
+                self.arbitrator.active_client().id
             } else {
                 ClientId::NONE
             },
@@ -714,7 +663,7 @@ impl RadioCoordinator {
             && self.effective_tx_channel().rx_freq == self.channels[slot.index()].rx_freq
         {
             VfoActivityState::Transmitting
-        } else if self.app_lock.is_active() && self.app_lock.slot == slot {
+        } else if self.arbitrator.locked_slot() == Some(slot) {
             VfoActivityState::FskLocked
         } else if self.carrier_active && self.listening_vfo == slot {
             VfoActivityState::CarrierActive
@@ -807,7 +756,7 @@ impl RadioCoordinator {
         rec: &crate::data::ChannelRecord,
     ) {
         let should_apply =
-            self.listening_vfo == slot && !self.is_transmitting && !self.app_lock.is_active();
+            self.listening_vfo == slot && !self.is_transmitting && !self.arbitrator.is_locked();
         self.populate_channel_config(slot, memory_idx, rec);
         if should_apply {
             let idx = slot.index().min(self.channels.len() - 1);
@@ -951,7 +900,7 @@ impl RadioCoordinator {
         ch.modulation = profile.mode;
         ch.bandwidth = profile.default_bandwidth;
 
-        if self.listening_vfo == slot && !self.is_transmitting && !self.app_lock.is_active() {
+        if self.listening_vfo == slot && !self.is_transmitting && !self.arbitrator.is_locked() {
             kernel::service::radio::RfModulation::set_modulation(radio, profile.mode);
             kernel::service::radio::RfModulation::set_bandwidth(radio, profile.default_bandwidth);
             radio.set_af_response(&profile.af_response);
@@ -1047,46 +996,47 @@ impl RadioCoordinator {
         }
 
         // 1. Process active arbitration lock countdown
-        if self.app_lock.is_active() {
-            if self.app_lock.remaining_ms <= 10 {
-                let client = self.app_lock.client;
-                let resources = self.app_lock.resources;
-                let slot = self.app_lock.slot;
-                let was_muted = self.app_lock.audio_muted;
-
-                let restored = self.pop_and_restore_lock();
-
-                if was_muted && self.audio_path_muted {
-                    let needs_mute = self.app_lock.is_active() && self.app_lock.audio_muted;
-                    if !needs_mute {
-                        radio.mute_audio(false);
-                        self.audio_path_muted = false;
-                    }
-                }
-
-                if let Some(res) = restored {
-                    if res.audio_muted && !self.audio_path_muted {
-                        radio.mute_audio(true);
-                        self.audio_path_muted = true;
+        if let Some(arb_ev) = self.arbitrator.tick(10) {
+            match arb_ev {
+                ArbitrationEvent::LockRestored {
+                    client,
+                    resources,
+                    slot,
+                    needs_mute,
+                } => {
+                    self.listening_vfo = slot;
+                    self.fsk_sync_active = client.id == ClientId::FSK_SIDECAR;
+                    if needs_mute != self.audio_path_muted {
+                        radio.mute_audio(needs_mute);
+                        self.audio_path_muted = needs_mute;
                     }
                     return RadioEvent::LockRestored {
-                        client: res.client,
-                        resources: res.resources,
-                        slot: res.slot,
-                    };
-                }
-
-                if client.id == ClientId::FSK_SIDECAR {
-                    return RadioEvent::FskLockReleased(slot);
-                } else {
-                    return RadioEvent::LockReleased {
                         client,
                         resources,
                         slot,
                     };
                 }
-            } else {
-                self.app_lock.remaining_ms = self.app_lock.remaining_ms.saturating_sub(10);
+                ArbitrationEvent::LockReleased {
+                    client,
+                    resources,
+                    slot,
+                    was_muted,
+                } => {
+                    self.fsk_sync_active = false;
+                    if was_muted && self.audio_path_muted {
+                        radio.mute_audio(false);
+                        self.audio_path_muted = false;
+                    }
+                    if client.id == ClientId::FSK_SIDECAR {
+                        return RadioEvent::FskLockReleased(slot);
+                    } else {
+                        return RadioEvent::LockReleased {
+                            client,
+                            resources,
+                            slot,
+                        };
+                    }
+                }
             }
         }
 
@@ -1105,7 +1055,7 @@ impl RadioCoordinator {
             // Voice carrier priority override: if squelch opens while FSK sidecar is holding the channel,
             // immediately restore audio so the user hears voice
             if self.fsk_config.voice_priority_override
-                && self.app_lock.client.id == ClientId::FSK_SIDECAR
+                && self.arbitrator.active_client().id == ClientId::FSK_SIDECAR
             {
                 if self.audio_path_muted {
                     radio.mute_audio(false);
@@ -1118,7 +1068,7 @@ impl RadioCoordinator {
                 if !self.is_transmitting {
                     bsp::set_status_led(bsp::StatusLed::Green);
                 }
-                if !self.app_lock.is_active() || !self.app_lock.audio_muted {
+                if !self.arbitrator.is_locked() || !self.arbitrator.active_lock.audio_muted {
                     radio.mute_audio(false);
                     self.audio_path_muted = false;
                 }
@@ -1147,7 +1097,7 @@ impl RadioCoordinator {
         }
 
         // 4. Freeze Dual Watch dwelling if VFO is held by an application or FSK sidecar
-        if self.app_lock.is_active() {
+        if self.arbitrator.is_locked() {
             return RadioEvent::None;
         }
 
