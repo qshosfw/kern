@@ -1523,19 +1523,18 @@ pub fn bind_cap_imports(
             return false;
         };
         let slot = binding.slot_idx as usize;
+        if slot >= got_words.len() {
+            return false;
+        }
         match resolve_capability_vtable(binding.interface_id, binding.min_abi, granted_caps) {
             Some(vtable_addr) => {
-                if slot < got_words.len() {
-                    got_words[slot] = vtable_addr as u32;
-                }
+                got_words[slot] = vtable_addr as u32;
             }
             None => {
                 if (binding.flags & CapBinding::FLAG_MANDATORY) != 0 {
                     return false;
                 }
-                if slot < got_words.len() {
-                    got_words[slot] = 0; // NULL for OPTIONAL binding
-                }
+                got_words[slot] = 0; // NULL for OPTIONAL binding
             }
         }
     }
