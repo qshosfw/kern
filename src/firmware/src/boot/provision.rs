@@ -16,7 +16,8 @@ use crate::services::SystemStorage;
 use crate::services::storage::DirEntryInfo;
 #[cfg(feature = "provision_apps")]
 use kernel::proc::krx::{
-    KRX_MAGIC, KrxClass, KrxExecType, SECTION_EXECUTION, SECTION_IDENTITY, SECTION_TYPE_LIFECYCLE,
+    KRX_MAGIC, KrxClass, KrxExecType, KrxProfile, SECTION_EXECUTION, SECTION_IDENTITY,
+    SECTION_TYPE_LIFECYCLE,
 };
 
 pub const PROV_BUF_CAP: usize = 512;
@@ -121,6 +122,7 @@ fn write_krx_package(
     filesystem: &mut SystemStorage,
     path: &str,
     class: KrxClass,
+    profile: KrxProfile,
     name: &str,
     caps: u32,
     payload: &[u8],
@@ -133,7 +135,7 @@ fn write_krx_package(
     if filesystem.exists(path) {
         let buf = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
         if let Ok(rlen) = filesystem.read_file(path, buf) {
-            if rlen == total_len && &buf[128..total_len] == payload {
+            if rlen == total_len && &buf[128..total_len] == payload && buf[94] == profile.raw_code() {
                 return;
             }
         }
@@ -166,6 +168,7 @@ fn write_krx_package(
     pkg[72..74].copy_from_slice(&512u16.to_le_bytes()); // page_size = 512
     pkg[74] = 2; // cache_blocks = 2
     pkg[80..84].copy_from_slice(&(payload.len() as u32).to_le_bytes()); // payload_size
+    pkg[94] = profile.raw_code(); // explicit profile
 
     // 4. SectionType (offset 96: 4B header + 12B body = 16B, ends at 112)
     pkg[96..98].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
@@ -198,6 +201,7 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
         filesystem,
         "/apps/sysinfo.krx",
         KrxClass::Declare,
+        KrxProfile::D0DeclareGraph,
         "SysInfo",
         base_caps,
         SYSINFO_PAYLOAD,
@@ -206,6 +210,7 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
         filesystem,
         "/apps/counter.krx",
         KrxClass::Declare,
+        KrxProfile::D0DeclareGraph,
         "Counter",
         base_caps,
         COUNTER_PAYLOAD,
@@ -214,6 +219,7 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
         filesystem,
         "/apps/timer.krx",
         KrxClass::Declare,
+        KrxProfile::D0DeclareGraph,
         "Timer",
         base_caps,
         TIMER_PAYLOAD,
@@ -222,6 +228,7 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
         filesystem,
         "/apps/radioinfo.krx",
         KrxClass::Declare,
+        KrxProfile::D0DeclareGraph,
         "RadioInfo",
         base_caps,
         RADIOINFO_PAYLOAD,
