@@ -1,5 +1,6 @@
 //! BlockDevice trait for underlying flash hardware drivers.
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsError {
     IoError,
     NotFound,

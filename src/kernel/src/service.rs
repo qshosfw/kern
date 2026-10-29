@@ -177,6 +177,18 @@ pub trait StorageService {
     fn create_dir(&mut self, path: &str) -> Result<(), StorageError>;
 
     fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError>;
+    fn read_file_at(
+        &mut self,
+        path: &str,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, StorageError> {
+        if offset == 0 {
+            self.read_file(path, buf)
+        } else {
+            Err(StorageError::IoError)
+        }
+    }
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError>;
 
     fn get_attributes(&mut self, path: &str) -> Result<FileAttributes, StorageError>;

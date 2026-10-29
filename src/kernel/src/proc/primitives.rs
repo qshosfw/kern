@@ -91,6 +91,10 @@ pub trait AudioPrimitive {
 // ── 4. Storage Primitive ────────────────────────────────────────────────────
 pub trait StoragePrimitive {
     fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, ()>;
+    fn read_file_at(&mut self, path: &str, offset: usize, buf: &mut [u8]) -> Result<usize, ()> {
+        let _ = (path, offset, buf);
+        Err(())
+    }
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()>;
     fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()>;
     fn remove_file(&mut self, path: &str) -> Result<(), ()>;

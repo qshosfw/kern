@@ -177,22 +177,7 @@ fn read_file_region(
     offset: usize,
     dst: &mut [u8],
 ) -> bool {
-    // Use staging buffer when offset > 0 to stream slice without heap allocation
-    if offset == 0 {
-        return storage.read_file(path, dst).is_ok();
-    }
-    let mut temp = [0u8; 512];
-    let total_needed = offset + dst.len();
-    if total_needed <= temp.len() {
-        if let Ok(n) = storage.read_file(path, &mut temp[..total_needed]) {
-            if n > offset {
-                let copy_len = (n - offset).min(dst.len());
-                dst[..copy_len].copy_from_slice(&temp[offset..offset + copy_len]);
-                return true;
-            }
-        }
-    }
-    false
+    storage.read_file_at(path, offset, dst).is_ok()
 }
 
 /// Loads a Native (`KrxClass::Native`) or Demand-Paged (`KrxClass::Paged`) binary from flash

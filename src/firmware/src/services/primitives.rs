@@ -499,6 +499,10 @@ impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
         self.storage.read_file(path, buf).map_err(|_| ())
     }
 
+    fn read_file_at(&mut self, path: &str, offset: usize, buf: &mut [u8]) -> Result<usize, ()> {
+        self.storage.read_file_at(path, offset, buf).map_err(|_| ())
+    }
+
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
         self.storage.write_file(path, data).map_err(|_| ())
     }

@@ -150,6 +150,20 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         Ok(len)
     }
 
+    pub fn read_file_at(
+        &mut self,
+        path: &str,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, StorageError> {
+        Self::sanitize_path(path)?;
+        let perm = self.fs.get_permission(path).unwrap_or(0);
+        if (perm & ATTR_ENCRYPTED) != 0 {
+            return Err(StorageError::EncryptedNoKey);
+        }
+        self.fs.read_file_at(path, offset, buf).map_err(Self::map_error)
+    }
+
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         Self::sanitize_path(path)?;
         let perm = self.fs.get_permission(path).unwrap_or(0);
@@ -258,6 +272,14 @@ impl<'a, D: BlockDevice> kernel::service::StorageService for FileSystemDriver<'a
     }
     fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
         self.read_file(path, buf)
+    }
+    fn read_file_at(
+        &mut self,
+        path: &str,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, StorageError> {
+        self.read_file_at(path, offset, buf)
     }
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         self.write_file(path, data)

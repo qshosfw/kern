@@ -21,6 +21,14 @@ impl NoStorage {
     pub fn read_file(&mut self, _path: &str, _buf: &mut [u8]) -> Result<usize, StorageError> {
         Err(StorageError::NotFound)
     }
+    pub fn read_file_at(
+        &mut self,
+        _path: &str,
+        _offset: usize,
+        _buf: &mut [u8],
+    ) -> Result<usize, StorageError> {
+        Err(StorageError::NotFound)
+    }
     pub fn write_file(&mut self, _path: &str, _data: &[u8]) -> Result<(), StorageError> {
         Err(StorageError::NotFound)
     }
@@ -71,6 +79,14 @@ impl StorageService for NoStorage {
     }
     fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
         self.read_file(path, buf)
+    }
+    fn read_file_at(
+        &mut self,
+        path: &str,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, StorageError> {
+        self.read_file_at(path, offset, buf)
     }
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         self.write_file(path, data)

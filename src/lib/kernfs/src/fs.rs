@@ -235,6 +235,22 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(to_read)
     }
 
+    /// Read file content at `path` starting at byte `offset` into `buf`.
+    /// Reads up to `buf.len()` bytes without heap allocation.
+    pub fn read_file_at(&mut self, path: &str, offset: usize, buf: &mut [u8]) -> Result<usize, FsError> {
+        let (sector, payload_len, _, _) =
+            self.find_best_sector(path).ok_or(FsError::NotFound)?;
+
+        if offset >= payload_len || buf.is_empty() {
+            return Ok(0);
+        }
+
+        let to_read = buf.len().min(payload_len - offset);
+        let data_offset = sector * D::BLOCK_SIZE + HEADER_SIZE + offset;
+        self.dev.read(data_offset, &mut buf[..to_read])?;
+        Ok(to_read)
+    }
+
     /// Write payload atomically to `path` with wear leveling and power-loss protection.
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
         if data.len() > (D::BLOCK_SIZE - HEADER_SIZE) {
@@ -557,4 +573,79 @@ pub struct FsStats {
     pub deleted_sectors: u16,
     pub wear_cycles: u32,
     pub total_sectors: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockFlash {
+        data: [u8; 16 * 4096],
+    }
+
+    impl MockFlash {
+        fn new() -> Self {
+            Self {
+                data: [0xFF; 16 * 4096],
+            }
+        }
+    }
+
+    impl BlockDevice for MockFlash {
+        const READ_SIZE: usize = 256;
+        const WRITE_SIZE: usize = 256;
+        const BLOCK_SIZE: usize = 4096;
+        const TOTAL_BLOCKS: usize = 16;
+
+        fn read(&mut self, offset: usize, buf: &mut [u8]) -> Result<(), FsError> {
+            if offset + buf.len() > self.data.len() {
+                return Err(FsError::IoError);
+            }
+            buf.copy_from_slice(&self.data[offset..offset + buf.len()]);
+            Ok(())
+        }
+
+        fn program(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
+            if offset + data.len() > self.data.len() {
+                return Err(FsError::IoError);
+            }
+            for (i, &b) in data.iter().enumerate() {
+                self.data[offset + i] &= b;
+            }
+            Ok(())
+        }
+
+        fn erase_sector(&mut self, sector_addr: usize) -> Result<(), FsError> {
+            let start = sector_addr;
+            let end = start + Self::BLOCK_SIZE;
+            if end > self.data.len() {
+                return Err(FsError::IoError);
+            }
+            self.data[start..end].fill(0xFF);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_read_file_at_arbitrary_offset() {
+        let mut flash = MockFlash::new();
+        let mut fs = KernFS::new(&mut flash);
+        fs.format(None).unwrap();
+
+        let payload = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        fs.write_file("/test.bin", payload).unwrap();
+
+        let mut out = [0u8; 10];
+        let n = fs.read_file_at("/test.bin", 10, &mut out).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(&out, b"ABCDEFGHIJ");
+
+        let n2 = fs.read_file_at("/test.bin", 36, &mut out).unwrap();
+        assert_eq!(n2, 10);
+        assert_eq!(&out, b"abcdefghij");
+
+        // Offset beyond length returns 0
+        let n3 = fs.read_file_at("/test.bin", 100, &mut out).unwrap();
+        assert_eq!(n3, 0);
+    }
 }
