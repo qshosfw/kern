@@ -100,6 +100,12 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
         None
     }
 
+    /// Check if a specific resource is currently leased.
+    #[inline(always)]
+    pub fn is_leased(&self, kind: LeaseKind) -> bool {
+        self.holder(kind).is_some()
+    }
+
     /// Acquires an exclusive timed lease on a resource.
     pub fn acquire(
         &mut self,

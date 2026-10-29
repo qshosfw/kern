@@ -415,6 +415,12 @@ impl RadioCoordinator {
         if self.is_transmitting {
             return false;
         }
+        if let Some(holder) = crate::orchestrator::lease_manager().holder(kernel::proc::LeaseKind::RadioTx) {
+            let caller_pid = crate::orchestrator::proc_table().find_by_app(client.id.0 as usize).map(|p| p.pid);
+            if caller_pid != Some(holder) && client.priority() < LockTier::EXCLUSIVE.0 {
+                return false;
+            }
+        }
         if self.app_lock.is_active()
             && self
                 .app_lock
