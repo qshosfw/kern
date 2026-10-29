@@ -353,4 +353,58 @@ mod tests {
         assert_eq!(stk.pop(), Ok(frame));
         assert_eq!(stk.pop(), Err(PagedError::ShadowStackUnderflow));
     }
+
+    #[test]
+    fn test_paged_nested_call_and_return_thunk_eviction() {
+        let mut cache = FixedWindowCache::<8, 2>::new();
+        // 4 blocks of 512B each
+        cache.configure(512, 2, 0, 2048, None);
+        let mut shadow_stack = ShadowReturnStack::<8>::new();
+
+        // 1. App starts in Block 0 (resident in Slot 0)
+        let (s0, _, _) = cache.resolve_or_select_slot(0).unwrap();
+        assert_eq!(s0, 0);
+
+        // 2. Block 0 calls function in Block 1 (returns to Block 0 offset 0x0020)
+        shadow_stack
+            .push(ReturnFrame {
+                caller_block_id: 0,
+                caller_slot: s0 as u8,
+                return_offset: 0x0020,
+            })
+            .unwrap();
+        let (s1, hit1, _) = cache.resolve_or_select_slot(1).unwrap();
+        assert_eq!((s1, hit1), (1, false)); // Slot 1 populated
+
+        // 3. Block 1 calls function in Block 2 (returns to Block 1 offset 0x0050)
+        shadow_stack
+            .push(ReturnFrame {
+                caller_block_id: 1,
+                caller_slot: s1 as u8,
+                return_offset: 0x0050,
+            })
+            .unwrap();
+        // Eviction happens! Block 0 was LRU, so Block 2 evicts Slot 0!
+        let (s2, hit2, _) = cache.resolve_or_select_slot(2).unwrap();
+        assert_eq!((s2, hit2), (0, false));
+        assert_eq!(cache.slots[0].resident_block, Some(2));
+        assert_eq!(cache.slots[1].resident_block, Some(1));
+
+        // 4. Block 2 returns: pop shadow stack -> resumes Block 1
+        let frame1 = shadow_stack.pop().unwrap();
+        assert_eq!(frame1.caller_block_id, 1);
+        assert_eq!(frame1.return_offset, 0x0050);
+        // Block 1 is STILL resident in Slot 1 -> Cache Hit!
+        let (s1_res, hit1_res, _) = cache.resolve_or_select_slot(frame1.caller_block_id).unwrap();
+        assert_eq!((s1_res, hit1_res), (1, true));
+
+        // 5. Block 1 returns: pop shadow stack -> resumes Block 0
+        let frame0 = shadow_stack.pop().unwrap();
+        assert_eq!(frame0.caller_block_id, 0);
+        assert_eq!(frame0.return_offset, 0x0020);
+        // Block 0 was EVICTED! -> Cache Miss, faults back in!
+        let (s0_res, hit0_res, _) = cache.resolve_or_select_slot(frame0.caller_block_id).unwrap();
+        assert_eq!((s0_res, hit0_res), (0, false));
+        assert_eq!(cache.slots[0].resident_block, Some(0));
+    }
 }
