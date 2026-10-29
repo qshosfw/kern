@@ -377,7 +377,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for VfoApp {
     fn status_bar_config(&self) -> kernel::app::StatusBarConfig<'_> {
         kernel::app::StatusBarConfig {
             visible: true,
-            title: Some("KERN VFO"),
+            title: Some("Radio"),
             ..Default::default()
         }
     }

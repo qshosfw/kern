@@ -1,6 +1,4 @@
 use crate::SysContext;
-#[cfg(feature = "app_tasks")]
-use crate::apps::APP_ID_TASKS;
 use crate::apps::{APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
 use gfx::Canvas;
 use gfx::Color;
@@ -39,18 +37,18 @@ impl GridItem for LauncherEntry {
     }
 }
 
-static mut DYNAMIC_LAUNCHER_ENTRIES: [LauncherEntry; 16] = [
+static mut ENTRIES: [LauncherEntry; 16] = [
     LauncherEntry {
-        title: "Home",
+        title: "Radio",
         icon_8: &crate::apps::vfo::assets::ICON_8,
         icon_16: &crate::apps::vfo::assets::ICON_16,
         target: LauncherTarget::App(APP_ID_VFO),
     }; 16
 ];
-static mut PKG_TITLES: [[u8; 16]; 8] = [[0; 16]; 8];
-static mut PKG_PATHS: [[u8; 32]; 8] = [[0; 32]; 8];
+static mut TITLES: [[u8; 16]; 8] = [[0; 16]; 8];
+static mut PATHS: [[u8; 32]; 8] = [[0; 32]; 8];
 
-pub fn rebuild_launcher_entries(storage: Option<&mut crate::services::SystemStorage>) -> &'static [LauncherEntry] {
+pub fn load_entries(storage: Option<&mut crate::services::SystemStorage>) -> &'static [LauncherEntry] {
     let cat = catalog::get_catalog();
     #[cfg(feature = "filesystem")]
     if let Some(s) = storage {
@@ -61,43 +59,21 @@ pub fn rebuild_launcher_entries(storage: Option<&mut crate::services::SystemStor
         let mut count = 0usize;
 
         // 1. Core Built-In Apps
-        DYNAMIC_LAUNCHER_ENTRIES[count] = LauncherEntry {
-            title: "Home",
+        ENTRIES[count] = LauncherEntry {
+            title: "Radio",
             icon_8: &crate::apps::vfo::assets::ICON_8,
             icon_16: &crate::apps::vfo::assets::ICON_16,
             target: LauncherTarget::App(APP_ID_VFO),
         };
         count += 1;
 
-        DYNAMIC_LAUNCHER_ENTRIES[count] = LauncherEntry {
+        ENTRIES[count] = LauncherEntry {
             title: "Settings",
             icon_8: &crate::apps::settings::assets::ICON_8,
             icon_16: &crate::apps::settings::assets::ICON_16,
             target: LauncherTarget::App(APP_ID_SETTINGS),
         };
         count += 1;
-
-        #[cfg(feature = "app_explorer")]
-        {
-            DYNAMIC_LAUNCHER_ENTRIES[count] = LauncherEntry {
-                title: "Explorer",
-                icon_8: &crate::apps::explorer::assets::ICON_8,
-                icon_16: &crate::apps::explorer::assets::ICON_16,
-                target: LauncherTarget::Shortcut(Shortcut::Explorer),
-            };
-            count += 1;
-        }
-
-        #[cfg(feature = "app_tasks")]
-        {
-            DYNAMIC_LAUNCHER_ENTRIES[count] = LauncherEntry {
-                title: "Tasks",
-                icon_8: &assets::ICON_DIAG_8,
-                icon_16: &assets::ICON_DIAG_16,
-                target: LauncherTarget::App(APP_ID_TASKS),
-            };
-            count += 1;
-        }
 
         // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
         let mut pkg_idx = 0usize;
@@ -108,20 +84,20 @@ pub fn rebuild_launcher_entries(storage: Option<&mut crate::services::SystemStor
 
             let t_bytes = app.title.as_bytes();
             let t_len = t_bytes.len().min(15);
-            PKG_TITLES[pkg_idx][..t_len].copy_from_slice(&t_bytes[..t_len]);
-            PKG_TITLES[pkg_idx][t_len] = 0;
-            let title_str = core::str::from_utf8_unchecked(&PKG_TITLES[pkg_idx][..t_len]);
+            TITLES[pkg_idx][..t_len].copy_from_slice(&t_bytes[..t_len]);
+            TITLES[pkg_idx][t_len] = 0;
+            let title_str = core::str::from_utf8_unchecked(&TITLES[pkg_idx][..t_len]);
 
             let prefix = b"/apps/";
             let f_bytes = app.filename.as_bytes();
             let p_len = prefix.len() + f_bytes.len();
             if p_len < 32 {
-                PKG_PATHS[pkg_idx][..prefix.len()].copy_from_slice(prefix);
-                PKG_PATHS[pkg_idx][prefix.len()..p_len].copy_from_slice(f_bytes);
-                PKG_PATHS[pkg_idx][p_len] = 0;
-                let path_str = core::str::from_utf8_unchecked(&PKG_PATHS[pkg_idx][..p_len]);
+                PATHS[pkg_idx][..prefix.len()].copy_from_slice(prefix);
+                PATHS[pkg_idx][prefix.len()..p_len].copy_from_slice(f_bytes);
+                PATHS[pkg_idx][p_len] = 0;
+                let path_str = core::str::from_utf8_unchecked(&PATHS[pkg_idx][..p_len]);
 
-                DYNAMIC_LAUNCHER_ENTRIES[count] = LauncherEntry {
+                ENTRIES[count] = LauncherEntry {
                     title: title_str,
                     icon_8: &assets::ICON_DIAG_8,
                     icon_16: &assets::ICON_DIAG_16,
@@ -133,7 +109,7 @@ pub fn rebuild_launcher_entries(storage: Option<&mut crate::services::SystemStor
         }
 
         // 3. Built-In Utilities & Information
-        DYNAMIC_LAUNCHER_ENTRIES[count] = LauncherEntry {
+        ENTRIES[count] = LauncherEntry {
             title: "Torch",
             icon_8: &assets::ICON_TORCH_8,
             icon_16: &assets::ICON_TORCH_16,
@@ -141,7 +117,7 @@ pub fn rebuild_launcher_entries(storage: Option<&mut crate::services::SystemStor
         };
         count += 1;
 
-        DYNAMIC_LAUNCHER_ENTRIES[count] = LauncherEntry {
+        ENTRIES[count] = LauncherEntry {
             title: "About",
             icon_8: &assets::ICON_ABOUT_8,
             icon_16: &assets::ICON_ABOUT_16,
@@ -149,7 +125,7 @@ pub fn rebuild_launcher_entries(storage: Option<&mut crate::services::SystemStor
         };
         count += 1;
 
-        &DYNAMIC_LAUNCHER_ENTRIES[..count]
+        &ENTRIES[..count]
     }
 }
 
@@ -165,8 +141,8 @@ pub struct LauncherApp {
 impl LauncherApp {
     pub unsafe fn init_at(ptr: *mut Self) {
         unsafe {
-            let entries = rebuild_launcher_entries(None);
-            (*ptr).model = GridMenuModel::new(entries, "KERN OS");
+            let entries = load_entries(None);
+            (*ptr).model = GridMenuModel::new(entries, "Home");
             (*ptr).view = GridMenuView::new();
             (*ptr).scroll_top = 0;
             (*ptr).scroller = gfx::gui::animation::KineticScroller::new(2);
@@ -387,7 +363,7 @@ impl LauncherApp {
 impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
     fn meta() -> AppMetadata {
         AppMetadata {
-            name: "Launcher",
+            name: "Home",
             icon: &[0; 32],
             icon_8: &[0; 8],
         }
@@ -396,7 +372,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.is_pressed = false;
         self.is_launching = false;
-        let entries = rebuild_launcher_entries(Some(ctx.storage));
+        let entries = load_entries(Some(ctx.storage));
         self.model.items = entries;
         if self.model.selected_idx >= entries.len() {
             self.model.selected_idx = entries.len().saturating_sub(1);
@@ -603,7 +579,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
     }
 
     fn status_bar_config(&self) -> kernel::app::StatusBarConfig<'_> {
-        kernel::app::StatusBarConfig::new("Launcher")
+        kernel::app::StatusBarConfig::new("Home")
     }
 
     #[inline(never)]

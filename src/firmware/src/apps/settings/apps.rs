@@ -9,7 +9,7 @@ use crate::apps::launcher::catalog::get_catalog;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
 
 pub static LAUNCHER_STYLE_OPTIONS: [&'static str; 2] = ["Grid", "List"];
-pub static STARTUP_APP_OPTIONS: [&'static str; 2] = ["Launcher", "Radio"];
+pub static STARTUP_APP_OPTIONS: [&'static str; 2] = ["Home", "Radio"];
 pub static VFO_DUAL_WATCH_OPTIONS: [&'static str; 3] = ["Off", "Dual", "Full"];
 
 pub static APPS_DEFS: &[SettingDef] = &[

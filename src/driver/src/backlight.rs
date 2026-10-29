@@ -4,9 +4,9 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 pub static BACKLIGHT_DUTY: AtomicU8 = AtomicU8::new(0);
-static BACKLIGHT_STEP: AtomicU8 = AtomicU8::new(0);
+static BACKLIGHT_ACC: AtomicU8 = AtomicU8::new(0);
 
-/// SysTick 1000 Hz Software PWM Tick (called inside 100 µs SysTick interrupt handler)
+/// SysTick 20 kHz Delta-Sigma Rate Multiplier Software PWM Tick (called inside 50 µs SysTick interrupt handler)
 #[inline(always)]
 pub fn systick_pwm_tick() {
     let duty = BACKLIGHT_DUTY.load(Ordering::Relaxed);
@@ -19,14 +19,18 @@ pub fn systick_pwm_tick() {
         return;
     }
 
-    let step = BACKLIGHT_STEP.load(Ordering::Relaxed);
-    if step < duty {
+    // Delta-Sigma (Bresenham) rate dispersal:
+    // Distributes pulses evenly across the tick train, maximizing frequency
+    // (up to 10 kHz) and eliminating low-frequency beat patterns against ST7565 LCD scan.
+    let acc = BACKLIGHT_ACC.load(Ordering::Relaxed);
+    let next = acc + duty;
+    if next >= 10 {
+        BACKLIGHT_ACC.store(next - 10, Ordering::Relaxed);
         bsp::pins::BACKLIGHT.set_high();
     } else {
+        BACKLIGHT_ACC.store(next, Ordering::Relaxed);
         bsp::pins::BACKLIGHT.set_low();
     }
-
-    BACKLIGHT_STEP.store((step + 1) % 10, Ordering::Relaxed);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -14,14 +14,14 @@ static MILLIS: AtomicU32 = AtomicU32::new(0);
 /// Sub-millisecond tick accumulator (0..9 at 10 kHz).
 static SUB_MS_COUNT: AtomicU8 = AtomicU8::new(0);
 
-/// SysTick interrupt frequency in Hz (10 kHz = 100 µs interval).
-pub const SYSTICK_HZ: u32 = 10_000;
-pub const TICKS_PER_MS: u8 = 10;
+/// SysTick interrupt frequency in Hz (20 kHz = 50 µs interval).
+pub const SYSTICK_HZ: u32 = 20_000;
+pub const TICKS_PER_MS: u8 = 20;
 
 /// Ticks per microsecond (48 at 48 MHz, 72 at 72 MHz).
 static TICKS_PER_US: AtomicU32 = AtomicU32::new(48);
 
-/// Initialize SysTick for 100 µs (10 kHz) interrupts.
+/// Initialize SysTick for 50 µs (20 kHz) interrupts.
 pub fn init() {
     update_systick_freq(crate::rcc::sysclk_hz());
 }

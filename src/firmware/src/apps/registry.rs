@@ -32,7 +32,7 @@ static mut DYNAMIC_APP: Option<DynamicAppRecord> = None;
 kernel::define_os_apps! {
     context: crate::services::FirmwareContext<'static, 'static>;
     APP_ID_LAUNCHER => crate::apps::LauncherApp [
-        meta: AppMetadata { name: "Launcher", icon: &[0u8; 32], icon_8: &[0u8; 8] },
+        meta: AppMetadata { name: "Home", icon: &[0u8; 32], icon_8: &[0u8; 8] },
         caps: CapabilitySet::NONE
     ],
     APP_ID_VFO => crate::apps::VfoApp [
