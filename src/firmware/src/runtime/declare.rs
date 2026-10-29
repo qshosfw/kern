@@ -13,9 +13,10 @@ use kernel::event::{Event, KeyCode, KeyState};
 use kernel::proc::declare::{
     DYN_ACTIVE_PROCS, DYN_BATTERY_MV, DYN_BATTERY_PCT, DYN_CPU_CLOCK, DYN_RADIO_FREQ_A,
     DYN_RADIO_FREQ_B, DYN_RADIO_RSSI, DYN_RAM_FREE, DYN_RAM_USED, DYN_STACK_MARGIN, DYN_STACK_PEAK,
-    DYN_STORAGE_FREE, DYN_SWAP_USAGE, DYN_UPTIME, DeclareWalker, FLAG_DYNAMIC, ITEM_ACTION,
-    ITEM_INFO, ITEM_LINK, ITEM_SUBMENU, ITEM_TOGGLE, ITEM_VALUE, LAYOUT_FORM, LAYOUT_INFO_CARD,
-    LAYOUT_MENU, LAYOUT_SCROLL_TEXT, TRIGGER_BOOT,
+    DYN_STORAGE_FREE, DYN_SWAP_USAGE, DYN_UPTIME, DeclareCommand, DeclareWalker, FLAG_DYNAMIC,
+    ITEM_ACTION, ITEM_INFO, ITEM_LINK, ITEM_SUBMENU, ITEM_TOGGLE, ITEM_VALUE, LAYOUT_FORM,
+    LAYOUT_INFO_CARD, LAYOUT_MENU, LAYOUT_SCROLL_TEXT, LAYOUT_TABLE_BROWSER, TABLE_ID_CHANNELS,
+    TABLE_ID_CONTACTS, TABLE_ID_DIR, TABLE_ID_HITS, TABLE_ID_PROCS, TABLE_ID_ZONES, TRIGGER_BOOT,
 };
 
 #[inline(never)]
@@ -58,7 +59,26 @@ pub unsafe fn walker_on_event(
             return EventResult::Consumed;
         }
 
-        if walker.handle_key(*code) {
+        let handled = walker.handle_key(*code);
+
+        // Process any pending commands dispatched by actions
+        match walker.take_command() {
+            DeclareCommand::PlayTone { freq_hz, duration_ms } => {
+                ctx.play_tone(freq_hz, duration_ms);
+            }
+            DeclareCommand::LaunchApp { app_id } => {
+                ctx.post_event(crate::apps::Shortcut::LaunchApp(app_id).into());
+            }
+            DeclareCommand::CallService { interface_id, method_id, param } => {
+                let _ = (interface_id, method_id, param);
+            }
+            DeclareCommand::EmitEvent { event_code, payload } => {
+                let _ = (event_code, payload);
+            }
+            DeclareCommand::Notify { .. } | DeclareCommand::None => {}
+        }
+
+        if handled {
             EventResult::Consumed
         } else if *code == KeyCode::Exit {
             ctx.post_event(crate::apps::Shortcut::LaunchApp(0).into());
@@ -302,7 +322,7 @@ pub unsafe fn walker_render(
     ctx: &FirmwareContext<'static, 'static>,
     sb: &mut StatusBarConfig<'_>,
 ) {
-    let walker = unsafe { &*(ptr as *const DeclareWalker) };
+    let walker = unsafe { &mut *(ptr as *mut DeclareWalker) };
     let font = &gfx::fonts::tomthumb::FONT;
 
     let node = if let Some(n) = walker.nodes.get(walker.current_node_idx) {
@@ -380,6 +400,120 @@ pub unsafe fn walker_render(
                         .unwrap_or("");
                     gfx::text::draw_str(canvas, 4, y, line, font, Color::Fill);
                 }
+            }
+        }
+        LAYOUT_TABLE_BROWSER => {
+            let table_id = node.first_item_offset;
+            // Draw table column headers
+            canvas.draw_horizontal_line(0, 9, 128, Color::Fill);
+            canvas.draw_horizontal_line(0, 16, 128, Color::DarkGray);
+
+            let (header_col1, header_col2) = match table_id {
+                TABLE_ID_DIR => ("FILE", "SIZE"),
+                TABLE_ID_PROCS => ("TASK", "STATE"),
+                TABLE_ID_CHANNELS => ("CH", "FREQ"),
+                TABLE_ID_CONTACTS => ("CALLSIGN", "ID"),
+                TABLE_ID_HITS => ("FREQ", "RSSI"),
+                TABLE_ID_ZONES => ("ZONE", "MEMBERS"),
+                _ => ("ITEM", "VALUE"),
+            };
+
+            gfx::text::draw_str(canvas, 4, 15, header_col1, font, Color::Fill);
+            let w2 = gfx::text::str_width(header_col2, font) as i16;
+            gfx::text::draw_str(canvas, 122 - w2, 15, header_col2, font, Color::Fill);
+
+            // Determine row count for dynamic tables
+            if total_items == 0 {
+                match table_id {
+                    TABLE_ID_PROCS => {
+                        walker.table_row_count = ctx.proc_table().active_count() as u16;
+                    }
+                    _ => {
+                        if walker.table_row_count == 0 {
+                            walker.table_row_count = 1;
+                        }
+                    }
+                }
+            }
+
+            let eff_total = if total_items > 0 {
+                total_items
+            } else {
+                walker.table_row_count as usize
+            };
+
+            let display_count = eff_total.saturating_sub(walker.scroll_top).min(visible_count);
+            for i in 0..display_count {
+                let row_idx = walker.scroll_top + i;
+                let is_selected = row_idx == walker.selected_item;
+                let y = 23 + (i as i16) * 7;
+
+                if is_selected {
+                    canvas.fill_rect(2, (y - 5).max(0) as u8, 122, 6, Color::Fill);
+                    canvas.clear_corners(2, (y - 5).max(0) as u8, 122, 6);
+                }
+                let color = if is_selected { Color::Clear } else { Color::Fill };
+
+                let mut name_buf = [0u8; 16];
+                let mut val_buf = [0u8; 16];
+                let (name, val) = match table_id {
+                    TABLE_ID_PROCS => {
+                        let mut found_name = "proc";
+                        let mut found_state = "RUN";
+                        let mut cur = 0;
+                        for p in ctx.proc_table().slots.iter() {
+                            if p.state != kernel::proc::ProcState::Dormant {
+                                if cur == row_idx {
+                                    found_name = p.name.as_str();
+                                    found_state = match p.state {
+                                        kernel::proc::ProcState::Running => "RUN",
+                                        kernel::proc::ProcState::Ready => "RDY",
+                                        kernel::proc::ProcState::Suspended => "SUSP",
+                                        kernel::proc::ProcState::ServiceIdle => "IDLE",
+                                        kernel::proc::ProcState::Hibernated => "SWAP",
+                                        _ => "STOP",
+                                    };
+                                    break;
+                                }
+                                cur += 1;
+                            }
+                        }
+                        (found_name, found_state)
+                    }
+                    _ => {
+                        if let Some(it) = walker.items.get(node.first_item_offset as usize + row_idx) {
+                            let l = walker.labels.get(it.label_offset as usize).copied().unwrap_or("");
+                            let v = resolve_item_info_str(walker, ctx, *it, &mut val_buf);
+                            (l, v)
+                        } else {
+                            let num_s = gfx::text::format_u32((row_idx + 1) as u32, &mut name_buf);
+                            (num_s, "")
+                        }
+                    }
+                };
+
+                if !name.is_empty() {
+                    gfx::text::draw_str(canvas, 4, y, name, font, color);
+                }
+                if !val.is_empty() {
+                    let vw = gfx::text::str_width(val, font) as i16;
+                    gfx::text::draw_str(canvas, 122 - vw, y, val, font, color);
+                }
+            }
+
+            // Scrollbar for table browser
+            if eff_total > visible_count {
+                let track_h = 35u8;
+                let thumb_h = ((visible_count as u32 * track_h as u32) / eff_total as u32).max(3) as u8;
+                let max_scroll = (eff_total - visible_count) as u32;
+                let thumb_offset = if max_scroll > 0 {
+                    ((walker.scroll_top as u32 * (track_h - thumb_h) as u32) / max_scroll) as u8
+                } else {
+                    0
+                };
+                let thumb_y = 17u8 + thumb_offset;
+                canvas.draw_vertical_line(126, 17, track_h, Color::DarkGray);
+                canvas.fill_rect(125, thumb_y, 3, thumb_h, Color::Fill);
             }
         }
         LAYOUT_MENU | LAYOUT_FORM | _ => {

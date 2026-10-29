@@ -33,6 +33,15 @@ pub const LAYOUT_SCROLL_TEXT: u8 = 2;
 pub const LAYOUT_INFO_CARD: u8 = 3;
 pub const LAYOUT_TABLE_BROWSER: u8 = 4;
 
+// ── Table Identifiers for LAYOUT_TABLE_BROWSER ─────────────────────────────
+pub const TABLE_ID_NONE: u16 = 0;
+pub const TABLE_ID_DIR: u16 = 1;
+pub const TABLE_ID_CHANNELS: u16 = 2;
+pub const TABLE_ID_CONTACTS: u16 = 3;
+pub const TABLE_ID_PROCS: u16 = 4;
+pub const TABLE_ID_HITS: u16 = 5;
+pub const TABLE_ID_ZONES: u16 = 6;
+
 // ── UI Item Kinds (Section 10.2) ────────────────────────────────────────────
 pub const ITEM_ACTION: u8 = 0;
 pub const ITEM_TOGGLE: u8 = 1;
@@ -151,6 +160,25 @@ pub const MAX_RULES: usize = 8;
 pub const MAX_ACTIONS: usize = 16;
 pub const MAX_SCHEDULES: usize = 4;
 
+/// Bounded navigation history frame for exact cursor and scroll restoration on Exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NavFrame {
+    pub node_idx: usize,
+    pub selected_item: usize,
+    pub scroll_top: usize,
+}
+
+/// Dynamic system or service command issued by Declare action execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclareCommand {
+    None,
+    CallService { interface_id: u16, method_id: u16, param: u16 },
+    EmitEvent { event_code: u16, payload: u16 },
+    PlayTone { freq_hz: u16, duration_ms: u16 },
+    Notify { message_offset: u16 },
+    LaunchApp { app_id: u8 },
+}
+
 /// Declare Walker (Class Runtime Engine).
 ///
 /// Executes the declarative graph, manages UI screen projections onto the Canvas,
@@ -167,7 +195,9 @@ pub struct DeclareWalker {
     pub current_node_idx: usize,
     pub selected_item: usize,
     pub scroll_top: usize,
-    pub nav_stack: heapless::Vec<usize, 4>,
+    pub table_row_count: u16,
+    pub nav_stack: heapless::Vec<NavFrame, 4>,
+    pub pending_command: DeclareCommand,
 }
 
 impl DeclareWalker {
@@ -184,7 +214,9 @@ impl DeclareWalker {
             current_node_idx: 0,
             selected_item: 0,
             scroll_top: 0,
+            table_row_count: 0,
             nav_stack: heapless::Vec::new(),
+            pending_command: DeclareCommand::None,
         }
     }
 
@@ -200,7 +232,16 @@ impl DeclareWalker {
         self.current_node_idx = 0;
         self.selected_item = 0;
         self.scroll_top = 0;
+        self.table_row_count = 0;
         self.nav_stack.clear();
+        self.pending_command = DeclareCommand::None;
+    }
+
+    #[inline(always)]
+    pub fn take_command(&mut self) -> DeclareCommand {
+        let cmd = self.pending_command;
+        self.pending_command = DeclareCommand::None;
+        cmd
     }
 
     #[inline(always)]
@@ -255,9 +296,39 @@ impl DeclareWalker {
                 ACTION_NAVIGATE => {
                     let target_node = act.a as usize;
                     if target_node < self.nodes.len() {
+                        let _ = self.nav_stack.push(NavFrame {
+                            node_idx: self.current_node_idx,
+                            selected_item: self.selected_item,
+                            scroll_top: self.scroll_top,
+                        });
                         self.current_node_idx = target_node;
                         self.selected_item = 0;
+                        self.scroll_top = 0;
                     }
+                }
+                ACTION_CALL_SVC => {
+                    self.pending_command = DeclareCommand::CallService {
+                        interface_id: act.a,
+                        method_id: act.b,
+                        param: act.c,
+                    };
+                }
+                ACTION_PLAY_ASSET => {
+                    self.pending_command = DeclareCommand::PlayTone {
+                        freq_hz: act.a,
+                        duration_ms: act.b,
+                    };
+                }
+                ACTION_EMIT_EVENT => {
+                    self.pending_command = DeclareCommand::EmitEvent {
+                        event_code: act.a,
+                        payload: act.b,
+                    };
+                }
+                ACTION_NOTIFY => {
+                    self.pending_command = DeclareCommand::Notify {
+                        message_offset: act.a,
+                    };
                 }
                 _ => {}
             }
@@ -289,7 +360,11 @@ impl DeclareWalker {
             return false;
         };
 
-        let item_count = node.item_count as usize;
+        let item_count = if node.layout == LAYOUT_TABLE_BROWSER && node.item_count == 0 {
+            self.table_row_count as usize
+        } else {
+            node.item_count as usize
+        };
 
         match code {
             KeyCode::Up | KeyCode::Key2 => {
@@ -349,6 +424,14 @@ impl DeclareWalker {
                 }
             }
             KeyCode::Menu => {
+                if node.layout == LAYOUT_TABLE_BROWSER && (node.first_item_offset as usize) >= self.items.len() {
+                    if let Some(act) = self.actions.first() {
+                        let op = act.op;
+                        self.execute_action(0);
+                        self.trigger_rules(TRIGGER_KEY, op as u16);
+                        return true;
+                    }
+                }
                 let item_idx = (node.first_item_offset as usize) + self.selected_item;
                 if let Some(item) = self.items.get(item_idx).copied() {
                     match item.kind {
@@ -370,7 +453,11 @@ impl DeclareWalker {
                         ITEM_SUBMENU => {
                             let target_node = item.target as usize;
                             if target_node < self.nodes.len() {
-                                let _ = self.nav_stack.push(self.current_node_idx);
+                                let _ = self.nav_stack.push(NavFrame {
+                                    node_idx: self.current_node_idx,
+                                    selected_item: self.selected_item,
+                                    scroll_top: self.scroll_top,
+                                });
                                 self.current_node_idx = target_node;
                                 self.selected_item = 0;
                                 self.scroll_top = 0;
@@ -383,9 +470,9 @@ impl DeclareWalker {
             }
             KeyCode::Exit => {
                 if let Some(prev) = self.nav_stack.pop() {
-                    self.current_node_idx = prev;
-                    self.selected_item = 0;
-                    self.scroll_top = 0;
+                    self.current_node_idx = prev.node_idx;
+                    self.selected_item = prev.selected_item;
+                    self.scroll_top = prev.scroll_top;
                     true
                 } else if self.current_node_idx > 0 {
                     self.current_node_idx = 0;
@@ -550,7 +637,67 @@ mod tests {
         assert_eq!(walker.current_node_idx, 0);
         assert!(walker.nav_stack.is_empty());
 
+        // Context preservation verification:
+        // Set root cursor and scroll position, enter submenu, and ensure Exit restores exact focus
+        walker.selected_item = 5;
+        walker.scroll_top = 3;
+        let _ = walker.nav_stack.push(NavFrame {
+            node_idx: walker.current_node_idx,
+            selected_item: walker.selected_item,
+            scroll_top: walker.scroll_top,
+        });
+        walker.current_node_idx = 1;
+        walker.selected_item = 0;
+        walker.scroll_top = 0;
+
+        assert_eq!(walker.current_node_idx, 1);
+        assert_eq!(walker.selected_item, 0);
+        assert_eq!(walker.scroll_top, 0);
+
+        assert!(walker.handle_key(KeyCode::Exit));
+        assert_eq!(walker.current_node_idx, 0);
+        assert_eq!(walker.selected_item, 5);
+        assert_eq!(walker.scroll_top, 3);
+
         // Exit at Root Node returns false so app can exit to Home
         assert!(!walker.handle_key(KeyCode::Exit));
+    }
+
+    #[test]
+    fn test_walker_action_commands_and_table_browser() {
+        let mut walker = DeclareWalker::new("TableApp");
+        let _ = walker.nodes.push(DeclareNode {
+            node_id: 0,
+            layout: LAYOUT_TABLE_BROWSER,
+            item_count: 0, // Dynamic table
+            title_offset: 0,
+            first_item_offset: TABLE_ID_DIR,
+        });
+        let _ = walker.actions.push(ActionRecord {
+            op: ACTION_CALL_SVC,
+            flags: 0,
+            a: 0x0004, // Storage
+            b: 1,      // Read
+            c: 0,
+        });
+        walker.table_row_count = 10;
+
+        // Navigate down dynamic rows
+        assert_eq!(walker.selected_item, 0);
+        walker.handle_key(KeyCode::Down);
+        assert_eq!(walker.selected_item, 1);
+
+        // Press Menu to trigger table action
+        walker.handle_key(KeyCode::Menu);
+        assert_eq!(
+            walker.take_command(),
+            DeclareCommand::CallService {
+                interface_id: 0x0004,
+                method_id: 1,
+                param: 0,
+            }
+        );
+        // Command consumed
+        assert_eq!(walker.take_command(), DeclareCommand::None);
     }
 }
