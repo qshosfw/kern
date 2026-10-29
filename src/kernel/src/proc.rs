@@ -295,4 +295,103 @@ mod tests {
         assert!(!pcb.is_hibernated());
         assert_eq!(pcb.compressed_bytes, 0);
     }
+
+    #[test]
+    fn test_process_table_daemon_accounting_and_multi_app_concurrency() {
+        let mut table = ProcessTable::<8>::new();
+
+        // 1. Spawn system daemons
+        let pid_kernel = table
+            .spawn(
+                "Kernel",
+                0xF0,
+                crate::sched::Priority::Safety,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+        let pid_radio = table
+            .spawn(
+                "Radio",
+                0xF1,
+                crate::sched::Priority::Radio,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+        let pid_power = table
+            .spawn(
+                "Power",
+                0xF2,
+                crate::sched::Priority::Safety,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+
+        // 2. Spawn foreground App 1 (VFO, app_id 0)
+        let pid_vfo = table
+            .spawn(
+                "Radio",
+                0,
+                crate::sched::Priority::Ui,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+
+        assert_eq!(pid_kernel, Pid(1));
+        assert_eq!(pid_radio, Pid(2));
+        assert_eq!(pid_power, Pid(3));
+        assert_eq!(pid_vfo, Pid(4));
+
+        // Mark radio daemon as ServiceIdle
+        table.find_mut(pid_radio).unwrap().set_state(ProcState::ServiceIdle);
+
+        // 3. Simulate 5 scheduler ticks: daemons receive background activations
+        for _ in 0..5 {
+            table.find_mut(pid_kernel).unwrap().ledger.record_activation();
+            table.find_mut(pid_radio).unwrap().ledger.record_activation();
+            table.find_mut(pid_power).unwrap().ledger.record_activation();
+            table.find_mut(pid_vfo).unwrap().ledger.record_activation();
+            table.find_mut(pid_vfo).unwrap().ledger.record_event();
+        }
+
+        assert_eq!(table.find(pid_kernel).unwrap().ledger.cpu_ticks, 5);
+        assert_eq!(table.find(pid_radio).unwrap().ledger.cpu_ticks, 5);
+        assert_eq!(table.find(pid_power).unwrap().ledger.cpu_ticks, 5);
+        assert_eq!(table.find(pid_vfo).unwrap().ledger.cpu_ticks, 5);
+        assert_eq!(table.find(pid_vfo).unwrap().ledger.ipc_events, 5);
+
+        // 4. Switch foreground app from VFO (0) to Explorer (app_id 10)
+        table.find_mut(pid_vfo).unwrap().set_state(ProcState::Suspended);
+        let pid_explorer = table
+            .spawn(
+                "Explorer",
+                10,
+                crate::sched::Priority::Ui,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+        table.find_mut(pid_explorer).unwrap().set_state(ProcState::Running);
+
+        // 5. Simulate 3 more background ticks while Explorer is active
+        for _ in 0..3 {
+            table.find_mut(pid_kernel).unwrap().ledger.record_activation();
+            table.find_mut(pid_radio).unwrap().ledger.record_activation();
+            table.find_mut(pid_power).unwrap().ledger.record_activation();
+            table.find_mut(pid_explorer).unwrap().ledger.record_activation();
+        }
+
+        // Background daemons continued running concurrently!
+        assert_eq!(table.find(pid_radio).unwrap().ledger.cpu_ticks, 8);
+        assert_eq!(table.find(pid_radio).unwrap().state, ProcState::ServiceIdle);
+        assert_eq!(table.find(pid_kernel).unwrap().ledger.cpu_ticks, 8);
+        // VFO state was preserved in Suspended state
+        assert_eq!(table.find(pid_vfo).unwrap().state, ProcState::Suspended);
+        assert_eq!(table.find(pid_vfo).unwrap().ledger.cpu_ticks, 5);
+        // Explorer accumulated 3 activations
+        assert_eq!(table.find(pid_explorer).unwrap().ledger.cpu_ticks, 3);
+    }
 }

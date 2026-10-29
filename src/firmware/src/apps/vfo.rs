@@ -1,6 +1,6 @@
 use crate::services::power::PowerService;
 use crate::services::radio::{
-    ClientId, ClientToken, CrossBandMode, DualWatchMode, LockTier, RadioEvent, RfClientParticipant,
+    ClientId, ClientToken, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant,
     RfSquelch, TxPermission,
 };
 // Main Dual VFO & Telemetry Application
@@ -33,8 +33,6 @@ pub struct VfoApp {
     repeater: gfx::gui::KeyRepeater,
     latched: bool,
     last_ptt_press_ms: u32,
-    last_coord_tick_ms: u32,
-    coord_accum_10ms: u16,
 }
 
 impl VfoApp {
@@ -43,8 +41,6 @@ impl VfoApp {
             (*ptr).repeater = gfx::gui::KeyRepeater::new(8, 2);
             (*ptr).latched = false;
             (*ptr).last_ptt_press_ms = 0;
-            (*ptr).last_coord_tick_ms = 0;
-            (*ptr).coord_accum_10ms = 0;
         }
     }
 
@@ -231,40 +227,10 @@ fn draw_vfo(
 }
 
 #[inline(never)]
-fn handle_radio_coord_tick(
+fn handle_vfo_repeat_tick(
     repeater: &mut gfx::gui::KeyRepeater,
     ctx: &mut SysContext,
 ) -> EventResult {
-    if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(0xF1) {
-        pcb.ledger.record_activation();
-        let is_busy = ctx.state.coord.is_transmitting
-            || ctx.state.coord.carrier_active
-            || ctx.radio.is_carrier_open();
-        pcb.set_state(if is_busy {
-            kernel::proc::ProcState::Running
-        } else {
-            kernel::proc::ProcState::ServiceIdle
-        });
-    }
-    let radio_ev = ctx.state.coord.tick_10ms(ctx.radio);
-    match radio_ev {
-        RadioEvent::None => {}
-        RadioEvent::TotWarning { .. } => {
-            if ctx.config.audio.key_beep != 0 {
-                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
-            }
-        }
-        RadioEvent::TotExpired => {
-            ctx.state.sync_from_coord();
-            if ctx.config.audio.key_beep != 0 {
-                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
-            }
-        }
-        _ => {
-            ctx.state.sync_from_coord();
-        }
-    }
-
     if let Some(repeat_code) = repeater.tick() {
         if matches!(repeat_code, KeyCode::Up | KeyCode::Down) {
             let res = step_freq(ctx, repeat_code == KeyCode::Up);
@@ -340,26 +306,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for VfoApp {
         ctx.state.rssi_dbm = ctx.radio.get_rssi_dbm();
 
         match *event {
-            Event::Tick => {
-                let now = py32_hal::delay::millis();
-                let dt = if self.last_coord_tick_ms == 0 {
-                    10
-                } else {
-                    now.wrapping_sub(self.last_coord_tick_ms).min(250) as u16
-                };
-                self.last_coord_tick_ms = now;
-                self.coord_accum_10ms = self.coord_accum_10ms.saturating_add(dt);
-
-                let mut res = EventResult::Ignored;
-                while self.coord_accum_10ms >= 10 {
-                    self.coord_accum_10ms -= 10;
-                    let step_res = handle_radio_coord_tick(&mut self.repeater, ctx);
-                    if step_res == EventResult::Consumed {
-                        res = EventResult::Consumed;
-                    }
-                }
-                res
-            }
+            Event::Tick => handle_vfo_repeat_tick(&mut self.repeater, ctx),
             Event::Key { code, state } => {
                 self.repeater.handle_key(code, state);
                 if code == KeyCode::Ptt {

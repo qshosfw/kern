@@ -199,6 +199,56 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn tick_background_services<'a>(
+        &mut self,
+        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+    ) {
+        // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
+        #[cfg(feature = "radio")]
+        {
+            if let Some(pcb) = proc_table_mut().find_mut_by_app(0xF1) {
+                pcb.ledger.record_activation();
+                let is_busy = ctx.state.coord.is_transmitting
+                    || ctx.state.coord.carrier_active
+                    || ctx.radio.is_carrier_open();
+                pcb.set_state(if is_busy {
+                    kernel::proc::ProcState::Running
+                } else {
+                    kernel::proc::ProcState::ServiceIdle
+                });
+            }
+            let radio_ev = ctx.state.coord.tick_10ms(ctx.radio);
+            match radio_ev {
+                crate::services::radio::RadioEvent::None => {}
+                crate::services::radio::RadioEvent::TotWarning { .. } => {
+                    if ctx.config.audio.key_beep != 0 {
+                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+                    }
+                }
+                crate::services::radio::RadioEvent::TotExpired => {
+                    ctx.state.sync_from_coord();
+                    if ctx.config.audio.key_beep != 0 {
+                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+                    }
+                }
+                _ => {
+                    ctx.state.sync_from_coord();
+                }
+            }
+        }
+
+        // 2. Power Management & Battery Supervisor (PID 3)
+        if let Some(pcb) = proc_table_mut().find_mut_by_app(0xF2) {
+            pcb.ledger.record_activation();
+        }
+
+        // 3. System Kernel & Watch Uptime Service (PID 1)
+        if let Some(pcb) = proc_table_mut().find_mut_by_app(0xF0) {
+            pcb.ledger.record_activation();
+        }
+    }
+
+    #[inline(never)]
     pub fn dispatch_event<'a>(
         &mut self,
         ctx: &mut crate::services::FirmwareContext<'a, '_>,
@@ -319,6 +369,7 @@ impl Orchestrator {
         }
 
         if matches!(event, Event::Tick) {
+            self.tick_background_services(ctx);
             if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
                 pcb.ledger.record_activation();
             }
