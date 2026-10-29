@@ -400,3 +400,157 @@ impl DeclareWalker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_walker_navigation_and_scrolling() {
+        let mut walker = DeclareWalker::new("TestApp");
+        let _ = walker.nodes.push(DeclareNode {
+            node_id: 0,
+            layout: LAYOUT_MENU,
+            item_count: 8,
+            title_offset: 0,
+            first_item_offset: 0,
+        });
+        for i in 0..8 {
+            let _ = walker.items.push(DeclareItem {
+                kind: ITEM_ACTION,
+                flags: 0,
+                label_offset: i as u16,
+                target: 0,
+                value_ref: 0,
+                aux: 0,
+                reserved: 0,
+            });
+        }
+
+        assert_eq!(walker.selected_item, 0);
+        assert_eq!(walker.scroll_top, 0);
+
+        // Move down past visible 5 rows
+        for _ in 0..5 {
+            walker.handle_key(KeyCode::Down);
+        }
+        assert_eq!(walker.selected_item, 5);
+        assert_eq!(walker.scroll_top, 1); // Scrolled to keep row 5 visible
+
+        // Wrap around to top
+        for _ in 0..3 {
+            walker.handle_key(KeyCode::Down);
+        }
+        assert_eq!(walker.selected_item, 0);
+        assert_eq!(walker.scroll_top, 0);
+
+        // Wrap around upwards
+        walker.handle_key(KeyCode::Up);
+        assert_eq!(walker.selected_item, 7);
+        assert_eq!(walker.scroll_top, 3);
+    }
+
+    #[test]
+    fn test_walker_interactive_form_values_and_toggles() {
+        let mut walker = DeclareWalker::new("FormApp");
+        let _ = walker.nodes.push(DeclareNode {
+            node_id: 0,
+            layout: LAYOUT_FORM,
+            item_count: 2,
+            title_offset: 0,
+            first_item_offset: 0,
+        });
+        // Item 0: ITEM_VALUE on key 10
+        let _ = walker.items.push(DeclareItem {
+            kind: ITEM_VALUE,
+            flags: 0,
+            label_offset: 0,
+            target: 0,
+            value_ref: 10,
+            aux: 0,
+            reserved: 0,
+        });
+        // Item 1: ITEM_TOGGLE on key 20
+        let _ = walker.items.push(DeclareItem {
+            kind: ITEM_TOGGLE,
+            flags: 0,
+            label_offset: 1,
+            target: 0,
+            value_ref: 20,
+            aux: 0,
+            reserved: 0,
+        });
+
+        // Test adjusting integer value with Key6 (Right / +1) and Key4 (Left / -1)
+        assert_eq!(walker.state.get_i32(10), 0);
+        walker.handle_key(KeyCode::Key6);
+        assert_eq!(walker.state.get_i32(10), 1);
+        walker.handle_key(KeyCode::Key6);
+        assert_eq!(walker.state.get_i32(10), 2);
+        walker.handle_key(KeyCode::Key4);
+        assert_eq!(walker.state.get_i32(10), 1);
+
+        // Move to toggle item and flip state with Menu key
+        walker.handle_key(KeyCode::Down);
+        assert_eq!(walker.selected_item, 1);
+        assert!(!walker.state.get_bool(20));
+        walker.handle_key(KeyCode::Menu);
+        assert!(walker.state.get_bool(20));
+        walker.handle_key(KeyCode::Menu);
+        assert!(!walker.state.get_bool(20));
+    }
+
+    #[test]
+    fn test_walker_submenu_and_nav_stack() {
+        let mut walker = DeclareWalker::new("NavApp");
+        // Root Node (0)
+        let _ = walker.nodes.push(DeclareNode {
+            node_id: 0,
+            layout: LAYOUT_MENU,
+            item_count: 1,
+            title_offset: 0,
+            first_item_offset: 0,
+        });
+        // Submenu Item pointing to Node 1
+        let _ = walker.items.push(DeclareItem {
+            kind: ITEM_SUBMENU,
+            flags: 0,
+            label_offset: 0,
+            target: 1,
+            value_ref: 0,
+            aux: 0,
+            reserved: 0,
+        });
+        // Sub Node (1)
+        let _ = walker.nodes.push(DeclareNode {
+            node_id: 1,
+            layout: LAYOUT_MENU,
+            item_count: 1,
+            title_offset: 1,
+            first_item_offset: 1,
+        });
+        let _ = walker.items.push(DeclareItem {
+            kind: ITEM_ACTION,
+            flags: 0,
+            label_offset: 2,
+            target: 0,
+            value_ref: 0,
+            aux: 0,
+            reserved: 0,
+        });
+
+        // Enter submenu
+        assert_eq!(walker.current_node_idx, 0);
+        walker.handle_key(KeyCode::Menu);
+        assert_eq!(walker.current_node_idx, 1);
+        assert_eq!(walker.nav_stack.len(), 1);
+
+        // Exit pops nav_stack and returns to Root Node
+        assert!(walker.handle_key(KeyCode::Exit));
+        assert_eq!(walker.current_node_idx, 0);
+        assert!(walker.nav_stack.is_empty());
+
+        // Exit at Root Node returns false so app can exit to Home
+        assert!(!walker.handle_key(KeyCode::Exit));
+    }
+}
