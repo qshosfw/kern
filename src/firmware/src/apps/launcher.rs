@@ -37,18 +37,18 @@ impl GridItem for LauncherEntry {
     }
 }
 
-static mut ENTRIES: [LauncherEntry; 16] = [
-    LauncherEntry {
-        title: "Radio",
-        icon_8: &crate::apps::vfo::assets::ICON_8,
-        icon_16: &crate::apps::vfo::assets::ICON_16,
-        target: LauncherTarget::App(APP_ID_VFO),
-    }; 16
-];
+static mut ENTRIES: [LauncherEntry; 16] = [LauncherEntry {
+    title: "Radio",
+    icon_8: &crate::apps::vfo::assets::ICON_8,
+    icon_16: &crate::apps::vfo::assets::ICON_16,
+    target: LauncherTarget::App(APP_ID_VFO),
+}; 16];
 static mut TITLES: [[u8; 16]; 8] = [[0; 16]; 8];
 static mut PATHS: [[u8; 32]; 8] = [[0; 32]; 8];
 
-pub fn load_entries(storage: Option<&mut crate::services::SystemStorage>) -> &'static [LauncherEntry] {
+pub fn load_entries(
+    storage: Option<&mut crate::services::SystemStorage>,
+) -> &'static [LauncherEntry] {
     let cat = catalog::get_catalog();
     #[cfg(feature = "filesystem")]
     if let Some(s) = storage {
@@ -388,7 +388,11 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.is_pressed = false;
         self.is_launching = false;
-        reload_launcher(ctx.storage);
+        let entries = load_entries(Some(ctx.storage));
+        self.model.items = entries;
+        if self.model.selected_idx >= entries.len() {
+            self.model.selected_idx = entries.len().saturating_sub(1);
+        }
         self.model.nav_layout = ctx.config.keys.nav_layout;
         self.model.show_numbers = ctx.config.apps.show_numbers != 0;
         self.model.show_labels = ctx.config.apps.show_labels != 0;
