@@ -297,6 +297,8 @@ pub fn load_native_from_storage(
 }
 
 /// Invokes a Native or Paged Thumb-1 entry point with the guest GOT base register (r9) bound.
+/// Validates Thumb alignment, arena memory bounds, and stack margin before branching.
+/// Returns `0xFFFF_FFFF` on pre-flight validation failure.
 #[inline(never)]
 pub unsafe fn invoke_krx_native(
     entry_point: usize,
@@ -305,6 +307,27 @@ pub unsafe fn invoke_krx_native(
     api_table: *const KrxApiTable,
     param: *const (),
 ) -> u32 {
+    let slot = slot_ref();
+    let slot_start = slot.buffer.as_ptr() as usize;
+    let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
+
+    // 1. Validate Thumb-1 mode bit and code bounds
+    let code_addr = entry_point & !1;
+    if (entry_point & 1) == 0 || code_addr < slot_start || code_addr >= slot_end {
+        return 0xFFFF_FFFF;
+    }
+
+    // 2. Validate GOT base alignment and memory bounds
+    let got_addr = got_base as usize;
+    if (got_addr & 3) != 0 || got_addr < slot_start || got_addr >= slot_end {
+        return 0xFFFF_FFFF;
+    }
+
+    // 3. Ensure minimum stack headroom exists (prevent Cortex-M0+ stack exhaustion)
+    if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 256 {
+        return 0xFFFF_FFFF;
+    }
+
     #[cfg(target_arch = "arm")]
     {
         let res: u32;
@@ -335,11 +358,11 @@ pub unsafe fn invoke_krx_native(
 }
 
 pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 'static>) {
-    let slot = slot_ref();
+    let slot = slot_mut();
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
             ACTIVE_CTX = ctx as *mut _;
-            let _ = invoke_krx_native(
+            let res = invoke_krx_native(
                 slot.entry_point,
                 slot.got_base,
                 KRX_OP_START,
@@ -347,6 +370,9 @@ pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 
                 core::ptr::null(),
             );
             ACTIVE_CTX = core::ptr::null_mut();
+            if res == 0xFFFF_FFFF {
+                slot.is_loaded = false;
+            }
         }
     }
 }
@@ -360,27 +386,35 @@ pub unsafe fn native_on_event(
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
             ACTIVE_CTX = ctx as *mut _;
-            let (key_val, payload_val) = match ev {
+            let (kind_val, key_val, flags_val, payload_val) = match ev {
                 Event::Key { code, state } => {
                     let s_val = match state {
                         KeyState::Pressed => 0u32,
                         KeyState::Released => 1u32,
                         KeyState::Held => 2u32,
                     };
-                    (*code as u8, s_val)
+                    (KRX_EV_KEY, *code as u8, 0u8, s_val)
                 }
-                Event::Encoder(dir) => (0u8, *dir as u32),
-                _ => (0u8, 0u32),
+                Event::Encoder(dir) => (KRX_EV_ENCODER, 0u8, 0u8, *dir as u32),
+                Event::Tick => (KRX_EV_TICK, 0u8, 0u8, 0u32),
+                Event::Bus(bus_ev) => (
+                    KRX_EV_BUS,
+                    bus_ev.event_id,
+                    (bus_ev.topic.0 & 0xFF) as u8,
+                    bus_ev.data,
+                ),
+                Event::Usb(usb_ev) => (KRX_EV_USB, *usb_ev as u8, 0u8, 0u32),
+                Event::Charging(chg) => (KRX_EV_POWER, *chg as u8, 0u8, 0u32),
+                _ => (KRX_EV_NONE, 0u8, 0u8, 0u32),
             };
+            if kind_val == KRX_EV_NONE {
+                ACTIVE_CTX = core::ptr::null_mut();
+                return EventResult::Ignored;
+            }
             let krx_ev = KrxEvent {
-                kind: match ev {
-                    Event::Key { .. } => 1,
-                    Event::Encoder(_) => 2,
-                    Event::Tick => 3,
-                    _ => 0,
-                },
+                kind: kind_val,
                 key: key_val,
-                flags: 0,
+                flags: flags_val,
                 reserved: 0,
                 payload: payload_val,
             };
@@ -392,7 +426,7 @@ pub unsafe fn native_on_event(
                 &krx_ev as *const _ as *const (),
             );
             ACTIVE_CTX = core::ptr::null_mut();
-            if res != 0 {
+            if res != 0 && res != 0xFFFF_FFFF {
                 EventResult::Consumed
             } else {
                 EventResult::Ignored

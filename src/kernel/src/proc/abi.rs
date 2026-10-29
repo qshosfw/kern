@@ -41,6 +41,14 @@ pub struct KrxSymbol {
     pub duration_us: u16,
 }
 
+pub const KRX_EV_NONE: u8 = 0;
+pub const KRX_EV_KEY: u8 = 1;
+pub const KRX_EV_ENCODER: u8 = 2;
+pub const KRX_EV_TICK: u8 = 3;
+pub const KRX_EV_BUS: u8 = 4;
+pub const KRX_EV_USB: u8 = 5;
+pub const KRX_EV_POWER: u8 = 6;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct KrxEvent {
@@ -49,6 +57,43 @@ pub struct KrxEvent {
     pub flags: u8,
     pub reserved: u8,
     pub payload: u32,
+}
+
+impl KrxEvent {
+    #[inline(always)]
+    pub const fn is_key(&self) -> bool {
+        self.kind == KRX_EV_KEY
+    }
+
+    #[inline(always)]
+    pub const fn is_encoder(&self) -> bool {
+        self.kind == KRX_EV_ENCODER
+    }
+
+    #[inline(always)]
+    pub const fn is_tick(&self) -> bool {
+        self.kind == KRX_EV_TICK
+    }
+
+    #[inline(always)]
+    pub const fn is_bus(&self) -> bool {
+        self.kind == KRX_EV_BUS
+    }
+
+    #[inline(always)]
+    pub const fn is_radio_bus(&self) -> bool {
+        self.kind == KRX_EV_BUS && self.flags == (crate::ipc::Topic::RADIO.0 & 0xFF) as u8
+    }
+
+    #[inline(always)]
+    pub const fn is_usb(&self) -> bool {
+        self.kind == KRX_EV_USB
+    }
+
+    #[inline(always)]
+    pub const fn is_power(&self) -> bool {
+        self.kind == KRX_EV_POWER
+    }
 }
 
 /// Directory listing entry record (§8.2 / ORDS-01) with $O(1)$ power-of-two geometry (32 bytes).
@@ -256,6 +301,12 @@ pub struct CapServiceVTable {
     pub sys_proc_count: unsafe extern "C" fn() -> u8,
     pub sys_proc_info: unsafe extern "C" fn(idx: u8, out_info: *mut KrxProcInfo) -> u8,
     pub sys_proc_kill: unsafe extern "C" fn(pid: u8) -> u8,
+    pub paged_call: unsafe extern "C" fn(
+        target_block_id: u8,
+        target_offset: u16,
+        return_offset: u16,
+    ) -> usize,
+    pub paged_return: unsafe extern "C" fn() -> usize,
 }
 
 /// 13. `CapHwBus` VTable (`interface_id = 0x000D`)
@@ -636,6 +687,16 @@ unsafe extern "C" fn noop_sys_proc_info(_idx: u8, _out_info: *mut KrxProcInfo) -
 unsafe extern "C" fn noop_sys_proc_kill(_pid: u8) -> u8 {
     1
 }
+unsafe extern "C" fn noop_paged_call(
+    _target_block_id: u8,
+    _target_offset: u16,
+    _return_offset: u16,
+) -> usize {
+    0
+}
+unsafe extern "C" fn noop_paged_return() -> usize {
+    0
+}
 
 unsafe extern "C" fn noop_hw_i2c_transfer(
     _addr: u8,
@@ -782,6 +843,8 @@ pub static STUB_SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     sys_proc_count: noop_sys_proc_count,
     sys_proc_info: noop_sys_proc_info,
     sys_proc_kill: noop_sys_proc_kill,
+    paged_call: noop_paged_call,
+    paged_return: noop_paged_return,
 };
 
 pub static STUB_HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {
@@ -900,6 +963,32 @@ mod tests {
             assert_eq!((svc.sys_proc_count)(), 0);
             assert_eq!((svc.svc_register)(0x0100, 1, 0), 1);
             assert_eq!((svc.svc_release)(0x0100), 1);
+            assert_eq!((svc.paged_call)(0, 0, 0), 0);
+            assert_eq!((svc.paged_return)(), 0);
         }
+    }
+
+    #[test]
+    fn test_krx_event_methods_and_kinds() {
+        let ev_key = KrxEvent {
+            kind: KRX_EV_KEY,
+            key: 15,
+            flags: 0,
+            reserved: 0,
+            payload: 0,
+        };
+        assert!(ev_key.is_key());
+        assert!(!ev_key.is_bus());
+
+        let ev_bus = KrxEvent {
+            kind: KRX_EV_BUS,
+            key: 1,
+            flags: (crate::ipc::Topic::RADIO.0 & 0xFF) as u8,
+            reserved: 0,
+            payload: 145_000_000,
+        };
+        assert!(ev_bus.is_bus());
+        assert!(ev_bus.is_radio_bus());
+        assert!(!ev_bus.is_key());
     }
 }

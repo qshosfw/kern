@@ -1066,6 +1066,19 @@ pub unsafe extern "C" fn api_sys_proc_kill(pid: u8) -> u8 {
     }
 }
 
+pub unsafe extern "C" fn api_paged_call(
+    target_block_id: u8,
+    target_offset: u16,
+    return_offset: u16,
+) -> usize {
+    super::native_runner::krx_call_paged(target_block_id, target_offset, return_offset)
+        .unwrap_or(0)
+}
+
+pub unsafe extern "C" fn api_paged_return() -> usize {
+    super::native_runner::krx_return_thunk().unwrap_or(0)
+}
+
 // ── 13. CapHwBus C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_hw_i2c_transfer(
@@ -1291,6 +1304,8 @@ pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     sys_proc_count: api_sys_proc_count,
     sys_proc_info: api_sys_proc_info,
     sys_proc_kill: api_sys_proc_kill,
+    paged_call: api_paged_call,
+    paged_return: api_paged_return,
 };
 
 pub static HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {

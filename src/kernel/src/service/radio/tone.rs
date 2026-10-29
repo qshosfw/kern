@@ -51,18 +51,4 @@ pub trait RfSubaudible {
     fn set_tx_subaudible(&mut self, tone: SubaudibleTone);
     fn is_subaudible_matched(&mut self) -> bool;
     fn send_css_tail(&mut self, mode: CssTailMode);
-
-    // Backward compatibility shim
-    #[inline(always)]
-    fn set_rx_tone(&mut self, tone: SubaudibleTone) {
-        self.set_rx_subaudible(tone);
-    }
-    #[inline(always)]
-    fn set_tx_tone(&mut self, tone: SubaudibleTone) {
-        self.set_tx_subaudible(tone);
-    }
-    #[inline(always)]
-    fn is_tone_matched(&mut self) -> bool {
-        self.is_subaudible_matched()
-    }
 }
