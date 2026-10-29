@@ -1365,4 +1365,100 @@ mod tests {
             KrxProfile::P1TransparentPaged
         );
     }
+
+    #[test]
+    fn test_synthetic_krx_package_end_to_end_parsing() {
+        let mut pkg = [0u8; 180];
+
+        // 1. Preamble (20 bytes)
+        pkg[0..4].copy_from_slice(&KRX_MAGIC);
+        pkg[4] = KrxClass::Paged as u8;
+        pkg[5] = 5; // format version 2.5.0
+        pkg[6..8].copy_from_slice(&4u16.to_le_bytes()); // 4 sections
+        let header_len = 140u16;
+        pkg[8..10].copy_from_slice(&header_len.to_le_bytes());
+
+        // 2. SectionIdentity (offset 20: 4B header + 40B body = 44B, ends at 64)
+        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[22..24].copy_from_slice(&44u16.to_le_bytes());
+        let name_str_off = 124u16;
+        pkg[24..26].copy_from_slice(&name_str_off.to_le_bytes());
+        pkg[26..29].copy_from_slice(&[1, 2, 0]); // v1.2.0
+        pkg[29..31].copy_from_slice(&1u16.to_le_bytes()); // min_abi = 1
+        pkg[31..37].copy_from_slice(b"F4HWN\0");
+
+        // 3. SectionExecution (offset 64: 4B header + 28B body = 32B, ends at 96)
+        pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[66..68].copy_from_slice(&32u16.to_le_bytes());
+        pkg[68..70].copy_from_slice(&256u16.to_le_bytes()); // min_stack = 256
+        pkg[72..74].copy_from_slice(&1024u16.to_le_bytes()); // page_size = 1024
+        pkg[74] = 2; // cache_blocks = 2
+        pkg[76..80].copy_from_slice(&0x08u32.to_le_bytes()); // entry_point = 0x08
+        pkg[80..84].copy_from_slice(&32u32.to_le_bytes()); // payload_size = 32
+
+        // 4. SectionCapImports (offset 96: 4B header + 8B body = 12B, ends at 108)
+        pkg[96..98].copy_from_slice(&SECTION_CAP_IMPORTS.to_le_bytes());
+        pkg[98..100].copy_from_slice(&12u16.to_le_bytes());
+        pkg[100..102].copy_from_slice(&0x0001u16.to_le_bytes()); // interface 1 (Display)
+        pkg[102..104].copy_from_slice(&1u16.to_le_bytes()); // min_abi = 1
+        pkg[104..106].copy_from_slice(&1u16.to_le_bytes()); // flags = mandatory
+        pkg[106..108].copy_from_slice(&0u16.to_le_bytes()); // slot = 0
+
+        // 5. SectionLeafMap (offset 108: 4B header + 16B body = 20B, ends at 128)
+        pkg[108..110].copy_from_slice(&SECTION_LEAF_MAP.to_le_bytes());
+        pkg[110..112].copy_from_slice(&20u16.to_le_bytes());
+        pkg[112] = 1; // leaf_id = 1
+        pkg[113] = 0; // flags = 0
+        pkg[114..116].copy_from_slice(&512u16.to_le_bytes()); // size = 512
+        pkg[116..120].copy_from_slice(&144u32.to_le_bytes()); // flash_offset = 144
+        pkg[120..122].copy_from_slice(&0u16.to_le_bytes()); // entry_offset = 0
+        pkg[122..124].copy_from_slice(&0u16.to_le_bytes()); // ram_scratch = 0
+
+        // 6. String Pool (offset 128..144)
+        pkg[128..134].copy_from_slice(b"Beacon");
+        let name_str_off = 128u16;
+        pkg[24..26].copy_from_slice(&name_str_off.to_le_bytes());
+
+        let header_len = 144u16;
+        pkg[8..10].copy_from_slice(&header_len.to_le_bytes());
+
+        // Validate parsing
+        let preamble = KrxPreamble::parse(&pkg).unwrap();
+        let section_count = preamble.section_count;
+        let hlen = preamble.header_len;
+        assert_eq!(section_count, 4);
+        assert_eq!(hlen, 144);
+
+        // Find Identity
+        let ident_body = find_section(&pkg, 144, SECTION_IDENTITY).unwrap();
+        let ident = SectionIdentity::parse(ident_body).unwrap();
+        assert_eq!(ident.name(&pkg[..144]).unwrap(), "Beacon");
+
+        // Find Execution
+        let exec_body = find_section(&pkg, 144, SECTION_EXECUTION).unwrap();
+        let exec = SectionExecution::parse(exec_body).unwrap();
+        let ep = exec.entry_point;
+        let ps = exec.payload_size;
+        assert_eq!(ep, 0x08);
+        assert_eq!(ps, 32);
+
+        // Find CapImports
+        let cap_body = find_section(&pkg, 144, SECTION_CAP_IMPORTS).unwrap();
+        let binding = CapBinding::parse(cap_body, 0).unwrap();
+        let iface = binding.interface_id;
+        let slot = binding.slot_idx;
+        assert_eq!(iface, 0x0001);
+        assert_eq!(slot, 0);
+
+        // Find LeafMap
+        let leaf_body = find_section(&pkg, 144, SECTION_LEAF_MAP).unwrap();
+        let leaf = LeafEntry::parse(leaf_body).unwrap();
+        let lsize = leaf.size;
+        assert_eq!(leaf.leaf_id, 1);
+        assert_eq!(lsize, 512);
+
+        // Detect profile: Paged class + leaf map => P0StructuredPaged
+        let profile = KrxProfile::detect(&preamble, &exec, false, true);
+        assert_eq!(profile, KrxProfile::P0StructuredPaged);
+    }
 }
