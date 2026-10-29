@@ -273,6 +273,9 @@ pub fn load_native_from_storage(
     }
 
     let payload_len = total_read - h_len;
+    if exec.payload_size > 0 && payload_len < (exec.payload_size as usize) {
+        return Err(KrxLaunchError::TruncatedPackage);
+    }
     if exec.payload_size > 0 && (exec.payload_size as usize) > (NATIVE_EXEC_BUFFER_WORDS * 4) {
         return Err(KrxLaunchError::PayloadTooLarge);
     }
@@ -393,7 +396,15 @@ pub fn load_native_from_storage(
     // 5. Flush instruction pipeline before branching into SRAM arena
     flush_instruction_pipeline();
 
-    slot.entry_point = ((load_base + exec.entry_point) | 1) as usize;
+    let raw_entry = load_base.wrapping_add(exec.entry_point);
+    let entry_thumb = (raw_entry | 1) as usize;
+    let slot_start = load_base as usize;
+    let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
+    if entry_thumb < slot_start || entry_thumb >= slot_end {
+        return Err(KrxLaunchError::InvalidEntryPoint);
+    }
+
+    slot.entry_point = entry_thumb;
     slot.app_name.clear();
     let _ = slot.app_name.push_str(name);
     slot.caps = caps;

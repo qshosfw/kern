@@ -37,13 +37,15 @@ impl GridItem for LauncherEntry {
     }
 }
 
+pub const MAX_LAUNCHER_ENTRIES: usize = 12;
+
 #[unsafe(link_section = ".uninit")]
-static mut ENTRIES: [LauncherEntry; 16] = [LauncherEntry {
+static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
     title: "",
     icon_8: &crate::apps::vfo::assets::ICON_8,
     icon_16: &crate::apps::vfo::assets::ICON_16,
     target: LauncherTarget::App(APP_ID_VFO),
-}; 16];
+}; MAX_LAUNCHER_ENTRIES];
 
 pub fn load_entries(
     storage: Option<&mut crate::services::SystemStorage>,
@@ -78,7 +80,7 @@ pub fn load_entries(
         let cat_ref: &'static catalog::PackageCatalog =
             &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
         for app in cat_ref.apps() {
-            if !app.is_valid || count >= 14 {
+            if !app.is_valid || count >= (MAX_LAUNCHER_ENTRIES - 2) {
                 continue;
             }
 
@@ -216,7 +218,7 @@ impl LauncherApp {
                     match crate::apps::runtime::launch_krx_package(ctx, path) {
                         Ok(_) => true,
                         Err(err) => {
-                            ctx.show_popup(0, err.title(), err.message());
+                            ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
                             ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
                             reload_launcher(ctx.storage);
                             false

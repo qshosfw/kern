@@ -55,7 +55,7 @@ impl KeypadLockManager {
             held_code: None,
             hold_elapsed_ms: 0,
             hold_target_ms: DEFAULT_HOLD_MS,
-            hold_start_threshold_ms: 300,
+            hold_start_threshold_ms: 550,
             is_long_press_triggered: false,
             last_tick_ms: 0,
             inactivity_ms: 0,
@@ -167,18 +167,18 @@ impl KeypadLockManager {
                         self.is_long_press_triggered = false;
                         self.last_tick_ms = py32_hal::delay::millis();
 
-                        // Deliberate hold threshold before showing hold dialog & progress bar (~250-350ms).
+                        // Deliberate hold threshold before showing hold dialog & progress bar (~550ms).
                         // Normal key taps (< threshold) toggle functions with strictly ZERO UI popups or progress bars.
                         let start_threshold =
-                            (base_hold_delay_ms as u32 * 3 / 4).clamp(250, 400) as u16;
+                            (base_hold_delay_ms as u32 + 150).clamp(550, 750) as u16;
                         self.hold_start_threshold_ms = start_threshold;
 
                         // Asymmetric hold targets:
-                        // - Hold-to-Lock: faster (~800ms) before pocketing
-                        // - Hold-to-Unlock: deliberate (~1300ms) against pocket bumps
-                        let lock_target = (base_hold_delay_ms as u32 * 2).clamp(600, 1000) as u16;
+                        // - Hold-to-Lock: deliberate (~1200ms) before pocketing
+                        // - Hold-to-Unlock: deliberate (~1500ms) against pocket bumps
+                        let lock_target = (start_threshold as u32 + 650).clamp(1200, 1600) as u16;
                         let unlock_target =
-                            (base_hold_delay_ms as u32 * 3).clamp(1000, 2000) as u16;
+                            (start_threshold as u32 + 850).clamp(1400, 2000) as u16;
                         self.hold_target_ms = if self.is_locked {
                             unlock_target
                         } else {
@@ -389,4 +389,63 @@ fn draw_unlock_hint(canvas: &mut Canvas, center_x: i16, base_y: i16) {
         &TOMTHUMB,
         Color::Fill,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_short_press_f_does_not_show_lock_dialog() {
+        let mut mgr = KeypadLockManager::new();
+        assert!(!mgr.is_locked);
+        assert!(!mgr.is_f_active);
+        assert!(!mgr.is_animating());
+
+        // Press F key
+        let pressed = Event::Key {
+            code: KeyCode::KeyF,
+            state: KeyState::Pressed,
+        };
+        assert!(mgr.handle_event(&pressed, 400, 3000, 0));
+        assert!(!mgr.is_animating()); // Crucial: must NOT animate immediately
+
+        // Simulate 200ms normal keypress duration
+        mgr.hold_elapsed_ms = 200;
+        assert!(!mgr.is_animating()); // Still below 550ms threshold
+
+        // Release F key
+        let released = Event::Key {
+            code: KeyCode::KeyF,
+            state: KeyState::Released,
+        };
+        assert!(mgr.handle_event(&released, 400, 3000, 0));
+        assert!(!mgr.is_locked);
+        assert!(mgr.is_f_active); // Cleanly activated sticky F
+        assert!(!mgr.is_animating());
+    }
+
+    #[test]
+    fn test_long_press_f_locks_keypad_after_threshold() {
+        let mut mgr = KeypadLockManager::new();
+        let pressed = Event::Key {
+            code: KeyCode::KeyF,
+            state: KeyState::Pressed,
+        };
+        mgr.handle_event(&pressed, 400, 3000, 0);
+
+        // Before threshold
+        mgr.hold_elapsed_ms = 400;
+        assert!(!mgr.is_animating());
+
+        // Past threshold, progress bar appears
+        mgr.hold_elapsed_ms = 600;
+        assert!(mgr.is_animating());
+
+        // Hold completed past target
+        mgr.hold_elapsed_ms = 1300;
+        let tick = Event::Tick;
+        mgr.handle_event(&tick, 400, 3000, 0);
+        assert!(mgr.is_locked);
+    }
 }

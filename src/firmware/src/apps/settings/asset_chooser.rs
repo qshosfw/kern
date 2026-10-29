@@ -27,12 +27,17 @@ struct AssetChooserStorage {
     count: usize,
 }
 
-static mut CHOOSER_STORAGE: AssetChooserStorage = AssetChooserStorage {
-    paths: [const { heapless::String::new() }; MAX_CHOOSER_ASSETS],
-    labels: [const { ShortString::empty() }; MAX_CHOOSER_ASSETS + 1],
-    has_none: false,
-    count: 0,
-};
+#[inline(always)]
+fn storage_ref() -> &'static AssetChooserStorage {
+    let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
+    unsafe { &*(arena[5120..].as_ptr() as *const AssetChooserStorage) }
+}
+
+#[inline(always)]
+fn storage_mut() -> &'static mut AssetChooserStorage {
+    let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
+    unsafe { &mut *(arena[5120..].as_mut_ptr() as *mut AssetChooserStorage) }
+}
 
 /// Universal dynamic display name formatter for filesystem assets.
 /// Converts e.g. "/user/rogers/01_roger.ton" -> "Roger", "02_mini_kong.rle" -> "Mini Kong"
@@ -99,7 +104,7 @@ fn has_extension(path: &str, extensions: &[&str]) -> bool {
 /// Generalized asset chooser builder
 #[inline(never)]
 pub fn build_asset_chooser(params: &AssetChooserParams, ctx: &mut SysContext) -> OptionSheet {
-    let storage = unsafe { &mut *core::ptr::addr_of_mut!(CHOOSER_STORAGE) };
+    let storage = storage_mut();
 
     storage.count = 0;
     storage.has_none = params.none_label.is_some();
@@ -174,22 +179,20 @@ pub fn build_asset_chooser(params: &AssetChooserParams, ctx: &mut SysContext) ->
     OptionSheet::new_dynamic(params.title, labels_slice, current_sel).with_radio(true)
 }
 
-/// Retrieve the selected asset path from static storage
+/// Retrieve the selected asset path from storage
 pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
-    unsafe {
-        let storage = &*core::ptr::addr_of!(CHOOSER_STORAGE);
-        let idx = if storage.has_none {
-            if sel == 0 {
-                return None;
-            }
-            sel - 1
-        } else {
-            sel
-        };
-        if idx < storage.count && !storage.paths[idx].is_empty() {
-            Some(storage.paths[idx].as_str())
-        } else {
-            None
+    let storage = storage_ref();
+    let idx = if storage.has_none {
+        if sel == 0 {
+            return None;
         }
+        sel - 1
+    } else {
+        sel
+    };
+    if idx < storage.count && !storage.paths[idx].is_empty() {
+        Some(storage.paths[idx].as_str())
+    } else {
+        None
     }
 }

@@ -189,7 +189,7 @@ impl Pcb {
 }
 
 /// Static, zero-allocation Process Table for up to N concurrent processes.
-pub struct ProcessTable<const N: usize = 10> {
+pub struct ProcessTable<const N: usize = 8> {
     pub slots: [Pcb; N],
     next_pid: u8,
 }

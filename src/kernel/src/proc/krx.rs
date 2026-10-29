@@ -233,6 +233,9 @@ pub enum KrxLaunchError {
     VmDisabled,
     PayloadTooLarge,
     ExecutionFailed,
+    InvalidEntryPoint,
+    TruncatedPackage,
+    UnsupportedProfile,
 }
 
 impl KrxLaunchError {
@@ -252,6 +255,9 @@ impl KrxLaunchError {
             Self::VmDisabled => "VM Disabled",
             Self::PayloadTooLarge => "Package Too Large",
             Self::ExecutionFailed => "Launch Failed",
+            Self::InvalidEntryPoint => "Bad Entry Point",
+            Self::TruncatedPackage => "Truncated File",
+            Self::UnsupportedProfile => "Unsupported Profile",
         }
     }
 
@@ -271,6 +277,9 @@ impl KrxLaunchError {
             Self::VmDisabled => "Virtual machine feature disabled",
             Self::PayloadTooLarge => "Binary exceeds execution arena",
             Self::ExecutionFailed => "Execution initialization failed",
+            Self::InvalidEntryPoint => "Entry point not Thumb-1 compatible or out of range",
+            Self::TruncatedPackage => "Binary is smaller than declared payload",
+            Self::UnsupportedProfile => "Execution profile not supported by host",
         }
     }
 }

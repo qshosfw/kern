@@ -20,13 +20,11 @@ use utils::units::Frequency;
 pub const STAGING_BUF_CAP: usize = 512;
 
 /// Staging buffer for atomic non-volatile commits (up to 512 bytes).
-/// Placed in `.uninit` so it incurs strictly ZERO bytes of Flash overhead.
-#[unsafe(link_section = ".uninit")]
-static mut STAGING_BUF: [u8; STAGING_BUF_CAP] = [0u8; STAGING_BUF_CAP];
-
+/// Reuses the shared transient arena so it incurs strictly ZERO bytes of Flash OR SRAM overhead.
 #[inline(always)]
 pub fn staging_buf() -> &'static mut [u8; STAGING_BUF_CAP] {
-    unsafe { &mut *core::ptr::addr_of_mut!(STAGING_BUF) }
+    let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
+    unsafe { &mut *(arena.as_mut_ptr() as *mut [u8; STAGING_BUF_CAP]) }
 }
 
 /// Active transfer session state
@@ -466,10 +464,8 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
             return send_status(hw, header, WireStatus::BadLength);
         }
 
-        unsafe {
-            let staging = &mut *core::ptr::addr_of_mut!(STAGING_BUF);
-            staging[off..off + chunk_len].copy_from_slice(req.data);
-        }
+        let staging = staging_buf();
+        staging[off..off + chunk_len].copy_from_slice(req.data);
         transfer.current_len = transfer.current_len.max((off + chunk_len) as u32);
 
         let mut resp = [0u8; 8];
@@ -521,7 +517,7 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
 
     if transfer.mode == TRANSFER_MODE_WRITE {
         let total_len = transfer.current_len as usize;
-        let staging = unsafe { &*core::ptr::addr_of!(STAGING_BUF) };
+        let staging = staging_buf();
         let actual_crc = crypto::crc::CrcEngine::crc32(&staging[..total_len]);
 
         if req.expected_crc32 != 0 && req.expected_crc32 != actual_crc {

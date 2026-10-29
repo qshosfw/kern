@@ -113,13 +113,13 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
 
     /// Read-only access to global process table
     #[inline(always)]
-    pub fn proc_table(&self) -> &'static kernel::proc::ProcessTable<10> {
+    pub fn proc_table(&self) -> &'static kernel::proc::ProcessTable<8> {
         crate::orchestrator::proc_table()
     }
 
     /// Mutable access to global process table
     #[inline(always)]
-    pub fn proc_table_mut(&mut self) -> &'static mut kernel::proc::ProcessTable<10> {
+    pub fn proc_table_mut(&mut self) -> &'static mut kernel::proc::ProcessTable<8> {
         crate::orchestrator::proc_table_mut()
     }
 

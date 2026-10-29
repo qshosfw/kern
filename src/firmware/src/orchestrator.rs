@@ -30,16 +30,19 @@ pub struct Orchestrator {
     is_monitoring: bool,
 }
 
+pub const MAX_PROCESSES: usize = 8;
+
 #[unsafe(link_section = ".uninit")]
-pub static mut PROC_TABLE: core::mem::MaybeUninit<ProcessTable<10>> = core::mem::MaybeUninit::uninit();
+pub static mut PROC_TABLE: core::mem::MaybeUninit<ProcessTable<MAX_PROCESSES>> =
+    core::mem::MaybeUninit::uninit();
 
 #[inline(always)]
-pub fn proc_table() -> &'static ProcessTable<10> {
+pub fn proc_table() -> &'static ProcessTable<MAX_PROCESSES> {
     unsafe { (*core::ptr::addr_of!(PROC_TABLE)).assume_init_ref() }
 }
 
 #[inline(always)]
-pub fn proc_table_mut() -> &'static mut ProcessTable<10> {
+pub fn proc_table_mut() -> &'static mut ProcessTable<MAX_PROCESSES> {
     unsafe { (*core::ptr::addr_of_mut!(PROC_TABLE)).assume_init_mut() }
 }
 
@@ -190,12 +193,12 @@ impl Orchestrator {
     }
 
     #[inline(always)]
-    pub fn proc_table(&self) -> &'static ProcessTable<10> {
+    pub fn proc_table(&self) -> &'static ProcessTable<MAX_PROCESSES> {
         proc_table()
     }
 
     #[inline(always)]
-    pub fn proc_table_mut(&mut self) -> &'static mut ProcessTable<10> {
+    pub fn proc_table_mut(&mut self) -> &'static mut ProcessTable<MAX_PROCESSES> {
         proc_table_mut()
     }
 
@@ -794,7 +797,7 @@ impl Orchestrator {
                     if let Err(err) =
                         crate::apps::runtime::launch_krx_package(ctx, "/apps/explorer.krx")
                     {
-                        ctx.show_popup(0, err.title(), err.message());
+                        ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
                         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
                     }
                 }
@@ -807,7 +810,7 @@ impl Orchestrator {
                     if let Err(err) =
                         crate::apps::runtime::launch_krx_package(ctx, "/apps/sysinfo.krx")
                     {
-                        ctx.show_popup(0, err.title(), err.message());
+                        ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
                         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
                     }
                 }

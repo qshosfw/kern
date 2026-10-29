@@ -57,16 +57,16 @@ impl TasksApp {
     }
 
     #[inline(always)]
-    fn proc_table() -> &'static ProcessTable<10> {
+    fn proc_table() -> &'static ProcessTable<crate::orchestrator::MAX_PROCESSES> {
         crate::orchestrator::proc_table()
     }
 
     #[inline(always)]
-    fn proc_table_mut() -> &'static mut ProcessTable<10> {
+    fn proc_table_mut() -> &'static mut ProcessTable<crate::orchestrator::MAX_PROCESSES> {
         crate::orchestrator::proc_table_mut()
     }
 
-    fn active_pids(&self, out: &mut [u8; 10]) -> usize {
+    fn active_pids(&self, out: &mut [u8; crate::orchestrator::MAX_PROCESSES]) -> usize {
         let table = Self::proc_table();
         let mut count = 0;
         for slot in table.slots.iter() {
@@ -111,7 +111,7 @@ impl<'a> App<SysContext<'a, '_>> for TasksApp {
             }
         }
 
-        let mut pids = [0u8; 10];
+        let mut pids = [0u8; crate::orchestrator::MAX_PROCESSES];
         let count = self.active_pids(&mut pids);
 
         // 1. Process Info Modal handling
@@ -313,7 +313,7 @@ impl<'a> App<SysContext<'a, '_>> for TasksApp {
     }
 
     fn render(&self, canvas: &mut Canvas, ctx: &SysContext<'a, '_>) {
-        let mut pids = [0u8; 10];
+        let mut pids = [0u8; crate::orchestrator::MAX_PROCESSES];
         let count = self.active_pids(&mut pids);
 
         let tab_cfg = TabbedSheetConfig::new(0, 0, 128, 53).with_status_bar_integrated(86);

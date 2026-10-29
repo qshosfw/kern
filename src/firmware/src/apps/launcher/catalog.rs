@@ -15,7 +15,7 @@ use kernel::proc::krx::{
 #[derive(Debug, Clone)]
 pub struct PackageCatalogEntry {
     pub title: heapless::String<16>,
-    pub path: heapless::String<32>,
+    pub path: heapless::String<24>,
     pub size_bytes: usize,
     pub app_class: AppClass,
     pub exec_type: ExecType,
@@ -31,9 +31,11 @@ impl PackageCatalogEntry {
     }
 }
 
+pub const MAX_CATALOG_PACKAGES: usize = 6;
+
 /// In-memory catalog of discovered dynamic packages.
 pub struct PackageCatalog {
-    pub entries: heapless::Vec<PackageCatalogEntry, 8>,
+    pub entries: heapless::Vec<PackageCatalogEntry, MAX_CATALOG_PACKAGES>,
     pub scanned: bool,
 }
 
@@ -135,9 +137,9 @@ impl PackageCatalog {
         let is_app = n > 4 && &bytes[n - 4..] == b".app";
         let is_krx = n > 4 && &bytes[n - 4..] == b".krx";
 
-        let mut path = heapless::String::<32>::new();
+        let mut path = heapless::String::<24>::new();
         let _ = path.push_str("/apps/");
-        let _ = path.push_str(&base_name[..n.min(26)]);
+        let _ = path.push_str(&base_name[..n.min(18)]);
         let path_str = path.as_str();
 
         let mut app_class = AppClass::Declare;
