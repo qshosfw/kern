@@ -307,6 +307,9 @@ pub struct CapServiceVTable {
         return_offset: u16,
     ) -> usize,
     pub paged_return: unsafe extern "C" fn() -> usize,
+    pub leaf_call: unsafe extern "C" fn(leaf_id: u8, arg: u32) -> u32,
+    pub lease_acquire: unsafe extern "C" fn(lease_kind: u8, timeout_ms: u32) -> u8,
+    pub lease_release: unsafe extern "C" fn(lease_kind: u8) -> u8,
 }
 
 /// 13. `CapHwBus` VTable (`interface_id = 0x000D`)
@@ -697,6 +700,15 @@ unsafe extern "C" fn noop_paged_call(
 unsafe extern "C" fn noop_paged_return() -> usize {
     0
 }
+unsafe extern "C" fn noop_leaf_call(_leaf_id: u8, _arg: u32) -> u32 {
+    0xFFFF_FFFF
+}
+unsafe extern "C" fn noop_lease_acquire(_lease_kind: u8, _timeout_ms: u32) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_lease_release(_lease_kind: u8) -> u8 {
+    1
+}
 
 unsafe extern "C" fn noop_hw_i2c_transfer(
     _addr: u8,
@@ -845,6 +857,9 @@ pub static STUB_SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     sys_proc_kill: noop_sys_proc_kill,
     paged_call: noop_paged_call,
     paged_return: noop_paged_return,
+    leaf_call: noop_leaf_call,
+    lease_acquire: noop_lease_acquire,
+    lease_release: noop_lease_release,
 };
 
 pub static STUB_HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {
@@ -965,6 +980,9 @@ mod tests {
             assert_eq!((svc.svc_release)(0x0100), 1);
             assert_eq!((svc.paged_call)(0, 0, 0), 0);
             assert_eq!((svc.paged_return)(), 0);
+            assert_eq!((svc.leaf_call)(1, 0), 0xFFFF_FFFF);
+            assert_eq!((svc.lease_acquire)(1, 1000), 1);
+            assert_eq!((svc.lease_release)(1), 1);
         }
     }
 

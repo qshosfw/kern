@@ -1079,6 +1079,43 @@ pub unsafe extern "C" fn api_paged_return() -> usize {
     super::native_runner::krx_return_thunk().unwrap_or(0)
 }
 
+pub unsafe extern "C" fn api_leaf_call(leaf_id: u8, arg: u32) -> u32 {
+    super::native_runner::krx_leaf_call(leaf_id, arg)
+}
+
+pub unsafe extern "C" fn api_lease_acquire(lease_kind: u8, timeout_ms: u32) -> u8 {
+    if let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) {
+        let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
+        let tick = py32_hal::delay::millis();
+        if crate::orchestrator::lease_manager_mut()
+            .acquire(pid, kind, timeout_ms, tick)
+            .is_ok()
+        {
+            0
+        } else {
+            1
+        }
+    } else {
+        1
+    }
+}
+
+pub unsafe extern "C" fn api_lease_release(lease_kind: u8) -> u8 {
+    if let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) {
+        let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
+        if crate::orchestrator::lease_manager_mut()
+            .release(pid, kind)
+            .is_ok()
+        {
+            0
+        } else {
+            1
+        }
+    } else {
+        1
+    }
+}
+
 // ── 13. CapHwBus C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_hw_i2c_transfer(
@@ -1306,6 +1343,9 @@ pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     sys_proc_kill: api_sys_proc_kill,
     paged_call: api_paged_call,
     paged_return: api_paged_return,
+    leaf_call: api_leaf_call,
+    lease_acquire: api_lease_acquire,
+    lease_release: api_lease_release,
 };
 
 pub static HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {

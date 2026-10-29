@@ -6,7 +6,9 @@
 pub mod abi;
 pub mod declare;
 pub mod krx;
+pub mod lease;
 pub mod ledger;
+pub mod memory;
 pub mod paged;
 pub mod primitives;
 pub mod reloc;
@@ -18,14 +20,17 @@ pub use crate::boot::{BOOT_RECORD_MAGIC, BootRecord, BootSlot, ResetReason};
 pub use crate::mem::{CellSlab, SlabCell};
 pub use abi::*;
 pub use krx::{
-    BOOT_MAGIC, CALIB_MAGIC, KERNFS_MAGIC, KRX_MAGIC, KrxClass, KrxExecType, KrxIndexEntry,
-    KrxPreamble, KrxSwapHeader, PCB_MAGIC, SIG_MAGIC, SLAB_MAGIC, SWAP_FLAG_COMPRESSED_RLE,
-    SWAP_MAGIC,
+    BOOT_MAGIC, CALIB_MAGIC, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, KERNFS_MAGIC,
+    KRX_MAGIC, KrxClass, KrxExecType, KrxIndexEntry, KrxPreamble, KrxProfile, KrxSwapHeader,
+    LeafContinuation, LeafEntry, PCB_MAGIC, SECTION_LEAF_MAP, SIG_MAGIC, SLAB_MAGIC,
+    SWAP_FLAG_COMPRESSED_RLE, SWAP_MAGIC,
 };
+pub use lease::{LeaseError, LeaseKind, ResourceLease, ResourceLeaseManager};
 pub use ledger::ResourceLedger;
+pub use memory::{MemoryMapLayout, MemoryRegionDescriptor, RegionKind, region_flags};
 pub use paged::{
     BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_PINNED, BLOCK_FLAG_RT, CacheSlotMeta, FixedWindowCache,
-    PagedError, ReturnFrame, ShadowReturnStack,
+    PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
 };
 pub use primitives::*;
 pub use reloc::{RelocError, apply_relocs};

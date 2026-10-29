@@ -42,6 +42,19 @@ pub fn proc_table_mut() -> &'static mut ProcessTable<10> {
     unsafe { &mut *core::ptr::addr_of_mut!(PROC_TABLE) }
 }
 
+static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<8> =
+    kernel::proc::ResourceLeaseManager::new();
+
+#[inline(always)]
+pub fn lease_manager() -> &'static kernel::proc::ResourceLeaseManager<8> {
+    unsafe { &*core::ptr::addr_of!(LEASE_MGR) }
+}
+
+#[inline(always)]
+pub fn lease_manager_mut() -> &'static mut kernel::proc::ResourceLeaseManager<8> {
+    unsafe { &mut *core::ptr::addr_of_mut!(LEASE_MGR) }
+}
+
 pub static mut SUNK_KEYS: u32 = 0;
 
 pub const BIT_MENU: u32 = 1 << 2;

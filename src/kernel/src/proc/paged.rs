@@ -5,7 +5,7 @@
 //! immunity, and the block-relative shadow return stack (`ShadowReturnStack`)
 //! for LR-thunking across overlay evictions on Cortex-M0+ (no MMU).
 
-use super::krx::BlockEntry;
+use super::krx::{BlockEntry, LeafContinuation, LeafEntry};
 
 /// Block flag: pinned in cache (never evicted once loaded; e.g., DSP inner loops)
 pub const BLOCK_FLAG_PINNED: u8 = 1 << 0;
@@ -17,10 +17,13 @@ pub const BLOCK_FLAG_HINT_NEXT: u8 = 1 << 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PagedError {
     InvalidBlockId,
+    InvalidLeafId,
     NoUnpinnedSlotAvailable,
     ShadowStackOverflow,
     ShadowStackUnderflow,
     StorageReadFailed,
+    ReentrantDispatchDenied,
+    LeafExecutionFailed,
 }
 
 impl BlockEntry {
@@ -307,9 +310,109 @@ impl<const DEPTH: usize> ShadowReturnStack<DEPTH> {
     }
 }
 
+/// P0 Structured Paged Overlay Manager (Resident Root + Leaf Overlays, §5.1 / KRX 3.2).
+///
+/// Enforces:
+/// 1. Only resident root directly calls an overlay leaf.
+/// 2. A leaf runs to completion (run-to-return).
+/// 3. Zero direct leaf-to-leaf calls.
+/// 4. Leaf requests another leaf via typed `LeafContinuation`.
+/// 5. Reentrant overlay dispatch attempts fail deterministically (`ReentrantDispatchDenied`).
+#[derive(Debug, Clone)]
+pub struct StructuredLeafManager<const MAX_LEAVES: usize = 16> {
+    pub overlay_vma: u32,
+    pub window_size: u16,
+    pub leaves: [LeafEntry; MAX_LEAVES],
+    pub leaf_count: u8,
+    pub active_leaf: Option<u8>,
+    pub is_dispatching: bool,
+    pub total_swaps: u16,
+}
+
+impl<const MAX_LEAVES: usize> Default for StructuredLeafManager<MAX_LEAVES> {
+    fn default() -> Self {
+        Self::new(0, 1024)
+    }
+}
+
+impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
+    pub const fn new(overlay_vma: u32, window_size: u16) -> Self {
+        Self {
+            overlay_vma,
+            window_size,
+            leaves: [const { LeafEntry::empty() }; MAX_LEAVES],
+            leaf_count: 0,
+            active_leaf: None,
+            is_dispatching: false,
+            total_swaps: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.leaf_count = 0;
+        self.active_leaf = None;
+        self.is_dispatching = false;
+        self.total_swaps = 0;
+    }
+
+    pub fn register_leaf(&mut self, entry: LeafEntry) -> Result<(), PagedError> {
+        if (self.leaf_count as usize) < MAX_LEAVES {
+            self.leaves[self.leaf_count as usize] = entry;
+            self.leaf_count += 1;
+            Ok(())
+        } else {
+            Err(PagedError::InvalidLeafId)
+        }
+    }
+
+    pub fn find_leaf(&self, leaf_id: u8) -> Option<&LeafEntry> {
+        for i in 0..(self.leaf_count as usize) {
+            if self.leaves[i].leaf_id == leaf_id {
+                return Some(&self.leaves[i]);
+            }
+        }
+        None
+    }
+
+    /// Pre-flight check and acquire overlay execution lock for a leaf call.
+    /// Returns `(leaf_entry, is_cache_hit)`.
+    pub fn begin_leaf_call(&mut self, leaf_id: u8) -> Result<(&LeafEntry, bool), PagedError> {
+        if self.is_dispatching {
+            return Err(PagedError::ReentrantDispatchDenied);
+        }
+        let leaf_idx = (0..(self.leaf_count as usize))
+            .find(|&i| self.leaves[i].leaf_id == leaf_id)
+            .ok_or(PagedError::InvalidLeafId)?;
+
+        let is_hit = self.active_leaf == Some(leaf_id);
+        if !is_hit {
+            self.active_leaf = Some(leaf_id);
+            self.total_swaps = self.total_swaps.saturating_add(1);
+        }
+        self.is_dispatching = true;
+        Ok((&self.leaves[leaf_idx], is_hit))
+    }
+
+    /// Completes the active leaf call and releases the overlay execution lock.
+    pub fn end_leaf_call(
+        &mut self,
+        continuation: LeafContinuation,
+    ) -> Result<LeafContinuation, PagedError> {
+        self.is_dispatching = false;
+        Ok(continuation)
+    }
+
+    /// Computes the executable Thumb-1 entry address for a leaf inside the overlay window.
+    #[inline(always)]
+    pub fn leaf_entry_address(&self, entry: &LeafEntry) -> usize {
+        ((self.overlay_vma + entry.entry_offset as u32) | 1) as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proc::FLAG_LEAF_RT;
 
     #[test]
     fn test_fixed_window_cache_lru_and_pinned() {
@@ -410,5 +513,70 @@ mod tests {
             .unwrap();
         assert_eq!((s0_res, hit0_res), (0, false));
         assert_eq!(cache.slots[0].resident_block, Some(0));
+    }
+
+    #[test]
+    fn test_structured_leaf_manager_dispatch_and_continuations() {
+        let mut mgr: StructuredLeafManager<4> = StructuredLeafManager::new(0x2000_1000, 1024);
+
+        let leaf0 = LeafEntry {
+            leaf_id: 1,
+            flags: 0,
+            size: 512,
+            flash_offset: 0x1000,
+            entry_offset: 0x0010,
+            ram_scratch_bytes: 64,
+            reserved: [0u8; 4],
+        };
+        let leaf1 = LeafEntry {
+            leaf_id: 2,
+            flags: FLAG_LEAF_RT,
+            size: 1024,
+            flash_offset: 0x1400,
+            entry_offset: 0x0020,
+            ram_scratch_bytes: 128,
+            reserved: [0u8; 4],
+        };
+
+        assert!(mgr.register_leaf(leaf0).is_ok());
+        assert!(mgr.register_leaf(leaf1).is_ok());
+
+        assert_eq!(mgr.leaf_entry_address(&leaf0), 0x2000_1011);
+
+        // 1. Begin leaf call to leaf 1
+        let (entry, hit) = mgr.begin_leaf_call(1).unwrap();
+        assert_eq!(entry.leaf_id, 1);
+        assert!(!hit); // first call: cache miss / swap
+
+        // 2. Reentrant leaf call while dispatching MUST fail
+        assert_eq!(
+            mgr.begin_leaf_call(2).unwrap_err(),
+            PagedError::ReentrantDispatchDenied
+        );
+
+        // 3. Leaf 1 completes and returns CallLeaf continuation to leaf 2
+        let cont = mgr
+            .end_leaf_call(LeafContinuation::call_leaf(2, 42))
+            .unwrap();
+        assert!(cont.is_call_leaf());
+        assert_eq!(cont.target_or_code, 2);
+        assert_eq!(cont.payload, 42);
+
+        // 4. Resident root handles continuation by invoking leaf 2
+        let (entry2, hit2) = mgr.begin_leaf_call(2).unwrap();
+        assert_eq!(entry2.leaf_id, 2);
+        assert!(!hit2); // swap to leaf 2
+        assert_eq!(mgr.total_swaps, 2);
+
+        // Leaf 2 finishes with Done(0)
+        let cont2 = mgr.end_leaf_call(LeafContinuation::done(0)).unwrap();
+        assert!(cont2.is_done());
+        assert_eq!(cont2.payload, 0);
+
+        // 5. Subsequent call to leaf 2 is a cache hit!
+        let (_, hit2_again) = mgr.begin_leaf_call(2).unwrap();
+        assert!(hit2_again);
+        assert_eq!(mgr.total_swaps, 2); // no extra swap
+        let _ = mgr.end_leaf_call(LeafContinuation::done(1));
     }
 }

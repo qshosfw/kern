@@ -11,8 +11,8 @@ use kernel::caps::CapabilitySet;
 use kernel::proc::declare::{ActionRecord, DeclareItem, DeclareNode, LAYOUT_MENU};
 use kernel::proc::krx::{
     KrxClass, KrxPreamble, SECTION_BLOCK_MAP, SECTION_CAP_IMPORTS, SECTION_EXECUTION,
-    SECTION_IDENTITY, SECTION_TYPE_LIFECYCLE, SectionExecution, SectionIdentity, SectionType,
-    find_section,
+    SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_TYPE_LIFECYCLE, SectionExecution,
+    SectionIdentity, SectionType, find_section,
 };
 
 pub use kernel::proc::krx::KrxLaunchError;
@@ -261,6 +261,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 .ok_or(KrxLaunchError::MissingExecution)?;
             let cap_imports_body = find_section(&hdr_buf, header_len, SECTION_CAP_IMPORTS);
             let block_map_body = find_section(&hdr_buf, header_len, SECTION_BLOCK_MAP);
+            let leaf_map_body = find_section(&hdr_buf, header_len, SECTION_LEAF_MAP);
 
             super::native_runner::load_native_from_storage(
                 app_name,
@@ -270,6 +271,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 &exec_sec,
                 cap_imports_body,
                 block_map_body,
+                leaf_map_body,
                 required_caps,
             )?;
 

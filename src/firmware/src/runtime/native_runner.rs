@@ -12,8 +12,10 @@ use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
-use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxPreamble, SectionExecution};
-use kernel::proc::paged::{FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack};
+use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxPreamble, LeafContinuation, LeafEntry, SectionExecution};
+use kernel::proc::paged::{
+    FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
+};
 use kernel::proc::reloc::apply_relocs;
 
 pub const NATIVE_EXEC_BUFFER_WORDS: usize = 1536; // 6.0 KB (6144 bytes) shared transient execution arena
@@ -34,6 +36,7 @@ pub(crate) struct NativeExecSlot {
     pub(crate) caps: CapabilitySet,
     pub(crate) cache: FixedWindowCache<16, 4>,
     pub(crate) shadow_stack: ShadowReturnStack<8>,
+    pub(crate) leaf_mgr: StructuredLeafManager<16>,
 }
 
 #[unsafe(link_section = ".uninit")]
@@ -155,6 +158,53 @@ pub fn krx_return_thunk() -> Result<usize, PagedError> {
     Ok(resume_addr)
 }
 
+/// Invokes a P0 Structured Leaf Overlay from the resident root actor (§5.1 / KRX 3.2).
+pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
+    let slot = slot_mut();
+    if !slot.is_loaded {
+        return 0xFFFF_FFFF;
+    }
+
+    let (leaf_entry, is_hit) = match slot.leaf_mgr.begin_leaf_call(leaf_id) {
+        Ok((entry, hit)) => (*entry, hit),
+        Err(_) => return 0xFFFF_FFFF,
+    };
+
+    if !is_hit {
+        let read_len = (leaf_entry.size as usize).min(slot.leaf_mgr.window_size as usize);
+        unsafe {
+            if !ACTIVE_CTX.is_null() {
+                let path = slot.pkg_path.as_str();
+                let dst = core::slice::from_raw_parts_mut(
+                    slot.leaf_mgr.overlay_vma as *mut u8,
+                    read_len,
+                );
+                let _ = read_file_region(
+                    (*ACTIVE_CTX).storage,
+                    path,
+                    leaf_entry.flash_offset as usize,
+                    dst,
+                );
+            }
+        }
+        flush_instruction_pipeline();
+    }
+
+    let entry_addr = slot.leaf_mgr.leaf_entry_address(&leaf_entry);
+    let res = unsafe {
+        invoke_krx_native(
+            entry_addr,
+            slot.got_base,
+            KRX_OP_START,
+            &raw const NATIVE_API_TABLE,
+            arg as *const (),
+        )
+    };
+
+    let _ = slot.leaf_mgr.end_leaf_call(LeafContinuation::done(res));
+    res
+}
+
 /// Read an asset slice from the currently loaded KRX package on KernFS.
 pub fn read_active_pkg_asset(
     storage: &mut crate::services::SystemStorage,
@@ -191,11 +241,13 @@ pub fn load_native_from_storage(
     exec: &SectionExecution,
     cap_imports_body: Option<&[u8]>,
     block_map_body: Option<&[u8]>,
+    leaf_map_body: Option<&[u8]>,
     caps: CapabilitySet,
 ) -> Result<(), KrxLaunchError> {
     let slot = slot_mut();
     slot.cache.reset();
     slot.shadow_stack.clear();
+    slot.leaf_mgr.reset();
     slot.current_block = 0;
     slot.current_slot = 0;
 
@@ -285,7 +337,21 @@ pub fn load_native_from_storage(
         let _ = slot.cache.resolve_or_select_slot(0);
     }
 
-    // 4. Flush instruction pipeline before branching into SRAM arena
+    // 4. Configure P0 Structured Leaf Manager if SECTION_LEAF_MAP is present
+    let overlay_vma = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(1024);
+    slot.leaf_mgr.overlay_vma = overlay_vma;
+    slot.leaf_mgr.window_size = 1024;
+    if let Some(leaf_body) = leaf_map_body {
+        let count = leaf_body.len() / LeafEntry::SIZE;
+        for i in 0..count {
+            let offset = i * LeafEntry::SIZE;
+            if let Some(entry) = LeafEntry::parse(&leaf_body[offset..]) {
+                let _ = slot.leaf_mgr.register_leaf(entry);
+            }
+        }
+    }
+
+    // 5. Flush instruction pipeline before branching into SRAM arena
     flush_instruction_pipeline();
 
     slot.entry_point = ((load_base + exec.entry_point) | 1) as usize;

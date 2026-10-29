@@ -45,6 +45,90 @@ impl KrxClass {
     }
 }
 
+/// KRX v3.2 Execution Profile & Executable Memory Paradigm taxonomy.
+/// Encodes the exact trust, placement, and memory model of an executable package (§1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum KrxProfile {
+    /// N0: Native-Fixed (trusted native, fixed execution VMA, zero relocation overhead, hot DSP)
+    N0NativeFixed = 0,
+    /// P0: Structured Paged (trusted native, resident root + leaf overlays with continuation dispatch)
+    P0StructuredPaged = 1,
+    /// N1: Native-PIC (trusted native, dynamic PIC with GOT base r9)
+    N1NativePic = 2,
+    /// P1: Transparent Paged (trusted native, demand-paged fixed window with LR-thunking shadow return stack)
+    P1TransparentPaged = 3,
+    /// V0: Resident KVM-16 (software-sandboxed bytecode, resident image)
+    V0ResidentVm = 4,
+    /// D0: Declare Graph (software-sandboxed declarative UI/data graph)
+    D0DeclareGraph = 5,
+    /// F0: Declare Flow / Stream Graph (software-sandboxed DSP/audio dataflow pipeline)
+    F0DeclareFlow = 6,
+}
+
+impl KrxProfile {
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        match val {
+            0 => Some(Self::N0NativeFixed),
+            1 => Some(Self::P0StructuredPaged),
+            2 => Some(Self::N1NativePic),
+            3 => Some(Self::P1TransparentPaged),
+            4 => Some(Self::V0ResidentVm),
+            5 => Some(Self::D0DeclareGraph),
+            6 => Some(Self::F0DeclareFlow),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::N0NativeFixed => "N0 (Native-Fixed)",
+            Self::P0StructuredPaged => "P0 (Structured-Paged)",
+            Self::N1NativePic => "N1 (Native-PIC)",
+            Self::P1TransparentPaged => "P1 (Transparent-Paged)",
+            Self::V0ResidentVm => "V0 (Resident-VM)",
+            Self::D0DeclareGraph => "D0 (Declare-Graph)",
+            Self::F0DeclareFlow => "F0 (Declare-Flow)",
+        }
+    }
+
+    #[inline(always)]
+    pub const fn is_trusted_native(&self) -> bool {
+        matches!(
+            self,
+            Self::N0NativeFixed
+                | Self::P0StructuredPaged
+                | Self::N1NativePic
+                | Self::P1TransparentPaged
+        )
+    }
+
+    #[inline(always)]
+    pub const fn is_sandboxed(&self) -> bool {
+        matches!(
+            self,
+            Self::V0ResidentVm | Self::D0DeclareGraph | Self::F0DeclareFlow
+        )
+    }
+
+    #[inline(always)]
+    pub const fn is_structured_paged(&self) -> bool {
+        matches!(self, Self::P0StructuredPaged)
+    }
+
+    #[inline(always)]
+    pub const fn uses_fixed_vma(&self) -> bool {
+        matches!(
+            self,
+            Self::N0NativeFixed
+                | Self::P0StructuredPaged
+                | Self::V0ResidentVm
+                | Self::D0DeclareGraph
+                | Self::F0DeclareFlow
+        )
+    }
+}
+
 /// Execution Type (KRX-ABI 2.5.0 Section 5.2 & Chapter 11)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -217,6 +301,7 @@ pub const SECTION_SERVICE_EXPORTS: u16 = 0x0006;
 pub const SECTION_CONFIG: u16 = 0x0007;
 pub const SECTION_SEAL: u16 = 0x0008;
 pub const SECTION_TYPE_LIFECYCLE: u16 = 0x0009;
+pub const SECTION_LEAF_MAP: u16 = 0x000A;
 
 /// Standard 4-byte Section Header prefix
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -525,6 +610,150 @@ pub struct BlockEntry {
     pub flags: u8,
     pub size: u16,
     pub flash_offset: u32,
+}
+
+// ── P0 Structured Paged Leaf Overlays & Continuations (§5.1 / KRX 3.2) ──────
+
+pub const FLAG_LEAF_PINNED: u8 = 1 << 0;
+pub const FLAG_LEAF_RT: u8 = 1 << 1;
+pub const FLAG_LEAF_PREFETCH: u8 = 1 << 2;
+
+/// P0 Structured Paged Leaf Overlay Descriptor (0x000A / ORDS-01 16-byte power-of-two geometry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C, packed)]
+pub struct LeafEntry {
+    pub leaf_id: u8,
+    pub flags: u8,
+    pub size: u16,
+    pub flash_offset: u32,
+    pub entry_offset: u16,
+    pub ram_scratch_bytes: u16,
+    pub reserved: [u8; 4],
+}
+
+const _: () = assert!(core::mem::size_of::<LeafEntry>() == 16);
+
+impl LeafEntry {
+    pub const SIZE: usize = 16;
+
+    pub const fn empty() -> Self {
+        Self {
+            leaf_id: 0,
+            flags: 0,
+            size: 0,
+            flash_offset: 0,
+            entry_offset: 0,
+            ram_scratch_bytes: 0,
+            reserved: [0u8; 4],
+        }
+    }
+
+    pub fn parse(buf: &[u8]) -> Option<Self> {
+        if buf.len() < Self::SIZE {
+            return None;
+        }
+        Some(Self {
+            leaf_id: buf[0],
+            flags: buf[1],
+            size: u16::from_le_bytes([buf[2], buf[3]]),
+            flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+            entry_offset: u16::from_le_bytes([buf[8], buf[9]]),
+            ram_scratch_bytes: u16::from_le_bytes([buf[10], buf[11]]),
+            reserved: [buf[12], buf[13], buf[14], buf[15]],
+        })
+    }
+
+    #[inline(always)]
+    pub const fn is_pinned(&self) -> bool {
+        (self.flags & FLAG_LEAF_PINNED) != 0
+    }
+
+    #[inline(always)]
+    pub const fn is_realtime(&self) -> bool {
+        (self.flags & FLAG_LEAF_RT) != 0
+    }
+
+    #[inline(always)]
+    pub const fn is_prefetch_hint(&self) -> bool {
+        (self.flags & FLAG_LEAF_PREFETCH) != 0
+    }
+}
+
+/// Typed continuation returned by a P0 leaf overlay to the resident root upon completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct LeafContinuation {
+    pub kind: u8,
+    pub target_or_code: u8,
+    pub reserved: u16,
+    pub payload: u32,
+}
+
+impl LeafContinuation {
+    pub const KIND_DONE: u8 = 0;
+    pub const KIND_CALL_LEAF: u8 = 1;
+    pub const KIND_YIELD: u8 = 2;
+    pub const KIND_ERROR: u8 = 3;
+
+    #[inline(always)]
+    pub const fn done(result: u32) -> Self {
+        Self {
+            kind: Self::KIND_DONE,
+            target_or_code: 0,
+            reserved: 0,
+            payload: result,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn call_leaf(target_leaf_id: u8, arg: u32) -> Self {
+        Self {
+            kind: Self::KIND_CALL_LEAF,
+            target_or_code: target_leaf_id,
+            reserved: 0,
+            payload: arg,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn yield_token(token: u32) -> Self {
+        Self {
+            kind: Self::KIND_YIELD,
+            target_or_code: 0,
+            reserved: 0,
+            payload: token,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn error(err_code: u8) -> Self {
+        Self {
+            kind: Self::KIND_ERROR,
+            target_or_code: err_code,
+            reserved: 0,
+            payload: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn is_done(&self) -> bool {
+        self.kind == Self::KIND_DONE
+    }
+
+    #[inline(always)]
+    pub const fn is_call_leaf(&self) -> bool {
+        self.kind == Self::KIND_CALL_LEAF
+    }
+
+    #[inline(always)]
+    pub const fn is_yield(&self) -> bool {
+        self.kind == Self::KIND_YIELD
+    }
+
+    #[inline(always)]
+    pub const fn is_error(&self) -> bool {
+        self.kind == Self::KIND_ERROR
+    }
 }
 
 /// Asset Descriptor (0x0004, 20 bytes)
