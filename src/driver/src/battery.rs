@@ -91,6 +91,11 @@ impl BatteryDriver {
         self.battery_type.set(bat_type);
     }
 
+    #[inline(always)]
+    pub fn battery_type(&self) -> BatteryType {
+        self.battery_type.get()
+    }
+
     /// Converts raw 12-bit ADC reading (Channel 8 / PB0) to battery millivolts using dynamic or factory calibration + user tweak.
     #[inline(always)]
     pub fn adc_to_mv(&self, raw_adc: u16, _vdda_mv: u16) -> u16 {

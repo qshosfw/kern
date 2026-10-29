@@ -546,6 +546,31 @@ impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
     fn read_asset(&mut self, _asset_id: u16, offset: u32, buf: &mut [u8]) -> Result<usize, ()> {
         crate::runtime::native_runner::read_active_pkg_asset(self.storage, offset, buf)
     }
+
+    fn list_dir(
+        &mut self,
+        dir_path: &str,
+        out_entries: &mut [kernel::proc::abi::KrxDirEntry],
+    ) -> Result<usize, ()> {
+        let mut temp_entries: [kernel::service::DirEntryInfo; 16] = Default::default();
+        let max_fetch = out_entries.len().min(temp_entries.len());
+        let count = self
+            .storage
+            .list_dir(dir_path, &mut temp_entries[..max_fetch])
+            .map_err(|_| ())?;
+        for i in 0..count {
+            let src = &temp_entries[i];
+            let dst = &mut out_entries[i];
+            dst.name = [0u8; 24];
+            let name_bytes = src.path.as_bytes();
+            let copy_len = name_bytes.len().min(24);
+            dst.name[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
+            dst.size = src.size as u32;
+            dst.is_dir = if src.is_dir { 1 } else { 0 };
+            dst.reserved = [0u8; 3];
+        }
+        Ok(count)
+    }
 }
 
 // ── 5. Keypad Primitive ─────────────────────────────────────────────────────
@@ -605,8 +630,32 @@ impl<'a, 'hw> PowerPrimitive for FirmwareContext<'a, 'hw> {
         self.power.battery_percentage()
     }
 
+    fn battery_ma(&self) -> u16 {
+        self.power.battery_current_ma()
+    }
+
+    fn battery_type(&self) -> u8 {
+        self.power.battery_type() as u8
+    }
+
+    fn raw_battery_adc(&self) -> u16 {
+        self.power.raw_battery_adc()
+    }
+
+    fn mcu_temp_deci_c(&self) -> i16 {
+        self.power.mcu_temperature_deci_c()
+    }
+
     fn is_charging(&self) -> bool {
         self.power.is_charging()
+    }
+
+    fn is_low(&self) -> bool {
+        self.power.is_low()
+    }
+
+    fn is_critical(&self) -> bool {
+        self.power.is_critical()
     }
 
     fn set_backlight(&mut self, mode: u8, timeout_s: u8) {
@@ -617,6 +666,12 @@ impl<'a, 'hw> PowerPrimitive for FirmwareContext<'a, 'hw> {
                 _ => kernel::service::BacklightMode::On,
             };
             d.set_backlight_mode(bmode);
+        }
+    }
+
+    fn set_backlight_brightness(&mut self, max: u8, min: u8) {
+        if let Some(ref mut d) = self.display {
+            d.set_backlight_brightness(max, min);
         }
     }
 

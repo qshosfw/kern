@@ -497,6 +497,60 @@ pub unsafe extern "C" fn api_storage_write_file(
     }
 }
 
+pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) -> u8 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() && !path.is_null() && path_len > 0 {
+            use kernel::proc::primitives::StoragePrimitive;
+            let path_slice = core::slice::from_raw_parts(path, path_len as usize);
+            if let Ok(path_str) = core::str::from_utf8(path_slice) {
+                if path_str.starts_with("/sys/") {
+                    return 1;
+                }
+                if (*ACTIVE_CTX).remove_file(path_str).is_ok() {
+                    return 0;
+                }
+            }
+        }
+        1
+    }
+}
+
+pub unsafe extern "C" fn api_storage_file_size(path: *const u8, path_len: u8) -> u32 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() && !path.is_null() && path_len > 0 {
+            use kernel::proc::primitives::StoragePrimitive;
+            let path_slice = core::slice::from_raw_parts(path, path_len as usize);
+            if let Ok(path_str) = core::str::from_utf8(path_slice) {
+                return (*ACTIVE_CTX).file_size(path_str).unwrap_or(0) as u32;
+            }
+        }
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_storage_list_dir(
+    dir_path: *const u8,
+    dir_len: u8,
+    out_entries: *mut KrxDirEntry,
+    max_entries: u8,
+) -> u8 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() && !out_entries.is_null() && max_entries > 0 {
+            use kernel::proc::primitives::StoragePrimitive;
+            let dir_slice = if dir_path.is_null() || dir_len == 0 {
+                b"/"
+            } else {
+                core::slice::from_raw_parts(dir_path, dir_len as usize)
+            };
+            if let Ok(dir_str) = core::str::from_utf8(dir_slice) {
+                let dst = core::slice::from_raw_parts_mut(out_entries, max_entries as usize);
+                return (*ACTIVE_CTX).list_dir(dir_str, dst).unwrap_or(0) as u8;
+            }
+        }
+        0
+    }
+}
+
 // ── 5..12. CapKeypad / CapPower / CapSerial / CapTimer / CapUi / CapMath / CapFm / CapService ──
 
 pub unsafe extern "C" fn api_sys_poll_key() -> u8 {
@@ -579,6 +633,90 @@ pub unsafe extern "C" fn api_sys_wake_backlight() {
         if !ACTIVE_CTX.is_null() {
             use kernel::proc::primitives::PowerPrimitive;
             (*ACTIVE_CTX).wake_backlight();
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_battery_ma() -> u16 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            (*ACTIVE_CTX).battery_ma()
+        } else {
+            0
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_battery_type() -> u8 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            (*ACTIVE_CTX).battery_type()
+        } else {
+            0
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_raw_battery_adc() -> u16 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            (*ACTIVE_CTX).raw_battery_adc()
+        } else {
+            0
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_mcu_temp() -> i16 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            (*ACTIVE_CTX).mcu_temp_deci_c()
+        } else {
+            250
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_is_low() -> u8 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            if (*ACTIVE_CTX).is_low() { 1 } else { 0 }
+        } else {
+            0
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_is_critical() -> u8 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            if (*ACTIVE_CTX).is_critical() { 1 } else { 0 }
+        } else {
+            0
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_set_backlight(mode: u8, timeout_s: u8) {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            (*ACTIVE_CTX).set_backlight(mode, timeout_s);
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_sys_set_backlight_brightness(max: u8, min: u8) {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::PowerPrimitive;
+            (*ACTIVE_CTX).set_backlight_brightness(max, min);
         }
     }
 }
@@ -830,6 +968,104 @@ pub unsafe extern "C" fn api_ipc_handoff_read(out_buf: *mut u8, max_len: u8) -> 
     }
 }
 
+pub unsafe extern "C" fn api_svc_release(interface_id: u16) -> u8 {
+    if service_registry_mut().release(interface_id) {
+        0
+    } else {
+        1
+    }
+}
+
+pub unsafe extern "C" fn api_ipc_send(
+    target_name: *const u8,
+    name_len: u8,
+    msg: *const u8,
+    msg_len: u8,
+) -> u8 {
+    unsafe { api_ipc_handoff(target_name, name_len, msg, msg_len) }
+}
+
+pub unsafe extern "C" fn api_ipc_poll(out_buf: *mut u8, max_len: u8) -> u8 {
+    unsafe { api_ipc_handoff_read(out_buf, max_len) }
+}
+
+pub unsafe extern "C" fn api_sys_os_version() -> u32 {
+    KRX_ABI_VERSION_3_0
+}
+
+pub unsafe extern "C" fn api_sys_ram_available() -> u16 {
+    kernel::sys::SystemDiagnostics::ram_available_bytes() as u16
+}
+
+pub unsafe extern "C" fn api_sys_stack_margin() -> u16 {
+    kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16
+}
+
+pub unsafe extern "C" fn api_sys_proc_count() -> u8 {
+    let table = crate::orchestrator::proc_table();
+    let mut count = 0u8;
+    for slot in table.slots.iter() {
+        if slot.state != kernel::proc::ProcState::Dormant
+            && slot.state != kernel::proc::ProcState::Dead
+        {
+            count += 1;
+        }
+    }
+    count
+}
+
+pub unsafe extern "C" fn api_sys_proc_info(idx: u8, out_info: *mut KrxProcInfo) -> u8 {
+    if out_info.is_null() {
+        return 1;
+    }
+    let table = crate::orchestrator::proc_table();
+    let mut match_idx = 0u8;
+    for slot in table.slots.iter() {
+        if slot.state != kernel::proc::ProcState::Dormant
+            && slot.state != kernel::proc::ProcState::Dead
+        {
+            if match_idx == idx {
+                unsafe {
+                    let info = &mut *out_info;
+                    info.pid = slot.pid.0;
+                    info.app_id = slot.app_id as u8;
+                    info.state = match slot.state {
+                        kernel::proc::ProcState::Running => 2,
+                        kernel::proc::ProcState::Suspended => 3,
+                        _ => 1,
+                    };
+                    info.priority = slot.priority as u8;
+                    info.memory_bytes = slot.mem_bytes;
+                    info.name = [0u8; 12];
+                    let name_bytes = slot.name.as_bytes();
+                    let copy_len = name_bytes.len().min(12);
+                    info.name[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
+                    info.runtime_ticks = slot.ledger.cpu_ticks;
+                    info.reserved = [0u8; 10];
+                }
+                return 0;
+            }
+            match_idx += 1;
+        }
+    }
+    1
+}
+
+pub unsafe extern "C" fn api_sys_proc_kill(pid: u8) -> u8 {
+    let table = crate::orchestrator::proc_table_mut();
+    if let Some(pcb) = table.find_mut(kernel::proc::Pid(pid)) {
+        if pcb.app_id < crate::AppRegistry::count() {
+            // Cannot kill core firmware app
+            return 1;
+        }
+        pcb.state = kernel::proc::ProcState::Dead;
+        crate::apps::AppRegistry::unregister_dynamic();
+        0
+    } else {
+        1
+    }
+}
+
 // ── 13. CapHwBus C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_hw_i2c_transfer(
@@ -984,6 +1220,9 @@ pub static STORAGE_VTABLE: CapStorageVTable = CapStorageVTable {
     storage_read_asset: api_storage_read_asset,
     storage_read_file: api_storage_read_file,
     storage_write_file: api_storage_write_file,
+    storage_remove_file: api_storage_remove_file,
+    storage_file_size: api_storage_file_size,
+    storage_list_dir: api_storage_list_dir,
 };
 
 pub static KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
@@ -995,7 +1234,15 @@ pub static KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
 pub static POWER_VTABLE: CapPowerVTable = CapPowerVTable {
     sys_battery_mv: api_sys_battery_mv,
     sys_battery_pct: api_sys_battery_pct,
+    sys_battery_ma: api_sys_battery_ma,
+    sys_battery_type: api_sys_battery_type,
+    sys_raw_battery_adc: api_sys_raw_battery_adc,
+    sys_mcu_temp: api_sys_mcu_temp,
     sys_is_charging: api_sys_is_charging,
+    sys_is_low: api_sys_is_low,
+    sys_is_critical: api_sys_is_critical,
+    sys_set_backlight: api_sys_set_backlight,
+    sys_set_backlight_brightness: api_sys_set_backlight_brightness,
     sys_wake_backlight: api_sys_wake_backlight,
 };
 
@@ -1032,14 +1279,18 @@ pub static FM_VTABLE: CapFmVTable = CapFmVTable {
 };
 
 pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
-    sys_stack_free: api_sys_stack_free,
-    sys_stack_free_min: api_sys_stack_free_min,
-    sys_device_uid: api_sys_device_uid,
-    page_fault: api_page_fault,
     svc_register: api_svc_register,
     svc_resolve: api_svc_resolve,
-    ipc_handoff: api_ipc_handoff,
-    ipc_handoff_read: api_ipc_handoff_read,
+    svc_release: api_svc_release,
+    ipc_send: api_ipc_send,
+    ipc_poll: api_ipc_poll,
+    sys_device_uid: api_sys_device_uid,
+    sys_os_version: api_sys_os_version,
+    sys_ram_available: api_sys_ram_available,
+    sys_stack_margin: api_sys_stack_margin,
+    sys_proc_count: api_sys_proc_count,
+    sys_proc_info: api_sys_proc_info,
+    sys_proc_kill: api_sys_proc_kill,
 };
 
 pub static HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {
@@ -1055,6 +1306,19 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
     abi_version: KRX_ABI_VERSION_3_0,
     table_size: core::mem::size_of::<KrxApiTable>() as u16,
     granted_caps: 0xFFFF_FFFF,
+    display: &raw const DISPLAY_VTABLE,
+    radio: &raw const RADIO_VTABLE,
+    audio: &raw const AUDIO_VTABLE,
+    storage: &raw const STORAGE_VTABLE,
+    keypad: &raw const KEYPAD_VTABLE,
+    power: &raw const POWER_VTABLE,
+    serial: &raw const SERIAL_VTABLE,
+    timer: &raw const TIMER_VTABLE,
+    ui: &raw const UI_VTABLE,
+    math: &raw const MATH_VTABLE,
+    fm: &raw const FM_VTABLE,
+    service: &raw const SERVICE_VTABLE,
+    hw_bus: &raw const HW_BUS_VTABLE,
     draw_pixel: api_draw_pixel,
     draw_line: api_draw_line,
     draw_rect: api_draw_rect,

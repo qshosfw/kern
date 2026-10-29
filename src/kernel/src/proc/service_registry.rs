@@ -124,6 +124,17 @@ impl<const N: usize> ServiceRegistry<N> {
         None
     }
 
+    /// Unregister a service interface by `interface_id`.
+    pub fn release(&mut self, interface_id: u16) -> bool {
+        for slot in self.entries.iter_mut() {
+            if slot.is_active() && slot.interface_id == interface_id {
+                *slot = ServiceEntry::empty();
+                return true;
+            }
+        }
+        false
+    }
+
     /// Unbind all services owned by a terminated/quarantined actor (`provider_pid`).
     /// Returns the number of unbound interfaces so the kernel can emit `SERVICE_DIED`.
     pub fn unbind_provider(&mut self, provider_pid: Pid) -> usize {
@@ -162,5 +173,20 @@ mod tests {
         // Unbind provider Pid(6)
         assert_eq!(reg.unbind_provider(Pid(6)), 1);
         assert_eq!(reg.resolve(0x0100, 1), None);
+    }
+
+    #[test]
+    fn test_service_registry_release() {
+        let mut reg = ServiceRegistry::<4>::new();
+        assert!(reg.register(0x0105, 1, Pid(1), 0x2000_3000, false));
+        assert_eq!(reg.resolve(0x0105, 1), Some(0x2000_3000));
+        assert_eq!(reg.active_count(), 1);
+
+        assert!(reg.release(0x0105));
+        assert_eq!(reg.resolve(0x0105, 1), None);
+        assert_eq!(reg.active_count(), 0);
+
+        // Releasing already released interface returns false
+        assert!(!reg.release(0x0105));
     }
 }

@@ -99,6 +99,14 @@ pub trait StoragePrimitive {
     fn load_config(&mut self, app_name: &str, buf: &mut [u8]) -> Result<usize, ()>;
     fn save_config(&mut self, app_name: &str, data: &[u8]) -> Result<(), ()>;
     fn read_asset(&mut self, asset_id: u16, offset: u32, buf: &mut [u8]) -> Result<usize, ()>;
+    fn list_dir(
+        &mut self,
+        dir_path: &str,
+        out_entries: &mut [crate::proc::abi::KrxDirEntry],
+    ) -> Result<usize, ()> {
+        let _ = (dir_path, out_entries);
+        Ok(0)
+    }
 }
 
 // ── 5. Keypad Primitive ─────────────────────────────────────────────────────
@@ -118,8 +126,29 @@ pub trait KeypadPrimitive {
 pub trait PowerPrimitive {
     fn battery_mv(&self) -> u16;
     fn battery_pct(&self) -> u8;
+    fn battery_ma(&self) -> u16 {
+        0
+    }
+    fn battery_type(&self) -> u8 {
+        0
+    }
+    fn raw_battery_adc(&self) -> u16 {
+        0
+    }
+    fn mcu_temp_deci_c(&self) -> i16 {
+        250
+    }
     fn is_charging(&self) -> bool;
+    fn is_low(&self) -> bool {
+        false
+    }
+    fn is_critical(&self) -> bool {
+        false
+    }
     fn set_backlight(&mut self, mode: u8, timeout_s: u8);
+    fn set_backlight_brightness(&mut self, max: u8, min: u8) {
+        let _ = (max, min);
+    }
     fn wake_backlight(&mut self);
     fn set_flashlight(&mut self, on: bool);
 }

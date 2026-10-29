@@ -57,6 +57,9 @@ pub trait PowerService {
     fn battery_percentage(&self) -> u8;
     fn battery_voltage_mv(&self) -> u16;
     fn battery_current_ma(&self) -> u16;
+    fn battery_type(&self) -> u8 {
+        0
+    }
     fn uptime_secs(&self) -> u32;
     fn raw_battery_adc(&self) -> u16 {
         0

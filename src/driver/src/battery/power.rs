@@ -107,6 +107,10 @@ impl SystemPower {
         self.battery_driver.set_battery_type(bat_type);
     }
 
+    pub fn battery_type(&self) -> BatteryType {
+        self.battery_driver.battery_type()
+    }
+
     pub fn load_calibration_data(&mut self, calib_data: &[u8]) {
         self.battery_driver.load_calibration_data(calib_data);
     }
@@ -209,6 +213,9 @@ impl kernel::service::PowerService for SystemPower {
     }
     fn battery_current_ma(&self) -> u16 {
         self.battery_ma
+    }
+    fn battery_type(&self) -> u8 {
+        self.battery_driver.battery_type() as u8
     }
     fn uptime_secs(&self) -> u32 {
         self.uptime_secs
