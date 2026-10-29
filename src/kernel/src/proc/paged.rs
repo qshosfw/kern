@@ -24,6 +24,7 @@ pub enum PagedError {
     StorageReadFailed,
     ReentrantDispatchDenied,
     LeafExecutionFailed,
+    MaxHopsExceeded,
 }
 
 impl BlockEntry {
@@ -477,7 +478,7 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
             }
         }
 
-        Err(PagedError::LeafExecutionFailed)
+        Err(PagedError::MaxHopsExceeded)
     }
 }
 
@@ -665,5 +666,14 @@ mod tests {
             }
         });
         assert_eq!(tramp_res.unwrap(), 150);
+
+        // 7. Test trampoline max_hops exceeded
+        let loop_res = mgr.dispatch_leaf_trampoline(1, 0, 3, |entry, _hit, ctx| {
+            // Ping-pong between leaf 1 and leaf 2
+            let next = if entry.leaf_id == 1 { 2 } else { 1 };
+            ctx.continuation = LeafContinuation::call_leaf(next, ctx.arg + 1);
+            Ok(0)
+        });
+        assert_eq!(loop_res.unwrap_err(), PagedError::MaxHopsExceeded);
     }
 }
