@@ -77,7 +77,7 @@ impl CacheSlotMeta {
 /// Manages 1 or 2 fixed-window cache slots (`512 B` or `1024 B` per slot)
 /// at a single fixed cache VMA in the application arena.
 #[derive(Debug, Clone)]
-pub struct FixedWindowCache<const MAX_BLOCKS: usize = 16, const MAX_SLOTS: usize = 2> {
+pub struct FixedWindowCache<const MAX_BLOCKS: usize = 16, const MAX_SLOTS: usize = 4> {
     pub page_size: u16,
     pub active_slots: u8,
     pub block_count: u8,

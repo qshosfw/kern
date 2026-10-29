@@ -16,8 +16,9 @@ use kernel::proc::krx::{KrxClass, KrxPreamble, SectionExecution};
 use kernel::proc::paged::{FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack};
 use kernel::proc::reloc::apply_relocs;
 
-pub const NATIVE_EXEC_BUFFER_WORDS: usize = 768; // 3.0 KB (3072 bytes) shared transient execution arena
-pub const PAGED_CACHE_MAX_BYTES: usize = 2048; // Up to 2 x 1024B fixed-window cache slots at arena base
+pub const NATIVE_EXEC_BUFFER_WORDS: usize = 1536; // 6.0 KB (6144 bytes) shared transient execution arena
+pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
+pub const MICRO_DAEMON_ARENA_BYTES: usize = 1024; // Headroom reservation for micro-daemons / applets
 
 #[repr(C, align(4))]
 pub(crate) struct NativeExecSlot {
@@ -31,7 +32,7 @@ pub(crate) struct NativeExecSlot {
     pub(crate) current_block: u8,
     pub(crate) current_slot: u8,
     pub(crate) caps: CapabilitySet,
-    pub(crate) cache: FixedWindowCache<16, 2>,
+    pub(crate) cache: FixedWindowCache<16, 4>,
     pub(crate) shadow_stack: ShadowReturnStack<8>,
 }
 

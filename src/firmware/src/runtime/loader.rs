@@ -37,7 +37,7 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
     }
 }
 
-/// Parse a Declare 3.0 binary payload from the persistent second slice of the shared arena (`[1024..1536]`).
+/// Parse a Declare 3.0 binary payload from the persistent upper slice of the shared arena (`[1024..5120]`).
 #[inline(never)]
 fn populate_declare_from_payload(
     walker: &mut kernel::proc::declare::DeclareWalker,
@@ -193,9 +193,9 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             let walker = crate::apps::runtime::get_global_walker();
             walker.reset(app_name);
 
-            // Store Declare payload in [1024..1536] of the shared transient arena
-            // (DeclareWalker occupies [0..988], so [1024..1536] persists for the app's lifetime!)
-            let arena_tail = &mut super::native_runner::transient_arena_bytes_mut()[1024..1536];
+            // Store Declare payload in [1024..5120] of the shared transient arena
+            // (DeclareWalker occupies [0..988], so [1024..5120] persists for the app's lifetime!)
+            let arena_tail = &mut super::native_runner::transient_arena_bytes_mut()[1024..5120];
             let read_total = ctx.storage.read_file(path, arena_tail).unwrap_or(0);
             let h_len = preamble.header_len as usize;
             if read_total > h_len {
