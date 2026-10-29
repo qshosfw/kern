@@ -43,8 +43,6 @@ static mut ENTRIES: [LauncherEntry; 16] = [LauncherEntry {
     icon_16: &crate::apps::vfo::assets::ICON_16,
     target: LauncherTarget::App(APP_ID_VFO),
 }; 16];
-static mut TITLES: [[u8; 16]; 8] = [[0; 16]; 8];
-static mut PATHS: [[u8; 32]; 8] = [[0; 32]; 8];
 
 pub fn load_entries(
     storage: Option<&mut crate::services::SystemStorage>,
@@ -76,36 +74,19 @@ pub fn load_entries(
         count += 1;
 
         // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
-        let mut pkg_idx = 0usize;
-        for app in cat.apps() {
-            if !app.is_valid || count >= 14 || pkg_idx >= 8 {
+        let cat_ref: &'static catalog::PackageCatalog = &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
+        for app in cat_ref.apps() {
+            if !app.is_valid || count >= 14 {
                 continue;
             }
 
-            let t_bytes = app.title.as_bytes();
-            let t_len = t_bytes.len().min(15);
-            TITLES[pkg_idx][..t_len].copy_from_slice(&t_bytes[..t_len]);
-            TITLES[pkg_idx][t_len] = 0;
-            let title_str = core::str::from_utf8_unchecked(&TITLES[pkg_idx][..t_len]);
-
-            let prefix = b"/apps/";
-            let f_bytes = app.filename.as_bytes();
-            let p_len = prefix.len() + f_bytes.len();
-            if p_len < 32 {
-                PATHS[pkg_idx][..prefix.len()].copy_from_slice(prefix);
-                PATHS[pkg_idx][prefix.len()..p_len].copy_from_slice(f_bytes);
-                PATHS[pkg_idx][p_len] = 0;
-                let path_str = core::str::from_utf8_unchecked(&PATHS[pkg_idx][..p_len]);
-
-                ENTRIES[count] = LauncherEntry {
-                    title: title_str,
-                    icon_8: &assets::ICON_DIAG_8,
-                    icon_16: &assets::ICON_DIAG_16,
-                    target: LauncherTarget::Package(path_str),
-                };
-                count += 1;
-                pkg_idx += 1;
-            }
+            ENTRIES[count] = LauncherEntry {
+                title: app.title.as_str(),
+                icon_8: &assets::ICON_DIAG_8,
+                icon_16: &assets::ICON_DIAG_16,
+                target: LauncherTarget::Package(app.path.as_str()),
+            };
+            count += 1;
         }
 
         // 3. Built-In Utilities & Information

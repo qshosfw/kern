@@ -15,13 +15,20 @@ use kernel::proc::krx::{
 #[derive(Debug, Clone)]
 pub struct PackageCatalogEntry {
     pub title: heapless::String<16>,
-    pub filename: heapless::String<24>,
+    pub path: heapless::String<32>,
     pub size_bytes: usize,
     pub app_class: AppClass,
     pub exec_type: ExecType,
     pub icon_id: u16,
     pub caps: u32,
     pub is_valid: bool,
+}
+
+impl PackageCatalogEntry {
+    #[inline(always)]
+    pub fn filename(&self) -> &str {
+        self.path.rsplit('/').next().unwrap_or(self.path.as_str())
+    }
 }
 
 /// In-memory catalog of discovered dynamic packages.
@@ -128,14 +135,10 @@ impl PackageCatalog {
         let is_app = n > 4 && &bytes[n - 4..] == b".app";
         let is_krx = n > 4 && &bytes[n - 4..] == b".krx";
 
-        let mut filename = heapless::String::<24>::new();
-        let _ = filename.push_str(&base_name[..n.min(24)]);
-
-        let mut full_path = [0u8; 32];
-        full_path[..6].copy_from_slice(b"/apps/");
-        let copy_len = n.min(26);
-        full_path[6..6 + copy_len].copy_from_slice(&bytes[..copy_len]);
-        let path_str = unsafe { core::str::from_utf8_unchecked(&full_path[..6 + copy_len]) };
+        let mut path = heapless::String::<32>::new();
+        let _ = path.push_str("/apps/");
+        let _ = path.push_str(&base_name[..n.min(26)]);
+        let path_str = path.as_str();
 
         let mut app_class = AppClass::Declare;
         let mut exec_type = ExecType::App;
@@ -220,7 +223,7 @@ impl PackageCatalog {
 
         Some(PackageCatalogEntry {
             title,
-            filename,
+            path,
             size_bytes: size,
             app_class,
             exec_type,

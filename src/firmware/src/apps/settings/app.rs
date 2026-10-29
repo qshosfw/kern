@@ -451,8 +451,8 @@ impl SettingsApp {
                     return;
                 }
                 if sel_idx == 0 {
-                    let path = super::apps::app_path(app.filename.as_str());
-                    match crate::apps::runtime::launch_krx_package(ctx, path.as_str()) {
+                    let path = app.path.as_str();
+                    match crate::apps::runtime::launch_krx_package(ctx, path) {
                         Ok(_) => {}
                         Err(_) => {
                             ctx.show_popup(
@@ -841,12 +841,11 @@ impl App<SysContext<'_, '_>> for SettingsApp {
                 }
                 TAG_APP_DELETE_CONFIRM => {
                     let cat = crate::apps::launcher::catalog::get_catalog();
-                    let filename = cat
+                    let path = cat
                         .apps()
                         .nth(self.selected_app_idx)
-                        .map(|app| app.filename.clone());
-                    if let Some(filename) = filename {
-                        let path = super::apps::app_path(filename.as_str());
+                        .map(|app| app.path.clone());
+                    if let Some(path) = path {
                         let _ = ctx.storage.remove(path.as_str());
 
                         // If dynamic app was loaded, unregister it and mark process dead

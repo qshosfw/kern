@@ -59,14 +59,6 @@ fn format_size(size_bytes: usize) -> ShortString {
     s
 }
 
-/// Normalized absolute path of a staged bundle (`/apps/<file>`).
-pub fn app_path(filename: &str) -> ShortString {
-    let base = filename.rsplit('/').next().unwrap_or(filename);
-    let mut s = ShortString::from_str("/apps/");
-    s.push_str(base);
-    s
-}
-
 fn populate_catalog_list(items: &mut [MenuItem], ctx: &mut SysContext, is_service: bool) -> usize {
     #[cfg(feature = "filesystem")]
     get_catalog().scan(ctx.storage);
@@ -172,7 +164,7 @@ fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: usize)
         push_action(items, &mut cur, "Delete Invalid");
         push_str(items, &mut cur, "Status", "Invalid / Corrupt");
         push_val(items, &mut cur, "Size", format_size(pkg.size_bytes));
-        push_val(items, &mut cur, "Path", app_path(pkg.filename.as_str()));
+        push_str(items, &mut cur, "Path", pkg.path.as_str());
         return cur;
     }
 
@@ -190,7 +182,7 @@ fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: usize)
     }
     push_str(items, &mut cur, "Class", pkg.app_class.as_str());
     push_val(items, &mut cur, "Size", format_size(pkg.size_bytes));
-    push_val(items, &mut cur, "Path", app_path(pkg.filename.as_str()));
+    push_str(items, &mut cur, "Path", pkg.path.as_str());
     if !is_service {
         push_action(items, &mut cur, "Delete App");
     }
