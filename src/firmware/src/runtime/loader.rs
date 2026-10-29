@@ -130,10 +130,10 @@ fn populate_declare_from_payload(
 /// Load and launch a verified KRX binary application package.
 #[inline(never)]
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let mut hdr_buf = [0u8; 256];
+    let hdr_buf = &mut super::native_runner::transient_arena_bytes_mut()[..256];
     let read_len = ctx
         .storage
-        .read_file(path, &mut hdr_buf)
+        .read_file(path, hdr_buf)
         .map_err(|e| match e {
             kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
             _ => KrxLaunchError::ReadFailed,

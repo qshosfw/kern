@@ -37,8 +37,9 @@ impl GridItem for LauncherEntry {
     }
 }
 
+#[unsafe(link_section = ".uninit")]
 static mut ENTRIES: [LauncherEntry; 16] = [LauncherEntry {
-    title: "Radio",
+    title: "",
     icon_8: &crate::apps::vfo::assets::ICON_8,
     icon_16: &crate::apps::vfo::assets::ICON_16,
     target: LauncherTarget::App(APP_ID_VFO),

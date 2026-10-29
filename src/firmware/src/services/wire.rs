@@ -50,7 +50,7 @@ impl ActiveTransfer {
             mode: TRANSFER_MODE_READ,
             total_size: 0,
             current_len: 0,
-            chunk_size: 128,
+            chunk_size: 0,
             path: [0u8; 32],
             path_len: 0,
         }

@@ -30,16 +30,24 @@ pub struct Orchestrator {
     is_monitoring: bool,
 }
 
-pub static mut PROC_TABLE: ProcessTable<10> = ProcessTable::new();
+#[unsafe(link_section = ".uninit")]
+pub static mut PROC_TABLE: core::mem::MaybeUninit<ProcessTable<10>> = core::mem::MaybeUninit::uninit();
 
 #[inline(always)]
 pub fn proc_table() -> &'static ProcessTable<10> {
-    unsafe { &*core::ptr::addr_of!(PROC_TABLE) }
+    unsafe { (*core::ptr::addr_of!(PROC_TABLE)).assume_init_ref() }
 }
 
 #[inline(always)]
 pub fn proc_table_mut() -> &'static mut ProcessTable<10> {
-    unsafe { &mut *core::ptr::addr_of_mut!(PROC_TABLE) }
+    unsafe { (*core::ptr::addr_of_mut!(PROC_TABLE)).assume_init_mut() }
+}
+
+#[inline(always)]
+pub fn init_proc_table() {
+    unsafe {
+        *core::ptr::addr_of_mut!(PROC_TABLE) = core::mem::MaybeUninit::new(ProcessTable::new());
+    }
 }
 
 static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<8> =
@@ -93,6 +101,7 @@ pub fn clear_sunk_keys() {
 
 impl Orchestrator {
     pub fn new(startup_app: usize) -> Self {
+        init_proc_table();
         let table = proc_table_mut();
 
         // 1. Core Kernel Daemon (PID 1)
