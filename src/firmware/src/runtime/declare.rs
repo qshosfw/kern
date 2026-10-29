@@ -9,7 +9,7 @@ use crate::services::FirmwareContext;
 use gfx::Canvas;
 use gfx::Color;
 use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
-use kernel::event::{Event, KeyCode, KeyState};
+use kernel::event::{Event, KeyState};
 use kernel::proc::declare::{
     DYN_ACTIVE_PROCS, DYN_BATTERY_MV, DYN_BATTERY_PCT, DYN_CPU_CLOCK, DYN_RADIO_FREQ_A,
     DYN_RADIO_FREQ_B, DYN_RADIO_RSSI, DYN_RAM_FREE, DYN_RAM_USED, DYN_STACK_MARGIN, DYN_STACK_PEAK,
@@ -54,11 +54,6 @@ pub unsafe fn walker_on_event(
         state: KeyState::Pressed,
     } = ev
     {
-        if *code == KeyCode::Exit && walker.current_node_idx == 0 && walker.nav_stack.is_empty() {
-            ctx.post_event(crate::apps::Shortcut::LaunchApp(0).into());
-            return EventResult::Consumed;
-        }
-
         let handled = walker.handle_key(*code);
 
         // Process any pending commands dispatched by actions
@@ -89,9 +84,6 @@ pub unsafe fn walker_on_event(
         }
 
         if handled {
-            EventResult::Consumed
-        } else if *code == KeyCode::Exit {
-            ctx.post_event(crate::apps::Shortcut::LaunchApp(0).into());
             EventResult::Consumed
         } else {
             EventResult::Ignored

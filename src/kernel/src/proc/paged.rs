@@ -356,6 +356,28 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
         self.total_swaps = 0;
     }
 
+    /// Configure the structured leaf manager and register leaves from `SectionLeafMap (0x0006)`.
+    pub fn configure(
+        &mut self,
+        overlay_vma: u32,
+        window_size: u16,
+        leaf_map_body: Option<&[u8]>,
+    ) {
+        self.reset();
+        self.overlay_vma = overlay_vma;
+        self.window_size = window_size;
+        if let Some(leaf_body) = leaf_map_body {
+            let count = (leaf_body.len() / LeafEntry::SIZE).min(MAX_LEAVES);
+            for i in 0..count {
+                let offset = i * LeafEntry::SIZE;
+                if let Some(entry) = LeafEntry::parse(&leaf_body[offset..]) {
+                    self.leaves[i] = entry;
+                    self.leaf_count += 1;
+                }
+            }
+        }
+    }
+
     pub fn register_leaf(&mut self, entry: LeafEntry) -> Result<(), PagedError> {
         if (self.leaf_count as usize) < MAX_LEAVES {
             self.leaves[self.leaf_count as usize] = entry;
@@ -675,5 +697,51 @@ mod tests {
             Ok(0)
         });
         assert_eq!(loop_res.unwrap_err(), PagedError::MaxHopsExceeded);
+    }
+
+    #[test]
+    fn test_structured_leaf_manager_configure_from_slice() {
+        let mut raw_leaf_map = [0u8; 32];
+        // Leaf 1
+        raw_leaf_map[0] = 1; // leaf_id
+        raw_leaf_map[1] = 0; // flags
+        raw_leaf_map[2..4].copy_from_slice(&512u16.to_le_bytes()); // size = 512
+        raw_leaf_map[4..8].copy_from_slice(&0x2000u32.to_le_bytes()); // flash_offset
+        raw_leaf_map[8..10].copy_from_slice(&0x0010u16.to_le_bytes()); // entry_offset
+        raw_leaf_map[10..12].copy_from_slice(&64u16.to_le_bytes()); // ram_scratch
+
+        // Leaf 2
+        raw_leaf_map[16] = 2; // leaf_id
+        raw_leaf_map[17] = FLAG_LEAF_RT; // flags
+        raw_leaf_map[18..20].copy_from_slice(&1024u16.to_le_bytes()); // size = 1024
+        raw_leaf_map[20..24].copy_from_slice(&0x2400u32.to_le_bytes()); // flash_offset
+        raw_leaf_map[24..26].copy_from_slice(&0x0020u16.to_le_bytes()); // entry_offset
+        raw_leaf_map[26..28].copy_from_slice(&128u16.to_le_bytes()); // ram_scratch
+
+        let mut mgr: StructuredLeafManager<4> = StructuredLeafManager::new(0, 0);
+        mgr.configure(0x2000_1000, 1024, Some(&raw_leaf_map));
+
+        assert_eq!(mgr.leaf_count(), 2);
+        assert_eq!(mgr.overlay_vma, 0x2000_1000);
+        assert_eq!(mgr.window_size, 1024);
+
+        let leaf1 = mgr.find_leaf(1).expect("Leaf 1 must be found");
+        let l1_size = leaf1.size;
+        let l1_flash = leaf1.flash_offset;
+        let l1_entry = leaf1.entry_offset;
+        let l1_scratch = leaf1.ram_scratch_bytes;
+        assert_eq!(l1_size, 512);
+        assert_eq!(l1_flash, 0x2000);
+        assert_eq!(l1_entry, 0x0010);
+        assert_eq!(l1_scratch, 64);
+
+        let leaf2 = mgr.find_leaf(2).expect("Leaf 2 must be found");
+        let l2_size = leaf2.size;
+        let l2_flash = leaf2.flash_offset;
+        assert_eq!(l2_size, 1024);
+        assert_eq!(leaf2.flags, FLAG_LEAF_RT);
+        assert_eq!(l2_flash, 0x2400);
+
+        assert!(mgr.find_leaf(3).is_none());
     }
 }

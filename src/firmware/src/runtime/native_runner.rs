@@ -13,7 +13,7 @@ use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::krx::{
-    KrxClass, KrxLaunchError, KrxPreamble, KrxProfile, LeafEntry, SectionExecution,
+    KrxClass, KrxLaunchError, KrxPreamble, KrxProfile, SectionExecution,
 };
 use kernel::proc::memory::MemoryMapLayout;
 use kernel::proc::paged::{
@@ -382,17 +382,7 @@ pub fn load_native_from_storage(
     // 4. Configure P0 Structured Leaf Manager if SECTION_LEAF_MAP is present
     let overlay_size = 1024u32;
     let overlay_vma = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(overlay_size);
-    slot.leaf_mgr.overlay_vma = overlay_vma;
-    slot.leaf_mgr.window_size = overlay_size as u16;
-    if let Some(leaf_body) = leaf_map_body {
-        let count = leaf_body.len() / LeafEntry::SIZE;
-        for i in 0..count {
-            let offset = i * LeafEntry::SIZE;
-            if let Some(entry) = LeafEntry::parse(&leaf_body[offset..]) {
-                let _ = slot.leaf_mgr.register_leaf(entry);
-            }
-        }
-    }
+    slot.leaf_mgr.configure(overlay_vma, overlay_size as u16, leaf_map_body);
 
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
