@@ -182,22 +182,34 @@ impl LauncherApp {
         }
     }
 
-    #[inline(never)]
-    fn execute_target(&mut self, ctx: &mut SysContext, target: LauncherTarget) -> bool {
-        self.is_launching = true;
-        self.model.is_pressed = true;
-
+    fn flush_lcd(&self, ctx: &mut SysContext, with_overlay: bool) {
         let is_list = ctx.config.apps.launcher_style == 1;
-
-        // Immediately update physical LCD so the outline border visibly persists during launch
         let sb_cfg = self.status_bar_config();
         let mut disp = ctx.display.take();
         if let Some(ref mut d) = disp {
             self.render_to_canvas(d.canvas, is_list);
             ctx.draw_status_bar_cfg(d.canvas, &sb_cfg);
+            if with_overlay {
+                unsafe {
+                    let modal_ref =
+                        &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL);
+                    if modal_ref.is_active() {
+                        modal_ref.render_overlay(d.canvas);
+                    }
+                }
+            }
             d.lcd.blit(d.canvas);
         }
         ctx.display = disp;
+    }
+
+    #[inline(never)]
+    fn execute_target(&mut self, ctx: &mut SysContext, target: LauncherTarget) -> bool {
+        self.is_launching = true;
+        self.model.is_pressed = true;
+
+        // Immediately update physical LCD so the outline border visibly persists during launch
+        self.flush_lcd(ctx, false);
 
         let success = match target {
             LauncherTarget::App(app_id) => {
@@ -234,22 +246,7 @@ impl LauncherApp {
             self.is_launching = false;
             self.is_pressed = false;
             self.model.is_pressed = false;
-            let is_list = ctx.config.apps.launcher_style == 1;
-            let sb_cfg = self.status_bar_config();
-            let mut disp = ctx.display.take();
-            if let Some(ref mut d) = disp {
-                self.render_to_canvas(d.canvas, is_list);
-                ctx.draw_status_bar_cfg(d.canvas, &sb_cfg);
-                unsafe {
-                    let modal_ref =
-                        &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL);
-                    if modal_ref.is_active() {
-                        modal_ref.render_overlay(d.canvas);
-                    }
-                }
-                d.lcd.blit(d.canvas);
-            }
-            ctx.display = disp;
+            self.flush_lcd(ctx, true);
         }
         success
     }

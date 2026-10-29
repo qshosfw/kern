@@ -194,37 +194,48 @@ pub fn format_live_metric(metric: u8, ctx: &mut crate::SysContext, out: &mut Sho
             format_debug_metric(metric, ctx, out);
         }
         _ => {
-            let (val, unit) = if metric >= METRIC_STORAGE_USED && metric <= METRIC_STORAGE_DELETED {
+            const UNIT_NONE: u8 = 0;
+            const UNIT_KB: u8 = 1;
+            const UNIT_PCT: u8 = 2;
+            const UNIT_MA: u8 = 3;
+            const UNIT_MV: u8 = 4;
+            const UNIT_MHZ: u8 = 5;
+            const UNIT_B: u8 = 6;
+            const UNIT_SEC: u8 = 7;
+            #[cfg(feature = "settings_calib")]
+            const UNIT_HZ: u8 = 8;
+
+            let (val, unit_code): (i32, u8) = if metric >= METRIC_STORAGE_USED && metric <= METRIC_STORAGE_DELETED {
                 let st = ctx.storage.stats();
                 match metric {
-                    METRIC_STORAGE_USED => (st.used_sectors as i32 * 4, " KB"),
-                    METRIC_STORAGE_FREE => (st.free_sectors as i32 * 4, " KB"),
-                    METRIC_STORAGE_FILES => (st.active_files as i32, ""),
-                    METRIC_STORAGE_WEAR => (st.wear_cycles as i32, ""),
-                    _ => (st.deleted_sectors as i32, " sec"),
+                    METRIC_STORAGE_USED => (st.used_sectors as i32 * 4, UNIT_KB),
+                    METRIC_STORAGE_FREE => (st.free_sectors as i32 * 4, UNIT_KB),
+                    METRIC_STORAGE_FILES => (st.active_files as i32, UNIT_NONE),
+                    METRIC_STORAGE_WEAR => (st.wear_cycles as i32, UNIT_NONE),
+                    _ => (st.deleted_sectors as i32, UNIT_SEC),
                 }
             } else {
                 match metric {
-                    METRIC_BATTERY_RAW_ADC => (ctx.power.raw_battery_adc() as i32, ""),
-                    METRIC_BATTERY_PCT => (ctx.power.battery_percentage() as i32, "%"),
-                    METRIC_BATTERY_CURRENT => (ctx.power.battery_current_ma() as i32, " mA"),
-                    METRIC_VDDA_REF => (ctx.power.vdda_voltage_mv() as i32, " mV"),
+                    METRIC_BATTERY_RAW_ADC => (ctx.power.raw_battery_adc() as i32, UNIT_NONE),
+                    METRIC_BATTERY_PCT => (ctx.power.battery_percentage() as i32, UNIT_PCT),
+                    METRIC_BATTERY_CURRENT => (ctx.power.battery_current_ma() as i32, UNIT_MA),
+                    METRIC_VDDA_REF => (ctx.power.vdda_voltage_mv() as i32, UNIT_MV),
                     METRIC_SYS_CLOCK => (
                         if ctx.config.battery.cpu_clock == 1 {
                             72
                         } else {
                             48
                         },
-                        " MHz",
+                        UNIT_MHZ,
                     ),
-                    METRIC_DEVICE_RADIO_ID => (ctx.config.system.radio_id as i32, ""),
+                    METRIC_DEVICE_RADIO_ID => (ctx.config.system.radio_id as i32, UNIT_NONE),
                     METRIC_STACK_HEADROOM => (
                         kernel::sys::SystemDiagnostics::stack_margin_bytes() as i32,
-                        " B",
+                        UNIT_B,
                     ),
                     METRIC_STACK_PEAK => (
                         kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as i32,
-                        " B",
+                        UNIT_B,
                     ),
                     #[cfg(feature = "flight_recorder")]
                     METRIC_BOOT_CRASHES => (
@@ -232,28 +243,40 @@ pub fn format_live_metric(metric: u8, ctx: &mut crate::SysContext, out: &mut Sho
                             .get()
                             .latest_valid_slot()
                             .map_or(0, |s| s.crash_count as i32),
-                        "",
+                        UNIT_NONE,
                     ),
                     #[cfg(not(feature = "flight_recorder"))]
-                    METRIC_BOOT_CRASHES => (0, ""),
+                    METRIC_BOOT_CRASHES => (0, UNIT_NONE),
                     METRIC_APPS_INSTALLED => (
                         crate::apps::launcher::catalog::get_catalog().entries.len() as i32,
-                        "",
+                        UNIT_NONE,
                     ),
                     #[cfg(feature = "settings_calib")]
-                    METRIC_BATT_CALIB_REF => (ctx.calibration.battery_calib_const() as i32, ""),
+                    METRIC_BATT_CALIB_REF => (ctx.calibration.battery_calib_const() as i32, UNIT_NONE),
                     #[cfg(feature = "settings_calib")]
-                    METRIC_CALIB_XTAL => (ctx.calibration.xtal_freq_low() as i32, " Hz"),
+                    METRIC_CALIB_XTAL => (ctx.calibration.xtal_freq_low() as i32, UNIT_HZ),
                     #[cfg(feature = "settings_calib")]
-                    METRIC_CALIB_LNA => (ctx.calibration.lna_calib() as i32, ""),
+                    METRIC_CALIB_LNA => (ctx.calibration.lna_calib() as i32, UNIT_NONE),
                     #[cfg(feature = "settings_calib")]
-                    METRIC_CALIB_MIX => (ctx.calibration.mix_calib() as i32, ""),
+                    METRIC_CALIB_MIX => (ctx.calibration.mix_calib() as i32, UNIT_NONE),
                     #[cfg(feature = "settings_calib")]
-                    METRIC_CALIB_VOL => (ctx.calibration.volume_gain() as i32, ""),
-                    _ => (-1, ""),
+                    METRIC_CALIB_VOL => (ctx.calibration.volume_gain() as i32, UNIT_NONE),
+                    _ => (-1, UNIT_NONE),
                 }
             };
             if val >= 0 {
+                let unit = match unit_code {
+                    UNIT_KB => " KB",
+                    UNIT_PCT => "%",
+                    UNIT_MA => " mA",
+                    UNIT_MV => " mV",
+                    UNIT_MHZ => " MHz",
+                    UNIT_B => " B",
+                    UNIT_SEC => " sec",
+                    #[cfg(feature = "settings_calib")]
+                    UNIT_HZ => " Hz",
+                    _ => "",
+                };
                 out.push_int_fixed(val, 0, "", unit);
             }
         }
