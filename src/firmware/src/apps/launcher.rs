@@ -74,7 +74,8 @@ pub fn load_entries(
         count += 1;
 
         // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
-        let cat_ref: &'static catalog::PackageCatalog = &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
+        let cat_ref: &'static catalog::PackageCatalog =
+            &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
         for app in cat_ref.apps() {
             if !app.is_valid || count >= 14 {
                 continue;

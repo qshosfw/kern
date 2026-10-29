@@ -63,16 +63,26 @@ pub unsafe fn walker_on_event(
 
         // Process any pending commands dispatched by actions
         match walker.take_command() {
-            DeclareCommand::PlayTone { freq_hz, duration_ms } => {
+            DeclareCommand::PlayTone {
+                freq_hz,
+                duration_ms,
+            } => {
                 ctx.play_tone(freq_hz, duration_ms);
             }
             DeclareCommand::LaunchApp { app_id } => {
                 ctx.post_event(crate::apps::Shortcut::LaunchApp(app_id).into());
             }
-            DeclareCommand::CallService { interface_id, method_id, param } => {
+            DeclareCommand::CallService {
+                interface_id,
+                method_id,
+                param,
+            } => {
                 let _ = (interface_id, method_id, param);
             }
-            DeclareCommand::EmitEvent { event_code, payload } => {
+            DeclareCommand::EmitEvent {
+                event_code,
+                payload,
+            } => {
                 let _ = (event_code, payload);
             }
             DeclareCommand::Notify { .. } | DeclareCommand::None => {}
@@ -442,7 +452,9 @@ pub unsafe fn walker_render(
                 walker.table_row_count as usize
             };
 
-            let display_count = eff_total.saturating_sub(walker.scroll_top).min(visible_count);
+            let display_count = eff_total
+                .saturating_sub(walker.scroll_top)
+                .min(visible_count);
             for i in 0..display_count {
                 let row_idx = walker.scroll_top + i;
                 let is_selected = row_idx == walker.selected_item;
@@ -452,7 +464,11 @@ pub unsafe fn walker_render(
                     canvas.fill_rect(2, (y - 5).max(0) as u8, 122, 6, Color::Fill);
                     canvas.clear_corners(2, (y - 5).max(0) as u8, 122, 6);
                 }
-                let color = if is_selected { Color::Clear } else { Color::Fill };
+                let color = if is_selected {
+                    Color::Clear
+                } else {
+                    Color::Fill
+                };
 
                 let mut name_buf = [0u8; 16];
                 let mut val_buf = [0u8; 16];
@@ -481,8 +497,14 @@ pub unsafe fn walker_render(
                         (found_name, found_state)
                     }
                     _ => {
-                        if let Some(it) = walker.items.get(node.first_item_offset as usize + row_idx) {
-                            let l = walker.labels.get(it.label_offset as usize).copied().unwrap_or("");
+                        if let Some(it) =
+                            walker.items.get(node.first_item_offset as usize + row_idx)
+                        {
+                            let l = walker
+                                .labels
+                                .get(it.label_offset as usize)
+                                .copied()
+                                .unwrap_or("");
                             let v = resolve_item_info_str(walker, ctx, *it, &mut val_buf);
                             (l, v)
                         } else {
@@ -504,7 +526,8 @@ pub unsafe fn walker_render(
             // Scrollbar for table browser
             if eff_total > visible_count {
                 let track_h = 35u8;
-                let thumb_h = ((visible_count as u32 * track_h as u32) / eff_total as u32).max(3) as u8;
+                let thumb_h =
+                    ((visible_count as u32 * track_h as u32) / eff_total as u32).max(3) as u8;
                 let max_scroll = (eff_total - visible_count) as u32;
                 let thumb_offset = if max_scroll > 0 {
                     ((walker.scroll_top as u32 * (track_h - thumb_h) as u32) / max_scroll) as u8

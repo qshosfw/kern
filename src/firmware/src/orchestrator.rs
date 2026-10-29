@@ -199,10 +199,7 @@ impl Orchestrator {
     }
 
     #[inline(never)]
-    fn tick_background_services<'a>(
-        &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
-    ) {
+    fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::FirmwareContext<'a, '_>) {
         // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
         #[cfg(feature = "radio")]
         {
@@ -234,6 +231,9 @@ impl Orchestrator {
                 _ => {
                     ctx.state.sync_from_coord();
                 }
+            }
+            if let Some(bus_ev) = radio_ev.to_bus_event(2) {
+                crate::system::enqueue_event(kernel::event::Event::Bus(bus_ev));
             }
         }
 

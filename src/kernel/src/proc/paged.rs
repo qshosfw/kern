@@ -395,7 +395,9 @@ mod tests {
         assert_eq!(frame1.caller_block_id, 1);
         assert_eq!(frame1.return_offset, 0x0050);
         // Block 1 is STILL resident in Slot 1 -> Cache Hit!
-        let (s1_res, hit1_res, _) = cache.resolve_or_select_slot(frame1.caller_block_id).unwrap();
+        let (s1_res, hit1_res, _) = cache
+            .resolve_or_select_slot(frame1.caller_block_id)
+            .unwrap();
         assert_eq!((s1_res, hit1_res), (1, true));
 
         // 5. Block 1 returns: pop shadow stack -> resumes Block 0
@@ -403,7 +405,9 @@ mod tests {
         assert_eq!(frame0.caller_block_id, 0);
         assert_eq!(frame0.return_offset, 0x0020);
         // Block 0 was EVICTED! -> Cache Miss, faults back in!
-        let (s0_res, hit0_res, _) = cache.resolve_or_select_slot(frame0.caller_block_id).unwrap();
+        let (s0_res, hit0_res, _) = cache
+            .resolve_or_select_slot(frame0.caller_block_id)
+            .unwrap();
         assert_eq!((s0_res, hit0_res), (0, false));
         assert_eq!(cache.slots[0].resident_block, Some(0));
     }

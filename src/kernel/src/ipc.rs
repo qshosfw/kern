@@ -121,3 +121,66 @@ pub struct BusEvent {
     pub event_id: u8,
     pub data: u32,
 }
+
+impl BusEvent {
+    #[inline(always)]
+    pub const fn new(topic: Topic, sender: u8, event_id: u8, data: u32) -> Self {
+        Self {
+            topic,
+            sender,
+            event_id,
+            data,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn is_radio(&self) -> bool {
+        self.topic.matches(Topic::RADIO)
+    }
+
+    #[inline(always)]
+    pub const fn is_system(&self) -> bool {
+        self.topic.matches(Topic::SYSTEM)
+    }
+
+    #[inline(always)]
+    pub const fn is_network(&self) -> bool {
+        self.topic.matches(Topic::NETWORK)
+    }
+}
+
+/// Standard Radio Subsystem Event Identifiers for BusEvent (Topic::RADIO).
+pub mod radio_events {
+    pub const CARRIER_OPENED: u8 = 1;
+    pub const CARRIER_CLOSED: u8 = 2;
+    pub const DUAL_WATCH_SWITCHED: u8 = 3;
+    pub const FSK_SYNC_DETECTED: u8 = 4;
+    pub const FSK_FRAME_FINISHED: u8 = 5;
+    pub const FSK_LOCK_RELEASED: u8 = 6;
+    pub const LOCK_ACQUIRED: u8 = 7;
+    pub const LOCK_RELEASED: u8 = 8;
+    pub const LOCK_PREEMPTED: u8 = 9;
+    pub const LOCK_RESTORED: u8 = 10;
+    pub const PACKET_RECEIVED: u8 = 11;
+    pub const TX_ENDED: u8 = 12;
+    pub const TOT_WARNING: u8 = 13;
+    pub const TOT_EXPIRED: u8 = 14;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_topic_matching_and_filtering() {
+        assert!(Topic::RADIO.matches(Topic::RADIO));
+        assert!(Topic::ALL.matches(Topic::RADIO));
+        assert!(!Topic::UI.matches(Topic::RADIO));
+
+        let bus_ev = BusEvent::new(Topic::RADIO, 2, radio_events::CARRIER_OPENED, 0);
+        assert!(bus_ev.is_radio());
+        assert!(!bus_ev.is_system());
+        assert_eq!(bus_ev.sender, 2);
+        assert_eq!(bus_ev.event_id, radio_events::CARRIER_OPENED);
+    }
+}

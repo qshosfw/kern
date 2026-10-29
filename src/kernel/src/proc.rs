@@ -346,13 +346,28 @@ mod tests {
         assert_eq!(pid_vfo, Pid(4));
 
         // Mark radio daemon as ServiceIdle
-        table.find_mut(pid_radio).unwrap().set_state(ProcState::ServiceIdle);
+        table
+            .find_mut(pid_radio)
+            .unwrap()
+            .set_state(ProcState::ServiceIdle);
 
         // 3. Simulate 5 scheduler ticks: daemons receive background activations
         for _ in 0..5 {
-            table.find_mut(pid_kernel).unwrap().ledger.record_activation();
-            table.find_mut(pid_radio).unwrap().ledger.record_activation();
-            table.find_mut(pid_power).unwrap().ledger.record_activation();
+            table
+                .find_mut(pid_kernel)
+                .unwrap()
+                .ledger
+                .record_activation();
+            table
+                .find_mut(pid_radio)
+                .unwrap()
+                .ledger
+                .record_activation();
+            table
+                .find_mut(pid_power)
+                .unwrap()
+                .ledger
+                .record_activation();
             table.find_mut(pid_vfo).unwrap().ledger.record_activation();
             table.find_mut(pid_vfo).unwrap().ledger.record_event();
         }
@@ -364,7 +379,10 @@ mod tests {
         assert_eq!(table.find(pid_vfo).unwrap().ledger.ipc_events, 5);
 
         // 4. Switch foreground app from VFO (0) to Explorer (app_id 10)
-        table.find_mut(pid_vfo).unwrap().set_state(ProcState::Suspended);
+        table
+            .find_mut(pid_vfo)
+            .unwrap()
+            .set_state(ProcState::Suspended);
         let pid_explorer = table
             .spawn(
                 "Explorer",
@@ -374,14 +392,33 @@ mod tests {
                 CapabilitySet::empty(),
             )
             .unwrap();
-        table.find_mut(pid_explorer).unwrap().set_state(ProcState::Running);
+        table
+            .find_mut(pid_explorer)
+            .unwrap()
+            .set_state(ProcState::Running);
 
         // 5. Simulate 3 more background ticks while Explorer is active
         for _ in 0..3 {
-            table.find_mut(pid_kernel).unwrap().ledger.record_activation();
-            table.find_mut(pid_radio).unwrap().ledger.record_activation();
-            table.find_mut(pid_power).unwrap().ledger.record_activation();
-            table.find_mut(pid_explorer).unwrap().ledger.record_activation();
+            table
+                .find_mut(pid_kernel)
+                .unwrap()
+                .ledger
+                .record_activation();
+            table
+                .find_mut(pid_radio)
+                .unwrap()
+                .ledger
+                .record_activation();
+            table
+                .find_mut(pid_power)
+                .unwrap()
+                .ledger
+                .record_activation();
+            table
+                .find_mut(pid_explorer)
+                .unwrap()
+                .ledger
+                .record_activation();
         }
 
         // Background daemons continued running concurrently!

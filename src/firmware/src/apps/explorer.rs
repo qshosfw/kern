@@ -594,12 +594,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for ExplorerApp {
                     0 => self.load_viewer_content(ctx),
                     1 => {
                         if let Some(item) = self.selected_item() {
-                            ctx.prompt_text(
-                                TAG_RENAME_PROMPT,
-                                "Rename File",
-                                item.name(),
-                                32,
-                            );
+                            ctx.prompt_text(TAG_RENAME_PROMPT, "Rename File", item.name(), 32);
                         }
                     }
                     2 => {

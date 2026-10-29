@@ -172,11 +172,25 @@ pub struct NavFrame {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclareCommand {
     None,
-    CallService { interface_id: u16, method_id: u16, param: u16 },
-    EmitEvent { event_code: u16, payload: u16 },
-    PlayTone { freq_hz: u16, duration_ms: u16 },
-    Notify { message_offset: u16 },
-    LaunchApp { app_id: u8 },
+    CallService {
+        interface_id: u16,
+        method_id: u16,
+        param: u16,
+    },
+    EmitEvent {
+        event_code: u16,
+        payload: u16,
+    },
+    PlayTone {
+        freq_hz: u16,
+        duration_ms: u16,
+    },
+    Notify {
+        message_offset: u16,
+    },
+    LaunchApp {
+        app_id: u8,
+    },
 }
 
 /// Declare Walker (Class Runtime Engine).
@@ -424,7 +438,9 @@ impl DeclareWalker {
                 }
             }
             KeyCode::Menu => {
-                if node.layout == LAYOUT_TABLE_BROWSER && (node.first_item_offset as usize) >= self.items.len() {
+                if node.layout == LAYOUT_TABLE_BROWSER
+                    && (node.first_item_offset as usize) >= self.items.len()
+                {
                     if let Some(act) = self.actions.first() {
                         let op = act.op;
                         self.execute_action(0);

@@ -15,8 +15,6 @@ pub use tone_service::*;
 use crate::services::melody::{BeepType, DialogSoundType, MelodyEngine, RogerType};
 use utils::units::{Frequency, Hertz};
 
-pub use kernel::service::radio::*;
-
 pub trait RadioMelodyExt {
     fn play_beep(&mut self, beep: BeepType);
     fn play_roger(&mut self, roger: RogerType);

@@ -198,8 +198,7 @@ impl KeypadLockManager {
                     }
                     KeyState::Released => {
                         let was_long_press = self.is_long_press_triggered;
-                        let had_started_hold =
-                            self.hold_elapsed_ms >= self.hold_start_threshold_ms;
+                        let had_started_hold = self.hold_elapsed_ms >= self.hold_start_threshold_ms;
                         self.held_code = None;
                         self.hold_elapsed_ms = 0;
                         self.is_long_press_triggered = false;
@@ -282,7 +281,9 @@ impl KeypadLockManager {
 
             let bar_w = 92u8;
             let bar_x = (center_x - (bar_w as i16) / 2) as i16;
-            let visible_elapsed = self.hold_elapsed_ms.saturating_sub(self.hold_start_threshold_ms);
+            let visible_elapsed = self
+                .hold_elapsed_ms
+                .saturating_sub(self.hold_start_threshold_ms);
             let visible_target = self
                 .hold_target_ms
                 .saturating_sub(self.hold_start_threshold_ms)

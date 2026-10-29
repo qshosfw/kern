@@ -1,7 +1,7 @@
 use crate::services::power::PowerService;
 use crate::services::radio::{
-    ClientId, ClientToken, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant,
-    RfSquelch, TxPermission,
+    ClientId, ClientToken, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant, RfSquelch,
+    TxPermission,
 };
 // Main Dual VFO & Telemetry Application
 
@@ -316,6 +316,10 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for VfoApp {
                 } else {
                     EventResult::Ignored
                 }
+            }
+            Event::Bus(bus_ev) if bus_ev.is_radio() => {
+                ctx.state.sync_from_coord();
+                EventResult::Consumed
             }
             _ => EventResult::Ignored,
         }

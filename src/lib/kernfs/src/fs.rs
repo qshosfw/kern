@@ -237,9 +237,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     /// Read file content at `path` starting at byte `offset` into `buf`.
     /// Reads up to `buf.len()` bytes without heap allocation.
-    pub fn read_file_at(&mut self, path: &str, offset: usize, buf: &mut [u8]) -> Result<usize, FsError> {
-        let (sector, payload_len, _, _) =
-            self.find_best_sector(path).ok_or(FsError::NotFound)?;
+    pub fn read_file_at(
+        &mut self,
+        path: &str,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, FsError> {
+        let (sector, payload_len, _, _) = self.find_best_sector(path).ok_or(FsError::NotFound)?;
 
         if offset >= payload_len || buf.is_empty() {
             return Ok(0);

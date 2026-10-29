@@ -161,7 +161,9 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         if (perm & ATTR_ENCRYPTED) != 0 {
             return Err(StorageError::EncryptedNoKey);
         }
-        self.fs.read_file_at(path, offset, buf).map_err(Self::map_error)
+        self.fs
+            .read_file_at(path, offset, buf)
+            .map_err(Self::map_error)
     }
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {

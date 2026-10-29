@@ -570,6 +570,11 @@ impl<'a> Bk4829<'a, Transmitting> {
 
 impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
     fn configure_channel(&mut self, config: &kernel::service::radio::ChannelConfig) {
+        let was_amp_active = bsp::pins::AUDIO_PA.is_high();
+        if was_amp_active {
+            bsp::pins::AUDIO_PA.set_low();
+            self.set_af(AfType::Mute);
+        }
         self.set_rx_frequency(config.effective_rx_freq());
         <Self as kernel::service::radio::RfModulation>::set_bandwidth(self, config.bandwidth);
         <Self as kernel::service::radio::RfModulation>::set_modulation(self, config.modulation);
@@ -584,6 +589,10 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
         );
         <Self as kernel::service::radio::RfSquelch>::set_squelch_level(self, config.squelch_level);
         <Self as kernel::service::radio::RfAudioPath>::set_af_response(self, &config.af_response);
+        if was_amp_active {
+            self.set_af(self.active_demod_af);
+            bsp::pins::AUDIO_PA.set_high();
+        }
     }
 
     fn set_rx_frequency(&mut self, freq: Frequency<Hertz>) {
