@@ -525,18 +525,15 @@ pub unsafe fn walker_render(
 
             // Scrollbar for table browser
             if eff_total > visible_count {
-                let track_h = 35u8;
-                let thumb_h =
-                    ((visible_count as u32 * track_h as u32) / eff_total as u32).max(3) as u8;
-                let max_scroll = (eff_total - visible_count) as u32;
-                let thumb_offset = if max_scroll > 0 {
-                    ((walker.scroll_top as u32 * (track_h - thumb_h) as u32) / max_scroll) as u8
-                } else {
-                    0
-                };
-                let thumb_y = 17u8 + thumb_offset;
-                canvas.draw_vertical_line(126, 17, track_h, Color::DarkGray);
-                canvas.fill_rect(125, thumb_y, 3, thumb_h, Color::Fill);
+                gfx::widgets::draw_scrollbar(
+                    canvas,
+                    125,
+                    17,
+                    35,
+                    walker.scroll_top,
+                    eff_total,
+                    visible_count,
+                );
             }
         }
         LAYOUT_MENU | LAYOUT_FORM | _ => {
@@ -555,18 +552,15 @@ pub unsafe fn walker_render(
 
             // Minimalist vertical scrollbar when total items exceed 5 visible rows
             if total_items > visible_count {
-                let track_h = 42u8;
-                let thumb_h =
-                    ((visible_count as u32 * track_h as u32) / total_items as u32).max(4) as u8;
-                let max_scroll = (total_items - visible_count) as u32;
-                let thumb_offset = if max_scroll > 0 {
-                    ((walker.scroll_top as u32 * (track_h - thumb_h) as u32) / max_scroll) as u8
-                } else {
-                    0
-                };
-                let thumb_y = 10u8 + thumb_offset;
-                canvas.draw_vertical_line(126, 10, track_h, Color::DarkGray);
-                canvas.fill_rect(125, thumb_y, 3, thumb_h, Color::Fill);
+                gfx::widgets::draw_scrollbar(
+                    canvas,
+                    125,
+                    10,
+                    42,
+                    walker.scroll_top,
+                    total_items,
+                    visible_count,
+                );
             }
         }
     }

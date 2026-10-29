@@ -153,13 +153,7 @@ impl<'a, const N: usize> View<FormModel<'a, N>> for FormView {
         // 4. Scrollbar on the right (X=124..126)
         if N > visible_count {
             let track_y = (sheet_y + 10) as u8;
-            let track_h = 34u8;
-            canvas.draw_rect(124, track_y, 3, track_h, Color::Fill);
-            let thumb_h = ((visible_count as u32 * track_h as u32) / N as u32).max(4) as u8;
-            let thumb_y = track_y
-                + ((model.top_idx as u32 * (track_h - thumb_h) as u32) / (N - visible_count) as u32)
-                    as u8;
-            canvas.fill_rect(125, thumb_y, 1, thumb_h, Color::Fill);
+            widgets::draw_scrollbar(canvas, 124, track_y, 34, model.top_idx, N, visible_count);
         }
 
         // 5. Bottom action badges

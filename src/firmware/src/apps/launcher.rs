@@ -353,19 +353,15 @@ impl LauncherApp {
 
         // Minimalist vertical scrollbar with smooth kinetic tracking
         if total > visible_count {
-            let track_h = 52u8;
-            let thumb_h = ((visible_count as u32 * track_h as u32) / total as u32).max(6) as u8;
-            let max_scroll_rows = total - visible_count;
-            let max_scroll_px = (max_scroll_rows as i16) * row_height;
-            let scroll_px = self.scroller.current().clamp(0, max_scroll_px);
-            let thumb_offset = if max_scroll_px > 0 {
-                ((scroll_px as u32 * (track_h - thumb_h) as u32) / max_scroll_px as u32) as u8
-            } else {
-                0
-            };
-            let thumb_y = 9u8 + thumb_offset;
-            canvas.draw_vertical_line(126, 9, track_h, Color::DarkGray);
-            canvas.fill_rect(125, thumb_y, 3, thumb_h, Color::Fill);
+            gfx::widgets::draw_scrollbar(
+                canvas,
+                125,
+                9,
+                52,
+                (self.scroller.current().max(0) as usize) / (row_height as usize),
+                total,
+                visible_count,
+            );
         }
     }
 }

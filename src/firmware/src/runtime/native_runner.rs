@@ -259,6 +259,7 @@ fn read_file_region(
 
 /// Loads a Native (`KrxClass::Native`) or Demand-Paged (`KrxClass::Paged`) binary from flash
 /// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
+#[inline(never)]
 pub fn load_native_from_storage(
     name: &str,
     storage: &mut crate::services::SystemStorage,

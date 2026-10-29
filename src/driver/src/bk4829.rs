@@ -234,10 +234,11 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_TONE_GAIN, 0x0000);
         if was_amp_active {
             self.set_af(self.active_demod_af);
+            self.write_reg(REG_TX_MUTE, 0x3B18);
         } else {
             self.set_af(AfType::Mute);
+            self.write_reg(REG_TX_MUTE, 0xBB18); // Keep muted to prevent hiss/whistle/pop during hangover
         }
-        self.write_reg(REG_TX_MUTE, 0x3B18);
     }
 
     pub fn begin_tone_sequence(&mut self) -> bool {
@@ -279,10 +280,11 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_TONE_GAIN, 0x0000);
         if was_amp_active {
             self.set_af(self.active_demod_af);
+            self.write_reg(REG_TX_MUTE, 0x3B18);
         } else {
             self.set_af(AfType::Mute);
+            self.write_reg(REG_TX_MUTE, 0xBB18); // Keep muted to prevent hiss/whistle/pop during hangover
         }
-        self.write_reg(REG_TX_MUTE, 0x3B18);
     }
 
     pub fn play_tone_sequence_with_gain(
