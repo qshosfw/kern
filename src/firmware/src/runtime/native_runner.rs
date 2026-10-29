@@ -100,23 +100,31 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
     let slot_vma = (slot.buffer.as_ptr() as usize) + slot_byte_off;
 
     if !is_hit {
+        // Bounds check func_offset against declared block size
+        if func_offset >= block_entry.size {
+            return 0;
+        }
         // Stream block from SPI Flash via active context storage
         let read_len = (block_entry.size as usize).min(slot.cache.page_size as usize);
         if slot_byte_off + read_len > PAGED_CACHE_MAX_BYTES {
             return 0;
         }
-        unsafe {
+        let read_ok = unsafe {
             if !ACTIVE_CTX.is_null() {
                 let path = slot.pkg_path.as_str();
                 let dst = core::slice::from_raw_parts_mut(slot_vma as *mut u8, read_len);
-                // Read block from file offset into cache slot
-                let _ = read_file_region(
+                read_file_region(
                     (*ACTIVE_CTX).storage,
                     path,
                     block_entry.flash_offset as usize,
                     dst,
-                );
+                )
+            } else {
+                false
             }
+        };
+        if !read_ok {
+            return 0;
         }
         flush_instruction_pipeline();
 
@@ -125,6 +133,8 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
         if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(active_id) {
             pcb.ledger.record_page_fault();
         }
+    } else if func_offset >= block_entry.size {
+        return 0;
     }
 
     slot.current_block = block_id;
@@ -177,22 +187,31 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     let res = slot.leaf_mgr.dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
         if !is_hit {
             let read_len = (leaf_entry.size as usize).min(window_size as usize);
-            unsafe {
+            let read_ok = unsafe {
                 if !ACTIVE_CTX.is_null() {
                     let path = slot_ref().pkg_path.as_str();
                     let dst = core::slice::from_raw_parts_mut(
                         overlay_vma as *mut u8,
                         read_len,
                     );
-                    let _ = read_file_region(
+                    read_file_region(
                         (*ACTIVE_CTX).storage,
                         path,
                         leaf_entry.flash_offset as usize,
                         dst,
-                    );
+                    )
+                } else {
+                    false
                 }
+            };
+            if !read_ok {
+                return Err(PagedError::StorageReadFailed);
             }
             flush_instruction_pipeline();
+        }
+
+        if leaf_entry.entry_offset >= leaf_entry.size {
+            return Err(PagedError::InvalidLeafId);
         }
 
         let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;

@@ -140,6 +140,19 @@ impl KrxProfile {
         }
     }
 
+    pub const fn from_raw_code(code: u8) -> Option<Self> {
+        match code {
+            0x10 => Some(Self::N0NativeFixed),
+            0x11 => Some(Self::P0StructuredPaged),
+            0x12 => Some(Self::N1NativePic),
+            0x13 => Some(Self::P1TransparentPaged),
+            0x20 => Some(Self::V0ResidentVm),
+            0x30 => Some(Self::D0DeclareGraph),
+            0x31 => Some(Self::F0DeclareFlow),
+            _ => None,
+        }
+    }
+
     /// Automatically infers the normative execution profile from package metadata.
     pub const fn detect(
         preamble: &KrxPreamble,
@@ -539,10 +552,10 @@ impl SectionExecution {
         available_ram >= total_required
     }
 
-    /// Explicitly requested execution profile if specified in reserved header bytes.
+    /// Explicitly requested execution profile if specified in reserved header bytes (0 = unspecified / autodetect).
     #[inline(always)]
     pub const fn profile(&self) -> Option<KrxProfile> {
-        KrxProfile::from_u8(self.reserved[0])
+        KrxProfile::from_raw_code(self.reserved[0])
     }
 }
 
@@ -1288,5 +1301,68 @@ mod tests {
         assert_eq!(arg, 42);
         let cont = ctx.continuation;
         assert!(cont.is_done());
+    }
+
+    #[test]
+    fn test_krx_profile_detection_and_inference() {
+        let mut preamble_bytes = [0u8; 24];
+        preamble_bytes[0..4].copy_from_slice(&KRX_MAGIC);
+        preamble_bytes[4] = KrxClass::Native as u8;
+        preamble_bytes[5] = 2; // format_version
+        preamble_bytes[6..8].copy_from_slice(&1u16.to_le_bytes()); // section_count
+        let preamble = KrxPreamble::parse(&preamble_bytes).unwrap();
+
+        let mut exec = SectionExecution {
+            entry_point: 0x10,
+            got_offset: 0x40,
+            reloc_offset: 0,
+            reloc_count: 0,
+            min_stack_bytes: 256,
+            min_heap_bytes: 256,
+            page_size: 0,
+            cache_blocks: 0,
+            dma_burst_size: 0,
+            payload_size: 1024,
+            rt_pin_mask: 0,
+            max_fault_latency_us: 0,
+            reserved: [0u8; 2],
+        };
+
+        // Class Native + reloc_count == 0 + link_base == 0 => N1NativePic
+        assert_eq!(
+            KrxProfile::detect(&preamble, &exec, false, false),
+            KrxProfile::N1NativePic
+        );
+
+        // Class Native + reloc_count == 0 + link_base != 0 => N0NativeFixed
+        let mut fixed_preamble_bytes = preamble_bytes;
+        fixed_preamble_bytes[20..24].copy_from_slice(&0x2000_1000u32.to_le_bytes());
+        let fixed_preamble = KrxPreamble::parse(&fixed_preamble_bytes).unwrap();
+        assert_eq!(
+            KrxProfile::detect(&fixed_preamble, &exec, false, false),
+            KrxProfile::N0NativeFixed
+        );
+
+        // Explicit profile stamped into reserved[0] overrides detection
+        exec.reserved[0] = KrxProfile::P0StructuredPaged.raw_code();
+        assert_eq!(
+            KrxProfile::detect(&preamble, &exec, false, false),
+            KrxProfile::P0StructuredPaged
+        );
+
+        exec.reserved[0] = 0;
+        // Class Paged + has_leaf_map => P0StructuredPaged
+        let mut paged_bytes = preamble_bytes;
+        paged_bytes[4] = KrxClass::Paged as u8;
+        let paged_preamble = KrxPreamble::parse(&paged_bytes).unwrap();
+        assert_eq!(
+            KrxProfile::detect(&paged_preamble, &exec, false, true),
+            KrxProfile::P0StructuredPaged
+        );
+        // Class Paged + no leaf map => P1TransparentPaged
+        assert_eq!(
+            KrxProfile::detect(&paged_preamble, &exec, true, false),
+            KrxProfile::P1TransparentPaged
+        );
     }
 }
