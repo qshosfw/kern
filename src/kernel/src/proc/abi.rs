@@ -310,6 +310,10 @@ pub struct CapServiceVTable {
     pub leaf_call: unsafe extern "C" fn(leaf_id: u8, arg: u32) -> u32,
     pub lease_acquire: unsafe extern "C" fn(lease_kind: u8, timeout_ms: u32) -> u8,
     pub lease_release: unsafe extern "C" fn(lease_kind: u8) -> u8,
+    pub mem_query: unsafe extern "C" fn(
+        kind: u8,
+        out_desc: *mut crate::proc::MemoryRegionDescriptor,
+    ) -> u8,
 }
 
 /// 13. `CapHwBus` VTable (`interface_id = 0x000D`)
@@ -709,6 +713,12 @@ unsafe extern "C" fn noop_lease_acquire(_lease_kind: u8, _timeout_ms: u32) -> u8
 unsafe extern "C" fn noop_lease_release(_lease_kind: u8) -> u8 {
     1
 }
+unsafe extern "C" fn noop_mem_query(
+    _kind: u8,
+    _out_desc: *mut crate::proc::MemoryRegionDescriptor,
+) -> u8 {
+    1
+}
 
 unsafe extern "C" fn noop_hw_i2c_transfer(
     _addr: u8,
@@ -860,6 +870,7 @@ pub static STUB_SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     leaf_call: noop_leaf_call,
     lease_acquire: noop_lease_acquire,
     lease_release: noop_lease_release,
+    mem_query: noop_mem_query,
 };
 
 pub static STUB_HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {

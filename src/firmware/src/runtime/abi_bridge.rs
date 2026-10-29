@@ -1116,6 +1116,28 @@ pub unsafe extern "C" fn api_lease_release(lease_kind: u8) -> u8 {
     }
 }
 
+pub unsafe extern "C" fn api_mem_query(
+    kind: u8,
+    out_desc: *mut kernel::proc::MemoryRegionDescriptor,
+) -> u8 {
+    if out_desc.is_null() {
+        return 1;
+    }
+    let slot = super::native_runner::slot_ref();
+    if !slot.is_loaded {
+        return 1;
+    }
+    if let Some(rk) = kernel::proc::RegionKind::from_u8(kind) {
+        if let Some(desc) = slot.mem_layout.find_region_by_kind(rk) {
+            unsafe {
+                *out_desc = *desc;
+            }
+            return 0;
+        }
+    }
+    1
+}
+
 // ── 13. CapHwBus C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_hw_i2c_transfer(
@@ -1346,6 +1368,7 @@ pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     leaf_call: api_leaf_call,
     lease_acquire: api_lease_acquire,
     lease_release: api_lease_release,
+    mem_query: api_mem_query,
 };
 
 pub static HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {

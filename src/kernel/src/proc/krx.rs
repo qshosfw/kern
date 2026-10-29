@@ -127,6 +127,48 @@ impl KrxProfile {
                 | Self::F0DeclareFlow
         )
     }
+
+    pub const fn raw_code(&self) -> u8 {
+        match self {
+            Self::N0NativeFixed => 0x10,
+            Self::P0StructuredPaged => 0x11,
+            Self::N1NativePic => 0x12,
+            Self::P1TransparentPaged => 0x13,
+            Self::V0ResidentVm => 0x20,
+            Self::D0DeclareGraph => 0x30,
+            Self::F0DeclareFlow => 0x31,
+        }
+    }
+
+    /// Automatically infers the normative execution profile from package metadata.
+    pub const fn detect(
+        preamble: &KrxPreamble,
+        exec: &SectionExecution,
+        _has_block_map: bool,
+        has_leaf_map: bool,
+    ) -> Self {
+        if let Some(p) = exec.profile() {
+            return p;
+        }
+        match preamble.execution_class() {
+            Some(KrxClass::Native) => {
+                if exec.reloc_count == 0 && preamble.link_base != 0 {
+                    Self::N0NativeFixed
+                } else {
+                    Self::N1NativePic
+                }
+            }
+            Some(KrxClass::Paged) => {
+                if has_leaf_map {
+                    Self::P0StructuredPaged
+                } else {
+                    Self::P1TransparentPaged
+                }
+            }
+            Some(KrxClass::VMachine) => Self::V0ResidentVm,
+            Some(KrxClass::Declare) | None => Self::D0DeclareGraph,
+        }
+    }
 }
 
 /// Execution Type (KRX-ABI 2.5.0 Section 5.2 & Chapter 11)
@@ -286,7 +328,8 @@ impl KrxPreamble {
         })
     }
 
-    pub fn execution_class(&self) -> Option<KrxClass> {
+    #[inline(always)]
+    pub const fn execution_class(&self) -> Option<KrxClass> {
         KrxClass::from_u8(self.app_type)
     }
 }
@@ -485,6 +528,12 @@ impl SectionExecution {
             .saturating_add(self.min_heap_bytes as usize)
             .saturating_add(stack_margin);
         available_ram >= total_required
+    }
+
+    /// Explicitly requested execution profile if specified in reserved header bytes.
+    #[inline(always)]
+    pub const fn profile(&self) -> Option<KrxProfile> {
+        KrxProfile::from_u8(self.reserved[0])
     }
 }
 
@@ -753,6 +802,53 @@ impl LeafContinuation {
     #[inline(always)]
     pub const fn is_error(&self) -> bool {
         self.kind == Self::KIND_ERROR
+    }
+
+    #[inline(always)]
+    pub const fn as_u64(&self) -> u64 {
+        let low = (self.kind as u32)
+            | ((self.target_or_code as u32) << 8)
+            | ((self.reserved as u32) << 16);
+        (low as u64) | ((self.payload as u64) << 32)
+    }
+
+    #[inline(always)]
+    pub const fn from_u64(val: u64) -> Self {
+        let low = (val & 0xFFFF_FFFF) as u32;
+        let high = (val >> 32) as u32;
+        Self {
+            kind: (low & 0xFF) as u8,
+            target_or_code: ((low >> 8) & 0xFF) as u8,
+            reserved: ((low >> 16) & 0xFFFF) as u16,
+            payload: high,
+        }
+    }
+}
+
+/// Invocation context passed into a P0 Structured Leaf Overlay (16 bytes, power-of-two geometry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C, packed)]
+pub struct LeafContext {
+    pub leaf_id: u8,
+    pub flags: u8,
+    pub reserved: u16,
+    pub arg: u32,
+    pub continuation: LeafContinuation,
+}
+
+const _: () = assert!(core::mem::size_of::<LeafContext>() == 16);
+
+impl LeafContext {
+    pub const SIZE: usize = 16;
+
+    pub const fn new(leaf_id: u8, arg: u32) -> Self {
+        Self {
+            leaf_id,
+            flags: 0,
+            reserved: 0,
+            arg,
+            continuation: LeafContinuation::done(0),
+        }
     }
 }
 
@@ -1162,5 +1258,26 @@ mod tests {
         let err_corrupt = KrxLaunchError::MissingExecution;
         assert_eq!(err_corrupt.title(), "Corrupted Binary");
         assert_eq!(err_corrupt.message(), "Missing execution manifest");
+    }
+
+    #[test]
+    fn test_leaf_continuation_and_context() {
+        assert_eq!(core::mem::size_of::<LeafContext>(), 16);
+        assert_eq!(core::mem::size_of::<LeafContinuation>(), 8);
+
+        let cont = LeafContinuation::call_leaf(5, 0x1234_5678);
+        assert!(cont.is_call_leaf());
+        let raw = cont.as_u64();
+        let restored = LeafContinuation::from_u64(raw);
+        assert_eq!(cont, restored);
+        assert_eq!(restored.target_or_code, 5);
+        assert_eq!(restored.payload, 0x1234_5678);
+
+        let ctx = LeafContext::new(3, 42);
+        assert_eq!(ctx.leaf_id, 3);
+        let arg = ctx.arg;
+        assert_eq!(arg, 42);
+        let cont = ctx.continuation;
+        assert!(cont.is_done());
     }
 }

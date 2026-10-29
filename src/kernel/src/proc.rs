@@ -22,7 +22,7 @@ pub use abi::*;
 pub use krx::{
     BOOT_MAGIC, CALIB_MAGIC, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, KERNFS_MAGIC,
     KRX_MAGIC, KrxClass, KrxExecType, KrxIndexEntry, KrxPreamble, KrxProfile, KrxSwapHeader,
-    LeafContinuation, LeafEntry, PCB_MAGIC, SECTION_LEAF_MAP, SIG_MAGIC, SLAB_MAGIC,
+    LeafContext, LeafContinuation, LeafEntry, PCB_MAGIC, SECTION_LEAF_MAP, SIG_MAGIC, SLAB_MAGIC,
     SWAP_FLAG_COMPRESSED_RLE, SWAP_MAGIC,
 };
 pub use lease::{LeaseError, LeaseKind, ResourceLease, ResourceLeaseManager};

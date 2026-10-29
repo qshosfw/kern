@@ -5,7 +5,7 @@
 //! immunity, and the block-relative shadow return stack (`ShadowReturnStack`)
 //! for LR-thunking across overlay evictions on Cortex-M0+ (no MMU).
 
-use super::krx::{BlockEntry, LeafContinuation, LeafEntry};
+use super::krx::{BlockEntry, LeafContext, LeafContinuation, LeafEntry};
 
 /// Block flag: pinned in cache (never evicted once loaded; e.g., DSP inner loops)
 pub const BLOCK_FLAG_PINNED: u8 = 1 << 0;
@@ -407,6 +407,78 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
     pub fn leaf_entry_address(&self, entry: &LeafEntry) -> usize {
         ((self.overlay_vma + entry.entry_offset as u32) | 1) as usize
     }
+
+    #[inline(always)]
+    pub const fn active_leaf_id(&self) -> Option<u8> {
+        self.active_leaf
+    }
+
+    #[inline(always)]
+    pub const fn leaf_count(&self) -> usize {
+        self.leaf_count as usize
+    }
+
+    #[inline(always)]
+    pub fn leaf_at(&self, idx: usize) -> Option<&LeafEntry> {
+        if idx < (self.leaf_count as usize) {
+            Some(&self.leaves[idx])
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn total_swaps(&self) -> u32 {
+        self.total_swaps as u32
+    }
+
+    /// Dispatches a structured leaf overlay call and processes returned continuations
+    /// with trampoline chaining up to `max_hops` to prevent Cortex-M0+ stack recursion.
+    pub fn dispatch_leaf_trampoline<F>(
+        &mut self,
+        initial_leaf_id: u8,
+        initial_arg: u32,
+        max_hops: u8,
+        mut runner: F,
+    ) -> Result<u32, PagedError>
+    where
+        F: FnMut(&LeafEntry, bool, &mut LeafContext) -> Result<u32, PagedError>,
+    {
+        let mut current_id = initial_leaf_id;
+        let mut current_arg = initial_arg;
+        let mut hops = 0;
+
+        while hops < max_hops {
+            hops += 1;
+            let (leaf_entry, is_hit) = {
+                let (entry, hit) = self.begin_leaf_call(current_id)?;
+                (*entry, hit)
+            };
+
+            let mut ctx = LeafContext::new(current_id, current_arg);
+            let raw_res = runner(&leaf_entry, is_hit, &mut ctx)?;
+
+            // If continuation was not explicitly modified, treat as DONE with raw_res
+            let mut cont = ctx.continuation;
+            if cont.is_done() && cont.payload == 0 {
+                cont.payload = raw_res;
+                ctx.continuation = cont;
+            }
+
+            let end_cont = self.end_leaf_call(cont)?;
+            if end_cont.is_call_leaf() {
+                current_id = end_cont.target_or_code;
+                current_arg = end_cont.payload;
+                continue;
+            } else if end_cont.is_error() {
+                return Err(PagedError::LeafExecutionFailed);
+            } else {
+                return Ok(end_cont.payload);
+            }
+        }
+
+        Err(PagedError::LeafExecutionFailed)
+    }
 }
 
 #[cfg(test)]
@@ -578,5 +650,20 @@ mod tests {
         assert!(hit2_again);
         assert_eq!(mgr.total_swaps, 2); // no extra swap
         let _ = mgr.end_leaf_call(LeafContinuation::done(1));
+
+        // 6. Test dispatch_leaf_trampoline chaining: Leaf 1 -> Leaf 2 -> Done(150)
+        let tramp_res = mgr.dispatch_leaf_trampoline(1, 10, 4, |entry, _hit, ctx| {
+            let arg = ctx.arg;
+            if entry.leaf_id == 1 {
+                ctx.continuation = LeafContinuation::call_leaf(2, arg + 5);
+                Ok(0)
+            } else if entry.leaf_id == 2 {
+                ctx.continuation = LeafContinuation::done(arg * 10);
+                Ok(0)
+            } else {
+                Err(PagedError::InvalidLeafId)
+            }
+        });
+        assert_eq!(tramp_res.unwrap(), 150);
     }
 }

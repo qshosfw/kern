@@ -12,7 +12,10 @@ use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
-use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxPreamble, LeafContinuation, LeafEntry, SectionExecution};
+use kernel::proc::krx::{
+    KrxClass, KrxLaunchError, KrxPreamble, KrxProfile, LeafEntry, SectionExecution,
+};
+use kernel::proc::memory::MemoryMapLayout;
 use kernel::proc::paged::{
     FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
 };
@@ -31,6 +34,8 @@ pub(crate) struct NativeExecSlot {
     pub(crate) pkg_path: heapless::String<32>,
     pub(crate) is_loaded: bool,
     pub(crate) is_paged: bool,
+    pub(crate) profile: KrxProfile,
+    pub(crate) mem_layout: MemoryMapLayout<4>,
     pub(crate) current_block: u8,
     pub(crate) current_slot: u8,
     pub(crate) caps: CapabilitySet,
@@ -53,7 +58,7 @@ pub fn transient_arena_bytes_mut() -> &'static mut [u8; NATIVE_EXEC_BUFFER_WORDS
 }
 
 #[inline(always)]
-fn slot_ref() -> &'static NativeExecSlot {
+pub(crate) fn slot_ref() -> &'static NativeExecSlot {
     unsafe { (*core::ptr::addr_of!(NATIVE_SLOT)).assume_init_ref() }
 }
 
@@ -165,44 +170,45 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
         return 0xFFFF_FFFF;
     }
 
-    let (leaf_entry, is_hit) = match slot.leaf_mgr.begin_leaf_call(leaf_id) {
-        Ok((entry, hit)) => (*entry, hit),
-        Err(_) => return 0xFFFF_FFFF,
-    };
+    let overlay_vma = slot.leaf_mgr.overlay_vma;
+    let window_size = slot.leaf_mgr.window_size;
+    let got_base = slot.got_base;
 
-    if !is_hit {
-        let read_len = (leaf_entry.size as usize).min(slot.leaf_mgr.window_size as usize);
-        unsafe {
-            if !ACTIVE_CTX.is_null() {
-                let path = slot.pkg_path.as_str();
-                let dst = core::slice::from_raw_parts_mut(
-                    slot.leaf_mgr.overlay_vma as *mut u8,
-                    read_len,
-                );
-                let _ = read_file_region(
-                    (*ACTIVE_CTX).storage,
-                    path,
-                    leaf_entry.flash_offset as usize,
-                    dst,
-                );
+    let res = slot.leaf_mgr.dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
+        if !is_hit {
+            let read_len = (leaf_entry.size as usize).min(window_size as usize);
+            unsafe {
+                if !ACTIVE_CTX.is_null() {
+                    let path = slot_ref().pkg_path.as_str();
+                    let dst = core::slice::from_raw_parts_mut(
+                        overlay_vma as *mut u8,
+                        read_len,
+                    );
+                    let _ = read_file_region(
+                        (*ACTIVE_CTX).storage,
+                        path,
+                        leaf_entry.flash_offset as usize,
+                        dst,
+                    );
+                }
             }
+            flush_instruction_pipeline();
         }
-        flush_instruction_pipeline();
-    }
 
-    let entry_addr = slot.leaf_mgr.leaf_entry_address(&leaf_entry);
-    let res = unsafe {
-        invoke_krx_native(
-            entry_addr,
-            slot.got_base,
-            KRX_OP_START,
-            &raw const NATIVE_API_TABLE,
-            arg as *const (),
-        )
-    };
+        let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;
+        let raw_res = unsafe {
+            invoke_krx_native(
+                entry_addr,
+                got_base,
+                KRX_OP_START,
+                &raw const NATIVE_API_TABLE,
+                ctx as *mut _ as *const (),
+            )
+        };
+        Ok(raw_res)
+    });
 
-    let _ = slot.leaf_mgr.end_leaf_call(LeafContinuation::done(res));
-    res
+    res.unwrap_or(0xFFFF_FFFF)
 }
 
 /// Read an asset slice from the currently loaded KRX package on KernFS.
@@ -338,9 +344,10 @@ pub fn load_native_from_storage(
     }
 
     // 4. Configure P0 Structured Leaf Manager if SECTION_LEAF_MAP is present
-    let overlay_vma = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(1024);
+    let overlay_size = 1024u32;
+    let overlay_vma = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(overlay_size);
     slot.leaf_mgr.overlay_vma = overlay_vma;
-    slot.leaf_mgr.window_size = 1024;
+    slot.leaf_mgr.window_size = overlay_size as u16;
     if let Some(leaf_body) = leaf_map_body {
         let count = leaf_body.len() / LeafEntry::SIZE;
         for i in 0..count {
@@ -349,6 +356,38 @@ pub fn load_native_from_storage(
                 let _ = slot.leaf_mgr.register_leaf(entry);
             }
         }
+    }
+
+    // 4b. Configure normative memory regions for the detected execution profile
+    let profile = KrxProfile::detect(
+        preamble,
+        exec,
+        block_map_body.is_some(),
+        leaf_map_body.is_some(),
+    );
+    slot.profile = profile;
+    slot.mem_layout.reset();
+    if profile.is_structured_paged() {
+        let ram_vma = slot.got_base;
+        let ram_size = overlay_vma.saturating_sub(ram_vma);
+        slot.mem_layout = MemoryMapLayout::for_p0_structured(
+            load_base,
+            overlay_vma.saturating_sub(load_base),
+            overlay_vma,
+            overlay_size,
+            ram_vma,
+            ram_size,
+        );
+    } else {
+        let code_size = (exec.got_offset as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4);
+        let ram_vma = slot.got_base;
+        let ram_size = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(ram_vma);
+        slot.mem_layout = MemoryMapLayout::for_native_pic(
+            load_base,
+            code_size,
+            ram_vma,
+            ram_size,
+        );
     }
 
     // 5. Flush instruction pipeline before branching into SRAM arena
@@ -380,6 +419,13 @@ pub unsafe fn invoke_krx_native(
     // 1. Validate Thumb-1 mode bit and code bounds
     let code_addr = entry_point & !1;
     if (entry_point & 1) == 0 || code_addr < slot_start || code_addr >= slot_end {
+        return 0xFFFF_FFFF;
+    }
+
+    // 1b. Validate memory region execution permissions if layout is active
+    if slot.mem_layout.region_count > 0
+        && !slot.mem_layout.validate_access(code_addr as u32, 2, false, true)
+    {
         return 0xFFFF_FFFF;
     }
 

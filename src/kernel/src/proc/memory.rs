@@ -163,6 +163,85 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.region_count = 0;
+    }
+
+    /// Construct a memory layout for P0 Structured Paged applications (§5.1).
+    pub fn for_p0_structured(
+        code_vma: u32,
+        code_size: u32,
+        overlay_vma: u32,
+        overlay_size: u32,
+        ram_vma: u32,
+        ram_size: u32,
+    ) -> Self {
+        let mut layout = Self::new();
+        let _ = layout.add_region(MemoryRegionDescriptor::new(
+            RegionKind::ImmutableCode,
+            region_flags::READ | region_flags::EXEC,
+            code_vma,
+            code_size,
+        ));
+        let _ = layout.add_region(MemoryRegionDescriptor::new(
+            RegionKind::OverlayWindow,
+            region_flags::READ | region_flags::EXEC,
+            overlay_vma,
+            overlay_size,
+        ));
+        let _ = layout.add_region(MemoryRegionDescriptor::new(
+            RegionKind::VirtualRam,
+            region_flags::READ | region_flags::WRITE,
+            ram_vma,
+            ram_size,
+        ));
+        layout
+    }
+
+    /// Construct a memory layout for N1 Native PIC applications (§6.1).
+    pub fn for_native_pic(
+        code_vma: u32,
+        code_size: u32,
+        ram_vma: u32,
+        ram_size: u32,
+    ) -> Self {
+        let mut layout = Self::new();
+        let _ = layout.add_region(MemoryRegionDescriptor::new(
+            RegionKind::ImmutableCode,
+            region_flags::READ | region_flags::EXEC,
+            code_vma,
+            code_size,
+        ));
+        let _ = layout.add_region(MemoryRegionDescriptor::new(
+            RegionKind::VirtualRam,
+            region_flags::READ | region_flags::WRITE,
+            ram_vma,
+            ram_size,
+        ));
+        layout
+    }
+
+    /// Find the first memory region matching a specific kind.
+    pub fn find_region_by_kind(&self, kind: RegionKind) -> Option<&MemoryRegionDescriptor> {
+        let target_kind = kind as u8;
+        for i in 0..(self.region_count as usize) {
+            if self.regions[i].kind == target_kind {
+                return Some(&self.regions[i]);
+            }
+        }
+        None
+    }
+
+    /// Find the memory region containing the specified VMA address.
+    pub fn find_region_containing(&self, addr: u32) -> Option<&MemoryRegionDescriptor> {
+        for i in 0..(self.region_count as usize) {
+            if self.regions[i].contains_addr(addr) {
+                return Some(&self.regions[i]);
+            }
+        }
+        None
+    }
+
     /// Validates whether an access at `[addr .. addr + len]` is permitted by the layout.
     pub fn validate_access(
         &self,
@@ -225,5 +304,20 @@ mod tests {
         assert!(!layout.validate_access(0x2000_0100, 32, true, false));
         assert!(layout.validate_access(0x2000_0810, 64, true, false));
         assert!(!layout.validate_access(0x2000_0810, 64, false, true));
+
+        // Test P0 structured layout builder
+        let p0_layout: MemoryMapLayout<4> = MemoryMapLayout::for_p0_structured(
+            0x2000_0000, 2048,
+            0x2000_0800, 1024,
+            0x2000_0C00, 1024,
+        );
+        assert_eq!(p0_layout.region_count, 3);
+        let overlay = p0_layout.find_region_by_kind(RegionKind::OverlayWindow).unwrap();
+        let base = overlay.base_vma;
+        assert_eq!(base, 0x2000_0800);
+        assert!(overlay.can_execute());
+
+        let containing = p0_layout.find_region_containing(0x2000_0850).unwrap();
+        assert_eq!(containing.kind, RegionKind::OverlayWindow as u8);
     }
 }
