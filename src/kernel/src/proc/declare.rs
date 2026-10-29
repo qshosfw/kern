@@ -41,6 +41,28 @@ pub const ITEM_SUBMENU: u8 = 3;
 pub const ITEM_LINK: u8 = 4;
 pub const ITEM_INFO: u8 = 5;
 
+// ── UI Item Flags (Section 10.2) ────────────────────────────────────────────
+pub const FLAG_DYNAMIC: u8 = 1 << 0;
+pub const FLAG_READONLY: u8 = 1 << 1;
+pub const FLAG_SEPARATOR: u8 = 1 << 2;
+pub const FLAG_DISABLED: u8 = 1 << 3;
+
+// ── Telemetry & Dynamic Data Provider Identifiers (Section 10.4) ─────────────
+pub const DYN_BATTERY_MV: u16 = 0x0100;
+pub const DYN_BATTERY_PCT: u16 = 0x0101;
+pub const DYN_CPU_CLOCK: u16 = 0x0102;
+pub const DYN_RAM_FREE: u16 = 0x0103;
+pub const DYN_RAM_USED: u16 = 0x0104;
+pub const DYN_STACK_MARGIN: u16 = 0x0105;
+pub const DYN_STACK_PEAK: u16 = 0x0106;
+pub const DYN_UPTIME: u16 = 0x0107;
+pub const DYN_ACTIVE_PROCS: u16 = 0x0108;
+pub const DYN_STORAGE_FREE: u16 = 0x0109;
+pub const DYN_RADIO_RSSI: u16 = 0x010A;
+pub const DYN_RADIO_FREQ_A: u16 = 0x010B;
+pub const DYN_RADIO_FREQ_B: u16 = 0x010C;
+pub const DYN_SWAP_USAGE: u16 = 0x010D;
+
 // ── Schedule Kinds (Section 10.2) ───────────────────────────────────────────
 pub const SCHEDULE_EVERY_MS: u8 = 0;
 pub const SCHEDULE_RTC_AT: u8 = 1;
@@ -144,6 +166,8 @@ pub struct DeclareWalker {
     pub state: StateStore,
     pub current_node_idx: usize,
     pub selected_item: usize,
+    pub scroll_top: usize,
+    pub nav_stack: heapless::Vec<usize, 4>,
 }
 
 impl DeclareWalker {
@@ -159,6 +183,8 @@ impl DeclareWalker {
             state: StateStore::new(),
             current_node_idx: 0,
             selected_item: 0,
+            scroll_top: 0,
+            nav_stack: heapless::Vec::new(),
         }
     }
 
@@ -173,6 +199,17 @@ impl DeclareWalker {
         self.state = StateStore::new();
         self.current_node_idx = 0;
         self.selected_item = 0;
+        self.scroll_top = 0;
+        self.nav_stack.clear();
+    }
+
+    #[inline(always)]
+    pub fn adjust_scroll_for_selection(&mut self, visible_count: usize) {
+        if self.selected_item < self.scroll_top {
+            self.scroll_top = self.selected_item;
+        } else if self.selected_item >= self.scroll_top + visible_count {
+            self.scroll_top = self.selected_item + 1 - visible_count;
+        }
     }
 
     #[inline(never)]
@@ -255,19 +292,61 @@ impl DeclareWalker {
         let item_count = node.item_count as usize;
 
         match code {
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Key2 => {
                 if self.selected_item > 0 {
                     self.selected_item -= 1;
                 } else if item_count > 0 {
                     self.selected_item = item_count - 1;
                 }
+                self.adjust_scroll_for_selection(5);
                 true
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Key8 => {
                 if item_count > 0 {
                     self.selected_item = (self.selected_item + 1) % item_count;
                 }
+                self.adjust_scroll_for_selection(5);
                 true
+            }
+            KeyCode::Key4 => {
+                let item_idx = (node.first_item_offset as usize) + self.selected_item;
+                if let Some(item) = self.items.get(item_idx).copied() {
+                    match item.kind {
+                        ITEM_VALUE => {
+                            self.state.add_i32(item.value_ref, -1);
+                            self.trigger_rules(TRIGGER_STATE_CHANGE, item.value_ref);
+                            true
+                        }
+                        ITEM_TOGGLE => {
+                            self.state.toggle_bool(item.value_ref);
+                            self.trigger_rules(TRIGGER_STATE_CHANGE, item.value_ref);
+                            true
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            KeyCode::Key6 => {
+                let item_idx = (node.first_item_offset as usize) + self.selected_item;
+                if let Some(item) = self.items.get(item_idx).copied() {
+                    match item.kind {
+                        ITEM_VALUE => {
+                            self.state.add_i32(item.value_ref, 1);
+                            self.trigger_rules(TRIGGER_STATE_CHANGE, item.value_ref);
+                            true
+                        }
+                        ITEM_TOGGLE => {
+                            self.state.toggle_bool(item.value_ref);
+                            self.trigger_rules(TRIGGER_STATE_CHANGE, item.value_ref);
+                            true
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
             }
             KeyCode::Menu => {
                 let item_idx = (node.first_item_offset as usize) + self.selected_item;
@@ -283,11 +362,18 @@ impl DeclareWalker {
                             self.state.toggle_bool(key);
                             self.trigger_rules(TRIGGER_STATE_CHANGE, key);
                         }
+                        ITEM_VALUE => {
+                            let key = item.value_ref;
+                            self.state.add_i32(key, 1);
+                            self.trigger_rules(TRIGGER_STATE_CHANGE, key);
+                        }
                         ITEM_SUBMENU => {
                             let target_node = item.target as usize;
                             if target_node < self.nodes.len() {
+                                let _ = self.nav_stack.push(self.current_node_idx);
                                 self.current_node_idx = target_node;
                                 self.selected_item = 0;
+                                self.scroll_top = 0;
                             }
                         }
                         _ => {}
@@ -296,9 +382,15 @@ impl DeclareWalker {
                 true
             }
             KeyCode::Exit => {
-                if self.current_node_idx > 0 {
+                if let Some(prev) = self.nav_stack.pop() {
+                    self.current_node_idx = prev;
+                    self.selected_item = 0;
+                    self.scroll_top = 0;
+                    true
+                } else if self.current_node_idx > 0 {
                     self.current_node_idx = 0;
                     self.selected_item = 0;
+                    self.scroll_top = 0;
                     true
                 } else {
                     false

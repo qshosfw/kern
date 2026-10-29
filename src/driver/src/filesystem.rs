@@ -38,7 +38,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.session_unlocked
     }
 
-    pub fn stats(&mut self) -> kernfs::FsStats {
+    pub fn stats(&self) -> kernfs::FsStats {
         self.fs.stats()
     }
 
@@ -276,7 +276,7 @@ impl<'a, D: BlockDevice> kernel::service::StorageService for FileSystemDriver<'a
         self.list_dir(dir_path, out_entries)
     }
     fn stats(&mut self) -> Option<kernel::service::StorageStats> {
-        let s = self.stats();
+        let s = self.fs.stats();
         Some(kernel::service::StorageStats {
             active_files: s.active_files,
             used_sectors: s.used_sectors,
