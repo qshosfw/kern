@@ -326,6 +326,205 @@ fn draw_walker_item(
     }
 }
 
+fn render_info_card(
+    canvas: &mut Canvas,
+    walker: &DeclareWalker,
+    ctx: &FirmwareContext<'static, 'static>,
+    node: &kernel::proc::declare::DeclareNode,
+    title: &str,
+    font: &gfx::GfxFont,
+    total_items: usize,
+) {
+    canvas.draw_rect(2, 9, 124, 43, Color::Fill);
+    canvas.clear_corners(2, 9, 124, 43);
+    canvas.draw_horizontal_line(2, 17, 124, Color::DarkGray);
+
+    if !title.is_empty() {
+        gfx::text::draw_str(canvas, 6, 15, title, font, Color::Fill);
+    }
+
+    let start_item = node.first_item_offset as usize;
+    let display_count = total_items.min(4);
+    for i in 0..display_count {
+        let global_idx = start_item + i;
+        if let Some(it) = walker.items.get(global_idx) {
+            let y = 24 + (i as i16) * 8;
+            let label = walker
+                .labels
+                .get(it.label_offset as usize)
+                .copied()
+                .unwrap_or("Info");
+            gfx::text::draw_str(canvas, 6, y, label, font, Color::Fill);
+
+            let mut nbuf = [0u8; 16];
+            let val = resolve_item_info_str(walker, ctx, *it, &mut nbuf);
+            if !val.is_empty() {
+                let w = gfx::text::str_width(val, font) as i16;
+                gfx::text::draw_str(canvas, 122 - w, y, val, font, Color::Fill);
+            }
+        }
+    }
+}
+
+fn render_scroll_text(
+    canvas: &mut Canvas,
+    walker: &DeclareWalker,
+    node: &kernel::proc::declare::DeclareNode,
+    font: &gfx::GfxFont,
+    total_items: usize,
+    visible_count: usize,
+) {
+    let start_item = node.first_item_offset as usize;
+    let display_count = total_items
+        .saturating_sub(walker.scroll_top)
+        .min(visible_count);
+    for i in 0..display_count {
+        let global_idx = start_item + walker.scroll_top + i;
+        if let Some(it) = walker.items.get(global_idx) {
+            let y = 15 + (i as i16) * 8;
+            let line = walker
+                .labels
+                .get(it.label_offset as usize)
+                .copied()
+                .unwrap_or("");
+            gfx::text::draw_str(canvas, 4, y, line, font, Color::Fill);
+        }
+    }
+}
+
+fn render_table_browser(
+    canvas: &mut Canvas,
+    walker: &mut DeclareWalker,
+    ctx: &FirmwareContext<'static, 'static>,
+    node: &kernel::proc::declare::DeclareNode,
+    font: &gfx::GfxFont,
+    total_items: usize,
+    visible_count: usize,
+) {
+    let table_id = node.first_item_offset;
+    // Draw table column headers
+    canvas.draw_horizontal_line(0, 9, 128, Color::Fill);
+    canvas.draw_horizontal_line(0, 16, 128, Color::DarkGray);
+
+    let (header_col1, header_col2) = match table_id {
+        TABLE_ID_DIR => ("FILE", "SIZE"),
+        TABLE_ID_PROCS => ("TASK", "STATE"),
+        TABLE_ID_CHANNELS => ("CH", "FREQ"),
+        TABLE_ID_CONTACTS => ("CALLSIGN", "ID"),
+        TABLE_ID_HITS => ("FREQ", "RSSI"),
+        TABLE_ID_ZONES => ("ZONE", "MEMBERS"),
+        _ => ("ITEM", "VALUE"),
+    };
+
+    gfx::text::draw_str(canvas, 4, 15, header_col1, font, Color::Fill);
+    let w2 = gfx::text::str_width(header_col2, font) as i16;
+    gfx::text::draw_str(canvas, 122 - w2, 15, header_col2, font, Color::Fill);
+
+    // Determine row count for dynamic tables
+    if total_items == 0 {
+        match table_id {
+            TABLE_ID_PROCS => {
+                walker.table_row_count = ctx.proc_table().active_count() as u16;
+            }
+            _ => {
+                if walker.table_row_count == 0 {
+                    walker.table_row_count = 1;
+                }
+            }
+        }
+    }
+
+    let eff_total = if total_items > 0 {
+        total_items
+    } else {
+        walker.table_row_count as usize
+    };
+
+    let display_count = eff_total
+        .saturating_sub(walker.scroll_top)
+        .min(visible_count);
+    for i in 0..display_count {
+        let row_idx = walker.scroll_top + i;
+        let is_selected = row_idx == walker.selected_item;
+        let y = 23 + (i as i16) * 7;
+
+        if is_selected {
+            canvas.fill_rect(2, (y - 5).max(0) as u8, 122, 6, Color::Fill);
+            canvas.clear_corners(2, (y - 5).max(0) as u8, 122, 6);
+        }
+        let color = if is_selected {
+            Color::Clear
+        } else {
+            Color::Fill
+        };
+
+        let mut name_buf = [0u8; 16];
+        let mut val_buf = [0u8; 16];
+        let (name, val) = match table_id {
+            TABLE_ID_PROCS => {
+                let mut found_name = "proc";
+                let mut found_state = "RUN";
+                let mut cur = 0;
+                for p in ctx.proc_table().slots.iter() {
+                    if p.state != kernel::proc::ProcState::Dormant {
+                        if cur == row_idx {
+                            found_name = p.name.as_str();
+                            found_state = match p.state {
+                                kernel::proc::ProcState::Running => "RUN",
+                                kernel::proc::ProcState::Ready => "RDY",
+                                kernel::proc::ProcState::Suspended => "SUSP",
+                                kernel::proc::ProcState::ServiceIdle => "IDLE",
+                                kernel::proc::ProcState::Hibernated => "SWAP",
+                                _ => "STOP",
+                            };
+                            break;
+                        }
+                        cur += 1;
+                    }
+                }
+                (found_name, found_state)
+            }
+            _ => {
+                if let Some(it) =
+                    walker.items.get(node.first_item_offset as usize + row_idx)
+                {
+                    let l = walker
+                        .labels
+                        .get(it.label_offset as usize)
+                        .copied()
+                        .unwrap_or("");
+                    let v = resolve_item_info_str(walker, ctx, *it, &mut val_buf);
+                    (l, v)
+                } else {
+                    let num_s = gfx::text::format_u32((row_idx + 1) as u32, &mut name_buf);
+                    (num_s, "")
+                }
+            }
+        };
+
+        if !name.is_empty() {
+            gfx::text::draw_str(canvas, 4, y, name, font, color);
+        }
+        if !val.is_empty() {
+            let vw = gfx::text::str_width(val, font) as i16;
+            gfx::text::draw_str(canvas, 122 - vw, y, val, font, color);
+        }
+    }
+
+    // Scrollbar for table browser
+    if eff_total > visible_count {
+        gfx::widgets::draw_scrollbar(
+            canvas,
+            125,
+            17,
+            35,
+            walker.scroll_top,
+            eff_total,
+            visible_count,
+        );
+    }
+}
+
 pub unsafe fn walker_render(
     ptr: *const (),
     canvas: &mut Canvas,
@@ -362,179 +561,13 @@ pub unsafe fn walker_render(
 
     match node.layout {
         LAYOUT_INFO_CARD => {
-            // Boxed System Card View
-            canvas.draw_rect(2, 9, 124, 43, Color::Fill);
-            canvas.clear_corners(2, 9, 124, 43);
-            canvas.draw_horizontal_line(2, 17, 124, Color::DarkGray);
-
-            if !title.is_empty() {
-                gfx::text::draw_str(canvas, 6, 15, title, font, Color::Fill);
-            }
-
-            let start_item = node.first_item_offset as usize;
-            let display_count = total_items.min(4);
-            for i in 0..display_count {
-                let global_idx = start_item + i;
-                if let Some(it) = walker.items.get(global_idx) {
-                    let y = 24 + (i as i16) * 8;
-                    let label = walker
-                        .labels
-                        .get(it.label_offset as usize)
-                        .copied()
-                        .unwrap_or("Info");
-                    gfx::text::draw_str(canvas, 6, y, label, font, Color::Fill);
-
-                    let mut nbuf = [0u8; 16];
-                    let val = resolve_item_info_str(walker, ctx, *it, &mut nbuf);
-                    if !val.is_empty() {
-                        let w = gfx::text::str_width(val, font) as i16;
-                        gfx::text::draw_str(canvas, 122 - w, y, val, font, Color::Fill);
-                    }
-                }
-            }
+            render_info_card(canvas, walker, ctx, &node, title, font, total_items);
         }
         LAYOUT_SCROLL_TEXT => {
-            // Text Document Reader View
-            let start_item = node.first_item_offset as usize;
-            let display_count = total_items
-                .saturating_sub(walker.scroll_top)
-                .min(visible_count);
-            for i in 0..display_count {
-                let global_idx = start_item + walker.scroll_top + i;
-                if let Some(it) = walker.items.get(global_idx) {
-                    let y = 15 + (i as i16) * 8;
-                    let line = walker
-                        .labels
-                        .get(it.label_offset as usize)
-                        .copied()
-                        .unwrap_or("");
-                    gfx::text::draw_str(canvas, 4, y, line, font, Color::Fill);
-                }
-            }
+            render_scroll_text(canvas, walker, &node, font, total_items, visible_count);
         }
         LAYOUT_TABLE_BROWSER => {
-            let table_id = node.first_item_offset;
-            // Draw table column headers
-            canvas.draw_horizontal_line(0, 9, 128, Color::Fill);
-            canvas.draw_horizontal_line(0, 16, 128, Color::DarkGray);
-
-            let (header_col1, header_col2) = match table_id {
-                TABLE_ID_DIR => ("FILE", "SIZE"),
-                TABLE_ID_PROCS => ("TASK", "STATE"),
-                TABLE_ID_CHANNELS => ("CH", "FREQ"),
-                TABLE_ID_CONTACTS => ("CALLSIGN", "ID"),
-                TABLE_ID_HITS => ("FREQ", "RSSI"),
-                TABLE_ID_ZONES => ("ZONE", "MEMBERS"),
-                _ => ("ITEM", "VALUE"),
-            };
-
-            gfx::text::draw_str(canvas, 4, 15, header_col1, font, Color::Fill);
-            let w2 = gfx::text::str_width(header_col2, font) as i16;
-            gfx::text::draw_str(canvas, 122 - w2, 15, header_col2, font, Color::Fill);
-
-            // Determine row count for dynamic tables
-            if total_items == 0 {
-                match table_id {
-                    TABLE_ID_PROCS => {
-                        walker.table_row_count = ctx.proc_table().active_count() as u16;
-                    }
-                    _ => {
-                        if walker.table_row_count == 0 {
-                            walker.table_row_count = 1;
-                        }
-                    }
-                }
-            }
-
-            let eff_total = if total_items > 0 {
-                total_items
-            } else {
-                walker.table_row_count as usize
-            };
-
-            let display_count = eff_total
-                .saturating_sub(walker.scroll_top)
-                .min(visible_count);
-            for i in 0..display_count {
-                let row_idx = walker.scroll_top + i;
-                let is_selected = row_idx == walker.selected_item;
-                let y = 23 + (i as i16) * 7;
-
-                if is_selected {
-                    canvas.fill_rect(2, (y - 5).max(0) as u8, 122, 6, Color::Fill);
-                    canvas.clear_corners(2, (y - 5).max(0) as u8, 122, 6);
-                }
-                let color = if is_selected {
-                    Color::Clear
-                } else {
-                    Color::Fill
-                };
-
-                let mut name_buf = [0u8; 16];
-                let mut val_buf = [0u8; 16];
-                let (name, val) = match table_id {
-                    TABLE_ID_PROCS => {
-                        let mut found_name = "proc";
-                        let mut found_state = "RUN";
-                        let mut cur = 0;
-                        for p in ctx.proc_table().slots.iter() {
-                            if p.state != kernel::proc::ProcState::Dormant {
-                                if cur == row_idx {
-                                    found_name = p.name.as_str();
-                                    found_state = match p.state {
-                                        kernel::proc::ProcState::Running => "RUN",
-                                        kernel::proc::ProcState::Ready => "RDY",
-                                        kernel::proc::ProcState::Suspended => "SUSP",
-                                        kernel::proc::ProcState::ServiceIdle => "IDLE",
-                                        kernel::proc::ProcState::Hibernated => "SWAP",
-                                        _ => "STOP",
-                                    };
-                                    break;
-                                }
-                                cur += 1;
-                            }
-                        }
-                        (found_name, found_state)
-                    }
-                    _ => {
-                        if let Some(it) =
-                            walker.items.get(node.first_item_offset as usize + row_idx)
-                        {
-                            let l = walker
-                                .labels
-                                .get(it.label_offset as usize)
-                                .copied()
-                                .unwrap_or("");
-                            let v = resolve_item_info_str(walker, ctx, *it, &mut val_buf);
-                            (l, v)
-                        } else {
-                            let num_s = gfx::text::format_u32((row_idx + 1) as u32, &mut name_buf);
-                            (num_s, "")
-                        }
-                    }
-                };
-
-                if !name.is_empty() {
-                    gfx::text::draw_str(canvas, 4, y, name, font, color);
-                }
-                if !val.is_empty() {
-                    let vw = gfx::text::str_width(val, font) as i16;
-                    gfx::text::draw_str(canvas, 122 - vw, y, val, font, color);
-                }
-            }
-
-            // Scrollbar for table browser
-            if eff_total > visible_count {
-                gfx::widgets::draw_scrollbar(
-                    canvas,
-                    125,
-                    17,
-                    35,
-                    walker.scroll_top,
-                    eff_total,
-                    visible_count,
-                );
-            }
+            render_table_browser(canvas, walker, ctx, &node, font, total_items, visible_count);
         }
         LAYOUT_MENU | LAYOUT_FORM | _ => {
             // LAYOUT_MENU and LAYOUT_FORM: standard interactive list with scrolling & selection

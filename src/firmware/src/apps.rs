@@ -12,7 +12,7 @@ pub mod vfo;
 
 pub mod registry;
 
-pub use crate::data::app_bundle::{AppHeader, FILE_ID_APP_BUNDLE, FILE_ID_KRX};
+pub use crate::data::file_header::{FILE_ID_APP_BUNDLE, FILE_ID_KRX};
 #[cfg(feature = "app_explorer")]
 pub use explorer::ExplorerApp;
 pub use launcher::LauncherApp;

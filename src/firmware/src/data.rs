@@ -12,8 +12,8 @@ pub mod file_header;
 pub mod frame_delta;
 
 pub use app_bundle::{
-    APP_PACKAGE_IDENT, AppClass, AppHeader, AppPreamble, ExecType, SectionEntry, SectionExecution,
-    SectionIdentity, SectionLifecycle,
+    KRX_MAGIC, KrxClass, KrxExecType, KrxPreamble, KrxProfile, SectionExecution, SectionIdentity,
+    SectionType,
 };
 pub use channel_record::{
     AprsChannelExt, ChannelExtension, ChannelRecord, ExtensionTag, HermesChannelExt,

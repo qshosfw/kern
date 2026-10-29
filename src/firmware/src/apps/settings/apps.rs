@@ -72,10 +72,10 @@ fn populate_catalog_list(items: &mut [MenuItem], ctx: &mut SysContext, is_servic
                 break;
             }
             let tag = match srv.exec_type {
-                crate::data::app_bundle::ExecType::Service => "[SRV] ",
-                crate::data::app_bundle::ExecType::Daemon => "[DMN] ",
-                crate::data::app_bundle::ExecType::Driver => "[DRV] ",
-                crate::data::app_bundle::ExecType::Module => "[MOD] ",
+                kernel::proc::krx::KrxExecType::Service => "[SRV] ",
+                kernel::proc::krx::KrxExecType::Daemon => "[DMN] ",
+                kernel::proc::krx::KrxExecType::Driver => "[DRV] ",
+                kernel::proc::krx::KrxExecType::Module => "[MOD] ",
                 _ => "[PKG] ",
             };
             let mut val = ShortString::from_str(tag);

@@ -4,11 +4,10 @@
 //! extracts identity metadata, flags invalid/corrupted files at the top,
 //! and caches entries for the OS launcher and Settings manager.
 
-use crate::data::app_bundle::{AppClass, AppPreamble, ExecType};
 use crate::services::SystemStorage;
 use kernel::proc::krx::{
-    KrxPreamble, SECTION_IDENTITY, SECTION_TYPE_LIFECYCLE, SectionIdentity, SectionType,
-    find_section,
+    KrxClass, KrxExecType, KrxPreamble, SECTION_IDENTITY, SECTION_TYPE_LIFECYCLE, SectionIdentity,
+    SectionType, find_section,
 };
 
 /// Cached catalog entry for an installed package.
@@ -17,8 +16,8 @@ pub struct PackageCatalogEntry {
     pub title: heapless::String<16>,
     pub path: heapless::String<24>,
     pub size_bytes: usize,
-    pub app_class: AppClass,
-    pub exec_type: ExecType,
+    pub app_class: KrxClass,
+    pub exec_type: KrxExecType,
     pub icon_id: u16,
     pub caps: u32,
     pub is_valid: bool,
@@ -57,14 +56,14 @@ impl PackageCatalog {
     pub fn apps(&self) -> impl Iterator<Item = &PackageCatalogEntry> {
         self.entries
             .iter()
-            .filter(|e| !e.is_valid || e.exec_type == ExecType::App)
+            .filter(|e| !e.is_valid || e.exec_type == KrxExecType::App)
     }
 
     /// Iterator over discovered background services, daemons, and drivers.
     pub fn services(&self) -> impl Iterator<Item = &PackageCatalogEntry> {
         self.entries
             .iter()
-            .filter(|e| e.is_valid && e.exec_type != ExecType::App)
+            .filter(|e| e.is_valid && e.exec_type != KrxExecType::App)
     }
 
     /// Count of application entries (including invalid entries flagged for cleanup).
@@ -142,8 +141,8 @@ impl PackageCatalog {
         let _ = path.push_str(&base_name[..n.min(18)]);
         let path_str = path.as_str();
 
-        let mut app_class = AppClass::Declare;
-        let mut exec_type = ExecType::App;
+        let mut app_class = KrxClass::Declare;
+        let mut exec_type = KrxExecType::App;
         let mut title = heapless::String::<16>::new();
         let mut icon_id = 0u16;
         let mut caps = 0u32;
@@ -156,12 +155,7 @@ impl PackageCatalog {
                     if let Ok(preamble) = KrxPreamble::parse(&hdr_buf[..read_len]) {
                         if let Some(cls) = preamble.execution_class() {
                             is_valid = true;
-                            app_class = match cls {
-                                kernel::proc::krx::KrxClass::Native => AppClass::Native,
-                                kernel::proc::krx::KrxClass::Paged => AppClass::Paged,
-                                kernel::proc::krx::KrxClass::VMachine => AppClass::VMachine,
-                                kernel::proc::krx::KrxClass::Declare => AppClass::Declare,
-                            };
+                            app_class = cls;
                         }
 
                         let header_len = (preamble.header_len as usize).min(read_len);
@@ -181,22 +175,10 @@ impl PackageCatalog {
                             find_section(&hdr_buf, header_len, SECTION_TYPE_LIFECYCLE)
                         {
                             if let Some(st) = SectionType::parse(type_body) {
-                                if let Some(et) = ExecType::from_raw(st.exec_type) {
+                                if let Some(et) = st.exec_type() {
                                     exec_type = et;
                                 }
                                 caps = st.cap_mask;
-                            }
-                        }
-                    } else if let Some(legacy) = AppPreamble::from_bytes(&hdr_buf) {
-                        is_valid = true;
-                        app_class = legacy.execution_class();
-                        if read_len >= 144 && hdr_buf[128] != 0 {
-                            let mut len = 0;
-                            while len < 16 && hdr_buf[128 + len] != 0 {
-                                len += 1;
-                            }
-                            if let Ok(s) = core::str::from_utf8(&hdr_buf[128..128 + len]) {
-                                let _ = title.push_str(s);
                             }
                         }
                     }

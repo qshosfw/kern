@@ -979,6 +979,7 @@ impl RadioCoordinator {
 
     // ── Main 10ms System Tick ──
 
+    #[inline(never)]
     pub fn tick_10ms<R: RadioService>(&mut self, radio: &mut R) -> RadioEvent {
         // Active transmission state machine
         if self.is_transmitting && self.tx_state == TxState::Active {

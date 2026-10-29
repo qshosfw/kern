@@ -276,6 +276,7 @@ impl MasterConfig {
         }
     }
 
+    #[inline(never)]
     pub fn sanitize(&mut self) -> u8 {
         let mut repaired = 0u8;
 
