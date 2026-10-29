@@ -11,6 +11,7 @@ use gfx::icons;
 use gfx::text;
 use kernel::app::{App, AppMetadata, EventResult, ModalResult};
 use kernel::event::{Event, KeyCode, KeyState};
+use kernel::proc::UiPrimitive;
 
 pub mod assets;
 
@@ -598,12 +599,11 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for ExplorerApp {
                                 "Rename File",
                                 item.name(),
                                 32,
-                                false,
                             );
                         }
                     }
                     2 => {
-                        ctx.prompt_text(TAG_NEW_FILE_PROMPT, "New File", "user.log", 32, false);
+                        ctx.prompt_text(TAG_NEW_FILE_PROMPT, "New File", "user.log", 32);
                     }
                     3 => {
                         if self.clipboard_path.is_empty() {
