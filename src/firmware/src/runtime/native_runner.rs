@@ -304,13 +304,56 @@ pub fn load_native_from_storage(
     true
 }
 
+/// Invokes a Native or Paged Thumb-1 entry point with the guest GOT base register (r9) bound.
+#[inline(never)]
+pub unsafe fn invoke_krx_native(
+    entry_point: usize,
+    got_base: u32,
+    op: u32,
+    api_table: *const KrxApiTable,
+    param: *const (),
+) -> u32 {
+    #[cfg(target_arch = "arm")]
+    {
+        let res: u32;
+        unsafe {
+            core::arch::asm!(
+                "mov r4, r9",       // save host GOT base register
+                "mov r9, {got}",    // load guest app's GOT base into r9 (Static Base)
+                "blx {entry}",      // call native entry point
+                "mov r9, r4",       // restore host GOT base register
+                got = in(reg) got_base,
+                entry = in(reg) entry_point,
+                in("r0") op,
+                in("r1") api_table,
+                in("r2") param,
+                lateout("r0") res,
+                out("r4") _,
+                clobber_abi("C"),
+            );
+        }
+        res
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        let _ = got_base;
+        let entry: KrxNativeEntryFn = core::mem::transmute(entry_point);
+        entry(op, api_table, param)
+    }
+}
+
 pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 'static>) {
     let slot = slot_ref();
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
             ACTIVE_CTX = ctx as *mut _;
-            let entry: KrxNativeEntryFn = core::mem::transmute(slot.entry_point);
-            let _ = entry(KRX_OP_START, &raw const NATIVE_API_TABLE, core::ptr::null());
+            let _ = invoke_krx_native(
+                slot.entry_point,
+                slot.got_base,
+                KRX_OP_START,
+                &raw const NATIVE_API_TABLE,
+                core::ptr::null(),
+            );
             ACTIVE_CTX = core::ptr::null_mut();
         }
     }
@@ -349,8 +392,9 @@ pub unsafe fn native_on_event(
                 reserved: 0,
                 payload: payload_val,
             };
-            let entry: KrxNativeEntryFn = core::mem::transmute(slot.entry_point);
-            let res = entry(
+            let res = invoke_krx_native(
+                slot.entry_point,
+                slot.got_base,
                 KRX_OP_EVENT,
                 &raw const NATIVE_API_TABLE,
                 &krx_ev as *const _ as *const (),
@@ -387,8 +431,9 @@ pub unsafe fn native_on_render(
         unsafe {
             ACTIVE_CTX = ctx as *const _ as *mut _;
             ACTIVE_CANVAS = canvas as *mut _;
-            let entry: KrxNativeEntryFn = core::mem::transmute(slot.entry_point);
-            let _ = entry(
+            let _ = invoke_krx_native(
+                slot.entry_point,
+                slot.got_base,
                 KRX_OP_RENDER,
                 &raw const NATIVE_API_TABLE,
                 core::ptr::null(),
@@ -404,8 +449,13 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut FirmwareContext<'static, '
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
             ACTIVE_CTX = ctx as *mut _;
-            let entry: KrxNativeEntryFn = core::mem::transmute(slot.entry_point);
-            let _ = entry(KRX_OP_EXIT, &raw const NATIVE_API_TABLE, core::ptr::null());
+            let _ = invoke_krx_native(
+                slot.entry_point,
+                slot.got_base,
+                KRX_OP_EXIT,
+                &raw const NATIVE_API_TABLE,
+                core::ptr::null(),
+            );
             ACTIVE_CTX = core::ptr::null_mut();
         }
     }
