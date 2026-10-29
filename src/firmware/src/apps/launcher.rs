@@ -1,5 +1,5 @@
 use crate::SysContext;
-use crate::apps::{APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
+use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
 use gfx::Canvas;
 use gfx::Color;
 use gfx::gui::modules::grid_menu::{GridItem, GridMenuModel, GridMenuView};
@@ -129,6 +129,22 @@ pub fn load_entries(storage: Option<&mut crate::services::SystemStorage>) -> &'s
     }
 }
 
+/// Mark package catalog dirty and reload in-memory Launcher entries.
+pub fn reload_launcher(storage: &mut crate::services::SystemStorage) {
+    let cat = catalog::get_catalog();
+    cat.mark_dirty();
+    let entries = load_entries(Some(storage));
+    if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_LAUNCHER) {
+        unsafe {
+            let app = &mut *(ptr as *mut LauncherApp);
+            app.model.items = entries;
+            if app.model.selected_idx >= entries.len() {
+                app.model.selected_idx = entries.len().saturating_sub(1);
+            }
+        }
+    }
+}
+
 pub struct LauncherApp {
     model: GridMenuModel<LauncherEntry>,
     view: GridMenuView,
@@ -216,8 +232,8 @@ impl LauncherApp {
                 {
                     let res = crate::apps::runtime::launch_krx_package(ctx, path);
                     if res.is_err() {
-                        crate::boot::provision::ensure_core_packages(ctx.storage);
-                        crate::apps::runtime::launch_krx_package(ctx, path).is_ok()
+                        reload_launcher(ctx.storage);
+                        false
                     } else {
                         true
                     }
@@ -372,11 +388,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.is_pressed = false;
         self.is_launching = false;
-        let entries = load_entries(Some(ctx.storage));
-        self.model.items = entries;
-        if self.model.selected_idx >= entries.len() {
-            self.model.selected_idx = entries.len().saturating_sub(1);
-        }
+        reload_launcher(ctx.storage);
         self.model.nav_layout = ctx.config.keys.nav_layout;
         self.model.show_numbers = ctx.config.apps.show_numbers != 0;
         self.model.show_labels = ctx.config.apps.show_labels != 0;

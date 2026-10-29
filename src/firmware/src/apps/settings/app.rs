@@ -861,6 +861,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
                         ctx.show_popup(TAG_POPUP_INFO, "App Deleted", "Application uninstalled");
                         cat.mark_dirty();
                         cat.scan(ctx.storage);
+                        crate::apps::launcher::reload_launcher(ctx.storage);
                         if self.current_page_id == PAGE_APP_DETAIL {
                             self.pop_submenu(ctx);
                         } else {

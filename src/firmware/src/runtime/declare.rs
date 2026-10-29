@@ -14,7 +14,7 @@ use kernel::proc::declare::{
     DeclareWalker, DYN_ACTIVE_PROCS, DYN_BATTERY_MV, DYN_BATTERY_PCT, DYN_CPU_CLOCK,
     DYN_RADIO_FREQ_A, DYN_RADIO_FREQ_B, DYN_RADIO_RSSI, DYN_RAM_FREE, DYN_RAM_USED,
     DYN_STACK_MARGIN, DYN_STACK_PEAK, DYN_STORAGE_FREE, DYN_SWAP_USAGE, DYN_UPTIME,
-    FLAG_DYNAMIC, FLAG_READONLY, ITEM_ACTION, ITEM_INFO, ITEM_LINK, ITEM_SUBMENU, ITEM_TOGGLE,
+    FLAG_DYNAMIC, ITEM_ACTION, ITEM_INFO, ITEM_LINK, ITEM_SUBMENU, ITEM_TOGGLE,
     ITEM_VALUE, LAYOUT_FORM, LAYOUT_INFO_CARD, LAYOUT_MENU, LAYOUT_SCROLL_TEXT, TRIGGER_BOOT,
 };
 
@@ -210,6 +210,27 @@ fn resolve_telemetry_str<'a>(
     core::str::from_utf8(&buf[..len]).unwrap_or("")
 }
 
+#[inline(always)]
+fn resolve_item_info_str<'a>(
+    walker: &DeclareWalker,
+    ctx: &FirmwareContext<'static, 'static>,
+    item: kernel::proc::declare::DeclareItem,
+    nbuf: &'a mut [u8; 16],
+) -> &'a str {
+    if item.flags & FLAG_DYNAMIC != 0 || item.value_ref >= 0x0100 {
+        resolve_telemetry_str(ctx, item.value_ref, nbuf)
+    } else if (item.value_ref as usize) < walker.labels.len() {
+        walker
+            .labels
+            .get(item.value_ref as usize)
+            .copied()
+            .unwrap_or("")
+    } else {
+        let val = walker.state.get_i32(item.value_ref);
+        gfx::text::format_i32(val, nbuf)
+    }
+}
+
 #[inline(never)]
 fn draw_walker_item(
     canvas: &mut Canvas,
@@ -265,33 +286,7 @@ fn draw_walker_item(
         ITEM_ACTION => ">",
         ITEM_SUBMENU => ">>",
         ITEM_LINK => "->",
-        ITEM_INFO => {
-            if item.value_ref >= 0x0100 {
-                resolve_telemetry_str(ctx, item.value_ref, &mut nbuf)
-            } else if (item.value_ref as usize) < walker.labels.len()
-                && (item.flags & FLAG_READONLY != 0 || item.flags & FLAG_DYNAMIC == 0)
-            {
-                walker
-                    .labels
-                    .get(item.value_ref as usize)
-                    .copied()
-                    .unwrap_or("")
-            } else {
-                // Fallback for legacy 0..5 and state values
-                match item.value_ref {
-                    0 => resolve_telemetry_str(ctx, DYN_BATTERY_MV, &mut nbuf),
-                    1 => resolve_telemetry_str(ctx, DYN_CPU_CLOCK, &mut nbuf),
-                    2 => resolve_telemetry_str(ctx, DYN_STACK_MARGIN, &mut nbuf),
-                    3 => resolve_telemetry_str(ctx, DYN_STACK_PEAK, &mut nbuf),
-                    4 => resolve_telemetry_str(ctx, DYN_UPTIME, &mut nbuf),
-                    5 => resolve_telemetry_str(ctx, DYN_ACTIVE_PROCS, &mut nbuf),
-                    _ => {
-                        let val = walker.state.get_i32(item.value_ref);
-                        gfx::text::format_u32(val.max(0) as u32, &mut nbuf)
-                    }
-                }
-            }
-        }
+        ITEM_INFO => resolve_item_info_str(walker, ctx, item, &mut nbuf),
         _ => "",
     };
 
@@ -360,19 +355,7 @@ pub unsafe fn walker_render(
                     gfx::text::draw_str(canvas, 6, y, label, font, Color::Fill);
 
                     let mut nbuf = [0u8; 16];
-                    let val = if it.value_ref >= 0x0100 {
-                        resolve_telemetry_str(ctx, it.value_ref, &mut nbuf)
-                    } else {
-                        match it.value_ref {
-                            0 => resolve_telemetry_str(ctx, DYN_BATTERY_MV, &mut nbuf),
-                            1 => resolve_telemetry_str(ctx, DYN_CPU_CLOCK, &mut nbuf),
-                            2 => resolve_telemetry_str(ctx, DYN_STACK_MARGIN, &mut nbuf),
-                            3 => resolve_telemetry_str(ctx, DYN_STACK_PEAK, &mut nbuf),
-                            4 => resolve_telemetry_str(ctx, DYN_UPTIME, &mut nbuf),
-                            5 => resolve_telemetry_str(ctx, DYN_ACTIVE_PROCS, &mut nbuf),
-                            _ => "",
-                        }
-                    };
+                    let val = resolve_item_info_str(walker, ctx, *it, &mut nbuf);
                     if !val.is_empty() {
                         let w = gfx::text::str_width(val, font) as i16;
                         gfx::text::draw_str(canvas, 122 - w, y, val, font, Color::Fill);
@@ -429,16 +412,18 @@ pub unsafe fn walker_render(
     // 3. Footer Bar (y=54..63)
     canvas.draw_horizontal_line(0, 53, 128, Color::Fill);
 
-    let sel_idx = (node.first_item_offset as usize) + walker.selected_item;
-    let sel_kind = walker.items.get(sel_idx).map(|it| it.kind).unwrap_or(ITEM_ACTION);
+    if node.layout != LAYOUT_INFO_CARD && node.layout != LAYOUT_SCROLL_TEXT {
+        let sel_idx = (node.first_item_offset as usize) + walker.selected_item;
+        let sel_kind = walker.items.get(sel_idx).map(|it| it.kind).unwrap_or(ITEM_ACTION);
 
-    let m_action = match sel_kind {
-        ITEM_TOGGLE => "Toggle",
-        ITEM_VALUE => "Adjust",
-        ITEM_SUBMENU => "Open",
-        _ => "Select",
-    };
-    gfx::widgets::draw_key_badge(canvas, 2, 55, "M", m_action);
+        let m_action = match sel_kind {
+            ITEM_TOGGLE => "Toggle",
+            ITEM_VALUE => "Adjust",
+            ITEM_SUBMENU => "Open",
+            _ => "Select",
+        };
+        gfx::widgets::draw_key_badge(canvas, 2, 55, "M", m_action);
+    }
 
     let back_label = if walker.nav_stack.is_empty() && walker.current_node_idx == 0 {
         "Home"

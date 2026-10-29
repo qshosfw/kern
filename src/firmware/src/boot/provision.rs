@@ -27,20 +27,43 @@ const SYSINFO_PAYLOAD: &[u8] = &[
     1, 5, 0, 6, // [node_count=1, item_count=5, action_count=0, label_count=6]
     // DeclareNode 0 (8B): node_id=0, layout=0 (Menu), item_count=5, title_offset=0, first_item=0
     0, 0, 0, 5, 0, 0, 0, 0,
-    // Item 0 (12B): kind=5 (ITEM_INFO), flags=0, label=1, target=0, value_ref=0 (Battery)
-    5, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    // Item 1 (12B): kind=5 (ITEM_INFO), flags=0, label=2, target=0, value_ref=1 (CPU Clock)
-    5, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-    // Item 2 (12B): kind=5 (ITEM_INFO), flags=0, label=3, target=0, value_ref=2 (Stack Free)
-    5, 0, 3, 0, 0, 0, 2, 0, 0, 0, 0, 0,
-    // Item 3 (12B): kind=5 (ITEM_INFO), flags=0, label=4, target=0, value_ref=4 (Uptime)
-    5, 0, 4, 0, 0, 0, 4, 0, 0, 0, 0, 0,
-    // Item 4 (12B): kind=5 (ITEM_INFO), flags=0, label=5, target=0, value_ref=5 (Active Tasks)
-    5, 0, 5, 0, 0, 0, 5, 0, 0, 0, 0, 0, // Length-prefixed string pool (6 strings)
+    // Item 0 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=1, target=0, value_ref=0x0100 (DYN_BATTERY_MV)
+    5, 1, 1, 0, 0, 0, 0x00, 0x01, 0, 0, 0, 0,
+    // Item 1 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=2, target=0, value_ref=0x0102 (DYN_CPU_CLOCK)
+    5, 1, 2, 0, 0, 0, 0x02, 0x01, 0, 0, 0, 0,
+    // Item 2 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=3, target=0, value_ref=0x0105 (DYN_STACK_MARGIN)
+    5, 1, 3, 0, 0, 0, 0x05, 0x01, 0, 0, 0, 0,
+    // Item 3 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=4, target=0, value_ref=0x0107 (DYN_UPTIME)
+    5, 1, 4, 0, 0, 0, 0x07, 0x01, 0, 0, 0, 0,
+    // Item 4 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=5, target=0, value_ref=0x0108 (DYN_ACTIVE_PROCS)
+    5, 1, 5, 0, 0, 0, 0x08, 0x01, 0, 0, 0, 0,
+    // Length-prefixed string pool (6 strings)
     4, b'L', b'i', b'v', b'e', 7, b'B', b'a', b't', b't', b'e', b'r', b'y', 9, b'C', b'P', b'U',
     b' ', b'C', b'l', b'o', b'c', b'k', 10, b'S', b't', b'a', b'c', b'k', b' ', b'F', b'r', b'e',
     b'e', 10, b'U', b'p', b't', b'i', b'm', b'e', b' ', b'(', b's', b')', 12, b'A', b'c', b't',
     b'i', b'v', b'e', b' ', b'T', b'a', b's', b'k', b's',
+];
+
+// Declare 3.0 payload for `/apps/radioinfo.krx` (1 node, 4 live telemetry rows, layout=3 InfoCard, 5 labels)
+#[cfg(feature = "provision_apps")]
+const RADIOINFO_PAYLOAD: &[u8] = &[
+    1, 4, 0, 5, // [node_count=1, item_count=4, action_count=0, label_count=5]
+    // DeclareNode 0 (8B): node_id=0, layout=3 (InfoCard), item_count=4, title_offset=0, first_item=0
+    0, 0, 3, 4, 0, 0, 0, 0,
+    // Item 0: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=1, target=0, value_ref=0x010B (DYN_RADIO_FREQ_A)
+    5, 1, 1, 0, 0, 0, 0x0B, 0x01, 0, 0, 0, 0,
+    // Item 1: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=2, target=0, value_ref=0x010C (DYN_RADIO_FREQ_B)
+    5, 1, 2, 0, 0, 0, 0x0C, 0x01, 0, 0, 0, 0,
+    // Item 2: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=3, target=0, value_ref=0x010A (DYN_RADIO_RSSI)
+    5, 1, 3, 0, 0, 0, 0x0A, 0x01, 0, 0, 0, 0,
+    // Item 3: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=4, target=0, value_ref=0x0101 (DYN_BATTERY_PCT)
+    5, 1, 4, 0, 0, 0, 0x01, 0x01, 0, 0, 0, 0,
+    // String pool: "Radio Info", "VFO A", "VFO B", "RSSI", "Battery"
+    10, b'R', b'a', b'd', b'i', b'o', b' ', b'I', b'n', b'f', b'o',
+    5, b'V', b'F', b'O', b' ', b'A',
+    5, b'V', b'F', b'O', b' ', b'B',
+    4, b'R', b'S', b'S', b'I',
+    7, b'B', b'a', b't', b't', b'e', b'r', b'y',
 ];
 
 // Declare 3.0 payload for `/apps/counter.krx` (1 node, 4 items, 3 actions, 5 labels)
@@ -193,11 +216,11 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
     );
     write_krx_package(
         filesystem,
-        "/apps/explorer.krx",
-        KrxClass::Paged,
-        "Explorer",
-        base_caps | (kernel::caps::Cap::StorageRead as u32),
-        &[],
+        "/apps/radioinfo.krx",
+        KrxClass::Declare,
+        "RadioInfo",
+        base_caps,
+        RADIOINFO_PAYLOAD,
     );
 }
 
@@ -217,10 +240,14 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
     let mut entries = [const { DirEntryInfo::empty() }; 8];
     let count = match filesystem.list_dir("/prov", &mut entries) {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => {
+            crate::apps::launcher::reload_launcher(filesystem);
+            return;
+        }
     };
 
     if count == 0 {
+        crate::apps::launcher::reload_launcher(filesystem);
         return;
     }
 
@@ -279,4 +306,6 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             }
         }
     }
+
+    crate::apps::launcher::reload_launcher(filesystem);
 }

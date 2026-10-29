@@ -49,7 +49,7 @@ passcode = false        # 🔑 Security enclave boot PIN lock & KDF stretching
 app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
 [features.provisioning]
-provision_apps = false        # 📱 Embed & provision built-in KRX packages (/apps/sysinfo.krx, counter.krx, timer.krx, explorer.krx)
+provision_apps = true        # 📱 Embed & provision built-in KRX packages (/apps/sysinfo.krx, counter.krx, timer.krx, explorer.krx)
 provision_rogers = false     # 🎵 Embed & provision built-in roger beep tones to /user/rogers/
 extra_rogers = true         # 📢 Extended roger beep collection (Apollo 11, etc.)
 boot_assets = true          # 🎨 Embedded ROM splash screens
