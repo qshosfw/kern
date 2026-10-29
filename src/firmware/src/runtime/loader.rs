@@ -15,16 +15,7 @@ use kernel::proc::krx::{
     find_section,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KrxLaunchError {
-    FileNotFound,
-    ReadFailed,
-    InvalidPreamble,
-    CrcMismatch,
-    MissingIdentity,
-    CapabilityDenied,
-    ExecutionFailed,
-}
+pub use kernel::proc::krx::KrxLaunchError;
 
 static mut DYNAMIC_APP_NAME_BUF: [u8; 32] = [0u8; 32];
 
@@ -143,7 +134,10 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     let read_len = ctx
         .storage
         .read_file(path, &mut hdr_buf)
-        .map_err(|_| KrxLaunchError::ReadFailed)?;
+        .map_err(|e| match e {
+            kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
+            _ => KrxLaunchError::ReadFailed,
+        })?;
 
     if read_len < KrxPreamble::SIZE {
         return Err(KrxLaunchError::InvalidPreamble);
@@ -170,7 +164,12 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
     // 3. Verify Hardware Capabilities
     if !ctx.caps().contains_all(required_caps) {
-        return Err(KrxLaunchError::CapabilityDenied);
+        let missing = required_caps.without(ctx.caps());
+        let cap_msg = missing
+            .first_cap()
+            .map(|c| c.required_message())
+            .unwrap_or("Requires Missing Capability");
+        return Err(KrxLaunchError::CapabilityDenied(cap_msg));
     }
 
     // 3b. Verify RAM and stack headroom requirements against Execution Section
@@ -178,8 +177,12 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         if let Some(exec) = SectionExecution::parse(exec_body) {
             let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
             let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
+            let min_stack = exec.min_stack_bytes as usize;
+            if margin < min_stack {
+                return Err(KrxLaunchError::InsufficientStack);
+            }
             if !exec.can_execute(avail, margin.min(256)) {
-                return Err(KrxLaunchError::ExecutionFailed);
+                return Err(KrxLaunchError::InsufficientRam);
             }
         }
     }
@@ -196,7 +199,10 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             // Store Declare payload in [1024..5120] of the shared transient arena
             // (DeclareWalker occupies [0..988], so [1024..5120] persists for the app's lifetime!)
             let arena_tail = &mut super::native_runner::transient_arena_bytes_mut()[1024..5120];
-            let read_total = ctx.storage.read_file(path, arena_tail).unwrap_or(0);
+            let read_total = ctx
+                .storage
+                .read_file(path, arena_tail)
+                .map_err(|_| KrxLaunchError::ReadFailed)?;
             let h_len = preamble.header_len as usize;
             if read_total > h_len {
                 let payload: &'static [u8] = unsafe {
@@ -216,7 +222,10 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         #[cfg(feature = "krx_vm")]
         KrxClass::VMachine => {
             let mut code_buf = [0u8; 256];
-            let read_total = ctx.storage.read_file(path, &mut code_buf).unwrap_or(0);
+            let read_total = ctx
+                .storage
+                .read_file(path, &mut code_buf)
+                .map_err(|_| KrxLaunchError::ReadFailed)?;
             let h_len = preamble.header_len as usize;
             let loaded = if read_total > h_len {
                 let payload = &code_buf[h_len..read_total];
@@ -244,16 +253,16 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         #[cfg(not(feature = "krx_vm"))]
         KrxClass::VMachine => {
             let _ = (ctx, path, preamble, app_name);
-            return Err(KrxLaunchError::ExecutionFailed);
+            return Err(KrxLaunchError::VmDisabled);
         }
         KrxClass::Native | KrxClass::Paged => {
             let exec_sec = find_section(&hdr_buf, header_len, SECTION_EXECUTION)
                 .and_then(SectionExecution::parse)
-                .ok_or(KrxLaunchError::ExecutionFailed)?;
+                .ok_or(KrxLaunchError::MissingExecution)?;
             let cap_imports_body = find_section(&hdr_buf, header_len, SECTION_CAP_IMPORTS);
             let block_map_body = find_section(&hdr_buf, header_len, SECTION_BLOCK_MAP);
 
-            if !super::native_runner::load_native_from_storage(
+            super::native_runner::load_native_from_storage(
                 app_name,
                 ctx.storage,
                 path,
@@ -262,9 +271,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 cap_imports_body,
                 block_map_body,
                 required_caps,
-            ) {
-                return Err(KrxLaunchError::ExecutionFailed);
-            }
+            )?;
 
             (
                 super::native_runner::NATIVE_RUNNER_VTABLE,

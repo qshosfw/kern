@@ -90,6 +90,65 @@ impl KrxExecType {
     }
 }
 
+/// Normative KRX Binary Launch and Verification Errors (§12, KRX-ABI 2.5.0 Appendix C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KrxLaunchError {
+    FileNotFound,
+    ReadFailed,
+    InvalidPreamble,
+    CrcMismatch,
+    MissingIdentity,
+    MissingExecution,
+    CapabilityDenied(&'static str),
+    InsufficientRam,
+    InsufficientStack,
+    RelocationFailed,
+    ImportBindingFailed,
+    VmDisabled,
+    PayloadTooLarge,
+    ExecutionFailed,
+}
+
+impl KrxLaunchError {
+    pub const fn title(&self) -> &'static str {
+        match self {
+            Self::FileNotFound => "File Not Found",
+            Self::ReadFailed => "Storage Error",
+            Self::InvalidPreamble => "Bad Package",
+            Self::CrcMismatch => "CRC Error",
+            Self::MissingIdentity => "Bad Identity",
+            Self::MissingExecution => "Corrupted Binary",
+            Self::CapabilityDenied(_) => "Missing Hardware",
+            Self::InsufficientRam => "Out of RAM",
+            Self::InsufficientStack => "Stack Overflow",
+            Self::RelocationFailed => "Reloc Error",
+            Self::ImportBindingFailed => "API Unresolved",
+            Self::VmDisabled => "VM Disabled",
+            Self::PayloadTooLarge => "Package Too Large",
+            Self::ExecutionFailed => "Launch Failed",
+        }
+    }
+
+    pub const fn message(&self) -> &'static str {
+        match self {
+            Self::FileNotFound => "Package file not found on flash",
+            Self::ReadFailed => "Failed reading file from flash",
+            Self::InvalidPreamble => "Invalid KRX package header",
+            Self::CrcMismatch => "Package CRC verification failed",
+            Self::MissingIdentity => "Missing application identity",
+            Self::MissingExecution => "Missing execution manifest",
+            Self::CapabilityDenied(cap) => cap,
+            Self::InsufficientRam => "Not enough free RAM to execute",
+            Self::InsufficientStack => "Insufficient stack headroom",
+            Self::RelocationFailed => "Binary relocation failed",
+            Self::ImportBindingFailed => "Required kernel API unavailable",
+            Self::VmDisabled => "Virtual machine feature disabled",
+            Self::PayloadTooLarge => "Binary exceeds execution arena",
+            Self::ExecutionFailed => "Execution initialization failed",
+        }
+    }
+}
+
 /// KRX Preamble (20 bytes, little-endian, non-ASCII magic)
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
@@ -837,5 +896,42 @@ mod tests {
             .expect("Decompression failed");
         assert_eq!(decomp_len, 100);
         assert!(restored.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_krx_launch_error_diagnostics() {
+        use crate::caps::Cap;
+
+        let err_cap = KrxLaunchError::CapabilityDenied(Cap::BroadBandRx.required_message());
+        assert_eq!(err_cap.title(), "Missing Hardware");
+        assert_eq!(err_cap.message(), "Requires Broadband HF RX");
+
+        let err_ram = KrxLaunchError::InsufficientRam;
+        assert_eq!(err_ram.title(), "Out of RAM");
+        assert_eq!(err_ram.message(), "Not enough free RAM to execute");
+
+        let err_stack = KrxLaunchError::InsufficientStack;
+        assert_eq!(err_stack.title(), "Stack Overflow");
+        assert_eq!(err_stack.message(), "Insufficient stack headroom");
+
+        let err_vm = KrxLaunchError::VmDisabled;
+        assert_eq!(err_vm.title(), "VM Disabled");
+        assert_eq!(err_vm.message(), "Virtual machine feature disabled");
+
+        let err_fnf = KrxLaunchError::FileNotFound;
+        assert_eq!(err_fnf.title(), "File Not Found");
+        assert_eq!(err_fnf.message(), "Package file not found on flash");
+
+        let err_reloc = KrxLaunchError::RelocationFailed;
+        assert_eq!(err_reloc.title(), "Reloc Error");
+        assert_eq!(err_reloc.message(), "Binary relocation failed");
+
+        let err_api = KrxLaunchError::ImportBindingFailed;
+        assert_eq!(err_api.title(), "API Unresolved");
+        assert_eq!(err_api.message(), "Required kernel API unavailable");
+
+        let err_corrupt = KrxLaunchError::MissingExecution;
+        assert_eq!(err_corrupt.title(), "Corrupted Binary");
+        assert_eq!(err_corrupt.message(), "Missing execution manifest");
     }
 }

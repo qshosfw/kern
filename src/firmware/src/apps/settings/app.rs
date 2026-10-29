@@ -454,12 +454,9 @@ impl SettingsApp {
                     let path = app.path.as_str();
                     match crate::apps::runtime::launch_krx_package(ctx, path) {
                         Ok(_) => {}
-                        Err(_) => {
-                            ctx.show_popup(
-                                TAG_POPUP_INFO,
-                                "Launch Error",
-                                "Failed to launch KRX package",
-                            );
+                        Err(err) => {
+                            ctx.show_popup(TAG_POPUP_INFO, err.title(), err.message());
+                            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
                         }
                     }
                     return;

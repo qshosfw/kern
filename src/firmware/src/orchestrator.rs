@@ -769,7 +769,12 @@ impl Orchestrator {
                 crate::apps::explorer::launch_explorer(ctx);
                 #[cfg(not(feature = "app_explorer"))]
                 {
-                    let _ = crate::apps::runtime::launch_krx_package(ctx, "/apps/explorer.krx");
+                    if let Err(err) =
+                        crate::apps::runtime::launch_krx_package(ctx, "/apps/explorer.krx")
+                    {
+                        ctx.show_popup(0, err.title(), err.message());
+                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+                    }
                 }
             }
             Shortcut::TaskManager => {
@@ -777,7 +782,12 @@ impl Orchestrator {
                 self.switch_app(ctx, APP_ID_TASKS);
                 #[cfg(not(feature = "app_tasks"))]
                 {
-                    let _ = crate::apps::runtime::launch_krx_package(ctx, "/apps/sysinfo.krx");
+                    if let Err(err) =
+                        crate::apps::runtime::launch_krx_package(ctx, "/apps/sysinfo.krx")
+                    {
+                        ctx.show_popup(0, err.title(), err.message());
+                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+                    }
                 }
             }
             Shortcut::Settings => self.switch_app(ctx, APP_ID_SETTINGS),

@@ -211,12 +211,14 @@ impl LauncherApp {
             LauncherTarget::Package(path) => {
                 #[cfg(feature = "filesystem")]
                 {
-                    let res = crate::apps::runtime::launch_krx_package(ctx, path);
-                    if res.is_err() {
-                        reload_launcher(ctx.storage);
-                        false
-                    } else {
-                        true
+                    match crate::apps::runtime::launch_krx_package(ctx, path) {
+                        Ok(_) => true,
+                        Err(err) => {
+                            ctx.show_popup(0, err.title(), err.message());
+                            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+                            reload_launcher(ctx.storage);
+                            false
+                        }
                     }
                 }
                 #[cfg(not(feature = "filesystem"))]
@@ -234,6 +236,13 @@ impl LauncherApp {
             if let Some(ref mut d) = disp {
                 self.render_to_canvas(d.canvas, is_list);
                 ctx.draw_status_bar_cfg(d.canvas, &sb_cfg);
+                unsafe {
+                    let modal_ref =
+                        &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL);
+                    if modal_ref.is_active() {
+                        modal_ref.render_overlay(d.canvas);
+                    }
+                }
                 d.lcd.blit(d.canvas);
             }
             ctx.display = disp;

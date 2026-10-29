@@ -236,6 +236,34 @@ impl Cap {
             Self::GpioAccess => "GPIO Access",
         }
     }
+
+    pub const fn required_message(&self) -> &'static str {
+        match self {
+            Self::RadioRx => "Requires Radio RX",
+            Self::RadioTx => "Requires Radio TX",
+            Self::StorageRead => "Requires Storage Access",
+            Self::StorageWrite => "Requires Storage Write",
+            Self::AudioOutput => "Requires Audio Output",
+            Self::DisplayDirect => "Requires Direct Display",
+            Self::SerialComm => "Requires Serial Port",
+            Self::UsbComm => "Requires USB Port",
+            Self::HardwareCrc => "Requires Hardware CRC",
+            Self::RealTimeClock => "Requires RTC Clock",
+            Self::PowerManage => "Requires Power Subsystem",
+            Self::CryptoAead => "Requires Crypto Engine",
+            Self::RawPeripheral => "Requires Raw MMIO",
+            Self::BroadBandRx => "Requires Broadband HF RX",
+            Self::GnssLocation => "Requires GNSS Location",
+            Self::WirelessLink => "Requires Wireless Link",
+            Self::AudioCapture => "Requires Audio Capture",
+            Self::BroadcastFm => "Requires Broadcast FM Tuner",
+            Self::Keypad => "Requires Keypad Matrix",
+            Self::TaskControl => "Requires Task Management",
+            Self::ServiceRegistry => "Requires Service Registry",
+            Self::BusAccess => "Requires Direct Bus Access",
+            Self::GpioAccess => "Requires Direct GPIO Access",
+        }
+    }
 }
 
 /// Compact 32-bit capability token set with zero-alloc O(1) bitwise operations.
@@ -292,6 +320,40 @@ impl CapabilitySet {
 
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
+    }
+
+    /// Returns the first required capability token in this set, if any.
+    pub const fn first_cap(&self) -> Option<Cap> {
+        if self.0 == 0 {
+            return None;
+        }
+        let tz = self.0.trailing_zeros();
+        match 1u32 << tz {
+            1 => Some(Cap::RadioRx),
+            2 => Some(Cap::RadioTx),
+            4 => Some(Cap::StorageRead),
+            8 => Some(Cap::StorageWrite),
+            16 => Some(Cap::AudioOutput),
+            32 => Some(Cap::DisplayDirect),
+            64 => Some(Cap::SerialComm),
+            128 => Some(Cap::UsbComm),
+            256 => Some(Cap::HardwareCrc),
+            512 => Some(Cap::RealTimeClock),
+            1024 => Some(Cap::PowerManage),
+            2048 => Some(Cap::CryptoAead),
+            4096 => Some(Cap::RawPeripheral),
+            8192 => Some(Cap::BroadBandRx),
+            16384 => Some(Cap::GnssLocation),
+            32768 => Some(Cap::WirelessLink),
+            65536 => Some(Cap::AudioCapture),
+            131072 => Some(Cap::BroadcastFm),
+            262144 => Some(Cap::Keypad),
+            524288 => Some(Cap::TaskControl),
+            1048576 => Some(Cap::ServiceRegistry),
+            2097152 => Some(Cap::BusAccess),
+            4194304 => Some(Cap::GpioAccess),
+            _ => None,
+        }
     }
 
     pub fn insert(&mut self, kind: Cap) {
@@ -439,6 +501,28 @@ mod tests {
         assert_eq!(collected[0], Cap::RadioRx);
         assert_eq!(collected[1], Cap::RadioTx);
         assert_eq!(collected[2], Cap::AudioOutput);
+    }
+
+    #[test]
+    fn test_first_cap_and_required_message() {
+        let empty = CapabilitySet::empty();
+        assert_eq!(empty.first_cap(), None);
+
+        let set = CapabilitySet::empty()
+            .with(Cap::BroadBandRx)
+            .with(Cap::GnssLocation);
+        assert_eq!(set.first_cap(), Some(Cap::BroadBandRx));
+        assert_eq!(
+            Cap::BroadBandRx.required_message(),
+            "Requires Broadband HF RX"
+        );
+
+        let single = CapabilitySet::empty().with(Cap::BroadcastFm);
+        assert_eq!(single.first_cap(), Some(Cap::BroadcastFm));
+        assert_eq!(
+            Cap::BroadcastFm.required_message(),
+            "Requires Broadcast FM Tuner"
+        );
     }
 
     struct MockSecurityContext {

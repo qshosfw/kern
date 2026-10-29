@@ -12,7 +12,7 @@ use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
-use kernel::proc::krx::{KrxClass, KrxPreamble, SectionExecution};
+use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxPreamble, SectionExecution};
 use kernel::proc::paged::{FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack};
 use kernel::proc::reloc::apply_relocs;
 
@@ -192,7 +192,7 @@ pub fn load_native_from_storage(
     cap_imports_body: Option<&[u8]>,
     block_map_body: Option<&[u8]>,
     caps: CapabilitySet,
-) -> bool {
+) -> Result<(), KrxLaunchError> {
     let slot = slot_mut();
     slot.cache.reset();
     slot.shadow_stack.clear();
@@ -206,13 +206,19 @@ pub fn load_native_from_storage(
         )
     };
 
-    let total_read = storage.read_file(path, buffer_bytes).unwrap_or(0);
+    let total_read = storage
+        .read_file(path, buffer_bytes)
+        .map_err(|_| KrxLaunchError::ReadFailed)?;
     let h_len = preamble.header_len as usize;
     if total_read <= h_len {
-        return false;
+        return Err(KrxLaunchError::ReadFailed);
     }
 
     let payload_len = total_read - h_len;
+    if exec.payload_size > 0 && (exec.payload_size as usize) > (NATIVE_EXEC_BUFFER_WORDS * 4) {
+        return Err(KrxLaunchError::PayloadTooLarge);
+    }
+
     // Shift payload to the beginning of the aligned buffer
     buffer_bytes.copy_within(h_len..total_read, 0);
 
@@ -235,7 +241,7 @@ pub fn load_native_from_storage(
                 )
             };
             if res.is_err() {
-                return false;
+                return Err(KrxLaunchError::RelocationFailed);
             }
         }
     }
@@ -250,7 +256,7 @@ pub fn load_native_from_storage(
             &mut [][..]
         };
         if !bind_cap_imports(cap_body, got_slice, caps) {
-            return false;
+            return Err(KrxLaunchError::ImportBindingFailed);
         }
     }
 
@@ -287,7 +293,7 @@ pub fn load_native_from_storage(
     let _ = slot.app_name.push_str(name);
     slot.caps = caps;
     slot.is_loaded = true;
-    true
+    Ok(())
 }
 
 /// Invokes a Native or Paged Thumb-1 entry point with the guest GOT base register (r9) bound.
