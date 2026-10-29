@@ -30,13 +30,19 @@ struct AssetChooserStorage {
 #[inline(always)]
 fn storage_ref() -> &'static AssetChooserStorage {
     let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
-    unsafe { &*(arena[5120..].as_ptr() as *const AssetChooserStorage) }
+    unsafe {
+        &*(arena[crate::runtime::native_runner::TRANSIENT_SCRATCH_OFFSET..].as_ptr()
+            as *const AssetChooserStorage)
+    }
 }
 
 #[inline(always)]
 fn storage_mut() -> &'static mut AssetChooserStorage {
     let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
-    unsafe { &mut *(arena[5120..].as_mut_ptr() as *mut AssetChooserStorage) }
+    unsafe {
+        &mut *(arena[crate::runtime::native_runner::TRANSIENT_SCRATCH_OFFSET..].as_mut_ptr()
+            as *mut AssetChooserStorage)
+    }
 }
 
 /// Universal dynamic display name formatter for filesystem assets.

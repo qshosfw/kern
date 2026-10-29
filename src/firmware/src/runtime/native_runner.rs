@@ -21,9 +21,10 @@ use kernel::proc::paged::{
 };
 use kernel::proc::reloc::apply_relocs;
 
-pub const NATIVE_EXEC_BUFFER_WORDS: usize = 1536; // 6.0 KB (6144 bytes) shared transient execution arena
+pub const NATIVE_EXEC_BUFFER_WORDS: usize = 2048; // 8.0 KB (8192 bytes) shared transient execution arena
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
-pub const MICRO_DAEMON_ARENA_BYTES: usize = 1024; // Headroom reservation for micro-daemons / applets
+pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
+pub const TRANSIENT_SCRATCH_OFFSET: usize = 6144; // Scratch storage offset for asset chooser, staging, etc.
 
 #[repr(C, align(4))]
 pub(crate) struct NativeExecSlot {
@@ -305,6 +306,18 @@ pub fn load_native_from_storage(
     let load_base = slot.buffer.as_ptr() as u32;
     let load_delta = load_base.wrapping_sub(preamble.link_base);
 
+    let profile = KrxProfile::detect(
+        preamble,
+        exec,
+        block_map_body.is_some(),
+        leaf_map_body.is_some(),
+    );
+
+    // Hardened check for N0 (NativeFixed): link_base must strictly match load_base!
+    if profile == KrxProfile::N0NativeFixed && preamble.link_base != load_base {
+        return Err(KrxLaunchError::RelocationFailed);
+    }
+
     // 1. Apply escape-capable delta relocations v2 (Section 6.2)
     if exec.reloc_count > 0 && exec.reloc_offset > 0 {
         let r_off = exec.reloc_offset as usize;
@@ -381,12 +394,6 @@ pub fn load_native_from_storage(
     }
 
     // 4b. Configure normative memory regions for the detected execution profile
-    let profile = KrxProfile::detect(
-        preamble,
-        exec,
-        block_map_body.is_some(),
-        leaf_map_body.is_some(),
-    );
     slot.profile = profile;
     slot.mem_layout.reset();
     if profile.is_structured_paged() {

@@ -196,9 +196,9 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             let walker = crate::apps::runtime::get_global_walker();
             walker.reset(app_name);
 
-            // Store Declare payload in [1024..5120] of the shared transient arena
-            // (DeclareWalker occupies [0..988], so [1024..5120] persists for the app's lifetime!)
-            let arena_tail = &mut super::native_runner::transient_arena_bytes_mut()[1024..5120];
+            // Store Declare payload in [1024..7168] of the shared transient arena
+            // (DeclareWalker occupies [0..988], so [1024..7168] persists for the app's lifetime!)
+            let arena_tail = &mut super::native_runner::transient_arena_bytes_mut()[1024..7168];
             let read_total = ctx
                 .storage
                 .read_file(path, arena_tail)
