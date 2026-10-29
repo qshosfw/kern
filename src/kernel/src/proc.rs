@@ -11,6 +11,7 @@ pub mod paged;
 pub mod primitives;
 pub mod reloc;
 pub mod service_registry;
+#[cfg(feature = "krx_vm")]
 pub mod vm;
 
 pub use crate::boot::{BOOT_RECORD_MAGIC, BootRecord, BootSlot, ResetReason};
@@ -29,6 +30,7 @@ pub use paged::{
 pub use primitives::*;
 pub use reloc::{RelocError, apply_relocs};
 pub use service_registry::{MAX_REGISTERED_SERVICES, ServiceEntry, ServiceRegistry};
+#[cfg(feature = "krx_vm")]
 pub use vm::{Kvm16, VmError, VmStatus};
 
 use crate::caps::CapabilitySet;

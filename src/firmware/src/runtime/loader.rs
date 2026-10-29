@@ -213,6 +213,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 walker as *mut _ as *mut (),
             )
         }
+        #[cfg(feature = "krx_vm")]
         KrxClass::VMachine => {
             let mut code_buf = [0u8; 256];
             let read_total = ctx.storage.read_file(path, &mut code_buf).unwrap_or(0);
@@ -239,6 +240,11 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             }
 
             (super::vm_runner::VM_RUNNER_VTABLE, core::ptr::null_mut())
+        }
+        #[cfg(not(feature = "krx_vm"))]
+        KrxClass::VMachine => {
+            let _ = (ctx, path, preamble, app_name);
+            return Err(KrxLaunchError::ExecutionFailed);
         }
         KrxClass::Native | KrxClass::Paged => {
             let exec_sec = find_section(&hdr_buf, header_len, SECTION_EXECUTION)

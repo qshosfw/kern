@@ -46,6 +46,9 @@ settings_calib = []
 settings_debug = []
 overclock_72mhz = []
 
+# ⚙️ Execution Runtime Engines
+krx_vm = ["kernel/krx_vm"]
+
 # 📡 Hardware Peripheral & RF Subsystems
 radio = ["drivers/radio"]
 fm_radio = ["drivers/fm_radio"]

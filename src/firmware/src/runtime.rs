@@ -13,6 +13,7 @@ pub mod loader;
 pub mod native_runner;
 #[cfg(feature = "app_hibernation")]
 pub mod swap;
+#[cfg(feature = "krx_vm")]
 pub mod vm_runner;
 
 pub use abi_bridge::*;
@@ -21,4 +22,5 @@ pub use loader::*;
 pub use native_runner::*;
 #[cfg(feature = "app_hibernation")]
 pub use swap::*;
+#[cfg(feature = "krx_vm")]
 pub use vm_runner::*;

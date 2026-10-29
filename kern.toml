@@ -48,6 +48,9 @@ secure_fs = false       # 🔒 Ascon-128 encrypted storage
 passcode = false        # 🔑 Security enclave boot PIN lock & KDF stretching
 app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
+[features.runtime]
+krx_vm = false          # ⚙️ KVM-16 virtual machine interpreter (disabled to focus on N0/N1/P0/P1/D0)
+
 [features.provisioning]
 provision_apps = true        # 📱 Embed & provision built-in KRX packages (/apps/sysinfo.krx, counter.krx, timer.krx, explorer.krx)
 provision_rogers = false     # 🎵 Embed & provision built-in roger beep tones to /user/rogers/
