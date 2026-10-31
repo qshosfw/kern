@@ -346,18 +346,6 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_SQL_RSSI, r78);
     }
 
-    pub fn set_squelch_thresholds(&mut self, noise: u16, glitch: u16, rssi: u16) {
-        let th = kernel::service::radio::squelch::SquelchThresholds {
-            open_noise: noise,
-            close_noise: noise.saturating_add(10),
-            open_glitch: glitch,
-            close_glitch: glitch.saturating_add(8),
-            open_rssi: rssi,
-            close_rssi: rssi.saturating_sub(16),
-        };
-        self.set_squelch_profile(&th);
-    }
-
     pub fn is_squelch_open(&mut self) -> bool {
         let reg0c = self.read_reg(REG_STATUS);
         (reg0c & 0x0002) != 0
