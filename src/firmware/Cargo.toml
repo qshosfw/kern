@@ -16,6 +16,7 @@ heapless = { workspace = true }
 kernfs = { path = "../lib/kernfs" }
 crypto = { path = "../lib/crypto" }
 utils = { path = "../lib/utils" }
+calib = { path = "../lib/calib" }
 
 [features]
 default = [

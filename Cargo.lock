@@ -113,6 +113,7 @@ name = "drivers"
 version = "0.1.0"
 dependencies = [
  "bsp",
+ "calib",
  "cortex-m",
  "crypto",
  "embedded-hal 1.0.0",
@@ -145,6 +146,7 @@ name = "firmware"
 version = "0.1.0"
 dependencies = [
  "bsp",
+ "calib",
  "cortex-m",
  "cortex-m-rt",
  "crypto",

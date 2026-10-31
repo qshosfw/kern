@@ -23,6 +23,8 @@ pub struct BatteryState {
 
 pub struct BatteryDriver {
     pub calib_const: u16,
+    pub calib_curve: [u16; 6],
+    pub has_calib_curve: bool,
     pub calib_tweak_mv: i16,
     battery_type: Cell<BatteryType>,
     smoothed_mv: u16,
@@ -46,6 +48,8 @@ impl BatteryDriver {
     pub const fn empty() -> Self {
         Self {
             calib_const: 0,
+            calib_curve: [0; 6],
+            has_calib_curve: false,
             calib_tweak_mv: 0,
             battery_type: Cell::new(BatteryType::Type1600mAh),
             smoothed_mv: 0,
@@ -68,6 +72,8 @@ impl BatteryDriver {
     pub const fn new() -> Self {
         Self {
             calib_const: 2227, // Default fallback to factory radio dump baseline (2227)
+            calib_curve: [1438, 2050, 2138, 2227, 2314, 2600],
+            has_calib_curve: true,
             calib_tweak_mv: 0,
             battery_type: Cell::new(BatteryType::Type1600mAh),
             smoothed_mv: 8200,
@@ -113,11 +119,27 @@ impl BatteryDriver {
     }
 
     pub fn load_calibration_data(&mut self, calib_data: &[u8]) {
-        if calib_data.len() >= 0x148 {
-            let word3 = u16::from_le_bytes([calib_data[0x146], calib_data[0x147]]);
+        if calib_data.len() >= 0x14C {
+            for i in 0..6 {
+                self.calib_curve[i] = u16::from_le_bytes([
+                    calib_data[0x140 + i * 2],
+                    calib_data[0x140 + i * 2 + 1],
+                ]);
+            }
+            self.has_calib_curve = true;
+            let word3 = self.calib_curve[3];
             if word3 >= 1000 && word3 <= 3500 {
                 self.calib_const = word3;
             }
+        }
+    }
+
+    pub fn load_calibration_curve(&mut self, curve: [u16; 6]) {
+        self.calib_curve = curve;
+        self.has_calib_curve = true;
+        let word3 = curve[3];
+        if word3 >= 1000 && word3 <= 3500 {
+            self.calib_const = word3;
         }
     }
 
@@ -269,7 +291,17 @@ impl BatteryDriver {
 
         self.last_mv = self.smoothed_mv;
 
-        let percentage = mv_to_percentage(self.smoothed_mv, self.battery_type.get());
+        let percentage = if self.has_calib_curve {
+            let cal = if self.calib_const >= 1000 && self.calib_const <= 3500 {
+                self.calib_const as u32
+            } else {
+                2227
+            };
+            let eff_adc = ((self.smoothed_mv as u32 * cal) / 7600) as u16;
+            calib::calculate_battery_percentage(eff_adc, &self.calib_curve)
+        } else {
+            mv_to_percentage(self.smoothed_mv, self.battery_type.get())
+        };
         let is_low = !is_external && (self.smoothed_mv < 6500 || percentage < 15);
         let is_critical = !is_external && (self.smoothed_mv < 6000 || percentage == 0);
 

@@ -12,6 +12,7 @@ crypto = { path = "../lib/crypto", optional = true }
 cortex-m = { workspace = true }
 heapless = { workspace = true }
 kernfs = { path = "../lib/kernfs" }
+calib = { path = "../lib/calib" }
 embedded-hal = { workspace = true }
 py32-hal = { path = "../platform/hal" }
 

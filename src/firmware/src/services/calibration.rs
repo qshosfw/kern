@@ -171,16 +171,25 @@ pub trait CalibrationService {
     fn is_device_bound(&self) -> bool;
     fn battery_calib_const(&self) -> u16;
     fn battery_curve(&self) -> [u16; 6];
+    fn battery_mv_from_adc(&self, raw_adc: u16) -> u16;
+    fn battery_percent_from_adc(&self, raw_adc: u16) -> u8;
     fn xtal_freq_low(&self) -> i16;
     fn lna_calib(&self) -> u16;
     fn mix_calib(&self) -> u16;
     fn volume_gain(&self) -> u8;
     fn dac_gain(&self) -> u8;
+    fn squelch_thresholds(&self, freq_hz: u32, level: u8) -> kernel::service::radio::squelch::SquelchThresholds;
+    fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8;
+    fn rssi_thresholds(&self, freq_hz: u32) -> [u16; 4];
+    fn s_meter_level(&self, freq_hz: u32, raw_rssi: u16) -> u8;
+    fn vox_thresholds(&self, level: u8) -> (u16, u16);
+    fn mic_gain_db(&self, level: u8) -> u8;
     fn raw_bytes(&self) -> &[u8; 512];
 }
 
-/// Concrete in-memory system calibration holder (compact 24-byte parsed representation).
+/// Concrete in-memory system calibration holder (512-byte raw + fast access cached registers).
 pub struct SystemCalibration {
+    raw: [u8; 512],
     battery_curve: [u16; 6],
     xtal_freq_low: i16,
     lna_calib: u16,
@@ -204,18 +213,20 @@ fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 1
 impl SystemCalibration {
     pub const fn new() -> Self {
         Self {
-            battery_curve: [1900, 2000, 2100, 2227, 2350, 2450],
-            xtal_freq_low: 0,
-            lna_calib: 0,
-            mix_calib: 0,
-            volume_gain: 58,
-            dac_gain: 8,
-            valid: false,
+            raw: *DEV_TARGET_FACTORY_CALIB,
+            battery_curve: [1438, 2050, 2138, 2227, 2314, 2600],
+            xtal_freq_low: 4,
+            lna_calib: 0x46,
+            mix_calib: 0x50,
+            volume_gain: 55,
+            dac_gain: 14,
+            valid: true,
             bound: false,
         }
     }
 
     fn extract_fields(&mut self, data: &[u8; 512]) {
+        self.raw.copy_from_slice(data);
         for i in 0..6 {
             self.battery_curve[i] =
                 u16::from_le_bytes([data[0x140 + i * 2], data[0x140 + i * 2 + 1]]);
@@ -226,6 +237,59 @@ impl SystemCalibration {
         let vol = data[0x18E];
         self.volume_gain = if vol < 64 { vol } else { 58 };
         self.dac_gain = data[0x18F];
+    }
+
+    #[inline(always)]
+    pub fn as_block(&self) -> &calib::CalibrationBlock {
+        calib::CalibrationBlock::from_bytes(&self.raw)
+    }
+
+    #[inline(always)]
+    pub fn squelch_thresholds(&self, freq_hz: u32, level: u8) -> kernel::service::radio::squelch::SquelchThresholds {
+        let th = self.as_block().get_squelch_thresholds(freq_hz, level);
+        kernel::service::radio::squelch::SquelchThresholds {
+            open_rssi: th.open_rssi,
+            close_rssi: th.close_rssi,
+            open_noise: th.open_noise,
+            close_noise: th.close_noise,
+            open_glitch: th.open_glitch,
+            close_glitch: th.close_glitch,
+        }
+    }
+
+    #[inline(always)]
+    pub fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8 {
+        self.as_block().get_tx_power_bias(freq_hz, power_level)
+    }
+
+    #[inline(always)]
+    pub fn rssi_thresholds(&self, freq_hz: u32) -> [u16; 4] {
+        self.as_block().get_rssi_thresholds(freq_hz)
+    }
+
+    #[inline(always)]
+    pub fn s_meter_level(&self, freq_hz: u32, raw_rssi: u16) -> u8 {
+        self.as_block().get_s_meter_level(freq_hz, raw_rssi)
+    }
+
+    #[inline(always)]
+    pub fn battery_mv_from_adc(&self, raw_adc: u16) -> u16 {
+        self.as_block().battery_mv(raw_adc)
+    }
+
+    #[inline(always)]
+    pub fn battery_percent_from_adc(&self, raw_adc: u16) -> u8 {
+        self.as_block().battery_percentage(raw_adc)
+    }
+
+    #[inline(always)]
+    pub fn vox_thresholds(&self, level: u8) -> (u16, u16) {
+        self.as_block().get_vox_thresholds(level)
+    }
+
+    #[inline(always)]
+    pub fn mic_gain_db(&self, level: u8) -> u8 {
+        self.as_block().get_mic_gain_db(level)
     }
 
     /// Load calibration into self from VFS with fallback to backup, factory default, and signature verification.
@@ -339,8 +403,18 @@ impl SystemCalibration {
     }
 
     #[inline(always)]
+    pub fn battery_curve(&self) -> [u16; 6] {
+        self.battery_curve
+    }
+
+    #[inline(always)]
     pub fn xtal_freq_low(&self) -> i16 {
         self.xtal_freq_low
+    }
+
+    #[inline(always)]
+    pub fn raw_bytes(&self) -> &[u8; 512] {
+        &self.raw
     }
 }
 
@@ -359,6 +433,14 @@ impl CalibrationService for SystemCalibration {
 
     fn battery_curve(&self) -> [u16; 6] {
         self.battery_curve
+    }
+
+    fn battery_mv_from_adc(&self, raw_adc: u16) -> u16 {
+        self.battery_mv_from_adc(raw_adc)
+    }
+
+    fn battery_percent_from_adc(&self, raw_adc: u16) -> u8 {
+        self.battery_percent_from_adc(raw_adc)
     }
 
     fn xtal_freq_low(&self) -> i16 {
@@ -381,7 +463,31 @@ impl CalibrationService for SystemCalibration {
         self.dac_gain
     }
 
+    fn squelch_thresholds(&self, freq_hz: u32, level: u8) -> kernel::service::radio::squelch::SquelchThresholds {
+        self.squelch_thresholds(freq_hz, level)
+    }
+
+    fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8 {
+        self.tx_power_bias(freq_hz, power_level)
+    }
+
+    fn rssi_thresholds(&self, freq_hz: u32) -> [u16; 4] {
+        self.rssi_thresholds(freq_hz)
+    }
+
+    fn s_meter_level(&self, freq_hz: u32, raw_rssi: u16) -> u8 {
+        self.s_meter_level(freq_hz, raw_rssi)
+    }
+
+    fn vox_thresholds(&self, level: u8) -> (u16, u16) {
+        self.vox_thresholds(level)
+    }
+
+    fn mic_gain_db(&self, level: u8) -> u8 {
+        self.mic_gain_db(level)
+    }
+
     fn raw_bytes(&self) -> &[u8; 512] {
-        DEV_TARGET_FACTORY_CALIB
+        &self.raw
     }
 }

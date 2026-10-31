@@ -117,6 +117,8 @@ pub struct Bk4829<'a, State = Disabled> {
     pub(crate) tone_gain: u8,
     pub(crate) active_demod_af: AfType,
     pub(crate) rx_demod_active: bool,
+    pub(crate) calib: Option<&'a [u8; 512]>,
+    pub(crate) current_freq_hz: u32,
     pub(crate) _state: PhantomData<State>,
 }
 
@@ -330,6 +332,22 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(0x36, (bias << 8) | (1 << 7) | gain);
     }
 
+    /// Set calibrated PA bias directly into REG_36.
+    pub fn set_rf_power_bias(&mut self, bias: u8) {
+        let gain: u16 = (4 << 3) | 2;
+        self.write_reg(0x36, ((bias as u16) << 8) | (1 << 7) | gain);
+    }
+
+    /// Soft-start S-curve PA ramp-up with precise calibrated PA bias.
+    pub fn tx_ramp_up_bias(&mut self, bias: u8) {
+        self.set_gpio_pin(1, true); // PA enable
+        py32_hal::delay::delay_ms(2);
+        self.rf_power_off();
+        py32_hal::delay::delay_ms(3);
+        self.set_rf_power_bias(bias);
+        py32_hal::delay::delay_ms(5);
+    }
+
     /// PA off (REG_36 reset value used by init).
     pub fn rf_power_off(&mut self) {
         self.write_reg(0x36, 0x0022);
@@ -412,10 +430,23 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_FSK_CTRL, reg58 | 0x0100);
     }
 
+    /// Select external VHF vs UHF front-end bandpass and LNA path on REG_33.
+    pub fn set_filter_path(&mut self, freq_hz: u32) {
+        if freq_hz < 280_000_000 {
+            self.set_gpio_pin(4, true);  // VHF LNA (pin 4, bit 2)
+            self.set_gpio_pin(3, false); // UHF LNA (pin 3, bit 3)
+        } else {
+            self.set_gpio_pin(4, false); // VHF LNA
+            self.set_gpio_pin(3, true);  // UHF LNA
+        }
+    }
+
     pub fn set_frequency(&mut self, freq: Frequency<Hertz>) {
+        self.current_freq_hz = freq.raw();
         let (low, high) = tuning::calculate_pll_dividers(freq);
         self.write_reg(REG_PLL_LOW, low);
         self.write_reg(REG_PLL_HIGH, high);
+        self.set_filter_path(self.current_freq_hz);
     }
 
     pub fn get_rssi(&mut self) -> u16 {
@@ -461,6 +492,15 @@ impl<'a, State> Bk4829<'a, State> {
     }
 }
 
+impl<'a, State> Bk4829<'a, State> {
+    /// Bind calibration memory reference and apply crystal trim to REG_3B.
+    pub fn attach_calibration(&mut self, calib_bytes: &'a [u8; 512]) {
+        self.calib = Some(calib_bytes);
+        let block = calib::CalibrationBlock::from_bytes(calib_bytes);
+        self.set_crystal_trim(block.xtal_freq_low());
+    }
+}
+
 // ── Boot & Power Transitions ────────────────────────────────────────────────
 
 impl<'a> Bk4829<'a, Disabled> {
@@ -471,6 +511,8 @@ impl<'a> Bk4829<'a, Disabled> {
             tone_gain: 128,
             active_demod_af: AfType::Fm,
             rx_demod_active: false,
+            calib: None,
+            current_freq_hz: 144_000_000,
             _state: PhantomData,
         }
     }
@@ -529,6 +571,8 @@ impl<'a> Bk4829<'a, Disabled> {
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
             rx_demod_active: self.rx_demod_active,
+            calib: self.calib,
+            current_freq_hz: self.current_freq_hz,
             _state: PhantomData,
         }
     }
@@ -548,6 +592,8 @@ impl<'a> Bk4829<'a, Disabled> {
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
             rx_demod_active: self.rx_demod_active,
+            calib: self.calib,
+            current_freq_hz: self.current_freq_hz,
             _state: PhantomData,
         }
     }
@@ -568,6 +614,8 @@ impl<'a> Bk4829<'a, Receiving> {
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
             rx_demod_active: self.rx_demod_active,
+            calib: self.calib,
+            current_freq_hz: self.current_freq_hz,
             _state: PhantomData,
         }
     }
@@ -588,6 +636,8 @@ impl<'a> Bk4829<'a, Transmitting> {
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
             rx_demod_active: self.rx_demod_active,
+            calib: self.calib,
+            current_freq_hz: self.current_freq_hz,
             _state: PhantomData,
         }
     }
@@ -780,7 +830,20 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
 
 impl<'a, State> kernel::service::radio::RfSquelch for Bk4829<'a, State> {
     fn set_squelch_level(&mut self, level: u8) {
-        let th = squelch::squelch_level_to_thresholds(level);
+        let th = if let Some(calib) = self.calib {
+            let block = calib::CalibrationBlock::from_bytes(calib);
+            let t = block.get_squelch_thresholds(self.current_freq_hz, level);
+            kernel::service::radio::squelch::SquelchThresholds {
+                open_rssi: t.open_rssi,
+                close_rssi: t.close_rssi,
+                open_noise: t.open_noise,
+                close_noise: t.close_noise,
+                open_glitch: t.open_glitch,
+                close_glitch: t.close_glitch,
+            }
+        } else {
+            squelch::squelch_level_to_thresholds(level)
+        };
         self.set_squelch_profile(&th);
     }
 
@@ -1249,14 +1312,17 @@ impl<'a, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, State> {
     }
 
     fn tx_ramp_up(&mut self, target_power_level: u8) {
-        self.set_gpio_pin(1, true); // PA enable
-        py32_hal::delay::delay_ms(2);
-        if target_power_level > 0 {
-            self.rf_power_off();
-            py32_hal::delay::delay_ms(3);
-        }
-        self.set_rf_power(target_power_level);
-        py32_hal::delay::delay_ms(5);
+        let bias = if let Some(calib) = self.calib {
+            let block = calib::CalibrationBlock::from_bytes(calib);
+            block.get_tx_power_bias(self.current_freq_hz, target_power_level)
+        } else {
+            match target_power_level {
+                0 => 0x20,
+                1 => 0x60,
+                _ => 0xA0,
+            }
+        };
+        self.tx_ramp_up_bias(bias);
     }
 
     fn tx_unmute(&mut self) {

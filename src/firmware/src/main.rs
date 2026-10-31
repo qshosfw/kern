@@ -178,6 +178,13 @@ fn main() -> ! {
         boot::boot_orchestration(&mut boot_hw)
     };
 
+    let calib_ref = unsafe { (*core::ptr::addr_of!(CALIBRATION)).raw_bytes() };
+    hw.radio.attach_calibration(calib_ref);
+    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
+    power_service
+        .battery_driver
+        .load_calibration_curve(unsafe { (*core::ptr::addr_of!(CALIBRATION)).battery_curve() });
+
     let startup_app = if master_config_ref().apps.startup_app == 1 {
         crate::apps::APP_ID_VFO
     } else {
