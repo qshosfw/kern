@@ -55,6 +55,7 @@ pub trait RadioPrimitive {
     fn set_subaudible_dcs(&mut self, code: u16, inverted: bool);
     fn send_tail(&mut self);
     fn mute(&mut self, muted: bool);
+    fn mute_mic(&mut self, muted: bool);
     fn read_register(&mut self, reg: u8) -> u16;
     fn write_register(&mut self, reg: u8, val: u16);
     fn fsk_init(&mut self, baud: u16);

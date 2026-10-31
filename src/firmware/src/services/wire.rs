@@ -62,6 +62,16 @@ impl ActiveTransfer {
 pub static mut CURRENT_TRANSFER: ActiveTransfer = ActiveTransfer::empty();
 static mut NEXT_TRANSFER_ID: u16 = 1;
 
+#[inline(always)]
+fn active_transfer_mut(transfer_id: u16) -> Option<&'static mut ActiveTransfer> {
+    let transfer = unsafe { &mut *core::ptr::addr_of_mut!(CURRENT_TRANSFER) };
+    if transfer.active && transfer.transfer_id == transfer_id {
+        Some(transfer)
+    } else {
+        None
+    }
+}
+
 /// Event streaming subscription state (§8.9)
 #[derive(Clone, Copy)]
 pub struct EventSubscription {
@@ -400,8 +410,8 @@ fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     let path_bytes = req.path.as_bytes();
     if path_bytes.is_empty()
         || path_bytes.len() > 32
-        || !req.path.starts_with('/')
-        || req.path.contains("..")
+        || path_bytes[0] != b'/'
+        || path_bytes.windows(2).any(|w| w == b"..")
     {
         return send_status(hw, header, WireStatus::BadRange);
     }
@@ -452,10 +462,10 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         None => return send_status(hw, header, WireStatus::BadLength),
     };
 
-    let transfer = unsafe { &mut *core::ptr::addr_of_mut!(CURRENT_TRANSFER) };
-    if !transfer.active || transfer.transfer_id != req.transfer_id {
-        return send_status(hw, header, WireStatus::BadSession);
-    }
+    let transfer = match active_transfer_mut(req.transfer_id) {
+        Some(t) => t,
+        None => return send_status(hw, header, WireStatus::BadSession),
+    };
 
     if transfer.mode == TRANSFER_MODE_WRITE {
         let off = req.offset as usize;
@@ -506,10 +516,10 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         None => return send_status(hw, header, WireStatus::BadLength),
     };
 
-    let transfer = unsafe { &mut *core::ptr::addr_of_mut!(CURRENT_TRANSFER) };
-    if !transfer.active || transfer.transfer_id != req.transfer_id {
-        return send_status(hw, header, WireStatus::BadSession);
-    }
+    let transfer = match active_transfer_mut(req.transfer_id) {
+        Some(t) => t,
+        None => return send_status(hw, header, WireStatus::BadSession),
+    };
 
     transfer.active = false;
     let mut resp = [0u8; 6];
@@ -566,8 +576,7 @@ fn on_transfer_abort(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         None => return send_status(hw, header, WireStatus::BadLength),
     };
 
-    let transfer = unsafe { &mut *core::ptr::addr_of_mut!(CURRENT_TRANSFER) };
-    if transfer.active && transfer.transfer_id == req.transfer_id {
+    if let Some(transfer) = active_transfer_mut(req.transfer_id) {
         transfer.active = false;
     }
 

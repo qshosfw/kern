@@ -179,6 +179,8 @@ pub struct CapRadioVTable {
     pub rf_fsk_init: unsafe extern "C" fn(baud: u16),
     pub rf_fsk_send: unsafe extern "C" fn(data: *const u8, len: u16) -> u8,
     pub rf_fsk_recv: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
+    pub rf_set_mic_mute: unsafe extern "C" fn(muted: u8),
+    pub rf_set_tx_carrier: unsafe extern "C" fn(active: u8) -> u8,
 }
 
 /// 3. `CapAudio` VTable (`interface_id = 0x0003`)
@@ -501,6 +503,7 @@ unsafe extern "C" fn noop_rf_fsk_send(_data: *const u8, _len: u16) -> u8 {
 unsafe extern "C" fn noop_rf_fsk_recv(_buf: *mut u8, _max_len: u16) -> u16 {
     0
 }
+unsafe extern "C" fn noop_rf_mute(_muted: u8) {}
 
 unsafe extern "C" fn noop_audio_play_tone(_freq_hz: u16, _duration_ms: u16) {}
 unsafe extern "C" fn noop_audio_play_beep(_beep_type: u8) {}
@@ -772,6 +775,8 @@ pub static STUB_RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
     rf_fsk_init: noop_rf_fsk_init,
     rf_fsk_send: noop_rf_fsk_send,
     rf_fsk_recv: noop_rf_fsk_recv,
+    rf_set_mic_mute: noop_rf_mute,
+    rf_set_tx_carrier: noop_rf_set_tx,
 };
 
 pub static STUB_AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {
@@ -1014,5 +1019,38 @@ mod tests {
         assert!(ev_bus.is_bus());
         assert!(ev_bus.is_radio_bus());
         assert!(!ev_bus.is_key());
+    }
+
+    #[test]
+    fn test_radio_vtable_silicon_primitives_and_stubs() {
+        let table = KrxApiTable::safe_stub(0xFFFF_FFFF);
+        assert!(!table.radio.is_null());
+        let radio = unsafe { &*table.radio };
+
+        unsafe {
+            // Radio control and mic clamping primitives
+            (radio.rf_set_mic_mute)(1);
+            (radio.rf_set_mic_mute)(0);
+            assert_eq!((radio.rf_set_tx_carrier)(1), 1);
+            assert_eq!((radio.rf_set_tx_carrier)(0), 1);
+            assert_eq!((radio.rf_tune)(433_920_000, 0, 25_000), 1);
+            assert_eq!((radio.rf_get_freq)(), 0);
+            assert_eq!((radio.rf_get_rssi)(), -140);
+            assert_eq!((radio.rf_is_carrier)(), 0);
+
+            // Audio capture and FSK primitives
+            assert!(!table.audio.is_null());
+            let audio = &*table.audio;
+            assert_eq!((audio.audio_capture_start)(8000), 1);
+            let mut samples = [0i16; 16];
+            assert_eq!((audio.audio_capture_read)(samples.as_mut_ptr(), 16), 0);
+            (audio.audio_capture_stop)();
+
+            // Hardware register access primitives (CapHwBus)
+            assert!(!table.hw_bus.is_null());
+            let bus = &*table.hw_bus;
+            assert_eq!((bus.hw_rf_read_reg)(0x0C), 0);
+            (bus.hw_rf_write_reg)(0x0C, 0);
+        }
     }
 }

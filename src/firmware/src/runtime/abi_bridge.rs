@@ -338,6 +338,27 @@ pub unsafe extern "C" fn api_rf_fsk_recv(buf: *mut u8, max_len: u16) -> u16 {
     }
 }
 
+pub unsafe extern "C" fn api_rf_set_mic_mute(muted: u8) {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::RadioPrimitive;
+            (*ACTIVE_CTX).mute_mic(muted != 0);
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_rf_set_tx_carrier(active: u8) -> u8 {
+    unsafe {
+        if !ACTIVE_CTX.is_null() {
+            use kernel::proc::primitives::RadioPrimitive;
+            (*ACTIVE_CTX).set_tx_carrier(active != 0);
+            0
+        } else {
+            1
+        }
+    }
+}
+
 // ── 3. CapAudio C-ABI Handlers ──────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_audio_play_tone(freq_hz: u16, duration_ms: u16) {
@@ -1274,6 +1295,8 @@ pub static RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
     rf_fsk_init: api_rf_fsk_init,
     rf_fsk_send: api_rf_fsk_send,
     rf_fsk_recv: api_rf_fsk_recv,
+    rf_set_mic_mute: api_rf_set_mic_mute,
+    rf_set_tx_carrier: api_rf_set_tx_carrier,
 };
 
 pub static AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {

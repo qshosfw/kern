@@ -335,15 +335,32 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(0x36, 0x0022);
     }
 
+    pub fn set_squelch_profile(&mut self, th: &kernel::service::radio::squelch::SquelchThresholds) {
+        let r4d = 0xA000 | (th.close_glitch & 0x00FF);
+        let r4e = (1u16 << 14) | (5u16 << 11) | (3u16 << 9) | (1u16 << 8) | (th.open_glitch & 0x00FF);
+        let r4f = ((th.close_noise & 0x007F) << 8) | (th.open_noise & 0x007F);
+        let r78 = ((th.open_rssi & 0x00FF) << 8) | (th.close_rssi & 0x00FF);
+        self.write_reg(REG_SQL_GLITCH_CLOSE, r4d);
+        self.write_reg(REG_SQL_GLITCH_OPEN, r4e);
+        self.write_reg(REG_SQL_NOISE, r4f);
+        self.write_reg(REG_SQL_RSSI, r78);
+    }
+
     pub fn set_squelch_thresholds(&mut self, noise: u16, glitch: u16, rssi: u16) {
-        self.write_reg(REG_SQL_NOISE_TH, noise);
-        self.write_reg(REG_SQL_GLITCH_TH, glitch);
-        self.write_reg(REG_SQL_RSSI_TH, rssi);
+        let th = kernel::service::radio::squelch::SquelchThresholds {
+            open_noise: noise,
+            close_noise: noise.saturating_add(10),
+            open_glitch: glitch,
+            close_glitch: glitch.saturating_add(8),
+            open_rssi: rssi,
+            close_rssi: rssi.saturating_sub(16),
+        };
+        self.set_squelch_profile(&th);
     }
 
     pub fn is_squelch_open(&mut self) -> bool {
-        let reg65 = self.read_reg(REG_CARRIER_STATUS);
-        (reg65 & 0x0001) != 0
+        let reg0c = self.read_reg(REG_STATUS);
+        (reg0c & 0x0002) != 0
     }
 
     pub fn get_snr(&mut self) -> u8 {
@@ -357,8 +374,8 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn get_noise(&mut self) -> u8 {
-        let reg64 = self.read_reg(REG_NOISE_VAL);
-        (reg64 & 0xFF) as u8
+        let reg65 = self.read_reg(REG_NOISE_VAL);
+        (reg65 & 0xFF) as u8
     }
 
     pub fn sleep(&mut self) {
@@ -776,11 +793,11 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
 impl<'a, State> kernel::service::radio::RfSquelch for Bk4829<'a, State> {
     fn set_squelch_level(&mut self, level: u8) {
         let th = squelch::squelch_level_to_thresholds(level);
-        self.set_squelch_thresholds(th.open_noise, th.open_glitch, th.open_rssi);
+        self.set_squelch_profile(&th);
     }
 
     fn set_squelch_thresholds(&mut self, th: &kernel::service::radio::squelch::SquelchThresholds) {
-        self.set_squelch_thresholds(th.open_noise, th.open_glitch, th.open_rssi);
+        self.set_squelch_profile(th);
     }
 
     fn get_signal_metrics(&mut self) -> kernel::service::radio::squelch::SignalMetrics {
@@ -859,8 +876,10 @@ impl<'a, State> kernel::service::radio::RfSubaudible for Bk4829<'a, State> {
     }
 
     fn is_subaudible_matched(&mut self) -> bool {
-        let reg65 = self.read_reg(REG_CARRIER_STATUS);
-        (reg65 & 0x0006) != 0
+        let reg0c = self.read_reg(REG_STATUS);
+        let ctc = (reg0c >> 10) & 0x03;
+        let dcs = (reg0c >> 14) & 0x03;
+        ctc == 1 || dcs != 0
     }
 
     fn send_css_tail(&mut self, mode: kernel::service::radio::CssTailMode) {

@@ -341,6 +341,10 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
         self.radio.mute_audio(muted);
     }
 
+    fn mute_mic(&mut self, muted: bool) {
+        self.radio.mute_mic(muted);
+    }
+
     fn fsk_init(&mut self, baud: u16) {
         let baud_rate = match baud {
             1200 => FskBaudRate::Baud1200,

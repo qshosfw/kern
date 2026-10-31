@@ -47,14 +47,15 @@ pub const REG_FSK_FIFO_STATUS: u8 = 0x5E;
 pub const REG_FSK_FIFO_DATA: u8 = 0x5F;
 
 // Squelch Threshold & Telemetry Registers
-pub const REG_SQL_NOISE_TH: u8 = 0x60;
-pub const REG_SQL_GLITCH_TH: u8 = 0x61;
-pub const REG_SQL_RSSI_TH: u8 = 0x62;
+pub const REG_SQL_GLITCH_CLOSE: u8 = 0x4D;
+pub const REG_SQL_GLITCH_OPEN: u8 = 0x4E;
+pub const REG_SQL_NOISE: u8 = 0x4F;
 pub const REG_GLITCH_VAL: u8 = 0x63;
-pub const REG_NOISE_VAL: u8 = 0x64;
-pub const REG_CARRIER_STATUS: u8 = 0x65;
+pub const REG_AUDIO_AMP: u8 = 0x64; // TX audio amplitude indicator
+pub const REG_NOISE_VAL: u8 = 0x65; // Ex-noise indicator
 pub const REG_SNR_VAL: u8 = 0x66;
 pub const REG_RSSI_VAL: u8 = 0x67;
+pub const REG_SQL_RSSI: u8 = 0x78;
 
 // Tone Generator Registers
 pub const REG_TONE_GAIN: u8 = 0x70;
