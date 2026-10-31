@@ -185,7 +185,7 @@ impl RadioCoordinator {
             fsk_sync_active: false,
             rssi_moving_avg: [-120, -120, -120],
             activity_count: [0, 0, 0],
-            audio_path_muted: false,
+            audio_path_muted: true,
             audio_source: AudioCrossbarSource::Primary,
             bclo_policy: BcloPolicy::CarrierOnly,
             dw_tx_policy: DualWatchTxPolicy::ActiveVfo,

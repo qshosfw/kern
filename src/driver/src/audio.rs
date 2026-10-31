@@ -82,6 +82,14 @@ impl AudioAmplifier {
         }
     }
 
+    /// Immediately cancel any active hangover and shut down the LN4898 amplifier.
+    pub fn cancel_hangover() {
+        unsafe {
+            HANGOVER_MS = 0;
+        }
+        AUDIO_PA.set_low();
+    }
+
     /// Periodic system tick to step hangover shutdown timer (called every 16ms).
     pub fn tick(&mut self, elapsed_ms: u16) {
         if !self.enabled {

@@ -229,13 +229,18 @@ impl<'a, State> Bk4829<'a, State> {
         let tone_cfg = 0x8000 | ((self.tone_gain as u16 & 0x7F) << 8);
         self.write_reg(REG_TONE_GAIN, tone_cfg);
 
-        // Ensure TX DSP bit (bit 1) is enabled in REG_SYS_POWER without triggering VCO recalibration (bit 15)
+        // 2. Isolate RF RX Demodulator during tone playback:
+        // Set REG_SYS_POWER to AF_DAC (bit 9) | DISC_MODE (bit 8) | TX_DSP (bit 1) = 0x0302.
+        // This isolates the FM discriminator and RX DSP so receiver hiss/whistle never mixes into the tone.
         let cur_pwr = self.cache.read(REG_SYS_POWER);
-        if cur_pwr != 0xFFFF && (cur_pwr & 0x0002) == 0 {
-            self.write_reg(REG_SYS_POWER, (cur_pwr & !0x8000) | 0x0002);
-        }
+        let rx_pwr = if cur_pwr != 0xFFFF && (cur_pwr & 0x0001) != 0 {
+            cur_pwr
+        } else {
+            0xBFF1
+        };
+        self.write_reg(REG_SYS_POWER, 0x0302);
 
-        // 2. Hardware Audio Power Amplifier Warm-Up:
+        // 3. Hardware Audio Power Amplifier Warm-Up:
         // On Quansheng UV-K1 / K5, LN4898 audio power amplifier (PA8) warm-up
         // requires ~35ms to charge the bypass capacitor from cold shutdown for pop-free, audible playback.
         let was_amp_active = bsp::pins::AUDIO_PA.is_high();
@@ -244,7 +249,7 @@ impl<'a, State> Bk4829<'a, State> {
             py32_hal::delay::delay_ms(35);
         }
 
-        // 3. Play note sequence
+        // 4. Play note sequence
         for note in notes {
             if note.freq_hz == 0 || note.duration_ms == 0 {
                 self.write_reg(REG_TX_MUTE, 0xBB18);
@@ -259,23 +264,21 @@ impl<'a, State> Bk4829<'a, State> {
             }
         }
 
-        // 4. Power amplifier post-tone hold & hangover extension
-        py32_hal::delay::delay_ms(5);
-        crate::audio::AudioAmplifier::notify_tone_played();
-
-        // 5. Restore clean RX state without resetting RF PLL or auto-calibrating VCO
+        // 5. Clean up tone generator
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         self.write_reg(REG_TONE_GAIN, 0x0000);
-        let cur_pwr = self.cache.read(REG_SYS_POWER);
-        if cur_pwr != 0xFFFF && (cur_pwr & 0x0002) != 0 {
-            self.write_reg(REG_SYS_POWER, cur_pwr & !0x8002);
-        }
-        if self.rx_demod_active {
+
+        // 6. Restore clean RX / idle state without resetting RF PLL or auto-calibrating VCO
+        self.write_reg(REG_SYS_POWER, rx_pwr & !0x8002);
+
+        if self.rx_demod_active && self.is_squelch_open() {
             self.set_af(self.active_demod_af);
             self.write_reg(REG_TX_MUTE, 0x3B18);
+            crate::audio::AudioAmplifier::notify_tone_played();
         } else {
             self.set_af(AfType::Mute);
-            self.write_reg(REG_TX_MUTE, 0xBB18); // Keep muted during hangover to eliminate whistle and shutdown pop
+            self.write_reg(REG_TX_MUTE, 0xBB18);
+            crate::audio::AudioAmplifier::cancel_hangover();
         }
     }
 
@@ -284,11 +287,7 @@ impl<'a, State> Bk4829<'a, State> {
         self.set_af(AfType::Beep);
         let tone_cfg = 0x8000 | ((self.tone_gain as u16 & 0x7F) << 8);
         self.write_reg(REG_TONE_GAIN, tone_cfg);
-
-        let cur_pwr = self.cache.read(REG_SYS_POWER);
-        if cur_pwr != 0xFFFF && (cur_pwr & 0x0002) == 0 {
-            self.write_reg(REG_SYS_POWER, (cur_pwr & !0x8000) | 0x0002);
-        }
+        self.write_reg(REG_SYS_POWER, 0x0302);
 
         let was_amp_active = bsp::pins::AUDIO_PA.is_high();
         if !was_amp_active {
@@ -313,19 +312,18 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn end_tone_sequence(&mut self, _was_amp_active: bool) {
-        crate::audio::AudioAmplifier::notify_tone_played();
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         self.write_reg(REG_TONE_GAIN, 0x0000);
-        let cur_pwr = self.cache.read(REG_SYS_POWER);
-        if cur_pwr != 0xFFFF && (cur_pwr & 0x0002) != 0 {
-            self.write_reg(REG_SYS_POWER, cur_pwr & !0x8002);
-        }
-        if self.rx_demod_active {
+        self.write_reg(REG_SYS_POWER, 0xBFF1);
+
+        if self.rx_demod_active && self.is_squelch_open() {
             self.set_af(self.active_demod_af);
             self.write_reg(REG_TX_MUTE, 0x3B18);
+            crate::audio::AudioAmplifier::notify_tone_played();
         } else {
             self.set_af(AfType::Mute);
             self.write_reg(REG_TX_MUTE, 0xBB18);
+            crate::audio::AudioAmplifier::cancel_hangover();
         }
     }
 
@@ -439,7 +437,10 @@ impl<'a, State> Bk4829<'a, State> {
         if self.squelch_level == 0 {
             true
         } else {
-            self.squelch_open
+            let reg0c = self.read_reg(REG_STATUS);
+            let hw_open = ((reg0c >> 1) & 0x0001) != 0;
+            self.squelch_open = hw_open;
+            hw_open
         }
     }
 
@@ -530,6 +531,13 @@ impl<'a, State> Bk4829<'a, State> {
 
     pub fn set_frequency(&mut self, freq: Frequency<Hertz>) {
         let old_uhf = self.current_freq_hz >= 174_000_000;
+        let freq_changed = self.current_freq_hz != freq.raw();
+        let was_rx = self.rx_demod_active;
+        if freq_changed && was_rx {
+            self.set_af(AfType::Mute);
+            self.write_reg(REG_TX_MUTE, 0xBB18);
+        }
+
         self.current_freq_hz = freq.raw();
         let new_uhf = self.current_freq_hz >= 174_000_000;
         let (low, high) = tuning::calculate_pll_dividers(freq);
@@ -543,6 +551,14 @@ impl<'a, State> Bk4829<'a, State> {
                 self,
                 self.squelch_level,
             );
+        }
+
+        if freq_changed {
+            self.clear_interrupts();
+            if was_rx && self.is_squelch_open() {
+                self.set_af(self.active_demod_af);
+                self.write_reg(REG_TX_MUTE, 0x3B18);
+            }
         }
     }
 
@@ -620,7 +636,7 @@ impl<'a> Bk4829<'a, Disabled> {
             rx_demod_active: false,
             calib: None,
             current_freq_hz: 144_000_000,
-            squelch_level: 0,
+            squelch_level: 4,
             squelch_open: false,
             subaudible_matched: false,
             _state: PhantomData,
@@ -655,15 +671,21 @@ impl<'a> Bk4829<'a, Disabled> {
         // 4. Default volume level 5 (Reg 0x48)
         self.set_volume_level(5);
 
-        // 5. Default modulation and AF routing (FM)
+        // 5. Default modulation (FM) with clean muted AF routing and LEDs off
         self.write_reg(REG_MODULATION, 0x3516);
-        self.set_af(AfType::Fm);
-        self.write_reg(REG_GPIO, 0x9000); // Base GPIO state (Reg 0x33)
+        self.set_af(AfType::Mute);
+        self.write_reg(REG_TX_MUTE, 0xBB18);
+        self.write_reg(REG_GPIO, 0x9000); // Base GPIO state (Reg 0x33, LEDs off)
 
         // 6. Power on RX link, AF DAC, DISC mode, PLL/VCO, RX DSP
         self.write_reg(REG_SYS_POWER, 0xBFF1);
 
-        // 7. Configure hardware interrupt enable mask
+        // 7. Squelch level 4 default profile and hardware amplifier shutdown
+        self.squelch_level = 4;
+        self.set_squelch_profile(&squelch::squelch_level_to_thresholds(4));
+        bsp::pins::AUDIO_PA.set_low();
+
+        // 8. Configure hardware interrupt enable mask
         let int_mask = INT_SQUELCH_FOUND
             | INT_SQUELCH_LOST
             | INT_CXCSS_TAIL
