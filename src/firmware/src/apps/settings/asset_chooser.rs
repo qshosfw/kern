@@ -4,26 +4,102 @@
 //! dynamic name extraction (e.g. "01_roger.ton" -> "Roger"), and OptionSheet generation.
 //! Completely decoupled from specific asset domains: takes directory paths and extensions dynamically.
 
-use crate::SysContext;
 use gfx::gui::modules::menu::{OptionSheet, ShortString};
 
 pub const MAX_CHOOSER_ASSETS: usize = 8;
 pub const TAG_ASSET_CHOOSER: u8 = 16;
 
-pub struct AssetChooserParams {
+pub struct AssetDescriptor {
     pub title: &'static str,
     pub dir: &'static str,
-    pub cur_path: heapless::String<32>,
-    pub is_active: bool,
-    pub none_label: Option<&'static str>,
-    pub fallback: Option<(&'static str, &'static str)>,
     pub extensions: &'static [&'static str],
+    pub none_label: &'static str,
+    pub get_path: for<'a> fn(&'a crate::config::MasterConfig) -> (bool, &'a str),
+    pub set_path: fn(&mut crate::config::MasterConfig, Option<&str>),
+}
+
+impl AssetDescriptor {
+    #[inline(never)]
+    pub fn build_sheet(
+        &self,
+        config: &crate::config::MasterConfig,
+        storage_fs: &mut crate::services::SystemStorage,
+    ) -> OptionSheet {
+        let (active, cur_path) = (self.get_path)(config);
+        let storage = storage_mut();
+
+        storage.count = 0;
+        storage.labels[0] = ShortString::from_str(self.none_label);
+
+        let mut dir_entries =
+            [const { crate::services::storage::DirEntryInfo::empty() }; MAX_CHOOSER_ASSETS];
+        let scan_count = storage_fs.list_dir(self.dir, &mut dir_entries).unwrap_or(0);
+
+        for i in 1..scan_count {
+            let mut j = i;
+            while j > 0 && dir_entries[j].path.as_str() < dir_entries[j - 1].path.as_str() {
+                dir_entries.swap(j, j - 1);
+                j -= 1;
+            }
+        }
+
+        let mut current_sel = 0;
+
+        for entry in &dir_entries[..scan_count] {
+            if entry.is_dir {
+                continue;
+            }
+            let path = entry.path.as_str();
+            if !has_extension(path, self.extensions) {
+                continue;
+            }
+
+            let found = storage.count;
+            storage.paths[found].clear();
+            let _ = storage.paths[found].push_str(path);
+            storage.labels[found + 1] = format_asset_name(path);
+
+            if active && current_sel == 0 && path == cur_path {
+                current_sel = found + 1;
+            }
+
+            storage.count += 1;
+            if storage.count >= MAX_CHOOSER_ASSETS {
+                break;
+            }
+        }
+
+        if active && current_sel == 0 && storage.count > 0 {
+            current_sel = 1;
+        }
+
+        let total_options = storage.count + 1;
+        let labels_slice: &'static [ShortString] =
+            unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), total_options) };
+
+        OptionSheet::new_dynamic(self.title, labels_slice, current_sel).with_radio(true)
+    }
+
+    pub fn apply_choice(&self, sel: usize, config: &mut crate::config::MasterConfig) -> bool {
+        let is_active = (self.get_path)(config).0;
+        apply_asset_selection(sel, is_active, |opt| {
+            (self.set_path)(config, opt);
+        })
+    }
+
+    pub fn format_status(&self, config: &crate::config::MasterConfig, out: &mut ShortString) {
+        let (active, path) = (self.get_path)(config);
+        if !active {
+            out.set_str(self.none_label);
+        } else {
+            *out = format_asset_name(path);
+        }
+    }
 }
 
 struct AssetChooserStorage {
     paths: [heapless::String<32>; MAX_CHOOSER_ASSETS],
     labels: [ShortString; MAX_CHOOSER_ASSETS + 1],
-    has_none: bool,
     count: usize,
 }
 
@@ -107,98 +183,38 @@ fn has_extension(path: &str, extensions: &[&str]) -> bool {
     false
 }
 
-/// Generalized asset chooser builder
-#[inline(never)]
-pub fn build_asset_chooser(params: &AssetChooserParams, ctx: &mut SysContext) -> OptionSheet {
-    let storage = storage_mut();
-
-    storage.count = 0;
-    storage.has_none = params.none_label.is_some();
-
-    let mut label_offset = 0;
-    if let Some(none_str) = params.none_label {
-        storage.labels[0] = ShortString::from_str(none_str);
-        label_offset = 1;
-    }
-
-    let mut dir_entries =
-        [const { crate::services::storage::DirEntryInfo::empty() }; MAX_CHOOSER_ASSETS];
-    let scan_count = ctx
-        .storage
-        .list_dir(params.dir, &mut dir_entries)
-        .unwrap_or(0);
-
-    for i in 1..scan_count {
-        let mut j = i;
-        while j > 0 && dir_entries[j].path.as_str() < dir_entries[j - 1].path.as_str() {
-            dir_entries.swap(j, j - 1);
-            j -= 1;
-        }
-    }
-
-    let mut current_sel = 0;
-
-    for entry in &dir_entries[..scan_count] {
-        if entry.is_dir {
-            continue;
-        }
-        let path = entry.path.as_str();
-        if !has_extension(path, params.extensions) {
-            continue;
-        }
-
-        let found = storage.count;
-        storage.paths[found].clear();
-        let _ = storage.paths[found].push_str(path);
-        storage.labels[found + label_offset] = format_asset_name(path);
-
-        if params.is_active && current_sel == 0 && path == params.cur_path.as_str() {
-            current_sel = found + label_offset;
-        }
-
-        storage.count += 1;
-        if storage.count >= MAX_CHOOSER_ASSETS {
-            break;
-        }
-    }
-
-    if storage.count == 0 {
-        if let Some((fb_path, fb_label)) = params.fallback {
-            storage.paths[0].clear();
-            let _ = storage.paths[0].push_str(fb_path);
-            storage.labels[label_offset] = ShortString::from_str(fb_label);
-            storage.count = 1;
-            if params.is_active {
-                current_sel = label_offset;
-            }
-        }
-    }
-
-    if params.is_active && current_sel == 0 && storage.count > 0 && params.none_label.is_some() {
-        current_sel = 1;
-    }
-
-    let total_options = storage.count + label_offset;
-    let labels_slice: &'static [ShortString] =
-        unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), total_options) };
-
-    OptionSheet::new_dynamic(params.title, labels_slice, current_sel).with_radio(true)
-}
-
 /// Retrieve the selected asset path from storage
 pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
+    if sel == 0 {
+        return None;
+    }
     let storage = storage_ref();
-    let idx = if storage.has_none {
-        if sel == 0 {
-            return None;
-        }
-        sel - 1
-    } else {
-        sel
-    };
+    let idx = sel - 1;
     if idx < storage.count && !storage.paths[idx].is_empty() {
         Some(storage.paths[idx].as_str())
     } else {
         None
+    }
+}
+
+/// Generalized asset selection applicator.
+/// Handles `sel == 0` (disable/off via `None`) and `sel > 0` (chosen asset path via `Some(path)`).
+pub fn apply_asset_selection(
+    sel: usize,
+    is_active: bool,
+    mut on_apply: impl FnMut(Option<&str>),
+) -> bool {
+    if sel == 0 {
+        if is_active {
+            on_apply(None);
+            return true;
+        }
+        return false;
+    }
+    if let Some(path) = get_chosen_asset_path(sel) {
+        on_apply(Some(path));
+        true
+    } else {
+        false
     }
 }

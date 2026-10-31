@@ -48,3 +48,13 @@ impl<'a, 'b> DisplayService for DisplayHardware<'a, 'b> {
         self.lcd.blit(self.canvas);
     }
 }
+
+impl<'a, 'b> DisplayHardware<'a, 'b> {
+    pub fn apply_config(&mut self, cfg: &crate::config::DisplayConfig) {
+        self.lcd.set_contrast(cfg.contrast);
+        self.lcd.set_inverted(cfg.inverted != 0);
+        self.lcd.shading_mode = cfg.shading_mode;
+        self.set_backlight_mode(cfg.backlight_mode_service());
+        self.set_backlight_brightness(cfg.backlight_max.clamp(1, 10), cfg.backlight_min.min(10));
+    }
+}

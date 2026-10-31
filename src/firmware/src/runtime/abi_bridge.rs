@@ -1071,8 +1071,7 @@ pub unsafe extern "C" fn api_paged_call(
     target_offset: u16,
     return_offset: u16,
 ) -> usize {
-    super::native_runner::krx_call_paged(target_block_id, target_offset, return_offset)
-        .unwrap_or(0)
+    super::native_runner::krx_call_paged(target_block_id, target_offset, return_offset).unwrap_or(0)
 }
 
 pub unsafe extern "C" fn api_paged_return() -> usize {

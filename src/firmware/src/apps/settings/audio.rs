@@ -1,16 +1,8 @@
 //! Audio Domain Settings Declarations & Hardware Binding
 
 #[cfg(feature = "boot_assets")]
-use super::options::{ACTION_JINGLE_CHOOSER, ACTION_ROGER_CHOOSER};
-use super::options::{
-    CHOICE_AUDIO_PROFILE, CHOICE_KEY_BEEP, RANGE_0_10, RANGE_MIC_GAIN, SettingDef, SettingField,
-    SettingKind,
-};
-#[cfg(not(feature = "boot_assets"))]
-use super::options::{CHOICE_BOOT_JINGLE, CHOICE_OFF_ON};
-use crate::SysContext;
-#[cfg(feature = "boot_assets")]
-use gfx::gui::modules::menu::OptionSheet;
+use super::asset_chooser::AssetDescriptor;
+use super::page::{RANGE_0_10, RANGE_MIC_GAIN, SettingDef, SettingField};
 
 pub static KEY_BEEP_OPTIONS: [&'static str; 6] =
     ["Off", "Tone", "Click", "Double", "Warning", "Scroll"];
@@ -19,156 +11,60 @@ pub static BOOT_JINGLE_OPTIONS: [&'static str; 5] = ["Off", "Chime", "Nokia", "C
 
 pub static AUDIO_PROFILE_OPTIONS: [&'static str; 5] = ["Flat", "Clean", "Mid", "Boost", "Max"];
 
-pub struct AudioDomain;
+pub static OFF_ON: [&'static str; 2] = ["Off", "On"];
+
+#[cfg(feature = "boot_assets")]
+pub static ROGER_ASSET: AssetDescriptor = AssetDescriptor {
+    title: "Roger Beep",
+    dir: "/user/rogers",
+    extensions: &[".ton", ".rgr"],
+    none_label: "Off",
+    get_path: |cfg| (cfg.audio.roger_beep != 0, cfg.audio.roger_path_str()),
+    set_path: |cfg, opt| match opt {
+        Some(path) => {
+            cfg.audio.roger_beep = 1;
+            cfg.audio.set_roger_path(path);
+        }
+        None => cfg.audio.roger_beep = 0,
+    },
+};
+
+#[cfg(feature = "boot_assets")]
+pub static JINGLE_ASSET: AssetDescriptor = AssetDescriptor {
+    title: "Boot Jingle",
+    dir: "/user/jingles",
+    extensions: &[".ton"],
+    none_label: "Off",
+    get_path: |cfg| (cfg.audio.boot_jingle != 0, cfg.audio.jingle_path_str()),
+    set_path: |cfg, opt| match opt {
+        Some(path) => {
+            cfg.audio.boot_jingle = 1;
+            cfg.audio.set_jingle_path(path);
+        }
+        None => cfg.audio.boot_jingle = 0,
+    },
+};
 
 pub static AUDIO_DEFS: [SettingDef; 7] = [
-    SettingDef {
-        title: "AF Gain",
-        kind: SettingKind::Range(RANGE_0_10),
-        field: SettingField::VOLUME,
-    },
-    SettingDef {
-        title: "Beep Vol",
-        kind: SettingKind::Range(RANGE_0_10),
-        field: SettingField::BEEP_GAIN,
-    },
-    SettingDef {
-        title: "Key Beep",
-        kind: SettingKind::Choice(CHOICE_KEY_BEEP),
-        field: SettingField::KEY_BEEP,
-    },
-    SettingDef {
-        title: "Mic Gain",
-        kind: SettingKind::Range(RANGE_MIC_GAIN),
-        field: SettingField::MIC_GAIN,
-    },
+    SettingDef::range("AF Gain", &RANGE_0_10, SettingField::VOLUME),
+    SettingDef::range("Beep Vol", &RANGE_0_10, SettingField::BEEP_GAIN),
+    SettingDef::choice("Key Beep", &KEY_BEEP_OPTIONS, SettingField::KEY_BEEP),
+    SettingDef::range("Mic Gain", &RANGE_MIC_GAIN, SettingField::MIC_GAIN),
     #[cfg(feature = "boot_assets")]
-    SettingDef {
-        title: "Roger Beep",
-        kind: SettingKind::Action(ACTION_ROGER_CHOOSER),
-        field: SettingField::None,
-    },
+    SettingDef::asset("Roger Beep", &ROGER_ASSET),
     #[cfg(not(feature = "boot_assets"))]
-    SettingDef {
-        title: "Roger Beep",
-        kind: SettingKind::Choice(CHOICE_OFF_ON),
-        field: SettingField::ROGER_BEEP,
-    },
+    SettingDef::choice("Roger Beep", &OFF_ON, SettingField::ROGER_BEEP),
     #[cfg(feature = "boot_assets")]
-    SettingDef {
-        title: "Boot Jingle",
-        kind: SettingKind::Action(ACTION_JINGLE_CHOOSER),
-        field: SettingField::None,
-    },
+    SettingDef::asset("Boot Jingle", &JINGLE_ASSET),
     #[cfg(not(feature = "boot_assets"))]
-    SettingDef {
-        title: "Boot Jingle",
-        kind: SettingKind::Choice(CHOICE_BOOT_JINGLE),
-        field: SettingField::BOOT_JINGLE,
-    },
-    SettingDef {
-        title: "RX Profile",
-        kind: SettingKind::Choice(CHOICE_AUDIO_PROFILE),
-        field: SettingField::AUDIO_PROFILE,
-    },
+    SettingDef::choice(
+        "Boot Jingle",
+        &BOOT_JINGLE_OPTIONS,
+        SettingField::BOOT_JINGLE,
+    ),
+    SettingDef::choice(
+        "RX Profile",
+        &AUDIO_PROFILE_OPTIONS,
+        SettingField::AUDIO_PROFILE,
+    ),
 ];
-
-impl AudioDomain {
-    #[cfg(feature = "boot_assets")]
-    pub fn create_roger_chooser(ctx: &mut SysContext) -> OptionSheet {
-        let params = super::asset_chooser::AssetChooserParams {
-            title: "Roger Beep",
-            dir: "/user/rogers",
-            cur_path: heapless::String::try_from(ctx.config.audio.roger_path_str())
-                .unwrap_or_default(),
-            is_active: ctx.config.audio.roger_beep != 0,
-            none_label: Some("Off"),
-            fallback: None,
-            extensions: &[".ton", ".rgr"],
-        };
-        super::asset_chooser::build_asset_chooser(&params, ctx)
-    }
-
-    #[cfg(feature = "boot_assets")]
-    pub fn apply_roger_choice(sel: usize, ctx: &mut SysContext) -> bool {
-        if sel == 0 {
-            if ctx.config.audio.roger_beep != 0 {
-                ctx.config.audio.roger_beep = 0;
-                ctx.config.audio.set_roger_path("");
-                ctx.play_beep(crate::services::melody::BeepType::Click);
-                return true;
-            }
-            return false;
-        }
-        if let Some(path) = super::asset_chooser::get_chosen_asset_path(sel) {
-            ctx.config.audio.roger_beep = 1;
-            ctx.config.audio.set_roger_path(path);
-            let mel = crate::services::melody::load_roger_melody(ctx.storage, path);
-            if !mel.is_empty() {
-                ctx.radio.play_tone_sequence(mel.as_slice());
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    #[cfg(feature = "boot_assets")]
-    pub fn create_jingle_chooser(ctx: &mut SysContext) -> OptionSheet {
-        let params = super::asset_chooser::AssetChooserParams {
-            title: "Boot Jingle",
-            dir: "/user/jingles",
-            cur_path: heapless::String::try_from(ctx.config.audio.jingle_path_str())
-                .unwrap_or_default(),
-            is_active: ctx.config.audio.boot_jingle != 0,
-            none_label: Some("Off"),
-            fallback: None,
-            extensions: &[".ton"],
-        };
-        super::asset_chooser::build_asset_chooser(&params, ctx)
-    }
-
-    #[cfg(feature = "boot_assets")]
-    pub fn apply_jingle_choice(sel: usize, ctx: &mut SysContext) -> bool {
-        if sel == 0 {
-            if ctx.config.audio.boot_jingle != 0 {
-                ctx.config.audio.boot_jingle = 0;
-                ctx.config.audio.set_jingle_path("");
-                ctx.play_beep(crate::services::melody::BeepType::Click);
-                return true;
-            }
-            return false;
-        }
-        if let Some(path) = super::asset_chooser::get_chosen_asset_path(sel) {
-            ctx.config.audio.boot_jingle = 1;
-            ctx.config.audio.set_jingle_path(path);
-            let mel = crate::services::melody::load_jingle_melody(ctx.storage, 1, path);
-            if !mel.is_empty() {
-                ctx.radio.play_tone_sequence(mel.as_slice());
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn on_choice_confirmed(sel_idx: usize, sel: usize, ctx: &mut SysContext) {
-        match sel_idx {
-            2 => {
-                ctx.play_beep(crate::services::melody::BeepType::from_u8(sel as u8));
-            }
-            5 => {
-                if sel != 0 {
-                    let jingle = crate::services::melody::BootJingleType::from_u8(sel as u8);
-                    let notes = crate::services::melody::MelodyEngine::boot_jingle_notes(jingle);
-                    if !notes.is_empty() {
-                        ctx.radio.play_tone_sequence(notes);
-                    }
-                } else {
-                    ctx.play_beep(crate::services::melody::BeepType::Click);
-                }
-            }
-            _ => {}
-        }
-    }
-}

@@ -11,8 +11,8 @@ use kernel::caps::CapabilitySet;
 use kernel::proc::declare::{ActionRecord, DeclareItem, DeclareNode, LAYOUT_MENU};
 use kernel::proc::krx::{
     KrxClass, KrxPreamble, SECTION_BLOCK_MAP, SECTION_CAP_IMPORTS, SECTION_EXECUTION,
-    SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_TYPE_LIFECYCLE, SectionExecution,
-    SectionIdentity, SectionType, find_section,
+    SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_TYPE_LIFECYCLE, SectionExecution, SectionIdentity,
+    SectionType, find_section,
 };
 
 pub use kernel::proc::krx::KrxLaunchError;
@@ -49,38 +49,24 @@ fn populate_declare_from_payload(
         if payload.len() >= min_bytes {
             let mut off = 4usize;
             for _ in 0..n_cnt {
-                let b = &payload[off..off + 8];
-                let _ = walker.nodes.push(DeclareNode {
-                    node_id: u16::from_le_bytes([b[0], b[1]]),
-                    layout: b[2],
-                    item_count: b[3],
-                    title_offset: u16::from_le_bytes([b[4], b[5]]),
-                    first_item_offset: u16::from_le_bytes([b[6], b[7]]),
-                });
+                let node: DeclareNode = unsafe {
+                    core::ptr::read_unaligned(payload.as_ptr().add(off) as *const DeclareNode)
+                };
+                let _ = walker.nodes.push(node);
                 off += 8;
             }
             for _ in 0..i_cnt {
-                let b = &payload[off..off + 12];
-                let _ = walker.items.push(DeclareItem {
-                    kind: b[0],
-                    flags: b[1],
-                    label_offset: u16::from_le_bytes([b[2], b[3]]),
-                    target: u16::from_le_bytes([b[4], b[5]]),
-                    value_ref: u16::from_le_bytes([b[6], b[7]]),
-                    aux: u16::from_le_bytes([b[8], b[9]]),
-                    reserved: u16::from_le_bytes([b[10], b[11]]),
-                });
+                let item: DeclareItem = unsafe {
+                    core::ptr::read_unaligned(payload.as_ptr().add(off) as *const DeclareItem)
+                };
+                let _ = walker.items.push(item);
                 off += 12;
             }
             for _ in 0..a_cnt {
-                let b = &payload[off..off + 8];
-                let _ = walker.actions.push(ActionRecord {
-                    op: b[0],
-                    flags: b[1],
-                    a: u16::from_le_bytes([b[2], b[3]]),
-                    b: u16::from_le_bytes([b[4], b[5]]),
-                    c: u16::from_le_bytes([b[6], b[7]]),
-                });
+                let act: ActionRecord = unsafe {
+                    core::ptr::read_unaligned(payload.as_ptr().add(off) as *const ActionRecord)
+                };
+                let _ = walker.actions.push(act);
                 off += 8;
             }
             // Length-prefixed string pool (u8 len + UTF-8, KRX-ABI 2.5.0 Section 10.2)
@@ -106,16 +92,10 @@ fn populate_declare_from_payload(
     let item_count = (payload.len() / core::mem::size_of::<DeclareItem>()).min(16);
     if item_count > 0 {
         for i in 0..item_count {
-            let b = &payload[i * 12..(i + 1) * 12];
-            let _ = walker.items.push(DeclareItem {
-                kind: b[0],
-                flags: b[1],
-                label_offset: u16::from_le_bytes([b[2], b[3]]),
-                target: u16::from_le_bytes([b[4], b[5]]),
-                value_ref: u16::from_le_bytes([b[6], b[7]]),
-                aux: u16::from_le_bytes([b[8], b[9]]),
-                reserved: u16::from_le_bytes([b[10], b[11]]),
-            });
+            let item: DeclareItem = unsafe {
+                core::ptr::read_unaligned(payload.as_ptr().add(i * 12) as *const DeclareItem)
+            };
+            let _ = walker.items.push(item);
         }
         let _ = walker.nodes.push(DeclareNode {
             node_id: 0,
@@ -130,14 +110,11 @@ fn populate_declare_from_payload(
 /// Load and launch a verified KRX binary application package.
 #[inline(never)]
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let hdr_buf = &mut super::native_runner::transient_arena_bytes_mut()[..256];
-    let read_len = ctx
-        .storage
-        .read_file(path, hdr_buf)
-        .map_err(|e| match e {
-            kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
-            _ => KrxLaunchError::ReadFailed,
-        })?;
+    let hdr_buf = &mut super::native_runner::transient_arena_bytes_mut()[..512];
+    let read_len = ctx.storage.read_file(path, hdr_buf).map_err(|e| match e {
+        kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
+        _ => KrxLaunchError::ReadFailed,
+    })?;
 
     if read_len < KrxPreamble::SIZE {
         return Err(KrxLaunchError::InvalidPreamble);
@@ -146,7 +123,10 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     let preamble =
         KrxPreamble::parse(&hdr_buf[..read_len]).map_err(|_| KrxLaunchError::InvalidPreamble)?;
 
-    let header_len = (preamble.header_len as usize).min(read_len);
+    let header_len = preamble.header_len as usize;
+    if header_len > read_len {
+        return Err(KrxLaunchError::TruncatedPackage);
+    }
 
     // 1. Inspect Identity Section
     let ident_body = find_section(&hdr_buf, header_len, SECTION_IDENTITY)
@@ -204,15 +184,16 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 .read_file(path, arena_tail)
                 .map_err(|_| KrxLaunchError::ReadFailed)?;
             let h_len = preamble.header_len as usize;
-            if read_total > h_len {
-                let payload: &'static [u8] = unsafe {
-                    core::slice::from_raw_parts(
-                        arena_tail[h_len..read_total].as_ptr(),
-                        read_total - h_len,
-                    )
-                };
-                populate_declare_from_payload(walker, payload);
+            if read_total <= h_len {
+                return Err(KrxLaunchError::TruncatedPackage);
             }
+            let payload: &'static [u8] = unsafe {
+                core::slice::from_raw_parts(
+                    arena_tail[h_len..read_total].as_ptr(),
+                    read_total - h_len,
+                )
+            };
+            populate_declare_from_payload(walker, payload);
 
             (
                 crate::apps::runtime::DECLARE_WALKER_VTABLE,

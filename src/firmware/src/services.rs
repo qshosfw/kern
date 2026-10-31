@@ -183,6 +183,31 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
         }
     }
 
+    /// Show an OS modal popup dialog with dynamic title and message slices.
+    pub fn show_popup_dynamic(&mut self, tag: u8, title: &str, message: &str) {
+        crate::orchestrator::sink_enter_keys();
+        unsafe {
+            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                .show_popup_dynamic(tag, title, message);
+        }
+    }
+
+    /// Show an OS modal confirmation dialog with dynamic title and message slices.
+    pub fn show_confirm_dynamic(
+        &mut self,
+        tag: u8,
+        title: &str,
+        message: &str,
+        confirm: &'static str,
+        cancel: &'static str,
+    ) {
+        crate::orchestrator::sink_enter_keys();
+        unsafe {
+            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                .show_confirm_dynamic(tag, title, message, confirm, cancel);
+        }
+    }
+
     /// Open an OS modal text input prompt.
     #[cfg(feature = "passcode")]
     pub fn prompt_text(
@@ -250,6 +275,18 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
         }
         self.radio.set_volume_level(level);
         self.config.audio.volume = level;
+    }
+
+    pub fn apply_audio_config(&mut self) {
+        let cfg = self.config.audio;
+        if let Some(ref mut audio) = self.audio {
+            audio.set_volume(cfg.volume);
+        }
+        self.radio.set_volume_level(cfg.volume);
+        self.radio
+            .set_tone_gain((cfg.beep_gain as u16 * 12).min(127) as u8);
+        self.radio.set_mic_gain(cfg.mic_gain);
+        self.radio.set_audio_profile(cfg.audio_profile);
     }
 
     /// Play single keypress or system feedback beep

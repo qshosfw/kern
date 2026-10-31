@@ -217,6 +217,8 @@ impl TxPermission {
 pub enum TxState {
     /// Radio receiver active (idle).
     Idle,
+    /// PTT keyed; transmitting unmodulated carrier / subaudible tone lead-in before opening mic.
+    LeadIn { remaining_ms: u16 },
     /// Radio actively transmitting carrier and modulation.
     Active,
     /// PTT released; transmitting subaudible 55 Hz / phase-shifted tail burst before unkeying PA.
@@ -500,7 +502,14 @@ mod tests {
         let fsk = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::EXCLUSIVE);
 
         // 1. Acquire background lock for Scanner on VFO A
-        assert!(arb.request_lock(scanner, RfResourceMask::VFO_A, VfoSlot::VfoA, 500, true, false));
+        assert!(arb.request_lock(
+            scanner,
+            RfResourceMask::VFO_A,
+            VfoSlot::VfoA,
+            500,
+            true,
+            false
+        ));
         assert!(arb.is_locked());
         assert_eq!(arb.lock_depth(), 1);
         assert_eq!(arb.active_client(), scanner);
@@ -508,7 +517,14 @@ mod tests {
 
         // 2. Reject lower/equal priority lock on overlapping resource
         let mesh = ClientToken::new(ClientId::HERMES_MESH, LockTier::BACKGROUND);
-        assert!(!arb.request_lock(mesh, RfResourceMask::VFO_A, VfoSlot::VfoA, 300, false, false));
+        assert!(!arb.request_lock(
+            mesh,
+            RfResourceMask::VFO_A,
+            VfoSlot::VfoA,
+            300,
+            false,
+            false
+        ));
         assert_eq!(arb.lock_depth(), 1);
         assert_eq!(arb.active_client(), scanner);
 
@@ -605,7 +621,14 @@ mod tests {
         );
 
         // Resource locked by another client
-        arb.request_lock(sidecar, RfResourceMask::TRANSMITTER, VfoSlot::VfoA, 500, false, false);
+        arb.request_lock(
+            sidecar,
+            RfResourceMask::TRANSMITTER,
+            VfoSlot::VfoA,
+            500,
+            false,
+            false,
+        );
         assert_eq!(
             arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, false),
             TxPermission::BlockedResourceLocked

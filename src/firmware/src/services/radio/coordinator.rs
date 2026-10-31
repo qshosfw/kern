@@ -150,6 +150,8 @@ pub struct RadioCoordinator {
     pub tot_warning_given: bool,
     /// Lockout penalty active: PTT must be released before transmitting again.
     pub tot_locked_out: bool,
+    /// Real-time RX Squelch Tail Elimination (STE) controller.
+    pub ste: RxSteController,
 }
 
 impl RadioCoordinator {
@@ -192,6 +194,7 @@ impl RadioCoordinator {
             tot_elapsed_10ms: 0,
             tot_warning_given: false,
             tot_locked_out: false,
+            ste: RxSteController::new(),
         }
     }
 
@@ -319,8 +322,7 @@ impl RadioCoordinator {
                 self.fsk_sync_active = false;
             } else if let Some(slot) = self.arbitrator.locked_slot() {
                 self.listening_vfo = slot;
-                self.fsk_sync_active =
-                    self.arbitrator.active_client().id == ClientId::FSK_SIDECAR;
+                self.fsk_sync_active = self.arbitrator.active_client().id == ClientId::FSK_SIDECAR;
             }
             self.dwell.reset_dwell();
             true
@@ -384,8 +386,12 @@ impl RadioCoordinator {
         if self.is_transmitting {
             return false;
         }
-        if let Some(holder) = crate::orchestrator::lease_manager().holder(kernel::proc::LeaseKind::RadioTx) {
-            let caller_pid = crate::orchestrator::proc_table().find_by_app(client.id.0 as usize).map(|p| p.pid);
+        if let Some(holder) =
+            crate::orchestrator::lease_manager().holder(kernel::proc::LeaseKind::RadioTx)
+        {
+            let caller_pid = crate::orchestrator::proc_table()
+                .find_by_app(client.id.0 as usize)
+                .map(|p| p.pid);
             if caller_pid != Some(holder) && client.priority() < LockTier::EXCLUSIVE.0 {
                 return false;
             }
@@ -432,7 +438,8 @@ impl RadioCoordinator {
         if self.arbitrator.active_client().id == ClientId::FSK_SIDECAR {
             // Keep locked for post-frame response/ACK window
             let client = self.arbitrator.active_client();
-            self.arbitrator.extend_lock(client, self.fsk_config.post_frame_hold_ms);
+            self.arbitrator
+                .extend_lock(client, self.fsk_config.post_frame_hold_ms);
         }
         RadioEvent::FskFrameFinished(slot)
     }
@@ -459,6 +466,7 @@ impl RadioCoordinator {
                 && !self.arbitrator.is_locked()
             {
                 self.listening_vfo = slot;
+                self.ste.reset();
                 radio.configure_channel(&self.channels[slot.index()]);
             }
         }
@@ -505,7 +513,8 @@ impl RadioCoordinator {
 
     /// Check granular transmission permission for a specific VFO slot and client token.
     pub fn check_tx_permission(&self, slot: VfoSlot, client: ClientToken) -> TxPermission {
-        if self.is_transmitting && self.tx_state == TxState::Active {
+        if self.is_transmitting && matches!(self.tx_state, TxState::Active | TxState::LeadIn { .. })
+        {
             return TxPermission::BlockedResourceLocked;
         }
 
@@ -545,26 +554,37 @@ impl RadioCoordinator {
         self.tot_warning_given = false;
     }
 
-    pub fn start_tx<R: RfChannel + RfTuning>(&mut self, radio: &mut R) {
+    pub fn start_tx<R: RfChannel + RfTuning + RfSubaudible + RfAudioPath>(
+        &mut self,
+        radio: &mut R,
+    ) {
         self.is_transmitting = true;
-        self.tx_state = TxState::Active;
-        bsp::set_status_led(bsp::StatusLed::Red);
-        self.tot_elapsed_10ms = 0;
-        self.tot_warning_given = false;
         let slot = self.effective_tx_slot();
         self.listening_vfo = slot;
         self.dwell.reset_dwell();
         let tx_ch = *self.effective_tx_channel();
+        radio.set_tx_subaudible(tx_ch.tx_subaudible);
+        if tx_ch.tx_subaudible != SubaudibleTone::None {
+            self.tx_state = TxState::LeadIn { remaining_ms: 50 };
+            radio.mute_mic(true);
+        } else {
+            self.tx_state = TxState::Active;
+            radio.mute_mic(false);
+        }
+        bsp::set_status_led(bsp::StatusLed::Red);
+        self.tot_elapsed_10ms = 0;
+        self.tot_warning_given = false;
         radio.set_tx_frequency(tx_ch.effective_tx_freq());
         radio.set_power_level(tx_ch.power);
         radio.set_modulation(tx_ch.modulation);
     }
 
-    pub fn stop_tx<R: RfChannel + RfTuning + RfSubaudible>(&mut self, radio: &mut R) {
+    pub fn stop_tx<R: RfChannel + RfTuning + RfSubaudible + RfAudioPath>(&mut self, radio: &mut R) {
         let tx_ch = *self.effective_tx_channel();
         if tx_ch.tx_subaudible.is_ctcss() {
             radio.send_css_tail(CssTailMode::Tone55Hz);
         }
+        radio.mute_mic(false);
         if let AudioRoutingState::ToneBurstActive { .. } = self.audio_routing {
             self.audio_routing = AudioRoutingState::NormalVoice;
         }
@@ -598,6 +618,7 @@ impl RadioCoordinator {
 
         if let TxState::TailBurst { .. } = self.tx_state {
             self.tx_state = TxState::Active;
+            radio.mute_mic(false);
             return TxPermission::Granted;
         }
 
@@ -621,6 +642,7 @@ impl RadioCoordinator {
         let tx_ch = *self.effective_tx_channel();
         if tx_ch.tx_subaudible.is_ctcss() {
             radio.send_css_tail(CssTailMode::Tone55Hz);
+            radio.mute_mic(true);
             self.tx_state = TxState::TailBurst { remaining_ms: 150 };
         } else {
             self.stop_tx(radio);
@@ -730,6 +752,7 @@ impl RadioCoordinator {
         if !self.is_transmitting {
             self.start_tx(radio);
         }
+        radio.mute_mic(true);
         radio.set_tone1(1750, 100);
         self.audio_routing = AudioRoutingState::ToneBurstActive {
             remaining_ms: duration_ms.max(10),
@@ -742,6 +765,9 @@ impl RadioCoordinator {
         if let AudioRoutingState::ToneBurstActive { .. } = self.audio_routing {
             radio.mute_tones();
             self.audio_routing = AudioRoutingState::NormalVoice;
+            if self.is_transmitting && self.tx_state == TxState::Active {
+                radio.mute_mic(false);
+            }
         }
     }
 
@@ -930,8 +956,21 @@ impl RadioCoordinator {
 
     #[inline(never)]
     pub fn tick_10ms<R: RadioService>(&mut self, radio: &mut R) -> RadioEvent {
+        // Lead-in countdown before unmuting mic
+        if let TxState::LeadIn { remaining_ms } = self.tx_state {
+            if remaining_ms <= 10 {
+                self.tx_state = TxState::Active;
+                radio.mute_mic(false);
+            } else {
+                self.tx_state = TxState::LeadIn {
+                    remaining_ms: remaining_ms.saturating_sub(10),
+                };
+            }
+        }
+
         // Active transmission state machine
-        if self.is_transmitting && self.tx_state == TxState::Active {
+        if self.is_transmitting && matches!(self.tx_state, TxState::Active | TxState::LeadIn { .. })
+        {
             self.tot_elapsed_10ms = self.tot_elapsed_10ms.saturating_add(1);
             if self.tot_limit_seconds > 0 {
                 let limit_ticks = (self.tot_limit_seconds as u32) * 100;
@@ -965,6 +1004,7 @@ impl RadioCoordinator {
             if remaining_ms <= 10 {
                 self.is_transmitting = false;
                 self.tx_state = TxState::Idle;
+                radio.mute_mic(false);
                 bsp::set_status_led(if self.carrier_active {
                     bsp::StatusLed::Green
                 } else {
@@ -988,6 +1028,9 @@ impl RadioCoordinator {
             if remaining_ms <= 10 {
                 radio.mute_tones();
                 self.audio_routing = AudioRoutingState::NormalVoice;
+                if self.is_transmitting && self.tx_state == TxState::Active {
+                    radio.mute_mic(false);
+                }
             } else {
                 self.audio_routing = AudioRoutingState::ToneBurstActive {
                     remaining_ms: remaining_ms.saturating_sub(10),
@@ -1073,15 +1116,29 @@ impl RadioCoordinator {
                     self.audio_path_muted = false;
                 }
                 self.dwell.on_carrier_opened();
+                self.ste.reset();
                 return RadioEvent::CarrierOpened(self.listening_vfo);
             } else {
                 self.dwell.on_carrier_refresh();
+
+                let tone_cfg = self.listening_channel().rx_subaudible != SubaudibleTone::None;
+                let tone_present = if tone_cfg {
+                    radio.is_subaudible_matched()
+                } else {
+                    false
+                };
+                if let Some(should_mute) = self.ste.process_tick(true, tone_cfg, tone_present) {
+                    radio.mute_audio(should_mute);
+                    self.audio_path_muted = should_mute;
+                }
+
                 return RadioEvent::None;
             }
         }
 
         if !carrier && self.carrier_active {
             self.carrier_active = false;
+            self.ste.reset();
             if !self.is_transmitting {
                 bsp::set_status_led(bsp::StatusLed::Off);
             }
@@ -1129,6 +1186,7 @@ impl RadioCoordinator {
         if self.dwell.is_dwell_expired(dwell_ms) {
             self.dwell.reset_dwell();
             self.listening_vfo = next_vfo;
+            self.ste.reset();
             radio.configure_channel(&self.channels[next_vfo.index()]);
             RadioEvent::DualWatchSwitched(next_vfo)
         } else {

@@ -1,10 +1,6 @@
 //! Buttons Domain Settings & Submenu Declarations
 
-use super::options::{
-    CHOICE_AUTO_LOCK, CHOICE_F_KEY_TIMEOUT, CHOICE_FAST_SCROLL, CHOICE_HOLD_DELAY, CHOICE_M_LONG,
-    CHOICE_PTT_MODE, CHOICE_REPEAT_RATE, CHOICE_SHORTCUT, PAGE_BUTTONS_SHORTCUTS,
-    PAGE_BUTTONS_TWEAKS, SettingDef, SettingField, SettingKind,
-};
+use super::page::{PageId, SettingDef, SettingField};
 use crate::apps::Shortcut;
 
 pub static SHORTCUT_OPTIONS: [&'static str; 13] = [
@@ -46,130 +42,46 @@ pub static F_KEY_TIMEOUT_OPTIONS: [&'static str; 5] = ["Toggle", "1s", "2s", "3s
 pub static AUTO_LOCK_OPTIONS: [&'static str; 5] = ["Off", "15s", "30s", "1 min", "2 min"];
 
 pub static BUTTONS_ROOT: [SettingDef; 6] = [
-    SettingDef {
-        title: "PTT Mode",
-        kind: SettingKind::Choice(CHOICE_PTT_MODE),
-        field: SettingField::PTT_MODE,
-    },
-    SettingDef {
-        title: "Auto Lock",
-        kind: SettingKind::Choice(CHOICE_AUTO_LOCK),
-        field: SettingField::AUTO_LOCK,
-    },
-    SettingDef {
-        title: "Sticky F-Key",
-        kind: SettingKind::Choice(CHOICE_F_KEY_TIMEOUT),
-        field: SettingField::F_KEY_TIMEOUT,
-    },
-    SettingDef {
-        title: "Fast Scroll",
-        kind: SettingKind::Choice(CHOICE_FAST_SCROLL),
-        field: SettingField::FAST_SCROLL,
-    },
-    SettingDef {
-        title: "Tweaks",
-        kind: SettingKind::Submenu(PAGE_BUTTONS_TWEAKS),
-        field: SettingField::None,
-    },
-    SettingDef {
-        title: "Shortcuts",
-        kind: SettingKind::Submenu(PAGE_BUTTONS_SHORTCUTS),
-        field: SettingField::None,
-    },
+    SettingDef::choice("PTT Mode", &PTT_MODE_OPTIONS, SettingField::PTT_MODE),
+    SettingDef::choice("Auto Lock", &AUTO_LOCK_OPTIONS, SettingField::AUTO_LOCK),
+    SettingDef::choice(
+        "Sticky F-Key",
+        &F_KEY_TIMEOUT_OPTIONS,
+        SettingField::F_KEY_TIMEOUT,
+    ),
+    SettingDef::choice(
+        "Fast Scroll",
+        &FAST_SCROLL_OPTIONS,
+        SettingField::FAST_SCROLL,
+    ),
+    SettingDef::submenu("Tweaks", PageId::ButtonsTweaks),
+    SettingDef::submenu("Shortcuts", PageId::ButtonsShortcuts),
 ];
 
 pub static BUTTONS_TWEAKS: [SettingDef; 2] = [
-    SettingDef {
-        title: "Hold Delay",
-        kind: SettingKind::Choice(CHOICE_HOLD_DELAY),
-        field: SettingField::HOLD_DELAY,
-    },
-    SettingDef {
-        title: "Repeat Rate",
-        kind: SettingKind::Choice(CHOICE_REPEAT_RATE),
-        field: SettingField::REPEAT_RATE,
-    },
+    SettingDef::choice("Hold Delay", &HOLD_DELAY_OPTIONS, SettingField::HOLD_DELAY),
+    SettingDef::choice(
+        "Repeat Rate",
+        &REPEAT_RATE_OPTIONS,
+        SettingField::REPEAT_RATE,
+    ),
 ];
 
 pub static BUTTONS_SHORTCUTS: [SettingDef; 16] = [
-    SettingDef {
-        title: "Side 1 Short",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::F1_SHORT,
-    },
-    SettingDef {
-        title: "Side 1 Long",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::F1_LONG,
-    },
-    SettingDef {
-        title: "Side 2 Short",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::F2_SHORT,
-    },
-    SettingDef {
-        title: "Side 2 Long",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::F2_LONG,
-    },
-    SettingDef {
-        title: "Menu Long",
-        kind: SettingKind::Choice(CHOICE_M_LONG),
-        field: SettingField::M_LONG,
-    },
-    SettingDef {
-        title: "F + 0",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::F_0,
-    },
-    SettingDef {
-        title: "F + 1",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(0),
-    },
-    SettingDef {
-        title: "F + 2",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(1),
-    },
-    SettingDef {
-        title: "F + 3",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(2),
-    },
-    SettingDef {
-        title: "F + 4",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(3),
-    },
-    SettingDef {
-        title: "F + 5",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(4),
-    },
-    SettingDef {
-        title: "F + 6",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(5),
-    },
-    SettingDef {
-        title: "F + 7",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(6),
-    },
-    SettingDef {
-        title: "F + 8",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(7),
-    },
-    SettingDef {
-        title: "F + 9",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::f_digit(8),
-    },
-    SettingDef {
-        title: "F + *",
-        kind: SettingKind::Choice(CHOICE_SHORTCUT),
-        field: SettingField::F_STAR,
-    },
+    SettingDef::choice("Side 1 Short", &SHORTCUT_OPTIONS, SettingField::F1_SHORT),
+    SettingDef::choice("Side 1 Long", &SHORTCUT_OPTIONS, SettingField::F1_LONG),
+    SettingDef::choice("Side 2 Short", &SHORTCUT_OPTIONS, SettingField::F2_SHORT),
+    SettingDef::choice("Side 2 Long", &SHORTCUT_OPTIONS, SettingField::F2_LONG),
+    SettingDef::choice("Menu Long", &M_LONG_OPTIONS, SettingField::M_LONG),
+    SettingDef::choice("F + 0", &SHORTCUT_OPTIONS, SettingField::F_0),
+    SettingDef::choice("F + 1", &SHORTCUT_OPTIONS, SettingField::f_digit(0)),
+    SettingDef::choice("F + 2", &SHORTCUT_OPTIONS, SettingField::f_digit(1)),
+    SettingDef::choice("F + 3", &SHORTCUT_OPTIONS, SettingField::f_digit(2)),
+    SettingDef::choice("F + 4", &SHORTCUT_OPTIONS, SettingField::f_digit(3)),
+    SettingDef::choice("F + 5", &SHORTCUT_OPTIONS, SettingField::f_digit(4)),
+    SettingDef::choice("F + 6", &SHORTCUT_OPTIONS, SettingField::f_digit(5)),
+    SettingDef::choice("F + 7", &SHORTCUT_OPTIONS, SettingField::f_digit(6)),
+    SettingDef::choice("F + 8", &SHORTCUT_OPTIONS, SettingField::f_digit(7)),
+    SettingDef::choice("F + 9", &SHORTCUT_OPTIONS, SettingField::f_digit(8)),
+    SettingDef::choice("F + *", &SHORTCUT_OPTIONS, SettingField::F_STAR),
 ];

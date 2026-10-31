@@ -28,225 +28,136 @@ pub enum PageId {
     ServiceDetail = 20,
 }
 
-// Backward compatibility constants for UI page numbers
-pub const PAGE_ROOT: u8 = PageId::Root as u8;
-pub const PAGE_DISPLAY: u8 = PageId::Display as u8;
-pub const PAGE_AUDIO: u8 = PageId::Audio as u8;
-pub const PAGE_BUTTONS: u8 = PageId::Buttons as u8;
-pub const PAGE_BATTERY: u8 = PageId::Battery as u8;
-pub const PAGE_DEVICE: u8 = PageId::Device as u8;
-pub const PAGE_SECURITY: u8 = PageId::Security as u8;
-pub const PAGE_SYSTEM: u8 = PageId::System as u8;
-pub const PAGE_BUTTONS_TWEAKS: u8 = PageId::ButtonsTweaks as u8;
-pub const PAGE_BUTTONS_SHORTCUTS: u8 = PageId::ButtonsShortcuts as u8;
-pub const PAGE_BATTERY_INFO: u8 = PageId::BatteryInfo as u8;
-pub const PAGE_BATTERY_TWEAKS: u8 = PageId::BatteryTweaks as u8;
-pub const PAGE_SYSTEM_STORAGE: u8 = PageId::SystemStorage as u8;
-pub const PAGE_APPS: u8 = PageId::Apps as u8;
-pub const PAGE_BOOT_SPLASH: u8 = PageId::BootSplash as u8;
-#[cfg(feature = "settings_calib")]
-pub const PAGE_SYSTEM_CALIBRATION: u8 = PageId::SystemCalibration as u8;
-#[cfg(feature = "settings_debug")]
-pub const PAGE_SYSTEM_DEBUG: u8 = PageId::SystemDebug as u8;
-pub const PAGE_MANAGE_APPS: u8 = PageId::ManageApps as u8;
-pub const PAGE_APP_DETAIL: u8 = PageId::AppDetail as u8;
-pub const PAGE_MANAGE_SERVICES: u8 = PageId::ManageServices as u8;
-pub const PAGE_SERVICE_DETAIL: u8 = PageId::ServiceDetail as u8;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ActionId {
+    ChooseModel = 1,
+    #[cfg(feature = "passcode")]
+    EditOwner = 2,
+    #[cfg(feature = "passcode")]
+    EditTag = 3,
+    #[cfg(feature = "passcode")]
+    EditRadioId = 4,
+    ClearLogs = 5,
+}
+
+#[derive(Clone, Copy)]
+pub struct RangeDef {
+    pub min: i16,
+    pub max: i16,
+    pub step: i16,
+    pub unit: &'static str,
+}
+
+pub static RANGE_0_10: RangeDef = RangeDef {
+    min: 0,
+    max: 10,
+    step: 1,
+    unit: "",
+};
+pub static RANGE_1_10: RangeDef = RangeDef {
+    min: 1,
+    max: 10,
+    step: 1,
+    unit: "",
+};
+pub static RANGE_MIC_GAIN: RangeDef = RangeDef {
+    min: 0,
+    max: 31,
+    step: 1,
+    unit: "dB",
+};
+pub static RANGE_CONTRAST: RangeDef = RangeDef {
+    min: 0,
+    max: 100,
+    step: 5,
+    unit: "%",
+};
+pub static RANGE_CALIB_TWEAK: RangeDef = RangeDef {
+    min: -500,
+    max: 500,
+    step: 10,
+    unit: "mV",
+};
+
+#[derive(Clone, Copy)]
+pub struct MenuFrame {
+    pub page: PageId,
+    pub selected_idx: usize,
+    pub title: &'static str,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MetricId {
-    BatteryVolts = 1,
-    BatteryRawAdc = 2,
-    BatteryPct = 3,
-    VddaRef = 4,
-    BattCalibRef = 5,
-    McuTemp = 6,
-    Uptime = 7,
-    SysSerial = 8,
-    SysMac = 9,
-    SysClock = 10,
-    StorageUsed = 11,
-    StorageFree = 12,
-    StorageFiles = 13,
-    StorageWear = 14,
-    StorageDeleted = 15,
-    PasscodeStatus = 16,
-    DeviceOwner = 17,
-    DeviceAsset = 18,
-    DeviceRadioId = 19,
-    CalibSig = 20,
-    CalibXtal = 21,
-    CalibLna = 22,
-    CalibMix = 23,
-    CalibVol = 24,
-    DebugSwd = 25,
-    DebugDevKey = 26,
-    DebugMk = 27,
-    BatteryCurrent = 28,
-    BatteryStatus = 29,
-    SysBuild = 30,
-    DebugRdp = 31,
-    StackHeadroom = 32,
-    StackPeak = 33,
-    BootCrashes = 34,
-    AppsInstalled = 35,
+    // Battery
+    BatteryVoltage,
+    BatteryPercentage,
+    BatteryStatus,
+    BatteryVdda,
+    BatteryCalibRef,
+    BatteryCoreTemp,
+
+    // Storage
+    StorageUsed,
+    StorageFree,
+    StorageFiles,
+    StorageWear,
+    StorageDeleted,
+
+    // System Identity & Health
+    SystemFirmware,
+    SystemSerial,
+    SystemMac,
+    SystemUptime,
+
+    // Calibration
+    #[cfg(feature = "settings_calib")]
+    CalibSig,
+    #[cfg(feature = "settings_calib")]
+    CalibXtal,
+    #[cfg(feature = "settings_calib")]
+    CalibBatt,
+    #[cfg(feature = "settings_calib")]
+    CalibLna,
+    #[cfg(feature = "settings_calib")]
+    CalibMix,
+    #[cfg(feature = "settings_calib")]
+    CalibVol,
+
+    // Debug Diagnostics
+    #[cfg(feature = "settings_debug")]
+    DebugStackMargin,
+    #[cfg(feature = "settings_debug")]
+    DebugStackPeak,
+    #[cfg(feature = "settings_debug")]
+    DebugCrashes,
+    #[cfg(feature = "settings_debug")]
+    DebugSwd,
+    #[cfg(feature = "settings_debug")]
+    DebugRdp,
+    #[cfg(feature = "settings_debug")]
+    DebugDevKey,
+    #[cfg(feature = "settings_debug")]
+    DebugMkHash,
+
+    // Device Identity
+    DeviceOwner,
+    DeviceTag,
+    DeviceRadioId,
 }
-
-pub const METRIC_APPS_INSTALLED: u8 = MetricId::AppsInstalled as u8;
-
-pub const METRIC_BATTERY_VOLTS: u8 = MetricId::BatteryVolts as u8;
-pub const METRIC_BATTERY_RAW_ADC: u8 = MetricId::BatteryRawAdc as u8;
-pub const METRIC_BATTERY_PCT: u8 = MetricId::BatteryPct as u8;
-pub const METRIC_VDDA_REF: u8 = MetricId::VddaRef as u8;
-pub const METRIC_BATT_CALIB_REF: u8 = MetricId::BattCalibRef as u8;
-pub const METRIC_MCU_TEMP: u8 = MetricId::McuTemp as u8;
-pub const METRIC_UPTIME: u8 = MetricId::Uptime as u8;
-pub const METRIC_SYS_SERIAL: u8 = MetricId::SysSerial as u8;
-pub const METRIC_SYS_MAC: u8 = MetricId::SysMac as u8;
-pub const METRIC_SYS_CLOCK: u8 = MetricId::SysClock as u8;
-pub const METRIC_SYS_BUILD: u8 = MetricId::SysBuild as u8;
-pub const METRIC_STORAGE_USED: u8 = MetricId::StorageUsed as u8;
-pub const METRIC_STORAGE_FREE: u8 = MetricId::StorageFree as u8;
-pub const METRIC_STORAGE_FILES: u8 = MetricId::StorageFiles as u8;
-pub const METRIC_STORAGE_WEAR: u8 = MetricId::StorageWear as u8;
-pub const METRIC_STORAGE_DELETED: u8 = MetricId::StorageDeleted as u8;
-pub const METRIC_PASSCODE_STATUS: u8 = MetricId::PasscodeStatus as u8;
-pub const METRIC_DEVICE_OWNER: u8 = MetricId::DeviceOwner as u8;
-pub const METRIC_DEVICE_ASSET: u8 = MetricId::DeviceAsset as u8;
-pub const METRIC_DEVICE_RADIO_ID: u8 = MetricId::DeviceRadioId as u8;
-pub const METRIC_CALIB_SIG: u8 = MetricId::CalibSig as u8;
-pub const METRIC_CALIB_XTAL: u8 = MetricId::CalibXtal as u8;
-pub const METRIC_CALIB_LNA: u8 = MetricId::CalibLna as u8;
-pub const METRIC_CALIB_MIX: u8 = MetricId::CalibMix as u8;
-pub const METRIC_CALIB_VOL: u8 = MetricId::CalibVol as u8;
-pub const METRIC_DEBUG_SWD: u8 = MetricId::DebugSwd as u8;
-pub const METRIC_DEBUG_RDP: u8 = MetricId::DebugRdp as u8;
-pub const METRIC_DEBUG_DEVKEY: u8 = MetricId::DebugDevKey as u8;
-pub const METRIC_DEBUG_MK: u8 = MetricId::DebugMk as u8;
-pub const METRIC_BATTERY_CURRENT: u8 = MetricId::BatteryCurrent as u8;
-pub const METRIC_BATTERY_STATUS: u8 = MetricId::BatteryStatus as u8;
-pub const METRIC_STACK_HEADROOM: u8 = MetricId::StackHeadroom as u8;
-pub const METRIC_STACK_PEAK: u8 = MetricId::StackPeak as u8;
-pub const METRIC_BOOT_CRASHES: u8 = MetricId::BootCrashes as u8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ActionId {
-    Passcode = 1,
-    EditOwner = 2,
-    EditTag = 3,
-    EditRadioId = 4,
-    ChooseModel = 7,
-    ClearLogs = 8,
-    ChooseSplash = 9,
-    ChooseRoger = 10,
-    ChooseJingle = 11,
-}
-
-pub const ACTION_PASSCODE: u8 = ActionId::Passcode as u8;
-pub const ACTION_EDIT_OWNER: u8 = ActionId::EditOwner as u8;
-pub const ACTION_EDIT_TAG: u8 = ActionId::EditTag as u8;
-pub const ACTION_EDIT_RADIO_ID: u8 = ActionId::EditRadioId as u8;
-pub const ACTION_CHOOSE_MODEL: u8 = ActionId::ChooseModel as u8;
-pub const ACTION_CLEAR_LOGS: u8 = ActionId::ClearLogs as u8;
-pub const ACTION_SPLASH_CHOOSER: u8 = ActionId::ChooseSplash as u8;
-pub const ACTION_ROGER_CHOOSER: u8 = ActionId::ChooseRoger as u8;
-pub const ACTION_JINGLE_CHOOSER: u8 = ActionId::ChooseJingle as u8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ChoiceGroup {
-    BacklightTime = 0,
-    BacklightTr = 1,
-    SplashTime = 2,
-    KeyBeep = 3,
-    BootJingle = 4,
-    AudioProfile = 5,
-    AutoLock = 6,
-    FKeyTimeout = 7,
-    FastScroll = 8,
-    HoldDelay = 9,
-    RepeatRate = 10,
-    Shortcut = 11,
-    MLong = 12,
-    BatteryFormat = 13,
-    DeepSleep = 14,
-    PowerProfile = 15,
-    OffOn = 16,
-    CpuClock = 17,
-    LauncherStyle = 18,
-    StartupApp = 19,
-    VfoDualWatch = 20,
-    BootAnim = 21,
-    PttMode = 22,
-    UartBaud = 23,
-    ShadingMode = 24,
-    UiAnimations = 25,
-    RogerBeep = 26,
-}
-
-pub const CHOICE_BACKLIGHT_TIME: u8 = ChoiceGroup::BacklightTime as u8;
-pub const CHOICE_BACKLIGHT_TR: u8 = ChoiceGroup::BacklightTr as u8;
-pub const CHOICE_SPLASH_TIME: u8 = ChoiceGroup::SplashTime as u8;
-pub const CHOICE_KEY_BEEP: u8 = ChoiceGroup::KeyBeep as u8;
-pub const CHOICE_BOOT_JINGLE: u8 = ChoiceGroup::BootJingle as u8;
-pub const CHOICE_AUDIO_PROFILE: u8 = ChoiceGroup::AudioProfile as u8;
-pub const CHOICE_AUTO_LOCK: u8 = ChoiceGroup::AutoLock as u8;
-pub const CHOICE_F_KEY_TIMEOUT: u8 = ChoiceGroup::FKeyTimeout as u8;
-pub const CHOICE_FAST_SCROLL: u8 = ChoiceGroup::FastScroll as u8;
-pub const CHOICE_HOLD_DELAY: u8 = ChoiceGroup::HoldDelay as u8;
-pub const CHOICE_REPEAT_RATE: u8 = ChoiceGroup::RepeatRate as u8;
-pub const CHOICE_SHORTCUT: u8 = ChoiceGroup::Shortcut as u8;
-pub const CHOICE_M_LONG: u8 = ChoiceGroup::MLong as u8;
-pub const CHOICE_BATTERY_FORMAT: u8 = ChoiceGroup::BatteryFormat as u8;
-pub const CHOICE_DEEP_SLEEP: u8 = ChoiceGroup::DeepSleep as u8;
-pub const CHOICE_PTT_MODE: u8 = ChoiceGroup::PttMode as u8;
-pub const CHOICE_POWER_PROFILE: u8 = ChoiceGroup::PowerProfile as u8;
-pub const CHOICE_OFF_ON: u8 = ChoiceGroup::OffOn as u8;
-pub const CHOICE_CPU_CLOCK: u8 = ChoiceGroup::CpuClock as u8;
-pub const CHOICE_LAUNCHER_STYLE: u8 = ChoiceGroup::LauncherStyle as u8;
-pub const CHOICE_STARTUP_APP: u8 = ChoiceGroup::StartupApp as u8;
-pub const CHOICE_VFO_DUAL_WATCH: u8 = ChoiceGroup::VfoDualWatch as u8;
-pub const CHOICE_BOOT_ANIM: u8 = ChoiceGroup::BootAnim as u8;
-pub const CHOICE_UART_BAUD: u8 = ChoiceGroup::UartBaud as u8;
-pub const CHOICE_SHADING_MODE: u8 = ChoiceGroup::ShadingMode as u8;
-pub const CHOICE_UI_ANIMATIONS: u8 = ChoiceGroup::UiAnimations as u8;
-pub const CHOICE_ROGER_BEEP: u8 = ChoiceGroup::RogerBeep as u8;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Unit {
-    None,
-    Db,
-    Percent,
-}
-
-impl Unit {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Unit::None => "",
-            Unit::Db => "dB",
-            Unit::Percent => "%",
-        }
-    }
-}
-
-pub const RANGE_0_10: u8 = 0;
-pub const RANGE_MIC_GAIN: u8 = 1;
-pub const RANGE_BACKLIGHT_MAX: u8 = 2;
-pub const RANGE_CONTRAST: u8 = 3;
 
 #[derive(Clone, Copy)]
-#[repr(u8)]
 pub enum SettingKind {
-    Submenu(u8),
-    Choice(u8),
+    Submenu(PageId),
+    Choice(&'static [&'static str]),
     BatteryType,
-    Range(u8),
-    CalibTweak,
+    Range(&'static RangeDef),
     Toggle,
-    Live(u8),
-    Action(u8),
+    Metric(MetricId),
+    #[cfg(feature = "boot_assets")]
+    Asset(&'static super::asset_chooser::AssetDescriptor),
+    Action(ActionId),
     Info,
 }
 
@@ -383,4 +294,86 @@ pub struct SettingDef {
     pub title: &'static str,
     pub kind: SettingKind,
     pub field: SettingField,
+}
+
+impl SettingDef {
+    pub const fn submenu(title: &'static str, target: PageId) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Submenu(target),
+            field: SettingField::None,
+        }
+    }
+
+    pub const fn choice(
+        title: &'static str,
+        options: &'static [&'static str],
+        field: SettingField,
+    ) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Choice(options),
+            field,
+        }
+    }
+
+    pub const fn range(title: &'static str, range: &'static RangeDef, field: SettingField) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Range(range),
+            field,
+        }
+    }
+
+    pub const fn toggle(title: &'static str, field: SettingField) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Toggle,
+            field,
+        }
+    }
+
+    pub const fn metric(title: &'static str, metric: MetricId) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Metric(metric),
+            field: SettingField::None,
+        }
+    }
+
+    #[cfg(feature = "boot_assets")]
+    pub const fn asset(
+        title: &'static str,
+        desc: &'static super::asset_chooser::AssetDescriptor,
+    ) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Asset(desc),
+            field: SettingField::None,
+        }
+    }
+
+    pub const fn action(title: &'static str, action: ActionId) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Action(action),
+            field: SettingField::None,
+        }
+    }
+
+    pub const fn battery_type(title: &'static str) -> Self {
+        Self {
+            title,
+            kind: SettingKind::BatteryType,
+            field: SettingField::BATTERY_TYPE,
+        }
+    }
+
+    pub const fn info(title: &'static str) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Info,
+            field: SettingField::None,
+        }
+    }
 }

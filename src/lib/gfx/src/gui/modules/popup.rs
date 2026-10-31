@@ -12,6 +12,7 @@ use crate::widgets;
 
 pub struct PopupModel {
     pub title: &'static str,
+    pub custom_title: String<24>,
     pub message: &'static str,
     pub custom_msg: String<192>,
     pub scroll_offset: usize,
@@ -25,6 +26,7 @@ impl PopupModel {
     pub const fn new(title: &'static str, message: &'static str) -> Self {
         Self {
             title,
+            custom_title: String::new(),
             message,
             custom_msg: String::new(),
             scroll_offset: 0,
@@ -48,6 +50,7 @@ impl PopupModel {
         cancel: Option<&'static str>,
     ) {
         self.title = title;
+        self.custom_title.clear();
         self.message = "";
         self.custom_msg.clear();
         self.scroll_offset = 0;
@@ -59,6 +62,7 @@ impl PopupModel {
 
     pub fn reset_msg(&mut self, title: &'static str, message: &'static str) {
         self.title = title;
+        self.custom_title.clear();
         self.message = message;
         self.custom_msg.clear();
         self.scroll_offset = 0;
@@ -66,6 +70,15 @@ impl PopupModel {
         self.cancel_label = None;
         self.repeater = crate::gui::repeater::KeyRepeater::new(8, 2);
         self.anim.reset_in();
+    }
+
+    #[inline(always)]
+    pub fn title_str(&self) -> &str {
+        if !self.custom_title.is_empty() {
+            self.custom_title.as_str()
+        } else {
+            self.title
+        }
     }
 }
 
@@ -128,10 +141,9 @@ impl View<PopupModel> for PopupView {
         // Short unbadged notifications / alerts (e.g. "Passcode Set", "Wrong Passcode", "Mismatch"):
         let anim_p = model.anim.progress();
         if !has_badges && total_lines <= 2 && msg.len() < 60 {
-            let title_opt = if !model.title.is_empty()
-                && !text::ascii_eq_ignore_case(model.title, "passcode")
-            {
-                Some(model.title)
+            let t = model.title_str();
+            let title_opt = if !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode") {
+                Some(t)
             } else {
                 None
             };
@@ -154,7 +166,7 @@ impl View<PopupModel> for PopupView {
             (None, Some(x)) => Some(("", x)),
             (None, None) => None,
         };
-        widgets::draw_sheet_slide_up(canvas, model.title, sheet_h, badges, y_offset);
+        widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, badges, y_offset);
 
         // Body text rendering (TomThumb, multi-line aware with padding)
         let visible_lines = popup_visible_lines(model);

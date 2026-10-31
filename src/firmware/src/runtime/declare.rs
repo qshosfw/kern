@@ -420,9 +420,7 @@ fn render_table_browser(
                 (found_name, found_state)
             }
             _ => {
-                if let Some(it) =
-                    walker.items.get(node.first_item_offset as usize + row_idx)
-                {
+                if let Some(it) = walker.items.get(node.first_item_offset as usize + row_idx) {
                     let l = walker
                         .labels
                         .get(it.label_offset as usize)

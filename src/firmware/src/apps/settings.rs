@@ -10,7 +10,10 @@ pub mod audio;
 pub mod battery;
 pub mod buttons;
 pub mod device;
+pub mod dialog;
 pub mod display;
+pub mod metric;
+pub mod nav;
 pub mod options;
 pub mod page;
 #[cfg(feature = "passcode")]

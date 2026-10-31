@@ -12,9 +12,7 @@ use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
-use kernel::proc::krx::{
-    KrxClass, KrxLaunchError, KrxPreamble, KrxProfile, SectionExecution,
-};
+use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxPreamble, KrxProfile, SectionExecution};
 use kernel::proc::memory::MemoryMapLayout;
 use kernel::proc::paged::{
     FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
@@ -185,48 +183,47 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     let window_size = slot.leaf_mgr.window_size;
     let got_base = slot.got_base;
 
-    let res = slot.leaf_mgr.dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
-        if !is_hit {
-            let read_len = (leaf_entry.size as usize).min(window_size as usize);
-            let read_ok = unsafe {
-                if !ACTIVE_CTX.is_null() {
-                    let path = slot_ref().pkg_path.as_str();
-                    let dst = core::slice::from_raw_parts_mut(
-                        overlay_vma as *mut u8,
-                        read_len,
-                    );
-                    read_file_region(
-                        (*ACTIVE_CTX).storage,
-                        path,
-                        leaf_entry.flash_offset as usize,
-                        dst,
-                    )
-                } else {
-                    false
+    let res = slot
+        .leaf_mgr
+        .dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
+            if !is_hit {
+                let read_len = (leaf_entry.size as usize).min(window_size as usize);
+                let read_ok = unsafe {
+                    if !ACTIVE_CTX.is_null() {
+                        let path = slot_ref().pkg_path.as_str();
+                        let dst = core::slice::from_raw_parts_mut(overlay_vma as *mut u8, read_len);
+                        read_file_region(
+                            (*ACTIVE_CTX).storage,
+                            path,
+                            leaf_entry.flash_offset as usize,
+                            dst,
+                        )
+                    } else {
+                        false
+                    }
+                };
+                if !read_ok {
+                    return Err(PagedError::StorageReadFailed);
                 }
-            };
-            if !read_ok {
-                return Err(PagedError::StorageReadFailed);
+                flush_instruction_pipeline();
             }
-            flush_instruction_pipeline();
-        }
 
-        if leaf_entry.entry_offset >= leaf_entry.size {
-            return Err(PagedError::InvalidLeafId);
-        }
+            if leaf_entry.entry_offset >= leaf_entry.size {
+                return Err(PagedError::InvalidLeafId);
+            }
 
-        let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;
-        let raw_res = unsafe {
-            invoke_krx_native(
-                entry_addr,
-                got_base,
-                KRX_OP_START,
-                &raw const NATIVE_API_TABLE,
-                ctx as *mut _ as *const (),
-            )
-        };
-        Ok(raw_res)
-    });
+            let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;
+            let raw_res = unsafe {
+                invoke_krx_native(
+                    entry_addr,
+                    got_base,
+                    KRX_OP_START,
+                    &raw const NATIVE_API_TABLE,
+                    ctx as *mut _ as *const (),
+                )
+            };
+            Ok(raw_res)
+        });
 
     res.unwrap_or(0xFFFF_FFFF)
 }
@@ -290,7 +287,7 @@ pub fn load_native_from_storage(
         .map_err(|_| KrxLaunchError::ReadFailed)?;
     let h_len = preamble.header_len as usize;
     if total_read <= h_len {
-        return Err(KrxLaunchError::ReadFailed);
+        return Err(KrxLaunchError::TruncatedPackage);
     }
 
     let payload_len = total_read - h_len;
@@ -381,8 +378,10 @@ pub fn load_native_from_storage(
 
     // 4. Configure P0 Structured Leaf Manager if SECTION_LEAF_MAP is present
     let overlay_size = 1024u32;
-    let overlay_vma = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(overlay_size);
-    slot.leaf_mgr.configure(overlay_vma, overlay_size as u16, leaf_map_body);
+    let overlay_vma =
+        (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(overlay_size);
+    slot.leaf_mgr
+        .configure(overlay_vma, overlay_size as u16, leaf_map_body);
 
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
@@ -402,12 +401,7 @@ pub fn load_native_from_storage(
         let code_size = (exec.got_offset as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4);
         let ram_vma = slot.got_base;
         let ram_size = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(ram_vma);
-        slot.mem_layout = MemoryMapLayout::for_native_pic(
-            load_base,
-            code_size,
-            ram_vma,
-            ram_size,
-        );
+        slot.mem_layout = MemoryMapLayout::for_native_pic(load_base, code_size, ram_vma, ram_size);
     }
 
     // 5. Flush instruction pipeline before branching into SRAM arena
@@ -452,7 +446,9 @@ pub unsafe fn invoke_krx_native(
 
     // 1b. Validate memory region execution permissions if layout is active
     if slot.mem_layout.region_count > 0
-        && !slot.mem_layout.validate_access(code_addr as u32, 2, false, true)
+        && !slot
+            .mem_layout
+            .validate_access(code_addr as u32, 2, false, true)
     {
         return 0xFFFF_FFFF;
     }
@@ -611,7 +607,7 @@ pub unsafe fn native_on_render(
 }
 
 pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 'static>) {
-    let slot = slot_ref();
+    let slot = slot_mut();
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
             ACTIVE_CTX = ctx as *mut _;
@@ -624,6 +620,12 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut FirmwareContext<'static, '
             );
             ACTIVE_CTX = core::ptr::null_mut();
         }
+        slot.is_loaded = false;
+        slot.entry_point = 0;
+    }
+    // Safety cleanup: ensure radio TX is disengaged if guest left PTT active
+    if ctx.state.coord.is_transmitting {
+        ctx.state.coord.request_ptt_stop(ctx.radio);
     }
 }
 

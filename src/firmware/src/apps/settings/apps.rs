@@ -1,9 +1,6 @@
 //! Applications & Launcher Domain Settings Declarations
 
-use super::options::{
-    CHOICE_LAUNCHER_STYLE, CHOICE_STARTUP_APP, PAGE_MANAGE_APPS, PAGE_MANAGE_SERVICES, SettingDef,
-    SettingField, SettingKind,
-};
+use super::page::{PageId, SettingDef, SettingField};
 use crate::SysContext;
 use crate::apps::launcher::catalog::get_catalog;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
@@ -13,36 +10,20 @@ pub static STARTUP_APP_OPTIONS: [&'static str; 2] = ["Home", "Radio"];
 pub static VFO_DUAL_WATCH_OPTIONS: [&'static str; 3] = ["Off", "Dual", "Full"];
 
 pub static APPS_DEFS: &[SettingDef] = &[
-    SettingDef {
-        title: "Installed",
-        kind: SettingKind::Submenu(PAGE_MANAGE_APPS),
-        field: SettingField::None,
-    },
-    SettingDef {
-        title: "Services",
-        kind: SettingKind::Submenu(PAGE_MANAGE_SERVICES),
-        field: SettingField::None,
-    },
-    SettingDef {
-        title: "Style",
-        kind: SettingKind::Choice(CHOICE_LAUNCHER_STYLE),
-        field: SettingField::LAUNCHER_STYLE,
-    },
-    SettingDef {
-        title: "Key Badges",
-        kind: SettingKind::Toggle,
-        field: SettingField::SHOW_NUMBERS,
-    },
-    SettingDef {
-        title: "App Titles",
-        kind: SettingKind::Toggle,
-        field: SettingField::SHOW_LABELS,
-    },
-    SettingDef {
-        title: "Startup App",
-        kind: SettingKind::Choice(CHOICE_STARTUP_APP),
-        field: SettingField::STARTUP_APP,
-    },
+    SettingDef::submenu("Installed", PageId::ManageApps),
+    SettingDef::submenu("Services", PageId::ManageServices),
+    SettingDef::choice(
+        "Style",
+        &LAUNCHER_STYLE_OPTIONS,
+        SettingField::LAUNCHER_STYLE,
+    ),
+    SettingDef::toggle("Key Badges", SettingField::SHOW_NUMBERS),
+    SettingDef::toggle("App Titles", SettingField::SHOW_LABELS),
+    SettingDef::choice(
+        "Startup App",
+        &STARTUP_APP_OPTIONS,
+        SettingField::STARTUP_APP,
+    ),
 ];
 
 /// `"512 B"` below 1 KB, otherwise one-decimal KB (`"12.4 KB"`).
@@ -201,4 +182,102 @@ pub fn populate_service_detail(
     _ctx: &mut SysContext,
 ) -> usize {
     populate_package_detail(items, true, srv_idx)
+}
+
+#[inline(never)]
+pub fn handle_apps_press(
+    app: &mut super::app::SettingsApp,
+    ctx: &mut SysContext,
+    sel_idx: usize,
+) -> bool {
+    match app.current_page {
+        PageId::ManageApps => {
+            let cat = get_catalog();
+            let count = cat.app_count();
+            if count > 0 && sel_idx < count {
+                app.selected_app_idx = sel_idx;
+                let is_valid = cat.apps().nth(sel_idx).map_or(false, |a| a.is_valid);
+                if !is_valid {
+                    ctx.show_confirm(
+                        super::dialog::TAG_APP_DELETE_CONFIRM,
+                        "Invalid App",
+                        "Invalid or corrupted package.\nDelete from /apps/?",
+                        "Delete",
+                        "Cancel",
+                    );
+                } else {
+                    app.push_submenu(PageId::AppDetail, ctx);
+                }
+            } else {
+                ctx.show_popup(
+                    super::dialog::TAG_POPUP_INFO,
+                    "Apps Storage",
+                    "Stage .krx files into /apps/",
+                );
+            }
+            true
+        }
+        PageId::ManageServices => {
+            let count = get_catalog().service_count();
+            if count > 0 && sel_idx < count {
+                app.selected_service_idx = sel_idx;
+                app.push_submenu(PageId::ServiceDetail, ctx);
+            } else {
+                ctx.show_popup(
+                    super::dialog::TAG_POPUP_INFO,
+                    "KRX Services",
+                    "No background services in /apps/",
+                );
+            }
+            true
+        }
+        PageId::AppDetail => {
+            let cat = get_catalog();
+            if let Some(pkg) = cat.apps().nth(app.selected_app_idx) {
+                if !pkg.is_valid {
+                    if sel_idx == 0 {
+                        ctx.show_confirm(
+                            super::dialog::TAG_APP_DELETE_CONFIRM,
+                            "Delete Invalid",
+                            "Delete invalid package from /apps/?",
+                            "Delete",
+                            "Cancel",
+                        );
+                    }
+                    return true;
+                }
+                if sel_idx == 0 {
+                    let path = pkg.path.as_str();
+                    if let Err(err) = crate::apps::runtime::launch_krx_package(ctx, path) {
+                        ctx.show_confirm(
+                            super::dialog::TAG_POPUP_INFO,
+                            err.title(),
+                            err.message(),
+                            "OK",
+                            "EXIT",
+                        );
+                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+                    }
+                } else if sel_idx == 5 {
+                    ctx.show_confirm(
+                        super::dialog::TAG_APP_DELETE_CONFIRM,
+                        "Delete App",
+                        "Uninstall and delete application binary?",
+                        "Delete",
+                        "Cancel",
+                    );
+                }
+            }
+            true
+        }
+        PageId::ServiceDetail => {
+            ctx.show_popup(
+                super::dialog::TAG_POPUP_INFO,
+                "Service Info",
+                "KRX background package in /apps/",
+            );
+            true
+        }
+        _ => false,
+    }
 }

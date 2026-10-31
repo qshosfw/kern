@@ -199,12 +199,7 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
     }
 
     /// Construct a memory layout for N1 Native PIC applications (§6.1).
-    pub fn for_native_pic(
-        code_vma: u32,
-        code_size: u32,
-        ram_vma: u32,
-        ram_size: u32,
-    ) -> Self {
+    pub fn for_native_pic(code_vma: u32, code_size: u32, ram_vma: u32, ram_size: u32) -> Self {
         let mut layout = Self::new();
         let _ = layout.add_region(MemoryRegionDescriptor::new(
             RegionKind::ImmutableCode,
@@ -307,12 +302,17 @@ mod tests {
 
         // Test P0 structured layout builder
         let p0_layout: MemoryMapLayout<4> = MemoryMapLayout::for_p0_structured(
-            0x2000_0000, 2048,
-            0x2000_0800, 1024,
-            0x2000_0C00, 1024,
+            0x2000_0000,
+            2048,
+            0x2000_0800,
+            1024,
+            0x2000_0C00,
+            1024,
         );
         assert_eq!(p0_layout.region_count, 3);
-        let overlay = p0_layout.find_region_by_kind(RegionKind::OverlayWindow).unwrap();
+        let overlay = p0_layout
+            .find_region_by_kind(RegionKind::OverlayWindow)
+            .unwrap();
         let base = overlay.base_vma;
         assert_eq!(base, 0x2000_0800);
         assert!(overlay.can_execute());

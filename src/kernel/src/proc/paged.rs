@@ -357,12 +357,7 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
     }
 
     /// Configure the structured leaf manager and register leaves from `SectionLeafMap (0x0006)`.
-    pub fn configure(
-        &mut self,
-        overlay_vma: u32,
-        window_size: u16,
-        leaf_map_body: Option<&[u8]>,
-    ) {
+    pub fn configure(&mut self, overlay_vma: u32, window_size: u16, leaf_map_body: Option<&[u8]>) {
         self.reset();
         self.overlay_vma = overlay_vma;
         self.window_size = window_size;

@@ -177,7 +177,11 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
     }
 
     /// Checks active leases against timeouts, invoking callback for expired leases.
-    pub fn check_timeouts(&mut self, current_tick: u32, mut on_timeout: impl FnMut(LeaseKind, Pid)) {
+    pub fn check_timeouts(
+        &mut self,
+        current_tick: u32,
+        mut on_timeout: impl FnMut(LeaseKind, Pid),
+    ) {
         for slot in self.leases.iter_mut() {
             if let Some(l) = slot {
                 if l.timeout_ms > 0 {

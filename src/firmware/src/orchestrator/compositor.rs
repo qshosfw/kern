@@ -88,6 +88,29 @@ impl ModalCompositor {
             ActiveModal::Popup(PopupModel::new(title, message).with_badges(confirm, cancel));
     }
 
+    pub fn show_popup_dynamic(&mut self, tag: u8, title: &str, message: &str) {
+        let mut model = PopupModel::new("", "");
+        let _ = model.custom_title.push_str(title);
+        let _ = model.custom_msg.push_str(message);
+        self.tag = tag;
+        self.modal = ActiveModal::Popup(model);
+    }
+
+    pub fn show_confirm_dynamic(
+        &mut self,
+        tag: u8,
+        title: &str,
+        message: &str,
+        confirm: &'static str,
+        cancel: &'static str,
+    ) {
+        let mut model = PopupModel::new("", "").with_badges(confirm, cancel);
+        let _ = model.custom_title.push_str(title);
+        let _ = model.custom_msg.push_str(message);
+        self.tag = tag;
+        self.modal = ActiveModal::Popup(model);
+    }
+
     #[cfg(feature = "passcode")]
     fn init_text_prompt(
         &mut self,

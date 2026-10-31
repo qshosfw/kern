@@ -301,19 +301,14 @@ pub struct CapServiceVTable {
     pub sys_proc_count: unsafe extern "C" fn() -> u8,
     pub sys_proc_info: unsafe extern "C" fn(idx: u8, out_info: *mut KrxProcInfo) -> u8,
     pub sys_proc_kill: unsafe extern "C" fn(pid: u8) -> u8,
-    pub paged_call: unsafe extern "C" fn(
-        target_block_id: u8,
-        target_offset: u16,
-        return_offset: u16,
-    ) -> usize,
+    pub paged_call:
+        unsafe extern "C" fn(target_block_id: u8, target_offset: u16, return_offset: u16) -> usize,
     pub paged_return: unsafe extern "C" fn() -> usize,
     pub leaf_call: unsafe extern "C" fn(leaf_id: u8, arg: u32) -> u32,
     pub lease_acquire: unsafe extern "C" fn(lease_kind: u8, timeout_ms: u32) -> u8,
     pub lease_release: unsafe extern "C" fn(lease_kind: u8) -> u8,
-    pub mem_query: unsafe extern "C" fn(
-        kind: u8,
-        out_desc: *mut crate::proc::MemoryRegionDescriptor,
-    ) -> u8,
+    pub mem_query:
+        unsafe extern "C" fn(kind: u8, out_desc: *mut crate::proc::MemoryRegionDescriptor) -> u8,
 }
 
 /// 13. `CapHwBus` VTable (`interface_id = 0x000D`)

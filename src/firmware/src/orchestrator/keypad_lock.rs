@@ -177,8 +177,7 @@ impl KeypadLockManager {
                         // - Hold-to-Lock: deliberate (~1200ms) before pocketing
                         // - Hold-to-Unlock: deliberate (~1500ms) against pocket bumps
                         let lock_target = (start_threshold as u32 + 650).clamp(1200, 1600) as u16;
-                        let unlock_target =
-                            (start_threshold as u32 + 850).clamp(1400, 2000) as u16;
+                        let unlock_target = (start_threshold as u32 + 850).clamp(1400, 2000) as u16;
                         self.hold_target_ms = if self.is_locked {
                             unlock_target
                         } else {

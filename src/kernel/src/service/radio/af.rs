@@ -43,4 +43,6 @@ pub trait RfAudioPath {
     fn mute_audio(&mut self, mute: bool) {
         self.set_rf_volume(if mute { 0 } else { 5 });
     }
+    /// Mute or unmute the microphone audio path.
+    fn mute_mic(&mut self, _mute: bool) {}
 }

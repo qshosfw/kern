@@ -135,7 +135,8 @@ fn write_krx_package(
     if filesystem.exists(path) {
         let buf = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
         if let Ok(rlen) = filesystem.read_file(path, buf) {
-            if rlen == total_len && &buf[128..total_len] == payload && buf[94] == profile.raw_code() {
+            if rlen == total_len && &buf[128..total_len] == payload && buf[94] == profile.raw_code()
+            {
                 return;
             }
         }

@@ -116,6 +116,7 @@ pub struct Bk4829<'a, State = Disabled> {
     pub(crate) bus: &'a mut dyn kern_platform_traits::radio::RadioBus,
     pub(crate) tone_gain: u8,
     pub(crate) active_demod_af: AfType,
+    pub(crate) rx_demod_active: bool,
     pub(crate) _state: PhantomData<State>,
 }
 
@@ -232,12 +233,16 @@ impl<'a, State> Bk4829<'a, State> {
         // 5. Restore clean RX state without resetting RF PLL or auto-calibrating VCO
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         self.write_reg(REG_TONE_GAIN, 0x0000);
-        if was_amp_active {
+        let cur_pwr = self.cache.read(REG_SYS_POWER);
+        if cur_pwr != 0xFFFF && (cur_pwr & 0x0002) != 0 {
+            self.write_reg(REG_SYS_POWER, cur_pwr & !0x8002);
+        }
+        if self.rx_demod_active {
             self.set_af(self.active_demod_af);
             self.write_reg(REG_TX_MUTE, 0x3B18);
         } else {
             self.set_af(AfType::Mute);
-            self.write_reg(REG_TX_MUTE, 0xBB18); // Keep muted to prevent hiss/whistle/pop during hangover
+            self.write_reg(REG_TX_MUTE, 0xBB18); // Keep muted during hangover to eliminate whistle and shutdown pop
         }
     }
 
@@ -274,16 +279,20 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_TX_MUTE, 0xBB18);
     }
 
-    pub fn end_tone_sequence(&mut self, was_amp_active: bool) {
+    pub fn end_tone_sequence(&mut self, _was_amp_active: bool) {
         crate::audio::AudioAmplifier::notify_tone_played();
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         self.write_reg(REG_TONE_GAIN, 0x0000);
-        if was_amp_active {
+        let cur_pwr = self.cache.read(REG_SYS_POWER);
+        if cur_pwr != 0xFFFF && (cur_pwr & 0x0002) != 0 {
+            self.write_reg(REG_SYS_POWER, cur_pwr & !0x8002);
+        }
+        if self.rx_demod_active {
             self.set_af(self.active_demod_af);
             self.write_reg(REG_TX_MUTE, 0x3B18);
         } else {
             self.set_af(AfType::Mute);
-            self.write_reg(REG_TX_MUTE, 0xBB18); // Keep muted to prevent hiss/whistle/pop during hangover
+            self.write_reg(REG_TX_MUTE, 0xBB18);
         }
     }
 
@@ -300,6 +309,12 @@ impl<'a, State> Bk4829<'a, State> {
 
     pub fn set_xtal_freq_trim(&mut self, trim: i16) {
         self.set_crystal_trim(trim);
+    }
+
+    /// Mute or unmute the microphone audio path into the RF modulator (REG_TX_MUTE).
+    #[inline(always)]
+    pub fn mute_mic(&mut self, mute: bool) {
+        self.write_reg(REG_TX_MUTE, if mute { 0xBB18 } else { 0x3B18 });
     }
 
     /// Set PA bias/gain (REG_36). Only touches the PA register — never the
@@ -450,6 +465,7 @@ impl<'a> Bk4829<'a, Disabled> {
             bus,
             tone_gain: 128,
             active_demod_af: AfType::Fm,
+            rx_demod_active: false,
             _state: PhantomData,
         }
     }
@@ -507,6 +523,7 @@ impl<'a> Bk4829<'a, Disabled> {
             bus: self.bus,
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
+            rx_demod_active: self.rx_demod_active,
             _state: PhantomData,
         }
     }
@@ -525,6 +542,7 @@ impl<'a> Bk4829<'a, Disabled> {
             bus: self.bus,
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
+            rx_demod_active: self.rx_demod_active,
             _state: PhantomData,
         }
     }
@@ -544,6 +562,7 @@ impl<'a> Bk4829<'a, Receiving> {
             bus: self.bus,
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
+            rx_demod_active: self.rx_demod_active,
             _state: PhantomData,
         }
     }
@@ -563,6 +582,7 @@ impl<'a> Bk4829<'a, Transmitting> {
             bus: self.bus,
             tone_gain: self.tone_gain,
             active_demod_af: self.active_demod_af,
+            rx_demod_active: self.rx_demod_active,
             _state: PhantomData,
         }
     }
@@ -572,8 +592,8 @@ impl<'a> Bk4829<'a, Transmitting> {
 
 impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
     fn configure_channel(&mut self, config: &kernel::service::radio::ChannelConfig) {
-        let was_amp_active = bsp::pins::AUDIO_PA.is_high();
-        if was_amp_active {
+        let was_rx_active = self.rx_demod_active;
+        if was_rx_active {
             bsp::pins::AUDIO_PA.set_low();
             self.set_af(AfType::Mute);
         }
@@ -591,7 +611,7 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
         );
         <Self as kernel::service::radio::RfSquelch>::set_squelch_level(self, config.squelch_level);
         <Self as kernel::service::radio::RfAudioPath>::set_af_response(self, &config.af_response);
-        if was_amp_active {
+        if was_rx_active {
             self.set_af(self.active_demod_af);
             bsp::pins::AUDIO_PA.set_high();
         }
@@ -1086,14 +1106,22 @@ impl<'a, State> kernel::service::radio::RfAudioPath for Bk4829<'a, State> {
 
     fn mute_audio(&mut self, mute: bool) {
         if mute {
-            bsp::pins::AUDIO_PA.set_low();
+            self.rx_demod_active = false;
             self.set_af(AfType::Mute);
+            self.write_reg(REG_TX_MUTE, 0xBB18);
+            bsp::pins::AUDIO_PA.set_low();
         } else {
+            self.rx_demod_active = true;
             self.set_af(self.active_demod_af);
+            self.write_reg(REG_TX_MUTE, 0x3B18);
             if self.cache.read(REG_AF_LEVEL) & 0x000F != 0 {
                 bsp::pins::AUDIO_PA.set_high();
             }
         }
+    }
+
+    fn mute_mic(&mut self, mute: bool) {
+        self.mute_mic(mute);
     }
 }
 
