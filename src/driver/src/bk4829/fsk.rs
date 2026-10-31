@@ -102,7 +102,7 @@ pub fn parse_fsk_status(reg0b: u16, reg0c: u16, reg5e: u16) -> FskPhyStatus {
         preamble_detected: (reg0b & (1 << 7)) != 0,
         sync_matched_live: (reg0b & (1 << 6)) != 0,
         fifo_almost_full: (reg0c & INT_FSK_FIFO_ALMOST_FULL) != 0,
-        fifo_almost_empty: (reg0c & INT_FSK_RX_FIFO_EMPTY) != 0,
+        fifo_almost_empty: (reg0c & INT_FSK_FIFO_ALMOST_EMPTY) != 0,
         fifo_rx_empty: (reg5e & (1 << 13)) != 0,
         fifo_tx_full: (reg5e & (1 << 14)) != 0,
         rx_finished: (reg0c & INT_FSK_RX_FINISHED) != 0,

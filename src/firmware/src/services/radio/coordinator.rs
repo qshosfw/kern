@@ -554,10 +554,7 @@ impl RadioCoordinator {
         self.tot_warning_given = false;
     }
 
-    pub fn start_tx<R: RadioService>(
-        &mut self,
-        radio: &mut R,
-    ) {
+    pub fn start_tx<R: RadioService>(&mut self, radio: &mut R) {
         self.is_transmitting = true;
         let slot = self.effective_tx_slot();
         self.listening_vfo = slot;

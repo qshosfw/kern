@@ -2,6 +2,7 @@
 
 // Control & Power Registers
 pub const REG_CHIP_ID: u8 = 0x00;
+pub const REG_INT_STATUS: u8 = 0x02; // Interrupt Status / Vector (read status, write 0 to clear IRQ)
 pub const REG_STATUS_LIVE: u8 = 0x0B;
 pub const REG_STATUS: u8 = 0x0C;
 pub const REG_SYS_POWER: u8 = 0x30;
@@ -9,8 +10,7 @@ pub const REG_GPIO: u8 = 0x33;
 pub const REG_XTAL_TRIM: u8 = 0x37;
 pub const REG_PLL_LOW: u8 = 0x38;
 pub const REG_PLL_HIGH: u8 = 0x39;
-pub const REG_INT_ENABLE: u8 = 0x3E;
-pub const REG_INT_CLEAR: u8 = 0x3F;
+pub const REG_INT_ENABLE: u8 = 0x3F; // Interrupt Enable Mask Register
 
 pub const REG_AGC_TABLE_MIN: u8 = 0x14; // RX AGC Gain Table[-1]
 pub const REG_FILTERS: u8 = 0x2B; // AF Tx/Rx filter control (bit 0 preemp, bit 8 deemp)
@@ -66,11 +66,19 @@ pub const REG_FSK_BAUD_DIV: u8 = 0x72; // alias
 pub const REG_AFC: u8 = 0x73; // Automatic Frequency Correction (bit 4 afc_disable)
 pub const REG_AGC_CONFIG: u8 = 0x7E; // AGC and DC filter bandwidth (bit 15 fix mode)
 
-// Status & Interrupt Bits in Reg 0x0C and 0x3F
+// Status & Interrupt Bits in Reg 0x02 and 0x3F
 pub const INT_FSK_TX_FINISHED: u16 = 1 << 15;
-pub const INT_FSK_RX_FIFO_EMPTY: u16 = 1 << 14;
+pub const INT_FSK_FIFO_ALMOST_EMPTY: u16 = 1 << 14;
 pub const INT_FSK_RX_FINISHED: u16 = 1 << 13;
 pub const INT_FSK_FIFO_ALMOST_FULL: u16 = 1 << 12;
-pub const INT_FSK_RX_SYNC: u16 = 1 << 11;
-pub const INT_SQUELCH_LOST: u16 = 1 << 1;
-pub const INT_SQUELCH_FOUND: u16 = 1 << 0;
+pub const INT_DTMF_5TONE_FOUND: u16 = 1 << 11;
+pub const INT_CXCSS_TAIL: u16 = 1 << 10;
+pub const INT_CDCSS_FOUND: u16 = 1 << 9;
+pub const INT_CDCSS_LOST: u16 = 1 << 8;
+pub const INT_CTCSS_FOUND: u16 = 1 << 7;
+pub const INT_CTCSS_LOST: u16 = 1 << 6;
+pub const INT_VOX_FOUND: u16 = 1 << 5;
+pub const INT_VOX_LOST: u16 = 1 << 4;
+pub const INT_SQUELCH_FOUND: u16 = 1 << 3;
+pub const INT_SQUELCH_LOST: u16 = 1 << 2;
+pub const INT_FSK_RX_SYNC: u16 = 1 << 1;

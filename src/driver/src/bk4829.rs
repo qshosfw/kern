@@ -120,6 +120,8 @@ pub struct Bk4829<'a, State = Disabled> {
     pub(crate) calib: Option<&'a [u8; 512]>,
     pub(crate) current_freq_hz: u32,
     pub(crate) squelch_level: u8,
+    pub(crate) squelch_open: bool,
+    pub(crate) subaudible_matched: bool,
     pub(crate) _state: PhantomData<State>,
 }
 
@@ -351,30 +353,37 @@ impl<'a, State> Bk4829<'a, State> {
     /// Set PA bias/gain (REG_36). Only touches the PA register — never the
     /// power-enable (0x30) or bandgap/LDO (0x37) registers.
     pub fn set_rf_power(&mut self, level: u8) {
-        // REG_36: <15:8> PA bias, <7> PA-CTL enable, <5:3> gain1, <2:0> gain2
-        let bias: u16 = match level {
+        let bias: u8 = match level {
             0 => 0x20, // Low
             1 => 0x60, // Medium
             _ => 0xA0, // High
         };
-        let gain: u16 = (4 << 3) | 2;
-        self.write_reg(0x36, (bias << 8) | (1 << 7) | gain);
+        self.set_rf_power_bias(bias);
     }
 
     /// Set calibrated PA bias directly into REG_36.
     pub fn set_rf_power_bias(&mut self, bias: u8) {
-        let gain: u16 = (4 << 3) | 2;
+        let gain: u16 = if self.current_freq_hz < 280_000_000 {
+            (1 << 3) | 0
+        } else {
+            (4 << 3) | 2
+        };
         self.write_reg(0x36, ((bias as u16) << 8) | (1 << 7) | gain);
     }
 
     /// Soft-start S-curve PA ramp-up with precise calibrated PA bias.
     pub fn tx_ramp_up_bias(&mut self, bias: u8) {
-        self.set_gpio_pin(1, true); // PA enable
-        py32_hal::delay::delay_ms(2);
-        self.rf_power_off();
-        py32_hal::delay::delay_ms(3);
+        self.set_gpio_pin(1, true); // PA enable (Pin 29)
+        self.set_gpio_pin(0, false); // RX disable (Pin 28)
+        py32_hal::delay::delay_ms(1);
+        self.set_rf_power_bias(bias / 4);
+        py32_hal::delay::delay_ms(1);
+        self.set_rf_power_bias(bias / 2);
+        py32_hal::delay::delay_ms(1);
+        self.set_rf_power_bias((bias as u16 * 3 / 4) as u8);
+        py32_hal::delay::delay_ms(1);
         self.set_rf_power_bias(bias);
-        py32_hal::delay::delay_ms(5);
+        py32_hal::delay::delay_ms(1);
     }
 
     /// PA off (REG_36 reset value used by init).
@@ -384,7 +393,8 @@ impl<'a, State> Bk4829<'a, State> {
 
     pub fn set_squelch_profile(&mut self, th: &kernel::service::radio::squelch::SquelchThresholds) {
         let r4d = 0xA000 | (th.close_glitch & 0x00FF);
-        let r4e = (1u16 << 14) | (5u16 << 11) | (3u16 << 9) | (1u16 << 8) | (th.open_glitch & 0x00FF);
+        let r4e =
+            (1u16 << 14) | (5u16 << 11) | (3u16 << 9) | (1u16 << 8) | (th.open_glitch & 0x00FF);
         let r4f = ((th.close_noise & 0x007F) << 8) | (th.open_noise & 0x007F);
         let r78 = ((th.open_rssi & 0x00FF) << 8) | (th.close_rssi & 0x00FF);
         self.write_reg(REG_SQL_GLITCH_CLOSE, r4d);
@@ -393,9 +403,52 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_SQL_RSSI, r78);
     }
 
-    pub fn is_squelch_open(&mut self) -> bool {
+    /// Acknowledge and clear pending hardware interrupts.
+    #[inline(always)]
+    pub fn clear_interrupts(&mut self) {
+        self.write_reg(REG_INT_STATUS, 0);
+    }
+
+    /// Poll pending interrupt events from BK4829, update internal latch states, and clear IRQ.
+    pub fn poll_interrupts(&mut self) -> u16 {
         let reg0c = self.read_reg(REG_STATUS);
-        (reg0c & 0x0002) != 0
+        if (reg0c & 0x0001) != 0 {
+            let irq = self.read_reg(REG_INT_STATUS);
+            self.write_reg(REG_INT_STATUS, 0);
+
+            if (irq & INT_SQUELCH_LOST) != 0 {
+                self.squelch_open = true;
+            }
+            if (irq & INT_SQUELCH_FOUND) != 0 {
+                self.squelch_open = false;
+            }
+            if (irq & (INT_CTCSS_FOUND | INT_CDCSS_FOUND)) != 0 {
+                self.subaudible_matched = true;
+            }
+            if (irq & (INT_CTCSS_LOST | INT_CDCSS_LOST | INT_CXCSS_TAIL)) != 0 {
+                self.subaudible_matched = false;
+            }
+            irq
+        } else {
+            0
+        }
+    }
+
+    pub fn is_squelch_open(&mut self) -> bool {
+        self.poll_interrupts();
+        if self.squelch_level == 0 {
+            true
+        } else {
+            self.squelch_open
+        }
+    }
+
+    pub fn is_subaudible_matched(&mut self) -> bool {
+        self.poll_interrupts();
+        let reg0c = self.read_reg(REG_STATUS);
+        let ctc = (reg0c >> 10) & 0x03;
+        let dcs = (reg0c >> 14) & 0x03;
+        self.subaudible_matched || ctc == 1 || dcs != 0
     }
 
     pub fn get_snr(&mut self) -> u8 {
@@ -447,11 +500,16 @@ impl<'a, State> Bk4829<'a, State> {
     pub fn prepare_fsk_receive(&mut self, data_length: u16) {
         self.write_reg(REG_FSK_CTRL, 0x00C1);
         self.write_reg(REG_FSK_PACKET_LEN, data_length << 8);
-        self.write_reg(REG_INT_CLEAR, (1 << 13) | (1 << 12));
+        self.clear_interrupts();
+        self.write_reg(
+            REG_INT_ENABLE,
+            INT_FSK_RX_FINISHED | INT_FSK_FIFO_ALMOST_FULL,
+        );
     }
 
     pub fn send_fsk_data(&mut self, data: &[u16]) {
-        self.write_reg(REG_INT_CLEAR, 1 << 15);
+        self.clear_interrupts();
+        self.write_reg(REG_INT_ENABLE, INT_FSK_TX_FINISHED);
         for &word in data {
             self.write_reg(REG_FSK_FIFO_DATA, word);
         }
@@ -462,11 +520,11 @@ impl<'a, State> Bk4829<'a, State> {
     /// Select external VHF vs UHF front-end bandpass and LNA path on REG_33.
     pub fn set_filter_path(&mut self, freq_hz: u32) {
         if freq_hz < 280_000_000 {
-            self.set_gpio_pin(4, true);  // VHF LNA (pin 4, bit 2)
+            self.set_gpio_pin(4, true); // VHF LNA (pin 4, bit 2)
             self.set_gpio_pin(3, false); // UHF LNA (pin 3, bit 3)
         } else {
             self.set_gpio_pin(4, false); // VHF LNA
-            self.set_gpio_pin(3, true);  // UHF LNA
+            self.set_gpio_pin(3, true); // UHF LNA
         }
     }
 
@@ -481,12 +539,25 @@ impl<'a, State> Bk4829<'a, State> {
 
         // Dynamically switch squelch calibration bank if crossing VHF/UHF boundary
         if old_uhf != new_uhf && self.squelch_level > 0 {
-            <Self as kernel::service::radio::RfSquelch>::set_squelch_level(self, self.squelch_level);
+            <Self as kernel::service::radio::RfSquelch>::set_squelch_level(
+                self,
+                self.squelch_level,
+            );
         }
     }
 
     pub fn get_rssi(&mut self) -> u16 {
         self.read_reg(REG_RSSI_VAL)
+    }
+
+    pub fn get_rssi_dbm(&mut self) -> i16 {
+        let raw = self.get_rssi();
+        if let Some(calib) = self.calib {
+            let block = calib::CalibrationBlock::from_bytes(calib);
+            block.raw_rssi_to_dbm(self.current_freq_hz, raw)
+        } else {
+            squelch::raw_rssi_to_dbm(raw)
+        }
     }
 
     pub fn set_status_led(&mut self, led: bsp::StatusLed) {
@@ -550,6 +621,8 @@ impl<'a> Bk4829<'a, Disabled> {
             calib: None,
             current_freq_hz: 144_000_000,
             squelch_level: 0,
+            squelch_open: false,
+            subaudible_matched: false,
             _state: PhantomData,
         }
     }
@@ -590,6 +663,22 @@ impl<'a> Bk4829<'a, Disabled> {
         // 6. Power on RX link, AF DAC, DISC mode, PLL/VCO, RX DSP
         self.write_reg(REG_SYS_POWER, 0xBFF1);
 
+        // 7. Configure hardware interrupt enable mask
+        let int_mask = INT_SQUELCH_FOUND
+            | INT_SQUELCH_LOST
+            | INT_CXCSS_TAIL
+            | INT_CTCSS_FOUND
+            | INT_CTCSS_LOST
+            | INT_CDCSS_FOUND
+            | INT_CDCSS_LOST
+            | INT_VOX_FOUND
+            | INT_VOX_LOST
+            | INT_FSK_RX_FINISHED
+            | INT_FSK_FIFO_ALMOST_FULL
+            | INT_FSK_TX_FINISHED;
+        self.write_reg(REG_INT_ENABLE, int_mask);
+        self.clear_interrupts();
+
         Ok(())
     }
 
@@ -598,10 +687,15 @@ impl<'a> Bk4829<'a, Disabled> {
         if reg33 == 0xFFFF {
             reg33 = 0x9000;
         }
-        reg33 &= !0x0003;
-        reg33 |= 0x0002; // Green LED (bit 1)
+        reg33 &= !0x0003; // LEDs off in RX idle
+        reg33 |= 0x0040; // RX enable (Pin 28)
+        reg33 &= !0x0020; // PA disable (Pin 29)
         self.write_reg(REG_GPIO, reg33);
-        self.write_reg(REG_SYS_POWER, 0x0200); // RX blocks power
+        // RX power: VCO CALIB, RX LINK, AF DAC, DISC MODE, PLL VCO, RX DSP
+        self.write_reg(REG_SYS_POWER, 0xBFF1);
+        self.squelch_open = false;
+        self.subaudible_matched = false;
+        self.clear_interrupts();
         Bk4829 {
             cache: self.cache,
             bus: self.bus,
@@ -611,6 +705,8 @@ impl<'a> Bk4829<'a, Disabled> {
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
             squelch_level: self.squelch_level,
+            squelch_open: self.squelch_open,
+            subaudible_matched: self.subaudible_matched,
             _state: PhantomData,
         }
     }
@@ -622,8 +718,14 @@ impl<'a> Bk4829<'a, Disabled> {
         }
         reg33 &= !0x0003;
         reg33 |= 0x0001; // Red LED (bit 0)
+        reg33 &= !0x0040; // RX disable (Pin 28)
+        reg33 |= 0x0020; // PA enable (Pin 29)
         self.write_reg(REG_GPIO, reg33);
-        self.write_reg(REG_SYS_POWER, 0x0020); // TX blocks power
+        // TX power: VCO CALIB, UNKNOWN (bit 14), AF DAC, DISC MODE, PLL VCO, PA GAIN, MIC ADC, TX DSP
+        self.write_reg(REG_SYS_POWER, 0xC3FE);
+        self.squelch_open = false;
+        self.subaudible_matched = false;
+        self.clear_interrupts();
         Bk4829 {
             cache: self.cache,
             bus: self.bus,
@@ -633,6 +735,8 @@ impl<'a> Bk4829<'a, Disabled> {
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
             squelch_level: self.squelch_level,
+            squelch_open: self.squelch_open,
+            subaudible_matched: self.subaudible_matched,
             _state: PhantomData,
         }
     }
@@ -645,8 +749,12 @@ impl<'a> Bk4829<'a, Receiving> {
             reg33 = 0x9000;
         }
         reg33 &= !0x0003; // Turn off status LEDs
+        reg33 &= !0x0060; // Turn off RX and PA switches
         self.write_reg(REG_GPIO, reg33);
         self.write_reg(REG_SYS_POWER, 0x0000);
+        self.squelch_open = false;
+        self.subaudible_matched = false;
+        self.clear_interrupts();
         Bk4829 {
             cache: self.cache,
             bus: self.bus,
@@ -656,6 +764,8 @@ impl<'a> Bk4829<'a, Receiving> {
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
             squelch_level: self.squelch_level,
+            squelch_open: self.squelch_open,
+            subaudible_matched: self.subaudible_matched,
             _state: PhantomData,
         }
     }
@@ -668,8 +778,12 @@ impl<'a> Bk4829<'a, Transmitting> {
             reg33 = 0x9000;
         }
         reg33 &= !0x0003; // Turn off status LEDs
+        reg33 &= !0x0060; // Turn off RX and PA switches
         self.write_reg(REG_GPIO, reg33);
         self.write_reg(REG_SYS_POWER, 0x0000);
+        self.squelch_open = false;
+        self.subaudible_matched = false;
+        self.clear_interrupts();
         Bk4829 {
             cache: self.cache,
             bus: self.bus,
@@ -679,6 +793,8 @@ impl<'a> Bk4829<'a, Transmitting> {
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
             squelch_level: self.squelch_level,
+            squelch_open: self.squelch_open,
+            subaudible_matched: self.subaudible_matched,
             _state: PhantomData,
         }
     }
@@ -726,7 +842,6 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
         // Writing it here would energize the PA while receiving.
     }
 }
-
 
 impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
     fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
@@ -895,8 +1010,7 @@ impl<'a, State> kernel::service::radio::RfSquelch for Bk4829<'a, State> {
     }
 
     fn get_rssi_dbm(&mut self) -> i16 {
-        let raw = self.get_rssi();
-        squelch::raw_rssi_to_dbm(raw)
+        self.get_rssi_dbm()
     }
 
     fn get_snr(&mut self) -> u8 {
@@ -956,10 +1070,7 @@ impl<'a, State> kernel::service::radio::RfSubaudible for Bk4829<'a, State> {
     }
 
     fn is_subaudible_matched(&mut self) -> bool {
-        let reg0c = self.read_reg(REG_STATUS);
-        let ctc = (reg0c >> 10) & 0x03;
-        let dcs = (reg0c >> 14) & 0x03;
-        ctc == 1 || dcs != 0
+        self.is_subaudible_matched()
     }
 
     fn send_css_tail(&mut self, mode: kernel::service::radio::CssTailMode) {
@@ -1029,7 +1140,7 @@ impl<'a, State> kernel::service::radio::RfFskPhy for Bk4829<'a, State> {
         self.write_reg(REG_FSK_FIFO_CTRL, fsk::build_fsk_fifo_ctrl_from_phy(config));
 
         // Clear interrupt status
-        self.write_reg(REG_INT_CLEAR, 0xFFFF);
+        self.clear_interrupts();
         Ok(())
     }
 
@@ -1134,14 +1245,17 @@ impl<'a, State> kernel::service::radio::RfFskPhy for Bk4829<'a, State> {
         for _ in 0..loops {
             py32_hal::delay::delay_ms(5);
             let reg0c = self.read_reg(REG_STATUS);
-            if (reg0c & INT_FSK_TX_FINISHED) != 0 {
-                finished = true;
-                break;
+            if (reg0c & 0x0001) != 0 {
+                let irq = self.read_reg(REG_INT_STATUS);
+                if (irq & INT_FSK_TX_FINISHED) != 0 {
+                    finished = true;
+                    break;
+                }
             }
         }
 
         // Clear interrupt flag and drop TX enable
-        self.write_reg(REG_INT_CLEAR, INT_FSK_TX_FINISHED);
+        self.clear_interrupts();
         self.fsk_enable_tx(false);
 
         if finished { Ok(()) } else { Err(()) }

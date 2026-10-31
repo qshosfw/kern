@@ -1,6 +1,6 @@
 use crate::services::power::PowerService;
 use crate::services::radio::{
-    ClientId, ClientToken, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant, RfSquelch,
+    ClientId, ClientToken, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant,
     TxPermission,
 };
 // Main Dual VFO & Telemetry Application

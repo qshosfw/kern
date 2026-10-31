@@ -1,4 +1,5 @@
 use crate::services::display::DisplayService;
+#[cfg(feature = "radio")]
 use crate::services::radio::RfSquelch;
 // Microkernel OS Orchestrator & Shell Compositor
 // Routes hardware events to the active foreground application, manages background execution,

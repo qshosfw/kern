@@ -555,7 +555,8 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
             // Dynamically reload calibrated parameters into live silicon
             let pwr = unsafe { &mut *core::ptr::addr_of_mut!(crate::POWER_SERVICE) };
             pwr.battery_driver.calib_const = calib.battery_calib_const();
-            pwr.battery_driver.load_calibration_curve(calib.battery_curve());
+            pwr.battery_driver
+                .load_calibration_curve(calib.battery_curve());
             hw.radio.attach_calibration(calib.raw_bytes());
             hw.radio.set_xtal_freq_trim(calib.xtal_freq_low());
         } else {

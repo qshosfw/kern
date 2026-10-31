@@ -178,7 +178,11 @@ pub trait CalibrationService {
     fn mix_calib(&self) -> u16;
     fn volume_gain(&self) -> u8;
     fn dac_gain(&self) -> u8;
-    fn squelch_thresholds(&self, freq_hz: u32, level: u8) -> kernel::service::radio::squelch::SquelchThresholds;
+    fn squelch_thresholds(
+        &self,
+        freq_hz: u32,
+        level: u8,
+    ) -> kernel::service::radio::squelch::SquelchThresholds;
     fn tx_power_bias(&self, freq_hz: u32, power_level: u8) -> u8;
     fn rssi_thresholds(&self, freq_hz: u32) -> [u16; 4];
     fn s_meter_level(&self, freq_hz: u32, raw_rssi: u16) -> u8;
@@ -245,7 +249,11 @@ impl SystemCalibration {
     }
 
     #[inline(always)]
-    pub fn squelch_thresholds(&self, freq_hz: u32, level: u8) -> kernel::service::radio::squelch::SquelchThresholds {
+    pub fn squelch_thresholds(
+        &self,
+        freq_hz: u32,
+        level: u8,
+    ) -> kernel::service::radio::squelch::SquelchThresholds {
         let th = self.as_block().get_squelch_thresholds(freq_hz, level);
         kernel::service::radio::squelch::SquelchThresholds {
             open_rssi: th.open_rssi,
@@ -463,7 +471,11 @@ impl CalibrationService for SystemCalibration {
         self.dac_gain
     }
 
-    fn squelch_thresholds(&self, freq_hz: u32, level: u8) -> kernel::service::radio::squelch::SquelchThresholds {
+    fn squelch_thresholds(
+        &self,
+        freq_hz: u32,
+        level: u8,
+    ) -> kernel::service::radio::squelch::SquelchThresholds {
         self.squelch_thresholds(freq_hz, level)
     }
 

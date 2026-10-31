@@ -94,7 +94,7 @@ const _: () = assert!(core::mem::size_of::<CalibrationBlock>() == 512);
 
 /// Frequency limits (lower, center, upper) in Hz for the 7 factory calibration bands.
 pub const CALIB_BAND_LIMITS: [(u32, u32, u32); 7] = [
-    (50_000_000, 63_000_000, 76_000_000),     // Band 0: 50 MHz
+    (50_000_000, 63_000_000, 76_000_000),    // Band 0: 50 MHz
     (108_000_000, 122_500_000, 137_000_000), // Band 1: 108 MHz
     (137_000_000, 155_500_000, 174_000_000), // Band 2: 137 MHz (VHF)
     (174_000_000, 262_000_000, 350_000_000), // Band 3: 174 MHz
@@ -269,6 +269,33 @@ impl CalibrationBlock {
         }
     }
 
+    /// Convert raw register 0x67 RSSI count into calibrated dBm using 4-point calibration curve.
+    pub fn raw_rssi_to_dbm(&self, freq_hz: u32, raw: u16) -> i16 {
+        let th = self.get_rssi_thresholds(freq_hz);
+        if th[0] == 0 || th[3] == 0 || th[3] <= th[0] {
+            return -160 + (raw as i16 / 2);
+        }
+        if raw <= th[0] {
+            let diff = th[0].saturating_sub(raw);
+            -123 - (diff as i16 / 2)
+        } else if raw <= th[1] {
+            let span = (th[1] - th[0]) as i32;
+            let offset = (raw - th[0]) as i32;
+            -123 + ((offset * 16) / span) as i16
+        } else if raw <= th[2] {
+            let span = (th[2] - th[1]) as i32;
+            let offset = (raw - th[1]) as i32;
+            -107 + ((offset * 24) / span) as i16
+        } else if raw <= th[3] {
+            let span = (th[3] - th[2]) as i32;
+            let offset = (raw - th[2]) as i32;
+            -83 + ((offset * 10) / span) as i16
+        } else {
+            let diff = raw.saturating_sub(th[3]);
+            (-73 + (diff as i16 / 2)).min(-10)
+        }
+    }
+
     /// Battery calibration baseline constant at 7.60V (word 3).
     #[inline(always)]
     pub fn battery_calib_const(&self) -> u16 {
@@ -294,7 +321,24 @@ impl CalibrationBlock {
             return (0, 0);
         }
         let idx = (level - 1).min(9) as usize;
-        (self.vox0_thresholds[idx], self.vox1_thresholds[idx])
+        let v0 = self.vox0_thresholds[idx];
+        let v1 = self.vox1_thresholds[idx];
+        if v0 != 0 && v1 != 0 {
+            (v0, v1)
+        } else {
+            match level {
+                1 => (800, 850),
+                2 => (700, 750),
+                3 => (600, 650),
+                4 => (500, 550),
+                5 => (400, 450),
+                6 => (300, 350),
+                7 => (220, 260),
+                8 => (150, 180),
+                9 => (100, 120),
+                _ => (50, 70),
+            }
+        }
     }
 
     /// Get calibrated microphone gain in dB for levels 0..4 (or 1..5).
@@ -358,11 +402,58 @@ mod tests {
     #[test]
     fn test_tx_power_interpolation() {
         // Band 2: 137..174 MHz, lower 137M, mid 155.5M, upper 174M
-        let bias = calculate_tx_power(50, 75, 100, 137_000_000, 155_500_000, 174_000_000, 137_000_000);
+        let bias = calculate_tx_power(
+            50,
+            75,
+            100,
+            137_000_000,
+            155_500_000,
+            174_000_000,
+            137_000_000,
+        );
         assert_eq!(bias, 50);
-        let bias = calculate_tx_power(50, 75, 100, 137_000_000, 155_500_000, 174_000_000, 155_500_000);
+        let bias = calculate_tx_power(
+            50,
+            75,
+            100,
+            137_000_000,
+            155_500_000,
+            174_000_000,
+            155_500_000,
+        );
         assert_eq!(bias, 75);
-        let bias = calculate_tx_power(50, 75, 100, 137_000_000, 155_500_000, 174_000_000, 174_000_000);
+        let bias = calculate_tx_power(
+            50,
+            75,
+            100,
+            137_000_000,
+            155_500_000,
+            174_000_000,
+            174_000_000,
+        );
         assert_eq!(bias, 100);
+    }
+
+    #[test]
+    fn test_rssi_and_vox_calibration() {
+        let mut bytes = [0u8; 512];
+        let cal = unsafe { &mut *(bytes.as_mut_ptr() as *mut CalibrationBlock) };
+        cal.rssi_vhf = [50, 100, 150, 200];
+        cal.vox0_thresholds[0] = 780;
+        cal.vox1_thresholds[0] = 820;
+
+        assert_eq!(cal.get_vox_thresholds(1), (780, 820));
+        assert_eq!(cal.get_vox_thresholds(2), (700, 750)); // fallback
+
+        // Below point 0
+        assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 40), -128);
+        // At point 0
+        assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 50), -123);
+        // At point 1
+        assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 100), -107);
+        // Midpoint between 0 and 1
+        assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 75), -115);
+        // At point 3
+        assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 200), -73);
     }
 }

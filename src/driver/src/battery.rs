@@ -121,10 +121,8 @@ impl BatteryDriver {
     pub fn load_calibration_data(&mut self, calib_data: &[u8]) {
         if calib_data.len() >= 0x14C {
             for i in 0..6 {
-                self.calib_curve[i] = u16::from_le_bytes([
-                    calib_data[0x140 + i * 2],
-                    calib_data[0x140 + i * 2 + 1],
-                ]);
+                self.calib_curve[i] =
+                    u16::from_le_bytes([calib_data[0x140 + i * 2], calib_data[0x140 + i * 2 + 1]]);
             }
             self.has_calib_curve = true;
             let word3 = self.calib_curve[3];
