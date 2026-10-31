@@ -119,6 +119,7 @@ pub struct Bk4829<'a, State = Disabled> {
     pub(crate) rx_demod_active: bool,
     pub(crate) calib: Option<&'a [u8; 512]>,
     pub(crate) current_freq_hz: u32,
+    pub(crate) squelch_level: u8,
     pub(crate) _state: PhantomData<State>,
 }
 
@@ -158,16 +159,44 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_volume_level(&mut self, level: u8) {
+        if level == 0 {
+            let val = 11u16 << 12;
+            self.write_reg(REG_AF_LEVEL, val);
+            return;
+        }
         let vol_idx = (level as usize).min(crate::audio::VOLUME_TABLE.len() - 1);
-        let (rx_gain2, dac_gain) = crate::audio::VOLUME_TABLE[vol_idx];
+        let (mut rx_gain2, mut dac_gain) = crate::audio::VOLUME_TABLE[vol_idx];
+        if let Some(calib) = self.calib {
+            let block = calib::CalibrationBlock::from_bytes(calib);
+            let max_vol = block.volume_gain();
+            let max_dac = block.dac_gain();
+            rx_gain2 = ((rx_gain2 as u16 * max_vol as u16) / 58).min(63) as u8;
+            dac_gain = dac_gain.min(max_dac);
+        }
         let val = (11u16 << 12) | ((rx_gain2 as u16 & 0x3F) << 4) | (dac_gain as u16 & 0x0F);
         self.write_reg(REG_AF_LEVEL, val);
     }
 
     pub fn set_mic_gain(&mut self, gain_db: u8) {
-        let val = (gain_db.min(31) as u16) & 0x1F;
+        let val = if gain_db < 5 {
+            if let Some(calib) = self.calib {
+                let block = calib::CalibrationBlock::from_bytes(calib);
+                block.get_mic_gain_db(gain_db)
+            } else {
+                match gain_db {
+                    0 => 8,
+                    1 => 14,
+                    2 => 19,
+                    3 => 24,
+                    _ => 30,
+                }
+            }
+        } else {
+            gain_db
+        };
+        let gain_bits = (val.min(31) as u16) & 0x1F;
         let mut reg44 = self.cache.read(REG_MIC_GAIN);
-        reg44 = (reg44 & !0x001F) | val;
+        reg44 = (reg44 & !0x001F) | gain_bits;
         self.write_reg(REG_MIC_GAIN, reg44);
     }
 
@@ -442,11 +471,18 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_frequency(&mut self, freq: Frequency<Hertz>) {
+        let old_uhf = self.current_freq_hz >= 174_000_000;
         self.current_freq_hz = freq.raw();
+        let new_uhf = self.current_freq_hz >= 174_000_000;
         let (low, high) = tuning::calculate_pll_dividers(freq);
         self.write_reg(REG_PLL_LOW, low);
         self.write_reg(REG_PLL_HIGH, high);
         self.set_filter_path(self.current_freq_hz);
+
+        // Dynamically switch squelch calibration bank if crossing VHF/UHF boundary
+        if old_uhf != new_uhf && self.squelch_level > 0 {
+            <Self as kernel::service::radio::RfSquelch>::set_squelch_level(self, self.squelch_level);
+        }
     }
 
     pub fn get_rssi(&mut self) -> u16 {
@@ -513,6 +549,7 @@ impl<'a> Bk4829<'a, Disabled> {
             rx_demod_active: false,
             calib: None,
             current_freq_hz: 144_000_000,
+            squelch_level: 0,
             _state: PhantomData,
         }
     }
@@ -573,6 +610,7 @@ impl<'a> Bk4829<'a, Disabled> {
             rx_demod_active: self.rx_demod_active,
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
+            squelch_level: self.squelch_level,
             _state: PhantomData,
         }
     }
@@ -594,6 +632,7 @@ impl<'a> Bk4829<'a, Disabled> {
             rx_demod_active: self.rx_demod_active,
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
+            squelch_level: self.squelch_level,
             _state: PhantomData,
         }
     }
@@ -616,6 +655,7 @@ impl<'a> Bk4829<'a, Receiving> {
             rx_demod_active: self.rx_demod_active,
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
+            squelch_level: self.squelch_level,
             _state: PhantomData,
         }
     }
@@ -638,6 +678,7 @@ impl<'a> Bk4829<'a, Transmitting> {
             rx_demod_active: self.rx_demod_active,
             calib: self.calib,
             current_freq_hz: self.current_freq_hz,
+            squelch_level: self.squelch_level,
             _state: PhantomData,
         }
     }
@@ -686,19 +727,6 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
     }
 }
 
-impl<'a, State> kernel::service::radio::RfTuning for Bk4829<'a, State> {
-    fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
-        <Self as kernel::service::radio::RfModulation>::set_modulation(self, mode);
-    }
-
-    fn set_bandwidth(&mut self, bw: kernel::service::radio::Bandwidth) {
-        <Self as kernel::service::radio::RfModulation>::set_bandwidth(self, bw);
-    }
-
-    fn set_xtal_trim(&mut self, trim: i16) {
-        self.set_crystal_trim(trim);
-    }
-}
 
 impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
     fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
@@ -830,6 +858,7 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
 
 impl<'a, State> kernel::service::radio::RfSquelch for Bk4829<'a, State> {
     fn set_squelch_level(&mut self, level: u8) {
+        self.squelch_level = level;
         let th = if let Some(calib) = self.calib {
             let block = calib::CalibrationBlock::from_bytes(calib);
             let t = block.get_squelch_thresholds(self.current_freq_hz, level);

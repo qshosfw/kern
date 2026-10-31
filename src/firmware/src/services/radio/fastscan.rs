@@ -4,7 +4,7 @@
 //! performing low-latency PLL frequency stepping, settling, and calibrated dBm
 //! RSSI sampling with peak hold and noise floor estimation.
 
-use kernel::service::radio::{RfSquelch, RfTuning};
+use kernel::service::radio::{RfChannel, RfSquelch};
 use utils::units::{Frequency, Hertz};
 
 pub const FASTSCAN_COLUMNS: usize = 128;
@@ -116,7 +116,7 @@ impl FastScanEngine {
 
     /// Execute a single step of the spectrum sweep.
     /// Returns `true` if a full 128-column sweep completed on this tick.
-    pub fn step<R: RfTuning + RfSquelch>(&mut self, radio: &mut R) -> bool {
+    pub fn step<R: RfChannel + RfSquelch>(&mut self, radio: &mut R) -> bool {
         let cur_bin = match self.status {
             ScanStatus::Sweeping { current_bin } => current_bin,
             _ => return false,

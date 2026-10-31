@@ -31,7 +31,6 @@ pub use vox::*;
 /// Full composite RF Radio Service contract combining granular facets with audio, AGC, and tone generation.
 pub trait RadioService:
     RfChannel
-    + RfTuning
     + RfFineTuning
     + RfModulation
     + RfSquelch
@@ -40,6 +39,7 @@ pub trait RadioService:
     + RfToneGenerator
     + RfAudioPath
     + RfAgc
+    + RfPowerSequencer
 {
     fn sleep(&mut self);
     fn wake(&mut self);

@@ -554,7 +554,7 @@ impl RadioCoordinator {
         self.tot_warning_given = false;
     }
 
-    pub fn start_tx<R: RfChannel + RfTuning + RfSubaudible + RfAudioPath>(
+    pub fn start_tx<R: RadioService>(
         &mut self,
         radio: &mut R,
     ) {
@@ -577,14 +577,25 @@ impl RadioCoordinator {
         radio.set_tx_frequency(tx_ch.effective_tx_freq());
         radio.set_power_level(tx_ch.power);
         radio.set_modulation(tx_ch.modulation);
+        let pwr = match tx_ch.power {
+            RfPowerLevel::Low => 0,
+            RfPowerLevel::Medium => 1,
+            RfPowerLevel::High => 2,
+        };
+        radio.tx_prepare();
+        radio.tx_ramp_up(pwr);
+        radio.tx_unmute();
     }
 
-    pub fn stop_tx<R: RfChannel + RfTuning + RfSubaudible + RfAudioPath>(&mut self, radio: &mut R) {
+    pub fn stop_tx<R: RadioService>(&mut self, radio: &mut R) {
         let tx_ch = *self.effective_tx_channel();
         if tx_ch.tx_subaudible.is_ctcss() {
             radio.send_css_tail(CssTailMode::Tone55Hz);
         }
         radio.mute_mic(false);
+        radio.tx_mute();
+        radio.tx_ramp_down();
+        radio.tx_conclude();
         if let AudioRoutingState::ToneBurstActive { .. } = self.audio_routing {
             self.audio_routing = AudioRoutingState::NormalVoice;
         }

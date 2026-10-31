@@ -185,13 +185,6 @@ pub trait RfChannel {
     fn set_power_level(&mut self, level: RfPowerLevel);
 }
 
-/// Alias trait for backward compatibility.
-pub trait RfTuning: RfChannel {
-    fn set_modulation(&mut self, mode: ModulationMode);
-    fn set_bandwidth(&mut self, bw: Bandwidth);
-    fn set_xtal_trim(&mut self, trim: i16);
-}
-
 /// Fine frequency synthesis, crystal trimming, and PLL fractional compensation.
 pub trait RfFineTuning {
     /// Apply crystal oscillator trim in hardware units (-300..=300).
