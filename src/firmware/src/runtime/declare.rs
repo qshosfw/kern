@@ -107,8 +107,7 @@ fn resolve_telemetry_str<'a>(
     telem_id: u16,
     buf: &'a mut [u8; 16],
 ) -> &'a str {
-    let mut tmp = [0u8; 16];
-    let len = match telem_id {
+    match telem_id {
         DYN_BATTERY_MV => {
             let mut vbuf = [0u8; 12];
             let v = gfx::text::format_voltage(ctx.power.battery_mv, 2, &mut vbuf);
@@ -116,120 +115,71 @@ fn resolve_telemetry_str<'a>(
             buf[..l].copy_from_slice(&v.as_bytes()[..l]);
             return core::str::from_utf8(&buf[..l]).unwrap_or("");
         }
-        DYN_BATTERY_PCT => {
-            let pct = ctx.power.battery_pct.min(100);
-            let s = gfx::text::format_u32(pct as u32, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            if l < 15 {
-                buf[l] = b'%';
-                l + 1
-            } else {
-                l
-            }
-        }
         DYN_CPU_CLOCK => {
-            if ctx.config.battery.cpu_clock == 1 {
-                return "72MHz";
+            return if ctx.config.battery.cpu_clock == 1 {
+                "72MHz"
             } else {
-                return "48MHz";
-            }
+                "48MHz"
+            };
         }
-        DYN_RAM_FREE => {
-            let free_kb = kernel::sys::SystemDiagnostics::ram_available_bytes() >> 10;
-            let s = gfx::text::format_u32(free_kb as u32, &mut tmp);
+        DYN_SWAP_USAGE => return "0K",
+        DYN_RADIO_RSSI => {
+            let rssi = ctx.state.rssi_dbm;
+            let mut sbuf = [0u8; 12];
+            let s = gfx::text::format_i32(rssi as i32, &mut sbuf);
             let l = s.len();
             buf[..l].copy_from_slice(s.as_bytes());
-            if l < 14 {
-                buf[l] = b' ';
-                buf[l + 1] = b'K';
-                l + 2
-            } else {
-                l
-            }
-        }
-        DYN_RAM_USED => {
-            let used_kb = kernel::sys::SystemDiagnostics::ram_static_used_bytes() >> 10;
-            let s = gfx::text::format_u32(used_kb as u32, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            l
-        }
-        DYN_STACK_MARGIN => {
-            let val = kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32;
-            let s = gfx::text::format_u32(val, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            l
-        }
-        DYN_STACK_PEAK => {
-            let val = kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as u32;
-            let s = gfx::text::format_u32(val, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            l
-        }
-        DYN_UPTIME => {
-            let s = gfx::text::format_u32(ctx.power.uptime_secs, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            if l < 15 {
-                buf[l] = b's';
-                l + 1
+            let u_len = if l + 3 <= 16 {
+                buf[l..l + 3].copy_from_slice(b"dBm");
+                l + 3
             } else {
                 l
-            }
+            };
+            return core::str::from_utf8(&buf[..u_len]).unwrap_or("");
         }
-        DYN_ACTIVE_PROCS => {
-            let s = gfx::text::format_u32(ctx.proc_table().active_count() as u32, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            l
-        }
+        _ => {}
+    }
+
+    let (val, unit): (u32, &str) = match telem_id {
+        DYN_BATTERY_PCT => (ctx.power.battery_pct.min(100) as u32, "%"),
+        DYN_RAM_FREE => (
+            (kernel::sys::SystemDiagnostics::ram_available_bytes() >> 10) as u32,
+            " K",
+        ),
+        DYN_RAM_USED => (
+            (kernel::sys::SystemDiagnostics::ram_static_used_bytes() >> 10) as u32,
+            "",
+        ),
+        DYN_STACK_MARGIN => (
+            kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32,
+            "",
+        ),
+        DYN_STACK_PEAK => (
+            kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as u32,
+            "",
+        ),
+        DYN_UPTIME => (ctx.power.uptime_secs, "s"),
+        DYN_ACTIVE_PROCS => (ctx.proc_table().active_count() as u32, ""),
         DYN_STORAGE_FREE => {
             #[cfg(feature = "filesystem")]
             let free_kb = (ctx.storage.stats().free_sectors as u32) * 4;
             #[cfg(not(feature = "filesystem"))]
             let free_kb = 0;
-            let s = gfx::text::format_u32(free_kb, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            l
+            (free_kb, "")
         }
-        DYN_RADIO_RSSI => {
-            let rssi = ctx.state.rssi_dbm;
-            let mut sbuf = [0u8; 12];
-            let num = gfx::text::format_i32(rssi as i32, &mut sbuf);
-            let l = num.len();
-            buf[..l].copy_from_slice(num.as_bytes());
-            if l + 3 <= 16 {
-                buf[l..l + 3].copy_from_slice(b"dBm");
-                l + 3
-            } else {
-                l
-            }
-        }
-        DYN_RADIO_FREQ_A => {
-            let mhz = ctx.state.vfo_a.frequency.raw() / 1_000_000;
-            let s = gfx::text::format_u32(mhz, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            l
-        }
-        DYN_RADIO_FREQ_B => {
-            let mhz = ctx.state.vfo_b.frequency.raw() / 1_000_000;
-            let s = gfx::text::format_u32(mhz, &mut tmp);
-            let l = s.len();
-            buf[..l].copy_from_slice(s.as_bytes());
-            l
-        }
-        DYN_SWAP_USAGE => {
-            return "0K";
-        }
+        DYN_RADIO_FREQ_A => (ctx.state.vfo_a.frequency.raw() / 1_000_000, ""),
+        DYN_RADIO_FREQ_B => (ctx.state.vfo_b.frequency.raw() / 1_000_000, ""),
         _ => return "",
     };
 
-    core::str::from_utf8(&buf[..len]).unwrap_or("")
+    let mut tmp = [0u8; 16];
+    let num_str = gfx::text::format_u32(val, &mut tmp);
+    let n_len = num_str.len();
+    buf[..n_len].copy_from_slice(num_str.as_bytes());
+    let u_bytes = unit.as_bytes();
+    let u_len = u_bytes.len().min(16 - n_len);
+    buf[n_len..n_len + u_len].copy_from_slice(&u_bytes[..u_len]);
+    core::str::from_utf8(&buf[..n_len + u_len]).unwrap_or("")
 }
 
 #[inline(always)]
@@ -461,14 +411,7 @@ fn render_table_browser(
                     if p.state != kernel::proc::ProcState::Dormant {
                         if cur == row_idx {
                             found_name = p.name.as_str();
-                            found_state = match p.state {
-                                kernel::proc::ProcState::Running => "RUN",
-                                kernel::proc::ProcState::Ready => "RDY",
-                                kernel::proc::ProcState::Suspended => "SUSP",
-                                kernel::proc::ProcState::ServiceIdle => "IDLE",
-                                kernel::proc::ProcState::Hibernated => "SWAP",
-                                _ => "STOP",
-                            };
+                            found_state = p.state.as_short_str();
                             break;
                         }
                         cur += 1;

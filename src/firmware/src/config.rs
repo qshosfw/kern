@@ -356,54 +356,21 @@ impl MasterConfig {
             repaired |= DIRTY_BATTERY;
         }
 
-        let d = &mut self.display;
-        let def = DisplayConfig::new();
-        if d.version != DisplayConfig::VERSION {
-            *d = def;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.backlight_mode > 5 {
-            d.backlight_mode = def.backlight_mode;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.backlight_max == 0 || d.backlight_max > 10 {
-            d.backlight_max = def.backlight_max;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.backlight_min > 10 {
-            d.backlight_min = def.backlight_min;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.contrast > 100 {
-            d.contrast = def.contrast;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.inverted > 1 {
-            d.inverted = def.inverted;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.boot_splash_anim > 3 {
-            d.boot_splash_anim = def.boot_splash_anim;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.boot_splash_mode > 1 {
-            d.boot_splash_mode = def.boot_splash_mode;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.boot_splash_duration > 4 {
-            d.boot_splash_duration = def.boot_splash_duration;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.shading_mode > 2 {
-            d.shading_mode = def.shading_mode;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.ui_animations > 1 {
-            d.ui_animations = def.ui_animations;
-            repaired |= DIRTY_DISPLAY;
-        }
-        if d.refresh_rate > 3 {
-            d.refresh_rate = def.refresh_rate;
+        if self.display.version != DisplayConfig::VERSION
+            || self.display.backlight_mode > 5
+            || self.display.backlight_max == 0
+            || self.display.backlight_max > 10
+            || self.display.backlight_min > 10
+            || self.display.contrast > 100
+            || self.display.inverted > 1
+            || self.display.boot_splash_anim > 3
+            || self.display.boot_splash_mode > 1
+            || self.display.boot_splash_duration > 4
+            || self.display.shading_mode > 2
+            || self.display.ui_animations > 1
+            || self.display.refresh_rate > 3
+        {
+            self.display = DisplayConfig::new();
             repaired |= DIRTY_DISPLAY;
         }
 

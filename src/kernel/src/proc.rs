@@ -76,6 +76,22 @@ pub enum ProcState {
     Dead,
 }
 
+impl ProcState {
+    #[inline(always)]
+    pub const fn as_short_str(&self) -> &'static str {
+        match self {
+            Self::Dormant => "IDLE",
+            Self::Ready => "RDY",
+            Self::Running => "RUN",
+            Self::Suspended => "SUSP",
+            Self::ServiceIdle => "IDLE",
+            Self::Hibernated => "SWAP",
+            Self::Stopped => "STOP",
+            Self::Dead => "DEAD",
+        }
+    }
+}
+
 /// Process Control Block (PCB)
 ///
 /// Designed with fixed geometry and packed fields to fit within minimal SRAM footprint.
