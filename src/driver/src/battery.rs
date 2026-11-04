@@ -34,14 +34,17 @@ pub struct BatteryDriver {
     pub last_raw_adc: u16,
     pub last_vdda: u16,
     pub last_temp: i16,
-    #[allow(dead_code)]
-    internal_res_m_ohm: u16,
+    pub internal_res_m_ohm: u16,
     pub charge_detect_enabled: bool,
     is_charging: bool,
     charge_counter: u8,
-    tx_recovery_secs: u8,
-    pre_tx_mv: u16,
+    tx_recovery_ticks: u8,
+    pre_tx_ocv: u16,
+    tx_active_prev: bool,
     drift_counter: u8,
+    display_pct: u8,
+    is_low_state: bool,
+    is_critical_state: bool,
     pub warn_threshold_mv: u16,
     pub shut_threshold_mv: u16,
 }
@@ -61,13 +64,17 @@ impl BatteryDriver {
             last_raw_adc: 0,
             last_vdda: 0,
             last_temp: 0,
-            internal_res_m_ohm: 0,
+            internal_res_m_ohm: 180,
             charge_detect_enabled: false,
             is_charging: false,
             charge_counter: 0,
-            tx_recovery_secs: 0,
-            pre_tx_mv: 0,
+            tx_recovery_ticks: 0,
+            pre_tx_ocv: 0,
+            tx_active_prev: false,
             drift_counter: 0,
+            display_pct: 0,
+            is_low_state: false,
+            is_critical_state: false,
             warn_threshold_mv: 6800,
             shut_threshold_mv: 6300,
         }
@@ -87,21 +94,36 @@ impl BatteryDriver {
             last_raw_adc: 0,
             last_vdda: 3300,
             last_temp: 250,
-            internal_res_m_ohm: 150,
+            internal_res_m_ohm: 180,
             charge_detect_enabled: true,
             is_charging: false,
             charge_counter: 0,
-            tx_recovery_secs: 0,
-            pre_tx_mv: 0,
+            tx_recovery_ticks: 0,
+            pre_tx_ocv: 8200,
+            tx_active_prev: false,
             drift_counter: 0,
+            display_pct: 100,
+            is_low_state: false,
+            is_critical_state: false,
             warn_threshold_mv: 6800,
             shut_threshold_mv: 6300,
         }
     }
 
     pub fn set_thresholds(&mut self, warn_mv: u16, shut_mv: u16) {
-        self.warn_threshold_mv = if warn_mv == 0 { 6800 } else { warn_mv };
-        self.shut_threshold_mv = if shut_mv == 0 { 6300 } else { shut_mv };
+        // Enforce physical limits for 2S Li-ion battery pack:
+        // Warn threshold: 6400 mV (3.2V/cell) to 7100 mV (3.55V/cell), default 6800 mV (3.4V/cell)
+        // Shut threshold: 6000 mV (3.0V/cell) to 6500 mV (3.25V/cell), default 6300 mV (3.15V/cell)
+        self.warn_threshold_mv = if (6400..=7100).contains(&warn_mv) {
+            warn_mv
+        } else {
+            6800
+        };
+        self.shut_threshold_mv = if (6000..=6500).contains(&shut_mv) {
+            shut_mv
+        } else {
+            6300
+        };
     }
 
     pub fn set_battery_type(&self, bat_type: BatteryType) {
@@ -170,37 +192,64 @@ impl BatteryDriver {
         self.ocv_mv = shift(self.ocv_mv);
         self.last_mv = shift(self.last_mv);
         self.base_mv = shift(self.base_mv);
-        self.pre_tx_mv = shift(self.pre_tx_mv);
+        self.pre_tx_ocv = shift(self.pre_tx_ocv);
         self.charge_counter = 0;
         self.drift_counter = 0;
+        if self.ocv_mv > 0 {
+            self.display_pct = self.calculate_percentage(self.ocv_mv);
+        }
     }
 
-    /// Calculates dynamic total system current draw in mA based on active hardware peripherals.
-    pub fn estimate_sys_current(periph: &PeripheralState, profile: PowerProfile) -> u16 {
-        let base_mcu = match profile {
-            PowerProfile::Balanced => 14,
+    /// Calculates dynamic total system current draw in mA from measured voltage sag (Thévenin load model)
+    /// without relying on arbitrary hardcoded current tables.
+    pub fn measure_load_ma(
+        v_term: u16,
+        v_ocv: u16,
+        internal_res_m_ohm: u16,
+        _periph: &PeripheralState,
+        profile: PowerProfile,
+    ) -> u16 {
+        // Quiescent base current for MCU and background peripherals
+        let quiescent_ma = match profile {
+            PowerProfile::Balanced => 15,
             PowerProfile::Performance => 22,
             PowerProfile::PowerSave => 8,
             PowerProfile::DeepSleep => 1,
         };
 
-        let backlight_ma = (periph.backlight_level as u16) * 2; // 0..20mA
-        let keypad_ma = if periph.keypad_led { 8 } else { 0 };
-        let audio_ma = if periph.audio_active { 75 } else { 0 };
-
-        let rf_ma = if periph.tx_active {
-            match periph.tx_power_level {
-                0 => 550,  // Low Power (500mW)
-                1 => 1050, // Mid Power (2.5W)
-                _ => 1650, // High Power (5W)
-            }
-        } else if periph.rx_active {
-            90 // Receiver ON
+        let r_int = if internal_res_m_ohm >= 80 {
+            internal_res_m_ohm as u32
         } else {
-            0
+            180
         };
 
-        base_mcu + backlight_ma + keypad_ma + audio_ma + rf_ma
+        if v_term >= v_ocv {
+            return quiescent_ma;
+        }
+
+        let sag_mv = v_ocv.saturating_sub(v_term);
+
+        // Filter out ADC quantization noise floor (~4 mV = ~2 LSBs)
+        if sag_mv <= 4 {
+            return quiescent_ma;
+        }
+
+        let dynamic_ma = ((sag_mv as u32 * 1000) / r_int) as u16;
+        quiescent_ma.saturating_add(dynamic_ma)
+    }
+
+    fn calculate_percentage(&self, ocv: u16) -> u8 {
+        if self.has_calib_curve {
+            let cal = if self.calib_const >= 1000 && self.calib_const <= 3500 {
+                self.calib_const as u32
+            } else {
+                2227
+            };
+            let eff_adc = ((ocv as u32 * cal) / 7600) as u16;
+            calib::calculate_battery_percentage(eff_adc, &self.calib_curve)
+        } else {
+            mv_to_percentage(ocv, self.battery_type.get())
+        }
     }
 
     /// Sample ADC with live responsive EMA filtering matching DeltaFW.
@@ -226,9 +275,10 @@ impl BatteryDriver {
                 self.ocv_mv = raw_mv;
                 self.base_mv = raw_mv;
                 self.last_mv = raw_mv;
+                self.pre_tx_ocv = raw_mv;
+                self.display_pct = self.calculate_percentage(raw_mv);
             } else {
                 self.smoothed_mv = ((self.smoothed_mv as u32 * 7 + raw_mv as u32 + 4) / 8) as u16;
-                self.ocv_mv = self.smoothed_mv;
             }
         }
 
@@ -238,33 +288,56 @@ impl BatteryDriver {
     fn finish_state(
         &mut self,
         raw_adc: u16,
-        _raw_mv: u16,
+        raw_mv: u16,
         periph: &PeripheralState,
         profile: PowerProfile,
     ) -> BatteryState {
-        let sys_ma = Self::estimate_sys_current(periph, profile);
-
         let is_external = self.battery_type.get() == BatteryType::TypeExternal;
+
+        let tx_just_started = periph.tx_active && !self.tx_active_prev;
+        self.tx_active_prev = periph.tx_active;
 
         if !self.charge_detect_enabled || is_external {
             self.is_charging = false;
             self.charge_counter = 0;
             self.base_mv = self.smoothed_mv;
+        } else if tx_just_started {
+            self.pre_tx_ocv = self.ocv_mv;
+            self.tx_recovery_ticks = 125; // 25s post-TX recovery window (at 200ms ticks)
+            self.charge_counter = 0;
         } else if periph.tx_active {
-            if self.tx_recovery_secs == 0 {
-                self.pre_tx_mv = self.smoothed_mv;
+            self.tx_recovery_ticks = 125;
+            self.charge_counter = 0;
+            self.ocv_mv = self.pre_tx_ocv;
+
+            // Refine internal resistance estimate from measured instantaneous raw step sag during TX
+            if self.pre_tx_ocv > raw_mv {
+                let step_sag = self.pre_tx_ocv - raw_mv;
+                let expected_tx_ma: u32 = match periph.tx_power_level {
+                    0 => 500,  // Low Power (~500 mA)
+                    1 => 1000, // Mid Power (~1000 mA)
+                    _ => 1500, // High Power (~1500 mA)
+                };
+                if step_sag >= 50 && step_sag <= 600 {
+                    let r_est = ((step_sag as u32 * 1000) / expected_tx_ma) as u16;
+                    if (100..=500).contains(&r_est) {
+                        self.internal_res_m_ohm =
+                            ((self.internal_res_m_ohm as u32 * 7 + r_est as u32 + 4) / 8) as u16;
+                    }
+                }
             }
-            self.tx_recovery_secs = 125; // 25s post-TX recovery window (at 200ms ticks)
+        } else if self.tx_recovery_ticks > 0 {
+            self.tx_recovery_ticks -= 1;
             self.charge_counter = 0;
-        } else if self.tx_recovery_secs > 0 {
-            self.tx_recovery_secs -= 1;
-            self.charge_counter = 0;
-            if self.smoothed_mv <= self.pre_tx_mv.saturating_add(20) {
+            self.ocv_mv = self.pre_tx_ocv;
+
+            // If terminal voltage has recovered within 15 mV of resting OCV, end recovery early
+            if self.smoothed_mv >= self.pre_tx_ocv.saturating_sub(15) {
+                self.tx_recovery_ticks = 0;
                 self.base_mv = self.smoothed_mv;
-            } else {
-                self.tx_recovery_secs = 0;
             }
         } else {
+            // Normal operation / discharge / charge detection
             const CHARGE_START_DELTA_MV: u16 = 35;
             const CHARGE_STOP_DROP_MV: u16 = 50;
 
@@ -274,6 +347,7 @@ impl BatteryDriver {
                     if self.charge_counter >= 3 {
                         self.is_charging = true;
                         self.base_mv = self.smoothed_mv;
+                        self.ocv_mv = self.smoothed_mv;
                     }
                 } else {
                     self.charge_counter = self.charge_counter.saturating_sub(1);
@@ -286,53 +360,104 @@ impl BatteryDriver {
                             self.drift_counter = 0;
                         }
                     }
+
+                    // Steady-state normal discharge tracking:
+                    // If load sag is small (<= 25 mV), it is normal steady-state discharge.
+                    // Slowly track OCV downwards with a 32-sample EMA (~6.4s time constant at 5 Hz).
+                    if self.smoothed_mv <= self.ocv_mv {
+                        let sag = self.ocv_mv - self.smoothed_mv;
+                        if sag <= 25 {
+                            self.ocv_mv = ((self.ocv_mv as u32 * 31 + self.smoothed_mv as u32 + 16)
+                                / 32) as u16;
+                        }
+                    } else if self.smoothed_mv < self.base_mv.saturating_add(35) {
+                        // Slight upward thermal drift <= 35 mV
+                        self.ocv_mv =
+                            ((self.ocv_mv as u32 * 63 + self.smoothed_mv as u32 + 32) / 64) as u16;
+                    }
                 }
             } else {
+                // Active charging
                 if self.smoothed_mv > self.base_mv {
                     self.base_mv = self.smoothed_mv;
+                    self.ocv_mv = self.smoothed_mv;
                 } else if self.smoothed_mv <= self.base_mv.saturating_sub(CHARGE_STOP_DROP_MV) {
                     self.is_charging = false;
                     self.charge_counter = 0;
                     self.base_mv = self.smoothed_mv;
+                    self.ocv_mv = self.smoothed_mv;
+                } else {
+                    self.ocv_mv = self.smoothed_mv;
                 }
             }
         }
 
         self.last_mv = self.smoothed_mv;
 
-        let percentage = if self.has_calib_curve {
-            let cal = if self.calib_const >= 1000 && self.calib_const <= 3500 {
-                self.calib_const as u32
-            } else {
-                2227
-            };
-            let eff_adc = ((self.smoothed_mv as u32 * cal) / 7600) as u16;
-            calib::calculate_battery_percentage(eff_adc, &self.calib_curve)
+        let raw_pct = self.calculate_percentage(self.ocv_mv);
+
+        // Monotonic SoC Governor:
+        // When discharging, the displayed percentage must never bounce upward due to transient load removal.
+        // When charging or using external power, percentage tracks freely.
+        let percentage = if is_external {
+            100
+        } else if self.is_charging {
+            self.display_pct = raw_pct;
+            raw_pct
         } else {
-            mv_to_percentage(self.smoothed_mv, self.battery_type.get())
+            if raw_pct < self.display_pct {
+                self.display_pct = raw_pct;
+            }
+            self.display_pct
         };
+
         // Debounced Hysteresis State Evaluation:
-        // Exiting low/critical state requires +150 mV margin or active charging to prevent threshold flutter
+        // Exiting low/critical state requires +150 mV margin or active charging to prevent threshold flutter.
+        // Low battery is strictly guarded: percentage must be <= 15% (or <= 20% if OCV is below threshold).
+        // It can NEVER spuriously trigger when battery is healthy (e.g. 77%).
         let warn_limit = self.warn_threshold_mv;
         let shut_limit = self.shut_threshold_mv;
 
-        let is_critical = if is_external {
-            false
+        if raw_adc == 0 || self.smoothed_mv == 0 {
+            self.is_low_state = false;
+            self.is_critical_state = false;
+        } else if is_external {
+            self.is_low_state = false;
+            self.is_critical_state = false;
         } else if self.is_charging {
-            self.smoothed_mv < shut_limit && percentage == 0
+            self.is_critical_state = self.ocv_mv < shut_limit && percentage == 0;
+            self.is_low_state = self.ocv_mv < warn_limit && percentage < 5;
         } else {
-            self.smoothed_mv < shut_limit || percentage == 0
-        };
+            // Critical cutoff evaluation
+            if self.is_critical_state {
+                if self.ocv_mv >= shut_limit.saturating_add(150) && percentage >= 3 {
+                    self.is_critical_state = false;
+                }
+            } else if (self.ocv_mv < shut_limit && percentage <= 5) || percentage == 0 {
+                self.is_critical_state = true;
+            }
 
-        let is_low = if is_external {
-            false
-        } else if is_critical {
-            true
-        } else if self.is_charging {
-            self.smoothed_mv < warn_limit && percentage < 15
-        } else {
-            self.smoothed_mv < warn_limit || percentage < 15
-        };
+            // Low battery warning evaluation
+            if self.is_low_state {
+                if self.ocv_mv >= warn_limit.saturating_add(150) && percentage >= 18 {
+                    self.is_low_state = false;
+                }
+            } else if (self.ocv_mv < warn_limit && percentage <= 20) || percentage <= 15 {
+                self.is_low_state = true;
+            }
+
+            if self.is_critical_state {
+                self.is_low_state = true;
+            }
+        }
+
+        let sys_ma = Self::measure_load_ma(
+            raw_mv,
+            self.ocv_mv,
+            self.internal_res_m_ohm,
+            periph,
+            profile,
+        );
 
         BatteryState {
             raw_adc,
@@ -341,8 +466,8 @@ impl BatteryDriver {
             percentage,
             current_ma: sys_ma,
             is_charging: self.is_charging,
-            is_low,
-            is_critical,
+            is_low: self.is_low_state,
+            is_critical: self.is_critical_state,
         }
     }
 
@@ -355,12 +480,96 @@ impl BatteryDriver {
         if raw_mv > 0 {
             self.smoothed_mv = raw_mv;
             self.ocv_mv = raw_mv;
+            self.pre_tx_ocv = raw_mv;
             if !self.is_charging {
                 self.base_mv = raw_mv;
             }
             self.charge_counter = 0;
+            self.display_pct = self.calculate_percentage(raw_mv);
         }
 
         self.finish_state(raw_adc, raw_mv, periph, profile)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_no_low_battery_at_77_percent() {
+        let mut bat = BatteryDriver::new();
+        // ADC 2305 yields 77% on standard factory calibration curve
+        let raw_adc = 2305u16;
+        let periph = PeripheralState::default();
+        let state = bat.sample(raw_adc, 3300, 250, &periph, PowerProfile::Balanced);
+
+        assert_eq!(state.percentage, 77);
+        assert!(!state.is_low, "Battery at 77% must NOT be flagged as low!");
+        assert!(
+            !state.is_critical,
+            "Battery at 77% must NOT be flagged as critical!"
+        );
+    }
+
+    #[test]
+    fn test_uninitialized_adc_does_not_trigger_low_battery() {
+        let mut bat = BatteryDriver::empty();
+        let periph = PeripheralState::default();
+        let state = bat.sample(0, 0, 0, &periph, PowerProfile::Balanced);
+
+        assert!(!state.is_low, "Uninitialized ADC must not trigger low!");
+        assert!(
+            !state.is_critical,
+            "Uninitialized ADC must not trigger critical!"
+        );
+    }
+
+    #[test]
+    fn test_monotonic_discharge_prevents_bounce() {
+        let mut bat = BatteryDriver::new();
+        let periph = PeripheralState::default();
+
+        // Initial sample at ~79-80% (7900 mV)
+        let adc_high = ((7900u32 * 2227) / 7600) as u16;
+        let s1 = bat.sample(adc_high, 3300, 250, &periph, PowerProfile::Balanced);
+        let initial_pct = s1.percentage;
+        assert!(initial_pct >= 75);
+
+        // Load causes temporary drop to 7600 mV (60%)
+        let adc_load = ((7600u32 * 2227) / 7600) as u16;
+        let s2 = bat.sample(adc_load, 3300, 250, &periph, PowerProfile::Balanced);
+        // Voltage sag under load does not drag down resting OCV immediately
+        assert_eq!(s2.percentage, initial_pct);
+
+        // Load removed, terminal voltage rebounds
+        let s3 = bat.sample(adc_high, 3300, 250, &periph, PowerProfile::Balanced);
+        assert_eq!(s3.percentage, initial_pct);
+    }
+
+    #[test]
+    fn test_dynamic_load_measurement() {
+        let mut bat = BatteryDriver::new();
+        let mut periph = PeripheralState::default();
+
+        // Resting at 8200 mV
+        let adc_rest = ((8200u32 * 2227) / 7600) as u16;
+        let s_rest = bat.sample(adc_rest, 3300, 250, &periph, PowerProfile::Balanced);
+        assert_eq!(s_rest.current_ma, 15); // Quiescent baseline
+
+        // Key TX on High power, causing instantaneous raw voltage sag of 270 mV (to 7930 mV)
+        periph.tx_active = true;
+        periph.tx_power_level = 2;
+        let adc_tx = ((7930u32 * 2227) / 7600) as u16;
+        let s_tx = bat.sample(adc_tx, 3300, 250, &periph, PowerProfile::Balanced);
+
+        // Expected load ~15 + (270 * 1000 / 180) = 1515 mA
+        assert!(
+            s_tx.current_ma >= 1400 && s_tx.current_ma <= 1650,
+            "TX load should measure ~1.5A from physical voltage sag, got {}",
+            s_tx.current_ma
+        );
+        // During TX, percentage remains stable at resting OCV!
+        assert_eq!(s_tx.percentage, s_rest.percentage);
     }
 }

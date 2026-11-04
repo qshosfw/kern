@@ -155,6 +155,7 @@ pub enum MetricId {
 pub enum SettingKind {
     Submenu(PageId),
     Choice(&'static [&'static str]),
+    Shortcut,
     BatteryType,
     Range(&'static RangeDef),
     Toggle,
@@ -317,6 +318,14 @@ impl SettingDef {
         Self {
             title,
             kind: SettingKind::Choice(options),
+            field,
+        }
+    }
+
+    pub const fn shortcut(title: &'static str, field: SettingField) -> Self {
+        Self {
+            title,
+            kind: SettingKind::Shortcut,
             field,
         }
     }

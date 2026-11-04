@@ -248,7 +248,8 @@ fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut 
     }
 
     let pwr = unsafe { &*core::ptr::addr_of!(POWER_SERVICE) };
-    if pwr.is_low() && !pwr.is_charging() && pwr.uptime_secs() > 5 {
+    if pwr.is_low() && !pwr.is_charging() && pwr.uptime_secs() > 5 && pwr.battery_percentage() <= 15
+    {
         *low_batt_warning_timer = low_batt_warning_timer.saturating_add(1);
         if *low_batt_warning_timer >= 30 {
             *low_batt_warning_timer = 0;
@@ -434,11 +435,14 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             let low_bat_edge =
                 unsafe { (*core::ptr::addr_of_mut!(POWER_SERVICE)).poll_low_battery_transition() };
             if low_bat_edge {
-                wake_and_notify_activity(hw);
-                hw.radio
-                    .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
-                crate::orchestrator::compositor::show_low_battery_popup();
-                dirty_render = true;
+                let pwr = unsafe { &*core::ptr::addr_of!(POWER_SERVICE) };
+                if pwr.uptime_secs() >= 3 && pwr.battery_percentage() <= 15 {
+                    wake_and_notify_activity(hw);
+                    hw.radio
+                        .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+                    crate::orchestrator::compositor::show_low_battery_popup();
+                    dirty_render = true;
+                }
             }
 
             // Kernel Safeguard: Critical Battery Cutoff & Low Power Sleep Mode

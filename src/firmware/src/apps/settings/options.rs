@@ -48,6 +48,15 @@ fn build_item_type(def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8
                 options: opts,
             }
         }
+        SettingKind::Shortcut => {
+            let raw_byte = def.field.get_u8(&ctx.config);
+            let sel = (raw_byte as usize)
+                .min(super::buttons::SHORTCUT_OPTIONS.len().saturating_sub(1)) as u16;
+            MenuItemType::Choice {
+                selected: sel,
+                options: &super::buttons::SHORTCUT_OPTIONS,
+            }
+        }
         SettingKind::BatteryType => {
             let (opts, types) = super::battery::battery_options_and_types(nav_layout);
             let raw_byte = def.field.get_u8(&ctx.config);

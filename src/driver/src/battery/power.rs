@@ -132,7 +132,12 @@ impl SystemPower {
             self.charging_stopped = true;
         }
 
-        if !prev_low && self.is_low && !self.is_charging {
+        if !prev_low
+            && self.is_low
+            && !self.is_charging
+            && self.battery_mv > 0
+            && self.battery_pct <= 15
+        {
             self.low_bat_transition = true;
         }
     }
