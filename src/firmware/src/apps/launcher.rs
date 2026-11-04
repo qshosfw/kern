@@ -326,7 +326,8 @@ impl LauncherApp {
 
             // Right arrow on selected row (vertically centered at y+3, oscillating horizontal animation)
             if is_sel {
-                let offset = match (self.model.tick_counter >> 1) % 6 {
+                let now_ms = py32_hal::delay::millis();
+                let offset = match ((now_ms / 80) % 6) as u8 {
                     0 => 0,
                     1 => 1,
                     2 => 2,

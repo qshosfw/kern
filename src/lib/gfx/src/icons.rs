@@ -17,6 +17,7 @@ pub const ICON_FLASHLIGHT: [u8; 8] = [0x00, 0x1C, 0x3E, 0x1C, 0x1C, 0x1C, 0x1C, 
 pub const ICON_MESH: [u8; 8] = [0x00, 0x24, 0x66, 0xE7, 0xE7, 0x66, 0x24, 0x00];
 pub const ICON_PLUG: [u8; 8] = [0x00, 0x36, 0x36, 0x7F, 0x7F, 0x3E, 0x08, 0x08];
 pub const ICON_BOLT: [u8; 8] = [0x0C, 0x18, 0x30, 0x7E, 0x0C, 0x18, 0x10, 0x00];
+pub const ICON_MOON: [u8; 8] = [0x0E, 0x1C, 0x38, 0x70, 0x70, 0x38, 0x1C, 0x0E];
 
 // 5x5 Compact Status Bar Glyph Bitmaps (1 byte per row, top 5 bits used)
 pub const ICON_LOCK_5X5: [u8; 5] = [0b01110000, 0b10001000, 0b11111000, 0b11111000, 0b11111000];
@@ -99,6 +100,7 @@ pub enum Icon {
     Roger,
     Beep,
     NoListen,
+    Moon,
 }
 
 impl Icon {
@@ -124,6 +126,7 @@ pub fn draw_icon(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) 
         Icon::Function => &ICON_KEYPAD,
         Icon::Plug | Icon::SerialActive => &ICON_PLUG,
         Icon::Bolt => &ICON_BOLT,
+        Icon::Moon => &ICON_MOON,
         _ => &ICON_ANTENNA,
     };
     draw::draw_bitmap(canvas, x, y, 8, 8, bmp, color);

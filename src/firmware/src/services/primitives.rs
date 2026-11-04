@@ -249,16 +249,7 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
 
     fn set_modulation(&mut self, mod_type: u8) {
         use kernel::service::radio::ModulationMode;
-        let mode = match mod_type {
-            1 => ModulationMode::Am,
-            2 => ModulationMode::AmB,
-            3 => ModulationMode::Usb,
-            4 => ModulationMode::Cw,
-            5 => ModulationMode::Wfm,
-            6 => ModulationMode::Raw,
-            7 => ModulationMode::PktFm,
-            _ => ModulationMode::Fm,
-        };
+        let mode = ModulationMode::from_u8(mod_type);
         self.state.coord.active_channel_mut().modulation = mode;
         RfModulation::set_modulation(self.radio, mode);
     }

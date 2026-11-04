@@ -12,6 +12,7 @@ pub mod squelch;
 pub mod tone;
 pub mod tone_gen;
 pub mod tuner;
+pub mod vernier;
 pub mod vox;
 
 pub use af::*;
@@ -26,6 +27,7 @@ pub use squelch::*;
 pub use tone::*;
 pub use tone_gen::*;
 pub use tuner::*;
+pub use vernier::*;
 pub use vox::*;
 
 /// Full composite RF Radio Service contract combining granular facets with audio, AGC, and tone generation.

@@ -21,6 +21,7 @@ pub const PROP_RADIO_SCAN_STATE: u16 = 0x0009;
 pub const PROP_RADIO_PTT_ACTIVE: u16 = 0x000A;
 pub const PROP_RADIO_BATTERY_MV: u16 = 0x000B;
 pub const PROP_RADIO_RSSI_DBM: u16 = 0x000C;
+pub const PROP_RADIO_FINE_OFFSET_DHZ: u16 = 0x000D;
 
 // System Properties (Component 0x00)
 pub const PROP_SYS_UPTIME_MS: u16 = 0x0020;

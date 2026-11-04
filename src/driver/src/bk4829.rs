@@ -122,6 +122,7 @@ pub struct Bk4829<'a, State = Disabled> {
     pub(crate) squelch_level: u8,
     pub(crate) squelch_open: bool,
     pub(crate) subaudible_matched: bool,
+    pub(crate) baseline_xtal_trim: i16,
     pub(crate) _state: PhantomData<State>,
 }
 
@@ -339,6 +340,7 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_xtal_freq_trim(&mut self, trim: i16) {
+        self.baseline_xtal_trim = trim;
         self.set_crystal_trim(trim);
     }
 
@@ -639,6 +641,7 @@ impl<'a> Bk4829<'a, Disabled> {
             squelch_level: 4,
             squelch_open: false,
             subaudible_matched: false,
+            baseline_xtal_trim: 0,
             _state: PhantomData,
         }
     }
@@ -729,6 +732,7 @@ impl<'a> Bk4829<'a, Disabled> {
             squelch_level: self.squelch_level,
             squelch_open: self.squelch_open,
             subaudible_matched: self.subaudible_matched,
+            baseline_xtal_trim: self.baseline_xtal_trim,
             _state: PhantomData,
         }
     }
@@ -759,6 +763,7 @@ impl<'a> Bk4829<'a, Disabled> {
             squelch_level: self.squelch_level,
             squelch_open: self.squelch_open,
             subaudible_matched: self.subaudible_matched,
+            baseline_xtal_trim: self.baseline_xtal_trim,
             _state: PhantomData,
         }
     }
@@ -788,6 +793,7 @@ impl<'a> Bk4829<'a, Receiving> {
             squelch_level: self.squelch_level,
             squelch_open: self.squelch_open,
             subaudible_matched: self.subaudible_matched,
+            baseline_xtal_trim: self.baseline_xtal_trim,
             _state: PhantomData,
         }
     }
@@ -817,6 +823,7 @@ impl<'a> Bk4829<'a, Transmitting> {
             squelch_level: self.squelch_level,
             squelch_open: self.squelch_open,
             subaudible_matched: self.subaudible_matched,
+            baseline_xtal_trim: self.baseline_xtal_trim,
             _state: PhantomData,
         }
     }
@@ -918,8 +925,9 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
                 self.write_reg(REG_FILTERS, reg2b | (1 << 8)); // Disable RX de-emphasis
                 self.set_agc(true);
             }
-            kernel::service::radio::ModulationMode::PktFm => {
-                // Packet Flat FM: zero de-emphasis/pre-emphasis, flat audio passband for TNC/FT8/APRS
+            kernel::service::radio::ModulationMode::PktFm
+            | kernel::service::radio::ModulationMode::Dig => {
+                // Packet Flat FM / Digital Mode: zero de-emphasis/pre-emphasis, flat audio passband
                 reg40 &= !0x1000; // FM mode
                 reg40 &= !(0b11 << 14); // Compander off
                 self.write_reg(REG_MODULATION, reg40);
@@ -1401,6 +1409,33 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
 
     fn get_crystal_trim(&mut self) -> i16 {
         (self.cache.read(REG_XTAL_TRIM) & 0x00FF) as i16
+    }
+
+    fn set_sub_hz_offset(&mut self, carrier_hz: u32, offset_dhz: i16) {
+        if offset_dhz == 0 {
+            self.set_crystal_trim(self.baseline_xtal_trim);
+            let (low, high) = tuning::calculate_pll_dividers(Frequency::new(carrier_hz));
+            self.write_reg(REG_PLL_LOW, low);
+            self.write_reg(REG_PLL_HIGH, high);
+            return;
+        }
+
+        let res = kernel::service::radio::vernier::solve_vernier(carrier_hz, offset_dhz);
+        let final_trim =
+            (self.baseline_xtal_trim as i32 + res.xtal_trim_offset as i32).clamp(-300, 300) as i16;
+        self.set_crystal_trim(final_trim);
+
+        let nominal_10hz = (carrier_hz / 10) as i32;
+        let adjusted_10hz = nominal_10hz + res.pll_comp_10hz as i32;
+        let low = (adjusted_10hz & 0xFFFF) as u16;
+        let high = ((adjusted_10hz >> 16) & 0xFFFF) as u16;
+        self.write_reg(REG_PLL_LOW, low);
+        self.write_reg(REG_PLL_HIGH, high);
+
+        // Toggle REG_SYS_POWER to re-sync PLL lock across trim changes (PR 271)
+        let reg30 = self.read_reg(REG_SYS_POWER);
+        self.write_reg(REG_SYS_POWER, 0);
+        self.write_reg(REG_SYS_POWER, reg30);
     }
 }
 

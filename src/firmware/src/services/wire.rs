@@ -13,7 +13,9 @@
 use crate::hardware::SystemHardware;
 use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
 use crate::services::storage::DirEntryInfo;
-use kernel::service::{PowerService, RfSquelch};
+use kernel::service::{
+    ModulationMode, PowerService, RfFineTuning, RfModulation, RfPowerSequencer, RfSquelch,
+};
 use kernel::wire::*;
 use utils::units::Frequency;
 
@@ -194,6 +196,37 @@ fn on_control_state_get(
                     val_buf[..2].copy_from_slice(&rssi.to_le_bytes());
                     2
                 }
+                PROP_RADIO_MODULATION_MODE => {
+                    let m = match vfo.mod_type {
+                        "AM" => 1,
+                        "AMB" => 2,
+                        "USB" => 3,
+                        "DSB" => 4,
+                        "CW" => 5,
+                        "WFM" => 6,
+                        "PKT" => 7,
+                        "DIG" => 8,
+                        "RAW" => 9,
+                        "BYP" => 10,
+                        _ => 0,
+                    };
+                    val_buf[0] = m;
+                    1
+                }
+                PROP_RADIO_BANDWIDTH_HZ => {
+                    let bw_hz: u32 = match vfo.bw {
+                        "W" => 25_000,
+                        "N" => 12_500,
+                        "VN" => 6_250,
+                        _ => 12_500,
+                    };
+                    val_buf[..4].copy_from_slice(&bw_hz.to_le_bytes());
+                    4
+                }
+                PROP_RADIO_FINE_OFFSET_DHZ => {
+                    val_buf[..2].copy_from_slice(&0i16.to_le_bytes());
+                    2
+                }
                 _ => 0,
             }
         }
@@ -306,6 +339,46 @@ fn on_control_state_set(header: &WireHeader, payload: &[u8], hw: &mut SystemHard
                         WireStatus::BadLength
                     }
                 }
+                PROP_RADIO_MODULATION_MODE => {
+                    if let Some(&m) = val.first() {
+                        let mode = ModulationMode::from_u8(m);
+                        let vfo = radio_state.selected_vfo_mut();
+                        vfo.mod_type = mode.as_str();
+                        hw.radio.set_modulation(mode);
+                        WireStatus::Ok
+                    } else {
+                        WireStatus::BadLength
+                    }
+                }
+                PROP_RADIO_FINE_OFFSET_DHZ => {
+                    if val.len() >= 2 {
+                        let offset_dhz = i16::from_le_bytes([val[0], val[1]]);
+                        let vfo = radio_state.selected_vfo();
+                        hw.radio.set_sub_hz_offset(vfo.frequency.raw(), offset_dhz);
+                        WireStatus::Ok
+                    } else {
+                        WireStatus::BadLength
+                    }
+                }
+                PROP_RADIO_PTT_ACTIVE => {
+                    if let Some(&tx_req) = val.first() {
+                        let vfo = radio_state.selected_vfo_mut();
+                        let should_tx = tx_req != 0;
+                        vfo.tx_active = should_tx;
+                        if should_tx {
+                            hw.radio.tx_prepare();
+                            hw.radio.tx_ramp_up(1);
+                            hw.radio.tx_unmute();
+                        } else {
+                            hw.radio.tx_mute();
+                            hw.radio.tx_ramp_down();
+                            hw.radio.tx_conclude();
+                        }
+                        WireStatus::Ok
+                    } else {
+                        WireStatus::BadLength
+                    }
+                }
                 _ => WireStatus::UnsupportedField,
             }
         }
@@ -362,6 +435,22 @@ fn on_control_action_invoke(header: &WireHeader, payload: &[u8], hw: &mut System
             ACTION_VFO_TOGGLE => {
                 let radio_state = crate::radio_state();
                 radio_state.active_vfo = 1 - radio_state.active_vfo;
+                WireStatus::Ok
+            }
+            ACTION_PTT_TRANSMIT => {
+                let start_tx = req.action_params.first().copied().unwrap_or(0) != 0;
+                let radio_state = crate::radio_state();
+                let vfo = radio_state.selected_vfo_mut();
+                vfo.tx_active = start_tx;
+                if start_tx {
+                    hw.radio.tx_prepare();
+                    hw.radio.tx_ramp_up(1);
+                    hw.radio.tx_unmute();
+                } else {
+                    hw.radio.tx_mute();
+                    hw.radio.tx_ramp_down();
+                    hw.radio.tx_conclude();
+                }
                 WireStatus::Ok
             }
             _ => WireStatus::Unsupported,

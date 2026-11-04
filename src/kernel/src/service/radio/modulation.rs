@@ -6,25 +6,54 @@ use super::squelch::SquelchType;
 
 /// Modulation and demodulation schemes supported across radio receivers and transmitters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum ModulationMode {
-    Fm,
-    Am,
+    /// Narrowband Frequency Modulation (standard analog voice)
+    Fm = 0,
+    /// Amplitude Modulation (standard envelope detection)
+    Am = 1,
     /// AM with active Baseband Demodulator & AGC correction (IJV FW5 / DeltaFW AMB).
-    AmB,
-    Usb,
-    Dsb,
-    Cw,
+    AmB = 2,
+    /// Upper Sideband (SSB DSP envelope / BFO offset).
+    Usb = 3,
+    /// Double Sideband.
+    Dsb = 4,
+    /// Continuous Wave (Morse code / carrier keying).
+    Cw = 5,
     /// Broadcast Wide FM (demodulator bypass filter).
-    Wfm,
-    /// Demodulator bypass (raw baseband tapped for decoders / pin PB1).
-    Byp,
+    Wfm = 6,
+    /// Packet Flat FM (de-emphasis/pre-emphasis bypassed, 20Hz..6kHz flat response for Direwolf/TNC/APRS).
+    PktFm = 7,
+    /// Direct Digital Carrier Modulation (Sub-Hz Fractional-N Vernier M-FSK: FT8, WSPR, JS8Call, narrow FSK).
+    Dig = 8,
     /// Raw discriminator audio.
-    Raw,
-    /// Packet Flat FM (de-emphasis/pre-emphasis bypassed, 20Hz..6kHz flat response for Direwolf/TNC/FT8/APRS).
-    PktFm,
+    Raw = 9,
+    /// Demodulator bypass (raw baseband tapped for decoders / pin PB1).
+    Byp = 10,
 }
 
 impl ModulationMode {
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Fm,
+            1 => Self::Am,
+            2 => Self::AmB,
+            3 => Self::Usb,
+            4 => Self::Dsb,
+            5 => Self::Cw,
+            6 => Self::Wfm,
+            7 => Self::PktFm,
+            8 => Self::Dig,
+            9 => Self::Raw,
+            10 => Self::Byp,
+            _ => Self::Fm,
+        }
+    }
+
+    pub const fn to_u8(self) -> u8 {
+        self as u8
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Fm => "FM",
@@ -34,9 +63,10 @@ impl ModulationMode {
             Self::Dsb => "DSB",
             Self::Cw => "CW",
             Self::Wfm => "WFM",
-            Self::Byp => "BYP",
+            Self::PktFm => "PKT",
+            Self::Dig => "DIG",
             Self::Raw => "RAW",
-            Self::PktFm => "PKTFM",
+            Self::Byp => "BYP",
         }
     }
 
@@ -171,6 +201,22 @@ impl ModulationMode {
                 agc_speed: AgcSpeed::Fast,
                 bfo_offset_hz: 0,
                 default_step_hz: 12_500,
+            },
+            Self::Dig => ModulationProfile {
+                mode: Self::Dig,
+                default_bandwidth: Bandwidth::Narrow6k25,
+                af_response: AfResponse {
+                    rx_300: -4,
+                    rx_3k: -4,
+                    tx_300: -4,
+                    tx_3k: -4,
+                },
+                audio_routing: AudioRoutingPolicy::BasebandModem,
+                squelch_type: SquelchType::Carrier,
+                agc_mode: AgcListeningMode::Fm,
+                agc_speed: AgcSpeed::Fast,
+                bfo_offset_hz: 0,
+                default_step_hz: 10,
             },
             Self::Raw => ModulationProfile {
                 mode: Self::Raw,

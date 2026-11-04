@@ -841,19 +841,7 @@ impl RadioCoordinator {
         } else {
             Bandwidth::Narrow12k5
         };
-        ch.modulation = match rec.modulation {
-            1 => ModulationMode::Am,
-            2 => ModulationMode::AmB,
-            3 => ModulationMode::Usb,
-            4 => ModulationMode::Dsb,
-            5 => ModulationMode::Dsb,
-            6 => ModulationMode::Cw,
-            7 => ModulationMode::Wfm,
-            8 => ModulationMode::PktFm,
-            9 => ModulationMode::Raw,
-            10 => ModulationMode::Byp,
-            _ => ModulationMode::Fm,
-        };
+        ch.modulation = ModulationMode::from_u8(rec.modulation);
         ch.power = if rec.power_mw == 0 || rec.power_mw >= 4000 {
             RfPowerLevel::High
         } else if rec.power_mw >= 1500 {
@@ -895,18 +883,7 @@ impl RadioCoordinator {
             Bandwidth::Narrow6k25 => 125, // 6.25 kHz
             Bandwidth::Narrow12k5 => 250, // 12.5 kHz
         };
-        rec.modulation = match ch.modulation {
-            ModulationMode::Fm => 0,
-            ModulationMode::Am => 1,
-            ModulationMode::AmB => 2,
-            ModulationMode::Usb => 3,
-            ModulationMode::Dsb => 5,
-            ModulationMode::Cw => 6,
-            ModulationMode::Wfm => 7,
-            ModulationMode::PktFm => 8,
-            ModulationMode::Raw => 9,
-            ModulationMode::Byp => 10,
-        };
+        rec.modulation = ch.modulation.to_u8();
         rec.power_mw = match ch.power {
             RfPowerLevel::Low => 500,
             RfPowerLevel::Medium => 2000,

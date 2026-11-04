@@ -126,6 +126,36 @@ impl<S: SerialPort> WireDriver<S> {
                 );
             }
 
+            OP_CORE_GET_STATUS => {
+                let mut resp = [0u8; 8];
+                resp[0] = 0; // system state: 0 = Ready / Idle
+                resp[1] = 0; // flags
+                resp[2..4].copy_from_slice(&8400u16.to_le_bytes()); // nominal battery mV
+                resp[4..8].copy_from_slice(&uptime_ms.to_le_bytes());
+
+                let _ = self.send_response(
+                    SERVICE_CORE,
+                    OP_CORE_GET_STATUS,
+                    header.sequence,
+                    WireStatus::Ok,
+                    &resp,
+                );
+            }
+
+            OP_CORE_GET_RESULT => {
+                let mut resp = [0u8; 5];
+                resp[0] = WireStatus::Ok.to_u8();
+                resp[1..5].copy_from_slice(&header.sequence.to_le_bytes());
+
+                let _ = self.send_response(
+                    SERVICE_CORE,
+                    OP_CORE_GET_RESULT,
+                    header.sequence,
+                    WireStatus::Ok,
+                    &resp,
+                );
+            }
+
             OP_CORE_REBOOT => {
                 let _ = self.send_response(
                     SERVICE_CORE,
@@ -135,6 +165,45 @@ impl<S: SerialPort> WireDriver<S> {
                     &[],
                 );
                 cortex_m::peripheral::SCB::sys_reset();
+            }
+
+            OP_CORE_TIME_SYNC => {
+                let host_tx_us = if payload.len() >= 4 {
+                    u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]])
+                } else {
+                    0
+                };
+                let dev_rx_us = py32_hal::time::now_us();
+                let dev_tx_us = py32_hal::time::now_us();
+
+                let mut resp = [0u8; 16];
+                resp[0..4].copy_from_slice(&host_tx_us.to_le_bytes());
+                resp[4..8].copy_from_slice(&dev_rx_us.to_le_bytes());
+                resp[8..12].copy_from_slice(&dev_tx_us.to_le_bytes());
+                resp[12..16].copy_from_slice(&uptime_ms.to_le_bytes());
+
+                let _ = self.send_response(
+                    SERVICE_CORE,
+                    OP_CORE_TIME_SYNC,
+                    header.sequence,
+                    WireStatus::Ok,
+                    &resp,
+                );
+            }
+
+            OP_CORE_GET_TIME => {
+                let now_us = py32_hal::time::now_us();
+                let mut resp = [0u8; 8];
+                resp[0..4].copy_from_slice(&now_us.to_le_bytes());
+                resp[4..8].copy_from_slice(&uptime_ms.to_le_bytes());
+
+                let _ = self.send_response(
+                    SERVICE_CORE,
+                    OP_CORE_GET_TIME,
+                    header.sequence,
+                    WireStatus::Ok,
+                    &resp,
+                );
             }
 
             _ => {

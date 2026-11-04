@@ -193,4 +193,7 @@ pub trait RfFineTuning {
     fn set_pll_offset_10hz(&mut self, offset_10hz: i16);
     /// Get the active crystal trim word.
     fn get_crystal_trim(&mut self) -> i16;
+    /// Set sub-Hz frequency offset relative to nominal carrier using Vernier calculation.
+    /// `offset_dhz`: desired offset in deci-Hertz (0.1 Hz increments, e.g. +62 = +6.2 Hz, -1700 = -170 Hz).
+    fn set_sub_hz_offset(&mut self, carrier_hz: u32, offset_dhz: i16);
 }

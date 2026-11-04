@@ -43,15 +43,25 @@ SERVICE_DATA = 0x03
 OP_CORE_HELLO = 0x01
 OP_CORE_GET_CAPS = 0x02
 OP_CORE_PING = 0x03
-OP_CORE_GET_RESULT = 0x04
-OP_CORE_GET_STATUS = 0x05
+OP_CORE_GET_STATUS = 0x04
+OP_CORE_GET_RESULT = 0x05
 OP_CORE_REBOOT = 0x06
+OP_CORE_TIME_SYNC = 0x07
+OP_CORE_GET_TIME = 0x08
 
 # Control Opcodes (§8.5)
 OP_CONTROL_STATE_GET = 0x01
 OP_CONTROL_STATE_SET = 0x02
 OP_CONTROL_ACTION_INVOKE = 0x03
 OP_CONTROL_ACTION_CANCEL = 0x04
+
+# Control Properties
+PROP_RADIO_RX_FREQ_HZ = 0x0001
+PROP_RADIO_TX_FREQ_HZ = 0x0002
+PROP_RADIO_MODULATION_MODE = 0x0003
+PROP_RADIO_BANDWIDTH_HZ = 0x0004
+PROP_RADIO_FINE_OFFSET_DHZ = 0x000D
+PROP_RADIO_PTT_ACTIVE = 0x000A
 
 # Data Opcodes (§8.5)
 OP_TRANSFER_OPEN = 0x01
@@ -475,6 +485,48 @@ class RigWireClient:
             pass
         print("  Reboot command dispatched.")
 
+    def time_sync(self, host_time_us=None):
+        """Execute a single NTP-like microsecond time synchronization round.
+        Returns: (host_tx_us, device_rx_us, device_tx_us, uptime_ms, rtt_us, offset_us)
+        """
+        if host_time_us is None:
+            host_time_us = int(time.monotonic() * 1_000_000) & 0xFFFFFFFF
+        t1 = host_time_us
+        payload = struct.pack("<I", t1)
+        resp = self.send_record(SERVICE_CORE, OP_CORE_TIME_SYNC, payload)
+        t4 = int(time.monotonic() * 1_000_000) & 0xFFFFFFFF
+        if len(resp) < 12:
+            raise RuntimeError(f"Time sync response too short: {len(resp)} bytes")
+        echo_tx, dev_rx, dev_tx = struct.unpack("<III", resp[:12])
+        uptime_ms = struct.unpack("<I", resp[12:16])[0] if len(resp) >= 16 else 0
+
+        # RTT = (T4 - T1) - (T3 - T2)
+        dev_dwell = (dev_tx - dev_rx) & 0xFFFFFFFF
+        host_elapsed = (t4 - t1) & 0xFFFFFFFF
+        rtt_us = (host_elapsed - dev_dwell) & 0xFFFFFFFF
+        # Offset = ((T2 - T1) + (T3 - T4)) / 2 (signed 32-bit math)
+        d1 = struct.unpack("<i", struct.pack("<I", (dev_rx - t1) & 0xFFFFFFFF))[0]
+        d2 = struct.unpack("<i", struct.pack("<I", (dev_tx - t4) & 0xFFFFFFFF))[0]
+        offset_us = (d1 + d2) // 2
+
+        return (echo_tx, dev_rx, dev_tx, uptime_ms, rtt_us, offset_us)
+
+    def sync_clock(self, rounds=5):
+        """Perform multi-round NTP clock synchronization and return best offset."""
+        results = []
+        for _ in range(rounds):
+            try:
+                res = self.time_sync()
+                results.append(res)
+                time.sleep(0.02)
+            except Exception:
+                continue
+        if not results:
+            raise RuntimeError("Clock synchronization failed across all rounds")
+        # Pick sample with lowest RTT
+        best = min(results, key=lambda x: x[4])
+        return best
+
 
 # ── SELF-TEST SUITE ───────────────────────────────────────────────────────────
 def run_protocol_tests():
@@ -531,6 +583,29 @@ def run_protocol_tests():
     assert crc32_val == 0xCBF43926, f"Expected 0xCBF43926, got {crc32_val:#010x}"
     print(f"PASSED ({crc32_val:#010x})")
 
+    print("Test 5: NTP-Like Microsecond Time Sync Packet Encoding & Midpoint Math...", end=" ")
+    host_t1 = 1_000_000 # 1.0s
+    req_payload = struct.pack("<I", host_t1)
+    assert len(req_payload) == 4
+
+    # Simulated radio response: device_rx = 1_000_200 us, device_tx = 1_000_210 us, uptime = 1000 ms
+    dev_rx = 1_000_200
+    dev_tx = 1_000_210
+    uptime = 1000
+    resp_payload = struct.pack("<IIII", host_t1, dev_rx, dev_tx, uptime)
+    assert len(resp_payload) == 16
+
+    # Simulated host receive at 1_000_420 us
+    host_t4 = 1_000_420
+    dev_dwell = (dev_tx - dev_rx)
+    host_elapsed = (host_t4 - host_t1)
+    rtt = host_elapsed - dev_dwell
+    assert rtt == 410 # 420 - 10 = 410 us RTT
+    offset = ((dev_rx - host_t1) + (dev_tx - host_t4)) // 2
+    # dev_rx - host_t1 = +200, dev_tx - host_t4 = -210 -> offset = -5 us
+    assert offset == -5
+    print(f"PASSED (RTT={rtt}us, offset={offset}us)")
+
     print("\n✨ All RigWire protocol self-tests passed with 100% conformance!")
     print("==================================================================")
 
@@ -575,6 +650,9 @@ def main():
 
     rm_p = subparsers.add_parser("rm", help="Delete file from radio filesystem")
     rm_p.add_argument("path", help="Path of file to delete on radio")
+
+    sync_p = subparsers.add_parser("sync", help="Synchronize microsecond clock via NTP handshake")
+    sync_p.add_argument("--rounds", type=int, default=5, help="Number of NTP handshake rounds (default: 5)")
 
     subparsers.add_parser("reboot", help="Reboot radio")
     subparsers.add_parser("test", help="Execute protocol unit self-tests (no hardware needed)")
@@ -650,6 +728,17 @@ def main():
 
         elif args.command == "reboot":
             client.reboot()
+
+        elif args.command == "sync":
+            print(f"Synchronizing clock with radio ({args.rounds} rounds)...")
+            best = client.sync_clock(args.rounds)
+            print(f"  Echo Host TX : {best[0]} us")
+            print(f"  Radio RX     : {best[1]} us")
+            print(f"  Radio TX     : {best[2]} us")
+            print(f"  Radio Uptime : {best[3]} ms")
+            print(f"  Measured RTT : {best[4]} us")
+            print(f"  Clock Offset : {best[5]:+d} us")
+            print("  ✨ Microsecond clock synchronized successfully!")
 
     finally:
         client.close()

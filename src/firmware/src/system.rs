@@ -4,7 +4,7 @@ use crate::hardware::SystemHardware;
 use crate::services::RadioMelodyExt;
 use crate::services::power::PowerService;
 use crate::{EVENT_QUEUE, POWER_SERVICE};
-use kernel::event::{Event, KeyCode, KeyState};
+use kernel::event::{Event, KeyCode};
 use kernel::service::SerialPort;
 use py32_hal::adc::Adc;
 
@@ -21,6 +21,77 @@ pub fn dequeue_event() -> Option<Event> {
 #[inline(always)]
 fn wake_and_notify_activity(hw: &mut SystemHardware) {
     hw.backlight.wake();
+    unsafe {
+        (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
+    }
+    hw.orchestrator.notify_activity();
+}
+
+#[inline(never)]
+fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
+    // 1. Play gentle descending power-down cue
+    hw.radio
+        .play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
+    py32_hal::delay::delay_ms(100);
+
+    // 2. Shut down power-hungry subsystems
+    hw.backlight.turn_off();
+    hw.lcd.turn_off();
+    hw.audio.disable();
+    hw.radio.sleep();
+    hw.radio.set_status_led(bsp::StatusLed::Off);
+
+    // 3. Mark power service profile as deep sleep
+    unsafe {
+        (*core::ptr::addr_of_mut!(POWER_SERVICE)).enter_deep_sleep();
+    }
+
+    // 4. Wait for key release before entering sleep loop to prevent immediate wake
+    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+        py32_hal::wdt::Watchdog::feed();
+        py32_hal::delay::delay_ms(10);
+    }
+    drivers::keyboard::KeypadScanner::reset_gpio_pins();
+
+    // 5. Deep Sleep Retention Loop (WFI / Low-Power sleep)
+    // Feeds watchdog periodically while keeping all displays, audio PA, and RF powered down.
+    // Wakes cleanly on ANY physical keypress or PTT.
+    loop {
+        py32_hal::wdt::Watchdog::feed();
+
+        if drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+            break;
+        }
+
+        cortex_m::asm::wfi();
+    }
+
+    // 6. Wakeup & Hardware Restoration
+    // Ensure clock tree is solid at 48 MHz
+    py32_hal::rcc::set_sysclk_48mhz();
+
+    // Re-initialize LCD panel and clear dirty state
+    hw.lcd.init();
+    let canvas = crate::system_canvas();
+    canvas.mark_all_dirty();
+    hw.lcd.blit(canvas);
+
+    // Wake RF modem and backlight
+    hw.radio.wake();
+    hw.backlight.wake();
+
+    // Restore volume and hardware audio settings
+    crate::hardware::apply_audio_hardware(
+        &crate::master_config_ref().audio,
+        &mut hw.audio,
+        &mut hw.radio,
+    );
+
+    // Sound unlock confirmation chime
+    hw.radio
+        .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+
+    // Reset power service inactivity tracking
     unsafe {
         (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
     }
@@ -165,15 +236,14 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             hw.key_scanner.scan_with_dt(dt);
             while let Some((code, state)) = hw.key_scanner.pop_event() {
                 let is_locked = hw.orchestrator.is_keypad_locked();
-                let should_wake =
-                    !is_locked || state == KeyState::Pressed || matches!(code, KeyCode::Ptt);
+                let should_wake = !is_locked || matches!(code, KeyCode::Ptt);
 
                 if should_wake {
                     hw.backlight.wake();
                     unsafe {
                         (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
                     }
-                } else if hw.backlight.is_active() {
+                } else if hw.backlight.is_active() && !is_locked {
                     unsafe {
                         (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
                     }
@@ -267,6 +337,17 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             last_tick = now;
             handle_one_second_tick(hw, &mut low_batt_warning_timer);
             dirty_render = true;
+
+            // Auto-Power-Off (APO) timeout -> automatically enter deep sleep
+            let apo_fired = unsafe {
+                let pwr = &mut *core::ptr::addr_of_mut!(POWER_SERVICE);
+                let fired = pwr.apo_triggered;
+                pwr.apo_triggered = false;
+                fired
+            };
+            if apo_fired {
+                handle_deep_sleep_mode(hw);
+            }
         }
 
         while let Some(ev) = dequeue_event() {
@@ -281,6 +362,12 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
                     dirty_render = true;
                 }
             }
+        }
+
+        // Check if deep sleep mode was requested (e.g. via long-press Exit)
+        if hw.orchestrator.take_sleep_requested() {
+            handle_deep_sleep_mode(hw);
+            dirty_render = true;
         }
 
         // Render loop

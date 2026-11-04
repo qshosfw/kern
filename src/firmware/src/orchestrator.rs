@@ -215,6 +215,12 @@ impl Orchestrator {
         self.lock_mgr.toggle_lock();
     }
 
+    pub fn take_sleep_requested(&mut self) -> bool {
+        let req = self.lock_mgr.sleep_requested;
+        self.lock_mgr.sleep_requested = false;
+        req
+    }
+
     pub fn active_app_id(&self) -> usize {
         self.active_app_id
     }
@@ -337,17 +343,6 @@ impl Orchestrator {
         }
 
         if lock_intercepted {
-            if self.lock_mgr.is_locked {
-                if let Event::Key {
-                    state: KeyState::Pressed,
-                    code,
-                } = event
-                {
-                    if code != KeyCode::Ptt {
-                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
-                    }
-                }
-            }
             self.drain_ipc_commands(ctx);
             return true;
         }
@@ -855,6 +850,9 @@ impl Orchestrator {
                 self.switch_app(ctx, APP_ID_VFO);
             }
             Shortcut::Reboot => kernel::sys::SystemDiagnostics::reboot(),
+            Shortcut::Sleep => {
+                self.lock_mgr.sleep_requested = true;
+            }
             Shortcut::Fault => {
                 panic!("Test panic");
             }

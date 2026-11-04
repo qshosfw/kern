@@ -20,6 +20,7 @@ pub enum Shortcut {
     Reboot = 13,
     Fault = 14,
     TaskManager = 15,
+    Sleep = 16,
 }
 
 impl Shortcut {
@@ -36,6 +37,7 @@ impl Shortcut {
         Shortcut::MuteAudio,
         Shortcut::FmRadio,
         Shortcut::TaskManager,
+        Shortcut::Sleep,
         Shortcut::Fault,
     ];
 
@@ -57,6 +59,7 @@ impl Shortcut {
             Shortcut::Reboot => "Reboot",
             Shortcut::Fault => "Fault",
             Shortcut::TaskManager => "Tasks",
+            Shortcut::Sleep => "Sleep",
         }
     }
 
@@ -74,6 +77,7 @@ impl Shortcut {
             10 => Shortcut::FmRadio,
             14 => Shortcut::Fault,
             15 => Shortcut::TaskManager,
+            16 => Shortcut::Sleep,
             _ => Shortcut::None,
         }
     }
@@ -165,6 +169,11 @@ impl From<Shortcut> for SysEvent {
                 command: 15,
                 arg: 0,
             },
+            Shortcut::Sleep => SysEvent {
+                target: 0,
+                command: 16,
+                arg: 0,
+            },
         }
     }
 }
@@ -190,6 +199,7 @@ impl From<SysEvent> for Shortcut {
             13 => Shortcut::Reboot,
             14 => Shortcut::Fault,
             15 => Shortcut::TaskManager,
+            16 => Shortcut::Sleep,
             _ => Shortcut::None,
         }
     }

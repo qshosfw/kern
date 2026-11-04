@@ -44,6 +44,9 @@ pub struct KeypadLockManager {
     // Dialog / Toast state
     toast: LockToast,
     toast_remaining_ms: u16,
+
+    // Sleep request flag (triggered when Exit key is held past target)
+    pub sleep_requested: bool,
 }
 
 impl KeypadLockManager {
@@ -61,6 +64,7 @@ impl KeypadLockManager {
             inactivity_ms: 0,
             toast: LockToast::None,
             toast_remaining_ms: 0,
+            sleep_requested: false,
         }
     }
 
@@ -132,14 +136,18 @@ impl KeypadLockManager {
                 }
             }
 
-            // Active hold tracking for # or F key in real milliseconds
-            if let Some(_code) = self.held_code {
+            // Active hold tracking for #, F, or Exit key in real milliseconds
+            if let Some(code) = self.held_code {
                 self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt);
 
                 // Check if hold duration reached threshold
                 if self.hold_elapsed_ms >= self.hold_target_ms && !self.is_long_press_triggered {
                     self.is_long_press_triggered = true;
-                    self.toggle_lock();
+                    if code == KeyCode::Exit {
+                        self.sleep_requested = true;
+                    } else {
+                        self.toggle_lock();
+                    }
                     self.held_code = None;
                     self.hold_elapsed_ms = 0;
                     return true;
@@ -158,8 +166,43 @@ impl KeypadLockManager {
             // Reset auto-lock inactivity on any physical key interaction
             self.inactivity_ms = 0;
 
-            // Handle # and F keys (Lock / Unlock trigger & Sticky F)
-            if *code == KeyCode::Hash || *code == KeyCode::KeyF {
+            // Handle Exit key (Hold-to-Sleep gesture)
+            if *code == KeyCode::Exit {
+                match state {
+                    KeyState::Pressed => {
+                        self.held_code = Some(KeyCode::Exit);
+                        self.hold_elapsed_ms = 0;
+                        self.is_long_press_triggered = false;
+                        self.last_tick_ms = py32_hal::delay::millis();
+
+                        let start_threshold =
+                            (base_hold_delay_ms as u32 + 150).clamp(550, 750) as u16;
+                        self.hold_start_threshold_ms = start_threshold;
+                        // Long hold to sleep (~1600ms) to ensure deliberate intentional shutdown
+                        self.hold_target_ms =
+                            (start_threshold as u32 + 900).clamp(1500, 2200) as u16;
+                        // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
+                    }
+                    KeyState::Held => {
+                        // Suppress key repeat while hold-to-sleep is tracking
+                        if self.held_code == Some(KeyCode::Exit) {
+                            return true;
+                        }
+                    }
+                    KeyState::Released => {
+                        let was_long_press = self.is_long_press_triggered;
+                        let had_started_hold = self.hold_elapsed_ms >= self.hold_start_threshold_ms;
+                        self.held_code = None;
+                        self.hold_elapsed_ms = 0;
+                        self.is_long_press_triggered = false;
+
+                        // If user held past threshold or triggered sleep, consume release so app doesn't act
+                        if was_long_press || had_started_hold {
+                            return true;
+                        }
+                    }
+                }
+            } else if *code == KeyCode::Hash || *code == KeyCode::KeyF {
                 match state {
                     KeyState::Pressed => {
                         self.held_code = Some(*code);
@@ -254,15 +297,12 @@ impl KeypadLockManager {
             let (bx, by) = gfx::widgets::dialog::draw_modal_box(canvas, box_w, box_h);
             let center_x = (bx as i16) + (box_w as i16 / 2);
 
-            let icon = if self.is_locked {
-                gfx::icons::Icon::Lock
+            let (icon, text_str) = if self.held_code == Some(KeyCode::Exit) {
+                (gfx::icons::Icon::Moon, "HOLD FOR SLEEP")
+            } else if self.is_locked {
+                (gfx::icons::Icon::Lock, "HOLD TO UNLOCK")
             } else {
-                gfx::icons::Icon::Unlock
-            };
-            let text_str = if self.is_locked {
-                "HOLD TO UNLOCK"
-            } else {
-                "HOLD TO LOCK"
+                (gfx::icons::Icon::Unlock, "HOLD TO LOCK")
             };
 
             let text_w = text::str_width(text_str, &TOMTHUMB);
@@ -446,5 +486,30 @@ mod tests {
         let tick = Event::Tick;
         mgr.handle_event(&tick, 400, 3000, 0);
         assert!(mgr.is_locked);
+    }
+
+    #[test]
+    fn test_long_press_exit_requests_sleep() {
+        let mut mgr = KeypadLockManager::new();
+        let pressed = Event::Key {
+            code: KeyCode::Exit,
+            state: KeyState::Pressed,
+        };
+        mgr.handle_event(&pressed, 400, 3000, 0);
+
+        // Before threshold
+        mgr.hold_elapsed_ms = 400;
+        assert!(!mgr.is_animating());
+
+        // Past threshold, progress bar appears
+        mgr.hold_elapsed_ms = 600;
+        assert!(mgr.is_animating());
+        assert!(!mgr.sleep_requested);
+
+        // Hold completed past target
+        mgr.hold_elapsed_ms = 1800;
+        let tick = Event::Tick;
+        mgr.handle_event(&tick, 400, 3000, 0);
+        assert!(mgr.sleep_requested);
     }
 }
