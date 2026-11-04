@@ -26,24 +26,24 @@ impl SystemSerialPort {
 }
 
 impl kernel::service::SerialPort for SystemSerialPort {
-    fn write(&mut self, data: &[u8]) {
+    fn write(&mut self, _data: &[u8]) {
         #[cfg(feature = "usb_cdc")]
         if drivers::usb::is_active_usb_configured()
             && (self.active_interface == 1 || drivers::usb::is_active_usb_dtr())
         {
-            let _ = drivers::usb::active_usb_write(data);
+            let _ = drivers::usb::active_usb_write(_data);
             return;
         }
 
         #[cfg(feature = "uart")]
-        bsp::Board::uart_write_bytes(data);
+        bsp::Board::uart_write_bytes(_data);
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> usize {
+    fn read(&mut self, _buf: &mut [u8]) -> usize {
         #[cfg(feature = "usb_cdc")]
         {
             if drivers::usb::is_active_usb_connected() {
-                let count = drivers::usb::active_usb_read(buf);
+                let count = drivers::usb::active_usb_read(_buf);
                 if count > 0 {
                     self.active_interface = 1;
                     return count;
@@ -54,7 +54,7 @@ impl kernel::service::SerialPort for SystemSerialPort {
         #[cfg(feature = "uart")]
         {
             let mut count = 0;
-            for byte in buf.iter_mut() {
+            for byte in _buf.iter_mut() {
                 if let Some(b) = bsp::Board::uart_try_read_byte() {
                     *byte = b;
                     count += 1;
@@ -203,7 +203,7 @@ impl<'a> SystemHardware<'a> {
         usb.update_power_telemetry(
             pwr.battery_voltage_mv(),
             pwr.battery_percentage(),
-            pwr.is_charging(),
+            pwr.is_charging,
         );
     }
 

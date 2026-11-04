@@ -155,6 +155,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     }
 
     // 3b. Verify RAM and stack headroom requirements against Execution Section
+    let mut exec_sec: Option<SectionExecution> = None;
     if let Some(exec_body) = find_section(&hdr_buf, header_len, SECTION_EXECUTION) {
         if let Some(exec) = SectionExecution::parse(exec_body) {
             let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
@@ -166,6 +167,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             if !exec.can_execute(avail, margin.min(256)) {
                 return Err(KrxLaunchError::InsufficientRam);
             }
+            exec_sec = Some(exec);
         }
     }
 
@@ -246,9 +248,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         }
         #[cfg(feature = "krx_native")]
         KrxClass::Native | KrxClass::Paged => {
-            let exec_sec = find_section(&hdr_buf, header_len, SECTION_EXECUTION)
-                .and_then(SectionExecution::parse)
-                .ok_or(KrxLaunchError::MissingExecution)?;
+            let exec_sec = exec_sec.ok_or(KrxLaunchError::MissingExecution)?;
             let cap_imports_body = find_section(&hdr_buf, header_len, SECTION_CAP_IMPORTS);
             let block_map_body = find_section(&hdr_buf, header_len, SECTION_BLOCK_MAP);
             let leaf_map_body = find_section(&hdr_buf, header_len, SECTION_LEAF_MAP);

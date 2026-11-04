@@ -5,6 +5,7 @@ use crate::services::RadioMelodyExt;
 use crate::services::power::PowerService;
 use crate::{EVENT_QUEUE, POWER_SERVICE};
 use kernel::event::{Event, KeyCode};
+#[cfg(feature = "wire")]
 use kernel::service::SerialPort;
 use py32_hal::adc::Adc;
 
@@ -53,13 +54,20 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     }
     drivers::keyboard::KeypadScanner::reset_gpio_pins();
 
-    // 5. Deep Sleep Retention Loop (WFI / Low-Power sleep)
-    // Feeds watchdog periodically while keeping all displays, audio PA, and RF powered down.
-    // Blinks Orange status LED periodically (25ms pulse every 2s) to indicate low-power sleep.
-    // Wakes ONLY when the Exit key is held down continuously for a bit (~800ms) or RigWire connects.
-    let mut next_blink_ms = py32_hal::delay::millis().wrapping_add(2000);
+    // 5. Downclock to direct 24 MHz HSI, shut off analog PLL, and set flash to 0WS
+    // This dramatically cuts dynamic core power and eliminates PLL analog consumption.
+    py32_hal::rcc::set_sysclk_24mhz_no_pll();
+    #[cfg(feature = "uart")]
+    py32_hal::uart::set_baud(115200);
+
+    // 6. Deep Sleep Retention Loop (WFI / Low-Power sleep)
+    // Feeds watchdog periodically while keeping displays, audio PA, and RF powered down.
+    // Blinks Red status LED periodically (10ms strobe every 5s) to indicate low-power sleep with minimal battery consumption.
+    // Wakes ONLY when the Exit key is held down continuously for 1.2 seconds (with solid Red LED feedback) or RigWire connects.
+    let mut next_blink_ms = py32_hal::delay::millis().wrapping_add(5000);
+    let mut last_scan_ms = py32_hal::delay::millis();
     let mut exit_press_start: Option<u32> = None;
-    const WAKE_HOLD_MS: u32 = 800;
+    const WAKE_HOLD_MS: u32 = 1200;
 
     'sleep_loop: loop {
         py32_hal::wdt::Watchdog::feed();
@@ -69,24 +77,28 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
             break 'sleep_loop;
         }
 
-        let key = drivers::keyboard::KeypadScanner::poll_matrix();
         let now = py32_hal::delay::millis();
 
-        if key == Some(KeyCode::Exit) {
-            match exit_press_start {
-                None => {
-                    exit_press_start = Some(now);
-                    // Light solid Orange LED to provide immediate tactile feedback that hold-to-wake is active
-                    hw.radio.set_status_led(bsp::StatusLed::Orange);
-                }
-                Some(start) => {
-                    if now.wrapping_sub(start) >= WAKE_HOLD_MS {
-                        break 'sleep_loop;
+        // Throttle hardware keyboard matrix polling to 20ms intervals (50 Hz).
+        // This eliminates continuous spin-delays on GPIOs and allows Cortex-M0+ to remain in WFI.
+        if now.wrapping_sub(last_scan_ms) >= 20 {
+            last_scan_ms = now;
+            let key = drivers::keyboard::KeypadScanner::poll_matrix();
+
+            if key == Some(KeyCode::Exit) {
+                match exit_press_start {
+                    None => {
+                        exit_press_start = Some(now);
+                        // Solid Red LED provides immediate tactile feedback that hold-to-wake is active
+                        hw.radio.set_status_led(bsp::StatusLed::Red);
+                    }
+                    Some(start) => {
+                        if now.wrapping_sub(start) >= WAKE_HOLD_MS {
+                            break 'sleep_loop;
+                        }
                     }
                 }
-            }
-        } else {
-            if exit_press_start.is_some() {
+            } else if exit_press_start.is_some() {
                 // Exit released before reaching hold target: turn off feedback LED
                 exit_press_start = None;
                 hw.radio.set_status_led(bsp::StatusLed::Off);
@@ -95,10 +107,10 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
 
         // Heartbeat blink only when user is not actively holding Exit
         if exit_press_start.is_none() && now.wrapping_sub(next_blink_ms) < 0x8000_0000 {
-            // Heartbeat: pulse orange status LED briefly (~25ms) via BK4829 GPIO1+2
-            hw.radio.set_status_led(bsp::StatusLed::Orange);
+            // Heartbeat: strobe Red status LED briefly (10ms) via BK4829 GPIO1
+            hw.radio.set_status_led(bsp::StatusLed::Red);
             let pulse_start = py32_hal::delay::millis();
-            while py32_hal::delay::millis().wrapping_sub(pulse_start) < 25 {
+            while py32_hal::delay::millis().wrapping_sub(pulse_start) < 10 {
                 py32_hal::wdt::Watchdog::feed();
                 #[cfg(feature = "uart")]
                 if py32_hal::uart::is_readable() {
@@ -113,7 +125,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
             if exit_press_start.is_none() {
                 hw.radio.set_status_led(bsp::StatusLed::Off);
             }
-            next_blink_ms = py32_hal::delay::millis().wrapping_add(2000);
+            next_blink_ms = py32_hal::delay::millis().wrapping_add(5000);
         }
 
         if exit_press_start.is_some() {
@@ -125,7 +137,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
 
     hw.radio.set_status_led(bsp::StatusLed::Off);
 
-    // 6. Wakeup & Hardware Restoration
+    // 7. Wakeup & Hardware Restoration
     // Restore system clocks cleanly based on configuration
     if crate::master_config_ref().system.cpu_clock == 1 {
         py32_hal::rcc::set_sysclk_72mhz();
@@ -331,13 +343,24 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         let is_display_awake = hw.backlight.is_active();
         let is_anim = hw.orchestrator.is_animating() && is_display_awake;
 
+        // Keep microkernel PowerService state in sync with display activity
+        unsafe {
+            let pwr = &mut *core::ptr::addr_of_mut!(POWER_SERVICE);
+            if is_display_awake {
+                pwr.state = kernel::power::PowerState::Active;
+            } else if pwr.state != kernel::power::PowerState::DeepSleep {
+                pwr.state = kernel::power::PowerState::Standby;
+            }
+        }
+
         // 2. Fully Adaptive Refresh Rate & Physical LCD Timing:
         // - Active UI animations: tick interval derived from active display refresh_rate:
         //   0 (20 Hz): 50ms tick (Battery saving)
         //   1 (60 Hz): 16ms tick (Std, matches f4hwn flashmap 15-16ms LC response time)
         //   2 (75 Hz): 13ms tick (Turbo, matches ST7565 internal panel scan ~76 Hz)
         //   3 (90 Hz): 11ms tick (Ultra)
-        // - Idle: 50ms tick (20 Hz) to maximize Cortex-M0+ sleep and preserve battery life.
+        // - Screen awake & idle: 50ms tick (20 Hz)
+        // - Screen asleep (Standby): 100ms tick (10 Hz) to maximize Cortex-M0+ low-power sleep.
         #[cfg(feature = "animations")]
         let ui_tick_interval = if is_anim {
             match crate::master_config_ref().display.refresh_rate {
@@ -347,11 +370,13 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
                 3 => 11u32,
                 _ => 16u32,
             }
-        } else {
+        } else if is_display_awake {
             50u32
+        } else {
+            100u32
         };
         #[cfg(not(feature = "animations"))]
-        let ui_tick_interval = 50u32;
+        let ui_tick_interval = if is_display_awake { 50u32 } else { 100u32 };
 
         if now.wrapping_sub(last_ui_tick) >= ui_tick_interval {
             let delta = now.wrapping_sub(last_ui_tick);
@@ -379,8 +404,15 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             hw.refresh_subframe();
         }
 
-        // 3. Periodic ADC battery/temp sampling every 200ms (fast charging detection & screen wake)
-        if now.wrapping_sub(last_battery_tick) >= 200 {
+        // 3. Periodic ADC battery/temp sampling:
+        // - 200ms (5 Hz) when display is awake or audio active for rapid meter updates & charge detection
+        // - 1000ms (1 Hz) when screen is asleep to cut ADC activations by 80%
+        let batt_interval = if is_display_awake || hw.audio.is_active() {
+            200u32
+        } else {
+            1000u32
+        };
+        if now.wrapping_sub(last_battery_tick) >= batt_interval {
             last_battery_tick = now;
             if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(0xF2) {
                 pcb.ledger.record_activation();
@@ -396,6 +428,17 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
                 }
                 dirty_render = true;
                 enqueue_event(Event::Charging(is_charging));
+            }
+
+            // Check for low battery edge transition -> display warning modal & sound alert
+            let low_bat_edge =
+                unsafe { (*core::ptr::addr_of_mut!(POWER_SERVICE)).poll_low_battery_transition() };
+            if low_bat_edge {
+                wake_and_notify_activity(hw);
+                hw.radio
+                    .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+                crate::orchestrator::compositor::show_low_battery_popup();
+                dirty_render = true;
             }
 
             // Kernel Safeguard: Critical Battery Cutoff & Low Power Sleep Mode
@@ -453,8 +496,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             dirty_render = true;
         }
 
-        // Render loop
-        if dirty_render {
+        // Render loop: skip expensive CPU view traversal and 1024-byte SPI blits when display is dark
+        if dirty_render && is_display_awake {
             hw.render_frame();
             dirty_render = false;
             #[cfg(feature = "grayscale")]
@@ -463,10 +506,10 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             }
         }
 
-        // Sleep until next event/interrupt, unless USB is actively connected, high-speed animation is active,
-        // or Grayscale FRC is actively cycling subframes while the display is awake
+        // Sleep until next event/interrupt, unless USB has an active pending control transfer,
+        // high-speed animation is active, or Grayscale FRC is actively cycling subframes while display is awake
         #[cfg(feature = "usb")]
-        if hw.usb.is_connected() || hw.usb.has_pending_transfer() {
+        if hw.usb.has_pending_transfer() {
             continue;
         }
 

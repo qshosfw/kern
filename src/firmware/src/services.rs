@@ -487,13 +487,14 @@ pub fn draw_status_right_unified(
     }
 
     if is_charging {
-        let bolt_x = if has_bat_icon {
-            right_limit - 7
-        } else {
-            right_limit - 5
-        };
-        gfx::icons::draw_icon_5x5(canvas, bolt_x, y_offset as i16, gfx::icons::Icon::Bolt, fg);
-        right_limit = bolt_x;
+        right_limit -= if has_bat_icon { 7 } else { 5 };
+        gfx::icons::draw_icon_5x5(
+            canvas,
+            right_limit,
+            y_offset as i16,
+            gfx::icons::Icon::Bolt,
+            fg,
+        );
     } else if is_low {
         right_limit -= if has_bat_icon { 5 } else { 4 };
         gfx::text::draw_char(canvas, right_limit, y_text, '!', &FONT, fg);
@@ -505,32 +506,20 @@ pub fn draw_status_right_unified(
         } else {
             gfx::icons::Icon::Plug
         };
-        let plug_x = if is_charging {
-            right_limit - 9
-        } else if has_bat_icon {
-            right_limit - 10
-        } else {
-            right_limit - 9
-        };
-        gfx::icons::draw_icon_5x5(canvas, plug_x, y_offset as i16, plug_icon, fg);
-        right_limit = plug_x;
+        right_limit -= 9;
+        gfx::icons::draw_icon_5x5(canvas, right_limit, y_offset as i16, plug_icon, fg);
     }
 
     let mut nbuf = [0u8; 12];
-    let (val, dec, suf_b) = match bfmt {
-        1 | 4 => (voltage_mv as i32 / 10, 2, b'v'),
-        6 => (voltage_mv as i32 / 100, 1, b'v'),
-        2 | 5 | 7 => (pct as i32, 0, b'%'),
-        8 => (temp_deci_c as i32 / 10, 0, b'C'),
-        _ => (0, 0, 0),
+    let (val, dec, suf) = match bfmt {
+        1 | 4 => ((((voltage_mv as u32) * 52429) >> 19) as i32, 2, "v"),
+        6 => ((((voltage_mv as u32) * 5243) >> 19) as i32, 1, "v"),
+        2 | 5 | 7 => (pct as i32, 0, "%"),
+        8 => ((((temp_deci_c as u32) * 52429) >> 19) as i32, 0, "C"),
+        _ => (0, 0, ""),
     };
-    let bat_str = if suf_b != 0 {
-        let s = unsafe { core::str::from_utf8_unchecked(core::slice::from_ref(&suf_b)) };
-        gfx::text::format_int_fixed(val, dec, "", s, &mut nbuf)
-    } else {
-        ""
-    };
-    if !bat_str.is_empty() {
+    if !suf.is_empty() {
+        let bat_str = gfx::text::format_int_fixed(val, dec, "", suf, &mut nbuf);
         let w = gfx::text::str_width(bat_str, &FONT) as i16;
         right_limit -= w + 2;
         gfx::text::draw_str(canvas, right_limit, y_text, bat_str, &FONT, fg);

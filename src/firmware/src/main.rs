@@ -190,7 +190,7 @@ fn main() -> ! {
     } else {
         crate::apps::APP_ID_LAUNCHER
     };
-    hw.orchestrator = orchestrator::Orchestrator::new(startup_app);
+    hw.orchestrator.set_startup_app(startup_app);
 
     #[cfg(feature = "usb")]
     drivers::usb::register_active_usb_driver(&mut hw.usb as *mut _);

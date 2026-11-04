@@ -144,31 +144,103 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
     }
 }
 
-#[inline(never)]
+#[derive(Clone, Copy)]
+pub struct PageMeta {
+    pub title: &'static str,
+    pub defs: &'static [SettingDef],
+}
+
+pub static PAGE_METAS: [PageMeta; PageId::COUNT] = [
+    PageMeta {
+        title: "Settings",
+        defs: ROOT_DEFS,
+    },
+    PageMeta {
+        title: "Display",
+        defs: super::display::DISPLAY_DEFS,
+    },
+    PageMeta {
+        title: "Audio",
+        defs: &super::audio::AUDIO_DEFS,
+    },
+    PageMeta {
+        title: "Buttons",
+        defs: &super::buttons::BUTTONS_ROOT,
+    },
+    PageMeta {
+        title: "Battery",
+        defs: &super::battery::BATTERY_ROOT,
+    },
+    PageMeta {
+        title: "Device",
+        defs: &super::device::DEVICE_ROOT,
+    },
+    PageMeta {
+        title: "Security",
+        defs: &[],
+    },
+    PageMeta {
+        title: "System",
+        defs: super::system::SYSTEM_ROOT,
+    },
+    PageMeta {
+        title: "Tweaks",
+        defs: &super::buttons::BUTTONS_TWEAKS,
+    },
+    PageMeta {
+        title: "Shortcuts",
+        defs: &super::buttons::BUTTONS_SHORTCUTS,
+    },
+    PageMeta {
+        title: "Battery Info",
+        defs: &super::battery::BATTERY_INFO,
+    },
+    PageMeta {
+        title: "Battery Tweaks",
+        defs: &super::battery::BATTERY_TWEAKS,
+    },
+    PageMeta {
+        title: "Storage",
+        defs: &super::system::SYSTEM_STORAGE,
+    },
+    PageMeta {
+        title: "Apps",
+        defs: super::apps::APPS_DEFS,
+    },
+    PageMeta {
+        title: "Boot Splash",
+        defs: super::device::SPLASH_PAGE_DEFS,
+    },
+    #[cfg(feature = "settings_calib")]
+    PageMeta {
+        title: "Calibration",
+        defs: &super::system::SYSTEM_CALIBRATION,
+    },
+    #[cfg(feature = "settings_debug")]
+    PageMeta {
+        title: "Debug",
+        defs: &super::system::SYSTEM_DEBUG,
+    },
+    PageMeta {
+        title: "Installed",
+        defs: &[],
+    },
+    PageMeta {
+        title: "App Info",
+        defs: &[],
+    },
+    PageMeta {
+        title: "Services",
+        defs: &[],
+    },
+    PageMeta {
+        title: "Service Info",
+        defs: &[],
+    },
+];
+
+#[inline(always)]
 pub fn get_page(page: PageId) -> (&'static str, &'static [SettingDef]) {
-    match page {
-        PageId::Root => ("Settings", ROOT_DEFS),
-        PageId::Display => ("Display", super::display::DISPLAY_DEFS),
-        PageId::Audio => ("Audio", &super::audio::AUDIO_DEFS),
-        PageId::Buttons => ("Buttons", &super::buttons::BUTTONS_ROOT),
-        PageId::Battery => ("Battery", &super::battery::BATTERY_ROOT),
-        PageId::Device => ("Device", &super::device::DEVICE_ROOT),
-        PageId::Security => ("Security", &[]),
-        PageId::System => ("System", super::system::SYSTEM_ROOT),
-        PageId::ButtonsTweaks => ("Tweaks", &super::buttons::BUTTONS_TWEAKS),
-        PageId::ButtonsShortcuts => ("Shortcuts", &super::buttons::BUTTONS_SHORTCUTS),
-        PageId::BatteryInfo => ("Battery Info", &super::battery::BATTERY_INFO),
-        PageId::BatteryTweaks => ("Battery Tweaks", &super::battery::BATTERY_TWEAKS),
-        PageId::SystemStorage => ("Storage", &super::system::SYSTEM_STORAGE),
-        PageId::Apps => ("Apps", super::apps::APPS_DEFS),
-        PageId::BootSplash => ("Boot Splash", super::device::SPLASH_PAGE_DEFS),
-        #[cfg(feature = "settings_calib")]
-        PageId::SystemCalibration => ("Calibration", &super::system::SYSTEM_CALIBRATION),
-        #[cfg(feature = "settings_debug")]
-        PageId::SystemDebug => ("Debug", &super::system::SYSTEM_DEBUG),
-        PageId::ManageApps => ("Installed", &[]),
-        PageId::AppDetail => ("App Info", &[]),
-        PageId::ManageServices => ("Services", &[]),
-        PageId::ServiceDetail => ("Service Info", &[]),
-    }
+    let m = &PAGE_METAS[page as usize];
+    (m.title, m.defs)
 }

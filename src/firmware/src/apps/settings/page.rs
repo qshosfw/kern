@@ -4,28 +4,32 @@
 #[repr(u8)]
 pub enum PageId {
     Root = 0,
-    Display = 1,
-    Audio = 2,
-    Buttons = 3,
-    Battery = 4,
-    Device = 5,
-    Security = 6,
-    System = 7,
-    ButtonsTweaks = 8,
-    ButtonsShortcuts = 9,
-    BatteryInfo = 10,
-    BatteryTweaks = 11,
-    SystemStorage = 12,
-    Apps = 13,
-    BootSplash = 14,
+    Display,
+    Audio,
+    Buttons,
+    Battery,
+    Device,
+    Security,
+    System,
+    ButtonsTweaks,
+    ButtonsShortcuts,
+    BatteryInfo,
+    BatteryTweaks,
+    SystemStorage,
+    Apps,
+    BootSplash,
     #[cfg(feature = "settings_calib")]
-    SystemCalibration = 15,
+    SystemCalibration,
     #[cfg(feature = "settings_debug")]
-    SystemDebug = 16,
-    ManageApps = 17,
-    AppDetail = 18,
-    ManageServices = 19,
-    ServiceDetail = 20,
+    SystemDebug,
+    ManageApps,
+    AppDetail,
+    ManageServices,
+    ServiceDetail,
+}
+
+impl PageId {
+    pub const COUNT: usize = PageId::ServiceDetail as usize + 1;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

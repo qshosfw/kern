@@ -19,9 +19,8 @@ impl CrcEngine {
         crc
     }
 
-    /// Calculate CRC-32 for payload and flash integrity checking.
-    pub fn crc32(data: &[u8]) -> u32 {
-        let mut crc: u32 = 0xFFFF_FFFF;
+    /// Progressively update CRC-32 state.
+    pub fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
         for &byte in data {
             crc ^= byte as u32;
             for _ in 0..8 {
@@ -29,6 +28,11 @@ impl CrcEngine {
                 crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
             }
         }
-        !crc
+        crc
+    }
+
+    /// Calculate CRC-32 for payload and flash integrity checking.
+    pub fn crc32(data: &[u8]) -> u32 {
+        !Self::crc32_update(0xFFFF_FFFF, data)
     }
 }

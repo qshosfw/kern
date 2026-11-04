@@ -193,6 +193,207 @@ static CONFIG_METAS: [ConfigMeta; 6] = [
     },
 ];
 
+#[derive(Clone, Copy)]
+struct BoundsRule {
+    offset: u8,
+    min: u8,
+    max: u8,
+}
+
+#[inline(never)]
+fn check_bounds(bytes: &[u8], expected_ver: u8, rules: &[BoundsRule]) -> bool {
+    if bytes[0] != expected_ver {
+        return false;
+    }
+    for r in rules {
+        let val = bytes[r.offset as usize];
+        if val < r.min || val > r.max {
+            return false;
+        }
+    }
+    true
+}
+
+static KEY_RULES: [BoundsRule; 6] = [
+    BoundsRule {
+        offset: 7,
+        min: 0,
+        max: 5,
+    },
+    BoundsRule {
+        offset: 8,
+        min: 0,
+        max: 3,
+    },
+    BoundsRule {
+        offset: 9,
+        min: 0,
+        max: 2,
+    },
+    BoundsRule {
+        offset: 10,
+        min: 0,
+        max: 3,
+    },
+    BoundsRule {
+        offset: 11,
+        min: 0,
+        max: 2,
+    },
+    BoundsRule {
+        offset: 21,
+        min: 0,
+        max: 2,
+    },
+];
+
+static BATT_RULES: [BoundsRule; 4] = [
+    BoundsRule {
+        offset: 2,
+        min: 0,
+        max: 8,
+    },
+    BoundsRule {
+        offset: 3,
+        min: 0,
+        max: 3,
+    },
+    BoundsRule {
+        offset: 4,
+        min: 0,
+        max: 5,
+    },
+    BoundsRule {
+        offset: 5,
+        min: 0,
+        max: 1,
+    },
+];
+
+static DISPLAY_RULES: [BoundsRule; 11] = [
+    BoundsRule {
+        offset: 1,
+        min: 0,
+        max: 5,
+    },
+    BoundsRule {
+        offset: 2,
+        min: 1,
+        max: 10,
+    },
+    BoundsRule {
+        offset: 3,
+        min: 0,
+        max: 10,
+    },
+    BoundsRule {
+        offset: 4,
+        min: 0,
+        max: 100,
+    },
+    BoundsRule {
+        offset: 5,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 6,
+        min: 0,
+        max: 3,
+    },
+    BoundsRule {
+        offset: 7,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 8,
+        min: 0,
+        max: 4,
+    },
+    BoundsRule {
+        offset: 9,
+        min: 0,
+        max: 2,
+    },
+    BoundsRule {
+        offset: 10,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 11,
+        min: 0,
+        max: 3,
+    },
+];
+
+static AUDIO_RULES: [BoundsRule; 7] = [
+    BoundsRule {
+        offset: 1,
+        min: 0,
+        max: 10,
+    },
+    BoundsRule {
+        offset: 2,
+        min: 0,
+        max: 5,
+    },
+    BoundsRule {
+        offset: 3,
+        min: 0,
+        max: 31,
+    },
+    BoundsRule {
+        offset: 4,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 6,
+        min: 0,
+        max: 10,
+    },
+    BoundsRule {
+        offset: 7,
+        min: 0,
+        max: 4,
+    },
+    BoundsRule {
+        offset: 8,
+        min: 0,
+        max: 4,
+    },
+];
+
+static APPS_RULES: [BoundsRule; 5] = [
+    BoundsRule {
+        offset: 1,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 2,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 3,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 4,
+        min: 0,
+        max: 1,
+    },
+    BoundsRule {
+        offset: 5,
+        min: 0,
+        max: 3,
+    },
+];
+
 impl MasterConfig {
     pub const fn new() -> Self {
         let sys = SystemConfig::new();
@@ -266,7 +467,7 @@ impl MasterConfig {
     /// Re-seal a block's CRC after a legitimate mutation. Any later stray write
     /// (stack overflow, wild pointer) breaks the seal and is caught by `flush_dirty`.
     #[inline(never)]
-    fn seal(&mut self, idx: usize) {
+    pub fn seal(&mut self, idx: usize) {
         update_raw_crc(self.config_bytes_mut(idx));
     }
 
@@ -284,16 +485,10 @@ impl MasterConfig {
             self.system = SystemConfig::new();
             repaired |= DIRTY_SYSTEM;
         }
-        if self.system.model > 2 {
-            self.system.model = 0;
-            repaired |= DIRTY_SYSTEM;
-        }
-        if self.system.uart_baud > 1 {
-            self.system.uart_baud = 0;
-            repaired |= DIRTY_SYSTEM;
-        }
-        if self.system.cpu_clock > 1 {
-            self.system.cpu_clock = 0;
+        if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > 1 {
+            self.system.model = self.system.model.min(2);
+            self.system.uart_baud = self.system.uart_baud.min(1);
+            self.system.cpu_clock = self.system.cpu_clock.min(1);
             repaired |= DIRTY_SYSTEM;
         }
         let is_empty_tag = self.system.tag[0] == 0
@@ -308,25 +503,14 @@ impl MasterConfig {
             repaired |= DIRTY_SYSTEM;
         }
 
-        if self.keys.version != KeyConfig::VERSION {
-            self.keys = KeyConfig::new();
-            repaired |= DIRTY_KEYS;
-        }
         let expected_nav = self.system.nav_layout();
-        if self.keys.nav_layout != expected_nav {
-            self.keys.nav_layout = expected_nav;
-            repaired |= DIRTY_KEYS;
-        }
-        if self.keys.auto_lock > 5
-            || self.keys.f_key_timeout > 3
-            || self.keys.fast_scroll > 2
-            || self.keys.hold_delay > 3
-            || self.keys.repeat_rate > 2
-            || self.keys.ptt_mode > 2
-        {
+        if !check_bounds(self.keys.as_bytes(), KeyConfig::VERSION, &KEY_RULES) {
             let mut def = KeyConfig::new();
             def.nav_layout = expected_nav;
             self.keys = def;
+            repaired |= DIRTY_KEYS;
+        } else if self.keys.nav_layout != expected_nav {
+            self.keys.nav_layout = expected_nav;
             repaired |= DIRTY_KEYS;
         }
 
@@ -346,10 +530,8 @@ impl MasterConfig {
             self.battery.battery_type = 0;
             repaired |= DIRTY_BATTERY;
         }
-        if self.battery.battery_format > 8
-            || self.battery.power_profile > 3
-            || self.battery.auto_power_off_min > 5
-            || self.battery.charging_detect > 1
+
+        if !check_bounds(self.battery.as_bytes(), BatteryConfig::VERSION, &BATT_RULES)
             || self.battery.calib_tweak_mv < -500
             || self.battery.calib_tweak_mv > 500
         {
@@ -359,44 +541,21 @@ impl MasterConfig {
             repaired |= DIRTY_BATTERY;
         }
 
-        if self.display.version != DisplayConfig::VERSION
-            || self.display.backlight_mode > 5
-            || self.display.backlight_max == 0
-            || self.display.backlight_max > 10
-            || self.display.backlight_min > 10
-            || self.display.contrast > 100
-            || self.display.inverted > 1
-            || self.display.boot_splash_anim > 3
-            || self.display.boot_splash_mode > 1
-            || self.display.boot_splash_duration > 4
-            || self.display.shading_mode > 2
-            || self.display.ui_animations > 1
-            || self.display.refresh_rate > 3
-        {
+        if !check_bounds(
+            self.display.as_bytes(),
+            DisplayConfig::VERSION,
+            &DISPLAY_RULES,
+        ) {
             self.display = DisplayConfig::new();
             repaired |= DIRTY_DISPLAY;
         }
 
-        if self.audio.version != AudioConfig::VERSION
-            || self.audio.volume > 10
-            || self.audio.key_beep > 5
-            || self.audio.mic_gain > 31
-            || self.audio.roger_beep > 1
-            || self.audio.beep_gain > 10
-            || self.audio.boot_jingle > 4
-            || self.audio.audio_profile > 4
-        {
+        if !check_bounds(self.audio.as_bytes(), AudioConfig::VERSION, &AUDIO_RULES) {
             self.audio = AudioConfig::new();
             repaired |= DIRTY_AUDIO;
         }
 
-        if self.apps.version != AppsConfig::VERSION
-            || self.apps.launcher_style > 1
-            || self.apps.show_numbers > 1
-            || self.apps.show_labels > 1
-            || self.apps.startup_app > 1
-            || self.apps.vfo_dual_watch > 3
-        {
+        if !check_bounds(self.apps.as_bytes(), AppsConfig::VERSION, &APPS_RULES) {
             self.apps = AppsConfig::new();
             repaired |= DIRTY_APPS;
         }

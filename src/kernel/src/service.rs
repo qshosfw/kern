@@ -82,8 +82,20 @@ pub trait PowerService {
     fn poll_charging_transition(&mut self) -> Option<bool> {
         None
     }
+    fn poll_low_battery_transition(&mut self) -> bool {
+        false
+    }
     fn set_battery_type(&mut self, _bat_type: u8) {}
     fn force_refresh(&mut self) {}
+    fn power_state(&self) -> crate::power::PowerState {
+        crate::power::PowerState::Active
+    }
+    fn power_profile(&self) -> crate::power::PowerProfile {
+        crate::power::PowerProfile::Balanced
+    }
+    fn inactivity_secs(&self) -> u32 {
+        0
+    }
 }
 
 // ── Display & Visual Feedback Services ──────────────────────────────────────

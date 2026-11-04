@@ -6,26 +6,7 @@ use super::{BatteryDriver, BatteryState};
 #[cfg(target_arch = "arm")]
 use cortex_m::asm;
 
-/// Power save profiles for MCU execution and peripherals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PowerProfile {
-    Balanced = 0,
-    Performance = 1,
-    PowerSave = 2,
-    DeepSleep = 3,
-}
-
-impl PowerProfile {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            0 => PowerProfile::Balanced,
-            1 => PowerProfile::Performance,
-            2 => PowerProfile::PowerSave,
-            3 => PowerProfile::DeepSleep,
-            _ => PowerProfile::Balanced,
-        }
-    }
-}
+pub use kernel::power::{PowerProfile, PowerState};
 
 /// Peripheral operational state for real-time dynamic current estimation.
 #[derive(Debug, Clone, Copy, Default)]
@@ -53,7 +34,9 @@ pub struct SystemPower {
     pub charging_started: bool,
     pub charging_stopped: bool,
     pub is_low: bool,
+    pub low_bat_transition: bool,
     pub is_critical: bool,
+    pub state: PowerState,
     pub profile: PowerProfile,
     pub battery_driver: BatteryDriver,
 }
@@ -75,7 +58,9 @@ impl SystemPower {
             charging_started: false,
             charging_stopped: false,
             is_low: false,
+            low_bat_transition: false,
             is_critical: false,
+            state: PowerState::Active,
             profile: PowerProfile::Balanced,
             battery_driver: BatteryDriver::empty(),
         }
@@ -97,7 +82,9 @@ impl SystemPower {
             charging_started: false,
             charging_stopped: false,
             is_low: false,
+            low_bat_transition: false,
             is_critical: false,
+            state: PowerState::Active,
             profile: PowerProfile::Balanced,
             battery_driver: BatteryDriver::new(),
         }
@@ -118,10 +105,20 @@ impl SystemPower {
     pub fn notify_activity(&mut self) {
         self.inactivity_secs = 0;
         self.apo_warning_active = false;
+        if self.state != PowerState::DeepSleep {
+            self.state = PowerState::Active;
+        }
+    }
+
+    pub fn set_standby(&mut self) {
+        if self.state != PowerState::DeepSleep {
+            self.state = PowerState::Standby;
+        }
     }
 
     fn apply_state(&mut self, state: &BatteryState) {
         let prev_charging = self.is_charging;
+        let prev_low = self.is_low;
         self.battery_pct = state.percentage;
         self.battery_mv = state.millivolts;
         self.battery_ma = state.current_ma;
@@ -133,6 +130,10 @@ impl SystemPower {
             self.charging_started = true;
         } else if prev_charging && !self.is_charging {
             self.charging_stopped = true;
+        }
+
+        if !prev_low && self.is_low && !self.is_charging {
+            self.low_bat_transition = true;
         }
     }
 
@@ -146,6 +147,16 @@ impl SystemPower {
             Some(false)
         } else {
             None
+        }
+    }
+
+    /// Poll for low battery edge transitions (0 -> 1) to trigger user alerts.
+    pub fn poll_low_battery_transition(&mut self) -> bool {
+        if self.low_bat_transition {
+            self.low_bat_transition = false;
+            true
+        } else {
+            false
         }
     }
 
@@ -206,6 +217,7 @@ impl SystemPower {
 
     /// Transition to Deep Sleep power saving state.
     pub fn enter_deep_sleep(&mut self) {
+        self.state = PowerState::DeepSleep;
         self.profile = PowerProfile::DeepSleep;
         #[cfg(target_arch = "arm")]
         asm::wfi();
@@ -249,11 +261,23 @@ impl kernel::service::PowerService for SystemPower {
     fn poll_charging_transition(&mut self) -> Option<bool> {
         self.poll_charging_transition()
     }
+    fn poll_low_battery_transition(&mut self) -> bool {
+        self.poll_low_battery_transition()
+    }
     fn set_battery_type(&mut self, bat_type: u8) {
         self.battery_driver
             .set_battery_type(BatteryType::from_u8(bat_type));
     }
     fn force_refresh(&mut self) {
         Self::force_refresh(self);
+    }
+    fn power_state(&self) -> PowerState {
+        self.state
+    }
+    fn power_profile(&self) -> PowerProfile {
+        self.profile
+    }
+    fn inactivity_secs(&self) -> u32 {
+        self.inactivity_secs
     }
 }

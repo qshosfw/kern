@@ -55,7 +55,9 @@ impl VfoApp {
         } else {
             self.latched = false;
             match perm {
-                TxPermission::BlockedBusyChannel | TxPermission::BlockedTotPenalty => {
+                TxPermission::BlockedBusyChannel
+                | TxPermission::BlockedTotPenalty
+                | TxPermission::BlockedBatteryCritical => {
                     if ctx.config.audio.key_beep != 0 {
                         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
                     }

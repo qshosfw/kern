@@ -253,6 +253,35 @@ fn read_file_region(
     storage.read_file_at(path, offset, dst).is_ok()
 }
 
+#[inline(never)]
+fn apply_package_relocs(
+    buffer_bytes: &[u8],
+    payload_len: usize,
+    exec: &SectionExecution,
+    load_delta: u32,
+) -> Result<(), KrxLaunchError> {
+    if exec.reloc_count > 0 && exec.reloc_offset > 0 {
+        let r_off = exec.reloc_offset as usize;
+        if r_off < payload_len {
+            let reloc_stream = &buffer_bytes[r_off..payload_len];
+            let code_len = r_off;
+            let res = unsafe {
+                apply_relocs(
+                    arena_base_ptr(),
+                    code_len,
+                    reloc_stream,
+                    load_delta,
+                    exec.reloc_count,
+                )
+            };
+            if res.is_err() {
+                return Err(KrxLaunchError::RelocationFailed);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Loads a Native (`KrxClass::Native`) or Demand-Paged (`KrxClass::Paged`) binary from flash
 /// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
 #[inline(never)]
@@ -312,25 +341,7 @@ pub fn load_native_from_storage(
     }
 
     // 1. Apply escape-capable delta relocations v2 (Section 6.2)
-    if exec.reloc_count > 0 && exec.reloc_offset > 0 {
-        let r_off = exec.reloc_offset as usize;
-        if r_off < payload_len {
-            let reloc_stream = &buffer_bytes[r_off..payload_len];
-            let code_len = r_off;
-            let res = unsafe {
-                apply_relocs(
-                    arena_base_ptr(),
-                    code_len,
-                    reloc_stream,
-                    load_delta,
-                    exec.reloc_count,
-                )
-            };
-            if res.is_err() {
-                return Err(KrxLaunchError::RelocationFailed);
-            }
-        }
-    }
+    apply_package_relocs(buffer_bytes, payload_len, exec, load_delta)?;
 
     // 2. Bind CapImports (0x0003) into the package GOT (Section 6.3 & Chapter 8)
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
@@ -385,11 +396,10 @@ pub fn load_native_from_storage(
 
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
-    slot.mem_layout.reset();
     if profile.is_structured_paged() {
         let ram_vma = slot.got_base;
         let ram_size = overlay_vma.saturating_sub(ram_vma);
-        slot.mem_layout = MemoryMapLayout::for_p0_structured(
+        slot.mem_layout.init_p0_structured(
             load_base,
             overlay_vma.saturating_sub(load_base),
             overlay_vma,
@@ -401,7 +411,8 @@ pub fn load_native_from_storage(
         let code_size = (exec.got_offset as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4);
         let ram_vma = slot.got_base;
         let ram_size = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(ram_vma);
-        slot.mem_layout = MemoryMapLayout::for_native_pic(load_base, code_size, ram_vma, ram_size);
+        slot.mem_layout
+            .init_native_pic(load_base, code_size, ram_vma, ram_size);
     }
 
     // 5. Flush instruction pipeline before branching into SRAM arena

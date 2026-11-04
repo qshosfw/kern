@@ -203,6 +203,8 @@ pub enum TxPermission {
     BlockedTxInhibited,
     /// Transmission blocked because Time-Out Timer expired; PTT must be released to clear lockout.
     BlockedTotPenalty,
+    /// Transmission blocked because battery voltage is critically low (< cutoff threshold).
+    BlockedBatteryCritical,
 }
 
 impl TxPermission {

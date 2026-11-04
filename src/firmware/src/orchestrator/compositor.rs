@@ -255,6 +255,20 @@ impl ModalCompositor {
 
 pub static mut ACTIVE_MODAL: ModalCompositor = ModalCompositor::new();
 
+pub const TAG_LOW_BATTERY_POPUP: u8 = 0xFE;
+
+/// Displays an immediate non-blocking Low Battery alert modal on top of active screen.
+pub fn show_low_battery_popup() {
+    crate::orchestrator::sink_enter_keys();
+    unsafe {
+        (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_popup(
+            TAG_LOW_BATTERY_POPUP,
+            "LOW BATTERY",
+            "Please Charge",
+        );
+    }
+}
+
 pub struct OsCompositor;
 
 impl OsCompositor {

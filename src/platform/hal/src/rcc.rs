@@ -232,3 +232,27 @@ pub fn set_sysclk_48mhz() {
     // 7. Update SysTick reload value and microsecond scaling to maintain millisecond precision
     crate::delay::update_systick_freq(48_000_000);
 }
+
+/// Safely switch system clock to direct 24 MHz HSI and disable PLL to minimize deep sleep power consumption.
+/// Adjusts Flash wait states to 0WS and updates SysTick calibration.
+pub fn set_sysclk_24mhz_no_pll() {
+    unsafe {
+        // 1. Switch SYSCLK source to direct HSI (24 MHz)
+        let cfgr = rcc::RCC_CFGR.read_volatile();
+        rcc::RCC_CFGR.write_volatile((cfgr & !rcc::CFGR_SW_MASK) | rcc::CFGR_SW_HSI);
+        while (rcc::RCC_CFGR.read_volatile() & rcc::CFGR_SWS_MASK) != rcc::CFGR_SWS_HSI {}
+
+        // 2. Disable PLL to eliminate analog oscillator and charge pump power consumption
+        let cr = rcc::RCC_CR.read_volatile();
+        rcc::RCC_CR.write_volatile(cr & !rcc::CR_PLLON);
+        while (rcc::RCC_CR.read_volatile() & rcc::CR_PLLRDY) != 0 {}
+
+        // 3. Set flash latency to 0WS for <= 24 MHz
+        let acr = pac::flash::FLASH_ACR.read_volatile();
+        pac::flash::FLASH_ACR
+            .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
+    }
+
+    // 4. Update SysTick reload value and microsecond scaling to maintain millisecond precision
+    crate::delay::update_systick_freq(24_000_000);
+}

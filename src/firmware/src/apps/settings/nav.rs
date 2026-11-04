@@ -14,24 +14,18 @@ impl SettingsApp {
             self.items_len = super::security::populate_security(&mut self.items, ctx);
             return;
         }
-        if self.current_page == PageId::ManageApps {
-            self.items_len = super::apps::populate_manage_apps(&mut self.items, ctx);
+
+        if self.current_page == PageId::ManageApps || self.current_page == PageId::ManageServices {
+            let is_srv = self.current_page == PageId::ManageServices;
+            self.items_len = super::apps::populate_package_list(&mut self.items, ctx, is_srv);
             return;
         }
-        if self.current_page == PageId::AppDetail {
-            self.items_len =
-                super::apps::populate_app_detail(&mut self.items, self.selected_app_idx, ctx);
-            return;
-        }
-        if self.current_page == PageId::ManageServices {
-            self.items_len = super::apps::populate_manage_services(&mut self.items, ctx);
-            return;
-        }
-        if self.current_page == PageId::ServiceDetail {
-            self.items_len = super::apps::populate_service_detail(
+        if self.current_page == PageId::AppDetail || self.current_page == PageId::ServiceDetail {
+            let is_srv = self.current_page == PageId::ServiceDetail;
+            self.items_len = super::apps::populate_package_detail(
                 &mut self.items,
-                self.selected_service_idx,
-                ctx,
+                is_srv,
+                self.selected_pkg_idx,
             );
             return;
         }

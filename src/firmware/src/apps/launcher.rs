@@ -48,12 +48,14 @@ static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
 }; MAX_LAUNCHER_ENTRIES];
 
 pub fn load_entries(
-    storage: Option<&mut crate::services::SystemStorage>,
+    _storage: Option<&mut crate::services::SystemStorage>,
 ) -> &'static [LauncherEntry] {
-    let cat = catalog::get_catalog();
     #[cfg(feature = "filesystem")]
-    if let Some(s) = storage {
-        cat.scan(s);
+    {
+        let cat = catalog::get_catalog();
+        if let Some(s) = _storage {
+            cat.scan(s);
+        }
     }
 
     unsafe {
@@ -224,10 +226,10 @@ impl LauncherApp {
                 ctx.show_popup_str(0, "About KERN", crate::build_info::ABOUT_TEXT);
                 true
             }
-            LauncherTarget::Package(path) => {
+            LauncherTarget::Package(_path) => {
                 #[cfg(feature = "filesystem")]
                 {
-                    match crate::apps::runtime::launch_krx_package(ctx, path) {
+                    match crate::apps::runtime::launch_krx_package(ctx, _path) {
                         Ok(_) => true,
                         Err(err) => {
                             ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");

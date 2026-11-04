@@ -1459,6 +1459,7 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
 
 /// Normative Capability & Service Resolution Broker (KRX-ABI 2.5.0 Section 8.1).
 /// Resolution order: preferred provider (`PIN_PROVIDER`) -> kernel primitive registry -> service registry.
+#[inline(never)]
 pub fn resolve_capability_vtable(
     interface_id: u16,
     min_abi: u16,
@@ -1525,6 +1526,7 @@ pub fn resolve_capability_vtable(
 
 /// Bind `SECTION_CAP_IMPORTS (0x0003)` into the loaded package's GOT slots (Appendix C).
 /// Returns `false` if any `FLAG_MANDATORY` import fails to resolve.
+#[inline(never)]
 pub fn bind_cap_imports(
     cap_section_body: &[u8],
     got_words: &mut [u32],

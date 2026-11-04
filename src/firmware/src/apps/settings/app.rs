@@ -33,8 +33,7 @@ pub struct SettingsApp {
     #[cfg(feature = "passcode")]
     pub(crate) passcode_candidate: heapless::String<16>,
 
-    pub selected_app_idx: usize,
-    pub selected_service_idx: usize,
+    pub selected_pkg_idx: usize,
     pub slide_offset_x: i16,
     #[cfg(feature = "boot_assets")]
     pub(crate) active_asset: Option<&'static super::asset_chooser::AssetDescriptor>,
@@ -45,8 +44,7 @@ impl SettingsApp {
         unsafe {
             (*ptr).title = "Settings";
             (*ptr).view = MenuView::new();
-            (*ptr).selected_app_idx = 0;
-            (*ptr).selected_service_idx = 0;
+            (*ptr).selected_pkg_idx = 0;
             (*ptr).slide_offset_x = 0;
             (*ptr).dirty_timer_ms = 0;
             (*ptr).last_tick_ms = 0;
@@ -116,7 +114,7 @@ impl SettingsApp {
             }
         }
 
-        if super::apps::handle_apps_press(self, ctx, sel_idx) {
+        if super::apps::handle_package_press(self, ctx, sel_idx) {
             return;
         }
 

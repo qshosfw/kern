@@ -1,7 +1,7 @@
 //! Modal Dialogs, Input Prompts & Action Dispatch for OS Settings
 
 use super::app::SettingsApp;
-use super::page::{ActionId, PageId};
+use super::page::ActionId;
 use crate::SysContext;
 use gfx::gui::modules::menu::OptionSheet;
 #[cfg(feature = "passcode")]
@@ -27,7 +27,6 @@ pub const TAG_ASSET_CHOOSER: u8 = 11;
 pub const TAG_MODEL_CHOOSER: u8 = 12;
 #[cfg(feature = "passcode")]
 pub const TAG_MODEL_INPUT: u8 = 13;
-pub const TAG_APP_DELETE_CONFIRM: u8 = 14;
 pub const TAG_APP_RESET_CONFIRM: u8 = 15;
 
 #[cfg(feature = "passcode")]
@@ -236,7 +235,7 @@ pub fn handle_text_input_done(
 }
 
 #[inline(never)]
-pub fn handle_confirm_result(app: &mut SettingsApp, ctx: &mut SysContext, tag: u8) -> EventResult {
+pub fn handle_confirm_result(_app: &mut SettingsApp, ctx: &mut SysContext, tag: u8) -> EventResult {
     match tag {
         TAG_APP_RESET_CONFIRM => {
             ctx.show_popup(
@@ -244,37 +243,6 @@ pub fn handle_confirm_result(app: &mut SettingsApp, ctx: &mut SysContext, tag: u
                 "Config Reset",
                 "Defaults restored on next launch",
             );
-            EventResult::Consumed
-        }
-        TAG_APP_DELETE_CONFIRM => {
-            let cat = crate::apps::launcher::catalog::get_catalog();
-            let path = cat
-                .apps()
-                .nth(app.selected_app_idx)
-                .map(|app| app.path.clone());
-            if let Some(path) = path {
-                let _ = ctx.storage.remove(path.as_str());
-
-                // If dynamic app was loaded, unregister it and mark process dead
-                let dyn_id = crate::apps::AppRegistry::count();
-                crate::apps::AppRegistry::unregister_dynamic();
-                if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(dyn_id) {
-                    pcb.set_state(kernel::proc::ProcState::Dead);
-                }
-
-                ctx.show_popup(TAG_POPUP_INFO, "App Deleted", "Application uninstalled");
-                cat.mark_dirty();
-                cat.scan(ctx.storage);
-                crate::apps::launcher::reload_launcher(ctx.storage);
-                if app.current_page == PageId::AppDetail {
-                    app.pop_submenu(ctx);
-                } else {
-                    app.populate_current_menu(ctx);
-                    if app.selected_idx >= app.items_len && app.items_len > 0 {
-                        app.selected_idx = app.items_len - 1;
-                    }
-                }
-            }
             EventResult::Consumed
         }
         _ => EventResult::Ignored,

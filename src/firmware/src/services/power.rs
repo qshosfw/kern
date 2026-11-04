@@ -15,6 +15,8 @@ impl PowerServiceConfigExt for drivers::battery::SystemPower {
             _ => drivers::battery::PowerProfile::Balanced,
         };
         self.auto_power_off_min = cfg.auto_power_off_min;
+        self.battery_driver
+            .set_thresholds(cfg.low_bat_warn_mv, cfg.low_bat_shut_mv);
         self.force_refresh();
     }
 }

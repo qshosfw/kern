@@ -42,6 +42,8 @@ pub struct BatteryDriver {
     tx_recovery_secs: u8,
     pre_tx_mv: u16,
     drift_counter: u8,
+    pub warn_threshold_mv: u16,
+    pub shut_threshold_mv: u16,
 }
 
 impl BatteryDriver {
@@ -66,6 +68,8 @@ impl BatteryDriver {
             tx_recovery_secs: 0,
             pre_tx_mv: 0,
             drift_counter: 0,
+            warn_threshold_mv: 6800,
+            shut_threshold_mv: 6300,
         }
     }
 
@@ -90,7 +94,14 @@ impl BatteryDriver {
             tx_recovery_secs: 0,
             pre_tx_mv: 0,
             drift_counter: 0,
+            warn_threshold_mv: 6800,
+            shut_threshold_mv: 6300,
         }
+    }
+
+    pub fn set_thresholds(&mut self, warn_mv: u16, shut_mv: u16) {
+        self.warn_threshold_mv = if warn_mv == 0 { 6800 } else { warn_mv };
+        self.shut_threshold_mv = if shut_mv == 0 { 6300 } else { shut_mv };
     }
 
     pub fn set_battery_type(&self, bat_type: BatteryType) {
@@ -300,8 +311,28 @@ impl BatteryDriver {
         } else {
             mv_to_percentage(self.smoothed_mv, self.battery_type.get())
         };
-        let is_low = !is_external && (self.smoothed_mv < 6500 || percentage < 15);
-        let is_critical = !is_external && (self.smoothed_mv < 6000 || percentage == 0);
+        // Debounced Hysteresis State Evaluation:
+        // Exiting low/critical state requires +150 mV margin or active charging to prevent threshold flutter
+        let warn_limit = self.warn_threshold_mv;
+        let shut_limit = self.shut_threshold_mv;
+
+        let is_critical = if is_external {
+            false
+        } else if self.is_charging {
+            self.smoothed_mv < shut_limit && percentage == 0
+        } else {
+            self.smoothed_mv < shut_limit || percentage == 0
+        };
+
+        let is_low = if is_external {
+            false
+        } else if is_critical {
+            true
+        } else if self.is_charging {
+            self.smoothed_mv < warn_limit && percentage < 15
+        } else {
+            self.smoothed_mv < warn_limit || percentage < 15
+        };
 
         BatteryState {
             raw_adc,

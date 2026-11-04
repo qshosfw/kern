@@ -518,6 +518,12 @@ impl RadioCoordinator {
             return TxPermission::BlockedResourceLocked;
         }
 
+        // Hardware Safeguard: Lock out TX if battery pack is critically depleted
+        let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+        if pwr.is_critical && !pwr.is_charging {
+            return TxPermission::BlockedBatteryCritical;
+        }
+
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &self.channels[idx];
         let tx_inhibited = ch.rx_freq.raw() == 0 || ch.effective_tx_freq().raw() == 0;
@@ -572,15 +578,25 @@ impl RadioCoordinator {
         self.tot_elapsed_10ms = 0;
         self.tot_warning_given = false;
         radio.set_tx_frequency(tx_ch.effective_tx_freq());
-        radio.set_power_level(tx_ch.power);
+
+        // Kernel Power Governor: Dynamic Brownout Protection
+        // When battery voltage is low, high-power TX (5W / ~2A) causes severe cell IR voltage sag
+        // that can drop the pack below 5.5V and brownout the MCU. Throttle power level to Medium.
+        let mut target_power = tx_ch.power;
+        let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+        if pwr.is_low && target_power == RfPowerLevel::High {
+            target_power = RfPowerLevel::Medium;
+        }
+
+        radio.set_power_level(target_power);
         radio.set_modulation(tx_ch.modulation);
-        let pwr = match tx_ch.power {
+        let pwr_level = match target_power {
             RfPowerLevel::Low => 0,
             RfPowerLevel::Medium => 1,
             RfPowerLevel::High => 2,
         };
         radio.tx_prepare();
-        radio.tx_ramp_up(pwr);
+        radio.tx_ramp_up(pwr_level);
         radio.tx_unmute();
     }
 

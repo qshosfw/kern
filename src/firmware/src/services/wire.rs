@@ -1,31 +1,33 @@
 //! Declarative Firmware RigWire Service & Component Dispatcher.
 //!
 //! Bridges RigWire serial transport with microkernel traits, firmware services,
-//! hardware peripherals, and hosted applications.
+//! hardware peripherals, and hosted applications using universal Resource Handles.
 //!
 //! Subsystems Handled:
-//! - SERVICE_CONTROL (0x01): Declarative routing to System (0x00), Radio (0x01),
-//!   Power (0x02), Audio (0x03), and Hosted Applications (0x10+).
-//! - SERVICE_DATA (0x03): Chunked file streaming with strict pre-commit validation,
-//!   automatic `/sys/calib.bak` backup, readback verification, and rollback.
+//! - SERVICE_CONTROL (0x01): Universal microkernel Resource Handle routing to System, Radio,
+//!   UI, Input, Config, App, and Storage facets.
+//! - SERVICE_DATA (0x03): Hardened chunked file streaming with strict path canonicalization,
+//!   8 KiB write ceiling, sector quota guards, automatic `/sys/calib.bak` backup,
+//!   and streaming CRC32 verification.
 //! - SERVICE_EVENTS (0x02): Host event subscriptions and asynchronous event streaming.
 
 use crate::hardware::SystemHardware;
 use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
 use crate::services::storage::DirEntryInfo;
+use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{
     ModulationMode, PowerService, RfFineTuning, RfModulation, RfPowerSequencer, RfSquelch,
 };
 use kernel::wire::*;
 use utils::units::Frequency;
 
-pub const STAGING_BUF_CAP: usize = 512;
+/// Maximum upload size accepted over RigWire (8 KiB, strictly aligned to transient arena).
+pub const MAX_WIRE_FILE_SIZE: usize = crate::data::arena::TRANSIENT_ARENA_BYTES;
 
-/// Staging buffer for atomic non-volatile commits (up to 512 bytes).
 /// Reuses the shared transient arena so it incurs strictly ZERO bytes of Flash OR SRAM overhead.
 #[inline(always)]
-pub fn staging_buf() -> &'static mut [u8; STAGING_BUF_CAP] {
-    crate::data::arena::staging_buf()
+pub fn wire_file_staging_buf() -> &'static mut [u8; MAX_WIRE_FILE_SIZE] {
+    crate::data::arena::transient_arena_bytes_mut()
 }
 
 /// Active transfer session state
@@ -129,106 +131,102 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     }
 }
 
-// ── SERVICE_CONTROL (0x01) ───────────────────────────────────────────────────
+// ── SERVICE_CONTROL (0x01): Universal Handle RPC ────────────────────────────
+
+#[inline(always)]
+fn get_u8(val: &[u8]) -> Result<u8, WireStatus> {
+    val.first().copied().ok_or(WireStatus::BadLength)
+}
+
+#[inline(always)]
+fn get_u32_le(val: &[u8]) -> Result<u32, WireStatus> {
+    if val.len() >= 4 {
+        Ok(u32::from_le_bytes([val[0], val[1], val[2], val[3]]))
+    } else {
+        Err(WireStatus::BadLength)
+    }
+}
+
+#[inline(always)]
+fn get_i16_le(val: &[u8]) -> Result<i16, WireStatus> {
+    if val.len() >= 2 {
+        Ok(i16::from_le_bytes([val[0], val[1]]))
+    } else {
+        Err(WireStatus::BadLength)
+    }
+}
 
 #[inline(never)]
-fn on_control_state_get(
-    header: &WireHeader,
-    payload: &[u8],
-    hw: &mut SystemHardware,
-    now: u32,
-) -> bool {
-    let req = match StateGetReq::parse(payload) {
+fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, now: u32) -> bool {
+    let req = match HandleGetReq::parse(payload) {
         Ok(r) => r,
         Err(status) => return send_status(hw, header, status),
     };
 
-    let mut val_buf = [0u8; 16];
-    let val_len = match req.component_id {
-        COMPONENT_SYSTEM => match req.property_id {
-            PROP_SYS_UPTIME_MS => {
-                val_buf[..4].copy_from_slice(&now.to_le_bytes());
-                4
-            }
-            PROP_SYS_KEYPAD_LOCKED => {
-                val_buf[0] = hw.orchestrator.is_keypad_locked() as u8;
-                1
-            }
-            PROP_SYS_FLASHLIGHT_ACTIVE => {
-                val_buf[0] = bsp::pins::FLASHLIGHT.is_high() as u8;
-                1
-            }
-            PROP_SYS_ACTIVE_APP => {
-                val_buf[0] = hw.orchestrator.active_app_id() as u8;
-                1
-            }
-            PROP_SYS_MCU_UID => {
-                if !hw.wire.session.is_authenticated {
-                    return send_status(hw, header, WireStatus::AuthRequired);
+    let mut val_buf = [0u8; 96];
+    let val_len = match req.handle.domain {
+        DOMAIN_SYSTEM => match req.handle.facet {
+            FACET_SYS_IDENTITY => {
+                // Serial64 (8B)
+                val_buf[..8].copy_from_slice(&bsp::uid::get_hardware_serial64().to_le_bytes());
+                // MAC address (6B)
+                val_buf[8..14].copy_from_slice(&bsp::uid::read_mac_address());
+                // Crockford serial string (14B)
+                val_buf[14..28].copy_from_slice(&bsp::uid::get_crockford_serial()[..14]);
+                // Auth status (1B)
+                let is_auth = hw.wire.session.is_authenticated;
+                val_buf[28] = is_auth as u8;
+                // MCU UID (12B if authenticated, otherwise 0)
+                if is_auth {
+                    val_buf[29..41].copy_from_slice(&bsp::uid::read_mcu_uid());
+                } else {
+                    val_buf[29..41].fill(0);
                 }
-                let uid = bsp::uid::read_mcu_uid();
-                val_buf[..12].copy_from_slice(&uid);
-                12
+                Ok(41)
             }
-            PROP_SYS_SERIAL64 => {
-                let serial = bsp::uid::get_hardware_serial64();
-                val_buf[..8].copy_from_slice(&serial.to_le_bytes());
-                8
+            FACET_SYS_METRICS => {
+                // uptime_ms (4B)
+                val_buf[..4].copy_from_slice(&now.to_le_bytes());
+                // sysclk_hz (4B)
+                val_buf[4..8].copy_from_slice(&py32_hal::rcc::sysclk_hz().to_le_bytes());
+                // battery_voltage_mv (2B)
+                let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+                val_buf[8..10].copy_from_slice(&pwr.battery_voltage_mv().to_le_bytes());
+                // battery_percent (1B)
+                val_buf[10] = pwr.battery_percentage();
+                // active_app_id (1B)
+                val_buf[11] = hw.orchestrator.active_app_id() as u8;
+                // keypad_locked (1B)
+                val_buf[12] = hw.orchestrator.is_keypad_locked() as u8;
+                // flashlight_active (1B)
+                val_buf[13] = bsp::pins::FLASHLIGHT.is_high() as u8;
+                Ok(14)
             }
-            PROP_SYS_MAC_ADDR => {
-                let mac = bsp::uid::read_mac_address();
-                val_buf[..6].copy_from_slice(&mac);
-                6
-            }
-            PROP_SYS_SERIAL_STR => {
-                let crockford = bsp::uid::get_crockford_serial();
-                val_buf[..14].copy_from_slice(&crockford[..14]);
-                14
-            }
-            PROP_SYS_SYSCLK_HZ => {
-                let hz = py32_hal::rcc::sysclk_hz();
-                val_buf[..4].copy_from_slice(&hz.to_le_bytes());
-                4
-            }
-            PROP_SYS_CALIB_VALID => {
+            FACET_SYS_CALIBRATION => {
                 let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
                 val_buf[0] = is_valid_calibration(calib.raw_bytes()) as u8;
-                1
+                val_buf[1..3].copy_from_slice(&calib.xtal_freq_low().to_le_bytes());
+                val_buf[3..5].copy_from_slice(&calib.battery_calib_const().to_le_bytes());
+                Ok(5)
             }
-            _ => 0,
+            _ => Err(WireStatus::UnsupportedField),
         },
-        COMPONENT_RADIO => {
+        DOMAIN_RADIO => {
             let radio_state = crate::radio_state_ref();
-            let vfo = radio_state.selected_vfo();
-            match req.property_id {
-                PROP_RADIO_RX_FREQ_HZ | PROP_RADIO_TX_FREQ_HZ => {
+            let vfo = match req.handle.instance {
+                RADIO_INSTANCE_VFO_A => &radio_state.vfo_a,
+                RADIO_INSTANCE_VFO_B => &radio_state.vfo_b,
+                _ => radio_state.selected_vfo(),
+            };
+            match req.handle.facet {
+                FACET_RADIO_TUNING => {
                     val_buf[..4].copy_from_slice(&vfo.frequency.raw().to_le_bytes());
-                    4
+                    val_buf[4..8]
+                        .copy_from_slice(&((radio_state.step_khz as u32) * 1000).to_le_bytes());
+                    val_buf[8] = radio_state.active_vfo;
+                    Ok(9)
                 }
-                PROP_RADIO_SELECTED_VFO => {
-                    val_buf[0] = radio_state.active_vfo;
-                    1
-                }
-                PROP_RADIO_POWER_LEVEL => {
-                    let p_bytes = vfo.power.as_bytes();
-                    let len = p_bytes.len().min(4);
-                    val_buf[..len].copy_from_slice(&p_bytes[..len]);
-                    len
-                }
-                PROP_RADIO_SQUELCH_LEVEL => {
-                    val_buf[0] = radio_state.squelch_level;
-                    1
-                }
-                PROP_RADIO_PTT_ACTIVE => {
-                    val_buf[0] = vfo.tx_active as u8;
-                    1
-                }
-                PROP_RADIO_RSSI_DBM => {
-                    let rssi = hw.radio.get_rssi();
-                    val_buf[..2].copy_from_slice(&rssi.to_le_bytes());
-                    2
-                }
-                PROP_RADIO_MODULATION_MODE => {
+                FACET_RADIO_MODULATION => {
                     let m = match vfo.mod_type {
                         "AM" => 1,
                         "AMB" => 2,
@@ -243,279 +241,330 @@ fn on_control_state_get(
                         _ => 0,
                     };
                     val_buf[0] = m;
-                    1
-                }
-                PROP_RADIO_BANDWIDTH_HZ => {
                     let bw_hz: u32 = match vfo.bw {
                         "W" => 25_000,
-                        "N" => 12_500,
                         "VN" => 6_250,
                         _ => 12_500,
                     };
-                    val_buf[..4].copy_from_slice(&bw_hz.to_le_bytes());
-                    4
+                    val_buf[1..5].copy_from_slice(&bw_hz.to_le_bytes());
+                    Ok(5)
                 }
-                PROP_RADIO_FINE_OFFSET_DHZ => {
+                FACET_RADIO_SQUELCH => {
+                    val_buf[0] = radio_state.squelch_level;
+                    val_buf[1..3].copy_from_slice(&hw.radio.get_rssi().to_le_bytes());
+                    val_buf[3] = hw.radio.is_squelch_open() as u8;
+                    Ok(4)
+                }
+                FACET_RADIO_TRANSMIT => {
+                    val_buf[0] = vfo.tx_active as u8;
+                    let p = match vfo.power.as_bytes().first() {
+                        Some(b'H') => 2,
+                        Some(b'M') => 1,
+                        _ => 0,
+                    };
+                    val_buf[1] = p;
+                    Ok(2)
+                }
+                FACET_RADIO_DIGITAL => {
                     val_buf[..2].copy_from_slice(&0i16.to_le_bytes());
-                    2
+                    Ok(2)
                 }
-                _ => 0,
+                _ => Err(WireStatus::UnsupportedField),
             }
         }
-        COMPONENT_POWER => {
-            let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-            match req.property_id {
-                PROP_RADIO_BATTERY_MV => {
-                    val_buf[..2].copy_from_slice(&pwr.battery_voltage_mv().to_le_bytes());
-                    2
-                }
-                _ => 0,
+        DOMAIN_UI => match req.handle.facet {
+            FACET_UI_SURFACE => {
+                val_buf[..2].copy_from_slice(&128u16.to_le_bytes());
+                val_buf[2..4].copy_from_slice(&64u16.to_le_bytes());
+                val_buf[4] = 1;
+                val_buf[5..7].copy_from_slice(&1024u16.to_le_bytes());
+                Ok(7)
             }
-        }
-        COMPONENT_AUDIO => match req.property_id {
-            PROP_AUDIO_VOLUME => {
-                val_buf[0] = crate::master_config_ref().audio.volume;
-                1
+            FACET_UI_MODAL => {
+                let modal =
+                    unsafe { &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL) };
+                val_buf[0] = modal.is_active() as u8;
+                val_buf[1] = modal.tag;
+                Ok(2)
             }
-            PROP_AUDIO_KEY_BEEP => {
-                val_buf[0] = (crate::master_config_ref().audio.key_beep != 0) as u8;
-                1
+            FACET_UI_VIEW => {
+                val_buf[0] = hw.orchestrator.active_app_id() as u8;
+                Ok(1)
             }
-            PROP_AUDIO_ROGER_BEEP => {
-                val_buf[0] = crate::master_config_ref().audio.roger_beep;
-                1
-            }
-            _ => 0,
+            _ => Err(WireStatus::UnsupportedField),
         },
-        _ => 0,
+        DOMAIN_INPUT => match req.handle.facet {
+            FACET_INPUT_LOCK => {
+                val_buf[0] = hw.orchestrator.is_keypad_locked() as u8;
+                Ok(1)
+            }
+            _ => Err(WireStatus::UnsupportedField),
+        },
+        DOMAIN_CONFIG => {
+            let domain_idx = req.handle.instance as usize;
+            if domain_idx > 5 {
+                return send_status(hw, header, WireStatus::BadRange);
+            }
+            let cfg_slice = crate::master_config_ref().config_bytes(domain_idx);
+            let len = cfg_slice.len().min(val_buf.len());
+            val_buf[..len].copy_from_slice(&cfg_slice[..len]);
+            Ok(len)
+        }
+        DOMAIN_APP => match req.handle.facet {
+            FACET_APP_REGISTRY => {
+                val_buf[0] = crate::AppRegistry::app_count() as u8;
+                Ok(1)
+            }
+            FACET_APP_LIFECYCLE => {
+                val_buf[0] = hw.orchestrator.active_app_id() as u8;
+                Ok(1)
+            }
+            _ => Err(WireStatus::UnsupportedField),
+        },
+        DOMAIN_STORAGE => {
+            let stats = hw.filesystem.stats();
+            val_buf[..2].copy_from_slice(&stats.active_files.to_le_bytes());
+            val_buf[2..4].copy_from_slice(&stats.used_sectors.to_le_bytes());
+            val_buf[4..6].copy_from_slice(&stats.free_sectors.to_le_bytes());
+            val_buf[6..8].copy_from_slice(&stats.deleted_sectors.to_le_bytes());
+            val_buf[8..12].copy_from_slice(&stats.wear_cycles.to_le_bytes());
+            val_buf[12..14].copy_from_slice(&stats.total_sectors.to_le_bytes());
+            Ok(14)
+        }
+        _ => Err(WireStatus::Unsupported),
     };
 
-    if val_len == 0 {
-        return send_status(hw, header, WireStatus::UnsupportedField);
+    let len = match val_len {
+        Ok(l) => l,
+        Err(status) => return send_status(hw, header, status),
+    };
+
+    let mut resp = [0u8; 100];
+    req.handle.write_bytes(&mut resp[..4]);
+    resp[4..4 + len].copy_from_slice(&val_buf[..len]);
+
+    send_resp(hw, header, WireStatus::Ok, &resp[..4 + len])
+}
+
+fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<(), WireStatus> {
+    match req.handle.domain {
+        DOMAIN_SYSTEM => match req.handle.facet {
+            FACET_SYS_METRICS => {
+                if let Some(&lock) = req.value.first() {
+                    let should_lock = lock != 0;
+                    if should_lock != hw.orchestrator.is_keypad_locked() {
+                        hw.orchestrator.toggle_keypad_lock();
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(WireStatus::UnsupportedField),
+        },
+        DOMAIN_RADIO => {
+            let radio_state = crate::radio_state();
+            let vfo = match req.handle.instance {
+                RADIO_INSTANCE_VFO_A => &mut radio_state.vfo_a,
+                RADIO_INSTANCE_VFO_B => &mut radio_state.vfo_b,
+                _ => radio_state.selected_vfo_mut(),
+            };
+            match req.handle.facet {
+                FACET_RADIO_TUNING => {
+                    let freq_hz = get_u32_le(req.value)?;
+                    if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
+                        return Err(WireStatus::BadRange);
+                    }
+                    vfo.frequency = Frequency::new(freq_hz);
+                    let _ = hw.radio.set_frequency(Frequency::new(freq_hz));
+                    Ok(())
+                }
+                FACET_RADIO_MODULATION => {
+                    let mode_u8 = get_u8(req.value)?;
+                    let mode = ModulationMode::from_u8(mode_u8);
+                    vfo.mod_type = mode.as_str();
+                    hw.radio.set_modulation(mode);
+                    Ok(())
+                }
+                FACET_RADIO_SQUELCH => {
+                    let sql = get_u8(req.value)?.min(9);
+                    radio_state.squelch_level = sql;
+                    hw.radio.set_squelch_level(sql);
+                    Ok(())
+                }
+                FACET_RADIO_TRANSMIT => {
+                    let should_tx = get_u8(req.value)? != 0;
+                    vfo.tx_active = should_tx;
+                    if should_tx {
+                        hw.radio.tx_prepare();
+                        hw.radio.tx_ramp_up(1);
+                        hw.radio.tx_unmute();
+                    } else {
+                        hw.radio.tx_mute();
+                        hw.radio.tx_ramp_down();
+                        hw.radio.tx_conclude();
+                    }
+                    Ok(())
+                }
+                FACET_RADIO_DIGITAL => {
+                    let offset_dhz = get_i16_le(req.value)?;
+                    let freq = vfo.frequency.raw();
+                    hw.radio.set_sub_hz_offset(freq, offset_dhz);
+                    Ok(())
+                }
+                _ => Err(WireStatus::UnsupportedField),
+            }
+        }
+        DOMAIN_INPUT => match req.handle.facet {
+            FACET_INPUT_KEY => {
+                if req.value.is_empty() {
+                    return Err(WireStatus::BadLength);
+                }
+                let code_u8 = req.value[0];
+                let state_u8 = req.value.get(1).copied().unwrap_or(0);
+                if let Some(code) = KeyCode::from_u8(code_u8) {
+                    let state = match state_u8 {
+                        0 => KeyState::Pressed,
+                        1 => KeyState::Held,
+                        _ => KeyState::Released,
+                    };
+                    crate::system::enqueue_event(Event::Key { code, state });
+                    Ok(())
+                } else {
+                    Err(WireStatus::BadRange)
+                }
+            }
+            FACET_INPUT_LOCK => {
+                let should_lock = get_u8(req.value)? != 0;
+                if should_lock != hw.orchestrator.is_keypad_locked() {
+                    hw.orchestrator.toggle_keypad_lock();
+                }
+                Ok(())
+            }
+            _ => Err(WireStatus::UnsupportedField),
+        },
+        DOMAIN_CONFIG => {
+            let domain_idx = req.handle.instance as usize;
+            if domain_idx > 5 {
+                return Err(WireStatus::BadRange);
+            }
+            let mcfg = crate::master_config();
+            let dest = mcfg.config_bytes_mut(domain_idx);
+            let copy_len = req.value.len().min(dest.len());
+            dest[..copy_len].copy_from_slice(&req.value[..copy_len]);
+            mcfg.seal(domain_idx);
+            mcfg.dirty |= 1 << domain_idx;
+            let _ = mcfg.flush_dirty(hw.filesystem);
+            Ok(())
+        }
+        _ => Err(WireStatus::Unsupported),
     }
-
-    let mut resp = [0u8; 24];
-    resp[0] = req.component_id;
-    resp[1] = 0; // flags
-    resp[2..6].copy_from_slice(&1u32.to_le_bytes()); // revision
-    resp[6..8].copy_from_slice(&req.property_id.to_le_bytes());
-    resp[8..8 + val_len].copy_from_slice(&val_buf[..val_len]);
-
-    send_resp(hw, header, WireStatus::Ok, &resp[..8 + val_len])
 }
 
 #[inline(never)]
-fn on_control_state_set(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
-    let req = match StateSetReq::parse(payload) {
+fn on_handle_set(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
+    let req = match HandleSetReq::parse(payload) {
         Ok(r) => r,
         Err(status) => return send_status(hw, header, status),
     };
 
-    let val = req.value_bytes;
-    let status = match req.component_id {
-        COMPONENT_SYSTEM => match req.property_id {
-            PROP_SYS_FLASHLIGHT_ACTIVE => {
-                if let Some(&b) = val.first() {
-                    if b != 0 {
-                        bsp::pins::FLASHLIGHT.set_high();
-                    } else {
-                        bsp::pins::FLASHLIGHT.set_low();
-                    }
-                    WireStatus::Ok
-                } else {
-                    WireStatus::BadLength
-                }
-            }
-            PROP_SYS_KEYPAD_LOCKED => {
-                if let Some(&b) = val.first() {
-                    let should_lock = b != 0;
-                    if should_lock != hw.orchestrator.is_keypad_locked() {
-                        hw.orchestrator.toggle_keypad_lock();
-                    }
-                    WireStatus::Ok
-                } else {
-                    WireStatus::BadLength
-                }
-            }
-            _ => WireStatus::UnsupportedField,
-        },
-        COMPONENT_RADIO => {
-            let radio_state = crate::radio_state();
-            match req.property_id {
-                PROP_RADIO_RX_FREQ_HZ | PROP_RADIO_TX_FREQ_HZ => {
-                    if val.len() >= 4 {
-                        let freq_hz = u32::from_le_bytes([val[0], val[1], val[2], val[3]]);
-                        if (18_000_000..=1_300_000_000).contains(&freq_hz) {
-                            let vfo = radio_state.selected_vfo_mut();
-                            vfo.frequency = Frequency::new(freq_hz);
-                            let _ = hw.radio.set_frequency(Frequency::new(freq_hz));
-                            WireStatus::Ok
-                        } else {
-                            WireStatus::BadRange
-                        }
-                    } else {
-                        WireStatus::BadLength
-                    }
-                }
-                PROP_RADIO_SELECTED_VFO => {
-                    if let Some(&vfo_idx) = val.first() {
-                        if vfo_idx <= 1 {
-                            radio_state.active_vfo = vfo_idx;
-                            WireStatus::Ok
-                        } else {
-                            WireStatus::BadRange
-                        }
-                    } else {
-                        WireStatus::BadLength
-                    }
-                }
-                PROP_RADIO_SQUELCH_LEVEL => {
-                    if let Some(&sql) = val.first() {
-                        let sql = sql.min(9);
-                        radio_state.squelch_level = sql;
-                        hw.radio.set_squelch_level(sql);
-                        WireStatus::Ok
-                    } else {
-                        WireStatus::BadLength
-                    }
-                }
-                PROP_RADIO_MODULATION_MODE => {
-                    if let Some(&m) = val.first() {
-                        let mode = ModulationMode::from_u8(m);
-                        let vfo = radio_state.selected_vfo_mut();
-                        vfo.mod_type = mode.as_str();
-                        hw.radio.set_modulation(mode);
-                        WireStatus::Ok
-                    } else {
-                        WireStatus::BadLength
-                    }
-                }
-                PROP_RADIO_FINE_OFFSET_DHZ => {
-                    if val.len() >= 2 {
-                        let offset_dhz = i16::from_le_bytes([val[0], val[1]]);
-                        let vfo = radio_state.selected_vfo();
-                        hw.radio.set_sub_hz_offset(vfo.frequency.raw(), offset_dhz);
-                        WireStatus::Ok
-                    } else {
-                        WireStatus::BadLength
-                    }
-                }
-                PROP_RADIO_PTT_ACTIVE => {
-                    if let Some(&tx_req) = val.first() {
-                        let vfo = radio_state.selected_vfo_mut();
-                        let should_tx = tx_req != 0;
-                        vfo.tx_active = should_tx;
-                        if should_tx {
-                            hw.radio.tx_prepare();
-                            hw.radio.tx_ramp_up(1);
-                            hw.radio.tx_unmute();
-                        } else {
-                            hw.radio.tx_mute();
-                            hw.radio.tx_ramp_down();
-                            hw.radio.tx_conclude();
-                        }
-                        WireStatus::Ok
-                    } else {
-                        WireStatus::BadLength
-                    }
-                }
-                _ => WireStatus::UnsupportedField,
-            }
-        }
-        COMPONENT_AUDIO => match req.property_id {
-            PROP_AUDIO_VOLUME => {
-                if let Some(&vol) = val.first() {
-                    let vol = vol.min(63);
-                    crate::master_config().audio.volume = vol;
-                    hw.audio.set_volume(vol);
-                    WireStatus::Ok
-                } else {
-                    WireStatus::BadLength
-                }
-            }
-            PROP_AUDIO_KEY_BEEP => {
-                if let Some(&b) = val.first() {
-                    crate::master_config().audio.key_beep = if b != 0 { 1 } else { 0 };
-                    WireStatus::Ok
-                } else {
-                    WireStatus::BadLength
-                }
-            }
-            PROP_AUDIO_ROGER_BEEP => {
-                if let Some(&b) = val.first() {
-                    crate::master_config().audio.roger_beep = b.min(3);
-                    WireStatus::Ok
-                } else {
-                    WireStatus::BadLength
-                }
-            }
-            _ => WireStatus::UnsupportedField,
-        },
-        _ => WireStatus::Unsupported,
+    let status = match handle_resource_set(&req, hw) {
+        Ok(()) => WireStatus::Ok,
+        Err(s) => s,
     };
 
-    let mut resp = [0u8; 8];
-    resp[0] = req.component_id;
-    resp[1] = 0;
-    resp[2..6].copy_from_slice(&2u32.to_le_bytes()); // new revision
-    resp[6..8].copy_from_slice(&req.property_id.to_le_bytes());
-
+    let mut resp = [0u8; 4];
+    req.handle.write_bytes(&mut resp);
     send_resp(hw, header, status, &resp)
 }
 
 #[inline(never)]
-fn on_control_action_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
-    let req = match ActionInvokeReq::parse(payload) {
+fn on_handle_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
+    let req = match HandleInvokeReq::parse(payload) {
         Ok(r) => r,
         Err(status) => return send_status(hw, header, status),
     };
 
-    let status = match req.component_id {
-        COMPONENT_SYSTEM => match req.action_id {
-            ACTION_FLASHLIGHT_TOGGLE => {
-                if bsp::pins::FLASHLIGHT.is_high() {
-                    bsp::pins::FLASHLIGHT.set_low();
-                } else {
-                    bsp::pins::FLASHLIGHT.set_high();
+    let status = match req.handle.domain {
+        DOMAIN_SYSTEM => match req.action_id {
+            ACTION_SYS_REBOOT => {
+                kernel::sys::SystemDiagnostics::reboot();
+            }
+            ACTION_SYS_FLASHLIGHT => {
+                let mode = req.params.first().copied().unwrap_or(2);
+                match mode {
+                    0 => bsp::pins::FLASHLIGHT.set_low(),
+                    1 => bsp::pins::FLASHLIGHT.set_high(),
+                    _ => {
+                        if bsp::pins::FLASHLIGHT.is_high() {
+                            bsp::pins::FLASHLIGHT.set_low();
+                        } else {
+                            bsp::pins::FLASHLIGHT.set_high();
+                        }
+                    }
                 }
                 WireStatus::Ok
             }
-            ACTION_KEYPAD_LOCK_TOGGLE => {
-                hw.orchestrator.toggle_keypad_lock();
-                WireStatus::Ok
-            }
-            ACTION_REBOOT => {
-                kernel::sys::SystemDiagnostics::reboot();
-            }
             _ => WireStatus::Unsupported,
         },
-        COMPONENT_RADIO => match req.action_id {
-            ACTION_VFO_TOGGLE => {
+        DOMAIN_RADIO => match req.action_id {
+            ACTION_RADIO_VFO_TOGGLE => {
                 let radio_state = crate::radio_state();
                 radio_state.active_vfo = 1 - radio_state.active_vfo;
                 WireStatus::Ok
             }
-            ACTION_PTT_TRANSMIT => {
-                let start_tx = req.action_params.first().copied().unwrap_or(0) != 0;
-                let radio_state = crate::radio_state();
-                let vfo = radio_state.selected_vfo_mut();
-                vfo.tx_active = start_tx;
-                if start_tx {
-                    hw.radio.tx_prepare();
-                    hw.radio.tx_ramp_up(1);
-                    hw.radio.tx_unmute();
-                } else {
-                    hw.radio.tx_mute();
-                    hw.radio.tx_ramp_down();
-                    hw.radio.tx_conclude();
+            _ => WireStatus::Unsupported,
+        },
+        DOMAIN_UI => match req.action_id {
+            ACTION_MODAL_DISMISS => {
+                unsafe {
+                    (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                        .dismiss();
                 }
+                WireStatus::Ok
+            }
+            ACTION_MODAL_CONFIRM => {
+                crate::system::enqueue_event(Event::Key {
+                    code: KeyCode::Menu,
+                    state: KeyState::Pressed,
+                });
+                WireStatus::Ok
+            }
+            ACTION_MODAL_CANCEL => {
+                crate::system::enqueue_event(Event::Key {
+                    code: KeyCode::Exit,
+                    state: KeyState::Pressed,
+                });
+                WireStatus::Ok
+            }
+            ACTION_VIEW_LAUNCHER => {
+                crate::system::enqueue_event(Event::Key {
+                    code: KeyCode::Exit,
+                    state: KeyState::Held,
+                });
                 WireStatus::Ok
             }
             _ => WireStatus::Unsupported,
         },
-        COMPONENT_AUDIO => match req.action_id {
-            ACTION_PLAY_BEEP => {
-                hw.radio.play_tone(1000, 100);
+        DOMAIN_INPUT => match req.action_id {
+            ACTION_INPUT_LOCK_TOGGLE => {
+                hw.orchestrator.toggle_keypad_lock();
+                WireStatus::Ok
+            }
+            _ => WireStatus::Unsupported,
+        },
+        DOMAIN_APP => match req.action_id {
+            ACTION_APP_LAUNCH => {
+                let app_id = req.params.first().copied().unwrap_or(0);
+                if (app_id as usize) < crate::AppRegistry::app_count() {
+                    WireStatus::Ok
+                } else {
+                    WireStatus::BadRange
+                }
+            }
+            ACTION_APP_KILL => {
+                crate::system::enqueue_event(Event::Key {
+                    code: KeyCode::Exit,
+                    state: KeyState::Held,
+                });
                 WireStatus::Ok
             }
             _ => WireStatus::Unsupported,
@@ -523,11 +572,37 @@ fn on_control_action_invoke(header: &WireHeader, payload: &[u8], hw: &mut System
         _ => WireStatus::Unsupported,
     };
 
-    let mut resp = [0u8; 4];
-    resp[0] = req.component_id;
-    resp[1..3].copy_from_slice(&req.action_id.to_le_bytes());
+    let mut resp = [0u8; 6];
+    req.handle.write_bytes(&mut resp[..4]);
+    resp[4..6].copy_from_slice(&req.action_id.to_le_bytes());
 
     send_resp(hw, header, status, &resp)
+}
+
+#[inline(never)]
+fn on_handle_stream(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
+    let req = match HandleStreamReq::parse(payload) {
+        Ok(r) => r,
+        Err(status) => return send_status(hw, header, status),
+    };
+
+    if req.handle.domain == DOMAIN_UI && req.handle.facet == FACET_UI_SURFACE {
+        let canvas = crate::system_canvas();
+        let flat = canvas.buffer_flat();
+        let total_sz = flat.len();
+        let off = (req.offset as usize).min(total_sz);
+        let len = (req.length as usize).min(100).min(total_sz - off);
+
+        let mut resp = [0u8; 10 + 100];
+        req.handle.write_bytes(&mut resp[..4]);
+        resp[4..8].copy_from_slice(&(off as u32).to_le_bytes());
+        resp[8..10].copy_from_slice(&(len as u16).to_le_bytes());
+        resp[10..10 + len].copy_from_slice(&flat[off..off + len]);
+
+        send_resp(hw, header, WireStatus::Ok, &resp[..10 + len])
+    } else {
+        send_status(hw, header, WireStatus::Unsupported)
+    }
 }
 
 #[inline(never)]
@@ -538,14 +613,38 @@ fn handle_control_service(
     now: u32,
 ) -> bool {
     match header.opcode {
-        OP_CONTROL_STATE_GET => on_control_state_get(header, payload, hw, now),
-        OP_CONTROL_STATE_SET => on_control_state_set(header, payload, hw),
-        OP_CONTROL_ACTION_INVOKE => on_control_action_invoke(header, payload, hw),
+        OP_HANDLE_GET => on_handle_get(header, payload, hw, now),
+        OP_HANDLE_SET => on_handle_set(header, payload, hw),
+        OP_HANDLE_INVOKE => on_handle_invoke(header, payload, hw),
+        OP_HANDLE_STREAM => on_handle_stream(header, payload, hw),
         _ => false,
     }
 }
 
-// ── SERVICE_DATA (0x03) ──────────────────────────────────────────────────────
+// ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
+
+fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
+    let b = path.as_bytes();
+    if b.is_empty()
+        || b.len() > 32
+        || b[0] != b'/'
+        || b.windows(2).any(|w| w == b".." || w == b"//")
+    {
+        return Err(WireStatus::BadRange);
+    }
+    // Must begin with one of authorized directories:
+    if !(path.starts_with("/user/")
+        || path.starts_with("/pref/")
+        || path.starts_with("/apps/")
+        || path.starts_with("/sys/"))
+    {
+        return Err(WireStatus::SafetyDenied);
+    }
+    if is_write && path.starts_with("/sys/") && path != CALIB_FILE_PATH {
+        return Err(WireStatus::SafetyDenied);
+    }
+    Ok(())
+}
 
 #[inline(never)]
 fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
@@ -554,17 +653,18 @@ fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
         None => return send_status(hw, header, WireStatus::BadLength),
     };
 
-    let path_bytes = req.path.as_bytes();
-    if path_bytes.is_empty()
-        || path_bytes.len() > 32
-        || path_bytes[0] != b'/'
-        || path_bytes.windows(2).any(|w| w == b"..")
-    {
-        return send_status(hw, header, WireStatus::BadRange);
+    if let Err(status) = validate_file_path(req.path, req.mode == TRANSFER_MODE_WRITE) {
+        return send_status(hw, header, status);
     }
 
-    if req.mode == TRANSFER_MODE_WRITE && req.total_size as usize > STAGING_BUF_CAP {
-        return send_status(hw, header, WireStatus::BadLength);
+    if req.mode == TRANSFER_MODE_WRITE {
+        if req.total_size as usize > MAX_WIRE_FILE_SIZE {
+            return send_status(hw, header, WireStatus::BadLength);
+        }
+        let stats = hw.filesystem.stats();
+        if stats.free_sectors < 4 {
+            return send_status(hw, header, WireStatus::Failed);
+        }
     }
 
     let existing_size = hw.filesystem.file_size(req.path).unwrap_or(0) as u32;
@@ -578,6 +678,7 @@ fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
 
     let chunk_size = req.chunk_size.clamp(16, 200);
 
+    let path_bytes = req.path.as_bytes();
     let mut path_buf = [0u8; 32];
     path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
 
@@ -617,11 +718,11 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
     if transfer.mode == TRANSFER_MODE_WRITE {
         let off = req.offset as usize;
         let chunk_len = req.data.len();
-        if off + chunk_len > STAGING_BUF_CAP {
+        if off + chunk_len > MAX_WIRE_FILE_SIZE {
             return send_status(hw, header, WireStatus::BadLength);
         }
 
-        let staging = staging_buf();
+        let staging = wire_file_staging_buf();
         staging[off..off + chunk_len].copy_from_slice(req.data);
         transfer.current_len = transfer.current_len.max((off + chunk_len) as u32);
 
@@ -636,15 +737,12 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         let off = req.offset as usize;
         let len = (req.length as usize).min(180);
 
-        let mut file_buf = [0u8; 256];
-        let read_sz = hw.filesystem.read_file(path, &mut file_buf).unwrap_or(0);
-
-        let chunk = if off < read_sz {
-            let end = (off + len).min(read_sz);
-            &file_buf[off..end]
-        } else {
-            &[]
+        let mut chunk_buf = [0u8; 180];
+        let read_sz = match hw.filesystem.read_file_at(path, off, &mut chunk_buf[..len]) {
+            Ok(n) => n,
+            Err(_) => 0,
         };
+        let chunk = &chunk_buf[..read_sz];
 
         let mut resp = [0u8; 8 + 180];
         resp[0..2].copy_from_slice(&req.transfer_id.to_le_bytes());
@@ -674,7 +772,7 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
 
     if transfer.mode == TRANSFER_MODE_WRITE {
         let total_len = transfer.current_len as usize;
-        let staging = staging_buf();
+        let staging = wire_file_staging_buf();
         let actual_crc = crypto::crc::CrcEngine::crc32(&staging[..total_len]);
 
         if req.expected_crc32 != 0 && req.expected_crc32 != actual_crc {
@@ -685,15 +783,22 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
 
         // ── HARDENED CALIBRATION COMMIT WITH VALIDATION & ROLLBACK ──
         if path == CALIB_FILE_PATH {
-            if total_len != 512 || !is_valid_calibration(staging) {
+            if total_len != 512
+                || !is_valid_calibration(staging[..512].try_into().unwrap_or(&[0; 512]))
+            {
                 return send_status(hw, header, WireStatus::SafetyDenied);
             }
 
             let mcu_uid = bsp::uid::read_mcu_uid();
             let calib = unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
 
+            let calib_slice: &[u8; 512] = match (&staging[..512]).try_into() {
+                Ok(s) => s,
+                Err(_) => return send_status(hw, header, WireStatus::SafetyDenied),
+            };
+
             if calib
-                .commit_with_backup(hw.filesystem, staging, &mcu_uid)
+                .commit_with_backup(hw.filesystem, calib_slice, &mcu_uid)
                 .is_err()
             {
                 return send_status(hw, header, WireStatus::IoError);
@@ -749,10 +854,25 @@ fn on_transfer_stat(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
             reply[1] = 0; // is_dir = false
             reply[2..6].copy_from_slice(&(sz as u32).to_le_bytes());
 
-            let mut buf = [0u8; 256];
-            let rlen = hw.filesystem.read_file(req.path, &mut buf).unwrap_or(0);
-            let crc = crypto::crc::CrcEngine::crc32(&buf[..rlen]);
-            reply[6..10].copy_from_slice(&crc.to_le_bytes());
+            // Compute CRC-32 by streaming chunks across full file
+            let mut crc_val = 0xFFFF_FFFFu32;
+            let mut cur_off = 0usize;
+            let mut chunk_buf = [0u8; 128];
+            while cur_off < sz {
+                let to_read = (sz - cur_off).min(chunk_buf.len());
+                match hw
+                    .filesystem
+                    .read_file_at(req.path, cur_off, &mut chunk_buf[..to_read])
+                {
+                    Ok(n) if n > 0 => {
+                        crc_val = crypto::crc::CrcEngine::crc32_update(crc_val, &chunk_buf[..n]);
+                        cur_off += n;
+                    }
+                    _ => break,
+                }
+            }
+            crc_val = !crc_val;
+            reply[6..10].copy_from_slice(&crc_val.to_le_bytes());
             WireStatus::Ok
         }
         Err(_) => {
@@ -802,6 +922,13 @@ fn on_transfer_remove(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwa
         Some(r) => r,
         None => return send_status(hw, header, WireStatus::BadLength),
     };
+
+    if let Err(status) = validate_file_path(req.path, true) {
+        return send_status(hw, header, status);
+    }
+    if req.path == CALIB_FILE_PATH {
+        return send_status(hw, header, WireStatus::SafetyDenied);
+    }
 
     let status = match hw.filesystem.remove(req.path) {
         Ok(_) => WireStatus::Ok,

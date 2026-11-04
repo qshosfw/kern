@@ -103,6 +103,22 @@ pub fn clear_sunk_keys() {
     }
 }
 
+#[inline(never)]
+fn filter_sunk_keys(event: &Event) -> bool {
+    if let Event::Key { code, state } = *event {
+        let bit = key_to_bit(code);
+        if (unsafe { SUNK_KEYS } & bit) != 0 {
+            if state == KeyState::Released || state != KeyState::Held {
+                unsafe {
+                    SUNK_KEYS &= !bit;
+                }
+            }
+            return true;
+        }
+    }
+    false
+}
+
 impl Orchestrator {
     pub fn new(startup_app: usize) -> Self {
         init_proc_table();
@@ -226,6 +242,21 @@ impl Orchestrator {
         self.active_app_id
     }
 
+    pub fn set_startup_app(&mut self, app_id: usize) {
+        if self.active_app_id != app_id {
+            self.active_app_id = app_id;
+            let table = proc_table_mut();
+            if let Some(pcb) = table.find_mut_by_app(5) {
+                let name = crate::AppRegistry::descriptor(app_id)
+                    .map(|m| m.name)
+                    .unwrap_or("App");
+                pcb.name.clear();
+                let _ = pcb.name.push_str(name);
+                pcb.app_id = app_id;
+            }
+        }
+    }
+
     /// Reset auto-lock inactivity countdown on external user or hardware activity.
     pub fn notify_activity(&mut self) {
         self.lock_mgr.reset_input_tracking();
@@ -282,6 +313,59 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn handle_f_key_action<'a>(
+        &mut self,
+        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        code: KeyCode,
+    ) {
+        self.lock_mgr.is_f_active = false;
+        let action = match code {
+            KeyCode::Key0 => ctx.config.keys.f_0,
+            KeyCode::Star => ctx.config.keys.f_star,
+            KeyCode::Menu => ctx.config.keys.f_menu,
+            KeyCode::Side1 => ctx.config.keys.f_side1,
+            KeyCode::Side2 => ctx.config.keys.f_side2,
+            _ => {
+                if let Some(d) = code.to_digit().filter(|&d| d >= 1) {
+                    ctx.config.keys.f_digits[(d - 1) as usize]
+                } else {
+                    0
+                }
+            }
+        };
+        if action != 0 {
+            self.process_ipc_command(ctx, Shortcut::from_u8(action));
+        } else {
+            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+        }
+        self.drain_ipc_commands(ctx);
+    }
+
+    #[inline(never)]
+    fn update_key_ownership(
+        &mut self,
+        is_key_event: bool,
+        key_code: Option<KeyCode>,
+        key_state: Option<KeyState>,
+        status: EventResult,
+        fault_handled: bool,
+    ) {
+        if is_key_event && !fault_handled {
+            if let (Some(code), Some(state)) = (key_code, key_state) {
+                if state == KeyState::Pressed {
+                    self.owned_key = if status == EventResult::Consumed {
+                        Some(code)
+                    } else {
+                        None
+                    };
+                } else if state == KeyState::Released && self.owned_key == Some(code) {
+                    self.owned_key = None;
+                }
+            }
+        }
+    }
+
+    #[inline(never)]
     pub fn dispatch_event<'a>(
         &mut self,
         ctx: &mut crate::services::FirmwareContext<'a, '_>,
@@ -290,22 +374,8 @@ impl Orchestrator {
         let prev_app = self.active_app_id;
 
         // Intercept and sink keys suppressed during screen/app/modal transitions
-        if let Event::Key { code, state } = event {
-            let bit = key_to_bit(code);
-            if (unsafe { SUNK_KEYS } & bit) != 0 {
-                if state == KeyState::Released {
-                    unsafe {
-                        SUNK_KEYS &= !bit;
-                    }
-                    return false;
-                } else if state == KeyState::Held {
-                    return false;
-                } else {
-                    unsafe {
-                        SUNK_KEYS &= !bit;
-                    }
-                }
-            }
+        if filter_sunk_keys(&event) {
+            return false;
         }
 
         // 0. If an OS modal is active, modal compositor intercepts all input
@@ -365,27 +435,7 @@ impl Orchestrator {
         } = event
         {
             if self.lock_mgr.is_f_active {
-                self.lock_mgr.is_f_active = false;
-                let action = match code {
-                    KeyCode::Key0 => ctx.config.keys.f_0,
-                    KeyCode::Star => ctx.config.keys.f_star,
-                    KeyCode::Menu => ctx.config.keys.f_menu,
-                    KeyCode::Side1 => ctx.config.keys.f_side1,
-                    KeyCode::Side2 => ctx.config.keys.f_side2,
-                    _ => {
-                        if let Some(d) = code.to_digit().filter(|&d| d >= 1) {
-                            ctx.config.keys.f_digits[(d - 1) as usize]
-                        } else {
-                            0
-                        }
-                    }
-                };
-                if action != 0 {
-                    self.process_ipc_command(ctx, Shortcut::from_u8(action));
-                } else {
-                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
-                }
-                self.drain_ipc_commands(ctx);
+                self.handle_f_key_action(ctx, code);
                 return true;
             }
         }
@@ -429,21 +479,7 @@ impl Orchestrator {
         }
 
         // 5. Track key ownership or release
-        if is_key_event && !fault_handled {
-            if let (Some(code), Some(state)) = (key_code, key_state) {
-                if state == KeyState::Pressed {
-                    if status == EventResult::Consumed {
-                        self.owned_key = Some(code);
-                    } else {
-                        self.owned_key = None;
-                    }
-                } else if state == KeyState::Released {
-                    if self.owned_key == Some(code) {
-                        self.owned_key = None;
-                    }
-                }
-            }
-        }
+        self.update_key_ownership(is_key_event, key_code, key_state, status, fault_handled);
 
         // 6. If foreground app consumed the event, owns this key, or fault was handled, it is completely sunk!
         if status == EventResult::Consumed || is_key_owned || fault_handled {

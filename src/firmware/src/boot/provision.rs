@@ -239,13 +239,17 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
 /// Execute the storage provisioning pass for dynamic application packages and configuration.
 #[inline(never)]
 pub fn provision_packages(filesystem: &mut SystemStorage) {
-    let _ = filesystem.create_dir("/apps");
-    let _ = filesystem.create_dir("/pref");
-    let _ = filesystem.create_dir("/sys");
-    let _ = filesystem.create_dir("/user");
-    let _ = filesystem.create_dir("/user/splash");
-    let _ = filesystem.create_dir("/user/rogers");
-    let _ = filesystem.create_dir("/user/jingles");
+    for d in [
+        "/apps",
+        "/pref",
+        "/sys",
+        "/user",
+        "/user/splash",
+        "/user/rogers",
+        "/user/jingles",
+    ] {
+        let _ = filesystem.create_dir(d);
+    }
 
     ensure_core_packages(filesystem);
 
@@ -307,10 +311,11 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         let mut dst_buf = [0u8; 48];
         let p_bytes = prefix.as_bytes();
         let n_bytes = fname.as_bytes();
-        if p_bytes.len() + n_bytes.len() <= dst_buf.len() {
+        let total_len = p_bytes.len() + n_bytes.len();
+        if total_len <= dst_buf.len() {
             dst_buf[..p_bytes.len()].copy_from_slice(p_bytes);
-            dst_buf[p_bytes.len()..p_bytes.len() + n_bytes.len()].copy_from_slice(n_bytes);
-            if let Ok(dst_path) = core::str::from_utf8(&dst_buf[..p_bytes.len() + n_bytes.len()]) {
+            dst_buf[p_bytes.len()..total_len].copy_from_slice(n_bytes);
+            if let Ok(dst_path) = core::str::from_utf8(&dst_buf[..total_len]) {
                 let _ = filesystem.remove(dst_path);
                 if filesystem.write_file(dst_path, buf).is_ok() {
                     let _ = filesystem.remove(src_path);

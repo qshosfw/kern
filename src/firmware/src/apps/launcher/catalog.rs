@@ -5,9 +5,11 @@
 //! and caches entries for the OS launcher and Settings manager.
 
 use crate::services::SystemStorage;
+use kernel::proc::krx::{KrxClass, KrxExecType};
+#[cfg(feature = "filesystem")]
 use kernel::proc::krx::{
-    KrxClass, KrxExecType, KrxPreamble, SECTION_IDENTITY, SECTION_TYPE_LIFECYCLE, SectionIdentity,
-    SectionType, find_section,
+    KrxPreamble, SECTION_IDENTITY, SECTION_TYPE_LIFECYCLE, SectionIdentity, SectionType,
+    find_section,
 };
 
 /// Cached catalog entry for an installed package.
@@ -147,62 +149,45 @@ impl PackageCatalog {
         let mut icon_id = 0u16;
         let mut caps = 0u32;
         let mut is_valid = false;
-        let mut hdr_buf = [0u8; 160];
 
         if (is_app || is_krx) && size >= KrxPreamble::SIZE {
-            if let Ok(read_len) = filesystem.read_file(path_str, &mut hdr_buf) {
-                if read_len >= KrxPreamble::SIZE {
-                    if let Ok(preamble) = KrxPreamble::parse(&hdr_buf[..read_len]) {
-                        if let Some(cls) = preamble.execution_class() {
-                            is_valid = true;
-                            app_class = cls;
-                        }
+            let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..160];
+            if let Ok(read_len) = filesystem.read_file(path_str, hdr_buf) {
+                if let Ok(preamble) = KrxPreamble::parse(&hdr_buf[..read_len]) {
+                    if let Some(cls) = preamble.execution_class() {
+                        is_valid = true;
+                        app_class = cls;
+                    }
 
-                        let header_len = (preamble.header_len as usize).min(read_len);
-
-                        if let Some(ident_body) =
-                            find_section(&hdr_buf, header_len, SECTION_IDENTITY)
-                        {
-                            if let Some(ident) = SectionIdentity::parse(ident_body) {
-                                icon_id = ident.icon_asset;
-                                if let Some(name_str) = ident.name(&hdr_buf[..header_len]) {
-                                    let _ = title.push_str(name_str);
-                                }
-                            }
+                    let h_len = (preamble.header_len as usize).min(read_len);
+                    if let Some(ident) = find_section(hdr_buf, h_len, SECTION_IDENTITY)
+                        .and_then(SectionIdentity::parse)
+                    {
+                        icon_id = ident.icon_asset;
+                        if let Some(name_str) = ident.name(&hdr_buf[..h_len]) {
+                            let _ = title.push_str(name_str);
                         }
+                    }
 
-                        if let Some(type_body) =
-                            find_section(&hdr_buf, header_len, SECTION_TYPE_LIFECYCLE)
-                        {
-                            if let Some(st) = SectionType::parse(type_body) {
-                                if let Some(et) = st.exec_type() {
-                                    exec_type = et;
-                                }
-                                caps = st.cap_mask;
-                            }
+                    if let Some(st) = find_section(hdr_buf, h_len, SECTION_TYPE_LIFECYCLE)
+                        .and_then(SectionType::parse)
+                    {
+                        if let Some(et) = st.exec_type() {
+                            exec_type = et;
                         }
+                        caps = st.cap_mask;
                     }
                 }
             }
         }
 
         if title.is_empty() {
-            let stem = if is_app || is_krx {
+            let stem = if (is_app || is_krx) && n > 4 {
                 &base_name[..n - 4]
             } else {
                 base_name
             };
-            if !is_valid {
-                let _ = title.push_str("[!] ");
-            }
-            let avail = 16usize.saturating_sub(title.len());
-            let _ = title.push_str(&stem[..stem.len().min(avail)]);
-        } else if !is_valid {
-            let mut warn_title = heapless::String::<16>::new();
-            let _ = warn_title.push_str("[!] ");
-            let avail = 16usize.saturating_sub(warn_title.len());
-            let _ = warn_title.push_str(&title.as_str()[..title.len().min(avail)]);
-            title = warn_title;
+            let _ = title.push_str(&stem[..stem.len().min(16)]);
         }
 
         Some(PackageCatalogEntry {
