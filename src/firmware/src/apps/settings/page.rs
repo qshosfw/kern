@@ -220,6 +220,7 @@ impl SettingField {
 
     // System (domain 3)
     pub const UART_BAUD: Self = Self::byte(3, 2);
+    pub const CPU_CLOCK: Self = Self::byte(3, 3);
 
     // Battery (domain 4)
     pub const BATTERY_TYPE: Self = Self::byte(4, 1);
@@ -228,7 +229,6 @@ impl SettingField {
     pub const AUTO_POWER_OFF: Self = Self::byte(4, 4);
     pub const CHARGE_DETECT: Self = Self::byte(4, 5);
     pub const CALIB_TWEAK_MV: Self = Self::CalibTweak;
-    pub const CPU_CLOCK: Self = Self::byte(4, 12);
 
     // Apps (domain 5)
     pub const LAUNCHER_STYLE: Self = Self::byte(5, 1);

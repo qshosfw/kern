@@ -105,18 +105,18 @@ struct AssetChooserStorage {
 
 #[inline(always)]
 fn storage_ref() -> &'static AssetChooserStorage {
-    let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
+    let arena = crate::data::arena::transient_arena_bytes_mut();
     unsafe {
-        &*(arena[crate::runtime::native_runner::TRANSIENT_SCRATCH_OFFSET..].as_ptr()
+        &*(arena[crate::data::arena::TRANSIENT_SCRATCH_OFFSET..].as_ptr()
             as *const AssetChooserStorage)
     }
 }
 
 #[inline(always)]
 fn storage_mut() -> &'static mut AssetChooserStorage {
-    let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
+    let arena = crate::data::arena::transient_arena_bytes_mut();
     unsafe {
-        &mut *(arena[crate::runtime::native_runner::TRANSIENT_SCRATCH_OFFSET..].as_mut_ptr()
+        &mut *(arena[crate::data::arena::TRANSIENT_SCRATCH_OFFSET..].as_mut_ptr()
             as *mut AssetChooserStorage)
     }
 }

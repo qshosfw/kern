@@ -5,6 +5,7 @@
 //! and display frame delta encoding / compression for screen-sharing and capture.
 
 pub mod app_bundle;
+pub mod arena;
 pub mod channel_record;
 pub mod contact_record;
 pub mod cursor;
@@ -15,6 +16,7 @@ pub use app_bundle::{
     KRX_MAGIC, KrxClass, KrxExecType, KrxPreamble, KrxProfile, SectionExecution, SectionIdentity,
     SectionType,
 };
+pub use arena::*;
 pub use channel_record::{
     AprsChannelExt, ChannelExtension, ChannelRecord, ExtensionTag, HermesChannelExt,
     PowerChannelExt, ScanChannelExt,

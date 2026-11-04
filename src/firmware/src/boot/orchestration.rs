@@ -316,7 +316,7 @@ pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
     boot_stage_security_check(hw, master_cfg, passcode_state, &adc);
 
     // ── STAGE 2: Clocks, Radio & Display Core Setup (<5ms) ──────────
-    if master_cfg.battery.cpu_clock == 1 {
+    if master_cfg.system.cpu_clock == 1 {
         py32_hal::rcc::set_sysclk_72mhz();
     } else {
         py32_hal::rcc::set_sysclk_48mhz();

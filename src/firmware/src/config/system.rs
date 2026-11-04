@@ -4,7 +4,7 @@ pub struct SystemConfig {
     pub version: u8,            // 4
     pub model: u8,              // 0=UV-K1, 1=UV-K5 V3, 2=Custom
     pub uart_baud: u8,          // 0=115200, 1=38400
-    pub _pad0: u8,              // 4-byte alignment
+    pub cpu_clock: u8,          // 0=48 MHz, 1=72 MHz (PY32F071 high-perf mode)
     pub radio_id: u32,          // Standard Radio ID / DMR ID / Fleet ID
     pub owner: [u8; 12],        // Owner Call Sign / Name
     pub tag: [u8; 8],           // Tag / Device Identifier (formerly asset_tag)
@@ -28,7 +28,7 @@ impl SystemConfig {
             version: 4,
             model: 0,
             uart_baud: 0, // 115200 default
-            _pad0: 0,
+            cpu_clock: 0, // 48 MHz default
             radio_id: 1,
             owner: *b"N0CALL      ",
             tag: *b"00000000",

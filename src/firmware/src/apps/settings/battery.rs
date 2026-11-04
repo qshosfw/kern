@@ -16,8 +16,6 @@ pub static AUTO_POWER_OFF_OPTIONS: [&'static str; 4] = ["Off", "15 Mins", "30 Mi
 
 pub static POWER_PROFILE_OPTIONS: [&'static str; 3] = ["Power Save", "Balanced", "Performance"];
 
-pub static CPU_CLOCK_OPTIONS: [&'static str; 2] = ["48 MHz", "72 MHz"];
-
 #[inline(always)]
 pub fn battery_options_and_types(nav_layout: u8) -> (&'static [&'static str], &'static [u8]) {
     if nav_layout == 0 {
@@ -52,7 +50,7 @@ pub static BATTERY_INFO: [SettingDef; 6] = [
     SettingDef::metric("Core Temp", MetricId::BatteryCoreTemp),
 ];
 
-pub static BATTERY_TWEAKS: [SettingDef; 4] = [
+pub static BATTERY_TWEAKS: [SettingDef; 3] = [
     SettingDef::range(
         "Calib Tweak",
         &RANGE_CALIB_TWEAK,
@@ -64,5 +62,4 @@ pub static BATTERY_TWEAKS: [SettingDef; 4] = [
         &POWER_PROFILE_OPTIONS,
         SettingField::POWER_PROFILE,
     ),
-    SettingDef::choice("CPU Clock", &CPU_CLOCK_OPTIONS, SettingField::CPU_CLOCK),
 ];

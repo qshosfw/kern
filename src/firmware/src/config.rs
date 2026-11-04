@@ -292,6 +292,10 @@ impl MasterConfig {
             self.system.uart_baud = 0;
             repaired |= DIRTY_SYSTEM;
         }
+        if self.system.cpu_clock > 1 {
+            self.system.cpu_clock = 0;
+            repaired |= DIRTY_SYSTEM;
+        }
         let is_empty_tag = self.system.tag[0] == 0
             || &self.system.tag == b"00000000"
             || self
@@ -346,7 +350,6 @@ impl MasterConfig {
             || self.battery.power_profile > 3
             || self.battery.auto_power_off_min > 5
             || self.battery.charging_detect > 1
-            || self.battery.cpu_clock > 1
             || self.battery.calib_tweak_mv < -500
             || self.battery.calib_tweak_mv > 500
         {

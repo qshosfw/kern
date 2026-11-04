@@ -543,7 +543,15 @@ impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
     }
 
     fn read_asset(&mut self, _asset_id: u16, offset: u32, buf: &mut [u8]) -> Result<usize, ()> {
-        crate::runtime::native_runner::read_active_pkg_asset(self.storage, offset, buf)
+        #[cfg(feature = "krx_native")]
+        {
+            crate::runtime::native_runner::read_active_pkg_asset(self.storage, offset, buf)
+        }
+        #[cfg(not(feature = "krx_native"))]
+        {
+            let _ = (offset, buf);
+            Err(())
+        }
     }
 
     fn list_dir(

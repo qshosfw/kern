@@ -10,8 +10,7 @@ pub struct BatteryConfig {
     pub calib_tweak_mv: i16,    // Calibration offset tweak in mV (-500mV to +500mV)
     pub low_bat_warn_mv: u16,   // Warning threshold (default 6800 mV)
     pub low_bat_shut_mv: u16,   // Cutoff threshold (default 6300 mV)
-    pub cpu_clock: u8,          // 0=48 MHz, 1=72 MHz (PY32F071 high-perf mode)
-    pub _pad1: u8,              // Alignment padding
+    pub _reserved: [u8; 2],     // Reserved (formerly cpu_clock)
     pub crc32: u32,
 }
 
@@ -27,8 +26,7 @@ impl BatteryConfig {
             calib_tweak_mv: 0,
             low_bat_warn_mv: 6800,
             low_bat_shut_mv: 6300,
-            cpu_clock: 0, // 48 MHz default
-            _pad1: 0,
+            _reserved: [0; 2],
             crc32: 0,
         }
     }

@@ -31,6 +31,9 @@ pub const PROP_SYS_ACTIVE_APP: u16 = 0x0023;
 pub const PROP_SYS_MCU_UID: u16 = 0x0024;
 pub const PROP_SYS_SYSCLK_HZ: u16 = 0x0025;
 pub const PROP_SYS_CALIB_VALID: u16 = 0x0026;
+pub const PROP_SYS_SERIAL64: u16 = 0x0027;
+pub const PROP_SYS_MAC_ADDR: u16 = 0x0028;
+pub const PROP_SYS_SERIAL_STR: u16 = 0x0029;
 
 // Audio Properties (Component 0x03)
 pub const PROP_AUDIO_VOLUME: u16 = 0x0030;

@@ -140,7 +140,7 @@ fn main() -> ! {
         usb: drivers::usb::UsbDriver::new(),
         #[cfg(feature = "uart")]
         uart: drivers::uart::HardwareUart::new(),
-        #[cfg(feature = "uart")]
+        #[cfg(any(feature = "uart", feature = "usb_cdc"))]
         wire: drivers::wire::WireDriver::new(hardware::SystemSerialPort::new()),
     };
 

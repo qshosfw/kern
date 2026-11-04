@@ -85,7 +85,7 @@ pub struct SystemHardware<'a> {
     pub usb: drivers::usb::UsbDriver,
     #[cfg(feature = "uart")]
     pub uart: drivers::uart::HardwareUart,
-    #[cfg(feature = "uart")]
+    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     pub wire: drivers::wire::WireDriver<SystemSerialPort>,
 }
 
@@ -177,15 +177,16 @@ impl<'a> SystemHardware<'a> {
         if (config.hw_dirty & crate::config::HW_DIRTY_BATTERY) != 0 {
             let power = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
             power.load_battery_config(&config.battery);
-            if config.battery.cpu_clock == 1 {
+            config.hw_dirty &= !crate::config::HW_DIRTY_BATTERY;
+        }
+        if (config.hw_dirty & crate::config::HW_DIRTY_SYSTEM) != 0 {
+            if config.system.cpu_clock == 1 {
                 py32_hal::rcc::set_sysclk_72mhz();
             } else {
                 py32_hal::rcc::set_sysclk_48mhz();
             }
-            config.hw_dirty &= !crate::config::HW_DIRTY_BATTERY;
-        }
-        #[cfg(feature = "usb")]
-        if (config.hw_dirty & crate::config::HW_DIRTY_SYSTEM) != 0 {
+            bsp::Board::uart_set_baud(config.system.baud_rate());
+            #[cfg(feature = "usb")]
             self.usb
                 .update_device_identity(config.system.model_str(), config.system.tag_str());
             config.hw_dirty &= !crate::config::HW_DIRTY_SYSTEM;

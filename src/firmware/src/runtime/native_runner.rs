@@ -19,14 +19,13 @@ use kernel::proc::paged::{
 };
 use kernel::proc::reloc::apply_relocs;
 
-pub const NATIVE_EXEC_BUFFER_WORDS: usize = 2048; // 8.0 KB (8192 bytes) shared transient execution arena
+pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_WORDS;
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
 pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
 pub const TRANSIENT_SCRATCH_OFFSET: usize = 6144; // Scratch storage offset for asset chooser, staging, etc.
 
 #[repr(C, align(4))]
 pub(crate) struct NativeExecSlot {
-    pub(crate) buffer: [u32; NATIVE_EXEC_BUFFER_WORDS],
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
     pub(crate) app_name: heapless::String<16>,
@@ -48,12 +47,12 @@ static mut NATIVE_SLOT: core::mem::MaybeUninit<NativeExecSlot> = core::mem::Mayb
 
 #[inline(always)]
 pub fn arena_base_ptr() -> *mut u8 {
-    core::ptr::addr_of_mut!(NATIVE_SLOT) as *mut u8
+    crate::data::arena::arena_base_ptr()
 }
 
 #[inline(always)]
 pub fn transient_arena_bytes_mut() -> &'static mut [u8; NATIVE_EXEC_BUFFER_WORDS * 4] {
-    unsafe { &mut *(arena_base_ptr() as *mut [u8; NATIVE_EXEC_BUFFER_WORDS * 4]) }
+    crate::data::arena::transient_arena_bytes_mut()
 }
 
 #[inline(always)]
@@ -96,7 +95,7 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
     };
 
     let slot_byte_off = slot.cache.slot_byte_offset(slot_idx);
-    let slot_vma = (slot.buffer.as_ptr() as usize) + slot_byte_off;
+    let slot_vma = (arena_base_ptr() as usize) + slot_byte_off;
 
     if !is_hit {
         // Bounds check func_offset against declared block size
@@ -275,12 +274,8 @@ pub fn load_native_from_storage(
     slot.current_block = 0;
     slot.current_slot = 0;
 
-    let buffer_bytes = unsafe {
-        core::slice::from_raw_parts_mut(
-            slot.buffer.as_mut_ptr() as *mut u8,
-            NATIVE_EXEC_BUFFER_WORDS * 4,
-        )
-    };
+    let buffer_bytes =
+        unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
 
     let total_read = storage
         .read_file(path, buffer_bytes)
@@ -301,7 +296,7 @@ pub fn load_native_from_storage(
     // Shift payload to the beginning of the aligned buffer
     buffer_bytes.copy_within(h_len..total_read, 0);
 
-    let load_base = slot.buffer.as_ptr() as u32;
+    let load_base = arena_base_ptr() as u32;
     let load_delta = load_base.wrapping_sub(preamble.link_base);
 
     let profile = KrxProfile::detect(
@@ -324,7 +319,7 @@ pub fn load_native_from_storage(
             let code_len = r_off;
             let res = unsafe {
                 apply_relocs(
-                    slot.buffer.as_mut_ptr() as *mut u8,
+                    arena_base_ptr(),
                     code_len,
                     reloc_stream,
                     load_delta,
@@ -342,7 +337,12 @@ pub fn load_native_from_storage(
     if let Some(cap_body) = cap_imports_body {
         let got_word_off = (exec.got_offset as usize) / 4;
         let got_slice = if got_word_off < NATIVE_EXEC_BUFFER_WORDS {
-            &mut slot.buffer[got_word_off..]
+            unsafe {
+                core::slice::from_raw_parts_mut(
+                    (arena_base_ptr() as *mut u32).add(got_word_off),
+                    NATIVE_EXEC_BUFFER_WORDS - got_word_off,
+                )
+            }
         } else {
             &mut [][..]
         };
@@ -435,7 +435,7 @@ pub unsafe fn invoke_krx_native(
     param: *const (),
 ) -> u32 {
     let slot = slot_ref();
-    let slot_start = slot.buffer.as_ptr() as usize;
+    let slot_start = arena_base_ptr() as usize;
     let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
 
     // 1. Validate Thumb-1 mode bit and code bounds

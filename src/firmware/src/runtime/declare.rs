@@ -116,7 +116,7 @@ fn resolve_telemetry_str<'a>(
             return core::str::from_utf8(&buf[..l]).unwrap_or("");
         }
         DYN_CPU_CLOCK => {
-            return if ctx.config.battery.cpu_clock == 1 {
+            return if ctx.config.system.cpu_clock == 1 {
                 "72MHz"
             } else {
                 "48MHz"

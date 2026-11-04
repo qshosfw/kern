@@ -45,6 +45,9 @@ pub struct KeypadLockManager {
     toast: LockToast,
     toast_remaining_ms: u16,
 
+    // Flag indicating hardware KeypadScanner confirmed KeyState::Held for the active key
+    held_confirmed: bool,
+
     // Sleep request flag (triggered when Exit key is held past target)
     pub sleep_requested: bool,
 }
@@ -64,6 +67,7 @@ impl KeypadLockManager {
             inactivity_ms: 0,
             toast: LockToast::None,
             toast_remaining_ms: 0,
+            held_confirmed: false,
             sleep_requested: false,
         }
     }
@@ -140,8 +144,17 @@ impl KeypadLockManager {
             if let Some(code) = self.held_code {
                 self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt);
 
-                // Check if hold duration reached threshold
-                if self.hold_elapsed_ms >= self.hold_target_ms && !self.is_long_press_triggered {
+                // Anti-phantom tap protection: if elapsed time exceeds base hold delay (e.g. 550ms)
+                // and hardware scanner NEVER confirmed KeyState::Held, this was a short tap
+                // whose release was missed or consumed by an app -> abort hold tracking!
+                if self.hold_elapsed_ms >= (base_hold_delay_ms + 150) && !self.held_confirmed {
+                    self.held_code = None;
+                    self.hold_elapsed_ms = 0;
+                    self.held_confirmed = false;
+                    self.is_long_press_triggered = false;
+                } else if self.hold_elapsed_ms >= self.hold_target_ms
+                    && !self.is_long_press_triggered
+                {
                     self.is_long_press_triggered = true;
                     if code == KeyCode::Exit {
                         self.sleep_requested = true;
@@ -150,13 +163,15 @@ impl KeypadLockManager {
                     }
                     self.held_code = None;
                     self.hold_elapsed_ms = 0;
+                    self.held_confirmed = false;
                     return true;
                 }
 
-                // Safety watchdog: auto-clear if hold orphaned (>3s)
-                if self.hold_elapsed_ms > 3000 {
+                // Safety watchdog: auto-clear if hold orphaned (>4s)
+                if self.hold_elapsed_ms > 4000 {
                     self.held_code = None;
                     self.hold_elapsed_ms = 0;
+                    self.held_confirmed = false;
                 }
             }
         }
@@ -166,24 +181,36 @@ impl KeypadLockManager {
             // Reset auto-lock inactivity on any physical key interaction
             self.inactivity_ms = 0;
 
+            // If a different key event arrives while tracking a hold, immediately abort the hold
+            if let Some(held) = self.held_code {
+                if *code != held {
+                    self.held_code = None;
+                    self.hold_elapsed_ms = 0;
+                    self.held_confirmed = false;
+                    self.is_long_press_triggered = false;
+                }
+            }
+
             // Handle Exit key (Hold-to-Sleep gesture)
             if *code == KeyCode::Exit {
                 match state {
                     KeyState::Pressed => {
                         self.held_code = Some(KeyCode::Exit);
                         self.hold_elapsed_ms = 0;
+                        self.held_confirmed = false;
                         self.is_long_press_triggered = false;
                         self.last_tick_ms = py32_hal::delay::millis();
 
                         let start_threshold =
-                            (base_hold_delay_ms as u32 + 350).clamp(750, 900) as u16;
+                            (base_hold_delay_ms as u32 + 550).clamp(950, 1200) as u16;
                         self.hold_start_threshold_ms = start_threshold;
-                        // Deliberate long hold to sleep (~2800ms) to prevent accidental shutdown
+                        // Deliberate long hold to sleep (~3200ms) to prevent accidental shutdown
                         self.hold_target_ms =
-                            (start_threshold as u32 + 2000).clamp(2600, 3200) as u16;
+                            (start_threshold as u32 + 2200).clamp(3000, 3600) as u16;
                         // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
                     }
                     KeyState::Held => {
+                        self.held_confirmed = true;
                         // Suppress key repeat while hold-to-sleep is tracking
                         if self.held_code == Some(KeyCode::Exit) {
                             return true;
@@ -194,6 +221,7 @@ impl KeypadLockManager {
                         let had_started_hold = self.hold_elapsed_ms >= self.hold_start_threshold_ms;
                         self.held_code = None;
                         self.hold_elapsed_ms = 0;
+                        self.held_confirmed = false;
                         self.is_long_press_triggered = false;
 
                         // If user held past threshold or triggered sleep, consume release so app doesn't act
@@ -207,6 +235,7 @@ impl KeypadLockManager {
                     KeyState::Pressed => {
                         self.held_code = Some(*code);
                         self.hold_elapsed_ms = 0;
+                        self.held_confirmed = false;
                         self.is_long_press_triggered = false;
                         self.last_tick_ms = py32_hal::delay::millis();
 
@@ -235,6 +264,7 @@ impl KeypadLockManager {
                         return true;
                     }
                     KeyState::Held => {
+                        self.held_confirmed = true;
                         // Do not instantly toggle! Progressively tracked via hold_elapsed_ms on Tick.
                         return true;
                     }
@@ -243,6 +273,7 @@ impl KeypadLockManager {
                         let had_started_hold = self.hold_elapsed_ms >= self.hold_start_threshold_ms;
                         self.held_code = None;
                         self.hold_elapsed_ms = 0;
+                        self.held_confirmed = false;
                         self.is_long_press_triggered = false;
 
                         if self.is_locked {
@@ -269,6 +300,7 @@ impl KeypadLockManager {
                 // Pressing any other physical key cancels hold-to-lock tracking
                 self.held_code = None;
                 self.hold_elapsed_ms = 0;
+                self.held_confirmed = false;
             }
 
             // 3. When locked, intercept all non-permitted keys
@@ -473,6 +505,12 @@ mod tests {
         };
         mgr.handle_event(&pressed, 400, 3000, 0);
 
+        let held = Event::Key {
+            code: KeyCode::KeyF,
+            state: KeyState::Held,
+        };
+        mgr.handle_event(&held, 400, 3000, 0);
+
         // Before threshold
         mgr.hold_elapsed_ms = 400;
         assert!(!mgr.is_animating());
@@ -497,19 +535,45 @@ mod tests {
         };
         mgr.handle_event(&pressed, 400, 3000, 0);
 
+        let held = Event::Key {
+            code: KeyCode::Exit,
+            state: KeyState::Held,
+        };
+        mgr.handle_event(&held, 400, 3000, 0);
+
         // Before threshold
-        mgr.hold_elapsed_ms = 400;
+        mgr.hold_elapsed_ms = 500;
         assert!(!mgr.is_animating());
 
         // Past threshold, progress bar appears
-        mgr.hold_elapsed_ms = 900;
+        mgr.hold_elapsed_ms = 1000;
         assert!(mgr.is_animating());
         assert!(!mgr.sleep_requested);
 
         // Hold completed past target
-        mgr.hold_elapsed_ms = 2900;
+        mgr.hold_elapsed_ms = 3300;
         let tick = Event::Tick;
         mgr.handle_event(&tick, 400, 3000, 0);
         assert!(mgr.sleep_requested);
+    }
+
+    #[test]
+    fn test_short_press_exit_aborts_without_held_confirmation() {
+        let mut mgr = KeypadLockManager::new();
+        let pressed = Event::Key {
+            code: KeyCode::Exit,
+            state: KeyState::Pressed,
+        };
+        mgr.handle_event(&pressed, 400, 3000, 0);
+
+        // Advance to 600ms without Held event (simulating tap without Held confirmation)
+        mgr.hold_elapsed_ms = 600;
+        let tick = Event::Tick;
+        mgr.handle_event(&tick, 400, 3000, 0);
+
+        // Must have auto-aborted!
+        assert_eq!(mgr.held_code, None);
+        assert_eq!(mgr.hold_elapsed_ms, 0);
+        assert!(!mgr.sleep_requested);
     }
 }

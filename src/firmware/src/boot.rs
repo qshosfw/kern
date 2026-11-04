@@ -17,7 +17,6 @@ use drivers::keyboard::KeypadScanner;
 #[cfg(feature = "filesystem")]
 use drivers::py25q16::Py25q16FlashDriver;
 use drivers::st7565::St7565;
-#[cfg(feature = "filesystem")]
 use kernel::event::{KeyCode, KeyState};
 #[cfg(feature = "filesystem")]
 use kernfs::KernFS;

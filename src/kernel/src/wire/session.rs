@@ -11,6 +11,7 @@ pub struct WireSession {
     pub last_sequence: u32,
     pub last_crc: u16,
     pub negotiated_max_payload: u16,
+    pub is_authenticated: bool,
     pub bad_crc_count: u32,
     pub malformed_count: u32,
     pub duplicate_count: u32,
@@ -25,6 +26,7 @@ impl WireSession {
             last_sequence: 0,
             last_crc: 0,
             negotiated_max_payload: 128,
+            is_authenticated: false,
             bad_crc_count: 0,
             malformed_count: 0,
             duplicate_count: 0,
@@ -38,6 +40,7 @@ impl WireSession {
         self.last_sequence = 0;
         self.last_crc = 0;
         self.negotiated_max_payload = 128;
+        self.is_authenticated = false;
     }
 
     pub fn validate_record<'a>(

@@ -216,9 +216,10 @@ impl Orchestrator {
     }
 
     pub fn take_sleep_requested(&mut self) -> bool {
+        let is_root = self.active_app_id == APP_ID_LAUNCHER || self.active_app_id == APP_ID_VFO;
         let req = self.lock_mgr.sleep_requested;
         self.lock_mgr.sleep_requested = false;
-        req
+        req && is_root
     }
 
     pub fn active_app_id(&self) -> usize {

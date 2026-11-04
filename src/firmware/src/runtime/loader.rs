@@ -8,6 +8,7 @@ use crate::SysContext;
 use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
 use kernel::caps::CapabilitySet;
+#[cfg(feature = "krx_declare")]
 use kernel::proc::declare::{ActionRecord, DeclareItem, DeclareNode, LAYOUT_MENU};
 use kernel::proc::krx::{
     KrxClass, KrxPreamble, SECTION_BLOCK_MAP, SECTION_CAP_IMPORTS, SECTION_EXECUTION,
@@ -30,6 +31,7 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
 
 /// Parse a Declare 3.0 binary payload from the persistent upper slice of the shared arena (`[1024..5120]`).
 #[inline(never)]
+#[cfg(feature = "krx_declare")]
 fn populate_declare_from_payload(
     walker: &mut kernel::proc::declare::DeclareWalker,
     payload: &'static [u8],
@@ -172,13 +174,14 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     // 5. Execution Class Dispatch
     let exec_class = preamble.execution_class().unwrap_or(KrxClass::Declare);
     let (vtable, instance) = match exec_class {
+        #[cfg(feature = "krx_declare")]
         KrxClass::Declare => {
             let walker = crate::apps::runtime::get_global_walker();
             walker.reset(app_name);
 
             // Store Declare payload in [1024..7168] of the shared transient arena
             // (DeclareWalker occupies [0..988], so [1024..7168] persists for the app's lifetime!)
-            let arena_tail = &mut super::native_runner::transient_arena_bytes_mut()[1024..7168];
+            let arena_tail = &mut crate::runtime::transient_arena_bytes_mut()[1024..7168];
             let read_total = ctx
                 .storage
                 .read_file(path, arena_tail)
@@ -199,6 +202,11 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 crate::apps::runtime::DECLARE_WALKER_VTABLE,
                 walker as *mut _ as *mut (),
             )
+        }
+        #[cfg(not(feature = "krx_declare"))]
+        KrxClass::Declare => {
+            let _ = (ctx, path, preamble, app_name);
+            return Err(KrxLaunchError::VmDisabled);
         }
         #[cfg(feature = "krx_vm")]
         KrxClass::VMachine => {
@@ -236,6 +244,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             let _ = (ctx, path, preamble, app_name);
             return Err(KrxLaunchError::VmDisabled);
         }
+        #[cfg(feature = "krx_native")]
         KrxClass::Native | KrxClass::Paged => {
             let exec_sec = find_section(&hdr_buf, header_len, SECTION_EXECUTION)
                 .and_then(SectionExecution::parse)
@@ -260,6 +269,11 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 super::native_runner::NATIVE_RUNNER_VTABLE,
                 core::ptr::null_mut(),
             )
+        }
+        #[cfg(not(feature = "krx_native"))]
+        KrxClass::Native | KrxClass::Paged => {
+            let _ = (ctx, path, preamble, app_name, required_caps);
+            return Err(KrxLaunchError::ExecutionFailed);
         }
     };
 

@@ -180,8 +180,16 @@ impl SystemPower {
         self.uptime_secs = self.uptime_secs.saturating_add(1);
         self.inactivity_secs = self.inactivity_secs.saturating_add(1);
 
-        if self.auto_power_off_min > 0 {
-            let limit_secs = (self.auto_power_off_min as u32) * 60;
+        // Convert setting enum (0=Off, 1=15m, 2=30m, 3=60m) to actual minutes
+        let limit_mins: u32 = match self.auto_power_off_min {
+            1 => 15,
+            2 => 30,
+            3 => 60,
+            _ => 0,
+        };
+
+        if limit_mins > 0 {
+            let limit_secs = limit_mins * 60;
             if self.inactivity_secs >= limit_secs {
                 self.apo_triggered = true;
             } else if self.inactivity_secs >= limit_secs.saturating_sub(10) {

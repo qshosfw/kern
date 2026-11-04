@@ -127,7 +127,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
 
     // 6. Wakeup & Hardware Restoration
     // Restore system clocks cleanly based on configuration
-    if crate::master_config_ref().battery.cpu_clock == 1 {
+    if crate::master_config_ref().system.cpu_clock == 1 {
         py32_hal::rcc::set_sysclk_72mhz();
     } else {
         py32_hal::rcc::set_sysclk_48mhz();
@@ -319,13 +319,9 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
                 if should_wake {
                     hw.backlight.wake();
-                    unsafe {
-                        (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
-                    }
-                } else if hw.backlight.is_active() && !is_locked {
-                    unsafe {
-                        (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
-                    }
+                }
+                unsafe {
+                    (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
                 }
 
                 enqueue_event(Event::Key { code, state });
@@ -417,14 +413,22 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             handle_one_second_tick(hw, &mut low_batt_warning_timer);
             dirty_render = true;
 
+            // Reset inactivity if backlight is on (user looking at screen) or audio amplifier is active
+            if hw.backlight.is_active() || hw.audio.is_active() {
+                unsafe {
+                    (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
+                }
+            }
+
             // Auto-Power-Off (APO) timeout -> automatically enter deep sleep
+            // Strictly guarded: only fires if user explicitly configured APO in settings (> 0)
             let apo_fired = unsafe {
                 let pwr = &mut *core::ptr::addr_of_mut!(POWER_SERVICE);
                 let fired = pwr.apo_triggered;
                 pwr.apo_triggered = false;
                 fired
             };
-            if apo_fired {
+            if apo_fired && crate::master_config_ref().battery.auto_power_off_min > 0 {
                 handle_deep_sleep_mode(hw);
             }
         }

@@ -10,8 +10,10 @@ pub mod radio;
 pub mod storage;
 pub mod telemetry;
 pub mod usb;
+#[cfg(feature = "wire")]
 pub mod wire;
 
+pub use crate::data::arena::staging_buf;
 pub use audio::*;
 pub use calibration::*;
 pub use display::*;
@@ -23,6 +25,7 @@ pub use radio::*;
 pub use storage::*;
 pub use telemetry::*;
 pub use usb::*;
+#[cfg(feature = "wire")]
 pub use wire::*;
 
 pub type SystemRadio<'a> = drivers::bk4829::Bk4829<'a, drivers::bk4829::Disabled>;

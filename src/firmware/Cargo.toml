@@ -26,12 +26,14 @@ default = [
     "uart",
     "usb",
     "usb_cdc",
+    "wire",
     "dma",
     "hw_crc",
     "rtc",
     "internal_flash",
     "panic_gui",
-    "provision_apps",
+    "krx_runtime",
+    "krx_native",
     "flashlight",
     "animations",
     "dynamic_spi",
@@ -48,7 +50,10 @@ settings_debug = []
 overclock_72mhz = []
 
 # ⚙️ Execution Runtime Engines
-krx_vm = ["kernel/krx_vm"]
+krx_runtime = []
+krx_native = ["krx_runtime"]
+krx_declare = ["krx_runtime"]
+krx_vm = ["kernel/krx_vm", "krx_runtime"]
 
 # 📡 Hardware Peripheral & RF Subsystems
 radio = ["drivers/radio"]
@@ -57,6 +62,7 @@ audio = ["drivers/audio", "kernel/audio"]
 uart = ["drivers/uart", "kernel/uart"]
 usb = ["drivers/usb"]
 usb_cdc = ["usb", "drivers/usb_cdc"]
+wire = []
 # USB MSC & Virtual FAT are preserved in framework for modularity but left disabled:
 # Costs ~5KB Flash + 512B RAM buffers, risks host FAT cache desynchronization,
 # and causes OS metadata pollution. Filesystem is accessed directly via CDC serial protocol instead.

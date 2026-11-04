@@ -54,14 +54,70 @@ OP_CONTROL_STATE_GET = 0x01
 OP_CONTROL_STATE_SET = 0x02
 OP_CONTROL_ACTION_INVOKE = 0x03
 OP_CONTROL_ACTION_CANCEL = 0x04
+OP_CONTROL_APP_LAUNCH = 0x05
 
-# Control Properties
+# Components (§8.5)
+COMPONENT_SYSTEM = 0x00
+COMPONENT_RADIO = 0x01
+COMPONENT_POWER = 0x02
+COMPONENT_AUDIO = 0x03
+
+# Radio Properties (Component 0x01)
 PROP_RADIO_RX_FREQ_HZ = 0x0001
 PROP_RADIO_TX_FREQ_HZ = 0x0002
 PROP_RADIO_MODULATION_MODE = 0x0003
 PROP_RADIO_BANDWIDTH_HZ = 0x0004
-PROP_RADIO_FINE_OFFSET_DHZ = 0x000D
+PROP_RADIO_SELECTED_VFO = 0x0005
+PROP_RADIO_SELECTED_CHANNEL = 0x0006
+PROP_RADIO_POWER_LEVEL = 0x0007
+PROP_RADIO_SQUELCH_LEVEL = 0x0008
+PROP_RADIO_SCAN_STATE = 0x0009
 PROP_RADIO_PTT_ACTIVE = 0x000A
+PROP_RADIO_BATTERY_MV = 0x000B
+PROP_RADIO_RSSI_DBM = 0x000C
+PROP_RADIO_FINE_OFFSET_DHZ = 0x000D
+
+# System Properties (Component 0x00)
+PROP_SYS_UPTIME_MS = 0x0020
+PROP_SYS_KEYPAD_LOCKED = 0x0021
+PROP_SYS_FLASHLIGHT_ACTIVE = 0x0022
+PROP_SYS_ACTIVE_APP = 0x0023
+PROP_SYS_MCU_UID = 0x0024
+PROP_SYS_SYSCLK_HZ = 0x0025
+PROP_SYS_CALIB_VALID = 0x0026
+PROP_SYS_SERIAL64 = 0x0027
+PROP_SYS_MAC_ADDR = 0x0028
+PROP_SYS_SERIAL_STR = 0x0029
+
+# Audio Properties (Component 0x03)
+PROP_AUDIO_VOLUME = 0x0030
+PROP_AUDIO_KEY_BEEP = 0x0031
+PROP_AUDIO_ROGER_BEEP = 0x0032
+
+# Standard Actions (§8.5 / §8.6)
+ACTION_FLASHLIGHT_TOGGLE = 0x0001
+ACTION_VFO_TOGGLE = 0x0002
+ACTION_PLAY_BEEP = 0x0003
+ACTION_KEYPAD_LOCK_TOGGLE = 0x0004
+ACTION_REBOOT = 0x0005
+ACTION_SCAN_TOGGLE = 0x0006
+ACTION_APP_LAUNCH = 0x0007
+ACTION_PTT_TRANSMIT = 0x0008
+
+MOD_NAMES = {
+    0: "FM",
+    1: "AM",
+    2: "AMB",
+    3: "USB",
+    4: "DSB",
+    5: "CW",
+    6: "WFM",
+    7: "PKT",
+    8: "DIG",
+    9: "RAW",
+    10: "BYP",
+}
+MOD_BY_NAME = {v.upper(): k for k, v in MOD_NAMES.items()}
 
 # Data Opcodes (§8.5)
 OP_TRANSFER_OPEN = 0x01
@@ -527,6 +583,222 @@ class RigWireClient:
         best = min(results, key=lambda x: x[4])
         return best
 
+    # ── CONTROL & TELEMETRY SERVICE (0x01) ────────────────────────────────────
+
+    def state_get(self, component_id: int, property_id: int) -> bytes:
+        """Query property value via OP_CONTROL_STATE_GET."""
+        payload = struct.pack("<BH", component_id, property_id)
+        resp = self.send_record(SERVICE_CONTROL, OP_CONTROL_STATE_GET, payload)
+        if len(resp) < 8:
+            raise ValueError(f"Short STATE_GET response: {len(resp)} bytes")
+        # Layout: component(1), flags(1), revision(4), property_id(2), value(N)
+        return resp[8:]
+
+    def state_set(self, component_id: int, property_id: int, value: bytes, revision: int = 0) -> bytes:
+        """Set property value via OP_CONTROL_STATE_SET."""
+        flags = 0
+        payload = struct.pack("<BBIH", component_id, flags, revision, property_id) + value
+        return self.send_record(SERVICE_CONTROL, OP_CONTROL_STATE_SET, payload)
+
+    def action_invoke(self, component_id: int, action_id: int, params: bytes = b"") -> bytes:
+        """Invoke component action via OP_CONTROL_ACTION_INVOKE."""
+        payload = struct.pack("<BH", component_id, action_id) + params
+        return self.send_record(SERVICE_CONTROL, OP_CONTROL_ACTION_INVOKE, payload)
+
+    # ── High-Level Telemetry & Control Helpers ─────────────────────────────────
+
+    def get_system_telemetry(self) -> dict:
+        """Fetch all system & silicon metadata."""
+        telemetry = {}
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_UPTIME_MS)
+            telemetry["uptime_ms"] = struct.unpack("<I", val[:4])[0] if len(val) >= 4 else 0
+        except Exception:
+            telemetry["uptime_ms"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_SYSCLK_HZ)
+            telemetry["sysclk_hz"] = struct.unpack("<I", val[:4])[0] if len(val) >= 4 else 0
+        except Exception:
+            telemetry["sysclk_hz"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_SERIAL_STR)
+            telemetry["serial_str"] = val.decode("ascii", errors="replace").strip("\x00 ").strip()
+        except Exception:
+            telemetry["serial_str"] = "unknown"
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_SERIAL64)
+            telemetry["serial64"] = struct.unpack("<Q", val[:8])[0] if len(val) >= 8 else 0
+        except Exception:
+            telemetry["serial64"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_MAC_ADDR)
+            if len(val) >= 6:
+                telemetry["mac_addr"] = ":".join(f"{b:02X}" for b in val[:6])
+            else:
+                telemetry["mac_addr"] = "unknown"
+        except Exception:
+            telemetry["mac_addr"] = "unknown"
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_MCU_UID)
+            telemetry["mcu_uid"] = val.hex() if val else "Protected (Auth Required)"
+        except Exception:
+            telemetry["mcu_uid"] = "Protected (Auth Required)"
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_CALIB_VALID)
+            telemetry["calib_valid"] = bool(val[0]) if val else False
+        except Exception:
+            telemetry["calib_valid"] = False
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_ACTIVE_APP)
+            telemetry["active_app"] = val[0] if val else 0
+        except Exception:
+            telemetry["active_app"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_FLASHLIGHT_ACTIVE)
+            telemetry["flashlight"] = bool(val[0]) if val else False
+        except Exception:
+            telemetry["flashlight"] = False
+
+        try:
+            val = self.state_get(COMPONENT_SYSTEM, PROP_SYS_KEYPAD_LOCKED)
+            telemetry["keypad_locked"] = bool(val[0]) if val else False
+        except Exception:
+            telemetry["keypad_locked"] = False
+
+        try:
+            val = self.state_get(COMPONENT_POWER, PROP_RADIO_BATTERY_MV)
+            telemetry["battery_mv"] = struct.unpack("<H", val[:2])[0] if len(val) >= 2 else 0
+        except Exception:
+            telemetry["battery_mv"] = 0
+
+        return telemetry
+
+    def get_radio_telemetry(self) -> dict:
+        """Fetch all radio VFO & RF parameters."""
+        rad = {}
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_SELECTED_VFO)
+            rad["active_vfo"] = val[0] if val else 0
+        except Exception:
+            rad["active_vfo"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_RX_FREQ_HZ)
+            rad["rx_freq_hz"] = struct.unpack("<I", val[:4])[0] if len(val) >= 4 else 0
+        except Exception:
+            rad["rx_freq_hz"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_TX_FREQ_HZ)
+            rad["tx_freq_hz"] = struct.unpack("<I", val[:4])[0] if len(val) >= 4 else 0
+        except Exception:
+            rad["tx_freq_hz"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_MODULATION_MODE)
+            rad["mod_mode"] = val[0] if val else 0
+            rad["mod_name"] = MOD_NAMES.get(rad["mod_mode"], f"MODE_{rad['mod_mode']}")
+        except Exception:
+            rad["mod_mode"] = 0
+            rad["mod_name"] = "FM"
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_BANDWIDTH_HZ)
+            rad["bandwidth_hz"] = struct.unpack("<I", val[:4])[0] if len(val) >= 4 else 12500
+        except Exception:
+            rad["bandwidth_hz"] = 12500
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_FINE_OFFSET_DHZ)
+            rad["offset_dhz"] = struct.unpack("<h", val[:2])[0] if len(val) >= 2 else 0
+        except Exception:
+            rad["offset_dhz"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_SQUELCH_LEVEL)
+            rad["squelch"] = val[0] if val else 0
+        except Exception:
+            rad["squelch"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_RSSI_DBM)
+            rad["rssi_dbm"] = struct.unpack("<h", val[:2])[0] if len(val) >= 2 else -127
+        except Exception:
+            rad["rssi_dbm"] = -127
+
+        try:
+            val = self.state_get(COMPONENT_RADIO, PROP_RADIO_PTT_ACTIVE)
+            rad["ptt_active"] = bool(val[0]) if val else False
+        except Exception:
+            rad["ptt_active"] = False
+
+        return rad
+
+    def get_audio_telemetry(self) -> dict:
+        """Fetch audio configuration."""
+        aud = {}
+        try:
+            val = self.state_get(COMPONENT_AUDIO, PROP_AUDIO_VOLUME)
+            aud["volume"] = val[0] if val else 0
+        except Exception:
+            aud["volume"] = 0
+
+        try:
+            val = self.state_get(COMPONENT_AUDIO, PROP_AUDIO_KEY_BEEP)
+            aud["key_beep"] = bool(val[0]) if val else False
+        except Exception:
+            aud["key_beep"] = False
+
+        try:
+            val = self.state_get(COMPONENT_AUDIO, PROP_AUDIO_ROGER_BEEP)
+            aud["roger_beep"] = val[0] if val else 0
+        except Exception:
+            aud["roger_beep"] = 0
+
+        return aud
+
+    def set_frequency(self, freq_hz: int):
+        payload = struct.pack("<I", freq_hz)
+        self.state_set(COMPONENT_RADIO, PROP_RADIO_RX_FREQ_HZ, payload)
+
+    def set_modulation(self, mod_mode: int):
+        self.state_set(COMPONENT_RADIO, PROP_RADIO_MODULATION_MODE, bytes([mod_mode]))
+
+    def set_squelch(self, sql: int):
+        self.state_set(COMPONENT_RADIO, PROP_RADIO_SQUELCH_LEVEL, bytes([min(max(sql, 0), 9)]))
+
+    def set_fine_offset_dhz(self, offset_dhz: int):
+        payload = struct.pack("<h", offset_dhz)
+        self.state_set(COMPONENT_RADIO, PROP_RADIO_FINE_OFFSET_DHZ, payload)
+
+    def set_vfo(self, vfo_idx: int):
+        self.state_set(COMPONENT_RADIO, PROP_RADIO_SELECTED_VFO, bytes([vfo_idx & 1]))
+
+    def set_ptt(self, active: bool):
+        self.action_invoke(COMPONENT_RADIO, ACTION_PTT_TRANSMIT, bytes([1 if active else 0]))
+
+    def set_volume(self, vol: int):
+        self.state_set(COMPONENT_AUDIO, PROP_AUDIO_VOLUME, bytes([min(max(vol, 0), 63)]))
+
+    def play_beep(self):
+        self.action_invoke(COMPONENT_AUDIO, ACTION_PLAY_BEEP)
+
+    def toggle_flashlight(self):
+        self.action_invoke(COMPONENT_SYSTEM, ACTION_FLASHLIGHT_TOGGLE)
+
+    def toggle_keypad_lock(self):
+        self.action_invoke(COMPONENT_SYSTEM, ACTION_KEYPAD_LOCK_TOGGLE)
+
 
 # ── SELF-TEST SUITE ───────────────────────────────────────────────────────────
 def run_protocol_tests():
@@ -606,8 +878,67 @@ def run_protocol_tests():
     assert offset == -5
     print(f"PASSED (RTT={rtt}us, offset={offset}us)")
 
+    print("Test 6: Control Service StateGet and StateSet Encodings...", end=" ")
+    sg_req = struct.pack("<BH", COMPONENT_RADIO, PROP_RADIO_RX_FREQ_HZ)
+    assert len(sg_req) == 3
+    ss_val = struct.pack("<I", 145_500_000)
+    ss_req = struct.pack("<BBIH", COMPONENT_RADIO, 0, 0, PROP_RADIO_RX_FREQ_HZ) + ss_val
+    assert len(ss_req) == 12
+    ai_req = struct.pack("<BH", COMPONENT_RADIO, ACTION_PTT_TRANSMIT) + bytes([1])
+    assert len(ai_req) == 4
+    # Test Public System Identifiers requests
+    sg_mac = struct.pack("<BH", COMPONENT_SYSTEM, PROP_SYS_MAC_ADDR)
+    sg_ser = struct.pack("<BH", COMPONENT_SYSTEM, PROP_SYS_SERIAL_STR)
+    assert len(sg_mac) == 3 and len(sg_ser) == 3
+    print("PASSED")
+
     print("\n✨ All RigWire protocol self-tests passed with 100% conformance!")
     print("==================================================================")
+
+
+def parse_frequency(val_str: str) -> int:
+    """Parse frequency string supporting MHz, kHz, or raw Hz."""
+    s = val_str.strip()
+    if s.lower().endswith("mhz") or s.lower().endswith("m"):
+        num_str = s.rstrip("MmHzhz").strip()
+        return int(float(num_str) * 1_000_000)
+    elif s.lower().endswith("khz") or s.lower().endswith("k"):
+        num_str = s.rstrip("KkHzhz").strip()
+        return int(float(num_str) * 1_000)
+    elif "." in s:
+        return int(float(s) * 1_000_000)
+    else:
+        return int(s)
+
+
+COMPONENT_MAP = {
+    "sys": COMPONENT_SYSTEM,
+    "system": COMPONENT_SYSTEM,
+    "0": COMPONENT_SYSTEM,
+    "radio": COMPONENT_RADIO,
+    "rf": COMPONENT_RADIO,
+    "1": COMPONENT_RADIO,
+    "power": COMPONENT_POWER,
+    "pwr": COMPONENT_POWER,
+    "bat": COMPONENT_POWER,
+    "battery": COMPONENT_POWER,
+    "2": COMPONENT_POWER,
+    "audio": COMPONENT_AUDIO,
+    "snd": COMPONENT_AUDIO,
+    "sound": COMPONENT_AUDIO,
+    "3": COMPONENT_AUDIO,
+}
+
+
+def parse_component(s: str) -> int:
+    s_clean = s.strip().lower()
+    if s_clean in COMPONENT_MAP:
+        return COMPONENT_MAP[s_clean]
+    return int(s, 0)
+
+
+def parse_int_or_hex(s: str) -> int:
+    return int(s, 0)
 
 
 # ── MAIN ENTRY POINT ──────────────────────────────────────────────────────────
@@ -633,6 +964,39 @@ def main():
     subparsers.add_parser("hello", help="Perform HELLO handshake and inspect device profiles")
     subparsers.add_parser("ping", help="Ping device and measure round-trip latency and uptime")
     subparsers.add_parser("caps", help="Query advertised hardware capabilities catalogue")
+    subparsers.add_parser("info", help="Display full radio, hardware, and audio telemetry dashboard")
+    subparsers.add_parser("status", help="Alias for info")
+
+    rad_p = subparsers.add_parser("radio", help="Inspect or adjust radio RF parameters and VFO")
+    rad_p.add_argument("--vfo", type=int, choices=[0, 1], help="Select active VFO (0=VFO-A, 1=VFO-B)")
+    rad_p.add_argument("--toggle-vfo", action="store_true", help="Toggle between VFO-A and VFO-B")
+    rad_p.add_argument("--freq", type=str, help="Set frequency (e.g. 145.5M, 145500000, 433.250)")
+    rad_p.add_argument("--mod", type=str, help="Set modulation mode (FM, AM, USB, CW, DIG, PKT, etc.)")
+    rad_p.add_argument("--squelch", type=int, choices=range(0, 10), help="Set squelch level (0-9)")
+    rad_p.add_argument("--offset", type=int, help="Set Vernier sub-Hz fine offset in deci-Hertz (dHz)")
+
+    ptt_p = subparsers.add_parser("ptt", help="Control transmitter PTT state")
+    ptt_p.add_argument("state", choices=["on", "off", "1", "0", "tx", "rx"], help="PTT state (on/off)")
+
+    subparsers.add_parser("tone", help="Play 1000 Hz beep tone via audio subsystem")
+
+    vol_p = subparsers.add_parser("volume", help="Get or set speaker volume (0-63)")
+    vol_p.add_argument("level", type=int, nargs="?", help="Volume level (0-63)")
+
+    fl_p = subparsers.add_parser("flashlight", help="Control top LED flashlight")
+    fl_p.add_argument("state", nargs="?", default="toggle", choices=["on", "off", "toggle"], help="State")
+
+    lk_p = subparsers.add_parser("lock", help="Control keypad lock state")
+    lk_p.add_argument("state", nargs="?", default="toggle", choices=["on", "off", "toggle"], help="State")
+
+    get_p = subparsers.add_parser("get", help="Query arbitrary component property value")
+    get_p.add_argument("component", help="Component name or ID (sys, radio, power, audio, 0, 1, 2, 3)")
+    get_p.add_argument("property", help="Property ID (e.g. 0x0001 or 1)")
+
+    set_p = subparsers.add_parser("set", help="Set arbitrary component property value")
+    set_p.add_argument("component", help="Component name or ID (sys, radio, power, audio)")
+    set_p.add_argument("property", help="Property ID (e.g. 0x0001 or 1)")
+    set_p.add_argument("value", help="Value string, integer, or hex bytes (e.g. 0x01, 145500000)")
 
     ls_p = subparsers.add_parser("ls", help="List directory entries on radio filesystem")
     ls_p.add_argument("path", nargs="?", default="/", help="Directory path to list (default: /)")
@@ -695,6 +1059,183 @@ def main():
             print(f"  Discovered {len(recs)} capability records:")
             for r in recs:
                 print(f"    - Type 0x{r['type']:02x} ({len(r['data'])} bytes): {r['data'].hex()}")
+
+        elif args.command in ("info", "status"):
+            sys_t = client.get_system_telemetry()
+            rad_t = client.get_radio_telemetry()
+            aud_t = client.get_audio_telemetry()
+
+            print("==================================================================")
+            print("⚡ Kern RigWire System & Radio Telemetry")
+            print("==================================================================")
+            print("  Hardware & Silicon:")
+            ser_str = sys_t.get("serial_str", "unknown")
+            ser64 = sys_t.get("serial64", 0)
+            print(f"    Hardware Serial : {ser_str} ({ser64:#018x})")
+            print(f"    MAC Address     : {sys_t.get('mac_addr', 'unknown')}")
+            uid_str = sys_t.get("mcu_uid", "Protected (Auth Required)")
+            if len(uid_str) == 24:
+                uid_fmt = f"{uid_str[0:8]}-{uid_str[8:16]}-{uid_str[16:24]}"
+            else:
+                uid_fmt = uid_str
+            print(f"    MCU Unique ID   : {uid_fmt}")
+            clk_mhz = sys_t["sysclk_hz"] / 1_000_000.0
+            print(f"    System Clock    : {clk_mhz:.1f} MHz")
+            calib_str = "Valid (Authenticated)" if sys_t["calib_valid"] else "Default / Uncalibrated"
+            print(f"    Calibration     : {calib_str}")
+            print(f"    Battery Level   : {sys_t['battery_mv']} mV ({sys_t['battery_mv'] / 1000.0:.2f} V)")
+            print(f"    Uptime          : {sys_t['uptime_ms'] / 1000.0:.2f} s ({sys_t['uptime_ms']} ms)")
+            print(f"    Active App ID   : #{sys_t['active_app']}")
+
+            print("\n  Radio State:")
+            vfo_name = "VFO-A" if rad_t["active_vfo"] == 0 else "VFO-B"
+            print(f"    Active VFO      : {vfo_name}")
+            rx_mhz = rad_t["rx_freq_hz"] / 1_000_000.0
+            tx_mhz = rad_t["tx_freq_hz"] / 1_000_000.0
+            print(f"    RX Frequency    : {rx_mhz:10.6f} MHz ({rad_t['rx_freq_hz']:,} Hz)")
+            print(f"    TX Frequency    : {tx_mhz:10.6f} MHz ({rad_t['tx_freq_hz']:,} Hz)")
+            print(f"    Modulation Mode : {rad_t['mod_name']} (Mode #{rad_t['mod_mode']})")
+            bw_khz = rad_t["bandwidth_hz"] / 1000.0
+            print(f"    Bandwidth       : {bw_khz:.1f} kHz ({rad_t['bandwidth_hz']} Hz)")
+            off_hz = rad_t["offset_dhz"] / 10.0
+            print(f"    Vernier Offset  : {off_hz:+.1f} Hz ({rad_t['offset_dhz']:+d} dHz)")
+            print(f"    Squelch Level   : {rad_t['squelch']} / 9")
+            rssi = rad_t["rssi_dbm"]
+            print(f"    Signal (RSSI)   : {rssi} dBm")
+            ptt_str = "TRANSMITTING (TX)" if rad_t["ptt_active"] else "IDLE (RX)"
+            print(f"    PTT State       : {ptt_str}")
+
+            print("\n  Audio & Preferences:")
+            print(f"    Speaker Volume  : {aud_t['volume']} / 63")
+            print(f"    Keypad Beep     : {'ON' if aud_t['key_beep'] else 'OFF'}")
+            print(f"    Roger Beep      : {aud_t['roger_beep']}")
+            print(f"    Keypad Lock     : {'LOCKED' if sys_t['keypad_locked'] else 'UNLOCKED'}")
+            print(f"    Flashlight      : {'ON' if sys_t['flashlight'] else 'OFF'}")
+            print("==================================================================")
+
+        elif args.command == "radio":
+            modified = False
+            if args.vfo is not None:
+                client.set_vfo(args.vfo)
+                print(f"  VFO set to VFO-{'A' if args.vfo == 0 else 'B'}")
+                modified = True
+            if args.toggle_vfo:
+                client.action_invoke(COMPONENT_RADIO, ACTION_VFO_TOGGLE)
+                print("  VFO toggled.")
+                modified = True
+            if args.freq is not None:
+                freq_hz = parse_frequency(args.freq)
+                client.set_frequency(freq_hz)
+                print(f"  Frequency set to {freq_hz:,} Hz ({freq_hz / 1_000_000.0:.6f} MHz)")
+                modified = True
+            if args.mod is not None:
+                mod_str = args.mod.strip().upper()
+                if mod_str in MOD_BY_NAME:
+                    mod_id = MOD_BY_NAME[mod_str]
+                else:
+                    mod_id = int(args.mod)
+                client.set_modulation(mod_id)
+                print(f"  Modulation set to {MOD_NAMES.get(mod_id, str(mod_id))} (#{mod_id})")
+                modified = True
+            if args.squelch is not None:
+                client.set_squelch(args.squelch)
+                print(f"  Squelch set to {args.squelch}")
+                modified = True
+            if args.offset is not None:
+                client.set_fine_offset_dhz(args.offset)
+                print(f"  Vernier fine offset set to {args.offset:+d} dHz ({args.offset / 10.0:+.1f} Hz)")
+                modified = True
+
+            if not modified:
+                rad_t = client.get_radio_telemetry()
+                vfo_name = "VFO-A" if rad_t["active_vfo"] == 0 else "VFO-B"
+                rx_mhz = rad_t["rx_freq_hz"] / 1_000_000.0
+                print(f"  Active VFO   : {vfo_name}")
+                print(f"  Frequency    : {rx_mhz:.6f} MHz ({rad_t['rx_freq_hz']:,} Hz)")
+                print(f"  Modulation   : {rad_t['mod_name']} (#{rad_t['mod_mode']})")
+                print(f"  Bandwidth    : {rad_t['bandwidth_hz'] / 1000.0:.1f} kHz")
+                print(f"  Vernier Off  : {rad_t['offset_dhz'] / 10.0:+.1f} Hz")
+                print(f"  Squelch      : {rad_t['squelch']} / 9")
+                print(f"  RSSI         : {rad_t['rssi_dbm']} dBm")
+                print(f"  PTT          : {'TX' if rad_t['ptt_active'] else 'RX'}")
+
+        elif args.command == "ptt":
+            state = args.state.lower() in ("on", "1", "tx", "start", "true")
+            client.set_ptt(state)
+            print(f"  PTT {'TRANSMITTING' if state else 'RELEASED (RX)'}")
+
+        elif args.command == "tone":
+            client.play_beep()
+            print("  Tone / beep emitted.")
+
+        elif args.command == "volume":
+            if args.level is not None:
+                client.set_volume(args.level)
+                print(f"  Volume set to {args.level}")
+            else:
+                aud = client.get_audio_telemetry()
+                print(f"  Volume: {aud['volume']} / 63")
+
+        elif args.command == "flashlight":
+            if args.state == "on":
+                client.state_set(COMPONENT_SYSTEM, PROP_SYS_FLASHLIGHT_ACTIVE, bytes([1]))
+                print("  Flashlight: ON")
+            elif args.state == "off":
+                client.state_set(COMPONENT_SYSTEM, PROP_SYS_FLASHLIGHT_ACTIVE, bytes([0]))
+                print("  Flashlight: OFF")
+            else:
+                client.toggle_flashlight()
+                print("  Flashlight toggled.")
+
+        elif args.command == "lock":
+            if args.state == "on":
+                client.state_set(COMPONENT_SYSTEM, PROP_SYS_KEYPAD_LOCKED, bytes([1]))
+                print("  Keypad: LOCKED")
+            elif args.state == "off":
+                client.state_set(COMPONENT_SYSTEM, PROP_SYS_KEYPAD_LOCKED, bytes([0]))
+                print("  Keypad: UNLOCKED")
+            else:
+                client.toggle_keypad_lock()
+                print("  Keypad lock toggled.")
+
+        elif args.command == "get":
+            comp = parse_component(args.component)
+            prop = parse_int_or_hex(args.property)
+            val = client.state_get(comp, prop)
+            print(f"  Component {comp:#04x}, Property {prop:#06x} ({len(val)} bytes):")
+            print(f"    Hex : {val.hex()}")
+            if len(val) == 1:
+                print(f"    u8  : {val[0]}")
+            elif len(val) == 2:
+                u16_val = struct.unpack("<H", val)[0]
+                i16_val = struct.unpack("<h", val)[0]
+                print(f"    u16 : {u16_val} (signed: {i16_val})")
+            elif len(val) == 4:
+                u32_val = struct.unpack("<I", val)[0]
+                i32_val = struct.unpack("<i", val)[0]
+                print(f"    u32 : {u32_val} (signed: {i32_val})")
+
+        elif args.command == "set":
+            comp = parse_component(args.component)
+            prop = parse_int_or_hex(args.property)
+            val_str = args.value.strip()
+            if val_str.startswith("0x") or val_str.startswith("0X"):
+                hex_digits = val_str[2:]
+                if len(hex_digits) % 2 != 0:
+                    hex_digits = "0" + hex_digits
+                val_bytes = bytes.fromhex(hex_digits)
+            elif val_str.isdigit() or (val_str.startswith("-") and val_str[1:].isdigit()):
+                num = int(val_str)
+                if -128 <= num <= 255:
+                    val_bytes = struct.pack("<b" if num < 0 else "<B", num)
+                elif -32768 <= num <= 65535:
+                    val_bytes = struct.pack("<h" if num < 0 else "<H", num)
+                else:
+                    val_bytes = struct.pack("<i" if num < 0 else "<I", num)
+            else:
+                val_bytes = val_str.encode("utf-8")
+            client.state_set(comp, prop, val_bytes)
+            print(f"  Set Component {comp:#04x}, Property {prop:#06x} = {val_bytes.hex()} OK")
 
         elif args.command == "ls":
             entries = client.ls(args.path)

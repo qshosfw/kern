@@ -25,8 +25,7 @@ pub const STAGING_BUF_CAP: usize = 512;
 /// Reuses the shared transient arena so it incurs strictly ZERO bytes of Flash OR SRAM overhead.
 #[inline(always)]
 pub fn staging_buf() -> &'static mut [u8; STAGING_BUF_CAP] {
-    let arena = crate::runtime::native_runner::transient_arena_bytes_mut();
-    unsafe { &mut *(arena.as_mut_ptr() as *mut [u8; STAGING_BUF_CAP]) }
+    crate::data::arena::staging_buf()
 }
 
 /// Active transfer session state
@@ -164,9 +163,27 @@ fn on_control_state_get(
                 1
             }
             PROP_SYS_MCU_UID => {
+                if !hw.wire.session.is_authenticated {
+                    return send_status(hw, header, WireStatus::AuthRequired);
+                }
                 let uid = bsp::uid::read_mcu_uid();
                 val_buf[..12].copy_from_slice(&uid);
                 12
+            }
+            PROP_SYS_SERIAL64 => {
+                let serial = bsp::uid::get_hardware_serial64();
+                val_buf[..8].copy_from_slice(&serial.to_le_bytes());
+                8
+            }
+            PROP_SYS_MAC_ADDR => {
+                let mac = bsp::uid::read_mac_address();
+                val_buf[..6].copy_from_slice(&mac);
+                6
+            }
+            PROP_SYS_SERIAL_STR => {
+                let crockford = bsp::uid::get_crockford_serial();
+                val_buf[..14].copy_from_slice(&crockford[..14]);
+                14
             }
             PROP_SYS_SYSCLK_HZ => {
                 let hz = py32_hal::rcc::sysclk_hz();

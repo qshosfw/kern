@@ -120,11 +120,13 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
         PageId::Buttons | PageId::ButtonsTweaks | PageId::ButtonsShortcuts => {
             ctx.config.mark_keys_dirty();
         }
-        PageId::Battery | PageId::BatteryTweaks | PageId::System => {
+        PageId::Battery | PageId::BatteryTweaks => {
             ctx.config.mark_battery_dirty();
-            ctx.config.mark_system_dirty();
             ctx.power.load_battery_config(&ctx.config.battery);
-            if ctx.config.battery.cpu_clock == 1 {
+        }
+        PageId::System => {
+            ctx.config.mark_system_dirty();
+            if ctx.config.system.cpu_clock == 1 {
                 py32_hal::rcc::set_sysclk_72mhz();
             } else {
                 py32_hal::rcc::set_sysclk_48mhz();

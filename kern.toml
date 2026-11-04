@@ -31,6 +31,7 @@ audio = true            # 🔊 Hardware audio amplifier and melody engine
 uart = true             # 🔌 USART serial debug console and telemetry
 usb = true              # 💻 Native USB 2.0 Full-Speed core controller
 usb_cdc = true          # 🔌 USB CDC ACM Virtual COM Port (Serial console)
+wire = true             # ⚡ RigWire binary serial protocol engine
 
 # ── USB Mass Storage (MSC) & Virtual FAT: DISABLED BY DEFAULT ────────────────
 usb_msc = false         # 💾 USB Mass Storage Class (Disabled - prefer CDC protocol)
@@ -49,14 +50,17 @@ passcode = false        # 🔑 Security enclave boot PIN lock & KDF stretching
 app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
 [features.runtime]
+krx_runtime = true      # ⚙️ KRX runtime subsystem
+krx_native = true       # 🚀 Class N0/P0 Thumb-1 Native & Paged Execution
+krx_declare = false     # 📋 Class D0 Declarative AST Walker (disabled, focus on native/paged)
 krx_vm = false          # ⚙️ KVM-16 virtual machine interpreter (disabled to focus on N0/N1/P0/P1/D0)
 
 [features.provisioning]
-provision_apps = true        # 📱 Embed & provision built-in KRX packages (/apps/sysinfo.krx, counter.krx, timer.krx, explorer.krx)
+provision_apps = false        # 📱 Mode B: Embed & provision built-in KRX packages (false in operational mode)
 provision_rogers = false     # 🎵 Embed & provision built-in roger beep tones to /user/rogers/
-extra_rogers = true         # 📢 Extended roger beep collection (Apollo 11, etc.)
-boot_assets = true          # 🎨 Embedded ROM splash screens
-boot_jingle = true          # 🎵 Polyphonic boot jingles & melody previews
+extra_rogers = false         # 📢 Mode B: Extended roger beep collection (Apollo 11, etc. loaded from flash)
+boot_assets = false          # 🎨 Mode B: Embedded ROM splash screens (splash loaded from flash)
+boot_jingle = false          # 🎵 Mode B: Polyphonic boot jingles & melody previews (loaded from flash)
 
 [features.display]
 animations = true       # ✨ Smooth kinetic scrolling, slide transitions & adaptive 60-90 Hz animation refresh
