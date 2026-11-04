@@ -56,53 +56,74 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // 5. Deep Sleep Retention Loop (WFI / Low-Power sleep)
     // Feeds watchdog periodically while keeping all displays, audio PA, and RF powered down.
     // Blinks Orange status LED periodically (25ms pulse every 2s) to indicate low-power sleep.
-    // Wakes cleanly on ANY physical keypress, PTT, or RigWire serial frame arrival.
+    // Wakes ONLY when the Exit key is held down continuously for a bit (~800ms) or RigWire connects.
     let mut next_blink_ms = py32_hal::delay::millis().wrapping_add(2000);
+    let mut exit_press_start: Option<u32> = None;
+    const WAKE_HOLD_MS: u32 = 800;
+
     'sleep_loop: loop {
         py32_hal::wdt::Watchdog::feed();
-
-        if drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
-            break 'sleep_loop;
-        }
 
         #[cfg(feature = "uart")]
         if py32_hal::uart::is_readable() {
             break 'sleep_loop;
         }
 
+        let key = drivers::keyboard::KeypadScanner::poll_matrix();
         let now = py32_hal::delay::millis();
-        if now.wrapping_sub(next_blink_ms) < 0x8000_0000 {
+
+        if key == Some(KeyCode::Exit) {
+            match exit_press_start {
+                None => {
+                    exit_press_start = Some(now);
+                    // Light solid Orange LED to provide immediate tactile feedback that hold-to-wake is active
+                    hw.radio.set_status_led(bsp::StatusLed::Orange);
+                }
+                Some(start) => {
+                    if now.wrapping_sub(start) >= WAKE_HOLD_MS {
+                        break 'sleep_loop;
+                    }
+                }
+            }
+        } else {
+            if exit_press_start.is_some() {
+                // Exit released before reaching hold target: turn off feedback LED
+                exit_press_start = None;
+                hw.radio.set_status_led(bsp::StatusLed::Off);
+            }
+        }
+
+        // Heartbeat blink only when user is not actively holding Exit
+        if exit_press_start.is_none() && now.wrapping_sub(next_blink_ms) < 0x8000_0000 {
             // Heartbeat: pulse orange status LED briefly (~25ms) via BK4829 GPIO1+2
             hw.radio.set_status_led(bsp::StatusLed::Orange);
             let pulse_start = py32_hal::delay::millis();
             while py32_hal::delay::millis().wrapping_sub(pulse_start) < 25 {
                 py32_hal::wdt::Watchdog::feed();
-                if drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
-                    hw.radio.set_status_led(bsp::StatusLed::Off);
-                    break 'sleep_loop;
-                }
                 #[cfg(feature = "uart")]
                 if py32_hal::uart::is_readable() {
                     hw.radio.set_status_led(bsp::StatusLed::Off);
                     break 'sleep_loop;
                 }
+                if drivers::keyboard::KeypadScanner::poll_matrix() == Some(KeyCode::Exit) {
+                    exit_press_start = Some(py32_hal::delay::millis());
+                    break;
+                }
             }
-            hw.radio.set_status_led(bsp::StatusLed::Off);
+            if exit_press_start.is_none() {
+                hw.radio.set_status_led(bsp::StatusLed::Off);
+            }
             next_blink_ms = py32_hal::delay::millis().wrapping_add(2000);
         }
 
-        cortex_m::asm::wfi();
+        if exit_press_start.is_some() {
+            py32_hal::delay::delay_ms(10);
+        } else {
+            cortex_m::asm::wfi();
+        }
     }
 
     hw.radio.set_status_led(bsp::StatusLed::Off);
-
-    // Wait for waking key to be released so it doesn't trigger spurious actions in active app
-    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
-        py32_hal::wdt::Watchdog::feed();
-        py32_hal::delay::delay_ms(10);
-    }
-    drivers::keyboard::KeypadScanner::reset_gpio_pins();
-    hw.key_scanner.clear();
 
     // 6. Wakeup & Hardware Restoration
     // Restore system clocks cleanly based on configuration
@@ -140,6 +161,14 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // Sound unlock confirmation chime
     hw.radio
         .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+
+    // Wait for waking Exit key to be released so it doesn't trigger spurious actions in active app
+    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+        py32_hal::wdt::Watchdog::feed();
+        py32_hal::delay::delay_ms(10);
+    }
+    drivers::keyboard::KeypadScanner::reset_gpio_pins();
+    hw.key_scanner.clear();
 
     // Reset power service inactivity tracking
     unsafe {
