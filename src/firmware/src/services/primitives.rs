@@ -5,8 +5,10 @@
 
 use crate::services::FirmwareContext;
 use kernel::proc::primitives::*;
+#[cfg(feature = "rf_fsk")]
+use kernel::service::radio::{FskBaudRate, FskPhyConfig};
 use kernel::service::radio::{
-    FskBaudRate, FskPhyConfig, RfAudioPath, RfChannel, RfModulation, RfSquelch, RfSubaudible,
+    RfAudioPath, RfChannel, RfModulation, RfSquelch, RfSubaudible,
 };
 use kernel::service::{DisplayService, PowerService};
 
@@ -336,6 +338,7 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
         self.radio.mute_mic(muted);
     }
 
+    #[cfg(feature = "rf_fsk")]
     fn fsk_init(&mut self, baud: u16) {
         let baud_rate = match baud {
             1200 => FskBaudRate::Baud1200,
@@ -349,7 +352,10 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
         config.raw_length_bytes = 64;
         let _ = crate::services::radio::fsk_stream::FskStreamService::arm_rx(self.radio, &config);
     }
+    #[cfg(not(feature = "rf_fsk"))]
+    fn fsk_init(&mut self, _baud: u16) {}
 
+    #[cfg(feature = "rf_fsk")]
     fn fsk_send(&mut self, data: &[u8]) -> Result<(), ()> {
         let mut words = [0u16; 64];
         let word_count = (data.len() + 1) / 2;
@@ -370,7 +376,12 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
             500,
         )
     }
+    #[cfg(not(feature = "rf_fsk"))]
+    fn fsk_send(&mut self, _data: &[u8]) -> Result<(), ()> {
+        Err(())
+    }
 
+    #[cfg(feature = "rf_fsk")]
     fn fsk_receive(&mut self, buf: &mut [u8]) -> usize {
         let mut words = [0u16; 32];
         let count = crate::services::radio::fsk_stream::FskStreamService::poll_and_read(
@@ -388,6 +399,10 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
             }
         }
         out_len
+    }
+    #[cfg(not(feature = "rf_fsk"))]
+    fn fsk_receive(&mut self, _buf: &mut [u8]) -> usize {
+        0
     }
 
     fn sweep(&mut self, start_hz: u32, step_hz: u32, out_rssi: &mut [i16]) -> usize {
@@ -554,6 +569,7 @@ impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
         }
     }
 
+    #[inline(never)]
     fn list_dir(
         &mut self,
         dir_path: &str,

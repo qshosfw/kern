@@ -301,6 +301,7 @@ pub unsafe extern "C" fn api_rf_set_dual_tones(
     }
 }
 
+#[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_init(baud: u16) {
     unsafe {
         if !ACTIVE_CTX.is_null() {
@@ -309,7 +310,10 @@ pub unsafe extern "C" fn api_rf_fsk_init(baud: u16) {
         }
     }
 }
+#[cfg(not(feature = "rf_fsk"))]
+pub unsafe extern "C" fn api_rf_fsk_init(_baud: u16) {}
 
+#[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_send(data: *const u8, len: u16) -> u8 {
     unsafe {
         if !ACTIVE_CTX.is_null() && !data.is_null() && len > 0 {
@@ -325,7 +329,12 @@ pub unsafe extern "C" fn api_rf_fsk_send(data: *const u8, len: u16) -> u8 {
         }
     }
 }
+#[cfg(not(feature = "rf_fsk"))]
+pub unsafe extern "C" fn api_rf_fsk_send(_data: *const u8, _len: u16) -> u8 {
+    1
+}
 
+#[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_recv(buf: *mut u8, max_len: u16) -> u16 {
     unsafe {
         if !ACTIVE_CTX.is_null() && !buf.is_null() && max_len > 0 {
@@ -336,6 +345,10 @@ pub unsafe extern "C" fn api_rf_fsk_recv(buf: *mut u8, max_len: u16) -> u16 {
             0
         }
     }
+}
+#[cfg(not(feature = "rf_fsk"))]
+pub unsafe extern "C" fn api_rf_fsk_recv(_buf: *mut u8, _max_len: u16) -> u16 {
+    0
 }
 
 pub unsafe extern "C" fn api_rf_set_mic_mute(muted: u8) {

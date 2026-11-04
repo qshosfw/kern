@@ -477,6 +477,21 @@ impl MasterConfig {
         }
     }
 
+#[inline(never)]
+fn check_and_reset_bytes(
+    val: &mut [u8],
+    rules: &[BoundsRule],
+    expected_ver: u8,
+    default: &[u8],
+) -> bool {
+    if !check_bounds(val, expected_ver, rules) {
+        val.copy_from_slice(default);
+        true
+    } else {
+        false
+    }
+}
+
     #[inline(never)]
     pub fn sanitize(&mut self) -> u8 {
         let mut repaired = 0u8;
@@ -491,13 +506,13 @@ impl MasterConfig {
             self.system.cpu_clock = self.system.cpu_clock.min(1);
             repaired |= DIRTY_SYSTEM;
         }
-        let is_empty_tag = self.system.tag[0] == 0
-            || &self.system.tag == b"00000000"
-            || self
-                .system
-                .tag
-                .iter()
-                .all(|&b| b == 0 || b == b' ' || b == b'0');
+        let mut is_empty_tag = true;
+        for &b in &self.system.tag {
+            if b != 0 && b != b' ' && b != b'0' {
+                is_empty_tag = false;
+                break;
+            }
+        }
         if is_empty_tag {
             self.system.init_default_tag();
             repaired |= DIRTY_SYSTEM;
@@ -541,22 +556,30 @@ impl MasterConfig {
             repaired |= DIRTY_BATTERY;
         }
 
-        if !check_bounds(
-            self.display.as_bytes(),
-            DisplayConfig::VERSION,
+        if Self::check_and_reset_bytes(
+            self.display.as_bytes_mut(),
             &DISPLAY_RULES,
+            DisplayConfig::VERSION,
+            DisplayConfig::new().as_bytes(),
         ) {
-            self.display = DisplayConfig::new();
             repaired |= DIRTY_DISPLAY;
         }
 
-        if !check_bounds(self.audio.as_bytes(), AudioConfig::VERSION, &AUDIO_RULES) {
-            self.audio = AudioConfig::new();
+        if Self::check_and_reset_bytes(
+            self.audio.as_bytes_mut(),
+            &AUDIO_RULES,
+            AudioConfig::VERSION,
+            AudioConfig::new().as_bytes(),
+        ) {
             repaired |= DIRTY_AUDIO;
         }
 
-        if !check_bounds(self.apps.as_bytes(), AppsConfig::VERSION, &APPS_RULES) {
-            self.apps = AppsConfig::new();
+        if Self::check_and_reset_bytes(
+            self.apps.as_bytes_mut(),
+            &APPS_RULES,
+            AppsConfig::VERSION,
+            AppsConfig::new().as_bytes(),
+        ) {
             repaired |= DIRTY_APPS;
         }
 

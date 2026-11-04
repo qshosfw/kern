@@ -157,145 +157,148 @@ fn get_i16_le(val: &[u8]) -> Result<i16, WireStatus> {
 }
 
 #[inline(never)]
+fn read_sys_facet(facet: u16, hw: &SystemHardware, now: u32, out: &mut [u8]) -> Result<usize, WireStatus> {
+    match facet {
+        FACET_SYS_IDENTITY => {
+            // Serial64 (8B)
+            out[..8].copy_from_slice(&bsp::uid::get_hardware_serial64().to_le_bytes());
+            // MAC address (6B)
+            out[8..14].copy_from_slice(&bsp::uid::read_mac_address());
+            // Crockford serial string (14B)
+            out[14..28].copy_from_slice(&bsp::uid::get_crockford_serial()[..14]);
+            // Auth status (1B)
+            let is_auth = hw.wire.session.is_authenticated;
+            out[28] = is_auth as u8;
+            // MCU UID (12B if authenticated, otherwise 0)
+            if is_auth {
+                out[29..41].copy_from_slice(&bsp::uid::read_mcu_uid());
+            } else {
+                out[29..41].fill(0);
+            }
+            Ok(41)
+        }
+        FACET_SYS_METRICS => {
+            out[..4].copy_from_slice(&now.to_le_bytes());
+            out[4..8].copy_from_slice(&py32_hal::rcc::sysclk_hz().to_le_bytes());
+            let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+            out[8..10].copy_from_slice(&pwr.battery_voltage_mv().to_le_bytes());
+            out[10] = pwr.battery_percentage();
+            out[11] = hw.orchestrator.active_app_id() as u8;
+            out[12] = hw.orchestrator.is_keypad_locked() as u8;
+            out[13] = bsp::pins::FLASHLIGHT.is_high() as u8;
+            Ok(14)
+        }
+        FACET_SYS_CALIBRATION => {
+            let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
+            out[0] = is_valid_calibration(calib.raw_bytes()) as u8;
+            out[1..3].copy_from_slice(&calib.xtal_freq_low().to_le_bytes());
+            out[3..5].copy_from_slice(&calib.battery_calib_const().to_le_bytes());
+            Ok(5)
+        }
+        _ => Err(WireStatus::UnsupportedField),
+    }
+}
+
+#[inline(never)]
+fn read_radio_facet(facet: u16, instance: u8, hw: &mut SystemHardware, out: &mut [u8]) -> Result<usize, WireStatus> {
+    let radio_state = crate::radio_state_ref();
+    let vfo = match instance {
+        RADIO_INSTANCE_VFO_A => &radio_state.vfo_a,
+        RADIO_INSTANCE_VFO_B => &radio_state.vfo_b,
+        _ => radio_state.selected_vfo(),
+    };
+    match facet {
+        FACET_RADIO_TUNING => {
+            out[..4].copy_from_slice(&vfo.frequency.raw().to_le_bytes());
+            out[4..8].copy_from_slice(&((radio_state.step_khz as u32) * 1000).to_le_bytes());
+            out[8] = radio_state.active_vfo;
+            Ok(9)
+        }
+        FACET_RADIO_MODULATION => {
+            let m = match vfo.mod_type.as_bytes().first() {
+                Some(b'A') => if vfo.mod_type.len() > 2 { 2 } else { 1 },
+                Some(b'U') => 3,
+                Some(b'D') => if vfo.mod_type.as_bytes().get(1) == Some(&b'S') { 4 } else { 8 },
+                Some(b'C') => 5,
+                Some(b'W') => 6,
+                Some(b'P') => 7,
+                Some(b'R') => 9,
+                Some(b'B') => 10,
+                _ => 0,
+            };
+            out[0] = m;
+            let bw_hz: u32 = match vfo.bw.as_bytes().first() {
+                Some(b'W') => 25_000,
+                Some(b'V') => 6_250,
+                _ => 12_500,
+            };
+            out[1..5].copy_from_slice(&bw_hz.to_le_bytes());
+            Ok(5)
+        }
+        FACET_RADIO_SQUELCH => {
+            out[0] = radio_state.squelch_level;
+            out[1..3].copy_from_slice(&hw.radio.get_rssi().to_le_bytes());
+            out[3] = hw.radio.is_squelch_open() as u8;
+            Ok(4)
+        }
+        FACET_RADIO_TRANSMIT => {
+            out[0] = vfo.tx_active as u8;
+            let p = match vfo.power.as_bytes().first() {
+                Some(b'H') => 2,
+                Some(b'M') => 1,
+                _ => 0,
+            };
+            out[1] = p;
+            Ok(2)
+        }
+        FACET_RADIO_DIGITAL => {
+            out[..2].copy_from_slice(&0i16.to_le_bytes());
+            Ok(2)
+        }
+        _ => Err(WireStatus::UnsupportedField),
+    }
+}
+
+#[inline(never)]
+fn read_ui_facet(facet: u16, hw: &SystemHardware, out: &mut [u8]) -> Result<usize, WireStatus> {
+    match facet {
+        FACET_UI_SURFACE => {
+            out[..2].copy_from_slice(&128u16.to_le_bytes());
+            out[2..4].copy_from_slice(&64u16.to_le_bytes());
+            out[4] = 1;
+            out[5..7].copy_from_slice(&1024u16.to_le_bytes());
+            Ok(7)
+        }
+        FACET_UI_MODAL => {
+            let modal =
+                unsafe { &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL) };
+            out[0] = modal.is_active() as u8;
+            out[1] = modal.tag;
+            Ok(2)
+        }
+        FACET_UI_VIEW => {
+            out[0] = hw.orchestrator.active_app_id() as u8;
+            Ok(1)
+        }
+        _ => Err(WireStatus::UnsupportedField),
+    }
+}
+
+#[inline(never)]
 fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, now: u32) -> bool {
     let req = match HandleGetReq::parse(payload) {
         Ok(r) => r,
         Err(status) => return send_status(hw, header, status),
     };
 
-    let mut val_buf = [0u8; 96];
+    let mut resp = [0u8; 100];
     let val_len = match req.handle.domain {
-        DOMAIN_SYSTEM => match req.handle.facet {
-            FACET_SYS_IDENTITY => {
-                // Serial64 (8B)
-                val_buf[..8].copy_from_slice(&bsp::uid::get_hardware_serial64().to_le_bytes());
-                // MAC address (6B)
-                val_buf[8..14].copy_from_slice(&bsp::uid::read_mac_address());
-                // Crockford serial string (14B)
-                val_buf[14..28].copy_from_slice(&bsp::uid::get_crockford_serial()[..14]);
-                // Auth status (1B)
-                let is_auth = hw.wire.session.is_authenticated;
-                val_buf[28] = is_auth as u8;
-                // MCU UID (12B if authenticated, otherwise 0)
-                if is_auth {
-                    val_buf[29..41].copy_from_slice(&bsp::uid::read_mcu_uid());
-                } else {
-                    val_buf[29..41].fill(0);
-                }
-                Ok(41)
-            }
-            FACET_SYS_METRICS => {
-                // uptime_ms (4B)
-                val_buf[..4].copy_from_slice(&now.to_le_bytes());
-                // sysclk_hz (4B)
-                val_buf[4..8].copy_from_slice(&py32_hal::rcc::sysclk_hz().to_le_bytes());
-                // battery_voltage_mv (2B)
-                let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-                val_buf[8..10].copy_from_slice(&pwr.battery_voltage_mv().to_le_bytes());
-                // battery_percent (1B)
-                val_buf[10] = pwr.battery_percentage();
-                // active_app_id (1B)
-                val_buf[11] = hw.orchestrator.active_app_id() as u8;
-                // keypad_locked (1B)
-                val_buf[12] = hw.orchestrator.is_keypad_locked() as u8;
-                // flashlight_active (1B)
-                val_buf[13] = bsp::pins::FLASHLIGHT.is_high() as u8;
-                Ok(14)
-            }
-            FACET_SYS_CALIBRATION => {
-                let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
-                val_buf[0] = is_valid_calibration(calib.raw_bytes()) as u8;
-                val_buf[1..3].copy_from_slice(&calib.xtal_freq_low().to_le_bytes());
-                val_buf[3..5].copy_from_slice(&calib.battery_calib_const().to_le_bytes());
-                Ok(5)
-            }
-            _ => Err(WireStatus::UnsupportedField),
-        },
-        DOMAIN_RADIO => {
-            let radio_state = crate::radio_state_ref();
-            let vfo = match req.handle.instance {
-                RADIO_INSTANCE_VFO_A => &radio_state.vfo_a,
-                RADIO_INSTANCE_VFO_B => &radio_state.vfo_b,
-                _ => radio_state.selected_vfo(),
-            };
-            match req.handle.facet {
-                FACET_RADIO_TUNING => {
-                    val_buf[..4].copy_from_slice(&vfo.frequency.raw().to_le_bytes());
-                    val_buf[4..8]
-                        .copy_from_slice(&((radio_state.step_khz as u32) * 1000).to_le_bytes());
-                    val_buf[8] = radio_state.active_vfo;
-                    Ok(9)
-                }
-                FACET_RADIO_MODULATION => {
-                    let m = match vfo.mod_type {
-                        "AM" => 1,
-                        "AMB" => 2,
-                        "USB" => 3,
-                        "DSB" => 4,
-                        "CW" => 5,
-                        "WFM" => 6,
-                        "PKT" => 7,
-                        "DIG" => 8,
-                        "RAW" => 9,
-                        "BYP" => 10,
-                        _ => 0,
-                    };
-                    val_buf[0] = m;
-                    let bw_hz: u32 = match vfo.bw {
-                        "W" => 25_000,
-                        "VN" => 6_250,
-                        _ => 12_500,
-                    };
-                    val_buf[1..5].copy_from_slice(&bw_hz.to_le_bytes());
-                    Ok(5)
-                }
-                FACET_RADIO_SQUELCH => {
-                    val_buf[0] = radio_state.squelch_level;
-                    val_buf[1..3].copy_from_slice(&hw.radio.get_rssi().to_le_bytes());
-                    val_buf[3] = hw.radio.is_squelch_open() as u8;
-                    Ok(4)
-                }
-                FACET_RADIO_TRANSMIT => {
-                    val_buf[0] = vfo.tx_active as u8;
-                    let p = match vfo.power.as_bytes().first() {
-                        Some(b'H') => 2,
-                        Some(b'M') => 1,
-                        _ => 0,
-                    };
-                    val_buf[1] = p;
-                    Ok(2)
-                }
-                FACET_RADIO_DIGITAL => {
-                    val_buf[..2].copy_from_slice(&0i16.to_le_bytes());
-                    Ok(2)
-                }
-                _ => Err(WireStatus::UnsupportedField),
-            }
-        }
-        DOMAIN_UI => match req.handle.facet {
-            FACET_UI_SURFACE => {
-                val_buf[..2].copy_from_slice(&128u16.to_le_bytes());
-                val_buf[2..4].copy_from_slice(&64u16.to_le_bytes());
-                val_buf[4] = 1;
-                val_buf[5..7].copy_from_slice(&1024u16.to_le_bytes());
-                Ok(7)
-            }
-            FACET_UI_MODAL => {
-                let modal =
-                    unsafe { &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL) };
-                val_buf[0] = modal.is_active() as u8;
-                val_buf[1] = modal.tag;
-                Ok(2)
-            }
-            FACET_UI_VIEW => {
-                val_buf[0] = hw.orchestrator.active_app_id() as u8;
-                Ok(1)
-            }
-            _ => Err(WireStatus::UnsupportedField),
-        },
+        DOMAIN_SYSTEM => read_sys_facet(req.handle.facet, hw, now, &mut resp[4..]),
+        DOMAIN_RADIO => read_radio_facet(req.handle.facet, req.handle.instance, hw, &mut resp[4..]),
+        DOMAIN_UI => read_ui_facet(req.handle.facet, hw, &mut resp[4..]),
         DOMAIN_INPUT => match req.handle.facet {
             FACET_INPUT_LOCK => {
-                val_buf[0] = hw.orchestrator.is_keypad_locked() as u8;
+                resp[4] = hw.orchestrator.is_keypad_locked() as u8;
                 Ok(1)
             }
             _ => Err(WireStatus::UnsupportedField),
@@ -306,29 +309,29 @@ fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, n
                 return send_status(hw, header, WireStatus::BadRange);
             }
             let cfg_slice = crate::master_config_ref().config_bytes(domain_idx);
-            let len = cfg_slice.len().min(val_buf.len());
-            val_buf[..len].copy_from_slice(&cfg_slice[..len]);
+            let len = cfg_slice.len().min(resp.len() - 4);
+            resp[4..4 + len].copy_from_slice(&cfg_slice[..len]);
             Ok(len)
         }
         DOMAIN_APP => match req.handle.facet {
             FACET_APP_REGISTRY => {
-                val_buf[0] = crate::AppRegistry::app_count() as u8;
+                resp[4] = crate::AppRegistry::app_count() as u8;
                 Ok(1)
             }
             FACET_APP_LIFECYCLE => {
-                val_buf[0] = hw.orchestrator.active_app_id() as u8;
+                resp[4] = hw.orchestrator.active_app_id() as u8;
                 Ok(1)
             }
             _ => Err(WireStatus::UnsupportedField),
         },
         DOMAIN_STORAGE => {
             let stats = hw.filesystem.stats();
-            val_buf[..2].copy_from_slice(&stats.active_files.to_le_bytes());
-            val_buf[2..4].copy_from_slice(&stats.used_sectors.to_le_bytes());
-            val_buf[4..6].copy_from_slice(&stats.free_sectors.to_le_bytes());
-            val_buf[6..8].copy_from_slice(&stats.deleted_sectors.to_le_bytes());
-            val_buf[8..12].copy_from_slice(&stats.wear_cycles.to_le_bytes());
-            val_buf[12..14].copy_from_slice(&stats.total_sectors.to_le_bytes());
+            resp[4..6].copy_from_slice(&stats.active_files.to_le_bytes());
+            resp[6..8].copy_from_slice(&stats.used_sectors.to_le_bytes());
+            resp[8..10].copy_from_slice(&stats.free_sectors.to_le_bytes());
+            resp[10..12].copy_from_slice(&stats.deleted_sectors.to_le_bytes());
+            resp[12..16].copy_from_slice(&stats.wear_cycles.to_le_bytes());
+            resp[16..18].copy_from_slice(&stats.total_sectors.to_le_bytes());
             Ok(14)
         }
         _ => Err(WireStatus::Unsupported),
@@ -339,13 +342,66 @@ fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, n
         Err(status) => return send_status(hw, header, status),
     };
 
-    let mut resp = [0u8; 100];
     req.handle.write_bytes(&mut resp[..4]);
-    resp[4..4 + len].copy_from_slice(&val_buf[..len]);
-
     send_resp(hw, header, WireStatus::Ok, &resp[..4 + len])
 }
 
+#[inline(never)]
+fn set_radio_facet(facet: u16, instance: u8, val: &[u8], hw: &mut SystemHardware) -> Result<(), WireStatus> {
+    let radio_state = crate::radio_state();
+    let vfo = match instance {
+        RADIO_INSTANCE_VFO_A => &mut radio_state.vfo_a,
+        RADIO_INSTANCE_VFO_B => &mut radio_state.vfo_b,
+        _ => radio_state.selected_vfo_mut(),
+    };
+    match facet {
+        FACET_RADIO_TUNING => {
+            let freq_hz = get_u32_le(val)?;
+            if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
+                return Err(WireStatus::BadRange);
+            }
+            vfo.frequency = Frequency::new(freq_hz);
+            let _ = hw.radio.set_frequency(Frequency::new(freq_hz));
+            Ok(())
+        }
+        FACET_RADIO_MODULATION => {
+            let mode_u8 = get_u8(val)?;
+            let mode = ModulationMode::from_u8(mode_u8);
+            vfo.mod_type = mode.as_str();
+            hw.radio.set_modulation(mode);
+            Ok(())
+        }
+        FACET_RADIO_SQUELCH => {
+            let sql = get_u8(val)?.min(9);
+            radio_state.squelch_level = sql;
+            hw.radio.set_squelch_level(sql);
+            Ok(())
+        }
+        FACET_RADIO_TRANSMIT => {
+            let should_tx = get_u8(val)? != 0;
+            vfo.tx_active = should_tx;
+            if should_tx {
+                hw.radio.tx_prepare();
+                hw.radio.tx_ramp_up(1);
+                hw.radio.tx_unmute();
+            } else {
+                hw.radio.tx_mute();
+                hw.radio.tx_ramp_down();
+                hw.radio.tx_conclude();
+            }
+            Ok(())
+        }
+        FACET_RADIO_DIGITAL => {
+            let offset_dhz = get_i16_le(val)?;
+            let freq = vfo.frequency.raw();
+            hw.radio.set_sub_hz_offset(freq, offset_dhz);
+            Ok(())
+        }
+        _ => Err(WireStatus::UnsupportedField),
+    }
+}
+
+#[inline(never)]
 fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<(), WireStatus> {
     match req.handle.domain {
         DOMAIN_SYSTEM => match req.handle.facet {
@@ -360,59 +416,7 @@ fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<()
             }
             _ => Err(WireStatus::UnsupportedField),
         },
-        DOMAIN_RADIO => {
-            let radio_state = crate::radio_state();
-            let vfo = match req.handle.instance {
-                RADIO_INSTANCE_VFO_A => &mut radio_state.vfo_a,
-                RADIO_INSTANCE_VFO_B => &mut radio_state.vfo_b,
-                _ => radio_state.selected_vfo_mut(),
-            };
-            match req.handle.facet {
-                FACET_RADIO_TUNING => {
-                    let freq_hz = get_u32_le(req.value)?;
-                    if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
-                        return Err(WireStatus::BadRange);
-                    }
-                    vfo.frequency = Frequency::new(freq_hz);
-                    let _ = hw.radio.set_frequency(Frequency::new(freq_hz));
-                    Ok(())
-                }
-                FACET_RADIO_MODULATION => {
-                    let mode_u8 = get_u8(req.value)?;
-                    let mode = ModulationMode::from_u8(mode_u8);
-                    vfo.mod_type = mode.as_str();
-                    hw.radio.set_modulation(mode);
-                    Ok(())
-                }
-                FACET_RADIO_SQUELCH => {
-                    let sql = get_u8(req.value)?.min(9);
-                    radio_state.squelch_level = sql;
-                    hw.radio.set_squelch_level(sql);
-                    Ok(())
-                }
-                FACET_RADIO_TRANSMIT => {
-                    let should_tx = get_u8(req.value)? != 0;
-                    vfo.tx_active = should_tx;
-                    if should_tx {
-                        hw.radio.tx_prepare();
-                        hw.radio.tx_ramp_up(1);
-                        hw.radio.tx_unmute();
-                    } else {
-                        hw.radio.tx_mute();
-                        hw.radio.tx_ramp_down();
-                        hw.radio.tx_conclude();
-                    }
-                    Ok(())
-                }
-                FACET_RADIO_DIGITAL => {
-                    let offset_dhz = get_i16_le(req.value)?;
-                    let freq = vfo.frequency.raw();
-                    hw.radio.set_sub_hz_offset(freq, offset_dhz);
-                    Ok(())
-                }
-                _ => Err(WireStatus::UnsupportedField),
-            }
-        }
+        DOMAIN_RADIO => set_radio_facet(req.handle.facet, req.handle.instance, req.value, hw),
         DOMAIN_INPUT => match req.handle.facet {
             FACET_INPUT_KEY => {
                 if req.value.is_empty() {

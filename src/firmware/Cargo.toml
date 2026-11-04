@@ -57,6 +57,7 @@ krx_vm = ["kernel/krx_vm", "krx_runtime"]
 
 # 📡 Hardware Peripheral & RF Subsystems
 radio = ["drivers/radio"]
+rf_fsk = []
 fm_radio = ["drivers/fm_radio"]
 audio = ["drivers/audio", "kernel/audio"]
 uart = ["drivers/uart", "kernel/uart"]
