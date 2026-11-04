@@ -1,8 +1,10 @@
 //! System Hardware Abstraction, Dirty Config Synchronization & Context Building.
 
+#[cfg(feature = "usb")]
+use kernel::service::PowerService;
 use crate::services::{
-    DisplayHardware, FirmwareContext as SysContext, PowerService, PowerServiceConfigExt,
-    RadioMelodyExt, SystemStorage,
+    DisplayHardware, FirmwareContext as SysContext, PowerServiceConfigExt, RadioMelodyExt,
+    SystemStorage,
 };
 use crate::{CALIBRATION, PASSCODE_STATE, POWER_SERVICE};
 use drivers::audio::AudioAmplifier;
