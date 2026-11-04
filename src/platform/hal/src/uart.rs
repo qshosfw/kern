@@ -119,10 +119,25 @@ pub fn write_line(s: &str) -> Result<(), UartError> {
     Ok(())
 }
 
-/// Check if a byte is available to read.
+/// Clear pending UART error flags (overrun, noise, framing) and flush DR.
+#[inline]
+pub fn clear_errors() {
+    unsafe {
+        let _ = usart::USART_SR.read_volatile();
+        let _ = usart::USART_DR.read_volatile();
+    }
+}
+
+/// Check if a byte is available to read, clearing any pending error flags.
 #[inline]
 pub fn is_readable() -> bool {
-    unsafe { usart::USART_SR.read_volatile() & usart::SR_RXNE != 0 }
+    unsafe {
+        let sr = usart::USART_SR.read_volatile();
+        if sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE) != 0 {
+            let _ = usart::USART_DR.read_volatile();
+        }
+        sr & usart::SR_RXNE != 0
+    }
 }
 
 /// Read a single byte (blocking).

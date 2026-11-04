@@ -32,6 +32,12 @@ pub const SR_TC: u32 = 1 << 6;
 pub const SR_RXNE: u32 = 1 << 5;
 /// Overrun error
 pub const SR_ORE: u32 = 1 << 3;
+/// Noise error
+pub const SR_NE: u32 = 1 << 2;
+/// Framing error
+pub const SR_FE: u32 = 1 << 1;
+/// Parity error
+pub const SR_PE: u32 = 1 << 0;
 
 // ── CR1 Bit Definitions ────────────────────────────────────────────────────
 

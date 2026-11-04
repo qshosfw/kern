@@ -55,20 +55,70 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
 
     // 5. Deep Sleep Retention Loop (WFI / Low-Power sleep)
     // Feeds watchdog periodically while keeping all displays, audio PA, and RF powered down.
-    // Wakes cleanly on ANY physical keypress or PTT.
-    loop {
+    // Blinks Orange status LED periodically (25ms pulse every 2s) to indicate low-power sleep.
+    // Wakes cleanly on ANY physical keypress, PTT, or RigWire serial frame arrival.
+    let mut next_blink_ms = py32_hal::delay::millis().wrapping_add(2000);
+    'sleep_loop: loop {
         py32_hal::wdt::Watchdog::feed();
 
         if drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
-            break;
+            break 'sleep_loop;
+        }
+
+        #[cfg(feature = "uart")]
+        if py32_hal::uart::is_readable() {
+            break 'sleep_loop;
+        }
+
+        let now = py32_hal::delay::millis();
+        if now.wrapping_sub(next_blink_ms) < 0x8000_0000 {
+            // Heartbeat: pulse orange status LED briefly (~25ms) via BK4829 GPIO1+2
+            hw.radio.set_status_led(bsp::StatusLed::Orange);
+            let pulse_start = py32_hal::delay::millis();
+            while py32_hal::delay::millis().wrapping_sub(pulse_start) < 25 {
+                py32_hal::wdt::Watchdog::feed();
+                if drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+                    hw.radio.set_status_led(bsp::StatusLed::Off);
+                    break 'sleep_loop;
+                }
+                #[cfg(feature = "uart")]
+                if py32_hal::uart::is_readable() {
+                    hw.radio.set_status_led(bsp::StatusLed::Off);
+                    break 'sleep_loop;
+                }
+            }
+            hw.radio.set_status_led(bsp::StatusLed::Off);
+            next_blink_ms = py32_hal::delay::millis().wrapping_add(2000);
         }
 
         cortex_m::asm::wfi();
     }
 
+    hw.radio.set_status_led(bsp::StatusLed::Off);
+
+    // Wait for waking key to be released so it doesn't trigger spurious actions in active app
+    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+        py32_hal::wdt::Watchdog::feed();
+        py32_hal::delay::delay_ms(10);
+    }
+    drivers::keyboard::KeypadScanner::reset_gpio_pins();
+    hw.key_scanner.clear();
+
     // 6. Wakeup & Hardware Restoration
-    // Ensure clock tree is solid at 48 MHz
-    py32_hal::rcc::set_sysclk_48mhz();
+    // Restore system clocks cleanly based on configuration
+    if crate::master_config_ref().battery.cpu_clock == 1 {
+        py32_hal::rcc::set_sysclk_72mhz();
+    } else {
+        py32_hal::rcc::set_sysclk_48mhz();
+    }
+
+    // Re-initialize and flush RigWire serial subsystem
+    #[cfg(feature = "uart")]
+    {
+        py32_hal::uart::clear_errors();
+        py32_hal::uart::set_baud(115200);
+        hw.wire.reset_collector();
+    }
 
     // Re-initialize LCD panel and clear dirty state
     hw.lcd.init();

@@ -96,8 +96,16 @@ impl WireSession {
         }
 
         // Validate session correlation
-        if service == SERVICE_CORE && opcode == OP_CORE_HELLO {
-            if session_id != 0 {
+        if service == SERVICE_CORE {
+            if opcode == OP_CORE_HELLO {
+                // HELLO always establishes or resets the session
+            } else if self.active_session_id == 0
+                || session_id == 0
+                || session_id == self.active_session_id
+            {
+                // Core discovery, ping, status, and time sync operations are permitted
+                // before full session establishment or with session_id=0
+            } else {
                 return Err(WireStatus::BadSession);
             }
         } else {

@@ -163,6 +163,21 @@ fn on_control_state_get(
                 val_buf[0] = hw.orchestrator.active_app_id() as u8;
                 1
             }
+            PROP_SYS_MCU_UID => {
+                let uid = bsp::uid::read_mcu_uid();
+                val_buf[..12].copy_from_slice(&uid);
+                12
+            }
+            PROP_SYS_SYSCLK_HZ => {
+                let hz = py32_hal::rcc::sysclk_hz();
+                val_buf[..4].copy_from_slice(&hz.to_le_bytes());
+                4
+            }
+            PROP_SYS_CALIB_VALID => {
+                let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
+                val_buf[0] = is_valid_calibration(calib.raw_bytes()) as u8;
+                1
+            }
             _ => 0,
         },
         COMPONENT_RADIO => {
@@ -243,6 +258,14 @@ fn on_control_state_get(
         COMPONENT_AUDIO => match req.property_id {
             PROP_AUDIO_VOLUME => {
                 val_buf[0] = crate::master_config_ref().audio.volume;
+                1
+            }
+            PROP_AUDIO_KEY_BEEP => {
+                val_buf[0] = (crate::master_config_ref().audio.key_beep != 0) as u8;
+                1
+            }
+            PROP_AUDIO_ROGER_BEEP => {
+                val_buf[0] = crate::master_config_ref().audio.roger_beep;
                 1
             }
             _ => 0,
@@ -385,7 +408,25 @@ fn on_control_state_set(header: &WireHeader, payload: &[u8], hw: &mut SystemHard
         COMPONENT_AUDIO => match req.property_id {
             PROP_AUDIO_VOLUME => {
                 if let Some(&vol) = val.first() {
-                    hw.audio.set_volume(vol.min(63));
+                    let vol = vol.min(63);
+                    crate::master_config().audio.volume = vol;
+                    hw.audio.set_volume(vol);
+                    WireStatus::Ok
+                } else {
+                    WireStatus::BadLength
+                }
+            }
+            PROP_AUDIO_KEY_BEEP => {
+                if let Some(&b) = val.first() {
+                    crate::master_config().audio.key_beep = if b != 0 { 1 } else { 0 };
+                    WireStatus::Ok
+                } else {
+                    WireStatus::BadLength
+                }
+            }
+            PROP_AUDIO_ROGER_BEEP => {
+                if let Some(&b) = val.first() {
+                    crate::master_config().audio.roger_beep = b.min(3);
                     WireStatus::Ok
                 } else {
                     WireStatus::BadLength

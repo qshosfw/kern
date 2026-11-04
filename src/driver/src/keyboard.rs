@@ -55,6 +55,16 @@ impl KeypadScanner {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.raw_history = [0; 3];
+        self.debounced = 0;
+        self.held_idx = None;
+        self.held_ms = 0;
+        self.key_being_held = false;
+        self.last_held_duration_ms = 0;
+        self.event_queue.clear();
+    }
+
     #[inline(always)]
     pub fn poll_raw_mask() -> u32 {
         matrix::poll_raw_mask()

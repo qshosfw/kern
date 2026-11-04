@@ -412,8 +412,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
                             self.model.is_pressed = false;
                             return EventResult::Consumed;
                         }
-                        ctx.post_event(Shortcut::LaunchApp(APP_ID_VFO as u8).into());
-                        return EventResult::Consumed;
+                        return EventResult::Ignored;
                     }
                     if code == KeyCode::Menu {
                         self.is_pressed = true;

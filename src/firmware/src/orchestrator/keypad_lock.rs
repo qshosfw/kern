@@ -176,11 +176,11 @@ impl KeypadLockManager {
                         self.last_tick_ms = py32_hal::delay::millis();
 
                         let start_threshold =
-                            (base_hold_delay_ms as u32 + 150).clamp(550, 750) as u16;
+                            (base_hold_delay_ms as u32 + 350).clamp(750, 900) as u16;
                         self.hold_start_threshold_ms = start_threshold;
-                        // Long hold to sleep (~1600ms) to ensure deliberate intentional shutdown
+                        // Deliberate long hold to sleep (~2800ms) to prevent accidental shutdown
                         self.hold_target_ms =
-                            (start_threshold as u32 + 900).clamp(1500, 2200) as u16;
+                            (start_threshold as u32 + 2000).clamp(2600, 3200) as u16;
                         // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
                     }
                     KeyState::Held => {
@@ -502,12 +502,12 @@ mod tests {
         assert!(!mgr.is_animating());
 
         // Past threshold, progress bar appears
-        mgr.hold_elapsed_ms = 600;
+        mgr.hold_elapsed_ms = 900;
         assert!(mgr.is_animating());
         assert!(!mgr.sleep_requested);
 
         // Hold completed past target
-        mgr.hold_elapsed_ms = 1800;
+        mgr.hold_elapsed_ms = 2900;
         let tick = Event::Tick;
         mgr.handle_event(&tick, 400, 3000, 0);
         assert!(mgr.sleep_requested);

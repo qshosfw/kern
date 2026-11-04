@@ -28,9 +28,14 @@ pub const PROP_SYS_UPTIME_MS: u16 = 0x0020;
 pub const PROP_SYS_KEYPAD_LOCKED: u16 = 0x0021;
 pub const PROP_SYS_FLASHLIGHT_ACTIVE: u16 = 0x0022;
 pub const PROP_SYS_ACTIVE_APP: u16 = 0x0023;
+pub const PROP_SYS_MCU_UID: u16 = 0x0024;
+pub const PROP_SYS_SYSCLK_HZ: u16 = 0x0025;
+pub const PROP_SYS_CALIB_VALID: u16 = 0x0026;
 
 // Audio Properties (Component 0x03)
 pub const PROP_AUDIO_VOLUME: u16 = 0x0030;
+pub const PROP_AUDIO_KEY_BEEP: u16 = 0x0031;
+pub const PROP_AUDIO_ROGER_BEEP: u16 = 0x0032;
 
 // Standard Actions (§8.5 / §8.6)
 pub const ACTION_FLASHLIGHT_TOGGLE: u16 = 0x0001;

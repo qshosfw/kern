@@ -37,6 +37,12 @@ impl<S: SerialPort> WireDriver<S> {
         }
     }
 
+    /// Reset the streaming frame collector, clearing partial frames and noise.
+    pub fn reset_collector(&mut self) {
+        self.rx_len = 0;
+        self.in_frame = false;
+    }
+
     /// Poll the serial byte stream, feeding the bounded COBS frame collector.
     pub fn poll(&mut self, uptime_ms: u32) -> Option<(WireHeader, usize)> {
         let mut byte_buf = [0u8; 64];
