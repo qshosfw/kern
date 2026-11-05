@@ -326,14 +326,8 @@ impl LauncherApp {
             // Right arrow on selected row (vertically centered at y+3, oscillating horizontal animation)
             if is_sel {
                 let now_ms = py32_hal::delay::millis();
-                let offset = match ((now_ms / 80) % 6) as u8 {
-                    0 => 0,
-                    1 => 1,
-                    2 => 2,
-                    3 => 3,
-                    4 => 2,
-                    _ => 1,
-                };
+                let phase = ((now_ms >> 6) & 3) as i16;
+                let offset = if phase == 3 { 1 } else { phase };
                 let arrow_x = 110 + offset;
                 gfx::icons::draw_icon_8(
                     canvas,
