@@ -1245,9 +1245,23 @@ impl KrxApiTable {
 }
 
 /// $O(1)$ Bitwise Integer Square Root for Cortex-M0+ (§8.2 / KRX-ABI 2.5.0).
-#[inline(always)]
-pub const fn isqrt(n: u32) -> u32 {
-    n.isqrt()
+#[inline(never)]
+pub const fn isqrt(mut n: u32) -> u32 {
+    let mut res = 0;
+    let mut one = 1 << 30;
+    while one > n {
+        one >>= 2;
+    }
+    while one != 0 {
+        if n >= res + one {
+            n -= res + one;
+            res = (res >> 1) + one;
+        } else {
+            res >>= 1;
+        }
+        one >>= 2;
+    }
+    res
 }
 
 #[cfg(test)]
