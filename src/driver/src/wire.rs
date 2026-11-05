@@ -105,20 +105,20 @@ impl<S: SerialPort> WireDriver<S> {
     #[inline(never)]
     fn handle_ascii_line(&mut self) {
         let cmd = &self.rx_buf[..self.rx_len];
-        if cmd.eq_ignore_ascii_case(b"help") || cmd.eq_ignore_ascii_case(b"?") {
-            self.port.write(b"\r\n--- KERN-OS RigWire ---\r\nCommands: help, status, ping, reboot\r\nFraming: COBS (0x00 ... 0x00)\r\n");
-        } else if cmd.eq_ignore_ascii_case(b"ping") {
-            self.port.write(b"\r\nPONG\r\n");
-        } else if cmd.eq_ignore_ascii_case(b"status") {
-            self.port
-                .write(b"\r\nKERN-OS v0.1.0 (PY32F071xB) - Ready\r\n");
-        } else if cmd.eq_ignore_ascii_case(b"reboot") {
+        if cmd.eq_ignore_ascii_case(b"reboot") {
             self.port.write(b"\r\nRebooting...\r\n");
             cortex_m::peripheral::SCB::sys_reset();
-        } else {
-            self.port
-                .write(b"\r\nKERN-OS RigWire Active. Type 'help' or send COBS frames.\r\n");
         }
+        let msg: &[u8] = if cmd.eq_ignore_ascii_case(b"help") || cmd.eq_ignore_ascii_case(b"?") {
+            b"\r\nRigWire: help, status, ping, reboot\r\n"
+        } else if cmd.eq_ignore_ascii_case(b"ping") {
+            b"\r\nPONG\r\n"
+        } else if cmd.eq_ignore_ascii_case(b"status") {
+            b"\r\nKERN-OS v0.1.0 Ready\r\n"
+        } else {
+            b"\r\nRigWire Active. Type 'help'\r\n"
+        };
+        self.port.write(msg);
     }
 
     pub fn current_payload<'a>(&'a self, header: &WireHeader) -> &'a [u8] {
