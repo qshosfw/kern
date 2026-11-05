@@ -157,23 +157,24 @@ pub fn format_mac_address<'a>(mac: &[u8; 6], out: &'a mut [u8; 17]) -> &'a str {
     unsafe { core::str::from_utf8_unchecked(out) }
 }
 
+#[inline(never)]
+fn put_2digit(out: &mut [u8; 8], off: usize, val: u8) {
+    let d = val / 10;
+    out[off] = b'0' + d;
+    out[off + 1] = b'0' + (val - d * 10);
+}
+
 /// Format uptime seconds into "HH:MM:SS" (hours clamped at 99).
 pub fn format_uptime_hms<'a>(secs: u32, out: &'a mut [u8; 8]) -> &'a str {
     let s = (secs % 60) as u8;
     let mins = secs / 60;
     let m = (mins % 60) as u8;
     let h = (mins / 60).min(99) as u8;
-    let d0 = h / 10;
-    out[0] = b'0' + d0;
-    out[1] = b'0' + (h - d0 * 10);
+    put_2digit(out, 0, h);
     out[2] = b':';
-    let d1 = m / 10;
-    out[3] = b'0' + d1;
-    out[4] = b'0' + (m - d1 * 10);
+    put_2digit(out, 3, m);
     out[5] = b':';
-    let d2 = s / 10;
-    out[6] = b'0' + d2;
-    out[7] = b'0' + (s - d2 * 10);
+    put_2digit(out, 6, s);
     unsafe { core::str::from_utf8_unchecked(out) }
 }
 
