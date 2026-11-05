@@ -313,13 +313,12 @@ impl BatteryDriver {
             // Refine internal resistance estimate from measured instantaneous raw step sag during TX
             if self.pre_tx_ocv > raw_mv {
                 let step_sag = self.pre_tx_ocv - raw_mv;
-                let expected_tx_ma: u32 = match periph.tx_power_level {
-                    0 => 500,  // Low Power (~500 mA)
-                    1 => 1000, // Mid Power (~1000 mA)
-                    _ => 1500, // High Power (~1500 mA)
-                };
                 if step_sag >= 50 && step_sag <= 600 {
-                    let r_est = ((step_sag as u32 * 1000) / expected_tx_ma) as u16;
+                    let r_est = match periph.tx_power_level {
+                        0 => step_sag << 1,
+                        1 => step_sag,
+                        _ => (((step_sag as u32) * 2) / 3) as u16,
+                    };
                     if (100..=500).contains(&r_est) {
                         self.internal_res_m_ohm =
                             ((self.internal_res_m_ohm as u32 * 7 + r_est as u32 + 4) / 8) as u16;
