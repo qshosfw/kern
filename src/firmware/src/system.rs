@@ -303,6 +303,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
     #[cfg(feature = "flight_recorder")]
     let mut flight_recorder_cleared = false;
     let mut low_batt_warning_timer = 0u8;
+    #[cfg(feature = "usb")]
+    let mut last_usb_probe_ms = py32_hal::delay::millis();
 
     loop {
         // Feed Independent Watchdog
@@ -337,6 +339,40 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         }
 
         let now = py32_hal::delay::millis();
+
+        // 0a. Periodic USB host attach probe: If configured for a non-48 MHz clock (e.g. 16, 24, 32, 72 MHz)
+        // and USB is not currently connected, briefly sample at 48 MHz to catch host attach / SOF tokens.
+        #[cfg(feature = "usb")]
+        if !hw.usb.is_connected()
+            && crate::master_config_ref().system.cpu_clock != 3
+            && !crate::radio_state().coord.is_transmitting
+            && now.wrapping_sub(last_usb_probe_ms) >= 250
+        {
+            last_usb_probe_ms = now;
+            if py32_hal::rcc::sysclk_hz() != 48_000_000 {
+                py32_hal::rcc::set_sysclk_48mhz();
+            }
+            let probe_start = py32_hal::delay::millis();
+            while py32_hal::delay::millis().wrapping_sub(probe_start) < 2 {
+                if let Some(ev) = hw.usb.poll() {
+                    if matches!(
+                        ev,
+                        kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed
+                    ) {
+                        dirty_render = true;
+                        wake_and_notify_activity(hw);
+                        #[cfg(feature = "uart")]
+                        bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
+                        enqueue_event(Event::Usb(ev));
+                        break;
+                    }
+                }
+                core::hint::spin_loop();
+            }
+            if !hw.usb.is_connected() && hw.usb.consecutive_sof() == 0 {
+                py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
+            }
+        }
 
         // 0b. Poll RigWire serial protocol (UART or USB CDC)
         #[cfg(any(feature = "uart", feature = "usb_cdc"))]

@@ -93,6 +93,14 @@ pub fn populate_package_list(
 }
 
 #[inline(never)]
+fn add_detail_row(items: &mut [MenuItem], n: &mut usize, title: &'static str, val: &str) {
+    if *n < items.len() {
+        items[*n] = MenuItem::new(title, MenuItemType::Value(ShortString::from_str(val)));
+        *n += 1;
+    }
+}
+
+#[inline(never)]
 pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: usize) -> usize {
     let cat = get_catalog();
     let pkg = if is_service {
@@ -115,20 +123,16 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
         n = 1;
     }
 
-    let mut add = |title: &'static str, val: ShortString| {
-        if n < items.len() {
-            items[n] = MenuItem::new(title, MenuItemType::Value(val));
-            n += 1;
-        }
-    };
-
-    add("Name", ShortString::from_str(pkg.title.as_str()));
+    add_detail_row(items, &mut n, "Name", pkg.title.as_str());
     if is_service {
-        add("Role", ShortString::from_str(pkg.exec_type.as_str()));
+        add_detail_row(items, &mut n, "Role", pkg.exec_type.as_str());
     }
-    add("Class", ShortString::from_str(pkg.app_class.as_str()));
-    add("Size", format_size(pkg.size_bytes));
-    add("File", ShortString::from_str(pkg.filename()));
+    add_detail_row(items, &mut n, "Class", pkg.app_class.as_str());
+    if n < items.len() {
+        items[n] = MenuItem::new("Size", MenuItemType::Value(format_size(pkg.size_bytes)));
+        n += 1;
+    }
+    add_detail_row(items, &mut n, "File", pkg.filename());
 
     if n < items.len() {
         items[n] = MenuItem::new("Delete", MenuItemType::Action);
