@@ -220,8 +220,6 @@ impl<'a> SystemHardware<'a> {
             if state == KeyState::Pressed
                 && code != KeyCode::Ptt
                 && code != KeyCode::KeyF
-                && code != KeyCode::Up
-                && code != KeyCode::Down
                 && key_beep != 0
             {
                 Some(code)

@@ -77,33 +77,10 @@ pub fn delay_ms(ms: u32) {
         return;
     }
 
-    // If interrupts are disabled (PRIMASK bit is set) or executing inside an exception handler
-    // (where SysTick cannot preempt), SysTick ISR cannot fire.
-    // Use hardware register-polled countdown loops to avoid deadlock.
-    let in_exception = cortex_m::peripheral::SCB::vect_active()
-        != cortex_m::peripheral::scb::VectActive::ThreadMode;
-    if cortex_m::register::primask::read().is_active() || in_exception {
-        let mut rem = ms;
-        while rem > 0 {
-            let chunk = rem.min(25);
-            for _ in 0..chunk {
-                delay_us(1000);
-            }
-            rem -= chunk;
-            unsafe {
-                pac::iwdg::IWDG_KR.write_volatile(pac::iwdg::KR_KEY_RELOAD);
-            }
-        }
-        return;
-    }
-
     let mut rem = ms;
     while rem > 0 {
         let chunk = rem.min(50);
-        let start = millis();
-        while millis().wrapping_sub(start) < chunk {
-            cortex_m::asm::nop();
-        }
+        crate::time::spin_us(chunk * 1000);
         rem -= chunk;
         unsafe {
             pac::iwdg::IWDG_KR.write_volatile(pac::iwdg::KR_KEY_RELOAD);

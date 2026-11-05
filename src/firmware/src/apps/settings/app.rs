@@ -253,16 +253,11 @@ impl SettingsApp {
             };
 
             let was_editing = self.is_editing;
-            let prev_idx = self.selected_idx;
             let handled = self.view.on_event(&mut model, event);
 
             self.selected_idx = model.selected_idx;
             self.is_editing = model.is_editing;
             self.is_pressed = model.is_pressed;
-
-            if handled && self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
-                ctx.play_beep(crate::services::melody::BeepType::Scroll);
-            }
 
             if handled && (self.is_editing || was_editing) {
                 self.update_config_from_menu(ctx);

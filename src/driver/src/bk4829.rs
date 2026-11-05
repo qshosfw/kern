@@ -235,9 +235,9 @@ impl<'a, State> Bk4829<'a, State> {
         // This isolates the FM discriminator and RX DSP so receiver hiss/whistle never mixes into the tone.
         let cur_pwr = self.cache.read(REG_SYS_POWER);
         let rx_pwr = if cur_pwr != 0xFFFF && (cur_pwr & 0x0001) != 0 {
-            cur_pwr
+            cur_pwr & !0x8000
         } else {
-            0xBFF1
+            0x3FF1
         };
         self.write_reg(REG_SYS_POWER, 0x0302);
 
@@ -656,7 +656,7 @@ impl<'a> Bk4829<'a, Disabled> {
         Self {
             cache: RegisterCache::new(),
             bus,
-            tone_gain: 60,
+            tone_gain: 96,
             active_demod_af: AfType::Fm,
             rx_demod_active: false,
             calib: None,
