@@ -86,27 +86,30 @@ pub trait RadioPrimitive {
         );
     }
     fn set_dtmf(&mut self, digit: u8, gain: u8) {
-        let (f1, f2) = match digit {
-            b'1' => (697, 1209),
-            b'2' => (697, 1336),
-            b'3' => (697, 1477),
-            b'A' | b'a' => (697, 1633),
-            b'4' => (770, 1209),
-            b'5' => (770, 1336),
-            b'6' => (770, 1477),
-            b'B' | b'b' => (770, 1633),
-            b'7' => (852, 1209),
-            b'8' => (852, 1336),
-            b'9' => (852, 1477),
-            b'C' | b'c' => (852, 1633),
-            b'*' => (941, 1209),
-            b'0' => (941, 1336),
-            b'#' => (941, 1477),
-            b'D' | b'd' => (941, 1633),
-            _ => (0, 0),
-        };
-        self.set_dual_tones_hz(f1, gain, f2, gain);
+        let (w1, w2) = dtmf_tone_words(digit);
+        self.set_dual_tones_raw(w1, gain, w2, gain);
     }
+}
+
+/// Convert DTMF character to BK4819/BK4829 dual DDS control words.
+#[inline(never)]
+pub fn dtmf_tone_words(digit: u8) -> (u16, u16) {
+    const ROW_WORDS: [u16; 4] = [7196, 7950, 8796, 9715];
+    const COL_WORDS: [u16; 4] = [12482, 13793, 15249, 16860];
+    let (r, c) = match digit {
+        b'1'..=b'3' => (0, (digit - b'1') as usize),
+        b'A' | b'a' => (0, 3),
+        b'4'..=b'6' => (1, (digit - b'4') as usize),
+        b'B' | b'b' => (1, 3),
+        b'7'..=b'9' => (2, (digit - b'7') as usize),
+        b'C' | b'c' => (2, 3),
+        b'*' => (3, 0),
+        b'0' => (3, 1),
+        b'#' => (3, 2),
+        b'D' | b'd' => (3, 3),
+        _ => return (0, 0),
+    };
+    (ROW_WORDS[r], COL_WORDS[c])
 }
 
 // ── 3. Audio Primitive ──────────────────────────────────────────────────────
