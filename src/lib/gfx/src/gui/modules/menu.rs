@@ -364,6 +364,15 @@ impl MenuView {
     }
 
     #[inline(never)]
+    fn on_nav_moved(&mut self, selected_idx: usize, total_items: usize, wrapped: bool, pause_ticks: u16) {
+        self.adjust_scroll(selected_idx, total_items);
+        if wrapped {
+            self.scroller.jump((self.scroll_top as i16) * 13);
+            self.repeater.pause(pause_ticks);
+        }
+    }
+
+    #[inline(never)]
     pub fn on_event(&mut self, model: &mut MenuModelMut<'_>, event: &Event) -> bool {
         if model.items.is_empty() {
             return false;
@@ -387,11 +396,7 @@ impl MenuView {
                 let prev_idx = model.selected_idx;
                 let wrapped = apply_list_nav_dir(model, dir);
                 if model.selected_idx != prev_idx {
-                    self.adjust_scroll(model.selected_idx, model.items.len());
-                    if wrapped {
-                        self.scroller.jump((self.scroll_top as i16) * 13);
-                        self.repeater.pause(5);
-                    }
+                    self.on_nav_moved(model.selected_idx, model.items.len(), wrapped, 5);
                 }
                 return true;
             }
@@ -430,11 +435,7 @@ impl MenuView {
                             apply_list_nav_dir(model, dir)
                         };
                         if model.selected_idx != prev_idx {
-                            self.adjust_scroll(model.selected_idx, total);
-                            if wrapped {
-                                self.scroller.jump((self.scroll_top as i16) * 13);
-                                self.repeater.pause(6);
-                            }
+                            self.on_nav_moved(model.selected_idx, total, wrapped, 6);
                             changed = true;
                         }
                     }
@@ -495,11 +496,7 @@ impl MenuView {
                     let prev_idx = model.selected_idx;
                     let wrapped = apply_list_nav_dir(model, dir);
                     if model.selected_idx != prev_idx {
-                        self.adjust_scroll(model.selected_idx, model.items.len());
-                        if wrapped {
-                            self.scroller.jump((self.scroll_top as i16) * 13);
-                            self.repeater.pause(5);
-                        }
+                        self.on_nav_moved(model.selected_idx, model.items.len(), wrapped, 5);
                     }
                     return true;
                 }
