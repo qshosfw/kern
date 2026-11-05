@@ -285,23 +285,15 @@ pub fn set_sysclk_72mhz() {
     crate::time::update_tim2_freq(72_000_000);
 }
 
-/// Safely switch system clock to 48 MHz.
-/// Checks the active HSI frequency:
-/// - If HSI is 24 MHz (hsifs == 4): PLL x2 = 48 MHz
-/// - If HSI is 16 MHz (hsifs == 2, bootloader default): PLL x3 = 48 MHz
-/// Adjusts Flash wait states to 1WS and updates SysTick calibration.
+/// Safely switch system clock to 48 MHz (HSI 24 MHz * PLL 2X, 1WS).
+/// Always uses the factory-calibrated 24 MHz HSI trim (0x1FFF_3220) to ensure
+/// clock jitter and frequency error remain strictly within the USB 2.0 Full-Speed
+/// ±0.25% specification (2500 ppm) across all operating conditions.
 pub fn set_sysclk_48mhz() {
     unsafe {
         switch_to_hsi_disable_pll();
-        let icscr = rcc::RCC_ICSCR.read_volatile();
-        let hsifs = (icscr >> 13) & 0x07;
-        let pll_mul = if hsifs == 4 {
-            rcc::PLLCFGR_PLLMUL_2X
-        } else {
-            set_hsi_fs(false);
-            rcc::PLLCFGR_PLLMUL_3X
-        };
-        enable_pll_and_switch(pll_mul, pac::flash::ACR_LATENCY_1WS);
+        set_hsi_fs(true);
+        enable_pll_and_switch(rcc::PLLCFGR_PLLMUL_2X, pac::flash::ACR_LATENCY_1WS);
     }
     crate::delay::update_systick_freq(48_000_000);
     crate::time::update_tim2_freq(48_000_000);

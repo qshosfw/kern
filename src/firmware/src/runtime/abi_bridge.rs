@@ -35,6 +35,31 @@ unsafe fn active_ctx() -> &'static mut FirmwareContext<'static, 'static> {
     unsafe { &mut *ACTIVE_CTX }
 }
 
+#[inline(never)]
+unsafe fn parse_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+    if !ptr.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+        core::str::from_utf8(slice).ok()
+    } else {
+        None
+    }
+}
+
+#[inline(never)]
+unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+    let path = unsafe { parse_str(ptr, len)? };
+    if path.starts_with("/sys/") {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+#[inline(never)]
+unsafe fn str_or_default<'a>(ptr: *const u8, len: usize, default: &'a str) -> &'a str {
+    unsafe { parse_str(ptr, len) }.unwrap_or(default)
+}
+
 // ── 1. CapDisplay C-ABI Handlers ────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_display_clear() {
@@ -78,12 +103,9 @@ pub unsafe extern "C" fn api_draw_str(
     font: u8,
     color: u8,
 ) {
-    if !text.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(text, len as usize) };
-        if let Ok(s) = core::str::from_utf8(slice) {
-            use kernel::proc::primitives::DisplayPrimitive;
-            unsafe { active_ctx().draw_str(x, y, s, font, color) };
-        }
+    if let Some(s) = unsafe { parse_str(text, len as usize) } {
+        use kernel::proc::primitives::DisplayPrimitive;
+        unsafe { active_ctx().draw_str(x, y, s, font, color) };
     }
 }
 
@@ -96,12 +118,9 @@ pub unsafe extern "C" fn api_draw_str_align(
     color: u8,
     align: u8,
 ) {
-    if !text.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(text, len as usize) };
-        if let Ok(s) = core::str::from_utf8(slice) {
-            use kernel::proc::primitives::DisplayPrimitive;
-            unsafe { active_ctx().draw_str_align(x, y, s, font, color, align) };
-        }
+    if let Some(s) = unsafe { parse_str(text, len as usize) } {
+        use kernel::proc::primitives::DisplayPrimitive;
+        unsafe { active_ctx().draw_str_align(x, y, s, font, color, align) };
     }
 }
 
@@ -336,9 +355,8 @@ pub unsafe extern "C" fn api_storage_read_file(
     buf: *mut u8,
     max_len: u16,
 ) -> u16 {
-    if !path.is_null() && !buf.is_null() && path_len > 0 && max_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
+        if !buf.is_null() && max_len > 0 {
             let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
             return unsafe { active_ctx().read_file(path_str, dst).unwrap_or(0) as u16 };
         }
@@ -352,12 +370,8 @@ pub unsafe extern "C" fn api_storage_write_file(
     data: *const u8,
     len: u16,
 ) -> u8 {
-    if !path.is_null() && !data.is_null() && path_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(path_str) = core::str::from_utf8(path_slice) {
-            if path_str.starts_with("/sys/") {
-                return 1;
-            }
+    if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
+        if !data.is_null() {
             let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
             if unsafe { active_ctx().write_file(path_str, src).is_ok() } {
                 return 0;
@@ -368,26 +382,17 @@ pub unsafe extern "C" fn api_storage_write_file(
 }
 
 pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) -> u8 {
-    if !path.is_null() && path_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(path_str) = core::str::from_utf8(path_slice) {
-            if path_str.starts_with("/sys/") {
-                return 1;
-            }
-            if unsafe { active_ctx().remove_file(path_str).is_ok() } {
-                return 0;
-            }
+    if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
+        if unsafe { active_ctx().remove_file(path_str).is_ok() } {
+            return 0;
         }
     }
     1
 }
 
 pub unsafe extern "C" fn api_storage_file_size(path: *const u8, path_len: u8) -> u32 {
-    if !path.is_null() && path_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(path_str) = core::str::from_utf8(path_slice) {
-            return unsafe { active_ctx().file_size(path_str).unwrap_or(0) as u32 };
-        }
+    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
+        return unsafe { active_ctx().file_size(path_str).unwrap_or(0) as u32 };
     }
     0
 }
@@ -921,12 +926,9 @@ pub unsafe extern "C" fn api_draw_str_max(
     color: u8,
     max_w: i16,
 ) {
-    if !text.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(text, len as usize) };
-        if let Ok(s) = core::str::from_utf8(slice) {
-            use kernel::proc::primitives::DisplayPrimitive;
-            unsafe { active_ctx().draw_str_max(x, y, s, font, color, max_w) };
-        }
+    if let Some(s) = unsafe { parse_str(text, len as usize) } {
+        use kernel::proc::primitives::DisplayPrimitive;
+        unsafe { active_ctx().draw_str_max(x, y, s, font, color, max_w) };
     }
 }
 
@@ -1009,14 +1011,9 @@ pub unsafe extern "C" fn api_audio_is_capturing() -> u8 {
 }
 
 pub unsafe extern "C" fn api_storage_file_exists(path: *const u8, path_len: u8) -> u8 {
-    if !path.is_null() && path_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(path_str) = core::str::from_utf8(path_slice) {
-            return if unsafe { active_ctx().exists(path_str) } {
-                1
-            } else {
-                0
-            };
+    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
+        if unsafe { active_ctx().exists(path_str) } {
+            return 1;
         }
     }
     0
@@ -1029,9 +1026,8 @@ pub unsafe extern "C" fn api_storage_read_file_at(
     buf: *mut u8,
     max_len: u16,
 ) -> u16 {
-    if !path.is_null() && !buf.is_null() && path_len > 0 && max_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
+        if !buf.is_null() && max_len > 0 {
             let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
             return unsafe {
                 active_ctx()
@@ -1049,18 +1045,12 @@ pub unsafe extern "C" fn api_storage_append_file(
     data: *const u8,
     len: u16,
 ) -> u8 {
-    if !path.is_null() && !data.is_null() && path_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(path_str) = core::str::from_utf8(path_slice) {
-            if path_str.starts_with("/sys/") {
-                return 1;
-            }
+    if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
+        if !data.is_null() {
             let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            return if unsafe { active_ctx().append_file(path_str, src).is_ok() } {
-                0
-            } else {
-                1
-            };
+            if unsafe { active_ctx().append_file(path_str, src).is_ok() } {
+                return 0;
+            }
         }
     }
     1
@@ -1129,18 +1119,8 @@ pub unsafe extern "C" fn api_ui_show_popup(
     msg: *const u8,
     m_len: u8,
 ) {
-    let t_str = if !title.is_null() && t_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(title, t_len as usize) };
-        core::str::from_utf8(slice).unwrap_or("Notice")
-    } else {
-        "Notice"
-    };
-    let m_str = if !msg.is_null() && m_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(msg, m_len as usize) };
-        core::str::from_utf8(slice).unwrap_or("")
-    } else {
-        ""
-    };
+    let t_str = unsafe { str_or_default(title, t_len as usize, "Notice") };
+    let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
     unsafe { active_ctx().show_popup_dynamic(tag, t_str, m_str) };
 }
 
@@ -1151,18 +1131,8 @@ pub unsafe extern "C" fn api_ui_show_confirm(
     msg: *const u8,
     m_len: u8,
 ) {
-    let t_str = if !title.is_null() && t_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(title, t_len as usize) };
-        core::str::from_utf8(slice).unwrap_or("Confirm")
-    } else {
-        "Confirm"
-    };
-    let m_str = if !msg.is_null() && m_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(msg, m_len as usize) };
-        core::str::from_utf8(slice).unwrap_or("Proceed?")
-    } else {
-        "Proceed?"
-    };
+    let t_str = unsafe { str_or_default(title, t_len as usize, "Confirm") };
+    let m_str = unsafe { str_or_default(msg, m_len as usize, "Proceed?") };
     unsafe { active_ctx().show_confirm_dynamic(tag, t_str, m_str, "OK", "CANCEL") };
 }
 
@@ -1174,18 +1144,8 @@ pub unsafe extern "C" fn api_ui_prompt_text(
     i_len: u8,
     max_len: u8,
 ) {
-    let t_str = if !title.is_null() && t_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(title, t_len as usize) };
-        core::str::from_utf8(slice).unwrap_or("Input")
-    } else {
-        "Input"
-    };
-    let init_str = if !initial.is_null() && i_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(initial, i_len as usize) };
-        core::str::from_utf8(slice).unwrap_or("")
-    } else {
-        ""
-    };
+    let t_str = unsafe { str_or_default(title, t_len as usize, "Input") };
+    let init_str = unsafe { str_or_default(initial, i_len as usize, "") };
     unsafe {
         active_ctx().prompt_text_dynamic(tag, t_str, init_str, max_len as usize);
     }
@@ -1252,32 +1212,21 @@ pub unsafe extern "C" fn api_storage_rename_file(
     new_path: *const u8,
     new_len: u8,
 ) -> u8 {
-    if !old_path.is_null() && !new_path.is_null() && old_len > 0 && new_len > 0 {
-        let old_slice = unsafe { core::slice::from_raw_parts(old_path, old_len as usize) };
-        let new_slice = unsafe { core::slice::from_raw_parts(new_path, new_len as usize) };
-        if let (Ok(o_str), Ok(n_str)) = (
-            core::str::from_utf8(old_slice),
-            core::str::from_utf8(new_slice),
-        ) {
-            return if unsafe { active_ctx().rename_file(o_str, n_str).is_ok() } {
-                0
-            } else {
-                1
-            };
+    if let (Some(o_str), Some(n_str)) = (
+        unsafe { parse_user_path(old_path, old_len as usize) },
+        unsafe { parse_user_path(new_path, new_len as usize) },
+    ) {
+        if unsafe { active_ctx().rename_file(o_str, n_str).is_ok() } {
+            return 0;
         }
     }
     1
 }
 
 pub unsafe extern "C" fn api_storage_create_dir(path: *const u8, path_len: u8) -> u8 {
-    if !path.is_null() && path_len > 0 {
-        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
-        if let Ok(p_str) = core::str::from_utf8(path_slice) {
-            return if unsafe { active_ctx().create_dir(p_str).is_ok() } {
-                0
-            } else {
-                1
-            };
+    if let Some(p_str) = unsafe { parse_user_path(path, path_len as usize) } {
+        if unsafe { active_ctx().create_dir(p_str).is_ok() } {
+            return 0;
         }
     }
     1

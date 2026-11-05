@@ -182,6 +182,16 @@ impl UsbDriver {
         let int_usb = unsafe { USBD_INT_USB_U8.read_volatile() };
         let now = py32_hal::delay::millis();
 
+        // ── 0. Clock Alignment Safeguard ─────────────────────────────────────
+        // If any USB host bus activity (Reset, Resume, SOF) is detected while
+        // running at a non-48 MHz system clock (e.g. 16, 24, 32, 72 MHz), immediately
+        // snap SYSCLK to 48 MHz so the USBD PHY decoder locks onto the 12 Mbps NRZI stream.
+        if (int_usb & (USB_INTR_RESET | USB_INTR_RESUME | USB_INTR_SOF)) != 0
+            && py32_hal::rcc::sysclk_hz() != 48_000_000
+        {
+            py32_hal::rcc::set_sysclk_48mhz();
+        }
+
         let mut event = None;
 
         // ── 1. Bus Lifecycle Events ──────────────────────────────────────────
@@ -741,6 +751,11 @@ impl UsbDriver {
     #[inline(always)]
     pub fn is_connected(&self) -> bool {
         self.is_connected || self.configured
+    }
+
+    #[inline(always)]
+    pub fn consecutive_sof(&self) -> u8 {
+        self.consecutive_sof
     }
 
     #[inline(always)]
