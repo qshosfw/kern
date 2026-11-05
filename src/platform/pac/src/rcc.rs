@@ -67,6 +67,8 @@ pub const APB1ENR_USART2: u32 = 1 << 17;
 pub const APB1ENR_SPI2: u32 = 1 << 14;
 /// USBD (USB 2.0 Full-Speed) clock enable
 pub const APB1ENR_USBD: u32 = 1 << 23;
+/// DAC1 clock enable
+pub const APB1ENR_DAC: u32 = 1 << 29;
 
 // ── APB2ENR Bit Definitions ─────────────────────────────────────────────────
 

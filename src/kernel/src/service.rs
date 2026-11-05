@@ -50,6 +50,14 @@ pub trait AudioSession {
     fn is_speaker_active(&self) -> bool;
 }
 
+/// Declarative interface for Audio ADC sampling & microphone capture.
+pub trait AudioCaptureService {
+    fn start_capture(&mut self, rate_hz: u16) -> Result<(), ()>;
+    fn read_samples(&mut self, out: &mut [i16]) -> usize;
+    fn stop_capture(&mut self);
+    fn is_capturing(&self) -> bool;
+}
+
 // ── Power & Sensor Services ─────────────────────────────────────────────────
 
 /// Declarative interface for Power, Battery and MCU Sensor services.

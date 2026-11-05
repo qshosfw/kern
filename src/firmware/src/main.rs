@@ -51,6 +51,8 @@ pub static mut PASSCODE_STATE: crate::security::PasscodeState =
 pub static mut RADIO_STATE: core::mem::MaybeUninit<RadioState> = core::mem::MaybeUninit::uninit();
 pub static mut POWER_SERVICE: SystemPower = SystemPower::empty();
 pub static mut CANVAS: gfx::Canvas = gfx::Canvas::new();
+pub static mut AUDIO_CAPTURE: drivers::audio::AudioCaptureDriver =
+    drivers::audio::AudioCaptureDriver::new();
 
 #[inline(always)]
 pub fn master_config() -> &'static mut MasterConfig {
@@ -75,6 +77,11 @@ pub fn radio_state_ref() -> &'static RadioState {
 #[inline(always)]
 pub fn system_canvas() -> &'static mut gfx::Canvas {
     unsafe { &mut *core::ptr::addr_of_mut!(CANVAS) }
+}
+
+#[inline(always)]
+pub fn audio_capture_mut() -> &'static mut drivers::audio::AudioCaptureDriver {
+    unsafe { &mut *core::ptr::addr_of_mut!(AUDIO_CAPTURE) }
 }
 
 /// SysTick interrupt handler for system uptime tracking

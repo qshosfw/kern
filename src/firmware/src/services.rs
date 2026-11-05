@@ -233,6 +233,19 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
         }
     }
 
+    #[cfg(feature = "text_input")]
+    pub fn prompt_text_dynamic(&mut self, tag: u8, title: &str, initial: &str, max_len: usize) {
+        crate::orchestrator::sink_enter_keys();
+        unsafe {
+            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                .prompt_text_dynamic(tag, title, initial, max_len);
+        }
+    }
+
+    #[cfg(not(feature = "text_input"))]
+    pub fn prompt_text_dynamic(&mut self, _tag: u8, _title: &str, _initial: &str, _max_len: usize) {
+    }
+
     #[cfg(not(feature = "text_input"))]
     pub fn prompt_text(
         &mut self,

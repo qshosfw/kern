@@ -87,6 +87,7 @@ class KrxPackageBuilder:
         self.cap_imports = []
         self.leaf_map = []
         self.block_map = []
+        self.service_exports = []
 
     def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0)):
         self.name = name
@@ -120,6 +121,10 @@ class KrxPackageBuilder:
 
     def add_block(self, block_id: int, size: int, flash_offset: int, flags: int = 0):
         self.block_map.append((block_id, flags, size, flash_offset))
+
+    def add_service_export(self, interface_id: int, vtable_offset: int, abi_version: int = 1, pinned: bool = False):
+        flags = 0x0001 if pinned else 0x0000
+        self.service_exports.append((interface_id, abi_version, vtable_offset, flags))
 
     def set_payload(self, payload_data: bytes):
         self.payload = bytearray(payload_data)
@@ -238,6 +243,15 @@ class KrxPackageBuilder:
                 block_body.extend(struct.pack("<H", size))
                 block_body.extend(struct.pack("<I", flash_off))
             sections.append((SEC_BLOCK_MAP, block_body))
+
+        # 7. ServiceExports Section (if present, 16 bytes per entry)
+        if self.service_exports:
+            export_body = bytearray()
+            for iface_id, abi_ver, vtable_off, flags in self.service_exports:
+                export_body.extend(struct.pack("<HHIH", iface_id, abi_ver, vtable_off, flags))
+                export_body.extend(b"\x00" * 6)
+            assert len(export_body) % 16 == 0
+            sections.append((SEC_SERVICE_EXPORTS, export_body))
 
         # Calculate section headers offset
         # Preamble is 20 bytes (KRX_MAGIC..header_crc32)

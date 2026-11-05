@@ -21,6 +21,7 @@ pub enum Charset {
 #[repr(align(4))]
 pub struct TextInputModel {
     pub title: &'static str,
+    pub custom_title: String<16>,
     pub buffer: String<32>,
     pub max_len: usize,
     pub press_count: usize,
@@ -49,6 +50,7 @@ impl TextInputModel {
     pub const fn new(max_len: usize) -> Self {
         Self {
             title: "Input Text",
+            custom_title: String::new(),
             buffer: String::new(),
             max_len,
             charset: Charset::Upper,
@@ -82,6 +84,15 @@ impl TextInputModel {
     pub fn with_title(mut self, title: &'static str) -> Self {
         self.title = title;
         self
+    }
+
+    #[inline(always)]
+    pub fn title_str(&self) -> &str {
+        if !self.custom_title.is_empty() {
+            self.custom_title.as_str()
+        } else {
+            self.title
+        }
     }
 
     pub fn reset_prompt(&mut self, title: &'static str, initial_text: &str, max_len: usize) {
@@ -290,8 +301,9 @@ impl TextInputView {
 
 impl View<TextInputModel> for TextInputView {
     fn render(&self, canvas: &mut Canvas, model: &TextInputModel) {
-        if model.show_header && !model.title.is_empty() {
-            crate::widgets::draw_negated_header(canvas, 0, model.title);
+        let title_s = model.title_str();
+        if model.show_header && !title_s.is_empty() {
+            crate::widgets::draw_negated_header(canvas, 0, title_s);
             canvas.fill_rect(0, 9, 128, 55, Color::Clear);
         } else {
             canvas.fill_rect(0, 8, 128, 56, Color::Clear);

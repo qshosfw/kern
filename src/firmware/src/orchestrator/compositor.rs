@@ -150,6 +150,13 @@ impl ModalCompositor {
     }
 
     #[cfg(feature = "text_input")]
+    pub fn prompt_text_dynamic(&mut self, tag: u8, title: &str, initial: &str, max_len: usize) {
+        let m = self.init_text_prompt(tag, "", max_len, false, false);
+        let _ = m.custom_title.push_str(title);
+        let _ = m.buffer.push_str(initial);
+    }
+
+    #[cfg(feature = "text_input")]
     pub fn prompt_passcode(
         &mut self,
         tag: u8,

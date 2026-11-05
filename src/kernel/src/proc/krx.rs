@@ -683,6 +683,52 @@ pub struct BlockEntry {
     pub flash_offset: u32,
 }
 
+/// Service Export Descriptor (0x0006 / ORDS-01 16-byte power-of-two geometry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C, packed)]
+pub struct ServiceExport {
+    pub interface_id: u16,
+    pub abi_version: u16,
+    pub vtable_offset: u32,
+    pub flags: u16,
+    pub reserved: [u8; 6],
+}
+
+const _: () = assert!(core::mem::size_of::<ServiceExport>() == 16);
+
+impl ServiceExport {
+    pub const SIZE: usize = 16;
+    pub const FLAG_PINNED: u16 = 1 << 0;
+
+    pub const fn empty() -> Self {
+        Self {
+            interface_id: 0,
+            abi_version: 0,
+            vtable_offset: 0,
+            flags: 0,
+            reserved: [0u8; 6],
+        }
+    }
+
+    pub fn parse(buf: &[u8]) -> Option<Self> {
+        if buf.len() < Self::SIZE {
+            return None;
+        }
+        Some(Self {
+            interface_id: u16::from_le_bytes([buf[0], buf[1]]),
+            abi_version: u16::from_le_bytes([buf[2], buf[3]]),
+            vtable_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+            flags: u16::from_le_bytes([buf[8], buf[9]]),
+            reserved: [buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]],
+        })
+    }
+
+    #[inline(always)]
+    pub const fn is_pinned(&self) -> bool {
+        (self.flags & Self::FLAG_PINNED) != 0
+    }
+}
+
 // ── P0 Structured Paged Leaf Overlays & Continuations (§5.1 / KRX 3.2) ──────
 
 pub const FLAG_LEAF_PINNED: u8 = 1 << 0;
@@ -1195,6 +1241,25 @@ mod tests {
         assert_eq!(comp_len, 28);
         assert_eq!(flags, SWAP_FLAG_COMPRESSED_RLE);
         assert_eq!(crc, 0xABCD);
+    }
+
+    #[test]
+    fn test_service_export_serde() {
+        assert_eq!(core::mem::size_of::<ServiceExport>(), 16);
+        let mut raw = [0u8; 16];
+        raw[0..2].copy_from_slice(&0x0104u16.to_le_bytes()); // interface_id
+        raw[2..4].copy_from_slice(&2u16.to_le_bytes()); // abi_version
+        raw[4..8].copy_from_slice(&0x0000_0140u32.to_le_bytes()); // vtable_offset
+        raw[8..10].copy_from_slice(&ServiceExport::FLAG_PINNED.to_le_bytes()); // flags
+
+        let export = ServiceExport::parse(&raw).expect("Failed to parse ServiceExport");
+        let iface = export.interface_id;
+        let abi = export.abi_version;
+        let vtable_off = export.vtable_offset;
+        assert_eq!(iface, 0x0104);
+        assert_eq!(abi, 2);
+        assert_eq!(vtable_off, 0x0140);
+        assert!(export.is_pinned());
     }
 
     #[test]

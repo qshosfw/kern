@@ -16,7 +16,11 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
     let (val, dec, unit) = match id {
         // 1. Direct string & buffer metrics that format directly into `out` and return:
         MetricId::BatteryStatus => {
-            out.set_str(if ctx.power.is_charging { "Charging" } else { "Discharging" });
+            out.set_str(if ctx.power.is_charging {
+                "Charging"
+            } else {
+                "Discharging"
+            });
             return;
         }
         MetricId::SystemFirmware => {
@@ -51,7 +55,11 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         }
         #[cfg(feature = "settings_calib")]
         MetricId::CalibSig => {
-            out.set_str(if ctx.calibration.is_valid() { "Valid" } else { "None" });
+            out.set_str(if ctx.calibration.is_valid() {
+                "Valid"
+            } else {
+                "None"
+            });
             return;
         }
         #[cfg(feature = "settings_debug")]

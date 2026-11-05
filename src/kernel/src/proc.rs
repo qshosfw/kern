@@ -23,7 +23,7 @@ pub use krx::{
     BOOT_MAGIC, CALIB_MAGIC, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, KERNFS_MAGIC,
     KRX_MAGIC, KrxClass, KrxExecType, KrxIndexEntry, KrxPreamble, KrxProfile, KrxSwapHeader,
     LeafContext, LeafContinuation, LeafEntry, PCB_MAGIC, SECTION_LEAF_MAP, SIG_MAGIC, SLAB_MAGIC,
-    SWAP_FLAG_COMPRESSED_RLE, SWAP_MAGIC,
+    SWAP_FLAG_COMPRESSED_RLE, SWAP_MAGIC, ServiceExport,
 };
 pub use lease::{LeaseError, LeaseKind, ResourceLease, ResourceLeaseManager};
 pub use ledger::ResourceLedger;
@@ -246,30 +246,42 @@ impl<const N: usize> ProcessTable<N> {
 
     /// Locate PCB by Pid.
     pub fn find(&self, pid: Pid) -> Option<&Pcb> {
-        self.slots
-            .iter()
-            .find(|p| p.pid == pid && p.state != ProcState::Dormant)
+        for p in &self.slots {
+            if p.pid == pid && p.state != ProcState::Dormant {
+                return Some(p);
+            }
+        }
+        None
     }
 
     /// Locate mutable PCB by Pid.
     pub fn find_mut(&mut self, pid: Pid) -> Option<&mut Pcb> {
-        self.slots
-            .iter_mut()
-            .find(|p| p.pid == pid && p.state != ProcState::Dormant)
+        for p in &mut self.slots {
+            if p.pid == pid && p.state != ProcState::Dormant {
+                return Some(p);
+            }
+        }
+        None
     }
 
     /// Locate PCB by app_id.
     pub fn find_by_app(&self, app_id: usize) -> Option<&Pcb> {
-        self.slots
-            .iter()
-            .find(|p| p.app_id == app_id && p.state != ProcState::Dormant)
+        for p in &self.slots {
+            if p.app_id == app_id && p.state != ProcState::Dormant {
+                return Some(p);
+            }
+        }
+        None
     }
 
     /// Locate mutable PCB by app_id.
     pub fn find_mut_by_app(&mut self, app_id: usize) -> Option<&mut Pcb> {
-        self.slots
-            .iter_mut()
-            .find(|p| p.app_id == app_id && p.state != ProcState::Dormant)
+        for p in &mut self.slots {
+            if p.app_id == app_id && p.state != ProcState::Dormant {
+                return Some(p);
+            }
+        }
+        None
     }
 
     /// Terminate process and recycle slot.
@@ -284,7 +296,13 @@ impl<const N: usize> ProcessTable<N> {
 
     /// Count of currently active (non-dormant, non-dead) processes.
     pub fn active_count(&self) -> usize {
-        self.slots.iter().filter(|p| p.is_active()).count()
+        let mut count = 0;
+        for p in &self.slots {
+            if p.is_active() {
+                count += 1;
+            }
+        }
+        count
     }
 }
 

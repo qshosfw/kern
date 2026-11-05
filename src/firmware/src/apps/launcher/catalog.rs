@@ -111,7 +111,7 @@ impl PackageCatalog {
 
         if let Ok(count) = filesystem.list_dir("/apps", &mut dir_entries) {
             for entry in &dir_entries[..count] {
-                if !entry.is_dir && self.entries.len() < 8 {
+                if !entry.is_dir && self.entries.len() < MAX_CATALOG_PACKAGES {
                     if let Some(pkg) =
                         Self::inspect_package(filesystem, entry.path.as_str(), entry.size)
                     {
@@ -148,13 +148,11 @@ impl PackageCatalog {
 
         let bytes = base_name.as_bytes();
         let n = bytes.len();
-        let is_app = n > 4 && &bytes[n - 4..] == b".app";
-        let is_krx = n > 4 && &bytes[n - 4..] == b".krx";
+        let is_pkg = n > 4 && (&bytes[n - 4..] == b".app" || &bytes[n - 4..] == b".krx");
 
         let mut path = heapless::String::<24>::new();
         let _ = path.push_str("/apps/");
         let _ = path.push_str(&base_name[..n.min(18)]);
-        let path_str = path.as_str();
 
         let mut app_class = KrxClass::Declare;
         let mut exec_type = KrxExecType::App;
@@ -163,9 +161,9 @@ impl PackageCatalog {
         let mut caps = 0u32;
         let mut is_valid = false;
 
-        if (is_app || is_krx) && size >= KrxPreamble::SIZE {
+        if is_pkg && size >= KrxPreamble::SIZE {
             let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..160];
-            if let Ok(read_len) = filesystem.read_file(path_str, hdr_buf) {
+            if let Ok(read_len) = filesystem.read_file(path.as_str(), hdr_buf) {
                 if let Ok(preamble) = KrxPreamble::parse(&hdr_buf[..read_len]) {
                     if let Some(cls) = preamble.execution_class() {
                         is_valid = true;
@@ -173,11 +171,12 @@ impl PackageCatalog {
                     }
 
                     let h_len = (preamble.header_len as usize).min(read_len);
+                    let hdr = &hdr_buf[..h_len];
                     if let Some(ident) = find_section(hdr_buf, h_len, SECTION_IDENTITY)
                         .and_then(SectionIdentity::parse)
                     {
                         icon_id = ident.icon_asset;
-                        if let Some(name_str) = ident.name(&hdr_buf[..h_len]) {
+                        if let Some(name_str) = ident.name(hdr) {
                             let _ = title.push_str(name_str);
                         }
                     }
@@ -195,7 +194,7 @@ impl PackageCatalog {
         }
 
         if title.is_empty() {
-            let stem = if (is_app || is_krx) && n > 4 {
+            let stem = if is_pkg {
                 &base_name[..n - 4]
             } else {
                 base_name

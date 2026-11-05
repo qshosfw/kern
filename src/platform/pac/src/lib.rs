@@ -25,6 +25,7 @@ pub use PY32f071xx_pac as raw;
 pub use PY32f071xx_pac::Interrupt;
 
 pub mod adc;
+pub mod dac;
 pub mod dma;
 pub mod exti;
 pub mod flash;

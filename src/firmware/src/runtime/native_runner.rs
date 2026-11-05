@@ -28,6 +28,7 @@ pub const TRANSIENT_SCRATCH_OFFSET: usize = 6144; // Scratch storage offset for 
 pub(crate) struct NativeExecSlot {
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
+    pub(crate) pid: kernel::proc::Pid,
     pub(crate) app_name: heapless::String<16>,
     pub(crate) pkg_path: heapless::String<32>,
     pub(crate) is_loaded: bool,
@@ -294,6 +295,7 @@ pub fn load_native_from_storage(
     cap_imports_body: Option<&[u8]>,
     block_map_body: Option<&[u8]>,
     leaf_map_body: Option<&[u8]>,
+    service_exports_body: Option<&[u8]>,
     caps: CapabilitySet,
 ) -> Result<(), KrxLaunchError> {
     let slot = slot_mut();
@@ -302,6 +304,7 @@ pub fn load_native_from_storage(
     slot.leaf_mgr.reset();
     slot.current_block = 0;
     slot.current_slot = 0;
+    slot.pid = kernel::proc::Pid(1);
 
     let buffer_bytes =
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
@@ -433,6 +436,23 @@ pub fn load_native_from_storage(
     let _ = slot.app_name.push_str(name);
     slot.caps = caps;
     slot.is_loaded = true;
+
+    // 6. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
+    if let Some(exports_body) = service_exports_body {
+        for chunk in exports_body.chunks_exact(kernel::proc::ServiceExport::SIZE) {
+            if let Some(export) = kernel::proc::ServiceExport::parse(chunk) {
+                let vtable_ptr = (load_base + export.vtable_offset) as usize;
+                super::abi_bridge::service_registry_mut().register(
+                    export.interface_id,
+                    export.abi_version,
+                    slot.pid,
+                    vtable_ptr,
+                    export.is_pinned(),
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -588,10 +608,71 @@ pub unsafe fn native_on_event(
 
 pub unsafe fn native_on_modal_result(
     _ptr: *mut (),
-    _ctx: &mut FirmwareContext<'static, 'static>,
-    _r: &ModalResult<'_>,
+    ctx: &mut FirmwareContext<'static, 'static>,
+    r: &ModalResult<'_>,
 ) -> EventResult {
-    EventResult::Ignored
+    let slot = slot_ref();
+    if !slot.is_loaded || slot.entry_point == 0 {
+        return EventResult::Ignored;
+    }
+
+    let krx_ev = match r {
+        ModalResult::Dismissed(tag) => KrxEvent {
+            kind: kernel::proc::abi::KRX_EV_MODAL,
+            key: *tag,
+            flags: kernel::proc::abi::MODAL_RESULT_DISMISSED,
+            reserved: 0,
+            payload: 0,
+        },
+        ModalResult::Confirmed(tag) => KrxEvent {
+            kind: kernel::proc::abi::KRX_EV_MODAL,
+            key: *tag,
+            flags: kernel::proc::abi::MODAL_RESULT_CONFIRMED,
+            reserved: 0,
+            payload: 0,
+        },
+        ModalResult::TextInputDone { tag, text } => {
+            super::abi_bridge::store_modal_text(text);
+            KrxEvent {
+                kind: kernel::proc::abi::KRX_EV_MODAL,
+                key: *tag,
+                flags: kernel::proc::abi::MODAL_RESULT_TEXT_DONE,
+                reserved: 0,
+                payload: text.len() as u32,
+            }
+        }
+        ModalResult::SheetSelected { tag, index } => KrxEvent {
+            kind: kernel::proc::abi::KRX_EV_MODAL,
+            key: *tag,
+            flags: kernel::proc::abi::MODAL_RESULT_SHEET_SELECTED,
+            reserved: 0,
+            payload: *index as u32,
+        },
+        ModalResult::Canceled(tag) => KrxEvent {
+            kind: kernel::proc::abi::KRX_EV_MODAL,
+            key: *tag,
+            flags: kernel::proc::abi::MODAL_RESULT_CANCELED,
+            reserved: 0,
+            payload: 0,
+        },
+    };
+
+    unsafe {
+        ACTIVE_CTX = ctx as *mut _;
+        let res = invoke_krx_native(
+            slot.entry_point,
+            slot.got_base,
+            KRX_OP_EVENT,
+            &raw const NATIVE_API_TABLE,
+            &krx_ev as *const _ as *const (),
+        );
+        ACTIVE_CTX = core::ptr::null_mut();
+        if res != 0 && res != 0xFFFF_FFFF {
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
+        }
+    }
 }
 
 pub unsafe fn native_on_render(
@@ -633,6 +714,10 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut FirmwareContext<'static, '
             );
             ACTIVE_CTX = core::ptr::null_mut();
         }
+        // Unbind any service interfaces exported by this package
+        super::abi_bridge::service_registry_mut().unbind_provider(slot.pid);
+        // Ensure continuous audio capture is stopped on exit
+        crate::audio_capture_mut().stop_capture();
         slot.is_loaded = false;
         slot.entry_point = 0;
     }

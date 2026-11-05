@@ -106,6 +106,19 @@ pub fn write_bytes(data: &[u8]) -> Result<(), UartError> {
     Ok(())
 }
 
+/// Wait until all transmitted bytes have completely shifted out (Transmission Complete).
+pub fn wait_tx_complete() {
+    unsafe {
+        let mut timeout = 100_000;
+        while usart::USART_SR.read_volatile() & usart::SR_TC == 0 {
+            timeout -= 1;
+            if timeout == 0 {
+                break;
+            }
+        }
+    }
+}
+
 /// Transmit a string (blocking).
 pub fn write_str(s: &str) -> Result<(), UartError> {
     write_bytes(s.as_bytes())

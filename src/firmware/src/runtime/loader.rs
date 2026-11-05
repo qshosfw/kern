@@ -12,8 +12,8 @@ use kernel::caps::CapabilitySet;
 use kernel::proc::declare::{ActionRecord, DeclareItem, DeclareNode, LAYOUT_MENU};
 use kernel::proc::krx::{
     KrxClass, KrxPreamble, SECTION_BLOCK_MAP, SECTION_CAP_IMPORTS, SECTION_EXECUTION,
-    SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_TYPE_LIFECYCLE, SectionExecution, SectionIdentity,
-    SectionType, find_section,
+    SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_SERVICE_EXPORTS, SECTION_TYPE_LIFECYCLE,
+    SectionExecution, SectionIdentity, SectionType,
 };
 
 pub use kernel::proc::krx::KrxLaunchError;
@@ -130,16 +130,37 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         return Err(KrxLaunchError::TruncatedPackage);
     }
 
-    // 1. Inspect Identity Section
-    let ident_body = find_section(&hdr_buf, header_len, SECTION_IDENTITY)
+    // 1. Single-pass section scan (KRX-ABI Appendix C)
+    let mut ident_body: Option<&[u8]> = None;
+    let mut type_body: Option<&[u8]> = None;
+    let mut exec_body: Option<&[u8]> = None;
+    let mut cap_imports_body: Option<&[u8]> = None;
+    let mut block_map_body: Option<&[u8]> = None;
+    let mut leaf_map_body: Option<&[u8]> = None;
+    let mut service_exports_body: Option<&[u8]> = None;
+
+    for (hdr, body) in kernel::proc::krx::KrxSectionIterator::new(&hdr_buf, header_len) {
+        match hdr.id {
+            SECTION_IDENTITY => ident_body = Some(body),
+            SECTION_TYPE_LIFECYCLE => type_body = Some(body),
+            SECTION_EXECUTION => exec_body = Some(body),
+            SECTION_CAP_IMPORTS => cap_imports_body = Some(body),
+            SECTION_BLOCK_MAP => block_map_body = Some(body),
+            SECTION_LEAF_MAP => leaf_map_body = Some(body),
+            SECTION_SERVICE_EXPORTS => service_exports_body = Some(body),
+            _ => {}
+        }
+    }
+
+    let ident = ident_body
+        .and_then(SectionIdentity::parse)
         .ok_or(KrxLaunchError::MissingIdentity)?;
-    let ident = SectionIdentity::parse(ident_body).ok_or(KrxLaunchError::MissingIdentity)?;
     let raw_name = ident.name(&hdr_buf[..header_len]).unwrap_or("App");
 
     // 2. Inspect Type & Lifecycle Section
     let mut required_caps = CapabilitySet::NONE;
-    if let Some(type_body) = find_section(&hdr_buf, header_len, SECTION_TYPE_LIFECYCLE) {
-        if let Some(st) = SectionType::parse(type_body) {
+    if let Some(tb) = type_body {
+        if let Some(st) = SectionType::parse(tb) {
             required_caps = st.capabilities();
         }
     }
@@ -156,8 +177,8 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
     // 3b. Verify RAM and stack headroom requirements against Execution Section
     let mut exec_sec: Option<SectionExecution> = None;
-    if let Some(exec_body) = find_section(&hdr_buf, header_len, SECTION_EXECUTION) {
-        if let Some(exec) = SectionExecution::parse(exec_body) {
+    if let Some(eb) = exec_body {
+        if let Some(exec) = SectionExecution::parse(eb) {
             let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
             let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
             let min_stack = exec.min_stack_bytes as usize;
@@ -249,9 +270,6 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         #[cfg(feature = "krx_native")]
         KrxClass::Native | KrxClass::Paged => {
             let exec_sec = exec_sec.ok_or(KrxLaunchError::MissingExecution)?;
-            let cap_imports_body = find_section(&hdr_buf, header_len, SECTION_CAP_IMPORTS);
-            let block_map_body = find_section(&hdr_buf, header_len, SECTION_BLOCK_MAP);
-            let leaf_map_body = find_section(&hdr_buf, header_len, SECTION_LEAF_MAP);
 
             super::native_runner::load_native_from_storage(
                 app_name,
@@ -262,6 +280,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 cap_imports_body,
                 block_map_body,
                 leaf_map_body,
+                service_exports_body,
                 required_caps,
             )?;
 

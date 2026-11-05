@@ -137,7 +137,13 @@ pub unsafe extern "C" fn api_rf_get_rssi() -> i16 {
 }
 
 pub unsafe extern "C" fn api_rf_is_carrier() -> u8 {
-    unsafe { if active_ctx().is_carrier_detected() { 1 } else { 0 } }
+    unsafe {
+        if active_ctx().is_carrier_detected() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 pub unsafe extern "C" fn api_rf_set_modulation(mod_type: u8) {
@@ -314,7 +320,11 @@ pub unsafe extern "C" fn api_storage_read_asset(
 ) -> u16 {
     if !buf.is_null() && len > 0 {
         let slice = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
-        unsafe { active_ctx().read_asset(asset_id, offset, slice).unwrap_or(0) as u16 }
+        unsafe {
+            active_ctx()
+                .read_asset(asset_id, offset, slice)
+                .unwrap_or(0) as u16
+        }
     } else {
         0
     }
@@ -508,7 +518,13 @@ pub unsafe extern "C" fn api_ui_close_modal() {
 }
 
 pub unsafe extern "C" fn api_ui_has_modal() -> u8 {
-    unsafe { if active_ctx().has_active_modal() { 1 } else { 0 } }
+    unsafe {
+        if active_ctx().has_active_modal() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 pub unsafe extern "C" fn api_sys_rand32() -> u32 {
@@ -864,7 +880,11 @@ pub unsafe extern "C" fn api_hw_spi_transfer(
         } else {
             unsafe { core::slice::from_raw_parts_mut(rx, len as usize) }
         };
-        if unsafe { active_ctx().spi_transfer(cs_pin, tx_slice, rx_slice).is_ok() } {
+        if unsafe {
+            active_ctx()
+                .spi_transfer(cs_pin, tx_slice, rx_slice)
+                .is_ok()
+        } {
             0
         } else {
             1
@@ -890,6 +910,445 @@ pub unsafe extern "C" fn api_hw_rf_write_reg(reg: u8, val: u16) {
     unsafe { active_ctx().write_register(reg, val) };
 }
 
+// ── Extended C-ABI Handlers (§8.2 / KRX-ABI 2.5.0) ─────────────────────────
+
+pub unsafe extern "C" fn api_draw_str_max(
+    x: i16,
+    y: i16,
+    text: *const u8,
+    len: u16,
+    font: u8,
+    color: u8,
+    max_w: i16,
+) {
+    if !text.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(text, len as usize) };
+        if let Ok(s) = core::str::from_utf8(slice) {
+            use kernel::proc::primitives::DisplayPrimitive;
+            unsafe { active_ctx().draw_str_max(x, y, s, font, color, max_w) };
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_set_inverted(inverted: u8) {
+    unsafe { active_ctx().set_inverted(inverted != 0) };
+}
+
+pub unsafe extern "C" fn api_set_contrast(contrast: u8) {
+    unsafe { active_ctx().set_contrast(contrast) };
+}
+
+pub unsafe extern "C" fn api_rf_set_subaudible_ctcss(freq_tenths_hz: u16) {
+    unsafe { active_ctx().set_subaudible_ctcss(freq_tenths_hz) };
+}
+
+pub unsafe extern "C" fn api_rf_set_subaudible_dcs(code: u16, inverted: u8) {
+    unsafe { active_ctx().set_subaudible_dcs(code, inverted != 0) };
+}
+
+pub unsafe extern "C" fn api_rf_send_tail() {
+    unsafe { active_ctx().send_tail() };
+}
+
+pub unsafe extern "C" fn api_rf_get_bandwidth() -> u32 {
+    unsafe { active_ctx().get_bandwidth() }
+}
+
+pub unsafe extern "C" fn api_rf_get_modulation() -> u8 {
+    unsafe { active_ctx().get_modulation() }
+}
+
+pub unsafe extern "C" fn api_rf_get_tx_state() -> u8 {
+    unsafe { active_ctx().get_tx_state() }
+}
+
+pub unsafe extern "C" fn api_rf_get_glitch() -> u8 {
+    unsafe { active_ctx().get_glitch() }
+}
+
+pub unsafe extern "C" fn api_rf_set_agc(table_idx: u8) {
+    unsafe { active_ctx().set_agc(table_idx) };
+}
+
+pub unsafe extern "C" fn api_audio_set_volume(volume: u8) {
+    unsafe { active_ctx().set_volume(volume) };
+}
+
+pub unsafe extern "C" fn api_audio_get_volume() -> u8 {
+    unsafe { active_ctx().get_volume() }
+}
+
+pub unsafe extern "C" fn api_audio_stop() {
+    unsafe { active_ctx().stop_audio() };
+}
+
+pub unsafe extern "C" fn api_audio_is_playing() -> u8 {
+    unsafe {
+        if active_ctx().is_audio_playing() {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+pub unsafe extern "C" fn api_audio_set_mic_gain(gain: u8) {
+    unsafe { active_ctx().set_mic_gain(gain) };
+}
+
+pub unsafe extern "C" fn api_audio_read_mic_sample() -> u16 {
+    unsafe { active_ctx().read_mic_sample() }
+}
+
+pub unsafe extern "C" fn api_audio_is_capturing() -> u8 {
+    if unsafe { active_ctx().is_capturing() } {
+        1
+    } else {
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_storage_file_exists(path: *const u8, path_len: u8) -> u8 {
+    if !path.is_null() && path_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+            return if unsafe { active_ctx().exists(path_str) } {
+                1
+            } else {
+                0
+            };
+        }
+    }
+    0
+}
+
+pub unsafe extern "C" fn api_storage_read_file_at(
+    path: *const u8,
+    path_len: u8,
+    offset: u32,
+    buf: *mut u8,
+    max_len: u16,
+) -> u16 {
+    if !path.is_null() && !buf.is_null() && path_len > 0 && max_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+            let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
+            return unsafe {
+                active_ctx()
+                    .read_file_at(path_str, offset as usize, dst)
+                    .unwrap_or(0) as u16
+            };
+        }
+    }
+    0
+}
+
+pub unsafe extern "C" fn api_storage_append_file(
+    path: *const u8,
+    path_len: u8,
+    data: *const u8,
+    len: u16,
+) -> u8 {
+    if !path.is_null() && !data.is_null() && path_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+            if path_str.starts_with("/sys/") {
+                return 1;
+            }
+            let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
+            return if unsafe { active_ctx().append_file(path_str, src).is_ok() } {
+                0
+            } else {
+                1
+            };
+        }
+    }
+    1
+}
+
+pub unsafe extern "C" fn api_sys_is_key_pressed(key_code: u8) -> u8 {
+    if unsafe { active_ctx().is_key_pressed(key_code) } {
+        1
+    } else {
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_sys_is_f_active() -> u8 {
+    if unsafe { active_ctx().is_f_active() } {
+        1
+    } else {
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_sys_is_ptt_pressed() -> u8 {
+    if unsafe { active_ctx().is_ptt_pressed() } {
+        1
+    } else {
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_sys_is_side1_pressed() -> u8 {
+    if unsafe { active_ctx().is_side1_pressed() } {
+        1
+    } else {
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_sys_is_side2_pressed() -> u8 {
+    if unsafe { active_ctx().is_side2_pressed() } {
+        1
+    } else {
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_sys_clear_key_buffer() {
+    unsafe { active_ctx().clear_key_buffer() };
+}
+
+pub unsafe extern "C" fn api_sys_set_flashlight(on: u8) {
+    unsafe { active_ctx().set_flashlight(on != 0) };
+}
+
+pub unsafe extern "C" fn api_serial_flush() {
+    unsafe { active_ctx().flush() };
+}
+
+pub unsafe extern "C" fn api_sys_delay_us(us: u32) {
+    py32_hal::delay::delay_us(us);
+}
+
+pub unsafe extern "C" fn api_ui_show_popup(
+    tag: u8,
+    title: *const u8,
+    t_len: u8,
+    msg: *const u8,
+    m_len: u8,
+) {
+    let t_str = if !title.is_null() && t_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(title, t_len as usize) };
+        core::str::from_utf8(slice).unwrap_or("Notice")
+    } else {
+        "Notice"
+    };
+    let m_str = if !msg.is_null() && m_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(msg, m_len as usize) };
+        core::str::from_utf8(slice).unwrap_or("")
+    } else {
+        ""
+    };
+    unsafe { active_ctx().show_popup_dynamic(tag, t_str, m_str) };
+}
+
+pub unsafe extern "C" fn api_ui_show_confirm(
+    tag: u8,
+    title: *const u8,
+    t_len: u8,
+    msg: *const u8,
+    m_len: u8,
+) {
+    let t_str = if !title.is_null() && t_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(title, t_len as usize) };
+        core::str::from_utf8(slice).unwrap_or("Confirm")
+    } else {
+        "Confirm"
+    };
+    let m_str = if !msg.is_null() && m_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(msg, m_len as usize) };
+        core::str::from_utf8(slice).unwrap_or("Proceed?")
+    } else {
+        "Proceed?"
+    };
+    unsafe { active_ctx().show_confirm_dynamic(tag, t_str, m_str, "OK", "CANCEL") };
+}
+
+pub unsafe extern "C" fn api_ui_prompt_text(
+    tag: u8,
+    title: *const u8,
+    t_len: u8,
+    initial: *const u8,
+    i_len: u8,
+    max_len: u8,
+) {
+    let t_str = if !title.is_null() && t_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(title, t_len as usize) };
+        core::str::from_utf8(slice).unwrap_or("Input")
+    } else {
+        "Input"
+    };
+    let init_str = if !initial.is_null() && i_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(initial, i_len as usize) };
+        core::str::from_utf8(slice).unwrap_or("")
+    } else {
+        ""
+    };
+    unsafe {
+        active_ctx().prompt_text_dynamic(tag, t_str, init_str, max_len as usize);
+    }
+}
+
+static mut MODAL_TEXT_BUF: [u8; 64] = [0u8; 64];
+static mut MODAL_TEXT_LEN: usize = 0;
+
+pub fn store_modal_text(text: &str) {
+    unsafe {
+        let copy_len = text.len().min(64);
+        core::ptr::copy_nonoverlapping(
+            text.as_bytes().as_ptr(),
+            core::ptr::addr_of_mut!(MODAL_TEXT_BUF) as *mut u8,
+            copy_len,
+        );
+        MODAL_TEXT_LEN = copy_len;
+    }
+}
+
+pub unsafe extern "C" fn api_ui_get_modal_text(buf: *mut u8, max_len: u8) -> u8 {
+    if buf.is_null() || max_len == 0 {
+        return 0;
+    }
+    unsafe {
+        let copy_len = MODAL_TEXT_LEN.min(max_len as usize);
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!(MODAL_TEXT_BUF) as *const u8,
+            buf,
+            copy_len,
+        );
+        copy_len as u8
+    }
+}
+
+pub unsafe extern "C" fn api_math_isqrt(val: u32) -> u32 {
+    kernel::proc::abi::isqrt(val)
+}
+
+pub unsafe extern "C" fn api_rf_set_dual_tones_hz(
+    tone1_hz: u16,
+    tone1_gain: u8,
+    tone2_hz: u16,
+    tone2_gain: u8,
+) {
+    unsafe { active_ctx().set_dual_tones_hz(tone1_hz, tone1_gain, tone2_hz, tone2_gain) };
+}
+
+pub unsafe extern "C" fn api_rf_set_dtmf(digit: u8, gain: u8) {
+    unsafe { active_ctx().set_dtmf(digit, gain) };
+}
+
+pub unsafe extern "C" fn api_rf_get_snr() -> u8 {
+    unsafe { active_ctx().get_snr() }
+}
+
+pub unsafe extern "C" fn api_rf_get_noise() -> u8 {
+    unsafe { active_ctx().get_noise() }
+}
+
+pub unsafe extern "C" fn api_storage_rename_file(
+    old_path: *const u8,
+    old_len: u8,
+    new_path: *const u8,
+    new_len: u8,
+) -> u8 {
+    if !old_path.is_null() && !new_path.is_null() && old_len > 0 && new_len > 0 {
+        let old_slice = unsafe { core::slice::from_raw_parts(old_path, old_len as usize) };
+        let new_slice = unsafe { core::slice::from_raw_parts(new_path, new_len as usize) };
+        if let (Ok(o_str), Ok(n_str)) = (
+            core::str::from_utf8(old_slice),
+            core::str::from_utf8(new_slice),
+        ) {
+            return if unsafe { active_ctx().rename_file(o_str, n_str).is_ok() } {
+                0
+            } else {
+                1
+            };
+        }
+    }
+    1
+}
+
+pub unsafe extern "C" fn api_storage_create_dir(path: *const u8, path_len: u8) -> u8 {
+    if !path.is_null() && path_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(p_str) = core::str::from_utf8(path_slice) {
+            return if unsafe { active_ctx().create_dir(p_str).is_ok() } {
+                0
+            } else {
+                1
+            };
+        }
+    }
+    1
+}
+
+pub unsafe extern "C" fn api_sys_is_keypad_locked() -> u8 {
+    if unsafe { active_ctx().is_keypad_locked() } {
+        1
+    } else {
+        0
+    }
+}
+
+pub unsafe extern "C" fn api_sys_cpu_freq_hz() -> u32 {
+    unsafe { active_ctx().cpu_freq_hz() }
+}
+
+pub unsafe extern "C" fn api_sys_rtc_get(out_time: *mut u8) -> u8 {
+    if !out_time.is_null() {
+        let (y, mo, d, h, mi, s) = unsafe { active_ctx().get_rtc_time() };
+        unsafe {
+            let dst = core::slice::from_raw_parts_mut(out_time, 7);
+            dst[0..2].copy_from_slice(&y.to_le_bytes());
+            dst[2] = mo;
+            dst[3] = d;
+            dst[4] = h;
+            dst[5] = mi;
+            dst[6] = s;
+        }
+        0
+    } else {
+        1
+    }
+}
+
+pub unsafe extern "C" fn api_hw_flash_read(addr: u32, buf: *mut u8, len: u16) -> u8 {
+    if !buf.is_null() && len > 0 {
+        let dst = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
+        if unsafe { active_ctx().raw_flash_read(addr, dst).is_ok() } {
+            0
+        } else {
+            1
+        }
+    } else {
+        1
+    }
+}
+
+pub unsafe extern "C" fn api_sys_post_event(event_id: u32) -> u8 {
+    use kernel::proc::primitives::ServicePrimitive;
+    if unsafe { <FirmwareContext as ServicePrimitive>::post_event(active_ctx(), event_id) } {
+        0
+    } else {
+        1
+    }
+}
+
+pub unsafe extern "C" fn api_sys_publish_event(topic: u16, data: *const u8, len: u8) -> u8 {
+    let slice = if !data.is_null() && len > 0 {
+        unsafe { core::slice::from_raw_parts(data, len as usize) }
+    } else {
+        &[]
+    };
+    use kernel::proc::primitives::ServicePrimitive;
+    if unsafe { <FirmwareContext as ServicePrimitive>::publish_event(active_ctx(), topic, slice) } {
+        0
+    } else {
+        1
+    }
+}
+
 // ── Immutable Per-Capability Domain VTables in XIP Flash (.rodata) ──────────
 
 pub static DISPLAY_VTABLE: CapDisplayVTable = CapDisplayVTable {
@@ -904,6 +1363,9 @@ pub static DISPLAY_VTABLE: CapDisplayVTable = CapDisplayVTable {
     commit_frame: api_commit_frame,
     commit_rows: api_commit_rows,
     get_framebuffer: api_get_framebuffer,
+    draw_str_max: api_draw_str_max,
+    set_inverted: api_set_inverted,
+    set_contrast: api_set_contrast,
 };
 
 pub static RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
@@ -924,6 +1386,18 @@ pub static RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
     rf_fsk_recv: api_rf_fsk_recv,
     rf_set_mic_mute: api_rf_set_mic_mute,
     rf_set_tx_carrier: api_rf_set_tx_carrier,
+    rf_set_subaudible_ctcss: api_rf_set_subaudible_ctcss,
+    rf_set_subaudible_dcs: api_rf_set_subaudible_dcs,
+    rf_send_tail: api_rf_send_tail,
+    rf_get_bandwidth: api_rf_get_bandwidth,
+    rf_get_modulation: api_rf_get_modulation,
+    rf_get_tx_state: api_rf_get_tx_state,
+    rf_get_glitch: api_rf_get_glitch,
+    rf_set_agc: api_rf_set_agc,
+    rf_set_dual_tones_hz: api_rf_set_dual_tones_hz,
+    rf_set_dtmf: api_rf_set_dtmf,
+    rf_get_snr: api_rf_get_snr,
+    rf_get_noise: api_rf_get_noise,
 };
 
 pub static AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {
@@ -933,6 +1407,13 @@ pub static AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {
     audio_capture_start: api_audio_capture_start,
     audio_capture_read: api_audio_capture_read,
     audio_capture_stop: api_audio_capture_stop,
+    audio_set_volume: api_audio_set_volume,
+    audio_get_volume: api_audio_get_volume,
+    audio_stop: api_audio_stop,
+    audio_is_playing: api_audio_is_playing,
+    audio_set_mic_gain: api_audio_set_mic_gain,
+    audio_read_mic_sample: api_audio_read_mic_sample,
+    audio_is_capturing: api_audio_is_capturing,
 };
 
 pub static STORAGE_VTABLE: CapStorageVTable = CapStorageVTable {
@@ -944,12 +1425,24 @@ pub static STORAGE_VTABLE: CapStorageVTable = CapStorageVTable {
     storage_remove_file: api_storage_remove_file,
     storage_file_size: api_storage_file_size,
     storage_list_dir: api_storage_list_dir,
+    storage_file_exists: api_storage_file_exists,
+    storage_read_file_at: api_storage_read_file_at,
+    storage_append_file: api_storage_append_file,
+    storage_rename_file: api_storage_rename_file,
+    storage_create_dir: api_storage_create_dir,
 };
 
 pub static KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
     sys_poll_key: api_sys_poll_key,
     sys_nav_dir: api_sys_nav_dir,
     sys_key_matrix: api_sys_key_matrix,
+    sys_is_key_pressed: api_sys_is_key_pressed,
+    sys_is_f_active: api_sys_is_f_active,
+    sys_is_ptt_pressed: api_sys_is_ptt_pressed,
+    sys_is_side1_pressed: api_sys_is_side1_pressed,
+    sys_is_side2_pressed: api_sys_is_side2_pressed,
+    sys_clear_key_buffer: api_sys_clear_key_buffer,
+    sys_is_keypad_locked: api_sys_is_keypad_locked,
 };
 
 pub static POWER_VTABLE: CapPowerVTable = CapPowerVTable {
@@ -965,23 +1458,32 @@ pub static POWER_VTABLE: CapPowerVTable = CapPowerVTable {
     sys_set_backlight: api_sys_set_backlight,
     sys_set_backlight_brightness: api_sys_set_backlight_brightness,
     sys_wake_backlight: api_sys_wake_backlight,
+    sys_set_flashlight: api_sys_set_flashlight,
+    sys_cpu_freq_hz: api_sys_cpu_freq_hz,
 };
 
 pub static SERIAL_VTABLE: CapSerialVTable = CapSerialVTable {
     serial_write: api_serial_write,
     serial_read: api_serial_read,
     serial_is_connected: api_serial_is_connected,
+    serial_flush: api_serial_flush,
 };
 
 pub static TIMER_VTABLE: CapTimerVTable = CapTimerVTable {
     sys_ticks_ms: api_sys_ticks_ms,
     sys_uptime_secs: api_sys_uptime_secs,
     sys_delay_ms: api_sys_delay_ms,
+    sys_delay_us: api_sys_delay_us,
+    sys_rtc_get: api_sys_rtc_get,
 };
 
 pub static UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_close_modal: api_ui_close_modal,
     ui_has_modal: api_ui_has_modal,
+    ui_show_popup: api_ui_show_popup,
+    ui_show_confirm: api_ui_show_confirm,
+    ui_prompt_text: api_ui_prompt_text,
+    ui_get_modal_text: api_ui_get_modal_text,
 };
 
 pub static MATH_VTABLE: CapMathVTable = CapMathVTable {
@@ -990,6 +1492,7 @@ pub static MATH_VTABLE: CapMathVTable = CapMathVTable {
     crc16: api_math_crc16,
     idivmod: api_math_idivmod,
     uidivmod: api_math_uidivmod,
+    isqrt: api_math_isqrt,
 };
 
 pub static FM_VTABLE: CapFmVTable = CapFmVTable {
@@ -1018,6 +1521,9 @@ pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     lease_acquire: api_lease_acquire,
     lease_release: api_lease_release,
     mem_query: api_mem_query,
+    sys_post_event: api_sys_post_event,
+    sys_publish_event: api_sys_publish_event,
+    sys_stack_free_min: api_sys_stack_free_min,
 };
 
 pub static HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {
@@ -1027,6 +1533,7 @@ pub static HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {
     hw_gpio_get: api_hw_gpio_get,
     hw_rf_read_reg: api_hw_rf_read_reg,
     hw_rf_write_reg: api_hw_rf_write_reg,
+    hw_flash_read: api_hw_flash_read,
 };
 
 pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
@@ -1064,6 +1571,7 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
     audio_capture_start: api_audio_capture_start,
     audio_capture_read: api_audio_capture_read,
     audio_capture_stop: api_audio_capture_stop,
+    audio_is_capturing: api_audio_is_capturing,
     rf_symbol_tx_emit: api_rf_symbol_tx_emit,
     storage_load_config: api_storage_load_config,
     storage_save_config: api_storage_save_config,
@@ -1082,6 +1590,7 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
     hw_gpio_get: api_hw_gpio_get,
     hw_rf_read_reg: api_hw_rf_read_reg,
     hw_rf_write_reg: api_hw_rf_write_reg,
+    hw_flash_read: api_hw_flash_read,
 };
 
 /// Normative Capability & Service Resolution Broker (KRX-ABI 2.5.0 Section 8.1).

@@ -769,7 +769,10 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         let len = (req.length as usize).min(180);
 
         let mut resp = [0u8; 8 + 180];
-        let read_sz = hw.filesystem.read_file_at(path, off, &mut resp[8..8 + len]).unwrap_or(0);
+        let read_sz = hw
+            .filesystem
+            .read_file_at(path, off, &mut resp[8..8 + len])
+            .unwrap_or(0);
         resp[0..2].copy_from_slice(&req.transfer_id.to_le_bytes());
         resp[2..6].copy_from_slice(&(off as u32).to_le_bytes());
         resp[6..8].copy_from_slice(&(read_sz as u16).to_le_bytes());

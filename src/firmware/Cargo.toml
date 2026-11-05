@@ -17,6 +17,7 @@ kernfs = { path = "../lib/kernfs" }
 crypto = { path = "../lib/crypto" }
 utils = { path = "../lib/utils" }
 calib = { path = "../lib/calib" }
+embedded-hal = { workspace = true }
 
 [features]
 default = [

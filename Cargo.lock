@@ -122,6 +122,7 @@ dependencies = [
  "kernel",
  "kernfs",
  "py32-hal",
+ "py32f071-pac",
  "utils",
 ]
 
@@ -151,6 +152,7 @@ dependencies = [
  "cortex-m-rt",
  "crypto",
  "drivers",
+ "embedded-hal 1.0.0",
  "gfx",
  "heapless",
  "kernel",

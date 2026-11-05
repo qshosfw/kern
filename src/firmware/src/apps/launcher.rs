@@ -137,7 +137,6 @@ pub struct LauncherApp {
     view: GridMenuView,
     scroll_top: usize,
     scroller: gfx::gui::animation::KineticScroller,
-    is_pressed: bool,
     is_launching: bool,
 }
 
@@ -149,7 +148,6 @@ impl LauncherApp {
             (*ptr).view = GridMenuView::new();
             (*ptr).scroll_top = 0;
             (*ptr).scroller = gfx::gui::animation::KineticScroller::new(2);
-            (*ptr).is_pressed = false;
             (*ptr).is_launching = false;
         }
     }
@@ -246,7 +244,6 @@ impl LauncherApp {
 
         if !success {
             self.is_launching = false;
-            self.is_pressed = false;
             self.model.is_pressed = false;
             self.flush_lcd(ctx, true);
         }
@@ -268,7 +265,7 @@ impl LauncherApp {
         let start_row = (scroll_y / row_height).max(0) as usize;
         let end_row = (((scroll_y + 52 + 12) / row_height) as usize).min(total);
 
-        let is_active_selection = self.is_pressed || self.is_launching;
+        let is_active_selection = self.model.is_pressed || self.is_launching;
 
         for idx in start_row..end_row {
             let row_top = 9 + (idx as i16 * row_height) - scroll_y;
@@ -376,7 +373,6 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
     }
 
     fn on_start(&mut self, ctx: &mut SysContext) {
-        self.is_pressed = false;
         self.is_launching = false;
         let entries = load_entries(Some(ctx.storage));
         self.model.items = entries;
@@ -410,15 +406,13 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
             match state {
                 KeyState::Pressed => {
                     if code == KeyCode::Exit {
-                        if self.is_pressed {
-                            self.is_pressed = false;
+                        if self.model.is_pressed {
                             self.model.is_pressed = false;
                             return EventResult::Consumed;
                         }
                         return EventResult::Ignored;
                     }
                     if code == KeyCode::Menu {
-                        self.is_pressed = true;
                         self.model.is_pressed = true;
                         return EventResult::Consumed;
                     }
@@ -440,7 +434,6 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
                                     ctx.config.display.animations_enabled(),
                                 );
                             }
-                            self.is_pressed = true;
                             self.model.is_pressed = true;
                             return EventResult::Consumed;
                         }
@@ -448,14 +441,13 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
                 }
                 KeyState::Held => {
                     if is_direct_key {
-                        self.is_pressed = true;
                         self.model.is_pressed = true;
                         return EventResult::Consumed;
                     }
                 }
                 KeyState::Released => {
-                    if self.is_pressed && is_direct_key {
-                        self.is_pressed = false;
+                    if self.model.is_pressed && is_direct_key {
+                        self.model.is_pressed = false;
                         if let Some(entry) = self.model.selected_item() {
                             let target = entry.target;
                             self.execute_target(ctx, target);
@@ -489,7 +481,6 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
                 };
 
                 if let Some(dir) = nav_dir {
-                    self.is_pressed = false;
                     self.model.is_pressed = false;
                     let prev_sel = self.model.selected_idx;
                     let is_tick = matches!(event, Event::Tick);
@@ -532,7 +523,6 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
         } else {
             let prev_sel = self.model.selected_idx;
             if self.view.on_event(&mut self.model, &event) {
-                self.is_pressed = false;
                 self.model.is_pressed = false;
                 if self.model.selected_idx != prev_sel
                     && ctx.config.audio.key_beep != 0

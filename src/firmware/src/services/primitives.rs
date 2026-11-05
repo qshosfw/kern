@@ -478,7 +478,7 @@ impl<'a, 'hw> AudioPrimitive for FirmwareContext<'a, 'hw> {
     }
 
     fn is_audio_playing(&self) -> bool {
-        false
+        self.audio.as_ref().map_or(false, |a| a.is_active())
     }
 
     fn set_mic_gain(&mut self, gain: u8) {
@@ -487,18 +487,24 @@ impl<'a, 'hw> AudioPrimitive for FirmwareContext<'a, 'hw> {
 
     fn read_mic_sample(&mut self) -> u16 {
         self.radio
-            .read_reg(drivers::bk4829::registers::REG_NOISE_VAL)
+            .read_reg(drivers::bk4829::registers::REG_AUDIO_AMP)
     }
 
-    fn capture_start(&mut self, _rate_hz: u16) -> Result<(), ()> {
-        Ok(())
+    fn capture_start(&mut self, rate_hz: u16) -> Result<(), ()> {
+        crate::audio_capture_mut().start_capture(rate_hz)
     }
 
-    fn capture_read(&mut self, _out_samples: &mut [i16]) -> usize {
-        0
+    fn capture_read(&mut self, out_samples: &mut [i16]) -> usize {
+        crate::audio_capture_mut().read_samples(out_samples)
     }
 
-    fn capture_stop(&mut self) {}
+    fn capture_stop(&mut self) {
+        crate::audio_capture_mut().stop_capture();
+    }
+
+    fn is_capturing(&self) -> bool {
+        crate::audio_capture_mut().is_capturing()
+    }
 }
 
 // ── 4. Storage Primitive ────────────────────────────────────────────────────
@@ -591,6 +597,20 @@ impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
             dst.reserved = [0u8; 3];
         }
         Ok(count)
+    }
+
+    fn rename_file(&mut self, old_path: &str, new_path: &str) -> Result<(), ()> {
+        if old_path.starts_with("/sys/") || new_path.starts_with("/sys/") {
+            return Err(());
+        }
+        self.storage.rename(old_path, new_path).map_err(|_| ())
+    }
+
+    fn create_dir(&mut self, path: &str) -> Result<(), ()> {
+        if path.starts_with("/sys/") {
+            return Err(());
+        }
+        self.storage.create_dir(path).map_err(|_| ())
     }
 }
 
@@ -709,10 +729,18 @@ impl<'a, 'hw> PowerPrimitive for FirmwareContext<'a, 'hw> {
             bsp::pins::FLASHLIGHT.set_low();
         }
     }
+
+    fn cpu_freq_hz(&self) -> u32 {
+        py32_hal::rcc::sysclk_hz()
+    }
 }
 
 // ── 7. Serial Primitive ─────────────────────────────────────────────────────
 impl<'a, 'hw> SerialPrimitive for FirmwareContext<'a, 'hw> {
+    fn flush(&mut self) {
+        py32_hal::uart::wait_tx_complete();
+    }
+
     fn write(&mut self, data: &[u8]) {
         #[cfg(feature = "usb")]
         if let Some(ref mut usb) = self.usb {
@@ -772,6 +800,14 @@ impl<'a, 'hw> TimerPrimitive for FirmwareContext<'a, 'hw> {
     fn delay_ms(&self, ms: u32) {
         py32_hal::delay::delay_ms(ms);
     }
+
+    fn delay_us(&self, us: u32) {
+        py32_hal::delay::delay_us(us);
+    }
+
+    fn get_rtc_time(&self) -> (u16, u8, u8, u8, u8, u8) {
+        (2026, 1, 1, 0, 0, 0)
+    }
 }
 
 // ── 9. UI Modal Primitive ───────────────────────────────────────────────────
@@ -830,11 +866,50 @@ impl<'a, 'hw> MathPrimitive for FirmwareContext<'a, 'hw> {
 
 // ── 11. FM Broadcast Tuner Primitive ────────────────────────────────────────
 impl<'a, 'hw> FmPrimitive for FirmwareContext<'a, 'hw> {
-    fn fm_tune(&mut self, _freq_100khz: u16) {}
-    fn fm_set_volume(&mut self, _volume: u8) {}
-    fn fm_mute(&mut self, _mute: bool) {}
+    fn fm_tune(&mut self, freq_100khz: u16) {
+        #[cfg(feature = "fm_radio")]
+        {
+            let i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
+            let mut bk = drivers::bk1080::Bk1080::new(i2c);
+            let _ = bk.tune(freq_100khz);
+        }
+        #[cfg(not(feature = "fm_radio"))]
+        let _ = freq_100khz;
+    }
+
+    fn fm_set_volume(&mut self, volume: u8) {
+        #[cfg(feature = "fm_radio")]
+        {
+            let i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
+            let mut bk = drivers::bk1080::Bk1080::new(i2c);
+            let _ = bk.set_volume(volume);
+        }
+        #[cfg(not(feature = "fm_radio"))]
+        let _ = volume;
+    }
+
+    fn fm_mute(&mut self, mute: bool) {
+        #[cfg(feature = "fm_radio")]
+        {
+            let i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
+            let mut bk = drivers::bk1080::Bk1080::new(i2c);
+            let _ = bk.set_mute(mute);
+        }
+        #[cfg(not(feature = "fm_radio"))]
+        let _ = mute;
+    }
+
     fn fm_get_rssi(&mut self) -> u8 {
-        0
+        #[cfg(feature = "fm_radio")]
+        {
+            let i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
+            let mut bk = drivers::bk1080::Bk1080::new(i2c);
+            bk.get_rssi()
+        }
+        #[cfg(not(feature = "fm_radio"))]
+        {
+            0
+        }
     }
 }
 
@@ -866,31 +941,107 @@ impl<'a, 'hw> ServicePrimitive for FirmwareContext<'a, 'hw> {
     }
 }
 
+#[inline(never)]
+fn i2c_bus_op(addr: u8, reg: u8, op2: embedded_hal::i2c::Operation) -> Result<(), ()> {
+    use embedded_hal::i2c::{I2c, Operation};
+    let mut i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
+    let reg_buf = [reg];
+    let mut ops = [Operation::Write(&reg_buf), op2];
+    i2c.transaction(addr, &mut ops).map_err(|_| ())
+}
+
 // ── 13. Low-Level Hardware & Bus Primitive ──────────────────────────────────
 impl<'a, 'hw> HardwarePrimitive for FirmwareContext<'a, 'hw> {
-    fn i2c_read(&mut self, _addr: u8, _reg: u8, _buf: &mut [u8]) -> Result<usize, ()> {
-        Err(())
+    fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> Result<usize, ()> {
+        i2c_bus_op(addr, reg, embedded_hal::i2c::Operation::Read(buf))?;
+        Ok(buf.len())
     }
 
-    fn i2c_write(&mut self, _addr: u8, _reg: u8, _data: &[u8]) -> Result<(), ()> {
-        Err(())
+    fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> Result<(), ()> {
+        i2c_bus_op(addr, reg, embedded_hal::i2c::Operation::Write(data))
     }
 
-    fn spi_transfer(&mut self, _cs_pin: u8, _tx: &[u8], _rx: &mut [u8]) -> Result<(), ()> {
-        Err(())
+    fn spi_transfer(&mut self, cs_pin: u8, tx: &[u8], rx: &mut [u8]) -> Result<(), ()> {
+        let is_flash = cs_pin == 0;
+        if is_flash {
+            bsp::pins::FLASH_CS.set_low();
+        } else {
+            bsp::pins::LCD_CS.set_low();
+        }
+        let count = tx.len().max(rx.len());
+        for i in 0..count {
+            let out_b = tx.get(i).copied().unwrap_or(0);
+            let in_b = if is_flash {
+                py32_hal::spi::spi2_transfer(out_b)
+            } else {
+                py32_hal::spi::transfer_byte(out_b)
+            }
+            .map_err(|_| ())?;
+            if let Some(slot) = rx.get_mut(i) {
+                *slot = in_b;
+            }
+        }
+        let _ = if is_flash {
+            py32_hal::spi::spi2_wait_idle()
+        } else {
+            py32_hal::spi::wait_idle()
+        };
+        if is_flash {
+            bsp::pins::FLASH_CS.set_high();
+        } else {
+            bsp::pins::LCD_CS.set_high();
+        }
+        Ok(())
     }
 
-    fn gpio_read(&self, _pin: u8) -> bool {
-        false
-    }
-
-    fn gpio_write(&mut self, pin: u8, high: bool) {
-        if pin == 0 {
-            self.set_flashlight(high);
+    fn gpio_read(&self, pin: u8) -> bool {
+        match pin {
+            0 => bsp::pins::FLASHLIGHT.is_high(),
+            1 => bsp::pins::PTT.is_low(),
+            2 => bsp::pins::AUDIO_PA.is_high(),
+            3 => bsp::pins::BACKLIGHT.is_high(),
+            4 => self.power.is_charging(),
+            _ => false,
         }
     }
 
-    fn raw_flash_read(&mut self, _addr: u32, _buf: &mut [u8]) -> Result<(), ()> {
-        Err(())
+    fn gpio_write(&mut self, pin: u8, high: bool) {
+        match pin {
+            0 => self.set_flashlight(high),
+            2 => {
+                if high {
+                    bsp::pins::AUDIO_PA.set_high();
+                } else {
+                    bsp::pins::AUDIO_PA.set_low();
+                }
+            }
+            3 => {
+                if high {
+                    bsp::pins::BACKLIGHT.set_high();
+                } else {
+                    bsp::pins::BACKLIGHT.set_low();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn raw_flash_read(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), ()> {
+        bsp::pins::FLASH_CS.set_low();
+        let cmd = [
+            0x03,
+            (addr >> 16) as u8,
+            (addr >> 8) as u8,
+            (addr & 0xFF) as u8,
+        ];
+        for &b in &cmd {
+            py32_hal::spi::spi2_transfer(b).map_err(|_| ())?;
+        }
+        for slot in buf.iter_mut() {
+            *slot = py32_hal::spi::spi2_transfer(0x00).map_err(|_| ())?;
+        }
+        let _ = py32_hal::spi::spi2_wait_idle();
+        bsp::pins::FLASH_CS.set_high();
+        Ok(())
     }
 }

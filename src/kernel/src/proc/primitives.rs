@@ -70,6 +70,43 @@ pub trait RadioPrimitive {
         tone2_word: u16,
         tone2_gain: u8,
     );
+    fn get_snr(&mut self) -> u8 {
+        (self.read_register(0x66) & 0xFF) as u8
+    }
+    fn get_noise(&mut self) -> u8 {
+        (self.read_register(0x65) & 0xFF) as u8
+    }
+    fn set_dual_tones_hz(&mut self, tone1_hz: u16, tone1_gain: u8, tone2_hz: u16, tone2_gain: u8) {
+        use crate::service::radio::tone_gen::calc_tone_word;
+        self.set_dual_tones_raw(
+            calc_tone_word(tone1_hz),
+            tone1_gain,
+            calc_tone_word(tone2_hz),
+            tone2_gain,
+        );
+    }
+    fn set_dtmf(&mut self, digit: u8, gain: u8) {
+        let (f1, f2) = match digit {
+            b'1' => (697, 1209),
+            b'2' => (697, 1336),
+            b'3' => (697, 1477),
+            b'A' | b'a' => (697, 1633),
+            b'4' => (770, 1209),
+            b'5' => (770, 1336),
+            b'6' => (770, 1477),
+            b'B' | b'b' => (770, 1633),
+            b'7' => (852, 1209),
+            b'8' => (852, 1336),
+            b'9' => (852, 1477),
+            b'C' | b'c' => (852, 1633),
+            b'*' => (941, 1209),
+            b'0' => (941, 1336),
+            b'#' => (941, 1477),
+            b'D' | b'd' => (941, 1633),
+            _ => (0, 0),
+        };
+        self.set_dual_tones_hz(f1, gain, f2, gain);
+    }
 }
 
 // ── 3. Audio Primitive ──────────────────────────────────────────────────────
@@ -87,6 +124,9 @@ pub trait AudioPrimitive {
     fn capture_start(&mut self, rate_hz: u16) -> Result<(), ()>;
     fn capture_read(&mut self, out_samples: &mut [i16]) -> usize;
     fn capture_stop(&mut self);
+    fn is_capturing(&self) -> bool {
+        false
+    }
 }
 
 // ── 4. Storage Primitive ────────────────────────────────────────────────────
@@ -111,6 +151,14 @@ pub trait StoragePrimitive {
     ) -> Result<usize, ()> {
         let _ = (dir_path, out_entries);
         Ok(0)
+    }
+    fn rename_file(&mut self, old_path: &str, new_path: &str) -> Result<(), ()> {
+        let _ = (old_path, new_path);
+        Err(())
+    }
+    fn create_dir(&mut self, path: &str) -> Result<(), ()> {
+        let _ = path;
+        Err(())
     }
 }
 
@@ -156,6 +204,9 @@ pub trait PowerPrimitive {
     }
     fn wake_backlight(&mut self);
     fn set_flashlight(&mut self, on: bool);
+    fn cpu_freq_hz(&self) -> u32 {
+        48_000_000
+    }
 }
 
 // ── 7. Serial Primitive ─────────────────────────────────────────────────────
@@ -163,6 +214,7 @@ pub trait SerialPrimitive {
     fn write(&mut self, data: &[u8]);
     fn read(&mut self, buf: &mut [u8]) -> usize;
     fn is_usb_active(&self) -> bool;
+    fn flush(&mut self) {}
 }
 
 // ── 8. Timer Primitive ──────────────────────────────────────────────────────
@@ -170,6 +222,12 @@ pub trait TimerPrimitive {
     fn uptime_secs(&self) -> u32;
     fn uptime_ms(&self) -> u32;
     fn delay_ms(&self, ms: u32);
+    fn delay_us(&self, us: u32) {
+        let _ = us;
+    }
+    fn get_rtc_time(&self) -> (u16, u8, u8, u8, u8, u8) {
+        (2026, 1, 1, 0, 0, 0)
+    }
 }
 
 // ── 9. UI Modal Primitive ───────────────────────────────────────────────────
@@ -188,6 +246,9 @@ pub trait MathPrimitive {
     fn rand32(&mut self) -> u32;
     fn idivmod(&self, n: i32, d: i32) -> (i32, i32);
     fn uidivmod(&self, n: u32, d: u32) -> (u32, u32);
+    fn isqrt(&self, val: u32) -> u32 {
+        crate::proc::abi::isqrt(val)
+    }
 }
 
 // ── 11. FM Broadcast Tuner Primitive ────────────────────────────────────────

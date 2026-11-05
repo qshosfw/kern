@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bsp = { path = "../platform/bsp" }
+py32-pac = { path = "../platform/pac", package = "py32f071-pac" }
 kern-platform-traits = { path = "../platform/traits" }
 kernel = { path = "../kernel" }
 utils = { path = "../lib/utils" }
