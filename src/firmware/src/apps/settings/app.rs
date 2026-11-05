@@ -244,6 +244,7 @@ impl SettingsApp {
                 }
             }
 
+            let prev_idx = self.selected_idx;
             let mut model = MenuModelMut {
                 items: &mut self.items[..self.items_len],
                 selected_idx: self.selected_idx,
@@ -259,6 +260,10 @@ impl SettingsApp {
             self.is_editing = model.is_editing;
             self.is_pressed = model.is_pressed;
 
+            if handled && self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
+                ctx.play_beep(crate::services::melody::BeepType::Scroll);
+            }
+
             if handled && (self.is_editing || was_editing) {
                 self.update_config_from_menu(ctx);
             }
@@ -271,6 +276,7 @@ impl SettingsApp {
         }
 
         // 5. Handle directional navigation & list scrolling (Up, Down, Encoder, etc.)
+        let prev_idx = self.selected_idx;
         let was_editing = self.is_editing;
         let handled = {
             let mut model = MenuModelMut {
@@ -291,6 +297,11 @@ impl SettingsApp {
         };
 
         if handled {
+            if let Event::Encoder(_) = event {
+                if self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
+                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
+                }
+            }
             if was_editing || self.is_editing {
                 self.update_config_from_menu(ctx);
             }

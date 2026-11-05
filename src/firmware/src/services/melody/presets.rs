@@ -27,8 +27,8 @@ pub const BEEP_WARNING: &[ToneNote] = &[
     ToneNote::new(650, 40),
 ];
 
-/// Subtle rotary dial tick: clean crisp pip (1046 Hz / C6 for 35ms) for continuous scrolling.
-pub const BEEP_SCROLL: &[ToneNote] = &[ToneNote::new(1046, 35)];
+/// Subtle rotary dial tick: clean crisp pip (1046 Hz / C6 for 20ms) for continuous scrolling.
+pub const BEEP_SCROLL: &[ToneNote] = &[ToneNote::new(1046, 20)];
 
 // ── UI Dialog / Notification Cues ─────────────────────────────────────────
 
