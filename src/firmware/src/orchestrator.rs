@@ -370,14 +370,12 @@ impl Orchestrator {
     #[inline(never)]
     fn update_key_ownership(
         &mut self,
-        is_key_event: bool,
-        key_code: Option<KeyCode>,
-        key_state: Option<KeyState>,
+        event: &Event,
         status: EventResult,
         fault_handled: bool,
     ) {
-        if is_key_event && !fault_handled {
-            if let (Some(code), Some(state)) = (key_code, key_state) {
+        if !fault_handled {
+            if let Event::Key { code, state } = *event {
                 if state == KeyState::Pressed {
                     self.owned_key = if status == EventResult::Consumed {
                         Some(code)
@@ -473,14 +471,10 @@ impl Orchestrator {
 
         // Key ownership tracking: if a key was consumed on Pressed, subsequent
         // Held/Released events for that key belong strictly to the active app.
-        let (key_code, key_state) = match event {
-            Event::Key { code, state } => (Some(code), Some(state)),
-            _ => (None, None),
+        let is_key_owned = match event {
+            Event::Key { code, .. } => self.owned_key == Some(code),
+            _ => false,
         };
-        let is_key_event = key_code.is_some();
-
-        // If this key is owned by the app and state is Held or Released, do not leak to global shortcuts
-        let is_key_owned = is_key_event && self.owned_key == key_code;
 
         // 3. Forward event to active foreground app
         record_proc_event(self.active_app_id);
@@ -498,11 +492,11 @@ impl Orchestrator {
         }
 
         // 5. Track key ownership or release
-        self.update_key_ownership(is_key_event, key_code, key_state, status, fault_handled);
+        self.update_key_ownership(&event, status, fault_handled);
 
         // 6. If foreground app consumed the event, owns this key, or fault was handled, it is completely sunk!
         if status == EventResult::Consumed || is_key_owned || fault_handled {
-            if is_key_event {
+            if matches!(event, Event::Key { .. }) {
                 self.lock_mgr.reset_input_tracking();
             }
         } else {
