@@ -654,24 +654,26 @@ fn handle_control_service(
 
 // ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
 
+#[inline(never)]
 fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
     let b = path.as_bytes();
-    if b.is_empty()
-        || b.len() > 32
-        || b[0] != b'/'
-        || b.windows(2).any(|w| w == b".." || w == b"//")
-    {
+    if b.is_empty() || b.len() > 32 || b[0] != b'/' {
         return Err(WireStatus::BadRange);
     }
-    // Must begin with one of authorized directories:
+    for i in 1..b.len() {
+        if (b[i - 1] == b'.' && b[i] == b'.') || (b[i - 1] == b'/' && b[i] == b'/') {
+            return Err(WireStatus::BadRange);
+        }
+    }
+    let is_sys = path.starts_with("/sys/");
     if !(path.starts_with("/user/")
         || path.starts_with("/pref/")
         || path.starts_with("/apps/")
-        || path.starts_with("/sys/"))
+        || is_sys)
     {
         return Err(WireStatus::SafetyDenied);
     }
-    if is_write && path.starts_with("/sys/") && path != CALIB_FILE_PATH {
+    if is_write && is_sys && path != CALIB_FILE_PATH {
         return Err(WireStatus::SafetyDenied);
     }
     Ok(())
@@ -782,6 +784,42 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
 }
 
 #[inline(never)]
+fn commit_calibration_payload(
+    staging: &[u8],
+    total_len: usize,
+    hw: &mut SystemHardware,
+) -> Result<(), WireStatus> {
+    if total_len != 512 {
+        return Err(WireStatus::SafetyDenied);
+    }
+    let calib_slice: &[u8; 512] = match (&staging[..512]).try_into() {
+        Ok(s) => s,
+        Err(_) => return Err(WireStatus::SafetyDenied),
+    };
+    if !is_valid_calibration(calib_slice) {
+        return Err(WireStatus::SafetyDenied);
+    }
+
+    let mcu_uid = bsp::uid::read_mcu_uid();
+    let calib = unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
+
+    if calib
+        .commit_with_backup(hw.filesystem, calib_slice, &mcu_uid)
+        .is_err()
+    {
+        return Err(WireStatus::IoError);
+    }
+
+    // Dynamically reload calibrated parameters into live silicon
+    let pwr = unsafe { &mut *core::ptr::addr_of_mut!(crate::POWER_SERVICE) };
+    pwr.battery_driver.calib_const = calib.battery_calib_const();
+    pwr.battery_driver
+        .load_calibration_curve(calib.battery_curve());
+    hw.radio.attach_calibration(calib.raw_bytes());
+    hw.radio.set_xtal_freq_trim(calib.xtal_freq_low());
+    Ok(())
+}
+
 fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferCloseRequest::parse(payload) {
         Some(r) => r,
@@ -810,39 +848,11 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
 
         // ── HARDENED CALIBRATION COMMIT WITH VALIDATION & ROLLBACK ──
         if path == CALIB_FILE_PATH {
-            if total_len != 512
-                || !is_valid_calibration(staging[..512].try_into().unwrap_or(&[0; 512]))
-            {
-                return send_status(hw, header, WireStatus::SafetyDenied);
+            if let Err(err) = commit_calibration_payload(staging, total_len, hw) {
+                return send_status(hw, header, err);
             }
-
-            let mcu_uid = bsp::uid::read_mcu_uid();
-            let calib = unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
-
-            let calib_slice: &[u8; 512] = match (&staging[..512]).try_into() {
-                Ok(s) => s,
-                Err(_) => return send_status(hw, header, WireStatus::SafetyDenied),
-            };
-
-            if calib
-                .commit_with_backup(hw.filesystem, calib_slice, &mcu_uid)
-                .is_err()
-            {
-                return send_status(hw, header, WireStatus::IoError);
-            }
-
-            // Dynamically reload calibrated parameters into live silicon
-            let pwr = unsafe { &mut *core::ptr::addr_of_mut!(crate::POWER_SERVICE) };
-            pwr.battery_driver.calib_const = calib.battery_calib_const();
-            pwr.battery_driver
-                .load_calibration_curve(calib.battery_curve());
-            hw.radio.attach_calibration(calib.raw_bytes());
-            hw.radio.set_xtal_freq_trim(calib.xtal_freq_low());
-        } else {
-            let res = hw.filesystem.write_file(path, &staging[..total_len]);
-            if res.is_err() {
-                return send_status(hw, header, WireStatus::IoError);
-            }
+        } else if hw.filesystem.write_file(path, &staging[..total_len]).is_err() {
+            return send_status(hw, header, WireStatus::IoError);
         }
 
         resp[2..6].copy_from_slice(&actual_crc.to_le_bytes());
