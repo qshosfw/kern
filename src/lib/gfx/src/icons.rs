@@ -329,15 +329,5 @@ pub const ICON_SYSTEM: [u8; 8] = [0x19, 0x33, 0x1E, 0x18, 0x18, 0x3C, 0x3C, 0x3C
 
 /// Draw an 8x8 standard 1-bit monochrome icon bitmap.
 pub fn draw_icon_8(canvas: &mut Canvas, x: i16, y: i16, bits: &[u8; 8], color: Color) {
-    for (row, byte) in bits.iter().enumerate() {
-        for col in 0..8 {
-            if (byte & (0x80 >> col)) != 0 {
-                let px = x + col;
-                let py = y + row as i16;
-                if px >= 0 && px < canvas.width() as i16 && py >= 0 && py < canvas.height() as i16 {
-                    canvas.draw_pixel(px as u8, py as u8, color);
-                }
-            }
-        }
-    }
+    draw::draw_bitmap(canvas, x, y, 8, 8, bits, color);
 }
