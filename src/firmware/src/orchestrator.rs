@@ -368,6 +368,39 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn supervise_lock<'a>(
+        &mut self,
+        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        event: &Event,
+    ) -> (bool, bool) {
+        let was_locked = self.lock_mgr.is_locked;
+        let was_f_active = self.lock_mgr.is_f_active;
+
+        let intercepted = self.lock_mgr.handle_event(
+            event,
+            ctx.config.keys.hold_delay_ms(),
+            ctx.config.keys.f_key_timeout_ms(),
+            ctx.config.keys.auto_lock_ms(),
+        );
+        let state_changed = was_locked != self.lock_mgr.is_locked || was_f_active != self.lock_mgr.is_f_active;
+
+        if was_locked != self.lock_mgr.is_locked {
+            if self.lock_mgr.is_locked {
+                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
+            } else {
+                if let Some(ref mut display) = ctx.display {
+                    display.wake();
+                }
+                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+            }
+        } else if !was_f_active && self.lock_mgr.is_f_active {
+            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
+        }
+
+        (intercepted, state_changed)
+    }
+
+    #[inline(never)]
     fn update_key_ownership(
         &mut self,
         event: &Event,
@@ -408,35 +441,8 @@ impl Orchestrator {
             return true;
         }
 
-        let hold_delay_ms = ctx.config.keys.hold_delay_ms();
-        let f_timeout_ms = ctx.config.keys.f_key_timeout_ms();
-        let auto_lock_ms = ctx.config.keys.auto_lock_ms();
-
         // 1. Keypad Lock & Hold Supervisor (strictly precedes all apps)
-        let was_locked = self.lock_mgr.is_locked;
-        let was_f_active = self.lock_mgr.is_f_active;
-
-        let lock_intercepted =
-            self.lock_mgr
-                .handle_event(&event, hold_delay_ms, f_timeout_ms, auto_lock_ms);
-        let lock_state_changed =
-            was_locked != self.lock_mgr.is_locked || was_f_active != self.lock_mgr.is_f_active;
-
-        if was_locked != self.lock_mgr.is_locked {
-            if self.lock_mgr.is_locked {
-                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
-            } else {
-                if let Some(ref mut display) = ctx.display {
-                    display.wake();
-                }
-                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
-            }
-        }
-
-        if !was_f_active && self.lock_mgr.is_f_active {
-            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
-        }
-
+        let (lock_intercepted, lock_state_changed) = self.supervise_lock(ctx, &event);
         if lock_intercepted {
             self.drain_ipc_commands(ctx);
             return true;
