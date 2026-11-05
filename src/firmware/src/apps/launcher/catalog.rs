@@ -28,8 +28,21 @@ pub struct PackageCatalogEntry {
 impl PackageCatalogEntry {
     #[inline(always)]
     pub fn filename(&self) -> &str {
-        self.path.rsplit('/').next().unwrap_or(self.path.as_str())
+        extract_filename(self.path.as_str())
     }
+}
+
+#[inline(always)]
+fn extract_filename(path: &str) -> &str {
+    let bytes = path.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if bytes[i] == b'/' {
+            return &path[i + 1..];
+        }
+    }
+    path
 }
 
 pub const MAX_CATALOG_PACKAGES: usize = 6;
@@ -128,7 +141,7 @@ impl PackageCatalog {
         raw_name: &str,
         size: usize,
     ) -> Option<PackageCatalogEntry> {
-        let base_name = raw_name.rsplit('/').next().unwrap_or(raw_name);
+        let base_name = extract_filename(raw_name);
         if base_name.is_empty() {
             return None;
         }

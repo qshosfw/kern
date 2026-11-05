@@ -322,8 +322,10 @@ pub fn load_native_from_storage(
         return Err(KrxLaunchError::PayloadTooLarge);
     }
 
-    // Shift payload to the beginning of the aligned buffer
-    buffer_bytes.copy_within(h_len..total_read, 0);
+    // Shift payload to the beginning of the aligned buffer without pulling in memmove
+    let copy_len = total_read - h_len;
+    let (dst, src) = buffer_bytes.split_at_mut(h_len);
+    dst[..copy_len].copy_from_slice(&src[..copy_len]);
 
     let load_base = arena_base_ptr() as u32;
     let load_delta = load_base.wrapping_sub(preamble.link_base);

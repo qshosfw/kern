@@ -78,6 +78,10 @@ pub const USB_INTR_SOF: u8 = 0x08;
 pub const USB_POWER_SUSPENDENB: u8 = 0x01;
 pub const USB_POWER_SUSPENDMODE: u8 = 0x02;
 pub const USB_POWER_RESUME: u8 = 0x04;
+pub const USB_POWER_RESET: u8 = 0x08;
+pub const USB_POWER_HSMODE: u8 = 0x10;
+pub const USB_POWER_HSENAB: u8 = 0x20;
+pub const USB_POWER_SOFTCONN: u8 = 0x40;
 pub const USB_POWER_ISOUPDATE: u8 = 0x80;
 
 // ── EP0 CSR (0x10) Bit Definitions ──────────────────────────────────────────

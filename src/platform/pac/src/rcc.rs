@@ -21,6 +21,9 @@ pub const RCC_CFGR: *mut u32 = (RCC_BASE + 0x08) as *mut u32;
 /// PLL configuration register
 pub const RCC_PLLCFGR: *mut u32 = (RCC_BASE + 0x0C) as *mut u32;
 
+/// APB peripheral reset register 1
+pub const RCC_APBRSTR1: *mut u32 = (RCC_BASE + 0x2C) as *mut u32;
+
 /// AHB peripheral clock enable register (DMA1, FLASH, CRC)
 pub const RCC_AHBENR: *mut u32 = (RCC_BASE + 0x38) as *mut u32;
 
@@ -32,6 +35,11 @@ pub const RCC_APB2ENR: *mut u32 = (RCC_BASE + 0x40) as *mut u32;
 
 /// IO port clock enable register (GPIOA, GPIOB, GPIOC, GPIOF)
 pub const RCC_IOPENR: *mut u32 = (RCC_BASE + 0x34) as *mut u32;
+
+// ── APBRSTR1 Bit Definitions ────────────────────────────────────────────────
+
+/// USBD peripheral reset enable
+pub const APBRSTR1_USBDRST: u32 = 1 << 23;
 
 // ── AHBENR Bit Definitions ─────────────────────────────────────────────────
 

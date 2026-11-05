@@ -275,12 +275,11 @@ impl<'a, State> Bk4829<'a, State> {
         if self.rx_demod_active && self.is_squelch_open() {
             self.set_af(self.active_demod_af);
             self.write_reg(REG_TX_MUTE, 0x3B18);
-            crate::audio::AudioAmplifier::notify_tone_played();
         } else {
             self.set_af(AfType::Mute);
             self.write_reg(REG_TX_MUTE, 0xBB18);
-            crate::audio::AudioAmplifier::cancel_hangover();
         }
+        crate::audio::AudioAmplifier::notify_tone_played();
     }
 
     pub fn begin_tone_sequence(&mut self) -> bool {
@@ -320,12 +319,11 @@ impl<'a, State> Bk4829<'a, State> {
         if self.rx_demod_active && self.is_squelch_open() {
             self.set_af(self.active_demod_af);
             self.write_reg(REG_TX_MUTE, 0x3B18);
-            crate::audio::AudioAmplifier::notify_tone_played();
         } else {
             self.set_af(AfType::Mute);
             self.write_reg(REG_TX_MUTE, 0xBB18);
-            crate::audio::AudioAmplifier::cancel_hangover();
         }
+        crate::audio::AudioAmplifier::notify_tone_played();
     }
 
     pub fn play_tone_sequence_with_gain(

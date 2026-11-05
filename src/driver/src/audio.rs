@@ -78,7 +78,7 @@ impl AudioAmplifier {
     /// Keep amplifier energized after tone playback to eliminate key repeat pops.
     pub fn notify_tone_played() {
         unsafe {
-            HANGOVER_MS = 150;
+            HANGOVER_MS = 250;
         }
     }
 

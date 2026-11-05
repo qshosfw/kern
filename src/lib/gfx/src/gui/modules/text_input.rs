@@ -197,7 +197,7 @@ impl TextInputView {
         let exit_label = if model.buffer.is_empty() {
             "Back"
         } else {
-            "Clear"
+            "Del"
         };
 
         if model.digits_only {

@@ -4,7 +4,6 @@ use super::app::SettingsApp;
 use super::page::ActionId;
 use crate::SysContext;
 use gfx::gui::modules::menu::OptionSheet;
-#[cfg(feature = "passcode")]
 use gfx::gui::modules::menu::ShortString;
 use kernel::app::EventResult;
 
@@ -16,20 +15,15 @@ pub const TAG_PASSCODE_NEW: u8 = 3;
 pub const TAG_PASSCODE_CONFIRM: u8 = 4;
 pub const TAG_CHOICE_SHEET: u8 = 6;
 pub const TAG_POPUP_INFO: u8 = 7;
-#[cfg(feature = "passcode")]
 pub const TAG_OWNER_INPUT: u8 = 8;
-#[cfg(feature = "passcode")]
 pub const TAG_TAG_INPUT: u8 = 9;
-#[cfg(feature = "passcode")]
 pub const TAG_RADIO_ID_INPUT: u8 = 10;
 #[cfg(feature = "boot_assets")]
 pub const TAG_ASSET_CHOOSER: u8 = 11;
 pub const TAG_MODEL_CHOOSER: u8 = 12;
-#[cfg(feature = "passcode")]
 pub const TAG_MODEL_INPUT: u8 = 13;
 pub const TAG_APP_RESET_CONFIRM: u8 = 15;
 
-#[cfg(feature = "passcode")]
 pub fn parse_u32_digits(s: &str) -> Option<u32> {
     if s.is_empty() {
         return None;
@@ -44,14 +38,12 @@ pub fn parse_u32_digits(s: &str) -> Option<u32> {
     Some(val)
 }
 
-#[cfg(feature = "passcode")]
 pub fn copy_padded(dst: &mut [u8], src: &[u8]) {
     dst.fill(b' ');
     let len = src.len().min(dst.len());
     dst[..len].copy_from_slice(&src[..len]);
 }
 
-#[cfg(feature = "passcode")]
 pub fn prompt_config_str(ctx: &mut SysContext, tag: u8) {
     let mut buf = ShortString::empty();
     let (title, max_len, digits) = match tag {
@@ -116,11 +108,11 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
                 OptionSheet::new("Model", &super::device::MODEL_OPTIONS, sel).with_radio(true),
             );
         }
-        #[cfg(feature = "passcode")]
+        #[cfg(feature = "text_input")]
         ActionId::EditOwner => prompt_config_str(ctx, TAG_OWNER_INPUT),
-        #[cfg(feature = "passcode")]
+        #[cfg(feature = "text_input")]
         ActionId::EditTag => prompt_config_str(ctx, TAG_TAG_INPUT),
-        #[cfg(feature = "passcode")]
+        #[cfg(feature = "text_input")]
         ActionId::EditRadioId => prompt_config_str(ctx, TAG_RADIO_ID_INPUT),
         ActionId::ClearLogs => {
             #[cfg(feature = "flight_recorder")]
@@ -156,7 +148,6 @@ pub fn handle_sheet_selected(
                 ctx.config.sanitize();
                 ctx.config.mark_system_dirty();
             } else {
-                #[cfg(feature = "passcode")]
                 prompt_config_str(ctx, TAG_MODEL_INPUT);
                 return EventResult::Consumed;
             }
@@ -170,7 +161,6 @@ pub fn handle_sheet_selected(
     EventResult::Consumed
 }
 
-#[cfg(feature = "passcode")]
 #[inline(never)]
 pub fn handle_text_input_done(
     app: &mut SettingsApp,
@@ -201,10 +191,12 @@ pub fn handle_text_input_done(
             }
             ctx.config.mark_system_dirty();
         }
+        #[cfg(feature = "passcode")]
         TAG_PASSCODE_VERIFY => {
             super::security::handle_passcode_verify(ctx, text);
             return EventResult::Consumed;
         }
+        #[cfg(feature = "passcode")]
         TAG_PASSCODE_NEW => {
             if text.is_empty() {
                 let _ = crate::security::passcode::disable_passcode(ctx.storage, ctx.passcode);
@@ -225,6 +217,7 @@ pub fn handle_text_input_done(
                 return EventResult::Consumed;
             }
         }
+        #[cfg(feature = "passcode")]
         TAG_PASSCODE_CONFIRM => {
             super::security::handle_passcode_confirm(app.passcode_candidate.as_str(), text, ctx);
         }

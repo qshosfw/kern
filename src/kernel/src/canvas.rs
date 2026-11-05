@@ -592,14 +592,24 @@ fn scroll_plane_horizontal(plane: &mut [[u8; LCD_WIDTH]; 8], dx: i8, fill_byte: 
     if dx > 0 {
         let shift = dx as usize;
         for page in 0..8 {
-            plane[page].copy_within(0..LCD_WIDTH - shift, shift);
-            plane[page][..shift].fill(fill_byte);
+            let row = &mut plane[page];
+            let mut i = LCD_WIDTH;
+            while i > shift {
+                i -= 1;
+                row[i] = row[i - shift];
+            }
+            row[..shift].fill(fill_byte);
         }
     } else {
         let shift = (-dx) as usize;
         for page in 0..8 {
-            plane[page].copy_within(shift..LCD_WIDTH, 0);
-            plane[page][LCD_WIDTH - shift..].fill(fill_byte);
+            let row = &mut plane[page];
+            let mut i = 0;
+            while i < LCD_WIDTH - shift {
+                row[i] = row[i + shift];
+                i += 1;
+            }
+            row[LCD_WIDTH - shift..].fill(fill_byte);
         }
     }
 }

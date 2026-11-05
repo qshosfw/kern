@@ -28,7 +28,7 @@ impl SystemConfig {
             version: 4,
             model: 0,
             uart_baud: 0, // 115200 default
-            cpu_clock: 0, // 48 MHz default
+            cpu_clock: 1, // 72 MHz default (ensures stable USB and high performance)
             radio_id: 1,
             owner: *b"N0CALL      ",
             tag: *b"00000000",

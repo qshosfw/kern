@@ -38,6 +38,7 @@ default = [
     "animations",
     "dynamic_spi",
     "overclock_72mhz",
+    "text_input",
 ]
 
 # 📦 Media & Asset Provisioning
@@ -77,7 +78,9 @@ internal_flash = []
 # 💾 Storage & Cryptographic Security
 filesystem = ["drivers/filesystem", "kernel/filesystem"]
 secure_fs = ["drivers/secure_fs", "kernel/secure_fs"]
-passcode = ["secure_fs"]
+passcode = ["secure_fs", "text_input"]
+text_input = []
+settings_edit = ["text_input"]
 app_explorer = ["filesystem"]
 app_tasks = []
 app_hibernation = ["filesystem"]

@@ -5,19 +5,19 @@ use drivers::audio::ToneNote;
 
 // ── Keypress Beep Tone Sequences ──────────────────────────────────────────
 
-/// Warm musical keypress pip — Concert A (880 Hz) for 40ms.
-pub const BEEP_TONE: &[ToneNote] = &[ToneNote::new(880, 40)];
+/// Warm musical keypress pip — Concert A (880 Hz) for 28ms.
+pub const BEEP_TONE: &[ToneNote] = &[ToneNote::new(880, 28)];
 
 /// Tactile mechanical switch impulse — sharp transient snap into resonant body.
-/// 1200 Hz (15ms) → 880 Hz (25ms). Total: 40ms.
-pub const BEEP_CLICK: &[ToneNote] = &[ToneNote::new(1200, 15), ToneNote::new(880, 25)];
+/// 1200 Hz (10ms) → 880 Hz (18ms). Total: 28ms.
+pub const BEEP_CLICK: &[ToneNote] = &[ToneNote::new(1200, 10), ToneNote::new(880, 18)];
 
 /// Friendly ascending confirmation pair — snappy major third.
-/// 880 Hz (25ms) → pause (15ms) → 1175 Hz (25ms). Total: 65ms.
+/// 880 Hz (18ms) → pause (10ms) → 1175 Hz (18ms). Total: 46ms.
 pub const BEEP_DOUBLE: &[ToneNote] = &[
-    ToneNote::new(880, 25),
-    ToneNote::new(0, 15),
-    ToneNote::new(1175, 25),
+    ToneNote::new(880, 18),
+    ToneNote::new(0, 10),
+    ToneNote::new(1175, 18),
 ];
 
 /// Classic assertive dual warning tone: 650 Hz (40ms) → pause (20ms) → 650 Hz (40ms). Total: 100ms.
@@ -27,8 +27,8 @@ pub const BEEP_WARNING: &[ToneNote] = &[
     ToneNote::new(650, 40),
 ];
 
-/// Subtle rotary dial tick: clean crisp pip (1046 Hz / C6 for 25ms) for continuous scrolling.
-pub const BEEP_SCROLL: &[ToneNote] = &[ToneNote::new(1046, 25)];
+/// Subtle rotary dial tick: clean crisp pip (1046 Hz / C6 for 15ms) for continuous scrolling.
+pub const BEEP_SCROLL: &[ToneNote] = &[ToneNote::new(1046, 15)];
 
 // ── UI Dialog / Notification Cues ─────────────────────────────────────────
 

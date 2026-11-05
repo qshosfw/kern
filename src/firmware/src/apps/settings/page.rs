@@ -36,11 +36,11 @@ impl PageId {
 #[repr(u8)]
 pub enum ActionId {
     ChooseModel = 1,
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     EditOwner = 2,
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     EditTag = 3,
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     EditRadioId = 4,
     ClearLogs = 5,
 }

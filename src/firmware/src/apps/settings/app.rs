@@ -252,6 +252,7 @@ impl SettingsApp {
                 is_pressed: self.is_pressed,
             };
 
+            let was_editing = self.is_editing;
             let prev_idx = self.selected_idx;
             let handled = self.view.on_event(&mut model, event);
 
@@ -261,6 +262,10 @@ impl SettingsApp {
 
             if handled && self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
                 ctx.play_beep(crate::services::melody::BeepType::Scroll);
+            }
+
+            if handled && (self.is_editing || was_editing) {
+                self.update_config_from_menu(ctx);
             }
 
             if animating || handled || self.slide_offset_x != 0 || self.view.scroller.is_animating()
@@ -281,16 +286,11 @@ impl SettingsApp {
                 is_pressed: self.is_pressed,
             };
 
-            let prev_idx = self.selected_idx;
             let handled = self.view.on_event(&mut model, event);
 
             self.selected_idx = model.selected_idx;
             self.is_editing = model.is_editing;
             self.is_pressed = model.is_pressed;
-
-            if handled && self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
-                ctx.play_beep(crate::services::melody::BeepType::Scroll);
-            }
 
             handled
         };
@@ -373,7 +373,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
             ModalResult::SheetSelected { tag, index } => {
                 dialog::handle_sheet_selected(self, ctx, *tag, *index)
             }
-            #[cfg(feature = "passcode")]
+            #[cfg(feature = "text_input")]
             ModalResult::TextInputDone { tag, text } => {
                 dialog::handle_text_input_done(self, ctx, *tag, text)
             }

@@ -115,23 +115,20 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
         n = 1;
     }
 
-    let rows: [(&'static str, ShortString); 5] = [
-        ("Name", ShortString::from_str(pkg.title.as_str())),
-        ("Role", ShortString::from_str(pkg.exec_type.as_str())),
-        ("Class", ShortString::from_str(pkg.app_class.as_str())),
-        ("Size", format_size(pkg.size_bytes)),
-        ("File", ShortString::from_str(pkg.filename())),
-    ];
-
-    for (i, &(title, val)) in rows.iter().enumerate() {
-        if i == 1 && !is_service {
-            continue;
-        }
+    let mut add = |title: &'static str, val: ShortString| {
         if n < items.len() {
             items[n] = MenuItem::new(title, MenuItemType::Value(val));
             n += 1;
         }
+    };
+
+    add("Name", ShortString::from_str(pkg.title.as_str()));
+    if is_service {
+        add("Role", ShortString::from_str(pkg.exec_type.as_str()));
     }
+    add("Class", ShortString::from_str(pkg.app_class.as_str()));
+    add("Size", format_size(pkg.size_bytes));
+    add("File", ShortString::from_str(pkg.filename()));
 
     if n < items.len() {
         items[n] = MenuItem::new("Delete", MenuItemType::Action);

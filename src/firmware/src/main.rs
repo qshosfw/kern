@@ -144,6 +144,9 @@ fn main() -> ! {
         wire: drivers::wire::WireDriver::new(hardware::SystemSerialPort::new()),
     };
 
+    #[cfg(feature = "usb")]
+    drivers::usb::register_active_usb_driver(&mut hw.usb as *mut _);
+
     // 2. Initialize Display & Keypad (screen remains blanked until passcode or splash)
     hw.lcd.init();
     bsp::pins::BACKLIGHT.set_low();
@@ -191,9 +194,6 @@ fn main() -> ! {
         crate::apps::APP_ID_LAUNCHER
     };
     hw.orchestrator.set_startup_app(startup_app);
-
-    #[cfg(feature = "usb")]
-    drivers::usb::register_active_usb_driver(&mut hw.usb as *mut _);
 
     #[cfg(feature = "uart")]
     bsp::Board::uart_set_baud(master_config_ref().system.baud_rate());

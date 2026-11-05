@@ -6,7 +6,7 @@ use gfx::gui::modules::menu::{
     MenuView, OptionSheet, SheetResult, handle_sheet_event_with_repeater,
 };
 use gfx::gui::modules::popup::{PopupModel, PopupView};
-#[cfg(feature = "passcode")]
+#[cfg(feature = "text_input")]
 use gfx::gui::modules::text_input::{TextInputModel, TextInputView};
 use gfx::gui::repeater::KeyRepeater;
 use gfx::gui::view::View;
@@ -20,7 +20,7 @@ use crate::services::FirmwareContext;
 pub enum ActiveModal {
     None = 0,
     Popup(PopupModel) = 1,
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     TextInput(TextInputModel) = 2,
     Sheet(OptionSheet, KeyRepeater, gfx::gui::animation::SlideUpAnim) = 3,
 }
@@ -29,7 +29,7 @@ pub struct ModalCompositor {
     pub tag: u8,
     pub modal: ActiveModal,
     pub popup_view: PopupView,
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     pub text_view: TextInputView,
 }
 
@@ -39,7 +39,7 @@ impl ModalCompositor {
             tag: 0,
             modal: ActiveModal::None,
             popup_view: PopupView::new(),
-            #[cfg(feature = "passcode")]
+            #[cfg(feature = "text_input")]
             text_view: TextInputView::new(),
         }
     }
@@ -111,7 +111,7 @@ impl ModalCompositor {
         self.modal = ActiveModal::Popup(model);
     }
 
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     fn init_text_prompt(
         &mut self,
         tag: u8,
@@ -136,7 +136,7 @@ impl ModalCompositor {
         }
     }
 
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     pub fn prompt_text(
         &mut self,
         tag: u8,
@@ -149,7 +149,7 @@ impl ModalCompositor {
         let _ = m.buffer.push_str(initial);
     }
 
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     pub fn prompt_passcode(
         &mut self,
         tag: u8,
@@ -196,7 +196,7 @@ impl ModalCompositor {
                     None
                 }
             }
-            #[cfg(feature = "passcode")]
+            #[cfg(feature = "text_input")]
             ActiveModal::TextInput(model) => {
                 self.text_view.on_event(model, event);
                 if model.is_done {
@@ -237,7 +237,7 @@ impl ModalCompositor {
             ActiveModal::Popup(model) => {
                 self.popup_view.render(canvas, model);
             }
-            #[cfg(feature = "passcode")]
+            #[cfg(feature = "text_input")]
             ActiveModal::TextInput(model) => {
                 self.text_view.render(canvas, model);
             }
@@ -297,7 +297,7 @@ impl OsCompositor {
             let modal_ref = &*core::ptr::addr_of!(ACTIVE_MODAL);
             if modal_ref.is_active() {
                 modal_ref.render_overlay(canvas);
-                #[cfg(feature = "passcode")]
+                #[cfg(feature = "text_input")]
                 if matches!(modal_ref.modal, ActiveModal::TextInput(_)) {
                     ctx.draw_status_bar_right_mode(canvas, true);
                 }

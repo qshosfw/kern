@@ -40,6 +40,15 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     hw.audio.disable();
     hw.radio.sleep();
     hw.radio.set_status_led(bsp::StatusLed::Off);
+    #[cfg(feature = "usb")]
+    {
+        // Avoid USB bus disturbance during deep sleep: release soft connect and clear endpoints
+        unsafe {
+            use py32_hal::pac::usbd::*;
+            let pwr = USBD_POWER_U8.read_volatile();
+            USBD_POWER_U8.write_volatile(pwr & !USB_POWER_SOFTCONN);
+        }
+    }
 
     // 3. Mark power service profile as deep sleep
     unsafe {
@@ -466,8 +475,15 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             handle_one_second_tick(hw, &mut low_batt_warning_timer);
             dirty_render = true;
 
-            // Reset inactivity if backlight is on (user looking at screen) or audio amplifier is active
-            if hw.backlight.is_active() || hw.audio.is_active() {
+            #[cfg(feature = "usb")]
+            let is_usb_plugged = hw.usb.is_connected();
+            #[cfg(not(feature = "usb"))]
+            let is_usb_plugged = false;
+            let is_charging = unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_charging() };
+            let is_plugged_in = is_usb_plugged || is_charging;
+
+            // Reset inactivity if backlight is on, audio amplifier is active, or radio is plugged into USB/charger
+            if is_plugged_in || hw.backlight.is_active() || hw.audio.is_active() {
                 unsafe {
                     (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
                 }
@@ -475,13 +491,17 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
             // Auto-Power-Off (APO) timeout -> automatically enter deep sleep
             // Strictly guarded: only fires if user explicitly configured APO in settings (> 0)
+            // and device is NOT plugged into USB or charging.
             let apo_fired = unsafe {
                 let pwr = &mut *core::ptr::addr_of_mut!(POWER_SERVICE);
                 let fired = pwr.apo_triggered;
                 pwr.apo_triggered = false;
                 fired
             };
-            if apo_fired && crate::master_config_ref().battery.auto_power_off_min > 0 {
+            if apo_fired
+                && !is_plugged_in
+                && crate::master_config_ref().battery.auto_power_off_min > 0
+            {
                 handle_deep_sleep_mode(hw);
             }
         }
@@ -500,10 +520,19 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             }
         }
 
-        // Check if deep sleep mode was requested (e.g. via long-press Exit)
+        // Check if deep sleep mode was requested (e.g. via long-press Exit).
+        // Suppressed while plugged into USB or charging.
         if hw.orchestrator.take_sleep_requested() {
-            handle_deep_sleep_mode(hw);
-            dirty_render = true;
+            #[cfg(feature = "usb")]
+            let is_usb_plugged = hw.usb.is_connected();
+            #[cfg(not(feature = "usb"))]
+            let is_usb_plugged = false;
+            let is_charging = unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_charging() };
+
+            if !is_usb_plugged && !is_charging {
+                handle_deep_sleep_mode(hw);
+                dirty_render = true;
+            }
         }
 
         // Render loop: skip expensive CPU view traversal and 1024-byte SPI blits when display is dark
@@ -516,10 +545,10 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             }
         }
 
-        // Sleep until next event/interrupt, unless USB has an active pending control transfer,
+        // Sleep until next event/interrupt, unless USB is actively connected or has pending transfer,
         // high-speed animation is active, or Grayscale FRC is actively cycling subframes while display is awake
         #[cfg(feature = "usb")]
-        if hw.usb.has_pending_transfer() {
+        if hw.usb.is_connected() || hw.usb.has_pending_transfer() {
             continue;
         }
 

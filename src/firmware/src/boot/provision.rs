@@ -108,11 +108,15 @@ const TIMER_PAYLOAD: &[u8] = &[
 
 /// Extract the filename component from a path (e.g. "/prov/app.krx" -> "app.krx").
 fn filename_from_path(path: &str) -> &str {
-    if let Some(idx) = path.rfind('/') {
-        &path[idx + 1..]
-    } else {
-        path
+    let bytes = path.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if bytes[i] == b'/' {
+            return &path[i + 1..];
+        }
     }
+    path
 }
 
 /// Build and write a KRX package file into KernFS using the shared transient arena buffer.

@@ -141,9 +141,11 @@ impl UsbDriver {
             set_active_ep(0);
             USBD_ADDR_U8.write_volatile(0);
 
-            // 3. Enable Suspend mode detection in POWER register
+            // 3. Enable Suspend mode detection and engage Soft Connect (D+ 1.5k pullup) in POWER register
             let pwr = USBD_POWER_U8.read_volatile();
-            USBD_POWER_U8.write_volatile(pwr | USB_POWER_SUSPENDENB);
+            USBD_POWER_U8.write_volatile(
+                (pwr | USB_POWER_SUSPENDENB | USB_POWER_SOFTCONN) & !USB_POWER_HSENAB,
+            );
 
             // 4. Arm bus lifecycle interrupts: Reset, Resume, Suspend, SOF
             USBD_INT_USBE_U8
@@ -200,7 +202,9 @@ impl UsbDriver {
             unsafe {
                 USBD_ADDR_U8.write_volatile(0);
                 let pwr = USBD_POWER_U8.read_volatile();
-                USBD_POWER_U8.write_volatile(pwr | USB_POWER_SUSPENDENB);
+                USBD_POWER_U8.write_volatile(
+                    (pwr | USB_POWER_SUSPENDENB | USB_POWER_SOFTCONN) & !USB_POWER_HSENAB,
+                );
             }
         }
 
@@ -730,7 +734,7 @@ impl UsbDriver {
 
     #[inline(always)]
     pub fn is_connected(&self) -> bool {
-        self.is_connected
+        self.is_connected || self.configured
     }
 
     #[inline(always)]

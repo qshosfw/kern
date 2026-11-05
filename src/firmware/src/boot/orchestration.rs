@@ -305,22 +305,23 @@ pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
 
     let adc = py32_hal::adc::Adc::init();
 
-    #[cfg(feature = "usb")]
-    {
-        hw.usb.init();
-    }
-
     master_cfg.load_into(hw.filesystem);
 
-    // ── STAGE 1: Instant Security & Recovery Introspection (<30ms) ──
-    boot_stage_security_check(hw, master_cfg, passcode_state, &adc);
-
-    // ── STAGE 2: Clocks, Radio & Display Core Setup (<5ms) ──────────
+    // ── STAGE 1: Clock Stabilization & USB Bring-up (<2ms) ──────────
+    // Clock is stabilized according to system configuration (48 MHz or 72 MHz),
+    // and USBD peripheral is initialized after PLL is locked.
     if master_cfg.system.cpu_clock == 1 {
         py32_hal::rcc::set_sysclk_72mhz();
     } else {
         py32_hal::rcc::set_sysclk_48mhz();
     }
+    #[cfg(feature = "usb")]
+    {
+        hw.usb.init();
+    }
+
+    // ── STAGE 2: Instant Security & Recovery Introspection (<30ms) ──
+    boot_stage_security_check(hw, master_cfg, passcode_state, &adc);
 
     let _ = hw.radio.init();
     hw.audio.init();

@@ -129,3 +129,26 @@ pub trait RfToneGenerator {
         self.set_tone1_freq_word(if bit { mark_word } else { space_word });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tone_word_calculation_and_roundtrip() {
+        // Standard musical tones used in key and navigation beeps
+        let test_freqs = [440, 650, 880, 1046, 1175, 1200, 1318];
+        for &freq in &test_freqs {
+            let word = calc_tone_word(freq);
+            assert!(word > 0, "Tone word for {} Hz must be non-zero", freq);
+            let roundtrip = tone_word_to_hz(word);
+            let diff = (roundtrip as i32 - freq as i32).abs();
+            assert!(
+                diff <= 1,
+                "Tone {} Hz roundtrip diff {} too large",
+                freq,
+                diff
+            );
+        }
+    }
+}

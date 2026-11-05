@@ -920,6 +920,42 @@ class RigWireClient:
 
 
 # ── ASCII & UNICODE SCREEN MIRRORING ──────────────────────────────────────────
+def render_canvas_braille(buf: bytes) -> str:
+    """Render 128x64 1-bit ST7565 canvas buffer using Unicode 2x4 Braille characters (64x16 text grid)."""
+    if len(buf) < 1024:
+        return "Invalid canvas buffer size"
+    lines = []
+    lines.append("┌" + "─" * 64 + "┐")
+    for y_block in range(0, 64, 4):
+        row_str = ["│"]
+        for x_block in range(0, 128, 2):
+            # Braille dots mapping (U+2800 + bitmask):
+            # Dot 1: (x,   y)   -> bit 0 (0x01)
+            # Dot 2: (x,   y+1) -> bit 1 (0x02)
+            # Dot 3: (x,   y+2) -> bit 2 (0x04)
+            # Dot 4: (x+1, y)   -> bit 3 (0x08)
+            # Dot 5: (x+1, y+1) -> bit 4 (0x10)
+            # Dot 6: (x+1, y+2) -> bit 5 (0x20)
+            # Dot 7: (x,   y+3) -> bit 6 (0x40)
+            # Dot 8: (x+1, y+3) -> bit 7 (0x80)
+            d1 = (buf[(y_block // 8) * 128 + x_block] >> (y_block % 8)) & 1
+            d2 = (buf[((y_block + 1) // 8) * 128 + x_block] >> ((y_block + 1) % 8)) & 1
+            d3 = (buf[((y_block + 2) // 8) * 128 + x_block] >> ((y_block + 2) % 8)) & 1
+            d7 = (buf[((y_block + 3) // 8) * 128 + x_block] >> ((y_block + 3) % 8)) & 1
+
+            d4 = (buf[(y_block // 8) * 128 + x_block + 1] >> (y_block % 8)) & 1
+            d5 = (buf[((y_block + 1) // 8) * 128 + x_block + 1] >> ((y_block + 1) % 8)) & 1
+            d6 = (buf[((y_block + 2) // 8) * 128 + x_block + 1] >> ((y_block + 2) % 8)) & 1
+            d8 = (buf[((y_block + 3) // 8) * 128 + x_block + 1] >> ((y_block + 3) % 8)) & 1
+
+            code = (d1 << 0) | (d2 << 1) | (d3 << 2) | (d4 << 3) | (d5 << 4) | (d6 << 5) | (d7 << 6) | (d8 << 7)
+            row_str.append(chr(0x2800 + code))
+        row_str.append("│")
+        lines.append("".join(row_str))
+    lines.append("└" + "─" * 64 + "┘")
+    return "\n".join(lines)
+
+
 def render_canvas_ascii(buf: bytes) -> str:
     """Render 128x64 1-bit ST7565 canvas buffer using Unicode half-blocks (32 text rows)."""
     if len(buf) < 1024:
@@ -1051,6 +1087,23 @@ def run_protocol_tests():
     assert len(h_key) == 6
     print("PASSED")
 
+    print("Test 7: High-Density Braille Screen Encoder (64x16 character grid)...", end=" ")
+    fake_fb = bytearray(1024)
+    # Set top-left pixel (x=0, y=0) -> bit 0 in page 0 -> braille dot 1 (0x2801)
+    fake_fb[0] = 0x01
+    # Set top-left right pixel (x=1, y=0) -> bit 0 in page 0 -> braille dot 4 (0x2808)
+    fake_fb[1] = 0x01
+    # Set bottom pixel of block (x=0, y=3) -> bit 3 in page 0 -> braille dot 7 (0x2840)
+    fake_fb[0] |= 0x08
+    rendered = render_canvas_braille(bytes(fake_fb))
+    lines = rendered.splitlines()
+    assert len(lines) == 18, f"Expected 18 lines (border + 16 rows), got {len(lines)}"
+    assert lines[0] == "┌" + "─" * 64 + "┐"
+    # First character inside row 1 should be chr(0x2800 | 0x01 | 0x08 | 0x40) = chr(0x2849)
+    first_char = lines[1][1]
+    assert first_char == chr(0x2849), f"Expected {chr(0x2849)} (0x2849), got {first_char} ({ord(first_char):#x})"
+    print(f"PASSED (verified character '{first_char}')")
+
     print("\n✨ All RigWire protocol self-tests passed with 100% conformance!")
     print("==================================================================")
 
@@ -1107,8 +1160,11 @@ def main():
     ptt_p = subparsers.add_parser("ptt", help="Control transmitter PTT state")
     ptt_p.add_argument("state", choices=["on", "off", "1", "0", "tx", "rx"], help="PTT state (on/off)")
 
-    subparsers.add_parser("screen", help="Capture live front panel display and render in terminal")
-    subparsers.add_parser("screencap", help="Alias for screen")
+    scr_p = subparsers.add_parser("screen", help="Capture live front panel display and render in terminal (Braille 64x16 or Halfblock 128x32)")
+    for p in (scr_p, subparsers.add_parser("screencap", help="Alias for screen")):
+        p.add_argument("--mode", "-m", choices=["braille", "ascii", "halfblock"], default="braille", help="Rendering mode (default: braille)")
+        p.add_argument("--ascii", action="store_true", help="Render using Unicode half-blocks (128x32 text grid)")
+        p.add_argument("--braille", action="store_true", help="Render using 2x4 Braille characters (64x16 text grid)")
 
     key_p = subparsers.add_parser("key", help="Inject keypad event remotely")
     key_p.add_argument("name", help="Key name (menu, exit, up, down, ptt, side1, side2, f, 0-9, star, hash)")
@@ -1305,7 +1361,13 @@ def main():
         elif args.command in ("screen", "screencap"):
             print("Fetching live display surface from radio...")
             fb = client.screencap()
-            print(render_canvas_ascii(fb))
+            use_ascii = getattr(args, "ascii", False) or (getattr(args, "mode", "braille") in ("ascii", "halfblock"))
+            if getattr(args, "braille", False):
+                use_ascii = False
+            if use_ascii:
+                print(render_canvas_ascii(fb))
+            else:
+                print(render_canvas_braille(fb))
 
         elif args.command == "key":
             key_name = args.name.lower()

@@ -2,11 +2,13 @@
 
 #[cfg(feature = "boot_assets")]
 use super::asset_chooser::AssetDescriptor;
-use super::page::{ActionId, MetricId, PageId, SettingDef, SettingField};
+#[cfg(not(feature = "text_input"))]
+use super::page::MetricId;
+use super::page::{ActionId, PageId, SettingDef, SettingField};
 
-#[cfg(feature = "passcode")]
+#[cfg(feature = "text_input")]
 pub static MODEL_OPTIONS: [&'static str; 3] = ["UV-K1", "UV-K5 V3", "Custom..."];
-#[cfg(not(feature = "passcode"))]
+#[cfg(not(feature = "text_input"))]
 pub static MODEL_OPTIONS: [&'static str; 2] = ["UV-K1", "UV-K5 V3"];
 
 pub static SPLASH_TIME_OPTIONS: [&'static str; 5] = ["Skip", "0.5s", "1.0s", "2.0s", "3.0s"];
@@ -63,7 +65,7 @@ pub static SPLASH_PAGE_DEFS: &[SettingDef] = &[
     ),
 ];
 
-#[cfg(feature = "passcode")]
+#[cfg(feature = "text_input")]
 pub static DEVICE_ROOT: [SettingDef; 5] = [
     SettingDef::action("Model", ActionId::ChooseModel),
     SettingDef::action("Owner", ActionId::EditOwner),
@@ -72,7 +74,7 @@ pub static DEVICE_ROOT: [SettingDef; 5] = [
     SettingDef::submenu("Boot Splash", PageId::BootSplash),
 ];
 
-#[cfg(not(feature = "passcode"))]
+#[cfg(not(feature = "text_input"))]
 pub static DEVICE_ROOT: [SettingDef; 5] = [
     SettingDef::action("Model", ActionId::ChooseModel),
     SettingDef::metric("Owner", MetricId::DeviceOwner),

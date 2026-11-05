@@ -11,6 +11,7 @@ use gfx::Canvas;
 use kernel::caps::{Cap, CapabilitySet};
 use kernel::proc::abi::*;
 use kernel::proc::krx::CapBinding;
+use kernel::proc::primitives::*;
 use kernel::proc::service_registry::ServiceRegistry;
 
 pub(crate) static mut ACTIVE_CTX: *mut FirmwareContext<'static, 'static> = core::ptr::null_mut();
@@ -29,60 +30,43 @@ pub fn service_registry_mut() -> &'static mut ServiceRegistry {
     unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_REGISTRY) }
 }
 
+#[inline(always)]
+unsafe fn active_ctx() -> &'static mut FirmwareContext<'static, 'static> {
+    unsafe { &mut *ACTIVE_CTX }
+}
+
 // ── 1. CapDisplay C-ABI Handlers ────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_display_clear() {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).clear();
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().clear() }
 }
 
 pub unsafe extern "C" fn api_draw_pixel(x: i16, y: i16, color: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).draw_pixel(x, y, color);
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().draw_pixel(x, y, color) }
 }
 
 pub unsafe extern "C" fn api_draw_line(x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).draw_line(x0, y0, x1, y1, color);
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().draw_line(x0, y0, x1, y1, color) }
 }
 
 pub unsafe extern "C" fn api_draw_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).draw_rect(x, y, w, h, color);
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().draw_rect(x, y, w, h, color) }
 }
 
 pub unsafe extern "C" fn api_fill_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).fill_rect(x, y, w, h, color);
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().fill_rect(x, y, w, h, color) }
 }
 
 pub unsafe extern "C" fn api_draw_bitmap(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !data.is_null() && len > 0 {
-            use kernel::proc::primitives::DisplayPrimitive;
-            let slice = core::slice::from_raw_parts(data, len as usize);
-            (*ACTIVE_CTX).draw_bitmap(x, y, w, h, slice);
-        }
+    if !data.is_null() && len > 0 {
+        use kernel::proc::primitives::DisplayPrimitive;
+        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
+        unsafe { active_ctx().draw_bitmap(x, y, w, h, slice) };
     }
 }
 
@@ -94,13 +78,11 @@ pub unsafe extern "C" fn api_draw_str(
     font: u8,
     color: u8,
 ) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !text.is_null() && len > 0 {
-            let slice = core::slice::from_raw_parts(text, len as usize);
-            if let Ok(s) = core::str::from_utf8(slice) {
-                use kernel::proc::primitives::DisplayPrimitive;
-                (*ACTIVE_CTX).draw_str(x, y, s, font, color);
-            }
+    if !text.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(text, len as usize) };
+        if let Ok(s) = core::str::from_utf8(slice) {
+            use kernel::proc::primitives::DisplayPrimitive;
+            unsafe { active_ctx().draw_str(x, y, s, font, color) };
         }
     }
 }
@@ -114,144 +96,69 @@ pub unsafe extern "C" fn api_draw_str_align(
     color: u8,
     align: u8,
 ) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !text.is_null() && len > 0 {
-            let slice = core::slice::from_raw_parts(text, len as usize);
-            if let Ok(s) = core::str::from_utf8(slice) {
-                use kernel::proc::primitives::DisplayPrimitive;
-                (*ACTIVE_CTX).draw_str_align(x, y, s, font, color, align);
-            }
+    if !text.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(text, len as usize) };
+        if let Ok(s) = core::str::from_utf8(slice) {
+            use kernel::proc::primitives::DisplayPrimitive;
+            unsafe { active_ctx().draw_str_align(x, y, s, font, color, align) };
         }
     }
 }
 
 pub unsafe extern "C" fn api_commit_frame() {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).commit_frame();
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().commit_frame() }
 }
 
 pub unsafe extern "C" fn api_commit_rows(row_mask: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).commit_rows(row_mask);
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().commit_rows(row_mask) }
 }
 
 pub unsafe extern "C" fn api_get_framebuffer() -> *mut u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::DisplayPrimitive;
-            (*ACTIVE_CTX).get_framebuffer_mut().as_mut_ptr()
-        } else {
-            core::ptr::null_mut()
-        }
-    }
+    use kernel::proc::primitives::DisplayPrimitive;
+    unsafe { active_ctx().get_framebuffer_mut().as_mut_ptr() }
 }
 
 // ── 2. CapRadio C-ABI Handlers ──────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_rf_tune(freq_hz: u32, bw: u8, step_hz: u32) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            let bw_hz = if bw == 1 { 25_000 } else { 12_500 };
-            (*ACTIVE_CTX).tune(freq_hz, bw_hz, step_hz);
-            0
-        } else {
-            1
-        }
-    }
+    let bw_hz = if bw == 1 { 25_000 } else { 12_500 };
+    unsafe { active_ctx().tune(freq_hz, bw_hz, step_hz) };
+    0
 }
 
 pub unsafe extern "C" fn api_rf_get_freq() -> u32 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).get_frequency()
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().get_frequency() }
 }
 
 pub unsafe extern "C" fn api_rf_get_rssi() -> i16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).get_rssi_dbm()
-        } else {
-            -140
-        }
-    }
+    unsafe { active_ctx().get_rssi_dbm() }
 }
 
 pub unsafe extern "C" fn api_rf_is_carrier() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            if (*ACTIVE_CTX).is_carrier_detected() {
-                1
-            } else {
-                0
-            }
-        } else {
-            0
-        }
-    }
+    unsafe { if active_ctx().is_carrier_detected() { 1 } else { 0 } }
 }
 
 pub unsafe extern "C" fn api_rf_set_modulation(mod_type: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).set_modulation(mod_type);
-        }
-    }
+    unsafe { active_ctx().set_modulation(mod_type) };
 }
 
 pub unsafe extern "C" fn api_rf_set_squelch(level: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).set_squelch(level);
-        }
-    }
+    unsafe { active_ctx().set_squelch(level) };
 }
 
 pub unsafe extern "C" fn api_rf_set_tx(active: u8) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).set_tx(active != 0);
-            0
-        } else {
-            1
-        }
-    }
+    unsafe { active_ctx().set_tx(active != 0) };
+    0
 }
 
 pub unsafe extern "C" fn api_rf_set_tx_power(level: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).set_tx_power(level);
-        }
-    }
+    unsafe { active_ctx().set_tx_power(level) };
 }
 
 pub unsafe extern "C" fn api_rf_set_af_mode(mode: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).set_af_mode(mode);
-        }
-    }
+    unsafe { active_ctx().set_af_mode(mode) };
 }
 
 pub unsafe extern "C" fn api_rf_sweep(
@@ -260,30 +167,24 @@ pub unsafe extern "C" fn api_rf_sweep(
     count: u16,
     out_rssi: *mut i16,
 ) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !out_rssi.is_null() && count > 0 {
-            use kernel::proc::primitives::RadioPrimitive;
-            let slice = core::slice::from_raw_parts_mut(out_rssi, count as usize);
-            (*ACTIVE_CTX).sweep(start_hz, step_hz, slice) as u16
-        } else {
-            0
-        }
+    if !out_rssi.is_null() && count > 0 {
+        let slice = unsafe { core::slice::from_raw_parts_mut(out_rssi, count as usize) };
+        unsafe { active_ctx().sweep(start_hz, step_hz, slice) as u16 }
+    } else {
+        0
     }
 }
 
 pub unsafe extern "C" fn api_rf_symbol_tx_emit(symbols: *const KrxSymbol, count: u16) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !symbols.is_null() && count > 0 {
-            use kernel::proc::primitives::RadioPrimitive;
-            let slice = core::slice::from_raw_parts(symbols, count as usize);
-            if (*ACTIVE_CTX).emit_symbols(slice).is_ok() {
-                0
-            } else {
-                1
-            }
+    if !symbols.is_null() && count > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(symbols, count as usize) };
+        if unsafe { active_ctx().emit_symbols(slice).is_ok() } {
+            0
         } else {
             1
         }
+    } else {
+        1
     }
 }
 
@@ -293,40 +194,27 @@ pub unsafe extern "C" fn api_rf_set_dual_tones(
     tone2_word: u16,
     tone2_gain: u8,
 ) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).set_dual_tones_raw(tone1_word, tone1_gain, tone2_word, tone2_gain);
-        }
-    }
+    unsafe { active_ctx().set_dual_tones_raw(tone1_word, tone1_gain, tone2_word, tone2_gain) };
 }
 
 #[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_init(baud: u16) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).fsk_init(baud);
-        }
-    }
+    unsafe { active_ctx().fsk_init(baud) };
 }
 #[cfg(not(feature = "rf_fsk"))]
 pub unsafe extern "C" fn api_rf_fsk_init(_baud: u16) {}
 
 #[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_send(data: *const u8, len: u16) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !data.is_null() && len > 0 {
-            use kernel::proc::primitives::RadioPrimitive;
-            let slice = core::slice::from_raw_parts(data, len as usize);
-            if (*ACTIVE_CTX).fsk_send(slice).is_ok() {
-                0
-            } else {
-                1
-            }
+    if !data.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
+        if unsafe { active_ctx().fsk_send(slice).is_ok() } {
+            0
         } else {
             1
         }
+    } else {
+        1
     }
 }
 #[cfg(not(feature = "rf_fsk"))]
@@ -336,14 +224,11 @@ pub unsafe extern "C" fn api_rf_fsk_send(_data: *const u8, _len: u16) -> u8 {
 
 #[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_recv(buf: *mut u8, max_len: u16) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !buf.is_null() && max_len > 0 {
-            use kernel::proc::primitives::RadioPrimitive;
-            let slice = core::slice::from_raw_parts_mut(buf, max_len as usize);
-            (*ACTIVE_CTX).fsk_receive(slice) as u16
-        } else {
-            0
-        }
+    if !buf.is_null() && max_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
+        unsafe { active_ctx().fsk_receive(slice) as u16 }
+    } else {
+        0
     }
 }
 #[cfg(not(feature = "rf_fsk"))]
@@ -352,119 +237,72 @@ pub unsafe extern "C" fn api_rf_fsk_recv(_buf: *mut u8, _max_len: u16) -> u16 {
 }
 
 pub unsafe extern "C" fn api_rf_set_mic_mute(muted: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).mute_mic(muted != 0);
-        }
-    }
+    unsafe { active_ctx().mute_mic(muted != 0) };
 }
 
 pub unsafe extern "C" fn api_rf_set_tx_carrier(active: u8) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).set_tx_carrier(active != 0);
-            0
-        } else {
-            1
-        }
-    }
+    unsafe { active_ctx().set_tx_carrier(active != 0) };
+    0
 }
 
 // ── 3. CapAudio C-ABI Handlers ──────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_audio_play_tone(freq_hz: u16, duration_ms: u16) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            (*ACTIVE_CTX).play_tone(freq_hz, duration_ms);
-        }
-    }
+    unsafe { active_ctx().play_tone(freq_hz, duration_ms) };
 }
 
 pub unsafe extern "C" fn api_audio_play_beep(beep_type: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::AudioPrimitive;
-            AudioPrimitive::play_beep(&mut *ACTIVE_CTX, beep_type);
-        }
-    }
+    unsafe { AudioPrimitive::play_beep(active_ctx(), beep_type) };
 }
 
 pub unsafe extern "C" fn api_audio_set_path(on: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::AudioPrimitive;
-            (*ACTIVE_CTX).set_audio_path(on != 0);
-        }
-    }
+    unsafe { active_ctx().set_audio_path(on != 0) };
 }
 
 pub unsafe extern "C" fn api_audio_capture_start(rate_hz: u16) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::AudioPrimitive;
-            if (*ACTIVE_CTX).capture_start(rate_hz).is_ok() {
-                0
-            } else {
-                1
-            }
-        } else {
-            1
-        }
+    if unsafe { active_ctx().capture_start(rate_hz).is_ok() } {
+        0
+    } else {
+        1
     }
 }
 
 pub unsafe extern "C" fn api_audio_capture_read(out_samples: *mut i16, max_samples: u16) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !out_samples.is_null() && max_samples > 0 {
-            use kernel::proc::primitives::AudioPrimitive;
-            let slice = core::slice::from_raw_parts_mut(out_samples, max_samples as usize);
-            (*ACTIVE_CTX).capture_read(slice) as u16
-        } else {
-            0
-        }
+    if !out_samples.is_null() && max_samples > 0 {
+        let slice = unsafe { core::slice::from_raw_parts_mut(out_samples, max_samples as usize) };
+        unsafe { active_ctx().capture_read(slice) as u16 }
+    } else {
+        0
     }
 }
 
 pub unsafe extern "C" fn api_audio_capture_stop() {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::AudioPrimitive;
-            (*ACTIVE_CTX).capture_stop();
-        }
-    }
+    unsafe { active_ctx().capture_stop() };
 }
 
 // ── 4. CapStorage C-ABI Handlers ────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_storage_load_config(buf: *mut u8, max_len: u16) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !buf.is_null() && max_len > 0 {
-            use kernel::proc::primitives::StoragePrimitive;
-            let app_name = super::native_runner::active_native_app_name();
-            let slice = core::slice::from_raw_parts_mut(buf, max_len as usize);
-            (*ACTIVE_CTX).load_config(app_name, slice).unwrap_or(0) as u16
-        } else {
-            0
-        }
+    if !buf.is_null() && max_len > 0 {
+        let app_name = super::native_runner::active_native_app_name();
+        let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
+        unsafe { active_ctx().load_config(app_name, slice).unwrap_or(0) as u16 }
+    } else {
+        0
     }
 }
 
 pub unsafe extern "C" fn api_storage_save_config(buf: *const u8, len: u16) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !buf.is_null() && len > 0 {
-            use kernel::proc::primitives::StoragePrimitive;
-            let app_name = super::native_runner::active_native_app_name();
-            let slice = core::slice::from_raw_parts(buf, len as usize);
-            if (*ACTIVE_CTX).save_config(app_name, slice).is_ok() {
-                0
-            } else {
-                1
-            }
+    if !buf.is_null() && len > 0 {
+        let app_name = super::native_runner::active_native_app_name();
+        let slice = unsafe { core::slice::from_raw_parts(buf, len as usize) };
+        if unsafe { active_ctx().save_config(app_name, slice).is_ok() } {
+            0
         } else {
             1
         }
+    } else {
+        1
     }
 }
 
@@ -474,16 +312,11 @@ pub unsafe extern "C" fn api_storage_read_asset(
     buf: *mut u8,
     len: u16,
 ) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !buf.is_null() && len > 0 {
-            use kernel::proc::primitives::StoragePrimitive;
-            let slice = core::slice::from_raw_parts_mut(buf, len as usize);
-            (*ACTIVE_CTX)
-                .read_asset(asset_id, offset, slice)
-                .unwrap_or(0) as u16
-        } else {
-            0
-        }
+    if !buf.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
+        unsafe { active_ctx().read_asset(asset_id, offset, slice).unwrap_or(0) as u16 }
+    } else {
+        0
     }
 }
 
@@ -493,18 +326,14 @@ pub unsafe extern "C" fn api_storage_read_file(
     buf: *mut u8,
     max_len: u16,
 ) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !path.is_null() && !buf.is_null() && path_len > 0 && max_len > 0
-        {
-            use kernel::proc::primitives::StoragePrimitive;
-            let path_slice = core::slice::from_raw_parts(path, path_len as usize);
-            if let Ok(path_str) = core::str::from_utf8(path_slice) {
-                let dst = core::slice::from_raw_parts_mut(buf, max_len as usize);
-                return (*ACTIVE_CTX).read_file(path_str, dst).unwrap_or(0) as u16;
-            }
+    if !path.is_null() && !buf.is_null() && path_len > 0 && max_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+            let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
+            return unsafe { active_ctx().read_file(path_str, dst).unwrap_or(0) as u16 };
         }
-        0
     }
+    0
 }
 
 pub unsafe extern "C" fn api_storage_write_file(
@@ -513,53 +342,44 @@ pub unsafe extern "C" fn api_storage_write_file(
     data: *const u8,
     len: u16,
 ) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !path.is_null() && !data.is_null() && path_len > 0 {
-            use kernel::proc::primitives::StoragePrimitive;
-            let path_slice = core::slice::from_raw_parts(path, path_len as usize);
-            if let Ok(path_str) = core::str::from_utf8(path_slice) {
-                if path_str.starts_with("/sys/") {
-                    return 1;
-                }
-                let src = core::slice::from_raw_parts(data, len as usize);
-                if (*ACTIVE_CTX).write_file(path_str, src).is_ok() {
-                    return 0;
-                }
+    if !path.is_null() && !data.is_null() && path_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+            if path_str.starts_with("/sys/") {
+                return 1;
+            }
+            let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
+            if unsafe { active_ctx().write_file(path_str, src).is_ok() } {
+                return 0;
             }
         }
-        1
     }
+    1
 }
 
 pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !path.is_null() && path_len > 0 {
-            use kernel::proc::primitives::StoragePrimitive;
-            let path_slice = core::slice::from_raw_parts(path, path_len as usize);
-            if let Ok(path_str) = core::str::from_utf8(path_slice) {
-                if path_str.starts_with("/sys/") {
-                    return 1;
-                }
-                if (*ACTIVE_CTX).remove_file(path_str).is_ok() {
-                    return 0;
-                }
+    if !path.is_null() && path_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+            if path_str.starts_with("/sys/") {
+                return 1;
+            }
+            if unsafe { active_ctx().remove_file(path_str).is_ok() } {
+                return 0;
             }
         }
-        1
     }
+    1
 }
 
 pub unsafe extern "C" fn api_storage_file_size(path: *const u8, path_len: u8) -> u32 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !path.is_null() && path_len > 0 {
-            use kernel::proc::primitives::StoragePrimitive;
-            let path_slice = core::slice::from_raw_parts(path, path_len as usize);
-            if let Ok(path_str) = core::str::from_utf8(path_slice) {
-                return (*ACTIVE_CTX).file_size(path_str).unwrap_or(0) as u32;
-            }
+    if !path.is_null() && path_len > 0 {
+        let path_slice = unsafe { core::slice::from_raw_parts(path, path_len as usize) };
+        if let Ok(path_str) = core::str::from_utf8(path_slice) {
+            return unsafe { active_ctx().file_size(path_str).unwrap_or(0) as u32 };
         }
-        0
     }
+    0
 }
 
 pub unsafe extern "C" fn api_storage_list_dir(
@@ -568,34 +388,24 @@ pub unsafe extern "C" fn api_storage_list_dir(
     out_entries: *mut KrxDirEntry,
     max_entries: u8,
 ) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !out_entries.is_null() && max_entries > 0 {
-            use kernel::proc::primitives::StoragePrimitive;
-            let dir_slice = if dir_path.is_null() || dir_len == 0 {
-                b"/"
-            } else {
-                core::slice::from_raw_parts(dir_path, dir_len as usize)
-            };
-            if let Ok(dir_str) = core::str::from_utf8(dir_slice) {
-                let dst = core::slice::from_raw_parts_mut(out_entries, max_entries as usize);
-                return (*ACTIVE_CTX).list_dir(dir_str, dst).unwrap_or(0) as u8;
-            }
+    if !out_entries.is_null() && max_entries > 0 {
+        let dir_slice = if dir_path.is_null() || dir_len == 0 {
+            b"/"
+        } else {
+            unsafe { core::slice::from_raw_parts(dir_path, dir_len as usize) }
+        };
+        if let Ok(dir_str) = core::str::from_utf8(dir_slice) {
+            let dst = unsafe { core::slice::from_raw_parts_mut(out_entries, max_entries as usize) };
+            return unsafe { active_ctx().list_dir(dir_str, dst).unwrap_or(0) as u8 };
         }
-        0
     }
+    0
 }
 
 // ── 5..12. CapKeypad / CapPower / CapSerial / CapTimer / CapUi / CapMath / CapFm / CapService ──
 
 pub unsafe extern "C" fn api_sys_poll_key() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::KeypadPrimitive;
-            (*ACTIVE_CTX).poll_key().unwrap_or(0)
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().poll_key().unwrap_or(0) }
 }
 
 pub unsafe extern "C" fn api_sys_nav_dir(key: u8) -> i8 {
@@ -607,14 +417,7 @@ pub unsafe extern "C" fn api_sys_nav_dir(key: u8) -> i8 {
 }
 
 pub unsafe extern "C" fn api_sys_key_matrix() -> u32 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::KeypadPrimitive;
-            (*ACTIVE_CTX).get_key_matrix()
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().get_key_matrix() }
 }
 
 pub unsafe extern "C" fn api_sys_ticks_ms() -> u32 {
@@ -630,219 +433,103 @@ pub unsafe extern "C" fn api_sys_delay_ms(ms: u32) {
 }
 
 pub unsafe extern "C" fn api_sys_battery_mv() -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).battery_mv()
-        } else {
-            4000
-        }
-    }
+    unsafe { active_ctx().battery_mv() }
 }
 
 pub unsafe extern "C" fn api_sys_battery_pct() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).battery_pct()
-        } else {
-            100
-        }
-    }
+    unsafe { active_ctx().battery_pct() }
 }
 
 pub unsafe extern "C" fn api_sys_is_charging() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            if (*ACTIVE_CTX).is_charging() { 1 } else { 0 }
-        } else {
-            0
-        }
-    }
+    unsafe { if active_ctx().is_charging() { 1 } else { 0 } }
 }
 
 pub unsafe extern "C" fn api_sys_wake_backlight() {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).wake_backlight();
-        }
-    }
+    unsafe { active_ctx().wake_backlight() };
 }
 
 pub unsafe extern "C" fn api_sys_battery_ma() -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).battery_ma()
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().battery_ma() }
 }
 
 pub unsafe extern "C" fn api_sys_battery_type() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).battery_type()
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().battery_type() }
 }
 
 pub unsafe extern "C" fn api_sys_raw_battery_adc() -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).raw_battery_adc()
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().raw_battery_adc() }
 }
 
 pub unsafe extern "C" fn api_sys_mcu_temp() -> i16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).mcu_temp_deci_c()
-        } else {
-            250
-        }
-    }
+    unsafe { active_ctx().mcu_temp_deci_c() }
 }
 
 pub unsafe extern "C" fn api_sys_is_low() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            if (*ACTIVE_CTX).is_low() { 1 } else { 0 }
-        } else {
-            0
-        }
-    }
+    unsafe { if active_ctx().is_low() { 1 } else { 0 } }
 }
 
 pub unsafe extern "C" fn api_sys_is_critical() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            if (*ACTIVE_CTX).is_critical() { 1 } else { 0 }
-        } else {
-            0
-        }
-    }
+    unsafe { if active_ctx().is_critical() { 1 } else { 0 } }
 }
 
 pub unsafe extern "C" fn api_sys_set_backlight(mode: u8, timeout_s: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).set_backlight(mode, timeout_s);
-        }
-    }
+    unsafe { active_ctx().set_backlight(mode, timeout_s) };
 }
 
 pub unsafe extern "C" fn api_sys_set_backlight_brightness(max: u8, min: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::PowerPrimitive;
-            (*ACTIVE_CTX).set_backlight_brightness(max, min);
-        }
-    }
+    unsafe { active_ctx().set_backlight_brightness(max, min) };
 }
 
 pub unsafe extern "C" fn api_serial_write(data: *const u8, len: u16) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !data.is_null() && len > 0 {
-            use kernel::proc::primitives::SerialPrimitive;
-            let slice = core::slice::from_raw_parts(data, len as usize);
-            (*ACTIVE_CTX).write(slice);
-            len
-        } else {
-            0
-        }
+    if !data.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
+        unsafe { active_ctx().write(slice) };
+        len
+    } else {
+        0
     }
 }
 
 pub unsafe extern "C" fn api_serial_read(buf: *mut u8, max_len: u16) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && !buf.is_null() && max_len > 0 {
-            use kernel::proc::primitives::SerialPrimitive;
-            let slice = core::slice::from_raw_parts_mut(buf, max_len as usize);
-            (*ACTIVE_CTX).read(slice) as u16
-        } else {
-            0
-        }
+    if !buf.is_null() && max_len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
+        unsafe { active_ctx().read(slice) as u16 }
+    } else {
+        0
     }
 }
 
 pub unsafe extern "C" fn api_serial_is_connected() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::SerialPrimitive;
-            if (*ACTIVE_CTX).is_usb_active() { 1 } else { 0 }
-        } else {
-            0
-        }
-    }
+    unsafe { if active_ctx().is_usb_active() { 1 } else { 0 } }
 }
 
 pub unsafe extern "C" fn api_ui_close_modal() {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            (*ACTIVE_CTX).close_modal();
-        }
-    }
+    unsafe { active_ctx().close_modal() };
 }
 
 pub unsafe extern "C" fn api_ui_has_modal() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            if (*ACTIVE_CTX).has_active_modal() {
-                1
-            } else {
-                0
-            }
-        } else {
-            0
-        }
-    }
+    unsafe { if active_ctx().has_active_modal() { 1 } else { 0 } }
 }
 
 pub unsafe extern "C" fn api_sys_rand32() -> u32 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::MathPrimitive;
-            (*ACTIVE_CTX).rand32()
-        } else {
-            0x5A5A_5A5A
-        }
-    }
+    unsafe { active_ctx().rand32() }
 }
 
 pub unsafe extern "C" fn api_math_crc32(data: *const u8, len: u16) -> u32 {
-    unsafe {
-        if !data.is_null() && len > 0 {
-            let slice = core::slice::from_raw_parts(data, len as usize);
-            crypto::crc::CrcEngine::crc32(slice)
-        } else {
-            0
-        }
+    if !data.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
+        crypto::crc::CrcEngine::crc32(slice)
+    } else {
+        0
     }
 }
 
 pub unsafe extern "C" fn api_math_crc16(data: *const u8, len: u16) -> u16 {
-    unsafe {
-        if !data.is_null() && len > 0 {
-            let slice = core::slice::from_raw_parts(data, len as usize);
-            crypto::crc::CrcEngine::crc16_ccitt(slice)
-        } else {
-            0
-        }
+    if !data.is_null() && len > 0 {
+        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
+        crypto::crc::CrcEngine::crc16_ccitt(slice)
+    } else {
+        0
     }
 }
 
@@ -857,63 +544,27 @@ pub unsafe extern "C" fn api_math_uidivmod(n: u32, d: u32) -> u64 {
 }
 
 pub unsafe extern "C" fn api_fm_tune(freq_100khz: u16) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::FmPrimitive;
-            (*ACTIVE_CTX).fm_tune(freq_100khz);
-        }
-    }
+    unsafe { active_ctx().fm_tune(freq_100khz) };
 }
 
 pub unsafe extern "C" fn api_fm_set_volume(volume: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::FmPrimitive;
-            (*ACTIVE_CTX).fm_set_volume(volume);
-        }
-    }
+    unsafe { active_ctx().fm_set_volume(volume) };
 }
 
 pub unsafe extern "C" fn api_fm_mute(mute: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::FmPrimitive;
-            (*ACTIVE_CTX).fm_mute(mute != 0);
-        }
-    }
+    unsafe { active_ctx().fm_mute(mute != 0) };
 }
 
 pub unsafe extern "C" fn api_fm_get_rssi() -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::FmPrimitive;
-            (*ACTIVE_CTX).fm_get_rssi()
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().fm_get_rssi() }
 }
 
 pub unsafe extern "C" fn api_sys_stack_free() -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::ServicePrimitive;
-            (*ACTIVE_CTX).get_stack_free_now()
-        } else {
-            kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16
-        }
-    }
+    unsafe { active_ctx().get_stack_free_now() }
 }
 
 pub unsafe extern "C" fn api_sys_stack_free_min() -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::ServicePrimitive;
-            (*ACTIVE_CTX).get_stack_free_min()
-        } else {
-            kernel::sys::SystemDiagnostics::ram_available_bytes() as u16
-        }
-    }
+    unsafe { active_ctx().get_stack_free_min() }
 }
 
 pub unsafe extern "C" fn api_sys_device_uid(out_uid12: *mut u8) {
@@ -1163,7 +814,7 @@ pub unsafe extern "C" fn api_mem_query(
     if let Some(rk) = kernel::proc::RegionKind::from_u8(kind) {
         if let Some(desc) = slot.mem_layout.find_region_by_kind(rk) {
             unsafe {
-                *out_desc = *desc;
+                core::ptr::copy_nonoverlapping(desc as *const _, out_desc, 1);
             }
             return 0;
         }
@@ -1181,26 +832,19 @@ pub unsafe extern "C" fn api_hw_i2c_transfer(
     rx: *mut u8,
     rx_len: u16,
 ) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::HardwarePrimitive;
-            if !tx.is_null() && tx_len > 0 {
-                let tx_slice = core::slice::from_raw_parts(tx, tx_len as usize);
-                if (*ACTIVE_CTX).i2c_write(addr, reg, tx_slice).is_err() {
-                    return 1;
-                }
-            }
-            if !rx.is_null() && rx_len > 0 {
-                let rx_slice = core::slice::from_raw_parts_mut(rx, rx_len as usize);
-                if (*ACTIVE_CTX).i2c_read(addr, reg, rx_slice).is_err() {
-                    return 1;
-                }
-            }
-            0
-        } else {
-            1
+    if !tx.is_null() && tx_len > 0 {
+        let tx_slice = unsafe { core::slice::from_raw_parts(tx, tx_len as usize) };
+        if unsafe { active_ctx().i2c_write(addr, reg, tx_slice).is_err() } {
+            return 1;
         }
     }
+    if !rx.is_null() && rx_len > 0 {
+        let rx_slice = unsafe { core::slice::from_raw_parts_mut(rx, rx_len as usize) };
+        if unsafe { active_ctx().i2c_read(addr, reg, rx_slice).is_err() } {
+            return 1;
+        }
+    }
+    0
 }
 
 pub unsafe extern "C" fn api_hw_spi_transfer(
@@ -1209,71 +853,41 @@ pub unsafe extern "C" fn api_hw_spi_transfer(
     rx: *mut u8,
     len: u16,
 ) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() && len > 0 {
-            use kernel::proc::primitives::HardwarePrimitive;
-            let tx_slice = if tx.is_null() {
-                &[]
-            } else {
-                core::slice::from_raw_parts(tx, len as usize)
-            };
-            let rx_slice = if rx.is_null() {
-                &mut []
-            } else {
-                core::slice::from_raw_parts_mut(rx, len as usize)
-            };
-            if (*ACTIVE_CTX)
-                .spi_transfer(cs_pin, tx_slice, rx_slice)
-                .is_ok()
-            {
-                0
-            } else {
-                1
-            }
+    if len > 0 {
+        let tx_slice = if tx.is_null() {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(tx, len as usize) }
+        };
+        let rx_slice = if rx.is_null() {
+            &mut []
+        } else {
+            unsafe { core::slice::from_raw_parts_mut(rx, len as usize) }
+        };
+        if unsafe { active_ctx().spi_transfer(cs_pin, tx_slice, rx_slice).is_ok() } {
+            0
         } else {
             1
         }
+    } else {
+        1
     }
 }
 
 pub unsafe extern "C" fn api_hw_gpio_set(pin: u8, high: u8) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::HardwarePrimitive;
-            (*ACTIVE_CTX).gpio_write(pin, high != 0);
-        }
-    }
+    unsafe { active_ctx().gpio_write(pin, high != 0) };
 }
 
 pub unsafe extern "C" fn api_hw_gpio_get(pin: u8) -> u8 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::HardwarePrimitive;
-            if (*ACTIVE_CTX).gpio_read(pin) { 1 } else { 0 }
-        } else {
-            0
-        }
-    }
+    unsafe { if active_ctx().gpio_read(pin) { 1 } else { 0 } }
 }
 
 pub unsafe extern "C" fn api_hw_rf_read_reg(reg: u8) -> u16 {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).read_register(reg)
-        } else {
-            0
-        }
-    }
+    unsafe { active_ctx().read_register(reg) }
 }
 
 pub unsafe extern "C" fn api_hw_rf_write_reg(reg: u8, val: u16) {
-    unsafe {
-        if !ACTIVE_CTX.is_null() {
-            use kernel::proc::primitives::RadioPrimitive;
-            (*ACTIVE_CTX).write_register(reg, val);
-        }
-    }
+    unsafe { active_ctx().write_register(reg, val) };
 }
 
 // ── Immutable Per-Capability Domain VTables in XIP Flash (.rodata) ──────────

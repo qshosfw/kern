@@ -85,7 +85,7 @@ pub fn enable_syscfg() {
     }
 }
 
-/// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1).
+/// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1) and reset PHY.
 pub fn enable_usbd() {
     unsafe {
         // 1. Enable SYSCFG clock (APB2) - required for USB PHY routing on PY32F071
@@ -99,6 +99,17 @@ pub fn enable_usbd() {
         // 3. Enable USBD peripheral clock (APB1)
         let val = rcc::RCC_APB1ENR.read_volatile();
         rcc::RCC_APB1ENR.write_volatile(val | rcc::APB1ENR_USBD);
+
+        // 4. Force reset and release USBD peripheral to guarantee clean hardware PHY state
+        let rst = rcc::RCC_APBRSTR1.read_volatile();
+        rcc::RCC_APBRSTR1.write_volatile(rst | rcc::APBRSTR1_USBDRST);
+        for _ in 0..500 {
+            core::hint::spin_loop();
+        }
+        rcc::RCC_APBRSTR1.write_volatile(rst & !rcc::APBRSTR1_USBDRST);
+        for _ in 0..500 {
+            core::hint::spin_loop();
+        }
     }
 }
 

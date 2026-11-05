@@ -212,7 +212,7 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
     }
 
     /// Open an OS modal text input prompt.
-    #[cfg(feature = "passcode")]
+    #[cfg(feature = "text_input")]
     pub fn prompt_text(
         &mut self,
         tag: u8,
@@ -231,6 +231,17 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
                 digits_only,
             );
         }
+    }
+
+    #[cfg(not(feature = "text_input"))]
+    pub fn prompt_text(
+        &mut self,
+        _tag: u8,
+        _title: &'static str,
+        _initial: &str,
+        _max_len: usize,
+        _digits_only: bool,
+    ) {
     }
 
     /// Open an OS modal passcode input prompt with dots.
