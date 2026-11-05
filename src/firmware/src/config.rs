@@ -500,10 +500,10 @@ impl MasterConfig {
             self.system = SystemConfig::new();
             repaired |= DIRTY_SYSTEM;
         }
-        if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > 1 {
+        if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > 4 {
             self.system.model = self.system.model.min(2);
             self.system.uart_baud = self.system.uart_baud.min(1);
-            self.system.cpu_clock = self.system.cpu_clock.min(1);
+            self.system.cpu_clock = self.system.cpu_clock.min(4);
             repaired |= DIRTY_SYSTEM;
         }
         let mut is_empty_tag = true;

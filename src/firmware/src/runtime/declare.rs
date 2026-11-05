@@ -116,10 +116,13 @@ fn resolve_telemetry_str<'a>(
             return core::str::from_utf8(&buf[..l]).unwrap_or("");
         }
         DYN_CPU_CLOCK => {
-            return if ctx.config.system.cpu_clock == 1 {
-                "72MHz"
-            } else {
-                "48MHz"
+            return match ctx.config.system.cpu_clock {
+                0 => "16MHz",
+                1 => "24MHz",
+                2 => "32MHz",
+                3 => "48MHz",
+                4 => "72MHz",
+                _ => "48MHz",
             };
         }
         DYN_SWAP_USAGE => return "0K",

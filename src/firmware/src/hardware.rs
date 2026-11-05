@@ -182,11 +182,15 @@ impl<'a> SystemHardware<'a> {
             config.hw_dirty &= !crate::config::HW_DIRTY_BATTERY;
         }
         if (config.hw_dirty & crate::config::HW_DIRTY_SYSTEM) != 0 {
-            if config.system.cpu_clock == 1 {
-                py32_hal::rcc::set_sysclk_72mhz();
-            } else {
+            #[cfg(feature = "usb")]
+            if self.usb.is_connected() {
                 py32_hal::rcc::set_sysclk_48mhz();
+            } else {
+                py32_hal::rcc::set_sysclk_index(config.system.cpu_clock);
             }
+            #[cfg(not(feature = "usb"))]
+            py32_hal::rcc::set_sysclk_index(config.system.cpu_clock);
+
             bsp::Board::uart_set_baud(config.system.baud_rate());
             #[cfg(feature = "usb")]
             self.usb

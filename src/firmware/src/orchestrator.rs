@@ -271,6 +271,13 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn record_proc_activation(app_id: usize) {
+        if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
+            pcb.ledger.record_activation();
+        }
+    }
+
+    #[inline(never)]
     fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::FirmwareContext<'a, '_>) {
         // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
         #[cfg(feature = "radio")]
@@ -310,14 +317,10 @@ impl Orchestrator {
         }
 
         // 2. Power Management & Battery Supervisor (PID 3)
-        if let Some(pcb) = proc_table_mut().find_mut_by_app(0xF2) {
-            pcb.ledger.record_activation();
-        }
+        Self::record_proc_activation(0xF2);
 
         // 3. System Kernel & Watch Uptime Service (PID 1)
-        if let Some(pcb) = proc_table_mut().find_mut_by_app(0xF0) {
-            pcb.ledger.record_activation();
-        }
+        Self::record_proc_activation(0xF0);
     }
 
     #[inline(never)]
@@ -450,9 +453,7 @@ impl Orchestrator {
 
         if matches!(event, Event::Tick) {
             self.tick_background_services(ctx);
-            if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
-                pcb.ledger.record_activation();
-            }
+            Self::record_proc_activation(self.active_app_id);
         }
 
         // Key ownership tracking: if a key was consumed on Pressed, subsequent
@@ -795,10 +796,7 @@ impl Orchestrator {
             Self::resume_app_state(app_id);
 
             // Track process activation in PCB table
-            if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
-                pcb.set_state(ProcState::Running);
-                pcb.ledger.record_activation();
-            } else {
+            if proc_table_mut().find_mut_by_app(app_id).is_none() {
                 let name = crate::AppRegistry::descriptor(app_id)
                     .map(|m| m.name)
                     .unwrap_or("App");
@@ -810,10 +808,10 @@ impl Orchestrator {
                     ExecType::StaticFirmware,
                     caps,
                 );
-                if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
-                    pcb.set_state(ProcState::Running);
-                    pcb.ledger.record_activation();
-                }
+            }
+            if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
+                pcb.set_state(ProcState::Running);
+                pcb.ledger.record_activation();
             }
 
             crate::AppRegistry::on_start(self.active_app_id, ctx);

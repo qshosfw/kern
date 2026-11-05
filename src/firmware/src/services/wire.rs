@@ -768,20 +768,13 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         let off = req.offset as usize;
         let len = (req.length as usize).min(180);
 
-        let mut chunk_buf = [0u8; 180];
-        let read_sz = match hw.filesystem.read_file_at(path, off, &mut chunk_buf[..len]) {
-            Ok(n) => n,
-            Err(_) => 0,
-        };
-        let chunk = &chunk_buf[..read_sz];
-
         let mut resp = [0u8; 8 + 180];
+        let read_sz = hw.filesystem.read_file_at(path, off, &mut resp[8..8 + len]).unwrap_or(0);
         resp[0..2].copy_from_slice(&req.transfer_id.to_le_bytes());
         resp[2..6].copy_from_slice(&(off as u32).to_le_bytes());
-        resp[6..8].copy_from_slice(&(chunk.len() as u16).to_le_bytes());
-        resp[8..8 + chunk.len()].copy_from_slice(chunk);
+        resp[6..8].copy_from_slice(&(read_sz as u16).to_le_bytes());
 
-        send_resp(hw, header, WireStatus::Ok, &resp[..8 + chunk.len()])
+        send_resp(hw, header, WireStatus::Ok, &resp[..8 + read_sz])
     }
 }
 

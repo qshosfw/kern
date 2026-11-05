@@ -61,9 +61,9 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     }
     drivers::keyboard::KeypadScanner::reset_gpio_pins();
 
-    // 5. Downclock to direct 24 MHz HSI, shut off analog PLL, and set flash to 0WS
+    // 5. Downclock to direct 16 MHz HSI, shut off analog PLL, and set flash to 0WS
     // This dramatically cuts dynamic core power and eliminates PLL analog consumption.
-    py32_hal::rcc::set_sysclk_24mhz_no_pll();
+    py32_hal::rcc::set_sysclk_16mhz();
     #[cfg(feature = "uart")]
     py32_hal::uart::set_baud(115200);
 
@@ -146,17 +146,20 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
 
     // 7. Wakeup & Hardware Restoration
     // Restore system clocks cleanly based on configuration
-    if crate::master_config_ref().system.cpu_clock == 1 {
-        py32_hal::rcc::set_sysclk_72mhz();
-    } else {
+    #[cfg(feature = "usb")]
+    if hw.usb.is_connected() {
         py32_hal::rcc::set_sysclk_48mhz();
+    } else {
+        py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
     }
+    #[cfg(not(feature = "usb"))]
+    py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
 
     // Re-initialize and flush RigWire serial subsystem
     #[cfg(feature = "uart")]
     {
         py32_hal::uart::clear_errors();
-        py32_hal::uart::set_baud(115200);
+        bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
     }
     #[cfg(feature = "usb")]
     {
@@ -310,11 +313,24 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         {
             if let Some(usb_ev) = hw.usb.poll() {
                 dirty_render = true;
-                if matches!(
-                    usb_ev,
-                    kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed
-                ) {
-                    wake_and_notify_activity(hw);
+                match usb_ev {
+                    kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
+                        wake_and_notify_activity(hw);
+                        if py32_hal::rcc::sysclk_hz() != 48_000_000 {
+                            py32_hal::rcc::set_sysclk_48mhz();
+                            #[cfg(feature = "uart")]
+                            bsp::Board::uart_set_baud(
+                                crate::master_config_ref().system.baud_rate(),
+                            );
+                        }
+                    }
+                    kernel::event::UsbEvent::Disconnected => {
+                        let target_clk = crate::master_config_ref().system.cpu_clock;
+                        py32_hal::rcc::set_sysclk_index(target_clk);
+                        #[cfg(feature = "uart")]
+                        bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
+                    }
+                    _ => {}
                 }
                 enqueue_event(Event::Usb(usb_ev));
             }

@@ -164,6 +164,142 @@ pub fn sysclk_hz() -> u32 {
     }
 }
 
+/// Switch system clock to one of the 5 discrete hardware speeds:
+/// 0: 16 MHz (Direct HSI, PLL OFF, 0WS)
+/// 1: 24 MHz (Direct HSI, PLL OFF, 0WS)
+/// 2: 32 MHz (HSI 16 MHz * PLL 2X, 1WS) - RF Sweet Spot
+/// 3: 48 MHz (HSI * PLL, 1WS) - Default / USB Full-Speed
+/// 4: 72 MHz (HSI 24 MHz * PLL 3X, 2WS) - High Performance
+pub fn set_sysclk_index(idx: u8) {
+    match idx {
+        0 => set_sysclk_16mhz(),
+        1 => set_sysclk_24mhz(),
+        2 => set_sysclk_32mhz(),
+        3 => set_sysclk_48mhz(),
+        4 => set_sysclk_72mhz(),
+        _ => set_sysclk_48mhz(),
+    }
+}
+
+/// Safely switch system clock to direct 16 MHz HSI (PLL OFF, 0WS).
+pub fn set_sysclk_16mhz() {
+    unsafe {
+        // 1. Temporarily switch SYSCLK source to direct HSI
+        let cfgr = rcc::RCC_CFGR.read_volatile();
+        rcc::RCC_CFGR.write_volatile((cfgr & !rcc::CFGR_SW_MASK) | rcc::CFGR_SW_HSI);
+        while (rcc::RCC_CFGR.read_volatile() & rcc::CFGR_SWS_MASK) != rcc::CFGR_SWS_HSI {}
+
+        // 2. Disable PLL to eliminate analog oscillator and charge pump power consumption
+        let cr = rcc::RCC_CR.read_volatile();
+        rcc::RCC_CR.write_volatile(cr & !rcc::CR_PLLON);
+        while (rcc::RCC_CR.read_volatile() & rcc::CR_PLLRDY) != 0 {}
+
+        // 3. Set HSI frequency to 16 MHz via calibration register
+        let cal = (0x1FFF_3210 as *const u32).read_volatile();
+        let trim = if cal != 0xFFFF_FFFF && (cal & 0x1FFF) != 0x1FFF && (cal & 0x1FFF) != 0 {
+            cal & 0x1FFF
+        } else {
+            rcc::RCC_ICSCR.read_volatile() & 0x1FFF
+        };
+        let val = (0x2 << 13) | trim;
+        let icscr = rcc::RCC_ICSCR.read_volatile();
+        rcc::RCC_ICSCR.write_volatile((icscr & !0xFFFF) | val);
+
+        // 4. Set flash latency to 0WS for <= 24 MHz
+        let acr = pac::flash::FLASH_ACR.read_volatile();
+        pac::flash::FLASH_ACR
+            .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
+    }
+
+    crate::delay::update_systick_freq(16_000_000);
+    crate::time::update_tim2_freq(16_000_000);
+}
+
+/// Safely switch system clock to direct 24 MHz HSI (PLL OFF, 0WS).
+pub fn set_sysclk_24mhz() {
+    unsafe {
+        // 1. Temporarily switch SYSCLK source to direct HSI
+        let cfgr = rcc::RCC_CFGR.read_volatile();
+        rcc::RCC_CFGR.write_volatile((cfgr & !rcc::CFGR_SW_MASK) | rcc::CFGR_SW_HSI);
+        while (rcc::RCC_CFGR.read_volatile() & rcc::CFGR_SWS_MASK) != rcc::CFGR_SWS_HSI {}
+
+        // 2. Disable PLL to eliminate analog oscillator and charge pump power consumption
+        let cr = rcc::RCC_CR.read_volatile();
+        rcc::RCC_CR.write_volatile(cr & !rcc::CR_PLLON);
+        while (rcc::RCC_CR.read_volatile() & rcc::CR_PLLRDY) != 0 {}
+
+        // 3. Set HSI frequency to 24 MHz via calibration register
+        let cal = (0x1FFF_3220 as *const u32).read_volatile();
+        let trim = if cal != 0xFFFF_FFFF && (cal & 0x1FFF) != 0x1FFF && (cal & 0x1FFF) != 0 {
+            cal & 0x1FFF
+        } else {
+            rcc::RCC_ICSCR.read_volatile() & 0x1FFF
+        };
+        let val = (0x4 << 13) | trim;
+        let icscr = rcc::RCC_ICSCR.read_volatile();
+        rcc::RCC_ICSCR.write_volatile((icscr & !0xFFFF) | val);
+
+        // 4. Set flash latency to 0WS for <= 24 MHz
+        let acr = pac::flash::FLASH_ACR.read_volatile();
+        pac::flash::FLASH_ACR
+            .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
+    }
+
+    crate::delay::update_systick_freq(24_000_000);
+    crate::time::update_tim2_freq(24_000_000);
+}
+
+/// Safely switch system clock to 32 MHz (16 MHz HSI * PLL 2X, 1WS).
+/// Optimal RF sweet spot: harmonics bypass both 2m (144-148 MHz) and 70cm (430-440 MHz) amateur bands.
+pub fn set_sysclk_32mhz() {
+    unsafe {
+        // 1. Increase flash latency to 1WS for > 24 MHz
+        let acr = pac::flash::FLASH_ACR.read_volatile();
+        pac::flash::FLASH_ACR
+            .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_1WS);
+
+        // 2. Temporarily switch SYSCLK source to direct HSI
+        let cfgr = rcc::RCC_CFGR.read_volatile();
+        rcc::RCC_CFGR.write_volatile((cfgr & !rcc::CFGR_SW_MASK) | rcc::CFGR_SW_HSI);
+        while (rcc::RCC_CFGR.read_volatile() & rcc::CFGR_SWS_MASK) != rcc::CFGR_SWS_HSI {}
+
+        // 3. Disable PLL to allow re-programming multiplier
+        let cr = rcc::RCC_CR.read_volatile();
+        rcc::RCC_CR.write_volatile(cr & !rcc::CR_PLLON);
+        while (rcc::RCC_CR.read_volatile() & rcc::CR_PLLRDY) != 0 {}
+
+        // 4. Ensure HSI is configured for 16 MHz
+        let cal = (0x1FFF_3210 as *const u32).read_volatile();
+        let trim = if cal != 0xFFFF_FFFF && (cal & 0x1FFF) != 0x1FFF && (cal & 0x1FFF) != 0 {
+            cal & 0x1FFF
+        } else {
+            rcc::RCC_ICSCR.read_volatile() & 0x1FFF
+        };
+        let val = (0x2 << 13) | trim;
+        let icscr = rcc::RCC_ICSCR.read_volatile();
+        rcc::RCC_ICSCR.write_volatile((icscr & !0xFFFF) | val);
+
+        // 5. Configure PLL for x2 (16 MHz * 2 = 32 MHz) with HSI source
+        let pllcfgr = rcc::RCC_PLLCFGR.read_volatile();
+        let new_pllcfgr = (pllcfgr & !(rcc::PLLCFGR_PLLSRC_MASK | rcc::PLLCFGR_PLLMUL_MASK))
+            | rcc::PLLCFGR_PLLSRC_HSI
+            | rcc::PLLCFGR_PLLMUL_2X;
+        rcc::RCC_PLLCFGR.write_volatile(new_pllcfgr);
+
+        // 6. Enable PLL and wait for lock
+        rcc::RCC_CR.write_volatile(rcc::RCC_CR.read_volatile() | rcc::CR_PLLON);
+        while (rcc::RCC_CR.read_volatile() & rcc::CR_PLLRDY) == 0 {}
+
+        // 7. Switch SYSCLK source back to PLL
+        let cfgr = rcc::RCC_CFGR.read_volatile();
+        rcc::RCC_CFGR.write_volatile((cfgr & !rcc::CFGR_SW_MASK) | rcc::CFGR_SW_PLL);
+        while (rcc::RCC_CFGR.read_volatile() & rcc::CFGR_SWS_MASK) != rcc::CFGR_SWS_PLL {}
+    }
+
+    crate::delay::update_systick_freq(32_000_000);
+    crate::time::update_tim2_freq(32_000_000);
+}
+
 /// Safely switch system clock to 72 MHz (PLL x3 from 24 MHz HSI).
 /// Adjusts Flash wait states to 2WS before overclocking and updates SysTick calibration.
 pub fn set_sysclk_72mhz() {
@@ -203,6 +339,7 @@ pub fn set_sysclk_72mhz() {
     // 7. Update SysTick reload value dynamically based on actual achieved frequency
     let actual_hz = sysclk_hz();
     crate::delay::update_systick_freq(actual_hz);
+    crate::time::update_tim2_freq(actual_hz);
 }
 
 /// Safely switch system clock to 48 MHz.
@@ -254,28 +391,11 @@ pub fn set_sysclk_48mhz() {
 
     // 7. Update SysTick reload value and microsecond scaling to maintain millisecond precision
     crate::delay::update_systick_freq(48_000_000);
+    crate::time::update_tim2_freq(48_000_000);
 }
 
 /// Safely switch system clock to direct 24 MHz HSI and disable PLL to minimize deep sleep power consumption.
 /// Adjusts Flash wait states to 0WS and updates SysTick calibration.
 pub fn set_sysclk_24mhz_no_pll() {
-    unsafe {
-        // 1. Switch SYSCLK source to direct HSI (24 MHz)
-        let cfgr = rcc::RCC_CFGR.read_volatile();
-        rcc::RCC_CFGR.write_volatile((cfgr & !rcc::CFGR_SW_MASK) | rcc::CFGR_SW_HSI);
-        while (rcc::RCC_CFGR.read_volatile() & rcc::CFGR_SWS_MASK) != rcc::CFGR_SWS_HSI {}
-
-        // 2. Disable PLL to eliminate analog oscillator and charge pump power consumption
-        let cr = rcc::RCC_CR.read_volatile();
-        rcc::RCC_CR.write_volatile(cr & !rcc::CR_PLLON);
-        while (rcc::RCC_CR.read_volatile() & rcc::CR_PLLRDY) != 0 {}
-
-        // 3. Set flash latency to 0WS for <= 24 MHz
-        let acr = pac::flash::FLASH_ACR.read_volatile();
-        pac::flash::FLASH_ACR
-            .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
-    }
-
-    // 4. Update SysTick reload value and microsecond scaling to maintain millisecond precision
-    crate::delay::update_systick_freq(24_000_000);
+    set_sysclk_24mhz();
 }

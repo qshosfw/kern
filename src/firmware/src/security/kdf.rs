@@ -106,9 +106,9 @@ pub fn derive_master_key(
         state.permute(6);
     }
 
-    let keep_72 = crate::master_config_ref().system.cpu_clock == 1;
+    let keep_72 = crate::master_config_ref().system.cpu_clock == 4;
     if initial_clk < 72_000_000 && !keep_72 {
-        py32_hal::rcc::set_sysclk_48mhz();
+        py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
     }
 
     if let Some(ref hook) = progress {

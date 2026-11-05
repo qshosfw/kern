@@ -4,7 +4,8 @@
 use super::page::ActionId;
 use super::page::{MetricId, PageId, SettingDef, SettingField};
 
-pub static CPU_CLOCK_OPTIONS: [&'static str; 2] = ["48 MHz", "72 MHz"];
+pub static CPU_CLOCK_OPTIONS: [&'static str; 5] =
+    ["16 MHz", "24 MHz", "32 MHz", "48 MHz", "72 MHz"];
 pub static UART_BAUD_OPTIONS: [&'static str; 2] = ["115200", "38400"];
 
 pub static SYSTEM_ROOT: &[SettingDef] = &[

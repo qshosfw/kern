@@ -15,10 +15,9 @@ use pac::tim;
 /// since initialization (wraps at ~71.6 minutes for u32).
 pub fn init() {
     rcc::enable_tim2();
+    update_tim2_freq(rcc::sysclk_hz());
 
     unsafe {
-        // Prescaler: 48MHz / (47+1) = 1 MHz → 1 tick = 1 µs
-        tim::TIM2_PSC.write_volatile(47);
         // Auto-reload at maximum (free-running)
         tim::TIM2_ARR.write_volatile(0xFFFF_FFFF);
         // Force an update event to load the prescaler immediately
@@ -26,6 +25,15 @@ pub fn init() {
         // Enable the counter
         let cr1 = tim::TIM2_CR1.read_volatile();
         tim::TIM2_CR1.write_volatile(cr1 | tim::CR1_CEN);
+    }
+}
+
+/// Dynamically update TIM2 prescaler to ensure 1 µs tick precision at any system clock frequency.
+pub fn update_tim2_freq(sysclk_hz: u32) {
+    let psc = (sysclk_hz / 1_000_000).saturating_sub(1);
+    unsafe {
+        tim::TIM2_PSC.write_volatile(psc);
+        tim::TIM2_EGR.write_volatile(tim::EGR_UG);
     }
 }
 

@@ -308,13 +308,9 @@ pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
     master_cfg.load_into(hw.filesystem);
 
     // ── STAGE 1: Clock Stabilization & USB Bring-up (<2ms) ──────────
-    // Clock is stabilized according to system configuration (48 MHz or 72 MHz),
+    // Clock is stabilized according to system configuration (default 48 MHz for USB),
     // and USBD peripheral is initialized after PLL is locked.
-    if master_cfg.system.cpu_clock == 1 {
-        py32_hal::rcc::set_sysclk_72mhz();
-    } else {
-        py32_hal::rcc::set_sysclk_48mhz();
-    }
+    py32_hal::rcc::set_sysclk_index(master_cfg.system.cpu_clock);
     #[cfg(feature = "usb")]
     {
         hw.usb.init();
@@ -336,6 +332,15 @@ pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
 
     // ── STAGE 4: Show Queued Alerts & Proceed ───────────────────────
     super::show_queued_alerts(hw);
+
+    #[cfg(feature = "usb")]
+    if hw.usb.is_connected() {
+        py32_hal::rcc::set_sysclk_48mhz();
+    } else {
+        py32_hal::rcc::set_sysclk_index(master_cfg.system.cpu_clock);
+    }
+    #[cfg(not(feature = "usb"))]
+    py32_hal::rcc::set_sysclk_index(master_cfg.system.cpu_clock);
 
     adc
 }
