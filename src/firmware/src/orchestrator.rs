@@ -108,12 +108,20 @@ fn filter_sunk_keys(event: &Event) -> bool {
     if let Event::Key { code, state } = *event {
         let bit = key_to_bit(code);
         if (unsafe { SUNK_KEYS } & bit) != 0 {
-            if state == KeyState::Released || state != KeyState::Held {
+            if state == KeyState::Released {
                 unsafe {
                     SUNK_KEYS &= !bit;
                 }
+                return true;
+            } else if state == KeyState::Held {
+                return true;
+            } else {
+                // KeyState::Pressed: A new press arrives, clear the stale sunk bit and allow it through!
+                unsafe {
+                    SUNK_KEYS &= !bit;
+                }
+                return false;
             }
-            return true;
         }
     }
     false
@@ -602,6 +610,11 @@ impl Orchestrator {
                 code: KeyCode::Exit,
                 state: KeyState::Pressed,
             } => {
+                // When already in Launcher (root launcher screen), Exit does not navigate back.
+                // This ensures holding Exit to sleep does not trigger an accidental switch to VFO.
+                if self.active_app_id == APP_ID_LAUNCHER {
+                    return;
+                }
                 while let Some(prev) = self.nav_stack.pop() {
                     let is_valid = if prev < crate::AppRegistry::count() {
                         true

@@ -152,6 +152,125 @@ impl SettingsApp {
     #[inline(never)]
     fn handle_menu_screen_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
         self.view.animated = ctx.config.display.animations_enabled();
+
+        // 1. If any key event arrives, immediately complete in-flight slide animation
+        // so navigation feels instantaneous and no key presses are delayed or blocked.
+        if matches!(event, Event::Key { .. }) && self.slide_offset_x != 0 {
+            self.slide_offset_x = 0;
+        }
+
+        // 2. Handle Exit key (back navigation / cancel edit)
+        if let Event::Key {
+            code: KeyCode::Exit,
+            state,
+        } = *event
+        {
+            if state == KeyState::Pressed {
+                if self.is_editing {
+                    self.view.repeater.reset();
+                    self.reset_input_state();
+                    let _ = ctx.flush_config();
+                    return EventResult::Consumed;
+                }
+
+                if self.pop_submenu(ctx) {
+                    return EventResult::Consumed;
+                }
+
+                if ctx.config.is_dirty() {
+                    let _ = ctx.flush_config();
+                }
+                // At root page: return Ignored so orchestrator navigates back to Launcher
+                return EventResult::Ignored;
+            } else if state == KeyState::Released {
+                return EventResult::Consumed;
+            }
+        }
+
+        // 3. Handle Menu / Key5 (Enter / Select)
+        if let Event::Key {
+            code: KeyCode::Menu | KeyCode::Key5,
+            state,
+        } = *event
+        {
+            if state == KeyState::Pressed {
+                if self.is_editing {
+                    self.view.repeater.reset();
+                    self.reset_input_state();
+                    let _ = ctx.flush_config();
+                    return EventResult::Consumed;
+                }
+
+                let sel_idx = self.selected_idx;
+                if sel_idx < self.items_len {
+                    match self.items[sel_idx].item_type {
+                        MenuItemType::Range { .. } => {
+                            self.view.repeater.reset();
+                            self.is_editing = true;
+                            return EventResult::Consumed;
+                        }
+                        MenuItemType::Toggle(ref mut on) => {
+                            *on = !*on;
+                            self.update_config_from_menu(ctx);
+                            return EventResult::Consumed;
+                        }
+                        _ => {
+                            self.handle_menu_press(ctx);
+                            return EventResult::Consumed;
+                        }
+                    }
+                }
+                return EventResult::Consumed;
+            } else if state == KeyState::Held || state == KeyState::Released {
+                // Prevent hold/release from leaking to global orchestrator shortcuts
+                return EventResult::Consumed;
+            }
+        }
+
+        // 4. Handle Tick event (animation and smooth scrolling)
+        if let Event::Tick = event {
+            let mut animating = false;
+            if self.slide_offset_x != 0 {
+                if !self.view.animated {
+                    self.slide_offset_x = 0;
+                } else {
+                    const STEP: i16 = 2;
+                    if self.slide_offset_x > 0 {
+                        self.slide_offset_x = (self.slide_offset_x - STEP).max(0);
+                    } else {
+                        self.slide_offset_x = (self.slide_offset_x + STEP).min(0);
+                    }
+                    animating = true;
+                }
+            }
+
+            let mut model = MenuModelMut {
+                items: &mut self.items[..self.items_len],
+                selected_idx: self.selected_idx,
+                nav_layout: ctx.config.keys.nav_layout,
+                is_editing: self.is_editing,
+                is_pressed: self.is_pressed,
+            };
+
+            let prev_idx = self.selected_idx;
+            let handled = self.view.on_event(&mut model, event);
+
+            self.selected_idx = model.selected_idx;
+            self.is_editing = model.is_editing;
+            self.is_pressed = model.is_pressed;
+
+            if handled && self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
+                ctx.play_beep(crate::services::melody::BeepType::Scroll);
+            }
+
+            if animating || handled || self.slide_offset_x != 0 || self.view.scroller.is_animating()
+            {
+                return EventResult::Consumed;
+            }
+            return EventResult::Ignored;
+        }
+
+        // 5. Handle directional navigation & list scrolling (Up, Down, Encoder, etc.)
         let was_editing = self.is_editing;
         let handled = {
             let mut model = MenuModelMut {
@@ -169,81 +288,18 @@ impl SettingsApp {
             self.is_editing = model.is_editing;
             self.is_pressed = model.is_pressed;
 
-            if handled
-                && self.selected_idx != prev_idx
-                && ctx.config.audio.key_beep != 0
-                && matches!(event, Event::Tick)
-            {
+            if handled && self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
                 ctx.play_beep(crate::services::melody::BeepType::Scroll);
             }
 
             handled
         };
 
-        if let Event::Tick = event {
-            if self.slide_offset_x != 0 {
-                if !self.view.animated {
-                    self.slide_offset_x = 0;
-                } else {
-                    const STEP: i16 = 2;
-                    if self.slide_offset_x > 0 {
-                        self.slide_offset_x = (self.slide_offset_x - STEP).max(0);
-                    } else {
-                        self.slide_offset_x = (self.slide_offset_x + STEP).min(0);
-                    }
-                }
-            }
-        }
-
-        if handled || self.slide_offset_x != 0 {
-            if was_editing
-                || self.is_editing
-                || matches!(
-                    event,
-                    Event::Key {
-                        code: KeyCode::Menu | KeyCode::Key5,
-                        state: KeyState::Pressed
-                    }
-                )
-            {
+        if handled {
+            if was_editing || self.is_editing {
                 self.update_config_from_menu(ctx);
             }
-
-            if !was_editing && !self.is_editing {
-                if let Event::Key {
-                    code,
-                    state: KeyState::Pressed,
-                } = *event
-                {
-                    if code == KeyCode::Menu || code == KeyCode::Key5 {
-                        self.handle_menu_press(ctx);
-                    }
-                }
-            } else if was_editing && !self.is_editing {
-                let _ = ctx.flush_config();
-            }
             return EventResult::Consumed;
-        }
-
-        if let Event::Key { code, state } = *event {
-            if state == KeyState::Pressed && code == KeyCode::Exit {
-                if self.is_editing {
-                    self.reset_input_state();
-                    let _ = ctx.flush_config();
-                    return EventResult::Consumed;
-                }
-
-                if self.pop_submenu(ctx) {
-                    return EventResult::Consumed;
-                }
-
-                if ctx.config.is_dirty() {
-                    let _ = ctx.flush_config();
-                }
-            } else if state == KeyState::Held && (code == KeyCode::Menu || code == KeyCode::Key5) {
-                // Prevent Menu hold from leaking to global orchestrator shortcut while inside settings
-                return EventResult::Consumed;
-            }
         }
 
         EventResult::Ignored

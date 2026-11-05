@@ -475,7 +475,30 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn wake(&mut self) {
-        self.write_reg(REG_SYS_POWER, 0x0200);
+        // 1. Restore crystal oscillator and internal bandgap reference (REG_37)
+        self.write_reg(REG_XTAL_TRIM, 0x9D1F);
+        py32_hal::delay::delay_ms(5); // Essential 5ms startup delay for 26 MHz crystal oscillator to stabilize
+
+        // 2. Power on VCO calibration, RX link, AF DAC, DISC mode, PLL VCO, and RX DSP (REG_30)
+        self.write_reg(REG_SYS_POWER, 0xBFF1);
+
+        // 3. Ensure tone generator is cleared and muted to prevent audio pops
+        self.write_reg(REG_TONE1_FREQ, 0x0000);
+        self.write_reg(REG_TONE_GAIN, 0x0000);
+        self.set_af(AfType::Mute);
+        self.write_reg(REG_TX_MUTE, 0xBB18);
+
+        // 4. Base GPIO state: RX enable (Pin 28) on, PA enable (Pin 29) off, LEDs off
+        let mut reg33 = self.cache.read(REG_GPIO);
+        if reg33 == 0xFFFF {
+            reg33 = 0x9000;
+        }
+        reg33 &= !0x0003; // LEDs off
+        reg33 |= 0x0040; // RX enable (Pin 28)
+        reg33 &= !0x0020; // PA disable (Pin 29)
+        self.write_reg(REG_GPIO, reg33);
+
+        self.clear_interrupts();
     }
 
     pub fn set_filter_bandwidth(&mut self, bw: FilterBw) {

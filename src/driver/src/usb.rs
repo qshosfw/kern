@@ -213,12 +213,16 @@ impl UsbDriver {
             self.consecutive_sof = self.consecutive_sof.saturating_add(1);
 
             let latch_ok = now.wrapping_sub(self.last_transition_ms) >= 50;
-            if self.consecutive_sof >= 20 && !self.is_connected && latch_ok {
+            if self.consecutive_sof >= 10 && !self.is_connected && latch_ok {
                 self.was_connected = false;
                 self.is_connected = true;
                 self.last_transition_ms = now;
                 if event.is_none() {
-                    event = Some(UsbEvent::Connected);
+                    event = Some(if self.configured {
+                        UsbEvent::Resumed
+                    } else {
+                        UsbEvent::Connected
+                    });
                 }
             }
         }
@@ -226,31 +230,18 @@ impl UsbDriver {
         if self.is_connected {
             let elapsed_since_sof = now.wrapping_sub(self.last_sof_ms);
             let has_suspend = (int_usb & USB_INTR_SUSPEND) != 0;
-            let has_reset = (int_usb & USB_INTR_RESET) != 0;
-            // Fast, deterministic disconnect detection:
-            // 1. Suspend received and no SOF for >= 40ms: host suspended/unplugged
-            // 2. Continuous SE0/Reset for >= 40ms without SOF: cable unplugged
-            // 3. No SOF received for >= 120ms: cable disconnected
-            let is_disconnected = (has_suspend && elapsed_since_sof >= 40)
-                || (has_reset && elapsed_since_sof >= 40)
-                || elapsed_since_sof >= 120;
+            // Robust disconnect detection:
+            // 1. Explicit bus suspend interrupt received and no SOF for >= 500ms
+            // 2. No SOF received for >= 1500ms (sustained silence)
+            // Note: self.configured and endpoint state are NOT cleared on idle/suspend;
+            // only hardware bus reset (USB_INTR_RESET) resets configuration (§9.1.1.4).
+            let is_disconnected =
+                (has_suspend && elapsed_since_sof >= 500) || elapsed_since_sof >= 1500;
 
             if is_disconnected {
                 self.was_connected = true;
                 self.is_connected = false;
                 self.consecutive_sof = 0;
-                self.configured = false;
-                self.ep0_transfer = None;
-                #[cfg(feature = "usb_cdc")]
-                {
-                    self.pending_set_line_coding = false;
-                    self.cdc.reset();
-                    let in_ep = descriptors::CDC_EP_IN & 0x7F;
-                    set_active_ep(in_ep);
-                    unsafe {
-                        USBD_IN_CSR1_U8.write_volatile(INCSR1_FLUSHFIFO);
-                    }
-                }
                 self.last_transition_ms = now;
                 if event.is_none() {
                     event = Some(UsbEvent::Disconnected);
@@ -795,7 +786,7 @@ impl UsbDriver {
     pub fn cdc_write(&mut self, _data: &[u8]) -> usize {
         #[cfg(feature = "usb_cdc")]
         {
-            if !self.is_connected || !self.configured || _data.is_empty() {
+            if !self.configured || _data.is_empty() {
                 return 0;
             }
             py32_hal::uart::mark_activity();
@@ -831,7 +822,7 @@ impl UsbDriver {
     pub fn cdc_read(&mut self, _buf: &mut [u8]) -> usize {
         #[cfg(feature = "usb_cdc")]
         {
-            if !self.is_connected || !self.configured {
+            if !self.configured {
                 return 0;
             }
             let read = self.cdc.pop_rx(_buf);

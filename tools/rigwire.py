@@ -288,6 +288,13 @@ class RigWireClient:
         if serial is None:
             raise RuntimeError("pyserial is required: pip install pyserial")
         self.ser = serial.Serial(port_name, baudrate=baudrate, timeout=timeout)
+        try:
+            self.ser.dtr = True
+            self.ser.rts = True
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
+        except Exception:
+            pass
         self.session_id = 0x4B45524E  # "KERN"
         self.sequence = 1
         self.max_payload = 128
@@ -328,6 +335,7 @@ class RigWireClient:
         buf = bytearray()
         start = time.time()
         timeout = 2.5
+        decoded = None
 
         while time.time() - start < timeout:
             b = self.ser.read(1)
@@ -335,16 +343,27 @@ class RigWireClient:
                 continue
             if b == b"\x00":
                 if buf:
-                    break
+                    try:
+                        cand = cobs_decode(bytes(buf))
+                        if len(cand) >= MIN_RECORD_LEN and cand[0] == WIRE_MAGIC and cand[1] == WIRE_MAJOR:
+                            decoded = cand
+                            break
+                    except Exception:
+                        pass
+                    buf.clear()
             else:
                 buf.extend(b)
 
-        if not buf:
-            raise TimeoutError("No response frame received from radio (delimiter timeout)")
-
-        decoded = cobs_decode(bytes(buf))
-        if len(decoded) < MIN_RECORD_LEN:
-            raise ValueError(f"Malformed response record: {len(decoded)} bytes (min {MIN_RECORD_LEN})")
+        if decoded is None:
+            if buf:
+                try:
+                    cand = cobs_decode(bytes(buf))
+                    if len(cand) >= MIN_RECORD_LEN and cand[0] == WIRE_MAGIC and cand[1] == WIRE_MAJOR:
+                        decoded = cand
+                except Exception:
+                    pass
+            if decoded is None:
+                raise TimeoutError("No valid response frame received from radio (delimiter timeout)")
 
         magic, major, flags, service, opcode, session, seq, plen = struct.unpack(
             "<BBBBBIIH", decoded[:HEADER_LEN]

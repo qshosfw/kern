@@ -7,9 +7,7 @@ use crate::services::FirmwareContext;
 use kernel::proc::primitives::*;
 #[cfg(feature = "rf_fsk")]
 use kernel::service::radio::{FskBaudRate, FskPhyConfig};
-use kernel::service::radio::{
-    RfAudioPath, RfChannel, RfModulation, RfSquelch, RfSubaudible,
-};
+use kernel::service::radio::{RfAudioPath, RfChannel, RfModulation, RfSquelch, RfSubaudible};
 use kernel::service::{DisplayService, PowerService};
 
 // ── 1. Display Primitive ────────────────────────────────────────────────────

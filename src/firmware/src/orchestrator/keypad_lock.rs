@@ -201,12 +201,15 @@ impl KeypadLockManager {
                         self.is_long_press_triggered = false;
                         self.last_tick_ms = py32_hal::delay::millis();
 
+                        // Responsive hold threshold before showing "HOLD FOR SLEEP" dialog (~480ms).
+                        // Normal key taps (< 400ms) release before this threshold with strictly zero dialog popup.
                         let start_threshold =
-                            (base_hold_delay_ms as u32 + 550).clamp(950, 1200) as u16;
+                            (base_hold_delay_ms as u32 + 80).clamp(450, 550) as u16;
                         self.hold_start_threshold_ms = start_threshold;
-                        // Deliberate long hold to sleep (~3200ms) to prevent accidental shutdown
+
+                        // Total hold target to sleep: ~1000ms progress fill (~1500ms total hold time).
                         self.hold_target_ms =
-                            (start_threshold as u32 + 2200).clamp(3000, 3600) as u16;
+                            (start_threshold as u32 + 1000).clamp(1400, 1600) as u16;
                         // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
                     }
                     KeyState::Held => {
@@ -542,16 +545,16 @@ mod tests {
         mgr.handle_event(&held, 400, 3000, 0);
 
         // Before threshold
-        mgr.hold_elapsed_ms = 500;
+        mgr.hold_elapsed_ms = 350;
         assert!(!mgr.is_animating());
 
         // Past threshold, progress bar appears
-        mgr.hold_elapsed_ms = 1000;
+        mgr.hold_elapsed_ms = 600;
         assert!(mgr.is_animating());
         assert!(!mgr.sleep_requested);
 
-        // Hold completed past target
-        mgr.hold_elapsed_ms = 3300;
+        // Hold completed past target (~1500ms)
+        mgr.hold_elapsed_ms = 1550;
         let tick = Event::Tick;
         mgr.handle_event(&tick, 400, 3000, 0);
         assert!(mgr.sleep_requested);

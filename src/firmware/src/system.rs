@@ -6,7 +6,6 @@ use crate::services::power::PowerService;
 use crate::{EVENT_QUEUE, POWER_SERVICE};
 use kernel::event::{Event, KeyCode};
 #[cfg(feature = "wire")]
-use kernel::service::SerialPort;
 use py32_hal::adc::Adc;
 
 pub fn enqueue_event(event: Event) {
@@ -150,8 +149,12 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     {
         py32_hal::uart::clear_errors();
         py32_hal::uart::set_baud(115200);
-        hw.wire.reset_collector();
     }
+    #[cfg(feature = "usb")]
+    {
+        hw.usb.init();
+    }
+    hw.wire.reset_collector();
 
     // Re-initialize LCD panel and clear dirty state
     hw.lcd.init();
@@ -162,6 +165,13 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // Wake RF modem and backlight
     hw.radio.wake();
     hw.backlight.wake();
+
+    // Re-apply listening VFO channel to RF hardware
+    {
+        use kernel::service::radio::RfChannel;
+        let ch = *crate::radio_state().coord.listening_channel();
+        hw.radio.configure_channel(&ch);
+    }
 
     // Restore volume and hardware audio settings
     crate::hardware::apply_audio_hardware(
@@ -296,10 +306,6 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
                     kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed
                 ) {
                     wake_and_notify_activity(hw);
-                    #[cfg(feature = "usb_cdc")]
-                    hw.wire.port.write(
-                        b"\r\n--- KERN-OS RigWire ---\r\nReady. Type 'help' or send COBS frames.\r\n",
-                    );
                 }
                 enqueue_event(Event::Usb(usb_ev));
             }

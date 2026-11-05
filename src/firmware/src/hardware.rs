@@ -1,7 +1,5 @@
 //! System Hardware Abstraction, Dirty Config Synchronization & Context Building.
 
-#[cfg(feature = "usb")]
-use kernel::service::PowerService;
 use crate::services::{
     DisplayHardware, FirmwareContext as SysContext, PowerServiceConfigExt, RadioMelodyExt,
     SystemStorage,
@@ -13,6 +11,8 @@ use drivers::bk4829::Bk4829;
 use drivers::keyboard::KeypadScanner;
 use drivers::st7565::St7565;
 use kernel::event::{Event, KeyCode, KeyState};
+#[cfg(feature = "usb")]
+use kernel::service::PowerService;
 
 #[derive(Clone, Copy, Default)]
 pub struct SystemSerialPort {
@@ -30,9 +30,7 @@ impl SystemSerialPort {
 impl kernel::service::SerialPort for SystemSerialPort {
     fn write(&mut self, _data: &[u8]) {
         #[cfg(feature = "usb_cdc")]
-        if drivers::usb::is_active_usb_configured()
-            && (self.active_interface == 1 || drivers::usb::is_active_usb_dtr())
-        {
+        if drivers::usb::is_active_usb_configured() && self.active_interface != 2 {
             let _ = drivers::usb::active_usb_write(_data);
             return;
         }
@@ -44,12 +42,14 @@ impl kernel::service::SerialPort for SystemSerialPort {
     fn read(&mut self, _buf: &mut [u8]) -> usize {
         #[cfg(feature = "usb_cdc")]
         {
-            if drivers::usb::is_active_usb_connected() {
+            if drivers::usb::is_active_usb_configured() || drivers::usb::is_active_usb_connected() {
                 let count = drivers::usb::active_usb_read(_buf);
                 if count > 0 {
                     self.active_interface = 1;
                     return count;
                 }
+            } else if self.active_interface == 1 {
+                self.active_interface = 0;
             }
         }
 
@@ -65,7 +65,7 @@ impl kernel::service::SerialPort for SystemSerialPort {
                 }
             }
             if count > 0 {
-                self.active_interface = 0;
+                self.active_interface = 2;
                 return count;
             }
         }

@@ -477,20 +477,20 @@ impl MasterConfig {
         }
     }
 
-#[inline(never)]
-fn check_and_reset_bytes(
-    val: &mut [u8],
-    rules: &[BoundsRule],
-    expected_ver: u8,
-    default: &[u8],
-) -> bool {
-    if !check_bounds(val, expected_ver, rules) {
-        val.copy_from_slice(default);
-        true
-    } else {
-        false
+    #[inline(never)]
+    fn check_and_reset_bytes(
+        val: &mut [u8],
+        rules: &[BoundsRule],
+        expected_ver: u8,
+        default: &[u8],
+    ) -> bool {
+        if !check_bounds(val, expected_ver, rules) {
+            val.copy_from_slice(default);
+            true
+        } else {
+            false
+        }
     }
-}
 
     #[inline(never)]
     pub fn sanitize(&mut self) -> u8 {

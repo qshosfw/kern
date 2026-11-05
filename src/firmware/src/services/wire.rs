@@ -157,7 +157,12 @@ fn get_i16_le(val: &[u8]) -> Result<i16, WireStatus> {
 }
 
 #[inline(never)]
-fn read_sys_facet(facet: u16, hw: &SystemHardware, now: u32, out: &mut [u8]) -> Result<usize, WireStatus> {
+fn read_sys_facet(
+    facet: u16,
+    hw: &SystemHardware,
+    now: u32,
+    out: &mut [u8],
+) -> Result<usize, WireStatus> {
     match facet {
         FACET_SYS_IDENTITY => {
             // Serial64 (8B)
@@ -200,7 +205,12 @@ fn read_sys_facet(facet: u16, hw: &SystemHardware, now: u32, out: &mut [u8]) -> 
 }
 
 #[inline(never)]
-fn read_radio_facet(facet: u16, instance: u8, hw: &mut SystemHardware, out: &mut [u8]) -> Result<usize, WireStatus> {
+fn read_radio_facet(
+    facet: u16,
+    instance: u8,
+    hw: &mut SystemHardware,
+    out: &mut [u8],
+) -> Result<usize, WireStatus> {
     let radio_state = crate::radio_state_ref();
     let vfo = match instance {
         RADIO_INSTANCE_VFO_A => &radio_state.vfo_a,
@@ -216,9 +226,21 @@ fn read_radio_facet(facet: u16, instance: u8, hw: &mut SystemHardware, out: &mut
         }
         FACET_RADIO_MODULATION => {
             let m = match vfo.mod_type.as_bytes().first() {
-                Some(b'A') => if vfo.mod_type.len() > 2 { 2 } else { 1 },
+                Some(b'A') => {
+                    if vfo.mod_type.len() > 2 {
+                        2
+                    } else {
+                        1
+                    }
+                }
                 Some(b'U') => 3,
-                Some(b'D') => if vfo.mod_type.as_bytes().get(1) == Some(&b'S') { 4 } else { 8 },
+                Some(b'D') => {
+                    if vfo.mod_type.as_bytes().get(1) == Some(&b'S') {
+                        4
+                    } else {
+                        8
+                    }
+                }
                 Some(b'C') => 5,
                 Some(b'W') => 6,
                 Some(b'P') => 7,
@@ -347,7 +369,12 @@ fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, n
 }
 
 #[inline(never)]
-fn set_radio_facet(facet: u16, instance: u8, val: &[u8], hw: &mut SystemHardware) -> Result<(), WireStatus> {
+fn set_radio_facet(
+    facet: u16,
+    instance: u8,
+    val: &[u8],
+    hw: &mut SystemHardware,
+) -> Result<(), WireStatus> {
     let radio_state = crate::radio_state();
     let vfo = match instance {
         RADIO_INSTANCE_VFO_A => &mut radio_state.vfo_a,

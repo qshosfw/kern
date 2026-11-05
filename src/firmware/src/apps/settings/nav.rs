@@ -56,7 +56,6 @@ impl SettingsApp {
             self.slide_offset_x = 0;
         }
         self.reset_input_state();
-        ctx.sink_enter_keys();
     }
 
     #[inline(never)]
@@ -79,7 +78,6 @@ impl SettingsApp {
                 self.slide_offset_x = 0;
             }
             self.reset_input_state();
-            ctx.sink_exit_key();
 
             if ctx.config.is_dirty() {
                 let _ = ctx.flush_config();
