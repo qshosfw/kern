@@ -249,6 +249,70 @@ impl LauncherApp {
         }
         success
     }
+
+    #[inline(never)]
+    fn handle_list_nav(&mut self, ctx: &mut SysContext, event: &Event) -> bool {
+        let total = self.model.items.len();
+        if total == 0 {
+            return false;
+        }
+        let nav_dir = match event {
+            Event::Tick => self.view.repeater.tick().and_then(|code| {
+                gfx::gui::modules::menu::get_list_nav_dir(self.model.nav_layout, code)
+            }),
+            Event::Key { code, state } => {
+                self.view.repeater.handle_key(*code, *state);
+                if *state == KeyState::Pressed {
+                    gfx::gui::modules::menu::get_list_nav_dir(self.model.nav_layout, *code)
+                } else {
+                    return *state == KeyState::Released
+                        && gfx::gui::modules::grid_menu::GridMenuView::is_nav_key(*code);
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(dir) = nav_dir {
+            self.model.is_pressed = false;
+            let prev_sel = self.model.selected_idx;
+            let is_tick = matches!(event, Event::Tick);
+            match dir {
+                gfx::gui::modules::menu::ListNavDir::Down => {
+                    if self.model.selected_idx + 1 < total {
+                        self.model.selected_idx += 1;
+                    } else if !is_tick || total > 4 {
+                        self.model.selected_idx = 0;
+                        self.scroll_top = 0;
+                        self.scroller.jump(0);
+                        if is_tick {
+                            self.view.repeater.pause(6);
+                        }
+                    }
+                }
+                gfx::gui::modules::menu::ListNavDir::Up => {
+                    if self.model.selected_idx > 0 {
+                        self.model.selected_idx -= 1;
+                    } else if !is_tick || total > 4 {
+                        self.model.selected_idx = total - 1;
+                        self.scroll_top = self.model.selected_idx.saturating_sub(3);
+                        self.scroller.jump((self.scroll_top as i16) * 13);
+                        if is_tick {
+                            self.view.repeater.pause(6);
+                        }
+                    }
+                }
+            }
+
+            if self.model.selected_idx != prev_sel {
+                if ctx.config.audio.key_beep != 0 && is_tick {
+                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
+                }
+                self.adjust_scroll_for_selection(ctx.config.display.animations_enabled());
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl LauncherApp {
@@ -453,70 +517,12 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
         }
 
         if is_list_mode {
-            let total = self.model.items.len();
-            if total > 0 {
-                let nav_dir = match event {
-                    Event::Tick => self.view.repeater.tick().and_then(|code| {
-                        gfx::gui::modules::menu::get_list_nav_dir(self.model.nav_layout, code)
-                    }),
-                    Event::Key { code, state } => {
-                        self.view.repeater.handle_key(*code, *state);
-                        if *state == KeyState::Pressed {
-                            gfx::gui::modules::menu::get_list_nav_dir(self.model.nav_layout, *code)
-                        } else if *state == KeyState::Released
-                            && gfx::gui::modules::grid_menu::GridMenuView::is_nav_key(*code)
-                        {
-                            return EventResult::Consumed;
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-
-                if let Some(dir) = nav_dir {
-                    self.model.is_pressed = false;
-                    let prev_sel = self.model.selected_idx;
-                    let is_tick = matches!(event, Event::Tick);
-                    match dir {
-                        gfx::gui::modules::menu::ListNavDir::Down => {
-                            if self.model.selected_idx + 1 < total {
-                                self.model.selected_idx += 1;
-                            } else if !is_tick || total > 4 {
-                                self.model.selected_idx = 0;
-                                self.scroll_top = 0;
-                                self.scroller.jump(0);
-                                if is_tick {
-                                    self.view.repeater.pause(6);
-                                }
-                            }
-                        }
-                        gfx::gui::modules::menu::ListNavDir::Up => {
-                            if self.model.selected_idx > 0 {
-                                self.model.selected_idx -= 1;
-                            } else if !is_tick || total > 4 {
-                                self.model.selected_idx = total - 1;
-                                self.scroll_top = self.model.selected_idx.saturating_sub(3);
-                                self.scroller.jump((self.scroll_top as i16) * 13);
-                                if is_tick {
-                                    self.view.repeater.pause(6);
-                                }
-                            }
-                        }
-                    }
-
-                    if self.model.selected_idx != prev_sel {
-                        if ctx.config.audio.key_beep != 0 && matches!(event, Event::Tick) {
-                            ctx.play_beep(crate::services::melody::BeepType::Scroll);
-                        }
-                        self.adjust_scroll_for_selection(ctx.config.display.animations_enabled());
-                        return EventResult::Consumed;
-                    }
-                }
+            if self.handle_list_nav(ctx, event) {
+                return EventResult::Consumed;
             }
         } else {
             let prev_sel = self.model.selected_idx;
-            if self.view.on_event(&mut self.model, &event) {
+            if self.view.on_event(&mut self.model, event) {
                 self.model.is_pressed = false;
                 if self.model.selected_idx != prev_sel
                     && ctx.config.audio.key_beep != 0
