@@ -243,11 +243,11 @@ impl<'a, State> Bk4829<'a, State> {
 
         // 3. Hardware Audio Power Amplifier Warm-Up:
         // On Quansheng UV-K1 / K5, LN4898 audio power amplifier (PA8) warm-up
-        // requires ~35ms to charge the bypass capacitor from cold shutdown for pop-free, audible playback.
+        // requires ~50ms to charge the bypass capacitor from cold shutdown for pop-free, audible playback.
         let was_amp_active = bsp::pins::AUDIO_PA.is_high();
         if !was_amp_active {
             bsp::pins::AUDIO_PA.set_high();
-            py32_hal::delay::delay_ms(35);
+            py32_hal::delay::delay_ms(50);
         }
 
         // 4. Play note sequence
@@ -268,6 +268,7 @@ impl<'a, State> Bk4829<'a, State> {
         // 5. Clean up tone generator
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         self.write_reg(REG_TONE_GAIN, 0x0000);
+        py32_hal::delay::delay_ms(5);
 
         // 6. Restore clean RX / idle state without resetting RF PLL or auto-calibrating VCO
         self.write_reg(REG_SYS_POWER, rx_pwr & !0x8002);
@@ -314,6 +315,7 @@ impl<'a, State> Bk4829<'a, State> {
     pub fn end_tone_sequence(&mut self, _was_amp_active: bool) {
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         self.write_reg(REG_TONE_GAIN, 0x0000);
+        py32_hal::delay::delay_ms(5);
         self.write_reg(REG_SYS_POWER, 0xBFF1);
 
         if self.rx_demod_active && self.is_squelch_open() {
@@ -654,7 +656,7 @@ impl<'a> Bk4829<'a, Disabled> {
         Self {
             cache: RegisterCache::new(),
             bus,
-            tone_gain: 128,
+            tone_gain: 60,
             active_demod_af: AfType::Fm,
             rx_demod_active: false,
             calib: None,
@@ -856,7 +858,9 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
     fn configure_channel(&mut self, config: &kernel::service::radio::ChannelConfig) {
         let was_rx_active = self.rx_demod_active;
         if was_rx_active {
-            bsp::pins::AUDIO_PA.set_low();
+            if !crate::audio::AudioAmplifier::is_hangover_active() {
+                bsp::pins::AUDIO_PA.set_low();
+            }
             self.set_af(AfType::Mute);
         }
         self.set_rx_frequency(config.effective_rx_freq());
@@ -1373,7 +1377,9 @@ impl<'a, State> kernel::service::radio::RfAudioPath for Bk4829<'a, State> {
             self.rx_demod_active = false;
             self.set_af(AfType::Mute);
             self.write_reg(REG_TX_MUTE, 0xBB18);
-            bsp::pins::AUDIO_PA.set_low();
+            if !crate::audio::AudioAmplifier::is_hangover_active() {
+                bsp::pins::AUDIO_PA.set_low();
+            }
         } else {
             self.rx_demod_active = true;
             self.set_af(self.active_demod_af);

@@ -621,11 +621,17 @@ pub unsafe fn native_on_modal_result(
         ModalResult::Confirmed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CONFIRMED, 0),
         ModalResult::TextInputDone { tag, text } => {
             super::abi_bridge::store_modal_text(text);
-            (*tag, kernel::proc::abi::MODAL_RESULT_TEXT_DONE, text.len() as u32)
+            (
+                *tag,
+                kernel::proc::abi::MODAL_RESULT_TEXT_DONE,
+                text.len() as u32,
+            )
         }
-        ModalResult::SheetSelected { tag, index } => {
-            (*tag, kernel::proc::abi::MODAL_RESULT_SHEET_SELECTED, *index as u32)
-        }
+        ModalResult::SheetSelected { tag, index } => (
+            *tag,
+            kernel::proc::abi::MODAL_RESULT_SHEET_SELECTED,
+            *index as u32,
+        ),
         ModalResult::Canceled(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CANCELED, 0),
     };
     let krx_ev = KrxEvent {

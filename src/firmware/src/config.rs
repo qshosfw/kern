@@ -541,7 +541,11 @@ impl MasterConfig {
             repaired |= DIRTY_BATTERY;
         }
 
-        if !check_bounds(self.display.as_bytes(), DisplayConfig::VERSION, &DISPLAY_RULES) {
+        if !check_bounds(
+            self.display.as_bytes(),
+            DisplayConfig::VERSION,
+            &DISPLAY_RULES,
+        ) {
             self.display = DisplayConfig::new();
             repaired |= DIRTY_DISPLAY;
         }

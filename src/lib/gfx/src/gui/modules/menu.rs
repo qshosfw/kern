@@ -364,7 +364,13 @@ impl MenuView {
     }
 
     #[inline(never)]
-    fn on_nav_moved(&mut self, selected_idx: usize, total_items: usize, wrapped: bool, pause_ticks: u16) {
+    fn on_nav_moved(
+        &mut self,
+        selected_idx: usize,
+        total_items: usize,
+        wrapped: bool,
+        pause_ticks: u16,
+    ) {
         self.adjust_scroll(selected_idx, total_items);
         if wrapped {
             self.scroller.jump((self.scroll_top as i16) * 13);

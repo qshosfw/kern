@@ -78,8 +78,14 @@ impl AudioAmplifier {
     /// Keep amplifier energized after tone playback to eliminate key repeat pops.
     pub fn notify_tone_played() {
         unsafe {
-            HANGOVER_MS = 250;
+            HANGOVER_MS = 2000;
         }
+    }
+
+    /// Check if post-tone hangover is currently keeping the amplifier energized.
+    #[inline(always)]
+    pub fn is_hangover_active() -> bool {
+        unsafe { HANGOVER_MS > 0 }
     }
 
     /// Immediately cancel any active hangover and shut down the LN4898 amplifier.

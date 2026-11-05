@@ -851,7 +851,11 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
             if let Err(err) = commit_calibration_payload(staging, total_len, hw) {
                 return send_status(hw, header, err);
             }
-        } else if hw.filesystem.write_file(path, &staging[..total_len]).is_err() {
+        } else if hw
+            .filesystem
+            .write_file(path, &staging[..total_len])
+            .is_err()
+        {
             return send_status(hw, header, WireStatus::IoError);
         }
 
