@@ -296,34 +296,30 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
 
         let buf = &prov_buf[..rlen];
 
-        let prefix = if fname.ends_with(".app")
-            || fname.ends_with(".svc")
-            || fname.ends_with(".dmn")
-            || fname.ends_with(".krx")
-        {
-            "/apps/"
-        } else if fname.ends_with(".cfg") {
-            "/pref/"
-        } else if fname.ends_with(".dat") || fname.ends_with(".sig") {
-            "/sys/"
-        } else if fname.ends_with(".rle") || fname.ends_with(".img") {
-            "/user/splash/"
+        let b = fname.as_bytes();
+        let ext = if b.len() >= 4 && b[b.len() - 4] == b'.' {
+            &b[b.len() - 3..]
         } else {
-            "/user/"
+            b""
+        };
+        let prefix = match ext {
+            b"app" | b"svc" | b"dmn" | b"krx" => "/apps/",
+            b"cfg" => "/pref/",
+            b"dat" | b"sig" => "/sys/",
+            b"rle" | b"img" => "/user/splash/",
+            _ => "/user/",
         };
 
         let mut dst_buf = [0u8; 48];
         let p_bytes = prefix.as_bytes();
-        let n_bytes = fname.as_bytes();
-        let total_len = p_bytes.len() + n_bytes.len();
+        let total_len = p_bytes.len() + b.len();
         if total_len <= dst_buf.len() {
             dst_buf[..p_bytes.len()].copy_from_slice(p_bytes);
-            dst_buf[p_bytes.len()..total_len].copy_from_slice(n_bytes);
-            if let Ok(dst_path) = core::str::from_utf8(&dst_buf[..total_len]) {
-                let _ = filesystem.remove(dst_path);
-                if filesystem.write_file(dst_path, buf).is_ok() {
-                    let _ = filesystem.remove(src_path);
-                }
+            dst_buf[p_bytes.len()..total_len].copy_from_slice(b);
+            let dst_path = unsafe { core::str::from_utf8_unchecked(&dst_buf[..total_len]) };
+            let _ = filesystem.remove(dst_path);
+            if filesystem.write_file(dst_path, buf).is_ok() {
+                let _ = filesystem.remove(src_path);
             }
         }
     }
