@@ -114,16 +114,15 @@ impl Icon {
 }
 
 pub fn draw_icon(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) {
-    let bmp = match icon {
+    let bmp: &'static [u8; 8] = match icon {
         Icon::Antenna => &ICON_ANTENNA,
         Icon::Lock => &ICON_LOCK,
         Icon::Unlock => &ICON_UNLOCK,
         Icon::Speaker => &ICON_SPEAKER,
         Icon::Shield => &ICON_SHIELD,
-        Icon::Keypad => &ICON_KEYPAD,
+        Icon::Keypad | Icon::Function => &ICON_KEYPAD,
         Icon::Flashlight => &ICON_FLASHLIGHT,
         Icon::Mesh => &ICON_MESH,
-        Icon::Function => &ICON_KEYPAD,
         Icon::Plug | Icon::SerialActive => &ICON_PLUG,
         Icon::Bolt => &ICON_BOLT,
         Icon::Moon => &ICON_MOON,
@@ -133,28 +132,28 @@ pub fn draw_icon(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) 
 }
 
 pub fn draw_icon_5x5(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) {
-    let (bmp, w) = match icon {
-        Icon::Antenna => (&ICON_ANTENNA_5X5[..], 5),
-        Icon::Lock => (&ICON_LOCK_5X5[..], 5),
-        Icon::Unlock => (&ICON_UNLOCK_5X5[..], 5),
-        Icon::Speaker => (&ICON_SPEAKER_5X5[..], 5),
-        Icon::Flashlight => (&ICON_FLASHLIGHT_5X5[..], 5),
-        Icon::Function => (&ICON_FUNCTION_5X5[..], 5),
-        Icon::Plug => (&ICON_PLUG_7X5[..], 7),
-        Icon::SerialActive => (&ICON_SERIAL_ACTIVE_7X5[..], 7),
-        Icon::Bolt => (&ICON_BOLT_5X5[..], 5),
-        Icon::Broadcast => (&ICON_BROADCAST_5X5[..], 5),
-        Icon::Storage => (&ICON_STORAGE_7X5[..], 7),
-        Icon::Scan => (&ICON_SCAN_5X5[..], 5),
-        Icon::Beacon => (&ICON_BEACON_6X5[..], 6),
-        Icon::Monitor => (&ICON_MONITOR_5X5[..], 5),
-        Icon::Converter => (&ICON_CONVERTER_5X5[..], 5),
-        Icon::Roger => (&ICON_ROGER_5X5[..], 5),
-        Icon::Beep => (&ICON_BEEP_5X5[..], 5),
-        Icon::NoListen => (&ICON_NO_LISTEN_7X5[..], 7),
-        _ => (&ICON_LOCK_5X5[..], 5),
+    let bmp: &'static [u8; 5] = match icon {
+        Icon::Antenna => &ICON_ANTENNA_5X5,
+        Icon::Lock => &ICON_LOCK_5X5,
+        Icon::Unlock => &ICON_UNLOCK_5X5,
+        Icon::Speaker => &ICON_SPEAKER_5X5,
+        Icon::Flashlight => &ICON_FLASHLIGHT_5X5,
+        Icon::Function => &ICON_FUNCTION_5X5,
+        Icon::Plug => &ICON_PLUG_7X5,
+        Icon::SerialActive => &ICON_SERIAL_ACTIVE_7X5,
+        Icon::Bolt => &ICON_BOLT_5X5,
+        Icon::Broadcast => &ICON_BROADCAST_5X5,
+        Icon::Storage => &ICON_STORAGE_7X5,
+        Icon::Scan => &ICON_SCAN_5X5,
+        Icon::Beacon => &ICON_BEACON_6X5,
+        Icon::Monitor => &ICON_MONITOR_5X5,
+        Icon::Converter => &ICON_CONVERTER_5X5,
+        Icon::Roger => &ICON_ROGER_5X5,
+        Icon::Beep => &ICON_BEEP_5X5,
+        Icon::NoListen => &ICON_NO_LISTEN_7X5,
+        _ => &ICON_LOCK_5X5,
     };
-    draw::draw_bitmap(canvas, x, y, w, 5, bmp, color);
+    draw::draw_bitmap(canvas, x, y, icon.width(), 5, bmp, color);
 }
 
 // ── 16x16 App Icon Bitmaps (32 bytes per icon: 2 bytes per row * 16 rows) ──────

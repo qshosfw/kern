@@ -11,8 +11,6 @@ pub static BOOT_JINGLE_OPTIONS: [&'static str; 5] = ["Off", "Chime", "Nokia", "C
 
 pub static AUDIO_PROFILE_OPTIONS: [&'static str; 5] = ["Flat", "Clean", "Mid", "Boost", "Max"];
 
-pub static OFF_ON: [&'static str; 2] = ["Off", "On"];
-
 #[cfg(feature = "boot_assets")]
 pub static ROGER_ASSET: AssetDescriptor = AssetDescriptor {
     title: "Roger Beep",
@@ -53,7 +51,7 @@ pub static AUDIO_DEFS: [SettingDef; 7] = [
     #[cfg(feature = "boot_assets")]
     SettingDef::asset("Roger Beep", &ROGER_ASSET),
     #[cfg(not(feature = "boot_assets"))]
-    SettingDef::choice("Roger Beep", &OFF_ON, SettingField::ROGER_BEEP),
+    SettingDef::toggle("Roger Beep", SettingField::ROGER_BEEP),
     #[cfg(feature = "boot_assets")]
     SettingDef::asset("Boot Jingle", &JINGLE_ASSET),
     #[cfg(not(feature = "boot_assets"))]

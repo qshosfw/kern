@@ -953,10 +953,8 @@ impl RadioCoordinator {
         }
     }
 
-    // ── Main 10ms System Tick ──
-
     #[inline(never)]
-    pub fn tick_10ms<R: RadioService>(&mut self, radio: &mut R) -> RadioEvent {
+    fn tick_tx<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
         // Lead-in countdown before unmuting mic
         if let TxState::LeadIn { remaining_ms } = self.tx_state {
             if remaining_ms <= 10 {
@@ -979,7 +977,7 @@ impl RadioCoordinator {
                 if elapsed >= limit_ticks {
                     self.stop_tx(radio);
                     self.tot_locked_out = true; // Lockout penalty until physical PTT release
-                    return RadioEvent::TotExpired;
+                    return Some(RadioEvent::TotExpired);
                 } else {
                     let lead = (self
                         .tot_warning_lead_seconds
@@ -991,13 +989,13 @@ impl RadioCoordinator {
                         && !self.tot_warning_given
                     {
                         self.tot_warning_given = true;
-                        return RadioEvent::TotWarning {
+                        return Some(RadioEvent::TotWarning {
                             remaining_sec: self.tot_warning_lead_seconds,
-                        };
+                        });
                     }
                 }
             }
-            return RadioEvent::None;
+            return Some(RadioEvent::None);
         }
 
         // Subaudible tail burst countdown
@@ -1015,13 +1013,24 @@ impl RadioCoordinator {
                 self.tot_warning_given = false;
                 self.dwell.on_tx_finished();
                 radio.configure_channel(self.listening_channel());
-                return RadioEvent::TxEnded;
+                return Some(RadioEvent::TxEnded);
             } else {
                 self.tx_state = TxState::TailBurst {
                     remaining_ms: remaining_ms.saturating_sub(10),
                 };
-                return RadioEvent::None;
+                return Some(RadioEvent::None);
             }
+        }
+
+        None
+    }
+
+    // ── Main 10ms System Tick ──
+
+    #[inline(never)]
+    pub fn tick_10ms<R: RadioService>(&mut self, radio: &mut R) -> RadioEvent {
+        if let Some(ev) = self.tick_tx(radio) {
+            return ev;
         }
 
         // 0. Process active 1750 Hz tone burst countdown

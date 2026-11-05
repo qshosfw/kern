@@ -6,9 +6,16 @@
 
 use pac::rcc;
 
+static mut BOOT_ICSCR: u32 = 0;
+
 /// Confirm the bootloader's clock configuration and enable GPIO port clocks.
 /// Must be called before any GPIO, SPI, UART, or timer initialization.
 pub fn init() {
+    unsafe {
+        if BOOT_ICSCR == 0 {
+            BOOT_ICSCR = rcc::RCC_ICSCR.read_volatile();
+        }
+    }
     // Enable all GPIO port clocks (A, B, C, F) — required before any pin config
     enable_gpio_clocks();
 }
@@ -200,21 +207,36 @@ unsafe fn enable_pll_and_switch(pll_mul: u32, ws: u32) {
 
 #[inline(never)]
 unsafe fn set_hsi_fs(is_24mhz: bool) {
+    let target_fs = if is_24mhz { 4 } else { 2 };
     unsafe {
-        let (addr, shift_val) = if is_24mhz {
-            (0x1FFF_3220 as *const u32, 0x4 << 13)
-        } else {
-            (0x1FFF_3210 as *const u32, 0x2 << 13)
-        };
-        let cal = addr.read_volatile();
-        let trim = if cal != 0xFFFF_FFFF && (cal & 0x1FFF) != 0x1FFF && (cal & 0x1FFF) != 0 {
-            cal & 0x1FFF
-        } else {
-            rcc::RCC_ICSCR.read_volatile() & 0x1FFF
-        };
-        let val = shift_val | trim;
         let icscr = rcc::RCC_ICSCR.read_volatile();
+        if ((icscr >> 13) & 0x07) == target_fs {
+            return;
+        }
+
+        let boot_fs = (BOOT_ICSCR >> 13) & 0x07;
+        let val = if target_fs == boot_fs && BOOT_ICSCR != 0 {
+            BOOT_ICSCR & 0xFFFF
+        } else {
+            let addr = if is_24mhz {
+                0x1FFF_3220 as *const u32
+            } else {
+                0x1FFF_3210 as *const u32
+            };
+            let cal = addr.read_volatile();
+            let trim = if cal != 0xFFFF_FFFF && (cal & 0x1FFF) != 0x1FFF && (cal & 0x1FFF) != 0 {
+                cal & 0x1FFF
+            } else {
+                icscr & 0x1FFF
+            };
+            (target_fs << 13) | trim
+        };
+
         rcc::RCC_ICSCR.write_volatile((icscr & !0xFFFF) | val);
+
+        while (rcc::RCC_CR.read_volatile() & rcc::CR_HSIRDY) == 0 {
+            core::hint::spin_loop();
+        }
     }
 }
 
@@ -244,8 +266,9 @@ pub fn set_sysclk_16mhz() {
         pac::flash::FLASH_ACR
             .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
     }
-    crate::delay::update_systick_freq(16_000_000);
-    crate::time::update_tim2_freq(16_000_000);
+    let hz = sysclk_hz();
+    crate::delay::update_systick_freq(hz);
+    crate::time::update_tim2_freq(hz);
 }
 
 /// Safely switch system clock to direct 24 MHz HSI (PLL OFF, 0WS).
@@ -257,8 +280,9 @@ pub fn set_sysclk_24mhz() {
         pac::flash::FLASH_ACR
             .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
     }
-    crate::delay::update_systick_freq(24_000_000);
-    crate::time::update_tim2_freq(24_000_000);
+    let hz = sysclk_hz();
+    crate::delay::update_systick_freq(hz);
+    crate::time::update_tim2_freq(hz);
 }
 
 /// Safely switch system clock to 32 MHz (16 MHz HSI * PLL 2X, 1WS).
@@ -269,8 +293,9 @@ pub fn set_sysclk_32mhz() {
         set_hsi_fs(false);
         enable_pll_and_switch(rcc::PLLCFGR_PLLMUL_2X, pac::flash::ACR_LATENCY_1WS);
     }
-    crate::delay::update_systick_freq(32_000_000);
-    crate::time::update_tim2_freq(32_000_000);
+    let hz = sysclk_hz();
+    crate::delay::update_systick_freq(hz);
+    crate::time::update_tim2_freq(hz);
 }
 
 /// Safely switch system clock to 72 MHz (PLL x3 from 24 MHz HSI).
@@ -281,8 +306,9 @@ pub fn set_sysclk_72mhz() {
         set_hsi_fs(true);
         enable_pll_and_switch(rcc::PLLCFGR_PLLMUL_3X, pac::flash::ACR_LATENCY_2WS);
     }
-    crate::delay::update_systick_freq(72_000_000);
-    crate::time::update_tim2_freq(72_000_000);
+    let hz = sysclk_hz();
+    crate::delay::update_systick_freq(hz);
+    crate::time::update_tim2_freq(hz);
 }
 
 /// Safely switch system clock to 48 MHz (HSI 24 MHz * PLL 2X, 1WS).
@@ -295,8 +321,9 @@ pub fn set_sysclk_48mhz() {
         set_hsi_fs(true);
         enable_pll_and_switch(rcc::PLLCFGR_PLLMUL_2X, pac::flash::ACR_LATENCY_1WS);
     }
-    crate::delay::update_systick_freq(48_000_000);
-    crate::time::update_tim2_freq(48_000_000);
+    let hz = sysclk_hz();
+    crate::delay::update_systick_freq(hz);
+    crate::time::update_tim2_freq(hz);
 }
 
 /// Safely switch system clock to direct 24 MHz HSI and disable PLL to minimize deep sleep power consumption.

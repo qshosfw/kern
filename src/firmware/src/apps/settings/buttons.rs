@@ -35,8 +35,6 @@ pub static HOLD_DELAY_OPTIONS: [&'static str; 4] = ["250ms", "350ms", "500ms", "
 pub static REPEAT_RATE_OPTIONS: [&'static str; 4] =
     ["30ms (Turbo)", "50ms (Fast)", "80ms (Norm)", "120ms (Slow)"];
 
-pub static FAST_SCROLL_OPTIONS: [&'static str; 2] = ["Off", "Accelerated"];
-
 pub static F_KEY_TIMEOUT_OPTIONS: [&'static str; 5] = ["Toggle", "1s", "2s", "3s", "5s"];
 
 pub static AUTO_LOCK_OPTIONS: [&'static str; 5] = ["Off", "15s", "30s", "1 min", "2 min"];
@@ -49,11 +47,7 @@ pub static BUTTONS_ROOT: [SettingDef; 6] = [
         &F_KEY_TIMEOUT_OPTIONS,
         SettingField::F_KEY_TIMEOUT,
     ),
-    SettingDef::choice(
-        "Fast Scroll",
-        &FAST_SCROLL_OPTIONS,
-        SettingField::FAST_SCROLL,
-    ),
+    SettingDef::toggle("Fast Scroll", SettingField::FAST_SCROLL),
     SettingDef::submenu("Tweaks", PageId::ButtonsTweaks),
     SettingDef::submenu("Shortcuts", PageId::ButtonsShortcuts),
 ];

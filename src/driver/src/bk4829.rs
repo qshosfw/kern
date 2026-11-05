@@ -271,7 +271,7 @@ impl<'a, State> Bk4829<'a, State> {
         py32_hal::delay::delay_ms(5);
 
         // 6. Restore clean RX / idle state without resetting RF PLL or auto-calibrating VCO
-        self.write_reg(REG_SYS_POWER, rx_pwr & !0x8002);
+        self.write_reg(REG_SYS_POWER, rx_pwr);
 
         if self.rx_demod_active && self.is_squelch_open() {
             self.set_af(self.active_demod_af);
