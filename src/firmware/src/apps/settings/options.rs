@@ -37,26 +37,21 @@ fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut Sho
     }
 }
 
+#[inline(always)]
+fn make_choice(opts: &'static [&'static str], raw_byte: u8) -> MenuItemType {
+    let sel = (raw_byte as usize).min(opts.len().saturating_sub(1)) as u16;
+    MenuItemType::Choice {
+        selected: sel,
+        options: opts,
+    }
+}
+
 #[inline(never)]
 fn build_item_type(def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8) -> MenuItemType {
     match def.kind {
-        SettingKind::Choice(opts) => {
-            let raw_byte = def.field.get_u8(&ctx.config);
-            let sel = (raw_byte as usize).min(opts.len().saturating_sub(1)) as u16;
-            MenuItemType::Choice {
-                selected: sel,
-                options: opts,
-            }
-        }
+        SettingKind::Choice(opts) => make_choice(opts, def.field.get_u8(&ctx.config)),
         SettingKind::Shortcut => {
-            let raw_byte = def.field.get_u8(&ctx.config);
-            let sel = (raw_byte as usize)
-                .min(super::buttons::SHORTCUT_OPTIONS.len().saturating_sub(1))
-                as u16;
-            MenuItemType::Choice {
-                selected: sel,
-                options: &super::buttons::SHORTCUT_OPTIONS,
-            }
+            make_choice(&super::buttons::SHORTCUT_OPTIONS, def.field.get_u8(&ctx.config))
         }
         SettingKind::BatteryType => {
             let (opts, types) = super::battery::battery_options_and_types(nav_layout);
