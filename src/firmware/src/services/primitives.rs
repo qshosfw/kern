@@ -20,6 +20,15 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
             crate::system_canvas()
         }
     }
+
+    #[inline(never)]
+    fn apply_subaudible_tone(&mut self, tone: kernel::service::radio::SubaudibleTone) {
+        let ch = self.state.coord.active_channel_mut();
+        ch.rx_subaudible = tone;
+        ch.tx_subaudible = tone;
+        self.radio.set_rx_subaudible(tone);
+        self.radio.set_tx_subaudible(tone);
+    }
 }
 
 impl<'a, 'hw> DisplayPrimitive for FirmwareContext<'a, 'hw> {
@@ -300,11 +309,7 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
         } else {
             SubaudibleTone::Ctcss(freq_tenths_hz)
         };
-        let ch = self.state.coord.active_channel_mut();
-        ch.rx_subaudible = tone;
-        ch.tx_subaudible = tone;
-        self.radio.set_rx_subaudible(tone);
-        self.radio.set_tx_subaudible(tone);
+        self.apply_subaudible_tone(tone);
     }
 
     fn set_subaudible_dcs(&mut self, code: u16, inverted: bool) {
@@ -316,11 +321,7 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
         } else {
             SubaudibleTone::DcsNormal(code)
         };
-        let ch = self.state.coord.active_channel_mut();
-        ch.rx_subaudible = tone;
-        ch.tx_subaudible = tone;
-        self.radio.set_rx_subaudible(tone);
-        self.radio.set_tx_subaudible(tone);
+        self.apply_subaudible_tone(tone);
     }
 
     fn send_tail(&mut self) {
@@ -507,6 +508,15 @@ impl<'a, 'hw> AudioPrimitive for FirmwareContext<'a, 'hw> {
     }
 }
 
+#[inline(never)]
+fn app_config_path(app_name: &str) -> heapless::String<32> {
+    let mut path = heapless::String::<32>::new();
+    let _ = path.push_str("/pref/app/");
+    let _ = path.push_str(app_name);
+    let _ = path.push_str(".cfg");
+    path
+}
+
 // ── 4. Storage Primitive ────────────────────────────────────────────────────
 impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
     fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, ()> {
@@ -546,18 +556,12 @@ impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
     }
 
     fn load_config(&mut self, app_name: &str, buf: &mut [u8]) -> Result<usize, ()> {
-        let mut path = heapless::String::<32>::new();
-        let _ = path.push_str("/pref/app/");
-        let _ = path.push_str(app_name);
-        let _ = path.push_str(".cfg");
+        let path = app_config_path(app_name);
         self.storage.read_file(path.as_str(), buf).map_err(|_| ())
     }
 
     fn save_config(&mut self, app_name: &str, data: &[u8]) -> Result<(), ()> {
-        let mut path = heapless::String::<32>::new();
-        let _ = path.push_str("/pref/app/");
-        let _ = path.push_str(app_name);
-        let _ = path.push_str(".cfg");
+        let path = app_config_path(app_name);
         self.storage.write_file(path.as_str(), data).map_err(|_| ())
     }
 

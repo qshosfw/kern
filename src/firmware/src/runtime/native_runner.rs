@@ -616,45 +616,24 @@ pub unsafe fn native_on_modal_result(
         return EventResult::Ignored;
     }
 
-    let krx_ev = match r {
-        ModalResult::Dismissed(tag) => KrxEvent {
-            kind: kernel::proc::abi::KRX_EV_MODAL,
-            key: *tag,
-            flags: kernel::proc::abi::MODAL_RESULT_DISMISSED,
-            reserved: 0,
-            payload: 0,
-        },
-        ModalResult::Confirmed(tag) => KrxEvent {
-            kind: kernel::proc::abi::KRX_EV_MODAL,
-            key: *tag,
-            flags: kernel::proc::abi::MODAL_RESULT_CONFIRMED,
-            reserved: 0,
-            payload: 0,
-        },
+    let (tag, flags, payload) = match r {
+        ModalResult::Dismissed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_DISMISSED, 0),
+        ModalResult::Confirmed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CONFIRMED, 0),
         ModalResult::TextInputDone { tag, text } => {
             super::abi_bridge::store_modal_text(text);
-            KrxEvent {
-                kind: kernel::proc::abi::KRX_EV_MODAL,
-                key: *tag,
-                flags: kernel::proc::abi::MODAL_RESULT_TEXT_DONE,
-                reserved: 0,
-                payload: text.len() as u32,
-            }
+            (*tag, kernel::proc::abi::MODAL_RESULT_TEXT_DONE, text.len() as u32)
         }
-        ModalResult::SheetSelected { tag, index } => KrxEvent {
-            kind: kernel::proc::abi::KRX_EV_MODAL,
-            key: *tag,
-            flags: kernel::proc::abi::MODAL_RESULT_SHEET_SELECTED,
-            reserved: 0,
-            payload: *index as u32,
-        },
-        ModalResult::Canceled(tag) => KrxEvent {
-            kind: kernel::proc::abi::KRX_EV_MODAL,
-            key: *tag,
-            flags: kernel::proc::abi::MODAL_RESULT_CANCELED,
-            reserved: 0,
-            payload: 0,
-        },
+        ModalResult::SheetSelected { tag, index } => {
+            (*tag, kernel::proc::abi::MODAL_RESULT_SHEET_SELECTED, *index as u32)
+        }
+        ModalResult::Canceled(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CANCELED, 0),
+    };
+    let krx_ev = KrxEvent {
+        kind: kernel::proc::abi::KRX_EV_MODAL,
+        key: tag,
+        flags,
+        reserved: 0,
+        payload,
     };
 
     unsafe {
