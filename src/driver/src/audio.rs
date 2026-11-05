@@ -194,6 +194,29 @@ impl kern_platform_traits::audio::AudioPa for AudioAmplifier {
 /// - Hardware ADC channel conflict protection: re-verifies `ADC_SQR3 = 4` per batch to prevent battery telemetry hijacking
 /// - Non-blocking abort check: polls keypad matrix every 64 samples to keep the UI interactive
 /// - Microsecond timing precision across all supported MCU clock speeds
+#[inline(never)]
+unsafe fn adc_convert_single(cr2: u32) -> i32 {
+    use py32_pac as pac;
+    unsafe {
+        pac::adc::ADC_SR.write_volatile(!pac::adc::SR_EOC);
+        pac::adc::ADC_CR2.write_volatile(cr2 | pac::adc::CR2_EXTTRIG | pac::adc::CR2_SWSTART);
+        let mut timeout = 2000;
+        while (pac::adc::ADC_SR.read_volatile() & pac::adc::SR_EOC) == 0 && timeout > 0 {
+            timeout -= 1;
+        }
+        (pac::adc::ADC_DR.read_volatile() & 0x0FFF) as i32
+    }
+}
+
+#[inline(never)]
+unsafe fn adc_select_channel(ch: u32) {
+    use py32_pac as pac;
+    unsafe {
+        pac::adc::ADC_SQR1.write_volatile(0);
+        pac::adc::ADC_SQR3.write_volatile(ch);
+    }
+}
+
 pub struct AudioCaptureDriver {
     active: bool,
     rate_hz: u16,
@@ -236,23 +259,14 @@ impl AudioCaptureDriver {
                 pac::adc::ADC_CR2.write_volatile(cr2);
                 py32_hal::delay::delay_us(150);
             }
-            pac::adc::ADC_SQR1.write_volatile(0);
-            pac::adc::ADC_SQR3.write_volatile(4); // Channel 4
+            adc_select_channel(4); // Channel 4
 
             py32_hal::delay::delay_us(50);
 
             // 5. Calibrate baseline DC bias: take 8 initial conversions and average them
             let mut sum: i32 = 0;
             for _ in 0..8 {
-                pac::adc::ADC_SR.write_volatile(!pac::adc::SR_EOC);
-                pac::adc::ADC_CR2
-                    .write_volatile(cr2 | pac::adc::CR2_EXTTRIG | pac::adc::CR2_SWSTART);
-                let mut timeout = 2000;
-                while (pac::adc::ADC_SR.read_volatile() & pac::adc::SR_EOC) == 0 && timeout > 0 {
-                    timeout -= 1;
-                }
-                let raw = (pac::adc::ADC_DR.read_volatile() & 0x0FFF) as i32;
-                sum += raw;
+                sum += adc_convert_single(cr2);
             }
 
             self.rate_hz = if rate_hz == 0 {
@@ -275,8 +289,7 @@ impl AudioCaptureDriver {
             use py32_pac as pac;
 
             // Re-verify ADC is set to Channel 4 (in case battery telemetry polled Channel 8)
-            pac::adc::ADC_SQR1.write_volatile(0);
-            pac::adc::ADC_SQR3.write_volatile(4);
+            adc_select_channel(4);
 
             let period_us = (1_000_000 / (self.rate_hz as u32)).max(10);
             let cr2 = pac::adc::ADC_CR2.read_volatile();
@@ -290,16 +303,7 @@ impl AudioCaptureDriver {
                     }
                 }
 
-                pac::adc::ADC_SR.write_volatile(!pac::adc::SR_EOC);
-                pac::adc::ADC_CR2
-                    .write_volatile(cr2 | pac::adc::CR2_EXTTRIG | pac::adc::CR2_SWSTART);
-
-                let mut timeout = 2000;
-                while (pac::adc::ADC_SR.read_volatile() & pac::adc::SR_EOC) == 0 && timeout > 0 {
-                    timeout -= 1;
-                }
-
-                let raw = (pac::adc::ADC_DR.read_volatile() & 0x0FFF) as i32;
+                let raw = adc_convert_single(cr2);
 
                 // Adaptive 64-sample IIR DC-removal filter
                 self.dc_bias_est += (raw - self.dc_bias_est) >> 6;
@@ -334,8 +338,7 @@ impl AudioCaptureDriver {
             bsp::pins::VOICE_DAC.configure_analog();
 
             // 4. Restore ADC sequence to Channel 8 (Battery voltage)
-            pac::adc::ADC_SQR1.write_volatile(0);
-            pac::adc::ADC_SQR3.write_volatile(8);
+            adc_select_channel(8);
 
             self.active = false;
         }

@@ -127,6 +127,21 @@ fn filter_sunk_keys(event: &Event) -> bool {
     false
 }
 
+#[inline(never)]
+fn record_proc_event(app_id: usize) {
+    if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
+        pcb.ledger.record_event();
+    }
+}
+
+#[inline(never)]
+fn record_proc_stack(app_id: usize) {
+    if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
+        let used_stk = kernel::sys::SystemDiagnostics::stack_used_now() as u16;
+        pcb.ledger.record_stack_depth(used_stk);
+    }
+}
+
 impl Orchestrator {
     pub fn new(startup_app: usize) -> Self {
         init_proc_table();
@@ -468,14 +483,9 @@ impl Orchestrator {
         let is_key_owned = is_key_event && self.owned_key == key_code;
 
         // 3. Forward event to active foreground app
-        if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
-            pcb.ledger.record_event();
-        }
+        record_proc_event(self.active_app_id);
         let status = crate::AppRegistry::on_event(self.active_app_id, ctx, &event);
-        if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
-            let used_stk = kernel::sys::SystemDiagnostics::stack_used_now() as u16;
-            pcb.ledger.record_stack_depth(used_stk);
-        }
+        record_proc_stack(self.active_app_id);
 
         // 4. Dynamic Fault & Error Interception
         let mut fault_handled = false;
@@ -635,28 +645,23 @@ impl Orchestrator {
                 }
             }
             Event::Key {
-                code: KeyCode::Side1,
+                code: code @ (KeyCode::Side1 | KeyCode::Side2),
                 state,
             } => {
-                if let Some(cfg) = Self::handle_side_key(
-                    &mut self.side1_held,
-                    state,
-                    ctx.config.keys.f1_long,
-                    ctx.config.keys.f1_short,
-                ) {
-                    self.process_ipc_command(ctx, Shortcut::from_u8(cfg));
-                }
-            }
-            Event::Key {
-                code: KeyCode::Side2,
-                state,
-            } => {
-                if let Some(cfg) = Self::handle_side_key(
-                    &mut self.side2_held,
-                    state,
-                    ctx.config.keys.f2_long,
-                    ctx.config.keys.f2_short,
-                ) {
+                let (held, long, short) = if code == KeyCode::Side1 {
+                    (
+                        &mut self.side1_held,
+                        ctx.config.keys.f1_long,
+                        ctx.config.keys.f1_short,
+                    )
+                } else {
+                    (
+                        &mut self.side2_held,
+                        ctx.config.keys.f2_long,
+                        ctx.config.keys.f2_short,
+                    )
+                };
+                if let Some(cfg) = Self::handle_side_key(held, state, long, short) {
                     self.process_ipc_command(ctx, Shortcut::from_u8(cfg));
                 }
             }
