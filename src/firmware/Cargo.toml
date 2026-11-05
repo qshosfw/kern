@@ -7,9 +7,9 @@ edition = "2024"
 py32-pac = { path = "../platform/pac", package = "py32f071-pac" }
 py32-hal = { path = "../platform/hal" }
 bsp = { path = "../platform/bsp" }
-drivers = { path = "../driver" }
-kernel = { path = "../kernel" }
-gfx = { path = "../lib/gfx" }
+drivers = { path = "../driver", default-features = false, features = ["display"] }
+kernel = { path = "../kernel", default-features = false }
+gfx = { path = "../lib/gfx", default-features = false }
 cortex-m = { workspace = true }
 cortex-m-rt = { workspace = true }
 heapless = { workspace = true }

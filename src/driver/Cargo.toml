@@ -8,7 +8,7 @@ bsp = { path = "../platform/bsp" }
 kern-platform-traits = { path = "../platform/traits" }
 kernel = { path = "../kernel" }
 utils = { path = "../lib/utils" }
-crypto = { path = "../lib/crypto", optional = true }
+crypto = { path = "../lib/crypto" }
 cortex-m = { workspace = true }
 heapless = { workspace = true }
 kernfs = { path = "../lib/kernfs" }
@@ -17,13 +17,13 @@ embedded-hal = { workspace = true }
 py32-hal = { path = "../platform/hal" }
 
 [features]
-default = ["radio", "audio", "filesystem", "uart", "display", "secure_fs", "fm_radio", "usb", "usb_cdc"]
+default = ["radio", "audio", "filesystem", "uart", "display", "usb", "usb_cdc"]
 radio = ["kernel/radio"]
 audio = ["kernel/audio"]
 filesystem = ["kernel/filesystem"]
 uart = ["kernel/uart"]
 display = []
-secure_fs = ["crypto", "kernel/secure_fs"]
+secure_fs = ["kernel/secure_fs"]
 fm_radio = []
 usb = []
 usb_cdc = ["usb"]

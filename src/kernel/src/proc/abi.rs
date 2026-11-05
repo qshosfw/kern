@@ -48,6 +48,12 @@ pub const KRX_EV_TICK: u8 = 3;
 pub const KRX_EV_BUS: u8 = 4;
 pub const KRX_EV_USB: u8 = 5;
 pub const KRX_EV_POWER: u8 = 6;
+pub const KRX_EV_MODAL: u8 = 7;
+
+pub const KRX_MODAL_DISMISSED: u8 = 0;
+pub const KRX_MODAL_CONFIRMED: u8 = 1;
+pub const KRX_MODAL_CANCELLED: u8 = 2;
+pub const KRX_MODAL_TEXT_SUBMITTED: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -93,6 +99,11 @@ impl KrxEvent {
     #[inline(always)]
     pub const fn is_power(&self) -> bool {
         self.kind == KRX_EV_POWER
+    }
+
+    #[inline(always)]
+    pub const fn is_modal(&self) -> bool {
+        self.kind == KRX_EV_MODAL
     }
 }
 

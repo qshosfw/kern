@@ -93,11 +93,10 @@ fn draw_page_overview(
     draw_item_hex(canvas, 1, 1, right_label, right_val, hbuf);
 
     // Row 2 (y=31): Actor & Cause
-    let actor_len = slot
-        .actor_tag
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(slot.actor_tag.len());
+    let mut actor_len = 0;
+    while actor_len < slot.actor_tag.len() && slot.actor_tag[actor_len] != 0 {
+        actor_len += 1;
+    }
     let actor_str = if actor_len > 0 {
         gfx::text::from_ascii_bytes(&slot.actor_tag[..actor_len]).unwrap_or("UNKNOWN")
     } else {

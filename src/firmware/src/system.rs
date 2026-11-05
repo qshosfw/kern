@@ -5,7 +5,6 @@ use crate::services::RadioMelodyExt;
 use crate::services::power::PowerService;
 use crate::{EVENT_QUEUE, POWER_SERVICE};
 use kernel::event::{Event, KeyCode};
-#[cfg(feature = "wire")]
 use py32_hal::adc::Adc;
 
 pub fn enqueue_event(event: Event) {
@@ -163,6 +162,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     {
         hw.usb.init();
     }
+    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     hw.wire.reset_collector();
 
     // Re-initialize LCD panel and clear dirty state

@@ -457,14 +457,14 @@ impl Orchestrator {
 
         // Key ownership tracking: if a key was consumed on Pressed, subsequent
         // Held/Released events for that key belong strictly to the active app.
-        let is_key_event = matches!(event, Event::Key { .. });
         let (key_code, key_state) = match event {
             Event::Key { code, state } => (Some(code), Some(state)),
             _ => (None, None),
         };
+        let is_key_event = key_code.is_some();
 
         // If this key is owned by the app and state is Held or Released, do not leak to global shortcuts
-        let is_key_owned = key_code.is_some() && self.owned_key == key_code;
+        let is_key_owned = is_key_event && self.owned_key == key_code;
 
         // 3. Forward event to active foreground app
         if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {

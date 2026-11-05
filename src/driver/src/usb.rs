@@ -133,6 +133,11 @@ impl UsbDriver {
 
     /// Initialize the USBD peripheral clock and arm bus state detection interrupts.
     pub fn init(&mut self) {
+        // Guarantee bus clock is at 48 MHz required by USB 2.0 Full-Speed PHY
+        if py32_hal::rcc::sysclk_hz() != 48_000_000 {
+            py32_hal::rcc::set_sysclk_48mhz();
+        }
+
         // 1. Enable peripheral clock on APB1, SYSCFG on APB2, GPIOA, and cycle reset
         py32_hal::rcc::enable_usbd();
 
@@ -514,12 +519,13 @@ impl UsbDriver {
     }
 
     #[inline(never)]
+    #[allow(unused_variables)]
     fn handle_class_request(
         &mut self,
-        _req_type: u8,
+        req_type: u8,
         request: u8,
-        _value: u16,
-        _index: u16,
+        value: u16,
+        index: u16,
         length: u16,
     ) {
         #[cfg(feature = "usb_msc")]
@@ -536,7 +542,7 @@ impl UsbDriver {
 
         #[cfg(feature = "usb_cdc")]
         if request == cdc::CDC_REQ_SET_CONTROL_LINE_STATE {
-            self.cdc.set_control_line_state(_value);
+            self.cdc.set_control_line_state(value);
             self.ep0_send_zlp();
             return;
         } else if request == cdc::CDC_REQ_GET_LINE_CODING {

@@ -406,6 +406,7 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
         }
 
         if let Event::Key { code, state } = *event {
+            let is_direct_key = code == KeyCode::Menu || matches!(code.to_digit(), Some(1..=6));
             match state {
                 KeyState::Pressed => {
                     if code == KeyCode::Exit {
@@ -423,23 +424,15 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
                     }
 
                     // Direct numeric keypad 1-touch app / tool launch matching 3x2 grid or list
-                    let direct_idx = match code {
-                        KeyCode::Key1 => Some(0),
-                        KeyCode::Key2 => Some(1),
-                        KeyCode::Key3 => Some(2),
-                        KeyCode::Key4 => Some(3),
-                        KeyCode::Key5 => Some(4),
-                        KeyCode::Key6 => Some(5),
-                        KeyCode::Key0 => {
+                    if let Some(digit) = code.to_digit() {
+                        if digit == 0 {
                             self.execute_target(
                                 ctx,
                                 LauncherTarget::Shortcut(Shortcut::Flashlight),
                             );
                             return EventResult::Consumed;
                         }
-                        _ => None,
-                    };
-                    if let Some(idx) = direct_idx {
+                        let idx = (digit - 1) as usize;
                         if idx < self.model.items.len() {
                             self.model.selected_idx = idx;
                             if is_list_mode {
@@ -454,34 +447,14 @@ impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
                     }
                 }
                 KeyState::Held => {
-                    if matches!(
-                        code,
-                        KeyCode::Menu
-                            | KeyCode::Key1
-                            | KeyCode::Key2
-                            | KeyCode::Key3
-                            | KeyCode::Key4
-                            | KeyCode::Key5
-                            | KeyCode::Key6
-                    ) {
+                    if is_direct_key {
                         self.is_pressed = true;
                         self.model.is_pressed = true;
                         return EventResult::Consumed;
                     }
                 }
                 KeyState::Released => {
-                    if self.is_pressed
-                        && matches!(
-                            code,
-                            KeyCode::Menu
-                                | KeyCode::Key1
-                                | KeyCode::Key2
-                                | KeyCode::Key3
-                                | KeyCode::Key4
-                                | KeyCode::Key5
-                                | KeyCode::Key6
-                        )
-                    {
+                    if self.is_pressed && is_direct_key {
                         self.is_pressed = false;
                         if let Some(entry) = self.model.selected_item() {
                             let target = entry.target;

@@ -90,9 +90,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         let nonce = Self::derive_path_nonce(path);
         Ascon128::new(SYSTEM_KEY).apply_keystream(&nonce, data);
     }
-
-    #[cfg(not(feature = "secure_fs"))]
-    fn crypt_payload(_path: &str, _data: &mut [u8]) {}
 }
 
 impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
