@@ -262,8 +262,8 @@ impl LauncherApp {
         let visible_count = 4;
         let row_height = 13i16;
         let scroll_y = self.scroller.current();
-        let start_row = (scroll_y / row_height).max(0) as usize;
-        let end_row = (((scroll_y + 52 + 12) / row_height) as usize).min(total);
+        let start_row = self.scroll_top;
+        let end_row = (self.scroll_top + 5).min(total);
 
         let is_active_selection = self.model.is_pressed || self.is_launching;
 
@@ -349,7 +349,7 @@ impl LauncherApp {
                 125,
                 9,
                 52,
-                (self.scroller.current().max(0) as usize) / (row_height as usize),
+                self.scroll_top,
                 total,
                 visible_count,
             );
