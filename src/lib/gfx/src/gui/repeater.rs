@@ -65,11 +65,9 @@ impl KeyRepeater {
                     self.ticks = 0;
                 }
             }
-            KeyState::Released => {
-                if self.active_key == (code as u8) + 1 {
-                    self.active_key = 0;
-                    self.ticks = 0;
-                }
+            KeyState::Released if self.active_key == (code as u8) + 1 => {
+                self.active_key = 0;
+                self.ticks = 0;
             }
             _ => {}
         }
@@ -95,7 +93,7 @@ impl KeyRepeater {
                 } else {
                     self.repeat_rate_ticks.max(1)
                 };
-                if repeat_ticks % rate == 0 {
+                if repeat_ticks.is_multiple_of(rate) {
                     return Some(key);
                 }
             }

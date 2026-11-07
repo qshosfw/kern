@@ -18,7 +18,7 @@ use crate::IOPORT_BASE;
 
 // ── Port Base Addresses ─────────────────────────────────────────────────────
 
-pub const GPIOA_BASE: u32 = IOPORT_BASE + 0x0000;
+pub const GPIOA_BASE: u32 = IOPORT_BASE;
 pub const GPIOB_BASE: u32 = IOPORT_BASE + 0x0400;
 pub const GPIOC_BASE: u32 = IOPORT_BASE + 0x0800;
 pub const GPIOF_BASE: u32 = IOPORT_BASE + 0x1400;

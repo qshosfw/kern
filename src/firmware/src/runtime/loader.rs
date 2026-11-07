@@ -134,20 +134,22 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     let mut ident_body: Option<&[u8]> = None;
     let mut type_body: Option<&[u8]> = None;
     let mut exec_body: Option<&[u8]> = None;
-    let mut cap_imports_body: Option<&[u8]> = None;
-    let mut block_map_body: Option<&[u8]> = None;
-    let mut leaf_map_body: Option<&[u8]> = None;
-    let mut service_exports_body: Option<&[u8]> = None;
+    #[cfg(feature = "krx_native")]
+    let mut aux = super::native_runner::KrxAuxSections::default();
 
     for (hdr, body) in kernel::proc::krx::KrxSectionIterator::new(&hdr_buf, header_len) {
         match hdr.id {
             SECTION_IDENTITY => ident_body = Some(body),
             SECTION_TYPE_LIFECYCLE => type_body = Some(body),
             SECTION_EXECUTION => exec_body = Some(body),
-            SECTION_CAP_IMPORTS => cap_imports_body = Some(body),
-            SECTION_BLOCK_MAP => block_map_body = Some(body),
-            SECTION_LEAF_MAP => leaf_map_body = Some(body),
-            SECTION_SERVICE_EXPORTS => service_exports_body = Some(body),
+            #[cfg(feature = "krx_native")]
+            SECTION_CAP_IMPORTS => aux.cap_imports = Some(body),
+            #[cfg(feature = "krx_native")]
+            SECTION_BLOCK_MAP => aux.block_map = Some(body),
+            #[cfg(feature = "krx_native")]
+            SECTION_LEAF_MAP => aux.leaf_map = Some(body),
+            #[cfg(feature = "krx_native")]
+            SECTION_SERVICE_EXPORTS => aux.service_exports = Some(body),
             _ => {}
         }
     }
@@ -277,10 +279,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 path,
                 &preamble,
                 &exec_sec,
-                cap_imports_body,
-                block_map_body,
-                leaf_map_body,
-                service_exports_body,
+                &aux,
                 required_caps,
             )?;
 

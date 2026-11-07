@@ -15,7 +15,7 @@ pub fn read_passcode_key(
     let n = filesystem
         .read_struct(PATH_PASSCODE_KEY, key)
         .map_err(|_| PasscodeError::StorageError)?;
-    if n >= min_len && key.magic == *MAGIC_PASSCODE_KEY {
+    if n >= min_len && key.ident == *FILE_ID_PASSCODE_KEY {
         Ok(())
     } else {
         Err(PasscodeError::StorageError)
@@ -107,13 +107,13 @@ pub fn is_passcode_set(filesystem: &mut SystemStorage) -> bool {
 fn hash_file_slice(
     filesystem: &mut SystemStorage,
     path: &str,
-    magic: Option<&[u8; 4]>,
+    ident: Option<&[u8; 4]>,
     offset: usize,
     len: usize,
 ) -> Option<u32> {
     let mut buf = [0u8; 72];
     if let Ok(n) = filesystem.read_file(path, &mut buf) {
-        if n >= offset + len && magic.map_or(true, |m| n >= 4 && &buf[..4] == m) {
+        if n >= offset + len && ident.map_or(true, |id| n >= 4 && &buf[..4] == id) {
             return Some(fnv1a_32(&buf[offset..offset + len]));
         }
     }
@@ -122,7 +122,13 @@ fn hash_file_slice(
 
 /// Returns the 32-bit FNV-1a hash of the Device Key signature in `/sys/device.key`.
 pub fn get_device_key_hash(filesystem: &mut SystemStorage) -> Option<u32> {
-    hash_file_slice(filesystem, PATH_DEVICE_KEY, Some(MAGIC_DEVICE_KEY), 20, 16)
+    hash_file_slice(
+        filesystem,
+        PATH_DEVICE_KEY,
+        Some(FILE_ID_DEVICE_KEY),
+        20,
+        16,
+    )
 }
 
 /// Returns the 32-bit FNV-1a hash of the Storage Master Key.
@@ -133,7 +139,7 @@ pub fn get_master_key_hash(filesystem: &mut SystemStorage, state: &PasscodeState
     hash_file_slice(
         filesystem,
         PATH_STORAGE_KEY,
-        Some(MAGIC_STORAGE_KEY),
+        Some(FILE_ID_STORAGE_KEY),
         36,
         32,
     )
@@ -200,7 +206,7 @@ pub fn write_wrapped_storage_key(
     progress: Option<ProgressHook>,
 ) -> Result<(), PasscodeError> {
     let mut sto_key = PackedStorageKey {
-        magic: *MAGIC_STORAGE_KEY,
+        ident: *FILE_ID_STORAGE_KEY,
         storage_nonce: *storage_nonce,
         salt: *salt,
         encrypted_mk: *state.master_key.as_slice(),

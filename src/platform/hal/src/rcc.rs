@@ -165,7 +165,7 @@ pub fn sysclk_hz() -> u32 {
         };
 
         // Apply AHB prescaler (HPRE[3:0])
-        let hpre = ((cfgr >> 4) & 0x0F) as u32;
+        let hpre = (cfgr >> 4) & 0x0F;
         let shift = if hpre >= 8 { (hpre - 7).min(9) } else { 0 };
         base_clk >> shift
     }

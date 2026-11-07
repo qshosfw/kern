@@ -36,6 +36,41 @@ pub enum CssTailMode {
     PhaseShift120Deg,
     /// 180-degree phase shift in subaudible tone prior to unkeying.
     PhaseShift180Deg,
+    /// 240-degree phase shift in subaudible tone prior to unkeying.
+    PhaseShift240Deg,
+}
+
+/// Compute the 23-bit TIA-603 Golay (23,12) codeword for an octal DCS code (e.g., `23` for D023N).
+///
+/// Uses the standard DCS generator polynomial `g(x) = 0xC75` in 12 shift-XOR steps
+/// with zero lookup tables.
+pub const fn dcs_octal_to_golay23(octal_code: u16) -> u32 {
+    let code_9bit = if octal_code > 0 && {
+        let d0 = octal_code % 10;
+        let d1 = (octal_code / 10) % 10;
+        let d2 = (octal_code / 100) % 10;
+        d0 < 8 && d1 < 8 && d2 < 8 && octal_code <= 777
+    } {
+        let d0 = octal_code % 10;
+        let d1 = (octal_code / 10) % 10;
+        let d2 = (octal_code / 100) % 10;
+        (d2 << 6) | (d1 << 3) | d0
+    } else {
+        octal_code & 0x01FF
+    };
+
+    let info12 = (0b100u32 << 9) | (code_9bit as u32);
+    let mut rem = info12;
+    let mut i = 0;
+    while i < 12 {
+        if (rem & 1) != 0 {
+            rem = (rem >> 1) ^ 0x0C75;
+        } else {
+            rem >>= 1;
+        }
+        i += 1;
+    }
+    ((rem & 0x07FF) << 12) | info12
 }
 
 /// 50 Standard EIA/TIA CTCSS Frequencies (in deci-Hz: 67.0 Hz to 254.1 Hz).
@@ -51,6 +86,12 @@ pub trait RfSubaudible {
     fn set_tx_subaudible(&mut self, tone: SubaudibleTone);
     fn is_subaudible_matched(&mut self) -> bool;
     fn send_css_tail(&mut self, mode: CssTailMode);
+
+    /// Check if hardware detected a subaudible reverse burst (120°/180°/240° phase inversion)
+    /// or 55 Hz CTC2 squelch tail elimination burst (`Reg 0x0C` bits `[13:11]`).
+    fn has_tail_burst_detected(&mut self) -> bool {
+        false
+    }
 }
 
 /// Receiver Squelch Tail Elimination (STE) operational state.
@@ -81,6 +122,27 @@ impl RxSteController {
     #[inline(always)]
     pub fn reset(&mut self) {
         self.state = RxSteState::Idle;
+    }
+
+    /// Process a 10ms tick with optional hardware reverse-burst / 55 Hz tail detection.
+    pub fn process_tick_with_tail(
+        &mut self,
+        carrier_open: bool,
+        tone_configured: bool,
+        tone_present: bool,
+        tail_burst_detected: bool,
+    ) -> Option<bool> {
+        if !carrier_open {
+            self.state = RxSteState::Idle;
+            return None;
+        }
+        // Instantaneous reverse-burst (120°/180°/240° phase shift) or 55 Hz CTC2 tail detection:
+        // Mute immediately on the first tick even if no RX CTCSS filter was configured!
+        if tail_burst_detected && !matches!(self.state, RxSteState::Muted { .. }) {
+            self.state = RxSteState::Muted { mute_count: 0 };
+            return Some(true);
+        }
+        self.process_tick(carrier_open, tone_configured, tone_present)
     }
 
     /// Process a 10ms tick.
@@ -251,5 +313,25 @@ mod tests {
 
         ste.process_tick(false, true, true);
         assert_eq!(ste.state, RxSteState::Idle);
+    }
+
+    #[test]
+    fn test_ste_instant_reverse_burst_tail_mute() {
+        let mut ste = RxSteController::new();
+        ste.process_tick_with_tail(true, true, true, false);
+        assert_eq!(ste.state, RxSteState::Monitoring);
+
+        // Hardware detects 120/180/240 deg phase shift or 55 Hz CTC2 tail -> mutes on very first tick!
+        let res = ste.process_tick_with_tail(true, true, true, true);
+        assert_eq!(res, Some(true));
+        assert_eq!(ste.state, RxSteState::Muted { mute_count: 0 });
+    }
+
+    #[test]
+    fn test_dcs_octal_to_golay23() {
+        // D023N (octal 023 = 0x013, with bit 9 marker = 0x813) produces 23-bit codeword
+        let cw023 = dcs_octal_to_golay23(23);
+        assert_eq!(cw023 & 0x0FFF, (0b100 << 9) | 0o023);
+        assert_ne!(cw023 >> 12, 0);
     }
 }

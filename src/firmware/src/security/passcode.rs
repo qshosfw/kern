@@ -26,7 +26,7 @@ pub fn unwrap_master_key(
 ) -> bool {
     let mut sto_key = PackedStorageKey::empty();
     if let Ok(sn) = filesystem.read_struct(PATH_STORAGE_KEY, &mut sto_key) {
-        if sn >= core::mem::size_of::<PackedStorageKey>() && sto_key.magic == *MAGIC_STORAGE_KEY {
+        if sn >= core::mem::size_of::<PackedStorageKey>() && sto_key.ident == *FILE_ID_STORAGE_KEY {
             let mut mk = sto_key.encrypted_mk;
             super::keychain::xor_derived_key(
                 uid,
@@ -78,7 +78,7 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
                 let mut sto_key = PackedStorageKey::empty();
                 if let Ok(sn) = filesystem.read_struct(PATH_STORAGE_KEY, &mut sto_key) {
                     if sn >= core::mem::size_of::<PackedStorageKey>()
-                        && sto_key.magic == *MAGIC_STORAGE_KEY
+                        && sto_key.ident == *FILE_ID_STORAGE_KEY
                     {
                         let _ = write_wrapped_storage_key(
                             filesystem,
@@ -106,7 +106,7 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
                 key.mac = super::keychain::compute_hw_mac(
                     &uid,
                     &key.salt,
-                    MAGIC_PASSCODE_KEY,
+                    FILE_ID_PASSCODE_KEY,
                     &key.passcode_verifier,
                 );
                 let _ = filesystem.write_struct(PATH_PASSCODE_KEY, &key);
@@ -214,14 +214,14 @@ pub fn verify_passcode(
             key.mac = super::keychain::compute_hw_mac(
                 &uid_current,
                 &key.salt,
-                MAGIC_PASSCODE_KEY,
+                FILE_ID_PASSCODE_KEY,
                 &key.passcode_verifier,
             );
 
             let mut sto_key = PackedStorageKey::empty();
             if let Ok(sn) = filesystem.read_struct(PATH_STORAGE_KEY, &mut sto_key) {
                 if sn >= core::mem::size_of::<PackedStorageKey>()
-                    && sto_key.magic == *MAGIC_STORAGE_KEY
+                    && sto_key.ident == *FILE_ID_STORAGE_KEY
                 {
                     let _ = write_wrapped_storage_key(
                         filesystem,
@@ -305,7 +305,7 @@ pub fn set_passcode(
     let mac = super::keychain::compute_hw_mac(
         &uid,
         passcode_salt,
-        MAGIC_PASSCODE_KEY,
+        FILE_ID_PASSCODE_KEY,
         passcode_verifier.as_slice(),
     );
 
@@ -324,7 +324,7 @@ pub fn set_passcode(
         });
 
     let passcode_key = PackedPasscodeKey {
-        magic: *MAGIC_PASSCODE_KEY,
+        ident: *FILE_ID_PASSCODE_KEY,
         flags,
         failed_attempts: 0,
         passcode_len: new_passcode.len() as u8,
@@ -399,7 +399,7 @@ pub fn disable_passcode(
     );
 
     let passcode_key = PackedPasscodeKey {
-        magic: *MAGIC_PASSCODE_KEY,
+        ident: *FILE_ID_PASSCODE_KEY,
         flags: 0,
         failed_attempts: 0,
         passcode_len: 0,

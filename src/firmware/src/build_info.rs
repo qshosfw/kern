@@ -6,7 +6,7 @@
 
 #[repr(C, packed)]
 pub struct FirmwareMeta {
-    pub magic: [u8; 4], // "KERN"
+    pub ident: [u8; 4], // "KERN"
     pub version_major: u8,
     pub version_minor: u8,
     pub version_patch: u8,
@@ -19,7 +19,7 @@ pub struct FirmwareMeta {
 #[used]
 #[unsafe(link_section = ".rodata.fw_meta")]
 pub static FW_METADATA: FirmwareMeta = FirmwareMeta {
-    magic: *b"KERN",
+    ident: *b"KERN",
     version_major: 0,
     version_minor: 1,
     version_patch: 0,

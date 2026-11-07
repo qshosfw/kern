@@ -32,7 +32,7 @@ pub fn draw_hex_view(
     buf[idx] = b'|';
     idx += 1;
     for &b in bytes {
-        buf[idx] = if b >= 32 && b <= 126 { b } else { b'.' };
+        buf[idx] = if (32..=126).contains(&b) { b } else { b'.' };
         idx += 1;
     }
 

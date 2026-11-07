@@ -137,7 +137,7 @@ impl RadioBus {
     }
 }
 
-impl crate::hw::Bk4829Bus for RadioBus {
+impl kern_platform_traits::radio::RadioBus for RadioBus {
     fn read_reg(&mut self, addr: u8) -> u16 {
         board_pins::BK_CSN.set_high();
         board_pins::BK_SCL.set_low();
@@ -248,7 +248,7 @@ impl LedPattern {
 
 impl Board {
     pub fn set_status_led(bus: &mut RadioBus, led: StatusLed) {
-        use crate::hw::Bk4829Bus;
+        use kern_platform_traits::radio::RadioBus as _;
         board_pins::BK_CSN.configure_output(py32_pac::gpio::SPEED_LOW);
         board_pins::BK_SCL.configure_output(py32_pac::gpio::SPEED_MEDIUM);
         board_pins::BK_SDA.configure_output(py32_pac::gpio::SPEED_LOW);

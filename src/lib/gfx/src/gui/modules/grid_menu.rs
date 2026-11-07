@@ -122,7 +122,7 @@ impl GridMenuView {
             model.selected_idx += 3;
         } else {
             // Wrap to top row
-            model.selected_idx = model.selected_idx % 3;
+            model.selected_idx %= 3;
         }
     }
 
@@ -188,6 +188,12 @@ impl GridMenuView {
     }
 }
 
+impl Default for GridMenuView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
     fn on_event(&mut self, model: &mut GridMenuModel<T>, event: &Event) -> bool {
         if model.items.is_empty() {
@@ -199,7 +205,7 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
             return self
                 .repeater
                 .tick()
-                .map_or(false, |code| Self::handle_nav_key(model, code));
+                .is_some_and(|code| Self::handle_nav_key(model, code));
         }
 
         if let Event::Key { code, state } = event {
@@ -308,7 +314,7 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
         }
 
         // Page Indicator Dots (only shown when multiple pages exist)
-        let total_pages = (total_items + items_per_page - 1) / items_per_page;
+        let total_pages = total_items.div_ceil(items_per_page);
         if total_pages > 1 {
             let dot_spacing = 6u8;
             let dots_total_width = (total_pages as u8 - 1) * dot_spacing;

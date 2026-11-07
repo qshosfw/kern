@@ -538,34 +538,36 @@ impl MenuView {
                 }
             }
 
-            if *state == KeyState::Held {
-                if matches!(code, KeyCode::Menu | KeyCode::Key5) {
-                    return true;
-                }
+            if *state == KeyState::Held && matches!(code, KeyCode::Menu | KeyCode::Key5) {
+                return true;
             }
         }
         false
     }
 }
 
+impl Default for MenuView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn apply_change_dir(item: &mut MenuItem, dir: ChangeDir) {
     match dir {
-        ChangeDir::RightInc => match &mut item.item_type {
-            MenuItemType::Range { val, max, step, .. } => {
-                if *val < *max {
-                    *val = (*val + *step).min(*max);
-                }
+        ChangeDir::RightInc => {
+            if let MenuItemType::Range { val, max, step, .. } = &mut item.item_type
+                && *val < *max
+            {
+                *val = (*val + *step).min(*max);
             }
-            _ => {}
-        },
-        ChangeDir::LeftDec => match &mut item.item_type {
-            MenuItemType::Range { val, min, step, .. } => {
-                if *val > *min {
-                    *val = (*val - *step).max(*min);
-                }
+        }
+        ChangeDir::LeftDec => {
+            if let MenuItemType::Range { val, min, step, .. } = &mut item.item_type
+                && *val > *min
+            {
+                *val = (*val - *step).max(*min);
             }
-            _ => {}
-        },
+        }
     }
 }
 
@@ -694,7 +696,7 @@ fn render_menu_row(
     let sw = if val_str.is_empty() {
         0
     } else {
-        text::str_width(val_str, &TOMTHUMB) as i16
+        text::str_width(val_str, &TOMTHUMB)
     };
     let title_max = if sw > 0 {
         (114 - sw).max(30)
@@ -915,34 +917,34 @@ pub fn handle_sheet_event_with_repeater(
     let total = sheet.options.len();
 
     if let Event::Tick = event {
-        if let Some(code) = repeater.tick() {
-            if let Some(down) = sheet_nav_dir(code) {
-                let prev = sheet.hover;
-                if total <= 4 {
-                    // Small sheet: clamp between 0 and total - 1 without wrapping
-                    if down {
-                        if sheet.hover + 1 < total {
-                            sheet.hover += 1;
-                        }
-                    } else if sheet.hover > 0 {
-                        sheet.hover -= 1;
-                    }
-                } else if down {
+        if let Some(code) = repeater.tick()
+            && let Some(down) = sheet_nav_dir(code)
+        {
+            let prev = sheet.hover;
+            if total <= 4 {
+                // Small sheet: clamp between 0 and total - 1 without wrapping
+                if down {
                     if sheet.hover + 1 < total {
                         sheet.hover += 1;
-                    } else {
-                        sheet.hover = 0;
-                        repeater.pause(6);
                     }
                 } else if sheet.hover > 0 {
                     sheet.hover -= 1;
+                }
+            } else if down {
+                if sheet.hover + 1 < total {
+                    sheet.hover += 1;
                 } else {
-                    sheet.hover = total - 1;
+                    sheet.hover = 0;
                     repeater.pause(6);
                 }
-                if sheet.hover != prev {
-                    return SheetResult::Changed;
-                }
+            } else if sheet.hover > 0 {
+                sheet.hover -= 1;
+            } else {
+                sheet.hover = total - 1;
+                repeater.pause(6);
+            }
+            if sheet.hover != prev {
+                return SheetResult::Changed;
             }
         }
         return SheetResult::None;
@@ -968,12 +970,12 @@ pub fn handle_sheet_event_with_repeater(
                         _ => {}
                     }
                 }
-                KeyState::Released => {
-                    if sheet.is_pressed && matches!(code, KeyCode::Menu | KeyCode::Key5) {
-                        sheet.is_pressed = false;
-                        sheet.selected = sheet.hover;
-                        return SheetResult::Confirmed(sheet.hover);
-                    }
+                KeyState::Released
+                    if sheet.is_pressed && matches!(code, KeyCode::Menu | KeyCode::Key5) =>
+                {
+                    sheet.is_pressed = false;
+                    sheet.selected = sheet.hover;
+                    return SheetResult::Confirmed(sheet.hover);
                 }
                 _ => {}
             }

@@ -140,7 +140,7 @@ pub enum StorageError {
     NotFound,
     IoError,
     CorruptedData,
-    InvalidMagic,
+    InvalidIdent,
     CapacityFull,
     AccessDenied,
     EncryptedNoKey,

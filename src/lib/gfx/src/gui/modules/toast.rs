@@ -48,11 +48,23 @@ impl ToastModel {
     }
 }
 
+impl Default for ToastModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct ToastView;
 
 impl ToastView {
     pub const fn new() -> Self {
         Self
+    }
+}
+
+impl Default for ToastView {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

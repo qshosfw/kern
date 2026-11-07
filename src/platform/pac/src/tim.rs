@@ -5,7 +5,7 @@
 use crate::APB1_BASE;
 
 pub const TIM1_BASE: u32 = 0x4001_2C00;
-pub const TIM2_BASE: u32 = APB1_BASE + 0x0000; // 0x4000_0000
+pub const TIM2_BASE: u32 = APB1_BASE; // 0x4000_0000
 pub const TIM3_BASE: u32 = 0x4000_0400;
 pub const TIM6_BASE: u32 = 0x4000_1000;
 pub const TIM7_BASE: u32 = 0x4000_1400;
@@ -19,7 +19,7 @@ pub struct TimerInstance(pub u32);
 impl TimerInstance {
     #[inline(always)]
     pub fn cr1(&self) -> *mut u32 {
-        (self.0 + 0x00) as *mut u32
+        self.0 as *mut u32
     }
     #[inline(always)]
     pub fn cr2(&self) -> *mut u32 {

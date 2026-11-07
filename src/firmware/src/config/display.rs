@@ -19,7 +19,7 @@ pub struct DisplayConfig {
 
 impl DisplayConfig {
     pub const fn new() -> Self {
-        let mut cfg = Self {
+        Self {
             version: 3,
             backlight_mode: 1,
             backlight_max: 10,
@@ -32,16 +32,9 @@ impl DisplayConfig {
             shading_mode: 1,         // Dither (1-bit Bayer) by default: 100% flicker-free on ST7565
             ui_animations: 1,        // Kinetic animations On by default
             refresh_rate: 1,         // 60 Hz by default (matches 16ms LC response time & flashmap)
-            splash_path: [0; 32],
+            splash_path: *b"/user/splash/01_quansheng.rle\0\0\0",
             crc32: 0,
-        };
-        const DEF_PATH: &[u8] = b"/user/splash/01_quansheng.rle";
-        let mut i = 0;
-        while i < DEF_PATH.len() {
-            cfg.splash_path[i] = DEF_PATH[i];
-            i += 1;
         }
-        cfg
     }
 
     #[inline(always)]

@@ -30,6 +30,12 @@ impl SecretBuffer {
     }
 }
 
+impl Default for SecretBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for SecretBuffer {
     fn drop(&mut self) {
         unsafe {
@@ -72,6 +78,12 @@ impl SecretBuffer16 {
                 core::ptr::write_volatile(byte, 0);
             }
         }
+    }
+}
+
+impl Default for SecretBuffer16 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

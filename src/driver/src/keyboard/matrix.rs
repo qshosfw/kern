@@ -78,12 +78,12 @@ pub fn poll_raw_mask() -> u32 {
                 | ((row_bits & 4) >> 1)
                 | ((row_bits & 8) >> 3);
             if j == 0 {
-                side_keys = (rev & 0x03) as u32;
+                side_keys = rev & 0x03;
                 mask |= side_keys;
             } else {
                 // If Side1 is pressed (PB15 grounded), mask out Row 0 (bit 0 of rev)
                 // If Side2 is pressed (PB14 grounded), mask out Row 1 (bit 1 of rev)
-                let mut col_rev = rev as u32;
+                let mut col_rev = rev;
                 if (side_keys & 1) != 0 {
                     col_rev &= !1;
                 }

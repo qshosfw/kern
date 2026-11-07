@@ -1,9 +1,9 @@
 //! High-Level Coordinated Microkernel Primitives Implementation (§8.2 / KRX-ABI 2.5.0).
 //!
-//! Exposes the complete 12 primitive interfaces on `FirmwareContext` with full subsystem
+//! Exposes the complete 12 primitive interfaces on `SysContext` with full subsystem
 //! coordination (RadioCoordinator, Audio priority ladder, Canvas compositor, KernFS, Keypad).
 
-use crate::services::FirmwareContext;
+use crate::services::SysContext;
 use kernel::proc::primitives::*;
 #[cfg(feature = "rf_fsk")]
 use kernel::service::radio::{FskBaudRate, FskPhyConfig};
@@ -11,9 +11,14 @@ use kernel::service::radio::{RfAudioPath, RfChannel, RfModulation, RfSquelch, Rf
 use kernel::service::{DisplayService, PowerService};
 
 // ── 1. Display Primitive ────────────────────────────────────────────────────
-impl<'a, 'hw> FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> SysContext<'a, 'hw> {
     #[inline(always)]
     fn active_canvas(&mut self) -> &mut gfx::Canvas {
+        unsafe {
+            if !crate::runtime::syscall::ACTIVE_CANVAS.is_null() {
+                return &mut *crate::runtime::syscall::ACTIVE_CANVAS;
+            }
+        }
         if let Some(ref mut d) = self.display {
             d.canvas
         } else {
@@ -31,7 +36,7 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
     }
 }
 
-impl<'a, 'hw> DisplayPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
     fn clear(&mut self) {
         self.active_canvas().clear();
     }
@@ -174,7 +179,7 @@ impl<'a, 'hw> DisplayPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 2. Radio Primitive ──────────────────────────────────────────────────────
-impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
     fn tune(&mut self, freq_hz: u32, bw_hz: u32, step_hz: u32) {
         use kernel::service::radio::{Bandwidth, StepSetting};
         use utils::units::Frequency;
@@ -438,7 +443,7 @@ impl<'a, 'hw> RadioPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 3. Audio Primitive ──────────────────────────────────────────────────────
-impl<'a, 'hw> AudioPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> AudioPrimitive for SysContext<'a, 'hw> {
     fn play_tone(&mut self, freq_hz: u16, duration_ms: u16) {
         self.play_tone(freq_hz, duration_ms);
     }
@@ -518,7 +523,7 @@ fn app_config_path(app_name: &str) -> heapless::String<32> {
 }
 
 // ── 4. Storage Primitive ────────────────────────────────────────────────────
-impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
     fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, ()> {
         self.storage.read_file(path, buf).map_err(|_| ())
     }
@@ -619,7 +624,7 @@ impl<'a, 'hw> StoragePrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 5. Keypad Primitive ─────────────────────────────────────────────────────
-impl<'a, 'hw> KeypadPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> KeypadPrimitive for SysContext<'a, 'hw> {
     fn poll_key(&mut self) -> Option<u8> {
         drivers::keyboard::KeypadScanner::poll_matrix().map(|k| k as u8)
     }
@@ -666,7 +671,7 @@ impl<'a, 'hw> KeypadPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 6. Power Primitive ──────────────────────────────────────────────────────
-impl<'a, 'hw> PowerPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> PowerPrimitive for SysContext<'a, 'hw> {
     fn battery_mv(&self) -> u16 {
         self.power.battery_voltage_mv()
     }
@@ -740,7 +745,7 @@ impl<'a, 'hw> PowerPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 7. Serial Primitive ─────────────────────────────────────────────────────
-impl<'a, 'hw> SerialPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> SerialPrimitive for SysContext<'a, 'hw> {
     fn flush(&mut self) {
         py32_hal::uart::wait_tx_complete();
     }
@@ -792,7 +797,7 @@ impl<'a, 'hw> SerialPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 8. Timer Primitive ──────────────────────────────────────────────────────
-impl<'a, 'hw> TimerPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> TimerPrimitive for SysContext<'a, 'hw> {
     fn uptime_secs(&self) -> u32 {
         py32_hal::delay::millis() / 1000
     }
@@ -815,7 +820,7 @@ impl<'a, 'hw> TimerPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 9. UI Modal Primitive ───────────────────────────────────────────────────
-impl<'a, 'hw> UiPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> UiPrimitive for SysContext<'a, 'hw> {
     fn show_popup(&mut self, tag: u8, title: &'static str, message: &str) {
         self.show_popup_str(tag, title, message);
     }
@@ -841,7 +846,7 @@ impl<'a, 'hw> UiPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 10. Math Primitive ──────────────────────────────────────────────────────
-impl<'a, 'hw> MathPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> MathPrimitive for SysContext<'a, 'hw> {
     fn crc32(&self, data: &[u8]) -> u32 {
         crypto::crc::CrcEngine::crc32(data)
     }
@@ -869,7 +874,7 @@ impl<'a, 'hw> MathPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 11. FM Broadcast Tuner Primitive ────────────────────────────────────────
-impl<'a, 'hw> FmPrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> FmPrimitive for SysContext<'a, 'hw> {
     fn fm_tune(&mut self, freq_100khz: u16) {
         #[cfg(feature = "fm_radio")]
         {
@@ -918,7 +923,7 @@ impl<'a, 'hw> FmPrimitive for FirmwareContext<'a, 'hw> {
 }
 
 // ── 12. Service & IPC Primitive ─────────────────────────────────────────────
-impl<'a, 'hw> ServicePrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> ServicePrimitive for SysContext<'a, 'hw> {
     fn post_event(&mut self, event_id: u32) -> bool {
         self.post_event(kernel::ipc::SysEvent {
             target: (event_id >> 16) as u8,
@@ -955,7 +960,7 @@ fn i2c_bus_op(addr: u8, reg: u8, op2: embedded_hal::i2c::Operation) -> Result<()
 }
 
 // ── 13. Low-Level Hardware & Bus Primitive ──────────────────────────────────
-impl<'a, 'hw> HardwarePrimitive for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> HardwarePrimitive for SysContext<'a, 'hw> {
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> Result<usize, ()> {
         i2c_bus_op(addr, reg, embedded_hal::i2c::Operation::Read(buf))?;
         Ok(buf.len())

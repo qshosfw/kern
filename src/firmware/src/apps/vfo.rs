@@ -285,7 +285,7 @@ fn handle_vfo_key_press(ctx: &mut SysContext, code: KeyCode) -> EventResult {
     }
 }
 
-impl<'a> App<crate::services::FirmwareContext<'a, '_>> for VfoApp {
+impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
     fn meta() -> AppMetadata {
         AppMetadata {
             name: "Radio",

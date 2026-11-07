@@ -50,7 +50,7 @@ pub const CCR_MEM2MEM: u32 = 1 << 14;
 
 #[inline(always)]
 pub const fn gif(ch: u8) -> u32 {
-    1 << (0 + (ch - 1) * 4)
+    1 << ((ch - 1) * 4)
 }
 #[inline(always)]
 pub const fn tcif(ch: u8) -> u32 {

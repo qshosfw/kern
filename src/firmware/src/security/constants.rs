@@ -1,8 +1,8 @@
-//! Security Domain Separation Constants, Magic Headers, and Defaults
+//! Security Domain Separation Constants, Format Identifiers, and Defaults
 
-pub const MAGIC_DEVICE_KEY: &[u8; 4] = b"DEV1";
-pub const MAGIC_PASSCODE_KEY: &[u8; 4] = b"PIN1";
-pub const MAGIC_STORAGE_KEY: &[u8; 4] = b"STO1";
+pub const FILE_ID_DEVICE_KEY: &[u8; 4] = b"DEV1";
+pub const FILE_ID_PASSCODE_KEY: &[u8; 4] = b"PIN1";
+pub const FILE_ID_STORAGE_KEY: &[u8; 4] = b"STO1";
 
 /// Default Passcode Seed (when no passcode is set)
 pub const DEFAULT_PASSCODE_SEED: &[u8] = b"0000";

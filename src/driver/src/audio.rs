@@ -133,6 +133,12 @@ impl AudioAmplifier {
     }
 }
 
+impl Default for AudioAmplifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// RAII Mute Guard that temporarily mutes speaker during FSK bursts and unmutes on drop.
 pub struct MuteGuard<'a> {
     amp: &'a mut AudioAmplifier,
@@ -352,6 +358,12 @@ impl AudioCaptureDriver {
 
     pub fn is_capturing(&self) -> bool {
         self.active
+    }
+}
+
+impl Default for AudioCaptureDriver {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

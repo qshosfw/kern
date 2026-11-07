@@ -408,20 +408,12 @@ impl LauncherApp {
 
         // Minimalist vertical scrollbar with smooth kinetic tracking
         if total > visible_count {
-            gfx::widgets::draw_scrollbar(
-                canvas,
-                125,
-                9,
-                52,
-                self.scroll_top,
-                total,
-                visible_count,
-            );
+            gfx::widgets::draw_scrollbar(canvas, 125, 9, 52, self.scroll_top, total, visible_count);
         }
     }
 }
 
-impl<'a> App<crate::services::FirmwareContext<'a, '_>> for LauncherApp {
+impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
     fn meta() -> AppMetadata {
         AppMetadata {
             name: "Home",

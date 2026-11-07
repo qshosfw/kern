@@ -8,13 +8,27 @@ use kernel::event::{Event, KeyCode};
 use py32_hal::adc::Adc;
 
 pub fn enqueue_event(event: Event) {
+    #[cfg(target_arch = "arm")]
     cortex_m::interrupt::free(|cs| {
         let _ = EVENT_QUEUE.borrow(cs).borrow_mut().push_back(event);
     });
+    #[cfg(not(target_arch = "arm"))]
+    {
+        let cs = unsafe { cortex_m::interrupt::CriticalSection::new() };
+        let _ = EVENT_QUEUE.borrow(&cs).borrow_mut().push_back(event);
+    }
 }
 
 pub fn dequeue_event() -> Option<Event> {
-    cortex_m::interrupt::free(|cs| EVENT_QUEUE.borrow(cs).borrow_mut().pop_front())
+    #[cfg(target_arch = "arm")]
+    {
+        cortex_m::interrupt::free(|cs| EVENT_QUEUE.borrow(cs).borrow_mut().pop_front())
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        let cs = unsafe { cortex_m::interrupt::CriticalSection::new() };
+        EVENT_QUEUE.borrow(&cs).borrow_mut().pop_front()
+    }
 }
 
 #[inline(always)]
@@ -197,7 +211,8 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // Re-apply listening VFO channel to RF hardware
     {
         use kernel::service::radio::RfChannel;
-        hw.radio.configure_channel(crate::radio_state().coord.listening_channel());
+        hw.radio
+            .configure_channel(crate::radio_state().coord.listening_channel());
     }
 
     // Restore volume and hardware audio settings
@@ -518,9 +533,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
                 pwr.apo_triggered = false;
                 fired
             };
-            if apo_fired
-                && !is_plugged
-                && crate::master_config_ref().battery.auto_power_off_min > 0
+            if apo_fired && !is_plugged && crate::master_config_ref().battery.auto_power_off_min > 0
             {
                 handle_deep_sleep_mode(hw);
             }

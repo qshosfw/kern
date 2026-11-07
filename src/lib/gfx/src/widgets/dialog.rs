@@ -71,7 +71,7 @@ pub fn draw_modal_progress(canvas: &mut Canvas, title: &str, subtitle: &str, pro
     }
 
     let bar_w = 96u8;
-    let bar_x = (center_x - (bar_w as i16) / 2) as i16;
+    let bar_x = center_x - (bar_w as i16) / 2;
     let bar_y = (by + 20) as i16;
     let bar_h = 6u8;
 
@@ -332,32 +332,33 @@ pub fn draw_modal_popup_materialize(
         let center_x = 64i16;
         let tc = Color::Fill;
 
-        if let Some(t) = title {
-            if !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode") {
+        if let Some(t) = title
+            && !t.is_empty()
+            && !text::ascii_eq_ignore_case(t, "passcode")
+        {
+            text::draw_str_align(
+                canvas,
+                center_x,
+                (by + 11) as i16,
+                t,
+                &crate::fonts::tomthumb::FONT,
+                tc,
+                text::Align::Center,
+            );
+            let mut line_y = (by + 21) as i16;
+            crate::text::for_each_line(msg, |line| {
                 text::draw_str_align(
                     canvas,
                     center_x,
-                    (by + 11) as i16,
-                    t,
+                    line_y,
+                    line,
                     &crate::fonts::tomthumb::FONT,
                     tc,
                     text::Align::Center,
                 );
-                let mut line_y = (by + 21) as i16;
-                crate::text::for_each_line(msg, |line| {
-                    text::draw_str_align(
-                        canvas,
-                        center_x,
-                        line_y,
-                        line,
-                        &crate::fonts::tomthumb::FONT,
-                        tc,
-                        text::Align::Center,
-                    );
-                    line_y += 8;
-                });
-                return;
-            }
+                line_y += 8;
+            });
+            return;
         }
 
         let mut line_y = if crate::text::count_lines(msg) <= 1 {

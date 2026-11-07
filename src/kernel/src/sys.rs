@@ -108,24 +108,27 @@ impl SystemDiagnostics {
     /// Fills words between `_stack_end` (end of static BSS/DATA/heap) and the current `MSP` - safety margin.
     #[inline(never)]
     pub fn paint_stack() {
-        unsafe extern "C" {
-            static _stack_end: u8;
-        }
-        let stack_end = core::ptr::addr_of!(_stack_end) as usize;
-        let mut msp: usize;
-        unsafe {
-            core::arch::asm!("mrs {}, MSP", out(reg) msp);
-        }
+        #[cfg(target_arch = "arm")]
+        {
+            unsafe extern "C" {
+                static _stack_end: u8;
+            }
+            let stack_end = core::ptr::addr_of!(_stack_end) as usize;
+            let mut msp: usize;
+            unsafe {
+                core::arch::asm!("mrs {}, MSP", out(reg) msp);
+            }
 
-        // Leave 128 bytes headroom below current MSP so we do not overwrite active call frames
-        let paint_limit = msp.saturating_sub(128);
-        if paint_limit > stack_end {
-            let mut ptr = (stack_end + 3) & !3; // Align to 4-byte boundary
-            while ptr < paint_limit {
-                unsafe {
-                    core::ptr::write_volatile(ptr as *mut u32, Self::STACK_PAINT_SENTINEL);
+            // Leave 128 bytes headroom below current MSP so we do not overwrite active call frames
+            let paint_limit = msp.saturating_sub(128);
+            if paint_limit > stack_end {
+                let mut ptr = (stack_end + 3) & !3; // Align to 4-byte boundary
+                while ptr < paint_limit {
+                    unsafe {
+                        core::ptr::write_volatile(ptr as *mut u32, Self::STACK_PAINT_SENTINEL);
+                    }
+                    ptr += 4;
                 }
-                ptr += 4;
             }
         }
     }
@@ -293,7 +296,7 @@ impl SystemDiagnostics {
         }
     }
 
-    /// Reboots into the Bootloader by manipulating boot pins or flash config (Quansheng specific magic).
+    /// Reboots into the Bootloader by triggering a Cortex-M0+ system reset via AIRCR.
     pub fn reboot_to_bootloader() -> ! {
         unsafe {
             let aircr = 0xE000ED0C as *mut u32;

@@ -145,14 +145,14 @@ pub fn draw_str_align(
 
 /// Stack-allocated zero-copy u8 formatter for `no_std` text rendering.
 #[inline(always)]
-pub fn format_u8<'a>(val: u8, buf: &'a mut [u8]) -> &'a str {
+pub fn format_u8(val: u8, buf: &mut [u8]) -> &str {
     format_u32(val as u32, buf)
 }
 
 /// Stack-allocated zero-copy i32 formatter for range values.
 /// When `min < 0` and `val > 0`, prepends a `+` symbol for clear signed indication.
 #[inline(always)]
-pub fn format_i32_range<'a>(val: i32, min: i32, buf: &'a mut [u8]) -> &'a str {
+pub fn format_i32_range(val: i32, min: i32, buf: &mut [u8]) -> &str {
     let pfx = if min < 0 && val > 0 { "+" } else { "" };
     format_int_fixed(val, 0, pfx, "", buf)
 }
@@ -223,20 +223,20 @@ pub fn format_num_msg<'a>(buf: &'a mut [u8], prefix: &str, val: u32, suffix: &st
 }
 
 /// Format voltage in millivolts with 1 or 2 decimal digits (e.g. "8.24v" or "8.2v").
-pub fn format_voltage<'a>(mv: u16, digits: u8, buf: &'a mut [u8; 12]) -> &'a str {
+pub fn format_voltage(mv: u16, digits: u8, buf: &mut [u8; 12]) -> &str {
     let val = if digits == 2 { mv / 10 } else { mv / 100 };
     format_int_fixed(val as i32, digits, "", "v", buf)
 }
 
 /// Format a u32 with a single-byte suffix (e.g. "85%", "24C").
-pub fn format_suffix_u32<'a>(val: u32, suffix: u8, buf: &'a mut [u8; 12]) -> &'a str {
+pub fn format_suffix_u32(val: u32, suffix: u8, buf: &mut [u8; 12]) -> &str {
     let s = [suffix];
     let s_str = unsafe { core::str::from_utf8_unchecked(&s) };
     format_int_fixed(val as i32, 0, "", s_str, buf)
 }
 
 /// Format a fraction (e.g. "0/16", "5/12").
-pub fn format_fraction_u32<'a>(n: u32, d: u32, buf: &'a mut [u8; 12]) -> &'a str {
+pub fn format_fraction_u32(n: u32, d: u32, buf: &mut [u8; 12]) -> &str {
     let mut tmp = [0u8; 6];
     let s1 = format_u32(n, &mut tmp);
     let l1 = s1.len();

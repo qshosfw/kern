@@ -2,7 +2,7 @@
 //!
 //! Provides multi-byte glitch-resistant state constants and the Passcode Metadata definition.
 
-/// Multi-byte magic constants for Glitch-Resistant Lockdown State Machine
+/// Multi-byte format-resistant state identifiers for Glitch-Resistant Lockdown State Machine
 pub const STATE_BOOT_INIT: u32 = 0x1122_3344; // Initial boot, verifying flash
 pub const STATE_UNLOCKED: u32 = 0x5AA5_A55A; // User authenticated, full access
 pub const STATE_SOFT_LOCK: u32 = 0xDEAD_BEEF; // Screen locked, keys in RAM but UI restricted

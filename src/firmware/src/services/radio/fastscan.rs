@@ -4,7 +4,7 @@
 //! performing low-latency PLL frequency stepping, settling, and calibrated dBm
 //! RSSI sampling with peak hold and noise floor estimation.
 
-use kernel::service::radio::{RfChannel, RfSquelch};
+use kernel::service::radio::{PrecomputedTuneState, RfChannel, RfSquelch};
 use utils::units::{Frequency, Hertz};
 
 pub const FASTSCAN_COLUMNS: usize = 128;
@@ -122,9 +122,11 @@ impl FastScanEngine {
             _ => return false,
         };
 
-        // Tune to current bin frequency
+        // Tune to current bin frequency using zero-division precomputed PLL state
         let freq = self.bin_freq(cur_bin);
-        radio.set_rx_frequency(freq);
+        let tune_state = PrecomputedTuneState::from_freq_hz(freq.raw());
+        radio.apply_precomputed_tune(&tune_state);
+        radio.wait_pll_lock(125);
 
         // Sample RSSI
         let rssi = radio.get_rssi_dbm();
@@ -156,6 +158,21 @@ impl FastScanEngine {
             };
             false
         }
+    }
+
+    /// Execute a pipelined batch of `count` frequency bins in a single frame tick.
+    /// Enables real-time waterfall sweep rates (hundreds of bins/sec) without stalling UI.
+    pub fn step_batch<R: RfChannel + RfSquelch>(&mut self, radio: &mut R, count: u8) -> bool {
+        let mut completed = false;
+        for _ in 0..count.max(1) {
+            if self.step(radio) {
+                completed = true;
+                if !self.continuous {
+                    break;
+                }
+            }
+        }
+        completed
     }
 }
 

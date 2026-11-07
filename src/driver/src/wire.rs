@@ -56,12 +56,11 @@ impl<S: SerialPort> WireDriver<S> {
         for &b in &byte_buf[..read_count] {
             if b == crypto::cobs::COBS_DELIMITER {
                 if self.in_frame && self.rx_len > 0 {
-                    if let Ok(raw_len) = Cobs::decode_inplace(&mut self.rx_buf, self.rx_len) {
-                        if let Ok((header, _)) =
+                    if let Ok(raw_len) = Cobs::decode_inplace(&mut self.rx_buf, self.rx_len)
+                        && let Ok((header, _)) =
                             self.session.validate_record(&self.rx_buf[..raw_len])
-                        {
-                            completed_record = Some((header, raw_len));
-                        }
+                    {
+                        completed_record = Some((header, raw_len));
                     }
                     self.rx_len = 0;
                     self.in_frame = false;
@@ -84,7 +83,7 @@ impl<S: SerialPort> WireDriver<S> {
                 }
             } else {
                 // Buffer printable ASCII bytes when outside COBS frame
-                if b >= 0x20 && b <= 0x7E && self.rx_len < 32 {
+                if (0x20..=0x7E).contains(&b) && self.rx_len < 32 {
                     self.rx_buf[self.rx_len] = b;
                     self.rx_len += 1;
                 }

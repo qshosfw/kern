@@ -40,7 +40,7 @@ pub struct DmaChannel {
 
 impl DmaChannel {
     pub fn new(channel_idx: u8) -> Self {
-        assert!(channel_idx >= 1 && channel_idx <= 7);
+        assert!((1..=7).contains(&channel_idx));
         Self { channel_idx }
     }
 

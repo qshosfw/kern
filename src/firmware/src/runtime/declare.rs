@@ -5,7 +5,7 @@
 //! Supports declarative ABI telemetry data binding, interactive forms, menu scrolling,
 //! info cards, and multi-level node navigation.
 
-use crate::services::FirmwareContext;
+use crate::services::SysContext;
 use gfx::Canvas;
 use gfx::Color;
 use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
@@ -33,7 +33,7 @@ pub fn get_global_walker() -> &'static mut DeclareWalker {
     }
 }
 
-pub unsafe fn walker_on_start(ptr: *mut (), _ctx: &mut FirmwareContext<'static, 'static>) {
+pub unsafe fn walker_on_start(ptr: *mut (), _ctx: &mut SysContext<'static, 'static>) {
     let walker = unsafe { &mut *(ptr as *mut DeclareWalker) };
     walker.current_node_idx = 0;
     walker.selected_item = 0;
@@ -44,7 +44,7 @@ pub unsafe fn walker_on_start(ptr: *mut (), _ctx: &mut FirmwareContext<'static, 
 
 pub unsafe fn walker_on_event(
     ptr: *mut (),
-    ctx: &mut FirmwareContext<'static, 'static>,
+    ctx: &mut SysContext<'static, 'static>,
     ev: &Event,
 ) -> EventResult {
     let walker = unsafe { &mut *(ptr as *mut DeclareWalker) };
@@ -95,7 +95,7 @@ pub unsafe fn walker_on_event(
 
 pub unsafe fn walker_on_modal_result(
     _ptr: *mut (),
-    _ctx: &mut FirmwareContext<'static, 'static>,
+    _ctx: &mut SysContext<'static, 'static>,
     _r: &ModalResult<'_>,
 ) -> EventResult {
     EventResult::Consumed
@@ -103,7 +103,7 @@ pub unsafe fn walker_on_modal_result(
 
 #[inline(never)]
 fn resolve_telemetry_str<'a>(
-    ctx: &FirmwareContext<'static, 'static>,
+    ctx: &SysContext<'static, 'static>,
     telem_id: u16,
     buf: &'a mut [u8; 16],
 ) -> &'a str {
@@ -188,7 +188,7 @@ fn resolve_telemetry_str<'a>(
 #[inline(always)]
 fn resolve_item_info_str<'a>(
     walker: &DeclareWalker,
-    ctx: &FirmwareContext<'static, 'static>,
+    ctx: &SysContext<'static, 'static>,
     item: kernel::proc::declare::DeclareItem,
     nbuf: &'a mut [u8; 16],
 ) -> &'a str {
@@ -210,7 +210,7 @@ fn resolve_item_info_str<'a>(
 fn draw_walker_item(
     canvas: &mut Canvas,
     walker: &DeclareWalker,
-    ctx: &FirmwareContext<'static, 'static>,
+    ctx: &SysContext<'static, 'static>,
     item: kernel::proc::declare::DeclareItem,
     row_idx: usize,
     font: &gfx::GfxFont,
@@ -274,7 +274,7 @@ fn draw_walker_item(
 fn render_info_card(
     canvas: &mut Canvas,
     walker: &DeclareWalker,
-    ctx: &FirmwareContext<'static, 'static>,
+    ctx: &SysContext<'static, 'static>,
     node: &kernel::proc::declare::DeclareNode,
     title: &str,
     font: &gfx::GfxFont,
@@ -340,7 +340,7 @@ fn render_scroll_text(
 fn render_table_browser(
     canvas: &mut Canvas,
     walker: &mut DeclareWalker,
-    ctx: &FirmwareContext<'static, 'static>,
+    ctx: &SysContext<'static, 'static>,
     node: &kernel::proc::declare::DeclareNode,
     font: &gfx::GfxFont,
     total_items: usize,
@@ -464,7 +464,7 @@ fn render_table_browser(
 pub unsafe fn walker_render(
     ptr: *const (),
     canvas: &mut Canvas,
-    ctx: &FirmwareContext<'static, 'static>,
+    ctx: &SysContext<'static, 'static>,
     sb: &mut StatusBarConfig<'_>,
 ) {
     let walker = unsafe { &mut *(ptr as *mut DeclareWalker) };
@@ -562,9 +562,9 @@ pub unsafe fn walker_render(
     gfx::widgets::draw_key_badge_right(canvas, 126, 55, "EXIT", back_label);
 }
 
-pub unsafe fn walker_on_exit(_ptr: *mut (), _ctx: &mut FirmwareContext<'static, 'static>) {}
+pub unsafe fn walker_on_exit(_ptr: *mut (), _ctx: &mut SysContext<'static, 'static>) {}
 
-pub const DECLARE_WALKER_VTABLE: AppVTable<FirmwareContext<'static, 'static>> = AppVTable {
+pub const DECLARE_WALKER_VTABLE: AppVTable<SysContext<'static, 'static>> = AppVTable {
     on_start: walker_on_start,
     on_event: walker_on_event,
     on_modal_result: walker_on_modal_result,

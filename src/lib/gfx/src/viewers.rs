@@ -66,7 +66,7 @@ pub fn draw_hex_row(
     for i in 0..4 {
         if i < bytes.len() {
             let b = bytes[i];
-            let c = if b >= 0x20 && b <= 0x7E {
+            let c = if (0x20..=0x7E).contains(&b) {
                 b as char
             } else {
                 '.'

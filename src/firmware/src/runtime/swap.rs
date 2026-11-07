@@ -25,7 +25,7 @@ impl SwapSlot {
     pub const fn empty() -> Self {
         Self {
             header: KrxSwapHeader {
-                magic: [0; 4],
+                ident: [0; 4],
                 app_id: 0,
                 original_len: 0,
                 compressed_len: 0,
@@ -44,7 +44,7 @@ impl SwapSlot {
 
     #[inline]
     pub fn clear(&mut self) {
-        self.header.magic = [0; 4];
+        self.header.ident = [0; 4];
         self.header.app_id = 0;
         self.header.compressed_len = 0;
         self.header.original_len = 0;
@@ -103,7 +103,7 @@ impl AppSwapManager {
 
     /// Restore hibernated application state from its swap slot.
     ///
-    /// Validates `KrxSwapHeader` magic and payload CRC16 before decompressing into `dst_state`.
+    /// Validates `KrxSwapHeader` format identifier and payload CRC16 before decompressing into `dst_state`.
     /// Releases the swap slot upon successful decompression.
     pub fn swap_in(app_id: usize, dst_state: &mut [u8]) -> Result<usize, ()> {
         let slots = unsafe { &mut *core::ptr::addr_of_mut!(SWAP_SLOTS) };

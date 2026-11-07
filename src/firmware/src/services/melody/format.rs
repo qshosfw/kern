@@ -5,13 +5,13 @@ use crate::services::SystemStorage;
 use drivers::audio::ToneNote;
 use heapless::Vec;
 
-/// Magic identifier for Kern Tone File (`.ton`): 2 bytes "KT"
-pub const TONE_MAGIC: [u8; 2] = *b"KT";
+/// Format identifier for Kern Tone File (`.ton`): 2 bytes "KT"
+pub const FILE_ID_TONE: [u8; 2] = *b"KT";
 pub const TONE_VERSION: u8 = 1;
 pub const MAX_TONE_NOTES: usize = 32;
 
-/// Legacy magic identifier for `.rgr` files
-pub const ROGER_MAGIC: [u8; 4] = *b"KRGR";
+/// Legacy format identifier for `.rgr` files
+pub const FILE_ID_ROGER: [u8; 4] = *b"KRGR";
 pub const MAX_ROGER_NOTES: usize = MAX_TONE_NOTES;
 
 /// Metadata tag identifiers in `.ton` tail
@@ -22,7 +22,7 @@ pub const MAX_NAME_LEN: usize = 16;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToneHeader {
-    pub magic: [u8; 2], // "KT"
+    pub ident: [u8; 2], // "KT"
     pub version: u8,    // 1
     pub note_count: u8, // 0 = dynamic length from file size, >0 = explicit count
 }
@@ -77,7 +77,7 @@ impl ToneFile {
         let (mut offset, count) = if is_krgr {
             name = parse_ascii(&data[6..16]);
             (16, (data[5] as usize).min(MAX_TONE_NOTES))
-        } else if data.len() >= 4 && data[0..2] == TONE_MAGIC && data[2] == TONE_VERSION {
+        } else if data.len() >= 4 && data[0..2] == FILE_ID_TONE && data[2] == TONE_VERSION {
             let raw = data[3] as usize;
             let c = if raw > 0 {
                 raw.min(MAX_TONE_NOTES)
@@ -118,7 +118,7 @@ impl ToneFile {
 
         Some(Self {
             header: ToneHeader {
-                magic: TONE_MAGIC,
+                ident: FILE_ID_TONE,
                 version: TONE_VERSION,
                 note_count: notes.len() as u8,
             },

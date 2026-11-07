@@ -255,7 +255,7 @@ impl Orchestrator {
     }
 
     pub fn take_sleep_requested(&mut self) -> bool {
-        let is_root = self.active_app_id == APP_ID_LAUNCHER || self.active_app_id == APP_ID_VFO;
+        let is_root = self.active_app_id == APP_ID_LAUNCHER;
         let req = self.lock_mgr.sleep_requested;
         self.lock_mgr.sleep_requested = false;
         req && is_root
@@ -293,7 +293,7 @@ impl Orchestrator {
     }
 
     #[inline(never)]
-    fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::FirmwareContext<'a, '_>) {
+    fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
         // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
         #[cfg(feature = "radio")]
         {
@@ -341,7 +341,7 @@ impl Orchestrator {
     #[inline(never)]
     fn handle_f_key_action<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         code: KeyCode,
     ) {
         self.lock_mgr.is_f_active = false;
@@ -370,19 +370,27 @@ impl Orchestrator {
     #[inline(never)]
     fn supervise_lock<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         event: &Event,
     ) -> (bool, bool) {
         let was_locked = self.lock_mgr.is_locked;
         let was_f_active = self.lock_mgr.is_f_active;
+
+        let is_modal_active = unsafe {
+            (*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL)).is_active()
+        };
+        let can_sleep =
+            !self.lock_mgr.is_locked && self.active_app_id == APP_ID_LAUNCHER && !is_modal_active;
 
         let intercepted = self.lock_mgr.handle_event(
             event,
             ctx.config.keys.hold_delay_ms(),
             ctx.config.keys.f_key_timeout_ms(),
             ctx.config.keys.auto_lock_ms(),
+            can_sleep,
         );
-        let state_changed = was_locked != self.lock_mgr.is_locked || was_f_active != self.lock_mgr.is_f_active;
+        let state_changed =
+            was_locked != self.lock_mgr.is_locked || was_f_active != self.lock_mgr.is_f_active;
 
         if was_locked != self.lock_mgr.is_locked {
             if self.lock_mgr.is_locked {
@@ -401,12 +409,7 @@ impl Orchestrator {
     }
 
     #[inline(never)]
-    fn update_key_ownership(
-        &mut self,
-        event: &Event,
-        status: EventResult,
-        fault_handled: bool,
-    ) {
+    fn update_key_ownership(&mut self, event: &Event, status: EventResult, fault_handled: bool) {
         if !fault_handled {
             if let Event::Key { code, state } = *event {
                 if state == KeyState::Pressed {
@@ -425,18 +428,20 @@ impl Orchestrator {
     #[inline(never)]
     pub fn dispatch_event<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         event: Event,
     ) -> bool {
         let prev_app = self.active_app_id;
 
         // Intercept and sink keys suppressed during screen/app/modal transitions
         if filter_sunk_keys(&event) {
+            self.lock_mgr.reset_input_tracking();
             return false;
         }
 
         // 0. If an OS modal is active, modal compositor intercepts all input
         if self.handle_modal_event(ctx, &event) {
+            self.lock_mgr.reset_input_tracking();
             self.drain_ipc_commands(ctx);
             return true;
         }
@@ -522,7 +527,7 @@ impl Orchestrator {
     #[inline(never)]
     fn handle_dynamic_fault<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         code: u8,
     ) {
         if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
@@ -549,7 +554,7 @@ impl Orchestrator {
     #[inline(never)]
     fn handle_modal_event<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         event: &Event,
     ) -> bool {
         unsafe {
@@ -613,7 +618,7 @@ impl Orchestrator {
     #[inline(never)]
     fn handle_global_shortcuts<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         event: Event,
     ) {
         match event {
@@ -626,6 +631,7 @@ impl Orchestrator {
                 if self.active_app_id == APP_ID_LAUNCHER {
                     return;
                 }
+                self.lock_mgr.reset_input_tracking();
                 while let Some(prev) = self.nav_stack.pop() {
                     let is_valid = if prev < crate::AppRegistry::count() {
                         true
@@ -676,7 +682,7 @@ impl Orchestrator {
     }
 
     #[inline(never)]
-    fn drain_ipc_commands<'a>(&mut self, ctx: &mut crate::services::FirmwareContext<'a, '_>) {
+    fn drain_ipc_commands<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
         loop {
             let next_cmd = match ctx.ipc {
                 Some(ref mut queue) => queue.pop().map(Shortcut::from),
@@ -752,17 +758,13 @@ impl Orchestrator {
         false
     }
 
-    pub fn switch_app<'a>(
-        &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
-        app_id: usize,
-    ) {
+    pub fn switch_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>, app_id: usize) {
         self.switch_app_internal(ctx, app_id, true);
     }
 
     fn switch_app_internal<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         app_id: usize,
         push_history: bool,
     ) {
@@ -793,6 +795,7 @@ impl Orchestrator {
             }
             self.active_app_id = app_id;
             self.owned_key = None;
+            self.lock_mgr.reset_input_tracking();
             sink_enter_keys();
             sink_exit_key();
 
@@ -826,7 +829,7 @@ impl Orchestrator {
     #[inline(never)]
     pub fn process_ipc_command<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         cmd: Shortcut,
     ) {
         match cmd {
@@ -915,17 +918,16 @@ impl Orchestrator {
     #[inline]
     pub fn execute_shortcut<'a>(
         &mut self,
-        ctx: &mut crate::services::FirmwareContext<'a, '_>,
+        ctx: &mut crate::services::SysContext<'a, '_>,
         action: Shortcut,
     ) {
         self.process_ipc_command(ctx, action);
     }
 
-    pub fn render<'a>(
-        &self,
-        canvas: &mut Canvas,
-        ctx: &'a crate::services::FirmwareContext<'a, '_>,
-    ) {
+    pub fn render<'a>(&self, canvas: &mut Canvas, ctx: &'a crate::services::SysContext<'a, '_>) {
+        unsafe {
+            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL)).tick(20);
+        }
         OsCompositor::render(self.active_app_id, canvas, ctx, &self.lock_mgr);
     }
 

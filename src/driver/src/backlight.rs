@@ -209,3 +209,9 @@ impl BacklightController {
         }
     }
 }
+
+impl Default for BacklightController {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -3,7 +3,7 @@
 //! Provides the execution bridge, load-time bytecode verification, substrate
 //! capability syscall routing, and `AppVTable` for Class 2 (`VMachine`) packages.
 
-use crate::services::FirmwareContext;
+use crate::services::SysContext;
 use gfx::Canvas;
 use gfx::Color;
 use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
@@ -48,11 +48,7 @@ pub fn load_vm_program(name: &str, bytecode: &[u16]) -> bool {
     true
 }
 
-fn dispatch_vm_slice(
-    state: &mut VmRunnerState,
-    ctx: &mut FirmwareContext<'static, 'static>,
-    fuel: u32,
-) {
+fn dispatch_vm_slice(state: &mut VmRunnerState, ctx: &mut SysContext<'static, 'static>, fuel: u32) {
     let code_slice = &state.bytecode[..state.bytecode_len];
     if let Ok(VmStatus::SysCall { iface, op, arg }) = state.vm.run_slice(code_slice, fuel) {
         match iface {
@@ -71,14 +67,14 @@ fn dispatch_vm_slice(
     }
 }
 
-pub unsafe fn vm_on_start(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 'static>) {
+pub unsafe fn vm_on_start(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
     let state = get_vm_state();
     dispatch_vm_slice(state, ctx, 5000);
 }
 
 pub unsafe fn vm_on_event(
     _ptr: *mut (),
-    ctx: &mut FirmwareContext<'static, 'static>,
+    ctx: &mut SysContext<'static, 'static>,
     ev: &Event,
 ) -> EventResult {
     if let Event::Key {
@@ -106,7 +102,7 @@ pub unsafe fn vm_on_event(
 
 pub unsafe fn vm_on_modal_result(
     _ptr: *mut (),
-    _ctx: &mut FirmwareContext<'static, 'static>,
+    _ctx: &mut SysContext<'static, 'static>,
     _r: &ModalResult<'_>,
 ) -> EventResult {
     EventResult::Consumed
@@ -115,7 +111,7 @@ pub unsafe fn vm_on_modal_result(
 pub unsafe fn vm_on_render(
     _ptr: *const (),
     canvas: &mut Canvas,
-    _ctx: &FirmwareContext<'static, 'static>,
+    _ctx: &SysContext<'static, 'static>,
     status_bar: &mut StatusBarConfig<'_>,
 ) {
     let state = get_vm_state();
@@ -149,7 +145,7 @@ pub unsafe fn vm_on_render(
     );
 }
 
-pub static VM_RUNNER_VTABLE: AppVTable<FirmwareContext<'static, 'static>> = AppVTable {
+pub static VM_RUNNER_VTABLE: AppVTable<SysContext<'static, 'static>> = AppVTable {
     on_start: vm_on_start,
     on_event: vm_on_event,
     on_modal_result: vm_on_modal_result,

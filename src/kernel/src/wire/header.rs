@@ -1,6 +1,6 @@
 //! RigWire Frame Header, Status Codes, and Domain Identifiers.
 
-pub const WIRE_MAGIC: u8 = 0x52; // 'R'
+pub const WIRE_SYNC_ID: u8 = 0x52; // 'R'
 pub const WIRE_MAJOR: u8 = 0x01;
 
 pub const FLAG_RESPONSE: u8 = 0x01;
@@ -89,7 +89,7 @@ impl WireStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct WireHeader {
-    pub magic: u8,
+    pub ident: u8,
     pub major: u8,
     pub flags: u8,
     pub service: u8,

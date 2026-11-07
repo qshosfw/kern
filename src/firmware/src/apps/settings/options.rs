@@ -57,7 +57,13 @@ fn build_item_type(def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8
         SettingKind::BatteryType => {
             let (opts, types) = super::battery::battery_options_and_types(nav_layout);
             let raw_byte = def.field.get_u8(&ctx.config);
-            let sel = types.iter().position(|&t| t == raw_byte).unwrap_or(0) as u16;
+            let mut sel = 0u16;
+            for i in 0..types.len() {
+                if types[i] == raw_byte {
+                    sel = i as u16;
+                    break;
+                }
+            }
             MenuItemType::Choice {
                 selected: sel,
                 options: opts,

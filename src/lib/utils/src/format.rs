@@ -10,7 +10,7 @@
 pub const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
 /// Format a 32-bit unsigned integer into decimal ASCII digits.
-pub fn format_u32<'a>(mut val: u32, out: &'a mut [u8]) -> &'a str {
+pub fn format_u32(mut val: u32, out: &mut [u8]) -> &str {
     if val == 0 {
         if !out.is_empty() {
             out[0] = b'0';
@@ -34,7 +34,7 @@ pub fn format_u32<'a>(mut val: u32, out: &'a mut [u8]) -> &'a str {
 }
 
 /// Format a 32-bit signed integer into decimal ASCII with negative sign.
-pub fn format_i32<'a>(val: i32, out: &'a mut [u8]) -> &'a str {
+pub fn format_i32(val: i32, out: &mut [u8]) -> &str {
     if val < 0 {
         if out.len() < 2 {
             return "-";
@@ -127,7 +127,7 @@ pub fn format_int_fixed<'a>(
 }
 
 /// Format a 32-bit integer into 8 uppercase hex digits.
-pub fn format_hex32<'a>(val: u32, out: &'a mut [u8; 8]) -> &'a str {
+pub fn format_hex32(val: u32, out: &mut [u8; 8]) -> &str {
     for i in 0..8 {
         out[7 - i] = HEX_CHARS[((val >> (i * 4)) & 0x0F) as usize];
     }
@@ -135,7 +135,7 @@ pub fn format_hex32<'a>(val: u32, out: &'a mut [u8; 8]) -> &'a str {
 }
 
 /// Format a 16-bit integer into 4 uppercase hex digits.
-pub fn format_hex16<'a>(val: u16, out: &'a mut [u8; 4]) -> &'a str {
+pub fn format_hex16(val: u16, out: &mut [u8; 4]) -> &str {
     for i in 0..4 {
         out[3 - i] = HEX_CHARS[((val >> (i * 4)) & 0x0F) as usize];
     }
@@ -143,9 +143,9 @@ pub fn format_hex16<'a>(val: u16, out: &'a mut [u8; 4]) -> &'a str {
 }
 
 /// Format a 6-byte MAC address into "XX:XX:XX:XX:XX:XX" uppercase hex string.
-pub fn format_mac_address<'a>(mac: &[u8; 6], out: &'a mut [u8; 17]) -> &'a str {
+pub fn format_mac_address<'a>(_mac: &[u8; 6], out: &'a mut [u8; 17]) -> &'a str {
     let mut idx = 0;
-    for (i, &b) in mac.iter().enumerate() {
+    for (i, &b) in _mac.iter().enumerate() {
         out[idx] = HEX_CHARS[(b >> 4) as usize];
         out[idx + 1] = HEX_CHARS[(b & 0x0F) as usize];
         idx += 2;
@@ -165,7 +165,7 @@ fn put_2digit(out: &mut [u8; 8], off: usize, val: u8) {
 }
 
 /// Format uptime seconds into "HH:MM:SS" (hours clamped at 99).
-pub fn format_uptime_hms<'a>(secs: u32, out: &'a mut [u8; 8]) -> &'a str {
+pub fn format_uptime_hms(secs: u32, out: &mut [u8; 8]) -> &str {
     let s = (secs % 60) as u8;
     let mins = secs / 60;
     let m = (mins % 60) as u8;
@@ -186,12 +186,12 @@ pub fn ascii_eq_ignore_case(a: &str, b: &str) -> bool {
         return false;
     }
     for i in 0..a_bytes.len() {
-        let ba = if (b'A'..=b'Z').contains(&a_bytes[i]) {
+        let ba = if a_bytes[i].is_ascii_uppercase() {
             a_bytes[i] + 32
         } else {
             a_bytes[i]
         };
-        let bb = if (b'A'..=b'Z').contains(&b_bytes[i]) {
+        let bb = if b_bytes[i].is_ascii_uppercase() {
             b_bytes[i] + 32
         } else {
             b_bytes[i]

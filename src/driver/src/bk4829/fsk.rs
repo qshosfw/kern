@@ -23,7 +23,7 @@ pub fn build_fsk_ctrl(mod_type: FskModulation, baud: FskBaudRate) -> u16 {
             (1 << 13) | (7 << 10) | (3 << 8) | (1 << 1) | 1
         }
         FskModulation::Ffsk1200_2400 => (3 << 13) | (4 << 10) | (3 << 8) | (4 << 1) | 1,
-        FskModulation::NoaaSame => (5 << 13) | (0 << 10) | (3 << 8) | (2 << 1) | 1,
+        FskModulation::NoaaSame => (5 << 13) | (3 << 8) | (2 << 1) | 1,
     }
 }
 
@@ -86,7 +86,7 @@ pub fn build_fsk_fifo_ctrl_from_phy(config: &FskPhyConfig) -> u16 {
 /// BK4819 / BK4829 hardware FIFO stalls if packet length is not even.
 pub fn build_packet_length_reg(max_len_bytes: u16) -> u16 {
     let len = max_len_bytes.clamp(2, 128);
-    let rounded_len = ((len + 1) / 2) * 2;
+    let rounded_len = len.div_ceil(2) * 2;
     let encoded = rounded_len - 1;
     ((encoded & 0xFF) << 8) | ((encoded >> 8) << 5)
 }

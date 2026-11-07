@@ -97,16 +97,41 @@ impl<S: SerialPort> WireDriver<S> {
 
             OP_CORE_GET_CAPS => {
                 const CAPS_REPLY: [u8; 35] = [
-                    1, 0, 0, 0, // generation = 1
-                    0xFF, 0xFF, // next cursor = 0xFFFF (end)
-                    7,          // 7 components
-                    1, 2, 1, COMPONENT_CLASS_RADIO,
-                    1, 2, 2, COMPONENT_CLASS_MCU,
-                    1, 2, 3, COMPONENT_CLASS_DISPLAY,
-                    1, 2, 4, COMPONENT_CLASS_KEYPAD,
-                    1, 2, 5, COMPONENT_CLASS_AUDIO,
-                    1, 2, 6, COMPONENT_CLASS_POWER,
-                    1, 2, 7, COMPONENT_CLASS_STORAGE,
+                    1,
+                    0,
+                    0,
+                    0, // generation = 1
+                    0xFF,
+                    0xFF, // next cursor = 0xFFFF (end)
+                    7,    // 7 components
+                    1,
+                    2,
+                    1,
+                    COMPONENT_CLASS_RADIO,
+                    1,
+                    2,
+                    2,
+                    COMPONENT_CLASS_MCU,
+                    1,
+                    2,
+                    3,
+                    COMPONENT_CLASS_DISPLAY,
+                    1,
+                    2,
+                    4,
+                    COMPONENT_CLASS_KEYPAD,
+                    1,
+                    2,
+                    5,
+                    COMPONENT_CLASS_AUDIO,
+                    1,
+                    2,
+                    6,
+                    COMPONENT_CLASS_POWER,
+                    1,
+                    2,
+                    7,
+                    COMPONENT_CLASS_STORAGE,
                 ];
 
                 let _ = self.send_response(

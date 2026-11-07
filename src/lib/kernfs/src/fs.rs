@@ -3,13 +3,13 @@
 use crate::device::{BlockDevice, FsError};
 use crypto::crc::CrcEngine;
 
-pub const MAGIC_KERNFS: u16 = 0x4B46; // "KF"
+pub const FILE_ID_KERNFS: u16 = 0x4B46; // "KF"
 pub const HEADER_SIZE: usize = 64;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct SectorHeader {
-    pub magic: u16,       // 0x4B46
+    pub ident: u16,       // 0x4B46 ("KF")
     pub version: u8,      // 0x01
     pub flags: u8,        // 0x01: Active, 0x02: Encrypted, 0x04: Compressed, 0x80: Deleted
     pub path_len: u8,     // Length of path string (max 32)
@@ -127,22 +127,24 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
     }
 
-    /// Mount filesystem, scan sector headers, calculate global sequence number.
+    /// Mount filesystem, scan sector headers, calculate global sequence number,
+    /// and resolve any interrupted atomic commits by invalidating superseded sectors.
     pub fn mount(&mut self) -> Result<(), FsError> {
         let mut max_seq = 0u32;
         let mut found_valid = false;
         let mut header_buf = [0u8; HEADER_SIZE];
         let mut used = 0u16;
         let mut deleted = 0u16;
+        self.cache = [CacheEntry::EMPTY; CACHE_CAPACITY];
 
         for sector in 0..D::TOTAL_BLOCKS {
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
-                let magic = read_u16_le(&header_buf, 0);
+                let ident = read_u16_le(&header_buf, 0);
                 let flags = header_buf[3];
                 let seq = read_u32_le(&header_buf, 42);
 
-                if magic == MAGIC_KERNFS && (flags == 0x7F || flags == 0x01) {
+                if ident == FILE_ID_KERNFS && (flags == 0x7F || flags == 0x01) {
                     found_valid = true;
                     used += 1;
                     if seq > max_seq {
@@ -156,7 +158,48 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                         let crc = read_u32_le(&header_buf, 46);
                         let perm = header_buf[5];
 
-                        self.cache_insert(path_hash, sector, payload_len, crc, perm);
+                        // Check if an earlier sector in our scan had the same path_hash
+                        let mut existing_sec = None;
+                        for entry in &self.cache {
+                            if entry.active != 0 && entry.path_hash == path_hash {
+                                existing_sec = Some(entry.sector as usize);
+                                break;
+                            }
+                        }
+
+                        if let Some(prev_sec) = existing_sec {
+                            let mut seq_buf = [0u8; 4];
+                            let prev_seq = if self
+                                .dev
+                                .read(prev_sec * D::BLOCK_SIZE + 42, &mut seq_buf)
+                                .is_ok()
+                            {
+                                read_u32_le(&seq_buf, 0)
+                            } else {
+                                0
+                            };
+
+                            if seq >= prev_seq {
+                                // Current sector is newer; invalidate previous sector
+                                if self
+                                    .dev
+                                    .program(prev_sec * D::BLOCK_SIZE + 3, &[0x00u8])
+                                    .is_ok()
+                                {
+                                    used = used.saturating_sub(1);
+                                    deleted = deleted.saturating_add(1);
+                                }
+                                self.cache_insert(path_hash, sector, payload_len, crc, perm);
+                            } else {
+                                // Previous sector is newer; invalidate current sector
+                                if self.dev.program(offset + 3, &[0x00u8]).is_ok() {
+                                    used = used.saturating_sub(1);
+                                    deleted = deleted.saturating_add(1);
+                                }
+                            }
+                        } else {
+                            self.cache_insert(path_hash, sector, payload_len, crc, perm);
+                        }
                     }
                 } else if flags == 0x00 {
                     deleted += 1;
@@ -264,10 +307,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             return Err(FsError::InvalidPath);
         }
 
-        let mut existing_perm = 0u8;
-        if let Some((_, _, _, perm)) = self.find_best_sector(path) {
-            existing_perm = perm;
-        }
+        let prev_entry = self.find_best_sector(path);
+        let existing_perm = prev_entry.map_or(0u8, |(_, _, _, perm)| perm);
 
         let target_sector = self.find_free_sector()?;
         let target_offset = target_sector * D::BLOCK_SIZE;
@@ -280,7 +321,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.global_seq += 1;
 
         let mut header_buf = [0u8; HEADER_SIZE];
-        write_u16_le(&mut header_buf, 0, MAGIC_KERNFS);
+        write_u16_le(&mut header_buf, 0, FILE_ID_KERNFS);
         header_buf[2] = 0x01; // Version 1
         header_buf[3] = 0x7F; // Active / Valid in NOR Flash (bit 7 = 0)
         header_buf[4] = path.len() as u8;
@@ -304,8 +345,17 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         // 2. Program sector header atomically
         self.dev.program(target_offset, &header_buf)?;
 
-        // 3. Invalidate old sectors matching path (if any)
-        self.mark_old_sectors_deleted(path, target_sector);
+        // 3. Invalidate previous sector in O(1) if known, else fallback scan
+        if let Some((old_sector, _, _, _)) = prev_entry
+            && old_sector != target_sector
+            && self
+                .dev
+                .program(old_sector * D::BLOCK_SIZE + 3, &[0x00u8])
+                .is_ok()
+        {
+            self.cached_used = self.cached_used.saturating_sub(1);
+            self.cached_deleted = self.cached_deleted.saturating_add(1);
+        }
 
         // 4. Update Cache
         let path_hash = CrcEngine::crc32(path.as_bytes());
@@ -316,6 +366,86 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             payload_crc,
             existing_perm,
         );
+        self.cached_used = self.cached_used.saturating_add(1);
+
+        Ok(())
+    }
+
+    /// Rename or relocate a file from `src` to `dst` using chunked sector-to-sector streaming
+    /// without truncating large payloads or allocating large stack buffers.
+    pub fn rename(&mut self, src: &str, dst: &str) -> Result<(), FsError> {
+        if src == dst {
+            return Ok(());
+        }
+        if dst.len() > 32 {
+            return Err(FsError::InvalidPath);
+        }
+
+        let (src_sector, payload_len, payload_crc, perm) =
+            self.find_best_sector(src).ok_or(FsError::NotFound)?;
+        let prev_dst = self.find_best_sector(dst);
+
+        let target_sector = self.find_free_sector()?;
+        let target_offset = target_sector * D::BLOCK_SIZE;
+        self.dev.erase_sector(target_offset)?;
+
+        // Stream payload in 128-byte chunks from src_sector to target_sector
+        let mut chunk = [0u8; 128];
+        let mut copied = 0usize;
+        while copied < payload_len {
+            let step = (payload_len - copied).min(chunk.len());
+            self.dev.read(
+                src_sector * D::BLOCK_SIZE + HEADER_SIZE + copied,
+                &mut chunk[..step],
+            )?;
+            self.dev
+                .program(target_offset + HEADER_SIZE + copied, &chunk[..step])?;
+            copied += step;
+        }
+
+        self.global_seq += 1;
+        let mut header_buf = [0u8; HEADER_SIZE];
+        write_u16_le(&mut header_buf, 0, FILE_ID_KERNFS);
+        header_buf[2] = 0x01;
+        header_buf[3] = 0x7F;
+        header_buf[4] = dst.len() as u8;
+        header_buf[5] = perm;
+        header_buf[6..6 + dst.len()].copy_from_slice(dst.as_bytes());
+        write_u32_le(&mut header_buf, 38, payload_len as u32);
+        write_u32_le(&mut header_buf, 42, self.global_seq);
+        write_u32_le(&mut header_buf, 46, payload_crc);
+        let header_crc = CrcEngine::crc32(&header_buf[..50]);
+        write_u32_le(&mut header_buf, 50, header_crc);
+
+        self.dev.program(target_offset, &header_buf)?;
+
+        // Invalidate previous dst sector (if any) and old src sector in O(1)
+        if let Some((old_dst_sector, _, _, _)) = prev_dst
+            && old_dst_sector != target_sector
+            && old_dst_sector != src_sector
+            && self
+                .dev
+                .program(old_dst_sector * D::BLOCK_SIZE + 3, &[0x00u8])
+                .is_ok()
+        {
+            self.cached_used = self.cached_used.saturating_sub(1);
+            self.cached_deleted = self.cached_deleted.saturating_add(1);
+        }
+        if src_sector != target_sector
+            && self
+                .dev
+                .program(src_sector * D::BLOCK_SIZE + 3, &[0x00u8])
+                .is_ok()
+        {
+            self.cached_used = self.cached_used.saturating_sub(1);
+            self.cached_deleted = self.cached_deleted.saturating_add(1);
+        }
+
+        let src_hash = CrcEngine::crc32(src.as_bytes());
+        self.cache_remove(src_hash);
+
+        let dst_hash = CrcEngine::crc32(dst.as_bytes());
+        self.cache_insert(dst_hash, target_sector, payload_len, payload_crc, perm);
         self.cached_used = self.cached_used.saturating_add(1);
 
         Ok(())
@@ -373,21 +503,23 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         for sector in 0..D::TOTAL_BLOCKS {
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
-                let magic = read_u16_le(&header_buf, 0);
+                let ident = read_u16_le(&header_buf, 0);
                 let flags = header_buf[3];
                 let path_len = header_buf[4] as usize;
                 let perm = header_buf[5];
 
-                if magic == MAGIC_KERNFS && (flags == 0x7F || flags == 0x01) {
-                    if path_len == path_bytes.len() && &header_buf[6..6 + path_len] == path_bytes {
-                        let seq = read_u32_le(&header_buf, 42);
-                        if seq > highest_seq {
-                            highest_seq = seq;
-                            best_sector = Some(sector);
-                            best_payload_len = read_u32_le(&header_buf, 38) as usize;
-                            best_crc = read_u32_le(&header_buf, 46);
-                            best_permission = perm;
-                        }
+                if ident == FILE_ID_KERNFS
+                    && (flags == 0x7F || flags == 0x01)
+                    && path_len == path_bytes.len()
+                    && &header_buf[6..6 + path_len] == path_bytes
+                {
+                    let seq = read_u32_le(&header_buf, 42);
+                    if seq > highest_seq {
+                        highest_seq = seq;
+                        best_sector = Some(sector);
+                        best_payload_len = read_u32_le(&header_buf, 38) as usize;
+                        best_crc = read_u32_le(&header_buf, 46);
+                        best_permission = perm;
                     }
                 }
             }
@@ -411,44 +543,17 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
-                let magic = read_u16_le(&header_buf, 0);
+                let ident = read_u16_le(&header_buf, 0);
                 let flags = header_buf[3];
 
-                // Unformatted (magic != MAGIC_KERNFS), erased (0xFF), or deleted (0x00) sector is free to use
-                if magic != MAGIC_KERNFS || flags == 0xFF || flags == 0x00 {
+                // Unformatted (ident != FILE_ID_KERNFS), erased (0xFF), or deleted (0x00) sector is free to use
+                if ident != FILE_ID_KERNFS || flags == 0xFF || flags == 0x00 {
                     return Ok(sector);
                 }
             }
         }
 
         Err(FsError::CapacityFull)
-    }
-
-    /// Mark older versions of file as deleted.
-    fn mark_old_sectors_deleted(&mut self, path: &str, current_sector: usize) {
-        let mut header_buf = [0u8; HEADER_SIZE];
-        let path_bytes = path.as_bytes();
-
-        for sector in 0..D::TOTAL_BLOCKS {
-            if sector == current_sector {
-                continue;
-            }
-            let offset = sector * D::BLOCK_SIZE;
-            if self.dev.read(offset, &mut header_buf).is_ok() {
-                let magic = read_u16_le(&header_buf, 0);
-                let flags = header_buf[3];
-                let path_len = header_buf[4] as usize;
-
-                if magic == MAGIC_KERNFS && (flags == 0x7F || flags == 0x01) {
-                    if path_len == path_bytes.len() && &header_buf[6..6 + path_len] == path_bytes {
-                        if self.dev.program(offset + 3, &[0x00u8]).is_ok() {
-                            self.cached_used = self.cached_used.saturating_sub(1);
-                            self.cached_deleted = self.cached_deleted.saturating_add(1);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     pub fn get_permission(&mut self, path: &str) -> Result<u8, FsError> {
@@ -460,9 +565,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     pub fn set_permission(&mut self, path: &str, perm: u8) -> Result<(), FsError> {
-        if let Some((sector, _, _, _)) = self.find_best_sector(path) {
+        if let Some((sector, payload_len, payload_crc, _)) = self.find_best_sector(path) {
             let offset = sector * D::BLOCK_SIZE;
             self.dev.program(offset + 5, &[perm])?;
+            let path_hash = CrcEngine::crc32(path.as_bytes());
+            self.cache_insert(path_hash, sector, payload_len, payload_crc, perm);
             Ok(())
         } else {
             Err(FsError::NotFound)
@@ -488,57 +595,57 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         for sector in 0..D::TOTAL_BLOCKS {
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
-                let magic = read_u16_le(&header_buf, 0);
+                let ident = read_u16_le(&header_buf, 0);
                 let flags = header_buf[3];
                 let path_len = header_buf[4] as usize;
                 let perm = header_buf[5];
 
-                if magic == MAGIC_KERNFS && (flags == 0x7F || flags == 0x01) {
-                    if path_len > 0
-                        && path_len <= 32
-                        && header_buf[6..6 + path_len].iter().all(|&b| b < 128)
-                    {
-                        let full_path =
-                            unsafe { core::str::from_utf8_unchecked(&header_buf[6..6 + path_len]) };
-                        let payload_len = read_u32_le(&header_buf, 38) as usize;
+                if ident == FILE_ID_KERNFS
+                    && (flags == 0x7F || flags == 0x01)
+                    && path_len > 0
+                    && path_len <= 32
+                    && header_buf[6..6 + path_len].iter().all(|&b| b < 128)
+                {
+                    let full_path =
+                        unsafe { core::str::from_utf8_unchecked(&header_buf[6..6 + path_len]) };
+                    let payload_len = read_u32_le(&header_buf, 38) as usize;
 
-                        // Determine the child portion relative to target_dir
-                        let child_start = if target_dir.is_empty() || target_dir == "/" {
-                            // Root listing: child starts after the leading '/'
-                            if full_path.as_bytes().first() == Some(&b'/') {
-                                1
-                            } else {
-                                0
-                            }
+                    // Determine the child portion relative to target_dir
+                    let child_start = if target_dir.is_empty() || target_dir == "/" {
+                        // Root listing: child starts after the leading '/'
+                        if full_path.as_bytes().first() == Some(&b'/') {
+                            1
                         } else {
-                            let fp_bytes = full_path.as_bytes();
-                            let td_bytes = target_dir.as_bytes();
-                            if fp_bytes.starts_with(td_bytes)
-                                && fp_bytes.get(td_bytes.len()) == Some(&b'/')
-                            {
-                                td_bytes.len() + 1 // skip past target_dir + '/'
-                            } else {
-                                continue; // not under this directory
-                            }
+                            0
+                        }
+                    } else {
+                        let fp_bytes = full_path.as_bytes();
+                        let td_bytes = target_dir.as_bytes();
+                        if fp_bytes.starts_with(td_bytes)
+                            && fp_bytes.get(td_bytes.len()) == Some(&b'/')
+                        {
+                            td_bytes.len() + 1 // skip past target_dir + '/'
+                        } else {
+                            continue; // not under this directory
+                        }
+                    };
+
+                    if child_start >= full_path.len() {
+                        continue; // exact match on dir itself, skip
+                    }
+
+                    // Extract immediate child: truncate at the next '/' if any
+                    let rest = &full_path.as_bytes()[child_start..];
+                    let (entry_end, is_dir) =
+                        if let Some(slash_pos) = rest.iter().position(|&b| b == b'/') {
+                            (child_start + slash_pos, true) // subdirectory — truncate before the slash
+                        } else {
+                            (full_path.len(), false) // leaf file — use full path
                         };
 
-                        if child_start >= full_path.len() {
-                            continue; // exact match on dir itself, skip
-                        }
-
-                        // Extract immediate child: truncate at the next '/' if any
-                        let rest = &full_path.as_bytes()[child_start..];
-                        let (entry_end, is_dir) =
-                            if let Some(slash_pos) = rest.iter().position(|&b| b == b'/') {
-                                (child_start + slash_pos, true) // subdirectory — truncate before the slash
-                            } else {
-                                (full_path.len(), false) // leaf file — use full path
-                            };
-
-                        let entry_path = &full_path[..entry_end];
-                        cb(entry_path, payload_len, perm, is_dir);
-                        count += 1;
-                    }
+                    let entry_path = &full_path[..entry_end];
+                    cb(entry_path, payload_len, perm, is_dir);
+                    count += 1;
                 }
             }
         }
@@ -651,5 +758,27 @@ mod tests {
         // Offset beyond length returns 0
         let n3 = fs.read_file_at("/test.bin", 100, &mut out).unwrap();
         assert_eq!(n3, 0);
+    }
+
+    #[test]
+    fn test_wrap_around_seq_recovery_and_rename() {
+        let mut flash = MockFlash::new();
+        {
+            let mut fs = KernFS::new(&mut flash);
+            fs.format(None).unwrap();
+            for i in 0..20u8 {
+                let payload = [b'A' + i; 32];
+                fs.write_file("/pref/test.cfg", &payload).unwrap();
+            }
+            fs.rename("/pref/test.cfg", "/pref/renamed.cfg").unwrap();
+        }
+
+        let mut fs2 = KernFS::new(&mut flash);
+        fs2.mount().unwrap();
+        let mut out = [0u8; 32];
+        let n = fs2.read_file("/pref/renamed.cfg", &mut out).unwrap();
+        assert_eq!(n, 32);
+        assert_eq!(out, [b'A' + 19; 32]);
+        assert!(fs2.read_file("/pref/test.cfg", &mut out).is_err());
     }
 }

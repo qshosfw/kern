@@ -84,7 +84,7 @@ impl KineticScroller {
         } else if abs_diff <= 28 {
             4
         } else {
-            ((abs_diff / 6) as i16).clamp(4, 8)
+            (abs_diff / 6).clamp(4, 8)
         };
 
         if abs_diff <= step {

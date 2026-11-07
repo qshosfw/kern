@@ -82,6 +82,12 @@ impl NumberPickerView {
     }
 }
 
+impl Default for NumberPickerView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl View<NumberPickerModel> for NumberPickerView {
     fn render(&self, canvas: &mut Canvas, model: &NumberPickerModel) {
         let sheet_y = 16i16;

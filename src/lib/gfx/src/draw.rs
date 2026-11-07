@@ -57,7 +57,7 @@ pub fn draw_bitmap(
     data: &[u8],
     color: Color,
 ) {
-    let bytes_per_row = (width as usize + 7) / 8;
+    let bytes_per_row = (width as usize).div_ceil(8);
     for row in 0..height as usize {
         for col in 0..width as usize {
             let byte = data[row * bytes_per_row + (col / 8)];

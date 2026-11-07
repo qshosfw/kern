@@ -6,22 +6,18 @@
 //!
 //! A 10-count sub-millisecond accumulator maintains the global millisecond counter.
 
-use portable_atomic::{AtomicU8, AtomicU32, Ordering};
+use portable_atomic::{AtomicU32, Ordering};
 
-/// Global millisecond counter, incremented every 10 SysTick ticks (1ms).
+/// Global millisecond counter, incremented every SysTick tick (1ms).
 static MILLIS: AtomicU32 = AtomicU32::new(0);
 
-/// Sub-millisecond tick accumulator (0..9 at 10 kHz).
-static SUB_MS_COUNT: AtomicU8 = AtomicU8::new(0);
-
-/// SysTick interrupt frequency in Hz (20 kHz = 50 µs interval).
-pub const SYSTICK_HZ: u32 = 20_000;
-pub const TICKS_PER_MS: u8 = 20;
+/// SysTick interrupt frequency in Hz (1000 Hz = 1 ms interval).
+pub const SYSTICK_HZ: u32 = 1_000;
 
 /// Ticks per microsecond (48 at 48 MHz, 72 at 72 MHz).
 static TICKS_PER_US: AtomicU32 = AtomicU32::new(48);
 
-/// Initialize SysTick for 50 µs (20 kHz) interrupts.
+/// Initialize SysTick for 1 ms (1 kHz) interrupts.
 pub fn init() {
     update_systick_freq(crate::rcc::sysclk_hz());
 }
@@ -43,16 +39,10 @@ pub fn update_systick_freq(sysclk_hz: u32) {
     }
 }
 
-/// Called by the SysTick exception handler at 10 kHz to increment the ms counter every 1ms.
+/// Called by the SysTick exception handler at 1 kHz to increment the ms counter every 1ms.
 #[inline(always)]
 pub fn on_systick() {
-    let count = SUB_MS_COUNT.load(Ordering::Relaxed);
-    if count >= TICKS_PER_MS - 1 {
-        SUB_MS_COUNT.store(0, Ordering::Relaxed);
-        MILLIS.fetch_add(1, Ordering::Relaxed);
-    } else {
-        SUB_MS_COUNT.store(count + 1, Ordering::Relaxed);
-    }
+    MILLIS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Get the current millisecond count since boot.
@@ -77,11 +67,22 @@ pub fn delay_ms(ms: u32) {
         return;
     }
 
-    let mut rem = ms;
-    while rem > 0 {
-        let chunk = rem.min(50);
-        crate::time::spin_us(chunk * 1000);
-        rem -= chunk;
+    if cortex_m::register::primask::read().is_inactive() {
+        let mut rem = ms;
+        while rem > 0 {
+            let chunk = rem.min(50);
+            delay_us(chunk * 1000);
+            rem -= chunk;
+            unsafe {
+                pac::iwdg::IWDG_KR.write_volatile(pac::iwdg::KR_KEY_RELOAD);
+            }
+        }
+        return;
+    }
+
+    let start = millis();
+    while millis().wrapping_sub(start) < ms {
+        cortex_m::asm::nop();
         unsafe {
             pac::iwdg::IWDG_KR.write_volatile(pac::iwdg::KR_KEY_RELOAD);
         }
@@ -114,8 +115,13 @@ pub fn delay_us(us: u32) {
             if elapsed >= remaining {
                 break;
             }
-            remaining -= elapsed;
-            prev = curr;
+            if elapsed > 0 {
+                remaining -= elapsed;
+                prev = curr;
+            } else {
+                // Guarantee forward progress if counter hasn't advanced between back-to-back reads
+                remaining = remaining.saturating_sub(4);
+            }
         }
     }
 }

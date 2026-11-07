@@ -6,7 +6,7 @@
 
 use crypto::crc::CrcEngine;
 
-pub const BOOT_RECORD_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x02, 0xFD];
+pub const BOOT_RECORD_IDENT: [u8; 4] = [0xC0, 0xDE, 0x02, 0xFD];
 
 /// Reset reason FourCC tags (§13.4 normative)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub enum ResetReason {
     Appf = u32::from_le_bytes(*b"APPF"),
     /// Hardware Independent Watchdog timeout
     Wdog = u32::from_le_bytes(*b"WDOG"),
-    /// Memory magic-tag corruption (§13.2)
+    /// Memory format-tag corruption (§13.2)
     Tags = u32::from_le_bytes(*b"TAGS"),
     /// Supply voltage brownout reset
     Brow = u32::from_le_bytes(*b"BROW"),
@@ -102,7 +102,7 @@ pub struct BootSlot {
     pub crash_count: u8,
     pub forensics: FaultForensics,
     pub rsvd: [u8; 2],
-    pub magic: [u8; 4],
+    pub ident: [u8; 4],
     pub crc32: u32,
 }
 
@@ -123,7 +123,7 @@ impl BootSlot {
             crash_count: 0,
             forensics: FaultForensics::empty(),
             rsvd: [0; 2],
-            magic: [0; 4],
+            ident: [0; 4],
             crc32: 0,
         }
     }
@@ -139,9 +139,9 @@ impl BootSlot {
         CrcEngine::crc32(bytes)
     }
 
-    /// Returns true if slot contains valid magic and valid CRC32
+    /// Returns true if slot contains valid format identifier and valid CRC32
     pub fn is_valid(&self) -> bool {
-        if self.magic != BOOT_RECORD_MAGIC {
+        if self.ident != BOOT_RECORD_IDENT {
             return false;
         }
         self.compute_crc() == self.crc32
@@ -206,14 +206,14 @@ impl BootRecord {
         slot
     }
 
-    /// Finalize writing the active slot with magic and CRC32.
+    /// Finalize writing the active slot with format identifier and CRC32.
     pub fn commit_write(&mut self) {
         let slot = if self.active_slot == 0 {
             &mut self.slot_b
         } else {
             &mut self.slot_a
         };
-        slot.magic = BOOT_RECORD_MAGIC;
+        slot.ident = BOOT_RECORD_IDENT;
         slot.crc32 = slot.compute_crc();
         self.active_slot ^= 1;
     }

@@ -1,6 +1,6 @@
 //! Application Registry and OS Application Dispatch.
 
-use crate::services::FirmwareContext;
+use crate::services::SysContext;
 
 use kernel::app::{AppMetadata, AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
@@ -10,7 +10,7 @@ use kernel::event::Event;
 #[derive(Clone, Copy)]
 pub struct OsAppDescriptor {
     pub metadata: AppMetadata,
-    pub vtable: AppVTable<FirmwareContext<'static, 'static>>,
+    pub vtable: AppVTable<SysContext<'static, 'static>>,
     pub instance: fn() -> *mut (),
     pub init: fn(*mut ()),
     pub required_capabilities: CapabilitySet,
@@ -21,7 +21,7 @@ pub struct OsAppDescriptor {
 #[derive(Clone, Copy)]
 pub struct DynamicAppRecord {
     pub metadata: AppMetadata,
-    pub vtable: AppVTable<FirmwareContext<'static, 'static>>,
+    pub vtable: AppVTable<SysContext<'static, 'static>>,
     pub instance: *mut (),
     pub required_capabilities: CapabilitySet,
 }
@@ -30,7 +30,7 @@ static mut DYNAMIC_APP: Option<DynamicAppRecord> = None;
 
 // Declarative OS Applications Registry (Core Triad)
 kernel::define_os_apps! {
-    context: crate::services::FirmwareContext<'static, 'static>;
+    context: crate::services::SysContext<'static, 'static>;
     APP_ID_LAUNCHER => crate::apps::LauncherApp [
         meta: AppMetadata { name: "Home", icon: &[0u8; 32], icon_8: &[0u8; 8] },
         caps: CapabilitySet::NONE
@@ -128,7 +128,7 @@ impl AppRegistry {
         }
     }
 
-    pub fn on_start<'a>(app_id: usize, ctx: &mut FirmwareContext<'a, '_>) {
+    pub fn on_start<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
         if let Some(entry) = APP_TABLE.get(app_id) {
             let ptr = (entry.instance)();
             unsafe { (entry.vtable.on_start)(ptr, core::mem::transmute(ctx)) }
@@ -141,11 +141,7 @@ impl AppRegistry {
         }
     }
 
-    pub fn on_event<'a>(
-        app_id: usize,
-        ctx: &mut FirmwareContext<'a, '_>,
-        event: &Event,
-    ) -> EventResult {
+    pub fn on_event<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>, event: &Event) -> EventResult {
         if let Some(entry) = APP_TABLE.get(app_id) {
             let ptr = (entry.instance)();
             unsafe { (entry.vtable.on_event)(ptr, core::mem::transmute(ctx), event) }
@@ -162,7 +158,7 @@ impl AppRegistry {
 
     pub fn on_modal_result<'a>(
         app_id: usize,
-        ctx: &mut FirmwareContext<'a, '_>,
+        ctx: &mut SysContext<'a, '_>,
         result: &ModalResult<'_>,
     ) -> EventResult {
         if let Some(entry) = APP_TABLE.get(app_id) {
@@ -186,7 +182,7 @@ impl AppRegistry {
     pub fn render<'a>(
         app_id: usize,
         canvas: &mut gfx::Canvas,
-        ctx: &'a FirmwareContext<'a, '_>,
+        ctx: &'a SysContext<'a, '_>,
         sb_cfg: &mut StatusBarConfig<'_>,
     ) {
         if let Some(entry) = APP_TABLE.get(app_id) {
@@ -206,7 +202,7 @@ impl AppRegistry {
         }
     }
 
-    pub fn on_exit<'a>(app_id: usize, ctx: &mut FirmwareContext<'a, '_>) {
+    pub fn on_exit<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
         if let Some(entry) = APP_TABLE.get(app_id) {
             let ptr = (entry.instance)();
             unsafe { (entry.vtable.on_exit)(ptr, core::mem::transmute(ctx)) }

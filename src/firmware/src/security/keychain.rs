@@ -10,7 +10,7 @@ use super::constants::*;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PackedDeviceKey {
-    pub magic: [u8; 4],
+    pub ident: [u8; 4],
     pub hardware_nonce: [u8; 16],
     pub device_signature: [u8; 16],
 }
@@ -18,7 +18,7 @@ pub struct PackedDeviceKey {
 impl PackedDeviceKey {
     pub const fn empty() -> Self {
         Self {
-            magic: [0; 4],
+            ident: [0; 4],
             hardware_nonce: [0; 16],
             device_signature: [0; 16],
         }
@@ -28,7 +28,7 @@ impl PackedDeviceKey {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PackedPasscodeKey {
-    pub magic: [u8; 4],
+    pub ident: [u8; 4],
     pub flags: u8,
     pub failed_attempts: u8,
     pub passcode_len: u8,
@@ -42,7 +42,7 @@ pub struct PackedPasscodeKey {
 impl PackedPasscodeKey {
     pub const fn empty() -> Self {
         Self {
-            magic: [0; 4],
+            ident: [0; 4],
             flags: 0,
             failed_attempts: 0,
             passcode_len: 0,
@@ -58,7 +58,7 @@ impl PackedPasscodeKey {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PackedStorageKey {
-    pub magic: [u8; 4],
+    pub ident: [u8; 4],
     pub storage_nonce: [u8; 16],
     pub salt: [u8; 16],
     pub encrypted_mk: [u8; 32],
@@ -67,7 +67,7 @@ pub struct PackedStorageKey {
 impl PackedStorageKey {
     pub const fn empty() -> Self {
         Self {
-            magic: [0; 4],
+            ident: [0; 4],
             storage_nonce: [0; 16],
             salt: [0; 16],
             encrypted_mk: [0; 32],
@@ -78,7 +78,7 @@ impl PackedStorageKey {
 pub(crate) fn compute_hw_mac(
     uid: &[u8; 12],
     nonce: &[u8; 16],
-    magic: &[u8; 4],
+    ident: &[u8; 4],
     data: &[u8],
 ) -> [u8; 16] {
     let mut hardware_kek = SecretBuffer::new();
@@ -86,35 +86,36 @@ pub(crate) fn compute_hw_mac(
     let mut key16 = [0u8; 16];
     key16.copy_from_slice(&hardware_kek.as_slice()[0..16]);
     let cipher = Ascon128::new(key16);
-    cipher.compute_mac(nonce, magic, data)
+    cipher.compute_mac(nonce, ident, data)
 }
 
 fn key_valid(
     filesystem: &mut SystemStorage,
     path: &str,
-    magic: &[u8; 4],
+    ident: &[u8; 4],
     expected_len: usize,
 ) -> bool {
     let mut header = [0u8; 4];
     filesystem.file_size(path) == Ok(expected_len)
         && filesystem.read_file(path, &mut header).is_ok()
-        && &header == magic
+        && &header == ident
 }
 
 fn init_device_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid: &[u8; 12]) {
     let mut dev_key = PackedDeviceKey::empty();
-    dev_key.magic = *MAGIC_DEVICE_KEY;
+    dev_key.ident = *FILE_ID_DEVICE_KEY;
     trng.fill_bytes(
         &mut dev_key.hardware_nonce,
         bsp::entropy::sample_hardware_noise(),
     );
-    dev_key.device_signature = compute_hw_mac(uid, &dev_key.hardware_nonce, MAGIC_DEVICE_KEY, uid);
+    dev_key.device_signature =
+        compute_hw_mac(uid, &dev_key.hardware_nonce, FILE_ID_DEVICE_KEY, uid);
     let _ = filesystem.write_struct(KEY_PATHS[0], &dev_key);
 }
 
 fn init_passcode_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid: &[u8; 12]) {
     let mut passcode_key = PackedPasscodeKey::empty();
-    passcode_key.magic = *MAGIC_PASSCODE_KEY;
+    passcode_key.ident = *FILE_ID_PASSCODE_KEY;
     passcode_key.max_tries = DEFAULT_MAX_TRIES;
     passcode_key.iterations = DEFAULT_PBKDF_ITERATIONS;
     trng.fill_bytes(
@@ -135,7 +136,7 @@ fn init_passcode_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, ui
     passcode_key.mac = compute_hw_mac(
         uid,
         &passcode_key.salt,
-        MAGIC_PASSCODE_KEY,
+        FILE_ID_PASSCODE_KEY,
         &passcode_key.passcode_verifier,
     );
 
@@ -144,7 +145,7 @@ fn init_passcode_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, ui
 
 fn init_storage_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid: &[u8; 12]) {
     let mut storage_key = PackedStorageKey::empty();
-    storage_key.magic = *MAGIC_STORAGE_KEY;
+    storage_key.ident = *FILE_ID_STORAGE_KEY;
     let s_bytes = unsafe {
         core::slice::from_raw_parts_mut(&mut storage_key.storage_nonce as *mut _ as *mut u8, 64)
     };
@@ -172,7 +173,7 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     let dev_valid = key_valid(
         filesystem,
         KEY_PATHS[0],
-        MAGIC_DEVICE_KEY,
+        FILE_ID_DEVICE_KEY,
         core::mem::size_of::<PackedDeviceKey>(),
     );
     if !dev_valid {
@@ -183,7 +184,7 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     let pass_valid = key_valid(
         filesystem,
         KEY_PATHS[1],
-        MAGIC_PASSCODE_KEY,
+        FILE_ID_PASSCODE_KEY,
         core::mem::size_of::<PackedPasscodeKey>(),
     );
     if !pass_valid {
@@ -194,7 +195,7 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     let sto_valid = key_valid(
         filesystem,
         KEY_PATHS[2],
-        MAGIC_STORAGE_KEY,
+        FILE_ID_STORAGE_KEY,
         core::mem::size_of::<PackedStorageKey>(),
     );
     if !sto_valid {

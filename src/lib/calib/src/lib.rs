@@ -1,24 +1,24 @@
 #![no_std]
 
-/// KERN Silicon Calibration Subsystem
-///
-/// Models the 512-byte packed factory calibration sector matching
-/// Quansheng UV-K1 / UV-K5 EEPROM addresses 0x1E00..0x2000.
-///
-/// Memory Geometry:
-/// - 0x000..0x0BF (192 B): Squelch thresholds (2 banks x 96 B: UHF and VHF)
-/// - 0x0C0..0x0CF ( 16 B): S-meter / RSSI thresholds (2 bands x 4 x u16: UHF and VHF)
-/// - 0x0D0..0x13F (112 B): Per-band TX power PA bias (7 bands x 16 B)
-/// - 0x140..0x14B ( 12 B): Battery ADC 6-point calibration curve
-/// - 0x14C..0x14F (  4 B): Battery reserved padding
-/// - 0x150..0x163 ( 20 B): VOX1 thresholds (10 x u16)
-/// - 0x164..0x167 (  4 B): VOX1 reserved padding
-/// - 0x168..0x17B ( 20 B): VOX0 thresholds (10 x u16)
-/// - 0x17C..0x17F (  4 B): VOX0 reserved padding
-/// - 0x180..0x184 (  5 B): Mic sensitivity gain dB (5 levels)
-/// - 0x185..0x187 (  3 B): Mic sensitivity padding
-/// - 0x188..0x18F (  8 B): Calibration Misc (XTAL trim, LNA/Mixer masks, Volume/DAC gains)
-/// - 0x190..0x1FF (112 B): Reserved / Alignment padding to 512 bytes
+//! KERN Silicon Calibration Subsystem
+//!
+//! Models the 512-byte packed factory calibration sector matching
+//! Quansheng UV-K1 / UV-K5 EEPROM addresses 0x1E00..0x2000.
+//!
+//! Memory Geometry:
+//! - 0x000..0x0BF (192 B): Squelch thresholds (2 banks x 96 B: UHF and VHF)
+//! - 0x0C0..0x0CF ( 16 B): S-meter / RSSI thresholds (2 bands x 4 x u16: UHF and VHF)
+//! - 0x0D0..0x13F (112 B): Per-band TX power PA bias (7 bands x 16 B)
+//! - 0x140..0x14B ( 12 B): Battery ADC 6-point calibration curve
+//! - 0x14C..0x14F (  4 B): Battery reserved padding
+//! - 0x150..0x163 ( 20 B): VOX1 thresholds (10 x u16)
+//! - 0x164..0x167 (  4 B): VOX1 reserved padding
+//! - 0x168..0x17B ( 20 B): VOX0 thresholds (10 x u16)
+//! - 0x17C..0x17F (  4 B): VOX0 reserved padding
+//! - 0x180..0x184 (  5 B): Mic sensitivity gain dB (5 levels)
+//! - 0x185..0x187 (  3 B): Mic sensitivity padding
+//! - 0x188..0x18F (  8 B): Calibration Misc (XTAL trim, LNA/Mixer masks, Volume/DAC gains)
+//! - 0x190..0x1FF (112 B): Reserved / Alignment padding to 512 bytes
 
 /// Squelch parameter table for one frequency bank (96 bytes).
 /// Contains 6 tables of 16 bytes for levels 0..9 (entries 10..15 reserved).
@@ -183,7 +183,7 @@ pub fn calculate_battery_percentage(raw_adc: u16, curve: &[u16; 6]) -> u8 {
 /// Convert raw battery ADC reading to millivolts using the 7.60V baseline calibration constant.
 #[inline(always)]
 pub fn calculate_battery_mv(raw_adc: u16, calib_const: u16) -> u16 {
-    let cal = if calib_const >= 1000 && calib_const <= 3500 {
+    let cal = if (1000..=3500).contains(&calib_const) {
         calib_const as u32
     } else {
         2227

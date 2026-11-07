@@ -131,7 +131,7 @@ impl Adc {
     pub fn read_mcu_temp_deci_c(&self, vdda_mv: u16) -> i16 {
         unsafe {
             // Validate VDDA reference: if out of range, assume typical 3.3V
-            let vdda = if vdda_mv < 1800 || vdda_mv > 3800 {
+            let vdda = if !(1800..=3800).contains(&vdda_mv) {
                 3300u32
             } else {
                 vdda_mv as u32
@@ -141,24 +141,12 @@ impl Adc {
             let c1 = TS_CAL1.read_volatile();
             let c2 = TS_CAL2.read_volatile();
 
-            let (cal1, cal2) = if c1 >= 200
-                && c1 <= 3800
-                && c2 > c1
-                && c2 <= 4000
-                && (c2 - c1) >= 50
-            {
-                (c1, c2)
-            } else {
-                // Try secondary factory calibration at 0x1FFF_0F14 / 0x1FFF_0F18
-                let alt1 = (0x1FFF_0F14 as *const u16).read_volatile();
-                let alt2 = (0x1FFF_0F18 as *const u16).read_volatile();
-                if alt1 >= 200 && alt1 <= 3800 && alt2 > alt1 && alt2 <= 4000 && (alt2 - alt1) >= 50
-                {
-                    (alt1, alt2)
+            let (cal1, cal2) =
+                if (200..=3800).contains(&c1) && c2 > c1 && c2 <= 4000 && (c2 - c1) >= 50 {
+                    (c1, c2)
                 } else {
                     (0xFFFF, 0xFFFF)
-                }
-            };
+                };
 
             // 8-sample software average for high thermal resolution
             let ts_data = self.read_channel_averaged(16, 8);

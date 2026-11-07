@@ -229,6 +229,12 @@ impl SystemPower {
     }
 }
 
+impl Default for SystemPower {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl kernel::service::PowerService for SystemPower {
     fn battery_percentage(&self) -> u8 {
         self.battery_pct

@@ -49,6 +49,12 @@ impl ProgressModalView {
     }
 }
 
+impl Default for ProgressModalView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl View<ProgressModalModel> for ProgressModalView {
     fn render(&self, canvas: &mut Canvas, model: &ProgressModalModel) {
         let sheet_y = 18i16;
@@ -93,15 +99,14 @@ impl View<ProgressModalModel> for ProgressModalView {
     }
 
     fn on_event(&mut self, model: &mut ProgressModalModel, event: &Event) -> bool {
-        if model.cancelable {
-            if let Event::Key {
+        if model.cancelable
+            && let Event::Key {
                 code: KeyCode::Exit,
                 state: KeyState::Pressed,
             } = *event
-            {
-                model.is_canceled = true;
-                return true;
-            }
+        {
+            model.is_canceled = true;
+            return true;
         }
         false
     }

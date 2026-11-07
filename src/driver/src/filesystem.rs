@@ -235,24 +235,24 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), StorageError> {
-        if let Ok(attrs) = self.get_attributes(old_path) {
-            if (attrs.permission & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0
-                || old_path.starts_with("/sys/calib.")
-            {
-                return Err(StorageError::AccessDenied);
-            }
+        Self::sanitize_path(old_path)?;
+        Self::sanitize_path(new_path)?;
+        let perm = self.fs.get_permission(old_path).map_err(Self::map_error)?;
+        if (perm & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0 || old_path.starts_with("/sys/calib.") {
+            return Err(StorageError::AccessDenied);
         }
 
-        let mut buf = [0u8; 512];
-        let len = self.read_file(old_path, &mut buf)?;
-        self.write_file(new_path, &buf[..len])?;
-
-        if let Ok(attrs) = self.get_attributes(old_path) {
-            let _ = self.set_attributes(new_path, attrs);
+        #[cfg(feature = "secure_fs")]
+        if (perm & ATTR_ENCRYPTED) != 0 {
+            let mut buf = [0u8; 512];
+            let len = self.read_file(old_path, &mut buf)?;
+            self.write_file(new_path, &buf[..len])?;
+            let _ = self.set_attributes(new_path, FileAttributes { permission: perm });
+            self.remove(old_path)?;
+            return Ok(());
         }
 
-        self.remove(old_path)?;
-        Ok(())
+        self.fs.rename(old_path, new_path).map_err(Self::map_error)
     }
 }
 

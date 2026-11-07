@@ -40,6 +40,7 @@ pub static BOOT_RECORD: BootRecordCell = BootRecordCell::new();
 static mut FAULT_REENTRY_LOCK: bool = false;
 
 /// Bare-metal naked HardFault exception entry.
+#[cfg(target_arch = "arm")]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn HardFault() -> ! {
@@ -61,6 +62,12 @@ pub unsafe extern "C" fn HardFault() -> ! {
         "bx r2",
         inner = sym hard_fault_inner,
     );
+}
+
+#[cfg(not(target_arch = "arm"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn HardFault() -> ! {
+    loop {}
 }
 
 #[inline(never)]
@@ -194,8 +201,10 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
 
 // ── Production & Graphical Panic Handler ────────────────────────────────────
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    #[cfg(target_arch = "arm")]
     unsafe {
         core::arch::asm!(
             "cpsid i",
@@ -210,6 +219,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
             options(noreturn)
         );
     }
+    #[cfg(not(target_arch = "arm"))]
+    loop {}
 }
 
 #[inline(never)]
@@ -256,8 +267,13 @@ unsafe extern "C" fn panic_inner(info_ptr: usize, sp: u32, lr: u32) -> ! {
     slot.stack_dump[11] = unwound_lrs[3];
 
     let ipsr: u32;
+    #[cfg(target_arch = "arm")]
     unsafe {
         core::arch::asm!("mrs {}, IPSR", out(reg) ipsr);
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        ipsr = 0;
     }
 
     let sig_data = [file_hash, line as u32, lr, sp, ResetReason::Appf as u32];

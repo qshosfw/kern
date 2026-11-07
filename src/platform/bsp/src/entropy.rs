@@ -35,7 +35,7 @@ pub fn sample_hardware_noise() -> u32 {
     let adc_en = unsafe { (pac::rcc::RCC_APB2ENR.read_volatile() & (1 << 9)) != 0 };
     if adc_en {
         let adc_val = unsafe { pac::adc::ADC_DR.read_volatile() & 0x0FFF };
-        entropy ^= (adc_val as u32) << 20;
+        entropy ^= adc_val << 20;
     }
 
     entropy

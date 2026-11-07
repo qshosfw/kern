@@ -1,5 +1,5 @@
 #![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_main)]
 
 use crate::config::MasterConfig;
 use crate::hardware::SystemHardware;
@@ -32,7 +32,7 @@ pub mod services;
 pub mod system;
 
 pub use crate::apps::AppRegistry;
-pub use crate::services::FirmwareContext as SysContext;
+pub use crate::services::SysContext;
 
 /// Global event queue for zero-alloc event-driven kernel dispatch
 pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 16>>> = Mutex::new(RefCell::new(Deque::new()));
@@ -91,6 +91,7 @@ fn SysTick() {
     drivers::backlight::systick_pwm_tick();
 }
 
+#[cfg(not(test))]
 #[entry]
 fn main() -> ! {
     // High-Assurance Stack Painting for memory introspection & watermarking (§13.1)

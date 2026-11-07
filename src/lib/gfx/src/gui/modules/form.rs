@@ -77,6 +77,12 @@ impl FormView {
     }
 }
 
+impl Default for FormView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a, const N: usize> View<FormModel<'a, N>> for FormView {
     fn render(&self, canvas: &mut Canvas, model: &FormModel<'a, N>) {
         let sheet_y = 12i16;

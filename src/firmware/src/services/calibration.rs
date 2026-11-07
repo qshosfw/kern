@@ -17,13 +17,13 @@ pub const CALIB_FILE_PATH: &str = "/sys/calib.dat";
 pub const CALIB_BAK_PATH: &str = "/sys/calib.bak";
 pub const CALIB_SIG_PATH: &str = "/sys/calib.sig";
 
-pub const CALIB_SIG_MAGIC: &[u8; 4] = b"CLBS";
+pub const CALIB_SIG_IDENT: &[u8; 4] = b"CLBS";
 
 /// 32-byte Hardware Silicon Binding Signature for calibration data.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct CalibSignature {
-    pub magic: [u8; 4],       // b"CLBS"
+    pub ident: [u8; 4],       // b"CLBS"
     pub version: u8,          // 1
     pub _reserved: [u8; 3],   // Alignment padding
     pub hardware_serial: u64, // MurmurHash3 64-bit hardware serial
@@ -33,7 +33,7 @@ pub struct CalibSignature {
 impl CalibSignature {
     pub const fn empty() -> Self {
         Self {
-            magic: [0; 4],
+            ident: [0; 4],
             version: 0,
             _reserved: [0; 3],
             hardware_serial: 0,
@@ -46,7 +46,7 @@ impl CalibSignature {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 32 || &bytes[..4] != CALIB_SIG_MAGIC {
+        if bytes.len() < 32 || &bytes[..4] != CALIB_SIG_IDENT {
             return None;
         }
         let sig: Self = unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) };
@@ -74,10 +74,10 @@ pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibS
     let mut key16 = [0u8; 16];
     key16.copy_from_slice(&calib_kek.as_slice()[0..16]);
     let cipher = Ascon128::new(key16);
-    let auth_tag = cipher.compute_mac(&nonce, CALIB_SIG_MAGIC, calib);
+    let auth_tag = cipher.compute_mac(&nonce, CALIB_SIG_IDENT, calib);
 
     CalibSignature {
-        magic: *CALIB_SIG_MAGIC,
+        ident: *CALIB_SIG_IDENT,
         version: 1,
         _reserved: [0; 3],
         hardware_serial: hw_serial,
@@ -91,7 +91,7 @@ pub fn verify_device_signature(
     sig: &CalibSignature,
     mcu_uid: &[u8; 12],
 ) -> bool {
-    if &sig.magic != CALIB_SIG_MAGIC {
+    if &sig.ident != CALIB_SIG_IDENT {
         return false;
     }
     let computed = compute_device_signature(calib, mcu_uid);

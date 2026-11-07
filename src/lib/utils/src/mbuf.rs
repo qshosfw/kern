@@ -114,3 +114,9 @@ impl MBufPool {
         }
     }
 }
+
+impl Default for MBufPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -43,6 +43,11 @@ impl ResourceLedger {
     }
 
     #[inline]
+    pub fn record_ipc(&mut self) {
+        self.ipc_events = self.ipc_events.saturating_add(1);
+    }
+
+    #[inline]
     pub fn record_stack_depth(&mut self, depth: u16) {
         if depth > self.stack_watermark {
             self.stack_watermark = depth;

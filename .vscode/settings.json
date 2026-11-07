@@ -1,0 +1,14 @@
+{
+  "rust-analyzer.check.allTargets": false,
+  "rust-analyzer.cargo.allTargets": false,
+  "rust-analyzer.cargo.target": "thumbv6m-none-eabi",
+  "rust-analyzer.cargo.extraArgs": [
+    "-Zbuild-std=core,compiler_builtins",
+    "-Zbuild-std-features=optimize_for_size"
+  ],
+  "rust-analyzer.check.extraArgs": [
+    "-Zbuild-std=core,compiler_builtins",
+    "-Zbuild-std-features=optimize_for_size"
+  ],
+  "rust-analyzer.rustc.source": "discover"
+}

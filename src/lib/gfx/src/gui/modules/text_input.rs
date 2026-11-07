@@ -285,7 +285,7 @@ impl TextInputView {
                     let w = text::str_width(last_char, &MUMATRIX);
                     text::draw_str(
                         canvas,
-                        cx + 3 - (w as i16) / 2,
+                        cx + 3 - w / 2,
                         cy + 6,
                         last_char,
                         &MUMATRIX,
@@ -296,6 +296,12 @@ impl TextInputView {
                 }
             }
         }
+    }
+}
+
+impl Default for TextInputView {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -361,11 +367,7 @@ impl View<TextInputModel> for TextInputView {
             let text_x = 5i16;
             let str_w = text::str_width(&model.buffer, &MUMATRIX);
             let max_w = 118i16;
-            let scroll_x = if str_w as i16 > max_w {
-                (str_w as i16) - max_w
-            } else {
-                0
-            };
+            let scroll_x = if str_w > max_w { str_w - max_w } else { 0 };
 
             text::draw_str(
                 canvas,
@@ -376,11 +378,11 @@ impl View<TextInputModel> for TextInputView {
                 Color::Fill,
             );
 
-            let cursor_x = (text_x - scroll_x) + str_w as i16;
+            let cursor_x = (text_x - scroll_x) + str_w;
             if is_cycling && !model.buffer.is_empty() {
                 let last_char_str = &model.buffer[model.buffer.len() - 1..];
                 let last_w = text::str_width(last_char_str, &MUMATRIX);
-                let char_x = cursor_x - last_w as i16;
+                let char_x = cursor_x - last_w;
                 canvas.fill_rect(
                     (char_x - 1) as u8,
                     (text_y - 7) as u8,

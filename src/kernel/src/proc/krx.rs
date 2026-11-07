@@ -5,14 +5,14 @@
 
 use crate::caps::CapabilitySet;
 
-pub const KRX_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x01, 0xFE];
-pub const BOOT_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x02, 0xFD];
-pub const CALIB_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x03, 0xFC];
-pub const SLAB_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x04, 0xFB];
-pub const SWAP_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x05, 0xFA];
-pub const PCB_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x06, 0xF9];
-pub const KERNFS_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x07, 0xF8];
-pub const SIG_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x08, 0xF7];
+pub const KRX_IDENT: [u8; 4] = [0xC0, 0xDE, 0x01, 0xFE];
+pub const BOOT_IDENT: [u8; 4] = [0xC0, 0xDE, 0x02, 0xFD];
+pub const CALIB_IDENT: [u8; 4] = [0xC0, 0xDE, 0x03, 0xFC];
+pub const SLAB_IDENT: [u8; 4] = [0xC0, 0xDE, 0x04, 0xFB];
+pub const SWAP_IDENT: [u8; 4] = [0xC0, 0xDE, 0x05, 0xFA];
+pub const KRX_PCB_IDENT: [u8; 4] = [0xC0, 0xDE, 0x06, 0xF9];
+pub const KERNFS_IDENT: [u8; 4] = [0xC0, 0xDE, 0x07, 0xF8];
+pub const SIG_IDENT: [u8; 4] = [0xC0, 0xDE, 0x08, 0xF7];
 
 /// Execution class: how the payload executes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,11 +297,11 @@ impl KrxLaunchError {
     }
 }
 
-/// KRX Preamble (20 bytes, little-endian, non-ASCII magic)
+/// KRX Preamble (20 bytes, little-endian, non-ASCII format identifier)
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct KrxPreamble {
-    pub magic: [u8; 4],
+    pub ident: [u8; 4],
     pub app_type: u8,
     pub format_version: u8,
     pub section_count: u16,
@@ -320,12 +320,15 @@ impl KrxPreamble {
         if buf.len() < Self::SIZE {
             return Err(());
         }
-        let magic = [buf[0], buf[1], buf[2], buf[3]];
-        if magic != KRX_MAGIC {
+        let ident = [buf[0], buf[1], buf[2], buf[3]];
+        if ident != KRX_IDENT {
             return Err(());
         }
         let app_type = buf[4];
         let format_version = buf[5];
+        if format_version == 0 || format_version > 5 {
+            return Err(());
+        }
         let section_count = u16::from_le_bytes([buf[6], buf[7]]);
         let header_len = u16::from_le_bytes([buf[8], buf[9]]);
         let flags = u16::from_le_bytes([buf[10], buf[11]]);
@@ -338,7 +341,7 @@ impl KrxPreamble {
         };
 
         Ok(Self {
-            magic,
+            ident,
             app_type,
             format_version,
             section_count,
@@ -1042,7 +1045,7 @@ pub const SWAP_FLAG_COMPRESSED_RLE: u16 = 0x0001;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct KrxSwapHeader {
-    pub magic: [u8; 4],
+    pub ident: [u8; 4],
     pub app_id: u16,
     pub original_len: u16,
     pub compressed_len: u16,
@@ -1064,7 +1067,7 @@ impl KrxSwapHeader {
         crc16: u16,
     ) -> Self {
         Self {
-            magic: SWAP_MAGIC,
+            ident: SWAP_IDENT,
             app_id,
             original_len,
             compressed_len,
@@ -1078,8 +1081,8 @@ impl KrxSwapHeader {
         if buf.len() < Self::SIZE {
             return None;
         }
-        let magic = [buf[0], buf[1], buf[2], buf[3]];
-        if magic != SWAP_MAGIC {
+        let ident = [buf[0], buf[1], buf[2], buf[3]];
+        if ident != SWAP_IDENT {
             return None;
         }
         let app_id = u16::from_le_bytes([buf[4], buf[5]]);
@@ -1090,7 +1093,7 @@ impl KrxSwapHeader {
         let reserved = [buf[14], buf[15]];
 
         Some(Self {
-            magic,
+            ident,
             app_id,
             original_len,
             compressed_len,
@@ -1102,7 +1105,7 @@ impl KrxSwapHeader {
 
     pub fn to_bytes(&self) -> [u8; 16] {
         let mut out = [0u8; 16];
-        out[0..4].copy_from_slice(&self.magic);
+        out[0..4].copy_from_slice(&self.ident);
         out[4..6].copy_from_slice(&self.app_id.to_le_bytes());
         out[6..8].copy_from_slice(&self.original_len.to_le_bytes());
         out[8..10].copy_from_slice(&self.compressed_len.to_le_bytes());
@@ -1113,7 +1116,7 @@ impl KrxSwapHeader {
     }
 
     pub fn is_valid(&self) -> bool {
-        self.magic == SWAP_MAGIC
+        self.ident == SWAP_IDENT
     }
 
     pub fn is_rle(&self) -> bool {
@@ -1228,14 +1231,14 @@ mod tests {
         assert_eq!(bytes.len(), 16);
 
         let parsed = KrxSwapHeader::parse(&bytes).expect("Failed to parse swap header");
-        let magic = parsed.magic;
+        let ident = parsed.ident;
         let app_id = parsed.app_id;
         let orig_len = parsed.original_len;
         let comp_len = parsed.compressed_len;
         let flags = parsed.flags;
         let crc = parsed.crc16;
 
-        assert_eq!(magic, SWAP_MAGIC);
+        assert_eq!(ident, SWAP_IDENT);
         assert_eq!(app_id, 2);
         assert_eq!(orig_len, 64);
         assert_eq!(comp_len, 28);
@@ -1371,7 +1374,7 @@ mod tests {
     #[test]
     fn test_krx_profile_detection_and_inference() {
         let mut preamble_bytes = [0u8; 24];
-        preamble_bytes[0..4].copy_from_slice(&KRX_MAGIC);
+        preamble_bytes[0..4].copy_from_slice(&KRX_IDENT);
         preamble_bytes[4] = KrxClass::Native as u8;
         preamble_bytes[5] = 2; // format_version
         preamble_bytes[6..8].copy_from_slice(&1u16.to_le_bytes()); // section_count
@@ -1436,7 +1439,7 @@ mod tests {
         let mut pkg = [0u8; 180];
 
         // 1. Preamble (20 bytes)
-        pkg[0..4].copy_from_slice(&KRX_MAGIC);
+        pkg[0..4].copy_from_slice(&KRX_IDENT);
         pkg[4] = KrxClass::Paged as u8;
         pkg[5] = 5; // format version 2.5.0
         pkg[6..8].copy_from_slice(&4u16.to_le_bytes()); // 4 sections
@@ -1525,5 +1528,1057 @@ mod tests {
         // Detect profile: Paged class + leaf map => P0StructuredPaged
         let profile = KrxProfile::detect(&preamble, &exec, false, true);
         assert_eq!(profile, KrxProfile::P0StructuredPaged);
+    }
+
+    #[test]
+    fn test_native_provisioned_package_full_test_bench() {
+        use crate::caps::Cap;
+        use crate::proc::ProcessTable;
+        use crate::proc::abi::*;
+        use crate::proc::memory::MemoryMapLayout;
+
+        // ── 1. Synthesize Native Provisioned Package Binary (/apps/beacon.krx) ──
+        let mut pkg = [0u8; 144]; // 128B header + 16B code payload
+
+        // 1a. Preamble (20B)
+        pkg[0..4].copy_from_slice(&KRX_IDENT);
+        pkg[4] = KrxClass::Native as u8;
+        pkg[5] = 0x05; // v2.5.0
+        pkg[6..8].copy_from_slice(&4u16.to_le_bytes()); // 4 sections
+        let header_len = 128u16;
+        pkg[8..10].copy_from_slice(&header_len.to_le_bytes());
+
+        // 1b. SectionIdentity (offset 20: 4B header + 40B body = 44B, ends at 64)
+        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[22] = 44;
+        pkg[24] = 112; // name_str offset = 112
+        pkg[26] = 1; // version 1.0.0
+        pkg[29] = 1; // min_kernel_abi = 1
+        pkg[31..40].copy_from_slice(b"KERN-TEAM");
+        pkg[47] = 1; // icon_asset = 1
+
+        // 1c. SectionExecution (offset 64: 4B header + 28B body = 32B, ends at 96)
+        pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[66] = 32;
+        pkg[68..70].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes = 256
+        pkg[70..72].copy_from_slice(&128u16.to_le_bytes()); // min_heap_bytes = 128
+        pkg[72..74].copy_from_slice(&0u16.to_le_bytes()); // page_size = 0 (unpaged native)
+        pkg[74] = 0; // cache_blocks = 0
+        pkg[76..80].copy_from_slice(&0u32.to_le_bytes()); // entry_point = 0 (offset in payload)
+        pkg[80..84].copy_from_slice(&16u32.to_le_bytes()); // payload_size = 16B
+        pkg[88..90].copy_from_slice(&16u16.to_le_bytes()); // got_offset = 16B
+        pkg[94] = KrxProfile::N1NativePic.raw_code(); // explicit profile
+
+        // 1d. SectionType (offset 96: 4B header + 12B body = 16B, ends at 112)
+        pkg[96..98].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
+        pkg[98] = 16;
+        pkg[100] = KrxExecType::App as u8;
+        pkg[102] = 1; // stack_cost = 1
+        let required_caps =
+            (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::RadioRx as u32);
+        pkg[108..112].copy_from_slice(&required_caps.to_le_bytes());
+
+        // 1e. String pool (offset 112..128)
+        pkg[112..118].copy_from_slice(b"Beacon");
+
+        // 1f. Thumb-1 Native Code Payload (offset 128..144, 16 bytes)
+        let thumb1_code: [u8; 16] = [
+            0x02, 0x28, // cmp r0, #2 (KRX_OP_EVENT)
+            0x01, 0xd1, // bne +1
+            0x01, 0x20, // movs r0, #1 (Consumed)
+            0x70, 0x47, // bx lr
+            0x00, 0x20, // movs r0, #0 (Success / Ignored)
+            0x70, 0x47, // bx lr
+            0x00, 0x00, 0x00, 0x00, // alignment padding
+        ];
+        pkg[128..144].copy_from_slice(&thumb1_code);
+
+        // ── 2. Validate End-to-End Preamble and Section Scanning ──
+        let preamble = KrxPreamble::parse(&pkg).expect("Valid KRX preamble");
+        assert_eq!(preamble.ident, KRX_IDENT);
+        assert_eq!(preamble.execution_class(), Some(KrxClass::Native));
+        assert_eq!(preamble.format_version, 5);
+        let hlen = preamble.header_len;
+        assert_eq!(hlen, 128);
+
+        let mut scanned_ident = false;
+        let mut scanned_exec = false;
+        let mut scanned_type = false;
+
+        for (hdr, body) in KrxSectionIterator::new(&pkg, 128) {
+            match hdr.id {
+                SECTION_IDENTITY => {
+                    let ident = SectionIdentity::parse(body).expect("Valid Identity");
+                    assert_eq!(ident.name(&pkg[..128]).unwrap(), "Beacon");
+                    assert_eq!(ident.version, [1, 0, 0]);
+                    scanned_ident = true;
+                }
+                SECTION_EXECUTION => {
+                    let exec = SectionExecution::parse(body).expect("Valid Execution");
+                    let min_stack = exec.min_stack_bytes;
+                    let payload_sz = exec.payload_size;
+                    let got_off = exec.got_offset;
+                    assert_eq!(min_stack, 256);
+                    assert_eq!(payload_sz, 16);
+                    assert_eq!(got_off, 16);
+                    assert_eq!(exec.reserved[0], KrxProfile::N1NativePic.raw_code());
+                    // Verify RAM / stack margin headroom evaluation
+                    assert!(exec.can_execute(1024, 256));
+                    assert!(!exec.can_execute(300, 256));
+                    scanned_exec = true;
+                }
+                SECTION_TYPE_LIFECYCLE => {
+                    let st = SectionType::parse(body).expect("Valid Type");
+                    assert_eq!(st.exec_type, KrxExecType::App as u8);
+                    let cap_set = st.capabilities();
+                    assert!(cap_set.contains(Cap::DisplayDirect));
+                    assert!(cap_set.contains(Cap::Keypad));
+                    assert!(cap_set.contains(Cap::RadioRx));
+                    assert!(!cap_set.contains(Cap::BroadBandRx));
+                    scanned_type = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(scanned_ident && scanned_exec && scanned_type);
+
+        // ── 3. Validate Capability Binding & Simulated GOT Resolution ──
+        let mut got_table = [0usize; 8];
+        // Slot 0: Display VTable
+        got_table[0] = &STUB_DISPLAY_VTABLE as *const _ as usize;
+        // Slot 1: Radio VTable
+        got_table[1] = &STUB_RADIO_VTABLE as *const _ as usize;
+        // Slot 2: Audio VTable
+        got_table[2] = &STUB_AUDIO_VTABLE as *const _ as usize;
+
+        unsafe {
+            let radio = &*(got_table[1] as *const CapRadioVTable);
+            assert_eq!((radio.rf_get_freq)(), 0);
+            assert_eq!((radio.rf_tune)(145_000_000, 25, 12_500), 1);
+            let display = &*(got_table[0] as *const CapDisplayVTable);
+            assert_eq!((display.get_framebuffer)(), core::ptr::null_mut());
+        }
+
+        // ── 4. Validate Process Lifecycle & PCB Ledger Integration ──
+        let mut proc_table = ProcessTable::<4>::new();
+        let pid = proc_table
+            .spawn(
+                "Beacon",
+                1,
+                crate::sched::Priority::Ui,
+                crate::proc::ExecType::RelocatableNative,
+                CapabilitySet::from_raw(required_caps),
+            )
+            .expect("Spawn Beacon process");
+        assert_eq!(pid, crate::proc::Pid(1));
+
+        let pcb = proc_table.find_mut(pid).expect("Found PCB");
+        assert_eq!(pcb.state, crate::proc::ProcState::Ready);
+        pcb.set_state(crate::proc::ProcState::Running);
+        pcb.ledger.record_activation();
+        pcb.ledger.record_event();
+        assert_eq!(pcb.ledger.cpu_ticks, 1);
+        assert_eq!(pcb.ledger.ipc_events, 1);
+
+        // ── 5. Validate MemoryMapLayout Boundary & Access Protection ──
+        let mut mem_layout = MemoryMapLayout::<4>::new();
+        let load_base = 0x2000_1000u32;
+        let code_size = 16u32;
+        let ram_vma = load_base + 16;
+        let ram_size = 256u32;
+        mem_layout.init_native_pic(load_base, code_size, ram_vma, ram_size);
+
+        // Code region: Execute = OK, Write = Denied
+        assert!(mem_layout.validate_access(load_base, 2, false, true));
+        assert!(mem_layout.validate_access(load_base + 8, 4, false, false));
+        assert!(!mem_layout.validate_access(load_base, 4, true, false));
+
+        // RAM/GOT region: Write = OK, Execute = Denied
+        assert!(mem_layout.validate_access(ram_vma, 4, true, false));
+        assert!(mem_layout.validate_access(ram_vma + 32, 4, false, false));
+        assert!(!mem_layout.validate_access(ram_vma, 2, false, true));
+
+        // Out of bounds: Denied
+        assert!(!mem_layout.validate_access(load_base - 4, 4, false, false));
+        assert!(!mem_layout.validate_access(ram_vma + ram_size + 4, 4, false, false));
+
+        // ── 6. Full C-ABI Safe-Stub Execution Dispatch Test ──
+        let api_table = KrxApiTable::safe_stub(required_caps);
+        assert_eq!(api_table.abi_version, KRX_ABI_VERSION_3_0);
+        assert_eq!(api_table.granted_caps, required_caps);
+
+        // Test Simulated Guest Entry Point Handler:
+        // Demonstrates standard lifecycle routing and safe stub calls
+        let guest_handler = |op: u32, api: *const KrxApiTable, param: *const ()| -> u32 {
+            let table = unsafe { &*api };
+            match op {
+                KRX_OP_START => {
+                    // Initialize app state
+                    0
+                }
+                KRX_OP_EVENT => {
+                    if param.is_null() {
+                        return 0;
+                    }
+                    let ev = unsafe { &*(param as *const KrxEvent) };
+                    if ev.is_key() {
+                        1 // Consumed
+                    } else if ev.is_radio_bus() {
+                        let _freq = unsafe { (table.rf_get_freq)() };
+                        1 // Consumed
+                    } else {
+                        0 // Ignored
+                    }
+                }
+                KRX_OP_RENDER => {
+                    unsafe {
+                        (table.draw_rect)(0, 0, 128, 64, 1);
+                        (table.commit_frame)();
+                    }
+                    0
+                }
+                KRX_OP_EXIT => 0,
+                _ => 0xFFFF_FFFF,
+            }
+        };
+
+        // Dispatch KRX_OP_START
+        assert_eq!(
+            guest_handler(KRX_OP_START, &api_table, core::ptr::null()),
+            0
+        );
+
+        // Dispatch KRX_OP_EVENT (Key Press)
+        let key_ev = KrxEvent {
+            kind: KRX_EV_KEY,
+            key: 15,
+            flags: 0,
+            reserved: 0,
+            payload: 0, // KeyState::Pressed
+        };
+        assert_eq!(
+            guest_handler(KRX_OP_EVENT, &api_table, &key_ev as *const _ as *const ()),
+            1
+        );
+
+        // Dispatch KRX_OP_EVENT (Radio Bus)
+        let bus_ev = KrxEvent {
+            kind: KRX_EV_BUS,
+            key: 1,
+            flags: (crate::ipc::Topic::RADIO.0 & 0xFF) as u8,
+            reserved: 0,
+            payload: 145_000_000,
+        };
+        assert_eq!(
+            guest_handler(KRX_OP_EVENT, &api_table, &bus_ev as *const _ as *const ()),
+            1
+        );
+
+        // Dispatch KRX_OP_RENDER
+        assert_eq!(
+            guest_handler(KRX_OP_RENDER, &api_table, core::ptr::null()),
+            0
+        );
+
+        // Dispatch KRX_OP_EXIT
+        assert_eq!(guest_handler(KRX_OP_EXIT, &api_table, core::ptr::null()), 0);
+
+        // Terminate process
+        let pcb = proc_table.find_mut(pid).expect("Found PCB");
+        pcb.set_state(crate::proc::ProcState::Dead);
+        assert!(!pcb.is_active());
+    }
+
+    #[test]
+    fn test_native_execution_fault_matrix_test_bench() {
+        use crate::caps::{Cap, CapabilitySet};
+
+        // 1. Fault: Corrupted Preamble FourCC
+        let mut bad_ident = [0u8; 32];
+        bad_ident[0..4].copy_from_slice(b"BAD\0");
+        assert!(KrxPreamble::parse(&bad_ident).is_err());
+
+        // 2. Fault: Unsupported Format Version
+        let mut bad_ver = [0u8; 32];
+        bad_ver[0..4].copy_from_slice(&KRX_IDENT);
+        bad_ver[5] = 99; // Version 99.0
+        assert!(KrxPreamble::parse(&bad_ver).is_err());
+
+        // 3. Fault: Truncated Package Header
+        let mut truncated = [0u8; 64];
+        truncated[0..4].copy_from_slice(&KRX_IDENT);
+        truncated[4] = KrxClass::Native as u8;
+        truncated[5] = 5;
+        truncated[8..10].copy_from_slice(&128u16.to_le_bytes()); // header_len = 128, but only 64B present!
+        let preamble = KrxPreamble::parse(&truncated).unwrap();
+        assert!(64 < preamble.header_len as usize); // Truncation detected!
+
+        // 4. Fault: Missing Identity Section
+        let mut no_ident = [0u8; 128];
+        no_ident[0..4].copy_from_slice(&KRX_IDENT);
+        no_ident[4] = KrxClass::Native as u8;
+        no_ident[5] = 5;
+        no_ident[6..8].copy_from_slice(&1u16.to_le_bytes());
+        no_ident[8..10].copy_from_slice(&64u16.to_le_bytes());
+        no_ident[20..22].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        no_ident[22] = 32;
+        let mut found_ident = false;
+        for (hdr, _) in KrxSectionIterator::new(&no_ident, 64) {
+            if hdr.id == SECTION_IDENTITY {
+                found_ident = true;
+            }
+        }
+        assert!(!found_ident); // Correctly missing!
+
+        // 5. Fault: Capability Denied (requires BroadBandRx, platform only has Display + Keypad)
+        let platform_caps =
+            CapabilitySet::from_raw((Cap::DisplayDirect as u32) | (Cap::Keypad as u32));
+        let app_required_caps =
+            CapabilitySet::from_raw((Cap::DisplayDirect as u32) | (Cap::BroadBandRx as u32));
+        assert!(!platform_caps.contains_all(app_required_caps));
+        let missing = app_required_caps.without(platform_caps);
+        assert_eq!(missing.first_cap(), Some(Cap::BroadBandRx));
+        let err = KrxLaunchError::CapabilityDenied(missing.first_cap().unwrap().required_message());
+        assert_eq!(err.message(), "Requires Broadband HF RX");
+
+        // 6. Fault: Insufficient Stack Headroom
+        let mut exec_raw = [0u8; 28];
+        exec_raw[0..2].copy_from_slice(&512u16.to_le_bytes()); // min_stack_bytes = 512
+        let sec_exec = SectionExecution::parse(&exec_raw).unwrap();
+        let current_stack_margin = 256usize;
+        assert!(current_stack_margin < sec_exec.min_stack_bytes as usize);
+
+        // 7. Fault: Insufficient System RAM
+        exec_raw[2..4].copy_from_slice(&4096u16.to_le_bytes()); // min_heap_bytes = 4096
+        let sec_exec_ram = SectionExecution::parse(&exec_raw).unwrap();
+        let available_ram = 2048usize;
+        assert!(!sec_exec_ram.can_execute(available_ram, 256));
+
+        // 8. Fault: Relocation Truncation / Stream Corrupt
+        let mut reloc_buffer = [0u32; 16];
+        let reloc_stream = [0xFFu8, 0xFFu8]; // Truncated escape stream
+        let res = unsafe {
+            crate::proc::reloc::apply_relocs(
+                reloc_buffer.as_mut_ptr() as *mut u8,
+                64,
+                &reloc_stream,
+                0x1000,
+                5, // Expects 5 relocations, only 2 bytes provided
+            )
+        };
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_native_app_execution_and_abi_integration_bench() {
+        use crate::caps::Cap;
+        use crate::proc::abi::*;
+
+        // Construct a complete Native Package in memory:
+        let mut pkg = [0u8; 320];
+        let required_caps =
+            (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::RadioRx as u32);
+
+        // 1. Preamble (20 bytes)
+        pkg[0..4].copy_from_slice(&KRX_IDENT);
+        pkg[4] = KrxClass::Native as u8;
+        pkg[5] = 5; // format version 2.5.0
+        pkg[6..8].copy_from_slice(&3u16.to_le_bytes()); // 3 sections
+        pkg[8..10].copy_from_slice(&128u16.to_le_bytes()); // header_len = 128
+
+        // 2. SectionIdentity (offset 20: 4B header + 40B body)
+        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[22] = 44;
+        pkg[24] = 112; // name_str offset = 112
+        pkg[26] = 1; // v1.0.0
+        pkg[29] = 1; // min_abi = 1
+        pkg[31..40].copy_from_slice(b"KERN-TEAM");
+
+        // 3. SectionExecution (offset 64: 4B header + 28B body)
+        pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[66] = 32;
+        pkg[68..70].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes = 256
+        pkg[72..74].copy_from_slice(&512u16.to_le_bytes()); // page_size = 512
+        pkg[80..84].copy_from_slice(&176u32.to_le_bytes()); // payload_size = 176
+        pkg[88..90].copy_from_slice(&176u16.to_le_bytes()); // got_offset
+        pkg[94] = KrxProfile::N1NativePic.raw_code();
+
+        // 4. SectionType (offset 96: 4B header + 12B body)
+        pkg[96..98].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
+        pkg[98] = 16;
+        pkg[100] = KrxExecType::App as u8;
+        pkg[108..112].copy_from_slice(&required_caps.to_le_bytes());
+
+        // 5. String pool (offset 112..128)
+        pkg[112..118].copy_from_slice(b"Beacon");
+
+        // Verify preamble and sections parse correctly
+        let preamble = KrxPreamble::parse(&pkg).expect("Valid preamble");
+        assert_eq!(preamble.execution_class(), Some(KrxClass::Native));
+
+        let mut ident_found = false;
+        let mut exec_found = false;
+        let mut type_found = false;
+        for (hdr, body) in KrxSectionIterator::new(&pkg, 128) {
+            match hdr.id {
+                SECTION_IDENTITY => {
+                    let ident = SectionIdentity::parse(body).unwrap();
+                    assert_eq!(ident.name(&pkg[..128]), Some("Beacon"));
+                    ident_found = true;
+                }
+                SECTION_EXECUTION => {
+                    let exec = SectionExecution::parse(body).unwrap();
+                    let payload_sz = exec.payload_size;
+                    assert_eq!(payload_sz, 176);
+                    assert_eq!(exec.profile(), Some(KrxProfile::N1NativePic));
+                    exec_found = true;
+                }
+                SECTION_TYPE_LIFECYCLE => {
+                    let st = SectionType::parse(body).unwrap();
+                    let cap_mask = st.cap_mask;
+                    assert_eq!(cap_mask, required_caps);
+                    type_found = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(ident_found && exec_found && type_found);
+
+        // Test Simulated Full App Lifecycle with state and ABI calls
+        struct TestAppState {
+            freq: u32,
+            rendered_frames: u32,
+            key_presses: u32,
+            exited: bool,
+        }
+        static mut APP_STATE: TestAppState = TestAppState {
+            freq: 0,
+            rendered_frames: 0,
+            key_presses: 0,
+            exited: false,
+        };
+
+        let app_entry = |op: u32, api: *const KrxApiTable, param: *const ()| -> u32 {
+            let table = unsafe { &*api };
+            let state = unsafe { &mut *core::ptr::addr_of_mut!(APP_STATE) };
+            match op {
+                KRX_OP_START => {
+                    state.freq = 145_500_000;
+                    unsafe { (table.rf_tune)(state.freq, 25, 12_500) };
+                    0
+                }
+                KRX_OP_EVENT => {
+                    if param.is_null() {
+                        return 0;
+                    }
+                    let ev = unsafe { &*(param as *const KrxEvent) };
+                    if ev.is_key() {
+                        state.key_presses += 1;
+                        if ev.key == 15 {
+                            0 // KEY_EXIT: pass to system
+                        } else {
+                            1 // Consumed
+                        }
+                    } else {
+                        0
+                    }
+                }
+                KRX_OP_RENDER => {
+                    state.rendered_frames += 1;
+                    unsafe {
+                        (table.draw_rect)(0, 0, 128, 64, 1);
+                        (table.draw_str)(16, 26, b"BEACON".as_ptr(), 6, 0, 1);
+                        (table.commit_frame)();
+                    }
+                    0
+                }
+                KRX_OP_EXIT => {
+                    state.exited = true;
+                    0
+                }
+                _ => 0xFFFF_FFFF,
+            }
+        };
+
+        let api_table = KrxApiTable::safe_stub(required_caps);
+
+        // 1. START
+        assert_eq!(app_entry(KRX_OP_START, &api_table, core::ptr::null()), 0);
+        assert_eq!(unsafe { APP_STATE.freq }, 145_500_000);
+
+        // 2. RENDER
+        assert_eq!(app_entry(KRX_OP_RENDER, &api_table, core::ptr::null()), 0);
+        assert_eq!(unsafe { APP_STATE.rendered_frames }, 1);
+
+        // 3. KEY EVENT (UP) -> Consumed (1)
+        let ev_up = KrxEvent {
+            kind: KRX_EV_KEY,
+            key: 1,
+            flags: 0,
+            reserved: 0,
+            payload: 0,
+        };
+        assert_eq!(
+            app_entry(KRX_OP_EVENT, &api_table, &ev_up as *const _ as *const ()),
+            1
+        );
+        assert_eq!(unsafe { APP_STATE.key_presses }, 1);
+
+        // 4. KEY EVENT (EXIT) -> Pass to system (0)
+        let ev_exit = KrxEvent {
+            kind: KRX_EV_KEY,
+            key: 15,
+            flags: 0,
+            reserved: 0,
+            payload: 0,
+        };
+        assert_eq!(
+            app_entry(KRX_OP_EVENT, &api_table, &ev_exit as *const _ as *const ()),
+            0
+        );
+        assert_eq!(unsafe { APP_STATE.key_presses }, 2);
+
+        // 5. EXIT
+        assert_eq!(app_entry(KRX_OP_EXIT, &api_table, core::ptr::null()), 0);
+        assert!(unsafe { APP_STATE.exited });
+    }
+
+    #[test]
+    fn test_exhaustive_abi_vtable_verification_bench() {
+        use crate::proc::abi::*;
+
+        let api = KrxApiTable::safe_stub(0xFFFF_FFFF);
+
+        // 1. CapDisplayVTable
+        unsafe {
+            let d = &*api.display;
+            (d.clear)();
+            (d.draw_pixel)(10, 20, 1);
+            (d.draw_line)(0, 0, 128, 64, 1);
+            (d.draw_rect)(5, 5, 20, 20, 1);
+            (d.fill_rect)(10, 10, 15, 15, 1);
+            let bmp = [0xFFu8; 8];
+            (d.draw_bitmap)(0, 0, 8, 8, bmp.as_ptr(), 8);
+            let s = b"TEST\0";
+            (d.draw_str)(0, 0, s.as_ptr(), 4, 0, 1);
+            (d.draw_str_align)(0, 0, s.as_ptr(), 4, 0, 1, 0);
+            (d.draw_str_max)(0, 0, s.as_ptr(), 4, 0, 1, 64);
+            (d.commit_frame)();
+            (d.commit_rows)(0b00000001);
+            let _fb = (d.get_framebuffer)();
+            (d.set_inverted)(1);
+            (d.set_contrast)(31);
+        }
+
+        // 2. CapRadioVTable
+        unsafe {
+            let r = &*api.radio;
+            assert_eq!((r.rf_tune)(145_500_000, 25, 12_500), 1);
+            assert_eq!((r.rf_get_freq)(), 0);
+            assert_eq!((r.rf_get_rssi)(), -140);
+            assert_eq!((r.rf_is_carrier)(), 0);
+            (r.rf_set_modulation)(0);
+            (r.rf_set_squelch)(3);
+            assert_eq!((r.rf_set_tx)(0), 1);
+            (r.rf_set_tx_power)(1);
+            (r.rf_set_af_mode)(0);
+            let mut sweep_buf = [0i16; 8];
+            assert_eq!(
+                (r.rf_sweep)(144_000_000, 25_000, 8, sweep_buf.as_mut_ptr()),
+                0
+            );
+            let sym = KrxSymbol {
+                freq_word: 1200,
+                duration_us: 833,
+            };
+            assert_eq!((r.rf_symbol_tx_emit)(&sym, 1), 1);
+            (r.rf_set_dual_tones)(100, 10, 200, 10);
+            (r.rf_fsk_init)(1200);
+            let fsk_data = b"FSK_TEST";
+            assert_eq!((r.rf_fsk_send)(fsk_data.as_ptr(), 8), 1);
+            let mut fsk_rx = [0u8; 16];
+            assert_eq!((r.rf_fsk_recv)(fsk_rx.as_mut_ptr(), 16), 0);
+            (r.rf_set_mic_mute)(1);
+            assert_eq!((r.rf_set_tx_carrier)(0), 1);
+            (r.rf_set_subaudible_ctcss)(670);
+            (r.rf_set_subaudible_dcs)(0o023, 0);
+            (r.rf_send_tail)();
+            assert_eq!((r.rf_get_bandwidth)(), 12_500);
+            assert_eq!((r.rf_get_modulation)(), 0);
+            assert_eq!((r.rf_get_tx_state)(), 0);
+            assert_eq!((r.rf_get_glitch)(), 0);
+            (r.rf_set_agc)(0);
+            (r.rf_set_dual_tones_hz)(700, 15, 900, 15);
+            (r.rf_set_dtmf)(1, 20);
+            assert_eq!((r.rf_get_snr)(), 0);
+            assert_eq!((r.rf_get_noise)(), 0);
+        }
+
+        // 3. CapAudioVTable
+        unsafe {
+            let a = &*api.audio;
+            (a.audio_play_tone)(800, 50);
+            (a.audio_play_beep)(1);
+            (a.audio_set_path)(1);
+            assert_eq!((a.audio_capture_start)(8000), 1);
+            let mut audio_buf = [0i16; 16];
+            assert_eq!((a.audio_capture_read)(audio_buf.as_mut_ptr(), 16), 0);
+            (a.audio_capture_stop)();
+            (a.audio_set_volume)(7);
+            assert_eq!((a.audio_get_volume)(), 5);
+            (a.audio_stop)();
+            assert_eq!((a.audio_is_playing)(), 0);
+            (a.audio_set_mic_gain)(16);
+            assert_eq!((a.audio_read_mic_sample)(), 0);
+            assert_eq!((a.audio_is_capturing)(), 0);
+        }
+
+        // 4. CapStorageVTable
+        unsafe {
+            let s = &*api.storage;
+            let mut cfg_buf = [0u8; 16];
+            assert_eq!((s.storage_load_config)(cfg_buf.as_mut_ptr(), 16), 0);
+            assert_eq!((s.storage_save_config)(cfg_buf.as_ptr(), 16), 1);
+            assert_eq!((s.storage_read_asset)(1, 0, cfg_buf.as_mut_ptr(), 16), 0);
+            let path = b"/user/test.txt\0";
+            assert_eq!(
+                (s.storage_read_file)(path.as_ptr(), 14, cfg_buf.as_mut_ptr(), 16),
+                0
+            );
+            assert_eq!(
+                (s.storage_write_file)(path.as_ptr(), 14, cfg_buf.as_ptr(), 16),
+                1
+            );
+            assert_eq!((s.storage_remove_file)(path.as_ptr(), 14), 1);
+            assert_eq!((s.storage_file_size)(path.as_ptr(), 14), 0);
+            let mut entries = [KrxDirEntry {
+                name: [0; 24],
+                size: 0,
+                is_dir: 0,
+                reserved: [0; 3],
+            }];
+            assert_eq!(
+                (s.storage_list_dir)(b"/\0".as_ptr(), 1, entries.as_mut_ptr(), 1),
+                0
+            );
+            assert_eq!((s.storage_file_exists)(path.as_ptr(), 14), 0);
+            assert_eq!(
+                (s.storage_read_file_at)(path.as_ptr(), 14, 0, cfg_buf.as_mut_ptr(), 16),
+                0
+            );
+            assert_eq!(
+                (s.storage_append_file)(path.as_ptr(), 14, cfg_buf.as_ptr(), 16),
+                1
+            );
+            let new_path = b"/user/new.txt\0";
+            assert_eq!(
+                (s.storage_rename_file)(path.as_ptr(), 14, new_path.as_ptr(), 13),
+                1
+            );
+            assert_eq!((s.storage_create_dir)(b"/user/data\0".as_ptr(), 10), 1);
+        }
+
+        // 5. CapKeypadVTable
+        unsafe {
+            let k = &*api.keypad;
+            assert_eq!((k.sys_poll_key)(), 0);
+            assert_eq!((k.sys_nav_dir)(1), 0);
+            assert_eq!((k.sys_nav_dir)(2), 0);
+            assert_eq!((k.sys_key_matrix)(), 0);
+            assert_eq!((k.sys_is_key_pressed)(1), 0);
+            assert_eq!((k.sys_is_f_active)(), 0);
+            assert_eq!((k.sys_is_ptt_pressed)(), 0);
+            assert_eq!((k.sys_is_side1_pressed)(), 0);
+            assert_eq!((k.sys_is_side2_pressed)(), 0);
+            (k.sys_clear_key_buffer)();
+            assert_eq!((k.sys_is_keypad_locked)(), 0);
+        }
+
+        // 6. CapPowerVTable
+        unsafe {
+            let p = &*api.power;
+            assert_eq!((p.sys_battery_mv)(), 4000);
+            assert_eq!((p.sys_battery_pct)(), 100);
+            assert_eq!((p.sys_battery_ma)(), 0);
+            assert_eq!((p.sys_battery_type)(), 0);
+            assert_eq!((p.sys_raw_battery_adc)(), 0);
+            assert_eq!((p.sys_mcu_temp)(), 250);
+            assert_eq!((p.sys_is_charging)(), 0);
+            assert_eq!((p.sys_is_low)(), 0);
+            assert_eq!((p.sys_is_critical)(), 0);
+            (p.sys_set_backlight)(1, 10);
+            (p.sys_set_backlight_brightness)(255, 32);
+            (p.sys_wake_backlight)();
+            (p.sys_set_flashlight)(0);
+            assert_eq!((p.sys_cpu_freq_hz)(), 48_000_000);
+        }
+
+        // 7. CapSerialVTable
+        unsafe {
+            let ser = &*api.serial;
+            let msg = b"TELEMETRY";
+            assert_eq!((ser.serial_write)(msg.as_ptr(), 9), 0);
+            let mut ser_rx = [0u8; 16];
+            assert_eq!((ser.serial_read)(ser_rx.as_mut_ptr(), 16), 0);
+            assert_eq!((ser.serial_is_connected)(), 0);
+            (ser.serial_flush)();
+        }
+
+        // 8. CapTimerVTable
+        unsafe {
+            let t = &*api.timer;
+            let _ = (t.sys_ticks_ms)();
+            let _ = (t.sys_uptime_secs)();
+            (t.sys_delay_ms)(0);
+            (t.sys_delay_us)(0);
+            let mut rtc_buf = [0u8; 7];
+            assert_eq!((t.sys_rtc_get)(rtc_buf.as_mut_ptr()), 1);
+        }
+
+        // 9. CapUiVTable (Compositor Spaces)
+        unsafe {
+            let u = &*api.ui;
+            (u.ui_close_modal)();
+            assert_eq!((u.ui_has_modal)(), 0);
+            let title = b"PROMPT\0";
+            let msg = b"BODY\0";
+            (u.ui_show_popup)(1, title.as_ptr(), 6, msg.as_ptr(), 4);
+            (u.ui_show_confirm)(2, title.as_ptr(), 6, msg.as_ptr(), 4);
+            (u.ui_prompt_text)(3, title.as_ptr(), 6, b"\0".as_ptr(), 0, 16);
+            let mut modal_res = [0u8; 16];
+            assert_eq!((u.ui_get_modal_text)(modal_res.as_mut_ptr(), 16), 0);
+            (u.ui_show_toast)(b"ALERT\0".as_ptr(), 5, 1500);
+            assert_eq!((u.ui_is_animating)(), 0);
+        }
+
+        // 10. CapMathVTable
+        unsafe {
+            let m = &*api.math;
+            assert_eq!((m.sys_rand32)(), 0x5A5A_5A5A);
+            assert_eq!((m.crc32)(b"123456789".as_ptr(), 9), 0);
+            assert_eq!((m.crc16)(b"123456789".as_ptr(), 9), 0);
+            assert_eq!((m.isqrt)(144), 12);
+            assert_eq!((m.isqrt)(256), 16);
+            assert_eq!((m.idivmod)(100, 7), 0);
+            assert_eq!((m.uidivmod)(100, 7), 0);
+        }
+
+        // 11. CapFmVTable
+        unsafe {
+            let f = &*api.fm;
+            (f.fm_tune)(1043);
+            (f.fm_set_volume)(12);
+            (f.fm_mute)(0);
+            assert_eq!((f.fm_get_rssi)(), 0);
+        }
+
+        // 12. CapServiceVTable
+        unsafe {
+            let svc = &*api.service;
+            assert_eq!((svc.svc_register)(0x1234, 1, 0x2000_0000), 1);
+            assert_eq!((svc.svc_resolve)(0x1234, 1), 0);
+            assert_eq!((svc.svc_release)(0x1234), 1);
+            assert_eq!(
+                (svc.ipc_send)(b"Radio\0".as_ptr(), 5, b"TUNE\0".as_ptr(), 4),
+                1
+            );
+            let mut ipc_out = [0u8; 16];
+            assert_eq!((svc.ipc_poll)(ipc_out.as_mut_ptr(), 16), 0xFF);
+            let mut uid = [0u8; 12];
+            (svc.sys_device_uid)(uid.as_mut_ptr());
+            assert_eq!((svc.sys_os_version)(), 0x0003_0000);
+            assert_eq!((svc.sys_ram_available)(), 4096);
+            assert_eq!((svc.sys_stack_margin)(), 1024);
+            assert_eq!((svc.sys_proc_count)(), 0);
+            let mut p_info = KrxProcInfo {
+                pid: 0,
+                app_id: 0,
+                state: 0,
+                priority: 0,
+                runtime_ticks: 0,
+                memory_bytes: 0,
+                name: [0; 12],
+                reserved: [0; 10],
+            };
+            assert_eq!((svc.sys_proc_info)(0, &mut p_info), 1);
+            assert_eq!((svc.sys_proc_kill)(99), 1);
+            assert_eq!((svc.paged_call)(2, 0x40, 0x88), 0);
+            assert_eq!((svc.paged_return)(), 0);
+            assert_eq!((svc.leaf_call)(0, 100), 0xFFFF_FFFF);
+            assert_eq!((svc.lease_acquire)(0, 1000), 1);
+            assert_eq!((svc.lease_release)(0), 1);
+            let mut mem_desc = crate::proc::MemoryRegionDescriptor {
+                kind: 0,
+                flags: 0,
+                reserved: 0,
+                base_vma: 0,
+                size_bytes: 0,
+                alignment: 4,
+                pad: [0; 2],
+            };
+            assert_eq!((svc.mem_query)(0, &mut mem_desc), 1);
+            assert_eq!((svc.sys_post_event)(1), 0);
+            assert_eq!((svc.sys_publish_event)(100, b"DATA".as_ptr(), 4), 0);
+            assert_eq!((svc.sys_stack_free_min)(), 1024);
+            let ipc_msg =
+                crate::ipc::KrxIpcMessage::new(1, 2, crate::ipc::ipc_msg_type::PING, b"PING");
+            assert_eq!((svc.ipc_send_msg)(&ipc_msg), 1);
+            let mut recv_msg = crate::ipc::KrxIpcMessage::empty();
+            assert_eq!((svc.ipc_recv_msg)(&mut recv_msg), 1);
+            assert_eq!((svc.ipc_reply)(&ipc_msg, b"PONG".as_ptr(), 4), 1);
+            assert_eq!((svc.sys_find_proc)(b"Radio\0".as_ptr(), 5), 0);
+            assert_eq!((svc.sys_self_pid)(), 1);
+        }
+
+        // 13. CapHwBusVTable
+        unsafe {
+            let hw = &*api.hw_bus;
+            let tx = [0x12, 0x34];
+            let mut rx = [0u8; 2];
+            assert_eq!(
+                (hw.hw_i2c_transfer)(0x38, 0x10, tx.as_ptr(), 2, rx.as_mut_ptr(), 2),
+                1
+            );
+            assert_eq!((hw.hw_spi_transfer)(1, tx.as_ptr(), rx.as_mut_ptr(), 2), 1);
+            (hw.hw_gpio_set)(5, 1);
+            assert_eq!((hw.hw_gpio_get)(5), 0);
+            assert_eq!((hw.hw_rf_read_reg)(0x30), 0);
+            (hw.hw_rf_write_reg)(0x30, 0x1234);
+            let mut flash_buf = [0u8; 16];
+            assert_eq!(
+                (hw.hw_flash_read)(0x0800_0000, flash_buf.as_mut_ptr(), 16),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn test_paged_execution_with_shadow_stack_and_leafs_bench() {
+        use crate::proc::paged::*;
+
+        // 1. Verify ShadowReturnStack push/pop and nesting
+        let mut stack = ShadowReturnStack::<4>::new();
+        assert_eq!(stack.sp, 0);
+
+        // Simulate nested paged calls:
+        // Frame 1: caller in block 1 at offset 0x0100 calls callee in block 2, return offset 0x0120
+        let frame1 = ReturnFrame {
+            caller_block_id: 1,
+            caller_slot: 0,
+            return_offset: 0x0120,
+        };
+        assert!(stack.push(frame1).is_ok());
+        assert_eq!(stack.sp, 1);
+
+        // Frame 2: block 2 at offset 0x0040 calls callee in block 3, return offset 0x0060
+        let frame2 = ReturnFrame {
+            caller_block_id: 2,
+            caller_slot: 1,
+            return_offset: 0x0060,
+        };
+        assert!(stack.push(frame2).is_ok());
+        assert_eq!(stack.sp, 2);
+
+        // Callee in block 3 completes, executes paged_return() -> restores frame2
+        let popped2 = stack.pop().expect("Pop frame 2");
+        assert_eq!(popped2.caller_block_id, 2);
+        assert_eq!(popped2.return_offset, 0x0060);
+        assert_eq!(stack.sp, 1);
+
+        // Callee in block 2 completes, executes paged_return() -> restores frame1
+        let popped1 = stack.pop().expect("Pop frame 1");
+        assert_eq!(popped1.caller_block_id, 1);
+        assert_eq!(popped1.return_offset, 0x0120);
+        assert_eq!(stack.sp, 0);
+
+        // Underflow protection
+        assert_eq!(stack.pop().unwrap_err(), PagedError::ShadowStackUnderflow);
+
+        // Overflow protection
+        for i in 0..4 {
+            assert!(
+                stack
+                    .push(ReturnFrame {
+                        caller_block_id: i as u8,
+                        caller_slot: 0,
+                        return_offset: 0x10,
+                    })
+                    .is_ok()
+            );
+        }
+        assert_eq!(
+            stack
+                .push(ReturnFrame {
+                    caller_block_id: 99,
+                    caller_slot: 0,
+                    return_offset: 0x10,
+                })
+                .unwrap_err(),
+            PagedError::ShadowStackOverflow
+        );
+
+        // 2. StructuredLeafManager overlay dispatch and swapping
+        let mut leaf_mgr = StructuredLeafManager::<4>::new(0x2000_1000, 1024);
+        assert_eq!(leaf_mgr.leaf_count, 0);
+        assert_eq!(leaf_mgr.total_swaps, 0);
+
+        // Configure Leaf 0 (Math/DSP) and Leaf 1 (Protocol Packet Demod)
+        leaf_mgr.leaves[0] = LeafEntry {
+            leaf_id: 0,
+            flags: 0,
+            size: 256,
+            flash_offset: 0x1000,
+            entry_offset: 0x00,
+            ram_scratch_bytes: 0,
+            reserved: [0u8; 4],
+        };
+        leaf_mgr.leaves[1] = LeafEntry {
+            leaf_id: 1,
+            flags: 0,
+            size: 512,
+            flash_offset: 0x1800,
+            entry_offset: 0x04,
+            ram_scratch_bytes: 0,
+            reserved: [0u8; 4],
+        };
+        leaf_mgr.leaf_count = 2;
+
+        let mut storage_reads = 0u32;
+        // Dispatch Leaf 0 -> Cache Miss (loads from storage)
+        let res0 = leaf_mgr
+            .dispatch_leaf_trampoline(0, 42, 8, |_entry, is_hit, _ctx| {
+                if !is_hit {
+                    storage_reads += 1;
+                }
+                Ok(42 * 2)
+            })
+            .expect("Dispatch Leaf 0");
+        assert_eq!(res0, 84);
+        assert_eq!(storage_reads, 1);
+        assert_eq!(leaf_mgr.active_leaf, Some(0));
+
+        // Dispatch Leaf 0 again -> Cache Hit (no storage read!)
+        let res0_hit = leaf_mgr
+            .dispatch_leaf_trampoline(0, 10, 8, |_entry, is_hit, _ctx| {
+                if !is_hit {
+                    storage_reads += 1;
+                }
+                Ok(10 * 2)
+            })
+            .expect("Dispatch Leaf 0 Hit");
+        assert_eq!(res0_hit, 20);
+        assert_eq!(storage_reads, 1); // Still 1, 0 additional reads!
+
+        // Dispatch Leaf 1 -> Overlay Swap (loads Leaf 1 into window)
+        let res1 = leaf_mgr
+            .dispatch_leaf_trampoline(1, 100, 8, |_entry, is_hit, _ctx| {
+                if !is_hit {
+                    storage_reads += 1;
+                }
+                Ok(100 + 7)
+            })
+            .expect("Dispatch Leaf 1");
+        assert_eq!(res1, 107);
+        assert_eq!(storage_reads, 2);
+        assert_eq!(leaf_mgr.active_leaf, Some(1));
+        assert_eq!(leaf_mgr.total_swaps, 2);
+    }
+
+    #[test]
+    fn test_streamed_pages_and_lru_cache_bench() {
+        use crate::proc::paged::*;
+
+        let mut cache = FixedWindowCache::<8, 2>::new();
+        // Configure 4 uniform 1024-byte blocks across 2 cache slots
+        cache.configure(1024, 2, 0x10000, 4096, None);
+        assert_eq!(cache.active_slots, 2);
+        assert_eq!(cache.block_count, 4);
+
+        // Access Block 0 -> Miss, allocated to Slot 0
+        let (slot0, hit0, _entry0) = cache.resolve_or_select_slot(0).expect("Alloc block 0");
+        assert!(!hit0);
+        assert_eq!(slot0, 0);
+        assert_eq!(cache.fault_count, 1);
+        assert_eq!(cache.hit_count, 0);
+
+        // Access Block 1 -> Miss, allocated to Slot 1
+        let (slot1, hit1, _entry1) = cache.resolve_or_select_slot(1).expect("Alloc block 1");
+        assert!(!hit1);
+        assert_eq!(slot1, 1);
+        assert_eq!(cache.fault_count, 2);
+        assert_eq!(cache.hit_count, 0);
+
+        // Access Block 0 again -> Cache Hit!
+        let (slot0_again, hit0_again, _entry0_again) =
+            cache.resolve_or_select_slot(0).expect("Hit block 0");
+        assert!(hit0_again);
+        assert_eq!(slot0_again, 0);
+        assert_eq!(cache.fault_count, 2);
+        assert_eq!(cache.hit_count, 1);
+
+        // Access Block 2 -> All slots full! Evicts least recently used (Block 1 in Slot 1)
+        let (slot_evicted, hit_evicted, _entry2) =
+            cache.resolve_or_select_slot(2).expect("Evict block 1");
+        assert!(!hit_evicted);
+        assert_eq!(slot_evicted, 1); // Evicted slot 1
+        assert_eq!(cache.fault_count, 3);
+        assert_eq!(cache.slots[1].resident_block, Some(2));
+        assert_eq!(cache.slots[0].resident_block, Some(0)); // Block 0 kept
+    }
+
+    #[test]
+    fn test_declarative_framework_and_compositor_bench() {
+        use crate::event::KeyCode;
+        use crate::proc::declare::*;
+
+        let mut walker = DeclareWalker::new("Telemetry");
+        let _ = walker.nodes.push(DeclareNode {
+            node_id: 0,
+            layout: LAYOUT_MENU,
+            item_count: 4,
+            title_offset: 0,
+            first_item_offset: 0,
+        });
+        for i in 0..4 {
+            let _ = walker.items.push(DeclareItem {
+                kind: ITEM_ACTION,
+                flags: 0,
+                label_offset: i as u16,
+                target: 0,
+                value_ref: 0,
+                aux: 0,
+                reserved: 0,
+            });
+        }
+
+        // Verify initial state
+        assert_eq!(walker.current_node_idx, 0);
+        assert_eq!(walker.selected_item, 0);
+
+        // Test key navigation (Down)
+        let handled_down = walker.handle_key(KeyCode::Down);
+        assert!(handled_down);
+        assert_eq!(walker.selected_item, 1);
+
+        // Test key navigation (Up)
+        let handled_up = walker.handle_key(KeyCode::Up);
+        assert!(handled_up);
+        assert_eq!(walker.selected_item, 0);
+
+        // Test rule triggering with boot event
+        walker.trigger_rules(TRIGGER_BOOT, 0);
+        assert_eq!(walker.take_command(), DeclareCommand::None);
+
+        // Verify navigation stack push and pop
+        assert_eq!(walker.nav_stack.len(), 0);
+        let frame = NavFrame {
+            node_idx: 0,
+            selected_item: 0,
+            scroll_top: 0,
+        };
+        assert!(walker.nav_stack.push(frame).is_ok());
+        assert_eq!(walker.nav_stack.len(), 1);
+        assert_eq!(walker.nav_stack.pop(), Some(frame));
+        assert_eq!(walker.nav_stack.len(), 0);
     }
 }

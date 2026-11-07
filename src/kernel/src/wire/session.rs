@@ -51,8 +51,8 @@ impl WireSession {
             return Err(WireStatus::BadLength);
         }
 
-        let magic = raw_record[0];
-        if magic != WIRE_MAGIC {
+        let ident = raw_record[0];
+        if ident != WIRE_SYNC_ID {
             return Err(WireStatus::Unsupported);
         }
 
@@ -134,7 +134,7 @@ impl WireSession {
 
         self.valid_records_count = self.valid_records_count.saturating_add(1);
         let header = WireHeader {
-            magic,
+            ident,
             major,
             flags,
             service,
@@ -166,7 +166,7 @@ impl WireSession {
             return Err(WireStatus::BadLength);
         }
 
-        raw_buf[0] = WIRE_MAGIC;
+        raw_buf[0] = WIRE_SYNC_ID;
         raw_buf[1] = WIRE_MAJOR;
         raw_buf[2] = flags;
         raw_buf[3] = service;

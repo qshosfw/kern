@@ -216,7 +216,10 @@ fn read_radio_facet(
     let (vfo, ch) = match instance {
         RADIO_INSTANCE_VFO_A => (&radio_state.vfo_a, &radio_state.coord.channels[0]),
         RADIO_INSTANCE_VFO_B => (&radio_state.vfo_b, &radio_state.coord.channels[1]),
-        _ => (radio_state.selected_vfo(), radio_state.coord.active_channel()),
+        _ => (
+            radio_state.selected_vfo(),
+            radio_state.coord.active_channel(),
+        ),
     };
     match facet {
         FACET_RADIO_TUNING => {

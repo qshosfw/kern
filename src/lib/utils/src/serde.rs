@@ -1,7 +1,9 @@
 //! Zero-copy packet framing and serialization views for embedded telemetry & IPC.
 
 /// Marker trait for zero-copy plain-old-data (POD) binary payloads.
-/// Safety: Implementing types must have a deterministic memory layout (`#[repr(C)]` or `#[repr(transparent)]`)
+///
+/// # Safety
+/// Implementing types must have a deterministic memory layout (`#[repr(C)]` or `#[repr(transparent)]`)
 /// with no internal padding bytes or pointer references.
 pub unsafe trait ZeroCopyPod: Copy + 'static {}
 
@@ -19,7 +21,7 @@ impl<'a, T: ZeroCopyPod> PacketView<'a, T> {
 
         // Align check
         let ptr = bytes.as_ptr();
-        if (ptr as usize) % core::mem::align_of::<T>() != 0 {
+        if !(ptr as usize).is_multiple_of(core::mem::align_of::<T>()) {
             return None;
         }
 

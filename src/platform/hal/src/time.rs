@@ -43,17 +43,8 @@ pub fn now_us() -> u32 {
     unsafe { tim::TIM2_CNT.read_volatile() }
 }
 
-/// Spin-wait for exactly `us` microseconds using the TIM2 counter.
-///
-/// More precise than [`crate::delay::delay_us`] for short delays
-/// because it doesn't depend on SysTick reload math.
+/// Spin-wait for exactly `us` microseconds using the SysTick countdown timer.
 #[inline]
 pub fn spin_us(us: u32) {
-    if us == 0 {
-        return;
-    }
-    let start = now_us();
-    while now_us().wrapping_sub(start) < us {
-        core::hint::spin_loop();
-    }
+    crate::delay::delay_us(us);
 }

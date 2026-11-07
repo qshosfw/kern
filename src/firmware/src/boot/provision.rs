@@ -16,14 +16,14 @@ use crate::services::SystemStorage;
 use crate::services::storage::DirEntryInfo;
 #[cfg(feature = "provision_apps")]
 use kernel::proc::krx::{
-    KRX_MAGIC, KrxClass, KrxExecType, KrxProfile, SECTION_EXECUTION, SECTION_IDENTITY,
+    KRX_IDENT, KrxClass, KrxExecType, KrxProfile, SECTION_EXECUTION, SECTION_IDENTITY,
     SECTION_TYPE_LIFECYCLE,
 };
 
 pub const PROV_BUF_CAP: usize = 512;
 
 // Declare 3.0 payload for `/apps/sysinfo.krx` (1 node, 5 live ITEM_INFO rows, 0 actions, 6 labels)
-#[cfg(feature = "provision_apps")]
+#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
 const SYSINFO_PAYLOAD: &[u8] = &[
     1, 5, 0, 6, // [node_count=1, item_count=5, action_count=0, label_count=6]
     // DeclareNode 0 (8B): node_id=0, layout=0 (Menu), item_count=5, title_offset=0, first_item=0
@@ -45,7 +45,7 @@ const SYSINFO_PAYLOAD: &[u8] = &[
 ];
 
 // Declare 3.0 payload for `/apps/radioinfo.krx` (1 node, 4 live telemetry rows, layout=3 InfoCard, 5 labels)
-#[cfg(feature = "provision_apps")]
+#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
 const RADIOINFO_PAYLOAD: &[u8] = &[
     1, 4, 0, 5, // [node_count=1, item_count=4, action_count=0, label_count=5]
     // DeclareNode 0 (8B): node_id=0, layout=3 (InfoCard), item_count=4, title_offset=0, first_item=0
@@ -65,7 +65,7 @@ const RADIOINFO_PAYLOAD: &[u8] = &[
 ];
 
 // Declare 3.0 payload for `/apps/counter.krx` (1 node, 4 items, 3 actions, 5 labels)
-#[cfg(feature = "provision_apps")]
+#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
 const COUNTER_PAYLOAD: &[u8] = &[
     1, 4, 3, 5, // [node_count=1, item_count=4, action_count=3, label_count=5]
     // DeclareNode 0 (8B): node_id=0, layout=0, item_count=4, title_offset=0, first_item=0
@@ -89,7 +89,7 @@ const COUNTER_PAYLOAD: &[u8] = &[
 ];
 
 // Declare 3.0 payload for `/apps/timer.krx` (1 node, 3 items, 2 actions, 4 labels)
-#[cfg(feature = "provision_apps")]
+#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
 const TIMER_PAYLOAD: &[u8] = &[
     1, 3, 2, 4, // [node_count=1, item_count=3, action_count=2, label_count=4]
     // DeclareNode 0 (8B): node_id=0, layout=0, item_count=3, title_offset=0, first_item=0
@@ -104,6 +104,103 @@ const TIMER_PAYLOAD: &[u8] = &[
     7, b'E', b'l', b'a', b'p', b's', b'e', b'd', 11, b'S', b't', b'a', b'r', b't', b' ', b'(',
     b'+', b'1', b'0', b')', 5, b'R', b'e', b's', b'e', b't', 7, b'S', b'e', b'c', b'o', b'n', b'd',
     b's',
+];
+
+// Native ARM Thumb-1 binary payload for `/apps/beacon.krx`
+// Implements standard KrxNativeEntryFn:
+//   r0 = op (0=START, 1=EVENT, 2=RENDER, 3=EXIT)
+//   r1 = api_table (*const KrxApiTable)
+//   r2 = param (*const ())
+#[cfg(all(feature = "provision_apps", feature = "krx_native"))]
+const BEACON_NATIVE_PAYLOAD: &[u8] = &[
+    0x70, 0xb5, // push {r4, r5, r6, lr}
+    0x04, 0x46, // mov r4, r0
+    0x0d, 0x46, // mov r5, r1
+    0x16, 0x46, // mov r6, r2
+    0x00, 0x2c, // cmp r4, #0
+    0x07, 0xd0, // beq .Lstart
+    0x01, 0x2c, // cmp r4, #1
+    0x0e, 0xd0, // beq .Levent
+    0x02, 0x2c, // cmp r4, #2
+    0x18, 0xd0, // beq .Lrender
+    0x03, 0x2c, // cmp r4, #3
+    0x3c, 0xd0, // beq .Lexit
+    0x00, 0x20, // movs r0, #0
+    0x70, 0xbd, // pop {r4, r5, r6, pc}
+    // .Lstart:
+    0x6b, 0x6e, // ldr r3, [r5, #100] (rf_tune)
+    0x00, 0x2b, // cmp r3, #0
+    0x03, 0xd0, // beq .Lstart_done
+    0x21, 0x48, // ldr r0, [pc, #132] (145.500 MHz)
+    0x19, 0x21, // movs r1, #25 (bandwidth)
+    0x21, 0x4a, // ldr r2, [pc, #132] (12.5 kHz step)
+    0x98, 0x47, // blx r3
+    // .Lstart_done:
+    0x00, 0x20, // movs r0, #0
+    0x70, 0xbd, // pop {r4, r5, r6, pc}
+    // .Levent:
+    0x00, 0x2e, // cmp r6, #0
+    0x07, 0xd0, // beq .Levent_ignored
+    0x31, 0x78, // ldrb r1, [r6, #0] (krx_ev.kind)
+    0x01, 0x29, // cmp r1, #1 (KRX_EV_KEY)
+    0x04, 0xd1, // bne .Levent_ignored
+    0x70, 0x78, // ldrb r0, [r6, #1] (krx_ev.key)
+    0x0f, 0x28, // cmp r0, #15 (KEY_EXIT)
+    0x01, 0xd0, // beq .Levent_ignored
+    0x01, 0x20, // movs r0, #1 (consumed)
+    0x70, 0xbd, // pop {r4, r5, r6, pc}
+    // .Levent_ignored:
+    0x00, 0x20, // movs r0, #0
+    0x70, 0xbd, // pop {r4, r5, r6, pc}
+    // .Lrender:
+    0xac, 0x6c, // ldr r4, [r5, #72] (draw_rect)
+    0x00, 0x2c, // cmp r4, #0
+    0x20, 0xd0, // beq .Lrender_done
+    0x01, 0x20, // movs r0, #1
+    0x81, 0xb0, // sub sp, #4
+    0x00, 0x90, // str r0, [sp, #0] (color = 1)
+    0x00, 0x20, // movs r0, #0 (x = 0)
+    0x00, 0x21, // movs r1, #0 (y = 0)
+    0x80, 0x22, // movs r2, #128 (w = 128)
+    0x40, 0x23, // movs r3, #64 (h = 64)
+    0xa0, 0x47, // blx r4
+    0x01, 0xb0, // add sp, #4
+    0x01, 0x20, // movs r0, #1
+    0x81, 0xb0, // sub sp, #4
+    0x00, 0x90, // str r0, [sp, #0] (color = 1)
+    0x02, 0x20, // movs r0, #2 (x = 2)
+    0x0a, 0x21, // movs r1, #10 (y = 10)
+    0x7c, 0x22, // movs r2, #124 (w = 124)
+    0x2c, 0x23, // movs r3, #44 (h = 44)
+    0xac, 0x6c, // ldr r4, [r5, #72]
+    0xa0, 0x47, // blx r4
+    0x01, 0xb0, // add sp, #4
+    0x2c, 0x6d, // ldr r4, [r5, #80] (draw_str)
+    0x00, 0x2c, // cmp r4, #0
+    0x0a, 0xd0, // beq .Lrender_done
+    0x00, 0x20, // movs r0, #0 (font = 0)
+    0x01, 0x21, // movs r1, #1 (color = 1)
+    0x82, 0xb0, // sub sp, #8
+    0x00, 0x90, // str r0, [sp, #0]
+    0x01, 0x91, // str r1, [sp, #4]
+    0x10, 0x20, // movs r0, #16 (x = 16)
+    0x1a, 0x21, // movs r1, #26 (y = 26)
+    0x04, 0xa2, // add r2, pc, #16 (adr r2, .Lstr_beacon)
+    0x0e, 0x23, // movs r3, #14 (len = 14)
+    0xa0, 0x47, // blx r4
+    0x02, 0xb0, // add sp, #8
+    // .Lrender_done:
+    0x00, 0x20, // movs r0, #0
+    0x70, 0xbd, // pop {r4, r5, r6, pc}
+    // .Lexit:
+    0x00, 0x20, // movs r0, #0
+    0x70, 0xbd, // pop {r4, r5, r6, pc}
+    0xc0, 0x46, // nop
+    // "BEACON 145.500"
+    b'B', b'E', b'A', b'C', b'O', b'N', b' ', b'1', b'4', b'5', b'.', b'5', b'0', b'0', 0xc0,
+    0x46, // nop
+    0x60, 0x27, 0xac, 0x08, // .word 145500000 (0x08ac2760)
+    0xd4, 0x30, 0x00, 0x00, // .word 12500 (0x000030d4)
 ];
 
 /// Extract the filename component from a path (e.g. "/prov/app.krx" -> "app.krx").
@@ -151,7 +248,7 @@ fn write_krx_package(
     pkg.fill(0);
 
     // 1. Preamble (20 bytes)
-    pkg[0..4].copy_from_slice(&KRX_MAGIC);
+    pkg[0..4].copy_from_slice(&KRX_IDENT);
     pkg[4] = class as u8;
     pkg[5] = 0x05; // Format version 2.5.0
     pkg[6..8].copy_from_slice(&3u16.to_le_bytes()); // 3 sections
@@ -173,6 +270,12 @@ fn write_krx_package(
     pkg[72..74].copy_from_slice(&512u16.to_le_bytes()); // page_size = 512
     pkg[74] = 2; // cache_blocks = 2
     pkg[80..84].copy_from_slice(&(payload.len() as u32).to_le_bytes()); // payload_size
+    let code_len = payload.len() as u16;
+    let got_offset = match class {
+        KrxClass::Native | KrxClass::Paged => (code_len + 3) & !3,
+        _ => 0,
+    };
+    pkg[88..90].copy_from_slice(&got_offset.to_le_bytes()); // got_offset
     pkg[94] = profile.raw_code(); // explicit profile
 
     // 4. SectionType (offset 96: 4B header + 12B body = 16B, ends at 112)
@@ -202,42 +305,60 @@ pub fn ensure_core_packages(_filesystem: &mut SystemStorage) {}
 #[inline(never)]
 pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
     let base_caps = (kernel::caps::Cap::DisplayDirect as u32) | (kernel::caps::Cap::Keypad as u32);
-    write_krx_package(
-        filesystem,
-        "/apps/sysinfo.krx",
-        KrxClass::Declare,
-        KrxProfile::D0DeclareGraph,
-        "SysInfo",
-        base_caps,
-        SYSINFO_PAYLOAD,
-    );
-    write_krx_package(
-        filesystem,
-        "/apps/counter.krx",
-        KrxClass::Declare,
-        KrxProfile::D0DeclareGraph,
-        "Counter",
-        base_caps,
-        COUNTER_PAYLOAD,
-    );
-    write_krx_package(
-        filesystem,
-        "/apps/timer.krx",
-        KrxClass::Declare,
-        KrxProfile::D0DeclareGraph,
-        "Timer",
-        base_caps,
-        TIMER_PAYLOAD,
-    );
-    write_krx_package(
-        filesystem,
-        "/apps/radioinfo.krx",
-        KrxClass::Declare,
-        KrxProfile::D0DeclareGraph,
-        "RadioInfo",
-        base_caps,
-        RADIOINFO_PAYLOAD,
-    );
+
+    #[cfg(feature = "krx_native")]
+    {
+        let radio_caps = base_caps | (kernel::caps::Cap::RadioRx as u32);
+        write_krx_package(
+            filesystem,
+            "/apps/beacon.krx",
+            KrxClass::Native,
+            KrxProfile::N1NativePic,
+            "Beacon",
+            radio_caps,
+            BEACON_NATIVE_PAYLOAD,
+        );
+    }
+
+    #[cfg(feature = "krx_declare")]
+    {
+        write_krx_package(
+            filesystem,
+            "/apps/sysinfo.krx",
+            KrxClass::Declare,
+            KrxProfile::D0DeclareGraph,
+            "SysInfo",
+            base_caps,
+            SYSINFO_PAYLOAD,
+        );
+        write_krx_package(
+            filesystem,
+            "/apps/counter.krx",
+            KrxClass::Declare,
+            KrxProfile::D0DeclareGraph,
+            "Counter",
+            base_caps,
+            COUNTER_PAYLOAD,
+        );
+        write_krx_package(
+            filesystem,
+            "/apps/timer.krx",
+            KrxClass::Declare,
+            KrxProfile::D0DeclareGraph,
+            "Timer",
+            base_caps,
+            TIMER_PAYLOAD,
+        );
+        write_krx_package(
+            filesystem,
+            "/apps/radioinfo.krx",
+            KrxClass::Declare,
+            KrxProfile::D0DeclareGraph,
+            "RadioInfo",
+            base_caps,
+            RADIOINFO_PAYLOAD,
+        );
+    }
 }
 
 /// Execute the storage provisioning pass for dynamic application packages and configuration.

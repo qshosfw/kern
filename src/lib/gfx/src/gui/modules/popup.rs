@@ -90,6 +90,12 @@ impl PopupView {
     }
 }
 
+impl Default for PopupView {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[inline(always)]
 fn popup_visible_lines(model: &PopupModel) -> usize {
     if model.confirm_label.is_some() || model.cancel_label.is_some() {
@@ -211,7 +217,7 @@ impl View<PopupModel> for PopupView {
             let rep_tick = model
                 .repeater
                 .tick()
-                .map_or(false, |c| scroll_popup(model, c));
+                .is_some_and(|c| scroll_popup(model, c));
             return anim_tick || rep_tick;
         }
 

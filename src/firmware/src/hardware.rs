@@ -1,8 +1,7 @@
 //! System Hardware Abstraction, Dirty Config Synchronization & Context Building.
 
 use crate::services::{
-    DisplayHardware, FirmwareContext as SysContext, PowerServiceConfigExt, RadioMelodyExt,
-    SystemStorage,
+    DisplayHardware, PowerServiceConfigExt, RadioMelodyExt, SysContext, SystemStorage,
 };
 use crate::{CALIBRATION, PASSCODE_STATE, POWER_SERVICE};
 use drivers::audio::AudioAmplifier;

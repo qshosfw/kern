@@ -163,7 +163,135 @@ def run_test():
             sys.exit("FAIL: Screen did not update after frequency step")
         print("  PASS  Frequency stepped successfully (+12.5 kHz)")
 
-        # 6. Safety release
+        # 6. Inject Key 'EXIT' to return to Launcher
+        print("  • Injecting keypad press: 'EXIT' (Return to Launcher)...")
+        key_resp = http_post_json("/api/key", {"key": "EXIT", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key EXIT injection failed: {key_resp}")
+
+        launcher_return_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != up_frame:
+                launcher_return_frame = cur
+                break
+        if not launcher_return_frame:
+            sys.exit("FAIL: Screen did not return to Launcher")
+        print("  PASS  Returned to Launcher from Radio app")
+
+        # 7. Inject Key '2' to launch Settings App
+        print("  • Injecting keypad press: '2' (Launch Settings App)...")
+        key_resp = http_post_json("/api/key", {"key": "2", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key 2 injection failed: {key_resp}")
+
+        settings_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != launcher_return_frame:
+                settings_frame = cur
+                break
+        if not settings_frame:
+            sys.exit("FAIL: Screen did not update after launching Settings app")
+        print("  PASS  Settings app loaded and rendered to LCD")
+
+        # 8. Inject Key 'DOWN' to navigate settings menu
+        print("  • Injecting keypad press: 'DOWN' (Navigate Settings)...")
+        key_resp = http_post_json("/api/key", {"key": "DOWN", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key DOWN injection failed: {key_resp}")
+
+        settings_down_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != settings_frame:
+                settings_down_frame = cur
+                break
+        if not settings_down_frame:
+            sys.exit("FAIL: Screen did not update after navigating Settings")
+        print("  PASS  Settings menu navigated down")
+
+        # 9. Return to Launcher from Settings
+        print("  • Injecting keypad press: 'EXIT' (Return to Launcher)...")
+        key_resp = http_post_json("/api/key", {"key": "EXIT", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key EXIT injection failed: {key_resp}")
+
+        final_launcher_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != settings_down_frame:
+                final_launcher_frame = cur
+                break
+        if not final_launcher_frame:
+            sys.exit("FAIL: Screen did not return to Launcher from Settings")
+        print("  PASS  Returned to Launcher from Settings app")
+
+        # 10. Inject Key '3' to launch Native Beacon App (/apps/beacon.krx)
+        print("  • Injecting keypad press: '3' (Launch Native Beacon App)...")
+        key_resp = http_post_json("/api/key", {"key": "3", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key 3 injection failed: {key_resp}")
+
+        beacon_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != final_launcher_frame:
+                beacon_frame = cur
+                break
+        if not beacon_frame:
+            serial_data = http_get_json("/api/serial")
+            print("Serial lines:", serial_data.get("lines", []))
+            sys.exit("FAIL: Screen did not update after launching Native Beacon app")
+        print("  PASS  Native Beacon app loaded and rendered to LCD")
+
+        # 11. Return to Launcher from Beacon App
+        print("  • Injecting keypad press: 'EXIT' (Return to Launcher from Beacon)...")
+        key_resp = http_post_json("/api/key", {"key": "EXIT", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key EXIT injection failed: {key_resp}")
+
+        beacon_launcher_return_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != beacon_frame:
+                beacon_launcher_return_frame = cur
+                break
+        if not beacon_launcher_return_frame:
+            sys.exit("FAIL: Screen did not return to Launcher from Beacon app")
+        print("  PASS  Returned to Launcher from Native Beacon app")
+
+        # 12. Test Deep Sleep from Launcher via long-press EXIT
+        print("  • Injecting long-press EXIT (1600ms) on Launcher for deep sleep...")
+        key_resp = http_post_json("/api/key", {"key": "EXIT", "hold_ms": 1600})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key EXIT hold injection failed: {key_resp}")
+
+        # Wait for deep sleep to take effect (display should turn off)
+        time.sleep(1.0)
+        status_sleep = http_get_json("/api/status")
+        panel_sleep = status_sleep.get("panel", {})
+        if panel_sleep.get("display") is False:
+            print("  PASS  Deep sleep confirmed: ST7565 LCD powered down")
+        else:
+            print(f"  Note: Panel display state: {panel_sleep.get('display')}")
+
+        # Wake up by pressing any key (e.g. '1')
+        print("  • Waking up from deep sleep by pressing key '1'...")
+        http_post_json("/api/key", {"key": "1", "hold_ms": 150})
+        time.sleep(1.0)
+        status_awake = http_get_json("/api/status")
+        panel_awake = status_awake.get("panel", {})
+        if panel_awake.get("display"):
+            print("  PASS  Radio woke up successfully from deep sleep")
+
+        # 13. Safety release
         rel_resp = http_post_json("/api/release-all")
         if not rel_resp.get("ok"):
             sys.exit(f"FAIL: Release all keys failed: {rel_resp}")

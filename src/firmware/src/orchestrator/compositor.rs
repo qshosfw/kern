@@ -8,13 +8,14 @@ use gfx::gui::modules::menu::{
 use gfx::gui::modules::popup::{PopupModel, PopupView};
 #[cfg(feature = "text_input")]
 use gfx::gui::modules::text_input::{TextInputModel, TextInputView};
+use gfx::gui::modules::toast::{ToastModel, ToastView};
 use gfx::gui::repeater::KeyRepeater;
 use gfx::gui::view::View;
 use kernel::app::ModalResult;
 use kernel::event::{Event, KeyCode, KeyState};
 
 use super::keypad_lock::KeypadLockManager;
-use crate::services::FirmwareContext;
+use crate::services::SysContext;
 
 #[repr(u8)]
 pub enum ActiveModal {
@@ -31,6 +32,8 @@ pub struct ModalCompositor {
     pub popup_view: PopupView,
     #[cfg(feature = "text_input")]
     pub text_view: TextInputView,
+    pub toast: ToastModel,
+    pub toast_view: ToastView,
 }
 
 impl ModalCompositor {
@@ -41,21 +44,34 @@ impl ModalCompositor {
             popup_view: PopupView::new(),
             #[cfg(feature = "text_input")]
             text_view: TextInputView::new(),
+            toast: ToastModel::new(),
+            toast_view: ToastView::new(),
         }
     }
 
     #[inline(always)]
     pub fn is_active(&self) -> bool {
-        !matches!(self.modal, ActiveModal::None)
+        !matches!(self.modal, ActiveModal::None) || self.toast.is_active
     }
 
     #[inline(always)]
     pub fn is_animating(&self) -> bool {
+        if self.toast.is_active {
+            return true;
+        }
         match &self.modal {
             ActiveModal::Sheet(_, _, anim) => anim.is_animating(),
             ActiveModal::Popup(model) => !model.anim.is_complete(),
             _ => false,
         }
+    }
+
+    pub fn show_toast(&mut self, msg: &str, duration_ms: u16) {
+        self.toast.show(msg, duration_ms);
+    }
+
+    pub fn tick(&mut self, dt_ms: u16) {
+        self.toast.tick(dt_ms);
     }
 
     #[inline(always)]
@@ -257,6 +273,9 @@ impl ModalCompositor {
                 }
             }
         }
+        if self.toast.is_active {
+            self.toast_view.render(canvas, &self.toast);
+        }
     }
 }
 
@@ -283,7 +302,7 @@ impl OsCompositor {
     pub fn render<'a>(
         active_app_id: usize,
         canvas: &mut Canvas,
-        ctx: &'a FirmwareContext<'a, '_>,
+        ctx: &'a SysContext<'a, '_>,
         lock_mgr: &KeypadLockManager,
     ) {
         canvas.clear();

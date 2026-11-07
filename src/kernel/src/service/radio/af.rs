@@ -45,4 +45,14 @@ pub trait RfAudioPath {
     }
     /// Mute or unmute the microphone audio path.
     fn mute_mic(&mut self, _mute: bool) {}
+
+    /// Read instantaneous voice/modulator amplitude from silicon (`Reg 0x64`).
+    fn get_voice_amplitude(&mut self) -> u16 {
+        0
+    }
+
+    /// Read AF TX/RX input amplitude in dB from silicon (`Reg 0x6F` bits `[6:0]`).
+    fn get_af_amplitude_db(&mut self) -> u8 {
+        0
+    }
 }

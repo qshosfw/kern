@@ -177,12 +177,55 @@ impl ChannelConfig {
     }
 }
 
+/// Pre-computed PLL divider and front-end filter state for zero-division sub-band interleaving.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrecomputedTuneState {
+    pub freq_hz: u32,
+    pub pll_low: u16,
+    pub pll_high: u16,
+    pub uhf_path: bool,
+}
+
+impl PrecomputedTuneState {
+    #[inline(always)]
+    pub const fn from_freq_hz(freq_hz: u32) -> Self {
+        let freq_10hz = freq_hz / 10;
+        Self {
+            freq_hz,
+            pll_low: (freq_10hz & 0xFFFF) as u16,
+            pll_high: ((freq_10hz >> 16) & 0xFFFF) as u16,
+            uhf_path: freq_hz >= 280_000_000,
+        }
+    }
+}
+
 /// Declarative interface for RF channel frequency synthesis and RF power output.
 pub trait RfChannel {
     fn configure_channel(&mut self, config: &ChannelConfig);
     fn set_rx_frequency(&mut self, freq: Frequency<Hertz>);
     fn set_tx_frequency(&mut self, freq: Frequency<Hertz>);
     fn set_power_level(&mut self, level: RfPowerLevel);
+
+    /// Apply a pre-computed PLL & LNA filter state for high-speed sub-band interleaving.
+    fn apply_precomputed_tune(&mut self, state: &PrecomputedTuneState) {
+        self.set_rx_frequency(Frequency::new(state.freq_hz));
+    }
+
+    /// Poll hardware PLL / VCO lock detector up to `max_wait_us` microseconds.
+    /// Returns `true` as soon as the synthesizer locks so RSSI can be sampled without blind sleeps.
+    fn wait_pll_lock(&mut self, _max_wait_us: u16) -> bool {
+        true
+    }
+
+    /// Read adjacent channel power ratio from silicon (`Reg 0x66`), returning `(upper_adj, lower_adj)`.
+    fn get_adjacent_channel_power(&mut self) -> (u8, u8) {
+        (0, 0)
+    }
+
+    /// Read LNA peak RSSI indicator from silicon (`Reg 0x62` bits `[15:8]`).
+    fn get_lna_peak_rssi(&mut self) -> u8 {
+        0
+    }
 }
 
 /// Fine frequency synthesis, crystal trimming, and PLL fractional compensation.
@@ -196,4 +239,8 @@ pub trait RfFineTuning {
     /// Set sub-Hz frequency offset relative to nominal carrier using Vernier calculation.
     /// `offset_dhz`: desired offset in deci-Hertz (0.1 Hz increments, e.g. +62 = +6.2 Hz, -1700 = -170 Hz).
     fn set_sub_hz_offset(&mut self, carrier_hz: u32, offset_dhz: i16);
+    /// Read signed Automatic Frequency Control (AFC) frequency offset indicator from silicon (`Reg 0x6D`).
+    fn get_afc_offset(&mut self) -> i16 {
+        0
+    }
 }

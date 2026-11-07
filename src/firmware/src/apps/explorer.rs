@@ -551,7 +551,7 @@ fn render_file_list(canvas: &mut Canvas, items: &[DynamicVfsItem], selected_idx:
     }
 }
 
-impl<'a> App<crate::services::FirmwareContext<'a, '_>> for ExplorerApp {
+impl<'a> App<crate::services::SysContext<'a, '_>> for ExplorerApp {
     fn meta() -> AppMetadata {
         AppMetadata {
             name: "Explorer",

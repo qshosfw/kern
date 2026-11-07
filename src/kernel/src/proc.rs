@@ -16,14 +16,14 @@ pub mod service_registry;
 #[cfg(feature = "krx_vm")]
 pub mod vm;
 
-pub use crate::boot::{BOOT_RECORD_MAGIC, BootRecord, BootSlot, ResetReason};
+pub use crate::boot::{BOOT_RECORD_IDENT, BootRecord, BootSlot, ResetReason};
 pub use crate::mem::{CellSlab, SlabCell};
 pub use abi::*;
 pub use krx::{
-    BOOT_MAGIC, CALIB_MAGIC, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, KERNFS_MAGIC,
-    KRX_MAGIC, KrxClass, KrxExecType, KrxIndexEntry, KrxPreamble, KrxProfile, KrxSwapHeader,
-    LeafContext, LeafContinuation, LeafEntry, PCB_MAGIC, SECTION_LEAF_MAP, SIG_MAGIC, SLAB_MAGIC,
-    SWAP_FLAG_COMPRESSED_RLE, SWAP_MAGIC, ServiceExport,
+    BOOT_IDENT, CALIB_IDENT, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, KERNFS_IDENT,
+    KRX_IDENT, KRX_PCB_IDENT, KrxClass, KrxExecType, KrxIndexEntry, KrxPreamble, KrxProfile,
+    KrxSwapHeader, LeafContext, LeafContinuation, LeafEntry, SECTION_LEAF_MAP, SIG_IDENT,
+    SLAB_IDENT, SWAP_FLAG_COMPRESSED_RLE, SWAP_IDENT, ServiceExport,
 };
 pub use lease::{LeaseError, LeaseKind, ResourceLease, ResourceLeaseManager};
 pub use ledger::ResourceLedger;
@@ -278,6 +278,26 @@ impl<const N: usize> ProcessTable<N> {
     pub fn find_mut_by_app(&mut self, app_id: usize) -> Option<&mut Pcb> {
         for p in &mut self.slots {
             if p.app_id == app_id && p.state != ProcState::Dormant {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// Locate PCB by process name (case-insensitive ASCII match).
+    pub fn find_by_name(&self, name: &str) -> Option<&Pcb> {
+        for p in &self.slots {
+            if p.state != ProcState::Dormant && p.name.as_str().eq_ignore_ascii_case(name) {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// Locate mutable PCB by process name (case-insensitive ASCII match).
+    pub fn find_mut_by_name(&mut self, name: &str) -> Option<&mut Pcb> {
+        for p in &mut self.slots {
+            if p.state != ProcState::Dormant && p.name.as_str().eq_ignore_ascii_case(name) {
                 return Some(p);
             }
         }

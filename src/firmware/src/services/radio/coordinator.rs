@@ -152,6 +152,14 @@ pub struct RadioCoordinator {
     pub tot_locked_out: bool,
     /// Real-time RX Squelch Tail Elimination (STE) controller.
     pub ste: RxSteController,
+    /// Per-VFO dynamic noise-floor estimator for Adaptive Squelch tracking.
+    pub adaptive_squelch: [AdaptiveSquelchTracker; 3],
+    /// Whether dynamic adaptive squelch tracking is enabled.
+    pub adaptive_squelch_enabled: bool,
+    /// Sub-divider counter for background adaptive squelch floor sampling.
+    pub adaptive_tick_div: u8,
+    /// True if PA power was folded back due to high die/board temperature during prolonged TX.
+    pub pa_thermal_foldback_active: bool,
 }
 
 impl RadioCoordinator {
@@ -195,6 +203,14 @@ impl RadioCoordinator {
             tot_warning_given: false,
             tot_locked_out: false,
             ste: RxSteController::new(),
+            adaptive_squelch: [
+                AdaptiveSquelchTracker::new(),
+                AdaptiveSquelchTracker::new(),
+                AdaptiveSquelchTracker::new(),
+            ],
+            adaptive_squelch_enabled: true,
+            adaptive_tick_div: 0,
+            pa_thermal_foldback_active: false,
         }
     }
 
@@ -585,6 +601,7 @@ impl RadioCoordinator {
         bsp::set_status_led(bsp::StatusLed::Red);
         self.tot_elapsed_10ms = 0;
         self.tot_warning_given = false;
+        self.pa_thermal_foldback_active = false;
         radio.set_tx_frequency(tx_freq);
 
         // Kernel Power Governor: Dynamic Brownout Protection
@@ -609,9 +626,7 @@ impl RadioCoordinator {
     }
 
     pub fn stop_tx<R: RadioService>(&mut self, radio: &mut R) {
-        if self.effective_tx_channel().tx_subaudible.is_ctcss() {
-            radio.send_css_tail(CssTailMode::Tone55Hz);
-        }
+        radio.send_css_tail(CssTailMode::None);
         radio.mute_mic(false);
         radio.tx_mute();
         radio.tx_ramp_down();
@@ -621,6 +636,7 @@ impl RadioCoordinator {
         }
         self.is_transmitting = false;
         self.tx_state = TxState::Idle;
+        self.pa_thermal_foldback_active = false;
         bsp::set_status_led(if self.carrier_active {
             bsp::StatusLed::Green
         } else {
@@ -980,6 +996,21 @@ impl RadioCoordinator {
         if self.is_transmitting && matches!(self.tx_state, TxState::Active | TxState::LeadIn { .. })
         {
             self.tot_elapsed_10ms = self.tot_elapsed_10ms.saturating_add(1);
+
+            // Silicon Thermal & Supply Protection:
+            // Poll on-die MCU temperature and battery droop every 500ms (50 ticks) during active TX.
+            // If temperature exceeds 65.0°C (650 deci-C) or battery droops into low state while on High PA,
+            // fold back PA bias to Medium (level 1) to protect final-stage RF transistors.
+            if (self.tot_elapsed_10ms % 50) == 0 && !self.pa_thermal_foldback_active {
+                let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+                if (pwr.mcu_temp_deci_c >= 650 || pwr.is_low)
+                    && self.effective_tx_channel().power == RfPowerLevel::High
+                {
+                    self.pa_thermal_foldback_active = true;
+                    radio.tx_ramp_up(1);
+                }
+            }
+
             if self.tot_limit_seconds > 0 {
                 let limit_ticks = (self.tot_limit_seconds as u32) * 100;
                 let elapsed = self.tot_elapsed_10ms as u32;
@@ -1010,18 +1041,7 @@ impl RadioCoordinator {
         // Subaudible tail burst countdown
         if let TxState::TailBurst { remaining_ms } = self.tx_state {
             if remaining_ms <= 10 {
-                self.is_transmitting = false;
-                self.tx_state = TxState::Idle;
-                radio.mute_mic(false);
-                bsp::set_status_led(if self.carrier_active {
-                    bsp::StatusLed::Green
-                } else {
-                    bsp::StatusLed::Off
-                });
-                self.tot_elapsed_10ms = 0;
-                self.tot_warning_given = false;
-                self.dwell.on_tx_finished();
-                radio.configure_channel(self.listening_channel());
+                self.stop_tx(radio);
                 return Some(RadioEvent::TxEnded);
             } else {
                 self.tx_state = TxState::TailBurst {
@@ -1135,6 +1155,12 @@ impl RadioCoordinator {
             .min(self.rssi_moving_avg.len() - 1);
         self.rssi_moving_avg[idx] = (self.rssi_moving_avg[idx] * 3 + current_rssi) / 4;
 
+        // Dynamic AM Linearity Mapping: adjust front-end gain inversely to carrier RSSI in AM mode
+        let listening_mod = self.channels[idx].modulation;
+        if matches!(listening_mod, ModulationMode::Am | ModulationMode::AmB) {
+            radio.compensate_am_linearity(current_rssi);
+        }
+
         if carrier {
             self.activity_count[idx] = self.activity_count[idx].saturating_add(1);
 
@@ -1166,11 +1192,30 @@ impl RadioCoordinator {
                 } else {
                     false
                 };
-                if let Some(should_mute) = self.ste.process_tick(true, tone_cfg, tone_present) {
+                let tail_burst = radio.has_tail_burst_detected();
+                if let Some(should_mute) =
+                    self.ste
+                        .process_tick_with_tail(true, tone_cfg, tone_present, tail_burst)
+                {
                     self.set_audio_muted(radio, should_mute);
                 }
 
                 return RadioEvent::None;
+            }
+        }
+
+        // Background Adaptive Squelch Noise-Floor Estimator (runs when channel is idle)
+        if self.adaptive_squelch_enabled {
+            self.adaptive_tick_div = self.adaptive_tick_div.wrapping_add(1);
+            if (self.adaptive_tick_div & 0x0F) == 0 {
+                let metrics = SignalMetrics {
+                    rssi_dbm: current_rssi,
+                    snr: 0,
+                    noise: radio.get_noise(),
+                    glitch: radio.get_glitch(),
+                    carrier_open: false,
+                };
+                self.adaptive_squelch[idx].update(&metrics);
             }
         }
 

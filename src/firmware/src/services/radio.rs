@@ -127,45 +127,80 @@ impl RadioState {
     }
 
     pub fn toggle_vfo(&mut self) {
-        self.active_vfo = if self.active_vfo == 0 {
-            1
-        } else if self.active_vfo == 1 {
-            2
-        } else {
+        self.active_vfo = if self.active_vfo >= 2 {
             0
+        } else {
+            self.active_vfo + 1
         };
         self.coord.active_vfo = match self.active_vfo {
-            0 => VfoSlot::VfoA,
             1 => VfoSlot::VfoB,
-            _ => VfoSlot::VfoC,
+            2 => VfoSlot::VfoC,
+            _ => VfoSlot::VfoA,
         };
     }
 
     pub fn sync_from_coord(&mut self) {
         self.active_vfo = self.coord.active_vfo.index() as u8;
 
-        let is_tx = self.coord.is_transmitting;
-        let tx_slot = self.coord.effective_tx_slot();
-        let app_lock_active = self.coord.arbitrator.is_locked();
-        let app_lock_slot = self.coord.arbitrator.locked_slot().unwrap_or(VfoSlot::VfoA);
+        let tx_slot = if self.coord.is_transmitting {
+            Some(self.coord.effective_tx_slot())
+        } else {
+            None
+        };
+        let lock_slot = if self.coord.arbitrator.is_locked() {
+            Some(self.coord.arbitrator.locked_slot().unwrap_or(VfoSlot::VfoA))
+        } else {
+            None
+        };
         let listening = self.coord.listening_vfo;
         let carrier = self.coord.carrier_active;
 
-        let vfos = [&mut self.vfo_a, &mut self.vfo_b, &mut self.vfo_c];
-        let slots = [VfoSlot::VfoA, VfoSlot::VfoB, VfoSlot::VfoC];
-
-        for (i, vfo) in vfos.into_iter().enumerate() {
-            let ch = &self.coord.channels[i];
-            let slot = slots[i];
-            vfo.frequency = ch.effective_rx_freq();
-            vfo.power = ch.power.as_str();
-            vfo.bw = ch.bandwidth.as_str();
-            vfo.mod_type = ch.modulation.as_str();
-            let lock = app_lock_active && app_lock_slot == slot;
-            vfo.rx_active = (listening == slot && carrier) || lock;
-            vfo.tx_active = is_tx && tx_slot == slot;
-        }
+        sync_vfo(
+            &mut self.vfo_a,
+            &self.coord.channels[0],
+            VfoSlot::VfoA,
+            listening,
+            carrier,
+            lock_slot,
+            tx_slot,
+        );
+        sync_vfo(
+            &mut self.vfo_b,
+            &self.coord.channels[1],
+            VfoSlot::VfoB,
+            listening,
+            carrier,
+            lock_slot,
+            tx_slot,
+        );
+        sync_vfo(
+            &mut self.vfo_c,
+            &self.coord.channels[2],
+            VfoSlot::VfoC,
+            listening,
+            carrier,
+            lock_slot,
+            tx_slot,
+        );
     }
+}
+
+#[inline(never)]
+fn sync_vfo(
+    vfo: &mut VfoChannelState,
+    ch: &ChannelConfig,
+    slot: VfoSlot,
+    listening: VfoSlot,
+    carrier: bool,
+    app_lock_slot: Option<VfoSlot>,
+    tx_slot: Option<VfoSlot>,
+) {
+    vfo.frequency = ch.effective_rx_freq();
+    vfo.power = ch.power.as_str();
+    vfo.bw = ch.bandwidth.as_str();
+    vfo.mod_type = ch.modulation.as_str();
+    vfo.rx_active = (listening == slot && carrier) || app_lock_slot == Some(slot);
+    vfo.tx_active = tx_slot == Some(slot);
 }
 
 impl<'a, State> RadioMelodyExt for drivers::bk4829::Bk4829<'a, State> {

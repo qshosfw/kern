@@ -26,6 +26,8 @@ pub const INTERFACE_FM: u16 = 0x000B;
 pub const INTERFACE_SERVICE: u16 = 0x000C;
 pub const INTERFACE_HW_BUS: u16 = 0x000D;
 
+pub use crate::ipc::{KrxIpcMessage, ipc_flags, ipc_msg_type, ipc_target};
+
 // Standard Service Package Interface IDs (Section 8.3)
 pub const INTERFACE_SVC_AX25: u16 = 0x0100;
 pub const INTERFACE_SVC_CW: u16 = 0x0101;
@@ -49,6 +51,7 @@ pub const KRX_EV_BUS: u8 = 4;
 pub const KRX_EV_USB: u8 = 5;
 pub const KRX_EV_POWER: u8 = 6;
 pub const KRX_EV_MODAL: u8 = 7;
+pub const KRX_EV_IPC: u8 = 8;
 
 pub const MODAL_RESULT_DISMISSED: u8 = 0;
 pub const MODAL_RESULT_CONFIRMED: u8 = 1;
@@ -105,6 +108,11 @@ impl KrxEvent {
     #[inline(always)]
     pub const fn is_modal(&self) -> bool {
         self.kind == KRX_EV_MODAL
+    }
+
+    #[inline(always)]
+    pub const fn is_ipc(&self) -> bool {
+        self.kind == KRX_EV_IPC
     }
 }
 
@@ -346,6 +354,8 @@ pub struct CapUiVTable {
         max_len: u8,
     ),
     pub ui_get_modal_text: unsafe extern "C" fn(buf: *mut u8, max_len: u8) -> u8,
+    pub ui_show_toast: unsafe extern "C" fn(msg: *const u8, len: u8, duration_ms: u16),
+    pub ui_is_animating: unsafe extern "C" fn() -> u8,
 }
 
 /// 10. `CapMath` VTable (`interface_id = 0x000A`)
@@ -400,6 +410,12 @@ pub struct CapServiceVTable {
     pub sys_post_event: unsafe extern "C" fn(event_id: u32) -> u8,
     pub sys_publish_event: unsafe extern "C" fn(topic: u16, data: *const u8, len: u8) -> u8,
     pub sys_stack_free_min: unsafe extern "C" fn() -> u16,
+    pub ipc_send_msg: unsafe extern "C" fn(msg: *const KrxIpcMessage) -> u8,
+    pub ipc_recv_msg: unsafe extern "C" fn(out_msg: *mut KrxIpcMessage) -> u8,
+    pub ipc_reply:
+        unsafe extern "C" fn(req: *const KrxIpcMessage, payload: *const u8, len: u8) -> u8,
+    pub sys_find_proc: unsafe extern "C" fn(name: *const u8, len: u8) -> u8,
+    pub sys_self_pid: unsafe extern "C" fn() -> u8,
 }
 
 /// 13. `CapHwBus` VTable (`interface_id = 0x000D`)
@@ -825,6 +841,10 @@ unsafe extern "C" fn noop_ui_prompt_text(
 unsafe extern "C" fn noop_ui_get_modal_text(_buf: *mut u8, _max_len: u8) -> u8 {
     0
 }
+unsafe extern "C" fn noop_ui_show_toast(_msg: *const u8, _len: u8, _duration_ms: u16) {}
+unsafe extern "C" fn noop_ui_is_animating() -> u8 {
+    0
+}
 
 unsafe extern "C" fn noop_sys_rand32() -> u32 {
     0x5A5A_5A5A
@@ -931,6 +951,25 @@ unsafe extern "C" fn noop_sys_publish_event(_topic: u16, _data: *const u8, _len:
 }
 unsafe extern "C" fn noop_sys_stack_free_min() -> u16 {
     1024
+}
+unsafe extern "C" fn noop_ipc_send_msg(_msg: *const KrxIpcMessage) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_ipc_recv_msg(_out_msg: *mut KrxIpcMessage) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_ipc_reply(
+    _req: *const KrxIpcMessage,
+    _payload: *const u8,
+    _len: u8,
+) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_sys_find_proc(_name: *const u8, _len: u8) -> u8 {
+    0
+}
+unsafe extern "C" fn noop_sys_self_pid() -> u8 {
+    1
 }
 
 unsafe extern "C" fn noop_hw_i2c_transfer(
@@ -1130,6 +1169,8 @@ pub static STUB_UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_show_confirm: noop_ui_show_confirm,
     ui_prompt_text: noop_ui_prompt_text,
     ui_get_modal_text: noop_ui_get_modal_text,
+    ui_show_toast: noop_ui_show_toast,
+    ui_is_animating: noop_ui_is_animating,
 };
 
 pub static STUB_MATH_VTABLE: CapMathVTable = CapMathVTable {
@@ -1170,6 +1211,11 @@ pub static STUB_SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     sys_post_event: noop_sys_post_event,
     sys_publish_event: noop_sys_publish_event,
     sys_stack_free_min: noop_sys_stack_free_min,
+    ipc_send_msg: noop_ipc_send_msg,
+    ipc_recv_msg: noop_ipc_recv_msg,
+    ipc_reply: noop_ipc_reply,
+    sys_find_proc: noop_sys_find_proc,
+    sys_self_pid: noop_sys_self_pid,
 };
 
 pub static STUB_HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {

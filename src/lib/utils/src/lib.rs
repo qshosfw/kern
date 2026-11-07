@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod dsp;
 pub mod format;
 pub mod gsm7;
 pub mod mbuf;

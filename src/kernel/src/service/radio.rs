@@ -46,4 +46,16 @@ pub trait RadioService:
     fn sleep(&mut self);
     fn wake(&mut self);
     fn set_xtal_freq_trim(&mut self, trim: i16);
+
+    /// Enable or disable internal TX-to-RX analog loopback (`Reg 0x30 = 0xFFF7`, PA disabled).
+    ///
+    /// Couples the internal modulator and tone/CTCSS synthesizer directly into the receiver
+    /// mixer through an internal attenuation path with zero RF emitted to the antenna.
+    /// Ideal for silent CTCSS deviation calibration, mic audio level checking, and AFC offset tuning.
+    fn set_internal_loopback(&mut self, _enabled: bool) {}
+
+    /// Query whether internal TX-to-RX analog loopback mode is currently active.
+    fn is_internal_loopback(&self) -> bool {
+        false
+    }
 }

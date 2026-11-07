@@ -159,7 +159,7 @@ impl BatteryDriver {
             }
             self.has_calib_curve = true;
             let word3 = self.calib_curve[3];
-            if word3 >= 1000 && word3 <= 3500 {
+            if (1000..=3500).contains(&word3) {
                 self.calib_const = word3;
             }
         }
@@ -169,7 +169,7 @@ impl BatteryDriver {
         self.calib_curve = curve;
         self.has_calib_curve = true;
         let word3 = curve[3];
-        if word3 >= 1000 && word3 <= 3500 {
+        if (1000..=3500).contains(&word3) {
             self.calib_const = word3;
         }
     }
@@ -313,7 +313,7 @@ impl BatteryDriver {
             // Refine internal resistance estimate from measured instantaneous raw step sag during TX
             if self.pre_tx_ocv > raw_mv {
                 let step_sag = self.pre_tx_ocv - raw_mv;
-                if step_sag >= 50 && step_sag <= 600 {
+                if (50..=600).contains(&step_sag) {
                     let r_est = match periph.tx_power_level {
                         0 => step_sag << 1,
                         1 => step_sag,
@@ -482,6 +482,12 @@ impl BatteryDriver {
         }
 
         self.finish_state(raw_adc, raw_mv, periph, profile)
+    }
+}
+
+impl Default for BatteryDriver {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

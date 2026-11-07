@@ -4,7 +4,7 @@
 //! backed by a multi-word occupancy bitmap. Zero heap, strictly `#![no_std]`.
 //! Standard Map A geometry: 400 cells = 6.4 KB with 13 u32 bitmap words.
 
-pub const SLAB_MAGIC: [u8; 4] = [0xC0, 0xDE, 0x04, 0xFB];
+pub const SLAB_IDENT: [u8; 4] = [0xC0, 0xDE, 0x04, 0xFB];
 
 /// 16-byte fixed-size slab cell
 #[repr(C, align(4))]
@@ -21,7 +21,7 @@ impl SlabCell {
 
 /// Static slab allocator backed by a multi-word bitmap (defaulting to Map A: 400 cells, 13 words).
 pub struct CellSlab<const N: usize = 400, const WORDS: usize = 13> {
-    pub magic: [u8; 4],
+    pub ident: [u8; 4],
     pub bitmap: [u32; WORDS],
     pub cells: [SlabCell; N],
 }
@@ -41,16 +41,16 @@ impl<const N: usize, const WORDS: usize> CellSlab<N, WORDS> {
             )
         };
         Self {
-            magic: SLAB_MAGIC,
+            ident: SLAB_IDENT,
             bitmap: [0; WORDS],
             cells: [const { SlabCell::empty() }; N],
         }
     }
 
-    /// Verifies that the slab header magic matches KRX SLAB_MAGIC.
+    /// Verifies that the slab header format identifier matches KRX SLAB_IDENT.
     #[inline(always)]
     pub fn is_valid(&self) -> bool {
-        self.magic == SLAB_MAGIC
+        self.ident == SLAB_IDENT
     }
 
     /// Checks if a cell at `idx` is currently allocated.

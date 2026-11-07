@@ -42,6 +42,12 @@ impl EntropyHealth {
     }
 }
 
+impl Default for EntropyHealth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Hardware TRNG Sponge based on the 320-bit Ascon Permutation.
 pub struct HardwareTrng {
     state: AsconPermutation,
@@ -150,7 +156,13 @@ impl HardwareTrng {
             prev = sample;
             total_ones += sample.count_ones();
         }
-        total_ones >= 102 && total_ones <= 410 && self.health.is_healthy
+        (102..=410).contains(&total_ones) && self.health.is_healthy
+    }
+}
+
+impl Default for HardwareTrng {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

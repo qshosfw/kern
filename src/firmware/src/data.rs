@@ -13,7 +13,7 @@ pub mod file_header;
 pub mod frame_delta;
 
 pub use app_bundle::{
-    KRX_MAGIC, KrxClass, KrxExecType, KrxPreamble, KrxProfile, SectionExecution, SectionIdentity,
+    KRX_IDENT, KrxClass, KrxExecType, KrxPreamble, KrxProfile, SectionExecution, SectionIdentity,
     SectionType,
 };
 pub use arena::*;

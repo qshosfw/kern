@@ -3,10 +3,10 @@
 //! Unifies Class 0 (`Native` single-base PIC) and Class 1 (`Paged` demand-paged
 //! fixed-window overlay cache with LR-thunking shadow return stack) in the
 //! shared transient SRAM execution arena (`NATIVE_SLOT`), linked against the
-//! modular capability VTables (`abi_bridge`) and delta relocation engine (`apply_relocs`).
+//! modular capability VTables (`syscall`) and delta relocation engine (`apply_relocs`).
 
-use super::abi_bridge::{ACTIVE_CANVAS, ACTIVE_CTX, NATIVE_API_TABLE, bind_cap_imports};
-use crate::services::FirmwareContext;
+use super::syscall::{ACTIVE_CANVAS, ACTIVE_CTX, NATIVE_API_TABLE, bind_cap_imports};
+use crate::services::SysContext;
 use gfx::Canvas;
 use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
@@ -283,6 +283,14 @@ fn apply_package_relocs(
     Ok(())
 }
 
+#[derive(Default, Clone, Copy)]
+pub struct KrxAuxSections<'a> {
+    pub cap_imports: Option<&'a [u8]>,
+    pub block_map: Option<&'a [u8]>,
+    pub leaf_map: Option<&'a [u8]>,
+    pub service_exports: Option<&'a [u8]>,
+}
+
 /// Loads a Native (`KrxClass::Native`) or Demand-Paged (`KrxClass::Paged`) binary from flash
 /// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
 #[inline(never)]
@@ -292,10 +300,7 @@ pub fn load_native_from_storage(
     path: &str,
     preamble: &KrxPreamble,
     exec: &SectionExecution,
-    cap_imports_body: Option<&[u8]>,
-    block_map_body: Option<&[u8]>,
-    leaf_map_body: Option<&[u8]>,
-    service_exports_body: Option<&[u8]>,
+    aux: &KrxAuxSections,
     caps: CapabilitySet,
 ) -> Result<(), KrxLaunchError> {
     let slot = slot_mut();
@@ -336,8 +341,8 @@ pub fn load_native_from_storage(
     let profile = KrxProfile::detect(
         preamble,
         exec,
-        block_map_body.is_some(),
-        leaf_map_body.is_some(),
+        aux.block_map.is_some(),
+        aux.leaf_map.is_some(),
     );
 
     // Hardened check for N0 (NativeFixed): link_base must strictly match load_base!
@@ -350,7 +355,7 @@ pub fn load_native_from_storage(
 
     // 2. Bind CapImports (0x0003) into the package GOT (Section 6.3 & Chapter 8)
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
-    if let Some(cap_body) = cap_imports_body {
+    if let Some(cap_body) = aux.cap_imports {
         let got_word_off = (exec.got_offset as usize) / 4;
         let got_slice = if got_word_off < NATIVE_EXEC_BUFFER_WORDS {
             unsafe {
@@ -370,7 +375,7 @@ pub fn load_native_from_storage(
     // 3. Configure Paged Fixed-Window Cache if KrxClass::Paged or page_size > 0
     let is_paged = preamble.execution_class() == Some(KrxClass::Paged)
         || exec.page_size > 0
-        || block_map_body.is_some();
+        || aux.block_map.is_some();
     slot.is_paged = is_paged;
     slot.pkg_path.clear();
     let _ = slot.pkg_path.push_str(path);
@@ -386,7 +391,7 @@ pub fn load_native_from_storage(
             exec.cache_blocks,
             h_len as u32,
             pay_size,
-            block_map_body,
+            aux.block_map,
         );
         // Mark block 0 as already resident in slot 0 from initial load
         let _ = slot.cache.resolve_or_select_slot(0);
@@ -397,7 +402,7 @@ pub fn load_native_from_storage(
     let overlay_vma =
         (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(overlay_size);
     slot.leaf_mgr
-        .configure(overlay_vma, overlay_size as u16, leaf_map_body);
+        .configure(overlay_vma, overlay_size as u16, aux.leaf_map);
 
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
@@ -438,11 +443,11 @@ pub fn load_native_from_storage(
     slot.is_loaded = true;
 
     // 6. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
-    if let Some(exports_body) = service_exports_body {
+    if let Some(exports_body) = aux.service_exports {
         for chunk in exports_body.chunks_exact(kernel::proc::ServiceExport::SIZE) {
             if let Some(export) = kernel::proc::ServiceExport::parse(chunk) {
                 let vtable_ptr = (load_base + export.vtable_offset) as usize;
-                super::abi_bridge::service_registry_mut().register(
+                super::syscall::service_registry_mut().register(
                     export.interface_id,
                     export.abi_version,
                     slot.pid,
@@ -521,12 +526,12 @@ pub unsafe fn invoke_krx_native(
     #[cfg(not(target_arch = "arm"))]
     {
         let _ = got_base;
-        let entry: KrxNativeEntryFn = core::mem::transmute(entry_point);
-        entry(op, api_table, param)
+        let entry: KrxNativeEntryFn = unsafe { core::mem::transmute(entry_point) };
+        unsafe { entry(op, api_table, param) }
     }
 }
 
-pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 'static>) {
+pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
     let slot = slot_mut();
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
@@ -548,7 +553,7 @@ pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 
 
 pub unsafe fn native_on_event(
     _ptr: *mut (),
-    ctx: &mut FirmwareContext<'static, 'static>,
+    ctx: &mut SysContext<'static, 'static>,
     ev: &Event,
 ) -> EventResult {
     let slot = slot_ref();
@@ -574,6 +579,12 @@ pub unsafe fn native_on_event(
                 ),
                 Event::Usb(usb_ev) => (KRX_EV_USB, *usb_ev as u8, 0u8, 0u32),
                 Event::Charging(chg) => (KRX_EV_POWER, *chg as u8, 0u8, 0u32),
+                Event::Sys(sys_ev) => (
+                    kernel::proc::abi::KRX_EV_IPC,
+                    sys_ev.target,
+                    sys_ev.command,
+                    sys_ev.arg as u32,
+                ),
                 _ => (KRX_EV_NONE, 0u8, 0u8, 0u32),
             };
             if kind_val == KRX_EV_NONE {
@@ -608,7 +619,7 @@ pub unsafe fn native_on_event(
 
 pub unsafe fn native_on_modal_result(
     _ptr: *mut (),
-    ctx: &mut FirmwareContext<'static, 'static>,
+    ctx: &mut SysContext<'static, 'static>,
     r: &ModalResult<'_>,
 ) -> EventResult {
     let slot = slot_ref();
@@ -620,7 +631,7 @@ pub unsafe fn native_on_modal_result(
         ModalResult::Dismissed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_DISMISSED, 0),
         ModalResult::Confirmed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CONFIRMED, 0),
         ModalResult::TextInputDone { tag, text } => {
-            super::abi_bridge::store_modal_text(text);
+            super::syscall::store_modal_text(text);
             (
                 *tag,
                 kernel::proc::abi::MODAL_RESULT_TEXT_DONE,
@@ -663,7 +674,7 @@ pub unsafe fn native_on_modal_result(
 pub unsafe fn native_on_render(
     _ptr: *const (),
     canvas: &mut Canvas,
-    ctx: &FirmwareContext<'static, 'static>,
+    ctx: &SysContext<'static, 'static>,
     status_bar: &mut StatusBarConfig<'_>,
 ) {
     let slot = slot_ref();
@@ -685,7 +696,7 @@ pub unsafe fn native_on_render(
     }
 }
 
-pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut FirmwareContext<'static, 'static>) {
+pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
     let slot = slot_mut();
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
@@ -700,7 +711,9 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut FirmwareContext<'static, '
             ACTIVE_CTX = core::ptr::null_mut();
         }
         // Unbind any service interfaces exported by this package
-        super::abi_bridge::service_registry_mut().unbind_provider(slot.pid);
+        super::syscall::service_registry_mut().unbind_provider(slot.pid);
+        // Cleanly purge any pending unread IPC messages for this process
+        super::syscall::ipc_mailbox_mut().purge_pid(slot.pid.0);
         // Ensure continuous audio capture is stopped on exit
         crate::audio_capture_mut().stop_capture();
         slot.is_loaded = false;
@@ -712,7 +725,7 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut FirmwareContext<'static, '
     }
 }
 
-pub static NATIVE_RUNNER_VTABLE: AppVTable<FirmwareContext<'static, 'static>> = AppVTable {
+pub static NATIVE_RUNNER_VTABLE: AppVTable<SysContext<'static, 'static>> = AppVTable {
     on_start: native_on_start,
     on_event: native_on_event,
     on_modal_result: native_on_modal_result,

@@ -162,3 +162,9 @@ impl CdcEngine {
         self.tx_ready = true;
     }
 }
+
+impl Default for CdcEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
