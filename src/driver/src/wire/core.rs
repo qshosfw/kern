@@ -55,13 +55,16 @@ impl<S: SerialPort> WireDriver<S> {
                 self.session.last_sequence = 0;
                 self.session.negotiated_max_payload = req_payload.min(128).max(32);
 
-                let mut reply = [0u8; 17];
-                reply[0] = 1; // minor version = 1
+                let mut reply = [
+                    1, // minor version = 1
+                    0, 0, // negotiated max payload (filled below)
+                    1, 0, 0, 0, // catalogue generation = 1
+                    0, 0, // transport profile (filled below)
+                    1, 0, 1, 0, // hardware profile = UV-K1 (0x0001_0001)
+                    0, 0, 1, 0, // firmware profile = KERN 1.0 (0x0001_0000)
+                ];
                 reply[1..3].copy_from_slice(&self.session.negotiated_max_payload.to_le_bytes());
-                reply[3..7].copy_from_slice(&1u32.to_le_bytes()); // catalogue generation = 1
                 reply[7..9].copy_from_slice(&self.transport_profile.to_le_bytes());
-                reply[9..13].copy_from_slice(&0x0001_0001u32.to_le_bytes()); // hardware profile = UV-K1
-                reply[13..17].copy_from_slice(&0x0001_0000u32.to_le_bytes()); // firmware profile = KERN 1.0
 
                 let _ = self.send_response(
                     SERVICE_CORE,
@@ -116,10 +119,7 @@ impl<S: SerialPort> WireDriver<S> {
             }
 
             OP_CORE_GET_STATUS => {
-                let mut resp = [0u8; 8];
-                resp[0] = 0; // system state: 0 = Ready / Idle
-                resp[1] = 0; // flags
-                resp[2..4].copy_from_slice(&8400u16.to_le_bytes()); // nominal battery mV
+                let mut resp = [0, 0, 0xD0, 0x20, 0, 0, 0, 0]; // state=0, flags=0, nominal=8400mV
                 resp[4..8].copy_from_slice(&uptime_ms.to_le_bytes());
 
                 let _ = self.send_response(
