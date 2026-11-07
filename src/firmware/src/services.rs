@@ -409,10 +409,14 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         canvas: &mut gfx::Canvas,
         config: &kernel::app::StatusBarConfig<'_>,
     ) {
+        if config.show_divider {
+            canvas.fill_rect(0, 0, 128, 7, gfx::Color::Clear);
+            canvas.draw_horizontal_line(0, 6, 128, gfx::Color::DarkGray);
+        }
         let right_limit = self.draw_status_bar_right(canvas);
         gfx::widgets::status_bar::draw_status_bar_layout(
             canvas,
-            config.show_divider,
+            false,
             config.signal_level,
             config.title,
             config.left_badge,

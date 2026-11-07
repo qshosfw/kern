@@ -375,7 +375,10 @@ pub fn draw_status_bar_layout(
 
     // Clear status bar background & draw dimmed divider line if enabled
     if show_divider {
-        canvas.fill_rect(0, 0, 128, 7, Color::Clear);
+        let clear_w = (right_limit.max(0) as u8).min(128);
+        if clear_w > 0 {
+            canvas.fill_rect(0, 0, clear_w, 7, Color::Clear);
+        }
         canvas.draw_horizontal_line(0, 6, 128, Color::DarkGray);
     }
 
@@ -516,5 +519,47 @@ mod tests {
 
         // Two 5x5 icons should each take 7px (total 14px)
         assert_eq!(limit_base - limit_dyn, 14);
+    }
+
+    #[test]
+    fn test_status_bar_layout_preserves_right_items() {
+        let mut canvas = Canvas::new();
+        let cfg = StatusRightConfig {
+            percentage: 90,
+            voltage_mv: 8250,
+            temp_deci_c: 220,
+            battery_format: 3, // Battery icon
+            is_charging: false,
+            is_low: false,
+            is_usb: false,
+            serial_active: false,
+            is_f_active: false,
+            is_keypad_locked: false,
+            shading_mode: 1,
+            anim_step: 0,
+            now_ms: 500,
+            inverted: false,
+            dynamic_icons: &[],
+        };
+        let right_limit = cfg.render(&mut canvas);
+        // Verify battery icon drew pixels on page 0 at x=120
+        assert_ne!(canvas.buffer[0][120], 0);
+
+        // Layout status bar with divider enabled
+        draw_status_bar_layout(
+            &mut canvas,
+            true,
+            None,
+            Some("Home"),
+            None,
+            None,
+            right_limit,
+        );
+
+        // Battery icon pixels on the right MUST still be preserved!
+        assert_ne!(
+            canvas.buffer[0][120], 0,
+            "Right status bar items were erased by draw_status_bar_layout"
+        );
     }
 }

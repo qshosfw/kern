@@ -91,7 +91,7 @@ impl<'a> App<SysContext<'a, '_>> for TasksApp {
     fn status_bar_config(&self) -> StatusBarConfig<'_> {
         let mut cfg = StatusBarConfig::default();
         cfg.visible = true;
-        cfg.title = None;
+        cfg.title = Some("");
         cfg.show_divider = false;
         cfg
     }
