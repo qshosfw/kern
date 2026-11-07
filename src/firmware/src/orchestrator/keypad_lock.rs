@@ -95,6 +95,23 @@ impl KeypadLockManager {
         self.inactivity_ms = 0;
     }
 
+    #[inline(always)]
+    fn reset_hold_tracking(&mut self) {
+        self.held_code = None;
+        self.hold_elapsed_ms = 0;
+        self.held_confirmed = false;
+        self.is_long_press_triggered = false;
+    }
+
+    #[inline(always)]
+    fn start_hold_tracking(&mut self, code: KeyCode) {
+        self.held_code = Some(code);
+        self.hold_elapsed_ms = 0;
+        self.held_confirmed = false;
+        self.is_long_press_triggered = false;
+        self.last_tick_ms = py32_hal::delay::millis();
+    }
+
     /// Process system events, hold-to-lock/unlock gestures, sticky F-key timeouts, and auto-lock.
     /// Returns `true` if the event was consumed/intercepted by the lock manager.
     pub fn handle_event(
@@ -148,10 +165,7 @@ impl KeypadLockManager {
                 // and hardware scanner NEVER confirmed KeyState::Held, this was a short tap
                 // whose release was missed or consumed by an app -> abort hold tracking!
                 if self.hold_elapsed_ms >= (base_hold_delay_ms + 150) && !self.held_confirmed {
-                    self.held_code = None;
-                    self.hold_elapsed_ms = 0;
-                    self.held_confirmed = false;
-                    self.is_long_press_triggered = false;
+                    self.reset_hold_tracking();
                 } else if self.hold_elapsed_ms >= self.hold_target_ms
                     && !self.is_long_press_triggered
                 {
@@ -161,17 +175,13 @@ impl KeypadLockManager {
                     } else {
                         self.toggle_lock();
                     }
-                    self.held_code = None;
-                    self.hold_elapsed_ms = 0;
-                    self.held_confirmed = false;
+                    self.reset_hold_tracking();
                     return true;
                 }
 
                 // Safety watchdog: auto-clear if hold orphaned (>4s)
                 if self.hold_elapsed_ms > 4000 {
-                    self.held_code = None;
-                    self.hold_elapsed_ms = 0;
-                    self.held_confirmed = false;
+                    self.reset_hold_tracking();
                 }
             }
         }
@@ -184,10 +194,7 @@ impl KeypadLockManager {
             // If a different key event arrives while tracking a hold, immediately abort the hold
             if let Some(held) = self.held_code {
                 if *code != held {
-                    self.held_code = None;
-                    self.hold_elapsed_ms = 0;
-                    self.held_confirmed = false;
-                    self.is_long_press_triggered = false;
+                    self.reset_hold_tracking();
                 }
             }
 
@@ -195,11 +202,7 @@ impl KeypadLockManager {
             if *code == KeyCode::Exit {
                 match state {
                     KeyState::Pressed => {
-                        self.held_code = Some(KeyCode::Exit);
-                        self.hold_elapsed_ms = 0;
-                        self.held_confirmed = false;
-                        self.is_long_press_triggered = false;
-                        self.last_tick_ms = py32_hal::delay::millis();
+                        self.start_hold_tracking(KeyCode::Exit);
 
                         // Responsive hold threshold before showing "HOLD FOR SLEEP" dialog (~480ms).
                         // Normal key taps (< 400ms) release before this threshold with strictly zero dialog popup.
@@ -222,10 +225,7 @@ impl KeypadLockManager {
                     KeyState::Released => {
                         let was_long_press = self.is_long_press_triggered;
                         let had_started_hold = self.hold_elapsed_ms >= self.hold_start_threshold_ms;
-                        self.held_code = None;
-                        self.hold_elapsed_ms = 0;
-                        self.held_confirmed = false;
-                        self.is_long_press_triggered = false;
+                        self.reset_hold_tracking();
 
                         // If user held past threshold or triggered sleep, consume release so app doesn't act
                         if was_long_press || had_started_hold {
@@ -236,11 +236,7 @@ impl KeypadLockManager {
             } else if *code == KeyCode::Hash || *code == KeyCode::KeyF {
                 match state {
                     KeyState::Pressed => {
-                        self.held_code = Some(*code);
-                        self.hold_elapsed_ms = 0;
-                        self.held_confirmed = false;
-                        self.is_long_press_triggered = false;
-                        self.last_tick_ms = py32_hal::delay::millis();
+                        self.start_hold_tracking(*code);
 
                         // Deliberate hold threshold before showing hold dialog & progress bar (~550ms).
                         // Normal key taps (< threshold) toggle functions with strictly ZERO UI popups or progress bars.
@@ -274,10 +270,7 @@ impl KeypadLockManager {
                     KeyState::Released => {
                         let was_long_press = self.is_long_press_triggered;
                         let had_started_hold = self.hold_elapsed_ms >= self.hold_start_threshold_ms;
-                        self.held_code = None;
-                        self.hold_elapsed_ms = 0;
-                        self.held_confirmed = false;
-                        self.is_long_press_triggered = false;
+                        self.reset_hold_tracking();
 
                         if self.is_locked {
                             // If released before long press triggered while locked, show unlock hint
