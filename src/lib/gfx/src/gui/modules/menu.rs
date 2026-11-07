@@ -43,8 +43,8 @@ impl ShortString {
 
     pub fn from_u32(val: u32) -> Self {
         let mut s = Self::empty();
-        let mut buf = [0u8; 10];
-        s.push_str(crate::text::format_u32(val, &mut buf));
+        let slice = crate::text::format_u32(val, &mut s.bytes);
+        s.len = slice.len() as u8;
         s
     }
 
@@ -53,8 +53,8 @@ impl ShortString {
             bytes: [0; 18],
             len: 8,
         };
-        let mut buf = [0u8; 8];
-        s.bytes[..8].copy_from_slice(crate::text::format_hex32(val, &mut buf).as_bytes());
+        let arr = unsafe { &mut *(s.bytes.as_mut_ptr() as *mut [u8; 8]) };
+        let _ = crate::text::format_hex32(val, arr);
         s
     }
 
@@ -73,9 +73,17 @@ impl ShortString {
     }
 
     pub fn push_int_fixed(&mut self, val: i32, decimals: u8, prefix: &str, suffix: &str) {
-        let mut buf = [0u8; 18];
-        let slice = crate::text::format_int_fixed(val, decimals, prefix, suffix, &mut buf);
-        self.push_str(slice);
+        let rem = 18usize.saturating_sub(self.len as usize);
+        if rem > 0 {
+            let slice = crate::text::format_int_fixed(
+                val,
+                decimals,
+                prefix,
+                suffix,
+                &mut self.bytes[self.len as usize..],
+            );
+            self.len += slice.len() as u8;
+        }
     }
 }
 
