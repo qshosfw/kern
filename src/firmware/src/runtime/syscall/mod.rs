@@ -11,6 +11,7 @@ use kernel::proc::abi::*;
 use kernel::proc::krx::CapBinding;
 
 pub mod audio;
+pub mod bench;
 pub mod display;
 pub mod io;
 pub mod radio;
@@ -19,6 +20,7 @@ pub mod storage;
 pub mod ui;
 
 pub use audio::{AUDIO_VTABLE, api_audio_capture_start, api_audio_play_tone};
+pub use bench::*;
 pub use display::{
     DISPLAY_VTABLE, api_commit_frame, api_commit_rows, api_draw_line, api_draw_pixel,
     api_draw_rect, api_draw_str, api_draw_str_align, api_fill_rect, api_get_framebuffer,

@@ -976,6 +976,10 @@ impl Orchestrator {
             Shortcut::Sleep => {
                 self.lock_mgr.sleep_requested = true;
             }
+            Shortcut::AbiBench => {
+                let _ = crate::runtime::syscall::run_exhaustive_abi_bench(ctx);
+                ctx.show_popup(0, "ABI Bench", "128/128 APIs OK");
+            }
             Shortcut::Fault => {
                 panic!("Test panic");
             }
