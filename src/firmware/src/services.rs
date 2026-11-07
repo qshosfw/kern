@@ -470,8 +470,6 @@ pub fn draw_status_right_unified(
 
     let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
     let pct = pwr.battery_percentage();
-    let voltage_mv = pwr.battery_voltage_mv();
-    let temp_deci_c = pwr.mcu_temperature_deci_c();
     let is_charging = pwr.is_charging();
     let is_low = pwr.is_low() || pct == 0;
     let serial_active = py32_hal::uart::is_active(800);
@@ -536,10 +534,10 @@ pub fn draw_status_right_unified(
 
     let mut nbuf = [0u8; 12];
     let (val, dec, suf) = match bfmt {
-        1 | 4 => ((((voltage_mv as u32) * 52429) >> 19) as i32, 2, "v"),
-        6 => ((((voltage_mv as u32) * 5243) >> 19) as i32, 1, "v"),
+        1 | 4 => ((((pwr.battery_voltage_mv() as u32) * 52429) >> 19) as i32, 2, "v"),
+        6 => ((((pwr.battery_voltage_mv() as u32) * 5243) >> 19) as i32, 1, "v"),
         2 | 5 | 7 => (pct as i32, 0, "%"),
-        8 => ((((temp_deci_c as u32) * 52429) >> 19) as i32, 0, "C"),
+        8 => ((((pwr.mcu_temperature_deci_c() as u32) * 52429) >> 19) as i32, 0, "C"),
         _ => (0, 0, ""),
     };
     if !suf.is_empty() {
