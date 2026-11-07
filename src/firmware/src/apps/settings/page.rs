@@ -293,20 +293,41 @@ impl SettingField {
     }
 }
 
+pub const TAG_SUBMENU: u8 = 0;
+pub const TAG_CHOICE: u8 = 1;
+pub const TAG_SHORTCUT: u8 = 2;
+pub const TAG_BATTERY_TYPE: u8 = 3;
+pub const TAG_RANGE: u8 = 4;
+pub const TAG_TOGGLE: u8 = 5;
+pub const TAG_METRIC: u8 = 6;
+pub const TAG_ACTION: u8 = 7;
+pub const TAG_INFO: u8 = 8;
+#[cfg(feature = "boot_assets")]
+pub const TAG_ASSET: u8 = 9;
+
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SettingDef {
     pub title: &'static str,
-    pub kind: SettingKind,
     pub field: SettingField,
+    pub tag: u8,
+    pub aux: u8,
+    pub _pad: u8,
+    pub ptr: *const (),
 }
+
+unsafe impl Sync for SettingDef {}
+unsafe impl Send for SettingDef {}
 
 impl SettingDef {
     pub const fn submenu(title: &'static str, target: PageId) -> Self {
         Self {
             title,
-            kind: SettingKind::Submenu(target),
             field: SettingField::None,
+            tag: TAG_SUBMENU,
+            aux: target as u8,
+            _pad: 0,
+            ptr: core::ptr::null(),
         }
     }
 
@@ -317,40 +338,55 @@ impl SettingDef {
     ) -> Self {
         Self {
             title,
-            kind: SettingKind::Choice(options),
             field,
+            tag: TAG_CHOICE,
+            aux: options.len() as u8,
+            _pad: 0,
+            ptr: options.as_ptr() as *const (),
         }
     }
 
     pub const fn shortcut(title: &'static str, field: SettingField) -> Self {
         Self {
             title,
-            kind: SettingKind::Shortcut,
             field,
+            tag: TAG_SHORTCUT,
+            aux: 0,
+            _pad: 0,
+            ptr: core::ptr::null(),
         }
     }
 
     pub const fn range(title: &'static str, range: &'static RangeDef, field: SettingField) -> Self {
         Self {
             title,
-            kind: SettingKind::Range(range),
             field,
+            tag: TAG_RANGE,
+            aux: 0,
+            _pad: 0,
+            ptr: range as *const RangeDef as *const (),
         }
     }
 
     pub const fn toggle(title: &'static str, field: SettingField) -> Self {
         Self {
             title,
-            kind: SettingKind::Toggle,
             field,
+            tag: TAG_TOGGLE,
+            aux: 0,
+            _pad: 0,
+            ptr: core::ptr::null(),
         }
     }
 
     pub const fn metric(title: &'static str, metric: MetricId) -> Self {
         Self {
             title,
-            kind: SettingKind::Metric(metric),
             field: SettingField::None,
+            tag: TAG_METRIC,
+            aux: metric as u8,
+            _pad: 0,
+            ptr: core::ptr::null(),
         }
     }
 
@@ -361,32 +397,65 @@ impl SettingDef {
     ) -> Self {
         Self {
             title,
-            kind: SettingKind::Asset(desc),
             field: SettingField::None,
+            tag: TAG_ASSET,
+            aux: 0,
+            _pad: 0,
+            ptr: desc as *const _ as *const (),
         }
     }
 
     pub const fn action(title: &'static str, action: ActionId) -> Self {
         Self {
             title,
-            kind: SettingKind::Action(action),
             field: SettingField::None,
+            tag: TAG_ACTION,
+            aux: action as u8,
+            _pad: 0,
+            ptr: core::ptr::null(),
         }
     }
 
     pub const fn battery_type(title: &'static str) -> Self {
         Self {
             title,
-            kind: SettingKind::BatteryType,
             field: SettingField::BATTERY_TYPE,
+            tag: TAG_BATTERY_TYPE,
+            aux: 0,
+            _pad: 0,
+            ptr: core::ptr::null(),
         }
     }
 
     pub const fn info(title: &'static str) -> Self {
         Self {
             title,
-            kind: SettingKind::Info,
             field: SettingField::None,
+            tag: TAG_INFO,
+            aux: 0,
+            _pad: 0,
+            ptr: core::ptr::null(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn kind(&self) -> SettingKind {
+        match self.tag {
+            TAG_SUBMENU => SettingKind::Submenu(unsafe { core::mem::transmute(self.aux) }),
+            TAG_CHOICE => SettingKind::Choice(unsafe {
+                core::slice::from_raw_parts(self.ptr as *const &'static str, self.aux as usize)
+            }),
+            TAG_SHORTCUT => SettingKind::Shortcut,
+            TAG_BATTERY_TYPE => SettingKind::BatteryType,
+            TAG_RANGE => SettingKind::Range(unsafe { &*(self.ptr as *const RangeDef) }),
+            TAG_TOGGLE => SettingKind::Toggle,
+            TAG_METRIC => SettingKind::Metric(unsafe { core::mem::transmute(self.aux) }),
+            #[cfg(feature = "boot_assets")]
+            TAG_ASSET => SettingKind::Asset(unsafe {
+                &*(self.ptr as *const super::asset_chooser::AssetDescriptor)
+            }),
+            TAG_ACTION => SettingKind::Action(unsafe { core::mem::transmute(self.aux) }),
+            _ => SettingKind::Info,
         }
     }
 }

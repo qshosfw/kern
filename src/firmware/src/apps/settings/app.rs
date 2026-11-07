@@ -120,7 +120,7 @@ impl SettingsApp {
 
         let (_, defs) = get_page(self.current_page);
         if let Some(def) = defs.get(sel_idx) {
-            match def.kind {
+            match def.kind() {
                 SettingKind::Submenu(target_page) => {
                     self.push_submenu(target_page, ctx);
                     return;

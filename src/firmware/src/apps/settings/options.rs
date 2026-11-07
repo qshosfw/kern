@@ -48,7 +48,7 @@ fn make_choice(opts: &'static [&'static str], raw_byte: u8) -> MenuItemType {
 
 #[inline(never)]
 fn build_item_type(def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8) -> MenuItemType {
-    match def.kind {
+    match def.kind() {
         SettingKind::Choice(opts) => make_choice(opts, def.field.get_u8(&ctx.config)),
         SettingKind::Shortcut => make_choice(
             &super::buttons::SHORTCUT_OPTIONS,
