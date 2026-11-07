@@ -617,6 +617,7 @@ impl MasterConfig {
         if self.dirty == 0 {
             return Ok(());
         }
+        let _ = self.sanitize();
         let mut first_err = None;
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
             if (self.dirty & meta.flag) == 0 {
@@ -624,12 +625,10 @@ impl MasterConfig {
             }
             if !is_raw_valid(self.config_bytes(i), meta.version) {
                 load_or_init_raw(self.config_bytes_mut(i), meta.version, meta.path, storage);
-                let _ = self.sanitize();
                 self.seal(i);
                 self.dirty &= !meta.flag;
                 continue;
             }
-            let _ = self.sanitize();
             let buf = self.config_bytes_mut(i);
             if let Err(e) = save_config_raw(storage, meta.path, buf) {
                 first_err = first_err.or(Some(e));

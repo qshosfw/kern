@@ -258,14 +258,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
     ensure_core_packages(filesystem);
 
     let mut entries = [const { DirEntryInfo::empty() }; 8];
-    let count = match filesystem.list_dir("/prov", &mut entries) {
-        Ok(c) => c,
-        Err(_) => {
-            crate::apps::launcher::reload_launcher(filesystem);
-            return;
-        }
-    };
-
+    let count = filesystem.list_dir("/prov", &mut entries).unwrap_or(0);
     if count == 0 {
         crate::apps::launcher::reload_launcher(filesystem);
         return;
