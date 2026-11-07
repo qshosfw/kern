@@ -321,6 +321,14 @@ pub enum Bandwidth {
 }
 
 impl Bandwidth {
+    pub const fn in_hz(self) -> u32 {
+        match self {
+            Self::Wide25k => 25_000,
+            Self::Narrow12k5 => 12_500,
+            Self::Narrow6k25 => 6_250,
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Wide25k => "W",

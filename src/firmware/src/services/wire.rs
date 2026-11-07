@@ -16,7 +16,8 @@ use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
 use crate::services::storage::DirEntryInfo;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{
-    ModulationMode, PowerService, RfFineTuning, RfModulation, RfPowerSequencer, RfSquelch,
+    ModulationMode, PowerService, RfFineTuning, RfModulation, RfPowerLevel, RfPowerSequencer,
+    RfSquelch,
 };
 use kernel::wire::*;
 use utils::units::Frequency;
@@ -212,10 +213,10 @@ fn read_radio_facet(
     out: &mut [u8],
 ) -> Result<usize, WireStatus> {
     let radio_state = crate::radio_state_ref();
-    let vfo = match instance {
-        RADIO_INSTANCE_VFO_A => &radio_state.vfo_a,
-        RADIO_INSTANCE_VFO_B => &radio_state.vfo_b,
-        _ => radio_state.selected_vfo(),
+    let (vfo, ch) = match instance {
+        RADIO_INSTANCE_VFO_A => (&radio_state.vfo_a, &radio_state.coord.channels[0]),
+        RADIO_INSTANCE_VFO_B => (&radio_state.vfo_b, &radio_state.coord.channels[1]),
+        _ => (radio_state.selected_vfo(), radio_state.coord.active_channel()),
     };
     match facet {
         FACET_RADIO_TUNING => {
@@ -225,35 +226,8 @@ fn read_radio_facet(
             Ok(9)
         }
         FACET_RADIO_MODULATION => {
-            let m = match vfo.mod_type.as_bytes().first() {
-                Some(b'A') => {
-                    if vfo.mod_type.len() > 2 {
-                        2
-                    } else {
-                        1
-                    }
-                }
-                Some(b'U') => 3,
-                Some(b'D') => {
-                    if vfo.mod_type.as_bytes().get(1) == Some(&b'S') {
-                        4
-                    } else {
-                        8
-                    }
-                }
-                Some(b'C') => 5,
-                Some(b'W') => 6,
-                Some(b'P') => 7,
-                Some(b'R') => 9,
-                Some(b'B') => 10,
-                _ => 0,
-            };
-            out[0] = m;
-            let bw_hz: u32 = match vfo.bw.as_bytes().first() {
-                Some(b'W') => 25_000,
-                Some(b'V') => 6_250,
-                _ => 12_500,
-            };
+            out[0] = ch.modulation.to_u8();
+            let bw_hz: u32 = ch.bandwidth.in_hz();
             out[1..5].copy_from_slice(&bw_hz.to_le_bytes());
             Ok(5)
         }
@@ -265,9 +239,9 @@ fn read_radio_facet(
         }
         FACET_RADIO_TRANSMIT => {
             out[0] = vfo.tx_active as u8;
-            let p = match vfo.power.as_bytes().first() {
-                Some(b'H') => 2,
-                Some(b'M') => 1,
+            let p = match ch.power {
+                RfPowerLevel::High => 2,
+                RfPowerLevel::Medium => 1,
                 _ => 0,
             };
             out[1] = p;
