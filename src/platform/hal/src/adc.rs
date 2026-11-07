@@ -52,6 +52,7 @@ impl Adc {
     }
 
     /// Read a raw 12-bit conversion value (0 - 4095) for the specified channel.
+    #[inline(never)]
     pub fn read_channel(&self, channel: u8) -> u16 {
         unsafe {
             // 1. Ensure ADC is powered ON with SWSTART trigger selected
