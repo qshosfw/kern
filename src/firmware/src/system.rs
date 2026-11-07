@@ -27,6 +27,22 @@ fn wake_and_notify_activity(hw: &mut SystemHardware) {
 }
 
 #[inline(never)]
+fn record_proc_activation(app_id: usize) {
+    if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(app_id) {
+        pcb.ledger.record_activation();
+    }
+}
+
+#[inline(never)]
+fn is_plugged_in(hw: &SystemHardware) -> bool {
+    #[cfg(feature = "usb")]
+    let is_usb_plugged = hw.usb.is_connected();
+    #[cfg(not(feature = "usb"))]
+    let is_usb_plugged = false;
+    is_usb_plugged || unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_charging() }
+}
+
+#[inline(never)]
 fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // 1. Play gentle descending power-down cue
     hw.radio
@@ -353,9 +369,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         if now.wrapping_sub(last_key_tick) >= 5 {
             let dt = now.wrapping_sub(last_key_tick).min(50) as u16;
             last_key_tick = now;
-            if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(0xF3) {
-                pcb.ledger.record_activation();
-            }
+            record_proc_activation(0xF3);
             hw.key_scanner.scan_with_dt(dt);
             while let Some((code, state)) = hw.key_scanner.pop_event() {
                 let is_locked = hw.orchestrator.is_keypad_locked();
@@ -413,9 +427,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         if now.wrapping_sub(last_ui_tick) >= ui_tick_interval {
             let delta = now.wrapping_sub(last_ui_tick);
             last_ui_tick = now;
-            if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(0xF0) {
-                pcb.ledger.record_activation();
-            }
+            record_proc_activation(0xF0);
             hw.backlight.tick(delta as u16);
             hw.audio.tick(delta as u16);
             enqueue_event(Event::Tick);
@@ -446,9 +458,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         };
         if now.wrapping_sub(last_battery_tick) >= batt_interval {
             last_battery_tick = now;
-            if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(0xF2) {
-                pcb.ledger.record_activation();
-            }
+            record_proc_activation(0xF2);
             crate::services::telemetry::sample_battery_and_system(&adc, hw.audio.is_active());
 
             // Check for battery pack charging transition
@@ -491,15 +501,10 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             handle_one_second_tick(hw, &mut low_batt_warning_timer);
             dirty_render = true;
 
-            #[cfg(feature = "usb")]
-            let is_usb_plugged = hw.usb.is_connected();
-            #[cfg(not(feature = "usb"))]
-            let is_usb_plugged = false;
-            let is_charging = unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_charging() };
-            let is_plugged_in = is_usb_plugged || is_charging;
+            let is_plugged = is_plugged_in(hw);
 
             // Reset inactivity if backlight is on, audio amplifier is active, or radio is plugged into USB/charger
-            if is_plugged_in || hw.backlight.is_active() || hw.audio.is_active() {
+            if is_plugged || hw.backlight.is_active() || hw.audio.is_active() {
                 unsafe {
                     (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
                 }
@@ -515,7 +520,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
                 fired
             };
             if apo_fired
-                && !is_plugged_in
+                && !is_plugged
                 && crate::master_config_ref().battery.auto_power_off_min > 0
             {
                 handle_deep_sleep_mode(hw);
@@ -538,17 +543,9 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
         // Check if deep sleep mode was requested (e.g. via long-press Exit).
         // Suppressed while plugged into USB or charging.
-        if hw.orchestrator.take_sleep_requested() {
-            #[cfg(feature = "usb")]
-            let is_usb_plugged = hw.usb.is_connected();
-            #[cfg(not(feature = "usb"))]
-            let is_usb_plugged = false;
-            let is_charging = unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_charging() };
-
-            if !is_usb_plugged && !is_charging {
-                handle_deep_sleep_mode(hw);
-                dirty_render = true;
-            }
+        if hw.orchestrator.take_sleep_requested() && !is_plugged_in(hw) {
+            handle_deep_sleep_mode(hw);
+            dirty_render = true;
         }
 
         // Render loop: skip expensive CPU view traversal and 1024-byte SPI blits when display is dark
