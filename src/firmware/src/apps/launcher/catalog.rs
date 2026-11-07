@@ -32,17 +32,9 @@ impl PackageCatalogEntry {
     }
 }
 
-#[inline(always)]
 fn extract_filename(path: &str) -> &str {
-    let bytes = path.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        if bytes[i] == b'/' {
-            return &path[i + 1..];
-        }
-    }
-    path
+    let start = gfx::text::rfind_byte(path, b'/').map_or(0, |i| i + 1);
+    &path[start..]
 }
 
 pub const MAX_CATALOG_PACKAGES: usize = 6;
