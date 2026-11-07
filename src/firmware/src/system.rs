@@ -197,8 +197,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // Re-apply listening VFO channel to RF hardware
     {
         use kernel::service::radio::RfChannel;
-        let ch = *crate::radio_state().coord.listening_channel();
-        hw.radio.configure_channel(&ch);
+        hw.radio.configure_channel(crate::radio_state().coord.listening_channel());
     }
 
     // Restore volume and hardware audio settings

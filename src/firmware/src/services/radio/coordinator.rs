@@ -629,10 +629,13 @@ impl RadioCoordinator {
         self.tot_elapsed_10ms = 0;
         self.tot_warning_given = false;
         self.dwell.on_tx_finished();
-        let rx_ch = *self.listening_channel();
-        radio.set_rx_frequency(rx_ch.effective_rx_freq());
-        radio.set_power_level(rx_ch.power);
-        radio.set_modulation(rx_ch.modulation);
+        let rx_ch = self.listening_channel();
+        let freq = rx_ch.effective_rx_freq();
+        let pwr = rx_ch.power;
+        let mod_mode = rx_ch.modulation;
+        radio.set_rx_frequency(freq);
+        radio.set_power_level(pwr);
+        radio.set_modulation(mod_mode);
     }
 
     /// High-level request to initiate PTT transmission on behalf of user or client.
