@@ -250,16 +250,15 @@ impl UsbDriver {
             let elapsed_since_sof = now.wrapping_sub(self.last_sof_ms);
             let has_suspend = (int_usb & USB_INTR_SUSPEND) != 0;
             // Robust disconnect detection:
-            // 1. Explicit bus suspend interrupt received and no SOF for >= 500ms
-            // 2. No SOF received for >= 1500ms (sustained silence)
-            // Note: self.configured and endpoint state are NOT cleared on idle/suspend;
-            // only hardware bus reset (USB_INTR_RESET) resets configuration (§9.1.1.4).
+            // 1. Explicit bus suspend interrupt received and no SOF for >= 150ms
+            // 2. No SOF received for >= 300ms (sustained silence)
             let is_disconnected =
-                (has_suspend && elapsed_since_sof >= 500) || elapsed_since_sof >= 1500;
+                (has_suspend && elapsed_since_sof >= 150) || elapsed_since_sof >= 300;
 
             if is_disconnected {
                 self.was_connected = true;
                 self.is_connected = false;
+                self.configured = false;
                 self.consecutive_sof = 0;
                 self.last_transition_ms = now;
                 if event.is_none() {
@@ -306,28 +305,27 @@ impl UsbDriver {
         }
 
         // Continue multi-packet control IN transfer if active
-        if let Some(ref mut xfer) = self.ep0_transfer {
-            if (csr & EP0_TXPKTRDY) == 0 {
-                let remaining = (xfer.total_len - xfer.sent_len) as usize;
-                let chunk = remaining.min(USB_EP0_MAX_PACKET_SIZE);
-                let slice = unsafe {
-                    core::slice::from_raw_parts(xfer.ptr.add(xfer.sent_len as usize), chunk)
-                };
-                write_fifo(0, slice);
-                xfer.sent_len += chunk as u16;
+        if let Some(ref mut xfer) = self.ep0_transfer
+            && (csr & EP0_TXPKTRDY) == 0
+        {
+            let remaining = (xfer.total_len - xfer.sent_len) as usize;
+            let chunk = remaining.min(USB_EP0_MAX_PACKET_SIZE);
+            let slice =
+                unsafe { core::slice::from_raw_parts(xfer.ptr.add(xfer.sent_len as usize), chunk) };
+            write_fifo(0, slice);
+            xfer.sent_len += chunk as u16;
 
-                if xfer.sent_len >= xfer.total_len {
-                    unsafe {
-                        USBD_EP0_CSR_U8.write_volatile(EP0_TXPKTRDY | EP0_DATAEND);
-                    }
-                    self.ep0_transfer = None;
-                } else {
-                    unsafe {
-                        USBD_EP0_CSR_U8.write_volatile(EP0_TXPKTRDY);
-                    }
+            if xfer.sent_len >= xfer.total_len {
+                unsafe {
+                    USBD_EP0_CSR_U8.write_volatile(EP0_TXPKTRDY | EP0_DATAEND);
                 }
-                return;
+                self.ep0_transfer = None;
+            } else {
+                unsafe {
+                    USBD_EP0_CSR_U8.write_volatile(EP0_TXPKTRDY);
+                }
             }
+            return;
         }
 
         // Apply pending device address once status stage of SET_ADDRESS finishes
@@ -444,7 +442,7 @@ impl UsbDriver {
 
     fn ep0_start_telemetry_transfer(&mut self, max_len: u16) {
         let mut buf = [0u8; 31];
-        let c_volts = (self.battery_voltage_mv as u32 * 52429 >> 19) as i32;
+        let c_volts = ((self.battery_voltage_mv as u32 * 52429) >> 19) as i32;
         let s = utils::format::format_int_fixed(c_volts, 2, "Supply: ", "v ", &mut buf);
         let mut pos = s.len();
         if self.is_charging {
@@ -728,7 +726,7 @@ impl UsbDriver {
 
     #[inline(always)]
     pub fn is_connected(&self) -> bool {
-        self.is_connected || self.configured
+        self.is_connected
     }
 
     #[inline(always)]

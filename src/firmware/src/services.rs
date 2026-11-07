@@ -37,7 +37,7 @@ pub use drivers::uart::HardwareUart as SystemUart;
 pub use drivers::usb::UsbDriver as SystemUsb;
 
 /// Dependency-injected System Context provided to applications during event dispatch and rendering.
-pub struct FirmwareContext<'a, 'hw> {
+pub struct SysContext<'a, 'hw> {
     pub state: &'a mut RadioState,
     pub radio: &'a mut SystemRadio<'hw>,
     pub power: &'a mut SystemPower,
@@ -64,7 +64,7 @@ fn play_tone_file(storage: &mut SystemStorage, radio: &mut SystemRadio, path: &s
     }
 }
 
-impl<'a, 'hw> FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> SysContext<'a, 'hw> {
     /// Check if current session is authorized for given trust scope
     pub fn is_authorized(&mut self, scope: crate::security::TrustScope) -> bool {
         crate::security::check_authorization(self.passcode, self.storage, scope).is_ok()
@@ -373,7 +373,20 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
 
     #[inline(never)]
     pub fn draw_status_bar_right_mode(&self, canvas: &mut gfx::Canvas, inverted: bool) -> i16 {
-        let is_usb = self.usb.as_ref().map(|u| u.is_connected()).unwrap_or(false);
+        let is_usb = self
+            .usb
+            .as_ref()
+            .map(|u| u.is_connected())
+            .unwrap_or_else(|| {
+                #[cfg(feature = "usb")]
+                {
+                    drivers::usb::is_active_usb_connected()
+                }
+                #[cfg(not(feature = "usb"))]
+                {
+                    false
+                }
+            });
         draw_status_right_unified(
             canvas,
             is_usb,
@@ -396,62 +409,16 @@ impl<'a, 'hw> FirmwareContext<'a, 'hw> {
         canvas: &mut gfx::Canvas,
         config: &kernel::app::StatusBarConfig<'_>,
     ) {
-        use gfx::Color;
-        use gfx::fonts::tomthumb::FONT;
-        use gfx::widgets::status_bar::{SIGNAL_WIDTH, draw_badge, draw_signal};
-
-        // Clear status bar background & draw dimmed divider line if enabled
-        if config.show_divider {
-            canvas.fill_rect(0, 0, 128, 7, Color::Clear);
-            canvas.draw_horizontal_line(0, 6, 128, Color::DarkGray);
-        }
-
-        // 1. Right items (flowing right-to-left)
         let right_limit = self.draw_status_bar_right(canvas);
-
-        // 2. Left items (flowing left-to-right)
-        let mut left_x = 1i16;
-        if let Some(lvl) = config.signal_level {
-            draw_signal(canvas, left_x, 0, lvl, Color::Fill);
-            left_x += (SIGNAL_WIDTH as i16) + 2;
-        }
-        if let Some(title) = config.title {
-            if !title.is_empty() {
-                let w = gfx::text::str_width(title, &FONT) as i16;
-                gfx::text::draw_str_max_x(
-                    canvas,
-                    left_x,
-                    4,
-                    title,
-                    &FONT,
-                    Color::Fill,
-                    right_limit,
-                );
-                left_x += w + 2;
-            }
-        }
-        if let Some(badge) = config.left_badge {
-            if !badge.is_empty() {
-                let bw = draw_badge(canvas, left_x, 0, badge, &FONT, false) as i16;
-                left_x += bw + 2;
-            }
-        }
-
-        // 3. Center items
-        if let Some(center) = config.center_text {
-            if !center.is_empty() {
-                let w = gfx::text::str_width(center, &FONT) as i16;
-                let ideal_x = 64i16 - (w >> 1);
-                let x = if ideal_x >= left_x && ideal_x + w <= right_limit {
-                    ideal_x
-                } else {
-                    left_x + ((right_limit - left_x - w).max(0) >> 1)
-                };
-                if x + w <= right_limit {
-                    gfx::text::draw_str(canvas, x, 4, center, &FONT, Color::Fill);
-                }
-            }
-        }
+        gfx::widgets::status_bar::draw_status_bar_layout(
+            canvas,
+            config.show_divider,
+            config.signal_level,
+            config.title,
+            config.left_badge,
+            config.center_text,
+            right_limit,
+        );
     }
 }
 
@@ -464,114 +431,41 @@ pub fn draw_status_right_unified(
     bfmt: u8,
     inverted: bool,
 ) -> i16 {
-    use gfx::Color;
-    use gfx::fonts::tomthumb::FONT;
-    use gfx::widgets::status_bar::{draw_battery_colored, draw_f_key};
-
     let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
     let pct = pwr.battery_percentage();
     let is_charging = pwr.is_charging();
     let is_low = pwr.is_low() || pct == 0;
     let serial_active = py32_hal::uart::is_active(800);
-
-    let (fg, bg) = if inverted {
-        (Color::Clear, Color::Fill)
-    } else {
-        (Color::Fill, Color::Clear)
-    };
-
-    let y_offset: u8 = if inverted { 2 } else { 0 };
-    let y_text: i16 = if inverted { 6 } else { 4 };
-
-    let mut right_limit = 126i16; // 127 - 1px padding
     let now_ms = py32_hal::delay::millis();
-    let has_bat_icon = matches!(bfmt, 3..=5);
-
+    let anim_step = ((now_ms >> 8) & 0xFF) as u8;
     let shading_mode = crate::master_config_ref().display.shading_mode;
 
-    if has_bat_icon {
-        let anim_step = ((now_ms >> 8) & 0xFF) as u8;
-        right_limit -= 12;
-        let blink_off = is_low && !is_charging && (((now_ms >> 9) & 1) != 0);
-        if !blink_off {
-            draw_battery_colored(
-                canvas,
-                right_limit as u8,
-                y_offset,
-                pct,
-                is_charging,
-                anim_step,
-                fg,
-                bg,
-                shading_mode,
-            );
-        }
-    }
-
-    if is_charging {
-        right_limit -= if has_bat_icon { 7 } else { 5 };
-        gfx::icons::draw_icon_5x5(
-            canvas,
-            right_limit,
-            y_offset as i16,
-            gfx::icons::Icon::Bolt,
-            fg,
-        );
-    } else if is_low {
-        right_limit -= if has_bat_icon { 5 } else { 4 };
-        gfx::text::draw_char(canvas, right_limit, y_text, '!', &FONT, fg);
-    }
-
-    if is_usb {
-        let plug_icon = if serial_active {
-            gfx::icons::Icon::SerialActive
-        } else {
-            gfx::icons::Icon::Plug
-        };
-        right_limit -= 9;
-        gfx::icons::draw_icon_5x5(canvas, right_limit, y_offset as i16, plug_icon, fg);
-    }
-
-    let mut nbuf = [0u8; 12];
-    let (val, dec, suf) = match bfmt {
-        1 | 4 => ((((pwr.battery_voltage_mv() as u32) * 52429) >> 19) as i32, 2, "v"),
-        6 => ((((pwr.battery_voltage_mv() as u32) * 5243) >> 19) as i32, 1, "v"),
-        2 | 5 | 7 => (pct as i32, 0, "%"),
-        8 => ((((pwr.mcu_temperature_deci_c() as u32) * 52429) >> 19) as i32, 0, "C"),
-        _ => (0, 0, ""),
+    let cfg = gfx::widgets::status_bar::StatusRightConfig {
+        percentage: pct,
+        voltage_mv: pwr.battery_voltage_mv(),
+        temp_deci_c: pwr.mcu_temperature_deci_c(),
+        battery_format: bfmt,
+        is_charging,
+        is_low,
+        is_usb,
+        serial_active,
+        is_f_active,
+        is_keypad_locked,
+        shading_mode,
+        anim_step,
+        now_ms,
+        inverted,
+        dynamic_icons: &[],
     };
-    if !suf.is_empty() {
-        let bat_str = gfx::text::format_int_fixed(val, dec, "", suf, &mut nbuf);
-        let w = gfx::text::str_width(bat_str, &FONT) as i16;
-        right_limit -= w + 2;
-        gfx::text::draw_str(canvas, right_limit, y_text, bat_str, &FONT, fg);
-    }
 
-    if !inverted {
-        if is_f_active {
-            right_limit -= 7;
-            draw_f_key(canvas, right_limit, y_offset as i16);
-        }
-        if is_keypad_locked {
-            right_limit -= 7;
-            gfx::icons::draw_icon_5x5(
-                canvas,
-                right_limit,
-                y_offset as i16,
-                gfx::icons::Icon::Lock,
-                Color::Fill,
-            );
-        }
-    }
-
-    right_limit
+    cfg.render(canvas)
 }
 
 pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_usb: bool) -> i16 {
     draw_status_right_unified(canvas, is_usb, false, false, battery_format, true)
 }
 
-impl<'a, 'hw> kernel::caps::CapsCheck for FirmwareContext<'a, 'hw> {
+impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {
     #[inline(always)]
     fn caps(&self) -> kernel::caps::CapabilitySet {
         const BASE_CAPS: kernel::caps::CapabilitySet = kernel::caps::CapabilitySet::NONE

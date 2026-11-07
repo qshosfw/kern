@@ -1,5 +1,8 @@
 use crate::{Canvas, Color};
 
+/// Normal spacing in pixels between status bar items/icons flowing right-to-left
+pub const STATUS_ITEM_SPACING: i16 = 2;
+
 /// Draw DeltaFW-style inverted F-key badge (5x5 pixels with outer border and inverted 'F' inside)
 pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
     if x < 0 || y < 0 {
@@ -177,9 +180,341 @@ pub fn draw_badge(
     }
 }
 
-// Backward-compatibility aliases
-pub use draw_badge as draw_status_badge;
-pub use draw_battery as draw_battery_icon;
-pub use draw_f_key as draw_f_key_icon;
-pub use draw_signal as draw_signal_antenna;
-pub const SIGNAL_ANTENNA_WIDTH: u8 = SIGNAL_WIDTH;
+/// Dynamically places and renders a status icon flowing right-to-left.
+/// Automatically calculates icon width and applies standard item spacing (`width + 2`).
+/// Returns the updated `right_limit`.
+#[inline]
+pub fn draw_status_icon(
+    canvas: &mut Canvas,
+    right_limit: i16,
+    y: i16,
+    icon: crate::icons::Icon,
+    color: Color,
+) -> i16 {
+    let w = icon.width() as i16;
+    let pos = right_limit - (w + STATUS_ITEM_SPACING);
+    crate::icons::draw_icon_5x5(canvas, pos, y, icon, color);
+    pos
+}
+
+/// Draws the charging bolt icon with preserved closer spacing to the battery.
+/// Bolt is deliberately placed closer to battery terminal (7px if battery icon present, 5px otherwise).
+#[inline]
+pub fn draw_status_bolt(
+    canvas: &mut Canvas,
+    right_limit: i16,
+    y: i16,
+    has_bat_icon: bool,
+    color: Color,
+) -> i16 {
+    let step = if has_bat_icon { 7 } else { 5 };
+    let pos = right_limit - step;
+    crate::icons::draw_icon_5x5(canvas, pos, y, crate::icons::Icon::Bolt, color);
+    pos
+}
+
+/// Draws the USB/serial plug icon with normal icon spacing (7px width + 2px gap = 9px).
+/// Selects `Icon::SerialActive` when serial activity is actively occurring, else `Icon::Plug`.
+#[inline]
+pub fn draw_status_plug(
+    canvas: &mut Canvas,
+    right_limit: i16,
+    y: i16,
+    serial_active: bool,
+    color: Color,
+) -> i16 {
+    let plug_icon = if serial_active {
+        crate::icons::Icon::SerialActive
+    } else {
+        crate::icons::Icon::Plug
+    };
+    draw_status_icon(canvas, right_limit, y, plug_icon, color)
+}
+
+/// Draws text flowing right-to-left with standard spacing.
+/// Returns the updated `right_limit`.
+#[inline]
+pub fn draw_status_text(
+    canvas: &mut Canvas,
+    right_limit: i16,
+    y_text: i16,
+    text: &str,
+    font: &crate::GfxFont,
+    color: Color,
+) -> i16 {
+    let w = crate::text::str_width(text, font) as i16;
+    let pos = right_limit - (w + STATUS_ITEM_SPACING);
+    crate::text::draw_str(canvas, pos, y_text, text, font, color);
+    pos
+}
+
+/// Modular configuration and automatic renderer for the right side of the status bar.
+#[derive(Debug, Clone, Copy)]
+pub struct StatusRightConfig<'a> {
+    pub percentage: u8,
+    pub voltage_mv: u16,
+    pub temp_deci_c: i16,
+    pub battery_format: u8,
+    pub is_charging: bool,
+    pub is_low: bool,
+    pub is_usb: bool,
+    pub serial_active: bool,
+    pub is_f_active: bool,
+    pub is_keypad_locked: bool,
+    pub shading_mode: u8,
+    pub anim_step: u8,
+    pub now_ms: u32,
+    pub inverted: bool,
+    pub dynamic_icons: &'a [crate::icons::Icon],
+}
+
+impl<'a> StatusRightConfig<'a> {
+    /// Renders all right-side status elements dynamically flowing right-to-left.
+    /// Preserves battery and bolt geometry while handling USB plug and dynamic icons.
+    pub fn render(&self, canvas: &mut Canvas) -> i16 {
+        use crate::fonts::tomthumb::FONT;
+
+        let (fg, bg) = if self.inverted {
+            (Color::Clear, Color::Fill)
+        } else {
+            (Color::Fill, Color::Clear)
+        };
+
+        let y_offset: u8 = if self.inverted { 2 } else { 0 };
+        let y_text: i16 = if self.inverted { 6 } else { 4 };
+
+        let mut right_limit = 126i16; // 127 - 1px screen padding
+        let has_bat_icon = matches!(self.battery_format, 3..=5);
+
+        // 1. High precision battery icon
+        if has_bat_icon {
+            right_limit -= 12;
+            let blink_off = self.is_low && !self.is_charging && (((self.now_ms >> 9) & 1) != 0);
+            if !blink_off {
+                draw_battery_colored(
+                    canvas,
+                    right_limit as u8,
+                    y_offset,
+                    self.percentage,
+                    self.is_charging,
+                    self.anim_step,
+                    fg,
+                    bg,
+                    self.shading_mode,
+                );
+            }
+        }
+
+        // 2. Charging bolt (closer spacing preserved) or low battery warning
+        if self.is_charging {
+            right_limit = draw_status_bolt(canvas, right_limit, y_offset as i16, has_bat_icon, fg);
+        } else if self.is_low {
+            right_limit -= if has_bat_icon { 5 } else { 4 };
+            crate::text::draw_char(canvas, right_limit, y_text, '!', &FONT, fg);
+        }
+
+        // 3. USB / Serial Plug Icon
+        // Shows when USB is connected or serial is active; disappears cleanly when unplugged/inactive.
+        // Spacing is normal (7px width + 2px spacing = 9px).
+        if self.is_usb || self.serial_active {
+            right_limit =
+                draw_status_plug(canvas, right_limit, y_offset as i16, self.serial_active, fg);
+        }
+
+        // 4. Battery Text Reading (Voltage, Percentage, or MCU Temperature)
+        let mut nbuf = [0u8; 12];
+        let (val, dec, suf) = match self.battery_format {
+            1 | 4 => ((((self.voltage_mv as u32) * 52429) >> 19) as i32, 2, "v"),
+            6 => ((((self.voltage_mv as u32) * 5243) >> 19) as i32, 1, "v"),
+            2 | 5 | 7 => (self.percentage as i32, 0, "%"),
+            8 => ((((self.temp_deci_c as u32) * 52429) >> 19) as i32, 0, "C"),
+            _ => (0, 0, ""),
+        };
+        if !suf.is_empty() {
+            let bat_str = crate::text::format_int_fixed(val, dec, "", suf, &mut nbuf);
+            right_limit = draw_status_text(canvas, right_limit, y_text, bat_str, &FONT, fg);
+        }
+
+        // 5. System Indicators (F-key badge and Keypad Lock)
+        if !self.inverted {
+            if self.is_f_active {
+                right_limit -= 7;
+                draw_f_key(canvas, right_limit, y_offset as i16);
+            }
+            if self.is_keypad_locked {
+                right_limit = draw_status_icon(
+                    canvas,
+                    right_limit,
+                    y_offset as i16,
+                    crate::icons::Icon::Lock,
+                    Color::Fill,
+                );
+            }
+        }
+
+        // 6. Dynamic Application & Subsystem Icons
+        for &icon in self.dynamic_icons {
+            right_limit = draw_status_icon(canvas, right_limit, y_offset as i16, icon, fg);
+        }
+
+        right_limit
+    }
+}
+
+/// Renders the complete status bar frame with automatic layout for left, center, and right elements.
+pub fn draw_status_bar_layout(
+    canvas: &mut Canvas,
+    show_divider: bool,
+    signal_level: Option<u8>,
+    title: Option<&str>,
+    left_badge: Option<&str>,
+    center_text: Option<&str>,
+    right_limit: i16,
+) {
+    use crate::fonts::tomthumb::FONT;
+
+    // Clear status bar background & draw dimmed divider line if enabled
+    if show_divider {
+        canvas.fill_rect(0, 0, 128, 7, Color::Clear);
+        canvas.draw_horizontal_line(0, 6, 128, Color::DarkGray);
+    }
+
+    // 1. Left items (flowing left-to-right)
+    let mut left_x = 1i16;
+    if let Some(lvl) = signal_level {
+        draw_signal(canvas, left_x, 0, lvl, Color::Fill);
+        left_x += (SIGNAL_WIDTH as i16) + 2;
+    }
+    if let Some(t) = title {
+        if !t.is_empty() {
+            let w = crate::text::str_width(t, &FONT) as i16;
+            crate::text::draw_str_max_x(canvas, left_x, 4, t, &FONT, Color::Fill, right_limit);
+            left_x += w + 2;
+        }
+    }
+    if let Some(badge) = left_badge {
+        if !badge.is_empty() {
+            let bw = draw_badge(canvas, left_x, 0, badge, &FONT, false) as i16;
+            left_x += bw + 2;
+        }
+    }
+
+    // 2. Center items (auto-centered in remaining dynamic space)
+    if let Some(center) = center_text {
+        if !center.is_empty() {
+            let w = crate::text::str_width(center, &FONT) as i16;
+            let ideal_x = 64i16 - (w >> 1);
+            let x = if ideal_x >= left_x && ideal_x + w <= right_limit {
+                ideal_x
+            } else {
+                left_x + ((right_limit - left_x - w).max(0) >> 1)
+            };
+            if x + w <= right_limit {
+                crate::text::draw_str(canvas, x, 4, center, &FONT, Color::Fill);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::icons::Icon;
+
+    #[test]
+    fn test_status_icon_dynamic_spacing() {
+        let mut canvas = Canvas::new();
+        let start = 120i16;
+
+        // 5x5 icon (Lock, width 5) -> stride is 5 + 2 = 7
+        let next1 = draw_status_icon(&mut canvas, start, 0, Icon::Lock, Color::Fill);
+        assert_eq!(next1, 113);
+
+        // 7x5 icon (Plug, width 7) -> stride is 7 + 2 = 9 (normal spacing)
+        let next2 = draw_status_icon(&mut canvas, next1, 0, Icon::Plug, Color::Fill);
+        assert_eq!(next2, 104);
+
+        // 6x5 icon (Beacon, width 6) -> stride is 6 + 2 = 8
+        let next3 = draw_status_icon(&mut canvas, next2, 0, Icon::Beacon, Color::Fill);
+        assert_eq!(next3, 96);
+    }
+
+    #[test]
+    fn test_bolt_spacing_preserved() {
+        let mut canvas = Canvas::new();
+        // With battery icon: bolt is placed closer to battery (7px)
+        let next_with_bat = draw_status_bolt(&mut canvas, 114, 0, true, Color::Fill);
+        assert_eq!(next_with_bat, 107);
+
+        // Without battery icon: 5px
+        let next_no_bat = draw_status_bolt(&mut canvas, 114, 0, false, Color::Fill);
+        assert_eq!(next_no_bat, 109);
+    }
+
+    #[test]
+    fn test_plug_show_and_disappear() {
+        let mut canvas = Canvas::new();
+
+        let cfg_unplugged = StatusRightConfig {
+            percentage: 85,
+            voltage_mv: 8200,
+            temp_deci_c: 250,
+            battery_format: 3, // Icon only
+            is_charging: false,
+            is_low: false,
+            is_usb: false,
+            serial_active: false,
+            is_f_active: false,
+            is_keypad_locked: false,
+            shading_mode: 1,
+            anim_step: 0,
+            now_ms: 1000,
+            inverted: false,
+            dynamic_icons: &[],
+        };
+        let limit_unplugged = cfg_unplugged.render(&mut canvas);
+
+        let cfg_plugged = StatusRightConfig {
+            is_usb: true,
+            ..cfg_unplugged
+        };
+        let limit_plugged = cfg_plugged.render(&mut canvas);
+
+        // When plugged in, limit should be reduced by exactly 9px (normal plug icon spacing: 7 + 2)
+        assert_eq!(limit_unplugged - limit_plugged, 9);
+    }
+
+    #[test]
+    fn test_status_dynamic_icons_flow() {
+        let mut canvas = Canvas::new();
+        let dynamic = [Icon::Scan, Icon::Moon];
+
+        let cfg = StatusRightConfig {
+            percentage: 90,
+            voltage_mv: 8250,
+            temp_deci_c: 220,
+            battery_format: 3,
+            is_charging: false,
+            is_low: false,
+            is_usb: false,
+            serial_active: false,
+            is_f_active: false,
+            is_keypad_locked: false,
+            shading_mode: 1,
+            anim_step: 0,
+            now_ms: 500,
+            inverted: false,
+            dynamic_icons: &dynamic,
+        };
+        let base_cfg = StatusRightConfig {
+            dynamic_icons: &[],
+            ..cfg
+        };
+
+        let limit_dyn = cfg.render(&mut canvas);
+        let limit_base = base_cfg.render(&mut canvas);
+
+        // Two 5x5 icons should each take 7px (total 14px)
+        assert_eq!(limit_base - limit_dyn, 14);
+    }
+}
