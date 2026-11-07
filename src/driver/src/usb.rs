@@ -444,53 +444,31 @@ impl UsbDriver {
 
     fn ep0_start_telemetry_transfer(&mut self, max_len: u16) {
         let mut buf = [0u8; 31];
-        buf[..14].copy_from_slice(b"Supply: 0.00v ");
-
-        let v_int = ((self.battery_voltage_mv as u32 * 4195) >> 22) as u16;
-        let rem = self.battery_voltage_mv.saturating_sub(v_int * 1000);
-        let d1 = ((rem as u32 * 5243) >> 19) as u16;
-        let rem2 = rem.saturating_sub(d1 * 100);
-        let d2 = ((rem2 as u32 * 52429) >> 19) as u16;
-
-        buf[8] = b'0' + (v_int as u8);
-        buf[10] = b'0' + (d1 as u8);
-        buf[11] = b'0' + (d2 as u8);
-
-        let pos = if self.is_charging {
-            buf[14..19].copy_from_slice(b"[CHG]");
-            19
+        let c_volts = (self.battery_voltage_mv as u32 * 52429 >> 19) as i32;
+        let s = utils::format::format_int_fixed(c_volts, 2, "Supply: ", "v ", &mut buf);
+        let mut pos = s.len();
+        if self.is_charging {
+            buf[pos..pos + 5].copy_from_slice(b"[CHG]");
+            pos += 5;
         } else {
-            buf[14] = b'(';
+            buf[pos] = b'(';
+            pos += 1;
             let pct = self.battery_pct.min(100);
-            if pct >= 100 {
-                buf[15..20].copy_from_slice(b"100%)");
-                20
-            } else if pct >= 10 {
-                let tens = ((pct as u32 * 52429) >> 19) as u8;
-                let ones = pct - tens * 10;
-                buf[15] = b'0' + tens;
-                buf[16] = b'0' + ones;
-                buf[17] = b'%';
-                buf[18] = b')';
-                19
-            } else {
-                buf[15] = b'0' + pct;
-                buf[16] = b'%';
-                buf[17] = b')';
-                18
-            }
-        };
+            let p_str = utils::format::format_u32(pct as u32, &mut buf[pos..]);
+            pos += p_str.len();
+            buf[pos..pos + 2].copy_from_slice(b"%)");
+            pos += 2;
+        }
         self.ep0_start_string_transfer(&buf[..pos], max_len);
     }
 
     fn ep0_start_mac_transfer(&mut self, max_len: u16) {
         let mac = bsp::uid::read_mac_address();
-        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-        let mut buf = *b"MAC: 00:00:00:00:00:00";
-        for (i, &b) in mac.iter().enumerate() {
-            buf[5 + i * 3] = HEX[(b >> 4) as usize];
-            buf[5 + i * 3 + 1] = HEX[(b & 0x0F) as usize];
-        }
+        let mut buf = [0u8; 22];
+        buf[..5].copy_from_slice(b"MAC: ");
+        let mut mac_buf = [0u8; 17];
+        let mac_str = utils::format::format_mac_address(&mac, &mut mac_buf);
+        buf[5..22].copy_from_slice(mac_str.as_bytes());
         self.ep0_start_string_transfer(&buf, max_len);
     }
 
