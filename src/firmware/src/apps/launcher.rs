@@ -342,15 +342,15 @@ impl LauncherApp {
             let item = &self.model.items[idx];
 
             let fg_color = if is_sel {
-                if is_active_selection {
+                let fg = if is_active_selection {
                     canvas.draw_rect(2, y, 120, 13, Color::Fill);
-                    canvas.clear_corners(2, y, 120, 13);
                     Color::Fill
                 } else {
                     canvas.fill_rect(2, y, 120, 13, Color::Fill);
-                    canvas.clear_corners(2, y, 120, 13);
                     Color::Clear
-                }
+                };
+                canvas.clear_corners(2, y, 120, 13);
+                fg
             } else {
                 Color::Fill
             };

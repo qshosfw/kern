@@ -64,13 +64,12 @@ pub unsafe extern "C" fn HardFault() -> ! {
 }
 
 #[inline(never)]
-unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
-    // 0. DOUBLE FAULT TRAP & HARDWARE CONTAINMENT
+fn enter_hardware_safety_gate() {
+    bsp::pins::AUDIO_PA.set_low();
+    bsp::pins::BACKLIGHT.set_high();
+    bsp::pins::FLASHLIGHT.set_low();
+    bsp::set_status_led(bsp::StatusLed::Red);
     if unsafe { *core::ptr::addr_of!(FAULT_REENTRY_LOCK) } {
-        bsp::pins::AUDIO_PA.set_low();
-        bsp::pins::BACKLIGHT.set_high();
-        bsp::pins::FLASHLIGHT.set_low();
-        bsp::set_status_led(bsp::StatusLed::Red);
         loop {
             hal::wdt::Watchdog::feed();
         }
@@ -78,14 +77,13 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
     unsafe {
         *core::ptr::addr_of_mut!(FAULT_REENTRY_LOCK) = true;
     }
-
-    // 1. HARDWARE SAFETY GATE: Instantly power down RF PA and activate RED fault light
-    bsp::pins::AUDIO_PA.set_low();
-    bsp::pins::BACKLIGHT.set_high();
-    bsp::pins::FLASHLIGHT.set_low();
-    bsp::set_status_led(bsp::StatusLed::Red);
     hal::wdt::Watchdog::feed();
     hal::spi::init();
+}
+
+#[inline(never)]
+unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
+    enter_hardware_safety_gate();
 
     // 2. STAGE 1: IMMEDIATE INVARIANT EXTRACTION
     let ef_valid =
@@ -216,27 +214,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 #[inline(never)]
 unsafe extern "C" fn panic_inner(info_ptr: usize, sp: u32, lr: u32) -> ! {
-    // 0. DOUBLE FAULT TRAP & HARDWARE CONTAINMENT
-    if unsafe { *core::ptr::addr_of!(FAULT_REENTRY_LOCK) } {
-        bsp::pins::AUDIO_PA.set_low();
-        bsp::pins::BACKLIGHT.set_high();
-        bsp::pins::FLASHLIGHT.set_low();
-        bsp::set_status_led(bsp::StatusLed::Red);
-        loop {
-            hal::wdt::Watchdog::feed();
-        }
-    }
-    unsafe {
-        *core::ptr::addr_of_mut!(FAULT_REENTRY_LOCK) = true;
-    }
-
-    // 1. HARDWARE SAFETY GATE
-    bsp::pins::AUDIO_PA.set_low();
-    bsp::pins::BACKLIGHT.set_high();
-    bsp::pins::FLASHLIGHT.set_low();
-    bsp::set_status_led(bsp::StatusLed::Red);
-    hal::wdt::Watchdog::feed();
-    hal::spi::init();
+    enter_hardware_safety_gate();
 
     let info = unsafe { &*(info_ptr as *const core::panic::PanicInfo) };
 
