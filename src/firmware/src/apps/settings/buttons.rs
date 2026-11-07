@@ -21,15 +21,6 @@ pub static SHORTCUT_OPTIONS: [&'static str; 13] = [
 
 pub static PTT_MODE_OPTIONS: [&'static str; 3] = ["Momentary", "Toggle / Latch", "2x Press Latch"];
 
-pub static M_LONG_OPTIONS: [&'static str; 6] = [
-    Shortcut::None.name(),
-    Shortcut::LockKeypad.name(),
-    Shortcut::Settings.name(),
-    Shortcut::Monitor.name(),
-    Shortcut::Flashlight.name(),
-    Shortcut::TaskManager.name(),
-];
-
 pub static HOLD_DELAY_OPTIONS: [&'static str; 4] = ["250ms", "350ms", "500ms", "750ms"];
 
 pub static REPEAT_RATE_OPTIONS: [&'static str; 4] =
@@ -66,7 +57,7 @@ pub static BUTTONS_SHORTCUTS: [SettingDef; 16] = [
     SettingDef::shortcut("Side 1 Long", SettingField::F1_LONG),
     SettingDef::shortcut("Side 2 Short", SettingField::F2_SHORT),
     SettingDef::shortcut("Side 2 Long", SettingField::F2_LONG),
-    SettingDef::choice("Menu Long", &M_LONG_OPTIONS, SettingField::M_LONG),
+    SettingDef::shortcut("Menu Long", SettingField::M_LONG),
     SettingDef::shortcut("F + 0", SettingField::F_0),
     SettingDef::shortcut("F + 1", SettingField::f_digit(0)),
     SettingDef::shortcut("F + 2", SettingField::f_digit(1)),

@@ -33,7 +33,7 @@ impl KeyConfig {
             f1_long: 2,                            // Monitor (Squelch open)
             f2_short: 4,                           // Explorer
             f2_long: 8,                            // Toggle TX Power
-            m_long: 15,                            // Task Manager
+            m_long: 11,                            // Task Manager
             auto_lock: 0,                          // Off
             f_key_timeout: 3,                      // 3s
             fast_scroll: 1,                        // On

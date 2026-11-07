@@ -75,8 +75,8 @@ impl Shortcut {
             8 => Shortcut::ToggleTxPower,
             9 => Shortcut::MuteAudio,
             10 => Shortcut::FmRadio,
-            14 => Shortcut::Fault,
-            15 => Shortcut::TaskManager,
+            11 | 15 => Shortcut::TaskManager,
+            12 | 14 => Shortcut::Fault,
             16 => Shortcut::Sleep,
             _ => Shortcut::None,
         }
