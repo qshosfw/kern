@@ -568,9 +568,14 @@ impl RadioCoordinator {
         let slot = self.effective_tx_slot();
         self.listening_vfo = slot;
         self.dwell.reset_dwell();
-        let tx_ch = *self.effective_tx_channel();
-        radio.set_tx_subaudible(tx_ch.tx_subaudible);
-        if tx_ch.tx_subaudible != SubaudibleTone::None {
+        let tx_ch = self.effective_tx_channel();
+        let tx_subaudible = tx_ch.tx_subaudible;
+        let tx_freq = tx_ch.effective_tx_freq();
+        let tx_power = tx_ch.power;
+        let tx_mod = tx_ch.modulation;
+
+        radio.set_tx_subaudible(tx_subaudible);
+        if tx_subaudible != SubaudibleTone::None {
             self.tx_state = TxState::LeadIn { remaining_ms: 50 };
             radio.mute_mic(true);
         } else {
@@ -580,19 +585,19 @@ impl RadioCoordinator {
         bsp::set_status_led(bsp::StatusLed::Red);
         self.tot_elapsed_10ms = 0;
         self.tot_warning_given = false;
-        radio.set_tx_frequency(tx_ch.effective_tx_freq());
+        radio.set_tx_frequency(tx_freq);
 
         // Kernel Power Governor: Dynamic Brownout Protection
         // When battery voltage is low, high-power TX (5W / ~2A) causes severe cell IR voltage sag
         // that can drop the pack below 5.5V and brownout the MCU. Throttle power level to Medium.
-        let mut target_power = tx_ch.power;
+        let mut target_power = tx_power;
         let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
         if pwr.is_low && target_power == RfPowerLevel::High {
             target_power = RfPowerLevel::Medium;
         }
 
         radio.set_power_level(target_power);
-        radio.set_modulation(tx_ch.modulation);
+        radio.set_modulation(tx_mod);
         let pwr_level = match target_power {
             RfPowerLevel::Low => 0,
             RfPowerLevel::Medium => 1,
@@ -604,8 +609,7 @@ impl RadioCoordinator {
     }
 
     pub fn stop_tx<R: RadioService>(&mut self, radio: &mut R) {
-        let tx_ch = *self.effective_tx_channel();
-        if tx_ch.tx_subaudible.is_ctcss() {
+        if self.effective_tx_channel().tx_subaudible.is_ctcss() {
             radio.send_css_tail(CssTailMode::Tone55Hz);
         }
         radio.mute_mic(false);
@@ -666,8 +670,7 @@ impl RadioCoordinator {
             return;
         }
 
-        let tx_ch = *self.effective_tx_channel();
-        if tx_ch.tx_subaudible.is_ctcss() {
+        if self.effective_tx_channel().tx_subaudible.is_ctcss() {
             radio.send_css_tail(CssTailMode::Tone55Hz);
             radio.mute_mic(true);
             self.tx_state = TxState::TailBurst { remaining_ms: 150 };
