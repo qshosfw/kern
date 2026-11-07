@@ -39,7 +39,7 @@ pub fn draw_battery_colored(
 
     if shading_mode == 2 {
         // Pure Monochrome Mode (1-bit binary): 100% faithful to standard DeltaFW
-        let max_bars = (((percentage as u16 * 10) + 50) / 100).min(10) as u8;
+        let max_bars = (((percentage as u16 + 5) * 205) >> 11).min(10) as u8;
         let fill_bars = if is_charging {
             if max_bars < 10 {
                 let range = 11 - max_bars;

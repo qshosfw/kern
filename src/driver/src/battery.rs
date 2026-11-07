@@ -377,16 +377,13 @@ impl BatteryDriver {
                 }
             } else {
                 // Active charging
+                self.ocv_mv = self.smoothed_mv;
                 if self.smoothed_mv > self.base_mv {
                     self.base_mv = self.smoothed_mv;
-                    self.ocv_mv = self.smoothed_mv;
                 } else if self.smoothed_mv <= self.base_mv.saturating_sub(CHARGE_STOP_DROP_MV) {
                     self.is_charging = false;
                     self.charge_counter = 0;
                     self.base_mv = self.smoothed_mv;
-                    self.ocv_mv = self.smoothed_mv;
-                } else {
-                    self.ocv_mv = self.smoothed_mv;
                 }
             }
         }
@@ -417,10 +414,7 @@ impl BatteryDriver {
         let warn_limit = self.warn_threshold_mv;
         let shut_limit = self.shut_threshold_mv;
 
-        if raw_adc == 0 || self.smoothed_mv == 0 {
-            self.is_low_state = false;
-            self.is_critical_state = false;
-        } else if is_external {
+        if raw_adc == 0 || self.smoothed_mv == 0 || is_external {
             self.is_low_state = false;
             self.is_critical_state = false;
         } else if self.is_charging {
