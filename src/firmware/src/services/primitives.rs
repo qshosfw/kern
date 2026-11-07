@@ -1054,3 +1054,337 @@ impl<'a, 'hw> HardwarePrimitive for SysContext<'a, 'hw> {
         Ok(())
     }
 }
+
+// ── 14. Radio Coordinator Service Trait ─────────────────────────────────────
+impl<'a, 'hw> kernel::service::radio::RadioCoordinator for SysContext<'a, 'hw> {
+    fn active_vfo(&self) -> kernel::service::radio::VfoSlot {
+        self.state.coord.active_vfo
+    }
+
+    fn listening_vfo(&self) -> kernel::service::radio::VfoSlot {
+        self.state.coord.listening_vfo
+    }
+
+    fn select_vfo(&mut self, slot: kernel::service::radio::VfoSlot) {
+        self.state.coord.select_vfo(self.radio, slot);
+        self.state.sync_from_coord();
+    }
+
+    fn toggle_vfo(&mut self) {
+        self.state.coord.toggle_vfo(self.radio);
+        self.state.sync_from_coord();
+    }
+
+    fn step_vfo_frequency(&mut self, slot: kernel::service::radio::VfoSlot, delta_hz: i32) {
+        self.state.coord.step_vfo_freq(self.radio, slot, delta_hz);
+        self.state.sync_from_coord();
+    }
+
+    fn toggle_reverse(&mut self, slot: kernel::service::radio::VfoSlot) {
+        self.state.coord.toggle_reverse(self.radio, slot);
+        self.state.sync_from_coord();
+    }
+
+    fn is_transmitting(&self) -> bool {
+        self.state.coord.is_transmitting
+    }
+
+    fn is_carrier_active(&self) -> bool {
+        self.state.coord.carrier_active
+    }
+
+    fn active_channel(&self) -> &kernel::service::radio::ChannelConfig {
+        self.state.coord.active_channel()
+    }
+
+    fn listening_channel(&self) -> &kernel::service::radio::ChannelConfig {
+        self.state.coord.listening_channel()
+    }
+
+    fn request_ptt_start(&mut self) -> kernel::service::radio::TxPermission {
+        let perm = self.state.coord.request_ptt_start(
+            self.radio,
+            kernel::service::radio::ClientToken::new(
+                kernel::service::radio::ClientId::VFO_UI,
+                kernel::service::radio::LockTier::FOREGROUND,
+            ),
+        );
+        if perm.is_granted() {
+            self.state.sync_from_coord();
+        }
+        perm
+    }
+
+    fn request_ptt_start_client(
+        &mut self,
+        client: kernel::service::radio::ClientToken,
+    ) -> kernel::service::radio::TxPermission {
+        let perm = self.state.coord.request_ptt_start(self.radio, client);
+        if perm.is_granted() {
+            self.state.sync_from_coord();
+        }
+        perm
+    }
+
+    fn request_ptt_stop(&mut self) {
+        if self.state.coord.is_transmitting {
+            self.state.coord.request_ptt_stop(self.radio);
+            self.state.sync_from_coord();
+        }
+    }
+
+    fn request_vfo_lock(
+        &mut self,
+        client: kernel::service::radio::ClientToken,
+        slot: kernel::service::radio::VfoSlot,
+        timeout_ms: u16,
+        mute_audio: bool,
+    ) -> bool {
+        self.state
+            .coord
+            .request_vfo_lock(client, slot, timeout_ms, mute_audio)
+    }
+
+    fn release_vfo_lock(&mut self, client: kernel::service::radio::ClientToken) -> bool {
+        self.state.coord.release_vfo_lock(client)
+    }
+
+    fn is_locked(&self) -> bool {
+        self.state.coord.is_vfo_locked()
+    }
+}
+
+// ── 15. Input Service Trait ─────────────────────────────────────────────────
+impl<'a, 'hw> kernel::service::InputService for SysContext<'a, 'hw> {
+    fn is_keypad_locked(&self) -> bool {
+        self.is_keypad_locked
+    }
+
+    fn set_keypad_locked(&mut self, locked: bool) {
+        self.is_keypad_locked = locked;
+    }
+
+    fn is_f_active(&self) -> bool {
+        self.is_f_active
+    }
+
+    fn set_f_active(&mut self, active: bool) {
+        self.is_f_active = active;
+    }
+}
+
+// ── 16. Input Subsystem Trait ───────────────────────────────────────────────
+impl<'a, 'hw> kernel::service::InputSubsystem for SysContext<'a, 'hw> {
+    fn is_ptt_pressed(&self) -> bool {
+        <Self as KeypadPrimitive>::is_ptt_pressed(self)
+    }
+}
+
+// ── 17. Audio Service Trait ─────────────────────────────────────────────────
+impl<'a, 'hw> kernel::service::AudioService for SysContext<'a, 'hw> {
+    fn set_volume(&mut self, level: u8) {
+        <Self as AudioPrimitive>::set_volume(self, level);
+    }
+
+    fn volume(&self) -> u8 {
+        <Self as AudioPrimitive>::get_volume(self)
+    }
+
+    fn enable(&mut self) {
+        <Self as AudioPrimitive>::set_audio_path(self, true);
+    }
+
+    fn disable(&mut self) {
+        <Self as AudioPrimitive>::set_audio_path(self, false);
+    }
+
+    fn is_enabled(&self) -> bool {
+        <Self as AudioPrimitive>::is_audio_playing(self)
+    }
+
+    fn is_active(&self) -> bool {
+        <Self as AudioPrimitive>::is_audio_playing(self)
+    }
+
+    fn hardware_gain(&self) -> (u8, u8) {
+        (self.config.audio.volume, self.config.audio.mic_gain)
+    }
+}
+
+// ── 18. Power Service Trait ─────────────────────────────────────────────────
+impl<'a, 'hw> kernel::service::PowerService for SysContext<'a, 'hw> {
+    fn battery_percentage(&self) -> u8 {
+        self.power.battery_percentage()
+    }
+
+    fn battery_voltage_mv(&self) -> u16 {
+        self.power.battery_voltage_mv()
+    }
+
+    fn battery_current_ma(&self) -> u16 {
+        self.power.battery_current_ma()
+    }
+
+    fn battery_type(&self) -> u8 {
+        self.power.battery_type() as u8
+    }
+
+    fn uptime_secs(&self) -> u32 {
+        self.power.uptime_secs()
+    }
+
+    fn raw_battery_adc(&self) -> u16 {
+        self.power.raw_battery_adc()
+    }
+
+    fn mcu_temperature_deci_c(&self) -> i16 {
+        self.power.mcu_temperature_deci_c()
+    }
+
+    fn is_charging(&self) -> bool {
+        self.power.is_charging()
+    }
+
+    fn is_low(&self) -> bool {
+        self.power.is_low()
+    }
+
+    fn is_critical(&self) -> bool {
+        self.power.is_critical()
+    }
+}
+
+// ── 19. Display Service Trait ───────────────────────────────────────────────
+impl<'a, 'hw> kernel::service::DisplayService for SysContext<'a, 'hw> {
+    fn set_contrast(&mut self, contrast: u8) {
+        if let Some(ref mut d) = self.display {
+            d.set_contrast(contrast);
+        }
+    }
+
+    fn set_inverted(&mut self, inverted: bool) {
+        if let Some(ref mut d) = self.display {
+            d.set_inverted(inverted);
+        }
+    }
+
+    fn set_backlight_mode(&mut self, mode: kernel::service::BacklightMode) {
+        if let Some(ref mut d) = self.display {
+            d.set_backlight_mode(mode);
+        }
+    }
+
+    fn set_backlight_brightness(&mut self, max: u8, min: u8) {
+        if let Some(ref mut d) = self.display {
+            d.set_backlight_brightness(max, min);
+        }
+    }
+
+    fn set_keypad_light_mode(&mut self, _mode: u8) {}
+
+    fn wake(&mut self) {
+        if let Some(ref mut d) = self.display {
+            d.wake();
+        }
+    }
+
+    fn show_progress(&mut self, title: &str, subtitle: &str, progress: u8) {
+        if let Some(ref mut d) = self.display {
+            d.show_progress(title, subtitle, progress);
+        }
+    }
+}
+
+// ── 20. LED Service Trait ───────────────────────────────────────────────────
+impl<'a, 'hw> kernel::service::LedService for SysContext<'a, 'hw> {
+    fn set_flashlight(&mut self, on: bool) {
+        <Self as PowerPrimitive>::set_flashlight(self, on);
+    }
+
+    fn toggle_flashlight(&mut self) {
+        let is_on = bsp::pins::FLASHLIGHT.is_high();
+        <Self as PowerPrimitive>::set_flashlight(self, !is_on);
+    }
+}
+
+// ── 21. Storage Service Trait ───────────────────────────────────────────────
+impl<'a, 'hw> kernel::service::StorageService for SysContext<'a, 'hw> {
+    fn exists(&mut self, path: &str) -> bool {
+        <Self as StoragePrimitive>::exists(self, path)
+    }
+
+    fn file_size(&mut self, path: &str) -> Result<usize, kernel::service::StorageError> {
+        <Self as StoragePrimitive>::file_size(self, path)
+            .map(|s| s as usize)
+            .map_err(|_| kernel::service::StorageError::NotFound)
+    }
+
+    fn remove(&mut self, path: &str) -> Result<(), kernel::service::StorageError> {
+        <Self as StoragePrimitive>::remove_file(self, path)
+            .map_err(|_| kernel::service::StorageError::IoError)
+    }
+
+    fn create_dir(&mut self, path: &str) -> Result<(), kernel::service::StorageError> {
+        <Self as StoragePrimitive>::create_dir(self, path)
+            .map_err(|_| kernel::service::StorageError::IoError)
+    }
+
+    fn read_file(
+        &mut self,
+        path: &str,
+        buf: &mut [u8],
+    ) -> Result<usize, kernel::service::StorageError> {
+        <Self as StoragePrimitive>::read_file(self, path, buf)
+            .map_err(|_| kernel::service::StorageError::IoError)
+    }
+
+    fn read_file_at(
+        &mut self,
+        path: &str,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, kernel::service::StorageError> {
+        <Self as StoragePrimitive>::read_file_at(self, path, offset, buf)
+            .map_err(|_| kernel::service::StorageError::IoError)
+    }
+
+    fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), kernel::service::StorageError> {
+        <Self as StoragePrimitive>::write_file(self, path, data)
+            .map_err(|_| kernel::service::StorageError::IoError)
+    }
+
+    fn get_attributes(
+        &mut self,
+        _path: &str,
+    ) -> Result<kernel::service::FileAttributes, kernel::service::StorageError> {
+        Ok(kernel::service::FileAttributes { permission: 0 })
+    }
+
+    fn set_attributes(
+        &mut self,
+        _path: &str,
+        _attrs: kernel::service::FileAttributes,
+    ) -> Result<(), kernel::service::StorageError> {
+        Ok(())
+    }
+
+    fn rename(
+        &mut self,
+        old_path: &str,
+        new_path: &str,
+    ) -> Result<(), kernel::service::StorageError> {
+        <Self as StoragePrimitive>::rename_file(self, old_path, new_path)
+            .map_err(|_| kernel::service::StorageError::IoError)
+    }
+}
+
+// ── 22. Serial Port Service Trait ───────────────────────────────────────────
+impl<'a, 'hw> kernel::service::SerialPort for SysContext<'a, 'hw> {
+    fn write(&mut self, data: &[u8]) {
+        <Self as SerialPrimitive>::write(self, data);
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> usize {
+        <Self as SerialPrimitive>::read(self, buf)
+    }
+}

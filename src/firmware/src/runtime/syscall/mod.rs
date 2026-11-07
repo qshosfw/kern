@@ -41,6 +41,26 @@ pub static mut ACTIVE_CANVAS: *mut Canvas = core::ptr::null_mut();
 pub static mut ACTIVE_SWAP: *mut () = core::ptr::null_mut();
 
 #[inline(always)]
+pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
+    let ptr = unsafe { ACTIVE_CTX };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { &mut *ptr })
+    }
+}
+
+#[inline(always)]
+pub fn active_canvas_opt() -> Option<&'static mut Canvas> {
+    let ptr = unsafe { ACTIVE_CANVAS };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { &mut *ptr })
+    }
+}
+
+#[inline(always)]
 pub unsafe fn active_ctx() -> &'static mut SysContext<'static, 'static> {
     unsafe { &mut *ACTIVE_CTX }
 }

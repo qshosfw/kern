@@ -15,6 +15,7 @@ use compositor::OsCompositor;
 use gfx::Canvas;
 use kernel::app::EventResult;
 use kernel::event::{Event, KeyCode, KeyState};
+use kernel::ipc::{ipc_flags, ipc_msg_type, ipc_target};
 use kernel::nav::NavStack;
 use kernel::proc::{ExecType, ProcState, ProcessTable};
 use keypad_lock::KeypadLockManager;
@@ -480,6 +481,22 @@ impl Orchestrator {
             Self::record_proc_activation(self.active_app_id);
         }
 
+        // Intercept and dispatch Microkernel System & IPC Events
+        if let Event::Sys(sys_evt) = event {
+            if sys_evt.target == ipc_target::KERNEL {
+                self.handle_kernel_sys_event(ctx, sys_evt);
+                self.drain_ipc_commands(ctx);
+                return true;
+            } else if sys_evt.target == 0 {
+                let cmd = Shortcut::from(sys_evt);
+                if cmd != Shortcut::None {
+                    self.process_ipc_command(ctx, cmd);
+                    self.drain_ipc_commands(ctx);
+                    return true;
+                }
+            }
+        }
+
         // Key ownership tracking: if a key was consumed on Pressed, subsequent
         // Held/Released events for that key belong strictly to the active app.
         let is_key_owned = match event {
@@ -682,6 +699,56 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn handle_kernel_sys_event<'a>(
+        &mut self,
+        ctx: &mut crate::services::SysContext<'a, '_>,
+        sys_evt: kernel::ipc::SysEvent,
+    ) {
+        #[cfg(feature = "krx_runtime")]
+        if let Some(msg) =
+            crate::runtime::syscall::service::ipc_mailbox_mut().poll(ipc_target::KERNEL)
+        {
+            match msg.msg_type {
+                ipc_msg_type::APP_SWITCH => {
+                    if msg.payload_len > 0 {
+                        let target_app = msg.payload[0] as usize;
+                        self.switch_app(ctx, target_app);
+                        if (msg.flags & ipc_flags::NEED_ACK) != 0 {
+                            let rep = msg.reply_to(&[target_app as u8], false);
+                            let _ = crate::runtime::syscall::service::ipc_mailbox_mut().send(rep);
+                        }
+                    }
+                }
+                ipc_msg_type::PING => {
+                    if (msg.flags & ipc_flags::NEED_ACK) != 0 {
+                        let rep = msg.reply_to(b"PONG", false);
+                        let _ = crate::runtime::syscall::service::ipc_mailbox_mut().send(rep);
+                    }
+                }
+                ipc_msg_type::DAEMON_STOP => {
+                    if msg.payload_len > 0 {
+                        let pid = kernel::proc::Pid(msg.payload[0]);
+                        if let Some(pcb) = proc_table_mut().find_mut(pid) {
+                            pcb.set_state(ProcState::Dormant);
+                        }
+                        if (msg.flags & ipc_flags::NEED_ACK) != 0 {
+                            let rep = msg.reply_to(&[0], false);
+                            let _ = crate::runtime::syscall::service::ipc_mailbox_mut().send(rep);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        let cmd = Shortcut::from(sys_evt);
+        if cmd != Shortcut::None {
+            self.process_ipc_command(ctx, cmd);
+        }
+    }
+
+    #[inline(never)]
     fn drain_ipc_commands<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
         loop {
             let next_cmd = match ctx.ipc {
@@ -809,7 +876,7 @@ impl Orchestrator {
                     .map(|m| m.name)
                     .unwrap_or("App");
                 let caps = crate::AppRegistry::required_caps(app_id);
-                let _ = proc_table_mut().spawn(
+                let _ = proc_table_mut().spawn_or_recycle(
                     name,
                     app_id,
                     kernel::sched::Priority::Ui,

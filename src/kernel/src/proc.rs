@@ -244,6 +244,44 @@ impl<const N: usize> ProcessTable<N> {
         Err(())
     }
 
+    /// Allocate a PCB slot, recycling the least-recently-active suspended process if all slots are full.
+    ///
+    /// Never evicts system-critical daemons (PID <= 4 or Priority::Safety).
+    pub fn spawn_or_recycle(
+        &mut self,
+        name: &str,
+        app_id: usize,
+        priority: crate::sched::Priority,
+        exec_type: ExecType,
+        caps: CapabilitySet,
+    ) -> Result<Pid, ()> {
+        if let Ok(pid) = self.spawn(name, app_id, priority, exec_type, caps) {
+            return Ok(pid);
+        }
+
+        let mut victim_idx = None;
+        let mut min_ticks = u32::MAX;
+        for (i, slot) in self.slots.iter().enumerate() {
+            if (slot.state == ProcState::Suspended || slot.state == ProcState::Hibernated)
+                && slot.app_id < 0xF0
+            {
+                if slot.ledger.cpu_ticks < min_ticks {
+                    min_ticks = slot.ledger.cpu_ticks;
+                    victim_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = victim_idx {
+            let pid = Pid(self.next_pid);
+            self.next_pid = self.next_pid.wrapping_add(1).max(1);
+            self.slots[idx] = Pcb::new(pid, name, app_id, priority, exec_type, caps);
+            Ok(pid)
+        } else {
+            Err(())
+        }
+    }
+
     /// Locate PCB by Pid.
     pub fn find(&self, pid: Pid) -> Option<&Pcb> {
         for p in &self.slots {
@@ -489,5 +527,98 @@ mod tests {
         assert_eq!(table.find(pid_vfo).unwrap().ledger.cpu_ticks, 5);
         // Explorer accumulated 3 activations
         assert_eq!(table.find(pid_explorer).unwrap().ledger.cpu_ticks, 3);
+    }
+
+    #[test]
+    fn test_process_table_slot_recycling_under_saturation() {
+        let mut table = ProcessTable::<4>::new();
+
+        // Fill all 4 slots: 1 daemon + 3 user apps
+        let pid1 = table
+            .spawn(
+                "Sys",
+                1,
+                crate::sched::Priority::Safety,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+        let pid2 = table
+            .spawn(
+                "AppA",
+                2,
+                crate::sched::Priority::Ui,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+        let pid3 = table
+            .spawn(
+                "AppB",
+                3,
+                crate::sched::Priority::Ui,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+        let pid4 = table
+            .spawn(
+                "AppC",
+                4,
+                crate::sched::Priority::Ui,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+
+        // Mark AppA, AppB, AppC suspended
+        table
+            .find_mut(pid2)
+            .unwrap()
+            .set_state(ProcState::Suspended);
+        table.find_mut(pid2).unwrap().ledger.cpu_ticks = 10;
+        table
+            .find_mut(pid3)
+            .unwrap()
+            .set_state(ProcState::Suspended);
+        table.find_mut(pid3).unwrap().ledger.cpu_ticks = 2; // Lowest ticks -> should be victim
+        table
+            .find_mut(pid4)
+            .unwrap()
+            .set_state(ProcState::Suspended);
+        table.find_mut(pid4).unwrap().ledger.cpu_ticks = 8;
+
+        // Normal spawn fails because all slots are occupied
+        assert!(
+            table
+                .spawn(
+                    "AppD",
+                    5,
+                    crate::sched::Priority::Ui,
+                    ExecType::StaticFirmware,
+                    CapabilitySet::empty()
+                )
+                .is_err()
+        );
+
+        // spawn_or_recycle succeeds by recycling AppB (lowest CPU ticks)
+        let pid_new = table
+            .spawn_or_recycle(
+                "AppD",
+                5,
+                crate::sched::Priority::Ui,
+                ExecType::StaticFirmware,
+                CapabilitySet::empty(),
+            )
+            .unwrap();
+        assert_eq!(pid_new, Pid(5));
+
+        // Daemon and other apps preserved, AppB replaced by AppD
+        assert!(table.find(pid1).is_some());
+        assert!(table.find(pid2).is_some());
+        assert!(table.find(pid3).is_none()); // Evicted
+        assert!(table.find(pid4).is_some());
+        assert_eq!(table.find(pid_new).unwrap().name.as_str(), "AppD");
+        assert_eq!(table.find(pid_new).unwrap().app_id, 5);
     }
 }

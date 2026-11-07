@@ -3,7 +3,7 @@
 //! Provides native executables with direct, declarative access to the microkernel
 //! compositor spaces: dialogs, confirmations, text/passcode inputs, toasts, and animations.
 
-use super::{active_ctx, str_or_default};
+use super::{active_ctx_opt, str_or_default};
 use kernel::proc::abi::CapUiVTable;
 
 static mut MODAL_TEXT_BUF: [u8; 64] = [0u8; 64];
@@ -22,12 +22,14 @@ pub fn store_modal_text(text: &str) {
 }
 
 pub unsafe extern "C" fn api_ui_close_modal() {
-    unsafe { active_ctx().close_modal() };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.close_modal();
+    }
 }
 
 pub unsafe extern "C" fn api_ui_has_modal() -> u8 {
-    if unsafe { active_ctx().has_active_modal() } {
-        1
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.has_active_modal() { 1 } else { 0 }
     } else {
         0
     }
@@ -42,7 +44,9 @@ pub unsafe extern "C" fn api_ui_show_popup(
 ) {
     let t_str = unsafe { str_or_default(title, t_len as usize, "Notice") };
     let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
-    unsafe { active_ctx().show_popup_dynamic(tag, t_str, m_str) };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.show_popup_dynamic(tag, t_str, m_str);
+    }
 }
 
 pub unsafe extern "C" fn api_ui_show_confirm(
@@ -54,7 +58,9 @@ pub unsafe extern "C" fn api_ui_show_confirm(
 ) {
     let t_str = unsafe { str_or_default(title, t_len as usize, "Confirm") };
     let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
-    unsafe { active_ctx().show_confirm_dynamic(tag, t_str, m_str, "OK", "CANCEL") };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.show_confirm_dynamic(tag, t_str, m_str, "OK", "CANCEL");
+    }
 }
 
 pub unsafe extern "C" fn api_ui_prompt_text(
@@ -67,8 +73,8 @@ pub unsafe extern "C" fn api_ui_prompt_text(
 ) {
     let t_str = unsafe { str_or_default(title, t_len as usize, "Input") };
     let init_str = unsafe { str_or_default(initial, i_len as usize, "") };
-    unsafe {
-        active_ctx().prompt_text_dynamic(tag, t_str, init_str, max_len as usize);
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.prompt_text_dynamic(tag, t_str, init_str, max_len as usize);
     }
 }
 

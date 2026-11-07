@@ -1,8 +1,8 @@
 use crate::services::power::PowerService;
 use crate::services::radio::{
-    ClientId, ClientToken, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant,
-    TxPermission,
+    ClientId, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant, TxPermission,
 };
+use kernel::service::RadioCoordinator;
 // Main Dual VFO & Telemetry Application
 
 pub mod assets;
@@ -46,13 +46,8 @@ impl VfoApp {
 
     #[inline(never)]
     fn start_transmitting(&mut self, ctx: &mut SysContext) {
-        let perm = ctx.state.coord.request_ptt_start(
-            ctx.radio,
-            ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND),
-        );
-        if perm.is_granted() {
-            ctx.state.sync_from_coord();
-        } else {
+        let perm = ctx.request_ptt_start();
+        if !perm.is_granted() {
             self.latched = false;
             match perm {
                 TxPermission::BlockedBusyChannel
@@ -70,9 +65,8 @@ impl VfoApp {
     #[inline(never)]
     fn stop_transmitting(&mut self, ctx: &mut SysContext) {
         self.latched = false;
-        if ctx.state.coord.is_transmitting {
-            ctx.state.coord.request_ptt_stop(ctx.radio);
-            ctx.state.sync_from_coord();
+        if ctx.is_transmitting() {
+            ctx.request_ptt_stop();
             if ctx.config.audio.roger_beep != 0 {
                 ctx.play_active_roger();
             }
@@ -144,10 +138,9 @@ impl RfClientParticipant for VfoApp {
 
 fn step_freq(ctx: &mut SysContext, up: bool) -> EventResult {
     let step = (ctx.state.step_khz as i32) * 1_000;
-    let slot = ctx.state.coord.active_vfo;
+    let slot = ctx.active_vfo();
     let delta = if up { step } else { -step };
-    ctx.state.coord.step_vfo_freq(ctx.radio, slot, delta);
-    ctx.state.sync_from_coord();
+    ctx.step_vfo_frequency(slot, delta);
     EventResult::Consumed
 }
 
@@ -251,8 +244,7 @@ fn handle_vfo_key_press(ctx: &mut SysContext, code: KeyCode) -> EventResult {
         KeyCode::Up => step_freq(ctx, true),
         KeyCode::Down => step_freq(ctx, false),
         KeyCode::Key1 => {
-            ctx.state.coord.toggle_vfo(ctx.radio);
-            ctx.state.sync_from_coord();
+            ctx.toggle_vfo();
             EventResult::Consumed
         }
         KeyCode::Key2 => {
@@ -264,9 +256,8 @@ fn handle_vfo_key_press(ctx: &mut SysContext, code: KeyCode) -> EventResult {
             EventResult::Consumed
         }
         KeyCode::Key4 | KeyCode::Star => {
-            let slot = ctx.state.coord.active_vfo;
-            ctx.state.coord.toggle_reverse(ctx.radio, slot);
-            ctx.state.sync_from_coord();
+            let slot = ctx.active_vfo();
+            ctx.toggle_reverse(slot);
             EventResult::Consumed
         }
         KeyCode::Menu => {
@@ -295,10 +286,8 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
     }
 
     fn on_start(&mut self, ctx: &mut SysContext) {
-        ctx.state
-            .coord
-            .select_vfo(ctx.radio, ctx.state.coord.active_vfo);
-        ctx.state.sync_from_coord();
+        let slot = ctx.active_vfo();
+        ctx.select_vfo(slot);
         ctx.state.rssi_dbm = ctx.radio.get_rssi_dbm();
         self.latched = false;
     }

@@ -38,11 +38,19 @@ pub fn active_caller_pid() -> u8 {
 }
 
 pub unsafe extern "C" fn api_sys_stack_free() -> u16 {
-    unsafe { super::active_ctx().get_stack_free_now() }
+    if let Some(ctx) = super::active_ctx_opt() {
+        ctx.get_stack_free_now()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_stack_free_min() -> u16 {
-    unsafe { super::active_ctx().get_stack_free_min() }
+    if let Some(ctx) = super::active_ctx_opt() {
+        ctx.get_stack_free_min()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_device_uid(out_uid12: *mut u8) {
@@ -370,10 +378,12 @@ pub unsafe extern "C" fn api_mem_query(
 
 pub unsafe extern "C" fn api_sys_post_event(event_id: u32) -> u8 {
     use kernel::proc::primitives::ServicePrimitive;
-    if unsafe {
-        <crate::services::SysContext as ServicePrimitive>::post_event(super::active_ctx(), event_id)
-    } {
-        0
+    if let Some(ctx) = super::active_ctx_opt() {
+        if <crate::services::SysContext as ServicePrimitive>::post_event(ctx, event_id) {
+            0
+        } else {
+            1
+        }
     } else {
         1
     }
@@ -386,21 +396,23 @@ pub unsafe extern "C" fn api_sys_publish_event(topic: u16, data: *const u8, len:
         &[]
     };
     use kernel::proc::primitives::ServicePrimitive;
-    if unsafe {
-        <crate::services::SysContext as ServicePrimitive>::publish_event(
-            super::active_ctx(),
-            topic,
-            slice,
-        )
-    } {
-        0
+    if let Some(ctx) = super::active_ctx_opt() {
+        if <crate::services::SysContext as ServicePrimitive>::publish_event(ctx, topic, slice) {
+            0
+        } else {
+            1
+        }
     } else {
         1
     }
 }
 
 pub unsafe extern "C" fn api_sys_rand32() -> u32 {
-    unsafe { super::active_ctx().rand32() }
+    if let Some(ctx) = super::active_ctx_opt() {
+        ctx.rand32()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_math_crc32(data: *const u8, len: u16) -> u32 {

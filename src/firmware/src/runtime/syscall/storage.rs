@@ -1,6 +1,6 @@
 //! Storage & Filesystem Subsystem System Call Handlers (`CapStorageVTable`, `interface_id = 0x0004`).
 
-use super::{active_ctx, parse_str, parse_user_path};
+use super::{active_ctx_opt, parse_str, parse_user_path};
 use kernel::proc::abi::{CapStorageVTable, KrxDirEntry};
 use kernel::proc::primitives::*;
 
@@ -8,7 +8,11 @@ pub unsafe extern "C" fn api_storage_load_config(buf: *mut u8, max_len: u16) -> 
     if !buf.is_null() && max_len > 0 {
         let app_name = super::super::native_runner::active_native_app_name();
         let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-        unsafe { active_ctx().load_config(app_name, slice).unwrap_or(0) as u16 }
+        if let Some(ctx) = active_ctx_opt() {
+            ctx.load_config(app_name, slice).unwrap_or(0) as u16
+        } else {
+            0
+        }
     } else {
         0
     }
@@ -18,8 +22,12 @@ pub unsafe extern "C" fn api_storage_save_config(buf: *const u8, len: u16) -> u8
     if !buf.is_null() && len > 0 {
         let app_name = super::super::native_runner::active_native_app_name();
         let slice = unsafe { core::slice::from_raw_parts(buf, len as usize) };
-        if unsafe { active_ctx().save_config(app_name, slice).is_ok() } {
-            0
+        if let Some(ctx) = active_ctx_opt() {
+            if ctx.save_config(app_name, slice).is_ok() {
+                0
+            } else {
+                1
+            }
         } else {
             1
         }
@@ -36,10 +44,10 @@ pub unsafe extern "C" fn api_storage_read_asset(
 ) -> u16 {
     if !buf.is_null() && len > 0 {
         let slice = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
-        unsafe {
-            active_ctx()
-                .read_asset(asset_id, offset, slice)
-                .unwrap_or(0) as u16
+        if let Some(ctx) = active_ctx_opt() {
+            ctx.read_asset(asset_id, offset, slice).unwrap_or(0) as u16
+        } else {
+            0
         }
     } else {
         0
@@ -55,7 +63,9 @@ pub unsafe extern "C" fn api_storage_read_file(
     if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
         if !buf.is_null() && max_len > 0 {
             let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-            return unsafe { active_ctx().read_file(path_str, dst).unwrap_or(0) as u16 };
+            if let Some(ctx) = active_ctx_opt() {
+                return ctx.read_file(path_str, dst).unwrap_or(0) as u16;
+            }
         }
     }
     0
@@ -70,8 +80,10 @@ pub unsafe extern "C" fn api_storage_write_file(
     if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
         if !data.is_null() {
             let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            if unsafe { active_ctx().write_file(path_str, src).is_ok() } {
-                return 0;
+            if let Some(ctx) = active_ctx_opt() {
+                if ctx.write_file(path_str, src).is_ok() {
+                    return 0;
+                }
             }
         }
     }
@@ -80,8 +92,10 @@ pub unsafe extern "C" fn api_storage_write_file(
 
 pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) -> u8 {
     if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
-        if unsafe { active_ctx().remove_file(path_str).is_ok() } {
-            return 0;
+        if let Some(ctx) = active_ctx_opt() {
+            if ctx.remove_file(path_str).is_ok() {
+                return 0;
+            }
         }
     }
     1
@@ -89,7 +103,9 @@ pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) 
 
 pub unsafe extern "C" fn api_storage_file_size(path: *const u8, path_len: u8) -> u32 {
     if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
-        return unsafe { active_ctx().file_size(path_str).unwrap_or(0) as u32 };
+        if let Some(ctx) = active_ctx_opt() {
+            return ctx.file_size(path_str).unwrap_or(0) as u32;
+        }
     }
     0
 }
@@ -108,7 +124,9 @@ pub unsafe extern "C" fn api_storage_list_dir(
         };
         if let Ok(dir_str) = core::str::from_utf8(dir_slice) {
             let dst = unsafe { core::slice::from_raw_parts_mut(out_entries, max_entries as usize) };
-            return unsafe { active_ctx().list_dir(dir_str, dst).unwrap_or(0) as u8 };
+            if let Some(ctx) = active_ctx_opt() {
+                return ctx.list_dir(dir_str, dst).unwrap_or(0) as u8;
+            }
         }
     }
     0
@@ -116,8 +134,10 @@ pub unsafe extern "C" fn api_storage_list_dir(
 
 pub unsafe extern "C" fn api_storage_file_exists(path: *const u8, path_len: u8) -> u8 {
     if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
-        if unsafe { active_ctx().exists(path_str) } {
-            return 1;
+        if let Some(ctx) = active_ctx_opt() {
+            if ctx.exists(path_str) {
+                return 1;
+            }
         }
     }
     0
@@ -133,11 +153,11 @@ pub unsafe extern "C" fn api_storage_read_file_at(
     if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
         if !buf.is_null() && max_len > 0 {
             let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-            return unsafe {
-                active_ctx()
+            if let Some(ctx) = active_ctx_opt() {
+                return ctx
                     .read_file_at(path_str, offset as usize, dst)
-                    .unwrap_or(0) as u16
-            };
+                    .unwrap_or(0) as u16;
+            }
         }
     }
     0
@@ -152,8 +172,10 @@ pub unsafe extern "C" fn api_storage_append_file(
     if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
         if !data.is_null() {
             let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            if unsafe { active_ctx().append_file(path_str, src).is_ok() } {
-                return 0;
+            if let Some(ctx) = active_ctx_opt() {
+                if ctx.append_file(path_str, src).is_ok() {
+                    return 0;
+                }
             }
         }
     }
@@ -170,8 +192,10 @@ pub unsafe extern "C" fn api_storage_rename_file(
         unsafe { parse_user_path(old_path, old_len as usize) },
         unsafe { parse_user_path(new_path, new_len as usize) },
     ) {
-        if unsafe { active_ctx().rename_file(o_str, n_str).is_ok() } {
-            return 0;
+        if let Some(ctx) = active_ctx_opt() {
+            if ctx.rename_file(o_str, n_str).is_ok() {
+                return 0;
+            }
         }
     }
     1
@@ -179,8 +203,10 @@ pub unsafe extern "C" fn api_storage_rename_file(
 
 pub unsafe extern "C" fn api_storage_create_dir(path: *const u8, path_len: u8) -> u8 {
     if let Some(p_str) = unsafe { parse_user_path(path, path_len as usize) } {
-        if unsafe { active_ctx().create_dir(p_str).is_ok() } {
-            return 0;
+        if let Some(ctx) = active_ctx_opt() {
+            if ctx.create_dir(p_str).is_ok() {
+                return 0;
+            }
         }
     }
     1

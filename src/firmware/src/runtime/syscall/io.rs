@@ -4,7 +4,7 @@
 //! Serial CDC (`CapSerialVTable`), Hardware Timers/RTC (`CapTimerVTable`),
 //! and Raw Hardware Buses (`CapHwBusVTable`).
 
-use super::active_ctx;
+use super::active_ctx_opt;
 use kernel::proc::abi::{
     CapHwBusVTable, CapKeypadVTable, CapPowerVTable, CapSerialVTable, CapTimerVTable,
 };
@@ -13,7 +13,11 @@ use kernel::proc::primitives::*;
 // ── 5. CapKeypad C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_sys_poll_key() -> u8 {
-    unsafe { active_ctx().poll_key().unwrap_or(0) }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.poll_key().unwrap_or(0)
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_nav_dir(key: u8) -> i8 {
@@ -25,56 +29,62 @@ pub unsafe extern "C" fn api_sys_nav_dir(key: u8) -> i8 {
 }
 
 pub unsafe extern "C" fn api_sys_key_matrix() -> u32 {
-    unsafe { active_ctx().get_key_matrix() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.get_key_matrix()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_is_key_pressed(key_code: u8) -> u8 {
-    if unsafe { active_ctx().is_key_pressed(key_code) } {
-        1
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_key_pressed(key_code) { 1 } else { 0 }
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_sys_is_f_active() -> u8 {
-    if unsafe { active_ctx().is_f_active() } {
-        1
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_f_active() { 1 } else { 0 }
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_sys_is_ptt_pressed() -> u8 {
-    if unsafe { active_ctx().is_ptt_pressed() } {
-        1
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_ptt_pressed() { 1 } else { 0 }
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_sys_is_side1_pressed() -> u8 {
-    if unsafe { active_ctx().is_side1_pressed() } {
-        1
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_side1_pressed() { 1 } else { 0 }
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_sys_is_side2_pressed() -> u8 {
-    if unsafe { active_ctx().is_side2_pressed() } {
-        1
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_side2_pressed() { 1 } else { 0 }
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_sys_clear_key_buffer() {
-    unsafe { active_ctx().clear_key_buffer() };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.clear_key_buffer();
+    }
 }
 
 pub unsafe extern "C" fn api_sys_is_keypad_locked() -> u8 {
-    if unsafe { active_ctx().is_keypad_locked() } {
-        1
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_keypad_locked() { 1 } else { 0 }
     } else {
         0
     }
@@ -96,59 +106,107 @@ pub static KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
 // ── 6. CapPower C-ABI Handlers ──────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_sys_battery_mv() -> u16 {
-    unsafe { active_ctx().battery_mv() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.battery_mv()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_battery_pct() -> u8 {
-    unsafe { active_ctx().battery_pct() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.battery_pct()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_battery_ma() -> u16 {
-    unsafe { active_ctx().battery_ma() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.battery_ma()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_battery_type() -> u8 {
-    unsafe { active_ctx().battery_type() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.battery_type()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_raw_battery_adc() -> u16 {
-    unsafe { active_ctx().raw_battery_adc() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.raw_battery_adc()
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_mcu_temp() -> i16 {
-    unsafe { active_ctx().mcu_temp_deci_c() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.mcu_temp_deci_c()
+    } else {
+        250
+    }
 }
 
 pub unsafe extern "C" fn api_sys_is_charging() -> u8 {
-    unsafe { if active_ctx().is_charging() { 1 } else { 0 } }
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_charging() { 1 } else { 0 }
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_is_low() -> u8 {
-    unsafe { if active_ctx().is_low() { 1 } else { 0 } }
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_low() { 1 } else { 0 }
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_is_critical() -> u8 {
-    unsafe { if active_ctx().is_critical() { 1 } else { 0 } }
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_critical() { 1 } else { 0 }
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_sys_set_backlight(mode: u8, timeout_s: u8) {
-    unsafe { active_ctx().set_backlight(mode, timeout_s) };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.set_backlight(mode, timeout_s);
+    }
 }
 
 pub unsafe extern "C" fn api_sys_set_backlight_brightness(max: u8, min: u8) {
-    unsafe { active_ctx().set_backlight_brightness(max, min) };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.set_backlight_brightness(max, min);
+    }
 }
 
 pub unsafe extern "C" fn api_sys_wake_backlight() {
-    unsafe { active_ctx().wake_backlight() };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.wake_backlight();
+    }
 }
 
 pub unsafe extern "C" fn api_sys_set_flashlight(on: u8) {
-    unsafe { active_ctx().set_flashlight(on != 0) };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.set_flashlight(on != 0);
+    }
 }
 
 pub unsafe extern "C" fn api_sys_cpu_freq_hz() -> u32 {
-    unsafe { active_ctx().cpu_freq_hz() }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.cpu_freq_hz()
+    } else {
+        48_000_000
+    }
 }
 
 pub static POWER_VTABLE: CapPowerVTable = CapPowerVTable {
@@ -172,9 +230,13 @@ pub static POWER_VTABLE: CapPowerVTable = CapPowerVTable {
 
 pub unsafe extern "C" fn api_serial_write(data: *const u8, len: u16) -> u16 {
     if !data.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
-        unsafe { active_ctx().write(slice) };
-        len
+        if let Some(ctx) = active_ctx_opt() {
+            let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
+            ctx.write(slice);
+            len
+        } else {
+            0
+        }
     } else {
         0
     }
@@ -182,19 +244,29 @@ pub unsafe extern "C" fn api_serial_write(data: *const u8, len: u16) -> u16 {
 
 pub unsafe extern "C" fn api_serial_read(buf: *mut u8, max_len: u16) -> u16 {
     if !buf.is_null() && max_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-        unsafe { active_ctx().read(slice) as u16 }
+        if let Some(ctx) = active_ctx_opt() {
+            let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
+            ctx.read(slice) as u16
+        } else {
+            0
+        }
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_serial_is_connected() -> u8 {
-    unsafe { if active_ctx().is_usb_active() { 1 } else { 0 } }
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.is_usb_active() { 1 } else { 0 }
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_serial_flush() {
-    unsafe { active_ctx().flush() };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.flush();
+    }
 }
 
 pub static SERIAL_VTABLE: CapSerialVTable = CapSerialVTable {
@@ -224,17 +296,19 @@ pub unsafe extern "C" fn api_sys_delay_us(us: u32) {
 
 pub unsafe extern "C" fn api_sys_rtc_get(out_time: *mut u8) -> u8 {
     if !out_time.is_null() {
-        let (y, mo, d, h, mi, s) = unsafe { active_ctx().get_rtc_time() };
-        unsafe {
-            let dst = core::slice::from_raw_parts_mut(out_time, 7);
+        if let Some(ctx) = active_ctx_opt() {
+            let (y, mo, d, h, mi, s) = ctx.get_rtc_time();
+            let dst = unsafe { core::slice::from_raw_parts_mut(out_time, 7) };
             dst[0..2].copy_from_slice(&y.to_le_bytes());
             dst[2] = mo;
             dst[3] = d;
             dst[4] = h;
             dst[5] = mi;
             dst[6] = s;
+            0
+        } else {
+            1
         }
-        0
     } else {
         1
     }
@@ -258,15 +332,18 @@ pub unsafe extern "C" fn api_hw_i2c_transfer(
     rx: *mut u8,
     rx_len: u16,
 ) -> u8 {
+    let Some(ctx) = active_ctx_opt() else {
+        return 1;
+    };
     if !tx.is_null() && tx_len > 0 {
         let tx_slice = unsafe { core::slice::from_raw_parts(tx, tx_len as usize) };
-        if unsafe { active_ctx().i2c_write(addr, reg, tx_slice).is_err() } {
+        if ctx.i2c_write(addr, reg, tx_slice).is_err() {
             return 1;
         }
     }
     if !rx.is_null() && rx_len > 0 {
         let rx_slice = unsafe { core::slice::from_raw_parts_mut(rx, rx_len as usize) };
-        if unsafe { active_ctx().i2c_read(addr, reg, rx_slice).is_err() } {
+        if ctx.i2c_read(addr, reg, rx_slice).is_err() {
             return 1;
         }
     }
@@ -279,6 +356,9 @@ pub unsafe extern "C" fn api_hw_spi_transfer(
     rx: *mut u8,
     len: u16,
 ) -> u8 {
+    let Some(ctx) = active_ctx_opt() else {
+        return 1;
+    };
     if len > 0 {
         let tx_slice = if tx.is_null() {
             &[]
@@ -290,11 +370,7 @@ pub unsafe extern "C" fn api_hw_spi_transfer(
         } else {
             unsafe { core::slice::from_raw_parts_mut(rx, len as usize) }
         };
-        if unsafe {
-            active_ctx()
-                .spi_transfer(cs_pin, tx_slice, rx_slice)
-                .is_ok()
-        } {
+        if ctx.spi_transfer(cs_pin, tx_slice, rx_slice).is_ok() {
             0
         } else {
             1
@@ -305,26 +381,42 @@ pub unsafe extern "C" fn api_hw_spi_transfer(
 }
 
 pub unsafe extern "C" fn api_hw_gpio_set(pin: u8, high: u8) {
-    unsafe { active_ctx().gpio_write(pin, high != 0) };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.gpio_write(pin, high != 0);
+    }
 }
 
 pub unsafe extern "C" fn api_hw_gpio_get(pin: u8) -> u8 {
-    unsafe { if active_ctx().gpio_read(pin) { 1 } else { 0 } }
+    if let Some(ctx) = active_ctx_opt() {
+        if ctx.gpio_read(pin) { 1 } else { 0 }
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_hw_rf_read_reg(reg: u8) -> u16 {
-    unsafe { active_ctx().read_register(reg) }
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.read_register(reg)
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "C" fn api_hw_rf_write_reg(reg: u8, val: u16) {
-    unsafe { active_ctx().write_register(reg, val) };
+    if let Some(ctx) = active_ctx_opt() {
+        ctx.write_register(reg, val);
+    }
 }
 
 pub unsafe extern "C" fn api_hw_flash_read(addr: u32, buf: *mut u8, len: u16) -> u8 {
     if !buf.is_null() && len > 0 {
-        let dst = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
-        if unsafe { active_ctx().raw_flash_read(addr, dst).is_ok() } {
-            0
+        if let Some(ctx) = active_ctx_opt() {
+            let dst = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
+            if ctx.raw_flash_read(addr, dst).is_ok() {
+                0
+            } else {
+                1
+            }
         } else {
             1
         }
