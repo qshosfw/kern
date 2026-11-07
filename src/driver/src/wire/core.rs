@@ -93,36 +93,25 @@ impl<S: SerialPort> WireDriver<S> {
             }
 
             OP_CORE_GET_CAPS => {
-                let mut caps_reply = [0u8; 35];
-                caps_reply[0..4].copy_from_slice(&1u32.to_le_bytes()); // generation = 1
-                caps_reply[4..6].copy_from_slice(&0xFFFFu16.to_le_bytes()); // next cursor = 0xFFFF (end)
-                caps_reply[6] = 7; // 7 components
-
-                let components = [
-                    (1, COMPONENT_CLASS_RADIO),
-                    (2, COMPONENT_CLASS_MCU),
-                    (3, COMPONENT_CLASS_DISPLAY),
-                    (4, COMPONENT_CLASS_KEYPAD),
-                    (5, COMPONENT_CLASS_AUDIO),
-                    (6, COMPONENT_CLASS_POWER),
-                    (7, COMPONENT_CLASS_STORAGE),
+                const CAPS_REPLY: [u8; 35] = [
+                    1, 0, 0, 0, // generation = 1
+                    0xFF, 0xFF, // next cursor = 0xFFFF (end)
+                    7,          // 7 components
+                    1, 2, 1, COMPONENT_CLASS_RADIO,
+                    1, 2, 2, COMPONENT_CLASS_MCU,
+                    1, 2, 3, COMPONENT_CLASS_DISPLAY,
+                    1, 2, 4, COMPONENT_CLASS_KEYPAD,
+                    1, 2, 5, COMPONENT_CLASS_AUDIO,
+                    1, 2, 6, COMPONENT_CLASS_POWER,
+                    1, 2, 7, COMPONENT_CLASS_STORAGE,
                 ];
-
-                let mut off = 7;
-                for (id, class) in components {
-                    caps_reply[off] = 1; // type 1 = Component Descriptor
-                    caps_reply[off + 1] = 2; // len = 2
-                    caps_reply[off + 2] = id;
-                    caps_reply[off + 3] = class;
-                    off += 4;
-                }
 
                 let _ = self.send_response(
                     SERVICE_CORE,
                     OP_CORE_GET_CAPS,
                     header.sequence,
                     WireStatus::Ok,
-                    &caps_reply,
+                    &CAPS_REPLY,
                 );
             }
 
