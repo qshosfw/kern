@@ -376,63 +376,26 @@ impl KeypadLockManager {
         let (bx, by) = gfx::widgets::dialog::draw_modal_box(canvas, box_w, box_h);
         let center_x = (bx as i16) + (box_w as i16 / 2);
 
-        if self.toast == LockToast::Unlocked {
-            // Unlocked confirmation: 8x8 open padlock + "KEYPAD UNLOCKED"
-            let total_w = 8 + 4 + text::str_width("KEYPAD UNLOCKED", &TOMTHUMB);
-            let start_x = center_x - (total_w as i16 / 2);
-            let icon_y = (by + 11) as i16;
-            gfx::icons::draw_icon(
-                canvas,
-                start_x,
-                icon_y,
-                gfx::icons::Icon::Unlock,
-                Color::Fill,
-            );
-            text::draw_str(
-                canvas,
-                start_x + 12,
-                (by + 17) as i16,
-                "KEYPAD UNLOCKED",
-                &TOMTHUMB,
-                Color::Fill,
-            );
-        } else if self.toast == LockToast::Locked {
-            // Locked confirmation: 8x8 closed padlock + "KEYPAD LOCKED"
-            let total_w = 8 + 4 + text::str_width("KEYPAD LOCKED", &TOMTHUMB);
-            let start_x = center_x - (total_w as i16 / 2);
-            let icon_y = (by + 11) as i16;
-            gfx::icons::draw_icon(canvas, start_x, icon_y, gfx::icons::Icon::Lock, Color::Fill);
-            text::draw_str(
-                canvas,
-                start_x + 12,
-                (by + 17) as i16,
-                "KEYPAD LOCKED",
-                &TOMTHUMB,
-                Color::Fill,
-            );
-        } else {
-            // PromptUnlock: 2-line layout
-            // Line 1: 8x8 closed padlock + "KEYPAD LOCKED"
-            let total_w1 = 8 + 4 + text::str_width("KEYPAD LOCKED", &TOMTHUMB);
-            let start_x1 = center_x - (total_w1 as i16 / 2);
-            let icon_y = (by + 5) as i16;
-            gfx::icons::draw_icon(
-                canvas,
-                start_x1,
-                icon_y,
-                gfx::icons::Icon::Lock,
-                Color::Fill,
-            );
-            text::draw_str(
-                canvas,
-                start_x1 + 12,
-                (by + 11) as i16,
-                "KEYPAD LOCKED",
-                &TOMTHUMB,
-                Color::Fill,
-            );
+        let (icon, text_str, y_off) = match self.toast {
+            LockToast::Unlocked => (gfx::icons::Icon::Unlock, "KEYPAD UNLOCKED", 11i16),
+            LockToast::Locked => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 11i16),
+            _ => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 5i16),
+        };
 
-            // Line 2 (Subtitle): Actionable unlock instruction centered horizontally using standard badges
+        let total_w = 12 + text::str_width(text_str, &TOMTHUMB);
+        let start_x = center_x - (total_w as i16 / 2);
+        let icon_y = (by as i16) + y_off;
+        gfx::icons::draw_icon(canvas, start_x, icon_y, icon, Color::Fill);
+        text::draw_str(
+            canvas,
+            start_x + 12,
+            icon_y + 6,
+            text_str,
+            &TOMTHUMB,
+            Color::Fill,
+        );
+
+        if self.toast != LockToast::Unlocked && self.toast != LockToast::Locked {
             draw_unlock_hint(canvas, center_x, (by + 18) as i16);
         }
     }
