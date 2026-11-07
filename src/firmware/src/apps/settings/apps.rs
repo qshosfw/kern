@@ -30,16 +30,12 @@ pub static APPS_DEFS: &[SettingDef] = &[
 
 fn format_size(bytes: usize) -> ShortString {
     let mut s = ShortString::empty();
-    if bytes < 1024 {
-        s.push_int_fixed(bytes as i32, 0, "", " B");
+    let (val, dec, unit) = if bytes < 1024 {
+        (bytes as i32, 0, " B")
     } else {
-        s.push_int_fixed(
-            ((bytes.saturating_mul(10).saturating_add(512)) >> 10) as i32,
-            1,
-            "",
-            " KB",
-        );
-    }
+        (((bytes * 10 + 512) >> 10) as i32, 1, " KB")
+    };
+    s.push_int_fixed(val, dec, "", unit);
     s
 }
 
