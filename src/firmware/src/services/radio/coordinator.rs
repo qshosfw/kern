@@ -413,6 +413,13 @@ impl RadioCoordinator {
 
     pub const FSK_CLIENT: ClientToken = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::SERVICE);
 
+    pub fn set_audio_muted<R: RfAudioPath>(&mut self, radio: &mut R, muted: bool) {
+        if self.audio_path_muted != muted {
+            self.audio_path_muted = muted;
+            radio.mute_audio(muted);
+        }
+    }
+
     /// Notify coordinator that an FSK preamble/sync burst has been detected on the physical layer.
     pub fn notify_fsk_sync<R: RfAudioPath>(&mut self, radio: &mut R, slot: VfoSlot) -> RadioEvent {
         self.fsk_sync_active = true;
@@ -420,9 +427,8 @@ impl RadioCoordinator {
 
         self.request_vfo_lock(Self::FSK_CLIENT, slot, self.fsk_config.sync_hold_ms, mute);
 
-        if mute && !self.audio_path_muted {
-            radio.mute_audio(true);
-            self.audio_path_muted = true;
+        if mute {
+            self.set_audio_muted(radio, true);
         }
 
         RadioEvent::FskSyncDetected(slot)
@@ -449,10 +455,7 @@ impl RadioCoordinator {
         if self.arbitrator.active_client().id == ClientId::FSK_SIDECAR {
             let client = self.arbitrator.active_client();
             self.release_vfo_lock(client);
-            if self.audio_path_muted {
-                radio.mute_audio(false);
-                self.audio_path_muted = false;
-            }
+            self.set_audio_muted(radio, false);
         }
     }
 
@@ -1028,6 +1031,34 @@ impl RadioCoordinator {
     // ── Main 10ms System Tick ──
 
     #[inline(never)]
+    fn calc_watch_target(&self, idx: usize) -> Option<(u16, VfoSlot)> {
+        match self.dual_watch {
+            DualWatchMode::Off => None,
+            DualWatchMode::EqualDwell { dwell_ms } | DualWatchMode::TripleWatch { dwell_ms } => {
+                Some((dwell_ms, self.next_watch_vfo()))
+            }
+            DualWatchMode::Priority {
+                priority_vfo,
+                check_interval_ms,
+            } => {
+                let target = if self.listening_vfo != priority_vfo {
+                    (check_interval_ms, priority_vfo)
+                } else {
+                    (100, priority_vfo.other())
+                };
+                Some(target)
+            }
+            DualWatchMode::Adaptive => Some((
+                DwellController::calc_adaptive_dwell(
+                    self.rssi_moving_avg[idx],
+                    self.activity_count[idx],
+                ),
+                self.next_watch_vfo(),
+            )),
+        }
+    }
+
+    #[inline(never)]
     pub fn tick_10ms<R: RadioService>(&mut self, radio: &mut R) -> RadioEvent {
         if let Some(ev) = self.tick_tx(radio) {
             return ev;
@@ -1059,10 +1090,7 @@ impl RadioCoordinator {
                 } => {
                     self.listening_vfo = slot;
                     self.fsk_sync_active = client.id == ClientId::FSK_SIDECAR;
-                    if needs_mute != self.audio_path_muted {
-                        radio.mute_audio(needs_mute);
-                        self.audio_path_muted = needs_mute;
-                    }
+                    self.set_audio_muted(radio, needs_mute);
                     return RadioEvent::LockRestored {
                         client,
                         resources,
@@ -1076,9 +1104,8 @@ impl RadioCoordinator {
                     was_muted,
                 } => {
                     self.fsk_sync_active = false;
-                    if was_muted && self.audio_path_muted {
-                        radio.mute_audio(false);
-                        self.audio_path_muted = false;
+                    if was_muted {
+                        self.set_audio_muted(radio, false);
                     }
                     if client.id == ClientId::FSK_SIDECAR {
                         return RadioEvent::FskLockReleased(slot);
@@ -1110,10 +1137,7 @@ impl RadioCoordinator {
             if self.fsk_config.voice_priority_override
                 && self.arbitrator.active_client().id == ClientId::FSK_SIDECAR
             {
-                if self.audio_path_muted {
-                    radio.mute_audio(false);
-                    self.audio_path_muted = false;
-                }
+                self.set_audio_muted(radio, false);
             }
 
             if !self.carrier_active {
@@ -1122,8 +1146,7 @@ impl RadioCoordinator {
                     bsp::set_status_led(bsp::StatusLed::Green);
                 }
                 if !self.arbitrator.is_locked() || !self.arbitrator.active_lock.audio_muted {
-                    radio.mute_audio(false);
-                    self.audio_path_muted = false;
+                    self.set_audio_muted(radio, false);
                 }
                 self.dwell.on_carrier_opened();
                 self.ste.reset();
@@ -1138,8 +1161,7 @@ impl RadioCoordinator {
                     false
                 };
                 if let Some(should_mute) = self.ste.process_tick(true, tone_cfg, tone_present) {
-                    radio.mute_audio(should_mute);
-                    self.audio_path_muted = should_mute;
+                    self.set_audio_muted(radio, should_mute);
                 }
 
                 return RadioEvent::None;
@@ -1152,8 +1174,7 @@ impl RadioCoordinator {
             if !self.is_transmitting {
                 bsp::set_status_led(bsp::StatusLed::Off);
             }
-            radio.mute_audio(true);
-            self.audio_path_muted = true;
+            self.set_audio_muted(radio, true);
             return RadioEvent::CarrierClosed(self.listening_vfo);
         }
 
@@ -1169,28 +1190,8 @@ impl RadioCoordinator {
         }
 
         // 5. Dual Watch / Triple Watch time-division multiplexing
-        let (dwell_ms, next_vfo) = match self.dual_watch {
-            DualWatchMode::Off => return RadioEvent::None,
-            DualWatchMode::EqualDwell { dwell_ms } | DualWatchMode::TripleWatch { dwell_ms } => {
-                (dwell_ms, self.next_watch_vfo())
-            }
-            DualWatchMode::Priority {
-                priority_vfo,
-                check_interval_ms,
-            } => {
-                if self.listening_vfo != priority_vfo {
-                    (check_interval_ms, priority_vfo)
-                } else {
-                    (100, priority_vfo.other())
-                }
-            }
-            DualWatchMode::Adaptive => (
-                DwellController::calc_adaptive_dwell(
-                    self.rssi_moving_avg[idx],
-                    self.activity_count[idx],
-                ),
-                self.next_watch_vfo(),
-            ),
+        let Some((dwell_ms, next_vfo)) = self.calc_watch_target(idx) else {
+            return RadioEvent::None;
         };
 
         if self.dwell.is_dwell_expired(dwell_ms) {
