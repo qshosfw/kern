@@ -18,7 +18,6 @@ pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
 }
 
 /// Draw DeltaFW-style high precision battery icon with customizable foreground, background, and shading mode
-#[inline(never)]
 pub fn draw_battery_colored(
     canvas: &mut Canvas,
     x: u8,
@@ -27,55 +26,27 @@ pub fn draw_battery_colored(
     is_charging: bool,
     anim_step: u8,
     fg: Color,
-    bg: Color,
+    _bg: Color,
     shading_mode: u8,
 ) {
-    let start_x = x;
-    let work_end_x = start_x + 11;
-
-    canvas.draw_horizontal_line(start_x + 1, y, 10, fg);
-    canvas.draw_horizontal_line(start_x + 1, y + 4, 10, fg);
-    canvas.draw_vertical_line(start_x - 1, y + 1, 3, fg);
-    canvas.draw_vertical_line(start_x, y, 5, fg);
-    canvas.draw_vertical_line(work_end_x, y, 5, fg);
-
-    canvas.fill_rect(start_x + 1, y + 1, 10, 3, bg);
-
-    let (full_bars, partial) = if shading_mode == 2 {
-        // Pure Monochrome Mode (1-bit binary): 100% faithful to standard DeltaFW
-        ((((percentage as u16 + 5) * 205) >> 11).min(10) as u8, 0u8)
-    } else {
-        // High-Precision 30-Step Optical Grayscale / Dither Mode
-        let p = percentage.min(100) as u32;
-        let total_steps = (((p * 1229) + 614) >> 12).min(30) as u8;
-        let fb = ((total_steps as u16 * 86) >> 8).min(10) as u8;
-        (fb, total_steps - (fb * 3))
-    };
-
-    let fill_bars = if is_charging && full_bars < 10 {
-        let range = 11 - full_bars;
-        let step = if range > 0 { anim_step % range } else { 0 };
-        full_bars + step
-    } else {
-        full_bars
-    };
-
-    if fill_bars > 0 {
-        canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
-    }
-
+    let mut flags = 0u8;
     if is_charging {
-        if fill_bars < 10 && fill_bars > full_bars {
-            canvas.draw_vertical_line(work_end_x - fill_bars, y + 1, 3, Color::DarkGray);
-        }
-    } else if partial > 0 && full_bars < 10 {
-        let partial_color = if partial == 2 {
-            Color::DarkGray
-        } else {
-            Color::LightGray
-        };
-        canvas.draw_vertical_line(work_end_x - full_bars - 1, y + 1, 3, partial_color);
+        flags |= STATUS_FLAG_CHARGING;
     }
+    if fg == Color::Clear {
+        flags |= STATUS_FLAG_INVERTED;
+    }
+    let cfg = StatusRightConfig {
+        percentage,
+        battery_format: 3,
+        shading_mode,
+        anim_step,
+        flags,
+        voltage_mv: 0,
+        temp_deci_c: 0,
+        dynamic_icons: &[],
+    };
+    cfg.draw_battery(canvas, x, y);
 }
 
 /// Draw DeltaFW-style high precision battery icon (13x5 pixels, x: 115..=127, y: 0..=4)
@@ -87,17 +58,21 @@ pub fn draw_battery(
     is_charging: bool,
     anim_step: u8,
 ) {
-    draw_battery_colored(
-        canvas,
-        x,
-        y,
+    let mut flags = 0u8;
+    if is_charging {
+        flags |= STATUS_FLAG_CHARGING;
+    }
+    let cfg = StatusRightConfig {
         percentage,
-        is_charging,
+        battery_format: 3,
+        shading_mode: 1,
         anim_step,
-        Color::Fill,
-        Color::Clear,
-        1, // Dither by default
-    );
+        flags,
+        voltage_mv: 0,
+        temp_deci_c: 0,
+        dynamic_icons: &[],
+    };
+    cfg.draw_battery(canvas, x, y);
 }
 
 /// Width in pixels occupied by DeltaFW signal antenna and 5 progressive bars
@@ -310,13 +285,68 @@ impl<'a> StatusRightConfig<'a> {
         (self.flags & STATUS_FLAG_INVERTED) != 0
     }
 
+    /// Draw DeltaFW-style high precision battery icon directly using config parameters
+    #[inline(never)]
+    pub fn draw_battery(&self, canvas: &mut Canvas, x: u8, y: u8) {
+        let (fg, bg) = if self.inverted() {
+            (Color::Clear, Color::Fill)
+        } else {
+            (Color::Fill, Color::Clear)
+        };
+        let start_x = x;
+        let work_end_x = start_x + 11;
+
+        canvas.draw_horizontal_line(start_x + 1, y, 10, fg);
+        canvas.draw_horizontal_line(start_x + 1, y + 4, 10, fg);
+        canvas.draw_vertical_line(start_x - 1, y + 1, 3, fg);
+        canvas.draw_vertical_line(start_x, y, 5, fg);
+        canvas.draw_vertical_line(work_end_x, y, 5, fg);
+
+        canvas.fill_rect(start_x + 1, y + 1, 10, 3, bg);
+
+        let (full_bars, partial) = if self.shading_mode == 2 {
+            ((((self.percentage as u16 + 5) * 205) >> 11).min(10) as u8, 0u8)
+        } else {
+            let p = self.percentage.min(100) as u32;
+            let total_steps = (((p * 1229) + 614) >> 12).min(30) as u8;
+            let fb = ((total_steps as u16 * 86) >> 8).min(10) as u8;
+            (fb, total_steps - (fb * 3))
+        };
+
+        let is_charging = self.is_charging();
+        let fill_bars = if is_charging && full_bars < 10 {
+            let range = 11 - full_bars;
+            let step = if range > 0 { self.anim_step % range } else { 0 };
+            full_bars + step
+        } else {
+            full_bars
+        };
+
+        if fill_bars > 0 {
+            canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
+        }
+
+        if is_charging {
+            if fill_bars < 10 && fill_bars > full_bars {
+                canvas.draw_vertical_line(work_end_x - fill_bars, y + 1, 3, Color::DarkGray);
+            }
+        } else if partial > 0 && full_bars < 10 {
+            let partial_color = if partial == 2 {
+                Color::DarkGray
+            } else {
+                Color::LightGray
+            };
+            canvas.draw_vertical_line(work_end_x - full_bars - 1, y + 1, 3, partial_color);
+        }
+    }
+
     /// Renders all right-side status elements dynamically flowing right-to-left.
     /// Preserves battery and bolt geometry while handling USB plug and dynamic icons.
     #[inline(never)]
     pub fn render(&self, canvas: &mut Canvas) -> i16 {
         use crate::fonts::tomthumb::FONT;
 
-        let (fg, bg) = if self.inverted() {
+        let (fg, _bg) = if self.inverted() {
             (Color::Clear, Color::Fill)
         } else {
             (Color::Fill, Color::Clear)
@@ -333,17 +363,7 @@ impl<'a> StatusRightConfig<'a> {
             right_limit -= 12;
             let blink_off = self.is_low() && !self.is_charging() && (((self.anim_step >> 1) & 1) != 0);
             if !blink_off {
-                draw_battery_colored(
-                    canvas,
-                    right_limit as u8,
-                    y_offset,
-                    self.percentage,
-                    self.is_charging(),
-                    self.anim_step,
-                    fg,
-                    bg,
-                    self.shading_mode,
-                );
+                self.draw_battery(canvas, right_limit as u8, y_offset);
             }
         }
 
