@@ -284,9 +284,7 @@ impl<'a> StatusRightConfig<'a> {
         // 2. Charging bolt (closer spacing preserved) or low battery warning
         let y_icon = y_offset as i16;
         if self.is_charging() {
-            let step = if has_bat_icon { 7 } else { 5 };
-            right_limit -= step;
-            crate::icons::draw_icon_5x5(canvas, right_limit, y_icon, crate::icons::Icon::Bolt, fg);
+            right_limit = draw_status_bolt(canvas, right_limit, y_icon, has_bat_icon, fg);
         } else if self.is_low() {
             right_limit -= if has_bat_icon { 5 } else { 4 };
             crate::text::draw_char(canvas, right_limit, y_text, '!', &FONT, fg);
@@ -296,12 +294,7 @@ impl<'a> StatusRightConfig<'a> {
         // Shows when USB is connected or serial is active; disappears cleanly when unplugged/inactive.
         // Spacing is normal (7px width + 2px spacing = 9px).
         if self.is_usb() || self.serial_active() {
-            let plug_icon = if self.serial_active() {
-                crate::icons::Icon::SerialActive
-            } else {
-                crate::icons::Icon::Plug
-            };
-            right_limit = draw_status_icon(canvas, right_limit, y_icon, plug_icon, fg);
+            right_limit = draw_status_plug(canvas, right_limit, y_icon, self.serial_active(), fg);
         }
 
         // 4. Battery Text Reading (Voltage, Percentage, or MCU Temperature)
@@ -368,14 +361,11 @@ pub fn draw_status_bar_layout(
         draw_signal(canvas, left_x, 0, lvl, Color::Fill);
         left_x += (SIGNAL_WIDTH as i16) + 2;
     }
-    if let Some(t) = config.title {
-        if !t.is_empty() {
-            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, t, &FONT, Color::Fill, right_limit) + 2;
-        }
-    }
-    if let Some(badge) = config.left_badge {
-        if !badge.is_empty() {
-            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, badge, &FONT, Color::Fill, right_limit) + 2;
+    for &opt_str in &[config.title, config.left_badge] {
+        if let Some(s) = opt_str {
+            if !s.is_empty() {
+                left_x = crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit) + 2;
+            }
         }
     }
     for &icon in config.left_icons {
