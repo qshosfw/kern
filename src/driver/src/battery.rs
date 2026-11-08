@@ -317,7 +317,7 @@ impl BatteryDriver {
                     let r_est = match periph.tx_power_level {
                         0 => step_sag << 1,
                         1 => step_sag,
-                        _ => (((step_sag as u32) * 2) / 3) as u16,
+                        _ => (((step_sag as u32) * 171) >> 8) as u16,
                     };
                     if r_est >= 100 && r_est <= 500 {
                         self.internal_res_m_ohm =
