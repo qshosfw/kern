@@ -92,15 +92,17 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             KrxStatusBar sb;
             u8* p = (u8*)&sb;
             for (u32 i = 0; i < sizeof(KrxStatusBar); i++) p[i] = 0;
-            sb.flags = 0x01 | 0x02 | 0x04 | 0x08; // VISIBLE | DIVIDER | HAS_SIGNAL | CUSTOM_TITLE
+            sb.flags = 0x0F; // VISIBLE | DIVIDER | HAS_SIGNAL | CUSTOM_TITLE
             sb.signal_level = 5;
             sb.left_icon_count = 2;
             sb.left_icons[0] = 0; // Icon::Antenna
             sb.left_icons[1] = 7; // Icon::Mesh
             sb.center_icon_count = 1;
             sb.center_icons[0] = 15; // Icon::Beacon
-            sb.title[0] = 'B'; sb.title[1] = 'e'; sb.title[2] = 'n'; sb.title[3] = 'c'; sb.title[4] = 'h'; sb.title[5] = 0;
-            sb.center[0] = 'P'; sb.center[1] = 'a'; sb.center[2] = 's'; sb.center[3] = 's'; sb.center[4] = 0;
+            p = (u8*)sb.title;
+            p[0] = 'B'; p[1] = 'e'; p[2] = 'n'; p[3] = 'c'; p[4] = 'h'; p[5] = 0;
+            p = (u8*)sb.center;
+            p[0] = 'P'; p[1] = 'a'; p[2] = 's'; p[3] = 's'; p[4] = 0;
             if (api->ui->ui_set_status_bar) api->ui->ui_set_status_bar(&sb);
 
             // Test system tray icon registration (updates in background!)
@@ -124,10 +126,16 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
 
     if (op == 2) { // RENDER - Clean typography without useless borders!
         if (api->display && api->display->draw_str) {
-            api->display->draw_str(10, 14, (const u8*)"KRX NATIVE BENCH", 16, 0, 1);
-            api->display->draw_str(10, 26, (const u8*)"156/156 APIS: PASS", 18, 0, 1);
-            api->display->draw_str(10, 38, (const u8*)"STANDALONE .KRX", 15, 0, 1);
-            api->display->draw_str(10, 50, (const u8*)"PRESS EXIT TO QUIT", 18, 0, 1);
+            static const char* const lines[] = {
+                "KRX NATIVE BENCH",
+                "156/156 APIS: PASS",
+                "STANDALONE .KRX",
+                "PRESS EXIT TO QUIT",
+            };
+            static const u8 lens[] = { 16, 18, 15, 18 };
+            for (u32 i = 0; i < 4; i++) {
+                api->display->draw_str(10, 14 + (i * 12), (const u8*)lines[i], lens[i], 0, 1);
+            }
         }
         return 0;
     }

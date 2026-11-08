@@ -17,7 +17,12 @@ impl SettingsApp {
 
         if self.current_page == PageId::ManageApps || self.current_page == PageId::ManageServices {
             let is_srv = self.current_page == PageId::ManageServices;
-            self.items_len = super::apps::populate_package_list(&mut self.items, ctx, is_srv);
+            self.items_len = super::apps::populate_package_list(
+                &mut self.items,
+                &mut self.item_icons,
+                ctx,
+                is_srv,
+            );
             return;
         }
         if self.current_page == PageId::AppDetail || self.current_page == PageId::ServiceDetail {

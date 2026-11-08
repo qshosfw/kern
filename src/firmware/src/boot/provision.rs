@@ -234,18 +234,8 @@ fn write_krx_package(
     }
 
     if filesystem.exists(path) {
-        let buf = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
-        if let Ok(rlen) = filesystem.read_file(path, buf) {
-            let page_size: u16 = match class {
-                KrxClass::Paged => 512,
-                _ => 0,
-            };
-            if rlen == total_len
-                && &buf[128..total_len] == payload
-                && buf[94] == profile.raw_code()
-                && buf[68..70] == 128u16.to_le_bytes()
-                && buf[72..74] == page_size.to_le_bytes()
-            {
+        if let Ok(size) = filesystem.file_size(path) {
+            if size == total_len {
                 return;
             }
         }
@@ -315,13 +305,7 @@ fn write_raw_krx_package(filesystem: &mut SystemStorage, path: &str, pkg_bytes: 
     if filesystem.exists(path) {
         if let Ok(size) = filesystem.file_size(path) {
             if size == pkg_bytes.len() {
-                let mut head = [0u8; 64];
-                let hlen = head.len().min(pkg_bytes.len());
-                if let Ok(rlen) = filesystem.read_file_at(path, 0, &mut head[..hlen]) {
-                    if rlen == hlen && head[..hlen] == pkg_bytes[..hlen] {
-                        return;
-                    }
-                }
+                return;
             }
         }
         let _ = filesystem.remove(path);

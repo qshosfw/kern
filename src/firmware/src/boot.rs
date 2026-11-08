@@ -93,54 +93,38 @@ pub fn draw_crash_dialog(
     );
 
     // 2. Natural language explanation
-    gfx::text::draw_str(
-        canvas,
-        4,
-        13,
-        "Radio restarted unexpectedly",
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
-    canvas.draw_horizontal_line(4, 21, 120, gfx::Color::Fill);
-
-    gfx::text::draw_str(
-        canvas,
-        4,
-        24,
-        slot.natural_cause(),
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
-
     let mut detail_buf = [0u8; 32];
     let detail_str = slot.natural_detail(&mut detail_buf);
-    gfx::text::draw_str(
-        canvas,
-        4,
-        34,
+    let lines = [
+        "Radio restarted unexpectedly",
+        slot.natural_cause(),
         detail_str,
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
-
-    gfx::text::draw_str(
-        canvas,
-        4,
-        45,
         "Operational state restored.",
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
+    ];
+    let ys = [13i16, 24, 34, 45];
+    for i in 0..4 {
+        gfx::text::draw_str(
+            canvas,
+            4,
+            ys[i],
+            lines[i],
+            &gfx::fonts::tomthumb::FONT,
+            gfx::Color::Fill,
+        );
+    }
+    canvas.draw_horizontal_line(4, 21, 120, gfx::Color::Fill);
 
     // 3. Action Badges
     gfx::widgets::draw_key_badge(canvas, 4, 55, "OK", "Dismiss");
 
     let exit_label = match countdown_secs {
-        Some(5) => "5s",
-        Some(4) => "4s",
-        Some(3) => "3s",
-        Some(2) => "2s",
-        Some(1) => "1s",
+        Some(s) if s > 0 && s <= 5 => match s {
+            5 => "5s",
+            4 => "4s",
+            3 => "3s",
+            2 => "2s",
+            _ => "1s",
+        },
         Some(_) => "0s",
         None => "Close",
     };

@@ -39,9 +39,29 @@ fn format_size(bytes: usize) -> ShortString {
     s
 }
 
+#[inline(always)]
+pub fn app_icon_8(title: &str) -> &'static [u8; 8] {
+    let b = title.as_bytes();
+    match b.first().copied().unwrap_or(0) {
+        b'B' | b'b' => {
+            if b.get(2).copied().unwrap_or(0) == b'a' || b.get(2).copied().unwrap_or(0) == b'A' {
+                &gfx::icons::ICON_ANTENNA
+            } else {
+                &gfx::icons::ICON_APP_DIAG
+            }
+        }
+        b'T' | b't' => &gfx::icons::ICON_APP_TORCH,
+        b'S' | b's' => &gfx::icons::ICON_APP_ABOUT,
+        b'R' | b'r' => &gfx::icons::ICON_APP_RADIO,
+        b'C' | b'c' => &gfx::icons::ICON_KEYPAD,
+        _ => &gfx::icons::ICON_APPS,
+    }
+}
+
 #[inline(never)]
 pub fn populate_package_list(
     items: &mut [MenuItem],
+    icons: &mut [&'static [u8; 8]],
     _ctx: &mut SysContext,
     is_service: bool,
 ) -> usize {
@@ -50,7 +70,7 @@ pub fn populate_package_list(
 
     let cat = get_catalog();
     let mut count = 0;
-    let max = items.len();
+    let max = items.len().min(icons.len());
 
     if is_service {
         for srv in cat.services() {
@@ -61,6 +81,7 @@ pub fn populate_package_list(
                 srv.title.as_str(),
                 MenuItemType::Value(ShortString::from_str(srv.exec_type.as_str())),
             );
+            icons[count] = app_icon_8(srv.title.as_str());
             count += 1;
         }
     } else {
@@ -74,6 +95,7 @@ pub fn populate_package_list(
                 ShortString::from_str("Invalid")
             };
             items[count] = MenuItem::new(app.title.as_str(), MenuItemType::Value(info));
+            icons[count] = app_icon_8(app.title.as_str());
             count += 1;
         }
     }
@@ -83,6 +105,9 @@ pub fn populate_package_list(
             if is_service { "No Services" } else { "No Apps" },
             MenuItemType::Value(ShortString::from_str("In /apps/")),
         );
+        if !icons.is_empty() {
+            icons[0] = &gfx::icons::ICON_APPS;
+        }
         return 1;
     }
     count
