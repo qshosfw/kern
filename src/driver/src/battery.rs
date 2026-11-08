@@ -278,7 +278,7 @@ impl BatteryDriver {
                 self.pre_tx_ocv = raw_mv;
                 self.display_pct = self.calculate_percentage(raw_mv);
             } else {
-                self.smoothed_mv = ((self.smoothed_mv as u32 * 7 + raw_mv as u32 + 4) / 8) as u16;
+                self.smoothed_mv = ((self.smoothed_mv as u32 * 7 + raw_mv as u32 + 4) >> 3) as u16;
             }
         }
 
@@ -313,15 +313,15 @@ impl BatteryDriver {
             // Refine internal resistance estimate from measured instantaneous raw step sag during TX
             if self.pre_tx_ocv > raw_mv {
                 let step_sag = self.pre_tx_ocv - raw_mv;
-                if (50..=600).contains(&step_sag) {
+                if step_sag >= 50 && step_sag <= 600 {
                     let r_est = match periph.tx_power_level {
                         0 => step_sag << 1,
                         1 => step_sag,
                         _ => (((step_sag as u32) * 2) / 3) as u16,
                     };
-                    if (100..=500).contains(&r_est) {
+                    if r_est >= 100 && r_est <= 500 {
                         self.internal_res_m_ohm =
-                            ((self.internal_res_m_ohm as u32 * 7 + r_est as u32 + 4) / 8) as u16;
+                            ((self.internal_res_m_ohm as u32 * 7 + r_est as u32 + 4) >> 3) as u16;
                     }
                 }
             }
@@ -367,12 +367,12 @@ impl BatteryDriver {
                         let sag = self.ocv_mv - self.smoothed_mv;
                         if sag <= 25 {
                             self.ocv_mv = ((self.ocv_mv as u32 * 31 + self.smoothed_mv as u32 + 16)
-                                / 32) as u16;
+                                >> 5) as u16;
                         }
                     } else if self.smoothed_mv < self.base_mv.saturating_add(35) {
                         // Slight upward thermal drift <= 35 mV
                         self.ocv_mv =
-                            ((self.ocv_mv as u32 * 63 + self.smoothed_mv as u32 + 32) / 64) as u16;
+                            ((self.ocv_mv as u32 * 63 + self.smoothed_mv as u32 + 32) >> 6) as u16;
                     }
                 }
             } else {
