@@ -72,32 +72,28 @@ pub fn populate_package_list(
     let mut count = 0;
     let max = items.len().min(icons.len());
 
-    if is_service {
-        for srv in cat.services() {
-            if count >= max {
-                break;
-            }
-            items[count] = MenuItem::new(
-                srv.title.as_str(),
-                MenuItemType::Value(ShortString::from_str(srv.exec_type.as_str())),
-            );
-            icons[count] = app_icon_8(srv.title.as_str());
-            count += 1;
+    for entry in cat.entries.iter() {
+        if count >= max {
+            break;
         }
-    } else {
-        for app in cat.apps() {
-            if count >= max {
-                break;
-            }
-            let info = if app.is_valid {
-                format_size(app.size_bytes)
-            } else {
-                ShortString::from_str("Invalid")
-            };
-            items[count] = MenuItem::new(app.title.as_str(), MenuItemType::Value(info));
-            icons[count] = app_icon_8(app.title.as_str());
-            count += 1;
+        let matches = if is_service {
+            entry.is_valid && entry.exec_type != kernel::proc::krx::KrxExecType::App
+        } else {
+            !entry.is_valid || entry.exec_type == kernel::proc::krx::KrxExecType::App
+        };
+        if !matches {
+            continue;
         }
+        let info = if is_service {
+            ShortString::from_str(entry.exec_type.as_str())
+        } else if entry.is_valid {
+            format_size(entry.size_bytes)
+        } else {
+            ShortString::from_str("Invalid")
+        };
+        items[count] = MenuItem::new(entry.title.as_str(), MenuItemType::Value(info));
+        icons[count] = app_icon_8(entry.title.as_str());
+        count += 1;
     }
 
     if count == 0 && !items.is_empty() {
@@ -124,11 +120,7 @@ fn add_detail_row(items: &mut [MenuItem], n: &mut usize, title: &'static str, va
 #[inline(never)]
 pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: usize) -> usize {
     let cat = get_catalog();
-    let pkg = if is_service {
-        cat.services().nth(idx)
-    } else {
-        cat.apps().nth(idx)
-    };
+    let pkg = cat.get_entry(is_service, idx);
 
     let Some(pkg) = pkg else {
         items[0] = MenuItem::new(
@@ -168,30 +160,26 @@ pub fn handle_package_press(
     sel_idx: usize,
 ) -> bool {
     match app.current_page {
-        PageId::ManageApps => {
+        PageId::ManageApps | PageId::ManageServices => {
+            let is_service = app.current_page == PageId::ManageServices;
             let cat = get_catalog();
-            if sel_idx < cat.app_count() {
+            if sel_idx < cat.count_entries(is_service) {
                 app.selected_pkg_idx = sel_idx;
-                app.push_submenu(PageId::AppDetail, ctx);
-            }
-            true
-        }
-        PageId::ManageServices => {
-            let cat = get_catalog();
-            if sel_idx < cat.service_count() {
-                app.selected_pkg_idx = sel_idx;
-                app.push_submenu(PageId::ServiceDetail, ctx);
+                app.push_submenu(
+                    if is_service {
+                        PageId::ServiceDetail
+                    } else {
+                        PageId::AppDetail
+                    },
+                    ctx,
+                );
             }
             true
         }
         PageId::AppDetail | PageId::ServiceDetail => {
             let is_service = app.current_page == PageId::ServiceDetail;
             let cat = get_catalog();
-            let pkg = if is_service {
-                cat.services().nth(app.selected_pkg_idx)
-            } else {
-                cat.apps().nth(app.selected_pkg_idx)
-            };
+            let pkg = cat.get_entry(is_service, app.selected_pkg_idx);
 
             let Some(pkg) = pkg else {
                 return true;

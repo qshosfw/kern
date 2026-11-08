@@ -81,8 +81,11 @@ pub fn load_entries(
         // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
         let cat_ref: &'static catalog::PackageCatalog =
             &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
-        for app in cat_ref.apps() {
-            if !app.is_valid || count >= (MAX_LAUNCHER_ENTRIES - 2) {
+        for app in cat_ref.entries.iter() {
+            if !app.is_valid
+                || app.exec_type != kernel::proc::krx::KrxExecType::App
+                || count >= (MAX_LAUNCHER_ENTRIES - 2)
+            {
                 continue;
             }
 

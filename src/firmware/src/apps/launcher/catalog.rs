@@ -59,28 +59,40 @@ impl PackageCatalog {
         self.scanned = false;
     }
 
-    /// Iterator over discovered application packages (including invalid entries sorted first).
-    pub fn apps(&self) -> impl Iterator<Item = &PackageCatalogEntry> {
+    pub fn get_entry(&self, is_service: bool, idx: usize) -> Option<&PackageCatalogEntry> {
         self.entries
             .iter()
-            .filter(|e| !e.is_valid || e.exec_type == KrxExecType::App)
+            .filter(|e| {
+                if is_service {
+                    e.is_valid && e.exec_type != KrxExecType::App
+                } else {
+                    !e.is_valid || e.exec_type == KrxExecType::App
+                }
+            })
+            .nth(idx)
     }
 
-    /// Iterator over discovered background services, daemons, and drivers.
-    pub fn services(&self) -> impl Iterator<Item = &PackageCatalogEntry> {
+    pub fn count_entries(&self, is_service: bool) -> usize {
         self.entries
             .iter()
-            .filter(|e| e.is_valid && e.exec_type != KrxExecType::App)
+            .filter(|e| {
+                if is_service {
+                    e.is_valid && e.exec_type != KrxExecType::App
+                } else {
+                    !e.is_valid || e.exec_type == KrxExecType::App
+                }
+            })
+            .count()
     }
 
-    /// Count of application entries (including invalid entries flagged for cleanup).
+    #[inline(always)]
     pub fn app_count(&self) -> usize {
-        self.apps().count()
+        self.count_entries(false)
     }
 
-    /// Count of valid service packages.
+    #[inline(always)]
     pub fn service_count(&self) -> usize {
-        self.services().count()
+        self.count_entries(true)
     }
 
     /// Perform a zero-allocation discovery pass across `/apps/` in storage.
