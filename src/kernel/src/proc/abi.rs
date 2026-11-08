@@ -188,6 +188,16 @@ pub struct CapDisplayVTable {
     ),
     pub set_inverted: unsafe extern "C" fn(inverted: u8),
     pub set_contrast: unsafe extern "C" fn(contrast: u8),
+    pub draw_line_h: unsafe extern "C" fn(x: i16, y: i16, len: i16, color: u8),
+    pub draw_line_v: unsafe extern "C" fn(x: i16, y: i16, len: i16, color: u8),
+    pub draw_dotted_line_h: unsafe extern "C" fn(x0: i16, x1: i16, y: i16, step: u8, color: u8),
+    pub clear_corners: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16),
+    pub fill_rect_dither: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16, progress: u8),
+    pub invert_rect: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16),
+    pub str_width: unsafe extern "C" fn(text: *const u8, len: u16, font: u8) -> i16,
+    pub draw_char: unsafe extern "C" fn(x: i16, y: i16, ch: u8, font: u8, color: u8) -> i16,
+    pub draw_icon: unsafe extern "C" fn(x: i16, y: i16, icon_id: u8, color: u8),
+    pub scroll: unsafe extern "C" fn(dx: i8, dy: i8, fill_byte: u8),
 }
 
 /// 2. `CapRadio` VTable (`interface_id = 0x0002`)
@@ -406,6 +416,29 @@ pub struct CapUiVTable {
     pub ui_set_status_bar: unsafe extern "C" fn(sb: *const KrxStatusBar) -> u8,
     pub ui_get_status_bar: unsafe extern "C" fn(out_sb: *mut KrxStatusBar),
     pub ui_set_tray_icon: unsafe extern "C" fn(icon_id: u8) -> u8,
+    pub ui_draw_progress_bar: unsafe extern "C" fn(x: i16, y: i16, w: u8, h: u8, percent: u8, border: u8),
+    pub ui_draw_s_meter: unsafe extern "C" fn(x: i16, y: i16, rssi_dbm: i16, peak_hold: u8),
+    pub ui_draw_tag_badge: unsafe extern "C" fn(x: i16, y: i16, text: *const u8, len: u8, style: u8),
+    pub ui_draw_key_badge: unsafe extern "C" fn(x: i16, y: i16, key_str: *const u8, k_len: u8, label: *const u8, l_len: u8),
+    pub ui_draw_capsule_button: unsafe extern "C" fn(x: i16, y: i16, w: u8, h: u8, label: *const u8, l_len: u8, selected: u8),
+    pub ui_draw_scrollbar: unsafe extern "C" fn(x: u8, y: u8, h: u8, current: u16, total: u16, visible: u16),
+    pub ui_draw_menu_item: unsafe extern "C" fn(y: i16, title: *const u8, t_len: u8, value: *const u8, v_len: u8, selected: u8, icon_id: u8),
+    pub ui_draw_big_digit: unsafe extern "C" fn(x: i16, y: i16, digit: u8, color: u8),
+    pub ui_draw_small_digit: unsafe extern "C" fn(x: i16, y: i16, digit: u8, color: u8),
+    pub ui_draw_battery: unsafe extern "C" fn(x: i16, y: i16, pct: u8, charging: u8),
+    pub ui_draw_signal: unsafe extern "C" fn(x: i16, y: i16, level: u8, color: u8),
+    pub ui_draw_modal_box: unsafe extern "C" fn(w: u8, h: u8, out_origin: *mut u8),
+    pub ui_show_confirm_labels: unsafe extern "C" fn(
+        tag: u8,
+        title: *const u8,
+        t_len: u8,
+        msg: *const u8,
+        m_len: u8,
+        confirm: *const u8,
+        c_len: u8,
+        cancel: *const u8,
+        cl_len: u8,
+    ),
 }
 
 /// 10. `CapMath` VTable (`interface_id = 0x000A`)
@@ -566,6 +599,16 @@ unsafe extern "C" fn noop_draw_str_max(
 }
 unsafe extern "C" fn noop_set_inverted(_inverted: u8) {}
 unsafe extern "C" fn noop_set_contrast(_contrast: u8) {}
+unsafe extern "C" fn noop_draw_line_h(_x: i16, _y: i16, _len: i16, _color: u8) {}
+unsafe extern "C" fn noop_draw_line_v(_x: i16, _y: i16, _len: i16, _color: u8) {}
+unsafe extern "C" fn noop_draw_dotted_line_h(_x0: i16, _x1: i16, _y: i16, _step: u8, _color: u8) {}
+unsafe extern "C" fn noop_clear_corners(_x: i16, _y: i16, _w: i16, _h: i16) {}
+unsafe extern "C" fn noop_fill_rect_dither(_x: i16, _y: i16, _w: i16, _h: i16, _progress: u8) {}
+unsafe extern "C" fn noop_invert_rect(_x: i16, _y: i16, _w: i16, _h: i16) {}
+unsafe extern "C" fn noop_str_width(_text: *const u8, _len: u16, _font: u8) -> i16 { 0 }
+unsafe extern "C" fn noop_draw_char(_x: i16, _y: i16, _ch: u8, _font: u8, _color: u8) -> i16 { 6 }
+unsafe extern "C" fn noop_draw_icon(_x: i16, _y: i16, _icon_id: u8, _color: u8) {}
+unsafe extern "C" fn noop_scroll(_dx: i8, _dy: i8, _fill_byte: u8) {}
 
 unsafe extern "C" fn noop_rf_tune(_freq_hz: u32, _bw: u8, _step_hz: u32) -> u8 {
     1
@@ -840,6 +883,29 @@ unsafe extern "C" fn noop_ui_get_status_bar(out_sb: *mut KrxStatusBar) {
 unsafe extern "C" fn noop_ui_set_tray_icon(_icon_id: u8) -> u8 {
     1
 }
+unsafe extern "C" fn noop_ui_draw_progress_bar(_x: i16, _y: i16, _w: u8, _h: u8, _percent: u8, _border: u8) {}
+unsafe extern "C" fn noop_ui_draw_s_meter(_x: i16, _y: i16, _rssi_dbm: i16, _peak_hold: u8) {}
+unsafe extern "C" fn noop_ui_draw_tag_badge(_x: i16, _y: i16, _text: *const u8, _len: u8, _style: u8) {}
+unsafe extern "C" fn noop_ui_draw_key_badge(_x: i16, _y: i16, _key_str: *const u8, _k_len: u8, _label: *const u8, _l_len: u8) {}
+unsafe extern "C" fn noop_ui_draw_capsule_button(_x: i16, _y: i16, _w: u8, _h: u8, _label: *const u8, _l_len: u8, _selected: u8) {}
+unsafe extern "C" fn noop_ui_draw_scrollbar(_x: u8, _y: u8, _h: u8, _current: u16, _total: u16, _visible: u16) {}
+unsafe extern "C" fn noop_ui_draw_menu_item(_y: i16, _title: *const u8, _t_len: u8, _value: *const u8, _v_len: u8, _selected: u8, _icon_id: u8) {}
+unsafe extern "C" fn noop_ui_draw_big_digit(_x: i16, _y: i16, _digit: u8, _color: u8) {}
+unsafe extern "C" fn noop_ui_draw_small_digit(_x: i16, _y: i16, _digit: u8, _color: u8) {}
+unsafe extern "C" fn noop_ui_draw_battery(_x: i16, _y: i16, _pct: u8, _charging: u8) {}
+unsafe extern "C" fn noop_ui_draw_signal(_x: i16, _y: i16, _level: u8, _color: u8) {}
+unsafe extern "C" fn noop_ui_draw_modal_box(_w: u8, _h: u8, _out_origin: *mut u8) {}
+unsafe extern "C" fn noop_ui_show_confirm_labels(
+    _tag: u8,
+    _title: *const u8,
+    _t_len: u8,
+    _msg: *const u8,
+    _m_len: u8,
+    _confirm: *const u8,
+    _c_len: u8,
+    _cancel: *const u8,
+    _cl_len: u8,
+) {}
 
 unsafe extern "C" fn noop_sys_rand32() -> u32 {
     0x5A5A_5A5A
@@ -1043,6 +1109,16 @@ pub static STUB_DISPLAY_VTABLE: CapDisplayVTable = CapDisplayVTable {
     draw_str_max: noop_draw_str_max,
     set_inverted: noop_set_inverted,
     set_contrast: noop_set_contrast,
+    draw_line_h: noop_draw_line_h,
+    draw_line_v: noop_draw_line_v,
+    draw_dotted_line_h: noop_draw_dotted_line_h,
+    clear_corners: noop_clear_corners,
+    fill_rect_dither: noop_fill_rect_dither,
+    invert_rect: noop_invert_rect,
+    str_width: noop_str_width,
+    draw_char: noop_draw_char,
+    draw_icon: noop_draw_icon,
+    scroll: noop_scroll,
 };
 
 pub static STUB_RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
@@ -1166,6 +1242,19 @@ pub static STUB_UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_set_status_bar: noop_ui_set_status_bar,
     ui_get_status_bar: noop_ui_get_status_bar,
     ui_set_tray_icon: noop_ui_set_tray_icon,
+    ui_draw_progress_bar: noop_ui_draw_progress_bar,
+    ui_draw_s_meter: noop_ui_draw_s_meter,
+    ui_draw_tag_badge: noop_ui_draw_tag_badge,
+    ui_draw_key_badge: noop_ui_draw_key_badge,
+    ui_draw_capsule_button: noop_ui_draw_capsule_button,
+    ui_draw_scrollbar: noop_ui_draw_scrollbar,
+    ui_draw_menu_item: noop_ui_draw_menu_item,
+    ui_draw_big_digit: noop_ui_draw_big_digit,
+    ui_draw_small_digit: noop_ui_draw_small_digit,
+    ui_draw_battery: noop_ui_draw_battery,
+    ui_draw_signal: noop_ui_draw_signal,
+    ui_draw_modal_box: noop_ui_draw_modal_box,
+    ui_show_confirm_labels: noop_ui_show_confirm_labels,
 };
 
 pub static STUB_MATH_VTABLE: CapMathVTable = CapMathVTable {

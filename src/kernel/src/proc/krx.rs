@@ -2068,6 +2068,16 @@ mod tests {
             let _fb = (d.get_framebuffer)();
             (d.set_inverted)(1);
             (d.set_contrast)(31);
+            (d.draw_line_h)(0, 10, 50, 1);
+            (d.draw_line_v)(10, 0, 50, 1);
+            (d.draw_dotted_line_h)(0, 100, 25, 2, 1);
+            (d.clear_corners)(10, 10, 30, 20);
+            (d.fill_rect_dither)(10, 10, 30, 20, 8);
+            (d.invert_rect)(10, 10, 30, 20);
+            assert_eq!((d.str_width)(s.as_ptr(), 4, 0), 0);
+            assert_eq!((d.draw_char)(0, 0, b'A', 0, 1), 6);
+            (d.draw_icon)(0, 0, 0, 1);
+            (d.scroll)(0, 1, 0);
         }
 
         // 2. CapRadioVTable
@@ -2254,6 +2264,30 @@ mod tests {
             let mut read_sb = KrxStatusBar::empty();
             (u.ui_get_status_bar)(&mut read_sb);
             assert_eq!((u.ui_set_tray_icon)(15), 1);
+            (u.ui_draw_progress_bar)(0, 0, 50, 6, 75, 1);
+            (u.ui_draw_s_meter)(0, 10, -90, 8);
+            (u.ui_draw_tag_badge)(0, 20, b"FM\0".as_ptr(), 2, 1);
+            (u.ui_draw_key_badge)(0, 30, b"M\0".as_ptr(), 1, b"Menu\0".as_ptr(), 4);
+            (u.ui_draw_capsule_button)(0, 40, 40, 10, b"OK\0".as_ptr(), 2, 1);
+            (u.ui_draw_scrollbar)(120, 0, 50, 1, 10, 4);
+            (u.ui_draw_menu_item)(0, b"Item\0".as_ptr(), 4, b"Val\0".as_ptr(), 3, 1, 0);
+            (u.ui_draw_big_digit)(0, 0, 5, 1);
+            (u.ui_draw_small_digit)(20, 0, 9, 1);
+            (u.ui_draw_battery)(0, 50, 85, 1);
+            (u.ui_draw_signal)(0, 55, 4, 1);
+            let mut origin = [0u8; 2];
+            (u.ui_draw_modal_box)(60, 40, origin.as_mut_ptr());
+            (u.ui_show_confirm_labels)(
+                4,
+                title.as_ptr(),
+                6,
+                msg.as_ptr(),
+                4,
+                b"YES\0".as_ptr(),
+                3,
+                b"NO\0".as_ptr(),
+                2,
+            );
         }
 
         // 10. CapMathVTable

@@ -11,6 +11,19 @@ use kernel::service::radio::{RfAudioPath, RfChannel, RfModulation, RfSquelch, Rf
 use kernel::service::{DisplayService, PowerService};
 
 // ── 1. Display Primitive ────────────────────────────────────────────────────
+#[inline(always)]
+pub fn color_from_u8(color: u8) -> gfx::Color {
+    match color {
+        0 => gfx::Color::Clear,
+        1 => gfx::Color::Fill,
+        2 => gfx::Color::Invert,
+        3 => gfx::Color::DarkGray,
+        4 => gfx::Color::LightGray,
+        0xFF => gfx::Color::Invert,
+        _ => gfx::Color::Fill,
+    }
+}
+
 impl<'a, 'hw> SysContext<'a, 'hw> {
     #[inline(always)]
     fn active_canvas(&mut self) -> &mut gfx::Canvas {
@@ -43,30 +56,18 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
 
     fn draw_pixel(&mut self, x: i16, y: i16, color: u8) {
         if x >= 0 && y >= 0 && x < 128 && y < 64 {
-            let col = if color != 0 {
-                gfx::Color::Fill
-            } else {
-                gfx::Color::Clear
-            };
+            let col = color_from_u8(color);
             self.active_canvas().draw_pixel(x as u8, y as u8, col);
         }
     }
 
     fn draw_line(&mut self, x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
-        let col = if color != 0 {
-            gfx::Color::Fill
-        } else {
-            gfx::Color::Clear
-        };
+        let col = color_from_u8(color);
         gfx::draw::draw_line(self.active_canvas(), x0, y0, x1, y1, col);
     }
 
     fn draw_rect(&mut self, x: i16, y: i16, w: i16, h: i16, color: u8) {
-        let col = if color != 0 {
-            gfx::Color::Fill
-        } else {
-            gfx::Color::Clear
-        };
+        let col = color_from_u8(color);
         self.active_canvas().draw_rect(
             x.max(0) as u8,
             y.max(0) as u8,
@@ -77,11 +78,7 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
     }
 
     fn fill_rect(&mut self, x: i16, y: i16, w: i16, h: i16, color: u8) {
-        let col = if color != 0 {
-            gfx::Color::Fill
-        } else {
-            gfx::Color::Clear
-        };
+        let col = color_from_u8(color);
         self.active_canvas().fill_rect(
             x.max(0) as u8,
             y.max(0) as u8,
@@ -96,11 +93,7 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
     }
 
     fn draw_str(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8) {
-        let col = if color != 0 {
-            gfx::Color::Fill
-        } else {
-            gfx::Color::Clear
-        };
+        let col = color_from_u8(color);
         let canvas = self.active_canvas();
         match font_id {
             1 => gfx::text::draw_str(canvas, x, y, text, &gfx::fonts::mumatrix_regular::FONT, col),
@@ -121,11 +114,7 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
     }
 
     fn draw_str_max(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8, max_w: i16) {
-        let col = if color != 0 {
-            gfx::Color::Fill
-        } else {
-            gfx::Color::Clear
-        };
+        let col = color_from_u8(color);
         let font = match font_id {
             1 => &gfx::fonts::mumatrix_regular::FONT,
             _ => &gfx::fonts::tomthumb::FONT,
@@ -142,11 +131,7 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
     }
 
     fn draw_str_align(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8, align: u8) {
-        let col = if color != 0 {
-            gfx::Color::Fill
-        } else {
-            gfx::Color::Clear
-        };
+        let col = color_from_u8(color);
         let font = match font_id {
             1 => &gfx::fonts::mumatrix_regular::FONT,
             _ => &gfx::fonts::tomthumb::FONT,

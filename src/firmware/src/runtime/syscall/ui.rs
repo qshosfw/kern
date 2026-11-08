@@ -152,4 +152,5 @@ pub static UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_set_status_bar: api_ui_set_status_bar,
     ui_get_status_bar: api_ui_get_status_bar,
     ui_set_tray_icon: api_ui_set_tray_icon,
+    ..kernel::proc::abi::STUB_UI_VTABLE
 };

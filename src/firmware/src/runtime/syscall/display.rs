@@ -137,4 +137,5 @@ pub static DISPLAY_VTABLE: CapDisplayVTable = CapDisplayVTable {
     draw_str_max: api_draw_str_max,
     set_inverted: api_set_inverted,
     set_contrast: api_set_contrast,
+    ..kernel::proc::abi::STUB_DISPLAY_VTABLE
 };
