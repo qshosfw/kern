@@ -64,7 +64,7 @@ pub fn draw_str(canvas: &mut Canvas, x: i16, y: i16, text: &str, font: &GfxFont,
     draw_str_max_x(canvas, x, y, text, font, color, 128);
 }
 
-/// Draw a string onto the canvas up to a maximum X coordinate.
+/// Draw a string onto the canvas up to a maximum X coordinate. Returns the advanced X.
 pub fn draw_str_max_x(
     canvas: &mut Canvas,
     mut x: i16,
@@ -73,7 +73,7 @@ pub fn draw_str_max_x(
     font: &GfxFont,
     color: Color,
     max_x: i16,
-) {
+) -> i16 {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -90,6 +90,7 @@ pub fn draw_str_max_x(
         x += adv;
         i += step;
     }
+    x
 }
 
 /// Calculate the total pixel width of a string formatted with the specified GfxFont.

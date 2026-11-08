@@ -43,30 +43,6 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
     SIGNAL_WIDTH
 }
 
-/// Draw a modular status badge / indicator text (e.g. "DW", "LOCK", "MSG", "VOX")
-pub fn draw_badge(
-    canvas: &mut Canvas,
-    x: i16,
-    y: i16,
-    text: &str,
-    font: &crate::GfxFont,
-    inverted: bool,
-) -> u8 {
-    let w = crate::text::str_width(text, font);
-    if w <= 0 || x < 0 || x + w > 128 {
-        return 0;
-    }
-
-    if inverted {
-        canvas.fill_rect(x as u8, y as u8, (w + 2) as u8, 5, Color::Fill);
-        crate::text::draw_str(canvas, x + 1, y + 4, text, font, Color::Clear);
-        (w + 3) as u8
-    } else {
-        crate::text::draw_str(canvas, x, y + 4, text, font, Color::Fill);
-        (w + 1) as u8
-    }
-}
-
 /// Dynamically places and renders a status icon flowing right-to-left.
 /// Automatically calculates icon width and applies standard item spacing (`width + 2`).
 /// Returns the updated `right_limit`.
@@ -391,15 +367,12 @@ pub fn draw_status_bar_layout(
     }
     if let Some(t) = config.title {
         if !t.is_empty() {
-            let w = crate::text::str_width(t, &FONT) as i16;
-            crate::text::draw_str_max_x(canvas, left_x, 4, t, &FONT, Color::Fill, right_limit);
-            left_x += w + 2;
+            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, t, &FONT, Color::Fill, right_limit) + 2;
         }
     }
     if let Some(badge) = config.left_badge {
         if !badge.is_empty() {
-            let bw = draw_badge(canvas, left_x, 0, badge, &FONT, false) as i16;
-            left_x += bw + 2;
+            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, badge, &FONT, Color::Fill, right_limit) + 2;
         }
     }
     for &icon in config.left_icons {
