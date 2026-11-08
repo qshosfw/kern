@@ -119,9 +119,7 @@ impl<S: SerialPort> WireDriver<S> {
     #[inline(never)]
     pub fn send_response(
         &mut self,
-        service: u8,
-        opcode: u8,
-        sequence: u32,
+        header: &WireHeader,
         status: WireStatus,
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
@@ -129,9 +127,9 @@ impl<S: SerialPort> WireDriver<S> {
         let mut wire_out = [0u8; MAX_WIRE_BUF_LEN];
 
         let frame_len = self.session.frame_response(
-            service,
-            opcode,
-            sequence,
+            header.service,
+            header.opcode,
+            header.sequence,
             status,
             payload_data,
             &mut raw_buf,

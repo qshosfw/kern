@@ -126,13 +126,7 @@ impl<S: SerialPort> WireDriver<S> {
             _ => (WireStatus::Unsupported, 0),
         };
 
-        let _ = self.send_response(
-            SERVICE_CORE,
-            header.opcode,
-            header.sequence,
-            status,
-            &resp_buf[..resp_len],
-        );
+        let _ = self.send_response(header, status, &resp_buf[..resp_len]);
 
         if do_reset {
             self.session.reset();

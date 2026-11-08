@@ -100,13 +100,7 @@ fn send_resp(
     status: WireStatus,
     payload: &[u8],
 ) -> bool {
-    let _ = hw.wire.send_response(
-        header.service,
-        header.opcode,
-        header.sequence,
-        status,
-        payload,
-    );
+    let _ = hw.wire.send_response(header, status, payload);
     true
 }
 
