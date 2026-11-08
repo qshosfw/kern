@@ -227,19 +227,8 @@ impl BootSlot {
                     out[pos..pos + m_len].copy_from_slice(&MID[..m_len]);
                     pos += m_len;
 
-                    let mut val = self.panic_line;
-                    let mut temp = [0u8; 5];
-                    let mut i = 0;
-                    while val > 0 && i < 5 {
-                        temp[i] = b'0' + (val % 10) as u8;
-                        val /= 10;
-                        i += 1;
-                    }
-                    let l_len = i.min(out.len().saturating_sub(pos));
-                    for j in 0..l_len {
-                        out[pos + j] = temp[i - 1 - j];
-                    }
-                    pos += l_len;
+                    let l_str = utils::format::format_u32(self.panic_line as u32, &mut out[pos..]);
+                    pos += l_str.len();
 
                     if pos < out.len() {
                         out[pos] = b'.';
@@ -272,12 +261,10 @@ impl BootSlot {
                         let p_len = prefix.len().min(out.len());
                         out[..p_len].copy_from_slice(&prefix[..p_len]);
                         pos += p_len;
-                        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-                        let h_len = 8.min(out.len().saturating_sub(pos));
-                        for i in 0..h_len {
-                            let nibble = ((addr >> ((7 - i) * 4)) & 0xF) as usize;
-                            out[pos + i] = HEX[nibble];
-                        }
+                        let mut hbuf = [0u8; 8];
+                        let h_str = utils::format::format_hex32(addr, &mut hbuf);
+                        let h_len = h_str.len().min(out.len().saturating_sub(pos));
+                        out[pos..pos + h_len].copy_from_slice(h_str.as_bytes());
                         pos += h_len;
                         if pos < out.len() {
                             out[pos] = b'.';
