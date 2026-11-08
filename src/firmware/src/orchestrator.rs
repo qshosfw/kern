@@ -156,6 +156,14 @@ fn record_proc_stack(app_id: usize) {
     }
 }
 
+#[inline(never)]
+fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) {
+    if let Err(err) = crate::apps::runtime::launch_krx_package(ctx, path) {
+        ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
+        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+    }
+}
+
 impl Orchestrator {
     pub fn new(startup_app: usize) -> Self {
         init_proc_table();
@@ -964,27 +972,13 @@ impl Orchestrator {
                 #[cfg(feature = "app_explorer")]
                 crate::apps::explorer::launch_explorer(ctx);
                 #[cfg(not(feature = "app_explorer"))]
-                {
-                    if let Err(err) =
-                        crate::apps::runtime::launch_krx_package(ctx, "/apps/explorer.krx")
-                    {
-                        ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
-                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
-                    }
-                }
+                launch_krx_shortcut(ctx, "/apps/explorer.krx");
             }
             Shortcut::TaskManager => {
                 #[cfg(feature = "app_tasks")]
                 self.switch_app(ctx, APP_ID_TASKS);
                 #[cfg(not(feature = "app_tasks"))]
-                {
-                    if let Err(err) =
-                        crate::apps::runtime::launch_krx_package(ctx, "/apps/sysinfo.krx")
-                    {
-                        ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
-                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
-                    }
-                }
+                launch_krx_shortcut(ctx, "/apps/sysinfo.krx");
             }
             Shortcut::Settings => self.switch_app(ctx, APP_ID_SETTINGS),
             Shortcut::LockKeypad => self.toggle_keypad_lock(),
