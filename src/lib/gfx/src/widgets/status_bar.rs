@@ -200,11 +200,18 @@ impl<'a> StatusRightConfig<'a> {
 
     #[inline(always)]
     pub fn inverted(&self) -> bool {
-        (self.flags & STATUS_FLAG_INVERTED) != 0
+        #[cfg(feature = "inverted_status")]
+        {
+            (self.flags & STATUS_FLAG_INVERTED) != 0
+        }
+        #[cfg(not(feature = "inverted_status"))]
+        {
+            false
+        }
     }
 
     /// Draw DeltaFW-style high precision battery icon directly using config parameters
-    #[inline(always)]
+    #[inline(never)]
     pub fn draw_battery(&self, canvas: &mut Canvas, x: u8, y: u8) {
         let (fg, bg) = if self.inverted() {
             (Color::Clear, Color::Fill)

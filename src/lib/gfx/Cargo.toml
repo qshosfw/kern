@@ -12,4 +12,5 @@ heapless = { workspace = true }
 [features]
 default = []
 grayscale = ["kernel/grayscale"]
+inverted_status = []
 
