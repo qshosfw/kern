@@ -152,6 +152,37 @@ impl SettingsApp {
         }
     }
 
+    fn dispatch_view_event(&mut self, ctx: &mut SysContext, event: &Event) -> bool {
+        let prev_idx = self.selected_idx;
+        let was_editing = self.is_editing;
+        let mut model = MenuModelMut {
+            items: &mut self.items[..self.items_len],
+            selected_idx: self.selected_idx,
+            nav_layout: ctx.config.keys.nav_layout,
+            is_editing: self.is_editing,
+            is_pressed: self.is_pressed,
+        };
+
+        let handled = self.view.on_event(&mut model, event);
+
+        self.selected_idx = model.selected_idx;
+        self.is_editing = model.is_editing;
+        self.is_pressed = model.is_pressed;
+
+        if handled {
+            if self.selected_idx != prev_idx
+                && ctx.config.audio.key_beep != 0
+                && matches!(event, Event::Tick | Event::Encoder(_))
+            {
+                ctx.play_beep(crate::services::melody::BeepType::Scroll);
+            }
+            if self.is_editing || was_editing {
+                self.update_config_from_menu(ctx);
+            }
+        }
+        handled
+    }
+
     #[inline(never)]
     fn handle_menu_screen_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
         self.view.animated = ctx.config.display.animations_enabled();
@@ -247,29 +278,7 @@ impl SettingsApp {
                 }
             }
 
-            let prev_idx = self.selected_idx;
-            let mut model = MenuModelMut {
-                items: &mut self.items[..self.items_len],
-                selected_idx: self.selected_idx,
-                nav_layout: ctx.config.keys.nav_layout,
-                is_editing: self.is_editing,
-                is_pressed: self.is_pressed,
-            };
-
-            let was_editing = self.is_editing;
-            let handled = self.view.on_event(&mut model, event);
-
-            self.selected_idx = model.selected_idx;
-            self.is_editing = model.is_editing;
-            self.is_pressed = model.is_pressed;
-
-            if handled && self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
-                ctx.play_beep(crate::services::melody::BeepType::Scroll);
-            }
-
-            if handled && (self.is_editing || was_editing) {
-                self.update_config_from_menu(ctx);
-            }
+            let handled = self.dispatch_view_event(ctx, event);
 
             if animating || handled || self.slide_offset_x != 0 || self.view.scroller.is_animating()
             {
@@ -279,35 +288,7 @@ impl SettingsApp {
         }
 
         // 5. Handle directional navigation & list scrolling (Up, Down, Encoder, etc.)
-        let prev_idx = self.selected_idx;
-        let was_editing = self.is_editing;
-        let handled = {
-            let mut model = MenuModelMut {
-                items: &mut self.items[..self.items_len],
-                selected_idx: self.selected_idx,
-                nav_layout: ctx.config.keys.nav_layout,
-                is_editing: self.is_editing,
-                is_pressed: self.is_pressed,
-            };
-
-            let handled = self.view.on_event(&mut model, event);
-
-            self.selected_idx = model.selected_idx;
-            self.is_editing = model.is_editing;
-            self.is_pressed = model.is_pressed;
-
-            handled
-        };
-
-        if handled {
-            if let Event::Encoder(_) = event {
-                if self.selected_idx != prev_idx && ctx.config.audio.key_beep != 0 {
-                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
-                }
-            }
-            if was_editing || self.is_editing {
-                self.update_config_from_menu(ctx);
-            }
+        if self.dispatch_view_event(ctx, event) {
             return EventResult::Consumed;
         }
 
