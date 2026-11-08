@@ -1724,7 +1724,7 @@ mod tests {
                     if ev.is_key() {
                         1 // Consumed
                     } else if ev.is_radio_bus() {
-                        let _freq = unsafe { (table.rf_get_freq)() };
+                        let _freq = unsafe { ((*table.radio).rf_get_freq)() };
                         1 // Consumed
                     } else {
                         0 // Ignored
@@ -1732,8 +1732,8 @@ mod tests {
                 }
                 KRX_OP_RENDER => {
                     unsafe {
-                        (table.draw_rect)(0, 0, 128, 64, 1);
-                        (table.commit_frame)();
+                        ((*table.display).draw_rect)(0, 0, 128, 64, 1);
+                        ((*table.display).commit_frame)();
                     }
                     0
                 }
@@ -1964,7 +1964,7 @@ mod tests {
             match op {
                 KRX_OP_START => {
                     state.freq = 145_500_000;
-                    unsafe { (table.rf_tune)(state.freq, 25, 12_500) };
+                    unsafe { ((*table.radio).rf_tune)(state.freq, 25, 12_500) };
                     0
                 }
                 KRX_OP_EVENT => {
@@ -1986,9 +1986,9 @@ mod tests {
                 KRX_OP_RENDER => {
                     state.rendered_frames += 1;
                     unsafe {
-                        (table.draw_rect)(0, 0, 128, 64, 1);
-                        (table.draw_str)(16, 26, b"BEACON".as_ptr(), 6, 0, 1);
-                        (table.commit_frame)();
+                        ((*table.display).draw_rect)(0, 0, 128, 64, 1);
+                        ((*table.display).draw_str)(16, 26, b"BEACON".as_ptr(), 6, 0, 1);
+                        ((*table.display).commit_frame)();
                     }
                     0
                 }
