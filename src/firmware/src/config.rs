@@ -395,6 +395,17 @@ static APPS_RULES: [BoundsRule; 5] = [
 ];
 
 impl MasterConfig {
+    pub const DEFAULT: Self = Self {
+        display: DisplayConfig::DEFAULT,
+        audio: AudioConfig::DEFAULT,
+        keys: KeyConfig::DEFAULT,
+        system: SystemConfig::DEFAULT,
+        battery: BatteryConfig::DEFAULT,
+        apps: AppsConfig::DEFAULT,
+        dirty: 0,
+        hw_dirty: 0,
+    };
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -402,16 +413,9 @@ impl MasterConfig {
     #[inline(never)]
     pub unsafe fn init_in_place(ptr: *mut Self) {
         unsafe {
-            core::ptr::write_bytes(ptr as *mut u8, 0, core::mem::size_of::<Self>());
-            (*ptr).display = DisplayConfig::new();
-            (*ptr).audio = AudioConfig::new();
-            let sys = SystemConfig::new();
-            let mut keys = KeyConfig::new();
-            keys.nav_layout = sys.nav_layout();
-            (*ptr).keys = keys;
-            (*ptr).system = sys;
-            (*ptr).battery = BatteryConfig::new();
-            (*ptr).apps = AppsConfig::new();
+            core::ptr::write(ptr, Self::DEFAULT);
+            let nav = (*ptr).system.nav_layout();
+            (*ptr).keys.nav_layout = nav;
         }
     }
 
@@ -470,7 +474,7 @@ impl MasterConfig {
         let mut repaired = 0u8;
 
         if self.system.version != SystemConfig::VERSION {
-            self.system = SystemConfig::new();
+            self.system = SystemConfig::DEFAULT;
             repaired |= DIRTY_SYSTEM;
         }
         if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > 4 {
@@ -493,7 +497,7 @@ impl MasterConfig {
 
         let expected_nav = self.system.nav_layout();
         if !check_bounds(self.keys.as_bytes(), KeyConfig::VERSION, &KEY_RULES) {
-            let mut def = KeyConfig::new();
+            let mut def = KeyConfig::DEFAULT;
             def.nav_layout = expected_nav;
             self.keys = def;
             repaired |= DIRTY_KEYS;
@@ -503,7 +507,7 @@ impl MasterConfig {
         }
 
         if self.battery.version != BatteryConfig::VERSION {
-            self.battery = BatteryConfig::new();
+            self.battery = BatteryConfig::DEFAULT;
             repaired |= DIRTY_BATTERY;
         }
         if self.system.is_k1() {
@@ -524,7 +528,7 @@ impl MasterConfig {
             || self.battery.calib_tweak_mv > 500
         {
             let btype = self.battery.battery_type;
-            self.battery = BatteryConfig::new();
+            self.battery = BatteryConfig::DEFAULT;
             self.battery.battery_type = btype;
             repaired |= DIRTY_BATTERY;
         }
@@ -534,17 +538,17 @@ impl MasterConfig {
             DisplayConfig::VERSION,
             &DISPLAY_RULES,
         ) {
-            self.display = DisplayConfig::new();
+            self.display = DisplayConfig::DEFAULT;
             repaired |= DIRTY_DISPLAY;
         }
 
         if !check_bounds(self.audio.as_bytes(), AudioConfig::VERSION, &AUDIO_RULES) {
-            self.audio = AudioConfig::new();
+            self.audio = AudioConfig::DEFAULT;
             repaired |= DIRTY_AUDIO;
         }
 
         if !check_bounds(self.apps.as_bytes(), AppsConfig::VERSION, &APPS_RULES) {
-            self.apps = AppsConfig::new();
+            self.apps = AppsConfig::DEFAULT;
             repaired |= DIRTY_APPS;
         }
 

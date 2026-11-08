@@ -25,6 +25,8 @@ pub struct KeyConfig {
 }
 
 impl KeyConfig {
+    pub const DEFAULT: Self = Self::new();
+
     pub const fn new() -> Self {
         Self {
             version: 2,

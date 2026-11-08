@@ -18,6 +18,8 @@ pub struct DisplayConfig {
 }
 
 impl DisplayConfig {
+    pub const DEFAULT: Self = Self::new();
+
     pub const fn new() -> Self {
         Self {
             version: 3,

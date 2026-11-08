@@ -23,6 +23,8 @@ fn ascii_or<'a>(bytes: &'a [u8], default: &'a str) -> &'a str {
 }
 
 impl SystemConfig {
+    pub const DEFAULT: Self = Self::new();
+
     pub const fn new() -> Self {
         Self {
             version: 4,

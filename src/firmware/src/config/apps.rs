@@ -22,6 +22,8 @@ pub struct AppsConfig {
 config_block!(AppsConfig, "/pref/apps.cfg", 1);
 
 impl AppsConfig {
+    pub const DEFAULT: Self = Self::new();
+
     pub const fn new() -> Self {
         Self {
             version: 1,

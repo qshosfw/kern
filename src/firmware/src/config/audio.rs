@@ -16,6 +16,8 @@ pub struct AudioConfig {
 }
 
 impl AudioConfig {
+    pub const DEFAULT: Self = Self::new();
+
     pub const fn new() -> Self {
         let mut cfg = Self {
             version: 3,

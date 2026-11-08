@@ -15,6 +15,8 @@ pub struct BatteryConfig {
 }
 
 impl BatteryConfig {
+    pub const DEFAULT: Self = Self::new();
+
     pub const fn new() -> Self {
         Self {
             version: 1,
