@@ -117,13 +117,12 @@ pub fn draw_crash_dialog(
     // 3. Action Badges
     gfx::widgets::draw_key_badge(canvas, 4, 55, "OK", "Dismiss");
 
+    let mut exit_buf = [b'0', b's'];
     let exit_label = match countdown_secs {
-        Some(5) => "5s",
-        Some(4) => "4s",
-        Some(3) => "3s",
-        Some(2) => "2s",
-        Some(1) => "1s",
-        Some(_) => "0s",
+        Some(s) => {
+            exit_buf[0] = b'0' + s.min(9);
+            unsafe { core::str::from_utf8_unchecked(&exit_buf) }
+        }
         None => "Close",
     };
     gfx::widgets::draw_key_badge_right(canvas, 124, 55, "EXIT", exit_label);
