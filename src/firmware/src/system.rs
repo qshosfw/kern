@@ -57,6 +57,17 @@ fn is_plugged_in(hw: &SystemHardware) -> bool {
 }
 
 #[inline(never)]
+fn drain_keypad_matrix(hw: &mut SystemHardware) {
+    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+        py32_hal::wdt::Watchdog::feed();
+        py32_hal::delay::delay_ms(10);
+    }
+    drivers::keyboard::KeypadScanner::reset_gpio_pins();
+    hw.orchestrator.reset_hold_tracking();
+    hw.key_scanner.clear();
+}
+
+#[inline(never)]
 fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // 1. Play gentle descending power-down cue
     hw.radio
@@ -85,12 +96,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     }
 
     // 4. Wait for key release before entering sleep loop to prevent immediate wake
-    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
-        py32_hal::wdt::Watchdog::feed();
-        py32_hal::delay::delay_ms(10);
-    }
-    drivers::keyboard::KeypadScanner::reset_gpio_pins();
-    hw.orchestrator.reset_hold_tracking();
+    drain_keypad_matrix(hw);
 
     // 5. Downclock to direct 16 MHz HSI, shut off analog PLL, and set flash to 0WS
     // This dramatically cuts dynamic core power and eliminates PLL analog consumption.
@@ -147,23 +153,9 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         if exit_press_start.is_none() && now.wrapping_sub(next_blink_ms) < 0x8000_0000 {
             // Heartbeat: strobe Red status LED briefly (10ms) via BK4829 GPIO1
             hw.radio.set_status_led(bsp::StatusLed::Red);
-            let pulse_start = py32_hal::delay::millis();
-            while py32_hal::delay::millis().wrapping_sub(pulse_start) < 10 {
-                py32_hal::wdt::Watchdog::feed();
-                #[cfg(feature = "uart")]
-                if py32_hal::uart::is_readable() {
-                    hw.radio.set_status_led(bsp::StatusLed::Off);
-                    break 'sleep_loop;
-                }
-                if drivers::keyboard::KeypadScanner::poll_matrix() == Some(KeyCode::Exit) {
-                    exit_press_start = Some(py32_hal::delay::millis());
-                    break;
-                }
-            }
-            if exit_press_start.is_none() {
-                hw.radio.set_status_led(bsp::StatusLed::Off);
-            }
-            next_blink_ms = py32_hal::delay::millis().wrapping_add(5000);
+            py32_hal::delay::delay_ms(10);
+            hw.radio.set_status_led(bsp::StatusLed::Off);
+            next_blink_ms = now.wrapping_add(5000);
         }
 
         if exit_press_start.is_some() {
@@ -176,12 +168,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     hw.radio.set_status_led(bsp::StatusLed::Off);
 
     // Wait for key release upon waking to prevent spurious key events
-    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
-        py32_hal::wdt::Watchdog::feed();
-        py32_hal::delay::delay_ms(10);
-    }
-    drivers::keyboard::KeypadScanner::reset_gpio_pins();
-    hw.orchestrator.reset_hold_tracking();
+    drain_keypad_matrix(hw);
 
     // 7. Wakeup & Hardware Restoration
     // Restore system clocks cleanly based on configuration
@@ -235,13 +222,8 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     hw.radio
         .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
 
-    // Wait for waking Exit key to be released so it doesn't trigger spurious actions in active app
-    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
-        py32_hal::wdt::Watchdog::feed();
-        py32_hal::delay::delay_ms(10);
-    }
-    drivers::keyboard::KeypadScanner::reset_gpio_pins();
-    hw.key_scanner.clear();
+    // Ensure matrix is clean before returning to event dispatch
+    drain_keypad_matrix(hw);
 
     // Reset power service inactivity tracking
     unsafe {
