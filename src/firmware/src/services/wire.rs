@@ -16,8 +16,7 @@ use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
 use crate::services::storage::DirEntryInfo;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{
-    ModulationMode, PowerService, RfFineTuning, RfModulation, RfPowerLevel, RfPowerSequencer,
-    RfSquelch,
+    ModulationMode, PowerService, RfFineTuning, RfModulation, RfPowerLevel, RfSquelch,
 };
 use kernel::wire::*;
 use utils::units::Frequency;
@@ -342,7 +341,6 @@ fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, n
     send_resp(hw, header, WireStatus::Ok, &resp[..4 + len])
 }
 
-#[inline(never)]
 fn set_radio_facet(
     facet: u16,
     instance: u8,
@@ -382,13 +380,9 @@ fn set_radio_facet(
             let should_tx = get_u8(val)? != 0;
             vfo.tx_active = should_tx;
             if should_tx {
-                hw.radio.tx_prepare();
-                hw.radio.tx_ramp_up(1);
-                hw.radio.tx_unmute();
+                radio_state.coord.start_tx(&mut hw.radio);
             } else {
-                hw.radio.tx_mute();
-                hw.radio.tx_ramp_down();
-                hw.radio.tx_conclude();
+                radio_state.coord.stop_tx(&mut hw.radio);
             }
             Ok(())
         }
