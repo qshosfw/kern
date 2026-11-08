@@ -204,7 +204,7 @@ impl<'a> StatusRightConfig<'a> {
     }
 
     /// Draw DeltaFW-style high precision battery icon directly using config parameters
-    #[inline(never)]
+    #[inline(always)]
     pub fn draw_battery(&self, canvas: &mut Canvas, x: u8, y: u8) {
         let (fg, bg) = if self.inverted() {
             (Color::Clear, Color::Fill)
@@ -214,12 +214,8 @@ impl<'a> StatusRightConfig<'a> {
         let start_x = x;
         let work_end_x = start_x + 11;
 
-        canvas.draw_horizontal_line(start_x + 1, y, 10, fg);
-        canvas.draw_horizontal_line(start_x + 1, y + 4, 10, fg);
+        canvas.draw_rect(start_x, y, 12, 5, fg);
         canvas.draw_vertical_line(start_x - 1, y + 1, 3, fg);
-        canvas.draw_vertical_line(start_x, y, 5, fg);
-        canvas.draw_vertical_line(work_end_x, y, 5, fg);
-
         canvas.fill_rect(start_x + 1, y + 1, 10, 3, bg);
 
         let (full_bars, partial) = if self.shading_mode == 2 {
@@ -286,8 +282,11 @@ impl<'a> StatusRightConfig<'a> {
         }
 
         // 2. Charging bolt (closer spacing preserved) or low battery warning
+        let y_icon = y_offset as i16;
         if self.is_charging() {
-            right_limit = draw_status_bolt(canvas, right_limit, y_offset as i16, has_bat_icon, fg);
+            let step = if has_bat_icon { 7 } else { 5 };
+            right_limit -= step;
+            crate::icons::draw_icon_5x5(canvas, right_limit, y_icon, crate::icons::Icon::Bolt, fg);
         } else if self.is_low() {
             right_limit -= if has_bat_icon { 5 } else { 4 };
             crate::text::draw_char(canvas, right_limit, y_text, '!', &FONT, fg);
@@ -297,8 +296,12 @@ impl<'a> StatusRightConfig<'a> {
         // Shows when USB is connected or serial is active; disappears cleanly when unplugged/inactive.
         // Spacing is normal (7px width + 2px spacing = 9px).
         if self.is_usb() || self.serial_active() {
-            right_limit =
-                draw_status_plug(canvas, right_limit, y_offset as i16, self.serial_active(), fg);
+            let plug_icon = if self.serial_active() {
+                crate::icons::Icon::SerialActive
+            } else {
+                crate::icons::Icon::Plug
+            };
+            right_limit = draw_status_icon(canvas, right_limit, y_icon, plug_icon, fg);
         }
 
         // 4. Battery Text Reading (Voltage, Percentage, or MCU Temperature)
@@ -319,13 +322,13 @@ impl<'a> StatusRightConfig<'a> {
         if !self.inverted() {
             if self.is_f_active() {
                 right_limit -= 7;
-                draw_f_key(canvas, right_limit, y_offset as i16);
+                draw_f_key(canvas, right_limit, y_icon);
             }
             if self.is_keypad_locked() {
                 right_limit = draw_status_icon(
                     canvas,
                     right_limit,
-                    y_offset as i16,
+                    y_icon,
                     crate::icons::Icon::Lock,
                     Color::Fill,
                 );
@@ -334,7 +337,7 @@ impl<'a> StatusRightConfig<'a> {
 
         // 6. Dynamic Application & Subsystem Icons
         for &icon in self.dynamic_icons {
-            right_limit = draw_status_icon(canvas, right_limit, y_offset as i16, icon, fg);
+            right_limit = draw_status_icon(canvas, right_limit, y_icon, icon, fg);
         }
 
         right_limit
