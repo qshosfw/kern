@@ -34,10 +34,12 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
     canvas.draw_pixel(ux + 2, uy, color);
 
     // 2. Progressive signal bars (1 to 5) with 1px spacers
-    for i in 1..=5 {
+    let mut i = 1u8;
+    while i <= 5 {
         if level >= i {
             canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
         }
+        i += 1;
     }
 
     SIGNAL_WIDTH
@@ -368,11 +370,14 @@ pub fn draw_status_bar_layout(
         draw_signal(canvas, left_x, 0, lvl, Color::Fill);
         left_x += (SIGNAL_WIDTH as i16) + 2;
     }
-    for &opt_str in &[config.title, config.left_badge] {
-        if let Some(s) = opt_str {
-            if !s.is_empty() {
-                left_x = crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit) + 2;
-            }
+    if let Some(s) = config.title {
+        if !s.is_empty() {
+            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit) + 2;
+        }
+    }
+    if let Some(s) = config.left_badge {
+        if !s.is_empty() {
+            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit) + 2;
         }
     }
     for &icon in config.left_icons {

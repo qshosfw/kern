@@ -167,14 +167,13 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
         self.region_count = 0;
     }
 
-    /// Configure memory layout in-place for P0 Structured Paged applications (§5.1).
+    /// Configure memory layout in-place with optional overlay window.
     #[inline(never)]
-    pub fn init_p0_structured(
+    pub fn init_regions(
         &mut self,
         code_vma: u32,
         code_size: u32,
-        overlay_vma: u32,
-        overlay_size: u32,
+        overlay: Option<(u32, u32)>,
         ram_vma: u32,
         ram_size: u32,
     ) {
@@ -185,18 +184,34 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
             code_vma,
             code_size,
         ));
-        let _ = self.add_region(MemoryRegionDescriptor::new(
-            RegionKind::OverlayWindow,
-            region_flags::READ | region_flags::EXEC,
-            overlay_vma,
-            overlay_size,
-        ));
+        if let Some((ov_vma, ov_size)) = overlay {
+            let _ = self.add_region(MemoryRegionDescriptor::new(
+                RegionKind::OverlayWindow,
+                region_flags::READ | region_flags::EXEC,
+                ov_vma,
+                ov_size,
+            ));
+        }
         let _ = self.add_region(MemoryRegionDescriptor::new(
             RegionKind::VirtualRam,
             region_flags::READ | region_flags::WRITE,
             ram_vma,
             ram_size,
         ));
+    }
+
+    /// Configure memory layout in-place for P0 Structured Paged applications (§5.1).
+    #[inline(always)]
+    pub fn init_p0_structured(
+        &mut self,
+        code_vma: u32,
+        code_size: u32,
+        overlay_vma: u32,
+        overlay_size: u32,
+        ram_vma: u32,
+        ram_size: u32,
+    ) {
+        self.init_regions(code_vma, code_size, Some((overlay_vma, overlay_size)), ram_vma, ram_size);
     }
 
     /// Construct a memory layout for P0 Structured Paged applications (§5.1).
@@ -221,21 +236,9 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
     }
 
     /// Configure memory layout in-place for N1 Native PIC applications (§6.1).
-    #[inline(never)]
+    #[inline(always)]
     pub fn init_native_pic(&mut self, code_vma: u32, code_size: u32, ram_vma: u32, ram_size: u32) {
-        self.reset();
-        let _ = self.add_region(MemoryRegionDescriptor::new(
-            RegionKind::ImmutableCode,
-            region_flags::READ | region_flags::EXEC,
-            code_vma,
-            code_size,
-        ));
-        let _ = self.add_region(MemoryRegionDescriptor::new(
-            RegionKind::VirtualRam,
-            region_flags::READ | region_flags::WRITE,
-            ram_vma,
-            ram_size,
-        ));
+        self.init_regions(code_vma, code_size, None, ram_vma, ram_size);
     }
 
     /// Construct a memory layout for N1 Native PIC applications (§6.1).

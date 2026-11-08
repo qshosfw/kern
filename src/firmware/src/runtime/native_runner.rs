@@ -419,45 +419,37 @@ pub fn load_native_from_storage(
 
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
-    if profile.is_structured_paged() {
-        let code_size = if exec.got_offset > 0 {
-            (exec.got_offset as u32).min(overlay_vma.saturating_sub(load_base))
-        } else {
-            (payload_len as u32).min(overlay_vma.saturating_sub(load_base))
-        };
-        let ram_vma = if exec.got_offset > 0 {
-            slot.got_base
-        } else {
-            load_base.saturating_add(code_size)
-        };
-        let ram_size = overlay_vma.saturating_sub(ram_vma);
-        slot.mem_layout.init_p0_structured(
-            load_base,
-            code_size,
-            overlay_vma,
-            overlay_size,
-            ram_vma,
-            ram_size,
-        );
+    let is_p0 = profile.is_structured_paged();
+    let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS as u32 * 4;
+    let limit_vma = if is_p0 {
+        overlay_vma
     } else {
-        let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS as u32 * 4;
-        let code_size = if slot.is_paged {
-            (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
-                .min(PAGED_CACHE_MAX_BYTES as u32)
-        } else if exec.got_offset > 0 {
-            (exec.got_offset as u32).min(max_arena_bytes)
-        } else {
-            (payload_len as u32).min(max_arena_bytes)
-        };
-        let ram_vma = if !slot.is_paged && exec.got_offset > 0 {
-            slot.got_base
-        } else {
-            load_base.saturating_add(code_size)
-        };
-        let ram_size = (load_base + max_arena_bytes).saturating_sub(ram_vma);
-        slot.mem_layout
-            .init_native_pic(load_base, code_size, ram_vma, ram_size);
-    }
+        load_base + max_arena_bytes
+    };
+    let code_limit = limit_vma.saturating_sub(load_base);
+
+    let code_size = if slot.is_paged && !is_p0 {
+        (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
+            .min(PAGED_CACHE_MAX_BYTES as u32)
+    } else if exec.got_offset > 0 {
+        (exec.got_offset as u32).min(code_limit)
+    } else {
+        (payload_len as u32).min(code_limit)
+    };
+
+    let ram_vma = if !slot.is_paged && exec.got_offset > 0 {
+        slot.got_base
+    } else {
+        load_base.saturating_add(code_size)
+    };
+    let ram_size = limit_vma.saturating_sub(ram_vma);
+    let overlay = if is_p0 {
+        Some((overlay_vma, overlay_size))
+    } else {
+        None
+    };
+    slot.mem_layout
+        .init_regions(load_base, code_size, overlay, ram_vma, ram_size);
 
     // 5. Flush instruction pipeline before branching into SRAM arena
     flush_instruction_pipeline();
