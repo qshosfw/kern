@@ -157,7 +157,6 @@ fn get_i16_le(val: &[u8]) -> Result<i16, WireStatus> {
     }
 }
 
-#[inline(never)]
 fn read_sys_facet(
     facet: u16,
     hw: &SystemHardware,
@@ -205,7 +204,6 @@ fn read_sys_facet(
     }
 }
 
-#[inline(never)]
 fn read_radio_facet(
     facet: u16,
     instance: u8,
@@ -258,7 +256,6 @@ fn read_radio_facet(
     }
 }
 
-#[inline(never)]
 fn read_ui_facet(facet: u16, hw: &SystemHardware, out: &mut [u8]) -> Result<usize, WireStatus> {
     match facet {
         FACET_UI_SURFACE => {
