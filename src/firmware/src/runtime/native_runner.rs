@@ -576,23 +576,44 @@ pub unsafe fn invoke_krx_native(
     }
 }
 
+#[inline(never)]
+unsafe fn invoke_guest(
+    op: u32,
+    ctx: *mut SysContext<'static, 'static>,
+    canvas: *mut Canvas,
+    param: *const (),
+) -> u32 {
+    let slot = slot_ref();
+    if !slot.is_loaded || slot.entry_point == 0 {
+        return 0xFFFF_FFFF;
+    }
+    unsafe {
+        ACTIVE_CTX = ctx;
+        ACTIVE_CANVAS = canvas;
+        let res = invoke_krx_native(
+            slot.entry_point,
+            slot.got_base,
+            op,
+            &raw const NATIVE_API_TABLE,
+            param,
+        );
+        ACTIVE_CANVAS = core::ptr::null_mut();
+        ACTIVE_CTX = core::ptr::null_mut();
+        res
+    }
+}
+
 pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
-    let slot = slot_mut();
-    if slot.is_loaded && slot.entry_point != 0 {
-        unsafe {
-            ACTIVE_CTX = ctx as *mut _;
-            let res = invoke_krx_native(
-                slot.entry_point,
-                slot.got_base,
-                KRX_OP_START,
-                &raw const NATIVE_API_TABLE,
-                core::ptr::null(),
-            );
-            ACTIVE_CTX = core::ptr::null_mut();
-            if res == 0xFFFF_FFFF {
-                slot.is_loaded = false;
-            }
-        }
+    let res = unsafe {
+        invoke_guest(
+            KRX_OP_START,
+            ctx as *mut _,
+            core::ptr::null_mut(),
+            core::ptr::null(),
+        )
+    };
+    if res == 0xFFFF_FFFF {
+        slot_mut().is_loaded = false;
     }
 }
 
@@ -601,61 +622,78 @@ pub unsafe fn native_on_event(
     ctx: &mut SysContext<'static, 'static>,
     ev: &Event,
 ) -> EventResult {
-    let slot = slot_ref();
-    if slot.is_loaded && slot.entry_point != 0 {
-        unsafe {
-            ACTIVE_CTX = ctx as *mut _;
-            let (kind_val, key_val, flags_val, payload_val) = match ev {
-                Event::Key { code, state } => {
-                    let s_val = match state {
-                        KeyState::Pressed => 0u32,
-                        KeyState::Released => 1u32,
-                        KeyState::Held => 2u32,
-                    };
-                    (KRX_EV_KEY, *code as u8, 0u8, s_val)
-                }
-                Event::Encoder(dir) => (KRX_EV_ENCODER, 0u8, 0u8, *dir as u32),
-                Event::Tick => (KRX_EV_TICK, 0u8, 0u8, 0u32),
-                Event::Bus(bus_ev) => (
-                    KRX_EV_BUS,
-                    bus_ev.event_id,
-                    (bus_ev.topic.0 & 0xFF) as u8,
-                    bus_ev.data,
-                ),
-                Event::Usb(usb_ev) => (KRX_EV_USB, *usb_ev as u8, 0u8, 0u32),
-                Event::Charging(chg) => (KRX_EV_POWER, *chg as u8, 0u8, 0u32),
-                Event::Sys(sys_ev) => (
-                    kernel::proc::abi::KRX_EV_IPC,
-                    sys_ev.target,
-                    sys_ev.command,
-                    sys_ev.arg as u32,
-                ),
-                _ => (KRX_EV_NONE, 0u8, 0u8, 0u32),
+    let krx_ev = match ev {
+        Event::Key { code, state } => {
+            let s_val = match state {
+                KeyState::Pressed => 0u32,
+                KeyState::Released => 1u32,
+                KeyState::Held => 2u32,
             };
-            if kind_val == KRX_EV_NONE {
-                ACTIVE_CTX = core::ptr::null_mut();
-                return EventResult::Ignored;
-            }
-            let krx_ev = KrxEvent {
-                kind: kind_val,
-                key: key_val,
-                flags: flags_val,
+            Some(KrxEvent {
+                kind: KRX_EV_KEY,
+                key: *code as u8,
+                flags: 0,
                 reserved: 0,
-                payload: payload_val,
-            };
-            let res = invoke_krx_native(
-                slot.entry_point,
-                slot.got_base,
+                payload: s_val,
+            })
+        }
+        Event::Encoder(dir) => Some(KrxEvent {
+            kind: KRX_EV_ENCODER,
+            key: 0,
+            flags: 0,
+            reserved: 0,
+            payload: *dir as u32,
+        }),
+        Event::Tick => Some(KrxEvent {
+            kind: KRX_EV_TICK,
+            key: 0,
+            flags: 0,
+            reserved: 0,
+            payload: 0,
+        }),
+        Event::Bus(bus_ev) => Some(KrxEvent {
+            kind: KRX_EV_BUS,
+            key: bus_ev.event_id,
+            flags: (bus_ev.topic.0 & 0xFF) as u8,
+            reserved: 0,
+            payload: bus_ev.data,
+        }),
+        Event::Usb(usb_ev) => Some(KrxEvent {
+            kind: KRX_EV_USB,
+            key: *usb_ev as u8,
+            flags: 0,
+            reserved: 0,
+            payload: 0,
+        }),
+        Event::Charging(chg) => Some(KrxEvent {
+            kind: KRX_EV_POWER,
+            key: *chg as u8,
+            flags: 0,
+            reserved: 0,
+            payload: 0,
+        }),
+        Event::Sys(sys_ev) => Some(KrxEvent {
+            kind: kernel::proc::abi::KRX_EV_IPC,
+            key: sys_ev.target,
+            flags: sys_ev.command,
+            reserved: 0,
+            payload: sys_ev.arg as u32,
+        }),
+        _ => None,
+    };
+    if let Some(krx_ev) = krx_ev {
+        let res = unsafe {
+            invoke_guest(
                 KRX_OP_EVENT,
-                &raw const NATIVE_API_TABLE,
+                ctx as *mut _,
+                core::ptr::null_mut(),
                 &krx_ev as *const _ as *const (),
-            );
-            ACTIVE_CTX = core::ptr::null_mut();
-            if res != 0 && res != 0xFFFF_FFFF {
-                EventResult::Consumed
-            } else {
-                EventResult::Ignored
-            }
+            )
+        };
+        if res != 0 && res != 0xFFFF_FFFF {
+            EventResult::Consumed
+        } else {
+            EventResult::Ignored
         }
     } else {
         EventResult::Ignored
@@ -667,11 +705,6 @@ pub unsafe fn native_on_modal_result(
     ctx: &mut SysContext<'static, 'static>,
     r: &ModalResult<'_>,
 ) -> EventResult {
-    let slot = slot_ref();
-    if !slot.is_loaded || slot.entry_point == 0 {
-        return EventResult::Ignored;
-    }
-
     let (tag, flags, payload) = match r {
         ModalResult::Dismissed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_DISMISSED, 0),
         ModalResult::Confirmed(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CONFIRMED, 0),
@@ -697,22 +730,18 @@ pub unsafe fn native_on_modal_result(
         reserved: 0,
         payload,
     };
-
-    unsafe {
-        ACTIVE_CTX = ctx as *mut _;
-        let res = invoke_krx_native(
-            slot.entry_point,
-            slot.got_base,
+    let res = unsafe {
+        invoke_guest(
             KRX_OP_EVENT,
-            &raw const NATIVE_API_TABLE,
+            ctx as *mut _,
+            core::ptr::null_mut(),
             &krx_ev as *const _ as *const (),
-        );
-        ACTIVE_CTX = core::ptr::null_mut();
-        if res != 0 && res != 0xFFFF_FFFF {
-            EventResult::Consumed
-        } else {
-            EventResult::Ignored
-        }
+        )
+    };
+    if res != 0 && res != 0xFFFF_FFFF {
+        EventResult::Consumed
+    } else {
+        EventResult::Ignored
     }
 }
 
@@ -805,38 +834,27 @@ pub unsafe fn native_on_render(
     status_bar: &mut StatusBarConfig<'_>,
 ) {
     apply_slot_status_bar(slot_ref(), status_bar);
-    let slot = slot_ref();
-    if slot.is_loaded && slot.entry_point != 0 {
-        unsafe {
-            ACTIVE_CTX = ctx as *const _ as *mut _;
-            ACTIVE_CANVAS = canvas as *mut _;
-            let _ = invoke_krx_native(
-                slot.entry_point,
-                slot.got_base,
-                KRX_OP_RENDER,
-                &raw const NATIVE_API_TABLE,
-                core::ptr::null(),
-            );
-            ACTIVE_CANVAS = core::ptr::null_mut();
-            ACTIVE_CTX = core::ptr::null_mut();
-        }
-        apply_slot_status_bar(slot_ref(), status_bar);
+    unsafe {
+        invoke_guest(
+            KRX_OP_RENDER,
+            ctx as *const _ as *mut _,
+            canvas as *mut _,
+            core::ptr::null(),
+        );
     }
+    apply_slot_status_bar(slot_ref(), status_bar);
 }
 
 pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
     let slot = slot_mut();
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
-            ACTIVE_CTX = ctx as *mut _;
-            let _ = invoke_krx_native(
-                slot.entry_point,
-                slot.got_base,
+            invoke_guest(
                 KRX_OP_EXIT,
-                &raw const NATIVE_API_TABLE,
+                ctx as *mut _,
+                core::ptr::null_mut(),
                 core::ptr::null(),
             );
-            ACTIVE_CTX = core::ptr::null_mut();
         }
         // Unbind any service interfaces exported by this package
         super::syscall::service_registry_mut().unbind_provider(slot.pid);
