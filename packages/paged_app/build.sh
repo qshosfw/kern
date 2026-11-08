@@ -14,7 +14,7 @@ arm-none-eabi-objcopy -O binary "$DIR/block1.elf" "$DIR/block1.bin"
 
 # Pack into P1 Transparent Paged package
 python3 "$DIR/../../tools/pack_krx.py" "$DIR/paged.krx" --name "Paged Demo" --profile p1 \
-    --page-size 512 --cache-blocks 2 \
+    --page-size 1024 --cache-blocks 2 \
     --block "0:$DIR/block0.bin" \
     --block "1:$DIR/block1.bin"
 

@@ -211,6 +211,9 @@ fn main() -> ! {
 
     hw.init_startup_app();
 
+    // Re-paint stack watermark after boot provisioning so steady-state introspection is clean
+    kernel::sys::SystemDiagnostics::paint_stack();
+
     // 7. Transition to System Event Loop
     system::run_system_loop(&mut hw, adc, boot_start_ms);
 }

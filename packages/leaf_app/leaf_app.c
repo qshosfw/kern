@@ -34,13 +34,9 @@ u32 krx_entry(u32 op, const KrxApiTable* api, void* param) {
         api->display->clear();
         krx_draw_str(api, 2, 2, "LEAF P0 OVERLAY");
         if (g_status == 2) {
-            krx_draw_str(api, 2, 16, "TRAMP: L1->L2 OK");
-            krx_draw_str(api, 2, 30, "RESULT: 104 PASS");
-            krx_draw_str(api, 2, 44, "SPEC: VERIFIED");
+            krx_draw_str(api, 2, 16, "TRAMP OK: 104");
         } else if (g_status == 3) {
-            krx_draw_str(api, 2, 16, "CHAIN: FAILED");
-        } else {
-            krx_draw_str(api, 2, 16, "RUNNING...");
+            krx_draw_str(api, 2, 16, "CHAIN FAILED");
         }
         return 0;
     }

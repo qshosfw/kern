@@ -75,8 +75,8 @@ class KrxPackageBuilder:
         self.min_abi = 1
         self.link_base = 0
         self.entry_point = 0
-        self.min_stack = 256
-        self.min_heap = 256
+        self.min_stack = 128
+        self.min_heap = 0
         self.page_size = 1024
         self.cache_blocks = 2
         self.got_offset = 0
@@ -102,8 +102,8 @@ class KrxPackageBuilder:
         entry_point: int,
         link_base: int = 0,
         got_offset: int = 0,
-        min_stack: int = 256,
-        min_heap: int = 256,
+        min_stack: int = 128,
+        min_heap: int = 0,
         page_size: int = 1024,
         cache_blocks: int = 2,
     ):
@@ -380,6 +380,8 @@ def main():
     parser.add_argument("--entry", type=lambda x: int(x, 0), default=0, help="Entry point offset")
     parser.add_argument("--link-base", type=lambda x: int(x, 0), default=0, help="Link base VMA")
     parser.add_argument("--got-offset", type=lambda x: int(x, 0), default=0, help="GOT offset")
+    parser.add_argument("--min-stack", type=int, default=128, help="Minimum stack bytes")
+    parser.add_argument("--min-heap", type=int, default=0, help="Minimum heap bytes (0 for no_std)")
     parser.add_argument("--page-size", type=lambda x: int(x, 0), default=1024, help="Page/block size")
     parser.add_argument("--cache-blocks", type=int, default=2, help="Number of cache blocks")
     parser.add_argument("--leaf", action="append", default=[], help="Add leaf overlay: <id>:<path>")
@@ -402,6 +404,8 @@ def main():
         entry_point=args.entry,
         link_base=args.link_base,
         got_offset=args.got_offset,
+        min_stack=args.min_stack,
+        min_heap=args.min_heap,
         page_size=args.page_size,
         cache_blocks=args.cache_blocks,
     )

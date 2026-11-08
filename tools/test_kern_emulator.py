@@ -412,7 +412,7 @@ def run_test():
         time.sleep(0.5)
         log_data = http_get_json("/api/logs")
         entries = log_data.get("entries", [])
-        paged_lines = [e.get("text", "") for e in entries if any(k in e.get("text", "") for k in ["PAGED", "BLK1"])]
+        paged_lines = [e.get("text", "") for e in entries if any(k in e.get("text", "") for k in ["PAGED", "BLK1", "DEMAND"])]
         expected_paged_markers = [
             "ROOT: P1 PAGED START",
             "BLK1: RUN CACHE SLOT 1",
@@ -422,6 +422,7 @@ def run_test():
             found = any(marker in line for line in paged_lines)
             if not found:
                 print("Captured paged lines:", paged_lines)
+                print("All serial lines:", [e.get("text", "") for e in entries if e.get("source") == "serial"][-30:])
                 sys.exit(f"FAIL: Expected paged marker not found: '{marker}'")
             print(f"  PASS  Paged marker verified: {marker}")
         print("  PASS  P1 Demand-Paged cache slot page-in and return-thunk verified: Block 0 -> Block 1 -> Return(47)")

@@ -92,56 +92,37 @@ pub fn draw_crash_dialog(
         gfx::text::Align::Center,
     );
 
-    // 2. Title & Separator
+    // 2. Natural language explanation
     gfx::text::draw_str(
         canvas,
         4,
         13,
-        "Radio restarted unexpectedly.",
+        "Radio restarted unexpectedly",
         &gfx::fonts::tomthumb::FONT,
         gfx::Color::Fill,
     );
     canvas.draw_horizontal_line(4, 21, 120, gfx::Color::Fill);
 
-    // 3. Human-friendly Cause
     gfx::text::draw_str(
         canvas,
         4,
-        25,
-        "Cause: ",
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
-    gfx::text::draw_str(
-        canvas,
-        32,
-        25,
-        slot.human_reason(),
+        24,
+        slot.natural_cause(),
         &gfx::fonts::tomthumb::FONT,
         gfx::Color::Fill,
     );
 
-    // 4. Human-friendly Info / Detail
     let mut detail_buf = [0u8; 32];
-    let detail_str = slot.human_detail(&mut detail_buf);
+    let detail_str = slot.natural_detail(&mut detail_buf);
     gfx::text::draw_str(
         canvas,
         4,
-        35,
-        "Info: ",
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
-    gfx::text::draw_str(
-        canvas,
-        28,
-        35,
+        34,
         detail_str,
         &gfx::fonts::tomthumb::FONT,
         gfx::Color::Fill,
     );
 
-    // 5. System Status
     gfx::text::draw_str(
         canvas,
         4,
@@ -151,19 +132,19 @@ pub fn draw_crash_dialog(
         gfx::Color::Fill,
     );
 
-    // 6. Action Badges
+    // 3. Action Badges
     gfx::widgets::draw_key_badge(canvas, 4, 55, "OK", "Dismiss");
 
-    if let Some(secs) = countdown_secs {
-        let mut cbuf = [0u8; 5];
-        let s = utils::format::format_u32(secs as u32, &mut cbuf[..4]);
-        let slen = s.len();
-        cbuf[slen] = b's';
-        let countdown_str = unsafe { core::str::from_utf8_unchecked(&cbuf[..slen + 1]) };
-        gfx::widgets::draw_key_badge_right(canvas, 124, 55, "EXIT", countdown_str);
-    } else {
-        gfx::widgets::draw_key_badge_right(canvas, 124, 55, "EXIT", "Close");
-    }
+    let exit_label = match countdown_secs {
+        Some(5) => "5s",
+        Some(4) => "4s",
+        Some(3) => "3s",
+        Some(2) => "2s",
+        Some(1) => "1s",
+        Some(_) => "0s",
+        None => "Close",
+    };
+    gfx::widgets::draw_key_badge_right(canvas, 124, 55, "EXIT", exit_label);
 }
 
 #[cfg(feature = "crash_dialog")]
@@ -185,11 +166,29 @@ pub fn show_crash_dialog_if_needed(hw: &mut BootHardware) {
                 .play_beep(crate::services::melody::BeepType::Warning);
             bsp::set_status_led(bsp::StatusLed::Orange);
 
+            // Drain any key events queued during boot/splash
+            while hw.key_scanner.pop_event().is_some() {}
+            // If any key is physically held down, wait up to 500ms for release
+            for _ in 0..50 {
+                if !hw.key_scanner.is_any_key_down() {
+                    break;
+                }
+                bsp::Board::wdt_feed();
+                let _ = hw.key_scanner.scan();
+                py32_hal::delay::delay_ms(10);
+            }
+            while hw.key_scanner.pop_event().is_some() {}
+
             let canvas = crate::system_canvas();
-            draw_crash_dialog(canvas, slot, None);
+            draw_crash_dialog(canvas, slot, Some(5));
             hw.lcd.blit(canvas);
 
-            if boot_wait_key(hw.key_scanner, 6000).is_some() {
+            #[cfg(feature = "usb")]
+            let key = boot_wait_key_with_usb(hw.key_scanner, hw.usb, 5000);
+            #[cfg(not(feature = "usb"))]
+            let key = boot_wait_key(hw.key_scanner, 5000);
+
+            if key.is_some() {
                 hw.radio
                     .play_beep(crate::services::melody::BeepType::Click);
             }

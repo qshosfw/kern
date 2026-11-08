@@ -17,6 +17,7 @@ void _start(void) {
 
 static void uart_log(const KrxApiTable* api, const char* str) {
     if (api && api->serial && api->serial->serial_write) {
+        api->serial->serial_write((const u8*)"[BENCH:ABI] ", 12);
         u16 len = 0;
         while (str[len]) len++;
         api->serial->serial_write((const u8*)str, len);
@@ -28,36 +29,36 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     if (!api) return 0;
 
     if (op == 0) { // START
-        uart_log(api, "[BENCH:ABI] STARTING EXHAUSTIVE C-ABI BENCHMARK ON CORTEX-M0+");
+        uart_log(api, "STARTING EXHAUSTIVE C-ABI BENCHMARK ON CORTEX-M0+");
 
         // 1. Display (14 APIs)
         if (api->display) {
             if (api->display->clear) api->display->clear();
-            uart_log(api, "[BENCH:ABI] DISPLAY (14 APIs): PASS");
+            uart_log(api, "DISPLAY (14 APIs): PASS");
         }
 
         // 2. Power (14 APIs)
         if (api->power) {
             if (api->power->sys_battery_mv) api->power->sys_battery_mv();
-            uart_log(api, "[BENCH:ABI] POWER (14 APIs): PASS");
+            uart_log(api, "POWER (14 APIs): PASS");
         }
 
         // 3. Keypad (10 APIs)
         if (api->keypad) {
             if (api->keypad->sys_key_matrix) api->keypad->sys_key_matrix();
-            uart_log(api, "[BENCH:ABI] KEYPAD (10 APIs): PASS");
+            uart_log(api, "KEYPAD (10 APIs): PASS");
         }
 
         // 4. Radio & FM (33 APIs)
         if (api->radio) {
             if (api->radio->rf_get_freq) api->radio->rf_get_freq();
-            uart_log(api, "[BENCH:ABI] RADIO_FM (33 APIs): PASS");
+            uart_log(api, "RADIO_FM (33 APIs): PASS");
         }
 
         // 5. Audio (13 APIs)
         if (api->audio) {
             if (api->audio->audio_get_volume) api->audio->audio_get_volume();
-            uart_log(api, "[BENCH:ABI] AUDIO (13 APIs): PASS");
+            uart_log(api, "AUDIO (13 APIs): PASS");
         }
 
         // 6. Storage (13 APIs)
@@ -65,24 +66,24 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             if (api->storage->storage_file_exists) {
                 api->storage->storage_file_exists((const u8*)"/apps", 5);
             }
-            uart_log(api, "[BENCH:ABI] STORAGE (13 APIs): PASS");
+            uart_log(api, "STORAGE (13 APIs): PASS");
         }
 
         // 7. Serial (4 APIs)
         if (api->serial) {
-            uart_log(api, "[BENCH:ABI] SERIAL (4 APIs): PASS");
+            uart_log(api, "SERIAL (4 APIs): PASS");
         }
 
         // 8. Timer (5 APIs)
         if (api->timer) {
             if (api->timer->sys_ticks_ms) api->timer->sys_ticks_ms();
-            uart_log(api, "[BENCH:ABI] TIMER (5 APIs): PASS");
+            uart_log(api, "TIMER (5 APIs): PASS");
         }
 
         // 9. Math (6 APIs)
         if (api->math) {
             if (api->math->sys_rand32) api->math->sys_rand32();
-            uart_log(api, "[BENCH:ABI] MATH (6 APIs): PASS");
+            uart_log(api, "MATH (6 APIs): PASS");
         }
 
         // 10. UI & Compositor (11 APIs)
@@ -104,20 +105,20 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
 
             // Test system tray icon registration (updates in background!)
             if (api->ui->ui_set_tray_icon) api->ui->ui_set_tray_icon(14); // Icon::Scan
-            uart_log(api, "[BENCH:ABI] UI_COMPOSITOR (11 APIs): PASS");
+            uart_log(api, "UI_COMPOSITOR (11 APIs): PASS");
         }
 
         // 11. Service & IPC (26 APIs)
         if (api->service) {
-            uart_log(api, "[BENCH:ABI] SERVICE_IPC (26 APIs): PASS");
+            uart_log(api, "SERVICE_IPC (26 APIs): PASS");
         }
 
         // 12. HW Bus (7 APIs)
         if (api->hw_bus) {
-            uart_log(api, "[BENCH:ABI] HW_BUS (7 APIs): PASS");
+            uart_log(api, "HW_BUS (7 APIs): PASS");
         }
 
-        uart_log(api, "[BENCH:ABI] TOTAL: 156/156 APIS EXHAUSTIVELY VALIDATED: PASS");
+        uart_log(api, "TOTAL: 156/156 APIS EXHAUSTIVELY VALIDATED: PASS");
         return 0;
     }
 

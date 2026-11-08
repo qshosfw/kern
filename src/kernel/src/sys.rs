@@ -217,7 +217,7 @@ impl SystemDiagnostics {
         }
         #[cfg(not(target_arch = "arm"))]
         {
-            1536
+            4096
         }
     }
 
@@ -248,13 +248,10 @@ impl SystemDiagnostics {
         }
     }
 
-    /// Calculate current available SRAM in bytes (Total RAM - static RAM - peak stack used).
+    /// Calculate current available SRAM in bytes (distance between active stack MSP and static _stack_end).
     #[inline]
     pub fn ram_available_bytes() -> usize {
-        let total = Self::ram_total_bytes();
-        let static_used = Self::ram_static_used_bytes();
-        let stack_peak = Self::stack_peak_used_bytes();
-        total.saturating_sub(static_used).saturating_sub(stack_peak)
+        Self::stack_margin_bytes()
     }
 
     /// Assess current system memory pressure tier based on available SRAM and stack margin.

@@ -313,11 +313,15 @@ fn write_krx_package(
 #[inline(never)]
 fn write_raw_krx_package(filesystem: &mut SystemStorage, path: &str, pkg_bytes: &[u8]) {
     if filesystem.exists(path) {
-        let mut head = [0u8; 128];
-        let hlen = head.len().min(pkg_bytes.len());
-        if let Ok(rlen) = filesystem.read_file_at(path, 0, &mut head[..hlen]) {
-            if rlen == hlen && head[..hlen] == pkg_bytes[..hlen] {
-                return;
+        if let Ok(size) = filesystem.file_size(path) {
+            if size == pkg_bytes.len() {
+                let mut head = [0u8; 64];
+                let hlen = head.len().min(pkg_bytes.len());
+                if let Ok(rlen) = filesystem.read_file_at(path, 0, &mut head[..hlen]) {
+                    if rlen == hlen && head[..hlen] == pkg_bytes[..hlen] {
+                        return;
+                    }
+                }
             }
         }
         let _ = filesystem.remove(path);

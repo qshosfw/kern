@@ -49,13 +49,9 @@ u32 krx_entry(u32 op, const KrxApiTable* api, void* param) {
         api->display->clear();
         krx_draw_str(api, 2, 2, "PAGED P1 STREAM");
         if (g_status == 2) {
-            krx_draw_str(api, 2, 16, "STREAM BLK 1 OK");
-            krx_draw_str(api, 2, 30, "RESULT: 47 PASS");
-            krx_draw_str(api, 2, 44, "SPEC: VERIFIED");
+            krx_draw_str(api, 2, 16, "STREAM OK: 47");
         } else if (g_status == 3) {
-            krx_draw_str(api, 2, 16, "STREAM: FAILED");
-        } else {
-            krx_draw_str(api, 2, 16, "RUNNING...");
+            krx_draw_str(api, 2, 16, "STREAM FAILED");
         }
         return 0;
     }

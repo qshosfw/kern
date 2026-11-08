@@ -174,9 +174,6 @@ pub fn recovery_loop() -> ! {
 
                 match code {
                     kernel::event::KeyCode::Menu | kernel::event::KeyCode::Exit => {
-                        if code == kernel::event::KeyCode::Menu {
-                            BOOT_RECORD.get_mut().clear_crash_loop();
-                        }
                         bsp::set_status_led(bsp::StatusLed::Off);
                         cortex_m::peripheral::SCB::sys_reset();
                     }

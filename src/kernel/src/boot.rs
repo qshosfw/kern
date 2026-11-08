@@ -171,107 +171,6 @@ impl BootSlot {
         core::str::from_utf8(&self.actor_tag[..len]).unwrap_or("Unknown")
     }
 
-    /// Human-friendly explanation of why the crash/reboot occurred.
-    pub fn human_reason(&self) -> &'static str {
-        match self.reason() {
-            Some(ResetReason::Wdog) => "Watchdog Timeout",
-            Some(ResetReason::Tags) => "Memory Corruption",
-            Some(ResetReason::Brow) => "Voltage Brownout",
-            Some(ResetReason::Appf) => "Software Panic",
-            Some(ResetReason::Hard) => {
-                let actor = self.actor_str();
-                if actor.starts_with("STACK_OVF") {
-                    "Stack Overflow"
-                } else if actor.starts_with("DACCVIOL") {
-                    "Invalid Memory Access"
-                } else if actor.starts_with("PRECISERR") {
-                    "Hardware Bus Error"
-                } else if actor.starts_with("UNDEFINSTR") {
-                    "Illegal Instruction"
-                } else if actor.starts_with("UNALIGNED") {
-                    "Unaligned Access"
-                } else if actor.starts_with("IBUSERR") {
-                    "Instruction Bus Error"
-                } else if actor.starts_with("INVSTATE") {
-                    "Invalid CPU State"
-                } else if actor.starts_with("INVPC") {
-                    "Invalid Program Counter"
-                } else if actor.starts_with("STKERR") {
-                    "Stack Push Fault"
-                } else if actor.starts_with("UNSTKERR") {
-                    "Stack Pop Fault"
-                } else if actor.starts_with("DEBUGEVT") {
-                    "Debug Breakpoint"
-                } else if actor.starts_with("WATCHDOG") {
-                    "Watchdog Timeout"
-                } else {
-                    "Hardware CPU Fault"
-                }
-            }
-            None => "Hardware Reset",
-        }
-    }
-
-    /// Formats human-friendly detail string (e.g. "main.rs:142", "Addr 0x20003FE0", "PC 0x08001234") into `out`.
-    pub fn human_detail<'a>(&'a self, out: &'a mut [u8]) -> &'a str {
-        match self.reason() {
-            Some(ResetReason::Appf) => {
-                let actor = self.actor_str();
-                if self.panic_line > 0 {
-                    let mut pos = 0;
-                    let a_bytes = actor.as_bytes();
-                    let a_len = a_bytes.len().min(out.len());
-                    out[..a_len].copy_from_slice(&a_bytes[..a_len]);
-                    pos += a_len;
-                    if pos < out.len() {
-                        out[pos] = b':';
-                        pos += 1;
-                        let line_str =
-                            utils::format::format_u32(self.panic_line as u32, &mut out[pos..]);
-                        pos += line_str.len();
-                    }
-                    unsafe { core::str::from_utf8_unchecked(&out[..pos]) }
-                } else {
-                    actor
-                }
-            }
-            Some(ResetReason::Hard) => {
-                let addr = self.panic_file_hash;
-                if addr != 0 && addr != 0xFFFF_FFFF {
-                    let mut pos = 0;
-                    const PREFIX: &[u8] = b"Addr 0x";
-                    let p_len = PREFIX.len().min(out.len());
-                    out[..p_len].copy_from_slice(&PREFIX[..p_len]);
-                    pos += p_len;
-                    let mut hbuf = [0u8; 8];
-                    let hex = utils::format::format_hex32(addr, &mut hbuf);
-                    let h_len = hex.len().min(out.len().saturating_sub(pos));
-                    out[pos..pos + h_len].copy_from_slice(&hex.as_bytes()[..h_len]);
-                    pos += h_len;
-                    unsafe { core::str::from_utf8_unchecked(&out[..pos]) }
-                } else if self.fault_pc > 0 {
-                    let mut pos = 0;
-                    const PREFIX: &[u8] = b"PC 0x";
-                    let p_len = PREFIX.len().min(out.len());
-                    out[..p_len].copy_from_slice(&PREFIX[..p_len]);
-                    pos += p_len;
-                    let mut hbuf = [0u8; 8];
-                    let hex = utils::format::format_hex32(self.fault_pc, &mut hbuf);
-                    let h_len = hex.len().min(out.len().saturating_sub(pos));
-                    out[pos..pos + h_len].copy_from_slice(&hex.as_bytes()[..h_len]);
-                    pos += h_len;
-                    unsafe { core::str::from_utf8_unchecked(&out[..pos]) }
-                } else {
-                    self.actor_str()
-                }
-            }
-            Some(ResetReason::Wdog) => "System unresponsive",
-            Some(ResetReason::Tags) => "Format tag mismatch",
-            Some(ResetReason::Brow) => "Voltage rail dip",
-            None => "Clean Reboot",
-        }
-    }
-
     /// Returns natural-language clause explaining why the crash occurred.
     pub fn natural_cause(&self) -> &'static str {
         match self.reason() {
@@ -284,25 +183,25 @@ impl BootSlot {
                 if actor.starts_with("STACK_OVF") {
                     "because call stack memory"
                 } else if actor.starts_with("DACCVIOL") {
-                    "due to an invalid memory access"
+                    "due to an invalid data access"
                 } else if actor.starts_with("PRECISERR") {
                     "due to a hardware bus error"
                 } else if actor.starts_with("UNDEFINSTR") {
                     "due to an illegal instruction"
                 } else if actor.starts_with("UNALIGNED") {
-                    "due to an unaligned access"
+                    "due to an unaligned memory access"
                 } else if actor.starts_with("IBUSERR") {
-                    "due to a bus fetch failure"
+                    "due to an instruction fetch failure"
                 } else if actor.starts_with("INVSTATE") {
-                    "due to an invalid CPU state"
+                    "due to an invalid CPU execution state"
                 } else if actor.starts_with("INVPC") {
-                    "due to a corrupted branch to"
+                    "due to an invalid program counter"
                 } else if actor.starts_with("STKERR") || actor.starts_with("UNSTKERR") {
-                    "due to a stack frame error"
+                    "due to an exception stack error"
                 } else if actor.starts_with("DEBUGEVT") {
-                    "after halting on a debug"
+                    "after a debug breakpoint halted"
                 } else if actor.starts_with("WATCHDOG") {
-                    "because the system froze or"
+                    "because the system froze and"
                 } else {
                     "due to an unexpected CPU fault"
                 }
@@ -311,7 +210,7 @@ impl BootSlot {
         }
     }
 
-    /// Formats natural-language detail clause (e.g. "main.rs at line 142.", "at memory address 0x20003FE0.") into `out`.
+    /// Formats natural-language detail clause into `out`.
     pub fn natural_detail<'a>(&'a self, out: &'a mut [u8]) -> &'a str {
         match self.reason() {
             Some(ResetReason::Appf) => {
@@ -328,10 +227,18 @@ impl BootSlot {
                     out[pos..pos + m_len].copy_from_slice(&MID[..m_len]);
                     pos += m_len;
 
-                    let mut lbuf = [0u8; 6];
-                    let line_str = utils::format::format_u32(self.panic_line as u32, &mut lbuf);
-                    let l_len = line_str.len().min(out.len().saturating_sub(pos));
-                    out[pos..pos + l_len].copy_from_slice(&line_str.as_bytes()[..l_len]);
+                    let mut val = self.panic_line;
+                    let mut temp = [0u8; 5];
+                    let mut i = 0;
+                    while val > 0 && i < 5 {
+                        temp[i] = b'0' + (val % 10) as u8;
+                        val /= 10;
+                        i += 1;
+                    }
+                    let l_len = i.min(out.len().saturating_sub(pos));
+                    for j in 0..l_len {
+                        out[pos + j] = temp[i - 1 - j];
+                    }
                     pos += l_len;
 
                     if pos < out.len() {
@@ -351,48 +258,26 @@ impl BootSlot {
                 let actor = self.actor_str();
                 if actor.starts_with("STACK_OVF") {
                     "overflowed available RAM."
-                } else if actor.starts_with("UNDEFINSTR") {
-                    "in program execution."
-                } else if actor.starts_with("UNALIGNED") {
-                    "to multi-byte memory."
-                } else if actor.starts_with("IBUSERR") {
-                    "from unmapped memory."
-                } else if actor.starts_with("INVSTATE") {
-                    "switch during execution."
-                } else if actor.starts_with("INVPC") {
-                    "an invalid memory address."
-                } else if actor.starts_with("STKERR") || actor.starts_with("UNSTKERR") {
-                    "during interrupt handling."
-                } else if actor.starts_with("DEBUGEVT") {
-                    "breakpoint instruction."
                 } else {
-                    let addr = self.panic_file_hash;
-                    if addr != 0 && addr != 0xFFFF_FFFF {
-                        let mut pos = 0;
-                        const PREFIX: &[u8] = b"at memory address 0x";
-                        let p_len = PREFIX.len().min(out.len());
-                        out[..p_len].copy_from_slice(&PREFIX[..p_len]);
-                        pos += p_len;
-                        let mut hbuf = [0u8; 8];
-                        let hex = utils::format::format_hex32(addr, &mut hbuf);
-                        let h_len = hex.len().min(out.len().saturating_sub(pos));
-                        out[pos..pos + h_len].copy_from_slice(&hex.as_bytes()[..h_len]);
-                        pos += h_len;
-                        if pos < out.len() {
-                            out[pos] = b'.';
-                            pos += 1;
-                        }
-                        unsafe { core::str::from_utf8_unchecked(&out[..pos]) }
+                    let (addr, prefix): (u32, &[u8]) = if self.panic_file_hash != 0 && self.panic_file_hash != 0xFFFF_FFFF {
+                        (self.panic_file_hash, b"at memory address 0x")
                     } else if self.fault_pc > 0 {
+                        (self.fault_pc, b"at program address 0x")
+                    } else {
+                        (0, b"")
+                    };
+
+                    if addr > 0 {
                         let mut pos = 0;
-                        const PREFIX: &[u8] = b"at program address 0x";
-                        let p_len = PREFIX.len().min(out.len());
-                        out[..p_len].copy_from_slice(&PREFIX[..p_len]);
+                        let p_len = prefix.len().min(out.len());
+                        out[..p_len].copy_from_slice(&prefix[..p_len]);
                         pos += p_len;
-                        let mut hbuf = [0u8; 8];
-                        let hex = utils::format::format_hex32(self.fault_pc, &mut hbuf);
-                        let h_len = hex.len().min(out.len().saturating_sub(pos));
-                        out[pos..pos + h_len].copy_from_slice(&hex.as_bytes()[..h_len]);
+                        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                        let h_len = 8.min(out.len().saturating_sub(pos));
+                        for i in 0..h_len {
+                            let nibble = ((addr >> ((7 - i) * 4)) & 0xF) as usize;
+                            out[pos + i] = HEX[nibble];
+                        }
                         pos += h_len;
                         if pos < out.len() {
                             out[pos] = b'.';
@@ -504,7 +389,7 @@ mod tests {
         assert!(!slot.is_valid());
         assert!(!slot.is_crash());
         assert_eq!(slot.reason(), None);
-        assert_eq!(slot.human_reason(), "Hardware Reset");
+        assert_eq!(slot.natural_cause(), "due to an unexpected hardware");
     }
 
     #[test]
@@ -527,10 +412,10 @@ mod tests {
         assert!(valid.is_crash());
         assert_eq!(valid.reason(), Some(ResetReason::Appf));
         assert_eq!(valid.actor_str(), "tasks.rs");
-        assert_eq!(valid.human_reason(), "Software Panic");
+        assert_eq!(valid.natural_cause(), "due to a software panic in");
 
         let mut buf = [0u8; 32];
-        assert_eq!(valid.human_detail(&mut buf), "tasks.rs:42");
+        assert_eq!(valid.natural_detail(&mut buf), "tasks.rs at line 42.");
     }
 
     #[test]
@@ -547,10 +432,10 @@ mod tests {
         record.commit_write();
 
         assert_eq!(record.latest_valid_slot().unwrap().crash_count, 1);
-        assert_eq!(record.latest_valid_slot().unwrap().human_reason(), "Invalid Memory Access");
+        assert_eq!(record.latest_valid_slot().unwrap().natural_cause(), "due to an invalid data access");
 
         let mut buf = [0u8; 32];
-        assert_eq!(record.latest_valid_slot().unwrap().human_detail(&mut buf), "PC 0x08004568");
+        assert_eq!(record.latest_valid_slot().unwrap().natural_detail(&mut buf), "at program address 0x08004568.");
 
         // 2nd Crash (reboot loop)
         {
@@ -563,8 +448,8 @@ mod tests {
         let slot2 = record.latest_valid_slot().unwrap();
         assert_eq!(slot2.crash_count, 2);
         assert_eq!(slot2.reason(), Some(ResetReason::Wdog));
-        assert_eq!(slot2.human_reason(), "Watchdog Timeout");
-        assert_eq!(slot2.human_detail(&mut buf), "System unresponsive");
+        assert_eq!(slot2.natural_cause(), "because the system froze or");
+        assert_eq!(slot2.natural_detail(&mut buf), "stopped responding.");
 
         // Clear crash loop preserves slot forensic data
         record.clear_crash_loop();
@@ -577,30 +462,30 @@ mod tests {
     #[test]
     fn test_boot_slot_hardfault_actor_mapping() {
         let actors: &[(&[u8], &str)] = &[
-            (b"STACK_OVF", "Stack Overflow"),
-            (b"DACCVIOL", "Invalid Memory Access"),
-            (b"PRECISERR", "Hardware Bus Error"),
-            (b"UNDEFINSTR", "Illegal Instruction"),
-            (b"UNALIGNED", "Unaligned Access"),
-            (b"IBUSERR", "Instruction Bus Error"),
-            (b"INVSTATE", "Invalid CPU State"),
-            (b"INVPC", "Invalid Program Counter"),
-            (b"STKERR", "Stack Push Fault"),
-            (b"UNSTKERR", "Stack Pop Fault"),
-            (b"DEBUGEVT", "Debug Breakpoint"),
-            (b"WATCHDOG", "Watchdog Timeout"),
-            (b"FORCED", "Hardware CPU Fault"),
-            (b"CUSTOM_ACTOR", "Hardware CPU Fault"),
+            (b"STACK_OVF", "because call stack memory"),
+            (b"DACCVIOL", "due to an invalid data access"),
+            (b"PRECISERR", "due to a hardware bus error"),
+            (b"UNDEFINSTR", "due to an illegal instruction"),
+            (b"UNALIGNED", "due to an unaligned memory access"),
+            (b"IBUSERR", "due to an instruction fetch failure"),
+            (b"INVSTATE", "due to an invalid CPU execution state"),
+            (b"INVPC", "due to an invalid program counter"),
+            (b"STKERR", "due to an exception stack error"),
+            (b"UNSTKERR", "due to an exception stack error"),
+            (b"DEBUGEVT", "after a debug breakpoint halted"),
+            (b"WATCHDOG", "because the system froze and"),
+            (b"FORCED", "due to an unexpected CPU fault"),
+            (b"CUSTOM_ACTOR", "due to an unexpected CPU fault"),
         ];
 
-        for &(tag, expected_reason) in actors {
+        for &(tag, expected_cause) in actors {
             let mut slot = BootSlot::empty();
             slot.reset_reason = ResetReason::Hard as u32;
             slot.set_actor(tag);
             slot.ident = BOOT_RECORD_IDENT;
             slot.crc32 = slot.compute_crc();
 
-            assert_eq!(slot.human_reason(), expected_reason);
+            assert_eq!(slot.natural_cause(), expected_cause);
         }
     }
 
@@ -611,15 +496,15 @@ mod tests {
 
         slot.reset_reason = ResetReason::Tags as u32;
         slot.crc32 = slot.compute_crc();
-        assert_eq!(slot.human_reason(), "Memory Corruption");
+        assert_eq!(slot.natural_cause(), "due to corrupted data");
 
         slot.reset_reason = ResetReason::Brow as u32;
         slot.crc32 = slot.compute_crc();
-        assert_eq!(slot.human_reason(), "Voltage Brownout");
+        assert_eq!(slot.natural_cause(), "due to a sudden drop in");
 
         slot.reset_reason = ResetReason::Wdog as u32;
         slot.crc32 = slot.compute_crc();
-        assert_eq!(slot.human_reason(), "Watchdog Timeout");
+        assert_eq!(slot.natural_cause(), "because the system froze or");
     }
 
     #[test]
@@ -657,7 +542,7 @@ mod tests {
         slot.reset_reason = ResetReason::Hard as u32;
         slot.set_actor(b"DACCVIOL");
         slot.panic_file_hash = 0x2000_3FE0;
-        assert_eq!(slot.natural_cause(), "due to an invalid memory access");
+        assert_eq!(slot.natural_cause(), "due to an invalid data access");
         assert_eq!(slot.natural_detail(&mut buf), "at memory address 0x20003FE0.");
 
         // 3. Stack overflow

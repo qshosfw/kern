@@ -4,7 +4,7 @@
 //! for transient operations: file streaming, boot splash staging, calibration,
 //! and native package execution.
 
-pub const TRANSIENT_ARENA_WORDS: usize = 1024;
+pub const TRANSIENT_ARENA_WORDS: usize = 1536; // 6 KiB aligned scratch buffer
 pub const TRANSIENT_ARENA_BYTES: usize = TRANSIENT_ARENA_WORDS * 4;
 pub const TRANSIENT_SCRATCH_OFFSET: usize = 2048;
 
