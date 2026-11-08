@@ -123,60 +123,94 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
 
 // ── Dynamic Linker / GOT Resolution ─────────────────────────────────────────
 
+struct InterfaceBinding {
+    vtable: *const (),
+    required_caps_mask: u32,
+}
+
+unsafe impl Sync for InterfaceBinding {}
+
+static INTERFACE_TABLE: [InterfaceBinding; 13] = [
+    // 0x0001: INTERFACE_DISPLAY
+    InterfaceBinding {
+        vtable: &raw const DISPLAY_VTABLE as *const (),
+        required_caps_mask: Cap::DisplayDirect as u32,
+    },
+    // 0x0002: INTERFACE_RADIO
+    InterfaceBinding {
+        vtable: &raw const RADIO_VTABLE as *const (),
+        required_caps_mask: (Cap::RadioRx as u32) | (Cap::RadioTx as u32) | (Cap::BroadBandRx as u32),
+    },
+    // 0x0003: INTERFACE_AUDIO
+    InterfaceBinding {
+        vtable: &raw const AUDIO_VTABLE as *const (),
+        required_caps_mask: (Cap::AudioOutput as u32) | (Cap::AudioCapture as u32),
+    },
+    // 0x0004: INTERFACE_STORAGE
+    InterfaceBinding {
+        vtable: &raw const STORAGE_VTABLE as *const (),
+        required_caps_mask: (Cap::StorageRead as u32) | (Cap::StorageWrite as u32),
+    },
+    // 0x0005: INTERFACE_KEYPAD
+    InterfaceBinding {
+        vtable: &raw const KEYPAD_VTABLE as *const (),
+        required_caps_mask: Cap::Keypad as u32,
+    },
+    // 0x0006: INTERFACE_POWER
+    InterfaceBinding {
+        vtable: &raw const POWER_VTABLE as *const (),
+        required_caps_mask: Cap::PowerManage as u32,
+    },
+    // 0x0007: INTERFACE_SERIAL
+    InterfaceBinding {
+        vtable: &raw const SERIAL_VTABLE as *const (),
+        required_caps_mask: (Cap::SerialComm as u32) | (Cap::UsbComm as u32),
+    },
+    // 0x0008: INTERFACE_TIMER
+    InterfaceBinding {
+        vtable: &raw const TIMER_VTABLE as *const (),
+        required_caps_mask: 0,
+    },
+    // 0x0009: INTERFACE_UI
+    InterfaceBinding {
+        vtable: &raw const UI_VTABLE as *const (),
+        required_caps_mask: Cap::DisplayDirect as u32,
+    },
+    // 0x000A: INTERFACE_MATH
+    InterfaceBinding {
+        vtable: &raw const MATH_VTABLE as *const (),
+        required_caps_mask: 0,
+    },
+    // 0x000B: INTERFACE_FM
+    InterfaceBinding {
+        vtable: &raw const FM_VTABLE as *const (),
+        required_caps_mask: Cap::BroadcastFm as u32,
+    },
+    // 0x000C: INTERFACE_SERVICE
+    InterfaceBinding {
+        vtable: &raw const SERVICE_VTABLE as *const (),
+        required_caps_mask: 0,
+    },
+    // 0x000D: INTERFACE_HW_BUS
+    InterfaceBinding {
+        vtable: &raw const HW_BUS_VTABLE as *const (),
+        required_caps_mask: Cap::RawPeripheral as u32,
+    },
+];
+
 #[inline(always)]
 fn resolve_capability_vtable(
     interface_id: u16,
     _min_abi: u16,
     granted_caps: CapabilitySet,
 ) -> Option<usize> {
-    match interface_id {
-        INTERFACE_DISPLAY if granted_caps.contains(Cap::DisplayDirect) => {
-            Some(&raw const DISPLAY_VTABLE as usize)
+    if (INTERFACE_DISPLAY..=INTERFACE_HW_BUS).contains(&interface_id) {
+        let entry = &INTERFACE_TABLE[(interface_id - INTERFACE_DISPLAY) as usize];
+        if entry.required_caps_mask == 0 || (granted_caps.raw() & entry.required_caps_mask) != 0 {
+            return Some(entry.vtable as usize);
         }
-        INTERFACE_RADIO
-            if granted_caps.contains(Cap::RadioRx)
-                || granted_caps.contains(Cap::RadioTx)
-                || granted_caps.contains(Cap::BroadBandRx) =>
-        {
-            Some(&raw const RADIO_VTABLE as usize)
-        }
-        INTERFACE_AUDIO
-            if granted_caps.contains(Cap::AudioOutput)
-                || granted_caps.contains(Cap::AudioCapture) =>
-        {
-            Some(&raw const AUDIO_VTABLE as usize)
-        }
-        INTERFACE_STORAGE
-            if granted_caps.contains(Cap::StorageRead)
-                || granted_caps.contains(Cap::StorageWrite) =>
-        {
-            Some(&raw const STORAGE_VTABLE as usize)
-        }
-        INTERFACE_KEYPAD if granted_caps.contains(Cap::Keypad) => {
-            Some(&raw const KEYPAD_VTABLE as usize)
-        }
-        INTERFACE_POWER if granted_caps.contains(Cap::PowerManage) => {
-            Some(&raw const POWER_VTABLE as usize)
-        }
-        INTERFACE_SERIAL
-            if granted_caps.contains(Cap::SerialComm) || granted_caps.contains(Cap::UsbComm) =>
-        {
-            Some(&raw const SERIAL_VTABLE as usize)
-        }
-        INTERFACE_TIMER => Some(&raw const TIMER_VTABLE as usize),
-        INTERFACE_UI if granted_caps.contains(Cap::DisplayDirect) => {
-            Some(&raw const UI_VTABLE as usize)
-        }
-        INTERFACE_MATH => Some(&raw const MATH_VTABLE as usize),
-        INTERFACE_FM if granted_caps.contains(Cap::BroadcastFm) => {
-            Some(&raw const FM_VTABLE as usize)
-        }
-        INTERFACE_SERVICE => Some(&raw const SERVICE_VTABLE as usize),
-        INTERFACE_HW_BUS if granted_caps.contains(Cap::RawPeripheral) => {
-            Some(&raw const HW_BUS_VTABLE as usize)
-        }
-        _ => None,
     }
+    None
 }
 
 /// Bind `SECTION_CAP_IMPORTS (0x0003)` into the loaded package's GOT slots (Appendix C).
