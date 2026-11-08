@@ -374,14 +374,51 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
                     false
                 }
             });
-        draw_status_right_unified(
-            canvas,
-            is_usb,
-            self.is_f_active,
-            self.is_keypad_locked,
-            self.config.battery.battery_format,
-            inverted,
-        )
+
+        let pct = self.power.battery_percentage();
+        let is_charging = self.power.is_charging();
+        let is_low = self.power.is_low() || pct == 0;
+        let serial_active = py32_hal::uart::is_active(800);
+        let now_ms = py32_hal::delay::millis();
+        let anim_step = ((now_ms >> 8) & 0xFF) as u8;
+        let shading_mode = self.config.display.shading_mode;
+        let tray_icons = crate::orchestrator::status_tray().active_icons();
+
+        let mut flags = 0u8;
+        if is_charging {
+            flags |= gfx::widgets::status_bar::STATUS_FLAG_CHARGING;
+        }
+        if is_low {
+            flags |= gfx::widgets::status_bar::STATUS_FLAG_LOW;
+        }
+        if is_usb {
+            flags |= gfx::widgets::status_bar::STATUS_FLAG_USB;
+        }
+        if serial_active {
+            flags |= gfx::widgets::status_bar::STATUS_FLAG_SERIAL;
+        }
+        if self.is_f_active {
+            flags |= gfx::widgets::status_bar::STATUS_FLAG_F_ACTIVE;
+        }
+        if self.is_keypad_locked {
+            flags |= gfx::widgets::status_bar::STATUS_FLAG_KEYPAD_LOCKED;
+        }
+        if inverted {
+            flags |= gfx::widgets::status_bar::STATUS_FLAG_INVERTED;
+        }
+
+        let cfg = gfx::widgets::status_bar::StatusRightConfig {
+            percentage: pct,
+            battery_format: self.config.battery.battery_format,
+            shading_mode,
+            anim_step,
+            flags,
+            voltage_mv: self.power.battery_voltage_mv(),
+            temp_deci_c: self.power.mcu_temperature_deci_c(),
+            dynamic_icons: tray_icons,
+        };
+
+        cfg.render(canvas)
     }
 
     #[inline(always)]
@@ -401,26 +438,13 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 }
 
-#[inline(never)]
-pub fn draw_status_right_unified(
-    canvas: &mut gfx::Canvas,
-    is_usb: bool,
-    is_f_active: bool,
-    is_keypad_locked: bool,
-    bfmt: u8,
-    inverted: bool,
-) -> i16 {
+#[cfg(feature = "passcode")]
+pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_usb: bool) -> i16 {
     let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
     let pct = pwr.battery_percentage();
     let is_charging = pwr.is_charging();
     let is_low = pwr.is_low() || pct == 0;
-    let serial_active = py32_hal::uart::is_active(800);
-    let now_ms = py32_hal::delay::millis();
-    let anim_step = ((now_ms >> 8) & 0xFF) as u8;
-    let shading_mode = crate::master_config_ref().display.shading_mode;
-    let tray_icons = crate::orchestrator::status_tray().active_icons();
-
-    let mut flags = 0u8;
+    let mut flags = gfx::widgets::status_bar::STATUS_FLAG_INVERTED;
     if is_charging {
         flags |= gfx::widgets::status_bar::STATUS_FLAG_CHARGING;
     }
@@ -430,35 +454,17 @@ pub fn draw_status_right_unified(
     if is_usb {
         flags |= gfx::widgets::status_bar::STATUS_FLAG_USB;
     }
-    if serial_active {
-        flags |= gfx::widgets::status_bar::STATUS_FLAG_SERIAL;
-    }
-    if is_f_active {
-        flags |= gfx::widgets::status_bar::STATUS_FLAG_F_ACTIVE;
-    }
-    if is_keypad_locked {
-        flags |= gfx::widgets::status_bar::STATUS_FLAG_KEYPAD_LOCKED;
-    }
-    if inverted {
-        flags |= gfx::widgets::status_bar::STATUS_FLAG_INVERTED;
-    }
-
     let cfg = gfx::widgets::status_bar::StatusRightConfig {
         percentage: pct,
-        battery_format: bfmt,
-        shading_mode,
-        anim_step,
+        battery_format,
+        shading_mode: crate::master_config_ref().display.shading_mode,
+        anim_step: 0,
         flags,
         voltage_mv: pwr.battery_voltage_mv(),
         temp_deci_c: pwr.mcu_temperature_deci_c(),
-        dynamic_icons: tray_icons,
+        dynamic_icons: &[],
     };
-
     cfg.render(canvas)
-}
-
-pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_usb: bool) -> i16 {
-    draw_status_right_unified(canvas, is_usb, false, false, battery_format, true)
 }
 
 impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {
