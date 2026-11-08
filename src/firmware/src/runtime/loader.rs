@@ -112,21 +112,21 @@ fn populate_declare_from_payload(
 /// Load and launch a verified KRX binary application package.
 #[inline(never)]
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let hdr_buf = &mut super::native_runner::transient_arena_bytes_mut()[..512];
-    let read_len = ctx.storage.read_file(path, hdr_buf).map_err(|e| match e {
+    let arena_buf = super::native_runner::transient_arena_bytes_mut();
+    let total_read = ctx.storage.read_file(path, arena_buf).map_err(|e| match e {
         kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
         _ => KrxLaunchError::ReadFailed,
     })?;
 
-    if read_len < KrxPreamble::SIZE {
+    if total_read < KrxPreamble::SIZE {
         return Err(KrxLaunchError::InvalidPreamble);
     }
 
     let preamble =
-        KrxPreamble::parse(&hdr_buf[..read_len]).map_err(|_| KrxLaunchError::InvalidPreamble)?;
+        KrxPreamble::parse(&arena_buf[..total_read]).map_err(|_| KrxLaunchError::InvalidPreamble)?;
 
     let header_len = preamble.header_len as usize;
-    if header_len > read_len {
+    if header_len > total_read {
         return Err(KrxLaunchError::TruncatedPackage);
     }
 
@@ -137,7 +137,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     #[cfg(feature = "krx_native")]
     let mut aux = super::native_runner::KrxAuxSections::default();
 
-    for (hdr, body) in kernel::proc::krx::KrxSectionIterator::new(&hdr_buf, header_len) {
+    for (hdr, body) in kernel::proc::krx::KrxSectionIterator::new(&arena_buf[..header_len], header_len) {
         match hdr.id {
             SECTION_IDENTITY => ident_body = Some(body),
             SECTION_TYPE_LIFECYCLE => type_body = Some(body),
@@ -157,7 +157,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     let ident = ident_body
         .and_then(SectionIdentity::parse)
         .ok_or(KrxLaunchError::MissingIdentity)?;
-    let raw_name = ident.name(&hdr_buf[..header_len]).unwrap_or("App");
+    let raw_name = ident.name(&arena_buf[..header_len]).unwrap_or("App");
 
     // 2. Inspect Type & Lifecycle Section
     let mut required_caps = CapabilitySet::NONE;
@@ -275,8 +275,8 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
             super::native_runner::load_native_from_storage(
                 app_name,
-                ctx.storage,
                 path,
+                total_read,
                 &preamble,
                 &exec_sec,
                 &aux,

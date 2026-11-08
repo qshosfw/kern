@@ -387,32 +387,24 @@ pub fn draw_status_bar_layout(
     }
 
     // 2. Center items (auto-centered in remaining dynamic space)
-    let mut center_w = 0i16;
-    for &icon in config.center_icons {
-        center_w += (icon.width() as i16) + STATUS_ITEM_SPACING;
-    }
     if let Some(center) = config.center_text {
         if !center.is_empty() {
-            center_w += crate::text::str_width(center, &FONT) as i16;
+            let w = crate::text::str_width(center, &FONT) as i16;
+            let ideal_x = 64i16 - (w >> 1);
+            let x = if ideal_x >= left_x && ideal_x + w <= right_limit {
+                ideal_x
+            } else {
+                left_x + ((right_limit - left_x - w).max(0) >> 1)
+            };
+            if x + w <= right_limit {
+                crate::text::draw_str(canvas, x, 4, center, &FONT, Color::Fill);
+            }
         }
     }
-    if center_w > 0 {
-        let ideal_x = 64i16 - (center_w >> 1);
-        let mut cx = if ideal_x >= left_x && ideal_x + center_w <= right_limit {
-            ideal_x
-        } else {
-            left_x + ((right_limit - left_x - center_w).max(0) >> 1)
-        };
-        for &icon in config.center_icons {
-            if cx + (icon.width() as i16) <= right_limit {
-                crate::icons::draw_icon_5x5(canvas, cx, 0, icon, Color::Fill);
-                cx += (icon.width() as i16) + STATUS_ITEM_SPACING;
-            }
-        }
-        if let Some(center) = config.center_text {
-            if !center.is_empty() && cx < right_limit {
-                crate::text::draw_str(canvas, cx, 4, center, &FONT, Color::Fill);
-            }
+    for &icon in config.center_icons {
+        let x = 60i16;
+        if x >= left_x && x + 5 <= right_limit {
+            crate::icons::draw_icon_5x5(canvas, x, 0, icon, Color::Fill);
         }
     }
 }

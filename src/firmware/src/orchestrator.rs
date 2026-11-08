@@ -1022,7 +1022,10 @@ impl Orchestrator {
             Shortcut::FmRadio => {
                 self.switch_app(ctx, APP_ID_VFO);
             }
-            Shortcut::Reboot => kernel::sys::SystemDiagnostics::reboot(),
+            Shortcut::Reboot => {
+                crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+                kernel::sys::SystemDiagnostics::reboot()
+            }
             Shortcut::Sleep => {
                 self.lock_mgr.sleep_requested = true;
             }

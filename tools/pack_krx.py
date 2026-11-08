@@ -87,6 +87,9 @@ class KrxPackageBuilder:
         self.cap_imports = []
         self.leaf_map = []
         self.block_map = []
+        self.leaf_files = []
+        self.block_files = []
+        self.resident_payload_size = 0
         self.service_exports = []
 
     def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0)):
@@ -119,8 +122,18 @@ class KrxPackageBuilder:
     def add_leaf(self, leaf_id: int, entry_offset: int, size: int, flash_offset: int, flags: int = 0):
         self.leaf_map.append((leaf_id, flags, size, entry_offset, flash_offset))
 
+    def add_leaf_file(self, leaf_id: int, file_path: str, flags: int = 0):
+        with open(file_path, "rb") as f:
+            data = f.read()
+        self.leaf_files.append((leaf_id, flags, data))
+
     def add_block(self, block_id: int, size: int, flash_offset: int, flags: int = 0):
         self.block_map.append((block_id, flags, size, flash_offset))
+
+    def add_block_file(self, block_id: int, file_path: str, flags: int = 0):
+        with open(file_path, "rb") as f:
+            data = f.read()
+        self.block_files.append((block_id, flags, data))
 
     def add_service_export(self, interface_id: int, vtable_offset: int, abi_version: int = 1, pinned: bool = False):
         flags = 0x0001 if pinned else 0x0000
@@ -152,7 +165,6 @@ class KrxPackageBuilder:
         align4(self.payload)
 
     def build(self) -> bytes:
-        sections = []
         string_pool = bytearray()
 
         def add_string(s: str) -> int:
@@ -163,11 +175,67 @@ class KrxPackageBuilder:
 
         name_str_offset = add_string(self.name)
 
+        # Pre-compute total_header_len to resolve leaf / block flash offsets
+        num_leaves = len(self.leaf_files) if self.leaf_files else len(self.leaf_map)
+        num_blocks = len(self.block_files) if self.block_files else len(self.block_map)
+
+        sec_sizes = [
+            4 + 40, # Identity
+            4 + 28, # Execution
+            4 + 12, # TypeLifecycle
+        ]
+        if self.cap_imports:
+            sec_sizes.append(4 + len(self.cap_imports) * 8)
+        if num_leaves > 0:
+            sec_sizes.append(4 + num_leaves * 16)
+        if num_blocks > 0:
+            sec_sizes.append(4 + num_blocks * 8)
+        if self.service_exports:
+            sec_sizes.append(4 + len(self.service_exports) * 16)
+
+        sec_hdr_len = 0
+        for sz in sec_sizes:
+            sec_hdr_len += sz
+            pad = (4 - (sz % 4)) % 4
+            sec_hdr_len += pad
+
+        str_pool_off = 20 + sec_hdr_len
+        tot_hdr = str_pool_off + len(string_pool)
+        h_pad = (4 - (tot_hdr % 4)) % 4
+        tot_hdr += h_pad
+
+        # Resolve leaf files into payload with exact flash offsets
+        if self.leaf_files:
+            root_data = bytes(self.payload)
+            self.resident_payload_size = len(root_data)
+            self.payload = bytearray(root_data)
+            self.leaf_map = []
+            cur_flash_off = tot_hdr + len(root_data)
+            for leaf_id, flags, ldata in self.leaf_files:
+                pad = (4 - (len(self.payload) % 4)) % 4
+                self.payload.extend(b"\x00" * pad)
+                cur_flash_off += pad
+                self.leaf_map.append((leaf_id, flags, len(ldata), 0, cur_flash_off))
+                self.payload.extend(ldata)
+                cur_flash_off += len(ldata)
+
+        # Resolve block files into payload with exact flash offsets
+        if self.block_files:
+            self.payload = bytearray()
+            self.block_map = []
+            cur_flash_off = tot_hdr
+            for block_id, flags, bdata in self.block_files:
+                pad = (4 - (len(self.payload) % 4)) % 4
+                self.payload.extend(b"\x00" * pad)
+                cur_flash_off += pad
+                self.block_map.append((block_id, flags, len(bdata), cur_flash_off))
+                self.payload.extend(bdata)
+                cur_flash_off += len(bdata)
+
+        sections = []
+
         # 1. Identity Section (40 bytes body)
-        name_str_id = 0  # Placeholder, will adjust relative to header base
         ident_body = bytearray()
-        # struct SectionIdentity:
-        # u16 name_str, u8 version[3], u16 min_kernel_abi, u8 author[12], u32 build_ts, u16 icon_asset, u16 flags, u8 reserved[13]
         author_bytes = self.author.ljust(12, b"\x00")[:12]
         ident_body.extend(struct.pack("<H", 0))  # name_str offset (filled after sizing)
         ident_body.extend(bytes([self.version[0], self.version[1], self.version[2]]))
@@ -182,16 +250,14 @@ class KrxPackageBuilder:
 
         # 2. Execution Section (28 bytes body)
         exec_body = bytearray()
-        # struct SectionExecution:
-        # u16 min_stack, u16 min_heap, u16 page_size, u8 cache_blocks, u8 dma_burst, u32 entry_point, u32 payload_size,
-        # u16 reloc_offset, u16 reloc_count, u16 got_offset, u16 rt_pin_mask, u16 max_fault_latency_us, u8 reserved[2]
         exec_body.extend(struct.pack("<H", self.min_stack))
         exec_body.extend(struct.pack("<H", self.min_heap))
         exec_body.extend(struct.pack("<H", self.page_size))
         exec_body.append(self.cache_blocks)
         exec_body.append(0)  # dma_burst_size
         exec_body.extend(struct.pack("<I", self.entry_point))
-        exec_body.extend(struct.pack("<I", len(self.payload)))
+        payload_size = self.resident_payload_size if self.resident_payload_size > 0 else len(self.payload)
+        exec_body.extend(struct.pack("<I", payload_size))
         exec_body.extend(struct.pack("<H", self.reloc_offset))
         exec_body.extend(struct.pack("<H", self.reloc_count))
         exec_body.extend(struct.pack("<H", self.got_offset))
@@ -314,6 +380,10 @@ def main():
     parser.add_argument("--entry", type=lambda x: int(x, 0), default=0, help="Entry point offset")
     parser.add_argument("--link-base", type=lambda x: int(x, 0), default=0, help="Link base VMA")
     parser.add_argument("--got-offset", type=lambda x: int(x, 0), default=0, help="GOT offset")
+    parser.add_argument("--page-size", type=lambda x: int(x, 0), default=1024, help="Page/block size")
+    parser.add_argument("--cache-blocks", type=int, default=2, help="Number of cache blocks")
+    parser.add_argument("--leaf", action="append", default=[], help="Add leaf overlay: <id>:<path>")
+    parser.add_argument("--block", action="append", default=[], help="Add demand block: <id>:<path>")
 
     args = parser.parse_args()
 
@@ -328,7 +398,13 @@ def main():
     app_class, profile_code = profile_map[args.profile]
     builder = KrxPackageBuilder(args.name, app_class, profile_code)
     builder.set_identity(args.name, args.author)
-    builder.set_execution(entry_point=args.entry, link_base=args.link_base, got_offset=args.got_offset)
+    builder.set_execution(
+        entry_point=args.entry,
+        link_base=args.link_base,
+        got_offset=args.got_offset,
+        page_size=args.page_size,
+        cache_blocks=args.cache_blocks,
+    )
 
     if args.payload and os.path.exists(args.payload):
         with open(args.payload, "rb") as f:
@@ -336,6 +412,18 @@ def main():
     else:
         # Default minimal NOP Thumb-1 payload: bx lr (0x4770)
         builder.set_payload(struct.pack("<H", 0x4770))
+
+    for item in args.leaf:
+        parts = item.split(":", 1)
+        lid = int(parts[0], 0)
+        lpath = parts[1]
+        builder.add_leaf_file(lid, lpath)
+
+    for item in args.block:
+        parts = item.split(":", 1)
+        bid = int(parts[0], 0)
+        bpath = parts[1]
+        builder.add_block_file(bid, bpath)
 
     package_bytes = builder.build()
     with open(args.output, "wb") as f:

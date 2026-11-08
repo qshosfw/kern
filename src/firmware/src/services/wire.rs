@@ -494,6 +494,7 @@ fn on_handle_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     let status = match req.handle.domain {
         DOMAIN_SYSTEM => match req.action_id {
             ACTION_SYS_REBOOT => {
+                crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
                 kernel::sys::SystemDiagnostics::reboot();
             }
             ACTION_SYS_FLASHLIGHT => {

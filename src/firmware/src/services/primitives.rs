@@ -608,6 +608,7 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
         Ok(count)
     }
 
+    #[inline(never)]
     fn rename_file(&mut self, old_path: &str, new_path: &str) -> Result<(), ()> {
         if old_path.starts_with("/sys/") || new_path.starts_with("/sys/") {
             return Err(());
@@ -615,6 +616,7 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
         self.storage.rename(old_path, new_path).map_err(|_| ())
     }
 
+    #[inline(never)]
     fn create_dir(&mut self, path: &str) -> Result<(), ()> {
         if path.starts_with("/sys/") {
             return Err(());

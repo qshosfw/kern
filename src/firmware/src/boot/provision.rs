@@ -197,6 +197,12 @@ const BEACON_NATIVE_PAYLOAD: &[u8] = &[
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
 const BENCH_NATIVE_PAYLOAD: &[u8] = include_bytes!("../../../../packages/bench/bench.bin");
 
+#[cfg(all(feature = "provision_apps", feature = "krx_native"))]
+const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/leaf_app/leaf.krx");
+
+#[cfg(all(feature = "provision_apps", feature = "krx_native"))]
+const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/paged_app/paged.krx");
+
 /// Extract the filename component from a path (e.g. "/prov/app.krx" -> "app.krx").
 fn filename_from_path(path: &str) -> &str {
     let bytes = path.as_bytes();
@@ -302,6 +308,23 @@ fn write_krx_package(
     let _ = filesystem.write_file(path, pkg);
 }
 
+/// Write a pre-built valid KRX package directly to KernFS storage with idempotency.
+#[cfg(feature = "provision_apps")]
+#[inline(never)]
+fn write_raw_krx_package(filesystem: &mut SystemStorage, path: &str, pkg_bytes: &[u8]) {
+    if filesystem.exists(path) {
+        let mut head = [0u8; 128];
+        let hlen = head.len().min(pkg_bytes.len());
+        if let Ok(rlen) = filesystem.read_file_at(path, 0, &mut head[..hlen]) {
+            if rlen == hlen && head[..hlen] == pkg_bytes[..hlen] {
+                return;
+            }
+        }
+        let _ = filesystem.remove(path);
+    }
+    let _ = filesystem.write_file(path, pkg_bytes);
+}
+
 /// Ensure core flash-loaded `.krx` packages exist in `/apps/`.
 #[cfg(not(feature = "provision_apps"))]
 pub fn ensure_core_packages(_filesystem: &mut SystemStorage) {}
@@ -345,6 +368,18 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
             "Bench",
             all_caps,
             BENCH_NATIVE_PAYLOAD,
+        );
+
+        write_raw_krx_package(
+            filesystem,
+            "/apps/leaf.krx",
+            LEAF_APP_PACKAGE,
+        );
+
+        write_raw_krx_package(
+            filesystem,
+            "/apps/paged.krx",
+            PAGED_APP_PACKAGE,
         );
     }
 

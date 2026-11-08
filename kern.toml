@@ -68,6 +68,7 @@ grayscale = false       # 🌓 True 2-bit 4-level grayscale with 500 Hz temporal
 
 [features.diagnostics]
 panic_gui = true           # 🚨 On-screen recovery GUI and fault register display
+crash_dialog = true        # 💬 Human-friendly crash & reboot dialog on startup
 flight_recorder = false    # 📊 Circular crash telemetry and reboot logging
 settings_calib = false     # 🎛️ Radio frequency and battery calibration submenu
 settings_debug = false     # 🛠️ Deep hardware register and memory debug submenu

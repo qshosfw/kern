@@ -301,8 +301,8 @@ pub struct KrxAuxSections<'a> {
 #[inline(never)]
 pub fn load_native_from_storage(
     name: &str,
-    storage: &mut crate::services::SystemStorage,
     path: &str,
+    total_read: usize,
     preamble: &KrxPreamble,
     exec: &SectionExecution,
     aux: &KrxAuxSections,
@@ -319,9 +319,6 @@ pub fn load_native_from_storage(
     let buffer_bytes =
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
 
-    let total_read = storage
-        .read_file(path, buffer_bytes)
-        .map_err(|_| KrxLaunchError::ReadFailed)?;
     let h_len = preamble.header_len as usize;
     if total_read <= h_len {
         return Err(KrxLaunchError::TruncatedPackage);
@@ -413,16 +410,32 @@ pub fn load_native_from_storage(
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
     if profile.is_structured_paged() {
-        let ram_vma = slot.got_base;
+        let code_size = if exec.got_offset > 0 {
+            (exec.got_offset as u32).min(overlay_vma.saturating_sub(load_base))
+        } else {
+            (payload_len as u32).min(overlay_vma.saturating_sub(load_base))
+        };
+        let ram_vma = if exec.got_offset > 0 {
+            slot.got_base
+        } else {
+            load_base.saturating_add(code_size)
+        };
         let ram_size = overlay_vma.saturating_sub(ram_vma);
         slot.mem_layout.init_p0_structured(
             load_base,
-            overlay_vma.saturating_sub(load_base),
+            code_size,
             overlay_vma,
             overlay_size,
             ram_vma,
             ram_size,
         );
+    } else if slot.is_paged {
+        let cache_size = (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
+            .min(PAGED_CACHE_MAX_BYTES as u32);
+        let ram_vma = load_base.saturating_add(cache_size);
+        let ram_size = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(ram_vma);
+        slot.mem_layout
+            .init_native_pic(load_base, cache_size, ram_vma, ram_size);
     } else {
         let code_size = if exec.got_offset > 0 {
             (exec.got_offset as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4)

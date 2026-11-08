@@ -413,7 +413,9 @@ pub fn run_safe_mode_recovery(
         match crate::boot::boot_wait_key(hw.key_scanner, 0) {
             Some(kernel::event::KeyCode::Menu) => {
                 crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
-                *master_cfg = MasterConfig::new();
+                unsafe {
+                    MasterConfig::init_in_place(master_cfg as *mut MasterConfig);
+                }
                 master_cfg.audio.boot_jingle = 0; // Disable jingle in safe mode recovery
                 let _ = master_cfg.save_all(hw.filesystem);
                 bsp::set_status_led(bsp::StatusLed::Off);

@@ -10,6 +10,11 @@ typedef unsigned int   u32;
 typedef long long      i64;
 typedef unsigned long long u64;
 
+#define KRX_OP_START  0
+#define KRX_OP_EVENT  1
+#define KRX_OP_RENDER 2
+#define KRX_OP_EXIT   3
+
 // 1. CapDisplayVTable (14 APIs)
 typedef struct {
     void (*clear)(void);
@@ -253,5 +258,44 @@ typedef struct {
     const CapServiceVTable* service;
     const CapHwBusVTable* hw_bus;
 } KrxApiTable;
+
+// P0 Structured Leaf Overlays & Continuations (§5.1 / KRX 3.2)
+#define KRX_LEAF_KIND_DONE       0
+#define KRX_LEAF_KIND_CALL_LEAF  1
+#define KRX_LEAF_KIND_YIELD      2
+#define KRX_LEAF_KIND_ERROR      3
+
+typedef struct __attribute__((packed)) {
+    u8 kind;
+    u8 target_or_code;
+    u16 reserved;
+    u32 payload;
+} KrxLeafContinuation;
+
+typedef struct __attribute__((packed)) {
+    u8 leaf_id;
+    u8 flags;
+    u16 reserved;
+    u32 arg;
+    KrxLeafContinuation continuation;
+} KrxLeafContext;
+
+static inline u16 krx_strlen(const char* s) {
+    u16 len = 0;
+    while (s[len]) len++;
+    return len;
+}
+
+static inline void krx_draw_str(const KrxApiTable* api, i16 x, i16 y, const char* str) {
+    if (api && api->display) {
+        api->display->draw_str(x, y, (const u8*)str, krx_strlen(str), 0, 1);
+    }
+}
+
+static inline void krx_print(const KrxApiTable* api, const char* str) {
+    if (api && api->serial) {
+        api->serial->serial_write((const u8*)str, krx_strlen(str));
+    }
+}
 
 #endif // KRX_H

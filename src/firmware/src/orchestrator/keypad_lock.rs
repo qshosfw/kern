@@ -126,6 +126,7 @@ impl KeypadLockManager {
 
     /// Process system events, hold-to-lock/unlock gestures, sticky F-key timeouts, and auto-lock.
     /// Returns `true` if the event was consumed/intercepted by the lock manager.
+    #[inline(never)]
     pub fn handle_event(
         &mut self,
         event: &Event,

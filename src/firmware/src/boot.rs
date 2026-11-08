@@ -71,8 +71,140 @@ pub fn boot_wait_key_with_usb(
     }
 }
 
+#[cfg(feature = "crash_dialog")]
+#[inline(never)]
+pub fn draw_crash_dialog(
+    canvas: &mut gfx::Canvas,
+    slot: &kernel::boot::BootSlot,
+    countdown_secs: Option<u8>,
+) {
+    canvas.clear();
+
+    // 1. Inverted Header Bar (minimalist and generic: "SYSTEM")
+    canvas.fill_rect(0, 0, 128, 10, gfx::Color::Fill);
+    gfx::text::draw_str_align(
+        canvas,
+        64,
+        2,
+        "SYSTEM",
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Clear,
+        gfx::text::Align::Center,
+    );
+
+    // 2. Title & Separator
+    gfx::text::draw_str(
+        canvas,
+        4,
+        13,
+        "Radio restarted unexpectedly.",
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
+    canvas.draw_horizontal_line(4, 21, 120, gfx::Color::Fill);
+
+    // 3. Human-friendly Cause
+    gfx::text::draw_str(
+        canvas,
+        4,
+        25,
+        "Cause: ",
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
+    gfx::text::draw_str(
+        canvas,
+        32,
+        25,
+        slot.human_reason(),
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
+
+    // 4. Human-friendly Info / Detail
+    let mut detail_buf = [0u8; 32];
+    let detail_str = slot.human_detail(&mut detail_buf);
+    gfx::text::draw_str(
+        canvas,
+        4,
+        35,
+        "Info: ",
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
+    gfx::text::draw_str(
+        canvas,
+        28,
+        35,
+        detail_str,
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
+
+    // 5. System Status
+    gfx::text::draw_str(
+        canvas,
+        4,
+        45,
+        "Operational state restored.",
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
+
+    // 6. Action Badges
+    gfx::widgets::draw_key_badge(canvas, 4, 55, "OK", "Dismiss");
+
+    if let Some(secs) = countdown_secs {
+        let mut cbuf = [0u8; 5];
+        let s = utils::format::format_u32(secs as u32, &mut cbuf[..4]);
+        let slen = s.len();
+        cbuf[slen] = b's';
+        let countdown_str = unsafe { core::str::from_utf8_unchecked(&cbuf[..slen + 1]) };
+        gfx::widgets::draw_key_badge_right(canvas, 124, 55, "EXIT", countdown_str);
+    } else {
+        gfx::widgets::draw_key_badge_right(canvas, 124, 55, "EXIT", "Close");
+    }
+}
+
+#[cfg(feature = "crash_dialog")]
+#[inline(never)]
+pub fn show_crash_dialog_if_needed(hw: &mut BootHardware) {
+    let crash_slot = crate::panic::BOOT_RECORD.get().latest_valid_slot().copied();
+    let crash_count = crash_slot.as_ref().map_or(0, |s| s.crash_count);
+
+    // Intentional reboots and normal cold boots have crash_count == 0 or non-crash slots.
+    // Only display warning dialog if an unexpected crash actually occurred!
+    if crash_count > 0 {
+        if let Some(ref slot) = crash_slot {
+            if !slot.is_crash() {
+                return;
+            }
+
+            hw.backlight.wake();
+            hw.radio
+                .play_beep(crate::services::melody::BeepType::Warning);
+            bsp::set_status_led(bsp::StatusLed::Orange);
+
+            let canvas = crate::system_canvas();
+            draw_crash_dialog(canvas, slot, None);
+            hw.lcd.blit(canvas);
+
+            if boot_wait_key(hw.key_scanner, 6000).is_some() {
+                hw.radio
+                    .play_beep(crate::services::melody::BeepType::Click);
+            }
+
+            bsp::set_status_led(bsp::StatusLed::Off);
+            crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+        }
+    }
+}
+
 #[inline(never)]
 pub fn show_queued_alerts(hw: &mut BootHardware) {
+    #[cfg(feature = "crash_dialog")]
+    show_crash_dialog_if_needed(hw);
+
     let alert = unsafe {
         let ptr = core::ptr::addr_of_mut!(PENDING_ALERT);
         let a = *ptr;
@@ -351,3 +483,80 @@ pub fn mount_or_format<'a>(
 #[cfg(not(feature = "filesystem"))]
 #[allow(dead_code)]
 pub fn ensure_default_files(_filesystem: &mut SystemStorage, _lcd: Option<&mut St7565>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernel::boot::{BOOT_RECORD_IDENT, BootSlot, ResetReason};
+
+    #[test]
+    #[cfg(feature = "crash_dialog")]
+    fn test_draw_crash_dialog_renders_elements() {
+        let mut canvas = gfx::Canvas::new();
+        let mut slot = BootSlot::empty();
+        slot.reset_reason = ResetReason::Appf as u32;
+        slot.set_actor(b"main.rs");
+        slot.panic_line = 142;
+        slot.crash_count = 1;
+        slot.ident = BOOT_RECORD_IDENT;
+        slot.crc32 = slot.compute_crc();
+
+        draw_crash_dialog(&mut canvas, &slot, Some(5));
+
+        // Header bar in page 0 must have fill pixels
+        assert_ne!(canvas.buffer[0][64], 0);
+
+        // Body area in pages 2..5 must have rendered text pixels
+        assert_ne!(canvas.buffer[2][10], 0);
+        assert_ne!(canvas.buffer[3][10], 0);
+        assert_ne!(canvas.buffer[4][10], 0);
+
+        // Action badges in page 7 must have rendered pixels
+        assert_ne!(canvas.buffer[7][10], 0);
+        assert_ne!(canvas.buffer[7][120], 0);
+    }
+
+    #[test]
+    #[cfg(feature = "crash_dialog")]
+    fn test_draw_crash_dialog_hardfault_and_watchdog() {
+        let mut canvas = gfx::Canvas::new();
+        let mut slot = BootSlot::empty();
+        slot.reset_reason = ResetReason::Hard as u32;
+        slot.set_actor(b"DACCVIOL");
+        slot.fault_pc = 0x0800_2468;
+        slot.crash_count = 1;
+        slot.ident = BOOT_RECORD_IDENT;
+        slot.crc32 = slot.compute_crc();
+
+        draw_crash_dialog(&mut canvas, &slot, None);
+        assert_ne!(canvas.buffer[0][64], 0);
+        assert_ne!(canvas.buffer[3][10], 0);
+
+        // Watchdog timeout test
+        canvas.clear();
+        slot.reset_reason = ResetReason::Wdog as u32;
+        slot.set_actor(b"WATCHDOG");
+        slot.crc32 = slot.compute_crc();
+
+        draw_crash_dialog(&mut canvas, &slot, None);
+        assert_ne!(canvas.buffer[0][64], 0);
+        assert_ne!(canvas.buffer[3][10], 0);
+    }
+
+    #[test]
+    #[cfg(feature = "crash_dialog")]
+    fn test_intentional_reboot_is_not_crash() {
+        let mut slot = BootSlot::empty();
+        // Clean boot / intentional reboot has crash_count == 0 and empty slot
+        assert_eq!(slot.crash_count, 0);
+        assert!(!slot.is_crash());
+
+        // Even if slot has ident but reason is None or crash_count is 0
+        slot.ident = BOOT_RECORD_IDENT;
+        slot.reset_reason = 0;
+        slot.crash_count = 0;
+        slot.crc32 = slot.compute_crc();
+        assert_eq!(slot.crash_count, 0);
+        assert!(!slot.is_crash());
+    }
+}

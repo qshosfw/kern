@@ -6,7 +6,6 @@
 
 use crate::canvas::Icon;
 use crate::proc::Pid;
-use heapless::Vec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TraySlot {
@@ -16,11 +15,27 @@ pub struct TraySlot {
 
 pub struct StatusTray<const N: usize = 4> {
     slots: [Option<TraySlot>; N],
+    cached: [Icon; N],
+    count: usize,
 }
 
 impl<const N: usize> StatusTray<N> {
     pub const fn new() -> Self {
-        Self { slots: [None; N] }
+        Self {
+            slots: [None; N],
+            cached: [Icon::Antenna; N],
+            count: 0,
+        }
+    }
+
+    fn rebuild(&mut self) {
+        self.count = 0;
+        for slot in self.slots.iter() {
+            if let Some(entry) = slot {
+                self.cached[self.count] = entry.icon;
+                self.count += 1;
+            }
+        }
     }
 
     /// Register or update a status icon for the specified owner process.
@@ -34,6 +49,7 @@ impl<const N: usize> StatusTray<N> {
             if let Some(entry) = slot {
                 if entry.owner == owner {
                     entry.icon = icon;
+                    self.rebuild();
                     return true;
                 }
             }
@@ -43,6 +59,7 @@ impl<const N: usize> StatusTray<N> {
         for slot in self.slots.iter_mut() {
             if slot.is_none() {
                 *slot = Some(TraySlot { owner, icon });
+                self.rebuild();
                 return true;
             }
         }
@@ -56,6 +73,7 @@ impl<const N: usize> StatusTray<N> {
             if let Some(entry) = slot {
                 if entry.owner == owner {
                     *slot = None;
+                    self.rebuild();
                     return true;
                 }
             }
@@ -75,15 +93,10 @@ impl<const N: usize> StatusTray<N> {
         None
     }
 
-    /// Returns a list of all currently active tray icons.
-    pub fn active_icons(&self) -> Vec<Icon, N> {
-        let mut list = Vec::new();
-        for slot in self.slots.iter() {
-            if let Some(entry) = slot {
-                let _ = list.push(entry.icon);
-            }
-        }
-        list
+    /// Returns a slice of all currently active tray icons.
+    #[inline(always)]
+    pub fn active_icons(&self) -> &[Icon] {
+        &self.cached[..self.count]
     }
 
     /// Clear all registered tray icons.
@@ -91,5 +104,6 @@ impl<const N: usize> StatusTray<N> {
         for slot in self.slots.iter_mut() {
             *slot = None;
         }
+        self.count = 0;
     }
 }

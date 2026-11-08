@@ -448,7 +448,7 @@ pub fn draw_status_right_unified(
         anim_step,
         now_ms,
         inverted,
-        dynamic_icons: &tray_icons,
+        dynamic_icons: tray_icons,
     };
 
     cfg.render(canvas)

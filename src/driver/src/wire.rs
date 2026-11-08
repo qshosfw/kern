@@ -44,6 +44,7 @@ impl<S: SerialPort> WireDriver<S> {
     }
 
     /// Poll the serial byte stream, feeding the bounded COBS frame collector.
+    #[inline(never)]
     pub fn poll(&mut self, uptime_ms: u32) -> Option<(WireHeader, usize)> {
         let mut byte_buf = [0u8; 64];
         let read_count = self.port.read(&mut byte_buf);

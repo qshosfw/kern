@@ -341,7 +341,106 @@ def run_test():
             sys.exit("FAIL: Screen did not return to Launcher from ABI Bench")
         print("  PASS  Returned to Launcher from Native Bench app")
 
-        # 14. Test Long-Press EXIT (Force Close) inside an app
+        # 14. Launch P0 Structured Leaf App (/apps/leaf.krx via key '5')
+        print("  • Injecting keypad press: '5' (Launch P0 Structured Leaf App)...")
+        key_resp = http_post_json("/api/key", {"key": "5", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key 5 injection failed: {key_resp}")
+
+        leaf_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != bench_return_frame:
+                leaf_frame = cur
+                break
+        if not leaf_frame:
+            sys.exit("FAIL: Leaf App failed to launch and render")
+        print("  PASS  P0 Structured Leaf App loaded and executed")
+
+        # Validate Leaf App serial telemetry
+        time.sleep(0.5)
+        log_data = http_get_json("/api/logs")
+        entries = log_data.get("entries", [])
+        leaf_lines = [e.get("text", "") for e in entries if any(k in e.get("text", "") for k in ["LEAF", "ROOT"])]
+        expected_leaf_markers = [
+            "ROOT: P0 LEAF START",
+            "LEAF1: TRAMP L2",
+            "LEAF2: DONE(104)",
+            "ROOT: LEAF PASS(104)",
+        ]
+        for marker in expected_leaf_markers:
+            found = any(marker in line for line in leaf_lines)
+            if not found:
+                print("Captured leaf lines:", leaf_lines)
+                sys.exit(f"FAIL: Expected leaf marker not found: '{marker}'")
+            print(f"  PASS  Leaf marker verified: {marker}")
+        print("  PASS  P0 Structured Leaf overlay trampoline chaining verified: Leaf 1 -> Leaf 2 -> Done(104)")
+
+        # Exit Leaf App
+        print("  • Injecting keypad press: 'EXIT' (Return to Launcher from Leaf)...")
+        http_post_json("/api/key", {"key": "EXIT", "hold_ms": 150})
+        leaf_return_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != leaf_frame:
+                leaf_return_frame = cur
+                break
+        if not leaf_return_frame:
+            sys.exit("FAIL: Screen did not return to Launcher from Leaf App")
+        print("  PASS  Returned to Launcher from Leaf app")
+
+        # 15. Launch P1 Transparent Paged Streaming App (/apps/paged.krx via key '6')
+        print("  • Injecting keypad press: '6' (Launch P1 Demand-Paged Streaming App)...")
+        key_resp = http_post_json("/api/key", {"key": "6", "hold_ms": 150})
+        if not key_resp.get("ok"):
+            sys.exit(f"FAIL: Key 6 injection failed: {key_resp}")
+
+        paged_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != leaf_return_frame:
+                paged_frame = cur
+                break
+        if not paged_frame:
+            sys.exit("FAIL: Paged App failed to launch and render")
+        print("  PASS  P1 Demand-Paged Streaming App loaded and executed")
+
+        # Validate Paged App serial telemetry
+        time.sleep(0.5)
+        log_data = http_get_json("/api/logs")
+        entries = log_data.get("entries", [])
+        paged_lines = [e.get("text", "") for e in entries if any(k in e.get("text", "") for k in ["PAGED", "BLK1"])]
+        expected_paged_markers = [
+            "ROOT: P1 PAGED START",
+            "BLK1: RUN CACHE SLOT 1",
+            "ROOT: DEMAND STREAM RES=47 PASS",
+        ]
+        for marker in expected_paged_markers:
+            found = any(marker in line for line in paged_lines)
+            if not found:
+                print("Captured paged lines:", paged_lines)
+                sys.exit(f"FAIL: Expected paged marker not found: '{marker}'")
+            print(f"  PASS  Paged marker verified: {marker}")
+        print("  PASS  P1 Demand-Paged cache slot page-in and return-thunk verified: Block 0 -> Block 1 -> Return(47)")
+
+        # Exit Paged App
+        print("  • Injecting keypad press: 'EXIT' (Return to Launcher from Paged)...")
+        http_post_json("/api/key", {"key": "EXIT", "hold_ms": 150})
+        paged_return_frame = None
+        for _ in range(30):
+            time.sleep(0.2)
+            cur = http_get("/frame.png")
+            if cur != paged_frame:
+                paged_return_frame = cur
+                break
+        if not paged_return_frame:
+            sys.exit("FAIL: Screen did not return to Launcher from Paged App")
+        print("  PASS  Returned to Launcher from Paged app")
+
+        # 16. Test Long-Press EXIT (Force Close) inside an app
         print("  • Testing Force Close via Long-Press EXIT in app...")
         http_post_json("/api/key", {"key": "1", "hold_ms": 150})
         time.sleep(1.0)
@@ -355,7 +454,7 @@ def run_test():
             sys.exit("FAIL: App did not force close back to Launcher on long-press EXIT")
         print("  PASS  App force closed back to Launcher on long-press EXIT")
 
-        # 15. Test F + EXIT (Force Suspend / Return Home) inside an app
+        # 17. Test F + EXIT (Force Suspend / Return Home) inside an app
         print("  • Testing Force Suspend via F + EXIT in app...")
         http_post_json("/api/key", {"key": "2", "hold_ms": 150})
         time.sleep(1.0)

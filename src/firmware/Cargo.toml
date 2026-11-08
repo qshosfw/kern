@@ -33,6 +33,7 @@ default = [
     "rtc",
     "internal_flash",
     "panic_gui",
+    "crash_dialog",
     "krx_runtime",
     "krx_native",
     "flashlight",
@@ -101,6 +102,7 @@ panic_gui = []
 panic_gui_extended = ["panic_gui"]
 panic_disasm = []
 panic_uart = ["uart"]
+crash_dialog = []
 
 # 📦 Feature Bundles & Group Configurations
 full = ["default", "passcode", "panic_gui", "panic_uart"]

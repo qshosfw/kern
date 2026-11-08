@@ -79,39 +79,41 @@ impl ModalCompositor {
         self.modal = ActiveModal::None;
     }
 
-    pub fn show_popup(&mut self, tag: u8, title: &'static str, message: &'static str) {
-        self.tag = tag;
-        self.modal = ActiveModal::Popup(PopupModel::new(title, message));
-    }
-
-    pub fn show_popup_str(&mut self, tag: u8, title: &'static str, message: &str) {
-        let mut model = PopupModel::new(title, "");
-        let _ = model.custom_msg.push_str(message);
-        self.tag = tag;
-        self.modal = ActiveModal::Popup(model);
-    }
-
+    #[inline(never)]
     pub fn show_confirm(
         &mut self,
         tag: u8,
-        title: &'static str,
-        message: &'static str,
+        title: &str,
+        message: &str,
         confirm: &'static str,
         cancel: &'static str,
     ) {
-        self.tag = tag;
-        self.modal =
-            ActiveModal::Popup(PopupModel::new(title, message).with_badges(confirm, cancel));
-    }
-
-    pub fn show_popup_dynamic(&mut self, tag: u8, title: &str, message: &str) {
         let mut model = PopupModel::new("", "");
+        if !confirm.is_empty() && !cancel.is_empty() {
+            model = model.with_badges(confirm, cancel);
+        }
         let _ = model.custom_title.push_str(title);
         let _ = model.custom_msg.push_str(message);
         self.tag = tag;
         self.modal = ActiveModal::Popup(model);
     }
 
+    #[inline(always)]
+    pub fn show_popup(&mut self, tag: u8, title: &str, message: &str) {
+        self.show_confirm(tag, title, message, "", "");
+    }
+
+    #[inline(always)]
+    pub fn show_popup_str(&mut self, tag: u8, title: &str, message: &str) {
+        self.show_popup(tag, title, message);
+    }
+
+    #[inline(always)]
+    pub fn show_popup_dynamic(&mut self, tag: u8, title: &str, message: &str) {
+        self.show_popup(tag, title, message);
+    }
+
+    #[inline(always)]
     pub fn show_confirm_dynamic(
         &mut self,
         tag: u8,
@@ -120,11 +122,7 @@ impl ModalCompositor {
         confirm: &'static str,
         cancel: &'static str,
     ) {
-        let mut model = PopupModel::new("", "").with_badges(confirm, cancel);
-        let _ = model.custom_title.push_str(title);
-        let _ = model.custom_msg.push_str(message);
-        self.tag = tag;
-        self.modal = ActiveModal::Popup(model);
+        self.show_confirm(tag, title, message, confirm, cancel);
     }
 
     #[cfg(feature = "text_input")]
@@ -197,6 +195,7 @@ impl ModalCompositor {
         self.modal = ActiveModal::Sheet(sheet, KeyRepeater::new(8, 2), anim);
     }
 
+    #[inline(never)]
     pub fn handle_event(&mut self, event: &Event) -> Option<ModalResult<'_>> {
         let tag = self.tag;
         match &mut self.modal {

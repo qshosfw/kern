@@ -395,20 +395,8 @@ static APPS_RULES: [BoundsRule; 5] = [
 ];
 
 impl MasterConfig {
-    pub const fn new() -> Self {
-        let sys = SystemConfig::new();
-        let mut keys = KeyConfig::new();
-        keys.nav_layout = sys.nav_layout();
-        Self {
-            display: DisplayConfig::new(),
-            audio: AudioConfig::new(),
-            keys,
-            system: sys,
-            battery: BatteryConfig::new(),
-            apps: AppsConfig::new(),
-            dirty: 0,
-            hw_dirty: 0,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     #[inline(never)]
@@ -600,12 +588,6 @@ impl MasterConfig {
             self.dirty |= repaired;
             let _ = self.flush_dirty(storage);
         }
-    }
-
-    pub fn load_all(storage: &mut SystemStorage) -> Self {
-        let mut cfg = Self::new();
-        cfg.load_into(storage);
-        cfg
     }
 
     pub fn is_dirty(&self) -> bool {
