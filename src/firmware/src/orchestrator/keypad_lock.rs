@@ -74,9 +74,10 @@ impl KeypadLockManager {
 
     #[inline(always)]
     pub fn is_animating(&self) -> bool {
+        let is_sleep_hold = self.held_code == Some(KeyCode::Exit);
         (self.held_code.is_some()
             && self.held_confirmed
-            && !self.is_long_press_triggered
+            && (!self.is_long_press_triggered || is_sleep_hold)
             && self.hold_elapsed_ms >= self.hold_start_threshold_ms)
             || self.toast_remaining_ms > 0
     }
@@ -99,7 +100,7 @@ impl KeypadLockManager {
     }
 
     #[inline(always)]
-    fn reset_hold_tracking(&mut self) {
+    pub fn reset_hold_tracking(&mut self) {
         self.held_code = None;
         self.hold_elapsed_ms = 0;
         self.held_confirmed = false;
@@ -334,10 +335,11 @@ impl KeypadLockManager {
     /// Renders an authentic centered notification modal dialog with lock/unlock padlock symbols,
     /// authentic inverted key badges for '#' and 'F', reusing standard system modal widgets.
     pub fn render_overlay(&self, canvas: &mut Canvas) {
-        // 1. Live hold-to-unlock / hold-to-lock progress bar takes precedence ONLY during deliberate confirmed long-press hold
+        // 1. Live hold-to-unlock / hold-to-lock / hold-to-sleep progress bar
+        let is_sleep_hold = self.held_code == Some(KeyCode::Exit);
         if self.held_code.is_some()
             && self.held_confirmed
-            && !self.is_long_press_triggered
+            && (!self.is_long_press_triggered || is_sleep_hold)
             && self.hold_elapsed_ms >= self.hold_start_threshold_ms
         {
             let box_w = 108u8;
@@ -345,8 +347,12 @@ impl KeypadLockManager {
             let (bx, by) = gfx::widgets::dialog::draw_modal_box(canvas, box_w, box_h);
             let center_x = (bx as i16) + (box_w as i16 / 2);
 
-            let (icon, text_str) = if self.held_code == Some(KeyCode::Exit) {
-                (gfx::icons::Icon::Moon, "HOLD FOR SLEEP")
+            let (icon, text_str) = if is_sleep_hold {
+                if self.is_long_press_triggered || self.hold_elapsed_ms >= self.hold_target_ms {
+                    (gfx::icons::Icon::Moon, "ENTERING SLEEP")
+                } else {
+                    (gfx::icons::Icon::Moon, "HOLD FOR SLEEP")
+                }
             } else if self.is_locked {
                 (gfx::icons::Icon::Lock, "HOLD TO UNLOCK")
             } else {
@@ -368,14 +374,19 @@ impl KeypadLockManager {
 
             let bar_w = 92u8;
             let bar_x = (center_x - (bar_w as i16) / 2) as i16;
-            let visible_elapsed = self
-                .hold_elapsed_ms
-                .saturating_sub(self.hold_start_threshold_ms);
-            let visible_target = self
-                .hold_target_ms
-                .saturating_sub(self.hold_start_threshold_ms)
-                .max(100) as u32;
-            let pct = ((visible_elapsed as u32 * 100) / visible_target).min(100) as u8;
+            let pct = if self.is_long_press_triggered || self.hold_elapsed_ms >= self.hold_target_ms
+            {
+                100
+            } else {
+                let visible_elapsed = self
+                    .hold_elapsed_ms
+                    .saturating_sub(self.hold_start_threshold_ms);
+                let visible_target = self
+                    .hold_target_ms
+                    .saturating_sub(self.hold_start_threshold_ms)
+                    .max(100) as u32;
+                ((visible_elapsed as u32 * 100) / visible_target).min(100) as u8
+            };
             gfx::widgets::draw_progress_bar(canvas, bar_x, (by + 18) as i16, bar_w, 6, pct, true);
             return;
         }
@@ -534,6 +545,41 @@ mod tests {
         let tick = Event::Tick;
         mgr.handle_event(&tick, 400, 3000, 0, true);
         assert!(mgr.sleep_requested);
+        assert!(mgr.is_long_press_triggered);
+
+        // Crucial: overlay must render the completed 100% dialog ("ENTERING SLEEP")
+        // and NOT disappear before deep sleep is entered!
+        let mut canvas = Canvas::new();
+        mgr.render_overlay(&mut canvas);
+        let mut non_zero = 0;
+        for page in 0..8 {
+            for col in 0..128 {
+                if canvas.buffer[page][col] != 0 {
+                    non_zero += 1;
+                }
+            }
+        }
+        assert!(
+            non_zero > 0,
+            "Sleep overlay dialog must be rendered on long-press Exit completion"
+        );
+
+        // Reset hold tracking must clear overlay
+        mgr.reset_hold_tracking();
+        let mut empty_canvas = Canvas::new();
+        mgr.render_overlay(&mut empty_canvas);
+        let mut empty_non_zero = 0;
+        for page in 0..8 {
+            for col in 0..128 {
+                if empty_canvas.buffer[page][col] != 0 {
+                    empty_non_zero += 1;
+                }
+            }
+        }
+        assert_eq!(
+            empty_non_zero, 0,
+            "Overlay must be cleared after reset_hold_tracking"
+        );
     }
 
     #[test]

@@ -262,6 +262,10 @@ impl Orchestrator {
         req && is_root
     }
 
+    pub fn reset_hold_tracking(&mut self) {
+        self.lock_mgr.reset_hold_tracking();
+    }
+
     pub fn active_app_id(&self) -> usize {
         self.active_app_id
     }

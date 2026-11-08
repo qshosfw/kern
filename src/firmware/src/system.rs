@@ -90,6 +90,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         py32_hal::delay::delay_ms(10);
     }
     drivers::keyboard::KeypadScanner::reset_gpio_pins();
+    hw.orchestrator.reset_hold_tracking();
 
     // 5. Downclock to direct 16 MHz HSI, shut off analog PLL, and set flash to 0WS
     // This dramatically cuts dynamic core power and eliminates PLL analog consumption.
@@ -173,6 +174,14 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     }
 
     hw.radio.set_status_led(bsp::StatusLed::Off);
+
+    // Wait for key release upon waking to prevent spurious key events
+    while drivers::keyboard::KeypadScanner::poll_matrix().is_some() {
+        py32_hal::wdt::Watchdog::feed();
+        py32_hal::delay::delay_ms(10);
+    }
+    drivers::keyboard::KeypadScanner::reset_gpio_pins();
+    hw.orchestrator.reset_hold_tracking();
 
     // 7. Wakeup & Hardware Restoration
     // Restore system clocks cleanly based on configuration
@@ -554,8 +563,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         }
 
         // Check if deep sleep mode was requested (e.g. via long-press Exit).
-        // Suppressed while plugged into USB or charging.
-        if hw.orchestrator.take_sleep_requested() && !is_plugged_in(hw) {
+        if hw.orchestrator.take_sleep_requested() {
+            hw.render_frame();
             handle_deep_sleep_mode(hw);
             dirty_render = true;
         }
