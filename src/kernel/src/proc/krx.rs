@@ -2249,6 +2249,11 @@ mod tests {
             assert_eq!((u.ui_get_modal_text)(modal_res.as_mut_ptr(), 16), 0);
             (u.ui_show_toast)(b"ALERT\0".as_ptr(), 5, 1500);
             assert_eq!((u.ui_is_animating)(), 0);
+            let sb = KrxStatusBar::empty();
+            assert_eq!((u.ui_set_status_bar)(&sb), 1);
+            let mut read_sb = KrxStatusBar::empty();
+            (u.ui_get_status_bar)(&mut read_sb);
+            assert_eq!((u.ui_set_tray_icon)(15), 1);
         }
 
         // 10. CapMathVTable

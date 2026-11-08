@@ -68,6 +68,18 @@ pub fn lease_manager_mut() -> &'static mut kernel::proc::ResourceLeaseManager<8>
     unsafe { &mut *core::ptr::addr_of_mut!(LEASE_MGR) }
 }
 
+static mut STATUS_TRAY: kernel::proc::StatusTray<4> = kernel::proc::StatusTray::new();
+
+#[inline(always)]
+pub fn status_tray() -> &'static kernel::proc::StatusTray<4> {
+    unsafe { &*core::ptr::addr_of!(STATUS_TRAY) }
+}
+
+#[inline(always)]
+pub fn status_tray_mut() -> &'static mut kernel::proc::StatusTray<4> {
+    unsafe { &mut *core::ptr::addr_of_mut!(STATUS_TRAY) }
+}
+
 pub static mut SUNK_KEYS: u32 = 0;
 
 pub const BIT_MENU: u32 = 1 << 2;
@@ -344,12 +356,39 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    pub fn force_close_active_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
+        if self.active_app_id == APP_ID_LAUNCHER {
+            return;
+        }
+        let closing_app = self.active_app_id;
+        self.lock_mgr.reset_input_tracking();
+        self.nav_stack.clear();
+        self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+        if closing_app >= crate::AppRegistry::count() {
+            crate::AppRegistry::unregister_dynamic();
+        } else if let Some(pcb) = proc_table_mut().find_mut_by_app(closing_app) {
+            pcb.set_state(ProcState::Stopped);
+        }
+        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Success);
+    }
+
+    #[inline(never)]
     fn handle_f_key_action<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
         code: KeyCode,
     ) {
         self.lock_mgr.is_f_active = false;
+        if code == KeyCode::Exit {
+            if self.active_app_id != APP_ID_LAUNCHER {
+                self.nav_stack.clear();
+                self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+                ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Success);
+            }
+            self.drain_ipc_commands(ctx);
+            return;
+        }
+
         let action = match code {
             KeyCode::Key0 => ctx.config.keys.f_0,
             KeyCode::Star => ctx.config.keys.f_star,
@@ -394,6 +433,13 @@ impl Orchestrator {
             ctx.config.keys.auto_lock_ms(),
             can_sleep,
         );
+
+        if self.lock_mgr.force_close_requested {
+            self.lock_mgr.force_close_requested = false;
+            self.force_close_active_app(ctx);
+            return (true, true);
+        }
+
         let state_changed =
             was_locked != self.lock_mgr.is_locked || was_f_active != self.lock_mgr.is_f_active;
 

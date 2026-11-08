@@ -20,7 +20,7 @@ use kernel::proc::krx::{
     SECTION_TYPE_LIFECYCLE,
 };
 
-pub const PROV_BUF_CAP: usize = 512;
+pub const PROV_BUF_CAP: usize = 2048;
 
 // Declare 3.0 payload for `/apps/sysinfo.krx` (1 node, 5 live ITEM_INFO rows, 0 actions, 6 labels)
 #[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
@@ -145,36 +145,25 @@ const BEACON_NATIVE_PAYLOAD: &[u8] = &[
     0x01, 0x29, // cmp r1, #1 (KRX_EV_KEY)
     0x04, 0xd1, // bne .Levent_ignored
     0x70, 0x78, // ldrb r0, [r6, #1] (krx_ev.key)
-    0x0f, 0x28, // cmp r0, #15 (KEY_EXIT)
+    0x06, 0x28, // cmp r0, #6 (KEY_EXIT)
     0x01, 0xd0, // beq .Levent_ignored
     0x01, 0x20, // movs r0, #1 (consumed)
     0x70, 0xbd, // pop {r4, r5, r6, pc}
     // .Levent_ignored:
     0x00, 0x20, // movs r0, #0
     0x70, 0xbd, // pop {r4, r5, r6, pc}
-    // .Lrender:
-    0xac, 0x6c, // ldr r4, [r5, #72] (draw_rect)
-    0x00, 0x2c, // cmp r4, #0
-    0x20, 0xd0, // beq .Lrender_done
-    0x01, 0x20, // movs r0, #1
-    0x81, 0xb0, // sub sp, #4
-    0x00, 0x90, // str r0, [sp, #0] (color = 1)
-    0x00, 0x20, // movs r0, #0 (x = 0)
-    0x00, 0x21, // movs r1, #0 (y = 0)
-    0x80, 0x22, // movs r2, #128 (w = 128)
-    0x40, 0x23, // movs r3, #64 (h = 64)
-    0xa0, 0x47, // blx r4
-    0x01, 0xb0, // add sp, #4
-    0x01, 0x20, // movs r0, #1
-    0x81, 0xb0, // sub sp, #4
-    0x00, 0x90, // str r0, [sp, #0] (color = 1)
-    0x02, 0x20, // movs r0, #2 (x = 2)
-    0x0a, 0x21, // movs r1, #10 (y = 10)
-    0x7c, 0x22, // movs r2, #124 (w = 124)
-    0x2c, 0x23, // movs r3, #44 (h = 44)
-    0xac, 0x6c, // ldr r4, [r5, #72]
-    0xa0, 0x47, // blx r4
-    0x01, 0xb0, // add sp, #4
+    // .Lrender: Clean edge-to-edge rendering without useless borders
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
+    0xc0, 0x46, // nop
     0x2c, 0x6d, // ldr r4, [r5, #80] (draw_str)
     0x00, 0x2c, // cmp r4, #0
     0x0a, 0xd0, // beq .Lrender_done
@@ -202,6 +191,11 @@ const BEACON_NATIVE_PAYLOAD: &[u8] = &[
     0x60, 0x27, 0xac, 0x08, // .word 145500000 (0x08ac2760)
     0xd4, 0x30, 0x00, 0x00, // .word 12500 (0x000030d4)
 ];
+
+// Standalone Native Thumb-1 binary payload for `/apps/bench.krx`.
+// 100% self-contained PIC executable. Completely resides inside the KRX file on KernFS.
+#[cfg(all(feature = "provision_apps", feature = "krx_native"))]
+const BENCH_NATIVE_PAYLOAD: &[u8] = include_bytes!("../../../../packages/bench/bench.bin");
 
 /// Extract the filename component from a path (e.g. "/prov/app.krx" -> "app.krx").
 fn filename_from_path(path: &str) -> &str {
@@ -236,10 +230,15 @@ fn write_krx_package(
     if filesystem.exists(path) {
         let buf = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
         if let Ok(rlen) = filesystem.read_file(path, buf) {
+            let page_size: u16 = match class {
+                KrxClass::Paged => 512,
+                _ => 0,
+            };
             if rlen == total_len
                 && &buf[128..total_len] == payload
                 && buf[94] == profile.raw_code()
                 && buf[68..70] == 128u16.to_le_bytes()
+                && buf[72..74] == page_size.to_le_bytes()
             {
                 return;
             }
@@ -270,8 +269,12 @@ fn write_krx_package(
     pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
     pkg[66] = 32;
     pkg[68..70].copy_from_slice(&128u16.to_le_bytes()); // min_stack_bytes = 128
-    pkg[72..74].copy_from_slice(&512u16.to_le_bytes()); // page_size = 512
-    pkg[74] = 2; // cache_blocks = 2
+    let page_size: u16 = match class {
+        KrxClass::Paged => 512,
+        _ => 0,
+    };
+    pkg[72..74].copy_from_slice(&page_size.to_le_bytes()); // page_size: 0 for Native
+    pkg[74] = if class == KrxClass::Paged { 2 } else { 0 }; // cache_blocks
     pkg[80..84].copy_from_slice(&(payload.len() as u32).to_le_bytes()); // payload_size
     let code_len = payload.len() as u16;
     let got_offset = match class {
@@ -334,12 +337,6 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
             | (kernel::caps::Cap::PowerManage as u32)
             | (kernel::caps::Cap::RealTimeClock as u32);
 
-        let entry_addr = (crate::runtime::syscall::krx_bench_app_entry as *const () as usize) | 1;
-        let mut bench_payload = [0u8; 8];
-        bench_payload[0..2].copy_from_slice(&[0x00, 0x4b]); // ldr r3, [pc, #0]
-        bench_payload[2..4].copy_from_slice(&[0x18, 0x47]); // bx r3
-        bench_payload[4..8].copy_from_slice(&(entry_addr as u32).to_le_bytes());
-
         write_krx_package(
             filesystem,
             "/apps/bench.krx",
@@ -347,7 +344,7 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
             KrxProfile::N1NativePic,
             "Bench",
             all_caps,
-            &bench_payload,
+            BENCH_NATIVE_PAYLOAD,
         );
     }
 

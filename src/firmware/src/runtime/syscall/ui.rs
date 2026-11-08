@@ -113,6 +113,33 @@ pub unsafe extern "C" fn api_ui_is_animating() -> u8 {
     }
 }
 
+pub unsafe extern "C" fn api_ui_set_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) -> u8 {
+    crate::runtime::native_runner::set_slot_status_bar(sb);
+    1
+}
+
+pub unsafe extern "C" fn api_ui_get_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
+    if !out_sb.is_null() {
+        crate::runtime::native_runner::get_slot_status_bar(out_sb);
+    }
+}
+
+pub unsafe extern "C" fn api_ui_set_tray_icon(icon_id: u8) -> u8 {
+    let pid = crate::runtime::native_runner::slot_ref().pid;
+    if icon_id == 0xFF {
+        crate::orchestrator::status_tray_mut().clear_icon(pid);
+        1
+    } else if let Some(icon) = kernel::canvas::Icon::from_u8(icon_id) {
+        if crate::orchestrator::status_tray_mut().set_icon(pid, icon) {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
 pub static UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_close_modal: api_ui_close_modal,
     ui_has_modal: api_ui_has_modal,
@@ -122,4 +149,7 @@ pub static UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_get_modal_text: api_ui_get_modal_text,
     ui_show_toast: api_ui_show_toast,
     ui_is_animating: api_ui_is_animating,
+    ui_set_status_bar: api_ui_set_status_bar,
+    ui_get_status_bar: api_ui_get_status_bar,
+    ui_set_tray_icon: api_ui_set_tray_icon,
 };

@@ -123,6 +123,7 @@ impl AppRegistry {
     pub fn unregister_dynamic() {
         let dyn_pid = kernel::proc::Pid(APP_TABLE.len() as u8);
         crate::orchestrator::lease_manager_mut().revoke_all_for_owner(dyn_pid);
+        crate::orchestrator::status_tray_mut().clear_icon(dyn_pid);
         unsafe {
             *core::ptr::addr_of_mut!(DYNAMIC_APP) = None;
         }

@@ -280,9 +280,7 @@ fn render_info_card(
     font: &gfx::GfxFont,
     total_items: usize,
 ) {
-    canvas.draw_rect(2, 9, 124, 43, Color::Fill);
-    canvas.clear_corners(2, 9, 124, 43);
-    canvas.draw_horizontal_line(2, 17, 124, Color::DarkGray);
+    canvas.draw_horizontal_line(0, 17, 128, Color::DarkGray);
 
     if !title.is_empty() {
         gfx::text::draw_str(canvas, 6, 15, title, font, Color::Fill);

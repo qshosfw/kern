@@ -409,20 +409,8 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         canvas: &mut gfx::Canvas,
         config: &kernel::app::StatusBarConfig<'_>,
     ) {
-        if config.show_divider {
-            canvas.fill_rect(0, 0, 128, 7, gfx::Color::Clear);
-            canvas.draw_horizontal_line(0, 6, 128, gfx::Color::DarkGray);
-        }
         let right_limit = self.draw_status_bar_right(canvas);
-        gfx::widgets::status_bar::draw_status_bar_layout(
-            canvas,
-            false,
-            config.signal_level,
-            config.title,
-            config.left_badge,
-            config.center_text,
-            right_limit,
-        );
+        gfx::widgets::status_bar::draw_status_bar_layout(canvas, config, right_limit);
     }
 }
 
@@ -443,6 +431,7 @@ pub fn draw_status_right_unified(
     let now_ms = py32_hal::delay::millis();
     let anim_step = ((now_ms >> 8) & 0xFF) as u8;
     let shading_mode = crate::master_config_ref().display.shading_mode;
+    let tray_icons = crate::orchestrator::status_tray().active_icons();
 
     let cfg = gfx::widgets::status_bar::StatusRightConfig {
         percentage: pct,
@@ -459,7 +448,7 @@ pub fn draw_status_right_unified(
         anim_step,
         now_ms,
         inverted,
-        dynamic_icons: &[],
+        dynamic_icons: &tray_icons,
     };
 
     cfg.render(canvas)

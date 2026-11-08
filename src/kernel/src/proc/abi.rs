@@ -336,6 +336,53 @@ pub struct CapTimerVTable {
     pub sys_rtc_get: unsafe extern "C" fn(out_time: *mut u8) -> u8,
 }
 
+pub const KRX_STATUS_VISIBLE: u8 = 1 << 0;
+pub const KRX_STATUS_DIVIDER: u8 = 1 << 1;
+pub const KRX_STATUS_HAS_SIGNAL: u8 = 1 << 2;
+pub const KRX_STATUS_CUSTOM_TITLE: u8 = 1 << 3;
+
+/// 64-byte ($2^6$) Power-of-Two Aligned C-ABI Status Bar Descriptor.
+///
+/// Supports multiple left icons and multiple center icons dynamically appended,
+/// padded, and composited across foreground apps and guest executables.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct KrxStatusBar {
+    pub flags: u8,
+    pub signal_level: u8,
+    pub left_icon_count: u8,
+    pub center_icon_count: u8,
+    pub left_icons: [u8; 4],
+    pub center_icons: [u8; 4],
+    pub title: [u8; 16],
+    pub badge: [u8; 8],
+    pub center: [u8; 16],
+    pub _reserved: [u8; 12],
+}
+
+impl Default for KrxStatusBar {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl KrxStatusBar {
+    pub const fn empty() -> Self {
+        Self {
+            flags: KRX_STATUS_VISIBLE | KRX_STATUS_DIVIDER,
+            signal_level: 0,
+            left_icon_count: 0,
+            center_icon_count: 0,
+            left_icons: [0; 4],
+            center_icons: [0; 4],
+            title: [0; 16],
+            badge: [0; 8],
+            center: [0; 16],
+            _reserved: [0; 12],
+        }
+    }
+}
+
 /// 9. `CapUi` VTable (`interface_id = 0x0009`)
 #[repr(C)]
 pub struct CapUiVTable {
@@ -356,6 +403,9 @@ pub struct CapUiVTable {
     pub ui_get_modal_text: unsafe extern "C" fn(buf: *mut u8, max_len: u8) -> u8,
     pub ui_show_toast: unsafe extern "C" fn(msg: *const u8, len: u8, duration_ms: u16),
     pub ui_is_animating: unsafe extern "C" fn() -> u8,
+    pub ui_set_status_bar: unsafe extern "C" fn(sb: *const KrxStatusBar) -> u8,
+    pub ui_get_status_bar: unsafe extern "C" fn(out_sb: *mut KrxStatusBar),
+    pub ui_set_tray_icon: unsafe extern "C" fn(icon_id: u8) -> u8,
 }
 
 /// 10. `CapMath` VTable (`interface_id = 0x000A`)
@@ -845,6 +895,19 @@ unsafe extern "C" fn noop_ui_show_toast(_msg: *const u8, _len: u8, _duration_ms:
 unsafe extern "C" fn noop_ui_is_animating() -> u8 {
     0
 }
+unsafe extern "C" fn noop_ui_set_status_bar(_sb: *const KrxStatusBar) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_ui_get_status_bar(out_sb: *mut KrxStatusBar) {
+    if !out_sb.is_null() {
+        unsafe {
+            *out_sb = KrxStatusBar::empty();
+        }
+    }
+}
+unsafe extern "C" fn noop_ui_set_tray_icon(_icon_id: u8) -> u8 {
+    1
+}
 
 unsafe extern "C" fn noop_sys_rand32() -> u32 {
     0x5A5A_5A5A
@@ -1171,6 +1234,9 @@ pub static STUB_UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_get_modal_text: noop_ui_get_modal_text,
     ui_show_toast: noop_ui_show_toast,
     ui_is_animating: noop_ui_is_animating,
+    ui_set_status_bar: noop_ui_set_status_bar,
+    ui_get_status_bar: noop_ui_get_status_bar,
+    ui_set_tray_icon: noop_ui_set_tray_icon,
 };
 
 pub static STUB_MATH_VTABLE: CapMathVTable = CapMathVTable {

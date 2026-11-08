@@ -308,10 +308,10 @@ def run_test():
             "SERIAL (4 APIs): PASS",
             "TIMER (5 APIs): PASS",
             "MATH (6 APIs): PASS",
-            "UI_COMPOSITOR (8 APIs): PASS",
+            "UI_COMPOSITOR (11 APIs): PASS",
             "SERVICE_IPC (26 APIs): PASS",
             "HW_BUS (7 APIs): PASS",
-            "TOTAL: 153/153 APIS EXHAUSTIVELY VALIDATED: PASS",
+            "TOTAL: 156/156 APIS EXHAUSTIVELY VALIDATED: PASS",
         ]
 
         for marker in expected_bench_markers:
@@ -322,7 +322,7 @@ def run_test():
                 sys.exit(f"FAIL: Expected bench marker not found: '{marker}'")
             print(f"  PASS  VTable domain validated: {marker}")
 
-        print("  PASS  All 153 C-ABI functions validated successfully on Cortex-M0+ silicon simulation")
+        print("  PASS  All 156 C-ABI functions validated successfully on Cortex-M0+ silicon simulation")
 
         # 13. Exit Native Bench App back to Launcher
         print("  • Injecting keypad press: 'EXIT' (Return to Launcher from Bench)...")
@@ -341,7 +341,37 @@ def run_test():
             sys.exit("FAIL: Screen did not return to Launcher from ABI Bench")
         print("  PASS  Returned to Launcher from Native Bench app")
 
-        # 14. Test Deep Sleep from Launcher via long-press EXIT
+        # 14. Test Long-Press EXIT (Force Close) inside an app
+        print("  • Testing Force Close via Long-Press EXIT in app...")
+        http_post_json("/api/key", {"key": "1", "hold_ms": 150})
+        time.sleep(1.0)
+        radio_frame = http_get("/frame.png")
+
+        print("  • Injecting long-press EXIT (1200ms) to force close app...")
+        http_post_json("/api/key", {"key": "EXIT", "hold_ms": 1200})
+        time.sleep(1.5)
+        post_close_frame = http_get("/frame.png")
+        if post_close_frame == radio_frame:
+            sys.exit("FAIL: App did not force close back to Launcher on long-press EXIT")
+        print("  PASS  App force closed back to Launcher on long-press EXIT")
+
+        # 15. Test F + EXIT (Force Suspend / Return Home) inside an app
+        print("  • Testing Force Suspend via F + EXIT in app...")
+        http_post_json("/api/key", {"key": "2", "hold_ms": 150})
+        time.sleep(1.0)
+        settings_frame2 = http_get("/frame.png")
+
+        print("  • Injecting F key followed by EXIT key...")
+        http_post_json("/api/key", {"key": "F", "hold_ms": 150})
+        time.sleep(0.3)
+        http_post_json("/api/key", {"key": "EXIT", "hold_ms": 150})
+        time.sleep(1.0)
+        post_f_exit_frame = http_get("/frame.png")
+        if post_f_exit_frame == settings_frame2:
+            sys.exit("FAIL: App did not return to Launcher on F+EXIT")
+        print("  PASS  App suspended back to Launcher on F + EXIT")
+
+        # 16. Test Deep Sleep from Launcher via long-press EXIT
         print("  • Injecting long-press EXIT (1600ms) on Launcher for deep sleep...")
         key_resp = http_post_json("/api/key", {"key": "EXIT", "hold_ms": 1600})
         if not key_resp.get("ok"):

@@ -18,6 +18,7 @@ pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
 }
 
 /// Draw DeltaFW-style high precision battery icon with customizable foreground, background, and shading mode
+#[inline(never)]
 pub fn draw_battery_colored(
     canvas: &mut Canvas,
     x: u8,
@@ -40,61 +41,40 @@ pub fn draw_battery_colored(
 
     canvas.fill_rect(start_x + 1, y + 1, 10, 3, bg);
 
-    if shading_mode == 2 {
+    let (full_bars, partial) = if shading_mode == 2 {
         // Pure Monochrome Mode (1-bit binary): 100% faithful to standard DeltaFW
-        let max_bars = (((percentage as u16 + 5) * 205) >> 11).min(10) as u8;
-        let fill_bars = if is_charging {
-            if max_bars < 10 {
-                let range = 11 - max_bars;
-                let step = if range > 0 { anim_step % range } else { 0 };
-                max_bars + step
-            } else {
-                10
-            }
-        } else {
-            max_bars
-        };
-
-        if fill_bars > 0 {
-            canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
-        }
+        ((((percentage as u16 + 5) * 205) >> 11).min(10) as u8, 0u8)
     } else {
         // High-Precision 30-Step Optical Grayscale / Dither Mode
         let p = percentage.min(100) as u32;
         let total_steps = (((p * 1229) + 614) >> 12).min(30) as u8;
-        let full_bars = ((total_steps as u16 * 86) >> 8).min(10) as u8;
-        let partial = total_steps - (full_bars * 3);
+        let fb = ((total_steps as u16 * 86) >> 8).min(10) as u8;
+        (fb, total_steps - (fb * 3))
+    };
 
-        if is_charging {
-            let fill_bars = if full_bars < 10 {
-                let range = 11 - full_bars;
-                let step = if range > 0 { anim_step % range } else { 0 };
-                full_bars + step
-            } else {
-                10
-            };
+    let fill_bars = if is_charging && full_bars < 10 {
+        let range = 11 - full_bars;
+        let step = if range > 0 { anim_step % range } else { 0 };
+        full_bars + step
+    } else {
+        full_bars
+    };
 
-            if fill_bars > 0 {
-                canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
-            }
-            if fill_bars < 10 && fill_bars > full_bars {
-                let lead_col = work_end_x - fill_bars;
-                canvas.draw_vertical_line(lead_col, y + 1, 3, Color::DarkGray);
-            }
-        } else {
-            if full_bars > 0 {
-                canvas.fill_rect(work_end_x - full_bars, y + 1, full_bars, 3, fg);
-            }
-            if partial > 0 && full_bars < 10 {
-                let partial_col = work_end_x - full_bars - 1;
-                let partial_color = if partial == 2 {
-                    Color::DarkGray
-                } else {
-                    Color::LightGray
-                };
-                canvas.draw_vertical_line(partial_col, y + 1, 3, partial_color);
-            }
+    if fill_bars > 0 {
+        canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
+    }
+
+    if is_charging {
+        if fill_bars < 10 && fill_bars > full_bars {
+            canvas.draw_vertical_line(work_end_x - fill_bars, y + 1, 3, Color::DarkGray);
         }
+    } else if partial > 0 && full_bars < 10 {
+        let partial_color = if partial == 2 {
+            Color::DarkGray
+        } else {
+            Color::LightGray
+        };
+        canvas.draw_vertical_line(work_end_x - full_bars - 1, y + 1, 3, partial_color);
     }
 }
 
@@ -271,6 +251,7 @@ pub struct StatusRightConfig<'a> {
 impl<'a> StatusRightConfig<'a> {
     /// Renders all right-side status elements dynamically flowing right-to-left.
     /// Preserves battery and bolt geometry while handling USB plug and dynamic icons.
+    #[inline(never)]
     pub fn render(&self, canvas: &mut Canvas) -> i16 {
         use crate::fonts::tomthumb::FONT;
 
@@ -362,19 +343,16 @@ impl<'a> StatusRightConfig<'a> {
 }
 
 /// Renders the complete status bar frame with automatic layout for left, center, and right elements.
+#[inline(never)]
 pub fn draw_status_bar_layout(
     canvas: &mut Canvas,
-    show_divider: bool,
-    signal_level: Option<u8>,
-    title: Option<&str>,
-    left_badge: Option<&str>,
-    center_text: Option<&str>,
+    config: &kernel::app::StatusBarConfig<'_>,
     right_limit: i16,
 ) {
     use crate::fonts::tomthumb::FONT;
 
     // Clear status bar background & draw dimmed divider line if enabled
-    if show_divider {
+    if config.show_divider {
         let clear_w = (right_limit.max(0) as u8).min(128);
         if clear_w > 0 {
             canvas.fill_rect(0, 0, clear_w, 7, Color::Clear);
@@ -384,36 +362,56 @@ pub fn draw_status_bar_layout(
 
     // 1. Left items (flowing left-to-right)
     let mut left_x = 1i16;
-    if let Some(lvl) = signal_level {
+    if let Some(lvl) = config.signal_level {
         draw_signal(canvas, left_x, 0, lvl, Color::Fill);
         left_x += (SIGNAL_WIDTH as i16) + 2;
     }
-    if let Some(t) = title {
+    if let Some(t) = config.title {
         if !t.is_empty() {
             let w = crate::text::str_width(t, &FONT) as i16;
             crate::text::draw_str_max_x(canvas, left_x, 4, t, &FONT, Color::Fill, right_limit);
             left_x += w + 2;
         }
     }
-    if let Some(badge) = left_badge {
+    if let Some(badge) = config.left_badge {
         if !badge.is_empty() {
             let bw = draw_badge(canvas, left_x, 0, badge, &FONT, false) as i16;
             left_x += bw + 2;
         }
     }
+    for &icon in config.left_icons {
+        if left_x + (icon.width() as i16) < right_limit {
+            crate::icons::draw_icon_5x5(canvas, left_x, 0, icon, Color::Fill);
+            left_x += (icon.width() as i16) + STATUS_ITEM_SPACING;
+        }
+    }
 
     // 2. Center items (auto-centered in remaining dynamic space)
-    if let Some(center) = center_text {
+    let mut center_w = 0i16;
+    for &icon in config.center_icons {
+        center_w += (icon.width() as i16) + STATUS_ITEM_SPACING;
+    }
+    if let Some(center) = config.center_text {
         if !center.is_empty() {
-            let w = crate::text::str_width(center, &FONT) as i16;
-            let ideal_x = 64i16 - (w >> 1);
-            let x = if ideal_x >= left_x && ideal_x + w <= right_limit {
-                ideal_x
-            } else {
-                left_x + ((right_limit - left_x - w).max(0) >> 1)
-            };
-            if x + w <= right_limit {
-                crate::text::draw_str(canvas, x, 4, center, &FONT, Color::Fill);
+            center_w += crate::text::str_width(center, &FONT) as i16;
+        }
+    }
+    if center_w > 0 {
+        let ideal_x = 64i16 - (center_w >> 1);
+        let mut cx = if ideal_x >= left_x && ideal_x + center_w <= right_limit {
+            ideal_x
+        } else {
+            left_x + ((right_limit - left_x - center_w).max(0) >> 1)
+        };
+        for &icon in config.center_icons {
+            if cx + (icon.width() as i16) <= right_limit {
+                crate::icons::draw_icon_5x5(canvas, cx, 0, icon, Color::Fill);
+                cx += (icon.width() as i16) + STATUS_ITEM_SPACING;
+            }
+        }
+        if let Some(center) = config.center_text {
+            if !center.is_empty() && cx < right_limit {
+                crate::text::draw_str(canvas, cx, 4, center, &FONT, Color::Fill);
             }
         }
     }
@@ -546,15 +544,9 @@ mod tests {
         assert_ne!(canvas.buffer[0][120], 0);
 
         // Layout status bar with divider enabled
-        draw_status_bar_layout(
-            &mut canvas,
-            true,
-            None,
-            Some("Home"),
-            None,
-            None,
-            right_limit,
-        );
+        let mut sb_cfg = kernel::app::StatusBarConfig::new("Home");
+        sb_cfg.show_divider = true;
+        draw_status_bar_layout(&mut canvas, &sb_cfg, right_limit);
 
         // Battery icon pixels on the right MUST still be preserved!
         assert_ne!(

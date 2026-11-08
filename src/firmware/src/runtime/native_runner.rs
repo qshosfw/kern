@@ -41,6 +41,11 @@ pub(crate) struct NativeExecSlot {
     pub(crate) cache: FixedWindowCache<16, 4>,
     pub(crate) shadow_stack: ShadowReturnStack<8>,
     pub(crate) leaf_mgr: StructuredLeafManager<16>,
+    pub(crate) status_bar: Option<kernel::proc::abi::KrxStatusBar>,
+    pub(crate) status_bar_left_icons: [kernel::canvas::Icon; 4],
+    pub(crate) status_bar_left_count: usize,
+    pub(crate) status_bar_center_icons: [kernel::canvas::Icon; 4],
+    pub(crate) status_bar_center_count: usize,
 }
 
 #[unsafe(link_section = ".uninit")]
@@ -332,8 +337,9 @@ pub fn load_native_from_storage(
 
     // Shift payload to the beginning of the aligned buffer without pulling in memmove
     let copy_len = total_read - h_len;
-    let (dst, src) = buffer_bytes.split_at_mut(h_len);
-    dst[..copy_len].copy_from_slice(&src[..copy_len]);
+    for i in 0..copy_len {
+        buffer_bytes[i] = buffer_bytes[h_len + i];
+    }
 
     let load_base = arena_base_ptr() as u32;
     let load_delta = load_base.wrapping_sub(preamble.link_base);
@@ -418,8 +424,16 @@ pub fn load_native_from_storage(
             ram_size,
         );
     } else {
-        let code_size = (exec.got_offset as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4);
-        let ram_vma = slot.got_base;
+        let code_size = if exec.got_offset > 0 {
+            (exec.got_offset as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4)
+        } else {
+            (payload_len as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4)
+        };
+        let ram_vma = if exec.got_offset > 0 {
+            slot.got_base
+        } else {
+            load_base.saturating_add(code_size)
+        };
         let ram_size = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(ram_vma);
         slot.mem_layout
             .init_native_pic(load_base, code_size, ram_vma, ram_size);
@@ -679,14 +693,96 @@ pub unsafe fn native_on_modal_result(
     }
 }
 
+fn c_str_to_str(buf: &[u8]) -> Option<&str> {
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    if len == 0 {
+        None
+    } else {
+        core::str::from_utf8(&buf[..len]).ok()
+    }
+}
+
+fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBarConfig<'a>) {
+    if let Some(sb) = &slot.status_bar {
+        let visible = (sb.flags & kernel::proc::abi::KRX_STATUS_VISIBLE) != 0;
+        let show_divider = (sb.flags & kernel::proc::abi::KRX_STATUS_DIVIDER) != 0;
+        let signal_level = if (sb.flags & kernel::proc::abi::KRX_STATUS_HAS_SIGNAL) != 0 {
+            Some(sb.signal_level)
+        } else {
+            None
+        };
+        let title = if (sb.flags & kernel::proc::abi::KRX_STATUS_CUSTOM_TITLE) != 0 {
+            c_str_to_str(&sb.title)
+        } else {
+            Some(slot.app_name.as_str())
+        };
+        let left_badge = c_str_to_str(&sb.badge);
+        let center_text = c_str_to_str(&sb.center);
+        let left_icons = &slot.status_bar_left_icons[..slot.status_bar_left_count];
+        let center_icons = &slot.status_bar_center_icons[..slot.status_bar_center_count];
+
+        *status_bar = StatusBarConfig {
+            visible,
+            title,
+            center_text,
+            signal_level,
+            left_badge,
+            left_icons,
+            center_icons,
+            show_divider,
+        };
+    } else {
+        *status_bar = StatusBarConfig::new(slot.app_name.as_str());
+    }
+}
+
+pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
+    let slot = slot_mut();
+    if sb.is_null() {
+        slot.status_bar = None;
+        slot.status_bar_left_count = 0;
+        slot.status_bar_center_count = 0;
+    } else {
+        let s = unsafe { *sb };
+        slot.status_bar_left_count = 0;
+        let l_cnt = (s.left_icon_count as usize).min(4);
+        for &id in &s.left_icons[..l_cnt] {
+            if let Some(ic) = kernel::canvas::Icon::from_u8(id) {
+                slot.status_bar_left_icons[slot.status_bar_left_count] = ic;
+                slot.status_bar_left_count += 1;
+            }
+        }
+        slot.status_bar_center_count = 0;
+        let c_cnt = (s.center_icon_count as usize).min(4);
+        for &id in &s.center_icons[..c_cnt] {
+            if let Some(ic) = kernel::canvas::Icon::from_u8(id) {
+                slot.status_bar_center_icons[slot.status_bar_center_count] = ic;
+                slot.status_bar_center_count += 1;
+            }
+        }
+        slot.status_bar = Some(s);
+    }
+}
+
+pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
+    if !out_sb.is_null() {
+        let slot = slot_ref();
+        unsafe {
+            *out_sb = slot
+                .status_bar
+                .unwrap_or_else(kernel::proc::abi::KrxStatusBar::empty);
+        }
+    }
+}
+
 pub unsafe fn native_on_render(
     _ptr: *const (),
     canvas: &mut Canvas,
     ctx: &SysContext<'static, 'static>,
     status_bar: &mut StatusBarConfig<'_>,
 ) {
+    apply_slot_status_bar(slot_ref(), status_bar);
     let slot = slot_ref();
-    *status_bar = StatusBarConfig::new(slot.app_name.as_str());
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
             ACTIVE_CTX = ctx as *const _ as *mut _;
@@ -701,6 +797,7 @@ pub unsafe fn native_on_render(
             ACTIVE_CANVAS = core::ptr::null_mut();
             ACTIVE_CTX = core::ptr::null_mut();
         }
+        apply_slot_status_bar(slot_ref(), status_bar);
     }
 }
 
@@ -727,6 +824,11 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
         slot.is_loaded = false;
         slot.entry_point = 0;
     }
+    let slot = slot_mut();
+    crate::orchestrator::status_tray_mut().clear_icon(slot.pid);
+    slot.status_bar = None;
+    slot.status_bar_left_count = 0;
+    slot.status_bar_center_count = 0;
     // Safety cleanup: ensure radio TX is disengaged if guest left PTT active
     if ctx.state.coord.is_transmitting {
         ctx.state.coord.request_ptt_stop(ctx.radio);

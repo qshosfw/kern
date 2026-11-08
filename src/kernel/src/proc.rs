@@ -13,6 +13,7 @@ pub mod paged;
 pub mod primitives;
 pub mod reloc;
 pub mod service_registry;
+pub mod status_tray;
 #[cfg(feature = "krx_vm")]
 pub mod vm;
 
@@ -35,6 +36,7 @@ pub use paged::{
 pub use primitives::*;
 pub use reloc::{RelocError, apply_relocs};
 pub use service_registry::{MAX_REGISTERED_SERVICES, ServiceEntry, ServiceRegistry};
+pub use status_tray::StatusTray;
 #[cfg(feature = "krx_vm")]
 pub use vm::{Kvm16, VmError, VmStatus};
 

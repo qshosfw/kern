@@ -50,7 +50,7 @@ impl BenchSummary {
             ui_passed: false,
             service_passed: false,
             hw_bus_passed: false,
-            total_apis: 153,
+            total_apis: 156,
             passed_apis: 0,
             failed_apis: 0,
         }
@@ -532,14 +532,25 @@ pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> Bench
         (ui.ui_close_modal)();
         (ui.ui_show_toast)(b"Bench Toast\0".as_ptr(), 11, 500);
         let _ = (ui.ui_is_animating)();
+
+        let sb = KrxStatusBar::empty();
+        if (ui.ui_set_status_bar)(&sb) != 1 {
+            ui_ok = false;
+        }
+        let mut read_sb = KrxStatusBar::empty();
+        (ui.ui_get_status_bar)(&mut read_sb);
+        if (ui.ui_set_tray_icon)(15) != 1 {
+            ui_ok = false;
+        }
+        let _ = (ui.ui_set_tray_icon)(0xFF);
     }
     summary.ui_passed = ui_ok;
     if ui_ok {
-        summary.passed_apis += 8;
-        bench_log("UI_COMPOSITOR (8 APIs): PASS");
+        summary.passed_apis += 11;
+        bench_log("UI_COMPOSITOR (11 APIs): PASS");
     } else {
-        summary.failed_apis += 8;
-        bench_log("UI_COMPOSITOR (8 APIs): FAIL");
+        summary.failed_apis += 11;
+        bench_log("UI_COMPOSITOR (11 APIs): FAIL");
     }
 
     // ── 11. SERVICE & IPC VTABLE (26 APIs) ──────────────────────────────────
@@ -663,7 +674,7 @@ pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> Bench
     }
 
     if summary.failed_apis == 0 {
-        bench_log("TOTAL: 153/153 APIS EXHAUSTIVELY VALIDATED: PASS");
+        bench_log("TOTAL: 156/156 APIS EXHAUSTIVELY VALIDATED: PASS");
     } else {
         bench_log("TOTAL: BENCHMARK SUITE FAILED SOME CHECKS");
     }

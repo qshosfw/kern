@@ -12,6 +12,74 @@ pub enum Color {
     Invert = 4,    // Bitwise Invert
 }
 
+/// Standardized monochromatic icon glyph identifier for UI and status bars.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Icon {
+    Antenna = 0,
+    Lock = 1,
+    Unlock = 2,
+    Speaker = 3,
+    Shield = 4,
+    Keypad = 5,
+    Flashlight = 6,
+    Mesh = 7,
+    Function = 8,
+    Plug = 9,
+    SerialActive = 10,
+    Bolt = 11,
+    Broadcast = 12,
+    Storage = 13,
+    Scan = 14,
+    Beacon = 15,
+    Monitor = 16,
+    Converter = 17,
+    Roger = 18,
+    Beep = 19,
+    NoListen = 20,
+    Moon = 21,
+}
+
+impl Icon {
+    #[inline(always)]
+    pub const fn width(self) -> u8 {
+        match self {
+            Icon::Plug | Icon::SerialActive | Icon::Storage | Icon::NoListen => 7,
+            Icon::Beacon => 6,
+            _ => 5,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        match val {
+            0 => Some(Icon::Antenna),
+            1 => Some(Icon::Lock),
+            2 => Some(Icon::Unlock),
+            3 => Some(Icon::Speaker),
+            4 => Some(Icon::Shield),
+            5 => Some(Icon::Keypad),
+            6 => Some(Icon::Flashlight),
+            7 => Some(Icon::Mesh),
+            8 => Some(Icon::Function),
+            9 => Some(Icon::Plug),
+            10 => Some(Icon::SerialActive),
+            11 => Some(Icon::Bolt),
+            12 => Some(Icon::Broadcast),
+            13 => Some(Icon::Storage),
+            14 => Some(Icon::Scan),
+            15 => Some(Icon::Beacon),
+            16 => Some(Icon::Monitor),
+            17 => Some(Icon::Converter),
+            18 => Some(Icon::Roger),
+            19 => Some(Icon::Beep),
+            20 => Some(Icon::NoListen),
+            21 => Some(Icon::Moon),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Canvas {
     pub buffer: [[u8; LCD_WIDTH]; 8],

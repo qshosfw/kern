@@ -1,0 +1,257 @@
+#ifndef KRX_H
+#define KRX_H
+
+typedef unsigned char  u8;
+typedef signed char    i8;
+typedef short          i16;
+typedef unsigned short u16;
+typedef int            i32;
+typedef unsigned int   u32;
+typedef long long      i64;
+typedef unsigned long long u64;
+
+// 1. CapDisplayVTable (14 APIs)
+typedef struct {
+    void (*clear)(void);
+    void (*draw_pixel)(i16 x, i16 y, u8 color);
+    void (*draw_line)(i16 x0, i16 y0, i16 x1, i16 y1, u8 color);
+    void (*draw_rect)(i16 x, i16 y, i16 w, i16 h, u8 color);
+    void (*fill_rect)(i16 x, i16 y, i16 w, i16 h, u8 color);
+    void (*draw_bitmap)(i16 x, i16 y, u8 w, u8 h, const u8* data, u16 len);
+    void (*draw_str)(i16 x, i16 y, const u8* text, u16 len, u8 font, u8 color);
+    void (*draw_str_align)(i16 x, i16 y, const u8* text, u16 len, u8 font, u8 color, u8 align);
+    void (*commit_frame)(void);
+    void (*commit_rows)(u8 row_mask);
+    u8* (*get_framebuffer)(void);
+    void (*draw_str_max)(i16 x, i16 y, const u8* text, u16 len, u8 font, u8 color, i16 max_w);
+    void (*set_inverted)(u8 inverted);
+    void (*set_contrast)(u8 contrast);
+} CapDisplayVTable;
+
+// 2. CapRadioVTable (33 APIs)
+typedef struct {
+    u8 (*rf_tune)(u32 freq_hz, u8 bw, u32 step_hz);
+    u32 (*rf_get_freq)(void);
+    i16 (*rf_get_rssi)(void);
+    u8 (*rf_is_carrier)(void);
+    void (*rf_set_modulation)(u8 mod_type);
+    void (*rf_set_squelch)(u8 level);
+    u8 (*rf_set_tx)(u8 active);
+    void (*rf_set_tx_power)(u8 level);
+    void (*rf_set_af_mode)(u8 mode);
+    u16 (*rf_sweep)(u32 start_hz, u32 step_hz, u16 count, i16* out_rssi);
+    u8 (*rf_symbol_tx_emit)(const void* symbols, u16 count);
+    void (*rf_set_dual_tones)(u16 tone1_word, u8 tone1_gain, u16 tone2_word, u8 tone2_gain);
+    void (*rf_fsk_init)(u16 baud);
+    u8 (*rf_fsk_send)(const u8* data, u16 len);
+    u16 (*rf_fsk_recv)(u8* buf, u16 max_len);
+    void (*rf_set_mic_mute)(u8 muted);
+    u8 (*rf_set_tx_carrier)(u8 active);
+    void (*rf_set_subaudible_ctcss)(u16 freq_tenths_hz);
+    void (*rf_set_subaudible_dcs)(u16 code, u8 inverted);
+    void (*rf_send_tail)(void);
+    u32 (*rf_get_bandwidth)(void);
+    u8 (*rf_get_modulation)(void);
+    u8 (*rf_get_tx_state)(void);
+    u8 (*rf_get_glitch)(void);
+    void (*rf_set_agc)(u8 table_idx);
+    void (*rf_set_dual_tones_hz)(u16 tone1_hz, u8 tone1_gain, u16 tone2_hz, u8 tone2_gain);
+    void (*rf_set_dtmf)(u8 digit, u8 gain);
+    u8 (*rf_get_snr)(void);
+    u8 (*rf_get_noise)(void);
+} CapRadioVTable;
+
+// 3. CapAudioVTable (13 APIs)
+typedef struct {
+    void (*audio_play_tone)(u16 freq_hz, u16 duration_ms);
+    void (*audio_play_beep)(u8 beep_type);
+    void (*audio_set_path)(u8 on);
+    u8 (*audio_capture_start)(u16 rate_hz);
+    u16 (*audio_capture_read)(i16* out_samples, u16 max_samples);
+    void (*audio_capture_stop)(void);
+    void (*audio_set_volume)(u8 volume);
+    u8 (*audio_get_volume)(void);
+    void (*audio_stop)(void);
+    u8 (*audio_is_playing)(void);
+    void (*audio_set_mic_gain)(u8 gain);
+    u16 (*audio_read_mic_sample)(void);
+    u8 (*audio_is_capturing)(void);
+} CapAudioVTable;
+
+// 4. CapStorageVTable (13 APIs)
+typedef struct {
+    u16 (*storage_load_config)(u8* buf, u16 max_len);
+    u8 (*storage_save_config)(const u8* buf, u16 len);
+    u16 (*storage_read_asset)(u16 asset_id, u32 offset, u8* buf, u16 len);
+    u16 (*storage_read_file)(const u8* path, u8 path_len, u8* buf, u16 max_len);
+    u8 (*storage_write_file)(const u8* path, u8 path_len, const u8* data, u16 len);
+    u8 (*storage_remove_file)(const u8* path, u8 path_len);
+    u32 (*storage_file_size)(const u8* path, u8 path_len);
+    u8 (*storage_list_dir)(const u8* dir_path, u8 dir_len, void* out_entries, u8 max_entries);
+    u8 (*storage_file_exists)(const u8* path, u8 path_len);
+    u16 (*storage_read_file_at)(const u8* path, u8 path_len, u32 offset, u8* buf, u16 max_len);
+    u8 (*storage_append_file)(const u8* path, u8 path_len, const u8* data, u16 len);
+    u8 (*storage_rename_file)(const u8* old_path, u8 old_len, const u8* new_path, u8 new_len);
+    u8 (*storage_create_dir)(const u8* path, u8 path_len);
+} CapStorageVTable;
+
+// 5. CapKeypadVTable (10 APIs)
+typedef struct {
+    u8 (*sys_poll_key)(void);
+    i8 (*sys_nav_dir)(u8 key);
+    u32 (*sys_key_matrix)(void);
+    u8 (*sys_is_key_pressed)(u8 key_code);
+    u8 (*sys_is_f_active)(void);
+    u8 (*sys_is_ptt_pressed)(void);
+    u8 (*sys_is_side1_pressed)(void);
+    u8 (*sys_is_side2_pressed)(void);
+    void (*sys_clear_key_buffer)(void);
+    u8 (*sys_is_keypad_locked)(void);
+} CapKeypadVTable;
+
+// 6. CapPowerVTable (14 APIs)
+typedef struct {
+    u16 (*sys_battery_mv)(void);
+    u8 (*sys_battery_pct)(void);
+    u16 (*sys_battery_ma)(void);
+    u8 (*sys_battery_type)(void);
+    u16 (*sys_raw_battery_adc)(void);
+    i16 (*sys_mcu_temp)(void);
+    u8 (*sys_is_charging)(void);
+    u8 (*sys_is_low)(void);
+    u8 (*sys_is_critical)(void);
+    void (*sys_set_backlight)(u8 mode, u8 timeout_s);
+    void (*sys_set_backlight_brightness)(u8 max, u8 min);
+    void (*sys_wake_backlight)(void);
+    void (*sys_set_flashlight)(u8 on);
+    u32 (*sys_cpu_freq_hz)(void);
+} CapPowerVTable;
+
+// 7. CapSerialVTable (4 APIs)
+typedef struct {
+    u16 (*serial_write)(const u8* data, u16 len);
+    u16 (*serial_read)(u8* buf, u16 max_len);
+    u8 (*serial_is_connected)(void);
+    void (*serial_flush)(void);
+} CapSerialVTable;
+
+// 8. CapTimerVTable (5 APIs)
+typedef struct {
+    u32 (*sys_ticks_ms)(void);
+    u32 (*sys_uptime_secs)(void);
+    void (*sys_delay_ms)(u32 ms);
+    void (*sys_delay_us)(u32 us);
+    u8 (*sys_rtc_get)(u8* out_time);
+} CapTimerVTable;
+
+// 64-byte ($2^6) KrxStatusBar
+typedef struct __attribute__((packed)) {
+    u8 flags;
+    u8 signal_level;
+    u8 left_icon_count;
+    u8 center_icon_count;
+    u8 left_icons[4];
+    u8 center_icons[4];
+    u8 title[16];
+    u8 badge[8];
+    u8 center[16];
+    u8 _reserved[12];
+} KrxStatusBar;
+
+// 9. CapUiVTable (11 APIs)
+typedef struct {
+    void (*ui_close_modal)(void);
+    u8 (*ui_has_modal)(void);
+    void (*ui_show_popup)(u8 tag, const u8* title, u8 t_len, const u8* msg, u8 m_len);
+    void (*ui_show_confirm)(u8 tag, const u8* title, u8 t_len, const u8* msg, u8 m_len);
+    void (*ui_prompt_text)(u8 tag, const u8* title, u8 t_len, const u8* initial, u8 i_len, u8 max_len);
+    u8 (*ui_get_modal_text)(u8* buf, u8 max_len);
+    void (*ui_show_toast)(const u8* msg, u8 len, u16 duration_ms);
+    u8 (*ui_is_animating)(void);
+    u8 (*ui_set_status_bar)(const KrxStatusBar* sb);
+    void (*ui_get_status_bar)(KrxStatusBar* out_sb);
+    u8 (*ui_set_tray_icon)(u8 icon_id);
+} CapUiVTable;
+
+// 10. CapMathVTable (6 APIs)
+typedef struct {
+    u32 (*sys_rand32)(void);
+    u32 (*crc32)(const u8* data, u16 len);
+    u16 (*crc16)(const u8* data, u16 len);
+    u64 (*idivmod)(i32 n, i32 d);
+    u64 (*uidivmod)(u32 n, u32 d);
+    u32 (*isqrt)(u32 val);
+} CapMathVTable;
+
+// 11. CapFmVTable (4 APIs)
+typedef struct {
+    void (*fm_tune)(u16 freq_100khz);
+    void (*fm_set_volume)(u8 volume);
+    void (*fm_mute)(u8 mute);
+    u8 (*fm_get_rssi)(void);
+} CapFmVTable;
+
+// 12. CapServiceVTable (26 APIs)
+typedef struct {
+    u8 (*svc_register)(u16 interface_id, u16 abi_version, u32 vtable_ptr);
+    u32 (*svc_resolve)(u16 interface_id, u16 min_abi);
+    u8 (*svc_release)(u16 interface_id);
+    u8 (*ipc_send)(const u8* target_name, u8 name_len, const u8* msg, u8 msg_len);
+    u8 (*ipc_poll)(u8* out_buf, u8 max_len);
+    void (*sys_device_uid)(u8* out_uid12);
+    u32 (*sys_os_version)(void);
+    u16 (*sys_ram_available)(void);
+    u16 (*sys_stack_margin)(void);
+    u8 (*sys_proc_count)(void);
+    u8 (*sys_proc_info)(u8 idx, void* out_info);
+    u8 (*sys_proc_kill)(u8 pid);
+    u32 (*paged_call)(u8 target_block_id, u16 target_offset, u16 return_offset);
+    u32 (*paged_return)(void);
+    u32 (*leaf_call)(u8 leaf_id, u32 arg);
+    u8 (*lease_acquire)(u8 lease_kind, u32 timeout_ms);
+    u8 (*lease_release)(u8 lease_kind);
+    u8 (*mem_query)(u8 kind, void* out_desc);
+    u8 (*sys_post_event)(u32 event_id);
+    u8 (*sys_publish_event)(u16 topic, const u8* data, u8 len);
+    u16 (*sys_stack_free_min)(void);
+    u8 (*ipc_send_msg)(const void* msg);
+    u8 (*ipc_recv_msg)(void* out_msg);
+    u8 (*ipc_reply)(const void* req, const u8* payload, u8 len);
+    u8 (*sys_find_proc)(const u8* name, u8 len);
+    u8 (*sys_self_pid)(void);
+} CapServiceVTable;
+
+// 13. CapHwBusVTable (7 APIs)
+typedef struct {
+    u8 (*hw_i2c_transfer)(u8 addr, u8 reg, const u8* tx, u16 tx_len, u8* rx, u16 rx_len);
+    u8 (*hw_spi_transfer)(u8 cs_pin, const u8* tx, u8* rx, u16 len);
+    void (*hw_gpio_set)(u8 pin, u8 high);
+    u8 (*hw_gpio_get)(u8 pin);
+    u16 (*hw_rf_read_reg)(u8 reg);
+    void (*hw_rf_write_reg)(u8 reg, u16 val);
+    u8 (*hw_flash_read)(u32 addr, u8* buf, u16 len);
+} CapHwBusVTable;
+
+// Composite KrxApiTable passed in r1
+typedef struct {
+    u32 abi_version;
+    u16 table_size;
+    u16 _pad0;
+    u32 granted_caps;
+
+    const CapDisplayVTable* display;
+    const CapRadioVTable* radio;
+    const CapAudioVTable* audio;
+    const CapStorageVTable* storage;
+    const CapKeypadVTable* keypad;
+    const CapPowerVTable* power;
+    const CapSerialVTable* serial;
+    const CapTimerVTable* timer;
+    const CapUiVTable* ui;
+    const CapMathVTable* math;
+    const CapFmVTable* fm;
+    const CapServiceVTable* service;
+    const CapHwBusVTable* hw_bus;
+} KrxApiTable;
+
+#endif // KRX_H

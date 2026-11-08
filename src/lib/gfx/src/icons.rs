@@ -77,41 +77,7 @@ pub const ICON_FOLDER: [u8; 8] = [0xE0, 0x9F, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF
 pub const ICON_CH: [u8; 8] = [0x88, 0xD8, 0xA8, 0x88, 0x06, 0x05, 0x06, 0x05];
 pub const ICON_VFO: [u8; 8] = [0xA0, 0xA0, 0x48, 0x10, 0x1A, 0x15, 0x05, 0x02];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Icon {
-    Antenna,
-    Lock,
-    Unlock,
-    Speaker,
-    Shield,
-    Keypad,
-    Flashlight,
-    Mesh,
-    Function,
-    Plug,
-    SerialActive,
-    Bolt,
-    Broadcast,
-    Storage,
-    Scan,
-    Beacon,
-    Monitor,
-    Converter,
-    Roger,
-    Beep,
-    NoListen,
-    Moon,
-}
-
-impl Icon {
-    pub const fn width(self) -> u8 {
-        match self {
-            Icon::Plug | Icon::SerialActive | Icon::Storage | Icon::NoListen => 7,
-            Icon::Beacon => 6,
-            _ => 5,
-        }
-    }
-}
+pub use kernel::canvas::Icon;
 
 pub fn draw_icon(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) {
     let bmp: &'static [u8; 8] = match icon {

@@ -48,8 +48,14 @@ pub struct KeypadLockManager {
     // Flag indicating hardware KeypadScanner confirmed KeyState::Held for the active key
     held_confirmed: bool,
 
-    // Sleep request flag (triggered when Exit key is held past target)
+    // Context flag indicating whether sleep is allowed (Launcher) or force-close (Apps)
+    pub can_sleep: bool,
+
+    // Sleep request flag (triggered when Exit key is held past target in Launcher)
     pub sleep_requested: bool,
+
+    // Force close request flag (triggered when Exit key is held past target in an app)
+    pub force_close_requested: bool,
 }
 
 impl KeypadLockManager {
@@ -68,7 +74,9 @@ impl KeypadLockManager {
             toast: LockToast::None,
             toast_remaining_ms: 0,
             held_confirmed: false,
+            can_sleep: false,
             sleep_requested: false,
+            force_close_requested: false,
         }
     }
 
@@ -164,38 +172,36 @@ impl KeypadLockManager {
 
             // Active hold tracking for #, F, or Exit key in real milliseconds
             if let Some(code) = self.held_code {
-                if code == KeyCode::Exit && !can_sleep {
+                self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt);
+
+                // Anti-phantom tap protection: if elapsed time exceeds base hold delay (e.g. 550ms)
+                // and hardware scanner NEVER confirmed KeyState::Held, this was a short tap
+                // whose release was missed or consumed by an app -> abort hold tracking!
+                if self.hold_elapsed_ms >= (base_hold_delay_ms + 150) && !self.held_confirmed {
                     self.reset_hold_tracking();
-                } else {
-                    self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt);
-
-                    // Anti-phantom tap protection: if elapsed time exceeds base hold delay (e.g. 550ms)
-                    // and hardware scanner NEVER confirmed KeyState::Held, this was a short tap
-                    // whose release was missed or consumed by an app -> abort hold tracking!
-                    if self.hold_elapsed_ms >= (base_hold_delay_ms + 150) && !self.held_confirmed {
-                        self.reset_hold_tracking();
-                    } else if self.held_confirmed
-                        && self.hold_elapsed_ms >= self.hold_target_ms
-                        && !self.is_long_press_triggered
-                    {
-                        self.is_long_press_triggered = true;
-                        if code == KeyCode::Exit {
-                            if can_sleep {
-                                self.sleep_requested = true;
-                            }
+                } else if self.held_confirmed
+                    && self.hold_elapsed_ms >= self.hold_target_ms
+                    && !self.is_long_press_triggered
+                {
+                    self.is_long_press_triggered = true;
+                    if code == KeyCode::Exit {
+                        if can_sleep {
+                            self.sleep_requested = true;
                         } else {
-                            self.toggle_lock();
+                            self.force_close_requested = true;
                         }
-                        // Note: do NOT reset hold tracking here. The key is still physically held!
-                        // Tracking will be reset on KeyState::Released, ensuring release does not
-                        // re-trigger sticky F or other tap actions.
-                        return true;
+                    } else {
+                        self.toggle_lock();
                     }
+                    // Note: do NOT reset hold tracking here. The key is still physically held!
+                    // Tracking will be reset on KeyState::Released, ensuring release does not
+                    // re-trigger sticky F or other tap actions.
+                    return true;
+                }
 
-                    // Safety watchdog: auto-clear if hold orphaned (>4s)
-                    if self.hold_elapsed_ms > 4000 {
-                        self.reset_hold_tracking();
-                    }
+                // Safety watchdog: auto-clear if hold orphaned (>4s)
+                if self.hold_elapsed_ms > 4000 {
+                    self.reset_hold_tracking();
                 }
             }
         }
@@ -212,30 +218,27 @@ impl KeypadLockManager {
                 }
             }
 
-            // Handle Exit key (Hold-to-Sleep gesture, strictly guarded by proper root launcher context)
+            // Handle Exit key (Hold-to-Sleep in Launcher, Hold-to-Force-Close in apps)
             if *code == KeyCode::Exit {
-                if !can_sleep {
-                    self.reset_hold_tracking();
-                    return false;
-                }
+                self.can_sleep = can_sleep;
                 match state {
                     KeyState::Pressed => {
                         self.start_hold_tracking(KeyCode::Exit);
 
-                        // Responsive hold threshold before showing "HOLD FOR SLEEP" dialog (~480ms).
-                        // Normal key taps (< 400ms) release before this threshold with strictly zero dialog popup.
                         let start_threshold =
                             (base_hold_delay_ms as u32 + 80).clamp(450, 550) as u16;
                         self.hold_start_threshold_ms = start_threshold;
 
-                        // Total hold target to sleep: ~1000ms progress fill (~1500ms total hold time).
-                        self.hold_target_ms =
-                            (start_threshold as u32 + 1000).clamp(1400, 1600) as u16;
+                        self.hold_target_ms = if can_sleep {
+                            (start_threshold as u32 + 1000).clamp(1400, 1600) as u16
+                        } else {
+                            (start_threshold as u32 + 500).clamp(900, 1100) as u16
+                        };
                         // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
                     }
                     KeyState::Held => {
                         self.held_confirmed = true;
-                        // Suppress key repeat while hold-to-sleep is tracking
+                        // Suppress key repeat while hold-to-sleep/close is tracking
                         if self.held_code == Some(KeyCode::Exit) {
                             return true;
                         }
@@ -246,7 +249,7 @@ impl KeypadLockManager {
                             && self.hold_elapsed_ms >= self.hold_start_threshold_ms;
                         self.reset_hold_tracking();
 
-                        // If user held past threshold or triggered sleep, consume release so app doesn't act
+                        // If user held past threshold or triggered action, consume release so app doesn't act
                         if was_long_press || had_started_hold {
                             return true;
                         }
@@ -603,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exit_when_cannot_sleep_does_not_track_or_animate() {
+    fn test_exit_when_cannot_sleep_tracks_force_close() {
         let mut mgr = KeypadLockManager::new();
         let pressed = Event::Key {
             code: KeyCode::Exit,
@@ -611,16 +614,21 @@ mod tests {
         };
         // In app context (can_sleep = false)
         assert!(!mgr.handle_event(&pressed, 400, 3000, 0, false));
-        assert_eq!(mgr.held_code, None);
-        assert!(!mgr.is_animating());
+        assert_eq!(mgr.held_code, Some(KeyCode::Exit));
 
         let held = Event::Key {
             code: KeyCode::Exit,
             state: KeyState::Held,
         };
-        assert!(!mgr.handle_event(&held, 400, 3000, 0, false));
-        assert_eq!(mgr.held_code, None);
-        assert!(!mgr.is_animating());
+        assert!(mgr.handle_event(&held, 400, 3000, 0, false));
+        assert!(!mgr.force_close_requested);
+
+        // Advance ticks past hold target (~1000ms)
+        let tick = Event::Tick;
+        for _ in 0..60 {
+            mgr.handle_event(&tick, 400, 3000, 0, false);
+        }
+        assert!(mgr.force_close_requested);
         assert!(!mgr.sleep_requested);
     }
 
