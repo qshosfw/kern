@@ -15,24 +15,23 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
     #[allow(unreachable_patterns)]
     let (val, dec, unit) = match id {
         // 1. Direct string & buffer metrics that format directly into `out` and return:
-        MetricId::BatteryStatus => {
-            out.set_str(if ctx.power.is_charging {
-                "Charging"
-            } else {
-                "Discharging"
-            });
-            return;
-        }
-        MetricId::SystemFirmware => {
-            out.set_str(crate::build_info::BUILD_STAMP);
-            return;
-        }
-        MetricId::DeviceOwner => {
-            out.set_str(ctx.config.system.owner_str());
-            return;
-        }
-        MetricId::DeviceTag => {
-            out.set_str(ctx.config.system.tag_str());
+        MetricId::BatteryStatus
+        | MetricId::SystemFirmware
+        | MetricId::DeviceOwner
+        | MetricId::DeviceTag => {
+            let s = match id {
+                MetricId::BatteryStatus => {
+                    if ctx.power.is_charging {
+                        "Charging"
+                    } else {
+                        "Discharging"
+                    }
+                }
+                MetricId::SystemFirmware => crate::build_info::BUILD_STAMP,
+                MetricId::DeviceOwner => ctx.config.system.owner_str(),
+                _ => ctx.config.system.tag_str(),
+            };
+            out.set_str(s);
             return;
         }
         MetricId::SystemSerial => {

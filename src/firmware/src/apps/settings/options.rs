@@ -47,27 +47,32 @@ fn make_choice(opts: &'static [&'static str], raw_byte: u8) -> MenuItemType {
 }
 
 #[inline(never)]
-fn build_item_type(def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8) -> MenuItemType {
+fn populate_item(item: &mut MenuItem, def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8) {
+    item.title = def.title;
     match def.kind() {
-        SettingKind::Choice(opts) => make_choice(opts, def.field.get_u8(&ctx.config)),
-        SettingKind::Shortcut => make_choice(
-            &super::buttons::SHORTCUT_OPTIONS,
-            def.field.get_u8(&ctx.config),
-        ),
+        SettingKind::Choice(opts) => {
+            item.item_type = make_choice(opts, def.field.get_u8(&ctx.config));
+        }
+        SettingKind::Shortcut => {
+            item.item_type = make_choice(
+                &super::buttons::SHORTCUT_OPTIONS,
+                def.field.get_u8(&ctx.config),
+            );
+        }
         SettingKind::BatteryType => {
             let (opts, types) = super::battery::battery_options_and_types(nav_layout);
             let raw_byte = def.field.get_u8(&ctx.config);
             let mut sel = 0u16;
-            for i in 0..types.len() {
-                if types[i] == raw_byte {
+            for (i, &t) in types.iter().enumerate() {
+                if t == raw_byte {
                     sel = i as u16;
                     break;
                 }
             }
-            MenuItemType::Choice {
+            item.item_type = MenuItemType::Choice {
                 selected: sel,
                 options: opts,
-            }
+            };
         }
         SettingKind::Range(range) => {
             let raw_val = if def.field == SettingField::CALIB_TWEAK_MV {
@@ -75,32 +80,38 @@ fn build_item_type(def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8
             } else {
                 def.field.get_u8(&ctx.config) as i16
             };
-            MenuItemType::Range {
+            item.item_type = MenuItemType::Range {
                 val: raw_val.clamp(range.min, range.max),
                 min: range.min,
                 max: range.max,
                 step: range.step,
                 unit: range.unit,
-            }
+            };
         }
-        SettingKind::Toggle => MenuItemType::Toggle(def.field.get_u8(&ctx.config) != 0),
-        SettingKind::Submenu(_) => MenuItemType::Submenu,
-        SettingKind::Info => MenuItemType::Info("Ascon-128"),
+        SettingKind::Toggle => {
+            item.item_type = MenuItemType::Toggle(def.field.get_u8(&ctx.config) != 0);
+        }
+        SettingKind::Submenu(_) => {
+            item.item_type = MenuItemType::Submenu;
+        }
+        SettingKind::Info => {
+            item.item_type = MenuItemType::Info("Ascon-128");
+        }
         SettingKind::Metric(metric) => {
             let mut s = ShortString::empty();
             super::metric::format_metric(metric, ctx, &mut s);
-            MenuItemType::Value(s)
+            item.item_type = MenuItemType::Value(s);
         }
         #[cfg(feature = "boot_assets")]
         SettingKind::Asset(desc) => {
             let mut s = ShortString::empty();
             desc.format_status(&ctx.config, &mut s);
-            MenuItemType::Value(s)
+            item.item_type = MenuItemType::Value(s);
         }
         SettingKind::Action(action) => {
             let mut s = ShortString::empty();
             get_action_value(action, ctx, &mut s);
-            MenuItemType::Value(s)
+            item.item_type = MenuItemType::Value(s);
         }
     }
 }
@@ -112,8 +123,7 @@ pub fn populate_defs(items: &mut [MenuItem], defs: &[SettingDef], ctx: &mut crat
         if i >= items.len() {
             break;
         }
-        items[i].title = def.title;
-        items[i].item_type = build_item_type(def, ctx, nav_layout);
+        populate_item(&mut items[i], def, ctx, nav_layout);
     }
 }
 
