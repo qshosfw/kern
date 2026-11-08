@@ -358,19 +358,6 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         self.radio.play_tone(freq_hz, duration_ms);
     }
 
-    /// Backwards-compatible status bar drawing with explicit title and center_text
-    #[inline(always)]
-    pub fn draw_status_bar(
-        &self,
-        canvas: &mut gfx::Canvas,
-        title: &str,
-        center_text: Option<&str>,
-    ) {
-        let mut cfg = kernel::app::StatusBarConfig::new(title);
-        cfg.center_text = center_text;
-        self.draw_status_bar_cfg(canvas, &cfg);
-    }
-
     #[inline(never)]
     pub fn draw_status_bar_right_mode(&self, canvas: &mut gfx::Canvas, inverted: bool) -> i16 {
         let is_usb = self

@@ -17,64 +17,6 @@ pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
     canvas.draw_horizontal_line(ux + 1, uy + 2, 2, Color::Clear);
 }
 
-/// Draw DeltaFW-style high precision battery icon with customizable foreground, background, and shading mode
-pub fn draw_battery_colored(
-    canvas: &mut Canvas,
-    x: u8,
-    y: u8,
-    percentage: u8,
-    is_charging: bool,
-    anim_step: u8,
-    fg: Color,
-    _bg: Color,
-    shading_mode: u8,
-) {
-    let mut flags = 0u8;
-    if is_charging {
-        flags |= STATUS_FLAG_CHARGING;
-    }
-    if fg == Color::Clear {
-        flags |= STATUS_FLAG_INVERTED;
-    }
-    let cfg = StatusRightConfig {
-        percentage,
-        battery_format: 3,
-        shading_mode,
-        anim_step,
-        flags,
-        voltage_mv: 0,
-        temp_deci_c: 0,
-        dynamic_icons: &[],
-    };
-    cfg.draw_battery(canvas, x, y);
-}
-
-/// Draw DeltaFW-style high precision battery icon (13x5 pixels, x: 115..=127, y: 0..=4)
-pub fn draw_battery(
-    canvas: &mut Canvas,
-    x: u8,
-    y: u8,
-    percentage: u8,
-    is_charging: bool,
-    anim_step: u8,
-) {
-    let mut flags = 0u8;
-    if is_charging {
-        flags |= STATUS_FLAG_CHARGING;
-    }
-    let cfg = StatusRightConfig {
-        percentage,
-        battery_format: 3,
-        shading_mode: 1,
-        anim_step,
-        flags,
-        voltage_mv: 0,
-        temp_deci_c: 0,
-        dynamic_icons: &[],
-    };
-    cfg.draw_battery(canvas, x, y);
-}
-
 /// Width in pixels occupied by DeltaFW signal antenna and 5 progressive bars
 pub const SIGNAL_WIDTH: u8 = 12;
 
