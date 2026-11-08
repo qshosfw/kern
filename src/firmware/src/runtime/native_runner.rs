@@ -439,25 +439,22 @@ pub fn load_native_from_storage(
             ram_vma,
             ram_size,
         );
-    } else if slot.is_paged {
-        let cache_size = (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
-            .min(PAGED_CACHE_MAX_BYTES as u32);
-        let ram_vma = load_base.saturating_add(cache_size);
-        let ram_size = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(ram_vma);
-        slot.mem_layout
-            .init_native_pic(load_base, cache_size, ram_vma, ram_size);
     } else {
-        let code_size = if exec.got_offset > 0 {
-            (exec.got_offset as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4)
+        let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS as u32 * 4;
+        let code_size = if slot.is_paged {
+            (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
+                .min(PAGED_CACHE_MAX_BYTES as u32)
+        } else if exec.got_offset > 0 {
+            (exec.got_offset as u32).min(max_arena_bytes)
         } else {
-            (payload_len as u32).min(NATIVE_EXEC_BUFFER_WORDS as u32 * 4)
+            (payload_len as u32).min(max_arena_bytes)
         };
-        let ram_vma = if exec.got_offset > 0 {
+        let ram_vma = if !slot.is_paged && exec.got_offset > 0 {
             slot.got_base
         } else {
             load_base.saturating_add(code_size)
         };
-        let ram_size = (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(ram_vma);
+        let ram_size = (load_base + max_arena_bytes).saturating_sub(ram_vma);
         slot.mem_layout
             .init_native_pic(load_base, code_size, ram_vma, ram_size);
     }
