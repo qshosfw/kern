@@ -40,6 +40,10 @@ pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 16>>> = Mutex::new(RefCell::n
 /// Global memory buffer allocator for zero-copy IPC
 pub static MBUF_POOL: utils::mbuf::MBufPool = utils::mbuf::MBufPool::new();
 
+#[used]
+#[unsafe(link_section = ".uninit")]
+pub static BOOT_RECORD: panic::BootRecordCell = panic::BootRecordCell::new();
+
 #[unsafe(link_section = ".uninit")]
 pub static mut MASTER_CONFIG: core::mem::MaybeUninit<MasterConfig> =
     core::mem::MaybeUninit::uninit();

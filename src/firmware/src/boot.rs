@@ -118,13 +118,11 @@ pub fn draw_crash_dialog(
     gfx::widgets::draw_key_badge(canvas, 4, 55, "OK", "Dismiss");
 
     let exit_label = match countdown_secs {
-        Some(s) if s > 0 && s <= 5 => match s {
-            5 => "5s",
-            4 => "4s",
-            3 => "3s",
-            2 => "2s",
-            _ => "1s",
-        },
+        Some(5) => "5s",
+        Some(4) => "4s",
+        Some(3) => "3s",
+        Some(2) => "2s",
+        Some(1) => "1s",
         Some(_) => "0s",
         None => "Close",
     };
@@ -150,31 +148,31 @@ pub fn show_crash_dialog_if_needed(hw: &mut BootHardware) {
                 .play_beep(crate::services::melody::BeepType::Warning);
             bsp::set_status_led(bsp::StatusLed::Orange);
 
-            // Drain any key events queued during boot/splash
-            while hw.key_scanner.pop_event().is_some() {}
-            // If any key is physically held down, wait up to 500ms for release
-            for _ in 0..50 {
-                if !hw.key_scanner.is_any_key_down() {
-                    break;
-                }
+            // Ensure keypad is quiet and no key is held
+            hw.key_scanner.clear();
+            while drivers::keyboard::KeypadScanner::poll_raw_mask() != 0 {
                 bsp::Board::wdt_feed();
-                let _ = hw.key_scanner.scan();
                 py32_hal::delay::delay_ms(10);
             }
-            while hw.key_scanner.pop_event().is_some() {}
+            hw.key_scanner.clear();
 
             let canvas = crate::system_canvas();
-            draw_crash_dialog(canvas, slot, Some(5));
-            hw.lcd.blit(canvas);
+            let mut sec = 5u8;
+            while sec > 0 {
+                draw_crash_dialog(canvas, slot, Some(sec));
+                hw.lcd.blit(canvas);
 
-            #[cfg(feature = "usb")]
-            let key = boot_wait_key_with_usb(hw.key_scanner, hw.usb, 5000);
-            #[cfg(not(feature = "usb"))]
-            let key = boot_wait_key(hw.key_scanner, 5000);
+                #[cfg(feature = "usb")]
+                let key = boot_wait_key_with_usb(hw.key_scanner, hw.usb, 1000);
+                #[cfg(not(feature = "usb"))]
+                let key = boot_wait_key(hw.key_scanner, 1000);
 
-            if key.is_some() {
-                hw.radio
-                    .play_beep(crate::services::melody::BeepType::Click);
+                if key.is_some() {
+                    hw.radio
+                        .play_beep(crate::services::melody::BeepType::Click);
+                    break;
+                }
+                sec -= 1;
             }
 
             bsp::set_status_led(bsp::StatusLed::Off);

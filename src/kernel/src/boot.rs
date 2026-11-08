@@ -324,6 +324,10 @@ impl BootRecord {
             (true, true) => {
                 if self.active_slot == 1 {
                     Some(&self.slot_b)
+                } else if self.active_slot == 0 {
+                    Some(&self.slot_a)
+                } else if self.slot_b.crash_count > self.slot_a.crash_count {
+                    Some(&self.slot_b)
                 } else {
                     Some(&self.slot_a)
                 }
@@ -337,6 +341,15 @@ impl BootRecord {
     /// Prepare next slot for in-place writing using A/B flip.
     pub fn begin_write(&mut self) -> &mut BootSlot {
         let prev_crashes = self.latest_valid_slot().map_or(0, |s| s.crash_count);
+        if self.active_slot > 1 {
+            self.active_slot = if self.slot_a.is_valid() && !self.slot_b.is_valid() {
+                0
+            } else if self.slot_b.is_valid() && !self.slot_a.is_valid() {
+                1
+            } else {
+                0
+            };
+        }
         let slot = if self.active_slot == 0 {
             &mut self.slot_b
         } else {
@@ -356,7 +369,7 @@ impl BootRecord {
         };
         slot.ident = BOOT_RECORD_IDENT;
         slot.crc32 = slot.compute_crc();
-        self.active_slot ^= 1;
+        self.active_slot = if self.active_slot == 0 { 1 } else { 0 };
     }
 
     /// Clear crash loop count on stable boot execution.

@@ -33,9 +33,7 @@ impl BootRecordCell {
     }
 }
 
-#[used]
-#[unsafe(link_section = ".uninit")]
-pub static BOOT_RECORD: BootRecordCell = BootRecordCell::new();
+pub use crate::BOOT_RECORD;
 
 static mut FAULT_REENTRY_LOCK: bool = false;
 

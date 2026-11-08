@@ -433,21 +433,37 @@ pub fn draw_status_right_unified(
     let shading_mode = crate::master_config_ref().display.shading_mode;
     let tray_icons = crate::orchestrator::status_tray().active_icons();
 
+    let mut flags = 0u8;
+    if is_charging {
+        flags |= gfx::widgets::status_bar::STATUS_FLAG_CHARGING;
+    }
+    if is_low {
+        flags |= gfx::widgets::status_bar::STATUS_FLAG_LOW;
+    }
+    if is_usb {
+        flags |= gfx::widgets::status_bar::STATUS_FLAG_USB;
+    }
+    if serial_active {
+        flags |= gfx::widgets::status_bar::STATUS_FLAG_SERIAL;
+    }
+    if is_f_active {
+        flags |= gfx::widgets::status_bar::STATUS_FLAG_F_ACTIVE;
+    }
+    if is_keypad_locked {
+        flags |= gfx::widgets::status_bar::STATUS_FLAG_KEYPAD_LOCKED;
+    }
+    if inverted {
+        flags |= gfx::widgets::status_bar::STATUS_FLAG_INVERTED;
+    }
+
     let cfg = gfx::widgets::status_bar::StatusRightConfig {
         percentage: pct,
-        voltage_mv: pwr.battery_voltage_mv(),
-        temp_deci_c: pwr.mcu_temperature_deci_c(),
         battery_format: bfmt,
-        is_charging,
-        is_low,
-        is_usb,
-        serial_active,
-        is_f_active,
-        is_keypad_locked,
         shading_mode,
         anim_step,
-        now_ms,
-        inverted,
+        flags,
+        voltage_mv: pwr.battery_voltage_mv(),
+        temp_deci_c: pwr.mcu_temperature_deci_c(),
         dynamic_icons: tray_icons,
     };
 

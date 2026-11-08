@@ -1085,12 +1085,7 @@ impl RadioCoordinator {
     }
 
     #[inline(never)]
-    pub fn tick_10ms<R: RadioService>(&mut self, radio: &mut R) -> RadioEvent {
-        if let Some(ev) = self.tick_tx(radio) {
-            return ev;
-        }
-
-        // 0. Process active 1750 Hz tone burst countdown
+    fn tick_tone_burst<R: RadioService>(&mut self, radio: &mut R) {
         if let AudioRoutingState::ToneBurstActive { remaining_ms } = self.audio_routing {
             if remaining_ms <= 10 {
                 radio.mute_tones();
@@ -1104,46 +1099,110 @@ impl RadioCoordinator {
                 };
             }
         }
+    }
 
-        // 1. Process active arbitration lock countdown
-        if let Some(arb_ev) = self.arbitrator.tick(10) {
-            match arb_ev {
-                ArbitrationEvent::LockRestored {
+    #[inline(never)]
+    fn tick_arbitrator<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
+        let arb_ev = self.arbitrator.tick(10)?;
+        match arb_ev {
+            ArbitrationEvent::LockRestored {
+                client,
+                resources,
+                slot,
+                needs_mute,
+            } => {
+                self.listening_vfo = slot;
+                self.fsk_sync_active = client.id == ClientId::FSK_SIDECAR;
+                self.set_audio_muted(radio, needs_mute);
+                Some(RadioEvent::LockRestored {
                     client,
                     resources,
                     slot,
-                    needs_mute,
-                } => {
-                    self.listening_vfo = slot;
-                    self.fsk_sync_active = client.id == ClientId::FSK_SIDECAR;
-                    self.set_audio_muted(radio, needs_mute);
-                    return RadioEvent::LockRestored {
+                })
+            }
+            ArbitrationEvent::LockReleased {
+                client,
+                resources,
+                slot,
+                was_muted,
+            } => {
+                self.fsk_sync_active = false;
+                if was_muted {
+                    self.set_audio_muted(radio, false);
+                }
+                if client.id == ClientId::FSK_SIDECAR {
+                    Some(RadioEvent::FskLockReleased(slot))
+                } else {
+                    Some(RadioEvent::LockReleased {
                         client,
                         resources,
                         slot,
-                    };
-                }
-                ArbitrationEvent::LockReleased {
-                    client,
-                    resources,
-                    slot,
-                    was_muted,
-                } => {
-                    self.fsk_sync_active = false;
-                    if was_muted {
-                        self.set_audio_muted(radio, false);
-                    }
-                    if client.id == ClientId::FSK_SIDECAR {
-                        return RadioEvent::FskLockReleased(slot);
-                    } else {
-                        return RadioEvent::LockReleased {
-                            client,
-                            resources,
-                            slot,
-                        };
-                    }
+                    })
                 }
             }
+        }
+    }
+
+    #[inline(never)]
+    fn process_carrier_active<R: RadioService>(
+        &mut self,
+        radio: &mut R,
+        idx: usize,
+    ) -> RadioEvent {
+        self.activity_count[idx] = self.activity_count[idx].saturating_add(1);
+
+        // Voice carrier priority override: if squelch opens while FSK sidecar is holding the channel,
+        // immediately restore audio so the user hears voice
+        if self.fsk_config.voice_priority_override
+            && self.arbitrator.active_client().id == ClientId::FSK_SIDECAR
+        {
+            self.set_audio_muted(radio, false);
+        }
+
+        if !self.carrier_active {
+            self.carrier_active = true;
+            if !self.is_transmitting {
+                bsp::set_status_led(bsp::StatusLed::Green);
+            }
+            if !self.arbitrator.is_locked() || !self.arbitrator.active_lock.audio_muted {
+                self.set_audio_muted(radio, false);
+            }
+            self.dwell.on_carrier_opened();
+            self.ste.reset();
+            RadioEvent::CarrierOpened(self.listening_vfo)
+        } else {
+            self.dwell.on_carrier_refresh();
+
+            let tone_cfg = self.listening_channel().rx_subaudible != SubaudibleTone::None;
+            let tone_present = if tone_cfg {
+                radio.is_subaudible_matched()
+            } else {
+                false
+            };
+            let tail_burst = radio.has_tail_burst_detected();
+            if let Some(should_mute) =
+                self.ste
+                    .process_tick_with_tail(true, tone_cfg, tone_present, tail_burst)
+            {
+                self.set_audio_muted(radio, should_mute);
+            }
+
+            RadioEvent::None
+        }
+    }
+
+    #[inline(never)]
+    pub fn tick_10ms<R: RadioService>(&mut self, radio: &mut R) -> RadioEvent {
+        if let Some(ev) = self.tick_tx(radio) {
+            return ev;
+        }
+
+        // 0. Process active 1750 Hz tone burst countdown
+        self.tick_tone_burst(radio);
+
+        // 1. Process active arbitration lock countdown
+        if let Some(ev) = self.tick_arbitrator(radio) {
+            return ev;
         }
 
         // 2. Telemetry and Squelch / Carrier detection
@@ -1153,7 +1212,7 @@ impl RadioCoordinator {
             .listening_vfo
             .index()
             .min(self.rssi_moving_avg.len() - 1);
-        self.rssi_moving_avg[idx] = (self.rssi_moving_avg[idx] * 3 + current_rssi) / 4;
+        self.rssi_moving_avg[idx] = (((self.rssi_moving_avg[idx] as i32 * 3) + current_rssi as i32) >> 2) as i16;
 
         // Dynamic AM Linearity Mapping: adjust front-end gain inversely to carrier RSSI in AM mode
         let listening_mod = self.channels[idx].modulation;
@@ -1162,46 +1221,7 @@ impl RadioCoordinator {
         }
 
         if carrier {
-            self.activity_count[idx] = self.activity_count[idx].saturating_add(1);
-
-            // Voice carrier priority override: if squelch opens while FSK sidecar is holding the channel,
-            // immediately restore audio so the user hears voice
-            if self.fsk_config.voice_priority_override
-                && self.arbitrator.active_client().id == ClientId::FSK_SIDECAR
-            {
-                self.set_audio_muted(radio, false);
-            }
-
-            if !self.carrier_active {
-                self.carrier_active = true;
-                if !self.is_transmitting {
-                    bsp::set_status_led(bsp::StatusLed::Green);
-                }
-                if !self.arbitrator.is_locked() || !self.arbitrator.active_lock.audio_muted {
-                    self.set_audio_muted(radio, false);
-                }
-                self.dwell.on_carrier_opened();
-                self.ste.reset();
-                return RadioEvent::CarrierOpened(self.listening_vfo);
-            } else {
-                self.dwell.on_carrier_refresh();
-
-                let tone_cfg = self.listening_channel().rx_subaudible != SubaudibleTone::None;
-                let tone_present = if tone_cfg {
-                    radio.is_subaudible_matched()
-                } else {
-                    false
-                };
-                let tail_burst = radio.has_tail_burst_detected();
-                if let Some(should_mute) =
-                    self.ste
-                        .process_tick_with_tail(true, tone_cfg, tone_present, tail_burst)
-                {
-                    self.set_audio_muted(radio, should_mute);
-                }
-
-                return RadioEvent::None;
-            }
+            return self.process_carrier_active(radio, idx);
         }
 
         // Background Adaptive Squelch Noise-Floor Estimator (runs when channel is idle)

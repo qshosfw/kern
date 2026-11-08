@@ -117,20 +117,10 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
     canvas.draw_pixel(ux + 2, uy, color);
 
     // 2. Progressive signal bars (1 to 5) with 1px spacers
-    if level >= 1 {
-        canvas.draw_vertical_line(ux + 3, uy + 4, 1, color);
-    }
-    if level >= 2 {
-        canvas.draw_vertical_line(ux + 5, uy + 3, 2, color);
-    }
-    if level >= 3 {
-        canvas.draw_vertical_line(ux + 7, uy + 2, 3, color);
-    }
-    if level >= 4 {
-        canvas.draw_vertical_line(ux + 9, uy + 1, 4, color);
-    }
-    if level >= 5 {
-        canvas.draw_vertical_line(ux + 11, uy, 5, color);
+    for i in 1..=5 {
+        if level >= i {
+            canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
+        }
     }
 
     SIGNAL_WIDTH
@@ -228,41 +218,112 @@ pub fn draw_status_text(
     pos
 }
 
+pub const STATUS_FLAG_CHARGING: u8 = 1 << 0;
+pub const STATUS_FLAG_LOW: u8 = 1 << 1;
+pub const STATUS_FLAG_USB: u8 = 1 << 2;
+pub const STATUS_FLAG_SERIAL: u8 = 1 << 3;
+pub const STATUS_FLAG_F_ACTIVE: u8 = 1 << 4;
+pub const STATUS_FLAG_KEYPAD_LOCKED: u8 = 1 << 5;
+pub const STATUS_FLAG_INVERTED: u8 = 1 << 6;
+
 /// Modular configuration and automatic renderer for the right side of the status bar.
 #[derive(Debug, Clone, Copy)]
 pub struct StatusRightConfig<'a> {
     pub percentage: u8,
-    pub voltage_mv: u16,
-    pub temp_deci_c: i16,
     pub battery_format: u8,
-    pub is_charging: bool,
-    pub is_low: bool,
-    pub is_usb: bool,
-    pub serial_active: bool,
-    pub is_f_active: bool,
-    pub is_keypad_locked: bool,
     pub shading_mode: u8,
     pub anim_step: u8,
-    pub now_ms: u32,
-    pub inverted: bool,
+    pub flags: u8,
+    pub voltage_mv: u16,
+    pub temp_deci_c: i16,
     pub dynamic_icons: &'a [crate::icons::Icon],
 }
 
 impl<'a> StatusRightConfig<'a> {
+    pub const fn new(percentage: u8, battery_format: u8, voltage_mv: u16) -> Self {
+        Self {
+            percentage,
+            battery_format,
+            shading_mode: 1,
+            anim_step: 0,
+            flags: 0,
+            voltage_mv,
+            temp_deci_c: 250,
+            dynamic_icons: &[],
+        }
+    }
+
+    #[inline(always)]
+    pub const fn with_flags(mut self, flags: u8) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    #[inline(always)]
+    pub const fn with_flag(mut self, flag: u8, val: bool) -> Self {
+        if val {
+            self.flags |= flag;
+        } else {
+            self.flags &= !flag;
+        }
+        self
+    }
+
+    #[inline(always)]
+    pub const fn with_dynamic_icons(mut self, icons: &'a [crate::icons::Icon]) -> Self {
+        self.dynamic_icons = icons;
+        self
+    }
+
+    #[inline(always)]
+    pub fn is_charging(&self) -> bool {
+        (self.flags & STATUS_FLAG_CHARGING) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_low(&self) -> bool {
+        (self.flags & STATUS_FLAG_LOW) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_usb(&self) -> bool {
+        (self.flags & STATUS_FLAG_USB) != 0
+    }
+
+    #[inline(always)]
+    pub fn serial_active(&self) -> bool {
+        (self.flags & STATUS_FLAG_SERIAL) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_f_active(&self) -> bool {
+        (self.flags & STATUS_FLAG_F_ACTIVE) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_keypad_locked(&self) -> bool {
+        (self.flags & STATUS_FLAG_KEYPAD_LOCKED) != 0
+    }
+
+    #[inline(always)]
+    pub fn inverted(&self) -> bool {
+        (self.flags & STATUS_FLAG_INVERTED) != 0
+    }
+
     /// Renders all right-side status elements dynamically flowing right-to-left.
     /// Preserves battery and bolt geometry while handling USB plug and dynamic icons.
     #[inline(never)]
     pub fn render(&self, canvas: &mut Canvas) -> i16 {
         use crate::fonts::tomthumb::FONT;
 
-        let (fg, bg) = if self.inverted {
+        let (fg, bg) = if self.inverted() {
             (Color::Clear, Color::Fill)
         } else {
             (Color::Fill, Color::Clear)
         };
 
-        let y_offset: u8 = if self.inverted { 2 } else { 0 };
-        let y_text: i16 = if self.inverted { 6 } else { 4 };
+        let y_offset: u8 = if self.inverted() { 2 } else { 0 };
+        let y_text: i16 = if self.inverted() { 6 } else { 4 };
 
         let mut right_limit = 126i16; // 127 - 1px screen padding
         let has_bat_icon = matches!(self.battery_format, 3..=5);
@@ -270,14 +331,14 @@ impl<'a> StatusRightConfig<'a> {
         // 1. High precision battery icon
         if has_bat_icon {
             right_limit -= 12;
-            let blink_off = self.is_low && !self.is_charging && (((self.now_ms >> 9) & 1) != 0);
+            let blink_off = self.is_low() && !self.is_charging() && (((self.anim_step >> 1) & 1) != 0);
             if !blink_off {
                 draw_battery_colored(
                     canvas,
                     right_limit as u8,
                     y_offset,
                     self.percentage,
-                    self.is_charging,
+                    self.is_charging(),
                     self.anim_step,
                     fg,
                     bg,
@@ -287,9 +348,9 @@ impl<'a> StatusRightConfig<'a> {
         }
 
         // 2. Charging bolt (closer spacing preserved) or low battery warning
-        if self.is_charging {
+        if self.is_charging() {
             right_limit = draw_status_bolt(canvas, right_limit, y_offset as i16, has_bat_icon, fg);
-        } else if self.is_low {
+        } else if self.is_low() {
             right_limit -= if has_bat_icon { 5 } else { 4 };
             crate::text::draw_char(canvas, right_limit, y_text, '!', &FONT, fg);
         }
@@ -297,9 +358,9 @@ impl<'a> StatusRightConfig<'a> {
         // 3. USB / Serial Plug Icon
         // Shows when USB is connected or serial is active; disappears cleanly when unplugged/inactive.
         // Spacing is normal (7px width + 2px spacing = 9px).
-        if self.is_usb || self.serial_active {
+        if self.is_usb() || self.serial_active() {
             right_limit =
-                draw_status_plug(canvas, right_limit, y_offset as i16, self.serial_active, fg);
+                draw_status_plug(canvas, right_limit, y_offset as i16, self.serial_active(), fg);
         }
 
         // 4. Battery Text Reading (Voltage, Percentage, or MCU Temperature)
@@ -317,12 +378,12 @@ impl<'a> StatusRightConfig<'a> {
         }
 
         // 5. System Indicators (F-key badge and Keypad Lock)
-        if !self.inverted {
-            if self.is_f_active {
+        if !self.inverted() {
+            if self.is_f_active() {
                 right_limit -= 7;
                 draw_f_key(canvas, right_limit, y_offset as i16);
             }
-            if self.is_keypad_locked {
+            if self.is_keypad_locked() {
                 right_limit = draw_status_icon(
                     canvas,
                     right_limit,
@@ -448,29 +509,10 @@ mod tests {
     fn test_plug_show_and_disappear() {
         let mut canvas = Canvas::new();
 
-        let cfg_unplugged = StatusRightConfig {
-            percentage: 85,
-            voltage_mv: 8200,
-            temp_deci_c: 250,
-            battery_format: 3, // Icon only
-            is_charging: false,
-            is_low: false,
-            is_usb: false,
-            serial_active: false,
-            is_f_active: false,
-            is_keypad_locked: false,
-            shading_mode: 1,
-            anim_step: 0,
-            now_ms: 1000,
-            inverted: false,
-            dynamic_icons: &[],
-        };
+        let cfg_unplugged = StatusRightConfig::new(85, 3, 8200);
         let limit_unplugged = cfg_unplugged.render(&mut canvas);
 
-        let cfg_plugged = StatusRightConfig {
-            is_usb: true,
-            ..cfg_unplugged
-        };
+        let cfg_plugged = cfg_unplugged.with_flag(STATUS_FLAG_USB, true);
         let limit_plugged = cfg_plugged.render(&mut canvas);
 
         // When plugged in, limit should be reduced by exactly 9px (normal plug icon spacing: 7 + 2)
@@ -482,27 +524,8 @@ mod tests {
         let mut canvas = Canvas::new();
         let dynamic = [Icon::Scan, Icon::Moon];
 
-        let cfg = StatusRightConfig {
-            percentage: 90,
-            voltage_mv: 8250,
-            temp_deci_c: 220,
-            battery_format: 3,
-            is_charging: false,
-            is_low: false,
-            is_usb: false,
-            serial_active: false,
-            is_f_active: false,
-            is_keypad_locked: false,
-            shading_mode: 1,
-            anim_step: 0,
-            now_ms: 500,
-            inverted: false,
-            dynamic_icons: &dynamic,
-        };
-        let base_cfg = StatusRightConfig {
-            dynamic_icons: &[],
-            ..cfg
-        };
+        let cfg = StatusRightConfig::new(90, 3, 8250).with_dynamic_icons(&dynamic);
+        let base_cfg = StatusRightConfig::new(90, 3, 8250);
 
         let limit_dyn = cfg.render(&mut canvas);
         let limit_base = base_cfg.render(&mut canvas);
@@ -514,23 +537,7 @@ mod tests {
     #[test]
     fn test_status_bar_layout_preserves_right_items() {
         let mut canvas = Canvas::new();
-        let cfg = StatusRightConfig {
-            percentage: 90,
-            voltage_mv: 8250,
-            temp_deci_c: 220,
-            battery_format: 3, // Battery icon
-            is_charging: false,
-            is_low: false,
-            is_usb: false,
-            serial_active: false,
-            is_f_active: false,
-            is_keypad_locked: false,
-            shading_mode: 1,
-            anim_step: 0,
-            now_ms: 500,
-            inverted: false,
-            dynamic_icons: &[],
-        };
+        let cfg = StatusRightConfig::new(90, 3, 8250);
         let right_limit = cfg.render(&mut canvas);
         // Verify battery icon drew pixels on page 0 at x=120
         assert_ne!(canvas.buffer[0][120], 0);
