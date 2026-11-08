@@ -129,31 +129,29 @@ impl AppRegistry {
         }
     }
 
-    pub fn on_start<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
+    #[inline(never)]
+    fn get_target(app_id: usize) -> Option<(*mut (), &'static AppVTable<SysContext<'static, 'static>>)> {
         if let Some(entry) = APP_TABLE.get(app_id) {
-            let ptr = (entry.instance)();
-            unsafe { (entry.vtable.on_start)(ptr, core::mem::transmute(ctx)) }
+            Some(((entry.instance)(), &entry.vtable))
         } else {
             unsafe {
-                if let Some(dyn_app) = *core::ptr::addr_of!(DYNAMIC_APP) {
-                    (dyn_app.vtable.on_start)(dyn_app.instance, core::mem::transmute(ctx));
-                }
+                let dyn_ref = (*core::ptr::addr_of!(DYNAMIC_APP)).as_ref()?;
+                Some((dyn_ref.instance, &dyn_ref.vtable))
             }
         }
     }
 
+    pub fn on_start<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
+        if let Some((ptr, vtable)) = Self::get_target(app_id) {
+            unsafe { (vtable.on_start)(ptr, core::mem::transmute(ctx)) }
+        }
+    }
+
     pub fn on_event<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>, event: &Event) -> EventResult {
-        if let Some(entry) = APP_TABLE.get(app_id) {
-            let ptr = (entry.instance)();
-            unsafe { (entry.vtable.on_event)(ptr, core::mem::transmute(ctx), event) }
+        if let Some((ptr, vtable)) = Self::get_target(app_id) {
+            unsafe { (vtable.on_event)(ptr, core::mem::transmute(ctx), event) }
         } else {
-            unsafe {
-                if let Some(dyn_app) = *core::ptr::addr_of!(DYNAMIC_APP) {
-                    (dyn_app.vtable.on_event)(dyn_app.instance, core::mem::transmute(ctx), event)
-                } else {
-                    EventResult::Ignored
-                }
-            }
+            EventResult::Ignored
         }
     }
 
@@ -162,21 +160,10 @@ impl AppRegistry {
         ctx: &mut SysContext<'a, '_>,
         result: &ModalResult<'_>,
     ) -> EventResult {
-        if let Some(entry) = APP_TABLE.get(app_id) {
-            let ptr = (entry.instance)();
-            unsafe { (entry.vtable.on_modal_result)(ptr, core::mem::transmute(ctx), result) }
+        if let Some((ptr, vtable)) = Self::get_target(app_id) {
+            unsafe { (vtable.on_modal_result)(ptr, core::mem::transmute(ctx), result) }
         } else {
-            unsafe {
-                if let Some(dyn_app) = *core::ptr::addr_of!(DYNAMIC_APP) {
-                    (dyn_app.vtable.on_modal_result)(
-                        dyn_app.instance,
-                        core::mem::transmute(ctx),
-                        result,
-                    )
-                } else {
-                    EventResult::Ignored
-                }
-            }
+            EventResult::Ignored
         }
     }
 
@@ -186,33 +173,14 @@ impl AppRegistry {
         ctx: &'a SysContext<'a, '_>,
         sb_cfg: &mut StatusBarConfig<'_>,
     ) {
-        if let Some(entry) = APP_TABLE.get(app_id) {
-            let ptr = (entry.instance)();
-            unsafe { (entry.vtable.render)(ptr, canvas, core::mem::transmute(ctx), sb_cfg) }
-        } else {
-            unsafe {
-                if let Some(dyn_app) = *core::ptr::addr_of!(DYNAMIC_APP) {
-                    (dyn_app.vtable.render)(
-                        dyn_app.instance,
-                        canvas,
-                        core::mem::transmute(ctx),
-                        sb_cfg,
-                    );
-                }
-            }
+        if let Some((ptr, vtable)) = Self::get_target(app_id) {
+            unsafe { (vtable.render)(ptr, canvas, core::mem::transmute(ctx), sb_cfg) }
         }
     }
 
     pub fn on_exit<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
-        if let Some(entry) = APP_TABLE.get(app_id) {
-            let ptr = (entry.instance)();
-            unsafe { (entry.vtable.on_exit)(ptr, core::mem::transmute(ctx)) }
-        } else {
-            unsafe {
-                if let Some(dyn_app) = *core::ptr::addr_of!(DYNAMIC_APP) {
-                    (dyn_app.vtable.on_exit)(dyn_app.instance, core::mem::transmute(ctx));
-                }
-            }
+        if let Some((ptr, vtable)) = Self::get_target(app_id) {
+            unsafe { (vtable.on_exit)(ptr, core::mem::transmute(ctx)) }
         }
     }
 }
