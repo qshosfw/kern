@@ -84,7 +84,7 @@ impl<S: SerialPort> WireDriver<S> {
                 }
             } else {
                 // Buffer printable ASCII bytes when outside COBS frame
-                if (0x20..=0x7E).contains(&b) && self.rx_len < 32 {
+                if b >= 0x20 && b <= 0x7E && self.rx_len < 16 {
                     self.rx_buf[self.rx_len] = b;
                     self.rx_len += 1;
                 }
@@ -106,19 +106,9 @@ impl<S: SerialPort> WireDriver<S> {
     fn handle_ascii_line(&mut self) {
         let cmd = &self.rx_buf[..self.rx_len];
         if cmd.eq_ignore_ascii_case(b"reboot") {
-            self.port.write(b"\r\nRebooting...\r\n");
             cortex_m::peripheral::SCB::sys_reset();
         }
-        let msg: &[u8] = if cmd.eq_ignore_ascii_case(b"help") || cmd.eq_ignore_ascii_case(b"?") {
-            b"\r\nRigWire: help, status, ping, reboot\r\n"
-        } else if cmd.eq_ignore_ascii_case(b"ping") {
-            b"\r\nPONG\r\n"
-        } else if cmd.eq_ignore_ascii_case(b"status") {
-            b"\r\nKERN-OS v0.1.0 Ready\r\n"
-        } else {
-            b"\r\nRigWire Active. Type 'help'\r\n"
-        };
-        self.port.write(msg);
+        self.port.write(b"RigWire\r\n");
     }
 
     pub fn current_payload<'a>(&'a self, header: &WireHeader) -> &'a [u8] {
