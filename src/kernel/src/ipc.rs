@@ -273,23 +273,28 @@ impl KrxIpcMessage {
     }
 }
 
-/// Zero-heap multi-process IPC Mailbox and Message Router (§8.4 / KRX 3.2).
-/// Manages up to N concurrent 32-byte messages in a fixed circular ring buffer.
-pub struct IpcMailbox<const N: usize = 8> {
+/// Zero-heap multi-process IPC Channel and Message Router (§8.4 / KRX 3.2).
+/// Manages up to N concurrent 32-byte messages in a fixed circular ring buffer
+/// with O(1) power-of-two bitmask indexing (zero software division on Cortex-M0+).
+pub struct IpcChannel<const N: usize = 8> {
     messages: [KrxIpcMessage; N],
     occupied: [bool; N],
     head: usize,
     next_seq: u16,
 }
 
-impl<const N: usize> Default for IpcMailbox<N> {
+impl<const N: usize> Default for IpcChannel<N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const N: usize> IpcMailbox<N> {
+impl<const N: usize> IpcChannel<N> {
     pub const fn new() -> Self {
+        assert!(
+            N > 0 && (N & (N - 1)) == 0,
+            "IpcChannel capacity must be a power of two"
+        );
         Self {
             messages: [const { KrxIpcMessage::empty() }; N],
             occupied: [false; N],
@@ -298,7 +303,7 @@ impl<const N: usize> IpcMailbox<N> {
         }
     }
 
-    /// Enqueue a message into the mailbox.
+    /// Enqueue a message into the IPC channel.
     /// If seq is 0, auto-assigns the next monotonic sequence number.
     pub fn send(&mut self, mut msg: KrxIpcMessage) -> bool {
         if msg.seq == 0 {
@@ -306,19 +311,20 @@ impl<const N: usize> IpcMailbox<N> {
             self.next_seq = self.next_seq.wrapping_add(1).max(1);
         }
 
+        let mask = N - 1;
         for i in 0..N {
-            let idx = (self.head + i) % N;
+            let idx = (self.head + i) & mask;
             if !self.occupied[idx] {
                 self.messages[idx] = msg;
                 self.occupied[idx] = true;
-                self.head = (idx + 1) % N;
+                self.head = (idx + 1) & mask;
                 return true;
             }
         }
         false
     }
 
-    /// Poll for the oldest pending message targeted to `receiver_pid` or broadcast.
+    /// Poll for the oldest pending message targeted to `receiver_pid`.
     pub fn poll(&mut self, receiver_pid: u8) -> Option<KrxIpcMessage> {
         self.poll_filtered(receiver_pid, None)
     }
@@ -329,11 +335,12 @@ impl<const N: usize> IpcMailbox<N> {
         receiver_pid: u8,
         filter_type: Option<u16>,
     ) -> Option<KrxIpcMessage> {
-        for idx in 0..N {
+        let mask = N - 1;
+        for i in 0..N {
+            let idx = (self.head + i) & mask;
             if self.occupied[idx] {
                 let msg = &self.messages[idx];
                 let is_recipient = msg.target_pid == receiver_pid
-                    || msg.target_pid == ipc_target::BROADCAST
                     || (receiver_pid != 0 && msg.target_pid == ipc_target::FOREGROUND_APP);
 
                 if is_recipient {
@@ -357,7 +364,6 @@ impl<const N: usize> IpcMailbox<N> {
             if self.occupied[idx] {
                 let msg = &self.messages[idx];
                 if msg.target_pid == receiver_pid
-                    || msg.target_pid == ipc_target::BROADCAST
                     || (receiver_pid != 0 && msg.target_pid == ipc_target::FOREGROUND_APP)
                 {
                     return true;
@@ -420,8 +426,8 @@ mod tests {
     }
 
     #[test]
-    fn test_ipc_mailbox_send_poll_and_reply() {
-        let mut mb = IpcMailbox::<4>::new();
+    fn test_ipc_channel_send_poll_and_reply() {
+        let mut mb = IpcChannel::<4>::new();
         assert_eq!(mb.pending_count(), 0);
 
         let msg1 = KrxIpcMessage::new(3, 7, ipc_msg_type::SERVICE_REQUEST, b"GET_STATUS");
@@ -456,20 +462,8 @@ mod tests {
     }
 
     #[test]
-    fn test_ipc_mailbox_broadcast_and_purge() {
-        let mut mb = IpcMailbox::<4>::new();
-        let bcast = KrxIpcMessage::new(
-            1,
-            ipc_target::BROADCAST,
-            ipc_msg_type::TELEMETRY_FRAME,
-            b"ALL",
-        );
-        assert!(mb.send(bcast));
-
-        // Any PID can poll broadcast message
-        assert!(mb.has_pending(99));
-        let recv = mb.poll(99).expect("broadcast polled");
-        assert!(recv.is_broadcast());
+    fn test_ipc_channel_saturation_and_purge() {
+        let mut mb = IpcChannel::<4>::new();
 
         // Queue saturation
         for i in 0..4 {

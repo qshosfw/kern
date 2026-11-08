@@ -33,7 +33,7 @@ pub use radio::{
 pub use service::{
     MATH_VTABLE, SERVICE_VTABLE, ServiceRegistry, active_caller_pid, api_ipc_poll,
     api_ipc_recv_msg, api_ipc_reply, api_ipc_send, api_ipc_send_msg, api_sys_find_proc,
-    api_sys_self_pid, ipc_mailbox_mut, service_registry_mut,
+    api_sys_self_pid, ipc_channel_mut, service_registry_mut,
 };
 pub use storage::STORAGE_VTABLE;
 pub use ui::{UI_VTABLE, store_modal_text};
@@ -325,8 +325,8 @@ mod tests {
         let send_res = unsafe { api_ipc_send(b"Radio".as_ptr(), 5, b"CMD_SET_FREQ".as_ptr(), 12) };
         assert_eq!(send_res, 0);
 
-        // Clear mailbox on test completion
-        ipc_mailbox_mut().purge_pid(radio_pid);
-        ipc_mailbox_mut().purge_pid(1);
+        // Clear IPC channel on test completion
+        ipc_channel_mut().purge_pid(radio_pid);
+        ipc_channel_mut().purge_pid(1);
     }
 }

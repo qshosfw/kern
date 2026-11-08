@@ -268,7 +268,7 @@ def run_test():
         print("  PASS  Returned to Launcher from Native Beacon app")
 
         # 12. Inject Key '4' to trigger Exhaustive C-ABI Test Bench
-        print("  • Injecting keypad press: '4' (Launch Exhaustive C-ABI Test Bench)...")
+        print("  • Injecting keypad press: '4' (Launch Native Exhaustive C-ABI Bench App)...")
         key_resp = http_post_json("/api/key", {"key": "4", "hold_ms": 150})
         if not key_resp.get("ok"):
             sys.exit(f"FAIL: Key 4 injection failed: {key_resp}")
@@ -282,58 +282,64 @@ def run_test():
                 break
         if not bench_frame:
             sys.exit("FAIL: Screen did not update after triggering C-ABI Test Bench")
-        print("  PASS  C-ABI Test Bench executed and popup modal rendered to LCD")
+        with open("/tmp/bench_frame.png", "wb") as f:
+            f.write(bench_frame)
+        print("  PASS  Native C-ABI Test Bench app loaded, executed, and rendered to LCD")
 
         # Verify all serial logs from the exhaustive bench
-        print("  • Validating C-ABI Test Bench telemetry across all 12 domains...")
-        logs = http_get_json("/api/logs")
-        entries = logs.get("entries", [])
-        bench_lines = [e.get("text", "") for e in entries if "[BENCH:ABI]" in e.get("text", "")]
-        if not bench_lines:
-            serial_data = http_get_json("/api/serial")
-            bench_lines = [l for l in serial_data.get("lines", []) if "[BENCH:ABI]" in l]
+        print("  • Validating C-ABI Test Bench telemetry across all 13 domains...")
+        bench_lines = []
+        for _ in range(15):
+            logs = http_get_json("/api/logs")
+            entries = logs.get("entries", [])
+            bench_lines = [e.get("text", "") for e in entries if "[BENCH:ABI]" in e.get("text", "")]
+            if len(bench_lines) >= 14:
+                break
+            time.sleep(0.2)
 
         expected_bench_markers = [
             "STARTING EXHAUSTIVE C-ABI BENCHMARK ON CORTEX-M0+",
             "DISPLAY (14 APIs): PASS",
             "POWER (14 APIs): PASS",
             "KEYPAD (10 APIs): PASS",
-            "RADIO_FM (29 APIs): PASS",
+            "RADIO_FM (33 APIs): PASS",
             "AUDIO (13 APIs): PASS",
             "STORAGE (13 APIs): PASS",
+            "SERIAL (4 APIs): PASS",
             "TIMER (5 APIs): PASS",
             "MATH (6 APIs): PASS",
             "UI_COMPOSITOR (8 APIs): PASS",
-            "SERVICE_IPC (8 APIs): PASS",
+            "SERVICE_IPC (26 APIs): PASS",
             "HW_BUS (7 APIs): PASS",
-            "TOTAL: 128/128 APIS EXHAUSTIVELY VALIDATED: PASS",
+            "TOTAL: 153/153 APIS EXHAUSTIVELY VALIDATED: PASS",
         ]
 
         for marker in expected_bench_markers:
             found = any(marker in line for line in bench_lines)
             if not found:
                 print("Captured bench lines:", bench_lines)
+                print("All log entries:", [e.get("text", "") for e in entries])
                 sys.exit(f"FAIL: Expected bench marker not found: '{marker}'")
             print(f"  PASS  VTable domain validated: {marker}")
 
-        print("  PASS  All 128 C-ABI functions validated successfully on Cortex-M0+ silicon simulation")
+        print("  PASS  All 153 C-ABI functions validated successfully on Cortex-M0+ silicon simulation")
 
-        # 13. Dismiss Bench Popup Modal
-        print("  • Injecting keypad press: 'EXIT' (Dismiss ABI Bench Modal)...")
+        # 13. Exit Native Bench App back to Launcher
+        print("  • Injecting keypad press: 'EXIT' (Return to Launcher from Bench)...")
         key_resp = http_post_json("/api/key", {"key": "EXIT", "hold_ms": 150})
         if not key_resp.get("ok"):
             sys.exit(f"FAIL: Key EXIT injection failed: {key_resp}")
 
-        bench_modal_dismiss_frame = None
+        bench_return_frame = None
         for _ in range(30):
             time.sleep(0.2)
             cur = http_get("/frame.png")
             if cur != bench_frame:
-                bench_modal_dismiss_frame = cur
+                bench_return_frame = cur
                 break
-        if not bench_modal_dismiss_frame:
-            sys.exit("FAIL: Screen did not dismiss ABI Bench modal")
-        print("  PASS  Returned to Launcher from ABI Bench modal")
+        if not bench_return_frame:
+            sys.exit("FAIL: Screen did not return to Launcher from ABI Bench")
+        print("  PASS  Returned to Launcher from Native Bench app")
 
         # 14. Test Deep Sleep from Launcher via long-press EXIT
         print("  • Injecting long-press EXIT (1600ms) on Launcher for deep sleep...")

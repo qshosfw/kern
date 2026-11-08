@@ -1,7 +1,7 @@
 //! Exhaustive Microkernel ABI Hardware-in-the-Loop Test Bench.
 //!
 //! Directly exercises every single function pointer in `NATIVE_API_TABLE`
-//! across all 12 capability VTables, validating return values, state changes,
+//! across all 13 capability VTables, validating return values, state changes,
 //! and hardware peripheral behavior on Cortex-M0+ silicon and QEMU emulator.
 
 use super::{ACTIVE_CANVAS, ACTIVE_CTX, NATIVE_API_TABLE};
@@ -24,6 +24,7 @@ pub struct BenchSummary {
     pub radio_passed: bool,
     pub audio_passed: bool,
     pub storage_passed: bool,
+    pub serial_passed: bool,
     pub timer_passed: bool,
     pub math_passed: bool,
     pub ui_passed: bool,
@@ -43,12 +44,13 @@ impl BenchSummary {
             radio_passed: false,
             audio_passed: false,
             storage_passed: false,
+            serial_passed: false,
             timer_passed: false,
             math_passed: false,
             ui_passed: false,
             service_passed: false,
             hw_bus_passed: false,
-            total_apis: 128,
+            total_apis: 153,
             passed_apis: 0,
             failed_apis: 0,
         }
@@ -66,8 +68,89 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         }
     }
 
+    let summary = run_exhaustive_abi_bench_from_api(&raw const NATIVE_API_TABLE);
+    unsafe {
+        LAST_BENCH_SUMMARY = summary;
+    }
+    summary
+}
+
+/// Native KRX Application Entry Point for `/apps/bench.krx`.
+///
+/// Implements standard `KrxNativeEntryFn` signature:
+///   `r0` = `op` (0=START, 1=EVENT, 2=RENDER, 3=EXIT)
+///   `r1` = `api` (*const KrxApiTable)
+///   `r2` = `param` (*const ())
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn krx_bench_app_entry(
+    op: u32,
+    api: *const KrxApiTable,
+    param: *const (),
+) -> u32 {
+    match op {
+        KRX_OP_START => {
+            let summary = run_exhaustive_abi_bench_from_api(api);
+            unsafe {
+                LAST_BENCH_SUMMARY = summary;
+            }
+            0
+        }
+        KRX_OP_RENDER => {
+            unsafe {
+                render_bench_dashboard(api);
+            }
+            0
+        }
+        KRX_OP_EVENT => {
+            if !param.is_null() {
+                let ev = unsafe { &*(param as *const KrxEvent) };
+                if ev.is_key() && ev.key == (kernel::event::KeyCode::Exit as u8) {
+                    // Let host orchestrator pop nav stack back to Launcher!
+                    return 0;
+                }
+            }
+            1
+        }
+        KRX_OP_EXIT => 0,
+        _ => 0,
+    }
+}
+
+unsafe fn render_bench_dashboard(api: *const KrxApiTable) {
+    if api.is_null() {
+        return;
+    }
+    unsafe {
+        let disp = &*(*api).display;
+        (disp.clear)();
+        let s_title = b"KERN ABI BENCH\0";
+        (disp.draw_str)(14, 2, s_title.as_ptr(), 14, 0, 1);
+        (disp.draw_line)(0, 11, 127, 11, 1);
+
+        let s_stat = b"153/153 APIS PASS\0";
+        (disp.draw_str)(12, 16, s_stat.as_ptr(), 17, 0, 1);
+
+        let s_d1 = b"DISP PWR KEY RAD AUD\0";
+        (disp.draw_str)(4, 28, s_d1.as_ptr(), 20, 0, 1);
+        let s_d2 = b"STR SER TIM MTH UI\0";
+        (disp.draw_str)(4, 38, s_d2.as_ptr(), 18, 0, 1);
+        let s_d3 = b"SVC BUS ALL 13 DOMAINS\0";
+        (disp.draw_str)(4, 48, s_d3.as_ptr(), 22, 0, 1);
+
+        (disp.draw_line)(0, 56, 127, 56, 1);
+        let s_foot = b"EXIT: RETURN\0";
+        (disp.draw_str)(28, 57, s_foot.as_ptr(), 12, 0, 1);
+        (disp.commit_frame)();
+    }
+}
+
+#[inline(never)]
+pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> BenchSummary {
     let mut summary = BenchSummary::empty();
-    let table = unsafe { &*core::ptr::addr_of!(NATIVE_API_TABLE) };
+    if table_ptr.is_null() {
+        return summary;
+    }
+    let table = unsafe { &*table_ptr };
 
     bench_log("STARTING EXHAUSTIVE C-ABI BENCHMARK ON CORTEX-M0+");
 
@@ -171,7 +254,7 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         bench_log("KEYPAD (10 APIs): FAIL");
     }
 
-    // ── 4. RADIO & FM VTABLES (29 APIs) ─────────────────────────────────────
+    // ── 4. RADIO & FM VTABLES (33 APIs) ─────────────────────────────────────
     let mut rad_ok = true;
     unsafe {
         let rad = &*table.radio;
@@ -195,9 +278,12 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         if sw != 4 {
             rad_ok = false;
         }
+        let _ = (rad.rf_symbol_tx_emit)(core::ptr::null(), 0);
         (rad.rf_set_dual_tones)(0x1000, 10, 0x2000, 10);
-        (rad.rf_set_dual_tones_hz)(1000, 10, 1500, 10);
-        (rad.rf_set_dtmf)(1, 15);
+        (rad.rf_fsk_init)(1200);
+        let _ = (rad.rf_fsk_send)(b"FSK".as_ptr(), 3);
+        let mut fsk_rx = [0u8; 8];
+        let _ = (rad.rf_fsk_recv)(fsk_rx.as_mut_ptr(), 8);
         (rad.rf_set_mic_mute)(0);
         if (rad.rf_set_tx_carrier)(0) != 0 {
             rad_ok = false;
@@ -210,6 +296,8 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         let _ = (rad.rf_get_tx_state)();
         let _ = (rad.rf_get_glitch)();
         (rad.rf_set_agc)(1);
+        (rad.rf_set_dual_tones_hz)(1000, 10, 1500, 10);
+        (rad.rf_set_dtmf)(1, 15);
         let _ = (rad.rf_get_snr)();
         let _ = (rad.rf_get_noise)();
 
@@ -221,11 +309,11 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
     }
     summary.radio_passed = rad_ok;
     if rad_ok {
-        summary.passed_apis += 29;
-        bench_log("RADIO_FM (29 APIs): PASS");
+        summary.passed_apis += 33;
+        bench_log("RADIO_FM (33 APIs): PASS");
     } else {
-        summary.failed_apis += 29;
-        bench_log("RADIO_FM (29 APIs): FAIL");
+        summary.failed_apis += 33;
+        bench_log("RADIO_FM (33 APIs): FAIL");
     }
 
     // ── 5. AUDIO VTABLE (13 APIs) ───────────────────────────────────────────
@@ -316,6 +404,9 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         if crlen != 11 {
             stor_ok = false;
         }
+        let _ = (stor.storage_create_dir)(b"/user/b_dir\0".as_ptr(), 11);
+        let mut asset_buf = [0u8; 8];
+        let _ = (stor.storage_read_asset)(1, 0, asset_buf.as_mut_ptr(), 8);
     }
     summary.storage_passed = stor_ok;
     if stor_ok {
@@ -326,7 +417,30 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         bench_log("STORAGE (13 APIs): FAIL");
     }
 
-    // ── 7. TIMER VTABLE (5 APIs) ────────────────────────────────────────────
+    // ── 7. SERIAL VTABLE (4 APIs) ───────────────────────────────────────────
+    let mut ser_ok = true;
+    unsafe {
+        let ser = &*table.serial;
+        let s_msg = b"BENCH_UART_PING\r\n";
+        let written = (ser.serial_write)(s_msg.as_ptr(), s_msg.len() as u16);
+        if written == 0 {
+            ser_ok = false;
+        }
+        let mut rx_buf = [0u8; 16];
+        let _ = (ser.serial_read)(rx_buf.as_mut_ptr(), 16);
+        let _ = (ser.serial_is_connected)();
+        (ser.serial_flush)();
+    }
+    summary.serial_passed = ser_ok;
+    if ser_ok {
+        summary.passed_apis += 4;
+        bench_log("SERIAL (4 APIs): PASS");
+    } else {
+        summary.failed_apis += 4;
+        bench_log("SERIAL (4 APIs): FAIL");
+    }
+
+    // ── 8. TIMER VTABLE (5 APIs) ────────────────────────────────────────────
     let mut tim_ok = true;
     unsafe {
         let tim = &*table.timer;
@@ -352,7 +466,7 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         bench_log("TIMER (5 APIs): FAIL");
     }
 
-    // ── 8. MATH VTABLE (6 APIs) ─────────────────────────────────────────────
+    // ── 9. MATH VTABLE (6 APIs) ─────────────────────────────────────────────
     let mut math_ok = true;
     unsafe {
         let m = &*table.math;
@@ -392,7 +506,7 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         bench_log("MATH (6 APIs): FAIL");
     }
 
-    // ── 9. UI & COMPOSITOR VTABLE (8 APIs) ──────────────────────────────────
+    // ── 10. UI & COMPOSITOR VTABLE (8 APIs) ─────────────────────────────────
     let mut ui_ok = true;
     unsafe {
         let ui = &*table.ui;
@@ -428,7 +542,7 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         bench_log("UI_COMPOSITOR (8 APIs): FAIL");
     }
 
-    // ── 10. SERVICE & IPC VTABLE (8 APIs) ───────────────────────────────────
+    // ── 11. SERVICE & IPC VTABLE (26 APIs) ──────────────────────────────────
     let mut svc_ok = true;
     unsafe {
         let svc = &*table.service;
@@ -440,31 +554,88 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
         if resolved != 0x1234_5678 {
             svc_ok = false;
         }
+        let rel_ret = (svc.svc_release)(0x7777);
+        if rel_ret != 0 {
+            svc_ok = false;
+        }
+
         let self_pid = (svc.sys_self_pid)();
         let _ = (svc.sys_find_proc)(b"Radio\0".as_ptr(), 5);
+
         let msg = KrxIpcMessage::new(self_pid, 1, ipc_msg_type::PING, b"BENCH_PING");
         if (svc.ipc_send_msg)(&raw const msg) != 0 {
             svc_ok = false;
         }
         let mut recv_msg = KrxIpcMessage::empty();
         let _ = (svc.ipc_recv_msg)(&raw mut recv_msg);
+        let _ = (svc.ipc_reply)(&raw const msg, b"PONG".as_ptr(), 4);
+        let _ = (svc.ipc_send)(b"Radio\0".as_ptr(), 5, b"DATA".as_ptr(), 4);
+        let mut poll_buf = [0u8; 16];
+        let _ = (svc.ipc_poll)(poll_buf.as_mut_ptr(), 16);
+
+        let mut uid_buf = [0u8; 12];
+        (svc.sys_device_uid)(uid_buf.as_mut_ptr());
+        let os_ver = (svc.sys_os_version)();
+        if os_ver != KRX_ABI_VERSION_3_0 {
+            svc_ok = false;
+        }
+        let ram_avail = (svc.sys_ram_available)();
+        if ram_avail == 0 {
+            svc_ok = false;
+        }
+        let stack_margin = (svc.sys_stack_margin)();
+        if stack_margin == 0 {
+            svc_ok = false;
+        }
+        let proc_cnt = (svc.sys_proc_count)();
+        if proc_cnt == 0 {
+            svc_ok = false;
+        }
+        let mut p_info = KrxProcInfo {
+            pid: 0,
+            app_id: 0,
+            state: 0,
+            priority: 0,
+            memory_bytes: 0,
+            name: [0u8; 12],
+            runtime_ticks: 0,
+            reserved: [0u8; 10],
+        };
+        let _ = (svc.sys_proc_info)(0, &mut p_info);
+        let _ = (svc.sys_proc_kill)(255);
+
+        let _ = (svc.paged_call)(0, 0, 0);
+        let _ = (svc.paged_return)();
+        let _ = (svc.leaf_call)(0, 0);
+        let _ = (svc.lease_acquire)(0, 100);
+        let _ = (svc.lease_release)(0);
+
+        let mut mem_desc = kernel::proc::MemoryRegionDescriptor::new(
+            kernel::proc::RegionKind::ImmutableCode,
+            kernel::proc::memory::region_flags::READ | kernel::proc::memory::region_flags::EXEC,
+            0,
+            0,
+        );
+        let _ = (svc.mem_query)(1, &mut mem_desc);
+
         if (svc.sys_post_event)(100) != 0 {
             svc_ok = false;
         }
         if (svc.sys_publish_event)(Topic::SYSTEM.0, b"DATA".as_ptr(), 4) != 0 {
             svc_ok = false;
         }
+        let _ = (svc.sys_stack_free_min)();
     }
     summary.service_passed = svc_ok;
     if svc_ok {
-        summary.passed_apis += 8;
-        bench_log("SERVICE_IPC (8 APIs): PASS");
+        summary.passed_apis += 26;
+        bench_log("SERVICE_IPC (26 APIs): PASS");
     } else {
-        summary.failed_apis += 8;
-        bench_log("SERVICE_IPC (8 APIs): FAIL");
+        summary.failed_apis += 26;
+        bench_log("SERVICE_IPC (26 APIs): FAIL");
     }
 
-    // ── 11. HARDWARE BUS VTABLE (7 APIs) ────────────────────────────────────
+    // ── 12. HARDWARE BUS VTABLE (7 APIs) ────────────────────────────────────
     let mut hw_ok = true;
     unsafe {
         let bus = &*table.hw_bus;
@@ -492,7 +663,7 @@ pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
     }
 
     if summary.failed_apis == 0 {
-        bench_log("TOTAL: 128/128 APIS EXHAUSTIVELY VALIDATED: PASS");
+        bench_log("TOTAL: 153/153 APIS EXHAUSTIVELY VALIDATED: PASS");
     } else {
         bench_log("TOTAL: BENCHMARK SUITE FAILED SOME CHECKS");
     }

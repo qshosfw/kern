@@ -5,7 +5,7 @@
 //! flash sector without ever straddling sector boundaries.
 //!
 //! Features an embedded 16-byte declarative Tagged Extension block (`user_tag`) allowing
-//! applications (Hermes, APRS, Scanners, Power Profilers) to store declarative,
+//! applications (Mesh, APRS, Scanners, Power Profilers) to store declarative,
 //! channel-specific settings without schema migrations.
 
 /// FourCC tag identifying the declarative schema of the 16-byte channel extension block.
@@ -14,8 +14,8 @@ pub struct ExtensionTag(pub u32);
 
 impl ExtensionTag {
     pub const NONE: Self = Self(0);
-    pub const HERMES: Self = Self(u32::from_be_bytes(*b"HRMS"));
-    pub const APRS: Self = Self(u32::from_be_bytes(*b"APRS"));
+    pub const MESH: Self = Self(u32::from_be_bytes(*b"MESH"));
+    pub const PACKET: Self = Self(u32::from_be_bytes(*b"PKT "));
     pub const SCAN: Self = Self(u32::from_be_bytes(*b"SCAN"));
     pub const POWER: Self = Self(u32::from_be_bytes(*b"POWR"));
     pub const TEXT: Self = Self(u32::from_be_bytes(*b"TEXT"));
@@ -77,33 +77,6 @@ impl ChannelExtension {
         unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
     }
 }
-
-/// Declarative extension payload for Hermes Mesh Channels (`b"HRMS"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
-pub struct HermesChannelExt {
-    pub subnet_id: u16,
-    pub key_slot: u8,
-    pub node_role: u8,
-    pub tx_power_dbm: i8,
-    pub topic_hash: u32,
-    pub reserved: [u8; 3],
-}
-
-const _: () = assert!(core::mem::size_of::<HermesChannelExt>() == 12);
-
-/// Declarative extension payload for APRS Packet Channels (`b"APRS"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
-pub struct AprsChannelExt {
-    pub symbol: u8,
-    pub table: u8,
-    pub ssid: u8,
-    pub path: [u8; 7],
-    pub beacon_interval_s: u16,
-}
-
-const _: () = assert!(core::mem::size_of::<AprsChannelExt>() == 12);
 
 /// Declarative extension payload for Channel Scanner Tuning (`b"SCAN"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -710,7 +710,7 @@ impl Orchestrator {
     ) {
         #[cfg(feature = "krx_runtime")]
         if let Some(msg) =
-            crate::runtime::syscall::service::ipc_mailbox_mut().poll(ipc_target::KERNEL)
+            crate::runtime::syscall::service::ipc_channel_mut().poll(ipc_target::KERNEL)
         {
             match msg.msg_type {
                 ipc_msg_type::APP_SWITCH => {
@@ -719,14 +719,14 @@ impl Orchestrator {
                         self.switch_app(ctx, target_app);
                         if (msg.flags & ipc_flags::NEED_ACK) != 0 {
                             let rep = msg.reply_to(&[target_app as u8], false);
-                            let _ = crate::runtime::syscall::service::ipc_mailbox_mut().send(rep);
+                            let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
                         }
                     }
                 }
                 ipc_msg_type::PING => {
                     if (msg.flags & ipc_flags::NEED_ACK) != 0 {
                         let rep = msg.reply_to(b"PONG", false);
-                        let _ = crate::runtime::syscall::service::ipc_mailbox_mut().send(rep);
+                        let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
                     }
                 }
                 ipc_msg_type::DAEMON_STOP => {
@@ -737,7 +737,7 @@ impl Orchestrator {
                         }
                         if (msg.flags & ipc_flags::NEED_ACK) != 0 {
                             let rep = msg.reply_to(&[0], false);
-                            let _ = crate::runtime::syscall::service::ipc_mailbox_mut().send(rep);
+                            let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
                         }
                     }
                 }
@@ -979,10 +979,6 @@ impl Orchestrator {
             Shortcut::Reboot => kernel::sys::SystemDiagnostics::reboot(),
             Shortcut::Sleep => {
                 self.lock_mgr.sleep_requested = true;
-            }
-            Shortcut::AbiBench => {
-                let _ = crate::runtime::syscall::run_exhaustive_abi_bench(ctx);
-                ctx.show_popup(0, "ABI Bench", "128/128 APIs OK");
             }
             Shortcut::Fault => {
                 panic!("Test panic");

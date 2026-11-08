@@ -236,7 +236,10 @@ fn write_krx_package(
     if filesystem.exists(path) {
         let buf = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
         if let Ok(rlen) = filesystem.read_file(path, buf) {
-            if rlen == total_len && &buf[128..total_len] == payload && buf[94] == profile.raw_code()
+            if rlen == total_len
+                && &buf[128..total_len] == payload
+                && buf[94] == profile.raw_code()
+                && buf[68..70] == 128u16.to_le_bytes()
             {
                 return;
             }
@@ -266,7 +269,7 @@ fn write_krx_package(
     // 3. SectionExecution (offset 64: 4B header + 28B body = 32B, ends at 96)
     pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
     pkg[66] = 32;
-    pkg[68..70].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes = 256
+    pkg[68..70].copy_from_slice(&128u16.to_le_bytes()); // min_stack_bytes = 128
     pkg[72..74].copy_from_slice(&512u16.to_le_bytes()); // page_size = 512
     pkg[74] = 2; // cache_blocks = 2
     pkg[80..84].copy_from_slice(&(payload.len() as u32).to_le_bytes()); // payload_size
@@ -317,6 +320,34 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
             "Beacon",
             radio_caps,
             BEACON_NATIVE_PAYLOAD,
+        );
+
+        let all_caps = base_caps
+            | (kernel::caps::Cap::RadioRx as u32)
+            | (kernel::caps::Cap::RadioTx as u32)
+            | (kernel::caps::Cap::StorageRead as u32)
+            | (kernel::caps::Cap::StorageWrite as u32)
+            | (kernel::caps::Cap::AudioOutput as u32)
+            | (kernel::caps::Cap::AudioCapture as u32)
+            | (kernel::caps::Cap::SerialComm as u32)
+            | (kernel::caps::Cap::ServiceRegistry as u32)
+            | (kernel::caps::Cap::PowerManage as u32)
+            | (kernel::caps::Cap::RealTimeClock as u32);
+
+        let entry_addr = (crate::runtime::syscall::krx_bench_app_entry as *const () as usize) | 1;
+        let mut bench_payload = [0u8; 8];
+        bench_payload[0..2].copy_from_slice(&[0x00, 0x4b]); // ldr r3, [pc, #0]
+        bench_payload[2..4].copy_from_slice(&[0x18, 0x47]); // bx r3
+        bench_payload[4..8].copy_from_slice(&(entry_addr as u32).to_le_bytes());
+
+        write_krx_package(
+            filesystem,
+            "/apps/bench.krx",
+            KrxClass::Native,
+            KrxProfile::N1NativePic,
+            "Bench",
+            all_caps,
+            &bench_payload,
         );
     }
 

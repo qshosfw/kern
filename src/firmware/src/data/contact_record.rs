@@ -5,7 +5,7 @@
 //! records fit in a 4096-byte flash sector without ever straddling sector boundaries.
 //!
 //! Universally supports:
-//! - 48-bit (6-byte) MAC addresses & Hermes Link Node IDs
+//! - 48-bit (6-byte) MAC addresses & Mesh Node IDs
 //! - M17 Base40 9-character callsigns
 //! - DMR 24/32-bit Radio IDs & Talkgroups
 //! - MDC1200 16-bit Unit IDs
@@ -38,7 +38,7 @@ impl ContactRecord {
 
     // Contact Signaling Protocol Types
     pub const TYPE_GENERIC: u8 = 0;
-    pub const TYPE_HERMES_MESH: u8 = 1;
+    pub const TYPE_MESH_NODE: u8 = 1;
     pub const TYPE_M17: u8 = 2;
     pub const TYPE_APRS: u8 = 3;
     pub const TYPE_DMR: u8 = 4;
@@ -59,7 +59,7 @@ impl ContactRecord {
     pub const FLAG_ENCRYPTED: u16 = 1 << 3;
     pub const FLAG_AUTO_ACK: u16 = 1 << 4;
 
-    // Node Roles (Hermes / Mesh)
+    // Node Roles (Digital / Mesh)
     pub const ROLE_CLIENT: u8 = 0;
     pub const ROLE_ROUTER: u8 = 1;
     pub const ROLE_TRACKER: u8 = 2;
@@ -81,7 +81,7 @@ impl ContactRecord {
         }
     }
 
-    /// Construct a contact with a 48-bit address (MAC, Hermes Node ID, or Base40).
+    /// Construct a contact with a 48-bit address (MAC, Mesh Node ID, or Base40).
     pub fn new_node(contact_type: u8, address: [u8; 6], name: &str) -> Self {
         let mut rec = Self::empty();
         rec.contact_type = contact_type;

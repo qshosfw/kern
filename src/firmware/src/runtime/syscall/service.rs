@@ -1,20 +1,20 @@
-//! Service Broker, IPC Mailbox, and System Management System Call Handlers.
+//! Service Broker, IPC Channel, and System Management System Call Handlers.
 //!
 //! Provides dynamic service registration and resolution (`CapServiceVTable`),
-//! process discovery, bounded non-blocking IPC mailboxes, shadow stack paged calls,
+//! process discovery, bounded non-blocking IPC channels, shadow stack paged calls,
 //! and hardware-accelerated math routines (`CapMathVTable`).
 
-use kernel::ipc::{IpcMailbox, KrxIpcMessage, ipc_msg_type, ipc_target};
+use kernel::ipc::{IpcChannel, KrxIpcMessage, ipc_msg_type, ipc_target};
 use kernel::proc::abi::{CapMathVTable, CapServiceVTable, KRX_ABI_VERSION_3_0, KrxProcInfo};
 use kernel::proc::primitives::*;
 pub use kernel::proc::service_registry::ServiceRegistry;
 
 pub static mut SERVICE_REGISTRY: ServiceRegistry = ServiceRegistry::new();
-pub static mut KERNEL_IPC_MAILBOX: IpcMailbox<8> = IpcMailbox::new();
+pub static mut KERNEL_IPC_CHANNEL: IpcChannel<8> = IpcChannel::new();
 
 #[inline(always)]
-pub fn ipc_mailbox_mut() -> &'static mut IpcMailbox<8> {
-    unsafe { &mut *core::ptr::addr_of_mut!(KERNEL_IPC_MAILBOX) }
+pub fn ipc_channel_mut() -> &'static mut IpcChannel<8> {
+    unsafe { &mut *core::ptr::addr_of_mut!(KERNEL_IPC_CHANNEL) }
 }
 
 #[inline(always)]
@@ -117,7 +117,7 @@ pub unsafe extern "C" fn api_ipc_send_msg(msg: *const KrxIpcMessage) -> u8 {
     if m.sender_pid == 0 {
         m.sender_pid = active_caller_pid();
     }
-    if ipc_mailbox_mut().send(m) {
+    if ipc_channel_mut().send(m) {
         if let Some(pcb) =
             crate::orchestrator::proc_table_mut().find_mut(kernel::proc::Pid(m.target_pid))
         {
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn api_ipc_recv_msg(out_msg: *mut KrxIpcMessage) -> u8 {
         return 1;
     }
     let receiver_pid = active_caller_pid();
-    if let Some(msg) = ipc_mailbox_mut().poll(receiver_pid) {
+    if let Some(msg) = ipc_channel_mut().poll(receiver_pid) {
         unsafe {
             *out_msg = msg;
         }

@@ -305,37 +305,38 @@ fn report_step(lcd: &mut Option<&mut St7565>, step: &'static str, pct: u8) {
 #[cfg(feature = "filesystem")]
 #[inline(never)]
 pub fn ensure_default_files(filesystem: &mut SystemStorage, mut lcd: Option<&mut St7565>) {
-    if filesystem.exists("/sys/init.done") {
-        return;
+    if !filesystem.exists("/sys/init.done") {
+        #[cfg(feature = "boot_assets")]
+        {
+            report_step(&mut lcd, "Provisioning boot assets...", 20);
+            splash::provision_splashes(filesystem);
+        }
+
+        #[cfg(feature = "provision_rogers")]
+        {
+            report_step(&mut lcd, "Provisioning roger beeps...", 40);
+            crate::services::melody::provision_rogers(filesystem);
+        }
+
+        #[cfg(feature = "boot_jingle")]
+        {
+            report_step(&mut lcd, "Provisioning boot jingles...", 55);
+            crate::services::melody::provision_jingles(filesystem);
+        }
+
+        report_step(&mut lcd, "Verifying security keychain...", 70);
+        crate::security::ensure_keychain(filesystem);
+
+        report_step(&mut lcd, "Installing core apps...", 90);
+        provision::provision_packages(filesystem);
+
+        let _ = filesystem.write_file("/sys/init.done", b"INIT");
+        report_step(&mut lcd, "Initialization Complete", 100);
+        py32_hal::delay::delay_ms(150);
     }
 
-    #[cfg(feature = "boot_assets")]
-    {
-        report_step(&mut lcd, "Provisioning boot assets...", 20);
-        splash::provision_splashes(filesystem);
-    }
-
-    #[cfg(feature = "provision_rogers")]
-    {
-        report_step(&mut lcd, "Provisioning roger beeps...", 40);
-        crate::services::melody::provision_rogers(filesystem);
-    }
-
-    #[cfg(feature = "boot_jingle")]
-    {
-        report_step(&mut lcd, "Provisioning boot jingles...", 55);
-        crate::services::melody::provision_jingles(filesystem);
-    }
-
-    report_step(&mut lcd, "Verifying security keychain...", 70);
-    crate::security::ensure_keychain(filesystem);
-
-    report_step(&mut lcd, "Installing core apps...", 90);
-    provision::provision_packages(filesystem);
-
-    let _ = filesystem.write_file("/sys/init.done", b"INIT");
-    report_step(&mut lcd, "Initialization Complete", 100);
-    py32_hal::delay::delay_ms(150);
+    // Always verify that core system packages in /apps/ are provisioned and current
+    provision::ensure_core_packages(filesystem);
 }
 
 #[cfg(not(feature = "filesystem"))]

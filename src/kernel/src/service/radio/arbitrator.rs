@@ -12,7 +12,7 @@ use super::channel::VfoSlot;
 /// - `b"VFO "`: Interactive VFO user interface
 /// - `b"SCAN"`: Channel / frequency search engine
 /// - `b"FSK "`: Physical FSK sidecar modem
-/// - `b"HRMS"`: Hermes mesh network engine
+/// - `b"MESH"`: Mesh network engine
 /// - `b"APRS"`: APRS packet terminal
 /// - `b"DIGI"`: Digital modes engine
 /// - `b"BCON"`: Automated beacon transmitter
@@ -25,7 +25,7 @@ impl ClientId {
     pub const VFO_UI: Self = Self::from_tag(b"VFO ");
     pub const SCANNER: Self = Self::from_tag(b"SCAN");
     pub const FSK_SIDECAR: Self = Self::from_tag(b"FSK ");
-    pub const HERMES_MESH: Self = Self::from_tag(b"HRMS");
+    pub const MESH_ROUTER: Self = Self::from_tag(b"MESH");
     pub const APRS: Self = Self::from_tag(b"APRS");
     pub const DIGMODE: Self = Self::from_tag(b"DIGI");
     pub const BEACON: Self = Self::from_tag(b"BCON");
@@ -518,7 +518,7 @@ mod tests {
         assert_eq!(arb.locked_slot(), Some(VfoSlot::VfoA));
 
         // 2. Reject lower/equal priority lock on overlapping resource
-        let mesh = ClientToken::new(ClientId::HERMES_MESH, LockTier::BACKGROUND);
+        let mesh = ClientToken::new(ClientId::MESH_ROUTER, LockTier::BACKGROUND);
         assert!(!arb.request_lock(
             mesh,
             RfResourceMask::VFO_A,

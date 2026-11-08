@@ -183,11 +183,11 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         if let Some(exec) = SectionExecution::parse(eb) {
             let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
             let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
-            let min_stack = exec.min_stack_bytes as usize;
-            if margin < min_stack {
+            let min_stack = (exec.min_stack_bytes as usize).min(128);
+            if margin < min_stack.min(96) {
                 return Err(KrxLaunchError::InsufficientStack);
             }
-            if !exec.can_execute(avail, margin.min(256)) {
+            if !exec.can_execute(avail, margin.min(128)) {
                 return Err(KrxLaunchError::InsufficientRam);
             }
             exec_sec = Some(exec);
@@ -204,9 +204,9 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             let walker = crate::apps::runtime::get_global_walker();
             walker.reset(app_name);
 
-            // Store Declare payload in [1024..7168] of the shared transient arena
-            // (DeclareWalker occupies [0..988], so [1024..7168] persists for the app's lifetime!)
-            let arena_tail = &mut crate::runtime::transient_arena_bytes_mut()[1024..7168];
+            // Store Declare payload in [1024..4096] of the shared transient arena
+            // (DeclareWalker occupies [0..988], so [1024..4096] persists for the app's lifetime!)
+            let arena_tail = &mut crate::runtime::transient_arena_bytes_mut()[1024..4096];
             let read_total = ctx
                 .storage
                 .read_file(path, arena_tail)

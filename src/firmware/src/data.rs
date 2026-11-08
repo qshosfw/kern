@@ -18,8 +18,7 @@ pub use app_bundle::{
 };
 pub use arena::*;
 pub use channel_record::{
-    AprsChannelExt, ChannelExtension, ChannelRecord, ExtensionTag, HermesChannelExt,
-    PowerChannelExt, ScanChannelExt,
+    ChannelExtension, ChannelRecord, ExtensionTag, PowerChannelExt, ScanChannelExt,
 };
 pub use contact_record::ContactRecord;
 pub use cursor::{RecordCursor, SliceRecordCursor};

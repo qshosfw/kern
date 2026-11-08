@@ -97,14 +97,6 @@ pub fn load_entries(
 
         // 3. Built-In Utilities & Information
         ENTRIES[count] = LauncherEntry {
-            title: "Bench",
-            icon_8: &assets::ICON_DIAG_8,
-            icon_16: &assets::ICON_DIAG_16,
-            target: LauncherTarget::Shortcut(Shortcut::AbiBench),
-        };
-        count += 1;
-
-        ENTRIES[count] = LauncherEntry {
             title: "Torch",
             icon_8: &assets::ICON_TORCH_8,
             icon_16: &assets::ICON_TORCH_16,

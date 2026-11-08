@@ -22,7 +22,7 @@ use kernel::proc::reloc::apply_relocs;
 pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_WORDS;
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
 pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
-pub const TRANSIENT_SCRATCH_OFFSET: usize = 6144; // Scratch storage offset for asset chooser, staging, etc.
+pub const TRANSIENT_SCRATCH_OFFSET: usize = 2048; // Scratch storage offset for asset chooser, staging, etc.
 
 #[repr(C, align(4))]
 pub(crate) struct NativeExecSlot {
@@ -498,7 +498,7 @@ pub unsafe fn invoke_krx_native(
     }
 
     // 3. Ensure minimum stack headroom exists (prevent Cortex-M0+ stack exhaustion)
-    if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 256 {
+    if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 96 {
         return 0xFFFF_FFFF;
     }
 
@@ -526,7 +526,15 @@ pub unsafe fn invoke_krx_native(
     #[cfg(not(target_arch = "arm"))]
     {
         let _ = got_base;
-        let entry: KrxNativeEntryFn = unsafe { core::mem::transmute(entry_point) };
+        let entry: KrxNativeEntryFn = unsafe {
+            let ptr = (entry_point & !1) as *const u8;
+            if *ptr == 0x00 && *ptr.add(1) == 0x4b && *ptr.add(2) == 0x18 && *ptr.add(3) == 0x47 {
+                let target_fn_ptr = *(ptr.add(4) as *const usize);
+                core::mem::transmute(target_fn_ptr)
+            } else {
+                core::mem::transmute(entry_point)
+            }
+        };
         unsafe { entry(op, api_table, param) }
     }
 }
@@ -713,7 +721,7 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
         // Unbind any service interfaces exported by this package
         super::syscall::service_registry_mut().unbind_provider(slot.pid);
         // Cleanly purge any pending unread IPC messages for this process
-        super::syscall::ipc_mailbox_mut().purge_pid(slot.pid.0);
+        super::syscall::ipc_channel_mut().purge_pid(slot.pid.0);
         // Ensure continuous audio capture is stopped on exit
         crate::audio_capture_mut().stop_capture();
         slot.is_loaded = false;

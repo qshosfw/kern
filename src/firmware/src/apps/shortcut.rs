@@ -21,7 +21,6 @@ pub enum Shortcut {
     Fault = 14,
     TaskManager = 15,
     Sleep = 16,
-    AbiBench = 17,
 }
 
 impl Shortcut {
@@ -40,7 +39,6 @@ impl Shortcut {
         Shortcut::TaskManager,
         Shortcut::Sleep,
         Shortcut::Fault,
-        Shortcut::AbiBench,
     ];
 
     pub const fn name(&self) -> &'static str {
@@ -62,7 +60,6 @@ impl Shortcut {
             Shortcut::Fault => "Fault",
             Shortcut::TaskManager => "Tasks",
             Shortcut::Sleep => "Sleep",
-            Shortcut::AbiBench => "ABI Bench",
         }
     }
 
@@ -81,7 +78,6 @@ impl Shortcut {
             11 | 15 => Shortcut::TaskManager,
             12 | 14 => Shortcut::Fault,
             16 => Shortcut::Sleep,
-            17 => Shortcut::AbiBench,
             _ => Shortcut::None,
         }
     }
@@ -178,11 +174,6 @@ impl From<Shortcut> for SysEvent {
                 command: 16,
                 arg: 0,
             },
-            Shortcut::AbiBench => SysEvent {
-                target: 0,
-                command: 17,
-                arg: 0,
-            },
         }
     }
 }
@@ -209,7 +200,6 @@ impl From<SysEvent> for Shortcut {
             14 => Shortcut::Fault,
             15 => Shortcut::TaskManager,
             16 => Shortcut::Sleep,
-            17 => Shortcut::AbiBench,
             _ => Shortcut::None,
         }
     }

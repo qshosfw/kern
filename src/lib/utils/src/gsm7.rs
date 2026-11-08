@@ -1,20 +1,20 @@
-//! GSM 7-bit Default & Extended Alphabet (3GPP TS 23.038 / DeltaFW Hermes standard).
+//! GSM 7-bit Default & Extended Alphabet (3GPP TS 23.038).
 //!
 //! Provides ultra-compact 7-to-8 bit packing (saves 12.5% storage/payload space),
-//! character mapping, and Hermes formatting tag parsing with zero allocations.
+//! character mapping, and text formatting tag parsing with zero allocations.
 
 pub const ESCAPE: u8 = 0x1B;
 
-/// Hermes Formatting Tags (toggled by extended codes 0x00..0x03)
+/// Text Formatting Tags (toggled by extended codes 0x00..0x03)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct HermesFormat {
+pub struct Gsm7Format {
     pub bold: bool,
     pub italic: bool,
     pub strikethrough: bool,
     pub underline: bool,
 }
 
-impl HermesFormat {
+impl Gsm7Format {
     pub const fn new() -> Self {
         Self {
             bold: false,
@@ -254,8 +254,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hermes_format_toggle() {
-        let mut fmt = HermesFormat::new();
+    fn test_gsm7_format_toggle() {
+        let mut fmt = Gsm7Format::new();
         assert!(!fmt.bold);
         assert!(fmt.toggle(0x00));
         assert!(fmt.bold);
