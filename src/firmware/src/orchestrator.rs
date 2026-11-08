@@ -14,6 +14,7 @@ use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
 use compositor::OsCompositor;
 use gfx::Canvas;
 use kernel::app::EventResult;
+use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::ipc::{ipc_flags, ipc_msg_type, ipc_target};
 use kernel::nav::NavStack;
@@ -160,77 +161,77 @@ impl Orchestrator {
         init_proc_table();
         let table = proc_table_mut();
 
+        fn spawn_proc(
+            table: &mut ProcessTable<MAX_PROCESSES>,
+            name: &str,
+            app_id: usize,
+            priority: kernel::sched::Priority,
+            caps: CapabilitySet,
+            state: ProcState,
+        ) {
+            let _ = table.spawn(name, app_id, priority, ExecType::StaticFirmware, caps);
+            if let Some(pcb) = table.find_mut_by_app(app_id) {
+                pcb.set_state(state);
+                pcb.ledger.record_activation();
+            }
+        }
+
         // 1. Core Kernel Daemon (PID 1)
-        let _ = table.spawn(
+        spawn_proc(
+            table,
             "Kernel",
             0xF0,
             kernel::sched::Priority::Safety,
-            ExecType::StaticFirmware,
-            kernel::caps::CapabilitySet::from_raw(0xFFFF_FFFF),
+            kernel::caps::CapabilitySet::ALL,
+            ProcState::Running,
         );
-        if let Some(pcb) = table.find_mut_by_app(0xF0) {
-            pcb.set_state(ProcState::Running);
-            pcb.ledger.record_activation();
-        }
 
         // 2. Radio Coordinator Service (PID 2)
-        let mut radio_caps = kernel::caps::CapabilitySet::empty();
-        radio_caps.insert(kernel::caps::Cap::RadioRx);
-        radio_caps.insert(kernel::caps::Cap::RadioTx);
-        let _ = table.spawn(
+        let radio_caps = CapabilitySet::empty()
+            .with(kernel::caps::Cap::RadioRx)
+            .with(kernel::caps::Cap::RadioTx);
+        spawn_proc(
+            table,
             "Radio",
             0xF1,
             kernel::sched::Priority::Radio,
-            ExecType::StaticFirmware,
             radio_caps,
+            ProcState::ServiceIdle,
         );
-        if let Some(pcb) = table.find_mut_by_app(0xF1) {
-            pcb.set_state(ProcState::ServiceIdle);
-            pcb.ledger.record_activation();
-        }
 
         // 3. Power Management Service (PID 3)
-        let _ = table.spawn(
+        spawn_proc(
+            table,
             "Power",
             0xF2,
             kernel::sched::Priority::Safety,
-            ExecType::StaticFirmware,
-            kernel::caps::CapabilitySet::empty(),
+            CapabilitySet::empty(),
+            ProcState::ServiceIdle,
         );
-        if let Some(pcb) = table.find_mut_by_app(0xF2) {
-            pcb.set_state(ProcState::ServiceIdle);
-            pcb.ledger.record_activation();
-        }
 
         // 4. Input & Keypad Daemon (PID 4)
-        let _ = table.spawn(
+        spawn_proc(
+            table,
             "Input",
             0xF3,
             kernel::sched::Priority::Ui,
-            ExecType::StaticFirmware,
-            kernel::caps::CapabilitySet::empty(),
+            CapabilitySet::empty(),
+            ProcState::ServiceIdle,
         );
-        if let Some(pcb) = table.find_mut_by_app(0xF3) {
-            pcb.set_state(ProcState::ServiceIdle);
-            pcb.ledger.record_activation();
-        }
 
         // 5. Active Foreground Startup Application (PID 5)
         let name = crate::AppRegistry::descriptor(startup_app)
             .map(|m| m.name)
             .unwrap_or("Radio");
         let caps = crate::AppRegistry::required_caps(startup_app);
-        let _ = table.spawn(
+        spawn_proc(
+            table,
             name,
             startup_app,
             kernel::sched::Priority::Ui,
-            ExecType::StaticFirmware,
             caps,
+            ProcState::Running,
         );
-        if let Some(pcb) = table.find_mut_by_app(startup_app) {
-            pcb.set_state(ProcState::Running);
-            pcb.ledger.record_activation();
-        }
 
         Self {
             active_app_id: startup_app,
