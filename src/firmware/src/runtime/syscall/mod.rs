@@ -57,10 +57,16 @@ pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
 #[inline(always)]
 pub fn active_canvas_opt() -> Option<&'static mut Canvas> {
     let ptr = unsafe { ACTIVE_CANVAS };
-    if ptr.is_null() {
-        None
-    } else {
+    if !ptr.is_null() {
         Some(unsafe { &mut *ptr })
+    } else if let Some(ctx) = active_ctx_opt() {
+        if let Some(ref mut d) = ctx.display {
+            Some(unsafe { &mut *(d.canvas as *mut Canvas) })
+        } else {
+            Some(crate::system_canvas())
+        }
+    } else {
+        Some(crate::system_canvas())
     }
 }
 
@@ -139,7 +145,9 @@ static INTERFACE_TABLE: [InterfaceBinding; 13] = [
     // 0x0002: INTERFACE_RADIO
     InterfaceBinding {
         vtable: &raw const RADIO_VTABLE as *const (),
-        required_caps_mask: (Cap::RadioRx as u32) | (Cap::RadioTx as u32) | (Cap::BroadBandRx as u32),
+        required_caps_mask: (Cap::RadioRx as u32)
+            | (Cap::RadioTx as u32)
+            | (Cap::BroadBandRx as u32),
     },
     // 0x0003: INTERFACE_AUDIO
     InterfaceBinding {

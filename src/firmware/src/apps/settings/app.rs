@@ -86,7 +86,9 @@ impl SettingsApp {
     fn build_menu_model<'a>(&'a self, is_editing: bool) -> MenuModel<'a> {
         let icons = if self.current_page == PageId::Root {
             Some(Self::ROOT_ICONS)
-        } else if self.current_page == PageId::ManageApps || self.current_page == PageId::ManageServices {
+        } else if self.current_page == PageId::ManageApps
+            || self.current_page == PageId::ManageServices
+        {
             Some(&self.item_icons[..self.items_len])
         } else {
             None

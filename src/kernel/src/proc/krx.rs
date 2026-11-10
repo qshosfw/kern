@@ -2652,7 +2652,10 @@ mod tests {
 
         // Stack margin required = 256 bytes -> Total needed = 512 + 256 + 256 = 1024 bytes
         assert!(!exec.can_execute(1023, 256), "1 byte under must fail");
-        assert!(exec.can_execute(1024, 256), "Exact required RAM must succeed");
+        assert!(
+            exec.can_execute(1024, 256),
+            "Exact required RAM must succeed"
+        );
         assert!(exec.can_execute(4096, 256), "Abundant RAM must succeed");
         assert!(!exec.can_execute(0, 0), "Zero RAM must fail");
 
@@ -2686,10 +2689,42 @@ mod tests {
         let mut table = ProcessTable::<8>::new();
 
         // Spawn 4 system critical daemons (PID <= 4, protected)
-        let d1 = table.spawn("RADIO_DAEMON", 0xF1, Priority::Safety, ExecType::StaticFirmware, CapabilitySet::ALL).unwrap();
-        let d2 = table.spawn("POWER_MGR", 0xF2, Priority::Safety, ExecType::StaticFirmware, CapabilitySet::ALL).unwrap();
-        let d3 = table.spawn("AUDIO_SRV", 0xF3, Priority::Radio, ExecType::StaticFirmware, CapabilitySet::ALL).unwrap();
-        let d4 = table.spawn("STORAGE_SRV", 0xF4, Priority::Capture, ExecType::StaticFirmware, CapabilitySet::ALL).unwrap();
+        let d1 = table
+            .spawn(
+                "RADIO_DAEMON",
+                0xF1,
+                Priority::Safety,
+                ExecType::StaticFirmware,
+                CapabilitySet::ALL,
+            )
+            .unwrap();
+        let d2 = table
+            .spawn(
+                "POWER_MGR",
+                0xF2,
+                Priority::Safety,
+                ExecType::StaticFirmware,
+                CapabilitySet::ALL,
+            )
+            .unwrap();
+        let d3 = table
+            .spawn(
+                "AUDIO_SRV",
+                0xF3,
+                Priority::Radio,
+                ExecType::StaticFirmware,
+                CapabilitySet::ALL,
+            )
+            .unwrap();
+        let d4 = table
+            .spawn(
+                "STORAGE_SRV",
+                0xF4,
+                Priority::Capture,
+                ExecType::StaticFirmware,
+                CapabilitySet::ALL,
+            )
+            .unwrap();
 
         assert_eq!(d1.0, 1);
         assert_eq!(d2.0, 2);
@@ -2697,13 +2732,56 @@ mod tests {
         assert_eq!(d4.0, 4);
 
         // Spawn 4 user processes to completely fill the 8 slots
-        let u1 = table.spawn("VFO_APP", 1, Priority::Ui, ExecType::RelocatableNative, CapabilitySet::NONE).unwrap();
-        let u2 = table.spawn("SETTINGS", 2, Priority::Ui, ExecType::RelocatableNative, CapabilitySet::NONE).unwrap();
-        let u3 = table.spawn("BEACON_KRX", 3, Priority::Idle, ExecType::RelocatableNative, CapabilitySet::NONE).unwrap();
-        let u4 = table.spawn("BENCH_KRX", 4, Priority::Idle, ExecType::RelocatableNative, CapabilitySet::NONE).unwrap();
+        let u1 = table
+            .spawn(
+                "VFO_APP",
+                1,
+                Priority::Ui,
+                ExecType::RelocatableNative,
+                CapabilitySet::NONE,
+            )
+            .unwrap();
+        let u2 = table
+            .spawn(
+                "SETTINGS",
+                2,
+                Priority::Ui,
+                ExecType::RelocatableNative,
+                CapabilitySet::NONE,
+            )
+            .unwrap();
+        let u3 = table
+            .spawn(
+                "BEACON_KRX",
+                3,
+                Priority::Idle,
+                ExecType::RelocatableNative,
+                CapabilitySet::NONE,
+            )
+            .unwrap();
+        let u4 = table
+            .spawn(
+                "BENCH_KRX",
+                4,
+                Priority::Idle,
+                ExecType::RelocatableNative,
+                CapabilitySet::NONE,
+            )
+            .unwrap();
 
         assert_eq!(u4.0, 8);
-        assert!(table.spawn("FAIL_APP", 5, Priority::Idle, ExecType::RelocatableNative, CapabilitySet::NONE).is_err(), "Table must be full");
+        assert!(
+            table
+                .spawn(
+                    "FAIL_APP",
+                    5,
+                    Priority::Idle,
+                    ExecType::RelocatableNative,
+                    CapabilitySet::NONE
+                )
+                .is_err(),
+            "Table must be full"
+        );
 
         // Suspend user apps with distinct CPU tick counts
         if let Some(pcb) = table.find_mut(u1) {
@@ -2725,18 +2803,41 @@ mod tests {
 
         // Test spawn_or_recycle under extreme saturation
         // Must recycle u3 (lowest CPU ticks among suspended user apps: 100 ticks)
-        let recycled1 = table.spawn_or_recycle("STREAM_P1", 5, Priority::Ui, ExecType::RelocatableNative, CapabilitySet::NONE).unwrap();
-        assert!(table.find(u3).is_none(), "Lowest tick suspended process u3 must be evicted");
+        let recycled1 = table
+            .spawn_or_recycle(
+                "STREAM_P1",
+                5,
+                Priority::Ui,
+                ExecType::RelocatableNative,
+                CapabilitySet::NONE,
+            )
+            .unwrap();
+        assert!(
+            table.find(u3).is_none(),
+            "Lowest tick suspended process u3 must be evicted"
+        );
         assert_eq!(table.find(recycled1).unwrap().name, "STREAM_P1");
 
         // Next victim must be u2 (300 ticks)
-        let recycled2 = table.spawn_or_recycle("LEAF_P0", 6, Priority::Ui, ExecType::RelocatableNative, CapabilitySet::NONE).unwrap();
+        let recycled2 = table
+            .spawn_or_recycle(
+                "LEAF_P0",
+                6,
+                Priority::Ui,
+                ExecType::RelocatableNative,
+                CapabilitySet::NONE,
+            )
+            .unwrap();
         assert!(table.find(u2).is_none(), "u2 must be evicted next");
         assert_eq!(table.find(recycled2).unwrap().name, "LEAF_P0");
 
         // System daemons (PID 1..4) must NEVER be evicted under any circumstances
         for pid_val in 1..=4 {
-            assert!(table.find(Pid(pid_val)).is_some(), "Critical daemon PID {} must survive saturation eviction", pid_val);
+            assert!(
+                table.find(Pid(pid_val)).is_some(),
+                "Critical daemon PID {} must survive saturation eviction",
+                pid_val
+            );
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -2750,7 +2851,8 @@ mod tests {
             block_map_bytes[offset] = b as u8; // block_id
             block_map_bytes[offset + 1] = if b == 0 { BLOCK_FLAG_PINNED } else { 0 }; // flags
             block_map_bytes[offset + 2..offset + 4].copy_from_slice(&1024u16.to_le_bytes()); // size = 1024
-            block_map_bytes[offset + 4..offset + 8].copy_from_slice(&((b * 1024) as u32).to_le_bytes()); // flash_offset
+            block_map_bytes[offset + 4..offset + 8]
+                .copy_from_slice(&((b * 1024) as u32).to_le_bytes()); // flash_offset
         }
         cache.configure(1024, 2, 0, 16384, Some(&block_map_bytes));
         assert_eq!(cache.active_slots, 2);
@@ -2766,9 +2868,17 @@ mod tests {
         // Stream blocks 1 through 15 sequentially through the single remaining unpinned slot (Slot 1)
         for blk in 1..=15 {
             let (slot, hit, _) = cache.resolve_or_select_slot(blk).unwrap();
-            assert_eq!(slot, 1, "Pinned Slot 0 must NEVER be evicted; Block {} must use Slot 1", blk);
+            assert_eq!(
+                slot, 1,
+                "Pinned Slot 0 must NEVER be evicted; Block {} must use Slot 1",
+                blk
+            );
             assert!(!hit);
-            assert_eq!(cache.slots[0].resident_block, Some(0), "Slot 0 must remain pinned to Block 0");
+            assert_eq!(
+                cache.slots[0].resident_block,
+                Some(0),
+                "Slot 0 must remain pinned to Block 0"
+            );
         }
 
         // Verify hit on pinned block 0
@@ -2781,13 +2891,24 @@ mod tests {
         // ══════════════════════════════════════════════════════════════════
         let mut shadow = ShadowReturnStack::<4>::new();
         for i in 0..4 {
-            assert!(shadow.push(ReturnFrame {
-                caller_block_id: i,
-                caller_slot: (i % 2) as u8,
-                return_offset: (i * 0x40) as u16,
-            }).is_ok());
+            assert!(
+                shadow
+                    .push(ReturnFrame {
+                        caller_block_id: i,
+                        caller_slot: (i % 2) as u8,
+                        return_offset: (i * 0x40) as u16,
+                    })
+                    .is_ok()
+            );
         }
-        assert_eq!(shadow.push(ReturnFrame { caller_block_id: 99, caller_slot: 0, return_offset: 0 }), Err(PagedError::ShadowStackOverflow));
+        assert_eq!(
+            shadow.push(ReturnFrame {
+                caller_block_id: 99,
+                caller_slot: 0,
+                return_offset: 0
+            }),
+            Err(PagedError::ShadowStackOverflow)
+        );
 
         for i in (0..4).rev() {
             let frame = shadow.pop().unwrap();
@@ -2802,10 +2923,14 @@ mod tests {
         let mut leaf_mgr = StructuredLeafManager::<8>::new(0x2000_1000, 1024);
         // Setup synthetic leaf map: Leaf 1..4 (16 bytes per LeafEntry)
         let leaf_map_bytes = [
-            1, 0, 0x80, 0x00, 0x10, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, // Leaf 1: offset 0x10, size 128
-            2, 0, 0x80, 0x00, 0x90, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, // Leaf 2: offset 0x90, size 128
-            3, 0, 0x80, 0x00, 0x10, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, // Leaf 3: offset 0x110, size 128
-            4, 0, 0x80, 0x00, 0x90, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, // Leaf 4: offset 0x190, size 128
+            1, 0, 0x80, 0x00, 0x10, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0,
+            0, // Leaf 1: offset 0x10, size 128
+            2, 0, 0x80, 0x00, 0x90, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0,
+            0, // Leaf 2: offset 0x90, size 128
+            3, 0, 0x80, 0x00, 0x10, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0,
+            0, // Leaf 3: offset 0x110, size 128
+            4, 0, 0x80, 0x00, 0x90, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0,
+            0, // Leaf 4: offset 0x190, size 128
         ];
         leaf_mgr.configure(0x2000_1000, 1024, Some(&leaf_map_bytes));
         assert_eq!(leaf_mgr.leaf_count, 4);
@@ -2815,7 +2940,9 @@ mod tests {
         let flash_offset1 = entry1.flash_offset;
         assert_eq!(flash_offset1, 0x10);
         assert!(!hit1);
-        let cont = leaf_mgr.end_leaf_call(LeafContinuation::call_leaf(2, 52)).unwrap();
+        let cont = leaf_mgr
+            .end_leaf_call(LeafContinuation::call_leaf(2, 52))
+            .unwrap();
         assert!(cont.is_call_leaf());
 
         let (entry2, hit2) = leaf_mgr.begin_leaf_call(2).unwrap();
@@ -2826,6 +2953,9 @@ mod tests {
         assert!(cont2.is_done());
         assert_eq!(cont2.payload, 104);
 
-        assert_eq!(leaf_mgr.begin_leaf_call(99).unwrap_err(), PagedError::InvalidLeafId);
+        assert_eq!(
+            leaf_mgr.begin_leaf_call(99).unwrap_err(),
+            PagedError::InvalidLeafId
+        );
     }
 }

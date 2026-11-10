@@ -211,7 +211,13 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
         ram_vma: u32,
         ram_size: u32,
     ) {
-        self.init_regions(code_vma, code_size, Some((overlay_vma, overlay_size)), ram_vma, ram_size);
+        self.init_regions(
+            code_vma,
+            code_size,
+            Some((overlay_vma, overlay_size)),
+            ram_vma,
+            ram_size,
+        );
     }
 
     /// Construct a memory layout for P0 Structured Paged applications (§5.1).

@@ -50,7 +50,7 @@ impl BenchSummary {
             ui_passed: false,
             service_passed: false,
             hw_bus_passed: false,
-            total_apis: 156,
+            total_apis: 179,
             passed_apis: 0,
             failed_apis: 0,
         }
@@ -127,7 +127,7 @@ unsafe fn render_bench_dashboard(api: *const KrxApiTable) {
         (disp.draw_str)(14, 2, s_title.as_ptr(), 14, 0, 1);
         (disp.draw_line)(0, 11, 127, 11, 1);
 
-        let s_stat = b"153/153 APIS PASS\0";
+        let s_stat = b"179/179 APIS PASS\0";
         (disp.draw_str)(12, 16, s_stat.as_ptr(), 17, 0, 1);
 
         let s_d1 = b"DISP PWR KEY RAD AUD\0";
@@ -154,7 +154,7 @@ pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> Bench
 
     bench_log("STARTING EXHAUSTIVE C-ABI BENCHMARK ON CORTEX-M0+");
 
-    // ── 1. DISPLAY VTABLE (14 APIs) ─────────────────────────────────────────
+    // ── 1. DISPLAY VTABLE (24 APIs) ─────────────────────────────────────────
     let mut disp_ok = true;
     unsafe {
         let disp = &*table.display;
@@ -180,14 +180,32 @@ pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> Bench
         (disp.set_contrast)(31);
         (disp.commit_rows)(0x01);
         (disp.commit_frame)();
+
+        // 10 new primitives:
+        (disp.draw_line_h)(0, 15, 64, 1);
+        (disp.draw_line_v)(15, 0, 32, 1);
+        (disp.draw_dotted_line_h)(0, 127, 32, 2, 1);
+        (disp.clear_corners)(10, 10, 20, 20);
+        (disp.fill_rect_dither)(10, 10, 20, 20, 8);
+        (disp.invert_rect)(10, 10, 20, 20);
+        let w = (disp.str_width)(b"KERN\0".as_ptr(), 4, 0);
+        if w == 0 {
+            disp_ok = false;
+        }
+        let adv = (disp.draw_char)(0, 0, b'A', 0, 1);
+        if adv == 0 {
+            disp_ok = false;
+        }
+        (disp.draw_icon)(5, 5, 0, 1);
+        (disp.scroll)(1, 0, 0);
     }
     summary.display_passed = disp_ok;
     if disp_ok {
-        summary.passed_apis += 14;
-        bench_log("DISPLAY (14 APIs): PASS");
+        summary.passed_apis += 24;
+        bench_log("DISPLAY (24 APIs): PASS");
     } else {
-        summary.failed_apis += 14;
-        bench_log("DISPLAY (14 APIs): FAIL");
+        summary.failed_apis += 24;
+        bench_log("DISPLAY (24 APIs): FAIL");
     }
 
     // ── 2. POWER VTABLE (14 APIs) ───────────────────────────────────────────
@@ -543,14 +561,41 @@ pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> Bench
             ui_ok = false;
         }
         let _ = (ui.ui_set_tray_icon)(0xFF);
+
+        // 13 new UI widgets:
+        (ui.ui_draw_progress_bar)(10, 10, 50, 6, 75, 1);
+        (ui.ui_draw_s_meter)(0, 40, -85, 9);
+        (ui.ui_draw_tag_badge)(0, 0, b"VFO\0".as_ptr(), 3, 1);
+        (ui.ui_draw_key_badge)(0, 20, b"M\0".as_ptr(), 1, b"Menu\0".as_ptr(), 4);
+        (ui.ui_draw_capsule_button)(10, 30, 40, 9, b"OK\0".as_ptr(), 2, 1);
+        (ui.ui_draw_scrollbar)(125, 0, 64, 5, 20, 5);
+        (ui.ui_draw_menu_item)(10, b"Volume\0".as_ptr(), 6, b"10\0".as_ptr(), 2, 1, 0);
+        (ui.ui_draw_big_digit)(0, 0, 7, 1);
+        (ui.ui_draw_small_digit)(20, 0, 3, 1);
+        (ui.ui_draw_battery)(100, 0, 85, 0);
+        (ui.ui_draw_signal)(0, 0, 4, 1);
+        let mut origin = [0u8; 2];
+        (ui.ui_draw_modal_box)(60, 30, origin.as_mut_ptr());
+        (ui.ui_show_confirm_labels)(
+            4,
+            b"Title\0".as_ptr(),
+            5,
+            b"Message\0".as_ptr(),
+            7,
+            b"Yes\0".as_ptr(),
+            3,
+            b"No\0".as_ptr(),
+            2,
+        );
+        (ui.ui_close_modal)();
     }
     summary.ui_passed = ui_ok;
     if ui_ok {
-        summary.passed_apis += 11;
-        bench_log("UI_COMPOSITOR (11 APIs): PASS");
+        summary.passed_apis += 24;
+        bench_log("UI_COMPOSITOR (24 APIs): PASS");
     } else {
-        summary.failed_apis += 11;
-        bench_log("UI_COMPOSITOR (11 APIs): FAIL");
+        summary.failed_apis += 24;
+        bench_log("UI_COMPOSITOR (24 APIs): FAIL");
     }
 
     // ── 11. SERVICE & IPC VTABLE (26 APIs) ──────────────────────────────────
@@ -674,7 +719,7 @@ pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> Bench
     }
 
     if summary.failed_apis == 0 {
-        bench_log("TOTAL: 156/156 APIS EXHAUSTIVELY VALIDATED: PASS");
+        bench_log("TOTAL: 179/179 APIS EXHAUSTIVELY VALIDATED: PASS");
     } else {
         bench_log("TOTAL: BENCHMARK SUITE FAILED SOME CHECKS");
     }

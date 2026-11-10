@@ -384,28 +384,13 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         let shading_mode = self.config.display.shading_mode;
         let tray_icons = crate::orchestrator::status_tray().active_icons();
 
-        let mut flags = 0u8;
-        if is_charging {
-            flags |= gfx::widgets::status_bar::STATUS_FLAG_CHARGING;
-        }
-        if is_low {
-            flags |= gfx::widgets::status_bar::STATUS_FLAG_LOW;
-        }
-        if is_usb {
-            flags |= gfx::widgets::status_bar::STATUS_FLAG_USB;
-        }
-        if serial_active {
-            flags |= gfx::widgets::status_bar::STATUS_FLAG_SERIAL;
-        }
-        if self.is_f_active {
-            flags |= gfx::widgets::status_bar::STATUS_FLAG_F_ACTIVE;
-        }
-        if self.is_keypad_locked {
-            flags |= gfx::widgets::status_bar::STATUS_FLAG_KEYPAD_LOCKED;
-        }
-        if inverted {
-            flags |= gfx::widgets::status_bar::STATUS_FLAG_INVERTED;
-        }
+        let flags = (is_charging as u8)
+            | ((is_low as u8) << 1)
+            | ((is_usb as u8) << 2)
+            | ((serial_active as u8) << 3)
+            | ((self.is_f_active as u8) << 4)
+            | ((self.is_keypad_locked as u8) << 5)
+            | ((inverted as u8) << 6);
 
         let cfg = gfx::widgets::status_bar::StatusRightConfig {
             percentage: pct,

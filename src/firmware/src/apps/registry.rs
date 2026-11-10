@@ -130,7 +130,9 @@ impl AppRegistry {
     }
 
     #[inline(never)]
-    fn get_target(app_id: usize) -> Option<(*mut (), &'static AppVTable<SysContext<'static, 'static>>)> {
+    fn get_target(
+        app_id: usize,
+    ) -> Option<(*mut (), &'static AppVTable<SysContext<'static, 'static>>)> {
         if let Some(entry) = APP_TABLE.get(app_id) {
             Some(((entry.instance)(), &entry.vtable))
         } else {

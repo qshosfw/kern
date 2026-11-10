@@ -5,16 +5,25 @@ pub const STATUS_ITEM_SPACING: i16 = 2;
 
 /// Draw DeltaFW-style inverted F-key badge (5x5 pixels with outer border and inverted 'F' inside)
 pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
-    if x < 0 || y < 0 {
+    if x < 0 || y < 0 || x + 5 > 128 {
         return;
     }
-    let ux = x as u8;
-    let uy = y as u8;
-
-    canvas.fill_rect(ux, uy, 5, 5, Color::Fill);
-    canvas.draw_horizontal_line(ux + 1, uy + 1, 3, Color::Clear);
-    canvas.draw_vertical_line(ux + 1, uy + 1, 3, Color::Clear);
-    canvas.draw_horizontal_line(ux + 1, uy + 2, 2, Color::Clear);
+    let ux = x as usize;
+    if y == 0 {
+        const F_KEY_COLS: [u8; 5] = [0x1F, 0x11, 0x19, 0x1D, 0x1F];
+        let mut i = 0usize;
+        while i < 5 {
+            canvas.buffer[0][ux + i] |= F_KEY_COLS[i];
+            i += 1;
+        }
+    } else {
+        let ux = x as u8;
+        let uy = y as u8;
+        canvas.fill_rect(ux, uy, 5, 5, Color::Fill);
+        canvas.draw_horizontal_line(ux + 1, uy + 1, 3, Color::Clear);
+        canvas.draw_vertical_line(ux + 1, uy + 1, 3, Color::Clear);
+        canvas.draw_horizontal_line(ux + 1, uy + 2, 2, Color::Clear);
+    }
 }
 
 /// Width in pixels occupied by DeltaFW signal antenna and 5 progressive bars
@@ -25,21 +34,45 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
     if x < 0 || x + (SIGNAL_WIDTH as i16) > 128 || y < 0 {
         return SIGNAL_WIDTH;
     }
-    let ux = x as u8;
-    let uy = y as u8;
-
-    // 1. Antenna body (Y-shape: tips at 0 and 2, stem at 1)
-    canvas.draw_pixel(ux, uy, color);
-    canvas.draw_vertical_line(ux + 1, uy + 1, 4, color);
-    canvas.draw_pixel(ux + 2, uy, color);
-
-    // 2. Progressive signal bars (1 to 5) with 1px spacers
-    let mut i = 1u8;
-    while i <= 5 {
-        if level >= i {
-            canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
+    let ux = x as usize;
+    if y == 0 {
+        if color == Color::Clear {
+            canvas.buffer[0][ux] &= !0x01;
+            canvas.buffer[0][ux + 1] &= !0x1E;
+            canvas.buffer[0][ux + 2] &= !0x01;
+        } else {
+            canvas.buffer[0][ux] |= 0x01;
+            canvas.buffer[0][ux + 1] |= 0x1E;
+            canvas.buffer[0][ux + 2] |= 0x01;
         }
-        i += 1;
+
+        const BAR_MASKS: [u8; 5] = [0x10, 0x18, 0x1C, 0x1E, 0x1F];
+        let mut i = 0usize;
+        while i < 5 {
+            if level > i as u8 {
+                let col = ux + 3 + (i * 2);
+                if color == Color::Clear {
+                    canvas.buffer[0][col] &= !BAR_MASKS[i];
+                } else {
+                    canvas.buffer[0][col] |= BAR_MASKS[i];
+                }
+            }
+            i += 1;
+        }
+    } else {
+        let ux = x as u8;
+        let uy = y as u8;
+        canvas.draw_pixel(ux, uy, color);
+        canvas.draw_vertical_line(ux + 1, uy + 1, 4, color);
+        canvas.draw_pixel(ux + 2, uy, color);
+
+        let mut i = 1u8;
+        while i <= 5 {
+            if level >= i {
+                canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
+            }
+            i += 1;
+        }
     }
 
     SIGNAL_WIDTH
@@ -228,7 +261,10 @@ impl<'a> StatusRightConfig<'a> {
         canvas.fill_rect(start_x + 1, y + 1, 10, 3, bg);
 
         let (full_bars, partial) = if self.shading_mode == 2 {
-            ((((self.percentage as u16 + 5) * 205) >> 11).min(10) as u8, 0u8)
+            (
+                (((self.percentage as u16 + 5) * 205) >> 11).min(10) as u8,
+                0u8,
+            )
         } else {
             let p = self.percentage.min(100) as u32;
             let total_steps = (((p * 1229) + 614) >> 12).min(30) as u8;
@@ -284,7 +320,8 @@ impl<'a> StatusRightConfig<'a> {
         // 1. High precision battery icon
         if has_bat_icon {
             right_limit -= 12;
-            let blink_off = self.is_low() && !self.is_charging() && (((self.anim_step >> 1) & 1) != 0);
+            let blink_off =
+                self.is_low() && !self.is_charging() && (((self.anim_step >> 1) & 1) != 0);
             if !blink_off {
                 self.draw_battery(canvas, right_limit as u8, y_offset);
             }
@@ -308,12 +345,28 @@ impl<'a> StatusRightConfig<'a> {
 
         // 4. Battery Text Reading (Voltage, Percentage, or MCU Temperature)
         let mut nbuf = [0u8; 12];
-        let (val, dec, suf) = match self.battery_format {
-            1 | 4 => ((((self.voltage_mv as u32) * 52429) >> 19) as i32, 2, "v"),
-            6 => ((((self.voltage_mv as u32) * 5243) >> 19) as i32, 1, "v"),
-            2 | 5 | 7 => (self.percentage as i32, 0, "%"),
-            8 => ((((self.temp_deci_c as u32) * 52429) >> 19) as i32, 0, "C"),
-            _ => (0, 0, ""),
+        let mut val = 0i32;
+        let mut dec = 0u8;
+        let suf = match self.battery_format {
+            1 | 4 => {
+                val = (((self.voltage_mv as u32) * 52429) >> 19) as i32;
+                dec = 2;
+                "v"
+            }
+            6 => {
+                val = (((self.voltage_mv as u32) * 5243) >> 19) as i32;
+                dec = 1;
+                "v"
+            }
+            2 | 5 | 7 => {
+                val = self.percentage as i32;
+                "%"
+            }
+            8 => {
+                val = (((self.temp_deci_c as u32) * 52429) >> 19) as i32;
+                "C"
+            }
+            _ => "",
         };
         if !suf.is_empty() {
             let bat_str = crate::text::format_int_fixed(val, dec, "", suf, &mut nbuf);
@@ -372,12 +425,16 @@ pub fn draw_status_bar_layout(
     }
     if let Some(s) = config.title {
         if !s.is_empty() {
-            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit) + 2;
+            left_x =
+                crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit)
+                    + 2;
         }
     }
     if let Some(s) = config.left_badge {
         if !s.is_empty() {
-            left_x = crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit) + 2;
+            left_x =
+                crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit)
+                    + 2;
         }
     }
     for &icon in config.left_icons {

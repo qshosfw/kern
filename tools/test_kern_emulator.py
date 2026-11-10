@@ -315,7 +315,7 @@ def run_test():
 
         expected_bench_markers = [
             "STARTING EXHAUSTIVE C-ABI BENCHMARK ON CORTEX-M0+",
-            "DISPLAY (14 APIs): PASS",
+            "DISPLAY (24 APIs): PASS",
             "POWER (14 APIs): PASS",
             "KEYPAD (10 APIs): PASS",
             "RADIO_FM (33 APIs): PASS",
@@ -324,10 +324,10 @@ def run_test():
             "SERIAL (4 APIs): PASS",
             "TIMER (5 APIs): PASS",
             "MATH (6 APIs): PASS",
-            "UI_COMPOSITOR (11 APIs): PASS",
+            "UI_COMPOSITOR (24 APIs): PASS",
             "SERVICE_IPC (26 APIs): PASS",
             "HW_BUS (7 APIs): PASS",
-            "TOTAL: 156/156 APIS EXHAUSTIVELY VALIDATED: PASS",
+            "TOTAL: 179/179 APIS EXHAUSTIVELY VALIDATED: PASS",
         ]
 
         for marker in expected_bench_markers:
@@ -338,7 +338,7 @@ def run_test():
                 sys.exit(f"FAIL: Expected bench marker not found: '{marker}'")
             print(f"  PASS  VTable domain validated: {marker}")
 
-        print("  PASS  All 156 C-ABI functions validated successfully on Cortex-M0+ silicon simulation")
+        print("  PASS  All 179 C-ABI functions validated successfully on Cortex-M0+ silicon simulation")
 
         # 13. Exit Native Bench App back to Launcher
         print("  • Injecting keypad press: 'EXIT' (Return to Launcher from Bench)...")
@@ -547,7 +547,7 @@ def run_test():
             http_post_json("/api/key", {"key": "EXIT", "hold_ms": 100})
             time.sleep(0.3)
 
-            # Bench (156 APIs)
+            # Bench (179 APIs)
             http_post_json("/api/key", {"key": "4", "hold_ms": 100})
             time.sleep(0.4)
             http_post_json("/api/key", {"key": "EXIT", "hold_ms": 100})

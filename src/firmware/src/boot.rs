@@ -167,8 +167,7 @@ pub fn show_crash_dialog_if_needed(hw: &mut BootHardware) {
                 let key = boot_wait_key(hw.key_scanner, 1000);
 
                 if key.is_some() {
-                    hw.radio
-                        .play_beep(crate::services::melody::BeepType::Click);
+                    hw.radio.play_beep(crate::services::melody::BeepType::Click);
                     break;
                 }
                 sec -= 1;

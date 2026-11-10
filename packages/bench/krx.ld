@@ -1,7 +1,8 @@
+ENTRY(_start)
 SECTIONS {
     . = 0;
     .text : {
-        *(.text.entry)
+        KEEP(*(.text.entry))
         *(.text*)
         *(.rodata*)
         *(.data*)

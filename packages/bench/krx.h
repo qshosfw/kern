@@ -15,7 +15,13 @@ typedef unsigned long long u64;
 #define KRX_OP_RENDER 2
 #define KRX_OP_EXIT   3
 
-// 1. CapDisplayVTable (14 APIs)
+#define COLOR_CLEAR      0
+#define COLOR_FILL       1
+#define COLOR_INVERT     2
+#define COLOR_DARK_GRAY  3
+#define COLOR_LIGHT_GRAY 4
+
+// 1. CapDisplayVTable (24 APIs)
 typedef struct {
     void (*clear)(void);
     void (*draw_pixel)(i16 x, i16 y, u8 color);
@@ -31,6 +37,16 @@ typedef struct {
     void (*draw_str_max)(i16 x, i16 y, const u8* text, u16 len, u8 font, u8 color, i16 max_w);
     void (*set_inverted)(u8 inverted);
     void (*set_contrast)(u8 contrast);
+    void (*draw_line_h)(i16 x, i16 y, i16 len, u8 color);
+    void (*draw_line_v)(i16 x, i16 y, i16 len, u8 color);
+    void (*draw_dotted_line_h)(i16 x0, i16 x1, i16 y, u8 step, u8 color);
+    void (*clear_corners)(i16 x, i16 y, i16 w, i16 h);
+    void (*fill_rect_dither)(i16 x, i16 y, i16 w, i16 h, u8 progress);
+    void (*invert_rect)(i16 x, i16 y, i16 w, i16 h);
+    i16 (*str_width)(const u8* text, u16 len, u8 font);
+    i16 (*draw_char)(i16 x, i16 y, u8 ch, u8 font, u8 color);
+    void (*draw_icon)(i16 x, i16 y, u8 icon_id, u8 color);
+    void (*scroll)(i8 dx, i8 dy, u8 fill_byte);
 } CapDisplayVTable;
 
 // 2. CapRadioVTable (33 APIs)
@@ -163,7 +179,7 @@ typedef struct __attribute__((packed)) {
     u8 _reserved[12];
 } KrxStatusBar;
 
-// 9. CapUiVTable (11 APIs)
+// 9. CapUiVTable (24 APIs)
 typedef struct {
     void (*ui_close_modal)(void);
     u8 (*ui_has_modal)(void);
@@ -176,6 +192,19 @@ typedef struct {
     u8 (*ui_set_status_bar)(const KrxStatusBar* sb);
     void (*ui_get_status_bar)(KrxStatusBar* out_sb);
     u8 (*ui_set_tray_icon)(u8 icon_id);
+    void (*ui_draw_progress_bar)(i16 x, i16 y, u8 w, u8 h, u8 percent, u8 border);
+    void (*ui_draw_s_meter)(i16 x, i16 y, i16 rssi_dbm, u8 peak_hold);
+    void (*ui_draw_tag_badge)(i16 x, i16 y, const u8* text, u8 len, u8 style);
+    void (*ui_draw_key_badge)(i16 x, i16 y, const u8* key_str, u8 k_len, const u8* label, u8 l_len);
+    void (*ui_draw_capsule_button)(i16 x, i16 y, u8 w, u8 h, const u8* label, u8 l_len, u8 selected);
+    void (*ui_draw_scrollbar)(u8 x, u8 y, u8 h, u16 current, u16 total, u16 visible);
+    void (*ui_draw_menu_item)(i16 y, const u8* title, u8 t_len, const u8* value, u8 v_len, u8 selected, u8 icon_id);
+    void (*ui_draw_big_digit)(i16 x, i16 y, u8 digit, u8 color);
+    void (*ui_draw_small_digit)(i16 x, i16 y, u8 digit, u8 color);
+    void (*ui_draw_battery)(i16 x, i16 y, u8 pct, u8 charging);
+    void (*ui_draw_signal)(i16 x, i16 y, u8 level, u8 color);
+    void (*ui_draw_modal_box)(u8 w, u8 h, u8* out_origin);
+    void (*ui_show_confirm_labels)(u8 tag, const u8* title, u8 t_len, const u8* msg, u8 m_len, const u8* confirm, u8 c_len, const u8* cancel, u8 cl_len);
 } CapUiVTable;
 
 // 10. CapMathVTable (6 APIs)

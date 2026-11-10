@@ -1144,11 +1144,7 @@ impl RadioCoordinator {
     }
 
     #[inline(never)]
-    fn process_carrier_active<R: RadioService>(
-        &mut self,
-        radio: &mut R,
-        idx: usize,
-    ) -> RadioEvent {
+    fn process_carrier_active<R: RadioService>(&mut self, radio: &mut R, idx: usize) -> RadioEvent {
         self.activity_count[idx] = self.activity_count[idx].saturating_add(1);
 
         // Voice carrier priority override: if squelch opens while FSK sidecar is holding the channel,
@@ -1212,7 +1208,8 @@ impl RadioCoordinator {
             .listening_vfo
             .index()
             .min(self.rssi_moving_avg.len() - 1);
-        self.rssi_moving_avg[idx] = (((self.rssi_moving_avg[idx] as i32 * 3) + current_rssi as i32) >> 2) as i16;
+        self.rssi_moving_avg[idx] =
+            (((self.rssi_moving_avg[idx] as i32 * 3) + current_rssi as i32) >> 2) as i16;
 
         // Dynamic AM Linearity Mapping: adjust front-end gain inversely to carrier RSSI in AM mode
         let listening_mod = self.channels[idx].modulation;

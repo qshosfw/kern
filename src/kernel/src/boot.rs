@@ -248,13 +248,14 @@ impl BootSlot {
                 if actor.starts_with("STACK_OVF") {
                     "overflowed available RAM."
                 } else {
-                    let (addr, prefix): (u32, &[u8]) = if self.panic_file_hash != 0 && self.panic_file_hash != 0xFFFF_FFFF {
-                        (self.panic_file_hash, b"at memory address 0x")
-                    } else if self.fault_pc > 0 {
-                        (self.fault_pc, b"at program address 0x")
-                    } else {
-                        (0, b"")
-                    };
+                    let (addr, prefix): (u32, &[u8]) =
+                        if self.panic_file_hash != 0 && self.panic_file_hash != 0xFFFF_FFFF {
+                            (self.panic_file_hash, b"at memory address 0x")
+                        } else if self.fault_pc > 0 {
+                            (self.fault_pc, b"at program address 0x")
+                        } else {
+                            (0, b"")
+                        };
 
                     if addr > 0 {
                         let mut pos = 0;
@@ -432,10 +433,16 @@ mod tests {
         record.commit_write();
 
         assert_eq!(record.latest_valid_slot().unwrap().crash_count, 1);
-        assert_eq!(record.latest_valid_slot().unwrap().natural_cause(), "due to an invalid data access");
+        assert_eq!(
+            record.latest_valid_slot().unwrap().natural_cause(),
+            "due to an invalid data access"
+        );
 
         let mut buf = [0u8; 32];
-        assert_eq!(record.latest_valid_slot().unwrap().natural_detail(&mut buf), "at program address 0x08004568.");
+        assert_eq!(
+            record.latest_valid_slot().unwrap().natural_detail(&mut buf),
+            "at program address 0x08004568."
+        );
 
         // 2nd Crash (reboot loop)
         {
@@ -543,7 +550,10 @@ mod tests {
         slot.set_actor(b"DACCVIOL");
         slot.panic_file_hash = 0x2000_3FE0;
         assert_eq!(slot.natural_cause(), "due to an invalid data access");
-        assert_eq!(slot.natural_detail(&mut buf), "at memory address 0x20003FE0.");
+        assert_eq!(
+            slot.natural_detail(&mut buf),
+            "at memory address 0x20003FE0."
+        );
 
         // 3. Stack overflow
         slot.set_actor(b"STACK_OVF");

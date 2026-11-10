@@ -33,7 +33,6 @@ default = [
     "rtc",
     "internal_flash",
     "panic_gui",
-    "crash_dialog",
     "krx_runtime",
     "krx_native",
     "flashlight",

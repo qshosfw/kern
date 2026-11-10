@@ -60,6 +60,44 @@ pub fn draw_tag_badge(canvas: &mut Canvas, x: i16, y: i16, text: &str, style: Ba
     draw_tag_badge_sized(canvas, x, y, text, style, BadgeSize::Standard);
 }
 
+#[inline(never)]
+fn render_badge_box(
+    canvas: &mut Canvas,
+    xu: u8,
+    yu: u8,
+    w: u8,
+    h: u8,
+    style: BadgeStyle,
+    rounded: bool,
+) -> Color {
+    let (bg, border, tc) = match style {
+        BadgeStyle::Empty => (Some(Color::Clear), Some(Color::Fill), Color::Fill),
+        BadgeStyle::Filled => (Some(Color::Fill), None, Color::Clear),
+        BadgeStyle::Dither(level) => {
+            canvas.fill_rect(xu, yu, w, h, Color::Clear);
+            canvas.fill_rect_dither(xu, yu, w, h, level);
+            let tc = if level >= 12 {
+                Color::Clear
+            } else {
+                Color::Fill
+            };
+            (None, Some(Color::Fill), tc)
+        }
+        BadgeStyle::Dimmed => (Some(Color::Clear), Some(Color::DarkGray), Color::Fill),
+        BadgeStyle::Disabled => (Some(Color::Clear), Some(Color::LightGray), Color::LightGray),
+    };
+    if let Some(c) = bg {
+        canvas.fill_rect(xu, yu, w, h, c);
+    }
+    if let Some(c) = border {
+        canvas.draw_rect(xu, yu, w, h, c);
+    }
+    if rounded {
+        canvas.clear_corners(xu, yu, w, h);
+    }
+    tc
+}
+
 /// Draw a capsule tag badge with specific size tier
 pub fn draw_tag_badge_sized(
     canvas: &mut Canvas,
@@ -87,53 +125,8 @@ pub fn draw_tag_badge_sized(
         BadgeSize::Large => y + 8,
     };
 
-    match style {
-        BadgeStyle::Empty => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::Fill);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str(canvas, x + 3, text_y, text, font, Color::Fill);
-        }
-        BadgeStyle::Filled => {
-            canvas.fill_rect(xu, yu, w, h, Color::Fill);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str(canvas, x + 3, text_y, text, font, Color::Clear);
-        }
-        BadgeStyle::Dither(level) => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.fill_rect_dither(xu, yu, w, h, level);
-            canvas.draw_rect(xu, yu, w, h, Color::Fill);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            let tc = if level >= 12 {
-                Color::Clear
-            } else {
-                Color::Fill
-            };
-            text::draw_str(canvas, x + 3, text_y, text, font, tc);
-        }
-        BadgeStyle::Dimmed => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::DarkGray);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str(canvas, x + 3, text_y, text, font, Color::Fill);
-        }
-        BadgeStyle::Disabled => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::LightGray);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str(canvas, x + 3, text_y, text, font, Color::LightGray);
-        }
-    }
+    let tc = render_badge_box(canvas, xu, yu, w, h, style, rounded);
+    text::draw_str(canvas, x + 3, text_y, text, font, tc);
 }
 
 /// Draw a tag badge with an 8x8 icon followed by text
@@ -154,48 +147,9 @@ pub fn draw_tag_badge_with_icon(
     let ix = (xu + 2) as i16;
     let iy = (yu + 1) as i16;
 
-    match style {
-        BadgeStyle::Empty => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::Fill);
-            canvas.clear_corners(xu, yu, w, h);
-            icons::draw_icon_8(canvas, ix, iy, icon, Color::Fill);
-            text::draw_str(canvas, x + 12, y + 7, text, font, Color::Fill);
-        }
-        BadgeStyle::Filled => {
-            canvas.fill_rect(xu, yu, w, h, Color::Fill);
-            canvas.clear_corners(xu, yu, w, h);
-            icons::draw_icon_8(canvas, ix, iy, icon, Color::Clear);
-            text::draw_str(canvas, x + 12, y + 7, text, font, Color::Clear);
-        }
-        BadgeStyle::Dither(level) => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.fill_rect_dither(xu, yu, w, h, level);
-            canvas.draw_rect(xu, yu, w, h, Color::Fill);
-            canvas.clear_corners(xu, yu, w, h);
-            let tc = if level >= 12 {
-                Color::Clear
-            } else {
-                Color::Fill
-            };
-            icons::draw_icon_8(canvas, ix, iy, icon, tc);
-            text::draw_str(canvas, x + 12, y + 7, text, font, tc);
-        }
-        BadgeStyle::Dimmed => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::DarkGray);
-            canvas.clear_corners(xu, yu, w, h);
-            icons::draw_icon_8(canvas, ix, iy, icon, Color::Fill);
-            text::draw_str(canvas, x + 12, y + 7, text, font, Color::Fill);
-        }
-        BadgeStyle::Disabled => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::LightGray);
-            canvas.clear_corners(xu, yu, w, h);
-            icons::draw_icon_8(canvas, ix, iy, icon, Color::LightGray);
-            text::draw_str(canvas, x + 12, y + 7, text, font, Color::LightGray);
-        }
-    }
+    let tc = render_badge_box(canvas, xu, yu, w, h, style, true);
+    icons::draw_icon_8(canvas, ix, iy, icon, tc);
+    text::draw_str(canvas, x + 12, y + 7, text, font, tc);
 }
 
 /// Draw a capsule action button with standard 1px corner cuts and centered label
@@ -215,93 +169,16 @@ pub fn draw_capsule_button(
     let center_x = x + (w as i16 / 2);
     let center_y = y + (h as i16 / 2) + 2;
 
-    match style {
-        BadgeStyle::Empty => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::Fill);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str_align(
-                canvas,
-                center_x,
-                center_y,
-                label,
-                &TOMTHUMB,
-                Color::Fill,
-                text::Align::Center,
-            );
-        }
-        BadgeStyle::Filled => {
-            canvas.fill_rect(xu, yu, w, h, Color::Fill);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str_align(
-                canvas,
-                center_x,
-                center_y,
-                label,
-                &TOMTHUMB,
-                Color::Clear,
-                text::Align::Center,
-            );
-        }
-        BadgeStyle::Dither(level) => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.fill_rect_dither(xu, yu, w, h, level);
-            canvas.draw_rect(xu, yu, w, h, Color::Fill);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            let tc = if level >= 12 {
-                Color::Clear
-            } else {
-                Color::Fill
-            };
-            text::draw_str_align(
-                canvas,
-                center_x,
-                center_y,
-                label,
-                &TOMTHUMB,
-                tc,
-                text::Align::Center,
-            );
-        }
-        BadgeStyle::Dimmed => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::DarkGray);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str_align(
-                canvas,
-                center_x,
-                center_y,
-                label,
-                &TOMTHUMB,
-                Color::Fill,
-                text::Align::Center,
-            );
-        }
-        BadgeStyle::Disabled => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, Color::LightGray);
-            if rounded {
-                canvas.clear_corners(xu, yu, w, h);
-            }
-            text::draw_str_align(
-                canvas,
-                center_x,
-                center_y,
-                label,
-                &TOMTHUMB,
-                Color::LightGray,
-                text::Align::Center,
-            );
-        }
-    }
+    let tc = render_badge_box(canvas, xu, yu, w, h, style, rounded);
+    text::draw_str_align(
+        canvas,
+        center_x,
+        center_y,
+        label,
+        &TOMTHUMB,
+        tc,
+        text::Align::Center,
+    );
 }
 
 /// Smoothly animate or display a toggle badge using dither progress

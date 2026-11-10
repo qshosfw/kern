@@ -416,13 +416,39 @@ pub struct CapUiVTable {
     pub ui_set_status_bar: unsafe extern "C" fn(sb: *const KrxStatusBar) -> u8,
     pub ui_get_status_bar: unsafe extern "C" fn(out_sb: *mut KrxStatusBar),
     pub ui_set_tray_icon: unsafe extern "C" fn(icon_id: u8) -> u8,
-    pub ui_draw_progress_bar: unsafe extern "C" fn(x: i16, y: i16, w: u8, h: u8, percent: u8, border: u8),
+    pub ui_draw_progress_bar:
+        unsafe extern "C" fn(x: i16, y: i16, w: u8, h: u8, percent: u8, border: u8),
     pub ui_draw_s_meter: unsafe extern "C" fn(x: i16, y: i16, rssi_dbm: i16, peak_hold: u8),
-    pub ui_draw_tag_badge: unsafe extern "C" fn(x: i16, y: i16, text: *const u8, len: u8, style: u8),
-    pub ui_draw_key_badge: unsafe extern "C" fn(x: i16, y: i16, key_str: *const u8, k_len: u8, label: *const u8, l_len: u8),
-    pub ui_draw_capsule_button: unsafe extern "C" fn(x: i16, y: i16, w: u8, h: u8, label: *const u8, l_len: u8, selected: u8),
-    pub ui_draw_scrollbar: unsafe extern "C" fn(x: u8, y: u8, h: u8, current: u16, total: u16, visible: u16),
-    pub ui_draw_menu_item: unsafe extern "C" fn(y: i16, title: *const u8, t_len: u8, value: *const u8, v_len: u8, selected: u8, icon_id: u8),
+    pub ui_draw_tag_badge:
+        unsafe extern "C" fn(x: i16, y: i16, text: *const u8, len: u8, style: u8),
+    pub ui_draw_key_badge: unsafe extern "C" fn(
+        x: i16,
+        y: i16,
+        key_str: *const u8,
+        k_len: u8,
+        label: *const u8,
+        l_len: u8,
+    ),
+    pub ui_draw_capsule_button: unsafe extern "C" fn(
+        x: i16,
+        y: i16,
+        w: u8,
+        h: u8,
+        label: *const u8,
+        l_len: u8,
+        selected: u8,
+    ),
+    pub ui_draw_scrollbar:
+        unsafe extern "C" fn(x: u8, y: u8, h: u8, current: u16, total: u16, visible: u16),
+    pub ui_draw_menu_item: unsafe extern "C" fn(
+        y: i16,
+        title: *const u8,
+        t_len: u8,
+        value: *const u8,
+        v_len: u8,
+        selected: u8,
+        icon_id: u8,
+    ),
     pub ui_draw_big_digit: unsafe extern "C" fn(x: i16, y: i16, digit: u8, color: u8),
     pub ui_draw_small_digit: unsafe extern "C" fn(x: i16, y: i16, digit: u8, color: u8),
     pub ui_draw_battery: unsafe extern "C" fn(x: i16, y: i16, pct: u8, charging: u8),
@@ -605,8 +631,12 @@ unsafe extern "C" fn noop_draw_dotted_line_h(_x0: i16, _x1: i16, _y: i16, _step:
 unsafe extern "C" fn noop_clear_corners(_x: i16, _y: i16, _w: i16, _h: i16) {}
 unsafe extern "C" fn noop_fill_rect_dither(_x: i16, _y: i16, _w: i16, _h: i16, _progress: u8) {}
 unsafe extern "C" fn noop_invert_rect(_x: i16, _y: i16, _w: i16, _h: i16) {}
-unsafe extern "C" fn noop_str_width(_text: *const u8, _len: u16, _font: u8) -> i16 { 0 }
-unsafe extern "C" fn noop_draw_char(_x: i16, _y: i16, _ch: u8, _font: u8, _color: u8) -> i16 { 6 }
+unsafe extern "C" fn noop_str_width(_text: *const u8, _len: u16, _font: u8) -> i16 {
+    0
+}
+unsafe extern "C" fn noop_draw_char(_x: i16, _y: i16, _ch: u8, _font: u8, _color: u8) -> i16 {
+    6
+}
 unsafe extern "C" fn noop_draw_icon(_x: i16, _y: i16, _icon_id: u8, _color: u8) {}
 unsafe extern "C" fn noop_scroll(_dx: i8, _dy: i8, _fill_byte: u8) {}
 
@@ -883,13 +913,62 @@ unsafe extern "C" fn noop_ui_get_status_bar(out_sb: *mut KrxStatusBar) {
 unsafe extern "C" fn noop_ui_set_tray_icon(_icon_id: u8) -> u8 {
     1
 }
-unsafe extern "C" fn noop_ui_draw_progress_bar(_x: i16, _y: i16, _w: u8, _h: u8, _percent: u8, _border: u8) {}
+unsafe extern "C" fn noop_ui_draw_progress_bar(
+    _x: i16,
+    _y: i16,
+    _w: u8,
+    _h: u8,
+    _percent: u8,
+    _border: u8,
+) {
+}
 unsafe extern "C" fn noop_ui_draw_s_meter(_x: i16, _y: i16, _rssi_dbm: i16, _peak_hold: u8) {}
-unsafe extern "C" fn noop_ui_draw_tag_badge(_x: i16, _y: i16, _text: *const u8, _len: u8, _style: u8) {}
-unsafe extern "C" fn noop_ui_draw_key_badge(_x: i16, _y: i16, _key_str: *const u8, _k_len: u8, _label: *const u8, _l_len: u8) {}
-unsafe extern "C" fn noop_ui_draw_capsule_button(_x: i16, _y: i16, _w: u8, _h: u8, _label: *const u8, _l_len: u8, _selected: u8) {}
-unsafe extern "C" fn noop_ui_draw_scrollbar(_x: u8, _y: u8, _h: u8, _current: u16, _total: u16, _visible: u16) {}
-unsafe extern "C" fn noop_ui_draw_menu_item(_y: i16, _title: *const u8, _t_len: u8, _value: *const u8, _v_len: u8, _selected: u8, _icon_id: u8) {}
+unsafe extern "C" fn noop_ui_draw_tag_badge(
+    _x: i16,
+    _y: i16,
+    _text: *const u8,
+    _len: u8,
+    _style: u8,
+) {
+}
+unsafe extern "C" fn noop_ui_draw_key_badge(
+    _x: i16,
+    _y: i16,
+    _key_str: *const u8,
+    _k_len: u8,
+    _label: *const u8,
+    _l_len: u8,
+) {
+}
+unsafe extern "C" fn noop_ui_draw_capsule_button(
+    _x: i16,
+    _y: i16,
+    _w: u8,
+    _h: u8,
+    _label: *const u8,
+    _l_len: u8,
+    _selected: u8,
+) {
+}
+unsafe extern "C" fn noop_ui_draw_scrollbar(
+    _x: u8,
+    _y: u8,
+    _h: u8,
+    _current: u16,
+    _total: u16,
+    _visible: u16,
+) {
+}
+unsafe extern "C" fn noop_ui_draw_menu_item(
+    _y: i16,
+    _title: *const u8,
+    _t_len: u8,
+    _value: *const u8,
+    _v_len: u8,
+    _selected: u8,
+    _icon_id: u8,
+) {
+}
 unsafe extern "C" fn noop_ui_draw_big_digit(_x: i16, _y: i16, _digit: u8, _color: u8) {}
 unsafe extern "C" fn noop_ui_draw_small_digit(_x: i16, _y: i16, _digit: u8, _color: u8) {}
 unsafe extern "C" fn noop_ui_draw_battery(_x: i16, _y: i16, _pct: u8, _charging: u8) {}
@@ -905,7 +984,8 @@ unsafe extern "C" fn noop_ui_show_confirm_labels(
     _c_len: u8,
     _cancel: *const u8,
     _cl_len: u8,
-) {}
+) {
+}
 
 unsafe extern "C" fn noop_sys_rand32() -> u32 {
     0x5A5A_5A5A
@@ -1396,7 +1476,10 @@ mod tests {
         assert_eq!(core::mem::size_of::<KrxApiTable>(), 64);
         #[cfg(target_pointer_width = "64")]
         assert_eq!(core::mem::size_of::<KrxApiTable>(), 120);
-        assert_eq!(core::mem::align_of::<KrxApiTable>(), core::mem::align_of::<usize>());
+        assert_eq!(
+            core::mem::align_of::<KrxApiTable>(),
+            core::mem::align_of::<usize>()
+        );
     }
 
     #[test]

@@ -358,17 +358,9 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
             BENCH_NATIVE_PAYLOAD,
         );
 
-        write_raw_krx_package(
-            filesystem,
-            "/apps/leaf.krx",
-            LEAF_APP_PACKAGE,
-        );
+        write_raw_krx_package(filesystem, "/apps/leaf.krx", LEAF_APP_PACKAGE);
 
-        write_raw_krx_package(
-            filesystem,
-            "/apps/paged.krx",
-            PAGED_APP_PACKAGE,
-        );
+        write_raw_krx_package(filesystem, "/apps/paged.krx", PAGED_APP_PACKAGE);
     }
 
     #[cfg(feature = "krx_declare")]

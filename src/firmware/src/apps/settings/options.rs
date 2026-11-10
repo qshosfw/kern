@@ -47,7 +47,12 @@ fn make_choice(opts: &'static [&'static str], raw_byte: u8) -> MenuItemType {
 }
 
 #[inline(never)]
-fn populate_item(item: &mut MenuItem, def: &SettingDef, ctx: &mut crate::SysContext, nav_layout: u8) {
+fn populate_item(
+    item: &mut MenuItem,
+    def: &SettingDef,
+    ctx: &mut crate::SysContext,
+    nav_layout: u8,
+) {
     item.title = def.title;
     match def.kind() {
         SettingKind::Choice(opts) => {
