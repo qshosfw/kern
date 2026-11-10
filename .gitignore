@@ -1,5 +1,7 @@
 /target
 **/*.elf
 **/*.bin
+!packages/beacon/beacon.bin
+!packages/bench/bench.bin
 **/*.bkp
 __pycache__/

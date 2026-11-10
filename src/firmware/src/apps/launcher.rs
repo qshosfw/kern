@@ -91,8 +91,8 @@ pub fn load_entries(
 
             ENTRIES[count] = LauncherEntry {
                 title: app.title.as_str(),
-                icon_8: &assets::ICON_DIAG_8,
-                icon_16: &assets::ICON_DIAG_16,
+                icon_8: crate::apps::settings::apps::app_icon_8(app.title.as_str()),
+                icon_16: crate::apps::settings::apps::app_icon_16(app.title.as_str()),
                 target: LauncherTarget::Package(app.path.as_str()),
             };
             count += 1;

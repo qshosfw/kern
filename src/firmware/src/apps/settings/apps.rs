@@ -58,6 +58,24 @@ pub fn app_icon_8(title: &str) -> &'static [u8; 8] {
     }
 }
 
+#[inline(always)]
+pub fn app_icon_16(title: &str) -> &'static [u8; 32] {
+    let b = title.as_bytes();
+    match b.first().copied().unwrap_or(0) {
+        b'B' | b'b' => {
+            if b.get(2).copied().unwrap_or(0) == b'a' || b.get(2).copied().unwrap_or(0) == b'A' {
+                &gfx::icons::ICON_16_SCANNER
+            } else {
+                &gfx::icons::ICON_16_DIAGNOSTICS
+            }
+        }
+        b'T' | b't' => &gfx::icons::ICON_16_FLASHLIGHT,
+        b'S' | b's' => &gfx::icons::ICON_16_INFO,
+        b'R' | b'r' => &gfx::icons::ICON_16_RADIO,
+        _ => &gfx::icons::ICON_16_APPS,
+    }
+}
+
 #[inline(never)]
 pub fn populate_package_list(
     items: &mut [MenuItem],
