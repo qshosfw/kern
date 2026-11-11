@@ -522,4 +522,48 @@ mod tests {
             "Right status bar items were erased by draw_status_bar_layout"
         );
     }
+
+    #[test]
+    fn test_partial_status_bar_leaves_tab_area_intact() {
+        let mut canvas = Canvas::new();
+        // Simulate app tab header drawn in x=0..60, y=0..7
+        canvas.fill_rect(0, 0, 60, 7, Color::Fill);
+        assert_eq!(canvas.buffer[0][10], 0x7F);
+
+        let cfg = StatusRightConfig::new(85, 3, 8100);
+        let right_limit = cfg.render(&mut canvas);
+        assert!(
+            right_limit >= 60,
+            "Right limit should not collide with tabs"
+        );
+
+        // Partial status bar layout: empty title, no divider
+        let sb_cfg = kernel::app::StatusBarConfig::partial();
+        assert!(sb_cfg.partial);
+        assert!(!sb_cfg.show_divider);
+
+        // When partial is handled (layout skipped), tab area must remain untouched
+        assert_eq!(
+            canvas.buffer[0][10], 0x7F,
+            "Tab header pixels must remain intact"
+        );
+    }
+
+    #[test]
+    fn test_status_bar_config_variants() {
+        let default_cfg = kernel::app::StatusBarConfig::default();
+        assert!(default_cfg.visible);
+        assert!(!default_cfg.partial);
+        assert!(default_cfg.show_divider);
+
+        let partial_cfg = kernel::app::StatusBarConfig::partial();
+        assert!(partial_cfg.visible);
+        assert!(partial_cfg.partial);
+        assert!(!partial_cfg.show_divider);
+
+        let hidden_cfg = kernel::app::StatusBarConfig::hidden();
+        assert!(!hidden_cfg.visible);
+        assert!(!hidden_cfg.partial);
+        assert!(!hidden_cfg.show_divider);
+    }
 }

@@ -123,7 +123,7 @@ impl Canvas {
         self.dirty = 0xFF;
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn draw_pixel(&mut self, x: u8, y: u8, color: Color) {
         if (x as usize) < LCD_WIDTH && (y as usize) < LCD_HEIGHT {
             let page = (y >> 3) as usize;
@@ -374,6 +374,7 @@ impl Canvas {
 
     /// Fill rectangle using progressive Bayer 4x4 matrix dithering.
     /// `progress` ranges from 0 (empty) to 16 (100% solid fill).
+    #[inline(never)]
     pub fn fill_rect_dither(&mut self, x: u8, y: u8, width: u8, height: u8, progress: u8) {
         if progress == 0
             || width == 0
@@ -606,7 +607,7 @@ impl Canvas {
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8) {
     if dy.unsigned_abs() >= LCD_HEIGHT as u8 {
         *plane = [[fill_byte; LCD_WIDTH]; 8];
@@ -670,7 +671,7 @@ fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 fn scroll_plane_horizontal(plane: &mut [[u8; LCD_WIDTH]; 8], dx: i8, fill_byte: u8) {
     if dx.unsigned_abs() >= LCD_WIDTH as u8 {
         *plane = [[fill_byte; LCD_WIDTH]; 8];

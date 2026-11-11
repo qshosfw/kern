@@ -287,12 +287,10 @@ impl OsCompositor {
             #[cfg(not(feature = "text_input"))]
             let is_text_input = false;
 
-            if is_text_input {
-                // Header rendered by TextInputView; right-side inverted status rendered post-overlay
-            } else if has_modal || sb_cfg.partial {
-                ctx.draw_status_bar_right(canvas);
-            } else {
-                if sb_cfg.title.is_none() {
+            if !is_text_input {
+                if has_modal {
+                    sb_cfg.partial = true;
+                } else if !sb_cfg.partial && sb_cfg.title.is_none() {
                     if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
                         sb_cfg.title = Some(meta.name);
                     }
