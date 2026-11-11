@@ -206,34 +206,50 @@ The real driver of the 1,876-byte `tick_10ms` footprint is **deep inlining of in
 
 ---
 
-### Phase 7: Boot Splash & System Recovery De-duplication
-**Location:** `src/firmware/src/boot/orchestration.rs`, `src/firmware/src/boot/recovery.rs`  
-**Current Footprint:** 7,203 bytes (`run_boot_splash` 1,616 B, `draw_recovery_screen` 984 B) | **Target:** ~4,200 bytes | **Savings:** ~3,000 bytes
+### Phase 7: Streamlined Boot Splash & Resident Recovery Parachute
+**Location:** `src/firmware/src/boot/orchestration.rs`, `src/firmware/src/boot/splash.rs`, `src/firmware/src/boot/recovery.rs`  
+**Current Footprint:** 7,203 bytes (`run_boot_splash` 1,616 B, `draw_recovery_screen` 984 B) | **Target:** ~2,800 bytes | **Savings:** ~4,400 bytes
 
-#### Architectural Flaw
-`run_boot_splash` duplicates frame interpolation math, canvas blitting, and key polling. `draw_recovery_screen` manually formats hex lines, stack markers, and boxes using independent procedural code.
-
-#### Implementation Directives
-1. **Consolidated Boot Dialog Renderer:**
-   - Share the box, banner, and key-prompt renderer (`render_dialog`) across boot stages, recovery, and format prompts.
-2. **Compact Splash Key Polling:**
-   - Factor splash animation ticking and key break detection into a unified, tight event poll.
+#### Architectural Analysis: Recovery vs. Splash
+A critical safety distinction must be maintained between Recovery and Boot Splash:
+- **Safe Mode Recovery CANNOT be an external app on KernFS:** Recovery is the device's last-line safety parachute, triggered on crash loops (`crash_count >= 2`), hard faults, or storage mounting failures. If Recovery depended on KernFS mounting, directory scanning, or the KRX runtime loader, a corrupted filesystem or broken SPI flash would permanently brick the radio. Recovery **must remain resident in Flash ROM**. However, its current 984-byte footprint is bloated by duplicated manual hex formatting, stack marker decoding, and box drawing. Unifying it to use standard shared dialog primitives will shrink it to ~250 bytes without sacrificing brick protection.
+- **Boot Splash is an Asset, NOT an Executable App:** A boot splash does not require an executable binary (`.krx`), GOT bindings, or syscall vtables. It is purely a 1,024-byte 1-bit VRAM image.
+  - The resident engine should be stripped of all procedural animation shaders (`apply_dither_mask`, `apply_invert_dissolve`, `apply_curtain_wipe`) and built-in ROM bitmap arrays.
+  - The resident pipeline simply checks if a provisioned splash exists in storage (`/pref/splash.raw` or `/user/splash.raw`), streams the 1,024 bytes directly into `CANVAS`, and pushes to LCD. If no splash is provisioned, it prints a 1-line text banner ("KERN OS") and boots in <1.8 ms.
 
 ---
 
-### Phase 8: OpenApps / KRX Overlay Runtime Unification (from Falcon / F4HWN)
-**Location:** `src/firmware/src/runtime/native_runner.rs`, `src/kernel/src/proc/krx.rs`  
-**Current Footprint:** ~18,000 bytes combined | **Target:** ~12,000 bytes | **Savings:** ~6,000 bytes
+### Phase 8: Provisioning Decoupling (Mode A vs Mode B)
+**Location:** `kern.toml`, `src/firmware/src/boot/provision.rs`  
+**Current Footprint:** 5,544 bytes in `.rodata` and `.text` | **Savings:** **5,544 bytes Flash**
 
-#### Inspiration from Falcon & F4HWN Architecture
-Analysis of Falcon (`inspo/Falcon-firmware-UV-K1-K5v3/`) and F4HWN reveals how community firmwares run dozens of full-featured apps (APRS, CW Keyer, SSTV, AIS, Spectrum) within 118 KB Flash:
-1. **Transient Arena as Overlay RAM:**
-   - All external applications run inside the 4 KiB sector cache / transient arena (`TRANSIENT_ARENA`).
-   - The resident firmware only maintains the kernel, the hardware drivers, and the compositor.
-2. **Zero-Copy ABI Table:**
-   - Resident services are exposed via clean static function tables (`KrxApiTable` / `app_api_t`), eliminating dynamic dispatch overhead in userland.
-3. **De-duplicate Relocation Routines:**
-   - Consolidate delta relocation application in `native_runner::apply_package_relocs` to standard pointer-offset arithmetic, ensuring P0 leaf overlays and resident apps share identical execution trampolines.
+#### Architectural Insight
+`provision_apps` currently embeds binary packages (`beacon.bin`, `bench.bin`, `leaf.krx`, `paged.krx`, `sysinfo.krx`) directly into the firmware image via `include_bytes!`. On first boot, the firmware copies these packages onto the external SPI NOR flash.
+
+- **Mode A (Production Profile - Default):** External SPI Flash is populated with standard application bundles during factory/developer provisioning via the `./kern flash` CLI or RigWire toolchain. The firmware binary contains **strictly 0 bytes** of embedded package blobs (`provision_apps = false`).
+- **Mode B (Self-Provisioning Profile - Developer/Bare-Metal):** Toggleable feature flag `provision_apps = true` used exclusively when bringing up blank SPI Flash without external tooling.
+- **Empirical Impact:** Disabling `provision_apps` immediately drops firmware size from **118,528 B to 112,984 B** (**5,544 bytes freed instantly**), expanding available Flash headroom from 2.3 KB to **7.8 KB**.
+
+---
+
+### Phase 9: Dynamic Declarative Settings Extensions (`PrefModule`)
+**Location:** `src/kernel/src/pref.rs`, `src/firmware/src/apps/settings/`  
+**Current Footprint:** 7,460 bytes | **Target:** ~3,500 bytes | **Savings:** ~3,900 bytes
+
+#### Architectural Model
+Today, `SettingsApp` hardcodes 18 distinct pages, including dynamic package inspection pages (`ManageApps`, `AppDetail`, `ManageServices`, `ServiceDetail`) and peripheral-specific pages.
+
+By implementing the declarative `PrefModule` schema:
+1. **Core Lean Menu:** The resident Settings app only hardcodes the essential system domains: `Display`, `Audio`, `Buttons`, `Battery`, `Device`, `Security`, and `System`.
+2. **App Contributed Settings:** Built-in and dynamic userland applications declare settings via a `PrefModule` vtable facet:
+   ```rust
+   pub struct PrefModule {
+       pub title: &'static str,
+       pub placement: PrefPlacement, // Root or AppMenu
+       pub items: &'static [PrefItem],
+   }
+   ```
+3. Settings materializes items dynamically through the shared engine without hardcoding per-app submenus, reducing resident code while providing infinite extensibility for new digital modes, APRS profiles, and user scripts.
 
 ---
 
