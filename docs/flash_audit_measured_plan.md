@@ -310,3 +310,140 @@ Ordered so each step is an architectural fix, not a patch. Cumulative column use
 | 7 | Phases 17, 19, 21 + S7/S8 | −2,500 | 95,852 | **79.3 %** |
 
 High-end estimates reach ≈ 85 KB (70 %). No user-visible feature is removed: assets and settings pages move to SPI flash and remain available; a resident fallback (recovery `TextScreen` + minimal settings `Sheet`) guarantees operation with unmounted storage.
+
+---
+
+## 8. Bloat Tooling for Agents — `tools/bloat.py`
+
+Pattern-level analyzer (not a "largest symbols" list). Each subcommand emits a *refactor action*, not just a size. Run after `./kern size`.
+
+| Command | Finds | Action it implies |
+|---|---|---|
+| `dups [--sim 0.8]` | Exact duplicates after normalising addresses/targets; near-duplicates via 4-gram shingle Jaccard | Merge into one fn / extract shared core |
+| `outline [--len 8 --count 3]` | Identical instruction windows repeated across ≥N functions, ranked by `(n-1)·bytes − n·4` | Extract a helper, hoist a guard, or replace with a table |
+| `mono` | Generic families grouped by base path with per-instance sizes | De-monomorphise (move type param to struct, `&dyn` at cold boundaries, non-generic inner fn) |
+| `calls [--min 400]` | Call-site fan-in × arg-setup cost; large **single-caller** monoliths | Pass a descriptor/struct; split monolith by state/table |
+| `consts` | Literal/immediate values reused across many fns | Name once; centralise the logic that uses it (e.g. watchdog feed) |
+| `strings` | Duplicate, prefix/suffix-shareable, and longest rodata strings | String pool, error-code space, host-side text |
+| `crates --depth N` | `.text`/`.rodata` rollup per module path | Ownership/budget per module |
+| `baseline` / `diff` | Per-symbol JSON baseline and delta | Guard against regressions in every commit |
+
+**Agent protocol:** `python3 tools/bloat.py baseline` before a phase → refactor → `./kern build` → `python3 tools/bloat.py diff` and paste the top deltas into the commit body. Planned extensions (implement as needed): `fields` (histogram of struct field offsets > Thumb imm5 range per type, from DWARF with `debug=1` build), `inlined` (with `debug=1`, list DW_TAG_inlined_subroutine counts per callee → shows which shared helpers got duplicated by inlining).
+
+### 8.1 First-run findings (2026-11-11)
+| Finding | Evidence (tool) | Fix |
+|---|---|---|
+| `api_ui_draw_big_digit` ≡ `api_ui_draw_small_digit` | `dups` exact | One fn with `font` arg; both vtable slots point to it |
+| `api_draw_rect`/`fill_rect`/`invert_rect` share clip prologue | `dups`/`outline` | Phase 10 (clip in `Canvas`) |
+| Every display/radio/io shim re-walks `ACTIVE_CTX → field → Option` with null checks (`ldr [r0,#24]; cmp; beq; ldr [r0,#4]; cmp; beq`) | `outline` ×3+ families | §5.2.6 `Exec` context: resolve once, non-optional |
+| Radio getters each re-derive active VFO via byte at offset 218 (`movs r1,#218; ldrb [r0,r1]`) in 15 fns | `outline`, `consts #218` | `active_vfo()` accessor + hot field reorder (§9.1) |
+| IWDG reload (`0x40003000`, key `0xAAAA`) inlined in 13 fns | `consts` | `bsp::watchdog::feed()` `#[inline(never)]`; ideally fed from one place (system tick) only |
+| Asset chooser closures (`JINGLE_ASSET`, `ROGER_ASSET`, …) are separate `FnOnce` instantiations with identical bodies | `outline` | `AssetDescriptor { cfg_field: ConfigField, dir: &str }` data, one handler |
+| `Bk4829` methods: 165 call sites | `calls` | Phase 14 register tables |
+| `FileSystemDriver` (60 sites) wraps `KernFS` (40 sites) with per-op `map_err` closure instantiations | `calls`, `mono` | §9.2 collapse storage layers |
+| Hex alphabet `0123456789ABCDEF` stored twice; Crockford alphabet separate; default identity `N0CALL…UV-K1` ×2; `KERN-TEAM` ×4; asset paths ×2 | `strings` | One `utils::HEX`, path constants module, single default identity record |
+| Three parallel human-readable label sets: launch errors (431 B), capability names (244 B), status codes (157 B) | `strings` | §9.4 unified status code space |
+| ~407 field accesses need `movs rX,#imm; ldr [rA,rX]` (offset beyond imm5 range) | disasm grep | §9.1 hot-field-first layout, split god structs |
+| Only 5.7 KB of rodata is text → ≈10 KB is fonts/bitmaps/packages | `strings` total vs `.rodata` | §10 resident asset compaction (no SPI dependency) |
+
+---
+
+## 9. Additional Design Problems (deduplication, de-monomorphisation, reuse)
+
+### 9.1 God structs defeat Thumb addressing — `SysContext`, `MasterConfig`, `Orchestrator`
+Thumb-1 `ldr/str` immediate offsets reach only 124 B (word), 62 B (half), **31 B (byte)**. Fields beyond cost an extra `movs` (+2 B) and a register on every access; 407 such sites exist.
+- **Split by concern**: `SysContext` → `RadioState`, `UiState`, `PowerState` each ≤ 128 B, passed separately (each shim touches one). `MasterConfig` → the already-separate `/pref/*.cfg` structs held as independent statics (matches ORDS-01 domain separation; today they are merged in RAM, undoing the on-disk modularity).
+- **Hot-first ordering**: within each struct place `u8` flags/hot bytes in the first 32 B, `u16` next, then `u32`/pointers, then cold arrays last.
+- Rule: no struct > 128 B is accessed in hot paths; static-assert sizes.
+
+### 9.2 Redundant storage layering
+`SysContext::StoragePrimitive` → `FileSystemDriver<Py25q16>` → `KernFS<Py25q16>` → `Py25q16FlashDriver`, each with its own error enum (`FsError` → `StorageError` → ABI code) and `map_err` closure per method.
+- One error type end-to-end: `kernfs::Error` as `#[repr(u8)]`, equal to the ABI status byte → conversions vanish.
+- Delete `FileSystemDriver` wrapper; `KernFS` *is* the storage service. `SysContext` holds `&mut KernFS<Flash>`.
+- `KernFS` is generic over the flash device but there is exactly one per target; keep the generic on the **struct** only and route all methods through a non-generic `BlockDev` vtable (`read/prog/erase/sync` 4 fn pointers) — this is how LittleFS itself is designed and removes per-method monomorphisation if a second device (internal flash, RAM disk for tests) is ever added.
+
+### 9.3 Generic-on-method instead of generic-on-type
+`RadioCoordinator::{tick_10ms, start_tx, stop_tx, request_ptt_*, select_vfo, toggle_vfo, set_audio_muted}::<Bk4829>`: the driver is a method type-param on 8 methods. Move to `RadioCoordinator<R: RadioService>` (or non-generic holding `&mut dyn RadioService` at the 10 ms boundary — a single indirect call per tick costs nothing). Benefit: adding the Si4732 HF receiver later does not double 2.9 KB of coordinator code.
+General rule (add to AGENTS.md): *Generic parameters for hardware go on the struct; hot inner loops are non-generic functions taking primitives; cold boundaries (≤ 1 kHz) may use `&dyn`.*
+
+### 9.4 One status/error code space
+`KrxLaunchError`, `StorageError`, `FsError`, `WireStatus`, ABI return codes, panic reasons and capability names each have their own enum + `as_str`. Define `kernel::Status` (`#[repr(u8)]`, ranges per subsystem: 0x00 ok, 0x10 storage, 0x20 krx, 0x30 wire, 0x40 caps…). One `Status::label()` table (packed `&[u8]` with offsets, see §10.3); RigWire, ABI and UI all return the same byte. Host tools print full text; device shows short labels.
+
+### 9.5 Two event models
+`KrxEvent` (ABI), `kernel::Event` (resident apps), `View::on_event` (gfx) and modal results each define keys/encoder/tick variants and translate between them. Make `KrxEvent` (8-byte `#[repr(C)]`) **the** event type everywhere; resident apps receive the same struct → translation code disappears and resident apps become portable to KRX unchanged.
+
+### 9.6 Resident apps implement `App` via generic `AppVTable::from_app::<T>`
+15 thunks (5 per app). Fine today, but the pattern means each new resident app adds 5 thunks + vtable. With §9.5, resident apps can use the same `(op, arg)` single entry as KRX apps: one `fn entry(&mut self, op: u8, ev: &KrxEvent)` per app, no thunks, one dispatch path in the orchestrator for resident and native apps alike.
+
+### 9.7 Two view frameworks
+`gfx::gui::View<Model>` (MenuView, PopupView, GridMenuView<T>) and ad-hoc `draw_*` functions in apps/compositor. `GridMenuView` is generic over entry type (`<LauncherEntry>`). Converge on: `ListModel` trait object with `fn row(&self, i: u8, out: &mut RowBuf)` (lazy), non-generic views taking `&dyn ListModel`; the cost of one indirect call per visible row (≤ 6 rows) is negligible.
+
+### 9.8 Boot/provision/recovery each reimplement "ensure file exists with default"
+`ensure_default_files`, `provision_packages`, `mount_or_format`, config loaders each open/stat/write. Single `kernfs::ensure(path, default: &[u8] | fn(&mut [u8]))` over a `const DEFAULT_FILES: [(&str, Default)]` table.
+
+### 9.9 Watchdog, delays and busy-waits scattered
+IWDG fed in 13 functions; `delay_ms` called from 19 sites in boot/drivers. Feed only in the system tick; drivers expose non-blocking state machines (`poll()`), boot sequence waits via one `wait_until(cond, timeout)` helper.
+
+---
+
+## 10. Keeping Assets and Settings Resident — Architectural Compaction & Silicon Tips
+
+Moving everything to SPI flash is not always acceptable (recovery must work with blank/failed SPI; boot latency). These techniques shrink what stays **in internal flash**.
+
+### 10.1 Fonts
+- **One glyph store, many fonts by metadata**: proportional fonts stored as column bitmaps with a per-glyph `(offset:u16, width:u4, yoff:u4)` table; trim blank columns/rows per glyph (typically −25–35 %).
+- **Glyph subsetting at build time**: `tools/convert_fonts_modular.py` emits only glyphs referenced by resident strings for large fonts (big digits need `0-9 . - :` only); small font keeps full ASCII.
+- **Derive instead of store**: bold = draw twice offset by 1 px; inverted = XOR fill; double-size big digits from the small font with 2× pixel scaling when quality permits.
+- **Seven-segment big digits** as 7 rectangle draws (7 B/digit table) instead of bitmaps.
+
+### 10.2 Bitmaps / icons / splash
+- Store as **PackBits RLE** (already used for `.rle` splash) for all icons > 32 B; decoder is ~60 B and shared with splash.
+- Icon atlas with dedupe (identical icons across launcher/settings/status tray); icons referenced by `u8` index.
+- Resident splash = procedurally drawn logo (lines/text via `TextScreen`), bitmap splash optional on SPI.
+
+### 10.3 Strings
+- **Single string pool** with `u16` offsets + lengths packed (`[u8]` blob + `[u16]` index); dedupe and suffix-share at build time (`build.rs` generates `strings.rs`). Removes per-`&str` 8-byte fat pointers in tables (a menu of 30 labels: 240 B of pointers → 60 B of `u16`).
+- Labels in tables become `StrId(u8|u16)`; `draw_str_id(id)` API.
+- Short canonical labels; long explanatory text lives in host tools / KRX help.
+
+### 10.4 Settings kept resident, but as data
+Even without SPI, settings can be pure data: `#[repr(C)] struct PrefItem { label: StrId, kind: u8, cfg_off: u8, min: u8, max: u8, choices: StrId }` (8 B/item) + one engine. 60 items ≈ 480 B + ~1.2 KB engine replaces ~7 KB of `apps::settings` code. SPI-hosted `PrefModule` files then only *extend* the resident set (apps' settings).
+
+### 10.5 Pointer-free tables
+Every `&'static T` in a const table costs 4 B and a relocation-free but 4-aligned slot. Use `u8`/`u16` indices into one array per kind (strings, icons, handlers). Function-pointer tables stay pointers (4 B, but replace 10+ B per match arm).
+
+### 10.6 Cortex-M0+/PY32 instruction-level rules
+| Rule | Why |
+|---|---|
+| Hot fields in first 32 B of a struct; struct ≤ 128 B | `ldrb/ldrh/ldr` imm5 scaled offsets (31/62/124 B) |
+| Group mutable globals into one `#[repr(C)] struct` static accessed via one base pointer | each separate static costs a 4 B literal-pool word per function using it |
+| Use `u32`/`usize` for locals and loop counters; `u8` only in storage | avoids `uxtb`/`sxtb` after arithmetic |
+| Immediates ≤ 255; prefer enum discriminants 0..N dense | `movs #imm8`; dense matches compile to `__gnu_thumb1_case_*` jump tables instead of compare chains |
+| Power-of-two strides and `>>`/`<<` instead of `/`/`%` | no hardware divider; `__aeabi_uidiv` ≈ 40–100 cycles |
+| `u32` multiply is single-cycle (PY32F071 M0+ fast multiplier) | reciprocal multiply for scaling is cheap |
+| ≤ 4 word arguments; return ≤ 1 word or small `#[repr(C)]` in r0–r1 | AAPCS: 5th arg spills to stack both sides |
+| Avoid `u64` arithmetic outside crypto/timekeeping | pulls `__aeabi_lmul`/`__aeabi_uldivmod` |
+| `core::fmt`, `from_utf8`, `char` iteration banned in resident code | each pulls 0.3–3 KB; ASCII byte APIs instead |
+| Copy fixed small structs by value (`Copy`, ≤ 16 B) | avoids `__aeabi_memcpy` call (122 sites today) |
+| Bit-packed flags in one `u32` with const masks | one load + `tst`; replaces scattered `bool` fields |
+| Place SRAM-executed hot code (`.ramfunc`) only for flash-wait-sensitive ISR paths | at 72 MHz flash has wait states; copying costs flash once and SRAM |
+
+### 10.7 Toolchain levers (measure each with `bloat.py diff`, keep only wins)
+- Per-crate `opt-level` overrides: `[profile.release.package.crypto] opt-level = 3` only if needed for speed; try `"s"` vs `"z"` per crate — `z` occasionally loses on table-heavy code.
+- `-Zshare-generics=y`, `-Zfmt-debug=none`, `-Zlocation-detail=none` (no-ops if fmt already absent; enforce they stay absent).
+- `-C link-arg=--icf=all` with `lld` (identical code folding) — merges exact duplicates found by `dups` automatically; keep code-level dedupe anyway for clarity.
+- `-Cllvm-args=-inline-threshold=` sweep (e.g. 0–25) with `bloat.py diff`; pick the minimum, then pin hot paths with `#[inline]`.
+- Check `-Cllvm-args=-enable-machine-outliner` support for Thumb-1 in the current LLVM; if unsupported, `bloat.py outline` is the manual substitute.
+- Linker `--gc-sections` + `KEEP` only for vectors and KRX ABI tables; verify no `#[used]` keeps dead diagnostics.
+
+### 10.8 Revised 80 % roadmap without full SPI offload
+| Step | Source | Low est. |
+|---|---|---|
+| ABI v3.2 + shim collapse | §5, Ph 10 | −4.5 KB |
+| Data-driven resident settings (no SPI) | §10.4 | −4.5 KB |
+| Sheet / TextScreen / unified views & events | Ph 15/16, §9.5–9.7 | −5.0 KB |
+| Resident asset compaction (fonts, RLE icons, string pool) | §10.1–10.3, 10.5 | −3.5 KB |
+| Storage layer collapse + one Status space | §9.2, §9.4 | −1.5 KB |
+| RigWire tables, reg tables, alignment, division, struct split | Ph 11–14, §9.1 | −4.0 KB |
+| Provisioning payloads via RigWire (only true offload) | Ph 18.3 | −5.5 KB |
+| **Total** | | **≈ −28.5 KB → ~92 KB (76 %)** |
