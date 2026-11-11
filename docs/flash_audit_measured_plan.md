@@ -605,3 +605,108 @@ When weak or specialized AI agents perform architectural refactoring on Kern, th
 | **App Boundaries** | `firmware/src/apps/vfo.rs:98`<br>`launcher.rs:369`<br>`security.rs:86` | 7 violations | Apps calling silicon HAL (`delay::millis`, `Watchdog::feed`) | `[APPS-TOUCH-HW]` Route time & peripheral queries strictly through `SysContext` |
 | **Packed Structs** | `kernel/src/proc/memory.rs`<br>`firmware/src/panic/baremetal.rs` | 87 `__aeabi_uread4/uwrite4` calls | `#[repr(C, packed)]` causes unaligned software trap generation | `[HOT-FIELD-FIRST]` Naturally aligned power-of-two `#[repr(C)]` with padding |
 | **Software Div** | `telemetry.rs:sample_battery`<br>`BatteryDriver::calculate_percentage` | 87 `__aeabi_uidiv/mod` calls | Division on Cortex-M0+ hardware | Use reciprocal multiply Q16 or power-of-two bit shifts |
+
+---
+
+## 14. Deep Industry Research & Silicon-Level Best Practices for Sub-128KB Cortex-M0+
+
+Based on empirical measurements of the PY32F071xB (ARMv6-M Thumb-1) core and embedded systems research from minimal-footprint Rust runtimes, the following silicon-level best practices must govern all future firmware development.
+
+### 14.1 The Low-Register Saturation Law (Thumb-1 Register Pressure)
+* **Silicon Architecture Insight:** On ARMv6-M (Cortex-M0/M0+), 16-bit Thumb data processing instructions (`adds`, `subs`, `movs`, `ands`, `orrs`, `eors`, `bics`, `mvns`, `lsrs`, `lsls`, `asrs`, `rors`, `cmp`) can **ONLY access low registers `r0` through `r7`**. High registers `r8` through `r12` can only be accessed via non-flag-setting `mov`, `cmp`, and `add`.
+* **The Compiler Trap:** When a function contains more than 5 or 6 concurrently live variables, LLVM is forced to either:
+  1. Park variables in high registers using extra `mov r8, r0` instructions (2 bytes per transfer).
+  2. Spill variables to the stack using `str r0, [sp, #offset]` and reload them with `ldr` (4–8 bytes per access).
+* **Firmware Best Practice:** 
+  - Every function must be decomposed into micro-stages where **no more than 5 variables are live simultaneously**.
+  - Pass compound states via a single pointer (`&State`) in `r0` rather than unpacking 4 or 5 scalar fields across the function body.
+
+### 14.2 Constant Islands & The 1,000-Byte Function Ceiling
+* **Silicon Architecture Insight:** In Thumb-1, PC-relative literal load instructions (`ldr rX, [pc, #imm]`) have an 8-bit immediate field scaled by 4, giving a maximum forward reach of **1,020 bytes**.
+* **The Compiler Trap:** When a function exceeds ~1,000 bytes (such as `dispatch_wire_record` at 4,656 B, `tick_10ms` at 1,936 B, or `run_system_loop` at 1,936 B), LLVM's *Constant Islands* pass cannot place the literal pool at the end of the function. Instead, it must split the code, insert literal pools directly into the instruction stream, and emit unconditional branch trampolines (`b.n`) around each pool.
+* **Firmware Best Practice:** 
+  - **Hard Function Ceiling:** No single function in Kern may exceed **800 bytes**.
+  - Functions exceeding 800 bytes must be split into dedicated `#[inline(never)]` stage handlers or table-driven dispatchers.
+
+### 14.3 Cold-Path Outlining (`#[cold] #[inline(never)]`)
+* **Silicon Architecture Insight:** Microcontrollers have minimal or zero instruction cache. Branching to an error handler should never pollute the cache or bloat the happy path.
+* **The Compiler Trap:** Currently, Kern has **zero** functions annotated with `#[cold]`. When an error occurs (e.g. invalid CRC, bad package header, flash write failure), LLVM inlines the error handling block directly into the main execution flow. This forces the caller to allocate registers and stack space for error formatting, bloating the happy path by 30–50%.
+* **Firmware Best Practice:** 
+  - Every error handling branch, assertion handler, recovery screen, and diagnostic logging routine must be extracted into a dedicated helper annotated with:
+    ```rust
+    #[cold]
+    #[inline(never)]
+    fn handle_error_case(...) -> Result<T, Error> { ... }
+    ```
+  - This allows LLVM to compile the caller with zero defensive register saving, keeping the main instruction path dense, linear, and cache-friendly.
+
+### 14.4 Pascal Strings & Interned Compact Text Encoding
+* **Silicon Architecture Insight:** In standard Rust, `&'static str` is a 2-word fat pointer: `(ptr: *const u8, len: usize)` consuming **8 bytes** per reference on 32-bit targets.
+* **The Rodata Bloat Trap:** In table-driven UIs (menu titles, settings options, battery types, asset directories, shortcut names), storing hundreds of `&'static str` references burns massive flash space purely on fat pointer metadata:
+  - 21 choices in `CHOICES` = 168 bytes
+  - 24 shortcuts in `BUTTONS_SHORTCUTS` = 192 bytes
+  - 50 menu definitions = 400 bytes of pointer overhead
+* **Firmware Best Practice:** 
+  - Replace `&'static str` arrays in table metadata with **Pascal strings** (`[len: u8, ...bytes]`) or an **Interned String Pool**:
+    ```rust
+    #[repr(transparent)]
+    pub struct StrId(pub u16); // 2 bytes instead of 8 bytes!
+    ```
+  - All UI labels are concatenated into a single deduplicated string pool in flash. A table entry stores only a 2-byte `StrId`.
+  - **Flash Saving:** Reduces string metadata overhead by **75%** (saves ~1.5–2.0 KB across the firmware).
+
+### 14.5 Zero-Division Fixed-Point Reciprocal Multiplication
+* **Silicon Architecture Insight:** The PY32F071xB Cortex-M0+ core features a single-cycle hardware multiplier, but **strictly NO hardware divider**.
+* **The Emulation Trap:** Any division instruction (`/` or `%`) forces the linker to include the software division routines `__aeabi_uidiv` and `__aeabi_uidivmod` (called from **87 sites** in Kern today). Each software division consumes 40–100 clock cycles and emits call-site marshalling code.
+* **Firmware Best Practice:** 
+  - Any division by a compile-time or runtime constant $D$ must use fixed-point reciprocal multiplication:
+    $$\lfloor x / D \rfloor = (x \times M) \gg S$$
+  - For example, division by 10 for integer formatting:
+    ```rust
+    #[inline(always)]
+    pub const fn div10(x: u32) -> (u32, u32) {
+        let q = ((x as u64 * 0xCCCC_CCCD) >> 35) as u32;
+        let r = x - q * 10;
+        (q, r)
+    }
+    ```
+  - Progress bar percentage calculation:
+    ```rust
+    // Instead of: (val * width) / max
+    // Precompute Q16 factor once: factor_q16 = ((width << 16) / max)
+    let px = ((val * factor_q16) >> 16) as u8;
+    ```
+
+### 14.6 Dense Enum Discriminants for Compressed Jump Tables
+* **Silicon Architecture Insight:** On Thumb-1, LLVM compiles `match` statements over dense enums (0..N) into compressed byte-offset tables using table-branch instructions or compact range checks:
+  ```asm
+  cmp r0, #MAX_VARIANT
+  bhi default_label
+  ; table jump via byte offsets
+  ```
+* **The Sparse Discriminant Trap:** If an enum has arbitrary or sparse discriminants (e.g. 1, 10, 50, 100), LLVM cannot emit a table jump. Instead, it generates a binary search tree of compare-and-branch instructions (`cmp`, `beq`, `bgt`, `blt`), consuming 6–8 bytes per variant.
+* **Firmware Best Practice:** 
+  - All internal enums (`KrxEvent`, `Status`, `MenuId`, `PageId`, `Modulation`, `Cap`) must use **zero-based, contiguous, dense discriminants** (`#[repr(u8)]`).
+  - Reserve sparse numeric codes strictly for external on-wire protocols (RigWire FourCC, ORDS-01 file tags), decoded via a single binary-search or lookup table at the peripheral boundary.
+
+### 14.7 Eliminating Heapless Buffer Sizing Overhead
+* **The Footprint Trap:** `heapless::Vec<T, N>` and `heapless::String<N>` store their capacity and length inline. When passed by value, large stack copies occur. When generic over `N`, every different buffer capacity instantiates a completely separate copy of all methods (`push`, `extend`, `as_str`).
+* **Firmware Best Practice:** 
+  - Pass buffers as unsized slices (`&mut [u8]`, `&[u8]`, `&mut str`) rather than concrete `heapless` types.
+  - Keep `heapless` collections restricted to top-level storage holders; all algorithm and rendering functions must take plain standard slices.
+
+---
+
+## 15. The Master Optimization Metric Scorecard
+
+| Architectural Metric | Current Baseline | Optimized Target | Key Mechanism |
+|---|---|---|---|
+| **Resident Flash Usage** | 120,532 B (99.8%) | **< 92,000 B (76.1%)** | System-wide architectural de-bloat |
+| **Free Flash Headroom** | 300 B | **> 28,000 B** | Headroom for user applications & features |
+| **`__aeabi_*` Emulation Calls** | 419 call sites | **< 30 call sites** | Aligned structs + reciprocal math |
+| **Functions with >96B Stack** | 29 functions (peak 1.4 KB) | **0 functions** | Scratch staging via `TRANSIENT_ARENA` |
+| **Imm5 Offset Penalties** | 454 penalties across 183 fns| **< 20 penalties** | Hot-fields-first struct reordering |
+| **Syscall Wrapper Footprint**| 11,520 B (183 symbols) | **< 4,000 B** | Canvas signed primitives + tail calls |
+| **Largest Single Function** | 4,656 B (`dispatch_wire_record`) | **< 800 B** | Const descriptor table interpretation |
+| **Anonymous `.rodata`** | 16,030 B (86.1% of rodata) | **< 4,000 B** | Font subsetting, RLE icons, string pool |
+| **Hand-Written Stub Functions**| 177 `noop_*` functions | **1 universal stub** | `generic_noop() -> u32` |
