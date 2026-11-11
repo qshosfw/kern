@@ -5,9 +5,7 @@
 //! and Raw Hardware Buses (`HwBusApi`).
 
 use super::active_ctx_opt;
-use kernel::proc::abi::{
-    HwBusApi, KeypadApi, PowerApi, SerialApi, TimerApi,
-};
+use kernel::proc::abi::{HwBusApi, KeypadApi, PowerApi, SerialApi, TimerApi};
 use kernel::proc::primitives::*;
 
 // ── 5. CapKeypad C-ABI Handlers ─────────────────────────────────────────────

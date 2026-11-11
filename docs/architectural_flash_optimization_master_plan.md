@@ -404,6 +404,28 @@ Kern eliminates stack bloat by using the **Single-Stack Run-to-Completion Archit
 - Background daemons maintain compact static state structs (64–256 bytes in the process table).
 - Result: **Up to 8 concurrent processes execute simultaneously using less than 2 KB of SRAM total!**
 
+### 4.5 Near-Silicon Native Execution Speed & Dispatch Optimization
+
+To achieve execution latency as close to bare silicon as possible while maintaining safety guards:
+
+#### 1. Split-Phase Preflight Validation
+- **Load-Time Static Verification (`load_native_from_storage`):**
+  - Full memory layout execution permissions check (`mem_layout.validate_access`) runs once at package load time.
+  - GOT base register (`got_base`) 4-byte alignment and arena bounds validation runs once at package load time.
+- **Hot-Path Fast Guards (`invoke_krx_native`):**
+  - Eliminated the per-event and per-frame `MemoryRegionDescriptor` iteration loop that previously called `__aeabi_uread4` software helpers.
+  - Eliminated the 44-byte stack allocation in `invoke_krx_native` (code size dropped from 240 bytes to 84 bytes).
+  - Retained essential silicon guards: 1-cycle Thumb-1 mode bit check (`tst r0, #1`), 2-instruction arena bounds compare, and lightweight Cortex-M0+ stack margin guard (`MSP` vs `_stack_end`).
+  - Total dispatch overhead before `blx r6`: **~20 clock cycles (< 0.4 µs @ 48 MHz)**.
+
+#### 2. Call Stack Flattening & Inlining
+- Marked `invoke_guest` and `invoke_guest_event` with `#[inline(always)]`, eliminating nested call frames and register spills during 20–50 Hz rendering and rapid key event loops.
+- Eliminated redundant `apply_slot_status_bar` pre-call in `native_on_render`, halving status bar string slicing and icon iteration work per frame.
+- Replaced intermediate `Option<KrxEvent>` matching in `native_on_event` with direct stack construction and early returns.
+
+#### 3. Power-of-Two Arithmetic on Cortex-M0+
+- In `FixedWindowCache::slot_byte_offset`, replaced dynamic integer multiplication with exact bit-shift instructions (`slot_idx << 9` for 512B pages, `slot_idx << 10` for 1024B pages), avoiding the Cortex-M0+ multi-cycle multiplication sequence.
+
 ---
 
 ## 5. Declarative Dynamic Settings with Icons (`PrefModule` 2.0)

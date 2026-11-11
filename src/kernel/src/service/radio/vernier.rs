@@ -61,7 +61,11 @@ pub fn solve_vernier(carrier_hz: u32, delta_dhz: i16) -> VernierResult {
     if alpha_mhz == 0 {
         // Fallback to integer 10-Hz PLL steps if carrier is too low
         let neg = delta_f_mhz < 0;
-        let abs_f = if neg { (-delta_f_mhz) as u32 } else { delta_f_mhz as u32 };
+        let abs_f = if neg {
+            (-delta_f_mhz) as u32
+        } else {
+            delta_f_mhz as u32
+        };
         let pc_u = (abs_f + (PLL_STEP_MHZ as u32 / 2)) / (PLL_STEP_MHZ as u32);
         let pc = if neg { -(pc_u as i32) } else { pc_u as i32 };
         return VernierResult {

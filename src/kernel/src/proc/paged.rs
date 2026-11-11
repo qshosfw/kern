@@ -246,7 +246,11 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
     /// Byte offset of `slot_idx` relative to the start of the fixed-window cache VMA.
     #[inline(always)]
     pub const fn slot_byte_offset(&self, slot_idx: usize) -> usize {
-        slot_idx * (self.page_size as usize)
+        if self.page_size == 512 {
+            slot_idx << 9
+        } else {
+            slot_idx << 10
+        }
     }
 }
 

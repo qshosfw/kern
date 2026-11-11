@@ -1096,7 +1096,3 @@ impl<'a, 'hw> kernel::service::radio::RadioCoordinator for SysContext<'a, 'hw> {
         self.state.coord.is_vfo_locked()
     }
 }
-
-
-
-

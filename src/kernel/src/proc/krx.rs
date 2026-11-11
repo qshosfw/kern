@@ -2127,6 +2127,28 @@ mod tests {
         // 5. EXIT
         assert_eq!(app_entry(KRX_OP_EXIT, &api_table, core::ptr::null()), 0);
         assert!(unsafe { APP_STATE.exited });
+
+        // 6. High-Throughput Deterministic Dispatch Bench (10,000 rapid event & render cycles)
+        unsafe {
+            APP_STATE.exited = false;
+        }
+        for i in 0..10_000u32 {
+            let tick_ev = KrxEvent {
+                kind: KRX_EV_TICK,
+                key: 0,
+                flags: 0,
+                reserved: 0,
+                payload: i,
+            };
+            let res = app_entry(KRX_OP_EVENT, &api_table, &tick_ev as *const _ as *const ());
+            assert_eq!(res, 0);
+
+            if (i & 0x7F) == 0 {
+                let r_res = app_entry(KRX_OP_RENDER, &api_table, core::ptr::null());
+                assert_eq!(r_res, 0);
+            }
+        }
+        assert_eq!(unsafe { APP_STATE.rendered_frames }, 1 + (10_000 / 128) + 1);
     }
 
     #[test]

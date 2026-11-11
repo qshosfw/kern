@@ -105,7 +105,8 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
                 (ctx.config.system.model as usize).min(super::device::MODEL_OPTIONS.len() - 1);
             ctx.show_sheet(
                 TAG_MODEL_CHOOSER,
-                OptionSheet::new_static("Model", &super::device::MODEL_OPTIONS, sel).with_radio(true),
+                OptionSheet::new_static("Model", &super::device::MODEL_OPTIONS, sel)
+                    .with_radio(true),
             );
         }
         #[cfg(feature = "text_input")]

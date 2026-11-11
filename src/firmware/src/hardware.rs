@@ -8,10 +8,10 @@ use drivers::bk4829::Bk4829;
 use drivers::keyboard::KeypadScanner;
 use drivers::st7565::St7565;
 use kernel::event::Event;
-#[cfg(feature = "radio")]
-use kernel::service::radio::RfSquelch;
 #[cfg(feature = "usb")]
 use kernel::service::PowerService;
+#[cfg(feature = "radio")]
+use kernel::service::radio::RfSquelch;
 
 #[derive(Clone, Copy, Default)]
 pub struct SystemSerialPort {

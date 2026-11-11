@@ -164,11 +164,7 @@ pub struct OptionSheet {
 }
 
 impl OptionSheet {
-    pub fn new(
-        title: &'static str,
-        options: SheetOptions,
-        selected: usize,
-    ) -> Self {
+    pub fn new(title: &'static str, options: SheetOptions, selected: usize) -> Self {
         let hover = if selected < options.len() {
             selected
         } else {

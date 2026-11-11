@@ -5,9 +5,9 @@
 //! and caches entries for the OS launcher and Settings manager.
 
 use crate::services::SystemStorage;
-use kernel::proc::krx::{KrxClass, KrxExecType};
 #[cfg(feature = "filesystem")]
 use kernel::proc::krx::KrxPreamble;
+use kernel::proc::krx::{KrxClass, KrxExecType};
 
 /// Cached catalog entry for an installed package.
 #[derive(Debug, Clone)]

@@ -281,8 +281,15 @@ pub fn draw_recovery_screen(
 
     if let Some(sec) = countdown {
         let r_buf = [
-            b'R', b'E', b'S', b'E', b'T', b' ',
-            b'0' + (sec / 10), b'0' + (sec % 10), b's',
+            b'R',
+            b'E',
+            b'S',
+            b'E',
+            b'T',
+            b' ',
+            b'0' + (sec / 10),
+            b'0' + (sec % 10),
+            b's',
         ];
         if let Ok(s) = core::str::from_utf8(&r_buf) {
             gfx::text::draw_str_align(
@@ -304,7 +311,12 @@ pub fn draw_recovery_screen(
 
     #[cfg(feature = "panic_gui_extended")]
     let pbuf = [
-        b'P', b'1' + p, b'/', b'5', b' ', b'#',
+        b'P',
+        b'1' + p,
+        b'/',
+        b'5',
+        b' ',
+        b'#',
         b'0' + (slot.crash_count.min(99) / 10),
         b'0' + (slot.crash_count % 10),
     ];
@@ -315,7 +327,15 @@ pub fn draw_recovery_screen(
         b'0' + (slot.crash_count % 10),
     ];
     if let Ok(pstr) = core::str::from_utf8(&pbuf) {
-        gfx::text::draw_str_align(canvas, 126, 6, pstr, font, gfx::Color::Clear, gfx::text::Align::Right);
+        gfx::text::draw_str_align(
+            canvas,
+            126,
+            6,
+            pstr,
+            font,
+            gfx::Color::Clear,
+            gfx::text::Align::Right,
+        );
     }
 
     #[cfg(feature = "panic_gui_extended")]
@@ -343,7 +363,15 @@ pub fn draw_recovery_screen(
     #[cfg(not(feature = "panic_gui_extended"))]
     let _ = is_k1;
 
-    gfx::text::draw_str_align(canvas, 126, 58, "[EXIT] Reboot", font, gfx::Color::Fill, gfx::text::Align::Right);
+    gfx::text::draw_str_align(
+        canvas,
+        126,
+        58,
+        "[EXIT] Reboot",
+        font,
+        gfx::Color::Fill,
+        gfx::text::Align::Right,
+    );
 }
 
 #[cfg(feature = "panic_gui_extended")]

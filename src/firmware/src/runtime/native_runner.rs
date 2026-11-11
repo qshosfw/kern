@@ -461,9 +461,6 @@ pub fn load_native_from_storage(
     slot.mem_layout
         .init_regions(load_base, code_size, overlay, ram_vma, ram_size);
 
-    // 5. Flush instruction pipeline before branching into SRAM arena
-    flush_instruction_pipeline();
-
     let raw_entry = load_base.wrapping_add(exec.entry_point);
     let entry_thumb = (raw_entry | 1) as usize;
     let slot_start = load_base as usize;
@@ -472,13 +469,29 @@ pub fn load_native_from_storage(
         return Err(KrxLaunchError::InvalidEntryPoint);
     }
 
+    // 5. Validate execution permissions and alignment at load time
+    let code_addr = (entry_thumb & !1) as u32;
+    if slot.mem_layout.region_count > 0
+        && !slot.mem_layout.validate_access(code_addr, 2, false, true)
+    {
+        return Err(KrxLaunchError::InvalidEntryPoint);
+    }
+
+    let got_addr = slot.got_base as usize;
+    if (got_addr & 3) != 0 || got_addr < slot_start || got_addr >= slot_end {
+        return Err(KrxLaunchError::ImportBindingFailed);
+    }
+
+    // 6. Flush instruction pipeline before branching into SRAM arena
+    flush_instruction_pipeline();
+
     slot.entry_point = entry_thumb;
     slot.app_name.clear();
     let _ = slot.app_name.push_str(name);
     slot.caps = caps;
     slot.is_loaded = true;
 
-    // 6. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
+    // 7. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
     if let Some(exports_body) = aux.service_exports {
         for chunk in exports_body.chunks_exact(kernel::proc::ServiceExport::SIZE) {
             if let Some(export) = kernel::proc::ServiceExport::parse(chunk) {
@@ -508,32 +521,16 @@ pub unsafe fn invoke_krx_native(
     api_table: *const KrxApiTable,
     param: *const (),
 ) -> u32 {
-    let slot = slot_ref();
     let slot_start = arena_base_ptr() as usize;
     let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
 
-    // 1. Validate Thumb-1 mode bit and code bounds
+    // 1. Fast Thumb-1 mode bit and code bounds guard (prevent wild branches)
     let code_addr = entry_point & !1;
     if (entry_point & 1) == 0 || code_addr < slot_start || code_addr >= slot_end {
         return 0xFFFF_FFFF;
     }
 
-    // 1b. Validate memory region execution permissions if layout is active
-    if slot.mem_layout.region_count > 0
-        && !slot
-            .mem_layout
-            .validate_access(code_addr as u32, 2, false, true)
-    {
-        return 0xFFFF_FFFF;
-    }
-
-    // 2. Validate GOT base alignment and memory bounds
-    let got_addr = got_base as usize;
-    if (got_addr & 3) != 0 || got_addr < slot_start || got_addr >= slot_end {
-        return 0xFFFF_FFFF;
-    }
-
-    // 3. Ensure minimum stack headroom exists (prevent Cortex-M0+ stack exhaustion)
+    // 2. Fast stack margin guard (prevent Cortex-M0+ stack exhaustion)
     if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 96 {
         return 0xFFFF_FFFF;
     }
@@ -575,7 +572,7 @@ pub unsafe fn invoke_krx_native(
     }
 }
 
-#[inline(never)]
+#[inline(always)]
 unsafe fn invoke_guest(
     op: u32,
     ctx: *mut SysContext<'static, 'static>,
@@ -628,66 +625,62 @@ pub unsafe fn native_on_event(
                 KeyState::Released => 1u32,
                 KeyState::Held => 2u32,
             };
-            Some(KrxEvent {
+            KrxEvent {
                 kind: KRX_EV_KEY,
                 key: *code as u8,
                 flags: 0,
                 reserved: 0,
                 payload: s_val,
-            })
+            }
         }
-        Event::Encoder(dir) => Some(KrxEvent {
+        Event::Encoder(dir) => KrxEvent {
             kind: KRX_EV_ENCODER,
             key: 0,
             flags: 0,
             reserved: 0,
             payload: *dir as u32,
-        }),
-        Event::Tick => Some(KrxEvent {
+        },
+        Event::Tick => KrxEvent {
             kind: KRX_EV_TICK,
             key: 0,
             flags: 0,
             reserved: 0,
             payload: 0,
-        }),
-        Event::Bus(bus_ev) => Some(KrxEvent {
+        },
+        Event::Bus(bus_ev) => KrxEvent {
             kind: KRX_EV_BUS,
             key: bus_ev.event_id,
             flags: (bus_ev.topic.0 & 0xFF) as u8,
             reserved: 0,
             payload: bus_ev.data,
-        }),
-        Event::Usb(usb_ev) => Some(KrxEvent {
+        },
+        Event::Usb(usb_ev) => KrxEvent {
             kind: KRX_EV_USB,
             key: *usb_ev as u8,
             flags: 0,
             reserved: 0,
             payload: 0,
-        }),
-        Event::Charging(chg) => Some(KrxEvent {
+        },
+        Event::Charging(chg) => KrxEvent {
             kind: KRX_EV_POWER,
             key: *chg as u8,
             flags: 0,
             reserved: 0,
             payload: 0,
-        }),
-        Event::Sys(sys_ev) => Some(KrxEvent {
+        },
+        Event::Sys(sys_ev) => KrxEvent {
             kind: kernel::proc::abi::KRX_EV_IPC,
             key: sys_ev.target,
             flags: sys_ev.command,
             reserved: 0,
             payload: sys_ev.arg as u32,
-        }),
-        _ => None,
+        },
+        _ => return EventResult::Ignored,
     };
-    if let Some(ref krx_ev) = krx_ev {
-        invoke_guest_event(ctx as *mut _, krx_ev)
-    } else {
-        EventResult::Ignored
-    }
+    invoke_guest_event(ctx as *mut _, &krx_ev)
 }
 
-#[inline(never)]
+#[inline(always)]
 fn invoke_guest_event(ctx: *mut SysContext<'static, 'static>, krx_ev: &KrxEvent) -> EventResult {
     let res = unsafe {
         invoke_guest(
@@ -825,7 +818,6 @@ pub unsafe fn native_on_render(
     ctx: &SysContext<'static, 'static>,
     status_bar: &mut StatusBarConfig<'_>,
 ) {
-    apply_slot_status_bar(slot_ref(), status_bar);
     unsafe {
         invoke_guest(
             KRX_OP_RENDER,

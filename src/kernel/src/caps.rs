@@ -206,8 +206,8 @@ pub enum Cap {
     ServiceRegistry = 1 << 20, // Microkernel IPC, event bus pub/sub, service RPC
     BusAccess = 1 << 21,       // Low-level I2C / SPI direct bus access
     GpioAccess = 1 << 22,      // Direct hardware GPIO pin manipulation
-    StorageAdmin = 1 << 23,    // Full filesystem management (mkdir, rename, unlink, partition operations)
-    FactoryCalib = 1 << 24,    // Protected factory calibration read/write access (/sys/calib.*)
+    StorageAdmin = 1 << 23, // Full filesystem management (mkdir, rename, unlink, partition operations)
+    FactoryCalib = 1 << 24, // Protected factory calibration read/write access (/sys/calib.*)
 }
 
 impl Cap {
@@ -502,17 +502,11 @@ mod tests {
             .with(Cap::BroadBandRx)
             .with(Cap::GnssLocation);
         assert_eq!(set.first_cap(), Some(Cap::BroadBandRx));
-        assert_eq!(
-            Cap::BroadBandRx.required_message(),
-            "Broadband HF RX"
-        );
+        assert_eq!(Cap::BroadBandRx.required_message(), "Broadband HF RX");
 
         let single = CapabilitySet::empty().with(Cap::BroadcastFm);
         assert_eq!(single.first_cap(), Some(Cap::BroadcastFm));
-        assert_eq!(
-            Cap::BroadcastFm.required_message(),
-            "Broadcast FM"
-        );
+        assert_eq!(Cap::BroadcastFm.required_message(), "Broadcast FM");
     }
 
     struct MockSecurityContext {

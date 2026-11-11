@@ -212,5 +212,3 @@ pub fn page_defs(page: PageId) -> &'static [SettingDef] {
         _ => &[],
     }
 }
-
-
