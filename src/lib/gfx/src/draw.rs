@@ -11,9 +11,7 @@ pub fn draw_line(canvas: &mut Canvas, mut x0: i16, mut y0: i16, x1: i16, y1: i16
     let mut err = dx + dy;
 
     loop {
-        if x0 >= 0 && x0 < canvas.width() as i16 && y0 >= 0 && y0 < canvas.height() as i16 {
-            canvas.draw_pixel(x0 as u8, y0 as u8, color);
-        }
+        canvas.draw_pixel_i(x0, y0, color);
         if x0 == x1 && y0 == y1 {
             break;
         }

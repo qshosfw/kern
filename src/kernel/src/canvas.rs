@@ -255,7 +255,7 @@ impl Canvas {
 
     #[inline(always)]
     pub fn draw_pixel_i(&mut self, x: i16, y: i16, color: Color) {
-        if x >= 0 && y >= 0 && (x as usize) < LCD_WIDTH && (y as usize) < LCD_HEIGHT {
+        if (x as u16) < LCD_WIDTH as u16 && (y as u16) < LCD_HEIGHT as u16 {
             self.draw_pixel(x as u8, y as u8, color);
         }
     }
