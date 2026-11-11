@@ -1,34 +1,19 @@
 //! Buttons Domain Settings & Submenu Declarations
 
 use super::page::{ChoiceId, PageId, SettingDef, SettingField};
-use crate::apps::Shortcut;
 
-pub static SHORTCUT_OPTIONS: [&'static str; 13] = [
-    Shortcut::None.name(),
-    Shortcut::Flashlight.name(),
-    Shortcut::Monitor.name(),
-    Shortcut::Scanner.name(),
-    Shortcut::Explorer.name(),
-    Shortcut::Settings.name(),
-    Shortcut::LockKeypad.name(),
-    Shortcut::ToggleVfo.name(),
-    Shortcut::ToggleTxPower.name(),
-    Shortcut::MuteAudio.name(),
-    Shortcut::FmRadio.name(),
-    Shortcut::TaskManager.name(),
-    Shortcut::Fault.name(),
-];
+pub static SHORTCUT_OPTIONS: &str =
+    "None\0Flashlight\0Monitor\0Scanner\0Explorer\0Settings\0Lock Keypad\0Toggle VFO\0TX Power\0Mute Audio\0FM Radio\0Tasks\0Fault\0";
 
-pub static PTT_MODE_OPTIONS: [&'static str; 3] = ["Momentary", "Toggle / Latch", "2x Press Latch"];
+pub static PTT_MODE_OPTIONS: &str = "Momentary\0Toggle / Latch\02x Press Latch\0";
 
-pub static HOLD_DELAY_OPTIONS: [&'static str; 4] = ["250ms", "350ms", "500ms", "750ms"];
+pub static HOLD_DELAY_OPTIONS: &str = "250ms\0350ms\0500ms\0750ms\0";
 
-pub static REPEAT_RATE_OPTIONS: [&'static str; 4] =
-    ["30ms (Turbo)", "50ms (Fast)", "80ms (Norm)", "120ms (Slow)"];
+pub static REPEAT_RATE_OPTIONS: &str = "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0";
 
-pub static F_KEY_TIMEOUT_OPTIONS: [&'static str; 5] = ["Toggle", "1s", "2s", "3s", "5s"];
+pub static F_KEY_TIMEOUT_OPTIONS: &str = "Toggle\01s\02s\03s\05s\0";
 
-pub static AUTO_LOCK_OPTIONS: [&'static str; 5] = ["Off", "15s", "30s", "1 min", "2 min"];
+pub static AUTO_LOCK_OPTIONS: &str = "Off\015s\030s\01 min\02 min\0";
 
 pub static BUTTONS_ROOT: [SettingDef; 6] = [
     SettingDef::choice("PTT Mode", ChoiceId::PttMode, SettingField::PTT_MODE),

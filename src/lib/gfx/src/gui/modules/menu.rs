@@ -87,10 +87,11 @@ impl ShortString {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SheetOptions {
     Static(&'static [&'static str]),
     Dynamic(&'static [ShortString]),
+    Packed(&'static str),
 }
 
 impl SheetOptions {
@@ -99,6 +100,15 @@ impl SheetOptions {
         match self {
             SheetOptions::Static(s) => s.len(),
             SheetOptions::Dynamic(d) => d.len(),
+            SheetOptions::Packed(p) => {
+                let mut count = 0;
+                for &b in p.as_bytes() {
+                    if b == 0 {
+                        count += 1;
+                    }
+                }
+                count
+            }
         }
     }
 
@@ -124,6 +134,21 @@ impl SheetOptions {
                     ""
                 }
             }
+            SheetOptions::Packed(p) => {
+                let bytes = p.as_bytes();
+                let mut current = 0;
+                let mut start = 0;
+                for (i, &b) in bytes.iter().enumerate() {
+                    if b == 0 {
+                        if current == idx {
+                            return core::str::from_utf8(&bytes[start..i]).unwrap_or("");
+                        }
+                        current += 1;
+                        start = i + 1;
+                    }
+                }
+                ""
+            }
         }
     }
 }
@@ -139,9 +164,9 @@ pub struct OptionSheet {
 }
 
 impl OptionSheet {
-    pub const fn new(
+    pub fn new(
         title: &'static str,
-        options: &'static [&'static str],
+        options: SheetOptions,
         selected: usize,
     ) -> Self {
         let hover = if selected < options.len() {
@@ -151,12 +176,20 @@ impl OptionSheet {
         };
         Self {
             title,
-            options: SheetOptions::Static(options),
+            options,
             selected,
             hover,
             show_radio: false,
             is_pressed: false,
         }
+    }
+
+    pub fn new_static(
+        title: &'static str,
+        options: &'static [&'static str],
+        selected: usize,
+    ) -> Self {
+        Self::new(title, SheetOptions::Static(options), selected)
     }
 
     pub fn new_dynamic(
@@ -203,7 +236,7 @@ pub enum MenuItemType {
     },
     Choice {
         selected: u16,
-        options: &'static [&'static str],
+        options: SheetOptions,
     },
     Submenu,
     Info(&'static str),
@@ -645,11 +678,7 @@ fn render_menu_row(
         MenuItemType::Value(v) => val_str = v.as_str(),
         MenuItemType::Choice { selected, options } => {
             let sel = *selected as usize;
-            val_str = if sel < options.len() {
-                options[sel]
-            } else {
-                "?"
-            };
+            val_str = options.get(sel);
             if sel > 0 {
                 arrows |= 1;
             }
@@ -1259,7 +1288,7 @@ mod tests {
     #[test]
     fn test_option_sheet_small_repeat_clamps() {
         static OPTS: [&str; 3] = ["Off", "Tone", "Voice"];
-        let mut sheet = OptionSheet::new("Beep", &OPTS, 0);
+        let mut sheet = OptionSheet::new_static("Beep", &OPTS, 0);
         let mut rep = crate::gui::KeyRepeater::new(4, 2);
 
         // 1. Single tap wraps

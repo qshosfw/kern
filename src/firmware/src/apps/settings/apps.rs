@@ -8,8 +8,8 @@ use crate::SysContext;
 use crate::apps::launcher::catalog::get_catalog;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
 
-pub static LAUNCHER_STYLE_OPTIONS: [&'static str; 2] = ["Grid", "List"];
-pub static STARTUP_APP_OPTIONS: [&'static str; 2] = ["Home", "Radio"];
+pub static LAUNCHER_STYLE_OPTIONS: &str = "Grid\0List\0";
+pub static STARTUP_APP_OPTIONS: &str = "Home\0Radio\0";
 
 pub static APPS_DEFS: &[SettingDef] = &[
     SettingDef::submenu("Installed", PageId::ManageApps),

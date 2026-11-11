@@ -13,9 +13,8 @@ pub static MODEL_OPTIONS: [&'static str; 3] = ["UV-K1", "UV-K5 V3", "Custom..."]
 #[cfg(not(feature = "text_input"))]
 pub static MODEL_OPTIONS: [&'static str; 2] = ["UV-K1", "UV-K5 V3"];
 
-pub static SPLASH_TIME_OPTIONS: [&'static str; 5] = ["Skip", "0.5s", "1.0s", "2.0s", "3.0s"];
-pub static BOOT_ANIM_OPTIONS: [&'static str; 4] =
-    ["None", "Dither Fill", "Invert Dissolve", "Curtain Wipe"];
+pub static SPLASH_TIME_OPTIONS: &str = "Skip\00.5s\01.0s\02.0s\03.0s\0";
+pub static BOOT_ANIM_OPTIONS: &str = "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0";
 
 #[cfg(feature = "boot_assets")]
 pub static SPLASH_ASSET: AssetDescriptor = AssetDescriptor {

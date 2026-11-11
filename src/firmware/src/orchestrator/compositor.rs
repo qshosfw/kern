@@ -238,12 +238,7 @@ impl ModalCompositor {
                 self.text_view.render(canvas, model);
             }
             ActiveModal::Sheet(sheet, _, anim) => {
-                let off = anim.offset();
-                if off > 0 {
-                    MenuView::render_sheet_slide_up(canvas, sheet, off as i8);
-                } else {
-                    MenuView::render_sheet(canvas, sheet);
-                }
+                MenuView::render_sheet_slide_up(canvas, sheet, anim.offset() as i8);
             }
         }
         if self.toast.is_active {

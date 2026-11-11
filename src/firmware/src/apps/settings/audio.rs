@@ -6,12 +6,11 @@ use super::asset_chooser::AssetDescriptor;
 use super::page::AssetId;
 use super::page::{ChoiceId, RangeId, SettingDef, SettingField};
 
-pub static KEY_BEEP_OPTIONS: [&'static str; 6] =
-    ["Off", "Tone", "Click", "Double", "Warning", "Scroll"];
+pub static KEY_BEEP_OPTIONS: &str = "Off\0Tone\0Click\0Double\0Warning\0Scroll\0";
 
-pub static BOOT_JINGLE_OPTIONS: [&'static str; 5] = ["Off", "Chime", "Nokia", "Chirp", "GameBoy"];
+pub static BOOT_JINGLE_OPTIONS: &str = "Off\0Chime\0Nokia\0Chirp\0GameBoy\0";
 
-pub static AUDIO_PROFILE_OPTIONS: [&'static str; 5] = ["Flat", "Clean", "Mid", "Boost", "Max"];
+pub static AUDIO_PROFILE_OPTIONS: &str = "Flat\0Clean\0Mid\0Boost\0Max\0";
 
 #[cfg(feature = "boot_assets")]
 pub static ROGER_ASSET: AssetDescriptor = AssetDescriptor {

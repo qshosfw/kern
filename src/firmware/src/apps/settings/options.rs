@@ -37,7 +37,8 @@ fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut Sho
 }
 
 #[inline(always)]
-fn make_choice(opts: &'static [&'static str], raw_byte: u8) -> MenuItemType {
+fn make_choice(packed: &'static str, raw_byte: u8) -> MenuItemType {
+    let opts = gfx::gui::modules::menu::SheetOptions::Packed(packed);
     let sel = (raw_byte as usize).min(opts.len().saturating_sub(1)) as u16;
     MenuItemType::Choice {
         selected: sel,
@@ -69,7 +70,7 @@ fn populate_item(
             }
             item.item_type = MenuItemType::Choice {
                 selected: sel,
-                options: opts,
+                options: gfx::gui::modules::menu::SheetOptions::Static(opts),
             };
         }
         SettingKind::Range(range) => {

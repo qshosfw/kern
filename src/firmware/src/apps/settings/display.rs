@@ -2,12 +2,11 @@
 
 use super::page::{ChoiceId, RangeId, SettingDef, SettingField};
 
-pub static BACKLIGHT_TIME_OPTIONS: [&'static str; 6] =
-    ["Off", "5s", "10s", "30s", "1m", "Always On"];
+pub static BACKLIGHT_TIME_OPTIONS: &str = "Off\05s\010s\030s\01m\0Always On\0";
 
-pub static SHADING_OPTIONS: [&'static str; 3] = ["Grayscale", "Dither", "Monochrome"];
+pub static SHADING_OPTIONS: &str = "Grayscale\0Dither\0Monochrome\0";
 
-pub static ANIMATION_OPTIONS: [&'static str; 2] = ["Off", "On"];
+pub static ANIMATION_OPTIONS: &str = "Off\0On\0";
 
 pub static DISPLAY_DEFS: &[SettingDef] = &[
     SettingDef::choice(

@@ -1,9 +1,9 @@
 //! Security Domain Settings Declarations & Logic
 
 use crate::services::display::DisplayService;
-use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
+use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions, ShortString};
 
-pub static TRIES_OPTS: [&str; 3] = ["3", "5", "10"];
+pub static TRIES_OPTS: &str = "3\05\010\0";
 
 #[inline(never)]
 pub fn populate_security(items: &mut [MenuItem], ctx: &mut crate::SysContext) -> usize {
@@ -30,7 +30,7 @@ pub fn populate_security(items: &mut [MenuItem], ctx: &mut crate::SysContext) ->
         items[4].title = "Max Tries";
         items[4].item_type = MenuItemType::Choice {
             selected: tries_sel as u16,
-            options: &TRIES_OPTS,
+            options: SheetOptions::Packed(TRIES_OPTS),
         };
 
         5

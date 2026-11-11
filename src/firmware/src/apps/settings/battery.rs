@@ -8,13 +8,12 @@ pub static BATTERY_K5_TYPES: [u8; 4] = [0, 1, 2, 5];
 pub static BATTERY_K1_OPTIONS: [&'static str; 3] = ["1500 mAh", "2500 mAh", "External"];
 pub static BATTERY_K1_TYPES: [u8; 3] = [3, 4, 5];
 
-pub static BATTERY_FORMAT_OPTIONS: [&'static str; 9] = [
-    "NONE", "VOLTAGE", "PERCENT", "ICON", "I+VOLT", "I+PERC", "VOLT", "PERC", "TEMP",
-];
+pub static BATTERY_FORMAT_OPTIONS: &str =
+    "NONE\0VOLTAGE\0PERCENT\0ICON\0I+VOLT\0I+PERC\0VOLT\0PERC\0TEMP\0";
 
-pub static AUTO_POWER_OFF_OPTIONS: [&'static str; 4] = ["Off", "15 Mins", "30 Mins", "1 Hour"];
+pub static AUTO_POWER_OFF_OPTIONS: &str = "Off\015 Mins\030 Mins\01 Hour\0";
 
-pub static POWER_PROFILE_OPTIONS: [&'static str; 3] = ["Power Save", "Balanced", "Performance"];
+pub static POWER_PROFILE_OPTIONS: &str = "Power Save\0Balanced\0Performance\0";
 
 #[inline(always)]
 pub fn battery_options_and_types(nav_layout: u8) -> (&'static [&'static str], &'static [u8]) {
