@@ -116,23 +116,16 @@ pub enum AudioRoutingState {
 /// System-level Multi-VFO, Sidecar, and RF Subsystem Coordinator.
 #[derive(Debug, Clone)]
 pub struct RadioCoordinator {
-    pub channels: [ChannelConfig; 3],
+    // ── Hot 1-byte scalar fields (offset 0..31: 1-insn ldrb/strb) ─────────
     pub active_vfo: VfoSlot,
     pub listening_vfo: VfoSlot,
     pub dual_watch: DualWatchMode,
     pub cross_band: CrossBandMode,
-    pub fsk_config: FskSidecarConfig,
-    pub arbitrator: RadioArbitrator,
-    pub dwell: DwellController,
-    pub audio_routing: AudioRoutingState,
-    pub vfo_memory_index: [Option<u16>; 3],
     pub is_transmitting: bool,
     /// Granular transmission state machine (Idle, Active, TailBurst).
     pub tx_state: TxState,
     pub carrier_active: bool,
     pub fsk_sync_active: bool,
-    pub rssi_moving_avg: [i16; 3],
-    pub activity_count: [u16; 3],
     pub audio_path_muted: bool,
     /// Physical tuner currently routed through the audio cross-bar to the power amplifier.
     pub audio_source: AudioCrossbarSource,
@@ -140,26 +133,40 @@ pub struct RadioCoordinator {
     pub bclo_policy: BcloPolicy,
     /// Dual Watch transmit target selection policy.
     pub dw_tx_policy: DualWatchTxPolicy,
-    /// Time-Out Timer limit in seconds (0 = disabled).
-    pub tot_limit_seconds: u16,
     /// Pre-timeout acoustic warning lead time in seconds. Default: 10s.
     pub tot_warning_lead_seconds: u8,
-    /// Current transmission elapsed time in 10ms ticks.
-    pub tot_elapsed_10ms: u16,
     /// Pre-timeout acoustic warning flag.
     pub tot_warning_given: bool,
     /// Lockout penalty active: PTT must be released before transmitting again.
     pub tot_locked_out: bool,
-    /// Real-time RX Squelch Tail Elimination (STE) controller.
-    pub ste: RxSteController,
-    /// Per-VFO dynamic noise-floor estimator for Adaptive Squelch tracking.
-    pub adaptive_squelch: [AdaptiveSquelchTracker; 3],
     /// Whether dynamic adaptive squelch tracking is enabled.
     pub adaptive_squelch_enabled: bool,
     /// Sub-divider counter for background adaptive squelch floor sampling.
     pub adaptive_tick_div: u8,
     /// True if PA power was folded back due to high die/board temperature during prolonged TX.
     pub pa_thermal_foldback_active: bool,
+
+    // ── Hot 2-byte scalar fields (offset 0..63: 1-insn ldrh/strh) ─────────
+    /// Time-Out Timer limit in seconds (0 = disabled).
+    pub tot_limit_seconds: u16,
+    /// Current transmission elapsed time in 10ms ticks.
+    pub tot_elapsed_10ms: u16,
+    pub activity_count: [u16; 3],
+    pub rssi_moving_avg: [i16; 3],
+
+    // ── Sub-controllers and state machines ───────────────────────────────
+    /// Real-time RX Squelch Tail Elimination (STE) controller.
+    pub ste: RxSteController,
+    pub dwell: DwellController,
+    pub audio_routing: AudioRoutingState,
+    pub arbitrator: RadioArbitrator,
+    pub fsk_config: FskSidecarConfig,
+    pub vfo_memory_index: [Option<u16>; 3],
+    /// Per-VFO dynamic noise-floor estimator for Adaptive Squelch tracking.
+    pub adaptive_squelch: [AdaptiveSquelchTracker; 3],
+
+    // ── Large channel storage array (150+ bytes) ─────────────────────────
+    pub channels: [ChannelConfig; 3],
 }
 
 impl RadioCoordinator {
@@ -177,40 +184,40 @@ impl RadioCoordinator {
         ch_c.bandwidth = Bandwidth::Narrow12k5;
 
         Self {
-            channels: [ch_a, ch_b, ch_c],
             active_vfo: VfoSlot::VfoA,
             listening_vfo: VfoSlot::VfoA,
             dual_watch: DualWatchMode::Off,
             cross_band: CrossBandMode::Off,
-            fsk_config: FskSidecarConfig::DEFAULT,
-            arbitrator: RadioArbitrator::new(),
-            dwell: DwellController::new(),
-            audio_routing: AudioRoutingState::NormalVoice,
-            vfo_memory_index: [None, Some(1), None],
             is_transmitting: false,
             tx_state: TxState::Idle,
             carrier_active: false,
             fsk_sync_active: false,
-            rssi_moving_avg: [-120, -120, -120],
-            activity_count: [0, 0, 0],
             audio_path_muted: true,
             audio_source: AudioCrossbarSource::Primary,
             bclo_policy: BcloPolicy::CarrierOnly,
             dw_tx_policy: DualWatchTxPolicy::ActiveVfo,
-            tot_limit_seconds: 60, // Default 60-second TOT
             tot_warning_lead_seconds: 10,
-            tot_elapsed_10ms: 0,
             tot_warning_given: false,
             tot_locked_out: false,
+            adaptive_squelch_enabled: true,
+            adaptive_tick_div: 0,
+            pa_thermal_foldback_active: false,
+            tot_limit_seconds: 60, // Default 60-second TOT
+            tot_elapsed_10ms: 0,
+            activity_count: [0, 0, 0],
+            rssi_moving_avg: [-120, -120, -120],
             ste: RxSteController::new(),
+            dwell: DwellController::new(),
+            audio_routing: AudioRoutingState::NormalVoice,
+            arbitrator: RadioArbitrator::new(),
+            fsk_config: FskSidecarConfig::DEFAULT,
+            vfo_memory_index: [None, Some(1), None],
             adaptive_squelch: [
                 AdaptiveSquelchTracker::new(),
                 AdaptiveSquelchTracker::new(),
                 AdaptiveSquelchTracker::new(),
             ],
-            adaptive_squelch_enabled: true,
-            adaptive_tick_div: 0,
-            pa_thermal_foldback_active: false,
+            channels: [ch_a, ch_b, ch_c],
         }
     }
 

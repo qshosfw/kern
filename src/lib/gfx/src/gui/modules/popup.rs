@@ -11,25 +11,25 @@ use heapless::String;
 use crate::widgets;
 
 pub struct PopupModel {
-    pub custom_title: String<24>,
-    pub custom_msg: String<192>,
+    pub anim: crate::gui::animation::TransitionProgress,
     pub scroll_offset: usize,
     pub confirm_label: Option<&'static str>,
     pub cancel_label: Option<&'static str>,
     pub repeater: crate::gui::repeater::KeyRepeater,
-    pub anim: crate::gui::animation::TransitionProgress,
+    pub custom_title: String<24>,
+    pub custom_msg: String<192>,
 }
 
 impl PopupModel {
     pub const fn new() -> Self {
         Self {
-            custom_title: String::new(),
-            custom_msg: String::new(),
+            anim: crate::gui::animation::TransitionProgress::new(4),
             scroll_offset: 0,
             confirm_label: None,
             cancel_label: None,
             repeater: crate::gui::repeater::KeyRepeater::new(8, 2),
-            anim: crate::gui::animation::TransitionProgress::new(4),
+            custom_title: String::new(),
+            custom_msg: String::new(),
         }
     }
 

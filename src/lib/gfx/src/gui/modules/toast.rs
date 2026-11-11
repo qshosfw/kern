@@ -9,19 +9,19 @@ use heapless::String;
 use kernel::event::Event;
 
 pub struct ToastModel {
-    pub message: String<32>,
+    pub is_active: bool,
     pub duration_ms: u16,
     pub elapsed_ms: u16,
-    pub is_active: bool,
+    pub message: String<32>,
 }
 
 impl ToastModel {
     pub const fn new() -> Self {
         Self {
-            message: String::new(),
+            is_active: false,
             duration_ms: 0,
             elapsed_ms: 0,
-            is_active: false,
+            message: String::new(),
         }
     }
 
