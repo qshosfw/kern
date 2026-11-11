@@ -76,7 +76,7 @@ pub const ACTION_APP_KILL: u16 = 0x0002;
 
 /// Standard Microkernel Resource Handle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct ResourceHandle {
     pub domain: u8,
     pub instance: u8,

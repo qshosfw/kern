@@ -85,21 +85,21 @@ impl WireStatus {
     }
 }
 
-/// Parsed Wire Record Header (15 bytes, little-endian)
+/// Parsed Wire Record Header (16 bytes, power-of-two geometry, naturally aligned)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct WireHeader {
+    pub session_id: u32,
+    pub sequence: u32,
+    pub payload_len: u16,
     pub ident: u8,
     pub major: u8,
     pub flags: u8,
     pub service: u8,
     pub opcode: u8,
-    pub session_id: u32,
-    pub sequence: u32,
-    pub payload_len: u16,
 }
 
-const _: () = assert!(core::mem::size_of::<WireHeader>() == HEADER_LEN);
+const _: () = assert!(core::mem::size_of::<WireHeader>() == 16);
 
 impl WireHeader {
     #[inline(always)]

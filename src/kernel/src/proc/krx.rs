@@ -299,7 +299,7 @@ impl KrxLaunchError {
 
 /// KRX Preamble (20 bytes, little-endian, non-ASCII format identifier)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct KrxPreamble {
     pub ident: [u8; 4],
     pub app_type: u8,
@@ -373,7 +373,7 @@ pub const SECTION_LEAF_MAP: u16 = 0x000A;
 
 /// Standard 4-byte Section Header prefix
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct SectionHeader {
     pub id: u16,
     pub length: u16, // Covers header + body, 4-aligned
@@ -504,7 +504,7 @@ impl SectionIdentity {
 
 /// Execution Manifest Section (0x0002, 28 bytes normative)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct SectionExecution {
     pub min_stack_bytes: u16,
     pub min_heap_bytes: u16,
@@ -604,7 +604,7 @@ impl CapBinding {
 
 /// Hardware Claim Descriptor for Drivers (4 bytes, Section 5.3 normative)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct HwClaim {
     pub kind: u8, // 0: PIN, 1: IRQ, 2: DMA_CH, 3: BUS
     pub id: u8,
@@ -614,7 +614,7 @@ pub struct HwClaim {
 
 /// Type & Lifecycle Section (0x0009, 12 bytes base header)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct SectionType {
     pub exec_type: u8, // 1: APP, 2: SERVICE, 3: DAEMON, 4: DRIVER, 5: MOD
     pub flags: u8,     // b0 STARTUP, b1 PERSISTENT, b2 RESTART_ON_FAIL, b3 SINGLETON
@@ -798,7 +798,7 @@ impl KrxPreamble {
 
 /// Paged Block Directory Entry (0x0005, 8 bytes)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct BlockEntry {
     pub block_id: u8,
     pub flags: u8,
@@ -808,7 +808,7 @@ pub struct BlockEntry {
 
 /// Service Export Descriptor (0x0006 / ORDS-01 16-byte power-of-two geometry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct ServiceExport {
     pub interface_id: u16,
     pub abi_version: u16,
@@ -860,7 +860,7 @@ pub const FLAG_LEAF_PREFETCH: u8 = 1 << 2;
 
 /// P0 Structured Paged Leaf Overlay Descriptor (0x000A / ORDS-01 16-byte power-of-two geometry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct LeafEntry {
     pub leaf_id: u8,
     pub flags: u8,
@@ -1018,7 +1018,7 @@ impl LeafContinuation {
 
 /// Invocation context passed into a P0 Structured Leaf Overlay (16 bytes, power-of-two geometry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct LeafContext {
     pub leaf_id: u8,
     pub flags: u8,
@@ -1045,7 +1045,7 @@ impl LeafContext {
 
 /// Asset Descriptor (0x0004, 20 bytes)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct AssetDescriptor {
     pub kind: u8,
     pub id: u8,
@@ -1075,7 +1075,7 @@ pub struct RuleRecord {
 
 /// Declare Action Record (8 bytes)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct ActionRecord {
     pub op: u8,
     pub flags: u8,
@@ -1096,7 +1096,7 @@ pub struct ScheduleRecord {
 
 /// Declare UI Projection Node (8 bytes)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct DeclareNode {
     pub node_id: u16,
     pub layout: u8,
@@ -1107,7 +1107,7 @@ pub struct DeclareNode {
 
 /// Declare UI Item Record (12 bytes)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct DeclareItem {
     pub kind: u8,
     pub flags: u8,
@@ -1163,7 +1163,7 @@ pub const SWAP_FLAG_COMPRESSED_RLE: u16 = 0x0001;
 
 /// Fixed 16-byte power-of-two Swap Header for state hibernation (KRX-ABI 2.5.0 / ORDS-01)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct KrxSwapHeader {
     pub ident: [u8; 4],
     pub app_id: u16,
