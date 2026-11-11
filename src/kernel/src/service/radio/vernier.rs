@@ -60,7 +60,10 @@ pub fn solve_vernier(carrier_hz: u32, delta_dhz: i16) -> VernierResult {
     let alpha_mhz = compute_vernier_alpha(carrier_hz);
     if alpha_mhz == 0 {
         // Fallback to integer 10-Hz PLL steps if carrier is too low
-        let pc = (delta_f_mhz + PLL_STEP_MHZ / 2) / PLL_STEP_MHZ;
+        let neg = delta_f_mhz < 0;
+        let abs_f = if neg { (-delta_f_mhz) as u32 } else { delta_f_mhz as u32 };
+        let pc_u = (abs_f + (PLL_STEP_MHZ as u32 / 2)) / (PLL_STEP_MHZ as u32);
+        let pc = if neg { -(pc_u as i32) } else { pc_u as i32 };
         return VernierResult {
             xtal_trim_offset: 0,
             pll_comp_10hz: pc as i16,
@@ -77,10 +80,11 @@ pub fn solve_vernier(carrier_hz: u32, delta_dhz: i16) -> VernierResult {
 
     for xt in 0..=MAX_XTAL_TRIM {
         let xtal_effect = (xt as i32) * (alpha_mhz as i32);
-        let pc = (xtal_effect - target_mhz + (PLL_STEP_MHZ / 2)) / PLL_STEP_MHZ;
-        if pc < 0 {
+        let numer = xtal_effect - target_mhz + (PLL_STEP_MHZ / 2);
+        if numer < 0 {
             continue;
         }
+        let pc = (numer as u32 / (PLL_STEP_MHZ as u32)) as i32;
 
         let actual = xtal_effect - pc * PLL_STEP_MHZ;
         let err = (actual - target_mhz).abs();

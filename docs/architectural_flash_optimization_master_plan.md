@@ -2,7 +2,7 @@
 **Target Architecture:** ARM Cortex-M0+ (PY32F071xB) @ 48 MHz  
 **Flash Ceiling:** 120,832 bytes (118.0 KB) | **Long-Term Target:** ≤ 80 KB (< 65% utilization)  
 **Status:** Living Engineering Blueprint for Multi-Agent Execution  
-**Revision:** 1.0.0 (Post-Batch 3 Baseline: 118,968 B Flash, 1,864 B free)
+**Revision:** 1.2.0 (Post-Batch 4 Baseline: 118,528 B Flash, 2,304 B free, 0 warnings)
 
 ---
 
@@ -38,10 +38,19 @@ Crucially, this consumption is **not caused by feature count**. Rather, deep sta
 
 All refactorings must adhere to the physical characteristics of the Cortex-M0+ core:
 1. **Strict Zero Dynamic Heap Allocation:** Every buffer is bounded with `heapless` or allocated from the 6 KB transient arena (`TRANSIENT_ARENA`).
-2. **No Hardware Integer Divider:** Cortex-M0+ lacks `sdiv`/`udiv`. Division operations (`/` and `%`) lower to `__aeabi_uidiv` or `__aeabi_idivmod`. Never divide by runtime variables in hot paths; use power-of-two bit-shifts (`>> N`) or pre-scaled fixed-point multipliers.
+2. **No Hardware Integer Divider (Signed Division Elimination):** Cortex-M0+ silicon lacks `sdiv`/`udiv`. Division operations (`/` and `%`) lower to `__aeabi_uidiv` or `__aeabi_idivmod`. By systematically eliminating all signed division (`/`) call sites across `menu.rs`, `adc.rs`, `calib.rs`, `vernier.rs`, and replacing `api_math_idivmod` with branchless sign-masking around `__aeabi_uidivmod`, the linker `--gc-sections` completely discards `__aeabi_idiv`, `__aeabi_idivmod`, and `compiler_builtins::int::sdiv::__divsi3` from the binary.
 3. **Register Pressure Management (`r0`–`r7`):** ARMv6-M only supports 16-bit Thumb instructions for registers `r0`–`r7`. Instructions referencing `r8`–`r12` require 32-bit encodings or extra `mov` instructions. Functions with >6 active local variables generate severe stack spilling.
 4. **Linker Builtin Guard:** Never allow slice assignments on disjoint slices of the same array to lower to `compiler_builtins::mem::memmove` (704 B penalty). Use explicit index loops.
 5. **No Cosmetic Type Aliases:** When refactoring, rename cleanly at definition and call sites. Never add `pub type OldName = NewName;` compatibility shims.
+6. **The Inlining Myth vs. Reality on Cortex-M0+:**
+   - *Rule 1*: Marking single-call-site private functions as `#[inline(never)]` ALWAYS increases binary size due to function prologue/epilogue (`push {r4..r7, lr}`, `pop {r4..r7, pc}`) and argument register setup.
+   - *Rule 2*: `#[inline(never)]` ONLY saves space if the function is called from **two or more call sites** where the body size exceeds the call sequence overhead.
+7. **Static Slice Indexing vs Dynamic Stream Cursors on ARMv6-M:**
+   - Constant-range slice copies on small arrays (`out[0..2].copy_from_slice(&val.to_le_bytes())`) lower directly to 1-cycle `strh`/`str` instructions with zero branch checks.
+   - Dynamic cursors (e.g. `WireBuf` with per-byte bounds check and length tracking) add runtime bounds checks, counter arithmetic, and register pressure on ARMv6-M (+392 bytes penalty). Retain direct slice writes for fixed-stride wire and table protocols.
+8. **Fat Pointer Tuple Return Penalty on ARMv6-M:**
+   - Returning multi-element fat pointer tuples (e.g. `(&'static str, &'static [SettingDef])` = 16 bytes, 4 words `r0`..`r3`) forces register spilling and massive match table branches (loading 4 words per arm).
+   - Functions must be decomposed by single responsibility (`page_title` returning `&str` and `page_defs` returning `&[SettingDef]`), allowing the compiler to optimize each branch table into compact 1-word or 2-word returns.
 
 ---
 
@@ -77,118 +86,45 @@ All refactorings must adhere to the physical characteristics of the Cortex-M0+ c
 
 ---
 
-### Phase 2: Settings Schema Compaction & String Packing
+### Phase 2: Settings Schema Compaction & Decomposed Page Lookups
 **Location:** `src/firmware/src/apps/settings/`  
-**Current Footprint:** 7,795 bytes | **Target:** ~4,200 bytes | **Savings:** ~3,600 bytes
+**Current Footprint:** 7,460 bytes | **Target:** ~4,200 bytes | **Savings:** ~3,200 bytes
 
-#### Architectural Flaw
-`Settings` currently defines 24 separate `&[&'static str]` static arrays for menu choices:
-```rust
-// Current anti-pattern (costs 8 bytes per option + 8 bytes slice metadata):
-pub static SHADING_OPTIONS: &[&str] = &["Outline", "Dither", "Solid"];
-pub static PTT_MODE_OPTIONS: &[&str] = &["Momentary", "Toggle"];
-pub static ANIMATION_OPTIONS: &[&str] = &["Off", "Standard", "Snappy"];
-```
-This generates over 2,000 bytes of `.rodata` relocation entries and pointer tables!
+#### Completed Refactoring (Batch 4)
+- **Eliminated `PAGE_METAS` Array:** Deleted the 304-byte static array of 16-byte structs (`PageMeta { title: &str, defs: &[SettingDef] }`).
+- **Decomposed Lookups:** Replaced the fat tuple return `get_page() -> (&str, &[SettingDef])` (which forced 4-word return register spilling and 360B of match branch loads) with two independent single-responsibility functions:
+  ```rust
+  pub fn page_title(page: PageId) -> &'static str { ... }
+  pub fn page_defs(page: PageId) -> &'static [SettingDef] { ... }
+  ```
+  This immediately reduced binary size by **108 bytes Flash** (328 bytes text reduction), with `page_title` compiling to only 28 bytes and `page_defs` to 48 bytes.
 
-#### Implementation Directives
+#### Remaining Implementation Directives
 1. **Packed Null-Delimited Option Strings (`\0` Encoding):**
-   - Pack option lists into single compact string literals:
-     ```rust
-     // New pattern: exactly N bytes + null terminators. ZERO pointer tables!
-     pub static SHADING_OPTS: &str = "Outline\0Dither\0Solid\0";
-     pub static PTT_OPTS: &str = "Momentary\0Toggle\0";
-     ```
-   - Provide an $O(1)$ zero-alloc index lookup helper:
-     ```rust
-     pub fn get_packed_option(packed: &str, mut index: usize) -> &str {
-         let bytes = packed.as_bytes();
-         let mut start = 0;
-         for (i, &b) in bytes.iter().enumerate() {
-             if b == 0 {
-                 if index == 0 {
-                     return unsafe { core::str::from_utf8_unchecked(&bytes[start..i]) };
-                 }
-                 index -= 1;
-                 start = i + 1;
-             }
-         }
-         ""
-     }
-     ```
-2. **Compact `PAGE_METAS` & Submenu Indices:**
-   - Replace the 304-byte `PAGE_METAS` table with a clean `match page_id` function that returns slice references dynamically.
+   - Pack remaining multi-element option lists into single compact string literals (`pub static SHADING_OPTS: &str = "Outline\0Dither\0Solid\0";`).
+   - Use `SheetOptions::Packed(str)` to avoid slice-of-pointers relocation tables.
 
 ---
 
-### Phase 3: Unified KRX Package Inspection & Section Reader
+### Phase 3: Unified KRX Package Inspection & Section Reader [COMPLETED]
 **Location:** `src/kernel/src/proc/krx.rs`, `src/firmware/src/runtime/loader.rs`, `src/firmware/src/apps/launcher/catalog.rs`  
-**Current Footprint:** ~4,300 bytes combined | **Target:** ~2,500 bytes | **Savings:** ~1,800 bytes
-
-#### Architectural Flaw
-`PackageCatalog::inspect_package` and `loader::launch_krx_package` independently implement:
-- Preamble signature check
-- Header length sanity checks
-- Section header iteration loop
-- `SECTION_IDENTITY` parsing (name string extraction, icon ID)
-- `SECTION_TYPE_LIFECYCLE` parsing (execution type, capability bitmask)
-
-#### Implementation Directives
-1. **Core Microkernel Inspector Struct:**
-   In `kernel::proc::krx`, define a zero-alloc `KrxSummary` struct:
-   ```rust
-   pub struct KrxSummary<'a> {
-       pub title: &'a str,
-       pub icon_id: u16,
-       pub exec_type: KrxExecType,
-       pub app_class: KrxClass,
-       pub caps: CapabilitySet,
-       pub min_ram: u16,
-       pub min_stack: u16,
-   }
-   ```
-2. **Single-Pass Parser:**
-   ```rust
-   impl KrxPreamble {
-       pub fn summarize<'a>(hdr_bytes: &'a [u8]) -> Result<KrxSummary<'a>, KrxLaunchError>;
-   }
-   ```
-3. Refactor both `catalog.rs` and `loader.rs` to call `KrxPreamble::summarize()`.
+**Status:** Completed via `KrxPreamble::summarize()`. Both `catalog.rs` and `loader.rs` now share the single-pass microkernel parser, avoiding duplicated section iteration loops.
 
 ---
 
-### Phase 4: RigWire Facet Dispatch Flattening & Response Builder
+### Phase 4: RigWire Facet Dispatch Flattening & Zero-Copy Payloads
 **Location:** `src/firmware/src/services/wire.rs`  
-**Current Footprint:** 4,974 bytes | **Target:** ~3,200 bytes | **Savings:** ~1,770 bytes
+**Current Footprint:** 4,974 bytes | **Target:** ~3,500 bytes | **Savings:** ~1,400 bytes
 
-#### Architectural Flaw
-In `services/wire.rs`, every facet handler manually constructs response byte buffers, repeatedly performing:
-```rust
-resp[0..2].copy_from_slice(&val.to_le_bytes());
-resp[2..4].copy_from_slice(&val2.to_le_bytes());
-send_resp(hw, header, WireStatus::Ok, &resp[..len]);
-```
-This pattern repeats over 25 times across `read_sys_facet`, `read_radio_facet`, `read_ui_facet`, `on_transfer_*`, and `on_handle_*`.
+#### Architectural Flaw & Invariant Insight
+Initial experiments with a dynamic stream cursor (`WireBuf` with write pointers and per-byte bounds checks) **increased binary size by +392 bytes** on ARMv6-M due to pointer tracking and branch checks. On Cortex-M0+, constant-range slice copies (`out[0..2].copy_from_slice(&val.to_le_bytes())`) lower directly to 1-cycle `strh`/`str` instructions with zero overhead.
 
 #### Implementation Directives
-1. **Compact `WireResponseBuilder`:**
-   Implement a minimal 16-byte response writer cursor that chains integers into an out-slice without branch overhead:
-   ```rust
-   pub struct WireBuf<'a> {
-       buf: &'a mut [u8],
-       len: usize,
-   }
-   impl<'a> WireBuf<'a> {
-       #[inline(always)]
-       pub fn put_u8(&mut self, val: u8) { ... }
-       #[inline(always)]
-       pub fn put_u16_le(&mut self, val: u16) { ... }
-       #[inline(always)]
-       pub fn put_u32_le(&mut self, val: u32) { ... }
-   }
-   ```
-2. **Zero-Copy Payload Borrowing:**
-   Eliminate the 128-byte stack copy `let mut payload_buf = [0u8; 128];` in `dispatch_wire_record`. Borrow the payload directly from the transport driver.
+1. **Zero-Copy Payload Borrowing:**
+   - In `dispatch_wire_record`, eliminate the redundant 128-byte stack buffer `let mut payload_buf = [0u8; 128];`.
+   - Borrow payload slices directly from the transport driver buffer `hw.wire.current_payload(header)` to eliminate stack copying and reduce register exhaustion in `dispatch_wire_record`.
+2. **Consolidate Response Status Dispatch:**
+   - Factor common status code return envelopes (`send_status(hw, header, status)`) into an `#[inline(never)]` common tail to eliminate duplicate framing sequences.
 
 ---
 
@@ -197,13 +133,58 @@ This pattern repeats over 25 times across `read_sys_facet`, `read_radio_facet`, 
 **Current Footprint:** ~3,700 bytes | **Target:** ~2,300 bytes | **Savings:** ~1,400 bytes
 
 #### Architectural Flaw
-`ModalCompositor` has separate procedural rendering branches for Confirm dialogs, Popups, Text Prompts, and Toasts. Each manually calculates box bounds, clears background dither patterns, draws outline rects, and centers button text.
+`ModalCompositor` (`render_overlay` at 1,492 B and `handle_event` at 1,316 B) inlines full rendering loops for popups, text inputs, sheets, and toasts.
 
 #### Implementation Directives
 1. **Unified Modal Chrome TVF (Template View Function):**
-   Extract a single standard function `draw_modal_chrome(canvas, w, h, title, msg)` that renders the centered window, clear box, outline, and title banner.
+   - Extract a single standard function `draw_modal_chrome(canvas, w, h, title, msg)` that renders the centered window, clear box, outline, and title banner.
 2. **Shared Button Capsule Row:**
-   Unify `[ OK ]` and `[ CANCEL ]` rendering between `compositor.rs` and `widgets/dialog.rs`.
+   - Unify `[ OK ]` and `[ CANCEL ]` rendering between `compositor.rs`, `widgets/dialog.rs`, and `api_ui_draw_capsule_button`.
+
+---
+
+### Phase 6: RadioCoordinator De-monomorphization
+**Location:** `src/firmware/src/services/radio/coordinator.rs`  
+**Current Footprint:** 3,420 bytes (`tick_10ms` alone is 1,876 bytes) | **Target:** ~2,100 bytes | **Savings:** ~1,300 bytes
+
+#### Architectural Flaw
+`RadioCoordinator` defines generic methods `<R: RadioService>` for `tick_10ms`, `select_vfo`, `start_tx`, `stop_tx`, `request_ptt_start`, and `request_ptt_stop`. On the UV-K1/UV-K5 architecture, the radio driver is always `drivers::bk4829::Bk4829`. Monomorphizing these complex state machines over a generic trait type parameter adds code bloat and prevents the compiler from optimizing cross-service inlining effectively.
+
+#### Implementation Directives
+1. **Static Dispatch Against Concrete Driver Facets:**
+   - In `firmware::services::radio::coordinator`, instantiate coordination methods directly against `&mut Bk4829` or use static dispatch through the BSP.
+   - Separate large sub-tick state machines (`tick_tx`, `tick_arbitrator`, `tick_rx`) into modular, non-generic helper functions.
+
+---
+
+### Phase 7: Boot Splash & System Recovery De-duplication
+**Location:** `src/firmware/src/boot/orchestration.rs`, `src/firmware/src/boot/recovery.rs`  
+**Current Footprint:** 7,203 bytes (`run_boot_splash` 1,616 B, `draw_recovery_screen` 984 B) | **Target:** ~4,200 bytes | **Savings:** ~3,000 bytes
+
+#### Architectural Flaw
+`run_boot_splash` duplicates frame interpolation math, canvas blitting, and key polling. `draw_recovery_screen` manually formats hex lines, stack markers, and boxes using independent procedural code.
+
+#### Implementation Directives
+1. **Consolidated Boot Dialog Renderer:**
+   - Share the box, banner, and key-prompt renderer (`render_dialog`) across boot stages, recovery, and format prompts.
+2. **Compact Splash Key Polling:**
+   - Factor splash animation ticking and key break detection into a unified, tight event poll.
+
+---
+
+### Phase 8: OpenApps / KRX Overlay Runtime Unification (from Falcon / F4HWN)
+**Location:** `src/firmware/src/runtime/native_runner.rs`, `src/kernel/src/proc/krx.rs`  
+**Current Footprint:** ~18,000 bytes combined | **Target:** ~12,000 bytes | **Savings:** ~6,000 bytes
+
+#### Inspiration from Falcon & F4HWN Architecture
+Analysis of Falcon (`inspo/Falcon-firmware-UV-K1-K5v3/`) and F4HWN reveals how community firmwares run dozens of full-featured apps (APRS, CW Keyer, SSTV, AIS, Spectrum) within 118 KB Flash:
+1. **Transient Arena as Overlay RAM:**
+   - All external applications run inside the 4 KiB sector cache / transient arena (`TRANSIENT_ARENA`).
+   - The resident firmware only maintains the kernel, the hardware drivers, and the compositor.
+2. **Zero-Copy ABI Table:**
+   - Resident services are exposed via clean static function tables (`KrxApiTable` / `app_api_t`), eliminating dynamic dispatch overhead in userland.
+3. **De-duplicate Relocation Routines:**
+   - Consolidate delta relocation application in `native_runner::apply_package_relocs` to standard pointer-offset arithmetic, ensuring P0 leaf overlays and resident apps share identical execution trampolines.
 
 ---
 

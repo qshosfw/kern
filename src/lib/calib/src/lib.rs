@@ -133,27 +133,39 @@ pub fn calculate_tx_power(
     upper: u32,
     freq: u32,
 ) -> u8 {
-    let (l, m, h) = (txp_low as i32, txp_mid as i32, txp_high as i32);
-    let (f, fl, fm, fu) = (freq as i32, lower as i32, middle as i32, upper as i32);
-
-    if f <= fl {
+    if freq <= lower {
         return txp_low;
     }
-    if f >= fu {
+    if freq >= upper {
         return txp_high;
     }
-    if f <= fm {
-        if fm == fl {
+    if freq <= middle {
+        if middle == lower {
             return txp_mid;
         }
-        let delta = ((m - l) * (f - fl)) / (fm - fl);
-        return (l + delta).clamp(0, 255) as u8;
+        let f_span = middle - lower;
+        let f_off = freq - lower;
+        if txp_mid >= txp_low {
+            let delta = ((txp_mid - txp_low) as u32 * f_off) / f_span;
+            (txp_low as u32 + delta).min(255) as u8
+        } else {
+            let delta = ((txp_low - txp_mid) as u32 * f_off) / f_span;
+            txp_low.saturating_sub(delta as u8)
+        }
+    } else {
+        if upper == middle {
+            return txp_high;
+        }
+        let f_span = upper - middle;
+        let f_off = freq - middle;
+        if txp_high >= txp_mid {
+            let delta = ((txp_high - txp_mid) as u32 * f_off) / f_span;
+            (txp_mid as u32 + delta).min(255) as u8
+        } else {
+            let delta = ((txp_mid - txp_high) as u32 * f_off) / f_span;
+            txp_mid.saturating_sub(delta as u8)
+        }
     }
-    if fu == fm {
-        return txp_high;
-    }
-    let delta = ((h - m) * (f - fm)) / (fu - fm);
-    (m + delta).clamp(0, 255) as u8
 }
 
 /// Piecewise linear interpolation across the 6 factory battery voltage points.

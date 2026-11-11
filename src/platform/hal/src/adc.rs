@@ -162,8 +162,13 @@ impl Adc {
             } else {
                 // Two-point linear interpolation between 30°C (300 dC) and 105°C (1050 dC):
                 // delta_T = 1050 - 300 = 750 deci-Celsius
-                300 + (((ts_data_norm as i32 - cal1 as i32) * 750) / (cal2 as i32 - cal1 as i32))
-                    as i16
+                let cal_span = (cal2 - cal1) as u32;
+                let c1 = cal1 as u32;
+                if ts_data_norm >= c1 {
+                    300 + (((ts_data_norm - c1) * 750) / cal_span) as i16
+                } else {
+                    300 - (((c1 - ts_data_norm) * 750) / cal_span) as i16
+                }
             };
 
             // Clamp to physical silicon operating bounds (-40.0°C to +125.0°C)

@@ -786,8 +786,9 @@ impl<'a> View<MenuModel<'a>> for MenuView {
         // 2. Exact 13px Row List Menu with Smooth Kinetic Windowing
         let visible_count = 4;
         let scroll_y = self.scroller.current();
-        let start_idx = (scroll_y / 13).max(0) as usize;
-        let end_idx = (((scroll_y + 52 + 12) / 13) as usize).min(total_items);
+        let sy = scroll_y.max(0) as u32;
+        let start_idx = ((sy * 5042) >> 16) as usize;
+        let end_idx = ((((sy + 64) * 5042) >> 16) as usize).min(total_items);
 
         for idx in start_idx..end_idx {
             let row_y = 8 + (idx as i16 * 13) - scroll_y;

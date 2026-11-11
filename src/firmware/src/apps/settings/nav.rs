@@ -1,7 +1,7 @@
 //! Navigation Stack & Menu State Synchronization for OS Settings
 
 use super::app::SettingsApp;
-use super::options::{apply_page_changes, get_page, populate_defs};
+use super::options::{apply_page_changes, page_defs, page_title, populate_defs};
 use super::page::{MenuFrame, PageId, SettingField, SettingKind};
 use crate::SysContext;
 use gfx::gui::modules::menu::MenuItemType;
@@ -35,7 +35,7 @@ impl SettingsApp {
             return;
         }
 
-        let (_, defs) = get_page(self.current_page);
+        let defs = page_defs(self.current_page);
         populate_defs(&mut self.items, defs, ctx);
         self.items_len = defs.len().min(self.items.len());
     }
@@ -51,7 +51,7 @@ impl SettingsApp {
         }
         self.current_page = page;
         self.selected_idx = 0;
-        self.title = get_page(page).0;
+        self.title = page_title(page);
         self.populate_current_menu(ctx);
         self.view.reset_scroll();
         if ctx.config.display.animations_enabled() {
@@ -69,7 +69,7 @@ impl SettingsApp {
             let frame = self.stack[self.stack_top];
             self.current_page = frame.page;
             self.selected_idx = frame.selected_idx as usize;
-            self.title = get_page(frame.page).0;
+            self.title = page_title(frame.page);
             self.populate_current_menu(ctx);
             if self.selected_idx >= self.items_len {
                 self.selected_idx = self.items_len.saturating_sub(1);
@@ -105,7 +105,7 @@ impl SettingsApp {
             return;
         }
 
-        let (_, defs) = get_page(self.current_page);
+        let defs = page_defs(self.current_page);
         let idx = self.selected_idx;
         if idx < self.items_len && idx < defs.len() {
             let def = &defs[idx];
@@ -137,7 +137,7 @@ impl SettingsApp {
                 super::security::update_security_option(ctx, sel_idx, sel);
                 return;
             }
-            let (_, defs) = get_page(self.current_page);
+            let defs = page_defs(self.current_page);
             if let Some(def) = defs.get(sel_idx) {
                 if def.field == SettingField::KEY_BEEP {
                     ctx.play_beep(crate::services::melody::BeepType::from_u8(sel as u8));

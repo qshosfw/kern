@@ -418,7 +418,18 @@ pub unsafe extern "C" fn api_math_crc16(data: *const u8, len: u16) -> u16 {
 }
 
 pub unsafe extern "C" fn api_math_idivmod(n: i32, d: i32) -> u64 {
-    let (q, r) = if d == 0 { (0, n) } else { (n / d, n % d) };
+    if d == 0 {
+        return (n as u32 as u64) << 32;
+    }
+    let m_n = n >> 31;
+    let un = ((n ^ m_n) - m_n) as u32;
+    let m_d = d >> 31;
+    let ud = ((d ^ m_d) - m_d) as u32;
+    let uq = (un / ud) as i32;
+    let ur = (un % ud) as i32;
+    let m_q = m_n ^ m_d;
+    let q = (uq ^ m_q) - m_q;
+    let r = (ur ^ m_n) - m_n;
     ((r as u32 as u64) << 32) | (q as u32 as u64)
 }
 

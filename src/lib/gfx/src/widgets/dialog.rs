@@ -14,8 +14,8 @@ pub fn draw_modal_box(canvas: &mut Canvas, w: u8, h: u8) -> (u8, u8) {
         (MODAL_BOX_X, MODAL_BOX_Y)
     } else {
         (
-            canvas.width().saturating_sub(w) / 2,
-            canvas.height().saturating_sub(h) / 2,
+            canvas.width().saturating_sub(w) >> 1,
+            canvas.height().saturating_sub(h) >> 1,
         )
     };
     canvas.fill_rect(x, y, w, h, Color::Clear);
@@ -34,7 +34,7 @@ pub fn draw_modal_progress(canvas: &mut Canvas, title: &str, subtitle: &str, pro
     let w = MODAL_BOX_W;
     let h = MODAL_BOX_H;
     let (bx, by) = draw_modal_box(canvas, w, h);
-    let center_x = (bx as i16) + (w as i16 / 2);
+    let center_x = (bx as i16) + ((w as i16) >> 1);
 
     let has_title = !title.is_empty() && !text::ascii_eq_ignore_case(title, "passcode");
 
@@ -71,7 +71,7 @@ pub fn draw_modal_progress(canvas: &mut Canvas, title: &str, subtitle: &str, pro
     }
 
     let bar_w = 96u8;
-    let bar_x = center_x - (bar_w as i16) / 2;
+    let bar_x = center_x - ((bar_w as i16) >> 1);
     let bar_y = (by + 20) as i16;
     let bar_h = 6u8;
 
@@ -316,10 +316,10 @@ pub fn draw_modal_popup_materialize(
         return;
     }
     let p = progress.min(16);
-    let bw = (MODAL_BOX_W as u16 * p as u16 / 16) as u8;
-    let bh = (MODAL_BOX_H as u16 * p as u16 / 16) as u8;
-    let bx = (128 - bw) / 2;
-    let by = (64 - bh) / 2;
+    let bw = ((MODAL_BOX_W as u16 * p as u16) >> 4) as u8;
+    let bh = ((MODAL_BOX_H as u16 * p as u16) >> 4) as u8;
+    let bx = (128 - bw) >> 1;
+    let by = (64 - bh) >> 1;
 
     canvas.fill_rect(bx, by, bw, bh, Color::Clear);
     canvas.draw_rect(bx, by, bw, bh, Color::Fill);

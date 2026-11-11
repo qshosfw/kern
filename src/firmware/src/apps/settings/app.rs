@@ -11,7 +11,7 @@ use kernel::app::{App, AppMetadata, EventResult, ModalResult, StatusBarConfig};
 use kernel::event::{Event, KeyCode, KeyState};
 
 use super::dialog;
-use super::options::get_page;
+use super::options::page_defs;
 use super::page::{MenuFrame, PageId, SettingKind};
 
 pub struct SettingsApp {
@@ -123,7 +123,7 @@ impl SettingsApp {
             return;
         }
 
-        let (_, defs) = get_page(self.current_page);
+        let defs = page_defs(self.current_page);
         if let Some(def) = defs.get(sel_idx) {
             match def.kind() {
                 SettingKind::Submenu(target_page) => {

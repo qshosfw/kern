@@ -159,103 +159,58 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct PageMeta {
-    pub title: &'static str,
-    pub defs: &'static [SettingDef],
+#[inline(never)]
+pub fn page_title(page: PageId) -> &'static str {
+    match page {
+        PageId::Root => "Settings",
+        PageId::Display => "Display",
+        PageId::Audio => "Audio",
+        PageId::Buttons => "Buttons",
+        PageId::Battery => "Battery",
+        PageId::Device => "Device",
+        PageId::Security => "Security",
+        PageId::System => "System",
+        PageId::ButtonsTweaks => "Tweaks",
+        PageId::ButtonsShortcuts => "Shortcuts",
+        PageId::BatteryInfo => "Battery Info",
+        PageId::BatteryTweaks => "Battery Tweaks",
+        PageId::SystemStorage => "Storage",
+        PageId::Apps => "Apps",
+        PageId::BootSplash => "Boot Splash",
+        #[cfg(feature = "settings_calib")]
+        PageId::SystemCalibration => "Calibration",
+        #[cfg(feature = "settings_debug")]
+        PageId::SystemDebug => "Debug",
+        PageId::ManageApps => "Installed",
+        PageId::AppDetail => "App Info",
+        PageId::ManageServices => "Services",
+        PageId::ServiceDetail => "Service Info",
+    }
 }
 
-pub static PAGE_METAS: [PageMeta; PageId::COUNT] = [
-    PageMeta {
-        title: "Settings",
-        defs: ROOT_DEFS,
-    },
-    PageMeta {
-        title: "Display",
-        defs: super::display::DISPLAY_DEFS,
-    },
-    PageMeta {
-        title: "Audio",
-        defs: &super::audio::AUDIO_DEFS,
-    },
-    PageMeta {
-        title: "Buttons",
-        defs: &super::buttons::BUTTONS_ROOT,
-    },
-    PageMeta {
-        title: "Battery",
-        defs: &super::battery::BATTERY_ROOT,
-    },
-    PageMeta {
-        title: "Device",
-        defs: &super::device::DEVICE_ROOT,
-    },
-    PageMeta {
-        title: "Security",
-        defs: &[],
-    },
-    PageMeta {
-        title: "System",
-        defs: super::system::SYSTEM_ROOT,
-    },
-    PageMeta {
-        title: "Tweaks",
-        defs: &super::buttons::BUTTONS_TWEAKS,
-    },
-    PageMeta {
-        title: "Shortcuts",
-        defs: &super::buttons::BUTTONS_SHORTCUTS,
-    },
-    PageMeta {
-        title: "Battery Info",
-        defs: &super::battery::BATTERY_INFO,
-    },
-    PageMeta {
-        title: "Battery Tweaks",
-        defs: &super::battery::BATTERY_TWEAKS,
-    },
-    PageMeta {
-        title: "Storage",
-        defs: &super::system::SYSTEM_STORAGE,
-    },
-    PageMeta {
-        title: "Apps",
-        defs: super::apps::APPS_DEFS,
-    },
-    PageMeta {
-        title: "Boot Splash",
-        defs: super::device::SPLASH_PAGE_DEFS,
-    },
-    #[cfg(feature = "settings_calib")]
-    PageMeta {
-        title: "Calibration",
-        defs: &super::system::SYSTEM_CALIBRATION,
-    },
-    #[cfg(feature = "settings_debug")]
-    PageMeta {
-        title: "Debug",
-        defs: &super::system::SYSTEM_DEBUG,
-    },
-    PageMeta {
-        title: "Installed",
-        defs: &[],
-    },
-    PageMeta {
-        title: "App Info",
-        defs: &[],
-    },
-    PageMeta {
-        title: "Services",
-        defs: &[],
-    },
-    PageMeta {
-        title: "Service Info",
-        defs: &[],
-    },
-];
-
-#[inline(always)]
-pub fn get_page(page: PageId) -> (&'static str, &'static [SettingDef]) {
-    let m = &PAGE_METAS[page as usize];
-    (m.title, m.defs)
+#[inline(never)]
+pub fn page_defs(page: PageId) -> &'static [SettingDef] {
+    match page {
+        PageId::Root => ROOT_DEFS,
+        PageId::Display => super::display::DISPLAY_DEFS,
+        PageId::Audio => &super::audio::AUDIO_DEFS,
+        PageId::Buttons => &super::buttons::BUTTONS_ROOT,
+        PageId::Battery => &super::battery::BATTERY_ROOT,
+        PageId::Device => &super::device::DEVICE_ROOT,
+        PageId::System => super::system::SYSTEM_ROOT,
+        PageId::ButtonsTweaks => &super::buttons::BUTTONS_TWEAKS,
+        PageId::ButtonsShortcuts => &super::buttons::BUTTONS_SHORTCUTS,
+        PageId::BatteryInfo => &super::battery::BATTERY_INFO,
+        PageId::BatteryTweaks => &super::battery::BATTERY_TWEAKS,
+        PageId::SystemStorage => &super::system::SYSTEM_STORAGE,
+        PageId::Apps => super::apps::APPS_DEFS,
+        PageId::BootSplash => super::device::SPLASH_PAGE_DEFS,
+        #[cfg(feature = "settings_calib")]
+        PageId::SystemCalibration => &super::system::SYSTEM_CALIBRATION,
+        #[cfg(feature = "settings_debug")]
+        PageId::SystemDebug => &super::system::SYSTEM_DEBUG,
+        _ => &[],
+    }
 }
+
+
