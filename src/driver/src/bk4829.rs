@@ -428,11 +428,11 @@ impl<'a, State> Bk4829<'a, State> {
         self.set_gpio_pin(1, true); // PA enable (Pin 29)
         self.set_gpio_pin(0, false); // RX disable (Pin 28)
         py32_hal::delay::delay_ms(1);
-        self.set_rf_power_bias(bias / 4);
+        self.set_rf_power_bias(bias >> 2);
         py32_hal::delay::delay_ms(1);
-        self.set_rf_power_bias(bias / 2);
+        self.set_rf_power_bias(bias >> 1);
         py32_hal::delay::delay_ms(1);
-        self.set_rf_power_bias((bias as u16 * 3 / 4) as u8);
+        self.set_rf_power_bias(((bias as u16 * 3) >> 2) as u8);
         py32_hal::delay::delay_ms(1);
         self.set_rf_power_bias(bias);
         py32_hal::delay::delay_ms(1);
@@ -1675,7 +1675,8 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
             (self.baseline_xtal_trim as i32 + res.xtal_trim_offset as i32).clamp(-300, 300) as i16;
         self.set_crystal_trim(final_trim);
 
-        let nominal_10hz = (carrier_hz / 10) as i32;
+        let (nominal_10hz_u32, _) = utils::div10_u32(carrier_hz);
+        let nominal_10hz = nominal_10hz_u32 as i32;
         let adjusted_10hz = nominal_10hz + res.pll_comp_10hz as i32;
         let low = (adjusted_10hz & 0xFFFF) as u16;
         let high = ((adjusted_10hz >> 16) & 0xFFFF) as u16;

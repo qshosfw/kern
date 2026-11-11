@@ -71,7 +71,7 @@ impl<'a> Py25q16FlashDriver<'a> {
         if sector_addr as usize >= FLASH_TOTAL_SIZE {
             return Err(());
         }
-        let addr = sector_addr - (sector_addr % FLASH_SECTOR_SIZE as u32);
+        let addr = sector_addr & !(FLASH_SECTOR_SIZE as u32 - 1);
         self.wait_while_busy();
         self.write_enable();
 
@@ -126,7 +126,7 @@ impl<'a> kernfs::BlockDevice for Py25q16FlashDriver<'a> {
         let mut pos = 0usize;
         let mut addr = offset;
         while pos < data.len() {
-            let page_remaining = FLASH_PAGE_SIZE - (addr % FLASH_PAGE_SIZE);
+            let page_remaining = FLASH_PAGE_SIZE - (addr & (FLASH_PAGE_SIZE - 1));
             let chunk_len = (data.len() - pos).min(page_remaining);
             self.program_page(addr as u32, &data[pos..pos + chunk_len])
                 .map_err(|_| kernfs::FsError::IoError)?;

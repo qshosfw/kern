@@ -42,21 +42,19 @@ pub enum CssTailMode {
 
 /// Compute the 23-bit TIA-603 Golay (23,12) codeword for an octal DCS code (e.g., `23` for D023N).
 ///
-/// Uses the standard DCS generator polynomial `g(x) = 0xC75` in 12 shift-XOR steps
-/// with zero lookup tables.
+/// Uses fast reciprocal multiplication for digit extraction and the standard
+/// DCS generator polynomial `g(x) = 0xC75` in 12 shift-XOR steps with zero lookup tables.
 pub const fn dcs_octal_to_golay23(octal_code: u16) -> u32 {
-    let code_9bit = if octal_code > 0 && {
-        let d0 = octal_code % 10;
-        let d1 = (octal_code / 10) % 10;
-        let d2 = (octal_code / 100) % 10;
-        d0 < 8 && d1 < 8 && d2 < 8 && octal_code <= 777
-    } {
-        let d0 = octal_code % 10;
-        let d1 = (octal_code / 10) % 10;
-        let d2 = (octal_code / 100) % 10;
-        (d2 << 6) | (d1 << 3) | d0
+    // Fast reciprocal division: ((x * 0xCCCD) >> 19) exact for all x <= 65,535
+    let q1 = ((octal_code as u32 * 0xCCCD) >> 19) as u16;
+    let d0 = (octal_code - q1 * 10) as u8;
+    let d2 = ((q1 as u32 * 0xCCCD) >> 19) as u16;
+    let d1 = (q1 - d2 * 10) as u8;
+
+    let code_9bit = if octal_code > 0 && d0 < 8 && d1 < 8 && d2 < 8 && octal_code <= 777 {
+        ((d2 as u32) << 6) | ((d1 as u32) << 3) | (d0 as u32)
     } else {
-        octal_code & 0x01FF
+        (octal_code & 0x01FF) as u32
     };
 
     let info12 = (0b100u32 << 9) | (code_9bit as u32);

@@ -285,11 +285,11 @@ impl CalibrationBlock {
     pub fn raw_rssi_to_dbm(&self, freq_hz: u32, raw: u16) -> i16 {
         let th = self.get_rssi_thresholds(freq_hz);
         if th[0] == 0 || th[3] == 0 || th[3] <= th[0] {
-            return -160 + (raw as i16 / 2);
+            return (raw >> 1) as i16 - 160;
         }
         if raw <= th[0] {
             let diff = th[0].saturating_sub(raw);
-            -123 - (diff as i16 / 2)
+            -123 - (diff >> 1) as i16
         } else if raw <= th[1] {
             let span = (th[1] - th[0]) as i32;
             let offset = (raw - th[0]) as i32;
@@ -304,7 +304,7 @@ impl CalibrationBlock {
             -83 + ((offset * 10) / span) as i16
         } else {
             let diff = raw.saturating_sub(th[3]);
-            (-73 + (diff as i16 / 2)).min(-10)
+            (-73 + (diff >> 1) as i16).min(-10)
         }
     }
 

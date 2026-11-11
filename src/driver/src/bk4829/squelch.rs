@@ -48,5 +48,5 @@ pub fn squelch_level_to_thresholds(level: u8) -> SquelchThresholds {
 /// Convert raw register 0x67 RSSI count into calibrated dBm.
 #[inline(always)]
 pub fn raw_rssi_to_dbm(raw: u16) -> i16 {
-    -160 + (raw as i16 / 2)
+    (raw >> 1) as i16 - 160
 }

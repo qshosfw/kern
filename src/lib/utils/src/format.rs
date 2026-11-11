@@ -23,8 +23,9 @@ pub fn format_u32(mut val: u32, out: &mut [u8]) -> &str {
     let mut pos = 10;
     while val > 0 && pos > 0 {
         pos -= 1;
-        buf[pos] = b'0' + (val % 10) as u8;
-        val /= 10;
+        let (q, r) = crate::math::div10_u32(val);
+        buf[pos] = b'0' + r;
+        val = q;
     }
 
     let digits = &buf[pos..];
@@ -83,16 +84,18 @@ pub fn format_int_fixed<'a>(
         } else {
             while uval > 0 && dpos > 0 {
                 dpos -= 1;
-                digits[dpos] = b'0' + (uval % 10) as u8;
-                uval /= 10;
+                let (q, r) = crate::math::div10_u32(uval);
+                digits[dpos] = b'0' + r;
+                uval = q;
             }
         }
     } else {
         let mut d_count = 0;
         loop {
             dpos -= 1;
-            digits[dpos] = b'0' + (uval % 10) as u8;
-            uval /= 10;
+            let (q, r) = crate::math::div10_u32(uval);
+            digits[dpos] = b'0' + r;
+            uval = q;
             d_count += 1;
 
             if d_count == decimals {
@@ -159,9 +162,9 @@ pub fn format_mac_address<'a>(_mac: &[u8; 6], out: &'a mut [u8; 17]) -> &'a str 
 
 #[inline(never)]
 fn put_2digit(out: &mut [u8; 8], off: usize, val: u8) {
-    let d = val / 10;
-    out[off] = b'0' + d;
-    out[off + 1] = b'0' + (val - d * 10);
+    let (d, r) = crate::math::div10_u16(val as u16);
+    out[off] = b'0' + d as u8;
+    out[off + 1] = b'0' + r;
 }
 
 /// Format uptime seconds into "HH:MM:SS" (hours clamped at 99).

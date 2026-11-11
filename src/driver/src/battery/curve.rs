@@ -85,7 +85,8 @@ pub fn mv_to_percentage(mv: u16, bat_type: BatteryType) -> u8 {
     if bat_type == BatteryType::TypeExternal {
         return 100;
     }
-    let v_10mv = mv / 10;
+    // Fast reciprocal division: ((x * 0xCCCD) >> 19) exact for all x <= 65,535
+    let v_10mv = ((mv as u32 * 0xCCCD) >> 19) as u16;
     let curve = VOLTAGE_CURVES[bat_type as usize];
 
     if v_10mv >= curve[0].0 {
