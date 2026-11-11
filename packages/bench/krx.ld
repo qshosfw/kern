@@ -6,5 +6,6 @@ SECTIONS {
         *(.text*)
         *(.rodata*)
         *(.data*)
+        *(.bss*)
     }
 }

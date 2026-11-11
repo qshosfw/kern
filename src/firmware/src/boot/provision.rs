@@ -20,7 +20,7 @@ use kernel::proc::krx::{
     SECTION_TYPE_LIFECYCLE,
 };
 
-pub const PROV_BUF_CAP: usize = 2048;
+pub const PROV_BUF_CAP: usize = 4096;
 
 // Declare 3.0 payload for `/apps/sysinfo.krx` (1 node, 5 live ITEM_INFO rows, 0 actions, 6 labels)
 #[cfg(all(feature = "provision_apps", feature = "krx_declare"))]

@@ -2,6 +2,7 @@ use crate::text;
 use crate::{Canvas, Color, GfxFont};
 
 /// Draw S-Meter widget (S1..S9 + 10dB..60dB)
+#[inline(never)]
 pub fn draw_s_meter(
     canvas: &mut Canvas,
     x: i16,
@@ -18,16 +19,17 @@ pub fn draw_s_meter(
         (((rssi_dbm + 121) as u16 * 12) / 68) as u8
     };
 
+    let ty = y + 5;
     if steps <= 9 {
-        text::draw_str(canvas, x, y, "S", font, Color::Fill);
-        text::draw_char(canvas, x + 6, y, (b'0' + steps) as char, font, Color::Fill);
+        text::draw_str(canvas, x, ty, "S", font, Color::Fill);
+        text::draw_char(canvas, x + 6, ty, (b'0' + steps) as char, font, Color::Fill);
     } else {
         let s = match steps {
             10 => "S9+10",
             11 => "S9+20",
             _ => "S9+30",
         };
-        text::draw_str(canvas, x, y, s, font, Color::Fill);
+        text::draw_str(canvas, x, ty, s, font, Color::Fill);
     }
 
     let bar_x_start = x + 34;

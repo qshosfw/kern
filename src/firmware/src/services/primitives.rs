@@ -11,7 +11,7 @@ use kernel::service::radio::{RfAudioPath, RfChannel, RfModulation, RfSquelch, Rf
 use kernel::service::{DisplayService, PowerService};
 
 // ── 1. Display Primitive ────────────────────────────────────────────────────
-#[inline(always)]
+#[inline(never)]
 pub fn color_from_u8(color: u8) -> gfx::Color {
     match color {
         0 => gfx::Color::Clear,
@@ -24,8 +24,16 @@ pub fn color_from_u8(color: u8) -> gfx::Color {
     }
 }
 
+#[inline(never)]
+pub fn font_from_u8(font_id: u8) -> &'static gfx::GfxFont {
+    match font_id {
+        1 => &gfx::fonts::mumatrix_regular::FONT,
+        _ => &gfx::fonts::tomthumb::FONT,
+    }
+}
+
 impl<'a, 'hw> SysContext<'a, 'hw> {
-    #[inline(always)]
+    #[inline(never)]
     fn active_canvas(&mut self) -> &mut gfx::Canvas {
         unsafe {
             if !crate::runtime::syscall::ACTIVE_CANVAS.is_null() {
@@ -94,11 +102,8 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
 
     fn draw_str(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8) {
         let col = color_from_u8(color);
-        let canvas = self.active_canvas();
-        match font_id {
-            1 => gfx::text::draw_str(canvas, x, y, text, &gfx::fonts::mumatrix_regular::FONT, col),
-            _ => gfx::text::draw_str(canvas, x, y, text, &gfx::fonts::tomthumb::FONT, col),
-        }
+        let font = font_from_u8(font_id);
+        gfx::text::draw_str(self.active_canvas(), x, y, text, font, col);
     }
 
     fn set_inverted(&mut self, inverted: bool) {
@@ -115,10 +120,7 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
 
     fn draw_str_max(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8, max_w: i16) {
         let col = color_from_u8(color);
-        let font = match font_id {
-            1 => &gfx::fonts::mumatrix_regular::FONT,
-            _ => &gfx::fonts::tomthumb::FONT,
-        };
+        let font = font_from_u8(font_id);
         gfx::text::draw_str_max_x(
             self.active_canvas(),
             x,
@@ -132,10 +134,7 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
 
     fn draw_str_align(&mut self, x: i16, y: i16, text: &str, font_id: u8, color: u8, align: u8) {
         let col = color_from_u8(color);
-        let font = match font_id {
-            1 => &gfx::fonts::mumatrix_regular::FONT,
-            _ => &gfx::fonts::tomthumb::FONT,
-        };
+        let font = font_from_u8(font_id);
         let al = match align {
             1 => gfx::text::Align::Center,
             2 => gfx::text::Align::Right,
@@ -522,8 +521,8 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
     }
 
     fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
-        let mut buf = [0u8; 512];
-        let existing_len = self.storage.read_file(path, &mut buf).unwrap_or(0);
+        let buf = crate::data::arena::staging_buf();
+        let existing_len = self.storage.read_file(path, buf).unwrap_or(0);
         if existing_len + data.len() > buf.len() {
             return Err(());
         }
@@ -573,7 +572,7 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
         dir_path: &str,
         out_entries: &mut [kernel::proc::abi::KrxDirEntry],
     ) -> Result<usize, ()> {
-        let mut temp_entries: [kernel::service::DirEntryInfo; 16] = Default::default();
+        let mut temp_entries = [const { kernel::service::DirEntryInfo::empty() }; 8];
         let max_fetch = out_entries.len().min(temp_entries.len());
         let count = self
             .storage

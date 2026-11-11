@@ -252,15 +252,20 @@ class KrxPackageBuilder:
         exec_body = bytearray()
         exec_body.extend(struct.pack("<H", self.min_stack))
         exec_body.extend(struct.pack("<H", self.min_heap))
-        exec_body.extend(struct.pack("<H", self.page_size))
-        exec_body.append(self.cache_blocks)
+        page_sz = self.page_size if self.app_class == CLASS_PAGED else 0
+        cache_blks = self.cache_blocks if self.app_class == CLASS_PAGED else 0
+        exec_body.extend(struct.pack("<H", page_sz))
+        exec_body.append(cache_blks)
         exec_body.append(0)  # dma_burst_size
         exec_body.extend(struct.pack("<I", self.entry_point))
         payload_size = self.resident_payload_size if self.resident_payload_size > 0 else len(self.payload)
         exec_body.extend(struct.pack("<I", payload_size))
         exec_body.extend(struct.pack("<H", self.reloc_offset))
         exec_body.extend(struct.pack("<H", self.reloc_count))
-        exec_body.extend(struct.pack("<H", self.got_offset))
+        got_off = self.got_offset
+        if got_off == 0 and self.app_class in (CLASS_NATIVE, CLASS_PAGED):
+            got_off = (payload_size + 3) & ~3
+        exec_body.extend(struct.pack("<H", got_off))
         exec_body.extend(struct.pack("<H", 0))  # rt_pin_mask
         exec_body.extend(struct.pack("<H", 0))  # max_fault_latency_us
         exec_body.append(self.profile)          # reserved[0] = explicit profile
@@ -270,12 +275,12 @@ class KrxPackageBuilder:
 
         # 3. Type & Lifecycle Section (12 bytes body)
         type_body = bytearray()
-        type_body.append(0)  # App
-        type_body.append(0)  # isolation: Ring3
+        type_body.append(1)  # KrxExecType::App = 1
+        type_body.append(0)  # flags
         type_body.append(1)  # stack_cost
-        type_body.append(0)  # reserved
+        type_body.append(0)  # restart_budget
+        type_body.extend(b"\x00" * 4)  # depends_count, provides_count, hw_claim_count, restart_policy
         type_body.extend(struct.pack("<I", self.caps))
-        type_body.extend(struct.pack("<I", 0))  # reserved2
         assert len(type_body) == 12
         sections.append((SEC_TYPE_LIFECYCLE, type_body))
 
@@ -384,6 +389,7 @@ def main():
     parser.add_argument("--min-heap", type=int, default=0, help="Minimum heap bytes (0 for no_std)")
     parser.add_argument("--page-size", type=lambda x: int(x, 0), default=1024, help="Page/block size")
     parser.add_argument("--cache-blocks", type=int, default=2, help="Number of cache blocks")
+    parser.add_argument("--caps", type=lambda x: int(x, 0), default=None, help="Capability bitmask (hex or decimal)")
     parser.add_argument("--leaf", action="append", default=[], help="Add leaf overlay: <id>:<path>")
     parser.add_argument("--block", action="append", default=[], help="Add demand block: <id>:<path>")
 
@@ -409,6 +415,9 @@ def main():
         page_size=args.page_size,
         cache_blocks=args.cache_blocks,
     )
+
+    if args.caps is not None:
+        builder.caps = args.caps
 
     if args.payload and os.path.exists(args.payload):
         with open(args.payload, "rb") as f:

@@ -1,7 +1,7 @@
 //! Display Subsystem System Call Handlers (`CapDisplayVTable`, `interface_id = 0x0001`).
 
 use super::{active_canvas_opt, active_ctx_opt, parse_str};
-use crate::services::primitives::color_from_u8;
+use crate::services::primitives::{color_from_u8, font_from_u8};
 use kernel::proc::abi::CapDisplayVTable;
 use kernel::proc::primitives::DisplayPrimitive;
 
@@ -183,11 +183,7 @@ pub unsafe extern "C" fn api_invert_rect(x: i16, y: i16, w: i16, h: i16) {
 
 pub unsafe extern "C" fn api_str_width(text: *const u8, len: u16, font: u8) -> i16 {
     if let Some(s) = unsafe { parse_str(text, len as usize) } {
-        let f = match font {
-            1 => &gfx::fonts::mumatrix_regular::FONT,
-            _ => &gfx::fonts::tomthumb::FONT,
-        };
-        gfx::text::str_width(s, f)
+        gfx::text::str_width(s, font_from_u8(font))
     } else {
         0
     }
@@ -195,12 +191,8 @@ pub unsafe extern "C" fn api_str_width(text: *const u8, len: u16, font: u8) -> i
 
 pub unsafe extern "C" fn api_draw_char(x: i16, y: i16, ch: u8, font: u8, color: u8) -> i16 {
     let col = color_from_u8(color);
-    let f = match font {
-        1 => &gfx::fonts::mumatrix_regular::FONT,
-        _ => &gfx::fonts::tomthumb::FONT,
-    };
     if let Some(canvas) = active_canvas_opt() {
-        gfx::text::draw_char(canvas, x, y, ch as char, f, col)
+        gfx::text::draw_char(canvas, x, y, ch as char, font_from_u8(font), col)
     } else {
         4
     }

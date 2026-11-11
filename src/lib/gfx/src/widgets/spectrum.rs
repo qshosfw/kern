@@ -12,6 +12,7 @@ fn draw_bitmap_columns(canvas: &mut Canvas, x: i16, y: i16, cols: &[u8], color: 
     }
 }
 
+#[inline(never)]
 pub fn draw_big_digit(canvas: &mut Canvas, x: i16, y: i16, digit: u8, color: Color) {
     if digit <= 10 {
         let data = &crate::fonts::deltafw::FONT_BIG_DIGITS[digit as usize];
@@ -20,6 +21,7 @@ pub fn draw_big_digit(canvas: &mut Canvas, x: i16, y: i16, digit: u8, color: Col
     }
 }
 
+#[inline(never)]
 pub fn draw_small_digit(canvas: &mut Canvas, x: i16, y: i16, digit: u8, color: Color) {
     if digit <= 10 {
         let data = &crate::fonts::deltafw::FONT_SMALL_DIGITS[digit as usize];

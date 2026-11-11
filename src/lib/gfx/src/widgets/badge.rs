@@ -99,6 +99,7 @@ fn render_badge_box(
 }
 
 /// Draw a capsule tag badge with specific size tier
+#[inline(never)]
 pub fn draw_tag_badge_sized(
     canvas: &mut Canvas,
     x: i16,
@@ -153,6 +154,7 @@ pub fn draw_tag_badge_with_icon(
 }
 
 /// Draw a capsule action button with standard 1px corner cuts and centered label
+#[inline(never)]
 pub fn draw_capsule_button(
     canvas: &mut Canvas,
     x: i16,

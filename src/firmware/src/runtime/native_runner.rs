@@ -753,7 +753,7 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
             None
         };
         let title = if (sb.flags & kernel::proc::abi::KRX_STATUS_CUSTOM_TITLE) != 0 {
-            c_str_to_str(&sb.title)
+            Some(c_str_to_str(&sb.title).unwrap_or(""))
         } else {
             Some(slot.app_name.as_str())
         };

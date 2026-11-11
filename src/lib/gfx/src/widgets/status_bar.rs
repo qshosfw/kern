@@ -30,6 +30,7 @@ pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
 pub const SIGNAL_WIDTH: u8 = 12;
 
 /// Draw DeltaFW-style antenna and signal bar widget (12x5 pixels).
+#[inline(never)]
 pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color) -> u8 {
     if x < 0 || x + (SIGNAL_WIDTH as i16) > 128 || y < 0 {
         return SIGNAL_WIDTH;

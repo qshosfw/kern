@@ -167,6 +167,33 @@ pub unsafe extern "C" fn api_ui_draw_s_meter(x: i16, y: i16, rssi_dbm: i16, peak
     }
 }
 
+#[inline(never)]
+fn draw_pill(x: i16, y: i16, w: u8, h: u8, s: &str, filled: bool, tx: i16) {
+    if let Some(canvas) = super::active_canvas_opt() {
+        let xu = x.max(0) as u8;
+        let yu = y.max(0) as u8;
+        let tc = if filled {
+            canvas.fill_rect(xu, yu, w, h, gfx::Color::Fill);
+            gfx::Color::Clear
+        } else {
+            canvas.fill_rect(xu, yu, w, h, gfx::Color::Clear);
+            canvas.draw_rect(xu, yu, w, h, gfx::Color::Fill);
+            gfx::Color::Fill
+        };
+        if h >= 9 {
+            canvas.clear_corners(xu, yu, w, h);
+        }
+        gfx::text::draw_str(
+            canvas,
+            tx,
+            y + (h as i16 >> 1) + 2,
+            s,
+            &gfx::fonts::tomthumb::FONT,
+            tc,
+        );
+    }
+}
+
 pub unsafe extern "C" fn api_ui_draw_tag_badge(
     x: i16,
     y: i16,
@@ -175,16 +202,8 @@ pub unsafe extern "C" fn api_ui_draw_tag_badge(
     style: u8,
 ) {
     if let Some(s) = unsafe { super::parse_str(text, len as usize) } {
-        if let Some(canvas) = super::active_canvas_opt() {
-            let bstyle = match style {
-                0 => gfx::widgets::badge::BadgeStyle::Empty,
-                1 => gfx::widgets::badge::BadgeStyle::Filled,
-                2 => gfx::widgets::badge::BadgeStyle::Dimmed,
-                3 => gfx::widgets::badge::BadgeStyle::Disabled,
-                d => gfx::widgets::badge::BadgeStyle::Dither(d.saturating_sub(4)),
-            };
-            gfx::widgets::badge::draw_tag_badge(canvas, x, y, s, bstyle);
-        }
+        let w = (gfx::text::str_width(s, &gfx::fonts::tomthumb::FONT) as u8).saturating_add(6);
+        draw_pill(x, y, w, 9, s, style == 1, x + 3);
     }
 }
 
@@ -212,15 +231,9 @@ pub unsafe extern "C" fn api_ui_draw_capsule_button(
     l_len: u8,
     selected: u8,
 ) {
-    let l_s = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
-    if let Some(canvas) = super::active_canvas_opt() {
-        let bstyle = if selected != 0 {
-            gfx::widgets::badge::BadgeStyle::Filled
-        } else {
-            gfx::widgets::badge::BadgeStyle::Empty
-        };
-        gfx::widgets::badge::draw_capsule_button(canvas, x, y, w, h, l_s, bstyle);
-    }
+    let s = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
+    let tw = gfx::text::str_width(s, &gfx::fonts::tomthumb::FONT);
+    draw_pill(x, y, w, h, s, selected != 0, x + ((w as i16 - tw) >> 1));
 }
 
 pub unsafe extern "C" fn api_ui_draw_scrollbar(
@@ -253,43 +266,40 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
     selected: u8,
     icon_id: u8,
 ) {
+    let is_sel = selected != 0;
+    let ry = y.max(0) as u8;
+    let tc = if is_sel {
+        gfx::Color::Clear
+    } else {
+        gfx::Color::Fill
+    };
     if let Some(canvas) = super::active_canvas_opt() {
-        let is_sel = selected != 0;
-        let ry = y.max(0) as u8;
-        let mut tc = gfx::Color::Fill;
         if is_sel {
-            canvas.fill_rect(0, ry, 124, 11, gfx::Color::Fill);
-            canvas.clear_corners(0, ry, 124, 11);
-            tc = gfx::Color::Clear;
+            canvas.fill_rect(2, ry, 120, 10, gfx::Color::Fill);
+            canvas.clear_corners(2, ry, 120, 10);
         }
-
-        let mut text_x = 4i16;
-        if icon_id != 0 {
-            if let Some(bits) = super::display::system_icon_8(icon_id) {
-                gfx::icons::draw_icon_8(canvas, 3, y + 2, bits, tc);
-                text_x = 15;
-            } else if let Some(icon) = kernel::canvas::Icon::from_u8(icon_id) {
-                gfx::icons::draw_icon(canvas, 3, y + 2, icon, tc);
-                text_x = 15;
-            }
+    }
+    let mut text_x = 5i16;
+    if icon_id != 0 {
+        unsafe {
+            super::display::api_draw_icon(4, y + 1, icon_id, if is_sel { 0 } else { 1 });
         }
-
+        text_x = 15;
+    }
+    if let Some(canvas) = super::active_canvas_opt() {
         if let Some(t) = unsafe { super::parse_str(title, t_len as usize) } {
             gfx::text::draw_str(
                 canvas,
                 text_x,
-                y + 8,
+                y + 7,
                 t,
                 &gfx::fonts::mumatrix_regular::FONT,
                 tc,
             );
         }
-
         if let Some(v) = unsafe { super::parse_str(value, v_len as usize) } {
             let vw = gfx::text::str_width(v, &gfx::fonts::tomthumb::FONT);
-            gfx::text::draw_str(canvas, 120 - vw, y + 8, v, &gfx::fonts::tomthumb::FONT, tc);
-        } else if is_sel {
-            gfx::icons::draw_icon_8(canvas, 116, y + 2, &gfx::icons::ARROW_RIGHT, tc);
+            gfx::text::draw_str(canvas, 119 - vw, y + 7, v, &gfx::fonts::tomthumb::FONT, tc);
         }
     }
 }
@@ -327,7 +337,7 @@ pub unsafe extern "C" fn api_ui_draw_battery(x: i16, y: i16, pct: u8, charging: 
                 gfx::Color::Fill,
             );
         } else {
-            let fill_w = ((pct.min(100) as u16 * 11) / 100) as u8;
+            let fill_w = ((pct.min(100) as u16 * 28) >> 8) as u8;
             if fill_w > 0 {
                 canvas.fill_rect(ux + 1, uy + 1, fill_w, 4, gfx::Color::Fill);
             }
@@ -386,5 +396,17 @@ pub static UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_set_status_bar: api_ui_set_status_bar,
     ui_get_status_bar: api_ui_get_status_bar,
     ui_set_tray_icon: api_ui_set_tray_icon,
-    ..kernel::proc::abi::STUB_UI_VTABLE
+    ui_draw_progress_bar: api_ui_draw_progress_bar,
+    ui_draw_s_meter: api_ui_draw_s_meter,
+    ui_draw_tag_badge: api_ui_draw_tag_badge,
+    ui_draw_key_badge: api_ui_draw_key_badge,
+    ui_draw_capsule_button: api_ui_draw_capsule_button,
+    ui_draw_scrollbar: api_ui_draw_scrollbar,
+    ui_draw_menu_item: api_ui_draw_menu_item,
+    ui_draw_big_digit: api_ui_draw_big_digit,
+    ui_draw_small_digit: api_ui_draw_small_digit,
+    ui_draw_battery: api_ui_draw_battery,
+    ui_draw_signal: api_ui_draw_signal,
+    ui_draw_modal_box: api_ui_draw_modal_box,
+    ui_show_confirm_labels: api_ui_show_confirm_labels,
 };

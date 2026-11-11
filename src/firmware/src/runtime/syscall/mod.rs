@@ -54,7 +54,7 @@ pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn active_canvas_opt() -> Option<&'static mut Canvas> {
     let ptr = unsafe { ACTIVE_CANVAS };
     if !ptr.is_null() {
