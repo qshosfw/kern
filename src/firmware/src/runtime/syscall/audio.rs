@@ -1,7 +1,7 @@
-//! Audio Subsystem System Call Handlers (`CapAudioVTable`, `interface_id = 0x0003`).
+//! Audio Subsystem System Call Handlers (`AudioApi`, `interface_id = 0x0003`).
 
 use super::active_ctx_opt;
-use kernel::proc::abi::CapAudioVTable;
+use kernel::proc::abi::AudioApi;
 use kernel::proc::primitives::*;
 
 pub unsafe extern "C" fn api_audio_play_tone(freq_hz: u16, duration_ms: u16) {
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn api_audio_is_capturing() -> u8 {
     crate::audio_capture_mut().is_capturing() as u8
 }
 
-pub static AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {
+pub static AUDIO_VTABLE: AudioApi = AudioApi {
     audio_play_tone: api_audio_play_tone,
     audio_play_beep: api_audio_play_beep,
     audio_set_path: api_audio_set_path,

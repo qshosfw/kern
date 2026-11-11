@@ -1,11 +1,11 @@
-//! UI & OS Compositor System Call Handlers (`CapUiVTable`, `interface_id = 0x0009`).
+//! UI & OS Compositor System Call Handlers (`UiApi`, `interface_id = 0x0009`).
 //!
 //! Provides native executables with direct, declarative access to the microkernel
 //! compositor spaces: dialogs, confirmations, text/passcode inputs, toasts, animations,
 //! and native UI widgets.
 
 use super::str_or_default;
-use kernel::proc::abi::CapUiVTable;
+use kernel::proc::abi::UiApi;
 
 #[inline(always)]
 fn modal_mut() -> &'static mut crate::orchestrator::compositor::ModalCompositor {
@@ -383,7 +383,7 @@ pub unsafe extern "C" fn api_ui_show_confirm_labels(
     show_modal_confirm(tag, title, t_len, "Confirm", msg, m_len, c_str, cl_str);
 }
 
-pub static UI_VTABLE: CapUiVTable = CapUiVTable {
+pub static UI_VTABLE: UiApi = UiApi {
     ui_close_modal: api_ui_close_modal,
     ui_has_modal: api_ui_has_modal,
     ui_show_popup: api_ui_show_popup,

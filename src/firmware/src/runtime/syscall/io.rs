@@ -1,12 +1,12 @@
 //! I/O & Hardware Peripheral System Call Handlers.
 //!
-//! Exposes Keypad (`CapKeypadVTable`), Power/PMU (`CapPowerVTable`),
-//! Serial CDC (`CapSerialVTable`), Hardware Timers/RTC (`CapTimerVTable`),
-//! and Raw Hardware Buses (`CapHwBusVTable`).
+//! Exposes Keypad (`KeypadApi`), Power/PMU (`PowerApi`),
+//! Serial CDC (`SerialApi`), Hardware Timers/RTC (`TimerApi`),
+//! and Raw Hardware Buses (`HwBusApi`).
 
 use super::active_ctx_opt;
 use kernel::proc::abi::{
-    CapHwBusVTable, CapKeypadVTable, CapPowerVTable, CapSerialVTable, CapTimerVTable,
+    HwBusApi, KeypadApi, PowerApi, SerialApi, TimerApi,
 };
 use kernel::proc::primitives::*;
 
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn api_sys_is_keypad_locked() -> u8 {
     }
 }
 
-pub static KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
+pub static KEYPAD_VTABLE: KeypadApi = KeypadApi {
     sys_poll_key: api_sys_poll_key,
     sys_nav_dir: api_sys_nav_dir,
     sys_key_matrix: api_sys_key_matrix,
@@ -165,7 +165,7 @@ pub unsafe extern "C" fn api_sys_cpu_freq_hz() -> u32 {
     py32_hal::rcc::sysclk_hz()
 }
 
-pub static POWER_VTABLE: CapPowerVTable = CapPowerVTable {
+pub static POWER_VTABLE: PowerApi = PowerApi {
     sys_battery_mv: api_sys_battery_mv,
     sys_battery_pct: api_sys_battery_pct,
     sys_battery_ma: api_sys_battery_ma,
@@ -223,7 +223,7 @@ pub unsafe extern "C" fn api_serial_flush() {
     py32_hal::uart::wait_tx_complete();
 }
 
-pub static SERIAL_VTABLE: CapSerialVTable = CapSerialVTable {
+pub static SERIAL_VTABLE: SerialApi = SerialApi {
     serial_write: api_serial_write,
     serial_read: api_serial_read,
     serial_is_connected: api_serial_is_connected,
@@ -258,7 +258,7 @@ pub unsafe extern "C" fn api_sys_rtc_get(out_time: *mut u8) -> u8 {
     }
 }
 
-pub static TIMER_VTABLE: CapTimerVTable = CapTimerVTable {
+pub static TIMER_VTABLE: TimerApi = TimerApi {
     sys_ticks_ms: api_sys_ticks_ms,
     sys_uptime_secs: api_sys_uptime_secs,
     sys_delay_ms: api_sys_delay_ms,
@@ -369,7 +369,7 @@ pub unsafe extern "C" fn api_hw_flash_read(addr: u32, buf: *mut u8, len: u16) ->
     }
 }
 
-pub static HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {
+pub static HW_BUS_VTABLE: HwBusApi = HwBusApi {
     hw_i2c_transfer: api_hw_i2c_transfer,
     hw_spi_transfer: api_hw_spi_transfer,
     hw_gpio_set: api_hw_gpio_set,

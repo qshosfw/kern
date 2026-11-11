@@ -281,18 +281,30 @@ Exporting 180+ fine-grained C functions (`api_draw_pixel`, `api_draw_line`, `api
 
 ### 4.2 KRX Structured System ABI (v3.1) Specification
 
-To achieve optimal Flash efficiency while guaranteeing silicon-level safety, Kern establishes the **KRX Structured System ABI (v3.1)**:
+To achieve optimal Flash efficiency while guaranteeing silicon-level safety, Kern establishes the **KRX Structured System ABI (v3.1)**. The subsystems align 1:1 with the 13 canonical microkernel primitives:
 
 ```rust
 #[repr(C)]
 pub struct KrxSysTable {
     pub abi_version: u32,             // KRX_ABI_VERSION_3_1 (0x0003_0100)
+    pub table_size: u16,              // sizeof(KrxSysTable) = 64 bytes (2^6)
+    pub _reserved: u16,               // Alignment pad
     pub granted_caps: u32,            // Bitwise capability token mask
-    pub gfx: *const GfxApi,           // Display & Canvas Primitives
-    pub radio: *const RadioApi,       // High-Level RF Modem, Tuning & Squelch
-    pub fs: *const FsApi,             // Filesystem & Storage Operations
-    pub audio: *const AudioApi,       // Tone Generation, AF Gain & Melodies
-    pub sys: *const SystemApi,        // Timers, Keypad, Power & IPC
+
+    // 13 Granular Subsystem APIs (1:1 Microkernel Primitive Mapping)
+    pub display: *const DisplayApi,   // 0x0001: 2D Graphics, Canvas & Framebuffer
+    pub radio: *const RadioApi,       // 0x0002: RF Modem, Tuning, RSSI & Sweep
+    pub audio: *const AudioApi,       // 0x0003: Tone Generation & Mic Sampling
+    pub storage: *const StorageApi,   // 0x0004: Filesystem, Assets & Configs
+    pub keypad: *const KeypadApi,     // 0x0005: Matrix Scanner, PTT & Side Keys
+    pub power: *const PowerApi,       // 0x0006: PMU, Battery ADC & Backlight
+    pub serial: *const SerialApi,     // 0x0007: USB CDC & UART Communication
+    pub timer: *const TimerApi,       // 0x0008: Hardware Timers, RTC & Delays
+    pub ui: *const UiApi,             // 0x0009: Modal Dialogs, Toast & Status Bar
+    pub math: *const MathApi,         // 0x000A: Hardware CRC32, CRC16 & Fixed-Point
+    pub fm: *const FmApi,             // 0x000B: Broadcast FM Tuner (Si4732 / RDA5807)
+    pub service: *const ServiceApi,   // 0x000C: Dynamic Linker, IPC & Process Ledger
+    pub hw_bus: *const HwBusApi,      // 0x000D: Low-Level I2C/SPI Bus & GPIO
 }
 ```
 
@@ -305,21 +317,22 @@ When a KRX app starts, the microkernel invokes its entry point with standard ARM
 
 In ARMv6-M machine code, calling a host service through the system table requires only **two CPU instructions** (2 cycles):
 ```asm
-ldr r3, [r1, #GFX_API_OFFSET]     ; Load GfxApi table pointer (1 cycle)
-ldr r3, [r3, #DRAW_TEXT_OFFSET]    ; Load function pointer (1 cycle)
+ldr r3, [r1, #DISPLAY_API_OFFSET]  ; Load DisplayApi table pointer (1 cycle)
+ldr r3, [r3, #DRAW_STR_OFFSET]     ; Load function pointer (1 cycle)
 blx r3                             ; Branch with link (2 cycles)
 ```
 **Architectural Rationale for Cortex-M0+:**
 - **Zero Syscall Trap Penalty:** Unlike traditional OS kernels that use the `SVC` (Supervisor Call) software interrupt, which incurs a 45-cycle penalty on ARMv6-M (16-cycle exception entry, 8-word hardware stack push, handler decode, and 15-cycle exception return), direct table linkage executes in **2 to 4 cycles** with zero context switch overhead.
 - **Strict Stack Safety:** Before invoking guest code, the microkernel performs a stack margin check (`stack_margin_bytes() >= 96`). If an app is within 96 bytes of stack exhaustion, the call is rejected with `0xFFFF_FFFF` rather than hardfaulting the CPU.
+- **Thumb-1 124-Byte Immediate Offset Invariant:** On ARMv6-M, `ldr rX, [r1, #imm]` encodes an unsigned 5-bit offset scaled by 4, granting a direct reach of $31 \times 4 = 124$ bytes. Because `KrxSysTable` is exactly 64 bytes ($2^6$), every subsystem pointer sits at offset $\le 60$ bytes. Every subsystem is reachable in a single 16-bit opcode with zero register reloading or synthetic address generation.
 
 #### Principle 2: High-Level Trait Contracts (Hardware Safety by Design)
 The `RadioApi` table exposes **strictly high-level contracts**:
-- `set_frequency(vfo, freq_hz)`
-- `set_modulation(vfo, profile)`
-- `request_tx(vfo, enable)`
-- `get_rssi(vfo) -> i16`
-- `get_squelch_status(vfo) -> bool`
+- `rf_tune(freq_hz, bw, step_hz)`
+- `rf_set_modulation(mod_type)`
+- `rf_set_tx(active)`
+- `rf_get_rssi() -> i16`
+- `rf_is_carrier() -> u8`
 
 Userland code **never** touches silicon registers. If an application lacks `Cap::RadioTx`, the microkernel's internal arbitrator rejects `request_tx` with `Err(CapError::PermissionDenied)`. Transmission timeouts (TOT), PA thermal throttling, and frequency band limits are enforced by the microkernel's resident state machine, preventing hardware damage.
 

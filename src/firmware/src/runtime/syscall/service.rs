@@ -1,11 +1,11 @@
 //! Service Broker, IPC Channel, and System Management System Call Handlers.
 //!
-//! Provides dynamic service registration and resolution (`CapServiceVTable`),
+//! Provides dynamic service registration and resolution (`ServiceApi`),
 //! process discovery, bounded non-blocking IPC channels, shadow stack paged calls,
-//! and hardware-accelerated math routines (`CapMathVTable`).
+//! and hardware-accelerated math routines (`MathApi`).
 
 use kernel::ipc::{IpcChannel, KrxIpcMessage, ipc_msg_type, ipc_target};
-use kernel::proc::abi::{CapMathVTable, CapServiceVTable, KRX_ABI_VERSION_3_0, KrxProcInfo};
+use kernel::proc::abi::{KRX_ABI_VERSION_3_0, KrxProcInfo, MathApi, ServiceApi};
 use kernel::proc::primitives::*;
 pub use kernel::proc::service_registry::ServiceRegistry;
 
@@ -442,7 +442,7 @@ pub unsafe extern "C" fn api_math_isqrt(val: u32) -> u32 {
     kernel::proc::abi::isqrt(val)
 }
 
-pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
+pub static SERVICE_VTABLE: ServiceApi = ServiceApi {
     svc_register: api_svc_register,
     svc_resolve: api_svc_resolve,
     svc_release: api_svc_release,
@@ -471,7 +471,7 @@ pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     sys_self_pid: api_sys_self_pid,
 };
 
-pub static MATH_VTABLE: CapMathVTable = CapMathVTable {
+pub static MATH_VTABLE: MathApi = MathApi {
     sys_rand32: api_sys_rand32,
     crc32: api_math_crc32,
     crc16: api_math_crc16,

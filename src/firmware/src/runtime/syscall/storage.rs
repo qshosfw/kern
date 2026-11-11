@@ -1,7 +1,7 @@
-//! Storage & Filesystem Subsystem System Call Handlers (`CapStorageVTable`, `interface_id = 0x0004`).
+//! Storage & Filesystem Subsystem System Call Handlers (`StorageApi`, `interface_id = 0x0004`).
 
 use super::{active_ctx_opt, parse_str, parse_user_path};
-use kernel::proc::abi::{CapStorageVTable, KrxDirEntry};
+use kernel::proc::abi::{KrxDirEntry, StorageApi};
 use kernel::proc::primitives::*;
 
 pub unsafe extern "C" fn api_storage_load_config(buf: *mut u8, max_len: u16) -> u16 {
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn api_storage_create_dir(path: *const u8, path_len: u8) -
     1
 }
 
-pub static STORAGE_VTABLE: CapStorageVTable = CapStorageVTable {
+pub static STORAGE_VTABLE: StorageApi = StorageApi {
     storage_load_config: api_storage_load_config,
     storage_save_config: api_storage_save_config,
     storage_read_asset: api_storage_read_asset,

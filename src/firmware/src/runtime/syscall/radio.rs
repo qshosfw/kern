@@ -1,7 +1,7 @@
-//! Radio & Broadcast FM Subsystem System Call Handlers (`CapRadioVTable`, `CapFmVTable`).
+//! Radio & Broadcast FM Subsystem System Call Handlers (`RadioApi`, `FmApi`).
 
 use super::active_ctx_opt;
-use kernel::proc::abi::{CapFmVTable, CapRadioVTable, KrxSymbol};
+use kernel::proc::abi::{FmApi, KrxSymbol, RadioApi};
 use kernel::proc::primitives::*;
 
 pub unsafe extern "C" fn api_rf_tune(freq_hz: u32, bw: u8, step_hz: u32) -> u8 {
@@ -253,7 +253,7 @@ pub unsafe extern "C" fn api_rf_get_noise() -> u8 {
     }
 }
 
-pub static RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
+pub static RADIO_VTABLE: RadioApi = RadioApi {
     rf_tune: api_rf_tune,
     rf_get_freq: api_rf_get_freq,
     rf_get_rssi: api_rf_get_rssi,
@@ -311,7 +311,7 @@ pub unsafe extern "C" fn api_fm_get_rssi() -> u8 {
     }
 }
 
-pub static FM_VTABLE: CapFmVTable = CapFmVTable {
+pub static FM_VTABLE: FmApi = FmApi {
     fm_tune: api_fm_tune,
     fm_set_volume: api_fm_set_volume,
     fm_mute: api_fm_mute,

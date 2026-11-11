@@ -1738,10 +1738,10 @@ mod tests {
         got_table[2] = &STUB_AUDIO_VTABLE as *const _ as usize;
 
         unsafe {
-            let radio = &*(got_table[1] as *const CapRadioVTable);
+            let radio = &*(got_table[1] as *const RadioApi);
             assert_eq!((radio.rf_get_freq)(), 0);
             assert_eq!((radio.rf_tune)(145_000_000, 25, 12_500), 1);
-            let display = &*(got_table[0] as *const CapDisplayVTable);
+            let display = &*(got_table[0] as *const DisplayApi);
             assert_eq!((display.get_framebuffer)(), core::ptr::null_mut());
         }
 

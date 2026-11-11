@@ -1,8 +1,8 @@
-//! Display Subsystem System Call Handlers (`CapDisplayVTable`, `interface_id = 0x0001`).
+//! Display Subsystem System Call Handlers (`DisplayApi`, `interface_id = 0x0001`).
 
 use super::{active_canvas_mut, active_ctx_opt, parse_str};
 use crate::services::primitives::{color_from_u8, font_from_u8};
-use kernel::proc::abi::CapDisplayVTable;
+use kernel::proc::abi::DisplayApi;
 use kernel::proc::primitives::DisplayPrimitive;
 
 pub unsafe extern "C" fn api_display_clear() {
@@ -250,7 +250,7 @@ pub unsafe extern "C" fn api_scroll(dx: i8, dy: i8, fill_byte: u8) {
     }
 }
 
-pub static DISPLAY_VTABLE: CapDisplayVTable = CapDisplayVTable {
+pub static DISPLAY_VTABLE: DisplayApi = DisplayApi {
     clear: api_display_clear,
     draw_pixel: api_draw_pixel,
     draw_line: api_draw_line,

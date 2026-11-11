@@ -1,11 +1,10 @@
-//! KRX-ABI 2.5.0 / 3.0 Modular Capability VTables & Stable C-ABI Specification (§8).
+//! KRX-ABI 2.5.0 / 3.0 Modular Capability API Tables & Stable C-ABI Specification (§8).
 //!
-//! Defines the normative, append-only per-capability domain VTables (`CapDisplayVTable`,
-//! `CapRadioVTable`, `CapAudioVTable`, `CapStorageVTable`, `CapKeypadVTable`,
-//! `CapPowerVTable`, `CapSerialVTable`, `CapTimerVTable`, `CapUiVTable`,
-//! `CapMathVTable`, `CapFmVTable`, `CapServiceVTable`, `CapHwBusVTable`) bound via
+//! Defines the normative, append-only per-capability domain API tables (`DisplayApi`,
+//! `RadioApi`, `AudioApi`, `StorageApi`, `KeypadApi`, `PowerApi`, `SerialApi`,
+//! `TimerApi`, `UiApi`, `MathApi`, `FmApi`, `ServiceApi`, `HwBusApi`) bound via
 //! `CapBinding` (`SECTION_CAP_IMPORTS = 0x0003`) into each package's GOT slots (`[r9, #slot*4]`),
-//! alongside the composite `KrxApiTable` dispatch structure.
+//! alongside the composite `KrxApiTable` and structured `KrxSysTable` dispatch structures.
 //! All calls use standard AAPCS-Thumb linkage (6–8 cycles per capability call, zero syscall trap).
 
 pub const KRX_ABI_VERSION_3_0: u32 = 0x0003_0000;
@@ -152,11 +151,11 @@ pub const KRX_OP_EXIT: u32 = 3;
 pub type KrxNativeEntryFn =
     unsafe extern "C" fn(op: u32, api: *const KrxApiTable, arg: *const ()) -> u32;
 
-// ── Modular Per-Capability Domain VTables (Chapter 8.2, Append-Only) ────────
+// ── Modular Per-Capability Domain API Tables (Chapter 8.2, Append-Only) ──────
 
-/// 1. `CapDisplay` VTable (`interface_id = 0x0001`)
+/// 1. `DisplayApi` Table (`interface_id = 0x0001`)
 #[repr(C)]
-pub struct CapDisplayVTable {
+pub struct DisplayApi {
     pub clear: unsafe extern "C" fn(),
     pub draw_pixel: unsafe extern "C" fn(x: i16, y: i16, color: u8),
     pub draw_line: unsafe extern "C" fn(x0: i16, y0: i16, x1: i16, y1: i16, color: u8),
@@ -200,9 +199,9 @@ pub struct CapDisplayVTable {
     pub scroll: unsafe extern "C" fn(dx: i8, dy: i8, fill_byte: u8),
 }
 
-/// 2. `CapRadio` VTable (`interface_id = 0x0002`)
+/// 2. `RadioApi` Table (`interface_id = 0x0002`)
 #[repr(C)]
-pub struct CapRadioVTable {
+pub struct RadioApi {
     pub rf_tune: unsafe extern "C" fn(freq_hz: u32, bw: u8, step_hz: u32) -> u8,
     pub rf_get_freq: unsafe extern "C" fn() -> u32,
     pub rf_get_rssi: unsafe extern "C" fn() -> i16,
@@ -237,9 +236,9 @@ pub struct CapRadioVTable {
     pub rf_get_noise: unsafe extern "C" fn() -> u8,
 }
 
-/// 3. `CapAudio` VTable (`interface_id = 0x0003`)
+/// 3. `AudioApi` Table (`interface_id = 0x0003`)
 #[repr(C)]
-pub struct CapAudioVTable {
+pub struct AudioApi {
     pub audio_play_tone: unsafe extern "C" fn(freq_hz: u16, duration_ms: u16),
     pub audio_play_beep: unsafe extern "C" fn(beep_type: u8),
     pub audio_set_path: unsafe extern "C" fn(on: u8),
@@ -255,9 +254,9 @@ pub struct CapAudioVTable {
     pub audio_is_capturing: unsafe extern "C" fn() -> u8,
 }
 
-/// 4. `CapStorage` VTable (`interface_id = 0x0004`)
+/// 4. `StorageApi` Table (`interface_id = 0x0004`)
 #[repr(C)]
-pub struct CapStorageVTable {
+pub struct StorageApi {
     pub storage_load_config: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
     pub storage_save_config: unsafe extern "C" fn(buf: *const u8, len: u16) -> u8,
     pub storage_read_asset:
@@ -293,9 +292,9 @@ pub struct CapStorageVTable {
     pub storage_create_dir: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
 }
 
-/// 5. `CapKeypad` VTable (`interface_id = 0x0005`)
+/// 5. `KeypadApi` Table (`interface_id = 0x0005`)
 #[repr(C)]
-pub struct CapKeypadVTable {
+pub struct KeypadApi {
     pub sys_poll_key: unsafe extern "C" fn() -> u8,
     pub sys_nav_dir: unsafe extern "C" fn(key: u8) -> i8,
     pub sys_key_matrix: unsafe extern "C" fn() -> u32,
@@ -308,9 +307,9 @@ pub struct CapKeypadVTable {
     pub sys_is_keypad_locked: unsafe extern "C" fn() -> u8,
 }
 
-/// 6. `CapPower` VTable (`interface_id = 0x0006`)
+/// 6. `PowerApi` Table (`interface_id = 0x0006`)
 #[repr(C)]
-pub struct CapPowerVTable {
+pub struct PowerApi {
     pub sys_battery_mv: unsafe extern "C" fn() -> u16,
     pub sys_battery_pct: unsafe extern "C" fn() -> u8,
     pub sys_battery_ma: unsafe extern "C" fn() -> u16,
@@ -327,18 +326,18 @@ pub struct CapPowerVTable {
     pub sys_cpu_freq_hz: unsafe extern "C" fn() -> u32,
 }
 
-/// 7. `CapSerial` VTable (`interface_id = 0x0007`)
+/// 7. `SerialApi` Table (`interface_id = 0x0007`)
 #[repr(C)]
-pub struct CapSerialVTable {
+pub struct SerialApi {
     pub serial_write: unsafe extern "C" fn(data: *const u8, len: u16) -> u16,
     pub serial_read: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
     pub serial_is_connected: unsafe extern "C" fn() -> u8,
     pub serial_flush: unsafe extern "C" fn(),
 }
 
-/// 8. `CapTimer` VTable (`interface_id = 0x0008`)
+/// 8. `TimerApi` Table (`interface_id = 0x0008`)
 #[repr(C)]
-pub struct CapTimerVTable {
+pub struct TimerApi {
     pub sys_ticks_ms: unsafe extern "C" fn() -> u32,
     pub sys_uptime_secs: unsafe extern "C" fn() -> u32,
     pub sys_delay_ms: unsafe extern "C" fn(ms: u32),
@@ -393,9 +392,9 @@ impl KrxStatusBar {
     }
 }
 
-/// 9. `CapUi` VTable (`interface_id = 0x0009`)
+/// 9. `UiApi` Table (`interface_id = 0x0009`)
 #[repr(C)]
-pub struct CapUiVTable {
+pub struct UiApi {
     pub ui_close_modal: unsafe extern "C" fn(),
     pub ui_has_modal: unsafe extern "C" fn() -> u8,
     pub ui_show_popup:
@@ -467,9 +466,9 @@ pub struct CapUiVTable {
     ),
 }
 
-/// 10. `CapMath` VTable (`interface_id = 0x000A`)
+/// 10. `MathApi` Table (`interface_id = 0x000A`)
 #[repr(C)]
-pub struct CapMathVTable {
+pub struct MathApi {
     pub sys_rand32: unsafe extern "C" fn() -> u32,
     pub crc32: unsafe extern "C" fn(data: *const u8, len: u16) -> u32,
     pub crc16: unsafe extern "C" fn(data: *const u8, len: u16) -> u16,
@@ -478,18 +477,18 @@ pub struct CapMathVTable {
     pub isqrt: unsafe extern "C" fn(val: u32) -> u32,
 }
 
-/// 11. `CapFm` VTable (`interface_id = 0x000B`)
+/// 11. `FmApi` Table (`interface_id = 0x000B`)
 #[repr(C)]
-pub struct CapFmVTable {
+pub struct FmApi {
     pub fm_tune: unsafe extern "C" fn(freq_100khz: u16),
     pub fm_set_volume: unsafe extern "C" fn(volume: u8),
     pub fm_mute: unsafe extern "C" fn(mute: u8),
     pub fm_get_rssi: unsafe extern "C" fn() -> u8,
 }
 
-/// 12. `CapService` VTable (`interface_id = 0x000C`)
+/// 12. `ServiceApi` Table (`interface_id = 0x000C`)
 #[repr(C)]
-pub struct CapServiceVTable {
+pub struct ServiceApi {
     pub svc_register:
         unsafe extern "C" fn(interface_id: u16, abi_version: u16, vtable_ptr: usize) -> u8,
     pub svc_resolve: unsafe extern "C" fn(interface_id: u16, min_abi: u16) -> usize,
@@ -527,9 +526,9 @@ pub struct CapServiceVTable {
     pub sys_self_pid: unsafe extern "C" fn() -> u8,
 }
 
-/// 13. `CapHwBus` VTable (`interface_id = 0x000D`)
+/// 13. `HwBusApi` Table (`interface_id = 0x000D`)
 #[repr(C)]
-pub struct CapHwBusVTable {
+pub struct HwBusApi {
     pub hw_i2c_transfer: unsafe extern "C" fn(
         addr: u8,
         reg: u8,
@@ -555,20 +554,20 @@ pub struct KrxApiTable {
     pub _pad0: u16,
     pub granted_caps: u32,
 
-    // Modular Capability Domain VTable Pointers (§8.2 / KRX-ABI 2.5.0)
-    pub display: *const CapDisplayVTable,
-    pub radio: *const CapRadioVTable,
-    pub audio: *const CapAudioVTable,
-    pub storage: *const CapStorageVTable,
-    pub keypad: *const CapKeypadVTable,
-    pub power: *const CapPowerVTable,
-    pub serial: *const CapSerialVTable,
-    pub timer: *const CapTimerVTable,
-    pub ui: *const CapUiVTable,
-    pub math: *const CapMathVTable,
-    pub fm: *const CapFmVTable,
-    pub service: *const CapServiceVTable,
-    pub hw_bus: *const CapHwBusVTable,
+    // Modular Capability Domain API Table Pointers (§8.2 / KRX-ABI 2.5.0)
+    pub display: *const DisplayApi,
+    pub radio: *const RadioApi,
+    pub audio: *const AudioApi,
+    pub storage: *const StorageApi,
+    pub keypad: *const KeypadApi,
+    pub power: *const PowerApi,
+    pub serial: *const SerialApi,
+    pub timer: *const TimerApi,
+    pub ui: *const UiApi,
+    pub math: *const MathApi,
+    pub fm: *const FmApi,
+    pub service: *const ServiceApi,
+    pub hw_bus: *const HwBusApi,
 }
 
 unsafe impl Sync for KrxApiTable {}
@@ -578,132 +577,31 @@ unsafe impl Send for KrxApiTable {}
 
 pub const KRX_ABI_VERSION_3_1: u32 = 0x0003_0100;
 
-/// Subsystem Interface: 2D Graphics, Canvas Drawing & UI Presentation
-#[repr(C)]
-pub struct GfxApi {
-    pub clear: unsafe extern "C" fn(),
-    pub draw_pixel: unsafe extern "C" fn(x: i16, y: i16, color: u8),
-    pub draw_line: unsafe extern "C" fn(x0: i16, y0: i16, x1: i16, y1: i16, color: u8),
-    pub draw_rect: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16, color: u8),
-    pub fill_rect: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16, color: u8),
-    pub draw_bitmap: unsafe extern "C" fn(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16),
-    pub draw_str: unsafe extern "C" fn(x: i16, y: i16, text: *const u8, len: u16, font: u8, color: u8),
-    pub draw_str_align: unsafe extern "C" fn(
-        x: i16,
-        y: i16,
-        text: *const u8,
-        len: u16,
-        font: u8,
-        color: u8,
-        align: u8,
-    ),
-    pub commit_frame: unsafe extern "C" fn(),
-    pub commit_rows: unsafe extern "C" fn(row_mask: u8),
-    pub get_framebuffer: unsafe extern "C" fn() -> *mut u8,
-    pub str_width: unsafe extern "C" fn(text: *const u8, len: u16, font: u8) -> i16,
-    pub draw_icon: unsafe extern "C" fn(x: i16, y: i16, icon_id: u8, color: u8),
-    pub fill_rect_dither: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16, progress: u8),
-    pub invert_rect: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16),
-    pub scroll: unsafe extern "C" fn(dx: i8, dy: i8, fill_byte: u8),
-    pub show_popup: unsafe extern "C" fn(tag: u8, title: *const u8, t_len: u8, msg: *const u8, m_len: u8),
-    pub show_confirm: unsafe extern "C" fn(tag: u8, title: *const u8, t_len: u8, msg: *const u8, m_len: u8),
-    pub set_status_bar: unsafe extern "C" fn(sb: *const KrxStatusBar) -> u8,
-}
-
-/// Subsystem Interface: RF Transceiver, Modulation Profiles & Hardware Modem
-#[repr(C)]
-pub struct RadioApi {
-    pub tune: unsafe extern "C" fn(freq_hz: u32, bw: u8, step_hz: u32) -> u8,
-    pub get_freq: unsafe extern "C" fn() -> u32,
-    pub get_rssi: unsafe extern "C" fn() -> i16,
-    pub is_carrier: unsafe extern "C" fn() -> u8,
-    pub set_modulation: unsafe extern "C" fn(mod_type: u8),
-    pub set_squelch: unsafe extern "C" fn(level: u8),
-    pub set_tx: unsafe extern "C" fn(active: u8) -> u8,
-    pub set_tx_power: unsafe extern "C" fn(level: u8),
-    pub set_af_mode: unsafe extern "C" fn(mode: u8),
-    pub sweep: unsafe extern "C" fn(start_hz: u32, step_hz: u32, count: u16, out_rssi: *mut i16) -> u16,
-    pub set_subaudible_ctcss: unsafe extern "C" fn(freq_tenths_hz: u16),
-    pub set_subaudible_dcs: unsafe extern "C" fn(code: u16, inverted: u8),
-    pub fsk_send: unsafe extern "C" fn(data: *const u8, len: u16) -> u8,
-    pub fsk_recv: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
-    pub fm_tune: unsafe extern "C" fn(freq_100khz: u16),
-    pub get_snr: unsafe extern "C" fn() -> u8,
-}
-
-/// Subsystem Interface: Persistent Storage, LittleFS Virtual Filesystem & Configs
-#[repr(C)]
-pub struct FsApi {
-    pub read_file: unsafe extern "C" fn(path: *const u8, path_len: u8, buf: *mut u8, max_len: u16) -> u16,
-    pub read_file_at: unsafe extern "C" fn(path: *const u8, path_len: u8, offset: u32, buf: *mut u8, max_len: u16) -> u16,
-    pub write_file: unsafe extern "C" fn(path: *const u8, path_len: u8, data: *const u8, len: u16) -> u8,
-    pub append_file: unsafe extern "C" fn(path: *const u8, path_len: u8, data: *const u8, len: u16) -> u8,
-    pub remove_file: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
-    pub file_size: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u32,
-    pub file_exists: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
-    pub list_dir: unsafe extern "C" fn(dir_path: *const u8, dir_len: u8, out_entries: *mut KrxDirEntry, max_entries: u8) -> u8,
-    pub create_dir: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
-    pub rename_file: unsafe extern "C" fn(old_path: *const u8, old_len: u8, new_path: *const u8, new_len: u8) -> u8,
-    pub load_config: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
-    pub save_config: unsafe extern "C" fn(buf: *const u8, len: u16) -> u8,
-}
-
-/// Subsystem Interface: Tone Generation, Audio Amplifier & ADC Microphone Sampling
-#[repr(C)]
-pub struct AudioApi {
-    pub play_tone: unsafe extern "C" fn(freq_hz: u16, duration_ms: u16),
-    pub play_beep: unsafe extern "C" fn(beep_type: u8),
-    pub set_path: unsafe extern "C" fn(on: u8),
-    pub set_volume: unsafe extern "C" fn(volume: u8),
-    pub get_volume: unsafe extern "C" fn() -> u8,
-    pub capture_start: unsafe extern "C" fn(rate_hz: u16) -> u8,
-    pub capture_read: unsafe extern "C" fn(out_samples: *mut i16, max_samples: u16) -> u16,
-    pub capture_stop: unsafe extern "C" fn(),
-    pub is_capturing: unsafe extern "C" fn() -> u8,
-    pub stop: unsafe extern "C" fn(),
-}
-
-/// Subsystem Interface: Execution Timers, Battery Power, Keypad, IPC & Diagnostics
-#[repr(C)]
-pub struct SystemApi {
-    pub ticks_ms: unsafe extern "C" fn() -> u32,
-    pub uptime_secs: unsafe extern "C" fn() -> u32,
-    pub delay_ms: unsafe extern "C" fn(ms: u32),
-    pub battery_mv: unsafe extern "C" fn() -> u16,
-    pub battery_pct: unsafe extern "C" fn() -> u8,
-    pub is_charging: unsafe extern "C" fn() -> u8,
-    pub poll_key: unsafe extern "C" fn() -> u8,
-    pub is_key_pressed: unsafe extern "C" fn(key_code: u8) -> u8,
-    pub is_keypad_locked: unsafe extern "C" fn() -> u8,
-    pub set_backlight: unsafe extern "C" fn(mode: u8, timeout_s: u8),
-    pub serial_write: unsafe extern "C" fn(data: *const u8, len: u16) -> u16,
-    pub serial_read: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
-    pub rand32: unsafe extern "C" fn() -> u32,
-    pub crc32: unsafe extern "C" fn(data: *const u8, len: u16) -> u32,
-    pub ipc_send: unsafe extern "C" fn(msg: *const KrxIpcMessage) -> u8,
-    pub ipc_recv: unsafe extern "C" fn(out_msg: *mut KrxIpcMessage) -> u8,
-    pub ipc_reply: unsafe extern "C" fn(req: *const KrxIpcMessage, payload: *const u8, len: u8) -> u8,
-    pub self_pid: unsafe extern "C" fn() -> u8,
-    pub find_proc: unsafe extern "C" fn(name: *const u8, len: u8) -> u8,
-    pub ram_available: unsafe extern "C" fn() -> u16,
-    pub stack_margin: unsafe extern "C" fn() -> u16,
-}
-
 /// Normative KRX Structured System Dispatch Table (§4.2 / KRX-ABI 3.1)
 ///
 /// Passed in `r1` to `KrxNativeEntryFn` for zero-overhead, $O(1)$ AAPCS-Thumb linkage.
-/// Fits in 32 bytes ($2^5$ on 32-bit Cortex-M0+), aligned to power-of-two sector geometries.
+/// Fits in exactly 64 bytes ($2^6$ on 32-bit Cortex-M0+), power-of-two aligned to flash erase sectors.
+/// Exposes 13 discrete subsystem pointers matching the microkernel primitives 1:1.
 #[repr(C)]
 pub struct KrxSysTable {
     pub abi_version: u32,
     pub table_size: u16,
     pub _reserved: u16,
     pub granted_caps: u32,
-    pub gfx: *const GfxApi,
+
+    pub display: *const DisplayApi,
     pub radio: *const RadioApi,
-    pub fs: *const FsApi,
     pub audio: *const AudioApi,
-    pub sys: *const SystemApi,
+    pub storage: *const StorageApi,
+    pub keypad: *const KeypadApi,
+    pub power: *const PowerApi,
+    pub serial: *const SerialApi,
+    pub timer: *const TimerApi,
+    pub ui: *const UiApi,
+    pub math: *const MathApi,
+    pub fm: *const FmApi,
+    pub service: *const ServiceApi,
+    pub hw_bus: *const HwBusApi,
 }
 
 unsafe impl Sync for KrxSysTable {}
@@ -1309,7 +1207,7 @@ unsafe extern "C" fn noop_sys_rtc_get(_out_time: *mut u8) -> u8 {
     1
 }
 
-pub static STUB_DISPLAY_VTABLE: CapDisplayVTable = CapDisplayVTable {
+pub static STUB_DISPLAY_VTABLE: DisplayApi = DisplayApi {
     clear: noop_commit_frame,
     draw_pixel: noop_draw_pixel,
     draw_line: noop_draw_line,
@@ -1336,7 +1234,7 @@ pub static STUB_DISPLAY_VTABLE: CapDisplayVTable = CapDisplayVTable {
     scroll: noop_scroll,
 };
 
-pub static STUB_RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
+pub static STUB_RADIO_VTABLE: RadioApi = RadioApi {
     rf_tune: noop_rf_tune,
     rf_get_freq: noop_rf_get_freq,
     rf_get_rssi: noop_rf_get_rssi,
@@ -1368,7 +1266,7 @@ pub static STUB_RADIO_VTABLE: CapRadioVTable = CapRadioVTable {
     rf_get_noise: noop_rf_get_noise,
 };
 
-pub static STUB_AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {
+pub static STUB_AUDIO_VTABLE: AudioApi = AudioApi {
     audio_play_tone: noop_audio_play_tone,
     audio_play_beep: noop_audio_play_beep,
     audio_set_path: noop_audio_set_path,
@@ -1384,7 +1282,7 @@ pub static STUB_AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {
     audio_is_capturing: noop_audio_is_capturing,
 };
 
-pub static STUB_STORAGE_VTABLE: CapStorageVTable = CapStorageVTable {
+pub static STUB_STORAGE_VTABLE: StorageApi = StorageApi {
     storage_load_config: noop_storage_load_config,
     storage_save_config: noop_storage_save_config,
     storage_read_asset: noop_storage_read_asset,
@@ -1400,7 +1298,7 @@ pub static STUB_STORAGE_VTABLE: CapStorageVTable = CapStorageVTable {
     storage_create_dir: noop_storage_create_dir,
 };
 
-pub static STUB_KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
+pub static STUB_KEYPAD_VTABLE: KeypadApi = KeypadApi {
     sys_poll_key: noop_sys_poll_key,
     sys_nav_dir: noop_sys_nav_dir,
     sys_key_matrix: noop_sys_key_matrix,
@@ -1413,7 +1311,7 @@ pub static STUB_KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
     sys_is_keypad_locked: noop_sys_is_keypad_locked,
 };
 
-pub static STUB_POWER_VTABLE: CapPowerVTable = CapPowerVTable {
+pub static STUB_POWER_VTABLE: PowerApi = PowerApi {
     sys_battery_mv: noop_sys_battery_mv,
     sys_battery_pct: noop_sys_battery_pct,
     sys_battery_ma: noop_sys_battery_ma,
@@ -1430,14 +1328,14 @@ pub static STUB_POWER_VTABLE: CapPowerVTable = CapPowerVTable {
     sys_cpu_freq_hz: noop_sys_cpu_freq_hz,
 };
 
-pub static STUB_SERIAL_VTABLE: CapSerialVTable = CapSerialVTable {
+pub static STUB_SERIAL_VTABLE: SerialApi = SerialApi {
     serial_write: noop_serial_write,
     serial_read: noop_serial_read,
     serial_is_connected: noop_serial_is_connected,
     serial_flush: noop_serial_flush,
 };
 
-pub static STUB_TIMER_VTABLE: CapTimerVTable = CapTimerVTable {
+pub static STUB_TIMER_VTABLE: TimerApi = TimerApi {
     sys_ticks_ms: noop_sys_ticks_ms,
     sys_uptime_secs: noop_sys_uptime_secs,
     sys_delay_ms: noop_sys_delay_ms,
@@ -1445,7 +1343,7 @@ pub static STUB_TIMER_VTABLE: CapTimerVTable = CapTimerVTable {
     sys_rtc_get: noop_sys_rtc_get,
 };
 
-pub static STUB_UI_VTABLE: CapUiVTable = CapUiVTable {
+pub static STUB_UI_VTABLE: UiApi = UiApi {
     ui_close_modal: noop_ui_close_modal,
     ui_has_modal: noop_ui_has_modal,
     ui_show_popup: noop_ui_show_popup,
@@ -1472,7 +1370,7 @@ pub static STUB_UI_VTABLE: CapUiVTable = CapUiVTable {
     ui_show_confirm_labels: noop_ui_show_confirm_labels,
 };
 
-pub static STUB_MATH_VTABLE: CapMathVTable = CapMathVTable {
+pub static STUB_MATH_VTABLE: MathApi = MathApi {
     sys_rand32: noop_sys_rand32,
     crc32: noop_crc32,
     crc16: noop_crc16,
@@ -1481,14 +1379,14 @@ pub static STUB_MATH_VTABLE: CapMathVTable = CapMathVTable {
     isqrt: noop_isqrt,
 };
 
-pub static STUB_FM_VTABLE: CapFmVTable = CapFmVTable {
+pub static STUB_FM_VTABLE: FmApi = FmApi {
     fm_tune: noop_fm_tune,
     fm_set_volume: noop_fm_set_volume,
     fm_mute: noop_fm_mute,
     fm_get_rssi: noop_fm_get_rssi,
 };
 
-pub static STUB_SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
+pub static STUB_SERVICE_VTABLE: ServiceApi = ServiceApi {
     svc_register: noop_svc_register,
     svc_resolve: noop_svc_resolve,
     svc_release: noop_svc_release,
@@ -1517,7 +1415,7 @@ pub static STUB_SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     sys_self_pid: noop_sys_self_pid,
 };
 
-pub static STUB_HW_BUS_VTABLE: CapHwBusVTable = CapHwBusVTable {
+pub static STUB_HW_BUS_VTABLE: HwBusApi = HwBusApi {
     hw_i2c_transfer: noop_hw_i2c_transfer,
     hw_spi_transfer: noop_hw_spi_transfer,
     hw_gpio_set: noop_hw_gpio_set,
@@ -1552,99 +1450,6 @@ impl KrxApiTable {
     }
 }
 
-pub static STUB_GFX_API: GfxApi = GfxApi {
-    clear: noop_commit_frame,
-    draw_pixel: noop_draw_pixel,
-    draw_line: noop_draw_line,
-    draw_rect: noop_draw_rect,
-    fill_rect: noop_fill_rect,
-    draw_bitmap: noop_draw_bitmap,
-    draw_str: noop_draw_str,
-    draw_str_align: noop_draw_str_align,
-    commit_frame: noop_commit_frame,
-    commit_rows: noop_commit_rows,
-    get_framebuffer: noop_get_framebuffer,
-    str_width: noop_str_width,
-    draw_icon: noop_draw_icon,
-    fill_rect_dither: noop_fill_rect_dither,
-    invert_rect: noop_invert_rect,
-    scroll: noop_scroll,
-    show_popup: noop_ui_show_popup,
-    show_confirm: noop_ui_show_confirm,
-    set_status_bar: noop_ui_set_status_bar,
-};
-
-pub static STUB_RADIO_API: RadioApi = RadioApi {
-    tune: noop_rf_tune,
-    get_freq: noop_rf_get_freq,
-    get_rssi: noop_rf_get_rssi,
-    is_carrier: noop_rf_is_carrier,
-    set_modulation: noop_rf_set_modulation,
-    set_squelch: noop_rf_set_squelch,
-    set_tx: noop_rf_set_tx,
-    set_tx_power: noop_rf_set_tx_power,
-    set_af_mode: noop_rf_set_af_mode,
-    sweep: noop_rf_sweep,
-    set_subaudible_ctcss: noop_rf_set_subaudible_ctcss,
-    set_subaudible_dcs: noop_rf_set_subaudible_dcs,
-    fsk_send: noop_rf_fsk_send,
-    fsk_recv: noop_rf_fsk_recv,
-    fm_tune: noop_fm_tune,
-    get_snr: noop_rf_get_snr,
-};
-
-pub static STUB_FS_API: FsApi = FsApi {
-    read_file: noop_storage_read_file,
-    read_file_at: noop_storage_read_file_at,
-    write_file: noop_storage_write_file,
-    append_file: noop_storage_append_file,
-    remove_file: noop_storage_remove_file,
-    file_size: noop_storage_file_size,
-    file_exists: noop_storage_file_exists,
-    list_dir: noop_storage_list_dir,
-    create_dir: noop_storage_create_dir,
-    rename_file: noop_storage_rename_file,
-    load_config: noop_storage_load_config,
-    save_config: noop_storage_save_config,
-};
-
-pub static STUB_AUDIO_API: AudioApi = AudioApi {
-    play_tone: noop_audio_play_tone,
-    play_beep: noop_audio_play_beep,
-    set_path: noop_audio_set_path,
-    set_volume: noop_audio_set_volume,
-    get_volume: noop_audio_get_volume,
-    capture_start: noop_audio_capture_start,
-    capture_read: noop_audio_capture_read,
-    capture_stop: noop_audio_capture_stop,
-    is_capturing: noop_audio_is_capturing,
-    stop: noop_audio_stop,
-};
-
-pub static STUB_SYSTEM_API: SystemApi = SystemApi {
-    ticks_ms: noop_sys_ticks_ms,
-    uptime_secs: noop_sys_uptime_secs,
-    delay_ms: noop_sys_delay_ms,
-    battery_mv: noop_sys_battery_mv,
-    battery_pct: noop_sys_battery_pct,
-    is_charging: noop_sys_is_charging,
-    poll_key: noop_sys_poll_key,
-    is_key_pressed: noop_sys_is_key_pressed,
-    is_keypad_locked: noop_sys_is_keypad_locked,
-    set_backlight: noop_sys_set_backlight,
-    serial_write: noop_serial_write,
-    serial_read: noop_serial_read,
-    rand32: noop_sys_rand32,
-    crc32: noop_crc32,
-    ipc_send: noop_ipc_send_msg,
-    ipc_recv: noop_ipc_recv_msg,
-    ipc_reply: noop_ipc_reply,
-    self_pid: noop_sys_self_pid,
-    find_proc: noop_sys_find_proc,
-    ram_available: noop_sys_ram_available,
-    stack_margin: noop_sys_stack_margin,
-};
-
 impl KrxSysTable {
     /// Constructs a safe default system table where all pointers reference safe no-op stubs.
     pub const fn safe_stub(granted_caps: u32) -> Self {
@@ -1653,11 +1458,19 @@ impl KrxSysTable {
             table_size: core::mem::size_of::<Self>() as u16,
             _reserved: 0,
             granted_caps,
-            gfx: &raw const STUB_GFX_API,
-            radio: &raw const STUB_RADIO_API,
-            fs: &raw const STUB_FS_API,
-            audio: &raw const STUB_AUDIO_API,
-            sys: &raw const STUB_SYSTEM_API,
+            display: &raw const STUB_DISPLAY_VTABLE,
+            radio: &raw const STUB_RADIO_VTABLE,
+            audio: &raw const STUB_AUDIO_VTABLE,
+            storage: &raw const STUB_STORAGE_VTABLE,
+            keypad: &raw const STUB_KEYPAD_VTABLE,
+            power: &raw const STUB_POWER_VTABLE,
+            serial: &raw const STUB_SERIAL_VTABLE,
+            timer: &raw const STUB_TIMER_VTABLE,
+            ui: &raw const STUB_UI_VTABLE,
+            math: &raw const STUB_MATH_VTABLE,
+            fm: &raw const STUB_FM_VTABLE,
+            service: &raw const STUB_SERVICE_VTABLE,
+            hw_bus: &raw const STUB_HW_BUS_VTABLE,
         }
     }
 }
@@ -1727,9 +1540,9 @@ mod tests {
         );
 
         #[cfg(target_pointer_width = "32")]
-        assert_eq!(core::mem::size_of::<KrxSysTable>(), 32);
+        assert_eq!(core::mem::size_of::<KrxSysTable>(), 64);
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(core::mem::size_of::<KrxSysTable>(), 56);
+        assert_eq!(core::mem::size_of::<KrxSysTable>(), 120);
         assert_eq!(
             core::mem::align_of::<KrxSysTable>(),
             core::mem::align_of::<usize>()
@@ -1743,31 +1556,44 @@ mod tests {
         assert_eq!(sys_table.granted_caps, 0xCAFE_BABE);
 
         unsafe {
-            assert!(!sys_table.gfx.is_null());
+            assert!(!sys_table.display.is_null());
             assert!(!sys_table.radio.is_null());
-            assert!(!sys_table.fs.is_null());
             assert!(!sys_table.audio.is_null());
-            assert!(!sys_table.sys.is_null());
+            assert!(!sys_table.storage.is_null());
+            assert!(!sys_table.keypad.is_null());
+            assert!(!sys_table.power.is_null());
+            assert!(!sys_table.serial.is_null());
+            assert!(!sys_table.timer.is_null());
+            assert!(!sys_table.ui.is_null());
+            assert!(!sys_table.math.is_null());
+            assert!(!sys_table.fm.is_null());
+            assert!(!sys_table.service.is_null());
+            assert!(!sys_table.hw_bus.is_null());
 
-            let gfx = &*sys_table.gfx;
-            (gfx.clear)();
-            assert_eq!((gfx.str_width)(b"Hello".as_ptr(), 5, 0), 0);
+            let display = &*sys_table.display;
+            (display.clear)();
+            assert_eq!((display.str_width)(b"Hello".as_ptr(), 5, 0), 0);
 
             let radio = &*sys_table.radio;
-            assert_eq!((radio.tune)(433_000_000, 25, 12_500), 1);
-            assert_eq!((radio.get_rssi)(), -140);
+            assert_eq!((radio.rf_tune)(433_000_000, 25, 12_500), 1);
+            assert_eq!((radio.rf_get_rssi)(), -140);
 
-            let fs = &*sys_table.fs;
-            assert_eq!((fs.file_exists)(b"/test".as_ptr(), 5), 0);
-            assert_eq!((fs.write_file)(b"/test".as_ptr(), 5, b"data".as_ptr(), 4), 1);
+            let storage = &*sys_table.storage;
+            assert_eq!((storage.storage_file_exists)(b"/test".as_ptr(), 5), 0);
+            assert_eq!(
+                (storage.storage_write_file)(b"/test".as_ptr(), 5, b"data".as_ptr(), 4),
+                1
+            );
 
             let audio = &*sys_table.audio;
-            (audio.play_tone)(1000, 100);
-            assert_eq!((audio.is_capturing)(), 0);
+            (audio.audio_play_tone)(1000, 100);
+            assert_eq!((audio.audio_is_capturing)(), 0);
 
-            let sys = &*sys_table.sys;
-            assert_eq!((sys.uptime_secs)(), 0);
-            assert_eq!((sys.battery_mv)(), 4000);
+            let timer = &*sys_table.timer;
+            assert_eq!((timer.sys_uptime_secs)(), 0);
+
+            let power = &*sys_table.power;
+            assert_eq!((power.sys_battery_mv)(), 4000);
         }
     }
 

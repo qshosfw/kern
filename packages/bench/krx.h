@@ -288,6 +288,21 @@ typedef struct {
     const CapHwBusVTable* hw_bus;
 } KrxApiTable;
 
+typedef CapDisplayVTable DisplayApi;
+typedef CapRadioVTable RadioApi;
+typedef CapAudioVTable AudioApi;
+typedef CapStorageVTable StorageApi;
+typedef CapKeypadVTable KeypadApi;
+typedef CapPowerVTable PowerApi;
+typedef CapSerialVTable SerialApi;
+typedef CapTimerVTable TimerApi;
+typedef CapUiVTable UiApi;
+typedef CapMathVTable MathApi;
+typedef CapFmVTable FmApi;
+typedef CapServiceVTable ServiceApi;
+typedef CapHwBusVTable HwBusApi;
+typedef KrxApiTable KrxSysTable;
+
 // P0 Structured Leaf Overlays & Continuations (§5.1 / KRX 3.2)
 #define KRX_LEAF_KIND_DONE       0
 #define KRX_LEAF_KIND_CALL_LEAF  1
