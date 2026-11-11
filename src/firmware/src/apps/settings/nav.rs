@@ -2,7 +2,7 @@
 
 use super::app::SettingsApp;
 use super::options::{apply_page_changes, page_defs, page_title, populate_defs};
-use super::page::{MenuFrame, PageId, SettingField, SettingKind};
+use super::page::{MenuFrame, PageId, SettingField, TAG_BATTERY_TYPE};
 use crate::SysContext;
 use gfx::gui::modules::menu::MenuItemType;
 
@@ -154,7 +154,7 @@ impl SettingsApp {
                     }
                 }
                 let nav_layout = ctx.config.keys.nav_layout;
-                let val: i32 = if matches!(def.kind(), SettingKind::BatteryType) {
+                let val: i32 = if def.tag == TAG_BATTERY_TYPE {
                     let (_, types) = super::battery::battery_options_and_types(nav_layout);
                     types.get(sel).copied().unwrap_or(types[0]) as i32
                 } else {

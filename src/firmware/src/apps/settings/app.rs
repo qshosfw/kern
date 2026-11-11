@@ -12,7 +12,7 @@ use kernel::event::{Event, KeyCode, KeyState};
 
 use super::dialog;
 use super::options::page_defs;
-use super::page::{MenuFrame, PageId, SettingKind};
+use super::page::{ActionId, MenuFrame, PageId, TAG_ACTION, TAG_ASSET, TAG_SUBMENU};
 
 pub struct SettingsApp {
     pub(crate) items: [MenuItem; 16],
@@ -125,20 +125,26 @@ impl SettingsApp {
 
         let defs = page_defs(self.current_page);
         if let Some(def) = defs.get(sel_idx) {
-            match def.kind() {
-                SettingKind::Submenu(target_page) => {
-                    self.push_submenu(target_page, ctx);
+            match def.tag {
+                TAG_SUBMENU => {
+                    if let Some(target_page) = PageId::from_u8(def.aux) {
+                        self.push_submenu(target_page, ctx);
+                    }
                     return;
                 }
-                SettingKind::Action(action_id) => {
-                    dialog::handle_action_press(ctx, action_id);
+                TAG_ACTION => {
+                    if let Some(action_id) = ActionId::from_u8(def.aux) {
+                        dialog::handle_action_press(ctx, action_id);
+                    }
                     return;
                 }
                 #[cfg(feature = "filesystem")]
-                SettingKind::Asset(desc) => {
-                    self.active_asset = Some(desc);
-                    let sheet = desc.build_sheet(&ctx.config, ctx.storage);
-                    ctx.show_sheet(dialog::TAG_ASSET_CHOOSER, sheet);
+                TAG_ASSET => {
+                    if let Some(&desc) = super::page::ASSETS.get(def.aux as usize) {
+                        self.active_asset = Some(desc);
+                        let sheet = desc.build_sheet(&ctx.config, ctx.storage);
+                        ctx.show_sheet(dialog::TAG_ASSET_CHOOSER, sheet);
+                    }
                     return;
                 }
                 _ => {}

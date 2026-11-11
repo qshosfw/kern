@@ -30,6 +30,15 @@ pub enum PageId {
 
 impl PageId {
     pub const COUNT: usize = PageId::ServiceDetail as usize + 1;
+
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        if val <= PageId::ServiceDetail as u8 {
+            Some(unsafe { core::mem::transmute(val) })
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +52,23 @@ pub enum ActionId {
     #[cfg(feature = "text_input")]
     EditRadioId = 4,
     ClearLogs = 5,
+}
+
+impl ActionId {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        match val {
+            1 => Some(ActionId::ChooseModel),
+            #[cfg(feature = "text_input")]
+            2 => Some(ActionId::EditOwner),
+            #[cfg(feature = "text_input")]
+            3 => Some(ActionId::EditTag),
+            #[cfg(feature = "text_input")]
+            4 => Some(ActionId::EditRadioId),
+            5 => Some(ActionId::ClearLogs),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -228,18 +254,15 @@ pub enum MetricId {
     DeviceRadioId,
 }
 
-#[derive(Clone, Copy)]
-pub enum SettingKind {
-    Submenu(PageId),
-    Choice(&'static str),
-    BatteryType,
-    Range(&'static RangeDef),
-    Toggle,
-    Metric(MetricId),
-    #[cfg(feature = "filesystem")]
-    Asset(&'static super::asset_chooser::AssetDescriptor),
-    Action(ActionId),
-    Info,
+impl MetricId {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        if val <= MetricId::DeviceRadioId as u8 {
+            Some(unsafe { core::mem::transmute(val) })
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -473,22 +496,6 @@ impl SettingDef {
             field: SettingField::None,
             tag: TAG_INFO,
             aux: 0,
-        }
-    }
-
-    #[inline(always)]
-    pub fn kind(&self) -> SettingKind {
-        match self.tag {
-            TAG_SUBMENU => SettingKind::Submenu(unsafe { core::mem::transmute(self.aux) }),
-            TAG_CHOICE => SettingKind::Choice(CHOICES[self.aux as usize]),
-            TAG_BATTERY_TYPE => SettingKind::BatteryType,
-            TAG_RANGE => SettingKind::Range(&RANGES[self.aux as usize]),
-            TAG_TOGGLE => SettingKind::Toggle,
-            TAG_METRIC => SettingKind::Metric(unsafe { core::mem::transmute(self.aux) }),
-            #[cfg(feature = "filesystem")]
-            TAG_ASSET => SettingKind::Asset(ASSETS[self.aux as usize]),
-            TAG_ACTION => SettingKind::Action(unsafe { core::mem::transmute(self.aux) }),
-            _ => SettingKind::Info,
         }
     }
 }

@@ -54,11 +54,13 @@ fn populate_item(
     nav_layout: u8,
 ) {
     item.title = def.title;
-    match def.kind() {
-        SettingKind::Choice(opts) => {
-            item.item_type = make_choice(opts, def.field.get_u8(&ctx.config));
+    match def.tag {
+        TAG_CHOICE => {
+            if let Some(&opts) = CHOICES.get(def.aux as usize) {
+                item.item_type = make_choice(opts, def.field.get_u8(&ctx.config));
+            }
         }
-        SettingKind::BatteryType => {
+        TAG_BATTERY_TYPE => {
             let (opts, types) = super::battery::battery_options_and_types(nav_layout);
             let raw_byte = def.field.get_u8(&ctx.config);
             let mut sel = 0u16;
@@ -73,44 +75,52 @@ fn populate_item(
                 options: gfx::gui::modules::menu::SheetOptions::Static(opts),
             };
         }
-        SettingKind::Range(range) => {
-            let raw_val = if def.field == SettingField::CALIB_TWEAK_MV {
-                def.field.get_i16(&ctx.config)
-            } else {
-                def.field.get_u8(&ctx.config) as i16
-            };
-            item.item_type = MenuItemType::Range {
-                val: raw_val.clamp(range.min, range.max),
-                min: range.min,
-                max: range.max,
-                step: range.step,
-                unit: range.unit,
-            };
+        TAG_RANGE => {
+            if let Some(range) = RANGES.get(def.aux as usize) {
+                let raw_val = if def.field == SettingField::CALIB_TWEAK_MV {
+                    def.field.get_i16(&ctx.config)
+                } else {
+                    def.field.get_u8(&ctx.config) as i16
+                };
+                item.item_type = MenuItemType::Range {
+                    val: raw_val.clamp(range.min, range.max),
+                    min: range.min,
+                    max: range.max,
+                    step: range.step,
+                    unit: range.unit,
+                };
+            }
         }
-        SettingKind::Toggle => {
+        TAG_TOGGLE => {
             item.item_type = MenuItemType::Toggle(def.field.get_u8(&ctx.config) != 0);
         }
-        SettingKind::Submenu(_) => {
+        TAG_SUBMENU => {
             item.item_type = MenuItemType::Submenu;
         }
-        SettingKind::Info => {
-            item.item_type = MenuItemType::Info("Ascon-128");
-        }
-        SettingKind::Metric(metric) => {
-            let mut s = ShortString::empty();
-            super::metric::format_metric(metric, ctx, &mut s);
-            item.item_type = MenuItemType::Value(s);
+        TAG_METRIC => {
+            if let Some(metric) = MetricId::from_u8(def.aux) {
+                let mut s = ShortString::empty();
+                super::metric::format_metric(metric, ctx, &mut s);
+                item.item_type = MenuItemType::Value(s);
+            }
         }
         #[cfg(feature = "filesystem")]
-        SettingKind::Asset(desc) => {
-            let mut s = ShortString::empty();
-            desc.format_status(&ctx.config, &mut s);
-            item.item_type = MenuItemType::Value(s);
+        TAG_ASSET => {
+            if let Some(&desc) = ASSETS.get(def.aux as usize) {
+                let mut s = ShortString::empty();
+                desc.format_status(&ctx.config, &mut s);
+                item.item_type = MenuItemType::Value(s);
+            }
         }
-        SettingKind::Action(action) => {
-            let mut s = ShortString::empty();
-            get_action_value(action, ctx, &mut s);
-            item.item_type = MenuItemType::Value(s);
+        TAG_ACTION => {
+            if let Some(action) = ActionId::from_u8(def.aux) {
+                let mut s = ShortString::empty();
+                get_action_value(action, ctx, &mut s);
+                item.item_type = MenuItemType::Value(s);
+            }
+        }
+        _ => {
+            item.item_type = MenuItemType::Info("Ascon-128");
         }
     }
 }
