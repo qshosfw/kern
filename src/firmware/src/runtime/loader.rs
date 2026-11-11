@@ -107,19 +107,23 @@ fn populate_declare_from_payload(
 /// Load and launch a verified KRX binary application package.
 #[inline(never)]
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let arena_buf = super::native_runner::transient_arena_bytes_mut();
-    let total_read = ctx
+    let mut header_buf = [0u8; 128];
+    let header_read = ctx
         .storage
-        .read_file(path, arena_buf)
+        .read_file_at(path, 0, &mut header_buf)
         .map_err(|e| match e {
             kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
             _ => KrxLaunchError::ReadFailed,
         })?;
 
-    let summary = KrxPreamble::summarize(&arena_buf[..total_read])?;
+    if header_read < KrxPreamble::SIZE {
+        return Err(KrxLaunchError::TruncatedPackage);
+    }
+
+    let summary = KrxPreamble::summarize(&header_buf[..header_read])?;
     let preamble = summary.preamble;
     let header_len = preamble.header_len as usize;
-    if header_len > total_read {
+    if header_len > header_read {
         return Err(KrxLaunchError::TruncatedPackage);
     }
 
@@ -133,10 +137,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     let required_caps = summary.caps;
     if !ctx.caps().contains_all(required_caps) {
         let missing = required_caps.without(ctx.caps());
-        let cap_msg = missing
-            .first_cap()
-            .map(|c| c.required_message())
-            .unwrap_or("Requires Missing Capability");
+        let cap_msg = missing.first_cap().map_or("Missing Cap", |c| c.required_message());
         return Err(KrxLaunchError::CapabilityDenied(cap_msg));
     }
 
@@ -180,17 +181,13 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             let arena_tail = &mut crate::runtime::transient_arena_bytes_mut()[1024..];
             let read_total = ctx
                 .storage
-                .read_file(path, arena_tail)
+                .read_file_at(path, header_len, arena_tail)
                 .map_err(|_| KrxLaunchError::ReadFailed)?;
-            let h_len = preamble.header_len as usize;
-            if read_total <= h_len {
+            if read_total == 0 {
                 return Err(KrxLaunchError::TruncatedPackage);
             }
             let payload: &'static [u8] = unsafe {
-                core::slice::from_raw_parts(
-                    arena_tail[h_len..read_total].as_ptr(),
-                    read_total - h_len,
-                )
+                core::slice::from_raw_parts(arena_tail.as_ptr(), read_total)
             };
             populate_declare_from_payload(walker, payload);
 
@@ -209,11 +206,10 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             let mut code_buf = [0u8; 256];
             let read_total = ctx
                 .storage
-                .read_file(path, &mut code_buf)
+                .read_file_at(path, header_len, &mut code_buf)
                 .map_err(|_| KrxLaunchError::ReadFailed)?;
-            let h_len = preamble.header_len as usize;
-            let loaded = if read_total > h_len {
-                let payload = &code_buf[h_len..read_total];
+            let loaded = if read_total > 0 {
+                let payload = &code_buf[..read_total];
                 let mut words = [0u16; 128];
                 let word_count = (payload.len() / 2).min(128);
                 for i in 0..word_count {
@@ -243,11 +239,16 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         #[cfg(feature = "krx_native")]
         KrxClass::Native | KrxClass::Paged => {
             let exec_sec = exec_sec.ok_or(KrxLaunchError::MissingExecution)?;
+            let arena_buf = super::native_runner::transient_arena_bytes_mut();
+            let payload_read = ctx
+                .storage
+                .read_file_at(path, header_len, arena_buf)
+                .map_err(|_| KrxLaunchError::ReadFailed)?;
 
             super::native_runner::load_native_from_storage(
                 app_name,
                 path,
-                total_read,
+                payload_read,
                 &preamble,
                 &exec_sec,
                 &aux,

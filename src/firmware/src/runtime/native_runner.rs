@@ -276,6 +276,9 @@ fn apply_package_relocs(
     exec: &SectionExecution,
     load_delta: u32,
 ) -> Result<(), KrxLaunchError> {
+    if load_delta == 0 {
+        return Ok(());
+    }
     if exec.reloc_count > 0 && exec.reloc_offset > 0 {
         let r_off = exec.reloc_offset as usize;
         if r_off < payload_len {
@@ -312,7 +315,7 @@ pub struct KrxAuxSections<'a> {
 pub fn load_native_from_storage(
     name: &str,
     path: &str,
-    total_read: usize,
+    payload_len: usize,
     preamble: &KrxPreamble,
     exec: &SectionExecution,
     aux: &KrxAuxSections,
@@ -330,11 +333,10 @@ pub fn load_native_from_storage(
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
 
     let h_len = preamble.header_len as usize;
-    if total_read <= h_len {
+    if payload_len == 0 {
         return Err(KrxLaunchError::TruncatedPackage);
     }
 
-    let payload_len = total_read - h_len;
     if exec.payload_size > 0 && payload_len < (exec.payload_size as usize) {
         return Err(KrxLaunchError::TruncatedPackage);
     }
@@ -357,7 +359,7 @@ pub fn load_native_from_storage(
         return Err(KrxLaunchError::RelocationFailed);
     }
 
-    // 1. Configure Paged Fixed-Window Cache before shifting payload (aux.block_map borrows header buffer!)
+    // 1. Configure Paged Fixed-Window Cache
     let is_paged = preamble.execution_class() == Some(KrxClass::Paged)
         || exec.page_size > 0
         || aux.block_map.is_some();
@@ -382,35 +384,19 @@ pub fn load_native_from_storage(
         let _ = slot.cache.resolve_or_select_slot(0);
     }
 
-    // 2. Configure P0 Structured Leaf Manager before shifting payload (aux.leaf_map borrows header buffer!)
+    // 2. Configure P0 Structured Leaf Manager
     let overlay_size = 1024u32;
     let overlay_vma =
         (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(overlay_size);
     slot.leaf_mgr
         .configure(overlay_vma, overlay_size as u16, aux.leaf_map);
 
-    // 3. Preserve CapImports body before shifting payload
-    let mut cap_buf = [0u8; 64];
-    let cap_len = if let Some(cap_body) = aux.cap_imports {
-        let len = cap_body.len().min(64);
-        cap_buf[..len].copy_from_slice(&cap_body[..len]);
-        len
-    } else {
-        0
-    };
-
-    // 4. Shift payload to the beginning of the aligned buffer without pulling in memmove
-    let copy_len = total_read - h_len;
-    for i in 0..copy_len {
-        buffer_bytes[i] = buffer_bytes[h_len + i];
-    }
-
-    // 5. Apply escape-capable delta relocations v2 (Section 6.2)
+    // 3. Apply escape-capable delta relocations v2 (Section 6.2)
     apply_package_relocs(buffer_bytes, payload_len, exec, load_delta)?;
 
-    // 6. Bind CapImports (0x0003) into the package GOT (Section 6.3 & Chapter 8)
+    // 4. Bind CapImports (0x0003) into the package GOT (Section 6.3 & Chapter 8)
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
-    if cap_len > 0 {
+    if let Some(cap_body) = aux.cap_imports {
         let got_word_off = (exec.got_offset as usize) / 4;
         let got_slice = if got_word_off < NATIVE_EXEC_BUFFER_WORDS {
             unsafe {
@@ -422,7 +408,7 @@ pub fn load_native_from_storage(
         } else {
             &mut [][..]
         };
-        if !bind_cap_imports(&cap_buf[..cap_len], got_slice, caps) {
+        if !bind_cap_imports(cap_body, got_slice, caps) {
             return Err(KrxLaunchError::ImportBindingFailed);
         }
     }
