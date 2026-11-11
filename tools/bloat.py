@@ -391,6 +391,34 @@ def cmd_baseline(a):
     print("saved", a.out)
 
 
+def cmd_divs(a):
+    fns = disasm(a.elf)
+    div_targets = ("__aeabi_uidiv", "__aeabi_uidivmod", "__aeabi_idiv", "__aeabi_idivmod")
+    callers = collections.Counter()
+    for fn, ins in fns.items():
+        for _, _, mn, op in ins:
+            if mn in ("bl", "blx") and any(t in op for t in div_targets):
+                callers[fn] += 1
+    total_calls = sum(callers.values())
+    print(f"== Cortex-M0+ Software Division Callers: {total_calls} calls across {len(callers)} functions ==")
+    for fn, cnt in callers.most_common(a.top):
+        print(f"{cnt:3d} calls  {fn}")
+
+
+def cmd_unaligned(a):
+    fns = disasm(a.elf)
+    unaligned_targets = ("__aeabi_uread4", "__aeabi_uwrite4", "__aeabi_uread8", "__aeabi_uwrite8")
+    callers = collections.Counter()
+    for fn, ins in fns.items():
+        for _, _, mn, op in ins:
+            if mn in ("bl", "blx") and any(t in op for t in unaligned_targets):
+                callers[fn] += 1
+    total_calls = sum(callers.values())
+    print(f"== Cortex-M0+ Unaligned Access Traps: {total_calls} calls across {len(callers)} functions ==")
+    for fn, cnt in callers.most_common(a.top):
+        print(f"{cnt:3d} calls  {fn}")
+
+
 def cmd_diff(a):
     old = json.load(open(a.base)); new = {n: v[0] for n, v in symbols(a.elf).items() if v[1] in "tTrR"}
     d = sorted(((new.get(k, 0) - old.get(k, 0), k) for k in set(old) | set(new)), key=lambda x: -abs(x[0]))
@@ -402,7 +430,7 @@ def cmd_diff(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff".split())
+    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned".split())
     p.add_argument("--elf", default=DEF_ELF); p.add_argument("--top", type=int, default=25)
     p.add_argument("--min", type=int, default=24, help="min fn or stack bytes"); p.add_argument("--sim", type=float, default=0.80)
     p.add_argument("--len", type=int, default=8, help="outline window (instructions)")

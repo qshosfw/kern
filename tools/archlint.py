@@ -255,6 +255,38 @@ def chk_stubs(a, F):
     return len(stubs)
 
 
+def chk_packed(a, F):
+    """Find #[repr(C, packed)] and #[repr(packed)] structs causing unaligned software traps on ARMv6-M."""
+    packed = []
+    for p, s in F:
+        for ln, line in enumerate(strip_tests(s).splitlines(), 1):
+            if re.search(r"#\[repr\([^)]*packed[^)]*\)\]", line):
+                packed.append((p, ln, line.strip()))
+    print(f"== found {len(packed)} packed structs generating unaligned software traps ==")
+    for p, ln, line in packed[: a.top]:
+        out("PACKED-STRUCT", f"{p}:{ln}", f"`{line}` -> use naturally aligned #[repr(C)] + size assert to kill __aeabi_uread/write")
+    return len(packed)
+
+
+def chk_divs(a, F):
+    """Find division and modulo operators causing software emulation calls on Cortex-M0+."""
+    divs = []
+    for p, s in F:
+        for ln, line in enumerate(strip_tests(s).splitlines(), 1):
+            ls = line.split("//")[0].strip()
+            if not ls or ls.startswith("/*") or ls.startswith("*"):
+                continue
+            if any(k in ls for k in ("http://", "https://", "use ", "<", ">")):
+                continue
+            m = re.search(r"\b([a-zA-Z0-9_.]+)\s*([/%])\s*([a-zA-Z0-9_.]+)", ls)
+            if m and not m.group(1).startswith("http") and not m.group(3).startswith("/"):
+                divs.append((p, ln, ls))
+    print(f"== found {len(divs)} division/modulo sites ==")
+    for p, ln, line in divs[: a.top]:
+        out("SOFTWARE-DIV", f"{p}:{ln}", f"`{line[:80]}` -> replace with reciprocal multiply / power-of-two shift")
+    return len(divs)
+
+
 CHECKS = {k[4:]: v for k, v in globals().items() if k.startswith("chk_")}
 CHECKS["clone"] = CHECKS["dupfn"]  # alias
 
