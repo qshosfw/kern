@@ -87,8 +87,7 @@ pub static RANGE_CALIB_TWEAK: RangeDef = RangeDef {
 #[derive(Clone, Copy)]
 pub struct MenuFrame {
     pub page: PageId,
-    pub selected_idx: usize,
-    pub title: &'static str,
+    pub selected_idx: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

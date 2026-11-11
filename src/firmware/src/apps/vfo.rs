@@ -5,8 +5,6 @@ use crate::services::radio::{
 use kernel::service::RadioCoordinator;
 // Main Dual VFO & Telemetry Application
 
-pub mod assets;
-
 use crate::SysContext;
 use gfx::{Canvas, Color};
 use kernel::app::{App, AppMetadata, EventResult};
@@ -280,8 +278,8 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
     fn meta() -> AppMetadata {
         AppMetadata {
             name: "Radio",
-            icon: &assets::ICON_16,
-            icon_8: &assets::ICON_8,
+            icon: &gfx::icons::ICON_16_RADIO,
+            icon_8: &gfx::icons::ICON_APP_RADIO,
         }
     }
 

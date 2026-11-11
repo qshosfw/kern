@@ -72,7 +72,6 @@ fn draw_inst_mnem(canvas: &mut gfx::Canvas, row: u8, label: &str, inst: u16) {
     }
 }
 
-#[inline(never)]
 fn draw_page_overview(
     canvas: &mut gfx::Canvas,
     slot: &BootSlot,
@@ -146,7 +145,6 @@ static STK_LABELS: [&str; 8] = [
 ];
 
 #[cfg(feature = "panic_gui_extended")]
-#[inline(never)]
 fn draw_page_registers(canvas: &mut gfx::Canvas, slot: &BootSlot, hbuf: &mut [u8; 8]) {
     let vals = [
         slot.stack_dump[0],
@@ -166,7 +164,6 @@ fn draw_page_registers(canvas: &mut gfx::Canvas, slot: &BootSlot, hbuf: &mut [u8
 }
 
 #[cfg(feature = "panic_gui_extended")]
-#[inline(never)]
 fn draw_page_backtrace(
     canvas: &mut gfx::Canvas,
     slot: &BootSlot,
@@ -209,7 +206,6 @@ fn draw_page_backtrace(
 }
 
 #[cfg(feature = "panic_gui_extended")]
-#[inline(never)]
 fn draw_page_stack(
     canvas: &mut gfx::Canvas,
     slot: &BootSlot,
@@ -226,7 +222,6 @@ fn draw_page_stack(
 }
 
 #[cfg(feature = "panic_gui_extended")]
-#[inline(never)]
 fn draw_page_forensics(
     canvas: &mut gfx::Canvas,
     slot: &BootSlot,

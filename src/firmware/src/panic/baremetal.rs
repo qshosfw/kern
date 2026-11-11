@@ -94,18 +94,16 @@ pub fn recovery_loop() -> ! {
     let mut led_on = true;
     let mut last_key: Option<kernel::event::KeyCode> = None;
 
+    let render_recovery = |canvas: &mut gfx::Canvas, p: u8, cd: Option<u8>| {
+        canvas.clear();
+        if let Some(slot) = BOOT_RECORD.get().latest_valid_slot() {
+            crate::boot::recovery::draw_recovery_screen(canvas, slot, p, cd, is_k1);
+        }
+        baremetal_lcd_blit(canvas);
+    };
+
     // Initial render FIRST: Draw screen and blit before any UART output!
-    canvas.clear();
-    if let Some(slot) = BOOT_RECORD.get().latest_valid_slot() {
-        crate::boot::recovery::draw_recovery_screen(
-            canvas,
-            slot,
-            page,
-            Some(countdown_secs),
-            is_k1,
-        );
-    }
-    baremetal_lcd_blit(canvas);
+    render_recovery(canvas, page, Some(countdown_secs));
     bsp::set_status_led(bsp::StatusLed::Red);
 
     // Stream UART dump only after the LCD is already updated
@@ -151,17 +149,7 @@ pub fn recovery_loop() -> ! {
                 cortex_m::peripheral::SCB::sys_reset();
             }
 
-            canvas.clear();
-            if let Some(slot) = BOOT_RECORD.get().latest_valid_slot() {
-                crate::boot::recovery::draw_recovery_screen(
-                    canvas,
-                    slot,
-                    page,
-                    Some(countdown_secs),
-                    is_k1,
-                );
-            }
-            baremetal_lcd_blit(canvas);
+            render_recovery(canvas, page, Some(countdown_secs));
         }
 
         // 3. Direct hardware keypad matrix polling with release confirmation
@@ -190,11 +178,7 @@ pub fn recovery_loop() -> ! {
                     }
                 }
 
-                canvas.clear();
-                if let Some(slot) = BOOT_RECORD.get().latest_valid_slot() {
-                    crate::boot::recovery::draw_recovery_screen(canvas, slot, page, None, is_k1);
-                }
-                baremetal_lcd_blit(canvas);
+                render_recovery(canvas, page, None);
             }
         } else {
             key_released = true;

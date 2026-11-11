@@ -7,7 +7,6 @@ use gfx::gui::view::View;
 use kernel::app::{App, AppMetadata, EventResult};
 use kernel::event::{Event, KeyCode, KeyState};
 
-pub mod assets;
 pub mod catalog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +41,8 @@ pub const MAX_LAUNCHER_ENTRIES: usize = 12;
 #[unsafe(link_section = ".uninit")]
 static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
     title: "",
-    icon_8: &crate::apps::vfo::assets::ICON_8,
-    icon_16: &crate::apps::vfo::assets::ICON_16,
+    icon_8: &gfx::icons::ICON_APP_RADIO,
+    icon_16: &gfx::icons::ICON_16_RADIO,
     target: LauncherTarget::App(APP_ID_VFO),
 }; MAX_LAUNCHER_ENTRIES];
 
@@ -64,16 +63,16 @@ pub fn load_entries(
         // 1. Core Built-In Apps
         ENTRIES[count] = LauncherEntry {
             title: "Radio",
-            icon_8: &crate::apps::vfo::assets::ICON_8,
-            icon_16: &crate::apps::vfo::assets::ICON_16,
+            icon_8: &gfx::icons::ICON_APP_RADIO,
+            icon_16: &gfx::icons::ICON_16_RADIO,
             target: LauncherTarget::App(APP_ID_VFO),
         };
         count += 1;
 
         ENTRIES[count] = LauncherEntry {
             title: "Settings",
-            icon_8: &crate::apps::settings::assets::ICON_8,
-            icon_16: &crate::apps::settings::assets::ICON_16,
+            icon_8: &gfx::icons::ICON_APP_SETTINGS,
+            icon_16: &gfx::icons::ICON_16_SETTINGS,
             target: LauncherTarget::App(APP_ID_SETTINGS),
         };
         count += 1;
@@ -101,16 +100,16 @@ pub fn load_entries(
         // 3. Built-In Utilities & Information
         ENTRIES[count] = LauncherEntry {
             title: "Torch",
-            icon_8: &assets::ICON_TORCH_8,
-            icon_16: &assets::ICON_TORCH_16,
+            icon_8: &gfx::icons::ICON_APP_TORCH,
+            icon_16: &gfx::icons::ICON_16_FLASHLIGHT,
             target: LauncherTarget::Shortcut(Shortcut::Flashlight),
         };
         count += 1;
 
         ENTRIES[count] = LauncherEntry {
             title: "About",
-            icon_8: &assets::ICON_ABOUT_8,
-            icon_16: &assets::ICON_ABOUT_16,
+            icon_8: &gfx::icons::ICON_APP_ABOUT,
+            icon_16: &gfx::icons::ICON_16_INFO,
             target: LauncherTarget::About,
         };
         count += 1;

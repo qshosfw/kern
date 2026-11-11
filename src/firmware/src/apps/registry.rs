@@ -36,16 +36,16 @@ kernel::define_os_apps! {
         caps: CapabilitySet::NONE
     ],
     APP_ID_VFO => crate::apps::VfoApp [
-        meta: AppMetadata { name: "Radio", icon: &crate::apps::vfo::assets::ICON_16, icon_8: &crate::apps::vfo::assets::ICON_8 },
+        meta: AppMetadata { name: "Radio", icon: &gfx::icons::ICON_16_RADIO, icon_8: &gfx::icons::ICON_APP_RADIO },
         caps: CapabilitySet::NONE.with(kernel::caps::Cap::RadioRx).with(kernel::caps::Cap::RadioTx)
     ],
     APP_ID_SETTINGS => crate::apps::SettingsApp [
-        meta: AppMetadata { name: "Settings", icon: &crate::apps::settings::assets::ICON_16, icon_8: &crate::apps::settings::assets::ICON_8 },
+        meta: AppMetadata { name: "Settings", icon: &gfx::icons::ICON_16_SETTINGS, icon_8: &gfx::icons::ICON_APP_SETTINGS },
         caps: CapabilitySet::NONE
     ],
     #[cfg(feature = "app_tasks")]
     APP_ID_TASKS => crate::apps::TasksApp [
-        meta: AppMetadata { name: "Tasks", icon: &crate::apps::launcher::assets::ICON_DIAG_16, icon_8: &crate::apps::launcher::assets::ICON_DIAG_8 },
+        meta: AppMetadata { name: "Tasks", icon: &gfx::icons::ICON_16_DIAGNOSTICS, icon_8: &gfx::icons::ICON_APP_DIAG },
         caps: CapabilitySet::NONE
     ],
 }

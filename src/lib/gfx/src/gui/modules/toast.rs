@@ -19,7 +19,7 @@ impl ToastModel {
     pub const fn new() -> Self {
         Self {
             message: String::new(),
-            duration_ms: 1500,
+            duration_ms: 0,
             elapsed_ms: 0,
             is_active: false,
         }

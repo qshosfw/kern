@@ -5,7 +5,6 @@ pub mod app;
 pub mod apps;
 #[cfg(feature = "boot_assets")]
 pub mod asset_chooser;
-pub mod assets;
 pub mod audio;
 pub mod battery;
 pub mod buttons;

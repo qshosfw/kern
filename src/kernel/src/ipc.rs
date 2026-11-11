@@ -299,7 +299,7 @@ impl<const N: usize> IpcChannel<N> {
             messages: [const { KrxIpcMessage::empty() }; N],
             occupied: [false; N],
             head: 0,
-            next_seq: 1,
+            next_seq: 0,
         }
     }
 
@@ -307,8 +307,8 @@ impl<const N: usize> IpcChannel<N> {
     /// If seq is 0, auto-assigns the next monotonic sequence number.
     pub fn send(&mut self, mut msg: KrxIpcMessage) -> bool {
         if msg.seq == 0 {
-            msg.seq = self.next_seq;
             self.next_seq = self.next_seq.wrapping_add(1).max(1);
+            msg.seq = self.next_seq;
         }
 
         let mask = N - 1;

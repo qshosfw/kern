@@ -45,8 +45,7 @@ impl SettingsApp {
         if self.stack_top < self.stack.len() {
             self.stack[self.stack_top] = MenuFrame {
                 page: self.current_page,
-                selected_idx: self.selected_idx,
-                title: self.title,
+                selected_idx: self.selected_idx as u8,
             };
             self.stack_top += 1;
         }
@@ -69,8 +68,8 @@ impl SettingsApp {
             self.stack_top -= 1;
             let frame = self.stack[self.stack_top];
             self.current_page = frame.page;
-            self.selected_idx = frame.selected_idx;
-            self.title = frame.title;
+            self.selected_idx = frame.selected_idx as usize;
+            self.title = get_page(frame.page).0;
             self.populate_current_menu(ctx);
             if self.selected_idx >= self.items_len {
                 self.selected_idx = self.items_len.saturating_sub(1);

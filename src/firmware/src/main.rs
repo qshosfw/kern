@@ -48,7 +48,7 @@ pub static BOOT_RECORD: panic::BootRecordCell = panic::BootRecordCell::new();
 pub static mut MASTER_CONFIG: core::mem::MaybeUninit<MasterConfig> =
     core::mem::MaybeUninit::uninit();
 pub static mut CALIBRATION: services::calibration::SystemCalibration =
-    services::calibration::SystemCalibration::new();
+    services::calibration::SystemCalibration::empty();
 pub static mut PASSCODE_STATE: crate::security::PasscodeState =
     crate::security::PasscodeState::empty();
 #[unsafe(link_section = ".uninit")]
@@ -105,6 +105,7 @@ fn main() -> ! {
     unsafe {
         MasterConfig::init_in_place(core::ptr::addr_of_mut!(MASTER_CONFIG) as *mut MasterConfig);
         RadioState::init_in_place(core::ptr::addr_of_mut!(RADIO_STATE) as *mut RadioState);
+        (*core::ptr::addr_of_mut!(CALIBRATION)).init_defaults();
     }
 
     // 0. CRITICAL: Set Vector Table Offset Register (VTOR) to 0x0800_2800!

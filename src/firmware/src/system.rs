@@ -40,14 +40,8 @@ fn wake_and_notify_activity(hw: &mut SystemHardware) {
     hw.orchestrator.notify_activity();
 }
 
-#[inline(never)]
-fn record_proc_activation(app_id: usize) {
-    if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(app_id) {
-        pcb.ledger.record_activation();
-    }
-}
+use crate::orchestrator::record_proc_activation;
 
-#[inline(never)]
 fn is_plugged_in(hw: &SystemHardware) -> bool {
     #[cfg(feature = "usb")]
     let is_usb_plugged = hw.usb.is_connected();
@@ -171,26 +165,10 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     drain_keypad_matrix(hw);
 
     // 7. Wakeup & Hardware Restoration
-    // Restore system clocks cleanly based on configuration
-    #[cfg(feature = "usb")]
-    if hw.usb.is_connected() {
-        py32_hal::rcc::set_sysclk_48mhz();
-    } else {
-        py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
-    }
-    #[cfg(not(feature = "usb"))]
-    py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
-
-    // Re-initialize and flush RigWire serial subsystem
     #[cfg(feature = "uart")]
-    {
-        py32_hal::uart::clear_errors();
-        bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
-    }
+    py32_hal::uart::clear_errors();
     #[cfg(feature = "usb")]
-    {
-        hw.usb.init();
-    }
+    hw.usb.init();
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     hw.wire.reset_collector();
 
@@ -211,12 +189,9 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
             .configure_channel(crate::radio_state().coord.listening_channel());
     }
 
-    // Restore volume and hardware audio settings
-    crate::hardware::apply_audio_hardware(
-        &crate::master_config_ref().audio,
-        &mut hw.audio,
-        &mut hw.radio,
-    );
+    // Restore clocks, UART baud, audio, and display hardware from master config
+    crate::master_config().hw_dirty = 0x1F;
+    hw.apply_dirty_configs();
 
     // Sound unlock confirmation chime
     hw.radio
@@ -268,7 +243,6 @@ fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc) {
 }
 
 #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-#[inline(never)]
 fn poll_rigwire(hw: &mut SystemHardware, now: u32) {
     if let Some((header, _raw_len)) = hw.wire.poll(now) {
         let handled = crate::services::wire::dispatch_wire_record(&header, hw, now);
@@ -284,7 +258,6 @@ fn poll_rigwire(hw: &mut SystemHardware, now: u32) {
     }
 }
 
-#[inline(never)]
 fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
     unsafe {
         (*core::ptr::addr_of_mut!(POWER_SERVICE)).tick_second();

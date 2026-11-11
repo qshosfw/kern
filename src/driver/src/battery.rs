@@ -64,7 +64,7 @@ impl BatteryDriver {
             last_raw_adc: 0,
             last_vdda: 0,
             last_temp: 0,
-            internal_res_m_ohm: 180,
+            internal_res_m_ohm: 0,
             charge_detect_enabled: false,
             is_charging: false,
             charge_counter: 0,
@@ -75,8 +75,8 @@ impl BatteryDriver {
             display_pct: 0,
             is_low_state: false,
             is_critical_state: false,
-            warn_threshold_mv: 6800,
-            shut_threshold_mv: 6300,
+            warn_threshold_mv: 0,
+            shut_threshold_mv: 0,
         }
     }
 
@@ -411,8 +411,16 @@ impl BatteryDriver {
         // Exiting low/critical state requires +150 mV margin or active charging to prevent threshold flutter.
         // Low battery is strictly guarded: percentage must be <= 15% (or <= 20% if OCV is below threshold).
         // It can NEVER spuriously trigger when battery is healthy (e.g. 77%).
-        let warn_limit = self.warn_threshold_mv;
-        let shut_limit = self.shut_threshold_mv;
+        let warn_limit = if self.warn_threshold_mv > 0 {
+            self.warn_threshold_mv
+        } else {
+            6800
+        };
+        let shut_limit = if self.shut_threshold_mv > 0 {
+            self.shut_threshold_mv
+        } else {
+            6300
+        };
 
         if raw_adc == 0 || self.smoothed_mv == 0 || is_external {
             self.is_low_state = false;

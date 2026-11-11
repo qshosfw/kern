@@ -153,17 +153,6 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
         }
         PageId::System => {
             ctx.config.mark_system_dirty();
-            #[cfg(feature = "usb")]
-            if ctx.usb.as_ref().map(|u| u.is_connected()).unwrap_or(false) {
-                // Maintain 48 MHz while USB host is actively connected
-                py32_hal::rcc::set_sysclk_48mhz();
-            } else {
-                py32_hal::rcc::set_sysclk_index(ctx.config.system.cpu_clock);
-            }
-            #[cfg(not(feature = "usb"))]
-            py32_hal::rcc::set_sysclk_index(ctx.config.system.cpu_clock);
-
-            bsp::Board::uart_set_baud(ctx.config.system.baud_rate());
         }
         PageId::Device | PageId::BootSplash => {
             ctx.config.mark_system_dirty();

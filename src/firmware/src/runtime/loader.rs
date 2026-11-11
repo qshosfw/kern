@@ -303,8 +303,8 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
         metadata: AppMetadata {
             name: app_name,
-            icon: &crate::apps::launcher::assets::ICON_DIAG_16,
-            icon_8: &crate::apps::launcher::assets::ICON_DIAG_8,
+            icon: &gfx::icons::ICON_16_DIAGNOSTICS,
+            icon_8: &gfx::icons::ICON_APP_DIAG,
         },
         vtable,
         instance,

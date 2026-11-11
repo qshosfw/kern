@@ -5,10 +5,8 @@ use crate::services::SystemStorage;
 // compile-time fallback for the target dev device, semantic validation,
 // and hardware binding signatures against the 96-bit MCU UID.
 
-use crate::security::kdf::derive_master_key;
 use crate::services::storage::{ATTR_READ_ONLY, ATTR_SYSTEM, FileAttributes};
 use crypto::ascon::Ascon128;
-use crypto::buffer::SecretBuffer;
 
 /// Factory radio calibration fallback (512 bytes).
 pub const DEV_TARGET_FACTORY_CALIB: &[u8; 512] = include_bytes!("calib_default.dat");
@@ -57,22 +55,10 @@ impl CalibSignature {
 /// Compute a 32-byte silicon binding signature linking calibration data to the MCU UID.
 pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibSignature {
     let hw_serial = bsp::uid::get_hardware_serial64();
-
-    // Derive a unique hardware KEK for calibration binding
-    let mut calib_kek = SecretBuffer::new();
     let nonce = [0x5Au8; 16];
-    derive_master_key(
-        mcu_uid,
-        b"CALIB_KEK",
-        &nonce,
-        50,
-        &mut calib_kek,
-        Some(bsp::Board::wdt_feed),
-        None,
-    );
-
     let mut key16 = [0u8; 16];
-    key16.copy_from_slice(&calib_kek.as_slice()[0..16]);
+    key16[..4].copy_from_slice(CALIB_SIG_IDENT);
+    key16[4..16].copy_from_slice(mcu_uid);
     let cipher = Ascon128::new(key16);
     let auth_tag = cipher.compute_mac(&nonce, CALIB_SIG_IDENT, calib);
 
@@ -191,15 +177,9 @@ pub trait CalibrationService {
     fn raw_bytes(&self) -> &[u8; 512];
 }
 
-/// Concrete in-memory system calibration holder (512-byte raw + fast access cached registers).
+/// Concrete in-memory system calibration holder (zero-copy 512-byte CalibrationBlock view).
 pub struct SystemCalibration {
     raw: [u8; 512],
-    battery_curve: [u16; 6],
-    xtal_freq_low: i16,
-    lna_calib: u16,
-    mix_calib: u16,
-    volume_gain: u8,
-    dac_gain: u8,
     valid: bool,
     bound: bool,
 }
@@ -215,32 +195,27 @@ fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 1
 }
 
 impl SystemCalibration {
+    pub const fn empty() -> Self {
+        Self {
+            raw: [0u8; 512],
+            valid: false,
+            bound: false,
+        }
+    }
+
     pub const fn new() -> Self {
         Self {
             raw: *DEV_TARGET_FACTORY_CALIB,
-            battery_curve: [1438, 2050, 2138, 2227, 2314, 2600],
-            xtal_freq_low: 4,
-            lna_calib: 0x46,
-            mix_calib: 0x50,
-            volume_gain: 55,
-            dac_gain: 14,
             valid: true,
             bound: false,
         }
     }
 
-    fn extract_fields(&mut self, data: &[u8; 512]) {
-        self.raw.copy_from_slice(data);
-        for i in 0..6 {
-            self.battery_curve[i] =
-                u16::from_le_bytes([data[0x140 + i * 2], data[0x140 + i * 2 + 1]]);
-        }
-        self.xtal_freq_low = i16::from_le_bytes([data[0x188], data[0x189]]);
-        self.lna_calib = u16::from_le_bytes([data[0x18A], data[0x18B]]) & 0x01FF;
-        self.mix_calib = u16::from_le_bytes([data[0x18C], data[0x18D]]) & 0x01FF;
-        let vol = data[0x18E];
-        self.volume_gain = if vol < 64 { vol } else { 58 };
-        self.dac_gain = data[0x18F];
+    #[inline(always)]
+    pub fn init_defaults(&mut self) {
+        self.raw.copy_from_slice(DEV_TARGET_FACTORY_CALIB);
+        self.valid = true;
+        self.bound = false;
     }
 
     #[inline(always)]
@@ -356,7 +331,7 @@ impl SystemCalibration {
             bound = true;
         }
 
-        self.extract_fields(data);
+        self.raw.copy_from_slice(data);
         self.valid = true;
         self.bound = bound;
     }
@@ -392,7 +367,7 @@ impl SystemCalibration {
             return Err(());
         }
 
-        self.extract_fields(new_calib);
+        self.raw.copy_from_slice(new_calib);
         self.valid = true;
 
         let attr = FileAttributes {
@@ -407,17 +382,17 @@ impl SystemCalibration {
 
     #[inline(always)]
     pub fn battery_calib_const(&self) -> u16 {
-        self.battery_curve[3]
+        self.as_block().battery_calib_const()
     }
 
     #[inline(always)]
     pub fn battery_curve(&self) -> [u16; 6] {
-        self.battery_curve
+        self.as_block().battery_curve
     }
 
     #[inline(always)]
     pub fn xtal_freq_low(&self) -> i16 {
-        self.xtal_freq_low
+        self.as_block().xtal_freq_low()
     }
 
     #[inline(always)]
@@ -436,11 +411,11 @@ impl CalibrationService for SystemCalibration {
     }
 
     fn battery_calib_const(&self) -> u16 {
-        self.battery_curve[3]
+        self.battery_calib_const()
     }
 
     fn battery_curve(&self) -> [u16; 6] {
-        self.battery_curve
+        self.battery_curve()
     }
 
     fn battery_mv_from_adc(&self, raw_adc: u16) -> u16 {
@@ -452,23 +427,23 @@ impl CalibrationService for SystemCalibration {
     }
 
     fn xtal_freq_low(&self) -> i16 {
-        self.xtal_freq_low
+        self.xtal_freq_low()
     }
 
     fn lna_calib(&self) -> u16 {
-        self.lna_calib
+        self.as_block().lna_calib()
     }
 
     fn mix_calib(&self) -> u16 {
-        self.mix_calib
+        self.as_block().mix_calib()
     }
 
     fn volume_gain(&self) -> u8 {
-        self.volume_gain
+        self.as_block().volume_gain()
     }
 
     fn dac_gain(&self) -> u8 {
-        self.dac_gain
+        self.as_block().dac_gain()
     }
 
     fn squelch_thresholds(

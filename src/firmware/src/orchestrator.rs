@@ -117,7 +117,6 @@ pub fn clear_sunk_keys() {
     }
 }
 
-#[inline(never)]
 fn filter_sunk_keys(event: &Event) -> bool {
     if let Event::Key { code, state } = *event {
         let bit = key_to_bit(code);
@@ -141,16 +140,15 @@ fn filter_sunk_keys(event: &Event) -> bool {
     false
 }
 
-#[inline(never)]
-fn record_proc_event(app_id: usize) {
+pub fn record_proc_activation(app_id: usize) {
     if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
-        pcb.ledger.record_event();
+        pcb.ledger.record_activation();
     }
 }
 
-#[inline(never)]
-fn record_proc_stack(app_id: usize) {
+fn record_proc_event_and_stack(app_id: usize) {
     if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
+        pcb.ledger.record_event();
         let used_stk = kernel::sys::SystemDiagnostics::stack_used_now() as u16;
         pcb.ledger.record_stack_depth(used_stk);
     }
@@ -311,14 +309,6 @@ impl Orchestrator {
         self.lock_mgr.reset_input_tracking();
     }
 
-    #[inline(never)]
-    fn record_proc_activation(app_id: usize) {
-        if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
-            pcb.ledger.record_activation();
-        }
-    }
-
-    #[inline(never)]
     fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
         // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
         #[cfg(feature = "radio")]
@@ -358,10 +348,10 @@ impl Orchestrator {
         }
 
         // 2. Power Management & Battery Supervisor (PID 3)
-        Self::record_proc_activation(0xF2);
+        record_proc_activation(0xF2);
 
         // 3. System Kernel & Watch Uptime Service (PID 1)
-        Self::record_proc_activation(0xF0);
+        record_proc_activation(0xF0);
     }
 
     #[inline(never)]
@@ -381,7 +371,6 @@ impl Orchestrator {
         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Success);
     }
 
-    #[inline(never)]
     fn handle_f_key_action<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -420,7 +409,6 @@ impl Orchestrator {
         self.drain_ipc_commands(ctx);
     }
 
-    #[inline(never)]
     fn supervise_lock<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -468,7 +456,6 @@ impl Orchestrator {
         (intercepted, state_changed)
     }
 
-    #[inline(never)]
     fn update_key_ownership(&mut self, event: &Event, status: EventResult, fault_handled: bool) {
         if !fault_handled {
             if let Event::Key { code, state } = *event {
@@ -537,7 +524,7 @@ impl Orchestrator {
 
         if matches!(event, Event::Tick) {
             self.tick_background_services(ctx);
-            Self::record_proc_activation(self.active_app_id);
+            record_proc_activation(self.active_app_id);
         }
 
         // Intercept and dispatch Microkernel System & IPC Events
@@ -564,9 +551,8 @@ impl Orchestrator {
         };
 
         // 3. Forward event to active foreground app
-        record_proc_event(self.active_app_id);
         let status = crate::AppRegistry::on_event(self.active_app_id, ctx, &event);
-        record_proc_stack(self.active_app_id);
+        record_proc_event_and_stack(self.active_app_id);
 
         // 4. Dynamic Fault & Error Interception
         let mut fault_handled = false;
@@ -600,7 +586,6 @@ impl Orchestrator {
             || lock_state_changed
     }
 
-    #[inline(never)]
     fn handle_dynamic_fault<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -627,7 +612,6 @@ impl Orchestrator {
         sink_exit_key();
     }
 
-    #[inline(never)]
     fn handle_modal_event<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -691,7 +675,6 @@ impl Orchestrator {
         }
     }
 
-    #[inline(never)]
     fn handle_global_shortcuts<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -757,7 +740,6 @@ impl Orchestrator {
         }
     }
 
-    #[inline(never)]
     fn handle_kernel_sys_event<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,

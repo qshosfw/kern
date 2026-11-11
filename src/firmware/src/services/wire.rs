@@ -273,7 +273,6 @@ fn read_ui_facet(facet: u16, hw: &SystemHardware, out: &mut [u8]) -> Result<usiz
     }
 }
 
-#[inline(never)]
 fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, now: u32) -> bool {
     let req = match HandleGetReq::parse(payload) {
         Ok(r) => r,
@@ -390,28 +389,20 @@ fn set_radio_facet(
     }
 }
 
-#[inline(never)]
 fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<(), WireStatus> {
     match req.handle.domain {
-        DOMAIN_SYSTEM => match req.handle.facet {
-            FACET_SYS_METRICS => {
-                if let Some(&lock) = req.value.first() {
-                    let should_lock = lock != 0;
-                    if should_lock != hw.orchestrator.is_keypad_locked() {
-                        hw.orchestrator.toggle_keypad_lock();
-                    }
+        DOMAIN_SYSTEM if req.handle.facet == FACET_SYS_METRICS => {
+            if let Some(&lock) = req.value.first() {
+                if (lock != 0) != hw.orchestrator.is_keypad_locked() {
+                    hw.orchestrator.toggle_keypad_lock();
                 }
-                Ok(())
             }
-            _ => Err(WireStatus::UnsupportedField),
-        },
+            Ok(())
+        }
         DOMAIN_RADIO => set_radio_facet(req.handle.facet, req.handle.instance, req.value, hw),
         DOMAIN_INPUT => match req.handle.facet {
             FACET_INPUT_KEY => {
-                if req.value.is_empty() {
-                    return Err(WireStatus::BadLength);
-                }
-                let code_u8 = req.value[0];
+                let code_u8 = get_u8(req.value)?;
                 let state_u8 = req.value.get(1).copied().unwrap_or(0);
                 if let Some(code) = KeyCode::from_u8(code_u8) {
                     let state = match state_u8 {
@@ -426,8 +417,7 @@ fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<()
                 }
             }
             FACET_INPUT_LOCK => {
-                let should_lock = get_u8(req.value)? != 0;
-                if should_lock != hw.orchestrator.is_keypad_locked() {
+                if (get_u8(req.value)? != 0) != hw.orchestrator.is_keypad_locked() {
                     hw.orchestrator.toggle_keypad_lock();
                 }
                 Ok(())
@@ -443,16 +433,15 @@ fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<()
             let dest = mcfg.config_bytes_mut(domain_idx);
             let copy_len = req.value.len().min(dest.len());
             dest[..copy_len].copy_from_slice(&req.value[..copy_len]);
-            mcfg.seal(domain_idx);
-            mcfg.dirty |= 1 << domain_idx;
+            mcfg.mark_domain_dirty(domain_idx);
             let _ = mcfg.flush_dirty(hw.filesystem);
             Ok(())
         }
+        DOMAIN_SYSTEM => Err(WireStatus::UnsupportedField),
         _ => Err(WireStatus::Unsupported),
     }
 }
 
-#[inline(never)]
 fn on_handle_set(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match HandleSetReq::parse(payload) {
         Ok(r) => r,
@@ -469,7 +458,6 @@ fn on_handle_set(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -
     send_resp(hw, header, status, &resp)
 }
 
-#[inline(never)]
 fn on_handle_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match HandleInvokeReq::parse(payload) {
         Ok(r) => r,
@@ -573,7 +561,6 @@ fn on_handle_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     send_resp(hw, header, status, &resp)
 }
 
-#[inline(never)]
 fn on_handle_stream(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match HandleStreamReq::parse(payload) {
         Ok(r) => r,
@@ -599,7 +586,6 @@ fn on_handle_stream(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     }
 }
 
-#[inline(never)]
 fn handle_control_service(
     header: &WireHeader,
     payload: &[u8],
@@ -617,7 +603,6 @@ fn handle_control_service(
 
 // ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
 
-#[inline(never)]
 fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
     let b = path.as_bytes();
     if b.is_empty() || b.len() > 32 || b[0] != b'/' {
@@ -642,7 +627,6 @@ fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
     Ok(())
 }
 
-#[inline(never)]
 fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferOpenRequest::parse(payload) {
         Some(r) => r,
@@ -699,7 +683,6 @@ fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     send_resp(hw, header, WireStatus::Ok, &resp)
 }
 
-#[inline(never)]
 fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferChunkRequest::parse(payload) {
         Some(r) => r,
@@ -746,7 +729,6 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
     }
 }
 
-#[inline(never)]
 fn commit_calibration_payload(
     staging: &[u8],
     total_len: usize,
@@ -828,7 +810,6 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
     send_resp(hw, header, WireStatus::Ok, &resp)
 }
 
-#[inline(never)]
 fn on_transfer_abort(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferAbortRequest::parse(payload) {
         Some(r) => r,
@@ -844,7 +825,6 @@ fn on_transfer_abort(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
     send_resp(hw, header, WireStatus::Ok, &resp)
 }
 
-#[inline(never)]
 fn on_transfer_stat(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferStatRequest::parse(payload) {
         Some(r) => r,
@@ -887,7 +867,6 @@ fn on_transfer_stat(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     send_resp(hw, header, status, &reply)
 }
 
-#[inline(never)]
 fn on_transfer_list(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferListRequest::parse(payload) {
         Some(r) => r,
@@ -920,7 +899,6 @@ fn on_transfer_list(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     send_resp(hw, header, WireStatus::Ok, &out[..off])
 }
 
-#[inline(never)]
 fn on_transfer_remove(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferRemoveRequest::parse(payload) {
         Some(r) => r,
@@ -942,7 +920,6 @@ fn on_transfer_remove(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwa
     send_status(hw, header, status)
 }
 
-#[inline(never)]
 fn handle_data_service(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     match header.opcode {
         OP_TRANSFER_OPEN => on_transfer_open(header, payload, hw),
@@ -957,7 +934,6 @@ fn handle_data_service(header: &WireHeader, payload: &[u8], hw: &mut SystemHardw
 }
 
 // ── SERVICE_EVENTS (0x02) ────────────────────────────────────────────────────
-#[inline(never)]
 fn handle_events_service(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     match header.opcode {
         OP_EVENTS_SUBSCRIBE => {

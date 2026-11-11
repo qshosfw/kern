@@ -248,6 +248,31 @@ pub fn render_progress(lcd: &mut St7565, big_title: &str, sub_title: &str, progr
 }
 
 #[cfg(feature = "filesystem")]
+fn rescue_raw_calibration<'a>(fs: &mut KernFS<Py25q16FlashDriver<'a>>, raw_calib: &mut [u8; 512]) {
+    let valid_at_10k = fs.dev.read_data(0x010000, raw_calib).is_ok()
+        && crate::services::calibration::is_valid_calibration(raw_calib);
+    if !valid_at_10k {
+        raw_calib.copy_from_slice(crate::services::calibration::DEV_TARGET_FACTORY_CALIB);
+    }
+}
+
+#[cfg(feature = "filesystem")]
+fn save_rescued_calibration<'a>(
+    fs: &mut KernFS<Py25q16FlashDriver<'a>>,
+    raw_calib: &[u8; 512],
+    radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
+) {
+    let _ = fs.create_dir("/sys");
+    let _ = fs.write_file("/sys/calib.dat", raw_calib);
+    let _ = fs.write_file("/sys/calib.bak", raw_calib);
+
+    let mcu_uid = bsp::uid::read_mcu_uid();
+    let sig = crate::services::calibration::compute_device_signature(raw_calib, &mcu_uid);
+    let _ = fs.write_file("/sys/calib.sig", &sig.to_bytes());
+    radio.set_status_led(bsp::StatusLed::Off);
+}
+
+#[cfg(feature = "filesystem")]
 #[inline(never)]
 fn prompt_and_format_storage<'a>(
     lcd: &mut St7565,
@@ -257,10 +282,8 @@ fn prompt_and_format_storage<'a>(
 ) {
     bsp::pins::BACKLIGHT.set_high();
     lcd.turn_on();
-    // Mount or calibration lookup failed. Turn ON Golden Orange status LED (Red + Green LEDs ON)
     radio.set_status_led(bsp::StatusLed::Orange);
 
-    // Enter blocking UI loop to confirm format.
     render_dialog(
         lcd,
         "Uninitialized Storage",
@@ -288,14 +311,9 @@ fn prompt_and_format_storage<'a>(
         }
     }
 
-    // Read raw factory calibration from SPI Flash 0x010000 (Sector 16 / EEPROM 0x1E00) to rescue it
     let raw_calib = crate::services::staging_buf();
-    let read_ok = fs.dev.read_data(0x010000, raw_calib).is_ok();
-    if !(read_ok && crate::services::calibration::is_valid_calibration(raw_calib)) {
-        raw_calib.copy_from_slice(crate::services::calibration::DEV_TARGET_FACTORY_CALIB);
-    }
+    rescue_raw_calibration(fs, raw_calib);
 
-    // --- Step 2: Format Flash with Progress Bar ---
     let mut last_rendered_progress = 0u8;
     let _ = fs.format(Some(&mut |progress| {
         bsp::Board::wdt_feed();
@@ -310,18 +328,8 @@ fn prompt_and_format_storage<'a>(
         }
     }));
 
-    // --- Step 3: Restore Factory Calibration ---
     render_progress(lcd, "Porting Calibration", "Writing /sys/calib.dat...", 95);
-
-    let _ = fs.write_file("/sys/calib.dat", raw_calib);
-    let _ = fs.write_file("/sys/calib.bak", raw_calib);
-
-    let mcu_uid = bsp::uid::read_mcu_uid();
-    let sig = crate::services::calibration::compute_device_signature(raw_calib, &mcu_uid);
-    let _ = fs.write_file("/sys/calib.sig", &sig.to_bytes());
-
-    // Turn OFF Yellow Status LED
-    radio.set_status_led(bsp::StatusLed::Off);
+    save_rescued_calibration(fs, raw_calib, radio);
 }
 
 #[cfg(feature = "filesystem")]
@@ -342,50 +350,14 @@ fn recover_calibration_to_fs<'a>(
     );
 
     let raw_calib = crate::services::staging_buf();
-    let mut restored = false;
-
-    // 1. Try reading /sys/calib.bak
-    if fs.exists("/sys/calib.bak") {
-        if let Ok(len) = fs.read_file("/sys/calib.bak", raw_calib) {
-            if len == 512 && crate::services::calibration::is_valid_calibration(raw_calib) {
-                restored = true;
-            }
-        }
+    let from_prov = fs.exists("/prov/calib.dat")
+        && fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
+        && crate::services::calibration::is_valid_calibration(raw_calib);
+    if !from_prov {
+        rescue_raw_calibration(fs, raw_calib);
     }
 
-    // 2. Try raw SPI Flash 0x010000 (Sector 16 / EEPROM 0x1E00)
-    if !restored {
-        if fs.dev.read_data(0x010000, raw_calib).is_ok()
-            && crate::services::calibration::is_valid_calibration(raw_calib)
-        {
-            restored = true;
-        }
-    }
-
-    // 3. Try /prov/calib.dat
-    if !restored && fs.exists("/prov/calib.dat") {
-        if let Ok(len) = fs.read_file("/prov/calib.dat", raw_calib) {
-            if len == 512 && crate::services::calibration::is_valid_calibration(raw_calib) {
-                restored = true;
-            }
-        }
-    }
-
-    // 4. Fallback to factory default calibration
-    if !restored {
-        raw_calib.copy_from_slice(crate::services::calibration::DEV_TARGET_FACTORY_CALIB);
-    }
-
-    let _ = fs.create_dir("/sys");
-    let _ = fs.write_file("/sys/calib.dat", raw_calib);
-    let _ = fs.write_file("/sys/calib.bak", raw_calib);
-
-    // Re-sign with device MCU UID to /sys/calib.sig
-    let mcu_uid = bsp::uid::read_mcu_uid();
-    let sig = crate::services::calibration::compute_device_signature(raw_calib, &mcu_uid);
-    let _ = fs.write_file("/sys/calib.sig", &sig.to_bytes());
-
-    radio.set_status_led(bsp::StatusLed::Off);
+    save_rescued_calibration(fs, raw_calib, radio);
 }
 
 #[cfg(feature = "filesystem")]

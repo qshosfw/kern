@@ -119,11 +119,11 @@ pub const DIRTY_SYSTEM: u8 = 1 << 3;
 pub const DIRTY_BATTERY: u8 = 1 << 4;
 pub const DIRTY_APPS: u8 = 1 << 5;
 
-pub const HW_DIRTY_KEYS: u8 = 1 << 0;
-pub const HW_DIRTY_AUDIO: u8 = 1 << 1;
-pub const HW_DIRTY_DISPLAY: u8 = 1 << 2;
-pub const HW_DIRTY_BATTERY: u8 = 1 << 3;
-pub const HW_DIRTY_SYSTEM: u8 = 1 << 4;
+pub const HW_DIRTY_DISPLAY: u8 = DIRTY_DISPLAY;
+pub const HW_DIRTY_AUDIO: u8 = DIRTY_AUDIO;
+pub const HW_DIRTY_KEYS: u8 = DIRTY_KEYS;
+pub const HW_DIRTY_SYSTEM: u8 = DIRTY_SYSTEM;
+pub const HW_DIRTY_BATTERY: u8 = DIRTY_BATTERY;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MasterConfig {
@@ -155,244 +155,67 @@ pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut S
 }
 
 struct ConfigMeta {
-    flag: u8,
     version: u8,
     path: &'static str,
 }
 
 static CONFIG_METAS: [ConfigMeta; 6] = [
     ConfigMeta {
-        flag: DIRTY_DISPLAY,
         version: DisplayConfig::VERSION,
         path: DisplayConfig::PATH,
     },
     ConfigMeta {
-        flag: DIRTY_AUDIO,
         version: AudioConfig::VERSION,
         path: AudioConfig::PATH,
     },
     ConfigMeta {
-        flag: DIRTY_KEYS,
         version: KeyConfig::VERSION,
         path: KeyConfig::PATH,
     },
     ConfigMeta {
-        flag: DIRTY_SYSTEM,
         version: SystemConfig::VERSION,
         path: SystemConfig::PATH,
     },
     ConfigMeta {
-        flag: DIRTY_BATTERY,
         version: BatteryConfig::VERSION,
         path: BatteryConfig::PATH,
     },
     ConfigMeta {
-        flag: DIRTY_APPS,
         version: AppsConfig::VERSION,
         path: AppsConfig::PATH,
     },
 ];
 
-#[derive(Clone, Copy)]
-struct BoundsRule {
-    offset: u8,
-    min: u8,
-    max: u8,
-}
-
 #[inline(never)]
-fn check_bounds(bytes: &[u8], expected_ver: u8, rules: &[BoundsRule]) -> bool {
+fn check_bounds(bytes: &[u8], expected_ver: u8, rules: &[[u8; 2]]) -> bool {
     if bytes[0] != expected_ver {
         return false;
     }
-    for r in rules {
-        let val = bytes[r.offset as usize];
-        if val < r.min || val > r.max {
+    for &[offset, max] in rules {
+        if bytes[offset as usize] > max {
             return false;
         }
     }
     true
 }
 
-static KEY_RULES: [BoundsRule; 6] = [
-    BoundsRule {
-        offset: 7,
-        min: 0,
-        max: 5,
-    },
-    BoundsRule {
-        offset: 8,
-        min: 0,
-        max: 3,
-    },
-    BoundsRule {
-        offset: 9,
-        min: 0,
-        max: 2,
-    },
-    BoundsRule {
-        offset: 10,
-        min: 0,
-        max: 3,
-    },
-    BoundsRule {
-        offset: 11,
-        min: 0,
-        max: 2,
-    },
-    BoundsRule {
-        offset: 21,
-        min: 0,
-        max: 2,
-    },
+static KEY_RULES: [[u8; 2]; 6] = [[7, 5], [8, 3], [9, 2], [10, 3], [11, 2], [21, 2]];
+static BATT_RULES: [[u8; 2]; 4] = [[2, 8], [3, 3], [4, 5], [5, 1]];
+static DISPLAY_RULES: [[u8; 2]; 11] = [
+    [1, 5],
+    [2, 10],
+    [3, 10],
+    [4, 100],
+    [5, 1],
+    [6, 3],
+    [7, 1],
+    [8, 4],
+    [9, 2],
+    [10, 1],
+    [11, 3],
 ];
-
-static BATT_RULES: [BoundsRule; 4] = [
-    BoundsRule {
-        offset: 2,
-        min: 0,
-        max: 8,
-    },
-    BoundsRule {
-        offset: 3,
-        min: 0,
-        max: 3,
-    },
-    BoundsRule {
-        offset: 4,
-        min: 0,
-        max: 5,
-    },
-    BoundsRule {
-        offset: 5,
-        min: 0,
-        max: 1,
-    },
-];
-
-static DISPLAY_RULES: [BoundsRule; 11] = [
-    BoundsRule {
-        offset: 1,
-        min: 0,
-        max: 5,
-    },
-    BoundsRule {
-        offset: 2,
-        min: 1,
-        max: 10,
-    },
-    BoundsRule {
-        offset: 3,
-        min: 0,
-        max: 10,
-    },
-    BoundsRule {
-        offset: 4,
-        min: 0,
-        max: 100,
-    },
-    BoundsRule {
-        offset: 5,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 6,
-        min: 0,
-        max: 3,
-    },
-    BoundsRule {
-        offset: 7,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 8,
-        min: 0,
-        max: 4,
-    },
-    BoundsRule {
-        offset: 9,
-        min: 0,
-        max: 2,
-    },
-    BoundsRule {
-        offset: 10,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 11,
-        min: 0,
-        max: 3,
-    },
-];
-
-static AUDIO_RULES: [BoundsRule; 7] = [
-    BoundsRule {
-        offset: 1,
-        min: 0,
-        max: 10,
-    },
-    BoundsRule {
-        offset: 2,
-        min: 0,
-        max: 5,
-    },
-    BoundsRule {
-        offset: 3,
-        min: 0,
-        max: 31,
-    },
-    BoundsRule {
-        offset: 4,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 6,
-        min: 0,
-        max: 10,
-    },
-    BoundsRule {
-        offset: 7,
-        min: 0,
-        max: 4,
-    },
-    BoundsRule {
-        offset: 8,
-        min: 0,
-        max: 4,
-    },
-];
-
-static APPS_RULES: [BoundsRule; 5] = [
-    BoundsRule {
-        offset: 1,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 2,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 3,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 4,
-        min: 0,
-        max: 1,
-    },
-    BoundsRule {
-        offset: 5,
-        min: 0,
-        max: 3,
-    },
-];
+static AUDIO_RULES: [[u8; 2]; 7] = [[1, 10], [2, 5], [3, 31], [4, 1], [6, 10], [7, 4], [8, 4]];
+static APPS_RULES: [[u8; 2]; 5] = [[1, 1], [2, 1], [3, 1], [4, 1], [5, 3]];
 
 impl MasterConfig {
     pub const DEFAULT: Self = Self {
@@ -427,33 +250,36 @@ impl MasterConfig {
         self.system.nav_layout()
     }
 
-    pub fn mark_audio_dirty(&mut self) {
-        self.dirty |= DIRTY_AUDIO;
-        self.hw_dirty |= HW_DIRTY_AUDIO;
-        self.seal(1);
+    #[inline(never)]
+    pub fn mark_domain_dirty(&mut self, idx: usize) {
+        let bit = 1u8 << idx;
+        self.dirty |= bit;
+        self.hw_dirty |= bit & 0x1F;
+        self.seal(idx);
     }
 
     pub fn mark_display_dirty(&mut self) {
-        self.dirty |= DIRTY_DISPLAY;
-        self.hw_dirty |= HW_DIRTY_DISPLAY;
-        self.seal(0);
+        self.mark_domain_dirty(0);
+    }
+
+    pub fn mark_audio_dirty(&mut self) {
+        self.mark_domain_dirty(1);
     }
 
     pub fn mark_keys_dirty(&mut self) {
-        self.dirty |= DIRTY_KEYS;
-        self.hw_dirty |= HW_DIRTY_KEYS;
-        self.seal(2);
-    }
-
-    pub fn mark_battery_dirty(&mut self) {
-        self.dirty |= DIRTY_BATTERY;
-        self.hw_dirty |= HW_DIRTY_BATTERY;
-        self.seal(4);
+        self.mark_domain_dirty(2);
     }
 
     pub fn mark_system_dirty(&mut self) {
-        self.dirty |= DIRTY_SYSTEM;
-        self.seal(3);
+        self.mark_domain_dirty(3);
+    }
+
+    pub fn mark_battery_dirty(&mut self) {
+        self.mark_domain_dirty(4);
+    }
+
+    pub fn mark_apps_dirty(&mut self) {
+        self.mark_domain_dirty(5);
     }
 
     /// Re-seal a block's CRC after a legitimate mutation. Any later stray write
@@ -537,7 +363,8 @@ impl MasterConfig {
             self.display.as_bytes(),
             DisplayConfig::VERSION,
             &DISPLAY_RULES,
-        ) {
+        ) || self.display.backlight_max == 0
+        {
             self.display = DisplayConfig::DEFAULT;
             repaired |= DIRTY_DISPLAY;
         }
@@ -553,11 +380,6 @@ impl MasterConfig {
         }
 
         repaired
-    }
-
-    pub fn mark_apps_dirty(&mut self) {
-        self.dirty |= DIRTY_APPS;
-        self.seal(5);
     }
 
     pub fn config_bytes(&self, idx: usize) -> &[u8] {
@@ -606,20 +428,21 @@ impl MasterConfig {
         let _ = self.sanitize();
         let mut first_err = None;
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
-            if (self.dirty & meta.flag) == 0 {
+            let flag = 1u8 << i;
+            if (self.dirty & flag) == 0 {
                 continue;
             }
             if !is_raw_valid(self.config_bytes(i), meta.version) {
                 load_or_init_raw(self.config_bytes_mut(i), meta.version, meta.path, storage);
                 self.seal(i);
-                self.dirty &= !meta.flag;
+                self.dirty &= !flag;
                 continue;
             }
             let buf = self.config_bytes_mut(i);
             if let Err(e) = save_config_raw(storage, meta.path, buf) {
                 first_err = first_err.or(Some(e));
             } else {
-                self.dirty &= !meta.flag;
+                self.dirty &= !flag;
             }
         }
         if let Some(err) = first_err {
