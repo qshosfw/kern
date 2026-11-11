@@ -52,7 +52,7 @@ settings_debug = []
 overclock_72mhz = []
 
 # ⚙️ Execution Runtime Engines
-krx_runtime = []
+krx_runtime = ["text_input"]
 krx_native = ["krx_runtime"]
 krx_declare = ["krx_runtime"]
 krx_vm = ["kernel/krx_vm", "krx_runtime"]
@@ -79,11 +79,9 @@ internal_flash = []
 # 💾 Storage & Cryptographic Security
 filesystem = ["drivers/filesystem", "kernel/filesystem"]
 secure_fs = ["drivers/secure_fs", "kernel/secure_fs"]
-passcode = ["secure_fs", "text_input"]
+passcode = ["secure_fs", "text_input", "gfx/passcode"]
 text_input = ["gfx/inverted_status"]
 settings_edit = ["text_input"]
-app_explorer = ["filesystem"]
-app_tasks = []
 app_hibernation = ["filesystem"]
 
 # 🎨 Display, Sound & Asset Bundles

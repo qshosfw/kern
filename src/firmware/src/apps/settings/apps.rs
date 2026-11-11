@@ -3,7 +3,7 @@
 //! Provides zero-alloc, lightweight package inspection and management,
 //! directly querying the system `PackageCatalog` without code duplication.
 
-use super::page::{PageId, SettingDef, SettingField};
+use super::page::{ChoiceId, PageId, SettingDef, SettingField};
 use crate::SysContext;
 use crate::apps::launcher::catalog::get_catalog;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
@@ -16,14 +16,14 @@ pub static APPS_DEFS: &[SettingDef] = &[
     SettingDef::submenu("Services", PageId::ManageServices),
     SettingDef::choice(
         "Style",
-        &LAUNCHER_STYLE_OPTIONS,
+        ChoiceId::LauncherStyle,
         SettingField::LAUNCHER_STYLE,
     ),
     SettingDef::toggle("Key Badges", SettingField::SHOW_NUMBERS),
     SettingDef::toggle("App Titles", SettingField::SHOW_LABELS),
     SettingDef::choice(
         "Startup App",
-        &STARTUP_APP_OPTIONS,
+        ChoiceId::StartupApp,
         SettingField::STARTUP_APP,
     ),
 ];
@@ -39,40 +39,21 @@ fn format_size(bytes: usize) -> ShortString {
     s
 }
 
-#[inline(always)]
-pub fn app_icon_8(title: &str) -> &'static [u8; 8] {
+pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
     let b = title.as_bytes();
     match b.first().copied().unwrap_or(0) {
         b'B' | b'b' => {
-            if b.get(2).copied().unwrap_or(0) == b'a' || b.get(2).copied().unwrap_or(0) == b'A' {
-                &gfx::icons::ICON_ANTENNA
+            if matches!(b.get(2), Some(b'a' | b'A')) {
+                (&gfx::icons::ICON_ANTENNA, &gfx::icons::ICON_16_SCANNER)
             } else {
-                &gfx::icons::ICON_APP_DIAG
+                (&gfx::icons::ICON_APP_DIAG, &gfx::icons::ICON_16_DIAGNOSTICS)
             }
         }
-        b'T' | b't' => &gfx::icons::ICON_APP_TORCH,
-        b'S' | b's' => &gfx::icons::ICON_APP_ABOUT,
-        b'R' | b'r' => &gfx::icons::ICON_APP_RADIO,
-        b'C' | b'c' => &gfx::icons::ICON_KEYPAD,
-        _ => &gfx::icons::ICON_APPS,
-    }
-}
-
-#[inline(always)]
-pub fn app_icon_16(title: &str) -> &'static [u8; 32] {
-    let b = title.as_bytes();
-    match b.first().copied().unwrap_or(0) {
-        b'B' | b'b' => {
-            if b.get(2).copied().unwrap_or(0) == b'a' || b.get(2).copied().unwrap_or(0) == b'A' {
-                &gfx::icons::ICON_16_SCANNER
-            } else {
-                &gfx::icons::ICON_16_DIAGNOSTICS
-            }
-        }
-        b'T' | b't' => &gfx::icons::ICON_16_FLASHLIGHT,
-        b'S' | b's' => &gfx::icons::ICON_16_INFO,
-        b'R' | b'r' => &gfx::icons::ICON_16_RADIO,
-        _ => &gfx::icons::ICON_16_APPS,
+        b'T' | b't' => (&gfx::icons::ICON_APP_TORCH, &gfx::icons::ICON_16_FLASHLIGHT),
+        b'S' | b's' => (&gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO),
+        b'R' | b'r' => (&gfx::icons::ICON_APP_RADIO, &gfx::icons::ICON_16_RADIO),
+        b'C' | b'c' => (&gfx::icons::ICON_KEYPAD, &gfx::icons::ICON_16_APPS),
+        _ => (&gfx::icons::ICON_APPS, &gfx::icons::ICON_16_APPS),
     }
 }
 
@@ -110,7 +91,7 @@ pub fn populate_package_list(
             ShortString::from_str("Invalid")
         };
         items[count] = MenuItem::new(entry.title.as_str(), MenuItemType::Value(info));
-        icons[count] = app_icon_8(entry.title.as_str());
+        icons[count] = app_icons(entry.title.as_str()).0;
         count += 1;
     }
 

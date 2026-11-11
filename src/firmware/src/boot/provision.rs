@@ -134,6 +134,17 @@ fn filename_from_path(path: &str) -> &str {
     path
 }
 
+/// Write a pre-built valid KRX package directly to KernFS storage with idempotency.
+#[cfg(feature = "provision_apps")]
+#[inline(never)]
+fn write_raw_krx_package(filesystem: &mut SystemStorage, path: &str, pkg_bytes: &[u8]) {
+    if filesystem.file_size(path) == Ok(pkg_bytes.len()) {
+        return;
+    }
+    let _ = filesystem.remove(path);
+    let _ = filesystem.write_file(path, pkg_bytes);
+}
+
 /// Build and write a KRX package file into KernFS using the shared transient arena buffer.
 #[cfg(feature = "provision_apps")]
 #[inline(never)]
@@ -147,28 +158,19 @@ fn write_krx_package(
     payload: &[u8],
 ) {
     let total_len = 128 + payload.len();
-    if total_len > PROV_BUF_CAP {
+    if total_len > PROV_BUF_CAP || filesystem.file_size(path) == Ok(total_len) {
         return;
     }
 
-    if filesystem.exists(path) {
-        if let Ok(size) = filesystem.file_size(path) {
-            if size == total_len {
-                return;
-            }
-        }
-        let _ = filesystem.remove(path);
-    }
-
     let pkg = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
-    pkg.fill(0);
+    pkg[..128].fill(0);
 
     // 1. Preamble (20 bytes)
     pkg[0..4].copy_from_slice(&KRX_IDENT);
     pkg[4] = class as u8;
     pkg[5] = 0x05; // Format version 2.5.0
-    pkg[6..8].copy_from_slice(&3u16.to_le_bytes()); // 3 sections
-    pkg[8..10].copy_from_slice(&128u16.to_le_bytes()); // header_len = 128
+    pkg[6] = 3; // 3 sections
+    pkg[8] = 128; // header_len = 128
 
     // 2. SectionIdentity (offset 20: 4B header + 40B body = 44B, ends at 64)
     pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
@@ -182,21 +184,17 @@ fn write_krx_package(
     // 3. SectionExecution (offset 64: 4B header + 28B body = 32B, ends at 96)
     pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
     pkg[66] = 32;
-    pkg[68..70].copy_from_slice(&128u16.to_le_bytes()); // min_stack_bytes = 128
-    let page_size: u16 = match class {
-        KrxClass::Paged => 512,
-        _ => 0,
-    };
-    pkg[72..74].copy_from_slice(&page_size.to_le_bytes()); // page_size: 0 for Native
-    pkg[74] = if class == KrxClass::Paged { 2 } else { 0 }; // cache_blocks
-    pkg[80..84].copy_from_slice(&(payload.len() as u32).to_le_bytes()); // payload_size
-    let code_len = payload.len() as u16;
-    let got_offset = match class {
-        KrxClass::Native | KrxClass::Paged => (code_len + 3) & !3,
-        _ => 0,
-    };
-    pkg[88..90].copy_from_slice(&got_offset.to_le_bytes()); // got_offset
-    pkg[94] = profile.raw_code(); // explicit profile
+    pkg[68] = 128; // min_stack_bytes = 128
+    if class == KrxClass::Paged {
+        pkg[73] = 2; // page_size = 512 (0x0200)
+        pkg[74] = 2; // cache_blocks = 2
+    }
+    pkg[80..84].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    if matches!(class, KrxClass::Native | KrxClass::Paged) {
+        let got_offset = ((payload.len() as u16) + 3) & !3;
+        pkg[88..90].copy_from_slice(&got_offset.to_le_bytes());
+    }
+    pkg[94] = profile.raw_code();
 
     // 4. SectionType (offset 96: 4B header + 12B body = 16B, ends at 112)
     pkg[96..98].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
@@ -205,30 +203,14 @@ fn write_krx_package(
     pkg[102] = 1; // stack_cost
     pkg[108..112].copy_from_slice(&caps.to_le_bytes());
 
-    // 5. String pool (offset 112..128)
+    // 5. String pool (offset 112..128) & Payload (offset 128..total_len)
     let nbytes = name.as_bytes();
     let nlen = nbytes.len().min(15);
     pkg[112..112 + nlen].copy_from_slice(&nbytes[..nlen]);
-
-    // 6. Payload (offset 128..total_len)
     pkg[128..total_len].copy_from_slice(payload);
 
+    let _ = filesystem.remove(path);
     let _ = filesystem.write_file(path, pkg);
-}
-
-/// Write a pre-built valid KRX package directly to KernFS storage with idempotency.
-#[cfg(feature = "provision_apps")]
-#[inline(never)]
-fn write_raw_krx_package(filesystem: &mut SystemStorage, path: &str, pkg_bytes: &[u8]) {
-    if filesystem.exists(path) {
-        if let Ok(size) = filesystem.file_size(path) {
-            if size == pkg_bytes.len() {
-                return;
-            }
-        }
-        let _ = filesystem.remove(path);
-    }
-    let _ = filesystem.write_file(path, pkg_bytes);
 }
 
 /// Ensure core flash-loaded `.krx` packages exist in `/apps/`.

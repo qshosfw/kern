@@ -33,18 +33,9 @@ pub fn font_from_u8(font_id: u8) -> &'static gfx::GfxFont {
 }
 
 impl<'a, 'hw> SysContext<'a, 'hw> {
-    #[inline(never)]
+    #[inline(always)]
     fn active_canvas(&mut self) -> &mut gfx::Canvas {
-        unsafe {
-            if !crate::runtime::syscall::ACTIVE_CANVAS.is_null() {
-                return &mut *crate::runtime::syscall::ACTIVE_CANVAS;
-            }
-        }
-        if let Some(ref mut d) = self.display {
-            d.canvas
-        } else {
-            crate::system_canvas()
-        }
+        crate::runtime::syscall::active_canvas_mut()
     }
 
     #[inline(never)]
@@ -171,18 +162,7 @@ impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
             0..=12_500 => Bandwidth::Narrow12k5,
             _ => Bandwidth::Wide25k,
         };
-        let step = match step_hz {
-            1_250 => StepSetting::Step1_25k,
-            2_500 => StepSetting::Step2_5k,
-            5_000 => StepSetting::Step5k,
-            6_250 => StepSetting::Step6_25k,
-            8_330 => StepSetting::Step8_33k,
-            10_000 => StepSetting::Step10k,
-            25_000 => StepSetting::Step25k,
-            50_000 => StepSetting::Step50k,
-            100_000 => StepSetting::Step100k,
-            _ => StepSetting::Step12_5k,
-        };
+        let step = StepSetting::from_hz_x10((step_hz / 10) as u16);
         let slot = self.state.coord.active_vfo;
         {
             let ch = self.state.coord.vfo_channel_mut(slot);
@@ -198,11 +178,7 @@ impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
     }
 
     fn get_bandwidth(&mut self) -> u32 {
-        match self.state.coord.active_channel().bandwidth {
-            kernel::service::radio::Bandwidth::Narrow6k25 => 6_250,
-            kernel::service::radio::Bandwidth::Narrow12k5 => 12_500,
-            kernel::service::radio::Bandwidth::Wide25k => 25_000,
-        }
+        self.state.coord.active_channel().bandwidth.in_hz()
     }
 
     fn get_modulation(&mut self) -> u8 {
@@ -641,18 +617,15 @@ impl<'a, 'hw> KeypadPrimitive for SysContext<'a, 'hw> {
     }
 
     fn is_ptt_pressed(&self) -> bool {
-        let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
-        (mask & drivers::keyboard::key_to_bit(kernel::event::KeyCode::Ptt)) != 0
+        self.is_key_pressed(kernel::event::KeyCode::Ptt as u8)
     }
 
     fn is_side1_pressed(&self) -> bool {
-        let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
-        (mask & drivers::keyboard::key_to_bit(kernel::event::KeyCode::Side1)) != 0
+        self.is_key_pressed(kernel::event::KeyCode::Side1 as u8)
     }
 
     fn is_side2_pressed(&self) -> bool {
-        let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
-        (mask & drivers::keyboard::key_to_bit(kernel::event::KeyCode::Side2)) != 0
+        self.is_key_pressed(kernel::event::KeyCode::Side2 as u8)
     }
 }
 
@@ -808,7 +781,7 @@ impl<'a, 'hw> TimerPrimitive for SysContext<'a, 'hw> {
 // ── 9. UI Modal Primitive ───────────────────────────────────────────────────
 impl<'a, 'hw> UiPrimitive for SysContext<'a, 'hw> {
     fn show_popup(&mut self, tag: u8, title: &'static str, message: &str) {
-        self.show_popup_str(tag, title, message);
+        self.show_popup(tag, title, message);
     }
 
     fn show_confirm(&mut self, tag: u8, title: &'static str, message: &'static str) {
@@ -816,10 +789,7 @@ impl<'a, 'hw> UiPrimitive for SysContext<'a, 'hw> {
     }
 
     fn prompt_text(&mut self, tag: u8, title: &'static str, initial: &str, max_len: usize) {
-        #[cfg(feature = "passcode")]
         self.prompt_text(tag, title, initial, max_len, false);
-        #[cfg(not(feature = "passcode"))]
-        let _ = (tag, title, initial, max_len);
     }
 
     fn close_modal(&mut self) {
@@ -1053,22 +1023,18 @@ impl<'a, 'hw> kernel::service::radio::RadioCoordinator for SysContext<'a, 'hw> {
 
     fn select_vfo(&mut self, slot: kernel::service::radio::VfoSlot) {
         self.state.coord.select_vfo(self.radio, slot);
-        self.state.sync_from_coord();
     }
 
     fn toggle_vfo(&mut self) {
         self.state.coord.toggle_vfo(self.radio);
-        self.state.sync_from_coord();
     }
 
     fn step_vfo_frequency(&mut self, slot: kernel::service::radio::VfoSlot, delta_hz: i32) {
         self.state.coord.step_vfo_freq(self.radio, slot, delta_hz);
-        self.state.sync_from_coord();
     }
 
     fn toggle_reverse(&mut self, slot: kernel::service::radio::VfoSlot) {
         self.state.coord.toggle_reverse(self.radio, slot);
-        self.state.sync_from_coord();
     }
 
     fn is_transmitting(&self) -> bool {
@@ -1088,34 +1054,25 @@ impl<'a, 'hw> kernel::service::radio::RadioCoordinator for SysContext<'a, 'hw> {
     }
 
     fn request_ptt_start(&mut self) -> kernel::service::radio::TxPermission {
-        let perm = self.state.coord.request_ptt_start(
+        self.state.coord.request_ptt_start(
             self.radio,
             kernel::service::radio::ClientToken::new(
                 kernel::service::radio::ClientId::VFO_UI,
                 kernel::service::radio::LockTier::FOREGROUND,
             ),
-        );
-        if perm.is_granted() {
-            self.state.sync_from_coord();
-        }
-        perm
+        )
     }
 
     fn request_ptt_start_client(
         &mut self,
         client: kernel::service::radio::ClientToken,
     ) -> kernel::service::radio::TxPermission {
-        let perm = self.state.coord.request_ptt_start(self.radio, client);
-        if perm.is_granted() {
-            self.state.sync_from_coord();
-        }
-        perm
+        self.state.coord.request_ptt_start(self.radio, client)
     }
 
     fn request_ptt_stop(&mut self) {
         if self.state.coord.is_transmitting {
             self.state.coord.request_ptt_stop(self.radio);
-            self.state.sync_from_coord();
         }
     }
 

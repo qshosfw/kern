@@ -2,9 +2,11 @@
 
 #[cfg(feature = "boot_assets")]
 use super::asset_chooser::AssetDescriptor;
+#[cfg(feature = "boot_assets")]
+use super::page::AssetId;
 #[cfg(not(feature = "text_input"))]
 use super::page::MetricId;
-use super::page::{ActionId, PageId, SettingDef, SettingField};
+use super::page::{ActionId, ChoiceId, PageId, SettingDef, SettingField};
 
 #[cfg(feature = "text_input")]
 pub static MODEL_OPTIONS: [&'static str; 3] = ["UV-K1", "UV-K5 V3", "Custom..."];
@@ -38,15 +40,15 @@ pub static SPLASH_ASSET: AssetDescriptor = AssetDescriptor {
 
 #[cfg(feature = "boot_assets")]
 pub static SPLASH_PAGE_DEFS: &[SettingDef] = &[
-    SettingDef::asset("Image", &SPLASH_ASSET),
+    SettingDef::asset("Image", AssetId::Splash),
     SettingDef::choice(
         "Animation",
-        &BOOT_ANIM_OPTIONS,
+        ChoiceId::SplashAnim,
         SettingField::BOOT_SPLASH_ANIM,
     ),
     SettingDef::choice(
         "Duration",
-        &SPLASH_TIME_OPTIONS,
+        ChoiceId::SplashDuration,
         SettingField::BOOT_SPLASH_DURATION,
     ),
 ];
@@ -55,12 +57,12 @@ pub static SPLASH_PAGE_DEFS: &[SettingDef] = &[
 pub static SPLASH_PAGE_DEFS: &[SettingDef] = &[
     SettingDef::choice(
         "Animation",
-        &BOOT_ANIM_OPTIONS,
+        ChoiceId::SplashAnim,
         SettingField::BOOT_SPLASH_ANIM,
     ),
     SettingDef::choice(
         "Duration",
-        &SPLASH_TIME_OPTIONS,
+        ChoiceId::SplashDuration,
         SettingField::BOOT_SPLASH_DURATION,
     ),
 ];

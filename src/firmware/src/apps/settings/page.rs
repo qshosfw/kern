@@ -53,36 +53,114 @@ pub struct RangeDef {
     pub unit: &'static str,
 }
 
-pub static RANGE_0_10: RangeDef = RangeDef {
-    min: 0,
-    max: 10,
-    step: 1,
-    unit: "",
-};
-pub static RANGE_1_10: RangeDef = RangeDef {
-    min: 1,
-    max: 10,
-    step: 1,
-    unit: "",
-};
-pub static RANGE_MIC_GAIN: RangeDef = RangeDef {
-    min: 0,
-    max: 31,
-    step: 1,
-    unit: "dB",
-};
-pub static RANGE_CONTRAST: RangeDef = RangeDef {
-    min: 0,
-    max: 100,
-    step: 5,
-    unit: "%",
-};
-pub static RANGE_CALIB_TWEAK: RangeDef = RangeDef {
-    min: -500,
-    max: 500,
-    step: 10,
-    unit: "mV",
-};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RangeId {
+    Range0_10 = 0,
+    Range1_10 = 1,
+    MicGain = 2,
+    Contrast = 3,
+    CalibTweak = 4,
+}
+
+pub static RANGES: [RangeDef; 5] = [
+    RangeDef {
+        min: 0,
+        max: 10,
+        step: 1,
+        unit: "",
+    },
+    RangeDef {
+        min: 1,
+        max: 10,
+        step: 1,
+        unit: "",
+    },
+    RangeDef {
+        min: 0,
+        max: 31,
+        step: 1,
+        unit: "dB",
+    },
+    RangeDef {
+        min: 0,
+        max: 100,
+        step: 5,
+        unit: "%",
+    },
+    RangeDef {
+        min: -500,
+        max: 500,
+        step: 10,
+        unit: "mV",
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ChoiceId {
+    BacklightTime = 0,
+    Shading = 1,
+    Animation = 2,
+    KeyBeep = 3,
+    BootJingle = 4,
+    AudioProfile = 5,
+    PttMode = 6,
+    AutoLock = 7,
+    FKeyTimeout = 8,
+    HoldDelay = 9,
+    RepeatRate = 10,
+    Shortcut = 11,
+    BatteryFormat = 12,
+    AutoPowerOff = 13,
+    PowerProfile = 14,
+    SplashAnim = 15,
+    SplashDuration = 16,
+    LauncherStyle = 17,
+    StartupApp = 18,
+    CpuClock = 19,
+    UartBaud = 20,
+}
+
+pub static CHOICES: [&'static [&'static str]; 21] = [
+    &super::display::BACKLIGHT_TIME_OPTIONS,
+    &super::display::SHADING_OPTIONS,
+    &super::display::ANIMATION_OPTIONS,
+    &super::audio::KEY_BEEP_OPTIONS,
+    &super::audio::BOOT_JINGLE_OPTIONS,
+    &super::audio::AUDIO_PROFILE_OPTIONS,
+    &super::buttons::PTT_MODE_OPTIONS,
+    &super::buttons::AUTO_LOCK_OPTIONS,
+    &super::buttons::F_KEY_TIMEOUT_OPTIONS,
+    &super::buttons::HOLD_DELAY_OPTIONS,
+    &super::buttons::REPEAT_RATE_OPTIONS,
+    &super::buttons::SHORTCUT_OPTIONS,
+    &super::battery::BATTERY_FORMAT_OPTIONS,
+    &super::battery::AUTO_POWER_OFF_OPTIONS,
+    &super::battery::POWER_PROFILE_OPTIONS,
+    &super::device::BOOT_ANIM_OPTIONS,
+    &super::device::SPLASH_TIME_OPTIONS,
+    &super::apps::LAUNCHER_STYLE_OPTIONS,
+    &super::apps::STARTUP_APP_OPTIONS,
+    &super::system::CPU_CLOCK_OPTIONS,
+    &super::system::UART_BAUD_OPTIONS,
+];
+
+#[cfg(feature = "boot_assets")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AssetId {
+    Splash = 0,
+    Roger = 1,
+    Jingle = 2,
+}
+
+#[cfg(feature = "boot_assets")]
+pub static ASSETS: [&'static super::asset_chooser::AssetDescriptor; 3] = [
+    &super::device::SPLASH_ASSET,
+    &super::audio::ROGER_ASSET,
+    &super::audio::JINGLE_ASSET,
+];
 
 #[derive(Clone, Copy)]
 pub struct MenuFrame {
@@ -154,7 +232,6 @@ pub enum MetricId {
 pub enum SettingKind {
     Submenu(PageId),
     Choice(&'static [&'static str]),
-    Shortcut,
     BatteryType,
     Range(&'static RangeDef),
     Toggle,
@@ -294,15 +371,14 @@ impl SettingField {
 
 pub const TAG_SUBMENU: u8 = 0;
 pub const TAG_CHOICE: u8 = 1;
-pub const TAG_SHORTCUT: u8 = 2;
-pub const TAG_BATTERY_TYPE: u8 = 3;
-pub const TAG_RANGE: u8 = 4;
-pub const TAG_TOGGLE: u8 = 5;
-pub const TAG_METRIC: u8 = 6;
-pub const TAG_ACTION: u8 = 7;
-pub const TAG_INFO: u8 = 8;
+pub const TAG_BATTERY_TYPE: u8 = 2;
+pub const TAG_RANGE: u8 = 3;
+pub const TAG_TOGGLE: u8 = 4;
+pub const TAG_METRIC: u8 = 5;
+pub const TAG_ACTION: u8 = 6;
+pub const TAG_INFO: u8 = 7;
 #[cfg(feature = "boot_assets")]
-pub const TAG_ASSET: u8 = 9;
+pub const TAG_ASSET: u8 = 8;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -311,12 +387,7 @@ pub struct SettingDef {
     pub field: SettingField,
     pub tag: u8,
     pub aux: u8,
-    pub _pad: u8,
-    pub ptr: *const (),
 }
-
-unsafe impl Sync for SettingDef {}
-unsafe impl Send for SettingDef {}
 
 impl SettingDef {
     pub const fn submenu(title: &'static str, target: PageId) -> Self {
@@ -325,45 +396,28 @@ impl SettingDef {
             field: SettingField::None,
             tag: TAG_SUBMENU,
             aux: target as u8,
-            _pad: 0,
-            ptr: core::ptr::null(),
         }
     }
 
-    pub const fn choice(
-        title: &'static str,
-        options: &'static [&'static str],
-        field: SettingField,
-    ) -> Self {
+    pub const fn choice(title: &'static str, choice: ChoiceId, field: SettingField) -> Self {
         Self {
             title,
             field,
             tag: TAG_CHOICE,
-            aux: options.len() as u8,
-            _pad: 0,
-            ptr: options.as_ptr() as *const (),
+            aux: choice as u8,
         }
     }
 
     pub const fn shortcut(title: &'static str, field: SettingField) -> Self {
-        Self {
-            title,
-            field,
-            tag: TAG_SHORTCUT,
-            aux: 0,
-            _pad: 0,
-            ptr: core::ptr::null(),
-        }
+        Self::choice(title, ChoiceId::Shortcut, field)
     }
 
-    pub const fn range(title: &'static str, range: &'static RangeDef, field: SettingField) -> Self {
+    pub const fn range(title: &'static str, range: RangeId, field: SettingField) -> Self {
         Self {
             title,
             field,
             tag: TAG_RANGE,
-            aux: 0,
-            _pad: 0,
-            ptr: range as *const RangeDef as *const (),
+            aux: range as u8,
         }
     }
 
@@ -373,8 +427,6 @@ impl SettingDef {
             field,
             tag: TAG_TOGGLE,
             aux: 0,
-            _pad: 0,
-            ptr: core::ptr::null(),
         }
     }
 
@@ -384,23 +436,16 @@ impl SettingDef {
             field: SettingField::None,
             tag: TAG_METRIC,
             aux: metric as u8,
-            _pad: 0,
-            ptr: core::ptr::null(),
         }
     }
 
     #[cfg(feature = "boot_assets")]
-    pub const fn asset(
-        title: &'static str,
-        desc: &'static super::asset_chooser::AssetDescriptor,
-    ) -> Self {
+    pub const fn asset(title: &'static str, asset: AssetId) -> Self {
         Self {
             title,
             field: SettingField::None,
             tag: TAG_ASSET,
-            aux: 0,
-            _pad: 0,
-            ptr: desc as *const _ as *const (),
+            aux: asset as u8,
         }
     }
 
@@ -410,8 +455,6 @@ impl SettingDef {
             field: SettingField::None,
             tag: TAG_ACTION,
             aux: action as u8,
-            _pad: 0,
-            ptr: core::ptr::null(),
         }
     }
 
@@ -421,8 +464,6 @@ impl SettingDef {
             field: SettingField::BATTERY_TYPE,
             tag: TAG_BATTERY_TYPE,
             aux: 0,
-            _pad: 0,
-            ptr: core::ptr::null(),
         }
     }
 
@@ -432,8 +473,6 @@ impl SettingDef {
             field: SettingField::None,
             tag: TAG_INFO,
             aux: 0,
-            _pad: 0,
-            ptr: core::ptr::null(),
         }
     }
 
@@ -441,18 +480,13 @@ impl SettingDef {
     pub fn kind(&self) -> SettingKind {
         match self.tag {
             TAG_SUBMENU => SettingKind::Submenu(unsafe { core::mem::transmute(self.aux) }),
-            TAG_CHOICE => SettingKind::Choice(unsafe {
-                core::slice::from_raw_parts(self.ptr as *const &'static str, self.aux as usize)
-            }),
-            TAG_SHORTCUT => SettingKind::Shortcut,
+            TAG_CHOICE => SettingKind::Choice(CHOICES[self.aux as usize]),
             TAG_BATTERY_TYPE => SettingKind::BatteryType,
-            TAG_RANGE => SettingKind::Range(unsafe { &*(self.ptr as *const RangeDef) }),
+            TAG_RANGE => SettingKind::Range(&RANGES[self.aux as usize]),
             TAG_TOGGLE => SettingKind::Toggle,
             TAG_METRIC => SettingKind::Metric(unsafe { core::mem::transmute(self.aux) }),
             #[cfg(feature = "boot_assets")]
-            TAG_ASSET => SettingKind::Asset(unsafe {
-                &*(self.ptr as *const super::asset_chooser::AssetDescriptor)
-            }),
+            TAG_ASSET => SettingKind::Asset(ASSETS[self.aux as usize]),
             TAG_ACTION => SettingKind::Action(unsafe { core::mem::transmute(self.aux) }),
             _ => SettingKind::Info,
         }

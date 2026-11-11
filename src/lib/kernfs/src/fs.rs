@@ -298,6 +298,51 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(to_read)
     }
 
+    fn invalidate_sector(&mut self, sector: usize) -> Result<(), FsError> {
+        self.dev.program(sector * D::BLOCK_SIZE + 3, &[0x00u8])?;
+        self.cached_used = self.cached_used.saturating_sub(1);
+        self.cached_deleted = self.cached_deleted.saturating_add(1);
+        Ok(())
+    }
+
+    fn commit_header_and_cache(
+        &mut self,
+        path: &str,
+        target_sector: usize,
+        payload_len: usize,
+        payload_crc: u32,
+        perm: u8,
+        old_sector: Option<usize>,
+    ) -> Result<(), FsError> {
+        self.global_seq += 1;
+        let mut header_buf = [0u8; HEADER_SIZE];
+        write_u16_le(&mut header_buf, 0, FILE_ID_KERNFS);
+        header_buf[2] = 0x01; // Version 1
+        header_buf[3] = 0x7F; // Active / Valid in NOR Flash (bit 7 = 0)
+        header_buf[4] = path.len() as u8;
+        header_buf[5] = perm;
+        header_buf[6..6 + path.len()].copy_from_slice(path.as_bytes());
+        write_u32_le(&mut header_buf, 38, payload_len as u32);
+        write_u32_le(&mut header_buf, 42, self.global_seq);
+        write_u32_le(&mut header_buf, 46, payload_crc);
+        let header_crc = CrcEngine::crc32(&header_buf[..50]);
+        write_u32_le(&mut header_buf, 50, header_crc);
+
+        self.dev
+            .program(target_sector * D::BLOCK_SIZE, &header_buf)?;
+
+        if let Some(old) = old_sector
+            && old != target_sector
+        {
+            let _ = self.invalidate_sector(old);
+        }
+
+        let path_hash = CrcEngine::crc32(path.as_bytes());
+        self.cache_insert(path_hash, target_sector, payload_len, payload_crc, perm);
+        self.cached_used = self.cached_used.saturating_add(1);
+        Ok(())
+    }
+
     /// Write payload atomically to `path` with wear leveling and power-loss protection.
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
         if data.len() > (D::BLOCK_SIZE - HEADER_SIZE) {
@@ -316,59 +361,17 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         // Erase target sector before writing
         self.dev.erase_sector(target_offset)?;
 
-        // Prepare Header
         let payload_crc = CrcEngine::crc32(data);
-        self.global_seq += 1;
-
-        let mut header_buf = [0u8; HEADER_SIZE];
-        write_u16_le(&mut header_buf, 0, FILE_ID_KERNFS);
-        header_buf[2] = 0x01; // Version 1
-        header_buf[3] = 0x7F; // Active / Valid in NOR Flash (bit 7 = 0)
-        header_buf[4] = path.len() as u8;
-        header_buf[5] = existing_perm;
-
-        // Copy path bytes
-        header_buf[6..6 + path.len()].copy_from_slice(path.as_bytes());
-
-        // Copy payload len & seq_num
-        write_u32_le(&mut header_buf, 38, data.len() as u32);
-        write_u32_le(&mut header_buf, 42, self.global_seq);
-        write_u32_le(&mut header_buf, 46, payload_crc);
-
-        // Header CRC32
-        let header_crc = CrcEngine::crc32(&header_buf[..50]);
-        write_u32_le(&mut header_buf, 50, header_crc);
-
-        // 1. Program payload data first
         self.dev.program(target_offset + HEADER_SIZE, data)?;
 
-        // 2. Program sector header atomically
-        self.dev.program(target_offset, &header_buf)?;
-
-        // 3. Invalidate previous sector in O(1) if known, else fallback scan
-        if let Some((old_sector, _, _, _)) = prev_entry
-            && old_sector != target_sector
-            && self
-                .dev
-                .program(old_sector * D::BLOCK_SIZE + 3, &[0x00u8])
-                .is_ok()
-        {
-            self.cached_used = self.cached_used.saturating_sub(1);
-            self.cached_deleted = self.cached_deleted.saturating_add(1);
-        }
-
-        // 4. Update Cache
-        let path_hash = CrcEngine::crc32(path.as_bytes());
-        self.cache_insert(
-            path_hash,
+        self.commit_header_and_cache(
+            path,
             target_sector,
             data.len(),
             payload_crc,
             existing_perm,
-        );
-        self.cached_used = self.cached_used.saturating_add(1);
-
-        Ok(())
+            prev_entry.map(|(s, _, _, _)| s),
+        )
     }
 
     /// Rename or relocate a file from `src` to `dst` using chunked sector-to-sector streaming
@@ -403,50 +406,18 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             copied += step;
         }
 
-        self.global_seq += 1;
-        let mut header_buf = [0u8; HEADER_SIZE];
-        write_u16_le(&mut header_buf, 0, FILE_ID_KERNFS);
-        header_buf[2] = 0x01;
-        header_buf[3] = 0x7F;
-        header_buf[4] = dst.len() as u8;
-        header_buf[5] = perm;
-        header_buf[6..6 + dst.len()].copy_from_slice(dst.as_bytes());
-        write_u32_le(&mut header_buf, 38, payload_len as u32);
-        write_u32_le(&mut header_buf, 42, self.global_seq);
-        write_u32_le(&mut header_buf, 46, payload_crc);
-        let header_crc = CrcEngine::crc32(&header_buf[..50]);
-        write_u32_le(&mut header_buf, 50, header_crc);
-
-        self.dev.program(target_offset, &header_buf)?;
-
-        // Invalidate previous dst sector (if any) and old src sector in O(1)
-        if let Some((old_dst_sector, _, _, _)) = prev_dst
-            && old_dst_sector != target_sector
-            && old_dst_sector != src_sector
-            && self
-                .dev
-                .program(old_dst_sector * D::BLOCK_SIZE + 3, &[0x00u8])
-                .is_ok()
-        {
-            self.cached_used = self.cached_used.saturating_sub(1);
-            self.cached_deleted = self.cached_deleted.saturating_add(1);
+        self.commit_header_and_cache(
+            dst,
+            target_sector,
+            payload_len,
+            payload_crc,
+            perm,
+            prev_dst.map(|(s, _, _, _)| s).filter(|&s| s != src_sector),
+        )?;
+        if src_sector != target_sector {
+            let _ = self.invalidate_sector(src_sector);
         }
-        if src_sector != target_sector
-            && self
-                .dev
-                .program(src_sector * D::BLOCK_SIZE + 3, &[0x00u8])
-                .is_ok()
-        {
-            self.cached_used = self.cached_used.saturating_sub(1);
-            self.cached_deleted = self.cached_deleted.saturating_add(1);
-        }
-
-        let src_hash = CrcEngine::crc32(src.as_bytes());
-        self.cache_remove(src_hash);
-
-        let dst_hash = CrcEngine::crc32(dst.as_bytes());
-        self.cache_insert(dst_hash, target_sector, payload_len, payload_crc, perm);
-        self.cached_used = self.cached_used.saturating_add(1);
+        self.cache_remove(CrcEngine::crc32(src.as_bytes()));
 
         Ok(())
     }
@@ -459,15 +430,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     /// Remove file at `path`.
     pub fn remove(&mut self, path: &str) -> Result<(), FsError> {
         if let Some((sector, _, _, _)) = self.find_best_sector(path) {
-            let offset = sector * D::BLOCK_SIZE;
-            let flag = [0x00u8]; // Mark Deleted (all bits 0)
-            self.dev.program(offset + 3, &flag)?;
-
-            let path_hash = CrcEngine::crc32(path.as_bytes());
-            self.cache_remove(path_hash);
-            self.cached_used = self.cached_used.saturating_sub(1);
-            self.cached_deleted = self.cached_deleted.saturating_add(1);
-
+            self.invalidate_sector(sector)?;
+            self.cache_remove(CrcEngine::crc32(path.as_bytes()));
             Ok(())
         } else {
             Err(FsError::NotFound)

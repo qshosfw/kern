@@ -39,56 +39,38 @@ pub fn check_reset_cause() {
     }
 }
 
-#[inline(always)]
-fn execute_bg_step(
-    step: &mut u8,
+fn init_system_services(
     hw: &mut BootHardware,
     master_cfg: &MasterConfig,
     passcode_state: &crate::security::PasscodeState,
     adc: &Adc,
 ) {
-    match *step {
-        0 => {
-            super::ensure_default_files(hw.filesystem, None);
-            *step = 1;
-        }
-        1 => {
-            if !passcode_state.is_locked {
-                let mut ps = unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) };
-                crate::security::passcode::init_passcode_state(hw.filesystem, &mut ps);
-            }
-            *step = 2;
-        }
-        2 => {
-            let mcu_uid = bsp::uid::read_mcu_uid();
-            let calibration = unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) };
-            calibration.load_into(hw.filesystem, &mcu_uid);
-            let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
-            power_service.load_battery_config(&master_cfg.battery);
-            power_service.battery_driver.calib_const = calibration.battery_calib_const();
-            hw.radio.set_xtal_freq_trim(calibration.xtal_freq_low());
-            *step = 3;
-        }
-        3 => {
-            hw.key_scanner.configure(
-                master_cfg.keys.hold_delay_ms(),
-                master_cfg.keys.repeat_rate_ms(),
-                master_cfg.keys.fast_scroll != 0,
-            );
-            crate::services::telemetry::sample_battery_and_system(adc, false);
-            bsp::pins::FLASHLIGHT.set_low();
-            crate::apps::init_all_apps();
-            *step = 4;
-        }
-        4 => {
-            #[cfg(feature = "usb")]
-            crate::hardware::SystemHardware::sync_usb_telemetry(hw.usb, master_cfg);
-            #[cfg(feature = "filesystem")]
-            crate::apps::launcher::catalog::get_catalog().scan(hw.filesystem);
-            *step = 5;
-        }
-        _ => {}
+    super::ensure_default_files(hw.filesystem, None);
+    if !passcode_state.is_locked {
+        let mut ps = unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) };
+        crate::security::passcode::init_passcode_state(hw.filesystem, &mut ps);
     }
+    let mcu_uid = bsp::uid::read_mcu_uid();
+    let calibration = unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) };
+    calibration.load_into(hw.filesystem, &mcu_uid);
+    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
+    power_service.load_battery_config(&master_cfg.battery);
+    power_service.battery_driver.calib_const = calibration.battery_calib_const();
+    hw.radio.set_xtal_freq_trim(calibration.xtal_freq_low());
+
+    hw.key_scanner.configure(
+        master_cfg.keys.hold_delay_ms(),
+        master_cfg.keys.repeat_rate_ms(),
+        master_cfg.keys.fast_scroll != 0,
+    );
+    crate::services::telemetry::sample_battery_and_system(adc, false);
+    bsp::pins::FLASHLIGHT.set_low();
+    crate::apps::init_all_apps();
+
+    #[cfg(feature = "usb")]
+    crate::hardware::SystemHardware::sync_usb_telemetry(hw.usb, master_cfg);
+    #[cfg(feature = "filesystem")]
+    crate::apps::launcher::catalog::get_catalog().scan(hw.filesystem);
 }
 
 #[inline(never)]
@@ -117,10 +99,7 @@ pub fn run_boot_splash(
     let jingle_notes = jingle.as_slice();
     let play_jingle = !jingle_notes.is_empty();
 
-    let mut bg_step = 0u8;
-    while bg_step < 5 {
-        execute_bg_step(&mut bg_step, hw, master_cfg, passcode_state, adc);
-    }
+    init_system_services(hw, master_cfg, passcode_state, adc);
 
     if !show_splash && !play_jingle {
         hw.lcd.turn_on();
@@ -222,28 +201,6 @@ pub fn run_boot_splash(
     if play_jingle && note_idx < jingle_notes.len() {
         hw.radio.end_tone_sequence(was_amp_active);
     }
-}
-
-#[inline(never)]
-pub fn init_system_services(hw: &mut BootHardware, master_cfg: &MasterConfig, adc: &Adc) {
-    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
-    power_service.load_battery_config(&master_cfg.battery);
-
-    hw.key_scanner.configure(
-        master_cfg.keys.hold_delay_ms(),
-        master_cfg.keys.repeat_rate_ms(),
-        master_cfg.keys.fast_scroll != 0,
-    );
-
-    let mcu_uid = bsp::uid::read_mcu_uid();
-    let calibration = unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) };
-    calibration.load_into(hw.filesystem, &mcu_uid);
-    power_service.battery_driver.calib_const = calibration.battery_calib_const();
-    hw.radio.set_xtal_freq_trim(calibration.xtal_freq_low());
-
-    crate::services::telemetry::sample_battery_and_system(adc, false);
-
-    crate::apps::init_all_apps();
 }
 
 #[inline(never)]

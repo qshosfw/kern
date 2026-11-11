@@ -29,6 +29,14 @@ impl VfoSlot {
             Self::VfoD => Self::VfoC,
         }
     }
+
+    pub const fn default_name(self) -> &'static str {
+        match self {
+            Self::VfoA => "MAIN VFO",
+            Self::VfoB => "RPT 2M",
+            _ => "CALL 2M",
+        }
+    }
 }
 
 /// Instantaneous operational state of a VFO.
@@ -62,19 +70,40 @@ pub enum StepSetting {
 }
 
 impl StepSetting {
+    pub const ALL: [Self; 10] = [
+        Self::Step1_25k,
+        Self::Step2_5k,
+        Self::Step5k,
+        Self::Step6_25k,
+        Self::Step8_33k,
+        Self::Step10k,
+        Self::Step12_5k,
+        Self::Step25k,
+        Self::Step50k,
+        Self::Step100k,
+    ];
+
+    pub const STEP_HZ_X10: [u16; 10] = [125, 250, 500, 625, 833, 1000, 1250, 2500, 5000, 10000];
+
+    #[inline(always)]
+    pub const fn in_hz_x10(self) -> u16 {
+        Self::STEP_HZ_X10[self as usize]
+    }
+
+    #[inline(always)]
     pub const fn in_hz(self) -> u32 {
-        match self {
-            Self::Step1_25k => 1_250,
-            Self::Step2_5k => 2_500,
-            Self::Step5k => 5_000,
-            Self::Step6_25k => 6_250,
-            Self::Step8_33k => 8_330,
-            Self::Step10k => 10_000,
-            Self::Step12_5k => 12_500,
-            Self::Step25k => 25_000,
-            Self::Step50k => 50_000,
-            Self::Step100k => 100_000,
+        (Self::STEP_HZ_X10[self as usize] as u32) * 10
+    }
+
+    pub const fn from_hz_x10(val: u16) -> Self {
+        let mut i = 0;
+        while i < 10 {
+            if Self::STEP_HZ_X10[i] == val {
+                return Self::ALL[i];
+            }
+            i += 1;
         }
+        Self::Step12_5k
     }
 }
 

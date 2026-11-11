@@ -62,54 +62,39 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
             return;
         }
         #[cfg(feature = "settings_debug")]
-        MetricId::DebugSwd => {
-            #[cfg(feature = "passcode")]
-            let open =
-                crate::security::passcode::get_security_summary(ctx.storage, ctx.passcode).swd_open;
-            #[cfg(not(feature = "passcode"))]
-            let open = crate::security::port_lock::is_swd_enabled();
-            out.set_str(if open { "Open" } else { "Locked" });
-            return;
-        }
-        #[cfg(feature = "settings_debug")]
-        MetricId::DebugRdp => {
-            #[cfg(feature = "passcode")]
-            let s = crate::security::passcode::get_security_summary(ctx.storage, ctx.passcode)
-                .rdp
-                .short_str();
-            #[cfg(not(feature = "passcode"))]
-            let s = py32_hal::flash::InternalFlash::rdp_status().short_str();
-            out.set_str(s);
-            return;
-        }
-        #[cfg(feature = "settings_debug")]
-        MetricId::DebugDevKey => {
+        MetricId::DebugSwd | MetricId::DebugRdp | MetricId::DebugDevKey | MetricId::DebugMkHash => {
             #[cfg(feature = "passcode")]
             {
                 let sec =
                     crate::security::passcode::get_security_summary(ctx.storage, ctx.passcode);
-                match sec.dev_key_hash {
-                    Some(h) => *out = ShortString::from_hex32(h),
-                    None => out.set_str("None"),
+                match id {
+                    MetricId::DebugSwd => out.set_str(if sec.swd_open { "Open" } else { "Locked" }),
+                    MetricId::DebugRdp => out.set_str(sec.rdp.short_str()),
+                    MetricId::DebugDevKey => match sec.dev_key_hash {
+                        Some(h) => *out = ShortString::from_hex32(h),
+                        None => out.set_str("None"),
+                    },
+                    _ => match sec.master_key_hash {
+                        Some(h) => *out = ShortString::from_hex32(h),
+                        None => out.set_str("None"),
+                    },
                 }
             }
             #[cfg(not(feature = "passcode"))]
-            out.set_str("None");
-            return;
-        }
-        #[cfg(feature = "settings_debug")]
-        MetricId::DebugMkHash => {
-            #[cfg(feature = "passcode")]
             {
-                let sec =
-                    crate::security::passcode::get_security_summary(ctx.storage, ctx.passcode);
-                match sec.master_key_hash {
-                    Some(h) => *out = ShortString::from_hex32(h),
-                    None => out.set_str("None"),
-                }
+                let s = match id {
+                    MetricId::DebugSwd => {
+                        if crate::security::port_lock::is_swd_enabled() {
+                            "Open"
+                        } else {
+                            "Locked"
+                        }
+                    }
+                    MetricId::DebugRdp => py32_hal::flash::InternalFlash::rdp_status().short_str(),
+                    _ => "None",
+                };
+                out.set_str(s);
             }
-            #[cfg(not(feature = "passcode"))]
-            out.set_str("None");
             return;
         }
 
@@ -123,11 +108,20 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         MetricId::BatteryCalibRef => (ctx.calibration.battery_calib_const() as i32, 0, ""),
         MetricId::BatteryCoreTemp => (ctx.power.mcu_temperature_deci_c() as i32, 1, " C"),
 
-        MetricId::StorageUsed => (ctx.storage.stats().used_sectors as i32 * 4, 0, " KB"),
-        MetricId::StorageFree => (ctx.storage.stats().free_sectors as i32 * 4, 0, " KB"),
-        MetricId::StorageFiles => (ctx.storage.stats().active_files as i32, 0, ""),
-        MetricId::StorageWear => (ctx.storage.stats().wear_cycles as i32, 0, ""),
-        MetricId::StorageDeleted => (ctx.storage.stats().deleted_sectors as i32, 0, " sec"),
+        MetricId::StorageUsed
+        | MetricId::StorageFree
+        | MetricId::StorageFiles
+        | MetricId::StorageWear
+        | MetricId::StorageDeleted => {
+            let s = ctx.storage.stats();
+            match id {
+                MetricId::StorageUsed => (s.used_sectors as i32 * 4, 0, " KB"),
+                MetricId::StorageFree => (s.free_sectors as i32 * 4, 0, " KB"),
+                MetricId::StorageFiles => (s.active_files as i32, 0, ""),
+                MetricId::StorageWear => (s.wear_cycles as i32, 0, ""),
+                _ => (s.deleted_sectors as i32, 0, " sec"),
+            }
+        }
 
         MetricId::DeviceRadioId => (ctx.config.system.radio_id as i32, 0, ""),
 

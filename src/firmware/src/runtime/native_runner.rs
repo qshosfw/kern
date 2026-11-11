@@ -670,20 +670,25 @@ pub unsafe fn native_on_event(
         }),
         _ => None,
     };
-    if let Some(krx_ev) = krx_ev {
-        let res = unsafe {
-            invoke_guest(
-                KRX_OP_EVENT,
-                ctx as *mut _,
-                core::ptr::null_mut(),
-                &krx_ev as *const _ as *const (),
-            )
-        };
-        if res != 0 && res != 0xFFFF_FFFF {
-            EventResult::Consumed
-        } else {
-            EventResult::Ignored
-        }
+    if let Some(ref krx_ev) = krx_ev {
+        invoke_guest_event(ctx as *mut _, krx_ev)
+    } else {
+        EventResult::Ignored
+    }
+}
+
+#[inline(never)]
+fn invoke_guest_event(ctx: *mut SysContext<'static, 'static>, krx_ev: &KrxEvent) -> EventResult {
+    let res = unsafe {
+        invoke_guest(
+            KRX_OP_EVENT,
+            ctx as *mut _,
+            core::ptr::null_mut(),
+            krx_ev as *const _ as *const (),
+        )
+    };
+    if res != 0 && res != 0xFFFF_FFFF {
+        EventResult::Consumed
     } else {
         EventResult::Ignored
     }
@@ -719,19 +724,7 @@ pub unsafe fn native_on_modal_result(
         reserved: 0,
         payload,
     };
-    let res = unsafe {
-        invoke_guest(
-            KRX_OP_EVENT,
-            ctx as *mut _,
-            core::ptr::null_mut(),
-            &krx_ev as *const _ as *const (),
-        )
-    };
-    if res != 0 && res != 0xFFFF_FFFF {
-        EventResult::Consumed
-    } else {
-        EventResult::Ignored
-    }
+    invoke_guest_event(ctx as *mut _, &krx_ev)
 }
 
 fn c_str_to_str(buf: &[u8]) -> Option<&str> {

@@ -1,6 +1,6 @@
 //! Buttons Domain Settings & Submenu Declarations
 
-use super::page::{PageId, SettingDef, SettingField};
+use super::page::{ChoiceId, PageId, SettingDef, SettingField};
 use crate::apps::Shortcut;
 
 pub static SHORTCUT_OPTIONS: [&'static str; 13] = [
@@ -31,11 +31,11 @@ pub static F_KEY_TIMEOUT_OPTIONS: [&'static str; 5] = ["Toggle", "1s", "2s", "3s
 pub static AUTO_LOCK_OPTIONS: [&'static str; 5] = ["Off", "15s", "30s", "1 min", "2 min"];
 
 pub static BUTTONS_ROOT: [SettingDef; 6] = [
-    SettingDef::choice("PTT Mode", &PTT_MODE_OPTIONS, SettingField::PTT_MODE),
-    SettingDef::choice("Auto Lock", &AUTO_LOCK_OPTIONS, SettingField::AUTO_LOCK),
+    SettingDef::choice("PTT Mode", ChoiceId::PttMode, SettingField::PTT_MODE),
+    SettingDef::choice("Auto Lock", ChoiceId::AutoLock, SettingField::AUTO_LOCK),
     SettingDef::choice(
         "Sticky F-Key",
-        &F_KEY_TIMEOUT_OPTIONS,
+        ChoiceId::FKeyTimeout,
         SettingField::F_KEY_TIMEOUT,
     ),
     SettingDef::toggle("Fast Scroll", SettingField::FAST_SCROLL),
@@ -44,10 +44,10 @@ pub static BUTTONS_ROOT: [SettingDef; 6] = [
 ];
 
 pub static BUTTONS_TWEAKS: [SettingDef; 2] = [
-    SettingDef::choice("Hold Delay", &HOLD_DELAY_OPTIONS, SettingField::HOLD_DELAY),
+    SettingDef::choice("Hold Delay", ChoiceId::HoldDelay, SettingField::HOLD_DELAY),
     SettingDef::choice(
         "Repeat Rate",
-        &REPEAT_RATE_OPTIONS,
+        ChoiceId::RepeatRate,
         SettingField::REPEAT_RATE,
     ),
 ];

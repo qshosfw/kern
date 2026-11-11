@@ -88,7 +88,8 @@ impl ModalCompositor {
         confirm: &'static str,
         cancel: &'static str,
     ) {
-        let mut model = PopupModel::new("", "");
+        crate::orchestrator::sink_enter_keys();
+        let mut model = PopupModel::new();
         if !confirm.is_empty() && !cancel.is_empty() {
             model = model.with_badges(confirm, cancel);
         }
@@ -103,40 +104,19 @@ impl ModalCompositor {
         self.show_confirm(tag, title, message, "", "");
     }
 
-    #[inline(always)]
-    pub fn show_popup_str(&mut self, tag: u8, title: &str, message: &str) {
-        self.show_popup(tag, title, message);
-    }
-
-    #[inline(always)]
-    pub fn show_popup_dynamic(&mut self, tag: u8, title: &str, message: &str) {
-        self.show_popup(tag, title, message);
-    }
-
-    #[inline(always)]
-    pub fn show_confirm_dynamic(
-        &mut self,
-        tag: u8,
-        title: &str,
-        message: &str,
-        confirm: &'static str,
-        cancel: &'static str,
-    ) {
-        self.show_confirm(tag, title, message, confirm, cancel);
-    }
-
     #[cfg(feature = "text_input")]
     fn init_text_prompt(
         &mut self,
         tag: u8,
-        title: &'static str,
+        title: &str,
         max_len: usize,
         digits_only: bool,
         is_passcode: bool,
     ) -> &mut TextInputModel {
+        crate::orchestrator::sink_enter_keys();
         self.tag = tag;
         let mut model = TextInputModel::new(max_len);
-        model.title = title;
+        let _ = model.custom_title.push_str(title);
         model.is_passcode = is_passcode;
         model.digits_only = digits_only;
         model.show_header = true;
@@ -154,7 +134,7 @@ impl ModalCompositor {
     pub fn prompt_text(
         &mut self,
         tag: u8,
-        title: &'static str,
+        title: &str,
         initial: &str,
         max_len: usize,
         digits_only: bool,
@@ -164,17 +144,10 @@ impl ModalCompositor {
     }
 
     #[cfg(feature = "text_input")]
-    pub fn prompt_text_dynamic(&mut self, tag: u8, title: &str, initial: &str, max_len: usize) {
-        let m = self.init_text_prompt(tag, "", max_len, false, false);
-        let _ = m.custom_title.push_str(title);
-        let _ = m.buffer.push_str(initial);
-    }
-
-    #[cfg(feature = "text_input")]
     pub fn prompt_passcode(
         &mut self,
         tag: u8,
-        title: &'static str,
+        title: &str,
         max_len: usize,
         digits_only: bool,
         expose_len: bool,
@@ -184,6 +157,7 @@ impl ModalCompositor {
     }
 
     pub fn show_sheet(&mut self, tag: u8, sheet: OptionSheet) {
+        crate::orchestrator::sink_enter_keys();
         self.tag = tag;
         let is_animated = crate::master_config_ref().display.animations_enabled();
         let mut anim = gfx::gui::animation::SlideUpAnim::new(48, 8);

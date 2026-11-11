@@ -236,7 +236,7 @@ pub fn run_boot_unlock_prompt(
         16
     };
     let mut text_model = TextInputModel::new(input_len);
-    text_model.title = "Enter Passcode";
+    let _ = text_model.custom_title.push_str("Enter Passcode");
     text_model.is_passcode = true;
     text_model.expose_len = cfg.expose_len;
     text_model.digits_only = cfg.digits_only;

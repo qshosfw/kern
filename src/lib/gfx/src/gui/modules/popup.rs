@@ -11,9 +11,7 @@ use heapless::String;
 use crate::widgets;
 
 pub struct PopupModel {
-    pub title: &'static str,
     pub custom_title: String<24>,
-    pub message: &'static str,
     pub custom_msg: String<192>,
     pub scroll_offset: usize,
     pub confirm_label: Option<&'static str>,
@@ -23,11 +21,9 @@ pub struct PopupModel {
 }
 
 impl PopupModel {
-    pub const fn new(title: &'static str, message: &'static str) -> Self {
+    pub const fn new() -> Self {
         Self {
-            title,
             custom_title: String::new(),
-            message,
             custom_msg: String::new(),
             scroll_offset: 0,
             confirm_label: None,
@@ -43,42 +39,9 @@ impl PopupModel {
         self
     }
 
-    pub fn reset(
-        &mut self,
-        title: &'static str,
-        confirm: Option<&'static str>,
-        cancel: Option<&'static str>,
-    ) {
-        self.title = title;
-        self.custom_title.clear();
-        self.message = "";
-        self.custom_msg.clear();
-        self.scroll_offset = 0;
-        self.confirm_label = confirm;
-        self.cancel_label = cancel;
-        self.repeater = crate::gui::repeater::KeyRepeater::new(8, 2);
-        self.anim.reset_in();
-    }
-
-    pub fn reset_msg(&mut self, title: &'static str, message: &'static str) {
-        self.title = title;
-        self.custom_title.clear();
-        self.message = message;
-        self.custom_msg.clear();
-        self.scroll_offset = 0;
-        self.confirm_label = None;
-        self.cancel_label = None;
-        self.repeater = crate::gui::repeater::KeyRepeater::new(8, 2);
-        self.anim.reset_in();
-    }
-
     #[inline(always)]
     pub fn title_str(&self) -> &str {
-        if !self.custom_title.is_empty() {
-            self.custom_title.as_str()
-        } else {
-            self.title
-        }
+        self.custom_title.as_str()
     }
 }
 
@@ -107,12 +70,7 @@ fn popup_visible_lines(model: &PopupModel) -> usize {
 
 #[inline(always)]
 fn popup_max_scroll(model: &PopupModel) -> usize {
-    let msg = if !model.custom_msg.is_empty() {
-        model.custom_msg.as_str()
-    } else {
-        model.message
-    };
-    text::count_lines(msg).saturating_sub(popup_visible_lines(model))
+    text::count_lines(model.custom_msg.as_str()).saturating_sub(popup_visible_lines(model))
 }
 
 fn scroll_popup(model: &mut PopupModel, code: KeyCode) -> bool {
@@ -137,11 +95,7 @@ impl View<PopupModel> for PopupView {
     #[inline(never)]
     fn render(&self, canvas: &mut Canvas, model: &PopupModel) {
         let has_badges = model.confirm_label.is_some() || model.cancel_label.is_some();
-        let msg = if !model.custom_msg.is_empty() {
-            model.custom_msg.as_str()
-        } else {
-            model.message
-        };
+        let msg = model.custom_msg.as_str();
         let total_lines = text::count_lines(msg);
 
         // Short unbadged notifications / alerts (e.g. "Passcode Set", "Wrong Passcode", "Mismatch"):

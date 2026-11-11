@@ -17,7 +17,6 @@ pub static ROOT_DEFS: &[SettingDef] = &[
     SettingDef::submenu("System", PageId::System),
 ];
 
-#[inline(never)]
 fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut ShortString) {
     match action {
         ActionId::ChooseModel => out.set_str(ctx.config.system.model_str()),
@@ -46,7 +45,6 @@ fn make_choice(opts: &'static [&'static str], raw_byte: u8) -> MenuItemType {
     }
 }
 
-#[inline(never)]
 fn populate_item(
     item: &mut MenuItem,
     def: &SettingDef,
@@ -57,12 +55,6 @@ fn populate_item(
     match def.kind() {
         SettingKind::Choice(opts) => {
             item.item_type = make_choice(opts, def.field.get_u8(&ctx.config));
-        }
-        SettingKind::Shortcut => {
-            item.item_type = make_choice(
-                &super::buttons::SHORTCUT_OPTIONS,
-                def.field.get_u8(&ctx.config),
-            );
         }
         SettingKind::BatteryType => {
             let (opts, types) = super::battery::battery_options_and_types(nav_layout);

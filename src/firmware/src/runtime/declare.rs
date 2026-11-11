@@ -170,8 +170,8 @@ fn resolve_telemetry_str<'a>(
             let free_kb = 0;
             (free_kb, "")
         }
-        DYN_RADIO_FREQ_A => (ctx.state.vfo_a.frequency.raw() / 1_000_000, ""),
-        DYN_RADIO_FREQ_B => (ctx.state.vfo_b.frequency.raw() / 1_000_000, ""),
+        DYN_RADIO_FREQ_A => (ctx.state.coord.channels[0].rx_freq.raw() / 1_000_000, ""),
+        DYN_RADIO_FREQ_B => (ctx.state.coord.channels[1].rx_freq.raw() / 1_000_000, ""),
         _ => return "",
     };
 

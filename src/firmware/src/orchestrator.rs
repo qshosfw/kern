@@ -8,8 +8,6 @@ use crate::services::radio::RfSquelch;
 pub mod compositor;
 pub mod keypad_lock;
 
-#[cfg(feature = "app_tasks")]
-use crate::apps::APP_ID_TASKS;
 use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
 use compositor::OsCompositor;
 use gfx::Canvas;
@@ -326,21 +324,17 @@ impl Orchestrator {
             }
             let radio_ev = ctx.state.coord.tick_10ms(ctx.radio);
             match radio_ev {
-                crate::services::radio::RadioEvent::None => {}
                 crate::services::radio::RadioEvent::TotWarning { .. } => {
                     if ctx.config.audio.key_beep != 0 {
                         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
                     }
                 }
                 crate::services::radio::RadioEvent::TotExpired => {
-                    ctx.state.sync_from_coord();
                     if ctx.config.audio.key_beep != 0 {
                         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
                     }
                 }
-                _ => {
-                    ctx.state.sync_from_coord();
-                }
+                _ => {}
             }
             if let Some(bus_ev) = radio_ev.to_bus_event(2) {
                 crate::system::enqueue_event(kernel::event::Event::Bus(bus_ev));
@@ -951,27 +945,23 @@ impl Orchestrator {
                 }
             }
             Shortcut::Scanner | Shortcut::Explorer => {
-                #[cfg(feature = "app_explorer")]
-                crate::apps::explorer::launch_explorer(ctx);
-                #[cfg(not(feature = "app_explorer"))]
                 launch_krx_shortcut(ctx, "/apps/explorer.krx");
             }
             Shortcut::TaskManager => {
-                #[cfg(feature = "app_tasks")]
-                self.switch_app(ctx, APP_ID_TASKS);
-                #[cfg(not(feature = "app_tasks"))]
                 launch_krx_shortcut(ctx, "/apps/sysinfo.krx");
             }
             Shortcut::Settings => self.switch_app(ctx, APP_ID_SETTINGS),
             Shortcut::LockKeypad => self.toggle_keypad_lock(),
-            Shortcut::ToggleVfo => ctx.state.toggle_vfo(),
+            Shortcut::ToggleVfo => ctx.state.coord.toggle_vfo(ctx.radio),
             Shortcut::ToggleTxPower => {
-                let vfo = ctx.state.selected_vfo_mut();
-                vfo.power = match vfo.power {
-                    "L" => "M",
-                    "M" => "H",
-                    _ => "L",
+                use kernel::service::radio::{RfChannel, RfPowerLevel};
+                let ch = ctx.state.coord.active_channel_mut();
+                ch.power = match ch.power {
+                    RfPowerLevel::Low => RfPowerLevel::Medium,
+                    RfPowerLevel::Medium => RfPowerLevel::High,
+                    RfPowerLevel::High => RfPowerLevel::Low,
                 };
+                ctx.radio.set_power_level(ch.power);
             }
             Shortcut::PlayBeep {
                 freq_hz,
@@ -984,7 +974,7 @@ impl Orchestrator {
                 let sql = if self.is_monitoring {
                     0
                 } else {
-                    ctx.state.squelch_level.clamp(1, 9)
+                    ctx.state.coord.active_channel().squelch_level.clamp(1, 9)
                 };
                 ctx.radio.set_squelch_level(sql);
             }
@@ -1048,12 +1038,6 @@ impl Orchestrator {
         } else if self.active_app_id == APP_ID_SETTINGS {
             if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_SETTINGS) {
                 return unsafe { (*(ptr as *const crate::apps::SettingsApp)).is_animating() };
-            }
-        }
-        #[cfg(feature = "app_tasks")]
-        if self.active_app_id == APP_ID_TASKS {
-            if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_TASKS) {
-                return unsafe { (*(ptr as *const crate::apps::TasksApp)).is_animating() };
             }
         }
         false

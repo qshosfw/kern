@@ -11,10 +11,10 @@ use kernel::event::Event;
 pub struct OsAppDescriptor {
     pub metadata: AppMetadata,
     pub vtable: AppVTable<SysContext<'static, 'static>>,
-    pub instance: fn() -> *mut (),
-    pub init: fn(*mut ()),
+    pub init: unsafe fn(*mut ()),
     pub required_capabilities: CapabilitySet,
-    pub instance_size: usize,
+    pub offset: u16,
+    pub instance_size: u16,
 }
 
 /// Dynamic application slot for installable application bundles (.app)
@@ -41,11 +41,6 @@ kernel::define_os_apps! {
     ],
     APP_ID_SETTINGS => crate::apps::SettingsApp [
         meta: AppMetadata { name: "Settings", icon: &gfx::icons::ICON_16_SETTINGS, icon_8: &gfx::icons::ICON_APP_SETTINGS },
-        caps: CapabilitySet::NONE
-    ],
-    #[cfg(feature = "app_tasks")]
-    APP_ID_TASKS => crate::apps::TasksApp [
-        meta: AppMetadata { name: "Tasks", icon: &gfx::icons::ICON_16_DIAGNOSTICS, icon_8: &gfx::icons::ICON_APP_DIAG },
         caps: CapabilitySet::NONE
     ],
 }
@@ -82,14 +77,17 @@ impl AppRegistry {
 
     #[inline(always)]
     pub fn app_instance(app_id: usize) -> Option<*mut ()> {
-        APP_TABLE.get(app_id).map(|entry| (entry.instance)())
+        APP_TABLE.get(app_id).map(|entry| unsafe {
+            (core::ptr::addr_of_mut!(OS_APP_STORAGE) as *mut u8).add(entry.offset as usize)
+                as *mut ()
+        })
     }
 
     #[inline(always)]
     pub fn app_size(app_id: usize) -> usize {
         APP_TABLE
             .get(app_id)
-            .map(|entry| entry.instance_size)
+            .map(|entry| entry.instance_size as usize)
             .unwrap_or(0)
     }
 
@@ -134,7 +132,11 @@ impl AppRegistry {
         app_id: usize,
     ) -> Option<(*mut (), &'static AppVTable<SysContext<'static, 'static>>)> {
         if let Some(entry) = APP_TABLE.get(app_id) {
-            Some(((entry.instance)(), &entry.vtable))
+            let ptr = unsafe {
+                (core::ptr::addr_of_mut!(OS_APP_STORAGE) as *mut u8).add(entry.offset as usize)
+                    as *mut ()
+            };
+            Some((ptr, &entry.vtable))
         } else {
             unsafe {
                 let dyn_ref = (*core::ptr::addr_of!(DYNAMIC_APP)).as_ref()?;

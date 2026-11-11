@@ -38,19 +38,11 @@ pub fn active_caller_pid() -> u8 {
 }
 
 pub unsafe extern "C" fn api_sys_stack_free() -> u16 {
-    if let Some(ctx) = super::active_ctx_opt() {
-        ctx.get_stack_free_now()
-    } else {
-        0
-    }
+    kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16
 }
 
 pub unsafe extern "C" fn api_sys_stack_free_min() -> u16 {
-    if let Some(ctx) = super::active_ctx_opt() {
-        ctx.get_stack_free_min()
-    } else {
-        0
-    }
+    kernel::sys::SystemDiagnostics::ram_available_bytes() as u16
 }
 
 pub unsafe extern "C" fn api_sys_device_uid(out_uid12: *mut u8) {
@@ -232,11 +224,11 @@ pub unsafe extern "C" fn api_sys_os_version() -> u32 {
 }
 
 pub unsafe extern "C" fn api_sys_ram_available() -> u16 {
-    kernel::sys::SystemDiagnostics::ram_available_bytes() as u16
+    unsafe { api_sys_stack_free_min() }
 }
 
 pub unsafe extern "C" fn api_sys_stack_margin() -> u16 {
-    kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16
+    unsafe { api_sys_stack_free() }
 }
 
 pub unsafe extern "C" fn api_sys_proc_count() -> u8 {

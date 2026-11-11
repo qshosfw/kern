@@ -15,11 +15,11 @@ pub unsafe extern "C" fn api_rf_tune(freq_hz: u32, bw: u8, step_hz: u32) -> u8 {
 }
 
 pub unsafe extern "C" fn api_rf_get_freq() -> u32 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_frequency()
-    } else {
-        0
-    }
+    crate::radio_state_ref()
+        .coord
+        .active_channel()
+        .rx_freq
+        .raw()
 }
 
 pub unsafe extern "C" fn api_rf_get_rssi() -> i16 {
@@ -169,12 +169,7 @@ pub unsafe extern "C" fn api_rf_set_mic_mute(muted: u8) {
 }
 
 pub unsafe extern "C" fn api_rf_set_tx_carrier(active: u8) -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_tx_carrier(active != 0);
-        0
-    } else {
-        1
-    }
+    unsafe { api_rf_set_tx(active) }
 }
 
 pub unsafe extern "C" fn api_rf_set_subaudible_ctcss(freq_tenths_hz: u16) {
@@ -196,27 +191,19 @@ pub unsafe extern "C" fn api_rf_send_tail() {
 }
 
 pub unsafe extern "C" fn api_rf_get_bandwidth() -> u32 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_bandwidth()
-    } else {
-        12_500
-    }
+    crate::radio_state_ref()
+        .coord
+        .active_channel()
+        .bandwidth
+        .in_hz()
 }
 
 pub unsafe extern "C" fn api_rf_get_modulation() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_modulation()
-    } else {
-        0
-    }
+    crate::radio_state_ref().coord.active_channel().modulation as u8
 }
 
 pub unsafe extern "C" fn api_rf_get_tx_state() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_tx_state()
-    } else {
-        0
-    }
+    crate::radio_state_ref().coord.is_transmitting as u8
 }
 
 pub unsafe extern "C" fn api_rf_get_glitch() -> u8 {

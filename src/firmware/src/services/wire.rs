@@ -15,9 +15,7 @@ use crate::hardware::SystemHardware;
 use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
 use crate::services::storage::DirEntryInfo;
 use kernel::event::{Event, KeyCode, KeyState};
-use kernel::service::{
-    ModulationMode, PowerService, RfFineTuning, RfModulation, RfPowerLevel, RfSquelch,
-};
+use kernel::service::{ModulationMode, PowerService, RfFineTuning, RfModulation, RfSquelch};
 use kernel::wire::*;
 use utils::units::Frequency;
 
@@ -203,20 +201,19 @@ fn read_radio_facet(
     hw: &mut SystemHardware,
     out: &mut [u8],
 ) -> Result<usize, WireStatus> {
-    let radio_state = crate::radio_state_ref();
-    let (vfo, ch) = match instance {
-        RADIO_INSTANCE_VFO_A => (&radio_state.vfo_a, &radio_state.coord.channels[0]),
-        RADIO_INSTANCE_VFO_B => (&radio_state.vfo_b, &radio_state.coord.channels[1]),
-        _ => (
-            radio_state.selected_vfo(),
-            radio_state.coord.active_channel(),
-        ),
+    use kernel::service::radio::VfoSlot;
+    let coord = &crate::radio_state_ref().coord;
+    let slot = match instance {
+        RADIO_INSTANCE_VFO_A => VfoSlot::VfoA,
+        RADIO_INSTANCE_VFO_B => VfoSlot::VfoB,
+        _ => coord.active_vfo,
     };
+    let ch = coord.vfo_channel(slot);
     match facet {
         FACET_RADIO_TUNING => {
-            out[..4].copy_from_slice(&vfo.frequency.raw().to_le_bytes());
-            out[4..8].copy_from_slice(&((radio_state.step_khz as u32) * 1000).to_le_bytes());
-            out[8] = radio_state.active_vfo;
+            out[..4].copy_from_slice(&ch.effective_rx_freq().raw().to_le_bytes());
+            out[4..8].copy_from_slice(&ch.step.in_hz().to_le_bytes());
+            out[8] = coord.active_vfo as u8;
             Ok(9)
         }
         FACET_RADIO_MODULATION => {
@@ -226,19 +223,14 @@ fn read_radio_facet(
             Ok(5)
         }
         FACET_RADIO_SQUELCH => {
-            out[0] = radio_state.squelch_level;
+            out[0] = ch.squelch_level;
             out[1..3].copy_from_slice(&hw.radio.get_rssi().to_le_bytes());
             out[3] = hw.radio.is_squelch_open() as u8;
             Ok(4)
         }
         FACET_RADIO_TRANSMIT => {
-            out[0] = vfo.tx_active as u8;
-            let p = match ch.power {
-                RfPowerLevel::High => 2,
-                RfPowerLevel::Medium => 1,
-                _ => 0,
-            };
-            out[1] = p;
+            out[0] = coord.is_slot_tx_active(slot) as u8;
+            out[1] = ch.power as u8;
             Ok(2)
         }
         FACET_RADIO_DIGITAL => {
@@ -340,48 +332,49 @@ fn set_radio_facet(
     val: &[u8],
     hw: &mut SystemHardware,
 ) -> Result<(), WireStatus> {
-    let radio_state = crate::radio_state();
-    let vfo = match instance {
-        RADIO_INSTANCE_VFO_A => &mut radio_state.vfo_a,
-        RADIO_INSTANCE_VFO_B => &mut radio_state.vfo_b,
-        _ => radio_state.selected_vfo_mut(),
+    use kernel::service::radio::VfoSlot;
+    let coord = &mut crate::radio_state().coord;
+    let slot = match instance {
+        RADIO_INSTANCE_VFO_A => VfoSlot::VfoA,
+        RADIO_INSTANCE_VFO_B => VfoSlot::VfoB,
+        _ => coord.active_vfo,
     };
+    let ch = coord.vfo_channel_mut(slot);
     match facet {
         FACET_RADIO_TUNING => {
             let freq_hz = get_u32_le(val)?;
             if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
                 return Err(WireStatus::BadRange);
             }
-            vfo.frequency = Frequency::new(freq_hz);
+            ch.rx_freq = Frequency::new(freq_hz);
             let _ = hw.radio.set_frequency(Frequency::new(freq_hz));
             Ok(())
         }
         FACET_RADIO_MODULATION => {
             let mode_u8 = get_u8(val)?;
             let mode = ModulationMode::from_u8(mode_u8);
-            vfo.mod_type = mode.as_str();
+            ch.modulation = mode;
             hw.radio.set_modulation(mode);
             Ok(())
         }
         FACET_RADIO_SQUELCH => {
             let sql = get_u8(val)?.min(9);
-            radio_state.squelch_level = sql;
+            ch.squelch_level = sql;
             hw.radio.set_squelch_level(sql);
             Ok(())
         }
         FACET_RADIO_TRANSMIT => {
             let should_tx = get_u8(val)? != 0;
-            vfo.tx_active = should_tx;
             if should_tx {
-                radio_state.coord.start_tx(&mut hw.radio);
+                coord.start_tx(&mut hw.radio);
             } else {
-                radio_state.coord.stop_tx(&mut hw.radio);
+                coord.stop_tx(&mut hw.radio);
             }
             Ok(())
         }
         FACET_RADIO_DIGITAL => {
             let offset_dhz = get_i16_le(val)?;
-            let freq = vfo.frequency.raw();
+            let freq = ch.rx_freq.raw();
             hw.radio.set_sub_hz_offset(freq, offset_dhz);
             Ok(())
         }
@@ -489,8 +482,7 @@ fn on_handle_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
         },
         DOMAIN_RADIO => match req.action_id {
             ACTION_RADIO_VFO_TOGGLE => {
-                let radio_state = crate::radio_state();
-                radio_state.active_vfo = 1 - radio_state.active_vfo;
+                crate::radio_state().coord.toggle_vfo(&mut hw.radio);
                 WireStatus::Ok
             }
             _ => WireStatus::Unsupported,

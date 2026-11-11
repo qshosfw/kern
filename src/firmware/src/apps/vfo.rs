@@ -135,7 +135,7 @@ impl RfClientParticipant for VfoApp {
 }
 
 fn step_freq(ctx: &mut SysContext, up: bool) -> EventResult {
-    let step = (ctx.state.step_khz as i32) * 1_000;
+    let step = ctx.state.coord.active_channel().step.in_hz() as i32;
     let slot = ctx.active_vfo();
     let delta = if up { step } else { -step };
     ctx.step_vfo_frequency(slot, delta);
@@ -146,17 +146,23 @@ fn step_freq(ctx: &mut SysContext, up: bool) -> EventResult {
 fn draw_vfo(
     canvas: &mut Canvas,
     y: i16,
-    vfo: &crate::services::radio::VfoChannelState,
+    coord: &crate::services::radio::RadioCoordinator,
+    slot: kernel::service::radio::VfoSlot,
     selected: bool,
 ) {
     let font = &gfx::fonts::tomthumb::FONT;
+    let ch = coord.vfo_channel(slot);
 
     // 1. Inverted VFO / Channel Badge (x=0..19, y..y+7)
-    let v_name = if vfo.vfo_num == 1 { "V1" } else { "V2" };
+    let v_name = if slot == kernel::service::radio::VfoSlot::VfoA {
+        "V1"
+    } else {
+        "V2"
+    };
     let (badge_text, fg_color) = if selected {
         canvas.fill_rect(0, y as u8, 19, 7, Color::Fill);
-        let t = match vfo.channel_num {
-            Some(ch) if ch < 10 => "M0",
+        let t = match coord.vfo_memory_index[slot.index()] {
+            Some(num) if num < 10 => "M0",
             Some(_) => "M",
             None => v_name,
         };
@@ -168,9 +174,9 @@ fn draw_vfo(
     gfx::text::draw_str(canvas, 2, y + 6, badge_text, font, fg_color);
 
     // 2. RX / TX Active Status Indicator (x=0, y+8)
-    let status_txt = if vfo.tx_active {
+    let status_txt = if coord.is_slot_tx_active(slot) {
         "TX"
-    } else if vfo.rx_active {
+    } else if coord.is_slot_rx_active(slot) {
         "RX"
     } else {
         ""
@@ -181,42 +187,41 @@ fn draw_vfo(
 
     // 3. Authentic Big Frequency (x=30)
     let mut fbuf = [0u8; 10];
-    let fbytes = gfx::text::format_u32(vfo.frequency.raw() / 10, &mut fbuf).as_bytes();
+    let fbytes = gfx::text::format_u32(ch.effective_rx_freq().raw() / 10, &mut fbuf).as_bytes();
     let flen = fbytes.len();
     let mut cur_x = 30i16;
 
     if flen >= 3 {
         let mhz_end = flen.saturating_sub(5);
-        for (i, &ch) in fbytes[..flen - 2].iter().enumerate() {
+        for (i, &c) in fbytes[..flen - 2].iter().enumerate() {
             if i == mhz_end {
                 canvas.fill_rect(cur_x as u8, (y + 13) as u8, 3, 2, Color::Fill);
                 cur_x += 3;
             }
-            gfx::widgets::draw_big_digit(canvas, cur_x, y, ch.wrapping_sub(b'0'), Color::Fill);
+            gfx::widgets::draw_big_digit(canvas, cur_x, y, c.wrapping_sub(b'0'), Color::Fill);
             cur_x += 13;
         }
-        for &ch in &fbytes[flen - 2..] {
-            gfx::widgets::draw_small_digit(
-                canvas,
-                cur_x,
-                y + 8,
-                ch.wrapping_sub(b'0'),
-                Color::Fill,
-            );
+        for &c in &fbytes[flen - 2..] {
+            gfx::widgets::draw_small_digit(canvas, cur_x, y + 8, c.wrapping_sub(b'0'), Color::Fill);
             cur_x += 7;
         }
     }
 
     // 4. Modulation Type (top right)
-    gfx::text::draw_str(canvas, 112, y + 6, vfo.mod_type, font, Color::Fill);
+    gfx::text::draw_str(
+        canvas,
+        112,
+        y + 6,
+        ch.modulation.as_str(),
+        font,
+        Color::Fill,
+    );
 
     // 5. Attributes Line (beneath frequency)
     let attr_y = y + 22;
-    gfx::text::draw_str(canvas, 32, attr_y, vfo.power, font, Color::Fill);
-    gfx::text::draw_str(canvas, 44, attr_y, vfo.bw, font, Color::Fill);
-    if !vfo.channel_name.is_empty() {
-        gfx::text::draw_str(canvas, 56, attr_y, vfo.channel_name, font, Color::Fill);
-    }
+    gfx::text::draw_str(canvas, 32, attr_y, ch.power.as_str(), font, Color::Fill);
+    gfx::text::draw_str(canvas, 44, attr_y, ch.bandwidth.as_str(), font, Color::Fill);
+    gfx::text::draw_str(canvas, 56, attr_y, slot.default_name(), font, Color::Fill);
 }
 
 #[inline(never)]
@@ -306,10 +311,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
                     EventResult::Ignored
                 }
             }
-            Event::Bus(bus_ev) if bus_ev.is_radio() => {
-                ctx.state.sync_from_coord();
-                EventResult::Consumed
-            }
+            Event::Bus(bus_ev) if bus_ev.is_radio() => EventResult::Consumed,
             _ => EventResult::Ignored,
         }
     }
@@ -324,13 +326,21 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
 
     #[inline(never)]
     fn render(&self, canvas: &mut Canvas, ctx: &SysContext) {
-        let (vfo_b, sel_b) = if ctx.state.active_vfo == 2 {
-            (&ctx.state.vfo_c, true)
+        let coord = &ctx.state.coord;
+        let active = coord.active_vfo;
+        let slot_b = if active == kernel::service::radio::VfoSlot::VfoC {
+            kernel::service::radio::VfoSlot::VfoC
         } else {
-            (&ctx.state.vfo_b, ctx.state.active_vfo == 1)
+            kernel::service::radio::VfoSlot::VfoB
         };
-        draw_vfo(canvas, 8, &ctx.state.vfo_a, ctx.state.active_vfo == 0);
-        draw_vfo(canvas, 34, vfo_b, sel_b);
+        draw_vfo(
+            canvas,
+            8,
+            coord,
+            kernel::service::radio::VfoSlot::VfoA,
+            active == kernel::service::radio::VfoSlot::VfoA,
+        );
+        draw_vfo(canvas, 34, coord, slot_b, active == slot_b);
 
         // Dotted Divider Line (y: 32)
         gfx::draw::draw_dotted_line_h(canvas, 0, 127, 32, 2, Color::Fill);

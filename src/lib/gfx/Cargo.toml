@@ -13,4 +13,5 @@ heapless = { workspace = true }
 default = []
 grayscale = ["kernel/grayscale"]
 inverted_status = []
+passcode = []
 

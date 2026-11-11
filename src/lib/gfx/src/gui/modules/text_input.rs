@@ -20,17 +20,14 @@ pub enum Charset {
 
 #[repr(align(4))]
 pub struct TextInputModel {
-    pub title: &'static str,
     pub custom_title: String<16>,
     pub buffer: String<32>,
     pub max_len: usize,
     pub press_count: usize,
     pub last_activity_tick: u32,
     pub ticks: u32,
-    pub scroll_offset: usize,
     pub last_key: Option<u8>,
     pub charset: Charset,
-    pub multiline: bool,
     pub show_grid: bool,
     pub is_done: bool,
     pub is_canceled: bool,
@@ -38,7 +35,6 @@ pub struct TextInputModel {
     pub exit_pressed: bool,
     pub exit_press_ticks: u32,
     pub hold_ticks: u32,
-    pub icons: Option<&'static [crate::icons::Icon]>,
     pub is_passcode: bool,
     pub expose_len: bool,
     pub is_k1: bool,
@@ -49,7 +45,6 @@ pub struct TextInputModel {
 impl TextInputModel {
     pub const fn new(max_len: usize) -> Self {
         Self {
-            title: "Input Text",
             custom_title: String::new(),
             buffer: String::new(),
             max_len,
@@ -58,16 +53,13 @@ impl TextInputModel {
             press_count: 0,
             last_activity_tick: 0,
             ticks: 0,
-            multiline: false,
             show_grid: false,
             is_done: false,
             is_canceled: false,
-            scroll_offset: 0,
             exit_held: false,
             exit_pressed: false,
             exit_press_ticks: 0,
             hold_ticks: 6,
-            icons: None,
             is_passcode: false,
             expose_len: false,
             is_k1: true,
@@ -76,53 +68,9 @@ impl TextInputModel {
         }
     }
 
-    pub fn with_hold_ticks(mut self, ticks: u32) -> Self {
-        self.hold_ticks = ticks;
-        self
-    }
-
-    pub fn with_title(mut self, title: &'static str) -> Self {
-        self.title = title;
-        self
-    }
-
     #[inline(always)]
     pub fn title_str(&self) -> &str {
-        if !self.custom_title.is_empty() {
-            self.custom_title.as_str()
-        } else {
-            self.title
-        }
-    }
-
-    pub fn reset_prompt(&mut self, title: &'static str, initial_text: &str, max_len: usize) {
-        self.title = title;
-        self.buffer.clear();
-        let _ = self.buffer.push_str(initial_text);
-        self.max_len = max_len;
-        self.press_count = 0;
-        self.last_activity_tick = 0;
-        self.ticks = 0;
-        self.scroll_offset = 0;
-        self.last_key = None;
-        self.is_done = false;
-        self.is_canceled = false;
-        self.is_passcode = false;
-        self.exit_held = false;
-        self.exit_pressed = false;
-    }
-
-    pub fn set_multiline(mut self, multiline: bool) -> Self {
-        self.multiline = multiline;
-        self
-    }
-
-    pub fn set_digits_only(mut self, digits_only: bool) -> Self {
-        self.digits_only = digits_only;
-        if digits_only {
-            self.charset = Charset::Numbers;
-        }
-        self
+        self.custom_title.as_str()
     }
 }
 
@@ -134,6 +82,7 @@ impl TextInputView {
     }
 
     fn get_charset_chars(charset: Charset, key: u8) -> &'static str {
+        const ALPHA_OFF: [u8; 11] = [0, 1, 7, 10, 13, 16, 19, 22, 26, 29, 33];
         if key > 9 {
             return "";
         }
@@ -144,14 +93,8 @@ impl TextInputView {
                 " .,?!'-@#$%&*()[]<>{}/\\|+-=\"'` :;_",
                 &[0u8, 1, 7, 10, 13, 17, 21, 24, 27, 30, 33][..],
             ),
-            Charset::Upper => (
-                " .,?!'-ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-                &[0u8, 1, 7, 10, 13, 16, 19, 22, 26, 29, 33][..],
-            ),
-            Charset::Lower => (
-                " .,?!'-abcdefghijklmnopqrstuvwxyz",
-                &[0u8, 1, 7, 10, 13, 16, 19, 22, 26, 29, 33][..],
-            ),
+            Charset::Upper => (" .,?!'-ABCDEFGHIJKLMNOPQRSTUVWXYZ", &ALPHA_OFF[..]),
+            Charset::Lower => (" .,?!'-abcdefghijklmnopqrstuvwxyz", &ALPHA_OFF[..]),
         };
         let start = off[k] as usize;
         let end = off[k + 1] as usize;
@@ -163,6 +106,7 @@ impl TextInputView {
         model.press_count = 0;
     }
 
+    #[cfg(feature = "passcode")]
     fn draw_dot(canvas: &mut Canvas, xu: u8, yu: u8, filled: bool) {
         canvas.draw_horizontal_line(xu + 1, yu, 4, Color::Fill);
         canvas.draw_horizontal_line(xu + 1, yu + 5, 4, Color::Fill);
@@ -174,7 +118,6 @@ impl TextInputView {
         }
     }
 
-    #[inline(never)]
     fn draw_t9_grid(canvas: &mut Canvas, charset: Charset) {
         let mut x = 2i16;
         let mut y = 34i16;
@@ -202,8 +145,7 @@ impl TextInputView {
         }
     }
 
-    #[inline(never)]
-    fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16) {
+    fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16, show_grid: bool) {
         let menu_key = if model.is_k1 { "M" } else { "Menu" };
         let exit_label = if model.buffer.is_empty() {
             "Back"
@@ -230,32 +172,21 @@ impl TextInputView {
             _ => "Case",
         };
 
-        let show_grid = model.show_grid
-            || match model.charset {
-                Charset::Numbers => false,
-                Charset::Symbols => true,
-                Charset::Upper | Charset::Lower => !model.is_k1,
-            };
-
-        if show_grid {
-            widgets::draw_key_badge(canvas, 2, by, "*", star_label);
-            widgets::draw_key_badge(canvas, 44, by, menu_key, "Enter");
-            widgets::draw_key_badge(canvas, 86, by, hash_key, case_label);
+        let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
+        let enter_label = if show_grid || model.is_k1 {
+            "Enter"
         } else {
-            widgets::draw_key_badge(canvas, 1, by, "*", star_label);
-            widgets::draw_key_badge(
-                canvas,
-                28,
-                by,
-                menu_key,
-                if model.is_k1 { "Enter" } else { "OK" },
-            );
-            widgets::draw_key_badge(canvas, 60, by, hash_key, case_label);
+            "OK"
+        };
+        widgets::draw_key_badge(canvas, x0, by, "*", star_label);
+        widgets::draw_key_badge(canvas, x1, by, menu_key, enter_label);
+        widgets::draw_key_badge(canvas, x2, by, hash_key, case_label);
+        if !show_grid {
             widgets::draw_key_badge_right(canvas, 126, by, "EXIT", exit_label);
         }
     }
 
-    #[inline(never)]
+    #[cfg(feature = "passcode")]
     fn draw_passcode_dots(canvas: &mut Canvas, model: &TextInputModel, cy: i16, is_cycling: bool) {
         let entered_len = model.buffer.len();
         let total_slots = if model.expose_len {
@@ -327,7 +258,12 @@ impl View<TextInputModel> for TextInputView {
             text::draw_str(canvas, 3, header_y, charset_name, &TOMTHUMB, Color::Fill);
         }
 
-        if !model.is_passcode {
+        #[cfg(feature = "passcode")]
+        let is_passcode = model.is_passcode;
+        #[cfg(not(feature = "passcode"))]
+        let is_passcode = false;
+
+        if !is_passcode {
             let mut num_buf = [0u8; 12];
             let count_s = text::format_fraction_u32(
                 model.buffer.len() as u32,
@@ -360,10 +296,12 @@ impl View<TextInputModel> for TextInputView {
             model.last_key.is_some() && (model.ticks.wrapping_sub(model.last_activity_tick) < 15);
         let text_y = if show_grid { 27i16 } else { 33i16 };
 
-        if model.is_passcode {
+        #[cfg(feature = "passcode")]
+        if is_passcode {
             let cy = if show_grid { 22i16 } else { 29i16 };
             Self::draw_passcode_dots(canvas, model, cy, is_cycling);
-        } else {
+        }
+        if !is_passcode {
             let text_x = 5i16;
             let str_w = text::str_width(&model.buffer, &MUMATRIX);
             let max_w = 118i16;
@@ -405,13 +343,13 @@ impl View<TextInputModel> for TextInputView {
 
         if show_grid {
             Self::draw_t9_grid(canvas, model.charset);
-            Self::draw_bottom_badges(canvas, model, 55);
+            Self::draw_bottom_badges(canvas, model, 55, true);
         } else {
-            if !model.is_passcode {
+            if !is_passcode {
                 canvas.draw_horizontal_line(0, 52, 128, Color::Fill);
             }
-            let by = if model.is_passcode { 55 } else { 54 };
-            Self::draw_bottom_badges(canvas, model, by);
+            let by = if is_passcode { 55 } else { 54 };
+            Self::draw_bottom_badges(canvas, model, by, false);
         }
     }
 
@@ -441,6 +379,7 @@ impl View<TextInputModel> for TextInputView {
                 if model.buffer.len() < model.max_len {
                     let _ = model.buffer.push(ch);
                 }
+                #[cfg(feature = "passcode")]
                 if model.is_passcode && model.expose_len && model.buffer.len() >= model.max_len {
                     model.last_key = None;
                     model.press_count = 0;

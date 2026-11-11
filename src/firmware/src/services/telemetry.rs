@@ -8,21 +8,17 @@ pub fn sample_battery_and_system(adc: &Adc, audio_active: bool) {
     let vdda_mv = adc.read_vref_mv();
     let mcu_temp = adc.read_mcu_temp_deci_c(vdda_mv);
 
-    let radio_state = crate::radio_state_ref();
-    let _master_cfg = crate::master_config_ref();
+    let coord = &crate::radio_state_ref().coord;
     let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
 
-    let active_vfo = radio_state.selected_vfo();
+    let slot = coord.active_vfo;
+    let ch = coord.active_channel();
     let periph = drivers::battery::PeripheralState {
         backlight_level: drivers::backlight::BACKLIGHT_DUTY
             .load(core::sync::atomic::Ordering::Relaxed),
-        tx_active: active_vfo.tx_active,
-        tx_power_level: match active_vfo.power.as_bytes().first() {
-            Some(b'L') => 0,
-            Some(b'M') => 1,
-            _ => 2,
-        },
-        rx_active: active_vfo.rx_active,
+        tx_active: coord.is_slot_tx_active(slot),
+        tx_power_level: ch.power as u8,
+        rx_active: coord.is_slot_rx_active(slot),
         audio_active,
         keypad_led: false,
     };

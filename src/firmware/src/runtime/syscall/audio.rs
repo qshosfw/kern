@@ -23,12 +23,8 @@ pub unsafe extern "C" fn api_audio_set_path(on: u8) {
 }
 
 pub unsafe extern "C" fn api_audio_capture_start(rate_hz: u16) -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.capture_start(rate_hz).is_ok() {
-            0
-        } else {
-            1
-        }
+    if crate::audio_capture_mut().start_capture(rate_hz).is_ok() {
+        0
     } else {
         1
     }
@@ -36,22 +32,15 @@ pub unsafe extern "C" fn api_audio_capture_start(rate_hz: u16) -> u8 {
 
 pub unsafe extern "C" fn api_audio_capture_read(out_samples: *mut i16, max_samples: u16) -> u16 {
     if !out_samples.is_null() && max_samples > 0 {
-        if let Some(ctx) = active_ctx_opt() {
-            let slice =
-                unsafe { core::slice::from_raw_parts_mut(out_samples, max_samples as usize) };
-            ctx.capture_read(slice) as u16
-        } else {
-            0
-        }
+        let slice = unsafe { core::slice::from_raw_parts_mut(out_samples, max_samples as usize) };
+        crate::audio_capture_mut().read_samples(slice) as u16
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_audio_capture_stop() {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.capture_stop();
-    }
+    crate::audio_capture_mut().stop_capture();
 }
 
 pub unsafe extern "C" fn api_audio_set_volume(volume: u8) {
@@ -61,17 +50,11 @@ pub unsafe extern "C" fn api_audio_set_volume(volume: u8) {
 }
 
 pub unsafe extern "C" fn api_audio_get_volume() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_volume()
-    } else {
-        0
-    }
+    crate::master_config_ref().audio.volume
 }
 
 pub unsafe extern "C" fn api_audio_stop() {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.stop_audio();
-    }
+    unsafe { api_audio_set_path(0) }
 }
 
 pub unsafe extern "C" fn api_audio_is_playing() -> u8 {
@@ -97,11 +80,7 @@ pub unsafe extern "C" fn api_audio_read_mic_sample() -> u16 {
 }
 
 pub unsafe extern "C" fn api_audio_is_capturing() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_capturing() { 1 } else { 0 }
-    } else {
-        0
-    }
+    crate::audio_capture_mut().is_capturing() as u8
 }
 
 pub static AUDIO_VTABLE: CapAudioVTable = CapAudioVTable {

@@ -55,18 +55,18 @@ pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
 }
 
 #[inline(never)]
-pub fn active_canvas_opt() -> Option<&'static mut Canvas> {
+pub fn active_canvas_mut() -> &'static mut Canvas {
     let ptr = unsafe { ACTIVE_CANVAS };
     if !ptr.is_null() {
-        Some(unsafe { &mut *ptr })
+        unsafe { &mut *ptr }
     } else if let Some(ctx) = active_ctx_opt() {
         if let Some(ref mut d) = ctx.display {
-            Some(unsafe { &mut *(d.canvas as *mut Canvas) })
+            unsafe { &mut *(d.canvas as *mut Canvas) }
         } else {
-            Some(crate::system_canvas())
+            crate::system_canvas()
         }
     } else {
-        Some(crate::system_canvas())
+        crate::system_canvas()
     }
 }
 

@@ -46,6 +46,36 @@ static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
     target: LauncherTarget::App(APP_ID_VFO),
 }; MAX_LAUNCHER_ENTRIES];
 
+static BUILTIN_HEAD: [LauncherEntry; 2] = [
+    LauncherEntry {
+        title: "Radio",
+        icon_8: &gfx::icons::ICON_APP_RADIO,
+        icon_16: &gfx::icons::ICON_16_RADIO,
+        target: LauncherTarget::App(APP_ID_VFO),
+    },
+    LauncherEntry {
+        title: "Settings",
+        icon_8: &gfx::icons::ICON_APP_SETTINGS,
+        icon_16: &gfx::icons::ICON_16_SETTINGS,
+        target: LauncherTarget::App(APP_ID_SETTINGS),
+    },
+];
+
+static BUILTIN_TAIL: [LauncherEntry; 2] = [
+    LauncherEntry {
+        title: "Torch",
+        icon_8: &gfx::icons::ICON_APP_TORCH,
+        icon_16: &gfx::icons::ICON_16_FLASHLIGHT,
+        target: LauncherTarget::Shortcut(Shortcut::Flashlight),
+    },
+    LauncherEntry {
+        title: "About",
+        icon_8: &gfx::icons::ICON_APP_ABOUT,
+        icon_16: &gfx::icons::ICON_16_INFO,
+        target: LauncherTarget::About,
+    },
+];
+
 pub fn load_entries(
     _storage: Option<&mut crate::services::SystemStorage>,
 ) -> &'static [LauncherEntry] {
@@ -58,24 +88,9 @@ pub fn load_entries(
     }
 
     unsafe {
-        let mut count = 0usize;
-
-        // 1. Core Built-In Apps
-        ENTRIES[count] = LauncherEntry {
-            title: "Radio",
-            icon_8: &gfx::icons::ICON_APP_RADIO,
-            icon_16: &gfx::icons::ICON_16_RADIO,
-            target: LauncherTarget::App(APP_ID_VFO),
-        };
-        count += 1;
-
-        ENTRIES[count] = LauncherEntry {
-            title: "Settings",
-            icon_8: &gfx::icons::ICON_APP_SETTINGS,
-            icon_16: &gfx::icons::ICON_16_SETTINGS,
-            target: LauncherTarget::App(APP_ID_SETTINGS),
-        };
-        count += 1;
+        let entries = &mut *core::ptr::addr_of_mut!(ENTRIES);
+        entries[..2].copy_from_slice(&BUILTIN_HEAD);
+        let mut count = 2usize;
 
         // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
         let cat_ref: &'static catalog::PackageCatalog =
@@ -88,33 +103,21 @@ pub fn load_entries(
                 continue;
             }
 
-            ENTRIES[count] = LauncherEntry {
+            let (icon_8, icon_16) = crate::apps::settings::apps::app_icons(app.title.as_str());
+            entries[count] = LauncherEntry {
                 title: app.title.as_str(),
-                icon_8: crate::apps::settings::apps::app_icon_8(app.title.as_str()),
-                icon_16: crate::apps::settings::apps::app_icon_16(app.title.as_str()),
+                icon_8,
+                icon_16,
                 target: LauncherTarget::Package(app.path.as_str()),
             };
             count += 1;
         }
 
         // 3. Built-In Utilities & Information
-        ENTRIES[count] = LauncherEntry {
-            title: "Torch",
-            icon_8: &gfx::icons::ICON_APP_TORCH,
-            icon_16: &gfx::icons::ICON_16_FLASHLIGHT,
-            target: LauncherTarget::Shortcut(Shortcut::Flashlight),
-        };
-        count += 1;
+        entries[count..count + 2].copy_from_slice(&BUILTIN_TAIL);
+        count += 2;
 
-        ENTRIES[count] = LauncherEntry {
-            title: "About",
-            icon_8: &gfx::icons::ICON_APP_ABOUT,
-            icon_16: &gfx::icons::ICON_16_INFO,
-            target: LauncherTarget::About,
-        };
-        count += 1;
-
-        &ENTRIES[..count]
+        &entries[..count]
     }
 }
 
@@ -175,7 +178,6 @@ impl LauncherApp {
         }
     }
 
-    #[inline(never)]
     fn render_to_canvas(&self, canvas: &mut Canvas, is_list_mode: bool) {
         if is_list_mode {
             self.render_list(canvas);
@@ -199,7 +201,7 @@ impl LauncherApp {
                 true
             }
             LauncherTarget::About => {
-                ctx.show_popup_str(0, "About KERN", crate::build_info::ABOUT_TEXT);
+                ctx.show_popup(0, "About KERN", crate::build_info::ABOUT_TEXT);
                 true
             }
             LauncherTarget::Package(_path) => {
@@ -227,7 +229,6 @@ impl LauncherApp {
         success
     }
 
-    #[inline(never)]
     fn handle_list_nav(&mut self, ctx: &mut SysContext, event: &Event) -> bool {
         let total = self.model.items.len();
         if total == 0 {
@@ -293,7 +294,6 @@ impl LauncherApp {
 }
 
 impl LauncherApp {
-    #[inline(never)]
     fn render_list(&self, canvas: &mut Canvas) {
         let total = self.model.items.len();
         if total == 0 {

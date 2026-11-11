@@ -60,15 +60,7 @@ pub unsafe extern "C" fn api_storage_read_file(
     buf: *mut u8,
     max_len: u16,
 ) -> u16 {
-    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
-        if !buf.is_null() && max_len > 0 {
-            let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-            if let Some(ctx) = active_ctx_opt() {
-                return ctx.read_file(path_str, dst).unwrap_or(0) as u16;
-            }
-        }
-    }
-    0
+    unsafe { api_storage_read_file_at(path, path_len, 0, buf, max_len) }
 }
 
 pub unsafe extern "C" fn api_storage_write_file(

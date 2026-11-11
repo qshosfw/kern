@@ -2,7 +2,9 @@
 
 #[cfg(feature = "boot_assets")]
 use super::asset_chooser::AssetDescriptor;
-use super::page::{RANGE_0_10, RANGE_MIC_GAIN, SettingDef, SettingField};
+#[cfg(feature = "boot_assets")]
+use super::page::AssetId;
+use super::page::{ChoiceId, RangeId, SettingDef, SettingField};
 
 pub static KEY_BEEP_OPTIONS: [&'static str; 6] =
     ["Off", "Tone", "Click", "Double", "Warning", "Scroll"];
@@ -44,25 +46,25 @@ pub static JINGLE_ASSET: AssetDescriptor = AssetDescriptor {
 };
 
 pub static AUDIO_DEFS: [SettingDef; 7] = [
-    SettingDef::range("AF Gain", &RANGE_0_10, SettingField::VOLUME),
-    SettingDef::range("Beep Vol", &RANGE_0_10, SettingField::BEEP_GAIN),
-    SettingDef::choice("Key Beep", &KEY_BEEP_OPTIONS, SettingField::KEY_BEEP),
-    SettingDef::range("Mic Gain", &RANGE_MIC_GAIN, SettingField::MIC_GAIN),
+    SettingDef::range("AF Gain", RangeId::Range0_10, SettingField::VOLUME),
+    SettingDef::range("Beep Vol", RangeId::Range0_10, SettingField::BEEP_GAIN),
+    SettingDef::choice("Key Beep", ChoiceId::KeyBeep, SettingField::KEY_BEEP),
+    SettingDef::range("Mic Gain", RangeId::MicGain, SettingField::MIC_GAIN),
     #[cfg(feature = "boot_assets")]
-    SettingDef::asset("Roger Beep", &ROGER_ASSET),
+    SettingDef::asset("Roger Beep", AssetId::Roger),
     #[cfg(not(feature = "boot_assets"))]
     SettingDef::toggle("Roger Beep", SettingField::ROGER_BEEP),
     #[cfg(feature = "boot_assets")]
-    SettingDef::asset("Boot Jingle", &JINGLE_ASSET),
+    SettingDef::asset("Boot Jingle", AssetId::Jingle),
     #[cfg(not(feature = "boot_assets"))]
     SettingDef::choice(
         "Boot Jingle",
-        &BOOT_JINGLE_OPTIONS,
+        ChoiceId::BootJingle,
         SettingField::BOOT_JINGLE,
     ),
     SettingDef::choice(
         "RX Profile",
-        &AUDIO_PROFILE_OPTIONS,
+        ChoiceId::AudioProfile,
         SettingField::AUDIO_PROFILE,
     ),
 ];

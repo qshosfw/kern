@@ -4,36 +4,52 @@
 //! compositor spaces: dialogs, confirmations, text/passcode inputs, toasts, animations,
 //! and native UI widgets.
 
-use super::{active_ctx_opt, str_or_default};
+use super::str_or_default;
 use kernel::proc::abi::CapUiVTable;
 
-static mut MODAL_TEXT_BUF: [u8; 64] = [0u8; 64];
-static mut MODAL_TEXT_LEN: usize = 0;
+#[inline(always)]
+fn modal_mut() -> &'static mut crate::orchestrator::compositor::ModalCompositor {
+    unsafe { &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL) }
+}
+
+static mut MODAL_TEXT_BUF: [u8; 32] = [0u8; 32];
+static mut MODAL_TEXT_LEN: u8 = 0;
 
 pub fn store_modal_text(text: &str) {
     unsafe {
-        let copy_len = text.len().min(64);
+        let copy_len = text.len().min(32);
         core::ptr::copy_nonoverlapping(
             text.as_bytes().as_ptr(),
             core::ptr::addr_of_mut!(MODAL_TEXT_BUF) as *mut u8,
             copy_len,
         );
-        MODAL_TEXT_LEN = copy_len;
+        MODAL_TEXT_LEN = copy_len as u8;
     }
 }
 
 pub unsafe extern "C" fn api_ui_close_modal() {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.close_modal();
-    }
+    crate::orchestrator::sink_enter_keys();
+    modal_mut().close();
 }
 
 pub unsafe extern "C" fn api_ui_has_modal() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.has_active_modal() { 1 } else { 0 }
-    } else {
-        0
-    }
+    modal_mut().is_active() as u8
+}
+
+#[inline(never)]
+fn show_modal_confirm(
+    tag: u8,
+    title: *const u8,
+    t_len: u8,
+    default_title: &'static str,
+    msg: *const u8,
+    m_len: u8,
+    confirm: &'static str,
+    cancel: &'static str,
+) {
+    let t_str = unsafe { str_or_default(title, t_len as usize, default_title) };
+    let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
+    modal_mut().show_confirm(tag, t_str, m_str, confirm, cancel);
 }
 
 pub unsafe extern "C" fn api_ui_show_popup(
@@ -43,11 +59,7 @@ pub unsafe extern "C" fn api_ui_show_popup(
     msg: *const u8,
     m_len: u8,
 ) {
-    let t_str = unsafe { str_or_default(title, t_len as usize, "Notice") };
-    let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.show_popup_dynamic(tag, t_str, m_str);
-    }
+    show_modal_confirm(tag, title, t_len, "Notice", msg, m_len, "", "");
 }
 
 pub unsafe extern "C" fn api_ui_show_confirm(
@@ -57,11 +69,7 @@ pub unsafe extern "C" fn api_ui_show_confirm(
     msg: *const u8,
     m_len: u8,
 ) {
-    let t_str = unsafe { str_or_default(title, t_len as usize, "Confirm") };
-    let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.show_confirm_dynamic(tag, t_str, m_str, "OK", "CANCEL");
-    }
+    show_modal_confirm(tag, title, t_len, "Confirm", msg, m_len, "OK", "CANCEL");
 }
 
 pub unsafe extern "C" fn api_ui_prompt_text(
@@ -74,9 +82,10 @@ pub unsafe extern "C" fn api_ui_prompt_text(
 ) {
     let t_str = unsafe { str_or_default(title, t_len as usize, "Input") };
     let init_str = unsafe { str_or_default(initial, i_len as usize, "") };
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.prompt_text_dynamic(tag, t_str, init_str, max_len as usize);
-    }
+    #[cfg(feature = "text_input")]
+    modal_mut().prompt_text(tag, t_str, init_str, max_len as usize, false);
+    #[cfg(not(feature = "text_input"))]
+    let _ = (tag, t_str, init_str, max_len);
 }
 
 pub unsafe extern "C" fn api_ui_get_modal_text(buf: *mut u8, max_len: u8) -> u8 {
@@ -84,7 +93,7 @@ pub unsafe extern "C" fn api_ui_get_modal_text(buf: *mut u8, max_len: u8) -> u8 
         return 0;
     }
     unsafe {
-        let copy_len = MODAL_TEXT_LEN.min(max_len as usize);
+        let copy_len = (MODAL_TEXT_LEN as usize).min(max_len as usize);
         core::ptr::copy_nonoverlapping(
             core::ptr::addr_of!(MODAL_TEXT_BUF) as *const u8,
             buf,
@@ -149,49 +158,44 @@ pub unsafe extern "C" fn api_ui_draw_progress_bar(
     percent: u8,
     border: u8,
 ) {
-    if let Some(canvas) = super::active_canvas_opt() {
-        gfx::widgets::draw_progress_bar(canvas, x, y, w, h, percent, border != 0);
-    }
+    gfx::widgets::draw_progress_bar(super::active_canvas_mut(), x, y, w, h, percent, border != 0);
 }
 
 pub unsafe extern "C" fn api_ui_draw_s_meter(x: i16, y: i16, rssi_dbm: i16, peak_hold: u8) {
-    if let Some(canvas) = super::active_canvas_opt() {
-        gfx::widgets::draw_s_meter(
-            canvas,
-            x,
-            y,
-            rssi_dbm,
-            peak_hold,
-            &gfx::fonts::tomthumb::FONT,
-        );
-    }
+    gfx::widgets::draw_s_meter(
+        super::active_canvas_mut(),
+        x,
+        y,
+        rssi_dbm,
+        peak_hold,
+        &gfx::fonts::tomthumb::FONT,
+    );
 }
 
 #[inline(never)]
 fn draw_pill(x: i16, y: i16, w: u8, h: u8, s: &str, filled: bool, tx: i16) {
-    if let Some(canvas) = super::active_canvas_opt() {
-        let xu = x.max(0) as u8;
-        let yu = y.max(0) as u8;
-        let tc = if filled {
-            canvas.fill_rect(xu, yu, w, h, gfx::Color::Fill);
-            gfx::Color::Clear
-        } else {
-            canvas.fill_rect(xu, yu, w, h, gfx::Color::Clear);
-            canvas.draw_rect(xu, yu, w, h, gfx::Color::Fill);
-            gfx::Color::Fill
-        };
-        if h >= 9 {
-            canvas.clear_corners(xu, yu, w, h);
-        }
-        gfx::text::draw_str(
-            canvas,
-            tx,
-            y + (h as i16 >> 1) + 2,
-            s,
-            &gfx::fonts::tomthumb::FONT,
-            tc,
-        );
+    let canvas = super::active_canvas_mut();
+    let xu = x.max(0) as u8;
+    let yu = y.max(0) as u8;
+    let tc = if filled {
+        canvas.fill_rect(xu, yu, w, h, gfx::Color::Fill);
+        gfx::Color::Clear
+    } else {
+        canvas.fill_rect(xu, yu, w, h, gfx::Color::Clear);
+        canvas.draw_rect(xu, yu, w, h, gfx::Color::Fill);
+        gfx::Color::Fill
+    };
+    if h >= 9 {
+        canvas.clear_corners(xu, yu, w, h);
     }
+    gfx::text::draw_str(
+        canvas,
+        tx,
+        y + (h as i16 >> 1) + 2,
+        s,
+        &gfx::fonts::tomthumb::FONT,
+        tc,
+    );
 }
 
 pub unsafe extern "C" fn api_ui_draw_tag_badge(
@@ -217,9 +221,7 @@ pub unsafe extern "C" fn api_ui_draw_key_badge(
 ) {
     let k_s = unsafe { super::parse_str(key_str, k_len as usize) }.unwrap_or("");
     let l_s = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
-    if let Some(canvas) = super::active_canvas_opt() {
-        gfx::widgets::draw_key_badge(canvas, x, y, k_s, l_s);
-    }
+    gfx::widgets::draw_key_badge(super::active_canvas_mut(), x, y, k_s, l_s);
 }
 
 pub unsafe extern "C" fn api_ui_draw_capsule_button(
@@ -244,17 +246,15 @@ pub unsafe extern "C" fn api_ui_draw_scrollbar(
     total: u16,
     visible: u16,
 ) {
-    if let Some(canvas) = super::active_canvas_opt() {
-        gfx::widgets::draw_scrollbar(
-            canvas,
-            x,
-            y,
-            h,
-            current as usize,
-            total as usize,
-            visible as usize,
-        );
-    }
+    gfx::widgets::draw_scrollbar(
+        super::active_canvas_mut(),
+        x,
+        y,
+        h,
+        current as usize,
+        total as usize,
+        visible as usize,
+    );
 }
 
 pub unsafe extern "C" fn api_ui_draw_menu_item(
@@ -273,11 +273,10 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
     } else {
         gfx::Color::Fill
     };
-    if let Some(canvas) = super::active_canvas_opt() {
-        if is_sel {
-            canvas.fill_rect(2, ry, 120, 10, gfx::Color::Fill);
-            canvas.clear_corners(2, ry, 120, 10);
-        }
+    let canvas = super::active_canvas_mut();
+    if is_sel {
+        canvas.fill_rect(2, ry, 120, 10, gfx::Color::Fill);
+        canvas.clear_corners(2, ry, 120, 10);
     }
     let mut text_x = 5i16;
     if icon_id != 0 {
@@ -286,80 +285,84 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
         }
         text_x = 15;
     }
-    if let Some(canvas) = super::active_canvas_opt() {
-        if let Some(t) = unsafe { super::parse_str(title, t_len as usize) } {
-            gfx::text::draw_str(
-                canvas,
-                text_x,
-                y + 7,
-                t,
-                &gfx::fonts::mumatrix_regular::FONT,
-                tc,
-            );
-        }
-        if let Some(v) = unsafe { super::parse_str(value, v_len as usize) } {
-            let vw = gfx::text::str_width(v, &gfx::fonts::tomthumb::FONT);
-            gfx::text::draw_str(canvas, 119 - vw, y + 7, v, &gfx::fonts::tomthumb::FONT, tc);
-        }
+    if let Some(t) = unsafe { super::parse_str(title, t_len as usize) } {
+        gfx::text::draw_str(
+            canvas,
+            text_x,
+            y + 7,
+            t,
+            &gfx::fonts::mumatrix_regular::FONT,
+            tc,
+        );
+    }
+    if let Some(v) = unsafe { super::parse_str(value, v_len as usize) } {
+        let vw = gfx::text::str_width(v, &gfx::fonts::tomthumb::FONT);
+        gfx::text::draw_str(canvas, 119 - vw, y + 7, v, &gfx::fonts::tomthumb::FONT, tc);
     }
 }
 
 pub unsafe extern "C" fn api_ui_draw_big_digit(x: i16, y: i16, digit: u8, color: u8) {
-    let col = crate::services::primitives::color_from_u8(color);
-    if let Some(canvas) = super::active_canvas_opt() {
-        gfx::widgets::spectrum::draw_big_digit(canvas, x, y, digit, col);
-    }
+    gfx::widgets::spectrum::draw_big_digit(
+        super::active_canvas_mut(),
+        x,
+        y,
+        digit,
+        crate::services::primitives::color_from_u8(color),
+    );
 }
 
 pub unsafe extern "C" fn api_ui_draw_small_digit(x: i16, y: i16, digit: u8, color: u8) {
-    let col = crate::services::primitives::color_from_u8(color);
-    if let Some(canvas) = super::active_canvas_opt() {
-        gfx::widgets::spectrum::draw_small_digit(canvas, x, y, digit, col);
-    }
+    gfx::widgets::spectrum::draw_small_digit(
+        super::active_canvas_mut(),
+        x,
+        y,
+        digit,
+        crate::services::primitives::color_from_u8(color),
+    );
 }
 
 pub unsafe extern "C" fn api_ui_draw_battery(x: i16, y: i16, pct: u8, charging: u8) {
-    if let Some(canvas) = super::active_canvas_opt() {
-        if x < 0 || x + 15 > 128 || y < 0 || y + 6 > 64 {
-            return;
-        }
-        let ux = x as u8;
-        let uy = y as u8;
-        canvas.draw_rect(ux, uy, 13, 6, gfx::Color::Fill);
-        canvas.draw_vertical_line(ux + 13, uy + 1, 4, gfx::Color::Fill);
-        canvas.fill_rect(ux + 1, uy + 1, 11, 4, gfx::Color::Clear);
-        if charging != 0 {
-            gfx::icons::draw_icon_5x5(
-                canvas,
-                x + 4,
-                y + 1,
-                gfx::icons::Icon::Bolt,
-                gfx::Color::Fill,
-            );
-        } else {
-            let fill_w = ((pct.min(100) as u16 * 28) >> 8) as u8;
-            if fill_w > 0 {
-                canvas.fill_rect(ux + 1, uy + 1, fill_w, 4, gfx::Color::Fill);
-            }
+    if x < 0 || x + 15 > 128 || y < 0 || y + 6 > 64 {
+        return;
+    }
+    let canvas = super::active_canvas_mut();
+    let ux = x as u8;
+    let uy = y as u8;
+    canvas.draw_rect(ux, uy, 13, 6, gfx::Color::Fill);
+    canvas.draw_vertical_line(ux + 13, uy + 1, 4, gfx::Color::Fill);
+    canvas.fill_rect(ux + 1, uy + 1, 11, 4, gfx::Color::Clear);
+    if charging != 0 {
+        gfx::icons::draw_icon_5x5(
+            canvas,
+            x + 4,
+            y + 1,
+            gfx::icons::Icon::Bolt,
+            gfx::Color::Fill,
+        );
+    } else {
+        let fill_w = ((pct.min(100) as u16 * 28) >> 8) as u8;
+        if fill_w > 0 {
+            canvas.fill_rect(ux + 1, uy + 1, fill_w, 4, gfx::Color::Fill);
         }
     }
 }
 
 pub unsafe extern "C" fn api_ui_draw_signal(x: i16, y: i16, level: u8, color: u8) {
-    let col = crate::services::primitives::color_from_u8(color);
-    if let Some(canvas) = super::active_canvas_opt() {
-        gfx::widgets::draw_signal(canvas, x, y, level, col);
-    }
+    gfx::widgets::draw_signal(
+        super::active_canvas_mut(),
+        x,
+        y,
+        level,
+        crate::services::primitives::color_from_u8(color),
+    );
 }
 
 pub unsafe extern "C" fn api_ui_draw_modal_box(w: u8, h: u8, out_origin: *mut u8) {
-    if let Some(canvas) = super::active_canvas_opt() {
-        let (ox, oy) = gfx::widgets::draw_modal_box(canvas, w, h);
-        if !out_origin.is_null() {
-            unsafe {
-                *out_origin = ox;
-                *out_origin.add(1) = oy;
-            }
+    let (ox, oy) = gfx::widgets::draw_modal_box(super::active_canvas_mut(), w, h);
+    if !out_origin.is_null() {
+        unsafe {
+            *out_origin = ox;
+            *out_origin.add(1) = oy;
         }
     }
 }
@@ -375,13 +378,9 @@ pub unsafe extern "C" fn api_ui_show_confirm_labels(
     cancel: *const u8,
     cl_len: u8,
 ) {
-    let t_str = unsafe { str_or_default(title, t_len as usize, "Confirm") };
-    let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
     let c_str = unsafe { str_or_default(confirm, c_len as usize, "OK") };
     let cl_str = unsafe { str_or_default(cancel, cl_len as usize, "CANCEL") };
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.show_confirm_dynamic(tag, t_str, m_str, c_str, cl_str);
-    }
+    show_modal_confirm(tag, title, t_len, "Confirm", msg, m_len, c_str, cl_str);
 }
 
 pub static UI_VTABLE: CapUiVTable = CapUiVTable {

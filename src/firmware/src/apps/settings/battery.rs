@@ -1,6 +1,6 @@
 //! Battery Domain Settings & Submenu Declarations
 
-use super::page::{MetricId, PageId, RANGE_CALIB_TWEAK, SettingDef, SettingField};
+use super::page::{ChoiceId, MetricId, PageId, RangeId, SettingDef, SettingField};
 
 pub static BATTERY_K5_OPTIONS: [&'static str; 4] = ["1600 mAh", "2200 mAh", "3500 mAh", "External"];
 pub static BATTERY_K5_TYPES: [u8; 4] = [0, 1, 2, 5];
@@ -29,12 +29,12 @@ pub static BATTERY_ROOT: [SettingDef; 5] = [
     SettingDef::battery_type("Capacity"),
     SettingDef::choice(
         "Status Bar",
-        &BATTERY_FORMAT_OPTIONS,
+        ChoiceId::BatteryFormat,
         SettingField::BATTERY_FORMAT,
     ),
     SettingDef::choice(
         "Deep Sleep",
-        &AUTO_POWER_OFF_OPTIONS,
+        ChoiceId::AutoPowerOff,
         SettingField::AUTO_POWER_OFF,
     ),
     SettingDef::submenu("Info", PageId::BatteryInfo),
@@ -53,13 +53,13 @@ pub static BATTERY_INFO: [SettingDef; 6] = [
 pub static BATTERY_TWEAKS: [SettingDef; 3] = [
     SettingDef::range(
         "Calib Tweak",
-        &RANGE_CALIB_TWEAK,
+        RangeId::CalibTweak,
         SettingField::CALIB_TWEAK_MV,
     ),
     SettingDef::toggle("Charge Detect", SettingField::CHARGE_DETECT),
     SettingDef::choice(
         "Power Profile",
-        &POWER_PROFILE_OPTIONS,
+        ChoiceId::PowerProfile,
         SettingField::POWER_PROFILE,
     ),
 ];

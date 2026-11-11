@@ -145,7 +145,7 @@ fn verify_passcode_interactive(ctx: &mut crate::SysContext, text: &str) -> bool 
             pcfg.max_tries,
             &mut nbuf,
         );
-        ctx.show_popup_str(super::app::TAG_POPUP_INFO, "Passcode Error", msg);
+        ctx.show_popup(super::app::TAG_POPUP_INFO, "Passcode Error", msg);
         false
     }
 }

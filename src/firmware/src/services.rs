@@ -153,50 +153,17 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     /// Show an OS modal popup dialog on top of the active application.
-    pub fn show_popup(&mut self, tag: u8, title: &'static str, message: &'static str) {
-        crate::orchestrator::sink_enter_keys();
+    #[inline(always)]
+    pub fn show_popup(&mut self, tag: u8, title: &str, message: &str) {
         unsafe {
             (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
                 .show_popup(tag, title, message);
         }
     }
 
-    /// Show an OS modal popup dialog with a dynamic message slice.
-    pub fn show_popup_str(&mut self, tag: u8, title: &'static str, message: &str) {
-        crate::orchestrator::sink_enter_keys();
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_popup_str(tag, title, message);
-        }
-    }
-
     /// Show an OS modal confirmation dialog with Confirm/Cancel badges.
+    #[inline(always)]
     pub fn show_confirm(
-        &mut self,
-        tag: u8,
-        title: &'static str,
-        message: &'static str,
-        confirm: &'static str,
-        cancel: &'static str,
-    ) {
-        crate::orchestrator::sink_enter_keys();
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_confirm(tag, title, message, confirm, cancel);
-        }
-    }
-
-    /// Show an OS modal popup dialog with dynamic title and message slices.
-    pub fn show_popup_dynamic(&mut self, tag: u8, title: &str, message: &str) {
-        crate::orchestrator::sink_enter_keys();
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_popup_dynamic(tag, title, message);
-        }
-    }
-
-    /// Show an OS modal confirmation dialog with dynamic title and message slices.
-    pub fn show_confirm_dynamic(
         &mut self,
         tag: u8,
         title: &str,
@@ -204,24 +171,23 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         confirm: &'static str,
         cancel: &'static str,
     ) {
-        crate::orchestrator::sink_enter_keys();
         unsafe {
             (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_confirm_dynamic(tag, title, message, confirm, cancel);
+                .show_confirm(tag, title, message, confirm, cancel);
         }
     }
 
     /// Open an OS modal text input prompt.
     #[cfg(feature = "text_input")]
+    #[inline(always)]
     pub fn prompt_text(
         &mut self,
         tag: u8,
-        title: &'static str,
+        title: &str,
         initial: &str,
         max_len: usize,
         digits_only: bool,
     ) {
-        crate::orchestrator::sink_enter_keys();
         unsafe {
             (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL)).prompt_text(
                 tag,
@@ -233,24 +199,12 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         }
     }
 
-    #[cfg(feature = "text_input")]
-    pub fn prompt_text_dynamic(&mut self, tag: u8, title: &str, initial: &str, max_len: usize) {
-        crate::orchestrator::sink_enter_keys();
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .prompt_text_dynamic(tag, title, initial, max_len);
-        }
-    }
-
     #[cfg(not(feature = "text_input"))]
-    pub fn prompt_text_dynamic(&mut self, _tag: u8, _title: &str, _initial: &str, _max_len: usize) {
-    }
-
-    #[cfg(not(feature = "text_input"))]
+    #[inline(always)]
     pub fn prompt_text(
         &mut self,
         _tag: u8,
-        _title: &'static str,
+        _title: &str,
         _initial: &str,
         _max_len: usize,
         _digits_only: bool,
@@ -259,15 +213,15 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
 
     /// Open an OS modal passcode input prompt with dots.
     #[cfg(feature = "passcode")]
+    #[inline(always)]
     pub fn prompt_passcode(
         &mut self,
         tag: u8,
-        title: &'static str,
+        title: &str,
         max_len: usize,
         digits_only: bool,
         expose_len: bool,
     ) {
-        crate::orchestrator::sink_enter_keys();
         unsafe {
             (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
                 .prompt_passcode(tag, title, max_len, digits_only, expose_len);
@@ -275,8 +229,8 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     /// Open an OS modal bottom option sheet.
+    #[inline(always)]
     pub fn show_sheet(&mut self, tag: u8, sheet: gfx::gui::modules::menu::OptionSheet) {
-        crate::orchestrator::sink_enter_keys();
         unsafe {
             (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
                 .show_sheet(tag, sheet);
@@ -284,6 +238,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     /// Close any active OS modal dialog immediately.
+    #[inline(always)]
     pub fn close_modal(&mut self) {
         crate::orchestrator::sink_enter_keys();
         unsafe {
@@ -292,6 +247,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     /// Returns true if an OS modal is currently covering the screen.
+    #[inline(always)]
     pub fn has_active_modal(&self) -> bool {
         unsafe { (*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL)).is_active() }
     }

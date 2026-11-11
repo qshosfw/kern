@@ -186,7 +186,7 @@ impl RadioCoordinator {
             arbitrator: RadioArbitrator::new(),
             dwell: DwellController::new(),
             audio_routing: AudioRoutingState::NormalVoice,
-            vfo_memory_index: [None, None, None],
+            vfo_memory_index: [None, Some(1), None],
             is_transmitting: false,
             tx_state: TxState::Idle,
             carrier_active: false,
@@ -212,6 +212,32 @@ impl RadioCoordinator {
             adaptive_tick_div: 0,
             pa_thermal_foldback_active: false,
         }
+    }
+
+    /// Initialize non-zero fields in-place on a zeroed `RadioCoordinator` instance.
+    pub fn init_zeroed(&mut self) {
+        const INIT_CH: [(u32, RfPowerLevel, Bandwidth); 3] = [
+            (433_500_000, RfPowerLevel::High, Bandwidth::Narrow12k5),
+            (145_500_000, RfPowerLevel::Low, Bandwidth::Wide25k),
+            (144_800_000, RfPowerLevel::Low, Bandwidth::Narrow12k5),
+        ];
+        for (i, &(freq, power, bw)) in INIT_CH.iter().enumerate() {
+            let mut ch = ChannelConfig::new(freq);
+            ch.power = power;
+            ch.bandwidth = bw;
+            self.channels[i] = ch;
+        }
+        self.fsk_config = FskSidecarConfig::DEFAULT;
+        self.vfo_memory_index[1] = Some(1);
+        self.arbitrator.active_lock.client.id = ClientId::SYSTEM;
+        self.dwell.resume_delay_ms = DwellController::DEFAULT_RESUME_DELAY_MS;
+        self.rssi_moving_avg = [-120; 3];
+        self.audio_path_muted = true;
+        self.bclo_policy = BcloPolicy::CarrierOnly;
+        self.tot_limit_seconds = 60;
+        self.tot_warning_lead_seconds = 10;
+        self.adaptive_squelch = [AdaptiveSquelchTracker::new(); 3];
+        self.adaptive_squelch_enabled = true;
     }
 
     #[inline(always)]
@@ -728,6 +754,17 @@ impl RadioCoordinator {
         }
     }
 
+    #[inline(always)]
+    pub fn is_slot_tx_active(&self, slot: VfoSlot) -> bool {
+        self.is_transmitting && self.effective_tx_slot() == slot
+    }
+
+    #[inline(always)]
+    pub fn is_slot_rx_active(&self, slot: VfoSlot) -> bool {
+        (self.listening_vfo == slot && self.carrier_active)
+            || self.arbitrator.locked_slot() == Some(slot)
+    }
+
     /// Query the complete display activity state of a VFO.
     pub fn vfo_activity_state(&self, slot: VfoSlot) -> VfoActivityState {
         if self.is_transmitting
@@ -839,7 +876,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn populate_channel_config(
         &mut self,
         slot: VfoSlot,
@@ -861,18 +897,7 @@ impl RadioCoordinator {
         } else {
             RepeaterShift::Simplex
         };
-        ch.step = match rec.step_hz_x10 {
-            125 => StepSetting::Step1_25k,
-            250 => StepSetting::Step2_5k,
-            500 => StepSetting::Step5k,
-            625 => StepSetting::Step6_25k,
-            1000 => StepSetting::Step10k,
-            1250 => StepSetting::Step12_5k,
-            2500 => StepSetting::Step25k,
-            5000 => StepSetting::Step50k,
-            10000 => StepSetting::Step100k,
-            _ => StepSetting::Step12_5k,
-        };
+        ch.step = StepSetting::from_hz_x10(rec.step_hz_x10);
         ch.bandwidth = if rec.bandwidth_50hz >= 400
             || (rec.flags & crate::data::ChannelRecord::FLAG_WIDE_FILTER) != 0
         {
@@ -907,18 +932,7 @@ impl RadioCoordinator {
             RepeaterShift::Positive(off) => ch.rx_freq.raw().saturating_add(off.raw()),
             RepeaterShift::Negative(off) => ch.rx_freq.raw().saturating_sub(off.raw()),
         };
-        rec.step_hz_x10 = match ch.step {
-            StepSetting::Step1_25k => 125,
-            StepSetting::Step2_5k => 250,
-            StepSetting::Step5k => 500,
-            StepSetting::Step6_25k => 625,
-            StepSetting::Step8_33k => 833,
-            StepSetting::Step10k => 1000,
-            StepSetting::Step12_5k => 1250,
-            StepSetting::Step25k => 2500,
-            StepSetting::Step50k => 5000,
-            StepSetting::Step100k => 10000,
-        };
+        rec.step_hz_x10 = ch.step.in_hz_x10();
         rec.bandwidth_50hz = match ch.bandwidth {
             Bandwidth::Wide25k => 500,    // 25 kHz
             Bandwidth::Narrow6k25 => 125, // 6.25 kHz
@@ -978,7 +992,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn tick_tx<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
         // Lead-in countdown before unmuting mic
         if let TxState::LeadIn { remaining_ms } = self.tx_state {
@@ -1056,7 +1069,6 @@ impl RadioCoordinator {
 
     // ── Main 10ms System Tick ──
 
-    #[inline(never)]
     fn calc_watch_target(&self, idx: usize) -> Option<(u16, VfoSlot)> {
         match self.dual_watch {
             DualWatchMode::Off => None,
@@ -1084,7 +1096,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn tick_tone_burst<R: RadioService>(&mut self, radio: &mut R) {
         if let AudioRoutingState::ToneBurstActive { remaining_ms } = self.audio_routing {
             if remaining_ms <= 10 {
@@ -1101,7 +1112,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn tick_arbitrator<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
         let arb_ev = self.arbitrator.tick(10)?;
         match arb_ev {
@@ -1143,7 +1153,6 @@ impl RadioCoordinator {
         }
     }
 
-    #[inline(never)]
     fn process_carrier_active<R: RadioService>(&mut self, radio: &mut R, idx: usize) -> RadioEvent {
         self.activity_count[idx] = self.activity_count[idx].saturating_add(1);
 

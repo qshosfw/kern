@@ -13,11 +13,9 @@ use kernel::proc::primitives::*;
 // ── 5. CapKeypad C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_sys_poll_key() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.poll_key().unwrap_or(0)
-    } else {
-        0
-    }
+    drivers::keyboard::KeypadScanner::poll_matrix()
+        .map(|k| k as u8)
+        .unwrap_or(0)
 }
 
 pub unsafe extern "C" fn api_sys_nav_dir(key: u8) -> i8 {
@@ -29,62 +27,46 @@ pub unsafe extern "C" fn api_sys_nav_dir(key: u8) -> i8 {
 }
 
 pub unsafe extern "C" fn api_sys_key_matrix() -> u32 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_key_matrix()
-    } else {
-        0
-    }
+    drivers::keyboard::KeypadScanner::poll_raw_mask()
 }
 
 pub unsafe extern "C" fn api_sys_is_key_pressed(key_code: u8) -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_key_pressed(key_code) { 1 } else { 0 }
-    } else {
-        0
+    let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
+    if let Some(kc) = kernel::event::KeyCode::from_u8(key_code) {
+        if (mask & drivers::keyboard::key_to_bit(kc)) != 0 {
+            return 1;
+        }
     }
+    0
 }
 
 pub unsafe extern "C" fn api_sys_is_f_active() -> u8 {
     if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_f_active() { 1 } else { 0 }
+        if ctx.is_f_active { 1 } else { 0 }
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_sys_is_ptt_pressed() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_ptt_pressed() { 1 } else { 0 }
-    } else {
-        0
-    }
+    unsafe { api_sys_is_key_pressed(kernel::event::KeyCode::Ptt as u8) }
 }
 
 pub unsafe extern "C" fn api_sys_is_side1_pressed() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_side1_pressed() { 1 } else { 0 }
-    } else {
-        0
-    }
+    unsafe { api_sys_is_key_pressed(kernel::event::KeyCode::Side1 as u8) }
 }
 
 pub unsafe extern "C" fn api_sys_is_side2_pressed() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_side2_pressed() { 1 } else { 0 }
-    } else {
-        0
-    }
+    unsafe { api_sys_is_key_pressed(kernel::event::KeyCode::Side2 as u8) }
 }
 
 pub unsafe extern "C" fn api_sys_clear_key_buffer() {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.clear_key_buffer();
-    }
+    drivers::keyboard::KeypadScanner::reset_gpio_pins();
 }
 
 pub unsafe extern "C" fn api_sys_is_keypad_locked() -> u8 {
     if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_keypad_locked() { 1 } else { 0 }
+        if ctx.is_keypad_locked { 1 } else { 0 }
     } else {
         0
     }
@@ -105,76 +87,52 @@ pub static KEYPAD_VTABLE: CapKeypadVTable = CapKeypadVTable {
 
 // ── 6. CapPower C-ABI Handlers ──────────────────────────────────────────────
 
+#[inline(always)]
+fn power_ref() -> &'static drivers::battery::SystemPower {
+    unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) }
+}
+
 pub unsafe extern "C" fn api_sys_battery_mv() -> u16 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.battery_mv()
-    } else {
-        0
-    }
+    use kernel::service::PowerService;
+    power_ref().battery_voltage_mv()
 }
 
 pub unsafe extern "C" fn api_sys_battery_pct() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.battery_pct()
-    } else {
-        0
-    }
+    use kernel::service::PowerService;
+    power_ref().battery_percentage()
 }
 
 pub unsafe extern "C" fn api_sys_battery_ma() -> u16 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.battery_ma()
-    } else {
-        0
-    }
+    use kernel::service::PowerService;
+    power_ref().battery_current_ma()
 }
 
 pub unsafe extern "C" fn api_sys_battery_type() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.battery_type()
-    } else {
-        0
-    }
+    power_ref().battery_type() as u8
 }
 
 pub unsafe extern "C" fn api_sys_raw_battery_adc() -> u16 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.raw_battery_adc()
-    } else {
-        0
-    }
+    use kernel::service::PowerService;
+    power_ref().raw_battery_adc()
 }
 
 pub unsafe extern "C" fn api_sys_mcu_temp() -> i16 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.mcu_temp_deci_c()
-    } else {
-        250
-    }
+    use kernel::service::PowerService;
+    power_ref().mcu_temperature_deci_c()
 }
 
 pub unsafe extern "C" fn api_sys_is_charging() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_charging() { 1 } else { 0 }
-    } else {
-        0
-    }
+    if power_ref().is_charging { 1 } else { 0 }
 }
 
 pub unsafe extern "C" fn api_sys_is_low() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_low() { 1 } else { 0 }
-    } else {
-        0
-    }
+    use kernel::service::PowerService;
+    if power_ref().is_low() { 1 } else { 0 }
 }
 
 pub unsafe extern "C" fn api_sys_is_critical() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_critical() { 1 } else { 0 }
-    } else {
-        0
-    }
+    use kernel::service::PowerService;
+    if power_ref().is_critical() { 1 } else { 0 }
 }
 
 pub unsafe extern "C" fn api_sys_set_backlight(mode: u8, timeout_s: u8) {
@@ -196,17 +154,15 @@ pub unsafe extern "C" fn api_sys_wake_backlight() {
 }
 
 pub unsafe extern "C" fn api_sys_set_flashlight(on: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_flashlight(on != 0);
+    if on != 0 {
+        bsp::pins::FLASHLIGHT.set_high();
+    } else {
+        bsp::pins::FLASHLIGHT.set_low();
     }
 }
 
 pub unsafe extern "C" fn api_sys_cpu_freq_hz() -> u32 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.cpu_freq_hz()
-    } else {
-        48_000_000
-    }
+    py32_hal::rcc::sysclk_hz()
 }
 
 pub static POWER_VTABLE: CapPowerVTable = CapPowerVTable {
@@ -264,9 +220,7 @@ pub unsafe extern "C" fn api_serial_is_connected() -> u8 {
 }
 
 pub unsafe extern "C" fn api_serial_flush() {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.flush();
-    }
+    py32_hal::uart::wait_tx_complete();
 }
 
 pub static SERIAL_VTABLE: CapSerialVTable = CapSerialVTable {
@@ -296,19 +250,9 @@ pub unsafe extern "C" fn api_sys_delay_us(us: u32) {
 
 pub unsafe extern "C" fn api_sys_rtc_get(out_time: *mut u8) -> u8 {
     if !out_time.is_null() {
-        if let Some(ctx) = active_ctx_opt() {
-            let (y, mo, d, h, mi, s) = ctx.get_rtc_time();
-            let dst = unsafe { core::slice::from_raw_parts_mut(out_time, 7) };
-            dst[0..2].copy_from_slice(&y.to_le_bytes());
-            dst[2] = mo;
-            dst[3] = d;
-            dst[4] = h;
-            dst[5] = mi;
-            dst[6] = s;
-            0
-        } else {
-            1
-        }
+        let dst = unsafe { core::slice::from_raw_parts_mut(out_time, 7) };
+        dst.copy_from_slice(&[0xEA, 0x07, 1, 1, 0, 0, 0]);
+        0
     } else {
         1
     }

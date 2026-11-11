@@ -2,7 +2,7 @@
 
 #[cfg(feature = "settings_debug")]
 use super::page::ActionId;
-use super::page::{MetricId, PageId, SettingDef, SettingField};
+use super::page::{ChoiceId, MetricId, PageId, SettingDef, SettingField};
 
 pub static CPU_CLOCK_OPTIONS: [&'static str; 5] =
     ["16 MHz", "24 MHz", "32 MHz", "48 MHz", "72 MHz"];
@@ -12,8 +12,8 @@ pub static SYSTEM_ROOT: &[SettingDef] = &[
     SettingDef::metric("Firmware", MetricId::SystemFirmware),
     SettingDef::metric("Serial", MetricId::SystemSerial),
     SettingDef::metric("MAC", MetricId::SystemMac),
-    SettingDef::choice("Clock", &CPU_CLOCK_OPTIONS, SettingField::CPU_CLOCK),
-    SettingDef::choice("UART Baud", &UART_BAUD_OPTIONS, SettingField::UART_BAUD),
+    SettingDef::choice("Clock", ChoiceId::CpuClock, SettingField::CPU_CLOCK),
+    SettingDef::choice("UART Baud", ChoiceId::UartBaud, SettingField::UART_BAUD),
     SettingDef::metric("Uptime", MetricId::SystemUptime),
     SettingDef::submenu("Storage", PageId::SystemStorage),
     #[cfg(feature = "settings_calib")]
