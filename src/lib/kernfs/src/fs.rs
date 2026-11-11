@@ -76,6 +76,7 @@ const CACHE_CAPACITY: usize = 24;
 pub struct KernFS<'a, D: BlockDevice> {
     pub dev: &'a mut D,
     next_alloc_sector: usize,
+    max_sector_used: usize,
     global_seq: u32,
     // Zero-alloc O(1) cache for active files (16B per entry)
     cache: [CacheEntry; CACHE_CAPACITY],
@@ -88,6 +89,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Self {
             dev,
             next_alloc_sector: 0,
+            max_sector_used: 0,
             global_seq: 1,
             cache: [CacheEntry::EMPTY; CACHE_CAPACITY],
             cached_used: 0,
@@ -104,17 +106,18 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             perm,
             active: 1,
         };
+        let mut empty_slot = None;
         for entry in self.cache.iter_mut() {
             if entry.active != 0 && entry.path_hash == path_hash {
                 *entry = entry_val;
                 return;
             }
-        }
-        for entry in self.cache.iter_mut() {
-            if entry.active == 0 {
-                *entry = entry_val;
-                return;
+            if entry.active == 0 && empty_slot.is_none() {
+                empty_slot = Some(entry);
             }
+        }
+        if let Some(slot) = empty_slot {
+            *slot = entry_val;
         }
     }
 
@@ -131,6 +134,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     /// and resolve any interrupted atomic commits by invalidating superseded sectors.
     pub fn mount(&mut self) -> Result<(), FsError> {
         let mut max_seq = 0u32;
+        let mut max_sector = 0usize;
         let mut found_valid = false;
         let mut header_buf = [0u8; HEADER_SIZE];
         let mut used = 0u16;
@@ -147,9 +151,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 if ident == FILE_ID_KERNFS && (flags == 0x7F || flags == 0x01) {
                     found_valid = true;
                     used += 1;
-                    if seq > max_seq {
-                        max_seq = seq;
-                    }
+                    max_sector = max_sector.max(sector);
+                    max_seq = max_seq.max(seq);
 
                     let path_len = header_buf[4] as usize;
                     if path_len > 0 && path_len <= 32 {
@@ -203,10 +206,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                     }
                 } else if flags == 0x00 {
                     deleted += 1;
+                    max_sector = max_sector.max(sector);
                 }
             }
         }
 
+        self.max_sector_used = max_sector;
         self.cached_used = used;
         self.cached_deleted = deleted;
         self.global_seq = max_seq + 1;
@@ -233,6 +238,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
 
         self.next_alloc_sector = 0;
+        self.max_sector_used = 0;
         self.global_seq = 1;
         self.cached_used = 0;
         self.cached_deleted = 0;
@@ -336,6 +342,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         {
             let _ = self.invalidate_sector(old);
         }
+
+        self.max_sector_used = self.max_sector_used.max(target_sector);
 
         let path_hash = CrcEngine::crc32(path.as_bytes());
         self.cache_insert(path_hash, target_sector, payload_len, payload_crc, perm);
@@ -460,7 +468,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             return None;
         }
 
-        // Cache miss fallback (should only happen if cache > 24 entries)
+        // Cache miss fallback bounded to max_sector_used instead of all 512 sectors
         let mut best_sector = None;
         let mut highest_seq = 0u32;
         let mut best_payload_len = 0usize;
@@ -468,8 +476,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let mut best_permission = 0u8;
 
         let mut header_buf = [0u8; HEADER_SIZE];
+        let scan_limit = (self.max_sector_used + 1).min(D::TOTAL_BLOCKS);
 
-        for sector in 0..D::TOTAL_BLOCKS {
+        for sector in 0..scan_limit {
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
                 let ident = read_u16_le(&header_buf, 0);
