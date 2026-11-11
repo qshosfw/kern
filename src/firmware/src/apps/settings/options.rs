@@ -45,6 +45,7 @@ fn make_choice(opts: &'static [&'static str], raw_byte: u8) -> MenuItemType {
     }
 }
 
+#[inline(never)]
 fn populate_item(
     item: &mut MenuItem,
     def: &SettingDef,

@@ -676,6 +676,92 @@ impl SectionType {
     }
 }
 
+/// Compact, zero-allocation metadata summary extracted from a KRX package header.
+#[derive(Debug, Clone, Copy)]
+pub struct KrxSummary<'a> {
+    pub preamble: KrxPreamble,
+    pub title: &'a str,
+    pub icon_id: u16,
+    pub exec_type: KrxExecType,
+    pub caps: crate::caps::CapabilitySet,
+    pub ident_body: Option<&'a [u8]>,
+    pub type_body: Option<&'a [u8]>,
+    pub exec_body: Option<&'a [u8]>,
+    pub cap_imports: Option<&'a [u8]>,
+    pub block_map: Option<&'a [u8]>,
+    pub leaf_map: Option<&'a [u8]>,
+    pub service_exports: Option<&'a [u8]>,
+}
+
+impl KrxPreamble {
+    /// Zero-allocation, single-pass inspection of a KRX package header buffer.
+    #[inline(never)]
+    pub fn summarize<'a>(buf: &'a [u8]) -> Result<KrxSummary<'a>, KrxLaunchError> {
+        let preamble = Self::parse(buf).map_err(|_| KrxLaunchError::InvalidPreamble)?;
+        let h_len = (preamble.header_len as usize).min(buf.len());
+        if h_len < Self::SIZE {
+            return Err(KrxLaunchError::TruncatedPackage);
+        }
+        let hdr = &buf[..h_len];
+
+        let mut title = "";
+        let mut icon_id = 0u16;
+        let mut exec_type = KrxExecType::App;
+        let mut caps = crate::caps::CapabilitySet::NONE;
+        let mut ident_body = None;
+        let mut type_body = None;
+        let mut exec_body = None;
+        let mut cap_imports = None;
+        let mut block_map = None;
+        let mut leaf_map = None;
+        let mut service_exports = None;
+
+        for (hdr_sec, body) in KrxSectionIterator::new(hdr, h_len) {
+            match hdr_sec.id {
+                SECTION_IDENTITY => {
+                    ident_body = Some(body);
+                    if let Some(ident) = SectionIdentity::parse(body) {
+                        icon_id = ident.icon_asset;
+                        if let Some(name_str) = ident.name(hdr) {
+                            title = name_str;
+                        }
+                    }
+                }
+                SECTION_TYPE_LIFECYCLE => {
+                    type_body = Some(body);
+                    if let Some(st) = SectionType::parse(body) {
+                        if let Some(et) = st.exec_type() {
+                            exec_type = et;
+                        }
+                        caps = st.capabilities();
+                    }
+                }
+                SECTION_EXECUTION => exec_body = Some(body),
+                SECTION_CAP_IMPORTS => cap_imports = Some(body),
+                SECTION_BLOCK_MAP => block_map = Some(body),
+                SECTION_LEAF_MAP => leaf_map = Some(body),
+                SECTION_SERVICE_EXPORTS => service_exports = Some(body),
+                _ => {}
+            }
+        }
+
+        Ok(KrxSummary {
+            preamble,
+            title,
+            icon_id,
+            exec_type,
+            caps,
+            ident_body,
+            type_body,
+            exec_body,
+            cap_imports,
+            block_map,
+            leaf_map,
+            service_exports,
+        })
+    }
+}
+
 /// Paged Block Directory Entry (0x0005, 8 bytes)
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]

@@ -28,23 +28,15 @@ fn clamp_pos_rect(x: i16, y: i16, w: i16, h: i16) -> Option<(u8, u8, u8, u8)> {
 }
 
 pub unsafe extern "C" fn api_draw_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    active_canvas_mut().draw_rect(
-        x.max(0) as u8,
-        y.max(0) as u8,
-        w.max(0) as u8,
-        h.max(0) as u8,
-        color_from_u8(color),
-    );
+    if let Some((xu, yu, wu, hu)) = clamp_pos_rect(x, y, w, h) {
+        active_canvas_mut().draw_rect(xu, yu, wu, hu, color_from_u8(color));
+    }
 }
 
 pub unsafe extern "C" fn api_fill_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    active_canvas_mut().fill_rect(
-        x.max(0) as u8,
-        y.max(0) as u8,
-        w.max(0) as u8,
-        h.max(0) as u8,
-        color_from_u8(color),
-    );
+    if let Some((xu, yu, wu, hu)) = clamp_pos_rect(x, y, w, h) {
+        active_canvas_mut().fill_rect(xu, yu, wu, hu, color_from_u8(color));
+    }
 }
 
 pub unsafe extern "C" fn api_draw_bitmap(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16) {

@@ -7,10 +7,7 @@
 use crate::services::SystemStorage;
 use kernel::proc::krx::{KrxClass, KrxExecType};
 #[cfg(feature = "filesystem")]
-use kernel::proc::krx::{
-    KrxPreamble, KrxSectionIterator, SECTION_IDENTITY, SECTION_TYPE_LIFECYCLE, SectionIdentity,
-    SectionType,
-};
+use kernel::proc::krx::KrxPreamble;
 
 /// Cached catalog entry for an installed package.
 #[derive(Debug, Clone)]
@@ -168,30 +165,16 @@ impl PackageCatalog {
         if is_pkg && size >= KrxPreamble::SIZE {
             let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..160];
             if let Ok(read_len) = filesystem.read_file(path.as_str(), hdr_buf) {
-                if let Ok(preamble) = KrxPreamble::parse(&hdr_buf[..read_len]) {
-                    if let Some(cls) = preamble.execution_class() {
+                if let Ok(summary) = KrxPreamble::summarize(&hdr_buf[..read_len]) {
+                    if let Some(cls) = summary.preamble.execution_class() {
                         is_valid = true;
                         app_class = cls;
                     }
-
-                    let h_len = (preamble.header_len as usize).min(read_len);
-                    let hdr = &hdr_buf[..h_len];
-                    for (hdr_sec, body) in KrxSectionIterator::new(hdr, h_len) {
-                        if hdr_sec.id == SECTION_IDENTITY {
-                            if let Some(ident) = SectionIdentity::parse(body) {
-                                icon_id = ident.icon_asset;
-                                if let Some(name_str) = ident.name(hdr) {
-                                    let _ = title.push_str(name_str);
-                                }
-                            }
-                        } else if hdr_sec.id == SECTION_TYPE_LIFECYCLE {
-                            if let Some(st) = SectionType::parse(body) {
-                                if let Some(et) = st.exec_type() {
-                                    exec_type = et;
-                                }
-                                caps = st.cap_mask;
-                            }
-                        }
+                    exec_type = summary.exec_type;
+                    icon_id = summary.icon_id;
+                    caps = summary.caps.raw();
+                    if !summary.title.is_empty() {
+                        let _ = title.push_str(summary.title);
                     }
                 }
             }

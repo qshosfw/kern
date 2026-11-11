@@ -7,14 +7,9 @@
 use crate::SysContext;
 use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
-use kernel::caps::CapabilitySet;
 #[cfg(feature = "krx_declare")]
 use kernel::proc::declare::{ActionRecord, DeclareItem, DeclareNode, LAYOUT_MENU};
-use kernel::proc::krx::{
-    KrxClass, KrxPreamble, SECTION_BLOCK_MAP, SECTION_CAP_IMPORTS, SECTION_EXECUTION,
-    SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_SERVICE_EXPORTS, SECTION_TYPE_LIFECYCLE,
-    SectionExecution, SectionIdentity, SectionType,
-};
+use kernel::proc::krx::{KrxClass, KrxPreamble, SectionExecution};
 
 pub use kernel::proc::krx::KrxLaunchError;
 
@@ -121,58 +116,21 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             _ => KrxLaunchError::ReadFailed,
         })?;
 
-    if total_read < KrxPreamble::SIZE {
-        return Err(KrxLaunchError::InvalidPreamble);
-    }
-
-    let preamble = KrxPreamble::parse(&arena_buf[..total_read])
-        .map_err(|_| KrxLaunchError::InvalidPreamble)?;
-
+    let summary = KrxPreamble::summarize(&arena_buf[..total_read])?;
+    let preamble = summary.preamble;
     let header_len = preamble.header_len as usize;
     if header_len > total_read {
         return Err(KrxLaunchError::TruncatedPackage);
     }
 
-    // 1. Single-pass section scan (KRX-ABI Appendix C)
-    let mut ident_body: Option<&[u8]> = None;
-    let mut type_body: Option<&[u8]> = None;
-    let mut exec_body: Option<&[u8]> = None;
-    #[cfg(feature = "krx_native")]
-    let mut aux = super::native_runner::KrxAuxSections::default();
+    let raw_name = if !summary.title.is_empty() {
+        summary.title
+    } else {
+        "App"
+    };
 
-    for (hdr, body) in
-        kernel::proc::krx::KrxSectionIterator::new(&arena_buf[..header_len], header_len)
-    {
-        match hdr.id {
-            SECTION_IDENTITY => ident_body = Some(body),
-            SECTION_TYPE_LIFECYCLE => type_body = Some(body),
-            SECTION_EXECUTION => exec_body = Some(body),
-            #[cfg(feature = "krx_native")]
-            SECTION_CAP_IMPORTS => aux.cap_imports = Some(body),
-            #[cfg(feature = "krx_native")]
-            SECTION_BLOCK_MAP => aux.block_map = Some(body),
-            #[cfg(feature = "krx_native")]
-            SECTION_LEAF_MAP => aux.leaf_map = Some(body),
-            #[cfg(feature = "krx_native")]
-            SECTION_SERVICE_EXPORTS => aux.service_exports = Some(body),
-            _ => {}
-        }
-    }
-
-    let ident = ident_body
-        .and_then(SectionIdentity::parse)
-        .ok_or(KrxLaunchError::MissingIdentity)?;
-    let raw_name = ident.name(&arena_buf[..header_len]).unwrap_or("App");
-
-    // 2. Inspect Type & Lifecycle Section
-    let mut required_caps = CapabilitySet::NONE;
-    if let Some(tb) = type_body {
-        if let Some(st) = SectionType::parse(tb) {
-            required_caps = st.capabilities();
-        }
-    }
-
-    // 3. Verify Hardware Capabilities
+    // 2. Verify Hardware Capabilities
+    let required_caps = summary.caps;
     if !ctx.caps().contains_all(required_caps) {
         let missing = required_caps.without(ctx.caps());
         let cap_msg = missing
@@ -182,9 +140,9 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         return Err(KrxLaunchError::CapabilityDenied(cap_msg));
     }
 
-    // 3b. Verify RAM and stack headroom requirements against Execution Section
+    // 3. Verify RAM and stack headroom requirements against Execution Section
     let mut exec_sec: Option<SectionExecution> = None;
-    if let Some(eb) = exec_body {
+    if let Some(eb) = summary.exec_body {
         if let Some(exec) = SectionExecution::parse(eb) {
             let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
             let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
@@ -198,6 +156,14 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             exec_sec = Some(exec);
         }
     }
+
+    #[cfg(feature = "krx_native")]
+    let aux = super::native_runner::KrxAuxSections {
+        cap_imports: summary.cap_imports,
+        block_map: summary.block_map,
+        leaf_map: summary.leaf_map,
+        service_exports: summary.service_exports,
+    };
 
     let app_name = store_dynamic_app_name(raw_name);
 

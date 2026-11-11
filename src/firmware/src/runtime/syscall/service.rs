@@ -223,14 +223,6 @@ pub unsafe extern "C" fn api_sys_os_version() -> u32 {
     KRX_ABI_VERSION_3_0
 }
 
-pub unsafe extern "C" fn api_sys_ram_available() -> u16 {
-    unsafe { api_sys_stack_free_min() }
-}
-
-pub unsafe extern "C" fn api_sys_stack_margin() -> u16 {
-    unsafe { api_sys_stack_free() }
-}
-
 pub unsafe extern "C" fn api_sys_proc_count() -> u8 {
     let table = crate::orchestrator::proc_table();
     let mut count = 0u8;
@@ -447,8 +439,8 @@ pub static SERVICE_VTABLE: CapServiceVTable = CapServiceVTable {
     ipc_poll: api_ipc_poll,
     sys_device_uid: api_sys_device_uid,
     sys_os_version: api_sys_os_version,
-    sys_ram_available: api_sys_ram_available,
-    sys_stack_margin: api_sys_stack_margin,
+    sys_ram_available: api_sys_stack_free_min,
+    sys_stack_margin: api_sys_stack_free,
     sys_proc_count: api_sys_proc_count,
     sys_proc_info: api_sys_proc_info,
     sys_proc_kill: api_sys_proc_kill,
