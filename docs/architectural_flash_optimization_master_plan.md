@@ -530,3 +530,5 @@ Successor agents must execute this master plan in structured, atomic batches:
 4. **Git Staging Rules:**
    - Commit only workspace changes: `git add -u src/ docs/`.
    - **STRICTLY NEVER** stage or commit files in `inspo/*`.
+
+> **Continuation:** Measured symbol-level audit and Phases 10–21 are in [`flash_audit_measured_plan.md`](flash_audit_measured_plan.md).
