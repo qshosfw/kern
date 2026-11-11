@@ -1,15 +1,15 @@
 //! System Hardware Abstraction, Dirty Config Synchronization & Context Building.
 
-use crate::services::{
-    DisplayHardware, PowerServiceConfigExt, RadioMelodyExt, SysContext, SystemStorage,
-};
+use crate::services::{DisplayHardware, PowerServiceConfigExt, SysContext, SystemStorage};
 use crate::{CALIBRATION, PASSCODE_STATE, POWER_SERVICE};
 use drivers::audio::AudioAmplifier;
 use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
 use drivers::keyboard::KeypadScanner;
 use drivers::st7565::St7565;
-use kernel::event::{Event, KeyCode, KeyState};
+use kernel::event::Event;
+#[cfg(feature = "radio")]
+use kernel::service::radio::RfSquelch;
 #[cfg(feature = "usb")]
 use kernel::service::PowerService;
 
@@ -214,29 +214,8 @@ impl<'a> SystemHardware<'a> {
 
     #[inline(never)]
     pub fn dispatch_event_and_actions(&mut self, ev: Event) -> bool {
-        let key_beep = crate::master_config_ref().audio.key_beep;
-        let key_press = if let Event::Key { code, state } = ev {
-            if state == KeyState::Pressed
-                && code != KeyCode::Ptt
-                && code != KeyCode::KeyF
-                && key_beep != 0
-            {
-                Some(code)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
         let is_locked = self.orchestrator.is_keypad_locked();
         let is_f = self.orchestrator.is_f_active();
-
-        // 1. Play immediate key feedback beep before UI transitions if key is valid and keypad unlocked
-        if key_beep != 0 && key_press.is_some() && !is_locked {
-            self.radio
-                .play_beep(crate::services::melody::BeepType::from_u8(key_beep));
-        }
 
         let consumed = {
             let mut display_hw = DisplayHardware {
@@ -262,28 +241,30 @@ impl<'a> SystemHardware<'a> {
             self.orchestrator.dispatch_event(&mut ctx, ev)
         };
 
-        let cfg = crate::master_config_ref();
-        let audio_enabled = cfg.audio.volume > 0;
-        if audio_enabled {
-            let sound = match ev {
-                Event::Charging(true) => Some(crate::services::melody::DialogSoundType::Charging),
-                #[cfg(feature = "usb")]
-                Event::Usb(
-                    kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed,
-                ) => Some(crate::services::melody::DialogSoundType::UsbConnect),
-                #[cfg(feature = "usb")]
-                Event::Usb(
-                    kernel::event::UsbEvent::Disconnected | kernel::event::UsbEvent::Suspended,
-                ) => Some(crate::services::melody::DialogSoundType::UsbDisconnect),
-                _ => None,
-            };
-            if let Some(snd) = sound {
-                self.radio.play_dialog_sound(snd);
-            }
-        }
-
         self.apply_dirty_configs();
         consumed
+    }
+
+    #[inline(never)]
+    pub fn tick_radio_services(&mut self) {
+        #[cfg(feature = "radio")]
+        {
+            if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(0xF1) {
+                pcb.ledger.record_activation();
+                let is_busy = crate::radio_state().coord.is_transmitting
+                    || crate::radio_state().coord.carrier_active
+                    || self.radio.is_carrier_open();
+                pcb.set_state(if is_busy {
+                    kernel::proc::ProcState::Running
+                } else {
+                    kernel::proc::ProcState::ServiceIdle
+                });
+            }
+            let radio_ev = crate::radio_state().coord.tick_10ms(&mut self.radio);
+            if let Some(bus_ev) = radio_ev.to_bus_event(2) {
+                crate::system::enqueue_event(kernel::event::Event::Bus(bus_ev));
+            }
+        }
     }
 
     #[inline(never)]

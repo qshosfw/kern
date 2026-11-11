@@ -206,6 +206,8 @@ pub enum Cap {
     ServiceRegistry = 1 << 20, // Microkernel IPC, event bus pub/sub, service RPC
     BusAccess = 1 << 21,       // Low-level I2C / SPI direct bus access
     GpioAccess = 1 << 22,      // Direct hardware GPIO pin manipulation
+    StorageAdmin = 1 << 23,    // Full filesystem management (mkdir, rename, unlink, partition operations)
+    FactoryCalib = 1 << 24,    // Protected factory calibration read/write access (/sys/calib.*)
 }
 
 impl Cap {
@@ -234,6 +236,8 @@ impl Cap {
             Self::ServiceRegistry => "Service Registry",
             Self::BusAccess => "Bus Access",
             Self::GpioAccess => "GPIO Access",
+            Self::StorageAdmin => "Storage Admin",
+            Self::FactoryCalib => "Factory Calibration",
         }
     }
 
@@ -328,6 +332,8 @@ impl CapabilitySet {
             1048576 => Some(Cap::ServiceRegistry),
             2097152 => Some(Cap::BusAccess),
             4194304 => Some(Cap::GpioAccess),
+            8388608 => Some(Cap::StorageAdmin),
+            16777216 => Some(Cap::FactoryCalib),
             _ => None,
         }
     }
@@ -357,7 +363,7 @@ impl Iterator for CapIter {
     type Item = Cap;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.bit < 23 {
+        while self.bit < 25 {
             let current_bit = self.bit;
             self.bit += 1;
             let flag = 1u32 << current_bit;
@@ -386,6 +392,8 @@ impl Iterator for CapIter {
                     1048576 => Some(Cap::ServiceRegistry),
                     2097152 => Some(Cap::BusAccess),
                     4194304 => Some(Cap::GpioAccess),
+                    8388608 => Some(Cap::StorageAdmin),
+                    16777216 => Some(Cap::FactoryCalib),
                     _ => None,
                 };
             }
@@ -426,6 +434,12 @@ mod tests {
         assert_eq!(Cap::RadioRx.name(), "Radio RX");
         assert_eq!(Cap::BroadBandRx.name(), "Broadband HF RX");
         assert_eq!(Cap::CryptoAead.name(), "Crypto AEAD");
+        assert_eq!(Cap::StorageAdmin.name(), "Storage Admin");
+        assert_eq!(Cap::FactoryCalib.name(), "Factory Calibration");
+        let admin_set = CapabilitySet::empty().with(Cap::StorageAdmin);
+        assert_eq!(admin_set.first_cap(), Some(Cap::StorageAdmin));
+        let calib_set = CapabilitySet::empty().with(Cap::FactoryCalib);
+        assert_eq!(calib_set.first_cap(), Some(Cap::FactoryCalib));
     }
 
     #[test]

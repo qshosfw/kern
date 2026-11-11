@@ -17,6 +17,8 @@ pub struct ResourceLedger {
     pub hibernations: u8,
     /// Soft fault / error count
     pub fault_count: u8,
+    /// Cooperative execution slice budget violations (> 500 µs)
+    pub slice_overruns: u8,
 }
 
 impl ResourceLedger {
@@ -29,6 +31,7 @@ impl ResourceLedger {
             cells_used: 0,
             hibernations: 0,
             fault_count: 0,
+            slice_overruns: 0,
         }
     }
 
@@ -69,7 +72,14 @@ impl ResourceLedger {
         self.fault_count = self.fault_count.saturating_add(1);
     }
 
+    #[inline]
+    pub fn record_slice_overrun(&mut self) {
+        self.slice_overruns = self.slice_overruns.saturating_add(1);
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new();
     }
 }
+
+const _: () = assert!(core::mem::size_of::<ResourceLedger>() == 16);

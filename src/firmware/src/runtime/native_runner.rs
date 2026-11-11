@@ -76,6 +76,16 @@ pub fn active_native_app_name() -> &'static str {
     slot_ref().app_name.as_str()
 }
 
+#[inline(always)]
+pub fn active_native_caps() -> CapabilitySet {
+    let slot = slot_ref();
+    if slot.is_loaded {
+        slot.caps
+    } else {
+        CapabilitySet::ALL
+    }
+}
+
 /// Mandatory ARMv6-M instruction/data barrier after code modification or page-in (KRX-ABI 2.5.0 Section 7.2 Step 4, F7).
 #[inline(always)]
 fn flush_instruction_pipeline() {

@@ -574,6 +574,141 @@ pub struct KrxApiTable {
 unsafe impl Sync for KrxApiTable {}
 unsafe impl Send for KrxApiTable {}
 
+// ── Golden Standard KRX Structured System ABI (v3.1) ────────────────────────
+
+pub const KRX_ABI_VERSION_3_1: u32 = 0x0003_0100;
+
+/// Standard Systems Graphics & UI API Table
+#[repr(C)]
+pub struct GfxApi {
+    pub clear: unsafe extern "C" fn(),
+    pub draw_pixel: unsafe extern "C" fn(x: i16, y: i16, color: u8),
+    pub draw_line: unsafe extern "C" fn(x0: i16, y0: i16, x1: i16, y1: i16, color: u8),
+    pub draw_rect: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16, color: u8),
+    pub fill_rect: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16, color: u8),
+    pub draw_bitmap: unsafe extern "C" fn(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16),
+    pub draw_str: unsafe extern "C" fn(x: i16, y: i16, text: *const u8, len: u16, font: u8, color: u8),
+    pub draw_str_align: unsafe extern "C" fn(
+        x: i16,
+        y: i16,
+        text: *const u8,
+        len: u16,
+        font: u8,
+        color: u8,
+        align: u8,
+    ),
+    pub commit_frame: unsafe extern "C" fn(),
+    pub commit_rows: unsafe extern "C" fn(row_mask: u8),
+    pub get_framebuffer: unsafe extern "C" fn() -> *mut u8,
+    pub str_width: unsafe extern "C" fn(text: *const u8, len: u16, font: u8) -> i16,
+    pub draw_icon: unsafe extern "C" fn(x: i16, y: i16, icon_id: u8, color: u8),
+    pub fill_rect_dither: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16, progress: u8),
+    pub invert_rect: unsafe extern "C" fn(x: i16, y: i16, w: i16, h: i16),
+    pub scroll: unsafe extern "C" fn(dx: i8, dy: i8, fill_byte: u8),
+    pub show_popup: unsafe extern "C" fn(tag: u8, title: *const u8, t_len: u8, msg: *const u8, m_len: u8),
+    pub show_confirm: unsafe extern "C" fn(tag: u8, title: *const u8, t_len: u8, msg: *const u8, m_len: u8),
+    pub set_status_bar: unsafe extern "C" fn(sb: *const KrxStatusBar) -> u8,
+}
+
+/// Standard Systems Radio & RF Modem API Table
+#[repr(C)]
+pub struct RadioApi {
+    pub tune: unsafe extern "C" fn(freq_hz: u32, bw: u8, step_hz: u32) -> u8,
+    pub get_freq: unsafe extern "C" fn() -> u32,
+    pub get_rssi: unsafe extern "C" fn() -> i16,
+    pub is_carrier: unsafe extern "C" fn() -> u8,
+    pub set_modulation: unsafe extern "C" fn(mod_type: u8),
+    pub set_squelch: unsafe extern "C" fn(level: u8),
+    pub set_tx: unsafe extern "C" fn(active: u8) -> u8,
+    pub set_tx_power: unsafe extern "C" fn(level: u8),
+    pub set_af_mode: unsafe extern "C" fn(mode: u8),
+    pub sweep: unsafe extern "C" fn(start_hz: u32, step_hz: u32, count: u16, out_rssi: *mut i16) -> u16,
+    pub set_subaudible_ctcss: unsafe extern "C" fn(freq_tenths_hz: u16),
+    pub set_subaudible_dcs: unsafe extern "C" fn(code: u16, inverted: u8),
+    pub fsk_send: unsafe extern "C" fn(data: *const u8, len: u16) -> u8,
+    pub fsk_recv: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
+    pub fm_tune: unsafe extern "C" fn(freq_100khz: u16),
+    pub get_snr: unsafe extern "C" fn() -> u8,
+}
+
+/// Standard Systems Storage & Filesystem API Table
+#[repr(C)]
+pub struct FsApi {
+    pub read_file: unsafe extern "C" fn(path: *const u8, path_len: u8, buf: *mut u8, max_len: u16) -> u16,
+    pub read_file_at: unsafe extern "C" fn(path: *const u8, path_len: u8, offset: u32, buf: *mut u8, max_len: u16) -> u16,
+    pub write_file: unsafe extern "C" fn(path: *const u8, path_len: u8, data: *const u8, len: u16) -> u8,
+    pub append_file: unsafe extern "C" fn(path: *const u8, path_len: u8, data: *const u8, len: u16) -> u8,
+    pub remove_file: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
+    pub file_size: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u32,
+    pub file_exists: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
+    pub list_dir: unsafe extern "C" fn(dir_path: *const u8, dir_len: u8, out_entries: *mut KrxDirEntry, max_entries: u8) -> u8,
+    pub create_dir: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
+    pub rename_file: unsafe extern "C" fn(old_path: *const u8, old_len: u8, new_path: *const u8, new_len: u8) -> u8,
+    pub load_config: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
+    pub save_config: unsafe extern "C" fn(buf: *const u8, len: u16) -> u8,
+}
+
+/// Standard Systems Audio & Melodies API Table
+#[repr(C)]
+pub struct AudioApi {
+    pub play_tone: unsafe extern "C" fn(freq_hz: u16, duration_ms: u16),
+    pub play_beep: unsafe extern "C" fn(beep_type: u8),
+    pub set_path: unsafe extern "C" fn(on: u8),
+    pub set_volume: unsafe extern "C" fn(volume: u8),
+    pub get_volume: unsafe extern "C" fn() -> u8,
+    pub capture_start: unsafe extern "C" fn(rate_hz: u16) -> u8,
+    pub capture_read: unsafe extern "C" fn(out_samples: *mut i16, max_samples: u16) -> u16,
+    pub capture_stop: unsafe extern "C" fn(),
+    pub is_capturing: unsafe extern "C" fn() -> u8,
+    pub stop: unsafe extern "C" fn(),
+}
+
+/// Standard Systems Kernel, Power, Input & IPC API Table
+#[repr(C)]
+pub struct SystemApi {
+    pub ticks_ms: unsafe extern "C" fn() -> u32,
+    pub uptime_secs: unsafe extern "C" fn() -> u32,
+    pub delay_ms: unsafe extern "C" fn(ms: u32),
+    pub battery_mv: unsafe extern "C" fn() -> u16,
+    pub battery_pct: unsafe extern "C" fn() -> u8,
+    pub is_charging: unsafe extern "C" fn() -> u8,
+    pub poll_key: unsafe extern "C" fn() -> u8,
+    pub is_key_pressed: unsafe extern "C" fn(key_code: u8) -> u8,
+    pub is_keypad_locked: unsafe extern "C" fn() -> u8,
+    pub set_backlight: unsafe extern "C" fn(mode: u8, timeout_s: u8),
+    pub serial_write: unsafe extern "C" fn(data: *const u8, len: u16) -> u16,
+    pub serial_read: unsafe extern "C" fn(buf: *mut u8, max_len: u16) -> u16,
+    pub rand32: unsafe extern "C" fn() -> u32,
+    pub crc32: unsafe extern "C" fn(data: *const u8, len: u16) -> u32,
+    pub ipc_send: unsafe extern "C" fn(msg: *const KrxIpcMessage) -> u8,
+    pub ipc_recv: unsafe extern "C" fn(out_msg: *mut KrxIpcMessage) -> u8,
+    pub ipc_reply: unsafe extern "C" fn(req: *const KrxIpcMessage, payload: *const u8, len: u8) -> u8,
+    pub self_pid: unsafe extern "C" fn() -> u8,
+    pub find_proc: unsafe extern "C" fn(name: *const u8, len: u8) -> u8,
+    pub ram_available: unsafe extern "C" fn() -> u16,
+    pub stack_margin: unsafe extern "C" fn() -> u16,
+}
+
+/// Golden Standard KRX Structured System Table (§4.2 / KRX-ABI 3.1)
+///
+/// Passed in `r1` to `KrxNativeEntryFn` for zero-overhead, $O(1)$ AAPCS-Thumb linkage.
+/// Fits in 32 bytes ($2^5$ on 32-bit Cortex-M0+), aligned to power-of-two sector geometries.
+#[repr(C)]
+pub struct KrxSysTable {
+    pub abi_version: u32,
+    pub table_size: u16,
+    pub _reserved: u16,
+    pub granted_caps: u32,
+    pub gfx: *const GfxApi,
+    pub radio: *const RadioApi,
+    pub fs: *const FsApi,
+    pub audio: *const AudioApi,
+    pub sys: *const SystemApi,
+}
+
+unsafe impl Sync for KrxSysTable {}
+unsafe impl Send for KrxSysTable {}
+
 // ── Safe Fallback Stubs ──────────────────────────────────────────────────────
 
 unsafe extern "C" fn noop_draw_pixel(_x: i16, _y: i16, _color: u8) {}
@@ -1417,6 +1552,116 @@ impl KrxApiTable {
     }
 }
 
+pub static STUB_GFX_API: GfxApi = GfxApi {
+    clear: noop_commit_frame,
+    draw_pixel: noop_draw_pixel,
+    draw_line: noop_draw_line,
+    draw_rect: noop_draw_rect,
+    fill_rect: noop_fill_rect,
+    draw_bitmap: noop_draw_bitmap,
+    draw_str: noop_draw_str,
+    draw_str_align: noop_draw_str_align,
+    commit_frame: noop_commit_frame,
+    commit_rows: noop_commit_rows,
+    get_framebuffer: noop_get_framebuffer,
+    str_width: noop_str_width,
+    draw_icon: noop_draw_icon,
+    fill_rect_dither: noop_fill_rect_dither,
+    invert_rect: noop_invert_rect,
+    scroll: noop_scroll,
+    show_popup: noop_ui_show_popup,
+    show_confirm: noop_ui_show_confirm,
+    set_status_bar: noop_ui_set_status_bar,
+};
+
+pub static STUB_RADIO_API: RadioApi = RadioApi {
+    tune: noop_rf_tune,
+    get_freq: noop_rf_get_freq,
+    get_rssi: noop_rf_get_rssi,
+    is_carrier: noop_rf_is_carrier,
+    set_modulation: noop_rf_set_modulation,
+    set_squelch: noop_rf_set_squelch,
+    set_tx: noop_rf_set_tx,
+    set_tx_power: noop_rf_set_tx_power,
+    set_af_mode: noop_rf_set_af_mode,
+    sweep: noop_rf_sweep,
+    set_subaudible_ctcss: noop_rf_set_subaudible_ctcss,
+    set_subaudible_dcs: noop_rf_set_subaudible_dcs,
+    fsk_send: noop_rf_fsk_send,
+    fsk_recv: noop_rf_fsk_recv,
+    fm_tune: noop_fm_tune,
+    get_snr: noop_rf_get_snr,
+};
+
+pub static STUB_FS_API: FsApi = FsApi {
+    read_file: noop_storage_read_file,
+    read_file_at: noop_storage_read_file_at,
+    write_file: noop_storage_write_file,
+    append_file: noop_storage_append_file,
+    remove_file: noop_storage_remove_file,
+    file_size: noop_storage_file_size,
+    file_exists: noop_storage_file_exists,
+    list_dir: noop_storage_list_dir,
+    create_dir: noop_storage_create_dir,
+    rename_file: noop_storage_rename_file,
+    load_config: noop_storage_load_config,
+    save_config: noop_storage_save_config,
+};
+
+pub static STUB_AUDIO_API: AudioApi = AudioApi {
+    play_tone: noop_audio_play_tone,
+    play_beep: noop_audio_play_beep,
+    set_path: noop_audio_set_path,
+    set_volume: noop_audio_set_volume,
+    get_volume: noop_audio_get_volume,
+    capture_start: noop_audio_capture_start,
+    capture_read: noop_audio_capture_read,
+    capture_stop: noop_audio_capture_stop,
+    is_capturing: noop_audio_is_capturing,
+    stop: noop_audio_stop,
+};
+
+pub static STUB_SYSTEM_API: SystemApi = SystemApi {
+    ticks_ms: noop_sys_ticks_ms,
+    uptime_secs: noop_sys_uptime_secs,
+    delay_ms: noop_sys_delay_ms,
+    battery_mv: noop_sys_battery_mv,
+    battery_pct: noop_sys_battery_pct,
+    is_charging: noop_sys_is_charging,
+    poll_key: noop_sys_poll_key,
+    is_key_pressed: noop_sys_is_key_pressed,
+    is_keypad_locked: noop_sys_is_keypad_locked,
+    set_backlight: noop_sys_set_backlight,
+    serial_write: noop_serial_write,
+    serial_read: noop_serial_read,
+    rand32: noop_sys_rand32,
+    crc32: noop_crc32,
+    ipc_send: noop_ipc_send_msg,
+    ipc_recv: noop_ipc_recv_msg,
+    ipc_reply: noop_ipc_reply,
+    self_pid: noop_sys_self_pid,
+    find_proc: noop_sys_find_proc,
+    ram_available: noop_sys_ram_available,
+    stack_margin: noop_sys_stack_margin,
+};
+
+impl KrxSysTable {
+    /// Constructs a safe default system table where all pointers reference safe no-op stubs.
+    pub const fn safe_stub(granted_caps: u32) -> Self {
+        Self {
+            abi_version: KRX_ABI_VERSION_3_1,
+            table_size: core::mem::size_of::<Self>() as u16,
+            _reserved: 0,
+            granted_caps,
+            gfx: &raw const STUB_GFX_API,
+            radio: &raw const STUB_RADIO_API,
+            fs: &raw const STUB_FS_API,
+            audio: &raw const STUB_AUDIO_API,
+            sys: &raw const STUB_SYSTEM_API,
+        }
+    }
+}
+
 /// $O(1)$ Bitwise Integer Square Root for Cortex-M0+ (§8.2 / KRX-ABI 2.5.0).
 #[inline(never)]
 pub const fn isqrt(mut n: u32) -> u32 {
@@ -1480,6 +1725,50 @@ mod tests {
             core::mem::align_of::<KrxApiTable>(),
             core::mem::align_of::<usize>()
         );
+
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(core::mem::size_of::<KrxSysTable>(), 32);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(core::mem::size_of::<KrxSysTable>(), 56);
+        assert_eq!(
+            core::mem::align_of::<KrxSysTable>(),
+            core::mem::align_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn test_krx_sys_table_dispatch() {
+        let sys_table = KrxSysTable::safe_stub(0xCAFE_BABE);
+        assert_eq!(sys_table.abi_version, KRX_ABI_VERSION_3_1);
+        assert_eq!(sys_table.granted_caps, 0xCAFE_BABE);
+
+        unsafe {
+            assert!(!sys_table.gfx.is_null());
+            assert!(!sys_table.radio.is_null());
+            assert!(!sys_table.fs.is_null());
+            assert!(!sys_table.audio.is_null());
+            assert!(!sys_table.sys.is_null());
+
+            let gfx = &*sys_table.gfx;
+            (gfx.clear)();
+            assert_eq!((gfx.str_width)(b"Hello".as_ptr(), 5, 0), 0);
+
+            let radio = &*sys_table.radio;
+            assert_eq!((radio.tune)(433_000_000, 25, 12_500), 1);
+            assert_eq!((radio.get_rssi)(), -140);
+
+            let fs = &*sys_table.fs;
+            assert_eq!((fs.file_exists)(b"/test".as_ptr(), 5), 0);
+            assert_eq!((fs.write_file)(b"/test".as_ptr(), 5, b"data".as_ptr(), 4), 1);
+
+            let audio = &*sys_table.audio;
+            (audio.play_tone)(1000, 100);
+            assert_eq!((audio.is_capturing)(), 0);
+
+            let sys = &*sys_table.sys;
+            assert_eq!((sys.uptime_secs)(), 0);
+            assert_eq!((sys.battery_mv)(), 4000);
+        }
     }
 
     #[test]

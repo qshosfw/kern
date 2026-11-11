@@ -291,6 +291,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
     let mut last_battery_tick = py32_hal::delay::millis();
     let mut last_key_tick = py32_hal::delay::millis();
     let mut last_ui_tick = py32_hal::delay::millis();
+    #[cfg(feature = "radio")]
+    let mut last_radio_tick = py32_hal::delay::millis();
     #[cfg(feature = "grayscale")]
     let mut last_subframe_tick = py32_hal::delay::millis();
     let mut dirty_render = true;
@@ -335,6 +337,13 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         // 0b. Poll RigWire serial protocol (UART or USB CDC)
         #[cfg(any(feature = "uart", feature = "usb_cdc"))]
         poll_rigwire(hw, now);
+
+        // 0c. High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms
+        #[cfg(feature = "radio")]
+        if now.wrapping_sub(last_radio_tick) >= 10 {
+            last_radio_tick = now;
+            hw.tick_radio_services();
+        }
 
         // Clear BOOT record crash loop counter after 5 seconds of stable main loop execution (§13.4)
         #[cfg(feature = "flight_recorder")]

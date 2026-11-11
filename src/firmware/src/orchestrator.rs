@@ -307,39 +307,9 @@ impl Orchestrator {
         self.lock_mgr.reset_input_tracking();
     }
 
-    fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
+    fn tick_background_services<'a>(&mut self, _ctx: &mut crate::services::SysContext<'a, '_>) {
         // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
-        #[cfg(feature = "radio")]
-        {
-            if let Some(pcb) = proc_table_mut().find_mut_by_app(0xF1) {
-                pcb.ledger.record_activation();
-                let is_busy = ctx.state.coord.is_transmitting
-                    || ctx.state.coord.carrier_active
-                    || ctx.radio.is_carrier_open();
-                pcb.set_state(if is_busy {
-                    kernel::proc::ProcState::Running
-                } else {
-                    kernel::proc::ProcState::ServiceIdle
-                });
-            }
-            let radio_ev = ctx.state.coord.tick_10ms(ctx.radio);
-            match radio_ev {
-                crate::services::radio::RadioEvent::TotWarning { .. } => {
-                    if ctx.config.audio.key_beep != 0 {
-                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
-                    }
-                }
-                crate::services::radio::RadioEvent::TotExpired => {
-                    if ctx.config.audio.key_beep != 0 {
-                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
-                    }
-                }
-                _ => {}
-            }
-            if let Some(bus_ev) = radio_ev.to_bus_event(2) {
-                crate::system::enqueue_event(kernel::event::Event::Bus(bus_ev));
-            }
-        }
+        record_proc_activation(0xF1);
 
         // 2. Power Management & Battery Supervisor (PID 3)
         record_proc_activation(0xF2);
@@ -513,6 +483,51 @@ impl Orchestrator {
             if self.lock_mgr.is_f_active {
                 self.handle_f_key_action(ctx, code);
                 return true;
+            }
+            if code != KeyCode::Ptt && code != KeyCode::KeyF && ctx.config.audio.key_beep != 0 {
+                ctx.play_beep(crate::services::melody::BeepType::from_u8(
+                    ctx.config.audio.key_beep,
+                ));
+            }
+        }
+
+        if let Event::Charging(true) = event {
+            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Charging);
+        }
+        #[cfg(feature = "usb")]
+        if let Event::Usb(usb_ev) = event {
+            match usb_ev {
+                kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
+                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbConnect);
+                }
+                kernel::event::UsbEvent::Disconnected | kernel::event::UsbEvent::Suspended => {
+                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbDisconnect);
+                }
+                _ => {}
+            }
+        }
+        #[cfg(feature = "radio")]
+        if let Event::Bus(ref bus_evt) = event {
+            if bus_evt.topic == kernel::ipc::Topic::RADIO {
+                if let Some(r_ev) = crate::services::radio::RadioEvent::from_bus_event(bus_evt) {
+                    match r_ev {
+                        crate::services::radio::RadioEvent::TotWarning { .. } => {
+                            if ctx.config.audio.key_beep != 0 {
+                                ctx.play_dialog_sound(
+                                    crate::services::melody::DialogSoundType::Warning,
+                                );
+                            }
+                        }
+                        crate::services::radio::RadioEvent::TotExpired => {
+                            if ctx.config.audio.key_beep != 0 {
+                                ctx.play_dialog_sound(
+                                    crate::services::melody::DialogSoundType::Error,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
 
