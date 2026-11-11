@@ -4,12 +4,26 @@ pub const LCD_WIDTH: usize = 128;
 pub const LCD_HEIGHT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Color {
-    Clear = 0,     // Level 0: 0% White (lo=0, hi=0)
-    LightGray = 1, // Level 1: 33% Light Gray (lo=1, hi=0)
-    DarkGray = 2,  // Level 2: 67% Dark Gray (lo=0, hi=1)
-    Fill = 3,      // Level 3: 100% Solid Black (lo=1, hi=1)
-    Invert = 4,    // Bitwise Invert
+    Clear = 0,     // Level 0: 0% White
+    Fill = 1,      // Level 1: 100% Solid Black
+    Invert = 2,    // Level 2: Bitwise Invert
+    DarkGray = 3,  // Level 3: 67% Dark Gray
+    LightGray = 4, // Level 4: 33% Light Gray
+}
+
+impl Color {
+    #[inline(always)]
+    pub const fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Color::Clear,
+            2 | 0xFF => Color::Invert,
+            3 => Color::DarkGray,
+            4 => Color::LightGray,
+            _ => Color::Fill,
+        }
+    }
 }
 
 /// Standardized monochromatic icon glyph identifier for UI and status bars.

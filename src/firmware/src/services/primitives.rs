@@ -13,15 +13,7 @@ use kernel::service::{DisplayService, PowerService};
 // ── 1. Display Primitive ────────────────────────────────────────────────────
 #[inline(never)]
 pub fn color_from_u8(color: u8) -> gfx::Color {
-    match color {
-        0 => gfx::Color::Clear,
-        1 => gfx::Color::Fill,
-        2 => gfx::Color::Invert,
-        3 => gfx::Color::DarkGray,
-        4 => gfx::Color::LightGray,
-        0xFF => gfx::Color::Invert,
-        _ => gfx::Color::Fill,
-    }
+    gfx::Color::from_u8(color)
 }
 
 #[inline(never)]
