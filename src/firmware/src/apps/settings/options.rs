@@ -101,7 +101,7 @@ fn populate_item(
             super::metric::format_metric(metric, ctx, &mut s);
             item.item_type = MenuItemType::Value(s);
         }
-        #[cfg(feature = "boot_assets")]
+        #[cfg(feature = "filesystem")]
         SettingKind::Asset(desc) => {
             let mut s = ShortString::empty();
             desc.format_status(&ctx.config, &mut s);

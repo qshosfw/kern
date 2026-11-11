@@ -94,23 +94,28 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
     let ef_valid =
         (fault_sp >= 0x2000_0000) && (fault_sp <= (0x2000_4000 - 32)) && ((fault_sp & 3) == 0);
 
-    let (r0, r1, r2, r3, r12, lr, mut pc, xpsr) = if ef_valid {
+    let slot = BOOT_RECORD.get_mut().begin_write();
+    slot.reset_reason = ResetReason::Hard as u32;
+    slot.fault_sp = fault_sp;
+
+    let mut pc = 0u32;
+    let mut lr = exc_return;
+    let mut xpsr = 0u32;
+
+    if ef_valid {
         let p = fault_sp as *const u32;
-        unsafe {
-            (
-                core::ptr::read_volatile(p.add(0)),
-                core::ptr::read_volatile(p.add(1)),
-                core::ptr::read_volatile(p.add(2)),
-                core::ptr::read_volatile(p.add(3)),
-                core::ptr::read_volatile(p.add(4)),
-                core::ptr::read_volatile(p.add(5)),
-                core::ptr::read_volatile(p.add(6)),
-                core::ptr::read_volatile(p.add(7)),
-            )
+        for i in 0..8 {
+            slot.stack_dump[i] = unsafe { core::ptr::read_volatile(p.add(i)) };
         }
+        lr = slot.stack_dump[5];
+        pc = slot.stack_dump[6];
+        xpsr = slot.stack_dump[7];
     } else {
-        (0, 0, 0, 0, 0, exc_return, 0, 0)
-    };
+        for i in 0..8 {
+            slot.stack_dump[i] = 0;
+        }
+        slot.stack_dump[5] = exc_return;
+    }
 
     let align_pad = if ef_valid && (xpsr & (1 << 9)) != 0 {
         4u32
@@ -128,25 +133,12 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
         pc = unwound_lrs[0];
     }
 
-    let slot = BOOT_RECORD.get_mut().begin_write();
-    slot.reset_reason = ResetReason::Hard as u32;
     slot.fault_pc = pc;
     slot.fault_lr = lr;
-    slot.fault_sp = fault_sp;
     slot.xpsr = xpsr;
-
-    slot.stack_dump[0] = r0;
-    slot.stack_dump[1] = r1;
-    slot.stack_dump[2] = r2;
-    slot.stack_dump[3] = r3;
-    slot.stack_dump[4] = r12;
-    slot.stack_dump[5] = lr;
-    slot.stack_dump[6] = pc;
-    slot.stack_dump[7] = xpsr;
-    slot.stack_dump[8] = unwound_lrs[0];
-    slot.stack_dump[9] = unwound_lrs[1];
-    slot.stack_dump[10] = unwound_lrs[2];
-    slot.stack_dump[11] = unwound_lrs[3];
+    for i in 0..4 {
+        slot.stack_dump[8 + i] = unwound_lrs[i];
+    }
 
     let caller_sp = if ef_valid
         && (thread_sp & 3) == 0
@@ -259,10 +251,9 @@ unsafe extern "C" fn panic_inner(info_ptr: usize, sp: u32, lr: u32) -> ! {
     }
 
     let (unwind_count, unwound_lrs) = unwind_caller_stack(true, sp, lr, lr);
-    slot.stack_dump[8] = unwound_lrs[0];
-    slot.stack_dump[9] = unwound_lrs[1];
-    slot.stack_dump[10] = unwound_lrs[2];
-    slot.stack_dump[11] = unwound_lrs[3];
+    for i in 0..4 {
+        slot.stack_dump[8 + i] = unwound_lrs[i];
+    }
 
     let ipsr: u32;
     #[cfg(target_arch = "arm")]

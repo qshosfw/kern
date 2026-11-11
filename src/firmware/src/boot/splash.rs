@@ -246,11 +246,17 @@ pub fn render_base_logo(
 /// Apply animation transition to a base VRAM image buffer
 pub fn apply_splash_anim(canvas: &mut Canvas, base_vram: &[u8; 1024], anim_type: u8, progress: u8) {
     canvas.load_raw_vram(base_vram);
+    #[cfg(feature = "animations")]
     match anim_type {
         1 => canvas.apply_dither_mask(progress),
         2 => canvas.apply_invert_dissolve(progress),
         3 => canvas.apply_curtain_wipe(progress),
         _ => canvas.sync_planes(),
+    }
+    #[cfg(not(feature = "animations"))]
+    {
+        let _ = (anim_type, progress);
+        canvas.sync_planes();
     }
 }
 
@@ -268,11 +274,17 @@ pub fn render_splash_frame(
 
     render_base_logo(canvas, storage, disp_cfg);
 
+    #[cfg(feature = "animations")]
     match disp_cfg.boot_splash_anim {
         1 => canvas.apply_dither_mask(progress),
         2 => canvas.apply_invert_dissolve(progress),
         3 => canvas.apply_curtain_wipe(progress),
         _ => canvas.sync_planes(),
+    }
+    #[cfg(not(feature = "animations"))]
+    {
+        let _ = progress;
+        canvas.sync_planes();
     }
 }
 

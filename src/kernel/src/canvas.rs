@@ -427,21 +427,32 @@ impl Canvas {
     /// Apply Bayer 4x4 dither reveal across the entire 128x64 canvas.
     /// Pixels where `threshold >= progress` are cleared (progress: 0..=16).
     pub fn apply_dither_mask(&mut self, progress: u8) {
-        if progress < 16 {
-            let buf = self.buffer_flat_mut();
-            for page in 0..8 {
-                for x in 0..128 {
-                    let idx = page * 128 + x;
-                    let mut byte = buf[idx];
-                    for bit in 0..8 {
-                        let y = page * 8 + bit;
-                        let threshold = Self::BAYER_4X4[((y & 3) << 2) | (x & 3)];
-                        if threshold >= progress {
-                            byte &= !(1 << bit);
-                        }
-                    }
-                    buf[idx] = byte;
-                }
+        if progress == 0 {
+            self.buffer = [[0; LCD_WIDTH]; 8];
+        } else if progress < 16 {
+            // For a 4x4 Bayer matrix, threshold depends only on (y & 3) and (x & 3).
+            // Since y = page * 8 + bit, y & 3 is identical to bit & 3.
+            // Bits 0..3 and bits 4..7 have identical thresholds for each column c in 0..4.
+            // Precompute the 8-bit keep mask for each column c:
+            let mut masks = [0u8; 4];
+            for (c, mask) in masks.iter_mut().enumerate() {
+                let b0 = (Self::BAYER_4X4[c] < progress) as u8;
+                let b1 = (Self::BAYER_4X4[4 + c] < progress) as u8;
+                let b2 = (Self::BAYER_4X4[8 + c] < progress) as u8;
+                let b3 = (Self::BAYER_4X4[12 + c] < progress) as u8;
+                let nib = b0 | (b1 << 1) | (b2 << 2) | (b3 << 3);
+                *mask = nib | (nib << 4);
+            }
+            let mask_word = u32::from_ne_bytes(masks);
+
+            let flat = self.buffer_flat_mut();
+            for chunk in flat.chunks_exact_mut(4) {
+                let word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let res = (word & mask_word).to_ne_bytes();
+                chunk[0] = res[0];
+                chunk[1] = res[1];
+                chunk[2] = res[2];
+                chunk[3] = res[3];
             }
         }
         self.sync_planes();
@@ -452,20 +463,25 @@ impl Canvas {
     /// Pixels where `threshold >= progress` are inverted (progress: 0..=16).
     pub fn apply_invert_dissolve(&mut self, progress: u8) {
         if progress < 16 {
-            let buf = self.buffer_flat_mut();
-            for page in 0..8 {
-                for x in 0..128 {
-                    let idx = page * 128 + x;
-                    let mut byte = buf[idx];
-                    for bit in 0..8 {
-                        let y = page * 8 + bit;
-                        let threshold = Self::BAYER_4X4[((y & 3) << 2) | (x & 3)];
-                        if threshold >= progress {
-                            byte ^= 1 << bit;
-                        }
-                    }
-                    buf[idx] = byte;
-                }
+            let mut inv_masks = [0u8; 4];
+            for (c, mask) in inv_masks.iter_mut().enumerate() {
+                let b0 = (Self::BAYER_4X4[c] >= progress) as u8;
+                let b1 = (Self::BAYER_4X4[4 + c] >= progress) as u8;
+                let b2 = (Self::BAYER_4X4[8 + c] >= progress) as u8;
+                let b3 = (Self::BAYER_4X4[12 + c] >= progress) as u8;
+                let nib = b0 | (b1 << 1) | (b2 << 2) | (b3 << 3);
+                *mask = nib | (nib << 4);
+            }
+            let inv_word = u32::from_ne_bytes(inv_masks);
+
+            let flat = self.buffer_flat_mut();
+            for chunk in flat.chunks_exact_mut(4) {
+                let word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let res = (word ^ inv_word).to_ne_bytes();
+                chunk[0] = res[0];
+                chunk[1] = res[1];
+                chunk[2] = res[2];
+                chunk[3] = res[3];
             }
         }
         self.sync_planes();
@@ -477,13 +493,13 @@ impl Canvas {
     pub fn apply_curtain_wipe(&mut self, progress: u8) {
         if progress < 16 {
             let sweep_x = (progress as usize) << 3;
-            let buf = self.buffer_flat_mut();
             for page in 0..8 {
-                for x in sweep_x..128 {
-                    buf[page * 128 + x] = 0;
+                let row = &mut self.buffer[page];
+                for col in sweep_x..LCD_WIDTH {
+                    row[col] = 0;
                 }
                 if sweep_x < 127 {
-                    buf[page * 128 + sweep_x] = 0xFF;
+                    row[sweep_x] = 0xFF;
                 }
             }
         }

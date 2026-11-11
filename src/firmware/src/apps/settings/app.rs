@@ -36,7 +36,7 @@ pub struct SettingsApp {
 
     pub selected_pkg_idx: usize,
     pub slide_offset_x: i16,
-    #[cfg(feature = "boot_assets")]
+    #[cfg(feature = "filesystem")]
     pub(crate) active_asset: Option<&'static super::asset_chooser::AssetDescriptor>,
 }
 
@@ -49,7 +49,7 @@ impl SettingsApp {
             (*ptr).slide_offset_x = 0;
             (*ptr).dirty_timer_ms = 0;
             (*ptr).last_tick_ms = 0;
-            #[cfg(feature = "boot_assets")]
+            #[cfg(feature = "filesystem")]
             {
                 (*ptr).active_asset = None;
             }
@@ -134,7 +134,7 @@ impl SettingsApp {
                     dialog::handle_action_press(ctx, action_id);
                     return;
                 }
-                #[cfg(feature = "boot_assets")]
+                #[cfg(feature = "filesystem")]
                 SettingKind::Asset(desc) => {
                     self.active_asset = Some(desc);
                     let sheet = desc.build_sheet(&ctx.config, ctx.storage);

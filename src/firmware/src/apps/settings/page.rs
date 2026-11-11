@@ -146,7 +146,7 @@ pub static CHOICES: [&'static str; 21] = [
     super::system::UART_BAUD_OPTIONS,
 ];
 
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AssetId {
@@ -155,7 +155,7 @@ pub enum AssetId {
     Jingle = 2,
 }
 
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 pub static ASSETS: [&'static super::asset_chooser::AssetDescriptor; 3] = [
     &super::device::SPLASH_ASSET,
     &super::audio::ROGER_ASSET,
@@ -236,7 +236,7 @@ pub enum SettingKind {
     Range(&'static RangeDef),
     Toggle,
     Metric(MetricId),
-    #[cfg(feature = "boot_assets")]
+    #[cfg(feature = "filesystem")]
     Asset(&'static super::asset_chooser::AssetDescriptor),
     Action(ActionId),
     Info,
@@ -377,7 +377,7 @@ pub const TAG_TOGGLE: u8 = 4;
 pub const TAG_METRIC: u8 = 5;
 pub const TAG_ACTION: u8 = 6;
 pub const TAG_INFO: u8 = 7;
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 pub const TAG_ASSET: u8 = 8;
 
 #[derive(Clone, Copy)]
@@ -439,7 +439,7 @@ impl SettingDef {
         }
     }
 
-    #[cfg(feature = "boot_assets")]
+    #[cfg(feature = "filesystem")]
     pub const fn asset(title: &'static str, asset: AssetId) -> Self {
         Self {
             title,
@@ -485,7 +485,7 @@ impl SettingDef {
             TAG_RANGE => SettingKind::Range(&RANGES[self.aux as usize]),
             TAG_TOGGLE => SettingKind::Toggle,
             TAG_METRIC => SettingKind::Metric(unsafe { core::mem::transmute(self.aux) }),
-            #[cfg(feature = "boot_assets")]
+            #[cfg(feature = "filesystem")]
             TAG_ASSET => SettingKind::Asset(ASSETS[self.aux as usize]),
             TAG_ACTION => SettingKind::Action(unsafe { core::mem::transmute(self.aux) }),
             _ => SettingKind::Info,

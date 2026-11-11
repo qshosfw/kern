@@ -3,7 +3,7 @@
 
 pub mod app;
 pub mod apps;
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 pub mod asset_chooser;
 pub mod audio;
 pub mod battery;

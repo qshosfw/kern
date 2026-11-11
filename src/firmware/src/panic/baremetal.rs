@@ -62,6 +62,15 @@ pub fn baremetal_lcd_blit(canvas: &gfx::Canvas) {
     bsp::pins::LCD_CS.set_high();
 }
 
+#[inline(never)]
+fn render_recovery_frame(canvas: &mut gfx::Canvas, page: u8, cd: Option<u8>, is_k1: bool) {
+    canvas.clear();
+    if let Some(slot) = BOOT_RECORD.get().latest_valid_slot() {
+        crate::boot::recovery::draw_recovery_screen(canvas, slot, page, cd, is_k1);
+    }
+    baremetal_lcd_blit(canvas);
+}
+
 /// Interactive Bare-Metal Recovery Loop with Auto-Reboot Countdown, Key Interrupt, and RED Warning Light
 #[cfg(feature = "panic_gui")]
 pub fn recovery_loop() -> ! {
@@ -94,16 +103,8 @@ pub fn recovery_loop() -> ! {
     let mut led_on = true;
     let mut last_key: Option<kernel::event::KeyCode> = None;
 
-    let render_recovery = |canvas: &mut gfx::Canvas, p: u8, cd: Option<u8>| {
-        canvas.clear();
-        if let Some(slot) = BOOT_RECORD.get().latest_valid_slot() {
-            crate::boot::recovery::draw_recovery_screen(canvas, slot, p, cd, is_k1);
-        }
-        baremetal_lcd_blit(canvas);
-    };
-
     // Initial render FIRST: Draw screen and blit before any UART output!
-    render_recovery(canvas, page, Some(countdown_secs));
+    render_recovery_frame(canvas, page, Some(countdown_secs), is_k1);
     bsp::set_status_led(bsp::StatusLed::Red);
 
     // Stream UART dump only after the LCD is already updated
@@ -149,7 +150,7 @@ pub fn recovery_loop() -> ! {
                 cortex_m::peripheral::SCB::sys_reset();
             }
 
-            render_recovery(canvas, page, Some(countdown_secs));
+            render_recovery_frame(canvas, page, Some(countdown_secs), is_k1);
         }
 
         // 3. Direct hardware keypad matrix polling with release confirmation
@@ -178,7 +179,7 @@ pub fn recovery_loop() -> ! {
                     }
                 }
 
-                render_recovery(canvas, page, None);
+                render_recovery_frame(canvas, page, None, is_k1);
             }
         } else {
             key_released = true;

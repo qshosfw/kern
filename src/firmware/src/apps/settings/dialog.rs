@@ -18,7 +18,7 @@ pub const TAG_POPUP_INFO: u8 = 7;
 pub const TAG_OWNER_INPUT: u8 = 8;
 pub const TAG_TAG_INPUT: u8 = 9;
 pub const TAG_RADIO_ID_INPUT: u8 = 10;
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 pub const TAG_ASSET_CHOOSER: u8 = 11;
 pub const TAG_MODEL_CHOOSER: u8 = 12;
 pub const TAG_MODEL_INPUT: u8 = 13;
@@ -132,7 +132,7 @@ pub fn handle_sheet_selected(
     idx: usize,
 ) -> EventResult {
     match tag {
-        #[cfg(feature = "boot_assets")]
+        #[cfg(feature = "filesystem")]
         TAG_ASSET_CHOOSER => {
             if let Some(desc) = app.active_asset.take() {
                 if desc.apply_choice(idx, &mut ctx.config) {

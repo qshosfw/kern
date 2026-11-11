@@ -78,7 +78,6 @@ fn draw_page_overview(
     hbuf: &mut [u8; 8],
     nbuf: &mut [u8; 6],
 ) {
-    let font = &gfx::fonts::tomthumb::FONT;
     draw_item_hex(canvas, 0, 0, "PC:", slot.fault_pc, hbuf);
     draw_item_hex(canvas, 1, 0, "LR:", slot.fault_lr, hbuf);
 
@@ -91,27 +90,15 @@ fn draw_page_overview(
     };
     draw_item_hex(canvas, 1, 1, right_label, right_val, hbuf);
 
-    // Row 2 (y=31): Actor & Cause
-    let mut actor_len = 0;
-    while actor_len < slot.actor_tag.len() && slot.actor_tag[actor_len] != 0 {
-        actor_len += 1;
-    }
-    let actor_str = if actor_len > 0 {
-        gfx::text::from_ascii_bytes(&slot.actor_tag[..actor_len]).unwrap_or("UNKNOWN")
-    } else {
-        "CORE"
-    };
-    gfx::text::draw_str_max_x(canvas, 2, 31, actor_str, font, gfx::Color::Fill, 62);
-
-    let cause_str = match slot.reason() {
-        Some(kernel::boot::ResetReason::Hard) => "CAUSE: HARD",
-        Some(kernel::boot::ResetReason::Appf) => "CAUSE: APPF",
-        Some(kernel::boot::ResetReason::Wdog) => "CAUSE: WDOG",
-        Some(kernel::boot::ResetReason::Tags) => "CAUSE: TAGS",
-        Some(kernel::boot::ResetReason::Brow) => "CAUSE: BROW",
-        None => "CAUSE: UNKN",
-    };
-    gfx::text::draw_str(canvas, 66, 31, cause_str, font, gfx::Color::Fill);
+    // Row 2 (y=31): Actor & Reason
+    draw_item(canvas, 0, 2, "ACT:", slot.actor_str());
+    draw_item(
+        canvas,
+        1,
+        2,
+        "RSN:",
+        slot.reason().map_or("UNKN", |r| r.as_str()),
+    );
 
     // Row 3 (y=39): SRAM Stack Headroom & Slot CRC32
     draw_stack_free(canvas, 0, 3, slot.fault_sp, nbuf);
@@ -293,25 +280,22 @@ pub fn draw_recovery_screen(
     gfx::text::draw_str(canvas, 3, 6, "PANIC!", font, gfx::Color::Clear);
 
     if let Some(sec) = countdown {
-        let mut r_buf = [b'R', b'E', b'S', b'E', b'T', b' ', b'0', b'0', b's'];
-        let sec_str = gfx::text::format_u8(sec, &mut nbuf);
-        let slen = sec_str.len();
-        r_buf[6..6 + slen].copy_from_slice(sec_str.as_bytes());
-        r_buf[6 + slen] = b's';
-        let s = unsafe { core::str::from_utf8_unchecked(&r_buf[..7 + slen]) };
-        gfx::text::draw_str_align(
-            canvas,
-            64,
-            6,
-            s,
-            font,
-            gfx::Color::Clear,
-            gfx::text::Align::Center,
-        );
+        let r_buf = [
+            b'R', b'E', b'S', b'E', b'T', b' ',
+            b'0' + (sec / 10), b'0' + (sec % 10), b's',
+        ];
+        if let Ok(s) = core::str::from_utf8(&r_buf) {
+            gfx::text::draw_str_align(
+                canvas,
+                64,
+                6,
+                s,
+                font,
+                gfx::Color::Clear,
+                gfx::text::Align::Center,
+            );
+        }
     }
-
-    let cstr = gfx::text::format_u8(slot.crash_count, &mut nbuf);
-    let clen = cstr.len().min(3);
 
     #[cfg(feature = "panic_gui_extended")]
     let p = page % 5;
@@ -319,20 +303,20 @@ pub fn draw_recovery_screen(
     let _ = page;
 
     #[cfg(feature = "panic_gui_extended")]
-    let mut pbuf = [b'P', b'1' + p, b'/', b'5', b' ', b'#', 0, 0, 0];
-    #[cfg(feature = "panic_gui_extended")]
-    pbuf[6..6 + clen].copy_from_slice(&cstr.as_bytes()[..clen]);
-
+    let pbuf = [
+        b'P', b'1' + p, b'/', b'5', b' ', b'#',
+        b'0' + (slot.crash_count.min(99) / 10),
+        b'0' + (slot.crash_count % 10),
+    ];
     #[cfg(not(feature = "panic_gui_extended"))]
-    let mut pbuf = [b'C', b'R', b'A', b'S', b'H', b' ', b'#', 0, 0, 0];
-    #[cfg(not(feature = "panic_gui_extended"))]
-    pbuf[7..7 + clen].copy_from_slice(&cstr.as_bytes()[..clen]);
-
-    #[cfg(feature = "panic_gui_extended")]
-    let pstr = unsafe { core::str::from_utf8_unchecked(&pbuf[..6 + clen]) };
-    #[cfg(not(feature = "panic_gui_extended"))]
-    let pstr = unsafe { core::str::from_utf8_unchecked(&pbuf[..7 + clen]) };
-    gfx::text::draw_str(canvas, 86, 6, pstr, font, gfx::Color::Clear);
+    let pbuf = [
+        b'#',
+        b'0' + (slot.crash_count.min(99) / 10),
+        b'0' + (slot.crash_count % 10),
+    ];
+    if let Ok(pstr) = core::str::from_utf8(&pbuf) {
+        gfx::text::draw_str_align(canvas, 126, 6, pstr, font, gfx::Color::Clear, gfx::text::Align::Right);
+    }
 
     #[cfg(feature = "panic_gui_extended")]
     match p {
@@ -348,20 +332,18 @@ pub fn draw_recovery_screen(
 
     // 3. Inverted Footer / Actions (y=52..63)
     canvas.draw_horizontal_line(0, 52, 128, gfx::Color::Fill);
-    gfx::widgets::draw_key_badge(canvas, 1, 54, "M", "Reset");
+    gfx::text::draw_str(canvas, 2, 58, "[M] Reset", font, gfx::Color::Fill);
 
     #[cfg(feature = "panic_gui_extended")]
     if is_k1 {
-        gfx::widgets::draw_key_badge(canvas, 38, 54, "<", "");
-        gfx::widgets::draw_key_badge(canvas, 48, 54, ">", "Page");
+        gfx::text::draw_str(canvas, 48, 58, "<> Page", font, gfx::Color::Fill);
     } else {
-        gfx::widgets::draw_key_badge(canvas, 36, 54, "^", "");
-        gfx::widgets::draw_key_badge(canvas, 47, 54, "v", "Page");
+        gfx::text::draw_str(canvas, 48, 58, "^v Page", font, gfx::Color::Fill);
     }
     #[cfg(not(feature = "panic_gui_extended"))]
     let _ = is_k1;
 
-    gfx::widgets::draw_key_badge_right(canvas, 126, 54, "EXIT", "Reboot");
+    gfx::text::draw_str_align(canvas, 126, 58, "[EXIT] Reboot", font, gfx::Color::Fill, gfx::text::Align::Right);
 }
 
 #[cfg(feature = "panic_gui_extended")]

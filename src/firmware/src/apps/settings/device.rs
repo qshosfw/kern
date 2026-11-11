@@ -1,8 +1,8 @@
 //! Device Domain Settings Declarations
 
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 use super::asset_chooser::AssetDescriptor;
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 use super::page::AssetId;
 #[cfg(not(feature = "text_input"))]
 use super::page::MetricId;
@@ -16,7 +16,7 @@ pub static MODEL_OPTIONS: [&'static str; 2] = ["UV-K1", "UV-K5 V3"];
 pub static SPLASH_TIME_OPTIONS: &str = "Skip\00.5s\01.0s\02.0s\03.0s\0";
 pub static BOOT_ANIM_OPTIONS: &str = "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0";
 
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 pub static SPLASH_ASSET: AssetDescriptor = AssetDescriptor {
     title: "Boot Splash",
     dir: "/user/splash",
@@ -37,7 +37,7 @@ pub static SPLASH_ASSET: AssetDescriptor = AssetDescriptor {
     },
 };
 
-#[cfg(feature = "boot_assets")]
+#[cfg(feature = "filesystem")]
 pub static SPLASH_PAGE_DEFS: &[SettingDef] = &[
     SettingDef::asset("Image", AssetId::Splash),
     SettingDef::choice(
@@ -52,7 +52,7 @@ pub static SPLASH_PAGE_DEFS: &[SettingDef] = &[
     ),
 ];
 
-#[cfg(not(feature = "boot_assets"))]
+#[cfg(not(feature = "filesystem"))]
 pub static SPLASH_PAGE_DEFS: &[SettingDef] = &[
     SettingDef::choice(
         "Animation",
