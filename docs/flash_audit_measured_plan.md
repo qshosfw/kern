@@ -447,3 +447,161 @@ Every `&'static T` in a const table costs 4 B and a relocation-free but 4-aligne
 | RigWire tables, reg tables, alignment, division, struct split | Ph 11–14, §9.1 | −4.0 KB |
 | Provisioning payloads via RigWire (only true offload) | Ph 18.3 | −5.5 KB |
 | **Total** | | **≈ −28.5 KB → ~92 KB (76 %)** |
+
+---
+
+## 11. Architectural Refactor Pattern Catalogue (The 9 Golden Patterns)
+
+Both `tools/archlint.py` and `tools/bloat.py` classify codebase design smells into these 9 canonical architectural refactoring patterns. Every developer and AI agent working on Kern must use these patterns rather than ad-hoc code edits.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    THE 9 CANONICAL REFACTORING PATTERNS                     │
+├────────────────────┬────────────────────────────────────────────────────────┤
+│ Pattern Tag        │ Architectural Meaning & Implementation Rule            │
+├────────────────────┼────────────────────────────────────────────────────────┤
+│ [DATA-NOT-CODE]    │ Replace procedural match trees with const tables.      │
+│ [PARAM-BLOCK]      │ Pass a &[repr(C)] descriptor when fn has >4 args.      │
+│ [PARALLEL-TYPES]   │ Unify duplicated structs and enums across crates.      │
+│ [GLOBAL-STATE]     │ Consolidate static mut into owned execution contexts.  │
+│ [APPS-TOUCH-HW]    │ Decouple user apps from HAL/BSP; route via SysContext. │
+│ [INLINE-POLICY]    │ Mark non-trivial fns #[inline(never)]; keep callers lean│
+│ [HOT-FIELD-FIRST]  │ Place u8/u16 in first 32B of structs (Thumb imm5).     │
+│ [ARENA-NOT-STACK]  │ Borrow from TRANSIENT_ARENA instead of [u8; N] on stack│
+│ [UNIVERSAL-STUB]   │ Replace 177 distinct noop functions with 1 generic stub│
+└────────────────────┴────────────────────────────────────────────────────────┘
+```
+
+### Pattern 1: `[DATA-NOT-CODE]` — Table-Driven Interpretation
+* **The Flaw:** Writing logic as giant procedural `match` expressions or cascades of `if ... == ...`. Every match arm in ARM Thumb-1 compiles to 4 to 8 bytes of comparison and branch instructions (`cmp`, `bne`, `ldr`, `bl`).
+* **The Fix:** Factor the invariants into a compact `#[repr(C)]` struct (2 to 8 bytes per entry) stored in a `const [Descriptor; N]` array in flash, processed by a single `#[inline(never)]` interpreter loop.
+* **Top Targets:**
+  1. `firmware::services::wire::dispatch_wire_record` (4,656 B) → `const SYS_FACETS: [FacetDesc; N]`
+  2. `firmware::apps::settings::metric::format_metric` (528 B, 42 match arms) → `const METRIC_DEFS: [MetricDef; 42]`
+  3. `utils::gsm7::decode_extended` & `decode_basic` (345 B, 107 match arms) → `const GSM7_TABLE: [u8; 128]`
+  4. `kernel::caps::first_cap` & `next` (190 B, 52 match arms) → `const CAP_BITS: [u8; 32]` or single bit-scan `31 - leading_zeros()`
+
+### Pattern 2: `[PARAM-BLOCK]` — AAPCS Register Parameter Packing
+* **The Flaw:** Functions taking 5 or more parameters. Under AAPCS-Thumb, arguments 1 through 4 are passed in registers `r0` through `r3`. Arguments 5+ are pushed onto the stack, requiring `str` before the call and `ldr` in the callee prologue.
+* **The Fix:** Group related arguments into a `#[repr(C)]` parameter descriptor passed by immutable reference (`&ParamBlock`), consuming exactly one register (`r0`).
+* **Top Targets:**
+  1. `gfx::widgets::input::draw_num_keypad_input` (9 arguments)
+  2. `kernel::proc::abi::noop_ui_show_confirm_labels` & `syscall::ui::api_ui_show_confirm_labels` (9 arguments)
+  3. `gfx::widgets::menu::draw_menu_list` (8 arguments)
+  4. `kernel::wire::session::frame_record_raw` (7 arguments)
+  5. `syscall::display::api_draw_str_align` (7 arguments)
+
+### Pattern 3: `[PARALLEL-TYPES]` — Type Deduplication & Canonicalization
+* **The Flaw:** Defining identical or near-identical structs and enums across different crates because authors wanted "crate autonomy". Each duplicate type brings separate method instantiations, conversions, and match tables.
+* **The Fix:** Consolidate onto a single canonical definition in `kernel` or `platform/traits`. For errors, standardize on a single `kernel::Status` (`#[repr(u8)]`).
+* **Top Targets:**
+  1. `kernfs::device::FsError` (8 variants) ~ `kernel::service::StorageError` (8 variants) → overlap 0.75.
+  2. `kernel::proc::abi::KrxApiTable` ~ `KrxSysTable` (identical 13 pointer fields!).
+  3. `calib::SquelchThresholds` ~ `kernel::service::radio::squelch::SquelchThresholds` (identical `[u16; 5]`).
+  4. `kernfs::fs::FsStats` ~ `kernel::service::StorageStats` (identical 5 fields).
+  5. `traits::rtc::RtcTime` ~ `hal::rtc::DateTime` (identical 5 date-time fields).
+  6. `firmware::services::melody::presets::JingleDef` ~ `RogerDef` (identical string and tone slice fields).
+
+### Pattern 4: `[GLOBAL-STATE]` — Consolidation of `static mut` Globals
+* **The Flaw:** 64 separate `static mut` globals scattered across modules. In Thumb-1, accessing each independent static requires loading its 32-bit absolute address from a local literal pool (`ldr rX, [pc, #offset]`), costing 6 bytes per access site plus register pressure.
+* **The Fix:** Group subsystem globals into a single cohesive struct (e.g. `SystemGlobals` or `ExecutionContext`) referenced by a single base pointer, allowing cheap offset-based access (`ldr r0, [rBase, #offset]`).
+* **Top Targets:**
+  1. `firmware::src::main.rs`: 11 statics
+  2. `firmware::src::orchestrator.rs`: 8 statics
+  3. `firmware::src::runtime::syscall/mod.rs`: 7 statics (`ACTIVE_CTX`, `ACTIVE_CANVAS`, `ACTIVE_SWAP`, etc.)
+  4. `firmware::src::services::wire.rs`: 5 statics
+
+### Pattern 5: `[APPS-TOUCH-HW]` — Microkernel Boundary Decoupling
+* **The Flaw:** Userland and resident applications directly invoking silicon HAL or BSP functions (`py32_hal::delay::millis()`, `py32_hal::wdt::Watchdog::feed()`, `bsp::uid::get_crockford_serial()`). This violates AGENTS.md Principle 1 (Strict layered decoupling: apps must never touch hardware registers or silicon peripherals directly).
+* **The Fix:** Mediate all peripheral services through `SysContext` or microkernel trait facets. Apps receive monotonic time, battery voltage, and identity via `ctx.now_ms()`, `ctx.battery_mv()`, and `ctx.serial()`.
+* **Top Targets:**
+  1. `src/firmware/src/apps/vfo.rs:98`: `py32_hal::delay::millis()` → `ctx.now_ms`
+  2. `src/firmware/src/apps/launcher.rs:369`: `py32_hal::delay::millis()` → `ctx.now_ms`
+  3. `src/firmware/src/apps/settings/security.rs:86`: `py32_hal::wdt::Watchdog::feed()` → remove (tick feeds WDT)
+  4. `src/firmware/src/apps/settings/metric.rs:38`: `bsp::uid::get_crockford_serial()` → `ctx.device_serial()`
+  5. `src/firmware/src/apps/settings/metric.rs:43`: `bsp::uid::read_mac_address()` → `ctx.mac_address()`
+
+### Pattern 6: `[INLINE-POLICY]` — De-Inlining Shared Primitives
+* **The Flaw:** Excessive `#[inline(always)]` on non-trivial functions (> 5 statements). `Canvas::draw_pixel` has 19 statements and a color switch jump table; because it was marked `#[inline(always)]`, its entire 100-byte body was copied into `api_draw_pixel`, `draw_line`, `draw_bitmap`, `fill_rect`, etc., resulting in > 1,200 bytes of duplicated pixel drawing code!
+* **The Fix:** Reserve `#[inline(always)]` strictly for 1-to-3 statement accessors. All shared primitives with > 2 callers and > 24 bytes MUST be marked `#[inline(never)]`.
+* **Top Targets:**
+  1. `kernel::canvas::Canvas::draw_pixel` (19 statements, jump table) → `#[inline(never)]`
+  2. `kernel::canvas::Canvas::scroll_plane_vertical` (24 statements) → `#[inline(never)]`
+  3. `kernel::canvas::Canvas::scroll_plane_horizontal` (16 statements) → `#[inline(never)]`
+  4. `crypto::ascon::round` (23 statements) → `#[inline(never)]`
+  5. `bsp::board::bitbang_write_u16` (7 statements) → `#[inline(never)]`
+
+### Pattern 7: `[HOT-FIELD-FIRST]` — Struct Layout Optimization for Thumb imm5
+* **The Flaw:** In ARMv6-M (Thumb-1), `ldrb/strb` instructions have an immediate offset limit of 31 bytes (5-bit imm). `ldrh/strh` reach 62 bytes. `ldr/str` reach 124 bytes. Structs with frequently accessed `u8` or `u16` fields placed past offset 31 force the compiler to emit `movs rX, #offset; ldrb rY, [rBase, rX]`, burning 454 extra instructions across 183 functions!
+* **The Fix:** Reorder all core structs (`RadioCoordinator`, `ModalCompositor`, `Orchestrator`, `MasterConfig`, `SysContext`) so that:
+  - Byte offsets 0..31: All hot `u8` flags, states, and counters.
+  - Byte offsets 32..62: All hot `u16` frequencies and dimensions.
+  - Byte offsets 64..124: Pointers, `u32` words.
+  - Byte offsets 128+: Cold arrays, buffers, and string slices.
+* **Top Targets:**
+  1. `RadioCoordinator`: 44 offset penalties (`half@188x3`, `byte@184x3`, `half@114x2`)
+  2. `run_system_loop`: 27 offset penalties (`byte@69x9`, `byte@72x3`, `word@200x2`)
+  3. `ModalCompositor`: 21 offset penalties (`byte@95x3`, `byte@84x3`, `byte@91x2`)
+  4. `Orchestrator`: 18 offset penalties (`byte@81x10`, `byte@82x3`)
+
+### Pattern 8: `[ARENA-NOT-STACK]` — Eliminating Large Stack Frames
+* **The Flaw:** Allocating large local buffers (`[u8; 128]`, `[u8; 256]`, `[u8; 512]`, `[u8; 1024]`) on the stack. 29 functions allocate >= 96 bytes on the stack, peaking at 1,412 bytes in `run_boot_splash` and 1,308 bytes in `dispatch_wire_record`. Because Cortex-M0+ cannot adjust SP by > 508 bytes in one instruction, it emits cascades of `sub sp, #508; sub sp, #508...` and requires multi-instruction address math to access local variables.
+* **The Fix:** Borrow temporary scratch buffers from `firmware::data::arena::TRANSIENT_ARENA` (6 KB statically reserved in `.bss`), which is already designed for zero-alloc staging!
+* **Top Targets:**
+  1. `run_boot_splash` (1,412 B stack) → borrow splash decode buffer from arena
+  2. `dispatch_wire_record` (1,308 B stack) → borrow wire payload and response buffer from arena
+  3. `build_sheet` (780 B stack) → borrow sheet row buffer from arena
+  4. `PackageCatalog::scan_internal` (772 B stack) → borrow package inspect buffer from arena
+  5. `provision_packages` (724 B stack) → borrow write buffer from arena
+
+### Pattern 9: `[UNIVERSAL-STUB]` — Consolidating Dummy VTable Functions
+* **The Flaw:** In `kernel/src/proc/abi.rs`, 177 distinct `noop_*` functions are written out by hand (`noop_draw_pixel`, `noop_draw_line`, `noop_rf_tune`, etc.), taking up hundreds of lines of code and cluttering the symbols.
+* **The Fix:** In ARM Thumb-1, a universal noop function is simply:
+  ```rust
+  #[inline(never)]
+  pub unsafe extern "C" fn generic_noop() -> u32 { 0 }
+  ```
+  In assembly, `movs r0, #0; bx lr` (2 instructions, 4 bytes). A single `generic_noop` function can populate EVERY unused function pointer slot across all stub vtables.
+
+---
+
+## 12. Architectural Playbook for AI Agents (The Rule of One)
+
+When weak or specialized AI agents perform architectural refactoring on Kern, they must strictly adhere to the **Rule of One**:
+
+1. **One Subsystem per Turn:** Never refactor multiple crates simultaneously. Choose one phase (e.g. Phase 10: Syscall layer) and complete it atomically.
+2. **One Pattern per Commit:** Focus on applying one pattern (e.g. `[ARENA-NOT-STACK]` on `dispatch_wire_record`, or `[HOT-FIELD-FIRST]` on `RadioCoordinator`).
+3. **Execution Protocol Checklist:**
+   ```
+   [ ] Step A: Run baseline audit:
+       python3 tools/bloat.py audit --json docs/baseline_before.json
+   [ ] Step B: Run architectural smell check:
+       python3 tools/archlint.py <check>
+   [ ] Step C: Apply refactoring pattern adhering to no_std and zero heap allocation.
+   [ ] Step D: Run fast syntax and type check (0 warnings required):
+       ./kern check
+   [ ] Step E: Verify monotonic flash decrease:
+       ./kern size
+       python3 tools/bloat.py diff --base docs/baseline_before.json
+   [ ] Step F: Run host tests:
+       cargo test --target x86_64-unknown-linux-gnu -p kernel -p kernfs -p utils
+   [ ] Step G: Atomic Git commit:
+       git add src/ tools/ docs/
+       git commit -m "refactor(<subsystem>): apply [<PATTERN>] to <target>"
+   ```
+
+---
+
+## 13. Comprehensive Inventory of Concrete Design Flaws
+
+| Subsystem | File & Location | Measured Cost | Root Cause Flaw | Architectural Remedy |
+|---|---|---|---|---|
+| **Wire RPC** | `firmware/src/services/wire.rs:112` | 4,656 B code<br>1,308 B stack | Monolithic match tree; stack-allocated 1KB buffers | `[DATA-NOT-CODE]` `[ARENA-NOT-STACK]` Const `FacetDesc` table + borrow from arena |
+| **Radio State** | `firmware/src/services/radio/coordinator.rs:248` | 1,936 B code<br>44 imm5 penalties | Inlined dual-watch, tone stepping, squelch polling; fields at offset 188+ | `[HOT-FIELD-FIRST]` Split states into `#[inline(never)]` handlers; reorder hot fields |
+| **Syscall Shims** | `firmware/src/runtime/syscall/display.rs` | 11,520 B code<br>(183 symbols) | Inlining `Canvas::draw_pixel` & `draw_line` into every shim | `[INLINE-POLICY]` Canvas signed coordinate primitives; direct tail calls |
+| **Boot Splash** | `firmware/src/boot/orchestration.rs:70` | 1,612 B code<br>1,412 B stack | Procedural animation loop; 1.4KB stack buffer | `[ARENA-NOT-STACK]` `[DATA-NOT-CODE]` Data-driven keyframe table + borrow arena |
+| **Catalog Scan** | `firmware/src/apps/launcher/catalog.rs:100` | 772 B stack<br>484 B code | Stack-allocated package read buffers | `[ARENA-NOT-STACK]` Stream inspect directly through shared arena buffer |
+| **ABI VTable Stubs**| `kernel/src/proc/abi.rs:612-1450` | 177 stub fns<br>600 lines code | 177 hand-written noop functions | `[UNIVERSAL-STUB]` Single `generic_noop() -> u32` for all unused slots |
+| **App Boundaries** | `firmware/src/apps/vfo.rs:98`<br>`launcher.rs:369`<br>`security.rs:86` | 7 violations | Apps calling silicon HAL (`delay::millis`, `Watchdog::feed`) | `[APPS-TOUCH-HW]` Route time & peripheral queries strictly through `SysContext` |
+| **Packed Structs** | `kernel/src/proc/memory.rs`<br>`firmware/src/panic/baremetal.rs` | 87 `__aeabi_uread4/uwrite4` calls | `#[repr(C, packed)]` causes unaligned software trap generation | `[HOT-FIELD-FIRST]` Naturally aligned power-of-two `#[repr(C)]` with padding |
+| **Software Div** | `telemetry.rs:sample_battery`<br>`BatteryDriver::calculate_percentage` | 87 `__aeabi_uidiv/mod` calls | Division on Cortex-M0+ hardware | Use reciprocal multiply Q16 or power-of-two bit shifts |
