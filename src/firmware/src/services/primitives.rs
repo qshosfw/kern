@@ -54,10 +54,8 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
     }
 
     fn draw_pixel(&mut self, x: i16, y: i16, color: u8) {
-        if x >= 0 && y >= 0 && x < 128 && y < 64 {
-            let col = color_from_u8(color);
-            self.active_canvas().draw_pixel(x as u8, y as u8, col);
-        }
+        let col = color_from_u8(color);
+        self.active_canvas().draw_pixel_i(x, y, col);
     }
 
     fn draw_line(&mut self, x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
@@ -67,24 +65,12 @@ impl<'a, 'hw> DisplayPrimitive for SysContext<'a, 'hw> {
 
     fn draw_rect(&mut self, x: i16, y: i16, w: i16, h: i16, color: u8) {
         let col = color_from_u8(color);
-        self.active_canvas().draw_rect(
-            x.max(0) as u8,
-            y.max(0) as u8,
-            w.max(0) as u8,
-            h.max(0) as u8,
-            col,
-        );
+        self.active_canvas().draw_rect_i(x, y, w, h, col);
     }
 
     fn fill_rect(&mut self, x: i16, y: i16, w: i16, h: i16, color: u8) {
         let col = color_from_u8(color);
-        self.active_canvas().fill_rect(
-            x.max(0) as u8,
-            y.max(0) as u8,
-            w.max(0) as u8,
-            h.max(0) as u8,
-            col,
-        );
+        self.active_canvas().fill_rect_i(x, y, w, h, col);
     }
 
     fn draw_bitmap(&mut self, x: i16, y: i16, w: u8, h: u8, data: &[u8]) {

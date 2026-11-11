@@ -260,7 +260,7 @@ impl Canvas {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn draw_horizontal_line_i(&mut self, x: i16, y: i16, len: i16, color: Color) {
         if len <= 0 || y < 0 || y >= LCD_HEIGHT as i16 {
             return;
@@ -272,7 +272,7 @@ impl Canvas {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn draw_vertical_line_i(&mut self, x: i16, y: i16, len: i16, color: Color) {
         if len <= 0 || x < 0 || x >= LCD_WIDTH as i16 {
             return;
@@ -284,6 +284,7 @@ impl Canvas {
         }
     }
 
+    #[inline(never)]
     pub fn draw_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
         if w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
             return;
@@ -304,6 +305,7 @@ impl Canvas {
         self.draw_pixel_i(x + w - 1, y + h - 1, Color::Clear);
     }
 
+    #[inline(never)]
     pub fn fill_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
         if w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
             return;
