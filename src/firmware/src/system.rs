@@ -242,7 +242,6 @@ fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc) {
     hw.backlight.wake();
 }
 
-
 fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
     unsafe {
         (*core::ptr::addr_of_mut!(POWER_SERVICE)).tick_second();

@@ -52,10 +52,12 @@ impl ResetReason {
     }
 }
 
-/// Extended low-level fault forensics & execution state (11 bytes)
+/// Extended low-level fault forensics & execution state (12 bytes, naturally aligned)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct FaultForensics {
+    /// Deterministic 32-bit fault fingerprint for automated grouping & deduplication
+    pub crash_signature: u32,
     /// Preceding 16-bit instruction at PC - 2 (disassembly stream window)
     pub inst_pre: u16,
     /// Target/source register index (0..15, or 0xFF if not applicable)
@@ -68,45 +70,50 @@ pub struct FaultForensics {
     pub exec_mode: u8,
     /// Number of valid caller return addresses recovered from the stack
     pub unwind_count: u8,
-    /// Deterministic 32-bit fault fingerprint for automated grouping & deduplication
-    pub crash_signature: u32,
+    /// Alignment padding for natural 4-byte struct boundary
+    pub _pad: u8,
 }
+
+const _: () = assert!(core::mem::size_of::<FaultForensics>() == 12);
+const _: () = assert!(core::mem::align_of::<FaultForensics>() == 4);
 
 impl FaultForensics {
     pub const fn empty() -> Self {
         Self {
+            crash_signature: 0,
             inst_pre: 0,
             fault_reg: 0xFF,
             access_flags: 0,
             ipsr_num: 0,
             exec_mode: 0,
             unwind_count: 0,
-            crash_signature: 0,
+            _pad: 0,
         }
     }
 }
 
-/// 128-byte packed crash log slot (§13.4 Listing 13.2)
+/// 128-byte naturally aligned crash log slot (§13.4 Listing 13.2)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct BootSlot {
     pub reset_reason: u32,
     pub fault_pc: u32,
     pub fault_lr: u32,
     pub fault_sp: u32,
     pub xpsr: u32,
-    pub panic_line: u16,
     pub panic_file_hash: u32,
-    pub actor_tag: [u8; 16],
     pub stack_dump: [u32; 16],
-    pub crash_count: u8,
+    pub actor_tag: [u8; 16],
     pub forensics: FaultForensics,
-    pub rsvd: [u8; 2],
     pub ident: [u8; 4],
+    pub panic_line: u16,
+    pub crash_count: u8,
+    pub _reserved: u8,
     pub crc32: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<BootSlot>() == 128);
+const _: () = assert!(core::mem::align_of::<BootSlot>() == 4);
 
 impl BootSlot {
     pub const fn empty() -> Self {
@@ -116,14 +123,14 @@ impl BootSlot {
             fault_lr: 0,
             fault_sp: 0,
             xpsr: 0,
-            panic_line: 0,
             panic_file_hash: 0,
-            actor_tag: [0; 16],
             stack_dump: [0; 16],
-            crash_count: 0,
+            actor_tag: [0; 16],
             forensics: FaultForensics::empty(),
-            rsvd: [0; 2],
             ident: [0; 4],
+            panic_line: 0,
+            crash_count: 0,
+            _reserved: 0,
             crc32: 0,
         }
     }

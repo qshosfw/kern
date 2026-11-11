@@ -133,7 +133,9 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     let required_caps = summary.caps;
     if !ctx.caps().contains_all(required_caps) {
         let missing = required_caps.without(ctx.caps());
-        let cap_msg = missing.first_cap().map_or("Missing Cap", |c| c.required_message());
+        let cap_msg = missing
+            .first_cap()
+            .map_or("Missing Cap", |c| c.required_message());
         return Err(KrxLaunchError::CapabilityDenied(cap_msg));
     }
 
@@ -189,9 +191,8 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             if read_total == 0 {
                 return Err(KrxLaunchError::TruncatedPackage);
             }
-            let payload: &'static [u8] = unsafe {
-                core::slice::from_raw_parts(arena_tail.as_ptr(), read_total)
-            };
+            let payload: &'static [u8] =
+                unsafe { core::slice::from_raw_parts(arena_tail.as_ptr(), read_total) };
             populate_declare_from_payload(walker, payload);
 
             (

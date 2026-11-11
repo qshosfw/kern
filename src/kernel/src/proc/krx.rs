@@ -3126,8 +3126,10 @@ mod tests {
         pkg[47] = 7; // icon_id = 7
 
         // Offset 64: SectionTypeLifecycle (4B header + 12B body = 16B, ends at 80)
-        let flags = SectionType::FLAG_STARTUP | SectionType::FLAG_PERSISTENT | SectionType::FLAG_SINGLETON;
-        let daemon_caps = (Cap::RadioRx as u32) | (Cap::AudioOutput as u32) | (Cap::SerialComm as u32);
+        let flags =
+            SectionType::FLAG_STARTUP | SectionType::FLAG_PERSISTENT | SectionType::FLAG_SINGLETON;
+        let daemon_caps =
+            (Cap::RadioRx as u32) | (Cap::AudioOutput as u32) | (Cap::SerialComm as u32);
         pkg[64..66].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
         pkg[66..68].copy_from_slice(&16u16.to_le_bytes());
         pkg[68] = KrxExecType::Daemon as u8;

@@ -277,6 +277,7 @@ unsafe extern "C" fn panic_inner(info_ptr: usize, sp: u32, lr: u32) -> ! {
         ipsr_num: (ipsr & 0x3F) as u8,
         exec_mode: 0x02, // Thumb mode
         unwind_count,
+        _pad: 0,
         crash_signature,
     };
 

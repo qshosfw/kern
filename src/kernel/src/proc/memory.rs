@@ -51,9 +51,9 @@ pub mod region_flags {
     pub const PINNED: u8 = 1 << 3;
 }
 
-/// Standard 16-byte Memory Region Descriptor ($O(1)$ power-of-two geometry).
+/// Standard 16-byte Memory Region Descriptor ($O(1)$ power-of-two geometry, naturally aligned).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct MemoryRegionDescriptor {
     pub kind: u8,
     pub flags: u8,
