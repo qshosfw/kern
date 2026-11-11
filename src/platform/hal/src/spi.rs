@@ -215,6 +215,42 @@ pub fn spi2_write_byte(data: u8) -> Result<(), SpiError> {
     spi2_transfer(data).map(|_| ())
 }
 
+/// Transmit a slice of bytes over SPI2.
+#[inline]
+pub fn spi2_write_bytes(data: &[u8]) -> Result<(), SpiError> {
+    for &b in data {
+        spi2_write_byte(b)?;
+    }
+    Ok(())
+}
+
+/// Read multiple bytes over SPI2 by clocking out 0xFF dummy bytes.
+#[inline]
+pub fn spi2_read_bytes(buffer: &mut [u8]) -> Result<(), SpiError> {
+    unsafe {
+        for b in buffer.iter_mut() {
+            let mut timeout = 100_000;
+            while SPI2.sr().read_volatile() & spi::SR_TXE == 0 {
+                timeout -= 1;
+                if timeout == 0 {
+                    return Err(SpiError::Timeout);
+                }
+            }
+            SPI2.dr_8().write_volatile(0xFF);
+
+            let mut timeout = 100_000;
+            while SPI2.sr().read_volatile() & spi::SR_RXNE == 0 {
+                timeout -= 1;
+                if timeout == 0 {
+                    return Err(SpiError::Timeout);
+                }
+            }
+            *b = SPI2.dr_8().read_volatile();
+        }
+        Ok(())
+    }
+}
+
 /// Wait until SPI2 is no longer busy.
 #[inline]
 pub fn spi2_wait_idle() -> Result<(), SpiError> {

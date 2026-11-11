@@ -94,9 +94,7 @@ impl<'a> Py25q16FlashDriver<'a> {
         self.cs_assert();
         self.spi.write_byte(0x02); // Page Program
         self.write_address(address);
-        for &b in data {
-            self.spi.write_byte(b);
-        }
+        self.spi.write_bytes(data);
         self.cs_release();
 
         self.wait_while_busy();
@@ -112,9 +110,7 @@ impl<'a> Py25q16FlashDriver<'a> {
         self.cs_assert();
         self.spi.write_byte(0x03); // Normal Read
         self.write_address(address);
-        for b in buffer.iter_mut() {
-            *b = self.spi.transfer_byte(0xFF);
-        }
+        self.spi.read_bytes(buffer);
         self.cs_release();
         Ok(())
     }

@@ -35,44 +35,15 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
     if x < 0 || x + (SIGNAL_WIDTH as i16) > 128 || y < 0 {
         return SIGNAL_WIDTH;
     }
-    let ux = x as usize;
-    if y == 0 {
-        if color == Color::Clear {
-            canvas.buffer[0][ux] &= !0x01;
-            canvas.buffer[0][ux + 1] &= !0x1E;
-            canvas.buffer[0][ux + 2] &= !0x01;
-        } else {
-            canvas.buffer[0][ux] |= 0x01;
-            canvas.buffer[0][ux + 1] |= 0x1E;
-            canvas.buffer[0][ux + 2] |= 0x01;
-        }
+    let ux = x as u8;
+    let uy = y as u8;
+    canvas.draw_pixel(ux, uy, color);
+    canvas.draw_vertical_line(ux + 1, uy + 1, 4, color);
+    canvas.draw_pixel(ux + 2, uy, color);
 
-        const BAR_MASKS: [u8; 5] = [0x10, 0x18, 0x1C, 0x1E, 0x1F];
-        let mut i = 0usize;
-        while i < 5 {
-            if level > i as u8 {
-                let col = ux + 3 + (i * 2);
-                if color == Color::Clear {
-                    canvas.buffer[0][col] &= !BAR_MASKS[i];
-                } else {
-                    canvas.buffer[0][col] |= BAR_MASKS[i];
-                }
-            }
-            i += 1;
-        }
-    } else {
-        let ux = x as u8;
-        let uy = y as u8;
-        canvas.draw_pixel(ux, uy, color);
-        canvas.draw_vertical_line(ux + 1, uy + 1, 4, color);
-        canvas.draw_pixel(ux + 2, uy, color);
-
-        let mut i = 1u8;
-        while i <= 5 {
-            if level >= i {
-                canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
-            }
-            i += 1;
+    for i in 1..=5 {
+        if level >= i {
+            canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
         }
     }
 

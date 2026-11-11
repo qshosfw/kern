@@ -152,8 +152,10 @@ impl PackageCatalog {
         let is_pkg = n > 4 && (&bytes[n - 4..] == b".app" || &bytes[n - 4..] == b".krx");
 
         let mut path = heapless::String::<24>::new();
-        let _ = path.push_str("/apps/");
-        let _ = path.push_str(&base_name[..n.min(18)]);
+        if !raw_name.starts_with("/apps/") {
+            let _ = path.push_str("/apps/");
+        }
+        let _ = path.push_str(&raw_name[..raw_name.len().min(24 - path.len())]);
 
         let mut app_class = KrxClass::Declare;
         let mut exec_type = KrxExecType::App;
@@ -163,8 +165,8 @@ impl PackageCatalog {
         let mut is_valid = false;
 
         if is_pkg && size >= KrxPreamble::SIZE {
-            let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..160];
-            if let Ok(read_len) = filesystem.read_file(path.as_str(), hdr_buf) {
+            let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..128];
+            if let Ok(read_len) = filesystem.read_file_at(path.as_str(), 0, hdr_buf) {
                 if let Ok(summary) = KrxPreamble::summarize(&hdr_buf[..read_len]) {
                     if let Some(cls) = summary.preamble.execution_class() {
                         is_valid = true;

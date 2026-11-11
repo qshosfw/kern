@@ -43,13 +43,12 @@ fn draw_item_hex(
 
 #[inline(never)]
 fn draw_stack_free(canvas: &mut gfx::Canvas, col: u8, row: u8, sp: u32, nbuf: &mut [u8; 6]) {
-    if sp >= 0x2000_0000 && sp <= 0x2000_4000 {
-        let free_bytes = sp.saturating_sub(0x2000_0000);
-        let s = gfx::text::format_u32(free_bytes, nbuf);
-        draw_item(canvas, col, row, "STK:", s);
+    let s = if sp >= 0x2000_0000 && sp <= 0x2000_4000 {
+        gfx::text::format_u32(sp.saturating_sub(0x2000_0000), nbuf)
     } else {
-        draw_item(canvas, col, row, "STK:", "OOB!");
-    }
+        "OOB!"
+    };
+    draw_item(canvas, col, row, "STK:", s);
 }
 
 #[cfg(feature = "panic_gui_extended")]
@@ -291,17 +290,16 @@ pub fn draw_recovery_screen(
             b'0' + (sec % 10),
             b's',
         ];
-        if let Ok(s) = core::str::from_utf8(&r_buf) {
-            gfx::text::draw_str_align(
-                canvas,
-                64,
-                6,
-                s,
-                font,
-                gfx::Color::Clear,
-                gfx::text::Align::Center,
-            );
-        }
+        let s = unsafe { core::str::from_utf8_unchecked(&r_buf) };
+        gfx::text::draw_str_align(
+            canvas,
+            64,
+            6,
+            s,
+            font,
+            gfx::Color::Clear,
+            gfx::text::Align::Center,
+        );
     }
 
     #[cfg(feature = "panic_gui_extended")]
@@ -326,17 +324,16 @@ pub fn draw_recovery_screen(
         b'0' + (slot.crash_count.min(99) / 10),
         b'0' + (slot.crash_count % 10),
     ];
-    if let Ok(pstr) = core::str::from_utf8(&pbuf) {
-        gfx::text::draw_str_align(
-            canvas,
-            126,
-            6,
-            pstr,
-            font,
-            gfx::Color::Clear,
-            gfx::text::Align::Right,
-        );
-    }
+    let pstr = unsafe { core::str::from_utf8_unchecked(&pbuf) };
+    gfx::text::draw_str_align(
+        canvas,
+        126,
+        6,
+        pstr,
+        font,
+        gfx::Color::Clear,
+        gfx::text::Align::Right,
+    );
 
     #[cfg(feature = "panic_gui_extended")]
     match p {

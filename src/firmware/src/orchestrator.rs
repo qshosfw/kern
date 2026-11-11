@@ -52,6 +52,8 @@ pub fn init_proc_table() {
     unsafe {
         *core::ptr::addr_of_mut!(PROC_TABLE) = core::mem::MaybeUninit::new(ProcessTable::new());
     }
+    #[cfg(feature = "krx_native")]
+    crate::runtime::init_native_slot();
 }
 
 static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<8> =
@@ -921,20 +923,29 @@ impl Orchestrator {
             Self::resume_app_state(app_id);
 
             // Track process activation in PCB table
-            if proc_table_mut().find_mut_by_app(app_id).is_none() {
+            let table = proc_table_mut();
+            let pcb = if let Some(pcb) = table.find_mut_by_app(app_id) {
+                Some(pcb)
+            } else {
                 let name = crate::AppRegistry::descriptor(app_id)
                     .map(|m| m.name)
                     .unwrap_or("App");
                 let caps = crate::AppRegistry::required_caps(app_id);
-                let _ = proc_table_mut().spawn_or_recycle(
+                let exec_type = if app_id >= crate::apps::AppRegistry::count() {
+                    ExecType::RelocatableNative
+                } else {
+                    ExecType::StaticFirmware
+                };
+                let _ = table.spawn_or_recycle(
                     name,
                     app_id,
                     kernel::sched::Priority::Ui,
-                    ExecType::StaticFirmware,
+                    exec_type,
                     caps,
                 );
-            }
-            if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
+                table.find_mut_by_app(app_id)
+            };
+            if let Some(pcb) = pcb {
                 pcb.set_state(ProcState::Running);
                 pcb.ledger.record_activation();
             }

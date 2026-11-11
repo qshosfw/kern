@@ -167,9 +167,24 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     };
 
     let app_name = store_dynamic_app_name(raw_name);
+    let dyn_id = AppRegistry::count();
+    let exec_class = preamble.execution_class().unwrap_or(KrxClass::Declare);
+    let exec_type = match exec_class {
+        #[cfg(feature = "krx_native")]
+        KrxClass::Native | KrxClass::Paged => kernel::proc::ExecType::RelocatableNative,
+        _ => kernel::proc::ExecType::SandboxedBytecode,
+    };
+    let dyn_pid = crate::orchestrator::proc_table_mut()
+        .spawn_or_recycle(
+            app_name,
+            dyn_id,
+            kernel::sched::Priority::Ui,
+            exec_type,
+            required_caps,
+        )
+        .unwrap_or(kernel::proc::Pid(dyn_id as u8));
 
     // 5. Execution Class Dispatch
-    let exec_class = preamble.execution_class().unwrap_or(KrxClass::Declare);
     let (vtable, instance) = match exec_class {
         #[cfg(feature = "krx_declare")]
         KrxClass::Declare => {
@@ -240,9 +255,14 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         KrxClass::Native | KrxClass::Paged => {
             let exec_sec = exec_sec.ok_or(KrxLaunchError::MissingExecution)?;
             let arena_buf = super::native_runner::transient_arena_bytes_mut();
+            let to_read = if exec_sec.payload_size > 0 {
+                (exec_sec.payload_size as usize).min(arena_buf.len())
+            } else {
+                arena_buf.len()
+            };
             let payload_read = ctx
                 .storage
-                .read_file_at(path, header_len, arena_buf)
+                .read_file_at(path, header_len, &mut arena_buf[..to_read])
                 .map_err(|_| KrxLaunchError::ReadFailed)?;
 
             super::native_runner::load_native_from_storage(
@@ -253,6 +273,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
                 &exec_sec,
                 &aux,
                 required_caps,
+                dyn_pid,
             )?;
 
             (

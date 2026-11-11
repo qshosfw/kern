@@ -48,6 +48,13 @@ pub(crate) struct NativeExecSlot {
     pub(crate) status_bar_center_count: usize,
 }
 
+pub fn init_native_slot() {
+    let slot = slot_mut();
+    slot.is_loaded = false;
+    slot.entry_point = 0;
+    slot.pid = kernel::proc::Pid(0);
+}
+
 #[unsafe(link_section = ".uninit")]
 static mut NATIVE_SLOT: core::mem::MaybeUninit<NativeExecSlot> = core::mem::MaybeUninit::uninit();
 
@@ -320,6 +327,7 @@ pub fn load_native_from_storage(
     exec: &SectionExecution,
     aux: &KrxAuxSections,
     caps: CapabilitySet,
+    pid: kernel::proc::Pid,
 ) -> Result<(), KrxLaunchError> {
     let slot = slot_mut();
     slot.cache.reset();
@@ -327,7 +335,7 @@ pub fn load_native_from_storage(
     slot.leaf_mgr.reset();
     slot.current_block = 0;
     slot.current_slot = 0;
-    slot.pid = kernel::proc::Pid(1);
+    slot.pid = pid;
 
     let buffer_bytes =
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
@@ -364,10 +372,10 @@ pub fn load_native_from_storage(
         || exec.page_size > 0
         || aux.block_map.is_some();
     slot.is_paged = is_paged;
-    slot.pkg_path.clear();
-    let _ = slot.pkg_path.push_str(path);
 
     if is_paged {
+        slot.pkg_path.clear();
+        let _ = slot.pkg_path.push_str(path);
         let pay_size = if exec.payload_size > 0 {
             exec.payload_size
         } else {

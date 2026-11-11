@@ -71,6 +71,14 @@ impl SpiDevice for Py32Spi2 {
         hal::spi::spi2_transfer(byte).unwrap_or(0)
     }
     #[inline(always)]
+    fn read_bytes(&mut self, buf: &mut [u8]) {
+        let _ = hal::spi::spi2_read_bytes(buf);
+    }
+    #[inline(always)]
+    fn write_bytes(&mut self, buf: &[u8]) {
+        let _ = hal::spi::spi2_write_bytes(buf);
+    }
+    #[inline(always)]
     fn wait_idle(&mut self) {
         let _ = hal::spi::spi2_wait_idle();
     }
