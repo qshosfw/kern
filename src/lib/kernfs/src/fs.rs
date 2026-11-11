@@ -455,7 +455,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             }
         }
 
-        // Cache miss fallback (should only happen if cache > 32 entries)
+        // If active files do not exceed cache capacity, an un-cached file is guaranteed absent.
+        if self.cached_used <= CACHE_CAPACITY as u16 {
+            return None;
+        }
+
+        // Cache miss fallback (should only happen if cache > 24 entries)
         let mut best_sector = None;
         let mut highest_seq = 0u32;
         let mut best_payload_len = 0usize;

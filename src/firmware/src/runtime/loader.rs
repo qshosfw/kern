@@ -107,7 +107,7 @@ fn populate_declare_from_payload(
 /// Load and launch a verified KRX binary application package.
 #[inline(never)]
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let mut header_buf = [0u8; 128];
+    let mut header_buf = [0u8; 256];
     let header_read = ctx
         .storage
         .read_file_at(path, 0, &mut header_buf)
@@ -115,10 +115,6 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
             _ => KrxLaunchError::ReadFailed,
         })?;
-
-    if header_read < KrxPreamble::SIZE {
-        return Err(KrxLaunchError::TruncatedPackage);
-    }
 
     let summary = KrxPreamble::summarize(&header_buf[..header_read])?;
     let preamble = summary.preamble;
