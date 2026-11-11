@@ -165,6 +165,13 @@ typedef struct {
     u8 (*sys_rtc_get)(u8* out_time);
 } CapTimerVTable;
 
+// Status Bar Flags
+#define KRX_STATUS_VISIBLE       (1 << 0)
+#define KRX_STATUS_DIVIDER       (1 << 1)
+#define KRX_STATUS_HAS_SIGNAL    (1 << 2)
+#define KRX_STATUS_CUSTOM_TITLE  (1 << 3)
+#define KRX_STATUS_PARTIAL       (1 << 4)
+
 // 64-byte ($2^6) KrxStatusBar
 typedef struct __attribute__((packed)) {
     u8 flags;
@@ -303,6 +310,57 @@ typedef CapServiceVTable ServiceApi;
 typedef CapHwBusVTable HwBusApi;
 typedef KrxApiTable KrxSysTable;
 
+// Event Kinds (§6.1 / KRX-ABI 2.5.0)
+#define KRX_EV_NONE     0
+#define KRX_EV_KEY      1
+#define KRX_EV_ENCODER  2
+#define KRX_EV_TICK     3
+#define KRX_EV_BUS      4
+#define KRX_EV_USB      5
+#define KRX_EV_POWER    6
+#define KRX_EV_MODAL    7
+#define KRX_EV_IPC      8
+
+// Key Codes (1:1 Hardware Matrix & Microkernel Mapping)
+typedef enum {
+    KEY_PTT   = 0,
+    KEY_SIDE1 = 1,
+    KEY_SIDE2 = 2,
+    KEY_UP    = 3,
+    KEY_DOWN  = 4,
+    KEY_MENU  = 5,
+    KEY_EXIT  = 6,
+    KEY_F     = 7,
+    KEY_0     = 8,
+    KEY_1     = 9,
+    KEY_2     = 10,
+    KEY_3     = 11,
+    KEY_4     = 12,
+    KEY_5     = 13,
+    KEY_6     = 14,
+    KEY_7     = 15,
+    KEY_8     = 16,
+    KEY_9     = 17,
+    KEY_STAR  = 18,
+    KEY_HASH  = 19,
+} KrxKeyCode;
+
+// Modal Results
+#define MODAL_RESULT_DISMISSED      0
+#define MODAL_RESULT_CONFIRMED      1
+#define MODAL_RESULT_TEXT_DONE      2
+#define MODAL_RESULT_SHEET_SELECTED 3
+#define MODAL_RESULT_CANCELED       4
+
+// Structured Event Packet (passed in r2 on KRX_OP_EVENT)
+typedef struct __attribute__((packed)) {
+    u8 kind;
+    u8 key;
+    u8 flags;
+    u8 reserved;
+    u32 payload;
+} KrxEvent;
+
 // P0 Structured Leaf Overlays & Continuations (§5.1 / KRX 3.2)
 #define KRX_LEAF_KIND_DONE       0
 #define KRX_LEAF_KIND_CALL_LEAF  1
@@ -323,6 +381,16 @@ typedef struct __attribute__((packed)) {
     u32 arg;
     KrxLeafContinuation continuation;
 } KrxLeafContext;
+
+// P1 Demand Paging Helpers (KRX-ABI 2.5.0 Chapter 7)
+#define KRX_PAGED_INVOKE(api, block_id, fn_type, offset, ret_offset, ...) \
+    ({ \
+        u32 _target = (api)->service->paged_call((block_id), (offset), (ret_offset)); \
+        fn_type _fn = (fn_type)_target; \
+        u32 _res = _fn(__VA_ARGS__); \
+        (api)->service->paged_return(); \
+        _res; \
+    })
 
 static inline u16 krx_strlen(const char* s) {
     u16 len = 0;

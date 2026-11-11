@@ -14,11 +14,8 @@
 
 use crate::services::SystemStorage;
 use crate::services::storage::DirEntryInfo;
-#[cfg(feature = "provision_apps")]
-use kernel::proc::krx::{
-    KRX_IDENT, KrxClass, KrxExecType, KrxProfile, SECTION_EXECUTION, SECTION_IDENTITY,
-    SECTION_TYPE_LIFECYCLE,
-};
+#[cfg(feature = "krx_declare")]
+use kernel::proc::krx::{KrxClass, KrxProfile};
 
 pub const PROV_BUF_CAP: usize = 4096;
 
@@ -108,12 +105,12 @@ const TIMER_PAYLOAD: &[u8] = &[
 
 // Native ARM Thumb-1 binary payload for `/apps/beacon.krx`
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
-const BEACON_NATIVE_PAYLOAD: &[u8] = include_bytes!("../../../../packages/beacon/beacon.bin");
+const BEACON_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/beacon/beacon.krx");
 
 // Standalone Native Thumb-1 binary payload for `/apps/bench.krx`.
 // 100% self-contained PIC executable. Completely resides inside the KRX file on KernFS.
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
-const BENCH_NATIVE_PAYLOAD: &[u8] = include_bytes!("../../../../packages/bench/bench.bin");
+const BENCH_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/bench/bench.krx");
 
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
 const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/leaf_app/leaf.krx");
@@ -145,74 +142,6 @@ fn write_raw_krx_package(filesystem: &mut SystemStorage, path: &str, pkg_bytes: 
     let _ = filesystem.write_file(path, pkg_bytes);
 }
 
-/// Build and write a KRX package file into KernFS using the shared transient arena buffer.
-#[cfg(feature = "provision_apps")]
-#[inline(never)]
-fn write_krx_package(
-    filesystem: &mut SystemStorage,
-    path: &str,
-    class: KrxClass,
-    profile: KrxProfile,
-    name: &str,
-    caps: u32,
-    payload: &[u8],
-) {
-    let total_len = 128 + payload.len();
-    if total_len > PROV_BUF_CAP || filesystem.file_size(path) == Ok(total_len) {
-        return;
-    }
-
-    let pkg = &mut crate::runtime::transient_arena_bytes_mut()[..total_len];
-    pkg[..128].fill(0);
-
-    // 1. Preamble (20 bytes)
-    pkg[0..4].copy_from_slice(&KRX_IDENT);
-    pkg[4] = class as u8;
-    pkg[5] = 0x05; // Format version 2.5.0
-    pkg[6] = 3; // 3 sections
-    pkg[8] = 128; // header_len = 128
-
-    // 2. SectionIdentity (offset 20: 4B header + 40B body = 44B, ends at 64)
-    pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
-    pkg[22] = 44;
-    pkg[24] = 112; // name_str offset = 112
-    pkg[26] = 1; // version 1.0.0
-    pkg[29] = 1; // min_kernel_abi = 1
-    pkg[31..40].copy_from_slice(b"KERN-TEAM");
-    pkg[47] = 1; // icon_asset = 1
-
-    // 3. SectionExecution (offset 64: 4B header + 28B body = 32B, ends at 96)
-    pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
-    pkg[66] = 32;
-    pkg[68] = 128; // min_stack_bytes = 128
-    if class == KrxClass::Paged {
-        pkg[73] = 2; // page_size = 512 (0x0200)
-        pkg[74] = 2; // cache_blocks = 2
-    }
-    pkg[80..84].copy_from_slice(&(payload.len() as u32).to_le_bytes());
-    if matches!(class, KrxClass::Native | KrxClass::Paged) {
-        let got_offset = ((payload.len() as u16) + 3) & !3;
-        pkg[88..90].copy_from_slice(&got_offset.to_le_bytes());
-    }
-    pkg[94] = profile.raw_code();
-
-    // 4. SectionType (offset 96: 4B header + 12B body = 16B, ends at 112)
-    pkg[96..98].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
-    pkg[98] = 16;
-    pkg[100] = KrxExecType::App as u8;
-    pkg[102] = 1; // stack_cost
-    pkg[108..112].copy_from_slice(&caps.to_le_bytes());
-
-    // 5. String pool (offset 112..128) & Payload (offset 128..total_len)
-    let nbytes = name.as_bytes();
-    let nlen = nbytes.len().min(15);
-    pkg[112..112 + nlen].copy_from_slice(&nbytes[..nlen]);
-    pkg[128..total_len].copy_from_slice(payload);
-
-    let _ = filesystem.remove(path);
-    let _ = filesystem.write_file(path, pkg);
-}
-
 /// Ensure core flash-loaded `.krx` packages exist in `/apps/`.
 #[cfg(not(feature = "provision_apps"))]
 pub fn ensure_core_packages(_filesystem: &mut SystemStorage) {}
@@ -221,45 +150,11 @@ pub fn ensure_core_packages(_filesystem: &mut SystemStorage) {}
 #[cfg(feature = "provision_apps")]
 #[inline(never)]
 pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
-    let base_caps = (kernel::caps::Cap::DisplayDirect as u32) | (kernel::caps::Cap::Keypad as u32);
-
     #[cfg(feature = "krx_native")]
     {
-        let radio_caps = base_caps | (kernel::caps::Cap::RadioRx as u32);
-        write_krx_package(
-            filesystem,
-            "/apps/beacon.krx",
-            KrxClass::Native,
-            KrxProfile::N1NativePic,
-            "Beacon",
-            radio_caps,
-            BEACON_NATIVE_PAYLOAD,
-        );
-
-        let all_caps = base_caps
-            | (kernel::caps::Cap::RadioRx as u32)
-            | (kernel::caps::Cap::RadioTx as u32)
-            | (kernel::caps::Cap::StorageRead as u32)
-            | (kernel::caps::Cap::StorageWrite as u32)
-            | (kernel::caps::Cap::AudioOutput as u32)
-            | (kernel::caps::Cap::AudioCapture as u32)
-            | (kernel::caps::Cap::SerialComm as u32)
-            | (kernel::caps::Cap::ServiceRegistry as u32)
-            | (kernel::caps::Cap::PowerManage as u32)
-            | (kernel::caps::Cap::RealTimeClock as u32);
-
-        write_krx_package(
-            filesystem,
-            "/apps/bench.krx",
-            KrxClass::Native,
-            KrxProfile::N1NativePic,
-            "Bench",
-            all_caps,
-            BENCH_NATIVE_PAYLOAD,
-        );
-
+        write_raw_krx_package(filesystem, "/apps/beacon.krx", BEACON_APP_PACKAGE);
+        write_raw_krx_package(filesystem, "/apps/bench.krx", BENCH_APP_PACKAGE);
         write_raw_krx_package(filesystem, "/apps/leaf.krx", LEAF_APP_PACKAGE);
-
         write_raw_krx_package(filesystem, "/apps/paged.krx", PAGED_APP_PACKAGE);
     }
 

@@ -23,6 +23,7 @@ pub enum EventResult {
 #[derive(Debug, Clone, Copy)]
 pub struct StatusBarConfig<'a> {
     pub visible: bool,
+    pub partial: bool,
     pub title: Option<&'a str>,
     pub center_text: Option<&'a str>,
     pub signal_level: Option<u8>,
@@ -36,6 +37,7 @@ impl<'a> Default for StatusBarConfig<'a> {
     fn default() -> Self {
         Self {
             visible: true,
+            partial: false,
             title: None,
             center_text: None,
             signal_level: None,
@@ -51,6 +53,7 @@ impl<'a> StatusBarConfig<'a> {
     pub const fn new(title: &'a str) -> Self {
         Self {
             visible: true,
+            partial: false,
             title: Some(title),
             center_text: None,
             signal_level: None,
@@ -59,6 +62,42 @@ impl<'a> StatusBarConfig<'a> {
             center_icons: &[],
             show_divider: true,
         }
+    }
+
+    pub const fn partial() -> Self {
+        Self {
+            visible: true,
+            partial: true,
+            title: None,
+            center_text: None,
+            signal_level: None,
+            left_badge: None,
+            left_icons: &[],
+            center_icons: &[],
+            show_divider: false,
+        }
+    }
+
+    pub const fn hidden() -> Self {
+        Self {
+            visible: false,
+            partial: false,
+            title: None,
+            center_text: None,
+            signal_level: None,
+            left_badge: None,
+            left_icons: &[],
+            center_icons: &[],
+            show_divider: false,
+        }
+    }
+
+    pub const fn with_partial(mut self, partial: bool) -> Self {
+        self.partial = partial;
+        if partial {
+            self.show_divider = false;
+        }
+        self
     }
 
     pub const fn with_center(mut self, center: &'a str) -> Self {

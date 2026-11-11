@@ -349,6 +349,7 @@ pub const KRX_STATUS_VISIBLE: u8 = 1 << 0;
 pub const KRX_STATUS_DIVIDER: u8 = 1 << 1;
 pub const KRX_STATUS_HAS_SIGNAL: u8 = 1 << 2;
 pub const KRX_STATUS_CUSTOM_TITLE: u8 = 1 << 3;
+pub const KRX_STATUS_PARTIAL: u8 = 1 << 4;
 
 /// 64-byte ($2^6$) Power-of-Two Aligned C-ABI Status Bar Descriptor.
 ///

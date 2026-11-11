@@ -487,7 +487,7 @@ impl SectionIdentity {
     /// Extract string-pool display name if offset is valid within the header buffer
     pub fn name<'a>(&self, header_buf: &'a [u8]) -> Option<&'a str> {
         let offset = self.name_str as usize;
-        if offset == 0 || offset >= header_buf.len() {
+        if offset < KrxPreamble::SIZE || offset >= header_buf.len() {
             return None;
         }
         let mut end = offset;
@@ -677,20 +677,41 @@ impl SectionType {
 }
 
 /// Compact, zero-allocation metadata summary extracted from a KRX package header.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KrxAuxSections<'a> {
+    pub cap_imports: Option<&'a [u8]>,
+    pub block_map: Option<&'a [u8]>,
+    pub leaf_map: Option<&'a [u8]>,
+    pub service_exports: Option<&'a [u8]>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct KrxSummary<'a> {
     pub preamble: KrxPreamble,
     pub title: &'a str,
     pub icon_id: u16,
     pub exec_type: KrxExecType,
+    pub type_flags: u8,
     pub caps: crate::caps::CapabilitySet,
-    pub ident_body: Option<&'a [u8]>,
-    pub type_body: Option<&'a [u8]>,
-    pub exec_body: Option<&'a [u8]>,
-    pub cap_imports: Option<&'a [u8]>,
-    pub block_map: Option<&'a [u8]>,
-    pub leaf_map: Option<&'a [u8]>,
-    pub service_exports: Option<&'a [u8]>,
+    pub exec: Option<SectionExecution>,
+    pub aux: KrxAuxSections<'a>,
+}
+
+impl<'a> KrxSummary<'a> {
+    #[inline(always)]
+    pub fn is_startup(&self) -> bool {
+        (self.type_flags & SectionType::FLAG_STARTUP) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_persistent(&self) -> bool {
+        (self.type_flags & SectionType::FLAG_PERSISTENT) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_singleton(&self) -> bool {
+        (self.type_flags & SectionType::FLAG_SINGLETON) != 0
+    }
 }
 
 impl KrxPreamble {
@@ -698,49 +719,66 @@ impl KrxPreamble {
     #[inline(never)]
     pub fn summarize<'a>(buf: &'a [u8]) -> Result<KrxSummary<'a>, KrxLaunchError> {
         let preamble = Self::parse(buf).map_err(|_| KrxLaunchError::InvalidPreamble)?;
-        let h_len = (preamble.header_len as usize).min(buf.len());
-        if h_len < Self::SIZE {
+        let h_len = preamble.header_len as usize;
+        if h_len < Self::SIZE || h_len > 512 || (h_len & 3) != 0 {
+            return Err(KrxLaunchError::InvalidPreamble);
+        }
+        if buf.len() < h_len {
             return Err(KrxLaunchError::TruncatedPackage);
         }
         let hdr = &buf[..h_len];
 
+        // Hardened CRC32 verification of the header payload
+        if preamble.header_crc32 != 0 {
+            let actual_crc = crypto::crc::CrcEngine::crc32(&hdr[Self::SIZE..]);
+            if actual_crc != preamble.header_crc32 {
+                return Err(KrxLaunchError::CrcMismatch);
+            }
+        }
+
         let mut title = "";
         let mut icon_id = 0u16;
         let mut exec_type = KrxExecType::App;
+        let mut type_flags = 0u8;
         let mut caps = crate::caps::CapabilitySet::NONE;
-        let mut ident_body = None;
-        let mut type_body = None;
-        let mut exec_body = None;
-        let mut cap_imports = None;
-        let mut block_map = None;
-        let mut leaf_map = None;
-        let mut service_exports = None;
+        let mut exec = None;
+        let mut aux = KrxAuxSections::default();
 
         for (hdr_sec, body) in KrxSectionIterator::new(hdr, h_len) {
             match hdr_sec.id {
                 SECTION_IDENTITY => {
-                    ident_body = Some(body);
-                    if let Some(ident) = SectionIdentity::parse(body) {
-                        icon_id = ident.icon_asset;
-                        if let Some(name_str) = ident.name(hdr) {
-                            title = name_str;
+                    if body.len() >= 25 {
+                        let name_off = u16::from_le_bytes([body[0], body[1]]) as usize;
+                        if name_off >= Self::SIZE && name_off < hdr.len() {
+                            let mut end = name_off;
+                            while end < hdr.len() && hdr[end] != 0 && (end - name_off) < 32 {
+                                end += 1;
+                            }
+                            if end > name_off {
+                                if let Ok(s) = core::str::from_utf8(&hdr[name_off..end]) {
+                                    title = s;
+                                }
+                            }
                         }
+                        icon_id = u16::from_le_bytes([body[23], body[24]]);
                     }
                 }
                 SECTION_TYPE_LIFECYCLE => {
-                    type_body = Some(body);
-                    if let Some(st) = SectionType::parse(body) {
-                        if let Some(et) = st.exec_type() {
+                    if body.len() >= 12 {
+                        if let Some(et) = KrxExecType::from_u8(body[0]) {
                             exec_type = et;
                         }
-                        caps = st.capabilities();
+                        type_flags = body[1];
+                        caps = crate::caps::CapabilitySet::from_raw(u32::from_le_bytes([
+                            body[8], body[9], body[10], body[11],
+                        ]));
                     }
                 }
-                SECTION_EXECUTION => exec_body = Some(body),
-                SECTION_CAP_IMPORTS => cap_imports = Some(body),
-                SECTION_BLOCK_MAP => block_map = Some(body),
-                SECTION_LEAF_MAP => leaf_map = Some(body),
-                SECTION_SERVICE_EXPORTS => service_exports = Some(body),
+                SECTION_EXECUTION => exec = SectionExecution::parse(body),
+                SECTION_CAP_IMPORTS => aux.cap_imports = Some(body),
+                SECTION_BLOCK_MAP => aux.block_map = Some(body),
+                SECTION_LEAF_MAP => aux.leaf_map = Some(body),
+                SECTION_SERVICE_EXPORTS => aux.service_exports = Some(body),
                 _ => {}
             }
         }
@@ -750,14 +788,10 @@ impl KrxPreamble {
             title,
             icon_id,
             exec_type,
+            type_flags,
             caps,
-            ident_body,
-            type_body,
-            exec_body,
-            cap_imports,
-            block_map,
-            leaf_map,
-            service_exports,
+            exec,
+            aux,
         })
     }
 }
@@ -3065,5 +3099,103 @@ mod tests {
             leaf_mgr.begin_leaf_call(99).unwrap_err(),
             PagedError::InvalidLeafId
         );
+    }
+
+    #[test]
+    fn test_krx_multi_type_lifecycle_and_flags() {
+        use crate::caps::Cap;
+
+        // Construct synthetic Daemon KRX binary package in memory
+        let mut pkg = [0u8; 128];
+
+        // 1. Preamble (20 bytes)
+        pkg[0..4].copy_from_slice(&KRX_IDENT);
+        pkg[4] = KrxClass::Native as u8;
+        pkg[5] = 5; // format_version
+        pkg[6..8].copy_from_slice(&3u16.to_le_bytes()); // section_count = 3
+        pkg[8..10].copy_from_slice(&120u16.to_le_bytes()); // header_len = 120
+        pkg[10..12].copy_from_slice(&0u16.to_le_bytes()); // flags = 0
+        pkg[12..16].copy_from_slice(&0u32.to_le_bytes()); // payload_crc32
+
+        // Sections layout:
+        // Offset 20: SectionIdentity (4B header + 40B body = 44B, ends at 64)
+        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[22..24].copy_from_slice(&44u16.to_le_bytes());
+        pkg[24..26].copy_from_slice(&104u16.to_le_bytes()); // name_str offset = 104
+        pkg[26] = 1; // version major
+        pkg[47] = 7; // icon_id = 7
+
+        // Offset 64: SectionTypeLifecycle (4B header + 12B body = 16B, ends at 80)
+        let flags = SectionType::FLAG_STARTUP | SectionType::FLAG_PERSISTENT | SectionType::FLAG_SINGLETON;
+        let daemon_caps = (Cap::RadioRx as u32) | (Cap::AudioOutput as u32) | (Cap::SerialComm as u32);
+        pkg[64..66].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
+        pkg[66..68].copy_from_slice(&16u16.to_le_bytes());
+        pkg[68] = KrxExecType::Daemon as u8;
+        pkg[69] = flags;
+        pkg[70] = 2; // stack_cost
+        pkg[76..80].copy_from_slice(&daemon_caps.to_le_bytes());
+
+        // Offset 80: SectionExecution (4B header + 28B body = 32B, ends at 112)
+        pkg[80..82].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[82..84].copy_from_slice(&32u16.to_le_bytes());
+        pkg[84..86].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes
+
+        // Offset 112: String Pool ("AprsDaemon\0")
+        pkg[24..26].copy_from_slice(&112u16.to_le_bytes()); // name_str offset = 112
+        let name_bytes = b"AprsDaemon\0";
+        pkg[112..112 + name_bytes.len()].copy_from_slice(name_bytes);
+
+        // Header total length: 124 bytes (padded to 4-byte boundary)
+        pkg[8..10].copy_from_slice(&124u16.to_le_bytes()); // header_len = 124
+
+        // Compute IEEE 802.3 CRC32 of header content (pkg[20..124])
+        let header_crc = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        pkg[16..20].copy_from_slice(&header_crc.to_le_bytes());
+
+        // Parse and summarize
+        let summary = KrxPreamble::summarize(&pkg[..124]).expect("Valid summary");
+        assert_eq!(summary.preamble.app_type, KrxClass::Native as u8);
+        assert_eq!(summary.title, "AprsDaemon");
+        let exec = summary.exec.expect("Has exec section");
+        let min_stack = exec.min_stack_bytes;
+        assert_eq!(min_stack, 256);
+        assert_eq!(summary.exec_type, KrxExecType::Daemon);
+        assert_eq!(summary.type_flags, flags);
+        assert!(summary.is_startup());
+        assert!(summary.is_persistent());
+        assert!(summary.is_singleton());
+        assert_eq!(summary.icon_id, 7);
+
+        let caps = summary.caps;
+        assert!(caps.contains(Cap::RadioRx));
+        assert!(caps.contains(Cap::AudioOutput));
+        assert!(caps.contains(Cap::SerialComm));
+        assert!(!caps.contains(Cap::DisplayDirect));
+
+        // Test Corrupted Header CRC rejection
+        pkg[16] ^= 0xFF;
+        assert!(KrxPreamble::summarize(&pkg[..124]).is_err());
+        pkg[16] ^= 0xFF; // Restore
+
+        // Test Service Exec Type
+        pkg[68] = KrxExecType::Service as u8;
+        let header_crc_svc = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        pkg[16..20].copy_from_slice(&header_crc_svc.to_le_bytes());
+        let summary_svc = KrxPreamble::summarize(&pkg[..124]).expect("Valid service summary");
+        assert_eq!(summary_svc.exec_type, KrxExecType::Service);
+
+        // Test Driver Exec Type
+        pkg[68] = KrxExecType::Driver as u8;
+        let header_crc_drv = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        pkg[16..20].copy_from_slice(&header_crc_drv.to_le_bytes());
+        let summary_drv = KrxPreamble::summarize(&pkg[..124]).expect("Valid driver summary");
+        assert_eq!(summary_drv.exec_type, KrxExecType::Driver);
+
+        // Test Module Exec Type
+        pkg[68] = KrxExecType::Module as u8;
+        let header_crc_mod = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        pkg[16..20].copy_from_slice(&header_crc_mod.to_le_bytes());
+        let summary_mod = KrxPreamble::summarize(&pkg[..124]).expect("Valid module summary");
+        assert_eq!(summary_mod.exec_type, KrxExecType::Module);
     }
 }

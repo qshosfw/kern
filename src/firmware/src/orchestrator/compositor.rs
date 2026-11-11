@@ -277,24 +277,36 @@ impl OsCompositor {
 
         let mut sb_cfg = kernel::app::StatusBarConfig::default();
         crate::AppRegistry::render(active_app_id, canvas, ctx, &mut sb_cfg);
-        if sb_cfg.title.is_none() {
-            if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
-                sb_cfg.title = Some(meta.name);
-            }
-        }
+
+        let modal_ref = unsafe { &*core::ptr::addr_of!(ACTIVE_MODAL) };
+        let has_modal = modal_ref.is_active();
+
         if sb_cfg.visible {
-            ctx.draw_status_bar_cfg(canvas, &sb_cfg);
+            #[cfg(feature = "text_input")]
+            let is_text_input = has_modal && matches!(modal_ref.modal, ActiveModal::TextInput(_));
+            #[cfg(not(feature = "text_input"))]
+            let is_text_input = false;
+
+            if is_text_input {
+                // Header rendered by TextInputView; right-side inverted status rendered post-overlay
+            } else if has_modal || sb_cfg.partial {
+                ctx.draw_status_bar_right(canvas);
+            } else {
+                if sb_cfg.title.is_none() {
+                    if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
+                        sb_cfg.title = Some(meta.name);
+                    }
+                }
+                ctx.draw_status_bar_cfg(canvas, &sb_cfg);
+            }
         }
 
         // Render OS modal overlay on top of screen if active
-        unsafe {
-            let modal_ref = &*core::ptr::addr_of!(ACTIVE_MODAL);
-            if modal_ref.is_active() {
-                modal_ref.render_overlay(canvas);
-                #[cfg(feature = "text_input")]
-                if matches!(modal_ref.modal, ActiveModal::TextInput(_)) {
-                    ctx.draw_status_bar_right_mode(canvas, true);
-                }
+        if has_modal {
+            modal_ref.render_overlay(canvas);
+            #[cfg(feature = "text_input")]
+            if matches!(modal_ref.modal, ActiveModal::TextInput(_)) {
+                ctx.draw_status_bar_right_mode(canvas, true);
             }
         }
 

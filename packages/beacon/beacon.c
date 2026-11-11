@@ -10,24 +10,24 @@ void _start(void) {
 int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     if (!api) return 0;
 
-    if (op == 0) { // START
+    if (op == KRX_OP_START) {
         if (api->radio && api->radio->rf_tune) {
             api->radio->rf_tune(145500000, 25, 12500);
         }
         return 0;
     }
 
-    if (op == 1) { // EVENT
+    if (op == KRX_OP_EVENT) {
         if (param) {
-            const u8* ev = (const u8*)param;
-            if (ev[0] == 1 && ev[1] == 6) { // KeyCode::Exit
+            const KrxEvent* ev = (const KrxEvent*)param;
+            if (ev->kind == KRX_EV_KEY && ev->key == KEY_EXIT) {
                 return 0; // Unhandled -> request OS exit
             }
         }
         return 1; // Consumed
     }
 
-    if (op == 2) { // RENDER
+    if (op == KRX_OP_RENDER) {
         if (api->display) {
             if (api->display->clear) api->display->clear();
             if (api->display->draw_str) {
@@ -37,7 +37,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         return 0;
     }
 
-    if (op == 3) { // EXIT
+    if (op == KRX_OP_EXIT) {
         return 0;
     }
 

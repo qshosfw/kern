@@ -375,7 +375,9 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         config: &kernel::app::StatusBarConfig<'_>,
     ) {
         let right_limit = self.draw_status_bar_right(canvas);
-        gfx::widgets::status_bar::draw_status_bar_layout(canvas, config, right_limit);
+        if !config.partial {
+            gfx::widgets::status_bar::draw_status_bar_layout(canvas, config, right_limit);
+        }
     }
 }
 

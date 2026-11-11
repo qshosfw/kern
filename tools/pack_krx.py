@@ -20,6 +20,36 @@ CLASS_PAGED = 1
 CLASS_VM = 2
 CLASS_DECLARE = 3
 
+CLASS_NAMES = {
+    CLASS_NATIVE: "Native",
+    CLASS_PAGED: "Paged",
+    CLASS_VM: "VMachine",
+    CLASS_DECLARE: "Declare",
+}
+
+# KRX Execution Types
+EXEC_APP = 1
+EXEC_SERVICE = 2
+EXEC_DAEMON = 3
+EXEC_DRIVER = 4
+EXEC_MODULE = 5
+
+EXEC_TYPE_NAMES = {
+    EXEC_APP: "App",
+    EXEC_SERVICE: "Service",
+    EXEC_DAEMON: "Daemon",
+    EXEC_DRIVER: "Driver",
+    EXEC_MODULE: "Module",
+}
+
+# Lifecycle Flags
+FLAG_STARTUP = 1 << 0
+FLAG_PERSISTENT = 1 << 1
+FLAG_RESTART_ON_FAIL = 1 << 2
+FLAG_SINGLETON = 1 << 3
+FLAG_AUTO_UPDATE_OK = 1 << 4
+FLAG_RTC = 1 << 5
+
 # KRX Profiles (raw codes)
 PROFILE_N0_FIXED = 0x10
 PROFILE_P0_PAGED = 0x11
@@ -28,6 +58,16 @@ PROFILE_P1_PAGED = 0x13
 PROFILE_V0_VM = 0x20
 PROFILE_D0_DECLARE = 0x30
 PROFILE_F0_FLOW = 0x31
+
+PROFILE_NAMES = {
+    PROFILE_N0_FIXED: "N0 (NativeFixed)",
+    PROFILE_P0_PAGED: "P0 (StructuredPaged)",
+    PROFILE_N1_PIC: "N1 (NativePic)",
+    PROFILE_P1_PAGED: "P1 (TransparentPaged)",
+    PROFILE_V0_VM: "V0 (ResidentVm)",
+    PROFILE_D0_DECLARE: "D0 (DeclareGraph)",
+    PROFILE_F0_FLOW: "F0 (FlowApp)",
+}
 
 # Section IDs
 SEC_IDENTITY = 0x0001
@@ -41,21 +81,46 @@ SEC_SEAL = 0x0008
 SEC_TYPE_LIFECYCLE = 0x0009
 SEC_LEAF_MAP = 0x000A
 
-# Capability Bitmask Constants
+SEC_NAMES = {
+    SEC_IDENTITY: "Identity",
+    SEC_EXECUTION: "Execution",
+    SEC_CAP_IMPORTS: "CapImports",
+    SEC_ASSETS: "Assets",
+    SEC_BLOCK_MAP: "BlockMap",
+    SEC_SERVICE_EXPORTS: "ServiceExports",
+    SEC_CONFIG: "Config",
+    SEC_SEAL: "Seal",
+    SEC_TYPE_LIFECYCLE: "TypeLifecycle",
+    SEC_LEAF_MAP: "LeafMap",
+}
+
+# Capability Bitmask Constants (Synchronized with kernel::caps::Cap)
 CAP_NONE = 0
-CAP_DISPLAY = 1 << 0
-CAP_KEYPAD = 1 << 1
-CAP_AUDIO_OUT = 1 << 2
-CAP_AUDIO_CAP = 1 << 3
-CAP_RADIO_RX = 1 << 4
-CAP_RADIO_TX = 1 << 5
-CAP_STORAGE_RD = 1 << 6
-CAP_STORAGE_WR = 1 << 7
-CAP_BROADCAST_FM = 1 << 8
-CAP_RAW_PERIPH = 1 << 9
-CAP_SERIAL = 1 << 10
-CAP_USB = 1 << 11
-CAP_POWER = 1 << 12
+CAP_RADIO_RX = 1 << 0
+CAP_RADIO_TX = 1 << 1
+CAP_STORAGE_RD = 1 << 2
+CAP_STORAGE_WR = 1 << 3
+CAP_AUDIO_OUT = 1 << 4
+CAP_DISPLAY = 1 << 5
+CAP_SERIAL = 1 << 6
+CAP_USB = 1 << 7
+CAP_HW_CRC = 1 << 8
+CAP_RTC = 1 << 9
+CAP_POWER = 1 << 10
+CAP_CRYPTO = 1 << 11
+CAP_RAW_PERIPH = 1 << 12
+CAP_BROADBAND_RX = 1 << 13
+CAP_GNSS = 1 << 14
+CAP_WIRELESS_LINK = 1 << 15
+CAP_AUDIO_CAP = 1 << 16
+CAP_BROADCAST_FM = 1 << 17
+CAP_KEYPAD = 1 << 18
+CAP_TASK_CONTROL = 1 << 19
+CAP_SERVICE_REG = 1 << 20
+CAP_BUS_ACCESS = 1 << 21
+CAP_GPIO_ACCESS = 1 << 22
+CAP_STORAGE_ADMIN = 1 << 23
+CAP_FACTORY_CALIB = 1 << 24
 
 
 def align4(data: bytearray) -> bytearray:
@@ -70,8 +135,11 @@ class KrxPackageBuilder:
         self.name = name
         self.app_class = app_class
         self.profile = profile
+        self.exec_type = EXEC_APP
+        self.type_flags = 0
         self.version = (1, 0, 0)
         self.author = b"KERN-TEAM"
+        self.icon_asset = 1
         self.min_abi = 1
         self.link_base = 0
         self.entry_point = 0
@@ -82,6 +150,7 @@ class KrxPackageBuilder:
         self.got_offset = 0
         self.reloc_offset = 0
         self.reloc_count = 0
+        self.auto_page = False
         self.caps = CAP_DISPLAY | CAP_KEYPAD
         self.payload = bytearray()
         self.cap_imports = []
@@ -92,10 +161,15 @@ class KrxPackageBuilder:
         self.resident_payload_size = 0
         self.service_exports = []
 
-    def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0)):
+    def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0), icon_asset: int = 1):
         self.name = name
         self.author = author.encode("utf-8")[:12]
         self.version = version
+        self.icon_asset = icon_asset
+
+    def set_lifecycle(self, exec_type: int = EXEC_APP, flags: int = 0):
+        self.exec_type = exec_type
+        self.type_flags = flags
 
     def set_execution(
         self,
@@ -177,19 +251,28 @@ class KrxPackageBuilder:
 
         # Pre-compute total_header_len to resolve leaf / block flash offsets
         num_leaves = len(self.leaf_files) if self.leaf_files else len(self.leaf_map)
-        num_blocks = len(self.block_files) if self.block_files else len(self.block_map)
+        if self.block_files:
+            num_blocks = len(self.block_files)
+        elif self.block_map:
+            num_blocks = len(self.block_map)
+        elif self.auto_page and self.app_class == CLASS_PAGED and len(self.payload) > 0:
+            step = self.page_size if self.page_size in (512, 1024) else 1024
+            num_blocks = (len(self.payload) + step - 1) // step
+        else:
+            num_blocks = 0
 
+        # Canonical section sizing: Identity (44), TypeLifecycle (16), Execution (32)
         sec_sizes = [
-            4 + 40, # Identity
-            4 + 28, # Execution
-            4 + 12, # TypeLifecycle
+            4 + 40,  # Identity
+            4 + 12,  # TypeLifecycle
+            4 + 28,  # Execution
         ]
         if self.cap_imports:
             sec_sizes.append(4 + len(self.cap_imports) * 8)
-        if num_leaves > 0:
-            sec_sizes.append(4 + num_leaves * 16)
         if num_blocks > 0:
             sec_sizes.append(4 + num_blocks * 8)
+        if num_leaves > 0:
+            sec_sizes.append(4 + num_leaves * 16)
         if self.service_exports:
             sec_sizes.append(4 + len(self.service_exports) * 16)
 
@@ -231,7 +314,24 @@ class KrxPackageBuilder:
                 self.block_map.append((block_id, flags, len(bdata), cur_flash_off))
                 self.payload.extend(bdata)
                 cur_flash_off += len(bdata)
+        elif self.auto_page and self.app_class == CLASS_PAGED and len(self.payload) > 0:
+            step = self.page_size if self.page_size in (512, 1024) else 1024
+            raw_payload = bytes(self.payload)
+            self.payload = bytearray()
+            self.block_map = []
+            cur_flash_off = tot_hdr
+            for i in range(0, len(raw_payload), step):
+                chunk = raw_payload[i : i + step]
+                bid = len(self.block_map)
+                pad = (4 - (len(self.payload) % 4)) % 4
+                self.payload.extend(b"\x00" * pad)
+                cur_flash_off += pad
+                self.block_map.append((bid, 0, len(chunk), cur_flash_off))
+                self.payload.extend(chunk)
+                cur_flash_off += len(chunk)
 
+        # Build Canonical Section Sequence:
+        # 1. Identity -> 2. TypeLifecycle -> 3. Execution -> 4. CapImports -> 5. BlockMap -> 6. LeafMap -> 7. ServiceExports
         sections = []
 
         # 1. Identity Section (40 bytes body)
@@ -242,13 +342,24 @@ class KrxPackageBuilder:
         ident_body.extend(struct.pack("<H", self.min_abi))
         ident_body.extend(author_bytes)
         ident_body.extend(struct.pack("<I", 0x67000000))  # timestamp
-        ident_body.extend(struct.pack("<H", 1))           # icon_asset
+        ident_body.extend(struct.pack("<H", self.icon_asset))
         ident_body.extend(struct.pack("<H", 0))           # flags
         ident_body.extend(b"\x00" * 13)                   # reserved
         assert len(ident_body) == 40
         sections.append((SEC_IDENTITY, ident_body))
 
-        # 2. Execution Section (28 bytes body)
+        # 2. Type & Lifecycle Section (12 bytes body) - Placed 2nd for fast 80-byte header cataloging
+        type_body = bytearray()
+        type_body.append(self.exec_type)
+        type_body.append(self.type_flags)
+        type_body.append(1)  # stack_cost
+        type_body.append(0)  # restart_budget
+        type_body.extend(b"\x00" * 4)  # depends_count, provides_count, hw_claim_count, restart_policy
+        type_body.extend(struct.pack("<I", self.caps))
+        assert len(type_body) == 12
+        sections.append((SEC_TYPE_LIFECYCLE, type_body))
+
+        # 3. Execution Section (28 bytes body)
         exec_body = bytearray()
         exec_body.extend(struct.pack("<H", self.min_stack))
         exec_body.extend(struct.pack("<H", self.min_heap))
@@ -273,17 +384,6 @@ class KrxPackageBuilder:
         assert len(exec_body) == 28
         sections.append((SEC_EXECUTION, exec_body))
 
-        # 3. Type & Lifecycle Section (12 bytes body)
-        type_body = bytearray()
-        type_body.append(1)  # KrxExecType::App = 1
-        type_body.append(0)  # flags
-        type_body.append(1)  # stack_cost
-        type_body.append(0)  # restart_budget
-        type_body.extend(b"\x00" * 4)  # depends_count, provides_count, hw_claim_count, restart_policy
-        type_body.extend(struct.pack("<I", self.caps))
-        assert len(type_body) == 12
-        sections.append((SEC_TYPE_LIFECYCLE, type_body))
-
         # 4. CapImports Section (if present)
         if self.cap_imports:
             cap_body = bytearray()
@@ -291,7 +391,17 @@ class KrxPackageBuilder:
                 cap_body.extend(struct.pack("<HHHH", iface_id, min_abi, flags, slot_idx))
             sections.append((SEC_CAP_IMPORTS, cap_body))
 
-        # 5. LeafMap Section (if present, 16 bytes per entry)
+        # 5. BlockMap Section (if present)
+        if self.block_map:
+            block_body = bytearray()
+            for block_id, flags, size, flash_off in self.block_map:
+                block_body.append(block_id)
+                block_body.append(flags)
+                block_body.extend(struct.pack("<H", size))
+                block_body.extend(struct.pack("<I", flash_off))
+            sections.append((SEC_BLOCK_MAP, block_body))
+
+        # 6. LeafMap Section (if present, 16 bytes per entry)
         if self.leaf_map:
             leaf_body = bytearray()
             for leaf_id, flags, size, entry_off, flash_off in self.leaf_map:
@@ -304,16 +414,6 @@ class KrxPackageBuilder:
                 leaf_body.extend(b"\x00" * 4)           # reserved
             assert len(leaf_body) % 16 == 0
             sections.append((SEC_LEAF_MAP, leaf_body))
-
-        # 6. BlockMap Section (if present)
-        if self.block_map:
-            block_body = bytearray()
-            for block_id, flags, size, flash_off in self.block_map:
-                block_body.append(block_id)
-                block_body.append(flags)
-                block_body.extend(struct.pack("<H", size))
-                block_body.extend(struct.pack("<I", flash_off))
-            sections.append((SEC_BLOCK_MAP, block_body))
 
         # 7. ServiceExports Section (if present, 16 bytes per entry)
         if self.service_exports:
@@ -370,6 +470,60 @@ class KrxPackageBuilder:
         return bytes(full_package)
 
 
+def verify_package(package_bytes: bytes) -> dict:
+    """Rigorous pre-flight verification of a packed KRX binary."""
+    if len(package_bytes) < 20:
+        raise ValueError("Package is shorter than normative preamble size (20 B)")
+    if package_bytes[:4] != KRX_MAGIC:
+        raise ValueError(f"Invalid KRX magic: {package_bytes[:4].hex()}")
+
+    app_class = package_bytes[4]
+    version = package_bytes[5]
+    if version == 0 or version > 5:
+        raise ValueError(f"Unsupported KRX format version: {version}")
+
+    section_count, total_header_len, flags, payload_crc, header_crc = struct.unpack(
+        "<HHHII", package_bytes[6:20]
+    )
+    if total_header_len < 20 or (total_header_len & 3) != 0:
+        raise ValueError(f"Unaligned or invalid total header length: {total_header_len}")
+    if len(package_bytes) < total_header_len:
+        raise ValueError(f"Truncated file: size {len(package_bytes)} < header {total_header_len}")
+
+    header_content = package_bytes[20:total_header_len]
+    actual_hdr_crc = zlib.crc32(header_content) & 0xFFFFFFFF
+    if header_crc != 0 and actual_hdr_crc != header_crc:
+        raise ValueError(f"Header CRC32 mismatch: expected 0x{header_crc:08X}, calculated 0x{actual_hdr_crc:08X}")
+
+    payload = package_bytes[total_header_len:]
+    actual_payload_crc = zlib.crc32(payload) & 0xFFFFFFFF
+    if payload_crc != 0 and actual_payload_crc != payload_crc:
+        raise ValueError(f"Payload CRC32 mismatch: expected 0x{payload_crc:08X}, calculated 0x{actual_payload_crc:08X}")
+
+    # Inspect sections
+    offset = 20
+    seen_sections = []
+    while offset + 4 <= total_header_len:
+        sec_id, sec_len = struct.unpack("<HH", package_bytes[offset : offset + 4])
+        if sec_id not in SEC_NAMES:
+            break  # string pool reached
+        if sec_len < 4 or offset + sec_len > total_header_len:
+            raise ValueError(f"Invalid section 0x{sec_id:04X} length: {sec_len}")
+        seen_sections.append((sec_id, SEC_NAMES.get(sec_id, f"0x{sec_id:04X}"), sec_len))
+        offset += (sec_len + 3) & ~3
+
+    return {
+        "class": app_class,
+        "class_name": CLASS_NAMES.get(app_class, f"Unknown ({app_class})"),
+        "version": version,
+        "sections": seen_sections,
+        "header_len": total_header_len,
+        "header_crc": header_crc,
+        "payload_len": len(payload),
+        "payload_crc": payload_crc,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="KRX Executable Packaging Tool")
     parser.add_argument("output", help="Output .krx file path")
@@ -381,6 +535,18 @@ def main():
         default="n1",
         help="KRX execution profile",
     )
+    parser.add_argument(
+        "--type",
+        choices=["app", "service", "daemon", "driver", "module"],
+        default="app",
+        help="KRX execution type (§5.2 / Chapter 11)",
+    )
+    parser.add_argument("--startup", action="store_true", help="Mark package with FLAG_STARTUP (boot auto-start)")
+    parser.add_argument("--persistent", action="store_true", help="Mark package with FLAG_PERSISTENT (exempt from reaper)")
+    parser.add_argument("--singleton", action="store_true", help="Mark package with FLAG_SINGLETON (single instance)")
+    parser.add_argument("--restart-on-fail", action="store_true", help="Mark package with FLAG_RESTART_ON_FAIL")
+    parser.add_argument("--icon", type=lambda x: int(x, 0), default=1, help="Icon asset ID (0..255)")
+    parser.add_argument("--version", default="1.0.0", help="Package semantic version (e.g. 1.2.0)")
     parser.add_argument("--payload", help="Binary payload input file")
     parser.add_argument("--entry", type=lambda x: int(x, 0), default=0, help="Entry point offset")
     parser.add_argument("--link-base", type=lambda x: int(x, 0), default=0, help="Link base VMA")
@@ -389,9 +555,23 @@ def main():
     parser.add_argument("--min-heap", type=int, default=0, help="Minimum heap bytes (0 for no_std)")
     parser.add_argument("--page-size", type=lambda x: int(x, 0), default=1024, help="Page/block size")
     parser.add_argument("--cache-blocks", type=int, default=2, help="Number of cache blocks")
+    parser.add_argument("--auto-page", action="store_true", help="Automatically partition continuous payload into page-sized demand blocks")
     parser.add_argument("--caps", type=lambda x: int(x, 0), default=None, help="Capability bitmask (hex or decimal)")
     parser.add_argument("--leaf", action="append", default=[], help="Add leaf overlay: <id>:<path>")
     parser.add_argument("--block", action="append", default=[], help="Add demand block: <id>:<path>")
+    parser.add_argument(
+        "--service-export",
+        action="append",
+        default=[],
+        help="Export service: <iface_id>:<vtable_offset>[:abi_ver][:pinned]",
+    )
+    parser.add_argument(
+        "--cap-import",
+        action="append",
+        default=[],
+        help="Import capability: <iface_id>:<slot_idx>[:min_abi][:mandatory]",
+    )
+    parser.add_argument("--verify", action="store_true", help="Print detailed verification report")
 
     args = parser.parse_args()
 
@@ -403,9 +583,35 @@ def main():
         "d0": (CLASS_DECLARE, PROFILE_D0_DECLARE),
     }
 
+    type_map = {
+        "app": EXEC_APP,
+        "service": EXEC_SERVICE,
+        "daemon": EXEC_DAEMON,
+        "driver": EXEC_DRIVER,
+        "module": EXEC_MODULE,
+    }
+
     app_class, profile_code = profile_map[args.profile]
     builder = KrxPackageBuilder(args.name, app_class, profile_code)
-    builder.set_identity(args.name, args.author)
+    builder.auto_page = args.auto_page
+
+    ver_parts = [int(p) for p in args.version.split(".")[:3]]
+    while len(ver_parts) < 3:
+        ver_parts.append(0)
+    builder.set_identity(args.name, args.author, tuple(ver_parts), args.icon)
+
+    flags = 0
+    if args.startup:
+        flags |= FLAG_STARTUP
+    if args.persistent:
+        flags |= FLAG_PERSISTENT
+    if args.singleton:
+        flags |= FLAG_SINGLETON
+    if args.restart_on_fail:
+        flags |= FLAG_RESTART_ON_FAIL
+
+    builder.set_lifecycle(type_map[args.type], flags)
+
     builder.set_execution(
         entry_point=args.entry,
         link_base=args.link_base,
@@ -438,11 +644,36 @@ def main():
         bpath = parts[1]
         builder.add_block_file(bid, bpath)
 
+    for item in args.service_export:
+        parts = item.split(":")
+        iface_id = int(parts[0], 0)
+        vtable_off = int(parts[1], 0)
+        abi_ver = int(parts[2], 0) if len(parts) > 2 else 1
+        pinned = bool(int(parts[3], 0)) if len(parts) > 3 else False
+        builder.add_service_export(iface_id, vtable_off, abi_ver, pinned)
+
+    for item in args.cap_import:
+        parts = item.split(":")
+        iface_id = int(parts[0], 0)
+        slot_idx = int(parts[1], 0)
+        min_abi = int(parts[2], 0) if len(parts) > 2 else 1
+        mandatory = bool(int(parts[3], 0)) if len(parts) > 3 else True
+        builder.add_cap_import(iface_id, slot_idx, min_abi, mandatory)
+
     package_bytes = builder.build()
+
+    # Perform strict normative validation before writing
+    report = verify_package(package_bytes)
+
     with open(args.output, "wb") as f:
         f.write(package_bytes)
 
-    print(f"Packed KRX package: {args.output} ({len(package_bytes)} bytes, profile={args.profile.upper()})")
+    prof_label = PROFILE_NAMES.get(profile_code, f"0x{profile_code:02X}")
+    type_label = EXEC_TYPE_NAMES.get(type_map[args.type], "Unknown")
+    print(
+        f"OK: Packed KRX {type_label} '{args.name}' v{args.version} -> {args.output} "
+        f"({len(package_bytes)} B | {prof_label} | Hdr: {report['header_len']} B CRC:0x{report['header_crc']:08X} | Pay: {report['payload_len']} B)"
+    )
 
 
 if __name__ == "__main__":

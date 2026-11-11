@@ -147,12 +147,12 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             u->ui_show_confirm_labels(4, &ch_b, 1, &ch_b, 1, &ch_b, 1, &ch_b, 1);
             u->ui_close_modal();
 
-            // Configure integrated status bar (like Task Manager: visible, empty title, no divider)
+            // Configure integrated status bar (like Task Manager: visible, empty title, no divider, partial right-only)
             KrxStatusBar sb;
             for (u8 i = 0; i < sizeof(KrxStatusBar); i++) {
                 ((u8*)&sb)[i] = 0;
             }
-            sb.flags = 1 | 8; // KRX_STATUS_VISIBLE | KRX_STATUS_CUSTOM_TITLE (empty string)
+            sb.flags = KRX_STATUS_VISIBLE | KRX_STATUS_CUSTOM_TITLE | KRX_STATUS_PARTIAL;
             u->ui_set_status_bar(&sb);
             u->ui_set_tray_icon(0xFF);
         }

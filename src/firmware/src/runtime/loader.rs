@@ -9,7 +9,7 @@ use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
 #[cfg(feature = "krx_declare")]
 use kernel::proc::declare::{ActionRecord, DeclareItem, DeclareNode, LAYOUT_MENU};
-use kernel::proc::krx::{KrxClass, KrxPreamble, SectionExecution};
+use kernel::proc::krx::{KrxClass, KrxPreamble};
 
 pub use kernel::proc::krx::KrxLaunchError;
 
@@ -138,29 +138,21 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     }
 
     // 3. Verify RAM and stack headroom requirements against Execution Section
-    let mut exec_sec: Option<SectionExecution> = None;
-    if let Some(eb) = summary.exec_body {
-        if let Some(exec) = SectionExecution::parse(eb) {
-            let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
-            let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
-            let min_stack = (exec.min_stack_bytes as usize).min(128);
-            if margin < min_stack.min(96) {
-                return Err(KrxLaunchError::InsufficientStack);
-            }
-            if !exec.can_execute(avail, margin.min(128)) {
-                return Err(KrxLaunchError::InsufficientRam);
-            }
-            exec_sec = Some(exec);
+    let exec_sec = summary.exec;
+    if let Some(ref exec) = exec_sec {
+        let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
+        let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
+        let min_stack = (exec.min_stack_bytes as usize).min(128);
+        if margin < min_stack.min(96) {
+            return Err(KrxLaunchError::InsufficientStack);
+        }
+        if !exec.can_execute(avail, margin.min(128)) {
+            return Err(KrxLaunchError::InsufficientRam);
         }
     }
 
     #[cfg(feature = "krx_native")]
-    let aux = super::native_runner::KrxAuxSections {
-        cap_imports: summary.cap_imports,
-        block_map: summary.block_map,
-        leaf_map: summary.leaf_map,
-        service_exports: summary.service_exports,
-    };
+    let aux = summary.aux;
 
     let app_name = store_dynamic_app_name(raw_name);
     let dyn_id = AppRegistry::count();

@@ -483,10 +483,13 @@ pub unsafe fn walker_render(
 
     *sb = StatusBarConfig {
         visible: true,
+        partial: false,
         title: Some(walker.app_name),
         center_text: if !title.is_empty() { Some(title) } else { None },
         signal_level: None,
         left_badge: None,
+        left_icons: &[],
+        center_icons: &[],
         show_divider: true,
     };
 

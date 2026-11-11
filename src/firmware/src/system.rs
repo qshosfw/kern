@@ -242,21 +242,6 @@ fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc) {
     hw.backlight.wake();
 }
 
-#[cfg(any(feature = "uart", feature = "usb_cdc"))]
-fn poll_rigwire(hw: &mut SystemHardware, now: u32) {
-    if let Some((header, _raw_len)) = hw.wire.poll(now) {
-        let handled = crate::services::wire::dispatch_wire_record(&header, hw, now);
-
-        if !handled {
-            wake_and_notify_activity(hw);
-            enqueue_event(Event::Sys(kernel::ipc::SysEvent {
-                target: header.service,
-                command: header.opcode,
-                arg: header.sequence as u16,
-            }));
-        }
-    }
-}
 
 fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
     unsafe {
@@ -336,7 +321,17 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
         // 0b. Poll RigWire serial protocol (UART or USB CDC)
         #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-        poll_rigwire(hw, now);
+        if let Some((header, _raw_len)) = hw.wire.poll(now) {
+            wake_and_notify_activity(hw);
+            dirty_render = true;
+            if !crate::services::wire::dispatch_wire_record(&header, hw, now) {
+                enqueue_event(Event::Sys(kernel::ipc::SysEvent {
+                    target: header.service,
+                    command: header.opcode,
+                    arg: header.sequence as u16,
+                }));
+            }
+        }
 
         // 0c. High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms
         #[cfg(feature = "radio")]

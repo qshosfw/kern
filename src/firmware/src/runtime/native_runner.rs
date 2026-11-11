@@ -49,10 +49,13 @@ pub(crate) struct NativeExecSlot {
 }
 
 pub fn init_native_slot() {
-    let slot = slot_mut();
-    slot.is_loaded = false;
-    slot.entry_point = 0;
-    slot.pid = kernel::proc::Pid(0);
+    unsafe {
+        core::ptr::write_bytes(
+            core::ptr::addr_of_mut!(NATIVE_SLOT) as *mut u8,
+            0,
+            core::mem::size_of::<NativeExecSlot>(),
+        );
+    }
 }
 
 #[unsafe(link_section = ".uninit")]
@@ -308,13 +311,7 @@ fn apply_package_relocs(
     Ok(())
 }
 
-#[derive(Default, Clone, Copy)]
-pub struct KrxAuxSections<'a> {
-    pub cap_imports: Option<&'a [u8]>,
-    pub block_map: Option<&'a [u8]>,
-    pub leaf_map: Option<&'a [u8]>,
-    pub service_exports: Option<&'a [u8]>,
-}
+pub use kernel::proc::krx::KrxAuxSections;
 
 /// Loads a Native (`KrxClass::Native`) or Demand-Paged (`KrxClass::Paged`) binary from flash
 /// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
@@ -336,6 +333,9 @@ pub fn load_native_from_storage(
     slot.current_block = 0;
     slot.current_slot = 0;
     slot.pid = pid;
+    slot.status_bar = None;
+    slot.status_bar_left_count = 0;
+    slot.status_bar_center_count = 0;
 
     let buffer_bytes =
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
@@ -725,17 +725,24 @@ pub unsafe fn native_on_modal_result(
 }
 
 fn c_str_to_str(buf: &[u8]) -> Option<&str> {
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let mut len = 0;
+    while len < buf.len() && buf[len] != 0 {
+        if buf[len] < 0x20 || buf[len] > 0x7E {
+            return None;
+        }
+        len += 1;
+    }
     if len == 0 {
         None
     } else {
-        core::str::from_utf8(&buf[..len]).ok()
+        Some(unsafe { core::str::from_utf8_unchecked(&buf[..len]) })
     }
 }
 
 fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBarConfig<'a>) {
     if let Some(sb) = &slot.status_bar {
         let visible = (sb.flags & kernel::proc::abi::KRX_STATUS_VISIBLE) != 0;
+        let mut partial = (sb.flags & kernel::proc::abi::KRX_STATUS_PARTIAL) != 0;
         let show_divider = (sb.flags & kernel::proc::abi::KRX_STATUS_DIVIDER) != 0;
         let signal_level = if (sb.flags & kernel::proc::abi::KRX_STATUS_HAS_SIGNAL) != 0 {
             Some(sb.signal_level)
@@ -743,10 +750,13 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
             None
         };
         let title = if (sb.flags & kernel::proc::abi::KRX_STATUS_CUSTOM_TITLE) != 0 {
-            Some(c_str_to_str(&sb.title).unwrap_or(""))
+            c_str_to_str(&sb.title)
         } else {
             Some(slot.app_name.as_str())
         };
+        if visible && !show_divider && title.is_none() && signal_level.is_none() {
+            partial = true;
+        }
         let left_badge = c_str_to_str(&sb.badge);
         let center_text = c_str_to_str(&sb.center);
         let left_icons = &slot.status_bar_left_icons[..slot.status_bar_left_count];
@@ -754,6 +764,7 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
 
         *status_bar = StatusBarConfig {
             visible,
+            partial,
             title,
             center_text,
             signal_level,
@@ -848,6 +859,8 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
     slot.status_bar = None;
     slot.status_bar_left_count = 0;
     slot.status_bar_center_count = 0;
+    slot.app_name.clear();
+    slot.pkg_path.clear();
     // Safety cleanup: ensure radio TX is disengaged if guest left PTT active
     if ctx.state.coord.is_transmitting {
         ctx.state.coord.request_ptt_stop(ctx.radio);
