@@ -223,3 +223,90 @@ Cumulative realistic target: **−25 to −40 KB** → resident ≈ 80–95 KB w
 | Resident apps (VFO, launcher, pref engine) | 12.5 KB | 6.0 KB |
 | Rodata (assets, strings) | 18.6 KB | 5.0 KB |
 | **Total** | **118 KB** | **≈ 57 KB** |
+
+---
+
+## 5. KRX ABI & Package Architecture Review (v3.2 target)
+
+Every change below is strictly additive in capability or neutral, and removes code. Source of truth reviewed: `src/firmware/src/runtime/syscall/mod.rs`, `src/kernel/src/proc/{abi,krx,declare,paged,vm}.rs` (8,094 lines in `proc/`), `native_runner.rs`.
+
+### 5.1 Concrete flaws found
+
+| ID | Flaw | Evidence | Consequence |
+|---|---|---|---|
+| A1 | **Three parallel binding mechanisms** for the same 13 vtables: `NATIVE_API_TABLE` (v3.0 composite), `NATIVE_SYS_TABLE` (v3.1 composite, field-for-field identical), and `INTERFACE_TABLE` + `bind_cap_imports` (GOT by `interface_id`). | `syscall/mod.rs` | 3 ABIs to maintain/test; dead `NATIVE_SYS_TABLE`; ~200 B rodata + docs/spec drift. |
+| A2 | **Capability bypass.** `NATIVE_API_TABLE.granted_caps = 0xFFFF_FFFF` and the table is passed to every native app (`native_runner.rs:243, :581`). Shims perform **zero** per-call cap checks (`grep` = 0 in display/radio/audio/storage/io/service). Any app that reads `api->radio` instead of its GOT slot gets TX. | `native_runner.rs`, shims | Violates AGENTS.md capability contract; the GOT binder's gating is decorative. |
+| A3 | **Format sniffing instead of declared layout.** `bind_cap_imports` guesses record stride via `len % 8 == 0 && len % 6 != 0` (24 B is ambiguous → mis-parses 3×8 as 4×6). | `mod.rs::bind_cap_imports` | Latent mis-binding; division/modulo on M0+. |
+| A4 | **Per-interface `min_abi` is ignored** (`_min_abi` param). Vtables have no length header. | `resolve_capability_vtable` | An app built for a newer vtable calls past the end → HardFault. No forward-compat story. |
+| A5 | **UTF-8 validation on every string syscall.** `parse_str` → `core::str::from_utf8` (368 B) on each `draw_str`/`str_width`/path call; fonts are ASCII-only. | `parse_str`, 14 call sites | 368 B + per-call O(n) scan; no safety gain (glyph lookup already clamps). |
+| A6 | **User pointers are only null-checked**, never range-checked against the process `MemoryMapLayout`. | `parse_str`, `api_draw_bitmap`, storage shims | App can make the kernel read/write arbitrary SRAM/flash (calibration MAC, PCB table). |
+| A7 | **Global mutable context with null-fallback per call**: `ACTIVE_CTX`, `ACTIVE_CANVAS`, `ACTIVE_SWAP` as `static mut` raw pointers; `active_canvas_mut()` is a non-inlined call with a fallback branch (30 call sites). | `mod.rs` | 30×(bl + branch); unsound aliasing; hides lifecycle bugs (drawing when no app active). |
+| A8 | **`parse_user_path` duplicates policy** with `services::wire::validate_file_path` and repeats `caps.contains` four times with identical bodies. | `mod.rs`, `wire.rs` | Two security policies that can diverge. |
+| A9 | **Header parsed by four independent readers** (`summarize`, `inspect_package`, `launch_krx_package`, `load_native_from_storage`). `krx.rs` is 3,201 lines with ~30 record structs. | Phase 19 | ~3 KB code; inconsistent validation between catalog and loader (TOCTOU between "shown as installable" and "loads"). |
+| A10 | **Execution-model sprawl**: `KrxExecType {App, Service, Daemon, Driver, Module}` × profiles × `declare`/`vm`/`paged`/leaf continuation. | `krx.rs`, `paged.rs`, `vm.rs`, `declare.rs` | Each model brings its own loader branch; most are not shipped in default build yet still shape the resident loader. |
+
+### 5.2 Target ABI v3.2 ("one table, bound once, checked once")
+
+1. **Single binding path = GOT import by interface (keep), delete both composite tables.** The entry point receives only `(op: u32, arg: u32)`; vtable pointers come exclusively from GOT slots filled at load. Removes A1/A2 at the root. Cost of an import stays one `ldr` from GOT + `blx` (identical to today's table walk).
+2. **Vtable header for versioning:**
+   ```rust
+   #[repr(C)] pub struct Vt<const N: usize> { pub rev: u16, pub len: u16, pub f: [unsafe extern "C" fn(); N] }
+   ```
+   Vtables are **append-only**; `len` = number of slots. Binder rejects a mandatory import whose `min_slots > len` (replaces unused `min_abi`, fixes A4). Optional imports bind `NULL`, so new kernels run old apps and old kernels refuse new apps cleanly.
+3. **Declared section layout:** CAP section header carries `stride: u8` (6 or 8) and `count: u8`; binder does `for i in 0..count` with `offset = i << stride_shift`. No modulo, no sniffing (A3).
+4. **Capability gating at bind time only, with fine-grained facets.** Split vtables where one interface mixes privilege levels: `RadioRx` vs `RadioTx` (TX setters in their own `RadioTxApi` vtable), `StorageRead` vs `StorageWrite`. Then a granted slot *is* the capability — zero per-call checks, zero bypass (A2). `INTERFACE_TABLE` becomes `[(vt, caps_all_required: u32)]` with **AND** semantics (current code uses OR: any one of `RadioRx|RadioTx|BroadBandRx` unlocks the whole radio vtable — a second bypass).
+5. **`UserSlice` validation primitive** (A5, A6, A8 unified):
+   ```rust
+   #[inline(never)] pub fn user_bytes(ptr: *const u8, len: u16) -> Option<&'static [u8]>   // range-checks against active PCB regions
+   #[inline(never)] pub fn user_bytes_mut(ptr: *mut u8, len: u16) -> Option<&'static mut [u8]>
+   ```
+   Text APIs take `&[u8]` (gfx `draw_str` accepts bytes; glyph table already maps out-of-range to `?`). Delete `parse_str`, `str_or_default`, and the `from_utf8` dependency (−368 B, −per-call scan). Path checks: one `kernfs::path::authorize(path: &[u8], caps) -> Option<Root>` used by syscalls and RigWire.
+6. **Explicit execution context instead of `static mut` pointers** (A7): the runner owns `struct Exec { ctx: &mut SysContext, canvas: &mut Canvas, pcb: u8 }` placed in one `static` slot set on entry and cleared on exit; shims call `exec()` which is `#[inline(always)]` and *debug-asserts* non-null (no fallback canvas — drawing outside an app frame is a bug). Removes 30 `bl` + branches.
+7. **Strings and buffers as `(ptr, len:u16)` pairs in r0–r3 only.** Rule: ≤4 word args per call (AAPCS registers); anything larger is a `#[repr(C)]` param block passed by pointer (validated once with `user_bytes`). Today `api_draw_str_align` takes 7 args → stack spills on both sides.
+8. **One header view** (A9): `KrxView::parse(&[u8; 64])` in `kernel::proc::krx` validates once (magic/FourCC, version, section bounds, CRC) and is cached by the catalog keyed by `(inode, mtime)`. Loader re-validates only the CRC of the payload it actually maps. Catalog and loader can no longer disagree.
+9. **Collapse execution models to two** (A10): `Native` (relocated Thumb code, single entry `(op,arg)`, exec types become a *flags* byte: `BACKGROUND | SERVICE_EXPORT | DRIVER_CLAIM`) and `Declare` (data-only descriptors interpreted by resident `PrefModule`/rules engine). `vm` and `paged`/leaf become *loader strategies* behind the same `Native` contract (`paged` = overlay fetch on GOT miss), compiled only with their features. `KrxExecType` 5-variant enum → `u8` flags; its `as_str` moves to the host tool.
+10. **Host-side work moves to the packer.** Relocation pre-resolution (only `R_ARM_ABS32` against segment base remains), section ordering, CRC, and stride selection are done by `tools/krx-pack`; the device applies one relocation type in a single loop. Spec text lives in `docs/app_format_spec.md` (update in the same commit).
+
+**Estimated effect:** −1.5 to −2.5 KB resident (tables, `from_utf8`, 4 header parsers → 1, path policy dedupe, exec-type branches) on top of Phases 10/19, plus closing three security holes. Requires a coordinated rebuild of `packages/*` (`leaf_app.c`, `paged_app.c`) against the new `kern_abi.h`; bump `KRX_ABI_VERSION` to `0x0003_0002` and have the loader reject < 3.2 with `KrxLaunchError::AbiTooOld` (no compatibility shims, per AGENTS.md "no aliases").
+
+---
+
+## 6. Structural Flaws Beyond Byte Counts (firmware-wide)
+
+These are architecture defects whose fix *naturally* removes bloat; they are not micro-optimisations.
+
+| ID | Flaw | Fix | Est. |
+|---|---|---|---|
+| S1 | **`firmware` is a god-crate** (63 % of `.text`): ABI, protocol, UI apps, boot, policy, services all in one crate, so nothing is independently feature-gated or testable on host. | Split into `kern-abi` (syscall shims + binder), `kern-wire` (RigWire services), `kern-ui` (compositor, Sheet, TextScreen, resident apps), `kern-boot` (boot, recovery, provisioning). `firmware` keeps only `main` + wiring. Crate boundaries force `pub` APIs → duplicate helpers surface and get deleted. | enables Phases 10–21 |
+| S2 | **Two security policies** (syscall path auth vs. RigWire path auth) and **OR-semantics capability masks**. | One `kernfs::path::authorize` + AND masks (§5.2.4–5). | 0.3 KB |
+| S3 | **Policy as code**: settings pages, modulation profiles, register sequences, boot steps, event filters, facet serialisers are all `match` trees. | Descriptor tables + one interpreter each (Phases 11, 14, 15, 17, 20). This is the dominant source of bloat. | 8–12 KB |
+| S4 | **Packed structs across the codebase** cost unaligned helper calls on every access and forbid references. | Naturally aligned power-of-two layouts (Phase 12); amend master-plan rule. | 0.7 KB |
+| S5 | **Assets compiled into ROM** (fonts, icons, provisioning packages): ~16 KB anonymous rodata. | KernFS-resident assets with tiny resident fallback (Phase 18). | 6–10 KB |
+| S6 | **Division-based math** contradicts the power-of-two design law (87 call sites). | Phase 13. | 0.5 KB |
+| S7 | **Inline policy left to the compiler**: single-use helpers fused into 1.5–4.6 KB monoliths that duplicate shared code. | Explicit `#[inline(never)]` on shared primitives; CI script fails if any function > 1 KB without an allow-list entry. | 2–3 KB |
+| S8 | **Diagnostics compiled into release** (`KrxPreamble::summarize` 1 KB, `KrxExecType::as_str`, verbose labels). | Move to host tool / `settings_debug` feature. | 1.2 KB |
+| S9 | **Static-mut raw-pointer globals** for execution context (`ACTIVE_*`, `PROC_TABLE`, `NATIVE_SLOT`). | Single `Exec` context + `critical_section`-guarded singletons. | 0.3 KB, soundness |
+
+### 6.1 Guard rails (add to `./kern check`)
+- `scripts/flash_guard.sh`: fail if `.text + .rodata` grows vs. `docs/flash_baseline.txt` without the commit message containing `[flash+N]`.
+- Fail if any symbol > 1,024 B is not in `docs/flash_allowlist.txt`.
+- Fail if `__aeabi_uidiv` call sites > budget, or `core::str::from_utf8` / `core::fmt` appear in the release ELF.
+
+---
+
+## 7. Path to ≤ 80 % Flash Utilisation (≤ 96,665 B used, −23,987 B)
+
+Ordered so each step is an architectural fix, not a patch. Cumulative column uses the low end of each estimate.
+
+| Step | Phase / ID | Low est. | Cumulative used | Util. |
+|---|---|---|---|---|
+| 0 | Baseline | — | 120,652 | 99.9 % |
+| 1 | §5 ABI v3.2 (A1–A10) + Phase 10 shim collapse | −4,500 | 116,152 | 96.1 % |
+| 2 | Phase 18 assets → KernFS, provisioning Mode B | −6,000 | 110,152 | 91.2 % |
+| 3 | Phase 15 Sheet + Phase 16 TextScreen | −4,000 | 106,152 | 87.9 % |
+| 4 | Phase 11 RigWire tables + ByteWriter | −2,000 | 104,152 | 86.2 % |
+| 5 | Phase 20 settings descriptor engine (resident part) | −4,000 | 100,152 | 82.9 % |
+| 6 | Phases 12, 13, 14 (alignment, division, reg tables) | −1,800 | 98,352 | 81.4 % |
+| 7 | Phases 17, 19, 21 + S7/S8 | −2,500 | 95,852 | **79.3 %** |
+
+High-end estimates reach ≈ 85 KB (70 %). No user-visible feature is removed: assets and settings pages move to SPI flash and remain available; a resident fallback (recovery `TextScreen` + minimal settings `Sheet`) guarantees operation with unmounted storage.
