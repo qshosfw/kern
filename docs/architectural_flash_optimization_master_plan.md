@@ -279,9 +279,9 @@ Exporting 180+ fine-grained C functions (`api_draw_pixel`, `api_draw_line`, `api
 
 ---
 
-### 4.2 The Golden Standard KRX Structured System ABI (v3.1) Specification
+### 4.2 KRX Structured System ABI (v3.1) Specification
 
-To achieve the theoretical limit of Flash efficiency while guaranteeing silicon-level safety, Kern establishes the **KRX Structured System ABI (v3.1)**:
+To achieve optimal Flash efficiency while guaranteeing silicon-level safety, Kern establishes the **KRX Structured System ABI (v3.1)**:
 
 ```rust
 #[repr(C)]
@@ -309,7 +309,7 @@ ldr r3, [r1, #GFX_API_OFFSET]     ; Load GfxApi table pointer (1 cycle)
 ldr r3, [r3, #DRAW_TEXT_OFFSET]    ; Load function pointer (1 cycle)
 blx r3                             ; Branch with link (2 cycles)
 ```
-**Why this is the Golden Standard for Cortex-M0+:**
+**Architectural Rationale for Cortex-M0+:**
 - **Zero Syscall Trap Penalty:** Unlike traditional OS kernels that use the `SVC` (Supervisor Call) software interrupt, which incurs a 45-cycle penalty on ARMv6-M (16-cycle exception entry, 8-word hardware stack push, handler decode, and 15-cycle exception return), direct table linkage executes in **2 to 4 cycles** with zero context switch overhead.
 - **Strict Stack Safety:** Before invoking guest code, the microkernel performs a stack margin check (`stack_margin_bytes() >= 96`). If an app is within 96 bytes of stack exhaustion, the call is rejected with `0xFFFF_FFFF` rather than hardfaulting the CPU.
 

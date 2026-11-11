@@ -574,11 +574,11 @@ pub struct KrxApiTable {
 unsafe impl Sync for KrxApiTable {}
 unsafe impl Send for KrxApiTable {}
 
-// ── Golden Standard KRX Structured System ABI (v3.1) ────────────────────────
+// ── KRX Structured System ABI Specification (v3.1) ──────────────────────────
 
 pub const KRX_ABI_VERSION_3_1: u32 = 0x0003_0100;
 
-/// Standard Systems Graphics & UI API Table
+/// Subsystem Interface: 2D Graphics, Canvas Drawing & UI Presentation
 #[repr(C)]
 pub struct GfxApi {
     pub clear: unsafe extern "C" fn(),
@@ -610,7 +610,7 @@ pub struct GfxApi {
     pub set_status_bar: unsafe extern "C" fn(sb: *const KrxStatusBar) -> u8,
 }
 
-/// Standard Systems Radio & RF Modem API Table
+/// Subsystem Interface: RF Transceiver, Modulation Profiles & Hardware Modem
 #[repr(C)]
 pub struct RadioApi {
     pub tune: unsafe extern "C" fn(freq_hz: u32, bw: u8, step_hz: u32) -> u8,
@@ -631,7 +631,7 @@ pub struct RadioApi {
     pub get_snr: unsafe extern "C" fn() -> u8,
 }
 
-/// Standard Systems Storage & Filesystem API Table
+/// Subsystem Interface: Persistent Storage, LittleFS Virtual Filesystem & Configs
 #[repr(C)]
 pub struct FsApi {
     pub read_file: unsafe extern "C" fn(path: *const u8, path_len: u8, buf: *mut u8, max_len: u16) -> u16,
@@ -648,7 +648,7 @@ pub struct FsApi {
     pub save_config: unsafe extern "C" fn(buf: *const u8, len: u16) -> u8,
 }
 
-/// Standard Systems Audio & Melodies API Table
+/// Subsystem Interface: Tone Generation, Audio Amplifier & ADC Microphone Sampling
 #[repr(C)]
 pub struct AudioApi {
     pub play_tone: unsafe extern "C" fn(freq_hz: u16, duration_ms: u16),
@@ -663,7 +663,7 @@ pub struct AudioApi {
     pub stop: unsafe extern "C" fn(),
 }
 
-/// Standard Systems Kernel, Power, Input & IPC API Table
+/// Subsystem Interface: Execution Timers, Battery Power, Keypad, IPC & Diagnostics
 #[repr(C)]
 pub struct SystemApi {
     pub ticks_ms: unsafe extern "C" fn() -> u32,
@@ -689,7 +689,7 @@ pub struct SystemApi {
     pub stack_margin: unsafe extern "C" fn() -> u16,
 }
 
-/// Golden Standard KRX Structured System Table (§4.2 / KRX-ABI 3.1)
+/// Normative KRX Structured System Dispatch Table (§4.2 / KRX-ABI 3.1)
 ///
 /// Passed in `r1` to `KrxNativeEntryFn` for zero-overhead, $O(1)$ AAPCS-Thumb linkage.
 /// Fits in 32 bytes ($2^5$ on 32-bit Cortex-M0+), aligned to power-of-two sector geometries.

@@ -148,7 +148,7 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
     hw_bus: &raw const HW_BUS_VTABLE,
 };
 
-// ── Golden Standard KRX Structured System Table (v3.1) ──────────────────────
+// ── KRX Structured System Dispatch Table (v3.1) ────────────────────────────
 
 pub static GFX_API: GfxApi = GfxApi {
     clear: display::api_display_clear,
