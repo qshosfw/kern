@@ -363,7 +363,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     #[inline(always)]
-    fn draw_status_bar_right(&self, canvas: &mut gfx::Canvas) -> i16 {
+    pub fn draw_status_bar_right(&self, canvas: &mut gfx::Canvas) -> i16 {
         self.draw_status_bar_right_mode(canvas, false)
     }
 
