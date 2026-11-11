@@ -248,7 +248,7 @@ A critical safety distinction must be maintained between Recovery and Boot Splas
 
 ### 4.1 Comparative Architectural Autopsy: Why Falcon & F4HWN Fail
 
-Reference firmwares (e.g. Falcon UV-K1/K5v3 and F4HWN OpenApps) introduced installable applications to amateur radios, but their underlying execution models suffer from fatal architectural flaws that violate high-assurance embedded systems engineering:
+Reference firmwares (e.g. Falcon UV-K1/K5v3 and F4HWN OpenApps) pioneered installable applications on amateur radios, but their underlying execution models suffer from structural flaws that compromise silicon safety and real-time determinism:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -256,17 +256,17 @@ Reference firmwares (e.g. Falcon UV-K1/K5v3 and F4HWN OpenApps) introduced insta
 ├────────────────────────────────┬────────────────────────────────────────────┤
 │ FALCON / F4HWN FLUID RUNTIME   │ KERN HIGH-ASSURANCE KRX RUNTIME            │
 ├────────────────────────────────┼────────────────────────────────────────────┤
-│ • Untyped C Function Pointers  │ • Strongly-Typed AAPCS-Thumb Facet VTables │
+│ • Untyped C Function Pointers  │ • Strongly-Typed AAPCS-Thumb System Tables │
 │ • Zero Capability Gating       │ • Strict Bitwise Hardware Token Checks     │
 │ • Raw Register Access Permitted│ • High-Level Microkernel Trait Contracts   │
-│ • Blocking `while(1)` App Loop │ • Cooperative Event-Driven Lifecycle       │
+│ • Blocking `while(1)` App Loop │ • Cooperative Event-Driven Slices (<500 µs)│
 │ • No Demand Paging (Fixed RAM) │ • Fixed-Window LRU Paged Overlays & Leaves │
 │ • App Crash = Radio Brick      │ • Hardware Quiescence & Safe-Mode Recovery │
 └────────────────────────────────┴────────────────────────────────────────────┘
 ```
 
 #### Flaw 1: Untyped Flat Function Pointer Tables (`void* api_table[]`)
-In Falcon/F4HWN, the app API is an unorganized flat array of pointers. There is no domain separation. An app wanting to draw a pixel receives the exact same API handle as an app wanting to configure the radio's RF power amplifier. If a firmware build inserts a single function pointer in the middle of `api_table`, every precompiled binary in existence experiences a silent offset shift, causing calls to `draw_text` to execute `radio_transmit` instead.
+In Falcon/F4HWN, the app API is an unorganized flat array of pointers without domain separation. An application wanting to draw a string receives the same API pointer table as an application configuring the radio's RF power amplifier. If a firmware build inserts a single function pointer in the middle of `api_table`, every precompiled binary in existence suffers a silent offset shift, causing calls to `draw_text` to execute `radio_transmit` instead.
 
 #### Flaw 2: Zero Capability Gating & Hardware Safety Hazards
 Falcon/F4HWN applications are granted unmediated access to peripheral silicon registers. An app can write directly to BK4829 register `0x30` or py32 GPIO registers, bypassing safety limits. A bug in userland can lock the RF transmitter in transmit mode, burning out the PA stage or violating FCC/ITU amateur radio transmission regulations.
@@ -279,40 +279,42 @@ Exporting 180+ fine-grained C functions (`api_draw_pixel`, `api_draw_line`, `api
 
 ---
 
-### 4.2 The Kern KRX Structured Host ABI (v3.1) Specification
+### 4.2 The Golden Standard KRX Structured System ABI (v3.1) Specification
 
-To achieve the theoretical limit of Flash efficiency while guaranteeing silicon-level safety, Kern establishes the **KRX Structured Facet ABI (v3.1)**:
+To achieve the theoretical limit of Flash efficiency while guaranteeing silicon-level safety, Kern establishes the **KRX Structured System ABI (v3.1)**:
 
 ```rust
 #[repr(C)]
-pub struct KrxAppHost {
+pub struct KrxSysTable {
     pub abi_version: u32,             // KRX_ABI_VERSION_3_1 (0x0003_0100)
     pub granted_caps: u32,            // Bitwise capability token mask
-    pub gfx: *const GfxFacetVTable,   // High-level Canvas & Display primitives
-    pub rf: *const RfFacetVTable,     // High-level Radio Service (No raw registers!)
-    pub fs: *const FsFacetVTable,     // Sandboxed Filesystem operations
-    pub snd: *const AudioFacetVTable, // Tone generator & AF gain control
-    pub sys: *const SysFacetVTable,   // Timers, Keypad, Battery telemetry
+    pub gfx: *const GfxApi,           // Display & Canvas Primitives
+    pub radio: *const RadioApi,       // High-Level RF Modem, Tuning & Squelch
+    pub fs: *const FsApi,             // Filesystem & Storage Operations
+    pub audio: *const AudioApi,       // Tone Generation, AF Gain & Melodies
+    pub sys: *const SystemApi,        // Timers, Keypad, Power & IPC
 }
 ```
 
 #### Principle 1: AAPCS-Thumb Register Linkage ($O(1)$ Zero-Cost Dispatch)
-When a KRX app starts, the kernel invokes its entry point with strict register conventions:
-- **`r0`**: Granted capabilities token (`caps: u32`)
-- **`r1`**: Immutable pointer to the flash-resident `&KrxAppHost`
-- **`r2`**: Memory arena base pointer (transient SRAM layout)
-- **`r3`**: Reserved for execution flags (e.g. `IS_DEMAND_PAGED`, `IS_COLOR_LCD`)
+When a KRX app starts, the microkernel invokes its entry point with standard ARM register conventions:
+- **`r0`**: Operation code (`SYS_OP_INIT = 0`, `SYS_OP_EVENT = 1`, `SYS_OP_RENDER = 2`, `SYS_OP_EXIT = 3`)
+- **`r1`**: Immutable pointer to the flash-resident `&KrxSysTable`
+- **`r2`**: Event or payload parameter pointer (e.g. `*const KrxEvent`)
+- **`r9`**: Guest Static Base / GOT base register (standard ARM PIC convention)
 
-In ARMv6-M machine code, calling a host service through a facet requires only **two CPU instructions** (2 cycles):
+In ARMv6-M machine code, calling a host service through the system table requires only **two CPU instructions** (2 cycles):
 ```asm
-ldr r3, [r1, #GFX_FACET_OFFSET]   ; Load facet vtable pointer (1 cycle)
+ldr r3, [r1, #GFX_API_OFFSET]     ; Load GfxApi table pointer (1 cycle)
 ldr r3, [r3, #DRAW_TEXT_OFFSET]    ; Load function pointer (1 cycle)
 blx r3                             ; Branch with link (2 cycles)
 ```
-No syscall software interrupts (`SVC`), no context-switch trap penalties, and zero register clobbering.
+**Why this is the Golden Standard for Cortex-M0+:**
+- **Zero Syscall Trap Penalty:** Unlike traditional OS kernels that use the `SVC` (Supervisor Call) software interrupt, which incurs a 45-cycle penalty on ARMv6-M (16-cycle exception entry, 8-word hardware stack push, handler decode, and 15-cycle exception return), direct table linkage executes in **2 to 4 cycles** with zero context switch overhead.
+- **Strict Stack Safety:** Before invoking guest code, the microkernel performs a stack margin check (`stack_margin_bytes() >= 96`). If an app is within 96 bytes of stack exhaustion, the call is rejected with `0xFFFF_FFFF` rather than hardfaulting the CPU.
 
 #### Principle 2: High-Level Trait Contracts (Hardware Safety by Design)
-The `RfFacetVTable` exposes **strictly high-level contracts**:
+The `RadioApi` table exposes **strictly high-level contracts**:
 - `set_frequency(vfo, freq_hz)`
 - `set_modulation(vfo, profile)`
 - `request_tx(vfo, enable)`
@@ -321,23 +323,73 @@ The `RfFacetVTable` exposes **strictly high-level contracts**:
 
 Userland code **never** touches silicon registers. If an application lacks `Cap::RadioTx`, the microkernel's internal arbitrator rejects `request_tx` with `Err(CapError::PermissionDenied)`. Transmission timeouts (TOT), PA thermal throttling, and frequency band limits are enforced by the microkernel's resident state machine, preventing hardware damage.
 
-#### Principle 3: Sandboxed Filesystem Boundaries
-The `FsFacetVTable` restricts all file I/O to:
-1. `/user/`: User-modifiable operational data (channels, contacts, logs).
-2. `/app/<pkg_id>/`: Dedicated application isolated storage sandbox.
-Writes targeting `/sys/` (factory calibration `calib.dat`, hardware signature `calib.sig`) are rejected at the microkernel gate, rendering it impossible for a userland app or script to de-calibrate or brick the radio.
+---
 
-#### Principle 4: Cooperative Event-Driven Lifecycle (`AppLifecycle`)
-Applications do not own the CPU in a blocking loop. Instead, they implement the standard event-driven interface:
-```rust
-pub trait AppLifecycle {
-    fn init(&mut self, host: &KrxAppHost) -> Result<(), ()>;
-    fn on_event(&mut self, host: &KrxAppHost, event: KrxEvent) -> EventResult;
-    fn render(&self, host: &KrxAppHost, canvas: &mut Canvas);
-    fn destroy(&mut self, host: &KrxAppHost);
-}
+### 4.3 Storage Permissions & Anti-Brick Protection
+
+Storage in Kern is **not arbitrarily locked to a single sandboxed folder**. System applications (such as File Explorers, Package Managers, Channel/Zone Importers, Hex Editors, and RigWire Serial Bridges) legitimately require access to operational data across the filesystem:
+
 ```
-Because the microkernel retains control of the event dispatch loop, background RF tasks (carrier detection, CTCSS squelch opening, RigWire USB commands, battery sampling) execute with deterministic sub-millisecond latency.
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                 CAPABILITY-BASED FILESYSTEM ACCESS PERMISSIONS              │
+├─────────────────────┬───────────────────────────────────────────────────────┤
+│ CAPABILITY TOKEN    │ PERMITTED OPERATIONS & PATHS                          │
+├─────────────────────┼───────────────────────────────────────────────────────┤
+│ `Cap::StorageRead`  │ Read any operational file across `/user/`, `/pref/`   │
+│ `Cap::StorageWrite` │ Read & write operational data (`/user/*`, `/pref/*`)  │
+│ `Cap::StorageAdmin` │ Full filesystem management (mkdir, rename, unlink,    │
+│                     │ format partition, install packages to `/user/apps/`) │
+│ `Cap::FactoryCalib` │ Exclusive write access to `/sys/calib.*` (Protected)  │
+└─────────────────────┴───────────────────────────────────────────────────────┘
+```
+
+#### The Three Invariant Anti-Brick Locks (Silicon-Level Protection):
+1. **Hardware Calibration Lock (`/sys/calib.dat` & `/sys/calib.sig`):**
+   - Contains factory crystal frequency trim, VCO tuning curves, and TX power tables.
+   - Guarded at the VFS driver level. Even if an application holds `Cap::StorageAdmin`, writes to `/sys/calib.*` are strictly blocked unless the process holds `Cap::FactoryCalib`. This capability requires either a cryptographic hardware MAC assertion or an explicit physical key sequence held during cold boot.
+2. **Physical Memory Decoupling (MCU Flash vs. External SPI Flash):**
+   - The PY32F071xB microcontroller internal Flash (`0x0800_0000..0x0802_0000`) hosts the Bootloader, Safe-Mode Recovery, and Microkernel ROM.
+   - The filesystem driver communicates exclusively with the external SPI NOR flash chip (`Py25q16`). It is physically impossible for any filesystem call to overwrite, erase, or corrupt internal MCU program memory.
+3. **ROM-Resident Safe Mode Recovery Parachute:**
+   - Safe Mode Recovery is baked into MCU ROM. Even if a buggy or malicious File Explorer formats the entire external SPI flash, the radio boots in safe mode, recovers, and awaits factory reflashing via RigWire USB CDC.
+
+---
+
+### 4.4 Sub-Millisecond Determinism Architecture & Concurrency Simulation
+
+An amateur radio is a hard real-time appliance. While applications and services execute, the radio must simultaneously decode sub-audible tones, eliminate squelch tail crashes, service USB CDC RigWire packets, and monitor battery voltage.
+
+#### Real-Time Simulated Scenarios
+
+##### Scenario 1: Foreground Spectrum Waterfall + Carrier Drop (Squelch Tail Elimination)
+- **Context:** The user is running a 128x64 Spectrum Waterfall scanning 50 channels. A signal appears on the priority channel; squelch opens; audio PA un-mutes. The remote transmitter releases PTT, sending a 55 Hz reverse burst for 150 ms, followed by immediate carrier loss.
+- **Hard Real-Time Constraint:** Audio PA must be muted within **$\le 5\ \text{ms}$** to prevent an abrasive white-noise squelch crash in the speaker.
+- **Architectural Solution:**
+  - **Tier 0 (Hardware Interrupt / SysTick 1ms):** The BK4829 interrupt or 1ms SysTick ISR samples squelch carrier flags and CTCSS phase reversal in $< 5\ \mu\text{s}$, completely preempting the foreground waterfall drawing calculation.
+  - **Tier 1 (Squelch Tail State Machine):** Executes `bsp::pins::AUDIO_PA.set_low()` in **$< 10\ \mu\text{s}$**. The audio amplifier is silenced instantly, with zero squelch crash, even if the userland app is in the middle of a complex math loop.
+
+##### Scenario 2: Foreground UI + Background APRS Packet Decoder + RigWire Serial RPC
+- **Context:** User is browsing Settings. In the background, an APRS daemon is decoding 1200 baud Bell 202 audio samples via the Goertzel algorithm, while a connected host PC streams RigWire CAT commands at 115200 baud.
+- **Real-Time Constraint:** Serial bytes arriving every 86 µs must not overflow the RX buffer; APRS tone sampling must remain phase-locked; UI navigation must feel instantaneous (<30 ms response).
+- **Architectural Solution:**
+  - **DMA Ring Buffer:** USART1 hardware DMA streams serial bytes directly into SRAM with zero CPU load.
+  - **Run-to-Completion Slices:** The APRS daemon does not run a blocking loop. Instead, it subscribes to `Topic::AUDIO` and executes in bounded **$\le 250\ \mu\text{s}$ slices** per block of 32 samples.
+  - **Total Loop Turnaround:** Keypad poll (12 µs) + APRS slice (250 µs) + RigWire packet dispatch (120 µs) + UI tick (150 µs) = **$< 600\ \mu\text{s}$ total loop time**. Sub-millisecond determinism is mathematically guaranteed.
+
+##### Scenario 3: Demand-Paged Overlay Miss during Dual-Watch Scan
+- **Context:** A paged KRX overlay (`Class 1`) experiences a cache miss while the radio is running Dual Watch (switching between VFO A and VFO B every 250 ms).
+- **Architectural Solution:**
+  - LittleFS streams the 1,024-byte overlay block from SPI Flash via SPI DMA in **420 µs**.
+  - Because SPI DMA runs asynchronously with CPU interrupts enabled, the 1ms SysTick ISR and radio priority timer fire normally during flash transfer. Dual Watch cadence is maintained with zero jitter.
+
+#### Concurrency Model: Single-Stack Shared Execution Arena
+On Cortex-M0+ with 16 KB SRAM, allocating dedicated 1 KB thread stacks for 8 processes would consume 8 KB (50% of the entire chip's RAM!).
+Kern eliminates stack bloat by using the **Single-Stack Run-to-Completion Architecture**:
+- All processes, services, and daemons share the main system stack (`MSP`).
+- Each event slice (`on_event`, `tick`) runs to completion and unwinds its stack frame before the next process runs.
+- Transient state for the active foreground app resides in the 4 KiB `TRANSIENT_ARENA`.
+- Background daemons maintain compact static state structs (64–256 bytes in the process table).
+- Result: **Up to 8 concurrent processes execute simultaneously using less than 2 KB of SRAM total!**
 
 ---
 
