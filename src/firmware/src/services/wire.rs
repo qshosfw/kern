@@ -578,6 +578,7 @@ fn on_handle_stream(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     }
 }
 
+#[inline(never)]
 fn handle_control_service(
     header: &WireHeader,
     payload: &[u8],
@@ -619,6 +620,7 @@ fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
     Ok(())
 }
 
+#[inline(never)]
 fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferOpenRequest::parse(payload) {
         Some(r) => r,
@@ -675,6 +677,7 @@ fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     send_resp(hw, header, WireStatus::Ok, &resp)
 }
 
+#[inline(never)]
 fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferChunkRequest::parse(payload) {
         Some(r) => r,
@@ -757,6 +760,7 @@ fn commit_calibration_payload(
     Ok(())
 }
 
+#[inline(never)]
 fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferCloseRequest::parse(payload) {
         Some(r) => r,
@@ -859,14 +863,22 @@ fn on_transfer_stat(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     send_resp(hw, header, status, &reply)
 }
 
+#[inline(never)]
 fn on_transfer_list(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     let req = match TransferListRequest::parse(payload) {
         Some(r) => r,
         None => return send_status(hw, header, WireStatus::BadLength),
     };
 
-    let mut entries = [const { DirEntryInfo::empty() }; 12];
-    let count = hw.filesystem.list_dir(req.path, &mut entries).unwrap_or(0);
+    let entries = unsafe {
+        let ptr = crate::runtime::arena_base_ptr() as *mut DirEntryInfo;
+        let slice = core::slice::from_raw_parts_mut(ptr, 12);
+        for e in slice.iter_mut() {
+            *e = DirEntryInfo::empty();
+        }
+        slice
+    };
+    let count = hw.filesystem.list_dir(req.path, entries).unwrap_or(0);
 
     let mut out = [0u8; 160];
     let next_cursor = 0xFFFFu16;
@@ -912,6 +924,7 @@ fn on_transfer_remove(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwa
     send_status(hw, header, status)
 }
 
+#[inline(never)]
 fn handle_data_service(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     match header.opcode {
         OP_TRANSFER_OPEN => on_transfer_open(header, payload, hw),
@@ -926,6 +939,7 @@ fn handle_data_service(header: &WireHeader, payload: &[u8], hw: &mut SystemHardw
 }
 
 // ── SERVICE_EVENTS (0x02) ────────────────────────────────────────────────────
+#[inline(never)]
 fn handle_events_service(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
     match header.opcode {
         OP_EVENTS_SUBSCRIBE => {
