@@ -1,6 +1,6 @@
 //! Declarative modular Application system and generic dependency-injected system context.
 
-use crate::canvas::Icon;
+use crate::canvas::StatusGlyph;
 use crate::event::Event;
 
 /// Static metadata describing an App for the OS GUI launcher.
@@ -28,8 +28,8 @@ pub struct StatusBarConfig<'a> {
     pub center_text: Option<&'a str>,
     pub signal_level: Option<u8>,
     pub left_badge: Option<&'a str>,
-    pub left_icons: &'a [Icon],
-    pub center_icons: &'a [Icon],
+    pub left_icons: &'a [StatusGlyph],
+    pub center_icons: &'a [StatusGlyph],
     pub show_divider: bool,
 }
 
@@ -115,12 +115,12 @@ impl<'a> StatusBarConfig<'a> {
         self
     }
 
-    pub const fn with_left_icons(mut self, icons: &'a [Icon]) -> Self {
+    pub const fn with_left_icons(mut self, icons: &'a [StatusGlyph]) -> Self {
         self.left_icons = icons;
         self
     }
 
-    pub const fn with_center_icons(mut self, icons: &'a [Icon]) -> Self {
+    pub const fn with_center_icons(mut self, icons: &'a [StatusGlyph]) -> Self {
         self.center_icons = icons;
         self
     }

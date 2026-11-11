@@ -42,10 +42,12 @@ pub(crate) struct NativeExecSlot {
     pub(crate) shadow_stack: ShadowReturnStack<8>,
     pub(crate) leaf_mgr: StructuredLeafManager<16>,
     pub(crate) status_bar: Option<kernel::proc::abi::KrxStatusBar>,
-    pub(crate) status_bar_left_icons: [kernel::canvas::Icon; 4],
+    pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_left_count: usize,
-    pub(crate) status_bar_center_icons: [kernel::canvas::Icon; 4],
+    pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_center_count: usize,
+    pub(crate) custom_icon_0: [u8; 5],
+    pub(crate) custom_icon_1: [u8; 5],
 }
 
 pub fn init_native_slot() {
@@ -778,6 +780,17 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
     }
 }
 
+#[inline(always)]
+fn decode_status_glyph(id: u8, c0: &[u8; 5], c1: &[u8; 5]) -> Option<kernel::canvas::StatusGlyph> {
+    if id == kernel::proc::abi::KRX_ICON_CUSTOM_0 {
+        Some(kernel::canvas::StatusGlyph::Custom(*c0))
+    } else if id == kernel::proc::abi::KRX_ICON_CUSTOM_1 {
+        Some(kernel::canvas::StatusGlyph::Custom(*c1))
+    } else {
+        kernel::canvas::Icon::from_u8(id).map(kernel::canvas::StatusGlyph::Builtin)
+    }
+}
+
 pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     let slot = slot_mut();
     if sb.is_null() {
@@ -786,22 +799,39 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
         slot.status_bar_center_count = 0;
     } else {
         let s = unsafe { *sb };
+        slot.custom_icon_0 = s.custom_icon_0;
+        slot.custom_icon_1 = s.custom_icon_1;
+
         slot.status_bar_left_count = 0;
         let l_cnt = (s.left_icon_count as usize).min(4);
         for &id in &s.left_icons[..l_cnt] {
-            if let Some(ic) = kernel::canvas::Icon::from_u8(id) {
-                slot.status_bar_left_icons[slot.status_bar_left_count] = ic;
+            if let Some(glyph) = decode_status_glyph(id, &s.custom_icon_0, &s.custom_icon_1) {
+                slot.status_bar_left_icons[slot.status_bar_left_count] = glyph;
                 slot.status_bar_left_count += 1;
             }
         }
+
         slot.status_bar_center_count = 0;
         let c_cnt = (s.center_icon_count as usize).min(4);
         for &id in &s.center_icons[..c_cnt] {
-            if let Some(ic) = kernel::canvas::Icon::from_u8(id) {
-                slot.status_bar_center_icons[slot.status_bar_center_count] = ic;
+            if let Some(glyph) = decode_status_glyph(id, &s.custom_icon_0, &s.custom_icon_1) {
+                slot.status_bar_center_icons[slot.status_bar_center_count] = glyph;
                 slot.status_bar_center_count += 1;
             }
         }
+
+        // Auto-register or clear status tray icon requested by app
+        if s.tray_icon_id != 0 {
+            let pid = slot.pid;
+            if s.tray_icon_id == kernel::proc::abi::KRX_ICON_NONE {
+                crate::orchestrator::status_tray_mut().clear_icon(pid);
+            } else if let Some(glyph) =
+                decode_status_glyph(s.tray_icon_id, &s.custom_icon_0, &s.custom_icon_1)
+            {
+                crate::orchestrator::status_tray_mut().set_glyph(pid, glyph);
+            }
+        }
+
         slot.status_bar = Some(s);
     }
 }
@@ -855,7 +885,12 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
         slot.entry_point = 0;
     }
     let slot = slot_mut();
-    crate::orchestrator::status_tray_mut().clear_icon(slot.pid);
+    let persist_tray = slot.status_bar.map_or(false, |sb| {
+        (sb.custom_flags & kernel::proc::abi::KRX_CUSTOM_TRAY_PERSIST) != 0
+    });
+    if !persist_tray {
+        crate::orchestrator::status_tray_mut().clear_icon(slot.pid);
+    }
     slot.status_bar = None;
     slot.status_bar_left_count = 0;
     slot.status_bar_center_count = 0;

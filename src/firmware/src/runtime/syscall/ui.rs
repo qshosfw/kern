@@ -135,18 +135,24 @@ pub unsafe extern "C" fn api_ui_get_status_bar(out_sb: *mut kernel::proc::abi::K
 }
 
 pub unsafe extern "C" fn api_ui_set_tray_icon(icon_id: u8) -> u8 {
-    let pid = crate::runtime::native_runner::slot_ref().pid;
-    if icon_id == 0xFF {
+    let slot = crate::runtime::native_runner::slot_ref();
+    let pid = slot.pid;
+    if icon_id == kernel::proc::abi::KRX_ICON_NONE {
         crate::orchestrator::status_tray_mut().clear_icon(pid);
         1
-    } else if let Some(icon) = kernel::canvas::Icon::from_u8(icon_id) {
-        if crate::orchestrator::status_tray_mut().set_icon(pid, icon) {
-            1
+    } else {
+        let glyph = if icon_id == kernel::proc::abi::KRX_ICON_CUSTOM_0 {
+            Some(kernel::canvas::StatusGlyph::Custom(slot.custom_icon_0))
+        } else if icon_id == kernel::proc::abi::KRX_ICON_CUSTOM_1 {
+            Some(kernel::canvas::StatusGlyph::Custom(slot.custom_icon_1))
+        } else {
+            kernel::canvas::Icon::from_u8(icon_id).map(kernel::canvas::StatusGlyph::Builtin)
+        };
+        if let Some(g) = glyph {
+            crate::orchestrator::status_tray_mut().set_glyph(pid, g) as u8
         } else {
             0
         }
-    } else {
-        0
     }
 }
 

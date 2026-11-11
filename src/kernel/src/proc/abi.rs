@@ -351,10 +351,17 @@ pub const KRX_STATUS_HAS_SIGNAL: u8 = 1 << 2;
 pub const KRX_STATUS_CUSTOM_TITLE: u8 = 1 << 3;
 pub const KRX_STATUS_PARTIAL: u8 = 1 << 4;
 
+pub const KRX_ICON_CUSTOM_0: u8 = 0x80;
+pub const KRX_ICON_CUSTOM_1: u8 = 0x81;
+pub const KRX_ICON_NONE: u8 = 0xFF;
+
+pub const KRX_CUSTOM_TRAY_PERSIST: u8 = 1 << 0;
+pub const KRX_CUSTOM_TRAY_ACTIVE: u8 = 1 << 1;
+
 /// 64-byte ($2^6$) Power-of-Two Aligned C-ABI Status Bar Descriptor.
 ///
 /// Supports multiple left icons and multiple center icons dynamically appended,
-/// padded, and composited across foreground apps and guest executables.
+/// padded, and composited across foreground apps, background daemons, and guest executables.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KrxStatusBar {
@@ -367,8 +374,13 @@ pub struct KrxStatusBar {
     pub title: [u8; 16],
     pub badge: [u8; 8],
     pub center: [u8; 16],
-    pub _reserved: [u8; 12],
+    pub custom_icon_0: [u8; 5],
+    pub custom_icon_1: [u8; 5],
+    pub tray_icon_id: u8,
+    pub custom_flags: u8,
 }
+
+const _: () = assert!(core::mem::size_of::<KrxStatusBar>() == 64);
 
 impl Default for KrxStatusBar {
     fn default() -> Self {
@@ -388,7 +400,10 @@ impl KrxStatusBar {
             title: [0; 16],
             badge: [0; 8],
             center: [0; 16],
-            _reserved: [0; 12],
+            custom_icon_0: [0; 5],
+            custom_icon_1: [0; 5],
+            tray_icon_id: 0,
+            custom_flags: 0,
         }
     }
 }

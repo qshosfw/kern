@@ -10,33 +10,19 @@ pub unsafe extern "C" fn api_display_clear() {
 }
 
 pub unsafe extern "C" fn api_draw_pixel(x: i16, y: i16, color: u8) {
-    if x >= 0 && y >= 0 && x < 128 && y < 64 {
-        active_canvas_mut().draw_pixel(x as u8, y as u8, color_from_u8(color));
-    }
+    active_canvas_mut().draw_pixel_i(x, y, color_from_u8(color));
 }
 
 pub unsafe extern "C" fn api_draw_line(x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
     gfx::draw::draw_line(active_canvas_mut(), x0, y0, x1, y1, color_from_u8(color));
 }
 
-fn clamp_pos_rect(x: i16, y: i16, w: i16, h: i16) -> Option<(u8, u8, u8, u8)> {
-    if w <= 0 || h <= 0 || x < 0 || y < 0 {
-        None
-    } else {
-        Some((x as u8, y as u8, w as u8, h as u8))
-    }
-}
-
 pub unsafe extern "C" fn api_draw_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    if let Some((xu, yu, wu, hu)) = clamp_pos_rect(x, y, w, h) {
-        active_canvas_mut().draw_rect(xu, yu, wu, hu, color_from_u8(color));
-    }
+    active_canvas_mut().draw_rect_i(x, y, w, h, color_from_u8(color));
 }
 
 pub unsafe extern "C" fn api_fill_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    if let Some((xu, yu, wu, hu)) = clamp_pos_rect(x, y, w, h) {
-        active_canvas_mut().fill_rect(xu, yu, wu, hu, color_from_u8(color));
-    }
+    active_canvas_mut().fill_rect_i(x, y, w, h, color_from_u8(color));
 }
 
 pub unsafe extern "C" fn api_draw_bitmap(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16) {
@@ -133,21 +119,11 @@ pub unsafe extern "C" fn api_set_contrast(contrast: u8) {
 }
 
 pub unsafe extern "C" fn api_draw_line_h(x: i16, y: i16, len: i16, color: u8) {
-    if len <= 0 || y < 0 || y >= 64 {
-        return;
-    }
-    let x_clamped = x.max(0) as u8;
-    let len_clamped = (len.min(128 - x.max(0))) as u8;
-    active_canvas_mut().draw_horizontal_line(x_clamped, y as u8, len_clamped, color_from_u8(color));
+    active_canvas_mut().draw_horizontal_line_i(x, y, len, color_from_u8(color));
 }
 
 pub unsafe extern "C" fn api_draw_line_v(x: i16, y: i16, len: i16, color: u8) {
-    if len <= 0 || x < 0 || x >= 128 {
-        return;
-    }
-    let y_clamped = y.max(0) as u8;
-    let len_clamped = (len.min(64 - y.max(0))) as u8;
-    active_canvas_mut().draw_vertical_line(x as u8, y_clamped, len_clamped, color_from_u8(color));
+    active_canvas_mut().draw_vertical_line_i(x, y, len, color_from_u8(color));
 }
 
 pub unsafe extern "C" fn api_draw_dotted_line_h(x0: i16, x1: i16, y: i16, step: u8, color: u8) {
@@ -155,21 +131,15 @@ pub unsafe extern "C" fn api_draw_dotted_line_h(x0: i16, x1: i16, y: i16, step: 
 }
 
 pub unsafe extern "C" fn api_clear_corners(x: i16, y: i16, w: i16, h: i16) {
-    if let Some((xu, yu, wu, hu)) = clamp_pos_rect(x, y, w, h) {
-        active_canvas_mut().clear_corners(xu, yu, wu, hu);
-    }
+    active_canvas_mut().clear_corners_i(x, y, w, h);
 }
 
 pub unsafe extern "C" fn api_fill_rect_dither(x: i16, y: i16, w: i16, h: i16, progress: u8) {
-    if let Some((xu, yu, wu, hu)) = clamp_pos_rect(x, y, w, h) {
-        active_canvas_mut().fill_rect_dither(xu, yu, wu, hu, progress);
-    }
+    active_canvas_mut().fill_rect_dither_i(x, y, w, h, progress);
 }
 
 pub unsafe extern "C" fn api_invert_rect(x: i16, y: i16, w: i16, h: i16) {
-    if let Some((xu, yu, wu, hu)) = clamp_pos_rect(x, y, w, h) {
-        active_canvas_mut().fill_rect(xu, yu, wu, hu, gfx::Color::Invert);
-    }
+    active_canvas_mut().fill_rect_i(x, y, w, h, gfx::Color::Invert);
 }
 
 pub unsafe extern "C" fn api_str_width(text: *const u8, len: u16, font: u8) -> i16 {

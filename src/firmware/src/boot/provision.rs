@@ -109,7 +109,7 @@ const BEACON_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/beacon/be
 
 // Standalone Native Thumb-1 binary payload for `/apps/bench.krx`.
 // 100% self-contained PIC executable. Completely resides inside the KRX file on KernFS.
-#[cfg(all(feature = "provision_apps", feature = "krx_native"))]
+#[cfg(all(feature = "provision_bench", feature = "krx_native"))]
 const BENCH_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/bench/bench.krx");
 
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
@@ -153,6 +153,7 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
     #[cfg(feature = "krx_native")]
     {
         write_raw_krx_package(filesystem, "/apps/beacon.krx", BEACON_APP_PACKAGE);
+        #[cfg(feature = "provision_bench")]
         write_raw_krx_package(filesystem, "/apps/bench.krx", BENCH_APP_PACKAGE);
         write_raw_krx_package(filesystem, "/apps/paged.krx", PAGED_APP_PACKAGE);
         write_raw_krx_package(filesystem, "/apps/leaf.krx", LEAF_APP_PACKAGE);

@@ -315,7 +315,12 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     #[inline(never)]
-    pub fn draw_status_bar_right_mode(&self, canvas: &mut gfx::Canvas, inverted: bool) -> i16 {
+    pub fn draw_status_bar_right_mode(
+        &self,
+        canvas: &mut gfx::Canvas,
+        inverted: bool,
+        partial: bool,
+    ) -> i16 {
         let is_usb = self
             .usb
             .as_ref()
@@ -338,7 +343,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         let now_ms = py32_hal::delay::millis();
         let anim_step = ((now_ms >> 8) & 0xFF) as u8;
         let shading_mode = self.config.display.shading_mode;
-        let tray_icons = crate::orchestrator::status_tray().active_icons();
+        let tray_glyphs = crate::orchestrator::status_tray().active_glyphs();
 
         let flags = (is_charging as u8)
             | ((is_low as u8) << 1)
@@ -346,7 +351,8 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
             | ((serial_active as u8) << 3)
             | ((self.is_f_active as u8) << 4)
             | ((self.is_keypad_locked as u8) << 5)
-            | ((inverted as u8) << 6);
+            | ((inverted as u8) << 6)
+            | ((partial as u8) << 7);
 
         let cfg = gfx::widgets::status_bar::StatusRightConfig {
             percentage: pct,
@@ -356,15 +362,10 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
             flags,
             voltage_mv: self.power.battery_voltage_mv(),
             temp_deci_c: self.power.mcu_temperature_deci_c(),
-            dynamic_icons: tray_icons,
+            dynamic_glyphs: tray_glyphs,
         };
 
         cfg.render(canvas)
-    }
-
-    #[inline(always)]
-    fn draw_status_bar_right(&self, canvas: &mut gfx::Canvas) -> i16 {
-        self.draw_status_bar_right_mode(canvas, false)
     }
 
     /// Renders a fully declarative, modular, auto-justified status bar
@@ -374,7 +375,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         canvas: &mut gfx::Canvas,
         config: &kernel::app::StatusBarConfig<'_>,
     ) {
-        let right_limit = self.draw_status_bar_right(canvas);
+        let right_limit = self.draw_status_bar_right_mode(canvas, false, config.partial);
         if !config.partial {
             gfx::widgets::status_bar::draw_status_bar_layout(canvas, config, right_limit);
         }

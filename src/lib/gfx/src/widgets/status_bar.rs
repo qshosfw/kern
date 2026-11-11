@@ -50,7 +50,24 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
     SIGNAL_WIDTH
 }
 
-/// Dynamically places and renders a status icon flowing right-to-left.
+/// Dynamically places and renders a status glyph flowing right-to-left.
+/// Automatically calculates glyph width and applies standard item spacing (`width + 2`).
+/// Returns the updated `right_limit`.
+#[inline]
+pub fn draw_status_glyph_rtl(
+    canvas: &mut Canvas,
+    right_limit: i16,
+    y: i16,
+    glyph: &crate::icons::StatusGlyph,
+    color: Color,
+) -> i16 {
+    let w = glyph.width() as i16;
+    let pos = right_limit - (w + STATUS_ITEM_SPACING);
+    crate::icons::draw_status_glyph(canvas, pos, y, glyph, color);
+    pos
+}
+
+/// Dynamically places and renders a built-in status icon flowing right-to-left.
 /// Automatically calculates icon width and applies standard item spacing (`width + 2`).
 /// Returns the updated `right_limit`.
 #[inline]
@@ -61,10 +78,13 @@ pub fn draw_status_icon(
     icon: crate::icons::Icon,
     color: Color,
 ) -> i16 {
-    let w = icon.width() as i16;
-    let pos = right_limit - (w + STATUS_ITEM_SPACING);
-    crate::icons::draw_icon_5x5(canvas, pos, y, icon, color);
-    pos
+    draw_status_glyph_rtl(
+        canvas,
+        right_limit,
+        y,
+        &crate::icons::StatusGlyph::Builtin(icon),
+        color,
+    )
 }
 
 /// Draws the charging bolt icon with preserved closer spacing to the battery.
@@ -125,6 +145,7 @@ pub const STATUS_FLAG_SERIAL: u8 = 1 << 3;
 pub const STATUS_FLAG_F_ACTIVE: u8 = 1 << 4;
 pub const STATUS_FLAG_KEYPAD_LOCKED: u8 = 1 << 5;
 pub const STATUS_FLAG_INVERTED: u8 = 1 << 6;
+pub const STATUS_FLAG_PARTIAL: u8 = 1 << 7;
 
 /// Modular configuration and automatic renderer for the right side of the status bar.
 #[derive(Debug, Clone, Copy)]
@@ -136,7 +157,7 @@ pub struct StatusRightConfig<'a> {
     pub flags: u8,
     pub voltage_mv: u16,
     pub temp_deci_c: i16,
-    pub dynamic_icons: &'a [crate::icons::Icon],
+    pub dynamic_glyphs: &'a [crate::icons::StatusGlyph],
 }
 
 impl<'a> StatusRightConfig<'a> {
@@ -149,7 +170,7 @@ impl<'a> StatusRightConfig<'a> {
             flags: 0,
             voltage_mv,
             temp_deci_c: 250,
-            dynamic_icons: &[],
+            dynamic_glyphs: &[],
         }
     }
 
@@ -170,8 +191,8 @@ impl<'a> StatusRightConfig<'a> {
     }
 
     #[inline(always)]
-    pub const fn with_dynamic_icons(mut self, icons: &'a [crate::icons::Icon]) -> Self {
-        self.dynamic_icons = icons;
+    pub const fn with_dynamic_glyphs(mut self, glyphs: &'a [crate::icons::StatusGlyph]) -> Self {
+        self.dynamic_glyphs = glyphs;
         self
     }
 
@@ -203,6 +224,11 @@ impl<'a> StatusRightConfig<'a> {
     #[inline(always)]
     pub fn is_keypad_locked(&self) -> bool {
         (self.flags & STATUS_FLAG_KEYPAD_LOCKED) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_partial(&self) -> bool {
+        (self.flags & STATUS_FLAG_PARTIAL) != 0
     }
 
     #[inline(always)]
@@ -362,9 +388,13 @@ impl<'a> StatusRightConfig<'a> {
             }
         }
 
-        // 6. Dynamic Application & Subsystem Icons
-        for &icon in self.dynamic_icons {
-            right_limit = draw_status_icon(canvas, right_limit, y_icon, icon, fg);
+        // 6. Dynamic Application & Subsystem Icons (tray icons)
+        let min_tray_limit = if self.is_partial() { 86 } else { 32 };
+        for glyph in self.dynamic_glyphs {
+            let w = glyph.width() as i16;
+            if right_limit - (w + STATUS_ITEM_SPACING) >= min_tray_limit {
+                right_limit = draw_status_glyph_rtl(canvas, right_limit, y_icon, glyph, fg);
+            }
         }
 
         right_limit
@@ -409,32 +439,54 @@ pub fn draw_status_bar_layout(
                     + 2;
         }
     }
-    for &icon in config.left_icons {
-        if left_x + (icon.width() as i16) < right_limit {
-            crate::icons::draw_icon_5x5(canvas, left_x, 0, icon, Color::Fill);
-            left_x += (icon.width() as i16) + STATUS_ITEM_SPACING;
+    for glyph in config.left_icons {
+        let w = glyph.width() as i16;
+        if left_x + w < right_limit {
+            crate::icons::draw_status_glyph(canvas, left_x, 0, glyph, Color::Fill);
+            left_x += w + STATUS_ITEM_SPACING;
         }
     }
 
-    // 2. Center items (auto-centered in remaining dynamic space)
-    if let Some(center) = config.center_text {
-        if !center.is_empty() {
-            let w = crate::text::str_width(center, &FONT) as i16;
-            let ideal_x = 64i16 - (w >> 1);
-            let x = if ideal_x >= left_x && ideal_x + w <= right_limit {
-                ideal_x
-            } else {
-                left_x + ((right_limit - left_x - w).max(0) >> 1)
-            };
-            if x + w <= right_limit {
-                crate::text::draw_str(canvas, x, 4, center, &FONT, Color::Fill);
-            }
-        }
+    // 2. Center items (coordinated, auto-justified, and spaced)
+    let center_str = config.center_text.unwrap_or("");
+    let text_w = if center_str.is_empty() {
+        0
+    } else {
+        crate::text::str_width(center_str, &FONT) as i16
+    };
+
+    let mut icons_w: i16 = 0;
+    for glyph in config.center_icons {
+        icons_w += (glyph.width() as i16) + STATUS_ITEM_SPACING;
     }
-    for &icon in config.center_icons {
-        let x = 60i16;
-        if x >= left_x && x + 5 <= right_limit {
-            crate::icons::draw_icon_5x5(canvas, x, 0, icon, Color::Fill);
+    let total_w = icons_w + text_w;
+
+    if total_w > 0 {
+        let ideal_x = 64i16 - (total_w >> 1);
+        let mut cur_x = if ideal_x >= left_x && ideal_x + total_w <= right_limit {
+            ideal_x
+        } else {
+            left_x + ((right_limit - left_x - total_w).max(0) >> 1)
+        };
+
+        for glyph in config.center_icons {
+            let w = glyph.width() as i16;
+            if cur_x >= left_x && cur_x + w <= right_limit {
+                crate::icons::draw_status_glyph(canvas, cur_x, 0, glyph, Color::Fill);
+            }
+            cur_x += w + STATUS_ITEM_SPACING;
+        }
+
+        if text_w > 0 && cur_x < right_limit {
+            crate::text::draw_str_max_x(
+                canvas,
+                cur_x,
+                4,
+                center_str,
+                &FONT,
+                Color::Fill,
+                right_limit,
+            );
         }
     }
 }
@@ -491,9 +543,12 @@ mod tests {
     #[test]
     fn test_status_dynamic_icons_flow() {
         let mut canvas = Canvas::new();
-        let dynamic = [Icon::Scan, Icon::Moon];
+        let dynamic = [
+            crate::icons::StatusGlyph::Builtin(Icon::Scan),
+            crate::icons::StatusGlyph::Builtin(Icon::Moon),
+        ];
 
-        let cfg = StatusRightConfig::new(90, 3, 8250).with_dynamic_icons(&dynamic);
+        let cfg = StatusRightConfig::new(90, 3, 8250).with_dynamic_glyphs(&dynamic);
         let base_cfg = StatusRightConfig::new(90, 3, 8250);
 
         let limit_dyn = cfg.render(&mut canvas);
@@ -501,6 +556,97 @@ mod tests {
 
         // Two 5x5 icons should each take 7px (total 14px)
         assert_eq!(limit_base - limit_dyn, 14);
+    }
+
+    #[test]
+    fn test_custom_5x5_glyph_rendering_and_spacing() {
+        let mut canvas = Canvas::new();
+        // Custom 5x5 plus sign '+' bitmap: row 0: 0x20, row 1: 0x20, row 2: 0xF8, row 3: 0x20, row 4: 0x20
+        let plus_bmp: [u8; 5] = [0b00100000, 0b00100000, 0b11111000, 0b00100000, 0b00100000];
+        let custom_glyph = crate::icons::StatusGlyph::Custom(plus_bmp);
+        assert_eq!(custom_glyph.width(), 5);
+
+        // Render via RTL status bar glyph function
+        let next = draw_status_glyph_rtl(&mut canvas, 100, 0, &custom_glyph, Color::Fill);
+        // Expected pos = 100 - (5 + 2) = 93
+        assert_eq!(next, 93);
+
+        // Verify pixels were drawn at x=95 (the vertical bar of plus sign at x = 93 + 2)
+        assert_ne!(canvas.buffer[0][95], 0);
+    }
+
+    #[test]
+    fn test_center_icons_group_spacing_and_centering() {
+        let mut canvas = Canvas::new();
+        let icons = [
+            crate::icons::StatusGlyph::Builtin(Icon::Scan),
+            crate::icons::StatusGlyph::Builtin(Icon::Moon),
+            crate::icons::StatusGlyph::Builtin(Icon::Lock),
+        ];
+
+        let sb_cfg = kernel::app::StatusBarConfig::default().with_center_icons(&icons);
+        draw_status_bar_layout(&mut canvas, &sb_cfg, 126);
+
+        // Total width of 3 icons (5px each + 2px spacing) = 5 + 2 + 5 + 2 + 5 = 19px.
+        // Screen center is 64. Ideal start x = 64 - (19 / 2) = 55.
+        // Icon 1 at x=55..60 (center column at x=57)
+        // Icon 2 at x=62..67 (center column at x=64)
+        // Icon 3 at x=69..74 (center column at x=71)
+        // All three icons MUST have non-zero pixels at their respective distinct positions!
+        assert_ne!(
+            canvas.buffer[0][57], 0,
+            "Icon 1 not rendered at expected x=57"
+        );
+        assert_ne!(
+            canvas.buffer[0][64], 0,
+            "Icon 2 not rendered at expected x=64"
+        );
+        assert_ne!(
+            canvas.buffer[0][71], 0,
+            "Icon 3 not rendered at expected x=71"
+        );
+    }
+
+    #[test]
+    fn test_composite_center_icons_and_text_coordination() {
+        let mut canvas = Canvas::new();
+        let icons = [crate::icons::StatusGlyph::Builtin(Icon::Lock)];
+        let sb_cfg = kernel::app::StatusBarConfig::default()
+            .with_center("KERN")
+            .with_center_icons(&icons);
+
+        draw_status_bar_layout(&mut canvas, &sb_cfg, 126);
+
+        // Lock icon (5px) + 2px spacing + "KERN" (approx 4 chars * 4px = 16px) = ~23px
+        // Ideal start x = 64 - (23 / 2) = ~53.
+        // Lock icon rendered near x=53, text starts near x=60.
+        // They must not collide and must both render non-zero pixels!
+        assert_ne!(canvas.buffer[0][54], 0, "Lock icon pixels missing");
+        assert_ne!(canvas.buffer[0][60], 0, "Center text pixels missing");
+    }
+
+    #[test]
+    fn test_partial_mode_protects_tab_zone_from_excess_tray_icons() {
+        let mut canvas = Canvas::new();
+        // 4 active tray icons
+        let dynamic = [
+            crate::icons::StatusGlyph::Builtin(Icon::Scan),
+            crate::icons::StatusGlyph::Builtin(Icon::Moon),
+            crate::icons::StatusGlyph::Builtin(Icon::Beacon),
+            crate::icons::StatusGlyph::Builtin(Icon::Storage),
+        ];
+
+        let cfg = StatusRightConfig::new(90, 3, 8250)
+            .with_flags(STATUS_FLAG_PARTIAL)
+            .with_dynamic_glyphs(&dynamic);
+
+        let right_limit = cfg.render(&mut canvas);
+        // Partial mode MUST prevent right limit from entering tab space (x < 86)
+        assert!(
+            right_limit >= 86,
+            "Partial mode failed to protect tab zone: right_limit={}",
+            right_limit
+        );
     }
 
     #[test]

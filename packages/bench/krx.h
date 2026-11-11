@@ -172,6 +172,13 @@ typedef struct {
 #define KRX_STATUS_CUSTOM_TITLE  (1 << 3)
 #define KRX_STATUS_PARTIAL       (1 << 4)
 
+#define KRX_ICON_CUSTOM_0        0x80
+#define KRX_ICON_CUSTOM_1        0x81
+#define KRX_ICON_NONE            0xFF
+
+#define KRX_CUSTOM_TRAY_PERSIST  (1 << 0)
+#define KRX_CUSTOM_TRAY_ACTIVE   (1 << 1)
+
 // 64-byte ($2^6) KrxStatusBar
 typedef struct __attribute__((packed)) {
     u8 flags;
@@ -183,7 +190,10 @@ typedef struct __attribute__((packed)) {
     u8 title[16];
     u8 badge[8];
     u8 center[16];
-    u8 _reserved[12];
+    u8 custom_icon_0[5];
+    u8 custom_icon_1[5];
+    u8 tray_icon_id;
+    u8 custom_flags;
 } KrxStatusBar;
 
 // 9. CapUiVTable (24 APIs)

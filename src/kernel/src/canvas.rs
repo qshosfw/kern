@@ -80,6 +80,45 @@ impl Icon {
     }
 }
 
+/// A status bar glyph: either a standardized built-in icon or a custom 5x5 bitmap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusGlyph {
+    Builtin(Icon),
+    Custom([u8; 5]),
+}
+
+impl StatusGlyph {
+    #[inline(always)]
+    pub const fn width(&self) -> u8 {
+        match self {
+            StatusGlyph::Builtin(ic) => ic.width(),
+            StatusGlyph::Custom(_) => 5,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn builtin(icon: Icon) -> Self {
+        StatusGlyph::Builtin(icon)
+    }
+
+    #[inline(always)]
+    pub const fn custom(bmp: [u8; 5]) -> Self {
+        StatusGlyph::Custom(bmp)
+    }
+
+    #[inline(always)]
+    pub const fn default_builtin() -> Self {
+        StatusGlyph::Builtin(Icon::Antenna)
+    }
+}
+
+impl From<Icon> for StatusGlyph {
+    #[inline(always)]
+    fn from(icon: Icon) -> Self {
+        StatusGlyph::Builtin(icon)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Canvas {
     pub buffer: [[u8; LCD_WIDTH]; 8],
@@ -212,6 +251,83 @@ impl Canvas {
         self.draw_pixel(right, y, Color::Clear);
         self.draw_pixel(x, bottom, Color::Clear);
         self.draw_pixel(right, bottom, Color::Clear);
+    }
+
+    #[inline(always)]
+    pub fn draw_pixel_i(&mut self, x: i16, y: i16, color: Color) {
+        if x >= 0 && y >= 0 && (x as usize) < LCD_WIDTH && (y as usize) < LCD_HEIGHT {
+            self.draw_pixel(x as u8, y as u8, color);
+        }
+    }
+
+    #[inline(always)]
+    pub fn draw_horizontal_line_i(&mut self, x: i16, y: i16, len: i16, color: Color) {
+        if len <= 0 || y < 0 || y >= LCD_HEIGHT as i16 {
+            return;
+        }
+        let x0 = x.max(0) as u8;
+        let x1 = (x + len).min(LCD_WIDTH as i16).max(0) as u8;
+        if x1 > x0 {
+            self.draw_horizontal_line(x0, y as u8, x1 - x0, color);
+        }
+    }
+
+    #[inline(always)]
+    pub fn draw_vertical_line_i(&mut self, x: i16, y: i16, len: i16, color: Color) {
+        if len <= 0 || x < 0 || x >= LCD_WIDTH as i16 {
+            return;
+        }
+        let y0 = y.max(0) as u8;
+        let y1 = (y + len).min(LCD_HEIGHT as i16).max(0) as u8;
+        if y1 > y0 {
+            self.draw_vertical_line(x as u8, y0, y1 - y0, color);
+        }
+    }
+
+    pub fn draw_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
+        if w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
+            return;
+        }
+        self.draw_horizontal_line_i(x, y, w, color);
+        self.draw_horizontal_line_i(x, y + h - 1, w, color);
+        self.draw_vertical_line_i(x, y, h, color);
+        self.draw_vertical_line_i(x + w - 1, y, h, color);
+    }
+
+    pub fn clear_corners_i(&mut self, x: i16, y: i16, w: i16, h: i16) {
+        if w < 2 || h < 2 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
+            return;
+        }
+        self.draw_pixel_i(x, y, Color::Clear);
+        self.draw_pixel_i(x + w - 1, y, Color::Clear);
+        self.draw_pixel_i(x, y + h - 1, Color::Clear);
+        self.draw_pixel_i(x + w - 1, y + h - 1, Color::Clear);
+    }
+
+    pub fn fill_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
+        if w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
+            return;
+        }
+        let x0 = x.max(0) as u8;
+        let y0 = y.max(0) as u8;
+        let x1 = (x + w).min(LCD_WIDTH as i16).max(0) as u8;
+        let y1 = (y + h).min(LCD_HEIGHT as i16).max(0) as u8;
+        if x1 > x0 && y1 > y0 {
+            self.fill_rect(x0, y0, x1 - x0, y1 - y0, color);
+        }
+    }
+
+    pub fn fill_rect_dither_i(&mut self, x: i16, y: i16, w: i16, h: i16, progress: u8) {
+        if progress == 0 || w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
+            return;
+        }
+        let x0 = x.max(0) as u8;
+        let y0 = y.max(0) as u8;
+        let x1 = (x + w).min(LCD_WIDTH as i16).max(0) as u8;
+        let y1 = (y + h).min(LCD_HEIGHT as i16).max(0) as u8;
+        if x1 > x0 && y1 > y0 {
+            self.fill_rect_dither(x0, y0, x1 - x0, y1 - y0, progress);
+        }
     }
 
     pub fn fill_rect(&mut self, x: u8, y: u8, width: u8, height: u8, color: Color) {

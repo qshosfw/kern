@@ -304,7 +304,7 @@ impl OsCompositor {
             modal_ref.render_overlay(canvas);
             #[cfg(feature = "text_input")]
             if matches!(modal_ref.modal, ActiveModal::TextInput(_)) {
-                ctx.draw_status_bar_right_mode(canvas, true);
+                ctx.draw_status_bar_right_mode(canvas, true, true);
             }
         }
 

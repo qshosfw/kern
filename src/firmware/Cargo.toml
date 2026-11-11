@@ -45,6 +45,7 @@ default = [
 # 📦 Media & Asset Provisioning
 provision_rogers = []
 provision_apps = []
+provision_bench = []
 
 # ⚙️ Granular Settings & Diagnostics
 settings_calib = []
