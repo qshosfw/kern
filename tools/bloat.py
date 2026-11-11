@@ -35,7 +35,7 @@ def symbols(elf):
 def disasm(elf):
     """-> {fn: [(addr, size, mnemonic, operands)]}"""
     fns, cur = {}, None
-    for ln in sh("arm-none-eabi-objdump", "-d", "-C", "--no-show-raw-insn" if False else "-w", elf).splitlines():
+    for ln in sh("arm-none-eabi-objdump", "-d", "-C", "-w", elf).splitlines():
         m = FN_RE.match(ln)
         if m:
             cur = m.group(2); fns[cur] = []; continue
@@ -61,9 +61,6 @@ def fbytes(body):
 
 
 def base_name(n):
-    s, depth, out = n, 0, []
-    for ch in s:  # strip ::<...> generic args only
-        out.append(ch)
     s = re.sub(r"::<.*>$", "", n)
     return re.sub(r"<([^<>]*?) as [^<>]*>", r"\1", s)
 
@@ -163,7 +160,6 @@ def cmd_consts(a):
 
 
 def cmd_strings(a):
-    out = sh("arm-none-eabi-objcopy", "-O", "binary", "-j", ".rodata", a.elf, "/dev/stdout") if False else None
     raw = subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", "-j", ".rodata", a.elf, "/dev/stdout"], capture_output=True).stdout
     strs = [m.group().decode() for m in re.finditer(rb"[\x20-\x7e]{4,}", raw)]
     c = collections.Counter(strs)
