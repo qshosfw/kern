@@ -238,31 +238,7 @@ impl Cap {
     }
 
     pub const fn required_message(&self) -> &'static str {
-        match self {
-            Self::RadioRx => "Requires Radio RX",
-            Self::RadioTx => "Requires Radio TX",
-            Self::StorageRead => "Requires Storage Access",
-            Self::StorageWrite => "Requires Storage Write",
-            Self::AudioOutput => "Requires Audio Output",
-            Self::DisplayDirect => "Requires Direct Display",
-            Self::SerialComm => "Requires Serial Port",
-            Self::UsbComm => "Requires USB Port",
-            Self::HardwareCrc => "Requires Hardware CRC",
-            Self::RealTimeClock => "Requires RTC Clock",
-            Self::PowerManage => "Requires Power Subsystem",
-            Self::CryptoAead => "Requires Crypto Engine",
-            Self::RawPeripheral => "Requires Raw MMIO",
-            Self::BroadBandRx => "Requires Broadband HF RX",
-            Self::GnssLocation => "Requires GNSS Location",
-            Self::WirelessLink => "Requires Wireless Link",
-            Self::AudioCapture => "Requires Audio Capture",
-            Self::BroadcastFm => "Requires Broadcast FM Tuner",
-            Self::Keypad => "Requires Keypad Matrix",
-            Self::TaskControl => "Requires Task Management",
-            Self::ServiceRegistry => "Requires Service Registry",
-            Self::BusAccess => "Requires Direct Bus Access",
-            Self::GpioAccess => "Requires Direct GPIO Access",
-        }
+        self.name()
     }
 }
 
@@ -514,14 +490,14 @@ mod tests {
         assert_eq!(set.first_cap(), Some(Cap::BroadBandRx));
         assert_eq!(
             Cap::BroadBandRx.required_message(),
-            "Requires Broadband HF RX"
+            "Broadband HF RX"
         );
 
         let single = CapabilitySet::empty().with(Cap::BroadcastFm);
         assert_eq!(single.first_cap(), Some(Cap::BroadcastFm));
         assert_eq!(
             Cap::BroadcastFm.required_message(),
-            "Requires Broadcast FM Tuner"
+            "Broadcast FM"
         );
     }
 

@@ -276,23 +276,23 @@ impl KrxLaunchError {
 
     pub const fn message(&self) -> &'static str {
         match self {
-            Self::FileNotFound => "Package file not found on flash",
-            Self::ReadFailed => "Failed reading file from flash",
-            Self::InvalidPreamble => "Invalid KRX package header",
-            Self::CrcMismatch => "Package CRC verification failed",
-            Self::MissingIdentity => "Missing application identity",
-            Self::MissingExecution => "Missing execution manifest",
+            Self::FileNotFound => "File not found",
+            Self::ReadFailed => "Storage read error",
+            Self::InvalidPreamble => "Bad package header",
+            Self::CrcMismatch => "CRC check failed",
+            Self::MissingIdentity => "Missing identity",
+            Self::MissingExecution => "Missing manifest",
             Self::CapabilityDenied(cap) => cap,
-            Self::InsufficientRam => "Not enough free RAM to execute",
-            Self::InsufficientStack => "Insufficient stack headroom",
-            Self::RelocationFailed => "Binary relocation failed",
-            Self::ImportBindingFailed => "Required kernel API unavailable",
-            Self::VmDisabled => "Virtual machine feature disabled",
-            Self::PayloadTooLarge => "Binary exceeds execution arena",
-            Self::ExecutionFailed => "Execution initialization failed",
-            Self::InvalidEntryPoint => "Entry point not Thumb-1 compatible or out of range",
-            Self::TruncatedPackage => "Binary is smaller than declared payload",
-            Self::UnsupportedProfile => "Execution profile not supported by host",
+            Self::InsufficientRam => "Not enough RAM",
+            Self::InsufficientStack => "Stack headroom low",
+            Self::RelocationFailed => "Relocation failed",
+            Self::ImportBindingFailed => "API not available",
+            Self::VmDisabled => "VM disabled",
+            Self::PayloadTooLarge => "Package too large",
+            Self::ExecutionFailed => "Execution failed",
+            Self::InvalidEntryPoint => "Invalid entry point",
+            Self::TruncatedPackage => "Truncated payload",
+            Self::UnsupportedProfile => "Unsupported profile",
         }
     }
 }
@@ -1319,35 +1319,35 @@ mod tests {
 
         let err_cap = KrxLaunchError::CapabilityDenied(Cap::BroadBandRx.required_message());
         assert_eq!(err_cap.title(), "Missing Hardware");
-        assert_eq!(err_cap.message(), "Requires Broadband HF RX");
+        assert_eq!(err_cap.message(), "Broadband HF RX");
 
         let err_ram = KrxLaunchError::InsufficientRam;
         assert_eq!(err_ram.title(), "Out of RAM");
-        assert_eq!(err_ram.message(), "Not enough free RAM to execute");
+        assert_eq!(err_ram.message(), "Not enough RAM");
 
         let err_stack = KrxLaunchError::InsufficientStack;
         assert_eq!(err_stack.title(), "Stack Overflow");
-        assert_eq!(err_stack.message(), "Insufficient stack headroom");
+        assert_eq!(err_stack.message(), "Stack headroom low");
 
         let err_vm = KrxLaunchError::VmDisabled;
         assert_eq!(err_vm.title(), "VM Disabled");
-        assert_eq!(err_vm.message(), "Virtual machine feature disabled");
+        assert_eq!(err_vm.message(), "VM disabled");
 
         let err_fnf = KrxLaunchError::FileNotFound;
         assert_eq!(err_fnf.title(), "File Not Found");
-        assert_eq!(err_fnf.message(), "Package file not found on flash");
+        assert_eq!(err_fnf.message(), "File not found");
 
         let err_reloc = KrxLaunchError::RelocationFailed;
         assert_eq!(err_reloc.title(), "Reloc Error");
-        assert_eq!(err_reloc.message(), "Binary relocation failed");
+        assert_eq!(err_reloc.message(), "Relocation failed");
 
         let err_api = KrxLaunchError::ImportBindingFailed;
         assert_eq!(err_api.title(), "API Unresolved");
-        assert_eq!(err_api.message(), "Required kernel API unavailable");
+        assert_eq!(err_api.message(), "API not available");
 
         let err_corrupt = KrxLaunchError::MissingExecution;
         assert_eq!(err_corrupt.title(), "Corrupted Binary");
-        assert_eq!(err_corrupt.message(), "Missing execution manifest");
+        assert_eq!(err_corrupt.message(), "Missing manifest");
     }
 
     #[test]
@@ -1839,7 +1839,7 @@ mod tests {
         let missing = app_required_caps.without(platform_caps);
         assert_eq!(missing.first_cap(), Some(Cap::BroadBandRx));
         let err = KrxLaunchError::CapabilityDenied(missing.first_cap().unwrap().required_message());
-        assert_eq!(err.message(), "Requires Broadband HF RX");
+        assert_eq!(err.message(), "Broadband HF RX");
 
         // 6. Fault: Insufficient Stack Headroom
         let mut exec_raw = [0u8; 28];

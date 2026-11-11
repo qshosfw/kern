@@ -606,7 +606,9 @@ fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8
             if p >= page_shift {
                 let src_p = p - page_shift;
                 if bit_shift == 0 {
-                    plane[p] = plane[src_p];
+                    for col in 0..LCD_WIDTH {
+                        plane[p][col] = plane[src_p][col];
+                    }
                 } else {
                     for col in 0..LCD_WIDTH {
                         let curr = plane[src_p][col];
@@ -631,7 +633,9 @@ fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8
             if p + page_shift < 8 {
                 let src_p = p + page_shift;
                 if bit_shift == 0 {
-                    plane[p] = plane[src_p];
+                    for col in 0..LCD_WIDTH {
+                        plane[p][col] = plane[src_p][col];
+                    }
                 } else {
                     for col in 0..LCD_WIDTH {
                         let curr = plane[src_p][col];

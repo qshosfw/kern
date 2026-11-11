@@ -59,12 +59,6 @@ pub fn active_canvas_mut() -> &'static mut Canvas {
     let ptr = unsafe { ACTIVE_CANVAS };
     if !ptr.is_null() {
         unsafe { &mut *ptr }
-    } else if let Some(ctx) = active_ctx_opt() {
-        if let Some(ref mut d) = ctx.display {
-            unsafe { &mut *(d.canvas as *mut Canvas) }
-        } else {
-            crate::system_canvas()
-        }
     } else {
         crate::system_canvas()
     }
