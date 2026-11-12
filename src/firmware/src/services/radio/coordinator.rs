@@ -115,6 +115,7 @@ pub enum AudioRoutingState {
 
 /// System-level Multi-VFO, Sidecar, and RF Subsystem Coordinator.
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct RadioCoordinator {
     // ── Hot 1-byte scalar fields (offset 0..31: 1-insn ldrb/strb) ─────────
     pub active_vfo: VfoSlot,
