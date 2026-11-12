@@ -219,7 +219,7 @@ pub fn trim_trailing_slashes(s: &str) -> &str {
 /// `core::str::from_utf8` (368 B) into Cortex-M0+ flash.
 #[inline(never)]
 pub fn ascii_str(bytes: &[u8]) -> Option<&str> {
-    if bytes.is_ascii() {
+    if bytes.iter().all(|&b| b < 0x80) {
         // Safety: all bytes are < 0x80, which is valid UTF-8.
         Some(unsafe { core::str::from_utf8_unchecked(bytes) })
     } else {
