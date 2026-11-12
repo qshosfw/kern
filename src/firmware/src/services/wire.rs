@@ -271,7 +271,8 @@ fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, n
         Err(status) => return send_status(hw, header, status),
     };
 
-    let mut resp = [0u8; 100];
+    let mut resp_uninit = core::mem::MaybeUninit::<[u8; 100]>::uninit();
+    let resp = unsafe { &mut *resp_uninit.as_mut_ptr() };
     let val_len = match req.handle.domain {
         DOMAIN_SYSTEM => read_sys_facet(req.handle.facet, hw, now, &mut resp[4..]),
         DOMAIN_RADIO => read_radio_facet(req.handle.facet, req.handle.instance, hw, &mut resp[4..]),
@@ -286,12 +287,13 @@ fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, n
         DOMAIN_CONFIG => {
             let domain_idx = req.handle.instance as usize;
             if domain_idx > 5 {
-                return send_status(hw, header, WireStatus::BadRange);
+                Err(WireStatus::BadRange)
+            } else {
+                let cfg_slice = crate::master_config_ref().config_bytes(domain_idx);
+                let len = cfg_slice.len().min(resp.len() - 4);
+                resp[4..4 + len].copy_from_slice(&cfg_slice[..len]);
+                Ok(len)
             }
-            let cfg_slice = crate::master_config_ref().config_bytes(domain_idx);
-            let len = cfg_slice.len().min(resp.len() - 4);
-            resp[4..4 + len].copy_from_slice(&cfg_slice[..len]);
-            Ok(len)
         }
         DOMAIN_APP => match req.handle.facet {
             FACET_APP_REGISTRY => {
@@ -382,13 +384,17 @@ fn set_radio_facet(
     }
 }
 
+fn set_keypad_lock(hw: &mut SystemHardware, locked: bool) {
+    if locked != hw.orchestrator.is_keypad_locked() {
+        hw.orchestrator.toggle_keypad_lock();
+    }
+}
+
 fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<(), WireStatus> {
     match req.handle.domain {
         DOMAIN_SYSTEM if req.handle.facet == FACET_SYS_METRICS => {
             if let Some(&lock) = req.value.first() {
-                if (lock != 0) != hw.orchestrator.is_keypad_locked() {
-                    hw.orchestrator.toggle_keypad_lock();
-                }
+                set_keypad_lock(hw, lock != 0);
             }
             Ok(())
         }
@@ -410,9 +416,7 @@ fn handle_resource_set(req: &HandleSetReq, hw: &mut SystemHardware) -> Result<()
                 }
             }
             FACET_INPUT_LOCK => {
-                if (get_u8(req.value)? != 0) != hw.orchestrator.is_keypad_locked() {
-                    hw.orchestrator.toggle_keypad_lock();
-                }
+                set_keypad_lock(hw, get_u8(req.value)? != 0);
                 Ok(())
             }
             _ => Err(WireStatus::UnsupportedField),
@@ -495,25 +499,13 @@ fn on_handle_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
                 }
                 WireStatus::Ok
             }
-            ACTION_MODAL_CONFIRM => {
-                crate::system::enqueue_event(Event::Key {
-                    code: KeyCode::Menu,
-                    state: KeyState::Pressed,
-                });
-                WireStatus::Ok
-            }
-            ACTION_MODAL_CANCEL => {
-                crate::system::enqueue_event(Event::Key {
-                    code: KeyCode::Exit,
-                    state: KeyState::Pressed,
-                });
-                WireStatus::Ok
-            }
-            ACTION_VIEW_LAUNCHER => {
-                crate::system::enqueue_event(Event::Key {
-                    code: KeyCode::Exit,
-                    state: KeyState::Held,
-                });
+            ACTION_MODAL_CONFIRM | ACTION_MODAL_CANCEL | ACTION_VIEW_LAUNCHER => {
+                let (code, state) = match req.action_id {
+                    ACTION_MODAL_CONFIRM => (KeyCode::Menu, KeyState::Pressed),
+                    ACTION_MODAL_CANCEL => (KeyCode::Exit, KeyState::Pressed),
+                    _ => (KeyCode::Exit, KeyState::Held),
+                };
+                crate::system::enqueue_event(Event::Key { code, state });
                 WireStatus::Ok
             }
             _ => WireStatus::Unsupported,
