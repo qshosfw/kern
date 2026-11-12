@@ -290,9 +290,7 @@ impl OsCompositor {
             let is_text_input = false;
 
             if !is_text_input {
-                if has_modal {
-                    sb_cfg.partial = true;
-                } else if !sb_cfg.partial && sb_cfg.title.is_none() {
+                if !sb_cfg.partial && sb_cfg.title.is_none() {
                     if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
                         sb_cfg.title = Some(meta.name);
                     }
