@@ -677,6 +677,8 @@ def cmd_phases(a):
     loop_sz, _ = max_fn("run_system_loop")
     krx_tot = (sum_mod("native_runner::load_native") + sum_mod("loader::launch_krx")
                + sum_mod("KrxPreamble") + sum_mod("inspect_package") + sum_mod("bind_cap_imports"))
+    settings_tot = sum_mod("apps::settings", "tTrR")
+    vfo_tot = sum_mod("apps::vfo", "tTrR")
 
     target_80 = int(FLASH_MAX * 0.80)
     rows = [
@@ -691,6 +693,8 @@ def cmd_phases(a):
         ("P17 Dispatch", disp_sz, 400, f"dispatch_event={disp_sz} B, loop={loop_sz} B"),
         ("P18 AnonRodata", anon_ro, 4096, f"total .rodata={rodata_sz} B (named={named_ro} B)"),
         ("P19 KRX Parse", krx_tot, 1800, f"loader+native+preamble+catalog+cap={krx_tot} B"),
+        ("P20 Settings", settings_tot, 4000, f".text+.rodata={settings_tot} B"),
+        ("P21 VFO", vfo_tot, 2500, f".text+.rodata={vfo_tot} B"),
     ]
     print("══════════════════════════════════════════════════════════════════════════")
     print(" 📋 MEASURED PLAN PHASE SCOREBOARD (docs/flash_audit_measured_plan.md)")
@@ -698,6 +702,26 @@ def cmd_phases(a):
     for label, cur, tgt, note in rows:
         st = "PASS" if cur <= tgt else "OPEN"
         print(f" [{st}] {label:<14} {cur:6d} / {tgt:<6d}  | {note}")
+
+
+def cmd_modules(a):
+    from collections import defaultdict
+    syms = symbols(a.elf)
+    buckets = defaultdict(lambda: [0, 0, []])  # text+rodata, count, [(sz, short)]
+    for k, (sz, t, _) in syms.items():
+        if t not in "tTrR":
+            continue
+        clean = k.lstrip("<").split(" as ")[0]
+        parts = clean.split("::")
+        mod = "::".join(parts[:3]) if len(parts) >= 3 and parts[0] == "firmware" else "::".join(parts[:2])
+        buckets[mod][0] += sz
+        buckets[mod][1] += 1
+        if t in "tT":
+            buckets[mod][2].append((sz, parts[-1]))
+    print(f"== module flash budget (.text + named .rodata, top {a.top}) ==")
+    for mod, (tot, cnt, fns) in sorted(buckets.items(), key=lambda x: -x[1][0])[: a.top]:
+        top3 = ", ".join(f"{nm}({sz})" for sz, nm in sorted(fns, reverse=True)[:3])
+        print(f"{tot:6d} B ({cnt:3d} syms)  {mod:<36}  {top3}")
 
 
 def cmd_diff(a):
@@ -728,7 +752,7 @@ def cmd_diff(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned math64 memcpy pools rodata traps suggest phases syscalls find".split())
+    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned math64 memcpy pools rodata traps suggest phases syscalls find modules".split())
     p.add_argument("--elf", default=DEF_ELF); p.add_argument("--top", type=int, default=25)
     p.add_argument("--min", type=int, default=24, help="min fn or stack bytes"); p.add_argument("--sim", type=float, default=0.80)
     p.add_argument("--len", type=int, default=8, help="outline window (instructions)")
