@@ -220,6 +220,7 @@ pub fn draw_sheet_frame(
 }
 
 /// Shared ultra-compact scrollbar renderer
+#[inline(never)]
 pub fn draw_scrollbar(
     canvas: &mut Canvas,
     track_x: u8,
@@ -234,14 +235,10 @@ pub fn draw_scrollbar(
     }
     canvas.draw_vertical_line(track_x + 1, track_y, track_h, Color::DarkGray);
     let thumb_h = ((visible as u32 * track_h as u32) / total as u32).max(4) as u8;
-    let max_scroll = total.saturating_sub(visible);
-    let thumb_y = track_y
-        + if max_scroll == 0 {
-            0
-        } else {
-            ((current.min(max_scroll) as u32 * (track_h - thumb_h) as u32) / max_scroll as u32)
-                as u8
-        };
+    let max_scroll = (total - visible) as u32;
+    let rem_h = (track_h - thumb_h) as u32;
+    let cur = current.min(total - visible) as u32;
+    let thumb_y = track_y + ((cur * rem_h) / max_scroll) as u8;
     let thumb_y = thumb_y.min(track_y + track_h - thumb_h);
     canvas.fill_rect(track_x, thumb_y, 3, thumb_h, Color::Fill);
 }
