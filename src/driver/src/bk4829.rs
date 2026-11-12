@@ -808,31 +808,32 @@ impl<'a> Bk4829<'a, Disabled> {
         py32_hal::delay::delay_ms(2);
         self.write_reg(0x00, 0x0000);
 
-        // 2. Crystal oscillator, bandgap, and 2.7V RX RF LDO enable
-        self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX);
-        self.write_reg(REG_PA_CTRL, 0x0022); // PA bias off
+        // 2. Crystal oscillator, bandgap, RX LDO, AGC, filter, and base routing parameters
+        const INIT_REG_PATCHES: [(u8, u16); 15] = [
+            (REG_POWER_CTRL, POWER_CTRL_RX),
+            (REG_PA_CTRL, 0x0022),
+            (REG_AGC_TABLE_0, 0x0318),
+            (REG_AGC_TABLE_1, 0x033A),
+            (REG_AGC_TABLE_2, 0x03DB),
+            (REG_AGC_TABLE_3, 0x03DF),
+            (REG_AGC_TABLE_MIN, 0x0210),
+            (REG_AGC_TARGET, 0x2AB2),
+            (0x7B, 0x73DC),
+            (0x7D, 0xE920), // Microphone sensitivity
+            (REG_MODULATION, 0x3516),
+            (REG_AF_ROUTING, 0x6042), // Muted AF routing
+            (REG_TX_MUTE, 0xBB18),
+            (REG_GPIO, 0x9000), // Base GPIO state (Reg 0x33, LEDs off)
+            (REG_CXCSS_FREQ, subaudible::CTC2_55HZ_DETECT_REG),
+        ];
+        for &(reg, val) in &INIT_REG_PATCHES {
+            self.write_reg(reg, val);
+        }
 
-        // 3. DSP and internal filter parameters (standard table from DeltaFW & fagci-k1-fw)
-        self.write_reg(REG_AGC_TABLE_0, 0x0318);
-        self.write_reg(REG_AGC_TABLE_1, 0x033A);
-        self.write_reg(REG_AGC_TABLE_2, 0x03DB);
-        self.write_reg(REG_AGC_TABLE_3, 0x03DF);
-        self.write_reg(REG_AGC_TABLE_MIN, 0x0210);
-        self.write_reg(REG_AGC_TARGET, 0x2AB2);
-        self.write_reg(0x7B, 0x73DC);
-        self.write_reg(0x7D, 0xE920); // Microphone sensitivity
-
-        // 4. Default volume level 5 (Reg 0x48)
+        // 3. Default volume level 5 (Reg 0x48)
         self.set_volume_level(5);
 
-        // 5. Default modulation (FM) with clean muted AF routing and LEDs off
-        self.write_reg(REG_MODULATION, 0x3516);
-        self.set_af(AfType::Mute);
-        self.write_reg(REG_TX_MUTE, 0xBB18);
-        self.write_reg(REG_GPIO, 0x9000); // Base GPIO state (Reg 0x33, LEDs off)
-
-        // 6. Arm 55 Hz CTC2 tail detector and power on RX link, AF DAC, DISC mode, PLL/VCO, RX DSP
-        self.write_reg(REG_CXCSS_FREQ, subaudible::CTC2_55HZ_DETECT_REG);
+        // 4. Arm CXCSS tail detector and power on RX link, AF DAC, DISC mode, PLL/VCO, RX DSP
         self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
         self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
 
