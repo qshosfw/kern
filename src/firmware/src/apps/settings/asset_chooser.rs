@@ -102,7 +102,7 @@ impl AssetDescriptor {
             let found = storage.count;
             storage.paths[found].clear();
             let _ = storage.paths[found].push_str(path);
-            storage.labels[found + 1] = format_asset_name(path);
+            format_asset_name_into(path, &mut storage.labels[found + 1]);
 
             if active && current_sel == 0 && path == cur_path {
                 current_sel = found + 1;
@@ -127,9 +127,19 @@ impl AssetDescriptor {
 
     pub fn apply_choice(&self, sel: usize, config: &mut crate::config::MasterConfig) -> bool {
         let is_active = self.get_path(config).0;
-        apply_asset_selection(sel, is_active, |opt| {
-            self.set_path(config, opt);
-        })
+        if sel == 0 {
+            if is_active {
+                self.set_path(config, None);
+                return true;
+            }
+            return false;
+        }
+        if let Some(path) = get_chosen_asset_path(sel) {
+            self.set_path(config, Some(path));
+            true
+        } else {
+            false
+        }
     }
 
     pub fn format_status(&self, config: &crate::config::MasterConfig, out: &mut ShortString) {
@@ -137,7 +147,7 @@ impl AssetDescriptor {
         if !active {
             out.set_str(self.none_label);
         } else {
-            *out = format_asset_name(path);
+            format_asset_name_into(path, out);
         }
     }
 }
@@ -169,32 +179,33 @@ fn storage_mut() -> &'static mut AssetChooserStorage {
 
 /// Universal dynamic display name formatter for filesystem assets.
 /// Converts e.g. "/user/rogers/01_roger.ton" -> "Roger", "02_mini_kong.rle" -> "Mini Kong"
-pub fn format_asset_name(path: &str) -> ShortString {
-    let name_start = gfx::text::rfind_byte(path, b'/').map_or(0, |i| i + 1);
-    let file_part = &path[name_start..];
-    let base = if let Some(dot_idx) = gfx::text::rfind_byte(file_part, b'.') {
-        &file_part[..dot_idx]
-    } else {
-        file_part
-    };
+pub fn format_asset_name_into(path: &str, out: &mut ShortString) {
+    let raw = path.as_bytes();
+    let name_start = raw.iter().rposition(|&b| b == b'/').map_or(0, |i| i + 1);
+    let file_part = &raw[name_start..];
+    let dot_idx = file_part
+        .iter()
+        .rposition(|&b| b == b'.')
+        .unwrap_or(file_part.len());
+    let base = &file_part[..dot_idx];
 
     // Strip leading numerical index prefix if present (e.g. "01_", "02-", "1_")
-    let bytes = base.as_bytes();
     let mut start = 0;
-    while start < bytes.len() && bytes[start].is_ascii_digit() {
+    while start < base.len() && base[start].is_ascii_digit() {
         start += 1;
     }
-    if start > 0 && start < bytes.len() && (bytes[start] == b'_' || bytes[start] == b'-') {
+    if start > 0 && start < base.len() && (base[start] == b'_' || base[start] == b'-') {
         start += 1;
     } else {
         start = 0;
     }
-    let clean = &bytes[start..];
+    let clean = &base[start..];
     if clean.is_empty() {
-        return ShortString::from_str("Asset");
+        out.set_str("Asset");
+        return;
     }
 
-    let mut out = ShortString::empty();
+    out.len = 0;
     let mut capitalize_next = true;
     for &b in clean {
         if (out.len as usize) >= out.bytes.len() {
@@ -212,7 +223,6 @@ pub fn format_asset_name(path: &str) -> ShortString {
         out.bytes[out.len as usize] = ch;
         out.len += 1;
     }
-    out
 }
 
 fn has_extension(path: &str, extensions: &[&str]) -> bool {
@@ -240,27 +250,5 @@ pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
         Some(storage.paths[idx].as_str())
     } else {
         None
-    }
-}
-
-/// Generalized asset selection applicator.
-/// Handles `sel == 0` (disable/off via `None`) and `sel > 0` (chosen asset path via `Some(path)`).
-pub fn apply_asset_selection(
-    sel: usize,
-    is_active: bool,
-    mut on_apply: impl FnMut(Option<&str>),
-) -> bool {
-    if sel == 0 {
-        if is_active {
-            on_apply(None);
-            return true;
-        }
-        return false;
-    }
-    if let Some(path) = get_chosen_asset_path(sel) {
-        on_apply(Some(path));
-        true
-    } else {
-        false
     }
 }

@@ -56,29 +56,26 @@ impl PackageCatalog {
         self.scanned = false;
     }
 
+    #[inline(always)]
+    fn matches_kind(e: &PackageCatalogEntry, is_service: bool) -> bool {
+        if is_service {
+            e.is_valid && e.exec_type != KrxExecType::App
+        } else {
+            !e.is_valid || e.exec_type == KrxExecType::App
+        }
+    }
+
     pub fn get_entry(&self, is_service: bool, idx: usize) -> Option<&PackageCatalogEntry> {
         self.entries
             .iter()
-            .filter(|e| {
-                if is_service {
-                    e.is_valid && e.exec_type != KrxExecType::App
-                } else {
-                    !e.is_valid || e.exec_type == KrxExecType::App
-                }
-            })
+            .filter(|e| Self::matches_kind(e, is_service))
             .nth(idx)
     }
 
     pub fn count_entries(&self, is_service: bool) -> usize {
         self.entries
             .iter()
-            .filter(|e| {
-                if is_service {
-                    e.is_valid && e.exec_type != KrxExecType::App
-                } else {
-                    !e.is_valid || e.exec_type == KrxExecType::App
-                }
-            })
+            .filter(|e| Self::matches_kind(e, is_service))
             .count()
     }
 
