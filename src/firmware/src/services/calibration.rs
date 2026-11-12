@@ -178,11 +178,17 @@ pub trait CalibrationService {
 }
 
 /// Concrete in-memory system calibration holder (zero-copy 512-byte CalibrationBlock view).
+#[repr(C, align(4))]
 pub struct SystemCalibration {
     raw: [u8; 512],
     valid: bool,
     bound: bool,
 }
+
+const _: () = {
+    assert!(core::mem::offset_of!(SystemCalibration, raw) == 0);
+    assert!(core::mem::align_of::<SystemCalibration>() >= 4);
+};
 
 fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 12]) {
     let sig = compute_device_signature(data, mcu_uid);
