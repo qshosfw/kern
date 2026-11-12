@@ -27,57 +27,72 @@ impl BatteryType {
 
 /// High-precision 2S Li-ion discharge curves (10mV resolution units -> Percentage 0..100)
 /// Modeled after industry 2S Li-ion cell characteristics (8.4V max, 7.4V nominal, 6.0V cutoff).
-pub const VOLTAGE_CURVES: [&[(u16, u8)]; 5] = [
+pub struct CurveDefinition {
+    pub v_max: u16,
+    pub segments: &'static [(u16, u8, u32)],
+}
+
+pub const VOLTAGE_CURVES: [CurveDefinition; 5] = [
     // 1600 mAh Standard Pack (UV-K5)
-    &[
-        (838, 100),
-        (820, 95),
-        (780, 75),
-        (745, 45),
-        (715, 20),
-        (670, 7),
-        (600, 0),
-    ],
+    CurveDefinition {
+        v_max: 838,
+        segments: &[
+            (820, 95, 18204),
+            (780, 75, 32768),
+            (745, 45, 56174),
+            (715, 20, 54613),
+            (670, 7, 18933),
+            (600, 0, 6554),
+        ],
+    },
     // 2200 mAh Extended Pack
-    &[
-        (839, 100),
-        (825, 96),
-        (785, 78),
-        (750, 50),
-        (720, 22),
-        (680, 8),
-        (600, 0),
-    ],
+    CurveDefinition {
+        v_max: 839,
+        segments: &[
+            (825, 96, 18725),
+            (785, 78, 29491),
+            (750, 50, 52429),
+            (720, 22, 61167),
+            (680, 8, 22938),
+            (600, 0, 6554),
+        ],
+    },
     // 3500 mAh High Capacity Pack
-    &[
-        (840, 100),
-        (828, 97),
-        (790, 80),
-        (755, 55),
-        (725, 25),
-        (685, 9),
-        (600, 0),
-    ],
+    CurveDefinition {
+        v_max: 840,
+        segments: &[
+            (828, 97, 16384),
+            (790, 80, 29319),
+            (755, 55, 46811),
+            (725, 25, 65536),
+            (685, 9, 26214),
+            (600, 0, 6939),
+        ],
+    },
     // 1500 mAh Compact Pack (K1)
-    &[
-        (836, 100),
-        (818, 94),
-        (778, 72),
-        (742, 42),
-        (712, 18),
-        (668, 6),
-        (600, 0),
-    ],
+    CurveDefinition {
+        v_max: 836,
+        segments: &[
+            (818, 94, 21845),
+            (778, 72, 36045),
+            (742, 42, 54613),
+            (712, 18, 52429),
+            (668, 6, 17873),
+            (600, 0, 5783),
+        ],
+    },
     // 2500 mAh Extended Pack (K1)
-    &[
-        (839, 100),
-        (826, 96),
-        (788, 79),
-        (752, 52),
-        (722, 23),
-        (682, 8),
-        (600, 0),
-    ],
+    CurveDefinition {
+        v_max: 839,
+        segments: &[
+            (826, 96, 20165),
+            (788, 79, 29319),
+            (752, 52, 49152),
+            (722, 23, 63351),
+            (682, 8, 24576),
+            (600, 0, 6394),
+        ],
+    },
 ];
 
 /// High-precision piecewise linear interpolation to convert OCV battery millivolts to percentage.
@@ -85,26 +100,18 @@ pub fn mv_to_percentage(mv: u16, bat_type: BatteryType) -> u8 {
     if bat_type == BatteryType::TypeExternal {
         return 100;
     }
-    // Fast reciprocal division: ((x * 0xCCCD) >> 19) exact for all x <= 65,535
-    let v_10mv = ((mv as u32 * 0xCCCD) >> 19) as u16;
-    let curve = VOLTAGE_CURVES[bat_type as usize];
+    // Fast reciprocal division: div10_u16
+    let (v_10mv, _) = utils::math::div10_u16(mv);
+    let curve = &VOLTAGE_CURVES[bat_type as usize];
 
-    if v_10mv >= curve[0].0 {
+    if v_10mv >= curve.v_max {
         return 100;
     }
 
-    for i in 1..curve.len() {
-        let (v_prev, p_prev) = curve[i - 1];
-        let (v_curr, p_curr) = curve[i];
-
+    for &(v_curr, p_curr, slope_q16) in curve.segments {
         if v_10mv >= v_curr {
-            let v_range = (v_prev - v_curr) as u32;
-            if v_range == 0 {
-                return p_curr;
-            }
-            let p_range = (p_prev - p_curr) as u32;
             let v_diff = (v_10mv - v_curr) as u32;
-            let interpolated = (p_curr as u32) + (v_diff * p_range) / v_range;
+            let interpolated = (p_curr as u32) + ((v_diff * slope_q16) >> 16);
             return (interpolated.min(100)) as u8;
         }
     }
