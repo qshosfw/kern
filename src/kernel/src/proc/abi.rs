@@ -362,7 +362,7 @@ pub const KRX_CUSTOM_TRAY_ACTIVE: u8 = 1 << 1;
 ///
 /// Supports multiple left icons and multiple center icons dynamically appended,
 /// padded, and composited across foreground apps, background daemons, and guest executables.
-#[repr(C)]
+#[repr(C, align(4))]
 #[derive(Debug, Clone, Copy)]
 pub struct KrxStatusBar {
     pub flags: u8,
