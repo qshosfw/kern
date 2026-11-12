@@ -84,24 +84,14 @@ pub unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str>
     let path = unsafe { parse_str(ptr, len)? };
     let caps = super::native_runner::active_native_caps();
 
-    // Anti-Brick Lock 1: Factory Calibration Guard
-    // Any mutation targeting /sys/calib.* strictly requires Cap::FactoryCalib.
-    // User applications and external packages without this token are blocked.
-    if path.starts_with("/sys/calib") {
-        if caps.contains(Cap::FactoryCalib) {
-            return Some(path);
-        } else {
-            return None;
-        }
-    }
-
-    // System configuration manifest (/sys/*) requires Cap::FactoryCalib for modification
+    // Anti-Brick Lock 1: Factory Calibration & System Manifest (/sys/*)
+    // Strictly requires Cap::FactoryCalib.
     if path.starts_with("/sys/") {
-        if caps.contains(Cap::FactoryCalib) {
-            return Some(path);
+        return if caps.contains(Cap::FactoryCalib) {
+            Some(path)
         } else {
-            return None;
-        }
+            None
+        };
     }
 
     // Anti-Brick Locks 2 & 3: Operational & User Filesystem (/user/*, /pref/*)

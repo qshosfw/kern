@@ -12,6 +12,20 @@ pub use display::DisplayConfig;
 pub use keys::KeyConfig;
 pub use system::SystemConfig;
 
+#[inline(never)]
+pub(crate) fn read_cstr(buf: &[u8]) -> &str {
+    let len = gfx::text::find_byte(buf, 0).unwrap_or(buf.len());
+    unsafe { core::str::from_utf8_unchecked(&buf[..len]) }
+}
+
+#[inline(never)]
+pub(crate) fn write_cstr(buf: &mut [u8], path: &str) {
+    buf.fill(0);
+    let bytes = path.as_bytes();
+    let copy_len = bytes.len().min(buf.len());
+    buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+}
+
 pub fn update_raw_crc(buf: &mut [u8]) {
     let len = buf.len();
     if len > 4 {
@@ -217,6 +231,8 @@ static DISPLAY_RULES: [[u8; 2]; 11] = [
 static AUDIO_RULES: [[u8; 2]; 7] = [[1, 10], [2, 5], [3, 31], [4, 1], [6, 10], [7, 4], [8, 4]];
 static APPS_RULES: [[u8; 2]; 5] = [[1, 1], [2, 1], [3, 1], [4, 1], [5, 3]];
 
+static DEFAULT_MASTER_CONFIG: MasterConfig = MasterConfig::DEFAULT;
+
 impl MasterConfig {
     pub const DEFAULT: Self = Self {
         display: DisplayConfig::DEFAULT,
@@ -236,7 +252,7 @@ impl MasterConfig {
     #[inline(never)]
     pub unsafe fn init_in_place(ptr: *mut Self) {
         unsafe {
-            core::ptr::write(ptr, Self::DEFAULT);
+            core::ptr::copy_nonoverlapping(&DEFAULT_MASTER_CONFIG, ptr, 1);
             let nav = (*ptr).system.nav_layout();
             (*ptr).keys.nav_layout = nav;
         }

@@ -52,15 +52,11 @@ impl DisplayConfig {
     }
 
     pub fn splash_path_str(&self) -> &str {
-        let len = gfx::text::find_byte(&self.splash_path, 0).unwrap_or(self.splash_path.len());
-        unsafe { core::str::from_utf8_unchecked(&self.splash_path[..len]) }
+        super::read_cstr(&self.splash_path)
     }
 
     pub fn set_splash_path(&mut self, path: &str) {
-        self.splash_path = [0; 32];
-        let bytes = path.as_bytes();
-        let copy_len = bytes.len().min(self.splash_path.len());
-        self.splash_path[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_cstr(&mut self.splash_path, path);
     }
 
     pub fn apply_to_backlight(&self, backlight: &mut drivers::backlight::BacklightController) {

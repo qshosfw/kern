@@ -49,27 +49,19 @@ impl AudioConfig {
     }
 
     pub fn roger_path_str(&self) -> &str {
-        let len = gfx::text::find_byte(&self.roger_path, 0).unwrap_or(self.roger_path.len());
-        unsafe { core::str::from_utf8_unchecked(&self.roger_path[..len]) }
+        super::read_cstr(&self.roger_path)
     }
 
     pub fn set_roger_path(&mut self, path: &str) {
-        self.roger_path = [0; 32];
-        let bytes = path.as_bytes();
-        let copy_len = bytes.len().min(self.roger_path.len());
-        self.roger_path[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_cstr(&mut self.roger_path, path);
     }
 
     pub fn jingle_path_str(&self) -> &str {
-        let len = gfx::text::find_byte(&self.jingle_path, 0).unwrap_or(self.jingle_path.len());
-        unsafe { core::str::from_utf8_unchecked(&self.jingle_path[..len]) }
+        super::read_cstr(&self.jingle_path)
     }
 
     pub fn set_jingle_path(&mut self, path: &str) {
-        self.jingle_path = [0; 32];
-        let bytes = path.as_bytes();
-        let copy_len = bytes.len().min(self.jingle_path.len());
-        self.jingle_path[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_cstr(&mut self.jingle_path, path);
     }
 }
 
