@@ -257,16 +257,16 @@ impl Canvas {
     }
 
     /// Clear the four outermost corners of a rectangle (for rounded / chamfered UI elements)
+    #[inline(never)]
     pub fn clear_corners(&mut self, x: u8, y: u8, width: u8, height: u8) {
         if width < 2 || height < 2 {
             return;
         }
         let right = (x + width - 1).min(127);
         let bottom = (y + height - 1).min(63);
-        self.draw_pixel(x, y, Color::Clear);
-        self.draw_pixel(right, y, Color::Clear);
-        self.draw_pixel(x, bottom, Color::Clear);
-        self.draw_pixel(right, bottom, Color::Clear);
+        for (px, py) in [(x, y), (right, y), (x, bottom), (right, bottom)] {
+            self.draw_pixel(px, py, Color::Clear);
+        }
     }
 
     #[inline(always)]
@@ -315,10 +315,9 @@ impl Canvas {
         if w >= 2 && h >= 2 {
             let x1 = x + w - 1;
             let y1 = y + h - 1;
-            self.draw_pixel_i(x, y, Color::Clear);
-            self.draw_pixel_i(x1, y, Color::Clear);
-            self.draw_pixel_i(x, y1, Color::Clear);
-            self.draw_pixel_i(x1, y1, Color::Clear);
+            for (px, py) in [(x, y), (x1, y), (x, y1), (x1, y1)] {
+                self.draw_pixel_i(px, py, Color::Clear);
+            }
         }
     }
 
