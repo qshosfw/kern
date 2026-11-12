@@ -23,7 +23,7 @@
 /// Squelch parameter table for one frequency bank (96 bytes).
 /// Contains 6 tables of 16 bytes for levels 0..9 (entries 10..15 reserved).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct SquelchBandTable {
     pub open_rssi: [u8; 16],
     pub close_rssi: [u8; 16],
@@ -46,7 +46,7 @@ pub struct SquelchThresholds {
 
 /// 16-byte TX power calibration record for a single frequency band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct BandTxPower {
     pub low: [u8; 3],  // Lower, mid, upper frequency points for Low power
     pub mid: [u8; 3],  // Lower, mid, upper frequency points for Mid power
@@ -65,9 +65,9 @@ impl BandTxPower {
     }
 }
 
-/// Complete 512-byte packed calibration layout.
+/// Complete 512-byte naturally-aligned calibration layout.
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C, align(4))]
 pub struct CalibrationBlock {
     pub squelch_uhf: SquelchBandTable, // 0x000..0x05F (96 bytes)
     pub squelch_vhf: SquelchBandTable, // 0x060..0x0BF (96 bytes)
@@ -90,7 +90,23 @@ pub struct CalibrationBlock {
     pub _reserved_end: [u8; 112],      // 0x190..0x1FF (112 bytes)
 }
 
-const _: () = assert!(core::mem::size_of::<CalibrationBlock>() == 512);
+const _: () = {
+    assert!(core::mem::size_of::<CalibrationBlock>() == 512);
+    assert!(core::mem::offset_of!(CalibrationBlock, squelch_uhf) == 0x000);
+    assert!(core::mem::offset_of!(CalibrationBlock, squelch_vhf) == 0x060);
+    assert!(core::mem::offset_of!(CalibrationBlock, rssi_uhf) == 0x0C0);
+    assert!(core::mem::offset_of!(CalibrationBlock, rssi_vhf) == 0x0C8);
+    assert!(core::mem::offset_of!(CalibrationBlock, tx_power) == 0x0D0);
+    assert!(core::mem::offset_of!(CalibrationBlock, battery_curve) == 0x140);
+    assert!(core::mem::offset_of!(CalibrationBlock, vox1_thresholds) == 0x150);
+    assert!(core::mem::offset_of!(CalibrationBlock, vox0_thresholds) == 0x168);
+    assert!(core::mem::offset_of!(CalibrationBlock, mic_sensitivity) == 0x180);
+    assert!(core::mem::offset_of!(CalibrationBlock, xtal_freq_low) == 0x188);
+    assert!(core::mem::offset_of!(CalibrationBlock, lna_calib) == 0x18A);
+    assert!(core::mem::offset_of!(CalibrationBlock, mix_calib) == 0x18C);
+    assert!(core::mem::offset_of!(CalibrationBlock, volume_gain) == 0x18E);
+    assert!(core::mem::offset_of!(CalibrationBlock, dac_gain) == 0x18F);
+};
 
 /// Frequency limits (lower, center, upper) in Hz for the 7 factory calibration bands.
 pub const CALIB_BAND_LIMITS: [(u32, u32, u32); 7] = [
