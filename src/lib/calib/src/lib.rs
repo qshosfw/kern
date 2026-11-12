@@ -297,23 +297,23 @@ impl CalibrationBlock {
         }
         if raw <= th[0] {
             let diff = th[0].saturating_sub(raw);
-            -123 - (diff >> 1) as i16
-        } else if raw <= th[1] {
-            let span = (th[1] - th[0]) as i32;
-            let offset = (raw - th[0]) as i32;
-            -123 + ((offset * 16) / span) as i16
-        } else if raw <= th[2] {
-            let span = (th[2] - th[1]) as i32;
-            let offset = (raw - th[1]) as i32;
-            -107 + ((offset * 24) / span) as i16
-        } else if raw <= th[3] {
-            let span = (th[3] - th[2]) as i32;
-            let offset = (raw - th[2]) as i32;
-            -83 + ((offset * 10) / span) as i16
-        } else {
-            let diff = raw.saturating_sub(th[3]);
-            (-73 + (diff >> 1) as i16).min(-10)
+            return -123 - (diff >> 1) as i16;
         }
+        if raw >= th[3] {
+            let diff = raw.saturating_sub(th[3]);
+            return (-73 + (diff >> 1) as i16).min(-10);
+        }
+        const DBM_POINTS: [i16; 4] = [-123, -107, -83, -73];
+        for i in 0..3 {
+            if raw <= th[i + 1] {
+                let span = (th[i + 1] - th[i]) as u32;
+                let offset = (raw - th[i]) as u32;
+                let delta_dbm = (DBM_POINTS[i + 1] - DBM_POINTS[i]) as u32;
+                let delta = if span > 0 { (offset * delta_dbm) / span } else { 0 };
+                return DBM_POINTS[i] + delta as i16;
+            }
+        }
+        -73
     }
 
     /// Battery calibration baseline constant at 7.60V (word 3).
