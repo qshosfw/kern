@@ -250,12 +250,12 @@ impl RadioCoordinator {
 
     #[inline(always)]
     pub fn active_channel(&self) -> &ChannelConfig {
-        &self.channels[self.active_vfo.index().min(self.channels.len() - 1)]
+        &self.channels[self.active_vfo.index() & 1]
     }
 
     #[inline(always)]
     pub fn active_channel_mut(&mut self) -> &mut ChannelConfig {
-        let idx = self.active_vfo.index().min(self.channels.len() - 1);
+        let idx = self.active_vfo.index() & 1;
         &mut self.channels[idx]
     }
 

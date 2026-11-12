@@ -244,10 +244,8 @@ fn read_radio_facet(
 fn read_ui_facet(facet: u16, hw: &SystemHardware, out: &mut [u8]) -> Result<usize, WireStatus> {
     match facet {
         FACET_UI_SURFACE => {
-            out[..2].copy_from_slice(&128u16.to_le_bytes());
-            out[2..4].copy_from_slice(&64u16.to_le_bytes());
-            out[4] = 1;
-            out[5..7].copy_from_slice(&1024u16.to_le_bytes());
+            const UI_SURFACE_INFO: [u8; 7] = [128, 0, 64, 0, 1, 0, 4];
+            out[..7].copy_from_slice(&UI_SURFACE_INFO);
             Ok(7)
         }
         FACET_UI_MODAL => {
@@ -558,7 +556,8 @@ fn on_handle_stream(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
         let off = (req.offset as usize).min(total_sz);
         let len = (req.length as usize).min(100).min(total_sz - off);
 
-        let mut resp = [0u8; 10 + 100];
+        let mut resp_uninit = core::mem::MaybeUninit::<[u8; 10 + 100]>::uninit();
+        let resp = unsafe { &mut *resp_uninit.as_mut_ptr() };
         req.handle.write_bytes(&mut resp[..4]);
         resp[4..8].copy_from_slice(&(off as u32).to_le_bytes());
         resp[8..10].copy_from_slice(&(len as u16).to_le_bytes());
