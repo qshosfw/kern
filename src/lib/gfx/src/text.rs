@@ -94,6 +94,7 @@ pub fn draw_str_max_x(
 }
 
 /// Calculate the total pixel width of a string formatted with the specified GfxFont.
+#[inline(never)]
 pub fn str_width(text: &str, font: &GfxFont) -> i16 {
     let mut width = 0i16;
     let bytes = text.as_bytes();
@@ -126,6 +127,7 @@ pub enum Align {
 }
 
 /// Draw aligned text (Left, Center, or Right) onto the canvas.
+#[inline(never)]
 pub fn draw_str_align(
     canvas: &mut Canvas,
     x: i16,
@@ -138,7 +140,7 @@ pub fn draw_str_align(
     let w = str_width(text, font);
     let start_x = match align {
         Align::Left => x,
-        Align::Center => x - (w / 2),
+        Align::Center => x - (w >> 1),
         Align::Right => x - w,
     };
     draw_str(canvas, start_x, y, text, font, color);

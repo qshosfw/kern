@@ -54,7 +54,7 @@ pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
     }
 }
 
-#[inline(never)]
+#[inline(always)]
 pub fn active_canvas_mut() -> &'static mut Canvas {
     crate::system_canvas()
 }

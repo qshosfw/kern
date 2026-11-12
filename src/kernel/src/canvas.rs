@@ -643,6 +643,7 @@ impl Canvas {
     /// Hardware-efficient in-place vertical bit-shift scroll.
     /// Positive `dy` shifts content down (towards page 7).
     /// Negative `dy` shifts content up (towards page 0).
+    #[inline(never)]
     pub fn scroll_vertical(&mut self, dy: i8, fill_byte: u8) {
         if dy == 0 {
             return;
@@ -658,6 +659,7 @@ impl Canvas {
     /// Hardware-efficient horizontal column shift across all display pages.
     /// Positive `dx` shifts content right.
     /// Negative `dx` shifts content left.
+    #[inline(never)]
     pub fn scroll_horizontal(&mut self, dx: i8, fill_byte: u8) {
         if dx == 0 {
             return;
