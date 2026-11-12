@@ -180,33 +180,29 @@ impl<'a, State> Bk4829<'a, State> {
     /// Apply a subaudible tone configuration (`None`, `Ctcss`, `DcsNormal`, `DcsInverted`)
     /// to hardware registers `REG_07`, `REG_08`, `REG_51`, and `REG_52`.
     pub(crate) fn apply_subaudible_hw(&mut self, tone: kernel::service::radio::SubaudibleTone) {
-        match tone {
+        self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
+        let ctrl = match tone {
             kernel::service::radio::SubaudibleTone::None => {
-                // Keep 55 Hz CTC2 tail detector armed on REG_07 even when no CTCSS is configured
                 self.write_reg(REG_CXCSS_FREQ, subaudible::CTC2_55HZ_DETECT_REG);
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-                self.write_reg(REG_CXCSS_CTRL, 0x0000);
+                0x0000
             }
             kernel::service::radio::SubaudibleTone::Ctcss(deci_hz) => {
-                // Program CTC2 55.0 Hz tail detector (mode 1) then CTC1 main frequency (mode 0)
                 self.write_reg(REG_CXCSS_FREQ, subaudible::CTC2_55HZ_DETECT_REG);
                 self.write_reg(REG_CXCSS_FREQ, subaudible::ctcss_deci_hz_to_reg(deci_hz));
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-                self.write_reg(REG_CXCSS_CTRL, subaudible::CXCSS_CTRL_CTCSS);
+                subaudible::CXCSS_CTRL_CTCSS
             }
-            kernel::service::radio::SubaudibleTone::DcsNormal(code) => {
+            kernel::service::radio::SubaudibleTone::DcsNormal(code)
+            | kernel::service::radio::SubaudibleTone::DcsInverted(code) => {
                 self.write_reg(REG_CXCSS_FREQ, subaudible::CDCSS_134_4HZ_BAUD_REG);
                 self.write_cdcss_golay_code(code);
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-                self.write_reg(REG_CXCSS_CTRL, subaudible::CXCSS_CTRL_CDCSS_NORM);
+                if matches!(tone, kernel::service::radio::SubaudibleTone::DcsInverted(_)) {
+                    subaudible::CXCSS_CTRL_CDCSS_INV
+                } else {
+                    subaudible::CXCSS_CTRL_CDCSS_NORM
+                }
             }
-            kernel::service::radio::SubaudibleTone::DcsInverted(code) => {
-                self.write_reg(REG_CXCSS_FREQ, subaudible::CDCSS_134_4HZ_BAUD_REG);
-                self.write_cdcss_golay_code(code);
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-                self.write_reg(REG_CXCSS_CTRL, subaudible::CXCSS_CTRL_CDCSS_INV);
-            }
-        }
+        };
+        self.write_reg(REG_CXCSS_CTRL, ctrl);
     }
 
     pub fn set_af(&mut self, af: AfType) {
@@ -1104,93 +1100,52 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
 
 impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
     fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
+        use kernel::service::radio::ModulationMode::*;
+        let is_am_or_ssb = matches!(mode, Am | AmB | Usb | Dsb | Cw);
         let mut reg40 = self.cache.read(REG_MODULATION);
-        match mode {
-            kernel::service::radio::ModulationMode::Fm => {
-                reg40 &= !0x1000; // FM mode bit in Reg 0x40
-                self.write_reg(REG_MODULATION, reg40);
-                self.write_reg(REG_IF_COEFF, 0x2AAB); // Standard IF filter coefficient
-                // Enable AFC (bit 4 of REG 0x73 = 0)
-                let reg73 = self.cache.read(REG_AFC);
-                self.write_reg(REG_AFC, reg73 & !(1 << 4));
-                // Set demodulator to FM and restore de-emphasis
-                self.active_demod_af = AfType::Fm;
-                self.set_af(AfType::Fm);
-                let reg2b = self.cache.read(REG_FILTERS);
-                self.write_reg(REG_FILTERS, reg2b & !(1 << 8)); // Enable RX de-emphasis
-                self.set_agc(true);
-            }
-            kernel::service::radio::ModulationMode::Am
-            | kernel::service::radio::ModulationMode::AmB => {
-                reg40 |= 0x1000; // AM mode bit in Reg 0x40
-                self.write_reg(REG_MODULATION, reg40);
-                self.write_reg(REG_IF_COEFF, 0x2AAB);
-                // Disable AFC (bit 4 of REG 0x73 = 1): FM AFC pulls toward sidebands, causing severe pitch flutter in AM
-                let reg73 = self.cache.read(REG_AFC);
-                self.write_reg(REG_AFC, reg73 | (1 << 4));
-                // Set demodulator to AM and disable de-emphasis (AM does not use pre-emphasis)
-                self.active_demod_af = AfType::Am;
-                self.set_af(AfType::Am);
-                let reg2b = self.cache.read(REG_FILTERS);
-                self.write_reg(REG_FILTERS, reg2b | (1 << 8)); // Disable RX de-emphasis
-                // Configure AM AGC gain staging: drop min gain floor to prevent envelope limiter saturation
+        if is_am_or_ssb {
+            reg40 |= 0x1000;
+        } else {
+            reg40 &= !0x1000;
+        }
+        if matches!(mode, PktFm | Dig) {
+            reg40 &= !(0b11 << 14); // Compander off
+        }
+        self.write_reg(REG_MODULATION, reg40);
+
+        if mode != Byp {
+            let if_coeff = if matches!(mode, Usb | Dsb | Cw) { 0x0000 } else { 0x2AAB };
+            self.write_reg(REG_IF_COEFF, if_coeff);
+        }
+
+        let af = match mode {
+            Am | AmB => AfType::Am,
+            Usb | Dsb | Cw => AfType::Baseband2,
+            Raw => AfType::Baseband1,
+            Byp => AfType::Byp,
+            _ => AfType::Fm,
+        };
+        self.active_demod_af = af;
+        self.set_af(af);
+
+        if !matches!(mode, Raw | Byp) {
+            let reg73 = self.cache.read(REG_AFC);
+            let afc_val = if is_am_or_ssb { reg73 | (1 << 4) } else { reg73 & !(1 << 4) };
+            self.write_reg(REG_AFC, afc_val);
+
+            let reg2b = self.cache.read(REG_FILTERS);
+            let filters_val = match mode {
+                Fm => reg2b & !(1 << 8),
+                PktFm | Dig => reg2b | (1 << 0) | (1 << 8),
+                _ => reg2b | (1 << 8),
+            };
+            self.write_reg(REG_FILTERS, filters_val);
+
+            if matches!(mode, Am | AmB) {
                 self.write_reg(REG_AGC_TABLE_MIN, 0x0000);
                 self.write_reg(REG_AGC_TARGET, (50 << 7) | 32);
-                self.set_agc(true);
             }
-            kernel::service::radio::ModulationMode::Usb
-            | kernel::service::radio::ModulationMode::Dsb
-            | kernel::service::radio::ModulationMode::Cw => {
-                reg40 |= 0x1000;
-                self.write_reg(REG_MODULATION, reg40);
-                // Bypass IF filter coefficient (0x0000 opens wide IF baseband for sideband reception)
-                self.write_reg(REG_IF_COEFF, 0x0000);
-                // Disable AFC (no carrier to lock onto in suppressed carrier SSB/CW)
-                let reg73 = self.cache.read(REG_AFC);
-                self.write_reg(REG_AFC, reg73 | (1 << 4));
-                // Route Baseband2 (undocumented SSB audio tap) and disable de-emphasis
-                self.active_demod_af = AfType::Baseband2;
-                self.set_af(AfType::Baseband2);
-                let reg2b = self.cache.read(REG_FILTERS);
-                self.write_reg(REG_FILTERS, reg2b | (1 << 8)); // Disable RX de-emphasis
-                self.set_agc(true);
-            }
-            kernel::service::radio::ModulationMode::PktFm
-            | kernel::service::radio::ModulationMode::Dig => {
-                // Packet Flat FM / Digital Mode: zero de-emphasis/pre-emphasis, flat audio passband
-                reg40 &= !0x1000; // FM mode
-                reg40 &= !(0b11 << 14); // Compander off
-                self.write_reg(REG_MODULATION, reg40);
-                self.write_reg(REG_IF_COEFF, 0x2AAB);
-                let reg73 = self.cache.read(REG_AFC);
-                self.write_reg(REG_AFC, reg73 & !(1 << 4));
-                self.active_demod_af = AfType::Fm;
-                self.set_af(AfType::Fm);
-                // Disable both TX pre-emphasis (bit 0) and RX de-emphasis (bit 8)
-                let reg2b = self.cache.read(REG_FILTERS);
-                self.write_reg(REG_FILTERS, reg2b | (1 << 0) | (1 << 8));
-                self.set_agc(true);
-            }
-            kernel::service::radio::ModulationMode::Raw => {
-                reg40 &= !0x1000;
-                self.write_reg(REG_MODULATION, reg40);
-                self.write_reg(REG_IF_COEFF, 0x2AAB);
-                self.active_demod_af = AfType::Baseband1;
-                self.set_af(AfType::Baseband1);
-            }
-            kernel::service::radio::ModulationMode::Byp => {
-                reg40 &= !0x1000;
-                self.write_reg(REG_MODULATION, reg40);
-                self.active_demod_af = AfType::Byp;
-                self.set_af(AfType::Byp);
-            }
-            kernel::service::radio::ModulationMode::Wfm => {
-                reg40 &= !0x1000;
-                self.write_reg(REG_MODULATION, reg40);
-                self.write_reg(REG_IF_COEFF, 0x2AAB);
-                self.active_demod_af = AfType::Fm;
-                self.set_af(AfType::Fm);
-            }
+            self.set_agc(true);
         }
     }
 
