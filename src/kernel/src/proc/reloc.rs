@@ -60,8 +60,8 @@ pub unsafe fn apply_relocs(
 
         unsafe {
             let ptr = data_base.add(offset) as *mut u32;
-            let current = ptr.read_unaligned();
-            ptr.write_unaligned(current.wrapping_add(load_delta));
+            let current = *ptr;
+            *ptr = current.wrapping_add(load_delta);
         }
 
         count += 1;
