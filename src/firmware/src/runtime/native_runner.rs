@@ -791,6 +791,25 @@ fn decode_status_glyph(id: u8, c0: &[u8; 5], c1: &[u8; 5]) -> Option<kernel::can
     }
 }
 
+#[inline(never)]
+fn decode_icon_list(
+    icons: &[u8],
+    count: u8,
+    c0: &[u8; 5],
+    c1: &[u8; 5],
+    out: &mut [kernel::canvas::StatusGlyph; 4],
+) -> usize {
+    let mut n = 0;
+    let limit = (count as usize).min(4);
+    for &id in &icons[..limit] {
+        if let Some(glyph) = decode_status_glyph(id, c0, c1) {
+            out[n] = glyph;
+            n += 1;
+        }
+    }
+    n
+}
+
 pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     let slot = slot_mut();
     if sb.is_null() {
@@ -798,27 +817,25 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
         slot.status_bar_left_count = 0;
         slot.status_bar_center_count = 0;
     } else {
-        let s = unsafe { *sb };
+        let s = unsafe { &*sb };
         slot.custom_icon_0 = s.custom_icon_0;
         slot.custom_icon_1 = s.custom_icon_1;
 
-        slot.status_bar_left_count = 0;
-        let l_cnt = (s.left_icon_count as usize).min(4);
-        for &id in &s.left_icons[..l_cnt] {
-            if let Some(glyph) = decode_status_glyph(id, &s.custom_icon_0, &s.custom_icon_1) {
-                slot.status_bar_left_icons[slot.status_bar_left_count] = glyph;
-                slot.status_bar_left_count += 1;
-            }
-        }
+        slot.status_bar_left_count = decode_icon_list(
+            &s.left_icons,
+            s.left_icon_count,
+            &s.custom_icon_0,
+            &s.custom_icon_1,
+            &mut slot.status_bar_left_icons,
+        );
 
-        slot.status_bar_center_count = 0;
-        let c_cnt = (s.center_icon_count as usize).min(4);
-        for &id in &s.center_icons[..c_cnt] {
-            if let Some(glyph) = decode_status_glyph(id, &s.custom_icon_0, &s.custom_icon_1) {
-                slot.status_bar_center_icons[slot.status_bar_center_count] = glyph;
-                slot.status_bar_center_count += 1;
-            }
-        }
+        slot.status_bar_center_count = decode_icon_list(
+            &s.center_icons,
+            s.center_icon_count,
+            &s.custom_icon_0,
+            &s.custom_icon_1,
+            &mut slot.status_bar_center_icons,
+        );
 
         // Auto-register or clear status tray icon requested by app
         if s.tray_icon_id != 0 {
@@ -832,7 +849,7 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
             }
         }
 
-        slot.status_bar = Some(s);
+        slot.status_bar = Some(*s);
     }
 }
 
