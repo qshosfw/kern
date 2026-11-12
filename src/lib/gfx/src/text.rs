@@ -186,13 +186,18 @@ pub fn find_byte(bytes: &[u8], target: u8) -> Option<usize> {
 }
 
 /// Count lines in a string slice without pulling in Split<char> iterator machinery.
-#[inline(always)]
+#[inline(never)]
 pub fn count_lines(s: &str) -> usize {
     if s.is_empty() {
-        0
-    } else {
-        s.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1
+        return 0;
     }
+    let mut n = 1;
+    for &b in s.as_bytes() {
+        if b == b'\n' {
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Zero-allocation line iterator splitting on ASCII `'\n'`.
