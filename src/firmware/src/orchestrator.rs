@@ -438,6 +438,52 @@ impl Orchestrator {
         }
     }
 
+    fn handle_system_audio_events<'a>(
+        &self,
+        ctx: &mut crate::services::SysContext<'a, '_>,
+        event: &Event,
+    ) {
+        if let Event::Charging(true) = event {
+            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Charging);
+        }
+        #[cfg(feature = "usb")]
+        if let Event::Usb(usb_ev) = event {
+            match usb_ev {
+                kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
+                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbConnect);
+                }
+                kernel::event::UsbEvent::Disconnected | kernel::event::UsbEvent::Suspended => {
+                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbDisconnect);
+                }
+                _ => {}
+            }
+        }
+        #[cfg(feature = "radio")]
+        if let Event::Bus(bus_evt) = event {
+            if bus_evt.topic == kernel::ipc::Topic::RADIO {
+                if let Some(r_ev) = crate::services::radio::RadioEvent::from_bus_event(bus_evt) {
+                    match r_ev {
+                        crate::services::radio::RadioEvent::TotWarning { .. } => {
+                            if ctx.config.audio.key_beep != 0 {
+                                ctx.play_dialog_sound(
+                                    crate::services::melody::DialogSoundType::Warning,
+                                );
+                            }
+                        }
+                        crate::services::radio::RadioEvent::TotExpired => {
+                            if ctx.config.audio.key_beep != 0 {
+                                ctx.play_dialog_sound(
+                                    crate::services::melody::DialogSoundType::Error,
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
     #[inline(never)]
     pub fn dispatch_event<'a>(
         &mut self,
@@ -493,45 +539,7 @@ impl Orchestrator {
             }
         }
 
-        if let Event::Charging(true) = event {
-            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Charging);
-        }
-        #[cfg(feature = "usb")]
-        if let Event::Usb(usb_ev) = event {
-            match usb_ev {
-                kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
-                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbConnect);
-                }
-                kernel::event::UsbEvent::Disconnected | kernel::event::UsbEvent::Suspended => {
-                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbDisconnect);
-                }
-                _ => {}
-            }
-        }
-        #[cfg(feature = "radio")]
-        if let Event::Bus(ref bus_evt) = event {
-            if bus_evt.topic == kernel::ipc::Topic::RADIO {
-                if let Some(r_ev) = crate::services::radio::RadioEvent::from_bus_event(bus_evt) {
-                    match r_ev {
-                        crate::services::radio::RadioEvent::TotWarning { .. } => {
-                            if ctx.config.audio.key_beep != 0 {
-                                ctx.play_dialog_sound(
-                                    crate::services::melody::DialogSoundType::Warning,
-                                );
-                            }
-                        }
-                        crate::services::radio::RadioEvent::TotExpired => {
-                            if ctx.config.audio.key_beep != 0 {
-                                ctx.play_dialog_sound(
-                                    crate::services::melody::DialogSoundType::Error,
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        self.handle_system_audio_events(ctx, &event);
 
         if matches!(event, Event::Tick) {
             self.tick_background_services(ctx);
