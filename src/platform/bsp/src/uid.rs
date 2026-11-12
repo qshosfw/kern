@@ -156,7 +156,9 @@ pub fn get_crockford_serial() -> [u8; 15] {
 
     let hi = (serial >> 32) as u32;
     let lo = serial as u32;
-    let mod37 = (((hi % 37) * 7 + (lo % 37)) % 37) as usize;
+    let r_hi = utils::math::rem37_u32(hi) as u16;
+    let r_lo = utils::math::rem37_u32(lo) as u16;
+    let mod37 = utils::math::div37_u16(r_hi * 7 + r_lo).1 as usize;
     out[13] = CHECKSUM_ALPHABET[mod37];
     out[14] = b'\0';
 
