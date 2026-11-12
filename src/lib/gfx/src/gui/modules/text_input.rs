@@ -450,7 +450,10 @@ impl View<TextInputModel> for TextInputView {
                     if is_same_key && is_recent && !model.buffer.is_empty() {
                         // Multi-tap cycle through characters
                         model.press_count += 1;
-                        let char_idx = model.press_count % chars.len();
+                        if model.press_count >= chars.len() {
+                            model.press_count = 0;
+                        }
+                        let char_idx = model.press_count;
                         let new_ch = chars[char_idx] as char;
                         model.buffer.pop();
                         let _ = model.buffer.push(new_ch);
@@ -459,6 +462,7 @@ impl View<TextInputModel> for TextInputView {
                         Self::confirm_current_char(model);
                         push_char_with_limit(model, chars[0] as char);
                         model.last_key = Some(key_num);
+                        model.press_count = 0;
                     }
                     model.last_activity_tick = model.ticks;
                     return true;

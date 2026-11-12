@@ -84,7 +84,8 @@ impl KineticScroller {
         } else if abs_diff <= 28 {
             4
         } else {
-            (abs_diff / 6).clamp(4, 8)
+            // Fast reciprocal division: abs_diff / 6 for abs_diff > 28
+            (((abs_diff as u32 * 0xAAAB) >> 18) as i16).min(8)
         };
 
         if abs_diff <= step {

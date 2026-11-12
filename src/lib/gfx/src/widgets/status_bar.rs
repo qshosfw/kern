@@ -273,7 +273,15 @@ impl<'a> StatusRightConfig<'a> {
         let is_charging = self.is_charging();
         let fill_bars = if is_charging && full_bars < 10 {
             let range = 11 - full_bars;
-            let step = if range > 0 { self.anim_step % range } else { 0 };
+            let step = if range > 0 {
+                let mut rem = self.anim_step;
+                while rem >= range {
+                    rem -= range;
+                }
+                rem
+            } else {
+                0
+            };
             full_bars + step
         } else {
             full_bars

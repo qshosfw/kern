@@ -628,11 +628,9 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_agc_table(&mut self, table: &[u16; 5]) {
-        self.write_reg(0x10, table[0]);
-        self.write_reg(0x11, table[1]);
-        self.write_reg(0x12, table[2]);
-        self.write_reg(0x13, table[3]);
-        self.write_reg(0x14, table[4]);
+        for (i, &val) in table.iter().enumerate() {
+            self.write_reg(0x10 + i as u8, val);
+        }
     }
 
     pub fn prepare_fsk_receive(&mut self, data_length: u16) {

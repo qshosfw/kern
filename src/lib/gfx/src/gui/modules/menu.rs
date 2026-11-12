@@ -854,7 +854,8 @@ impl MenuView {
 
         let visible_count = 3usize;
         let total = sheet.options.len();
-        let page = sheet.hover / visible_count;
+        let (page_u16, _) = utils::math::div3_u16(sheet.hover as u16);
+        let page = page_u16 as usize;
         let start_idx = page * visible_count;
         let end_idx = (start_idx + visible_count).min(total);
 
@@ -926,9 +927,17 @@ pub fn sheet_nav_dir(code: KeyCode) -> Option<bool> {
 #[inline(always)]
 fn step_hover(hover: usize, total: usize, forward: bool) -> usize {
     if forward {
-        (hover + 1) % total
+        if hover + 1 < total {
+            hover + 1
+        } else {
+            0
+        }
+    } else if hover > 0 {
+        hover - 1
+    } else if total > 0 {
+        total - 1
     } else {
-        (hover + total - 1) % total
+        0
     }
 }
 

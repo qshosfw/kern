@@ -261,6 +261,30 @@ fn resolve_capability_vtable(
     None
 }
 
+#[inline(always)]
+fn bind_entry(
+    binding: CapBinding,
+    got_words: &mut [u32],
+    granted_caps: CapabilitySet,
+) -> bool {
+    let slot = binding.slot_idx as usize;
+    if slot >= got_words.len() {
+        return false;
+    }
+    match resolve_capability_vtable(binding.interface_id, binding.min_abi, granted_caps) {
+        Some(vtable_addr) => {
+            got_words[slot] = vtable_addr as u32;
+        }
+        None => {
+            if (binding.flags & CapBinding::FLAG_MANDATORY) != 0 {
+                return false;
+            }
+            got_words[slot] = 0; // NULL for OPTIONAL binding
+        }
+    }
+    true
+}
+
 /// Bind `SECTION_CAP_IMPORTS (0x0003)` into the loaded package's GOT slots (Appendix C).
 /// Returns `false` if any `FLAG_MANDATORY` import fails to resolve.
 #[inline(never)]
@@ -272,32 +296,23 @@ pub fn bind_cap_imports(
     if cap_section_body.is_empty() {
         return true;
     }
-    let stride = if cap_section_body.len() % 8 == 0 && cap_section_body.len() % 6 != 0 {
-        CapBinding::SIZE_WITH_SLOT
-    } else {
-        CapBinding::SIZE
-    };
-    let count = cap_section_body.len() / stride;
-    for i in 0..count {
-        let slice = &cap_section_body[i * stride..];
-        let Some(binding) = CapBinding::parse(slice, i as u16) else {
+    let len = cap_section_body.len();
+    let (_, r3) = utils::math::div3_u16((len as u16) >> 1);
+    let is_div_6 = (len & 1) == 0 && r3 == 0;
+    let is_div_8 = (len & 7) == 0;
+    let stride = if is_div_8 && !is_div_6 { 8 } else { 6 };
+    let mut offset = 0;
+    let mut slot_i = 0u16;
+    while offset + stride <= len {
+        let slice = &cap_section_body[offset..offset + stride];
+        let Some(binding) = CapBinding::parse(slice, slot_i) else {
             return false;
         };
-        let slot = binding.slot_idx as usize;
-        if slot >= got_words.len() {
+        if !bind_entry(binding, got_words, granted_caps) {
             return false;
         }
-        match resolve_capability_vtable(binding.interface_id, binding.min_abi, granted_caps) {
-            Some(vtable_addr) => {
-                got_words[slot] = vtable_addr as u32;
-            }
-            None => {
-                if (binding.flags & CapBinding::FLAG_MANDATORY) != 0 {
-                    return false;
-                }
-                got_words[slot] = 0; // NULL for OPTIONAL binding
-            }
-        }
+        offset += stride;
+        slot_i = slot_i.saturating_add(1);
     }
     true
 }

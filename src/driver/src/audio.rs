@@ -231,7 +231,7 @@ unsafe fn adc_select_channel(ch: u32) {
 
 pub struct AudioCaptureDriver {
     active: bool,
-    rate_hz: u16,
+    period_us: u16,
     dc_bias_est: i32,
 }
 
@@ -239,7 +239,7 @@ impl AudioCaptureDriver {
     pub const fn new() -> Self {
         Self {
             active: false,
-            rate_hz: 8000,
+            period_us: 125,
             dc_bias_est: 2048,
         }
     }
@@ -281,10 +281,18 @@ impl AudioCaptureDriver {
                 sum += adc_convert_single(cr2);
             }
 
-            self.rate_hz = if rate_hz == 0 {
+            let rate = if rate_hz == 0 {
                 8000
             } else {
                 rate_hz.clamp(1000, 24000)
+            };
+            self.period_us = match rate {
+                8000 => 125,
+                11025 => 90,
+                16000 => 62,
+                22050 => 45,
+                24000 => 41,
+                _ => (1_000_000 / (rate as u32)).max(10) as u16,
             };
             self.dc_bias_est = sum >> 3;
             self.active = true;
@@ -303,7 +311,7 @@ impl AudioCaptureDriver {
             // Re-verify ADC is set to Channel 4 (in case battery telemetry polled Channel 8)
             adc_select_channel(4);
 
-            let period_us = (1_000_000 / (self.rate_hz as u32)).max(10);
+            let period_us = self.period_us as u32;
             let cr2 = pac::adc::ADC_CR2.read_volatile();
 
             for (i, sample) in out_samples.iter_mut().enumerate() {

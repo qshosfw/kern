@@ -96,6 +96,15 @@ pub const fn div60_u32(x: u32) -> (u32, u8) {
     (q, r)
 }
 
+/// Fast reciprocal division by 1000 for unsigned 32-bit integers.
+///
+/// Exact for all `x <= 4,294,967,295`.
+/// Uses a 64-bit multiply and 40-bit shift: `((x * 0x4189_374C) >> 40)`.
+#[inline(always)]
+pub const fn div1000_u32(x: u32) -> u32 {
+    ((x as u64 * 0x4189_374C) >> 40) as u32
+}
+
 /// Fast reciprocal division by 7600 for unsigned 32-bit integers.
 ///
 /// Exact for all `x <= 52,500,000` (battery millivolt / calibration conversions).
@@ -185,6 +194,17 @@ mod tests {
             let (q, r) = div60_u32(x);
             assert_eq!(q, x / 60, "q mismatch at {}", x);
             assert_eq!(r as u32, x % 60, "r mismatch at {}", x);
+        }
+    }
+
+    #[test]
+    fn test_div1000_u32_selected_values() {
+        let test_cases = [
+            0, 1, 999, 1000, 1001, 5000, 9999, 10000, 65535, 86400, 100000, 1000000,
+            12345678, 100000000, 4294967290, 4294967295,
+        ];
+        for &x in &test_cases {
+            assert_eq!(div1000_u32(x), x / 1000, "div1000 mismatch at {}", x);
         }
     }
 

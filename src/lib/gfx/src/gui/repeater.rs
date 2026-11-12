@@ -86,14 +86,28 @@ impl KeyRepeater {
             self.ticks = self.ticks.saturating_add(1);
             if self.ticks > self.initial_delay_ticks {
                 let repeat_ticks = self.ticks - self.initial_delay_ticks;
-                let rate = if self.turbo_threshold_ticks > 0
+                let is_fire = if self.turbo_threshold_ticks > 0
                     && repeat_ticks > self.turbo_threshold_ticks
                 {
-                    1
+                    true
                 } else {
-                    self.repeat_rate_ticks.max(1)
+                    let rate = self.repeat_rate_ticks.max(1);
+                    match rate {
+                        1 => true,
+                        2 => (repeat_ticks & 1) == 0,
+                        3 => utils::math::div3_u16(repeat_ticks).1 == 0,
+                        4 => (repeat_ticks & 3) == 0,
+                        8 => (repeat_ticks & 7) == 0,
+                        _ => {
+                            let mut rem = repeat_ticks;
+                            while rem >= rate {
+                                rem -= rate;
+                            }
+                            rem == 0
+                        }
+                    }
                 };
-                if repeat_ticks.is_multiple_of(rate) {
+                if is_fire {
                     return Some(key);
                 }
             }

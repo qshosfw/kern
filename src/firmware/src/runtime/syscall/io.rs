@@ -235,7 +235,7 @@ pub unsafe extern "C" fn api_sys_ticks_ms() -> u32 {
 }
 
 pub unsafe extern "C" fn api_sys_uptime_secs() -> u32 {
-    py32_hal::delay::millis() / 1000
+    utils::math::div1000_u32(py32_hal::delay::millis())
 }
 
 pub unsafe extern "C" fn api_sys_delay_ms(ms: u32) {

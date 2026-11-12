@@ -140,7 +140,8 @@ impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
             0..=12_500 => Bandwidth::Narrow12k5,
             _ => Bandwidth::Wide25k,
         };
-        let step = StepSetting::from_hz_x10((step_hz / 10) as u16);
+        let (step_10hz, _) = utils::math::div10_u32(step_hz);
+        let step = StepSetting::from_hz_x10(step_10hz as u16);
         let slot = self.state.coord.active_vfo;
         {
             let ch = self.state.coord.vfo_channel_mut(slot);
