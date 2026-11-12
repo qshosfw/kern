@@ -23,6 +23,7 @@ pub enum LockToast {
     PromptUnlock,
 }
 
+#[repr(C)]
 pub struct KeypadLockManager {
     pub is_locked: bool,
     pub is_f_active: bool,
@@ -126,7 +127,7 @@ impl KeypadLockManager {
         self.last_tick_ms = py32_hal::delay::millis();
     }
 
-    #[inline(always)]
+    #[inline(never)]
     fn update_progress_slope(&mut self) {
         let vis_target = self
             .hold_target_ms

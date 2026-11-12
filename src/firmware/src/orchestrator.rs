@@ -28,8 +28,8 @@ pub struct Orchestrator {
     owned_key: Option<KeyCode>,
     active_app_id: usize,
     previous_app: Option<usize>,
-    nav_stack: NavStack<6>,
     lock_mgr: KeypadLockManager,
+    nav_stack: NavStack<6>,
 }
 
 pub const MAX_PROCESSES: usize = 8;
