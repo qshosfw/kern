@@ -16,12 +16,13 @@ pub enum Color {
 impl Color {
     #[inline(always)]
     pub const fn from_u8(v: u8) -> Self {
-        match v {
-            0 => Color::Clear,
-            2 | 0xFF => Color::Invert,
-            3 => Color::DarkGray,
-            4 => Color::LightGray,
-            _ => Color::Fill,
+        if v == 0xFF {
+            Color::Invert
+        } else if v > 4 {
+            Color::Fill
+        } else {
+            // Safety: v is in 0..=4 which matches #[repr(u8)] discriminants 0..=4
+            unsafe { core::mem::transmute(v) }
         }
     }
 }
