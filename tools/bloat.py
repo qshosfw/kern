@@ -17,7 +17,9 @@ Subcommands:
   pools     literal-pool tax, most-reloaded statics, fns exceeding +1020 B ldr reach
   math64    __aeabi_l* 64-bit emulation callers;  memcpy  mem* callers;  traps  udf check sites
   divs / unaligned   software division / unaligned-access helper callers
-  baseline  save per-symbol sizes to JSON;  diff  compare current ELF to a baseline
+  phases    live scoreboard against docs/flash_audit_measured_plan.md Phases 10-19 targets
+  syscalls  list runtime::syscall shims sorted by size (Phase 10 target <= 24 B)
+  baseline  save per-symbol sizes + section totals to JSON;  diff  compare current ELF to baseline
 
 Usage: tools/bloat.py <cmd> [--elf PATH] [--top N] [--json FILE] [...]
 """
@@ -189,8 +191,9 @@ def cmd_audit(a):
     print(f"     Target: {anon_rodata} B anonymous rodata -> ~4,000 B (Est. Saving: ~6,000–10,000 B)")
     print("     Action: Subset fonts, PackBits RLE for icons, string pool for UI labels.")
     print(" [3] PHASE 11: RigWire Facet Table & ByteWriter Cursor")
-    print(f"     Target: dispatch_wire_record (4,656 B) -> ≤ 1,200 B (Est. Saving: ~3,400 B)")
-    print("     Action: Replace 30 inline facet serializers with const FacetDesc table.")
+    wire_top = max(((sz, k) for k, (sz, t, _) in syms.items() if "services::wire::" in k and t in "tT"), default=(0, ""))
+    print(f"     Target: top wire fn ({wire_top[1].split('::')[-1]}: {wire_top[0]} B) -> <= 1,200 B")
+    print("     Action: Replace inline facet serializers with const FacetDesc table.")
     print(" [4] PHASE 15: Unified Sheet Modal Compositor")
     print("     Target: Compositor + dialogs + settings sheets -> one Sheet model (Est. Saving: ~3,000 B)")
     print("     Action: Merge 4 overlapping modal renderers into single Sheet::render().")
@@ -392,7 +395,18 @@ def cmd_crates(a):
 
 
 def cmd_baseline(a):
-    json.dump({n: v[0] for n, v in symbols(a.elf).items() if v[1] in "tTrR"}, open(a.out, "w"), indent=0)
+    secs = elf_sections(a.elf)
+    payload = {
+        "__sections__": {
+            "text": secs.get(".text", (0, 0))[0],
+            "rodata": secs.get(".rodata", (0, 0))[0],
+            "data": secs.get(".data", (0, 0))[0],
+            "bss": secs.get(".bss", (0, 0))[0],
+        },
+        "symbols": {n: v[0] for n, v in symbols(a.elf).items() if v[1] in "tTrR"},
+    }
+    with open(a.out, "w") as f:
+        json.dump(payload, f, indent=0)
     print("saved", a.out)
 
 
@@ -529,6 +543,10 @@ def cmd_rodata(a):
             return "strings"
         return "binary (glyphs/icons/tables)"
     print(f"== .rodata {sz} B: named {sum(s for _, s, _ in named)} B, anonymous {sum(g for _, g in gaps)} B in {len(gaps)} gaps ==")
+    print("-- top named .rodata symbols --")
+    for ad, s, k in sorted(named, key=lambda x: -x[1])[: min(10, a.top)]:
+        print(f"{s:6d} B  +{ad-ro:<6d} {k}")
+    print("-- top anonymous .rodata gaps --")
     for g, gs in sorted(gaps, key=lambda x: -x[1])[: a.top]:
         who = collections.Counter()
         for v, fs in refs.items():
@@ -580,10 +598,108 @@ def cmd_suggest(a):
         print(f"{i:2d}. ~{s:4d} B  [{k}]  {d}")
 
 
+def cmd_syscalls(a):
+    """List runtime::syscall functions sorted by size with callees (Phase 10 target <= 24 B)."""
+    syms = symbols(a.elf)
+    fns = disasm(a.elf)
+    sc = sorted(((sz, k) for k, (sz, t, _) in syms.items() if "runtime::syscall" in k and t in "tT"), reverse=True)
+    tot = sum(sz for sz, _ in sc)
+    over = sum(1 for sz, _ in sc if sz > 24)
+    print(f"== runtime::syscall: {len(sc)} symbols, {tot} B total, {over} > 24 B (Phase 10 target <= 8,192 B) ==")
+    for sz, k in sc[: a.top]:
+        callees = []
+        for _, _, mn, op in fns.get(k, ()):
+            if mn in ("bl", "blx", "b.w", "b"):
+                m = re.search(r"<([^>+]+)", op)
+                if m and m.group(1) != k:
+                    callees.append(m.group(1).split("::")[-1])
+        uniq_c = ", ".join(dict.fromkeys(callees))[:55]
+        flag = "!" if sz > 24 else " "
+        print(f"{flag}{sz:5d} B  {k:<62}  -> {uniq_c}")
+
+
+def cmd_phases(a):
+    """Live scoreboard against docs/flash_audit_measured_plan.md Phases 10-19."""
+    syms = symbols(a.elf)
+    secs = elf_sections(a.elf)
+    fns = disasm(a.elf)
+    text_sz = secs.get(".text", (0, 0))[0]
+    rodata_sz = secs.get(".rodata", (0, 0))[0]
+    data_sz = secs.get(".data", (0, 0))[0]
+    flash = text_sz + rodata_sz + data_sz
+    named_ro = sum(v[0] for v in syms.values() if v[1] in "rR")
+    anon_ro = max(0, rodata_sz - named_ro)
+
+    def sum_mod(substr, types="tT"):
+        return sum(sz for k, (sz, t, _) in syms.items() if substr in k and t in types)
+
+    def max_fn(substr):
+        return max(((sz, k) for k, (sz, t, _) in syms.items() if substr in k and t in "tT"), default=(0, ""))
+
+    def count_bl(pred):
+        return sum(
+            1 for body in fns.values() for _, _, mn, op in body
+            if mn in ("bl", "blx") and (m := re.search(r"<([^>+]+)", op)) and pred(m.group(1))
+        )
+
+    sc_tot = sum_mod("runtime::syscall")
+    sc_apis = [sz for k, (sz, t, _) in syms.items() if "runtime::syscall" in k and "::api_" in k and t in "tT"]
+    wire_tot = sum_mod("services::wire")
+    wire_top_sz, wire_top_nm = max_fn("services::wire::")
+    uread_cnt = count_bl(lambda t: any(u in t for u in ("__aeabi_uread4", "__aeabi_uwrite4", "__aeabi_uread8", "__aeabi_uwrite8")))
+    div_cnt = count_bl(lambda t: t in ("__aeabi_uidiv", "__aeabi_uidivmod", "__aeabi_idiv", "__aeabi_idivmod"))
+    wreg_cnt = count_bl(lambda t: "Bk4829>::write_reg" in t or "Bk4829::write_reg" in t)
+    comp_tot = sum_mod("orchestrator::compositor")
+    dlg_tot = sum_mod("gfx::widgets::dialog")
+    p16_tot = sum_mod("boot::recovery") + sum_mod("panic::baremetal") + sum_mod("boot::orchestration")
+    disp_sz, _ = max_fn("::dispatch_event")
+    loop_sz, _ = max_fn("run_system_loop")
+    krx_tot = (sum_mod("native_runner::load_native") + sum_mod("loader::launch_krx")
+               + sum_mod("KrxPreamble") + sum_mod("inspect_package") + sum_mod("bind_cap_imports"))
+
+    target_80 = int(FLASH_MAX * 0.80)
+    rows = [
+        ("Flash <=80%", flash, target_80, f"{flash*100/FLASH_MAX:.1f}% ({flash - target_80:+d} B to 80%)"),
+        ("P10 Syscall", sc_tot, 8192, f"{len(sc_apis)} api_* shims, max={max(sc_apis, default=0)} B"),
+        ("P11 Wire", wire_tot, 2400, f"top={wire_top_nm.split('::')[-1]} ({wire_top_sz} B)"),
+        ("P12 Unaligned", uread_cnt, 10, f"{uread_cnt} __aeabi_uread/uwrite calls"),
+        ("P13 Divisions", div_cnt, 15, f"{div_cnt} __aeabi_uidiv/idiv calls"),
+        ("P14 BK4829", wreg_cnt, 15, f"{wreg_cnt} write_reg call sites"),
+        ("P15 Modal/Dlg", comp_tot + dlg_tot, 2400, f"compositor={comp_tot} B, dialog={dlg_tot} B"),
+        ("P16 TextScreen", p16_tot, 2000, f"recovery+baremetal+orchestration={p16_tot} B"),
+        ("P17 Dispatch", disp_sz, 400, f"dispatch_event={disp_sz} B, loop={loop_sz} B"),
+        ("P18 AnonRodata", anon_ro, 4096, f"total .rodata={rodata_sz} B (named={named_ro} B)"),
+        ("P19 KRX Parse", krx_tot, 1800, f"loader+native+preamble+catalog+cap={krx_tot} B"),
+    ]
+    print("══════════════════════════════════════════════════════════════════════════")
+    print(" 📋 MEASURED PLAN PHASE SCOREBOARD (docs/flash_audit_measured_plan.md)")
+    print("══════════════════════════════════════════════════════════════════════════")
+    for label, cur, tgt, note in rows:
+        st = "PASS" if cur <= tgt else "OPEN"
+        print(f" [{st}] {label:<14} {cur:6d} / {tgt:<6d}  | {note}")
+
+
 def cmd_diff(a):
-    old = json.load(open(a.base)); new = {n: v[0] for n, v in symbols(a.elf).items() if v[1] in "tTrR"}
+    raw_old = json.load(open(a.base))
+    if "__sections__" in raw_old:
+        old_secs = raw_old["__sections__"]
+        old = raw_old["symbols"]
+        secs = elf_sections(a.elf)
+        new_secs = {k: secs.get("." + k, (0, 0))[0] for k in ("text", "rodata", "data", "bss")}
+        old_fl = old_secs["text"] + old_secs["rodata"] + old_secs["data"]
+        new_fl = new_secs["text"] + new_secs["rodata"] + new_secs["data"]
+        print(
+            f"FLASH delta: {new_fl - old_fl:+d} B ({old_fl} -> {new_fl}) | "
+            f".text {new_secs['text'] - old_secs['text']:+d}, "
+            f".rodata {new_secs['rodata'] - old_secs['rodata']:+d}, "
+            f".data {new_secs['data'] - old_secs['data']:+d}, "
+            f".bss {new_secs['bss'] - old_secs['bss']:+d}"
+        )
+    else:
+        old = raw_old
+    new = {n: v[0] for n, v in symbols(a.elf).items() if v[1] in "tTrR"}
     d = sorted(((new.get(k, 0) - old.get(k, 0), k) for k in set(old) | set(new)), key=lambda x: -abs(x[0]))
-    print(f"total delta: {sum(new.values()) - sum(old.values()):+d} B")
+    print(f"named symbols delta: {sum(new.values()) - sum(old.values()):+d} B")
     for dv, k in d[: a.top]:
         if dv:
             print(f"{dv:+6d}  {k}")
@@ -591,7 +707,7 @@ def cmd_diff(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned math64 memcpy pools rodata traps suggest".split())
+    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned math64 memcpy pools rodata traps suggest phases syscalls".split())
     p.add_argument("--elf", default=DEF_ELF); p.add_argument("--top", type=int, default=25)
     p.add_argument("--min", type=int, default=24, help="min fn or stack bytes"); p.add_argument("--sim", type=float, default=0.80)
     p.add_argument("--len", type=int, default=8, help="outline window (instructions)")
