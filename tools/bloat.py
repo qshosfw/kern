@@ -12,6 +12,11 @@ Subcommands:
   consts    32-bit literals repeated across functions -> shared tables/enums
   strings   duplicate / near-duplicate rodata strings -> string pool
   crates    .text/.rodata rollup per crate::module (depth configurable)
+  suggest   ranked pattern-coded refactor tasks ([SPLIT-1K] [GLOBAL-ANCHOR] [RECIPROCAL-32] ...)
+  rodata    attribute anonymous .rodata gaps to referencing fns + classify (strings/glyphs/vtables)
+  pools     literal-pool tax, most-reloaded statics, fns exceeding +1020 B ldr reach
+  math64    __aeabi_l* 64-bit emulation callers;  memcpy  mem* callers;  traps  udf check sites
+  divs / unaligned   software division / unaligned-access helper callers
   baseline  save per-symbol sizes to JSON;  diff  compare current ELF to a baseline
 
 Usage: tools/bloat.py <cmd> [--elf PATH] [--top N] [--json FILE] [...]
@@ -419,6 +424,162 @@ def cmd_unaligned(a):
         print(f"{cnt:3d} calls  {fn}")
 
 
+def bl_callers(fns, pred):
+    """{callee: Counter(caller)} for bl/blx whose target name satisfies pred."""
+    res = collections.defaultdict(collections.Counter)
+    for f, body in fns.items():
+        for _, _, mn, op in body:
+            if mn in ("bl", "blx"):
+                m = re.search(r"<([^>+]+)", op)
+                if m and pred(m.group(1)):
+                    res[m.group(1)][f] += 1
+    return res
+
+
+def cmd_math64(a):
+    """64-bit emulation callers; each lmul site ~10 B setup + 4-reg pressure."""
+    res = bl_callers(disasm(a.elf), lambda t: t.startswith("__aeabi_l") or "udivmoddi" in t or "divdi" in t)
+    tot = collections.Counter()
+    for t, c in res.items():
+        print(f"== {t}: {sum(c.values())} calls / {len(c)} fns ==")
+        for f, n in c.most_common(a.top):
+            print(f"{n:3d}  {f}"); tot[f] += n
+    print("\nFIX [RECIPROCAL-32]: if operand <= 0xFFFF, use (x as u32 * K16) >> s (single muls);"
+          " precompute Q16 constants at init; keep u64 only for true 64-bit values (UID hashing).")
+
+
+def cmd_memcpy(a):
+    """memcpy/memclr/memset callers -> pass-by-value structs, zero-init of big locals."""
+    res = bl_callers(disasm(a.elf), lambda t: re.search(r"mem(cpy|clr|set|move)", t) is not None)
+    per = collections.Counter()
+    for c in res.values():
+        per.update(c)
+    print(f"== mem* calls: {sum(per.values())} sites / {len(per)} fns (~8 B each) ==")
+    for t, c in sorted(res.items(), key=lambda kv: -sum(kv[1].values())):
+        print(f"   {t:<20} {sum(c.values())}")
+    for f, n in per.most_common(a.top):
+        print(f"{n:3d}  {f}")
+    print("\nFIX [BY-REF]: return/accept large structs by &mut out-param; build in place (MaybeUninit or "
+          "field writes) instead of `x = Struct{..}`; zero big buffers once in the arena, not per call.")
+
+
+def cmd_pools(a):
+    """PC-relative literal pools: global-anchor reloads and >1020 B reach splits."""
+    secs = elf_sections(a.elf); ro_sz, ro = secs.get(".rodata", (0, 0))
+    syms = {}
+    for k, v in sorted(symbols(a.elf).items(), key=lambda kv: kv[1][0]):
+        if v[1] in "bBdD":
+            syms[v[2]] = f"{k} ({v[0]} B)"  # largest symbol at an address wins
+    fns = disasm(a.elf); vals = collections.Counter(); per = {}
+    for f, body in fns.items():
+        w = [(ad, op.split()[0]) for ad, _, mn, op in body if mn == ".word" and op]
+        if w:
+            per[f] = (len(w), body[-1][0] - body[0][0] + body[-1][1])
+            for _, v in w:
+                vals[v] += 1
+    n = sum(vals.values()); txt = secs.get(".text", (1, 0))[0]
+    print(f"== literal pool words: {n} ({n*4} B = {n*400/txt:.1f}% of .text), {len(vals)} distinct ==")
+    print("-- most reloaded literals (each extra copy = 4 B pool + ldr) --")
+    for v, c in vals.most_common(a.top):
+        iv = int(v, 16); kind = syms.get(iv, "")
+        if not kind:
+            kind = "rodata" if ro <= iv < ro + ro_sz else ("sram" if iv >> 28 == 2 else ("flash" if iv >> 24 == 8 else "const"))
+        print(f"{c:4d}x {c*4:5d} B  {v}  {kind[:80]}")
+    print("-- functions whose span exceeds the +1020 B ldr reach (pool is split/duplicated) --")
+    for f, (k, span) in sorted(per.items(), key=lambda kv: -kv[1][1]):
+        if span > 1020:
+            print(f"{span:5d} B span  {k:3d} words  {f}")
+    print("\nNOTE: a hot SRAM literal labelled with a tiny static is usually an LLVM GlobalMerge base "
+          "(_MergedGlobals): already anchored, its count = number of fns touching small statics.")
+    print("FIX [GLOBAL-ANCHOR]: pass &mut Ctx/&mut Canvas down the call tree, or group hot statics "
+          "into one #[repr(C)] struct so all accesses share one base literal (ldr r,[base,#imm5]).")
+
+
+def cmd_rodata(a):
+    """Attribute anonymous .rodata gaps to referencing functions and classify content."""
+    secs = elf_sections(a.elf); sz, ro = secs[".rodata"]; end = ro + sz
+    raw = subprocess.run(["arm-none-eabi-objcopy", "-O", "binary", "-j", ".rodata", a.elf, "/dev/stdout"],
+                         capture_output=True).stdout
+    named = sorted((v[2], v[0], k) for k, v in symbols(a.elf).items() if v[1] in "rR" and ro <= v[2] < end)
+    gaps, cur = [], ro
+    for ad, s, _ in named:
+        if ad > cur:
+            gaps.append((cur, ad - cur))
+        cur = max(cur, ad + s)
+    if cur < end:
+        gaps.append((cur, end - cur))
+    refs = collections.defaultdict(set)
+    for f, body in disasm(a.elf).items():
+        for _, _, mn, op in body:
+            if mn == ".word" and op:
+                v = int(op.split()[0], 16)
+                if ro <= v < end:
+                    refs[v].add(f)
+    text_lo, text_hi = secs[".text"][1], secs[".text"][1] + secs[".text"][0]
+
+    def classify(b):
+        if not b:
+            return "?"
+        pr = sum(32 <= x < 127 for x in b) / len(b)
+        words = [int.from_bytes(b[i:i+4], "little") for i in range(0, len(b) - 3, 4)]
+        fp = sum(text_lo <= w < text_hi for w in words) / max(1, len(words))
+        if fp > 0.3:
+            return f"fn-ptrs/vtables ({fp*100:.0f}%)"
+        if pr > 0.7:
+            return "strings"
+        return "binary (glyphs/icons/tables)"
+    print(f"== .rodata {sz} B: named {sum(s for _, s, _ in named)} B, anonymous {sum(g for _, g in gaps)} B in {len(gaps)} gaps ==")
+    for g, gs in sorted(gaps, key=lambda x: -x[1])[: a.top]:
+        who = collections.Counter()
+        for v, fs in refs.items():
+            if g <= v < g + gs:
+                who.update(fs)
+        b = raw[g - ro:g - ro + gs]
+        print(f"{gs:6d} B  +{g-ro:<6d} {classify(b):<30} refs: {', '.join(f for f, _ in who.most_common(3))[:120]}")
+    print("\nFIX [NAME-ASSET]: give fonts/icons named `static`s; [STR-POOL]: dedupe labels; "
+          "[VTABLE]: collapse trait objects with 1 impl; move non-boot assets to KernFS.")
+
+
+def cmd_traps(a):
+    """udf/abort trap sites = unreachable/bounds/overflow checks surviving panic=abort."""
+    fns = disasm(a.elf); c = collections.Counter()
+    for f, body in fns.items():
+        c[f] = sum(1 for i in body if i[2] == "udf")
+    c = +c
+    print(f"== udf trap sites: {sum(c.values())} in {len(c)} fns ==")
+    print("   (1 udf/fn is usually the noreturn/unreachable tail; >1 = surviving bounds/overflow checks)")
+    for f, n in c.most_common(a.top):
+        print(f"{n:3d}  {f}")
+    print("\nFIX [NO-CHECK]: index via get()/iterators or `&arr[..N]` sub-slicing once; mask indices "
+          "with power-of-two lengths (i & (N-1)); use wrapping_* where overflow is intended.")
+
+
+def cmd_suggest(a):
+    """Ranked, pattern-coded refactor tasks generated from live ELF telemetry."""
+    syms = symbols(a.elf); fns = disasm(a.elf); tasks = []
+    for t, c in bl_callers(fns, lambda t: t.startswith("__aeabi_")).items():
+        for f, n in c.items():
+            code = {"lmul": "RECIPROCAL-32", "uidiv": "RECIPROCAL-DIV", "idiv": "RECIPROCAL-DIV",
+                    "uread": "ALIGN-RECORD", "uwrite": "ALIGN-RECORD", "mem": "BY-REF"}
+            k = next((v for key, v in code.items() if key in t), None)
+            if k and n >= 2:
+                tasks.append((n * 10, k, f"{f}: {n}x {t}"))
+    for f, (sz, ty, _) in syms.items():
+        if ty in "tT" and sz > 1020:
+            tasks.append((sz // 4, "SPLIT-1K", f"{f}: {sz} B > ldr reach; split by state / table-dispatch"))
+    for f, body in fns.items():
+        w = collections.Counter(op.split()[0] for _, _, mn, op in body if mn == ".word" and op)
+        dup = sum(n for v, n in w.items() if v.startswith("0x200"))
+        if dup >= 8:
+            tasks.append((dup * 4, "GLOBAL-ANCHOR", f"{f}: {dup} SRAM-static literals; pass &mut ctx"))
+        sp = sum(int(m.group(1)) for _, _, mn, op in body[:15] if mn.startswith("sub") and "sp" in op
+                 for m in [re.search(r"#(\d+)", op)] if m)
+        if sp >= 256:
+            tasks.append((sp // 8, "STACK-ARENA", f"{f}: {sp} B stack frame -> TRANSIENT_ARENA lease"))
+    for i, (s, k, d) in enumerate(sorted(tasks, reverse=True)[: a.top], 1):
+        print(f"{i:2d}. ~{s:4d} B  [{k}]  {d}")
+
+
 def cmd_diff(a):
     old = json.load(open(a.base)); new = {n: v[0] for n, v in symbols(a.elf).items() if v[1] in "tTrR"}
     d = sorted(((new.get(k, 0) - old.get(k, 0), k) for k in set(old) | set(new)), key=lambda x: -abs(x[0]))
@@ -430,7 +591,7 @@ def cmd_diff(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned".split())
+    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned math64 memcpy pools rodata traps suggest".split())
     p.add_argument("--elf", default=DEF_ELF); p.add_argument("--top", type=int, default=25)
     p.add_argument("--min", type=int, default=24, help="min fn or stack bytes"); p.add_argument("--sim", type=float, default=0.80)
     p.add_argument("--len", type=int, default=8, help="outline window (instructions)")
