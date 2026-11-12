@@ -323,16 +323,19 @@ impl MasterConfig {
 
         let expected_nav = self.system.nav_layout();
         if !check_bounds(self.keys.as_bytes(), KeyConfig::VERSION, &KEY_RULES) {
-            let mut def = KeyConfig::DEFAULT;
-            def.nav_layout = expected_nav;
-            self.keys = def;
+            self.keys = KeyConfig::DEFAULT;
             repaired |= DIRTY_KEYS;
-        } else if self.keys.nav_layout != expected_nav {
+        }
+        if self.keys.nav_layout != expected_nav {
             self.keys.nav_layout = expected_nav;
             repaired |= DIRTY_KEYS;
         }
 
-        if self.battery.version != BatteryConfig::VERSION {
+        let batt_invalid = self.battery.version != BatteryConfig::VERSION
+            || !check_bounds(self.battery.as_bytes(), BatteryConfig::VERSION, &BATT_RULES)
+            || self.battery.calib_tweak_mv < -500
+            || self.battery.calib_tweak_mv > 500;
+        if batt_invalid {
             self.battery = BatteryConfig::DEFAULT;
             repaired |= DIRTY_BATTERY;
         }
@@ -341,21 +344,8 @@ impl MasterConfig {
                 self.battery.battery_type = 3;
                 repaired |= DIRTY_BATTERY;
             }
-        } else if self.battery.battery_type == 3
-            || self.battery.battery_type == 4
-            || self.battery.battery_type > 5
-        {
+        } else if self.battery.battery_type >= 3 {
             self.battery.battery_type = 0;
-            repaired |= DIRTY_BATTERY;
-        }
-
-        if !check_bounds(self.battery.as_bytes(), BatteryConfig::VERSION, &BATT_RULES)
-            || self.battery.calib_tweak_mv < -500
-            || self.battery.calib_tweak_mv > 500
-        {
-            let btype = self.battery.battery_type;
-            self.battery = BatteryConfig::DEFAULT;
-            self.battery.battery_type = btype;
             repaired |= DIRTY_BATTERY;
         }
 

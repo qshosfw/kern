@@ -31,21 +31,23 @@ impl AssetDescriptor {
         storage.count = 0;
         storage.labels[0] = ShortString::from_str(self.none_label);
 
-        let mut dir_entries =
-            [const { crate::services::storage::DirEntryInfo::empty() }; MAX_CHOOSER_ASSETS];
-        let scan_count = storage_fs.list_dir(self.dir, &mut dir_entries).unwrap_or(0);
+        let scan_count = storage_fs
+            .list_dir(self.dir, &mut storage.dir_entries)
+            .unwrap_or(0);
 
         for i in 1..scan_count {
             let mut j = i;
-            while j > 0 && dir_entries[j].path.as_str() < dir_entries[j - 1].path.as_str() {
-                dir_entries.swap(j, j - 1);
+            while j > 0
+                && storage.dir_entries[j].path.as_str() < storage.dir_entries[j - 1].path.as_str()
+            {
+                storage.dir_entries.swap(j, j - 1);
                 j -= 1;
             }
         }
 
         let mut current_sel = 0;
 
-        for entry in &dir_entries[..scan_count] {
+        for entry in &storage.dir_entries[..scan_count] {
             if entry.is_dir {
                 continue;
             }
@@ -98,6 +100,7 @@ impl AssetDescriptor {
 }
 
 struct AssetChooserStorage {
+    dir_entries: [crate::services::storage::DirEntryInfo; MAX_CHOOSER_ASSETS],
     paths: [heapless::String<32>; MAX_CHOOSER_ASSETS],
     labels: [ShortString; MAX_CHOOSER_ASSETS + 1],
     count: usize,
