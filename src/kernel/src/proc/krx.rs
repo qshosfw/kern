@@ -749,14 +749,17 @@ impl KrxPreamble {
                 SECTION_IDENTITY => {
                     if body.len() >= 25 {
                         let name_off = u16::from_le_bytes([body[0], body[1]]) as usize;
-                        if name_off >= Self::SIZE && name_off < hdr.len() {
-                            let mut end = name_off;
-                            while end < hdr.len() && hdr[end] != 0 && (end - name_off) < 32 {
-                                end += 1;
-                            }
-                            if end > name_off {
-                                if let Some(s) = utils::format::ascii_str(&hdr[name_off..end]) {
-                                    title = s;
+                        if name_off >= Self::SIZE {
+                            if let Some(tail) = hdr.get(name_off..) {
+                                let max_len = tail.len().min(32);
+                                let len = tail[..max_len]
+                                    .iter()
+                                    .position(|&b| b == 0)
+                                    .unwrap_or(max_len);
+                                if len > 0 {
+                                    if let Some(s) = utils::format::ascii_str(&tail[..len]) {
+                                        title = s;
+                                    }
                                 }
                             }
                         }

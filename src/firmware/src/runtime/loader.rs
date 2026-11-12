@@ -107,10 +107,12 @@ fn populate_declare_from_payload(
 /// Load and launch a verified KRX binary application package.
 #[inline(never)]
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let mut header_buf = [0u8; 256];
+    let mut header_buf = core::mem::MaybeUninit::<[u8; 256]>::uninit();
+    // SAFETY: `read_file_at` initializes `[..header_read]`, and `summarize` only reads that prefix.
+    let header_buf = unsafe { &mut *header_buf.as_mut_ptr() };
     let header_read = ctx
         .storage
-        .read_file_at(path, 0, &mut header_buf)
+        .read_file_at(path, 0, header_buf)
         .map_err(|e| match e {
             kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
             _ => KrxLaunchError::ReadFailed,
