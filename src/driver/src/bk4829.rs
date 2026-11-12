@@ -225,7 +225,8 @@ impl<'a, State> Bk4829<'a, State> {
             let block = calib::CalibrationBlock::from_bytes(calib);
             let max_vol = block.volume_gain();
             let max_dac = block.dac_gain();
-            rx_gain2 = ((rx_gain2 as u16 * max_vol as u16) / 58).min(63) as u8;
+            let prod = rx_gain2 as u32 * max_vol as u32;
+            rx_gain2 = (((prod * 0x046A) >> 16) as u8).min(63);
             dac_gain = dac_gain.min(max_dac);
         }
         let val = (11u16 << 12) | ((rx_gain2 as u16 & 0x3F) << 4) | (dac_gain as u16 & 0x0F);

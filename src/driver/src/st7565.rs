@@ -97,7 +97,8 @@ impl<'a> St7565<'a> {
         // Map 0..=100% user setting to optimal ST7565 Electronic Volume (EV) range 21..=41.
         // EV = 31 is the factory default optimum (50% user contrast, 21 + 10 = 31 per DeltaFW).
         // Hardware EV values > 45 cause liquid crystal over-drive and pixel ghosting on ST7565.
-        let ev = 21 + ((contrast_percent.min(100) as u16 * 20) / 100) as u8;
+        let pct = contrast_percent.min(100) as u16;
+        let ev = 21 + utils::math::div10_u16(pct * 2).0 as u8;
         self.cs.set_low();
         self.write_cmd(0x81);
         self.write_cmd(ev & 0x3F);
