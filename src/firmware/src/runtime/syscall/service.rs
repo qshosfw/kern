@@ -65,17 +65,13 @@ pub unsafe extern "C" fn api_svc_register(
     vtable_ptr: usize,
 ) -> u8 {
     let provider_id = crate::AppRegistry::count() as u8;
-    if service_registry_mut().register(
+    (!service_registry_mut().register(
         interface_id,
         abi_version,
         kernel::proc::Pid(provider_id),
         vtable_ptr,
         false,
-    ) {
-        0
-    } else {
-        1
-    }
+    )) as u8
 }
 
 pub unsafe extern "C" fn api_svc_resolve(interface_id: u16, min_abi: u16) -> usize {
@@ -212,11 +208,7 @@ pub unsafe extern "C" fn api_ipc_poll(out_buf: *mut u8, max_len: u8) -> u8 {
 }
 
 pub unsafe extern "C" fn api_svc_release(interface_id: u16) -> u8 {
-    if service_registry_mut().release(interface_id) {
-        0
-    } else {
-        1
-    }
+    (!service_registry_mut().release(interface_id)) as u8
 }
 
 pub unsafe extern "C" fn api_sys_os_version() -> u32 {
@@ -306,36 +298,24 @@ pub unsafe extern "C" fn api_leaf_call(leaf_id: u8, arg: u32) -> u32 {
 }
 
 pub unsafe extern "C" fn api_lease_acquire(lease_kind: u8, timeout_ms: u32) -> u8 {
-    if let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) {
-        let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
-        let tick = py32_hal::delay::millis();
-        if crate::orchestrator::lease_manager_mut()
-            .acquire(pid, kind, timeout_ms, tick)
-            .is_ok()
-        {
-            0
-        } else {
-            1
-        }
-    } else {
-        1
-    }
+    let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) else {
+        return 1;
+    };
+    let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
+    let tick = py32_hal::delay::millis();
+    crate::orchestrator::lease_manager_mut()
+        .acquire(pid, kind, timeout_ms, tick)
+        .is_err() as u8
 }
 
 pub unsafe extern "C" fn api_lease_release(lease_kind: u8) -> u8 {
-    if let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) {
-        let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
-        if crate::orchestrator::lease_manager_mut()
-            .release(pid, kind)
-            .is_ok()
-        {
-            0
-        } else {
-            1
-        }
-    } else {
-        1
-    }
+    let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) else {
+        return 1;
+    };
+    let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
+    crate::orchestrator::lease_manager_mut()
+        .release(pid, kind)
+        .is_err() as u8
 }
 
 pub unsafe extern "C" fn api_mem_query(
