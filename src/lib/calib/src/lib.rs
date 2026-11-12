@@ -139,6 +139,20 @@ pub fn get_band_index(freq_hz: u32) -> usize {
     }
 }
 
+#[inline(never)]
+fn lerp_u8(v0: u8, v1: u8, off: u32, span: u32) -> u8 {
+    if span == 0 {
+        return v0;
+    }
+    let diff = v1.abs_diff(v0) as u32;
+    let delta = (diff * off) / span;
+    if v1 >= v0 {
+        (v0 as u32 + delta).min(255) as u8
+    } else {
+        v0.saturating_sub(delta as u8)
+    }
+}
+
 /// Piecewise linear interpolation for TX power bias across band frequency limits.
 pub fn calculate_tx_power(
     txp_low: u8,
@@ -156,31 +170,9 @@ pub fn calculate_tx_power(
         return txp_high;
     }
     if freq <= middle {
-        if middle == lower {
-            return txp_mid;
-        }
-        let f_span = middle - lower;
-        let f_off = freq - lower;
-        if txp_mid >= txp_low {
-            let delta = ((txp_mid - txp_low) as u32 * f_off) / f_span;
-            (txp_low as u32 + delta).min(255) as u8
-        } else {
-            let delta = ((txp_low - txp_mid) as u32 * f_off) / f_span;
-            txp_low.saturating_sub(delta as u8)
-        }
+        lerp_u8(txp_low, txp_mid, freq - lower, middle - lower)
     } else {
-        if upper == middle {
-            return txp_high;
-        }
-        let f_span = upper - middle;
-        let f_off = freq - middle;
-        if txp_high >= txp_mid {
-            let delta = ((txp_high - txp_mid) as u32 * f_off) / f_span;
-            (txp_mid as u32 + delta).min(255) as u8
-        } else {
-            let delta = ((txp_mid - txp_high) as u32 * f_off) / f_span;
-            txp_mid.saturating_sub(delta as u8)
-        }
+        lerp_u8(txp_mid, txp_high, freq - middle, upper - middle)
     }
 }
 
@@ -196,13 +188,13 @@ pub fn calculate_battery_percentage(raw_adc: u16, curve: &[u16; 6]) -> u8 {
         let low_adc = curve[i];
         let high_adc = curve[i + 1];
         if raw_adc <= high_adc {
-            let span = (high_adc - low_adc) as u32;
-            if span == 0 {
-                return (i as u8) * 20;
-            }
-            let offset = (raw_adc - low_adc) as u32;
-            let pct = (i as u32) * 20 + (offset * 20) / span;
-            return pct.min(100) as u8;
+            let base = (i as u8) * 20;
+            return lerp_u8(
+                base,
+                base + 20,
+                (raw_adc - low_adc) as u32,
+                (high_adc - low_adc) as u32,
+            );
         }
     }
     100
