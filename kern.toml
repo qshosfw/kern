@@ -56,7 +56,7 @@ krx_declare = false     # 📋 Class D0 Declarative AST Walker (disabled, focus 
 krx_vm = false          # ⚙️ KVM-16 virtual machine interpreter (disabled to focus on N0/N1/P0/P1/D0)
 
 [features.provisioning]
-provision_apps = true         # 📱 Mode B: Embed & provision built-in KRX packages
+provision_apps = false        # 📱 Mode B: Embed & provision built-in KRX packages (delivered via RigWire / kern flash --assets)
 provision_rogers = false     # 🎵 Embed & provision built-in roger beep tones to /user/rogers/
 extra_rogers = false         # 📢 Mode B: Extended roger beep collection (Apollo 11, etc. loaded from flash)
 boot_assets = false          # 🎨 Mode B: Embedded ROM splash screens (splash loaded from flash)
