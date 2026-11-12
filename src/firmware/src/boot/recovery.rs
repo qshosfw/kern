@@ -279,6 +279,7 @@ pub fn draw_recovery_screen(
     gfx::text::draw_str(canvas, 3, 6, "PANIC!", font, gfx::Color::Clear);
 
     if let Some(sec) = countdown {
+        let (sd, sr) = utils::math::div10_u16(sec as u16);
         let r_buf = [
             b'R',
             b'E',
@@ -286,8 +287,8 @@ pub fn draw_recovery_screen(
             b'E',
             b'T',
             b' ',
-            b'0' + (sec / 10),
-            b'0' + (sec % 10),
+            b'0' + sd as u8,
+            b'0' + sr,
             b's',
         ];
         let s = unsafe { core::str::from_utf8_unchecked(&r_buf) };
@@ -302,6 +303,8 @@ pub fn draw_recovery_screen(
         );
     }
 
+    let (cd, cr) = utils::math::div10_u16(slot.crash_count.min(99) as u16);
+
     #[cfg(feature = "panic_gui_extended")]
     let p = page % 5;
     #[cfg(not(feature = "panic_gui_extended"))]
@@ -315,14 +318,14 @@ pub fn draw_recovery_screen(
         b'5',
         b' ',
         b'#',
-        b'0' + (slot.crash_count.min(99) / 10),
-        b'0' + (slot.crash_count % 10),
+        b'0' + cd as u8,
+        b'0' + cr,
     ];
     #[cfg(not(feature = "panic_gui_extended"))]
     let pbuf = [
         b'#',
-        b'0' + (slot.crash_count.min(99) / 10),
-        b'0' + (slot.crash_count % 10),
+        b'0' + cd as u8,
+        b'0' + cr,
     ];
     let pstr = unsafe { core::str::from_utf8_unchecked(&pbuf) };
     gfx::text::draw_str_align(
