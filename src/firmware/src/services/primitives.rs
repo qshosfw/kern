@@ -11,12 +11,12 @@ use kernel::service::radio::{RfAudioPath, RfChannel, RfModulation, RfSquelch, Rf
 use kernel::service::{DisplayService, PowerService};
 
 // ── 1. Display Primitive ────────────────────────────────────────────────────
-#[inline(always)]
+#[inline(never)]
 pub fn color_from_u8(color: u8) -> gfx::Color {
     gfx::Color::from_u8(color)
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn font_from_u8(font_id: u8) -> &'static gfx::GfxFont {
     if font_id == 1 {
         &gfx::fonts::mumatrix_regular::FONT
@@ -528,8 +528,18 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
         dir_path: &str,
         out_entries: &mut [kernel::proc::abi::KrxDirEntry],
     ) -> Result<usize, ()> {
-        let mut temp_entries = [const { kernel::service::DirEntryInfo::empty() }; 8];
-        let max_fetch = out_entries.len().min(temp_entries.len());
+        const MAX_FETCH: usize = 8;
+        const {
+            assert!(
+                core::mem::size_of::<[kernel::service::DirEntryInfo; MAX_FETCH]>()
+                    <= crate::data::arena::TRANSIENT_ARENA_BYTES
+            );
+        }
+        let arena = crate::data::arena::transient_arena_bytes_mut();
+        let temp_entries = unsafe {
+            &mut *(arena.as_mut_ptr() as *mut [kernel::service::DirEntryInfo; MAX_FETCH])
+        };
+        let max_fetch = out_entries.len().min(MAX_FETCH);
         let count = self
             .storage
             .list_dir(dir_path, &mut temp_entries[..max_fetch])
