@@ -114,7 +114,15 @@ impl Adc {
         for _ in 0..samples {
             sum += self.read_channel(channel) as u32;
         }
-        (sum / (samples as u32)) as u16
+        if samples == 8 {
+            (sum >> 3) as u16
+        } else if samples == 4 {
+            (sum >> 2) as u16
+        } else if samples == 16 {
+            (sum >> 4) as u16
+        } else {
+            (sum / (samples as u32).max(1)) as u16
+        }
     }
 
     /// Read internal VREFINT (Channel 17 on PY32F071) and return calculated VDDA voltage in millivolts.
@@ -152,12 +160,16 @@ impl Adc {
             let ts_data = self.read_channel_averaged(16, 8);
 
             // Normalize raw counts to 3.3V factory calibration baseline
-            let ts_data_norm = (ts_data as u32 * vdda) / 3300;
+            // Fast reciprocal division: (x * 0x4F7005) >> 34 exact for all x <= 16,000,000
+            let prod = ts_data as u64 * vdda as u64;
+            let ts_data_norm = ((prod * 0x4F7005) >> 34) as u32;
 
             let deci_c = if cal1 == 0xFFFF {
                 // Unprogrammed fallback to typical silicon values:
                 // V_30 = 0.75V (750 mV), Slope = 2.5 mV/°C (4 deci-°C per mV)
-                let mv = (ts_data_norm * 3300) / 4095;
+                // Fast reciprocal division: (x * 0x1001002) >> 36 exact for all x <= 16,000,000
+                let prod_mv = ts_data_norm as u64 * 3300;
+                let mv = ((prod_mv * 0x1001002) >> 36) as u32;
                 300 + ((mv as i32 - 750) * 4) as i16
             } else {
                 // Two-point linear interpolation between 30°C (300 dC) and 105°C (1050 dC):
