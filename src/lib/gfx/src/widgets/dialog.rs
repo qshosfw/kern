@@ -328,44 +328,32 @@ pub fn draw_modal_popup_materialize(
     if p >= 8 {
         let center_x = 64i16;
         let tc = Color::Fill;
+        let has_title =
+            title.is_some_and(|t| !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode"));
 
-        if let Some(t) = title
-            && !t.is_empty()
-            && !text::ascii_eq_ignore_case(t, "passcode")
-        {
+        let (mut line_y, step_y) = if has_title {
             text::draw_str_align(
                 canvas,
                 center_x,
                 (by + 11) as i16,
-                t,
+                title.unwrap_or(""),
                 &crate::fonts::tomthumb::FONT,
                 tc,
                 text::Align::Center,
             );
-            let mut line_y = (by + 21) as i16;
-            crate::text::for_each_line(msg, |line| {
-                text::draw_str_align(
-                    canvas,
-                    center_x,
-                    line_y,
-                    line,
-                    &crate::fonts::tomthumb::FONT,
-                    tc,
-                    text::Align::Center,
-                );
-                line_y += 8;
-            });
-            return;
-        }
-
-        let mut line_y = if crate::text::count_lines(msg) <= 1 {
-            (by + 20) as i16
+            ((by + 21) as i16, 8i16)
         } else {
-            (by + 14) as i16
+            let y0 = if crate::text::count_lines(msg) <= 1 {
+                (by + 20) as i16
+            } else {
+                (by + 14) as i16
+            };
+            (y0, 12i16)
         };
+
         let mut is_first = true;
         crate::text::for_each_line(msg, |line| {
-            let font = if is_first {
+            let font = if !has_title && is_first {
                 &crate::fonts::mumatrix_regular::FONT
             } else {
                 &crate::fonts::tomthumb::FONT
@@ -379,7 +367,7 @@ pub fn draw_modal_popup_materialize(
                 tc,
                 text::Align::Center,
             );
-            line_y += 12;
+            line_y += step_y;
             is_first = false;
         });
     }
