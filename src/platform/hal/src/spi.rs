@@ -131,6 +131,45 @@ pub enum SpiError {
     Timeout,
 }
 
+/// Transfer a byte over a specific SPI instance (returns received byte).
+#[inline(never)]
+pub fn transfer_byte_instance(spi: pac::spi::SpiInstance, data: u8) -> Result<u8, SpiError> {
+    unsafe {
+        let mut timeout = 100_000;
+        while spi.sr().read_volatile() & spi::SR_TXE == 0 {
+            timeout -= 1;
+            if timeout == 0 {
+                return Err(SpiError::Timeout);
+            }
+        }
+        spi.dr_8().write_volatile(data);
+
+        let mut timeout = 100_000;
+        while spi.sr().read_volatile() & spi::SR_RXNE == 0 {
+            timeout -= 1;
+            if timeout == 0 {
+                return Err(SpiError::Timeout);
+            }
+        }
+        Ok(spi.dr_8().read_volatile())
+    }
+}
+
+/// Wait until a specific SPI instance is no longer busy.
+#[inline(never)]
+pub fn wait_idle_instance(spi: pac::spi::SpiInstance) -> Result<(), SpiError> {
+    unsafe {
+        let mut timeout = 100_000;
+        while spi.sr().read_volatile() & spi::SR_BSY != 0 {
+            timeout -= 1;
+            if timeout == 0 {
+                return Err(SpiError::Timeout);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Transmit a single byte over SPI1 and read back 32-bit DR to clear RXNE.
 #[inline]
 pub fn write_byte(data: u8) -> Result<(), SpiError> {
@@ -140,40 +179,13 @@ pub fn write_byte(data: u8) -> Result<(), SpiError> {
 /// Transfer a byte over SPI1 (returns received byte).
 #[inline]
 pub fn transfer_byte(data: u8) -> Result<u8, SpiError> {
-    unsafe {
-        let mut timeout = 100_000;
-        while SPI1.sr().read_volatile() & spi::SR_TXE == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(SpiError::Timeout);
-            }
-        }
-        SPI1.dr_8().write_volatile(data);
-
-        let mut timeout = 100_000;
-        while SPI1.sr().read_volatile() & spi::SR_RXNE == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(SpiError::Timeout);
-            }
-        }
-        Ok(SPI1.dr_8().read_volatile())
-    }
+    transfer_byte_instance(SPI1, data)
 }
 
 /// Wait until SPI1 is no longer busy (all transfers complete).
 #[inline]
 pub fn wait_idle() -> Result<(), SpiError> {
-    unsafe {
-        let mut timeout = 100_000;
-        while SPI1.sr().read_volatile() & spi::SR_BSY != 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(SpiError::Timeout);
-            }
-        }
-        Ok(())
-    }
+    wait_idle_instance(SPI1)
 }
 
 /// Transmit a slice of bytes over SPI1.
@@ -188,25 +200,7 @@ pub fn write_bytes(data: &[u8]) -> Result<(), SpiError> {
 /// Transfer a byte over SPI2 (returns received byte).
 #[inline]
 pub fn spi2_transfer(data: u8) -> Result<u8, SpiError> {
-    unsafe {
-        let mut timeout = 100_000;
-        while SPI2.sr().read_volatile() & spi::SR_TXE == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(SpiError::Timeout);
-            }
-        }
-        SPI2.dr_8().write_volatile(data);
-
-        let mut timeout = 100_000;
-        while SPI2.sr().read_volatile() & spi::SR_RXNE == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(SpiError::Timeout);
-            }
-        }
-        Ok(SPI2.dr_8().read_volatile())
-    }
+    transfer_byte_instance(SPI2, data)
 }
 
 /// Transmit a byte over SPI2.
@@ -227,41 +221,14 @@ pub fn spi2_write_bytes(data: &[u8]) -> Result<(), SpiError> {
 /// Read multiple bytes over SPI2 by clocking out 0xFF dummy bytes.
 #[inline]
 pub fn spi2_read_bytes(buffer: &mut [u8]) -> Result<(), SpiError> {
-    unsafe {
-        for b in buffer.iter_mut() {
-            let mut timeout = 100_000;
-            while SPI2.sr().read_volatile() & spi::SR_TXE == 0 {
-                timeout -= 1;
-                if timeout == 0 {
-                    return Err(SpiError::Timeout);
-                }
-            }
-            SPI2.dr_8().write_volatile(0xFF);
-
-            let mut timeout = 100_000;
-            while SPI2.sr().read_volatile() & spi::SR_RXNE == 0 {
-                timeout -= 1;
-                if timeout == 0 {
-                    return Err(SpiError::Timeout);
-                }
-            }
-            *b = SPI2.dr_8().read_volatile();
-        }
-        Ok(())
+    for b in buffer.iter_mut() {
+        *b = spi2_transfer(0xFF)?;
     }
+    Ok(())
 }
 
 /// Wait until SPI2 is no longer busy.
 #[inline]
 pub fn spi2_wait_idle() -> Result<(), SpiError> {
-    unsafe {
-        let mut timeout = 100_000;
-        while SPI2.sr().read_volatile() & spi::SR_BSY != 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(SpiError::Timeout);
-            }
-        }
-        Ok(())
-    }
+    wait_idle_instance(SPI2)
 }
