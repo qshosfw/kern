@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Code Style & Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: thumbv6m-none-eabi, x86_64-unknown-linux-gnu
+          components: rust-src, llvm-tools-preview, clippy, rustfmt
+
+      - name: Verify Formatting (cargo fmt)
+        run: cargo fmt --all -- --check
+
+      - name: Type & Invariant Check (./kern check)
+        run: ./kern check
+
+  test:
+    name: Host Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Run Workspace Unit Tests (./kern test)
+        run: ./kern test
+
+  build-and-size:
+    name: Firmware Build & Size Guard
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: thumbv6m-none-eabi
+          components: rust-src, llvm-tools-preview
+
+      - name: Install ARM GNU Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi python3
+
+      - name: Build Release Firmware (./kern build)
+        run: ./kern build
+
+      - name: Inspect Section Breakdown (./kern size)
+        run: ./kern size
+
+      - name: Enforce Flash Budget Ceiling (118 KB / 120,832 B)
+        run: |
+          MAX_FLASH=120832
+          BIN_SIZE=$(stat -c %s target/firmware.bin)
+          echo "Firmware binary size: $BIN_SIZE bytes (Limit: $MAX_FLASH bytes)"
+          if [ "$BIN_SIZE" -gt "$MAX_FLASH" ]; then
+            echo "ERROR: Firmware size ($BIN_SIZE B) exceeds hard flash ceiling ($MAX_FLASH B)!"
+            exit 1
+          fi
+          RESERVE=$((MAX_FLASH - BIN_SIZE))
+          echo "SUCCESS: Firmware is within budget with $RESERVE bytes of flash headroom remaining."
+
+      - name: Upload Firmware Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kern-firmware
+          path: |
+            target/firmware.bin
+            target/firmware_packed.bin
+          if-no-files-found: error
+          retention-days: 14

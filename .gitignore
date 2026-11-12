@@ -5,3 +5,10 @@
 !packages/bench/bench.bin
 **/*.bkp
 __pycache__/
+
+# Local reference & working directories (not tracked in public repository)
+/inspo/
+/docs/
+/backups/
+/tmp/
+*.zip.html

@@ -1,0 +1,44 @@
+name: Feature Request
+description: Propose a new capability, radio service, driver, or userland application for Kern
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We welcome architectural proposals that align with Kern's core principles:
+        **Abstracted, Lightweight, Efficient, Modular, Flexible, Extensible, Elegant + KISS**.
+  - type: input
+    id: summary
+    attributes:
+      label: Feature Summary
+      description: A concise 1-sentence summary of the proposed feature.
+      placeholder: e.g. Add Si4732 HF receiver I2C driver integration
+    validations:
+      required: true
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Target Subsystem
+      description: Which area of Kern does this feature target?
+      options:
+        - Radio Engine & RF Services (`src/platform/traits`, `src/driver`)
+        - Microkernel & Scheduler (`src/kernel`)
+        - Storage & Filesystem (`src/lib/kernfs`)
+        - Graphics & UI (`src/lib/gfx`)
+        - Protocols & RigWire (`src/firmware/src/services/wire.rs`)
+        - Userland KRX Applications (`packages/`)
+        - Developer Toolchain & Simulation (`tools/`)
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation & Use Case
+      description: What problem does this solve or what new capability does it unlock?
+    validations:
+      required: true
+  - type: textarea
+    id: architectural-impact
+    attributes:
+      label: Architectural & Memory Footprint Impact
+      description: Estimate the Flash and SRAM budget impact (remember: strict zero dynamic heap allocation!).

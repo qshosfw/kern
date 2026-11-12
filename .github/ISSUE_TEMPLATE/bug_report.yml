@@ -1,0 +1,46 @@
+name: Bug Report
+description: Report a reproducible defect or unexpected behavior in Kern firmware
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please ensure you have tested on the latest commit of `master`.
+  - type: dropdown
+    id: hardware-target
+    attributes:
+      label: Hardware Target
+      description: Which radio hardware and revision are you running?
+      options:
+        - Quansheng UV-K1 (Puya PY32F071xB)
+        - Quansheng UV-K5 v3 (Puya PY32F071xB)
+        - QEMU Hardware Emulator (`./kern emu`)
+        - Desktop SDL2 Simulator (`cargo run --bin sim`)
+        - Other / Custom Mod
+    validations:
+      required: true
+  - type: input
+    id: firmware-version
+    attributes:
+      label: Firmware Version / Git Commit Hash
+      description: The output of `./kern info` or the commit hash (`git rev-parse --short HEAD`).
+      placeholder: e.g. da23a8f
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description & Steps to Reproduce
+      description: Describe what happened and provide step-by-step instructions to reproduce.
+      placeholder: |
+        1. Boot radio into Dual VFO mode.
+        2. Set VFO A to 433.500 MHz FM.
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Serial Console / Flight Recorder Logs
+      description: Paste any RigWire or USART serial console output or crash dialog details.
+      render: shell
