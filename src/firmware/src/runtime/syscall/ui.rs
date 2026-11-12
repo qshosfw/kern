@@ -129,9 +129,7 @@ pub unsafe extern "C" fn api_ui_set_status_bar(sb: *const kernel::proc::abi::Krx
 }
 
 pub unsafe extern "C" fn api_ui_get_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
-    if !out_sb.is_null() {
-        crate::runtime::native_runner::get_slot_status_bar(out_sb);
-    }
+    crate::runtime::native_runner::get_slot_status_bar(out_sb);
 }
 
 pub unsafe extern "C" fn api_ui_set_tray_icon(icon_id: u8) -> u8 {

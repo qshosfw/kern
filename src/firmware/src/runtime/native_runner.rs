@@ -857,9 +857,10 @@ pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
     if !out_sb.is_null() {
         let slot = slot_ref();
         unsafe {
-            *out_sb = slot
-                .status_bar
-                .unwrap_or_else(kernel::proc::abi::KrxStatusBar::empty);
+            *out_sb = match &slot.status_bar {
+                Some(sb) => *sb,
+                None => kernel::proc::abi::KrxStatusBar::empty(),
+            };
         }
     }
 }
