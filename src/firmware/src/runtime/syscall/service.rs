@@ -22,13 +22,13 @@ pub fn service_registry_mut() -> &'static mut ServiceRegistry {
     unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_REGISTRY) }
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn active_caller_pid() -> u8 {
     let slot = super::super::native_runner::slot_ref();
     if slot.is_loaded && slot.pid.0 != 0 {
         slot.pid.0
     } else {
-        for p in &crate::orchestrator::proc_table_mut().slots {
+        for p in &crate::orchestrator::proc_table().slots {
             if p.state == kernel::proc::ProcState::Running {
                 return p.pid.0;
             }
