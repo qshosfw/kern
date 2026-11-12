@@ -18,7 +18,7 @@ pub enum Charset {
     Symbols = 3,
 }
 
-#[repr(align(4))]
+#[repr(C)]
 pub struct TextInputModel {
     pub is_done: bool,
     pub is_canceled: bool,

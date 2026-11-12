@@ -19,16 +19,17 @@ use kernel::nav::NavStack;
 use kernel::proc::{ExecType, ProcState, ProcessTable};
 use keypad_lock::KeypadLockManager;
 
+#[repr(C)]
 pub struct Orchestrator {
-    active_app_id: usize,
-    previous_app: Option<usize>,
-    nav_stack: NavStack<6>,
-    owned_key: Option<KeyCode>,
-    lock_mgr: KeypadLockManager,
     side1_held: bool,
     side2_held: bool,
     is_muted: bool,
     is_monitoring: bool,
+    owned_key: Option<KeyCode>,
+    active_app_id: usize,
+    previous_app: Option<usize>,
+    nav_stack: NavStack<6>,
+    lock_mgr: KeypadLockManager,
 }
 
 pub const MAX_PROCESSES: usize = 8;
