@@ -302,24 +302,25 @@ impl<'a, State> Bk4829<'a, State> {
         // 4. Play note sequence
         for note in notes {
             if note.freq_hz == 0 || note.duration_ms == 0 {
-                self.write_reg(REG_TX_MUTE, 0xBB18);
+                self.mute_tone_note();
                 self.write_reg(REG_TONE1_FREQ, 0x0000);
                 py32_hal::delay::delay_ms(note.duration_ms as u32);
             } else {
-                let reg_val = af::tone_freq_to_reg(note.freq_hz);
-                self.write_reg(REG_TONE1_FREQ, reg_val);
-                self.write_reg(REG_TX_MUTE, 0x3B18); // Unmute clean tone to DAC
+                self.step_tone_note(note.freq_hz);
                 py32_hal::delay::delay_ms(note.duration_ms as u32);
-                self.write_reg(REG_TX_MUTE, 0xBB18); // Mute at note boundary
+                self.mute_tone_note();
             }
         }
 
-        // 5. Clean up tone generator
+        // 5. Restore clean RX / idle state
+        self.restore_post_tone_state(rx_pwr);
+    }
+
+    #[inline(never)]
+    fn restore_post_tone_state(&mut self, rx_pwr: u16) {
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         self.write_reg(REG_TONE_GAIN, 0x0000);
         py32_hal::delay::delay_ms(5);
-
-        // 6. Restore clean RX / idle state without resetting RF PLL or auto-calibrating VCO
         self.write_reg(REG_SYS_POWER, rx_pwr);
 
         if self.rx_demod_active && self.is_squelch_open() {
@@ -362,19 +363,7 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn end_tone_sequence(&mut self, _was_amp_active: bool) {
-        self.write_reg(REG_TONE1_FREQ, 0x0000);
-        self.write_reg(REG_TONE_GAIN, 0x0000);
-        py32_hal::delay::delay_ms(5);
-        self.write_reg(REG_SYS_POWER, 0xBFF1);
-
-        if self.rx_demod_active && self.is_squelch_open() {
-            self.set_af(self.active_demod_af);
-            self.write_reg(REG_TX_MUTE, 0x3B18);
-        } else {
-            self.set_af(AfType::Mute);
-            self.write_reg(REG_TX_MUTE, 0xBB18);
-        }
-        crate::audio::AudioAmplifier::notify_tone_played();
+        self.restore_post_tone_state(0xBFF1);
     }
 
     pub fn play_tone_sequence_with_gain(
