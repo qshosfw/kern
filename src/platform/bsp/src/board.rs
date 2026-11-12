@@ -191,11 +191,12 @@ pub struct Board {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum StatusLed {
-    Off,
-    Red,
-    Green,
-    Orange,
+    Off = 0,
+    Red = 1,
+    Green = 2,
+    Orange = 3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,13 +266,7 @@ impl Board {
         if reg33 == 0xFFFF || (reg33 & 0x9000) != 0x9000 {
             reg33 = 0x9000;
         }
-        reg33 &= !0x0003;
-        match led {
-            StatusLed::Off => {}
-            StatusLed::Red => reg33 |= 0x0001,
-            StatusLed::Green => reg33 |= 0x0002,
-            StatusLed::Orange => reg33 |= 0x0003,
-        }
+        reg33 = (reg33 & !0x0003) | (led as u16);
         bus.write_reg(0x33, reg33);
     }
 

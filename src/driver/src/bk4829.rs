@@ -721,13 +721,7 @@ impl<'a, State> Bk4829<'a, State> {
         if reg33 == 0xFFFF {
             reg33 = 0x9000;
         }
-        reg33 &= !0x0003; // Clear green (bit 1) and red (bit 0)
-        match led {
-            bsp::StatusLed::Off => {}
-            bsp::StatusLed::Red => reg33 |= 0x0001,
-            bsp::StatusLed::Green => reg33 |= 0x0002,
-            bsp::StatusLed::Orange => reg33 |= 0x0003,
-        }
+        reg33 = (reg33 & !0x0003) | (led as u16);
         self.write_reg(REG_GPIO, reg33);
     }
 
@@ -761,6 +755,45 @@ impl<'a, State> Bk4829<'a, State> {
         self.calib = Some(calib_bytes);
         let block = calib::CalibrationBlock::from_bytes(calib_bytes);
         self.set_crystal_trim(block.xtal_freq_low());
+    }
+
+    #[inline(never)]
+    pub(crate) fn disable_rf(&mut self) {
+        let mut reg33 = self.cache.read(REG_GPIO);
+        if reg33 == 0xFFFF {
+            reg33 = 0x9000;
+        }
+        reg33 &= !0x0003; // Turn off status LEDs
+        reg33 &= !0x0060; // Turn off RX and PA switches
+        self.write_reg(REG_GPIO, reg33);
+        self.write_reg(REG_SYS_POWER, 0x0000);
+        self.squelch_open = false;
+        self.subaudible_matched = false;
+        self.tail_burst_latched = false;
+        self.clear_interrupts();
+    }
+
+    #[inline(never)]
+    pub(crate) fn transition_state<NextState>(self) -> Bk4829<'a, NextState> {
+        Bk4829 {
+            cache: self.cache,
+            bus: self.bus,
+            tone_gain: self.tone_gain,
+            active_demod_af: self.active_demod_af,
+            rx_demod_active: self.rx_demod_active,
+            calib: self.calib,
+            current_freq_hz: self.current_freq_hz,
+            squelch_level: self.squelch_level,
+            squelch_open: self.squelch_open,
+            subaudible_matched: self.subaudible_matched,
+            tail_burst_latched: self.tail_burst_latched,
+            loopback_active: self.loopback_active,
+            baseline_xtal_trim: self.baseline_xtal_trim,
+            rx_subaudible: self.rx_subaudible,
+            tx_subaudible: self.tx_subaudible,
+            am_tracker: self.am_tracker,
+            _state: PhantomData,
+        }
     }
 }
 
@@ -869,25 +902,7 @@ impl<'a> Bk4829<'a, Disabled> {
         self.subaudible_matched = false;
         self.tail_burst_latched = false;
         self.clear_interrupts();
-        Bk4829 {
-            cache: self.cache,
-            bus: self.bus,
-            tone_gain: self.tone_gain,
-            active_demod_af: self.active_demod_af,
-            rx_demod_active: self.rx_demod_active,
-            calib: self.calib,
-            current_freq_hz: self.current_freq_hz,
-            squelch_level: self.squelch_level,
-            squelch_open: self.squelch_open,
-            subaudible_matched: self.subaudible_matched,
-            tail_burst_latched: self.tail_burst_latched,
-            loopback_active: self.loopback_active,
-            baseline_xtal_trim: self.baseline_xtal_trim,
-            rx_subaudible: self.rx_subaudible,
-            tx_subaudible: self.tx_subaudible,
-            am_tracker: self.am_tracker,
-            _state: PhantomData,
-        }
+        self.transition_state()
     }
 
     pub fn into_tx(mut self) -> Bk4829<'a, Transmitting> {
@@ -907,97 +922,23 @@ impl<'a> Bk4829<'a, Disabled> {
         self.subaudible_matched = false;
         self.tail_burst_latched = false;
         self.clear_interrupts();
-        Bk4829 {
-            cache: self.cache,
-            bus: self.bus,
-            tone_gain: self.tone_gain,
-            active_demod_af: self.active_demod_af,
-            rx_demod_active: self.rx_demod_active,
-            calib: self.calib,
-            current_freq_hz: self.current_freq_hz,
-            squelch_level: self.squelch_level,
-            squelch_open: self.squelch_open,
-            subaudible_matched: self.subaudible_matched,
-            tail_burst_latched: self.tail_burst_latched,
-            loopback_active: self.loopback_active,
-            baseline_xtal_trim: self.baseline_xtal_trim,
-            rx_subaudible: self.rx_subaudible,
-            tx_subaudible: self.tx_subaudible,
-            am_tracker: self.am_tracker,
-            _state: PhantomData,
-        }
+        self.transition_state()
     }
 }
 
 impl<'a> Bk4829<'a, Receiving> {
+    #[inline(always)]
     pub fn disable(mut self) -> Bk4829<'a, Disabled> {
-        let mut reg33 = self.cache.read(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
-        reg33 &= !0x0003; // Turn off status LEDs
-        reg33 &= !0x0060; // Turn off RX and PA switches
-        self.write_reg(REG_GPIO, reg33);
-        self.write_reg(REG_SYS_POWER, 0x0000);
-        self.squelch_open = false;
-        self.subaudible_matched = false;
-        self.tail_burst_latched = false;
-        self.clear_interrupts();
-        Bk4829 {
-            cache: self.cache,
-            bus: self.bus,
-            tone_gain: self.tone_gain,
-            active_demod_af: self.active_demod_af,
-            rx_demod_active: self.rx_demod_active,
-            calib: self.calib,
-            current_freq_hz: self.current_freq_hz,
-            squelch_level: self.squelch_level,
-            squelch_open: self.squelch_open,
-            subaudible_matched: self.subaudible_matched,
-            tail_burst_latched: self.tail_burst_latched,
-            loopback_active: self.loopback_active,
-            baseline_xtal_trim: self.baseline_xtal_trim,
-            rx_subaudible: self.rx_subaudible,
-            tx_subaudible: self.tx_subaudible,
-            am_tracker: self.am_tracker,
-            _state: PhantomData,
-        }
+        self.disable_rf();
+        self.transition_state()
     }
 }
 
 impl<'a> Bk4829<'a, Transmitting> {
+    #[inline(always)]
     pub fn disable(mut self) -> Bk4829<'a, Disabled> {
-        let mut reg33 = self.cache.read(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
-        reg33 &= !0x0003; // Turn off status LEDs
-        reg33 &= !0x0060; // Turn off RX and PA switches
-        self.write_reg(REG_GPIO, reg33);
-        self.write_reg(REG_SYS_POWER, 0x0000);
-        self.squelch_open = false;
-        self.subaudible_matched = false;
-        self.tail_burst_latched = false;
-        self.clear_interrupts();
-        Bk4829 {
-            cache: self.cache,
-            bus: self.bus,
-            tone_gain: self.tone_gain,
-            active_demod_af: self.active_demod_af,
-            rx_demod_active: self.rx_demod_active,
-            calib: self.calib,
-            current_freq_hz: self.current_freq_hz,
-            squelch_level: self.squelch_level,
-            squelch_open: self.squelch_open,
-            subaudible_matched: self.subaudible_matched,
-            tail_burst_latched: self.tail_burst_latched,
-            loopback_active: self.loopback_active,
-            baseline_xtal_trim: self.baseline_xtal_trim,
-            rx_subaudible: self.rx_subaudible,
-            tx_subaudible: self.tx_subaudible,
-            am_tracker: self.am_tracker,
-            _state: PhantomData,
-        }
+        self.disable_rf();
+        self.transition_state()
     }
 }
 
