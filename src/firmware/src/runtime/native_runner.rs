@@ -334,7 +334,6 @@ pub fn load_native_from_storage(
     let slot = slot_mut();
     slot.cache.reset();
     slot.shadow_stack.clear();
-    slot.leaf_mgr.reset();
     slot.current_block = 0;
     slot.current_slot = 0;
     slot.pid = pid;
