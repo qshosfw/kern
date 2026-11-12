@@ -165,6 +165,7 @@ impl View<PopupModel> for PopupView {
         }
     }
 
+    #[inline(never)]
     fn on_event(&mut self, model: &mut PopupModel, event: &Event) -> bool {
         if let Event::Tick = event {
             let anim_tick = model.anim.tick();

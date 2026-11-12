@@ -237,6 +237,7 @@ impl Default for TextInputView {
 }
 
 impl View<TextInputModel> for TextInputView {
+    #[inline(never)]
     fn render(&self, canvas: &mut Canvas, model: &TextInputModel) {
         let title_s = model.title_str();
         if model.show_header && !title_s.is_empty() {
@@ -353,6 +354,7 @@ impl View<TextInputModel> for TextInputView {
         }
     }
 
+    #[inline(never)]
     fn on_event(&mut self, model: &mut TextInputModel, event: &Event) -> bool {
         if let Event::Tick = event {
             model.ticks = model.ticks.wrapping_add(1);
