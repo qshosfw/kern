@@ -256,11 +256,17 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
 
 /// Shadow return frame for LR-thunking across paged block calls (KRX-ABI 2.5.0 Section 7.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C, align(4))]
 pub struct ReturnFrame {
     pub caller_block_id: u8,
     pub caller_slot: u8,
     pub return_offset: u16,
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<ReturnFrame>() == 4);
+    assert!(core::mem::align_of::<ReturnFrame>() == 4);
+};
 
 impl ReturnFrame {
     pub const fn empty() -> Self {
