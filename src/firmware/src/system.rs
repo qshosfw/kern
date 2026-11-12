@@ -270,6 +270,73 @@ fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut 
     }
 }
 
+fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool) {
+    #[cfg(feature = "usb")]
+    if let Some(usb_ev) = hw.usb.poll() {
+        *dirty_render = true;
+        match usb_ev {
+            kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
+                wake_and_notify_activity(hw);
+                if py32_hal::rcc::sysclk_hz() != 48_000_000 {
+                    py32_hal::rcc::set_sysclk_48mhz();
+                    #[cfg(feature = "uart")]
+                    bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
+                }
+            }
+            kernel::event::UsbEvent::Disconnected => {
+                let target_clk = crate::master_config_ref().system.cpu_clock;
+                py32_hal::rcc::set_sysclk_index(target_clk);
+                #[cfg(feature = "uart")]
+                bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
+            }
+            _ => {}
+        }
+        enqueue_event(Event::Usb(usb_ev));
+    }
+
+    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
+    if let Some((header, _raw_len)) = hw.wire.poll(now) {
+        wake_and_notify_activity(hw);
+        *dirty_render = true;
+        if !crate::services::wire::dispatch_wire_record(&header, hw, now) {
+            enqueue_event(Event::Sys(kernel::ipc::SysEvent {
+                target: header.service,
+                command: header.opcode,
+                arg: header.sequence as u16,
+            }));
+        }
+    }
+}
+
+fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool) {
+    record_proc_activation(0xF2);
+    crate::services::telemetry::sample_battery_and_system(adc, hw.audio.is_active());
+
+    let pwr = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
+
+    if let Some(is_charging) = pwr.poll_charging_transition() {
+        if is_charging {
+            wake_and_notify_activity(hw);
+        }
+        *dirty_render = true;
+        enqueue_event(Event::Charging(is_charging));
+    }
+
+    if pwr.poll_low_battery_transition() && pwr.uptime_secs() >= 3 && pwr.battery_percentage() <= 15
+    {
+        wake_and_notify_activity(hw);
+        hw.radio
+            .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+        crate::orchestrator::compositor::show_low_battery_popup();
+        *dirty_render = true;
+    }
+
+    if pwr.is_critical() && !pwr.is_charging() {
+        handle_critical_battery_cutoff(hw, adc);
+        *dirty_render = true;
+    }
+}
+
 pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -> ! {
     let mut last_tick = py32_hal::delay::millis();
     let mut last_battery_tick = py32_hal::delay::millis();
@@ -288,49 +355,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         // Feed Independent Watchdog
         py32_hal::wdt::Watchdog::feed();
 
-        // 0. Poll hardware USB on EVERY iteration for instantaneous host responsiveness
-        #[cfg(feature = "usb")]
-        {
-            if let Some(usb_ev) = hw.usb.poll() {
-                dirty_render = true;
-                match usb_ev {
-                    kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
-                        wake_and_notify_activity(hw);
-                        if py32_hal::rcc::sysclk_hz() != 48_000_000 {
-                            py32_hal::rcc::set_sysclk_48mhz();
-                            #[cfg(feature = "uart")]
-                            bsp::Board::uart_set_baud(
-                                crate::master_config_ref().system.baud_rate(),
-                            );
-                        }
-                    }
-                    kernel::event::UsbEvent::Disconnected => {
-                        let target_clk = crate::master_config_ref().system.cpu_clock;
-                        py32_hal::rcc::set_sysclk_index(target_clk);
-                        #[cfg(feature = "uart")]
-                        bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
-                    }
-                    _ => {}
-                }
-                enqueue_event(Event::Usb(usb_ev));
-            }
-        }
-
         let now = py32_hal::delay::millis();
-
-        // 0b. Poll RigWire serial protocol (UART or USB CDC)
-        #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-        if let Some((header, _raw_len)) = hw.wire.poll(now) {
-            wake_and_notify_activity(hw);
-            dirty_render = true;
-            if !crate::services::wire::dispatch_wire_record(&header, hw, now) {
-                enqueue_event(Event::Sys(kernel::ipc::SysEvent {
-                    target: header.service,
-                    command: header.opcode,
-                    arg: header.sequence as u16,
-                }));
-            }
-        }
+        poll_usb_and_wire(hw, now, &mut dirty_render);
 
         // 0c. High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms
         #[cfg(feature = "radio")]
@@ -390,13 +416,9 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         // - Screen asleep (Standby): 100ms tick (10 Hz) to maximize Cortex-M0+ low-power sleep.
         #[cfg(feature = "animations")]
         let ui_tick_interval = if is_anim {
-            match crate::master_config_ref().display.refresh_rate {
-                0 => 50u32,
-                1 => 16u32,
-                2 => 13u32,
-                3 => 11u32,
-                _ => 16u32,
-            }
+            const RATE_MS: [u8; 4] = [50, 16, 13, 11];
+            let r = crate::master_config_ref().display.refresh_rate;
+            RATE_MS[if r < 4 { r as usize } else { 1 }] as u32
         } else if is_display_awake {
             50u32
         } else {
@@ -439,41 +461,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         };
         if now.wrapping_sub(last_battery_tick) >= batt_interval {
             last_battery_tick = now;
-            record_proc_activation(0xF2);
-            crate::services::telemetry::sample_battery_and_system(&adc, hw.audio.is_active());
-
-            // Check for battery pack charging transition
-            let charging_trans =
-                unsafe { (*core::ptr::addr_of_mut!(POWER_SERVICE)).poll_charging_transition() };
-            if let Some(is_charging) = charging_trans {
-                if is_charging {
-                    wake_and_notify_activity(hw);
-                }
-                dirty_render = true;
-                enqueue_event(Event::Charging(is_charging));
-            }
-
-            // Check for low battery edge transition -> display warning modal & sound alert
-            let low_bat_edge =
-                unsafe { (*core::ptr::addr_of_mut!(POWER_SERVICE)).poll_low_battery_transition() };
-            if low_bat_edge {
-                let pwr = unsafe { &*core::ptr::addr_of!(POWER_SERVICE) };
-                if pwr.uptime_secs() >= 3 && pwr.battery_percentage() <= 15 {
-                    wake_and_notify_activity(hw);
-                    hw.radio
-                        .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
-                    crate::orchestrator::compositor::show_low_battery_popup();
-                    dirty_render = true;
-                }
-            }
-
-            // Kernel Safeguard: Critical Battery Cutoff & Low Power Sleep Mode
-            let is_crit = unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_critical() };
-            let is_chrg = unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_charging() };
-            if is_crit && !is_chrg {
-                handle_critical_battery_cutoff(hw, &adc);
-                dirty_render = true;
-            }
+            poll_battery_tick(hw, &adc, &mut dirty_render);
         }
 
         // 4. 1-second system tick for uptime & telemetry update
