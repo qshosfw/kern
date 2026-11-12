@@ -317,7 +317,7 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
         }
 
         // Page Indicator Dots (only shown when multiple pages exist)
-        let total_pages = total_items.div_ceil(items_per_page);
+        let total_pages = (((total_items as u32 + 5) * 0xAAAB) >> 18) as usize;
         if total_pages > 1 {
             let dot_spacing = 6u8;
             let dots_total_width = (total_pages as u8 - 1) * dot_spacing;
