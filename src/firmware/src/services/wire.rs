@@ -711,7 +711,8 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         let off = req.offset as usize;
         let len = (req.length as usize).min(180);
 
-        let mut resp = [0u8; 8 + 180];
+        let mut resp_uninit = core::mem::MaybeUninit::<[u8; 8 + 180]>::uninit();
+        let resp = unsafe { &mut *resp_uninit.as_mut_ptr() };
         let read_sz = hw
             .filesystem
             .read_file_at(path, off, &mut resp[8..8 + len])
