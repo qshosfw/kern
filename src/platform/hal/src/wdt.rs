@@ -39,7 +39,7 @@ impl Watchdog {
     }
 
     /// Feed / Kick the watchdog timer to prevent system reset
-    #[inline(always)]
+    #[inline(never)]
     pub fn feed() {
         unsafe {
             IWDG_KR.write_volatile(KR_KEY_RELOAD);
