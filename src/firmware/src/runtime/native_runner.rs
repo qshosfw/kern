@@ -28,25 +28,25 @@ pub const TRANSIENT_SCRATCH_OFFSET: usize = 2048; // Scratch storage offset for 
 pub(crate) struct NativeExecSlot {
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
+    pub(crate) caps: CapabilitySet,
     pub(crate) pid: kernel::proc::Pid,
-    pub(crate) app_name: heapless::String<16>,
-    pub(crate) pkg_path: heapless::String<32>,
     pub(crate) is_loaded: bool,
     pub(crate) is_paged: bool,
     pub(crate) profile: KrxProfile,
-    pub(crate) mem_layout: MemoryMapLayout<4>,
     pub(crate) current_block: u8,
     pub(crate) current_slot: u8,
-    pub(crate) caps: CapabilitySet,
+    pub(crate) status_bar_has_custom: bool,
+    pub(crate) status_bar_left_count: usize,
+    pub(crate) status_bar_center_count: usize,
+    pub(crate) app_name: heapless::String<16>,
+    pub(crate) pkg_path: heapless::String<32>,
+    pub(crate) mem_layout: MemoryMapLayout<4>,
     pub(crate) cache: FixedWindowCache<16, 4>,
     pub(crate) shadow_stack: ShadowReturnStack<8>,
     pub(crate) leaf_mgr: StructuredLeafManager<16>,
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
-    pub(crate) status_bar_has_custom: bool,
     pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
-    pub(crate) status_bar_left_count: usize,
     pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
-    pub(crate) status_bar_center_count: usize,
     pub(crate) custom_icon_0: [u8; 5],
     pub(crate) _pad_icon0: [u8; 3],
     pub(crate) custom_icon_1: [u8; 5],
@@ -855,9 +855,7 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
             let pid = slot.pid;
             if s.tray_icon_id == kernel::proc::abi::KRX_ICON_NONE {
                 crate::orchestrator::status_tray_mut().clear_icon(pid);
-            } else if let Some(glyph) =
-                decode_status_glyph(s.tray_icon_id, &c0, &c1)
-            {
+            } else if let Some(glyph) = decode_status_glyph(s.tray_icon_id, &c0, &c1) {
                 crate::orchestrator::status_tray_mut().set_glyph(pid, glyph);
             }
         }
