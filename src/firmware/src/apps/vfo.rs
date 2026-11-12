@@ -187,7 +187,8 @@ fn draw_vfo(
 
     // 3. Authentic Big Frequency (x=30)
     let mut fbuf = [0u8; 10];
-    let fbytes = gfx::text::format_u32(ch.effective_rx_freq().raw() / 10, &mut fbuf).as_bytes();
+    let (freq_10hz, _) = utils::math::div10_u32(ch.effective_rx_freq().raw());
+    let fbytes = gfx::text::format_u32(freq_10hz, &mut fbuf).as_bytes();
     let flen = fbytes.len();
     let mut cur_x = 30i16;
 
