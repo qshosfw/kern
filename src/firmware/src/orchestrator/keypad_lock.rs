@@ -33,6 +33,7 @@ pub struct KeypadLockManager {
     hold_elapsed_ms: u16,
     hold_target_ms: u16,
     hold_start_threshold_ms: u16,
+    progress_slope_q16: u16,
     is_long_press_triggered: bool,
 
     // Millisecond timing reference
@@ -68,6 +69,7 @@ impl KeypadLockManager {
             hold_elapsed_ms: 0,
             hold_target_ms: DEFAULT_HOLD_MS,
             hold_start_threshold_ms: 550,
+            progress_slope_q16: 0,
             is_long_press_triggered: false,
             last_tick_ms: 0,
             inactivity_ms: 0,
@@ -122,6 +124,15 @@ impl KeypadLockManager {
         self.held_confirmed = false;
         self.is_long_press_triggered = false;
         self.last_tick_ms = py32_hal::delay::millis();
+    }
+
+    #[inline(always)]
+    fn update_progress_slope(&mut self) {
+        let vis_target = self
+            .hold_target_ms
+            .saturating_sub(self.hold_start_threshold_ms)
+            .max(100) as u32;
+        self.progress_slope_q16 = ((100u32 << 16) / vis_target) as u16;
     }
 
     /// Process system events, hold-to-lock/unlock gestures, sticky F-key timeouts, and auto-lock.
@@ -235,6 +246,7 @@ impl KeypadLockManager {
                         } else {
                             (start_threshold as u32 + 500).clamp(900, 1100) as u16
                         };
+                        self.update_progress_slope();
                         // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
                     }
                     KeyState::Held => {
@@ -277,6 +289,7 @@ impl KeypadLockManager {
                         } else {
                             lock_target
                         };
+                        self.update_progress_slope();
 
                         if !self.is_locked {
                             self.toast = LockToast::None;
@@ -385,11 +398,7 @@ impl KeypadLockManager {
                 let visible_elapsed = self
                     .hold_elapsed_ms
                     .saturating_sub(self.hold_start_threshold_ms);
-                let visible_target = self
-                    .hold_target_ms
-                    .saturating_sub(self.hold_start_threshold_ms)
-                    .max(100) as u32;
-                ((visible_elapsed as u32 * 100) / visible_target).min(100) as u8
+                ((visible_elapsed as u32 * self.progress_slope_q16 as u32) >> 16).min(100) as u8
             };
             gfx::widgets::draw_progress_bar(canvas, bar_x, (by + 18) as i16, bar_w, 6, pct, true);
             return;

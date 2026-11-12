@@ -16,7 +16,9 @@ pub fn draw_s_meter(
     } else if rssi_dbm >= -53 {
         12
     } else {
-        (((rssi_dbm + 121) as u16 * 12) / 68) as u8
+        // Fast reciprocal division: (rssi + 121) * 12 / 68 = (val * 3) / 17
+        // (val * 11565) >> 16 is exact for all val in 0..68
+        (((rssi_dbm + 121) as u32 * 11565) >> 16) as u8
     };
 
     let ty = y + 5;
