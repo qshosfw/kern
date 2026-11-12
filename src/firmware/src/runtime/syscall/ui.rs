@@ -181,14 +181,15 @@ fn draw_pill(x: i16, y: i16, w: u8, h: u8, s: &str, filled: bool, tx: i16) {
     let canvas = super::active_canvas_mut();
     let xu = x.max(0) as u8;
     let yu = y.max(0) as u8;
-    let tc = if filled {
-        canvas.fill_rect(xu, yu, w, h, gfx::Color::Fill);
-        gfx::Color::Clear
+    let (fc, tc) = if filled {
+        (gfx::Color::Fill, gfx::Color::Clear)
     } else {
-        canvas.fill_rect(xu, yu, w, h, gfx::Color::Clear);
-        canvas.draw_rect(xu, yu, w, h, gfx::Color::Fill);
-        gfx::Color::Fill
+        (gfx::Color::Clear, gfx::Color::Fill)
     };
+    canvas.fill_rect(xu, yu, w, h, fc);
+    if !filled {
+        canvas.draw_rect(xu, yu, w, h, gfx::Color::Fill);
+    }
     if h >= 9 {
         canvas.clear_corners(xu, yu, w, h);
     }
@@ -300,8 +301,15 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
         );
     }
     if let Some(v) = unsafe { super::parse_str(value, v_len as usize) } {
-        let vw = gfx::text::str_width(v, &gfx::fonts::tomthumb::FONT);
-        gfx::text::draw_str(canvas, 119 - vw, y + 7, v, &gfx::fonts::tomthumb::FONT, tc);
+        gfx::text::draw_str_align(
+            canvas,
+            119,
+            y + 7,
+            v,
+            &gfx::fonts::tomthumb::FONT,
+            tc,
+            gfx::text::Align::Right,
+        );
     }
 }
 
@@ -326,7 +334,7 @@ pub unsafe extern "C" fn api_ui_draw_small_digit(x: i16, y: i16, digit: u8, colo
 }
 
 pub unsafe extern "C" fn api_ui_draw_battery(x: i16, y: i16, pct: u8, charging: u8) {
-    if x < 0 || x + 15 > 128 || y < 0 || y + 6 > 64 {
+    if (x as u16) > (128 - 15) || (y as u16) > (64 - 6) {
         return;
     }
     let canvas = super::active_canvas_mut();
