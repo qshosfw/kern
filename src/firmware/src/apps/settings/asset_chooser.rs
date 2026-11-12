@@ -72,7 +72,7 @@ impl AssetDescriptor {
         let storage = storage_mut();
 
         storage.count = 0;
-        storage.labels[0] = ShortString::from_str(self.none_label);
+        storage.labels[0].set_str(self.none_label);
 
         let scan_count = storage_fs
             .list_dir(self.dir, &mut storage.dir_entries)

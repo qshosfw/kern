@@ -28,15 +28,13 @@ pub static APPS_DEFS: &[SettingDef] = &[
     ),
 ];
 
-fn format_size(bytes: usize) -> ShortString {
-    let mut s = ShortString::empty();
+fn format_size_into(bytes: usize, s: &mut ShortString) {
     let (val, dec, unit) = if bytes < 1024 {
         (bytes as i32, 0, " B")
     } else {
         (((bytes * 10 + 512) >> 10) as i32, 1, " KB")
     };
     s.push_int_fixed(val, dec, "", unit);
-    s
 }
 
 pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
@@ -93,14 +91,16 @@ pub fn populate_package_list(
         if !crate::apps::launcher::catalog::PackageCatalog::matches_kind(entry, is_service) {
             continue;
         }
-        let info = if is_service {
-            ShortString::from_str(entry.exec_type.as_str())
-        } else if entry.is_valid {
-            format_size(entry.size_bytes)
-        } else {
-            ShortString::from_str("Invalid")
-        };
-        items[count] = MenuItem::new(entry.title.as_str(), MenuItemType::Value(info));
+        items[count] = MenuItem::new(entry.title.as_str(), MenuItemType::Value(ShortString::empty()));
+        if let MenuItemType::Value(ref mut s) = items[count].item_type {
+            if is_service {
+                s.set_str(entry.exec_type.as_str());
+            } else if entry.is_valid {
+                format_size_into(entry.size_bytes, s);
+            } else {
+                s.set_str("Invalid");
+            }
+        }
         icons[count] = app_icons(entry.title.as_str()).0;
         count += 1;
     }
@@ -151,7 +151,10 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
     }
     add_detail_row(items, &mut n, "Class", pkg.app_class.as_str());
     if n < items.len() {
-        items[n] = MenuItem::new("Size", MenuItemType::Value(format_size(pkg.size_bytes)));
+        items[n] = MenuItem::new("Size", MenuItemType::Value(ShortString::empty()));
+        if let MenuItemType::Value(ref mut s) = items[n].item_type {
+            format_size_into(pkg.size_bytes, s);
+        }
         n += 1;
     }
     add_detail_row(items, &mut n, "File", pkg.filename());
