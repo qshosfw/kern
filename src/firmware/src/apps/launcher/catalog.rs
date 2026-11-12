@@ -57,7 +57,7 @@ impl PackageCatalog {
     }
 
     #[inline(always)]
-    fn matches_kind(e: &PackageCatalogEntry, is_service: bool) -> bool {
+    pub fn matches_kind(e: &PackageCatalogEntry, is_service: bool) -> bool {
         if is_service {
             e.is_valid && e.exec_type != KrxExecType::App
         } else {
@@ -104,15 +104,26 @@ impl PackageCatalog {
     fn scan_internal(&mut self, filesystem: &mut SystemStorage) {
         self.entries.clear();
 
-        const EMPTY_DIR: kernel::service::DirEntryInfo = kernel::service::DirEntryInfo::empty();
-        let mut dir_entries = [EMPTY_DIR; 8];
+        let arena = crate::runtime::transient_arena_bytes_mut();
+        let dir_ptr = arena[256..].as_mut_ptr() as *mut kernel::service::DirEntryInfo;
+        unsafe {
+            core::ptr::write_bytes(dir_ptr, 0, 8);
+        }
+        let dir_entries = unsafe { core::slice::from_raw_parts_mut(dir_ptr, 8) };
 
-        if let Ok(count) = filesystem.list_dir("/apps", &mut dir_entries) {
-            for entry in &dir_entries[..count] {
-                if !entry.is_dir && self.entries.len() < MAX_CATALOG_PACKAGES {
-                    if let Some(pkg) =
-                        Self::inspect_package(filesystem, entry.path.as_str(), entry.size)
-                    {
+        if let Ok(count) = filesystem.list_dir("/apps", dir_entries) {
+            for i in 0..count {
+                let (is_dir, size, path_ptr, path_len) = {
+                    let e = &dir_entries[i];
+                    (e.is_dir, e.size, e.path.as_ptr(), e.path.len())
+                };
+                if !is_dir && self.entries.len() < MAX_CATALOG_PACKAGES {
+                    let path_str = unsafe {
+                        core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                            path_ptr, path_len,
+                        ))
+                    };
+                    if let Some(pkg) = Self::inspect_package(filesystem, path_str, size) {
                         let _ = self.entries.push(pkg);
                     }
                 }

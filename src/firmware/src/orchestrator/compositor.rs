@@ -89,14 +89,16 @@ impl ModalCompositor {
         cancel: &'static str,
     ) {
         crate::orchestrator::sink_enter_keys();
-        let mut model = PopupModel::new();
-        if !confirm.is_empty() && !cancel.is_empty() {
-            model = model.with_badges(confirm, cancel);
-        }
-        let _ = model.custom_title.push_str(title);
-        let _ = model.custom_msg.push_str(message);
         self.tag = tag;
-        self.modal = ActiveModal::Popup(model);
+        self.modal = ActiveModal::Popup(PopupModel::new());
+        if let ActiveModal::Popup(model) = &mut self.modal {
+            if !confirm.is_empty() && !cancel.is_empty() {
+                model.confirm_label = Some(confirm);
+                model.cancel_label = Some(cancel);
+            }
+            let _ = model.custom_title.push_str(title);
+            let _ = model.custom_msg.push_str(message);
+        }
     }
 
     #[inline(always)]

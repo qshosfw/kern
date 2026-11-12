@@ -40,21 +40,36 @@ fn format_size(bytes: usize) -> ShortString {
 }
 
 pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
+    static MAP: [(u8, &'static [u8; 8], &'static [u8; 32]); 5] = [
+        (
+            b'T',
+            &gfx::icons::ICON_APP_TORCH,
+            &gfx::icons::ICON_16_FLASHLIGHT,
+        ),
+        (b'S', &gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO),
+        (
+            b'R',
+            &gfx::icons::ICON_APP_RADIO,
+            &gfx::icons::ICON_16_RADIO,
+        ),
+        (b'C', &gfx::icons::ICON_KEYPAD, &gfx::icons::ICON_16_APPS),
+        (
+            b'B',
+            &gfx::icons::ICON_APP_DIAG,
+            &gfx::icons::ICON_16_DIAGNOSTICS,
+        ),
+    ];
     let b = title.as_bytes();
-    match b.first().copied().unwrap_or(0) {
-        b'B' | b'b' => {
-            if matches!(b.get(2), Some(b'a' | b'A')) {
-                (&gfx::icons::ICON_ANTENNA, &gfx::icons::ICON_16_SCANNER)
-            } else {
-                (&gfx::icons::ICON_APP_DIAG, &gfx::icons::ICON_16_DIAGNOSTICS)
-            }
-        }
-        b'T' | b't' => (&gfx::icons::ICON_APP_TORCH, &gfx::icons::ICON_16_FLASHLIGHT),
-        b'S' | b's' => (&gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO),
-        b'R' | b'r' => (&gfx::icons::ICON_APP_RADIO, &gfx::icons::ICON_16_RADIO),
-        b'C' | b'c' => (&gfx::icons::ICON_KEYPAD, &gfx::icons::ICON_16_APPS),
-        _ => (&gfx::icons::ICON_APPS, &gfx::icons::ICON_16_APPS),
+    let c0 = b.first().copied().unwrap_or(0) & !0x20;
+    if c0 == b'B' && (b.get(2).copied().unwrap_or(0) & !0x20) == b'A' {
+        return (&gfx::icons::ICON_ANTENNA, &gfx::icons::ICON_16_SCANNER);
     }
+    for &(k, i8, i16) in &MAP {
+        if c0 == k {
+            return (i8, i16);
+        }
+    }
+    (&gfx::icons::ICON_APPS, &gfx::icons::ICON_16_APPS)
 }
 
 #[inline(never)]
@@ -75,12 +90,7 @@ pub fn populate_package_list(
         if count >= max {
             break;
         }
-        let matches = if is_service {
-            entry.is_valid && entry.exec_type != kernel::proc::krx::KrxExecType::App
-        } else {
-            !entry.is_valid || entry.exec_type == kernel::proc::krx::KrxExecType::App
-        };
-        if !matches {
+        if !crate::apps::launcher::catalog::PackageCatalog::matches_kind(entry, is_service) {
             continue;
         }
         let info = if is_service {
