@@ -73,19 +73,20 @@ impl kernel::service::SerialPort for SystemSerialPort {
     }
 }
 
+#[repr(C)]
 pub struct SystemHardware<'a> {
-    pub orchestrator: crate::orchestrator::Orchestrator,
-    pub lcd: St7565<'a>,
     pub backlight: BacklightController,
-    pub key_scanner: KeypadScanner,
     pub audio: AudioAmplifier,
-    pub radio: Bk4829<'a, drivers::bk4829::Disabled>,
-    pub ipc_queue: kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
     pub filesystem: &'a mut SystemStorage<'a>,
+    pub lcd: St7565<'a>,
     #[cfg(feature = "usb")]
     pub usb: drivers::usb::UsbDriver,
     #[cfg(feature = "uart")]
     pub uart: drivers::uart::HardwareUart,
+    pub orchestrator: crate::orchestrator::Orchestrator,
+    pub key_scanner: KeypadScanner,
+    pub radio: Bk4829<'a, drivers::bk4829::Disabled>,
+    pub ipc_queue: kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     pub wire: drivers::wire::WireDriver<SystemSerialPort>,
 }
