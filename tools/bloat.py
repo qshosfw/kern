@@ -598,6 +598,27 @@ def cmd_suggest(a):
         print(f"{i:2d}. ~{s:4d} B  [{k}]  {d}")
 
 
+def cmd_find(a):
+    """List symbols matching --match (substring) sorted by size with section and callees."""
+    pat = a.match or ""
+    syms = symbols(a.elf)
+    fns = disasm(a.elf)
+    matches = sorted(
+        ((sz, t, k) for k, (sz, t, _) in syms.items() if pat in k and t in "tTrRdDbB" and sz >= a.min),
+        reverse=True,
+    )
+    tot = sum(sz for sz, _, _ in matches)
+    print(f"== match '{pat}' (>={a.min} B): {len(matches)} symbols, {tot} B total ==")
+    for sz, t, k in matches[: a.top]:
+        callees = ""
+        if t in "tT" and k in fns:
+            cs = [m.group(1).split("::")[-1] for _, _, mn, op in fns[k]
+                  if mn in ("bl", "blx", "b.w", "b") and (m := re.search(r"<([^>+]+)", op)) and m.group(1) != k]
+            if cs:
+                callees = " -> " + ", ".join(dict.fromkeys(cs))[:50]
+        print(f"{sz:6d} B  [{t}]  {k}{callees}")
+
+
 def cmd_syscalls(a):
     """List runtime::syscall functions sorted by size with callees (Phase 10 target <= 24 B)."""
     syms = symbols(a.elf)
@@ -707,13 +728,14 @@ def cmd_diff(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned math64 memcpy pools rodata traps suggest phases syscalls".split())
+    p.add_argument("cmd", choices="audit stack fields dups outline mono calls consts strings crates baseline diff divs unaligned math64 memcpy pools rodata traps suggest phases syscalls find".split())
     p.add_argument("--elf", default=DEF_ELF); p.add_argument("--top", type=int, default=25)
     p.add_argument("--min", type=int, default=24, help="min fn or stack bytes"); p.add_argument("--sim", type=float, default=0.80)
     p.add_argument("--len", type=int, default=8, help="outline window (instructions)")
     p.add_argument("--count", type=int, default=3, help="min occurrences for outline")
     p.add_argument("--depth", type=int, default=3); p.add_argument("--out", default="docs/flash_baseline.json")
     p.add_argument("--base", default="docs/flash_baseline.json")
+    p.add_argument("--match", default="", help="substring filter for 'find'")
     p.add_argument("--json", help="path to export JSON report")
     a = p.parse_args()
     if a.cmd == "calls" and a.min == 24:
