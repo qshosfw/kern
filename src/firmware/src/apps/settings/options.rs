@@ -97,27 +97,23 @@ fn populate_item(
         TAG_SUBMENU => {
             item.item_type = MenuItemType::Submenu;
         }
-        TAG_METRIC => {
-            if let Some(metric) = MetricId::from_u8(def.aux) {
-                let mut s = ShortString::empty();
-                super::metric::format_metric(metric, ctx, &mut s);
-                item.item_type = MenuItemType::Value(s);
+        TAG_METRIC | TAG_ACTION | TAG_ASSET => {
+            let mut s = ShortString::empty();
+            if def.tag == TAG_METRIC {
+                if let Some(metric) = MetricId::from_u8(def.aux) {
+                    super::metric::format_metric(metric, ctx, &mut s);
+                }
+            } else if def.tag == TAG_ACTION {
+                if let Some(action) = ActionId::from_u8(def.aux) {
+                    get_action_value(action, ctx, &mut s);
+                }
+            } else {
+                #[cfg(feature = "filesystem")]
+                if let Some(&desc) = ASSETS.get(def.aux as usize) {
+                    desc.format_status(&ctx.config, &mut s);
+                }
             }
-        }
-        #[cfg(feature = "filesystem")]
-        TAG_ASSET => {
-            if let Some(&desc) = ASSETS.get(def.aux as usize) {
-                let mut s = ShortString::empty();
-                desc.format_status(&ctx.config, &mut s);
-                item.item_type = MenuItemType::Value(s);
-            }
-        }
-        TAG_ACTION => {
-            if let Some(action) = ActionId::from_u8(def.aux) {
-                let mut s = ShortString::empty();
-                get_action_value(action, ctx, &mut s);
-                item.item_type = MenuItemType::Value(s);
-            }
+            item.item_type = MenuItemType::Value(s);
         }
         _ => {
             item.item_type = MenuItemType::Info("Ascon-128");
