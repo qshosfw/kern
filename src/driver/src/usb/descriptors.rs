@@ -45,7 +45,7 @@ pub const CDC_EP_OUT: u8 = 0x04;
 pub const CDC_DATA_SIZE: u8 = 64;
 
 // ── Standard Device Descriptor ──────────────────────────────────────────────
-pub const DEVICE_DESCRIPTOR: [u8; 18] = [
+pub static DEVICE_DESCRIPTOR: [u8; 18] = [
     18,               // bLength
     DESC_TYPE_DEVICE, // bDescriptorType
     0x00,
@@ -227,7 +227,7 @@ pub const CONFIG_DESCRIPTOR: [u8; 9 + 9 + 7 + 7] = [
 ];
 
 #[cfg(all(feature = "usb_cdc", not(feature = "usb_msc")))]
-pub const CONFIG_DESCRIPTOR: [u8; 9 + 8 + 9 + 5 + 5 + 4 + 5 + 7 + 9 + 7 + 7] = [
+pub static CONFIG_DESCRIPTOR: [u8; 9 + 8 + 9 + 5 + 5 + 4 + 5 + 7 + 9 + 7 + 7] = [
     // 1. Configuration Header (9 bytes)
     9,
     DESC_TYPE_CONFIGURATION,
@@ -314,14 +314,14 @@ pub const CONFIG_DESCRIPTOR: [u8; 9 + 8 + 9 + 5 + 5 + 4 + 5 + 7 + 9 + 7 + 7] = [
 pub const CONFIG_DESCRIPTOR: [u8; 9] = [9, DESC_TYPE_CONFIGURATION, 9, 0, 0, 1, 0, 0xC0, 50];
 
 // ── Standard String Descriptors ─────────────────────────────────────────────
-pub const STRING_LANGID: [u8; 4] = [
+pub static STRING_LANGID: [u8; 4] = [
     4,
     DESC_TYPE_STRING,
     0x09,
     0x04, // 0x0409 English (US)
 ];
 
-pub const STRING_MANUFACTURER: [u8; 20] = [
+pub static STRING_MANUFACTURER: [u8; 20] = [
     20,
     DESC_TYPE_STRING,
     b'Q',
@@ -345,7 +345,7 @@ pub const STRING_MANUFACTURER: [u8; 20] = [
 ];
 
 #[cfg(feature = "usb_cdc")]
-pub const STRING_INTERFACE_SERIAL: [u8; 14] = [
+pub static STRING_INTERFACE_SERIAL: [u8; 14] = [
     14,
     DESC_TYPE_STRING,
     b'S',
@@ -363,7 +363,7 @@ pub const STRING_INTERFACE_SERIAL: [u8; 14] = [
 ];
 
 #[cfg(feature = "usb_msc")]
-pub const STRING_INTERFACE_STORAGE: [u8; 16] = [
+pub static STRING_INTERFACE_STORAGE: [u8; 16] = [
     16,
     DESC_TYPE_STRING,
     b'S',
