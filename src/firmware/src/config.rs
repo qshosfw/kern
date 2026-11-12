@@ -316,7 +316,7 @@ impl MasterConfig {
         let mut repaired = 0u8;
 
         if self.system.version != SystemConfig::VERSION {
-            self.system = SystemConfig::DEFAULT;
+            self.system = DEFAULT_MASTER_CONFIG.system;
             repaired |= DIRTY_SYSTEM;
         }
         if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > 4 {
@@ -339,7 +339,7 @@ impl MasterConfig {
 
         let expected_nav = self.system.nav_layout();
         if !check_bounds(self.keys.as_bytes(), KeyConfig::VERSION, &KEY_RULES) {
-            self.keys = KeyConfig::DEFAULT;
+            self.keys = DEFAULT_MASTER_CONFIG.keys;
             repaired |= DIRTY_KEYS;
         }
         if self.keys.nav_layout != expected_nav {
@@ -352,7 +352,7 @@ impl MasterConfig {
             || self.battery.calib_tweak_mv < -500
             || self.battery.calib_tweak_mv > 500;
         if batt_invalid {
-            self.battery = BatteryConfig::DEFAULT;
+            self.battery = DEFAULT_MASTER_CONFIG.battery;
             repaired |= DIRTY_BATTERY;
         }
         if self.system.is_k1() {
@@ -371,17 +371,17 @@ impl MasterConfig {
             &DISPLAY_RULES,
         ) || self.display.backlight_max == 0
         {
-            self.display = DisplayConfig::DEFAULT;
+            self.display = DEFAULT_MASTER_CONFIG.display;
             repaired |= DIRTY_DISPLAY;
         }
 
         if !check_bounds(self.audio.as_bytes(), AudioConfig::VERSION, &AUDIO_RULES) {
-            self.audio = AudioConfig::DEFAULT;
+            self.audio = DEFAULT_MASTER_CONFIG.audio;
             repaired |= DIRTY_AUDIO;
         }
 
         if !check_bounds(self.apps.as_bytes(), AppsConfig::VERSION, &APPS_RULES) {
-            self.apps = AppsConfig::DEFAULT;
+            self.apps = DEFAULT_MASTER_CONFIG.apps;
             repaired |= DIRTY_APPS;
         }
 
