@@ -30,7 +30,9 @@ pub fn init() {
 
 /// Dynamically update TIM2 prescaler to ensure 1 µs tick precision at any system clock frequency.
 pub fn update_tim2_freq(sysclk_hz: u32) {
-    let psc = (sysclk_hz / 1_000_000).saturating_sub(1);
+    // Fast reciprocal division: sysclk_hz / 1_000_000: ((x * 0x10C6F7A1) >> 48)
+    let div1m = ((sysclk_hz as u64 * 0x10C6F7A1) >> 48) as u32;
+    let psc = div1m.saturating_sub(1);
     unsafe {
         tim::TIM2_PSC.write_volatile(psc);
         tim::TIM2_EGR.write_volatile(tim::EGR_UG);
