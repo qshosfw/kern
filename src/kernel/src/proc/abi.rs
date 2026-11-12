@@ -389,6 +389,8 @@ impl Default for KrxStatusBar {
 }
 
 impl KrxStatusBar {
+    pub const EMPTY: Self = Self::empty();
+
     pub const fn empty() -> Self {
         Self {
             flags: KRX_STATUS_VISIBLE | KRX_STATUS_DIVIDER,

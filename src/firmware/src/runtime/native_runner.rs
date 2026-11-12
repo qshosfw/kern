@@ -41,13 +41,16 @@ pub(crate) struct NativeExecSlot {
     pub(crate) cache: FixedWindowCache<16, 4>,
     pub(crate) shadow_stack: ShadowReturnStack<8>,
     pub(crate) leaf_mgr: StructuredLeafManager<16>,
-    pub(crate) status_bar: Option<kernel::proc::abi::KrxStatusBar>,
+    pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
+    pub(crate) status_bar_has_custom: bool,
     pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_left_count: usize,
     pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_center_count: usize,
     pub(crate) custom_icon_0: [u8; 5],
+    pub(crate) _pad_icon0: [u8; 3],
     pub(crate) custom_icon_1: [u8; 5],
+    pub(crate) _pad_icon1: [u8; 3],
 }
 
 pub fn init_native_slot() {
@@ -335,7 +338,7 @@ pub fn load_native_from_storage(
     slot.current_block = 0;
     slot.current_slot = 0;
     slot.pid = pid;
-    slot.status_bar = None;
+    slot.status_bar_has_custom = false;
     slot.status_bar_left_count = 0;
     slot.status_bar_center_count = 0;
 
@@ -742,7 +745,8 @@ fn c_str_to_str(buf: &[u8]) -> Option<&str> {
 }
 
 fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBarConfig<'a>) {
-    if let Some(sb) = &slot.status_bar {
+    if slot.status_bar_has_custom {
+        let sb = &slot.status_bar;
         let visible = (sb.flags & kernel::proc::abi::KRX_STATUS_VISIBLE) != 0;
         let mut partial = (sb.flags & kernel::proc::abi::KRX_STATUS_PARTIAL) != 0;
         let show_divider = (sb.flags & kernel::proc::abi::KRX_STATUS_DIVIDER) != 0;
@@ -813,27 +817,37 @@ fn decode_icon_list(
 pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     let slot = slot_mut();
     if sb.is_null() {
-        slot.status_bar = None;
+        slot.status_bar_has_custom = false;
         slot.status_bar_left_count = 0;
         slot.status_bar_center_count = 0;
     } else {
-        let s = unsafe { &*sb };
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                sb as *const u32,
+                &mut slot.status_bar as *mut kernel::proc::abi::KrxStatusBar as *mut u32,
+                16,
+            );
+        }
+        slot.status_bar_has_custom = true;
+        let s = &slot.status_bar;
         slot.custom_icon_0 = s.custom_icon_0;
         slot.custom_icon_1 = s.custom_icon_1;
+        let c0 = slot.custom_icon_0;
+        let c1 = slot.custom_icon_1;
 
         slot.status_bar_left_count = decode_icon_list(
             &s.left_icons,
             s.left_icon_count,
-            &s.custom_icon_0,
-            &s.custom_icon_1,
+            &c0,
+            &c1,
             &mut slot.status_bar_left_icons,
         );
 
         slot.status_bar_center_count = decode_icon_list(
             &s.center_icons,
             s.center_icon_count,
-            &s.custom_icon_0,
-            &s.custom_icon_1,
+            &c0,
+            &c1,
             &mut slot.status_bar_center_icons,
         );
 
@@ -843,24 +857,28 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
             if s.tray_icon_id == kernel::proc::abi::KRX_ICON_NONE {
                 crate::orchestrator::status_tray_mut().clear_icon(pid);
             } else if let Some(glyph) =
-                decode_status_glyph(s.tray_icon_id, &s.custom_icon_0, &s.custom_icon_1)
+                decode_status_glyph(s.tray_icon_id, &c0, &c1)
             {
                 crate::orchestrator::status_tray_mut().set_glyph(pid, glyph);
             }
         }
-
-        slot.status_bar = Some(*s);
     }
 }
 
 pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
     if !out_sb.is_null() {
         let slot = slot_ref();
+        let src = if slot.status_bar_has_custom {
+            &slot.status_bar
+        } else {
+            &kernel::proc::abi::KrxStatusBar::EMPTY
+        };
         unsafe {
-            *out_sb = match &slot.status_bar {
-                Some(sb) => *sb,
-                None => kernel::proc::abi::KrxStatusBar::empty(),
-            };
+            core::ptr::copy_nonoverlapping(
+                src as *const kernel::proc::abi::KrxStatusBar as *const u32,
+                out_sb as *mut u32,
+                16,
+            );
         }
     }
 }
@@ -903,13 +921,12 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
         slot.entry_point = 0;
     }
     let slot = slot_mut();
-    let persist_tray = slot.status_bar.map_or(false, |sb| {
-        (sb.custom_flags & kernel::proc::abi::KRX_CUSTOM_TRAY_PERSIST) != 0
-    });
+    let persist_tray = slot.status_bar_has_custom
+        && (slot.status_bar.custom_flags & kernel::proc::abi::KRX_CUSTOM_TRAY_PERSIST) != 0;
     if !persist_tray {
         crate::orchestrator::status_tray_mut().clear_icon(slot.pid);
     }
-    slot.status_bar = None;
+    slot.status_bar_has_custom = false;
     slot.status_bar_left_count = 0;
     slot.status_bar_center_count = 0;
     slot.app_name.clear();

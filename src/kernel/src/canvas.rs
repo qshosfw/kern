@@ -95,6 +95,7 @@ impl Icon {
 }
 
 /// A status bar glyph: either a standardized built-in icon or a custom 5x5 bitmap.
+#[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusGlyph {
     Builtin(Icon),
