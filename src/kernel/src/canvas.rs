@@ -310,13 +310,14 @@ impl Canvas {
     }
 
     pub fn clear_corners_i(&mut self, x: i16, y: i16, w: i16, h: i16) {
-        if w < 2 || h < 2 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
-            return;
+        if w >= 2 && h >= 2 {
+            let x1 = x + w - 1;
+            let y1 = y + h - 1;
+            self.draw_pixel_i(x, y, Color::Clear);
+            self.draw_pixel_i(x1, y, Color::Clear);
+            self.draw_pixel_i(x, y1, Color::Clear);
+            self.draw_pixel_i(x1, y1, Color::Clear);
         }
-        self.draw_pixel_i(x, y, Color::Clear);
-        self.draw_pixel_i(x + w - 1, y, Color::Clear);
-        self.draw_pixel_i(x, y + h - 1, Color::Clear);
-        self.draw_pixel_i(x + w - 1, y + h - 1, Color::Clear);
     }
 
     #[inline(never)]
