@@ -141,7 +141,7 @@ impl SheetOptions {
                 for (i, &b) in bytes.iter().enumerate() {
                     if b == 0 {
                         if current == idx {
-                            return core::str::from_utf8(&bytes[start..i]).unwrap_or("");
+                            return utils::format::ascii_str(&bytes[start..i]).unwrap_or("");
                         }
                         current += 1;
                         start = i + 1;
@@ -927,11 +927,7 @@ pub fn sheet_nav_dir(code: KeyCode) -> Option<bool> {
 #[inline(always)]
 fn step_hover(hover: usize, total: usize, forward: bool) -> usize {
     if forward {
-        if hover + 1 < total {
-            hover + 1
-        } else {
-            0
-        }
+        if hover + 1 < total { hover + 1 } else { 0 }
     } else if hover > 0 {
         hover - 1
     } else if total > 0 {

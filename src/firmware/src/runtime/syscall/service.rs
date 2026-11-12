@@ -85,7 +85,7 @@ pub unsafe extern "C" fn api_sys_find_proc(name: *const u8, len: u8) -> u8 {
         return 0;
     }
     let slice = unsafe { core::slice::from_raw_parts(name, (len as usize).min(16)) };
-    if let Ok(name_str) = core::str::from_utf8(slice) {
+    if let Some(name_str) = utils::format::ascii_str(slice) {
         if let Some(pcb) = crate::orchestrator::proc_table_mut().find_by_name(name_str) {
             return pcb.pid.0;
         }

@@ -73,7 +73,7 @@ pub unsafe fn active_canvas() -> &'static mut Canvas {
 pub unsafe fn parse_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     if !ptr.is_null() && len > 0 {
         let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
-        core::str::from_utf8(slice).ok()
+        utils::format::ascii_str(slice)
     } else {
         None
     }
@@ -262,11 +262,7 @@ fn resolve_capability_vtable(
 }
 
 #[inline(always)]
-fn bind_entry(
-    binding: CapBinding,
-    got_words: &mut [u32],
-    granted_caps: CapabilitySet,
-) -> bool {
+fn bind_entry(binding: CapBinding, got_words: &mut [u32], granted_caps: CapabilitySet) -> bool {
     let slot = binding.slot_idx as usize;
     if slot >= got_words.len() {
         return false;

@@ -43,7 +43,7 @@ impl<'a> TransferOpenRequest<'a> {
         if payload.len() < 8 + path_len {
             return None;
         }
-        let path = core::str::from_utf8(&payload[8..8 + path_len]).ok()?;
+        let path = utils::format::ascii_str(&payload[8..8 + path_len])?;
         Some(Self {
             mode,
             total_size,
@@ -137,7 +137,7 @@ impl<'a> TransferStatRequest<'a> {
         if payload.len() < 1 + path_len {
             return None;
         }
-        let path = core::str::from_utf8(&payload[1..1 + path_len]).ok()?;
+        let path = utils::format::ascii_str(&payload[1..1 + path_len])?;
         Some(Self { path })
     }
 }
@@ -158,7 +158,7 @@ impl<'a> TransferListRequest<'a> {
         if payload.len() < 3 + path_len {
             return None;
         }
-        let path = core::str::from_utf8(&payload[3..3 + path_len]).ok()?;
+        let path = utils::format::ascii_str(&payload[3..3 + path_len])?;
         Some(Self { cursor, path })
     }
 }
@@ -177,7 +177,7 @@ impl<'a> TransferRemoveRequest<'a> {
         if payload.len() < 1 + path_len {
             return None;
         }
-        let path = core::str::from_utf8(&payload[1..1 + path_len]).ok()?;
+        let path = utils::format::ascii_str(&payload[1..1 + path_len])?;
         Some(Self { path })
     }
 }

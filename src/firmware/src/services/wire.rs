@@ -56,7 +56,7 @@ impl ActiveTransfer {
     }
 
     pub fn path_str(&self) -> &str {
-        core::str::from_utf8(&self.path[..self.path_len as usize]).unwrap_or("")
+        utils::format::ascii_str(&self.path[..self.path_len as usize]).unwrap_or("")
     }
 }
 

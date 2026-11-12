@@ -114,7 +114,7 @@ pub unsafe extern "C" fn api_storage_list_dir(
         } else {
             unsafe { core::slice::from_raw_parts(dir_path, dir_len as usize) }
         };
-        if let Ok(dir_str) = core::str::from_utf8(dir_slice) {
+        if let Some(dir_str) = utils::format::ascii_str(dir_slice) {
             let dst = unsafe { core::slice::from_raw_parts_mut(out_entries, max_entries as usize) };
             if let Some(ctx) = active_ctx_opt() {
                 return ctx.list_dir(dir_str, dst).unwrap_or(0) as u8;

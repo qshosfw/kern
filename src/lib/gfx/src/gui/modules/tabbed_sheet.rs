@@ -172,7 +172,7 @@ fn format_tab_title<'b>(title: &str, buf: &'b mut [u8; 16]) -> &'b str {
             buf[i] = b.to_ascii_lowercase();
         }
     }
-    core::str::from_utf8(&buf[..len]).unwrap_or("")
+    utils::format::ascii_str(&buf[..len]).unwrap_or("")
 }
 
 pub struct TabbedSheet;
@@ -346,7 +346,7 @@ impl TabbedSheet {
             let tx = tab_x[i.min(7)];
             let tw = tab_w[i.min(7)];
             let title_bytes = &formatted_titles[i.min(7)];
-            let title = core::str::from_utf8(title_bytes)
+            let title = utils::format::ascii_str(title_bytes)
                 .unwrap_or("")
                 .trim_matches('\0');
             let text_x = (tx + pad_left) as i16;

@@ -495,7 +495,7 @@ impl SectionIdentity {
             end += 1;
         }
         if end > offset {
-            core::str::from_utf8(&header_buf[offset..end]).ok()
+            utils::format::ascii_str(&header_buf[offset..end])
         } else {
             None
         }
@@ -755,7 +755,7 @@ impl KrxPreamble {
                                 end += 1;
                             }
                             if end > name_off {
-                                if let Ok(s) = core::str::from_utf8(&hdr[name_off..end]) {
+                                if let Some(s) = utils::format::ascii_str(&hdr[name_off..end]) {
                                     title = s;
                                 }
                             }

@@ -215,6 +215,18 @@ pub fn trim_trailing_slashes(s: &str) -> &str {
     &s[..end]
 }
 
+/// Validate that `bytes` is pure 7-bit ASCII and return it as `&str` without pulling
+/// `core::str::from_utf8` (368 B) into Cortex-M0+ flash.
+#[inline(never)]
+pub fn ascii_str(bytes: &[u8]) -> Option<&str> {
+    if bytes.is_ascii() {
+        // Safety: all bytes are < 0x80, which is valid UTF-8.
+        Some(unsafe { core::str::from_utf8_unchecked(bytes) })
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

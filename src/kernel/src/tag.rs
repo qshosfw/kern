@@ -27,6 +27,6 @@ impl Tag {
     }
     pub fn as_str<'a>(&'a self, buf: &'a mut [u8; 4]) -> &'a str {
         *buf = self.0;
-        core::str::from_utf8(buf).unwrap_or("????")
+        utils::format::ascii_str(buf).unwrap_or("????")
     }
 }

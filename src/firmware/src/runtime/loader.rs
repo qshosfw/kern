@@ -76,7 +76,7 @@ fn populate_declare_from_payload(
                 if off + slen > payload.len() {
                     break;
                 }
-                if let Ok(s) = core::str::from_utf8(&payload[off..off + slen]) {
+                if let Some(s) = utils::format::ascii_str(&payload[off..off + slen]) {
                     let _ = walker.labels.push(s);
                 }
                 off += slen;

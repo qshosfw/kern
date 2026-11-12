@@ -175,7 +175,7 @@ impl BootSlot {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(self.actor_tag.len());
-        core::str::from_utf8(&self.actor_tag[..len]).unwrap_or("Unknown")
+        utils::format::ascii_str(&self.actor_tag[..len]).unwrap_or("Unknown")
     }
 
     /// Returns natural-language clause explaining why the crash occurred.
