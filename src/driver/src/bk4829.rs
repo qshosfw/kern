@@ -429,6 +429,12 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(0x36, 0x0022);
     }
 
+    #[inline(never)]
+    pub fn write_pll_words(&mut self, low: u16, high: u16) {
+        self.write_reg(REG_PLL_LOW, low);
+        self.write_reg(REG_PLL_HIGH, high);
+    }
+
     pub fn set_squelch_profile(&mut self, th: &kernel::service::radio::squelch::SquelchThresholds) {
         let r4d = 0xA000 | (th.close_glitch & 0x00FF);
         let r4e =
@@ -676,8 +682,7 @@ impl<'a, State> Bk4829<'a, State> {
         self.current_freq_hz = freq.raw();
         let new_uhf = self.current_freq_hz >= 174_000_000;
         let (low, high) = tuning::calculate_pll_dividers(freq);
-        self.write_reg(REG_PLL_LOW, low);
-        self.write_reg(REG_PLL_HIGH, high);
+        self.write_pll_words(low, high);
         self.set_filter_path(self.current_freq_hz);
 
         // Dynamically switch squelch calibration bank if crossing VHF/UHF boundary
@@ -1044,8 +1049,7 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
         let old_uhf = self.current_freq_hz >= 174_000_000;
         self.current_freq_hz = state.freq_hz;
         let new_uhf = self.current_freq_hz >= 174_000_000;
-        self.write_reg(REG_PLL_LOW, state.pll_low);
-        self.write_reg(REG_PLL_HIGH, state.pll_high);
+        self.write_pll_words(state.pll_low, state.pll_high);
         if state.uhf_path {
             self.set_gpio_pin(4, false);
             self.set_gpio_pin(3, true);
@@ -1609,8 +1613,7 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
         if offset_dhz == 0 {
             self.set_crystal_trim(self.baseline_xtal_trim);
             let (low, high) = tuning::calculate_pll_dividers(Frequency::new(carrier_hz));
-            self.write_reg(REG_PLL_LOW, low);
-            self.write_reg(REG_PLL_HIGH, high);
+            self.write_pll_words(low, high);
             return;
         }
 
@@ -1624,8 +1627,7 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
         let adjusted_10hz = nominal_10hz + res.pll_comp_10hz as i32;
         let low = (adjusted_10hz & 0xFFFF) as u16;
         let high = ((adjusted_10hz >> 16) & 0xFFFF) as u16;
-        self.write_reg(REG_PLL_LOW, low);
-        self.write_reg(REG_PLL_HIGH, high);
+        self.write_pll_words(low, high);
 
         // Toggle REG_SYS_POWER to re-sync PLL lock across trim changes (PR 271)
         let reg30 = self.read_reg(REG_SYS_POWER);
