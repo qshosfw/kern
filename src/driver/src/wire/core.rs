@@ -44,13 +44,25 @@ impl<S: SerialPort> WireDriver<S> {
                         self.session.last_sequence = 0;
                         self.session.negotiated_max_payload = req_payload.min(128).max(32);
 
+                        let max_p = self.session.negotiated_max_payload.to_le_bytes();
+                        let tp = self.transport_profile.to_le_bytes();
                         resp_buf[0] = 1; // minor version = 1
-                        resp_buf[1..3]
-                            .copy_from_slice(&self.session.negotiated_max_payload.to_le_bytes());
-                        resp_buf[3..7].copy_from_slice(&1u32.to_le_bytes()); // catalogue generation = 1
-                        resp_buf[7..9].copy_from_slice(&self.transport_profile.to_le_bytes());
-                        resp_buf[9..13].copy_from_slice(&0x0001_0001u32.to_le_bytes()); // UV-K1
-                        resp_buf[13..17].copy_from_slice(&0x0001_0000u32.to_le_bytes()); // KERN 1.0
+                        resp_buf[1] = max_p[0];
+                        resp_buf[2] = max_p[1];
+                        resp_buf[3] = 1; // catalogue generation = 1
+                        resp_buf[4] = 0;
+                        resp_buf[5] = 0;
+                        resp_buf[6] = 0;
+                        resp_buf[7] = tp[0];
+                        resp_buf[8] = tp[1];
+                        resp_buf[9] = 1; // UV-K1 (0x0001_0001)
+                        resp_buf[10] = 0;
+                        resp_buf[11] = 1;
+                        resp_buf[12] = 0;
+                        resp_buf[13] = 0; // KERN 1.0 (0x0001_0000)
+                        resp_buf[14] = 0;
+                        resp_buf[15] = 1;
+                        resp_buf[16] = 0;
                         (WireStatus::Ok, 17)
                     }
                 }
@@ -115,8 +127,12 @@ impl<S: SerialPort> WireDriver<S> {
             }
 
             OP_CORE_GET_RESULT => {
+                let seq = header.sequence.to_le_bytes();
                 resp_buf[0] = WireStatus::Ok.to_u8();
-                resp_buf[1..5].copy_from_slice(&header.sequence.to_le_bytes());
+                resp_buf[1] = seq[0];
+                resp_buf[2] = seq[1];
+                resp_buf[3] = seq[2];
+                resp_buf[4] = seq[3];
                 (WireStatus::Ok, 5)
             }
 
