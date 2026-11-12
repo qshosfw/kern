@@ -9,23 +9,66 @@ use gfx::gui::modules::menu::{OptionSheet, ShortString};
 pub const MAX_CHOOSER_ASSETS: usize = 8;
 pub const TAG_ASSET_CHOOSER: u8 = 16;
 
+#[derive(Clone, Copy)]
+pub enum AssetKind {
+    Splash,
+    Roger,
+    Jingle,
+}
+
 pub struct AssetDescriptor {
     pub title: &'static str,
     pub dir: &'static str,
     pub extensions: &'static [&'static str],
     pub none_label: &'static str,
-    pub get_path: for<'a> fn(&'a crate::config::MasterConfig) -> (bool, &'a str),
-    pub set_path: fn(&mut crate::config::MasterConfig, Option<&str>),
+    pub kind: AssetKind,
 }
 
 impl AssetDescriptor {
+    fn get_path<'a>(&self, cfg: &'a crate::config::MasterConfig) -> (bool, &'a str) {
+        match self.kind {
+            AssetKind::Splash => (
+                cfg.display.boot_splash_mode != 0,
+                cfg.display.splash_path_str(),
+            ),
+            AssetKind::Roger => (cfg.audio.roger_beep != 0, cfg.audio.roger_path_str()),
+            AssetKind::Jingle => (cfg.audio.boot_jingle != 0, cfg.audio.jingle_path_str()),
+        }
+    }
+
+    fn set_path(&self, cfg: &mut crate::config::MasterConfig, opt: Option<&str>) {
+        match self.kind {
+            AssetKind::Splash => match opt {
+                Some(path) => {
+                    cfg.display.boot_splash_mode = 1;
+                    cfg.display.set_splash_path(path);
+                }
+                None => cfg.display.boot_splash_mode = 0,
+            },
+            AssetKind::Roger => match opt {
+                Some(path) => {
+                    cfg.audio.roger_beep = 1;
+                    cfg.audio.set_roger_path(path);
+                }
+                None => cfg.audio.roger_beep = 0,
+            },
+            AssetKind::Jingle => match opt {
+                Some(path) => {
+                    cfg.audio.boot_jingle = 1;
+                    cfg.audio.set_jingle_path(path);
+                }
+                None => cfg.audio.boot_jingle = 0,
+            },
+        }
+    }
+
     #[inline(never)]
     pub fn build_sheet(
         &self,
         config: &crate::config::MasterConfig,
         storage_fs: &mut crate::services::SystemStorage,
     ) -> OptionSheet {
-        let (active, cur_path) = (self.get_path)(config);
+        let (active, cur_path) = self.get_path(config);
         let storage = storage_mut();
 
         storage.count = 0;
@@ -83,14 +126,14 @@ impl AssetDescriptor {
     }
 
     pub fn apply_choice(&self, sel: usize, config: &mut crate::config::MasterConfig) -> bool {
-        let is_active = (self.get_path)(config).0;
+        let is_active = self.get_path(config).0;
         apply_asset_selection(sel, is_active, |opt| {
-            (self.set_path)(config, opt);
+            self.set_path(config, opt);
         })
     }
 
     pub fn format_status(&self, config: &crate::config::MasterConfig, out: &mut ShortString) {
-        let (active, path) = (self.get_path)(config);
+        let (active, path) = self.get_path(config);
         if !active {
             out.set_str(self.none_label);
         } else {

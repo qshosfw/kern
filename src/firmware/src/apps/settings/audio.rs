@@ -1,7 +1,7 @@
 //! Audio Domain Settings Declarations & Hardware Binding
 
 #[cfg(feature = "filesystem")]
-use super::asset_chooser::AssetDescriptor;
+use super::asset_chooser::{AssetDescriptor, AssetKind};
 #[cfg(feature = "filesystem")]
 use super::page::AssetId;
 use super::page::{ChoiceId, RangeId, SettingDef, SettingField};
@@ -18,14 +18,7 @@ pub static ROGER_ASSET: AssetDescriptor = AssetDescriptor {
     dir: "/user/rogers",
     extensions: &[".ton", ".rgr"],
     none_label: "Off",
-    get_path: |cfg| (cfg.audio.roger_beep != 0, cfg.audio.roger_path_str()),
-    set_path: |cfg, opt| match opt {
-        Some(path) => {
-            cfg.audio.roger_beep = 1;
-            cfg.audio.set_roger_path(path);
-        }
-        None => cfg.audio.roger_beep = 0,
-    },
+    kind: AssetKind::Roger,
 };
 
 #[cfg(feature = "filesystem")]
@@ -34,14 +27,7 @@ pub static JINGLE_ASSET: AssetDescriptor = AssetDescriptor {
     dir: "/user/jingles",
     extensions: &[".ton"],
     none_label: "Off",
-    get_path: |cfg| (cfg.audio.boot_jingle != 0, cfg.audio.jingle_path_str()),
-    set_path: |cfg, opt| match opt {
-        Some(path) => {
-            cfg.audio.boot_jingle = 1;
-            cfg.audio.set_jingle_path(path);
-        }
-        None => cfg.audio.boot_jingle = 0,
-    },
+    kind: AssetKind::Jingle,
 };
 
 pub static AUDIO_DEFS: [SettingDef; 7] = [

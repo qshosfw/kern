@@ -176,10 +176,11 @@ impl Adc {
                 // delta_T = 1050 - 300 = 750 deci-Celsius
                 let cal_span = (cal2 - cal1) as u32;
                 let c1 = cal1 as u32;
+                let delta = ((ts_data_norm.abs_diff(c1) * 750) / cal_span) as i16;
                 if ts_data_norm >= c1 {
-                    300 + (((ts_data_norm - c1) * 750) / cal_span) as i16
+                    300 + delta
                 } else {
-                    300 - (((c1 - ts_data_norm) * 750) / cal_span) as i16
+                    300 - delta
                 }
             };
 

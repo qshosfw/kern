@@ -1,7 +1,7 @@
 //! Device Domain Settings Declarations
 
 #[cfg(feature = "filesystem")]
-use super::asset_chooser::AssetDescriptor;
+use super::asset_chooser::{AssetDescriptor, AssetKind};
 #[cfg(feature = "filesystem")]
 use super::page::AssetId;
 #[cfg(not(feature = "text_input"))]
@@ -22,19 +22,7 @@ pub static SPLASH_ASSET: AssetDescriptor = AssetDescriptor {
     dir: "/user/splash",
     extensions: &[".rle", ".img", ".bin"],
     none_label: "None",
-    get_path: |cfg| {
-        (
-            cfg.display.boot_splash_mode != 0,
-            cfg.display.splash_path_str(),
-        )
-    },
-    set_path: |cfg, opt| match opt {
-        Some(path) => {
-            cfg.display.boot_splash_mode = 1;
-            cfg.display.set_splash_path(path);
-        }
-        None => cfg.display.boot_splash_mode = 0,
-    },
+    kind: AssetKind::Splash,
 };
 
 #[cfg(feature = "filesystem")]
