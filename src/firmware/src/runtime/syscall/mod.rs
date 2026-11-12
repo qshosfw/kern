@@ -44,7 +44,7 @@ pub static mut ACTIVE_CTX: *mut SysContext<'static, 'static> = core::ptr::null_m
 pub static mut ACTIVE_CANVAS: *mut Canvas = core::ptr::null_mut();
 pub static mut ACTIVE_SWAP: *mut () = core::ptr::null_mut();
 
-#[inline(always)]
+#[inline(never)]
 pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
     let ptr = unsafe { ACTIVE_CTX };
     if ptr.is_null() {
