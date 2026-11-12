@@ -195,18 +195,42 @@ pub fn count_lines(s: &str) -> usize {
     }
 }
 
-/// Iterate over lines of text without pulling in Split<char> iterator machinery.
-pub fn for_each_line<F: FnMut(&str)>(s: &str, mut f: F) {
-    let bytes = s.as_bytes();
-    let mut start = 0;
-    for i in 0..bytes.len() {
-        if bytes[i] == b'\n' {
-            f(&s[start..i]);
-            start = i + 1;
+/// Zero-allocation line iterator splitting on ASCII `'\n'`.
+pub struct Lines<'a> {
+    rest: &'a [u8],
+    done: bool,
+}
+
+impl<'a> Iterator for Lines<'a> {
+    type Item = &'a str;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a str> {
+        if self.done {
+            return None;
         }
+        let line = match self.rest.iter().position(|&b| b == b'\n') {
+            Some(i) => {
+                let head = &self.rest[..i];
+                self.rest = &self.rest[i + 1..];
+                head
+            }
+            None => {
+                self.done = true;
+                self.rest
+            }
+        };
+        // SAFETY: `b'\n'` (0x0A) is never a UTF-8 continuation byte, so splitting on it preserves UTF-8.
+        Some(unsafe { core::str::from_utf8_unchecked(line) })
     }
-    if start <= bytes.len() {
-        f(&s[start..]);
+}
+
+/// Iterate over lines of text without pulling in `Split<char>` or generic closures.
+#[inline(always)]
+pub fn lines(s: &str) -> Lines<'_> {
+    Lines {
+        rest: s.as_bytes(),
+        done: false,
     }
 }
 

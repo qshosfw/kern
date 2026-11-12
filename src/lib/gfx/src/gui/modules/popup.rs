@@ -102,11 +102,7 @@ impl View<PopupModel> for PopupView {
         let anim_p = model.anim.progress();
         if !has_badges && total_lines <= 2 && msg.len() < 60 {
             let t = model.title_str();
-            let title_opt = if !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode") {
-                Some(t)
-            } else {
-                None
-            };
+            let title_opt = (!t.is_empty()).then_some(t);
             widgets::draw_modal_popup_materialize(canvas, title_opt, msg, anim_p);
             return;
         }
@@ -137,16 +133,14 @@ impl View<PopupModel> for PopupView {
         let scroll_offset = model.scroll_offset.min(max_scroll);
 
         if anim_p >= 8 {
-            let mut idx = 0;
-            text::for_each_line(msg, |line| {
+            for (idx, line) in text::lines(msg).enumerate() {
                 if idx >= scroll_offset && idx < scroll_offset + visible_lines {
                     let line_y = start_y + ((idx - scroll_offset) as i16 * line_height);
                     if line_y < 64 {
                         text::draw_str(canvas, 4, line_y, line, &TOMTHUMB, Color::Fill);
                     }
                 }
-                idx += 1;
-            });
+            }
         }
 
         // Integrated Scrollbar (X=124..125) when total lines exceed viewport

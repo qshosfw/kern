@@ -352,7 +352,7 @@ pub fn draw_modal_popup_materialize(
         };
 
         let mut is_first = true;
-        crate::text::for_each_line(msg, |line| {
+        for line in crate::text::lines(msg) {
             let font = if !has_title && is_first {
                 &crate::fonts::mumatrix_regular::FONT
             } else {
@@ -369,6 +369,6 @@ pub fn draw_modal_popup_materialize(
             );
             line_y += step_y;
             is_first = false;
-        });
+        }
     }
 }
