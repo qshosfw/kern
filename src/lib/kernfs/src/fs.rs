@@ -72,6 +72,23 @@ impl CacheEntry {
 }
 
 const CACHE_CAPACITY: usize = 24;
+const RESERVE_SECTORS: usize = 2;
+
+fn is_valid_header(header_buf: &[u8; HEADER_SIZE], max_payload: usize) -> bool {
+    let ident = read_u16_le(header_buf, 0);
+    let flags = header_buf[3];
+    let path_len = header_buf[4] as usize;
+    let payload_len = read_u32_le(header_buf, 38) as usize;
+    if ident != FILE_ID_KERNFS
+        || (flags != 0x7F && flags != 0x01)
+        || path_len == 0
+        || path_len > 32
+        || payload_len > max_payload
+    {
+        return false;
+    }
+    CrcEngine::crc32(&header_buf[..50]) == read_u32_le(header_buf, 50)
+}
 
 pub struct KernFS<'a, D: BlockDevice> {
     pub dev: &'a mut D,
@@ -144,44 +161,39 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         for sector in 0..D::TOTAL_BLOCKS {
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
-                let ident = read_u16_le(&header_buf, 0);
                 let flags = header_buf[3];
-                let seq = read_u32_le(&header_buf, 42);
-
-                if ident == FILE_ID_KERNFS && (flags == 0x7F || flags == 0x01) {
+                if is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE) {
+                    let seq = read_u32_le(&header_buf, 42);
                     found_valid = true;
                     used += 1;
                     max_sector = max_sector.max(sector);
                     max_seq = max_seq.max(seq);
 
                     let path_len = header_buf[4] as usize;
-                    if path_len > 0 && path_len <= 32 {
-                        let path_hash = CrcEngine::crc32(&header_buf[6..6 + path_len]);
-                        let payload_len = read_u32_le(&header_buf, 38) as usize;
-                        let crc = read_u32_le(&header_buf, 46);
-                        let perm = header_buf[5];
+                    let path_hash = CrcEngine::crc32(&header_buf[6..6 + path_len]);
+                    let payload_len = read_u32_le(&header_buf, 38) as usize;
+                    let crc = read_u32_le(&header_buf, 46);
+                    let perm = header_buf[5];
 
-                        // Check if an earlier sector in our scan had the same path_hash
-                        let mut existing_sec = None;
-                        for entry in &self.cache {
-                            if entry.active != 0 && entry.path_hash == path_hash {
-                                existing_sec = Some(entry.sector as usize);
-                                break;
-                            }
+                    // Check if an earlier sector in our scan had the same path_hash
+                    let mut existing_sec = None;
+                    for entry in &self.cache {
+                        if entry.active != 0 && entry.path_hash == path_hash {
+                            existing_sec = Some(entry.sector as usize);
+                            break;
                         }
+                    }
 
-                        if let Some(prev_sec) = existing_sec {
-                            let mut seq_buf = [0u8; 4];
-                            let prev_seq = if self
-                                .dev
-                                .read(prev_sec * D::BLOCK_SIZE + 42, &mut seq_buf)
-                                .is_ok()
-                            {
-                                read_u32_le(&seq_buf, 0)
-                            } else {
-                                0
-                            };
-
+                    if let Some(prev_sec) = existing_sec {
+                        let mut prev_buf = [0u8; HEADER_SIZE];
+                        if self
+                            .dev
+                            .read(prev_sec * D::BLOCK_SIZE, &mut prev_buf)
+                            .is_ok()
+                            && prev_buf[4] as usize == path_len
+                            && prev_buf[6..6 + path_len] == header_buf[6..6 + path_len]
+                        {
+                            let prev_seq = read_u32_le(&prev_buf, 42);
                             if seq >= prev_seq {
                                 // Current sector is newer; invalidate previous sector
                                 if self
@@ -203,6 +215,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                         } else {
                             self.cache_insert(path_hash, sector, payload_len, crc, perm);
                         }
+                    } else {
+                        self.cache_insert(path_hash, sector, payload_len, crc, perm);
                     }
                 } else if flags == 0x00 {
                     deleted += 1;
@@ -212,6 +226,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
 
         self.max_sector_used = max_sector;
+        self.next_alloc_sector = if found_valid || deleted > 0 {
+            (max_sector + 1) & (D::TOTAL_BLOCKS - 1)
+        } else {
+            0
+        };
         self.cached_used = used;
         self.cached_deleted = deleted;
         self.global_seq = max_seq + 1;
@@ -222,9 +241,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
     }
 
-    /// Format active filesystem blocks (fast 16-sector format for instant boot turnaround).
+    /// Format active filesystem blocks (erasing all sectors up to `max_sector_used`, min 16).
     pub fn format(&mut self, progress_cb: Option<&mut dyn FnMut(u8)>) -> Result<(), FsError> {
-        let total = 16;
+        let total = (self.max_sector_used + 1).max(16).min(D::TOTAL_BLOCKS);
         let mut cb = progress_cb;
 
         for sector in 0..total {
@@ -324,7 +343,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let mut header_buf = [0u8; HEADER_SIZE];
         write_u16_le(&mut header_buf, 0, FILE_ID_KERNFS);
         header_buf[2] = 0x01; // Version 1
-        header_buf[3] = 0x7F; // Active / Valid in NOR Flash (bit 7 = 0)
+        header_buf[3] = 0x7F; // Committed state for header_crc calculation
         header_buf[4] = path.len() as u8;
         header_buf[5] = perm;
         header_buf[6..6 + path.len()].copy_from_slice(path.as_bytes());
@@ -334,8 +353,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let header_crc = CrcEngine::crc32(&header_buf[..50]);
         write_u32_le(&mut header_buf, 50, header_crc);
 
-        self.dev
-            .program(target_sector * D::BLOCK_SIZE, &header_buf)?;
+        // Two-phase atomic commit: stage with flags = 0xFF, then commit 0x7F (1->0 bit transition)
+        header_buf[3] = 0xFF;
+        let target_offset = target_sector * D::BLOCK_SIZE;
+        self.dev.program(target_offset, &header_buf)?;
+        self.dev.program(target_offset + 3, &[0x7Fu8])?;
 
         if let Some(old) = old_sector
             && old != target_sector
@@ -363,7 +385,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let prev_entry = self.find_best_sector(path);
         let existing_perm = prev_entry.map_or(0u8, |(_, _, _, perm)| perm);
 
-        let target_sector = self.find_free_sector()?;
+        let target_sector = self.find_free_sector(prev_entry.is_some())?;
         let target_offset = target_sector * D::BLOCK_SIZE;
 
         // Erase target sector before writing
@@ -382,21 +404,16 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         )
     }
 
-    /// Rename or relocate a file from `src` to `dst` using chunked sector-to-sector streaming
-    /// without truncating large payloads or allocating large stack buffers.
-    pub fn rename(&mut self, src: &str, dst: &str) -> Result<(), FsError> {
-        if src == dst {
-            return Ok(());
-        }
-        if dst.len() > 32 {
-            return Err(FsError::InvalidPath);
-        }
-
-        let (src_sector, payload_len, payload_crc, perm) =
-            self.find_best_sector(src).ok_or(FsError::NotFound)?;
-        let prev_dst = self.find_best_sector(dst);
-
-        let target_sector = self.find_free_sector()?;
+    fn relocate_sector(
+        &mut self,
+        src_sector: usize,
+        dst: &str,
+        payload_len: usize,
+        payload_crc: u32,
+        perm: u8,
+        prev_dst: Option<usize>,
+    ) -> Result<(), FsError> {
+        let target_sector = self.find_free_sector(true)?;
         let target_offset = target_sector * D::BLOCK_SIZE;
         self.dev.erase_sector(target_offset)?;
 
@@ -420,11 +437,29 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             payload_len,
             payload_crc,
             perm,
-            prev_dst.map(|(s, _, _, _)| s).filter(|&s| s != src_sector),
+            prev_dst.filter(|&s| s != src_sector),
         )?;
         if src_sector != target_sector {
             let _ = self.invalidate_sector(src_sector);
         }
+        Ok(())
+    }
+
+    /// Rename or relocate a file from `src` to `dst` using chunked sector-to-sector streaming
+    /// without truncating large payloads or allocating large stack buffers.
+    pub fn rename(&mut self, src: &str, dst: &str) -> Result<(), FsError> {
+        if src == dst {
+            return Ok(());
+        }
+        if dst.len() > 32 {
+            return Err(FsError::InvalidPath);
+        }
+
+        let (src_sector, payload_len, payload_crc, perm) =
+            self.find_best_sector(src).ok_or(FsError::NotFound)?;
+        let prev_dst = self.find_best_sector(dst).map(|(s, _, _, _)| s);
+
+        self.relocate_sector(src_sector, dst, payload_len, payload_crc, perm, prev_dst)?;
         self.cache_remove(CrcEngine::crc32(src.as_bytes()));
 
         Ok(())
@@ -450,16 +485,24 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     fn find_best_sector(&mut self, path: &str) -> Option<(usize, usize, u32, u8)> {
         let path_bytes = path.as_bytes();
         let path_hash = CrcEngine::crc32(path_bytes);
+        let mut header_buf = [0u8; HEADER_SIZE];
 
-        // O(1) Cache fast-path
+        // O(1) Cache fast-path with full-path collision & header CRC verification
         for entry in &self.cache {
             if entry.active != 0 && entry.path_hash == path_hash {
-                return Some((
-                    entry.sector as usize,
-                    entry.payload_len as usize,
-                    entry.payload_crc,
-                    entry.perm,
-                ));
+                let sec = entry.sector as usize;
+                if self.dev.read(sec * D::BLOCK_SIZE, &mut header_buf).is_ok()
+                    && is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE)
+                    && header_buf[4] as usize == path_bytes.len()
+                    && &header_buf[6..6 + path_bytes.len()] == path_bytes
+                {
+                    return Some((
+                        sec,
+                        entry.payload_len as usize,
+                        entry.payload_crc,
+                        entry.perm,
+                    ));
+                }
             }
         }
 
@@ -475,19 +518,15 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let mut best_crc = 0u32;
         let mut best_permission = 0u8;
 
-        let mut header_buf = [0u8; HEADER_SIZE];
         let scan_limit = (self.max_sector_used + 1).min(D::TOTAL_BLOCKS);
 
         for sector in 0..scan_limit {
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
-                let ident = read_u16_le(&header_buf, 0);
-                let flags = header_buf[3];
                 let path_len = header_buf[4] as usize;
                 let perm = header_buf[5];
 
-                if ident == FILE_ID_KERNFS
-                    && (flags == 0x7F || flags == 0x01)
+                if is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE)
                     && path_len == path_bytes.len()
                     && &header_buf[6..6 + path_len] == path_bytes
                 {
@@ -512,7 +551,14 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     /// Find next clean/free sector using round-robin wear leveling.
-    fn find_free_sector(&mut self) -> Result<usize, FsError> {
+    /// Reserves `RESERVE_SECTORS` exclusively for updates to existing files (`is_update == true`).
+    fn find_free_sector(&mut self, is_update: bool) -> Result<usize, FsError> {
+        if !is_update
+            && D::TOTAL_BLOCKS.saturating_sub(self.cached_used as usize) <= RESERVE_SECTORS
+        {
+            return Err(FsError::CapacityFull);
+        }
+
         let mut header_buf = [0u8; HEADER_SIZE];
 
         for _ in 0..D::TOTAL_BLOCKS {
@@ -524,7 +570,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 let ident = read_u16_le(&header_buf, 0);
                 let flags = header_buf[3];
 
-                // Unformatted (ident != FILE_ID_KERNFS), erased (0xFF), or deleted (0x00) sector is free to use
+                // Unformatted (ident != FILE_ID_KERNFS), staged/erased (0xFF), or deleted (0x00) sector is free to use
                 if ident != FILE_ID_KERNFS || flags == 0xFF || flags == 0x00 {
                     return Ok(sector);
                 }
@@ -543,12 +589,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     pub fn set_permission(&mut self, path: &str, perm: u8) -> Result<(), FsError> {
-        if let Some((sector, payload_len, payload_crc, _)) = self.find_best_sector(path) {
-            let offset = sector * D::BLOCK_SIZE;
-            self.dev.program(offset + 5, &[perm])?;
-            let path_hash = CrcEngine::crc32(path.as_bytes());
-            self.cache_insert(path_hash, sector, payload_len, payload_crc, perm);
-            Ok(())
+        if let Some((sector, payload_len, payload_crc, cur_perm)) = self.find_best_sector(path) {
+            if cur_perm == perm {
+                return Ok(());
+            }
+            self.relocate_sector(sector, path, payload_len, payload_crc, perm, Some(sector))
         } else {
             Err(FsError::NotFound)
         }
@@ -573,15 +618,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         for sector in 0..D::TOTAL_BLOCKS {
             let offset = sector * D::BLOCK_SIZE;
             if self.dev.read(offset, &mut header_buf).is_ok() {
-                let ident = read_u16_le(&header_buf, 0);
-                let flags = header_buf[3];
                 let path_len = header_buf[4] as usize;
                 let perm = header_buf[5];
 
-                if ident == FILE_ID_KERNFS
-                    && (flags == 0x7F || flags == 0x01)
-                    && path_len > 0
-                    && path_len <= 32
+                if is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE)
                     && header_buf[6..6 + path_len].iter().all(|&b| b < 128)
                 {
                     let full_path =
@@ -758,5 +798,195 @@ mod tests {
         assert_eq!(n, 32);
         assert_eq!(out, [b'A' + 19; 32]);
         assert!(fs2.read_file("/pref/test.cfg", &mut out).is_err());
+    }
+
+    struct LargeMockFlash {
+        data: [u8; 32 * 4096],
+    }
+
+    impl LargeMockFlash {
+        fn new() -> Self {
+            Self {
+                data: [0xFF; 32 * 4096],
+            }
+        }
+    }
+
+    impl BlockDevice for LargeMockFlash {
+        const READ_SIZE: usize = 256;
+        const WRITE_SIZE: usize = 256;
+        const BLOCK_SIZE: usize = 4096;
+        const TOTAL_BLOCKS: usize = 32;
+
+        fn read(&mut self, offset: usize, buf: &mut [u8]) -> Result<(), FsError> {
+            if offset + buf.len() > self.data.len() {
+                return Err(FsError::IoError);
+            }
+            buf.copy_from_slice(&self.data[offset..offset + buf.len()]);
+            Ok(())
+        }
+
+        fn program(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
+            if offset + data.len() > self.data.len() {
+                return Err(FsError::IoError);
+            }
+            for (i, &b) in data.iter().enumerate() {
+                self.data[offset + i] &= b;
+            }
+            Ok(())
+        }
+
+        fn erase_sector(&mut self, sector_addr: usize) -> Result<(), FsError> {
+            let start = sector_addr;
+            let end = start + Self::BLOCK_SIZE;
+            if end > self.data.len() {
+                return Err(FsError::IoError);
+            }
+            self.data[start..end].fill(0xFF);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_format_does_not_resurrect_high_sectors() {
+        let mut flash = LargeMockFlash::new();
+        {
+            let mut fs = KernFS::new(&mut flash);
+            fs.format(None).unwrap();
+            // Write 20 times so round-robin allocator writes past sector 16
+            for i in 0..20u8 {
+                fs.write_file("/user/ghost.dat", &[i; 16]).unwrap();
+            }
+            assert!(fs.max_sector_used >= 16);
+            fs.format(None).unwrap();
+        }
+
+        let mut fs2 = KernFS::new(&mut flash);
+        assert_eq!(fs2.mount(), Err(FsError::NotFound));
+        assert!(!fs2.exists("/user/ghost.dat"));
+    }
+
+    #[test]
+    fn test_wear_leveling_allocator_persists_across_mounts() {
+        let mut flash = MockFlash::new();
+        let first_next;
+        {
+            let mut fs = KernFS::new(&mut flash);
+            fs.format(None).unwrap();
+            fs.write_file("/a.bin", b"one").unwrap();
+            fs.write_file("/b.bin", b"two").unwrap();
+            first_next = fs.next_alloc_sector;
+            assert!(first_next >= 2);
+        }
+
+        let mut fs2 = KernFS::new(&mut flash);
+        fs2.mount().unwrap();
+        assert_eq!(fs2.next_alloc_sector, first_next);
+        fs2.write_file("/c.bin", b"three").unwrap();
+        assert!(fs2.next_alloc_sector > first_next);
+    }
+
+    #[test]
+    fn test_corrupt_header_crc_rejected() {
+        let mut flash = MockFlash::new();
+        {
+            let mut fs = KernFS::new(&mut flash);
+            fs.format(None).unwrap();
+            fs.write_file("/sys/cfg.dat", b"valid_payload").unwrap();
+        }
+
+        // Flip a bit in payload_len (byte 38 of sector 0)
+        flash.data[38] ^= 0x01;
+
+        let mut fs2 = KernFS::new(&mut flash);
+        assert_eq!(fs2.mount(), Err(FsError::NotFound));
+        let mut buf = [0u8; 32];
+        assert_eq!(
+            fs2.read_file("/sys/cfg.dat", &mut buf),
+            Err(FsError::NotFound)
+        );
+    }
+
+    struct PowerCutFlash {
+        inner: MockFlash,
+        cut_on_commit_flag: bool,
+    }
+
+    impl BlockDevice for PowerCutFlash {
+        const READ_SIZE: usize = 256;
+        const WRITE_SIZE: usize = 256;
+        const BLOCK_SIZE: usize = 4096;
+        const TOTAL_BLOCKS: usize = 16;
+
+        fn read(&mut self, offset: usize, buf: &mut [u8]) -> Result<(), FsError> {
+            self.inner.read(offset, buf)
+        }
+
+        fn program(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
+            if self.cut_on_commit_flag && data == [0x7Fu8] && (offset % Self::BLOCK_SIZE) == 3 {
+                return Err(FsError::IoError);
+            }
+            self.inner.program(offset, data)
+        }
+
+        fn erase_sector(&mut self, sector_addr: usize) -> Result<(), FsError> {
+            self.inner.erase_sector(sector_addr)
+        }
+    }
+
+    #[test]
+    fn test_two_phase_commit_power_cut() {
+        let mut flash = PowerCutFlash {
+            inner: MockFlash::new(),
+            cut_on_commit_flag: false,
+        };
+        {
+            let mut fs = KernFS::new(&mut flash);
+            fs.format(None).unwrap();
+            fs.write_file("/pref/test.cfg", b"v1").unwrap();
+        }
+
+        flash.cut_on_commit_flag = true;
+        {
+            let mut fs = KernFS::new(&mut flash);
+            fs.mount().unwrap();
+            assert_eq!(
+                fs.write_file("/pref/test.cfg", b"v2"),
+                Err(FsError::IoError)
+            );
+        }
+
+        flash.cut_on_commit_flag = false;
+        let mut fs2 = KernFS::new(&mut flash);
+        fs2.mount().unwrap();
+        let mut out = [0u8; 8];
+        let n = fs2.read_file("/pref/test.cfg", &mut out).unwrap();
+        assert_eq!(&out[..n], b"v1");
+    }
+
+    #[test]
+    fn test_rewrite_reserve_sectors() {
+        let mut flash = MockFlash::new();
+        let mut fs = KernFS::new(&mut flash);
+        fs.format(None).unwrap();
+
+        // Fill 14 of 16 sectors (leaving 2 reserve sectors)
+        for i in 0..14u8 {
+            let mut path = [b'/'; 8];
+            path[1] = b'f';
+            path[2] = b'0' + (i / 10);
+            path[3] = b'0' + (i % 10);
+            let s = core::str::from_utf8(&path[..4]).unwrap();
+            fs.write_file(s, &[i; 8]).unwrap();
+        }
+
+        // New file creation must fail with CapacityFull
+        assert_eq!(fs.write_file("/new", b"fail"), Err(FsError::CapacityFull));
+
+        // Updating an existing file must succeed using reserve sectors
+        fs.write_file("/f00", b"updated").unwrap();
+        let mut out = [0u8; 8];
+        let n = fs.read_file("/f00", &mut out).unwrap();
+        assert_eq!(&out[..n], b"updated");
     }
 }
