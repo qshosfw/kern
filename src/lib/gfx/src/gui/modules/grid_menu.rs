@@ -92,7 +92,8 @@ impl GridMenuView {
         if len == 0 {
             return;
         }
-        model.selected_idx = (model.selected_idx + 1) % len;
+        let next = model.selected_idx + 1;
+        model.selected_idx = if next >= len { 0 } else { next };
     }
 
     fn navigate_up<T: GridItem>(model: &mut GridMenuModel<T>) {
@@ -122,7 +123,9 @@ impl GridMenuView {
             model.selected_idx += 3;
         } else {
             // Wrap to top row
-            model.selected_idx %= 3;
+            while model.selected_idx >= 3 {
+                model.selected_idx -= 3;
+            }
         }
     }
 
@@ -236,7 +239,7 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
 
         // 3x2 Grid (Tiles are 40x26 pixels, physically square on 1.7:1 tall pixels)
         let items_per_page = 6;
-        let page = model.selected_idx / items_per_page;
+        let page = ((model.selected_idx as u32 * 0xAAAB) >> 18) as usize;
         let start_idx = page * items_per_page;
         let end_idx = (start_idx + items_per_page).min(total_items);
 
