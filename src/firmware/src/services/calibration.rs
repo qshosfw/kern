@@ -40,34 +40,59 @@ impl CalibSignature {
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        out[0..4].copy_from_slice(&self.ident);
-        out[4] = self.version;
-        out[5..8].copy_from_slice(&self._reserved);
-        out[8..16].copy_from_slice(&self.hardware_serial.to_le_bytes());
-        out[16..32].copy_from_slice(&self.auth_tag);
-        out
+        #[cfg(target_endian = "little")]
+        {
+            const _: () = assert!(core::mem::size_of::<CalibSignature>() == 32);
+            let mut out = [0u8; 32];
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self as *const Self as *const u8,
+                    out.as_mut_ptr(),
+                    32,
+                );
+            }
+            out
+        }
+        #[cfg(not(target_endian = "little"))]
+        {
+            let mut out = [0u8; 32];
+            out[0..4].copy_from_slice(&self.ident);
+            out[4] = self.version;
+            out[5..8].copy_from_slice(&self._reserved);
+            out[8..16].copy_from_slice(&self.hardware_serial.to_le_bytes());
+            out[16..32].copy_from_slice(&self.auth_tag);
+            out
+        }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < 32 || &bytes[..4] != CALIB_SIG_IDENT {
             return None;
         }
-        let mut ident = [0u8; 4];
-        ident.copy_from_slice(&bytes[0..4]);
-        let mut reserved = [0u8; 3];
-        reserved.copy_from_slice(&bytes[5..8]);
-        let mut serial_bytes = [0u8; 8];
-        serial_bytes.copy_from_slice(&bytes[8..16]);
-        let mut auth_tag = [0u8; 16];
-        auth_tag.copy_from_slice(&bytes[16..32]);
-        Some(Self {
-            ident,
-            version: bytes[4],
-            _reserved: reserved,
-            hardware_serial: u64::from_le_bytes(serial_bytes),
-            auth_tag,
-        })
+        #[cfg(target_endian = "little")]
+        unsafe {
+            let mut sig = core::mem::MaybeUninit::<Self>::uninit();
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), sig.as_mut_ptr() as *mut u8, 32);
+            Some(sig.assume_init())
+        }
+        #[cfg(not(target_endian = "little"))]
+        {
+            let mut ident = [0u8; 4];
+            ident.copy_from_slice(&bytes[0..4]);
+            let mut reserved = [0u8; 3];
+            reserved.copy_from_slice(&bytes[5..8]);
+            let mut serial_bytes = [0u8; 8];
+            serial_bytes.copy_from_slice(&bytes[8..16]);
+            let mut auth_tag = [0u8; 16];
+            auth_tag.copy_from_slice(&bytes[16..32]);
+            Some(Self {
+                ident,
+                version: bytes[4],
+                _reserved: reserved,
+                hardware_serial: u64::from_le_bytes(serial_bytes),
+                auth_tag,
+            })
+        }
     }
 }
 
