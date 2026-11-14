@@ -36,12 +36,8 @@ impl KrxClass {
     }
 
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Native => "Native",
-            Self::Paged => "Paged",
-            Self::VMachine => "VM",
-            Self::Declare => "Declare",
-        }
+        const NAMES: &[u8] = b"Native\0Paged\0VM\0Declare\0";
+        utils::format::nth_cstr(NAMES, *self as u8)
     }
 }
 
@@ -208,13 +204,8 @@ impl KrxExecType {
     }
 
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::App => "App",
-            Self::Service => "Service",
-            Self::Daemon => "Daemon",
-            Self::Driver => "Driver",
-            Self::Module => "Module",
-        }
+        const NAMES: &[u8] = b"App\0Service\0Daemon\0Driver\0Module\0";
+        utils::format::nth_cstr(NAMES, (*self as u8) - 1)
     }
 
     pub const fn is_app(&self) -> bool {
