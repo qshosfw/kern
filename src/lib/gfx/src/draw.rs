@@ -59,6 +59,9 @@ pub fn draw_bitmap(
     color: Color,
 ) {
     let bytes_per_row = (width as usize + 7) >> 3;
+    if data.len() < (height as usize).saturating_mul(bytes_per_row) {
+        return;
+    }
     for row in 0..height as usize {
         let row_offset = row * bytes_per_row;
         let row_y = y + row as i16;
@@ -68,5 +71,17 @@ pub fn draw_bitmap(
                 canvas.draw_pixel_i(x + col as i16, row_y, color);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_bitmap_ignores_truncated_buffer() {
+        let mut canvas = Canvas::new();
+        draw_bitmap(&mut canvas, 0, 0, 16, 4, &[0xFF, 0xFF], Color::Fill);
+        assert_eq!(canvas.buffer[0][0], 0);
     }
 }

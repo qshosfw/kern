@@ -93,12 +93,19 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
 
     let (arena_head, arena_tail) =
         crate::runtime::transient_arena_bytes_mut().split_at_mut(PROV_BUF_CAP);
+    const {
+        assert!(core::mem::size_of::<[DirEntryInfo; 8]>() <= 2048);
+        assert!(PROV_BUF_CAP.is_multiple_of(8));
+        assert!(core::mem::align_of::<DirEntryInfo>() <= 8);
+    }
     let entries: &mut [DirEntryInfo; 8] = unsafe {
-        let ptr = arena_tail.as_mut_ptr() as *mut [DirEntryInfo; 8];
-        for e in &mut *ptr {
-            core::ptr::write(e, DirEntryInfo::empty());
+        let base = arena_tail.as_mut_ptr() as *mut DirEntryInfo;
+        let mut idx = 0;
+        while idx < 8 {
+            base.add(idx).write(DirEntryInfo::empty());
+            idx += 1;
         }
-        &mut *ptr
+        &mut *(base as *mut [DirEntryInfo; 8])
     };
     let count = filesystem.list_dir("/prov", entries).unwrap_or(0);
     if count == 0 {
@@ -109,7 +116,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
     let prov_buf = arena_head;
 
     for entry in &entries[..count] {
-        if entry.is_dir || entry.path.is_empty() {
+        if entry.is_dir || entry.path.is_empty() || entry.size > PROV_BUF_CAP {
             continue;
         }
 
@@ -145,17 +152,17 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             _ => "/user/",
         };
 
-        let mut dst_buf = core::mem::MaybeUninit::<[u8; 48]>::uninit();
-        let dst_arr = unsafe { &mut *dst_buf.as_mut_ptr() };
+        let mut dst_arr = [0u8; 48];
         let p_bytes = prefix.as_bytes();
         let total_len = p_bytes.len() + b.len();
         if total_len <= dst_arr.len() {
             dst_arr[..p_bytes.len()].copy_from_slice(p_bytes);
             dst_arr[p_bytes.len()..total_len].copy_from_slice(b);
-            let dst_path = unsafe { core::str::from_utf8_unchecked(&dst_arr[..total_len]) };
-            let _ = filesystem.remove(dst_path);
-            if filesystem.write_file(dst_path, buf).is_ok() {
-                let _ = filesystem.remove(src_path);
+            if let Ok(dst_path) = core::str::from_utf8(&dst_arr[..total_len]) {
+                let _ = filesystem.remove(dst_path);
+                if filesystem.write_file(dst_path, buf).is_ok() {
+                    let _ = filesystem.remove(src_path);
+                }
             }
         }
     }
