@@ -352,7 +352,6 @@ impl Orchestrator {
                 self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
                 ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Success);
             }
-            self.drain_ipc_commands(ctx);
             return;
         }
 
@@ -493,25 +492,31 @@ impl Orchestrator {
         ctx: &mut crate::services::SysContext<'a, '_>,
         event: Event,
     ) -> bool {
-        let prev_app = self.active_app_id;
-
-        // Intercept and sink keys suppressed during screen/app/modal transitions
         if filter_sunk_keys(&event) {
             self.lock_mgr.reset_input_tracking();
             return false;
         }
+        let handled = self.dispatch_active_event(ctx, event);
+        self.drain_ipc_commands(ctx);
+        handled
+    }
+
+    fn dispatch_active_event<'a>(
+        &mut self,
+        ctx: &mut crate::services::SysContext<'a, '_>,
+        event: Event,
+    ) -> bool {
+        let prev_app = self.active_app_id;
 
         // 0. If an OS modal is active, modal compositor intercepts all input
         if self.handle_modal_event(ctx, &event) {
             self.lock_mgr.reset_input_tracking();
-            self.drain_ipc_commands(ctx);
             return true;
         }
 
         // 1. Keypad Lock & Hold Supervisor (strictly precedes all apps)
         let (lock_intercepted, lock_state_changed) = self.supervise_lock(ctx, &event);
         if lock_intercepted {
-            self.drain_ipc_commands(ctx);
             return true;
         }
 
@@ -519,7 +524,6 @@ impl Orchestrator {
         if self.lock_mgr.is_locked {
             if let Event::Key { code, .. } = event {
                 if !matches!(code, KeyCode::Ptt | KeyCode::Side1 | KeyCode::Side2) {
-                    self.drain_ipc_commands(ctx);
                     return lock_state_changed;
                 }
             }
@@ -551,17 +555,8 @@ impl Orchestrator {
 
         // Intercept and dispatch Microkernel System & IPC Events
         if let Event::Sys(sys_evt) = event {
-            if sys_evt.target == ipc_target::KERNEL {
-                self.handle_kernel_sys_event(ctx, sys_evt);
-                self.drain_ipc_commands(ctx);
+            if self.handle_kernel_sys_event(ctx, sys_evt) {
                 return true;
-            } else if sys_evt.target == 0 {
-                let cmd = Shortcut::from(sys_evt);
-                if cmd != Shortcut::None {
-                    self.process_ipc_command(ctx, cmd);
-                    self.drain_ipc_commands(ctx);
-                    return true;
-                }
             }
         }
 
@@ -598,9 +593,6 @@ impl Orchestrator {
             // 7. Global navigation shortcuts & hotkeys (only if foreground app ignored the event and does not own the key)
             self.handle_global_shortcuts(ctx, event);
         }
-
-        // Process pending Microkernel IPC System Commands
-        self.drain_ipc_commands(ctx);
 
         status == EventResult::Consumed
             || fault_handled
@@ -774,42 +766,48 @@ impl Orchestrator {
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
         sys_evt: kernel::ipc::SysEvent,
-    ) {
-        #[cfg(feature = "krx_runtime")]
-        if let Some(msg) =
-            crate::runtime::syscall::service::ipc_channel_mut().poll(ipc_target::KERNEL)
-        {
-            let mut ack_byte = [0u8; 1];
-            let ack: Option<&[u8]> = match msg.msg_type {
-                ipc_msg_type::APP_SWITCH if msg.payload_len > 0 => {
-                    let target_app = msg.payload[0] as usize;
-                    self.switch_app(ctx, target_app);
-                    ack_byte[0] = target_app as u8;
-                    Some(&ack_byte)
-                }
-                ipc_msg_type::PING => Some(b"PONG"),
-                ipc_msg_type::DAEMON_STOP if msg.payload_len > 0 => {
-                    let pid = kernel::proc::Pid(msg.payload[0]);
-                    if let Some(pcb) = proc_table_mut().find_mut(pid) {
-                        pcb.set_state(ProcState::Dormant);
+    ) -> bool {
+        if sys_evt.target == ipc_target::KERNEL {
+            #[cfg(feature = "krx_runtime")]
+            if let Some(msg) =
+                crate::runtime::syscall::service::ipc_channel_mut().poll(ipc_target::KERNEL)
+            {
+                let mut ack_byte = [0u8; 1];
+                let ack: Option<&[u8]> = match msg.msg_type {
+                    ipc_msg_type::APP_SWITCH if msg.payload_len > 0 => {
+                        let target_app = msg.payload[0] as usize;
+                        self.switch_app(ctx, target_app);
+                        ack_byte[0] = target_app as u8;
+                        Some(&ack_byte)
                     }
-                    Some(&ack_byte)
+                    ipc_msg_type::PING => Some(b"PONG"),
+                    ipc_msg_type::DAEMON_STOP if msg.payload_len > 0 => {
+                        let pid = kernel::proc::Pid(msg.payload[0]);
+                        if let Some(pcb) = proc_table_mut().find_mut(pid) {
+                            pcb.set_state(ProcState::Dormant);
+                        }
+                        Some(&ack_byte)
+                    }
+                    _ => None,
+                };
+                if let Some(reply_payload) = ack {
+                    if (msg.flags & ipc_flags::NEED_ACK) != 0 {
+                        let rep = msg.reply_to(reply_payload, false);
+                        let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
+                    }
                 }
-                _ => None,
-            };
-            if let Some(reply_payload) = ack {
-                if (msg.flags & ipc_flags::NEED_ACK) != 0 {
-                    let rep = msg.reply_to(reply_payload, false);
-                    let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
-                }
+                return true;
             }
-            return;
+        } else if sys_evt.target != 0 {
+            return false;
         }
 
         let cmd = Shortcut::from(sys_evt);
         if cmd != Shortcut::None {
             self.process_ipc_command(ctx, cmd);
+            return true;
         }
+        false
     }
 
     #[inline(never)]
