@@ -104,6 +104,23 @@ fn flush_instruction_pipeline() {
     cortex_m::asm::isb();
 }
 
+#[inline(never)]
+fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bool {
+    let ok = unsafe {
+        if !ACTIVE_CTX.is_null() {
+            let path = slot_ref().pkg_path.as_str();
+            let dst = core::slice::from_raw_parts_mut(dst_vma as *mut u8, len);
+            read_file_region((*ACTIVE_CTX).storage, path, flash_offset, dst)
+        } else {
+            false
+        }
+    };
+    if ok {
+        flush_instruction_pipeline();
+    }
+    ok
+}
+
 /// Normative Demand-Paged Block Fault Handler (`krx_page_fault`, KRX-ABI 2.5.0 Section 7.2).
 ///
 /// Resolves `block_id` in the fixed-window cache (`slot.cache`). On a cache miss,
@@ -134,24 +151,9 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
         if slot_byte_off + read_len > PAGED_CACHE_MAX_BYTES {
             return 0;
         }
-        let read_ok = unsafe {
-            if !ACTIVE_CTX.is_null() {
-                let path = slot.pkg_path.as_str();
-                let dst = core::slice::from_raw_parts_mut(slot_vma as *mut u8, read_len);
-                read_file_region(
-                    (*ACTIVE_CTX).storage,
-                    path,
-                    block_entry.flash_offset as usize,
-                    dst,
-                )
-            } else {
-                false
-            }
-        };
-        if !read_ok {
+        if !read_active_pkg_region(block_entry.flash_offset as usize, slot_vma, read_len) {
             return 0;
         }
-        flush_instruction_pipeline();
 
         // Record page fault in active process ledger (Section 13.11)
         let active_id = crate::AppRegistry::count();
@@ -214,24 +216,13 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
         .dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
             if !is_hit {
                 let read_len = (leaf_entry.size as usize).min(window_size as usize);
-                let read_ok = unsafe {
-                    if !ACTIVE_CTX.is_null() {
-                        let path = slot_ref().pkg_path.as_str();
-                        let dst = core::slice::from_raw_parts_mut(overlay_vma as *mut u8, read_len);
-                        read_file_region(
-                            (*ACTIVE_CTX).storage,
-                            path,
-                            leaf_entry.flash_offset as usize,
-                            dst,
-                        )
-                    } else {
-                        false
-                    }
-                };
-                if !read_ok {
+                if !read_active_pkg_region(
+                    leaf_entry.flash_offset as usize,
+                    overlay_vma as usize,
+                    read_len,
+                ) {
                     return Err(PagedError::StorageReadFailed);
                 }
-                flush_instruction_pipeline();
             }
 
             if leaf_entry.entry_offset >= leaf_entry.size {
