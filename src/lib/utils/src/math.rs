@@ -22,7 +22,7 @@ pub const fn div10_u16(x: u16) -> (u16, u8) {
 ///
 /// Exact for all `x <= 4,294,967,295`.
 /// `((x * 0xCCCC_CCCD) >> 35)`.
-#[inline(always)]
+#[inline(never)]
 pub const fn div10_u32(x: u32) -> (u32, u8) {
     let q = ((x as u64 * 0xCCCC_CCCD) >> 35) as u32;
     let r = (x - q * 10) as u8;
@@ -100,7 +100,7 @@ pub const fn div60_u32(x: u32) -> (u32, u8) {
 ///
 /// Exact for all `x <= 4,294,967,295`.
 /// Uses a 64-bit multiply and 40-bit shift: `((x * 0x4189_374C) >> 40)`.
-#[inline(always)]
+#[inline(never)]
 pub const fn div1000_u32(x: u32) -> u32 {
     ((x as u64 * 0x4189_374C) >> 40) as u32
 }

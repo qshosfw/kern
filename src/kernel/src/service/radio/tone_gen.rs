@@ -37,20 +37,16 @@ impl ToneConfig {
 /// Formula: `round((freq_hz * 1032444) / 100000)` with 26 MHz master crystal.
 #[inline(always)]
 pub const fn calc_tone_word(freq_hz: u16) -> u16 {
-    // Fast reciprocal division:
-    // (freq_hz * 1032444 + 50000) / 100000 = freq_hz * 10 + (freq_hz * 32444 + 50000) / 100000
-    // (num * 0xA7C5_AC48) >> 48 exact for all freq_hz <= 65535
-    let num = (freq_hz as u32 * 32444) + 50000;
-    let frac = ((num as u64 * 0xA7C5_AC48) >> 48) as u32;
+    // 32-bit fixed-point reciprocal: 42525 / 2^17 = 0.3244400024 (exact to 9 decimal places)
+    let frac = (freq_hz as u32 * 42_525 + 65_536) >> 17;
     (freq_hz as u32 * 10 + frac) as u16
 }
 
 /// Convert a 16-bit DDS frequency control word back into frequency in Hertz.
 #[inline(always)]
 pub const fn tone_word_to_hz(word: u16) -> u16 {
-    // Fast reciprocal division: (num * 0x1040_0011) >> 48 exact for all word <= 65535
-    let num = (word as u32 * 100000) + 516222;
-    ((num as u64 * 0x1040_0011) >> 48) as u16
+    // 32-bit fixed-point reciprocal: 50781 / 2^19 = 1 / 10.32444
+    ((word as u32 * 50_781 + 262_144) >> 19) as u16
 }
 
 /// Granular, low-level hardware contract for independent dual tone generation.
