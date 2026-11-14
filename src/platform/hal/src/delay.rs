@@ -22,9 +22,9 @@ pub fn init() {
 pub fn update_systick_freq(sysclk_hz: u32) {
     // Fast reciprocal division:
     // sysclk_hz / 1000: ((x * 0x4189374C) >> 40)
-    // sysclk_hz / 1_000_000: ((x * 0x10C6F7A1) >> 48)
+    // sysclk_hz / 1_000_000: (((x >> 12) * 17_180) >> 22) in 32-bit math
     let div1k = ((sysclk_hz as u64 * 0x4189374C) >> 40) as u32;
-    let div1m = ((sysclk_hz as u64 * 0x10C6F7A1) >> 48) as u32;
+    let div1m = ((sysclk_hz >> 12) * 17_180) >> 22;
     let reload = div1k.saturating_sub(1);
     let ticks_us = div1m.max(1);
     TICKS_PER_US.store(ticks_us, Ordering::Relaxed);

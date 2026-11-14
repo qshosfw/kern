@@ -182,43 +182,29 @@ pub fn enable_usbd() {
 /// Query active system core clock frequency in Hz dynamically from RCC registers.
 /// Correctly distinguishes 48 MHz vs 72 MHz (PLL x2 vs x3) or HSI/HSE modes.
 pub fn sysclk_hz() -> u32 {
-    static HSI_TABLE: [u32; 8] = [
-        4_000_000, 8_000_000, 16_000_000, 22_120_000, 24_000_000, 4_000_000, 4_000_000, 4_000_000,
-    ];
+    static HSI_KHZ: [u16; 5] = [4_000, 8_000, 16_000, 22_120, 24_000];
     unsafe {
         let cfgr = rcc::RCC_CFGR.read_volatile();
         let sws = cfgr & 0x00000038;
+        let hsifs = ((rcc::RCC_ICSCR.read_volatile() >> 13) & 0x07) as usize;
+        let hsi_base = (*HSI_KHZ.get(hsifs).unwrap_or(&4_000) as u32) * 1_000;
 
         let base_clk = match sws {
             0x00000010 => {
                 // PLL used as system clock
                 let pllcfgr = rcc::RCC_PLLCFGR.read_volatile();
-                let pllmul = match (pllcfgr >> 2) & 0x03 {
-                    1 => 3, // PLL x3 (72 MHz with 24 MHz source)
-                    _ => 2, // PLL x2 (48 MHz with 24 MHz source)
-                };
-                let icscr = rcc::RCC_ICSCR.read_volatile();
-                let hsifs = ((icscr >> 13) & 0x07) as usize;
-                let hsi_base = if hsifs == 4 {
-                    24_000_000
-                } else if hsifs < HSI_TABLE.len() && HSI_TABLE[hsifs] >= 16_000_000 {
-                    HSI_TABLE[hsifs]
+                let pllmul = if ((pllcfgr >> 2) & 0x03) == 1 { 3 } else { 2 };
+                let src = if hsi_base >= 16_000_000 {
+                    hsi_base
                 } else {
                     24_000_000
                 };
-                pllmul * hsi_base
+                pllmul * src
             }
-            0x00000008 => {
-                // HSE (External 24 MHz crystal)
-                24_000_000
-            }
+            0x00000008 => 24_000_000,
             _ => {
                 // HSI direct
-                let icscr = rcc::RCC_ICSCR.read_volatile();
-                let hsifs = ((icscr >> 13) & 0x07) as usize;
-                let hsi_base = HSI_TABLE.get(hsifs).copied().unwrap_or(24_000_000);
-                let cr = rcc::RCC_CR.read_volatile();
-                let hsidiv_exp = ((cr >> 11) & 0x07).min(7);
+                let hsidiv_exp = (rcc::RCC_CR.read_volatile() >> 11) & 0x07;
                 hsi_base >> hsidiv_exp
             }
         };
