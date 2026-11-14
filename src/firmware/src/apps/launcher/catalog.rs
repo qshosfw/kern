@@ -175,7 +175,8 @@ impl PackageCatalog {
         if is_pkg && size >= KrxPreamble::SIZE {
             let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..256];
             if let Ok(read_len) = filesystem.read_file_at(path.as_str(), 0, hdr_buf) {
-                if let Ok(summary) = KrxPreamble::summarize(&hdr_buf[..read_len]) {
+                let mut summary = kernel::proc::krx::KrxSummary::default();
+                if KrxPreamble::summarize_into(&hdr_buf[..read_len], &mut summary).is_ok() {
                     if let Some(cls) = summary.preamble.execution_class() {
                         is_valid = true;
                         app_class = cls;

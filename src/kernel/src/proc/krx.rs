@@ -531,21 +531,12 @@ impl SectionExecution {
         if buf.len() < Self::SIZE {
             return None;
         }
-        Some(Self {
-            min_stack_bytes: u16::from_le_bytes([buf[0], buf[1]]),
-            min_heap_bytes: u16::from_le_bytes([buf[2], buf[3]]),
-            page_size: u16::from_le_bytes([buf[4], buf[5]]),
-            cache_blocks: buf[6],
-            dma_burst_size: buf[7],
-            entry_point: u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
-            payload_size: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
-            reloc_offset: u16::from_le_bytes([buf[16], buf[17]]),
-            reloc_count: u16::from_le_bytes([buf[18], buf[19]]),
-            got_offset: u16::from_le_bytes([buf[20], buf[21]]),
-            rt_pin_mask: u16::from_le_bytes([buf[22], buf[23]]),
-            max_fault_latency_us: u16::from_le_bytes([buf[24], buf[25]]),
-            reserved: [buf[26], buf[27]],
-        })
+        let b = &buf[..Self::SIZE];
+        let mut sec = core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            core::ptr::copy_nonoverlapping(b.as_ptr(), sec.as_mut_ptr() as *mut u8, Self::SIZE);
+            Some(sec.assume_init())
+        }
     }
 
     /// Check whether this section can safely execute given available system RAM and required stack safety margin.
@@ -720,10 +711,43 @@ impl<'a> KrxSummary<'a> {
     }
 }
 
+impl<'a> Default for KrxSummary<'a> {
+    fn default() -> Self {
+        Self {
+            preamble: KrxPreamble {
+                ident: [0u8; 4],
+                app_type: 0,
+                format_version: 0,
+                section_count: 0,
+                header_len: 0,
+                flags: 0,
+                payload_crc32: 0,
+                header_crc32: 0,
+                link_base: 0,
+            },
+            title: "",
+            icon_id: 0,
+            exec_type: KrxExecType::App,
+            type_flags: 0,
+            caps: crate::caps::CapabilitySet::NONE,
+            exec: None,
+            aux: KrxAuxSections {
+                cap_imports: None,
+                block_map: None,
+                leaf_map: None,
+                service_exports: None,
+            },
+        }
+    }
+}
+
 impl KrxPreamble {
-    /// Zero-allocation, single-pass inspection of a KRX package header buffer.
+    /// Zero-allocation, single-pass inspection of a KRX package header buffer into `out`.
     #[inline(never)]
-    pub fn summarize<'a>(buf: &'a [u8]) -> Result<KrxSummary<'a>, KrxLaunchError> {
+    pub fn summarize_into<'a>(
+        buf: &'a [u8],
+        out: &mut KrxSummary<'a>,
+    ) -> Result<(), KrxLaunchError> {
         let preamble = Self::parse(buf).map_err(|_| KrxLaunchError::InvalidPreamble)?;
         let h_len = preamble.header_len as usize;
         if h_len < Self::SIZE || h_len > 512 || (h_len & 3) != 0 {
@@ -742,66 +766,67 @@ impl KrxPreamble {
             }
         }
 
-        let mut title = "";
-        let mut icon_id = 0u16;
-        let mut exec_type = KrxExecType::App;
-        let mut type_flags = 0u8;
-        let mut caps = crate::caps::CapabilitySet::NONE;
-        let mut exec = None;
-        let mut aux = KrxAuxSections::default();
+        *out = KrxSummary::default();
+        out.preamble = preamble;
 
-        for (hdr_sec, body) in KrxSectionIterator::new(hdr, h_len) {
-            match hdr_sec.id {
+        let mut off = Self::SIZE;
+        while off + SectionHeader::SIZE <= h_len {
+            let sec = &hdr[off..h_len];
+            let sec_id = u16::from_le_bytes([sec[0], sec[1]]);
+            let sec_len = u16::from_le_bytes([sec[2], sec[3]]) as usize;
+            if sec_len < SectionHeader::SIZE || off + sec_len > h_len {
+                break;
+            }
+            let body = &sec[SectionHeader::SIZE..sec_len];
+            match sec_id {
                 SECTION_IDENTITY => {
                     if body.len() >= 25 {
                         let name_off = u16::from_le_bytes([body[0], body[1]]) as usize;
-                        if name_off >= Self::SIZE {
-                            if let Some(tail) = hdr.get(name_off..) {
-                                let max_len = tail.len().min(32);
-                                let len = tail[..max_len]
-                                    .iter()
-                                    .position(|&b| b == 0)
-                                    .unwrap_or(max_len);
-                                if len > 0 {
-                                    if let Some(s) = utils::format::ascii_str(&tail[..len]) {
-                                        title = s;
-                                    }
+                        if name_off >= Self::SIZE && name_off < h_len {
+                            let tail = &hdr[name_off..h_len];
+                            let max_len = tail.len().min(32);
+                            let mut len = 0usize;
+                            while len < max_len && tail[len] != 0 {
+                                len += 1;
+                            }
+                            if len > 0 {
+                                if let Some(s) = utils::format::ascii_str(&tail[..len]) {
+                                    out.title = s;
                                 }
                             }
                         }
-                        icon_id = u16::from_le_bytes([body[23], body[24]]);
+                        out.icon_id = u16::from_le_bytes([body[23], body[24]]);
                     }
                 }
                 SECTION_TYPE_LIFECYCLE => {
                     if body.len() >= 12 {
                         if let Some(et) = KrxExecType::from_u8(body[0]) {
-                            exec_type = et;
+                            out.exec_type = et;
                         }
-                        type_flags = body[1];
-                        caps = crate::caps::CapabilitySet::from_raw(u32::from_le_bytes([
+                        out.type_flags = body[1];
+                        out.caps = crate::caps::CapabilitySet::from_raw(u32::from_le_bytes([
                             body[8], body[9], body[10], body[11],
                         ]));
                     }
                 }
-                SECTION_EXECUTION => exec = SectionExecution::parse(body),
-                SECTION_CAP_IMPORTS => aux.cap_imports = Some(body),
-                SECTION_BLOCK_MAP => aux.block_map = Some(body),
-                SECTION_LEAF_MAP => aux.leaf_map = Some(body),
-                SECTION_SERVICE_EXPORTS => aux.service_exports = Some(body),
+                SECTION_EXECUTION => out.exec = SectionExecution::parse(body),
+                SECTION_CAP_IMPORTS => out.aux.cap_imports = Some(body),
+                SECTION_BLOCK_MAP => out.aux.block_map = Some(body),
+                SECTION_LEAF_MAP => out.aux.leaf_map = Some(body),
+                SECTION_SERVICE_EXPORTS => out.aux.service_exports = Some(body),
                 _ => {}
             }
+            off += (sec_len + 3) & !3;
         }
 
-        Ok(KrxSummary {
-            preamble,
-            title,
-            icon_id,
-            exec_type,
-            type_flags,
-            caps,
-            exec,
-            aux,
-        })
+        Ok(())
+    }
+
+    /// Zero-allocation, single-pass inspection of a KRX package header buffer.
+    pub fn summarize<'a>(buf: &'a [u8]) -> Result<KrxSummary<'a>, KrxLaunchError> {
+        let mut summary = KrxSummary::default();
+        Self::summarize_into(buf, &mut summary)?;
+        Ok(summary)
     }
 }
 

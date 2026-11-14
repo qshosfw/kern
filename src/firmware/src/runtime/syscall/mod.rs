@@ -133,28 +133,6 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
     hw_bus: &raw const HW_BUS_VTABLE,
 };
 
-// ── KRX Structured System Dispatch Table (v3.1) ────────────────────────────
-
-pub static NATIVE_SYS_TABLE: KrxSysTable = KrxSysTable {
-    abi_version: KRX_ABI_VERSION_3_1,
-    table_size: core::mem::size_of::<KrxSysTable>() as u16,
-    _reserved: 0,
-    granted_caps: 0xFFFF_FFFF,
-    display: &raw const DISPLAY_VTABLE,
-    radio: &raw const RADIO_VTABLE,
-    audio: &raw const AUDIO_VTABLE,
-    storage: &raw const STORAGE_VTABLE,
-    keypad: &raw const KEYPAD_VTABLE,
-    power: &raw const POWER_VTABLE,
-    serial: &raw const SERIAL_VTABLE,
-    timer: &raw const TIMER_VTABLE,
-    ui: &raw const UI_VTABLE,
-    math: &raw const MATH_VTABLE,
-    fm: &raw const FM_VTABLE,
-    service: &raw const SERVICE_VTABLE,
-    hw_bus: &raw const HW_BUS_VTABLE,
-};
-
 // ── Dynamic Linker / GOT Resolution ─────────────────────────────────────────
 
 struct InterfaceBinding {

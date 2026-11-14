@@ -144,10 +144,13 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
         self.active_slots = cache_blocks.clamp(1, MAX_SLOTS as u8);
 
         if let Some(body) = block_map_body {
-            let count = (body.len() / BlockEntry::SIZE).min(MAX_BLOCKS);
-            for i in 0..count {
-                if let Some(entry) = BlockEntry::parse(&body[i * BlockEntry::SIZE..]) {
-                    self.blocks[i] = entry;
+            for (dst, chunk) in self
+                .blocks
+                .iter_mut()
+                .zip(body.chunks_exact(BlockEntry::SIZE))
+            {
+                if let Some(entry) = BlockEntry::parse(chunk) {
+                    *dst = entry;
                     self.block_count += 1;
                 }
             }
@@ -187,6 +190,7 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
 
     /// Resolve a block in the cache or select a victim slot for page-in.
     /// Returns `(slot_index, is_cache_hit, block_entry)`.
+    #[inline(never)]
     pub fn resolve_or_select_slot(
         &mut self,
         block_id: u8,
@@ -372,11 +376,13 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
         self.overlay_vma = overlay_vma;
         self.window_size = window_size;
         if let Some(leaf_body) = leaf_map_body {
-            let count = (leaf_body.len() / LeafEntry::SIZE).min(MAX_LEAVES);
-            for i in 0..count {
-                let offset = i * LeafEntry::SIZE;
-                if let Some(entry) = LeafEntry::parse(&leaf_body[offset..]) {
-                    self.leaves[i] = entry;
+            for (dst, chunk) in self
+                .leaves
+                .iter_mut()
+                .zip(leaf_body.chunks_exact(LeafEntry::SIZE))
+            {
+                if let Some(entry) = LeafEntry::parse(chunk) {
+                    *dst = entry;
                     self.leaf_count += 1;
                 }
             }

@@ -393,7 +393,14 @@ pub fn load_native_from_storage(
             aux.block_map,
         );
         // Mark block 0 as already resident in slot 0 from initial load
-        let _ = slot.cache.resolve_or_select_slot(0);
+        if slot.cache.block_count > 0 {
+            slot.cache.access_clock = 1;
+            slot.cache.slots[0] = kernel::proc::paged::CacheSlotMeta {
+                resident_block: Some(0),
+                pinned: slot.cache.blocks[0].is_pinned(),
+                last_access_tick: 1,
+            };
+        }
     }
 
     // 2. Configure P0 Structured Leaf Manager
@@ -467,11 +474,9 @@ pub fn load_native_from_storage(
         return Err(KrxLaunchError::InvalidEntryPoint);
     }
 
-    // 5. Validate execution permissions and alignment at load time
+    // 5. Validate execution alignment and code region bounds at load time
     let code_addr = (entry_thumb & !1) as u32;
-    if slot.mem_layout.region_count > 0
-        && !slot.mem_layout.validate_access(code_addr, 2, false, true)
-    {
+    if code_addr < load_base || code_addr >= load_base.saturating_add(code_size) {
         return Err(KrxLaunchError::InvalidEntryPoint);
     }
 

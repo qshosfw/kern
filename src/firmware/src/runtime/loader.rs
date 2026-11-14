@@ -25,9 +25,7 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
 /// Load and launch a verified KRX binary application package.
 #[inline(never)]
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let mut header_buf = core::mem::MaybeUninit::<[u8; 256]>::uninit();
-    // SAFETY: `read_file_at` initializes `[..header_read]`, and `summarize` only reads that prefix.
-    let header_buf = unsafe { &mut *header_buf.as_mut_ptr() };
+    let header_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[1792..2048];
     let header_read = ctx
         .storage
         .read_file_at(path, 0, header_buf)
@@ -36,11 +34,25 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             _ => KrxLaunchError::ReadFailed,
         })?;
 
-    let summary = KrxPreamble::summarize(&header_buf[..header_read])?;
+    let mut summary = kernel::proc::krx::KrxSummary::default();
+    KrxPreamble::summarize_into(&header_buf[..header_read], &mut summary)?;
     let preamble = summary.preamble;
     let header_len = preamble.header_len as usize;
     if header_len > header_read {
         return Err(KrxLaunchError::TruncatedPackage);
+    }
+
+    let exec_class = preamble.execution_class().unwrap_or(KrxClass::Declare);
+    #[cfg(feature = "krx_native")]
+    let is_native_or_paged = matches!(exec_class, KrxClass::Native | KrxClass::Paged);
+    #[cfg(not(feature = "krx_native"))]
+    let is_native_or_paged = false;
+    if !is_native_or_paged {
+        let _ = (ctx, path, preamble);
+        return Err(match exec_class {
+            KrxClass::Declare | KrxClass::VMachine => KrxLaunchError::VmDisabled,
+            _ => KrxLaunchError::ExecutionFailed,
+        });
     }
 
     let raw_name = if !summary.title.is_empty() {
@@ -73,68 +85,57 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         }
     }
 
-    #[cfg(feature = "krx_native")]
-    let aux = summary.aux;
-
     let app_name = store_dynamic_app_name(raw_name);
     let dyn_id = AppRegistry::count();
-    let exec_class = preamble.execution_class().unwrap_or(KrxClass::Declare);
-    let exec_type = match exec_class {
-        #[cfg(feature = "krx_native")]
-        KrxClass::Native | KrxClass::Paged => kernel::proc::ExecType::RelocatableNative,
-        _ => kernel::proc::ExecType::SandboxedBytecode,
-    };
     let dyn_pid = crate::orchestrator::proc_table_mut()
         .spawn_or_recycle(
             app_name,
             dyn_id,
             kernel::sched::Priority::Ui,
-            exec_type,
+            kernel::proc::ExecType::RelocatableNative,
             required_caps,
         )
         .unwrap_or(kernel::proc::Pid(dyn_id as u8));
 
-    // 5. Execution Class Dispatch
-    let (vtable, instance) = match exec_class {
-        KrxClass::Declare | KrxClass::VMachine => {
-            let _ = (ctx, path, preamble, app_name);
-            return Err(KrxLaunchError::VmDisabled);
-        }
-        #[cfg(feature = "krx_native")]
-        KrxClass::Native | KrxClass::Paged => {
-            let exec_sec = exec_sec.ok_or(KrxLaunchError::MissingExecution)?;
-            let arena_buf = super::native_runner::transient_arena_bytes_mut();
-            let to_read = if exec_sec.payload_size > 0 {
-                (exec_sec.payload_size as usize).min(arena_buf.len())
-            } else {
-                arena_buf.len()
-            };
-            let payload_read = ctx
-                .storage
-                .read_file_at(path, header_len, &mut arena_buf[..to_read])
-                .map_err(|_| KrxLaunchError::ReadFailed)?;
+    #[cfg(feature = "krx_native")]
+    let (vtable, instance) = {
+        let aux = summary.aux;
+        let exec_sec = exec_sec.ok_or(KrxLaunchError::MissingExecution)?;
+        let arena_buf = super::native_runner::transient_arena_bytes_mut();
+        let max_payload = arena_buf.len() - 256;
+        let to_read = if exec_sec.payload_size > 0 {
+            (exec_sec.payload_size as usize).min(max_payload)
+        } else {
+            max_payload
+        };
+        let payload_read = ctx
+            .storage
+            .read_file_at(path, header_len, &mut arena_buf[..to_read])
+            .map_err(|_| KrxLaunchError::ReadFailed)?;
 
-            super::native_runner::load_native_from_storage(
-                app_name,
-                path,
-                payload_read,
-                &preamble,
-                &exec_sec,
-                &aux,
-                required_caps,
-                dyn_pid,
-            )?;
+        super::native_runner::load_native_from_storage(
+            app_name,
+            path,
+            payload_read,
+            &preamble,
+            &exec_sec,
+            &aux,
+            required_caps,
+            dyn_pid,
+        )?;
 
-            (
-                super::native_runner::NATIVE_RUNNER_VTABLE,
-                core::ptr::null_mut(),
-            )
-        }
-        #[cfg(not(feature = "krx_native"))]
-        KrxClass::Native | KrxClass::Paged => {
-            let _ = (ctx, path, preamble, app_name, required_caps);
-            return Err(KrxLaunchError::ExecutionFailed);
-        }
+        (
+            super::native_runner::NATIVE_RUNNER_VTABLE,
+            core::ptr::null_mut(),
+        )
+    };
+    #[cfg(not(feature = "krx_native"))]
+    let (vtable, instance): (
+        &'static kernel::app::AppVTable<SysContext<'static, 'static>>,
+        *mut (),
+    ) = {
+        let _ = (ctx, path, preamble, app_name, dyn_pid, required_caps);
+        return Err(KrxLaunchError::ExecutionFailed);
     };
 
     let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
