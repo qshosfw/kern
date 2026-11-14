@@ -271,24 +271,24 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
     }
 }
 
-pub unsafe extern "C" fn api_ui_draw_big_digit(x: i16, y: i16, digit: u8, color: u8) {
-    gfx::widgets::spectrum::draw_big_digit(
+#[inline(never)]
+unsafe fn draw_digit_shim(x: i16, y: i16, digit: u8, flags: u8) {
+    gfx::widgets::spectrum::draw_digit(
         super::active_canvas_mut(),
         x,
         y,
         digit,
-        crate::services::primitives::color_from_u8(color),
+        crate::services::primitives::color_from_u8(flags & 0x7f),
+        (flags & 0x80) != 0,
     );
 }
 
+pub unsafe extern "C" fn api_ui_draw_big_digit(x: i16, y: i16, digit: u8, color: u8) {
+    unsafe { draw_digit_shim(x, y, digit, (color & 0x7f) | 0x80) };
+}
+
 pub unsafe extern "C" fn api_ui_draw_small_digit(x: i16, y: i16, digit: u8, color: u8) {
-    gfx::widgets::spectrum::draw_small_digit(
-        super::active_canvas_mut(),
-        x,
-        y,
-        digit,
-        crate::services::primitives::color_from_u8(color),
-    );
+    unsafe { draw_digit_shim(x, y, digit, color & 0x7f) };
 }
 
 pub unsafe extern "C" fn api_ui_draw_battery(x: i16, y: i16, pct: u8, charging: u8) {
