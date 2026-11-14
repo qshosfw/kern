@@ -272,13 +272,6 @@ impl SystemAlert {
             message: heapless::String::new(),
         }
     }
-
-    pub fn new(title: &str, message: &str) -> Self {
-        let mut alert = Self::empty();
-        let _ = alert.title.push_str(title);
-        wrap_alert_text(message, &mut alert.message);
-        alert
-    }
 }
 
 struct AlertQueue {
@@ -296,31 +289,53 @@ impl AlertQueue {
         }
     }
 
-    fn push(&mut self, alert: SystemAlert) {
+    fn push_alert(&mut self, title: &str, message: &str) {
+        let mut target = None;
         for i in 0..self.len {
             let idx = (self.head + i) & (MAX_SYSTEM_ALERTS - 1);
-            if self.slots[idx].title.as_str() == alert.title.as_str() {
-                self.slots[idx] = alert;
-                return;
+            if self.slots[idx].title.as_str() == title {
+                target = Some(idx);
+                break;
             }
         }
-        if self.len == MAX_SYSTEM_ALERTS {
-            self.slots[self.head] = alert;
-            self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
+        let idx = match target {
+            Some(i) => i,
+            None if self.len == MAX_SYSTEM_ALERTS => {
+                let i = self.head;
+                self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
+                i
+            }
+            None => {
+                let i = (self.head + self.len) & (MAX_SYSTEM_ALERTS - 1);
+                self.len += 1;
+                i
+            }
+        };
+        let slot = &mut self.slots[idx];
+        slot.title.clear();
+        let _ = slot.title.push_str(title);
+        wrap_alert_text(message, &mut slot.message);
+    }
+
+    fn peek(&self) -> Option<&SystemAlert> {
+        if self.len == 0 {
+            None
         } else {
-            let idx = (self.head + self.len) & (MAX_SYSTEM_ALERTS - 1);
-            self.slots[idx] = alert;
-            self.len += 1;
+            Some(&self.slots[self.head])
         }
     }
 
-    fn pop(&mut self) -> Option<SystemAlert> {
-        if self.len == 0 {
-            return None;
+    fn discard_head(&mut self) {
+        if self.len > 0 {
+            self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
+            self.len -= 1;
         }
-        let alert = core::mem::replace(&mut self.slots[self.head], SystemAlert::empty());
-        self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
-        self.len -= 1;
+    }
+
+    #[cfg(test)]
+    fn pop(&mut self) -> Option<SystemAlert> {
+        let alert = self.peek().cloned()?;
+        self.discard_head();
         Some(alert)
     }
 
@@ -338,38 +353,45 @@ pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<168>) {
     out.clear();
     let mut line_px: i16 = 0;
     let space_px = gfx::text::str_width(" ", &gfx::fonts::tomthumb::FONT);
+    let b = raw.as_bytes();
+    let mut pos = 0usize;
 
-    for paragraph in gfx::text::lines(raw) {
-        if !out.is_empty() {
+    while pos < b.len() {
+        let mut nl = pos;
+        while nl < b.len() && b[nl] != b'\n' {
+            nl += 1;
+        }
+        if pos > 0 {
             if out.push('\n').is_err() {
                 break;
             }
             line_px = 0;
         }
-        let mut b = paragraph.as_bytes();
-        loop {
-            while !b.is_empty() && b[0] == b' ' {
-                b = &b[1..];
+        let mut p = pos;
+        while p < nl {
+            while p < nl && b[p] == b' ' {
+                p += 1;
             }
-            if b.is_empty() {
+            if p >= nl {
                 break;
             }
-            let end = gfx::text::find_byte(b, b' ').unwrap_or(b.len());
-            // SAFETY: `b` is valid UTF-8 and splitting on ASCII `b' '` (`0x20`) always lands on a char boundary.
-            let word = unsafe { core::str::from_utf8_unchecked(&b[..end]) };
-            b = &b[end..];
+            let mut end = p;
+            while end < nl && b[end] != b' ' {
+                end += 1;
+            }
+            // SAFETY: `b` is valid UTF-8 and splitting on ASCII `' '` / `'\n'` preserves char boundaries.
+            let word = unsafe { core::str::from_utf8_unchecked(&b[p..end]) };
+            p = end;
 
             let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
             let need_space = line_px > 0;
-            if need_space && line_px + space_px + word_px > MAX_ALERT_LINE_PX {
-                if out.push('\n').is_err() {
-                    return;
-                }
+            let sep = if need_space && line_px + space_px + word_px > MAX_ALERT_LINE_PX {
                 line_px = 0;
-            } else if need_space && out.push(' ').is_err() {
-                return;
-            }
-            if out.push_str(word).is_err() {
+                '\n'
+            } else {
+                ' '
+            };
+            if (need_space && out.push(sep).is_err()) || out.push_str(word).is_err() {
                 return;
             }
             line_px += if line_px > 0 {
@@ -378,18 +400,19 @@ pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<168>) {
                 word_px
             };
         }
+        pos = nl + 1;
     }
 }
 
 /// Queues a persistent notification for presentation once the Launcher is active.
 #[inline(never)]
 pub fn queue_system_alert(title: &str, message: &str) {
-    let alert = SystemAlert::new(title, message);
     unsafe {
-        (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).push(alert);
+        (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).push_alert(title, message);
     }
 }
 
+#[cfg(test)]
 pub fn pop_system_alert() -> Option<SystemAlert> {
     unsafe { (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).pop() }
 }
@@ -407,7 +430,8 @@ pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
     if modal_active {
         return false;
     }
-    let Some(alert) = pop_system_alert() else {
+    let q = unsafe { &mut *core::ptr::addr_of_mut!(SYSTEM_ALERTS) };
+    let Some(alert) = q.peek() else {
         return false;
     };
     ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
@@ -421,6 +445,7 @@ pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
             "",
         );
     }
+    q.discard_head();
     true
 }
 

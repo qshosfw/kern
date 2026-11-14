@@ -777,36 +777,29 @@ impl Orchestrator {
         if let Some(msg) =
             crate::runtime::syscall::service::ipc_channel_mut().poll(ipc_target::KERNEL)
         {
-            match msg.msg_type {
-                ipc_msg_type::APP_SWITCH => {
-                    if msg.payload_len > 0 {
-                        let target_app = msg.payload[0] as usize;
-                        self.switch_app(ctx, target_app);
-                        if (msg.flags & ipc_flags::NEED_ACK) != 0 {
-                            let rep = msg.reply_to(&[target_app as u8], false);
-                            let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
-                        }
-                    }
+            let mut ack_byte = [0u8; 1];
+            let ack: Option<&[u8]> = match msg.msg_type {
+                ipc_msg_type::APP_SWITCH if msg.payload_len > 0 => {
+                    let target_app = msg.payload[0] as usize;
+                    self.switch_app(ctx, target_app);
+                    ack_byte[0] = target_app as u8;
+                    Some(&ack_byte)
                 }
-                ipc_msg_type::PING => {
-                    if (msg.flags & ipc_flags::NEED_ACK) != 0 {
-                        let rep = msg.reply_to(b"PONG", false);
-                        let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
+                ipc_msg_type::PING => Some(b"PONG"),
+                ipc_msg_type::DAEMON_STOP if msg.payload_len > 0 => {
+                    let pid = kernel::proc::Pid(msg.payload[0]);
+                    if let Some(pcb) = proc_table_mut().find_mut(pid) {
+                        pcb.set_state(ProcState::Dormant);
                     }
+                    Some(&ack_byte)
                 }
-                ipc_msg_type::DAEMON_STOP => {
-                    if msg.payload_len > 0 {
-                        let pid = kernel::proc::Pid(msg.payload[0]);
-                        if let Some(pcb) = proc_table_mut().find_mut(pid) {
-                            pcb.set_state(ProcState::Dormant);
-                        }
-                        if (msg.flags & ipc_flags::NEED_ACK) != 0 {
-                            let rep = msg.reply_to(&[0], false);
-                            let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
-                        }
-                    }
+                _ => None,
+            };
+            if let Some(reply_payload) = ack {
+                if (msg.flags & ipc_flags::NEED_ACK) != 0 {
+                    let rep = msg.reply_to(reply_payload, false);
+                    let _ = crate::runtime::syscall::service::ipc_channel_mut().send(rep);
                 }
-                _ => {}
             }
             return;
         }

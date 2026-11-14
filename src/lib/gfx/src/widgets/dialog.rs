@@ -10,14 +10,8 @@ pub const MODAL_BOX_H: u8 = 35;
 
 /// Center-Screen Modal Outer Box with Clear background and rounded border
 pub fn draw_modal_box(canvas: &mut Canvas, w: u8, h: u8) -> (u8, u8) {
-    let (x, y) = if w == MODAL_BOX_W && h == MODAL_BOX_H {
-        (MODAL_BOX_X, MODAL_BOX_Y)
-    } else {
-        (
-            canvas.width().saturating_sub(w) >> 1,
-            canvas.height().saturating_sub(h) >> 1,
-        )
-    };
+    let x = canvas.width().saturating_sub(w) >> 1;
+    let y = canvas.height().saturating_sub(h) >> 1;
     canvas.fill_rect(x, y, w, h, Color::Clear);
     canvas.draw_rect(x, y, w, h, Color::Fill);
     canvas.clear_corners(x, y, w, h);

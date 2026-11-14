@@ -342,75 +342,46 @@ impl KeypadLockManager {
     /// Renders an authentic centered notification modal dialog with lock/unlock padlock symbols,
     /// authentic inverted key badges for '#' and 'F', reusing standard system modal widgets.
     pub fn render_overlay(&self, canvas: &mut Canvas) {
-        // 1. Live hold-to-unlock / hold-to-lock / hold-to-sleep progress bar
         let is_sleep_hold = self.held_code == Some(KeyCode::Exit);
-        if self.held_code.is_some()
+        let show_hold = self.held_code.is_some()
             && self.held_confirmed
             && (!self.is_long_press_triggered || is_sleep_hold)
-            && self.hold_elapsed_ms >= self.hold_start_threshold_ms
-        {
-            let box_w = 108u8;
-            let box_h = 30u8;
-            let (bx, by) = gfx::widgets::dialog::draw_modal_box(canvas, box_w, box_h);
-            let center_x = (bx as i16) + (box_w as i16 / 2);
+            && self.hold_elapsed_ms >= self.hold_start_threshold_ms;
 
-            let (icon, text_str) = if is_sleep_hold {
-                if self.is_long_press_triggered || self.hold_elapsed_ms >= self.hold_target_ms {
-                    (gfx::icons::Icon::Moon, "ENTERING SLEEP")
-                } else {
-                    (gfx::icons::Icon::Moon, "HOLD FOR SLEEP")
-                }
-            } else if self.is_locked {
-                (gfx::icons::Icon::Lock, "HOLD TO UNLOCK")
-            } else {
-                (gfx::icons::Icon::Unlock, "HOLD TO LOCK")
-            };
-
-            let text_w = text::str_width(text_str, &TOMTHUMB);
-            let total_w = 8 + 4 + text_w;
-            let start_x = center_x - (total_w as i16 / 2);
-            gfx::icons::draw_icon(canvas, start_x, (by + 5) as i16, icon, Color::Fill);
-            text::draw_str(
-                canvas,
-                start_x + 12,
-                (by + 11) as i16,
-                text_str,
-                &TOMTHUMB,
-                Color::Fill,
-            );
-
-            let bar_w = 92u8;
-            let bar_x = (center_x - (bar_w as i16) / 2) as i16;
-            let pct = if self.is_long_press_triggered || self.hold_elapsed_ms >= self.hold_target_ms
-            {
-                100
-            } else {
-                let visible_elapsed = self
-                    .hold_elapsed_ms
-                    .saturating_sub(self.hold_start_threshold_ms);
-                ((visible_elapsed as u32 * self.progress_slope_q16 as u32) >> 16).min(100) as u8
-            };
-            gfx::widgets::draw_progress_bar(canvas, bar_x, (by + 18) as i16, bar_w, 6, pct, true);
-            return;
-        }
-
-        if self.toast == LockToast::None {
+        if !show_hold && self.toast == LockToast::None {
             return;
         }
 
         let box_w = 108u8;
         let box_h = 30u8;
         let (bx, by) = gfx::widgets::dialog::draw_modal_box(canvas, box_w, box_h);
-        let center_x = (bx as i16) + (box_w as i16 / 2);
+        let center_x = (bx as i16) + 54;
 
-        let (icon, text_str, y_off) = match self.toast {
-            LockToast::Unlocked => (gfx::icons::Icon::Unlock, "KEYPAD UNLOCKED", 11i16),
-            LockToast::Locked => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 11i16),
-            _ => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 5i16),
+        let (icon, text_str, y_off) = if show_hold {
+            if is_sleep_hold {
+                let msg = if self.is_long_press_triggered
+                    || self.hold_elapsed_ms >= self.hold_target_ms
+                {
+                    "ENTERING SLEEP"
+                } else {
+                    "HOLD FOR SLEEP"
+                };
+                (gfx::icons::Icon::Moon, msg, 5i16)
+            } else if self.is_locked {
+                (gfx::icons::Icon::Lock, "HOLD TO UNLOCK", 5i16)
+            } else {
+                (gfx::icons::Icon::Unlock, "HOLD TO LOCK", 5i16)
+            }
+        } else {
+            match self.toast {
+                LockToast::Unlocked => (gfx::icons::Icon::Unlock, "KEYPAD UNLOCKED", 11i16),
+                LockToast::Locked => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 11i16),
+                _ => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 5i16),
+            }
         };
 
         let total_w = 12 + text::str_width(text_str, &TOMTHUMB);
-        let start_x = center_x - (total_w as i16 / 2);
+        let start_x = center_x - (total_w >> 1);
         let icon_y = (by as i16) + y_off;
         gfx::icons::draw_icon(canvas, start_x, icon_y, icon, Color::Fill);
         text::draw_str(
@@ -422,7 +393,20 @@ impl KeypadLockManager {
             Color::Fill,
         );
 
-        if self.toast != LockToast::Unlocked && self.toast != LockToast::Locked {
+        if show_hold {
+            let bar_w = 92u8;
+            let bar_x = center_x - ((bar_w as i16) >> 1);
+            let pct = if self.is_long_press_triggered || self.hold_elapsed_ms >= self.hold_target_ms
+            {
+                100
+            } else {
+                let visible_elapsed = self
+                    .hold_elapsed_ms
+                    .saturating_sub(self.hold_start_threshold_ms);
+                ((visible_elapsed as u32 * self.progress_slope_q16 as u32) >> 16).min(100) as u8
+            };
+            gfx::widgets::draw_progress_bar(canvas, bar_x, (by + 18) as i16, bar_w, 6, pct, true);
+        } else if self.toast == LockToast::PromptUnlock {
             draw_unlock_hint(canvas, center_x, (by + 18) as i16);
         }
     }
