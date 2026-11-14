@@ -28,9 +28,8 @@ fn read_kt_file(
     if path.is_empty() {
         return 0;
     }
-    let mut raw_uninit = core::mem::MaybeUninit::<[u8; 140]>::uninit();
-    let raw = unsafe { &mut *raw_uninit.as_mut_ptr() };
-    let Ok(n) = storage.read_file(path, raw) else {
+    let mut raw = [0u8; 140];
+    let Ok(n) = storage.read_file(path, &mut raw) else {
         return 0;
     };
     let (mut pos, count_raw) = if n >= 4 && &raw[0..2] == b"KT" && raw[2] == 1 {
@@ -134,6 +133,25 @@ fn write_provision_ton(storage: &mut SystemStorage, path: &str, name: &str, note
     }
 }
 
+#[cfg(all(
+    feature = "filesystem",
+    any(feature = "provision_rogers", feature = "boot_jingle")
+))]
+fn build_tone_path<'a>(
+    buf: &'a mut [u8; 32],
+    dir_prefix: &[u8],
+    file_name: &str,
+) -> Option<&'a str> {
+    let fname = file_name.as_bytes();
+    let total = dir_prefix.len().checked_add(fname.len())?;
+    if total > buf.len() {
+        return None;
+    }
+    buf[..dir_prefix.len()].copy_from_slice(dir_prefix);
+    buf[dir_prefix.len()..total].copy_from_slice(fname);
+    core::str::from_utf8(&buf[..total]).ok()
+}
+
 #[cfg(not(all(feature = "filesystem", feature = "provision_rogers")))]
 pub fn provision_rogers(_storage: &mut SystemStorage) {}
 
@@ -142,13 +160,11 @@ pub fn provision_rogers(_storage: &mut SystemStorage) {}
 pub fn provision_rogers(storage: &mut SystemStorage) {
     let _ = storage.create_dir("/user/rogers");
     let mut path_buf = [0u8; 32];
-    path_buf[..13].copy_from_slice(b"/user/rogers/");
 
     for def in ROGER_DEFS {
-        let flen = def.file_name.len();
-        path_buf[13..13 + flen].copy_from_slice(def.file_name.as_bytes());
-        let path = unsafe { core::str::from_utf8_unchecked(&path_buf[..13 + flen]) };
-        write_provision_ton(storage, path, def.name, def.notes);
+        if let Some(path) = build_tone_path(&mut path_buf, b"/user/rogers/", def.file_name) {
+            write_provision_ton(storage, path, def.name, def.notes);
+        }
     }
 }
 
@@ -160,13 +176,11 @@ pub fn provision_jingles(_storage: &mut SystemStorage) {}
 pub fn provision_jingles(storage: &mut SystemStorage) {
     let _ = storage.create_dir("/user/jingles");
     let mut path_buf = [0u8; 32];
-    path_buf[..14].copy_from_slice(b"/user/jingles/");
 
     for def in JINGLE_DEFS {
-        let flen = def.file_name.len();
-        path_buf[14..14 + flen].copy_from_slice(def.file_name.as_bytes());
-        let path = unsafe { core::str::from_utf8_unchecked(&path_buf[..14 + flen]) };
-        write_provision_ton(storage, path, def.name, def.notes);
+        if let Some(path) = build_tone_path(&mut path_buf, b"/user/jingles/", def.file_name) {
+            write_provision_ton(storage, path, def.name, def.notes);
+        }
     }
 }
 

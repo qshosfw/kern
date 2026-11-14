@@ -6,6 +6,13 @@ pub const FLASH_TOTAL_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
 use kern_platform_traits::{gpio::OutputPin, spi::SpiDevice};
 
+#[inline(always)]
+fn range_within_flash(address: u32, len: usize) -> bool {
+    (address as usize)
+        .checked_add(len)
+        .is_some_and(|end| end <= FLASH_TOTAL_SIZE)
+}
+
 pub struct Py25q16FlashDriver<'a> {
     spi: &'a mut dyn SpiDevice,
     cs: &'a mut dyn OutputPin,
@@ -26,7 +33,6 @@ impl<'a> Py25q16FlashDriver<'a> {
     pub fn deep_power_down(&mut self) {
         self.cs_assert();
         self.spi.write_byte(0xB9);
-        self.spi.wait_idle();
         self.cs_release();
     }
 
@@ -34,7 +40,6 @@ impl<'a> Py25q16FlashDriver<'a> {
     pub fn release_power_down(&mut self) {
         self.cs_assert();
         self.spi.write_byte(0xAB);
-        self.spi.wait_idle();
         self.cs_release();
         #[cfg(target_arch = "arm")]
         py32_hal::delay::delay_us(30);
@@ -47,6 +52,7 @@ impl<'a> Py25q16FlashDriver<'a> {
 
     #[inline(always)]
     fn cs_release(&mut self) {
+        self.spi.wait_idle();
         self.cs.set_high();
     }
 
@@ -105,7 +111,7 @@ impl<'a> Py25q16FlashDriver<'a> {
     }
 
     pub fn program_page(&mut self, address: u32, data: &[u8]) -> Result<(), ()> {
-        if address as usize + data.len() > FLASH_TOTAL_SIZE || data.len() > FLASH_PAGE_SIZE {
+        if !range_within_flash(address, data.len()) || data.len() > FLASH_PAGE_SIZE {
             return Err(());
         }
         self.wait_while_busy();
@@ -122,7 +128,7 @@ impl<'a> Py25q16FlashDriver<'a> {
     }
 
     pub fn read_data(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ()> {
-        if address as usize + buffer.len() > FLASH_TOTAL_SIZE {
+        if !range_within_flash(address, buffer.len()) {
             return Err(());
         }
         self.wait_while_busy();
@@ -159,5 +165,18 @@ impl<'a> kernfs::BlockDevice for Py25q16FlashDriver<'a> {
     fn erase_sector(&mut self, sector_addr: usize) -> Result<(), kernfs::FsError> {
         self.erase_sector(sector_addr as u32)
             .map_err(|_| kernfs::FsError::IoError)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flash_bounds_check_rejects_overflow() {
+        assert!(range_within_flash(0, FLASH_TOTAL_SIZE));
+        assert!(!range_within_flash(FLASH_TOTAL_SIZE as u32, 1));
+        assert!(!range_within_flash(u32::MAX, 1));
+        assert!(!range_within_flash(1, usize::MAX));
     }
 }

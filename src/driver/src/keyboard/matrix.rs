@@ -4,9 +4,9 @@ use super::keys::ALL_KEYS;
 use kernel::event::KeyCode;
 
 // GPIOB memory-mapped register offsets for atomic single-cycle register access
-const GPIOB_BASE: u32 = 0x5000_0400;
-const BSRR_OFFSET: u32 = 0x18;
-const IDR_OFFSET: u32 = 0x10;
+const GPIOB_BASE: u32 = py32_hal::pac::gpio::GPIOB_BASE;
+const BSRR_OFFSET: u32 = py32_hal::pac::gpio::BSRR_OFFSET;
+const IDR_OFFSET: u32 = py32_hal::pac::gpio::IDR_OFFSET;
 
 // PB6, PB5, PB4, PB3
 const PIN_MASK_COLS: u32 = (1 << 6) | (1 << 5) | (1 << 4) | (1 << 3);
@@ -44,6 +44,8 @@ fn read_ptt_raw() -> bool {
 
 /// Scans the complete 5-column matrix and dedicated PTT pin into a 19-bit bitmask.
 pub fn poll_raw_mask() -> u32 {
+    let settle_2us = (py32_hal::rcc::sysclk_hz() >> 19) + 5;
+    let settle_1us = (settle_2us >> 1).max(16);
     let mut mask: u32 = 0;
 
     let mut side_keys = 0u32;
@@ -53,14 +55,14 @@ pub fn poll_raw_mask() -> u32 {
             clear_col(j - 1);
         }
 
-        // Line settling delay for GPIO output driver and trace capacitance (2µs @ 48MHz)
-        cortex_m::asm::delay(96);
+        // Line settling delay (~2 us scaled to active SYSCLK)
+        cortex_m::asm::delay(settle_2us);
 
         let mut reg = 0u32;
         let mut i = 0usize;
         let mut k = 0usize;
         while i < 3 && k < 12 {
-            cortex_m::asm::delay(48); // 1 µs intra-sample delay @ 48MHz
+            cortex_m::asm::delay(settle_1us); // ~1 us intra-sample delay scaled to SYSCLK
             let reg2 = read_rows_raw();
             if reg == reg2 {
                 i += 1;

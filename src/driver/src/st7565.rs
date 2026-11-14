@@ -35,6 +35,12 @@ impl<'a> St7565<'a> {
         self.spi.write_byte(cmd);
     }
 
+    #[inline(always)]
+    fn end_transfer(&mut self) {
+        self.spi.wait_idle();
+        self.cs.set_high();
+    }
+
     #[allow(dead_code)]
     #[inline(always)]
     fn write_data(&mut self, data: u8) {
@@ -83,15 +89,14 @@ impl<'a> St7565<'a> {
         self.cs.set_low();
         self.write_cmd(0x40); // Start line 0
         self.write_cmd(0xAF); // Display ON
-        self.cs.set_high();
+        self.end_transfer();
     }
 
     /// Turn off the LCD panel output (0xAE)
     pub fn turn_off(&mut self) {
         self.cs.set_low();
         self.write_cmd(0xAE); // Display OFF
-        self.spi.wait_idle();
-        self.cs.set_high();
+        self.end_transfer();
     }
 
     /// Enter ST7565 sub-microamp Sleep mode (`0xAE` Display OFF + `0xA5` All Points ON).
@@ -100,8 +105,7 @@ impl<'a> St7565<'a> {
         self.cs.set_low();
         self.write_cmd(0xAE);
         self.write_cmd(0xA5);
-        self.spi.wait_idle();
-        self.cs.set_high();
+        self.end_transfer();
     }
 
     /// Exit ST7565 Sleep mode cleanly (`0x2F` booster + `0xA4` + `0x40` + `0xAF`).
@@ -113,8 +117,7 @@ impl<'a> St7565<'a> {
         self.write_cmd(0xA4); // Normal RAM display
         self.write_cmd(0x40); // Start line 0
         self.write_cmd(0xAF); // Display ON
-        self.spi.wait_idle();
-        self.cs.set_high();
+        self.end_transfer();
     }
 
     pub fn set_contrast(&mut self, contrast_percent: u8) {
@@ -126,7 +129,7 @@ impl<'a> St7565<'a> {
         self.cs.set_low();
         self.write_cmd(0x81);
         self.write_cmd(ev & 0x3F);
-        self.cs.set_high();
+        self.end_transfer();
     }
 
     pub fn set_inverted(&mut self, inverted: bool) {
@@ -136,7 +139,7 @@ impl<'a> St7565<'a> {
         } else {
             self.write_cmd(0xA6); // Normal display OFF (DeltaFW: 0xA6 | 0)
         }
-        self.cs.set_high();
+        self.end_transfer();
     }
 
     /// Dynamically enable or disable motion bypass.
@@ -217,7 +220,6 @@ impl<'a> St7565<'a> {
         }
 
         canvas.dirty = 0;
-        self.spi.wait_idle();
-        self.cs.set_high();
+        self.end_transfer();
     }
 }

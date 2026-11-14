@@ -51,14 +51,33 @@ impl<const BYTES: usize> ScratchArena<BYTES> {
 
     /// Acquire a slice of size `len` aligned to 4 bytes.
     pub fn alloc_slice(&mut self, len: usize) -> Option<&mut [u8]> {
-        let aligned_watermark = (self.watermark + 3) & !3;
-        if aligned_watermark + len <= BYTES {
+        let aligned_watermark = self.watermark.checked_add(3)? & !3;
+        let end = aligned_watermark.checked_add(len)?;
+        if end <= BYTES {
             let start = aligned_watermark;
-            let end = start + len;
             self.watermark = end;
             Some(&mut self.buffer[start..end])
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scratch_arena_alignment_and_overflow_bounds() {
+        let mut arena = ScratchArena::<16>::new();
+        assert_eq!(arena.alloc_slice(5).map(|s| s.len()), Some(5));
+        assert_eq!(arena.used(), 5);
+        assert_eq!(arena.alloc_slice(usize::MAX), None);
+        // Next allocation aligns up to offset 8; 8 + 8 == 16 fits cleanly.
+        assert_eq!(arena.alloc_slice(8).map(|s| s.len()), Some(8));
+        assert_eq!(arena.used(), 16);
+        assert_eq!(arena.alloc_slice(1), None);
+        arena.reset();
+        assert_eq!(arena.available(), 16);
     }
 }
