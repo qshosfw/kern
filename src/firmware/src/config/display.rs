@@ -59,27 +59,33 @@ impl DisplayConfig {
         super::write_cstr(&mut self.splash_path, path);
     }
 
+    #[inline(never)]
+    fn backlight_timeout_code(&self) -> u16 {
+        match self.backlight_mode {
+            0 => 0,
+            1 => 5000,
+            2 => 10000,
+            3 => 30000,
+            4 => 60000,
+            _ => u16::MAX,
+        }
+    }
+
     pub fn apply_to_backlight(&self, backlight: &mut drivers::backlight::BacklightController) {
-        let mode = match self.backlight_mode {
+        let mode = match self.backlight_timeout_code() {
             0 => drivers::backlight::BacklightMode::Off,
-            1 => drivers::backlight::BacklightMode::Auto(5000),
-            2 => drivers::backlight::BacklightMode::Auto(10000),
-            3 => drivers::backlight::BacklightMode::Auto(30000),
-            4 => drivers::backlight::BacklightMode::Auto(60000),
-            _ => drivers::backlight::BacklightMode::On,
+            u16::MAX => drivers::backlight::BacklightMode::On,
+            ms => drivers::backlight::BacklightMode::Auto(ms),
         };
         backlight.set_mode(mode);
         backlight.set_levels(self.backlight_max, self.backlight_min);
     }
 
     pub fn backlight_mode_service(&self) -> crate::services::BacklightMode {
-        match self.backlight_mode {
+        match self.backlight_timeout_code() {
             0 => crate::services::BacklightMode::Off,
-            1 => crate::services::BacklightMode::Auto(5000),
-            2 => crate::services::BacklightMode::Auto(10000),
-            3 => crate::services::BacklightMode::Auto(30000),
-            4 => crate::services::BacklightMode::Auto(60000),
-            _ => crate::services::BacklightMode::On,
+            u16::MAX => crate::services::BacklightMode::On,
+            ms => crate::services::BacklightMode::Auto(ms),
         }
     }
 }

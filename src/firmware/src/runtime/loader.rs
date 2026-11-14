@@ -142,7 +142,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         metadata: AppMetadata {
             name: app_name,
             icon: &gfx::icons::ICON_16_DIAGNOSTICS,
-            icon_8: &gfx::icons::ICON_APP_DIAG,
+            icon_8: gfx::icons::ICON_APP_DIAG,
         },
         vtable,
         instance,

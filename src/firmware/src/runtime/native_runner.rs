@@ -788,8 +788,11 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
     }
 }
 
-#[inline(always)]
-fn decode_status_glyph(id: u8, c0: &[u8; 5], c1: &[u8; 5]) -> Option<kernel::canvas::StatusGlyph> {
+pub(crate) fn decode_status_glyph(
+    id: u8,
+    c0: &[u8; 5],
+    c1: &[u8; 5],
+) -> Option<kernel::canvas::StatusGlyph> {
     if id == kernel::proc::abi::KRX_ICON_CUSTOM_0 {
         Some(kernel::canvas::StatusGlyph::Custom(*c0))
     } else if id == kernel::proc::abi::KRX_ICON_CUSTOM_1 {

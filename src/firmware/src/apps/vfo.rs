@@ -285,7 +285,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
         AppMetadata {
             name: "Radio",
             icon: &gfx::icons::ICON_16_RADIO,
-            icon_8: &gfx::icons::ICON_APP_RADIO,
+            icon_8: gfx::icons::ICON_APP_RADIO,
         }
     }
 

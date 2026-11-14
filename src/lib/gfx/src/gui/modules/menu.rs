@@ -703,16 +703,16 @@ fn render_menu_row(
                 111,
                 row_y + 2,
                 if *on {
-                    &icons::CHECKBOX_ON
+                    icons::CHECKBOX_ON
                 } else {
-                    &icons::CHECKBOX_OFF
+                    icons::CHECKBOX_OFF
                 },
                 tc,
             );
             max_title_x = 105;
         }
         MenuItemType::Submenu => {
-            icons::draw_icon_8(canvas, 114, row_y + 3, &icons::ARROW_RIGHT, tc);
+            icons::draw_icon_8(canvas, 114, row_y + 3, icons::ARROW_RIGHT, tc);
             max_title_x = 105;
         }
         _ => {}
@@ -741,16 +741,10 @@ fn render_menu_row(
     if sw > 0 {
         let text_x = if (flags & 3) == 3 {
             if (arrows & 2) != 0 {
-                icons::draw_icon_8(canvas, 116, row_y + 3, &icons::ARROW_RIGHT, tc);
+                icons::draw_icon_8(canvas, 116, row_y + 3, icons::ARROW_RIGHT, tc);
             }
             if (arrows & 1) != 0 {
-                icons::draw_icon_8(
-                    canvas,
-                    (106 - sw).max(40),
-                    row_y + 3,
-                    &icons::ARROW_LEFT,
-                    tc,
-                );
+                icons::draw_icon_8(canvas, (106 - sw).max(40), row_y + 3, icons::ARROW_LEFT, tc);
             }
             114
         } else {
@@ -881,12 +875,12 @@ impl MenuView {
 
             let sprite = if sheet.show_radio {
                 Some(if is_selected {
-                    &icons::RADIO_ON
+                    icons::RADIO_ON
                 } else {
-                    &icons::RADIO_OFF
+                    icons::RADIO_OFF
                 })
             } else if is_hovered {
-                Some(&icons::ARROW_RIGHT)
+                Some(icons::ARROW_RIGHT)
             } else {
                 None
             };

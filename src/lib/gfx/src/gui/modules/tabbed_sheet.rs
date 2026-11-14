@@ -383,7 +383,7 @@ impl TabbedSheet {
                 canvas,
                 x as i16,
                 (y as i16) + 1,
-                &crate::icons::ARROW_LEFT,
+                crate::icons::ARROW_LEFT,
                 Color::Fill,
             );
         }
@@ -393,7 +393,7 @@ impl TabbedSheet {
                 canvas,
                 arrow_x,
                 (y as i16) + 1,
-                &crate::icons::ARROW_RIGHT,
+                crate::icons::ARROW_RIGHT,
                 Color::Fill,
             );
         }

@@ -161,43 +161,8 @@ pub unsafe extern "C" fn api_draw_char(x: i16, y: i16, ch: u8, font: u8, color: 
     )
 }
 
-const SYSTEM_ICONS_8: [&[u8; 8]; 27] = [
-    &gfx::icons::ICON_FOLDER,
-    &gfx::icons::ICON_CH,
-    &gfx::icons::ICON_VFO,
-    &gfx::icons::ICON_APP_RADIO,
-    &gfx::icons::ICON_APP_SETTINGS,
-    &gfx::icons::ICON_APP_EXPLORER,
-    &gfx::icons::ICON_APP_TORCH,
-    &gfx::icons::ICON_APP_DIAG,
-    &gfx::icons::ICON_APP_ABOUT,
-    &gfx::icons::CHECKBOX_OFF,
-    &gfx::icons::CHECKBOX_ON,
-    &gfx::icons::RADIO_OFF,
-    &gfx::icons::RADIO_ON,
-    &gfx::icons::ARROW_RIGHT,
-    &gfx::icons::ARROW_LEFT,
-    &gfx::icons::SELECT_ARROWS,
-    &gfx::icons::ICON_GEAR,
-    &gfx::icons::FILE_DOC,
-    &gfx::icons::FILE_FOLDER,
-    &gfx::icons::ICON_DISPLAY,
-    &gfx::icons::ICON_BUTTONS,
-    &gfx::icons::ICON_AUDIO,
-    &gfx::icons::ICON_BATTERY,
-    &gfx::icons::ICON_DEVICE,
-    &gfx::icons::ICON_APPS,
-    &gfx::icons::ICON_SECURITY,
-    &gfx::icons::ICON_SYSTEM,
-];
-
 pub fn system_icon_8(icon_id: u8) -> Option<&'static [u8; 8]> {
-    let idx = icon_id.wrapping_sub(22) as usize;
-    if idx < SYSTEM_ICONS_8.len() {
-        Some(SYSTEM_ICONS_8[idx])
-    } else {
-        None
-    }
+    gfx::icons::SYSTEM_ICONS_8.get(icon_id.wrapping_sub(22) as usize)
 }
 
 pub unsafe extern "C" fn api_draw_icon(x: i16, y: i16, icon_id: u8, color: u8) {

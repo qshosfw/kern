@@ -41,19 +41,15 @@ pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
     static MAP: [(u8, &'static [u8; 8], &'static [u8; 32]); 5] = [
         (
             b'T',
-            &gfx::icons::ICON_APP_TORCH,
+            gfx::icons::ICON_APP_TORCH,
             &gfx::icons::ICON_16_FLASHLIGHT,
         ),
-        (b'S', &gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO),
-        (
-            b'R',
-            &gfx::icons::ICON_APP_RADIO,
-            &gfx::icons::ICON_16_RADIO,
-        ),
+        (b'S', gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO),
+        (b'R', gfx::icons::ICON_APP_RADIO, &gfx::icons::ICON_16_RADIO),
         (b'C', &gfx::icons::ICON_KEYPAD, &gfx::icons::ICON_16_APPS),
         (
             b'B',
-            &gfx::icons::ICON_APP_DIAG,
+            gfx::icons::ICON_APP_DIAG,
             &gfx::icons::ICON_16_DIAGNOSTICS,
         ),
     ];
@@ -67,7 +63,7 @@ pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
             return (i8, i16);
         }
     }
-    (&gfx::icons::ICON_APPS, &gfx::icons::ICON_16_APPS)
+    (gfx::icons::ICON_APPS, &gfx::icons::ICON_16_APPS)
 }
 
 #[inline(never)]
@@ -114,7 +110,7 @@ pub fn populate_package_list(
             MenuItemType::Value(ShortString::from_str("In /apps/")),
         );
         if !icons.is_empty() {
-            icons[0] = &gfx::icons::ICON_APPS;
+            icons[0] = gfx::icons::ICON_APPS;
         }
         return 1;
     }

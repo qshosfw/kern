@@ -286,14 +286,7 @@ impl AudioCaptureDriver {
             } else {
                 rate_hz.clamp(1000, 24000)
             };
-            self.period_us = match rate {
-                8000 => 125,
-                11025 => 90,
-                16000 => 62,
-                22050 => 45,
-                24000 => 41,
-                _ => (1_000_000 / (rate as u32)).max(10) as u16,
-            };
+            self.period_us = (1_000_000 / (rate as u32)).max(10) as u16;
             self.dc_bias_est = sum >> 3;
             self.active = true;
         }

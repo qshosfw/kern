@@ -36,11 +36,11 @@ kernel::define_os_apps! {
         caps: CapabilitySet::NONE
     ],
     APP_ID_VFO => crate::apps::VfoApp [
-        meta: AppMetadata { name: "Radio", icon: &gfx::icons::ICON_16_RADIO, icon_8: &gfx::icons::ICON_APP_RADIO },
+        meta: AppMetadata { name: "Radio", icon: &gfx::icons::ICON_16_RADIO, icon_8: gfx::icons::ICON_APP_RADIO },
         caps: CapabilitySet::NONE.with(kernel::caps::Cap::RadioRx).with(kernel::caps::Cap::RadioTx)
     ],
     APP_ID_SETTINGS => crate::apps::SettingsApp [
-        meta: AppMetadata { name: "Settings", icon: &gfx::icons::ICON_16_SETTINGS, icon_8: &gfx::icons::ICON_APP_SETTINGS },
+        meta: AppMetadata { name: "Settings", icon: &gfx::icons::ICON_16_SETTINGS, icon_8: gfx::icons::ICON_APP_SETTINGS },
         caps: CapabilitySet::NONE
     ],
 }

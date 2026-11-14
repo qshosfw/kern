@@ -71,15 +71,15 @@ impl SettingsApp {
     }
 
     pub const ROOT_ICONS: &'static [&'static [u8; 8]] = &[
-        &gfx::icons::ICON_DISPLAY,
-        &gfx::icons::ICON_AUDIO,
-        &gfx::icons::ICON_BUTTONS,
-        &gfx::icons::ICON_BATTERY,
-        &gfx::icons::ICON_DEVICE,
-        &gfx::icons::ICON_APPS,
+        gfx::icons::ICON_DISPLAY,
+        gfx::icons::ICON_AUDIO,
+        gfx::icons::ICON_BUTTONS,
+        gfx::icons::ICON_BATTERY,
+        gfx::icons::ICON_DEVICE,
+        gfx::icons::ICON_APPS,
         #[cfg(feature = "passcode")]
-        &gfx::icons::ICON_SECURITY,
-        &gfx::icons::ICON_SYSTEM,
+        gfx::icons::ICON_SECURITY,
+        gfx::icons::ICON_SYSTEM,
     ];
 
     #[inline(never)]
@@ -309,7 +309,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
         AppMetadata {
             name: "Settings",
             icon: &gfx::icons::ICON_16_SETTINGS,
-            icon_8: &gfx::icons::ICON_APP_SETTINGS,
+            icon_8: gfx::icons::ICON_APP_SETTINGS,
         }
     }
 

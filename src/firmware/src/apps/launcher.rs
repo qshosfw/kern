@@ -41,7 +41,7 @@ pub const MAX_LAUNCHER_ENTRIES: usize = 12;
 #[unsafe(link_section = ".uninit")]
 static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
     title: "",
-    icon_8: &gfx::icons::ICON_APP_RADIO,
+    icon_8: gfx::icons::ICON_APP_RADIO,
     icon_16: &gfx::icons::ICON_16_RADIO,
     target: LauncherTarget::App(APP_ID_VFO),
 }; MAX_LAUNCHER_ENTRIES];
@@ -49,13 +49,13 @@ static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
 static BUILTIN_HEAD: [LauncherEntry; 2] = [
     LauncherEntry {
         title: "Radio",
-        icon_8: &gfx::icons::ICON_APP_RADIO,
+        icon_8: gfx::icons::ICON_APP_RADIO,
         icon_16: &gfx::icons::ICON_16_RADIO,
         target: LauncherTarget::App(APP_ID_VFO),
     },
     LauncherEntry {
         title: "Settings",
-        icon_8: &gfx::icons::ICON_APP_SETTINGS,
+        icon_8: gfx::icons::ICON_APP_SETTINGS,
         icon_16: &gfx::icons::ICON_16_SETTINGS,
         target: LauncherTarget::App(APP_ID_SETTINGS),
     },
@@ -64,13 +64,13 @@ static BUILTIN_HEAD: [LauncherEntry; 2] = [
 static BUILTIN_TAIL: [LauncherEntry; 2] = [
     LauncherEntry {
         title: "Torch",
-        icon_8: &gfx::icons::ICON_APP_TORCH,
+        icon_8: gfx::icons::ICON_APP_TORCH,
         icon_16: &gfx::icons::ICON_16_FLASHLIGHT,
         target: LauncherTarget::Shortcut(Shortcut::Flashlight),
     },
     LauncherEntry {
         title: "About",
-        icon_8: &gfx::icons::ICON_APP_ABOUT,
+        icon_8: gfx::icons::ICON_APP_ABOUT,
         icon_16: &gfx::icons::ICON_16_INFO,
         target: LauncherTarget::About,
     },
@@ -374,7 +374,7 @@ impl LauncherApp {
                     canvas,
                     arrow_x,
                     row_top + 3,
-                    &gfx::icons::ARROW_RIGHT,
+                    gfx::icons::ARROW_RIGHT,
                     fg_color,
                 );
             }
