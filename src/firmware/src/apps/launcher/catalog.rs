@@ -142,12 +142,18 @@ impl PackageCatalog {
         }
 
         // Sort invalid/corrupted packages to the top so they are immediately visible for cleanup
-        let n = self.entries.len();
-        for i in 1..n {
+        let base = self.entries.as_mut_ptr();
+        for i in 1..self.entries.len() {
             let mut j = i;
-            while j > 0 && !self.entries[j].is_valid && self.entries[j - 1].is_valid {
-                self.entries.swap(j - 1, j);
-                j -= 1;
+            unsafe {
+                while j > 0 && !(*base.add(j)).is_valid && (*base.add(j - 1)).is_valid {
+                    let a = base.add(j - 1) as *mut u8;
+                    let b = base.add(j) as *mut u8;
+                    for k in 0..core::mem::size_of::<PackageCatalogEntry>() {
+                        core::ptr::swap(a.add(k), b.add(k));
+                    }
+                    j -= 1;
+                }
             }
         }
 
