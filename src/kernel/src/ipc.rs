@@ -364,9 +364,18 @@ impl<const N: usize> IpcChannel<N> {
         let old_len = self.len;
         let mut write = 0usize;
         for read in 0..old_len {
-            let msg = self.messages[read];
+            let msg = &self.messages[read];
             if msg.sender_pid != pid && msg.target_pid != pid {
-                self.messages[write] = msg;
+                if write != read {
+                    // `write < read`, so the two array slots cannot overlap.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            &self.messages[read],
+                            &mut self.messages[write],
+                            1,
+                        );
+                    }
+                }
                 write += 1;
             }
         }
