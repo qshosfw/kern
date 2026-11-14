@@ -170,7 +170,7 @@ fn read_sys_facet(
     hw: &SystemHardware,
     now: u32,
     w: &mut ByteWriter<'_>,
-) -> Result<usize, WireStatus> {
+) -> Result<(), WireStatus> {
     match facet {
         FACET_SYS_IDENTITY => {
             w.write_u64_le(bsp::uid::get_hardware_serial64());
@@ -183,7 +183,6 @@ fn read_sys_facet(
             } else {
                 w.write_zeroes(12);
             }
-            Ok(w.position())
         }
         FACET_SYS_METRICS => {
             w.write_u32_le(now);
@@ -194,17 +193,16 @@ fn read_sys_facet(
             w.write_u8(hw.orchestrator.active_app_id() as u8);
             w.write_u8(hw.orchestrator.is_keypad_locked() as u8);
             w.write_u8(bsp::pins::FLASHLIGHT.is_high() as u8);
-            Ok(w.position())
         }
         FACET_SYS_CALIBRATION => {
             let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
             w.write_u8(is_valid_calibration(calib.raw_bytes()) as u8);
             w.write_i16_le(calib.xtal_freq_low());
             w.write_u16_le(calib.battery_calib_const());
-            Ok(w.position())
         }
-        _ => Err(WireStatus::UnsupportedField),
+        _ => return Err(WireStatus::UnsupportedField),
     }
+    Ok(())
 }
 
 #[inline(never)]
@@ -213,7 +211,7 @@ fn read_radio_facet(
     instance: u8,
     hw: &mut SystemHardware,
     w: &mut ByteWriter<'_>,
-) -> Result<usize, WireStatus> {
+) -> Result<(), WireStatus> {
     let (slot, ch) = active_radio_slot(instance);
     let coord = &crate::radio_state_ref().coord;
     match facet {
@@ -221,30 +219,26 @@ fn read_radio_facet(
             w.write_u32_le(ch.effective_rx_freq().raw());
             w.write_u32_le(ch.step.in_hz());
             w.write_u8(coord.active_vfo as u8);
-            Ok(w.position())
         }
         FACET_RADIO_MODULATION => {
             w.write_u8(ch.modulation.to_u8());
             w.write_u32_le(ch.bandwidth.in_hz());
-            Ok(w.position())
         }
         FACET_RADIO_SQUELCH => {
             w.write_u8(ch.squelch_level);
             w.write_u16_le(hw.radio.get_rssi());
             w.write_u8(hw.radio.is_squelch_open() as u8);
-            Ok(w.position())
         }
         FACET_RADIO_TRANSMIT => {
             w.write_u8(coord.is_slot_tx_active(slot) as u8);
             w.write_u8(ch.power as u8);
-            Ok(w.position())
         }
         FACET_RADIO_DIGITAL => {
             w.write_i16_le(0);
-            Ok(w.position())
         }
-        _ => Err(WireStatus::UnsupportedField),
+        _ => return Err(WireStatus::UnsupportedField),
     }
+    Ok(())
 }
 
 #[inline(never)]
@@ -256,8 +250,8 @@ fn on_handle_get(
 ) -> Result<usize, WireStatus> {
     let mut w = ByteWriter::new(out);
     match handle.domain {
-        DOMAIN_SYSTEM => return read_sys_facet(handle.facet, hw, now, &mut w),
-        DOMAIN_RADIO => return read_radio_facet(handle.facet, handle.instance, hw, &mut w),
+        DOMAIN_SYSTEM => read_sys_facet(handle.facet, hw, now, &mut w)?,
+        DOMAIN_RADIO => read_radio_facet(handle.facet, handle.instance, hw, &mut w)?,
         DOMAIN_UI => match handle.facet {
             FACET_UI_SURFACE => {
                 const UI_SURFACE_INFO: [u8; 7] = [128, 0, 64, 0, 1, 0, 4];
@@ -557,20 +551,16 @@ fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
 fn on_transfer_open(
     payload: &[u8],
     hw: &mut SystemHardware,
-    out: &mut [u8],
-) -> (WireStatus, usize) {
-    let Some(req) = TransferOpenRequest::parse(payload) else {
-        return err_empty(WireStatus::BadLength);
-    };
-    if let Err(status) = validate_file_path(req.path, req.mode == TRANSFER_MODE_WRITE) {
-        return err_empty(status);
-    }
+    w: &mut ByteWriter<'_>,
+) -> Result<(), WireStatus> {
+    let req = TransferOpenRequest::parse(payload).ok_or(WireStatus::BadLength)?;
+    validate_file_path(req.path, req.mode == TRANSFER_MODE_WRITE)?;
     if req.mode == TRANSFER_MODE_WRITE {
         if req.total_size as usize > MAX_WIRE_FILE_SIZE {
-            return err_empty(WireStatus::BadLength);
+            return Err(WireStatus::BadLength);
         }
         if hw.filesystem.stats().free_sectors < 4 {
-            return err_empty(WireStatus::Failed);
+            return Err(WireStatus::Failed);
         }
     }
 
@@ -595,11 +585,10 @@ fn on_transfer_open(
         t.path_len = path_bytes.len() as u8;
     }
 
-    let mut w = ByteWriter::new(&mut out[..8]);
     w.write_u16_le(tid);
     w.write_u16_le(chunk_size);
     w.write_u32_le(existing_size);
-    ok_bytes(w.position())
+    Ok(())
 }
 
 #[inline(never)]
@@ -625,7 +614,7 @@ fn on_transfer_chunk(
         let new_len = (off + chunk_len) as u32;
         transfer.current_len = transfer.current_len.max(new_len);
 
-        let mut w = ByteWriter::new(&mut out[..8]);
+        let mut w = ByteWriter::new(out);
         w.write_u16_le(req.transfer_id);
         w.write_u16_le(chunk_len as u16);
         w.write_u32_le(new_len);
@@ -638,7 +627,7 @@ fn on_transfer_chunk(
             .filesystem
             .read_file_at(path, off, &mut out[8..8 + len])
             .unwrap_or(0);
-        let mut w = ByteWriter::new(&mut out[..8]);
+        let mut w = ByteWriter::new(out);
         w.write_u16_le(req.transfer_id);
         w.write_u32_le(off as u32);
         w.write_u16_le(read_sz as u16);
@@ -682,14 +671,10 @@ fn commit_calibration_payload(
 fn on_transfer_close(
     payload: &[u8],
     hw: &mut SystemHardware,
-    out: &mut [u8],
-) -> (WireStatus, usize) {
-    let Some(req) = TransferCloseRequest::parse(payload) else {
-        return err_empty(WireStatus::BadLength);
-    };
-    let Some(transfer) = active_transfer_mut(req.transfer_id) else {
-        return err_empty(WireStatus::BadSession);
-    };
+    w: &mut ByteWriter<'_>,
+) -> Result<(), WireStatus> {
+    let req = TransferCloseRequest::parse(payload).ok_or(WireStatus::BadLength)?;
+    let transfer = active_transfer_mut(req.transfer_id).ok_or(WireStatus::BadSession)?;
 
     transfer.active = false;
     let mut actual_crc = 0u32;
@@ -698,36 +683,31 @@ fn on_transfer_close(
         let staging = wire_file_staging_buf();
         actual_crc = crypto::crc::CrcEngine::crc32(&staging[..total_len]);
         if req.expected_crc32 != 0 && req.expected_crc32 != actual_crc {
-            return err_empty(WireStatus::Failed);
+            return Err(WireStatus::Failed);
         }
         let path = transfer.path_str();
         if path == CALIB_FILE_PATH {
-            if let Err(err) = commit_calibration_payload(staging, total_len, hw) {
-                return err_empty(err);
-            }
+            commit_calibration_payload(staging, total_len, hw)?;
         } else if hw
             .filesystem
             .write_file(path, &staging[..total_len])
             .is_err()
         {
-            return err_empty(WireStatus::IoError);
+            return Err(WireStatus::IoError);
         }
     }
 
-    let mut w = ByteWriter::new(&mut out[..6]);
     w.write_u16_le(req.transfer_id);
     w.write_u32_le(actual_crc);
-    ok_bytes(w.position())
+    Ok(())
 }
 
 fn on_transfer_stat(
     payload: &[u8],
     hw: &mut SystemHardware,
-    out: &mut [u8],
-) -> (WireStatus, usize) {
-    let Some(req) = TransferStatRequest::parse(payload) else {
-        return err_empty(WireStatus::BadLength);
-    };
+    w: &mut ByteWriter<'_>,
+) -> Result<(), WireStatus> {
+    let req = TransferStatRequest::parse(payload).ok_or(WireStatus::BadLength)?;
 
     match hw.filesystem.file_size(req.path) {
         Ok(sz) => {
@@ -748,17 +728,14 @@ fn on_transfer_stat(
                     _ => break,
                 }
             }
-            let mut w = ByteWriter::new(&mut out[..10]);
             w.write_u16_le(1);
             w.write_u32_le(sz as u32);
             w.write_u32_le(!crc_val);
-            ok_bytes(w.position())
+            Ok(())
         }
         Err(_) => {
-            unsafe {
-                core::ptr::write_bytes(out.as_mut_ptr(), 0, 10);
-            }
-            (WireStatus::NotFound, 10)
+            w.write_zeroes(10);
+            Err(WireStatus::NotFound)
         }
     }
 }
@@ -767,11 +744,9 @@ fn on_transfer_stat(
 fn on_transfer_list(
     payload: &[u8],
     hw: &mut SystemHardware,
-    out: &mut [u8],
-) -> (WireStatus, usize) {
-    let Some(req) = TransferListRequest::parse(payload) else {
-        return err_empty(WireStatus::BadLength);
-    };
+    w: &mut ByteWriter<'_>,
+) -> Result<(), WireStatus> {
+    let req = TransferListRequest::parse(payload).ok_or(WireStatus::BadLength)?;
 
     let entries = unsafe {
         let ptr = crate::runtime::arena_base_ptr() as *mut DirEntryInfo;
@@ -780,7 +755,6 @@ fn on_transfer_list(
     };
     let count = hw.filesystem.list_dir(req.path, entries).unwrap_or(0);
 
-    let mut w = ByteWriter::new(&mut out[..160]);
     w.write_u16_le(0xFFFFu16);
     w.write_u8(count as u8);
 
@@ -795,7 +769,7 @@ fn on_transfer_list(
         w.write_u8(name_len as u8);
         w.write_bytes(&b[..name_len]);
     }
-    ok_bytes(w.position())
+    Ok(())
 }
 
 #[inline(never)]
@@ -805,43 +779,41 @@ fn handle_data_service(
     hw: &mut SystemHardware,
     out: &mut [u8],
 ) -> Option<(WireStatus, usize)> {
+    if opcode == OP_TRANSFER_CHUNK {
+        return Some(on_transfer_chunk(payload, hw, out));
+    }
+    let mut w = ByteWriter::new(&mut out[..160]);
     let res = match opcode {
-        OP_TRANSFER_OPEN => on_transfer_open(payload, hw, out),
-        OP_TRANSFER_CHUNK => on_transfer_chunk(payload, hw, out),
-        OP_TRANSFER_CLOSE => on_transfer_close(payload, hw, out),
-        OP_TRANSFER_ABORT => {
-            let Some(req) = TransferAbortRequest::parse(payload) else {
-                return Some(err_empty(WireStatus::BadLength));
-            };
-            if let Some(transfer) = active_transfer_mut(req.transfer_id) {
-                transfer.active = false;
+        OP_TRANSFER_OPEN => on_transfer_open(payload, hw, &mut w),
+        OP_TRANSFER_CLOSE => on_transfer_close(payload, hw, &mut w),
+        OP_TRANSFER_ABORT => match TransferAbortRequest::parse(payload) {
+            Some(req) => {
+                if let Some(transfer) = active_transfer_mut(req.transfer_id) {
+                    transfer.active = false;
+                }
+                w.write_u16_le(req.transfer_id);
+                Ok(())
             }
-            let mut w = ByteWriter::new(&mut out[..2]);
-            w.write_u16_le(req.transfer_id);
-            ok_bytes(w.position())
-        }
-        OP_TRANSFER_STAT => on_transfer_stat(payload, hw, out),
-        OP_TRANSFER_LIST => on_transfer_list(payload, hw, out),
-        OP_TRANSFER_REMOVE => {
-            let Some(req) = TransferRemoveRequest::parse(payload) else {
-                return Some(err_empty(WireStatus::BadLength));
-            };
-            if let Err(status) = validate_file_path(req.path, true) {
-                return Some(err_empty(status));
-            }
-            if req.path == CALIB_FILE_PATH {
-                return Some(err_empty(WireStatus::SafetyDenied));
-            }
-            let status = if hw.filesystem.remove(req.path).is_ok() {
-                WireStatus::Ok
-            } else {
-                WireStatus::NotFound
-            };
-            (status, 0)
-        }
+            None => Err(WireStatus::BadLength),
+        },
+        OP_TRANSFER_STAT => on_transfer_stat(payload, hw, &mut w),
+        OP_TRANSFER_LIST => on_transfer_list(payload, hw, &mut w),
+        OP_TRANSFER_REMOVE => match TransferRemoveRequest::parse(payload) {
+            Some(req) => validate_file_path(req.path, true).and_then(|()| {
+                if req.path == CALIB_FILE_PATH {
+                    Err(WireStatus::SafetyDenied)
+                } else if hw.filesystem.remove(req.path).is_ok() {
+                    Ok(())
+                } else {
+                    Err(WireStatus::NotFound)
+                }
+            }),
+            None => Err(WireStatus::BadLength),
+        },
         _ => return None,
     };
-    Some(res)
+    let status = res.err().unwrap_or(WireStatus::Ok);
+    Some((status, w.position()))
 }
 
 // ── SERVICE_EVENTS (0x02) ────────────────────────────────────────────────────
