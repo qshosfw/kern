@@ -163,12 +163,12 @@ impl Canvas {
         LCD_HEIGHT as u8
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn clear(&mut self) {
-        self.buffer = [[0; LCD_WIDTH]; 8];
-        #[cfg(feature = "grayscale")]
-        {
-            self.buffer_lo = [[0; LCD_WIDTH]; 8];
+        unsafe {
+            core::ptr::write_bytes(self.buffer.as_mut_ptr() as *mut u8, 0, LCD_WIDTH * 8);
+            #[cfg(feature = "grayscale")]
+            core::ptr::write_bytes(self.buffer_lo.as_mut_ptr() as *mut u8, 0, LCD_WIDTH * 8);
         }
         self.dirty = 0xFF;
     }
