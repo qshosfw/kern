@@ -482,43 +482,24 @@ impl View<TextInputModel> for TextInputView {
                         model.exit_pressed = true;
                         model.exit_press_ticks = 0;
                         model.exit_held = false;
-                        return true;
                     }
 
-                    KeyCode::Star => {
-                        if model.digits_only {
-                            return true;
-                        }
-                        // Cycle Charset Category (*): Letters (Upper/Lower) -> Numbers -> Symbols -> Letters
+                    KeyCode::Star | KeyCode::KeyF | KeyCode::Hash | KeyCode::Side1
+                        if !model.digits_only =>
+                    {
                         Self::confirm_current_char(model);
-                        model.charset = match model.charset {
-                            Charset::Upper | Charset::Lower => Charset::Numbers,
-                            Charset::Numbers => Charset::Symbols,
-                            Charset::Symbols => Charset::Upper,
+                        model.charset = match (*code == KeyCode::Star, model.charset) {
+                            (true, Charset::Upper | Charset::Lower) => Charset::Numbers,
+                            (true, Charset::Numbers) => Charset::Symbols,
+                            (false, Charset::Upper) => Charset::Lower,
+                            _ => Charset::Upper,
                         };
-                        return true;
-                    }
-
-                    KeyCode::KeyF | KeyCode::Hash | KeyCode::Side1 => {
-                        if model.digits_only {
-                            return true;
-                        }
-                        // Quick Case Toggle (# / F / Side1): Upper <-> Lower
-                        // If in Numbers or Symbols, toggle switches to Upper letters
-                        Self::confirm_current_char(model);
-                        model.charset = match model.charset {
-                            Charset::Upper => Charset::Lower,
-                            Charset::Lower => Charset::Upper,
-                            Charset::Numbers | Charset::Symbols => Charset::Upper,
-                        };
-                        return true;
                     }
 
                     KeyCode::Menu => {
                         // Single tap MENU submits/finishes
                         Self::confirm_current_char(model);
                         model.is_done = true;
-                        return true;
                     }
 
                     _ => {}
