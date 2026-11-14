@@ -87,21 +87,13 @@ pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label:
 
     canvas.fill_rect(x as u8, y as u8, box_w, 7, Color::Fill);
 
-    match key_str.as_bytes() {
-        b"^" | b"v" | b"V" => {
-            let (apex_y, base_y) = if key_str.as_bytes()[0] == b'^' {
-                (y + 2, y + 4)
-            } else {
-                (y + 4, y + 2)
-            };
-            for (px, py) in [
-                (x + 4, apex_y),
-                (x + 3, y + 3),
-                (x + 5, y + 3),
-                (x + 2, base_y),
-                (x + 6, base_y),
-            ] {
-                canvas.draw_pixel(px as u8, py as u8, Color::Clear);
+    match key_str {
+        "^" | "v" | "V" => {
+            let is_up = key_str == "^";
+            for dx in 0..5u8 {
+                let d = dx.abs_diff(2) as i16;
+                let py = if is_up { y + 2 + d } else { y + 4 - d };
+                canvas.draw_pixel((x + 2 + dx as i16) as u8, py as u8, Color::Clear);
             }
         }
         _ => text::draw_str(canvas, x + 2, y + 5, key_str, font, Color::Clear),
