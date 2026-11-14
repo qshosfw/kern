@@ -64,11 +64,10 @@ pub unsafe extern "C" fn api_svc_register(
     abi_version: u16,
     vtable_ptr: usize,
 ) -> u8 {
-    let provider_id = crate::AppRegistry::count() as u8;
     (!service_registry_mut().register(
         interface_id,
         abi_version,
-        kernel::proc::Pid(provider_id),
+        kernel::proc::Pid(active_caller_pid()),
         vtable_ptr,
         false,
     )) as u8
@@ -239,9 +238,9 @@ pub unsafe extern "C" fn api_sys_proc_info(idx: u8, out_info: *mut KrxProcInfo) 
                     };
                     info.priority = slot.priority as u8;
                     info.memory_bytes = slot.mem_bytes;
-                    let name_bytes = slot.name.as_bytes();
-                    let copy_len = name_bytes.len().min(12);
-                    info.name[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
+                    for (d, &s) in info.name.iter_mut().zip(slot.name.as_bytes()) {
+                        *d = s;
+                    }
                     info.runtime_ticks = slot.ledger.cpu_ticks;
                 }
                 return 0;
@@ -288,7 +287,7 @@ fn lease_op(lease_kind: u8, acquire: bool, timeout_ms: u32) -> u8 {
     let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) else {
         return 1;
     };
-    let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
+    let pid = kernel::proc::Pid(active_caller_pid());
     let mgr = crate::orchestrator::lease_manager_mut();
     let res = if acquire {
         let tick = py32_hal::delay::millis();
@@ -363,21 +362,11 @@ pub unsafe extern "C" fn api_sys_rand32() -> u32 {
 }
 
 pub unsafe extern "C" fn api_math_crc32(data: *const u8, len: u16) -> u32 {
-    if !data.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
-        crypto::crc::CrcEngine::crc32(slice)
-    } else {
-        0
-    }
+    unsafe { super::ptr_slice(data, len as usize) }.map_or(0, crypto::crc::CrcEngine::crc32)
 }
 
 pub unsafe extern "C" fn api_math_crc16(data: *const u8, len: u16) -> u16 {
-    if !data.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
-        crypto::crc::CrcEngine::crc16_ccitt(slice)
-    } else {
-        0
-    }
+    unsafe { super::ptr_slice(data, len as usize) }.map_or(0, crypto::crc::CrcEngine::crc16_ccitt)
 }
 
 pub unsafe extern "C" fn api_math_idivmod(n: i32, d: i32) -> u64 {
