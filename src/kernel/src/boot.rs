@@ -21,17 +21,15 @@ pub enum TrapCode {
     RustPanic = 0xFE,
 }
 
+const TRAP_NAMES: &[u8] = b"ASSERT\0KLOCK\0CANARY\0PAGER_IO\0ALLOC\0RFLOCK\0PANIC\0";
+
 impl TrapCode {
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::AssertFail => "ASSERT",
-            Self::KernelLock => "KLOCK",
-            Self::StackCanary => "CANARY",
-            Self::PagerIo => "PAGER_IO",
-            Self::AllocInvariant => "ALLOC",
-            Self::RadioLock => "RFLOCK",
-            Self::RustPanic => "PANIC",
-        }
+        let idx = match self {
+            Self::RustPanic => 6,
+            _ => (*self as u8) - 1,
+        };
+        utils::format::nth_cstr(TRAP_NAMES, idx)
     }
 
     pub const fn from_u8(v: u8) -> Option<Self> {

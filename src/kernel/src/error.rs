@@ -26,6 +26,18 @@ pub enum KernelError {
     Stopped = 10,
 }
 
+const ERROR_NAMES: &[u8] = b"\
+Unspecified\0\
+Access Denied\0\
+Not Found\0\
+Out of Res\0\
+HW Timeout\0\
+Corrupt Data\0\
+Invalid Arg\0\
+Stack Low\0\
+Deadline Exceeded\0\
+Stopped\0";
+
 impl KernelError {
     pub const fn to_code(self) -> u8 {
         self as u8
@@ -47,17 +59,6 @@ impl KernelError {
     }
 
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unspecified => "Unspecified",
-            Self::AccessDenied => "Access Denied",
-            Self::NotFound => "Not Found",
-            Self::OutOfResources => "Out of Res",
-            Self::HardwareTimeout => "HW Timeout",
-            Self::CorruptData => "Corrupt Data",
-            Self::InvalidArgument => "Invalid Arg",
-            Self::StackDepleted => "Stack Low",
-            Self::DeadlineExceeded => "Deadline Exceeded",
-            Self::Stopped => "Stopped",
-        }
+        utils::format::nth_cstr(ERROR_NAMES, (self as u8) - 1)
     }
 }
