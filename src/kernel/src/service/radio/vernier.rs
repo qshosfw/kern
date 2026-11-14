@@ -56,65 +56,48 @@ pub fn solve_vernier(carrier_hz: u32, delta_dhz: i16) -> VernierResult {
         return VernierResult::zero();
     }
 
-    let delta_f_mhz: i32 = (delta_dhz as i32) * 100;
-    let alpha_mhz = compute_vernier_alpha(carrier_hz);
+    let alpha_mhz = compute_vernier_alpha(carrier_hz) as i32;
     if alpha_mhz == 0 {
-        // Fallback to integer 10-Hz PLL steps if carrier is too low
-        let neg = delta_f_mhz < 0;
-        let abs_f = if neg {
-            (-delta_f_mhz) as u32
-        } else {
-            delta_f_mhz as u32
-        };
-        let pc_u = utils::div10000_u32(abs_f + (PLL_STEP_MHZ as u32 / 2));
-        let pc = if neg { -(pc_u as i32) } else { pc_u as i32 };
-        return VernierResult {
-            xtal_trim_offset: 0,
-            pll_comp_10hz: pc as i16,
-            residual_error_mhz: ((pc * PLL_STEP_MHZ) - delta_f_mhz) as i16,
-        };
+        return VernierResult::zero();
     }
 
-    let negative = delta_f_mhz < 0;
-    let target_mhz = if negative { -delta_f_mhz } else { delta_f_mhz };
+    let negative = delta_dhz < 0;
+    let target_mhz = (delta_dhz as i32).abs() * 100;
 
     let mut best_xt: u16 = 0;
     let mut best_pc: u16 = 0;
     let mut min_err: i32 = i32::MAX;
+    let mut numer = (PLL_STEP_MHZ / 2) - target_mhz;
+    let mut pc: u16 = 0;
 
     for xt in 0..=MAX_XTAL_TRIM {
-        let xtal_effect = (xt as i32) * (alpha_mhz as i32);
-        let numer = xtal_effect - target_mhz + (PLL_STEP_MHZ / 2);
-        if numer < 0 {
-            continue;
-        }
-        let pc = utils::div10000_u32(numer as u32) as i32;
-
-        let actual = xtal_effect - pc * PLL_STEP_MHZ;
-        let err = (actual - target_mhz).abs();
-
-        if err < min_err {
-            min_err = err;
-            best_xt = xt;
-            best_pc = pc as u16;
-            if err == 0 {
-                break;
+        if numer >= 0 {
+            while numer >= PLL_STEP_MHZ {
+                numer -= PLL_STEP_MHZ;
+                pc += 1;
+            }
+            let err = (numer - (PLL_STEP_MHZ / 2)).abs();
+            if err < min_err {
+                min_err = err;
+                best_xt = xt;
+                best_pc = pc;
+                if err == 0 {
+                    break;
+                }
             }
         }
+        numer += alpha_mhz;
     }
 
-    if negative {
-        VernierResult {
-            xtal_trim_offset: -(best_xt as i16),
-            pll_comp_10hz: -(best_pc as i16),
-            residual_error_mhz: min_err as i16,
-        }
+    let (xtal_trim_offset, pll_comp_10hz) = if negative {
+        (-(best_xt as i16), -(best_pc as i16))
     } else {
-        VernierResult {
-            xtal_trim_offset: best_xt as i16,
-            pll_comp_10hz: best_pc as i16,
-            residual_error_mhz: min_err as i16,
-        }
+        (best_xt as i16, best_pc as i16)
+    };
+    VernierResult {
+        xtal_trim_offset,
+        pll_comp_10hz,
+        residual_error_mhz: min_err as i16,
     }
 }
 
