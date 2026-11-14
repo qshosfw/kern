@@ -33,6 +33,15 @@ pub const RCC_APB1ENR: *mut u32 = (RCC_BASE + 0x3C) as *mut u32;
 /// APB2 peripheral clock enable register (SPI1, USART1, ADC1, TIM1)
 pub const RCC_APB2ENR: *mut u32 = (RCC_BASE + 0x40) as *mut u32;
 
+/// Peripherals independent clock configuration register
+pub const RCC_CCIPR: *mut u32 = (RCC_BASE + 0x54) as *mut u32;
+
+/// Backup / RTC domain control register
+pub const RCC_BDCR: *mut u32 = (RCC_BASE + 0x5C) as *mut u32;
+
+/// Control / status register (LSI & Reset cause flags)
+pub const RCC_CSR: *mut u32 = (RCC_BASE + 0x60) as *mut u32;
+
 /// IO port clock enable register (GPIOA, GPIOB, GPIOC, GPIOF)
 pub const RCC_IOPENR: *mut u32 = (RCC_BASE + 0x34) as *mut u32;
 
@@ -44,6 +53,8 @@ pub const APBRSTR1_USBDRST: u32 = 1 << 23;
 // ── AHBENR Bit Definitions ─────────────────────────────────────────────────
 
 pub const AHBENR_DMA1: u32 = 1 << 0;
+pub const AHBENR_FLASH: u32 = 1 << 8;
+pub const AHBENR_CRC: u32 = 1 << 12;
 
 // ── IOPENR Bit Definitions ─────────────────────────────────────────────────
 
@@ -60,15 +71,54 @@ pub const APB1ENR_TIM2: u32 = 1 << 0;
 pub const APB1ENR_TIM3: u32 = 1 << 1;
 /// TIM6 clock enable
 pub const APB1ENR_TIM6: u32 = 1 << 4;
-/// I2C1 clock enable
-pub const APB1ENR_I2C1: u32 = 1 << 21;
+/// RTC APB clock enable
+pub const APB1ENR_RTCAPB: u32 = 1 << 10;
+/// WWDG clock enable
+pub const APB1ENR_WWDG: u32 = 1 << 11;
+/// SPI2 clock enable
+pub const APB1ENR_SPI2: u32 = 1 << 14;
 /// USART2 clock enable
 pub const APB1ENR_USART2: u32 = 1 << 17;
-pub const APB1ENR_SPI2: u32 = 1 << 14;
+/// I2C1 clock enable
+pub const APB1ENR_I2C1: u32 = 1 << 21;
 /// USBD (USB 2.0 Full-Speed) clock enable
 pub const APB1ENR_USBD: u32 = 1 << 23;
+/// PWR interface clock enable
+pub const APB1ENR_PWR: u32 = 1 << 28;
 /// DAC1 clock enable
 pub const APB1ENR_DAC: u32 = 1 << 29;
+/// LPTIM1 clock enable
+pub const APB1ENR_LPTIM: u32 = 1 << 31;
+
+// ── CCIPR Bit Definitions ──────────────────────────────────────────────────
+
+pub const CCIPR_LPTIM1SEL_SHIFT: u32 = 18;
+pub const CCIPR_LPTIM1SEL_MASK: u32 = 0b11 << 18;
+pub const CCIPR_LPTIM1SEL_PCLK: u32 = 0b00 << 18;
+pub const CCIPR_LPTIM1SEL_LSI: u32 = 0b01 << 18;
+pub const CCIPR_LPTIM1SEL_LSE: u32 = 0b11 << 18;
+
+// ── BDCR Bit Definitions ───────────────────────────────────────────────────
+
+pub const BDCR_LSEON: u32 = 1 << 0;
+pub const BDCR_LSERDY: u32 = 1 << 1;
+pub const BDCR_RTCSEL_MASK: u32 = 0b11 << 8;
+pub const BDCR_RTCSEL_LSE: u32 = 0b01 << 8;
+pub const BDCR_RTCSEL_LSI: u32 = 0b10 << 8;
+pub const BDCR_RTCEN: u32 = 1 << 15;
+pub const BDCR_BDRST: u32 = 1 << 16;
+
+// ── CSR Bit Definitions ────────────────────────────────────────────────────
+
+pub const CSR_LSION: u32 = 1 << 0;
+pub const CSR_LSIRDY: u32 = 1 << 1;
+pub const CSR_RMVF: u32 = 1 << 23;
+pub const CSR_OBLRSTF: u32 = 1 << 25;
+pub const CSR_PINRSTF: u32 = 1 << 26;
+pub const CSR_PWRRSTF: u32 = 1 << 27;
+pub const CSR_SFTRSTF: u32 = 1 << 28;
+pub const CSR_IWDGRSTF: u32 = 1 << 29;
+pub const CSR_WWDGRSTF: u32 = 1 << 30;
 
 // ── APB2ENR Bit Definitions ─────────────────────────────────────────────────
 

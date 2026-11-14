@@ -1,22 +1,25 @@
 //! Hardware CRC32 Calculation Unit for PY32F071.
 //!
-//! Peripheral Base: 0x4002_3000 (AHB)
-//! Polynomial: 0x04C11DB7 (standard Ethernet / ISO 3309 / MPEG-2 / ZIP)
-//! Execution time: 4 AHB clock cycles per 32-bit word (instantaneous zero-CPU).
+//! Polynomial: 0x04C11DB7 (Ethernet / ISO 3309 / MPEG-2 / ZIP).
+//! Execution time: 4 AHB clock cycles per 32-bit word.
 
-const CRC_BASE: usize = 0x4002_3000;
-const CRC_DR: *mut u32 = CRC_BASE as *mut u32;
-const CRC_IDR: *mut u8 = (CRC_BASE + 0x04) as *mut u8;
-const CRC_CR: *mut u32 = (CRC_BASE + 0x08) as *mut u32;
+use pac::crc::{CR_RESET, CRC_CR, CRC_DR, CRC_IDR};
 
 pub struct HardwareCrc;
 
 impl HardwareCrc {
+    /// Enables the AHB clock for the hardware CRC unit.
+    #[inline]
+    pub fn enable() {
+        crate::rcc::enable_crc();
+    }
+
     /// Resets the CRC data register to 0xFFFF_FFFF.
     #[inline(always)]
     pub fn reset() {
+        Self::enable();
         unsafe {
-            CRC_CR.write_volatile(1); // RESET bit
+            CRC_CR.write_volatile(CR_RESET);
         }
     }
 

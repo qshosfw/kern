@@ -25,18 +25,25 @@ pub use PY32f071xx_pac as raw;
 pub use PY32f071xx_pac::Interrupt;
 
 pub mod adc;
+pub mod comp;
+pub mod crc;
 pub mod dac;
 pub mod dma;
 pub mod exti;
 pub mod flash;
 pub mod gpio;
+pub mod i2c;
 pub mod iwdg;
+pub mod lptim;
 pub mod pwr;
 pub mod rcc;
+pub mod rtc;
 pub mod spi;
+pub mod syscfg;
 pub mod tim;
 pub mod usart;
 pub mod usbd;
+pub mod wwdg;
 
 // ── Base Addresses ──────────────────────────────────────────────────────────
 
@@ -65,6 +72,32 @@ pub const SYST_CVR: *mut u32 = 0xE000_E018 as *mut u32;
 pub const NVIC_ISER: *mut u32 = 0xE000_E100 as *mut u32;
 /// NVIC Interrupt Clear-Enable Register
 pub const NVIC_ICER: *mut u32 = 0xE000_E180 as *mut u32;
+/// NVIC Interrupt Clear-Pending Register
+pub const NVIC_ICPR: *mut u32 = 0xE000_E280 as *mut u32;
+
+/// Enable an NVIC interrupt line cleanly without relying on unmasked globals.
+#[inline(always)]
+pub unsafe fn nvic_enable(irq_num: u8) {
+    unsafe {
+        NVIC_ISER.write_volatile(1u32 << (irq_num & 31));
+    }
+}
+
+/// Disable an NVIC interrupt line.
+#[inline(always)]
+pub unsafe fn nvic_disable(irq_num: u8) {
+    unsafe {
+        NVIC_ICER.write_volatile(1u32 << (irq_num & 31));
+    }
+}
+
+/// Clear a pending NVIC interrupt flag.
+#[inline(always)]
+pub unsafe fn nvic_clear_pending(irq_num: u8) {
+    unsafe {
+        NVIC_ICPR.write_volatile(1u32 << (irq_num & 31));
+    }
+}
 
 /// System Control Block — Vector Table Offset Register
 pub const SCB_VTOR: *mut u32 = 0xE000_ED08 as *mut u32;

@@ -16,33 +16,21 @@ const CROCKFORD_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CHECKSUM_ALPHABET: &[u8; 37] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U";
 
 /// Reads the raw 96-bit (12-byte) hardware Unique ID from system memory.
+#[inline(always)]
 pub fn read_mcu_uid() -> [u8; 12] {
-    let mut uid = [0u8; 12];
-    let ptr = UID_BASE_ADDR as *const u8;
-    for i in 0..12 {
-        uid[i] = unsafe { core::ptr::read_volatile(ptr.add(i)) };
-    }
-    uid
+    py32_hal::uid::SystemInfo::read_uid_12()
 }
 
 /// Reads the raw 16-byte CPU ID block used by DeltaFW for serial & KDF generation.
+#[inline(always)]
 pub fn read_cpu_id_16() -> [u8; 16] {
-    let mut id = [0u8; 16];
-    let ptr = UID_BASE_ADDR as *const u8;
-    for i in 0..16 {
-        id[i] = unsafe { core::ptr::read_volatile(ptr.add(i)) };
-    }
-    id
+    py32_hal::uid::SystemInfo::read_uid_16()
 }
 
 /// Reads the complete 256-byte factory UID and system info space (0x1FFF3000..0x1FFF30FF).
+#[inline(always)]
 pub fn read_uid_256() -> [u8; 256] {
-    let mut full = [0u8; 256];
-    let ptr = UID_BASE_ADDR as *const u8;
-    for i in 0..256 {
-        full[i] = unsafe { core::ptr::read_volatile(ptr.add(i)) };
-    }
-    full
+    py32_hal::uid::SystemInfo::read_uid_256()
 }
 
 /// MurmurHash3 64-bit finalizer (`fmix64`).
@@ -198,13 +186,14 @@ pub fn get_hardware_fingerprint256() -> u64 {
 
 /// Formats the 96-bit MCU UID into a null-terminated 25-byte Hex ASCII string buffer.
 pub fn read_usb_serial_ascii() -> [u8; 25] {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let uid = read_mcu_uid();
     let mut buf = [0u8; 25];
 
     for i in 0..12 {
         let b = uid[i];
-        buf[i * 2] = CHECKSUM_ALPHABET[(b >> 4) as usize];
-        buf[i * 2 + 1] = CHECKSUM_ALPHABET[(b & 0x0F) as usize];
+        buf[i * 2] = HEX[(b >> 4) as usize];
+        buf[i * 2 + 1] = HEX[(b & 0x0F) as usize];
     }
     buf[24] = 0;
     buf

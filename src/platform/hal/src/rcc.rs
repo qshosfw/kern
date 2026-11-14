@@ -92,6 +92,65 @@ pub fn enable_syscfg() {
     }
 }
 
+/// Enable the CRC peripheral clock (AHB1).
+pub fn enable_crc() {
+    unsafe {
+        let val = rcc::RCC_AHBENR.read_volatile();
+        rcc::RCC_AHBENR.write_volatile(val | rcc::AHBENR_CRC);
+    }
+}
+
+/// Enable the PWR peripheral clock (APB1).
+pub fn enable_pwr() {
+    unsafe {
+        let val = rcc::RCC_APB1ENR.read_volatile();
+        rcc::RCC_APB1ENR.write_volatile(val | rcc::APB1ENR_PWR);
+    }
+}
+
+/// Ensure the internal 32.768 kHz LSI oscillator is enabled and ready.
+pub fn enable_lsi() {
+    unsafe {
+        let csr = rcc::RCC_CSR.read_volatile();
+        if (csr & rcc::CSR_LSION) == 0 {
+            rcc::RCC_CSR.write_volatile(csr | rcc::CSR_LSION);
+        }
+        let mut timeout = 50_000u32;
+        while (rcc::RCC_CSR.read_volatile() & rcc::CSR_LSIRDY) == 0 && timeout > 0 {
+            timeout -= 1;
+        }
+    }
+}
+
+/// Enable LPTIM1 clock gated on LSI (~32.768 kHz).
+pub fn enable_lptim1_lsi() {
+    enable_lsi();
+    unsafe {
+        let ccipr = rcc::RCC_CCIPR.read_volatile();
+        rcc::RCC_CCIPR
+            .write_volatile((ccipr & !rcc::CCIPR_LPTIM1SEL_MASK) | rcc::CCIPR_LPTIM1SEL_LSI);
+        let apb1 = rcc::RCC_APB1ENR.read_volatile();
+        rcc::RCC_APB1ENR.write_volatile(apb1 | rcc::APB1ENR_LPTIM);
+    }
+}
+
+/// Enable RTC APB clock, unlock backup domain, and select LSI as RTC clock source.
+pub fn enable_rtc_lsi() {
+    enable_pwr();
+    crate::pwr::set_backup_write_enabled(true);
+    enable_lsi();
+    unsafe {
+        let apb1 = rcc::RCC_APB1ENR.read_volatile();
+        rcc::RCC_APB1ENR.write_volatile(apb1 | rcc::APB1ENR_RTCAPB);
+        let bdcr = rcc::RCC_BDCR.read_volatile();
+        if (bdcr & rcc::BDCR_RTCEN) == 0 || (bdcr & rcc::BDCR_RTCSEL_MASK) != rcc::BDCR_RTCSEL_LSI {
+            rcc::RCC_BDCR.write_volatile(
+                (bdcr & !rcc::BDCR_RTCSEL_MASK) | rcc::BDCR_RTCSEL_LSI | rcc::BDCR_RTCEN,
+            );
+        }
+    }
+}
+
 /// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1) and reset PHY.
 pub fn enable_usbd() {
     unsafe {
@@ -159,8 +218,8 @@ pub fn sysclk_hz() -> u32 {
                 let hsifs = ((icscr >> 13) & 0x07) as usize;
                 let hsi_base = HSI_TABLE.get(hsifs).copied().unwrap_or(24_000_000);
                 let cr = rcc::RCC_CR.read_volatile();
-                let hsidiv = 1 << (((cr >> 11) & 0x07).min(7));
-                hsi_base / hsidiv.max(1)
+                let hsidiv_exp = ((cr >> 11) & 0x07).min(7);
+                hsi_base >> hsidiv_exp
             }
         };
 
@@ -240,94 +299,80 @@ unsafe fn set_hsi_fs(is_24mhz: bool) {
     }
 }
 
+#[inline(never)]
+fn apply_sysclk(hsi_24: bool, pll_mul: Option<u32>, wait_states: u32) {
+    unsafe {
+        switch_to_hsi_disable_pll();
+        set_hsi_fs(hsi_24);
+        if let Some(mul) = pll_mul {
+            enable_pll_and_switch(mul, wait_states);
+        } else {
+            let acr = pac::flash::FLASH_ACR.read_volatile();
+            pac::flash::FLASH_ACR
+                .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | wait_states);
+        }
+    }
+    let hz = sysclk_hz();
+    crate::delay::update_systick_freq(hz);
+    crate::time::update_tim2_freq(hz);
+    crate::uart::resync_clock(hz);
+}
+
 /// Switch system clock to one of the 5 discrete hardware speeds:
 /// 0: 16 MHz (Direct HSI, PLL OFF, 0WS)
 /// 1: 24 MHz (Direct HSI, PLL OFF, 0WS)
 /// 2: 32 MHz (HSI 16 MHz * PLL 2X, 1WS) - RF Sweet Spot
 /// 3: 48 MHz (HSI * PLL, 1WS) - Default / USB Full-Speed
 /// 4: 72 MHz (HSI 24 MHz * PLL 3X, 2WS) - High Performance
+#[inline(never)]
 pub fn set_sysclk_index(idx: u8) {
     match idx {
-        0 => set_sysclk_16mhz(),
-        1 => set_sysclk_24mhz(),
-        2 => set_sysclk_32mhz(),
-        3 => set_sysclk_48mhz(),
-        4 => set_sysclk_72mhz(),
-        _ => set_sysclk_48mhz(),
+        0 => apply_sysclk(false, None, pac::flash::ACR_LATENCY_0WS),
+        1 => apply_sysclk(true, None, pac::flash::ACR_LATENCY_0WS),
+        2 => apply_sysclk(
+            false,
+            Some(rcc::PLLCFGR_PLLMUL_2X),
+            pac::flash::ACR_LATENCY_1WS,
+        ),
+        4 => apply_sysclk(
+            true,
+            Some(rcc::PLLCFGR_PLLMUL_3X),
+            pac::flash::ACR_LATENCY_2WS,
+        ),
+        _ => apply_sysclk(
+            true,
+            Some(rcc::PLLCFGR_PLLMUL_2X),
+            pac::flash::ACR_LATENCY_1WS,
+        ),
     }
 }
 
-/// Safely switch system clock to direct 16 MHz HSI (PLL OFF, 0WS).
+#[inline]
 pub fn set_sysclk_16mhz() {
-    unsafe {
-        switch_to_hsi_disable_pll();
-        set_hsi_fs(false);
-        let acr = pac::flash::FLASH_ACR.read_volatile();
-        pac::flash::FLASH_ACR
-            .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
-    }
-    let hz = sysclk_hz();
-    crate::delay::update_systick_freq(hz);
-    crate::time::update_tim2_freq(hz);
+    set_sysclk_index(0);
 }
 
-/// Safely switch system clock to direct 24 MHz HSI (PLL OFF, 0WS).
+#[inline]
 pub fn set_sysclk_24mhz() {
-    unsafe {
-        switch_to_hsi_disable_pll();
-        set_hsi_fs(true);
-        let acr = pac::flash::FLASH_ACR.read_volatile();
-        pac::flash::FLASH_ACR
-            .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | pac::flash::ACR_LATENCY_0WS);
-    }
-    let hz = sysclk_hz();
-    crate::delay::update_systick_freq(hz);
-    crate::time::update_tim2_freq(hz);
+    set_sysclk_index(1);
 }
 
-/// Safely switch system clock to 32 MHz (16 MHz HSI * PLL 2X, 1WS).
-/// Optimal RF sweet spot: harmonics bypass both 2m (144-148 MHz) and 70cm (430-440 MHz) amateur bands.
+#[inline]
 pub fn set_sysclk_32mhz() {
-    unsafe {
-        switch_to_hsi_disable_pll();
-        set_hsi_fs(false);
-        enable_pll_and_switch(rcc::PLLCFGR_PLLMUL_2X, pac::flash::ACR_LATENCY_1WS);
-    }
-    let hz = sysclk_hz();
-    crate::delay::update_systick_freq(hz);
-    crate::time::update_tim2_freq(hz);
+    set_sysclk_index(2);
 }
 
-/// Safely switch system clock to 72 MHz (PLL x3 from 24 MHz HSI).
-/// Adjusts Flash wait states to 2WS before overclocking and updates SysTick calibration.
-pub fn set_sysclk_72mhz() {
-    unsafe {
-        switch_to_hsi_disable_pll();
-        set_hsi_fs(true);
-        enable_pll_and_switch(rcc::PLLCFGR_PLLMUL_3X, pac::flash::ACR_LATENCY_2WS);
-    }
-    let hz = sysclk_hz();
-    crate::delay::update_systick_freq(hz);
-    crate::time::update_tim2_freq(hz);
-}
-
-/// Safely switch system clock to 48 MHz (HSI 24 MHz * PLL 2X, 1WS).
-/// Always uses the factory-calibrated 24 MHz HSI trim (0x1FFF_3220) to ensure
-/// clock jitter and frequency error remain strictly within the USB 2.0 Full-Speed
-/// ±0.25% specification (2500 ppm) across all operating conditions.
+#[inline]
 pub fn set_sysclk_48mhz() {
-    unsafe {
-        switch_to_hsi_disable_pll();
-        set_hsi_fs(true);
-        enable_pll_and_switch(rcc::PLLCFGR_PLLMUL_2X, pac::flash::ACR_LATENCY_1WS);
-    }
-    let hz = sysclk_hz();
-    crate::delay::update_systick_freq(hz);
-    crate::time::update_tim2_freq(hz);
+    set_sysclk_index(3);
 }
 
-/// Safely switch system clock to direct 24 MHz HSI and disable PLL to minimize deep sleep power consumption.
-/// Adjusts Flash wait states to 0WS and updates SysTick calibration.
+#[inline]
+pub fn set_sysclk_72mhz() {
+    set_sysclk_index(4);
+}
+
+#[inline]
 pub fn set_sysclk_24mhz_no_pll() {
-    set_sysclk_24mhz();
+    set_sysclk_index(1);
 }

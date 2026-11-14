@@ -1,4 +1,4 @@
-//! External Interrupt Driver
+//! External Interrupt Driver (`EXTI` at `0x4002_1800` on PY32F071).
 
 use pac::exti;
 
@@ -7,6 +7,28 @@ pub enum TriggerEdge {
     Rising,
     Falling,
     Both,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Port {
+    GpioA = exti::PORT_GPIOA,
+    GpioB = exti::PORT_GPIOB,
+    GpioC = exti::PORT_GPIOC,
+    GpioF = exti::PORT_GPIOF,
+}
+
+/// Bind an EXTI GPIO line `0..=15` to its physical GPIO port (`EXTI_EXTICR1..4`).
+pub fn select_port(pin: u8, port: Port) {
+    if pin >= 16 {
+        return;
+    }
+    let reg = exti::exticr(pin);
+    let shift = ((pin & 3) as u32) * 8;
+    cortex_m::interrupt::free(|_| unsafe {
+        let cur = reg.read_volatile();
+        reg.write_volatile((cur & !(0xFF << shift)) | ((port as u32) << shift));
+    });
 }
 
 pub fn enable_line(line: u8, trigger: TriggerEdge) {

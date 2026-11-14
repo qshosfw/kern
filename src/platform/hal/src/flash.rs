@@ -3,42 +3,138 @@
 //! Page Size: 256 bytes (64 words).
 //! Sector Size: 512 bytes (2 pages).
 //! Base Address: 0x0800_0000 (up to 128 KB).
+//! Bootloader Protected Region: 0x0800_0000..0x0800_2800 (10 KB).
 //!
-//! Sourced from PY32F071 reference manual & inspo/ichi/src/internal_flash.c.
+//! Erase and program sequences execute from `.data.ramfunc` (SRAM) with IRQs
+//! masked so AHB instruction fetches never stall or HardFault the active bank.
+
+use pac::flash::*;
 
 pub const FLASH_PAGE_SIZE: usize = 256;
 pub const FLASH_BASE_ADDR: u32 = 0x0800_0000;
+pub const FIRMWARE_MIN_ADDR: u32 = 0x0800_2800;
+pub const FLASH_END_ADDR: u32 = 0x0802_0000;
+const FLASH_WAIT_TIMEOUT: u32 = 250_000;
 
-const FLASH_REG_BASE: usize = 0x4002_2000;
-#[allow(dead_code)]
-const FLASH_ACR: *mut u32 = FLASH_REG_BASE as *mut u32;
-const FLASH_KEYR: *mut u32 = (FLASH_REG_BASE + 0x08) as *mut u32;
-#[allow(dead_code)]
-const FLASH_OPTKEYR: *mut u32 = (FLASH_REG_BASE + 0x0C) as *mut u32;
-const FLASH_SR: *mut u32 = (FLASH_REG_BASE + 0x10) as *mut u32;
-const FLASH_CR: *mut u32 = (FLASH_REG_BASE + 0x14) as *mut u32;
-
-const KEY1: u32 = 0x4567_0123;
-const KEY2: u32 = 0xCDEF_89AB;
-
-const SR_BSY: u32 = 1 << 0;
-const SR_EOP: u32 = 1 << 1;
-#[allow(dead_code)]
-const SR_WRPERR: u32 = 1 << 4;
-#[allow(dead_code)]
-const SR_PGERR: u32 = 1 << 5;
-
-const CR_PG: u32 = 1 << 0;
-const CR_PER: u32 = 1 << 1;
-#[allow(dead_code)]
-const CR_MER: u32 = 1 << 2;
-const CR_PGSTRT: u32 = 1 << 16;
-const CR_EOPIE: u32 = 1 << 24;
-const CR_LOCK: u32 = 1 << 31;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlashError {
+    ProtectedRange,
+    WriteProtected,
+    ProgramError,
+    Timeout,
+}
 
 pub struct InternalFlash;
 
 impl InternalFlash {
+    /// Validate that `addr` targets user flash above the 10 KB bootloader and within 128 KB.
+    #[inline(always)]
+    fn validate_addr(addr: u32) -> Result<u32, FlashError> {
+        let aligned = addr & !0xFF;
+        if aligned < FIRMWARE_MIN_ADDR || aligned >= FLASH_END_ADDR {
+            return Err(FlashError::ProtectedRange);
+        }
+        Ok(aligned)
+    }
+
+    #[cfg_attr(target_os = "none", unsafe(link_section = ".data.ramfunc"))]
+    #[inline(never)]
+    unsafe fn wait_flash_done_ram() -> Result<(), FlashError> {
+        unsafe {
+            let mut t = FLASH_WAIT_TIMEOUT;
+            while (FLASH_SR.read_volatile() & SR_BSY) != 0 {
+                t -= 1;
+                if t == 0 {
+                    return Err(FlashError::Timeout);
+                }
+            }
+            let sr = FLASH_SR.read_volatile();
+            if (sr & SR_WRPERR) != 0 {
+                FLASH_SR.write_volatile(SR_WRPERR);
+                return Err(FlashError::WriteProtected);
+            }
+            if (sr & SR_PGERR) != 0 {
+                FLASH_SR.write_volatile(SR_PGERR);
+                return Err(FlashError::ProgramError);
+            }
+            let mut eop_t = FLASH_WAIT_TIMEOUT;
+            while (FLASH_SR.read_volatile() & SR_EOP) == 0 {
+                eop_t -= 1;
+                if eop_t == 0 {
+                    break;
+                }
+            }
+            FLASH_SR.write_volatile(SR_EOP);
+            Ok(())
+        }
+    }
+
+    #[cfg_attr(target_os = "none", unsafe(link_section = ".data.ramfunc"))]
+    #[inline(never)]
+    unsafe fn erase_page_ram(aligned: u32) -> Result<(), FlashError> {
+        unsafe {
+            let mut t = FLASH_WAIT_TIMEOUT;
+            while (FLASH_SR.read_volatile() & SR_BSY) != 0 {
+                t -= 1;
+                if t == 0 {
+                    return Err(FlashError::Timeout);
+                }
+            }
+            if (FLASH_CR.read_volatile() & CR_LOCK) != 0 {
+                FLASH_KEYR.write_volatile(KEY1);
+                FLASH_KEYR.write_volatile(KEY2);
+            }
+            FLASH_SR.write_volatile(SR_EOP | SR_WRPERR | SR_PGERR);
+            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_PER | CR_EOPIE);
+            (aligned as *mut u32).write_volatile(0xFFFF_FFFF);
+            let res = Self::wait_flash_done_ram();
+            FLASH_CR.write_volatile(FLASH_CR.read_volatile() & !(CR_PER | CR_EOPIE));
+            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_LOCK);
+            res
+        }
+    }
+
+    #[cfg_attr(target_os = "none", unsafe(link_section = ".data.ramfunc"))]
+    #[inline(never)]
+    unsafe fn program_page_ram(
+        aligned: u32,
+        data: &[u8; FLASH_PAGE_SIZE],
+    ) -> Result<(), FlashError> {
+        unsafe {
+            let mut t = FLASH_WAIT_TIMEOUT;
+            while (FLASH_SR.read_volatile() & SR_BSY) != 0 {
+                t -= 1;
+                if t == 0 {
+                    return Err(FlashError::Timeout);
+                }
+            }
+            if (FLASH_CR.read_volatile() & CR_LOCK) != 0 {
+                FLASH_KEYR.write_volatile(KEY1);
+                FLASH_KEYR.write_volatile(KEY2);
+            }
+            FLASH_SR.write_volatile(SR_EOP | SR_WRPERR | SR_PGERR);
+            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_PG | CR_EOPIE);
+
+            let dest = aligned as *mut u32;
+            let mut i = 0usize;
+            while i < 63 {
+                let off = i * 4;
+                let w =
+                    u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+                dest.add(i).write_volatile(w);
+                i += 1;
+            }
+            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_PGSTRT);
+            let last_w = u32::from_le_bytes([data[252], data[253], data[254], data[255]]);
+            dest.add(63).write_volatile(last_w);
+
+            let res = Self::wait_flash_done_ram();
+            FLASH_CR.write_volatile(FLASH_CR.read_volatile() & !(CR_PG | CR_EOPIE));
+            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_LOCK);
+            res
+        }
+    }
+
     /// Unlocks flash control registers for write/erase operations.
     pub fn unlock() {
         unsafe {
@@ -57,22 +153,9 @@ impl InternalFlash {
         }
     }
 
-    #[inline(always)]
-    fn wait_busy() {
-        unsafe { while (FLASH_SR.read_volatile() & SR_BSY) != 0 {} }
-    }
-
-    #[inline(always)]
-    fn wait_eop() {
-        unsafe {
-            while (FLASH_SR.read_volatile() & SR_EOP) == 0 {}
-            FLASH_SR.write_volatile(SR_EOP);
-        }
-    }
-
-    /// Checks if a 256-byte page at  contains any non-0xFF bytes requiring an erase.
+    /// Checks if a 256-byte page at `addr` contains any non-0xFF bytes requiring an erase.
     pub fn page_needs_erase(addr: u32) -> bool {
-        let ptr = addr as *const u32;
+        let ptr = (addr & !0xFF) as *const u32;
         for i in 0..64 {
             if unsafe { ptr.add(i).read_volatile() } != 0xFFFF_FFFF {
                 return true;
@@ -81,75 +164,21 @@ impl InternalFlash {
         false
     }
 
-    /// Erases a 256-byte page of flash memory at .
-    ///  must be page-aligned (multiple of 256).
-    pub fn erase_page(addr: u32) {
-        Self::wait_busy();
-        Self::unlock();
-
-        unsafe {
-            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_PER | CR_EOPIE);
-            let target_ptr = (addr & !0xFF) as *mut u32;
-            target_ptr.write_volatile(0xFFFF_FFFF);
-        }
-
-        Self::wait_busy();
-        Self::wait_eop();
-
-        unsafe {
-            FLASH_CR.write_volatile(FLASH_CR.read_volatile() & !(CR_PER | CR_EOPIE));
-        }
-        Self::lock();
+    /// Erases a 256-byte page of flash memory at `addr` (executing from SRAM inside IRQ-free critical section).
+    pub fn erase_page(addr: u32) -> Result<(), FlashError> {
+        let aligned = Self::validate_addr(addr)?;
+        cortex_m::interrupt::free(|_| unsafe { Self::erase_page_ram(aligned) })
     }
 
-    /// Programs a complete 256-byte page of flash memory at .
-    /// Automatically performs a page erase first if needed.
-    pub fn program_page(addr: u32, data: &[u8; FLASH_PAGE_SIZE]) {
-        if Self::page_needs_erase(addr) {
-            Self::erase_page(addr);
-        }
-
-        Self::wait_busy();
-        Self::unlock();
-
-        unsafe {
-            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_PG | CR_EOPIE);
-
-            let dest = addr as *mut u32;
-            let mut offset = 0;
-
-            // Write first 63 words
-            for i in 0..63 {
-                let w = u32::from_le_bytes([
-                    data[offset],
-                    data[offset + 1],
-                    data[offset + 2],
-                    data[offset + 3],
-                ]);
-                dest.add(i).write_volatile(w);
-                offset += 4;
+    /// Programs a complete 256-byte page of flash memory at `addr`, erasing first if needed.
+    pub fn program_page(addr: u32, data: &[u8; FLASH_PAGE_SIZE]) -> Result<(), FlashError> {
+        let aligned = Self::validate_addr(addr)?;
+        cortex_m::interrupt::free(|_| unsafe {
+            if Self::page_needs_erase(aligned) {
+                Self::erase_page_ram(aligned)?;
             }
-
-            // Trigger Page Program Start
-            FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_PGSTRT);
-
-            // Write final 64th word
-            let last_w = u32::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ]);
-            dest.add(63).write_volatile(last_w);
-        }
-
-        Self::wait_busy();
-        Self::wait_eop();
-
-        unsafe {
-            FLASH_CR.write_volatile(FLASH_CR.read_volatile() & !(CR_PG | CR_EOPIE));
-        }
-        Self::lock();
+            Self::program_page_ram(aligned, data)
+        })
     }
 
     /// Reads raw 32-bit `FLASH_OPTR` register from Flash controller.

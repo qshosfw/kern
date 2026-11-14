@@ -1,10 +1,9 @@
 //! Hardware Electronic Signature & Factory Calibration Introspection for PY32F071.
 //!
-//! Sourced from official CMSIS device descriptors:
-//! - UID_BASE: 0x1FFF_3000 (256 bytes)
-//! - FLASHSIZE_BASE: 0x1FFF_31FC (16-bit Flash size in KB)
-//! - VREFINT_CAL: 0x1FFF_0F04 / 0x1FFF_0F06 (factory reference calibration)
-//! - TSENSOR_CAL: 0x1FFF_0F14 / 0x1FFF_0F16 (factory temperature sensor calibration)
+//! - `UID_BASE`: `0x1FFF_3000` (256-byte system electronic signature)
+//! - `FLASHSIZE_BASE`: `0x1FFF_31FC` (16-bit Flash size in KB)
+//! - `TSENSOR_CAL1`: `0x1FFF_3228` (30°C calibration point @ 3.3V)
+//! - `TSENSOR_CAL2`: `0x1FFF_3230` (105°C calibration point @ 3.3V)
 
 pub const UID_BASE_ADDR: usize = 0x1FFF_3000;
 pub const FLASH_SIZE_REG: usize = 0x1FFF_31FC;
@@ -12,6 +11,7 @@ pub const VREFINT_CAL_ADDR: usize = 0x1FFF_0F04;
 pub const TSENSOR_CAL1_ADDR: usize = 0x1FFF_3228;
 pub const TSENSOR_CAL2_ADDR: usize = 0x1FFF_3230;
 pub const TSENSOR_CAL_ADDR: usize = TSENSOR_CAL1_ADDR;
+pub const VREFINT_MV_TYPICAL: u16 = 1200;
 
 pub struct SystemInfo;
 
@@ -24,7 +24,13 @@ impl SystemInfo {
         if sz == 0 || sz == 0xFFFF { 128 } else { sz }
     }
 
-    /// Reads the factory internal reference voltage calibration word.
+    /// Typical internal reference voltage in millivolts (1200 mV on PY32F071).
+    #[inline(always)]
+    pub const fn vrefint_mv_typical() -> u16 {
+        VREFINT_MV_TYPICAL
+    }
+
+    /// Reads the factory internal reference calibration slot if queried by legacy callers.
     #[inline(always)]
     pub fn vrefint_calibration() -> u16 {
         let ptr = VREFINT_CAL_ADDR as *const u16;

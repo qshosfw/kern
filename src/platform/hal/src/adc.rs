@@ -114,15 +114,46 @@ impl Adc {
         for _ in 0..samples {
             sum += self.read_channel(channel) as u32;
         }
-        if samples == 8 {
-            (sum >> 3) as u16
-        } else if samples == 4 {
-            (sum >> 2) as u16
-        } else if samples == 16 {
-            (sum >> 4) as u16
+        if samples.is_power_of_two() {
+            (sum >> samples.trailing_zeros()) as u16
         } else {
-            (sum / (samples as u32).max(1)) as u16
+            (sum / samples as u32) as u16
         }
+    }
+
+    /// Configure single-channel analog watchdog thresholds (12-bit counts).
+    pub fn configure_watchdog(&self, channel: u8, low: u16, high: u16, enable_irq: bool) {
+        unsafe {
+            adc::ADC_LTR.write_volatile((low & 0x0FFF) as u32);
+            adc::ADC_HTR.write_volatile((high & 0x0FFF) as u32);
+            let mut cr1 = adc::ADC_CR1.read_volatile() & !(0x1F | adc::CR1_AWDIE);
+            cr1 |= (channel as u32 & 0x1F) | adc::CR1_AWDSGL | adc::CR1_AWDEN;
+            if enable_irq {
+                cr1 |= adc::CR1_AWDIE;
+            }
+            adc::ADC_CR1.write_volatile(cr1);
+            adc::ADC_SR.write_volatile(!adc::SR_AWD);
+        }
+    }
+
+    /// Returns true if the analog watchdog threshold flag is latched.
+    #[inline]
+    pub fn watchdog_triggered(&self) -> bool {
+        unsafe { (adc::ADC_SR.read_volatile() & adc::SR_AWD) != 0 }
+    }
+
+    /// Clear analog watchdog threshold flag.
+    #[inline]
+    pub fn clear_watchdog(&self) {
+        unsafe {
+            adc::ADC_SR.write_volatile(!adc::SR_AWD);
+        }
+    }
+
+    /// Read latest 12-bit injected channel result from JDR1.
+    #[inline]
+    pub fn read_jdr1_raw(&self) -> u16 {
+        unsafe { (adc::ADC_JDR1.read_volatile() & 0x0FFF) as u16 }
     }
 
     /// Read internal VREFINT (Channel 17 on PY32F071) and return calculated VDDA voltage in millivolts.

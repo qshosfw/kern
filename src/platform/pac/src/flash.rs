@@ -54,3 +54,21 @@ pub const FLASH_OPTR_NRST_MODE: u32 = 1 << 13;
 pub const FLASH_OPTR_NBOOT1: u32 = 1 << 14;
 /// IWDG counter behavior in STOP mode: 0 = Freeze, 1 = Active
 pub const FLASH_OPTR_IWDG_STOP: u32 = 1 << 15;
+
+// ── SR / CR Bit Definitions ────────────────────────────────────────────────
+
+pub const SR_BSY: u32 = 1 << 0;
+pub const SR_EOP: u32 = 1 << 1;
+pub const SR_WRPERR: u32 = 1 << 4;
+pub const SR_PGERR: u32 = 1 << 5;
+pub const SR_ERR_MASK: u32 = SR_WRPERR | SR_PGERR;
+
+pub const CR_PG: u32 = 1 << 0;
+pub const CR_PER: u32 = 1 << 1;
+pub const CR_MER: u32 = 1 << 2;
+pub const CR_PGSTRT: u32 = 1 << 16;
+pub const CR_EOPIE: u32 = 1 << 24;
+pub const CR_LOCK: u32 = 1 << 31;
+
+pub const KEY1: u32 = 0x4567_0123;
+pub const KEY2: u32 = 0xCDEF_89AB;

@@ -7,8 +7,11 @@
 
 use crate::gpio::Pin;
 use crate::rcc;
+use core::sync::atomic::{AtomicU32, Ordering};
 use pac::gpio;
 use pac::usart;
+
+static CURRENT_BAUD: AtomicU32 = AtomicU32::new(115_200);
 
 /// Initialize USART1 at 115200 baud, 8N1.
 pub fn init() {
@@ -25,13 +28,14 @@ pub fn init() {
     rx.set_pull(pac::gpio::PULL_UP);
     rx.configure_af(pac::gpio::AF1, pac::gpio::SPEED_MEDIUM);
 
+    let baud = CURRENT_BAUD.load(Ordering::Relaxed);
     let pclk = rcc::sysclk_hz();
     unsafe {
         // Disable USART before configuration
         usart::USART_CR1.write_volatile(0);
 
-        // Baud rate: BRR = PCLK / baud (e.g. 48000000 / 115200 = 417, 48000000 / 38400 = 1250)
-        let brr = (pclk + 115200 / 2) / 115200;
+        // Baud rate: BRR = PCLK / baud
+        let brr = (pclk + (baud >> 1)) / baud;
         usart::USART_BRR.write_volatile(brr);
 
         // CR2: 1 stop bit (default 0)
@@ -46,18 +50,28 @@ pub fn init() {
 
 /// Dynamically update USART1 baud rate (e.g. 115200 or 38400)
 pub fn set_baud(baud: u32) {
-    let baud = if baud == 0 { 115200 } else { baud };
-    let pclk = rcc::sysclk_hz();
+    let baud = if baud == 0 { 115_200 } else { baud };
+    CURRENT_BAUD.store(baud, Ordering::Relaxed);
+    resync_clock(rcc::sysclk_hz());
+}
+
+/// Recompute `USART_BRR` after a system clock switch (`rcc::set_sysclk_*`).
+pub fn resync_clock(pclk_hz: u32) {
+    if unsafe { (pac::rcc::RCC_APB2ENR.read_volatile() & pac::rcc::APB2ENR_USART1) == 0 } {
+        return;
+    }
+    let baud = CURRENT_BAUD.load(Ordering::Relaxed);
     unsafe {
         let cr1 = usart::USART_CR1.read_volatile();
-        usart::USART_CR1.write_volatile(0);
-        let brr = (pclk + baud / 2) / baud;
+        if (cr1 & usart::CR1_UE) == 0 {
+            return;
+        }
+        usart::USART_CR1.write_volatile(cr1 & !usart::CR1_UE);
+        let brr = (pclk_hz + (baud >> 1)) / baud;
         usart::USART_BRR.write_volatile(brr);
         usart::USART_CR1.write_volatile(cr1);
     }
 }
-
-use core::sync::atomic::{AtomicU32, Ordering};
 
 pub static LAST_UART_ACTIVITY_MS: AtomicU32 = AtomicU32::new(0);
 

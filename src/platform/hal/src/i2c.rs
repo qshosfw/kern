@@ -28,20 +28,35 @@ impl<SCL, SDA> ErrorType for BitbangI2c<SCL, SDA> {
     type Error = BitbangI2cError;
 }
 
-impl<SCL: OutputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> {
+impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> {
     pub fn new(scl: SCL, sda: SDA) -> Self {
         Self { scl, sda }
     }
 
+    #[inline(always)]
     fn delay(&self) {
-        cortex_m::asm::delay(48); // ~1us delay at 48MHz clock
+        // ~1 us half-bit delay scaled to active SYSCLK without hardware division.
+        let cycles = (crate::rcc::sysclk_hz() >> 20).max(4);
+        cortex_m::asm::delay(cycles);
+    }
+
+    fn release_scl_and_wait(&mut self) -> Result<(), BitbangI2cError> {
+        self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
+        let mut spins = 1_000u32;
+        while self.scl.is_low().unwrap_or(false) && spins > 0 {
+            spins -= 1;
+        }
+        if spins == 0 {
+            return Err(BitbangI2cError::Timeout);
+        }
+        self.delay();
+        Ok(())
     }
 
     fn start(&mut self) -> Result<(), BitbangI2cError> {
         self.sda.set_high().map_err(|_| BitbangI2cError::Timeout)?;
         self.delay();
-        self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
-        self.delay();
+        self.release_scl_and_wait()?;
         self.sda.set_low().map_err(|_| BitbangI2cError::Timeout)?;
         self.delay();
         self.scl.set_low().map_err(|_| BitbangI2cError::Timeout)?;
@@ -52,8 +67,7 @@ impl<SCL: OutputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> {
     fn stop(&mut self) -> Result<(), BitbangI2cError> {
         self.sda.set_low().map_err(|_| BitbangI2cError::Timeout)?;
         self.delay();
-        self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
-        self.delay();
+        self.release_scl_and_wait()?;
         self.sda.set_high().map_err(|_| BitbangI2cError::Timeout)?;
         self.delay();
         Ok(())
@@ -68,8 +82,7 @@ impl<SCL: OutputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> {
             }
             byte <<= 1;
             self.delay();
-            self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
-            self.delay();
+            self.release_scl_and_wait()?;
             self.scl.set_low().map_err(|_| BitbangI2cError::Timeout)?;
             self.delay();
         }
@@ -77,8 +90,7 @@ impl<SCL: OutputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> {
         // ACK Check
         self.sda.set_high().map_err(|_| BitbangI2cError::Timeout)?;
         self.delay();
-        self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
-        self.delay();
+        self.release_scl_and_wait()?;
 
         let ack = self.sda.is_low().unwrap_or(false);
 
@@ -97,8 +109,7 @@ impl<SCL: OutputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> {
         let mut byte = 0u8;
 
         for _ in 0..8 {
-            self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
-            self.delay();
+            self.release_scl_and_wait()?;
             byte <<= 1;
             if self.sda.is_high().unwrap_or(false) {
                 byte |= 1;
@@ -113,16 +124,37 @@ impl<SCL: OutputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> {
             self.sda.set_high().map_err(|_| BitbangI2cError::Timeout)?;
         }
 
-        self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
-        self.delay();
+        self.release_scl_and_wait()?;
         self.scl.set_low().map_err(|_| BitbangI2cError::Timeout)?;
         self.delay();
 
         Ok(byte)
     }
+
+    /// Raw START / WRITE / STOP sequence for 2-wire chips with non-standard framing (e.g. BK1080).
+    pub fn write_raw(&mut self, bytes: &[u8]) -> Result<(), BitbangI2cError> {
+        self.start()?;
+        for &b in bytes {
+            self.write_byte(b)?;
+        }
+        self.stop()
+    }
+
+    /// Raw START / WRITE prefix + RESTART / READ / STOP sequence.
+    pub fn write_read_raw(&mut self, write: &[u8], read: &mut [u8]) -> Result<(), BitbangI2cError> {
+        self.start()?;
+        for &b in write {
+            self.write_byte(b)?;
+        }
+        let n = read.len();
+        for (i, dst) in read.iter_mut().enumerate() {
+            *dst = self.read_byte(i + 1 < n)?;
+        }
+        self.stop()
+    }
 }
 
-impl<SCL: OutputPin, SDA: OutputPin + InputPin> I2c for BitbangI2c<SCL, SDA> {
+impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> I2c for BitbangI2c<SCL, SDA> {
     fn transaction(
         &mut self,
         address: u8,
@@ -148,6 +180,69 @@ impl<SCL: OutputPin, SDA: OutputPin + InputPin> I2c for BitbangI2c<SCL, SDA> {
                     self.stop()?;
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+/// Hardware I2C1 controller wrapper using `pac::i2c` registers.
+pub struct HwI2c1;
+
+impl HwI2c1 {
+    /// Initialize I2C1 in standard mode (100 kHz) for the current APB1 clock (`pclk_mhz`).
+    pub fn init_100khz(pclk_mhz: u32) {
+        let freq = pclk_mhz.clamp(2, 48);
+        let ccr = (freq * 5).max(4);
+        unsafe {
+            let apb1 = pac::rcc::RCC_APB1ENR.read_volatile();
+            pac::rcc::RCC_APB1ENR.write_volatile(apb1 | pac::rcc::APB1ENR_I2C1);
+
+            pac::i2c::I2C1_CR1.write_volatile(pac::i2c::CR1_SWRST);
+            pac::i2c::I2C1_CR1.write_volatile(0);
+            pac::i2c::I2C1_CR2.write_volatile(freq);
+            pac::i2c::I2C1_CCR.write_volatile(ccr);
+            pac::i2c::I2C1_TRISE.write_volatile(freq + 1);
+            pac::i2c::I2C1_CR1.write_volatile(pac::i2c::CR1_PE);
+        }
+    }
+
+    fn wait_sr1(mask: u32) -> Result<(), BitbangI2cError> {
+        let mut timeout = 50_000u32;
+        while timeout > 0 {
+            let sr1 = unsafe { pac::i2c::I2C1_SR1.read_volatile() };
+            if (sr1 & pac::i2c::SR1_AF) != 0 {
+                unsafe {
+                    pac::i2c::I2C1_SR1.write_volatile(sr1 & !pac::i2c::SR1_AF);
+                    pac::i2c::I2C1_CR1.write_volatile(pac::i2c::CR1_PE | pac::i2c::CR1_STOP);
+                }
+                return Err(BitbangI2cError::NoAcknowledge);
+            }
+            if (sr1 & mask) != 0 {
+                return Ok(());
+            }
+            timeout -= 1;
+        }
+        Err(BitbangI2cError::Timeout)
+    }
+
+    /// Write `data` to 7-bit `addr` over hardware I2C1.
+    pub fn write(&mut self, addr: u8, data: &[u8]) -> Result<(), BitbangI2cError> {
+        unsafe {
+            pac::i2c::I2C1_CR1.write_volatile(pac::i2c::CR1_PE | pac::i2c::CR1_START);
+        }
+        Self::wait_sr1(pac::i2c::SR1_SB)?;
+        unsafe {
+            pac::i2c::I2C1_DR.write_volatile(((addr as u32) << 1) & 0xFE);
+        }
+        Self::wait_sr1(pac::i2c::SR1_ADDR)?;
+        let _ = unsafe { pac::i2c::I2C1_SR2.read_volatile() };
+        for &b in data {
+            Self::wait_sr1(pac::i2c::SR1_TXE)?;
+            unsafe { pac::i2c::I2C1_DR.write_volatile(b as u32) };
+        }
+        Self::wait_sr1(pac::i2c::SR1_BTF)?;
+        unsafe {
+            pac::i2c::I2C1_CR1.write_volatile(pac::i2c::CR1_PE | pac::i2c::CR1_STOP);
         }
         Ok(())
     }

@@ -69,8 +69,8 @@ pub fn init() {
     BACKLIGHT.set_low();
 
     // ── BK1080 I2C Pins ─────────────────────────────────────────────────
-    FM_SCL.configure_output(pac::gpio::SPEED_LOW);
-    FM_SDA.configure_output(pac::gpio::SPEED_LOW);
+    FM_SCL.configure_output_od(pac::gpio::SPEED_LOW);
+    FM_SDA.configure_output_od(pac::gpio::SPEED_LOW);
     FM_SCL.set_high();
     FM_SDA.set_high();
 

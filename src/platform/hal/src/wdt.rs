@@ -29,8 +29,8 @@ impl Watchdog {
             // Prescaler 64 (~500Hz clock from LSI 32kHz)
             IWDG_PR.write_volatile(0x04);
 
-            // Calculate reload count (timeout_ms * 32 / 64)
-            let reload = (timeout_ms * 32 / 64).min(0xFFF);
+            // Calculate reload count (timeout_ms * 32 / 64 == timeout_ms >> 1)
+            let reload = (timeout_ms >> 1).min(0xFFF);
             IWDG_RLR.write_volatile(reload);
 
             // Refresh counter
@@ -46,34 +46,38 @@ impl Watchdog {
         }
     }
 
-    /// Introspect the MCU reset cause from hardware flags
-    pub fn reset_cause() -> ResetCause {
-        // Source RCC_CSR at 0x4002_1024
-        let csr_ptr = 0x4002_1024 as *const u32;
-        let csr = unsafe { csr_ptr.read_volatile() };
+    /// Read raw `RCC_CSR` reset status bits for diagnostics / crash capture.
+    #[inline(always)]
+    pub fn raw_reset_flags() -> u32 {
+        unsafe { pac::rcc::RCC_CSR.read_volatile() }
+    }
 
-        if (csr & (1 << 29)) != 0 {
+    /// Introspect the MCU reset cause from `RCC_CSR` hardware flags.
+    pub fn reset_cause() -> ResetCause {
+        let csr = Self::raw_reset_flags();
+
+        if (csr & pac::rcc::CSR_IWDGRSTF) != 0 {
             ResetCause::IndependentWatchdog
-        } else if (csr & (1 << 30)) != 0 {
+        } else if (csr & pac::rcc::CSR_WWDGRSTF) != 0 {
             ResetCause::WindowWatchdog
-        } else if (csr & (1 << 28)) != 0 {
+        } else if (csr & pac::rcc::CSR_SFTRSTF) != 0 {
             ResetCause::SoftwareReset
-        } else if (csr & (1 << 27)) != 0 {
+        } else if (csr & pac::rcc::CSR_PWRRSTF) != 0 {
             ResetCause::PowerOn
-        } else if (csr & (1 << 26)) != 0 {
+        } else if (csr & pac::rcc::CSR_PINRSTF) != 0 {
             ResetCause::PinReset
-        } else if (csr & (1 << 31)) != 0 {
+        } else if (csr & pac::rcc::CSR_OBLRSTF) != 0 {
             ResetCause::LowPower
         } else {
             ResetCause::Unknown
         }
     }
 
-    /// Clear the hardware reset flags in RCC_CSR (Bit 24 RMVF: Remove Reset Flag)
+    /// Clear the hardware reset flags in `RCC_CSR` (Bit 23 `RMVF`: Remove Reset Flag).
     pub fn clear_reset_flags() {
-        let csr_ptr = 0x4002_1024 as *mut u32;
         unsafe {
-            csr_ptr.write_volatile(csr_ptr.read_volatile() | (1 << 24));
+            let csr = pac::rcc::RCC_CSR.read_volatile();
+            pac::rcc::RCC_CSR.write_volatile(csr | pac::rcc::CSR_RMVF);
         }
     }
 }

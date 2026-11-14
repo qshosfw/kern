@@ -26,13 +26,36 @@ pub const ADC_SQR1: *mut u32 = (ADC1_BASE + 0x30) as *mut u32;
 pub const ADC_SQR2: *mut u32 = (ADC1_BASE + 0x34) as *mut u32;
 /// ADC regular sequence register 3
 pub const ADC_SQR3: *mut u32 = (ADC1_BASE + 0x38) as *mut u32;
+/// ADC injected sequence register
+pub const ADC_JSQR: *mut u32 = (ADC1_BASE + 0x3C) as *mut u32;
+/// ADC injected data register 1
+pub const ADC_JDR1: *const u32 = (ADC1_BASE + 0x40) as *const u32;
+/// ADC watchdog higher threshold register
+pub const ADC_HTR: *mut u32 = (ADC1_BASE + 0x24) as *mut u32;
+/// ADC watchdog lower threshold register
+pub const ADC_LTR: *mut u32 = (ADC1_BASE + 0x28) as *mut u32;
 /// ADC regular data register
 pub const ADC_DR: *const u32 = (ADC1_BASE + 0x50) as *const u32;
 
 // ── SR Bit Definitions ─────────────────────────────────────────────────────
 
+/// Analog watchdog flag
+pub const SR_AWD: u32 = 1 << 0;
 /// End of conversion
 pub const SR_EOC: u32 = 1 << 1;
+/// Injected channel end of conversion
+pub const SR_JEOC: u32 = 1 << 2;
+
+// ── CR1 Bit Definitions ────────────────────────────────────────────────────
+
+/// Analog watchdog interrupt enable
+pub const CR1_AWDIE: u32 = 1 << 6;
+/// Analog watchdog enable on regular channels
+pub const CR1_AWDEN: u32 = 1 << 23;
+/// Single channel analog watchdog mode
+pub const CR1_AWDSGL: u32 = 1 << 9;
+/// Automatic injected group conversion
+pub const CR1_JAUTO: u32 = 1 << 10;
 
 // ── CR2 Bit Definitions ────────────────────────────────────────────────────
 

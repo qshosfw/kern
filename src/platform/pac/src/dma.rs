@@ -64,11 +64,3 @@ pub const fn htif(ch: u8) -> u32 {
 pub const fn teif(ch: u8) -> u32 {
     1 << (3 + (ch - 1) * 4)
 }
-
-// ── SYSCFG DMA Remap ────────────────────────────────────────────────────
-// According to PY32/STM32 conventions, SYSCFG_CFGR1 or similar handles DMA mapping.
-// We'll define a dummy base if not already present.
-
-pub const SYSCFG_BASE: u32 = 0x4001_0000;
-pub const SYSCFG_CFGR1: *mut u32 = SYSCFG_BASE as *mut u32;
-pub const SYSCFG_CFGR3: *mut u32 = (SYSCFG_BASE + 0x20) as *mut u32; // Assuming CFGR3 for remaps
