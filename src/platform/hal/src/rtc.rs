@@ -37,18 +37,24 @@ impl RealTimeClock {
         }
     }
 
+    #[inline(never)]
+    fn write_pair(reg_hi: *mut u32, reg_lo: *mut u32, val: u32) {
+        crate::rcc::enable_rtc_lsi();
+        Self::wait_rtoff();
+        unsafe {
+            RTC_CRL.write_volatile(RTC_CRL.read_volatile() | CRL_CNF);
+            reg_hi.write_volatile(val >> 16);
+            reg_lo.write_volatile(val & 0xFFFF);
+            RTC_CRL.write_volatile(RTC_CRL.read_volatile() & !CRL_CNF);
+        }
+        Self::wait_rtoff();
+    }
+
     /// Initializes the RTC with LSI clock and `PRL = 32767` (~1 Hz tick).
     pub fn init() {
         crate::rcc::enable_rtc_lsi();
         Self::wait_rsf();
-        Self::wait_rtoff();
-        unsafe {
-            RTC_CRL.write_volatile(RTC_CRL.read_volatile() | CRL_CNF);
-            RTC_PRLH.write_volatile(0);
-            RTC_PRLL.write_volatile(32_767);
-            RTC_CRL.write_volatile(RTC_CRL.read_volatile() & !CRL_CNF);
-        }
-        Self::wait_rtoff();
+        Self::write_pair(RTC_PRLH, RTC_PRLL, 32_767);
     }
 
     /// Reads the raw 32-bit seconds counter after `CRL.RSF` synchronization.
@@ -69,15 +75,7 @@ impl RealTimeClock {
 
     /// Sets the 32-bit RTC seconds counter.
     pub fn set_seconds(secs: u32) {
-        crate::rcc::enable_rtc_lsi();
-        Self::wait_rtoff();
-        unsafe {
-            RTC_CRL.write_volatile(RTC_CRL.read_volatile() | CRL_CNF);
-            RTC_CNTH.write_volatile(secs >> 16);
-            RTC_CNTL.write_volatile(secs & 0xFFFF);
-            RTC_CRL.write_volatile(RTC_CRL.read_volatile() & !CRL_CNF);
-        }
-        Self::wait_rtoff();
+        Self::write_pair(RTC_CNTH, RTC_CNTL, secs);
     }
 
     /// Reads the 32-bit RTC alarm register (`ALRH/ALRL`) retained in the backup domain.
@@ -89,19 +87,12 @@ impl RealTimeClock {
 
     /// Writes the 32-bit RTC alarm register (`ALRH/ALRL`).
     pub fn write_alarm_raw(val: u32) {
-        crate::rcc::enable_rtc_lsi();
-        Self::wait_rtoff();
-        unsafe {
-            RTC_CRL.write_volatile(RTC_CRL.read_volatile() | CRL_CNF);
-            RTC_ALRH.write_volatile(val >> 16);
-            RTC_ALRL.write_volatile(val & 0xFFFF);
-            RTC_CRL.write_volatile(RTC_CRL.read_volatile() & !CRL_CNF);
-        }
-        Self::wait_rtoff();
+        Self::write_pair(RTC_ALRH, RTC_ALRL, val);
     }
 
     /// Decodes the 32-bit counter (seconds since 2000-01-01 00:00:00) into UTC `DateTime`.
     pub fn get_time() -> DateTime {
+        static DAYS_IN_MONTH: [u8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
         let mut s = Self::get_seconds();
         let sec = (s % 60) as u8;
         s /= 60;
@@ -120,23 +111,8 @@ impl RealTimeClock {
             year += 1;
         }
         let mut month = 1u8;
-        for (i, &dim) in [
-            31u32,
-            if (year & 3) == 0 { 29 } else { 28 },
-            31,
-            30,
-            31,
-            30,
-            31,
-            31,
-            30,
-            31,
-            30,
-            31,
-        ]
-        .iter()
-        .enumerate()
-        {
+        for (i, &base_dim) in DAYS_IN_MONTH.iter().enumerate() {
+            let dim = base_dim as u32 + u32::from(i == 1 && (year & 3) == 0);
             if days < dim {
                 month = (i as u8) + 1;
                 break;
