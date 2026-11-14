@@ -40,6 +40,7 @@ pub enum BacklightMode {
     On,
 }
 
+#[repr(align(4))]
 pub struct BacklightController {
     mode: BacklightMode,
     keypad_mode: u8, // 0=Off, 1=Sync Screen, 2=5s, 3=10s, 4=30s, 5=Always On
