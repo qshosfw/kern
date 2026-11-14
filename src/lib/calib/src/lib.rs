@@ -203,7 +203,7 @@ pub fn calculate_battery_percentage(raw_adc: u16, curve: &[u16; 6]) -> u8 {
 /// Convert raw battery ADC reading to millivolts using the 7.60V baseline calibration constant.
 #[inline(always)]
 pub fn calculate_battery_mv(raw_adc: u16, calib_const: u16) -> u16 {
-    let cal = if (1000..=3500).contains(&calib_const) {
+    let cal = if calib_const >= 1000 && calib_const <= 3500 {
         calib_const as u32
     } else {
         2227

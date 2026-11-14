@@ -170,7 +170,7 @@ impl Adc {
     pub fn read_mcu_temp_deci_c(&self, vdda_mv: u16) -> i16 {
         unsafe {
             // Validate VDDA reference: if out of range, assume typical 3.3V
-            let vdda = if !(1800..=3800).contains(&vdda_mv) {
+            let vdda = if vdda_mv < 1800 || vdda_mv > 3800 {
                 3300u32
             } else {
                 vdda_mv as u32
@@ -181,7 +181,7 @@ impl Adc {
             let c2 = TS_CAL2.read_volatile();
 
             let (cal1, cal2) =
-                if (200..=3800).contains(&c1) && c2 > c1 && c2 <= 4000 && (c2 - c1) >= 50 {
+                if c1 >= 200 && c1 <= 3800 && c2 > c1 && c2 <= 4000 && (c2 - c1) >= 50 {
                     (c1, c2)
                 } else {
                     (0xFFFF, 0xFFFF)
@@ -192,8 +192,8 @@ impl Adc {
 
             // Normalize raw counts to 3.3V factory calibration baseline
             // Fast reciprocal division: (x * 0x4F7005) >> 34 exact for all x <= 16,000,000
-            let prod = ts_data as u64 * vdda as u64;
-            let ts_data_norm = ((prod * 0x4F7005) >> 34) as u32;
+            let prod = ts_data as u32 * vdda;
+            let ts_data_norm = (((prod as u64) * 0x4F7005) >> 34) as u32;
 
             let deci_c = if cal1 == 0xFFFF {
                 // Unprogrammed fallback to typical silicon values:
