@@ -159,8 +159,7 @@ impl<'a, State> Bk4829<'a, State> {
 
     /// Soft Reset: Clears RF core configuration.
     pub fn soft_reset(&mut self) {
-        self.write_reg(REG_SYS_POWER, 0x0000);
-        self.write_reg(REG_POWER_CTRL, POWER_CTRL_SLEEP);
+        self.sleep();
     }
 
     pub fn set_crystal_trim(&mut self, trim: i16) {
@@ -273,29 +272,16 @@ impl<'a, State> Bk4829<'a, State> {
             return;
         }
 
-        // 1. Prepare tone generator with TX Mute active (prevents clicks/pops while configuring)
-        self.write_reg(REG_TX_MUTE, 0xBB18);
-        self.set_af(AfType::Beep);
-        let tone_cfg = 0x8000 | ((self.tone_gain as u16 & 0x7F) << 8);
-        self.write_reg(REG_TONE_GAIN, tone_cfg);
-
-        // 2. Isolate RF RX Demodulator during tone playback:
-        // Set REG_SYS_POWER to AF_DAC (bit 9) | DISC_MODE (bit 8) | TX_DSP (bit 1) = 0x0302.
-        // This isolates the FM discriminator and RX DSP so receiver hiss/whistle never mixes into the tone.
+        // Capture RX power state before begin_tone_sequence isolates REG_SYS_POWER for beep playback.
         let cur_pwr = self.cache.read(REG_SYS_POWER);
         let rx_pwr = if cur_pwr != 0xFFFF && (cur_pwr & 0x0001) != 0 {
             cur_pwr & !0x8000
         } else {
             0x3FF1
         };
-        self.write_reg(REG_SYS_POWER, 0x0302);
 
-        // 3. Hardware Audio Power Amplifier Warm-Up:
-        // On Quansheng UV-K1 / K5, LN4898 audio power amplifier (PA8) warm-up
-        // requires ~50ms to charge the bypass capacitor from cold shutdown for pop-free, audible playback.
-        let was_amp_active = bsp::pins::AUDIO_PA.is_high();
-        if !was_amp_active {
-            bsp::pins::AUDIO_PA.set_high();
+        // Wait ~50ms when waking LN4898 PA8 from cold shutdown for pop-free playback.
+        if !self.begin_tone_sequence() {
             py32_hal::delay::delay_ms(50);
         }
 
@@ -607,14 +593,7 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_TX_MUTE, 0xBB18);
 
         // 4. Base GPIO state: RX enable (Pin 28) on, PA enable (Pin 29) off, LEDs off
-        let mut reg33 = self.cache.read(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
-        reg33 &= !0x0003; // LEDs off
-        reg33 |= 0x0040; // RX enable (Pin 28)
-        reg33 &= !0x0020; // PA disable (Pin 29)
-        self.write_reg(REG_GPIO, reg33);
+        self.update_gpio_reg(0x0023, 0x0040);
 
         self.clear_interrupts();
     }
@@ -696,27 +675,24 @@ impl<'a, State> Bk4829<'a, State> {
         }
     }
 
-    pub fn set_status_led(&mut self, led: bsp::StatusLed) {
+    #[inline(never)]
+    fn update_gpio_reg(&mut self, clear_mask: u16, set_mask: u16) {
         let mut reg33 = self.cache.read(REG_GPIO);
         if reg33 == 0xFFFF {
             reg33 = 0x9000;
         }
-        reg33 = (reg33 & !0x0003) | (led as u16);
+        reg33 = (reg33 & !clear_mask) | set_mask;
         self.write_reg(REG_GPIO, reg33);
     }
 
+    pub fn set_status_led(&mut self, led: bsp::StatusLed) {
+        self.update_gpio_reg(0x0003, led as u16);
+    }
+
     pub fn set_gpio_pin(&mut self, pin: u8, high: bool) {
-        let mut reg33 = self.cache.read(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
         let bit = 0x0040 >> pin;
-        if high {
-            reg33 |= bit;
-        } else {
-            reg33 &= !bit;
-        }
-        self.write_reg(REG_GPIO, reg33);
+        let (clear_mask, set_mask) = if high { (0, bit) } else { (bit, 0) };
+        self.update_gpio_reg(clear_mask, set_mask);
     }
 
     pub fn set_agc(&mut self, enable: bool) {
@@ -739,13 +715,7 @@ impl<'a, State> Bk4829<'a, State> {
 
     #[inline(never)]
     pub(crate) fn disable_rf(&mut self) {
-        let mut reg33 = self.cache.read(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
-        reg33 &= !0x0003; // Turn off status LEDs
-        reg33 &= !0x0060; // Turn off RX and PA switches
-        self.write_reg(REG_GPIO, reg33);
+        self.update_gpio_reg(0x0063, 0);
         self.write_reg(REG_SYS_POWER, 0x0000);
         self.squelch_open = false;
         self.subaudible_matched = false;
