@@ -49,23 +49,15 @@ fn fmix64(mut k: u64) -> u64 {
 fn murmur3_64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0x9e3779b97f4a7c15; // DeltaFW golden ratio seed
     let mut i = 0;
-    while i + 8 <= bytes.len() {
-        let chunk = u64::from_le_bytes([
-            bytes[i],
-            bytes[i + 1],
-            bytes[i + 2],
-            bytes[i + 3],
-            bytes[i + 4],
-            bytes[i + 5],
-            bytes[i + 6],
-            bytes[i + 7],
-        ]);
+    let n = bytes.len() & !7;
+    while i < n {
+        let chunk = unsafe { u64::from_le_bytes(*bytes.as_ptr().add(i).cast::<[u8; 8]>()) };
         let mut k = chunk.wrapping_mul(0x87c37b91114253d5);
         k = k.rotate_left(31);
         k = k.wrapping_mul(0x4cf5ad432745937f);
         h ^= k;
         h = h.rotate_left(27);
-        h = h.wrapping_mul(5).wrapping_add(0x52dce729);
+        h = (h << 2).wrapping_add(h).wrapping_add(0x52dce729);
         i += 8;
     }
     h ^= bytes.len() as u64;
@@ -136,12 +128,12 @@ pub fn get_crockford_serial() -> [u8; 15] {
         val >>= 5;
     }
 
-    let hi = (serial >> 32) as u32;
-    let lo = serial as u32;
-    let r_hi = utils::math::rem37_u32(hi) as u16;
-    let r_lo = utils::math::rem37_u32(lo) as u16;
-    let mod37 = utils::math::div37_u16(r_hi * 7 + r_lo).1 as usize;
-    out[13] = CHECKSUM_ALPHABET[mod37];
+    let mut rem = 0u16;
+    for shift in [48u8, 32, 16, 0] {
+        rem = rem * 9 + utils::math::div37_u16((serial >> shift) as u16).1 as u16;
+    }
+    let mod37 = utils::math::div37_u16(rem).1 as usize;
+    out[13] = unsafe { *CHECKSUM_ALPHABET.get_unchecked(mod37) };
     out[14] = b'\0';
 
     out
