@@ -83,10 +83,13 @@ impl AssetDescriptor {
         for i in 0..scan_count {
             order[i] = i as u8;
             let mut j = i;
-            while j > 0
-                && storage.dir_entries[order[j] as usize].path.as_str()
-                    < storage.dir_entries[order[j - 1] as usize].path.as_str()
-            {
+            while j > 0 {
+                let cur = (order[j] as usize) & (MAX_CHOOSER_ASSETS - 1);
+                let prev = (order[j - 1] as usize) & (MAX_CHOOSER_ASSETS - 1);
+                if storage.dir_entries[cur].path.as_str() >= storage.dir_entries[prev].path.as_str()
+                {
+                    break;
+                }
                 order.swap(j, j - 1);
                 j -= 1;
             }
@@ -95,7 +98,11 @@ impl AssetDescriptor {
         let mut current_sel = 0;
 
         for &idx in &order[..scan_count] {
-            let entry = &storage.dir_entries[idx as usize];
+            let found = storage.count;
+            if found >= MAX_CHOOSER_ASSETS {
+                break;
+            }
+            let entry = &storage.dir_entries[(idx as usize) & (MAX_CHOOSER_ASSETS - 1)];
             if entry.is_dir {
                 continue;
             }
@@ -104,12 +111,11 @@ impl AssetDescriptor {
                 continue;
             }
 
-            let found = storage.count;
             if build_full_asset_path(self.dir, entry_name, &mut storage.paths[found]).is_err() {
                 continue;
             }
             let full_path = storage.paths[found].as_str();
-            format_asset_name_into(full_path, &mut storage.labels[found + 1]);
+            format_asset_name_into(entry_name, &mut storage.labels[found + 1]);
 
             if active
                 && current_sel == 0
@@ -118,10 +124,7 @@ impl AssetDescriptor {
                 current_sel = found + 1;
             }
 
-            storage.count += 1;
-            if storage.count >= MAX_CHOOSER_ASSETS {
-                break;
-            }
+            storage.count = found + 1;
         }
 
         if active && current_sel == 0 && storage.count > 0 {
@@ -307,7 +310,7 @@ pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
     }
     let storage = storage_ref();
     let idx = sel - 1;
-    if idx < storage.count && !storage.paths[idx].is_empty() {
+    if idx < storage.count.min(MAX_CHOOSER_ASSETS) && !storage.paths[idx].is_empty() {
         Some(storage.paths[idx].as_str())
     } else {
         None

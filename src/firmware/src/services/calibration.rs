@@ -39,72 +39,43 @@ impl CalibSignature {
         }
     }
 
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        const _: () = assert!(core::mem::size_of::<CalibSignature>() == 32);
+        unsafe { &*(self as *const Self as *const [u8; 32]) }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes_mut(&mut self) -> &mut [u8; 32] {
+        unsafe { &mut *(self as *mut Self as *mut [u8; 32]) }
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
-        #[cfg(target_endian = "little")]
-        {
-            const _: () = assert!(core::mem::size_of::<CalibSignature>() == 32);
-            let mut out = [0u8; 32];
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    self as *const Self as *const u8,
-                    out.as_mut_ptr(),
-                    32,
-                );
-            }
-            out
-        }
-        #[cfg(not(target_endian = "little"))]
-        {
-            let mut out = [0u8; 32];
-            out[0..4].copy_from_slice(&self.ident);
-            out[4] = self.version;
-            out[5..8].copy_from_slice(&self._reserved);
-            out[8..16].copy_from_slice(&self.hardware_serial.to_le_bytes());
-            out[16..32].copy_from_slice(&self.auth_tag);
-            out
-        }
+        *self.as_bytes()
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < 32 || &bytes[..4] != CALIB_SIG_IDENT {
             return None;
         }
-        #[cfg(target_endian = "little")]
         unsafe {
             let mut sig = core::mem::MaybeUninit::<Self>::uninit();
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), sig.as_mut_ptr() as *mut u8, 32);
             Some(sig.assume_init())
         }
-        #[cfg(not(target_endian = "little"))]
-        {
-            let mut ident = [0u8; 4];
-            ident.copy_from_slice(&bytes[0..4]);
-            let mut reserved = [0u8; 3];
-            reserved.copy_from_slice(&bytes[5..8]);
-            let mut serial_bytes = [0u8; 8];
-            serial_bytes.copy_from_slice(&bytes[8..16]);
-            let mut auth_tag = [0u8; 16];
-            auth_tag.copy_from_slice(&bytes[16..32]);
-            Some(Self {
-                ident,
-                version: bytes[4],
-                _reserved: reserved,
-                hardware_serial: u64::from_le_bytes(serial_bytes),
-                auth_tag,
-            })
-        }
     }
 }
 
 /// Compute a 32-byte silicon binding signature linking calibration data to the MCU UID.
+#[inline(never)]
 pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibSignature {
+    const NONCE: [u8; 16] = [0x5Au8; 16];
     let hw_serial = bsp::uid::get_hardware_serial64();
-    let nonce = [0x5Au8; 16];
     let mut key16 = [0u8; 16];
     key16[..4].copy_from_slice(CALIB_SIG_IDENT);
     key16[4..16].copy_from_slice(mcu_uid);
     let cipher = Ascon128::new(key16);
-    let auth_tag = cipher.compute_mac(&nonce, CALIB_SIG_IDENT, calib);
+    let auth_tag = cipher.compute_mac(&NONCE, CALIB_SIG_IDENT, calib);
 
     CalibSignature {
         ident: *CALIB_SIG_IDENT,
@@ -130,69 +101,50 @@ pub fn verify_device_signature(
 
 /// Strict semantic validation of calibration memory block.
 /// Rejects erased flash (all 0xFF), zeroed memory (all 0x00), or physically invalid values.
+#[inline(never)]
 pub fn is_valid_calibration(calib: &[u8]) -> bool {
     if calib.len() < 512 {
         return false;
     }
 
     // 1. Check for blank / erased flash
-    let mut all_ff = true;
-    let mut all_00 = true;
-    for &b in &calib[..64] {
-        if b != 0xFF {
-            all_ff = false;
+    let first = calib[0];
+    if first == 0x00 || first == 0xFF {
+        let mut same = true;
+        let mut i = 1;
+        while i < 64 {
+            if calib[i] != first {
+                same = false;
+                break;
+            }
+            i += 1;
         }
-        if b != 0x00 {
-            all_00 = false;
-        }
-    }
-    if all_ff || all_00 {
-        return false;
-    }
-
-    // 2. Validate Battery Calibration words at offset 0x140..0x14C (6 x u16)
-    let mut words = [0u16; 6];
-    for i in 0..6 {
-        words[i] = u16::from_le_bytes([calib[0x140 + i * 2], calib[0x140 + i * 2 + 1]]);
-    }
-
-    // Word 3 (7.60V calibration baseline) must be in valid ADC range (1800..2600, authentic = 2227)
-    let w3 = words[3];
-    if w3 < 1800 || w3 > 2600 {
-        return false;
-    }
-
-    // Monotonic sanity check: W0 < W1 < W2 < W3 < W4 < W5
-    for i in 1..6 {
-        if words[i] <= words[i - 1] {
+        if same {
             return false;
         }
     }
 
-    // 3. Validate Crystal Trim at offset 0x188 (i16)
-    let xtal = i16::from_le_bytes([calib[0x188], calib[0x189]]);
-    if xtal < -1000 || xtal > 1000 {
+    let read_u16 = |off: usize| unsafe {
+        u16::from_le_bytes([*calib.get_unchecked(off), *calib.get_unchecked(off + 1)])
+    };
+
+    // 2. Word 3 (7.60V calibration baseline) in valid ADC range (1800..=2600, authentic = 2227)
+    if read_u16(0x146).wrapping_sub(1800) > 800 {
         return false;
     }
 
-    // 4. Validate Volume Gain at offset 0x18E (u8 <= 63)
-    if calib[0x18E] > 63 {
-        return false;
+    // Monotonic sanity check: W0 < W1 < W2 < W3 < W4 < W5
+    for i in 0..5 {
+        if read_u16(0x142 + i * 2) <= read_u16(0x140 + i * 2) {
+            return false;
+        }
     }
 
-    // 5. Validate DAC Gain at offset 0x18F (u8 <= 15)
-    if calib[0x18F] > 15 {
-        return false;
-    }
-
-    // 6. Validate LNA & Mix registers (9-bit register masks <= 0x01FF)
-    let lna = u16::from_le_bytes([calib[0x18A], calib[0x18B]]);
-    let mix = u16::from_le_bytes([calib[0x18C], calib[0x18D]]);
-    if (lna & !0x01FF) != 0 || (mix & !0x01FF) != 0 {
-        return false;
-    }
-
-    true
+    // 3..6. Crystal trim (-1000..=1000), volume gain (<=63), DAC gain (<=15), LNA/Mix masks (<=0x01FF)
+    (read_u16(0x188) as i16).unsigned_abs() <= 1000
+        && calib[0x18E] <= 63
+        && calib[0x18F] <= 15
+        && ((read_u16(0x18A) | read_u16(0x18C)) & !0x01FF) == 0
 }
 
 /// Declarative service interface for system calibration access.
@@ -259,8 +211,7 @@ fn write_protected_sys_file(
 #[inline(never)]
 fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 12]) {
     let sig = compute_device_signature(data, mcu_uid);
-    let sig_bytes = sig.to_bytes();
-    let _ = write_protected_sys_file(vfs, CALIB_SIG_PATH, &sig_bytes);
+    let _ = write_protected_sys_file(vfs, CALIB_SIG_PATH, sig.as_bytes());
 }
 
 #[cfg(feature = "filesystem")]
@@ -408,15 +359,13 @@ impl SystemCalibration {
         }
 
         // Verify device binding signature (re-sign only if signature file is absent)
-        let mut sig_buf = [0u8; 32];
+        let mut sig = CalibSignature::empty();
         let mut sig_present = false;
         let mut bound = !loaded;
-        if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, &mut sig_buf) {
+        if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, sig.as_bytes_mut()) {
             sig_present = true;
             if n >= 32 {
-                if let Some(sig) = CalibSignature::from_bytes(&sig_buf) {
-                    bound = verify_device_signature(&self.raw, &sig, mcu_uid);
-                }
+                bound = verify_device_signature(&self.raw, &sig, mcu_uid);
             }
         }
 
@@ -436,10 +385,6 @@ impl SystemCalibration {
         new_calib: &[u8; 512],
         mcu_uid: &[u8; 12],
     ) -> Result<(), ()> {
-        if !is_valid_calibration(new_calib) {
-            return Err(());
-        }
-
         // Use TRANSIENT_ARENA tail staging_buf() ([4096..4608)) so RigWire payloads in [0..4096) never alias.
         let staging = crate::services::staging_buf();
         let backed_up = read_valid_calib(vfs, CALIB_FILE_PATH, staging)

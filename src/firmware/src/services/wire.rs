@@ -97,17 +97,21 @@ fn err_empty(status: WireStatus) -> (WireStatus, usize) {
 /// Main entry point for non-core RigWire records routed from the transport driver.
 #[inline(never)]
 pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u32) -> bool {
-    let mut payload_buf = [0u8; 128];
     let plen = (header.payload_len as usize).min(128);
-    payload_buf[..plen].copy_from_slice(hw.wire.current_payload(header));
-    let payload = &payload_buf[..plen];
+    let mut payload_buf = core::mem::MaybeUninit::<[u8; 128]>::uninit();
+    let payload = unsafe {
+        let ptr = payload_buf.as_mut_ptr() as *mut u8;
+        core::ptr::copy_nonoverlapping(hw.wire.current_payload(header).as_ptr(), ptr, plen);
+        core::slice::from_raw_parts(ptr, plen)
+    };
 
-    let mut out = [0u8; 192];
+    let mut out_uninit = core::mem::MaybeUninit::<[u8; 192]>::uninit();
+    let out = unsafe { &mut *out_uninit.as_mut_ptr() };
 
     let res = match header.service {
-        SERVICE_CONTROL => handle_control_service(header.opcode, payload, hw, now, &mut out),
-        SERVICE_DATA => handle_data_service(header.opcode, payload, hw, &mut out),
-        SERVICE_EVENTS => handle_events_service(header.opcode, payload, &mut out),
+        SERVICE_CONTROL => handle_control_service(header.opcode, payload, hw, now, out),
+        SERVICE_DATA => handle_data_service(header.opcode, payload, hw, out),
+        SERVICE_EVENTS => handle_events_service(header.opcode, payload),
         _ => return false,
     };
 
@@ -192,7 +196,7 @@ fn read_sys_facet(
         }
         FACET_SYS_CALIBRATION => {
             let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
-            w.write_u8(is_valid_calibration(calib.raw_bytes()) as u8);
+            w.write_u8(calib.is_valid() as u8);
             w.write_i16_le(calib.xtal_freq_low());
             w.write_u16_le(calib.battery_calib_const());
         }
@@ -322,11 +326,12 @@ fn handle_resource_set(
             match handle.facet {
                 FACET_RADIO_TUNING => {
                     let freq_hz = get_u32_le(val)?;
-                    if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
+                    if freq_hz < 18_000_000 || freq_hz > 1_300_000_000 {
                         return Err(WireStatus::BadRange);
                     }
-                    ch.rx_freq = Frequency::new(freq_hz);
-                    let _ = hw.radio.set_frequency(Frequency::new(freq_hz));
+                    let freq = Frequency::new(freq_hz);
+                    ch.rx_freq = freq;
+                    let _ = hw.radio.set_frequency(freq);
                     Ok(())
                 }
                 FACET_RADIO_MODULATION => {
@@ -827,11 +832,7 @@ fn handle_data_service(
 
 // ── SERVICE_EVENTS (0x02) ────────────────────────────────────────────────────
 #[inline(never)]
-fn handle_events_service(
-    opcode: u8,
-    payload: &[u8],
-    _out: &mut [u8; 192],
-) -> Option<(WireStatus, usize)> {
+fn handle_events_service(opcode: u8, payload: &[u8]) -> Option<(WireStatus, usize)> {
     let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
     let status = match opcode {
         OP_EVENTS_SUBSCRIBE => match EventSubscribeReq::parse(payload) {
