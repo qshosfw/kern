@@ -88,15 +88,15 @@ impl SpiDevice for Py32Spi2 {
 pub struct RadioBus;
 
 impl RadioBus {
-    #[inline(always)]
+    #[inline(never)]
     fn delay_bus() {
         // ~0.5us setup/hold scaled to current sysclk (~22 cycles @ 48MHz, ~34 @ 72MHz)
         cortex_m::asm::delay((hal::rcc::sysclk_hz() >> 21).max(1));
     }
 
-    #[inline(always)]
-    fn bitbang_write_u8(&mut self, data: u8) {
-        for i in (0..8).rev() {
+    #[inline(never)]
+    fn bitbang_write_bits(data: u16, bits: u8) {
+        for i in (0..bits).rev() {
             board_pins::BK_SCL.set_low();
             if ((data >> i) & 1) != 0 {
                 board_pins::BK_SDA.set_high();
@@ -110,20 +110,23 @@ impl RadioBus {
         board_pins::BK_SCL.set_low();
     }
 
-    #[inline(always)]
-    fn bitbang_write_u16(&mut self, data: u16) {
-        for i in (0..16).rev() {
-            board_pins::BK_SCL.set_low();
-            if ((data >> i) & 1) != 0 {
-                board_pins::BK_SDA.set_high();
-            } else {
-                board_pins::BK_SDA.set_low();
-            }
-            Self::delay_bus();
-            board_pins::BK_SCL.set_high();
-            Self::delay_bus();
-        }
+    #[inline(never)]
+    fn begin_cmd(cmd: u8) {
+        board_pins::BK_CSN.set_high();
         board_pins::BK_SCL.set_low();
+        Self::delay_bus();
+
+        board_pins::BK_CSN.set_low();
+        Self::bitbang_write_bits(cmd as u16, 8);
+    }
+
+    #[inline(never)]
+    fn end_cmd() {
+        board_pins::BK_CSN.set_high();
+
+        Self::delay_bus();
+        board_pins::BK_SCL.set_high();
+        board_pins::BK_SDA.set_high();
     }
 
     #[inline(always)]
@@ -148,36 +151,18 @@ impl RadioBus {
 
 impl kern_platform_traits::radio::RadioBus for RadioBus {
     fn read_reg(&mut self, addr: u8) -> u16 {
-        board_pins::BK_CSN.set_high();
-        board_pins::BK_SCL.set_low();
-        Self::delay_bus();
-
-        board_pins::BK_CSN.set_low();
-        self.bitbang_write_u8(addr | 0x80);
+        Self::begin_cmd(addr | 0x80);
         let val = self.bitbang_read_u16();
-        board_pins::BK_CSN.set_high();
-
-        Self::delay_bus();
-        board_pins::BK_SCL.set_high();
-        board_pins::BK_SDA.set_high();
+        Self::end_cmd();
         val
     }
 
     fn write_reg(&mut self, addr: u8, val: u16) {
-        board_pins::BK_CSN.set_high();
-        board_pins::BK_SCL.set_low();
+        Self::begin_cmd(addr);
         Self::delay_bus();
-
-        board_pins::BK_CSN.set_low();
-        self.bitbang_write_u8(addr);
+        Self::bitbang_write_bits(val, 16);
         Self::delay_bus();
-        self.bitbang_write_u16(val);
-        Self::delay_bus();
-        board_pins::BK_CSN.set_high();
-
-        Self::delay_bus();
-        board_pins::BK_SCL.set_high();
-        board_pins::BK_SDA.set_high();
+        Self::end_cmd();
     }
 }
 
