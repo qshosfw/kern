@@ -130,12 +130,12 @@ impl BatteryDriver {
         // Enforce physical limits for 2S Li-ion battery pack:
         // Warn threshold: 6400 mV (3.2V/cell) to 7100 mV (3.55V/cell), default 6800 mV (3.4V/cell)
         // Shut threshold: 6000 mV (3.0V/cell) to 6500 mV (3.25V/cell), default 6300 mV (3.15V/cell)
-        self.warn_threshold_mv = if (6400..=7100).contains(&warn_mv) {
+        self.warn_threshold_mv = if warn_mv >= 6400 && warn_mv <= 7100 {
             warn_mv
         } else {
             6800
         };
-        self.shut_threshold_mv = if (6000..=6500).contains(&shut_mv) {
+        self.shut_threshold_mv = if shut_mv >= 6000 && shut_mv <= 6500 {
             shut_mv
         } else {
             6300
@@ -153,7 +153,7 @@ impl BatteryDriver {
 
     #[inline(never)]
     pub fn set_calib_const(&mut self, calib_const: u16) {
-        if (1000..=3500).contains(&calib_const) {
+        if calib_const >= 1000 && calib_const <= 3500 {
             self.calib_const = calib_const;
             self.cal_scale_q16 = (7600u32 << 16) / calib_const as u32;
         }
@@ -198,22 +198,43 @@ impl BatteryDriver {
             return;
         }
         self.calib_tweak_mv = mv;
-        let shift = |v: u16| {
-            if v == 0 {
-                0
-            } else {
-                (v as i32 + delta).clamp(0, 15000) as u16
+        for field in [
+            &mut self.smoothed_mv,
+            &mut self.ocv_mv,
+            &mut self.last_mv,
+            &mut self.base_mv,
+            &mut self.pre_tx_ocv,
+        ] {
+            if *field != 0 {
+                *field = (*field as i32 + delta).clamp(0, 15000) as u16;
             }
-        };
-        self.smoothed_mv = shift(self.smoothed_mv);
-        self.ocv_mv = shift(self.ocv_mv);
-        self.last_mv = shift(self.last_mv);
-        self.base_mv = shift(self.base_mv);
-        self.pre_tx_ocv = shift(self.pre_tx_ocv);
+        }
         self.charge_counter = 0;
         self.drift_counter = 0;
         if self.ocv_mv > 0 {
             self.display_pct = self.calculate_percentage(self.ocv_mv);
+        }
+    }
+
+    fn ema_u16(cur: u16, sample: u16, shift: u32) -> u16 {
+        let weight = (1u32 << shift) - 1;
+        let round = 1u32 << (shift - 1);
+        ((cur as u32 * weight + sample as u32 + round) >> shift) as u16
+    }
+
+    fn eval_hysteresis(
+        active: bool,
+        ocv_mv: u16,
+        pct: u8,
+        limit_mv: u16,
+        enter_pct: u8,
+        exit_pct: u8,
+        floor_pct: u8,
+    ) -> bool {
+        if active {
+            !(ocv_mv >= limit_mv.saturating_add(150) && pct >= exit_pct)
+        } else {
+            (ocv_mv < limit_mv && pct <= enter_pct) || pct <= floor_pct
         }
     }
 
@@ -295,7 +316,7 @@ impl BatteryDriver {
                 self.pre_tx_ocv = raw_mv;
                 self.display_pct = self.calculate_percentage(raw_mv);
             } else {
-                self.smoothed_mv = ((self.smoothed_mv as u32 * 7 + raw_mv as u32 + 4) >> 3) as u16;
+                self.smoothed_mv = Self::ema_u16(self.smoothed_mv, raw_mv, 3);
             }
         }
 
@@ -337,8 +358,7 @@ impl BatteryDriver {
                         _ => (((step_sag as u32) * 171) >> 8) as u16,
                     };
                     if r_est >= 100 && r_est <= 500 {
-                        self.internal_res_m_ohm =
-                            ((self.internal_res_m_ohm as u32 * 7 + r_est as u32 + 4) >> 3) as u16;
+                        self.internal_res_m_ohm = Self::ema_u16(self.internal_res_m_ohm, r_est, 3);
                     }
                 }
             }
@@ -381,15 +401,12 @@ impl BatteryDriver {
                     // If load sag is small (<= 25 mV), it is normal steady-state discharge.
                     // Slowly track OCV downwards with a 32-sample EMA (~6.4s time constant at 5 Hz).
                     if self.smoothed_mv <= self.ocv_mv {
-                        let sag = self.ocv_mv - self.smoothed_mv;
-                        if sag <= 25 {
-                            self.ocv_mv = ((self.ocv_mv as u32 * 31 + self.smoothed_mv as u32 + 16)
-                                >> 5) as u16;
+                        if self.ocv_mv - self.smoothed_mv <= 25 {
+                            self.ocv_mv = Self::ema_u16(self.ocv_mv, self.smoothed_mv, 5);
                         }
                     } else if self.smoothed_mv < self.base_mv.saturating_add(35) {
                         // Slight upward thermal drift <= 35 mV
-                        self.ocv_mv =
-                            ((self.ocv_mv as u32 * 63 + self.smoothed_mv as u32 + 32) >> 6) as u16;
+                        self.ocv_mv = Self::ema_u16(self.ocv_mv, self.smoothed_mv, 6);
                     }
                 }
             } else {
@@ -446,23 +463,24 @@ impl BatteryDriver {
             self.is_critical_state = self.ocv_mv < shut_limit && percentage == 0;
             self.is_low_state = self.ocv_mv < warn_limit && percentage < 5;
         } else {
-            // Critical cutoff evaluation
-            if self.is_critical_state {
-                if self.ocv_mv >= shut_limit.saturating_add(150) && percentage >= 3 {
-                    self.is_critical_state = false;
-                }
-            } else if (self.ocv_mv < shut_limit && percentage <= 5) || percentage == 0 {
-                self.is_critical_state = true;
-            }
-
-            // Low battery warning evaluation
-            if self.is_low_state {
-                if self.ocv_mv >= warn_limit.saturating_add(150) && percentage >= 18 {
-                    self.is_low_state = false;
-                }
-            } else if (self.ocv_mv < warn_limit && percentage <= 20) || percentage <= 15 {
-                self.is_low_state = true;
-            }
+            self.is_critical_state = Self::eval_hysteresis(
+                self.is_critical_state,
+                self.ocv_mv,
+                percentage,
+                shut_limit,
+                5,
+                3,
+                0,
+            );
+            self.is_low_state = Self::eval_hysteresis(
+                self.is_low_state,
+                self.ocv_mv,
+                percentage,
+                warn_limit,
+                20,
+                18,
+                15,
+            );
 
             if self.is_critical_state {
                 self.is_low_state = true;
