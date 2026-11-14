@@ -325,14 +325,15 @@ impl<const DEPTH: usize> ShadowReturnStack<DEPTH> {
 /// 4. Leaf requests another leaf via typed `LeafContinuation`.
 /// 5. Reentrant overlay dispatch attempts fail deterministically (`ReentrantDispatchDenied`).
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct StructuredLeafManager<const MAX_LEAVES: usize = 16> {
     pub overlay_vma: u32,
     pub window_size: u16,
-    pub leaves: [LeafEntry; MAX_LEAVES],
-    pub leaf_count: u8,
-    pub active_leaf: Option<u8>,
-    pub is_dispatching: bool,
     pub total_swaps: u16,
+    pub leaf_count: u8,
+    pub is_dispatching: bool,
+    pub active_leaf: Option<u8>,
+    pub leaves: [LeafEntry; MAX_LEAVES],
 }
 
 impl<const MAX_LEAVES: usize> Default for StructuredLeafManager<MAX_LEAVES> {
@@ -346,11 +347,11 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
         Self {
             overlay_vma,
             window_size,
-            leaves: [const { LeafEntry::empty() }; MAX_LEAVES],
-            leaf_count: 0,
-            active_leaf: None,
-            is_dispatching: false,
             total_swaps: 0,
+            leaf_count: 0,
+            is_dispatching: false,
+            active_leaf: None,
+            leaves: [const { LeafEntry::empty() }; MAX_LEAVES],
         }
     }
 
