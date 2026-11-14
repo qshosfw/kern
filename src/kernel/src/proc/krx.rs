@@ -529,14 +529,23 @@ impl SectionExecution {
     pub const SIZE: usize = 28;
 
     pub fn parse(buf: &[u8]) -> Option<Self> {
+        let mut out = None;
+        Self::parse_into(buf, &mut out);
+        out
+    }
+
+    pub fn parse_into(buf: &[u8], dst: &mut Option<Self>) {
         if buf.len() < Self::SIZE {
-            return None;
+            *dst = None;
+            return;
         }
-        let b = &buf[..Self::SIZE];
-        let mut sec = core::mem::MaybeUninit::<Self>::uninit();
+        let sec = dst.insert(unsafe { core::mem::MaybeUninit::zeroed().assume_init() });
         unsafe {
-            core::ptr::copy_nonoverlapping(b.as_ptr(), sec.as_mut_ptr() as *mut u8, Self::SIZE);
-            Some(sec.assume_init())
+            core::ptr::copy_nonoverlapping(
+                buf.as_ptr(),
+                (sec as *mut Self).cast::<u8>(),
+                Self::SIZE,
+            );
         }
     }
 
@@ -810,7 +819,7 @@ impl KrxPreamble {
                         ]));
                     }
                 }
-                SECTION_EXECUTION => out.exec = SectionExecution::parse(body),
+                SECTION_EXECUTION => SectionExecution::parse_into(body, &mut out.exec),
                 SECTION_CAP_IMPORTS => out.aux.cap_imports = Some(body),
                 SECTION_BLOCK_MAP => out.aux.block_map = Some(body),
                 SECTION_LEAF_MAP => out.aux.leaf_map = Some(body),
