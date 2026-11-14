@@ -141,8 +141,8 @@ pub unsafe extern "C" fn api_ui_set_tray_icon(icon_id: u8) -> u8 {
     } else {
         let glyph = crate::runtime::native_runner::decode_status_glyph(
             icon_id,
-            &slot.custom_icon_0,
-            &slot.custom_icon_1,
+            &slot.status_bar.custom_icon_0,
+            &slot.status_bar.custom_icon_1,
         );
         if let Some(g) = glyph {
             crate::orchestrator::status_tray_mut().set_glyph(pid, g) as u8

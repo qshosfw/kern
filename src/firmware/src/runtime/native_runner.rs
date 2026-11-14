@@ -47,10 +47,6 @@ pub(crate) struct NativeExecSlot {
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
     pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
-    pub(crate) custom_icon_0: [u8; 5],
-    pub(crate) _pad_icon0: [u8; 3],
-    pub(crate) custom_icon_1: [u8; 5],
-    pub(crate) _pad_icon1: [u8; 3],
 }
 
 pub fn init_native_slot() {
@@ -807,24 +803,20 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
         }
         slot.status_bar_has_custom = true;
         let s = &slot.status_bar;
-        slot.custom_icon_0 = s.custom_icon_0;
-        slot.custom_icon_1 = s.custom_icon_1;
-        let c0 = slot.custom_icon_0;
-        let c1 = slot.custom_icon_1;
 
         slot.status_bar_left_count = decode_icon_list(
             &s.left_icons,
             s.left_icon_count,
-            &c0,
-            &c1,
+            &s.custom_icon_0,
+            &s.custom_icon_1,
             &mut slot.status_bar_left_icons,
         );
 
         slot.status_bar_center_count = decode_icon_list(
             &s.center_icons,
             s.center_icon_count,
-            &c0,
-            &c1,
+            &s.custom_icon_0,
+            &s.custom_icon_1,
             &mut slot.status_bar_center_icons,
         );
 
