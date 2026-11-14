@@ -276,28 +276,14 @@ impl Canvas {
         }
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn draw_horizontal_line_i(&mut self, x: i16, y: i16, len: i16, color: Color) {
-        if len <= 0 || y < 0 || y >= LCD_HEIGHT as i16 {
-            return;
-        }
-        let x0 = x.max(0) as u8;
-        let x1 = (x + len).min(LCD_WIDTH as i16).max(0) as u8;
-        if x1 > x0 {
-            self.draw_horizontal_line(x0, y as u8, x1 - x0, color);
-        }
+        self.fill_rect_i(x, y, len, 1, color);
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn draw_vertical_line_i(&mut self, x: i16, y: i16, len: i16, color: Color) {
-        if len <= 0 || x < 0 || x >= LCD_WIDTH as i16 {
-            return;
-        }
-        let y0 = y.max(0) as u8;
-        let y1 = (y + len).min(LCD_HEIGHT as i16).max(0) as u8;
-        if y1 > y0 {
-            self.draw_vertical_line(x as u8, y0, y1 - y0, color);
-        }
+        self.fill_rect_i(x, y, 1, len, color);
     }
 
     #[inline(never)]
@@ -378,9 +364,9 @@ impl Canvas {
         let end_x = (x as usize + width as usize).min(LCD_WIDTH);
         let end_y = (y as usize + height as usize).min(LCD_HEIGHT);
         let start_page = (y >> 3) as usize;
-        let end_page = (end_y.saturating_sub(1) >> 3) as usize;
+        let end_page_excl = ((end_y - 1) >> 3) + 1;
 
-        for page in start_page..=end_page {
+        for page in start_page..end_page_excl {
             let page_start_y = page * 8;
             let page_end_y = page_start_y + 8;
             let top = if (y as usize) > page_start_y {
@@ -435,42 +421,23 @@ impl Canvas {
             #[cfg(not(feature = "grayscale"))]
             {
                 let row = &mut self.buffer[page];
-                match color {
-                    Color::Fill => {
-                        for b in &mut row[x as usize..end_x] {
-                            *b |= mask;
-                        }
-                    }
-                    Color::Clear => {
-                        for b in &mut row[x as usize..end_x] {
-                            *b &= not_mask;
-                        }
-                    }
-                    Color::Invert => {
-                        for b in &mut row[x as usize..end_x] {
-                            *b ^= mask;
-                        }
-                    }
-                    Color::DarkGray => {
-                        for col in x as usize..end_x {
-                            let dither = if (col & 1) == 0 {
-                                0b1010_1010
-                            } else {
-                                0b0101_0101
+                for (col, byte) in row[x as usize..end_x].iter_mut().enumerate() {
+                    let cur = *byte;
+                    let abs_col = (x as usize) + col;
+                    *byte = match color {
+                        Color::Fill => cur | mask,
+                        Color::Clear => cur & not_mask,
+                        Color::Invert => cur ^ mask,
+                        Color::DarkGray | Color::LightGray => {
+                            let dither = match (color, abs_col & 1) {
+                                (Color::DarkGray, 0) => 0b1010_1010,
+                                (Color::DarkGray, _) => 0b0101_0101,
+                                (_, 0) => 0b1000_1000,
+                                _ => 0b0010_0010,
                             };
-                            row[col] = (row[col] & not_mask) | (dither & mask);
+                            (cur & not_mask) | (dither & mask)
                         }
-                    }
-                    Color::LightGray => {
-                        for col in x as usize..end_x {
-                            let dither = if (col & 1) == 0 {
-                                0b1000_1000
-                            } else {
-                                0b0010_0010
-                            };
-                            row[col] = (row[col] & not_mask) | (dither & mask);
-                        }
-                    }
+                    };
                 }
             }
             self.dirty |= 1 << page;
@@ -549,9 +516,9 @@ impl Canvas {
         let end_x = (x as usize + width as usize).min(LCD_WIDTH);
         let end_y = (y as usize + height as usize).min(LCD_HEIGHT);
         let start_page = (y >> 3) as usize;
-        let end_page = (end_y.saturating_sub(1) >> 3) as usize;
+        let end_page_excl = ((end_y - 1) >> 3) + 1;
 
-        for page in start_page..=end_page {
+        for page in start_page..end_page_excl {
             let page_start_y = page * 8;
             let page_end_y = page_start_y + 8;
             let top = if (y as usize) > page_start_y {
@@ -768,64 +735,41 @@ impl Canvas {
 
 #[inline(never)]
 fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8) {
-    if dy.unsigned_abs() >= LCD_HEIGHT as u8 {
-        *plane = [[fill_byte; LCD_WIDTH]; 8];
+    let abs_dy = dy.unsigned_abs() as usize;
+    if abs_dy >= LCD_HEIGHT {
+        plane.as_flattened_mut().fill(fill_byte);
         return;
     }
 
-    if dy > 0 {
-        let dy = dy as usize;
-        let page_shift = dy >> 3;
-        let bit_shift = dy & 7;
+    let page_shift = abs_dy >> 3;
+    let bit_shift = abs_dy & 7;
+    let down = dy > 0;
 
-        for p in (0..8).rev() {
-            if p >= page_shift {
-                let src_p = p - page_shift;
-                if bit_shift == 0 {
-                    for col in 0..LCD_WIDTH {
-                        plane[p][col] = plane[src_p][col];
-                    }
-                } else {
-                    for col in 0..LCD_WIDTH {
-                        let curr = plane[src_p][col];
-                        let prev = if src_p > 0 {
-                            plane[src_p - 1][col]
-                        } else {
-                            fill_byte
-                        };
-                        plane[p][col] = (curr << bit_shift) | (prev >> (8 - bit_shift));
-                    }
-                }
-            } else {
-                plane[p] = [fill_byte; LCD_WIDTH];
-            }
+    for i in 0..8usize {
+        let p = if down { 7 - i } else { i };
+        let has_src = if down {
+            p >= page_shift
+        } else {
+            p + page_shift < 8
+        };
+        if !has_src {
+            plane[p].fill(fill_byte);
+            continue;
         }
-    } else {
-        let abs_dy = (-dy) as usize;
-        let page_shift = abs_dy >> 3;
-        let bit_shift = abs_dy & 7;
-
-        for p in 0..8 {
-            if p + page_shift < 8 {
-                let src_p = p + page_shift;
-                if bit_shift == 0 {
-                    for col in 0..LCD_WIDTH {
-                        plane[p][col] = plane[src_p][col];
-                    }
-                } else {
-                    for col in 0..LCD_WIDTH {
-                        let curr = plane[src_p][col];
-                        let next = if src_p + 1 < 8 {
-                            plane[src_p + 1][col]
-                        } else {
-                            fill_byte
-                        };
-                        plane[p][col] = (curr >> bit_shift) | (next << (8 - bit_shift));
-                    }
-                }
+        let src_p = if down { p - page_shift } else { p + page_shift };
+        let adj_p = if down {
+            src_p.checked_sub(1)
+        } else {
+            (src_p + 1 < 8).then_some(src_p + 1)
+        };
+        for col in 0..LCD_WIDTH {
+            let curr = plane[src_p][col] as u16;
+            let adj = adj_p.map_or(fill_byte, |ap| plane[ap][col]) as u16;
+            plane[p][col] = if down {
+                (((curr << 8) | adj) << bit_shift) >> 8
             } else {
-                plane[p] = [fill_byte; LCD_WIDTH];
-            }
+                ((adj << 8) | curr) >> bit_shift
+            } as u8;
         }
     }
 }
