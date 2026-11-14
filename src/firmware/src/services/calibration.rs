@@ -209,14 +209,26 @@ const _: () = {
     assert!(core::mem::align_of::<SystemCalibration>() >= 4);
 };
 
+fn write_protected_sys_file(
+    vfs: &mut SystemStorage,
+    path: &str,
+    data: &[u8],
+) -> Result<(), crate::services::storage::StorageError> {
+    let _ = vfs.set_attributes(path, FileAttributes { permission: 0 });
+    let res = vfs.write_file(path, data);
+    let _ = vfs.set_attributes(
+        path,
+        FileAttributes {
+            permission: ATTR_SYSTEM | ATTR_READ_ONLY,
+        },
+    );
+    res
+}
+
 fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 12]) {
     let sig = compute_device_signature(data, mcu_uid);
     let sig_bytes = sig.to_bytes();
-    let _ = vfs.write_file(CALIB_SIG_PATH, &sig_bytes);
-    let attr = FileAttributes {
-        permission: ATTR_SYSTEM | ATTR_READ_ONLY,
-    };
-    let _ = vfs.set_attributes(CALIB_SIG_PATH, attr);
+    let _ = write_protected_sys_file(vfs, CALIB_SIG_PATH, &sig_bytes);
 }
 
 impl SystemCalibration {
@@ -337,11 +349,7 @@ impl SystemCalibration {
         if !loaded {
             if let Ok(n) = vfs.read_file(CALIB_BAK_PATH, data) {
                 if n == 512 && is_valid_calibration(data) {
-                    let _ = vfs.write_file(CALIB_FILE_PATH, data);
-                    let attr = FileAttributes {
-                        permission: ATTR_SYSTEM | ATTR_READ_ONLY,
-                    };
-                    let _ = vfs.set_attributes(CALIB_FILE_PATH, attr);
+                    let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, data);
                     sign_and_save_sig(vfs, data, mcu_uid);
                     loaded = true;
                 }
@@ -351,18 +359,16 @@ impl SystemCalibration {
         // 3. Last-resort fallback to embedded factory default
         if !loaded {
             data.copy_from_slice(DEV_TARGET_FACTORY_CALIB);
-            let _ = vfs.write_file(CALIB_FILE_PATH, data);
-            let attr = FileAttributes {
-                permission: ATTR_SYSTEM | ATTR_READ_ONLY,
-            };
-            let _ = vfs.set_attributes(CALIB_FILE_PATH, attr);
+            let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, data);
             sign_and_save_sig(vfs, data, mcu_uid);
         }
 
-        // Verify device binding signature
+        // Verify device binding signature (re-sign only if signature file is absent)
         let mut sig_buf = [0u8; 32];
-        let mut bound = false;
+        let mut sig_present = false;
+        let mut bound = !loaded;
         if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, &mut sig_buf) {
+            sig_present = true;
             if n >= 32 {
                 if let Some(sig) = CalibSignature::from_bytes(&sig_buf) {
                     bound = verify_device_signature(data, &sig, mcu_uid);
@@ -370,8 +376,7 @@ impl SystemCalibration {
             }
         }
 
-        if !bound && loaded {
-            // Re-sign if signature was missing but data was valid
+        if !sig_present && loaded {
             sign_and_save_sig(vfs, data, mcu_uid);
             bound = true;
         }
@@ -392,33 +397,33 @@ impl SystemCalibration {
             return Err(());
         }
 
-        let staging = unsafe { &mut *(crate::runtime::arena_base_ptr() as *mut [u8; 512]) };
+        // Use TRANSIENT_ARENA tail staging_buf() ([4096..4608)) so RigWire payloads in [0..4096) never alias.
+        let staging = crate::services::staging_buf();
+        let mut backed_up = false;
         if let Ok(512) = vfs.read_file(CALIB_FILE_PATH, staging) {
-            if is_valid_calibration(staging) {
-                let _ = vfs.write_file(CALIB_BAK_PATH, staging);
+            if is_valid_calibration(staging)
+                && write_protected_sys_file(vfs, CALIB_BAK_PATH, staging).is_ok()
+            {
+                backed_up = true;
             }
         }
 
-        if vfs.write_file(CALIB_FILE_PATH, new_calib).is_err() {
-            return Err(());
-        }
-
-        let read_ok = match vfs.read_file(CALIB_FILE_PATH, staging) {
-            Ok(512) => staging == new_calib,
-            _ => false,
-        };
+        let write_ok = write_protected_sys_file(vfs, CALIB_FILE_PATH, new_calib).is_ok();
+        let read_ok = write_ok
+            && match vfs.read_file(CALIB_FILE_PATH, staging) {
+                Ok(512) => staging == new_calib,
+                _ => false,
+            };
 
         if !read_ok {
+            if backed_up && vfs.read_file(CALIB_BAK_PATH, staging) == Ok(512) {
+                let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, staging);
+            }
             return Err(());
         }
 
         self.raw.copy_from_slice(new_calib);
         self.valid = true;
-
-        let attr = FileAttributes {
-            permission: ATTR_SYSTEM | ATTR_READ_ONLY,
-        };
-        let _ = vfs.set_attributes(CALIB_FILE_PATH, attr);
         sign_and_save_sig(vfs, new_calib, mcu_uid);
         self.bound = true;
 
