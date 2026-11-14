@@ -153,83 +153,33 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
 
 // ── Dynamic Linker / GOT Resolution ─────────────────────────────────────────
 
-struct InterfaceBinding {
-    vtable: *const (),
-    required_caps_mask: u32,
-}
-
-unsafe impl Sync for InterfaceBinding {}
-
-static INTERFACE_TABLE: [InterfaceBinding; 13] = [
+static INTERFACE_CAP_MASKS: [u32; 13] = [
     // 0x0001: INTERFACE_DISPLAY
-    InterfaceBinding {
-        vtable: &raw const DISPLAY_VTABLE as *const (),
-        required_caps_mask: Cap::DisplayDirect as u32,
-    },
+    Cap::DisplayDirect as u32,
     // 0x0002: INTERFACE_RADIO
-    InterfaceBinding {
-        vtable: &raw const RADIO_VTABLE as *const (),
-        required_caps_mask: (Cap::RadioRx as u32)
-            | (Cap::RadioTx as u32)
-            | (Cap::BroadBandRx as u32),
-    },
+    (Cap::RadioRx as u32) | (Cap::RadioTx as u32) | (Cap::BroadBandRx as u32),
     // 0x0003: INTERFACE_AUDIO
-    InterfaceBinding {
-        vtable: &raw const AUDIO_VTABLE as *const (),
-        required_caps_mask: (Cap::AudioOutput as u32) | (Cap::AudioCapture as u32),
-    },
+    (Cap::AudioOutput as u32) | (Cap::AudioCapture as u32),
     // 0x0004: INTERFACE_STORAGE
-    InterfaceBinding {
-        vtable: &raw const STORAGE_VTABLE as *const (),
-        required_caps_mask: (Cap::StorageRead as u32)
-            | (Cap::StorageWrite as u32)
-            | (Cap::StorageAdmin as u32),
-    },
+    (Cap::StorageRead as u32) | (Cap::StorageWrite as u32) | (Cap::StorageAdmin as u32),
     // 0x0005: INTERFACE_KEYPAD
-    InterfaceBinding {
-        vtable: &raw const KEYPAD_VTABLE as *const (),
-        required_caps_mask: Cap::Keypad as u32,
-    },
+    Cap::Keypad as u32,
     // 0x0006: INTERFACE_POWER
-    InterfaceBinding {
-        vtable: &raw const POWER_VTABLE as *const (),
-        required_caps_mask: Cap::PowerManage as u32,
-    },
+    Cap::PowerManage as u32,
     // 0x0007: INTERFACE_SERIAL
-    InterfaceBinding {
-        vtable: &raw const SERIAL_VTABLE as *const (),
-        required_caps_mask: (Cap::SerialComm as u32) | (Cap::UsbComm as u32),
-    },
+    (Cap::SerialComm as u32) | (Cap::UsbComm as u32),
     // 0x0008: INTERFACE_TIMER
-    InterfaceBinding {
-        vtable: &raw const TIMER_VTABLE as *const (),
-        required_caps_mask: 0,
-    },
+    0,
     // 0x0009: INTERFACE_UI
-    InterfaceBinding {
-        vtable: &raw const UI_VTABLE as *const (),
-        required_caps_mask: Cap::DisplayDirect as u32,
-    },
+    Cap::DisplayDirect as u32,
     // 0x000A: INTERFACE_MATH
-    InterfaceBinding {
-        vtable: &raw const MATH_VTABLE as *const (),
-        required_caps_mask: 0,
-    },
+    0,
     // 0x000B: INTERFACE_FM
-    InterfaceBinding {
-        vtable: &raw const FM_VTABLE as *const (),
-        required_caps_mask: Cap::BroadcastFm as u32,
-    },
+    Cap::BroadcastFm as u32,
     // 0x000C: INTERFACE_SERVICE
-    InterfaceBinding {
-        vtable: &raw const SERVICE_VTABLE as *const (),
-        required_caps_mask: 0,
-    },
+    0,
     // 0x000D: INTERFACE_HW_BUS
-    InterfaceBinding {
-        vtable: &raw const HW_BUS_VTABLE as *const (),
-        required_caps_mask: Cap::RawPeripheral as u32,
-    },
+    Cap::RawPeripheral as u32,
 ];
 
 #[inline(always)]
@@ -238,10 +188,13 @@ fn resolve_capability_vtable(
     _min_abi: u16,
     granted_caps: CapabilitySet,
 ) -> Option<usize> {
-    if (INTERFACE_DISPLAY..=INTERFACE_HW_BUS).contains(&interface_id) {
-        let entry = &INTERFACE_TABLE[(interface_id - INTERFACE_DISPLAY) as usize];
-        if entry.required_caps_mask == 0 || (granted_caps.raw() & entry.required_caps_mask) != 0 {
-            return Some(entry.vtable as usize);
+    let idx = interface_id.wrapping_sub(INTERFACE_DISPLAY) as usize;
+    if idx < INTERFACE_CAP_MASKS.len() {
+        let mask = INTERFACE_CAP_MASKS[idx];
+        if mask == 0 || (granted_caps.raw() & mask) != 0 {
+            let vtable =
+                unsafe { *(&raw const NATIVE_API_TABLE.display as *const *const ()).add(idx) };
+            return Some(vtable as usize);
         }
     }
     None
@@ -249,19 +202,18 @@ fn resolve_capability_vtable(
 
 #[inline(always)]
 fn bind_entry(binding: CapBinding, got_words: &mut [u32], granted_caps: CapabilitySet) -> bool {
-    let slot = binding.slot_idx as usize;
-    if slot >= got_words.len() {
+    let Some(dst) = got_words.get_mut(binding.slot_idx as usize) else {
         return false;
-    }
+    };
     match resolve_capability_vtable(binding.interface_id, binding.min_abi, granted_caps) {
         Some(vtable_addr) => {
-            got_words[slot] = vtable_addr as u32;
+            *dst = vtable_addr as u32;
         }
         None => {
             if (binding.flags & CapBinding::FLAG_MANDATORY) != 0 {
                 return false;
             }
-            got_words[slot] = 0; // NULL for OPTIONAL binding
+            *dst = 0; // NULL for OPTIONAL binding
         }
     }
     true
@@ -286,7 +238,7 @@ pub fn bind_cap_imports(
     let mut offset = 0;
     let mut slot_i = 0u16;
     while offset + stride <= len {
-        let slice = &cap_section_body[offset..offset + stride];
+        let slice = unsafe { cap_section_body.get_unchecked(offset..offset + stride) };
         let Some(binding) = CapBinding::parse(slice, slot_i) else {
             return false;
         };
@@ -294,7 +246,7 @@ pub fn bind_cap_imports(
             return false;
         }
         offset += stride;
-        slot_i = slot_i.saturating_add(1);
+        slot_i = slot_i.wrapping_add(1);
     }
     true
 }
