@@ -407,8 +407,9 @@ pub unsafe extern "C" fn api_math_idivmod(n: i32, d: i32) -> u64 {
     let un = ((n ^ m_n) - m_n) as u32;
     let m_d = d >> 31;
     let ud = ((d ^ m_d) - m_d) as u32;
-    let uq = (un / ud) as i32;
-    let ur = (un % ud) as i32;
+    let packed = unsafe { api_math_uidivmod(un, ud) };
+    let uq = packed as i32;
+    let ur = (packed >> 32) as i32;
     let m_q = m_n ^ m_d;
     let q = (uq ^ m_q) - m_q;
     let r = (ur ^ m_n) - m_n;

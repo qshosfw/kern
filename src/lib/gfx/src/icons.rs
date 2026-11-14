@@ -6,71 +6,51 @@ use crate::{Canvas, Color};
 pub const ICON_WIDTH: u8 = 8;
 pub const ICON_HEIGHT: u8 = 8;
 
-// 8x8 Bitmaps
 pub static ICON_ANTENNA: [u8; 8] = [0x00, 0x55, 0x2A, 0x1C, 0x08, 0x08, 0x08, 0x00];
-pub static ICON_LOCK: [u8; 8] = [0x00, 0x1C, 0x22, 0x22, 0x7F, 0x7F, 0x7F, 0x00];
-pub static ICON_UNLOCK: [u8; 8] = [0x00, 0x1C, 0x20, 0x20, 0x7F, 0x7F, 0x7F, 0x00];
-pub static ICON_SPEAKER: [u8; 8] = [0x00, 0x12, 0x36, 0x7E, 0x7E, 0x36, 0x12, 0x00];
-pub static ICON_SHIELD: [u8; 8] = [0x00, 0x7E, 0x7E, 0x3C, 0x3C, 0x18, 0x00, 0x00];
 pub static ICON_KEYPAD: [u8; 8] = [0x00, 0x6E, 0x6E, 0x00, 0x6E, 0x6E, 0x00, 0x00];
-pub static ICON_FLASHLIGHT: [u8; 8] = [0x00, 0x1C, 0x3E, 0x1C, 0x1C, 0x1C, 0x1C, 0x00];
-pub static ICON_MESH: [u8; 8] = [0x00, 0x24, 0x66, 0xE7, 0xE7, 0x66, 0x24, 0x00];
-pub static ICON_PLUG: [u8; 8] = [0x00, 0x36, 0x36, 0x7F, 0x7F, 0x3E, 0x08, 0x08];
-pub static ICON_BOLT: [u8; 8] = [0x0C, 0x18, 0x30, 0x7E, 0x0C, 0x18, 0x10, 0x00];
-pub static ICON_MOON: [u8; 8] = [0x0E, 0x1C, 0x38, 0x70, 0x70, 0x38, 0x1C, 0x0E];
 
-// 5x5 Compact Status Bar Glyph Bitmaps (1 byte per row, top 5 bits used)
-pub static ICON_LOCK_5X5: [u8; 5] = [0b01110000, 0b10001000, 0b11111000, 0b11111000, 0b11111000];
-pub static ICON_UNLOCK_5X5: [u8; 5] = [0b01110000, 0b10000000, 0b11111000, 0b11111000, 0b11111000];
-pub static ICON_ANTENNA_5X5: [u8; 5] = [0b10101000, 0b01110000, 0b00100000, 0b00100000, 0b00100000];
-pub static ICON_SPEAKER_5X5: [u8; 5] = [0b00100000, 0b01101000, 0b11111000, 0b01101000, 0b00100000];
-pub static ICON_FLASHLIGHT_5X5: [u8; 5] =
-    [0b11111000, 0b01110000, 0b00100000, 0b00100000, 0b00100000];
-pub static ICON_FUNCTION_5X5: [u8; 5] =
-    [0b11111000, 0b10000000, 0b11100000, 0b10000000, 0b10000000];
+static ICONS_8X8: [[u8; 8]; 11] = [
+    [0x00, 0x55, 0x2A, 0x1C, 0x08, 0x08, 0x08, 0x00], // 0: Antenna
+    [0x00, 0x1C, 0x22, 0x22, 0x7F, 0x7F, 0x7F, 0x00], // 1: Lock
+    [0x00, 0x1C, 0x20, 0x20, 0x7F, 0x7F, 0x7F, 0x00], // 2: Unlock
+    [0x00, 0x12, 0x36, 0x7E, 0x7E, 0x36, 0x12, 0x00], // 3: Speaker
+    [0x00, 0x7E, 0x7E, 0x3C, 0x3C, 0x18, 0x00, 0x00], // 4: Shield
+    [0x00, 0x6E, 0x6E, 0x00, 0x6E, 0x6E, 0x00, 0x00], // 5: Keypad / Function
+    [0x00, 0x1C, 0x3E, 0x1C, 0x1C, 0x1C, 0x1C, 0x00], // 6: Flashlight
+    [0x00, 0x24, 0x66, 0xE7, 0xE7, 0x66, 0x24, 0x00], // 7: Mesh
+    [0x00, 0x36, 0x36, 0x7F, 0x7F, 0x3E, 0x08, 0x08], // 8: Plug / SerialActive
+    [0x0C, 0x18, 0x30, 0x7E, 0x0C, 0x18, 0x10, 0x00], // 9: Bolt
+    [0x0E, 0x1C, 0x38, 0x70, 0x70, 0x38, 0x1C, 0x0E], // 10: Moon
+];
 
-// 5x5 Charging lightning bolt: ..██. / .██.. / █████ / ..██. / .█...
-pub static ICON_BOLT_5X5: [u8; 5] = [0b00110000, 0b01100000, 0b11111000, 0b00110000, 0b01000000];
+static ICON_8X8_IDX: [u8; 22] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 5, 8, 8, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10,
+];
 
-// 7x5 USB plug icon (idle / host connected)
-// XXXOOOO, XXXXXXO, XXXOOOX, OOOOOOX, OOOOOXO
-pub static ICON_PLUG_7X5: [u8; 5] = [0b11100000, 0b11111100, 0b11100010, 0b00000010, 0b00000100];
+static ICONS_5X5: [[u8; 5]; 18] = [
+    [0b10101000, 0b01110000, 0b00100000, 0b00100000, 0b00100000], // 0: Antenna
+    [0b01110000, 0b10001000, 0b11111000, 0b11111000, 0b11111000], // 1: Lock
+    [0b01110000, 0b10000000, 0b11111000, 0b11111000, 0b11111000], // 2: Unlock
+    [0b00100000, 0b01101000, 0b11111000, 0b01101000, 0b00100000], // 3: Speaker
+    [0b11111000, 0b01110000, 0b00100000, 0b00100000, 0b00100000], // 4: Flashlight
+    [0b11111000, 0b10000000, 0b11100000, 0b10000000, 0b10000000], // 5: Function
+    [0b11100000, 0b11111100, 0b11100010, 0b00000010, 0b00000100], // 6: Plug (7x5)
+    [0b11100000, 0b11111100, 0b11100010, 0b01000010, 0b11100100], // 7: SerialActive (7x5)
+    [0b00110000, 0b01100000, 0b11111000, 0b00110000, 0b01000000], // 8: Bolt
+    [0b11100000, 0b00010000, 0b11001000, 0b00101000, 0b10101000], // 9: Broadcast
+    [0b10101010, 0b11111110, 0b11111110, 0b11111110, 0b10101010], // 10: Storage (7x5)
+    [0b01110000, 0b11001000, 0b10101000, 0b10001000, 0b01110000], // 11: Scan
+    [0b00001000, 0b00100100, 0b10010100, 0b00100100, 0b00001000], // 12: Beacon (6x5)
+    [0b10001000, 0b11011000, 0b10101000, 0b10001000, 0b10001000], // 13: Monitor
+    [0b01000000, 0b01010000, 0b11111000, 0b11111000, 0b11111000], // 14: Converter
+    [0b01110000, 0b01001000, 0b01001000, 0b01001000, 0b01110000], // 15: Roger
+    [0b00011000, 0b01111000, 0b01111000, 0b01111000, 0b00011000], // 16: Beep
+    [0b00100000, 0b11101010, 0b11100100, 0b11101010, 0b00100000], // 17: NoListen (7x5)
+];
 
-// 7x5 USB plug with dynamic packet activity pulse (active serial / RigWire / protocol traffic)
-// XXXOOOO, XXXXXXO, XXXOOOX, OXOOOOX, XXXOOXO
-pub static ICON_SERIAL_ACTIVE_7X5: [u8; 5] =
-    [0b11100000, 0b11111100, 0b11100010, 0b01000010, 0b11100100];
-
-// Symbols imported from fagci-k1-fw Symbols font:
-// 5x5 Broadcast FM receiver / tower waves
-pub static ICON_BROADCAST_5X5: [u8; 5] =
-    [0b11100000, 0b00010000, 0b11001000, 0b00101000, 0b10101000];
-
-// 7x5 Storage write / Flash write busy indicator
-pub static ICON_STORAGE_7X5: [u8; 5] = [0b10101010, 0b11111110, 0b11111110, 0b11111110, 0b10101010];
-
-// 5x5 Frequency / channel scanner active
-pub static ICON_SCAN_5X5: [u8; 5] = [0b01110000, 0b11001000, 0b10101000, 0b10001000, 0b01110000];
-
-// 6x5 Radio beacon / transmitter antenna waves
-pub static ICON_BEACON_6X5: [u8; 5] = [0b00001000, 0b00100100, 0b10010100, 0b00100100, 0b00001000];
-
-// 5x5 Monitor mode (squelch open / bypass)
-pub static ICON_MONITOR_5X5: [u8; 5] = [0b10001000, 0b11011000, 0b10101000, 0b10001000, 0b10001000];
-
-// 5x5 Upconverter / transverter active
-pub static ICON_CONVERTER_5X5: [u8; 5] =
-    [0b01000000, 0b01010000, 0b11111000, 0b11111000, 0b11111000];
-
-// 5x5 Roger beep active
-pub static ICON_ROGER_5X5: [u8; 5] = [0b01110000, 0b01001000, 0b01001000, 0b01001000, 0b01110000];
-
-// 5x5 Audio beep enabled
-pub static ICON_BEEP_5X5: [u8; 5] = [0b00011000, 0b01111000, 0b01111000, 0b01111000, 0b00011000];
-
-// 7x5 Listen inhibit / no listen
-pub static ICON_NO_LISTEN_7X5: [u8; 5] =
-    [0b00100000, 0b11101010, 0b11100100, 0b11101010, 0b00100000];
+static ICON_5X5_IDX: [u8; 22] = [
+    0, 1, 2, 3, 1, 1, 4, 1, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 1,
+];
 
 // 8x8 Special Symbols (from fagci-k1-fw):
 pub static ICON_MELODY: [u8; 8] = [0x04, 0x06, 0x04, 0x0C, 0x0C, 0x04, 0x06, 0x06];
@@ -88,46 +68,13 @@ pub fn draw_status_glyph(canvas: &mut Canvas, x: i16, y: i16, glyph: &StatusGlyp
 }
 
 pub fn draw_icon(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) {
-    let bmp: &'static [u8; 8] = match icon {
-        Icon::Antenna => &ICON_ANTENNA,
-        Icon::Lock => &ICON_LOCK,
-        Icon::Unlock => &ICON_UNLOCK,
-        Icon::Speaker => &ICON_SPEAKER,
-        Icon::Shield => &ICON_SHIELD,
-        Icon::Keypad | Icon::Function => &ICON_KEYPAD,
-        Icon::Flashlight => &ICON_FLASHLIGHT,
-        Icon::Mesh => &ICON_MESH,
-        Icon::Plug | Icon::SerialActive => &ICON_PLUG,
-        Icon::Bolt => &ICON_BOLT,
-        Icon::Moon => &ICON_MOON,
-        _ => &ICON_ANTENNA,
-    };
-    draw::draw_bitmap(canvas, x, y, 8, 8, bmp, color);
+    let idx = ICON_8X8_IDX.get(icon as usize).copied().unwrap_or(0) as usize;
+    draw::draw_bitmap(canvas, x, y, 8, 8, &ICONS_8X8[idx], color);
 }
 
 pub fn draw_icon_5x5(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) {
-    let bmp: &'static [u8; 5] = match icon {
-        Icon::Antenna => &ICON_ANTENNA_5X5,
-        Icon::Lock => &ICON_LOCK_5X5,
-        Icon::Unlock => &ICON_UNLOCK_5X5,
-        Icon::Speaker => &ICON_SPEAKER_5X5,
-        Icon::Flashlight => &ICON_FLASHLIGHT_5X5,
-        Icon::Function => &ICON_FUNCTION_5X5,
-        Icon::Plug => &ICON_PLUG_7X5,
-        Icon::SerialActive => &ICON_SERIAL_ACTIVE_7X5,
-        Icon::Bolt => &ICON_BOLT_5X5,
-        Icon::Broadcast => &ICON_BROADCAST_5X5,
-        Icon::Storage => &ICON_STORAGE_7X5,
-        Icon::Scan => &ICON_SCAN_5X5,
-        Icon::Beacon => &ICON_BEACON_6X5,
-        Icon::Monitor => &ICON_MONITOR_5X5,
-        Icon::Converter => &ICON_CONVERTER_5X5,
-        Icon::Roger => &ICON_ROGER_5X5,
-        Icon::Beep => &ICON_BEEP_5X5,
-        Icon::NoListen => &ICON_NO_LISTEN_7X5,
-        _ => &ICON_LOCK_5X5,
-    };
-    draw::draw_bitmap(canvas, x, y, icon.width(), 5, bmp, color);
+    let idx = ICON_5X5_IDX.get(icon as usize).copied().unwrap_or(1) as usize;
+    draw::draw_bitmap(canvas, x, y, icon.width(), 5, &ICONS_5X5[idx], color);
 }
 
 // ── 16x16 App Icon Bitmaps (32 bytes per icon: 2 bytes per row * 16 rows) ──────
