@@ -223,6 +223,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         query: MetaQuery<'_>,
         mut list_cb: Option<&mut dyn FnMut(&str, usize, u8, bool)>,
     ) -> Result<u16, FsError> {
+        let mut matched: u16 = 0;
         for g in 0..MAX_META_GROUPS {
             let mp = self.meta_pages[g];
             if mp == 0 {
@@ -253,22 +254,23 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                         }
                     }
                     MetaQuery::ListDir(dir_ino) => {
-                        if self.cur_inode.parent_ino == dir_ino
-                            && let Some(cb) = list_cb.as_deref_mut()
-                        {
-                            cb(
-                                self.cur_inode.name_str(),
-                                self.cur_inode.size as usize,
-                                self.cur_inode.perm,
-                                self.cur_inode.is_dir(),
-                            );
+                        if self.cur_inode.parent_ino == dir_ino {
+                            matched = matched.saturating_add(1);
+                            if let Some(cb) = list_cb.as_deref_mut() {
+                                cb(
+                                    self.cur_inode.name_str(),
+                                    self.cur_inode.size as usize,
+                                    self.cur_inode.perm,
+                                    self.cur_inode.is_dir(),
+                                );
+                            }
                         }
                     }
                     MetaQuery::FreeSlot => {}
                 }
             }
         }
-        Ok(0)
+        Ok(matched)
     }
 
     #[inline(always)]

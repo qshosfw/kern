@@ -99,17 +99,22 @@ impl AssetDescriptor {
             if entry.is_dir {
                 continue;
             }
-            let path = entry.path.as_str();
-            if !has_extension(path, self.extensions) {
+            let entry_name = entry.path.as_str();
+            if !has_extension(entry_name, self.extensions) {
                 continue;
             }
 
             let found = storage.count;
-            storage.paths[found].clear();
-            let _ = storage.paths[found].push_str(path);
-            format_asset_name_into(path, &mut storage.labels[found + 1]);
+            if build_full_asset_path(self.dir, entry_name, &mut storage.paths[found]).is_err() {
+                continue;
+            }
+            let full_path = storage.paths[found].as_str();
+            format_asset_name_into(full_path, &mut storage.labels[found + 1]);
 
-            if active && current_sel == 0 && path == cur_path {
+            if active
+                && current_sel == 0
+                && (full_path == cur_path || (!cur_path.starts_with('/') && entry_name == cur_path))
+            {
                 current_sel = found + 1;
             }
 
@@ -267,6 +272,34 @@ fn has_extension(path: &str, extensions: &[&str]) -> bool {
     false
 }
 
+fn build_full_asset_path(
+    dir: &str,
+    entry_name: &str,
+    out: &mut heapless::String<32>,
+) -> Result<(), ()> {
+    out.clear();
+    if entry_name.starts_with('/') {
+        if entry_name.len() > 31 {
+            return Err(());
+        }
+        return out.push_str(entry_name);
+    }
+    let clean_dir = dir.trim_end_matches('/');
+    let dir_prefix = if clean_dir.is_empty() {
+        0
+    } else {
+        clean_dir.len()
+    };
+    if dir_prefix + 1 + entry_name.len() > 31 {
+        return Err(());
+    }
+    if !clean_dir.is_empty() {
+        out.push_str(clean_dir)?;
+    }
+    out.push('/')?;
+    out.push_str(entry_name)
+}
+
 /// Retrieve the selected asset path from storage
 pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
     if sel == 0 {
@@ -278,5 +311,25 @@ pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
         Some(storage.paths[idx].as_str())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_full_asset_path() {
+        let mut out = heapless::String::<32>::new();
+        assert!(build_full_asset_path("/user/splash", "01_quansheng.rle", &mut out).is_ok());
+        assert_eq!(out.as_str(), "/user/splash/01_quansheng.rle");
+
+        assert!(build_full_asset_path("/user/rogers/", "03_mototrbo.ton", &mut out).is_ok());
+        assert_eq!(out.as_str(), "/user/rogers/03_mototrbo.ton");
+
+        assert!(
+            build_full_asset_path("/user/jingles", "/user/jingles/01_chime.ton", &mut out).is_ok()
+        );
+        assert_eq!(out.as_str(), "/user/jingles/01_chime.ton");
     }
 }

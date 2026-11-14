@@ -387,8 +387,9 @@ fn test_large_volume_1000_files_and_double_indirect_file() {
     }
 
     let mut listed = 0usize;
-    fs.list_dir("/dir", |_, _, _, _| listed += 1).unwrap();
+    let returned = fs.list_dir("/dir", |_, _, _, _| listed += 1).unwrap();
     assert_eq!(listed, 1000);
+    assert_eq!(returned, 1000);
 
     // Remount and verify 1000th file + 96 KB double-indirect file
     let mut fs2 = KernFS::new(&mut flash);
@@ -401,4 +402,25 @@ fn test_large_volume_1000_files_and_double_indirect_file() {
         large.len()
     );
     assert_eq!(CrcEngine::crc32(&verify), CrcEngine::crc32(&large));
+}
+
+#[test]
+fn test_list_dir_returns_exact_count_and_nested_dir() {
+    let mut flash = SmallFlash::new();
+    let mut fs = KernFS::new(&mut flash);
+    fs.format(None).unwrap();
+    fs.write_file("/user/splash/demo_01.rle", b"RLE1").unwrap();
+    fs.write_file("/user/splash/second.img", b"IMG2").unwrap();
+    fs.write_file("/user/splash/deleted.rle", b"DEL3").unwrap();
+    fs.remove("/user/splash/deleted.rle").unwrap();
+
+    let mut seen = 0usize;
+    let count = fs
+        .list_dir("/user/splash", |_name, _sz, _perm, is_dir| {
+            assert!(!is_dir);
+            seen += 1;
+        })
+        .unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(seen, 2);
 }

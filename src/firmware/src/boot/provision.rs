@@ -120,11 +120,29 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             continue;
         }
 
-        let src_path = entry.path.as_str();
-        let fname = filename_from_path(src_path);
+        let raw_entry = entry.path.as_str();
+        let fname = filename_from_path(raw_entry);
         if fname.is_empty() {
             continue;
         }
+
+        let mut src_arr = [0u8; 40];
+        let src_path = if raw_entry.starts_with('/') {
+            raw_entry
+        } else {
+            let prefix = b"/prov/";
+            let fb = fname.as_bytes();
+            let slen = prefix.len() + fb.len();
+            if slen > src_arr.len() {
+                continue;
+            }
+            src_arr[..prefix.len()].copy_from_slice(prefix);
+            src_arr[prefix.len()..slen].copy_from_slice(fb);
+            let Ok(s) = core::str::from_utf8(&src_arr[..slen]) else {
+                continue;
+            };
+            s
+        };
 
         let rlen = match filesystem.read_file(src_path, prov_buf) {
             Ok(l) => l,
@@ -149,6 +167,9 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             b"cfg" => "/pref/",
             b"dat" | b"sig" => "/sys/",
             b"rle" | b"img" => "/user/splash/",
+            b"rgr" => "/user/rogers/",
+            b"ton" if b.starts_with(b"jingle") => "/user/jingles/",
+            b"ton" => "/user/rogers/",
             _ => "/user/",
         };
 

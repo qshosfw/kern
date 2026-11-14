@@ -360,26 +360,61 @@ pub fn mount_or_format<'a>(
 }
 
 #[cfg(feature = "filesystem")]
+const INIT_MARK_BASE: u8 = 1 << 0;
+#[cfg(feature = "filesystem")]
+const INIT_MARK_SPLASHES: u8 = if cfg!(feature = "boot_assets") {
+    1 << 1
+} else {
+    0
+};
+#[cfg(feature = "filesystem")]
+const INIT_MARK_ROGERS: u8 = if cfg!(feature = "provision_rogers") {
+    1 << 2
+} else {
+    0
+};
+#[cfg(feature = "filesystem")]
+const INIT_MARK_JINGLES: u8 = if cfg!(feature = "boot_jingle") {
+    1 << 3
+} else {
+    0
+};
+
+#[cfg(feature = "filesystem")]
 #[inline(never)]
 pub fn ensure_default_files(filesystem: &mut SystemStorage) {
-    if !filesystem.exists("/sys/init.done") {
+    let desired: u8 = INIT_MARK_BASE | INIT_MARK_SPLASHES | INIT_MARK_ROGERS | INIT_MARK_JINGLES;
+
+    let mut init_buf = [0u8; 8];
+    let done_mask = match filesystem.read_file("/sys/init.done", &mut init_buf) {
+        Ok(n) if n >= 5 && &init_buf[..4] == b"INIT" => init_buf[4],
+        Ok(n) if n >= 4 && &init_buf[..4] == b"INIT" => INIT_MARK_BASE,
+        _ => 0,
+    };
+
+    if (done_mask & desired) != desired {
+        if (done_mask & INIT_MARK_BASE) == 0 {
+            crate::security::ensure_keychain(filesystem);
+        }
         #[cfg(feature = "boot_assets")]
-        splash::provision_splashes(filesystem);
-
+        if (done_mask & INIT_MARK_SPLASHES) == 0 {
+            splash::provision_splashes(filesystem);
+        }
         #[cfg(feature = "provision_rogers")]
-        crate::services::melody::provision_rogers(filesystem);
-
+        if (done_mask & INIT_MARK_ROGERS) == 0 {
+            crate::services::melody::provision_rogers(filesystem);
+        }
         #[cfg(feature = "boot_jingle")]
-        crate::services::melody::provision_jingles(filesystem);
+        if (done_mask & INIT_MARK_JINGLES) == 0 {
+            crate::services::melody::provision_jingles(filesystem);
+        }
 
-        crate::security::ensure_keychain(filesystem);
-        provision::provision_packages(filesystem);
-
-        let _ = filesystem.write_file("/sys/init.done", b"INIT");
+        let updated = [b'I', b'N', b'I', b'T', done_mask | desired];
+        let _ = filesystem.write_file("/sys/init.done", &updated);
     }
 
-    // Always verify that core system packages in /apps/ are provisioned and current
-    provision::ensure_core_packages(filesystem);
+    // Verify core /apps/*.krx packages, install any staged /prov/* items, and refresh launcher catalog
+    provision::provision_packages(filesystem);
 }
 
 #[cfg(not(feature = "filesystem"))]

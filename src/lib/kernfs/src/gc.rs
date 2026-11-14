@@ -568,8 +568,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 Err(e) => return Err(e),
             }
         };
-        let _ = self.scan_meta(crate::fs::MetaQuery::ListDir(dir_ino), Some(&mut cb))?;
-        Ok(0)
+        let count = self.scan_meta(crate::fs::MetaQuery::ListDir(dir_ino), Some(&mut cb))?;
+        Ok(count as usize)
     }
 
     /// Detect whether blocks 0..16 contain any legacy KernFS v1 headers.
