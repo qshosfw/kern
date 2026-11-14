@@ -8,13 +8,21 @@ pub const MODAL_BOX_Y: u8 = 14;
 pub const MODAL_BOX_W: u8 = 124;
 pub const MODAL_BOX_H: u8 = 35;
 
+/// Draw a cleared, 1px bordered box with 1px rounded outer corners.
+#[inline(never)]
+pub fn draw_rounded_box(canvas: &mut Canvas, x: u8, y: u8, w: u8, h: u8) {
+    canvas.fill_rect(x, y, w, h, Color::Clear);
+    canvas.draw_rect(x, y, w, h, Color::Fill);
+    if w > 4 && h > 4 {
+        canvas.clear_corners(x, y, w, h);
+    }
+}
+
 /// Center-Screen Modal Outer Box with Clear background and rounded border
 pub fn draw_modal_box(canvas: &mut Canvas, w: u8, h: u8) -> (u8, u8) {
     let x = canvas.width().saturating_sub(w) >> 1;
     let y = canvas.height().saturating_sub(h) >> 1;
-    canvas.fill_rect(x, y, w, h, Color::Clear);
-    canvas.draw_rect(x, y, w, h, Color::Fill);
-    canvas.clear_corners(x, y, w, h);
+    draw_rounded_box(canvas, x, y, w, h);
     (x, y)
 }
 
@@ -269,9 +277,7 @@ pub fn draw_sheet_slide_up(
     }
     let visible_h = (64 - sheet_y).min(sheet_h as i16) as u8;
     let sy = sheet_y as u8;
-    canvas.fill_rect(0, sy, 128, visible_h, Color::Clear);
-    canvas.draw_rect(0, sy, 128, visible_h, Color::Fill);
-    canvas.clear_corners(0, sy, 128, visible_h);
+    draw_rounded_box(canvas, 0, sy, 128, visible_h);
     draw_negated_header(canvas, sheet_y, title);
 
     if let Some((confirm, cancel)) = badges {
@@ -300,14 +306,7 @@ pub fn draw_modal_popup_materialize(
     let p = progress.min(16);
     let bw = ((MODAL_BOX_W as u16 * p as u16) >> 4) as u8;
     let bh = ((MODAL_BOX_H as u16 * p as u16) >> 4) as u8;
-    let bx = (128 - bw) >> 1;
-    let by = (64 - bh) >> 1;
-
-    canvas.fill_rect(bx, by, bw, bh, Color::Clear);
-    canvas.draw_rect(bx, by, bw, bh, Color::Fill);
-    if bw > 4 && bh > 4 {
-        canvas.clear_corners(bx, by, bw, bh);
-    }
+    let (_, by) = draw_modal_box(canvas, bw, bh);
 
     // High-contrast text reveals as materialization expands (>= 8)
     if p >= 8 {
