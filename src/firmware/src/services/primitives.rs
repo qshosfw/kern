@@ -39,12 +39,31 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     #[inline(never)]
+    pub(crate) fn apply_subaudible_split(
+        &mut self,
+        set_rx: bool,
+        set_tx: bool,
+        tone: kernel::service::radio::SubaudibleTone,
+    ) {
+        {
+            let ch = self.state.coord.active_channel_mut();
+            if set_rx {
+                ch.rx_subaudible = tone;
+            }
+            if set_tx {
+                ch.tx_subaudible = tone;
+            }
+        }
+        if set_rx && !self.state.coord.is_transmitting {
+            self.radio.set_rx_subaudible(tone);
+        }
+        if set_tx {
+            self.radio.set_tx_subaudible(tone);
+        }
+    }
+
     fn apply_subaudible_tone(&mut self, tone: kernel::service::radio::SubaudibleTone) {
-        let ch = self.state.coord.active_channel_mut();
-        ch.rx_subaudible = tone;
-        ch.tx_subaudible = tone;
-        self.radio.set_rx_subaudible(tone);
-        self.radio.set_tx_subaudible(tone);
+        self.apply_subaudible_split(true, true, tone);
     }
 }
 
@@ -157,7 +176,9 @@ impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
             ch.bandwidth = bw;
             ch.step = step;
         }
-        self.state.coord.select_vfo(self.radio, slot);
+        if !self.state.coord.is_transmitting {
+            self.state.coord.select_vfo(self.radio, slot);
+        }
     }
 
     fn get_frequency(&mut self) -> u32 {
@@ -212,13 +233,17 @@ impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
         use kernel::service::radio::ModulationMode;
         let mode = ModulationMode::from_u8(mod_type);
         self.state.coord.active_channel_mut().modulation = mode;
-        RfModulation::set_modulation(self.radio, mode);
+        if !self.state.coord.is_transmitting {
+            RfModulation::set_modulation(self.radio, mode);
+        }
     }
 
     fn set_squelch(&mut self, level: u8) {
         let sql = level.clamp(0, 9);
         self.state.coord.active_channel_mut().squelch_level = sql;
-        self.radio.set_squelch_level(sql);
+        if !self.state.coord.is_transmitting {
+            self.radio.set_squelch_level(sql);
+        }
     }
 
     fn get_rssi_dbm(&mut self) -> i16 {
@@ -251,7 +276,9 @@ impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
             _ => RfPowerLevel::High,
         };
         self.state.coord.active_channel_mut().power = pwr;
-        self.radio.set_power_level(pwr);
+        if !self.state.coord.is_transmitting {
+            self.radio.set_power_level(pwr);
+        }
     }
 
     fn set_subaudible_ctcss(&mut self, freq_tenths_hz: u16) {

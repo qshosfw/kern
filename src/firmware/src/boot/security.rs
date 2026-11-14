@@ -112,8 +112,7 @@ pub fn handle_unlock_failure(
         radio.set_status_led(bsp::StatusLed::Red);
         radio.play_beep(crate::services::melody::BeepType::Warning);
         py32_hal::delay::delay_ms(1500);
-        crate::boot::prepare_clean_reboot();
-        cortex_m::peripheral::SCB::sys_reset();
+        kernel::power::PowerControl::reboot();
     }
 
     let mut msg_buf = [0u8; 32];

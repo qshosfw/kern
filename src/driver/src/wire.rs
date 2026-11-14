@@ -120,7 +120,7 @@ impl<S: SerialPort> WireDriver<S> {
     fn handle_ascii_line(&mut self) {
         let cmd = &self.rx_buf[..self.rx_len];
         if cmd.eq_ignore_ascii_case(b"reboot") {
-            cortex_m::peripheral::SCB::sys_reset();
+            kernel::power::PowerControl::reboot();
         }
         self.port.write(b"RigWire\r\n");
     }

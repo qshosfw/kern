@@ -47,7 +47,7 @@ pub fn draw_dotted_line_h(canvas: &mut Canvas, x0: i16, x1: i16, y: i16, step: u
     }
 }
 
-/// Draw 1-bit monochrome bitmap
+/// Draw 1-bit monochrome bitmap.
 #[inline(never)]
 pub fn draw_bitmap(
     canvas: &mut Canvas,
@@ -64,14 +64,45 @@ pub fn draw_bitmap(
     }
     for row in 0..height as usize {
         let row_offset = row * bytes_per_row;
-        let row_y = y + row as i16;
+        let py = y + row as i16;
         for col in 0..width as usize {
-            let byte = data[row_offset + (col >> 3)];
-            if (byte & (0x80 >> (col & 7))) != 0 {
-                canvas.draw_pixel_i(x + col as i16, row_y, color);
+            if (data[row_offset + (col >> 3)] & (0x80 >> (col & 7))) != 0 {
+                canvas.draw_pixel_i(x + col as i16, py, color);
             }
         }
     }
+}
+
+/// Decompress a 128x64 PackBits RLE page-packed bitmap into `canvas`.
+#[inline(never)]
+pub fn draw_rle_splash(canvas: &mut Canvas, rle: &[u8]) {
+    canvas.clear();
+    let flat = canvas.buffer_flat_mut();
+    let mut idx = 0usize;
+    let mut i = 0usize;
+    while i < rle.len() && idx < 1024 {
+        let hdr = rle[i] as i8;
+        i += 1;
+        if hdr >= 0 {
+            let mut count = (hdr as usize) + 1;
+            while count > 0 && i < rle.len() && idx < 1024 {
+                flat[idx] = rle[i];
+                idx += 1;
+                i += 1;
+                count -= 1;
+            }
+        } else if hdr != -128 && i < rle.len() {
+            let mut count = (1 - hdr as i16) as usize;
+            let val = rle[i];
+            i += 1;
+            while count > 0 && idx < 1024 {
+                flat[idx] = val;
+                idx += 1;
+                count -= 1;
+            }
+        }
+    }
+    canvas.sync_planes();
 }
 
 #[cfg(test)]

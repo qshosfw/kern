@@ -1026,10 +1026,7 @@ impl Orchestrator {
             Shortcut::FmRadio => {
                 self.switch_app(ctx, APP_ID_VFO);
             }
-            Shortcut::Reboot => {
-                crate::boot::prepare_clean_reboot();
-                kernel::sys::SystemDiagnostics::reboot()
-            }
+            Shortcut::Reboot => kernel::power::PowerControl::reboot(),
             Shortcut::Sleep => {
                 self.lock_mgr.sleep_requested = true;
             }

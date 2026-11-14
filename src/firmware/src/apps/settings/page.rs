@@ -91,6 +91,19 @@ impl PageId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+pub enum DestructiveLevel {
+    /// Non-destructive settings edit or picker.
+    None = 0,
+    /// Restarts device out of user session (e.g. DFU bootloader hold).
+    Reboot = 1,
+    /// Erases user settings/files while keeping calibration intact.
+    UserDataLoss = 2,
+    /// Erases calibration and/or raw flash sectors.
+    FactoryDataWipe = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum ActionId {
     ChooseModel = 1,
     #[cfg(feature = "text_input")]
@@ -105,6 +118,9 @@ pub enum ActionId {
     FormatKeepCalib = 6,
     #[cfg(feature = "filesystem")]
     FormatWipeAll = 7,
+    #[cfg(feature = "filesystem")]
+    Wipe0xFFBootloader = 8,
+    RebootBootloader = 9,
 }
 
 impl ActionId {
@@ -124,7 +140,23 @@ impl ActionId {
             6 => Some(ActionId::FormatKeepCalib),
             #[cfg(feature = "filesystem")]
             7 => Some(ActionId::FormatWipeAll),
+            #[cfg(feature = "filesystem")]
+            8 => Some(ActionId::Wipe0xFFBootloader),
+            9 => Some(ActionId::RebootBootloader),
             _ => None,
+        }
+    }
+
+    pub const fn destructive_level(&self) -> DestructiveLevel {
+        match self {
+            #[cfg(feature = "filesystem")]
+            ActionId::FormatKeepCalib => DestructiveLevel::UserDataLoss,
+            #[cfg(feature = "filesystem")]
+            ActionId::FormatWipeAll | ActionId::Wipe0xFFBootloader => {
+                DestructiveLevel::FactoryDataWipe
+            }
+            ActionId::RebootBootloader => DestructiveLevel::Reboot,
+            _ => DestructiveLevel::None,
         }
     }
 }

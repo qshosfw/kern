@@ -18,6 +18,7 @@ pub static ROOT_DEFS: &[SettingDef] = &[
 fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut ShortString) {
     match action {
         ActionId::ChooseModel => out.set_str(ctx.config.system.model_str()),
+        ActionId::RebootBootloader => out.set_str(crate::boot::bootloader_version_str()),
         #[cfg(feature = "text_input")]
         ActionId::EditOwner => {
             super::metric::format_metric(super::page::MetricId::DeviceOwner, ctx, out)

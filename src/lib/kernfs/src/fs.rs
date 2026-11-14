@@ -647,4 +647,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             self.write_pages_at(0, data, Some(max_bytes))
         }
     }
+
+    /// Unmount the filesystem and perform a full raw `0xFF` erase of the underlying flash device.
+    pub fn wipe_raw(&mut self) -> Result<(), FsError> {
+        self.mounted = false;
+        self.dev.chip_erase()
+    }
 }

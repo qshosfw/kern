@@ -9,8 +9,9 @@
 //! - [`canvas`]: Hardware-agnostic 2D graphics rendering interface.
 //! - [`event`]: Hardware, IPC, and UI event routing taxonomy.
 //! - [`ipc`]: Lock-free SPSC message queues for thread/task communication.
+//! - [`power`]: Power states, profiles, and reset/bootloader lifecycle (`PowerControl`).
 //! - [`sched`]: Zero-alloc cooperative run-to-completion actor and priority scheduler.
-//! - [`sys`]: System metrics, stack introspection, and crash reporting.
+//! - [`sys`]: System metrics and stack introspection (`SystemDiagnostics`).
 
 #![no_std]
 

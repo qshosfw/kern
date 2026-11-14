@@ -125,6 +125,7 @@ pub struct RadioCoordinator {
     /// Granular transmission state machine (Idle, Active, TailBurst).
     pub tx_state: TxState,
     pub carrier_active: bool,
+    pub subaudible_matched: bool,
     pub fsk_sync_active: bool,
     pub audio_path_muted: bool,
     /// Physical tuner currently routed through the audio cross-bar to the power amplifier.
@@ -194,6 +195,7 @@ impl RadioCoordinator {
             is_transmitting: false,
             tx_state: TxState::Idle,
             carrier_active: false,
+            subaudible_matched: false,
             fsk_sync_active: false,
             audio_path_muted: true,
             audio_source: AudioCrossbarSource::Primary,
@@ -381,6 +383,50 @@ impl RadioCoordinator {
         } else {
             false
         }
+    }
+
+    #[inline(never)]
+    fn resync_after_unlock<R: RadioService>(&mut self, radio: &mut R, was_muted: bool) {
+        self.dwell.reset_dwell();
+        let locked = self.arbitrator.is_locked();
+        if locked {
+            self.listening_vfo = self.arbitrator.active_lock.slot;
+            self.fsk_sync_active = self.arbitrator.active_client().id == ClientId::FSK_SIDECAR;
+        } else {
+            self.fsk_sync_active = false;
+            if !self.is_transmitting && self.dual_watch == DualWatchMode::Off {
+                self.listening_vfo = self.active_vfo;
+            }
+        }
+        if !self.is_transmitting {
+            radio.configure_channel(
+                &self.channels[self.listening_vfo.index().min(self.channels.len() - 1)],
+            );
+            if locked || was_muted {
+                self.set_audio_muted(radio, locked && self.arbitrator.active_lock.audio_muted);
+            }
+        }
+    }
+
+    /// Release any arbitrator lock owned by `client_id` and resynchronize hardware RX state.
+    pub fn release_client_lock<R: RadioService>(
+        &mut self,
+        radio: &mut R,
+        client_id: ClientId,
+    ) -> bool {
+        let was_active = self.arbitrator.active_lock.is_active()
+            && self.arbitrator.active_lock.client.id == client_id;
+        let was_muted = self.arbitrator.active_lock.audio_muted;
+        if !self.arbitrator.release_client(client_id) {
+            return false;
+        }
+        if was_active {
+            if !self.arbitrator.is_locked() {
+                self.listening_vfo = self.active_vfo;
+            }
+            self.resync_after_unlock(radio, was_muted);
+        }
+        true
     }
 
     /// Force-release all active locks (e.g. user pressed PTT or exit key).
@@ -584,11 +630,15 @@ impl RadioCoordinator {
         let ch = &self.channels[idx];
         let tx_inhibited = ch.rx_freq.raw() == 0 || ch.effective_tx_freq().raw() == 0;
         let carrier_active = ch.busy_lock && self.carrier_active && self.listening_vfo == slot;
+        let tone_matched = ch.rx_subaudible != SubaudibleTone::None
+            && self.subaudible_matched
+            && self.listening_vfo == slot;
 
         self.arbitrator.evaluate_tx_permission(
             client,
             self.bclo_policy,
             carrier_active,
+            tone_matched,
             tx_inhibited,
             self.tot_locked_out,
         )
@@ -626,6 +676,7 @@ impl RadioCoordinator {
         let tx_freq = tx_ch.effective_tx_freq();
         let tx_power = tx_ch.power;
         let tx_mod = tx_ch.modulation;
+        let tx_bw = tx_ch.bandwidth;
 
         radio.set_tx_subaudible(tx_subaudible);
         if tx_subaudible != SubaudibleTone::None {
@@ -652,6 +703,7 @@ impl RadioCoordinator {
 
         radio.set_power_level(target_power);
         radio.set_modulation(tx_mod);
+        radio.set_bandwidth(tx_bw);
         let pwr_level = match target_power {
             RfPowerLevel::Low => 0,
             RfPowerLevel::Medium => 1,
@@ -682,13 +734,23 @@ impl RadioCoordinator {
         self.tot_elapsed_10ms = 0;
         self.tot_warning_given = false;
         self.dwell.on_tx_finished();
+        if matches!(
+            self.cross_band,
+            CrossBandMode::FixedTxOnA | CrossBandMode::FixedTxOnB
+        ) {
+            self.listening_vfo = self.active_vfo;
+        }
         let rx_ch = self.listening_channel();
         let freq = rx_ch.effective_rx_freq();
         let pwr = rx_ch.power;
         let mod_mode = rx_ch.modulation;
+        let bw = rx_ch.bandwidth;
+        let rx_subaudible = rx_ch.rx_subaudible;
         radio.set_rx_frequency(freq);
         radio.set_power_level(pwr);
         radio.set_modulation(mod_mode);
+        radio.set_bandwidth(bw);
+        radio.set_rx_subaudible(rx_subaudible);
     }
 
     /// High-level request to initiate PTT transmission on behalf of user or client.
@@ -833,6 +895,7 @@ impl RadioCoordinator {
     // ── 1750 Hz Repeater Access Tone Burst ──
 
     /// Trigger a 1750 Hz tone burst for European/international repeater access.
+    #[inline(never)]
     pub fn trigger_1750hz_burst<R: RadioService>(
         &mut self,
         radio: &mut R,
@@ -1133,12 +1196,9 @@ impl RadioCoordinator {
                 client,
                 resources,
                 slot,
-                needs_mute,
+                needs_mute: _,
             } => {
-                self.listening_vfo = slot;
-                self.fsk_sync_active = client.id == ClientId::FSK_SIDECAR;
-                radio.configure_channel(&self.channels[slot.index()]);
-                self.set_audio_muted(radio, needs_mute);
+                self.resync_after_unlock(radio, false);
                 Some(RadioEvent::LockRestored {
                     client,
                     resources,
@@ -1151,14 +1211,7 @@ impl RadioCoordinator {
                 slot,
                 was_muted,
             } => {
-                self.fsk_sync_active = false;
-                if self.dual_watch == DualWatchMode::Off && !self.is_transmitting {
-                    self.listening_vfo = self.active_vfo;
-                }
-                radio.configure_channel(&self.channels[self.listening_vfo.index()]);
-                if was_muted {
-                    self.set_audio_muted(radio, false);
-                }
+                self.resync_after_unlock(radio, was_muted);
                 if client.id == ClientId::FSK_SIDECAR {
                     Some(RadioEvent::FskLockReleased(slot))
                 } else {
@@ -1193,6 +1246,7 @@ impl RadioCoordinator {
                 self.set_audio_muted(radio, false);
             }
             self.dwell.on_carrier_opened();
+            self.subaudible_matched = false;
             self.ste.reset();
             RadioEvent::CarrierOpened(self.listening_vfo)
         } else {
@@ -1204,6 +1258,7 @@ impl RadioCoordinator {
             } else {
                 false
             };
+            self.subaudible_matched = tone_present;
             let tail_burst = radio.has_tail_burst_detected();
             if let Some(should_mute) =
                 self.ste
@@ -1267,6 +1322,7 @@ impl RadioCoordinator {
 
         if !carrier && self.carrier_active {
             self.carrier_active = false;
+            self.subaudible_matched = false;
             self.ste.reset();
             if !self.is_transmitting {
                 bsp::set_status_led(bsp::StatusLed::Off);
@@ -1318,6 +1374,9 @@ mod tests {
         mic_muted: bool,
         tx_state: TransceiverTxState,
         tail_sent: CssTailMode,
+        bandwidth: Bandwidth,
+        rx_subaudible: SubaudibleTone,
+        tone_matched: bool,
     }
 
     impl MockRadio {
@@ -1332,6 +1391,9 @@ mod tests {
                 mic_muted: false,
                 tx_state: TransceiverTxState::IdleRx,
                 tail_sent: CssTailMode::None,
+                bandwidth: Bandwidth::Narrow12k5,
+                rx_subaudible: SubaudibleTone::None,
+                tone_matched: false,
             }
         }
     }
@@ -1339,6 +1401,8 @@ mod tests {
     impl RfChannel for MockRadio {
         fn configure_channel(&mut self, config: &ChannelConfig) {
             self.rx_freq = config.effective_rx_freq().raw();
+            self.bandwidth = config.bandwidth;
+            self.rx_subaudible = config.rx_subaudible;
             if self.configured_count < self.configured_freqs.len() {
                 self.configured_freqs[self.configured_count] = self.rx_freq;
                 self.configured_count += 1;
@@ -1364,7 +1428,9 @@ mod tests {
 
     impl RfModulation for MockRadio {
         fn set_modulation(&mut self, _mode: ModulationMode) {}
-        fn set_bandwidth(&mut self, _bw: Bandwidth) {}
+        fn set_bandwidth(&mut self, bw: Bandwidth) {
+            self.bandwidth = bw;
+        }
         fn set_deviation(&mut self, _dev: DeviationLimit) {}
         fn set_compander(&mut self, _compander: CompanderMode) {}
         fn set_scrambler(&mut self, _scrambler: ScramblerMode) {}
@@ -1400,10 +1466,12 @@ mod tests {
     }
 
     impl RfSubaudible for MockRadio {
-        fn set_rx_subaudible(&mut self, _tone: SubaudibleTone) {}
+        fn set_rx_subaudible(&mut self, tone: SubaudibleTone) {
+            self.rx_subaudible = tone;
+        }
         fn set_tx_subaudible(&mut self, _tone: SubaudibleTone) {}
         fn is_subaudible_matched(&mut self) -> bool {
-            false
+            self.tone_matched
         }
         fn send_css_tail(&mut self, mode: CssTailMode) {
             self.tail_sent = mode;
@@ -1607,5 +1675,64 @@ mod tests {
             RadioEvent::DualWatchSwitched(VfoSlot::VfoB)
         );
         assert_eq!(radio.rx_freq, 433_500_000);
+    }
+
+    #[test]
+    fn test_coordinator_tone_bclo_crossband_bw_and_client_unlock_restoration() {
+        let mut coord = RadioCoordinator::new();
+        let mut radio = MockRadio::new();
+        coord.dual_watch = DualWatchMode::Off;
+        coord.channels[0].rx_freq = Frequency::new(145_500_000);
+        coord.channels[0].bandwidth = Bandwidth::Narrow12k5;
+        coord.channels[0].rx_subaudible = SubaudibleTone::Ctcss(885);
+        coord.channels[0].busy_lock = true;
+        coord.channels[1].rx_freq = Frequency::new(433_500_000);
+        coord.channels[1].bandwidth = Bandwidth::Wide25k;
+        coord.channels[1].tx_subaudible = SubaudibleTone::DcsNormal(0o023);
+        coord.cross_band = CrossBandMode::FixedTxOnB;
+        coord.bclo_policy = BcloPolicy::ToneMismatchOnly;
+        coord.listening_vfo = VfoSlot::VfoA;
+
+        // ToneMismatchOnly: busy carrier without tone match blocks TX on VfoA.
+        radio.carrier_open = true;
+        radio.tone_matched = false;
+        let _ = coord.tick_10ms(&mut radio); // CarrierOpened
+        let _ = coord.tick_10ms(&mut radio); // polls is_subaudible_matched
+        let ui = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+        assert_eq!(
+            coord.check_tx_permission(VfoSlot::VfoA, ui),
+            TxPermission::BlockedBusyChannel
+        );
+
+        // Matched CTCSS tone unlocks ToneMismatchOnly permission.
+        radio.tone_matched = true;
+        let _ = coord.tick_10ms(&mut radio);
+        assert_eq!(
+            coord.check_tx_permission(VfoSlot::VfoA, ui),
+            TxPermission::Granted
+        );
+
+        // Cross-band TX applies TX slot bandwidth (Wide25k) and stop_tx restores RX bw + tone.
+        assert_eq!(
+            coord.request_ptt_start(&mut radio, ui),
+            TxPermission::Granted
+        );
+        assert_eq!(radio.bandwidth, Bandwidth::Wide25k);
+        radio.carrier_open = false;
+        coord.stop_tx(&mut radio);
+        assert_eq!(radio.bandwidth, Bandwidth::Narrow12k5);
+        assert_eq!(radio.rx_subaudible, SubaudibleTone::Ctcss(885));
+
+        // Preempting KRX client lock on VfoB restores stashed FSK lock on VfoA when released.
+        let fsk = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::BACKGROUND);
+        let krx_id = ClientId::for_krx_pid(3);
+        let krx = ClientToken::new(krx_id, LockTier::FOREGROUND);
+        assert!(coord.request_resource_lock(fsk, RfResourceMask::VFO_A, VfoSlot::VfoA, 500, true));
+        assert!(coord.request_resource_lock(krx, RfResourceMask::VFO_B, VfoSlot::VfoB, 500, false));
+        assert_eq!(coord.listening_vfo, VfoSlot::VfoB);
+        assert!(coord.release_client_lock(&mut radio, krx_id));
+        assert_eq!(coord.listening_vfo, VfoSlot::VfoA);
+        assert_eq!(coord.arbitrator.active_client(), fsk);
+        assert!(coord.fsk_sync_active);
     }
 }

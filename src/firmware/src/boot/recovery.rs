@@ -424,9 +424,8 @@ pub fn run_safe_mode_recovery(
                 break;
             }
             Some(kernel::event::KeyCode::Exit) => {
-                crate::boot::prepare_clean_reboot();
                 bsp::set_status_led(bsp::StatusLed::Off);
-                cortex_m::peripheral::SCB::sys_reset();
+                kernel::power::PowerControl::reboot();
             }
             #[cfg(feature = "panic_gui_extended")]
             Some(code) => {

@@ -408,8 +408,12 @@ fn handle_resource_invoke(
 ) -> WireStatus {
     match (handle.domain, action_id) {
         (DOMAIN_SYSTEM, ACTION_SYS_REBOOT) => {
-            crate::boot::prepare_clean_reboot();
-            kernel::sys::SystemDiagnostics::reboot();
+            let mode = match params.first().copied() {
+                Some(1) => kernel::power::RebootMode::Bootloader,
+                Some(2) => kernel::power::RebootMode::SafeRecovery,
+                _ => kernel::power::RebootMode::Firmware,
+            };
+            kernel::power::PowerControl::reboot_with(mode);
         }
         (DOMAIN_SYSTEM, ACTION_SYS_FLASHLIGHT) => {
             match params.first().copied().unwrap_or(2) {

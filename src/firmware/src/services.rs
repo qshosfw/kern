@@ -179,6 +179,23 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         }
     }
 
+    /// Show a destructive confirmation dialog requiring `hold_ms` hold on `Menu`.
+    #[inline(always)]
+    pub fn show_hold_confirm(
+        &mut self,
+        tag: u8,
+        title: &str,
+        message: &str,
+        confirm: &'static str,
+        cancel: &'static str,
+        hold_ms: u16,
+    ) {
+        unsafe {
+            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                .show_hold_confirm(tag, title, message, confirm, cancel, hold_ms);
+        }
+    }
+
     /// Open an OS modal text input prompt.
     #[cfg(feature = "text_input")]
     #[inline(always)]

@@ -49,7 +49,46 @@ typedef struct {
     void (*scroll)(i8 dx, i8 dy, u8 fill_byte);
 } CapDisplayVTable;
 
-// 2. CapRadioVTable (33 APIs)
+typedef struct {
+    u8  kind;
+    u8  _pad;
+    u16 value;
+} KrxSubaudible;
+
+typedef struct {
+    u32 rx_freq_hz;
+    u32 tx_offset_hz;
+    u32 step_hz;
+    KrxSubaudible rx_subaudible;
+    KrxSubaudible tx_subaudible;
+    u8  modulation;
+    u8  bandwidth;
+    u8  power;
+    u8  tx_shift;
+    u8  squelch_level;
+    u8  reverse;
+    u8  busy_lock;
+    u8  _reserved;
+} KrxVfoConfig;
+
+typedef struct {
+    u8  active_vfo;
+    u8  listening_vfo;
+    u8  dual_watch;
+    u8  cross_band;
+    u8  bclo_policy;
+    u8  ptt_active;
+    u8  squelch_open;
+    u8  subaudible_matched;
+    u8  tot_locked_out;
+    u8  lock_active;
+    u8  tx_perm;
+    u8  _reserved;
+    u16 tot_remaining_s;
+    i16 rssi_dbm;
+} KrxRadioState;
+
+// 2. CapRadioVTable (37 APIs)
 typedef struct {
     u8 (*rf_tune)(u32 freq_hz, u8 bw, u32 step_hz);
     u32 (*rf_get_freq)(void);
@@ -80,6 +119,14 @@ typedef struct {
     void (*rf_set_dtmf)(u8 digit, u8 gain);
     u8 (*rf_get_snr)(void);
     u8 (*rf_get_noise)(void);
+    u8 (*rf_get_vfo_config)(u8 slot, KrxVfoConfig* out);
+    u8 (*rf_set_vfo_config)(u8 slot, const KrxVfoConfig* cfg);
+    u8 (*rf_get_radio_state)(KrxRadioState* out);
+    u8 (*rf_set_watch_mode)(u8 active_vfo, u8 dual_watch, u8 cross_band, u8 bclo);
+    u8 (*rf_set_rx_tx_subaudible)(u8 is_tx, u8 kind, u16 value);
+    u8 (*rf_lock_vfo)(u16 resources, u8 slot, u16 timeout_ms, u8 exclusive);
+    u8 (*rf_unlock_vfo)(void);
+    u8 (*rf_trigger_burst)(u16 freq_hz, u16 duration_ms);
 } CapRadioVTable;
 
 // 3. CapAudioVTable (13 APIs)

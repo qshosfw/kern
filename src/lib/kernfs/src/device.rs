@@ -31,4 +31,12 @@ pub trait BlockDevice {
     fn resume_erase(&mut self) -> Result<(), FsError> {
         Ok(())
     }
+
+    /// Erase the entire block device to `0xFF` (raw factory flash state).
+    fn chip_erase(&mut self) -> Result<(), FsError> {
+        for block in 0..Self::TOTAL_BLOCKS {
+            self.erase_sector(block * Self::BLOCK_SIZE)?;
+        }
+        Ok(())
+    }
 }

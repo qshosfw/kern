@@ -62,7 +62,7 @@ fn drain_keypad_matrix(hw: &mut SystemHardware) {
     hw.key_scanner.clear();
 }
 
-const WAKE_HOLD_STEPS: u8 = 6; // ~6 x 50 ms (~300 ms) hold to wake
+const WAKE_HOLD_STEPS: u8 = 20; // ~20 x 50 ms (~1.0 s) hold to wake
 const LPTIM_IDLE_TICKS: u16 = 1536; // ~1.5 s @ 1024 Hz LSI/32 (>2x safety margin under 6.0 s IWDG across LSI spread)
 const LPTIM_HOLD_TICKS: u16 = 52; // ~50 ms @ 1024 Hz
 

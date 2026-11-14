@@ -268,23 +268,6 @@ impl SystemDiagnostics {
             MemoryPressure::Critical => 1,
         }
     }
-
-    /// Performs a software reset of the MCU.
-    pub fn reboot() -> ! {
-        unsafe {
-            // Cortex-M SCB AIRCR Reset
-            let aircr = 0xE000ED0C as *mut u32;
-            core::ptr::write_volatile(aircr, (0x5FA << 16) | (1 << 2));
-            loop {
-                core::arch::asm!("nop");
-            }
-        }
-    }
-
-    /// Reboots into the Bootloader by triggering a Cortex-M0+ system reset via AIRCR.
-    pub fn reboot_to_bootloader() -> ! {
-        Self::reboot()
-    }
 }
 
 #[cfg(test)]

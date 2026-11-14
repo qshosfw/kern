@@ -1,8 +1,6 @@
 //! System Domain Settings & Submenu Declarations
 
-#[cfg(any(feature = "settings_debug", feature = "filesystem"))]
-use super::page::ActionId;
-use super::page::{ChoiceId, MetricId, PageId, SettingDef, SettingField};
+use super::page::{ActionId, ChoiceId, MetricId, PageId, SettingDef, SettingField};
 
 pub static CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0";
 pub static UART_BAUD_OPTIONS: &str = "115200\038400\0";
@@ -19,6 +17,7 @@ pub static SYSTEM_ROOT: &[SettingDef] = &[
     SettingDef::submenu("Calibration", PageId::SystemCalibration),
     #[cfg(feature = "settings_debug")]
     SettingDef::submenu("Debug", PageId::SystemDebug),
+    SettingDef::action("Bootloader", ActionId::RebootBootloader),
 ];
 
 pub static SYSTEM_STORAGE: &[SettingDef] = &[
@@ -28,9 +27,11 @@ pub static SYSTEM_STORAGE: &[SettingDef] = &[
     SettingDef::metric("Wear Cycles", MetricId::StorageWear),
     SettingDef::metric("Deleted", MetricId::StorageDeleted),
     #[cfg(feature = "filesystem")]
-    SettingDef::action("Format (Keep Cal)", ActionId::FormatKeepCalib),
+    SettingDef::action("Format Storage", ActionId::FormatKeepCalib),
     #[cfg(feature = "filesystem")]
-    SettingDef::action("Format (Full Wipe)", ActionId::FormatWipeAll),
+    SettingDef::action("Erase All Data", ActionId::FormatWipeAll),
+    #[cfg(feature = "filesystem")]
+    SettingDef::action("Blank Chip & DFU", ActionId::Wipe0xFFBootloader),
 ];
 
 #[cfg(feature = "settings_calib")]

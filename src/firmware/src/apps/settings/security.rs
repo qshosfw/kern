@@ -137,8 +137,7 @@ fn verify_passcode_interactive(ctx: &mut crate::SysContext, text: &str) -> bool 
     } else {
         let pcfg = crate::security::passcode::get_passcode_config(ctx.storage);
         if pcfg.failed_attempts >= pcfg.max_tries {
-            crate::boot::prepare_clean_reboot();
-            cortex_m::peripheral::SCB::sys_reset();
+            kernel::power::PowerControl::reboot();
         }
         let mut nbuf = [0u8; 32];
         let msg = crate::security::passcode::format_wrong_passcode_msg(

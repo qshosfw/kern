@@ -158,8 +158,6 @@ fn main() -> ! {
     // Ensure Display Backlight is OFF during bring-up
     bsp::pins::BACKLIGHT.set_low();
 
-    // Start Independent Watchdog with generous 6000ms timeout for reliable boot & flash operations
-    hal::wdt::Watchdog::start(6000);
     let _ = hal::uart::write_line("KERN v0.1.0");
     let _ = hal::uart::write_line(build_info::BUILD_STAMP);
 
@@ -204,6 +202,13 @@ fn main() -> ! {
     canvas.clear();
     hw.lcd.blit(canvas);
     hw.backlight.init();
+    kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
+    if boot::is_bootloader_hold_requested() {
+        boot::enter_dfu_bootloader(&mut hw.lcd);
+    }
+
+    // Start Independent Watchdog with generous 6000ms timeout after DFU bootloader check
+    hal::wdt::Watchdog::start(6000);
 
     // 3. Storage & Drivers (Fast mount without heavy provisioning stalls)
     #[cfg(feature = "filesystem")]

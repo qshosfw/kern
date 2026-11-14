@@ -234,6 +234,69 @@ pub struct RadioApi {
     pub rf_set_dtmf: unsafe extern "C" fn(digit: u8, gain: u8),
     pub rf_get_snr: unsafe extern "C" fn() -> u8,
     pub rf_get_noise: unsafe extern "C" fn() -> u8,
+    pub rf_get_vfo_config: unsafe extern "C" fn(slot: u8, out: *mut KrxVfoConfig) -> u8,
+    pub rf_set_vfo_config: unsafe extern "C" fn(slot: u8, cfg: *const KrxVfoConfig) -> u8,
+    pub rf_get_radio_state: unsafe extern "C" fn(out: *mut KrxRadioState) -> u8,
+    pub rf_set_watch_mode:
+        unsafe extern "C" fn(active_vfo: u8, dual_watch: u8, cross_band: u8, bclo: u8) -> u8,
+    pub rf_set_rx_tx_subaudible: unsafe extern "C" fn(is_tx: u8, kind: u8, value: u16) -> u8,
+    pub rf_lock_vfo:
+        unsafe extern "C" fn(resources: u16, slot: u8, timeout_ms: u16, exclusive: u8) -> u8,
+    pub rf_unlock_vfo: unsafe extern "C" fn() -> u8,
+    pub rf_trigger_burst: unsafe extern "C" fn(freq_hz: u16, duration_ms: u16) -> u8,
+}
+
+/// C-ABI subaudible CTCSS/DCS tone specification for external `.krx` VFO apps.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KrxSubaudible {
+    /// 0 = None, 1 = CTCSS (value in deci-Hz), 2 = DCS Normal, 3 = DCS Inverted.
+    pub kind: u8,
+    pub _pad: u8,
+    pub value: u16,
+}
+
+/// C-ABI full channel/VFO configuration record for external `.krx` VFO runtimes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KrxVfoConfig {
+    pub rx_freq_hz: u32,
+    pub tx_offset_hz: u32,
+    pub step_hz: u32,
+    pub rx_subaudible: KrxSubaudible,
+    pub tx_subaudible: KrxSubaudible,
+    /// Modulation mode (`ModulationMode` ordinal).
+    pub modulation: u8,
+    /// 0 = Wide25k, 1 = Narrow12k5, 2 = Narrow6k25.
+    pub bandwidth: u8,
+    /// 0 = Low, 1 = Medium, 2 = High.
+    pub power: u8,
+    /// 0 = Simplex, 1 = Positive (+), 2 = Negative (-).
+    pub tx_shift: u8,
+    pub squelch_level: u8,
+    pub reverse: u8,
+    pub busy_lock: u8,
+    pub _reserved: u8,
+}
+
+/// C-ABI live coordinator telemetry snapshot for external `.krx` VFO runtimes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KrxRadioState {
+    pub active_vfo: u8,
+    pub listening_vfo: u8,
+    pub dual_watch: u8,
+    pub cross_band: u8,
+    pub bclo_policy: u8,
+    pub ptt_active: u8,
+    pub squelch_open: u8,
+    pub subaudible_matched: u8,
+    pub tot_locked_out: u8,
+    pub lock_active: u8,
+    pub tx_perm: u8,
+    pub _reserved: u8,
+    pub tot_remaining_s: u16,
+    pub rssi_dbm: i16,
 }
 
 /// 3. `AudioApi` Table (`interface_id = 0x0003`)
@@ -1204,6 +1267,40 @@ unsafe extern "C" fn noop_rf_get_snr() -> u8 {
 unsafe extern "C" fn noop_rf_get_noise() -> u8 {
     0
 }
+unsafe extern "C" fn noop_rf_get_vfo_config(_slot: u8, _out: *mut KrxVfoConfig) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_rf_set_vfo_config(_slot: u8, _cfg: *const KrxVfoConfig) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_rf_get_radio_state(_out: *mut KrxRadioState) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_rf_set_watch_mode(
+    _active_vfo: u8,
+    _dual_watch: u8,
+    _cross_band: u8,
+    _bclo: u8,
+) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_rf_set_rx_tx_subaudible(_is_tx: u8, _kind: u8, _value: u16) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_rf_lock_vfo(
+    _resources: u16,
+    _slot: u8,
+    _timeout_ms: u16,
+    _exclusive: u8,
+) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_rf_unlock_vfo() -> u8 {
+    1
+}
+unsafe extern "C" fn noop_rf_trigger_burst(_freq_hz: u16, _duration_ms: u16) -> u8 {
+    1
+}
 unsafe extern "C" fn noop_storage_rename_file(
     _old_path: *const u8,
     _old_len: u8,
@@ -1282,6 +1379,14 @@ pub static STUB_RADIO_VTABLE: RadioApi = RadioApi {
     rf_set_dtmf: noop_rf_set_dtmf,
     rf_get_snr: noop_rf_get_snr,
     rf_get_noise: noop_rf_get_noise,
+    rf_get_vfo_config: noop_rf_get_vfo_config,
+    rf_set_vfo_config: noop_rf_set_vfo_config,
+    rf_get_radio_state: noop_rf_get_radio_state,
+    rf_set_watch_mode: noop_rf_set_watch_mode,
+    rf_set_rx_tx_subaudible: noop_rf_set_rx_tx_subaudible,
+    rf_lock_vfo: noop_rf_lock_vfo,
+    rf_unlock_vfo: noop_rf_unlock_vfo,
+    rf_trigger_burst: noop_rf_trigger_burst,
 };
 
 pub static STUB_AUDIO_VTABLE: AudioApi = AudioApi {
@@ -1718,6 +1823,8 @@ mod tests {
             (radio.rf_set_dtmf)(b'1', 80);
             assert_eq!((radio.rf_get_snr)(), 0);
             assert_eq!((radio.rf_get_noise)(), 0);
+            assert_eq!((radio.rf_get_vfo_config)(0, core::ptr::null_mut()), 1);
+            assert_eq!((radio.rf_unlock_vfo)(), 1);
 
             // Storage extension primitives
             assert!(!table.storage.is_null());

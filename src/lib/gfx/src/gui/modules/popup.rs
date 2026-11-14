@@ -15,6 +15,9 @@ pub struct PopupModel {
     pub scroll_offset: usize,
     pub confirm_label: Option<&'static str>,
     pub cancel_label: Option<&'static str>,
+    pub hold_ms_required: u16,
+    pub hold_elapsed_ms: u16,
+    pub hold_active: bool,
     pub repeater: crate::gui::repeater::KeyRepeater,
     pub custom_title: String<24>,
     pub custom_msg: String<192>,
@@ -27,6 +30,9 @@ impl PopupModel {
             scroll_offset: 0,
             confirm_label: None,
             cancel_label: None,
+            hold_ms_required: 0,
+            hold_elapsed_ms: 0,
+            hold_active: false,
             repeater: crate::gui::repeater::KeyRepeater::new(8, 2),
             custom_title: String::new(),
             custom_msg: String::new(),
@@ -37,6 +43,26 @@ impl PopupModel {
         self.confirm_label = Some(confirm);
         self.cancel_label = Some(cancel);
         self
+    }
+
+    pub fn hold_percent(&self) -> u8 {
+        if self.hold_ms_required == 0 {
+            return 0;
+        }
+        (((self.hold_elapsed_ms as u32) * 100) / (self.hold_ms_required as u32)).min(100) as u8
+    }
+
+    pub fn advance_hold(&mut self, dt_ms: u16) -> bool {
+        if !self.hold_active || self.hold_ms_required == 0 {
+            return false;
+        }
+        self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt_ms);
+        if self.hold_elapsed_ms >= self.hold_ms_required {
+            self.hold_elapsed_ms = self.hold_ms_required;
+            self.hold_active = false;
+            return true;
+        }
+        false
     }
 
     #[inline(always)]
@@ -61,7 +87,9 @@ impl Default for PopupView {
 
 #[inline(always)]
 fn popup_visible_lines(model: &PopupModel) -> usize {
-    if model.confirm_label.is_some() || model.cancel_label.is_some() {
+    if model.hold_ms_required > 0 {
+        2
+    } else if model.confirm_label.is_some() || model.cancel_label.is_some() {
         3
     } else {
         4
@@ -143,6 +171,11 @@ impl View<PopupModel> for PopupView {
             }
         }
 
+        // Hold-to-confirm safety progress bar above bottom badges
+        if model.hold_ms_required > 0 && anim_p >= 8 {
+            widgets::draw_progress_bar(canvas, 4, sheet_y + 30, 120, 5, model.hold_percent(), true);
+        }
+
         // Integrated Scrollbar (X=124..125) when total lines exceed viewport
         if total_lines > visible_lines && anim_p >= 12 {
             let track_y = (sheet_y + 10) as u8;
@@ -167,11 +200,25 @@ impl View<PopupModel> for PopupView {
                 .repeater
                 .tick()
                 .is_some_and(|c| scroll_popup(model, c));
-            return anim_tick || rep_tick;
+            return anim_tick || rep_tick || model.hold_active;
         }
 
         if let Event::Key { code, state } = event {
             model.repeater.handle_key(*code, *state);
+            if *code == KeyCode::Menu && model.hold_ms_required > 0 {
+                match state {
+                    KeyState::Pressed => {
+                        model.hold_active = true;
+                        model.hold_elapsed_ms = 0;
+                    }
+                    KeyState::Held => {}
+                    KeyState::Released => {
+                        model.hold_active = false;
+                        model.hold_elapsed_ms = 0;
+                    }
+                }
+                return true;
+            }
             if *state == KeyState::Pressed {
                 if scroll_popup(model, *code) {
                     return true;

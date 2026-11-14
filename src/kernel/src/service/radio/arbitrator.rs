@@ -40,6 +40,12 @@ impl ClientId {
         self.0.to_be_bytes()
     }
 
+    /// Derive a stable FourCC client tag for a loaded `.krx` runtime PID (`"KRX\xNN"`).
+    #[inline(always)]
+    pub const fn for_krx_pid(pid: u8) -> Self {
+        Self::from_tag(&[b'K', b'R', b'X', pid])
+    }
+
     /// Render tag as 4-character ASCII string into caller-provided buffer.
     pub fn tag_str<'a>(&self, buf: &'a mut [u8; 4]) -> &'a str {
         *buf = self.to_tag();
@@ -398,6 +404,20 @@ impl RadioArbitrator {
         self.saved_lock = None;
     }
 
+    /// Release any active and/or stashed lock held by `id`, restoring any stashed lock underneath.
+    pub fn release_client(&mut self, id: ClientId) -> bool {
+        let mut released = false;
+        if self.saved_lock.is_some_and(|l| l.client.id == id) {
+            self.saved_lock = None;
+            released = true;
+        }
+        if self.active_lock.is_active() && self.active_lock.client.id == id {
+            self.pop_and_restore();
+            released = true;
+        }
+        released
+    }
+
     /// Step lock countdown by `delta_ms` and return an event if lock expired.
     pub fn tick(&mut self, delta_ms: u16) -> Option<ArbitrationEvent> {
         if !self.active_lock.is_active() {
@@ -438,6 +458,7 @@ impl RadioArbitrator {
         client: ClientToken,
         bclo: BcloPolicy,
         carrier_active: bool,
+        subaudible_matched: bool,
         tx_inhibited: bool,
         tot_locked_out: bool,
     ) -> TxPermission {
@@ -452,8 +473,15 @@ impl RadioArbitrator {
         {
             return TxPermission::BlockedResourceLocked;
         }
-        if carrier_active && bclo != BcloPolicy::Disabled {
-            return TxPermission::BlockedBusyChannel;
+        if carrier_active {
+            let busy = match bclo {
+                BcloPolicy::Disabled => false,
+                BcloPolicy::CarrierOnly => true,
+                BcloPolicy::ToneMismatchOnly => !subaudible_matched,
+            };
+            if busy {
+                return TxPermission::BlockedBusyChannel;
+            }
         }
         TxPermission::Granted
     }
@@ -598,26 +626,50 @@ mod tests {
 
         // Standard idle permission
         assert_eq!(
-            arb.evaluate_tx_permission(user, BcloPolicy::CarrierOnly, false, false, false),
+            arb.evaluate_tx_permission(user, BcloPolicy::CarrierOnly, false, false, false, false),
             TxPermission::Granted
         );
 
         // TOT lockout penalty
         assert_eq!(
-            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, true),
+            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, false, true),
             TxPermission::BlockedTotPenalty
         );
 
         // TX Inhibited (RX-only)
         assert_eq!(
-            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, true, false),
+            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, true, false),
             TxPermission::BlockedTxInhibited
         );
 
         // BCLO carrier active
         assert_eq!(
-            arb.evaluate_tx_permission(user, BcloPolicy::CarrierOnly, true, false, false),
+            arb.evaluate_tx_permission(user, BcloPolicy::CarrierOnly, true, true, false, false),
             TxPermission::BlockedBusyChannel
+        );
+
+        // BCLO ToneMismatchOnly: carrier + mismatched tone blocks, matched tone grants
+        assert_eq!(
+            arb.evaluate_tx_permission(
+                user,
+                BcloPolicy::ToneMismatchOnly,
+                true,
+                false,
+                false,
+                false
+            ),
+            TxPermission::BlockedBusyChannel
+        );
+        assert_eq!(
+            arb.evaluate_tx_permission(
+                user,
+                BcloPolicy::ToneMismatchOnly,
+                true,
+                true,
+                false,
+                false
+            ),
+            TxPermission::Granted
         );
 
         // Resource locked by another client
@@ -630,13 +682,13 @@ mod tests {
             false,
         );
         assert_eq!(
-            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, false),
+            arb.evaluate_tx_permission(user, BcloPolicy::Disabled, false, false, false, false),
             TxPermission::BlockedResourceLocked
         );
 
         // Holding client allowed to transmit
         assert_eq!(
-            arb.evaluate_tx_permission(sidecar, BcloPolicy::Disabled, false, false, false),
+            arb.evaluate_tx_permission(sidecar, BcloPolicy::Disabled, false, false, false, false),
             TxPermission::Granted
         );
     }

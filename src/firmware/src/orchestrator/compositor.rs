@@ -28,6 +28,7 @@ pub enum ActiveModal {
 
 pub struct ModalCompositor {
     pub tag: u8,
+    pub last_hold_ms: u32,
     pub toast: ToastModel,
     pub toast_view: ToastView,
     pub popup_view: PopupView,
@@ -40,6 +41,7 @@ impl ModalCompositor {
     pub const fn new() -> Self {
         Self {
             tag: 0,
+            last_hold_ms: 0,
             toast: ToastModel::new(),
             toast_view: ToastView::new(),
             popup_view: PopupView::new(),
@@ -61,7 +63,7 @@ impl ModalCompositor {
         }
         match &self.modal {
             ActiveModal::Sheet(_, _, anim) => anim.is_animating(),
-            ActiveModal::Popup(model) => !model.anim.is_complete(),
+            ActiveModal::Popup(model) => !model.anim.is_complete() || model.hold_active,
             _ => false,
         }
     }
@@ -90,6 +92,7 @@ impl ModalCompositor {
     ) {
         crate::orchestrator::sink_enter_keys();
         self.tag = tag;
+        self.last_hold_ms = 0;
         self.modal = ActiveModal::Popup(PopupModel::new());
         if let ActiveModal::Popup(model) = &mut self.modal {
             if !confirm.is_empty() {
@@ -103,7 +106,23 @@ impl ModalCompositor {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
+    pub fn show_hold_confirm(
+        &mut self,
+        tag: u8,
+        title: &str,
+        message: &str,
+        confirm: &'static str,
+        cancel: &'static str,
+        hold_ms: u16,
+    ) {
+        self.show_confirm(tag, title, message, confirm, cancel);
+        if let ActiveModal::Popup(model) = &mut self.modal {
+            model.hold_ms_required = hold_ms;
+        }
+    }
+
+    #[inline(never)]
     pub fn show_popup(&mut self, tag: u8, title: &str, message: &str) {
         self.show_confirm(tag, title, message, "", "");
     }
@@ -179,6 +198,26 @@ impl ModalCompositor {
             ActiveModal::None => None,
             ActiveModal::Popup(model) => {
                 if self.popup_view.on_event(model, event) {
+                    if matches!(event, Event::Tick) && model.hold_active {
+                        #[cfg(target_arch = "arm")]
+                        let (now, dt) = {
+                            let now = py32_hal::delay::millis();
+                            let dt = if self.last_hold_ms == 0 {
+                                20
+                            } else {
+                                now.wrapping_sub(self.last_hold_ms).min(250) as u16
+                            };
+                            (now, dt)
+                        };
+                        #[cfg(not(target_arch = "arm"))]
+                        let (now, dt) = (self.last_hold_ms.wrapping_add(50), 50u16);
+                        self.last_hold_ms = now;
+                        if model.advance_hold(dt) {
+                            return Some(ModalResult::Confirmed(tag));
+                        }
+                    } else if !model.hold_active {
+                        self.last_hold_ms = 0;
+                    }
                     return None;
                 }
                 if let Event::Key {
@@ -566,5 +605,56 @@ mod tests {
             }
             _ => panic!("expected popup modal"),
         }
+    }
+
+    #[test]
+    fn hold_confirm_requires_sustained_hold_and_resets_on_release() {
+        let mut compositor = ModalCompositor::new();
+        compositor.show_hold_confirm(
+            42,
+            "Format Storage?",
+            "Erase all files?",
+            "Hold",
+            "Cancel",
+            1000,
+        );
+        assert!(
+            compositor
+                .handle_event(&Event::Key {
+                    code: KeyCode::Menu,
+                    state: KeyState::Pressed,
+                })
+                .is_none()
+        );
+        for _ in 0..5 {
+            assert!(compositor.handle_event(&Event::Tick).is_none());
+        }
+        assert!(
+            compositor
+                .handle_event(&Event::Key {
+                    code: KeyCode::Menu,
+                    state: KeyState::Released,
+                })
+                .is_none()
+        );
+        assert!(
+            compositor
+                .handle_event(&Event::Key {
+                    code: KeyCode::Menu,
+                    state: KeyState::Pressed,
+                })
+                .is_none()
+        );
+        let mut confirmed = false;
+        for _ in 0..20 {
+            if matches!(
+                compositor.handle_event(&Event::Tick),
+                Some(ModalResult::Confirmed(42))
+            ) {
+                confirmed = true;
+                break;
+            }
+        }
+        assert!(confirmed, "sustained Menu hold must confirm hold modal");
     }
 }

@@ -886,9 +886,13 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
     slot.status_bar_center_count = 0;
     slot.app_name.clear();
     slot.pkg_path.clear();
-    // Safety cleanup: ensure radio TX is disengaged if guest left PTT active
+    // Safety cleanup: ensure radio TX and arbitrator VFO locks are released on exit
     if ctx.state.coord.is_transmitting {
         ctx.state.coord.request_ptt_stop(ctx.radio);
+    }
+    if slot.pid.0 != 0 {
+        let client_id = kernel::service::radio::ClientId::for_krx_pid(slot.pid.0 as u8);
+        ctx.state.coord.release_client_lock(ctx.radio, client_id);
     }
 }
 

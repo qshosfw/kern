@@ -171,7 +171,7 @@ impl<S: SerialPort> WireDriver<S> {
             self.session.reset();
         }
         if do_reboot {
-            cortex_m::peripheral::SCB::sys_reset();
+            kernel::power::PowerControl::reboot();
         }
     }
 }

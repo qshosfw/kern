@@ -233,6 +233,7 @@ pub fn draw_scrollbar(
 }
 
 /// Dialog rendered with a vertical slide-up offset (y_offset = 0 is docked; y_offset > 0 shifts down)
+#[inline(never)]
 pub fn draw_dialog_slide_up(
     canvas: &mut Canvas,
     big_title: &str,
@@ -354,5 +355,70 @@ pub fn draw_modal_popup_materialize(
             line_y += step_y;
             is_first = false;
         }
+    }
+}
+
+/// Compressed 128x64 DFU bitmap (PackBits RLE, 1bpp ST7565 page order, shifted up to Y=6..40).
+/// Depicts a solid-filled handheld radio (with empty LCD cutout), rounded solid left arrow, and solid USB-C plug/cable.
+pub static DFU_SPLASH_RLE: [u8; 129] = [
+    0xF1, 0x00, 0x00, 0x80, 0xFF, 0xC0, 0x00, 0x80, 0x85, 0x00, 0xFD, 0xFF, 0xF7, 0x00, 0xFC, 0xE0,
+    0x9A, 0x00, 0xFF, 0xF0, 0x00, 0xFE, 0xFE, 0xFF, 0xEF, 0x0F, 0xFE, 0xFF, 0x00, 0xFE, 0xF7, 0x00,
+    0x01, 0x80, 0xC0, 0xFE, 0xE0, 0x00, 0xC0, 0xEF, 0x00, 0xF9, 0x80, 0x02, 0x00, 0xC0, 0xE0, 0xED,
+    0xF0, 0x02, 0xE0, 0xC0, 0x00, 0xFD, 0x80, 0xE5, 0x00, 0xFF, 0x0F, 0xFD, 0xFF, 0xEF, 0xE0, 0xFD,
+    0xFF, 0xFA, 0x00, 0x02, 0x1C, 0x3E, 0x7F, 0xFB, 0xFF, 0xF8, 0x7F, 0x00, 0x3E, 0xFA, 0x00, 0x00,
+    0x7F, 0xF9, 0xFF, 0x00, 0x00, 0xE9, 0xFF, 0x00, 0x00, 0xFD, 0xFF, 0xEF, 0x3E, 0xF5, 0x00, 0xFB,
+    0xFF, 0xF3, 0xF6, 0xFB, 0xFF, 0xF6, 0x00, 0x00, 0x01, 0xFE, 0x03, 0x00, 0x01, 0xE6, 0x00, 0x01,
+    0x01, 0x03, 0xED, 0x07, 0x01, 0x03, 0x01, 0xDD, 0x00, 0xE9, 0x01, 0x81, 0x00, 0x81, 0x00, 0xA6,
+    0x00,
+];
+
+/// Full 128x64 DFU bitmap: bigger radio icon at left and USB-C plug/cable entering from right.
+#[inline(always)]
+pub fn draw_dfu_bitmap(canvas: &mut Canvas) {
+    crate::draw::draw_rle_splash(canvas, &DFU_SPLASH_RLE);
+}
+
+/// Complete 128x64 DFU screen with shifted-up graphic (Y=6..40) and centered tomthumb metadata
+/// (live-detected factory bootloader version and 38400 bps serial link rate) below.
+#[inline(never)]
+pub fn draw_dfu_screen(canvas: &mut Canvas, bl_ver: &str) {
+    draw_dfu_bitmap(canvas);
+    let mut line1 = [0u8; 24];
+    const PREFIX: &[u8] = b"DFU MODE - BL ";
+    line1[..PREFIX.len()].copy_from_slice(PREFIX);
+    let vbytes = bl_ver.as_bytes();
+    let vlen = vbytes.len().min(line1.len() - PREFIX.len());
+    line1[PREFIX.len()..PREFIX.len() + vlen].copy_from_slice(&vbytes[..vlen]);
+    let s1 = unsafe { core::str::from_utf8_unchecked(&line1[..PREFIX.len() + vlen]) };
+    let font = &crate::fonts::tomthumb::FONT;
+    text::draw_str_align(canvas, 64, 51, s1, font, Color::Fill, text::Align::Center);
+    text::draw_str_align(
+        canvas,
+        64,
+        59,
+        "USB-C / UART 38400 BPS",
+        font,
+        Color::Fill,
+        text::Align::Center,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_draw_dfu_bitmap_renders_left_radio_and_right_usbc() {
+        let mut canvas = Canvas::new();
+        draw_dfu_screen(&mut canvas, "7.02.02");
+        assert_ne!(canvas.buffer[1][17], 0); // left radio antenna
+        assert_ne!(canvas.buffer[2][14], 0); // solid radio chassis
+        assert_eq!(canvas.buffer[2][24], 0x0F); // empty LCD cutout below 4px top bezel
+        assert_ne!(canvas.buffer[3][50], 0); // rounded solid left-pointing arrow
+        assert_ne!(canvas.buffer[3][75], 0); // USB-C metal plug tip
+        assert_ne!(canvas.buffer[3][90], 0); // solid USB-C overmold housing
+        assert_ne!(canvas.buffer[3][120], 0); // solid USB-C cable entering from right edge
+        assert!(canvas.buffer[6].iter().any(|&b| b != 0)); // centered tomthumb metadata line 1
+        assert!(canvas.buffer[7].iter().any(|&b| b != 0)); // centered tomthumb metadata line 2
     }
 }
