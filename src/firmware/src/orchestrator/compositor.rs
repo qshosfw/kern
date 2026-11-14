@@ -450,7 +450,6 @@ pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
 
 /// Displays an immediate non-blocking Low Battery alert modal on top of active screen.
 pub fn show_low_battery_popup() {
-    crate::orchestrator::sink_enter_keys();
     unsafe {
         (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_popup(
             TAG_LOW_BATTERY_POPUP,
