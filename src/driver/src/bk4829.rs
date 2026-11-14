@@ -121,6 +121,7 @@ pub struct Bk4829<'a, State = Disabled> {
     pub(crate) cache: RegisterCache,
     pub(crate) bus: &'a mut dyn kern_platform_traits::radio::RadioBus,
     pub(crate) tone_gain: u8,
+    pub(crate) saved_tx_volume: u8,
     pub(crate) active_demod_af: AfType,
     pub(crate) rx_demod_active: bool,
     pub(crate) calib: Option<&'a [u8; 512]>,
@@ -150,6 +151,13 @@ impl<'a, State> Bk4829<'a, State> {
         if self.cache.write_check(addr, val) {
             self.bus.write_reg(addr, val);
         }
+    }
+
+    /// Clear `clear_mask` bits and set `set_mask` bits on a cached register.
+    #[inline(never)]
+    pub(crate) fn update_reg_bits(&mut self, addr: u8, clear_mask: u16, set_mask: u16) {
+        let val = (self.cache.read(addr) & !clear_mask) | set_mask;
+        self.write_reg(addr, val);
     }
 
     /// Read Chip ID from register 0x00.
@@ -246,9 +254,7 @@ impl<'a, State> Bk4829<'a, State> {
             gain_db
         };
         let gain_bits = (val.min(31) as u16) & 0x1F;
-        let mut reg44 = self.cache.read(REG_MIC_GAIN);
-        reg44 = (reg44 & !0x001F) | gain_bits;
-        self.write_reg(REG_MIC_GAIN, reg44);
+        self.update_reg_bits(REG_MIC_GAIN, 0x001F, gain_bits);
     }
 
     pub fn set_tone_gain(&mut self, gain: u8) {
@@ -593,17 +599,13 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_filter_bandwidth(&mut self, bw: FilterBw) {
-        let mut reg43 = self.cache.read(REG_FILTER_BW);
         let bw_val = if bw == FilterBw::Wide { 0 } else { 1 };
-        reg43 = (reg43 & !(0b111 << 12)) | (bw_val << 12);
-        self.write_reg(REG_FILTER_BW, reg43);
+        self.update_reg_bits(REG_FILTER_BW, 0b111 << 12, bw_val << 12);
     }
 
     pub fn set_deviation(&mut self, dev_hz: u32) {
         let (dev_val, _) = utils::math::div100_u16(dev_hz.min(65535) as u16);
-        let mut reg40 = self.cache.read(REG_MODULATION);
-        reg40 = (reg40 & 0xF000) | (dev_val & 0x0FFF);
-        self.write_reg(REG_MODULATION, reg40);
+        self.update_reg_bits(REG_MODULATION, 0x0FFF, dev_val & 0x0FFF);
     }
 
     pub fn set_agc_table(&mut self, table: &[u16; 5]) {
@@ -724,6 +726,7 @@ impl<'a, State> Bk4829<'a, State> {
             cache: self.cache,
             bus: self.bus,
             tone_gain: self.tone_gain,
+            saved_tx_volume: self.saved_tx_volume,
             active_demod_af: self.active_demod_af,
             rx_demod_active: self.rx_demod_active,
             calib: self.calib,
@@ -750,6 +753,7 @@ impl<'a> Bk4829<'a, Disabled> {
             cache: RegisterCache::new(),
             bus,
             tone_gain: 96,
+            saved_tx_volume: 5,
             active_demod_af: AfType::Fm,
             rx_demod_active: false,
             calib: None,
@@ -913,8 +917,12 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
         <Self as kernel::service::radio::RfSquelch>::set_squelch_level(self, config.squelch_level);
         <Self as kernel::service::radio::RfAudioPath>::set_af_response(self, &config.af_response);
         if was_rx_active {
-            self.set_af(self.active_demod_af);
-            bsp::pins::AUDIO_PA.set_high();
+            if self.is_squelch_open() {
+                self.set_af(self.active_demod_af);
+                bsp::pins::AUDIO_PA.set_high();
+            } else {
+                self.rx_demod_active = false;
+            }
         }
     }
 
@@ -974,16 +982,13 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
     fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
         use kernel::service::radio::ModulationMode::*;
         let is_am_or_ssb = matches!(mode, Am | AmB | Usb | Dsb | Cw);
-        let mut reg40 = self.cache.read(REG_MODULATION);
-        if is_am_or_ssb {
-            reg40 |= 0x1000;
+        let clear = if matches!(mode, PktFm | Dig) {
+            0x1000 | (0b11 << 14) // Clear AM bit + compander off
         } else {
-            reg40 &= !0x1000;
-        }
-        if matches!(mode, PktFm | Dig) {
-            reg40 &= !(0b11 << 14); // Compander off
-        }
-        self.write_reg(REG_MODULATION, reg40);
+            0x1000
+        };
+        let set = if is_am_or_ssb { 0x1000 } else { 0 };
+        self.update_reg_bits(REG_MODULATION, clear, set);
 
         if mode != Byp {
             let if_coeff = if matches!(mode, Usb | Dsb | Cw) {
@@ -1005,21 +1010,14 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
         self.set_af(af);
 
         if !matches!(mode, Raw | Byp) {
-            let reg73 = self.cache.read(REG_AFC);
-            let afc_val = if is_am_or_ssb {
-                reg73 | (1 << 4)
-            } else {
-                reg73 & !(1 << 4)
-            };
-            self.write_reg(REG_AFC, afc_val);
+            self.update_reg_bits(REG_AFC, 1 << 4, if is_am_or_ssb { 1 << 4 } else { 0 });
 
-            let reg2b = self.cache.read(REG_FILTERS);
-            let filters_val = match mode {
-                Fm => reg2b & !(1 << 8),
-                PktFm | Dig => reg2b | (1 << 0) | (1 << 8),
-                _ => reg2b | (1 << 8),
+            let (clr, set) = match mode {
+                Fm => (1 << 8, 0),
+                PktFm | Dig => (0, (1 << 0) | (1 << 8)),
+                _ => (0, 1 << 8),
             };
-            self.write_reg(REG_FILTERS, filters_val);
+            self.update_reg_bits(REG_FILTERS, clr, set);
 
             if matches!(mode, Am | AmB) {
                 self.write_reg(REG_AGC_TABLE_MIN, 0x0000);
@@ -1050,9 +1048,7 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
             kernel::service::radio::CompanderMode::RxExpander => 2,
             kernel::service::radio::CompanderMode::Both => 3,
         };
-        let mut reg40 = self.cache.read(REG_MODULATION);
-        reg40 = (reg40 & !(0b11 << 14)) | (val << 14);
-        self.write_reg(REG_MODULATION, reg40);
+        self.update_reg_bits(REG_MODULATION, 0b11 << 14, val << 14);
     }
 
     fn set_scrambler(&mut self, scrambler: kernel::service::radio::ScramblerMode) {
@@ -1060,9 +1056,7 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
             kernel::service::radio::ScramblerMode::Off => 0,
             kernel::service::radio::ScramblerMode::InvertFrequency(p) => (p & 0x07) as u16 + 1,
         };
-        let mut reg40 = self.cache.read(REG_MODULATION);
-        reg40 = (reg40 & !(0b1111 << 8)) | (val << 8);
-        self.write_reg(REG_MODULATION, reg40);
+        self.update_reg_bits(REG_MODULATION, 0b1111 << 8, val << 8);
     }
 }
 
@@ -1594,6 +1588,10 @@ impl<'a, State> kernel::service::radio::RfToneGenerator for Bk4829<'a, State> {
 
 impl<'a, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, State> {
     fn tx_prepare(&mut self) {
+        let cur_vol = (self.cache.read(REG_AF_LEVEL) & 0x000F) as u8;
+        if cur_vol != 0 {
+            self.saved_tx_volume = cur_vol;
+        }
         self.set_volume_level(0);
         self.set_gpio_pin(0, false); // RX path off
         self.write_reg(REG_POWER_CTRL, POWER_CTRL_TX);
@@ -1620,9 +1618,7 @@ impl<'a, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, State> {
     }
 
     fn tx_mute(&mut self) {
-        let mut reg30 = self.cache.read(REG_SYS_POWER);
-        reg30 &= !0x0200;
-        self.write_reg(REG_SYS_POWER, reg30);
+        self.update_reg_bits(REG_SYS_POWER, 0x0200, 0);
     }
 
     fn tx_ramp_down(&mut self) {
@@ -1636,6 +1632,9 @@ impl<'a, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, State> {
         self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX); // Restore 2.7V RX RF LDO for full sensitivity!
         self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
         self.apply_subaudible_hw(self.rx_subaudible);
+        if self.saved_tx_volume != 0 {
+            self.set_volume_level(self.saved_tx_volume);
+        }
     }
 
     fn tx_state(&self) -> kernel::service::radio::TransceiverTxState {
