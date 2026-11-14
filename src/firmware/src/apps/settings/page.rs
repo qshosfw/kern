@@ -16,6 +16,7 @@ pub enum PageId {
     ButtonsShortcuts,
     BatteryInfo,
     BatteryTweaks,
+    SystemInfo,
     SystemStorage,
     Apps,
     BootSplash,
@@ -34,57 +35,10 @@ impl PageId {
 
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
-        const ROOT: u8 = PageId::Root as u8;
-        const DISPLAY: u8 = PageId::Display as u8;
-        const AUDIO: u8 = PageId::Audio as u8;
-        const BUTTONS: u8 = PageId::Buttons as u8;
-        const BATTERY: u8 = PageId::Battery as u8;
-        const DEVICE: u8 = PageId::Device as u8;
-        #[cfg(feature = "passcode")]
-        const SECURITY: u8 = PageId::Security as u8;
-        const SYSTEM: u8 = PageId::System as u8;
-        const BUTTONS_TWEAKS: u8 = PageId::ButtonsTweaks as u8;
-        const BUTTONS_SHORTCUTS: u8 = PageId::ButtonsShortcuts as u8;
-        const BATTERY_INFO: u8 = PageId::BatteryInfo as u8;
-        const BATTERY_TWEAKS: u8 = PageId::BatteryTweaks as u8;
-        const SYSTEM_STORAGE: u8 = PageId::SystemStorage as u8;
-        const APPS: u8 = PageId::Apps as u8;
-        const BOOT_SPLASH: u8 = PageId::BootSplash as u8;
-        #[cfg(feature = "settings_calib")]
-        const SYSTEM_CALIBRATION: u8 = PageId::SystemCalibration as u8;
-        #[cfg(feature = "settings_debug")]
-        const SYSTEM_DEBUG: u8 = PageId::SystemDebug as u8;
-        const MANAGE_APPS: u8 = PageId::ManageApps as u8;
-        const APP_DETAIL: u8 = PageId::AppDetail as u8;
-        const MANAGE_SERVICES: u8 = PageId::ManageServices as u8;
-        const SERVICE_DETAIL: u8 = PageId::ServiceDetail as u8;
-
-        match val {
-            ROOT => Some(PageId::Root),
-            DISPLAY => Some(PageId::Display),
-            AUDIO => Some(PageId::Audio),
-            BUTTONS => Some(PageId::Buttons),
-            BATTERY => Some(PageId::Battery),
-            DEVICE => Some(PageId::Device),
-            #[cfg(feature = "passcode")]
-            SECURITY => Some(PageId::Security),
-            SYSTEM => Some(PageId::System),
-            BUTTONS_TWEAKS => Some(PageId::ButtonsTweaks),
-            BUTTONS_SHORTCUTS => Some(PageId::ButtonsShortcuts),
-            BATTERY_INFO => Some(PageId::BatteryInfo),
-            BATTERY_TWEAKS => Some(PageId::BatteryTweaks),
-            SYSTEM_STORAGE => Some(PageId::SystemStorage),
-            APPS => Some(PageId::Apps),
-            BOOT_SPLASH => Some(PageId::BootSplash),
-            #[cfg(feature = "settings_calib")]
-            SYSTEM_CALIBRATION => Some(PageId::SystemCalibration),
-            #[cfg(feature = "settings_debug")]
-            SYSTEM_DEBUG => Some(PageId::SystemDebug),
-            MANAGE_APPS => Some(PageId::ManageApps),
-            APP_DETAIL => Some(PageId::AppDetail),
-            MANAGE_SERVICES => Some(PageId::ManageServices),
-            SERVICE_DETAIL => Some(PageId::ServiceDetail),
-            _ => None,
+        if (val as usize) < Self::COUNT {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
         }
     }
 }
@@ -304,8 +258,11 @@ pub enum MetricId {
 
     // System Identity & Health
     SystemFirmware,
+    SystemBootloader,
     SystemSerial,
+    SystemFactoryId,
     SystemMac,
+    SystemFlashSize,
     SystemUptime,
 
     // Calibration
@@ -345,99 +302,14 @@ pub enum MetricId {
 }
 
 impl MetricId {
+    pub const COUNT: usize = MetricId::DeviceRadioId as usize + 1;
+
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
-        const BATTERY_VOLTAGE: u8 = MetricId::BatteryVoltage as u8;
-        const BATTERY_PERCENTAGE: u8 = MetricId::BatteryPercentage as u8;
-        const BATTERY_STATUS: u8 = MetricId::BatteryStatus as u8;
-        const BATTERY_VDDA: u8 = MetricId::BatteryVdda as u8;
-        const BATTERY_CALIB_REF: u8 = MetricId::BatteryCalibRef as u8;
-        const BATTERY_CORE_TEMP: u8 = MetricId::BatteryCoreTemp as u8;
-        const STORAGE_USED: u8 = MetricId::StorageUsed as u8;
-        const STORAGE_FREE: u8 = MetricId::StorageFree as u8;
-        const STORAGE_FILES: u8 = MetricId::StorageFiles as u8;
-        const STORAGE_WEAR: u8 = MetricId::StorageWear as u8;
-        const STORAGE_DELETED: u8 = MetricId::StorageDeleted as u8;
-        const SYSTEM_FIRMWARE: u8 = MetricId::SystemFirmware as u8;
-        const SYSTEM_SERIAL: u8 = MetricId::SystemSerial as u8;
-        const SYSTEM_MAC: u8 = MetricId::SystemMac as u8;
-        const SYSTEM_UPTIME: u8 = MetricId::SystemUptime as u8;
-        #[cfg(feature = "settings_calib")]
-        const CALIB_SIG: u8 = MetricId::CalibSig as u8;
-        #[cfg(feature = "settings_calib")]
-        const CALIB_XTAL: u8 = MetricId::CalibXtal as u8;
-        #[cfg(feature = "settings_calib")]
-        const CALIB_BATT: u8 = MetricId::CalibBatt as u8;
-        #[cfg(feature = "settings_calib")]
-        const CALIB_LNA: u8 = MetricId::CalibLna as u8;
-        #[cfg(feature = "settings_calib")]
-        const CALIB_MIX: u8 = MetricId::CalibMix as u8;
-        #[cfg(feature = "settings_calib")]
-        const CALIB_VOL: u8 = MetricId::CalibVol as u8;
-        #[cfg(feature = "settings_debug")]
-        const DEBUG_STACK_MARGIN: u8 = MetricId::DebugStackMargin as u8;
-        #[cfg(feature = "settings_debug")]
-        const DEBUG_STACK_PEAK: u8 = MetricId::DebugStackPeak as u8;
-        #[cfg(feature = "settings_debug")]
-        const DEBUG_CRASHES: u8 = MetricId::DebugCrashes as u8;
-        #[cfg(feature = "settings_debug")]
-        const DEBUG_SWD: u8 = MetricId::DebugSwd as u8;
-        #[cfg(feature = "settings_debug")]
-        const DEBUG_RDP: u8 = MetricId::DebugRdp as u8;
-        #[cfg(feature = "settings_debug")]
-        const DEBUG_DEV_KEY: u8 = MetricId::DebugDevKey as u8;
-        #[cfg(feature = "settings_debug")]
-        const DEBUG_MK_HASH: u8 = MetricId::DebugMkHash as u8;
-        const DEVICE_OWNER: u8 = MetricId::DeviceOwner as u8;
-        const DEVICE_TAG: u8 = MetricId::DeviceTag as u8;
-        const DEVICE_RADIO_ID: u8 = MetricId::DeviceRadioId as u8;
-
-        match val {
-            BATTERY_VOLTAGE => Some(MetricId::BatteryVoltage),
-            BATTERY_PERCENTAGE => Some(MetricId::BatteryPercentage),
-            BATTERY_STATUS => Some(MetricId::BatteryStatus),
-            BATTERY_VDDA => Some(MetricId::BatteryVdda),
-            BATTERY_CALIB_REF => Some(MetricId::BatteryCalibRef),
-            BATTERY_CORE_TEMP => Some(MetricId::BatteryCoreTemp),
-            STORAGE_USED => Some(MetricId::StorageUsed),
-            STORAGE_FREE => Some(MetricId::StorageFree),
-            STORAGE_FILES => Some(MetricId::StorageFiles),
-            STORAGE_WEAR => Some(MetricId::StorageWear),
-            STORAGE_DELETED => Some(MetricId::StorageDeleted),
-            SYSTEM_FIRMWARE => Some(MetricId::SystemFirmware),
-            SYSTEM_SERIAL => Some(MetricId::SystemSerial),
-            SYSTEM_MAC => Some(MetricId::SystemMac),
-            SYSTEM_UPTIME => Some(MetricId::SystemUptime),
-            #[cfg(feature = "settings_calib")]
-            CALIB_SIG => Some(MetricId::CalibSig),
-            #[cfg(feature = "settings_calib")]
-            CALIB_XTAL => Some(MetricId::CalibXtal),
-            #[cfg(feature = "settings_calib")]
-            CALIB_BATT => Some(MetricId::CalibBatt),
-            #[cfg(feature = "settings_calib")]
-            CALIB_LNA => Some(MetricId::CalibLna),
-            #[cfg(feature = "settings_calib")]
-            CALIB_MIX => Some(MetricId::CalibMix),
-            #[cfg(feature = "settings_calib")]
-            CALIB_VOL => Some(MetricId::CalibVol),
-            #[cfg(feature = "settings_debug")]
-            DEBUG_STACK_MARGIN => Some(MetricId::DebugStackMargin),
-            #[cfg(feature = "settings_debug")]
-            DEBUG_STACK_PEAK => Some(MetricId::DebugStackPeak),
-            #[cfg(feature = "settings_debug")]
-            DEBUG_CRASHES => Some(MetricId::DebugCrashes),
-            #[cfg(feature = "settings_debug")]
-            DEBUG_SWD => Some(MetricId::DebugSwd),
-            #[cfg(feature = "settings_debug")]
-            DEBUG_RDP => Some(MetricId::DebugRdp),
-            #[cfg(feature = "settings_debug")]
-            DEBUG_DEV_KEY => Some(MetricId::DebugDevKey),
-            #[cfg(feature = "settings_debug")]
-            DEBUG_MK_HASH => Some(MetricId::DebugMkHash),
-            DEVICE_OWNER => Some(MetricId::DeviceOwner),
-            DEVICE_TAG => Some(MetricId::DeviceTag),
-            DEVICE_RADIO_ID => Some(MetricId::DeviceRadioId),
-            _ => None,
+        if (val as usize) < Self::COUNT {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
         }
     }
 }

@@ -114,11 +114,10 @@ pub fn get_mac_tag_str() -> &'static str {
     }
 }
 
-/// Generates a Crockford Base32 serial string with Mod-37 Checksum (e.g. "7K9MP3R2W8VFXC").
-/// 100% bitwise identical to DeltaFW's `GetCrockfordSerial()`.
-/// Returns a 15-byte null-terminated ASCII buffer (13 Crockford Base32 chars + 1 Mod-37 checksum + null).
-pub fn get_crockford_serial() -> [u8; 15] {
-    let serial = get_hardware_serial64();
+/// Encodes any 64-bit hardware identifier into a 15-byte null-terminated Crockford Base32
+/// ASCII buffer (13 Crockford Base32 chars + 1 Mod-37 checksum + null).
+#[inline(never)]
+pub fn encode_crockford64(serial: u64) -> [u8; 15] {
     let mut val = serial;
     let mut out = [0u8; 15];
 
@@ -137,6 +136,33 @@ pub fn get_crockford_serial() -> [u8; 15] {
     out[14] = b'\0';
 
     out
+}
+
+/// Generates a Crockford Base32 serial string with Mod-37 Checksum (e.g. "7K9MP3R2W8VFXC").
+/// 100% bitwise identical to DeltaFW's `GetCrockfordSerial()`.
+/// Returns a 15-byte null-terminated ASCII buffer (13 Crockford Base32 chars + 1 Mod-37 checksum + null).
+#[inline(always)]
+pub fn get_crockford_serial() -> [u8; 15] {
+    encode_crockford64(get_hardware_serial64())
+}
+
+/// Computes a deterministic 64-bit hash over the 104-byte (`13 * 8` B) factory provisioning
+/// certificate at `0x0800_2700..0x0800_2768` (80B UID-bound AES-128-CBC license + 24B factory stamp).
+pub fn get_factory_cert_hash64() -> Option<u64> {
+    py32_hal::uid::SystemInfo::factory_cert_slice().map(|cert| murmur3_64(cert))
+}
+
+/// Generates a 14-character Crockford Base32 + Mod-37 checksum serial number derived from the
+/// 104-byte factory provisioning certificate at `0x0800_2700..0x0800_2768`.
+#[inline(always)]
+pub fn get_factory_serial() -> Option<[u8; 15]> {
+    get_factory_cert_hash64().map(encode_crockford64)
+}
+
+/// Reads the live factory bootloader version string (e.g. `"7.02.02"`) from internal Flash.
+#[inline(always)]
+pub fn bootloader_version_str() -> &'static str {
+    py32_hal::uid::SystemInfo::bootloader_version_str()
 }
 
 /// Hashes all 256 bytes of the UID memory space into a high-order 64-bit entropy fingerprint.
@@ -175,7 +201,7 @@ pub fn get_mcu_rdp_level() -> py32_hal::flash::RdpLevel {
 
 #[cfg(test)]
 mod tests {
-    use super::murmur3_64;
+    use super::*;
 
     #[test]
     fn murmur3_64_matches_legacy_16_byte_mixing() {
@@ -198,5 +224,14 @@ mod tests {
         h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
         h ^= h >> 33;
         assert_eq!(murmur3_64(&input), h);
+    }
+
+    #[test]
+    fn factory_cert_serial_and_bootloader_version_are_deterministic() {
+        let serial = get_factory_serial().expect("host fixture provides 104B factory cert");
+        assert_eq!(serial[14], 0);
+        assert!(serial[..14].iter().all(|b| b.is_ascii_graphic()));
+        assert_ne!(serial, get_crockford_serial());
+        assert_eq!(bootloader_version_str(), "7.02.02");
     }
 }

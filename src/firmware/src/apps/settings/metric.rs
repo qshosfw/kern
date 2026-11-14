@@ -17,6 +17,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         // 1. Direct string & buffer metrics that format directly into `out` and return:
         MetricId::BatteryStatus
         | MetricId::SystemFirmware
+        | MetricId::SystemBootloader
         | MetricId::DeviceOwner
         | MetricId::DeviceTag => {
             let s = match id {
@@ -28,15 +29,24 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
                     }
                 }
                 MetricId::SystemFirmware => crate::build_info::BUILD_STAMP,
+                MetricId::SystemBootloader => bsp::uid::bootloader_version_str(),
                 MetricId::DeviceOwner => ctx.config.system.owner_str(),
                 _ => ctx.config.system.tag_str(),
             };
             out.set_str(s);
             return;
         }
-        MetricId::SystemSerial => {
-            let serial = bsp::uid::get_crockford_serial();
-            out.set_str(utils::format::ascii_str(&serial[..14]).unwrap_or(""));
+        MetricId::SystemSerial | MetricId::SystemFactoryId => {
+            let serial = if id == MetricId::SystemSerial {
+                Some(bsp::uid::get_crockford_serial())
+            } else {
+                bsp::uid::get_factory_serial()
+            };
+            let s = serial
+                .as_ref()
+                .and_then(|b| utils::format::ascii_str(&b[..14]))
+                .unwrap_or("None");
+            out.set_str(s);
             return;
         }
         MetricId::SystemMac => {
@@ -123,6 +133,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
             }
         }
 
+        MetricId::SystemFlashSize => (py32_hal::uid::SystemInfo::flash_size_kb() as i32, 0, " KB"),
         MetricId::DeviceRadioId => (ctx.config.system.radio_id as i32, 0, ""),
 
         #[cfg(feature = "settings_calib")]

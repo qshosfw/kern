@@ -349,7 +349,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
             self.last_tick_ms = now_ms;
 
             // Live metric polling (refresh once per second transition to save CPU and battery)
-            if self.current_page == PageId::BatteryInfo || self.current_page == PageId::System {
+            if self.current_page == PageId::BatteryInfo || self.current_page == PageId::SystemInfo {
                 let cur_sec = ctx.power.uptime_secs as u16;
                 if cur_sec != self.last_poll_sec {
                     self.last_poll_sec = cur_sec;
@@ -417,5 +417,29 @@ mod tests {
         assert!(core::mem::offset_of!(SettingsApp, items_len) < 124);
         assert!(core::mem::offset_of!(SettingsApp, selected_idx) < 124);
         assert!(core::mem::offset_of!(SettingsApp, stack_top) < 124);
+    }
+
+    #[test]
+    fn system_menu_groups_info_and_bootloader_cleanly() {
+        let sys_defs = page_defs(PageId::System);
+        assert_eq!(sys_defs[0].title, "Clock");
+        assert_eq!(sys_defs[1].title, "UART Baud");
+        assert_eq!(sys_defs[2].title, "Info");
+        assert_eq!(PageId::from_u8(sys_defs[2].aux), Some(PageId::SystemInfo));
+        assert_eq!(sys_defs[3].title, "Storage");
+        assert_eq!(sys_defs.last().unwrap().title, "Bootloader");
+
+        let info_defs = page_defs(PageId::SystemInfo);
+        assert_eq!(
+            super::super::options::page_title(PageId::SystemInfo),
+            "System Info"
+        );
+        assert_eq!(info_defs[0].title, "Firmware");
+        assert_eq!(info_defs[1].title, "Bootloader");
+        assert_eq!(info_defs[2].title, "Serial");
+        assert_eq!(info_defs[3].title, "Factory ID");
+        assert_eq!(info_defs[4].title, "MAC");
+        assert_eq!(info_defs[5].title, "MCU Flash");
+        assert_eq!(info_defs[6].title, "Uptime");
     }
 }

@@ -437,28 +437,9 @@ pub fn ensure_default_files(_filesystem: &mut SystemStorage) {}
 
 /// Read the factory bootloader version string (e.g. `"7.02.02"`) directly from internal MCU Flash
 /// (`0x0800_1F00..0x0800_2700`), falling back to `"7.02.02"` on host unit-test targets.
+#[inline(always)]
 pub fn bootloader_version_str() -> &'static str {
-    #[cfg(all(not(test), target_arch = "arm"))]
-    unsafe {
-        let rom = core::slice::from_raw_parts(0x0800_1F00 as *const u8, 0x0800);
-        let mut i = 0usize;
-        while i + 8 <= rom.len() {
-            let w = &rom[i..i + 8];
-            if w[1] == b'.'
-                && w[4] == b'.'
-                && w[7] == 0
-                && w[0].is_ascii_digit()
-                && w[2].is_ascii_digit()
-                && w[3].is_ascii_digit()
-                && w[5].is_ascii_digit()
-                && w[6].is_ascii_digit()
-            {
-                return core::str::from_utf8_unchecked(&w[..7]);
-            }
-            i += 1;
-        }
-    }
-    "7.02.02"
+    bsp::uid::bootloader_version_str()
 }
 
 #[inline(always)]

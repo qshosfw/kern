@@ -6,18 +6,25 @@ pub static CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0";
 pub static UART_BAUD_OPTIONS: &str = "115200\038400\0";
 
 pub static SYSTEM_ROOT: &[SettingDef] = &[
-    SettingDef::metric("Firmware", MetricId::SystemFirmware),
-    SettingDef::metric("Serial", MetricId::SystemSerial),
-    SettingDef::metric("MAC", MetricId::SystemMac),
     SettingDef::choice("Clock", ChoiceId::CpuClock, SettingField::CPU_CLOCK),
     SettingDef::choice("UART Baud", ChoiceId::UartBaud, SettingField::UART_BAUD),
-    SettingDef::metric("Uptime", MetricId::SystemUptime),
+    SettingDef::submenu("Info", PageId::SystemInfo),
     SettingDef::submenu("Storage", PageId::SystemStorage),
     #[cfg(feature = "settings_calib")]
     SettingDef::submenu("Calibration", PageId::SystemCalibration),
     #[cfg(feature = "settings_debug")]
     SettingDef::submenu("Debug", PageId::SystemDebug),
     SettingDef::action("Bootloader", ActionId::RebootBootloader),
+];
+
+pub static SYSTEM_INFO: &[SettingDef] = &[
+    SettingDef::metric("Firmware", MetricId::SystemFirmware),
+    SettingDef::metric("Bootloader", MetricId::SystemBootloader),
+    SettingDef::metric("Serial", MetricId::SystemSerial),
+    SettingDef::metric("Factory ID", MetricId::SystemFactoryId),
+    SettingDef::metric("MAC", MetricId::SystemMac),
+    SettingDef::metric("MCU Flash", MetricId::SystemFlashSize),
+    SettingDef::metric("Uptime", MetricId::SystemUptime),
 ];
 
 pub static SYSTEM_STORAGE: &[SettingDef] = &[
