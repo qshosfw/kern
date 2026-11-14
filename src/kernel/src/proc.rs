@@ -78,19 +78,11 @@ pub enum ProcState {
     Dead,
 }
 
+const PROC_STATE_NAMES: &[u8] = b"IDLE\0RDY\0RUN\0SUSP\0IDLE\0SWAP\0STOP\0DEAD\0";
+
 impl ProcState {
-    #[inline(always)]
     pub const fn as_short_str(&self) -> &'static str {
-        match self {
-            Self::Dormant => "IDLE",
-            Self::Ready => "RDY",
-            Self::Running => "RUN",
-            Self::Suspended => "SUSP",
-            Self::ServiceIdle => "IDLE",
-            Self::Hibernated => "SWAP",
-            Self::Stopped => "STOP",
-            Self::Dead => "DEAD",
-        }
+        utils::format::nth_cstr(PROC_STATE_NAMES, *self as u8)
     }
 }
 

@@ -32,6 +32,8 @@ pub enum ModulationMode {
     Byp = 10,
 }
 
+const MOD_NAMES: &[u8] = b"FM\0AM\0AMB\0USB\0DSB\0CW\0WFM\0PKT\0DIG\0RAW\0BYP\0";
+
 impl ModulationMode {
     pub const fn from_u8(val: u8) -> Self {
         match val {
@@ -55,19 +57,7 @@ impl ModulationMode {
     }
 
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Fm => "FM",
-            Self::Am => "AM",
-            Self::AmB => "AMB",
-            Self::Usb => "USB",
-            Self::Dsb => "DSB",
-            Self::Cw => "CW",
-            Self::Wfm => "WFM",
-            Self::PktFm => "PKT",
-            Self::Dig => "DIG",
-            Self::Raw => "RAW",
-            Self::Byp => "BYP",
-        }
+        utils::format::nth_cstr(MOD_NAMES, self as u8)
     }
 
     /// Return the generic, standard operational profile defining the physical RF,
