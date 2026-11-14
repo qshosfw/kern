@@ -119,8 +119,12 @@ impl KeypadScanner {
 
     /// Advance scanner state machine with elapsed time delta `dt_ms`.
     pub fn scan_with_dt(&mut self, dt_ms: u16) {
+        self.scan_mask_with_dt(matrix::poll_raw_mask(), dt_ms);
+    }
+
+    /// Advance scanner state machine using an explicit raw key mask sample and `dt_ms`.
+    pub fn scan_mask_with_dt(&mut self, curr_raw: u32, dt_ms: u16) {
         let dt = dt_ms.max(1);
-        let curr_raw = matrix::poll_raw_mask();
 
         let newly_pressed = (curr_raw & self.raw_history[0]) & !self.debounced;
         let newly_released =
@@ -130,36 +134,43 @@ impl KeypadScanner {
         self.raw_history[2] = self.raw_history[1];
         self.raw_history[1] = self.raw_history[0];
         self.raw_history[0] = curr_raw;
-        self.debounced = (self.debounced | newly_pressed) & !newly_released;
 
-        // 1. Process newly pressed keys
+        // 1. Process newly pressed keys (commit debounced bit only if queued)
         if newly_pressed != 0 {
             for i in 0..19 {
-                if (newly_pressed & (1 << i)) != 0 {
+                let bit = 1u32 << i;
+                if (newly_pressed & bit) != 0 {
                     let key = ALL_KEYS[i];
-                    let _ = self.event_queue.push_back((key, KeyState::Pressed));
-
-                    if self.held_idx.is_none() {
-                        self.held_idx = Some(i as u8);
-                        self.held_ms = 0;
-                        self.key_being_held = false;
+                    if self.event_queue.push_back((key, KeyState::Pressed)).is_ok() {
+                        self.debounced |= bit;
+                        if self.held_idx.is_none() {
+                            self.held_idx = Some(i as u8);
+                            self.held_ms = 0;
+                            self.key_being_held = false;
+                        }
                     }
                 }
             }
         }
 
-        // 2. Process newly released keys
+        // 2. Process newly released keys (commit release only if queued)
         if newly_released != 0 {
             for i in 0..19 {
-                if (newly_released & (1 << i)) != 0 {
+                let bit = 1u32 << i;
+                if (newly_released & bit) != 0 {
                     let key = ALL_KEYS[i];
-                    let _ = self.event_queue.push_back((key, KeyState::Released));
-
-                    if self.held_idx == Some(i as u8) {
-                        self.last_held_duration_ms = self.held_ms;
-                        self.held_idx = None;
-                        self.held_ms = 0;
-                        self.key_being_held = false;
+                    if self
+                        .event_queue
+                        .push_back((key, KeyState::Released))
+                        .is_ok()
+                    {
+                        self.debounced &= !bit;
+                        if self.held_idx == Some(i as u8) {
+                            self.last_held_duration_ms = self.held_ms;
+                            self.held_idx = None;
+                            self.held_ms = 0;
+                            self.key_being_held = false;
+                        }
                     }
                 }
             }
@@ -170,11 +181,14 @@ impl KeypadScanner {
             if (self.debounced & (1 << (idx as usize))) != 0 {
                 self.held_ms = self.held_ms.saturating_add(dt);
 
-                if !self.key_being_held && self.held_ms >= self.hold_delay_ms {
-                    self.key_being_held = true;
-                    let _ = self
+                if !self.key_being_held
+                    && self.held_ms >= self.hold_delay_ms
+                    && self
                         .event_queue
-                        .push_back((ALL_KEYS[idx as usize], KeyState::Held));
+                        .push_back((ALL_KEYS[idx as usize], KeyState::Held))
+                        .is_ok()
+                {
+                    self.key_being_held = true;
                 }
             } else {
                 self.held_idx = None;
@@ -201,5 +215,42 @@ impl KeypadScanner {
         self.last_scan_ms = now;
         self.scan_with_dt(dt.max(1));
         self.pop_event()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_queue_defers_debounced_transition_without_loss() {
+        let mut scanner = KeypadScanner::new();
+        // Saturate the 16-slot queue first
+        for i in 0..16 {
+            assert!(
+                scanner
+                    .event_queue
+                    .push_back((ALL_KEYS[i], KeyState::Pressed))
+                    .is_ok()
+            );
+        }
+
+        // Key 17 pressed over 2 samples while queue is full: must NOT commit debounced bit 17
+        scanner.scan_mask_with_dt(1 << 17, 10);
+        scanner.scan_mask_with_dt(1 << 17, 10);
+        assert_eq!(scanner.active_mask() & (1 << 17), 0);
+
+        // Drain 1 slot and re-scan key 17: deferred Pressed event is now emitted cleanly
+        assert!(scanner.pop_event().is_some());
+        scanner.scan_mask_with_dt(1 << 17, 10);
+        assert_ne!(scanner.active_mask() & (1 << 17), 0);
+
+        let mut drained = false;
+        while let Some((k, st)) = scanner.pop_event() {
+            if k == ALL_KEYS[17] && st == KeyState::Pressed {
+                drained = true;
+            }
+        }
+        assert!(drained);
     }
 }

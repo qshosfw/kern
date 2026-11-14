@@ -205,8 +205,6 @@ pub fn handle_package_press(
             {
                 let path = pkg.path.clone();
                 let _ = ctx.storage.remove(path.as_str());
-                cat.mark_dirty();
-                cat.scan(ctx.storage);
                 crate::apps::launcher::reload_launcher(ctx.storage);
                 ctx.show_popup(
                     super::dialog::TAG_POPUP_INFO,

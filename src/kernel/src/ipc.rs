@@ -274,12 +274,10 @@ impl KrxIpcMessage {
 }
 
 /// Zero-heap multi-process IPC Channel and Message Router (§8.4 / KRX 3.2).
-/// Manages up to N concurrent 32-byte messages in a fixed circular ring buffer
-/// with O(1) power-of-two bitmask indexing (zero software division on Cortex-M0+).
+/// Manages up to N concurrent 32-byte messages in strict FIFO order.
 pub struct IpcChannel<const N: usize = 8> {
     messages: [KrxIpcMessage; N],
-    occupied: [bool; N],
-    head: usize,
+    len: usize,
     next_seq: u16,
 }
 
@@ -291,14 +289,10 @@ impl<const N: usize> Default for IpcChannel<N> {
 
 impl<const N: usize> IpcChannel<N> {
     pub const fn new() -> Self {
-        assert!(
-            N > 0 && (N & (N - 1)) == 0,
-            "IpcChannel capacity must be a power of two"
-        );
+        assert!(N > 0, "IpcChannel capacity must be non-zero");
         Self {
             messages: [const { KrxIpcMessage::empty() }; N],
-            occupied: [false; N],
-            head: 0,
+            len: 0,
             next_seq: 0,
         }
     }
@@ -306,22 +300,16 @@ impl<const N: usize> IpcChannel<N> {
     /// Enqueue a message into the IPC channel.
     /// If seq is 0, auto-assigns the next monotonic sequence number.
     pub fn send(&mut self, mut msg: KrxIpcMessage) -> bool {
+        if self.len >= N {
+            return false;
+        }
         if msg.seq == 0 {
             self.next_seq = self.next_seq.wrapping_add(1).max(1);
             msg.seq = self.next_seq;
         }
-
-        let mask = N - 1;
-        for i in 0..N {
-            let idx = (self.head + i) & mask;
-            if !self.occupied[idx] {
-                self.messages[idx] = msg;
-                self.occupied[idx] = true;
-                self.head = (idx + 1) & mask;
-                return true;
-            }
-        }
-        false
+        self.messages[self.len] = msg;
+        self.len += 1;
+        true
     }
 
     /// Poll for the oldest pending message targeted to `receiver_pid`.
@@ -335,24 +323,18 @@ impl<const N: usize> IpcChannel<N> {
         receiver_pid: u8,
         filter_type: Option<u16>,
     ) -> Option<KrxIpcMessage> {
-        let mask = N - 1;
-        for i in 0..N {
-            let idx = (self.head + i) & mask;
-            if self.occupied[idx] {
-                let msg = &self.messages[idx];
-                let is_recipient = msg.target_pid == receiver_pid
-                    || (receiver_pid != 0 && msg.target_pid == ipc_target::FOREGROUND_APP);
-
-                if is_recipient {
-                    if let Some(t) = filter_type {
-                        if msg.msg_type != t {
-                            continue;
-                        }
-                    }
-                    let out = *msg;
-                    self.occupied[idx] = false;
-                    return Some(out);
+        for idx in 0..self.len {
+            let msg = &self.messages[idx];
+            let is_recipient = msg.target_pid == receiver_pid
+                || (receiver_pid != 0 && msg.target_pid == ipc_target::FOREGROUND_APP);
+            let type_ok = filter_type.is_none_or(|t| msg.msg_type == t);
+            if is_recipient && type_ok {
+                let out = *msg;
+                for k in idx..self.len - 1 {
+                    self.messages[k] = self.messages[k + 1];
                 }
+                self.len -= 1;
+                return Some(out);
             }
         }
         None
@@ -360,14 +342,12 @@ impl<const N: usize> IpcChannel<N> {
 
     /// Check if pending messages exist for `receiver_pid`.
     pub fn has_pending(&self, receiver_pid: u8) -> bool {
-        for idx in 0..N {
-            if self.occupied[idx] {
-                let msg = &self.messages[idx];
-                if msg.target_pid == receiver_pid
-                    || (receiver_pid != 0 && msg.target_pid == ipc_target::FOREGROUND_APP)
-                {
-                    return true;
-                }
+        for idx in 0..self.len {
+            let msg = &self.messages[idx];
+            if msg.target_pid == receiver_pid
+                || (receiver_pid != 0 && msg.target_pid == ipc_target::FOREGROUND_APP)
+            {
+                return true;
             }
         }
         false
@@ -381,22 +361,22 @@ impl<const N: usize> IpcChannel<N> {
 
     /// Purge any messages sent to or from a terminated process PID.
     pub fn purge_pid(&mut self, pid: u8) -> usize {
-        let mut purged = 0;
-        for idx in 0..N {
-            if self.occupied[idx] {
-                let msg = &self.messages[idx];
-                if msg.sender_pid == pid || msg.target_pid == pid {
-                    self.occupied[idx] = false;
-                    purged += 1;
-                }
+        let old_len = self.len;
+        let mut write = 0usize;
+        for read in 0..old_len {
+            let msg = self.messages[read];
+            if msg.sender_pid != pid && msg.target_pid != pid {
+                self.messages[write] = msg;
+                write += 1;
             }
         }
-        purged
+        self.len = write;
+        old_len - write
     }
 
     /// Number of occupied message slots.
     pub fn pending_count(&self) -> usize {
-        self.occupied.iter().filter(|&&o| o).count()
+        self.len
     }
 }
 
@@ -489,5 +469,22 @@ mod tests {
         assert!(!bus_ev.is_system());
         assert_eq!(bus_ev.sender, 2);
         assert_eq!(bus_ev.event_id, radio_events::CARRIER_OPENED);
+    }
+
+    #[test]
+    fn test_ipc_channel_preserves_fifo_across_interleaved_polls() {
+        let mut mb = IpcChannel::<4>::new();
+        assert!(mb.send(KrxIpcMessage::new(1, 2, 1, b"A")));
+        assert!(mb.send(KrxIpcMessage::new(1, 1, 2, b"B")));
+        assert!(mb.send(KrxIpcMessage::new(1, 2, 3, b"C")));
+        assert_eq!(mb.poll(1).unwrap().payload[0], b'B');
+        assert!(mb.send(KrxIpcMessage::new(1, 2, 4, b"D")));
+        assert!(mb.send(KrxIpcMessage::new(1, 2, 5, b"E")));
+
+        assert_eq!(mb.poll(2).unwrap().payload[0], b'A');
+        assert_eq!(mb.poll(2).unwrap().payload[0], b'C');
+        assert_eq!(mb.poll(2).unwrap().payload[0], b'D');
+        assert_eq!(mb.poll(2).unwrap().payload[0], b'E');
+        assert_eq!(mb.poll(2), None);
     }
 }
