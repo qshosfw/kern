@@ -247,12 +247,13 @@ impl View<TextInputModel> for TextInputView {
     #[inline(never)]
     fn render(&self, canvas: &mut Canvas, model: &TextInputModel) {
         let title_s = model.title_str();
-        if model.show_header && !title_s.is_empty() {
+        let clear_y: u8 = if model.show_header && !title_s.is_empty() {
             crate::widgets::draw_negated_header(canvas, 0, title_s);
-            canvas.fill_rect(0, 9, 128, 55, Color::Clear);
+            9
         } else {
-            canvas.fill_rect(0, 8, 128, 56, Color::Clear);
-        }
+            8
+        };
+        canvas.fill_rect(0, clear_y, 128, 64 - clear_y, Color::Clear);
 
         // 2. Mode & Length Indicator Bar (DeltaFW layout below header)
         let header_y = 15i16;
@@ -349,16 +350,16 @@ impl View<TextInputModel> for TextInputView {
             }
         }
 
-        if show_grid {
+        let by = if show_grid {
             Self::draw_t9_grid(canvas, model.charset);
-            Self::draw_bottom_badges(canvas, model, 55, true);
+            55
         } else {
             if !is_passcode {
                 canvas.draw_horizontal_line(0, 52, 128, Color::Fill);
             }
-            let by = if is_passcode { 55 } else { 54 };
-            Self::draw_bottom_badges(canvas, model, by, false);
-        }
+            if is_passcode { 55 } else { 54 }
+        };
+        Self::draw_bottom_badges(canvas, model, by, show_grid);
     }
 
     #[inline(never)]
