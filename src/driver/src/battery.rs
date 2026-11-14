@@ -276,7 +276,7 @@ impl BatteryDriver {
             } else {
                 2227
             };
-            let eff_adc = utils::math::div7600_u32(ocv as u32 * cal) as u16;
+            let eff_adc = ((ocv as u32 * cal) / 7600) as u16;
             calib::calculate_battery_percentage(eff_adc, &self.calib_curve)
         } else {
             mv_to_percentage(ocv, self.battery_type.get())
@@ -345,13 +345,13 @@ impl BatteryDriver {
             } else if self.pre_tx_ocv > raw_mv {
                 // Refine internal resistance estimate from measured instantaneous raw step sag during TX
                 let step_sag = self.pre_tx_ocv - raw_mv;
-                if (50..=600).contains(&step_sag) {
+                if step_sag >= 50 && step_sag <= 600 {
                     let r_est = match periph.tx_power_level {
                         0 => step_sag << 1,
                         1 => step_sag,
                         _ => (((step_sag as u32) * 171) >> 8) as u16,
                     };
-                    if (100..=500).contains(&r_est) {
+                    if r_est >= 100 && r_est <= 500 {
                         self.internal_res_m_ohm = Self::ema_u16(self.internal_res_m_ohm, r_est, 3);
                     }
                 }

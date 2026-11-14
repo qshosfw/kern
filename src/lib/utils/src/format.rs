@@ -9,45 +9,37 @@
 
 pub const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
+#[inline(never)]
+fn push_bytes(out: &mut [u8], idx: &mut usize, src: &[u8]) {
+    let n = src.len().min(out.len().saturating_sub(*idx));
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.as_ptr(), out.as_mut_ptr().add(*idx), n);
+    }
+    *idx += n;
+}
+
 /// Format a 32-bit unsigned integer into decimal ASCII digits.
 pub fn format_u32(mut val: u32, out: &mut [u8]) -> &str {
-    if val == 0 {
-        if !out.is_empty() {
-            out[0] = b'0';
-            return unsafe { core::str::from_utf8_unchecked(&out[..1]) };
-        }
-        return "0";
-    }
-
     let mut buf = [0u8; 10];
     let mut pos = 10;
-    while val > 0 && pos > 0 {
+    loop {
         pos -= 1;
         let (q, r) = crate::math::div10_u32(val);
         buf[pos] = b'0' + r;
         val = q;
+        if val == 0 || pos == 0 {
+            break;
+        }
     }
 
-    let digits = &buf[pos..];
-    let copy_len = digits.len().min(out.len());
-    out[..copy_len].copy_from_slice(&digits[..copy_len]);
-    unsafe { core::str::from_utf8_unchecked(&out[..copy_len]) }
+    let mut idx = 0;
+    push_bytes(out, &mut idx, unsafe { buf.get_unchecked(pos..) });
+    unsafe { core::str::from_utf8_unchecked(out.get_unchecked(..idx)) }
 }
 
 /// Format a 32-bit signed integer into decimal ASCII with negative sign.
 pub fn format_i32(val: i32, out: &mut [u8]) -> &str {
-    if val < 0 {
-        if out.len() < 2 {
-            return "-";
-        }
-        out[0] = b'-';
-        let uval = val.unsigned_abs();
-        let sub = format_u32(uval, &mut out[1..]);
-        let total_len = 1 + sub.len();
-        unsafe { core::str::from_utf8_unchecked(&out[..total_len]) }
-    } else {
-        format_u32(val as u32, out)
-    }
+    format_int_fixed(val, 0, "", "", out)
 }
 
 /// Format a signed value with fixed decimal places and optional prefix/suffix.
@@ -61,16 +53,12 @@ pub fn format_int_fixed<'a>(
     let mut idx = 0;
 
     // 1. Prefix
-    let plen = prefix.len().min(out.len());
-    out[idx..idx + plen].copy_from_slice(&prefix.as_bytes()[..plen]);
-    idx += plen;
+    push_bytes(out, &mut idx, prefix.as_bytes());
 
     // 2. Negative sign
-    let is_neg = val < 0;
     let mut uval = val.unsigned_abs();
-    if is_neg && idx < out.len() {
-        out[idx] = b'-';
-        idx += 1;
+    if val < 0 {
+        push_bytes(out, &mut idx, b"-");
     }
 
     // 3. Digits & decimal point
@@ -101,17 +89,12 @@ pub fn format_int_fixed<'a>(
         }
     }
 
-    let d_slice = &digits[dpos..];
-    let dlen = d_slice.len().min(out.len() - idx);
-    out[idx..idx + dlen].copy_from_slice(&d_slice[..dlen]);
-    idx += dlen;
+    push_bytes(out, &mut idx, unsafe { digits.get_unchecked(dpos..) });
 
     // 4. Suffix
-    let slen = suffix.len().min(out.len() - idx);
-    out[idx..idx + slen].copy_from_slice(&suffix.as_bytes()[..slen]);
-    idx += slen;
+    push_bytes(out, &mut idx, suffix.as_bytes());
 
-    unsafe { core::str::from_utf8_unchecked(&out[..idx]) }
+    unsafe { core::str::from_utf8_unchecked(out.get_unchecked(..idx)) }
 }
 
 /// Format a 32-bit integer into 8 uppercase hex digits.
@@ -155,9 +138,8 @@ fn put_2digit(out: &mut [u8; 8], off: usize, val: u8) {
 /// Format uptime seconds into "HH:MM:SS" (hours clamped at 99).
 pub fn format_uptime_hms(secs: u32, out: &mut [u8; 8]) -> &str {
     let (mins, s) = crate::math::div60_u32(secs);
-    let (h, m) = crate::math::div60_u32(mins);
-    let h = (h as u8).min(99);
-    put_2digit(out, 0, h);
+    let (h, m) = crate::math::div60_u16(mins.min(5999) as u16);
+    put_2digit(out, 0, h as u8);
     out[2] = b':';
     put_2digit(out, 3, m);
     out[5] = b':';
