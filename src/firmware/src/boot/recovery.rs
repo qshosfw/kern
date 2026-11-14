@@ -15,8 +15,27 @@ fn decode_thumb16(inst: u16) -> &'static str {
     OP_CATS[(inst >> 12) as usize]
 }
 
-#[inline(never)]
-fn draw_item(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: &str) {
+const OVERVIEW_LABELS: &[u8] =
+    b"PC:\0LR:\0SP:\0ADR:\0CRC:\0PSR:\0ACT:\0RSN:\0STK:\0OP:\0S0:\0S1:\0";
+const LBL_PC: u8 = 0;
+const LBL_LR: u8 = 1;
+const LBL_SP: u8 = 2;
+const LBL_ADR: u8 = 3;
+const LBL_CRC: u8 = 4;
+const LBL_PSR: u8 = 5;
+const LBL_ACT: u8 = 6;
+const LBL_RSN: u8 = 7;
+const LBL_STK: u8 = 8;
+const LBL_OP: u8 = 9;
+const LBL_S0: u8 = 10;
+const LBL_S1: u8 = 11;
+
+#[inline(always)]
+const fn item_spec(pos: u8, lbl: u8) -> u8 {
+    (pos << 4) | (lbl & 0x0F)
+}
+
+fn draw_item_raw(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: &str) {
     let font = &gfx::fonts::tomthumb::FONT;
     let x = if (pos & 1) == 0 { 2 } else { 66 };
     let y = 15 + ((pos >> 1) as i16) * 8;
@@ -24,6 +43,13 @@ fn draw_item(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: &str) {
     gfx::text::draw_str(canvas, x + 18, y, val, font, gfx::Color::Fill);
 }
 
+#[cfg(feature = "panic_gui_extended")]
+#[inline(never)]
+fn draw_item(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: &str) {
+    draw_item_raw(canvas, pos, label, val);
+}
+
+#[cfg(feature = "panic_gui_extended")]
 #[inline(never)]
 fn draw_item_hex(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: u32) {
     let mut hbuf = [0u8; 8];
@@ -32,7 +58,28 @@ fn draw_item_hex(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: u32) {
     } else {
         gfx::text::format_hex32(val, &mut hbuf)
     };
-    draw_item(canvas, pos, label, s);
+    draw_item_raw(canvas, pos, label, s);
+}
+
+#[inline(never)]
+fn draw_overview_item(canvas: &mut gfx::Canvas, spec: u8, val: &str) {
+    draw_item_raw(
+        canvas,
+        spec >> 4,
+        utils::format::nth_cstr(OVERVIEW_LABELS, spec & 0x0F),
+        val,
+    );
+}
+
+#[inline(never)]
+fn draw_overview_hex(canvas: &mut gfx::Canvas, spec: u8, val: u32) {
+    let mut hbuf = [0u8; 8];
+    let s = if val == 0xFFFF_FFFF {
+        "????????"
+    } else {
+        gfx::text::format_hex32(val, &mut hbuf)
+    };
+    draw_overview_item(canvas, spec, s);
 }
 
 #[inline(never)]
@@ -43,7 +90,7 @@ fn draw_stack_free(canvas: &mut gfx::Canvas, pos: u8, sp: u32) {
     } else {
         "OOB!"
     };
-    draw_item(canvas, pos, "STK:", s);
+    draw_overview_item(canvas, item_spec(pos, LBL_STK), s);
 }
 
 #[cfg(feature = "panic_gui_extended")]
@@ -69,22 +116,24 @@ fn draw_inst_mnem(canvas: &mut gfx::Canvas, row: u8, label: &str, inst: u16) {
 fn draw_page_overview(canvas: &mut gfx::Canvas, slot: &BootSlot) {
     let is_hard = slot.reason() == Some(kernel::boot::ResetReason::Hard);
     let (r1_lbl, r1_val) = if slot.panic_file_hash != 0 {
-        (if is_hard { "ADR:" } else { "CRC:" }, slot.panic_file_hash)
+        (
+            if is_hard { LBL_ADR } else { LBL_CRC },
+            slot.panic_file_hash,
+        )
     } else {
-        ("PSR:", slot.xpsr)
+        (LBL_PSR, slot.xpsr)
     };
-    draw_item_hex(canvas, 0, "PC:", slot.fault_pc);
-    draw_item_hex(canvas, 1, "LR:", slot.fault_lr);
-    draw_item_hex(canvas, 2, "SP:", slot.fault_sp);
-    draw_item_hex(canvas, 3, r1_lbl, r1_val);
-    draw_item_hex(canvas, 7, "CRC:", slot.crc32);
+    draw_overview_hex(canvas, item_spec(0, LBL_PC), slot.fault_pc);
+    draw_overview_hex(canvas, item_spec(1, LBL_LR), slot.fault_lr);
+    draw_overview_hex(canvas, item_spec(2, LBL_SP), slot.fault_sp);
+    draw_overview_hex(canvas, item_spec(3, r1_lbl), r1_val);
+    draw_overview_hex(canvas, item_spec(7, LBL_CRC), slot.crc32);
 
     // Row 2 (y=31): Actor & Reason
-    draw_item(canvas, 4, "ACT:", slot.actor_str());
-    draw_item(
+    draw_overview_item(canvas, item_spec(4, LBL_ACT), slot.actor_str());
+    draw_overview_item(
         canvas,
-        5,
-        "RSN:",
+        item_spec(5, LBL_RSN),
         slot.reason().map_or("UNKN", |r| r.as_str()),
     );
 
@@ -96,14 +145,14 @@ fn draw_page_overview(canvas: &mut gfx::Canvas, slot: &BootSlot) {
         if slot.panic_line > 0 {
             let mut obuf = [0u8; 4];
             let hex_str = gfx::text::format_hex16(slot.panic_line, &mut obuf);
-            draw_item(canvas, 8, "OP:", hex_str);
+            draw_overview_item(canvas, item_spec(8, LBL_OP), hex_str);
         } else {
-            draw_item(canvas, 8, "OP:", "NONE");
+            draw_overview_item(canvas, item_spec(8, LBL_OP), "NONE");
         }
-        draw_item_hex(canvas, 9, "S0:", slot.stack_dump[8]);
+        draw_overview_hex(canvas, item_spec(9, LBL_S0), slot.stack_dump[8]);
     } else {
-        draw_item_hex(canvas, 8, "S0:", slot.stack_dump[0]);
-        draw_item_hex(canvas, 9, "S1:", slot.stack_dump[1]);
+        draw_overview_hex(canvas, item_spec(8, LBL_S0), slot.stack_dump[0]);
+        draw_overview_hex(canvas, item_spec(9, LBL_S1), slot.stack_dump[1]);
     }
 }
 
@@ -250,17 +299,9 @@ pub fn draw_recovery_screen(
 
     if let Some(sec) = countdown {
         let (sd, sr) = utils::math::div10_u16(sec as u16);
-        let r_buf = [
-            b'R',
-            b'E',
-            b'S',
-            b'E',
-            b'T',
-            b' ',
-            b'0' + sd as u8,
-            b'0' + sr,
-            b's',
-        ];
+        let mut r_buf = *b"RESET 00s";
+        r_buf[6] += sd as u8;
+        r_buf[7] += sr;
         let s = unsafe { core::str::from_utf8_unchecked(&r_buf) };
         gfx::text::draw_str_align(
             canvas,
@@ -281,18 +322,20 @@ pub fn draw_recovery_screen(
     let _ = page;
 
     #[cfg(feature = "panic_gui_extended")]
-    let pbuf = [
-        b'P',
-        b'1' + p,
-        b'/',
-        b'5',
-        b' ',
-        b'#',
-        b'0' + cd as u8,
-        b'0' + cr,
-    ];
+    let pbuf = {
+        let mut b = *b"P1/5 #00";
+        b[1] += p;
+        b[6] += cd as u8;
+        b[7] += cr;
+        b
+    };
     #[cfg(not(feature = "panic_gui_extended"))]
-    let pbuf = [b'#', b'0' + cd as u8, b'0' + cr];
+    let pbuf = {
+        let mut b = *b"#00";
+        b[1] += cd as u8;
+        b[2] += cr;
+        b
+    };
     let pstr = unsafe { core::str::from_utf8_unchecked(&pbuf) };
     gfx::text::draw_str_align(
         canvas,
