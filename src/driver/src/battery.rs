@@ -222,19 +222,11 @@ impl BatteryDriver {
         ((cur as u32 * weight + sample as u32 + round) >> shift) as u16
     }
 
-    fn eval_hysteresis(
-        active: bool,
-        ocv_mv: u16,
-        pct: u8,
-        limit_mv: u16,
-        enter_pct: u8,
-        exit_pct: u8,
-        floor_pct: u8,
-    ) -> bool {
+    fn eval_hysteresis(active: bool, ocv_mv: u16, pct: u8, limit_mv: u16, enter_pct: u8) -> bool {
         if active {
-            !(ocv_mv >= limit_mv.saturating_add(150) && pct >= exit_pct)
+            !(ocv_mv >= limit_mv.saturating_add(150) && pct >= enter_pct - 2)
         } else {
-            (ocv_mv < limit_mv && pct <= enter_pct) || pct <= floor_pct
+            (ocv_mv < limit_mv && pct <= enter_pct) || pct <= enter_pct - 5
         }
     }
 
@@ -276,6 +268,7 @@ impl BatteryDriver {
         quiescent_ma.saturating_add(dynamic_ma)
     }
 
+    #[inline(never)]
     fn calculate_percentage(&self, ocv: u16) -> u8 {
         if self.has_calib_curve {
             let cal = if self.calib_const >= 1000 && self.calib_const <= 3500 {
@@ -288,6 +281,17 @@ impl BatteryDriver {
         } else {
             mv_to_percentage(ocv, self.battery_type.get())
         }
+    }
+
+    fn seed_mv(&mut self, raw_mv: u16) {
+        self.smoothed_mv = raw_mv;
+        self.ocv_mv = raw_mv;
+        self.pre_tx_ocv = raw_mv;
+        if !self.is_charging {
+            self.base_mv = raw_mv;
+        }
+        self.charge_counter = 0;
+        self.display_pct = self.calculate_percentage(raw_mv);
     }
 
     /// Sample ADC with live responsive EMA filtering matching DeltaFW.
@@ -309,12 +313,7 @@ impl BatteryDriver {
         // Symmetric 8-tap EMA smoothing: filters sound beeps, screen dimming, and inrush noise
         if raw_mv > 0 {
             if first_sample || self.base_mv == 0 {
-                self.smoothed_mv = raw_mv;
-                self.ocv_mv = raw_mv;
-                self.base_mv = raw_mv;
-                self.last_mv = raw_mv;
-                self.pre_tx_ocv = raw_mv;
-                self.display_pct = self.calculate_percentage(raw_mv);
+                self.seed_mv(raw_mv);
             } else {
                 self.smoothed_mv = Self::ema_u16(self.smoothed_mv, raw_mv, 3);
             }
@@ -331,46 +330,44 @@ impl BatteryDriver {
         profile: PowerProfile,
     ) -> BatteryState {
         let is_external = self.battery_type.get() == BatteryType::TypeExternal;
+        let sm = self.smoothed_mv;
 
-        let tx_just_started = periph.tx_active && !self.tx_active_prev;
+        let tx_was_active = self.tx_active_prev;
         self.tx_active_prev = periph.tx_active;
 
         if !self.charge_detect_enabled || is_external {
             self.is_charging = false;
             self.charge_counter = 0;
-            self.base_mv = self.smoothed_mv;
-        } else if tx_just_started {
-            self.pre_tx_ocv = self.ocv_mv;
-            self.tx_recovery_ticks = 125; // 25s post-TX recovery window (at 200ms ticks)
-            self.charge_counter = 0;
+            self.base_mv = sm;
         } else if periph.tx_active {
-            self.tx_recovery_ticks = 125;
-            self.charge_counter = 0;
-            self.ocv_mv = self.pre_tx_ocv;
-
-            // Refine internal resistance estimate from measured instantaneous raw step sag during TX
-            if self.pre_tx_ocv > raw_mv {
+            if !tx_was_active {
+                self.pre_tx_ocv = self.ocv_mv;
+            } else if self.pre_tx_ocv > raw_mv {
+                // Refine internal resistance estimate from measured instantaneous raw step sag during TX
                 let step_sag = self.pre_tx_ocv - raw_mv;
-                if step_sag >= 50 && step_sag <= 600 {
+                if (50..=600).contains(&step_sag) {
                     let r_est = match periph.tx_power_level {
                         0 => step_sag << 1,
                         1 => step_sag,
                         _ => (((step_sag as u32) * 171) >> 8) as u16,
                     };
-                    if r_est >= 100 && r_est <= 500 {
+                    if (100..=500).contains(&r_est) {
                         self.internal_res_m_ohm = Self::ema_u16(self.internal_res_m_ohm, r_est, 3);
                     }
                 }
             }
+            self.tx_recovery_ticks = 125; // 25s post-TX recovery window (at 200ms ticks)
+            self.charge_counter = 0;
+            self.ocv_mv = self.pre_tx_ocv;
         } else if self.tx_recovery_ticks > 0 {
             self.tx_recovery_ticks -= 1;
             self.charge_counter = 0;
             self.ocv_mv = self.pre_tx_ocv;
 
             // If terminal voltage has recovered within 15 mV of resting OCV, end recovery early
-            if self.smoothed_mv >= self.pre_tx_ocv.saturating_sub(15) {
+            if sm >= self.pre_tx_ocv.saturating_sub(15) {
                 self.tx_recovery_ticks = 0;
-                self.base_mv = self.smoothed_mv;
+                self.base_mv = sm;
             }
         } else {
             // Normal operation / discharge / charge detection
@@ -378,17 +375,17 @@ impl BatteryDriver {
             const CHARGE_STOP_DROP_MV: u16 = 50;
 
             if !self.is_charging {
-                if self.smoothed_mv >= self.base_mv.saturating_add(CHARGE_START_DELTA_MV) {
+                if sm >= self.base_mv.saturating_add(CHARGE_START_DELTA_MV) {
                     self.charge_counter = self.charge_counter.saturating_add(1);
                     if self.charge_counter >= 3 {
                         self.is_charging = true;
-                        self.base_mv = self.smoothed_mv;
-                        self.ocv_mv = self.smoothed_mv;
+                        self.base_mv = sm;
+                        self.ocv_mv = sm;
                     }
                 } else {
                     self.charge_counter = self.charge_counter.saturating_sub(1);
-                    if self.smoothed_mv < self.base_mv {
-                        self.base_mv = self.smoothed_mv;
+                    if sm < self.base_mv {
+                        self.base_mv = sm;
                     } else {
                         self.drift_counter = self.drift_counter.saturating_add(1);
                         if self.drift_counter >= 25 {
@@ -400,29 +397,29 @@ impl BatteryDriver {
                     // Steady-state normal discharge tracking:
                     // If load sag is small (<= 25 mV), it is normal steady-state discharge.
                     // Slowly track OCV downwards with a 32-sample EMA (~6.4s time constant at 5 Hz).
-                    if self.smoothed_mv <= self.ocv_mv {
-                        if self.ocv_mv - self.smoothed_mv <= 25 {
-                            self.ocv_mv = Self::ema_u16(self.ocv_mv, self.smoothed_mv, 5);
+                    if sm <= self.ocv_mv {
+                        if self.ocv_mv - sm <= 25 {
+                            self.ocv_mv = Self::ema_u16(self.ocv_mv, sm, 5);
                         }
-                    } else if self.smoothed_mv < self.base_mv.saturating_add(35) {
+                    } else if sm < self.base_mv.saturating_add(35) {
                         // Slight upward thermal drift <= 35 mV
-                        self.ocv_mv = Self::ema_u16(self.ocv_mv, self.smoothed_mv, 6);
+                        self.ocv_mv = Self::ema_u16(self.ocv_mv, sm, 6);
                     }
                 }
             } else {
                 // Active charging
-                self.ocv_mv = self.smoothed_mv;
-                if self.smoothed_mv > self.base_mv {
-                    self.base_mv = self.smoothed_mv;
-                } else if self.smoothed_mv <= self.base_mv.saturating_sub(CHARGE_STOP_DROP_MV) {
+                self.ocv_mv = sm;
+                if sm > self.base_mv {
+                    self.base_mv = sm;
+                } else if sm <= self.base_mv.saturating_sub(CHARGE_STOP_DROP_MV) {
                     self.is_charging = false;
                     self.charge_counter = 0;
-                    self.base_mv = self.smoothed_mv;
+                    self.base_mv = sm;
                 }
             }
         }
 
-        self.last_mv = self.smoothed_mv;
+        self.last_mv = sm;
 
         let raw_pct = self.calculate_percentage(self.ocv_mv);
 
@@ -469,18 +466,9 @@ impl BatteryDriver {
                 percentage,
                 shut_limit,
                 5,
-                3,
-                0,
             );
-            self.is_low_state = Self::eval_hysteresis(
-                self.is_low_state,
-                self.ocv_mv,
-                percentage,
-                warn_limit,
-                20,
-                18,
-                15,
-            );
+            self.is_low_state =
+                Self::eval_hysteresis(self.is_low_state, self.ocv_mv, percentage, warn_limit, 20);
 
             if self.is_critical_state {
                 self.is_low_state = true;
@@ -514,14 +502,7 @@ impl BatteryDriver {
         let raw_mv = self.adc_to_mv(raw_adc, vdda_mv);
 
         if raw_mv > 0 {
-            self.smoothed_mv = raw_mv;
-            self.ocv_mv = raw_mv;
-            self.pre_tx_ocv = raw_mv;
-            if !self.is_charging {
-                self.base_mv = raw_mv;
-            }
-            self.charge_counter = 0;
-            self.display_pct = self.calculate_percentage(raw_mv);
+            self.seed_mv(raw_mv);
         }
 
         self.finish_state(raw_adc, raw_mv, periph, profile)
