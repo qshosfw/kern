@@ -447,22 +447,13 @@ impl UsbDriver {
     fn ep0_start_telemetry_transfer(&mut self, max_len: u16) {
         let mut buf = [0u8; 31];
         let c_volts = ((self.battery_voltage_mv as u32 * 52429) >> 19) as i32;
-        let s = utils::format::format_int_fixed(c_volts, 2, "Supply: ", "v ", &mut buf);
+        let suffix = if self.is_charging { "v [CHG]" } else { "v (" };
+        let s = utils::format::format_int_fixed(c_volts, 2, "Supply: ", suffix, &mut buf);
         let mut pos = s.len();
-        if self.is_charging {
-            for &b in b"[CHG]" {
-                buf[pos] = b;
-                pos += 1;
-            }
-        } else {
-            let pct = self.battery_pct.min(100);
-            buf[pos] = b'(';
-            pos += 1;
-            let p_str = utils::format::format_u32(pct as u32, &mut buf[pos..]);
+        if !self.is_charging {
+            let pct = self.battery_pct.min(100) as i32;
+            let p_str = utils::format::format_int_fixed(pct, 0, "", "%)", &mut buf[pos..]);
             pos += p_str.len();
-            buf[pos] = b'%';
-            buf[pos + 1] = b')';
-            pos += 2;
         }
         self.ep0_start_string_transfer(&buf[..pos], max_len);
     }
@@ -480,33 +471,41 @@ impl UsbDriver {
         let desc_type = (w_value >> 8) as u8;
         let desc_index = (w_value & 0xFF) as u8;
 
-        match desc_type {
-            DESC_TYPE_DEVICE => {
-                self.ep0_start_transfer(&DEVICE_DESCRIPTOR, w_length);
-            }
-            DESC_TYPE_CONFIGURATION => {
-                self.ep0_start_transfer(&CONFIG_DESCRIPTOR, w_length);
-            }
+        let static_desc: Option<&[u8]> = match desc_type {
+            DESC_TYPE_DEVICE => Some(&DEVICE_DESCRIPTOR),
+            DESC_TYPE_CONFIGURATION => Some(&CONFIG_DESCRIPTOR),
             DESC_TYPE_STRING => match desc_index {
-                0 => self.ep0_start_transfer(&STRING_LANGID, w_length),
-                1 => self.ep0_start_transfer(&STRING_MANUFACTURER, w_length),
-                2 => self.ep0_start_product_transfer(w_length),
+                0 => Some(&STRING_LANGID),
+                1 => Some(&STRING_MANUFACTURER),
+                2 => {
+                    self.ep0_start_product_transfer(w_length);
+                    return;
+                }
                 3 => {
                     let crock = bsp::uid::get_crockford_serial();
                     self.ep0_start_string_transfer(&crock[..14], w_length);
+                    return;
                 }
                 #[cfg(feature = "usb_cdc")]
-                4 => self.ep0_start_transfer(&STRING_INTERFACE_SERIAL, w_length),
-                5 => self.ep0_start_telemetry_transfer(w_length),
-                6 => self.ep0_start_mac_transfer(w_length),
+                4 => Some(&STRING_INTERFACE_SERIAL),
+                5 => {
+                    self.ep0_start_telemetry_transfer(w_length);
+                    return;
+                }
+                6 => {
+                    self.ep0_start_mac_transfer(w_length);
+                    return;
+                }
                 #[cfg(feature = "usb_msc")]
-                7 => self.ep0_start_transfer(&STRING_INTERFACE_STORAGE, w_length),
-                _ => self.ep0_stall(),
+                7 => Some(&STRING_INTERFACE_STORAGE),
+                _ => None,
             },
-            DESC_TYPE_DEVICE_QUALIFIER => {
-                self.ep0_stall();
-            }
-            _ => self.ep0_stall(),
+            _ => None,
+        };
+        if let Some(d) = static_desc {
+            self.ep0_start_transfer(d, w_length);
+        } else {
+            self.ep0_stall();
         }
     }
 
@@ -545,9 +544,7 @@ impl UsbDriver {
         } else if request == cdc::CDC_REQ_SET_LINE_CODING {
             // Acknowledge SETUP packet reception only (do NOT assert DATAEND yet);
             // wait for the 7-byte line coding data packet in the OUT data stage.
-            unsafe {
-                USBD_EP0_CSR_U8.write_volatile(EP0_SVRXPKTRDY);
-            }
+            Self::ep0_write_csr(EP0_SVRXPKTRDY);
             self.pending_set_line_coding = true;
             return;
         }
@@ -677,22 +674,17 @@ impl UsbDriver {
         set_active_ep(0);
     }
 
+    #[inline(never)]
     fn ep0_start_transfer(&mut self, data: &[u8], max_len: u16) {
         let total = data.len().min(max_len as usize);
-        set_active_ep(0);
-
-        // Acknowledge SETUP packet reception
-        unsafe {
-            USBD_EP0_CSR_U8.write_volatile(EP0_SVRXPKTRDY);
-        }
-
         if total == 0 {
-            unsafe {
-                USBD_EP0_CSR_U8.write_volatile(EP0_SVRXPKTRDY | EP0_DATAEND);
-            }
+            self.ep0_send_zlp();
             self.ep0_transfer = None;
             return;
         }
+
+        // Acknowledge SETUP packet reception
+        Self::ep0_write_csr(EP0_SVRXPKTRDY);
 
         let chunk = total.min(USB_EP0_MAX_PACKET_SIZE);
         write_fifo(0, &data[..chunk]);
