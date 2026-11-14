@@ -109,6 +109,7 @@ pub fn enable_pwr() {
 }
 
 /// Ensure the internal 32.768 kHz LSI oscillator is enabled and ready.
+#[inline(never)]
 pub fn enable_lsi() {
     unsafe {
         let csr = rcc::RCC_CSR.read_volatile();
@@ -153,12 +154,8 @@ pub fn enable_rtc_lsi() {
 
 /// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1) and reset PHY.
 pub fn enable_usbd() {
+    enable_syscfg();
     unsafe {
-        // 1. Enable SYSCFG clock (APB2) - required for USB PHY routing on PY32F071
-        let val_apb2 = rcc::RCC_APB2ENR.read_volatile();
-        rcc::RCC_APB2ENR.write_volatile(val_apb2 | rcc::APB2ENR_SYSCFG);
-
-        // 2. Enable GPIOA clock
         let val_iop = rcc::RCC_IOPENR.read_volatile();
         rcc::RCC_IOPENR.write_volatile(val_iop | rcc::IOPENR_GPIOA);
 
@@ -168,13 +165,11 @@ pub fn enable_usbd() {
 
         // 4. Force reset and release USBD peripheral to guarantee clean hardware PHY state
         let rst = rcc::RCC_APBRSTR1.read_volatile();
-        rcc::RCC_APBRSTR1.write_volatile(rst | rcc::APBRSTR1_USBDRST);
-        for _ in 0..500 {
-            core::hint::spin_loop();
-        }
-        rcc::RCC_APBRSTR1.write_volatile(rst & !rcc::APBRSTR1_USBDRST);
-        for _ in 0..500 {
-            core::hint::spin_loop();
+        for next in [rst | rcc::APBRSTR1_USBDRST, rst & !rcc::APBRSTR1_USBDRST] {
+            rcc::RCC_APBRSTR1.write_volatile(next);
+            for _ in 0..500 {
+                core::hint::spin_loop();
+            }
         }
     }
 }
@@ -285,12 +280,32 @@ unsafe fn set_hsi_fs(is_24mhz: bool) {
     }
 }
 
+/// Switch system clock to one of the 5 discrete hardware speeds:
+/// 0: 16 MHz (Direct HSI, PLL OFF, 0WS)
+/// 1: 24 MHz (Direct HSI, PLL OFF, 0WS)
+/// 2: 32 MHz (HSI 16 MHz * PLL 2X, 1WS) - RF Sweet Spot
+/// 3: 48 MHz (HSI * PLL, 1WS) - Default / USB Full-Speed
+/// 4: 72 MHz (HSI 24 MHz * PLL 3X, 2WS) - High Performance
 #[inline(never)]
-fn apply_sysclk(hsi_24: bool, pll_mul: Option<u32>, wait_states: u32) {
+pub fn set_sysclk_index(idx: u8) {
+    let idx = if idx > 4 { 3 } else { idx };
+    let hsi_24 = idx != 0 && idx != 2;
+    let wait_states = if idx < 2 {
+        pac::flash::ACR_LATENCY_0WS
+    } else if idx == 4 {
+        pac::flash::ACR_LATENCY_2WS
+    } else {
+        pac::flash::ACR_LATENCY_1WS
+    };
     unsafe {
         switch_to_hsi_disable_pll();
         set_hsi_fs(hsi_24);
-        if let Some(mul) = pll_mul {
+        if idx >= 2 {
+            let mul = if idx == 4 {
+                rcc::PLLCFGR_PLLMUL_3X
+            } else {
+                rcc::PLLCFGR_PLLMUL_2X
+            };
             enable_pll_and_switch(mul, wait_states);
         } else {
             let acr = pac::flash::FLASH_ACR.read_volatile();
@@ -303,35 +318,6 @@ fn apply_sysclk(hsi_24: bool, pll_mul: Option<u32>, wait_states: u32) {
     crate::time::update_tim2_freq(hz);
     crate::spi::resync_clock(hz);
     crate::uart::resync_clock(hz);
-}
-
-/// Switch system clock to one of the 5 discrete hardware speeds:
-/// 0: 16 MHz (Direct HSI, PLL OFF, 0WS)
-/// 1: 24 MHz (Direct HSI, PLL OFF, 0WS)
-/// 2: 32 MHz (HSI 16 MHz * PLL 2X, 1WS) - RF Sweet Spot
-/// 3: 48 MHz (HSI * PLL, 1WS) - Default / USB Full-Speed
-/// 4: 72 MHz (HSI 24 MHz * PLL 3X, 2WS) - High Performance
-#[inline(never)]
-pub fn set_sysclk_index(idx: u8) {
-    match idx {
-        0 => apply_sysclk(false, None, pac::flash::ACR_LATENCY_0WS),
-        1 => apply_sysclk(true, None, pac::flash::ACR_LATENCY_0WS),
-        2 => apply_sysclk(
-            false,
-            Some(rcc::PLLCFGR_PLLMUL_2X),
-            pac::flash::ACR_LATENCY_1WS,
-        ),
-        4 => apply_sysclk(
-            true,
-            Some(rcc::PLLCFGR_PLLMUL_3X),
-            pac::flash::ACR_LATENCY_2WS,
-        ),
-        _ => apply_sysclk(
-            true,
-            Some(rcc::PLLCFGR_PLLMUL_2X),
-            pac::flash::ACR_LATENCY_1WS,
-        ),
-    }
 }
 
 #[inline]

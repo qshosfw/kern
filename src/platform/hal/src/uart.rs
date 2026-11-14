@@ -20,7 +20,6 @@ pub fn init() {
 
     // Configure PA9 as AF1 (USART1_TX)
     let tx = Pin::new(gpio::GPIOA_BASE, 9);
-    tx.set_speed(pac::gpio::SPEED_MEDIUM);
     tx.configure_af(pac::gpio::AF1, pac::gpio::SPEED_MEDIUM);
 
     // Configure PA10 as AF1 (USART1_RX)
@@ -90,7 +89,7 @@ pub enum UartError {
 }
 
 /// Transmit a single byte (blocking).
-#[inline]
+#[inline(never)]
 pub fn write_byte(byte: u8) -> Result<(), UartError> {
     mark_activity();
     unsafe {
@@ -184,16 +183,10 @@ pub fn read_byte() -> Result<u8, UartError> {
 /// Try to read a byte without blocking. Returns `None` if no data available.
 #[inline]
 pub fn try_read_byte() -> Option<u8> {
-    unsafe {
-        let sr = usart::USART_SR.read_volatile();
-        if (sr & usart::SR_RXNE) != 0 {
-            mark_activity();
-            Some(usart::USART_DR.read_volatile() as u8)
-        } else {
-            if sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE) != 0 {
-                let _ = usart::USART_DR.read_volatile();
-            }
-            None
-        }
+    if is_readable() {
+        mark_activity();
+        Some(unsafe { usart::USART_DR.read_volatile() as u8 })
+    } else {
+        None
     }
 }
