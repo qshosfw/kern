@@ -50,25 +50,20 @@ pub fn copy_padded(dst: &mut [u8], src: &[u8]) {
     dst[..len].copy_from_slice(&src[..len]);
 }
 
+#[inline(never)]
 pub fn prompt_config_str(ctx: &mut SysContext, tag: u8) {
     let mut buf = ShortString::empty();
-    let (title, max_len, digits) = match tag {
-        TAG_OWNER_INPUT => {
-            buf.set_str(ctx.config.system.owner_str());
-            ("Owner", 12, false)
-        }
-        TAG_TAG_INPUT => {
-            buf.set_str(ctx.config.system.tag_str());
-            ("Tag", 8, false)
-        }
-        TAG_MODEL_INPUT => {
-            buf.set_str(ctx.config.system.custom_model_str());
-            ("Model", 12, false)
-        }
-        _ => {
-            buf.push_int_fixed(ctx.config.system.radio_id as i32, 0, "", "");
-            ("Radio ID", 8, true)
-        }
+    let (title, max_len, digits) = if tag == TAG_RADIO_ID_INPUT {
+        buf.push_int_fixed(ctx.config.system.radio_id as i32, 0, "", "");
+        ("Radio ID", 8, true)
+    } else {
+        let (title, s, max_len) = match tag {
+            TAG_OWNER_INPUT => ("Owner", ctx.config.system.owner_str(), 12),
+            TAG_TAG_INPUT => ("Tag", ctx.config.system.tag_str(), 8),
+            _ => ("Model", ctx.config.system.custom_model_str(), 12),
+        };
+        buf.set_str(s);
+        (title, max_len, false)
     };
     ctx.prompt_text(tag, title, buf.as_str(), max_len, digits);
 }

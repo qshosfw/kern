@@ -187,11 +187,12 @@ impl View<PopupModel> for PopupView {
 
         // Hold-to-confirm live countdown in header + balanced 6px sub-pixel progress bar
         if model.hold_ms_required > 0 && anim_p >= 8 {
-            let rem_ds = model
-                .hold_ms_required
-                .saturating_sub(model.hold_elapsed_ms)
-                .saturating_add(50)
-                / 100;
+            let (rem_ds, _) = utils::math::div100_u16(
+                model
+                    .hold_ms_required
+                    .saturating_sub(model.hold_elapsed_ms)
+                    .saturating_add(50),
+            );
             let (sec, tenth) = utils::math::div10_u16(rem_ds.min(99));
             let t_buf = [b'0' + (sec as u8), b'.', b'0' + tenth, b's'];
             let t_str = unsafe { core::str::from_utf8_unchecked(&t_buf) };
