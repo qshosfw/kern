@@ -397,16 +397,11 @@ impl<'a, State> Bk4829<'a, State> {
 
     /// Soft-start S-curve PA ramp-up with precise calibrated PA bias.
     pub fn tx_ramp_up_bias(&mut self, bias: u8) {
-        self.set_gpio_pin(1, true); // PA enable (Pin 29)
-        self.set_gpio_pin(0, false); // RX disable (Pin 28)
-        py32_hal::delay::delay_ms(1);
-        self.set_rf_power_bias(bias >> 2);
-        py32_hal::delay::delay_ms(1);
-        self.set_rf_power_bias(bias >> 1);
-        py32_hal::delay::delay_ms(1);
-        self.set_rf_power_bias(((bias as u16 * 3) >> 2) as u8);
-        py32_hal::delay::delay_ms(1);
-        self.set_rf_power_bias(bias);
+        self.update_gpio_reg(0x0060, 0x0020); // PA enable (Pin 1), RX disable (Pin 0)
+        for b in [bias >> 2, bias >> 1, ((bias as u16 * 3) >> 2) as u8, bias] {
+            py32_hal::delay::delay_ms(1);
+            self.set_rf_power_bias(b);
+        }
         py32_hal::delay::delay_ms(1);
     }
 
@@ -521,18 +516,17 @@ impl<'a, State> Bk4829<'a, State> {
     /// mixer through an internal attenuation path with zero RF emitted to the antenna.
     pub fn set_internal_loopback(&mut self, enabled: bool) {
         self.loopback_active = enabled;
-        if enabled {
+        let sys_power = if enabled {
             // Strictly guarantee PA bias and external PA switch are OFF before enabling internal coupling
             self.rf_power_off();
-            self.set_gpio_pin(1, false); // PA disable (Pin 29)
-            self.set_gpio_pin(0, false); // Isolate external RX antenna switch
-            self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX);
-            self.write_reg(REG_SYS_POWER, SYS_POWER_LOOPBACK);
+            self.update_gpio_reg(0x0060, 0); // PA disable (Pin 1), isolate RX antenna switch (Pin 0)
+            SYS_POWER_LOOPBACK
         } else {
             self.set_gpio_pin(0, true); // Restore RX antenna switch
-            self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX);
-            self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
-        }
+            SYS_POWER_RX
+        };
+        self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX);
+        self.write_reg(REG_SYS_POWER, sys_power);
     }
 
     /// Read instantaneous voice/modulator amplitude (`Reg 0x64`).
@@ -620,13 +614,14 @@ impl<'a, State> Bk4829<'a, State> {
 
     /// Select external VHF vs UHF front-end bandpass and LNA path on REG_33.
     pub fn set_filter_path(&mut self, freq_hz: u32) {
-        if freq_hz < 280_000_000 {
-            self.set_gpio_pin(4, true); // VHF LNA (pin 4, bit 2)
-            self.set_gpio_pin(3, false); // UHF LNA (pin 3, bit 3)
-        } else {
-            self.set_gpio_pin(4, false); // VHF LNA
-            self.set_gpio_pin(3, true); // UHF LNA
-        }
+        self.update_gpio_reg(
+            0x000C,
+            if freq_hz < 280_000_000 {
+                0x0004
+            } else {
+                0x0008
+            },
+        );
     }
 
     pub fn set_frequency(&mut self, freq: Frequency<Hertz>) {
@@ -941,13 +936,7 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
         self.current_freq_hz = state.freq_hz;
         let new_uhf = self.current_freq_hz >= 174_000_000;
         self.write_pll_words(state.pll_low, state.pll_high);
-        if state.uhf_path {
-            self.set_gpio_pin(4, false);
-            self.set_gpio_pin(3, true);
-        } else {
-            self.set_gpio_pin(4, true);
-            self.set_gpio_pin(3, false);
-        }
+        self.update_gpio_reg(0x000C, if state.uhf_path { 0x0008 } else { 0x0004 });
         if old_uhf != new_uhf && self.squelch_level > 0 {
             <Self as kernel::service::radio::RfSquelch>::set_squelch_level(
                 self,
