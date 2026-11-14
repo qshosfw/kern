@@ -185,7 +185,7 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
         for slot in self.leases.iter_mut() {
             if let Some(l) = slot {
                 if l.timeout_ms > 0 {
-                    let elapsed = current_tick.saturating_sub(l.acquired_tick);
+                    let elapsed = current_tick.wrapping_sub(l.acquired_tick);
                     if elapsed >= l.timeout_ms {
                         let kind = l.kind;
                         let owner = l.owner;
@@ -239,5 +239,23 @@ mod tests {
         assert_eq!(mgr.revoke_all_for_owner(pid), 2);
         assert_eq!(mgr.holder(LeaseKind::RadioRx), None);
         assert_eq!(mgr.holder(LeaseKind::DisplayCanvas), None);
+    }
+
+    #[test]
+    fn test_lease_timeout_across_tick_wraparound() {
+        let mut mgr: ResourceLeaseManager<2> = ResourceLeaseManager::new();
+        let pid = Pid(9);
+        assert!(
+            mgr.acquire(pid, LeaseKind::SpiBus, 100, u32::MAX - 50)
+                .is_ok()
+        );
+
+        let mut timed_out = None;
+        mgr.check_timeouts(10, |kind, owner| timed_out = Some((kind, owner)));
+        assert_eq!(timed_out, None);
+
+        mgr.check_timeouts(60, |kind, owner| timed_out = Some((kind, owner)));
+        assert_eq!(timed_out, Some((LeaseKind::SpiBus, pid)));
+        assert_eq!(mgr.holder(LeaseKind::SpiBus), None);
     }
 }

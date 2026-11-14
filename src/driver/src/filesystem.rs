@@ -229,12 +229,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             }
             #[cfg(not(feature = "secure_fs"))]
             {
-                if !self.session_unlocked {
-                    return Err(StorageError::EncryptedNoKey);
-                }
-                self.fs.write_file(path, data).map_err(Self::map_error)?;
-                let _ = self.fs.set_permission(path, perm & !ATTR_ENCRYPTED);
-                return Ok(());
+                return Err(StorageError::EncryptedNoKey);
             }
         }
 
@@ -247,6 +242,10 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         max_bytes: usize,
         data: &[u8],
     ) -> Result<(), StorageError> {
+        let perm = self.check_writable(path)?;
+        if (perm & ATTR_ENCRYPTED) != 0 {
+            return Err(StorageError::EncryptedNoKey);
+        }
         self.fs
             .write_ring(path, max_bytes, data)
             .map_err(Self::map_error)
@@ -461,6 +460,52 @@ mod tests {
 
         let mut entries = [const { DirEntryInfo::empty() }; 2];
         assert!(drv.list_dir("/", &mut entries).is_ok());
+    }
+
+    #[test]
+    fn write_ring_respects_protected_and_encrypted_flags() {
+        let mut flash = MemFlash::new();
+        let mut fs = KernFS::new(&mut flash);
+        fs.format(None).unwrap();
+        let mut drv = FileSystemDriver::new(fs);
+
+        drv.write_file("/ro.log", b"abc").unwrap();
+        drv.set_attributes(
+            "/ro.log",
+            FileAttributes {
+                permission: ATTR_READ_ONLY,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            drv.write_ring("/ro.log", 64, b"def"),
+            Err(StorageError::AccessDenied)
+        );
+
+        drv.write_file("/sys.log", b"abc").unwrap();
+        drv.set_attributes(
+            "/sys.log",
+            FileAttributes {
+                permission: ATTR_SYSTEM,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            drv.write_ring("/sys.log", 64, b"def"),
+            Err(StorageError::AccessDenied)
+        );
+
+        drv.set_attributes(
+            "/ro.log",
+            FileAttributes {
+                permission: ATTR_ENCRYPTED,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            drv.write_ring("/ro.log", 64, b"def"),
+            Err(StorageError::EncryptedNoKey)
+        );
     }
 
     #[cfg(feature = "secure_fs")]

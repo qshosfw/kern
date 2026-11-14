@@ -143,11 +143,14 @@ impl<const N: usize, const WORDS: usize> CellSlab<N, WORDS> {
 
     /// Free `count` contiguous cells starting at `start_idx`.
     pub fn free_contiguous(&mut self, start_idx: usize, count: usize) -> bool {
-        if start_idx + count > N {
+        let Some(end) = start_idx.checked_add(count) else {
+            return false;
+        };
+        if end > N {
             return false;
         }
         let mut all_freed = true;
-        for i in start_idx..start_idx + count {
+        for i in start_idx..end {
             if !self.free_cell(i) {
                 all_freed = false;
             }
@@ -185,5 +188,22 @@ impl<const N: usize, const WORDS: usize> CellSlab<N, WORDS> {
     /// Total count of free cells available.
     pub fn free_count(&self) -> usize {
         N.saturating_sub(self.allocated_count())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_contiguous_rejects_overflow_and_oob() {
+        let mut slab: CellSlab<8, 1> = CellSlab::new();
+        let start = slab.alloc_contiguous(4).unwrap();
+        assert_eq!(start, 0);
+        assert!(!slab.free_contiguous(usize::MAX, 2));
+        assert!(!slab.free_contiguous(6, 4));
+        assert_eq!(slab.allocated_count(), 4);
+        assert!(slab.free_contiguous(start, 4));
+        assert_eq!(slab.allocated_count(), 0);
     }
 }

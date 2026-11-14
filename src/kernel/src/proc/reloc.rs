@@ -32,6 +32,9 @@ pub unsafe fn apply_relocs(
     if load_delta == 0 && expect_count == 0 {
         return Ok(());
     }
+    if ((data_base as usize) & 3) != 0 {
+        return Err(RelocError::UnalignedTarget);
+    }
 
     let mut offset: usize = 0;
     let mut count: u16 = 0;
@@ -53,8 +56,15 @@ pub unsafe fn apply_relocs(
             d as usize
         };
 
-        offset = if count == 0 { delta } else { offset + delta };
-        if (offset & 3) != 0 || offset + 4 > reloc_region_size {
+        offset = if count == 0 {
+            delta
+        } else {
+            offset
+                .checked_add(delta)
+                .ok_or(RelocError::BadRelocOffset)?
+        };
+        let end = offset.checked_add(4).ok_or(RelocError::BadRelocOffset)?;
+        if (offset & 3) != 0 || end > reloc_region_size {
             return Err(RelocError::BadRelocOffset);
         }
 
@@ -64,7 +74,7 @@ pub unsafe fn apply_relocs(
             *ptr = current.wrapping_add(load_delta);
         }
 
-        count += 1;
+        count = count.checked_add(1).ok_or(RelocError::RelocCountMismatch)?;
     }
 
     if count != expect_count {
@@ -78,125 +88,145 @@ pub unsafe fn apply_relocs(
 mod tests {
     use super::*;
 
+    #[repr(C, align(4))]
+    struct AlignedBuf<const N: usize>([u8; N]);
+
+    impl<const N: usize> AlignedBuf<N> {
+        const fn zeroed() -> Self {
+            Self([0u8; N])
+        }
+    }
+
     #[test]
     fn test_relocs_empty() {
-        let mut buf = [0u8; 16];
+        let mut buf = AlignedBuf::<16>::zeroed();
         unsafe {
-            assert_eq!(apply_relocs(buf.as_mut_ptr(), 16, &[0], 0, 0), Ok(()));
-            assert_eq!(apply_relocs(buf.as_mut_ptr(), 16, &[], 0, 0), Ok(()));
+            assert_eq!(apply_relocs(buf.0.as_mut_ptr(), 16, &[0], 0, 0), Ok(()));
+            assert_eq!(apply_relocs(buf.0.as_mut_ptr(), 16, &[], 0, 0), Ok(()));
         }
     }
 
     #[test]
     fn test_relocs_single() {
-        let mut buf = [0u8; 32];
+        let mut buf = AlignedBuf::<32>::zeroed();
         // At offset 4, put initial pointer 0x2000_0000
         let initial_ptr = 0x2000_0000u32;
-        buf[4..8].copy_from_slice(&initial_ptr.to_le_bytes());
+        buf.0[4..8].copy_from_slice(&initial_ptr.to_le_bytes());
 
         // Stream: delta=4, then end-of-stream=0
         let stream = [4u8, 0u8];
         let load_delta = 0x1000u32;
 
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream, load_delta, 1);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream, load_delta, 1);
             assert_eq!(res, Ok(()));
         }
 
-        let updated_ptr = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+        let updated_ptr = u32::from_le_bytes(buf.0[4..8].try_into().unwrap());
         assert_eq!(updated_ptr, 0x2000_1000);
     }
 
     #[test]
     fn test_relocs_multiple_positive_deltas() {
-        let mut buf = [0u8; 64];
+        let mut buf = AlignedBuf::<64>::zeroed();
         let p1 = 0x1000_0000u32;
         let p2 = 0x1000_0040u32;
-        buf[4..8].copy_from_slice(&p1.to_le_bytes());
-        buf[12..16].copy_from_slice(&p2.to_le_bytes());
+        buf.0[4..8].copy_from_slice(&p1.to_le_bytes());
+        buf.0[12..16].copy_from_slice(&p2.to_le_bytes());
 
         // First reloc offset 4, second offset 12 (delta = 12 - 4 = 8)
         let stream = [4u8, 8u8, 0u8];
         let load_delta = 0x0000_0200u32;
 
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream, load_delta, 2);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream, load_delta, 2);
             assert_eq!(res, Ok(()));
         }
 
-        let updated_p1 = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-        let updated_p2 = u32::from_le_bytes(buf[12..16].try_into().unwrap());
+        let updated_p1 = u32::from_le_bytes(buf.0[4..8].try_into().unwrap());
+        let updated_p2 = u32::from_le_bytes(buf.0[12..16].try_into().unwrap());
         assert_eq!(updated_p1, 0x1000_0200);
         assert_eq!(updated_p2, 0x1000_0240);
     }
 
     #[test]
     fn test_relocs_16bit_escape() {
-        let mut buf = [0u8; 512];
+        let mut buf = AlignedBuf::<512>::zeroed();
         let target_offset = 300usize; // 300 % 4 == 0
         let p = 0x0800_1000u32;
-        buf[target_offset..target_offset + 4].copy_from_slice(&p.to_le_bytes());
+        buf.0[target_offset..target_offset + 4].copy_from_slice(&p.to_le_bytes());
 
         // Escape: 0xFF, followed by 300 in little-endian (0x2C, 0x01), then 0
         let stream = [0xFFu8, 0x2Cu8, 0x01u8, 0u8];
         let load_delta = 0x0001_0000u32;
 
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream, load_delta, 1);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream, load_delta, 1);
             assert_eq!(res, Ok(()));
         }
 
         let updated_p =
-            u32::from_le_bytes(buf[target_offset..target_offset + 4].try_into().unwrap());
+            u32::from_le_bytes(buf.0[target_offset..target_offset + 4].try_into().unwrap());
         assert_eq!(updated_p, 0x0801_1000);
     }
 
     #[test]
+    fn test_relocs_unaligned_base_rejected() {
+        let mut buf = AlignedBuf::<32>::zeroed();
+        let stream = [4u8, 0u8];
+        unsafe {
+            let unaligned_ptr = buf.0.as_mut_ptr().add(1);
+            let res = apply_relocs(unaligned_ptr, 31, &stream, 0x100, 1);
+            assert_eq!(res, Err(RelocError::UnalignedTarget));
+        }
+    }
+
+    #[test]
     fn test_relocs_unaligned_rejected() {
-        let mut buf = [0u8; 32];
+        let mut buf = AlignedBuf::<32>::zeroed();
         // Delta 3 is unaligned (3 & 3 != 0)
         let stream = [3u8, 0u8];
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream, 0x100, 1);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream, 0x100, 1);
             assert_eq!(res, Err(RelocError::BadRelocOffset));
         }
     }
 
     #[test]
     fn test_relocs_out_of_bounds_rejected() {
-        let mut buf = [0u8; 16];
+        let mut buf = AlignedBuf::<16>::zeroed();
         // Target offset 16 -> offset + 4 > 16
         let stream = [16u8, 0u8];
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream, 0x100, 1);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream, 0x100, 1);
             assert_eq!(res, Err(RelocError::BadRelocOffset));
         }
     }
 
     #[test]
     fn test_relocs_truncated_stream() {
-        let mut buf = [0u8; 32];
+        let mut buf = AlignedBuf::<32>::zeroed();
         // Missing trailing 0
         let stream = [4u8];
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream, 0x100, 1);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream, 0x100, 1);
             assert_eq!(res, Err(RelocError::TruncatedStream));
         }
 
         // Incomplete escape sequence
         let stream2 = [0xFFu8, 0x20u8];
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream2, 0x100, 1);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream2, 0x100, 1);
             assert_eq!(res, Err(RelocError::TruncatedStream));
         }
     }
 
     #[test]
     fn test_relocs_count_mismatch() {
-        let mut buf = [0u8; 32];
+        let mut buf = AlignedBuf::<32>::zeroed();
         let stream = [4u8, 0u8]; // 1 relocation
         unsafe {
-            let res = apply_relocs(buf.as_mut_ptr(), buf.len(), &stream, 0x100, 2);
+            let res = apply_relocs(buf.0.as_mut_ptr(), buf.0.len(), &stream, 0x100, 2);
             assert_eq!(res, Err(RelocError::RelocCountMismatch));
         }
     }
