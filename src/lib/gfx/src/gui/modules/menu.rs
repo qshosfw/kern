@@ -401,17 +401,24 @@ impl MenuView {
     }
 
     #[inline(never)]
-    fn on_nav_moved(
+    fn move_selection(
         &mut self,
-        selected_idx: usize,
-        total_items: usize,
-        wrapped: bool,
+        model: &mut MenuModelMut<'_>,
+        dir: ListNavDir,
+        wrap: bool,
         pause_ticks: u16,
-    ) {
-        self.adjust_scroll(selected_idx, total_items);
-        if wrapped {
-            self.scroller.jump((self.scroll_top as i16) * 13);
-            self.repeater.pause(pause_ticks);
+    ) -> bool {
+        let prev_idx = model.selected_idx;
+        let wrapped = apply_list_nav_dir(model, dir, wrap);
+        if model.selected_idx != prev_idx {
+            self.adjust_scroll(model.selected_idx, model.items.len());
+            if wrapped {
+                self.scroller.jump((self.scroll_top as i16) * 13);
+                self.repeater.pause(pause_ticks);
+            }
+            true
+        } else {
+            false
         }
     }
 
@@ -436,11 +443,7 @@ impl MenuView {
                 } else {
                     ListNavDir::Up
                 };
-                let prev_idx = model.selected_idx;
-                let wrapped = apply_list_nav_dir(model, dir);
-                if model.selected_idx != prev_idx {
-                    self.on_nav_moved(model.selected_idx, model.items.len(), wrapped, 5);
-                }
+                self.move_selection(model, dir, true, 5);
                 return true;
             }
         }
@@ -456,31 +459,9 @@ impl MenuView {
                         changed = true;
                     }
                 } else if let Some(dir) = get_list_nav_dir(model.nav_layout, repeat_code) {
-                    let total = model.items.len();
-                    if total > 0 {
-                        let prev_idx = model.selected_idx;
-                        let wrapped = if total <= 4 {
-                            // On small lists (all items visible on screen), clamp to boundaries during repeat hold
-                            match dir {
-                                ListNavDir::Down => {
-                                    if model.selected_idx + 1 < total {
-                                        model.selected_idx += 1;
-                                    }
-                                }
-                                ListNavDir::Up => {
-                                    if model.selected_idx > 0 {
-                                        model.selected_idx -= 1;
-                                    }
-                                }
-                            }
-                            false
-                        } else {
-                            apply_list_nav_dir(model, dir)
-                        };
-                        if model.selected_idx != prev_idx {
-                            self.on_nav_moved(model.selected_idx, total, wrapped, 6);
-                            changed = true;
-                        }
+                    // On small lists (all items visible on screen), clamp to boundaries during repeat hold
+                    if self.move_selection(model, dir, model.items.len() > 4, 6) {
+                        changed = true;
                     }
                 }
             }
@@ -536,11 +517,7 @@ impl MenuView {
 
             if is_pressed {
                 if let Some(dir) = get_list_nav_dir(model.nav_layout, *code) {
-                    let prev_idx = model.selected_idx;
-                    let wrapped = apply_list_nav_dir(model, dir);
-                    if model.selected_idx != prev_idx {
-                        self.on_nav_moved(model.selected_idx, model.items.len(), wrapped, 5);
-                    }
+                    self.move_selection(model, dir, true, 5);
                     return true;
                 }
                 // Non-nav key handling (Menu, Exit, etc.)
@@ -601,7 +578,7 @@ fn apply_change_dir(item: &mut MenuItem, dir: ChangeDir) {
 }
 
 /// Returns true if navigation wrapped around boundaries (from 0 -> len-1 or len-1 -> 0).
-fn apply_list_nav_dir(model: &mut MenuModelMut<'_>, dir: ListNavDir) -> bool {
+fn apply_list_nav_dir(model: &mut MenuModelMut<'_>, dir: ListNavDir, wrap: bool) -> bool {
     let len = model.items.len();
     if len > 0 {
         model.is_pressed = false;
@@ -609,8 +586,7 @@ fn apply_list_nav_dir(model: &mut MenuModelMut<'_>, dir: ListNavDir) -> bool {
             ListNavDir::Up => {
                 if model.selected_idx > 0 {
                     model.selected_idx -= 1;
-                    return false;
-                } else if len > 1 {
+                } else if wrap && len > 1 {
                     model.selected_idx = len - 1;
                     return true;
                 }
@@ -618,8 +594,7 @@ fn apply_list_nav_dir(model: &mut MenuModelMut<'_>, dir: ListNavDir) -> bool {
             ListNavDir::Down => {
                 if model.selected_idx + 1 < len {
                     model.selected_idx += 1;
-                    return false;
-                } else if len > 1 {
+                } else if wrap && len > 1 {
                     model.selected_idx = 0;
                     return true;
                 }
