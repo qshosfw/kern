@@ -127,7 +127,7 @@ impl TextInputView {
         let mut x = 2i16;
         let mut y = 34i16;
 
-        for key in 1..=9u8 {
+        for key in 1..10u8 {
             canvas.fill_rect(x as u8, y as u8, 7, 6, Color::Fill);
             text::draw_char(
                 canvas,

@@ -41,10 +41,9 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
     canvas.draw_vertical_line(ux + 1, uy + 1, 4, color);
     canvas.draw_pixel(ux + 2, uy, color);
 
-    for i in 1..=5 {
-        if level >= i {
-            canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
-        }
+    let bars = level.min(5);
+    for i in 1..(bars + 1) {
+        canvas.draw_vertical_line(ux + 1 + (i * 2), uy + 5 - i, i, color);
     }
 
     SIGNAL_WIDTH
