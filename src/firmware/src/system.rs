@@ -240,12 +240,12 @@ fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc) {
         py32_hal::wdt::Watchdog::feed();
         let cur = py32_hal::delay::millis();
 
-        let cycle = (cur >> 8) & 0x07;
-        if cycle == 0 {
-            hw.radio.set_status_led(bsp::StatusLed::Red);
+        let led = if ((cur >> 8) & 0x07) == 0 {
+            bsp::StatusLed::Red
         } else {
-            hw.radio.set_status_led(bsp::StatusLed::Off);
-        }
+            bsp::StatusLed::Off
+        };
+        hw.radio.set_status_led(led);
 
         if cur.wrapping_sub(check_ms) >= 500 {
             check_ms = cur;
@@ -369,14 +369,15 @@ fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool
 }
 
 pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -> ! {
-    let mut last_tick = py32_hal::delay::millis();
-    let mut last_battery_tick = py32_hal::delay::millis();
-    let mut last_key_tick = py32_hal::delay::millis();
-    let mut last_ui_tick = py32_hal::delay::millis();
+    let t0 = py32_hal::delay::millis();
+    let mut last_tick = t0;
+    let mut last_battery_tick = t0;
+    let mut last_key_tick = t0;
+    let mut last_ui_tick = t0;
     #[cfg(feature = "radio")]
-    let mut last_radio_tick = py32_hal::delay::millis();
+    let mut last_radio_tick = t0;
     #[cfg(feature = "grayscale")]
-    let mut last_subframe_tick = py32_hal::delay::millis();
+    let mut last_subframe_tick = t0;
     let mut dirty_render = true;
     let mut crash_loop_cleared = false;
     let mut low_batt_warning_timer = 0u8;
@@ -502,15 +503,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
         while let Some(ev) = dequeue_event() {
             let consumed = hw.dispatch_event_and_actions(ev);
-            match ev {
-                Event::Tick => {
-                    if consumed || is_anim {
-                        dirty_render = true;
-                    }
-                }
-                _ => {
-                    dirty_render = true;
-                }
+            if !matches!(ev, Event::Tick) || consumed || is_anim {
+                dirty_render = true;
             }
         }
 
