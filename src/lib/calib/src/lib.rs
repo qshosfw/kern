@@ -122,21 +122,11 @@ pub const CALIB_BAND_LIMITS: [(u32, u32, u32); 7] = [
 /// Identify calibration frequency band index (0..6) for a given frequency in Hz.
 #[inline]
 pub fn get_band_index(freq_hz: u32) -> usize {
-    if freq_hz < 108_000_000 {
-        0
-    } else if freq_hz < 137_000_000 {
-        1
-    } else if freq_hz < 174_000_000 {
-        2
-    } else if freq_hz < 350_000_000 {
-        3
-    } else if freq_hz < 400_000_000 {
-        4
-    } else if freq_hz < 470_000_000 {
-        5
-    } else {
-        6
+    let mut band = 0;
+    while band < 6 && freq_hz >= CALIB_BAND_LIMITS[band + 1].0 {
+        band += 1;
     }
+    band
 }
 
 #[inline(never)]
@@ -234,24 +224,18 @@ impl CalibrationBlock {
         }
 
         let idx = (level.min(9)) as usize;
-        if freq_hz < 174_000_000 {
-            SquelchThresholds {
-                open_rssi: self.squelch_vhf.open_rssi[idx] as u16,
-                close_rssi: self.squelch_vhf.close_rssi[idx] as u16,
-                open_noise: self.squelch_vhf.open_noise[idx] as u16,
-                close_noise: self.squelch_vhf.close_noise[idx] as u16,
-                close_glitch: self.squelch_vhf.close_glitch[idx] as u16,
-                open_glitch: self.squelch_vhf.open_glitch[idx] as u16,
-            }
+        let table = if freq_hz < 174_000_000 {
+            &self.squelch_vhf
         } else {
-            SquelchThresholds {
-                open_rssi: self.squelch_uhf.open_rssi[idx] as u16,
-                close_rssi: self.squelch_uhf.close_rssi[idx] as u16,
-                open_noise: self.squelch_uhf.open_noise[idx] as u16,
-                close_noise: self.squelch_uhf.close_noise[idx] as u16,
-                close_glitch: self.squelch_uhf.close_glitch[idx] as u16,
-                open_glitch: self.squelch_uhf.open_glitch[idx] as u16,
-            }
+            &self.squelch_uhf
+        };
+        SquelchThresholds {
+            open_rssi: table.open_rssi[idx] as u16,
+            close_rssi: table.close_rssi[idx] as u16,
+            open_noise: table.open_noise[idx] as u16,
+            close_noise: table.close_noise[idx] as u16,
+            close_glitch: table.close_glitch[idx] as u16,
+            open_glitch: table.open_glitch[idx] as u16,
         }
     }
 
