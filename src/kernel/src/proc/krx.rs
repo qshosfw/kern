@@ -251,48 +251,58 @@ pub enum KrxLaunchError {
     UnsupportedProfile,
 }
 
+const LAUNCH_ERR_TEXTS: &[u8] = b"\
+File Not Found\0File not found\0\
+Storage Error\0Storage read error\0\
+Bad Package\0Bad package header\0\
+CRC Error\0CRC check failed\0\
+Bad Identity\0Missing identity\0\
+Corrupted Binary\0Missing manifest\0\
+Missing Hardware\0\0\
+Out of RAM\0Not enough RAM\0\
+Stack Overflow\0Stack headroom low\0\
+Reloc Error\0Relocation failed\0\
+API Unresolved\0API not available\0\
+VM Disabled\0VM disabled\0\
+Package Too Large\0Package too large\0\
+Launch Failed\0Execution failed\0\
+Bad Entry Point\0Invalid entry point\0\
+Truncated File\0Truncated payload\0\
+Unsupported Profile\0Unsupported profile\0";
+
 impl KrxLaunchError {
-    pub const fn title(&self) -> &'static str {
+    #[inline(never)]
+    const fn index(&self) -> u8 {
         match self {
-            Self::FileNotFound => "File Not Found",
-            Self::ReadFailed => "Storage Error",
-            Self::InvalidPreamble => "Bad Package",
-            Self::CrcMismatch => "CRC Error",
-            Self::MissingIdentity => "Bad Identity",
-            Self::MissingExecution => "Corrupted Binary",
-            Self::CapabilityDenied(_) => "Missing Hardware",
-            Self::InsufficientRam => "Out of RAM",
-            Self::InsufficientStack => "Stack Overflow",
-            Self::RelocationFailed => "Reloc Error",
-            Self::ImportBindingFailed => "API Unresolved",
-            Self::VmDisabled => "VM Disabled",
-            Self::PayloadTooLarge => "Package Too Large",
-            Self::ExecutionFailed => "Launch Failed",
-            Self::InvalidEntryPoint => "Bad Entry Point",
-            Self::TruncatedPackage => "Truncated File",
-            Self::UnsupportedProfile => "Unsupported Profile",
+            Self::FileNotFound => 0,
+            Self::ReadFailed => 1,
+            Self::InvalidPreamble => 2,
+            Self::CrcMismatch => 3,
+            Self::MissingIdentity => 4,
+            Self::MissingExecution => 5,
+            Self::CapabilityDenied(_) => 6,
+            Self::InsufficientRam => 7,
+            Self::InsufficientStack => 8,
+            Self::RelocationFailed => 9,
+            Self::ImportBindingFailed => 10,
+            Self::VmDisabled => 11,
+            Self::PayloadTooLarge => 12,
+            Self::ExecutionFailed => 13,
+            Self::InvalidEntryPoint => 14,
+            Self::TruncatedPackage => 15,
+            Self::UnsupportedProfile => 16,
         }
     }
 
+    pub const fn title(&self) -> &'static str {
+        utils::format::nth_cstr(LAUNCH_ERR_TEXTS, self.index() * 2)
+    }
+
     pub const fn message(&self) -> &'static str {
-        match self {
-            Self::FileNotFound => "File not found",
-            Self::ReadFailed => "Storage read error",
-            Self::InvalidPreamble => "Bad package header",
-            Self::CrcMismatch => "CRC check failed",
-            Self::MissingIdentity => "Missing identity",
-            Self::MissingExecution => "Missing manifest",
-            Self::CapabilityDenied(cap) => cap,
-            Self::InsufficientRam => "Not enough RAM",
-            Self::InsufficientStack => "Stack headroom low",
-            Self::RelocationFailed => "Relocation failed",
-            Self::ImportBindingFailed => "API not available",
-            Self::VmDisabled => "VM disabled",
-            Self::PayloadTooLarge => "Package too large",
-            Self::ExecutionFailed => "Execution failed",
-            Self::InvalidEntryPoint => "Invalid entry point",
-            Self::TruncatedPackage => "Truncated payload",
-            Self::UnsupportedProfile => "Unsupported profile",
+        if let Self::CapabilityDenied(cap) = self {
+            cap
+        } else {
+            utils::format::nth_cstr(LAUNCH_ERR_TEXTS, self.index() * 2 + 1)
         }
     }
 }
