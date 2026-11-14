@@ -40,13 +40,8 @@ struct Ep0MultiPacket {
 pub struct UsbDriver {
     last_sof_ms: u32,
     last_transition_ms: u32,
-    ep0_transfer: Option<Ep0MultiPacket>,
-    battery_voltage_mv: u16,
-    product_len: u8,
-    battery_pct: u8,
-    product_name: [u8; 32],
 
-    // Keep consecutive 1-byte state flags 4-byte aligned for Cortex-M0+ reset clears.
+    // Keep consecutive 1-byte state flags 4-byte aligned and < 32 B for Cortex-M0+ Thumb-1 imm5.
     is_connected: bool,
     was_connected: bool,
     consecutive_sof: u8,
@@ -58,6 +53,12 @@ pub struct UsbDriver {
 
     #[cfg(feature = "usb_cdc")]
     pending_set_line_coding: bool,
+    product_len: u8,
+    battery_pct: u8,
+    battery_voltage_mv: u16,
+
+    ep0_transfer: Option<Ep0MultiPacket>,
+    product_name: [u8; 32],
 
     #[cfg(feature = "usb_cdc")]
     cdc: CdcEngine,
