@@ -148,8 +148,44 @@ impl ContactRecord {
         unsafe { &mut *(self as *mut Self as *mut [u8; 32]) }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn from_bytes(bytes: &[u8; 32]) -> Self {
-        unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
+        Self {
+            address: [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]],
+            contact_type: bytes[6],
+            call_type: bytes[7],
+            name: [
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+                bytes[15], bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21],
+            ],
+            sub_id: u16::from_le_bytes([bytes[22], bytes[23]]),
+            flags: u16::from_le_bytes([bytes[24], bytes[25]]),
+            last_rssi_dbm: bytes[26] as i8,
+            battery_metric: bytes[27],
+            role_capabilities: bytes[28],
+            lqi: bytes[29],
+            reserved: [bytes[30], bytes[31]],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contact_record_roundtrip() {
+        let mut rec = ContactRecord::new_numeric(ContactRecord::TYPE_DMR, 0x0102_0304, "REPEATER");
+        rec.sub_id = 0x1234;
+        rec.flags = ContactRecord::FLAG_FAVORITE | ContactRecord::FLAG_AUTO_ACK;
+        rec.last_rssi_dbm = -87;
+        rec.battery_metric = 0x80 | 82;
+        rec.role_capabilities = ContactRecord::ROLE_ROUTER;
+        rec.lqi = 240;
+
+        let decoded = ContactRecord::from_bytes(rec.as_bytes());
+        assert_eq!(decoded, rec);
+        assert_eq!(decoded.numeric_id(), 0x0102_0304);
+        assert_eq!(decoded.name_as_str(), "REPEATER");
     }
 }

@@ -88,12 +88,10 @@ impl<I2C: I2c> Bk1080<I2C> {
         // Auto band select: band 3 (64-76MHz) vs band 1 (76-108MHz)
         let auto_band: u8 = if freq_10k < 7600 { 3 } else { 1 };
         let limit_10k: u16 = if auto_band == 3 { 6400 } else { 7600 };
-        let spacing_khz = 100u16; // 100 kHz spacing
 
-        let channel = (((freq_10k as u32 * 10).saturating_sub(limit_10k as u32 * 10))
-            / spacing_khz as u32) as u16;
+        let (channel, _) = utils::math::div10_u16(freq_10k.saturating_sub(limit_10k));
 
-        let reg5 = self.read_reg(REG_SYSTEM_CONFIG2).unwrap_or(0x0A1F);
+        let reg5 = self.read_reg(REG_SYSTEM_CONFIG2)?;
         let updated_reg5 = (reg5 & !0x00F0) | ((auto_band as u16 & 3) << 6) | (1 << 4); // 100kHz space
         self.write_reg(REG_SYSTEM_CONFIG2, updated_reg5)?;
 

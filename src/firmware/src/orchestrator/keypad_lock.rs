@@ -179,7 +179,9 @@ impl KeypadLockManager {
                 // Anti-phantom tap protection: if elapsed time exceeds base hold delay (e.g. 550ms)
                 // and hardware scanner NEVER confirmed KeyState::Held, this was a short tap
                 // whose release was missed or consumed by an app -> abort hold tracking!
-                if self.hold_elapsed_ms >= (base_hold_delay_ms + 150) && !self.held_confirmed {
+                if self.hold_elapsed_ms >= base_hold_delay_ms.saturating_add(150)
+                    && !self.held_confirmed
+                {
                     self.reset_hold_tracking();
                 } else if self.held_confirmed
                     && self.hold_elapsed_ms >= self.hold_target_ms

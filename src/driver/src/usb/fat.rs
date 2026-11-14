@@ -35,6 +35,9 @@ impl VirtualFat {
     /// Read a 512-byte sector by Logical Block Address (LBA).
     pub fn read_sector(lba: u32, buf: &mut [u8; SECTOR_SIZE]) {
         buf.fill(0);
+        if lba >= TOTAL_SECTORS {
+            return;
+        }
 
         if lba == BOOT_SECTOR {
             Self::fill_boot_sector(buf);
@@ -207,5 +210,21 @@ impl VirtualFat {
           \r\n\
           [security]\r\n\
           passcode_enabled=false\r\n"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_sector_rejects_out_of_bounds_lba() {
+        let mut buf = [0xAAu8; SECTOR_SIZE];
+        VirtualFat::read_sector(TOTAL_SECTORS, &mut buf);
+        assert!(buf.iter().all(|&b| b == 0));
+
+        // Ensure wrapped LBA >= DATA_START + 65536 does not alias CLUSTER_README (2).
+        VirtualFat::read_sector(DATA_START + 65536, &mut buf);
+        assert!(buf.iter().all(|&b| b == 0));
     }
 }
