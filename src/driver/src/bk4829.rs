@@ -1499,29 +1499,28 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
 
     #[inline(never)]
     fn set_sub_hz_offset(&mut self, carrier_hz: u32, offset_dhz: i16) {
-        if offset_dhz == 0 {
+        let (nominal_10hz, _) = utils::div10_u32(carrier_hz);
+        let adjusted_10hz = if offset_dhz == 0 {
             self.set_crystal_trim(self.baseline_xtal_trim);
-            let (low, high) = tuning::calculate_pll_dividers(Frequency::new(carrier_hz));
-            self.write_pll_words(low, high);
-            return;
-        }
+            nominal_10hz as i32
+        } else {
+            let res = kernel::service::radio::vernier::solve_vernier(carrier_hz, offset_dhz);
+            let final_trim = (self.baseline_xtal_trim as i32 + res.xtal_trim_offset as i32)
+                .clamp(-300, 300) as i16;
+            self.set_crystal_trim(final_trim);
+            nominal_10hz as i32 + res.pll_comp_10hz as i32
+        };
 
-        let res = kernel::service::radio::vernier::solve_vernier(carrier_hz, offset_dhz);
-        let final_trim =
-            (self.baseline_xtal_trim as i32 + res.xtal_trim_offset as i32).clamp(-300, 300) as i16;
-        self.set_crystal_trim(final_trim);
-
-        let (nominal_10hz_u32, _) = utils::div10_u32(carrier_hz);
-        let nominal_10hz = nominal_10hz_u32 as i32;
-        let adjusted_10hz = nominal_10hz + res.pll_comp_10hz as i32;
         let low = (adjusted_10hz & 0xFFFF) as u16;
         let high = ((adjusted_10hz >> 16) & 0xFFFF) as u16;
         self.write_pll_words(low, high);
 
-        // Toggle REG_SYS_POWER to re-sync PLL lock across trim changes (PR 271)
-        let reg30 = self.read_reg(REG_SYS_POWER);
-        self.write_reg(REG_SYS_POWER, 0);
-        self.write_reg(REG_SYS_POWER, reg30);
+        if offset_dhz != 0 {
+            // Toggle REG_SYS_POWER to re-sync PLL lock across trim changes (PR 271)
+            let reg30 = self.read_reg(REG_SYS_POWER);
+            self.write_reg(REG_SYS_POWER, 0);
+            self.write_reg(REG_SYS_POWER, reg30);
+        }
     }
 
     fn get_afc_offset(&mut self) -> i16 {
