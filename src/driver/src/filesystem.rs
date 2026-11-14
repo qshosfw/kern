@@ -76,28 +76,12 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.stats()
     }
 
-    #[inline(never)]
-    pub fn sanitize_path(path: &str) -> Result<&str, StorageError> {
-        let b = path.as_bytes();
-        if b.is_empty() || b[0] != b'/' || b.len() > 31 {
-            return Err(StorageError::InvalidPath);
-        }
-        for i in 0..b.len().saturating_sub(1) {
-            if b[i] == b'.' && b[i + 1] == b'.' {
-                return Err(StorageError::InvalidPath);
-            }
-        }
-        Ok(path)
-    }
-
-    #[inline(never)]
+    #[inline(always)]
     fn map_error(err: FsError) -> StorageError {
-        match err {
-            FsError::NotFound => StorageError::NotFound,
-            FsError::CapacityFull => StorageError::CapacityFull,
-            FsError::AccessDenied => StorageError::AccessDenied,
-            FsError::CorruptedData => StorageError::CorruptedData,
-            _ => StorageError::IoError,
+        if matches!(err, FsError::LowPower) {
+            StorageError::IoError
+        } else {
+            unsafe { core::mem::transmute::<u8, StorageError>(err as u8) }
         }
     }
 
@@ -144,22 +128,19 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
 
 impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     pub fn exists(&mut self, path: &str) -> bool {
-        Self::sanitize_path(path).is_ok() && self.fs.exists(path)
+        self.fs.exists(path)
     }
 
     pub fn remove(&mut self, path: &str) -> Result<(), StorageError> {
-        Self::sanitize_path(path)?;
         self.check_writable(path)?;
         self.fs.remove(path).map_err(Self::map_error)
     }
 
     pub fn file_size(&mut self, path: &str) -> Result<usize, StorageError> {
-        Self::sanitize_path(path)?;
         self.fs.file_size(path).map_err(Self::map_error)
     }
 
     pub fn create_dir(&mut self, path: &str) -> Result<(), StorageError> {
-        Self::sanitize_path(path)?;
         self.fs.create_dir(path).map_err(Self::map_error)
     }
 
@@ -176,11 +157,10 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
-        Self::sanitize_path(path)?;
-        let perm = self.fs.get_permission(path).unwrap_or(0);
-        if (perm & ATTR_ENCRYPTED) != 0 {
-            #[cfg(feature = "secure_fs")]
-            {
+        #[cfg(feature = "secure_fs")]
+        {
+            let perm = self.fs.get_permission(path).unwrap_or(0);
+            if (perm & ATTR_ENCRYPTED) != 0 {
                 if !self.session_unlocked {
                     return Err(StorageError::EncryptedNoKey);
                 }
@@ -197,11 +177,12 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
                 buf[..copy_len].copy_from_slice(&ct[..copy_len]);
                 return Ok(copy_len);
             }
-            #[cfg(not(feature = "secure_fs"))]
-            return Err(StorageError::EncryptedNoKey);
+            self.fs.read_file(path, buf).map_err(Self::map_error)
         }
-
-        self.fs.read_file(path, buf).map_err(Self::map_error)
+        #[cfg(not(feature = "secure_fs"))]
+        {
+            self.read_file_at(path, 0, buf)
+        }
     }
 
     pub fn read_file_at(
@@ -210,7 +191,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         offset: usize,
         buf: &mut [u8],
     ) -> Result<usize, StorageError> {
-        Self::sanitize_path(path)?;
         let perm = self.fs.get_permission(path).unwrap_or(0);
         if (perm & ATTR_ENCRYPTED) != 0 {
             return Err(StorageError::EncryptedNoKey);
@@ -221,7 +201,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
-        Self::sanitize_path(path)?;
         let perm = self.check_writable(path)?;
         if (perm & ATTR_ENCRYPTED) != 0 {
             #[cfg(feature = "secure_fs")]
@@ -250,8 +229,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
                 if !self.session_unlocked {
                     return Err(StorageError::EncryptedNoKey);
                 }
-                // When compiled without `secure_fs` and unlocked, allow non-system writable files
-                // to be updated as plaintext and clear `ATTR_ENCRYPTED`.
                 self.fs.write_file(path, data).map_err(Self::map_error)?;
                 let _ = self.fs.set_permission(path, perm & !ATTR_ENCRYPTED);
                 return Ok(());
@@ -262,7 +239,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     pub fn get_attributes(&mut self, path: &str) -> Result<FileAttributes, StorageError> {
-        Self::sanitize_path(path)?;
         let perm = self.fs.get_permission(path).map_err(Self::map_error)?;
         Ok(FileAttributes { permission: perm })
     }
@@ -272,7 +248,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         path: &str,
         attrs: FileAttributes,
     ) -> Result<(), StorageError> {
-        Self::sanitize_path(path)?;
         let cur_perm = self.fs.get_permission(path).unwrap_or(0);
         if (cur_perm & ATTR_ENCRYPTED) != 0
             && (attrs.permission & ATTR_ENCRYPTED) == 0
@@ -286,9 +261,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     pub fn count_encrypted_in_dir(&mut self, dir_path: &str) -> usize {
-        if dir_path != "/" && Self::sanitize_path(dir_path).is_err() {
-            return 0;
-        }
         let mut count = 0usize;
         let _ = self.fs.list_dir(dir_path, |_path, _size, perm, is_dir| {
             if !is_dir && (perm & ATTR_ENCRYPTED) != 0 {
@@ -303,27 +275,24 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         dir_path: &str,
         out_entries: &mut [DirEntryInfo],
     ) -> Result<usize, StorageError> {
-        if dir_path != "/" {
-            Self::sanitize_path(dir_path)?;
-        }
         let mut count = 0;
-        let _ = self.fs.list_dir(dir_path, |path, size, perm, is_dir| {
-            let already_exists = out_entries[..count].iter().any(|e| e.path.as_str() == path);
-            if !already_exists && count < out_entries.len() {
-                out_entries[count].path.clear();
-                let _ = out_entries[count].path.push_str(path);
-                out_entries[count].size = size;
-                out_entries[count].is_dir = is_dir;
-                out_entries[count].permission = perm;
-                count += 1;
-            }
-        });
+        self.fs
+            .list_dir(dir_path, |path, size, perm, is_dir| {
+                if count < out_entries.len() {
+                    let entry = &mut out_entries[count];
+                    entry.path.clear();
+                    let _ = entry.path.push_str(path);
+                    entry.size = size;
+                    entry.is_dir = is_dir;
+                    entry.permission = perm;
+                    count += 1;
+                }
+            })
+            .map_err(Self::map_error)?;
         Ok(count)
     }
 
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), StorageError> {
-        Self::sanitize_path(old_path)?;
-        Self::sanitize_path(new_path)?;
         let perm = self.fs.get_permission(old_path).map_err(Self::map_error)?;
         if (perm & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0 || old_path.starts_with("/sys/calib.") {
             return Err(StorageError::AccessDenied);
@@ -450,7 +419,8 @@ mod tests {
     #[test]
     fn sanitize_path_enforced_across_all_fs_ops() {
         let mut flash = MemFlash::new();
-        let fs = KernFS::new(&mut flash);
+        let mut fs = KernFS::new(&mut flash);
+        fs.format(None).unwrap();
         let mut drv = FileSystemDriver::new(fs);
 
         for bad in [
@@ -483,7 +453,8 @@ mod tests {
     #[test]
     fn secure_fs_uses_unique_nonces_per_write() {
         let mut flash = MemFlash::new();
-        let fs = KernFS::new(&mut flash);
+        let mut fs = KernFS::new(&mut flash);
+        fs.format(None).unwrap();
         let mut drv = FileSystemDriver::new(fs);
         drv.set_encryption_key([0x5Au8; 16]);
 
@@ -518,7 +489,8 @@ mod tests {
     #[test]
     fn secure_fs_requires_key_and_zeroizes_on_lock() {
         let mut flash = MemFlash::new();
-        let fs = KernFS::new(&mut flash);
+        let mut fs = KernFS::new(&mut flash);
+        fs.format(None).unwrap();
         let mut drv = FileSystemDriver::new(fs);
 
         assert!(!drv.is_session_unlocked());

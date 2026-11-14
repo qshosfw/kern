@@ -135,16 +135,17 @@ pub trait LedService {
 
 // ── Storage & VFS Services ──────────────────────────────────────────────────
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageError {
-    NotFound,
-    IoError,
-    CorruptedData,
-    InvalidIdent,
-    CapacityFull,
-    AccessDenied,
-    EncryptedNoKey,
-    InvalidPath,
+    NotFound = 0,
+    IoError = 1,
+    CorruptedData = 2,
+    InvalidIdent = 3,
+    CapacityFull = 4,
+    AccessDenied = 5,
+    EncryptedNoKey = 6,
+    InvalidPath = 7,
 }
 
 pub const ATTR_READ_ONLY: u8 = 0x01;

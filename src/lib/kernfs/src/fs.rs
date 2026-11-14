@@ -1,697 +1,14 @@
-//! KernFS FileSystem Engine: Ultra-compact, Zero-Alloc `#![no_std]`, Crash-Safe, Wear-Leveled VFS.
+//! KernFS v2: 256-Byte Page-Granular, CoW, Power-Loss-Safe Flash Filesystem.
 
 use crate::device::{BlockDevice, FsError};
+use crate::format::*;
 use crypto::crc::CrcEngine;
 
-pub const FILE_ID_KERNFS: u16 = 0x4B46; // "KF"
-pub const HEADER_SIZE: usize = 64;
-
-#[repr(C, packed)]
 #[derive(Clone, Copy)]
-pub struct SectorHeader {
-    pub ident: u16,       // 0x4B46 ("KF")
-    pub version: u8,      // 0x01
-    pub flags: u8,        // 0x01: Active, 0x02: Encrypted, 0x04: Compressed, 0x80: Deleted
-    pub path_len: u8,     // Length of path string (max 32)
-    pub permission: u8,   // File permission bitmask
-    pub path: [u8; 32],   // Path string (e.g. "/sys/calib.dat")
-    pub payload_len: u32, // Payload size in bytes
-    pub seq_num: u32,     // Sequence counter for atomic commits
-    pub payload_crc: u32, // CRC32 checksum over payload bytes
-    pub header_crc: u32,  // CRC32 checksum over header fields
-}
-
-#[inline(always)]
-fn read_u16_le(buf: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([buf[offset], buf[offset + 1]])
-}
-
-fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        buf[offset],
-        buf[offset + 1],
-        buf[offset + 2],
-        buf[offset + 3],
-    ])
-}
-
-#[inline(always)]
-fn write_u16_le(buf: &mut [u8], offset: usize, val: u16) {
-    let b = val.to_le_bytes();
-    buf[offset] = b[0];
-    buf[offset + 1] = b[1];
-}
-
-fn write_u32_le(buf: &mut [u8], offset: usize, val: u32) {
-    let b = val.to_le_bytes();
-    buf[offset] = b[0];
-    buf[offset + 1] = b[1];
-    buf[offset + 2] = b[2];
-    buf[offset + 3] = b[3];
-}
-
-#[derive(Clone, Copy)]
-struct CacheEntry {
-    path_hash: u32,
-    payload_crc: u32,
-    sector: u16,
-    payload_len: u16,
-    perm: u8,
-    active: u8,
-}
-
-impl CacheEntry {
-    const EMPTY: Self = Self {
-        path_hash: 0,
-        payload_crc: 0,
-        sector: 0,
-        payload_len: 0,
-        perm: 0,
-        active: 0,
-    };
-}
-
-const CACHE_CAPACITY: usize = 24;
-const RESERVE_SECTORS: usize = 2;
-
-fn is_valid_header(header_buf: &[u8; HEADER_SIZE], max_payload: usize) -> bool {
-    let ident = read_u16_le(header_buf, 0);
-    let flags = header_buf[3];
-    let path_len = header_buf[4] as usize;
-    let payload_len = read_u32_le(header_buf, 38) as usize;
-    if ident != FILE_ID_KERNFS
-        || (flags != 0x7F && flags != 0x01)
-        || path_len == 0
-        || path_len > 32
-        || payload_len > max_payload
-    {
-        return false;
-    }
-    CrcEngine::crc32(&header_buf[..50]) == read_u32_le(header_buf, 50)
-}
-
-pub struct KernFS<'a, D: BlockDevice> {
-    pub dev: &'a mut D,
-    next_alloc_sector: usize,
-    max_sector_used: usize,
-    global_seq: u32,
-    // Zero-alloc O(1) cache for active files (16B per entry)
-    cache: [CacheEntry; CACHE_CAPACITY],
-    cached_used: u16,
-    cached_deleted: u16,
-}
-
-impl<'a, D: BlockDevice> KernFS<'a, D> {
-    pub fn new(dev: &'a mut D) -> Self {
-        Self {
-            dev,
-            next_alloc_sector: 0,
-            max_sector_used: 0,
-            global_seq: 1,
-            cache: [CacheEntry::EMPTY; CACHE_CAPACITY],
-            cached_used: 0,
-            cached_deleted: 0,
-        }
-    }
-
-    fn cache_insert(&mut self, path_hash: u32, sector: usize, len: usize, crc: u32, perm: u8) {
-        let entry_val = CacheEntry {
-            path_hash,
-            payload_crc: crc,
-            sector: sector as u16,
-            payload_len: len as u16,
-            perm,
-            active: 1,
-        };
-        let mut empty_slot = None;
-        for entry in self.cache.iter_mut() {
-            if entry.active != 0 && entry.path_hash == path_hash {
-                *entry = entry_val;
-                return;
-            }
-            if entry.active == 0 && empty_slot.is_none() {
-                empty_slot = Some(entry);
-            }
-        }
-        if let Some(slot) = empty_slot {
-            *slot = entry_val;
-        }
-    }
-
-    fn cache_remove(&mut self, path_hash: u32) {
-        for entry in self.cache.iter_mut() {
-            if entry.active != 0 && entry.path_hash == path_hash {
-                *entry = CacheEntry::EMPTY;
-                break;
-            }
-        }
-    }
-
-    /// Mount filesystem, scan sector headers, calculate global sequence number,
-    /// and resolve any interrupted atomic commits by invalidating superseded sectors.
-    pub fn mount(&mut self) -> Result<(), FsError> {
-        let mut max_seq = 0u32;
-        let mut max_sector = 0usize;
-        let mut found_valid = false;
-        let mut header_buf = [0u8; HEADER_SIZE];
-        let mut used = 0u16;
-        let mut deleted = 0u16;
-        self.cache = [CacheEntry::EMPTY; CACHE_CAPACITY];
-
-        for sector in 0..D::TOTAL_BLOCKS {
-            let offset = sector * D::BLOCK_SIZE;
-            if self.dev.read(offset, &mut header_buf).is_ok() {
-                let flags = header_buf[3];
-                if is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE) {
-                    let seq = read_u32_le(&header_buf, 42);
-                    found_valid = true;
-                    used += 1;
-                    max_sector = max_sector.max(sector);
-                    max_seq = max_seq.max(seq);
-
-                    let path_len = header_buf[4] as usize;
-                    let path_hash = CrcEngine::crc32(&header_buf[6..6 + path_len]);
-                    let payload_len = read_u32_le(&header_buf, 38) as usize;
-                    let crc = read_u32_le(&header_buf, 46);
-                    let perm = header_buf[5];
-
-                    // Check if an earlier sector in our scan had the same path_hash
-                    let mut existing_sec = None;
-                    for entry in &self.cache {
-                        if entry.active != 0 && entry.path_hash == path_hash {
-                            existing_sec = Some(entry.sector as usize);
-                            break;
-                        }
-                    }
-
-                    if let Some(prev_sec) = existing_sec {
-                        let mut prev_buf = [0u8; HEADER_SIZE];
-                        if self
-                            .dev
-                            .read(prev_sec * D::BLOCK_SIZE, &mut prev_buf)
-                            .is_ok()
-                            && prev_buf[4] as usize == path_len
-                            && prev_buf[6..6 + path_len] == header_buf[6..6 + path_len]
-                        {
-                            let prev_seq = read_u32_le(&prev_buf, 42);
-                            if seq >= prev_seq {
-                                // Current sector is newer; invalidate previous sector
-                                if self
-                                    .dev
-                                    .program(prev_sec * D::BLOCK_SIZE + 3, &[0x00u8])
-                                    .is_ok()
-                                {
-                                    used = used.saturating_sub(1);
-                                    deleted = deleted.saturating_add(1);
-                                }
-                                self.cache_insert(path_hash, sector, payload_len, crc, perm);
-                            } else {
-                                // Previous sector is newer; invalidate current sector
-                                if self.dev.program(offset + 3, &[0x00u8]).is_ok() {
-                                    used = used.saturating_sub(1);
-                                    deleted = deleted.saturating_add(1);
-                                }
-                            }
-                        } else {
-                            self.cache_insert(path_hash, sector, payload_len, crc, perm);
-                        }
-                    } else {
-                        self.cache_insert(path_hash, sector, payload_len, crc, perm);
-                    }
-                } else if flags == 0x00 {
-                    deleted += 1;
-                    max_sector = max_sector.max(sector);
-                }
-            }
-        }
-
-        self.max_sector_used = max_sector;
-        self.next_alloc_sector = if found_valid || deleted > 0 {
-            (max_sector + 1) & (D::TOTAL_BLOCKS - 1)
-        } else {
-            0
-        };
-        self.cached_used = used;
-        self.cached_deleted = deleted;
-        self.global_seq = max_seq + 1;
-        if found_valid {
-            Ok(())
-        } else {
-            Err(FsError::NotFound)
-        }
-    }
-
-    /// Format active filesystem blocks (erasing all sectors up to `max_sector_used`, min 16).
-    pub fn format(&mut self, progress_cb: Option<&mut dyn FnMut(u8)>) -> Result<(), FsError> {
-        let total = (self.max_sector_used + 1).max(16).min(D::TOTAL_BLOCKS);
-        let mut cb = progress_cb;
-
-        for sector in 0..total {
-            let addr = sector * D::BLOCK_SIZE;
-            self.dev.erase_sector(addr)?;
-
-            if let Some(ref mut f) = cb {
-                let percent = (((sector + 1) * 100) / total) as u8;
-                f(percent);
-            }
-        }
-
-        self.next_alloc_sector = 0;
-        self.max_sector_used = 0;
-        self.global_seq = 1;
-        self.cached_used = 0;
-        self.cached_deleted = 0;
-        self.cache = [CacheEntry::EMPTY; CACHE_CAPACITY];
-        Ok(())
-    }
-
-    /// Check if a path exists.
-    pub fn exists(&mut self, path: &str) -> bool {
-        self.find_best_sector(path).is_some()
-    }
-
-    /// Query exact file payload size in bytes.
-    pub fn file_size(&mut self, path: &str) -> Result<usize, FsError> {
-        let (_, payload_len, _, _) = self.find_best_sector(path).ok_or(FsError::NotFound)?;
-        Ok(payload_len)
-    }
-
-    /// Read file content at `path` into `buf`.
-    /// Reads up to `buf.len()` bytes.
-    /// If `buf.len() >= payload_len`, verifies payload CRC32 and returns `Ok(payload_len)`.
-    /// If `buf.len() < payload_len`, reads the first `buf.len()` bytes and returns `Ok(buf.len())`.
-    pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, FsError> {
-        let (sector, payload_len, payload_crc, _) =
-            self.find_best_sector(path).ok_or(FsError::NotFound)?;
-
-        let to_read = buf.len().min(payload_len);
-        if to_read == 0 {
-            return Ok(0);
-        }
-
-        let data_offset = sector * D::BLOCK_SIZE + HEADER_SIZE;
-        self.dev.read(data_offset, &mut buf[..to_read])?;
-
-        // If a full payload was read into buf, verify CRC32 checksum
-        if buf.len() >= payload_len {
-            let computed_crc = CrcEngine::crc32(&buf[..payload_len]);
-            if computed_crc != payload_crc {
-                return Err(FsError::CorruptedData);
-            }
-        }
-
-        Ok(to_read)
-    }
-
-    /// Read file content at `path` starting at byte `offset` into `buf`.
-    /// Reads up to `buf.len()` bytes without heap allocation.
-    pub fn read_file_at(
-        &mut self,
-        path: &str,
-        offset: usize,
-        buf: &mut [u8],
-    ) -> Result<usize, FsError> {
-        let (sector, payload_len, _, _) = self.find_best_sector(path).ok_or(FsError::NotFound)?;
-
-        if offset >= payload_len || buf.is_empty() {
-            return Ok(0);
-        }
-
-        let to_read = buf.len().min(payload_len - offset);
-        let data_offset = sector * D::BLOCK_SIZE + HEADER_SIZE + offset;
-        self.dev.read(data_offset, &mut buf[..to_read])?;
-        Ok(to_read)
-    }
-
-    fn invalidate_sector(&mut self, sector: usize) -> Result<(), FsError> {
-        self.dev.program(sector * D::BLOCK_SIZE + 3, &[0x00u8])?;
-        self.cached_used = self.cached_used.saturating_sub(1);
-        self.cached_deleted = self.cached_deleted.saturating_add(1);
-        Ok(())
-    }
-
-    fn commit_header_and_cache(
-        &mut self,
-        path: &str,
-        target_sector: usize,
-        payload_len: usize,
-        payload_crc: u32,
-        perm: u8,
-        old_sector: Option<usize>,
-    ) -> Result<(), FsError> {
-        self.global_seq += 1;
-        let mut header_buf = [0u8; HEADER_SIZE];
-        write_u16_le(&mut header_buf, 0, FILE_ID_KERNFS);
-        header_buf[2] = 0x01; // Version 1
-        header_buf[3] = 0x7F; // Committed state for header_crc calculation
-        header_buf[4] = path.len() as u8;
-        header_buf[5] = perm;
-        header_buf[6..6 + path.len()].copy_from_slice(path.as_bytes());
-        write_u32_le(&mut header_buf, 38, payload_len as u32);
-        write_u32_le(&mut header_buf, 42, self.global_seq);
-        write_u32_le(&mut header_buf, 46, payload_crc);
-        let header_crc = CrcEngine::crc32(&header_buf[..50]);
-        write_u32_le(&mut header_buf, 50, header_crc);
-
-        // Two-phase atomic commit: stage with flags = 0xFF, then commit 0x7F (1->0 bit transition)
-        header_buf[3] = 0xFF;
-        let target_offset = target_sector * D::BLOCK_SIZE;
-        self.dev.program(target_offset, &header_buf)?;
-        self.dev.program(target_offset + 3, &[0x7Fu8])?;
-
-        if let Some(old) = old_sector
-            && old != target_sector
-        {
-            let _ = self.invalidate_sector(old);
-        }
-
-        self.max_sector_used = self.max_sector_used.max(target_sector);
-
-        let path_hash = CrcEngine::crc32(path.as_bytes());
-        self.cache_insert(path_hash, target_sector, payload_len, payload_crc, perm);
-        self.cached_used = self.cached_used.saturating_add(1);
-        Ok(())
-    }
-
-    /// Write payload atomically to `path` with wear leveling and power-loss protection.
-    pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
-        if data.len() > (D::BLOCK_SIZE - HEADER_SIZE) {
-            return Err(FsError::CapacityFull);
-        }
-        if path.len() > 32 {
-            return Err(FsError::InvalidPath);
-        }
-
-        let prev_entry = self.find_best_sector(path);
-        let existing_perm = prev_entry.map_or(0u8, |(_, _, _, perm)| perm);
-
-        let target_sector = self.find_free_sector(prev_entry.is_some())?;
-        let target_offset = target_sector * D::BLOCK_SIZE;
-
-        // Erase target sector before writing
-        self.dev.erase_sector(target_offset)?;
-
-        let payload_crc = CrcEngine::crc32(data);
-        self.dev.program(target_offset + HEADER_SIZE, data)?;
-
-        self.commit_header_and_cache(
-            path,
-            target_sector,
-            data.len(),
-            payload_crc,
-            existing_perm,
-            prev_entry.map(|(s, _, _, _)| s),
-        )
-    }
-
-    fn relocate_sector(
-        &mut self,
-        src_sector: usize,
-        dst: &str,
-        payload_len: usize,
-        payload_crc: u32,
-        perm: u8,
-        prev_dst: Option<usize>,
-    ) -> Result<(), FsError> {
-        let target_sector = self.find_free_sector(true)?;
-        let target_offset = target_sector * D::BLOCK_SIZE;
-        self.dev.erase_sector(target_offset)?;
-
-        // Stream payload in 128-byte chunks from src_sector to target_sector
-        let mut chunk = [0u8; 128];
-        let mut copied = 0usize;
-        while copied < payload_len {
-            let step = (payload_len - copied).min(chunk.len());
-            self.dev.read(
-                src_sector * D::BLOCK_SIZE + HEADER_SIZE + copied,
-                &mut chunk[..step],
-            )?;
-            self.dev
-                .program(target_offset + HEADER_SIZE + copied, &chunk[..step])?;
-            copied += step;
-        }
-
-        self.commit_header_and_cache(
-            dst,
-            target_sector,
-            payload_len,
-            payload_crc,
-            perm,
-            prev_dst.filter(|&s| s != src_sector),
-        )?;
-        if src_sector != target_sector {
-            let _ = self.invalidate_sector(src_sector);
-        }
-        Ok(())
-    }
-
-    /// Rename or relocate a file from `src` to `dst` using chunked sector-to-sector streaming
-    /// without truncating large payloads or allocating large stack buffers.
-    pub fn rename(&mut self, src: &str, dst: &str) -> Result<(), FsError> {
-        if src == dst {
-            return Ok(());
-        }
-        if dst.len() > 32 {
-            return Err(FsError::InvalidPath);
-        }
-
-        let (src_sector, payload_len, payload_crc, perm) =
-            self.find_best_sector(src).ok_or(FsError::NotFound)?;
-        let prev_dst = self.find_best_sector(dst).map(|(s, _, _, _)| s);
-
-        self.relocate_sector(src_sector, dst, payload_len, payload_crc, perm, prev_dst)?;
-        self.cache_remove(CrcEngine::crc32(src.as_bytes()));
-
-        Ok(())
-    }
-
-    /// Create directory branch (no-op in flat block-structured VFS, kept for trait compatibility).
-    pub fn create_dir(&mut self, _path: &str) -> Result<(), FsError> {
-        Ok(())
-    }
-
-    /// Remove file at `path`.
-    pub fn remove(&mut self, path: &str) -> Result<(), FsError> {
-        if let Some((sector, _, _, _)) = self.find_best_sector(path) {
-            self.invalidate_sector(sector)?;
-            self.cache_remove(CrcEngine::crc32(path.as_bytes()));
-            Ok(())
-        } else {
-            Err(FsError::NotFound)
-        }
-    }
-
-    /// Find sector with highest sequence number matching `path`.
-    fn find_best_sector(&mut self, path: &str) -> Option<(usize, usize, u32, u8)> {
-        let path_bytes = path.as_bytes();
-        let path_hash = CrcEngine::crc32(path_bytes);
-        let mut header_buf = [0u8; HEADER_SIZE];
-
-        // O(1) Cache fast-path with full-path collision & header CRC verification
-        for entry in &self.cache {
-            if entry.active != 0 && entry.path_hash == path_hash {
-                let sec = entry.sector as usize;
-                if self.dev.read(sec * D::BLOCK_SIZE, &mut header_buf).is_ok()
-                    && is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE)
-                    && header_buf[4] as usize == path_bytes.len()
-                    && &header_buf[6..6 + path_bytes.len()] == path_bytes
-                {
-                    return Some((
-                        sec,
-                        entry.payload_len as usize,
-                        entry.payload_crc,
-                        entry.perm,
-                    ));
-                }
-            }
-        }
-
-        // If active files do not exceed cache capacity, an un-cached file is guaranteed absent.
-        if self.cached_used <= CACHE_CAPACITY as u16 {
-            return None;
-        }
-
-        // Cache miss fallback bounded to max_sector_used instead of all 512 sectors
-        let mut best_sector = None;
-        let mut highest_seq = 0u32;
-        let mut best_payload_len = 0usize;
-        let mut best_crc = 0u32;
-        let mut best_permission = 0u8;
-
-        let scan_limit = (self.max_sector_used + 1).min(D::TOTAL_BLOCKS);
-
-        for sector in 0..scan_limit {
-            let offset = sector * D::BLOCK_SIZE;
-            if self.dev.read(offset, &mut header_buf).is_ok() {
-                let path_len = header_buf[4] as usize;
-                let perm = header_buf[5];
-
-                if is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE)
-                    && path_len == path_bytes.len()
-                    && &header_buf[6..6 + path_len] == path_bytes
-                {
-                    let seq = read_u32_le(&header_buf, 42);
-                    if seq > highest_seq {
-                        highest_seq = seq;
-                        best_sector = Some(sector);
-                        best_payload_len = read_u32_le(&header_buf, 38) as usize;
-                        best_crc = read_u32_le(&header_buf, 46);
-                        best_permission = perm;
-                    }
-                }
-            }
-        }
-
-        // Populate cache on miss
-        if let Some(s) = best_sector {
-            self.cache_insert(path_hash, s, best_payload_len, best_crc, best_permission);
-        }
-
-        best_sector.map(|s| (s, best_payload_len, best_crc, best_permission))
-    }
-
-    /// Find next clean/free sector using round-robin wear leveling.
-    /// Reserves `RESERVE_SECTORS` exclusively for updates to existing files (`is_update == true`).
-    fn find_free_sector(&mut self, is_update: bool) -> Result<usize, FsError> {
-        if !is_update
-            && D::TOTAL_BLOCKS.saturating_sub(self.cached_used as usize) <= RESERVE_SECTORS
-        {
-            return Err(FsError::CapacityFull);
-        }
-
-        let mut header_buf = [0u8; HEADER_SIZE];
-
-        for _ in 0..D::TOTAL_BLOCKS {
-            let sector = self.next_alloc_sector;
-            self.next_alloc_sector = (self.next_alloc_sector + 1) & (D::TOTAL_BLOCKS - 1);
-
-            let offset = sector * D::BLOCK_SIZE;
-            if self.dev.read(offset, &mut header_buf).is_ok() {
-                let ident = read_u16_le(&header_buf, 0);
-                let flags = header_buf[3];
-
-                // Unformatted (ident != FILE_ID_KERNFS), staged/erased (0xFF), or deleted (0x00) sector is free to use
-                if ident != FILE_ID_KERNFS || flags == 0xFF || flags == 0x00 {
-                    return Ok(sector);
-                }
-            }
-        }
-
-        Err(FsError::CapacityFull)
-    }
-
-    pub fn get_permission(&mut self, path: &str) -> Result<u8, FsError> {
-        if let Some((_, _, _, perm)) = self.find_best_sector(path) {
-            Ok(perm)
-        } else {
-            Err(FsError::NotFound)
-        }
-    }
-
-    pub fn set_permission(&mut self, path: &str, perm: u8) -> Result<(), FsError> {
-        if let Some((sector, payload_len, payload_crc, cur_perm)) = self.find_best_sector(path) {
-            if cur_perm == perm {
-                return Ok(());
-            }
-            self.relocate_sector(sector, path, payload_len, payload_crc, perm, Some(sector))
-        } else {
-            Err(FsError::NotFound)
-        }
-    }
-
-    /// List files/directories under `dir_path` by performing a single-pass
-    /// Returns only immediate children — nested paths are collapsed to the first child component.
-    pub fn list_dir<F: FnMut(&str, usize, u8, bool)>(
-        &mut self,
-        dir_path: &str,
-        mut cb: F,
-    ) -> Result<usize, FsError> {
-        let mut count = 0;
-        let mut header_buf = [0u8; HEADER_SIZE];
-        let mut end = dir_path.len();
-        while end > 0 && dir_path.as_bytes()[end - 1] == b'/' {
-            end -= 1;
-        }
-        let target_dir = &dir_path[..end];
-
-        // Single pass over sectors (no nested find_best_sector loops)
-        for sector in 0..D::TOTAL_BLOCKS {
-            let offset = sector * D::BLOCK_SIZE;
-            if self.dev.read(offset, &mut header_buf).is_ok() {
-                let path_len = header_buf[4] as usize;
-                let perm = header_buf[5];
-
-                if is_valid_header(&header_buf, D::BLOCK_SIZE - HEADER_SIZE)
-                    && header_buf[6..6 + path_len].iter().all(|&b| b < 128)
-                {
-                    let full_path =
-                        unsafe { core::str::from_utf8_unchecked(&header_buf[6..6 + path_len]) };
-                    let payload_len = read_u32_le(&header_buf, 38) as usize;
-
-                    // Determine the child portion relative to target_dir
-                    let child_start = if target_dir.is_empty() || target_dir == "/" {
-                        // Root listing: child starts after the leading '/'
-                        if full_path.as_bytes().first() == Some(&b'/') {
-                            1
-                        } else {
-                            0
-                        }
-                    } else {
-                        let fp_bytes = full_path.as_bytes();
-                        let td_bytes = target_dir.as_bytes();
-                        if fp_bytes.starts_with(td_bytes)
-                            && fp_bytes.get(td_bytes.len()) == Some(&b'/')
-                        {
-                            td_bytes.len() + 1 // skip past target_dir + '/'
-                        } else {
-                            continue; // not under this directory
-                        }
-                    };
-
-                    if child_start >= full_path.len() {
-                        continue; // exact match on dir itself, skip
-                    }
-
-                    // Extract immediate child: truncate at the next '/' if any
-                    let rest = &full_path.as_bytes()[child_start..];
-                    let (entry_end, is_dir) =
-                        if let Some(slash_pos) = rest.iter().position(|&b| b == b'/') {
-                            (child_start + slash_pos, true) // subdirectory — truncate before the slash
-                        } else {
-                            (full_path.len(), false) // leaf file — use full path
-                        };
-
-                    let entry_path = &full_path[..entry_end];
-                    cb(entry_path, payload_len, perm, is_dir);
-                    count += 1;
-                }
-            }
-        }
-
-        Ok(count)
-    }
-
-    /// Query dynamic filesystem wear leveling and storage statistics in O(1) time without SPI reads.
-    pub fn stats(&self) -> FsStats {
-        let mut active = 0u16;
-        for entry in &self.cache {
-            if entry.active != 0 {
-                active += 1;
-            }
-        }
-        let total = D::TOTAL_BLOCKS as u16;
-        let used = self.cached_used;
-        let deleted = self.cached_deleted;
-        let free = total.saturating_sub(used.saturating_add(deleted));
-        FsStats {
-            active_files: active,
-            used_sectors: used,
-            free_sectors: free,
-            deleted_sectors: deleted,
-            wear_cycles: self.global_seq,
-            total_sectors: total,
-        }
-    }
+pub(crate) enum MetaQuery<'a> {
+    Child(u16, &'a [u8]),
+    FreeSlot,
+    ListDir(u16),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -704,289 +21,621 @@ pub struct FsStats {
     pub total_sectors: u16,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[repr(C)]
+pub struct KernFS<'a, D: BlockDevice> {
+    pub(crate) cur_tag: PageTag,
+    pub(crate) block_seq: u16,
+    pub(crate) cur_alloc_block: u16,
+    pub(crate) hot_ino: u16,
+    pub(crate) active_files: u16,
+    pub(crate) cur_alloc_page: u8,
+    pub(crate) low_power: bool,
+    pub(crate) mounted: bool,
+    pub(crate) in_gc: bool,
+    pub(crate) cur_inode: Inode,
+    pub dev: &'a mut D,
+    pub(crate) format_epoch: u32,
+    pub(crate) super_seq: u32,
+    pub(crate) global_gen: u32,
+    pub(crate) total_erases: u32,
+    pub(crate) hot_hash: u32,
+    pub(crate) page_buf: [u8; PAGE_SIZE],
+    pub(crate) meta_pages: [u16; MAX_META_GROUPS],
+    pub(crate) block_table: [u8; MAX_BLOCKS],
+}
 
-    struct MockFlash {
-        data: [u8; 16 * 4096],
-    }
-
-    impl MockFlash {
-        fn new() -> Self {
-            Self {
-                data: [0xFF; 16 * 4096],
-            }
+impl<'a, D: BlockDevice> KernFS<'a, D> {
+    pub fn new(dev: &'a mut D) -> Self {
+        Self {
+            cur_tag: PageTag::EMPTY,
+            block_seq: 1,
+            cur_alloc_block: 0,
+            hot_ino: 0,
+            active_files: 0,
+            cur_alloc_page: 1,
+            low_power: false,
+            mounted: false,
+            in_gc: false,
+            cur_inode: Inode::EMPTY,
+            dev,
+            format_epoch: 1,
+            super_seq: 1,
+            global_gen: 1,
+            total_erases: 0,
+            hot_hash: 0,
+            page_buf: [0; PAGE_SIZE],
+            meta_pages: [0; MAX_META_GROUPS],
+            block_table: [BLOCK_TBL_ERASED; MAX_BLOCKS],
         }
     }
 
-    impl BlockDevice for MockFlash {
-        const READ_SIZE: usize = 256;
-        const WRITE_SIZE: usize = 256;
-        const BLOCK_SIZE: usize = 4096;
-        const TOTAL_BLOCKS: usize = 16;
+    #[inline(never)]
+    pub(crate) fn reset_tables(&mut self) {
+        self.hot_hash = 0;
+        self.hot_ino = 0;
+        self.active_files = 0;
+        self.meta_pages.fill(0);
+        self.block_table.fill(BLOCK_TBL_ERASED);
+    }
 
-        fn read(&mut self, offset: usize, buf: &mut [u8]) -> Result<(), FsError> {
-            if offset + buf.len() > self.data.len() {
-                return Err(FsError::IoError);
+    /// Enable or clear the brown-out guard (blocks erases/writes below safe voltage).
+    pub fn set_low_power(&mut self, low_power: bool) {
+        self.low_power = low_power;
+    }
+
+    #[inline(never)]
+    pub(crate) fn page_counts(&self) -> (u16, u16) {
+        let mut free_pages = 0u16;
+        let mut obs_pages = 0u16;
+        for b in FIRST_DATA_BLOCK..D::TOTAL_BLOCKS {
+            let v = self.block_table[b];
+            if v != BLOCK_TBL_BAD {
+                free_pages += (v >> 4) as u16;
+                obs_pages += (v & 0x0F) as u16;
             }
-            buf.copy_from_slice(&self.data[offset..offset + buf.len()]);
-            Ok(())
         }
+        (free_pages, obs_pages)
+    }
 
-        fn program(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
-            if offset + data.len() > self.data.len() {
-                return Err(FsError::IoError);
+    #[inline(never)]
+    pub fn stats(&self) -> FsStats {
+        let total = D::TOTAL_BLOCKS as u16;
+        let (free_pages, obs_pages) = self.page_counts();
+        let mut bad_blocks = 0u16;
+        for b in FIRST_DATA_BLOCK..D::TOTAL_BLOCKS {
+            if self.block_table[b] == BLOCK_TBL_BAD {
+                bad_blocks += 1;
             }
-            for (i, &b) in data.iter().enumerate() {
-                self.data[offset + i] &= b;
-            }
-            Ok(())
         }
-
-        fn erase_sector(&mut self, sector_addr: usize) -> Result<(), FsError> {
-            let start = sector_addr;
-            let end = start + Self::BLOCK_SIZE;
-            if end > self.data.len() {
-                return Err(FsError::IoError);
-            }
-            self.data[start..end].fill(0xFF);
-            Ok(())
+        let usable_blocks = (D::TOTAL_BLOCKS - FIRST_DATA_BLOCK) as u16 - bad_blocks;
+        let free_sectors = (((free_pages as u32) * 4369 + 4368) >> 16) as u16;
+        let deleted_sectors = (((obs_pages as u32) * 4369 + 4368) >> 16) as u16;
+        let used_sectors =
+            usable_blocks.saturating_sub(free_sectors.saturating_add(deleted_sectors));
+        FsStats {
+            active_files: self.active_files,
+            used_sectors,
+            free_sectors,
+            deleted_sectors,
+            wear_cycles: self.total_erases.max(self.global_gen),
+            total_sectors: total,
         }
     }
 
-    #[test]
-    fn test_read_file_at_arbitrary_offset() {
-        let mut flash = MockFlash::new();
-        let mut fs = KernFS::new(&mut flash);
-        fs.format(None).unwrap();
-
-        let payload = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        fs.write_file("/test.bin", payload).unwrap();
-
-        let mut out = [0u8; 10];
-        let n = fs.read_file_at("/test.bin", 10, &mut out).unwrap();
-        assert_eq!(n, 10);
-        assert_eq!(&out, b"ABCDEFGHIJ");
-
-        let n2 = fs.read_file_at("/test.bin", 36, &mut out).unwrap();
-        assert_eq!(n2, 10);
-        assert_eq!(&out, b"abcdefghij");
-
-        // Offset beyond length returns 0
-        let n3 = fs.read_file_at("/test.bin", 100, &mut out).unwrap();
-        assert_eq!(n3, 0);
+    #[inline(never)]
+    pub(crate) fn read_tag(&mut self, phys_page: u16) -> Result<(), FsError> {
+        let (block, slot) = split_phys_page(phys_page);
+        if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || slot == 0 {
+            return Err(FsError::CorruptedData);
+        }
+        self.dev
+            .read(tag_flash_offset(block, slot), self.cur_tag.as_bytes_mut())
     }
 
-    #[test]
-    fn test_wrap_around_seq_recovery_and_rename() {
-        let mut flash = MockFlash::new();
-        {
-            let mut fs = KernFS::new(&mut flash);
-            fs.format(None).unwrap();
-            for i in 0..20u8 {
-                let payload = [b'A' + i; 32];
-                fs.write_file("/pref/test.cfg", &payload).unwrap();
-            }
-            fs.rename("/pref/test.cfg", "/pref/renamed.cfg").unwrap();
+    #[inline(never)]
+    pub(crate) fn load_page(&mut self, phys_page: u16) -> Result<(), FsError> {
+        self.read_tag(phys_page)?;
+        self.dev
+            .read(page_flash_offset(phys_page), &mut self.page_buf)?;
+        if CrcEngine::crc32(&self.page_buf) != self.cur_tag.crc32 {
+            return Err(FsError::CorruptedData);
         }
-
-        let mut fs2 = KernFS::new(&mut flash);
-        fs2.mount().unwrap();
-        let mut out = [0u8; 32];
-        let n = fs2.read_file("/pref/renamed.cfg", &mut out).unwrap();
-        assert_eq!(n, 32);
-        assert_eq!(out, [b'A' + 19; 32]);
-        assert!(fs2.read_file("/pref/test.cfg", &mut out).is_err());
+        Ok(())
     }
 
-    struct LargeMockFlash {
-        data: [u8; 32 * 4096],
-    }
-
-    impl LargeMockFlash {
-        fn new() -> Self {
-            Self {
-                data: [0xFF; 32 * 4096],
-            }
-        }
-    }
-
-    impl BlockDevice for LargeMockFlash {
-        const READ_SIZE: usize = 256;
-        const WRITE_SIZE: usize = 256;
-        const BLOCK_SIZE: usize = 4096;
-        const TOTAL_BLOCKS: usize = 32;
-
-        fn read(&mut self, offset: usize, buf: &mut [u8]) -> Result<(), FsError> {
-            if offset + buf.len() > self.data.len() {
-                return Err(FsError::IoError);
-            }
-            buf.copy_from_slice(&self.data[offset..offset + buf.len()]);
-            Ok(())
-        }
-
-        fn program(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
-            if offset + data.len() > self.data.len() {
-                return Err(FsError::IoError);
-            }
-            for (i, &b) in data.iter().enumerate() {
-                self.data[offset + i] &= b;
-            }
-            Ok(())
-        }
-
-        fn erase_sector(&mut self, sector_addr: usize) -> Result<(), FsError> {
-            let start = sector_addr;
-            let end = start + Self::BLOCK_SIZE;
-            if end > self.data.len() {
-                return Err(FsError::IoError);
-            }
-            self.data[start..end].fill(0xFF);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn test_format_does_not_resurrect_high_sectors() {
-        let mut flash = LargeMockFlash::new();
-        {
-            let mut fs = KernFS::new(&mut flash);
-            fs.format(None).unwrap();
-            // Write 20 times so round-robin allocator writes past sector 16
-            for i in 0..20u8 {
-                fs.write_file("/user/ghost.dat", &[i; 16]).unwrap();
-            }
-            assert!(fs.max_sector_used >= 16);
-            fs.format(None).unwrap();
-        }
-
-        let mut fs2 = KernFS::new(&mut flash);
-        assert_eq!(fs2.mount(), Err(FsError::NotFound));
-        assert!(!fs2.exists("/user/ghost.dat"));
-    }
-
-    #[test]
-    fn test_wear_leveling_allocator_persists_across_mounts() {
-        let mut flash = MockFlash::new();
-        let first_next;
-        {
-            let mut fs = KernFS::new(&mut flash);
-            fs.format(None).unwrap();
-            fs.write_file("/a.bin", b"one").unwrap();
-            fs.write_file("/b.bin", b"two").unwrap();
-            first_next = fs.next_alloc_sector;
-            assert!(first_next >= 2);
-        }
-
-        let mut fs2 = KernFS::new(&mut flash);
-        fs2.mount().unwrap();
-        assert_eq!(fs2.next_alloc_sector, first_next);
-        fs2.write_file("/c.bin", b"three").unwrap();
-        assert!(fs2.next_alloc_sector > first_next);
-    }
-
-    #[test]
-    fn test_corrupt_header_crc_rejected() {
-        let mut flash = MockFlash::new();
-        {
-            let mut fs = KernFS::new(&mut flash);
-            fs.format(None).unwrap();
-            fs.write_file("/sys/cfg.dat", b"valid_payload").unwrap();
-        }
-
-        // Flip a bit in payload_len (byte 38 of sector 0)
-        flash.data[38] ^= 0x01;
-
-        let mut fs2 = KernFS::new(&mut flash);
-        assert_eq!(fs2.mount(), Err(FsError::NotFound));
-        let mut buf = [0u8; 32];
-        assert_eq!(
-            fs2.read_file("/sys/cfg.dat", &mut buf),
-            Err(FsError::NotFound)
-        );
-    }
-
-    struct PowerCutFlash {
-        inner: MockFlash,
-        cut_on_commit_flag: bool,
-    }
-
-    impl BlockDevice for PowerCutFlash {
-        const READ_SIZE: usize = 256;
-        const WRITE_SIZE: usize = 256;
-        const BLOCK_SIZE: usize = 4096;
-        const TOTAL_BLOCKS: usize = 16;
-
-        fn read(&mut self, offset: usize, buf: &mut [u8]) -> Result<(), FsError> {
-            self.inner.read(offset, buf)
-        }
-
-        fn program(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
-            if self.cut_on_commit_flag && data == [0x7Fu8] && (offset % Self::BLOCK_SIZE) == 3 {
-                return Err(FsError::IoError);
-            }
-            self.inner.program(offset, data)
-        }
-
-        fn erase_sector(&mut self, sector_addr: usize) -> Result<(), FsError> {
-            self.inner.erase_sector(sector_addr)
-        }
-    }
-
-    #[test]
-    fn test_two_phase_commit_power_cut() {
-        let mut flash = PowerCutFlash {
-            inner: MockFlash::new(),
-            cut_on_commit_flag: false,
+    #[inline(never)]
+    pub(crate) fn program_page_buf(
+        &mut self,
+        phys: u16,
+        ino: u16,
+        page_idx: u16,
+        kind: u8,
+    ) -> Result<u16, FsError> {
+        let (block, slot) = split_phys_page(phys);
+        self.global_gen = self.global_gen.wrapping_add(1);
+        self.cur_tag = PageTag {
+            ino,
+            page_idx,
+            generation: self.global_gen,
+            state: TAG_STATE_COMMITTED,
+            kind,
+            _pad: 0xFFFF,
+            crc32: CrcEngine::crc32(&self.page_buf),
         };
+        if self
+            .dev
+            .program(page_flash_offset(phys), &self.page_buf)
+            .is_err()
+            || self
+                .dev
+                .program(tag_flash_offset(block, slot), self.cur_tag.as_bytes())
+                .is_err()
         {
-            let mut fs = KernFS::new(&mut flash);
-            fs.format(None).unwrap();
-            fs.write_file("/pref/test.cfg", b"v1").unwrap();
+            self.block_table[block] = BLOCK_TBL_BAD;
+            return Err(FsError::IoError);
         }
-
-        flash.cut_on_commit_flag = true;
-        {
-            let mut fs = KernFS::new(&mut flash);
-            fs.mount().unwrap();
-            assert_eq!(
-                fs.write_file("/pref/test.cfg", b"v2"),
-                Err(FsError::IoError)
-            );
-        }
-
-        flash.cut_on_commit_flag = false;
-        let mut fs2 = KernFS::new(&mut flash);
-        fs2.mount().unwrap();
-        let mut out = [0u8; 8];
-        let n = fs2.read_file("/pref/test.cfg", &mut out).unwrap();
-        assert_eq!(&out[..n], b"v1");
+        Ok(phys)
     }
 
-    #[test]
-    fn test_rewrite_reserve_sectors() {
-        let mut flash = MockFlash::new();
-        let mut fs = KernFS::new(&mut flash);
-        fs.format(None).unwrap();
+    #[inline(never)]
+    pub(crate) fn set_tag_state(&mut self, phys_page: u16, new_state: u8) -> Result<(), FsError> {
+        let (block, slot) = split_phys_page(phys_page);
+        if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || slot == 0 {
+            return Ok(());
+        }
+        self.dev
+            .program(tag_flash_offset(block, slot) + 8, &[new_state])?;
+        if new_state == TAG_STATE_OBSOLETE {
+            let v = self.block_table[block];
+            if v != BLOCK_TBL_BAD {
+                let free = v >> 4;
+                let obs = (v & 0x0F).saturating_add(1).min(DATA_PAGES_PER_BLOCK as u8);
+                self.block_table[block] = (free << 4) | obs;
+            }
+        }
+        Ok(())
+    }
 
-        // Fill 14 of 16 sectors (leaving 2 reserve sectors)
-        for i in 0..14u8 {
-            let mut path = [b'/'; 8];
-            path[1] = b'f';
-            path[2] = b'0' + (i / 10);
-            path[3] = b'0' + (i % 10);
-            let s = core::str::from_utf8(&path[..4]).unwrap();
-            fs.write_file(s, &[i; 8]).unwrap();
+    /// O(1) direct inode read by inode number `ino >= 2`.
+    #[inline(never)]
+    pub(crate) fn read_inode(
+        &mut self,
+        ino: u16,
+        out: Option<&mut Inode>,
+    ) -> Result<bool, FsError> {
+        if ino < 2 {
+            return Ok(false);
+        }
+        let g = ((ino - 2) >> 2) as usize;
+        let slot = ((ino - 2) & 3) as usize;
+        if g >= MAX_META_GROUPS || self.meta_pages[g] == 0 {
+            return Ok(false);
+        }
+        self.load_page(self.meta_pages[g])?;
+        let dst = out.unwrap_or(&mut self.cur_inode);
+        Inode::read_slot_into(&self.page_buf, slot, dst);
+        Ok(dst.ino == ino)
+    }
+
+    #[inline(never)]
+    pub(crate) fn scan_meta(
+        &mut self,
+        query: MetaQuery<'_>,
+        mut list_cb: Option<&mut dyn FnMut(&str, usize, u8, bool)>,
+    ) -> Result<u16, FsError> {
+        for g in 0..MAX_META_GROUPS {
+            let mp = self.meta_pages[g];
+            if mp == 0 {
+                if matches!(query, MetaQuery::FreeSlot) {
+                    return Ok((g as u16 * 4) + 2);
+                }
+                continue;
+            }
+            self.load_page(mp)?;
+            for slot in 0..INODES_PER_PAGE {
+                let slot_ino = (g as u16 * 4) + (slot as u16) + 2;
+                if matches!(query, MetaQuery::FreeSlot) {
+                    if Inode::slot_is_free(&self.page_buf, slot) {
+                        return Ok(slot_ino);
+                    }
+                    continue;
+                }
+                Inode::read_slot_into(&self.page_buf, slot, &mut self.cur_inode);
+                if !self.cur_inode.is_active() {
+                    continue;
+                }
+                match query {
+                    MetaQuery::Child(parent_ino, name_bytes) => {
+                        if self.cur_inode.parent_ino == parent_ino
+                            && (name_bytes.is_empty() || self.cur_inode.name_bytes() == name_bytes)
+                        {
+                            return Ok(slot_ino);
+                        }
+                    }
+                    MetaQuery::ListDir(dir_ino) => {
+                        if self.cur_inode.parent_ino == dir_ino
+                            && let Some(cb) = list_cb.as_deref_mut()
+                        {
+                            cb(
+                                self.cur_inode.name_str(),
+                                self.cur_inode.size as usize,
+                                self.cur_inode.perm,
+                                self.cur_inode.is_dir(),
+                            );
+                        }
+                    }
+                    MetaQuery::FreeSlot => {}
+                }
+            }
+        }
+        Ok(0)
+    }
+
+    #[inline(always)]
+    pub(crate) fn find_child_inode(
+        &mut self,
+        parent_ino: u16,
+        name: &[u8],
+    ) -> Result<bool, FsError> {
+        Ok(self.scan_meta(MetaQuery::Child(parent_ino, name), None)? != 0)
+    }
+
+    #[inline(never)]
+    pub(crate) fn alloc_ino(&mut self) -> Result<u16, FsError> {
+        let ino = self.scan_meta(MetaQuery::FreeSlot, None)?;
+        if ino == 0 {
+            Err(FsError::CapacityFull)
+        } else {
+            Ok(ino)
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn init_new_cur_inode(&mut self, parent_ino: u16, name: &[u8]) {
+        self.cur_inode = Inode::EMPTY;
+        self.cur_inode.parent_ino = parent_ino;
+        self.cur_inode.set_name(name);
+    }
+
+    /// Commits a modified or deleted (`inode.ino == 0`) inode at `target_ino` in a single atomic page write.
+    #[inline(never)]
+    pub(crate) fn commit_inode_at(
+        &mut self,
+        target_ino: u16,
+        inode: Option<&Inode>,
+        extra_obsolete: &[u16],
+    ) -> Result<(), FsError> {
+        let new_mp = self.alloc_page(false)?;
+        let g = (((target_ino - 2) >> 2) as usize) & (MAX_META_GROUPS - 1);
+        let slot = ((target_ino - 2) & 3) as usize;
+        let old_mp = self.meta_pages[g];
+        if old_mp != 0 {
+            self.load_page(old_mp)?;
+        } else {
+            self.page_buf.fill(0);
+        }
+        inode
+            .unwrap_or(&self.cur_inode)
+            .write_slot(&mut self.page_buf, slot);
+        self.program_page_buf(new_mp, 0, g as u16, TAG_KIND_META)?;
+        self.meta_pages[g] = new_mp;
+        if old_mp != 0 {
+            let _ = self.set_tag_state(old_mp, TAG_STATE_OBSOLETE);
+        }
+        for &ep in extra_obsolete {
+            if ep != 0 {
+                let _ = self.set_tag_state(ep, TAG_STATE_OBSOLETE);
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn commit_inode(
+        &mut self,
+        inode: &Inode,
+        extra_obsolete: &[u16],
+    ) -> Result<(), FsError> {
+        self.commit_inode_at(inode.ino, Some(inode), extra_obsolete)
+    }
+
+    #[inline(always)]
+    pub(crate) fn commit_cur_inode(&mut self, extra_obsolete: &[u16]) -> Result<(), FsError> {
+        self.commit_inode_at(self.cur_inode.ino, None, extra_obsolete)
+    }
+
+    /// Resolves `path` and loads the target into `self.cur_inode` if found (`Ok(true)`).
+    /// When not found and `create_dirs == true`, initializes `self.cur_inode` with `parent_ino` and `basename` (`Ok(false)`).
+    #[inline(never)]
+    pub(crate) fn resolve_path(&mut self, path: &str, create_dirs: bool) -> Result<bool, FsError> {
+        let b = path.as_bytes();
+        let mut end = b.len();
+        if end == 0 || end > 31 || b[0] != b'/' {
+            return Err(FsError::InvalidPath);
+        }
+        for j in 1..end {
+            if b[j] == b'.' && b[j - 1] == b'.' {
+                return Err(FsError::InvalidPath);
+            }
+        }
+        while end > 1 && b[end - 1] == b'/' {
+            end -= 1;
+        }
+        if end <= 1 {
+            return Err(FsError::InvalidPath);
+        }
+        let mut parent = ROOT_INO;
+        let mut i = 1usize;
+        loop {
+            let start = i;
+            while i < end && b[i] != b'/' {
+                i += 1;
+            }
+            let seg = &b[start..i];
+            if seg.is_empty() || seg == b"." || seg.len() > MAX_NAME_LEN {
+                return Err(FsError::InvalidPath);
+            }
+            if !self.mounted {
+                if i == end {
+                    return Err(FsError::NotFound);
+                }
+                i += 1;
+                continue;
+            }
+            let found = self.find_child_inode(parent, seg)?;
+            if i == end {
+                if !found {
+                    if !create_dirs {
+                        return Err(FsError::NotFound);
+                    }
+                    self.init_new_cur_inode(parent, seg);
+                }
+                return Ok(found);
+            }
+            i += 1; // skip '/'
+            if found {
+                if !self.cur_inode.is_dir() {
+                    return Err(FsError::InvalidPath);
+                }
+                parent = self.cur_inode.ino;
+            } else {
+                if !create_dirs {
+                    return Err(FsError::NotFound);
+                }
+                let ino = self.alloc_ino()?;
+                self.init_new_cur_inode(parent, seg);
+                self.cur_inode.ino = ino;
+                self.cur_inode.flags = INODE_FLAG_DIR;
+                self.commit_cur_inode(&[])?;
+                parent = ino;
+            }
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn lookup_inode(&mut self, path: &str) -> Result<(), FsError> {
+        let hash = CrcEngine::crc32(path.as_bytes());
+        if self.mounted
+            && self.hot_ino >= 2
+            && self.hot_hash == hash
+            && self.read_inode(self.hot_ino, None).unwrap_or(false)
+        {
+            return Ok(());
+        }
+        self.resolve_path(path, false)?;
+        self.hot_hash = hash;
+        self.hot_ino = self.cur_inode.ino;
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub fn exists(&mut self, path: &str) -> bool {
+        self.lookup_inode(path).is_ok()
+    }
+
+    #[inline(never)]
+    pub fn file_size(&mut self, path: &str) -> Result<usize, FsError> {
+        self.lookup_inode(path)?;
+        Ok(self.cur_inode.size as usize)
+    }
+
+    #[inline(never)]
+    pub fn get_permission(&mut self, path: &str) -> Result<u8, FsError> {
+        self.lookup_inode(path)?;
+        Ok(self.cur_inode.perm)
+    }
+
+    #[inline(never)]
+    pub fn create_dir(&mut self, path: &str) -> Result<(), FsError> {
+        if path == "/" {
+            return if self.mounted {
+                Ok(())
+            } else {
+                Err(FsError::NotFound)
+            };
+        }
+        if self.resolve_path(path, true)? {
+            return if self.cur_inode.is_dir() {
+                Ok(())
+            } else {
+                Err(FsError::InvalidPath)
+            };
+        }
+        self.cur_inode.ino = self.alloc_ino()?;
+        self.cur_inode.flags = INODE_FLAG_DIR;
+        self.commit_cur_inode(&[])
+    }
+
+    #[inline(never)]
+    pub(crate) fn resolve_data_page(&mut self, lpage_idx: u16) -> Result<u16, FsError> {
+        let depth = self.cur_inode.depth;
+        let s = if depth == DEPTH_DIRECT {
+            lpage_idx as usize
+        } else if depth == DEPTH_SINGLE_INDIRECT {
+            (lpage_idx >> 7) as usize
+        } else {
+            return Ok(0);
+        };
+        if s >= 8 {
+            return Ok(0);
+        }
+        let mut p = self.cur_inode.l1_page(s);
+        if p != 0 && depth == DEPTH_SINGLE_INDIRECT {
+            self.load_page(p)?;
+            p = read_idx_u16(&self.page_buf, (lpage_idx & 0x7F) as usize);
+        }
+        Ok(p)
+    }
+
+    pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, FsError> {
+        self.read_file_at(path, 0, buf)
+    }
+
+    #[inline(never)]
+    pub fn read_file_at(
+        &mut self,
+        path: &str,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, FsError> {
+        self.lookup_inode(path)?;
+        if self.cur_inode.is_dir() {
+            return Err(FsError::InvalidPath);
+        }
+        let total = self.cur_inode.size as usize;
+        if offset >= total || buf.is_empty() {
+            return Ok(0);
+        }
+        let to_read = (total - offset).min(buf.len());
+        if self.cur_inode.is_inline() {
+            let end = (offset + to_read).min(MAX_INLINE_LEN);
+            let n = end.saturating_sub(offset);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self.cur_inode.inline_data.as_ptr().add(offset),
+                    buf.as_mut_ptr(),
+                    n,
+                );
+            }
+            return Ok(n);
+        }
+        let mut copied = 0usize;
+        while copied < to_read {
+            let pos = offset + copied;
+            let lpage = (pos >> 8) as u16;
+            let in_page = pos & 0xFF;
+            let take = (to_read - copied).min(PAGE_SIZE - in_page);
+            let phys = self.resolve_data_page(lpage)?;
+            if phys != 0 {
+                self.load_page(phys)?;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        self.page_buf.as_ptr().add(in_page),
+                        buf.as_mut_ptr().add(copied),
+                        take,
+                    );
+                }
+            } else {
+                unsafe {
+                    core::ptr::write_bytes(buf.as_mut_ptr().add(copied), 0, take);
+                }
+            }
+            copied += take;
+        }
+        Ok(copied)
+    }
+
+    #[inline(never)]
+    pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
+        if self.low_power {
+            return Err(FsError::LowPower);
+        }
+        let has_existing = self.resolve_path(path, true)?;
+        if has_existing && self.cur_inode.is_dir() {
+            return Err(FsError::InvalidPath);
+        }
+        if !has_existing && !self.has_free_room_for_new() {
+            return Err(FsError::CapacityFull);
         }
 
-        // New file creation must fail with CapacityFull
-        assert_eq!(fs.write_file("/new", b"fail"), Err(FsError::CapacityFull));
+        let mut old_depth = 0u8;
+        let mut old_ptrs = [0u8; MAX_INLINE_LEN];
+        if has_existing {
+            if !self.cur_inode.is_inline() {
+                old_depth = self.cur_inode.depth;
+                old_ptrs = self.cur_inode.inline_data;
+            }
+            self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
+        } else {
+            self.cur_inode.ino = self.alloc_ino()?;
+        }
+        self.cur_inode.size = data.len() as u32;
+        self.cur_inode.generation = self.global_gen + 1;
 
-        // Updating an existing file must succeed using reserve sectors
-        fs.write_file("/f00", b"updated").unwrap();
-        let mut out = [0u8; 8];
-        let n = fs.read_file("/f00", &mut out).unwrap();
-        assert_eq!(&out[..n], b"updated");
+        if data.len() <= MAX_INLINE_LEN {
+            self.cur_inode.flags = INODE_FLAG_INLINE;
+            self.cur_inode.depth = DEPTH_NONE_OR_INLINE;
+            self.cur_inode.inline_data[..data.len()].copy_from_slice(data);
+        } else {
+            self.cur_inode.flags = 0;
+            self.write_fresh_extent_tree(data)?;
+        }
+
+        self.commit_cur_inode(&[])?;
+        self.hot_hash = CrcEngine::crc32(path.as_bytes());
+        self.hot_ino = self.cur_inode.ino;
+
+        if has_existing {
+            self.mark_tree_obsolete(old_depth, &old_ptrs);
+        } else {
+            self.active_files = self.active_files.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    pub fn write_at(&mut self, path: &str, offset: usize, data: &[u8]) -> Result<(), FsError> {
+        match self.lookup_inode(path) {
+            Ok(()) => {}
+            Err(FsError::NotFound) if self.mounted => return self.write_file(path, data),
+            Err(e) => return Err(e),
+        }
+        if self.cur_inode.is_dir() {
+            return Err(FsError::InvalidPath);
+        }
+        if self.low_power {
+            return Err(FsError::LowPower);
+        }
+        let new_end = offset + data.len();
+        let new_size = (self.cur_inode.size as usize).max(new_end);
+        if new_size <= MAX_INLINE_LEN && self.cur_inode.is_inline() {
+            self.cur_inode.inline_data[offset..offset + data.len()].copy_from_slice(data);
+            self.cur_inode.size = new_size as u32;
+            return self.commit_cur_inode(&[]);
+        }
+        self.write_pages_at(offset, data, None)
+    }
+
+    pub fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
+        let cur_sz = self.file_size(path).unwrap_or(0);
+        self.write_at(path, cur_sz, data)
+    }
+
+    /// Append fixed or variable records in a bounded cyclic ring buffer (`max_bytes`).
+    pub fn write_ring(&mut self, path: &str, max_bytes: usize, data: &[u8]) -> Result<(), FsError> {
+        if max_bytes == 0 || data.len() > max_bytes {
+            return Err(FsError::CapacityFull);
+        }
+        let cur_sz = self.file_size(path).unwrap_or(0);
+        if cur_sz + data.len() <= max_bytes {
+            self.append_file(path, data)
+        } else {
+            match self.lookup_inode(path) {
+                Ok(()) => {}
+                Err(FsError::NotFound) if self.mounted => return self.write_file(path, data),
+                Err(e) => return Err(e),
+            }
+            self.cur_inode.flags |= INODE_FLAG_RING;
+            self.write_pages_at(0, data, Some(max_bytes))
+        }
     }
 }
