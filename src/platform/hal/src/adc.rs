@@ -68,9 +68,8 @@ impl Adc {
             adc::ADC_SQR3.write_volatile((channel as u32) & 0x1F);
 
             // 3. Configure internal sensor path for TempSensor (Ch 16) or VREFINT (Ch 17)
-            if channel == 16 || channel == 17 {
+            if channel >= 16 {
                 cr2 |= adc::CR2_TSVREFE;
-                cr2 |= adc::CR2_EXTSEL_SWSTART | adc::CR2_ADON;
                 adc::ADC_CR2.write_volatile(cr2);
                 crate::delay::delay_us(20); // Internal reference buffer stabilization
             }
@@ -105,20 +104,19 @@ impl Adc {
     }
 
     /// Read a software-averaged 12-bit ADC value across `samples` iterations.
+    #[inline(never)]
     pub fn read_channel_averaged(&self, channel: u8, samples: u8) -> u16 {
-        if samples == 0 {
-            return self.read_channel(channel);
-        }
-
+        let count = samples.max(1);
         let mut sum = 0u32;
-        for _ in 0..samples {
+        for _ in 0..count {
             sum += self.read_channel(channel) as u32;
         }
-        if samples.is_power_of_two() {
-            (sum >> samples.trailing_zeros()) as u16
-        } else {
-            (sum / samples as u32) as u16
+        let mut s = count;
+        while s > 1 {
+            sum >>= 1;
+            s >>= 1;
         }
+        sum as u16
     }
 
     /// Configure single-channel analog watchdog thresholds (12-bit counts).
@@ -177,42 +175,33 @@ impl Adc {
             };
 
             // 1. Primary factory calibration at 0x1FFF_3228 (30°C) and 0x1FFF_3230 (105°C)
-            let c1 = TS_CAL1.read_volatile();
-            let c2 = TS_CAL2.read_volatile();
-
-            let (cal1, cal2) =
-                if c1 >= 200 && c1 <= 3800 && c2 > c1 && c2 <= 4000 && (c2 - c1) >= 50 {
-                    (c1, c2)
-                } else {
-                    (0xFFFF, 0xFFFF)
-                };
+            let c1 = TS_CAL1.read_volatile() as u32;
+            let c2 = TS_CAL2.read_volatile() as u32;
 
             // 8-sample software average for high thermal resolution
-            let ts_data = self.read_channel_averaged(16, 8);
+            let ts_data = self.read_channel_averaged(16, 8) as u32;
 
-            // Normalize raw counts to 3.3V factory calibration baseline
-            // Fast reciprocal division: (x * 0x4F7005) >> 34 exact for all x <= 16,000,000
-            let prod = ts_data as u32 * vdda;
-            let ts_data_norm = (((prod as u64) * 0x4F7005) >> 34) as u32;
+            // Normalize raw counts to 3.3V factory calibration baseline:
+            // (vdda * 0x4F70) >> 26 == vdda / 3300 in 32-bit math (exact across 1800..=3800 mV)
+            let ts_data_norm = (ts_data * ((vdda * 0x4F70) >> 12)) >> 14;
 
-            let deci_c = if cal1 == 0xFFFF {
-                // Unprogrammed fallback to typical silicon values:
-                // V_30 = 0.75V (750 mV), Slope = 2.5 mV/°C (4 deci-°C per mV)
-                // Fast reciprocal division: (x * 0x1001002) >> 36 exact for all x <= 16,000,000
-                let prod_mv = ts_data_norm as u64 * 3300;
-                let mv = ((prod_mv * 0x1001002) >> 36) as u32;
-                300 + ((mv as i32 - 750) * 4) as i16
-            } else {
+            let deci_c = if c1 >= 200 && c1 <= 3800 && c2 <= 4000 && c2 >= c1 + 50 {
                 // Two-point linear interpolation between 30°C (300 dC) and 105°C (1050 dC):
                 // delta_T = 1050 - 300 = 750 deci-Celsius
-                let cal_span = (cal2 - cal1) as u32;
-                let c1 = cal1 as u32;
+                let cal_span = c2 - c1;
                 let delta = ((ts_data_norm.abs_diff(c1) * 750) / cal_span) as i16;
                 if ts_data_norm >= c1 {
                     300 + delta
                 } else {
                     300 - delta
                 }
+            } else {
+                // Unprogrammed fallback to typical silicon values:
+                // V_30 = 0.75V (750 mV), Slope = 2.5 mV/°C (4 deci-°C per mV)
+                // mv = (ts_data * vdda) / 4095 via 32-bit (prod + (prod >> 12)) >> 12
+                let prod = ts_data * vdda;
+                let mv = (prod + (prod >> 12)) >> 12;
+                300 + ((mv as i32 - 750) * 4) as i16
             };
 
             // Clamp to physical silicon operating bounds (-40.0°C to +125.0°C)
