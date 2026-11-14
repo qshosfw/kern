@@ -153,35 +153,37 @@ impl TextInputView {
             "Del"
         };
 
+        let mut draw_exit = true;
         if model.digits_only {
             widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
-            widgets::draw_key_badge_right(canvas, 126, by, "EXIT", exit_label);
-            return;
-        }
-
-        let star_label = match model.charset {
-            Charset::Upper | Charset::Lower => "123",
-            Charset::Numbers => "SYM",
-            _ => "ABC",
-        };
-
-        let hash_key = if model.is_k1 { "F" } else { "#" };
-        let case_label = match model.charset {
-            Charset::Upper => "abc",
-            Charset::Lower => "ABC",
-            _ => "Case",
-        };
-
-        let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
-        let enter_label = if show_grid || model.is_k1 {
-            "Enter"
         } else {
-            "OK"
-        };
-        widgets::draw_key_badge(canvas, x0, by, "*", star_label);
-        widgets::draw_key_badge(canvas, x1, by, menu_key, enter_label);
-        widgets::draw_key_badge(canvas, x2, by, hash_key, case_label);
-        if !show_grid {
+            let star_label = match model.charset {
+                Charset::Upper | Charset::Lower => "123",
+                Charset::Numbers => "SYM",
+                _ => "ABC",
+            };
+            let hash_key = if model.is_k1 { "F" } else { "#" };
+            let case_label = match model.charset {
+                Charset::Upper => "abc",
+                Charset::Lower => "ABC",
+                _ => "Case",
+            };
+            let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
+            let enter_label = if show_grid || model.is_k1 {
+                "Enter"
+            } else {
+                "OK"
+            };
+            for &(bx, key, lbl) in &[
+                (x0, "*", star_label),
+                (x1, menu_key, enter_label),
+                (x2, hash_key, case_label),
+            ] {
+                widgets::draw_key_badge(canvas, bx, by, key, lbl);
+            }
+            draw_exit = !show_grid;
+        }
+        if draw_exit {
             widgets::draw_key_badge_right(canvas, 126, by, "EXIT", exit_label);
         }
     }

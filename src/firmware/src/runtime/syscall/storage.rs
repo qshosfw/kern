@@ -63,23 +63,32 @@ pub unsafe extern "C" fn api_storage_read_file(
     unsafe { api_storage_read_file_at(path, path_len, 0, buf, max_len) }
 }
 
-pub unsafe extern "C" fn api_storage_write_file(
-    path: *const u8,
-    path_len: u8,
-    data: *const u8,
-    len: u16,
-) -> u8 {
+fn storage_write_op(path: *const u8, path_len: u8, data: *const u8, len: u16, append: bool) -> u8 {
     if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
         if !data.is_null() {
             let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
             if let Some(ctx) = active_ctx_opt() {
-                if ctx.write_file(path_str, src).is_ok() {
+                let res = if append {
+                    ctx.append_file(path_str, src)
+                } else {
+                    ctx.write_file(path_str, src)
+                };
+                if res.is_ok() {
                     return 0;
                 }
             }
         }
     }
     1
+}
+
+pub unsafe extern "C" fn api_storage_write_file(
+    path: *const u8,
+    path_len: u8,
+    data: *const u8,
+    len: u16,
+) -> u8 {
+    storage_write_op(path, path_len, data, len, false)
 }
 
 pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) -> u8 {
@@ -161,17 +170,7 @@ pub unsafe extern "C" fn api_storage_append_file(
     data: *const u8,
     len: u16,
 ) -> u8 {
-    if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
-        if !data.is_null() {
-            let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            if let Some(ctx) = active_ctx_opt() {
-                if ctx.append_file(path_str, src).is_ok() {
-                    return 0;
-                }
-            }
-        }
-    }
-    1
+    storage_write_op(path, path_len, data, len, true)
 }
 
 pub unsafe extern "C" fn api_storage_rename_file(

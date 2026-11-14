@@ -80,38 +80,37 @@ pub fn draw_modal_progress(canvas: &mut Canvas, title: &str, subtitle: &str, pro
 
 /// Draw an authentic KERN inverted filled key badge (e.g. [M] Format)
 #[inline(never)]
+fn key_badge_key_width(key_str: &str) -> u8 {
+    match key_str.as_bytes() {
+        b"^" | b"v" | b"V" => 5,
+        _ => text::str_width(key_str, &crate::fonts::tomthumb::FONT) as u8,
+    }
+}
+
 pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label: &str) {
     let font = &crate::fonts::tomthumb::FONT;
-    let is_up = key_str == "^";
-    let is_down = key_str == "v" || key_str == "V";
-
-    let box_w = if is_up || is_down {
-        9u8
-    } else {
-        (text::str_width(key_str, font) as u8) + 4
-    };
+    let box_w = key_badge_key_width(key_str) + 4;
 
     canvas.fill_rect(x as u8, y as u8, box_w, 7, Color::Fill);
 
-    if is_up || is_down {
-        let pattern: [u8; 3] = if is_up {
-            [0b00100, 0b01010, 0b10001]
-        } else {
-            [0b10001, 0b01010, 0b00100]
-        };
-        for (row, &bits) in pattern.iter().enumerate() {
-            for col in 0..5 {
-                if (bits & (0x10 >> col)) != 0 {
-                    canvas.draw_pixel(
-                        (x + 2 + col) as u8,
-                        (y + 2 + row as i16) as u8,
-                        Color::Clear,
-                    );
-                }
+    match key_str.as_bytes() {
+        b"^" | b"v" | b"V" => {
+            let (apex_y, base_y) = if key_str.as_bytes()[0] == b'^' {
+                (y + 2, y + 4)
+            } else {
+                (y + 4, y + 2)
+            };
+            for (px, py) in [
+                (x + 4, apex_y),
+                (x + 3, y + 3),
+                (x + 5, y + 3),
+                (x + 2, base_y),
+                (x + 6, base_y),
+            ] {
+                canvas.draw_pixel(px as u8, py as u8, Color::Clear);
             }
         }
-    } else {
-        text::draw_str(canvas, x + 2, y + 5, key_str, font, Color::Clear);
+        _ => text::draw_str(canvas, x + 2, y + 5, key_str, font, Color::Clear),
     }
 
     if !label.is_empty() {
@@ -130,11 +129,7 @@ pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label:
 #[inline(never)]
 pub fn draw_key_badge_right(canvas: &mut Canvas, right_x: i16, y: i16, key_str: &str, label: &str) {
     let font = &crate::fonts::tomthumb::FONT;
-    let key_w = if key_str == "^" || key_str == "v" || key_str == "V" {
-        5
-    } else {
-        text::str_width(key_str, font)
-    };
+    let key_w = key_badge_key_width(key_str) as i16;
     let label_w = if label.is_empty() {
         0
     } else {

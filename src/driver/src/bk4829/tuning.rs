@@ -9,7 +9,7 @@ pub const XTAL_BASELINE_26MHZ: i32 = 22656;
 #[inline(always)]
 pub fn calculate_pll_dividers(freq: Frequency<Hertz>) -> (u16, u16) {
     let hz = freq.raw();
-    let freq_10hz = hz / 10;
+    let (freq_10hz, _) = utils::math::div10_u32(hz);
     let low = (freq_10hz & 0xFFFF) as u16;
     let high = ((freq_10hz >> 16) & 0xFFFF) as u16;
     (low, high)

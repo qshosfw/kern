@@ -117,30 +117,56 @@ impl<S: SerialPort> WireDriver<S> {
     }
 
     #[inline(never)]
+    fn send_frame(
+        &mut self,
+        service: u8,
+        opcode: u8,
+        sequence: u32,
+        status: Option<WireStatus>,
+        payload_data: &[u8],
+    ) -> Result<usize, WireStatus> {
+        let mut raw_buf = [0u8; MAX_RAW_BUF_LEN];
+        let mut wire_out = [0u8; MAX_WIRE_BUF_LEN];
+
+        let frame_len = match status {
+            Some(st) => self.session.frame_response(
+                service,
+                opcode,
+                sequence,
+                st,
+                payload_data,
+                &mut raw_buf,
+                &mut wire_out,
+            )?,
+            None => self.session.frame_event(
+                service,
+                opcode,
+                sequence,
+                payload_data,
+                &mut raw_buf,
+                &mut wire_out,
+            )?,
+        };
+
+        self.port.write(&wire_out[..frame_len]);
+        Ok(frame_len)
+    }
+
     pub fn send_response(
         &mut self,
         header: &WireHeader,
         status: WireStatus,
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
-        let mut raw_buf = [0u8; MAX_RAW_BUF_LEN];
-        let mut wire_out = [0u8; MAX_WIRE_BUF_LEN];
-
-        let frame_len = self.session.frame_response(
+        self.send_frame(
             header.service,
             header.opcode,
             header.sequence,
-            status,
+            Some(status),
             payload_data,
-            &mut raw_buf,
-            &mut wire_out,
-        )?;
-
-        self.port.write(&wire_out[..frame_len]);
-        Ok(frame_len)
+        )
     }
 
-    #[inline(never)]
     pub fn send_event(
         &mut self,
         service: u8,
@@ -148,19 +174,6 @@ impl<S: SerialPort> WireDriver<S> {
         sequence: u32,
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
-        let mut raw_buf = [0u8; MAX_RAW_BUF_LEN];
-        let mut wire_out = [0u8; MAX_WIRE_BUF_LEN];
-
-        let frame_len = self.session.frame_event(
-            service,
-            opcode,
-            sequence,
-            payload_data,
-            &mut raw_buf,
-            &mut wire_out,
-        )?;
-
-        self.port.write(&wire_out[..frame_len]);
-        Ok(frame_len)
+        self.send_frame(service, opcode, sequence, None, payload_data)
     }
 }

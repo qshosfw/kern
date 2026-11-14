@@ -42,6 +42,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.stats()
     }
 
+    #[inline(never)]
     pub fn sanitize_path(path: &str) -> Result<&str, StorageError> {
         let b = path.as_bytes();
         if b.is_empty() || b[0] != b'/' || b.len() > 31 {
@@ -55,6 +56,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         Ok(path)
     }
 
+    #[inline(never)]
     fn map_error(err: FsError) -> StorageError {
         match err {
             FsError::NotFound => StorageError::NotFound,
@@ -63,6 +65,15 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             FsError::CorruptedData => StorageError::CorruptedData,
             _ => StorageError::IoError,
         }
+    }
+
+    #[inline(never)]
+    fn check_writable(&mut self, path: &str) -> Result<u8, StorageError> {
+        let perm = self.fs.get_permission(path).unwrap_or(0);
+        if (perm & (ATTR_READ_ONLY | ATTR_SYSTEM)) != 0 {
+            return Err(StorageError::AccessDenied);
+        }
+        Ok(perm)
     }
 
     #[cfg(feature = "secure_fs")]
@@ -98,10 +109,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     pub fn remove(&mut self, path: &str) -> Result<(), StorageError> {
-        let perm = self.fs.get_permission(path).unwrap_or(0);
-        if (perm & ATTR_READ_ONLY) != 0 || (perm & ATTR_SYSTEM) != 0 {
-            return Err(StorageError::AccessDenied);
-        }
+        self.check_writable(path)?;
         self.fs.remove(path).map_err(Self::map_error)
     }
 
@@ -165,10 +173,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
 
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         Self::sanitize_path(path)?;
-        let perm = self.fs.get_permission(path).unwrap_or(0);
-        if (perm & ATTR_READ_ONLY) != 0 || (perm & ATTR_SYSTEM) != 0 {
-            return Err(StorageError::AccessDenied);
-        }
+        let perm = self.check_writable(path)?;
         if (perm & ATTR_ENCRYPTED) != 0 {
             #[cfg(feature = "secure_fs")]
             {

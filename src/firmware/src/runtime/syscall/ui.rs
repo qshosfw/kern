@@ -176,33 +176,6 @@ pub unsafe extern "C" fn api_ui_draw_s_meter(x: i16, y: i16, rssi_dbm: i16, peak
     );
 }
 
-#[inline(never)]
-fn draw_pill(x: i16, y: i16, w: u8, h: u8, s: &str, filled: bool, tx: i16) {
-    let canvas = super::active_canvas_mut();
-    let xu = x.max(0) as u8;
-    let yu = y.max(0) as u8;
-    let (fc, tc) = if filled {
-        (gfx::Color::Fill, gfx::Color::Clear)
-    } else {
-        (gfx::Color::Clear, gfx::Color::Fill)
-    };
-    canvas.fill_rect(xu, yu, w, h, fc);
-    if !filled {
-        canvas.draw_rect(xu, yu, w, h, gfx::Color::Fill);
-    }
-    if h >= 9 {
-        canvas.clear_corners(xu, yu, w, h);
-    }
-    gfx::text::draw_str(
-        canvas,
-        tx,
-        y + (h as i16 >> 1) + 2,
-        s,
-        &gfx::fonts::tomthumb::FONT,
-        tc,
-    );
-}
-
 pub unsafe extern "C" fn api_ui_draw_tag_badge(
     x: i16,
     y: i16,
@@ -211,8 +184,12 @@ pub unsafe extern "C" fn api_ui_draw_tag_badge(
     style: u8,
 ) {
     if let Some(s) = unsafe { super::parse_str(text, len as usize) } {
-        let w = (gfx::text::str_width(s, &gfx::fonts::tomthumb::FONT) as u8).saturating_add(6);
-        draw_pill(x, y, w, 9, s, style == 1, x + 3);
+        let st = if style == 1 {
+            gfx::widgets::BadgeStyle::Filled
+        } else {
+            gfx::widgets::BadgeStyle::Empty
+        };
+        gfx::widgets::draw_tag_badge(super::active_canvas_mut(), x, y, s, st);
     }
 }
 
@@ -239,8 +216,12 @@ pub unsafe extern "C" fn api_ui_draw_capsule_button(
     selected: u8,
 ) {
     let s = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
-    let tw = gfx::text::str_width(s, &gfx::fonts::tomthumb::FONT);
-    draw_pill(x, y, w, h, s, selected != 0, x + ((w as i16 - tw) >> 1));
+    let st = if selected != 0 {
+        gfx::widgets::BadgeStyle::Filled
+    } else {
+        gfx::widgets::BadgeStyle::Empty
+    };
+    gfx::widgets::draw_capsule_button(super::active_canvas_mut(), x, y, w, h, s, st);
 }
 
 pub unsafe extern "C" fn api_ui_draw_scrollbar(

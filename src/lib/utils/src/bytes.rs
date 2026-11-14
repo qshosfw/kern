@@ -51,7 +51,7 @@ impl<'a> ByteWriter<'a> {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn write_u8(&mut self, val: u8) -> bool {
         if self.pos < self.buf.len() {
             self.buf[self.pos] = val;
@@ -62,29 +62,29 @@ impl<'a> ByteWriter<'a> {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn write_u16_le(&mut self, val: u16) -> bool {
         self.write_bytes(&val.to_le_bytes())
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn write_u32_le(&mut self, val: u32) -> bool {
         self.write_bytes(&val.to_le_bytes())
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn write_u64_le(&mut self, val: u64) -> bool {
         self.write_bytes(&val.to_le_bytes())
     }
 
     #[inline(always)]
     pub fn write_i16_le(&mut self, val: i16) -> bool {
-        self.write_bytes(&val.to_le_bytes())
+        self.write_u16_le(val as u16)
     }
 
     #[inline(always)]
     pub fn write_i32_le(&mut self, val: i32) -> bool {
-        self.write_bytes(&val.to_le_bytes())
+        self.write_u32_le(val as u32)
     }
 
     #[inline(never)]
@@ -143,7 +143,7 @@ impl<'a> ByteReader<'a> {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn read_u8(&mut self) -> Option<u8> {
         if self.pos < self.buf.len() {
             let val = self.buf[self.pos];
@@ -154,37 +154,34 @@ impl<'a> ByteReader<'a> {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn read_u16_le(&mut self) -> Option<u16> {
         let bytes = self.read_bytes(2)?;
         Some(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn read_u32_le(&mut self) -> Option<u32> {
         let bytes = self.read_bytes(4)?;
         Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn read_u64_le(&mut self) -> Option<u64> {
         let bytes = self.read_bytes(8)?;
         Some(u64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]))
     }
 
     #[inline(always)]
     pub fn read_i16_le(&mut self) -> Option<i16> {
-        let bytes = self.read_bytes(2)?;
-        Some(i16::from_le_bytes([bytes[0], bytes[1]]))
+        self.read_u16_le().map(|v| v as i16)
     }
 
     #[inline(always)]
     pub fn read_i32_le(&mut self) -> Option<i32> {
-        let bytes = self.read_bytes(4)?;
-        Some(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        self.read_u32_le().map(|v| v as i32)
     }
 }
 
@@ -200,7 +197,10 @@ mod tests {
         assert!(w.write_u16_le(0x1234));
         assert!(w.write_u32_le(0xDEADBEEF));
         assert_eq!(w.position(), 7);
-        assert_eq!(&w.as_slice()[..7], &[0x42, 0x34, 0x12, 0xEF, 0xBE, 0xAD, 0xDE]);
+        assert_eq!(
+            &w.as_slice()[..7],
+            &[0x42, 0x34, 0x12, 0xEF, 0xBE, 0xAD, 0xDE]
+        );
     }
 
     #[test]

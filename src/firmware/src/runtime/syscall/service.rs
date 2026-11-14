@@ -297,25 +297,27 @@ pub unsafe extern "C" fn api_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     super::super::native_runner::krx_leaf_call(leaf_id, arg)
 }
 
-pub unsafe extern "C" fn api_lease_acquire(lease_kind: u8, timeout_ms: u32) -> u8 {
+fn lease_op(lease_kind: u8, acquire: bool, timeout_ms: u32) -> u8 {
     let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) else {
         return 1;
     };
     let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
-    let tick = py32_hal::delay::millis();
-    crate::orchestrator::lease_manager_mut()
-        .acquire(pid, kind, timeout_ms, tick)
-        .is_err() as u8
+    let mgr = crate::orchestrator::lease_manager_mut();
+    let res = if acquire {
+        let tick = py32_hal::delay::millis();
+        mgr.acquire(pid, kind, timeout_ms, tick)
+    } else {
+        mgr.release(pid, kind)
+    };
+    res.is_err() as u8
+}
+
+pub unsafe extern "C" fn api_lease_acquire(lease_kind: u8, timeout_ms: u32) -> u8 {
+    lease_op(lease_kind, true, timeout_ms)
 }
 
 pub unsafe extern "C" fn api_lease_release(lease_kind: u8) -> u8 {
-    let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) else {
-        return 1;
-    };
-    let pid = kernel::proc::Pid(crate::apps::AppRegistry::count() as u8);
-    crate::orchestrator::lease_manager_mut()
-        .release(pid, kind)
-        .is_err() as u8
+    lease_op(lease_kind, false, 0)
 }
 
 pub unsafe extern "C" fn api_mem_query(

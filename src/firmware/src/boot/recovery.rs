@@ -77,17 +77,22 @@ fn draw_page_overview(
     hbuf: &mut [u8; 8],
     nbuf: &mut [u8; 6],
 ) {
-    draw_item_hex(canvas, 0, 0, "PC:", slot.fault_pc, hbuf);
-    draw_item_hex(canvas, 1, 0, "LR:", slot.fault_lr, hbuf);
-
-    draw_item_hex(canvas, 0, 1, "SP:", slot.fault_sp, hbuf);
     let is_hard = slot.reason() == Some(kernel::boot::ResetReason::Hard);
-    let (right_label, right_val) = if slot.panic_file_hash != 0 {
+    let (r1_lbl, r1_val) = if slot.panic_file_hash != 0 {
         (if is_hard { "ADR:" } else { "CRC:" }, slot.panic_file_hash)
     } else {
         ("PSR:", slot.xpsr)
     };
-    draw_item_hex(canvas, 1, 1, right_label, right_val, hbuf);
+    let items = [
+        (0u8, "PC:", slot.fault_pc),
+        (1u8, "LR:", slot.fault_lr),
+        (2u8, "SP:", slot.fault_sp),
+        (3u8, r1_lbl, r1_val),
+        (7u8, "CRC:", slot.crc32),
+    ];
+    for &(pos, lbl, val) in &items {
+        draw_item_hex(canvas, pos & 1, pos >> 1, lbl, val, hbuf);
+    }
 
     // Row 2 (y=31): Actor & Reason
     draw_item(canvas, 0, 2, "ACT:", slot.actor_str());
@@ -99,9 +104,8 @@ fn draw_page_overview(
         slot.reason().map_or("UNKN", |r| r.as_str()),
     );
 
-    // Row 3 (y=39): SRAM Stack Headroom & Slot CRC32
+    // Row 3 (y=39): SRAM Stack Headroom
     draw_stack_free(canvas, 0, 3, slot.fault_sp, nbuf);
-    draw_item_hex(canvas, 1, 3, "CRC:", slot.crc32, hbuf);
 
     // Row 4 (y=47): Instruction Opcode & Top Stack Word
     if is_hard {
@@ -275,8 +279,7 @@ pub fn draw_recovery_screen(
     let mut nbuf = [0u8; 6];
 
     // 1. Inverted Header Bar (y=0..8)
-    canvas.fill_rect(0, 0, 128, 9, gfx::Color::Fill);
-    gfx::text::draw_str(canvas, 3, 6, "PANIC!", font, gfx::Color::Clear);
+    gfx::widgets::draw_negated_header(canvas, 0, "PANIC!");
 
     if let Some(sec) = countdown {
         let (sd, sr) = utils::math::div10_u16(sec as u16);
@@ -322,11 +325,7 @@ pub fn draw_recovery_screen(
         b'0' + cr,
     ];
     #[cfg(not(feature = "panic_gui_extended"))]
-    let pbuf = [
-        b'#',
-        b'0' + cd as u8,
-        b'0' + cr,
-    ];
+    let pbuf = [b'#', b'0' + cd as u8, b'0' + cr];
     let pstr = unsafe { core::str::from_utf8_unchecked(&pbuf) };
     gfx::text::draw_str_align(
         canvas,

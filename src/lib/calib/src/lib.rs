@@ -309,7 +309,11 @@ impl CalibrationBlock {
                 let span = (th[i + 1] - th[i]) as u32;
                 let offset = (raw - th[i]) as u32;
                 let delta_dbm = (DBM_POINTS[i + 1] - DBM_POINTS[i]) as u32;
-                let delta = if span > 0 { (offset * delta_dbm) / span } else { 0 };
+                let delta = if span > 0 {
+                    (offset * delta_dbm) / span
+                } else {
+                    0
+                };
                 return DBM_POINTS[i] + delta as i16;
             }
         }

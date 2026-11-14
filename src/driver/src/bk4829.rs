@@ -627,7 +627,7 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_deviation(&mut self, dev_hz: u32) {
-        let dev_val = ((dev_hz * 10) / 1000) as u16;
+        let (dev_val, _) = utils::math::div100_u16(dev_hz.min(65535) as u16);
         let mut reg40 = self.cache.read(REG_MODULATION);
         reg40 = (reg40 & 0xF000) | (dev_val & 0x0FFF);
         self.write_reg(REG_MODULATION, reg40);
@@ -1047,7 +1047,11 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
         self.write_reg(REG_MODULATION, reg40);
 
         if mode != Byp {
-            let if_coeff = if matches!(mode, Usb | Dsb | Cw) { 0x0000 } else { 0x2AAB };
+            let if_coeff = if matches!(mode, Usb | Dsb | Cw) {
+                0x0000
+            } else {
+                0x2AAB
+            };
             self.write_reg(REG_IF_COEFF, if_coeff);
         }
 
@@ -1063,7 +1067,11 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
 
         if !matches!(mode, Raw | Byp) {
             let reg73 = self.cache.read(REG_AFC);
-            let afc_val = if is_am_or_ssb { reg73 | (1 << 4) } else { reg73 & !(1 << 4) };
+            let afc_val = if is_am_or_ssb {
+                reg73 | (1 << 4)
+            } else {
+                reg73 & !(1 << 4)
+            };
             self.write_reg(REG_AFC, afc_val);
 
             let reg2b = self.cache.read(REG_FILTERS);

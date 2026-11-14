@@ -70,5 +70,3 @@ pub fn draw_bitmap(
         }
     }
 }
-
-
