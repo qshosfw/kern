@@ -53,13 +53,12 @@ pub fn init() {
     use py32_pac as pac;
 
     // ── Input Pins ──────────────────────────────────────────────────────
-    for row in &KB_ROWS {
-        row.configure_input(pac::gpio::PULL_UP);
+    for &pin in &[KB_ROWS[0], KB_ROWS[1], KB_ROWS[2], KB_ROWS[3], PTT] {
+        pin.configure_input(pac::gpio::PULL_UP);
     }
-    PTT.configure_input(pac::gpio::PULL_UP);
 
     // ── Output Pins (high speed for keyboard columns to ensure crisp edges) ────
-    for col in &KB_COLS {
+    for &col in &KB_COLS {
         col.configure_output(pac::gpio::SPEED_HIGH);
         col.set_high(); // Idle high
     }
@@ -74,21 +73,13 @@ pub fn init() {
     FM_SCL.set_high();
     FM_SDA.set_high();
 
-    // ── LCD pins ────────────────────────────────────────────────────────
-    LCD_A0.configure_output(pac::gpio::SPEED_LOW);
-    LCD_A0.set_high();
-    LCD_CS.configure_output(pac::gpio::SPEED_LOW);
-    LCD_CS.set_high(); // Deselected
-    FLASH_CS.configure_output(pac::gpio::SPEED_LOW);
-    FLASH_CS.set_high(); // Deselected
-
-    // ── BK4819 pins ─────────────────────────────────────────────────────
+    // ── LCD & BK4819 idle-high pins ─────────────────────────────────────
+    for &pin in &[LCD_A0, LCD_CS, FLASH_CS, BK_SDA, BK_CSN] {
+        pin.configure_output(pac::gpio::SPEED_LOW);
+        pin.set_high();
+    }
     BK_SCL.configure_output(pac::gpio::SPEED_MEDIUM);
-    BK_SDA.configure_output(pac::gpio::SPEED_LOW);
-    BK_CSN.configure_output(pac::gpio::SPEED_LOW);
     BK_SCL.set_high();
-    BK_SDA.set_high();
-    BK_CSN.set_high();
 
     // ── Unused & ADC pins → analog (minimize leakage & electromagnetic pickup) ───
     py32_hal::gpio::set_pins_analog(
