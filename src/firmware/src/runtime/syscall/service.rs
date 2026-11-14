@@ -199,53 +199,51 @@ pub unsafe extern "C" fn api_sys_os_version() -> u32 {
     KRX_ABI_VERSION_3_0
 }
 
-pub unsafe extern "C" fn api_sys_proc_count() -> u8 {
-    let table = crate::orchestrator::proc_table();
+#[inline(never)]
+fn active_slot_scan(target: u8) -> (u8, Option<&'static kernel::proc::Pcb>) {
     let mut count = 0u8;
-    for slot in table.slots.iter() {
+    for slot in crate::orchestrator::proc_table().slots.iter() {
         if slot.state != kernel::proc::ProcState::Dormant
             && slot.state != kernel::proc::ProcState::Dead
         {
+            if count == target {
+                return (count, Some(slot));
+            }
             count += 1;
         }
     }
-    count
+    (count, None)
+}
+
+pub unsafe extern "C" fn api_sys_proc_count() -> u8 {
+    active_slot_scan(u8::MAX).0
 }
 
 pub unsafe extern "C" fn api_sys_proc_info(idx: u8, out_info: *mut KrxProcInfo) -> u8 {
     if out_info.is_null() {
         return 1;
     }
-    let table = crate::orchestrator::proc_table();
-    let mut match_idx = 0u8;
-    for slot in table.slots.iter() {
-        if slot.state != kernel::proc::ProcState::Dormant
-            && slot.state != kernel::proc::ProcState::Dead
-        {
-            if match_idx == idx {
-                unsafe {
-                    core::ptr::write_bytes(out_info, 0, 1);
-                    let info = &mut *out_info;
-                    info.pid = slot.pid.0;
-                    info.app_id = slot.app_id as u8;
-                    info.state = match slot.state {
-                        kernel::proc::ProcState::Running => 2,
-                        kernel::proc::ProcState::Suspended => 3,
-                        _ => 1,
-                    };
-                    info.priority = slot.priority as u8;
-                    info.memory_bytes = slot.mem_bytes;
-                    for (d, &s) in info.name.iter_mut().zip(slot.name.as_bytes()) {
-                        *d = s;
-                    }
-                    info.runtime_ticks = slot.ledger.cpu_ticks;
-                }
-                return 0;
-            }
-            match_idx += 1;
-        }
+    let (_, Some(slot)) = active_slot_scan(idx) else {
+        return 1;
+    };
+    unsafe {
+        core::ptr::write_bytes(out_info, 0, 1);
+        let info = &mut *out_info;
+        info.pid = slot.pid.0;
+        info.app_id = slot.app_id as u8;
+        info.state = match slot.state {
+            kernel::proc::ProcState::Running => 2,
+            kernel::proc::ProcState::Suspended => 3,
+            _ => 1,
+        };
+        info.priority = slot.priority as u8;
+        info.memory_bytes = slot.mem_bytes;
+        let src = slot.name.as_bytes();
+        let len = src.len().min(info.name.len());
+        info.name[..len].copy_from_slice(&src[..len]);
+        info.runtime_ticks = slot.ledger.cpu_ticks;
     }
-    1
+    0
 }
 
 pub unsafe extern "C" fn api_sys_proc_kill(pid: u8) -> u8 {
@@ -280,6 +278,7 @@ pub unsafe extern "C" fn api_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     super::super::native_runner::krx_leaf_call(leaf_id, arg)
 }
 
+#[inline(never)]
 fn lease_op(lease_kind: u8, acquire: bool, timeout_ms: u32) -> u8 {
     let Some(kind) = kernel::proc::LeaseKind::from_u8(lease_kind) else {
         return 1;
