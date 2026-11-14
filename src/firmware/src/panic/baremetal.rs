@@ -63,6 +63,7 @@ pub fn baremetal_lcd_blit(canvas: &gfx::Canvas) {
     bsp::pins::LCD_CS.set_high();
 }
 
+#[cfg(feature = "panic_gui")]
 #[inline(never)]
 fn render_recovery_frame(canvas: &mut gfx::Canvas, page: u8, cd: Option<u8>, is_k1: bool) {
     canvas.clear();

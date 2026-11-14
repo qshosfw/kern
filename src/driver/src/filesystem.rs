@@ -307,9 +307,13 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
 
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), StorageError> {
         let perm = self.fs.get_permission(old_path).map_err(Self::map_error)?;
-        if (perm & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0 || old_path.starts_with("/sys/calib.") {
+        if (perm & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0
+            || old_path.starts_with("/sys/calib.")
+            || new_path.starts_with("/sys/calib.")
+        {
             return Err(StorageError::AccessDenied);
         }
+        self.check_writable(new_path)?;
 
         #[cfg(feature = "secure_fs")]
         if (perm & ATTR_ENCRYPTED) != 0 {
@@ -589,5 +593,39 @@ mod tests {
             drv.read_file("/secret", &mut buf),
             Err(StorageError::EncryptedNoKey)
         );
+    }
+
+    #[test]
+    fn test_rename_blocks_protected_destination() {
+        let mut flash = MemFlash::new();
+        let mut fs = KernFS::new(&mut flash);
+        fs.format(None).unwrap();
+        let mut drv = FileSystemDriver::new(fs);
+
+        drv.write_file("/sys/calib.dat", b"factory").unwrap();
+        drv.write_file("/sys/locked.bin", b"locked").unwrap();
+        drv.set_attributes(
+            "/sys/locked.bin",
+            FileAttributes {
+                permission: ATTR_SYSTEM | ATTR_READ_ONLY,
+            },
+        )
+        .unwrap();
+        drv.write_file("/tmp.dat", b"evil").unwrap();
+
+        assert_eq!(
+            drv.rename("/tmp.dat", "/sys/calib.dat"),
+            Err(StorageError::AccessDenied)
+        );
+        assert_eq!(
+            drv.rename("/tmp.dat", "/sys/locked.bin"),
+            Err(StorageError::AccessDenied)
+        );
+
+        let mut buf = [0u8; 16];
+        let n = drv.read_file("/sys/calib.dat", &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"factory");
+        let n2 = drv.read_file("/sys/locked.bin", &mut buf).unwrap();
+        assert_eq!(&buf[..n2], b"locked");
     }
 }

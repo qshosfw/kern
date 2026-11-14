@@ -9,6 +9,7 @@ pub enum PageId {
     Buttons,
     Battery,
     Device,
+    #[cfg(feature = "passcode")]
     Security,
     System,
     ButtonsTweaks,
@@ -39,6 +40,7 @@ impl PageId {
         const BUTTONS: u8 = PageId::Buttons as u8;
         const BATTERY: u8 = PageId::Battery as u8;
         const DEVICE: u8 = PageId::Device as u8;
+        #[cfg(feature = "passcode")]
         const SECURITY: u8 = PageId::Security as u8;
         const SYSTEM: u8 = PageId::System as u8;
         const BUTTONS_TWEAKS: u8 = PageId::ButtonsTweaks as u8;
@@ -64,6 +66,7 @@ impl PageId {
             BUTTONS => Some(PageId::Buttons),
             BATTERY => Some(PageId::Battery),
             DEVICE => Some(PageId::Device),
+            #[cfg(feature = "passcode")]
             SECURITY => Some(PageId::Security),
             SYSTEM => Some(PageId::System),
             BUTTONS_TWEAKS => Some(PageId::ButtonsTweaks),
@@ -96,7 +99,12 @@ pub enum ActionId {
     EditTag = 3,
     #[cfg(feature = "text_input")]
     EditRadioId = 4,
+    #[cfg(feature = "settings_debug")]
     ClearLogs = 5,
+    #[cfg(feature = "filesystem")]
+    FormatKeepCalib = 6,
+    #[cfg(feature = "filesystem")]
+    FormatWipeAll = 7,
 }
 
 impl ActionId {
@@ -110,7 +118,12 @@ impl ActionId {
             3 => Some(ActionId::EditTag),
             #[cfg(feature = "text_input")]
             4 => Some(ActionId::EditRadioId),
+            #[cfg(feature = "settings_debug")]
             5 => Some(ActionId::ClearLogs),
+            #[cfg(feature = "filesystem")]
+            6 => Some(ActionId::FormatKeepCalib),
+            #[cfg(feature = "filesystem")]
+            7 => Some(ActionId::FormatWipeAll),
             _ => None,
         }
     }
@@ -532,7 +545,6 @@ pub const TAG_TOGGLE: u8 = 4;
 pub const TAG_METRIC: u8 = 5;
 pub const TAG_ACTION: u8 = 6;
 pub const TAG_INFO: u8 = 7;
-#[cfg(feature = "filesystem")]
 pub const TAG_ASSET: u8 = 8;
 
 #[derive(Clone, Copy)]

@@ -18,6 +18,9 @@ impl NoStorage {
     pub fn create_dir(&mut self, _path: &str) -> Result<(), StorageError> {
         Err(StorageError::NotFound)
     }
+    pub fn rename(&mut self, _old_path: &str, _new_path: &str) -> Result<(), StorageError> {
+        Err(StorageError::NotFound)
+    }
     pub fn read_file(&mut self, _path: &str, _buf: &mut [u8]) -> Result<usize, StorageError> {
         Err(StorageError::NotFound)
     }

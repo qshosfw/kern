@@ -42,6 +42,7 @@ fn wake_and_notify_activity(hw: &mut SystemHardware) {
 
 use crate::orchestrator::record_proc_activation;
 
+#[allow(unused_variables)]
 fn is_plugged_in(hw: &SystemHardware) -> bool {
     #[cfg(feature = "usb")]
     let is_usb_plugged = hw.usb.is_connected();
@@ -319,6 +320,7 @@ fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut 
     }
 }
 
+#[allow(unused_variables)]
 #[inline(never)]
 fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool) {
     #[cfg(feature = "usb")]

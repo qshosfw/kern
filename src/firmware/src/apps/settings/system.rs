@@ -1,6 +1,6 @@
 //! System Domain Settings & Submenu Declarations
 
-#[cfg(feature = "settings_debug")]
+#[cfg(any(feature = "settings_debug", feature = "filesystem"))]
 use super::page::ActionId;
 use super::page::{ChoiceId, MetricId, PageId, SettingDef, SettingField};
 
@@ -21,12 +21,16 @@ pub static SYSTEM_ROOT: &[SettingDef] = &[
     SettingDef::submenu("Debug", PageId::SystemDebug),
 ];
 
-pub static SYSTEM_STORAGE: [SettingDef; 5] = [
+pub static SYSTEM_STORAGE: &[SettingDef] = &[
     SettingDef::metric("Used", MetricId::StorageUsed),
     SettingDef::metric("Free", MetricId::StorageFree),
     SettingDef::metric("Files", MetricId::StorageFiles),
     SettingDef::metric("Wear Cycles", MetricId::StorageWear),
     SettingDef::metric("Deleted", MetricId::StorageDeleted),
+    #[cfg(feature = "filesystem")]
+    SettingDef::action("Format (Keep Cal)", ActionId::FormatKeepCalib),
+    #[cfg(feature = "filesystem")]
+    SettingDef::action("Format (Full Wipe)", ActionId::FormatWipeAll),
 ];
 
 #[cfg(feature = "settings_calib")]

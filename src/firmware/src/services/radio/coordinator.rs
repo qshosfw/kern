@@ -1137,6 +1137,7 @@ impl RadioCoordinator {
             } => {
                 self.listening_vfo = slot;
                 self.fsk_sync_active = client.id == ClientId::FSK_SIDECAR;
+                radio.configure_channel(&self.channels[slot.index()]);
                 self.set_audio_muted(radio, needs_mute);
                 Some(RadioEvent::LockRestored {
                     client,
@@ -1151,6 +1152,10 @@ impl RadioCoordinator {
                 was_muted,
             } => {
                 self.fsk_sync_active = false;
+                if self.dual_watch == DualWatchMode::Off && !self.is_transmitting {
+                    self.listening_vfo = self.active_vfo;
+                }
+                radio.configure_channel(&self.channels[self.listening_vfo.index()]);
                 if was_muted {
                     self.set_audio_muted(radio, false);
                 }
@@ -1296,5 +1301,311 @@ impl RadioCoordinator {
             self.dwell.tick_10ms();
             RadioEvent::None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockRadio {
+        configured_freqs: [u32; 8],
+        configured_count: usize,
+        rx_freq: u32,
+        tx_freq: u32,
+        carrier_open: bool,
+        muted: bool,
+        mic_muted: bool,
+        tx_state: TransceiverTxState,
+        tail_sent: CssTailMode,
+    }
+
+    impl MockRadio {
+        fn new() -> Self {
+            Self {
+                configured_freqs: [0; 8],
+                configured_count: 0,
+                rx_freq: 0,
+                tx_freq: 0,
+                carrier_open: false,
+                muted: false,
+                mic_muted: false,
+                tx_state: TransceiverTxState::IdleRx,
+                tail_sent: CssTailMode::None,
+            }
+        }
+    }
+
+    impl RfChannel for MockRadio {
+        fn configure_channel(&mut self, config: &ChannelConfig) {
+            self.rx_freq = config.effective_rx_freq().raw();
+            if self.configured_count < self.configured_freqs.len() {
+                self.configured_freqs[self.configured_count] = self.rx_freq;
+                self.configured_count += 1;
+            }
+        }
+        fn set_rx_frequency(&mut self, freq: Frequency<Hertz>) {
+            self.rx_freq = freq.raw();
+        }
+        fn set_tx_frequency(&mut self, freq: Frequency<Hertz>) {
+            self.tx_freq = freq.raw();
+        }
+        fn set_power_level(&mut self, _level: RfPowerLevel) {}
+    }
+
+    impl RfFineTuning for MockRadio {
+        fn set_crystal_trim(&mut self, _trim: i16) {}
+        fn set_pll_offset_10hz(&mut self, _offset_10hz: i16) {}
+        fn get_crystal_trim(&mut self) -> i16 {
+            0
+        }
+        fn set_sub_hz_offset(&mut self, _carrier_hz: u32, _offset_dhz: i16) {}
+    }
+
+    impl RfModulation for MockRadio {
+        fn set_modulation(&mut self, _mode: ModulationMode) {}
+        fn set_bandwidth(&mut self, _bw: Bandwidth) {}
+        fn set_deviation(&mut self, _dev: DeviationLimit) {}
+        fn set_compander(&mut self, _compander: CompanderMode) {}
+        fn set_scrambler(&mut self, _scrambler: ScramblerMode) {}
+    }
+
+    impl RfSquelch for MockRadio {
+        fn set_squelch_level(&mut self, _level: u8) {}
+        fn set_squelch_thresholds(&mut self, _thresholds: &SquelchThresholds) {}
+        fn get_signal_metrics(&mut self) -> SignalMetrics {
+            SignalMetrics {
+                rssi_dbm: -110,
+                snr: 0,
+                noise: 0,
+                glitch: 0,
+                carrier_open: self.carrier_open,
+            }
+        }
+        fn is_carrier_open(&mut self) -> bool {
+            self.carrier_open
+        }
+        fn get_rssi_dbm(&mut self) -> i16 {
+            -110
+        }
+        fn get_snr(&mut self) -> u8 {
+            0
+        }
+        fn get_glitch(&mut self) -> u8 {
+            0
+        }
+        fn get_noise(&mut self) -> u8 {
+            0
+        }
+    }
+
+    impl RfSubaudible for MockRadio {
+        fn set_rx_subaudible(&mut self, _tone: SubaudibleTone) {}
+        fn set_tx_subaudible(&mut self, _tone: SubaudibleTone) {}
+        fn is_subaudible_matched(&mut self) -> bool {
+            false
+        }
+        fn send_css_tail(&mut self, mode: CssTailMode) {
+            self.tail_sent = mode;
+        }
+    }
+
+    impl RfFskPhy for MockRadio {
+        fn fsk_configure_phy(&mut self, _config: &FskPhyConfig) -> Result<(), ()> {
+            Ok(())
+        }
+        fn fsk_enable(&mut self, _enable: bool) {}
+        fn fsk_enable_rx(&mut self, _enable: bool) {}
+        fn fsk_enable_tx(&mut self, _enable: bool) {}
+        fn fsk_clear_rx_fifo(&mut self) {}
+        fn fsk_clear_tx_fifo(&mut self) {}
+        fn fsk_read_status(&mut self) -> FskPhyStatus {
+            FskPhyStatus::default()
+        }
+        fn fsk_read_fifo(&mut self, _out_words: &mut [u16]) -> usize {
+            0
+        }
+        fn fsk_write_fifo(&mut self, _words: &[u16]) -> usize {
+            0
+        }
+        fn fsk_set_tone_gain(&mut self, _gain: u8) {}
+        fn fsk_set_baud_divider(&mut self, _divider: u16) {}
+        fn fsk_set_deviation(&mut self, _deviation_hz: u16) {}
+        fn fsk_rearm_rx(&mut self) {}
+        fn send_fsk_packet_with_timeout(
+            &mut self,
+            _words: &[u16],
+            _timeout_ms: u16,
+        ) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    impl RfToneGenerator for MockRadio {
+        fn set_tone1_raw(&mut self, _freq_word: u16, _gain: u8, _enabled: bool) {}
+        fn set_tone2_raw(&mut self, _freq_word: u16, _gain: u8, _enabled: bool) {}
+        fn set_tone1_freq_word(&mut self, _freq_word: u16) {}
+        fn set_tone2_freq_word(&mut self, _freq_word: u16) {}
+        fn set_tone1_gain(&mut self, _gain: u8) {}
+        fn set_tone2_gain(&mut self, _gain: u8) {}
+        fn enable_tone1(&mut self, _enable: bool) {}
+        fn enable_tone2(&mut self, _enable: bool) {}
+        fn mute_tones(&mut self) {}
+    }
+
+    impl RfAudioPath for MockRadio {
+        fn set_af_response(&mut self, _response: &AfResponse) {}
+        fn set_mic_gain(&mut self, _gain_db: u8) {}
+        fn set_rf_volume(&mut self, _level: u8) {}
+        fn set_tone_gain(&mut self, _gain: u8) {}
+        fn play_tone(&mut self, _freq_hz: u16, _duration_ms: u16) {}
+        fn play_tone_sequence(&mut self, _notes: &[ToneNote]) {}
+        fn play_tone_sequence_with_gain(&mut self, _notes: &[ToneNote], _gain: u8) {}
+        fn mute_audio(&mut self, mute: bool) {
+            self.muted = mute;
+        }
+        fn mute_mic(&mut self, mute: bool) {
+            self.mic_muted = mute;
+        }
+    }
+
+    impl RfAgc for MockRadio {
+        fn set_agc_table(&mut self, _table: &[u16; 5]) {}
+        fn set_agc_mode(&mut self, _mode: AgcListeningMode, _disable: bool) {}
+        fn set_agc_speed(&mut self, _speed: AgcSpeed) {}
+    }
+
+    impl RfPowerSequencer for MockRadio {
+        fn tx_prepare(&mut self) {
+            self.tx_state = TransceiverTxState::ActiveTransmit;
+        }
+        fn tx_ramp_up(&mut self, _target_power_level: u8) {}
+        fn tx_unmute(&mut self) {}
+        fn tx_mute(&mut self) {}
+        fn tx_ramp_down(&mut self) {}
+        fn tx_conclude(&mut self) {
+            self.tx_state = TransceiverTxState::IdleRx;
+        }
+        fn tx_state(&self) -> TransceiverTxState {
+            self.tx_state
+        }
+    }
+
+    impl RadioService for MockRadio {
+        fn sleep(&mut self) {}
+        fn wake(&mut self) {}
+        fn set_xtal_freq_trim(&mut self, _trim: i16) {}
+    }
+
+    #[test]
+    fn test_coordinator_lock_restoration_reconfigures_radio_and_dual_watch() {
+        let mut coord = RadioCoordinator::new();
+        let mut radio = MockRadio::new();
+        coord.channels[0].rx_freq = Frequency::new(145_500_000);
+        coord.channels[1].rx_freq = Frequency::new(433_500_000);
+        coord.active_vfo = VfoSlot::VfoA;
+        coord.listening_vfo = VfoSlot::VfoA;
+        coord.dual_watch = DualWatchMode::Off;
+
+        let fsk = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::SERVICE);
+        let ui = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+        assert!(coord.request_vfo_lock(fsk, VfoSlot::VfoA, 100, true));
+        assert!(coord.request_vfo_lock(ui, VfoSlot::VfoB, 20, false));
+        coord.set_audio_muted(&mut radio, false);
+        radio.configure_channel(&coord.channels[1]);
+        assert_eq!(radio.rx_freq, 433_500_000);
+
+        // UI lock expires -> FSK lock restored AND hardware retuned back to VFO A.
+        let _ = coord.tick_10ms(&mut radio);
+        let ev = coord.tick_10ms(&mut radio);
+        assert!(matches!(
+            ev,
+            RadioEvent::LockRestored {
+                slot: VfoSlot::VfoA,
+                ..
+            }
+        ));
+        assert_eq!(radio.rx_freq, 145_500_000);
+        assert!(radio.muted);
+
+        // Release FSK -> hardware stays cleanly configured on active VFO A and audio unmuted.
+        for _ in 0..10 {
+            let _ = coord.tick_10ms(&mut radio);
+        }
+        assert!(!coord.is_vfo_locked());
+        assert!(!radio.muted);
+        assert_eq!(radio.rx_freq, 145_500_000);
+    }
+
+    #[test]
+    fn test_coordinator_ptt_ctcss_lead_in_tail_and_bclo_gating() {
+        let mut coord = RadioCoordinator::new();
+        let mut radio = MockRadio::new();
+        coord.channels[0].rx_freq = Frequency::new(145_700_000);
+        coord.channels[0].tx_subaudible = SubaudibleTone::Ctcss(885);
+        coord.channels[0].busy_lock = true;
+        coord.bclo_policy = BcloPolicy::CarrierOnly;
+
+        let ui = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+
+        // BCLO must block TX while carrier is active on listening VFO.
+        coord.carrier_active = true;
+        assert_eq!(
+            coord.request_ptt_start(&mut radio, ui),
+            TxPermission::BlockedBusyChannel
+        );
+        coord.carrier_active = false;
+
+        // CTCSS channel enters 50ms LeadIn (mic muted) -> Active (mic unmuted).
+        assert_eq!(
+            coord.request_ptt_start(&mut radio, ui),
+            TxPermission::Granted
+        );
+        assert!(coord.is_transmitting);
+        assert!(radio.mic_muted);
+        for _ in 0..5 {
+            let _ = coord.tick_10ms(&mut radio);
+        }
+        assert_eq!(coord.tx_state, TxState::Active);
+        assert!(!radio.mic_muted);
+
+        // PTT stop triggers 150ms 55Hz tail burst -> full teardown to RX.
+        coord.request_ptt_stop(&mut radio);
+        assert!(matches!(coord.tx_state, TxState::TailBurst { .. }));
+        assert_eq!(radio.tail_sent, CssTailMode::Tone55Hz);
+        for _ in 0..15 {
+            let _ = coord.tick_10ms(&mut radio);
+        }
+        assert!(!coord.is_transmitting);
+        assert_eq!(coord.tx_state, TxState::Idle);
+        assert_eq!(radio.rx_freq, 145_700_000);
+    }
+
+    #[test]
+    fn test_coordinator_dual_watch_freezes_when_locked_and_alternates() {
+        let mut coord = RadioCoordinator::new();
+        let mut radio = MockRadio::new();
+        coord.channels[0].rx_freq = Frequency::new(145_500_000);
+        coord.channels[1].rx_freq = Frequency::new(433_500_000);
+        coord.listening_vfo = VfoSlot::VfoA;
+        coord.dual_watch = DualWatchMode::EqualDwell { dwell_ms: 20 };
+
+        let bg = ClientToken::new(ClientId::SCANNER, LockTier::BACKGROUND);
+        assert!(coord.request_vfo_lock(bg, VfoSlot::VfoA, 20, false));
+        // Locked for 20ms: ticks 1 & 2 handle arbitration expiration, not dual-watch hop.
+        assert_eq!(coord.tick_10ms(&mut radio), RadioEvent::None);
+        assert!(matches!(
+            coord.tick_10ms(&mut radio),
+            RadioEvent::LockReleased { .. }
+        ));
+
+        // Unlocked: after 20ms dwell ticks, switches to VfoB and configures 433.500 MHz.
+        assert_eq!(coord.tick_10ms(&mut radio), RadioEvent::None);
+        assert_eq!(coord.tick_10ms(&mut radio), RadioEvent::None);
+        assert_eq!(
+            coord.tick_10ms(&mut radio),
+            RadioEvent::DualWatchSwitched(VfoSlot::VfoB)
+        );
+        assert_eq!(radio.rx_freq, 433_500_000);
     }
 }

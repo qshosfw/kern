@@ -23,6 +23,10 @@ pub const TAG_ASSET_CHOOSER: u8 = 11;
 pub const TAG_MODEL_CHOOSER: u8 = 12;
 pub const TAG_MODEL_INPUT: u8 = 13;
 pub const TAG_APP_RESET_CONFIRM: u8 = 15;
+#[cfg(feature = "filesystem")]
+pub const TAG_FORMAT_KEEP_CALIB: u8 = 16;
+#[cfg(feature = "filesystem")]
+pub const TAG_FORMAT_WIPE_ALL: u8 = 17;
 
 pub fn parse_u32_digits(s: &str) -> Option<u32> {
     if s.is_empty() {
@@ -114,10 +118,31 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
         ActionId::EditTag => prompt_config_str(ctx, TAG_TAG_INPUT),
         #[cfg(feature = "text_input")]
         ActionId::EditRadioId => prompt_config_str(ctx, TAG_RADIO_ID_INPUT),
+        #[cfg(feature = "settings_debug")]
         ActionId::ClearLogs => {
             #[cfg(feature = "flight_recorder")]
             crate::panic::BOOT_RECORD.get_mut().reset_all();
             ctx.show_popup(TAG_POPUP_INFO, "Debug", "Crash logs cleared");
+        }
+        #[cfg(feature = "filesystem")]
+        ActionId::FormatKeepCalib => {
+            ctx.show_confirm(
+                TAG_FORMAT_KEEP_CALIB,
+                "Format Flash?",
+                "Erase files? Calib kept.",
+                "FORMAT",
+                "CANCEL",
+            );
+        }
+        #[cfg(feature = "filesystem")]
+        ActionId::FormatWipeAll => {
+            ctx.show_confirm(
+                TAG_FORMAT_WIPE_ALL,
+                "Full Wipe?",
+                "Erase ALL files + calib!",
+                "WIPE",
+                "CANCEL",
+            );
         }
         #[allow(unreachable_patterns)]
         _ => {}
@@ -227,15 +252,44 @@ pub fn handle_text_input_done(
     EventResult::Consumed
 }
 
+fn reset_config_to_defaults(ctx: &mut SysContext) {
+    unsafe {
+        crate::config::MasterConfig::init_in_place(ctx.config);
+    }
+    ctx.config.sanitize();
+    let _ = ctx.config.save_all(ctx.storage);
+}
+
 #[inline(never)]
-pub fn handle_confirm_result(_app: &mut SettingsApp, ctx: &mut SysContext, tag: u8) -> EventResult {
+pub fn handle_confirm_result(app: &mut SettingsApp, ctx: &mut SysContext, tag: u8) -> EventResult {
     match tag {
         TAG_APP_RESET_CONFIRM => {
-            ctx.show_popup(
-                TAG_POPUP_INFO,
-                "Config Reset",
-                "Defaults restored on next launch",
-            );
+            reset_config_to_defaults(ctx);
+            app.flush_and_refresh(ctx);
+            ctx.show_popup(TAG_POPUP_INFO, "Config Reset", "Defaults restored");
+            EventResult::Consumed
+        }
+        #[cfg(feature = "filesystem")]
+        TAG_FORMAT_KEEP_CALIB | TAG_FORMAT_WIPE_ALL => {
+            let keep = tag == TAG_FORMAT_KEEP_CALIB;
+            if crate::services::calibration::reformat_storage(
+                ctx.storage,
+                ctx.calibration.raw_bytes(),
+                keep,
+            )
+            .is_ok()
+            {
+                reset_config_to_defaults(ctx);
+                app.flush_and_refresh(ctx);
+                let msg = if keep {
+                    "Formatted (Calib Kept)"
+                } else {
+                    "Full Wipe Complete"
+                };
+                ctx.show_popup(TAG_POPUP_INFO, "Storage", msg);
+            } else {
+                ctx.show_popup(TAG_POPUP_INFO, "Storage", "Format Failed");
+            }
             EventResult::Consumed
         }
         _ => EventResult::Ignored,

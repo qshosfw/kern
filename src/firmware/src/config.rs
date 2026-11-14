@@ -217,18 +217,18 @@ static ALL_BOUND_RULES: [[u8; 2]; 38] = [
     [11, 3],
     // 1: Audio (11..18)
     [1, 10],
-    [2, 5],
+    [2, 6],
     [3, 31],
-    [4, 1],
+    [4, 12],
     [6, 10],
     [7, 4],
     [8, 4],
     // 2: Keys (18..24)
     [7, 5],
-    [8, 3],
+    [8, 4],
     [9, 2],
     [10, 3],
-    [11, 2],
+    [11, 3],
     [21, 2],
     // 4: Battery (24..28)
     [2, 8],
@@ -444,6 +444,14 @@ impl MasterConfig {
             repaired |= DIRTY_BATTERY;
         }
 
+        if repaired != 0 {
+            for i in 0..CONFIG_METAS.len() {
+                if (repaired & (1u8 << i)) != 0 {
+                    self.seal(i);
+                }
+            }
+        }
+
         repaired
     }
 
@@ -490,7 +498,8 @@ impl MasterConfig {
         if self.dirty == 0 {
             return Ok(());
         }
-        let _ = self.sanitize();
+        let repaired = self.sanitize();
+        self.dirty |= repaired;
         let mut first_err = None;
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
             let flag = 1u8 << i;
@@ -561,5 +570,29 @@ mod tests {
             cfg.apps.daemon_budget_ms,
             AppsConfig::DEFAULT.daemon_budget_ms
         );
+    }
+
+    #[test]
+    fn test_keys_and_audio_upper_bounds_and_repair_sealing() {
+        let mut cfg = MasterConfig::DEFAULT;
+        cfg.system.tag = *b"TESTTAG ";
+        cfg.battery.battery_type = 3;
+        cfg.keys.f_key_timeout = 4; // 5s option
+        cfg.keys.repeat_rate = 3; // Slow 120ms option
+        cfg.audio.key_beep = 6; // Custom beep
+        cfg.audio.roger_beep = 12; // CustomFile roger
+        assert_eq!(cfg.sanitize(), 0);
+        assert_eq!(cfg.keys.f_key_timeout, 4);
+        assert_eq!(cfg.keys.repeat_rate, 3);
+        assert_eq!(cfg.audio.key_beep, 6);
+        assert_eq!(cfg.audio.roger_beep, 12);
+
+        // Model switch repairs keys.nav_layout and battery.battery_type and must re-seal them.
+        cfg.seal_all();
+        cfg.system.model = 1; // UV-K5 V3
+        let repaired = cfg.sanitize();
+        assert_ne!(repaired & (DIRTY_KEYS | DIRTY_BATTERY), 0);
+        assert!(is_raw_valid(cfg.config_bytes(2), CONFIG_METAS[2].version));
+        assert!(is_raw_valid(cfg.config_bytes(4), CONFIG_METAS[4].version));
     }
 }

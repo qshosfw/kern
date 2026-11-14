@@ -30,6 +30,7 @@ fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut Sho
         ActionId::EditRadioId => {
             super::metric::format_metric(super::page::MetricId::DeviceRadioId, ctx, out)
         }
+        #[allow(unreachable_patterns)]
         _ => {}
     }
 }
@@ -113,6 +114,7 @@ fn populate_item(
             }
             item.item_type = MenuItemType::Value(s);
         }
+        #[allow(unreachable_patterns)]
         _ => {
             item.item_type = MenuItemType::Info("Ascon-128");
         }
@@ -172,6 +174,7 @@ pub fn page_title(page: PageId) -> &'static str {
         PageId::Buttons => "Buttons",
         PageId::Battery => "Battery",
         PageId::Device => "Device",
+        #[cfg(feature = "passcode")]
         PageId::Security => "Security",
         PageId::System => "System",
         PageId::ButtonsTweaks => "Tweaks",
@@ -206,7 +209,7 @@ pub fn page_defs(page: PageId) -> &'static [SettingDef] {
         PageId::ButtonsShortcuts => &super::buttons::BUTTONS_SHORTCUTS,
         PageId::BatteryInfo => &super::battery::BATTERY_INFO,
         PageId::BatteryTweaks => &super::battery::BATTERY_TWEAKS,
-        PageId::SystemStorage => &super::system::SYSTEM_STORAGE,
+        PageId::SystemStorage => super::system::SYSTEM_STORAGE,
         PageId::Apps => super::apps::APPS_DEFS,
         PageId::BootSplash => super::device::SPLASH_PAGE_DEFS,
         #[cfg(feature = "settings_calib")]

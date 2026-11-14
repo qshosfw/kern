@@ -334,8 +334,15 @@ impl Board {
 
 /// Standalone zero-cost helper to control board status LEDs via BK4819/BK4829 bus.
 pub fn set_status_led(led: StatusLed) {
-    let mut bus = RadioBus;
-    Board::set_status_led(&mut bus, led);
+    #[cfg(target_arch = "arm")]
+    {
+        let mut bus = RadioBus;
+        Board::set_status_led(&mut bus, led);
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        let _ = led;
+    }
 }
 
 /// Immediately quench all RF PA/TX stages, audio amp, and flashlight during a fault.

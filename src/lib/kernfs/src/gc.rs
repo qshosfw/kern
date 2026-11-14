@@ -2,7 +2,7 @@
 
 use crate::device::{BlockDevice, FsError};
 use crate::format::*;
-use crate::fs::KernFS;
+use crate::fs::{KernFS, MetaQuery};
 
 impl<'a, D: BlockDevice> KernFS<'a, D> {
     pub(crate) fn has_free_room_for_new(&self) -> bool {
@@ -497,8 +497,17 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
         self.lookup_inode(src)?;
         let mut src_inode = self.cur_inode;
+        let src_t = src.trim_matches('/');
+        let dst_t = dst.trim_matches('/');
+        if src_inode.is_dir()
+            && !src_t.is_empty()
+            && (dst_t == src_t
+                || (dst_t.starts_with(src_t) && dst_t.as_bytes().get(src_t.len()) == Some(&b'/')))
+        {
+            return Err(FsError::InvalidPath);
+        }
         if self.resolve_path(dst, true)? {
-            if self.cur_inode.is_dir() {
+            if self.cur_inode.is_dir() || src_inode.is_dir() {
                 return Err(FsError::InvalidPath);
             }
             self.remove(dst)?;
@@ -511,6 +520,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         src_inode.generation = self.global_gen + 1;
         self.commit_inode(&src_inode, &[])?;
         self.hot_ino = 0;
+        self.hot_hash = 0;
         Ok(())
     }
 
@@ -753,6 +763,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.block_seq = highest_bseq.max(1);
         self.cur_alloc_block = active_block_candidate as u16;
         self.cur_alloc_page = active_next_page;
+        self.active_files = self.scan_meta(MetaQuery::CountFiles, None)?;
         self.mounted = true;
         Ok(())
     }

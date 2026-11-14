@@ -338,13 +338,11 @@ impl RadioArbitrator {
         }
 
         if self.active_lock.is_active() && self.active_lock.client != client {
-            if self.active_lock.resources.intersects(resources) {
-                if client.priority() <= self.active_lock.client.priority() {
-                    return false; // Lower or equal priority cannot preempt
-                }
-                // Preempt active lock: stash into saved_lock
-                self.saved_lock = Some(self.active_lock);
+            if client.priority() <= self.active_lock.client.priority() {
+                return false; // Lower or equal priority cannot preempt active owner
             }
+            // Preempt active lock: stash into saved_lock
+            self.saved_lock = Some(self.active_lock);
         }
 
         self.active_lock = VfoArbitrationLock {
@@ -641,5 +639,46 @@ mod tests {
             arb.evaluate_tx_permission(sidecar, BcloPolicy::Disabled, false, false, false),
             TxPermission::Granted
         );
+    }
+
+    #[test]
+    fn test_arbitrator_cross_vfo_priority_and_stashing() {
+        let mut arb = RadioArbitrator::new();
+        let exclusive = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::EXCLUSIVE);
+        let bg = ClientToken::new(ClientId::SCANNER, LockTier::BACKGROUND);
+        let fg = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+        let emergency = ClientToken::new(ClientId::BEACON, LockTier::EMERGENCY);
+
+        assert!(arb.request_lock(bg, RfResourceMask::VFO_A, VfoSlot::VfoA, 200, false, false));
+        // Higher priority on different VFO stashes lower-priority lock rather than dropping it.
+        assert!(arb.request_lock(fg, RfResourceMask::VFO_B, VfoSlot::VfoB, 100, true, false));
+        assert_eq!(arb.lock_depth(), 2);
+        assert_eq!(arb.active_client(), fg);
+
+        // Lower/equal priority on a disjoint VFO must not clobber active lock.
+        assert!(!arb.request_lock(bg, RfResourceMask::VFO_A, VfoSlot::VfoA, 50, false, false));
+        assert_eq!(arb.active_client(), fg);
+
+        assert!(arb.release_lock(fg));
+        assert_eq!(arb.active_client(), bg);
+
+        assert!(arb.request_lock(
+            exclusive,
+            RfResourceMask::VFO_A,
+            VfoSlot::VfoA,
+            300,
+            true,
+            false
+        ));
+        assert!(!arb.request_lock(fg, RfResourceMask::VFO_B, VfoSlot::VfoB, 100, false, false));
+        assert!(arb.request_lock(
+            emergency,
+            RfResourceMask::VFO_B,
+            VfoSlot::VfoB,
+            50,
+            false,
+            false
+        ));
+        assert_eq!(arb.active_client(), emergency);
     }
 }

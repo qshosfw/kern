@@ -424,3 +424,32 @@ fn test_list_dir_returns_exact_count_and_nested_dir() {
     assert_eq!(count, 2);
     assert_eq!(seen, 2);
 }
+
+#[test]
+fn test_mount_restores_active_files_and_rename_safety() {
+    let mut flash = SmallFlash::new();
+    let mut fs = KernFS::new(&mut flash);
+    fs.format(None).unwrap();
+    fs.write_file("/a/one.txt", b"1").unwrap();
+    fs.write_file("/a/two.txt", b"22").unwrap();
+    fs.write_file("/a/tmp.txt", b"333").unwrap();
+    fs.remove("/a/tmp.txt").unwrap();
+    assert_eq!(fs.stats().active_files, 2);
+
+    // Remount from flash and verify active_files is restored from live non-dir inodes.
+    let mut fs2 = KernFS::new(&mut flash);
+    fs2.mount().unwrap();
+    assert_eq!(fs2.stats().active_files, 2);
+
+    // Prevent directory self-nesting cycle (/a -> /a/sub).
+    assert_eq!(fs2.rename("/a", "/a/sub"), Err(FsError::InvalidPath));
+
+    // Rename must invalidate hot cache so old path resolves NotFound cleanly.
+    fs2.rename("/a/one.txt", "/a/moved.txt").unwrap();
+    let mut buf = [0u8; 8];
+    assert_eq!(
+        fs2.read_file("/a/one.txt", &mut buf),
+        Err(FsError::NotFound)
+    );
+    assert_eq!(fs2.read_file("/a/moved.txt", &mut buf).unwrap(), 1);
+}

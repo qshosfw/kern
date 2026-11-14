@@ -566,7 +566,7 @@ fn on_transfer_open(
         *next_ptr = (*next_ptr).wrapping_add(1).max(1);
         id
     };
-    let chunk_size = req.chunk_size.clamp(16, 200);
+    let chunk_size = req.chunk_size.clamp(16, 120);
     let path_bytes = req.path.as_bytes();
     unsafe {
         let t = &mut *core::ptr::addr_of_mut!(CURRENT_TRANSFER);
@@ -620,7 +620,7 @@ fn on_transfer_chunk(
     } else {
         let path = transfer.path_str();
         let off = req.offset as usize;
-        let len = (req.length as usize).min(180);
+        let len = (req.length as usize).min(120);
         let read_sz = hw
             .filesystem
             .read_file_at(path, off, &mut out[8..8 + len])

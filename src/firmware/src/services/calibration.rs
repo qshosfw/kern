@@ -231,6 +231,34 @@ fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 1
     let _ = write_protected_sys_file(vfs, CALIB_SIG_PATH, &sig_bytes);
 }
 
+#[cfg(feature = "filesystem")]
+#[inline(never)]
+pub fn reformat_storage(
+    vfs: &mut SystemStorage,
+    fallback_calib: &[u8; 512],
+    keep_calib: bool,
+) -> Result<(), ()> {
+    let staging = crate::services::staging_buf();
+    if keep_calib {
+        let loaded = matches!(vfs.read_file(CALIB_FILE_PATH, staging), Ok(512) if is_valid_calibration(staging))
+            || matches!(vfs.read_file(CALIB_BAK_PATH, staging), Ok(512) if is_valid_calibration(staging));
+        if !loaded {
+            staging.copy_from_slice(fallback_calib);
+        }
+    }
+    if vfs.fs.format(None).is_err() {
+        return Err(());
+    }
+    if keep_calib {
+        let _ = vfs.create_dir("/sys");
+        let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, staging);
+        let _ = write_protected_sys_file(vfs, CALIB_BAK_PATH, staging);
+        let mcu_uid = bsp::uid::read_mcu_uid();
+        sign_and_save_sig(vfs, staging, &mcu_uid);
+    }
+    Ok(())
+}
+
 impl SystemCalibration {
     pub const fn empty() -> Self {
         Self {

@@ -9,6 +9,7 @@ pub(crate) enum MetaQuery<'a> {
     Child(u16, &'a [u8]),
     FreeSlot,
     ListDir(u16),
+    CountFiles,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -264,6 +265,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                                     self.cur_inode.is_dir(),
                                 );
                             }
+                        }
+                    }
+                    MetaQuery::CountFiles => {
+                        if !self.cur_inode.is_dir() {
+                            matched = matched.saturating_add(1);
                         }
                     }
                     MetaQuery::FreeSlot => {}
@@ -612,6 +618,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         if new_size <= MAX_INLINE_LEN && self.cur_inode.is_inline() {
             self.cur_inode.inline_data[offset..offset + data.len()].copy_from_slice(data);
             self.cur_inode.size = new_size as u32;
+            self.cur_inode.generation = self.global_gen + 1;
             return self.commit_cur_inode(&[]);
         }
         self.write_pages_at(offset, data, None)

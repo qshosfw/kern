@@ -52,8 +52,19 @@ pub unsafe extern "C" fn api_rf_set_squelch(level: u8) {
 
 pub unsafe extern "C" fn api_rf_set_tx(active: u8) -> u8 {
     if let Some(ctx) = active_ctx_opt() {
-        ctx.set_tx(active != 0);
-        0
+        if active != 0 {
+            use crate::services::radio::coordinator::{ClientId, ClientToken, LockTier};
+            let token = ClientToken::new(ClientId::SYSTEM, LockTier::FOREGROUND);
+            let perm = ctx.state.coord.request_ptt_start(ctx.radio, token);
+            if perm.is_granted() {
+                0
+            } else {
+                (perm as u8) + 1
+            }
+        } else {
+            ctx.state.coord.request_ptt_stop(ctx.radio);
+            0
+        }
     } else {
         1
     }

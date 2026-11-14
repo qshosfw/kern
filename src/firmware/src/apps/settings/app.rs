@@ -12,7 +12,9 @@ use kernel::event::{Event, KeyCode, KeyState};
 
 use super::dialog;
 use super::options::page_defs;
-use super::page::{ActionId, MenuFrame, PageId, TAG_ACTION, TAG_ASSET, TAG_SUBMENU};
+#[cfg(feature = "filesystem")]
+use super::page::TAG_ASSET;
+use super::page::{ActionId, MenuFrame, PageId, TAG_ACTION, TAG_SUBMENU};
 
 #[repr(C)]
 pub struct SettingsApp {

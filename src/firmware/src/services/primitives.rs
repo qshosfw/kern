@@ -28,7 +28,14 @@ pub fn font_from_u8(font_id: u8) -> &'static gfx::GfxFont {
 impl<'a, 'hw> SysContext<'a, 'hw> {
     #[inline(always)]
     fn active_canvas(&mut self) -> &mut gfx::Canvas {
-        crate::runtime::syscall::active_canvas_mut()
+        #[cfg(feature = "krx_runtime")]
+        {
+            crate::runtime::syscall::active_canvas_mut()
+        }
+        #[cfg(not(feature = "krx_runtime"))]
+        {
+            crate::system_canvas()
+        }
     }
 
     #[inline(never)]

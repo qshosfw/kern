@@ -9,8 +9,8 @@ use crypto::cobs::Cobs;
 use kernel::service::SerialPort;
 use kernel::wire::*;
 
-pub const MAX_WIRE_BUF_LEN: usize = 148;
-pub const MAX_RAW_BUF_LEN: usize = 145;
+pub const MAX_RAW_BUF_LEN: usize = 146;
+pub const MAX_WIRE_BUF_LEN: usize = 149;
 
 pub struct WireDriver<S: SerialPort> {
     pub port: S,
@@ -18,6 +18,9 @@ pub struct WireDriver<S: SerialPort> {
     pub transport_profile: u16,
     rx_buf: [u8; MAX_WIRE_BUF_LEN],
     rx_len: usize,
+    rx_stage: [u8; 64],
+    rx_stage_pos: u8,
+    rx_stage_len: u8,
     in_frame: bool,
 }
 
@@ -33,6 +36,9 @@ impl<S: SerialPort> WireDriver<S> {
             transport_profile,
             rx_buf: [0; MAX_WIRE_BUF_LEN],
             rx_len: 0,
+            rx_stage: [0; 64],
+            rx_stage_pos: 0,
+            rx_stage_len: 0,
             in_frame: false,
         }
     }
@@ -40,31 +46,47 @@ impl<S: SerialPort> WireDriver<S> {
     /// Reset the streaming frame collector, clearing partial frames and noise.
     pub fn reset_collector(&mut self) {
         self.rx_len = 0;
+        self.rx_stage_pos = 0;
+        self.rx_stage_len = 0;
         self.in_frame = false;
     }
 
     /// Poll the serial byte stream, feeding the bounded COBS frame collector.
     #[inline(never)]
     pub fn poll(&mut self, uptime_ms: u32) -> Option<(WireHeader, usize)> {
-        let mut byte_buf = [0u8; 64];
-        let read_count = self.port.read(&mut byte_buf);
-        if read_count == 0 {
-            return None;
+        if self.rx_stage_pos >= self.rx_stage_len {
+            let read_count = self.port.read(&mut self.rx_stage);
+            if read_count == 0 {
+                return None;
+            }
+            self.rx_stage_pos = 0;
+            self.rx_stage_len = read_count.min(self.rx_stage.len()) as u8;
         }
 
-        let mut completed_record = None;
+        while (self.rx_stage_pos as usize) < (self.rx_stage_len as usize) {
+            let b = self.rx_stage[self.rx_stage_pos as usize];
+            self.rx_stage_pos += 1;
 
-        for &b in &byte_buf[..read_count] {
             if b == crypto::cobs::COBS_DELIMITER {
                 if self.in_frame && self.rx_len > 0 {
-                    if let Ok(raw_len) = Cobs::decode_inplace(&mut self.rx_buf, self.rx_len)
+                    let decoded = if let Ok(raw_len) =
+                        Cobs::decode_inplace(&mut self.rx_buf, self.rx_len)
                         && let Ok((header, _)) =
                             self.session.validate_record(&self.rx_buf[..raw_len])
                     {
-                        completed_record = Some((header, raw_len));
-                    }
+                        Some((header, raw_len))
+                    } else {
+                        None
+                    };
                     self.rx_len = 0;
                     self.in_frame = false;
+                    if let Some((header, raw_len)) = decoded {
+                        if header.service == SERVICE_CORE {
+                            self.handle_core_operation(&header, raw_len, uptime_ms);
+                        } else {
+                            return Some((header, raw_len));
+                        }
+                    }
                 } else {
                     self.rx_len = 0;
                     self.in_frame = true;
@@ -89,14 +111,6 @@ impl<S: SerialPort> WireDriver<S> {
                     self.rx_len += 1;
                 }
             }
-        }
-
-        if let Some((header, raw_len)) = completed_record {
-            if header.service == SERVICE_CORE {
-                self.handle_core_operation(&header, raw_len, uptime_ms);
-                return None;
-            }
-            return Some((header, raw_len));
         }
 
         None
@@ -175,5 +189,104 @@ impl<S: SerialPort> WireDriver<S> {
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
         self.send_frame(service, opcode, sequence, None, payload_data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockPort {
+        rx: [u8; 256],
+        rx_len: usize,
+        rx_pos: usize,
+        tx_len: usize,
+    }
+
+    impl MockPort {
+        fn new() -> Self {
+            Self {
+                rx: [0; 256],
+                rx_len: 0,
+                rx_pos: 0,
+                tx_len: 0,
+            }
+        }
+    }
+
+    impl SerialPort for MockPort {
+        fn write(&mut self, data: &[u8]) {
+            self.tx_len += data.len();
+        }
+
+        fn read(&mut self, buf: &mut [u8]) -> usize {
+            let avail = self.rx_len.saturating_sub(self.rx_pos);
+            let n = avail.min(buf.len());
+            if n > 0 {
+                buf[..n].copy_from_slice(&self.rx[self.rx_pos..self.rx_pos + n]);
+                self.rx_pos += n;
+            }
+            n
+        }
+    }
+
+    #[test]
+    fn test_coalesced_frames_in_single_read_and_max_128b_response() {
+        let mut session = WireSession::new();
+        session.begin_session(0x1122_3344, 128);
+
+        let mut raw = [0u8; MAX_RAW_BUF_LEN];
+        let mut wire1 = [0u8; MAX_WIRE_BUF_LEN];
+        let mut wire2 = [0u8; MAX_WIRE_BUF_LEN];
+        let n1 = session
+            .frame_record_raw(
+                SERVICE_CONTROL,
+                0x01,
+                0,
+                1,
+                None,
+                b"ONE!",
+                &mut raw,
+                &mut wire1,
+            )
+            .unwrap();
+        let n2 = session
+            .frame_record_raw(
+                SERVICE_CONTROL,
+                0x02,
+                0,
+                2,
+                None,
+                b"TWO!!",
+                &mut raw,
+                &mut wire2,
+            )
+            .unwrap();
+
+        let mut port = MockPort::new();
+        assert!(n1 + n2 <= 64);
+        port.rx[..n1].copy_from_slice(&wire1[..n1]);
+        port.rx[n1..n1 + n2].copy_from_slice(&wire2[..n2]);
+        port.rx_len = n1 + n2;
+
+        let mut drv = WireDriver::new(port);
+        drv.session.begin_session(0x1122_3344, 128);
+
+        let (hdr1, _) = drv.poll(100).expect("first coalesced frame");
+        assert_eq!(hdr1.sequence, 1);
+        assert_eq!(drv.current_payload(&hdr1), b"ONE!");
+
+        let (hdr2, _) = drv.poll(100).expect("second coalesced frame");
+        assert_eq!(hdr2.sequence, 2);
+        assert_eq!(drv.current_payload(&hdr2), b"TWO!!");
+        assert!(drv.poll(100).is_none());
+
+        // Max 128-byte response payload (8B header + 120B data) must fit without BadLength.
+        let max_payload = [0xA5u8; 128];
+        let written = drv
+            .send_response(&hdr2, WireStatus::Ok, &max_payload)
+            .unwrap();
+        assert!(written <= MAX_WIRE_BUF_LEN);
+        assert_eq!(drv.port.tx_len, written);
     }
 }

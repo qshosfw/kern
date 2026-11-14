@@ -14,7 +14,9 @@ use gfx::Canvas;
 use kernel::app::EventResult;
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyCode, KeyState};
-use kernel::ipc::{ipc_flags, ipc_msg_type, ipc_target};
+use kernel::ipc::ipc_target;
+#[cfg(feature = "krx_runtime")]
+use kernel::ipc::{ipc_flags, ipc_msg_type};
 use kernel::nav::NavStack;
 use kernel::proc::{ExecType, ProcState, ProcessTable};
 use keypad_lock::KeypadLockManager;
