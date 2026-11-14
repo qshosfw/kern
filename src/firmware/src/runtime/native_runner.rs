@@ -415,17 +415,19 @@ pub fn load_native_from_storage(
 
     // 4. Bind CapImports (0x0003) into the package GOT (Section 6.3 & Chapter 8)
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
+    let slot_start = load_base as usize;
+    let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
+    let got_addr = slot.got_base as usize;
+    if (got_addr & 3) != 0 || got_addr < slot_start || got_addr >= slot_end {
+        return Err(KrxLaunchError::ImportBindingFailed);
+    }
     if let Some(cap_body) = aux.cap_imports {
         let got_word_off = (exec.got_offset as usize) / 4;
-        let got_slice = if got_word_off < NATIVE_EXEC_BUFFER_WORDS {
-            unsafe {
-                core::slice::from_raw_parts_mut(
-                    (arena_base_ptr() as *mut u32).add(got_word_off),
-                    NATIVE_EXEC_BUFFER_WORDS - got_word_off,
-                )
-            }
-        } else {
-            &mut [][..]
+        let got_slice = unsafe {
+            core::slice::from_raw_parts_mut(
+                (arena_base_ptr() as *mut u32).add(got_word_off),
+                NATIVE_EXEC_BUFFER_WORDS - got_word_off,
+            )
         };
         if !bind_cap_imports(cap_body, got_slice, caps) {
             return Err(KrxLaunchError::ImportBindingFailed);
@@ -471,13 +473,6 @@ pub fn load_native_from_storage(
     let code_addr = raw_entry & !1;
     if code_addr < load_base || code_addr >= load_base.saturating_add(code_size) {
         return Err(KrxLaunchError::InvalidEntryPoint);
-    }
-
-    let slot_start = load_base as usize;
-    let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
-    let got_addr = slot.got_base as usize;
-    if (got_addr & 3) != 0 || got_addr < slot_start || got_addr >= slot_end {
-        return Err(KrxLaunchError::ImportBindingFailed);
     }
 
     // 6. Flush instruction pipeline before branching into SRAM arena
@@ -616,76 +611,57 @@ pub unsafe fn native_on_event(
     ctx: &mut SysContext<'static, 'static>,
     ev: &Event,
 ) -> EventResult {
-    let krx_ev = match ev {
+    let (kind, key, flags, payload) = match ev {
         Event::Key { code, state } => {
             let s_val = match state {
                 KeyState::Pressed => 0u32,
                 KeyState::Released => 1u32,
                 KeyState::Held => 2u32,
             };
-            KrxEvent {
-                kind: KRX_EV_KEY,
-                key: *code as u8,
-                flags: 0,
-                reserved: 0,
-                payload: s_val,
-            }
+            (KRX_EV_KEY, *code as u8, 0, s_val)
         }
-        Event::Encoder(dir) => KrxEvent {
-            kind: KRX_EV_ENCODER,
-            key: 0,
-            flags: 0,
-            reserved: 0,
-            payload: *dir as u32,
-        },
-        Event::Tick => KrxEvent {
-            kind: KRX_EV_TICK,
-            key: 0,
-            flags: 0,
-            reserved: 0,
-            payload: 0,
-        },
-        Event::Bus(bus_ev) => KrxEvent {
-            kind: KRX_EV_BUS,
-            key: bus_ev.event_id,
-            flags: (bus_ev.topic.0 & 0xFF) as u8,
-            reserved: 0,
-            payload: bus_ev.data,
-        },
-        Event::Usb(usb_ev) => KrxEvent {
-            kind: KRX_EV_USB,
-            key: *usb_ev as u8,
-            flags: 0,
-            reserved: 0,
-            payload: 0,
-        },
-        Event::Charging(chg) => KrxEvent {
-            kind: KRX_EV_POWER,
-            key: *chg as u8,
-            flags: 0,
-            reserved: 0,
-            payload: 0,
-        },
-        Event::Sys(sys_ev) => KrxEvent {
-            kind: kernel::proc::abi::KRX_EV_IPC,
-            key: sys_ev.target,
-            flags: sys_ev.command,
-            reserved: 0,
-            payload: sys_ev.arg as u32,
-        },
+        Event::Encoder(dir) => (KRX_EV_ENCODER, 0, 0, *dir as u32),
+        Event::Tick => (KRX_EV_TICK, 0, 0, 0),
+        Event::Bus(bus_ev) => (
+            KRX_EV_BUS,
+            bus_ev.event_id,
+            (bus_ev.topic.0 & 0xFF) as u8,
+            bus_ev.data,
+        ),
+        Event::Usb(usb_ev) => (KRX_EV_USB, *usb_ev as u8, 0, 0),
+        Event::Charging(chg) => (KRX_EV_POWER, *chg as u8, 0, 0),
+        Event::Sys(sys_ev) => (
+            kernel::proc::abi::KRX_EV_IPC,
+            sys_ev.target,
+            sys_ev.command,
+            sys_ev.arg as u32,
+        ),
         _ => return EventResult::Ignored,
     };
-    invoke_guest_event(ctx as *mut _, &krx_ev)
+    dispatch_krx_event(ctx as *mut _, kind, key, flags, payload)
 }
 
-#[inline(always)]
-fn invoke_guest_event(ctx: *mut SysContext<'static, 'static>, krx_ev: &KrxEvent) -> EventResult {
+#[inline(never)]
+fn dispatch_krx_event(
+    ctx: *mut SysContext<'static, 'static>,
+    kind: u8,
+    key: u8,
+    flags: u8,
+    payload: u32,
+) -> EventResult {
+    let krx_ev = KrxEvent {
+        kind,
+        key,
+        flags,
+        reserved: 0,
+        payload,
+    };
     let res = unsafe {
         invoke_guest(
             KRX_OP_EVENT,
-            ctx as *mut _,
+            ctx,
             core::ptr::null_mut(),
-            krx_ev as *const _ as *const (),
+            &krx_ev as *const _ as *const (),
         )
     };
     if res != 0 && res != 0xFFFF_FFFF {
@@ -718,14 +694,13 @@ pub unsafe fn native_on_modal_result(
         ),
         ModalResult::Canceled(tag) => (*tag, kernel::proc::abi::MODAL_RESULT_CANCELED, 0),
     };
-    let krx_ev = KrxEvent {
-        kind: kernel::proc::abi::KRX_EV_MODAL,
-        key: tag,
+    dispatch_krx_event(
+        ctx as *mut _,
+        kernel::proc::abi::KRX_EV_MODAL,
+        tag,
         flags,
-        reserved: 0,
         payload,
-    };
-    invoke_guest_event(ctx as *mut _, &krx_ev)
+    )
 }
 
 fn c_str_to_str(buf: &[u8]) -> Option<&str> {
