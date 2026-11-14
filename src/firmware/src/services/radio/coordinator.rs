@@ -146,7 +146,12 @@ pub struct RadioCoordinator {
     /// True if PA power was folded back due to high die/board temperature during prolonged TX.
     pub pa_thermal_foldback_active: bool,
 
-    // ── Hot 2-byte scalar fields (offset 18..40: 1-insn ldrh/strh) ─────────
+    // ── Hot compact sub-controllers (offset 18..36: byte fields < 32) ─────
+    /// Real-time RX Squelch Tail Elimination (STE) controller.
+    pub ste: RxSteController,
+    pub fsk_config: FskSidecarConfig,
+
+    // ── Hot 2-byte scalar fields (offset 36..58: 1-insn ldrh/strh) ─────────
     pub dual_watch: DualWatchMode,
     /// Time-Out Timer limit in seconds (0 = disabled).
     pub tot_limit_seconds: u16,
@@ -156,12 +161,9 @@ pub struct RadioCoordinator {
     pub rssi_moving_avg: [i16; 3],
 
     // ── Sub-controllers and state machines ───────────────────────────────
-    /// Real-time RX Squelch Tail Elimination (STE) controller.
-    pub ste: RxSteController,
     pub dwell: DwellController,
     pub audio_routing: AudioRoutingState,
     pub arbitrator: RadioArbitrator,
-    pub fsk_config: FskSidecarConfig,
     pub vfo_memory_index: [Option<u16>; 3],
     /// Per-VFO dynamic noise-floor estimator for Adaptive Squelch tracking.
     pub adaptive_squelch: [AdaptiveSquelchTracker; 3],
