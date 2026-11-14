@@ -119,7 +119,10 @@ impl ModalCompositor {
     ) -> &mut TextInputModel {
         crate::orchestrator::sink_enter_keys();
         self.tag = tag;
-        let mut model = TextInputModel::new(max_len);
+        self.modal = ActiveModal::TextInput(TextInputModel::new(max_len));
+        let ActiveModal::TextInput(model) = &mut self.modal else {
+            unreachable!()
+        };
         let _ = model.custom_title.push_str(title);
         model.is_passcode = is_passcode;
         model.digits_only = digits_only;
@@ -127,11 +130,7 @@ impl ModalCompositor {
         if digits_only {
             model.charset = gfx::gui::modules::text_input::Charset::Numbers;
         }
-        self.modal = ActiveModal::TextInput(model);
-        match &mut self.modal {
-            ActiveModal::TextInput(m) => m,
-            _ => unreachable!(),
-        }
+        model
     }
 
     #[cfg(feature = "text_input")]
@@ -478,28 +477,25 @@ impl OsCompositor {
 
         let modal_ref = unsafe { &*core::ptr::addr_of!(ACTIVE_MODAL) };
         let has_modal = modal_ref.is_active();
+        #[cfg(feature = "text_input")]
+        let is_text_input = has_modal && matches!(modal_ref.modal, ActiveModal::TextInput(_));
+        #[cfg(not(feature = "text_input"))]
+        let is_text_input = false;
 
-        if sb_cfg.visible {
-            #[cfg(feature = "text_input")]
-            let is_text_input = has_modal && matches!(modal_ref.modal, ActiveModal::TextInput(_));
-            #[cfg(not(feature = "text_input"))]
-            let is_text_input = false;
-
-            if !is_text_input {
-                if !sb_cfg.partial && sb_cfg.title.is_none() {
-                    if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
-                        sb_cfg.title = Some(meta.name);
-                    }
+        if sb_cfg.visible && !is_text_input {
+            if !sb_cfg.partial && sb_cfg.title.is_none() {
+                if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
+                    sb_cfg.title = Some(meta.name);
                 }
-                ctx.draw_status_bar_cfg(canvas, &sb_cfg);
             }
+            ctx.draw_status_bar_cfg(canvas, &sb_cfg);
         }
 
         // Render OS modal overlay on top of screen if active
         if has_modal {
             modal_ref.render_overlay(canvas);
             #[cfg(feature = "text_input")]
-            if matches!(modal_ref.modal, ActiveModal::TextInput(_)) {
+            if is_text_input {
                 ctx.draw_status_bar_right_mode(canvas, true, true);
             }
         }
