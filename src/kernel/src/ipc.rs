@@ -233,27 +233,31 @@ impl KrxIpcMessage {
         }
     }
 
+    #[inline(never)]
     pub fn new(sender_pid: u8, target_pid: u8, msg_type: u16, payload_data: &[u8]) -> Self {
         let mut msg = Self::empty();
         msg.sender_pid = sender_pid;
         msg.target_pid = target_pid;
         msg.msg_type = msg_type;
         let len = payload_data.len().min(24);
-        msg.payload[..len].copy_from_slice(&payload_data[..len]);
         msg.payload_len = len as u8;
+        let mut i = 0;
+        while i < len {
+            msg.payload[i] = payload_data[i];
+            i += 1;
+        }
         msg
     }
 
     pub fn reply_to(&self, payload_data: &[u8], is_error: bool) -> Self {
-        let mut rep = Self::empty();
-        rep.sender_pid = self.target_pid;
-        rep.target_pid = self.sender_pid;
-        rep.msg_type = self.msg_type;
+        let mut rep = Self::new(
+            self.target_pid,
+            self.sender_pid,
+            self.msg_type,
+            payload_data,
+        );
         rep.seq = self.seq;
         rep.flags = ipc_flags::REPLY | if is_error { ipc_flags::ERROR } else { 0 };
-        let len = payload_data.len().min(24);
-        rep.payload[..len].copy_from_slice(&payload_data[..len]);
-        rep.payload_len = len as u8;
         rep
     }
 
@@ -299,15 +303,16 @@ impl<const N: usize> IpcChannel<N> {
 
     /// Enqueue a message into the IPC channel.
     /// If seq is 0, auto-assigns the next monotonic sequence number.
-    pub fn send(&mut self, mut msg: KrxIpcMessage) -> bool {
+    pub fn send(&mut self, msg: KrxIpcMessage) -> bool {
         if self.len >= N {
             return false;
         }
-        if msg.seq == 0 {
+        let slot = &mut self.messages[self.len];
+        *slot = msg;
+        if slot.seq == 0 {
             self.next_seq = self.next_seq.wrapping_add(1).max(1);
-            msg.seq = self.next_seq;
+            slot.seq = self.next_seq;
         }
-        self.messages[self.len] = msg;
         self.len += 1;
         true
     }
