@@ -21,18 +21,16 @@ pub fn draw_s_meter(
         (((rssi_dbm + 121) as u32 * 11565) >> 16) as u8
     };
 
-    let ty = y + 5;
-    if steps <= 9 {
-        text::draw_str(canvas, x, ty, "S", font, Color::Fill);
-        text::draw_char(canvas, x + 6, ty, (b'0' + steps) as char, font, Color::Fill);
+    let mut buf = *b"S9+00";
+    let s_bytes: &[u8] = if steps <= 9 {
+        buf[1] = b'0' + steps;
+        &buf[..2]
     } else {
-        let s = match steps {
-            10 => "S9+10",
-            11 => "S9+20",
-            _ => "S9+30",
-        };
-        text::draw_str(canvas, x, ty, s, font, Color::Fill);
-    }
+        buf[3] = b'0' + (steps - 9);
+        &buf[..5]
+    };
+    let s = unsafe { core::str::from_utf8_unchecked(s_bytes) };
+    text::draw_str(canvas, x, y + 5, s, font, Color::Fill);
 
     let bar_x_start = x + 34;
     for i in 0..12 {
