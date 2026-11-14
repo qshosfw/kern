@@ -248,18 +248,18 @@ impl RadioCoordinator {
         self.adaptive_squelch_enabled = true;
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn active_channel(&self) -> &ChannelConfig {
         &self.channels[self.active_vfo.index().min(self.channels.len() - 1)]
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn active_channel_mut(&mut self) -> &mut ChannelConfig {
         let idx = self.active_vfo.index().min(self.channels.len() - 1);
         &mut self.channels[idx]
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn listening_channel(&self) -> &ChannelConfig {
         &self.channels[self.listening_vfo.index().min(self.channels.len() - 1)]
     }
