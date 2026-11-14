@@ -9,9 +9,9 @@ use super::page::MetricId;
 use super::page::{ActionId, ChoiceId, PageId, SettingDef, SettingField};
 
 #[cfg(feature = "text_input")]
-pub static MODEL_OPTIONS: [&'static str; 3] = ["UV-K1", "UV-K5 V3", "Custom..."];
+pub static MODEL_OPTIONS: &str = "UV-K1\0UV-K5 V3\0Custom...\0";
 #[cfg(not(feature = "text_input"))]
-pub static MODEL_OPTIONS: [&'static str; 2] = ["UV-K1", "UV-K5 V3"];
+pub static MODEL_OPTIONS: &str = "UV-K1\0UV-K5 V3\0";
 
 pub static SPLASH_TIME_OPTIONS: &str = "Skip\00.5s\01.0s\02.0s\03.0s\0";
 pub static BOOT_ANIM_OPTIONS: &str = "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0";

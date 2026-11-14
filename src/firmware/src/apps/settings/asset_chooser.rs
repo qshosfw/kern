@@ -170,6 +170,14 @@ const _: () = {
             <= crate::data::arena::TRANSIENT_ARENA_BYTES
                 - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
     );
+    assert!(
+        crate::data::arena::TRANSIENT_SCRATCH_OFFSET % core::mem::align_of::<AssetChooserStorage>()
+            == 0
+    );
+    assert!(
+        core::mem::align_of::<AssetChooserStorage>()
+            <= core::mem::align_of::<crate::data::arena::AlignedArena>()
+    );
 };
 
 #[inline(always)]

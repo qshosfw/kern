@@ -70,7 +70,7 @@ fn populate_item(
             }
             item.item_type = MenuItemType::Choice {
                 selected: sel,
-                options: gfx::gui::modules::menu::SheetOptions::Static(opts),
+                options: gfx::gui::modules::menu::SheetOptions::Packed(opts),
             };
         }
         TAG_RANGE => {

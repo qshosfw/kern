@@ -44,45 +44,39 @@ fn fmix64(mut k: u64) -> u64 {
     k
 }
 
+/// Shared MurmurHash3 64-bit chunk-mixing accumulator over 8-byte little-endian blocks.
+#[inline(never)]
+fn murmur3_64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0x9e3779b97f4a7c15; // DeltaFW golden ratio seed
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        let chunk = u64::from_le_bytes([
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+            bytes[i + 4],
+            bytes[i + 5],
+            bytes[i + 6],
+            bytes[i + 7],
+        ]);
+        let mut k = chunk.wrapping_mul(0x87c37b91114253d5);
+        k = k.rotate_left(31);
+        k = k.wrapping_mul(0x4cf5ad432745937f);
+        h ^= k;
+        h = h.rotate_left(27);
+        h = h.wrapping_mul(5).wrapping_add(0x52dce729);
+        i += 8;
+    }
+    h ^= bytes.len() as u64;
+    fmix64(h)
+}
+
 /// Generates a deterministic 64-bit serial from the 16-byte CPU ID at 0x1FFF3000.
 /// 100% bitwise identical to DeltaFW's `GetSerial()` in `identifier.c`.
 pub fn get_hardware_serial64() -> u64 {
     let id_bytes = read_cpu_id_16();
-    let k1 = u64::from_le_bytes([
-        id_bytes[0],
-        id_bytes[1],
-        id_bytes[2],
-        id_bytes[3],
-        id_bytes[4],
-        id_bytes[5],
-        id_bytes[6],
-        id_bytes[7],
-    ]);
-    let k2 = u64::from_le_bytes([
-        id_bytes[8],
-        id_bytes[9],
-        id_bytes[10],
-        id_bytes[11],
-        id_bytes[12],
-        id_bytes[13],
-        id_bytes[14],
-        id_bytes[15],
-    ]);
-
-    let mut h: u64 = 0x9e3779b97f4a7c15; // DeltaFW golden ratio seed
-
-    for &k in &[k1, k2] {
-        let mut k_mixed = k.wrapping_mul(0x87c37b91114253d5);
-        k_mixed = k_mixed.rotate_left(31);
-        k_mixed = k_mixed.wrapping_mul(0x4cf5ad432745937f);
-        h ^= k_mixed;
-        h = h.rotate_left(27);
-        h = h.wrapping_mul(5).wrapping_add(0x52dce729);
-    }
-
-    // Finalize with length 16
-    h ^= 16;
-    fmix64(h)
+    murmur3_64(&id_bytes)
 }
 
 /// Computes an IEEE EUI-48 (6-byte) MAC address derived from hardware serial.
@@ -157,31 +151,7 @@ pub fn get_crockford_serial() -> [u8; 15] {
 /// Ideal for cryptographic PRNG seeding and physical device fingerprinting.
 pub fn get_hardware_fingerprint256() -> u64 {
     let raw = read_uid_256();
-    let mut h: u64 = 0x9e3779b97f4a7c15;
-
-    let mut i = 0;
-    while i < 256 {
-        let chunk = u64::from_le_bytes([
-            raw[i],
-            raw[i + 1],
-            raw[i + 2],
-            raw[i + 3],
-            raw[i + 4],
-            raw[i + 5],
-            raw[i + 6],
-            raw[i + 7],
-        ]);
-        let mut k = chunk.wrapping_mul(0x87c37b91114253d5);
-        k = k.rotate_left(31);
-        k = k.wrapping_mul(0x4cf5ad432745937f);
-        h ^= k;
-        h = h.rotate_left(27);
-        h = h.wrapping_mul(5).wrapping_add(0x52dce729);
-        i += 8;
-    }
-
-    h ^= 256;
-    fmix64(h)
+    murmur3_64(&raw)
 }
 
 /// Formats the 96-bit MCU UID into a null-terminated 25-byte Hex ASCII string buffer.
@@ -209,4 +179,32 @@ pub fn is_mcu_read_protected() -> bool {
 #[inline(always)]
 pub fn get_mcu_rdp_level() -> py32_hal::flash::RdpLevel {
     py32_hal::flash::InternalFlash::rdp_status()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::murmur3_64;
+
+    #[test]
+    fn murmur3_64_matches_legacy_16_byte_mixing() {
+        let input = *b"0123456789ABCDEF";
+        let k1 = u64::from_le_bytes(input[0..8].try_into().unwrap());
+        let k2 = u64::from_le_bytes(input[8..16].try_into().unwrap());
+        let mut h: u64 = 0x9e3779b97f4a7c15;
+        for &k in &[k1, k2] {
+            let mut km = k.wrapping_mul(0x87c37b91114253d5);
+            km = km.rotate_left(31);
+            km = km.wrapping_mul(0x4cf5ad432745937f);
+            h ^= km;
+            h = h.rotate_left(27);
+            h = h.wrapping_mul(5).wrapping_add(0x52dce729);
+        }
+        h ^= 16;
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51afd7ed558ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ceb9fe1a85ec53);
+        h ^= h >> 33;
+        assert_eq!(murmur3_64(&input), h);
+    }
 }

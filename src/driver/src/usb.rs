@@ -124,6 +124,18 @@ impl UsbDriver {
         self.product_len = pos as u8;
     }
 
+    /// Release USB soft-connect pull-up and reset link state before deep STOP sleep.
+    pub fn disconnect_for_sleep(&mut self) {
+        unsafe {
+            let pwr = USBD_POWER_U8.read_volatile();
+            USBD_POWER_U8.write_volatile(pwr & !USB_POWER_SOFTCONN);
+        }
+        self.is_connected = false;
+        self.configured = false;
+        self.consecutive_sof = 0;
+        self.ep0_transfer = None;
+    }
+
     /// Update live power and battery telemetry for standard USB descriptors and CAT queries.
     pub fn update_power_telemetry(&mut self, voltage_mv: u16, pct: u8, charging: bool) {
         self.battery_voltage_mv = voltage_mv;

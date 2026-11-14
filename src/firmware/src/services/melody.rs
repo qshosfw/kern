@@ -13,12 +13,17 @@ pub use types::*;
 
 use crate::services::SystemStorage;
 
+enum KtSink<'a> {
+    Slice(&'a mut [ToneNote; MAX_MELODY_NOTES]),
+    Buffer(&'a mut MelodyBuffer),
+}
+
 #[inline(never)]
 fn read_kt_file(
     storage: &mut SystemStorage,
     path: &str,
     allow_krgr: bool,
-    out: &mut [ToneNote; MAX_MELODY_NOTES],
+    mut sink: KtSink<'_>,
 ) -> usize {
     if path.is_empty() {
         return 0;
@@ -40,7 +45,13 @@ fn read_kt_file(
     while pos + 4 <= n && written < count {
         let freq = u16::from_be_bytes([raw[pos], raw[pos + 1]]);
         let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]);
-        out[written] = ToneNote::new(freq, dur);
+        let note = ToneNote::new(freq, dur);
+        match &mut sink {
+            KtSink::Slice(out) => out[written] = note,
+            KtSink::Buffer(buf) => {
+                let _ = buf.push(note);
+            }
+        }
         written += 1;
         pos += 4;
     }
@@ -64,7 +75,7 @@ pub fn load_roger_notes(
     path: &str,
     out: &mut [ToneNote; MAX_MELODY_NOTES],
 ) -> usize {
-    let n = read_kt_file(storage, path, true, out);
+    let n = read_kt_file(storage, path, true, KtSink::Slice(out));
     if n > 0 {
         return n;
     }
@@ -82,87 +93,13 @@ pub fn load_jingle_melody(
     if boot_jingle_mode == 0 {
         return buf;
     }
-    let mut notes = [ToneNote::new(0, 0); MAX_MELODY_NOTES];
-    let n = read_kt_file(storage, path, false, &mut notes);
-    let src = if n > 0 {
-        &notes[..n]
-    } else {
-        MelodyEngine::boot_jingle_notes(BootJingleType::from_u8(boot_jingle_mode))
-    };
-    for note in src {
-        let _ = buf.push(*note);
+    let n = read_kt_file(storage, path, false, KtSink::Buffer(&mut buf));
+    if n == 0 {
+        for note in MelodyEngine::boot_jingle_notes(BootJingleType::from_u8(boot_jingle_mode)) {
+            let _ = buf.push(*note);
+        }
     }
     buf
-}
-
-/// Fast zero-allocation, zero-I/O display name extractor for roger files
-pub fn get_roger_name(path: &str) -> gfx::gui::modules::menu::ShortString {
-    use gfx::gui::modules::menu::ShortString;
-    let name_start = gfx::text::rfind_byte(path, b'/').map_or(0, |i| i + 1);
-    let file_part = &path[name_start..];
-    let base = if let Some(dot_idx) = gfx::text::rfind_byte(file_part, b'.') {
-        &file_part[..dot_idx]
-    } else {
-        file_part
-    };
-    if base.starts_with("01_classic") {
-        ShortString::from_str("Classic")
-    } else if base.starts_with("02_tiny") {
-        ShortString::from_str("Tiny")
-    } else if base.starts_with("03_mototrbo") {
-        ShortString::from_str("MotoTRBO")
-    } else if base.starts_with("04_apx6000") {
-        ShortString::from_str("APX6000")
-    } else if base.starts_with("05_t40") {
-        ShortString::from_str("T40")
-    } else if base.starts_with("06_tlkrt80") {
-        ShortString::from_str("TLKR T80")
-    } else if base.starts_with("07_cobra") {
-        ShortString::from_str("Cobra")
-    } else {
-        let clean = if base.len() > 3
-            && base.as_bytes()[0].is_ascii_digit()
-            && base.as_bytes()[1].is_ascii_digit()
-            && base.as_bytes()[2] == b'_'
-        {
-            &base[3..]
-        } else {
-            base
-        };
-        ShortString::from_str(clean)
-    }
-}
-
-/// Fast zero-allocation, zero-I/O display name extractor for jingle files
-pub fn get_jingle_name(path: &str) -> gfx::gui::modules::menu::ShortString {
-    use gfx::gui::modules::menu::ShortString;
-    let name_start = gfx::text::rfind_byte(path, b'/').map_or(0, |i| i + 1);
-    let file_part = &path[name_start..];
-    let base = if let Some(dot_idx) = gfx::text::rfind_byte(file_part, b'.') {
-        &file_part[..dot_idx]
-    } else {
-        file_part
-    };
-    if base.starts_with("01_chime") {
-        ShortString::from_str("Chime")
-    } else if base.starts_with("02_nokia") {
-        ShortString::from_str("Nokia")
-    } else if base.starts_with("03_chirp") {
-        ShortString::from_str("Chirp")
-    } else if base.starts_with("04_gameboy") {
-        ShortString::from_str("GameBoy")
-    } else {
-        let clean = if base.len() > 3
-            && base.as_bytes()[0].is_ascii_digit()
-            && base.as_bytes()[1].is_ascii_digit()
-            && base.as_bytes()[2] == b'_'
-        {
-            &base[3..]
-        } else {
-            base
-        };
-        ShortString::from_str(clean)
-    }
 }
 
 #[cfg(all(
@@ -172,23 +109,26 @@ pub fn get_jingle_name(path: &str) -> gfx::gui::modules::menu::ShortString {
 fn write_provision_ton(storage: &mut SystemStorage, path: &str, name: &str, notes: &[ToneNote]) {
     if !storage.exists(path) {
         let mut buf = [0u8; 160];
+        let max_notes = ((buf.len() - 4) / 4).min(MAX_MELODY_NOTES);
+        let note_count = notes.len().min(max_notes);
         buf[0] = b'K';
         buf[1] = b'T';
         buf[2] = 1;
-        buf[3] = notes.len() as u8;
+        buf[3] = note_count as u8;
         let mut pos = 4;
-        for note in notes {
+        for note in &notes[..note_count] {
             buf[pos..pos + 2].copy_from_slice(&note.freq_hz.to_be_bytes());
             buf[pos + 2..pos + 4].copy_from_slice(&note.duration_ms.to_be_bytes());
             pos += 4;
         }
-        let name_bytes = name.as_bytes();
-        if !name_bytes.is_empty() {
+        let max_name = buf.len().saturating_sub(pos + 2);
+        let name_len = name.len().min(max_name).min(u8::MAX as usize);
+        if name_len > 0 {
             buf[pos] = TAG_NAME;
-            buf[pos + 1] = name_bytes.len() as u8;
+            buf[pos + 1] = name_len as u8;
             pos += 2;
-            buf[pos..pos + name_bytes.len()].copy_from_slice(name_bytes);
-            pos += name_bytes.len();
+            buf[pos..pos + name_len].copy_from_slice(&name.as_bytes()[..name_len]);
+            pos += name_len;
         }
         let _ = storage.write_file(path, &buf[..pos]);
     }

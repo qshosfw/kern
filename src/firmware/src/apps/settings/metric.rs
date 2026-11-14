@@ -36,7 +36,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         }
         MetricId::SystemSerial => {
             let serial = bsp::uid::get_crockford_serial();
-            out.set_str(unsafe { core::str::from_utf8_unchecked(&serial[..14]) });
+            out.set_str(utils::format::ascii_str(&serial[..14]).unwrap_or(""));
             return;
         }
         MetricId::SystemMac => {
@@ -90,7 +90,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
                             "Locked"
                         }
                     }
-                    MetricId::DebugRdp => py32_hal::flash::InternalFlash::rdp_status().short_str(),
+                    MetricId::DebugRdp => bsp::uid::get_mcu_rdp_level().short_str(),
                     _ => "None",
                 };
                 out.set_str(s);

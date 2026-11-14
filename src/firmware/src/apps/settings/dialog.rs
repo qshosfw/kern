@@ -101,12 +101,11 @@ pub fn handle_security_press(ctx: &mut SysContext) {
 pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
     match action_id {
         ActionId::ChooseModel => {
-            let sel =
-                (ctx.config.system.model as usize).min(super::device::MODEL_OPTIONS.len() - 1);
+            let opts = gfx::gui::modules::menu::SheetOptions::Packed(super::device::MODEL_OPTIONS);
+            let sel = (ctx.config.system.model as usize).min(opts.len() - 1);
             ctx.show_sheet(
                 TAG_MODEL_CHOOSER,
-                OptionSheet::new_static("Model", &super::device::MODEL_OPTIONS, sel)
-                    .with_radio(true),
+                OptionSheet::new("Model", opts, sel).with_radio(true),
             );
         }
         #[cfg(feature = "text_input")]

@@ -2,10 +2,10 @@
 
 use super::page::{ChoiceId, MetricId, PageId, RangeId, SettingDef, SettingField};
 
-pub static BATTERY_K5_OPTIONS: [&'static str; 4] = ["1600 mAh", "2200 mAh", "3500 mAh", "External"];
+pub static BATTERY_K5_OPTIONS: &str = "1600 mAh\02200 mAh\03500 mAh\0External\0";
 pub static BATTERY_K5_TYPES: [u8; 4] = [0, 1, 2, 5];
 
-pub static BATTERY_K1_OPTIONS: [&'static str; 3] = ["1500 mAh", "2500 mAh", "External"];
+pub static BATTERY_K1_OPTIONS: &str = "1500 mAh\02500 mAh\0External\0";
 pub static BATTERY_K1_TYPES: [u8; 3] = [3, 4, 5];
 
 pub static BATTERY_FORMAT_OPTIONS: &str =
@@ -16,11 +16,11 @@ pub static AUTO_POWER_OFF_OPTIONS: &str = "Off\015 Mins\030 Mins\01 Hour\0";
 pub static POWER_PROFILE_OPTIONS: &str = "Power Save\0Balanced\0Performance\0";
 
 #[inline(always)]
-pub fn battery_options_and_types(nav_layout: u8) -> (&'static [&'static str], &'static [u8]) {
+pub fn battery_options_and_types(nav_layout: u8) -> (&'static str, &'static [u8]) {
     if nav_layout == 0 {
-        (&BATTERY_K1_OPTIONS, &BATTERY_K1_TYPES)
+        (BATTERY_K1_OPTIONS, &BATTERY_K1_TYPES)
     } else {
-        (&BATTERY_K5_OPTIONS, &BATTERY_K5_TYPES)
+        (BATTERY_K5_OPTIONS, &BATTERY_K5_TYPES)
     }
 }
 

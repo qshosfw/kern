@@ -256,7 +256,11 @@ pub fn format_num_msg<'a>(buf: &'a mut [u8], prefix: &str, val: u32, suffix: &st
 
 /// Format voltage in millivolts with 1 or 2 decimal digits (e.g. "8.24v" or "8.2v").
 pub fn format_voltage(mv: u16, digits: u8, buf: &mut [u8; 12]) -> &str {
-    let val = if digits == 2 { mv / 10 } else { mv / 100 };
+    let val = if digits == 2 {
+        utils::math::div10_u16(mv).0
+    } else {
+        utils::math::div100_u16(mv).0
+    };
     format_int_fixed(val as i32, digits, "", "v", buf)
 }
 

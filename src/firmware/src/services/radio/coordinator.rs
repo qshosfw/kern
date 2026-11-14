@@ -463,6 +463,7 @@ impl RadioCoordinator {
 
     pub const FSK_CLIENT: ClientToken = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::SERVICE);
 
+    #[inline(never)]
     pub fn set_audio_muted<R: RfAudioPath>(&mut self, radio: &mut R, muted: bool) {
         if self.audio_path_muted != muted {
             self.audio_path_muted = muted;
@@ -1000,6 +1001,7 @@ impl RadioCoordinator {
         }
     }
 
+    #[inline(never)]
     fn tick_tx<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
         // Lead-in countdown before unmuting mic
         if let TxState::LeadIn { remaining_ms } = self.tx_state {
@@ -1121,6 +1123,7 @@ impl RadioCoordinator {
         }
     }
 
+    #[inline(never)]
     fn tick_arbitrator<R: RadioService>(&mut self, radio: &mut R) -> Option<RadioEvent> {
         let arb_ev = self.arbitrator.tick(10)?;
         match arb_ev {
@@ -1162,6 +1165,7 @@ impl RadioCoordinator {
         }
     }
 
+    #[inline(never)]
     fn process_carrier_active<R: RadioService>(&mut self, radio: &mut R, idx: usize) -> RadioEvent {
         self.activity_count[idx] = self.activity_count[idx].saturating_add(1);
 

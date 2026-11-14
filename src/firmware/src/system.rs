@@ -101,14 +101,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     #[cfg(feature = "filesystem")]
     hw.filesystem.fs.dev.deep_power_down();
     #[cfg(feature = "usb")]
-    {
-        // Avoid USB bus disturbance during deep sleep: release soft connect and clear endpoints
-        unsafe {
-            use py32_hal::pac::usbd::*;
-            let pwr = USBD_POWER_U8.read_volatile();
-            USBD_POWER_U8.write_volatile(pwr & !USB_POWER_SOFTCONN);
-        }
-    }
+    hw.usb.disconnect_for_sleep();
 
     // 3. Mark power service profile as deep sleep
     unsafe {
