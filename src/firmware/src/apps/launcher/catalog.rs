@@ -29,7 +29,7 @@ impl PackageCatalogEntry {
     }
 }
 
-fn extract_filename(path: &str) -> &str {
+pub fn extract_filename(path: &str) -> &str {
     let start = gfx::text::rfind_byte(path, b'/').map_or(0, |i| i + 1);
     &path[start..]
 }

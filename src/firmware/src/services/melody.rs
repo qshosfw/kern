@@ -159,7 +159,7 @@ fn build_tone_path<'a>(
     }
     buf[..dir_prefix.len()].copy_from_slice(dir_prefix);
     buf[dir_prefix.len()..total].copy_from_slice(fname);
-    core::str::from_utf8(&buf[..total]).ok()
+    utils::format::ascii_str(&buf[..total])
 }
 
 #[cfg(not(all(feature = "filesystem", feature = "provision_rogers")))]

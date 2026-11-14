@@ -32,17 +32,19 @@ const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/leaf_app/le
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
 const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/paged_app/paged.krx");
 
-/// Extract the filename component from a path (e.g. "/prov/app.krx" -> "app.krx").
-fn filename_from_path(path: &str) -> &str {
-    let bytes = path.as_bytes();
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        if bytes[i] == b'/' {
-            return &path[i + 1..];
-        }
+#[inline(never)]
+fn join_path<'a>(buf: &'a mut [u8; 48], prefix: &str, name: &str) -> Option<&'a str> {
+    let p = prefix.as_bytes();
+    let n = name.as_bytes();
+    let total = p.len() + n.len();
+    if total > buf.len() {
+        return None;
     }
-    path
+    unsafe {
+        core::ptr::copy_nonoverlapping(p.as_ptr(), buf.as_mut_ptr(), p.len());
+        core::ptr::copy_nonoverlapping(n.as_ptr(), buf.as_mut_ptr().add(p.len()), n.len());
+        Some(core::str::from_utf8_unchecked(buf.get_unchecked(..total)))
+    }
 }
 
 /// Write a pre-built valid KRX package directly to KernFS storage with idempotency.
@@ -100,11 +102,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
     }
     let entries: &mut [DirEntryInfo; 8] = unsafe {
         let base = arena_tail.as_mut_ptr() as *mut DirEntryInfo;
-        let mut idx = 0;
-        while idx < 8 {
-            base.add(idx).write(DirEntryInfo::empty());
-            idx += 1;
-        }
+        core::ptr::write_bytes(base, 0, 8);
         &mut *(base as *mut [DirEntryInfo; 8])
     };
     let count = filesystem.list_dir("/prov", entries).unwrap_or(0);
@@ -121,24 +119,16 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         }
 
         let raw_entry = entry.path.as_str();
-        let fname = filename_from_path(raw_entry);
+        let fname = crate::apps::launcher::catalog::extract_filename(raw_entry);
         if fname.is_empty() {
             continue;
         }
 
-        let mut src_arr = [0u8; 40];
+        let mut src_arr = [0u8; 48];
         let src_path = if raw_entry.starts_with('/') {
             raw_entry
         } else {
-            let prefix = b"/prov/";
-            let fb = fname.as_bytes();
-            let slen = prefix.len() + fb.len();
-            if slen > src_arr.len() {
-                continue;
-            }
-            src_arr[..prefix.len()].copy_from_slice(prefix);
-            src_arr[prefix.len()..slen].copy_from_slice(fb);
-            let Ok(s) = core::str::from_utf8(&src_arr[..slen]) else {
+            let Some(s) = join_path(&mut src_arr, "/prov/", fname) else {
                 continue;
             };
             s
@@ -174,16 +164,10 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         };
 
         let mut dst_arr = [0u8; 48];
-        let p_bytes = prefix.as_bytes();
-        let total_len = p_bytes.len() + b.len();
-        if total_len <= dst_arr.len() {
-            dst_arr[..p_bytes.len()].copy_from_slice(p_bytes);
-            dst_arr[p_bytes.len()..total_len].copy_from_slice(b);
-            if let Ok(dst_path) = core::str::from_utf8(&dst_arr[..total_len]) {
-                let _ = filesystem.remove(dst_path);
-                if filesystem.write_file(dst_path, buf).is_ok() {
-                    let _ = filesystem.remove(src_path);
-                }
+        if let Some(dst_path) = join_path(&mut dst_arr, prefix, fname) {
+            let _ = filesystem.remove(dst_path);
+            if filesystem.write_file(dst_path, buf).is_ok() {
+                let _ = filesystem.remove(src_path);
             }
         }
     }

@@ -15,16 +15,13 @@ pub use system::SystemConfig;
 #[inline(never)]
 pub(crate) fn read_cstr(buf: &[u8]) -> &str {
     let len = gfx::text::find_byte(buf, 0).unwrap_or(buf.len());
-    core::str::from_utf8(&buf[..len]).unwrap_or("")
+    utils::format::ascii_str(&buf[..len]).unwrap_or("")
 }
 
 #[inline(never)]
 pub(crate) fn write_cstr(buf: &mut [u8], path: &str) {
     buf.fill(0);
-    let mut copy_len = path.len().min(buf.len());
-    while copy_len > 0 && !path.is_char_boundary(copy_len) {
-        copy_len -= 1;
-    }
+    let copy_len = path.len().min(buf.len());
     buf[..copy_len].copy_from_slice(&path.as_bytes()[..copy_len]);
 }
 
