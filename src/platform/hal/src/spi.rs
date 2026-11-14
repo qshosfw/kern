@@ -35,25 +35,8 @@ pub fn init() {
     mosi.set_pull(pac::gpio::PULL_NONE);
     mosi.configure_af(pac::gpio::AF0, pac::gpio::SPEED_MEDIUM);
 
-    // Configure SPI1 registers
-    unsafe {
-        // CR1: Master, CPOL=1, CPHA=1, 8-bit MSB, SSM+SSI, BR=/4 (12 MHz @ 48 MHz PCLK)
-        // At 12 MHz, full 1024-byte screen transfer takes 0.68ms (4x faster blits, lower active power)
-        let cr1 = spi::CR1_MSTR
-            | spi::CR1_CPOL
-            | spi::CR1_CPHA
-            | spi::CR1_SSM
-            | spi::CR1_SSI
-            | (0b001 << spi::CR1_BR_SHIFT); // /4 = 48MHz/4 = 12MHz
-        SPI1.cr1().write_volatile(cr1);
-
-        // CR2: Clear to 0 (no DMA / SSOE / interrupts)
-        SPI1.cr2().write_volatile(0);
-
-        // Enable SPI
-        let val = SPI1.cr1().read_volatile();
-        SPI1.cr1().write_volatile(val | spi::CR1_SPE);
-    }
+    // BR=/4 (12 MHz @ 48 MHz PCLK)
+    set_spi_br(SPI1, 0b001);
 }
 
 /// Initialize SPI2 peripheral for Flash.
@@ -77,18 +60,8 @@ pub fn init_spi2() {
     miso.set_pull(pac::gpio::PULL_NONE);
     miso.configure_af(9, pac::gpio::SPEED_HIGH);
 
-    unsafe {
-        let cr1 = spi::CR1_MSTR
-            | spi::CR1_CPOL
-            | spi::CR1_CPHA
-            | spi::CR1_SSM
-            | spi::CR1_SSI
-            | (0b000 << spi::CR1_BR_SHIFT); // BR=/2 = 24MHz
-        SPI2.cr1().write_volatile(cr1);
-        SPI2.cr2().write_volatile(0);
-        let val = SPI2.cr1().read_volatile();
-        SPI2.cr1().write_volatile(val | spi::CR1_SPE);
-    }
+    // BR=/2 = 24MHz
+    set_spi_br(SPI2, 0b000);
 }
 
 /// Dynamic baud rate prescalers for SPI1 (LCD interface).
@@ -107,20 +80,19 @@ pub enum Spi1Speed {
 }
 
 /// Update SPI baud rate prescaler cleanly after draining active bus transfers.
+#[inline(never)]
 fn set_spi_br(spi_inst: pac::spi::SpiInstance, br: u32) {
+    let _ = wait_idle_instance(spi_inst);
     unsafe {
-        let mut timeout = 100_000;
-        while spi_inst.sr().read_volatile() & spi::SR_BSY != 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                break;
-            }
-        }
-        let mut cr1 = spi_inst.cr1().read_volatile();
-        // SPE must be cleared before modifying BR bits
-        spi_inst.cr1().write_volatile(cr1 & !spi::CR1_SPE);
-        cr1 &= !(0b111 << spi::CR1_BR_SHIFT);
-        cr1 |= (br & 0b111) << spi::CR1_BR_SHIFT;
+        let cr1 = spi::CR1_MSTR
+            | spi::CR1_CPOL
+            | spi::CR1_CPHA
+            | spi::CR1_SSM
+            | spi::CR1_SSI
+            | ((br & 0b111) << spi::CR1_BR_SHIFT);
+        // Writing cr1 (without CR1_SPE) disables SPE while updating BR
+        spi_inst.cr1().write_volatile(cr1);
+        spi_inst.cr2().write_volatile(0);
         spi_inst.cr1().write_volatile(cr1 | spi::CR1_SPE);
     }
 }
