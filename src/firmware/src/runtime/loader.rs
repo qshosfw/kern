@@ -41,19 +41,21 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
     let mut summary_uninit = core::mem::MaybeUninit::uninit();
     let summary = KrxPreamble::summarize_into(&header_buf[..header_read], &mut summary_uninit)?;
-    let preamble = summary.preamble;
-    let header_len = preamble.header_len as usize;
+    let header_len = summary.preamble.header_len as usize;
     if header_len > header_read {
         return Err(KrxLaunchError::TruncatedPackage);
     }
 
-    let exec_class = preamble.execution_class().unwrap_or(KrxClass::Declare);
+    let exec_class = summary
+        .preamble
+        .execution_class()
+        .unwrap_or(KrxClass::Declare);
     #[cfg(feature = "krx_native")]
     let is_native_or_paged = matches!(exec_class, KrxClass::Native | KrxClass::Paged);
     #[cfg(not(feature = "krx_native"))]
     let is_native_or_paged = false;
     if !is_native_or_paged {
-        let _ = (ctx, path, preamble);
+        let _ = (ctx, path);
         return Err(match exec_class {
             KrxClass::Declare | KrxClass::VMachine => KrxLaunchError::VmDisabled,
             _ => KrxLaunchError::ExecutionFailed,
@@ -77,8 +79,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     }
 
     // 3. Verify RAM and stack headroom requirements against Execution Section
-    let exec_sec = summary.exec;
-    if let Some(ref exec) = exec_sec {
+    if let Some(ref exec) = summary.exec {
         let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
         let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
         let min_stack = (exec.min_stack_bytes as usize).min(128);
@@ -104,8 +105,10 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
     #[cfg(feature = "krx_native")]
     let (vtable, instance) = {
-        let aux = summary.aux;
-        let exec_sec = exec_sec.ok_or(KrxLaunchError::MissingExecution)?;
+        let exec_sec = summary
+            .exec
+            .as_ref()
+            .ok_or(KrxLaunchError::MissingExecution)?;
         let arena_buf = super::native_runner::transient_arena_bytes_mut();
         let max_payload = arena_buf.len() - 256;
         let to_read = if exec_sec.payload_size > 0 {
@@ -122,9 +125,9 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             app_name,
             path,
             payload_read,
-            &preamble,
-            &exec_sec,
-            &aux,
+            &summary.preamble,
+            exec_sec,
+            &summary.aux,
             required_caps,
             dyn_pid,
         )?;
@@ -139,7 +142,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         &'static kernel::app::AppVTable<SysContext<'static, 'static>>,
         *mut (),
     ) = {
-        let _ = (ctx, path, preamble, app_name, dyn_pid, required_caps);
+        let _ = (ctx, path, app_name, dyn_pid, required_caps);
         return Err(KrxLaunchError::ExecutionFailed);
     };
 
