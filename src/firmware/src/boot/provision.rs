@@ -125,7 +125,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         }
 
         let mut src_arr = [0u8; 48];
-        let src_path = if raw_entry.starts_with('/') {
+        let src_path = if raw_entry.starts_with("/") {
             raw_entry
         } else {
             let Some(s) = join_path(&mut src_arr, "/prov/", fname) else {

@@ -12,14 +12,20 @@ pub struct SystemConfig {
     pub crc32: u32,
 }
 
-#[inline(always)]
-fn ascii_or<'a>(bytes: &'a [u8], default: &'a str) -> &'a str {
-    for &b in bytes {
-        if b < 32 || b > 126 {
+#[inline(never)]
+fn field_str<'a>(bytes: &'a [u8], default: &'a str, empty_is_default: bool) -> &'a str {
+    let mut len = 0;
+    while len < bytes.len() && bytes[len] != 0 && bytes[len] != b' ' {
+        if bytes[len] < 32 || bytes[len] > 126 {
             return default;
         }
+        len += 1;
     }
-    unsafe { core::str::from_utf8_unchecked(bytes) }
+    if len == 0 && empty_is_default {
+        default
+    } else {
+        unsafe { core::str::from_utf8_unchecked(bytes.get_unchecked(..len)) }
+    }
 }
 
 impl SystemConfig {
@@ -73,31 +79,23 @@ impl SystemConfig {
     }
 
     pub fn custom_model_str(&self) -> &str {
-        let len = self
-            .custom_model
-            .iter()
-            .position(|&b| b == 0 || b == b' ')
-            .unwrap_or(self.custom_model.len());
-        if len == 0 {
-            "Custom"
-        } else {
-            ascii_or(&self.custom_model[..len], "Custom")
-        }
+        field_str(&self.custom_model, "Custom", true)
     }
 
     pub fn set_custom_model(&mut self, s: &str) {
-        let trimmed = s.trim_ascii();
         self.custom_model = [b' '; 12];
-        let bytes = trimmed.as_bytes();
+        let bytes = utils::format::trim_ascii_bytes(s.as_bytes());
         let l = bytes.len().min(12);
         self.custom_model[..l].copy_from_slice(&bytes[..l]);
+        let trimmed = unsafe { core::str::from_utf8_unchecked(bytes) };
 
-        if trimmed.eq_ignore_ascii_case("UV-K1") || trimmed.eq_ignore_ascii_case("K1") {
+        use utils::format::ascii_eq_ignore_case as eq_ic;
+        if eq_ic(trimmed, "UV-K1") || eq_ic(trimmed, "K1") {
             self.model = 0;
-        } else if trimmed.eq_ignore_ascii_case("UV-K5 V3")
-            || trimmed.eq_ignore_ascii_case("k5v3")
-            || trimmed.eq_ignore_ascii_case("UV-K5")
-            || trimmed.eq_ignore_ascii_case("K5")
+        } else if eq_ic(trimmed, "UV-K5 V3")
+            || eq_ic(trimmed, "k5v3")
+            || eq_ic(trimmed, "UV-K5")
+            || eq_ic(trimmed, "K5")
         {
             self.model = 1;
         } else {
@@ -111,24 +109,15 @@ impl SystemConfig {
     }
 
     pub fn owner_str(&self) -> &str {
-        let len = self
-            .owner
-            .iter()
-            .position(|&b| b == 0 || b == b' ')
-            .unwrap_or(self.owner.len());
-        ascii_or(&self.owner[..len], "N0CALL")
+        field_str(&self.owner, "N0CALL", false)
     }
 
     pub fn tag_str(&self) -> &str {
-        let len = self
-            .tag
-            .iter()
-            .position(|&b| b == 0 || b == b' ')
-            .unwrap_or(self.tag.len());
-        if len == 0 || &self.tag[..len] == b"00000000" {
+        let s = field_str(&self.tag, "", false);
+        if s.is_empty() || s == "00000000" {
             bsp::uid::get_mac_tag_str()
         } else {
-            ascii_or(&self.tag[..len], bsp::uid::get_mac_tag_str())
+            s
         }
     }
 

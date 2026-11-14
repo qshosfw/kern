@@ -194,6 +194,23 @@ pub fn ascii_str(bytes: &[u8]) -> Option<&str> {
     }
 }
 
+#[inline(never)]
+pub fn trim_ascii_bytes(mut b: &[u8]) -> &[u8] {
+    while let [first, rest @ ..] = b {
+        if !first.is_ascii_whitespace() {
+            break;
+        }
+        b = rest;
+    }
+    while let [rest @ .., last] = b {
+        if !last.is_ascii_whitespace() {
+            break;
+        }
+        b = rest;
+    }
+    b
+}
+
 /// Extract the `idx`-th NUL-delimited UTF-8 string from `packed`.
 ///
 /// Packing string enum tables into one NUL-delimited byte slice avoids per-variant

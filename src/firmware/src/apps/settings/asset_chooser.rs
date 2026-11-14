@@ -113,7 +113,7 @@ impl AssetDescriptor {
 
             if active
                 && current_sel == 0
-                && (full_path == cur_path || (!cur_path.starts_with('/') && entry_name == cur_path))
+                && (full_path == cur_path || (!cur_path.starts_with("/") && entry_name == cur_path))
             {
                 current_sel = found + 1;
             }
@@ -278,13 +278,13 @@ fn build_full_asset_path(
     out: &mut heapless::String<32>,
 ) -> Result<(), ()> {
     out.clear();
-    if entry_name.starts_with('/') {
+    if entry_name.starts_with("/") {
         if entry_name.len() > 31 {
             return Err(());
         }
         return out.push_str(entry_name);
     }
-    let clean_dir = dir.trim_end_matches('/');
+    let clean_dir = utils::format::trim_trailing_slashes(dir);
     let dir_prefix = if clean_dir.is_empty() {
         0
     } else {

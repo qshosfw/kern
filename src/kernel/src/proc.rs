@@ -319,7 +319,9 @@ impl<const N: usize> ProcessTable<N> {
     /// Locate PCB by process name (case-insensitive ASCII match).
     pub fn find_by_name(&self, name: &str) -> Option<&Pcb> {
         for p in &self.slots {
-            if p.state != ProcState::Dormant && p.name.as_str().eq_ignore_ascii_case(name) {
+            if p.state != ProcState::Dormant
+                && utils::format::ascii_eq_ignore_case(p.name.as_str(), name)
+            {
                 return Some(p);
             }
         }
@@ -329,7 +331,9 @@ impl<const N: usize> ProcessTable<N> {
     /// Locate mutable PCB by process name (case-insensitive ASCII match).
     pub fn find_mut_by_name(&mut self, name: &str) -> Option<&mut Pcb> {
         for p in &mut self.slots {
-            if p.state != ProcState::Dormant && p.name.as_str().eq_ignore_ascii_case(name) {
+            if p.state != ProcState::Dormant
+                && utils::format::ascii_eq_ignore_case(p.name.as_str(), name)
+            {
                 return Some(p);
             }
         }

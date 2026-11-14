@@ -119,7 +119,9 @@ impl<S: SerialPort> WireDriver<S> {
     #[inline(never)]
     fn handle_ascii_line(&mut self) {
         let cmd = &self.rx_buf[..self.rx_len];
-        if cmd.eq_ignore_ascii_case(b"reboot") {
+        if utils::format::ascii_str(cmd)
+            .is_some_and(|s| utils::format::ascii_eq_ignore_case(s, "reboot"))
+        {
             kernel::power::PowerControl::reboot();
         }
         self.port.write(b"RigWire\r\n");

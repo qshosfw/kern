@@ -492,13 +492,24 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     /// Metadata-only rename across any directories (zero data page copies).
     #[inline(never)]
     pub fn rename(&mut self, src: &str, dst: &str) -> Result<(), FsError> {
+        #[inline(never)]
+        fn trim_slashes(s: &str) -> &str {
+            let mut b = s.as_bytes();
+            while let [b'/', rest @ ..] = b {
+                b = rest;
+            }
+            while let [rest @ .., b'/'] = b {
+                b = rest;
+            }
+            unsafe { core::str::from_utf8_unchecked(b) }
+        }
         if src == dst {
             return Ok(());
         }
         self.lookup_inode(src)?;
         let mut src_inode = self.cur_inode;
-        let src_t = src.trim_matches('/');
-        let dst_t = dst.trim_matches('/');
+        let src_t = trim_slashes(src);
+        let dst_t = trim_slashes(dst);
         if src_inode.is_dir()
             && !src_t.is_empty()
             && (dst_t == src_t

@@ -100,8 +100,8 @@ impl UsbDriver {
 
     /// Update configured device identity (e.g. "Quansheng UV-K1 1D9E") for USB product descriptor.
     pub fn update_device_identity(&mut self, model: &str, tag: &str) {
-        let m_bytes = model.trim_ascii().as_bytes();
-        let t_bytes = tag.trim_ascii().as_bytes();
+        let m_bytes = utils::format::trim_ascii_bytes(model.as_bytes());
+        let t_bytes = utils::format::trim_ascii_bytes(tag.as_bytes());
         let m_len = m_bytes.len().min(12);
         let t_len = t_bytes.len().min(8);
 
