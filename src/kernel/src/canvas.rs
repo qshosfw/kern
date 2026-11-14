@@ -496,6 +496,21 @@ impl Canvas {
 
     pub const BAYER_4X4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
+    /// Precompute 8-pixel-tall Bayer 4x4 column bitmasks for `threshold < progress`.
+    #[inline(never)]
+    fn bayer_col_masks(progress: u8) -> [u8; 4] {
+        let mut masks = [0u8; 4];
+        for (c, mask) in masks.iter_mut().enumerate() {
+            let b0 = (Self::BAYER_4X4[c] < progress) as u8;
+            let b1 = (Self::BAYER_4X4[4 + c] < progress) as u8;
+            let b2 = (Self::BAYER_4X4[8 + c] < progress) as u8;
+            let b3 = (Self::BAYER_4X4[12 + c] < progress) as u8;
+            let nib = b0 | (b1 << 1) | (b2 << 2) | (b3 << 3);
+            *mask = nib | (nib << 4);
+        }
+        masks
+    }
+
     /// Fill rectangle using progressive Bayer 4x4 matrix dithering.
     /// `progress` ranges from 0 (empty) to 16 (100% solid fill).
     #[inline(never)]
@@ -517,33 +532,17 @@ impl Canvas {
         let end_y = (y as usize + height as usize).min(LCD_HEIGHT);
         let start_page = (y >> 3) as usize;
         let end_page_excl = ((end_y - 1) >> 3) + 1;
+        let masks = Self::bayer_col_masks(progress);
 
         for page in start_page..end_page_excl {
-            let page_start_y = page * 8;
-            let page_end_y = page_start_y + 8;
-            let top = if (y as usize) > page_start_y {
-                (y as usize) - page_start_y
-            } else {
-                0
-            };
-            let bottom = if end_y < page_end_y {
-                end_y - page_start_y
-            } else {
-                8
-            };
+            let page_start_y = page << 3;
+            let top = (y as usize).saturating_sub(page_start_y);
+            let bottom = (end_y - page_start_y).min(8);
+            let y_mask = (0xFFu8 >> (8 - bottom)) & (0xFFu8 << top);
             let row = &mut self.buffer[page];
 
             for col in (x as usize)..end_x {
-                let x_mod = col & 3;
-                let mut mask = 0u8;
-                for bit in top..bottom {
-                    let py = page_start_y + bit;
-                    let threshold = Self::BAYER_4X4[((py & 3) << 2) | x_mod];
-                    if threshold < progress {
-                        mask |= 1 << bit;
-                    }
-                }
-                row[col] |= mask;
+                row[col] |= masks[col & 3] & y_mask;
             }
             self.dirty |= 1 << page;
         }
@@ -555,20 +554,7 @@ impl Canvas {
         if progress == 0 {
             self.buffer = [[0; LCD_WIDTH]; 8];
         } else if progress < 16 {
-            // For a 4x4 Bayer matrix, threshold depends only on (y & 3) and (x & 3).
-            // Since y = page * 8 + bit, y & 3 is identical to bit & 3.
-            // Bits 0..3 and bits 4..7 have identical thresholds for each column c in 0..4.
-            // Precompute the 8-bit keep mask for each column c:
-            let mut masks = [0u8; 4];
-            for (c, mask) in masks.iter_mut().enumerate() {
-                let b0 = (Self::BAYER_4X4[c] < progress) as u8;
-                let b1 = (Self::BAYER_4X4[4 + c] < progress) as u8;
-                let b2 = (Self::BAYER_4X4[8 + c] < progress) as u8;
-                let b3 = (Self::BAYER_4X4[12 + c] < progress) as u8;
-                let nib = b0 | (b1 << 1) | (b2 << 2) | (b3 << 3);
-                *mask = nib | (nib << 4);
-            }
-            let mask_word = u32::from_ne_bytes(masks);
+            let mask_word = u32::from_ne_bytes(Self::bayer_col_masks(progress));
 
             let flat = self.buffer_flat_mut();
             for chunk in flat.chunks_exact_mut(4) {
@@ -588,16 +574,7 @@ impl Canvas {
     /// Pixels where `threshold >= progress` are inverted (progress: 0..=16).
     pub fn apply_invert_dissolve(&mut self, progress: u8) {
         if progress < 16 {
-            let mut inv_masks = [0u8; 4];
-            for (c, mask) in inv_masks.iter_mut().enumerate() {
-                let b0 = (Self::BAYER_4X4[c] >= progress) as u8;
-                let b1 = (Self::BAYER_4X4[4 + c] >= progress) as u8;
-                let b2 = (Self::BAYER_4X4[8 + c] >= progress) as u8;
-                let b3 = (Self::BAYER_4X4[12 + c] >= progress) as u8;
-                let nib = b0 | (b1 << 1) | (b2 << 2) | (b3 << 3);
-                *mask = nib | (nib << 4);
-            }
-            let inv_word = u32::from_ne_bytes(inv_masks);
+            let inv_word = !u32::from_ne_bytes(Self::bayer_col_masks(progress));
 
             let flat = self.buffer_flat_mut();
             for chunk in flat.chunks_exact_mut(4) {
@@ -776,33 +753,25 @@ fn scroll_plane_vertical(plane: &mut [[u8; LCD_WIDTH]; 8], dy: i8, fill_byte: u8
 
 #[inline(never)]
 fn scroll_plane_horizontal(plane: &mut [[u8; LCD_WIDTH]; 8], dx: i8, fill_byte: u8) {
-    if dx.unsigned_abs() >= LCD_WIDTH as u8 {
-        *plane = [[fill_byte; LCD_WIDTH]; 8];
-        return;
-    }
-
-    if dx > 0 {
-        let shift = dx as usize;
-        for page in 0..8 {
-            let row = &mut plane[page];
+    let shift = (dx.unsigned_abs() as usize).min(LCD_WIDTH);
+    let keep = LCD_WIDTH - shift;
+    for row in plane.iter_mut() {
+        let fill_slice = if dx > 0 {
             let mut i = LCD_WIDTH;
             while i > shift {
                 i -= 1;
                 row[i] = row[i - shift];
             }
-            row[..shift].fill(fill_byte);
-        }
-    } else {
-        let shift = (-dx) as usize;
-        for page in 0..8 {
-            let row = &mut plane[page];
+            &mut row[..shift]
+        } else {
             let mut i = 0;
-            while i < LCD_WIDTH - shift {
+            while i < keep {
                 row[i] = row[i + shift];
                 i += 1;
             }
-            row[LCD_WIDTH - shift..].fill(fill_byte);
-        }
+            &mut row[keep..]
+        };
+        fill_slice.fill(fill_byte);
     }
 }
 
