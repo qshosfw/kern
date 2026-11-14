@@ -20,7 +20,7 @@ pub struct KeyConfig {
     pub f_menu: u8,        // Shortcut for F + Menu
     pub f_side1: u8,       // Shortcut for F + Side1
     pub f_side2: u8,       // Shortcut for F + Side2
-    pub _pad: [u8; 2],     // 4-byte alignment (total 32 bytes)
+    pub _pad: [u8; 5],     // Explicit 4-byte alignment padding (total 36 bytes)
     pub crc32: u32,
 }
 
@@ -48,7 +48,7 @@ impl KeyConfig {
             f_menu: 5,                             // Settings
             f_side1: 0,
             f_side2: 0,
-            _pad: [0; 2],
+            _pad: [0; 5],
             crc32: 0,
         }
     }

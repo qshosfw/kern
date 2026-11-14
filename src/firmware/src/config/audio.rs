@@ -12,6 +12,7 @@ pub struct AudioConfig {
     pub audio_profile: u8,     // 0=Flat, 1=Clean, 2=Mid, 3=Boost, 4=Max (Reg 0x54/0x55)
     pub roger_path: [u8; 32],  // e.g. "/user/rogers/01_classic.ton" (up to 32 chars)
     pub jingle_path: [u8; 32], // e.g. "/user/jingles/01_chime.ton" (up to 32 chars)
+    pub _pad: [u8; 3],         // Explicit 4-byte alignment padding before crc32
     pub crc32: u32,
 }
 
@@ -31,6 +32,7 @@ impl AudioConfig {
             audio_profile: 0, // Default Flat
             roger_path: [0; 32],
             jingle_path: [0; 32],
+            _pad: [0; 3],
             crc32: 0,
         };
         const DEF_ROGER: &[u8] = b"/user/rogers/01_classic.ton";

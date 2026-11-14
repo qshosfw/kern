@@ -10,7 +10,7 @@ pub struct BatteryConfig {
     pub calib_tweak_mv: i16,    // Calibration offset tweak in mV (-500mV to +500mV)
     pub low_bat_warn_mv: u16,   // Warning threshold (default 6800 mV)
     pub low_bat_shut_mv: u16,   // Cutoff threshold (default 6300 mV)
-    pub _reserved: [u8; 2],     // Reserved (formerly cpu_clock)
+    pub _reserved: [u8; 4],     // 4-byte alignment padding before crc32 (total 20 bytes)
     pub crc32: u32,
 }
 
@@ -28,7 +28,7 @@ impl BatteryConfig {
             calib_tweak_mv: 0,
             low_bat_warn_mv: 6800,
             low_bat_shut_mv: 6300,
-            _reserved: [0; 2],
+            _reserved: [0; 4],
             crc32: 0,
         }
     }

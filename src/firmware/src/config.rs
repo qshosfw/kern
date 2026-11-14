@@ -159,12 +159,20 @@ pub struct MasterConfig {
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<DisplayConfig>() <= 128);
-    assert!(core::mem::size_of::<AudioConfig>() <= 128);
-    assert!(core::mem::size_of::<KeyConfig>() <= 128);
-    assert!(core::mem::size_of::<SystemConfig>() <= 128);
-    assert!(core::mem::size_of::<BatteryConfig>() <= 128);
-    assert!(core::mem::size_of::<AppsConfig>() <= 128);
+    assert!(core::mem::size_of::<DisplayConfig>() == 48);
+    assert!(core::mem::offset_of!(DisplayConfig, crc32) == 44);
+    assert!(core::mem::size_of::<AudioConfig>() == 80);
+    assert!(core::mem::offset_of!(AudioConfig, crc32) == 76);
+    assert!(core::mem::size_of::<KeyConfig>() == 36);
+    assert!(core::mem::offset_of!(KeyConfig, crc32) == 32);
+    assert!(core::mem::size_of::<SystemConfig>() == 44);
+    assert!(core::mem::offset_of!(SystemConfig, crc32) == 40);
+    assert!(core::mem::size_of::<BatteryConfig>() == 20);
+    assert!(core::mem::offset_of!(BatteryConfig, crc32) == 16);
+    assert!(core::mem::size_of::<AppsConfig>() == 64);
+    assert!(core::mem::align_of::<AppsConfig>() == 4);
+    assert!(core::mem::offset_of!(AppsConfig, autostart_hashes) == 16);
+    assert!(core::mem::offset_of!(AppsConfig, crc32) == 60);
 };
 
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
@@ -244,7 +252,18 @@ static DISPLAY_RULES: [[u8; 2]; 11] = [
     [11, 3],
 ];
 static AUDIO_RULES: [[u8; 2]; 7] = [[1, 10], [2, 5], [3, 31], [4, 1], [6, 10], [7, 4], [8, 4]];
-static APPS_RULES: [[u8; 2]; 5] = [[1, 1], [2, 1], [3, 1], [4, 1], [5, 3]];
+static APPS_RULES: [[u8; 2]; 10] = [
+    [1, 1],   // launcher_style: 0..=1
+    [2, 1],   // show_numbers: 0..=1
+    [3, 1],   // show_labels: 0..=1
+    [4, 2],   // startup_app: 0..=2 (Launcher, Radio, Custom KRX)
+    [6, 2],   // pager_policy: 0..=2
+    [7, 2],   // swap_policy: 0..=2
+    [12, 16], // daemon_budget_ms <= 16
+    [13, 32], // hook_budget_ms <= 32
+    [14, 3],  // max_strikes <= 3
+    [15, 4],  // zone_b_cache_kb <= 4
+];
 
 static DEFAULT_MASTER_CONFIG: MasterConfig = MasterConfig::DEFAULT;
 
@@ -395,7 +414,11 @@ impl MasterConfig {
             repaired |= DIRTY_AUDIO;
         }
 
-        if !check_bounds(self.apps.as_bytes(), AppsConfig::VERSION, &APPS_RULES) {
+        if !check_bounds(self.apps.as_bytes(), AppsConfig::VERSION, &APPS_RULES)
+            || self.apps.daemon_budget_ms < 2
+            || self.apps.hook_budget_ms < 2
+            || self.apps.zone_b_cache_kb == 0
+        {
             self.apps = DEFAULT_MASTER_CONFIG.apps;
             repaired |= DIRTY_APPS;
         }
@@ -478,5 +501,44 @@ impl MasterConfig {
         self.seal_all();
         self.dirty = 0x3F;
         self.flush_dirty(storage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_all_config_blocks_valid_and_deterministic_crc() {
+        let mut a = MasterConfig::DEFAULT;
+        a.system.tag = *b"TESTTAG ";
+        a.battery.battery_type = 3;
+        let mut b = a;
+        assert_eq!(a.sanitize(), 0);
+        for i in 0..6 {
+            a.seal(i);
+            b.seal(i);
+            assert_eq!(a.config_bytes(i), b.config_bytes(i));
+            assert!(is_raw_valid(a.config_bytes(i), CONFIG_METAS[i].version));
+        }
+    }
+
+    #[test]
+    fn test_apps_config_v2_bounds_and_custom_startup_allowed() {
+        let mut cfg = MasterConfig::DEFAULT;
+        cfg.system.tag = *b"TESTTAG ";
+        cfg.battery.battery_type = 3;
+        cfg.apps.startup_app = 2; // Custom KRX (startup_hash)
+        cfg.apps.startup_hash = 0xDEAD_BEEF;
+        cfg.apps.autostart_hashes[0] = 0x1234_5678;
+        cfg.apps.autostart_states[0] = apps::AUTOSTART_STATE_ENABLED;
+        assert_eq!(cfg.sanitize(), 0);
+
+        cfg.apps.daemon_budget_ms = 0; // Below 2 ms minimum -> repaired
+        assert_ne!(cfg.sanitize() & DIRTY_APPS, 0);
+        assert_eq!(
+            cfg.apps.daemon_budget_ms,
+            AppsConfig::DEFAULT.daemon_budget_ms
+        );
     }
 }
