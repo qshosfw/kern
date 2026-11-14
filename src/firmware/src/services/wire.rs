@@ -169,9 +169,8 @@ fn read_sys_facet(
     facet: u16,
     hw: &SystemHardware,
     now: u32,
-    out: &mut [u8],
+    w: &mut ByteWriter<'_>,
 ) -> Result<usize, WireStatus> {
-    let mut w = ByteWriter::new(out);
     match facet {
         FACET_SYS_IDENTITY => {
             w.write_u64_le(bsp::uid::get_hardware_serial64());
@@ -182,9 +181,7 @@ fn read_sys_facet(
             if is_auth {
                 w.write_bytes(&bsp::uid::read_mcu_uid());
             } else {
-                for _ in 0..12 {
-                    w.write_u8(0);
-                }
+                w.write_zeroes(12);
             }
             Ok(w.position())
         }
@@ -215,11 +212,10 @@ fn read_radio_facet(
     facet: u16,
     instance: u8,
     hw: &mut SystemHardware,
-    out: &mut [u8],
+    w: &mut ByteWriter<'_>,
 ) -> Result<usize, WireStatus> {
     let (slot, ch) = active_radio_slot(instance);
     let coord = &crate::radio_state_ref().coord;
-    let mut w = ByteWriter::new(out);
     match facet {
         FACET_RADIO_TUNING => {
             w.write_u32_le(ch.effective_rx_freq().raw());
@@ -258,67 +254,58 @@ fn on_handle_get(
     now: u32,
     out: &mut [u8],
 ) -> Result<usize, WireStatus> {
+    let mut w = ByteWriter::new(out);
     match handle.domain {
-        DOMAIN_SYSTEM => read_sys_facet(handle.facet, hw, now, out),
-        DOMAIN_RADIO => read_radio_facet(handle.facet, handle.instance, hw, out),
+        DOMAIN_SYSTEM => return read_sys_facet(handle.facet, hw, now, &mut w),
+        DOMAIN_RADIO => return read_radio_facet(handle.facet, handle.instance, hw, &mut w),
         DOMAIN_UI => match handle.facet {
             FACET_UI_SURFACE => {
                 const UI_SURFACE_INFO: [u8; 7] = [128, 0, 64, 0, 1, 0, 4];
-                out[..7].copy_from_slice(&UI_SURFACE_INFO);
-                Ok(7)
+                w.write_bytes(&UI_SURFACE_INFO);
             }
             FACET_UI_MODAL => {
                 let modal =
                     unsafe { &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL) };
-                out[0] = modal.is_active() as u8;
-                out[1] = modal.tag;
-                Ok(2)
+                w.write_u8(modal.is_active() as u8);
+                w.write_u8(modal.tag);
             }
             FACET_UI_VIEW => {
-                out[0] = hw.orchestrator.active_app_id() as u8;
-                Ok(1)
+                w.write_u8(hw.orchestrator.active_app_id() as u8);
             }
-            _ => Err(WireStatus::UnsupportedField),
+            _ => return Err(WireStatus::UnsupportedField),
         },
         DOMAIN_INPUT if handle.facet == FACET_INPUT_LOCK => {
-            out[0] = hw.orchestrator.is_keypad_locked() as u8;
-            Ok(1)
+            w.write_u8(hw.orchestrator.is_keypad_locked() as u8);
         }
-        DOMAIN_INPUT => Err(WireStatus::UnsupportedField),
+        DOMAIN_INPUT => return Err(WireStatus::UnsupportedField),
         DOMAIN_CONFIG => {
             let domain_idx = handle.instance as usize;
             if domain_idx > 5 {
                 return Err(WireStatus::BadRange);
             }
-            let cfg_slice = crate::master_config_ref().config_bytes(domain_idx);
-            let len = cfg_slice.len().min(out.len());
-            out[..len].copy_from_slice(&cfg_slice[..len]);
-            Ok(len)
+            w.write_bytes(crate::master_config_ref().config_bytes(domain_idx));
         }
         DOMAIN_APP => match handle.facet {
             FACET_APP_REGISTRY => {
-                out[0] = crate::AppRegistry::app_count() as u8;
-                Ok(1)
+                w.write_u8(crate::AppRegistry::app_count() as u8);
             }
             FACET_APP_LIFECYCLE => {
-                out[0] = hw.orchestrator.active_app_id() as u8;
-                Ok(1)
+                w.write_u8(hw.orchestrator.active_app_id() as u8);
             }
-            _ => Err(WireStatus::UnsupportedField),
+            _ => return Err(WireStatus::UnsupportedField),
         },
         DOMAIN_STORAGE => {
             let stats = hw.filesystem.stats();
-            let mut w = ByteWriter::new(out);
             w.write_u16_le(stats.active_files);
             w.write_u16_le(stats.used_sectors);
             w.write_u16_le(stats.free_sectors);
             w.write_u16_le(stats.deleted_sectors);
             w.write_u32_le(stats.wear_cycles);
             w.write_u16_le(stats.total_sectors);
-            Ok(w.position())
         }
-        _ => Err(WireStatus::Unsupported),
+        _ => return Err(WireStatus::Unsupported),
     }
+    Ok(w.position())
 }
 
 fn set_keypad_lock(hw: &mut SystemHardware, locked: bool) {
@@ -762,15 +749,14 @@ fn on_transfer_stat(
                 }
             }
             let mut w = ByteWriter::new(&mut out[..10]);
-            w.write_u8(1);
-            w.write_u8(0);
+            w.write_u16_le(1);
             w.write_u32_le(sz as u32);
             w.write_u32_le(!crc_val);
             ok_bytes(w.position())
         }
         Err(_) => {
-            for b in &mut out[..10] {
-                *b = 0;
+            unsafe {
+                core::ptr::write_bytes(out.as_mut_ptr(), 0, 10);
             }
             (WireStatus::NotFound, 10)
         }

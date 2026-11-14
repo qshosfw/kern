@@ -82,23 +82,28 @@ impl TextInputView {
     }
 
     fn get_charset_chars(charset: Charset, key: u8) -> &'static str {
-        const ALPHA_OFF: [u8; 11] = [0, 1, 7, 10, 13, 16, 19, 22, 26, 29, 33];
+        const ALPHA_OFF: [u8; 9] = [0, 3, 6, 9, 12, 15, 19, 22, 26];
+        const SYM_OFF: [u8; 9] = [0, 3, 6, 10, 14, 17, 20, 23, 26];
         if key > 9 {
             return "";
         }
         let k = key as usize;
+        if charset == Charset::Numbers {
+            return &"0123456789"[k..k + 1];
+        }
+        if key == 0 {
+            return " ";
+        }
+        if key == 1 {
+            return ".,?!'-";
+        }
         let (s, off) = match charset {
-            Charset::Numbers => return &"0123456789"[k..k + 1],
-            Charset::Symbols => (
-                " .,?!'-@#$%&*()[]<>{}/\\|+-=\"'` :;_",
-                &[0u8, 1, 7, 10, 13, 17, 21, 24, 27, 30, 33][..],
-            ),
-            Charset::Upper => (" .,?!'-ABCDEFGHIJKLMNOPQRSTUVWXYZ", &ALPHA_OFF[..]),
-            Charset::Lower => (" .,?!'-abcdefghijklmnopqrstuvwxyz", &ALPHA_OFF[..]),
+            Charset::Symbols => ("@#$%&*()[]<>{}/\\|+-=\"'` :;_", &SYM_OFF[..]),
+            Charset::Upper => ("ABCDEFGHIJKLMNOPQRSTUVWXYZ", &ALPHA_OFF[..]),
+            _ => ("abcdefghijklmnopqrstuvwxyz", &ALPHA_OFF[..]),
         };
-        let start = off[k] as usize;
-        let end = off[k + 1] as usize;
-        &s[start..end]
+        let tk = k - 2;
+        &s[off[tk] as usize..off[tk + 1] as usize]
     }
 
     fn confirm_current_char(model: &mut TextInputModel) {

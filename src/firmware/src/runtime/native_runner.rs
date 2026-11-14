@@ -855,11 +855,8 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
 
         // Auto-register or clear status tray icon requested by app
         if s.tray_icon_id != 0 {
-            let pid = slot.pid;
-            if s.tray_icon_id == kernel::proc::abi::KRX_ICON_NONE {
-                crate::orchestrator::status_tray_mut().clear_icon(pid);
-            } else if let Some(glyph) = decode_status_glyph(s.tray_icon_id, &c0, &c1) {
-                crate::orchestrator::status_tray_mut().set_glyph(pid, glyph);
+            unsafe {
+                super::syscall::ui::api_ui_set_tray_icon(s.tray_icon_id);
             }
         }
     }

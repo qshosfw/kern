@@ -238,12 +238,16 @@ fn save_rescued_calibration<'a>(
 }
 
 #[cfg(feature = "filesystem")]
-#[inline]
-fn enable_boot_dialog_backlight(lcd: &mut St7565) {
+#[inline(never)]
+fn prepare_boot_dialog(
+    lcd: &mut St7565,
+    radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
+) {
     // Set non-zero PWM duty alongside GPIO high so 20 kHz SysTick PWM does not zero BACKLIGHT.
     drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
     bsp::pins::BACKLIGHT.set_high();
     lcd.turn_on();
+    radio.set_status_led(bsp::StatusLed::Orange);
 }
 
 #[cfg(feature = "filesystem")]
@@ -254,8 +258,7 @@ fn prompt_and_format_storage<'a>(
     radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
     fs: &mut KernFS<Py25q16FlashDriver<'a>>,
 ) {
-    enable_boot_dialog_backlight(lcd);
-    radio.set_status_led(bsp::StatusLed::Orange);
+    prepare_boot_dialog(lcd, radio);
 
     render_dialog(
         lcd,
@@ -320,8 +323,7 @@ fn recover_calibration_to_fs<'a>(
     radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
     fs: &mut KernFS<Py25q16FlashDriver<'a>>,
 ) {
-    enable_boot_dialog_backlight(lcd);
-    radio.set_status_led(bsp::StatusLed::Orange);
+    prepare_boot_dialog(lcd, radio);
     render_progress(
         lcd,
         "Calibration Recovery",
@@ -359,43 +361,21 @@ pub fn mount_or_format<'a>(
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn report_step(lcd: &mut Option<&mut St7565>, step: &'static str, pct: u8) {
-    if let Some(display) = lcd {
-        render_progress(display, "System Setup", step, pct);
-    }
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-pub fn ensure_default_files(filesystem: &mut SystemStorage, mut lcd: Option<&mut St7565>) {
+pub fn ensure_default_files(filesystem: &mut SystemStorage) {
     if !filesystem.exists("/sys/init.done") {
         #[cfg(feature = "boot_assets")]
-        {
-            report_step(&mut lcd, "Provisioning boot assets...", 20);
-            splash::provision_splashes(filesystem);
-        }
+        splash::provision_splashes(filesystem);
 
         #[cfg(feature = "provision_rogers")]
-        {
-            report_step(&mut lcd, "Provisioning roger beeps...", 40);
-            crate::services::melody::provision_rogers(filesystem);
-        }
+        crate::services::melody::provision_rogers(filesystem);
 
         #[cfg(feature = "boot_jingle")]
-        {
-            report_step(&mut lcd, "Provisioning boot jingles...", 55);
-            crate::services::melody::provision_jingles(filesystem);
-        }
+        crate::services::melody::provision_jingles(filesystem);
 
-        report_step(&mut lcd, "Verifying security keychain...", 70);
         crate::security::ensure_keychain(filesystem);
-
-        report_step(&mut lcd, "Installing core apps...", 90);
         provision::provision_packages(filesystem);
 
         let _ = filesystem.write_file("/sys/init.done", b"INIT");
-        report_step(&mut lcd, "Initialization Complete", 100);
-        py32_hal::delay::delay_ms(150);
     }
 
     // Always verify that core system packages in /apps/ are provisioned and current
@@ -413,7 +393,7 @@ pub fn mount_or_format<'a>(
 
 #[cfg(not(feature = "filesystem"))]
 #[allow(dead_code)]
-pub fn ensure_default_files(_filesystem: &mut SystemStorage, _lcd: Option<&mut St7565>) {}
+pub fn ensure_default_files(_filesystem: &mut SystemStorage) {}
 
 #[cfg(test)]
 mod tests {

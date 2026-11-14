@@ -113,7 +113,7 @@ fn init_system_services(
     passcode_state: &crate::security::PasscodeState,
     adc: &Adc,
 ) {
-    super::ensure_default_files(hw.filesystem, None);
+    super::ensure_default_files(hw.filesystem);
     #[cfg(feature = "filesystem")]
     super::flush_crash_log_if_pending(hw.filesystem);
     #[cfg(feature = "passcode")]
@@ -192,6 +192,18 @@ pub fn run_boot_splash(
         FRAMES
     };
 
+    fn render_splash_frame(
+        canvas: &mut gfx::Canvas,
+        lcd: &mut drivers::st7565::St7565,
+        base_vram: &[u8; 1024],
+        anim: u8,
+        frame: u8,
+    ) {
+        super::splash::apply_splash_anim(canvas, base_vram, anim, frame);
+        canvas.mark_all_dirty();
+        lcd.blit(canvas);
+    }
+
     let canvas = crate::system_canvas();
     let base_vram: &[u8; 1024] = unsafe {
         let slice = &mut crate::runtime::transient_arena_bytes_mut()[..1024];
@@ -199,14 +211,13 @@ pub fn run_boot_splash(
             super::splash::render_base_logo(canvas, hw.filesystem, disp_cfg);
             slice.copy_from_slice(canvas.buffer_flat());
             let arr = &*(slice.as_ptr() as *const [u8; 1024]);
-            super::splash::apply_splash_anim(
+            render_splash_frame(
                 canvas,
+                hw.lcd,
                 arr,
                 disp_cfg.boot_splash_anim,
                 first_frame as u8,
             );
-            canvas.mark_all_dirty();
-            hw.lcd.blit(canvas);
         }
         &*(slice.as_ptr() as *const [u8; 1024])
     };
@@ -251,14 +262,13 @@ pub fn run_boot_splash(
             let next_frame_ms = (target_splash_ms * cur_frame) / FRAMES;
             if elapsed >= next_frame_ms {
                 cur_frame += 1;
-                super::splash::apply_splash_anim(
+                render_splash_frame(
                     canvas,
+                    hw.lcd,
                     base_vram,
                     disp_cfg.boot_splash_anim,
                     cur_frame as u8,
                 );
-                canvas.mark_all_dirty();
-                hw.lcd.blit(canvas);
             }
         }
 

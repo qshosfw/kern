@@ -70,13 +70,31 @@ pub unsafe fn active_canvas() -> &'static mut Canvas {
 }
 
 #[inline(never)]
-pub unsafe fn parse_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+pub unsafe fn ptr_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     if !ptr.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
-        utils::format::ascii_str(slice)
+        Some(unsafe { core::slice::from_raw_parts(ptr, len) })
     } else {
         None
     }
+}
+
+#[inline(never)]
+pub unsafe fn ptr_slice_mut<'a>(ptr: *mut u8, len: usize) -> Option<&'a mut [u8]> {
+    if !ptr.is_null() && len > 0 {
+        Some(unsafe { core::slice::from_raw_parts_mut(ptr, len) })
+    } else {
+        None
+    }
+}
+
+#[inline(never)]
+pub unsafe fn slice_or_empty<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+    unsafe { ptr_slice(ptr, len) }.unwrap_or(&[])
+}
+
+#[inline(never)]
+pub unsafe fn parse_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+    unsafe { ptr_slice(ptr, len) }.and_then(utils::format::ascii_str)
 }
 
 #[inline(never)]

@@ -183,27 +183,23 @@ pub static POWER_VTABLE: PowerApi = PowerApi {
 // ── 7. CapSerial C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_serial_write(data: *const u8, len: u16) -> u16 {
-    if !data.is_null() && len > 0 {
-        if let Some(ctx) = active_ctx_opt() {
-            let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            ctx.write(slice);
-            len
-        } else {
-            0
-        }
+    if let (Some(slice), Some(ctx)) = (
+        unsafe { super::ptr_slice(data, len as usize) },
+        active_ctx_opt(),
+    ) {
+        ctx.write(slice);
+        len
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_serial_read(buf: *mut u8, max_len: u16) -> u16 {
-    if !buf.is_null() && max_len > 0 {
-        if let Some(ctx) = active_ctx_opt() {
-            let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-            ctx.read(slice) as u16
-        } else {
-            0
-        }
+    if let (Some(slice), Some(ctx)) = (
+        unsafe { super::ptr_slice_mut(buf, max_len as usize) },
+        active_ctx_opt(),
+    ) {
+        ctx.read(slice) as u16
     } else {
         0
     }
@@ -302,21 +298,17 @@ pub unsafe extern "C" fn api_hw_spi_transfer(
         return 1;
     };
     if len > 0 {
-        let tx_slice = if tx.is_null() {
-            &[]
-        } else {
+        let tx_slice = if !tx.is_null() {
             unsafe { core::slice::from_raw_parts(tx, len as usize) }
-        };
-        let rx_slice = if rx.is_null() {
-            &mut []
         } else {
+            &[]
+        };
+        let rx_slice = if !rx.is_null() {
             unsafe { core::slice::from_raw_parts_mut(rx, len as usize) }
-        };
-        if ctx.spi_transfer(cs_pin, tx_slice, rx_slice).is_ok() {
-            0
         } else {
-            1
-        }
+            &mut []
+        };
+        u8::from(ctx.spi_transfer(cs_pin, tx_slice, rx_slice).is_err())
     } else {
         1
     }
@@ -354,17 +346,10 @@ pub unsafe extern "C" fn api_hw_flash_read(addr: u32, buf: *mut u8, len: u16) ->
     if !buf.is_null() && len > 0 {
         if let Some(ctx) = active_ctx_opt() {
             let dst = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
-            if ctx.raw_flash_read(addr, dst).is_ok() {
-                0
-            } else {
-                1
-            }
-        } else {
-            1
+            return u8::from(ctx.raw_flash_read(addr, dst).is_err());
         }
-    } else {
-        1
     }
+    1
 }
 
 pub static HW_BUS_VTABLE: HwBusApi = HwBusApi {

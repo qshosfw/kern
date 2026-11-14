@@ -252,11 +252,7 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
 ) {
     let is_sel = selected != 0;
     let ry = y.max(0) as u8;
-    let tc = if is_sel {
-        gfx::Color::Clear
-    } else {
-        gfx::Color::Fill
-    };
+    let tc_u8 = if is_sel { 0 } else { 1 };
     let canvas = super::active_canvas_mut();
     if is_sel {
         canvas.fill_rect(2, ry, 120, 10, gfx::Color::Fill);
@@ -265,30 +261,13 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
     let mut text_x = 5i16;
     if icon_id != 0 {
         unsafe {
-            super::display::api_draw_icon(4, y + 1, icon_id, if is_sel { 0 } else { 1 });
+            super::display::api_draw_icon(4, y + 1, icon_id, tc_u8);
         }
         text_x = 15;
     }
-    if let Some(t) = unsafe { super::parse_str(title, t_len as usize) } {
-        gfx::text::draw_str(
-            canvas,
-            text_x,
-            y + 7,
-            t,
-            &gfx::fonts::mumatrix_regular::FONT,
-            tc,
-        );
-    }
-    if let Some(v) = unsafe { super::parse_str(value, v_len as usize) } {
-        gfx::text::draw_str_align(
-            canvas,
-            119,
-            y + 7,
-            v,
-            &gfx::fonts::tomthumb::FONT,
-            tc,
-            gfx::text::Align::Right,
-        );
+    unsafe {
+        super::display::api_draw_str_align(text_x, y + 7, title, t_len as u16, 1, tc_u8, 0);
+        super::display::api_draw_str_align(119, y + 7, value, v_len as u16, 0, tc_u8, 2);
     }
 }
 

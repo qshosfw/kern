@@ -81,11 +81,7 @@ pub unsafe extern "C" fn api_svc_resolve(interface_id: u16, min_abi: u16) -> usi
 }
 
 pub unsafe extern "C" fn api_sys_find_proc(name: *const u8, len: u8) -> u8 {
-    if name.is_null() || len == 0 {
-        return 0;
-    }
-    let slice = unsafe { core::slice::from_raw_parts(name, (len as usize).min(16)) };
-    if let Some(name_str) = utils::format::ascii_str(slice) {
+    if let Some(name_str) = unsafe { super::parse_str(name, (len as usize).min(16)) } {
         if let Some(pcb) = crate::orchestrator::proc_table_mut().find_by_name(name_str) {
             return pcb.pid.0;
         }
@@ -146,11 +142,7 @@ pub unsafe extern "C" fn api_ipc_reply(
         return 1;
     }
     let req_msg = unsafe { &*req };
-    let slice = if !payload.is_null() && len > 0 {
-        unsafe { core::slice::from_raw_parts(payload, (len as usize).min(24)) }
-    } else {
-        &[]
-    };
+    let slice = unsafe { super::slice_or_empty(payload, (len as usize).min(24)) };
     let reply_msg = req_msg.reply_to(slice, false);
     unsafe { api_ipc_send_msg(&reply_msg) }
 }
@@ -161,26 +153,22 @@ pub unsafe extern "C" fn api_ipc_send(
     msg: *const u8,
     msg_len: u8,
 ) -> u8 {
-    let target_pid = if !target_name.is_null() && name_len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(target_name, name_len as usize) };
-        if slice == b"*" || slice == b"ALL" {
-            ipc_target::BROADCAST
-        } else {
-            let pid = unsafe { api_sys_find_proc(target_name, name_len) };
-            if pid == 0 {
-                return 1;
+    let target_pid =
+        if let Some(slice) = unsafe { super::ptr_slice(target_name, name_len as usize) } {
+            if slice == b"*" || slice == b"ALL" {
+                ipc_target::BROADCAST
+            } else {
+                let pid = unsafe { api_sys_find_proc(target_name, name_len) };
+                if pid == 0 {
+                    return 1;
+                }
+                pid
             }
-            pid
-        }
-    } else {
-        ipc_target::FOREGROUND_APP
-    };
+        } else {
+            ipc_target::FOREGROUND_APP
+        };
 
-    let payload_slice = if !msg.is_null() && msg_len > 0 {
-        unsafe { core::slice::from_raw_parts(msg, (msg_len as usize).min(24)) }
-    } else {
-        &[]
-    };
+    let payload_slice = unsafe { super::slice_or_empty(msg, (msg_len as usize).min(24)) };
 
     let ipc_msg = KrxIpcMessage::new(
         active_caller_pid(),
@@ -240,6 +228,7 @@ pub unsafe extern "C" fn api_sys_proc_info(idx: u8, out_info: *mut KrxProcInfo) 
         {
             if match_idx == idx {
                 unsafe {
+                    core::ptr::write_bytes(out_info, 0, 1);
                     let info = &mut *out_info;
                     info.pid = slot.pid.0;
                     info.app_id = slot.app_id as u8;
@@ -250,12 +239,10 @@ pub unsafe extern "C" fn api_sys_proc_info(idx: u8, out_info: *mut KrxProcInfo) 
                     };
                     info.priority = slot.priority as u8;
                     info.memory_bytes = slot.mem_bytes;
-                    info.name = [0u8; 12];
                     let name_bytes = slot.name.as_bytes();
                     let copy_len = name_bytes.len().min(12);
                     info.name[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
                     info.runtime_ticks = slot.ledger.cpu_ticks;
-                    info.reserved = [0u8; 10];
                 }
                 return 0;
             }
@@ -356,18 +343,12 @@ pub unsafe extern "C" fn api_sys_post_event(event_id: u32) -> u8 {
 }
 
 pub unsafe extern "C" fn api_sys_publish_event(topic: u16, data: *const u8, len: u8) -> u8 {
-    let slice = if !data.is_null() && len > 0 {
-        unsafe { core::slice::from_raw_parts(data, len as usize) }
-    } else {
-        &[]
-    };
+    let slice = unsafe { super::slice_or_empty(data, len as usize) };
     use kernel::proc::primitives::ServicePrimitive;
     if let Some(ctx) = super::active_ctx_opt() {
-        if <crate::services::SysContext as ServicePrimitive>::publish_event(ctx, topic, slice) {
-            0
-        } else {
-            1
-        }
+        u8::from(
+            !<crate::services::SysContext as ServicePrimitive>::publish_event(ctx, topic, slice),
+        )
     } else {
         1
     }

@@ -5,32 +5,24 @@ use kernel::proc::abi::{KrxDirEntry, StorageApi};
 use kernel::proc::primitives::*;
 
 pub unsafe extern "C" fn api_storage_load_config(buf: *mut u8, max_len: u16) -> u16 {
-    if !buf.is_null() && max_len > 0 {
+    if let (Some(slice), Some(ctx)) = (
+        unsafe { super::ptr_slice_mut(buf, max_len as usize) },
+        active_ctx_opt(),
+    ) {
         let app_name = super::super::native_runner::active_native_app_name();
-        let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-        if let Some(ctx) = active_ctx_opt() {
-            ctx.load_config(app_name, slice).unwrap_or(0) as u16
-        } else {
-            0
-        }
+        ctx.load_config(app_name, slice).unwrap_or(0) as u16
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_storage_save_config(buf: *const u8, len: u16) -> u8 {
-    if !buf.is_null() && len > 0 {
+    if let (Some(slice), Some(ctx)) = (
+        unsafe { super::ptr_slice(buf, len as usize) },
+        active_ctx_opt(),
+    ) {
         let app_name = super::super::native_runner::active_native_app_name();
-        let slice = unsafe { core::slice::from_raw_parts(buf, len as usize) };
-        if let Some(ctx) = active_ctx_opt() {
-            if ctx.save_config(app_name, slice).is_ok() {
-                0
-            } else {
-                1
-            }
-        } else {
-            1
-        }
+        u8::from(ctx.save_config(app_name, slice).is_err())
     } else {
         1
     }
@@ -42,13 +34,11 @@ pub unsafe extern "C" fn api_storage_read_asset(
     buf: *mut u8,
     len: u16,
 ) -> u16 {
-    if !buf.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
-        if let Some(ctx) = active_ctx_opt() {
-            ctx.read_asset(asset_id, offset, slice).unwrap_or(0) as u16
-        } else {
-            0
-        }
+    if let (Some(slice), Some(ctx)) = (
+        unsafe { super::ptr_slice_mut(buf, len as usize) },
+        active_ctx_opt(),
+    ) {
+        ctx.read_asset(asset_id, offset, slice).unwrap_or(0) as u16
     } else {
         0
     }
@@ -118,16 +108,10 @@ pub unsafe extern "C" fn api_storage_list_dir(
     max_entries: u8,
 ) -> u8 {
     if !out_entries.is_null() && max_entries > 0 {
-        let dir_slice = if dir_path.is_null() || dir_len == 0 {
-            b"/"
-        } else {
-            unsafe { core::slice::from_raw_parts(dir_path, dir_len as usize) }
-        };
-        if let Some(dir_str) = utils::format::ascii_str(dir_slice) {
-            let dst = unsafe { core::slice::from_raw_parts_mut(out_entries, max_entries as usize) };
-            if let Some(ctx) = active_ctx_opt() {
-                return ctx.list_dir(dir_str, dst).unwrap_or(0) as u8;
-            }
+        let dir_str = unsafe { super::str_or_default(dir_path, dir_len as usize, "/") };
+        let dst = unsafe { core::slice::from_raw_parts_mut(out_entries, max_entries as usize) };
+        if let Some(ctx) = active_ctx_opt() {
+            return ctx.list_dir(dir_str, dst).unwrap_or(0) as u8;
         }
     }
     0
@@ -151,15 +135,14 @@ pub unsafe extern "C" fn api_storage_read_file_at(
     buf: *mut u8,
     max_len: u16,
 ) -> u16 {
-    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
-        if !buf.is_null() && max_len > 0 {
-            let dst = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-            if let Some(ctx) = active_ctx_opt() {
-                return ctx
-                    .read_file_at(path_str, offset as usize, dst)
-                    .unwrap_or(0) as u16;
-            }
-        }
+    if let (Some(path_str), Some(dst), Some(ctx)) = (
+        unsafe { parse_str(path, path_len as usize) },
+        unsafe { super::ptr_slice_mut(buf, max_len as usize) },
+        active_ctx_opt(),
+    ) {
+        return ctx
+            .read_file_at(path_str, offset as usize, dst)
+            .unwrap_or(0) as u16;
     }
     0
 }

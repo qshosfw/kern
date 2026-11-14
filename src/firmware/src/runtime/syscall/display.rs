@@ -26,8 +26,7 @@ pub unsafe extern "C" fn api_fill_rect(x: i16, y: i16, w: i16, h: i16, color: u8
 }
 
 pub unsafe extern "C" fn api_draw_bitmap(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16) {
-    if !data.is_null() && len > 0 {
-        let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
+    if let Some(slice) = unsafe { super::ptr_slice(data, len as usize) } {
         gfx::draw::draw_bitmap(active_canvas_mut(), x, y, w, h, slice, gfx::Color::Fill);
     }
 }
