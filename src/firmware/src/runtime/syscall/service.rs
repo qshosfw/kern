@@ -122,10 +122,7 @@ pub unsafe extern "C" fn api_ipc_recv_msg(out_msg: *mut KrxIpcMessage) -> u8 {
         return 1;
     }
     let receiver_pid = active_caller_pid();
-    if let Some(msg) = ipc_channel_mut().poll(receiver_pid) {
-        unsafe {
-            *out_msg = msg;
-        }
+    if ipc_channel_mut().poll_into(receiver_pid, unsafe { &mut *out_msg }) {
         0
     } else {
         1

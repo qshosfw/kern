@@ -317,27 +317,62 @@ impl<const N: usize> IpcChannel<N> {
         self.poll_filtered(receiver_pid, None)
     }
 
+    /// Poll directly into `out`, avoiding stack/return copies of `KrxIpcMessage`.
+    pub fn poll_into(&mut self, receiver_pid: u8, out: &mut KrxIpcMessage) -> bool {
+        self.poll_filtered_into(receiver_pid, None, out)
+    }
+
     /// Poll with optional filter on `msg_type`.
     pub fn poll_filtered(
         &mut self,
         receiver_pid: u8,
         filter_type: Option<u16>,
     ) -> Option<KrxIpcMessage> {
+        let mut out = core::mem::MaybeUninit::<KrxIpcMessage>::uninit();
+        if self.poll_filtered_into_ptr(receiver_pid, filter_type, out.as_mut_ptr()) {
+            Some(unsafe { out.assume_init() })
+        } else {
+            None
+        }
+    }
+
+    /// Poll with optional filter directly into `out`.
+    pub fn poll_filtered_into(
+        &mut self,
+        receiver_pid: u8,
+        filter_type: Option<u16>,
+        out: &mut KrxIpcMessage,
+    ) -> bool {
+        self.poll_filtered_into_ptr(receiver_pid, filter_type, out as *mut KrxIpcMessage)
+    }
+
+    fn poll_filtered_into_ptr(
+        &mut self,
+        receiver_pid: u8,
+        filter_type: Option<u16>,
+        out_ptr: *mut KrxIpcMessage,
+    ) -> bool {
         for idx in 0..self.len {
             let msg = &self.messages[idx];
             let is_recipient = msg.target_pid == receiver_pid
                 || (receiver_pid != 0 && msg.target_pid == ipc_target::FOREGROUND_APP);
             let type_ok = filter_type.is_none_or(|t| msg.msg_type == t);
             if is_recipient && type_ok {
-                let out = *msg;
-                for k in idx..self.len - 1 {
-                    self.messages[k] = self.messages[k + 1];
+                unsafe {
+                    core::ptr::copy_nonoverlapping(&self.messages[idx], out_ptr, 1);
+                    for k in idx..self.len - 1 {
+                        core::ptr::copy_nonoverlapping(
+                            &self.messages[k + 1],
+                            &mut self.messages[k],
+                            1,
+                        );
+                    }
                 }
                 self.len -= 1;
-                return Some(out);
+                return true;
             }
         }
-        None
+        false
     }
 
     /// Check if pending messages exist for `receiver_pid`.
