@@ -168,6 +168,7 @@ impl Orchestrator {
         init_proc_table();
         let table = proc_table_mut();
 
+        #[inline(never)]
         fn spawn_proc(
             table: &mut ProcessTable<MAX_PROCESSES>,
             name: &str,
@@ -292,9 +293,10 @@ impl Orchestrator {
 
     pub fn set_startup_app(&mut self, app_id: usize) {
         if self.active_app_id != app_id {
+            let prev = self.active_app_id;
             self.active_app_id = app_id;
             let table = proc_table_mut();
-            if let Some(pcb) = table.find_mut_by_app(5) {
+            if let Some(pcb) = table.find_mut_by_app(prev) {
                 let name = crate::AppRegistry::descriptor(app_id)
                     .map(|m| m.name)
                     .unwrap_or("App");
@@ -1077,5 +1079,26 @@ impl Orchestrator {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_startup_app_updates_active_and_pcb() {
+        let mut orch = Orchestrator::new(crate::apps::APP_ID_LAUNCHER);
+        assert_eq!(orch.active_app_id(), crate::apps::APP_ID_LAUNCHER);
+
+        orch.set_startup_app(crate::apps::APP_ID_VFO);
+        assert_eq!(orch.active_app_id(), crate::apps::APP_ID_VFO);
+
+        let table = orch.proc_table();
+        assert!(table.find_by_app(crate::apps::APP_ID_LAUNCHER).is_none());
+        let pcb = table
+            .find_by_app(crate::apps::APP_ID_VFO)
+            .expect("startup app PCB updated to new app_id");
+        assert_eq!(pcb.app_id, crate::apps::APP_ID_VFO);
     }
 }

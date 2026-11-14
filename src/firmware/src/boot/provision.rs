@@ -145,13 +145,14 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             _ => "/user/",
         };
 
-        let mut dst_buf = [0u8; 48];
+        let mut dst_buf = core::mem::MaybeUninit::<[u8; 48]>::uninit();
+        let dst_arr = unsafe { &mut *dst_buf.as_mut_ptr() };
         let p_bytes = prefix.as_bytes();
         let total_len = p_bytes.len() + b.len();
-        if total_len <= dst_buf.len() {
-            dst_buf[..p_bytes.len()].copy_from_slice(p_bytes);
-            dst_buf[p_bytes.len()..total_len].copy_from_slice(b);
-            let dst_path = unsafe { core::str::from_utf8_unchecked(&dst_buf[..total_len]) };
+        if total_len <= dst_arr.len() {
+            dst_arr[..p_bytes.len()].copy_from_slice(p_bytes);
+            dst_arr[p_bytes.len()..total_len].copy_from_slice(b);
+            let dst_path = unsafe { core::str::from_utf8_unchecked(&dst_arr[..total_len]) };
             let _ = filesystem.remove(dst_path);
             if filesystem.write_file(dst_path, buf).is_ok() {
                 let _ = filesystem.remove(src_path);

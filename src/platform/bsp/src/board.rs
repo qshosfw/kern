@@ -286,6 +286,7 @@ impl Board {
         hal::uart::set_baud(baud);
     }
 
+    #[inline(never)]
     pub fn init() -> Self {
         // Disable unused timers & DAC to prevent dynamic clock power leakage
         unsafe {

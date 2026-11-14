@@ -40,6 +40,35 @@ impl SettingsApp {
         self.items_len = defs.len().min(self.items.len());
     }
 
+    fn enter_page(
+        &mut self,
+        page: PageId,
+        selected_idx: usize,
+        slide_dir: i16,
+        ctx: &mut SysContext,
+    ) {
+        self.current_page = page;
+        self.selected_idx = selected_idx;
+        self.title = page_title(page);
+        self.populate_current_menu(ctx);
+        if self.selected_idx >= self.items_len {
+            self.selected_idx = self.items_len.saturating_sub(1);
+        }
+        self.slide_offset_x = if ctx.config.display.animations_enabled() {
+            slide_dir
+        } else {
+            0
+        };
+        self.reset_input_state();
+    }
+
+    fn commit_field(&mut self, field: SettingField, val: i32, ctx: &mut SysContext) {
+        if field.set_val(val, &mut ctx.config) {
+            apply_page_changes(self.current_page, ctx);
+            self.dirty_timer_ms = 250;
+        }
+    }
+
     #[inline(never)]
     pub fn push_submenu(&mut self, page: PageId, ctx: &mut SysContext) {
         if self.stack_top < self.stack.len() {
@@ -49,17 +78,8 @@ impl SettingsApp {
             };
             self.stack_top += 1;
         }
-        self.current_page = page;
-        self.selected_idx = 0;
-        self.title = page_title(page);
-        self.populate_current_menu(ctx);
+        self.enter_page(page, 0, 28, ctx);
         self.view.reset_scroll();
-        if ctx.config.display.animations_enabled() {
-            self.slide_offset_x = 28;
-        } else {
-            self.slide_offset_x = 0;
-        }
-        self.reset_input_state();
     }
 
     #[inline(never)]
@@ -67,21 +87,9 @@ impl SettingsApp {
         if self.stack_top > 0 {
             self.stack_top -= 1;
             let frame = self.stack[self.stack_top];
-            self.current_page = frame.page;
-            self.selected_idx = frame.selected_idx as usize;
-            self.title = page_title(frame.page);
-            self.populate_current_menu(ctx);
-            if self.selected_idx >= self.items_len {
-                self.selected_idx = self.items_len.saturating_sub(1);
-            }
+            self.enter_page(frame.page, frame.selected_idx as usize, -28, ctx);
             self.view.adjust_scroll(self.selected_idx, self.items_len);
             self.view.scroller.jump((self.view.scroll_top as i16) * 13);
-            if ctx.config.display.animations_enabled() {
-                self.slide_offset_x = -28;
-            } else {
-                self.slide_offset_x = 0;
-            }
-            self.reset_input_state();
 
             if ctx.config.is_dirty() {
                 let _ = ctx.flush_config();
@@ -115,10 +123,7 @@ impl SettingsApp {
                 _ => None,
             };
             if let Some(v) = val {
-                if def.field.set_val(v, &mut ctx.config) {
-                    apply_page_changes(self.current_page, ctx);
-                    self.dirty_timer_ms = 250;
-                }
+                self.commit_field(def.field, v, ctx);
             }
         }
     }
@@ -160,10 +165,7 @@ impl SettingsApp {
                 } else {
                     sel as i32
                 };
-                if def.field.set_val(val, &mut ctx.config) {
-                    apply_page_changes(self.current_page, ctx);
-                    self.dirty_timer_ms = 250;
-                }
+                self.commit_field(def.field, val, ctx);
             }
         }
     }

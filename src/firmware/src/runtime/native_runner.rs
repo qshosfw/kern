@@ -468,18 +468,13 @@ pub fn load_native_from_storage(
 
     let raw_entry = load_base.wrapping_add(exec.entry_point);
     let entry_thumb = (raw_entry | 1) as usize;
-    let slot_start = load_base as usize;
-    let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
-    if entry_thumb < slot_start || entry_thumb >= slot_end {
-        return Err(KrxLaunchError::InvalidEntryPoint);
-    }
-
-    // 5. Validate execution alignment and code region bounds at load time
-    let code_addr = (entry_thumb & !1) as u32;
+    let code_addr = raw_entry & !1;
     if code_addr < load_base || code_addr >= load_base.saturating_add(code_size) {
         return Err(KrxLaunchError::InvalidEntryPoint);
     }
 
+    let slot_start = load_base as usize;
+    let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
     let got_addr = slot.got_base as usize;
     if (got_addr & 3) != 0 || got_addr < slot_start || got_addr >= slot_end {
         return Err(KrxLaunchError::ImportBindingFailed);

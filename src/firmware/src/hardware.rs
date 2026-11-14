@@ -118,8 +118,14 @@ pub fn apply_display_hardware(
     disp_cfg.apply_to_backlight(backlight);
 }
 
-#[inline(never)]
-pub fn build_sys_context<'a, 'hw>(
+#[derive(Clone, Copy)]
+enum CtxOp {
+    Start,
+    Render,
+    Dispatch(Event),
+}
+
+fn fill_sys_context<'a, 'hw>(
     radio: &'a mut crate::services::SystemRadio<'hw>,
     filesystem: &'a mut crate::services::SystemStorage<'hw>,
     audio: &'a mut crate::services::SystemAudio,
@@ -214,34 +220,53 @@ impl<'a> SystemHardware<'a> {
     }
 
     #[inline(never)]
-    pub fn dispatch_event_and_actions(&mut self, ev: Event) -> bool {
+    fn exec_with_ctx(&mut self, op: CtxOp) -> bool {
         let is_locked = self.orchestrator.is_keypad_locked();
         let is_f = self.orchestrator.is_f_active();
-
-        let consumed = {
-            let mut display_hw = DisplayHardware {
-                lcd: &mut self.lcd,
-                canvas: crate::system_canvas(),
-                backlight: &mut self.backlight,
-            };
-            let mut ctx = build_sys_context(
-                &mut self.radio,
-                self.filesystem,
-                &mut self.audio,
-                #[cfg(feature = "usb")]
-                Some(&mut self.usb),
-                #[cfg(not(feature = "usb"))]
-                None,
-                #[cfg(feature = "uart")]
-                &mut self.uart,
-                Some(&mut display_hw),
-                Some(&mut self.ipc_queue),
-                is_locked,
-                is_f,
-            );
-            self.orchestrator.dispatch_event(&mut ctx, ev)
+        let with_display = !matches!(op, CtxOp::Render);
+        let mut display_hw = DisplayHardware {
+            lcd: &mut self.lcd,
+            canvas: crate::system_canvas(),
+            backlight: &mut self.backlight,
         };
+        let mut ctx = fill_sys_context(
+            &mut self.radio,
+            self.filesystem,
+            &mut self.audio,
+            #[cfg(feature = "usb")]
+            Some(&mut self.usb),
+            #[cfg(not(feature = "usb"))]
+            None,
+            #[cfg(feature = "uart")]
+            &mut self.uart,
+            if with_display {
+                Some(&mut display_hw)
+            } else {
+                None
+            },
+            if with_display {
+                Some(&mut self.ipc_queue)
+            } else {
+                None
+            },
+            is_locked,
+            is_f,
+        );
+        match op {
+            CtxOp::Start => {
+                crate::AppRegistry::on_start(self.orchestrator.active_app_id(), &mut ctx);
+                false
+            }
+            CtxOp::Render => {
+                self.orchestrator.render(crate::system_canvas(), &ctx);
+                false
+            }
+            CtxOp::Dispatch(ev) => self.orchestrator.dispatch_event(&mut ctx, ev),
+        }
+    }
 
+    pub fn dispatch_event_and_actions(&mut self, ev: Event) -> bool {
+        let consumed = self.exec_with_ctx(CtxOp::Dispatch(ev));
         self.apply_dirty_configs();
         consumed
     }
@@ -268,54 +293,13 @@ impl<'a> SystemHardware<'a> {
         }
     }
 
-    #[inline(never)]
     pub fn init_startup_app(&mut self) {
-        let is_locked = self.orchestrator.is_keypad_locked();
-        let is_f = self.orchestrator.is_f_active();
-        let mut display_hw = DisplayHardware {
-            lcd: &mut self.lcd,
-            canvas: crate::system_canvas(),
-            backlight: &mut self.backlight,
-        };
-        let mut ctx = build_sys_context(
-            &mut self.radio,
-            self.filesystem,
-            &mut self.audio,
-            #[cfg(feature = "usb")]
-            Some(&mut self.usb),
-            #[cfg(not(feature = "usb"))]
-            None,
-            #[cfg(feature = "uart")]
-            &mut self.uart,
-            Some(&mut display_hw),
-            Some(&mut self.ipc_queue),
-            is_locked,
-            is_f,
-        );
-        crate::AppRegistry::on_start(self.orchestrator.active_app_id(), &mut ctx);
+        self.exec_with_ctx(CtxOp::Start);
     }
 
-    #[inline(never)]
     pub fn render_frame(&mut self) {
-        let is_locked = self.orchestrator.is_keypad_locked();
-        let is_f = self.orchestrator.is_f_active();
-        let ctx = build_sys_context(
-            &mut self.radio,
-            self.filesystem,
-            &mut self.audio,
-            #[cfg(feature = "usb")]
-            Some(&mut self.usb),
-            #[cfg(not(feature = "usb"))]
-            None,
-            #[cfg(feature = "uart")]
-            &mut self.uart,
-            None,
-            None,
-            is_locked,
-            is_f,
-        );
+        self.exec_with_ctx(CtxOp::Render);
         let canvas = crate::system_canvas();
-        self.orchestrator.render(canvas, &ctx);
         canvas.mark_all_dirty();
         self.lcd.blit(canvas);
     }

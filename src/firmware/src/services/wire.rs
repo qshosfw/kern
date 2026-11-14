@@ -85,16 +85,14 @@ impl EventSubscription {
 
 pub static mut ACTIVE_SUBSCRIPTION: EventSubscription = EventSubscription::empty();
 
-type WireOut = Result<(WireStatus, usize), (WireStatus, usize)>;
-
 #[inline(always)]
-fn ok_bytes(len: usize) -> WireOut {
-    Ok((WireStatus::Ok, len))
+fn ok_bytes(len: usize) -> (WireStatus, usize) {
+    (WireStatus::Ok, len)
 }
 
 #[inline(always)]
-fn err_empty(status: WireStatus) -> WireOut {
-    Err((status, 0))
+fn err_empty(status: WireStatus) -> (WireStatus, usize) {
+    (status, 0)
 }
 
 /// Main entry point for non-core RigWire records routed from the transport driver.
@@ -117,11 +115,8 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
         _ => return false,
     };
 
-    let Some(outcome) = res else {
+    let Some((status, resp_len)) = res else {
         return false;
-    };
-    let (status, resp_len) = match outcome {
-        Ok(pair) | Err(pair) => pair,
     };
     let _ = hw.wire.send_response(header, status, &out[..resp_len]);
     true
@@ -495,7 +490,7 @@ fn handle_control_service(
     hw: &mut SystemHardware,
     now: u32,
     out: &mut [u8],
-) -> Option<WireOut> {
+) -> Option<(WireStatus, usize)> {
     if !matches!(
         opcode,
         OP_HANDLE_GET | OP_HANDLE_SET | OP_HANDLE_INVOKE | OP_HANDLE_STREAM
@@ -516,7 +511,7 @@ fn handle_control_service(
             let status = handle_resource_set(handle, &payload[4..], hw)
                 .err()
                 .unwrap_or(WireStatus::Ok);
-            Ok((status, 4))
+            (status, 4)
         }
         OP_HANDLE_INVOKE => {
             let Ok(req) = HandleInvokeReq::parse(payload) else {
@@ -525,7 +520,7 @@ fn handle_control_service(
             out[4] = payload[4];
             out[5] = payload[5];
             let status = handle_resource_invoke(handle, req.action_id, req.params, hw);
-            Ok((status, 6))
+            (status, 6)
         }
         OP_HANDLE_STREAM => {
             let Ok(req) = HandleStreamReq::parse(payload) else {
@@ -538,13 +533,11 @@ fn handle_control_service(
             let total_sz = flat.len();
             let off = (req.offset as usize).min(total_sz);
             let len = (req.length as usize).min(100).min(total_sz - off);
-            {
-                let mut w = ByteWriter::new(&mut out[4..10]);
-                w.write_u32_le(off as u32);
-                w.write_u16_le(len as u16);
-            }
-            out[10..10 + len].copy_from_slice(&flat[off..off + len]);
-            ok_bytes(10 + len)
+            let mut w = ByteWriter::new(&mut out[4..10 + len]);
+            w.write_u32_le(off as u32);
+            w.write_u16_le(len as u16);
+            w.write_bytes(&flat[off..off + len]);
+            ok_bytes(4 + w.position())
         }
         _ => return None,
     };
@@ -574,7 +567,11 @@ fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
 }
 
 #[inline(never)]
-fn on_transfer_open(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> WireOut {
+fn on_transfer_open(
+    payload: &[u8],
+    hw: &mut SystemHardware,
+    out: &mut [u8],
+) -> (WireStatus, usize) {
     let Some(req) = TransferOpenRequest::parse(payload) else {
         return err_empty(WireStatus::BadLength);
     };
@@ -619,7 +616,11 @@ fn on_transfer_open(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> 
 }
 
 #[inline(never)]
-fn on_transfer_chunk(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> WireOut {
+fn on_transfer_chunk(
+    payload: &[u8],
+    hw: &mut SystemHardware,
+    out: &mut [u8],
+) -> (WireStatus, usize) {
     let Some(req) = TransferChunkRequest::parse(payload) else {
         return err_empty(WireStatus::BadLength);
     };
@@ -691,7 +692,11 @@ fn commit_calibration_payload(
 }
 
 #[inline(never)]
-fn on_transfer_close(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> WireOut {
+fn on_transfer_close(
+    payload: &[u8],
+    hw: &mut SystemHardware,
+    out: &mut [u8],
+) -> (WireStatus, usize) {
     let Some(req) = TransferCloseRequest::parse(payload) else {
         return err_empty(WireStatus::BadLength);
     };
@@ -728,7 +733,11 @@ fn on_transfer_close(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) ->
     ok_bytes(w.position())
 }
 
-fn on_transfer_stat(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> WireOut {
+fn on_transfer_stat(
+    payload: &[u8],
+    hw: &mut SystemHardware,
+    out: &mut [u8],
+) -> (WireStatus, usize) {
     let Some(req) = TransferStatRequest::parse(payload) else {
         return err_empty(WireStatus::BadLength);
     };
@@ -760,25 +769,28 @@ fn on_transfer_stat(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> 
             ok_bytes(w.position())
         }
         Err(_) => {
-            out[..10].fill(0);
-            Ok((WireStatus::NotFound, 10))
+            for b in &mut out[..10] {
+                *b = 0;
+            }
+            (WireStatus::NotFound, 10)
         }
     }
 }
 
 #[inline(never)]
-fn on_transfer_list(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> WireOut {
+fn on_transfer_list(
+    payload: &[u8],
+    hw: &mut SystemHardware,
+    out: &mut [u8],
+) -> (WireStatus, usize) {
     let Some(req) = TransferListRequest::parse(payload) else {
         return err_empty(WireStatus::BadLength);
     };
 
     let entries = unsafe {
         let ptr = crate::runtime::arena_base_ptr() as *mut DirEntryInfo;
-        let slice = core::slice::from_raw_parts_mut(ptr, 12);
-        for e in slice.iter_mut() {
-            *e = DirEntryInfo::empty();
-        }
-        slice
+        core::ptr::write_bytes(ptr, 0, 12);
+        core::slice::from_raw_parts_mut(ptr, 12)
     };
     let count = hw.filesystem.list_dir(req.path, entries).unwrap_or(0);
 
@@ -806,7 +818,7 @@ fn handle_data_service(
     payload: &[u8],
     hw: &mut SystemHardware,
     out: &mut [u8],
-) -> Option<WireOut> {
+) -> Option<(WireStatus, usize)> {
     let res = match opcode {
         OP_TRANSFER_OPEN => on_transfer_open(payload, hw, out),
         OP_TRANSFER_CHUNK => on_transfer_chunk(payload, hw, out),
@@ -839,7 +851,7 @@ fn handle_data_service(
             } else {
                 WireStatus::NotFound
             };
-            Ok((status, 0))
+            (status, 0)
         }
         _ => return None,
     };
@@ -848,7 +860,11 @@ fn handle_data_service(
 
 // ── SERVICE_EVENTS (0x02) ────────────────────────────────────────────────────
 #[inline(never)]
-fn handle_events_service(opcode: u8, payload: &[u8], _out: &mut [u8]) -> Option<WireOut> {
+fn handle_events_service(
+    opcode: u8,
+    payload: &[u8],
+    _out: &mut [u8],
+) -> Option<(WireStatus, usize)> {
     let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
     let status = match opcode {
         OP_EVENTS_SUBSCRIBE => match EventSubscribeReq::parse(payload) {
@@ -875,7 +891,7 @@ fn handle_events_service(opcode: u8, payload: &[u8], _out: &mut [u8]) -> Option<
         }
         _ => return None,
     };
-    Some(Ok((status, 0)))
+    Some((status, 0))
 }
 
 /// Asynchronously emit an event frame over RigWire if the host holds a valid subscription with credits.
@@ -885,8 +901,8 @@ pub fn emit_event(hw: &mut SystemHardware, event_id: u16, data: &[u8]) {
         let bit = 1u32 << (event_id & 0x1F);
         if (sub.active_mask & bit) != 0 && sub.credits > 0 {
             sub.credits -= 1;
-            let mut payload = [0u8; 32];
-            let mut w = ByteWriter::new(&mut payload);
+            let mut payload = MaybeUninit::<[u8; 32]>::uninit();
+            let mut w = ByteWriter::new(&mut *payload.as_mut_ptr());
             w.write_u16_le(event_id);
             let d_len = data.len().min(30);
             w.write_bytes(&data[..d_len]);

@@ -177,15 +177,16 @@ const _: () = {
 };
 
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
-    let mut temp = [0u8; 128];
-    let n = buf.len().min(temp.len());
-    let loaded = if let Ok(len) = storage.read_file(path, &mut temp[..n]) {
-        len >= n && is_raw_valid(&temp[..n], version)
+    let mut temp = core::mem::MaybeUninit::<[u8; 128]>::uninit();
+    let temp_buf = unsafe { &mut *temp.as_mut_ptr() };
+    let n = buf.len().min(128);
+    let loaded = if let Ok(len) = storage.read_file(path, &mut temp_buf[..n]) {
+        len >= n && is_raw_valid(&temp_buf[..n], version)
     } else {
         false
     };
     if loaded {
-        buf[..n].copy_from_slice(&temp[..n]);
+        buf[..n].copy_from_slice(&temp_buf[..n]);
     } else {
         update_raw_crc(buf);
         let _ = save_config_raw(storage, path, buf);

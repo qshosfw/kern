@@ -639,26 +639,6 @@ impl<'a, State> Bk4829<'a, State> {
         }
     }
 
-    pub fn prepare_fsk_receive(&mut self, data_length: u16) {
-        self.write_reg(REG_FSK_CTRL, 0x00C1);
-        self.write_reg(REG_FSK_PACKET_LEN, data_length << 8);
-        self.clear_interrupts();
-        self.write_reg(
-            REG_INT_ENABLE,
-            INT_FSK_RX_FINISHED | INT_FSK_FIFO_ALMOST_FULL,
-        );
-    }
-
-    pub fn send_fsk_data(&mut self, data: &[u16]) {
-        self.clear_interrupts();
-        self.write_reg(REG_INT_ENABLE, INT_FSK_TX_FINISHED);
-        for &word in data {
-            self.write_reg(REG_FSK_FIFO_DATA, word);
-        }
-        let reg58 = self.cache.read(REG_FSK_CTRL);
-        self.write_reg(REG_FSK_CTRL, reg58 | 0x0100);
-    }
-
     /// Select external VHF vs UHF front-end bandpass and LNA path on REG_33.
     pub fn set_filter_path(&mut self, freq_hz: u32) {
         if freq_hz < 280_000_000 {

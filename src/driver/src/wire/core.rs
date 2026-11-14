@@ -17,7 +17,8 @@ impl<S: SerialPort> WireDriver<S> {
             return;
         }
         let payload = &self.rx_buf[HEADER_LEN..covered];
-        let mut resp_buf = [0u8; 35];
+        let mut resp_uninit = ::core::mem::MaybeUninit::<[u8; 35]>::uninit();
+        let resp_buf = unsafe { &mut *resp_uninit.as_mut_ptr() };
         let mut do_reset = false;
         let mut do_reboot = false;
 
@@ -120,6 +121,8 @@ impl<S: SerialPort> WireDriver<S> {
             }
 
             OP_CORE_GET_STATUS => {
+                resp_buf[0] = 0;
+                resp_buf[1] = 0;
                 resp_buf[2] = 0xD0;
                 resp_buf[3] = 0x20; // nominal=8400mV
                 resp_buf[4..8].copy_from_slice(&uptime_ms.to_le_bytes());
@@ -127,12 +130,8 @@ impl<S: SerialPort> WireDriver<S> {
             }
 
             OP_CORE_GET_RESULT => {
-                let seq = header.sequence.to_le_bytes();
                 resp_buf[0] = WireStatus::Ok.to_u8();
-                resp_buf[1] = seq[0];
-                resp_buf[2] = seq[1];
-                resp_buf[3] = seq[2];
-                resp_buf[4] = seq[3];
+                resp_buf[1..5].copy_from_slice(&header.sequence.to_le_bytes());
                 (WireStatus::Ok, 5)
             }
 
