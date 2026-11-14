@@ -76,21 +76,26 @@ impl AssetDescriptor {
 
         let scan_count = storage_fs
             .list_dir(self.dir, &mut storage.dir_entries)
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .min(MAX_CHOOSER_ASSETS);
 
-        for i in 1..scan_count {
+        let mut order = [0u8; MAX_CHOOSER_ASSETS];
+        for i in 0..scan_count {
+            order[i] = i as u8;
             let mut j = i;
             while j > 0
-                && storage.dir_entries[j].path.as_str() < storage.dir_entries[j - 1].path.as_str()
+                && storage.dir_entries[order[j] as usize].path.as_str()
+                    < storage.dir_entries[order[j - 1] as usize].path.as_str()
             {
-                storage.dir_entries.swap(j, j - 1);
+                order.swap(j, j - 1);
                 j -= 1;
             }
         }
 
         let mut current_sel = 0;
 
-        for entry in &storage.dir_entries[..scan_count] {
+        for &idx in &order[..scan_count] {
+            let entry = &storage.dir_entries[idx as usize];
             if entry.is_dir {
                 continue;
             }
@@ -189,13 +194,20 @@ fn storage_mut() -> &'static mut AssetChooserStorage {
 /// Converts e.g. "/user/rogers/01_roger.ton" -> "Roger", "02_mini_kong.rle" -> "Mini Kong"
 pub fn format_asset_name_into(path: &str, out: &mut ShortString) {
     let raw = path.as_bytes();
-    let name_start = raw.iter().rposition(|&b| b == b'/').map_or(0, |i| i + 1);
-    let file_part = &raw[name_start..];
-    let dot_idx = file_part
-        .iter()
-        .rposition(|&b| b == b'.')
-        .unwrap_or(file_part.len());
-    let base = &file_part[..dot_idx];
+    let mut name_start = 0usize;
+    let mut dot_idx = raw.len();
+    let mut i = raw.len();
+    while i > 0 {
+        i -= 1;
+        if raw[i] == b'/' {
+            name_start = i + 1;
+            break;
+        }
+        if raw[i] == b'.' && dot_idx == raw.len() {
+            dot_idx = i;
+        }
+    }
+    let base = &raw[name_start..dot_idx.max(name_start)];
 
     // Strip leading numerical index prefix if present (e.g. "01_", "02-", "1_")
     let mut start = 0;

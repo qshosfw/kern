@@ -96,23 +96,22 @@ fn populate_item(
             item.item_type = MenuItemType::Submenu;
         }
         TAG_METRIC | TAG_ACTION | TAG_ASSET => {
-            item.item_type = MenuItemType::Value(ShortString::empty());
-            if let MenuItemType::Value(ref mut s) = item.item_type {
-                if def.tag == TAG_METRIC {
-                    if let Some(metric) = MetricId::from_u8(def.aux) {
-                        super::metric::format_metric(metric, ctx, s);
-                    }
-                } else if def.tag == TAG_ACTION {
-                    if let Some(action) = ActionId::from_u8(def.aux) {
-                        get_action_value(action, ctx, s);
-                    }
-                } else {
-                    #[cfg(feature = "filesystem")]
-                    if let Some(&desc) = ASSETS.get(def.aux as usize) {
-                        desc.format_status(&ctx.config, s);
-                    }
+            let mut s = ShortString::empty();
+            if def.tag == TAG_METRIC {
+                if let Some(metric) = MetricId::from_u8(def.aux) {
+                    super::metric::format_metric(metric, ctx, &mut s);
+                }
+            } else if def.tag == TAG_ACTION {
+                if let Some(action) = ActionId::from_u8(def.aux) {
+                    get_action_value(action, ctx, &mut s);
+                }
+            } else {
+                #[cfg(feature = "filesystem")]
+                if let Some(&desc) = ASSETS.get(def.aux as usize) {
+                    desc.format_status(&ctx.config, &mut s);
                 }
             }
+            item.item_type = MenuItemType::Value(s);
         }
         _ => {
             item.item_type = MenuItemType::Info("Ascon-128");

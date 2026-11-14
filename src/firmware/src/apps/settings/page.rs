@@ -342,7 +342,7 @@ impl SettingField {
     pub const VFO_DUAL_WATCH: Self = Self::byte(5, 5);
     pub const SCANNER_DWELL: Self = Self::byte(5, 6);
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn get_u8(self, config: &crate::config::MasterConfig) -> u8 {
         if self.0 >= 0xFE {
             0

@@ -122,11 +122,22 @@ pub fn populate_package_list(
 }
 
 #[inline(never)]
-fn add_detail_row(items: &mut [MenuItem], n: &mut usize, title: &'static str, val: &str) {
+fn push_item(items: &mut [MenuItem], n: &mut usize, title: &'static str, ty: MenuItemType) {
     if *n < items.len() {
-        items[*n] = MenuItem::new(title, MenuItemType::Value(ShortString::from_str(val)));
+        items[*n].title = title;
+        items[*n].item_type = ty;
         *n += 1;
     }
+}
+
+#[inline(never)]
+fn add_detail_row(items: &mut [MenuItem], n: &mut usize, title: &'static str, val: &str) {
+    push_item(
+        items,
+        n,
+        title,
+        MenuItemType::Value(ShortString::from_str(val)),
+    );
 }
 
 #[inline(never)]
@@ -134,18 +145,14 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
     let cat = get_catalog();
     let pkg = cat.get_entry(is_service, idx);
 
+    let mut n = 0;
     let Some(pkg) = pkg else {
-        items[0] = MenuItem::new(
-            "Status",
-            MenuItemType::Value(ShortString::from_str("Empty")),
-        );
-        return 1;
+        add_detail_row(items, &mut n, "Status", "Empty");
+        return n;
     };
 
-    let mut n = 0;
     if !is_service && pkg.is_valid {
-        items[0] = MenuItem::new("Launch App", MenuItemType::Action);
-        n = 1;
+        push_item(items, &mut n, "Launch App", MenuItemType::Action);
     }
 
     add_detail_row(items, &mut n, "Name", pkg.title.as_str());
@@ -153,19 +160,11 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
         add_detail_row(items, &mut n, "Role", pkg.exec_type.as_str());
     }
     add_detail_row(items, &mut n, "Class", pkg.app_class.as_str());
-    if n < items.len() {
-        items[n] = MenuItem::new("Size", MenuItemType::Value(ShortString::empty()));
-        if let MenuItemType::Value(ref mut s) = items[n].item_type {
-            format_size_into(pkg.size_bytes, s);
-        }
-        n += 1;
-    }
+    let mut size_s = ShortString::empty();
+    format_size_into(pkg.size_bytes, &mut size_s);
+    push_item(items, &mut n, "Size", MenuItemType::Value(size_s));
     add_detail_row(items, &mut n, "File", pkg.filename());
-
-    if n < items.len() {
-        items[n] = MenuItem::new("Delete", MenuItemType::Action);
-        n += 1;
-    }
+    push_item(items, &mut n, "Delete", MenuItemType::Action);
     n
 }
 
