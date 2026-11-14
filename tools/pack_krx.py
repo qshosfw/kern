@@ -425,8 +425,8 @@ class KrxPackageBuilder:
             sections.append((SEC_SERVICE_EXPORTS, export_body))
 
         # Calculate section headers offset
-        # Preamble is 20 bytes (KRX_MAGIC..header_crc32)
-        preamble_len = 20
+        # Preamble is 24 bytes (KRX_MAGIC..link_base)
+        preamble_len = 24
         sec_header_len = 0
         for sec_id, sec_body in sections:
             sec_header_len += 4 + len(sec_body)
@@ -454,7 +454,7 @@ class KrxPackageBuilder:
         header_crc = zlib.crc32(header_content) & 0xFFFFFFFF
         payload_crc = zlib.crc32(self.payload) & 0xFFFFFFFF
 
-        # Build 20-byte Preamble
+        # Build 24-byte Preamble
         preamble = bytearray()
         preamble.extend(KRX_MAGIC)
         preamble.append(self.app_class)
@@ -464,7 +464,8 @@ class KrxPackageBuilder:
         preamble.extend(struct.pack("<H", 0))  # flags
         preamble.extend(struct.pack("<I", payload_crc))
         preamble.extend(struct.pack("<I", header_crc))
-        assert len(preamble) == 20
+        preamble.extend(struct.pack("<I", self.link_base))
+        assert len(preamble) == 24
 
         full_package = preamble + header_content + self.payload
         return bytes(full_package)
@@ -472,8 +473,8 @@ class KrxPackageBuilder:
 
 def verify_package(package_bytes: bytes) -> dict:
     """Rigorous pre-flight verification of a packed KRX binary."""
-    if len(package_bytes) < 20:
-        raise ValueError("Package is shorter than normative preamble size (20 B)")
+    if len(package_bytes) < 24:
+        raise ValueError("Package is shorter than normative preamble size (24 B)")
     if package_bytes[:4] != KRX_MAGIC:
         raise ValueError(f"Invalid KRX magic: {package_bytes[:4].hex()}")
 
@@ -482,15 +483,15 @@ def verify_package(package_bytes: bytes) -> dict:
     if version == 0 or version > 5:
         raise ValueError(f"Unsupported KRX format version: {version}")
 
-    section_count, total_header_len, flags, payload_crc, header_crc = struct.unpack(
-        "<HHHII", package_bytes[6:20]
+    section_count, total_header_len, flags, payload_crc, header_crc, link_base = struct.unpack(
+        "<HHHIII", package_bytes[6:24]
     )
-    if total_header_len < 20 or (total_header_len & 3) != 0:
+    if total_header_len < 24 or (total_header_len & 3) != 0:
         raise ValueError(f"Unaligned or invalid total header length: {total_header_len}")
     if len(package_bytes) < total_header_len:
         raise ValueError(f"Truncated file: size {len(package_bytes)} < header {total_header_len}")
 
-    header_content = package_bytes[20:total_header_len]
+    header_content = package_bytes[24:total_header_len]
     actual_hdr_crc = zlib.crc32(header_content) & 0xFFFFFFFF
     if header_crc != 0 and actual_hdr_crc != header_crc:
         raise ValueError(f"Header CRC32 mismatch: expected 0x{header_crc:08X}, calculated 0x{actual_hdr_crc:08X}")
@@ -501,7 +502,7 @@ def verify_package(package_bytes: bytes) -> dict:
         raise ValueError(f"Payload CRC32 mismatch: expected 0x{payload_crc:08X}, calculated 0x{actual_payload_crc:08X}")
 
     # Inspect sections
-    offset = 20
+    offset = 24
     seen_sections = []
     while offset + 4 <= total_header_len:
         sec_id, sec_len = struct.unpack("<HH", package_bytes[offset : offset + 4])

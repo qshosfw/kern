@@ -313,7 +313,7 @@ pub struct KrxPreamble {
 }
 
 impl KrxPreamble {
-    pub const SIZE: usize = 20;
+    pub const SIZE: usize = 24;
 
     /// Parse preamble from little-endian byte slice
     pub fn parse(buf: &[u8]) -> Result<Self, ()> {
@@ -334,11 +334,7 @@ impl KrxPreamble {
         let flags = u16::from_le_bytes([buf[10], buf[11]]);
         let payload_crc32 = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
         let header_crc32 = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
-        let link_base = if buf.len() >= 24 {
-            u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]])
-        } else {
-            0
-        };
+        let link_base = u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]);
 
         Ok(Self {
             ident,
@@ -358,6 +354,8 @@ impl KrxPreamble {
         KrxClass::from_u8(self.app_type)
     }
 }
+
+const _: () = assert!(core::mem::size_of::<KrxPreamble>() == KrxPreamble::SIZE);
 
 /// Standard KRX Section IDs
 pub const SECTION_IDENTITY: u16 = 0x0001;
@@ -1123,18 +1121,19 @@ pub struct DeclareItem {
 
 /// Fixed-size 32-byte Index Entry for two-pass zero-alloc launcher scanner
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct KrxIndexEntry {
     pub name: [u8; 16],
     pub class: u8,
     pub exec_type: u8,
     pub icon_id: u16,
-    pub caps: u16,
+    pub caps: u32,
     pub file_size: u32,
     pub crc16: u16,
     pub flags: u16,
-    pub reserved: [u8; 4],
 }
+
+const _: () = assert!(core::mem::size_of::<KrxIndexEntry>() == 32);
 
 impl KrxIndexEntry {
     pub const fn empty() -> Self {
@@ -1147,7 +1146,6 @@ impl KrxIndexEntry {
             file_size: 0,
             crc16: 0,
             flags: 0,
-            reserved: [0; 4],
         }
     }
 
@@ -1157,7 +1155,7 @@ impl KrxIndexEntry {
     }
 
     pub fn capability_set(&self) -> CapabilitySet {
-        CapabilitySet::from_raw(self.caps as u32)
+        CapabilitySet::from_raw(self.caps)
     }
 }
 
@@ -1561,56 +1559,56 @@ mod tests {
     fn test_synthetic_krx_package_end_to_end_parsing() {
         let mut pkg = [0u8; 180];
 
-        // 1. Preamble (20 bytes)
+        // 1. Preamble (24 bytes)
         pkg[0..4].copy_from_slice(&KRX_IDENT);
         pkg[4] = KrxClass::Paged as u8;
         pkg[5] = 5; // format version 2.5.0
         pkg[6..8].copy_from_slice(&4u16.to_le_bytes()); // 4 sections
-        let header_len = 140u16;
+        let header_len = 148u16;
         pkg[8..10].copy_from_slice(&header_len.to_le_bytes());
 
-        // 2. SectionIdentity (offset 20: 4B header + 40B body = 44B, ends at 64)
-        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
-        pkg[22..24].copy_from_slice(&44u16.to_le_bytes());
-        let name_str_off = 124u16;
-        pkg[24..26].copy_from_slice(&name_str_off.to_le_bytes());
-        pkg[26..29].copy_from_slice(&[1, 2, 0]); // v1.2.0
-        pkg[29..31].copy_from_slice(&1u16.to_le_bytes()); // min_abi = 1
-        pkg[31..37].copy_from_slice(b"F4HWN\0");
+        // 2. SectionIdentity (offset 24: 4B header + 40B body = 44B, ends at 68)
+        pkg[24..26].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[26..28].copy_from_slice(&44u16.to_le_bytes());
+        let name_str_off = 132u16;
+        pkg[28..30].copy_from_slice(&name_str_off.to_le_bytes());
+        pkg[30..33].copy_from_slice(&[1, 2, 0]); // v1.2.0
+        pkg[33..35].copy_from_slice(&1u16.to_le_bytes()); // min_abi = 1
+        pkg[35..41].copy_from_slice(b"F4HWN\0");
 
-        // 3. SectionExecution (offset 64: 4B header + 28B body = 32B, ends at 96)
-        pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
-        pkg[66..68].copy_from_slice(&32u16.to_le_bytes());
-        pkg[68..70].copy_from_slice(&256u16.to_le_bytes()); // min_stack = 256
-        pkg[72..74].copy_from_slice(&1024u16.to_le_bytes()); // page_size = 1024
-        pkg[74] = 2; // cache_blocks = 2
-        pkg[76..80].copy_from_slice(&0x08u32.to_le_bytes()); // entry_point = 0x08
-        pkg[80..84].copy_from_slice(&32u32.to_le_bytes()); // payload_size = 32
+        // 3. SectionExecution (offset 68: 4B header + 28B body = 32B, ends at 100)
+        pkg[68..70].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[70..72].copy_from_slice(&32u16.to_le_bytes());
+        pkg[72..74].copy_from_slice(&256u16.to_le_bytes()); // min_stack = 256
+        pkg[76..78].copy_from_slice(&1024u16.to_le_bytes()); // page_size = 1024
+        pkg[78] = 2; // cache_blocks = 2
+        pkg[80..84].copy_from_slice(&0x08u32.to_le_bytes()); // entry_point = 0x08
+        pkg[84..88].copy_from_slice(&32u32.to_le_bytes()); // payload_size = 32
 
-        // 4. SectionCapImports (offset 96: 4B header + 8B body = 12B, ends at 108)
-        pkg[96..98].copy_from_slice(&SECTION_CAP_IMPORTS.to_le_bytes());
-        pkg[98..100].copy_from_slice(&12u16.to_le_bytes());
-        pkg[100..102].copy_from_slice(&0x0001u16.to_le_bytes()); // interface 1 (Display)
-        pkg[102..104].copy_from_slice(&1u16.to_le_bytes()); // min_abi = 1
-        pkg[104..106].copy_from_slice(&1u16.to_le_bytes()); // flags = mandatory
-        pkg[106..108].copy_from_slice(&0u16.to_le_bytes()); // slot = 0
+        // 4. SectionCapImports (offset 100: 4B header + 8B body = 12B, ends at 112)
+        pkg[100..102].copy_from_slice(&SECTION_CAP_IMPORTS.to_le_bytes());
+        pkg[102..104].copy_from_slice(&12u16.to_le_bytes());
+        pkg[104..106].copy_from_slice(&0x0001u16.to_le_bytes()); // interface 1 (Display)
+        pkg[106..108].copy_from_slice(&1u16.to_le_bytes()); // min_abi = 1
+        pkg[108..110].copy_from_slice(&1u16.to_le_bytes()); // flags = mandatory
+        pkg[110..112].copy_from_slice(&0u16.to_le_bytes()); // slot = 0
 
-        // 5. SectionLeafMap (offset 108: 4B header + 16B body = 20B, ends at 128)
-        pkg[108..110].copy_from_slice(&SECTION_LEAF_MAP.to_le_bytes());
-        pkg[110..112].copy_from_slice(&20u16.to_le_bytes());
-        pkg[112] = 1; // leaf_id = 1
-        pkg[113] = 0; // flags = 0
-        pkg[114..116].copy_from_slice(&512u16.to_le_bytes()); // size = 512
-        pkg[116..120].copy_from_slice(&144u32.to_le_bytes()); // flash_offset = 144
-        pkg[120..122].copy_from_slice(&0u16.to_le_bytes()); // entry_offset = 0
-        pkg[122..124].copy_from_slice(&0u16.to_le_bytes()); // ram_scratch = 0
+        // 5. SectionLeafMap (offset 112: 4B header + 16B body = 20B, ends at 132)
+        pkg[112..114].copy_from_slice(&SECTION_LEAF_MAP.to_le_bytes());
+        pkg[114..116].copy_from_slice(&20u16.to_le_bytes());
+        pkg[116] = 1; // leaf_id = 1
+        pkg[117] = 0; // flags = 0
+        pkg[118..120].copy_from_slice(&512u16.to_le_bytes()); // size = 512
+        pkg[120..124].copy_from_slice(&148u32.to_le_bytes()); // flash_offset = 148
+        pkg[124..126].copy_from_slice(&0u16.to_le_bytes()); // entry_offset = 0
+        pkg[126..128].copy_from_slice(&0u16.to_le_bytes()); // ram_scratch = 0
 
-        // 6. String Pool (offset 128..144)
-        pkg[128..134].copy_from_slice(b"Beacon");
-        let name_str_off = 128u16;
-        pkg[24..26].copy_from_slice(&name_str_off.to_le_bytes());
+        // 6. String Pool (offset 132..148)
+        pkg[132..138].copy_from_slice(b"Beacon");
+        let name_str_off = 132u16;
+        pkg[28..30].copy_from_slice(&name_str_off.to_le_bytes());
 
-        let header_len = 144u16;
+        let header_len = 148u16;
         pkg[8..10].copy_from_slice(&header_len.to_le_bytes());
 
         // Validate parsing
@@ -1618,15 +1616,15 @@ mod tests {
         let section_count = preamble.section_count;
         let hlen = preamble.header_len;
         assert_eq!(section_count, 4);
-        assert_eq!(hlen, 144);
+        assert_eq!(hlen, 148);
 
         // Find Identity
-        let ident_body = find_section(&pkg, 144, SECTION_IDENTITY).unwrap();
+        let ident_body = find_section(&pkg, 148, SECTION_IDENTITY).unwrap();
         let ident = SectionIdentity::parse(ident_body).unwrap();
-        assert_eq!(ident.name(&pkg[..144]).unwrap(), "Beacon");
+        assert_eq!(ident.name(&pkg[..148]).unwrap(), "Beacon");
 
         // Find Execution
-        let exec_body = find_section(&pkg, 144, SECTION_EXECUTION).unwrap();
+        let exec_body = find_section(&pkg, 148, SECTION_EXECUTION).unwrap();
         let exec = SectionExecution::parse(exec_body).unwrap();
         let ep = exec.entry_point;
         let ps = exec.payload_size;
@@ -1634,7 +1632,7 @@ mod tests {
         assert_eq!(ps, 32);
 
         // Find CapImports
-        let cap_body = find_section(&pkg, 144, SECTION_CAP_IMPORTS).unwrap();
+        let cap_body = find_section(&pkg, 148, SECTION_CAP_IMPORTS).unwrap();
         let binding = CapBinding::parse(cap_body, 0).unwrap();
         let iface = binding.interface_id;
         let slot = binding.slot_idx;
@@ -1642,7 +1640,7 @@ mod tests {
         assert_eq!(slot, 0);
 
         // Find LeafMap
-        let leaf_body = find_section(&pkg, 144, SECTION_LEAF_MAP).unwrap();
+        let leaf_body = find_section(&pkg, 148, SECTION_LEAF_MAP).unwrap();
         let leaf = LeafEntry::parse(leaf_body).unwrap();
         let lsize = leaf.size;
         assert_eq!(leaf.leaf_id, 1);
@@ -1661,50 +1659,50 @@ mod tests {
         use crate::proc::memory::MemoryMapLayout;
 
         // ── 1. Synthesize Native Provisioned Package Binary (/apps/beacon.krx) ──
-        let mut pkg = [0u8; 144]; // 128B header + 16B code payload
+        let mut pkg = [0u8; 148]; // 132B header + 16B code payload
 
-        // 1a. Preamble (20B)
+        // 1a. Preamble (24B)
         pkg[0..4].copy_from_slice(&KRX_IDENT);
         pkg[4] = KrxClass::Native as u8;
         pkg[5] = 0x05; // v2.5.0
         pkg[6..8].copy_from_slice(&4u16.to_le_bytes()); // 4 sections
-        let header_len = 128u16;
+        let header_len = 132u16;
         pkg[8..10].copy_from_slice(&header_len.to_le_bytes());
 
-        // 1b. SectionIdentity (offset 20: 4B header + 40B body = 44B, ends at 64)
-        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
-        pkg[22] = 44;
-        pkg[24] = 112; // name_str offset = 112
-        pkg[26] = 1; // version 1.0.0
-        pkg[29] = 1; // min_kernel_abi = 1
-        pkg[31..40].copy_from_slice(b"KERN-TEAM");
-        pkg[47] = 1; // icon_asset = 1
+        // 1b. SectionIdentity (offset 24: 4B header + 40B body = 44B, ends at 68)
+        pkg[24..26].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[26] = 44;
+        pkg[28] = 116; // name_str offset = 116
+        pkg[30] = 1; // version 1.0.0
+        pkg[33] = 1; // min_kernel_abi = 1
+        pkg[35..44].copy_from_slice(b"KERN-TEAM");
+        pkg[51] = 1; // icon_asset = 1
 
-        // 1c. SectionExecution (offset 64: 4B header + 28B body = 32B, ends at 96)
-        pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
-        pkg[66] = 32;
-        pkg[68..70].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes = 256
-        pkg[70..72].copy_from_slice(&128u16.to_le_bytes()); // min_heap_bytes = 128
-        pkg[72..74].copy_from_slice(&0u16.to_le_bytes()); // page_size = 0 (unpaged native)
-        pkg[74] = 0; // cache_blocks = 0
-        pkg[76..80].copy_from_slice(&0u32.to_le_bytes()); // entry_point = 0 (offset in payload)
-        pkg[80..84].copy_from_slice(&16u32.to_le_bytes()); // payload_size = 16B
-        pkg[88..90].copy_from_slice(&16u16.to_le_bytes()); // got_offset = 16B
-        pkg[94] = KrxProfile::N1NativePic.raw_code(); // explicit profile
+        // 1c. SectionExecution (offset 68: 4B header + 28B body = 32B, ends at 100)
+        pkg[68..70].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[70] = 32;
+        pkg[72..74].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes = 256
+        pkg[74..76].copy_from_slice(&128u16.to_le_bytes()); // min_heap_bytes = 128
+        pkg[76..78].copy_from_slice(&0u16.to_le_bytes()); // page_size = 0 (unpaged native)
+        pkg[78] = 0; // cache_blocks = 0
+        pkg[80..84].copy_from_slice(&0u32.to_le_bytes()); // entry_point = 0 (offset in payload)
+        pkg[84..88].copy_from_slice(&16u32.to_le_bytes()); // payload_size = 16B
+        pkg[92..94].copy_from_slice(&16u16.to_le_bytes()); // got_offset = 16B
+        pkg[98] = KrxProfile::N1NativePic.raw_code(); // explicit profile
 
-        // 1d. SectionType (offset 96: 4B header + 12B body = 16B, ends at 112)
-        pkg[96..98].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
-        pkg[98] = 16;
-        pkg[100] = KrxExecType::App as u8;
-        pkg[102] = 1; // stack_cost = 1
+        // 1d. SectionType (offset 100: 4B header + 12B body = 16B, ends at 116)
+        pkg[100..102].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
+        pkg[102] = 16;
+        pkg[104] = KrxExecType::App as u8;
+        pkg[106] = 1; // stack_cost = 1
         let required_caps =
             (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::RadioRx as u32);
-        pkg[108..112].copy_from_slice(&required_caps.to_le_bytes());
+        pkg[112..116].copy_from_slice(&required_caps.to_le_bytes());
 
-        // 1e. String pool (offset 112..128)
-        pkg[112..118].copy_from_slice(b"Beacon");
+        // 1e. String pool (offset 116..132)
+        pkg[116..122].copy_from_slice(b"Beacon");
 
-        // 1f. Thumb-1 Native Code Payload (offset 128..144, 16 bytes)
+        // 1f. Thumb-1 Native Code Payload (offset 132..148, 16 bytes)
         let thumb1_code: [u8; 16] = [
             0x02, 0x28, // cmp r0, #2 (KRX_OP_EVENT)
             0x01, 0xd1, // bne +1
@@ -1714,7 +1712,7 @@ mod tests {
             0x70, 0x47, // bx lr
             0x00, 0x00, 0x00, 0x00, // alignment padding
         ];
-        pkg[128..144].copy_from_slice(&thumb1_code);
+        pkg[132..148].copy_from_slice(&thumb1_code);
 
         // ── 2. Validate End-to-End Preamble and Section Scanning ──
         let preamble = KrxPreamble::parse(&pkg).expect("Valid KRX preamble");
@@ -1722,17 +1720,17 @@ mod tests {
         assert_eq!(preamble.execution_class(), Some(KrxClass::Native));
         assert_eq!(preamble.format_version, 5);
         let hlen = preamble.header_len;
-        assert_eq!(hlen, 128);
+        assert_eq!(hlen, 132);
 
         let mut scanned_ident = false;
         let mut scanned_exec = false;
         let mut scanned_type = false;
 
-        for (hdr, body) in KrxSectionIterator::new(&pkg, 128) {
+        for (hdr, body) in KrxSectionIterator::new(&pkg, 132) {
             match hdr.id {
                 SECTION_IDENTITY => {
                     let ident = SectionIdentity::parse(body).expect("Valid Identity");
-                    assert_eq!(ident.name(&pkg[..128]).unwrap(), "Beacon");
+                    assert_eq!(ident.name(&pkg[..132]).unwrap(), "Beacon");
                     assert_eq!(ident.version, [1, 0, 0]);
                     scanned_ident = true;
                 }
@@ -1943,8 +1941,8 @@ mod tests {
         no_ident[5] = 5;
         no_ident[6..8].copy_from_slice(&1u16.to_le_bytes());
         no_ident[8..10].copy_from_slice(&64u16.to_le_bytes());
-        no_ident[20..22].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
-        no_ident[22] = 32;
+        no_ident[24..26].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        no_ident[26] = 32;
         let mut found_ident = false;
         for (hdr, _) in KrxSectionIterator::new(&no_ident, 64) {
             if hdr.id == SECTION_IDENTITY {
@@ -2002,38 +2000,38 @@ mod tests {
         let required_caps =
             (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::RadioRx as u32);
 
-        // 1. Preamble (20 bytes)
+        // 1. Preamble (24 bytes)
         pkg[0..4].copy_from_slice(&KRX_IDENT);
         pkg[4] = KrxClass::Native as u8;
         pkg[5] = 5; // format version 2.5.0
         pkg[6..8].copy_from_slice(&3u16.to_le_bytes()); // 3 sections
-        pkg[8..10].copy_from_slice(&128u16.to_le_bytes()); // header_len = 128
+        pkg[8..10].copy_from_slice(&132u16.to_le_bytes()); // header_len = 132
 
-        // 2. SectionIdentity (offset 20: 4B header + 40B body)
-        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
-        pkg[22] = 44;
-        pkg[24] = 112; // name_str offset = 112
-        pkg[26] = 1; // v1.0.0
-        pkg[29] = 1; // min_abi = 1
-        pkg[31..40].copy_from_slice(b"KERN-TEAM");
+        // 2. SectionIdentity (offset 24: 4B header + 40B body)
+        pkg[24..26].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[26] = 44;
+        pkg[28] = 116; // name_str offset = 116
+        pkg[30] = 1; // v1.0.0
+        pkg[33] = 1; // min_abi = 1
+        pkg[35..44].copy_from_slice(b"KERN-TEAM");
 
-        // 3. SectionExecution (offset 64: 4B header + 28B body)
-        pkg[64..66].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
-        pkg[66] = 32;
-        pkg[68..70].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes = 256
-        pkg[72..74].copy_from_slice(&512u16.to_le_bytes()); // page_size = 512
-        pkg[80..84].copy_from_slice(&176u32.to_le_bytes()); // payload_size = 176
-        pkg[88..90].copy_from_slice(&176u16.to_le_bytes()); // got_offset
-        pkg[94] = KrxProfile::N1NativePic.raw_code();
+        // 3. SectionExecution (offset 68: 4B header + 28B body)
+        pkg[68..70].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[70] = 32;
+        pkg[72..74].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes = 256
+        pkg[76..78].copy_from_slice(&512u16.to_le_bytes()); // page_size = 512
+        pkg[84..88].copy_from_slice(&176u32.to_le_bytes()); // payload_size = 176
+        pkg[92..94].copy_from_slice(&176u16.to_le_bytes()); // got_offset
+        pkg[98] = KrxProfile::N1NativePic.raw_code();
 
-        // 4. SectionType (offset 96: 4B header + 12B body)
-        pkg[96..98].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
-        pkg[98] = 16;
-        pkg[100] = KrxExecType::App as u8;
-        pkg[108..112].copy_from_slice(&required_caps.to_le_bytes());
+        // 4. SectionType (offset 100: 4B header + 12B body)
+        pkg[100..102].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
+        pkg[102] = 16;
+        pkg[104] = KrxExecType::App as u8;
+        pkg[112..116].copy_from_slice(&required_caps.to_le_bytes());
 
-        // 5. String pool (offset 112..128)
-        pkg[112..118].copy_from_slice(b"Beacon");
+        // 5. String pool (offset 116..132)
+        pkg[116..122].copy_from_slice(b"Beacon");
 
         // Verify preamble and sections parse correctly
         let preamble = KrxPreamble::parse(&pkg).expect("Valid preamble");
@@ -2042,11 +2040,11 @@ mod tests {
         let mut ident_found = false;
         let mut exec_found = false;
         let mut type_found = false;
-        for (hdr, body) in KrxSectionIterator::new(&pkg, 128) {
+        for (hdr, body) in KrxSectionIterator::new(&pkg, 132) {
             match hdr.id {
                 SECTION_IDENTITY => {
                     let ident = SectionIdentity::parse(body).unwrap();
-                    assert_eq!(ident.name(&pkg[..128]), Some("Beacon"));
+                    assert_eq!(ident.name(&pkg[..132]), Some("Beacon"));
                     ident_found = true;
                 }
                 SECTION_EXECUTION => {
@@ -3111,54 +3109,54 @@ mod tests {
         // Construct synthetic Daemon KRX binary package in memory
         let mut pkg = [0u8; 128];
 
-        // 1. Preamble (20 bytes)
+        // 1. Preamble (24 bytes)
         pkg[0..4].copy_from_slice(&KRX_IDENT);
         pkg[4] = KrxClass::Native as u8;
         pkg[5] = 5; // format_version
         pkg[6..8].copy_from_slice(&3u16.to_le_bytes()); // section_count = 3
-        pkg[8..10].copy_from_slice(&120u16.to_le_bytes()); // header_len = 120
+        pkg[8..10].copy_from_slice(&124u16.to_le_bytes()); // header_len = 124
         pkg[10..12].copy_from_slice(&0u16.to_le_bytes()); // flags = 0
         pkg[12..16].copy_from_slice(&0u32.to_le_bytes()); // payload_crc32
 
         // Sections layout:
-        // Offset 20: SectionIdentity (4B header + 40B body = 44B, ends at 64)
-        pkg[20..22].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
-        pkg[22..24].copy_from_slice(&44u16.to_le_bytes());
-        pkg[24..26].copy_from_slice(&104u16.to_le_bytes()); // name_str offset = 104
-        pkg[26] = 1; // version major
-        pkg[47] = 7; // icon_id = 7
+        // Offset 24: SectionIdentity (4B header + 40B body = 44B, ends at 68)
+        pkg[24..26].copy_from_slice(&SECTION_IDENTITY.to_le_bytes());
+        pkg[26..28].copy_from_slice(&44u16.to_le_bytes());
+        pkg[28..30].copy_from_slice(&108u16.to_le_bytes()); // name_str offset = 108
+        pkg[30] = 1; // version major
+        pkg[51] = 7; // icon_id = 7
 
-        // Offset 64: SectionTypeLifecycle (4B header + 12B body = 16B, ends at 80)
+        // Offset 68: SectionTypeLifecycle (4B header + 12B body = 16B, ends at 84)
         let flags =
             SectionType::FLAG_STARTUP | SectionType::FLAG_PERSISTENT | SectionType::FLAG_SINGLETON;
         let daemon_caps =
             (Cap::RadioRx as u32) | (Cap::AudioOutput as u32) | (Cap::SerialComm as u32);
-        pkg[64..66].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
-        pkg[66..68].copy_from_slice(&16u16.to_le_bytes());
-        pkg[68] = KrxExecType::Daemon as u8;
-        pkg[69] = flags;
-        pkg[70] = 2; // stack_cost
-        pkg[76..80].copy_from_slice(&daemon_caps.to_le_bytes());
+        pkg[68..70].copy_from_slice(&SECTION_TYPE_LIFECYCLE.to_le_bytes());
+        pkg[70..72].copy_from_slice(&16u16.to_le_bytes());
+        pkg[72] = KrxExecType::Daemon as u8;
+        pkg[73] = flags;
+        pkg[74] = 2; // stack_cost
+        pkg[80..84].copy_from_slice(&daemon_caps.to_le_bytes());
 
-        // Offset 80: SectionExecution (4B header + 28B body = 32B, ends at 112)
-        pkg[80..82].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
-        pkg[82..84].copy_from_slice(&32u16.to_le_bytes());
-        pkg[84..86].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes
+        // Offset 84: SectionExecution (4B header + 28B body = 32B, ends at 116)
+        pkg[84..86].copy_from_slice(&SECTION_EXECUTION.to_le_bytes());
+        pkg[86..88].copy_from_slice(&32u16.to_le_bytes());
+        pkg[88..90].copy_from_slice(&256u16.to_le_bytes()); // min_stack_bytes
 
-        // Offset 112: String Pool ("AprsDaemon\0")
-        pkg[24..26].copy_from_slice(&112u16.to_le_bytes()); // name_str offset = 112
+        // Offset 116: String Pool ("AprsDaemon\0")
+        pkg[28..30].copy_from_slice(&116u16.to_le_bytes()); // name_str offset = 116
         let name_bytes = b"AprsDaemon\0";
-        pkg[112..112 + name_bytes.len()].copy_from_slice(name_bytes);
+        pkg[116..116 + name_bytes.len()].copy_from_slice(name_bytes);
 
-        // Header total length: 124 bytes (padded to 4-byte boundary)
-        pkg[8..10].copy_from_slice(&124u16.to_le_bytes()); // header_len = 124
+        // Header total length: 128 bytes (padded to 4-byte boundary)
+        pkg[8..10].copy_from_slice(&128u16.to_le_bytes()); // header_len = 128
 
-        // Compute IEEE 802.3 CRC32 of header content (pkg[20..124])
-        let header_crc = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        // Compute IEEE 802.3 CRC32 of header content (pkg[24..128])
+        let header_crc = crypto::crc::CrcEngine::crc32(&pkg[24..128]);
         pkg[16..20].copy_from_slice(&header_crc.to_le_bytes());
 
         // Parse and summarize
-        let summary = KrxPreamble::summarize(&pkg[..124]).expect("Valid summary");
+        let summary = KrxPreamble::summarize(&pkg[..128]).expect("Valid summary");
         assert_eq!(summary.preamble.app_type, KrxClass::Native as u8);
         assert_eq!(summary.title, "AprsDaemon");
         let exec = summary.exec.expect("Has exec section");
@@ -3179,28 +3177,28 @@ mod tests {
 
         // Test Corrupted Header CRC rejection
         pkg[16] ^= 0xFF;
-        assert!(KrxPreamble::summarize(&pkg[..124]).is_err());
+        assert!(KrxPreamble::summarize(&pkg[..128]).is_err());
         pkg[16] ^= 0xFF; // Restore
 
         // Test Service Exec Type
-        pkg[68] = KrxExecType::Service as u8;
-        let header_crc_svc = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        pkg[72] = KrxExecType::Service as u8;
+        let header_crc_svc = crypto::crc::CrcEngine::crc32(&pkg[24..128]);
         pkg[16..20].copy_from_slice(&header_crc_svc.to_le_bytes());
-        let summary_svc = KrxPreamble::summarize(&pkg[..124]).expect("Valid service summary");
+        let summary_svc = KrxPreamble::summarize(&pkg[..128]).expect("Valid service summary");
         assert_eq!(summary_svc.exec_type, KrxExecType::Service);
 
         // Test Driver Exec Type
-        pkg[68] = KrxExecType::Driver as u8;
-        let header_crc_drv = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        pkg[72] = KrxExecType::Driver as u8;
+        let header_crc_drv = crypto::crc::CrcEngine::crc32(&pkg[24..128]);
         pkg[16..20].copy_from_slice(&header_crc_drv.to_le_bytes());
-        let summary_drv = KrxPreamble::summarize(&pkg[..124]).expect("Valid driver summary");
+        let summary_drv = KrxPreamble::summarize(&pkg[..128]).expect("Valid driver summary");
         assert_eq!(summary_drv.exec_type, KrxExecType::Driver);
 
         // Test Module Exec Type
-        pkg[68] = KrxExecType::Module as u8;
-        let header_crc_mod = crypto::crc::CrcEngine::crc32(&pkg[20..124]);
+        pkg[72] = KrxExecType::Module as u8;
+        let header_crc_mod = crypto::crc::CrcEngine::crc32(&pkg[24..128]);
         pkg[16..20].copy_from_slice(&header_crc_mod.to_le_bytes());
-        let summary_mod = KrxPreamble::summarize(&pkg[..124]).expect("Valid module summary");
+        let summary_mod = KrxPreamble::summarize(&pkg[..128]).expect("Valid module summary");
         assert_eq!(summary_mod.exec_type, KrxExecType::Module);
     }
 }
