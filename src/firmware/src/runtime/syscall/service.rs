@@ -49,8 +49,7 @@ pub unsafe extern "C" fn api_sys_device_uid(out_uid12: *mut u8) {
     unsafe {
         if !out_uid12.is_null() {
             let uid = bsp::uid::read_mcu_uid();
-            let dst = core::slice::from_raw_parts_mut(out_uid12, 12);
-            dst.copy_from_slice(&uid[..12]);
+            core::ptr::copy_nonoverlapping(uid.as_ptr(), out_uid12, 12);
         }
     }
 }
@@ -179,8 +178,9 @@ pub unsafe extern "C" fn api_ipc_poll(out_buf: *mut u8, max_len: u8) -> u8 {
     if out_buf.is_null() || max_len == 0 {
         return 0xFF;
     }
-    let mut msg = KrxIpcMessage::empty();
-    if unsafe { api_ipc_recv_msg(&mut msg) } == 0 {
+    let mut msg = core::mem::MaybeUninit::<KrxIpcMessage>::uninit();
+    if unsafe { api_ipc_recv_msg(msg.as_mut_ptr()) } == 0 {
+        let msg = unsafe { msg.assume_init_ref() };
         let copy_len = (msg.payload_len as usize).min(max_len as usize);
         unsafe {
             core::ptr::copy_nonoverlapping(msg.payload.as_ptr(), out_buf, copy_len);
@@ -240,7 +240,7 @@ pub unsafe extern "C" fn api_sys_proc_info(idx: u8, out_info: *mut KrxProcInfo) 
         info.memory_bytes = slot.mem_bytes;
         let src = slot.name.as_bytes();
         let len = src.len().min(info.name.len());
-        info.name[..len].copy_from_slice(&src[..len]);
+        core::ptr::copy_nonoverlapping(src.as_ptr(), info.name.as_mut_ptr(), len);
         info.runtime_ticks = slot.ledger.cpu_ticks;
     }
     0
