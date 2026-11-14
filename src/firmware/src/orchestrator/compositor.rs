@@ -63,7 +63,7 @@ impl ModalCompositor {
         }
         match &self.modal {
             ActiveModal::Sheet(_, _, anim) => anim.is_animating(),
-            ActiveModal::Popup(model) => !model.anim.is_complete() || model.hold_active,
+            ActiveModal::Popup(model) => !model.anim.is_complete() || model.is_hold_animating(),
             _ => false,
         }
     }
@@ -117,6 +117,7 @@ impl ModalCompositor {
         hold_ms: u16,
     ) {
         self.show_confirm(tag, title, message, confirm, cancel);
+        crate::orchestrator::clear_sunk_keys();
         if let ActiveModal::Popup(model) = &mut self.modal {
             model.hold_ms_required = hold_ms;
         }
@@ -198,7 +199,7 @@ impl ModalCompositor {
             ActiveModal::None => None,
             ActiveModal::Popup(model) => {
                 if self.popup_view.on_event(model, event) {
-                    if matches!(event, Event::Tick) && model.hold_active {
+                    if matches!(event, Event::Tick) && model.is_hold_animating() {
                         #[cfg(target_arch = "arm")]
                         let (now, dt) = {
                             let now = py32_hal::delay::millis();
@@ -215,7 +216,7 @@ impl ModalCompositor {
                         if model.advance_hold(dt) {
                             return Some(ModalResult::Confirmed(tag));
                         }
-                    } else if !model.hold_active {
+                    } else if !model.is_hold_animating() {
                         self.last_hold_ms = 0;
                     }
                     return None;
@@ -637,11 +638,15 @@ mod tests {
                 })
                 .is_none()
         );
+        // Smooth 3x decay rewinds progress back to 0 across subsequent ticks
+        for _ in 0..3 {
+            assert!(compositor.handle_event(&Event::Tick).is_none());
+        }
         assert!(
             compositor
                 .handle_event(&Event::Key {
                     code: KeyCode::Menu,
-                    state: KeyState::Pressed,
+                    state: KeyState::Held,
                 })
                 .is_none()
         );

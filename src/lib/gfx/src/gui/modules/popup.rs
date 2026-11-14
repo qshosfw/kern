@@ -45,6 +45,14 @@ impl PopupModel {
         self
     }
 
+    #[inline(always)]
+    pub fn is_hold_animating(&self) -> bool {
+        self.hold_active
+            || (self.hold_ms_required > 0
+                && self.hold_elapsed_ms > 0
+                && self.hold_elapsed_ms < self.hold_ms_required)
+    }
+
     pub fn hold_percent(&self) -> u8 {
         if self.hold_ms_required == 0 {
             return 0;
@@ -53,14 +61,18 @@ impl PopupModel {
     }
 
     pub fn advance_hold(&mut self, dt_ms: u16) -> bool {
-        if !self.hold_active || self.hold_ms_required == 0 {
+        if self.hold_ms_required == 0 {
             return false;
         }
-        self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt_ms);
-        if self.hold_elapsed_ms >= self.hold_ms_required {
-            self.hold_elapsed_ms = self.hold_ms_required;
-            self.hold_active = false;
-            return true;
+        if self.hold_active {
+            self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt_ms);
+            if self.hold_elapsed_ms >= self.hold_ms_required {
+                self.hold_elapsed_ms = self.hold_ms_required;
+                self.hold_active = false;
+                return true;
+            }
+        } else if self.hold_elapsed_ms > 0 {
+            self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_sub(dt_ms.saturating_mul(3));
         }
         false
     }
@@ -145,10 +157,12 @@ impl View<PopupModel> for PopupView {
         let sheet_y = 18i16 + y_offset as i16;
 
         let badges = has_badges.then(|| {
-            (
-                model.confirm_label.unwrap_or(""),
-                model.cancel_label.unwrap_or(""),
-            )
+            let confirm = if model.hold_active {
+                "Holding..."
+            } else {
+                model.confirm_label.unwrap_or("")
+            };
+            (confirm, model.cancel_label.unwrap_or(""))
         });
         widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, badges, y_offset);
 
@@ -171,9 +185,26 @@ impl View<PopupModel> for PopupView {
             }
         }
 
-        // Hold-to-confirm safety progress bar above bottom badges
+        // Hold-to-confirm live countdown in header + balanced 6px sub-pixel progress bar
         if model.hold_ms_required > 0 && anim_p >= 8 {
-            widgets::draw_progress_bar(canvas, 4, sheet_y + 30, 120, 5, model.hold_percent(), true);
+            let rem_ds = model
+                .hold_ms_required
+                .saturating_sub(model.hold_elapsed_ms)
+                .saturating_add(50)
+                / 100;
+            let (sec, tenth) = utils::math::div10_u16(rem_ds.min(99));
+            let t_buf = [b'0' + (sec as u8), b'.', b'0' + tenth, b's'];
+            let t_str = unsafe { core::str::from_utf8_unchecked(&t_buf) };
+            text::draw_str_align(
+                canvas,
+                125,
+                sheet_y + 6,
+                t_str,
+                &TOMTHUMB,
+                Color::Clear,
+                text::Align::Right,
+            );
+            widgets::draw_progress_bar(canvas, 4, sheet_y + 25, 120, 6, model.hold_percent(), true);
         }
 
         // Integrated Scrollbar (X=124..125) when total lines exceed viewport
@@ -200,23 +231,13 @@ impl View<PopupModel> for PopupView {
                 .repeater
                 .tick()
                 .is_some_and(|c| scroll_popup(model, c));
-            return anim_tick || rep_tick || model.hold_active;
+            return anim_tick || rep_tick || model.is_hold_animating();
         }
 
         if let Event::Key { code, state } = event {
             model.repeater.handle_key(*code, *state);
-            if *code == KeyCode::Menu && model.hold_ms_required > 0 {
-                match state {
-                    KeyState::Pressed => {
-                        model.hold_active = true;
-                        model.hold_elapsed_ms = 0;
-                    }
-                    KeyState::Held => {}
-                    KeyState::Released => {
-                        model.hold_active = false;
-                        model.hold_elapsed_ms = 0;
-                    }
-                }
+            if matches!(code, KeyCode::Menu | KeyCode::Key5) && model.hold_ms_required > 0 {
+                model.hold_active = *state != KeyState::Released;
                 return true;
             }
             if *state == KeyState::Pressed {

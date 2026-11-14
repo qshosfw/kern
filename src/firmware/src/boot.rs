@@ -513,21 +513,30 @@ fn handoff_to_factory_bootloader() -> ! {
     unsafe {
         cortex_m::interrupt::disable();
 
-        // 1. Pull PB10 (PTT) LOW in open-drain output mode and hardware-lock PB10 via
-        //    GPIOB->LCKR (0x5000_041C) so the factory bootloader GPIO_Init (0x0800_0688)
-        //    cannot revert PB10 to Input Pull-Up. The bootloader reads PB10 == 0 across
-        //    its 50 ms debounce, turns ON the FLASHLIGHT LED (PC13), and enters DFU mode!
+        // 1. Lock PB3..PB6 (KB_COLS) and PB14..PB15 (KB_ROWS[0..1]) as Input Pull-Up and
+        //    PB10 (PTT) as Open-Drain Output LOW via GPIOB->LCKR (0x5000_041C).
+        //    Why PB3..PB6 too? In GPIO_Init (0x0800_0688), the stock bootloader drives
+        //    PB3..PB6 LOW and checks at 0x0800_1384 that PB14/PB15 are HIGH before checking
+        //    PTT (PB10). If the user is still holding MENU (PB6 <-> PB15), an unlocked PB6
+        //    driven LOW would pull PB15 LOW and abort DFU entry! Locking PB3..PB6 as Input
+        //    Pull-Up ensures PB14/PB15 always read HIGH even while MENU is held.
         let gpiob = py32_pac::gpio::GPIOB_BASE as *mut u32;
-        let pin = 1u32 << 10;
-        gpiob.byte_add(0x28).write_volatile(pin);
+        let ptt_pin = 1u32 << 10;
+        let lock_pins = 0xC478u32; // PB3..PB6 (0x0078) | PB10 (0x0400) | PB14..PB15 (0xC000)
+        let mask_2b = 0xF030_3FC0u32;
+        gpiob.byte_add(0x28).write_volatile(ptt_pin);
         let otyper = gpiob.byte_add(0x04).read_volatile();
-        gpiob.byte_add(0x04).write_volatile(otyper | pin);
+        gpiob.byte_add(0x04).write_volatile(otyper | ptt_pin);
+        let pupdr = gpiob.byte_add(0x0C).read_volatile();
+        gpiob
+            .byte_add(0x0C)
+            .write_volatile((pupdr & !mask_2b) | 0x5000_1540);
         let moder = gpiob.read_volatile();
-        gpiob.write_volatile((moder & !(0b11 << 20)) | (0b01 << 20));
+        gpiob.write_volatile((moder & !mask_2b) | (0b01 << 20));
         let lckr = gpiob.byte_add(0x1C);
-        let lckk = (1u32 << 16) | pin;
+        let lckk = (1u32 << 16) | lock_pins;
         lckr.write_volatile(lckk);
-        lckr.write_volatile(pin);
+        lckr.write_volatile(lock_pins);
         lckr.write_volatile(lckk);
         let _ = lckr.read_volatile();
 
