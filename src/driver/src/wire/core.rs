@@ -17,8 +17,10 @@ impl<S: SerialPort> WireDriver<S> {
             return;
         }
         let payload = &self.rx_buf[HEADER_LEN..covered];
-        let mut resp_uninit = ::core::mem::MaybeUninit::<[u8; 35]>::uninit();
-        let resp_buf = unsafe { &mut *resp_uninit.as_mut_ptr() };
+        let mut resp_uninit = ::core::mem::MaybeUninit::<[u32; 5]>::uninit();
+        let resp_buf =
+            unsafe { ::core::slice::from_raw_parts_mut(resp_uninit.as_mut_ptr() as *mut u8, 20) };
+        let mut override_slice: Option<&[u8]> = None;
         let mut do_reset = false;
         let mut do_reboot = false;
 
@@ -116,7 +118,7 @@ impl<S: SerialPort> WireDriver<S> {
                     7,
                     COMPONENT_CLASS_STORAGE,
                 ];
-                resp_buf.copy_from_slice(&CAPS_REPLY);
+                override_slice = Some(&CAPS_REPLY);
                 (WireStatus::Ok, 35)
             }
 
@@ -166,7 +168,8 @@ impl<S: SerialPort> WireDriver<S> {
             _ => (WireStatus::Unsupported, 0),
         };
 
-        let _ = self.send_response(header, status, &resp_buf[..resp_len]);
+        let resp_slice = override_slice.unwrap_or(&resp_buf[..resp_len]);
+        let _ = self.send_response(header, status, resp_slice);
 
         if do_reset {
             self.session.reset();
