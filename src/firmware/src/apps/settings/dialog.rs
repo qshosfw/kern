@@ -36,10 +36,10 @@ pub fn parse_u32_digits(s: &str) -> Option<u32> {
     }
     let mut val = 0u32;
     for &b in s.as_bytes() {
-        if !b.is_ascii_digit() {
+        if !b.is_ascii_digit() || val > u32::MAX / 10 {
             return None;
         }
-        val = val.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+        val = (val * 10).checked_add((b - b'0') as u32)?;
     }
     Some(val)
 }

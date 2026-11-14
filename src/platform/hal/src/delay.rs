@@ -20,13 +20,10 @@ pub fn init() {
 
 /// Update SysTick reload register and tick scaling for a new system clock frequency.
 pub fn update_systick_freq(sysclk_hz: u32) {
-    // Fast reciprocal division:
-    // sysclk_hz / 1000: ((x * 0x4189374C) >> 40)
-    // sysclk_hz / 1_000_000: (((x >> 12) * 17_180) >> 22) in 32-bit math
-    let div1k = ((sysclk_hz as u64 * 0x4189374C) >> 40) as u32;
-    let div1m = ((sysclk_hz >> 12) * 17_180) >> 22;
-    let reload = div1k.saturating_sub(1);
-    let ticks_us = div1m.max(1);
+    // Fast 32-bit reciprocal division for sysclk_hz / 1_000_000:
+    // (((x >> 12) * 17_180) >> 22) is exact for 16, 24, 48, and 72 MHz.
+    let ticks_us = (((sysclk_hz >> 12) * 17_180) >> 22).max(1);
+    let reload = (ticks_us * 1_000).saturating_sub(1);
     TICKS_PER_US.store(ticks_us, Ordering::Relaxed);
 
     unsafe {

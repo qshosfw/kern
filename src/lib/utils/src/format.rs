@@ -137,7 +137,8 @@ fn put_2digit(out: &mut [u8; 8], off: usize, val: u8) {
 
 /// Format uptime seconds into "HH:MM:SS" (hours clamped at 99).
 pub fn format_uptime_hms(secs: u32, out: &mut [u8; 8]) -> &str {
-    let (mins, s) = crate::math::div60_u32(secs);
+    let mins = secs / 60;
+    let s = (secs - mins * 60) as u8;
     let (h, m) = crate::math::div60_u16(mins.min(5999) as u16);
     put_2digit(out, 0, h as u8);
     out[2] = b':';

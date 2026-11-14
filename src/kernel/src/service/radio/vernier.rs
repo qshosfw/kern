@@ -44,7 +44,7 @@ impl VernierResult {
 /// alpha = (5000 * f_carrier_hz) / 26_000_000 (mHz per LSB).
 #[inline]
 pub fn compute_vernier_alpha(carrier_hz: u32) -> u32 {
-    utils::div5200_u32(carrier_hz)
+    carrier_hz / 5200
 }
 
 /// Solve for the optimal `(xtal_trim_offset, pll_comp_10hz)` pair to achieve `delta_dhz`.

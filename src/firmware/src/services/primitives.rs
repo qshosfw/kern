@@ -385,11 +385,12 @@ impl<'a, 'hw> RadioPrimitive for SysContext<'a, 'hw> {
 
     fn sweep(&mut self, start_hz: u32, step_hz: u32, out_rssi: &mut [i16]) -> usize {
         let count = out_rssi.len().min(128);
-        for i in 0..count {
-            let freq = start_hz.saturating_add((i as u32).saturating_mul(step_hz));
+        let mut freq = start_hz;
+        for slot in &mut out_rssi[..count] {
             self.radio
                 .set_rx_frequency(utils::units::Frequency::new(freq));
-            out_rssi[i] = self.radio.get_rssi_dbm();
+            *slot = self.radio.get_rssi_dbm();
+            freq = freq.saturating_add(step_hz);
         }
         count
     }
