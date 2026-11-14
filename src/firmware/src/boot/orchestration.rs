@@ -116,9 +116,15 @@ fn init_system_services(
     super::ensure_default_files(hw.filesystem, None);
     #[cfg(feature = "filesystem")]
     super::flush_crash_log_if_pending(hw.filesystem);
-    if !passcode_state.is_locked {
-        let mut ps = unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) };
-        crate::security::passcode::init_passcode_state(hw.filesystem, &mut ps);
+    #[cfg(feature = "passcode")]
+    let already_authenticated =
+        !passcode_state.is_locked && passcode_state.master_key.as_slice().iter().any(|&b| b != 0);
+    #[cfg(not(feature = "passcode"))]
+    let already_authenticated = false;
+
+    if !passcode_state.is_locked && !already_authenticated {
+        let ps = unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) };
+        crate::security::passcode::init_passcode_state(hw.filesystem, ps);
     }
     let mcu_uid = bsp::uid::read_mcu_uid();
     let calibration = unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) };
@@ -304,6 +310,7 @@ fn boot_stage_security_check(
     #[cfg(feature = "passcode")]
     if crate::security::passcode::is_passcode_set(hw.filesystem) {
         passcode_state.lock();
+        hw.filesystem.lock_session();
         let pcfg = crate::security::passcode::get_passcode_config(hw.filesystem);
         let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
         power_service.load_battery_config(&master_cfg.battery);
@@ -323,11 +330,16 @@ fn boot_stage_security_check(
         }
 
         super::security::run_boot_unlock_prompt(hw, passcode_state, master_cfg, adc);
+        let _ = crate::security::sync_filesystem_security(hw.filesystem, passcode_state);
     }
 
     #[cfg(not(feature = "passcode"))]
-    if crate::security::passcode::is_passcode_set(hw.filesystem) {
-        super::queue_alert("Storage Locked", "Passcode enabled in storage");
+    {
+        let status = crate::security::sync_filesystem_security(hw.filesystem, passcode_state);
+        let mut msg = heapless::String::<168>::new();
+        if let Some(title) = crate::security::format_storage_alert_message(status, &mut msg) {
+            crate::orchestrator::compositor::queue_system_alert(title, msg.as_str());
+        }
     }
 }
 
@@ -363,8 +375,9 @@ pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
     // ── STAGE 3: Instant Boot Splash & Concurrent System Bring-up ───
     run_boot_splash(hw, master_cfg, passcode_state, &adc);
 
-    // ── STAGE 4: Show Queued Alerts & Proceed ───────────────────────
-    super::show_queued_alerts(hw);
+    // ── STAGE 4: Post-Boot Recovery Prompt (System Alerts Wait for Launcher) ───
+    #[cfg(feature = "crash_dialog")]
+    super::show_crash_dialog_if_needed(hw);
 
     #[cfg(feature = "usb")]
     if hw.usb.is_connected() || hw.usb.consecutive_sof() > 0 {

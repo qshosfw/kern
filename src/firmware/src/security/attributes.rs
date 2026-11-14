@@ -25,4 +25,55 @@ impl FileSecurityLevel {
             _ => Self::Public,
         }
     }
+
+    /// Returns whether this security level encrypts whole-file payloads at rest via `ATTR_ENCRYPTED`.
+    #[inline]
+    pub const fn encrypts_at_rest(self) -> bool {
+        !matches!(self, Self::Public)
+    }
+
+    /// Classifies a filesystem path into its security tier:
+    /// - Private app configs (`/pref/app/*`) and user vaults (`/user/vault/*`) encrypt at rest.
+    /// - Boot/UI preferences (`/pref/*.cfg`), system calibration/keys (`/sys/*`),
+    ///   executables (`/apps/*`), media, and large random-access radio tables remain `Public`
+    ///   (or hardware-MAC authenticated like `/sys/calib.sig`) so locked boots never corrupt UI state.
+    pub fn classify_path(path: &str) -> Self {
+        if path.starts_with("/pref/app/") || path.starts_with("/user/vault/") {
+            Self::UserAuthRead
+        } else {
+            Self::Public
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileSecurityLevel;
+
+    #[test]
+    fn path_classification_separates_boot_prefs_from_private_app_vaults() {
+        assert_eq!(
+            FileSecurityLevel::classify_path("/pref/display.cfg"),
+            FileSecurityLevel::Public
+        );
+        assert_eq!(
+            FileSecurityLevel::classify_path("/sys/calib.dat"),
+            FileSecurityLevel::Public
+        );
+        assert_eq!(
+            FileSecurityLevel::classify_path("/apps/morse.krx"),
+            FileSecurityLevel::Public
+        );
+        assert_eq!(
+            FileSecurityLevel::classify_path("/pref/app/secret.cfg"),
+            FileSecurityLevel::UserAuthRead
+        );
+        assert_eq!(
+            FileSecurityLevel::classify_path("/user/vault/keys.dat"),
+            FileSecurityLevel::UserAuthRead
+        );
+        assert!(!FileSecurityLevel::Public.encrypts_at_rest());
+        assert!(FileSecurityLevel::DeviceBound.encrypts_at_rest());
+        assert!(FileSecurityLevel::UserAuthRead.encrypts_at_rest());
+    }
 }

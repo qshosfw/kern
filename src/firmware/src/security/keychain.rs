@@ -247,3 +247,77 @@ pub fn derive_passcode_kek(
         progress,
     );
 }
+
+/// Derives a domain-separated, UID-bound 128-bit `FileSystemDriver` key from the 256-bit master key.
+pub fn derive_fs_key(master_key: &[u8; 32], mcu_uid: &[u8; 12]) -> [u8; 16] {
+    let mut perm = crypto::ascon::AsconPermutation::new();
+    // Domain tag: "KRN_FS01"
+    perm.x[0] = 0x4B52_4E5F_4653_3031;
+    perm.x[1] = u64::from_le_bytes(master_key[0..8].try_into().unwrap());
+    perm.x[2] = u64::from_le_bytes(master_key[8..16].try_into().unwrap());
+    perm.x[3] = u64::from_le_bytes(master_key[16..24].try_into().unwrap())
+        ^ u64::from_le_bytes(mcu_uid[0..8].try_into().unwrap());
+    let uid_hi = u32::from_le_bytes(mcu_uid[8..12].try_into().unwrap()) as u64;
+    perm.x[4] = u64::from_le_bytes(master_key[24..32].try_into().unwrap()) ^ uid_hi;
+    perm.permute(12);
+    let mut fs_key = [0u8; 16];
+    fs_key[0..8].copy_from_slice(&perm.x[0].to_le_bytes());
+    fs_key[8..16].copy_from_slice(&perm.x[1].to_le_bytes());
+    perm.x.fill(0);
+    fs_key
+}
+
+/// Unwraps the UID-bound device storage master key using `DEFAULT_PASSCODE_SEED`.
+/// Used when `secure_fs` is active without a user passcode.
+pub fn unwrap_device_master_key(
+    filesystem: &mut SystemStorage,
+    uid: &[u8; 12],
+) -> Option<SecretBuffer> {
+    let mut sto_key = PackedStorageKey::empty();
+    let sn = filesystem
+        .read_struct(PATH_STORAGE_KEY, &mut sto_key)
+        .ok()?;
+    if sn < core::mem::size_of::<PackedStorageKey>() || sto_key.ident != *FILE_ID_STORAGE_KEY {
+        return None;
+    }
+
+    let mut pass_key = PackedPasscodeKey::empty();
+    let iterations = match filesystem.read_struct(PATH_PASSCODE_KEY, &mut pass_key) {
+        Ok(pn)
+            if pn >= core::mem::size_of::<PackedPasscodeKey>()
+                && pass_key.ident == *FILE_ID_PASSCODE_KEY
+                && pass_key.iterations != 0
+                && pass_key.iterations != 0xFFFF_FFFF =>
+        {
+            pass_key.iterations
+        }
+        _ => DEFAULT_PBKDF_ITERATIONS,
+    };
+
+    let mut mk = SecretBuffer::new();
+    mk.as_mut_slice().copy_from_slice(&sto_key.encrypted_mk);
+    xor_derived_key(
+        uid,
+        DEFAULT_PASSCODE_SEED,
+        &sto_key.salt,
+        iterations,
+        mk.as_mut_slice(),
+        None,
+    );
+    Some(mk)
+}
+
+/// Ensures keychain exists and installs the UID-bound device FS key into `FileSystemDriver`.
+pub fn unlock_device_storage(filesystem: &mut SystemStorage) -> bool {
+    ensure_keychain(filesystem);
+    let uid = bsp::uid::read_mcu_uid();
+    if let Some(mk) = unwrap_device_master_key(filesystem, &uid) {
+        let mut fs_key = derive_fs_key(mk.as_slice(), &uid);
+        filesystem.set_encryption_key(fs_key);
+        fs_key.fill(0);
+        true
+    } else {
+        filesystem.lock_session();
+        false
+    }
+}

@@ -124,6 +124,7 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
             }
         }
     }
+    let _ = super::sync_filesystem_security(filesystem, state);
 }
 
 fn progress_phase1(ctx: *mut (), pct: u8) {
@@ -242,6 +243,9 @@ pub fn verify_passcode(
         key.failed_attempts = new_fails;
     }
     let _ = filesystem.write_struct(PATH_PASSCODE_KEY, &key);
+    if success {
+        let _ = super::sync_filesystem_security(filesystem, state);
+    }
     if let Some(ref hook) = progress {
         hook.report(100);
     }
@@ -358,6 +362,7 @@ pub fn set_passcode(
     }
 
     state.unlock();
+    let _ = super::sync_filesystem_security(filesystem, state);
     Ok(())
 }
 
@@ -414,5 +419,6 @@ pub fn disable_passcode(
         .map_err(|_| PasscodeError::StorageError)?;
 
     state.unlock();
+    let _ = super::sync_filesystem_security(filesystem, state);
     Ok(())
 }

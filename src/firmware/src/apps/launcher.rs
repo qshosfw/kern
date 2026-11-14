@@ -412,6 +412,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
         self.model.is_pressed = false;
         self.adjust_scroll_for_selection(false);
         self.scroller.jump((self.scroll_top as i16) * 13);
+        crate::orchestrator::compositor::present_next_system_alert(ctx);
     }
 
     #[inline(never)]

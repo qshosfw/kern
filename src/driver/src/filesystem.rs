@@ -16,14 +16,13 @@ use crypto::ascon::{Ascon128, AsconPermutation};
 #[cfg(feature = "secure_fs")]
 const SECURE_NONCE_LEN: usize = 16;
 
-#[cfg(feature = "secure_fs")]
-const FALLBACK_KEY: [u8; 16] = *b"KERN_SECURE_VFS!";
-
 pub struct FileSystemDriver<'a, D: BlockDevice> {
     pub fs: KernFS<'a, D>,
     session_unlocked: bool,
     #[cfg(feature = "secure_fs")]
     enc_key: [u8; 16],
+    #[cfg(feature = "secure_fs")]
+    key_installed: bool,
     #[cfg(feature = "secure_fs")]
     nonce_ctr: u32,
 }
@@ -32,9 +31,11 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     pub fn new(fs: KernFS<'a, D>) -> Self {
         Self {
             fs,
-            session_unlocked: true,
+            session_unlocked: !cfg!(feature = "secure_fs"),
             #[cfg(feature = "secure_fs")]
-            enc_key: FALLBACK_KEY,
+            enc_key: [0u8; 16],
+            #[cfg(feature = "secure_fs")]
+            key_installed: false,
             #[cfg(feature = "secure_fs")]
             nonce_ctr: 1,
         }
@@ -43,14 +44,28 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     #[cfg(feature = "secure_fs")]
     pub fn set_encryption_key(&mut self, key: [u8; 16]) {
         self.enc_key = key;
+        self.key_installed = true;
+        self.session_unlocked = true;
     }
 
     pub fn unlock_session(&mut self) {
-        self.session_unlocked = true;
+        #[cfg(feature = "secure_fs")]
+        {
+            self.session_unlocked = self.key_installed;
+        }
+        #[cfg(not(feature = "secure_fs"))]
+        {
+            self.session_unlocked = true;
+        }
     }
 
     pub fn lock_session(&mut self) {
         self.session_unlocked = false;
+        #[cfg(feature = "secure_fs")]
+        {
+            self.enc_key.fill(0);
+            self.key_installed = false;
+        }
     }
 
     pub fn is_session_unlocked(&self) -> bool {
@@ -232,8 +247,11 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             }
             #[cfg(not(feature = "secure_fs"))]
             {
-                // When compiled without `secure_fs`, allow non-system, writable files (e.g. `.cfg`)
-                // to be overwritten cleanly as plaintext and clear the `ATTR_ENCRYPTED` bit.
+                if !self.session_unlocked {
+                    return Err(StorageError::EncryptedNoKey);
+                }
+                // When compiled without `secure_fs` and unlocked, allow non-system writable files
+                // to be updated as plaintext and clear `ATTR_ENCRYPTED`.
                 self.fs.write_file(path, data).map_err(Self::map_error)?;
                 let _ = self.fs.set_permission(path, perm & !ATTR_ENCRYPTED);
                 return Ok(());
@@ -255,9 +273,29 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         attrs: FileAttributes,
     ) -> Result<(), StorageError> {
         Self::sanitize_path(path)?;
+        let cur_perm = self.fs.get_permission(path).unwrap_or(0);
+        if (cur_perm & ATTR_ENCRYPTED) != 0
+            && (attrs.permission & ATTR_ENCRYPTED) == 0
+            && !self.session_unlocked
+        {
+            return Err(StorageError::EncryptedNoKey);
+        }
         self.fs
             .set_permission(path, attrs.permission)
             .map_err(Self::map_error)
+    }
+
+    pub fn count_encrypted_in_dir(&mut self, dir_path: &str) -> usize {
+        if dir_path != "/" && Self::sanitize_path(dir_path).is_err() {
+            return 0;
+        }
+        let mut count = 0usize;
+        let _ = self.fs.list_dir(dir_path, |_path, _size, perm, is_dir| {
+            if !is_dir && (perm & ATTR_ENCRYPTED) != 0 {
+                count += 1;
+            }
+        });
+        count
     }
 
     pub fn list_dir(
@@ -474,5 +512,51 @@ mod tests {
         let mut dec = [0u8; 64];
         let dec_len = drv.read_file("/secret", &mut dec).unwrap();
         assert_eq!(&dec[..dec_len], msg);
+    }
+
+    #[cfg(feature = "secure_fs")]
+    #[test]
+    fn secure_fs_requires_key_and_zeroizes_on_lock() {
+        let mut flash = MemFlash::new();
+        let fs = KernFS::new(&mut flash);
+        let mut drv = FileSystemDriver::new(fs);
+
+        assert!(!drv.is_session_unlocked());
+        drv.unlock_session();
+        assert!(!drv.is_session_unlocked());
+
+        drv.write_file("/secret", b"initial").unwrap();
+        drv.set_attributes(
+            "/secret",
+            FileAttributes {
+                permission: ATTR_ENCRYPTED,
+            },
+        )
+        .unwrap();
+
+        let mut buf = [0u8; 32];
+        assert_eq!(
+            drv.read_file("/secret", &mut buf),
+            Err(StorageError::EncryptedNoKey)
+        );
+        assert_eq!(
+            drv.write_file("/secret", b"blocked"),
+            Err(StorageError::EncryptedNoKey)
+        );
+
+        drv.set_encryption_key([0x3Cu8; 16]);
+        assert!(drv.is_session_unlocked());
+        drv.write_file("/secret", b"sealed-ok").unwrap();
+        let n = drv.read_file("/secret", &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"sealed-ok");
+
+        drv.lock_session();
+        assert!(!drv.is_session_unlocked());
+        drv.unlock_session();
+        assert!(!drv.is_session_unlocked());
+        assert_eq!(
+            drv.read_file("/secret", &mut buf),
+            Err(StorageError::EncryptedNoKey)
+        );
     }
 }

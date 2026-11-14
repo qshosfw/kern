@@ -10,6 +10,7 @@ pub mod splash;
 
 pub use orchestration::*;
 
+#[cfg(feature = "crash_dialog")]
 use crate::services::radio::RadioMelodyExt;
 #[cfg(feature = "filesystem")]
 use drivers::filesystem::FileSystemDriver;
@@ -20,20 +21,6 @@ use drivers::st7565::St7565;
 use kernel::event::{KeyCode, KeyState};
 #[cfg(feature = "filesystem")]
 use kernfs::KernFS;
-
-#[derive(Clone, Copy)]
-pub struct BootAlert {
-    pub title: &'static str,
-    pub message: &'static str,
-}
-
-static mut PENDING_ALERT: Option<BootAlert> = None;
-
-pub fn queue_alert(title: &'static str, message: &'static str) {
-    unsafe {
-        *core::ptr::addr_of_mut!(PENDING_ALERT) = Some(BootAlert { title, message });
-    }
-}
 
 #[inline(never)]
 pub fn boot_wait_key(key_scanner: &mut KeypadScanner, timeout_ms: u32) -> Option<KeyCode> {
@@ -202,54 +189,6 @@ pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
 
     tag.flags &= !kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
     crate::boot::write_backup_tag(tag);
-}
-
-#[inline(never)]
-pub fn show_queued_alerts(hw: &mut BootHardware) {
-    #[cfg(feature = "crash_dialog")]
-    show_crash_dialog_if_needed(hw);
-
-    let alert = unsafe {
-        let ptr = core::ptr::addr_of_mut!(PENDING_ALERT);
-        let a = *ptr;
-        *ptr = None;
-        a
-    };
-
-    let Some(alert) = alert else {
-        return;
-    };
-
-    hw.backlight.wake();
-    hw.radio
-        .play_beep(crate::services::melody::BeepType::Warning);
-
-    let canvas = crate::system_canvas();
-    canvas.clear();
-    gfx::widgets::draw_sheet_frame(canvas, alert.title, 10, 44, None);
-    gfx::text::draw_str_align(
-        canvas,
-        64,
-        24,
-        alert.title,
-        &gfx::fonts::mumatrix_regular::FONT,
-        gfx::Color::Fill,
-        gfx::text::Align::Center,
-    );
-    gfx::text::draw_str_align(
-        canvas,
-        64,
-        38,
-        alert.message,
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-        gfx::text::Align::Center,
-    );
-    hw.lcd.blit(canvas);
-
-    if boot_wait_key(hw.key_scanner, 2500).is_some() {
-        hw.radio.play_beep(crate::services::melody::BeepType::Click);
-    }
 }
 
 #[cfg(feature = "filesystem")]

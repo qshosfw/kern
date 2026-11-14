@@ -680,12 +680,20 @@ impl Orchestrator {
                             }
                             _ => {}
                         }
+                    } else if tag == crate::orchestrator::compositor::TAG_SYSTEM_ALERT {
+                        // System notifications self-dismiss without dispatching app modal callbacks.
                     } else {
                         crate::AppRegistry::on_modal_result(self.active_app_id, ctx, &res);
                     }
 
                     if modal_mut.is_active() && modal_mut.tag == tag {
                         modal_mut.dismiss();
+                    }
+
+                    if tag == crate::orchestrator::compositor::TAG_SYSTEM_ALERT
+                        && self.active_app_id == APP_ID_LAUNCHER
+                    {
+                        crate::orchestrator::compositor::present_next_system_alert(ctx);
                     }
                 }
                 true

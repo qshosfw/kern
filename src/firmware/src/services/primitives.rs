@@ -473,7 +473,7 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
     }
 
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
-        self.storage.write_file(path, data).map_err(|_| ())
+        crate::security::write_classified_file(self.storage, path, data).map_err(|_| ())
     }
 
     fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
@@ -507,7 +507,7 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
 
     fn save_config(&mut self, app_name: &str, data: &[u8]) -> Result<(), ()> {
         let path = app_config_path(app_name);
-        self.storage.write_file(path.as_str(), data).map_err(|_| ())
+        crate::security::write_classified_file(self.storage, path.as_str(), data).map_err(|_| ())
     }
 
     fn read_asset(&mut self, _asset_id: u16, offset: u32, buf: &mut [u8]) -> Result<usize, ()> {

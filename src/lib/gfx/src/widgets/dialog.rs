@@ -291,8 +291,12 @@ pub fn draw_sheet_slide_up(
     if let Some((confirm, cancel)) = badges {
         let by = (sheet_y + sheet_h as i16).saturating_sub(10);
         if by < 64 {
-            draw_key_badge(canvas, 3, by, "M", confirm);
-            draw_key_badge_right(canvas, 125, by, "EXIT", cancel);
+            if !confirm.is_empty() {
+                draw_key_badge(canvas, 3, by, "M", confirm);
+            }
+            if !cancel.is_empty() {
+                draw_key_badge_right(canvas, 125, by, "EXIT", cancel);
+            }
         }
     }
 }

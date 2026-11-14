@@ -92,8 +92,10 @@ impl ModalCompositor {
         self.tag = tag;
         self.modal = ActiveModal::Popup(PopupModel::new());
         if let ActiveModal::Popup(model) = &mut self.modal {
-            if !confirm.is_empty() && !cancel.is_empty() {
+            if !confirm.is_empty() {
                 model.confirm_label = Some(confirm);
+            }
+            if !cancel.is_empty() {
                 model.cancel_label = Some(cancel);
             }
             let _ = model.custom_title.push_str(title);
@@ -252,6 +254,175 @@ impl ModalCompositor {
 pub static mut ACTIVE_MODAL: ModalCompositor = ModalCompositor::new();
 
 pub const TAG_LOW_BATTERY_POPUP: u8 = 0xFE;
+pub const TAG_SYSTEM_ALERT: u8 = 0xFD;
+
+const MAX_SYSTEM_ALERTS: usize = 2;
+const MAX_ALERT_LINE_PX: i16 = 116;
+
+#[derive(Clone)]
+pub struct SystemAlert {
+    pub title: heapless::String<24>,
+    pub message: heapless::String<168>,
+}
+
+impl SystemAlert {
+    pub const fn empty() -> Self {
+        Self {
+            title: heapless::String::new(),
+            message: heapless::String::new(),
+        }
+    }
+
+    pub fn new(title: &str, message: &str) -> Self {
+        let mut alert = Self::empty();
+        let _ = alert.title.push_str(title);
+        wrap_alert_text(message, &mut alert.message);
+        alert
+    }
+}
+
+struct AlertQueue {
+    slots: [SystemAlert; MAX_SYSTEM_ALERTS],
+    head: usize,
+    len: usize,
+}
+
+impl AlertQueue {
+    const fn new() -> Self {
+        Self {
+            slots: [const { SystemAlert::empty() }; MAX_SYSTEM_ALERTS],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, alert: SystemAlert) {
+        for i in 0..self.len {
+            let idx = (self.head + i) & (MAX_SYSTEM_ALERTS - 1);
+            if self.slots[idx].title.as_str() == alert.title.as_str() {
+                self.slots[idx] = alert;
+                return;
+            }
+        }
+        if self.len == MAX_SYSTEM_ALERTS {
+            self.slots[self.head] = alert;
+            self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
+        } else {
+            let idx = (self.head + self.len) & (MAX_SYSTEM_ALERTS - 1);
+            self.slots[idx] = alert;
+            self.len += 1;
+        }
+    }
+
+    fn pop(&mut self) -> Option<SystemAlert> {
+        if self.len == 0 {
+            return None;
+        }
+        let alert = core::mem::replace(&mut self.slots[self.head], SystemAlert::empty());
+        self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
+        self.len -= 1;
+        Some(alert)
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.head = 0;
+        self.len = 0;
+    }
+}
+
+static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
+
+/// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
+pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<168>) {
+    out.clear();
+    let mut line_px: i16 = 0;
+    let space_px = gfx::text::str_width(" ", &gfx::fonts::tomthumb::FONT);
+
+    for paragraph in gfx::text::lines(raw) {
+        if !out.is_empty() {
+            if out.push('\n').is_err() {
+                break;
+            }
+            line_px = 0;
+        }
+        let mut b = paragraph.as_bytes();
+        loop {
+            while !b.is_empty() && b[0] == b' ' {
+                b = &b[1..];
+            }
+            if b.is_empty() {
+                break;
+            }
+            let end = gfx::text::find_byte(b, b' ').unwrap_or(b.len());
+            // SAFETY: `b` is valid UTF-8 and splitting on ASCII `b' '` (`0x20`) always lands on a char boundary.
+            let word = unsafe { core::str::from_utf8_unchecked(&b[..end]) };
+            b = &b[end..];
+
+            let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
+            let need_space = line_px > 0;
+            if need_space && line_px + space_px + word_px > MAX_ALERT_LINE_PX {
+                if out.push('\n').is_err() {
+                    return;
+                }
+                line_px = 0;
+            } else if need_space && out.push(' ').is_err() {
+                return;
+            }
+            if out.push_str(word).is_err() {
+                return;
+            }
+            line_px += if line_px > 0 {
+                space_px + word_px
+            } else {
+                word_px
+            };
+        }
+    }
+}
+
+/// Queues a persistent notification for presentation once the Launcher is active.
+#[inline(never)]
+pub fn queue_system_alert(title: &str, message: &str) {
+    let alert = SystemAlert::new(title, message);
+    unsafe {
+        (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).push(alert);
+    }
+}
+
+pub fn pop_system_alert() -> Option<SystemAlert> {
+    unsafe { (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).pop() }
+}
+
+#[cfg(test)]
+pub fn clear_system_alerts() {
+    unsafe {
+        (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).clear();
+    }
+}
+
+/// Presents the next queued system notification as a persistent modal bottom sheet.
+pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
+    let modal_active = unsafe { (*core::ptr::addr_of!(ACTIVE_MODAL)).is_active() };
+    if modal_active {
+        return false;
+    }
+    let Some(alert) = pop_system_alert() else {
+        return false;
+    };
+    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
+    crate::orchestrator::sink_exit_key();
+    unsafe {
+        (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_confirm(
+            TAG_SYSTEM_ALERT,
+            alert.title.as_str(),
+            alert.message.as_str(),
+            "OK",
+            "",
+        );
+    }
+    true
+}
 
 /// Displays an immediate non-blocking Low Battery alert modal on top of active screen.
 pub fn show_low_battery_popup() {
@@ -310,5 +481,70 @@ impl OsCompositor {
 
         // Render Keypad Lock Toast Modal overlay on top of screen if active
         lock_mgr.render_overlay(canvas);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_alert_text_fits_within_bottom_sheet_width() {
+        let mut out = heapless::String::<168>::new();
+        wrap_alert_text(
+            "A device passcode protects 3 encrypted files, and Passcode unlock is disabled in this firmware.",
+            &mut out,
+        );
+        assert!(gfx::text::count_lines(out.as_str()) >= 2);
+        for line in gfx::text::lines(out.as_str()) {
+            let px = gfx::text::str_width(line, &gfx::fonts::tomthumb::FONT);
+            assert!(
+                px <= MAX_ALERT_LINE_PX,
+                "line overflowed ({px} px): {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn system_alert_queue_dedups_and_preserves_order() {
+        clear_system_alerts();
+        queue_system_alert("Storage Protected", "First copy");
+        queue_system_alert("Encrypted Storage", "Second alert");
+        queue_system_alert("Storage Protected", "Updated first copy");
+
+        let a1 = pop_system_alert().unwrap();
+        assert_eq!(a1.title.as_str(), "Storage Protected");
+        assert_eq!(a1.message.as_str(), "Updated first copy");
+
+        let a2 = pop_system_alert().unwrap();
+        assert_eq!(a2.title.as_str(), "Encrypted Storage");
+        assert!(pop_system_alert().is_none());
+
+        // Pushing beyond capacity evicts oldest slot cleanly
+        queue_system_alert("First", "1");
+        queue_system_alert("Second", "2");
+        queue_system_alert("Third", "3");
+        assert_eq!(pop_system_alert().unwrap().title.as_str(), "Second");
+        assert_eq!(pop_system_alert().unwrap().title.as_str(), "Third");
+        assert!(pop_system_alert().is_none());
+    }
+
+    #[test]
+    fn modal_single_badge_mode_allows_ok_only() {
+        let mut compositor = ModalCompositor::new();
+        compositor.show_confirm(
+            TAG_SYSTEM_ALERT,
+            "Storage Protected",
+            "Message body",
+            "OK",
+            "",
+        );
+        match &compositor.modal {
+            ActiveModal::Popup(model) => {
+                assert_eq!(model.confirm_label, Some("OK"));
+                assert_eq!(model.cancel_label, None);
+            }
+            _ => panic!("expected popup modal"),
+        }
     }
 }
