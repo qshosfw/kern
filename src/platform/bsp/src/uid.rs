@@ -102,12 +102,12 @@ static mut MAC_TAG_CACHED: [u8; 4] = [0; 4];
 /// Computes the default 4-character hex tag from the last 2 bytes of the MAC address.
 pub fn get_mac_tag() -> [u8; 4] {
     let mac = read_mac_address();
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let hex = utils::format::HEX_CHARS;
     [
-        HEX[(mac[4] >> 4) as usize],
-        HEX[(mac[4] & 0x0F) as usize],
-        HEX[(mac[5] >> 4) as usize],
-        HEX[(mac[5] & 0x0F) as usize],
+        hex[(mac[4] >> 4) as usize],
+        hex[(mac[4] & 0x0F) as usize],
+        hex[(mac[5] >> 4) as usize],
+        hex[(mac[5] & 0x0F) as usize],
     ]
 }
 
@@ -156,14 +156,14 @@ pub fn get_hardware_fingerprint256() -> u64 {
 
 /// Formats the 96-bit MCU UID into a null-terminated 25-byte Hex ASCII string buffer.
 pub fn read_usb_serial_ascii() -> [u8; 25] {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let hex = utils::format::HEX_CHARS;
     let uid = read_mcu_uid();
     let mut buf = [0u8; 25];
 
     for i in 0..12 {
         let b = uid[i];
-        buf[i * 2] = HEX[(b >> 4) as usize];
-        buf[i * 2 + 1] = HEX[(b & 0x0F) as usize];
+        buf[i * 2] = hex[(b >> 4) as usize];
+        buf[i * 2 + 1] = hex[(b & 0x0F) as usize];
     }
     buf[24] = 0;
     buf
