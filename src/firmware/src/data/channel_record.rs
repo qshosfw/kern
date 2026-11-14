@@ -38,12 +38,17 @@ impl ExtensionTag {
 /// - `version: u8` (app schema version)
 /// - `payload: [u8; 3]` (3 bytes application payload)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct ChannelExtension {
     pub tag: u32,
     pub version: u8,
     pub payload: [u8; 3],
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<ChannelExtension>() == 8);
+    assert!(core::mem::align_of::<ChannelExtension>() == 4);
+};
 
 impl ChannelExtension {
     pub const fn empty() -> Self {
@@ -80,20 +85,23 @@ impl ChannelExtension {
 
 /// Declarative extension payload for Channel Scanner Tuning (`b"SCAN"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct ScanChannelExt {
     pub dwell_ms: u16,
-    pub priority_weight: u8,
     pub resume_delay_ms: u16,
     pub scan_group_mask: u16,
+    pub priority_weight: u8,
     pub reserved: [u8; 5],
 }
 
-const _: () = assert!(core::mem::size_of::<ScanChannelExt>() == 12);
+const _: () = {
+    assert!(core::mem::size_of::<ScanChannelExt>() == 12);
+    assert!(core::mem::align_of::<ScanChannelExt>() == 2);
+};
 
 /// Declarative extension payload for Calibrated PA Power Profiling (`b"POWR"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct PowerChannelExt {
     pub pa_bias_dac: u16,
     pub target_power_mw: u16,
@@ -102,11 +110,14 @@ pub struct PowerChannelExt {
     pub reserved: [u8; 5],
 }
 
-const _: () = assert!(core::mem::size_of::<PowerChannelExt>() == 12);
+const _: () = {
+    assert!(core::mem::size_of::<PowerChannelExt>() == 12);
+    assert!(core::mem::align_of::<PowerChannelExt>() == 2);
+};
 
-/// 64-byte packed, power-of-two aligned channel record matching Keel v0.5.0 specification.
+/// 64-byte naturally-aligned, power-of-two channel record (zero unaligned accesses on Cortex-M0+).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct ChannelRecord {
     pub rx_frequency_hz: u32,
     pub tx_frequency_hz: u32,
@@ -119,9 +130,9 @@ pub struct ChannelRecord {
     pub zone_mask: u16,
     pub flags: u16,
     pub power_mw: u16,
-    pub proto: u8,
     pub proto_ref: u16,
     pub uid: u16,
+    pub proto: u8,
 
     // Audio Block (9 bytes physical parameters matching BK4829 hardware registers)
     pub scram_mode: u8,
@@ -139,7 +150,11 @@ pub struct ChannelRecord {
     pub record_crc: u16,
 }
 
-const _: () = assert!(core::mem::size_of::<ChannelRecord>() == 64);
+const _: () = {
+    assert!(core::mem::size_of::<ChannelRecord>() == 64);
+    assert!(core::mem::align_of::<ChannelRecord>() == 4);
+    assert!(core::mem::offset_of!(ChannelRecord, record_crc) == 0x3E);
+};
 
 impl ChannelRecord {
     pub const SIZE: usize = 64;

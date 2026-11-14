@@ -113,6 +113,22 @@ pub const fn div7600_u32(x: u32) -> u32 {
     ((x as u64 * 0x227E_1D1B) >> 42) as u32
 }
 
+/// Fast reciprocal division by 5200 for unsigned 32-bit integers.
+///
+/// Exact for all `x <= u32::MAX` (`(5000 * carrier_hz) / 26_000_000`).
+#[inline(always)]
+pub const fn div5200_u32(x: u32) -> u32 {
+    ((x as u64 * 0xC9A6_34FD) >> 44) as u32
+}
+
+/// Fast reciprocal division by 10000 for unsigned 32-bit integers.
+///
+/// Exact for all `x <= u32::MAX`.
+#[inline(always)]
+pub const fn div10000_u32(x: u32) -> u32 {
+    ((x as u64 * 0xD1B7_1759) >> 45) as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +239,40 @@ mod tests {
         ];
         for &x in &test_cases {
             assert_eq!(div7600_u32(x), x / 7600, "div7600 mismatch at {}", x);
+        }
+    }
+
+    #[test]
+    fn test_div5200_and_div10000_u32_selected_values() {
+        let test_cases = [
+            0,
+            1,
+            5199,
+            5200,
+            5201,
+            9999,
+            10000,
+            10001,
+            7_100_000,
+            14_074_000,
+            28_400_000,
+            50_313_000,
+            144_000_000,
+            145_500_000,
+            433_000_000,
+            1_296_000_000,
+            4_294_967_290,
+            4_294_967_295,
+        ];
+        for &x in &test_cases {
+            assert_eq!(div5200_u32(x), x / 5200, "div5200 mismatch at {}", x);
+            assert_eq!(
+                div5200_u32(x),
+                ((5000u64 * x as u64) / 26_000_000u64) as u32,
+                "vernier alpha mismatch at {}",
+                x
+            );
+            assert_eq!(div10000_u32(x), x / 10_000, "div10000 mismatch at {}", x);
         }
     }
 }

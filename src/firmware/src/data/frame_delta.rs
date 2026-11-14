@@ -7,13 +7,18 @@ use kernel::canvas::{Canvas, LCD_WIDTH};
 
 /// Header for a frame difference packet in a screen-sharing stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct FrameDeltaHeader {
     pub seq: u16,
     pub modified_pages: u8,
     pub flags: u8,
     pub payload_len: u16,
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<FrameDeltaHeader>() == 6);
+    assert!(core::mem::align_of::<FrameDeltaHeader>() == 2);
+};
 
 impl FrameDeltaHeader {
     pub const SIZE: usize = 6;

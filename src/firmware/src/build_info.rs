@@ -4,7 +4,7 @@
 //! and a compact binary firmware header (`.rodata.fw_meta`) readable by
 //! external flashers and updater utilities.
 
-#[repr(C, packed)]
+#[repr(C)]
 pub struct FirmwareMeta {
     pub ident: [u8; 4], // "KERN"
     pub version_major: u8,
@@ -15,6 +15,11 @@ pub struct FirmwareMeta {
     pub git_hash: [u8; 8], // 7-char short hash + null
     pub flags: u32,        // Active feature flag bitmask
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<FirmwareMeta>() == 24);
+    assert!(core::mem::align_of::<FirmwareMeta>() == 4);
+};
 
 #[used]
 #[unsafe(link_section = ".rodata.fw_meta")]

@@ -88,20 +88,31 @@ impl GoertzelFilter {
         self.magnitude_squared()
     }
 
-    /// Compute the non-negative squared magnitude power of the accumulated block.
+    /// Compute the non-negative squared magnitude power of the accumulated block strictly in 32-bit math.
     #[inline]
     pub fn magnitude_squared(&self) -> u32 {
-        let s1 = self.s1 as i64;
-        let s2 = self.s2 as i64;
-        let coeff = self.coeff_q14 as i64;
-        let cross = ((coeff * s1) >> 14) * s2;
+        let mut s1 = self.s1;
+        let mut s2 = self.s2;
+        let mut shift = 0u32;
+        while s1.unsigned_abs().max(s2.unsigned_abs()) >= 16384 {
+            s1 >>= 1;
+            s2 >>= 1;
+            shift += 1;
+        }
+        let cross = ((self.coeff_q14 * s1) >> 14) * s2;
         let power = s1 * s1 + s2 * s2 - cross;
         if power <= 0 {
             0
-        } else if power > u32::MAX as i64 {
-            u32::MAX
         } else {
-            power as u32
+            let p = power as u32;
+            let sh = shift << 1;
+            if sh == 0 {
+                p
+            } else if sh >= 32 || p.leading_zeros() < sh {
+                u32::MAX
+            } else {
+                p << sh
+            }
         }
     }
 }

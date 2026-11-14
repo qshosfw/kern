@@ -105,9 +105,9 @@ pub const FILE_ID_APP_LEGACY: u32 = 0x7F505041; // "\x7FAPP"
 pub const FILE_ID_BMP: u16 = 0x4D42; // "BM"
 pub const FILE_ID_RLE_BITMAP: u32 = 0x4D424C52; // "RLBM"
 
-/// Packed 16-byte header for fixed-stride record tables (Channels, Contacts).
+/// Naturally-aligned 16-byte header for fixed-stride record tables (Channels, Contacts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct TableFileHeader {
     pub ident: u32,
     pub version: u16,
@@ -118,6 +118,11 @@ pub struct TableFileHeader {
     pub flags: u8,
     pub crc16: u16,
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<TableFileHeader>() == 16);
+    assert!(core::mem::align_of::<TableFileHeader>() == 4);
+};
 
 impl TableFileHeader {
     pub const SIZE: usize = 16;

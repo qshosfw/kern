@@ -1022,7 +1022,8 @@ impl RadioCoordinator {
             // Poll on-die MCU temperature and battery droop every 500ms (50 ticks) during active TX.
             // If temperature exceeds 65.0°C (650 deci-C) or battery droops into low state while on High PA,
             // fold back PA bias to Medium (level 1) to protect final-stage RF transistors.
-            if (self.tot_elapsed_10ms % 50) == 0 && !self.pa_thermal_foldback_active {
+            // Check thermal/battery droop every 320 ms (bitmask avoids software division on M0+).
+            if (self.tot_elapsed_10ms & 31) == 0 && !self.pa_thermal_foldback_active {
                 let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
                 if (pwr.mcu_temp_deci_c >= 650 || pwr.is_low)
                     && self.effective_tx_channel().power == RfPowerLevel::High

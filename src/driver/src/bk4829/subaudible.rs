@@ -13,15 +13,16 @@
 //!   - Bit `15`: Enable tail shift, Bits `[14:13]`: `0 = 134.4Hz CDCSS tail`, `1 = 120°`, `2 = 180°`, `3 = 240°`
 
 /// Calculate BK4819/BK4829 `REG_07` CTC1 frequency control word from deci-Hz (`0.1 Hz` units).
+/// Uses single-cycle 32-bit Q16 multiply `round(deci_hz * 2.065)` without u64/division.
 #[inline(always)]
 pub const fn ctcss_deci_hz_to_reg(deci_hz: u16) -> u16 {
-    (((deci_hz as u32 * 2065) + 500) / 1000) as u16 & 0x1FFF
+    (((deci_hz as u32 * 135_332) + 32_768) >> 16) as u16 & 0x1FFF
 }
 
 /// Convert raw `REG_68` CTCSS scan word into deci-Hz (`0.1 Hz` units).
 #[inline(always)]
 pub const fn reg_to_ctcss_deci_hz(reg68: u16) -> u16 {
-    (((reg68 & 0x1FFF) as u32 * 4843) / 10000) as u16
+    (((reg68 & 0x1FFF) as u32 * 31_739) >> 16) as u16
 }
 
 /// 55.0 Hz CTC1 frequency control word (`1136`) for transmitting a 55 Hz STE tail burst.

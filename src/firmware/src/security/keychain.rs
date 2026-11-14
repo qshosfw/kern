@@ -2,7 +2,7 @@ use crate::services::SystemStorage;
 // Dynamic Hardware Silicon Key Pipeline & Security Keychain Containers
 
 use crypto::ascon::Ascon128;
-use crypto::buffer::SecretBuffer;
+use crypto::buffer::SecretBuf;
 use crypto::trng::HardwareTrng;
 
 use super::constants::*;
@@ -81,7 +81,7 @@ pub(crate) fn compute_hw_mac(
     ident: &[u8; 4],
     data: &[u8],
 ) -> [u8; 16] {
-    let mut hardware_kek = SecretBuffer::new();
+    let mut hardware_kek = SecretBuf::<32>::new();
     derive_passcode_kek(uid, b"HW_KEK", nonce, 100, &mut hardware_kek, None);
     let mut key16 = [0u8; 16];
     key16.copy_from_slice(&hardware_kek.as_slice()[0..16]);
@@ -123,7 +123,7 @@ fn init_passcode_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, ui
         bsp::entropy::sample_hardware_noise(),
     );
 
-    let mut passcode_verifier = SecretBuffer::new();
+    let mut passcode_verifier = SecretBuf::<32>::new();
     derive_passcode_kek(
         uid,
         DEFAULT_PASSCODE_SEED,
@@ -222,7 +222,7 @@ pub fn xor_derived_key(
     buf: &mut [u8; 32],
     progress: Option<super::kdf::ProgressHook>,
 ) {
-    let mut kek = SecretBuffer::new();
+    let mut kek = SecretBuf::<32>::new();
     derive_passcode_kek(uid, seed, salt, iterations, &mut kek, progress);
     for i in 0..32 {
         buf[i] ^= kek.as_slice()[i];
@@ -234,7 +234,7 @@ pub fn derive_passcode_kek(
     user_passcode: &[u8],
     salt: &[u8; 16],
     iterations: u32,
-    out_kek: &mut SecretBuffer,
+    out_kek: &mut SecretBuf<32>,
     progress: Option<super::kdf::ProgressHook>,
 ) {
     super::kdf::derive_master_key(
@@ -272,7 +272,7 @@ pub fn derive_fs_key(master_key: &[u8; 32], mcu_uid: &[u8; 12]) -> [u8; 16] {
 pub fn unwrap_device_master_key(
     filesystem: &mut SystemStorage,
     uid: &[u8; 12],
-) -> Option<SecretBuffer> {
+) -> Option<SecretBuf<32>> {
     let mut sto_key = PackedStorageKey::empty();
     let sn = filesystem
         .read_struct(PATH_STORAGE_KEY, &mut sto_key)
@@ -294,7 +294,7 @@ pub fn unwrap_device_master_key(
         _ => DEFAULT_PBKDF_ITERATIONS,
     };
 
-    let mut mk = SecretBuffer::new();
+    let mut mk = SecretBuf::<32>::new();
     mk.as_mut_slice().copy_from_slice(&sto_key.encrypted_mk);
     xor_derived_key(
         uid,

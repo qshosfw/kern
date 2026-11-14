@@ -21,8 +21,12 @@ pub struct BatteryState {
     pub is_critical: bool,
 }
 
+const DEFAULT_CALIB_CONST: u16 = 2227;
+const DEFAULT_CAL_SCALE_Q16: u32 = (7600u32 << 16) / DEFAULT_CALIB_CONST as u32;
+
 pub struct BatteryDriver {
     pub calib_const: u16,
+    cal_scale_q16: u32,
     pub calib_curve: [u16; 6],
     pub has_calib_curve: bool,
     pub calib_tweak_mv: i16,
@@ -53,6 +57,7 @@ impl BatteryDriver {
     pub const fn empty() -> Self {
         Self {
             calib_const: 0,
+            cal_scale_q16: 0,
             calib_curve: [0; 6],
             has_calib_curve: false,
             calib_tweak_mv: 0,
@@ -82,7 +87,8 @@ impl BatteryDriver {
 
     pub const fn new() -> Self {
         Self {
-            calib_const: 2227, // Default fallback to factory radio dump baseline (2227)
+            calib_const: DEFAULT_CALIB_CONST, // Default fallback to factory radio dump baseline (2227)
+            cal_scale_q16: DEFAULT_CAL_SCALE_Q16,
             calib_curve: [1438, 2050, 2138, 2227, 2314, 2600],
             has_calib_curve: true,
             calib_tweak_mv: 0,
@@ -135,19 +141,26 @@ impl BatteryDriver {
         self.battery_type.get()
     }
 
-    /// Converts raw 12-bit ADC reading (Channel 8 / PB0) to battery millivolts using dynamic or factory calibration + user tweak.
+    #[inline(never)]
+    pub fn set_calib_const(&mut self, calib_const: u16) {
+        if (1000..=3500).contains(&calib_const) {
+            self.calib_const = calib_const;
+            self.cal_scale_q16 = (7600u32 << 16) / calib_const as u32;
+        }
+    }
+
+    /// Converts raw 12-bit ADC reading (Channel 8 / PB0) to battery millivolts using precomputed Q16 calibration + user tweak.
     #[inline(always)]
     pub fn adc_to_mv(&self, raw_adc: u16, _vdda_mv: u16) -> u16 {
         if raw_adc == 0 {
             return 0;
         }
-        let cal = if self.calib_const >= 1000 && self.calib_const <= 3500 {
-            self.calib_const as u32
+        let scale_q16 = if self.cal_scale_q16 != 0 {
+            self.cal_scale_q16
         } else {
-            2227
+            DEFAULT_CAL_SCALE_Q16
         };
-        // Preserving 1mV resolution: (raw_adc * 7600) / cal
-        let base_mv = ((raw_adc as u32 * 7600) / cal) as i32;
+        let base_mv = (((raw_adc as u32 * scale_q16) + 0x8000) >> 16) as i32;
         (base_mv + self.calib_tweak_mv as i32).clamp(0, 15000) as u16
     }
 
@@ -158,20 +171,14 @@ impl BatteryDriver {
                     u16::from_le_bytes([calib_data[0x140 + i * 2], calib_data[0x140 + i * 2 + 1]]);
             }
             self.has_calib_curve = true;
-            let word3 = self.calib_curve[3];
-            if (1000..=3500).contains(&word3) {
-                self.calib_const = word3;
-            }
+            self.set_calib_const(self.calib_curve[3]);
         }
     }
 
     pub fn load_calibration_curve(&mut self, curve: [u16; 6]) {
         self.calib_curve = curve;
         self.has_calib_curve = true;
-        let word3 = curve[3];
-        if (1000..=3500).contains(&word3) {
-            self.calib_const = word3;
-        }
+        self.set_calib_const(curve[3]);
     }
 
     /// Apply a user calibration offset.

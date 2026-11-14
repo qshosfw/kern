@@ -17,6 +17,7 @@ use crate::services::storage::DirEntryInfo;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{ModulationMode, PowerService, RfFineTuning, RfModulation, RfSquelch};
 use kernel::wire::*;
+use utils::bytes::ByteWriter;
 use utils::units::Frequency;
 
 /// Maximum upload size accepted over RigWire (8 KiB, strictly aligned to transient arena).
@@ -154,42 +155,38 @@ fn read_sys_facet(
     now: u32,
     out: &mut [u8],
 ) -> Result<usize, WireStatus> {
+    let mut w = ByteWriter::new(out);
     match facet {
         FACET_SYS_IDENTITY => {
-            // Serial64 (8B)
-            out[..8].copy_from_slice(&bsp::uid::get_hardware_serial64().to_le_bytes());
-            // MAC address (6B)
-            out[8..14].copy_from_slice(&bsp::uid::read_mac_address());
-            // Crockford serial string (14B)
-            out[14..28].copy_from_slice(&bsp::uid::get_crockford_serial()[..14]);
-            // Auth status (1B)
+            w.write_u64_le(bsp::uid::get_hardware_serial64());
+            w.write_bytes(&bsp::uid::read_mac_address());
+            w.write_bytes(&bsp::uid::get_crockford_serial()[..14]);
             let is_auth = hw.wire.session.is_authenticated;
-            out[28] = is_auth as u8;
-            // MCU UID (12B if authenticated, otherwise 0)
+            w.write_u8(is_auth as u8);
             if is_auth {
-                out[29..41].copy_from_slice(&bsp::uid::read_mcu_uid());
+                w.write_bytes(&bsp::uid::read_mcu_uid());
             } else {
-                out[29..41].fill(0);
+                w.write_bytes(&[0u8; 12]);
             }
-            Ok(41)
+            Ok(w.position())
         }
         FACET_SYS_METRICS => {
-            out[..4].copy_from_slice(&now.to_le_bytes());
-            out[4..8].copy_from_slice(&py32_hal::rcc::sysclk_hz().to_le_bytes());
+            w.write_u32_le(now);
+            w.write_u32_le(py32_hal::rcc::sysclk_hz());
             let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-            out[8..10].copy_from_slice(&pwr.battery_voltage_mv().to_le_bytes());
-            out[10] = pwr.battery_percentage();
-            out[11] = hw.orchestrator.active_app_id() as u8;
-            out[12] = hw.orchestrator.is_keypad_locked() as u8;
-            out[13] = bsp::pins::FLASHLIGHT.is_high() as u8;
-            Ok(14)
+            w.write_u16_le(pwr.battery_voltage_mv());
+            w.write_u8(pwr.battery_percentage());
+            w.write_u8(hw.orchestrator.active_app_id() as u8);
+            w.write_u8(hw.orchestrator.is_keypad_locked() as u8);
+            w.write_u8(bsp::pins::FLASHLIGHT.is_high() as u8);
+            Ok(w.position())
         }
         FACET_SYS_CALIBRATION => {
             let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
-            out[0] = is_valid_calibration(calib.raw_bytes()) as u8;
-            out[1..3].copy_from_slice(&calib.xtal_freq_low().to_le_bytes());
-            out[3..5].copy_from_slice(&calib.battery_calib_const().to_le_bytes());
-            Ok(5)
+            w.write_u8(is_valid_calibration(calib.raw_bytes()) as u8);
+            w.write_i16_le(calib.xtal_freq_low());
+            w.write_u16_le(calib.battery_calib_const());
+            Ok(w.position())
         }
         _ => Err(WireStatus::UnsupportedField),
     }
@@ -209,33 +206,33 @@ fn read_radio_facet(
         _ => coord.active_vfo,
     };
     let ch = coord.vfo_channel(slot);
+    let mut w = ByteWriter::new(out);
     match facet {
         FACET_RADIO_TUNING => {
-            out[..4].copy_from_slice(&ch.effective_rx_freq().raw().to_le_bytes());
-            out[4..8].copy_from_slice(&ch.step.in_hz().to_le_bytes());
-            out[8] = coord.active_vfo as u8;
-            Ok(9)
+            w.write_u32_le(ch.effective_rx_freq().raw());
+            w.write_u32_le(ch.step.in_hz());
+            w.write_u8(coord.active_vfo as u8);
+            Ok(w.position())
         }
         FACET_RADIO_MODULATION => {
-            out[0] = ch.modulation.to_u8();
-            let bw_hz: u32 = ch.bandwidth.in_hz();
-            out[1..5].copy_from_slice(&bw_hz.to_le_bytes());
-            Ok(5)
+            w.write_u8(ch.modulation.to_u8());
+            w.write_u32_le(ch.bandwidth.in_hz());
+            Ok(w.position())
         }
         FACET_RADIO_SQUELCH => {
-            out[0] = ch.squelch_level;
-            out[1..3].copy_from_slice(&hw.radio.get_rssi().to_le_bytes());
-            out[3] = hw.radio.is_squelch_open() as u8;
-            Ok(4)
+            w.write_u8(ch.squelch_level);
+            w.write_u16_le(hw.radio.get_rssi());
+            w.write_u8(hw.radio.is_squelch_open() as u8);
+            Ok(w.position())
         }
         FACET_RADIO_TRANSMIT => {
-            out[0] = coord.is_slot_tx_active(slot) as u8;
-            out[1] = ch.power as u8;
-            Ok(2)
+            w.write_u8(coord.is_slot_tx_active(slot) as u8);
+            w.write_u8(ch.power as u8);
+            Ok(w.position())
         }
         FACET_RADIO_DIGITAL => {
-            out[..2].copy_from_slice(&0i16.to_le_bytes());
-            Ok(2)
+            w.write_i16_le(0);
+            Ok(w.position())
         }
         _ => Err(WireStatus::UnsupportedField),
     }
@@ -306,13 +303,14 @@ fn on_handle_get(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware, n
         },
         DOMAIN_STORAGE => {
             let stats = hw.filesystem.stats();
-            resp[4..6].copy_from_slice(&stats.active_files.to_le_bytes());
-            resp[6..8].copy_from_slice(&stats.used_sectors.to_le_bytes());
-            resp[8..10].copy_from_slice(&stats.free_sectors.to_le_bytes());
-            resp[10..12].copy_from_slice(&stats.deleted_sectors.to_le_bytes());
-            resp[12..16].copy_from_slice(&stats.wear_cycles.to_le_bytes());
-            resp[16..18].copy_from_slice(&stats.total_sectors.to_le_bytes());
-            Ok(14)
+            let mut w = ByteWriter::new(&mut resp[4..]);
+            w.write_u16_le(stats.active_files);
+            w.write_u16_le(stats.used_sectors);
+            w.write_u16_le(stats.free_sectors);
+            w.write_u16_le(stats.deleted_sectors);
+            w.write_u32_le(stats.wear_cycles);
+            w.write_u16_le(stats.total_sectors);
+            Ok(w.position())
         }
         _ => Err(WireStatus::Unsupported),
     };
@@ -538,7 +536,8 @@ fn on_handle_invoke(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
 
     let mut resp = [0u8; 6];
     req.handle.write_bytes(&mut resp[..4]);
-    resp[4..6].copy_from_slice(&req.action_id.to_le_bytes());
+    let mut w = ByteWriter::new(&mut resp[4..]);
+    w.write_u16_le(req.action_id);
 
     send_resp(hw, header, status, &resp)
 }
@@ -559,8 +558,11 @@ fn on_handle_stream(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
         let mut resp_uninit = core::mem::MaybeUninit::<[u8; 10 + 100]>::uninit();
         let resp = unsafe { &mut *resp_uninit.as_mut_ptr() };
         req.handle.write_bytes(&mut resp[..4]);
-        resp[4..8].copy_from_slice(&(off as u32).to_le_bytes());
-        resp[8..10].copy_from_slice(&(len as u16).to_le_bytes());
+        {
+            let mut w = ByteWriter::new(&mut resp[4..]);
+            w.write_u32_le(off as u32);
+            w.write_u16_le(len as u16);
+        }
         resp[10..10 + len].copy_from_slice(&flat[off..off + len]);
 
         send_resp(hw, header, WireStatus::Ok, &resp[..10 + len])
@@ -661,11 +663,12 @@ fn on_transfer_open(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     }
 
     let mut resp = [0u8; 8];
-    resp[0..2].copy_from_slice(&tid.to_le_bytes());
-    resp[2..4].copy_from_slice(&chunk_size.to_le_bytes());
-    resp[4..8].copy_from_slice(&existing_size.to_le_bytes());
+    let mut w = ByteWriter::new(&mut resp);
+    w.write_u16_le(tid);
+    w.write_u16_le(chunk_size);
+    w.write_u32_le(existing_size);
 
-    send_resp(hw, header, WireStatus::Ok, &resp)
+    send_resp(hw, header, WireStatus::Ok, w.as_slice())
 }
 
 #[inline(never)]
@@ -692,11 +695,12 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
         transfer.current_len = transfer.current_len.max((off + chunk_len) as u32);
 
         let mut resp = [0u8; 8];
-        resp[0..2].copy_from_slice(&req.transfer_id.to_le_bytes());
-        resp[2..4].copy_from_slice(&(chunk_len as u16).to_le_bytes());
-        resp[4..8].copy_from_slice(&((off + chunk_len) as u32).to_le_bytes());
+        let mut w = ByteWriter::new(&mut resp);
+        w.write_u16_le(req.transfer_id);
+        w.write_u16_le(chunk_len as u16);
+        w.write_u32_le((off + chunk_len) as u32);
 
-        send_resp(hw, header, WireStatus::Ok, &resp)
+        send_resp(hw, header, WireStatus::Ok, w.as_slice())
     } else {
         let path = transfer.path_str();
         let off = req.offset as usize;
@@ -708,9 +712,12 @@ fn on_transfer_chunk(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
             .filesystem
             .read_file_at(path, off, &mut resp[8..8 + len])
             .unwrap_or(0);
-        resp[0..2].copy_from_slice(&req.transfer_id.to_le_bytes());
-        resp[2..6].copy_from_slice(&(off as u32).to_le_bytes());
-        resp[6..8].copy_from_slice(&(read_sz as u16).to_le_bytes());
+        {
+            let mut w = ByteWriter::new(&mut resp[..8]);
+            w.write_u16_le(req.transfer_id);
+            w.write_u32_le(off as u32);
+            w.write_u16_le(read_sz as u16);
+        }
 
         send_resp(hw, header, WireStatus::Ok, &resp[..8 + read_sz])
     }
@@ -744,7 +751,8 @@ fn commit_calibration_payload(
 
     // Dynamically reload calibrated parameters into live silicon
     let pwr = unsafe { &mut *core::ptr::addr_of_mut!(crate::POWER_SERVICE) };
-    pwr.battery_driver.calib_const = calib.battery_calib_const();
+    pwr.battery_driver
+        .set_calib_const(calib.battery_calib_const());
     pwr.battery_driver
         .load_calibration_curve(calib.battery_curve());
     hw.radio.attach_calibration(calib.raw_bytes());
@@ -766,7 +774,8 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
 
     transfer.active = false;
     let mut resp = [0u8; 6];
-    resp[0..2].copy_from_slice(&req.transfer_id.to_le_bytes());
+    let mut w = ByteWriter::new(&mut resp);
+    w.write_u16_le(req.transfer_id);
 
     if transfer.mode == TRANSFER_MODE_WRITE {
         let total_len = transfer.current_len as usize;
@@ -792,10 +801,12 @@ fn on_transfer_close(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
             return send_status(hw, header, WireStatus::IoError);
         }
 
-        resp[2..6].copy_from_slice(&actual_crc.to_le_bytes());
+        w.write_u32_le(actual_crc);
+    } else {
+        w.write_u32_le(0);
     }
 
-    send_resp(hw, header, WireStatus::Ok, &resp)
+    send_resp(hw, header, WireStatus::Ok, w.as_slice())
 }
 
 fn on_transfer_abort(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
@@ -809,8 +820,9 @@ fn on_transfer_abort(header: &WireHeader, payload: &[u8], hw: &mut SystemHardwar
     }
 
     let mut resp = [0u8; 2];
-    resp.copy_from_slice(&req.transfer_id.to_le_bytes());
-    send_resp(hw, header, WireStatus::Ok, &resp)
+    let mut w = ByteWriter::new(&mut resp);
+    w.write_u16_le(req.transfer_id);
+    send_resp(hw, header, WireStatus::Ok, w.as_slice())
 }
 
 fn on_transfer_stat(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
@@ -822,10 +834,6 @@ fn on_transfer_stat(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     let mut reply = [0u8; 10];
     let status = match hw.filesystem.file_size(req.path) {
         Ok(sz) => {
-            reply[0] = 1; // exists
-            reply[1] = 0; // is_dir = false
-            reply[2..6].copy_from_slice(&(sz as u32).to_le_bytes());
-
             // Compute CRC-32 by streaming chunks across full file
             let mut crc_val = 0xFFFF_FFFFu32;
             let mut cur_off = 0usize;
@@ -844,7 +852,11 @@ fn on_transfer_stat(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
                 }
             }
             crc_val = !crc_val;
-            reply[6..10].copy_from_slice(&crc_val.to_le_bytes());
+            let mut w = ByteWriter::new(&mut reply);
+            w.write_u8(1); // exists
+            w.write_u8(0); // is_dir = false
+            w.write_u32_le(sz as u32);
+            w.write_u32_le(crc_val);
             WireStatus::Ok
         }
         Err(_) => {
@@ -873,26 +885,23 @@ fn on_transfer_list(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware
     let count = hw.filesystem.list_dir(req.path, entries).unwrap_or(0);
 
     let mut out = [0u8; 160];
-    let next_cursor = 0xFFFFu16;
-    out[0..2].copy_from_slice(&next_cursor.to_le_bytes());
-    out[2] = count as u8;
-    let mut off = 3;
+    let mut w = ByteWriter::new(&mut out);
+    w.write_u16_le(0xFFFFu16);
+    w.write_u8(count as u8);
 
     for entry in &entries[..count] {
-        let name = entry.path.as_str();
-        let b = name.as_bytes();
+        let b = entry.path.as_str().as_bytes();
         let name_len = b.len().min(24);
-        if off + 6 + name_len > out.len() {
+        if w.remaining() < 6 + name_len {
             break;
         }
-        out[off] = entry.is_dir as u8;
-        out[off + 1..off + 5].copy_from_slice(&(entry.size as u32).to_le_bytes());
-        out[off + 5] = name_len as u8;
-        out[off + 6..off + 6 + name_len].copy_from_slice(&b[..name_len]);
-        off += 6 + name_len;
+        w.write_u8(entry.is_dir as u8);
+        w.write_u32_le(entry.size as u32);
+        w.write_u8(name_len as u8);
+        w.write_bytes(&b[..name_len]);
     }
 
-    send_resp(hw, header, WireStatus::Ok, &out[..off])
+    send_resp(hw, header, WireStatus::Ok, w.as_slice())
 }
 
 fn on_transfer_remove(header: &WireHeader, payload: &[u8], hw: &mut SystemHardware) -> bool {
@@ -984,12 +993,13 @@ pub fn emit_event(hw: &mut SystemHardware, event_id: u16, data: &[u8]) {
         if (sub.active_mask & bit) != 0 && sub.credits > 0 {
             sub.credits -= 1;
             let mut payload = [0u8; 32];
-            payload[0..2].copy_from_slice(&event_id.to_le_bytes());
+            let mut w = ByteWriter::new(&mut payload);
+            w.write_u16_le(event_id);
             let d_len = data.len().min(30);
-            payload[2..2 + d_len].copy_from_slice(&data[..d_len]);
+            w.write_bytes(&data[..d_len]);
             let _ = hw
                 .wire
-                .send_event(SERVICE_EVENTS, OP_EVENTS_EMIT, 0, &payload[..2 + d_len]);
+                .send_event(SERVICE_EVENTS, OP_EVENTS_EMIT, 0, w.as_slice());
         }
     }
 }

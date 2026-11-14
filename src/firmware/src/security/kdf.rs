@@ -3,7 +3,7 @@
 //! Stretches MCU UID, user passcode, and unique salt into a 256-bit cryptographic key.
 
 use crypto::ascon::AsconPermutation;
-use crypto::buffer::SecretBuffer;
+use crypto::buffer::SecretBuf;
 
 #[derive(Clone, Copy)]
 pub struct ProgressHook {
@@ -30,7 +30,7 @@ pub fn derive_master_key(
     user_passcode: &[u8],
     salt: &[u8; 16],
     iterations: u32,
-    out_key: &mut SecretBuffer,
+    out_key: &mut SecretBuf<32>,
     wdt_feed_fn: Option<fn()>,
     progress: Option<ProgressHook>,
 ) {

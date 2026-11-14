@@ -1558,6 +1558,7 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
         }
     }
 
+    #[inline(never)]
     fn set_sub_hz_offset(&mut self, carrier_hz: u32, offset_dhz: i16) {
         if offset_dhz == 0 {
             self.set_crystal_trim(self.baseline_xtal_trim);

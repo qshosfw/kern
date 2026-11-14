@@ -436,21 +436,24 @@ pub fn find_section<'a>(buf: &'a [u8], header_len: usize, target_id: u16) -> Opt
     None
 }
 
-/// Identity Section (0x0001, 40 bytes normative)
+/// Identity Section (0x0001, 40 bytes normative, naturally aligned in RAM)
 #[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct SectionIdentity {
-    pub name_str: u16,
-    pub version: [u8; 3],
-    pub min_kernel_abi: u16,
-    pub author: [u8; 12],
     pub build_timestamp: u32,
+    pub name_str: u16,
+    pub min_kernel_abi: u16,
     pub icon_asset: u16,
     pub flags: u16,
+    pub version: [u8; 3],
+    pub author: [u8; 12],
     pub reserved: [u8; 13],
 }
 
-const _: () = assert!(core::mem::size_of::<SectionIdentity>() == 40);
+const _: () = {
+    assert!(core::mem::size_of::<SectionIdentity>() == 40);
+    assert!(core::mem::align_of::<SectionIdentity>() == 4);
+};
 
 impl SectionIdentity {
     pub const SIZE: usize = 40;
@@ -560,15 +563,20 @@ impl SectionExecution {
     }
 }
 
-/// CapBinding Record (6 bytes, Section 8.1 normative)
+/// CapBinding Record (6 or 8 bytes on flash, naturally aligned in RAM)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct CapBinding {
     pub interface_id: u16,
     pub min_abi: u16,
     pub flags: u16,
     pub slot_idx: u16,
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<CapBinding>() == 8);
+    assert!(core::mem::align_of::<CapBinding>() == 2);
+};
 
 impl CapBinding {
     pub const SIZE: usize = 6;

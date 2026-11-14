@@ -1,7 +1,7 @@
 //! Passcode Security State, Enums, and FNV-1a Hashing.
 
 use super::super::constants::*;
-use crypto::buffer::SecretBuffer;
+use crypto::buffer::SecretBuf;
 
 pub const PASSCODE_FLAG_ENABLED: u8 = 1 << 0;
 pub const PASSCODE_FLAG_LOCK_BOOT: u8 = 1 << 1;
@@ -21,7 +21,7 @@ pub struct PasscodeState {
     pub is_locked: bool,
     pub tries_failed: u8,
     pub max_tries: u8,
-    pub master_key: SecretBuffer,
+    pub master_key: SecretBuf<32>,
 }
 
 impl PasscodeState {
@@ -30,7 +30,7 @@ impl PasscodeState {
             is_locked: false,
             tries_failed: 0,
             max_tries: 0,
-            master_key: SecretBuffer::new(),
+            master_key: SecretBuf::new(),
         }
     }
 
@@ -39,7 +39,7 @@ impl PasscodeState {
             is_locked: false,
             tries_failed: 0,
             max_tries: DEFAULT_MAX_TRIES,
-            master_key: SecretBuffer::new(),
+            master_key: SecretBuf::new(),
         }
     }
 

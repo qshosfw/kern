@@ -131,7 +131,9 @@ fn init_system_services(
     calibration.load_into(hw.filesystem, &mcu_uid);
     let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
     power_service.load_battery_config(&master_cfg.battery);
-    power_service.battery_driver.calib_const = calibration.battery_calib_const();
+    power_service
+        .battery_driver
+        .set_calib_const(calibration.battery_calib_const());
     hw.radio.set_xtal_freq_trim(calibration.xtal_freq_low());
 
     hw.key_scanner.configure(

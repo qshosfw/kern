@@ -30,7 +30,12 @@ pub fn update_raw_crc(buf: &mut [u8]) {
     let len = buf.len();
     if len > 4 {
         let crc = crypto::crc::CrcEngine::crc32(&buf[..len - 4]);
-        buf[len - 4..].copy_from_slice(&crc.to_le_bytes());
+        let b = crc.to_le_bytes();
+        let tail = len - 4;
+        buf[tail] = b[0];
+        buf[tail + 1] = b[1];
+        buf[tail + 2] = b[2];
+        buf[tail + 3] = b[3];
     }
 }
 
@@ -40,7 +45,8 @@ pub fn is_raw_valid(buf: &[u8], expected_version: u8) -> bool {
         return false;
     }
     let calc_crc = crypto::crc::CrcEngine::crc32(&buf[..len - 4]);
-    let stored_crc = u32::from_le_bytes(buf[len - 4..].try_into().unwrap_or([0; 4]));
+    let tail = len - 4;
+    let stored_crc = u32::from_le_bytes([buf[tail], buf[tail + 1], buf[tail + 2], buf[tail + 3]]);
     stored_crc == calc_crc
 }
 

@@ -64,7 +64,7 @@ impl CdcEngine {
 
     pub fn push_rx(&mut self, data: &[u8]) {
         for &b in data {
-            let next_head = (self.rx_head + 1) % CDC_RX_BUF_SIZE;
+            let next_head = (self.rx_head + 1) & (CDC_RX_BUF_SIZE - 1);
             if next_head != self.rx_tail {
                 self.rx_buf[self.rx_head] = b;
                 self.rx_head = next_head;
@@ -76,7 +76,7 @@ impl CdcEngine {
         let mut count = 0;
         while self.rx_head != self.rx_tail && count < buf.len() {
             buf[count] = self.rx_buf[self.rx_tail];
-            self.rx_tail = (self.rx_tail + 1) % CDC_RX_BUF_SIZE;
+            self.rx_tail = (self.rx_tail + 1) & (CDC_RX_BUF_SIZE - 1);
             count += 1;
         }
         count

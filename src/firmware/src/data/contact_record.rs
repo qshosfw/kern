@@ -13,9 +13,9 @@
 //! - APRS callsigns & SSIDs
 //! - Mesh neighbor telemetry (RSSI, battery, LQI, role)
 
-/// 32-byte packed, power-of-two aligned contact record.
+/// 32-byte naturally-aligned, power-of-two contact record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C, packed)]
+#[repr(C)]
 pub struct ContactRecord {
     pub address: [u8; 6],
     pub contact_type: u8,
@@ -30,7 +30,10 @@ pub struct ContactRecord {
     pub reserved: [u8; 2],
 }
 
-const _: () = assert!(core::mem::size_of::<ContactRecord>() == 32);
+const _: () = {
+    assert!(core::mem::size_of::<ContactRecord>() == 32);
+    assert!(core::mem::align_of::<ContactRecord>() == 2);
+};
 
 impl ContactRecord {
     pub const SIZE: usize = 32;

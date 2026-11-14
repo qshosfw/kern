@@ -12,7 +12,7 @@ use super::constants::*;
 pub use super::kdf::ProgressHook;
 use super::keychain::{PackedPasscodeKey, PackedStorageKey, derive_passcode_kek};
 use crate::services::SystemStorage;
-use crypto::buffer::SecretBuffer;
+use crypto::buffer::SecretBuf;
 use crypto::trng::HardwareTrng;
 
 /// Initializes Passcode state on boot:
@@ -93,7 +93,7 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
                     }
                 }
                 key.iterations = DEFAULT_PBKDF_ITERATIONS;
-                let mut default_verifier = SecretBuffer::new();
+                let mut default_verifier = SecretBuf::<32>::new();
                 derive_passcode_kek(
                     &uid,
                     DEFAULT_PASSCODE_SEED,
@@ -166,7 +166,7 @@ pub fn verify_passcode(
     }
 
     let uid_current = bsp::uid::read_mcu_uid();
-    let mut computed = SecretBuffer::new();
+    let mut computed = SecretBuf::<32>::new();
 
     let hook_copy = progress;
     let (p_cb1, p_cb2) = if let Some(ref h) = hook_copy {
@@ -201,7 +201,7 @@ pub fn verify_passcode(
         state.unlock();
 
         if key.iterations != DEFAULT_PBKDF_ITERATIONS {
-            let mut new_verifier = SecretBuffer::new();
+            let mut new_verifier = SecretBuf::<32>::new();
             super::keychain::derive_passcode_kek(
                 &uid_current,
                 passcode,
@@ -296,7 +296,7 @@ pub fn set_passcode(
         hook.report(15);
     }
 
-    let mut passcode_verifier = SecretBuffer::new();
+    let mut passcode_verifier = SecretBuf::<32>::new();
     super::keychain::derive_passcode_kek(
         &uid,
         new_passcode,
@@ -393,7 +393,7 @@ pub fn disable_passcode(
         None,
     )?;
 
-    let mut default_verifier = SecretBuffer::new();
+    let mut default_verifier = SecretBuf::<32>::new();
     derive_passcode_kek(
         &uid,
         DEFAULT_PASSCODE_SEED,

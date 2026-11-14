@@ -64,17 +64,44 @@ impl<'a> ByteWriter<'a> {
 
     #[inline(never)]
     pub fn write_u16_le(&mut self, val: u16) -> bool {
-        self.write_bytes(&val.to_le_bytes())
+        if self.remaining() >= 2 {
+            self.buf[self.pos] = val as u8;
+            self.buf[self.pos + 1] = (val >> 8) as u8;
+            self.pos += 2;
+            true
+        } else {
+            false
+        }
     }
 
     #[inline(never)]
     pub fn write_u32_le(&mut self, val: u32) -> bool {
-        self.write_bytes(&val.to_le_bytes())
+        if self.remaining() >= 4 {
+            let mut v = val;
+            for i in 0..4 {
+                self.buf[self.pos + i] = v as u8;
+                v >>= 8;
+            }
+            self.pos += 4;
+            true
+        } else {
+            false
+        }
     }
 
     #[inline(never)]
     pub fn write_u64_le(&mut self, val: u64) -> bool {
-        self.write_bytes(&val.to_le_bytes())
+        if self.remaining() >= 8 {
+            let mut v = val;
+            for i in 0..8 {
+                self.buf[self.pos + i] = v as u8;
+                v >>= 8;
+            }
+            self.pos += 8;
+            true
+        } else {
+            false
+        }
     }
 
     #[inline(always)]
