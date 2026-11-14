@@ -415,7 +415,12 @@ mod tests {
         let fs = KernFS::new(&mut flash);
         let mut drv = FileSystemDriver::new(fs);
 
-        for bad in ["", "relative", "/user/../sys", "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p"] {
+        for bad in [
+            "",
+            "relative",
+            "/user/../sys",
+            "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p",
+        ] {
             assert!(!drv.exists(bad));
             assert_eq!(drv.remove(bad), Err(StorageError::InvalidPath));
             assert_eq!(drv.file_size(bad), Err(StorageError::InvalidPath));
@@ -426,7 +431,10 @@ mod tests {
                 Err(StorageError::InvalidPath)
             );
             let mut entries = [const { DirEntryInfo::empty() }; 2];
-            assert_eq!(drv.list_dir(bad, &mut entries), Err(StorageError::InvalidPath));
+            assert_eq!(
+                drv.list_dir(bad, &mut entries),
+                Err(StorageError::InvalidPath)
+            );
         }
 
         let mut entries = [const { DirEntryInfo::empty() }; 2];

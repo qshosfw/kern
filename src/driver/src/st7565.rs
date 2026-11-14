@@ -90,6 +90,30 @@ impl<'a> St7565<'a> {
     pub fn turn_off(&mut self) {
         self.cs.set_low();
         self.write_cmd(0xAE); // Display OFF
+        self.spi.wait_idle();
+        self.cs.set_high();
+    }
+
+    /// Enter ST7565 sub-microamp Sleep mode (`0xAE` Display OFF + `0xA5` All Points ON).
+    /// Retains display RAM and bias configuration so `exit_sleep()` avoids a 42 ms cold reset.
+    pub fn enter_sleep(&mut self) {
+        self.cs.set_low();
+        self.write_cmd(0xAE);
+        self.write_cmd(0xA5);
+        self.spi.wait_idle();
+        self.cs.set_high();
+    }
+
+    /// Exit ST7565 Sleep mode cleanly (`0x2F` booster + `0xA4` + `0x40` + `0xAF`).
+    pub fn exit_sleep(&mut self) {
+        self.cs.set_low();
+        self.write_cmd(0x2F); // Re-enable VB/VR/VF power circuits
+        #[cfg(target_arch = "arm")]
+        py32_hal::delay::delay_ms(2);
+        self.write_cmd(0xA4); // Normal RAM display
+        self.write_cmd(0x40); // Start line 0
+        self.write_cmd(0xAF); // Display ON
+        self.spi.wait_idle();
         self.cs.set_high();
     }
 

@@ -61,6 +61,29 @@ fn drain_keypad_matrix(hw: &mut SystemHardware) {
     hw.key_scanner.clear();
 }
 
+const WAKE_HOLD_STEPS: u8 = 9; // ~9 x 50 ms (~450 ms) hold to wake
+const LPTIM_IDLE_TICKS: u16 = 4096; // ~4.0 s @ 1024 Hz LSI/32 (< 6.0 s IWDG)
+const LPTIM_HOLD_TICKS: u16 = 52; // ~50 ms @ 1024 Hz
+
+/// Advances hold-to-wake state for `KeyCode::Exit` during STOP sleep.
+/// Returns `None` once held across `WAKE_HOLD_STEPS`, or `Some(lptim_ticks)` for the next sleep window.
+#[inline(always)]
+fn next_stop_sleep_ticks(exit_held: bool, hold_steps: &mut u8) -> Option<u16> {
+    if exit_held {
+        *hold_steps = hold_steps.saturating_add(1);
+        if *hold_steps >= WAKE_HOLD_STEPS {
+            return None;
+        }
+        Some(LPTIM_HOLD_TICKS)
+    } else {
+        *hold_steps = 0;
+        Some(LPTIM_IDLE_TICKS)
+    }
+}
+
+/// Latched `EXTI4_15` pending mask captured inside ISR for STOP wakeup dispatch.
+pub static WAKE_EXTI_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 #[inline(never)]
 fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // 1. Play gentle descending power-down cue
@@ -68,12 +91,15 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         .play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
     py32_hal::delay::delay_ms(100);
 
-    // 2. Shut down power-hungry subsystems
+    // 2. Shut down power-hungry subsystems and enter chip standby states
     hw.backlight.turn_off();
-    hw.lcd.turn_off();
+    hw.lcd.enter_sleep();
     hw.audio.disable();
     hw.radio.sleep();
     hw.radio.set_status_led(bsp::StatusLed::Off);
+    bsp::pins::FLASHLIGHT.set_low();
+    #[cfg(feature = "filesystem")]
+    hw.filesystem.fs.dev.deep_power_down();
     #[cfg(feature = "usb")]
     {
         // Avoid USB bus disturbance during deep sleep: release soft connect and clear endpoints
@@ -93,78 +119,75 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     drain_keypad_matrix(hw);
 
     // 5. Downclock to direct 16 MHz HSI, shut off analog PLL, and set flash to 0WS
-    // This dramatically cuts dynamic core power and eliminates PLL analog consumption.
+    // (automatically resynchronizes USART1 BRR to 16 MHz).
     py32_hal::rcc::set_sysclk_16mhz();
-    #[cfg(feature = "uart")]
-    py32_hal::uart::set_baud(115200);
 
-    // 6. Deep Sleep Retention Loop (WFI / Low-Power sleep)
-    // Feeds watchdog periodically while keeping displays, audio PA, and RF powered down.
-    // Blinks Red status LED periodically (10ms strobe every 5s) to indicate low-power sleep with minimal battery consumption.
-    // Wakes ONLY when the Exit key is held down continuously for 1.2 seconds (with solid Red LED feedback) or RigWire connects.
-    let mut next_blink_ms = py32_hal::delay::millis().wrapping_add(5000);
-    let mut last_scan_ms = py32_hal::delay::millis();
-    let mut exit_press_start: Option<u32> = None;
-    const WAKE_HOLD_MS: u32 = 1200;
+    // 6. Park peripheral/matrix pins and arm LPTIM1 + EXTI15 (Exit) [+ EXTI10 UART] for true STOP mode
+    py32_hal::lptim::LowPowerTimer::init();
+    let saved_pins = bsp::pins::park_for_stop(cfg!(feature = "uart"));
+
+    py32_hal::exti::select_port(15, py32_hal::exti::Port::GpioB);
+    py32_hal::exti::enable_line(15, py32_hal::exti::TriggerEdge::Falling);
+    #[cfg(feature = "uart")]
+    {
+        py32_hal::exti::select_port(10, py32_hal::exti::Port::GpioA);
+        py32_hal::exti::enable_line(10, py32_hal::exti::TriggerEdge::Falling);
+    }
+    let exti_mask: u32 = if cfg!(feature = "uart") {
+        (1 << 15) | (1 << 10)
+    } else {
+        1 << 15
+    };
+    py32_hal::exti::clear_pending_mask(exti_mask);
+
+    use py32_hal::pac::Interrupt;
+    unsafe {
+        py32_hal::pac::nvic_clear_pending(Interrupt::EXTI4_15 as u8);
+        py32_hal::pac::nvic_clear_pending(Interrupt::TIM6_LPTIM1_DAC as u8);
+        py32_hal::pac::nvic_enable(Interrupt::EXTI4_15 as u8);
+        py32_hal::pac::nvic_enable(Interrupt::TIM6_LPTIM1_DAC as u8);
+    }
+
+    let mut exit_hold_steps: u8 = 0;
 
     'sleep_loop: loop {
         py32_hal::wdt::Watchdog::feed();
 
-        #[cfg(feature = "uart")]
-        if py32_hal::uart::is_readable() {
+        let Some(sleep_ticks) =
+            next_stop_sleep_ticks(bsp::pins::is_exit_held_parked(), &mut exit_hold_steps)
+        else {
             break 'sleep_loop;
-        }
+        };
 
-        let now = py32_hal::delay::millis();
+        WAKE_EXTI_FLAGS.store(0, core::sync::atomic::Ordering::Release);
+        py32_hal::exti::clear_pending_mask(exti_mask);
+        py32_hal::lptim::LowPowerTimer::start_single_shot_irq(sleep_ticks, true);
+        py32_hal::pwr::enter_stop();
 
-        // Throttle hardware keyboard matrix polling to 20ms intervals (50 Hz).
-        // This eliminates continuous spin-delays on GPIOs and allows Cortex-M0+ to remain in WFI.
-        if now.wrapping_sub(last_scan_ms) >= 20 {
-            last_scan_ms = now;
-            let key = drivers::keyboard::KeypadScanner::poll_matrix();
+        py32_hal::wdt::Watchdog::feed();
 
-            if key == Some(KeyCode::Exit) {
-                match exit_press_start {
-                    None => {
-                        exit_press_start = Some(now);
-                        // Solid Red LED provides immediate tactile feedback that hold-to-wake is active
-                        hw.radio.set_status_led(bsp::StatusLed::Red);
-                    }
-                    Some(start) => {
-                        if now.wrapping_sub(start) >= WAKE_HOLD_MS {
-                            break 'sleep_loop;
-                        }
-                    }
-                }
-            } else if exit_press_start.is_some() {
-                // Exit released before reaching hold target: turn off feedback LED
-                exit_press_start = None;
-                hw.radio.set_status_led(bsp::StatusLed::Off);
+        #[cfg(feature = "uart")]
+        if (WAKE_EXTI_FLAGS.load(core::sync::atomic::Ordering::Acquire) & (1 << 10)) != 0 {
+            py32_hal::delay::delay_ms(2);
+            if py32_hal::uart::is_readable() {
+                break 'sleep_loop;
             }
-        }
-
-        // Heartbeat blink only when user is not actively holding Exit
-        if exit_press_start.is_none() && now.wrapping_sub(next_blink_ms) < 0x8000_0000 {
-            // Heartbeat: strobe Red status LED briefly (10ms) via BK4829 GPIO1
-            hw.radio.set_status_led(bsp::StatusLed::Red);
-            py32_hal::delay::delay_ms(10);
-            hw.radio.set_status_led(bsp::StatusLed::Off);
-            next_blink_ms = now.wrapping_add(5000);
-        }
-
-        if exit_press_start.is_some() {
-            py32_hal::delay::delay_ms(10);
-        } else {
-            cortex_m::asm::wfi();
         }
     }
 
-    hw.radio.set_status_led(bsp::StatusLed::Off);
+    // 7. Disarm sleep wake IRQs and restore GPIOs & external peripherals
+    unsafe {
+        py32_hal::pac::nvic_disable(Interrupt::EXTI4_15 as u8);
+        py32_hal::pac::nvic_disable(Interrupt::TIM6_LPTIM1_DAC as u8);
+    }
+    py32_hal::exti::disable_lines(exti_mask);
+    py32_hal::lptim::LowPowerTimer::stop();
 
-    // Wait for key release upon waking to prevent spurious key events
-    drain_keypad_matrix(hw);
+    bsp::pins::restore_from_stop(&saved_pins);
 
-    // 7. Wakeup & Hardware Restoration
+    #[cfg(feature = "filesystem")]
+    hw.filesystem.fs.dev.release_power_down();
+
     #[cfg(feature = "uart")]
     py32_hal::uart::clear_errors();
     #[cfg(feature = "usb")]
@@ -172,8 +195,11 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     hw.wire.reset_collector();
 
-    // Re-initialize LCD panel and clear dirty state
-    hw.lcd.init();
+    // Exit LCD sleep and restore clocks, UART baud, audio, and display hardware from master config
+    hw.lcd.exit_sleep();
+    crate::master_config().hw_dirty = 0x1F;
+    hw.apply_dirty_configs();
+
     let canvas = crate::system_canvas();
     canvas.mark_all_dirty();
     hw.lcd.blit(canvas);
@@ -188,10 +214,6 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         hw.radio
             .configure_channel(crate::radio_state().coord.listening_channel());
     }
-
-    // Restore clocks, UART baud, audio, and display hardware from master config
-    crate::master_config().hw_dirty = 0x1F;
-    hw.apply_dirty_configs();
 
     // Sound unlock confirmation chime
     hw.radio
@@ -542,5 +564,44 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
         // Sleep until next event/interrupt
         cortex_m::asm::wfi();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stop_hold_to_wake_transitions() {
+        let mut steps = 0u8;
+        assert_eq!(
+            next_stop_sleep_ticks(false, &mut steps),
+            Some(LPTIM_IDLE_TICKS)
+        );
+        assert_eq!(steps, 0);
+
+        for expected in 1..WAKE_HOLD_STEPS {
+            assert_eq!(
+                next_stop_sleep_ticks(true, &mut steps),
+                Some(LPTIM_HOLD_TICKS)
+            );
+            assert_eq!(steps, expected);
+        }
+
+        // Releasing before threshold drops immediately back to 4s idle STOP ticks
+        assert_eq!(
+            next_stop_sleep_ticks(false, &mut steps),
+            Some(LPTIM_IDLE_TICKS)
+        );
+        assert_eq!(steps, 0);
+
+        // Holding through full threshold triggers wakeup (`None`)
+        for _ in 1..WAKE_HOLD_STEPS {
+            assert_eq!(
+                next_stop_sleep_ticks(true, &mut steps),
+                Some(LPTIM_HOLD_TICKS)
+            );
+        }
+        assert_eq!(next_stop_sleep_ticks(true, &mut steps), None);
     }
 }

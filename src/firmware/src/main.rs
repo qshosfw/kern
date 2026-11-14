@@ -108,6 +108,28 @@ fn SysTick() {
     drivers::backlight::systick_pwm_tick();
 }
 
+/// EXTI lines 4..=15 interrupt handler (deep-sleep Exit key PB15 & UART RX PA10 wake).
+#[cfg(all(not(test), target_arch = "arm"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn EXTI4_15() {
+    let pr = unsafe { pac::exti::EXTI_PR.read_volatile() };
+    let mask = pr & 0xFFF0;
+    if mask != 0 {
+        let prev = crate::system::WAKE_EXTI_FLAGS.load(core::sync::atomic::Ordering::Relaxed);
+        crate::system::WAKE_EXTI_FLAGS.store(prev | mask, core::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            pac::exti::EXTI_PR.write_volatile(mask);
+        }
+    }
+}
+
+/// TIM6 / LPTIM1 / DAC interrupt handler (deep-sleep 4s watchdog cadence wakeup).
+#[cfg(all(not(test), target_arch = "arm"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn TIM6_LPTIM1_DAC() {
+    hal::lptim::LowPowerTimer::clear_expired();
+}
+
 #[cfg(not(test))]
 #[entry]
 fn main() -> ! {

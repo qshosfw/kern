@@ -32,7 +32,9 @@ pub fn select_port(pin: u8, port: Port) {
 }
 
 pub fn enable_line(line: u8, trigger: TriggerEdge) {
-    assert!(line < 32);
+    if line >= 32 {
+        return;
+    }
     unsafe {
         // Enable interrupt mask for this line
         let imr = exti::EXTI_IMR.read_volatile();
@@ -65,23 +67,37 @@ pub fn enable_line(line: u8, trigger: TriggerEdge) {
 }
 
 pub fn disable_line(line: u8) {
-    assert!(line < 32);
+    if line < 32 {
+        disable_lines(1 << line);
+    }
+}
+
+/// Mask multiple EXTI interrupt lines simultaneously.
+#[inline(always)]
+pub fn disable_lines(mask: u32) {
     unsafe {
-        // Disable interrupt mask for this line
         let imr = exti::EXTI_IMR.read_volatile();
-        exti::EXTI_IMR.write_volatile(imr & !(1 << line));
+        exti::EXTI_IMR.write_volatile(imr & !mask);
     }
 }
 
 pub fn is_pending(line: u8) -> bool {
-    assert!(line < 32);
+    if line >= 32 {
+        return false;
+    }
     unsafe { (exti::EXTI_PR.read_volatile() & (1 << line)) != 0 }
 }
 
 pub fn clear_pending(line: u8) {
-    assert!(line < 32);
+    if line < 32 {
+        clear_pending_mask(1 << line);
+    }
+}
+
+/// Acknowledge and clear all pending EXTI bits specified in `mask`.
+#[inline(always)]
+pub fn clear_pending_mask(mask: u32) {
     unsafe {
-        // Clear pending bit by writing 1
-        exti::EXTI_PR.write_volatile(1 << line);
+        exti::EXTI_PR.write_volatile(mask);
     }
 }

@@ -20,6 +20,24 @@ impl<'a> Py25q16FlashDriver<'a> {
         self.cs.set_high();
     }
 
+    /// Enter Deep Power-Down (`0xB9`, <1 uA standby until `release_power_down()`).
+    pub fn deep_power_down(&mut self) {
+        self.cs_assert();
+        self.spi.write_byte(0xB9);
+        self.spi.wait_idle();
+        self.cs_release();
+    }
+
+    /// Release from Deep Power-Down (`0xAB` + >=30 us recovery window).
+    pub fn release_power_down(&mut self) {
+        self.cs_assert();
+        self.spi.write_byte(0xAB);
+        self.spi.wait_idle();
+        self.cs_release();
+        #[cfg(target_arch = "arm")]
+        py32_hal::delay::delay_us(30);
+    }
+
     #[inline(always)]
     fn cs_assert(&mut self) {
         self.cs.set_low();

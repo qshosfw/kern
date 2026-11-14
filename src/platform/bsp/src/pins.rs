@@ -141,3 +141,94 @@ pub fn disable_swd() {
     use py32_pac as pac;
     py32_hal::gpio::set_pins_analog(pac::gpio::GPIOA_BASE, pac::gpio::PIN_13 | pac::gpio::PIN_14);
 }
+
+const STOP_PORTS: [u32; 3] = [
+    py32_pac::gpio::GPIOA_BASE,
+    py32_pac::gpio::GPIOB_BASE,
+    py32_pac::gpio::GPIOF_BASE,
+];
+
+/// Park active peripheral and matrix GPIO pins in Analog / idle states before entering `PWR Stop`.
+/// Saves the 6 `MODER`/`PUPDR` registers for ports A, B, F so `restore_from_stop()` can restore
+/// exact pre-sleep pin states (including dynamic AF, DAC, and SWD settings) in ~40 bytes of code.
+pub fn park_for_stop(uart_rx_wake: bool) -> [u32; 6] {
+    use py32_pac::gpio as g;
+
+    let mut saved = [0u32; 6];
+    for (idx, &base) in STOP_PORTS.iter().enumerate() {
+        unsafe {
+            saved[idx * 2] = ((base + g::MODER_OFFSET) as *const u32).read_volatile();
+            saved[idx * 2 + 1] = ((base + g::PUPDR_OFFSET) as *const u32).read_volatile();
+        }
+    }
+
+    FLASHLIGHT.set_low();
+    AUDIO_PA.set_low();
+    BACKLIGHT.set_low();
+    FLASH_CS.set_high();
+    LCD_CS.set_high();
+    BK_CSN.set_high();
+
+    let mut gpioa_analog =
+        g::PIN_0 | g::PIN_1 | g::PIN_2 | g::PIN_5 | g::PIN_6 | g::PIN_7 | g::PIN_9;
+    if !uart_rx_wake {
+        gpioa_analog |= g::PIN_10;
+    } else {
+        let rx = Pin::new(g::GPIOA_BASE, 10);
+        rx.configure_input(g::PULL_UP);
+    }
+    py32_hal::gpio::set_pins_analog(g::GPIOA_BASE, gpioa_analog);
+
+    // Park unused keypad columns/rows, BK SPI lines, and PTT in Analog to eliminate floating pull leakage.
+    py32_hal::gpio::set_pins_analog(
+        g::GPIOB_BASE,
+        g::PIN_4
+            | g::PIN_5
+            | g::PIN_6
+            | g::PIN_8
+            | g::PIN_9
+            | g::PIN_10
+            | g::PIN_12
+            | g::PIN_13
+            | g::PIN_14,
+    );
+
+    // Park BK1080 I2C pins in Analog
+    py32_hal::gpio::set_pins_analog(g::GPIOF_BASE, g::PIN_5 | g::PIN_6);
+
+    // Arm ONLY Exit key column (PB3 low) and Row 0 (PB15 pull-up) for EXTI15 falling-edge wake.
+    KB_COLS[3].configure_output(g::SPEED_LOW);
+    KB_COLS[3].set_low();
+    KB_ROWS[0].configure_input(g::PULL_UP);
+
+    saved
+}
+
+/// Checks whether `KeyCode::Exit` (`PB3` -> `PB15`) is held while matrix pins are parked for STOP.
+/// Distinguishes `Exit` from `Side1` (direct `PB15 -> GND`) by briefly releasing `PB3` high.
+pub fn is_exit_held_parked() -> bool {
+    KB_COLS[3].set_low();
+    cortex_m::asm::delay(48);
+    if KB_ROWS[0].is_high() {
+        return false;
+    }
+    KB_COLS[3].set_high();
+    cortex_m::asm::delay(48);
+    let released_high = KB_ROWS[0].is_high();
+    KB_COLS[3].set_low();
+    released_high
+}
+
+/// Restore GPIO `MODER`/`PUPDR` registers and keypad idle outputs after waking from `PWR Stop`.
+pub fn restore_from_stop(saved: &[u32; 6]) {
+    use py32_pac::gpio as g;
+    cortex_m::interrupt::free(|_| unsafe {
+        for (idx, &base) in STOP_PORTS.iter().enumerate() {
+            ((base + g::MODER_OFFSET) as *mut u32).write_volatile(saved[idx * 2]);
+            ((base + g::PUPDR_OFFSET) as *mut u32).write_volatile(saved[idx * 2 + 1]);
+        }
+    });
+    for col in &KB_COLS {
+        col.set_high();
+    }
+}

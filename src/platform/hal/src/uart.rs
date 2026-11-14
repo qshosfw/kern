@@ -28,24 +28,19 @@ pub fn init() {
     rx.set_pull(pac::gpio::PULL_UP);
     rx.configure_af(pac::gpio::AF1, pac::gpio::SPEED_MEDIUM);
 
-    let baud = CURRENT_BAUD.load(Ordering::Relaxed);
-    let pclk = rcc::sysclk_hz();
     unsafe {
         // Disable USART before configuration
         usart::USART_CR1.write_volatile(0);
-
-        // Baud rate: BRR = PCLK / baud
-        let brr = (pclk + (baud >> 1)) / baud;
-        usart::USART_BRR.write_volatile(brr);
 
         // CR2: 1 stop bit (default 0)
         usart::USART_CR2.write_volatile(0);
         // CR3: no flow control (default 0)
         usart::USART_CR3.write_volatile(0);
 
-        // CR1: Enable USART, TX, RX (8-bit word, no parity)
+        // CR1: Enable USART, TX, RX (8-bit word, no parity), then sync BRR
         usart::USART_CR1.write_volatile(usart::CR1_UE | usart::CR1_TE | usart::CR1_RE);
     }
+    resync_clock(rcc::sysclk_hz());
 }
 
 /// Dynamically update USART1 baud rate (e.g. 115200 or 38400)
