@@ -385,18 +385,6 @@ impl View<TextInputModel> for TextInputView {
             let is_held = *state == KeyState::Held;
             let is_released = *state == KeyState::Released;
 
-            fn push_char_with_limit(model: &mut TextInputModel, ch: char) {
-                if model.buffer.len() < model.max_len {
-                    let _ = model.buffer.push(ch);
-                }
-                #[cfg(feature = "passcode")]
-                if model.is_passcode && model.expose_len && model.buffer.len() >= model.max_len {
-                    model.last_key = None;
-                    model.press_count = 0;
-                    model.is_done = true;
-                }
-            }
-
             // 1. Explicit KeyState::Held fallback (for drivers/simulators sending Held)
             if is_held {
                 match code {
@@ -411,8 +399,7 @@ impl View<TextInputModel> for TextInputView {
                     }
                     _ => {
                         if let Some(digit) = code.to_digit() {
-                            Self::confirm_current_char(model);
-                            push_char_with_limit(model, (b'0' + digit) as char);
+                            confirm_and_push(model, (b'0' + digit) as char);
                             return true;
                         }
                     }
@@ -443,8 +430,7 @@ impl View<TextInputModel> for TextInputView {
             if is_pressed {
                 if let Some(key_num) = code.to_digit() {
                     if model.digits_only || model.charset == Charset::Numbers {
-                        Self::confirm_current_char(model);
-                        push_char_with_limit(model, (b'0' + key_num) as char);
+                        confirm_and_push(model, (b'0' + key_num) as char);
                         model.last_activity_tick = model.ticks;
                         return true;
                     }
@@ -469,8 +455,7 @@ impl View<TextInputModel> for TextInputView {
                         let _ = model.buffer.push(new_ch);
                     } else {
                         // First tap on a new key
-                        Self::confirm_current_char(model);
-                        push_char_with_limit(model, chars[0] as char);
+                        confirm_and_push(model, chars[0] as char);
                         model.last_key = Some(key_num);
                         model.press_count = 0;
                     }
@@ -515,6 +500,21 @@ impl View<TextInputModel> for TextInputView {
     }
 }
 
+#[inline(never)]
+fn confirm_and_push(model: &mut TextInputModel, ch: char) {
+    TextInputView::confirm_current_char(model);
+    if model.buffer.len() < model.max_len {
+        let _ = model.buffer.push(ch);
+    }
+    #[cfg(feature = "passcode")]
+    if model.is_passcode && model.expose_len && model.buffer.len() >= model.max_len {
+        model.last_key = None;
+        model.press_count = 0;
+        model.is_done = true;
+    }
+}
+
+#[inline(never)]
 fn cancel_input(model: &mut TextInputModel) {
     model.exit_held = true;
     model.exit_pressed = false;
