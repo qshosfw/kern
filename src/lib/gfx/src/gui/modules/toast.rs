@@ -77,7 +77,7 @@ impl View<ToastModel> for ToastView {
         // Calculate width from message length (~4px per character in TomThumb)
         let text_w = (model.message.len() as i16 * 4).min(112);
         let badge_w = (text_w + 12).min(124) as u8;
-        let badge_x = (128 - badge_w) / 2;
+        let badge_x = (128 - badge_w) >> 1;
         let badge_y = 26u8; // Centered vertically
         let badge_h = 13u8;
 
@@ -86,14 +86,14 @@ impl View<ToastModel> for ToastView {
         canvas.draw_rect(badge_x, badge_y, badge_w, badge_h, Color::Clear);
 
         // Center text in badge
-        let text_x = badge_x as i16 + ((badge_w as i16 - text_w) / 2);
-        text::draw_str(
+        text::draw_str_align(
             canvas,
-            text_x,
+            64,
             badge_y as i16 + 8,
             model.message.as_str(),
             &TOMTHUMB,
             Color::Clear,
+            text::Align::Center,
         );
     }
 

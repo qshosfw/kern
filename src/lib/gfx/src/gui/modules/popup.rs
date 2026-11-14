@@ -116,12 +116,12 @@ impl View<PopupModel> for PopupView {
         };
         let sheet_y = 18i16 + y_offset as i16;
 
-        let badges = match (model.confirm_label, model.cancel_label) {
-            (Some(c), Some(x)) => Some((c, x)),
-            (Some(c), None) => Some((c, "")),
-            (None, Some(x)) => Some(("", x)),
-            (None, None) => None,
-        };
+        let badges = has_badges.then(|| {
+            (
+                model.confirm_label.unwrap_or(""),
+                model.cancel_label.unwrap_or(""),
+            )
+        });
         widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, badges, y_offset);
 
         // Body text rendering (TomThumb, multi-line aware with padding)
