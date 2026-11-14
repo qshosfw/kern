@@ -8,6 +8,108 @@ use crypto::crc::CrcEngine;
 
 pub const BOOT_RECORD_IDENT: [u8; 4] = [0xC0, 0xDE, 0x02, 0xFD];
 
+/// Semantic Thumb-16 `udf #imm8` trap codes (`0 B` `.rodata` per trap site).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TrapCode {
+    AssertFail = 0x01,
+    KernelLock = 0x02,
+    StackCanary = 0x03,
+    PagerIo = 0x04,
+    AllocInvariant = 0x05,
+    RadioLock = 0x06,
+    RustPanic = 0xFE,
+}
+
+impl TrapCode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::AssertFail => "ASSERT",
+            Self::KernelLock => "KLOCK",
+            Self::StackCanary => "CANARY",
+            Self::PagerIo => "PAGER_IO",
+            Self::AllocInvariant => "ALLOC",
+            Self::RadioLock => "RFLOCK",
+            Self::RustPanic => "PANIC",
+        }
+    }
+
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0x01 => Some(Self::AssertFail),
+            0x02 => Some(Self::KernelLock),
+            0x03 => Some(Self::StackCanary),
+            0x04 => Some(Self::PagerIo),
+            0x05 => Some(Self::AllocInvariant),
+            0x06 => Some(Self::RadioLock),
+            0xFE => Some(Self::RustPanic),
+            _ => None,
+        }
+    }
+}
+
+/// Callee-saved and silicon control registers captured in `.uninit` prior to `MSP` rewind.
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct FaultExtraRegs {
+    pub callee: [u32; 8], // r4..r11
+    pub msp: u32,
+    pub psp: u32,
+    pub rcc_csr: u32,
+    pub icsr: u32,
+    pub valid: u32,
+}
+
+impl FaultExtraRegs {
+    pub const FAULT_EXTRA_IDENT: u32 = 0xF007_CAFE;
+
+    pub const fn empty() -> Self {
+        Self {
+            callee: [0; 8],
+            msp: 0,
+            psp: 0,
+            rcc_csr: 0,
+            icsr: 0,
+            valid: 0,
+        }
+    }
+}
+
+/// Trigger an immediate semantic Thumb-16 `udf` trap (`0 B` `.rodata`).
+#[inline(always)]
+pub fn ktrap(code: TrapCode) -> ! {
+    #[cfg(target_arch = "arm")]
+    unsafe {
+        match code {
+            TrapCode::AssertFail => core::arch::asm!("udf #0x01", options(noreturn)),
+            TrapCode::KernelLock => core::arch::asm!("udf #0x02", options(noreturn)),
+            TrapCode::StackCanary => core::arch::asm!("udf #0x03", options(noreturn)),
+            TrapCode::PagerIo => core::arch::asm!("udf #0x04", options(noreturn)),
+            TrapCode::AllocInvariant => core::arch::asm!("udf #0x05", options(noreturn)),
+            TrapCode::RadioLock => core::arch::asm!("udf #0x06", options(noreturn)),
+            TrapCode::RustPanic => core::arch::asm!("udf #0xFE", options(noreturn)),
+        }
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        panic!("ktrap({:?})", code);
+    }
+}
+
+#[macro_export]
+macro_rules! kassert {
+    ($cond:expr) => {
+        if !$cond {
+            $crate::boot::ktrap($crate::boot::TrapCode::AssertFail);
+        }
+    };
+    ($cond:expr, $code:expr) => {
+        if !$cond {
+            $crate::boot::ktrap($code);
+        }
+    };
+}
+
 /// Reset reason FourCC tags (§13.4 normative)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -108,7 +210,7 @@ pub struct BootSlot {
     pub ident: [u8; 4],
     pub panic_line: u16,
     pub crash_count: u8,
-    pub _reserved: u8,
+    pub trap_code: u8,
     pub crc32: u32,
 }
 
@@ -130,7 +232,7 @@ impl BootSlot {
             ident: [0; 4],
             panic_line: 0,
             crash_count: 0,
-            _reserved: 0,
+            trap_code: 0,
             crc32: 0,
         }
     }
@@ -289,6 +391,47 @@ impl BootSlot {
             Some(ResetReason::Brow) => "battery supply voltage.",
             None => "reset during operation.",
         }
+    }
+}
+
+/// Compact 32-bit backup-domain crash/reboot tag stored in PY32F071 `RTC_ALRH/ALRL`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackupCrashTag {
+    pub strikes: u8,
+    pub flags: u8,
+    pub reason_code: u8,
+}
+
+impl BackupCrashTag {
+    pub const IDENT_BYTE: u8 = 0xA5;
+    pub const FLAG_CLEAN_REBOOT: u8 = 1 << 0;
+    pub const FLAG_DIRTY_CRASH: u8 = 1 << 1;
+    pub const FLAG_SAFE_MODE_REQ: u8 = 1 << 2;
+
+    pub const fn empty() -> Self {
+        Self {
+            strikes: 0,
+            flags: 0,
+            reason_code: 0,
+        }
+    }
+
+    pub const fn decode(raw: u32) -> Option<Self> {
+        if ((raw >> 24) as u8) != Self::IDENT_BYTE {
+            return None;
+        }
+        Some(Self {
+            strikes: ((raw >> 16) & 0xFF) as u8,
+            flags: ((raw >> 8) & 0xFF) as u8,
+            reason_code: (raw & 0xFF) as u8,
+        })
+    }
+
+    pub const fn encode(&self) -> u32 {
+        ((Self::IDENT_BYTE as u32) << 24)
+            | ((self.strikes as u32) << 16)
+            | ((self.flags as u32) << 8)
+            | (self.reason_code as u32)
     }
 }
 

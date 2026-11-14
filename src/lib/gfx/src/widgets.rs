@@ -9,6 +9,7 @@ pub mod radio;
 pub mod s_meter;
 pub mod spectrum;
 pub mod status_bar;
+pub mod text_screen;
 
 pub use badge::*;
 pub use compact_list::*;
@@ -21,3 +22,4 @@ pub use radio::*;
 pub use s_meter::*;
 pub use spectrum::*;
 pub use status_bar::*;
+pub use text_screen::*;

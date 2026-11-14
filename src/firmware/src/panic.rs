@@ -6,10 +6,15 @@
 pub mod baremetal;
 pub mod forensics;
 
+#[cfg(not(test))]
 pub use baremetal::*;
+#[cfg(not(test))]
 pub use forensics::*;
 
-use kernel::boot::{BootRecord, ResetReason};
+use kernel::boot::BootRecord;
+#[cfg(not(test))]
+use kernel::boot::ResetReason;
+#[cfg(not(test))]
 use py32_hal as hal;
 
 #[repr(C)]
@@ -33,17 +38,42 @@ impl BootRecordCell {
     }
 }
 
-pub use crate::BOOT_RECORD;
+#[cfg(not(test))]
+use core::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(test))]
+use kernel::boot::{BackupCrashTag, FaultExtraRegs, TrapCode};
 
-static mut FAULT_REENTRY_LOCK: bool = false;
+pub use crate::BOOT_RECORD;
+#[cfg(not(test))]
+pub use crate::FAULT_EXTRA;
+
+#[cfg(not(test))]
+static FAULT_REENTRY_LOCK: AtomicBool = AtomicBool::new(false);
 
 /// Bare-metal naked HardFault exception entry.
-#[cfg(target_arch = "arm")]
+/// Captures `r4..r11`, `msp`, `psp`, `RCC_CSR`, and `SCB_ICSR` before rewinding `MSP`.
+#[cfg(all(target_arch = "arm", not(test)))]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn HardFault() -> ! {
     core::arch::naked_asm!(
         "cpsid i",
+        "ldr r3, ={extra}",
+        "stm r3!, {{r4-r7}}",
+        "mov r4, r8",
+        "mov r5, r9",
+        "mov r6, r10",
+        "mov r7, r11",
+        "stm r3!, {{r4-r7}}",
+        "mrs r4, msp",
+        "mrs r5, psp",
+        "ldr r6, =0x40021060",
+        "ldr r6, [r6]",
+        "ldr r7, =0xE000ED04",
+        "ldr r7, [r7]",
+        "stm r3!, {{r4-r7}}",
+        "ldr r4, ={extra_magic}",
+        "str r4, [r3]",
         "mov r0, lr",
         "movs r1, #4",
         "tst r0, r1",
@@ -58,34 +88,35 @@ pub unsafe extern "C" fn HardFault() -> ! {
         "msr msp, r2",
         "ldr r2, ={inner}",
         "bx r2",
+        extra = sym crate::FAULT_EXTRA,
+        extra_magic = const FaultExtraRegs::FAULT_EXTRA_IDENT,
         inner = sym hard_fault_inner,
     );
 }
 
-#[cfg(not(target_arch = "arm"))]
+#[cfg(all(not(target_arch = "arm"), not(test)))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn HardFault() -> ! {
     loop {}
 }
 
+#[cfg(not(test))]
 #[inline(never)]
 fn enter_hardware_safety_gate() {
-    bsp::pins::AUDIO_PA.set_low();
+    bsp::bk4829_fault_quench();
     bsp::pins::BACKLIGHT.set_high();
-    bsp::pins::FLASHLIGHT.set_low();
     bsp::set_status_led(bsp::StatusLed::Red);
-    if unsafe { *core::ptr::addr_of!(FAULT_REENTRY_LOCK) } {
+    if FAULT_REENTRY_LOCK.load(Ordering::Acquire) {
         loop {
             hal::wdt::Watchdog::feed();
         }
     }
-    unsafe {
-        *core::ptr::addr_of_mut!(FAULT_REENTRY_LOCK) = true;
-    }
+    FAULT_REENTRY_LOCK.store(true, Ordering::Release);
     hal::wdt::Watchdog::feed();
     hal::spi::init();
 }
 
+#[cfg(not(test))]
 #[inline(never)]
 unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
     enter_hardware_safety_gate();
@@ -157,7 +188,31 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
         }
     }
 
-    analyze_fault_cause(slot, ef_valid, thread_sp);
+    let extra = unsafe {
+        let ptr = core::ptr::addr_of!(FAULT_EXTRA);
+        if (*ptr).valid == FaultExtraRegs::FAULT_EXTRA_IDENT {
+            Some(&*ptr)
+        } else {
+            None
+        }
+    };
+
+    analyze_fault_cause(slot, ef_valid, thread_sp, extra);
+
+    if (pc >= 0x0800_2800 && pc < 0x0802_0000) || (pc >= 0x2000_0000 && pc < 0x2000_4000) {
+        let inst = unsafe { core::ptr::read_volatile((pc & !1) as *const u16) };
+        if (inst & 0xFF00) == 0xDE00 {
+            let code = (inst & 0xFF) as u8;
+            slot.trap_code = code;
+            if slot.actor_tag[0] == 0 {
+                if let Some(t) = TrapCode::from_u8(code) {
+                    slot.set_actor(t.as_str().as_bytes());
+                } else {
+                    slot.set_actor(b"UDF_TRAP");
+                }
+            }
+        }
+    }
 
     let ipsr_num = (xpsr & 0x3F) as u8;
     let psp_flag = if (exc_return & (1 << 2)) != 0 {
@@ -182,9 +237,29 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
         unsafe { core::slice::from_raw_parts(sig_data.as_ptr() as *const u8, sig_data.len() * 4) };
     slot.forensics.crash_signature = crypto::crc::CrcEngine::crc32(sig_bytes);
 
+    let strikes = slot.crash_count;
     BOOT_RECORD.get_mut().commit_write();
 
+    let tag = BackupCrashTag {
+        strikes,
+        flags: BackupCrashTag::FLAG_DIRTY_CRASH
+            | if strikes >= 2 {
+                BackupCrashTag::FLAG_SAFE_MODE_REQ
+            } else {
+                0
+            },
+        reason_code: 1,
+    };
+    hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
+
     hal::wdt::Watchdog::feed();
+
+    #[cfg(target_arch = "arm")]
+    if unsafe { (py32_pac::COREDEBUG_DHCSR.read_volatile() & py32_pac::COREDEBUG_C_DEBUGEN) != 0 } {
+        unsafe {
+            core::arch::asm!("bkpt #0");
+        }
+    }
 
     recovery_loop();
 }
@@ -213,6 +288,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+#[cfg(not(test))]
 #[inline(never)]
 unsafe extern "C" fn panic_inner(info_ptr: usize, sp: u32, lr: u32) -> ! {
     enter_hardware_safety_gate();

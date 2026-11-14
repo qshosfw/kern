@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(dead_code))]
 //! Bare-Metal LCD SPI Framebuffer Blitter, UART Forensics Streamer & Interactive Recovery Loop.
 
 use super::BOOT_RECORD;
@@ -94,7 +95,11 @@ pub fn recovery_loop() -> ! {
     #[allow(unused_mut)]
     let mut page = 0u8;
 
-    let is_k1 = crate::master_config_ref().is_k1();
+    let is_k1 = if crate::CONFIG_INITIALIZED.load(core::sync::atomic::Ordering::Acquire) {
+        crate::master_config_ref().is_k1()
+    } else {
+        true
+    };
 
     let mut timer_active = true;
     let mut countdown_secs = 10u8;

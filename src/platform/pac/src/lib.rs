@@ -68,6 +68,15 @@ pub const SYST_RVR: *mut u32 = 0xE000_E014 as *mut u32;
 /// SysTick Current Value Register
 pub const SYST_CVR: *mut u32 = 0xE000_E018 as *mut u32;
 
+/// SCB Interrupt Control and State Register
+pub const SCB_ICSR: *const u32 = 0xE000_ED04 as *const u32;
+/// SCB Vector Table Offset Register
+pub const SCB_VTOR: *mut u32 = 0xE000_ED08 as *mut u32;
+/// CoreDebug Halting Control and Status Register
+pub const COREDEBUG_DHCSR: *const u32 = 0xE000_EDF0 as *const u32;
+/// CoreDebug Halting Debug Enable bit (`C_DEBUGEN`)
+pub const COREDEBUG_C_DEBUGEN: u32 = 1 << 0;
+
 /// NVIC Interrupt Set-Enable Register
 pub const NVIC_ISER: *mut u32 = 0xE000_E100 as *mut u32;
 /// NVIC Interrupt Clear-Enable Register
@@ -98,6 +107,3 @@ pub unsafe fn nvic_clear_pending(irq_num: u8) {
         NVIC_ICPR.write_volatile(1u32 << (irq_num & 31));
     }
 }
-
-/// System Control Block — Vector Table Offset Register
-pub const SCB_VTOR: *mut u32 = 0xE000_ED08 as *mut u32;

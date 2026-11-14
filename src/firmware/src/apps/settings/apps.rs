@@ -91,7 +91,10 @@ pub fn populate_package_list(
         if !crate::apps::launcher::catalog::PackageCatalog::matches_kind(entry, is_service) {
             continue;
         }
-        items[count] = MenuItem::new(entry.title.as_str(), MenuItemType::Value(ShortString::empty()));
+        items[count] = MenuItem::new(
+            entry.title.as_str(),
+            MenuItemType::Value(ShortString::empty()),
+        );
         if let MenuItemType::Value(ref mut s) = items[count].item_type {
             if is_service {
                 s.set_str(entry.exec_type.as_str());

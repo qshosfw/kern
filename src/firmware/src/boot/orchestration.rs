@@ -23,20 +23,88 @@ pub struct BootHardware<'a, 'b> {
     pub usb: &'a mut drivers::usb::UsbDriver,
 }
 
+#[inline(never)]
+pub fn read_backup_tag() -> kernel::boot::BackupCrashTag {
+    kernel::boot::BackupCrashTag::decode(py32_hal::rtc::RealTimeClock::read_alarm_raw())
+        .unwrap_or(kernel::boot::BackupCrashTag::empty())
+}
+
+#[inline(never)]
+pub fn write_backup_tag(tag: kernel::boot::BackupCrashTag) {
+    py32_hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
+}
+
 pub fn check_reset_cause() {
+    let raw_csr = py32_hal::wdt::Watchdog::raw_reset_flags();
     let reset_cause = py32_hal::wdt::Watchdog::reset_cause();
+    py32_hal::wdt::Watchdog::clear_reset_flags();
+
+    let mut tag = read_backup_tag();
+    let clean_reboot = (tag.flags & kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT) != 0;
+
+    if clean_reboot {
+        // Intentional reboot: preserve strike counter unless cleared after >=10s healthy uptime,
+        // clear CLEAN_REBOOT bit so unexpected resets next boot are caught.
+        tag.flags &= !kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
+        write_backup_tag(tag);
+        return;
+    }
+
+    // Never overwrite a valid HardFault / Appf BOOT_RECORD slot with a PC=0 placeholder.
+    let existing = crate::panic::BOOT_RECORD.get().latest_valid_slot();
     let is_watchdog_reset = matches!(
         reset_cause,
         py32_hal::wdt::ResetCause::IndependentWatchdog | py32_hal::wdt::ResetCause::WindowWatchdog
     );
-    py32_hal::wdt::Watchdog::clear_reset_flags();
+    let is_brownout = matches!(reset_cause, py32_hal::wdt::ResetCause::PowerOn)
+        && ((raw_csr & py32_pac::rcc::CSR_PWRRSTF) != 0 || tag.reason_code != 0);
 
-    if is_watchdog_reset {
+    if is_watchdog_reset && existing.is_none_or(|s| s.crash_count == 0) {
         let slot = crate::panic::BOOT_RECORD.get_mut().begin_write();
         slot.reset_reason = kernel::boot::ResetReason::Wdog as u32;
         slot.set_actor(b"WATCHDOG");
+        slot.panic_file_hash = raw_csr;
+        slot.crash_count = slot.crash_count.max(tag.strikes.saturating_add(1));
+        tag.strikes = slot.crash_count;
+        tag.reason_code = 3;
+        tag.flags |= kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
         crate::panic::BOOT_RECORD.get_mut().commit_write();
+        write_backup_tag(tag);
+    } else if is_brownout && existing.is_none_or(|s| s.crash_count == 0) && tag.strikes > 0 {
+        let slot = crate::panic::BOOT_RECORD.get_mut().begin_write();
+        slot.reset_reason = kernel::boot::ResetReason::Brow as u32;
+        slot.set_actor(b"BROWNOUT");
+        slot.panic_file_hash = raw_csr;
+        slot.crash_count = tag.strikes;
+        crate::panic::BOOT_RECORD.get_mut().commit_write();
+    } else if let Some(s) = existing {
+        if s.crash_count > tag.strikes {
+            tag.strikes = s.crash_count;
+            tag.flags |= kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
+            write_backup_tag(tag);
+        }
     }
+}
+
+/// Mark the backup-domain reboot tag before an intentional software reset.
+#[inline(never)]
+pub fn prepare_clean_reboot() {
+    let mut tag = read_backup_tag();
+    tag.flags |= kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
+    write_backup_tag(tag);
+    crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+}
+
+/// Reset both `.uninit` crash-loop strike counter and backup-domain strikes after healthy uptime.
+#[inline(never)]
+pub fn clear_crash_strikes() {
+    crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+    let mut tag = read_backup_tag();
+    tag.strikes = 0;
+    tag.flags &= !(kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH
+        | kernel::boot::BackupCrashTag::FLAG_SAFE_MODE_REQ);
+    tag.reason_code = 0;
+    write_backup_tag(tag);
 }
 
 fn init_system_services(
@@ -46,6 +114,8 @@ fn init_system_services(
     adc: &Adc,
 ) {
     super::ensure_default_files(hw.filesystem, None);
+    #[cfg(feature = "filesystem")]
+    super::flush_crash_log_if_pending(hw.filesystem);
     if !passcode_state.is_locked {
         let mut ps = unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) };
         crate::security::passcode::init_passcode_state(hw.filesystem, &mut ps);
@@ -212,15 +282,22 @@ fn boot_stage_security_check(
 ) {
     let _ = (&hw, &master_cfg, &passcode_state, adc);
     let crash_slot = crate::panic::BOOT_RECORD.get().latest_valid_slot().copied();
-    let crash_count = crash_slot.as_ref().map_or(0, |s| s.crash_count);
+    let backup_strikes = read_backup_tag().strikes;
+    let crash_count = crash_slot
+        .as_ref()
+        .map_or(0, |s| s.crash_count)
+        .max(backup_strikes);
 
     if crash_count >= 2 {
         #[cfg(feature = "panic_gui")]
         if let Some(ref slot) = crash_slot {
             super::recovery::run_safe_mode_recovery(hw, slot, master_cfg);
+        } else {
+            let fallback = kernel::boot::BootSlot::empty();
+            super::recovery::run_safe_mode_recovery(hw, &fallback, master_cfg);
         }
         #[cfg(not(feature = "panic_gui"))]
-        crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+        super::clear_crash_strikes();
         return;
     }
 

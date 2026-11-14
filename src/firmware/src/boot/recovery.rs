@@ -266,6 +266,11 @@ fn draw_page_forensics(
     draw_item_hex(canvas, 0, 4, "SIG:", slot.forensics.crash_signature, hbuf);
 }
 
+static RECOVERY_CHROME: [gfx::widgets::TextLine; 2] = [
+    gfx::widgets::TextLine::new(58, 0, 0, "[M] Reset"),
+    gfx::widgets::TextLine::new(58, 0, 2, "[EXIT] Reboot"),
+];
+
 /// Render exhaustive forensic crash report on ST7565 128x64 monochrome LCD.
 pub fn draw_recovery_screen(
     canvas: &mut gfx::Canvas,
@@ -278,7 +283,8 @@ pub fn draw_recovery_screen(
     let mut hbuf = [0u8; 8];
     let mut nbuf = [0u8; 6];
 
-    // 1. Inverted Header Bar (y=0..8)
+    // 1. Inverted Header Bar (y=0..8) + Footer Chrome via shared TextScreen
+    gfx::widgets::draw_text_screen(canvas, "", &RECOVERY_CHROME, None);
     gfx::widgets::draw_negated_header(canvas, 0, "PANIC!");
 
     if let Some(sec) = countdown {
@@ -351,7 +357,6 @@ pub fn draw_recovery_screen(
 
     // 3. Inverted Footer / Actions (y=52..63)
     canvas.draw_horizontal_line(0, 52, 128, gfx::Color::Fill);
-    gfx::text::draw_str(canvas, 2, 58, "[M] Reset", font, gfx::Color::Fill);
 
     #[cfg(feature = "panic_gui_extended")]
     if is_k1 {
@@ -361,16 +366,6 @@ pub fn draw_recovery_screen(
     }
     #[cfg(not(feature = "panic_gui_extended"))]
     let _ = is_k1;
-
-    gfx::text::draw_str_align(
-        canvas,
-        126,
-        58,
-        "[EXIT] Reboot",
-        font,
-        gfx::Color::Fill,
-        gfx::text::Align::Right,
-    );
 }
 
 #[cfg(feature = "panic_gui_extended")]
@@ -416,7 +411,7 @@ pub fn run_safe_mode_recovery(
 
         match crate::boot::boot_wait_key(hw.key_scanner, 0) {
             Some(kernel::event::KeyCode::Menu) => {
-                crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+                crate::boot::clear_crash_strikes();
                 unsafe {
                     MasterConfig::init_in_place(master_cfg as *mut MasterConfig);
                 }
@@ -426,7 +421,7 @@ pub fn run_safe_mode_recovery(
                 break;
             }
             Some(kernel::event::KeyCode::Exit) => {
-                crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+                crate::boot::prepare_clean_reboot();
                 bsp::set_status_led(bsp::StatusLed::Off);
                 cortex_m::peripheral::SCB::sys_reset();
             }

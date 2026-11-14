@@ -72,42 +72,30 @@ pub fn boot_wait_key_with_usb(
 }
 
 #[cfg(feature = "crash_dialog")]
+static CRASH_DIALOG_LINES: [gfx::widgets::TextLine; 2] = [
+    gfx::widgets::TextLine::new(13, 0, 0, "Radio restarted unexpectedly"),
+    gfx::widgets::TextLine::new(45, 0, 0, "Operational state restored."),
+];
+
+#[cfg(feature = "crash_dialog")]
 #[inline(never)]
 pub fn draw_crash_dialog(
     canvas: &mut gfx::Canvas,
     slot: &kernel::boot::BootSlot,
     countdown_secs: Option<u8>,
 ) {
-    canvas.clear();
+    gfx::widgets::draw_text_screen(canvas, "SYSTEM", &CRASH_DIALOG_LINES, None);
 
-    // 1. Inverted Header Bar (minimalist and generic: "SYSTEM")
-    canvas.fill_rect(0, 0, 128, 10, gfx::Color::Fill);
-    gfx::text::draw_str_align(
-        canvas,
-        64,
-        2,
-        "SYSTEM",
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Clear,
-        gfx::text::Align::Center,
-    );
-
-    // 2. Natural language explanation
+    // 2. Dynamic cause and forensic detail
     let mut detail_buf = [0u8; 32];
     let detail_str = slot.natural_detail(&mut detail_buf);
-    let lines = [
-        "Radio restarted unexpectedly",
-        slot.natural_cause(),
-        detail_str,
-        "Operational state restored.",
-    ];
-    let ys = [13i16, 24, 34, 45];
-    for i in 0..4 {
+    let dyn_lines = [(24i16, slot.natural_cause()), (34i16, detail_str)];
+    for &(y, s) in &dyn_lines {
         gfx::text::draw_str(
             canvas,
             4,
-            ys[i],
-            lines[i],
+            y,
+            s,
             &gfx::fonts::tomthumb::FONT,
             gfx::Color::Fill,
         );
@@ -174,9 +162,46 @@ pub fn show_crash_dialog_if_needed(hw: &mut BootHardware) {
             }
 
             bsp::set_status_led(bsp::StatusLed::Off);
-            crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
         }
     }
+}
+
+/// Append a valid crash `BootSlot` (128 B) into the `/log/crash.bin` 1 KB ring (`8 x 128 B`).
+#[cfg(feature = "filesystem")]
+#[inline(never)]
+pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
+    let mut tag = crate::boot::read_backup_tag();
+    if (tag.flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) == 0 {
+        return;
+    }
+    let Some(slot) = crate::panic::BOOT_RECORD.get().latest_valid_slot().copied() else {
+        return;
+    };
+    if !slot.is_crash() {
+        return;
+    }
+
+    let mut ring = [0u8; 1024];
+    let existing_len = fs.read_file("/log/crash.bin", &mut ring).unwrap_or(0);
+    let slot_bytes = unsafe {
+        core::slice::from_raw_parts(
+            &slot as *const kernel::boot::BootSlot as *const u8,
+            core::mem::size_of::<kernel::boot::BootSlot>(),
+        )
+    };
+    if existing_len + 128 <= ring.len() {
+        ring[existing_len..existing_len + 128].copy_from_slice(slot_bytes);
+        let _ = fs.write_file("/log/crash.bin", &ring[..existing_len + 128]);
+    } else {
+        for i in 0..(1024 - 128) {
+            ring[i] = ring[i + 128];
+        }
+        ring[1024 - 128..1024].copy_from_slice(slot_bytes);
+        let _ = fs.write_file("/log/crash.bin", &ring);
+    }
+
+    tag.flags &= !kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
+    crate::boot::write_backup_tag(tag);
 }
 
 #[inline(never)]
@@ -437,8 +462,27 @@ pub fn ensure_default_files(_filesystem: &mut SystemStorage, _lcd: Option<&mut S
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "crash_dialog")]
     use super::*;
+    #[cfg(feature = "crash_dialog")]
     use kernel::boot::{BOOT_RECORD_IDENT, BootSlot, ResetReason};
+    use kernel::boot::{BackupCrashTag, BootRecord, TrapCode};
+
+    #[test]
+    fn test_backup_crash_tag_roundtrip_and_trap_codes() {
+        let tag = BackupCrashTag {
+            strikes: 3,
+            flags: BackupCrashTag::FLAG_DIRTY_CRASH | BackupCrashTag::FLAG_SAFE_MODE_REQ,
+            reason_code: 1,
+        };
+        let decoded = BackupCrashTag::decode(tag.encode()).expect("valid ident byte");
+        assert_eq!(decoded, tag);
+        assert_eq!(BackupCrashTag::decode(0), None);
+        assert_eq!(TrapCode::from_u8(0x02), Some(TrapCode::KernelLock));
+        assert_eq!(TrapCode::from_u8(0xFE), Some(TrapCode::RustPanic));
+        let rec = BootRecord::new();
+        assert!(rec.latest_valid_slot().is_none());
+    }
 
     #[test]
     #[cfg(feature = "crash_dialog")]

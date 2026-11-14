@@ -64,7 +64,10 @@ impl Shortcut {
     }
 
     pub fn from_u8(val: u8) -> Self {
-        Self::ALL.get(val as usize).copied().unwrap_or(Shortcut::None)
+        Self::ALL
+            .get(val as usize)
+            .copied()
+            .unwrap_or(Shortcut::None)
     }
 }
 

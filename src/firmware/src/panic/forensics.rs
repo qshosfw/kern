@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(dead_code))]
 //! ARM Cortex-M0+ CPU Fault Opcode Disassembly & Caller Stack Unwinder.
 
 #[inline(always)]
@@ -19,15 +20,17 @@ pub fn unwind_caller_stack(ef_valid: bool, thread_sp: u32, pc: u32, lr: u32) -> 
     {
         (
             thread_sp,
-            (((0x2000_4000 - thread_sp) >> 2) as usize).min(64),
+            (((0x2000_4000 - thread_sp) >> 2) as usize).min(128),
         )
     } else {
-        (0x2000_0000, 64)
+        (0x2000_0000, 128)
     };
 
     let sp_slice = unsafe { core::slice::from_raw_parts(start_sp as *const u32, max_words) };
     for &w in sp_slice {
-        if w >= 0x0800_2800 && w < 0x0802_0000 && (w & 1) != 0 && w != pc && w != lr {
+        let in_flash = w >= 0x0800_2800 && w < 0x0802_0000;
+        let in_sram = w >= 0x2000_0000 && w < 0x2000_4000;
+        if (in_flash || in_sram) && (w & 1) != 0 && w != pc && w != lr {
             if (unwind_count == 0 || unwound_lrs[(unwind_count - 1) as usize] != w)
                 && (unwind_count < 4)
             {
@@ -48,7 +51,12 @@ pub fn unwind_caller_stack(_ef_valid: bool, _thread_sp: u32, _pc: u32, _lr: u32)
 
 #[cfg(feature = "flight_recorder")]
 #[inline(never)]
-pub fn analyze_fault_cause(slot: &mut kernel::boot::BootSlot, ef_valid: bool, thread_sp: u32) {
+pub fn analyze_fault_cause(
+    slot: &mut kernel::boot::BootSlot,
+    ef_valid: bool,
+    thread_sp: u32,
+    extra: Option<&kernel::boot::FaultExtraRegs>,
+) {
     let mut actor: &'static [u8] = b"FORCED";
     let mut fault_opcode = 0u16;
     let mut fault_addr = 0xFFFF_FFFFu32;
@@ -60,6 +68,15 @@ pub fn analyze_fault_cause(slot: &mut kernel::boot::BootSlot, ef_valid: bool, th
     let xpsr = slot.xpsr;
     let pc_in_flash = pc >= 0x0800_2800 && pc < 0x0802_0000;
     let pc_in_sram = pc >= 0x2000_0000 && pc < 0x2000_4000;
+
+    let read_reg = |rn: usize| -> Option<u32> {
+        match rn {
+            0..=3 => Some(slot.stack_dump[rn]),
+            4..=11 => extra.map(|e| e.callee[rn - 4]),
+            12 => Some(slot.stack_dump[4]),
+            _ => None,
+        }
+    };
 
     if !ef_valid || thread_sp < 0x2000_0080 || thread_sp > 0x2000_4000 {
         actor = b"STACK_OVF";
@@ -103,11 +120,14 @@ pub fn analyze_fault_cause(slot: &mut kernel::boot::BootSlot, ef_valid: bool, th
             access_flags = (sz << 1) | (is_write as u8);
 
             let rn = ((inst >> 3) & 7) as usize;
-            let reg_val = if rn < 4 { slot.stack_dump[rn] } else { 0 };
-            let imm = (((inst >> 6) & 0x1F) as u32) << sz;
-            fault_addr = reg_val.wrapping_add(imm);
-            if fault_addr < 0x0000_0100 {
-                actor = b"DACCVIOL";
+            if let Some(reg_val) = read_reg(rn) {
+                let imm = (((inst >> 6) & 0x1F) as u32) << sz;
+                fault_addr = reg_val.wrapping_add(imm);
+                actor = if fault_addr < 0x0000_0100 {
+                    b"DACCVIOL"
+                } else {
+                    b"PRECISERR"
+                };
             } else {
                 actor = b"PRECISERR";
             }
@@ -150,4 +170,10 @@ pub fn analyze_fault_cause(slot: &mut kernel::boot::BootSlot, ef_valid: bool, th
 
 #[cfg(not(feature = "flight_recorder"))]
 #[inline(always)]
-pub fn analyze_fault_cause(_slot: &mut kernel::boot::BootSlot, _ef_valid: bool, _thread_sp: u32) {}
+pub fn analyze_fault_cause(
+    _slot: &mut kernel::boot::BootSlot,
+    _ef_valid: bool,
+    _thread_sp: u32,
+    _extra: Option<&kernel::boot::FaultExtraRegs>,
+) {
+}

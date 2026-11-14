@@ -1025,7 +1025,7 @@ impl Orchestrator {
                 self.switch_app(ctx, APP_ID_VFO);
             }
             Shortcut::Reboot => {
-                crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
+                crate::boot::prepare_clean_reboot();
                 kernel::sys::SystemDiagnostics::reboot()
             }
             Shortcut::Sleep => {

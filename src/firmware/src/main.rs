@@ -2,19 +2,25 @@
 #![cfg_attr(not(test), no_main)]
 
 use crate::config::MasterConfig;
+#[cfg_attr(test, allow(unused_imports))]
 use crate::hardware::SystemHardware;
 use crate::services::RadioState;
 use core::cell::RefCell;
 use cortex_m::interrupt::Mutex;
+#[cfg_attr(test, allow(unused_imports))]
 use cortex_m_rt::{entry, exception};
 use drivers::battery::SystemPower;
+#[cfg_attr(test, allow(unused_imports))]
 use drivers::bk4829::Bk4829;
+#[cfg_attr(test, allow(unused_imports))]
 use drivers::st7565::St7565;
 use heapless::Deque;
 use kernel::event::Event;
 
+#[cfg_attr(test, allow(unused_imports))]
 use bsp::Board;
 use py32_hal as hal;
+#[cfg_attr(test, allow(unused_imports))]
 use py32_pac as pac;
 
 pub mod apps;
@@ -43,6 +49,13 @@ pub static MBUF_POOL: utils::mbuf::MBufPool = utils::mbuf::MBufPool::new();
 #[used]
 #[unsafe(link_section = ".uninit")]
 pub static BOOT_RECORD: panic::BootRecordCell = panic::BootRecordCell::new();
+
+#[used]
+#[unsafe(link_section = ".uninit")]
+pub static mut FAULT_EXTRA: kernel::boot::FaultExtraRegs = kernel::boot::FaultExtraRegs::empty();
+
+pub static CONFIG_INITIALIZED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 #[unsafe(link_section = ".uninit")]
 pub static mut MASTER_CONFIG: core::mem::MaybeUninit<MasterConfig> =
@@ -104,6 +117,7 @@ fn main() -> ! {
 
     unsafe {
         MasterConfig::init_in_place(core::ptr::addr_of_mut!(MASTER_CONFIG) as *mut MasterConfig);
+        CONFIG_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
         RadioState::init_in_place(core::ptr::addr_of_mut!(RADIO_STATE) as *mut RadioState);
         (*core::ptr::addr_of_mut!(CALIBRATION)).init_defaults();
     }

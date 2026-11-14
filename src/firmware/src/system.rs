@@ -347,8 +347,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
     #[cfg(feature = "grayscale")]
     let mut last_subframe_tick = py32_hal::delay::millis();
     let mut dirty_render = true;
-    #[cfg(feature = "flight_recorder")]
-    let mut flight_recorder_cleared = false;
+    let mut crash_loop_cleared = false;
     let mut low_batt_warning_timer = 0u8;
 
     loop {
@@ -365,11 +364,10 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             hw.tick_radio_services();
         }
 
-        // Clear BOOT record crash loop counter after 5 seconds of stable main loop execution (§13.4)
-        #[cfg(feature = "flight_recorder")]
-        if !flight_recorder_cleared && now.wrapping_sub(_boot_start_ms) >= 5000 {
-            crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
-            flight_recorder_cleared = true;
+        // Clear crash-loop strike counter only after >= 10 s of healthy main loop execution (§38.4)
+        if !crash_loop_cleared && now.wrapping_sub(_boot_start_ms) >= 10_000 {
+            crate::boot::clear_crash_strikes();
+            crash_loop_cleared = true;
         }
 
         // 1. Poll hardware keyboard matrix every 5ms (DeltaFW / fagci-k1-fw standard)

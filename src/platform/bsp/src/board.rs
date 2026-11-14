@@ -336,6 +336,20 @@ pub fn set_status_led(led: StatusLed) {
     Board::set_status_led(&mut bus, led);
 }
 
+/// Immediately quench all RF PA/TX stages, audio amp, and flashlight during a fault.
+#[inline(never)]
+pub fn bk4829_fault_quench() {
+    use kern_platform_traits::radio::RadioBus as _;
+    board_pins::AUDIO_PA.set_low();
+    board_pins::FLASHLIGHT.set_low();
+    board_pins::BK_CSN.configure_output(py32_pac::gpio::SPEED_LOW);
+    board_pins::BK_SCL.configure_output(py32_pac::gpio::SPEED_MEDIUM);
+    board_pins::BK_SDA.configure_output(py32_pac::gpio::SPEED_LOW);
+    let mut bus = RadioBus;
+    bus.write_reg(0x36, 0x0022); // PA bias off
+    bus.write_reg(0x30, 0x0000); // Disable TX, RX, VCO, PLL, AF, DSP
+}
+
 pub struct BspAudioPa;
 
 impl kern_platform_traits::audio::AudioPa for BspAudioPa {
