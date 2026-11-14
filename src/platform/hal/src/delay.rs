@@ -1,10 +1,6 @@
 //! SysTick-based blocking delays for PY32F071.
 //!
-//! Uses the ARM Cortex-M0+ SysTick timer configured for 10 kHz (100 µs) ticks.
-//! This drives a 1000 Hz software PWM for LCD/keyboard backlight to eliminate
-//! low-frequency beating against the ST7565 LCD panel multiplex rate (~70 Hz).
-//!
-//! A 10-count sub-millisecond accumulator maintains the global millisecond counter.
+//! Uses the ARM Cortex-M0+ SysTick timer configured for 1 kHz (1 ms) ticks.
 
 use portable_atomic::{AtomicU32, Ordering};
 
@@ -72,7 +68,7 @@ pub fn delay_ms(ms: u32) {
         return;
     }
 
-    if cortex_m::register::primask::read().is_inactive() {
+    if !cortex_m::register::primask::read().is_inactive() {
         let mut rem = ms;
         while rem > 0 {
             let chunk = rem.min(50);

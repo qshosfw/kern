@@ -533,11 +533,12 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
             assert!(
                 core::mem::size_of::<[kernel::service::DirEntryInfo; MAX_FETCH]>()
                     <= crate::data::arena::TRANSIENT_ARENA_BYTES
+                        - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
             );
         }
-        let arena = crate::data::arena::transient_arena_bytes_mut();
+        let scratch = crate::data::arena::scratch_tail_bytes_mut();
         let temp_entries = unsafe {
-            &mut *(arena.as_mut_ptr() as *mut [kernel::service::DirEntryInfo; MAX_FETCH])
+            &mut *(scratch.as_mut_ptr() as *mut [kernel::service::DirEntryInfo; MAX_FETCH])
         };
         let max_fetch = out_entries.len().min(MAX_FETCH);
         let count = self

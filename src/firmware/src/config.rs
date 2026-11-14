@@ -152,8 +152,17 @@ pub struct MasterConfig {
     pub hw_dirty: u8,
 }
 
+const _: () = {
+    assert!(core::mem::size_of::<DisplayConfig>() <= 128);
+    assert!(core::mem::size_of::<AudioConfig>() <= 128);
+    assert!(core::mem::size_of::<KeyConfig>() <= 128);
+    assert!(core::mem::size_of::<SystemConfig>() <= 128);
+    assert!(core::mem::size_of::<BatteryConfig>() <= 128);
+    assert!(core::mem::size_of::<AppsConfig>() <= 128);
+};
+
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
-    let mut temp = [0u8; 48];
+    let mut temp = [0u8; 128];
     let n = buf.len().min(temp.len());
     let loaded = if let Ok(len) = storage.read_file(path, &mut temp[..n]) {
         len >= n && is_raw_valid(&temp[..n], version)

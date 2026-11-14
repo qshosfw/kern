@@ -22,7 +22,7 @@ use kernel::proc::reloc::apply_relocs;
 pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_WORDS;
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
 pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
-pub const TRANSIENT_SCRATCH_OFFSET: usize = 2048; // Scratch storage offset for asset chooser, staging, etc.
+pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
 
 #[repr(C, align(4))]
 pub(crate) struct NativeExecSlot {

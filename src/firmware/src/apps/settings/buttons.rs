@@ -2,7 +2,7 @@
 
 use super::page::{ChoiceId, PageId, SettingDef, SettingField};
 
-pub static SHORTCUT_OPTIONS: &str = "None\0Flashlight\0Monitor\0Scanner\0Explorer\0Settings\0Lock Keypad\0Toggle VFO\0TX Power\0Mute Audio\0FM Radio\0Tasks\0Fault\0";
+pub static SHORTCUT_OPTIONS: &str = "None\0Flashlight\0Monitor\0Scanner\0Explorer\0Settings\0Lock Keypad\0Toggle VFO\0TX Power\0Mute Audio\0FM Radio\0Tasks\0Fault\0Sleep\0";
 
 pub static PTT_MODE_OPTIONS: &str = "Momentary\0Toggle / Latch\02x Press Latch\0";
 

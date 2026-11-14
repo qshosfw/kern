@@ -15,12 +15,12 @@ pub enum Shortcut {
     ToggleTxPower = 8,
     MuteAudio = 9,
     FmRadio = 10,
-    LaunchApp(u8) = 11,
-    PlayBeep { freq_hz: u16, duration_ms: u16 } = 12,
-    Reboot = 13,
-    Fault = 14,
-    TaskManager = 15,
-    Sleep = 16,
+    TaskManager = 11,
+    Fault = 12,
+    Sleep = 13,
+    Reboot = 14,
+    LaunchApp(u8) = 15,
+    PlayBeep { freq_hz: u16, duration_ms: u16 } = 16,
 }
 
 impl Shortcut {
@@ -37,8 +37,8 @@ impl Shortcut {
         Shortcut::MuteAudio,
         Shortcut::FmRadio,
         Shortcut::TaskManager,
-        Shortcut::Sleep,
         Shortcut::Fault,
+        Shortcut::Sleep,
     ];
 
     pub const fn name(&self) -> &'static str {
@@ -54,126 +54,48 @@ impl Shortcut {
             Shortcut::ToggleTxPower => "TX Power",
             Shortcut::MuteAudio => "Mute Audio",
             Shortcut::FmRadio => "FM Radio",
+            Shortcut::TaskManager => "Tasks",
+            Shortcut::Fault => "Fault",
+            Shortcut::Sleep => "Sleep",
+            Shortcut::Reboot => "Reboot",
             Shortcut::LaunchApp(_) => "Launch App",
             Shortcut::PlayBeep { .. } => "Play Beep",
-            Shortcut::Reboot => "Reboot",
-            Shortcut::Fault => "Fault",
-            Shortcut::TaskManager => "Tasks",
-            Shortcut::Sleep => "Sleep",
         }
     }
 
     pub fn from_u8(val: u8) -> Self {
-        match val {
-            1 => Shortcut::Flashlight,
-            2 => Shortcut::Monitor,
-            3 => Shortcut::Scanner,
-            4 => Shortcut::Explorer,
-            5 => Shortcut::Settings,
-            6 => Shortcut::LockKeypad,
-            7 => Shortcut::ToggleVfo,
-            8 => Shortcut::ToggleTxPower,
-            9 => Shortcut::MuteAudio,
-            10 => Shortcut::FmRadio,
-            11 | 15 => Shortcut::TaskManager,
-            12 | 14 => Shortcut::Fault,
-            16 => Shortcut::Sleep,
-            _ => Shortcut::None,
-        }
+        Self::ALL.get(val as usize).copied().unwrap_or(Shortcut::None)
     }
 }
 
 impl From<Shortcut> for SysEvent {
     fn from(val: Shortcut) -> Self {
-        match val {
-            Shortcut::None => SysEvent {
-                target: 0,
-                command: 0,
-                arg: 0,
-            },
-            Shortcut::Flashlight => SysEvent {
-                target: 0,
-                command: 1,
-                arg: 0,
-            },
-            Shortcut::Monitor => SysEvent {
-                target: 0,
-                command: 2,
-                arg: 0,
-            },
-            Shortcut::Scanner => SysEvent {
-                target: 0,
-                command: 3,
-                arg: 0,
-            },
-            Shortcut::Explorer => SysEvent {
-                target: 0,
-                command: 4,
-                arg: 0,
-            },
-            Shortcut::Settings => SysEvent {
-                target: 0,
-                command: 5,
-                arg: 0,
-            },
-            Shortcut::LockKeypad => SysEvent {
-                target: 0,
-                command: 6,
-                arg: 0,
-            },
-            Shortcut::ToggleVfo => SysEvent {
-                target: 0,
-                command: 7,
-                arg: 0,
-            },
-            Shortcut::ToggleTxPower => SysEvent {
-                target: 0,
-                command: 8,
-                arg: 0,
-            },
-            Shortcut::MuteAudio => SysEvent {
-                target: 0,
-                command: 9,
-                arg: 0,
-            },
-            Shortcut::FmRadio => SysEvent {
-                target: 0,
-                command: 10,
-                arg: 0,
-            },
-            Shortcut::LaunchApp(app_id) => SysEvent {
-                target: 0,
-                command: 11,
-                arg: app_id as u16,
-            },
+        let (command, arg) = match val {
+            Shortcut::None => (0, 0),
+            Shortcut::Flashlight => (1, 0),
+            Shortcut::Monitor => (2, 0),
+            Shortcut::Scanner => (3, 0),
+            Shortcut::Explorer => (4, 0),
+            Shortcut::Settings => (5, 0),
+            Shortcut::LockKeypad => (6, 0),
+            Shortcut::ToggleVfo => (7, 0),
+            Shortcut::ToggleTxPower => (8, 0),
+            Shortcut::MuteAudio => (9, 0),
+            Shortcut::FmRadio => (10, 0),
+            Shortcut::TaskManager => (11, 0),
+            Shortcut::Fault => (12, 0),
+            Shortcut::Sleep => (13, 0),
+            Shortcut::Reboot => (14, 0),
+            Shortcut::LaunchApp(app_id) => (15, app_id as u16),
             Shortcut::PlayBeep {
                 freq_hz,
                 duration_ms: _,
-            } => SysEvent {
-                target: 0,
-                command: 12,
-                arg: freq_hz,
-            },
-            Shortcut::Reboot => SysEvent {
-                target: 0,
-                command: 13,
-                arg: 0,
-            },
-            Shortcut::Fault => SysEvent {
-                target: 0,
-                command: 14,
-                arg: 0,
-            },
-            Shortcut::TaskManager => SysEvent {
-                target: 0,
-                command: 15,
-                arg: 0,
-            },
-            Shortcut::Sleep => SysEvent {
-                target: 0,
-                command: 16,
-                arg: 0,
-            },
+            } => (16, freq_hz),
+        };
+        SysEvent {
+            target: 0,
+            command,
+            arg,
         }
     }
 }
@@ -181,25 +103,13 @@ impl From<Shortcut> for SysEvent {
 impl From<SysEvent> for Shortcut {
     fn from(evt: SysEvent) -> Self {
         match evt.command {
-            1 => Shortcut::Flashlight,
-            2 => Shortcut::Monitor,
-            3 => Shortcut::Scanner,
-            4 => Shortcut::Explorer,
-            5 => Shortcut::Settings,
-            6 => Shortcut::LockKeypad,
-            7 => Shortcut::ToggleVfo,
-            8 => Shortcut::ToggleTxPower,
-            9 => Shortcut::MuteAudio,
-            10 => Shortcut::FmRadio,
-            11 => Shortcut::LaunchApp(evt.arg as u8),
-            12 => Shortcut::PlayBeep {
+            1..=13 => Self::from_u8(evt.command),
+            14 => Shortcut::Reboot,
+            15 => Shortcut::LaunchApp(evt.arg as u8),
+            16 => Shortcut::PlayBeep {
                 freq_hz: evt.arg,
                 duration_ms: 100,
             },
-            13 => Shortcut::Reboot,
-            14 => Shortcut::Fault,
-            15 => Shortcut::TaskManager,
-            16 => Shortcut::Sleep,
             _ => Shortcut::None,
         }
     }

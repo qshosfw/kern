@@ -159,6 +159,14 @@ struct AssetChooserStorage {
     count: usize,
 }
 
+const _: () = {
+    assert!(
+        core::mem::size_of::<AssetChooserStorage>()
+            <= crate::data::arena::TRANSIENT_ARENA_BYTES
+                - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
+    );
+};
+
 #[inline(always)]
 fn storage_ref() -> &'static AssetChooserStorage {
     let arena = crate::data::arena::transient_arena_bytes_mut();

@@ -141,15 +141,18 @@ pub fn clear_errors() {
     }
 }
 
-/// Check if a byte is available to read, clearing any pending error flags.
+/// Check if a byte is available to read without losing valid data in DR.
 #[inline]
 pub fn is_readable() -> bool {
     unsafe {
         let sr = usart::USART_SR.read_volatile();
+        if (sr & usart::SR_RXNE) != 0 {
+            return true;
+        }
         if sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE) != 0 {
             let _ = usart::USART_DR.read_volatile();
         }
-        sr & usart::SR_RXNE != 0
+        false
     }
 }
 
@@ -172,10 +175,16 @@ pub fn read_byte() -> Result<u8, UartError> {
 /// Try to read a byte without blocking. Returns `None` if no data available.
 #[inline]
 pub fn try_read_byte() -> Option<u8> {
-    if is_readable() {
-        mark_activity();
-        Some(unsafe { usart::USART_DR.read_volatile() as u8 })
-    } else {
-        None
+    unsafe {
+        let sr = usart::USART_SR.read_volatile();
+        if (sr & usart::SR_RXNE) != 0 {
+            mark_activity();
+            Some(usart::USART_DR.read_volatile() as u8)
+        } else {
+            if sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE) != 0 {
+                let _ = usart::USART_DR.read_volatile();
+            }
+            None
+        }
     }
 }

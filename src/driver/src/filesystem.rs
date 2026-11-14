@@ -11,11 +11,21 @@ pub use kernel::service::{
 use kernfs::{BlockDevice, FsError, KernFS};
 
 #[cfg(feature = "secure_fs")]
-use crypto::ascon::Ascon128;
+use crypto::ascon::{Ascon128, AsconPermutation};
+
+#[cfg(feature = "secure_fs")]
+const SECURE_NONCE_LEN: usize = 16;
+
+#[cfg(feature = "secure_fs")]
+const FALLBACK_KEY: [u8; 16] = *b"KERN_SECURE_VFS!";
 
 pub struct FileSystemDriver<'a, D: BlockDevice> {
     pub fs: KernFS<'a, D>,
     session_unlocked: bool,
+    #[cfg(feature = "secure_fs")]
+    enc_key: [u8; 16],
+    #[cfg(feature = "secure_fs")]
+    nonce_ctr: u32,
 }
 
 impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
@@ -23,7 +33,16 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         Self {
             fs,
             session_unlocked: true,
+            #[cfg(feature = "secure_fs")]
+            enc_key: FALLBACK_KEY,
+            #[cfg(feature = "secure_fs")]
+            nonce_ctr: 1,
         }
+    }
+
+    #[cfg(feature = "secure_fs")]
+    pub fn set_encryption_key(&mut self, key: [u8; 16]) {
+        self.enc_key = key;
     }
 
     pub fn unlock_session(&mut self) {
@@ -77,47 +96,55 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     #[cfg(feature = "secure_fs")]
-    fn derive_path_nonce(path: &str) -> [u8; 16] {
-        let mut nonce = [0u8; 16];
-        let mut hash: u32 = 5381;
-        for (i, &b) in path.as_bytes().iter().enumerate() {
-            hash = hash.wrapping_mul(33).wrapping_add(b as u32);
-            nonce[i % 16] ^= b;
+    fn next_write_nonce(&mut self, path: &str, data: &[u8]) -> [u8; SECURE_NONCE_LEN] {
+        self.nonce_ctr = self.nonce_ctr.wrapping_add(1);
+        let stats = self.fs.stats();
+        let mut perm = AsconPermutation::new();
+        perm.x[0] = u64::from_le_bytes([
+            self.nonce_ctr as u8,
+            (self.nonce_ctr >> 8) as u8,
+            (self.nonce_ctr >> 16) as u8,
+            (self.nonce_ctr >> 24) as u8,
+            stats.wear_cycles as u8,
+            (stats.wear_cycles >> 8) as u8,
+            stats.used_sectors as u8,
+            stats.active_files as u8,
+        ]) ^ 0x4E4F_4E43_4531_5F56;
+        perm.x[1] = u64::from_le_bytes(self.enc_key[..8].try_into().unwrap())
+            ^ (data.len() as u64).rotate_left(17);
+        perm.x[4] = u64::from_le_bytes(self.enc_key[8..16].try_into().unwrap());
+        for (i, &b) in path.as_bytes().iter().take(16).enumerate() {
+            perm.x[2] ^= (b as u64) << ((i & 7) * 8);
         }
-        let hash_bytes = hash.to_le_bytes();
-        nonce[0] ^= hash_bytes[0];
-        nonce[1] ^= hash_bytes[1];
-        nonce[2] ^= hash_bytes[2];
-        nonce[3] ^= hash_bytes[3];
+        for &b in data.iter().take(16) {
+            perm.x[3] = perm.x[3].rotate_left(7) ^ (b as u64);
+        }
+        perm.permute(12);
+        let mut nonce = [0u8; SECURE_NONCE_LEN];
+        nonce[..8].copy_from_slice(&perm.x[0].to_le_bytes());
+        nonce[8..16].copy_from_slice(&perm.x[1].to_le_bytes());
         nonce
-    }
-
-    #[cfg(feature = "secure_fs")]
-    fn crypt_payload(path: &str, data: &mut [u8]) {
-        const SYSTEM_KEY: [u8; 16] = [
-            0x4B, 0x45, 0x52, 0x4E, 0x5F, 0x53, 0x45, 0x43, 0x55, 0x52, 0x45, 0x5F, 0x56, 0x46,
-            0x53, 0x21,
-        ];
-        let nonce = Self::derive_path_nonce(path);
-        Ascon128::new(SYSTEM_KEY).apply_keystream(&nonce, data);
     }
 }
 
 impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     pub fn exists(&mut self, path: &str) -> bool {
-        self.fs.exists(path)
+        Self::sanitize_path(path).is_ok() && self.fs.exists(path)
     }
 
     pub fn remove(&mut self, path: &str) -> Result<(), StorageError> {
+        Self::sanitize_path(path)?;
         self.check_writable(path)?;
         self.fs.remove(path).map_err(Self::map_error)
     }
 
     pub fn file_size(&mut self, path: &str) -> Result<usize, StorageError> {
+        Self::sanitize_path(path)?;
         self.fs.file_size(path).map_err(Self::map_error)
     }
 
     pub fn create_dir(&mut self, path: &str) -> Result<(), StorageError> {
+        Self::sanitize_path(path)?;
         self.fs.create_dir(path).map_err(Self::map_error)
     }
 
@@ -138,21 +165,28 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         let perm = self.fs.get_permission(path).unwrap_or(0);
         if (perm & ATTR_ENCRYPTED) != 0 {
             #[cfg(feature = "secure_fs")]
-            if !self.session_unlocked {
-                return Err(StorageError::EncryptedNoKey);
+            {
+                if !self.session_unlocked {
+                    return Err(StorageError::EncryptedNoKey);
+                }
+                let mut raw = [0u8; 512 + SECURE_NONCE_LEN];
+                let raw_len = self.fs.read_file(path, &mut raw).map_err(Self::map_error)?;
+                if raw_len < SECURE_NONCE_LEN {
+                    return Err(StorageError::CorruptedData);
+                }
+                let (nonce_slice, ct) = raw[..raw_len].split_at_mut(SECURE_NONCE_LEN);
+                let mut nonce = [0u8; SECURE_NONCE_LEN];
+                nonce.copy_from_slice(nonce_slice);
+                Ascon128::new(self.enc_key).apply_keystream(&nonce, ct);
+                let copy_len = ct.len().min(buf.len());
+                buf[..copy_len].copy_from_slice(&ct[..copy_len]);
+                return Ok(copy_len);
             }
             #[cfg(not(feature = "secure_fs"))]
             return Err(StorageError::EncryptedNoKey);
         }
 
-        let len = self.fs.read_file(path, buf).map_err(Self::map_error)?;
-
-        #[cfg(feature = "secure_fs")]
-        if (perm & ATTR_ENCRYPTED) != 0 && len > 0 {
-            Self::crypt_payload(path, &mut buf[..len]);
-        }
-
-        Ok(len)
+        self.fs.read_file(path, buf).map_err(Self::map_error)
     }
 
     pub fn read_file_at(
@@ -183,12 +217,17 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
                 if data.len() > 512 {
                     return Err(StorageError::CapacityFull);
                 }
-                let mut tmp_buf = [0u8; 512];
-                tmp_buf[..data.len()].copy_from_slice(data);
-                Self::crypt_payload(path, &mut tmp_buf[..data.len()]);
+                let mut tmp_buf = [0u8; 512 + SECURE_NONCE_LEN];
+                let nonce = self.next_write_nonce(path, data);
+                tmp_buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
+                tmp_buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + data.len()].copy_from_slice(data);
+                Ascon128::new(self.enc_key).apply_keystream(
+                    &nonce,
+                    &mut tmp_buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + data.len()],
+                );
                 return self
                     .fs
-                    .write_file(path, &tmp_buf[..data.len()])
+                    .write_file(path, &tmp_buf[..SECURE_NONCE_LEN + data.len()])
                     .map_err(Self::map_error);
             }
             #[cfg(not(feature = "secure_fs"))]
@@ -205,6 +244,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     pub fn get_attributes(&mut self, path: &str) -> Result<FileAttributes, StorageError> {
+        Self::sanitize_path(path)?;
         let perm = self.fs.get_permission(path).map_err(Self::map_error)?;
         Ok(FileAttributes { permission: perm })
     }
@@ -214,6 +254,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         path: &str,
         attrs: FileAttributes,
     ) -> Result<(), StorageError> {
+        Self::sanitize_path(path)?;
         self.fs
             .set_permission(path, attrs.permission)
             .map_err(Self::map_error)
@@ -224,6 +265,9 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         dir_path: &str,
         out_entries: &mut [DirEntryInfo],
     ) -> Result<usize, StorageError> {
+        if dir_path != "/" {
+            Self::sanitize_path(dir_path)?;
+        }
         let mut count = 0;
         let _ = self.fs.list_dir(dir_path, |path, size, perm, is_dir| {
             let already_exists = out_entries[..count].iter().any(|e| e.path.as_str() == path);
@@ -311,5 +355,116 @@ impl<'a, D: BlockDevice> kernel::service::StorageService for FileSystemDriver<'a
             wear_cycles: s.wear_cycles,
             total_sectors: s.total_sectors,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MemFlash {
+        sectors: [[u8; 4096]; 16],
+    }
+
+    impl MemFlash {
+        fn new() -> Self {
+            Self {
+                sectors: [[0xFFu8; 4096]; 16],
+            }
+        }
+    }
+
+    impl BlockDevice for MemFlash {
+        const TOTAL_BLOCKS: usize = 16;
+
+        fn read(&mut self, offset: usize, buf: &mut [u8]) -> Result<(), FsError> {
+            let s = offset / 4096;
+            let o = offset % 4096;
+            if s >= Self::TOTAL_BLOCKS || o + buf.len() > 4096 {
+                return Err(FsError::IoError);
+            }
+            buf.copy_from_slice(&self.sectors[s][o..o + buf.len()]);
+            Ok(())
+        }
+
+        fn program(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
+            let s = offset / 4096;
+            let o = offset % 4096;
+            if s >= Self::TOTAL_BLOCKS || o + data.len() > 4096 {
+                return Err(FsError::IoError);
+            }
+            for (dst, &src) in self.sectors[s][o..o + data.len()].iter_mut().zip(data) {
+                *dst &= src;
+            }
+            Ok(())
+        }
+
+        fn erase_sector(&mut self, sector_addr: usize) -> Result<(), FsError> {
+            let s = sector_addr / 4096;
+            if s >= Self::TOTAL_BLOCKS {
+                return Err(FsError::IoError);
+            }
+            self.sectors[s].fill(0xFF);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn sanitize_path_enforced_across_all_fs_ops() {
+        let mut flash = MemFlash::new();
+        let fs = KernFS::new(&mut flash);
+        let mut drv = FileSystemDriver::new(fs);
+
+        for bad in ["", "relative", "/user/../sys", "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p"] {
+            assert!(!drv.exists(bad));
+            assert_eq!(drv.remove(bad), Err(StorageError::InvalidPath));
+            assert_eq!(drv.file_size(bad), Err(StorageError::InvalidPath));
+            assert_eq!(drv.create_dir(bad), Err(StorageError::InvalidPath));
+            assert_eq!(drv.get_attributes(bad), Err(StorageError::InvalidPath));
+            assert_eq!(
+                drv.set_attributes(bad, FileAttributes { permission: 0 }),
+                Err(StorageError::InvalidPath)
+            );
+            let mut entries = [const { DirEntryInfo::empty() }; 2];
+            assert_eq!(drv.list_dir(bad, &mut entries), Err(StorageError::InvalidPath));
+        }
+
+        let mut entries = [const { DirEntryInfo::empty() }; 2];
+        assert!(drv.list_dir("/", &mut entries).is_ok());
+    }
+
+    #[cfg(feature = "secure_fs")]
+    #[test]
+    fn secure_fs_uses_unique_nonces_per_write() {
+        let mut flash = MemFlash::new();
+        let fs = KernFS::new(&mut flash);
+        let mut drv = FileSystemDriver::new(fs);
+        drv.set_encryption_key([0x5Au8; 16]);
+
+        drv.write_file("/secret", b"initial").unwrap();
+        drv.set_attributes(
+            "/secret",
+            FileAttributes {
+                permission: ATTR_ENCRYPTED,
+            },
+        )
+        .unwrap();
+
+        let msg = b"top-secret-payload";
+        drv.write_file("/secret", msg).unwrap();
+        let mut raw1 = [0u8; 64];
+        let n1 = drv.fs.read_file("/secret", &mut raw1).unwrap();
+
+        drv.write_file("/secret", msg).unwrap();
+        let mut raw2 = [0u8; 64];
+        let n2 = drv.fs.read_file("/secret", &mut raw2).unwrap();
+
+        assert_eq!(n1, SECURE_NONCE_LEN + msg.len());
+        assert_eq!(n2, n1);
+        assert_ne!(&raw1[..n1], &raw2[..n2]);
+
+        let mut dec = [0u8; 64];
+        let dec_len = drv.read_file("/secret", &mut dec).unwrap();
+        assert_eq!(&dec[..dec_len], msg);
     }
 }
