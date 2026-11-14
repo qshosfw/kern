@@ -604,6 +604,11 @@ fn apply_list_nav_dir(model: &mut MenuModelMut<'_>, dir: ListNavDir, wrap: bool)
     false
 }
 
+#[inline(always)]
+const fn arrow_bits(has_prev: bool, has_next: bool) -> u8 {
+    (has_prev as u8) | ((has_next as u8) << 1)
+}
+
 #[inline(never)]
 fn render_menu_row(
     canvas: &mut Canvas,
@@ -644,18 +649,14 @@ fn render_menu_row(
     let mut arrows = 0u8;
     let mut max_title_x = 110i16;
 
+    let mut right_icon: Option<(i16, i16, &'static [u8; 8])> = None;
     match &item.item_type {
         MenuItemType::Info(s) => val_str = s,
         MenuItemType::Value(v) => val_str = v.as_str(),
         MenuItemType::Choice { selected, options } => {
             let sel = *selected as usize;
             val_str = options.get(sel);
-            if sel > 0 {
-                arrows |= 1;
-            }
-            if sel + 1 < options.len() {
-                arrows |= 2;
-            }
+            arrows = arrow_bits(sel > 0, sel + 1 < options.len());
         }
         MenuItemType::Range {
             val,
@@ -664,17 +665,11 @@ fn render_menu_row(
             unit,
             ..
         } => {
-            if *val > *min {
-                arrows |= 1;
-            }
-            if *val < *max {
-                arrows |= 2;
-            }
+            arrows = arrow_bits(*val > *min, *val < *max);
             val_str = text::format_range_val(*val as i32, *min as i32, unit, &mut buf);
         }
         MenuItemType::Toggle(on) => {
-            icons::draw_icon_8(
-                canvas,
+            right_icon = Some((
                 111,
                 row_y + 2,
                 if *on {
@@ -682,15 +677,16 @@ fn render_menu_row(
                 } else {
                     icons::CHECKBOX_OFF
                 },
-                tc,
-            );
-            max_title_x = 105;
+            ));
         }
         MenuItemType::Submenu => {
-            icons::draw_icon_8(canvas, 114, row_y + 3, icons::ARROW_RIGHT, tc);
-            max_title_x = 105;
+            right_icon = Some((114, row_y + 3, icons::ARROW_RIGHT));
         }
         _ => {}
+    }
+    if let Some((rx, ry, bmp)) = right_icon {
+        icons::draw_icon_8(canvas, rx, ry, bmp, tc);
+        max_title_x = 105;
     }
 
     let sw = if val_str.is_empty() {
