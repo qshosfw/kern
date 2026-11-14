@@ -16,39 +16,34 @@ fn decode_thumb16(inst: u16) -> &'static str {
 }
 
 #[inline(never)]
-fn draw_item(canvas: &mut gfx::Canvas, col: u8, row: u8, label: &str, val: &str) {
+fn draw_item(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: &str) {
     let font = &gfx::fonts::tomthumb::FONT;
-    let x = if col == 0 { 2 } else { 66 };
-    let y = 15 + (row as i16) * 8;
+    let x = if (pos & 1) == 0 { 2 } else { 66 };
+    let y = 15 + ((pos >> 1) as i16) * 8;
     gfx::text::draw_str(canvas, x, y, label, font, gfx::Color::Fill);
     gfx::text::draw_str(canvas, x + 18, y, val, font, gfx::Color::Fill);
 }
 
 #[inline(never)]
-fn draw_item_hex(
-    canvas: &mut gfx::Canvas,
-    col: u8,
-    row: u8,
-    label: &str,
-    val: u32,
-    hbuf: &mut [u8; 8],
-) {
+fn draw_item_hex(canvas: &mut gfx::Canvas, pos: u8, label: &str, val: u32) {
+    let mut hbuf = [0u8; 8];
     let s = if val == 0xFFFF_FFFF {
         "????????"
     } else {
-        gfx::text::format_hex32(val, hbuf)
+        gfx::text::format_hex32(val, &mut hbuf)
     };
-    draw_item(canvas, col, row, label, s);
+    draw_item(canvas, pos, label, s);
 }
 
 #[inline(never)]
-fn draw_stack_free(canvas: &mut gfx::Canvas, col: u8, row: u8, sp: u32, nbuf: &mut [u8; 6]) {
+fn draw_stack_free(canvas: &mut gfx::Canvas, pos: u8, sp: u32) {
+    let mut nbuf = [0u8; 6];
     let s = if sp >= 0x2000_0000 && sp <= 0x2000_4000 {
-        gfx::text::format_u32(sp.saturating_sub(0x2000_0000), nbuf)
+        gfx::text::format_u32(sp.saturating_sub(0x2000_0000), &mut nbuf)
     } else {
         "OOB!"
     };
-    draw_item(canvas, col, row, "STK:", s);
+    draw_item(canvas, pos, "STK:", s);
 }
 
 #[cfg(feature = "panic_gui_extended")]
@@ -71,55 +66,44 @@ fn draw_inst_mnem(canvas: &mut gfx::Canvas, row: u8, label: &str, inst: u16) {
     }
 }
 
-fn draw_page_overview(
-    canvas: &mut gfx::Canvas,
-    slot: &BootSlot,
-    hbuf: &mut [u8; 8],
-    nbuf: &mut [u8; 6],
-) {
+fn draw_page_overview(canvas: &mut gfx::Canvas, slot: &BootSlot) {
     let is_hard = slot.reason() == Some(kernel::boot::ResetReason::Hard);
     let (r1_lbl, r1_val) = if slot.panic_file_hash != 0 {
         (if is_hard { "ADR:" } else { "CRC:" }, slot.panic_file_hash)
     } else {
         ("PSR:", slot.xpsr)
     };
-    let items = [
-        (0u8, "PC:", slot.fault_pc),
-        (1u8, "LR:", slot.fault_lr),
-        (2u8, "SP:", slot.fault_sp),
-        (3u8, r1_lbl, r1_val),
-        (7u8, "CRC:", slot.crc32),
-    ];
-    for &(pos, lbl, val) in &items {
-        draw_item_hex(canvas, pos & 1, pos >> 1, lbl, val, hbuf);
-    }
+    draw_item_hex(canvas, 0, "PC:", slot.fault_pc);
+    draw_item_hex(canvas, 1, "LR:", slot.fault_lr);
+    draw_item_hex(canvas, 2, "SP:", slot.fault_sp);
+    draw_item_hex(canvas, 3, r1_lbl, r1_val);
+    draw_item_hex(canvas, 7, "CRC:", slot.crc32);
 
     // Row 2 (y=31): Actor & Reason
-    draw_item(canvas, 0, 2, "ACT:", slot.actor_str());
+    draw_item(canvas, 4, "ACT:", slot.actor_str());
     draw_item(
         canvas,
-        1,
-        2,
+        5,
         "RSN:",
         slot.reason().map_or("UNKN", |r| r.as_str()),
     );
 
     // Row 3 (y=39): SRAM Stack Headroom
-    draw_stack_free(canvas, 0, 3, slot.fault_sp, nbuf);
+    draw_stack_free(canvas, 6, slot.fault_sp);
 
     // Row 4 (y=47): Instruction Opcode & Top Stack Word
     if is_hard {
         if slot.panic_line > 0 {
             let mut obuf = [0u8; 4];
             let hex_str = gfx::text::format_hex16(slot.panic_line, &mut obuf);
-            draw_item(canvas, 0, 4, "OP:", hex_str);
+            draw_item(canvas, 8, "OP:", hex_str);
         } else {
-            draw_item(canvas, 0, 4, "OP:", "NONE");
+            draw_item(canvas, 8, "OP:", "NONE");
         }
-        draw_item_hex(canvas, 1, 4, "S0:", slot.stack_dump[8], hbuf);
+        draw_item_hex(canvas, 9, "S0:", slot.stack_dump[8]);
     } else {
-        draw_item_hex(canvas, 0, 4, "S0:", slot.stack_dump[0], hbuf);
-        draw_item_hex(canvas, 1, 4, "S1:", slot.stack_dump[1], hbuf);
+        draw_item_hex(canvas, 8, "S0:", slot.stack_dump[0]);
+        draw_item_hex(canvas, 9, "S1:", slot.stack_dump[1]);
     }
 }
 
@@ -135,7 +119,7 @@ static STK_LABELS: [&str; 8] = [
 ];
 
 #[cfg(feature = "panic_gui_extended")]
-fn draw_page_registers(canvas: &mut gfx::Canvas, slot: &BootSlot, hbuf: &mut [u8; 8]) {
+fn draw_page_registers(canvas: &mut gfx::Canvas, slot: &BootSlot) {
     let vals = [
         slot.stack_dump[0],
         slot.stack_dump[1],
@@ -149,17 +133,13 @@ fn draw_page_registers(canvas: &mut gfx::Canvas, slot: &BootSlot, hbuf: &mut [u8
         slot.stack_dump[9],
     ];
     for (i, (&label, &val)) in REG_LABELS.iter().zip(vals.iter()).enumerate() {
-        draw_item_hex(canvas, (i & 1) as u8, (i >> 1) as u8, label, val, hbuf);
+        draw_item_hex(canvas, i as u8, label, val);
     }
 }
 
 #[cfg(feature = "panic_gui_extended")]
-fn draw_page_backtrace(
-    canvas: &mut gfx::Canvas,
-    slot: &BootSlot,
-    hbuf: &mut [u8; 8],
-    nbuf: &mut [u8; 6],
-) {
+fn draw_page_backtrace(canvas: &mut gfx::Canvas, slot: &BootSlot) {
+    let mut nbuf = [0u8; 6];
     let vals = [
         slot.fault_pc,
         slot.fault_lr,
@@ -169,15 +149,14 @@ fn draw_page_backtrace(
         slot.stack_dump[11],
     ];
     for (i, (&label, &val)) in BT_LABELS.iter().zip(vals.iter()).enumerate() {
-        draw_item_hex(canvas, (i & 1) as u8, (i >> 1) as u8, label, val, hbuf);
+        draw_item_hex(canvas, i as u8, label, val);
     }
 
     draw_item(
         canvas,
-        0,
-        3,
+        6,
         "UNWIND:",
-        gfx::text::format_u8(slot.forensics.unwind_count, nbuf),
+        gfx::text::format_u8(slot.forensics.unwind_count, &mut nbuf),
     );
 
     let vec_str = match slot.forensics.ipsr_num {
@@ -190,34 +169,25 @@ fn draw_page_backtrace(
         v if v >= 16 => "IRQ",
         _ => "EXC",
     };
-    draw_item(canvas, 1, 3, "VEC:", vec_str);
+    draw_item(canvas, 7, "VEC:", vec_str);
 
-    draw_item_hex(canvas, 0, 4, "SIG:", slot.forensics.crash_signature, hbuf);
+    draw_item_hex(canvas, 8, "SIG:", slot.forensics.crash_signature);
 }
 
 #[cfg(feature = "panic_gui_extended")]
-fn draw_page_stack(
-    canvas: &mut gfx::Canvas,
-    slot: &BootSlot,
-    hbuf: &mut [u8; 8],
-    nbuf: &mut [u8; 6],
-) {
+fn draw_page_stack(canvas: &mut gfx::Canvas, slot: &BootSlot) {
     let dump = slot.stack_dump;
     for (i, (&label, &val)) in STK_LABELS.iter().zip(dump[8..16].iter()).enumerate() {
-        draw_item_hex(canvas, (i & 1) as u8, (i >> 1) as u8, label, val, hbuf);
+        draw_item_hex(canvas, i as u8, label, val);
     }
 
-    draw_item_hex(canvas, 0, 4, "SP:", slot.fault_sp, hbuf);
-    draw_stack_free(canvas, 1, 4, slot.fault_sp, nbuf);
+    draw_item_hex(canvas, 8, "SP:", slot.fault_sp);
+    draw_stack_free(canvas, 9, slot.fault_sp);
 }
 
 #[cfg(feature = "panic_gui_extended")]
-fn draw_page_forensics(
-    canvas: &mut gfx::Canvas,
-    slot: &BootSlot,
-    hbuf: &mut [u8; 8],
-    nbuf: &mut [u8; 6],
-) {
+fn draw_page_forensics(canvas: &mut gfx::Canvas, slot: &BootSlot) {
+    let mut nbuf = [0u8; 6];
     draw_inst_mnem(canvas, 0, "PREV:", slot.forensics.inst_pre);
 
     let curr = if slot.reason() == Some(kernel::boot::ResetReason::Hard) {
@@ -230,40 +200,33 @@ fn draw_page_forensics(
     let reg = slot.forensics.fault_reg;
     if reg <= 15 {
         let mut rbuf = [b'R', 0, 0];
-        let num = gfx::text::format_u8(reg, nbuf);
+        let num = gfx::text::format_u8(reg, &mut nbuf);
         let nlen = num.len().min(2);
         rbuf[1..1 + nlen].copy_from_slice(&num.as_bytes()[..nlen]);
         let r_str = unsafe { core::str::from_utf8_unchecked(&rbuf[..1 + nlen]) };
-        draw_item(canvas, 0, 2, "REG:", r_str);
+        draw_item(canvas, 4, "REG:", r_str);
     } else {
-        draw_item(canvas, 0, 2, "REG:", "NONE");
+        draw_item(canvas, 4, "REG:", "NONE");
     }
 
     let is_write = (slot.forensics.access_flags & 1) != 0;
-    draw_item(
-        canvas,
-        1,
-        2,
-        "ACC:",
-        if is_write { "WRITE" } else { "READ" },
-    );
+    draw_item(canvas, 5, "ACC:", if is_write { "WRITE" } else { "READ" });
 
     let mode_str = if (slot.forensics.exec_mode & 1) != 0 {
         "PSP"
     } else {
         "MSP"
     };
-    draw_item(canvas, 0, 3, "MODE:", mode_str);
+    draw_item(canvas, 6, "MODE:", mode_str);
 
     draw_item(
         canvas,
-        1,
-        3,
+        7,
         "IPSR:",
-        gfx::text::format_u8(slot.forensics.ipsr_num, nbuf),
+        gfx::text::format_u8(slot.forensics.ipsr_num, &mut nbuf),
     );
 
-    draw_item_hex(canvas, 0, 4, "SIG:", slot.forensics.crash_signature, hbuf);
+    draw_item_hex(canvas, 8, "SIG:", slot.forensics.crash_signature);
 }
 
 static RECOVERY_CHROME: [gfx::widgets::TextLine; 2] = [
@@ -280,8 +243,6 @@ pub fn draw_recovery_screen(
     is_k1: bool,
 ) {
     let font = &gfx::fonts::tomthumb::FONT;
-    let mut hbuf = [0u8; 8];
-    let mut nbuf = [0u8; 6];
 
     // 1. Inverted Header Bar (y=0..8) + Footer Chrome via shared TextScreen
     gfx::widgets::draw_text_screen(canvas, "", &RECOVERY_CHROME, None);
@@ -345,15 +306,15 @@ pub fn draw_recovery_screen(
 
     #[cfg(feature = "panic_gui_extended")]
     match p {
-        0 => draw_page_overview(canvas, slot, &mut hbuf, &mut nbuf),
-        1 => draw_page_registers(canvas, slot, &mut hbuf),
-        2 => draw_page_backtrace(canvas, slot, &mut hbuf, &mut nbuf),
-        3 => draw_page_stack(canvas, slot, &mut hbuf, &mut nbuf),
-        _ => draw_page_forensics(canvas, slot, &mut hbuf, &mut nbuf),
+        0 => draw_page_overview(canvas, slot),
+        1 => draw_page_registers(canvas, slot),
+        2 => draw_page_backtrace(canvas, slot),
+        3 => draw_page_stack(canvas, slot),
+        _ => draw_page_forensics(canvas, slot),
     }
 
     #[cfg(not(feature = "panic_gui_extended"))]
-    draw_page_overview(canvas, slot, &mut hbuf, &mut nbuf);
+    draw_page_overview(canvas, slot);
 
     // 3. Inverted Footer / Actions (y=52..63)
     canvas.draw_horizontal_line(0, 52, 128, gfx::Color::Fill);
@@ -405,7 +366,6 @@ pub fn run_safe_mode_recovery(
 
     loop {
         let canvas = crate::system_canvas();
-        canvas.clear();
         draw_recovery_screen(canvas, slot, current_page, None, is_k1);
         hw.lcd.blit(canvas);
 
