@@ -62,7 +62,7 @@ pub fn format_int_fixed<'a>(
 
     // 1. Prefix
     let plen = prefix.len().min(out.len());
-    out[idx..idx + plen].copy_from_slice(prefix.as_bytes());
+    out[idx..idx + plen].copy_from_slice(&prefix.as_bytes()[..plen]);
     idx += plen;
 
     // 2. Negative sign
@@ -75,44 +75,29 @@ pub fn format_int_fixed<'a>(
 
     // 3. Digits & decimal point
     let mut digits = [0u8; 12];
-    let mut dpos = 12;
+    let mut dpos = 12usize;
+    let mut d_count = 0u8;
+    loop {
+        dpos -= 1;
+        let (q, r) = crate::math::div10_u32(uval);
+        digits[dpos] = b'0' + r;
+        uval = q;
+        d_count += 1;
 
-    if decimals == 0 {
-        if uval == 0 {
+        if d_count == decimals && dpos > 0 {
             dpos -= 1;
-            digits[dpos] = b'0';
-        } else {
-            while uval > 0 && dpos > 0 {
-                dpos -= 1;
-                let (q, r) = crate::math::div10_u32(uval);
-                digits[dpos] = b'0' + r;
-                uval = q;
-            }
+            digits[dpos] = b'.';
         }
-    } else {
-        let mut d_count = 0;
-        loop {
-            dpos -= 1;
-            let (q, r) = crate::math::div10_u32(uval);
-            digits[dpos] = b'0' + r;
-            uval = q;
-            d_count += 1;
 
-            if d_count == decimals {
+        if d_count >= decimals && uval == 0 {
+            if digits[dpos] == b'.' && dpos > 0 {
                 dpos -= 1;
-                digits[dpos] = b'.';
+                digits[dpos] = b'0';
             }
-
-            if d_count >= decimals && uval == 0 {
-                if digits[dpos] == b'.' {
-                    dpos -= 1;
-                    digits[dpos] = b'0';
-                }
-                break;
-            }
-            if dpos == 0 {
-                break;
-            }
+            break;
+        }
+        if dpos == 0 {
+            break;
         }
     }
 
@@ -123,7 +108,7 @@ pub fn format_int_fixed<'a>(
 
     // 4. Suffix
     let slen = suffix.len().min(out.len() - idx);
-    out[idx..idx + slen].copy_from_slice(suffix.as_bytes());
+    out[idx..idx + slen].copy_from_slice(&suffix.as_bytes()[..slen]);
     idx += slen;
 
     unsafe { core::str::from_utf8_unchecked(&out[..idx]) }
