@@ -27,6 +27,7 @@ impl Shortcut {
     /// Single source of truth for UI shortcut option strings (`NUL`-terminated).
     pub const PACKED_NAMES: &'static str = "None\0Flashlight\0Monitor\0Scanner\0Explorer\0Settings\0Lock Keypad\0Toggle VFO\0TX Power\0Mute Audio\0FM Radio\0Tasks\0Fault\0Sleep\0";
 
+    #[cfg(test)]
     pub const ALL: &'static [Shortcut] = &[
         Shortcut::None,
         Shortcut::Flashlight,
@@ -44,52 +45,8 @@ impl Shortcut {
         Shortcut::Sleep,
     ];
 
-    pub fn name(&self) -> &'static str {
-        let idx = match self {
-            Shortcut::None => 0,
-            Shortcut::Flashlight => 1,
-            Shortcut::Monitor => 2,
-            Shortcut::Scanner => 3,
-            Shortcut::Explorer => 4,
-            Shortcut::Settings => 5,
-            Shortcut::LockKeypad => 6,
-            Shortcut::ToggleVfo => 7,
-            Shortcut::ToggleTxPower => 8,
-            Shortcut::MuteAudio => 9,
-            Shortcut::FmRadio => 10,
-            Shortcut::TaskManager => 11,
-            Shortcut::Fault => 12,
-            Shortcut::Sleep => 13,
-            Shortcut::Reboot => return "Reboot",
-            Shortcut::LaunchApp(_) => return "Launch App",
-            Shortcut::PlayBeep { .. } => return "Play Beep",
-        };
-        let bytes = Self::PACKED_NAMES.as_bytes();
-        let mut cur = 0usize;
-        let mut start = 0usize;
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == 0 {
-                if cur == idx {
-                    return Self::PACKED_NAMES.get(start..i).unwrap_or("None");
-                }
-                cur += 1;
-                start = i + 1;
-            }
-        }
-        "None"
-    }
-
-    pub fn from_u8(val: u8) -> Self {
-        Self::ALL
-            .get(val as usize)
-            .copied()
-            .unwrap_or(Shortcut::None)
-    }
-}
-
-impl From<Shortcut> for SysEvent {
-    fn from(val: Shortcut) -> Self {
-        let (command, arg) = match val {
+    fn as_cmd_arg(self) -> (u8, u16) {
+        match self {
             Shortcut::None => (0, 0),
             Shortcut::Flashlight => (1, 0),
             Shortcut::Monitor => (2, 0),
@@ -110,7 +67,45 @@ impl From<Shortcut> for SysEvent {
                 freq_hz,
                 duration_ms: _,
             } => (16, freq_hz),
-        };
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        let (idx, _) = self.as_cmd_arg();
+        match idx {
+            14 => "Reboot",
+            15 => "Launch App",
+            16 => "Play Beep",
+            _ => {
+                let s = utils::format::nth_cstr(Self::PACKED_NAMES.as_bytes(), idx);
+                if s.is_empty() { "None" } else { s }
+            }
+        }
+    }
+
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            1 => Shortcut::Flashlight,
+            2 => Shortcut::Monitor,
+            3 => Shortcut::Scanner,
+            4 => Shortcut::Explorer,
+            5 => Shortcut::Settings,
+            6 => Shortcut::LockKeypad,
+            7 => Shortcut::ToggleVfo,
+            8 => Shortcut::ToggleTxPower,
+            9 => Shortcut::MuteAudio,
+            10 => Shortcut::FmRadio,
+            11 => Shortcut::TaskManager,
+            12 => Shortcut::Fault,
+            13 => Shortcut::Sleep,
+            _ => Shortcut::None,
+        }
+    }
+}
+
+impl From<Shortcut> for SysEvent {
+    fn from(val: Shortcut) -> Self {
+        let (command, arg) = val.as_cmd_arg();
         SysEvent {
             target: 0,
             command,
