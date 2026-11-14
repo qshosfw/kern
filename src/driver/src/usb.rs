@@ -105,23 +105,21 @@ impl UsbDriver {
         let m_len = m_bytes.len().min(12);
         let t_len = t_bytes.len().min(8);
 
-        let mut buf = [b' '; 32];
         const PREFIX: &[u8] = b"Quansheng ";
-        buf[..PREFIX.len()].copy_from_slice(PREFIX);
-        let mut pos = PREFIX.len();
-
-        buf[pos..pos + m_len].copy_from_slice(&m_bytes[..m_len]);
-        pos += m_len;
-
-        if t_len > 0 {
-            buf[pos] = b' ';
-            pos += 1;
-            buf[pos..pos + t_len].copy_from_slice(&t_bytes[..t_len]);
-            pos += t_len;
+        let dst = self.product_name.as_mut_ptr();
+        unsafe {
+            core::ptr::copy_nonoverlapping(PREFIX.as_ptr(), dst, PREFIX.len());
+            let mut pos = PREFIX.len();
+            core::ptr::copy_nonoverlapping(m_bytes.as_ptr(), dst.add(pos), m_len);
+            pos += m_len;
+            if t_len > 0 {
+                *dst.add(pos) = b' ';
+                pos += 1;
+                core::ptr::copy_nonoverlapping(t_bytes.as_ptr(), dst.add(pos), t_len);
+                pos += t_len;
+            }
+            self.product_len = pos as u8;
         }
-
-        self.product_name = buf;
-        self.product_len = pos as u8;
     }
 
     /// Release USB soft-connect pull-up and reset link state before deep STOP sleep.
