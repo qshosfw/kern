@@ -210,35 +210,36 @@ pub enum Cap {
     FactoryCalib = 1 << 24, // Protected factory calibration read/write access (/sys/calib.*)
 }
 
+const CAP_NAMES: &[u8] = b"\
+Radio RX\0\
+Radio TX\0\
+Storage Read\0\
+Storage Write\0\
+Audio Output\0\
+Display\0\
+Serial UART\0\
+USB CDC\0\
+Hardware CRC\0\
+Real-Time Clock\0\
+Power Management\0\
+Crypto AEAD\0\
+Raw MMIO\0\
+Broadband HF RX\0\
+GNSS Location\0\
+Wireless Link\0\
+Audio Capture\0\
+Broadcast FM\0\
+Keypad\0\
+Task Control\0\
+Service Registry\0\
+Bus Access\0\
+GPIO Access\0\
+Storage Admin\0\
+Factory Calibration\0";
+
 impl Cap {
     pub const fn name(&self) -> &'static str {
-        match self {
-            Self::RadioRx => "Radio RX",
-            Self::RadioTx => "Radio TX",
-            Self::StorageRead => "Storage Read",
-            Self::StorageWrite => "Storage Write",
-            Self::AudioOutput => "Audio Output",
-            Self::DisplayDirect => "Display",
-            Self::SerialComm => "Serial UART",
-            Self::UsbComm => "USB CDC",
-            Self::HardwareCrc => "Hardware CRC",
-            Self::RealTimeClock => "Real-Time Clock",
-            Self::PowerManage => "Power Management",
-            Self::CryptoAead => "Crypto AEAD",
-            Self::RawPeripheral => "Raw MMIO",
-            Self::BroadBandRx => "Broadband HF RX",
-            Self::GnssLocation => "GNSS Location",
-            Self::WirelessLink => "Wireless Link",
-            Self::AudioCapture => "Audio Capture",
-            Self::BroadcastFm => "Broadcast FM",
-            Self::Keypad => "Keypad",
-            Self::TaskControl => "Task Control",
-            Self::ServiceRegistry => "Service Registry",
-            Self::BusAccess => "Bus Access",
-            Self::GpioAccess => "GPIO Access",
-            Self::StorageAdmin => "Storage Admin",
-            Self::FactoryCalib => "Factory Calibration",
-        }
+        utils::format::nth_cstr(CAP_NAMES, (*self as u32).trailing_zeros() as u8)
     }
 
     pub const fn required_message(&self) -> &'static str {

@@ -227,6 +227,29 @@ pub fn ascii_str(bytes: &[u8]) -> Option<&str> {
     }
 }
 
+/// Extract the `idx`-th NUL-delimited UTF-8 string from `packed`.
+///
+/// Packing string enum tables into one NUL-delimited byte slice avoids per-variant
+/// `(ptr, len)` descriptor tables in `.rodata` (8 bytes saved per entry).
+#[inline(never)]
+pub const fn nth_cstr<'a>(packed: &'a [u8], mut idx: u8) -> &'a str {
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < packed.len() {
+        if packed[i] == 0 {
+            if idx == 0 {
+                let slice =
+                    unsafe { core::slice::from_raw_parts(packed.as_ptr().add(start), i - start) };
+                return unsafe { core::str::from_utf8_unchecked(slice) };
+            }
+            idx -= 1;
+            start = i + 1;
+        }
+        i += 1;
+    }
+    ""
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +303,15 @@ mod tests {
         assert!(ascii_eq_ignore_case("Vfo_A.vfo", "vfo_a.vfo"));
         assert!(!ascii_eq_ignore_case("abc", "abd"));
         assert!(!ascii_eq_ignore_case("abc", "abcd"));
+    }
+
+    #[test]
+    fn test_nth_cstr() {
+        const TABLE: &[u8] = b"alpha\0beta\0\0delta\0";
+        assert_eq!(nth_cstr(TABLE, 0), "alpha");
+        assert_eq!(nth_cstr(TABLE, 1), "beta");
+        assert_eq!(nth_cstr(TABLE, 2), "");
+        assert_eq!(nth_cstr(TABLE, 3), "delta");
+        assert_eq!(nth_cstr(TABLE, 4), "");
     }
 }
