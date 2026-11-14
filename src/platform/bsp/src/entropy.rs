@@ -37,7 +37,7 @@ pub fn gather_hardware_seed(out_seed: &mut [u8; 32]) {
     let uid_raw = crate::uid::read_uid_256();
     // Fold 256-byte UID into 32-byte base seed
     for (i, b) in uid_raw.iter().enumerate() {
-        out_seed[i % 32] ^= *b;
+        out_seed[i & 31] ^= *b;
     }
 
     // Inject high-resolution timer and cycle jitter into seed

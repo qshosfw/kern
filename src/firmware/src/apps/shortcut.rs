@@ -70,7 +70,7 @@ impl Shortcut {
         for (i, &b) in bytes.iter().enumerate() {
             if b == 0 {
                 if cur == idx {
-                    return unsafe { core::str::from_utf8_unchecked(&bytes[start..i]) };
+                    return Self::PACKED_NAMES.get(start..i).unwrap_or("None");
                 }
                 cur += 1;
                 start = i + 1;

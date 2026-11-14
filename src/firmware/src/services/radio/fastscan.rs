@@ -101,8 +101,9 @@ impl FastScanEngine {
 
     /// Center-span configuration: centers the 128 bins on `center_freq_hz`.
     pub fn set_center_span(&mut self, center_freq_hz: u32, span_hz: u32) {
-        let step_hz = (span_hz / FASTSCAN_COLUMNS as u32).max(1000);
-        let half_span = (step_hz * (FASTSCAN_COLUMNS as u32)) / 2;
+        const _: () = assert!(FASTSCAN_COLUMNS == 128);
+        let step_hz = (span_hz >> 7).max(1000);
+        let half_span = step_hz << 6;
         let start_freq_hz = center_freq_hz.saturating_sub(half_span);
         self.set_range(start_freq_hz, step_hz);
     }
@@ -110,8 +111,8 @@ impl FastScanEngine {
     /// Calculate frequency in Hertz for a specific bin index (0..127).
     #[inline(always)]
     pub fn bin_freq(&self, bin: u8) -> Frequency<Hertz> {
-        let offset = (bin as u32) * self.step_hz;
-        Frequency::new(self.start_freq.raw() + offset)
+        let offset = (bin as u32).saturating_mul(self.step_hz);
+        Frequency::new(self.start_freq.raw().saturating_add(offset))
     }
 
     /// Execute a single step of the spectrum sweep.
@@ -185,5 +186,22 @@ impl super::coordinator::RfClientParticipant for FastScanEngine {
     #[inline(always)]
     fn default_tier(&self) -> super::coordinator::LockTier {
         super::coordinator::LockTier::SERVICE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fastscan_center_span_and_saturation() {
+        let mut engine = FastScanEngine::new(144_000_000, 12_500);
+        engine.set_center_span(146_520_000, 1_280_000);
+        assert_eq!(engine.step_hz, 10_000);
+        assert_eq!(engine.start_freq.raw(), 145_880_000);
+        assert_eq!(engine.bin_freq(64).raw(), 146_520_000);
+
+        engine.set_range(u32::MAX - 500, 1000);
+        assert_eq!(engine.bin_freq(127).raw(), u32::MAX);
     }
 }

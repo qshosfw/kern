@@ -35,35 +35,36 @@ pub fn enable_line(line: u8, trigger: TriggerEdge) {
     if line >= 32 {
         return;
     }
-    unsafe {
+    let bit = 1u32 << line;
+    cortex_m::interrupt::free(|_| unsafe {
         // Enable interrupt mask for this line
         let imr = exti::EXTI_IMR.read_volatile();
-        exti::EXTI_IMR.write_volatile(imr | (1 << line));
+        exti::EXTI_IMR.write_volatile(imr | bit);
 
         match trigger {
             TriggerEdge::Rising => {
                 let rtsr = exti::EXTI_RTSR.read_volatile();
-                exti::EXTI_RTSR.write_volatile(rtsr | (1 << line));
+                exti::EXTI_RTSR.write_volatile(rtsr | bit);
 
                 let ftsr = exti::EXTI_FTSR.read_volatile();
-                exti::EXTI_FTSR.write_volatile(ftsr & !(1 << line));
+                exti::EXTI_FTSR.write_volatile(ftsr & !bit);
             }
             TriggerEdge::Falling => {
                 let ftsr = exti::EXTI_FTSR.read_volatile();
-                exti::EXTI_FTSR.write_volatile(ftsr | (1 << line));
+                exti::EXTI_FTSR.write_volatile(ftsr | bit);
 
                 let rtsr = exti::EXTI_RTSR.read_volatile();
-                exti::EXTI_RTSR.write_volatile(rtsr & !(1 << line));
+                exti::EXTI_RTSR.write_volatile(rtsr & !bit);
             }
             TriggerEdge::Both => {
                 let rtsr = exti::EXTI_RTSR.read_volatile();
-                exti::EXTI_RTSR.write_volatile(rtsr | (1 << line));
+                exti::EXTI_RTSR.write_volatile(rtsr | bit);
 
                 let ftsr = exti::EXTI_FTSR.read_volatile();
-                exti::EXTI_FTSR.write_volatile(ftsr | (1 << line));
+                exti::EXTI_FTSR.write_volatile(ftsr | bit);
             }
         }
-    }
+    });
 }
 
 /// Internal EXTI line routed to LPTIM1 wakeup on PY32F071 (`EXTI_IMR_IM29`).
@@ -73,10 +74,10 @@ pub const LINE_LPTIM1: u8 = 29;
 /// Intended for internal peripheral wakeup lines (e.g. `LINE_LPTIM1`).
 #[inline(always)]
 pub fn enable_lines(mask: u32) {
-    unsafe {
+    cortex_m::interrupt::free(|_| unsafe {
         let imr = exti::EXTI_IMR.read_volatile();
         exti::EXTI_IMR.write_volatile(imr | mask);
-    }
+    });
 }
 
 pub fn disable_line(line: u8) {
@@ -88,10 +89,10 @@ pub fn disable_line(line: u8) {
 /// Mask multiple EXTI interrupt lines simultaneously.
 #[inline(always)]
 pub fn disable_lines(mask: u32) {
-    unsafe {
+    cortex_m::interrupt::free(|_| unsafe {
         let imr = exti::EXTI_IMR.read_volatile();
         exti::EXTI_IMR.write_volatile(imr & !mask);
-    }
+    });
 }
 
 pub fn is_pending(line: u8) -> bool {

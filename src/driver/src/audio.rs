@@ -14,6 +14,7 @@
 //!    - BK1080 REG_05: Digital volume attenuation for the FM broadcast receiver.
 
 use bsp::pins::AUDIO_PA;
+use core::sync::atomic::{AtomicU16, Ordering};
 
 /// 11-step digital AF Preamp / DAC Gain curve for BK4829 REG_48.
 /// Maps digital level 0..=10 to (rx_gain2: 0..=63, dac_gain: 0..=15).
@@ -37,7 +38,7 @@ pub use kernel::service::ToneNote;
 
 // ── Audio Amplifier Hardware Control ────────────────────────────────────────
 
-static mut HANGOVER_MS: u16 = 0;
+static HANGOVER_MS: AtomicU16 = AtomicU16::new(0);
 
 /// Hardware driver for the external LN4898 Audio Power Amplifier on GPIOA Pin 8.
 pub struct AudioAmplifier {
@@ -60,53 +61,44 @@ impl AudioAmplifier {
     /// Enable LN4898 power amplifier by driving PA8 High.
     pub fn enable(&mut self) {
         self.enabled = true;
-        unsafe {
-            HANGOVER_MS = 0;
-        }
+        HANGOVER_MS.store(0, Ordering::Relaxed);
         AUDIO_PA.set_high();
     }
 
     /// Disable LN4898 power amplifier by driving PA8 Low (ultra-low power shutdown).
     pub fn disable(&mut self) {
         self.enabled = false;
-        unsafe {
-            HANGOVER_MS = 0;
-        }
+        HANGOVER_MS.store(0, Ordering::Relaxed);
         AUDIO_PA.set_low();
     }
 
     /// Keep amplifier energized after tone playback to eliminate key repeat pops.
     pub fn notify_tone_played() {
-        unsafe {
-            HANGOVER_MS = 2000;
-        }
+        HANGOVER_MS.store(2000, Ordering::Relaxed);
     }
 
     /// Check if post-tone hangover is currently keeping the amplifier energized.
     #[inline(always)]
     pub fn is_hangover_active() -> bool {
-        unsafe { HANGOVER_MS > 0 }
+        HANGOVER_MS.load(Ordering::Relaxed) > 0
     }
 
     /// Immediately cancel any active hangover and shut down the LN4898 amplifier.
     pub fn cancel_hangover() {
-        unsafe {
-            HANGOVER_MS = 0;
-        }
+        HANGOVER_MS.store(0, Ordering::Relaxed);
         AUDIO_PA.set_low();
     }
 
     /// Periodic system tick to step hangover shutdown timer (called every 16ms).
     pub fn tick(&mut self, elapsed_ms: u16) {
         if !self.enabled {
-            unsafe {
-                if HANGOVER_MS > 0 {
-                    if elapsed_ms >= HANGOVER_MS {
-                        HANGOVER_MS = 0;
-                        AUDIO_PA.set_low();
-                    } else {
-                        HANGOVER_MS -= elapsed_ms;
-                    }
+            let rem = HANGOVER_MS.load(Ordering::Relaxed);
+            if rem > 0 {
+                if elapsed_ms >= rem {
+                    HANGOVER_MS.store(0, Ordering::Relaxed);
+                    AUDIO_PA.set_low();
+                } else {
+                    HANGOVER_MS.store(rem - elapsed_ms, Ordering::Relaxed);
                 }
             }
         }
@@ -117,7 +109,7 @@ impl AudioAmplifier {
     }
 
     pub fn is_active(&self) -> bool {
-        self.enabled || unsafe { HANGOVER_MS > 0 } || AUDIO_PA.is_high()
+        self.enabled || HANGOVER_MS.load(Ordering::Relaxed) > 0 || AUDIO_PA.is_high()
     }
 
     pub fn volume(&self) -> u8 {

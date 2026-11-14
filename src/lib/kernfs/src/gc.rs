@@ -105,7 +105,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     pub(crate) fn retire_block(&mut self, block: usize) {
-        self.block_table[block & (MAX_BLOCKS - 1)] = BLOCK_TBL_BAD;
+        if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || block >= MAX_BLOCKS {
+            return;
+        }
+        self.block_table[block] = BLOCK_TBL_BAD;
         let _ = self
             .dev
             .program(block * D::BLOCK_SIZE + 14, &[BLOCK_KIND_BAD]);

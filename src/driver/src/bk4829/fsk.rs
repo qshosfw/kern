@@ -86,9 +86,9 @@ pub fn build_fsk_fifo_ctrl_from_phy(config: &FskPhyConfig) -> u16 {
 /// BK4819 / BK4829 hardware FIFO stalls if packet length is not even.
 pub fn build_packet_length_reg(max_len_bytes: u16) -> u16 {
     let len = max_len_bytes.clamp(2, 128);
-    let rounded_len = len.div_ceil(2) * 2;
+    let rounded_len = (len + 1) & !1;
     let encoded = rounded_len - 1;
-    ((encoded & 0xFF) << 8) | ((encoded >> 8) << 5)
+    (encoded & 0xFF) << 8
 }
 
 /// Hardware register 0x5C: Disable hardware CRC checking/generation for transparent raw FIFO IO.
@@ -108,5 +108,39 @@ pub fn parse_fsk_status(reg0b: u16, reg0c: u16, reg5e: u16) -> FskPhyStatus {
         rx_finished: (reg0c & INT_FSK_RX_FINISHED) != 0,
         tx_finished: (reg0c & INT_FSK_TX_FINISHED) != 0,
         rx_words_available: words_avail,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernel::service::radio::fsk::FskRxGain;
+
+    #[test]
+    fn fsk_packet_length_rounds_to_even_and_clamps() {
+        assert_eq!(build_packet_length_reg(0), 1 << 8);
+        assert_eq!(build_packet_length_reg(2), 1 << 8);
+        assert_eq!(build_packet_length_reg(3), 3 << 8);
+        assert_eq!(build_packet_length_reg(64), 63 << 8);
+        assert_eq!(build_packet_length_reg(127), 127 << 8);
+        assert_eq!(build_packet_length_reg(500), 127 << 8);
+    }
+
+    #[test]
+    fn fsk_ctrl_legacy_and_phy_agree_on_noaa_and_ffsk() {
+        for modulation in [
+            FskModulation::Ffsk1200_1800,
+            FskModulation::Ffsk1200_2400,
+            FskModulation::NoaaSame,
+        ] {
+            let mut cfg = FskPhyConfig::default();
+            cfg.modulation = modulation;
+            cfg.rx_gain = FskRxGain::Gain3;
+            cfg.preamble_pattern = FskPreamblePattern::Auto;
+            assert_eq!(
+                build_fsk_ctrl(modulation, FskBaudRate::Baud1200),
+                build_fsk_ctrl_from_phy(&cfg)
+            );
+        }
     }
 }
