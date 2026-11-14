@@ -36,23 +36,24 @@ struct Ep0MultiPacket {
 }
 
 /// Hardware USB Device Controller driver for PY32F071
+#[repr(C)]
 pub struct UsbDriver {
+    last_sof_ms: u32,
+    last_transition_ms: u32,
+    ep0_transfer: Option<Ep0MultiPacket>,
+    battery_voltage_mv: u16,
+    product_len: u8,
+    battery_pct: u8,
+    product_name: [u8; 32],
+
+    // Keep consecutive 1-byte state flags 4-byte aligned for Cortex-M0+ reset clears.
     is_connected: bool,
     was_connected: bool,
     consecutive_sof: u8,
-    last_sof_ms: u32,
-    last_transition_ms: u32,
     is_initialized: bool,
     dev_addr: u8,
     pending_addr: u8,
-    ep0_transfer: Option<Ep0MultiPacket>,
     configured: bool,
-
-    product_name: [u8; 32],
-    product_len: u8,
-
-    battery_voltage_mv: u16,
-    battery_pct: u8,
     is_charging: bool,
 
     #[cfg(feature = "usb_cdc")]
@@ -69,22 +70,20 @@ impl UsbDriver {
     /// Create a new, uninitialized USB driver instance (const constructible).
     pub const fn new() -> Self {
         Self {
+            last_sof_ms: 0,
+            last_transition_ms: 0,
+            ep0_transfer: None,
+            battery_voltage_mv: 0,
+            product_len: 15,
+            battery_pct: 0,
+            product_name: *b"Quansheng UV-K1                 ",
             is_connected: false,
             was_connected: false,
             consecutive_sof: 0,
-            last_sof_ms: 0,
-            last_transition_ms: 0,
             is_initialized: false,
             dev_addr: 0,
             pending_addr: 0,
-            ep0_transfer: None,
             configured: false,
-
-            product_name: *b"Quansheng UV-K1                 ",
-            product_len: 15,
-
-            battery_voltage_mv: 0,
-            battery_pct: 0,
             is_charging: false,
 
             #[cfg(feature = "usb_cdc")]
@@ -405,23 +404,14 @@ impl UsbDriver {
                     self.configure_endpoints();
                     self.ep0_send_zlp();
                 }
-                0x00 => {
-                    // GET_STATUS
-                    let status: [u8; 2] = [0, 0];
-                    self.ep0_start_transfer(&status, w_length);
+                0x00 | 0x0A => {
+                    // GET_STATUS (2 zero bytes) / GET_INTERFACE (1 zero byte)
+                    let len = if b_request == 0x00 { 2 } else { 1 };
+                    self.ep0_start_transfer(&[0, 0][..len], w_length);
                 }
-                0x01 | 0x03 => {
-                    // CLEAR_FEATURE / SET_FEATURE
+                0x01 | 0x03 | 0x0B => {
+                    // CLEAR_FEATURE / SET_FEATURE / SET_INTERFACE
                     self.ep0_send_zlp();
-                }
-                0x0B => {
-                    // SET_INTERFACE
-                    self.ep0_send_zlp();
-                }
-                0x0A => {
-                    // GET_INTERFACE
-                    let alt: [u8; 1] = [0];
-                    self.ep0_start_transfer(&alt, w_length);
                 }
                 _ => self.ep0_stall(),
             }
@@ -720,20 +710,24 @@ impl UsbDriver {
         }
     }
 
-    fn ep0_send_zlp(&mut self) {
+    #[inline(never)]
+    fn ep0_write_csr(csr: u8) {
         set_active_ep(0);
-        // On PY32F071 MUSB EP0, zero-data control transfers require
-        // acknowledging the SETUP packet with SvRxPktRdy and setting DataEnd.
         unsafe {
-            USBD_EP0_CSR_U8.write_volatile(EP0_SVRXPKTRDY | EP0_DATAEND);
+            USBD_EP0_CSR_U8.write_volatile(csr);
         }
     }
 
+    #[inline(always)]
+    fn ep0_send_zlp(&mut self) {
+        // On PY32F071 MUSB EP0, zero-data control transfers require
+        // acknowledging the SETUP packet with SvRxPktRdy and setting DataEnd.
+        Self::ep0_write_csr(EP0_SVRXPKTRDY | EP0_DATAEND);
+    }
+
+    #[inline(always)]
     fn ep0_stall(&mut self) {
-        set_active_ep(0);
-        unsafe {
-            USBD_EP0_CSR_U8.write_volatile(EP0_SENDSTALL);
-        }
+        Self::ep0_write_csr(EP0_SENDSTALL);
     }
 
     #[inline(always)]
@@ -815,7 +809,6 @@ impl UsbDriver {
                     }
                 }
                 write_fifo(in_ep, chunk);
-                set_active_ep(in_ep);
                 unsafe {
                     USBD_IN_CSR1_U8.write_volatile(INCSR1_INPKTRDY);
                 }
