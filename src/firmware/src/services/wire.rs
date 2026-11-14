@@ -106,7 +106,7 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     let payload = &payload_buf[..plen];
 
     let mut out_uninit = MaybeUninit::<[u32; 48]>::uninit();
-    let out = unsafe { core::slice::from_raw_parts_mut(out_uninit.as_mut_ptr() as *mut u8, 192) };
+    let out = unsafe { &mut *(out_uninit.as_mut_ptr() as *mut [u8; 192]) };
 
     let res = match header.service {
         SERVICE_CONTROL => handle_control_service(header.opcode, payload, hw, now, out),
@@ -470,7 +470,7 @@ fn handle_control_service(
     payload: &[u8],
     hw: &mut SystemHardware,
     now: u32,
-    out: &mut [u8],
+    out: &mut [u8; 192],
 ) -> Option<(WireStatus, usize)> {
     if !matches!(
         opcode,
@@ -498,8 +498,7 @@ fn handle_control_service(
             let Ok(req) = HandleInvokeReq::parse(payload) else {
                 return Some(err_empty(WireStatus::BadLength));
             };
-            out[4] = payload[4];
-            out[5] = payload[5];
+            out[4..6].copy_from_slice(&req.action_id.to_le_bytes());
             let status = handle_resource_invoke(handle, req.action_id, req.params, hw);
             (status, 6)
         }
@@ -595,7 +594,7 @@ fn on_transfer_open(
 fn on_transfer_chunk(
     payload: &[u8],
     hw: &mut SystemHardware,
-    out: &mut [u8],
+    out: &mut [u8; 192],
 ) -> (WireStatus, usize) {
     let Some(req) = TransferChunkRequest::parse(payload) else {
         return err_empty(WireStatus::BadLength);
@@ -636,11 +635,11 @@ fn on_transfer_chunk(
 }
 
 fn commit_calibration_payload(
-    staging: &[u8],
+    staging: &[u8; MAX_WIRE_FILE_SIZE],
     total_len: usize,
     hw: &mut SystemHardware,
 ) -> Result<(), WireStatus> {
-    if total_len != 512 || staging.len() < 512 {
+    if total_len != 512 {
         return Err(WireStatus::SafetyDenied);
     }
     let calib_slice: &[u8; 512] = unsafe { &*(staging.as_ptr() as *const [u8; 512]) };
@@ -679,8 +678,8 @@ fn on_transfer_close(
     transfer.active = false;
     let mut actual_crc = 0u32;
     if transfer.mode == TRANSFER_MODE_WRITE {
-        let total_len = transfer.current_len as usize;
         let staging = wire_file_staging_buf();
+        let total_len = (transfer.current_len as usize).min(staging.len());
         actual_crc = crypto::crc::CrcEngine::crc32(&staging[..total_len]);
         if req.expected_crc32 != 0 && req.expected_crc32 != actual_crc {
             return Err(WireStatus::Failed);
@@ -777,7 +776,7 @@ fn handle_data_service(
     opcode: u8,
     payload: &[u8],
     hw: &mut SystemHardware,
-    out: &mut [u8],
+    out: &mut [u8; 192],
 ) -> Option<(WireStatus, usize)> {
     if opcode == OP_TRANSFER_CHUNK {
         return Some(on_transfer_chunk(payload, hw, out));
@@ -802,10 +801,10 @@ fn handle_data_service(
             Some(req) => validate_file_path(req.path, true).and_then(|()| {
                 if req.path == CALIB_FILE_PATH {
                     Err(WireStatus::SafetyDenied)
-                } else if hw.filesystem.remove(req.path).is_ok() {
-                    Ok(())
                 } else {
-                    Err(WireStatus::NotFound)
+                    hw.filesystem
+                        .remove(req.path)
+                        .map_err(|_| WireStatus::NotFound)
                 }
             }),
             None => Err(WireStatus::BadLength),
@@ -821,7 +820,7 @@ fn handle_data_service(
 fn handle_events_service(
     opcode: u8,
     payload: &[u8],
-    _out: &mut [u8],
+    _out: &mut [u8; 192],
 ) -> Option<(WireStatus, usize)> {
     let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
     let status = match opcode {
