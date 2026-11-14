@@ -14,94 +14,8 @@
 
 use crate::services::SystemStorage;
 use crate::services::storage::DirEntryInfo;
-#[cfg(feature = "krx_declare")]
-use kernel::proc::krx::{KrxClass, KrxProfile};
 
 pub const PROV_BUF_CAP: usize = 4096;
-
-// Declare 3.0 payload for `/apps/sysinfo.krx` (1 node, 5 live ITEM_INFO rows, 0 actions, 6 labels)
-#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
-const SYSINFO_PAYLOAD: &[u8] = &[
-    1, 5, 0, 6, // [node_count=1, item_count=5, action_count=0, label_count=6]
-    // DeclareNode 0 (8B): node_id=0, layout=0 (Menu), item_count=5, title_offset=0, first_item=0
-    0, 0, 0, 5, 0, 0, 0, 0,
-    // Item 0 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=1, target=0, value_ref=0x0100 (DYN_BATTERY_MV)
-    5, 1, 1, 0, 0, 0, 0x00, 0x01, 0, 0, 0, 0,
-    // Item 1 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=2, target=0, value_ref=0x0102 (DYN_CPU_CLOCK)
-    5, 1, 2, 0, 0, 0, 0x02, 0x01, 0, 0, 0, 0,
-    // Item 2 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=3, target=0, value_ref=0x0105 (DYN_STACK_MARGIN)
-    5, 1, 3, 0, 0, 0, 0x05, 0x01, 0, 0, 0, 0,
-    // Item 3 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=4, target=0, value_ref=0x0107 (DYN_UPTIME)
-    5, 1, 4, 0, 0, 0, 0x07, 0x01, 0, 0, 0, 0,
-    // Item 4 (12B): kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=5, target=0, value_ref=0x0108 (DYN_ACTIVE_PROCS)
-    5, 1, 5, 0, 0, 0, 0x08, 0x01, 0, 0, 0, 0, // Length-prefixed string pool (6 strings)
-    4, b'L', b'i', b'v', b'e', 7, b'B', b'a', b't', b't', b'e', b'r', b'y', 9, b'C', b'P', b'U',
-    b' ', b'C', b'l', b'o', b'c', b'k', 10, b'S', b't', b'a', b'c', b'k', b' ', b'F', b'r', b'e',
-    b'e', 10, b'U', b'p', b't', b'i', b'm', b'e', b' ', b'(', b's', b')', 12, b'A', b'c', b't',
-    b'i', b'v', b'e', b' ', b'T', b'a', b's', b'k', b's',
-];
-
-// Declare 3.0 payload for `/apps/radioinfo.krx` (1 node, 4 live telemetry rows, layout=3 InfoCard, 5 labels)
-#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
-const RADIOINFO_PAYLOAD: &[u8] = &[
-    1, 4, 0, 5, // [node_count=1, item_count=4, action_count=0, label_count=5]
-    // DeclareNode 0 (8B): node_id=0, layout=3 (InfoCard), item_count=4, title_offset=0, first_item=0
-    0, 0, 3, 4, 0, 0, 0, 0,
-    // Item 0: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=1, target=0, value_ref=0x010B (DYN_RADIO_FREQ_A)
-    5, 1, 1, 0, 0, 0, 0x0B, 0x01, 0, 0, 0, 0,
-    // Item 1: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=2, target=0, value_ref=0x010C (DYN_RADIO_FREQ_B)
-    5, 1, 2, 0, 0, 0, 0x0C, 0x01, 0, 0, 0, 0,
-    // Item 2: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=3, target=0, value_ref=0x010A (DYN_RADIO_RSSI)
-    5, 1, 3, 0, 0, 0, 0x0A, 0x01, 0, 0, 0, 0,
-    // Item 3: kind=5 (ITEM_INFO), flags=1 (FLAG_DYNAMIC), label=4, target=0, value_ref=0x0101 (DYN_BATTERY_PCT)
-    5, 1, 4, 0, 0, 0, 0x01, 0x01, 0, 0, 0, 0,
-    // String pool: "Radio Info", "VFO A", "VFO B", "RSSI", "Battery"
-    10, b'R', b'a', b'd', b'i', b'o', b' ', b'I', b'n', b'f', b'o', 5, b'V', b'F', b'O', b' ', b'A',
-    5, b'V', b'F', b'O', b' ', b'B', 4, b'R', b'S', b'S', b'I', 7, b'B', b'a', b't', b't', b'e',
-    b'r', b'y',
-];
-
-// Declare 3.0 payload for `/apps/counter.krx` (1 node, 4 items, 3 actions, 5 labels)
-#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
-const COUNTER_PAYLOAD: &[u8] = &[
-    1, 4, 3, 5, // [node_count=1, item_count=4, action_count=3, label_count=5]
-    // DeclareNode 0 (8B): node_id=0, layout=0, item_count=4, title_offset=0, first_item=0
-    0, 0, 0, 4, 0, 0, 0, 0, // Item 0: ACTION (0), label=1 ("Count +1"), target=0
-    0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    // Item 1: ACTION (0), label=2 ("Count -1"), target=1
-    0, 0, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-    // Item 2: ACTION (0), label=3 ("Reset (0)"), target=2
-    0, 0, 3, 0, 2, 0, 0, 0, 0, 0, 0, 0,
-    // Item 3: VALUE (2), label=4 ("Current"), value_ref=0
-    2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    // Action 0 (8B): ACTION_SET_STATE (1), a=0, b=+1, c=1 (delta)
-    1, 0, 0, 0, 1, 0, 1, 0,
-    // Action 1 (8B): ACTION_SET_STATE (1), a=0, b=-1 (0xFFFF), c=1 (delta)
-    1, 0, 0, 0, 0xFF, 0xFF, 1, 0,
-    // Action 2 (8B): ACTION_SET_STATE (1), a=0, b=0, c=0 (set)
-    1, 0, 0, 0, 0, 0, 0, 0, // Length-prefixed string pool (5 strings)
-    5, b'T', b'a', b'l', b'l', b'y', 8, b'C', b'o', b'u', b'n', b't', b' ', b'+', b'1', 8, b'C',
-    b'o', b'u', b'n', b't', b' ', b'-', b'1', 9, b'R', b'e', b's', b'e', b't', b' ', b'(', b'0',
-    b')', 7, b'C', b'u', b'r', b'r', b'e', b'n', b't',
-];
-
-// Declare 3.0 payload for `/apps/timer.krx` (1 node, 3 items, 2 actions, 4 labels)
-#[cfg(all(feature = "provision_apps", feature = "krx_declare"))]
-const TIMER_PAYLOAD: &[u8] = &[
-    1, 3, 2, 4, // [node_count=1, item_count=3, action_count=2, label_count=4]
-    // DeclareNode 0 (8B): node_id=0, layout=0, item_count=3, title_offset=0, first_item=0
-    0, 0, 0, 3, 0, 0, 0, 0, // Item 0: ACTION (0), label=1 ("Start (+10)"), target=0
-    0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, // Item 1: ACTION (0), label=2 ("Reset"), target=1
-    0, 0, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-    // Item 2: VALUE (2), label=3 ("Seconds"), value_ref=0
-    2, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    // Action 0 (8B): ACTION_SET_STATE (1), a=0, b=+10, c=1 (delta)
-    1, 0, 0, 0, 10, 0, 1, 0, // Action 1 (8B): ACTION_SET_STATE (1), a=0, b=0, c=0 (set)
-    1, 0, 0, 0, 0, 0, 0, 0, // Length-prefixed string pool (4 strings)
-    7, b'E', b'l', b'a', b'p', b's', b'e', b'd', 11, b'S', b't', b'a', b'r', b't', b' ', b'(',
-    b'+', b'1', b'0', b')', 5, b'R', b'e', b's', b'e', b't', 7, b'S', b'e', b'c', b'o', b'n', b'd',
-    b's',
-];
 
 // Native ARM Thumb-1 binary payload for `/apps/beacon.krx`
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
@@ -157,46 +71,6 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
         write_raw_krx_package(filesystem, "/apps/bench.krx", BENCH_APP_PACKAGE);
         write_raw_krx_package(filesystem, "/apps/paged.krx", PAGED_APP_PACKAGE);
         write_raw_krx_package(filesystem, "/apps/leaf.krx", LEAF_APP_PACKAGE);
-    }
-
-    #[cfg(feature = "krx_declare")]
-    {
-        write_krx_package(
-            filesystem,
-            "/apps/sysinfo.krx",
-            KrxClass::Declare,
-            KrxProfile::D0DeclareGraph,
-            "SysInfo",
-            base_caps,
-            SYSINFO_PAYLOAD,
-        );
-        write_krx_package(
-            filesystem,
-            "/apps/counter.krx",
-            KrxClass::Declare,
-            KrxProfile::D0DeclareGraph,
-            "Counter",
-            base_caps,
-            COUNTER_PAYLOAD,
-        );
-        write_krx_package(
-            filesystem,
-            "/apps/timer.krx",
-            KrxClass::Declare,
-            KrxProfile::D0DeclareGraph,
-            "Timer",
-            base_caps,
-            TIMER_PAYLOAD,
-        );
-        write_krx_package(
-            filesystem,
-            "/apps/radioinfo.krx",
-            KrxClass::Declare,
-            KrxProfile::D0DeclareGraph,
-            "RadioInfo",
-            base_caps,
-            RADIOINFO_PAYLOAD,
-        );
     }
 }
 

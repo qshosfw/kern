@@ -55,8 +55,6 @@ overclock_72mhz = []
 # ⚙️ Execution Runtime Engines
 krx_runtime = ["text_input"]
 krx_native = ["krx_runtime"]
-krx_declare = ["krx_runtime"]
-krx_vm = ["kernel/krx_vm", "krx_runtime"]
 
 # 📡 Hardware Peripheral & RF Subsystems
 radio = ["drivers/radio"]

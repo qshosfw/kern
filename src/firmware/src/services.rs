@@ -406,7 +406,7 @@ pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_u
         flags,
         voltage_mv: pwr.battery_voltage_mv(),
         temp_deci_c: pwr.mcu_temperature_deci_c(),
-        dynamic_icons: &[],
+        dynamic_glyphs: &[],
     };
     cfg.render(canvas)
 }

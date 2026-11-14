@@ -1,5 +1,3 @@
-#[cfg(feature = "settings_calib")]
-use crate::services::calibration::CalibrationService;
 use crate::services::power::PowerServiceConfigExt;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
 

@@ -7,8 +7,6 @@
 use crate::SysContext;
 use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
-#[cfg(feature = "krx_declare")]
-use kernel::proc::declare::{ActionRecord, DeclareItem, DeclareNode, LAYOUT_MENU};
 use kernel::proc::krx::{KrxClass, KrxPreamble};
 
 pub use kernel::proc::krx::KrxLaunchError;
@@ -21,86 +19,6 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
         DYNAMIC_APP_NAME_BUF[..len].copy_from_slice(&name.as_bytes()[..len]);
         DYNAMIC_APP_NAME_BUF[len] = 0;
         core::str::from_utf8_unchecked(&DYNAMIC_APP_NAME_BUF[..len])
-    }
-}
-
-/// Parse a Declare 3.0 binary payload from the persistent upper slice of the shared arena (`[1024..5120]`).
-#[inline(never)]
-#[cfg(feature = "krx_declare")]
-fn populate_declare_from_payload(
-    walker: &mut kernel::proc::declare::DeclareWalker,
-    payload: &'static [u8],
-) {
-    if payload.len() >= 4
-        && payload[0] > 0
-        && payload[0] <= 8
-        && payload[1] <= 24
-        && payload[2] <= 16
-        && payload[3] <= 24
-    {
-        let n_cnt = payload[0] as usize;
-        let i_cnt = payload[1] as usize;
-        let a_cnt = payload[2] as usize;
-        let l_cnt = payload[3] as usize;
-        let min_bytes = 4 + n_cnt * 8 + i_cnt * 12 + a_cnt * 8;
-        if payload.len() >= min_bytes {
-            let mut off = 4usize;
-            for _ in 0..n_cnt {
-                let node: DeclareNode = unsafe {
-                    core::ptr::read_unaligned(payload.as_ptr().add(off) as *const DeclareNode)
-                };
-                let _ = walker.nodes.push(node);
-                off += 8;
-            }
-            for _ in 0..i_cnt {
-                let item: DeclareItem = unsafe {
-                    core::ptr::read_unaligned(payload.as_ptr().add(off) as *const DeclareItem)
-                };
-                let _ = walker.items.push(item);
-                off += 12;
-            }
-            for _ in 0..a_cnt {
-                let act: ActionRecord = unsafe {
-                    core::ptr::read_unaligned(payload.as_ptr().add(off) as *const ActionRecord)
-                };
-                let _ = walker.actions.push(act);
-                off += 8;
-            }
-            // Length-prefixed string pool (u8 len + UTF-8, KRX-ABI 2.5.0 Section 10.2)
-            for _ in 0..l_cnt {
-                if off >= payload.len() {
-                    break;
-                }
-                let slen = payload[off] as usize;
-                off += 1;
-                if off + slen > payload.len() {
-                    break;
-                }
-                if let Some(s) = utils::format::ascii_str(&payload[off..off + slen]) {
-                    let _ = walker.labels.push(s);
-                }
-                off += slen;
-            }
-            return;
-        }
-    }
-
-    // Fallback for raw DeclareItem slices: synthesize root DeclareNode
-    let item_count = (payload.len() / core::mem::size_of::<DeclareItem>()).min(16);
-    if item_count > 0 {
-        for i in 0..item_count {
-            let item: DeclareItem = unsafe {
-                core::ptr::read_unaligned(payload.as_ptr().add(i * 12) as *const DeclareItem)
-            };
-            let _ = walker.items.push(item);
-        }
-        let _ = walker.nodes.push(DeclareNode {
-            node_id: 0,
-            layout: LAYOUT_MENU,
-            item_count: item_count as u8,
-            title_offset: 0,
-            first_item_offset: 0,
-        });
     }
 }
 
@@ -178,67 +96,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
     // 5. Execution Class Dispatch
     let (vtable, instance) = match exec_class {
-        #[cfg(feature = "krx_declare")]
-        KrxClass::Declare => {
-            let walker = crate::apps::runtime::get_global_walker();
-            walker.reset(app_name);
-
-            // Store Declare payload in [1024..] of the shared transient arena
-            // (DeclareWalker occupies [0..988], so [1024..] persists for the app's lifetime!)
-            let arena_tail = &mut crate::runtime::transient_arena_bytes_mut()[1024..];
-            let read_total = ctx
-                .storage
-                .read_file_at(path, header_len, arena_tail)
-                .map_err(|_| KrxLaunchError::ReadFailed)?;
-            if read_total == 0 {
-                return Err(KrxLaunchError::TruncatedPackage);
-            }
-            let payload: &'static [u8] =
-                unsafe { core::slice::from_raw_parts(arena_tail.as_ptr(), read_total) };
-            populate_declare_from_payload(walker, payload);
-
-            (
-                crate::apps::runtime::DECLARE_WALKER_VTABLE,
-                walker as *mut _ as *mut (),
-            )
-        }
-        #[cfg(not(feature = "krx_declare"))]
-        KrxClass::Declare => {
-            let _ = (ctx, path, preamble, app_name);
-            return Err(KrxLaunchError::VmDisabled);
-        }
-        #[cfg(feature = "krx_vm")]
-        KrxClass::VMachine => {
-            let mut code_buf = [0u8; 256];
-            let read_total = ctx
-                .storage
-                .read_file_at(path, header_len, &mut code_buf)
-                .map_err(|_| KrxLaunchError::ReadFailed)?;
-            let loaded = if read_total > 0 {
-                let payload = &code_buf[..read_total];
-                let mut words = [0u16; 128];
-                let word_count = (payload.len() / 2).min(128);
-                for i in 0..word_count {
-                    words[i] = u16::from_le_bytes([payload[i * 2], payload[i * 2 + 1]]);
-                }
-                super::vm_runner::load_vm_program(app_name, &words[..word_count])
-            } else {
-                static DEFAULT_BYTECODE: [u16; 4] = [
-                    0x0400, // MOV_IMM v0, 0
-                    0x0400, // MOV_IMM v0, 0
-                    0x4000, // HALT
-                    0x0000, // NOP
-                ];
-                super::vm_runner::load_vm_program(app_name, &DEFAULT_BYTECODE)
-            };
-            if !loaded {
-                return Err(KrxLaunchError::ExecutionFailed);
-            }
-
-            (super::vm_runner::VM_RUNNER_VTABLE, core::ptr::null_mut())
-        }
-        #[cfg(not(feature = "krx_vm"))]
-        KrxClass::VMachine => {
+        KrxClass::Declare | KrxClass::VMachine => {
             let _ = (ctx, path, preamble, app_name);
             return Err(KrxLaunchError::VmDisabled);
         }

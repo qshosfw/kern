@@ -145,7 +145,7 @@ fn verify_passcode_interactive(ctx: &mut crate::SysContext, text: &str) -> bool 
             pcfg.max_tries,
             &mut nbuf,
         );
-        ctx.show_popup(super::app::TAG_POPUP_INFO, "Passcode Error", msg);
+        ctx.show_popup(super::dialog::TAG_POPUP_INFO, "Passcode Error", msg);
         false
     }
 }
@@ -155,7 +155,7 @@ pub fn handle_passcode_verify(ctx: &mut crate::SysContext, text: &str) {
     if verify_passcode_interactive(ctx, text) {
         let pcfg = crate::security::passcode::get_passcode_config(ctx.storage);
         ctx.prompt_passcode(
-            super::app::TAG_PASSCODE_NEW,
+            super::dialog::TAG_PASSCODE_NEW,
             "Set Passcode",
             16,
             pcfg.digits_only,
@@ -185,8 +185,8 @@ pub fn handle_passcode_confirm(candidate: &str, text: &str, ctx: &mut crate::Sys
         } else {
             "Failed to save"
         };
-        ctx.show_popup(super::app::TAG_POPUP_INFO, "", msg);
+        ctx.show_popup(super::dialog::TAG_POPUP_INFO, "", msg);
     } else {
-        ctx.show_popup(super::app::TAG_POPUP_INFO, "", "Mismatch");
+        ctx.show_popup(super::dialog::TAG_POPUP_INFO, "", "Mismatch");
     }
 }

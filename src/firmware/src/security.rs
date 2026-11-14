@@ -62,7 +62,7 @@ pub mod passcode {
     pub fn is_passcode_set(filesystem: &mut crate::services::SystemStorage) -> bool {
         let mut hdr = [0u8; 6];
         if let Ok(n) = filesystem.read_file("/sys/passcode.key", &mut hdr) {
-            return n >= 6 && &hdr[..4] == b"KPCK" && (hdr[4] & 1) != 0;
+            return n >= 6 && &hdr[..4] == b"PIN1" && (hdr[4] & 1) != 0;
         }
         false
     }

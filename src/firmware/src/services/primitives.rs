@@ -826,7 +826,7 @@ impl<'a, 'hw> FmPrimitive for SysContext<'a, 'hw> {
         {
             let i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
             let mut bk = drivers::bk1080::Bk1080::new(i2c);
-            let _ = bk.tune(freq_100khz);
+            let _ = bk.set_frequency_10khz(freq_100khz.saturating_mul(10));
         }
         #[cfg(not(feature = "fm_radio"))]
         let _ = freq_100khz;

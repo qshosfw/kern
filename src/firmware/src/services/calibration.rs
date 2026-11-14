@@ -230,6 +230,26 @@ impl SystemCalibration {
     }
 
     #[inline(always)]
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    #[inline(always)]
+    pub fn lna_calib(&self) -> u16 {
+        self.as_block().lna_calib
+    }
+
+    #[inline(always)]
+    pub fn mix_calib(&self) -> u16 {
+        self.as_block().mix_calib
+    }
+
+    #[inline(always)]
+    pub fn volume_gain(&self) -> u8 {
+        self.as_block().volume_gain
+    }
+
+    #[inline(always)]
     pub fn squelch_thresholds(
         &self,
         freq_hz: u32,
