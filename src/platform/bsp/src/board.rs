@@ -90,7 +90,8 @@ pub struct RadioBus;
 impl RadioBus {
     #[inline(always)]
     fn delay_bus() {
-        cortex_m::asm::delay(24); // ~0.5us at 48MHz for clean RF bitbang SPI
+        // ~0.5us setup/hold scaled to current sysclk (~22 cycles @ 48MHz, ~34 @ 72MHz)
+        cortex_m::asm::delay((hal::rcc::sysclk_hz() >> 21).max(1));
     }
 
     #[inline(always)]

@@ -106,23 +106,36 @@ pub enum Spi1Speed {
     Turbo = 0b001,
 }
 
-/// Dynamically adjust SPI1 baudrate prescaler without resetting peripheral state.
-pub fn set_spi1_speed(speed: Spi1Speed) {
+/// Update SPI baud rate prescaler cleanly after draining active bus transfers.
+fn set_spi_br(spi_inst: pac::spi::SpiInstance, br: u32) {
     unsafe {
-        // Wait for current transmission to finish
         let mut timeout = 100_000;
-        while SPI1.sr().read_volatile() & spi::SR_BSY != 0 {
+        while spi_inst.sr().read_volatile() & spi::SR_BSY != 0 {
             timeout -= 1;
             if timeout == 0 {
                 break;
             }
         }
-        let mut cr1 = SPI1.cr1().read_volatile();
+        let mut cr1 = spi_inst.cr1().read_volatile();
         // SPE must be cleared before modifying BR bits
-        SPI1.cr1().write_volatile(cr1 & !spi::CR1_SPE);
+        spi_inst.cr1().write_volatile(cr1 & !spi::CR1_SPE);
         cr1 &= !(0b111 << spi::CR1_BR_SHIFT);
-        cr1 |= (speed as u32) << spi::CR1_BR_SHIFT;
-        SPI1.cr1().write_volatile(cr1 | spi::CR1_SPE);
+        cr1 |= (br & 0b111) << spi::CR1_BR_SHIFT;
+        spi_inst.cr1().write_volatile(cr1 | spi::CR1_SPE);
+    }
+}
+
+/// Dynamically adjust SPI1 baudrate prescaler without resetting peripheral state.
+pub fn set_spi1_speed(speed: Spi1Speed) {
+    set_spi_br(SPI1, speed as u32);
+}
+
+/// Resynchronize SPI2 (Flash) prescaler after APB clock changes so SCK stays <= 24 MHz.
+pub fn resync_clock(pclk_hz: u32) {
+    let apb1 = unsafe { pac::rcc::RCC_APB1ENR.read_volatile() };
+    if (apb1 & pac::rcc::APB1ENR_SPI2) != 0 {
+        let br = if pclk_hz > 48_000_000 { 0b001 } else { 0b000 };
+        set_spi_br(SPI2, br);
     }
 }
 

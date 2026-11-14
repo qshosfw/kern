@@ -374,7 +374,6 @@ impl Orchestrator {
         } else {
             ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
         }
-        self.drain_ipc_commands(ctx);
     }
 
     fn supervise_lock<'a>(

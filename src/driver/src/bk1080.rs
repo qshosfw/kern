@@ -65,12 +65,12 @@ impl<I2C: I2c> Bk1080<I2C> {
         }
 
         // Delay ~250ms for PLL stabilization
-        cortex_m::asm::delay(48_000_000 / 4);
+        py32_hal::delay::delay_ms(250);
 
         self.write_reg(REG_INTERNAL_25, 0xA83C)?;
         self.write_reg(REG_INTERNAL_25, 0xA8BC)?;
 
-        cortex_m::asm::delay(48_000_000 / 16);
+        py32_hal::delay::delay_ms(62);
 
         self.is_initialized = true;
         Ok(())
@@ -98,7 +98,7 @@ impl<I2C: I2c> Bk1080<I2C> {
         self.write_reg(REG_SYSTEM_CONFIG2, updated_reg5)?;
 
         self.write_reg(REG_CHANNEL, channel)?;
-        cortex_m::asm::delay(480_000); // 10ms
+        py32_hal::delay::delay_ms(10);
         self.write_reg(REG_CHANNEL, channel | 0x8000)?; // Tune bit
 
         Ok(())

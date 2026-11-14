@@ -40,15 +40,34 @@ impl CalibSignature {
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
-        unsafe { core::mem::transmute(*self) }
+        let mut out = [0u8; 32];
+        out[0..4].copy_from_slice(&self.ident);
+        out[4] = self.version;
+        out[5..8].copy_from_slice(&self._reserved);
+        out[8..16].copy_from_slice(&self.hardware_serial.to_le_bytes());
+        out[16..32].copy_from_slice(&self.auth_tag);
+        out
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < 32 || &bytes[..4] != CALIB_SIG_IDENT {
             return None;
         }
-        let sig: Self = unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) };
-        Some(sig)
+        let mut ident = [0u8; 4];
+        ident.copy_from_slice(&bytes[0..4]);
+        let mut reserved = [0u8; 3];
+        reserved.copy_from_slice(&bytes[5..8]);
+        let mut serial_bytes = [0u8; 8];
+        serial_bytes.copy_from_slice(&bytes[8..16]);
+        let mut auth_tag = [0u8; 16];
+        auth_tag.copy_from_slice(&bytes[16..32]);
+        Some(Self {
+            ident,
+            version: bytes[4],
+            _reserved: reserved,
+            hardware_serial: u64::from_le_bytes(serial_bytes),
+            auth_tag,
+        })
     }
 }
 
@@ -502,5 +521,33 @@ impl CalibrationService for SystemCalibration {
 
     fn raw_bytes(&self) -> &[u8; 512] {
         &self.raw
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calib_signature_byte_roundtrip() {
+        let mut sig = CalibSignature::empty();
+        sig.ident = *CALIB_SIG_IDENT;
+        sig.version = 1;
+        sig._reserved = [0xAA, 0xBB, 0xCC];
+        sig.hardware_serial = 0x0123_4567_89AB_CDEF;
+        sig.auth_tag = [0x42; 16];
+
+        let encoded = sig.to_bytes();
+        let decoded = CalibSignature::from_bytes(&encoded).expect("valid CalibSignature");
+        assert_eq!(decoded.ident, *CALIB_SIG_IDENT);
+        assert_eq!(decoded.version, 1);
+        assert_eq!(decoded._reserved, [0xAA, 0xBB, 0xCC]);
+        assert_eq!(decoded.hardware_serial, 0x0123_4567_89AB_CDEF);
+        assert_eq!(decoded.auth_tag, [0x42; 16]);
+
+        let mut bad = encoded;
+        bad[0] = b'X';
+        assert!(CalibSignature::from_bytes(&bad).is_none());
+        assert!(CalibSignature::from_bytes(&encoded[..31]).is_none());
     }
 }

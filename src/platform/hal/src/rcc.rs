@@ -315,6 +315,7 @@ fn apply_sysclk(hsi_24: bool, pll_mul: Option<u32>, wait_states: u32) {
     let hz = sysclk_hz();
     crate::delay::update_systick_freq(hz);
     crate::time::update_tim2_freq(hz);
+    crate::spi::resync_clock(hz);
     crate::uart::resync_clock(hz);
 }
 

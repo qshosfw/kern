@@ -283,13 +283,7 @@ impl SystemDiagnostics {
 
     /// Reboots into the Bootloader by triggering a Cortex-M0+ system reset via AIRCR.
     pub fn reboot_to_bootloader() -> ! {
-        unsafe {
-            let aircr = 0xE000ED0C as *mut u32;
-            core::ptr::write_volatile(aircr, (0x5FA << 16) | (1 << 2));
-            loop {
-                core::arch::asm!("nop");
-            }
-        }
+        Self::reboot()
     }
 }
 
