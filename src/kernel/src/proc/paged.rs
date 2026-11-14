@@ -209,23 +209,14 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
             }
         }
 
-        // 2. Cache miss (Page Fault): find empty slot first
-        for s in 0..slot_limit {
-            if self.slots[s].resident_block.is_none() {
-                self.slots[s] = CacheSlotMeta {
-                    resident_block: Some(block_id),
-                    pinned: entry.is_pinned(),
-                    last_access_tick: self.access_clock,
-                };
-                self.fault_count = self.fault_count.saturating_add(1);
-                return Ok((s, false, entry));
-            }
-        }
-
-        // 3. Evict least-recently-used unpinned slot
+        // 2. Cache miss (Page Fault): prefer an empty slot, else evict LRU unpinned slot
         let mut victim: Option<usize> = None;
         let mut oldest_age: u16 = 0;
         for s in 0..slot_limit {
+            if self.slots[s].resident_block.is_none() {
+                victim = Some(s);
+                break;
+            }
             if !self.slots[s].pinned {
                 let age = self
                     .access_clock
@@ -237,14 +228,14 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
             }
         }
 
-        let victim_idx = victim.ok_or(PagedError::NoUnpinnedSlotAvailable)?;
-        self.slots[victim_idx] = CacheSlotMeta {
+        let slot_idx = victim.ok_or(PagedError::NoUnpinnedSlotAvailable)?;
+        self.slots[slot_idx] = CacheSlotMeta {
             resident_block: Some(block_id),
             pinned: entry.is_pinned(),
             last_access_tick: self.access_clock,
         };
         self.fault_count = self.fault_count.saturating_add(1);
-        Ok((victim_idx, false, entry))
+        Ok((slot_idx, false, entry))
     }
 
     /// Byte offset of `slot_idx` relative to the start of the fixed-window cache VMA.
