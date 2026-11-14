@@ -195,52 +195,13 @@ pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut S
 
 struct ConfigMeta {
     version: u8,
+    rules_start: u8,
+    rules_len: u8,
     path: &'static str,
 }
 
-static CONFIG_METAS: [ConfigMeta; 6] = [
-    ConfigMeta {
-        version: DisplayConfig::VERSION,
-        path: DisplayConfig::PATH,
-    },
-    ConfigMeta {
-        version: AudioConfig::VERSION,
-        path: AudioConfig::PATH,
-    },
-    ConfigMeta {
-        version: KeyConfig::VERSION,
-        path: KeyConfig::PATH,
-    },
-    ConfigMeta {
-        version: SystemConfig::VERSION,
-        path: SystemConfig::PATH,
-    },
-    ConfigMeta {
-        version: BatteryConfig::VERSION,
-        path: BatteryConfig::PATH,
-    },
-    ConfigMeta {
-        version: AppsConfig::VERSION,
-        path: AppsConfig::PATH,
-    },
-];
-
-#[inline(never)]
-fn check_bounds(bytes: &[u8], expected_ver: u8, rules: &[[u8; 2]]) -> bool {
-    if bytes[0] != expected_ver {
-        return false;
-    }
-    for &[offset, max] in rules {
-        if bytes[offset as usize] > max {
-            return false;
-        }
-    }
-    true
-}
-
-static KEY_RULES: [[u8; 2]; 6] = [[7, 5], [8, 3], [9, 2], [10, 3], [11, 2], [21, 2]];
-static BATT_RULES: [[u8; 2]; 4] = [[2, 8], [3, 3], [4, 5], [5, 1]];
-static DISPLAY_RULES: [[u8; 2]; 11] = [
+static ALL_BOUND_RULES: [[u8; 2]; 38] = [
+    // 0: Display (0..11)
     [1, 5],
     [2, 10],
     [3, 10],
@@ -252,9 +213,27 @@ static DISPLAY_RULES: [[u8; 2]; 11] = [
     [9, 2],
     [10, 1],
     [11, 3],
-];
-static AUDIO_RULES: [[u8; 2]; 7] = [[1, 10], [2, 5], [3, 31], [4, 1], [6, 10], [7, 4], [8, 4]];
-static APPS_RULES: [[u8; 2]; 10] = [
+    // 1: Audio (11..18)
+    [1, 10],
+    [2, 5],
+    [3, 31],
+    [4, 1],
+    [6, 10],
+    [7, 4],
+    [8, 4],
+    // 2: Keys (18..24)
+    [7, 5],
+    [8, 3],
+    [9, 2],
+    [10, 3],
+    [11, 2],
+    [21, 2],
+    // 4: Battery (24..28)
+    [2, 8],
+    [3, 3],
+    [4, 5],
+    [5, 1],
+    // 5: Apps (28..38)
     [1, 1],   // launcher_style: 0..=1
     [2, 1],   // show_numbers: 0..=1
     [3, 1],   // show_labels: 0..=1
@@ -266,6 +245,60 @@ static APPS_RULES: [[u8; 2]; 10] = [
     [14, 3],  // max_strikes <= 3
     [15, 4],  // zone_b_cache_kb <= 4
 ];
+
+static CONFIG_METAS: [ConfigMeta; 6] = [
+    ConfigMeta {
+        version: DisplayConfig::VERSION,
+        rules_start: 0,
+        rules_len: 11,
+        path: DisplayConfig::PATH,
+    },
+    ConfigMeta {
+        version: AudioConfig::VERSION,
+        rules_start: 11,
+        rules_len: 7,
+        path: AudioConfig::PATH,
+    },
+    ConfigMeta {
+        version: KeyConfig::VERSION,
+        rules_start: 18,
+        rules_len: 6,
+        path: KeyConfig::PATH,
+    },
+    ConfigMeta {
+        version: SystemConfig::VERSION,
+        rules_start: 0,
+        rules_len: 0,
+        path: SystemConfig::PATH,
+    },
+    ConfigMeta {
+        version: BatteryConfig::VERSION,
+        rules_start: 24,
+        rules_len: 4,
+        path: BatteryConfig::PATH,
+    },
+    ConfigMeta {
+        version: AppsConfig::VERSION,
+        rules_start: 28,
+        rules_len: 10,
+        path: AppsConfig::PATH,
+    },
+];
+
+#[inline(never)]
+fn check_bounds(bytes: &[u8], expected_ver: u8, start: u8, len: u8) -> bool {
+    if bytes[0] != expected_ver {
+        return false;
+    }
+    let s = start as usize;
+    let e = s + (len as usize);
+    for &[offset, max] in &ALL_BOUND_RULES[s..e] {
+        if bytes[offset as usize] > max {
+            return false;
+        }
+    }
+    true
+}
 
 static DEFAULT_MASTER_CONFIG: MasterConfig = MasterConfig::DEFAULT;
 
@@ -352,46 +385,53 @@ impl MasterConfig {
     pub fn sanitize(&mut self) -> u8 {
         let mut repaired = 0u8;
 
-        if self.system.version != SystemConfig::VERSION {
-            self.system = DEFAULT_MASTER_CONFIG.system;
-            repaired |= DIRTY_SYSTEM;
+        for (i, meta) in CONFIG_METAS.iter().enumerate() {
+            let extra_bad = match i {
+                0 => self.display.backlight_max == 0,
+                4 => self.battery.calib_tweak_mv < -500 || self.battery.calib_tweak_mv > 500,
+                5 => {
+                    self.apps.daemon_budget_ms < 2
+                        || self.apps.hook_budget_ms < 2
+                        || self.apps.zone_b_cache_kb == 0
+                }
+                _ => false,
+            };
+            if extra_bad
+                || !check_bounds(
+                    self.config_bytes(i),
+                    meta.version,
+                    meta.rules_start,
+                    meta.rules_len,
+                )
+            {
+                let def = DEFAULT_MASTER_CONFIG.config_bytes(i);
+                self.config_bytes_mut(i).copy_from_slice(def);
+                repaired |= 1u8 << i;
+            }
         }
+
         if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > 4 {
             self.system.model = self.system.model.min(2);
             self.system.uart_baud = self.system.uart_baud.min(1);
             self.system.cpu_clock = self.system.cpu_clock.min(4);
             repaired |= DIRTY_SYSTEM;
         }
-        let mut is_empty_tag = true;
-        for &b in &self.system.tag {
-            if b != 0 && b != b' ' && b != b'0' {
-                is_empty_tag = false;
-                break;
-            }
-        }
-        if is_empty_tag {
+        if self
+            .system
+            .tag
+            .iter()
+            .all(|&b| b == 0 || b == b' ' || b == b'0')
+        {
             self.system.init_default_tag();
             repaired |= DIRTY_SYSTEM;
         }
 
         let expected_nav = self.system.nav_layout();
-        if !check_bounds(self.keys.as_bytes(), KeyConfig::VERSION, &KEY_RULES) {
-            self.keys = DEFAULT_MASTER_CONFIG.keys;
-            repaired |= DIRTY_KEYS;
-        }
         if self.keys.nav_layout != expected_nav {
             self.keys.nav_layout = expected_nav;
             repaired |= DIRTY_KEYS;
         }
 
-        let batt_invalid = self.battery.version != BatteryConfig::VERSION
-            || !check_bounds(self.battery.as_bytes(), BatteryConfig::VERSION, &BATT_RULES)
-            || self.battery.calib_tweak_mv < -500
-            || self.battery.calib_tweak_mv > 500;
-        if batt_invalid {
-            self.battery = DEFAULT_MASTER_CONFIG.battery;
-            repaired |= DIRTY_BATTERY;
-        }
         if self.system.is_k1() {
             if self.battery.battery_type < 3 || self.battery.battery_type > 5 {
                 self.battery.battery_type = 3;
@@ -400,30 +440,6 @@ impl MasterConfig {
         } else if self.battery.battery_type >= 3 {
             self.battery.battery_type = 0;
             repaired |= DIRTY_BATTERY;
-        }
-
-        if !check_bounds(
-            self.display.as_bytes(),
-            DisplayConfig::VERSION,
-            &DISPLAY_RULES,
-        ) || self.display.backlight_max == 0
-        {
-            self.display = DEFAULT_MASTER_CONFIG.display;
-            repaired |= DIRTY_DISPLAY;
-        }
-
-        if !check_bounds(self.audio.as_bytes(), AudioConfig::VERSION, &AUDIO_RULES) {
-            self.audio = DEFAULT_MASTER_CONFIG.audio;
-            repaired |= DIRTY_AUDIO;
-        }
-
-        if !check_bounds(self.apps.as_bytes(), AppsConfig::VERSION, &APPS_RULES)
-            || self.apps.daemon_budget_ms < 2
-            || self.apps.hook_budget_ms < 2
-            || self.apps.zone_b_cache_kb == 0
-        {
-            self.apps = DEFAULT_MASTER_CONFIG.apps;
-            repaired |= DIRTY_APPS;
         }
 
         repaired
