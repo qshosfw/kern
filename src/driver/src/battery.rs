@@ -24,13 +24,24 @@ pub struct BatteryState {
 const DEFAULT_CALIB_CONST: u16 = 2227;
 const DEFAULT_CAL_SCALE_Q16: u32 = (7600u32 << 16) / DEFAULT_CALIB_CONST as u32;
 
+#[repr(C)]
 pub struct BatteryDriver {
-    pub calib_const: u16,
-    cal_scale_q16: u32,
-    pub calib_curve: [u16; 6],
-    pub has_calib_curve: bool,
-    pub calib_tweak_mv: i16,
+    // ── Hot 1-byte scalars (offset 0..10: 1-insn ldrb/strb) ─────────
     battery_type: Cell<BatteryType>,
+    pub has_calib_curve: bool,
+    pub charge_detect_enabled: bool,
+    is_charging: bool,
+    charge_counter: u8,
+    tx_recovery_ticks: u8,
+    tx_active_prev: bool,
+    drift_counter: u8,
+    display_pct: u8,
+    is_low_state: bool,
+    is_critical_state: bool,
+    _pad: u8,
+    // ── 2-byte scalars (offset 12..34) ─────────────────────────────
+    pub calib_const: u16,
+    pub calib_tweak_mv: i16,
     smoothed_mv: u16,
     ocv_mv: u16,
     last_mv: u16,
@@ -39,18 +50,13 @@ pub struct BatteryDriver {
     pub last_vdda: u16,
     pub last_temp: i16,
     pub internal_res_m_ohm: u16,
-    pub charge_detect_enabled: bool,
-    is_charging: bool,
-    charge_counter: u8,
-    tx_recovery_ticks: u8,
     pre_tx_ocv: u16,
-    tx_active_prev: bool,
-    drift_counter: u8,
-    display_pct: u8,
-    is_low_state: bool,
-    is_critical_state: bool,
     pub warn_threshold_mv: u16,
     pub shut_threshold_mv: u16,
+    _pad2: u16,
+    // ── 4-byte scalars & curve array ───────────────────────────────
+    cal_scale_q16: u32,
+    pub calib_curve: [u16; 6],
 }
 
 impl BatteryDriver {
@@ -82,6 +88,8 @@ impl BatteryDriver {
             is_critical_state: false,
             warn_threshold_mv: 0,
             shut_threshold_mv: 0,
+            _pad: 0,
+            _pad2: 0,
         }
     }
 
@@ -113,6 +121,8 @@ impl BatteryDriver {
             is_critical_state: false,
             warn_threshold_mv: 6800,
             shut_threshold_mv: 6300,
+            _pad: 0,
+            _pad2: 0,
         }
     }
 

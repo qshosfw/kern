@@ -25,39 +25,28 @@ pub enum LockToast {
 
 #[repr(C)]
 pub struct KeypadLockManager {
+    // ── Hot 1-byte scalars (offset 0..10: 1-insn ldrb/strb) ─────────
     pub is_locked: bool,
     pub is_f_active: bool,
-    pub f_key_remaining_ms: u16,
-
-    // Hold tracking for # and F keys
+    held_confirmed: bool,
+    pub can_sleep: bool,
+    pub sleep_requested: bool,
+    pub force_close_requested: bool,
+    toast: LockToast,
+    is_long_press_triggered: bool,
     held_code: Option<KeyCode>,
+
+    // ── 2-byte scalars (offset 10..24: 1-insn ldrh/strh) ────────────
+    pub f_key_remaining_ms: u16,
     hold_elapsed_ms: u16,
     hold_target_ms: u16,
     hold_start_threshold_ms: u16,
     progress_slope_q16: u16,
-    is_long_press_triggered: bool,
-
-    // Millisecond timing reference
-    last_tick_ms: u32,
-
-    // Inactivity tracking for auto-lock in real milliseconds
-    inactivity_ms: u32,
-
-    // Dialog / Toast state
-    toast: LockToast,
     toast_remaining_ms: u16,
 
-    // Flag indicating hardware KeypadScanner confirmed KeyState::Held for the active key
-    held_confirmed: bool,
-
-    // Context flag indicating whether sleep is allowed (Launcher) or force-close (Apps)
-    pub can_sleep: bool,
-
-    // Sleep request flag (triggered when Exit key is held past target in Launcher)
-    pub sleep_requested: bool,
-
-    // Force close request flag (triggered when Exit key is held past target in an app)
-    pub force_close_requested: bool,
+    // ── 4-byte timing counters ──────────────────────────────────────
+    last_tick_ms: u32,
+    inactivity_ms: u32,
 }
 
 impl KeypadLockManager {

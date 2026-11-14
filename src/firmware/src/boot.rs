@@ -161,31 +161,32 @@ pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
     if (tag.flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) == 0 {
         return;
     }
-    let Some(slot) = crate::panic::BOOT_RECORD.get().latest_valid_slot().copied() else {
+    let Some(slot) = crate::panic::BOOT_RECORD.get().latest_valid_slot() else {
         return;
     };
     if !slot.is_crash() {
         return;
     }
 
-    let mut ring = [0u8; 1024];
-    let existing_len = fs.read_file("/log/crash.bin", &mut ring).unwrap_or(0);
+    let ring = &mut crate::data::scratch_tail_bytes_mut()[..1024];
+    let existing_len = fs.read_file("/log/crash.bin", ring).unwrap_or(0);
     let slot_bytes = unsafe {
         core::slice::from_raw_parts(
-            &slot as *const kernel::boot::BootSlot as *const u8,
+            slot as *const kernel::boot::BootSlot as *const u8,
             core::mem::size_of::<kernel::boot::BootSlot>(),
         )
     };
-    if existing_len + 128 <= ring.len() {
+    let write_len = if existing_len + 128 <= ring.len() {
         ring[existing_len..existing_len + 128].copy_from_slice(slot_bytes);
-        let _ = fs.write_file("/log/crash.bin", &ring[..existing_len + 128]);
+        existing_len + 128
     } else {
         for i in 0..(1024 - 128) {
             ring[i] = ring[i + 128];
         }
         ring[1024 - 128..1024].copy_from_slice(slot_bytes);
-        let _ = fs.write_file("/log/crash.bin", &ring);
-    }
+        1024
+    };
+    let _ = fs.write_file("/log/crash.bin", &ring[..write_len]);
 
     tag.flags &= !kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
     crate::boot::write_backup_tag(tag);

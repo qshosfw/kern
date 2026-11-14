@@ -145,17 +145,18 @@ pub const HW_DIRTY_KEYS: u8 = DIRTY_KEYS;
 pub const HW_DIRTY_SYSTEM: u8 = DIRTY_SYSTEM;
 pub const HW_DIRTY_BATTERY: u8 = DIRTY_BATTERY;
 
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MasterConfig {
-    pub display: DisplayConfig,
-    pub audio: AudioConfig,
-    pub keys: KeyConfig,
-    pub system: SystemConfig,
-    pub battery: BatteryConfig,
-    pub apps: AppsConfig,
-
     pub dirty: u8,
     pub hw_dirty: u8,
+    pub _pad: [u8; 2],
+    pub display: DisplayConfig,
+    pub battery: BatteryConfig,
+    pub system: SystemConfig,
+    pub keys: KeyConfig,
+    pub apps: AppsConfig,
+    pub audio: AudioConfig,
 }
 
 const _: () = {
@@ -277,6 +278,7 @@ impl MasterConfig {
         apps: AppsConfig::DEFAULT,
         dirty: 0,
         hw_dirty: 0,
+        _pad: [0; 2],
     };
 
     pub fn new() -> Self {

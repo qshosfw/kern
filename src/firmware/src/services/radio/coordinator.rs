@@ -117,10 +117,9 @@ pub enum AudioRoutingState {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct RadioCoordinator {
-    // ── Hot 1-byte scalar fields (offset 0..31: 1-insn ldrb/strb) ─────────
+    // ── Hot 1-byte scalar fields (offset 0..22: 1-insn ldrb/strb) ─────────
     pub active_vfo: VfoSlot,
     pub listening_vfo: VfoSlot,
-    pub dual_watch: DualWatchMode,
     pub cross_band: CrossBandMode,
     pub is_transmitting: bool,
     /// Granular transmission state machine (Idle, Active, TailBurst).
@@ -147,7 +146,8 @@ pub struct RadioCoordinator {
     /// True if PA power was folded back due to high die/board temperature during prolonged TX.
     pub pa_thermal_foldback_active: bool,
 
-    // ── Hot 2-byte scalar fields (offset 0..63: 1-insn ldrh/strh) ─────────
+    // ── Hot 2-byte scalar fields (offset 18..40: 1-insn ldrh/strh) ─────────
+    pub dual_watch: DualWatchMode,
     /// Time-Out Timer limit in seconds (0 = disabled).
     pub tot_limit_seconds: u16,
     /// Current transmission elapsed time in 10ms ticks.

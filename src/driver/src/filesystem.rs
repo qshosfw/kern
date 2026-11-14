@@ -238,6 +238,17 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.write_file(path, data).map_err(Self::map_error)
     }
 
+    pub fn write_ring(
+        &mut self,
+        path: &str,
+        max_bytes: usize,
+        data: &[u8],
+    ) -> Result<(), StorageError> {
+        self.fs
+            .write_ring(path, max_bytes, data)
+            .map_err(Self::map_error)
+    }
+
     pub fn get_attributes(&mut self, path: &str) -> Result<FileAttributes, StorageError> {
         let perm = self.fs.get_permission(path).map_err(Self::map_error)?;
         Ok(FileAttributes { permission: perm })

@@ -19,14 +19,12 @@ pub struct PeripheralState {
     pub keypad_led: bool,
 }
 
+#[repr(C)]
 pub struct SystemPower {
+    // ── Hot 1-byte scalars (offset 0..14: 1-insn ldrb/strb) ─────────
+    pub state: PowerState,
+    pub profile: PowerProfile,
     pub battery_pct: u8,
-    pub battery_mv: u16,
-    pub battery_ma: u16,
-    pub mcu_temp_deci_c: i16,
-    pub vdda_mv: u16,
-    pub uptime_secs: u32,
-    pub inactivity_secs: u32,
     pub auto_power_off_min: u8,
     pub apo_warning_active: bool,
     pub apo_triggered: bool,
@@ -36,8 +34,15 @@ pub struct SystemPower {
     pub is_low: bool,
     pub low_bat_transition: bool,
     pub is_critical: bool,
-    pub state: PowerState,
-    pub profile: PowerProfile,
+    // ── 2-byte scalars (offset 12..24) ─────────────────────────────
+    pub battery_mv: u16,
+    pub battery_ma: u16,
+    pub mcu_temp_deci_c: i16,
+    pub vdda_mv: u16,
+    // ── 4-byte scalars (offset 20..28, aligned) ────────────────────
+    pub uptime_secs: u32,
+    pub inactivity_secs: u32,
+    // ── Cold/nested sub-driver ─────────────────────────────────────
     pub battery_driver: BatteryDriver,
 }
 

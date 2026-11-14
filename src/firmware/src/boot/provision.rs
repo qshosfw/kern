@@ -91,14 +91,22 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
 
     ensure_core_packages(filesystem);
 
-    let mut entries = [const { DirEntryInfo::empty() }; 8];
-    let count = filesystem.list_dir("/prov", &mut entries).unwrap_or(0);
+    let (arena_head, arena_tail) =
+        crate::runtime::transient_arena_bytes_mut().split_at_mut(PROV_BUF_CAP);
+    let entries: &mut [DirEntryInfo; 8] = unsafe {
+        let ptr = arena_tail.as_mut_ptr() as *mut [DirEntryInfo; 8];
+        for e in &mut *ptr {
+            core::ptr::write(e, DirEntryInfo::empty());
+        }
+        &mut *ptr
+    };
+    let count = filesystem.list_dir("/prov", entries).unwrap_or(0);
     if count == 0 {
         crate::apps::launcher::reload_launcher(filesystem);
         return;
     }
 
-    let prov_buf = &mut crate::runtime::transient_arena_bytes_mut()[..PROV_BUF_CAP];
+    let prov_buf = arena_head;
 
     for entry in &entries[..count] {
         if entry.is_dir || entry.path.is_empty() {

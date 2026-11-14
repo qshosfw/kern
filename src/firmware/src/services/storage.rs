@@ -32,6 +32,14 @@ impl NoStorage {
     pub fn write_file(&mut self, _path: &str, _data: &[u8]) -> Result<(), StorageError> {
         Err(StorageError::NotFound)
     }
+    pub fn write_ring(
+        &mut self,
+        _path: &str,
+        _max_bytes: usize,
+        _data: &[u8],
+    ) -> Result<(), StorageError> {
+        Err(StorageError::NotFound)
+    }
     pub fn get_attributes(&mut self, _path: &str) -> Result<FileAttributes, StorageError> {
         Err(StorageError::NotFound)
     }
