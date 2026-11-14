@@ -30,7 +30,7 @@ impl KeyCode {
     #[inline(always)]
     pub fn to_digit(self) -> Option<u8> {
         let c = self as u8;
-        if (Self::Key0 as u8..=Self::Key9 as u8).contains(&c) {
+        if c >= Self::Key0 as u8 && c <= Self::Key9 as u8 {
             Some(c - Self::Key0 as u8)
         } else {
             None
