@@ -34,8 +34,8 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             _ => KrxLaunchError::ReadFailed,
         })?;
 
-    let mut summary = kernel::proc::krx::KrxSummary::default();
-    KrxPreamble::summarize_into(&header_buf[..header_read], &mut summary)?;
+    let mut summary_uninit = core::mem::MaybeUninit::uninit();
+    let summary = KrxPreamble::summarize_into(&header_buf[..header_read], &mut summary_uninit)?;
     let preamble = summary.preamble;
     let header_len = preamble.header_len as usize;
     if header_len > header_read {

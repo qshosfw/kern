@@ -267,19 +267,19 @@ fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc) {
     hw.backlight.wake();
 }
 
+#[inline(never)]
 fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
     unsafe {
         (*core::ptr::addr_of_mut!(POWER_SERVICE)).tick_second();
     }
 
-    let pwr = unsafe { &*core::ptr::addr_of!(POWER_SERVICE) };
+    let pwr = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
     if pwr.is_low() && !pwr.is_charging() && pwr.uptime_secs() > 5 && pwr.battery_percentage() <= 15
     {
         *low_batt_warning_timer = low_batt_warning_timer.saturating_add(1);
         if *low_batt_warning_timer >= 30 {
             *low_batt_warning_timer = 0;
-            let beeps_on = crate::master_config_ref().audio.key_beep != 0;
-            if beeps_on {
+            if crate::master_config_ref().audio.key_beep != 0 {
                 hw.radio
                     .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
             }
@@ -293,8 +293,20 @@ fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut 
         let cfg = crate::master_config_ref();
         crate::hardware::SystemHardware::sync_usb_telemetry(&mut hw.usb, cfg);
     }
+
+    let is_plugged = is_plugged_in(hw);
+    if is_plugged || hw.backlight.is_active() || hw.audio.is_active() {
+        pwr.notify_activity();
+    }
+
+    let apo_fired = pwr.apo_triggered;
+    pwr.apo_triggered = false;
+    if apo_fired && !is_plugged && crate::master_config_ref().battery.auto_power_off_min > 0 {
+        handle_deep_sleep_mode(hw);
+    }
 }
 
+#[inline(never)]
 fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool) {
     #[cfg(feature = "usb")]
     if let Some(usb_ev) = hw.usb.poll() {
@@ -333,6 +345,7 @@ fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool)
     }
 }
 
+#[inline(never)]
 fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool) {
     record_proc_activation(0xF2);
     crate::services::telemetry::sample_battery_and_system(adc, hw.audio.is_active());
@@ -487,34 +500,11 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             poll_battery_tick(hw, &adc, &mut dirty_render);
         }
 
-        // 4. 1-second system tick for uptime & telemetry update
+        // 4. 1-second system tick for uptime, telemetry, activity & Auto-Power-Off (APO)
         if now.wrapping_sub(last_tick) >= 1000 {
             last_tick = now;
             handle_one_second_tick(hw, &mut low_batt_warning_timer);
             dirty_render = true;
-
-            let is_plugged = is_plugged_in(hw);
-
-            // Reset inactivity if backlight is on, audio amplifier is active, or radio is plugged into USB/charger
-            if is_plugged || hw.backlight.is_active() || hw.audio.is_active() {
-                unsafe {
-                    (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
-                }
-            }
-
-            // Auto-Power-Off (APO) timeout -> automatically enter deep sleep
-            // Strictly guarded: only fires if user explicitly configured APO in settings (> 0)
-            // and device is NOT plugged into USB or charging.
-            let apo_fired = unsafe {
-                let pwr = &mut *core::ptr::addr_of_mut!(POWER_SERVICE);
-                let fired = pwr.apo_triggered;
-                pwr.apo_triggered = false;
-                fired
-            };
-            if apo_fired && !is_plugged && crate::master_config_ref().battery.auto_power_off_min > 0
-            {
-                handle_deep_sleep_mode(hw);
-            }
         }
 
         while let Some(ev) = dequeue_event() {

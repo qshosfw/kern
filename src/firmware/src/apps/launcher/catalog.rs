@@ -123,9 +123,7 @@ impl PackageCatalog {
                             path_ptr, path_len,
                         ))
                     };
-                    if let Some(pkg) = Self::inspect_package(filesystem, path_str, size) {
-                        let _ = self.entries.push(pkg);
-                    }
+                    Self::inspect_package(filesystem, path_str, size, &mut self.entries);
                 }
             }
         }
@@ -149,67 +147,71 @@ impl PackageCatalog {
         filesystem: &mut SystemStorage,
         raw_name: &str,
         size: usize,
-    ) -> Option<PackageCatalogEntry> {
+        entries: &mut heapless::Vec<PackageCatalogEntry, MAX_CATALOG_PACKAGES>,
+    ) {
         let base_name = extract_filename(raw_name);
         if base_name.is_empty() {
-            return None;
+            return;
         }
+        if entries
+            .push(PackageCatalogEntry {
+                title: heapless::String::new(),
+                path: heapless::String::new(),
+                size_bytes: size,
+                app_class: KrxClass::Declare,
+                exec_type: KrxExecType::App,
+                icon_id: 0,
+                caps: 0,
+                is_valid: false,
+            })
+            .is_err()
+        {
+            return;
+        }
+        let Some(entry) = entries.last_mut() else {
+            return;
+        };
 
         let bytes = base_name.as_bytes();
         let n = bytes.len();
         let is_pkg = n > 4 && (&bytes[n - 4..] == b".app" || &bytes[n - 4..] == b".krx");
 
-        let mut path = heapless::String::<24>::new();
         if !raw_name.starts_with("/apps/") {
-            let _ = path.push_str("/apps/");
+            let _ = entry.path.push_str("/apps/");
         }
-        let _ = path.push_str(&raw_name[..raw_name.len().min(24 - path.len())]);
-
-        let mut app_class = KrxClass::Declare;
-        let mut exec_type = KrxExecType::App;
-        let mut title = heapless::String::<16>::new();
-        let mut icon_id = 0u16;
-        let mut caps = 0u32;
-        let mut is_valid = false;
+        let _ = entry
+            .path
+            .push_str(&raw_name[..raw_name.len().min(24 - entry.path.len())]);
 
         if is_pkg && size >= KrxPreamble::SIZE {
             let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..256];
-            if let Ok(read_len) = filesystem.read_file_at(path.as_str(), 0, hdr_buf) {
-                let mut summary = kernel::proc::krx::KrxSummary::default();
-                if KrxPreamble::summarize_into(&hdr_buf[..read_len], &mut summary).is_ok() {
+            if let Ok(read_len) = filesystem.read_file_at(entry.path.as_str(), 0, hdr_buf) {
+                let mut summary_uninit = core::mem::MaybeUninit::uninit();
+                if let Ok(summary) =
+                    KrxPreamble::summarize_into(&hdr_buf[..read_len], &mut summary_uninit)
+                {
                     if let Some(cls) = summary.preamble.execution_class() {
-                        is_valid = true;
-                        app_class = cls;
+                        entry.is_valid = true;
+                        entry.app_class = cls;
                     }
-                    exec_type = summary.exec_type;
-                    icon_id = summary.icon_id;
-                    caps = summary.caps.raw();
+                    entry.exec_type = summary.exec_type;
+                    entry.icon_id = summary.icon_id;
+                    entry.caps = summary.caps.raw();
                     if !summary.title.is_empty() {
-                        let _ = title.push_str(summary.title);
+                        let _ = entry.title.push_str(summary.title);
                     }
                 }
             }
         }
 
-        if title.is_empty() {
+        if entry.title.is_empty() {
             let stem = if is_pkg {
                 &base_name[..n - 4]
             } else {
                 base_name
             };
-            let _ = title.push_str(&stem[..stem.len().min(16)]);
+            let _ = entry.title.push_str(&stem[..stem.len().min(16)]);
         }
-
-        Some(PackageCatalogEntry {
-            title,
-            path,
-            size_bytes: size,
-            app_class,
-            exec_type,
-            icon_id,
-            caps,
-            is_valid,
-        })
     }
 
     #[cfg(not(feature = "filesystem"))]

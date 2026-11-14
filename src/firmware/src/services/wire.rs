@@ -187,7 +187,9 @@ fn read_sys_facet(
             if is_auth {
                 w.write_bytes(&bsp::uid::read_mcu_uid());
             } else {
-                w.write_bytes(&[0u8; 12]);
+                for _ in 0..12 {
+                    w.write_u8(0);
+                }
             }
             Ok(w.position())
         }
@@ -605,7 +607,6 @@ fn on_transfer_open(payload: &[u8], hw: &mut SystemHardware, out: &mut [u8]) -> 
         t.total_size = req.total_size;
         t.current_len = 0;
         t.chunk_size = chunk_size;
-        t.path = [0u8; 32];
         t.path[..path_bytes.len()].copy_from_slice(path_bytes);
         t.path_len = path_bytes.len() as u8;
     }
@@ -662,12 +663,10 @@ fn commit_calibration_payload(
     total_len: usize,
     hw: &mut SystemHardware,
 ) -> Result<(), WireStatus> {
-    if total_len != 512 {
+    if total_len != 512 || staging.len() < 512 {
         return Err(WireStatus::SafetyDenied);
     }
-    let calib_slice: &[u8; 512] = (&staging[..512])
-        .try_into()
-        .map_err(|_| WireStatus::SafetyDenied)?;
+    let calib_slice: &[u8; 512] = unsafe { &*(staging.as_ptr() as *const [u8; 512]) };
     if !is_valid_calibration(calib_slice) {
         return Err(WireStatus::SafetyDenied);
     }

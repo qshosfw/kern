@@ -742,12 +742,12 @@ impl<'a> Default for KrxSummary<'a> {
 }
 
 impl KrxPreamble {
-    /// Zero-allocation, single-pass inspection of a KRX package header buffer into `out`.
+    /// Zero-allocation, single-pass inspection of a KRX package header buffer into uninitialized `out`.
     #[inline(never)]
-    pub fn summarize_into<'a>(
+    pub fn summarize_into<'a, 'b>(
         buf: &'a [u8],
-        out: &mut KrxSummary<'a>,
-    ) -> Result<(), KrxLaunchError> {
+        out: &'b mut core::mem::MaybeUninit<KrxSummary<'a>>,
+    ) -> Result<&'b mut KrxSummary<'a>, KrxLaunchError> {
         let preamble = Self::parse(buf).map_err(|_| KrxLaunchError::InvalidPreamble)?;
         let h_len = preamble.header_len as usize;
         if h_len < Self::SIZE || h_len > 512 || (h_len & 3) != 0 {
@@ -766,7 +766,7 @@ impl KrxPreamble {
             }
         }
 
-        *out = KrxSummary::default();
+        let out = out.write(KrxSummary::default());
         out.preamble = preamble;
 
         let mut off = Self::SIZE;
@@ -819,14 +819,14 @@ impl KrxPreamble {
             off += (sec_len + 3) & !3;
         }
 
-        Ok(())
+        Ok(out)
     }
 
     /// Zero-allocation, single-pass inspection of a KRX package header buffer.
     pub fn summarize<'a>(buf: &'a [u8]) -> Result<KrxSummary<'a>, KrxLaunchError> {
-        let mut summary = KrxSummary::default();
-        Self::summarize_into(buf, &mut summary)?;
-        Ok(summary)
+        let mut summary = core::mem::MaybeUninit::uninit();
+        let _ = Self::summarize_into(buf, &mut summary)?;
+        Ok(unsafe { summary.assume_init() })
     }
 }
 

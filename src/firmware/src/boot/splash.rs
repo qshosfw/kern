@@ -176,6 +176,7 @@ pub fn get_splash_name(path: &str) -> gfx::gui::modules::menu::ShortString {
 
 /// Load and render splash from storage supporting both RLE and raw VRAM formats
 #[cfg(feature = "filesystem")]
+#[inline(never)]
 pub fn load_and_render_splash(
     canvas: &mut Canvas,
     storage: &mut crate::services::SystemStorage,
@@ -184,8 +185,9 @@ pub fn load_and_render_splash(
     if path.is_empty() || !storage.exists(path) {
         return false;
     }
-    let mut buf = [0u8; 1032];
-    if let Ok(n) = storage.read_file(path, &mut buf) {
+    let mut buf_uninit = core::mem::MaybeUninit::<[u32; 258]>::uninit();
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_uninit.as_mut_ptr() as *mut u8, 1032) };
+    if let Ok(n) = storage.read_file(path, buf) {
         if n == 1024 {
             canvas.load_raw_vram(&buf[..1024]);
             return true;
@@ -243,9 +245,7 @@ pub fn render_base_logo(
     render_default_banner(canvas);
 }
 
-/// Apply animation transition to a base VRAM image buffer
-pub fn apply_splash_anim(canvas: &mut Canvas, base_vram: &[u8; 1024], anim_type: u8, progress: u8) {
-    canvas.load_raw_vram(base_vram);
+fn apply_anim_effect(canvas: &mut Canvas, anim_type: u8, progress: u8) {
     #[cfg(feature = "animations")]
     match anim_type {
         1 => canvas.apply_dither_mask(progress),
@@ -260,6 +260,12 @@ pub fn apply_splash_anim(canvas: &mut Canvas, base_vram: &[u8; 1024], anim_type:
     }
 }
 
+/// Apply animation transition to a base VRAM image buffer
+pub fn apply_splash_anim(canvas: &mut Canvas, base_vram: &[u8; 1024], anim_type: u8, progress: u8) {
+    canvas.load_raw_vram(base_vram);
+    apply_anim_effect(canvas, anim_type, progress);
+}
+
 /// Animated progressive splash frame renderer
 pub fn render_splash_frame(
     canvas: &mut Canvas,
@@ -267,25 +273,13 @@ pub fn render_splash_frame(
     disp_cfg: &crate::config::DisplayConfig,
     progress: u8, // 0..=16
 ) {
-    canvas.clear();
     if disp_cfg.boot_splash_mode == 0 {
+        canvas.clear();
         return;
     }
 
     render_base_logo(canvas, storage, disp_cfg);
-
-    #[cfg(feature = "animations")]
-    match disp_cfg.boot_splash_anim {
-        1 => canvas.apply_dither_mask(progress),
-        2 => canvas.apply_invert_dissolve(progress),
-        3 => canvas.apply_curtain_wipe(progress),
-        _ => canvas.sync_planes(),
-    }
-    #[cfg(not(feature = "animations"))]
-    {
-        let _ = progress;
-        canvas.sync_planes();
-    }
+    apply_anim_effect(canvas, disp_cfg.boot_splash_anim, progress);
 }
 
 /// Render boot splash according to configured mode and path

@@ -57,10 +57,12 @@ pub struct SysContext<'a, 'hw> {
     pub uart: &'a mut SystemUart,
 }
 
+#[inline(never)]
 fn play_tone_file(storage: &mut SystemStorage, radio: &mut SystemRadio, path: &str) {
-    let buf = crate::services::melody::load_roger_melody(storage, path);
-    if !buf.is_empty() {
-        radio.play_tone_sequence(&buf);
+    let mut notes = [melody::ToneNote::new(0, 0); melody::MAX_MELODY_NOTES];
+    let n = crate::services::melody::load_roger_notes(storage, path, &mut notes);
+    if n > 0 {
+        radio.play_tone_sequence(&notes[..n]);
     }
 }
 
@@ -291,13 +293,11 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     /// Play currently configured active roger beep
+    #[inline(never)]
     pub fn play_active_roger(&mut self) {
         if self.config.audio.roger_beep != 0 {
             let path = self.config.audio.roger_path_str();
-            let mel = crate::services::melody::load_roger_melody(self.storage, path);
-            if !mel.is_empty() {
-                self.radio.play_tone_sequence(mel.as_slice());
-            }
+            play_tone_file(self.storage, self.radio, path);
         }
     }
 

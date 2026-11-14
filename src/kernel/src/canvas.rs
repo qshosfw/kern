@@ -311,6 +311,7 @@ impl Canvas {
         self.draw_vertical_line_i(x + w - 1, y, h, color);
     }
 
+    #[inline(never)]
     pub fn clear_corners_i(&mut self, x: i16, y: i16, w: i16, h: i16) {
         if w >= 2 && h >= 2 {
             let x1 = x + w - 1;
@@ -322,29 +323,51 @@ impl Canvas {
     }
 
     #[inline(never)]
-    pub fn fill_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
+    fn clamp_rect_i(x: i16, y: i16, w: i16, h: i16) -> u32 {
         if w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
-            return;
+            return 0;
         }
         let x0 = x.max(0) as u8;
         let y0 = y.max(0) as u8;
         let x1 = (x + w).min(LCD_WIDTH as i16).max(0) as u8;
         let y1 = (y + h).min(LCD_HEIGHT as i16).max(0) as u8;
         if x1 > x0 && y1 > y0 {
-            self.fill_rect(x0, y0, x1 - x0, y1 - y0, color);
+            (x0 as u32)
+                | ((y0 as u32) << 8)
+                | (((x1 - x0) as u32) << 16)
+                | (((y1 - y0) as u32) << 24)
+        } else {
+            0
         }
     }
 
-    pub fn fill_rect_dither_i(&mut self, x: i16, y: i16, w: i16, h: i16, progress: u8) {
-        if progress == 0 || w <= 0 || h <= 0 || x >= LCD_WIDTH as i16 || y >= LCD_HEIGHT as i16 {
-            return;
+    #[inline(never)]
+    pub fn fill_rect_i(&mut self, x: i16, y: i16, w: i16, h: i16, color: Color) {
+        let r = Self::clamp_rect_i(x, y, w, h);
+        if r != 0 {
+            self.fill_rect(
+                r as u8,
+                (r >> 8) as u8,
+                (r >> 16) as u8,
+                (r >> 24) as u8,
+                color,
+            );
         }
-        let x0 = x.max(0) as u8;
-        let y0 = y.max(0) as u8;
-        let x1 = (x + w).min(LCD_WIDTH as i16).max(0) as u8;
-        let y1 = (y + h).min(LCD_HEIGHT as i16).max(0) as u8;
-        if x1 > x0 && y1 > y0 {
-            self.fill_rect_dither(x0, y0, x1 - x0, y1 - y0, progress);
+    }
+
+    #[inline(never)]
+    pub fn fill_rect_dither_i(&mut self, x: i16, y: i16, w: i16, h: i16, progress: u8) {
+        if progress != 0 {
+            let r = Self::clamp_rect_i(x, y, w, h);
+            if r != 0 {
+                self.fill_rect_dither(
+                    r as u8,
+                    (r >> 8) as u8,
+                    (r >> 16) as u8,
+                    (r >> 24) as u8,
+                    progress,
+                );
+            }
         }
     }
 

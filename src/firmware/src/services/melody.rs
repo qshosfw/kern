@@ -13,47 +13,66 @@ pub use types::*;
 
 use crate::services::SystemStorage;
 
-/// Load roger melody from storage path, with automatic fallback to classic default
-pub fn load_roger_melody(storage: &mut SystemStorage, path: &str) -> MelodyBuffer {
-    let mut buf = MelodyBuffer::new();
-    if !path.is_empty() {
-        let mut raw = [0u8; 140];
-        if let Ok(n) = storage.read_file(path, &mut raw) {
-            if n >= 4 && &raw[0..2] == b"KT" && raw[2] == 1 {
-                let count = (raw[3] as usize).min(MAX_MELODY_NOTES);
-                let mut pos = 4;
-                while pos + 4 <= n && buf.len() < count {
-                    let freq = u16::from_be_bytes([raw[pos], raw[pos + 1]]);
-                    let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]);
-                    let _ = buf.push(ToneNote::new(freq, dur));
-                    pos += 4;
-                }
-                if !buf.is_empty() {
-                    return buf;
-                }
-            } else if n >= 16 && &raw[0..4] == b"KRGR" {
-                let count = (raw[5] as usize).min(MAX_MELODY_NOTES);
-                let mut pos = 16;
-                while pos + 4 <= n && buf.len() < count {
-                    let freq = u16::from_be_bytes([raw[pos], raw[pos + 1]]);
-                    let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]);
-                    let _ = buf.push(ToneNote::new(freq, dur));
-                    pos += 4;
-                }
-                if !buf.is_empty() {
-                    return buf;
-                }
-            }
-        }
+#[inline(never)]
+fn read_kt_file(
+    storage: &mut SystemStorage,
+    path: &str,
+    allow_krgr: bool,
+    out: &mut [ToneNote; MAX_MELODY_NOTES],
+) -> usize {
+    if path.is_empty() {
+        return 0;
     }
-    // Resilient fallback to default Classic roger
-    for note in ROGER_CLASSIC_FALLBACK {
-        let _ = buf.push(*note);
+    let mut raw_uninit = core::mem::MaybeUninit::<[u8; 140]>::uninit();
+    let raw = unsafe { &mut *raw_uninit.as_mut_ptr() };
+    let Ok(n) = storage.read_file(path, raw) else {
+        return 0;
+    };
+    let (mut pos, count_raw) = if n >= 4 && &raw[0..2] == b"KT" && raw[2] == 1 {
+        (4usize, raw[3] as usize)
+    } else if allow_krgr && n >= 16 && &raw[0..4] == b"KRGR" {
+        (16usize, raw[5] as usize)
+    } else {
+        return 0;
+    };
+    let count = count_raw.min(MAX_MELODY_NOTES);
+    let mut written = 0usize;
+    while pos + 4 <= n && written < count {
+        let freq = u16::from_be_bytes([raw[pos], raw[pos + 1]]);
+        let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]);
+        out[written] = ToneNote::new(freq, dur);
+        written += 1;
+        pos += 4;
     }
-    buf
+    written
+}
+
+fn fill_notes(slice: &[ToneNote], out: &mut [ToneNote; MAX_MELODY_NOTES]) -> usize {
+    let count = slice.len().min(MAX_MELODY_NOTES);
+    let mut i = 0;
+    while i < count {
+        out[i] = slice[i];
+        i += 1;
+    }
+    count
+}
+
+/// Load roger melody notes into `out` from storage path, with fallback to classic default.
+#[inline(never)]
+pub fn load_roger_notes(
+    storage: &mut SystemStorage,
+    path: &str,
+    out: &mut [ToneNote; MAX_MELODY_NOTES],
+) -> usize {
+    let n = read_kt_file(storage, path, true, out);
+    if n > 0 {
+        return n;
+    }
+    fill_notes(ROGER_CLASSIC_FALLBACK, out)
 }
 
 /// Load jingle melody from storage path, or fallback to selected preset
+#[inline(never)]
 pub fn load_jingle_melody(
     storage: &mut SystemStorage,
     boot_jingle_mode: u8,
@@ -63,27 +82,14 @@ pub fn load_jingle_melody(
     if boot_jingle_mode == 0 {
         return buf;
     }
-    if !path.is_empty() {
-        let mut raw = [0u8; 140];
-        if let Ok(n) = storage.read_file(path, &mut raw) {
-            if n >= 4 && &raw[0..2] == b"KT" && raw[2] == 1 {
-                let count = (raw[3] as usize).min(MAX_MELODY_NOTES);
-                let mut pos = 4;
-                while pos + 4 <= n && buf.len() < count {
-                    let freq = u16::from_be_bytes([raw[pos], raw[pos + 1]]);
-                    let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]);
-                    let _ = buf.push(ToneNote::new(freq, dur));
-                    pos += 4;
-                }
-                if !buf.is_empty() {
-                    return buf;
-                }
-            }
-        }
-    }
-    // Fallback to configured preset
-    let jtype = BootJingleType::from_u8(boot_jingle_mode);
-    for note in MelodyEngine::boot_jingle_notes(jtype) {
+    let mut notes = [ToneNote::new(0, 0); MAX_MELODY_NOTES];
+    let n = read_kt_file(storage, path, false, &mut notes);
+    let src = if n > 0 {
+        &notes[..n]
+    } else {
+        MelodyEngine::boot_jingle_notes(BootJingleType::from_u8(boot_jingle_mode))
+    };
+    for note in src {
         let _ = buf.push(*note);
     }
     buf
