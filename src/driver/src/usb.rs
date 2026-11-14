@@ -424,6 +424,7 @@ impl UsbDriver {
         }
     }
 
+    #[inline(never)]
     fn ep0_start_string_transfer(&mut self, ascii: &[u8], max_len: u16) {
         let len = ascii.len().min(31);
         let mut desc = [0u8; 64];
@@ -449,15 +450,18 @@ impl UsbDriver {
         let s = utils::format::format_int_fixed(c_volts, 2, "Supply: ", "v ", &mut buf);
         let mut pos = s.len();
         if self.is_charging {
-            buf[pos..pos + 5].copy_from_slice(b"[CHG]");
-            pos += 5;
+            for &b in b"[CHG]" {
+                buf[pos] = b;
+                pos += 1;
+            }
         } else {
+            let pct = self.battery_pct.min(100);
             buf[pos] = b'(';
             pos += 1;
-            let pct = self.battery_pct.min(100);
             let p_str = utils::format::format_u32(pct as u32, &mut buf[pos..]);
             pos += p_str.len();
-            buf[pos..pos + 2].copy_from_slice(b"%)");
+            buf[pos] = b'%';
+            buf[pos + 1] = b')';
             pos += 2;
         }
         self.ep0_start_string_transfer(&buf[..pos], max_len);
@@ -467,9 +471,8 @@ impl UsbDriver {
         let mac = bsp::uid::read_mac_address();
         let mut buf = [0u8; 22];
         buf[..5].copy_from_slice(b"MAC: ");
-        let mut mac_buf = [0u8; 17];
-        let mac_str = utils::format::format_mac_address(&mac, &mut mac_buf);
-        buf[5..22].copy_from_slice(mac_str.as_bytes());
+        let mac_dst: &mut [u8; 17] = (&mut buf[5..22]).try_into().unwrap();
+        let _ = utils::format::format_mac_address(&mac, mac_dst);
         self.ep0_start_string_transfer(&buf, max_len);
     }
 
