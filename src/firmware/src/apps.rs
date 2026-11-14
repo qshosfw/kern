@@ -14,7 +14,3 @@ pub use registry::*;
 pub use settings::SettingsApp;
 pub use shortcut::Shortcut;
 pub use vfo::VfoApp;
-
-/// Constants for well-known app IDs to allow for quick shortcut routing
-#[allow(dead_code)]
-pub const APP_ID_MIGRATION: usize = 4;

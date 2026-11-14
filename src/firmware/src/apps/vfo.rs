@@ -95,7 +95,7 @@ impl VfoApp {
             }
             PttMode::DoublePressLatch => {
                 if state == KeyState::Pressed {
-                    let now_ms = py32_hal::delay::millis();
+                    let now_ms = kernel::proc::primitives::TimerPrimitive::uptime_ms(ctx);
                     let diff_ms = now_ms.wrapping_sub(self.last_ptt_press_ms);
                     self.last_ptt_press_ms = now_ms;
 

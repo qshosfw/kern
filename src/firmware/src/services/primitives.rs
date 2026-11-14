@@ -473,22 +473,38 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
     }
 
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
+        if path.starts_with("/sys/") {
+            return Err(());
+        }
         crate::security::write_classified_file(self.storage, path, data).map_err(|_| ())
     }
 
     fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
+        if path.starts_with("/sys/") {
+            return Err(());
+        }
         let buf = crate::data::arena::staging_buf();
-        let existing_len = self.storage.read_file(path, buf).unwrap_or(0);
+        let existing_len = match self.storage.read_file(path, buf) {
+            Ok(n) => n,
+            Err(kernel::service::StorageError::NotFound) => 0,
+            Err(_) => return Err(()),
+        };
         if existing_len + data.len() > buf.len() {
             return Err(());
         }
         buf[existing_len..existing_len + data.len()].copy_from_slice(data);
-        self.storage
-            .write_file(path, &buf[..existing_len + data.len()])
-            .map_err(|_| ())
+        crate::security::write_classified_file(
+            self.storage,
+            path,
+            &buf[..existing_len + data.len()],
+        )
+        .map_err(|_| ())
     }
 
     fn remove_file(&mut self, path: &str) -> Result<(), ()> {
+        if path.starts_with("/sys/") {
+            return Err(());
+        }
         self.storage.remove(path).map_err(|_| ())
     }
 
@@ -530,6 +546,10 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
     ) -> Result<usize, ()> {
         const MAX_FETCH: usize = 8;
         const {
+            assert!(
+                core::mem::align_of::<kernel::service::DirEntryInfo>()
+                    <= core::mem::align_of::<crate::data::arena::AlignedArena>()
+            );
             assert!(
                 core::mem::size_of::<[kernel::service::DirEntryInfo; MAX_FETCH]>()
                     <= crate::data::arena::TRANSIENT_ARENA_BYTES

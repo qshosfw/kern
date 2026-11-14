@@ -101,7 +101,7 @@ impl MemoryPressure {
 pub struct SystemDiagnostics;
 
 impl SystemDiagnostics {
-    pub const STACK_PAINT_SENTINEL: u32 = 0xDEAD_BEEF;
+    pub const STACK_PAINT_SENTINEL: u32 = crate::mem::guard::STACK_PAINT_SENTINEL;
 
     /// Paint unused stack area with a sentinel pattern (0xDEADBEEF) to allow high-assurance watermarking.
     ///
@@ -113,21 +113,17 @@ impl SystemDiagnostics {
             unsafe extern "C" {
                 static _stack_end: u8;
             }
-            let stack_end = core::ptr::addr_of!(_stack_end) as usize;
+            let stack_end = (core::ptr::addr_of!(_stack_end) as usize + 3) & !3;
             let mut msp: usize;
             unsafe {
                 core::arch::asm!("mrs {}, MSP", out(reg) msp);
             }
 
-            // Leave 128 bytes headroom below current MSP so we do not overwrite active call frames
-            let paint_limit = msp.saturating_sub(128);
+            // Leave guard headroom below current MSP so we do not overwrite active call frames
+            let paint_limit = msp.saturating_sub(crate::mem::guard::STACK_GUARD_ZONE_BYTES);
             if paint_limit > stack_end {
-                let mut ptr = (stack_end + 3) & !3; // Align to 4-byte boundary
-                while ptr < paint_limit {
-                    unsafe {
-                        core::ptr::write_volatile(ptr as *mut u32, Self::STACK_PAINT_SENTINEL);
-                    }
-                    ptr += 4;
+                unsafe {
+                    crate::mem::guard::stack_paint(stack_end as *mut u32, paint_limit as *mut u32);
                 }
             }
         }
@@ -142,26 +138,18 @@ impl SystemDiagnostics {
                 static _stack_end: u8;
                 static _stack_start: u8;
             }
-            let stack_end = core::ptr::addr_of!(_stack_end) as usize;
+            let stack_end = (core::ptr::addr_of!(_stack_end) as usize + 3) & !3;
             let stack_start = core::ptr::addr_of!(_stack_start) as usize;
-            let total_stack = if stack_start > stack_end {
-                stack_start - stack_end
+            if stack_start > stack_end {
+                unsafe {
+                    crate::mem::guard::stack_watermark(
+                        stack_end as *const u32,
+                        stack_start as *const u32,
+                    )
+                }
             } else {
                 0
-            };
-
-            // Scan from _stack_end upwards until the first non-sentinel word is found
-            let mut ptr = (stack_end + 3) & !3;
-            while ptr < stack_start {
-                let val = unsafe { core::ptr::read_volatile(ptr as *const u32) };
-                if val != Self::STACK_PAINT_SENTINEL {
-                    break;
-                }
-                ptr += 4;
             }
-
-            let unreached = if ptr > stack_end { ptr - stack_end } else { 0 };
-            total_stack.saturating_sub(unreached)
         }
         #[cfg(not(target_arch = "arm"))]
         {

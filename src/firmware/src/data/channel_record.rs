@@ -241,7 +241,7 @@ impl ChannelRecord {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(self.name.len());
-        unsafe { core::str::from_utf8_unchecked(&self.name[..len]) }
+        utils::format::ascii_str(&self.name[..len]).unwrap_or("")
     }
 
     pub fn set_name(&mut self, s: &str) {
@@ -257,7 +257,7 @@ impl ChannelRecord {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(self.user_tag.len());
-        unsafe { core::str::from_utf8_unchecked(&self.user_tag[..len]) }
+        utils::format::ascii_str(&self.user_tag[..len]).unwrap_or("")
     }
 
     pub fn set_user_tag(&mut self, s: &str) {

@@ -24,6 +24,9 @@ pub enum Shortcut {
 }
 
 impl Shortcut {
+    /// Single source of truth for UI shortcut option strings (`NUL`-terminated).
+    pub const PACKED_NAMES: &'static str = "None\0Flashlight\0Monitor\0Scanner\0Explorer\0Settings\0Lock Keypad\0Toggle VFO\0TX Power\0Mute Audio\0FM Radio\0Tasks\0Fault\0Sleep\0";
+
     pub const ALL: &'static [Shortcut] = &[
         Shortcut::None,
         Shortcut::Flashlight,
@@ -41,26 +44,39 @@ impl Shortcut {
         Shortcut::Sleep,
     ];
 
-    pub const fn name(&self) -> &'static str {
-        match self {
-            Shortcut::None => "None",
-            Shortcut::Flashlight => "Flashlight",
-            Shortcut::Monitor => "Monitor",
-            Shortcut::Scanner => "Scanner",
-            Shortcut::Explorer => "Explorer",
-            Shortcut::Settings => "Settings",
-            Shortcut::LockKeypad => "Lock Keypad",
-            Shortcut::ToggleVfo => "Toggle VFO",
-            Shortcut::ToggleTxPower => "TX Power",
-            Shortcut::MuteAudio => "Mute Audio",
-            Shortcut::FmRadio => "FM Radio",
-            Shortcut::TaskManager => "Tasks",
-            Shortcut::Fault => "Fault",
-            Shortcut::Sleep => "Sleep",
-            Shortcut::Reboot => "Reboot",
-            Shortcut::LaunchApp(_) => "Launch App",
-            Shortcut::PlayBeep { .. } => "Play Beep",
+    pub fn name(&self) -> &'static str {
+        let idx = match self {
+            Shortcut::None => 0,
+            Shortcut::Flashlight => 1,
+            Shortcut::Monitor => 2,
+            Shortcut::Scanner => 3,
+            Shortcut::Explorer => 4,
+            Shortcut::Settings => 5,
+            Shortcut::LockKeypad => 6,
+            Shortcut::ToggleVfo => 7,
+            Shortcut::ToggleTxPower => 8,
+            Shortcut::MuteAudio => 9,
+            Shortcut::FmRadio => 10,
+            Shortcut::TaskManager => 11,
+            Shortcut::Fault => 12,
+            Shortcut::Sleep => 13,
+            Shortcut::Reboot => return "Reboot",
+            Shortcut::LaunchApp(_) => return "Launch App",
+            Shortcut::PlayBeep { .. } => return "Play Beep",
+        };
+        let bytes = Self::PACKED_NAMES.as_bytes();
+        let mut cur = 0usize;
+        let mut start = 0usize;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == 0 {
+                if cur == idx {
+                    return unsafe { core::str::from_utf8_unchecked(&bytes[start..i]) };
+                }
+                cur += 1;
+                start = i + 1;
+            }
         }
+        "None"
     }
 
     pub fn from_u8(val: u8) -> Self {
@@ -115,5 +131,24 @@ impl From<SysEvent> for Shortcut {
             },
             _ => Shortcut::None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcut_names_and_sysevent_roundtrip() {
+        for (idx, &sc) in Shortcut::ALL.iter().enumerate() {
+            assert_eq!(Shortcut::from_u8(idx as u8), sc);
+            assert!(!sc.name().is_empty());
+            if idx > 0 {
+                let evt = SysEvent::from(sc);
+                assert_eq!(Shortcut::from(evt), sc);
+            }
+        }
+        assert_eq!(Shortcut::Reboot.name(), "Reboot");
+        assert_eq!(Shortcut::LaunchApp(2).name(), "Launch App");
     }
 }

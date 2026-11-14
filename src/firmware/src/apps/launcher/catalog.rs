@@ -104,8 +104,21 @@ impl PackageCatalog {
     fn scan_internal(&mut self, filesystem: &mut SystemStorage) {
         self.entries.clear();
 
-        let arena = crate::runtime::transient_arena_bytes_mut();
-        let dir_ptr = arena[256..].as_mut_ptr() as *mut kernel::service::DirEntryInfo;
+        // Keep scan scratch strictly inside TRANSIENT_ARENA[4096..6144) so [0..4096) KRX code is never clobbered.
+        const HDR_SCRATCH_BYTES: usize = 256;
+        const {
+            assert!(
+                core::mem::align_of::<kernel::service::DirEntryInfo>()
+                    <= core::mem::align_of::<crate::data::arena::AlignedArena>()
+            );
+            assert!(
+                HDR_SCRATCH_BYTES + 8 * core::mem::size_of::<kernel::service::DirEntryInfo>()
+                    <= crate::data::arena::TRANSIENT_ARENA_BYTES
+                        - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
+            );
+        }
+        let dir_ptr = crate::data::arena::scratch_tail_bytes_mut()[HDR_SCRATCH_BYTES..].as_mut_ptr()
+            as *mut kernel::service::DirEntryInfo;
         unsafe {
             core::ptr::write_bytes(dir_ptr, 0, 8);
         }
@@ -184,7 +197,7 @@ impl PackageCatalog {
             .push_str(&raw_name[..raw_name.len().min(24 - entry.path.len())]);
 
         if is_pkg && size >= KrxPreamble::SIZE {
-            let hdr_buf = &mut crate::runtime::transient_arena_bytes_mut()[..256];
+            let hdr_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[..256];
             if let Ok(read_len) = filesystem.read_file_at(entry.path.as_str(), 0, hdr_buf) {
                 let mut summary_uninit = core::mem::MaybeUninit::uninit();
                 if let Ok(summary) =

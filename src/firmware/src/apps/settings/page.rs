@@ -160,7 +160,7 @@ pub static CHOICES: [&'static str; 21] = [
     super::buttons::F_KEY_TIMEOUT_OPTIONS,
     super::buttons::HOLD_DELAY_OPTIONS,
     super::buttons::REPEAT_RATE_OPTIONS,
-    super::buttons::SHORTCUT_OPTIONS,
+    crate::apps::Shortcut::PACKED_NAMES,
     super::battery::BATTERY_FORMAT_OPTIONS,
     super::battery::AUTO_POWER_OFF_OPTIONS,
     super::battery::POWER_PROFILE_OPTIONS,

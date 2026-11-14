@@ -118,7 +118,7 @@ impl ContactRecord {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(self.name.len());
-        unsafe { core::str::from_utf8_unchecked(&self.name[..len]) }
+        utils::format::ascii_str(&self.name[..len]).unwrap_or("")
     }
 
     pub fn set_name(&mut self, s: &str) {

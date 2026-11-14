@@ -14,10 +14,15 @@ pub use kernel::proc::krx::KrxLaunchError;
 static mut DYNAMIC_APP_NAME_BUF: [u8; 32] = [0u8; 32];
 
 fn store_dynamic_app_name(name: &str) -> &'static str {
+    let bytes = name.as_bytes();
+    let mut len = bytes.len().min(31);
+    while len > 0 && len < bytes.len() && (bytes[len] & 0xC0) == 0x80 {
+        len -= 1;
+    }
     unsafe {
-        let len = name.len().min(31);
-        DYNAMIC_APP_NAME_BUF[..len].copy_from_slice(&name.as_bytes()[..len]);
+        DYNAMIC_APP_NAME_BUF[..len].copy_from_slice(&bytes[..len]);
         DYNAMIC_APP_NAME_BUF[len] = 0;
+        // Safety: `name` is valid `&str` and `len` lands on a UTF-8 codepoint boundary.
         core::str::from_utf8_unchecked(&DYNAMIC_APP_NAME_BUF[..len])
     }
 }

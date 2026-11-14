@@ -8,7 +8,7 @@ pub const TRANSIENT_ARENA_WORDS: usize = 1536; // 6 KiB aligned scratch buffer
 pub const TRANSIENT_ARENA_BYTES: usize = TRANSIENT_ARENA_WORDS * 4;
 pub const TRANSIENT_SCRATCH_OFFSET: usize = 4096;
 
-#[repr(align(4))]
+#[repr(align(8))]
 pub struct AlignedArena(pub [u32; TRANSIENT_ARENA_WORDS]);
 
 #[unsafe(link_section = ".uninit")]

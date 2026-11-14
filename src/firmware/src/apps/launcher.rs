@@ -11,10 +11,10 @@ pub mod catalog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LauncherTarget {
-    App(usize),
+    App(u8),
     Shortcut(Shortcut),
     About,
-    Package(&'static str),
+    Package(u8),
 }
 
 #[derive(Clone, Copy)]
@@ -43,7 +43,7 @@ static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
     title: "",
     icon_8: gfx::icons::ICON_APP_RADIO,
     icon_16: &gfx::icons::ICON_16_RADIO,
-    target: LauncherTarget::App(APP_ID_VFO),
+    target: LauncherTarget::App(APP_ID_VFO as u8),
 }; MAX_LAUNCHER_ENTRIES];
 
 static BUILTIN_HEAD: [LauncherEntry; 2] = [
@@ -51,13 +51,13 @@ static BUILTIN_HEAD: [LauncherEntry; 2] = [
         title: "Radio",
         icon_8: gfx::icons::ICON_APP_RADIO,
         icon_16: &gfx::icons::ICON_16_RADIO,
-        target: LauncherTarget::App(APP_ID_VFO),
+        target: LauncherTarget::App(APP_ID_VFO as u8),
     },
     LauncherEntry {
         title: "Settings",
         icon_8: gfx::icons::ICON_APP_SETTINGS,
         icon_16: &gfx::icons::ICON_16_SETTINGS,
-        target: LauncherTarget::App(APP_ID_SETTINGS),
+        target: LauncherTarget::App(APP_ID_SETTINGS as u8),
     },
 ];
 
@@ -95,7 +95,7 @@ pub fn load_entries(
         // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
         let cat_ref: &'static catalog::PackageCatalog =
             &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
-        for app in cat_ref.entries.iter() {
+        for (pkg_idx, app) in cat_ref.entries.iter().enumerate() {
             if !app.is_valid
                 || app.exec_type != kernel::proc::krx::KrxExecType::App
                 || count >= (MAX_LAUNCHER_ENTRIES - 2)
@@ -108,7 +108,7 @@ pub fn load_entries(
                 title: app.title.as_str(),
                 icon_8,
                 icon_16,
-                target: LauncherTarget::Package(app.path.as_str()),
+                target: LauncherTarget::Package(pkg_idx as u8),
             };
             count += 1;
         }
@@ -137,12 +137,13 @@ pub fn reload_launcher(storage: &mut crate::services::SystemStorage) {
     }
 }
 
+#[repr(C)]
 pub struct LauncherApp {
-    model: GridMenuModel<LauncherEntry>,
-    view: GridMenuView,
+    is_launching: bool,
     scroll_top: usize,
     scroller: gfx::gui::animation::KineticScroller,
-    is_launching: bool,
+    model: GridMenuModel<LauncherEntry>,
+    view: GridMenuView,
 }
 
 impl LauncherApp {
@@ -193,7 +194,7 @@ impl LauncherApp {
 
         let success = match target {
             LauncherTarget::App(app_id) => {
-                ctx.post_event(Shortcut::LaunchApp(app_id as u8).into());
+                ctx.post_event(Shortcut::LaunchApp(app_id).into());
                 true
             }
             LauncherTarget::Shortcut(sc) => {
@@ -204,17 +205,24 @@ impl LauncherApp {
                 ctx.show_popup(0, "About KERN", crate::build_info::ABOUT_TEXT);
                 true
             }
-            LauncherTarget::Package(_path) => {
+            LauncherTarget::Package(_pkg_idx) => {
                 #[cfg(feature = "filesystem")]
                 {
-                    match crate::apps::runtime::launch_krx_package(ctx, _path) {
-                        Ok(_) => true,
-                        Err(err) => {
-                            ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
-                            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
-                            reload_launcher(ctx.storage);
-                            false
+                    if let Some(pkg) = catalog::get_catalog().entries.get(_pkg_idx as usize) {
+                        let path = pkg.path.as_str();
+                        match crate::apps::runtime::launch_krx_package(ctx, path) {
+                            Ok(_) => true,
+                            Err(err) => {
+                                ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
+                                ctx.play_dialog_sound(
+                                    crate::services::melody::DialogSoundType::Error,
+                                );
+                                reload_launcher(ctx.storage);
+                                false
+                            }
                         }
+                    } else {
+                        false
                     }
                 }
                 #[cfg(not(feature = "filesystem"))]
@@ -366,8 +374,7 @@ impl LauncherApp {
 
             // Right arrow on selected row (vertically centered at y+3, oscillating horizontal animation)
             if is_sel {
-                let now_ms = py32_hal::delay::millis();
-                let phase = ((now_ms >> 6) & 3) as i16;
+                let phase = ((self.model.tick_counter >> 1) & 3) as i16;
                 let offset = if phase == 3 { 1 } else { phase };
                 let arrow_x = 110 + offset;
                 gfx::icons::draw_icon_8(
@@ -526,4 +533,18 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
     }
 
     fn on_exit(&mut self, _ctx: &mut SysContext) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launcher_entries_and_targets_are_compact() {
+        assert!(core::mem::size_of::<LauncherTarget>() <= 8);
+        let entries = load_entries(None);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].title(), "Radio");
+        assert_eq!(entries[1].title(), "Settings");
+    }
 }

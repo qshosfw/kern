@@ -14,30 +14,31 @@ use super::dialog;
 use super::options::page_defs;
 use super::page::{ActionId, MenuFrame, PageId, TAG_ACTION, TAG_ASSET, TAG_SUBMENU};
 
+#[repr(C)]
 pub struct SettingsApp {
-    pub(crate) items: [MenuItem; 16],
-    pub(crate) item_icons: [&'static [u8; 8]; 16],
-    pub(crate) items_len: usize,
-
+    // ── Hot 1- & 2-byte scalars inside first 32B (Thumb-1 imm5 ldrb/ldrh) ──
     pub(crate) current_page: PageId,
-    pub(crate) stack: [MenuFrame; 4],
-    pub(crate) stack_top: usize,
-
-    pub(crate) title: &'static str,
-    pub(crate) selected_idx: usize,
     pub(crate) is_editing: bool,
     pub(crate) is_pressed: bool,
     pub(crate) dirty_timer_ms: u16,
-    pub(crate) last_tick_ms: u32,
-
-    pub(crate) view: MenuView,
-    #[cfg(feature = "passcode")]
-    pub(crate) passcode_candidate: heapless::String<16>,
-
-    pub selected_pkg_idx: usize,
+    pub(crate) last_poll_sec: u16,
     pub slide_offset_x: i16,
+    // ── Hot word fields inside first 124B ──
+    pub(crate) items_len: usize,
+    pub(crate) selected_idx: usize,
+    pub(crate) stack_top: usize,
+    pub(crate) last_tick_ms: u32,
+    pub selected_pkg_idx: usize,
+    pub(crate) title: &'static str,
     #[cfg(feature = "filesystem")]
     pub(crate) active_asset: Option<&'static super::asset_chooser::AssetDescriptor>,
+    #[cfg(feature = "passcode")]
+    pub(crate) passcode_candidate: heapless::String<16>,
+    // ── Cold/large structures ──
+    pub(crate) stack: [MenuFrame; 4],
+    pub(crate) view: MenuView,
+    pub(crate) item_icons: [&'static [u8; 8]; 8],
+    pub(crate) items: [MenuItem; 16],
 }
 
 impl SettingsApp {
@@ -48,6 +49,7 @@ impl SettingsApp {
             (*ptr).selected_pkg_idx = 0;
             (*ptr).slide_offset_x = 0;
             (*ptr).dirty_timer_ms = 0;
+            (*ptr).last_poll_sec = u16::MAX;
             (*ptr).last_tick_ms = 0;
             #[cfg(feature = "filesystem")]
             {
@@ -327,6 +329,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
         self.title = "Settings";
         self.selected_idx = 0;
         self.dirty_timer_ms = 0;
+        self.last_poll_sec = u16::MAX;
 
         self.view.reset_scroll();
         self.populate_current_menu(ctx);
@@ -335,7 +338,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
     #[inline(never)]
     fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
         if let Event::Tick = *event {
-            let now_ms = py32_hal::delay::millis();
+            let now_ms = kernel::proc::primitives::TimerPrimitive::uptime_ms(ctx);
             let dt = if self.last_tick_ms == 0 {
                 50
             } else {
@@ -343,9 +346,11 @@ impl App<SysContext<'_, '_>> for SettingsApp {
             };
             self.last_tick_ms = now_ms;
 
-            // Live metric polling (throttle to once per second to save CPU and battery)
+            // Live metric polling (refresh once per second transition to save CPU and battery)
             if self.current_page == PageId::BatteryInfo || self.current_page == PageId::System {
-                if (ctx.power.uptime_secs & 1) == 0 {
+                let cur_sec = ctx.power.uptime_secs as u16;
+                if cur_sec != self.last_poll_sec {
+                    self.last_poll_sec = cur_sec;
                     self.populate_current_menu(ctx);
                 }
             }
@@ -393,5 +398,22 @@ impl App<SysContext<'_, '_>> for SettingsApp {
         if ctx.config.is_dirty() {
             let _ = ctx.flush_config();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_app_hot_scalars_fit_thumb1_imm5_window() {
+        assert!(core::mem::offset_of!(SettingsApp, current_page) < 32);
+        assert!(core::mem::offset_of!(SettingsApp, is_editing) < 32);
+        assert!(core::mem::offset_of!(SettingsApp, is_pressed) < 32);
+        assert!(core::mem::offset_of!(SettingsApp, dirty_timer_ms) < 32);
+        assert!(core::mem::offset_of!(SettingsApp, last_poll_sec) < 32);
+        assert!(core::mem::offset_of!(SettingsApp, items_len) < 124);
+        assert!(core::mem::offset_of!(SettingsApp, selected_idx) < 124);
+        assert!(core::mem::offset_of!(SettingsApp, stack_top) < 124);
     }
 }

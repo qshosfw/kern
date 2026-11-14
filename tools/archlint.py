@@ -16,19 +16,20 @@ import argparse, collections, hashlib, itertools, json, os, re, sys
 ROOT = "src"
 # Allowed dependency direction (crate -> crates it may `use`). Anything else is a layering violation.
 LAYERS = {
-    "pac": set(), "traits": set(), "utils": set(), "crypto": {"utils"},
-    "hal": {"pac", "traits", "utils"}, "bsp": {"hal", "pac", "traits", "utils"},
+    "pac": {"cortex_m"}, "traits": set(), "utils": {"cortex_m"}, "crypto": {"utils"},
+    "hal": {"pac", "traits", "utils", "cortex_m"}, "bsp": {"hal", "pac", "traits", "utils", "cortex_m"},
     "kernfs": {"utils", "crypto", "traits"}, "calib": {"utils", "crypto"},
-    "kernel": {"traits", "utils", "crypto", "kernfs"},
+    "kernel": {"traits", "utils", "crypto", "kernfs", "cortex_m"},
     "gfx": {"kernel", "utils", "traits"},
-    "drivers": {"hal", "bsp", "pac", "traits", "utils", "kernel", "kernfs", "crypto", "calib"},
+    "drivers": {"hal", "bsp", "pac", "traits", "utils", "kernel", "kernfs", "crypto", "calib", "cortex_m"},
     "firmware": None,  # integration crate: anything, but see APP_RULES
 }
 CRATE_NAMES = {"driver": "drivers", "py32_hal": "hal", "py32f071_pac": "pac"}
 EXTERN = {"py32_hal": "hal", "py32f071_pac": "pac", "drivers": "drivers", "kernel": "kernel", "gfx": "gfx",
-          "kernfs": "kernfs", "utils": "utils", "crypto": "crypto", "bsp": "bsp", "traits": "traits", "calib": "calib"}
+          "kernfs": "kernfs", "utils": "utils", "crypto": "crypto", "bsp": "bsp", "traits": "traits", "calib": "calib",
+          "cortex_m": "cortex_m"}
 # Module-level rules inside firmware (AGENTS.md: apps never touch hardware)
-APP_RULES = [(r"firmware/src/apps/", {"drivers", "hal", "pac", "bsp"}, "APPS-TOUCH-HW")]
+APP_RULES = [(r"firmware/src/apps/", {"drivers", "hal", "pac", "bsp", "cortex_m"}, "APPS-TOUCH-HW")]
 
 
 def files():
@@ -72,7 +73,7 @@ def chk_layers(a, F):
     for p, s in F:
         c = crate_of(p); allowed = LAYERS.get(c)
         for ln, line in enumerate(strip_tests(s).splitlines(), 1):
-            m = re.match(r"\s*(?:pub\s+)?use\s+(\w+)::", line) or re.search(r"\b(drivers|py32_hal|py32f071_pac|bsp)::\w", line)
+            m = re.match(r"\s*(?:pub\s+)?use\s+(\w+)::", line) or re.search(r"\b(drivers|py32_hal|py32f071_pac|bsp|cortex_m)::\w", line)
             if not m:
                 continue
             dep = EXTERN.get(m.group(1))
