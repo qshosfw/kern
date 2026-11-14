@@ -3,6 +3,7 @@
 
 #[inline(always)]
 pub fn copy_tag(dst: &mut [u8; 16], src: &[u8]) {
+    *dst = [0u8; 16];
     let len = src.len().min(16);
     dst[..len].copy_from_slice(&src[..len]);
 }

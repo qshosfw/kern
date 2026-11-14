@@ -101,6 +101,21 @@ pub unsafe extern "C" fn HardFault() -> ! {
 }
 
 #[cfg(not(test))]
+fn record_backup_crash(strikes: u8, reason_code: u8) {
+    let tag = BackupCrashTag {
+        strikes,
+        flags: BackupCrashTag::FLAG_DIRTY_CRASH
+            | if strikes >= 2 {
+                BackupCrashTag::FLAG_SAFE_MODE_REQ
+            } else {
+                0
+            },
+        reason_code,
+    };
+    hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
+}
+
+#[cfg(not(test))]
 #[inline(never)]
 fn enter_hardware_safety_gate() {
     bsp::bk4829_fault_quench();
@@ -239,18 +254,7 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
 
     let strikes = slot.crash_count;
     BOOT_RECORD.get_mut().commit_write();
-
-    let tag = BackupCrashTag {
-        strikes,
-        flags: BackupCrashTag::FLAG_DIRTY_CRASH
-            | if strikes >= 2 {
-                BackupCrashTag::FLAG_SAFE_MODE_REQ
-            } else {
-                0
-            },
-        reason_code: 1,
-    };
-    hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
+    record_backup_crash(strikes, 1);
 
     hal::wdt::Watchdog::feed();
 
@@ -310,13 +314,12 @@ unsafe extern "C" fn panic_inner(info_ptr: usize, sp: u32, lr: u32) -> ! {
     slot.panic_line = line;
     slot.panic_file_hash = file_hash;
 
-    copy_tag(&mut slot.actor_tag, b"PANIC");
     if let Some(loc) = info.location() {
         let f = loc.file().as_bytes();
         let start = f.iter().rposition(|&b| b == b'/').map_or(0, |i| i + 1);
-        let name = &f[start..];
-        let len = name.len().min(16);
-        slot.actor_tag[..len].copy_from_slice(&name[..len]);
+        copy_tag(&mut slot.actor_tag, &f[start..]);
+    } else {
+        copy_tag(&mut slot.actor_tag, b"PANIC");
     }
 
     let sp_ptr = sp as *const u32;
@@ -357,7 +360,9 @@ unsafe extern "C" fn panic_inner(info_ptr: usize, sp: u32, lr: u32) -> ! {
         crash_signature,
     };
 
+    let strikes = slot.crash_count;
     BOOT_RECORD.get_mut().commit_write();
+    record_backup_crash(strikes, 2);
 
     hal::wdt::Watchdog::feed();
 

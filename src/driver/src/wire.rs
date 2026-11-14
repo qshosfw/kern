@@ -46,9 +46,8 @@ impl<S: SerialPort> WireDriver<S> {
     /// Poll the serial byte stream, feeding the bounded COBS frame collector.
     #[inline(never)]
     pub fn poll(&mut self, uptime_ms: u32) -> Option<(WireHeader, usize)> {
-        let mut byte_uninit = ::core::mem::MaybeUninit::<[u8; 64]>::uninit();
-        let byte_buf = unsafe { &mut *byte_uninit.as_mut_ptr() };
-        let read_count = self.port.read(byte_buf);
+        let mut byte_buf = [0u8; 64];
+        let read_count = self.port.read(&mut byte_buf);
         if read_count == 0 {
             return None;
         }
@@ -126,15 +125,8 @@ impl<S: SerialPort> WireDriver<S> {
         status: Option<WireStatus>,
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
-        let mut raw_uninit = ::core::mem::MaybeUninit::<[u32; (MAX_RAW_BUF_LEN + 3) / 4]>::uninit();
-        let raw_buf = unsafe {
-            ::core::slice::from_raw_parts_mut(raw_uninit.as_mut_ptr() as *mut u8, MAX_RAW_BUF_LEN)
-        };
-        let mut wire_uninit =
-            ::core::mem::MaybeUninit::<[u32; (MAX_WIRE_BUF_LEN + 3) / 4]>::uninit();
-        let wire_out = unsafe {
-            ::core::slice::from_raw_parts_mut(wire_uninit.as_mut_ptr() as *mut u8, MAX_WIRE_BUF_LEN)
-        };
+        let mut raw_buf = [0u8; MAX_RAW_BUF_LEN];
+        let mut wire_out = [0u8; MAX_WIRE_BUF_LEN];
 
         let frame_len = match status {
             Some(st) => self.session.frame_response(
@@ -143,16 +135,16 @@ impl<S: SerialPort> WireDriver<S> {
                 sequence,
                 st,
                 payload_data,
-                raw_buf,
-                wire_out,
+                &mut raw_buf,
+                &mut wire_out,
             )?,
             None => self.session.frame_event(
                 service,
                 opcode,
                 sequence,
                 payload_data,
-                raw_buf,
-                wire_out,
+                &mut raw_buf,
+                &mut wire_out,
             )?,
         };
 

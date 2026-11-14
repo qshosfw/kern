@@ -80,23 +80,96 @@ impl AudioSessionManager {
         mut audio: Option<&mut A>,
         f: F,
     ) -> R {
-        let prev_prio = self.current_priority;
-        let prev_target = self.current_target;
-        self.request_session(
-            audio.as_deref_mut(),
-            AudioPriority::Mute,
-            AudioOutputTarget::Speaker,
-        );
+        let prev_muted = self.is_muted;
+        self.is_muted = true;
+        if let Some(amp) = audio.as_deref_mut() {
+            amp.disable();
+        }
         let res = f();
-        self.current_priority = prev_prio;
-        self.current_target = prev_target;
+        self.is_muted = prev_muted;
         if let Some(amp) = audio {
-            if prev_prio > AudioPriority::Mute && self.master_volume > 0 {
+            if !self.is_muted
+                && self.current_priority > AudioPriority::Mute
+                && self.master_volume > 0
+            {
                 amp.enable();
             } else {
                 amp.disable();
             }
         }
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockAudio {
+        enabled: bool,
+        vol: u8,
+        disable_count: u32,
+        enable_count: u32,
+    }
+
+    impl MockAudio {
+        fn new() -> Self {
+            Self {
+                enabled: false,
+                vol: 5,
+                disable_count: 0,
+                enable_count: 0,
+            }
+        }
+    }
+
+    impl AudioService for MockAudio {
+        fn set_volume(&mut self, level: u8) {
+            self.vol = level;
+        }
+        fn volume(&self) -> u8 {
+            self.vol
+        }
+        fn enable(&mut self) {
+            self.enabled = true;
+            self.enable_count += 1;
+        }
+        fn disable(&mut self) {
+            self.enabled = false;
+            self.disable_count += 1;
+        }
+        fn is_enabled(&self) -> bool {
+            self.enabled
+        }
+        fn is_active(&self) -> bool {
+            self.enabled
+        }
+        fn hardware_gain(&self) -> (u8, u8) {
+            (0, self.vol)
+        }
+    }
+
+    #[test]
+    fn with_muted_silences_amp_even_during_higher_priority_session() {
+        let mut mgr = AudioSessionManager::new();
+        let mut amp = MockAudio::new();
+
+        assert!(mgr.request_session(
+            Some(&mut amp),
+            AudioPriority::RxVoice,
+            AudioOutputTarget::Speaker
+        ));
+        assert!(amp.is_enabled());
+        assert!(mgr.is_speaker_active());
+
+        let muted_inside = mgr.with_muted(Some(&mut amp), || {
+            // Hardware amp must have been disabled despite RxVoice priority
+            false
+        });
+        assert!(!muted_inside);
+        assert!(amp.disable_count >= 1);
+        assert!(amp.is_enabled());
+        assert_eq!(mgr.current_priority(), AudioPriority::RxVoice);
+        assert!(mgr.is_speaker_active());
     }
 }

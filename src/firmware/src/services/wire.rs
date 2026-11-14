@@ -6,7 +6,6 @@
 use crate::hardware::SystemHardware;
 use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
 use crate::services::storage::DirEntryInfo;
-use core::mem::MaybeUninit;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{ModulationMode, PowerService, RfFineTuning, RfModulation, RfSquelch};
 use kernel::wire::*;
@@ -98,20 +97,17 @@ fn err_empty(status: WireStatus) -> (WireStatus, usize) {
 /// Main entry point for non-core RigWire records routed from the transport driver.
 #[inline(never)]
 pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u32) -> bool {
-    let mut payload_uninit = MaybeUninit::<[u32; 32]>::uninit();
-    let payload_buf =
-        unsafe { core::slice::from_raw_parts_mut(payload_uninit.as_mut_ptr() as *mut u8, 128) };
+    let mut payload_buf = [0u8; 128];
     let plen = (header.payload_len as usize).min(128);
     payload_buf[..plen].copy_from_slice(hw.wire.current_payload(header));
     let payload = &payload_buf[..plen];
 
-    let mut out_uninit = MaybeUninit::<[u32; 48]>::uninit();
-    let out = unsafe { &mut *(out_uninit.as_mut_ptr() as *mut [u8; 192]) };
+    let mut out = [0u8; 192];
 
     let res = match header.service {
-        SERVICE_CONTROL => handle_control_service(header.opcode, payload, hw, now, out),
-        SERVICE_DATA => handle_data_service(header.opcode, payload, hw, out),
-        SERVICE_EVENTS => handle_events_service(header.opcode, payload, out),
+        SERVICE_CONTROL => handle_control_service(header.opcode, payload, hw, now, &mut out),
+        SERVICE_DATA => handle_data_service(header.opcode, payload, hw, &mut out),
+        SERVICE_EVENTS => handle_events_service(header.opcode, payload, &mut out),
         _ => return false,
     };
 
@@ -606,11 +602,14 @@ fn on_transfer_chunk(
     if transfer.mode == TRANSFER_MODE_WRITE {
         let off = req.offset as usize;
         let chunk_len = req.data.len();
-        if off + chunk_len > MAX_WIRE_FILE_SIZE {
+        let Some(end) = off.checked_add(chunk_len) else {
+            return err_empty(WireStatus::BadRange);
+        };
+        if end > MAX_WIRE_FILE_SIZE {
             return err_empty(WireStatus::BadLength);
         }
-        wire_file_staging_buf()[off..off + chunk_len].copy_from_slice(req.data);
-        let new_len = (off + chunk_len) as u32;
+        wire_file_staging_buf()[off..end].copy_from_slice(req.data);
+        let new_len = end as u32;
         transfer.current_len = transfer.current_len.max(new_len);
 
         let mut w = ByteWriter::new(out);
@@ -712,8 +711,7 @@ fn on_transfer_stat(
         Ok(sz) => {
             let mut crc_val = 0xFFFF_FFFFu32;
             let mut cur_off = 0usize;
-            let mut chunk_uninit = MaybeUninit::<[u8; 128]>::uninit();
-            let chunk_buf = unsafe { &mut *chunk_uninit.as_mut_ptr() };
+            let mut chunk_buf = [0u8; 128];
             while cur_off < sz {
                 let to_read = (sz - cur_off).min(chunk_buf.len());
                 match hw
@@ -746,6 +744,14 @@ fn on_transfer_list(
     w: &mut ByteWriter<'_>,
 ) -> Result<(), WireStatus> {
     let req = TransferListRequest::parse(payload).ok_or(WireStatus::BadLength)?;
+
+    let active_upload = unsafe {
+        let t = &*core::ptr::addr_of!(CURRENT_TRANSFER);
+        t.active && t.mode == TRANSFER_MODE_WRITE
+    };
+    if active_upload {
+        return Err(WireStatus::Busy);
+    }
 
     let entries = unsafe {
         let ptr = crate::runtime::arena_base_ptr() as *mut DirEntryInfo;
@@ -858,8 +864,8 @@ pub fn emit_event(hw: &mut SystemHardware, event_id: u16, data: &[u8]) {
         let bit = 1u32 << (event_id & 0x1F);
         if (sub.active_mask & bit) != 0 && sub.credits > 0 {
             sub.credits -= 1;
-            let mut payload = MaybeUninit::<[u8; 32]>::uninit();
-            let mut w = ByteWriter::new(&mut *payload.as_mut_ptr());
+            let mut payload = [0u8; 32];
+            let mut w = ByteWriter::new(&mut payload);
             w.write_u16_le(event_id);
             let d_len = data.len().min(30);
             w.write_bytes(&data[..d_len]);

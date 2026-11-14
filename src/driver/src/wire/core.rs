@@ -17,9 +17,7 @@ impl<S: SerialPort> WireDriver<S> {
             return;
         }
         let payload = &self.rx_buf[HEADER_LEN..covered];
-        let mut resp_uninit = ::core::mem::MaybeUninit::<[u32; 5]>::uninit();
-        let resp_buf =
-            unsafe { ::core::slice::from_raw_parts_mut(resp_uninit.as_mut_ptr() as *mut u8, 20) };
+        let mut resp_buf = [0u8; 20];
         let mut override_slice: Option<&[u8]> = None;
         let mut do_reset = false;
         let mut do_reboot = false;
@@ -42,10 +40,8 @@ impl<S: SerialPort> WireDriver<S> {
                         do_reset = true;
                         (WireStatus::BadVersion, 3)
                     } else {
-                        self.session.active_session_id = host_session;
-                        self.session.expected_sequence = 1;
-                        self.session.last_sequence = 0;
-                        self.session.negotiated_max_payload = req_payload.min(128).max(32);
+                        self.session
+                            .begin_session(host_session, req_payload.clamp(32, 128));
 
                         let max_p = self.session.negotiated_max_payload.to_le_bytes();
                         let tp = self.transport_profile.to_le_bytes();

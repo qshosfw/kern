@@ -44,6 +44,15 @@ impl WireSession {
         self.is_authenticated = false;
     }
 
+    pub fn begin_session(&mut self, session_id: u32, max_payload: u16) {
+        self.active_session_id = session_id;
+        self.expected_sequence = 1;
+        self.last_sequence = 0;
+        self.last_crc = 0;
+        self.negotiated_max_payload = max_payload;
+        self.is_authenticated = false;
+    }
+
     pub fn validate_record<'a>(
         &mut self,
         raw_record: &'a [u8],
@@ -161,9 +170,13 @@ impl WireSession {
         wire_out: &mut [u8],
     ) -> Result<usize, WireStatus> {
         let app_payload_len = status_byte.map_or(0, |_| 1) + payload_data.len();
+        if app_payload_len > u16::MAX as usize {
+            return Err(WireStatus::BadLength);
+        }
         let raw_len = HEADER_LEN + app_payload_len + CRC_LEN;
+        let required_wire_len = Cobs::max_encoded_len(raw_len) + 2;
 
-        if raw_buf.len() < raw_len || wire_out.len() < raw_len + 3 {
+        if raw_buf.len() < raw_len || wire_out.len() < required_wire_len {
             return Err(WireStatus::BadLength);
         }
 
@@ -238,5 +251,57 @@ impl WireSession {
             raw_buf,
             wire_out,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn begin_session_clears_auth_and_stale_crc() {
+        let mut session = WireSession::new();
+        session.active_session_id = 11;
+        session.last_sequence = 9;
+        session.last_crc = 0xBEEF;
+        session.is_authenticated = true;
+
+        session.begin_session(42, 64);
+
+        assert_eq!(session.active_session_id, 42);
+        assert_eq!(session.expected_sequence, 1);
+        assert_eq!(session.last_sequence, 0);
+        assert_eq!(session.last_crc, 0);
+        assert_eq!(session.negotiated_max_payload, 64);
+        assert!(!session.is_authenticated);
+    }
+
+    #[test]
+    fn frame_record_raw_rejects_short_wire_out_above_254_bytes() {
+        let session = WireSession::new();
+        let payload = [0xAAu8; 243]; // raw_len = 15 + 243 + 2 = 260 >= 254 (max COBS = 262)
+        let mut raw_buf = [0u8; 260];
+        let mut short_wire_out = [0u8; 263]; // previously passed raw_len + 3 and panicked
+
+        let res = session.frame_event(
+            SERVICE_DATA,
+            0x01,
+            1,
+            &payload,
+            &mut raw_buf,
+            &mut short_wire_out,
+        );
+        assert_eq!(res, Err(WireStatus::BadLength));
+
+        let mut ok_wire_out = [0u8; 264];
+        let ok = session.frame_event(
+            SERVICE_DATA,
+            0x01,
+            1,
+            &payload,
+            &mut raw_buf,
+            &mut ok_wire_out,
+        );
+        assert!(ok.is_ok());
     }
 }
