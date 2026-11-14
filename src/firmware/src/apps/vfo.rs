@@ -38,7 +38,8 @@ impl VfoApp {
         unsafe {
             (*ptr).repeater = gfx::gui::KeyRepeater::new(8, 2);
             (*ptr).latched = false;
-            (*ptr).last_ptt_press_ms = 0;
+            // Offset initial timestamp past the 400ms double-press window so a first PTT press right after boot does not false-latch.
+            (*ptr).last_ptt_press_ms = u32::MAX - 500;
         }
     }
 
@@ -99,6 +100,10 @@ impl VfoApp {
                     let diff_ms = now_ms.wrapping_sub(self.last_ptt_press_ms);
                     self.last_ptt_press_ms = now_ms;
 
+                    if self.latched && !ctx.is_transmitting() {
+                        // TOT or external stop cleared TX while latched; clear stale latch before handling the new press.
+                        self.latched = false;
+                    }
                     if self.latched {
                         // Any press while latched turns TX off
                         self.stop_transmitting(ctx);

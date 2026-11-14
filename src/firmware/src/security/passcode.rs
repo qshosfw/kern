@@ -288,9 +288,11 @@ pub fn set_passcode(
 
     let mut rand_buf = [0u8; 48];
     trng.fill_bytes(&mut rand_buf, bsp::entropy::sample_hardware_noise());
-    let passcode_salt: &[u8; 16] = unsafe { &*(rand_buf.as_ptr() as *const [u8; 16]) };
-    let storage_salt: &[u8; 16] = unsafe { &*(rand_buf.as_ptr().add(16) as *const [u8; 16]) };
-    let storage_nonce: &[u8; 16] = unsafe { &*(rand_buf.as_ptr().add(32) as *const [u8; 16]) };
+    let (passcode_salt, rest) = rand_buf.split_at(16);
+    let (storage_salt, storage_nonce) = rest.split_at(16);
+    let passcode_salt: &[u8; 16] = passcode_salt.try_into().unwrap();
+    let storage_salt: &[u8; 16] = storage_salt.try_into().unwrap();
+    let storage_nonce: &[u8; 16] = storage_nonce.try_into().unwrap();
 
     if let Some(ref hook) = progress {
         hook.report(15);
@@ -378,9 +380,11 @@ pub fn disable_passcode(
 
     let mut rand_buf = [0u8; 48];
     trng.fill_bytes(&mut rand_buf, bsp::entropy::sample_hardware_noise());
-    let storage_salt: &[u8; 16] = unsafe { &*(rand_buf.as_ptr() as *const [u8; 16]) };
-    let storage_nonce: &[u8; 16] = unsafe { &*(rand_buf.as_ptr().add(16) as *const [u8; 16]) };
-    let passcode_salt: &[u8; 16] = unsafe { &*(rand_buf.as_ptr().add(32) as *const [u8; 16]) };
+    let (storage_salt, rest) = rand_buf.split_at(16);
+    let (storage_nonce, passcode_salt) = rest.split_at(16);
+    let storage_salt: &[u8; 16] = storage_salt.try_into().unwrap();
+    let storage_nonce: &[u8; 16] = storage_nonce.try_into().unwrap();
+    let passcode_salt: &[u8; 16] = passcode_salt.try_into().unwrap();
 
     write_wrapped_storage_key(
         filesystem,

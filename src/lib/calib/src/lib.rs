@@ -192,8 +192,8 @@ pub fn calculate_battery_percentage(raw_adc: u16, curve: &[u16; 6]) -> u8 {
             return lerp_u8(
                 base,
                 base + 20,
-                (raw_adc - low_adc) as u32,
-                (high_adc - low_adc) as u32,
+                raw_adc.saturating_sub(low_adc) as u32,
+                high_adc.saturating_sub(low_adc) as u32,
             );
         }
     }
@@ -306,8 +306,8 @@ impl CalibrationBlock {
         const DBM_POINTS: [i16; 4] = [-123, -107, -83, -73];
         for i in 0..3 {
             if raw <= th[i + 1] {
-                let span = (th[i + 1] - th[i]) as u32;
-                let offset = (raw - th[i]) as u32;
+                let span = th[i + 1].saturating_sub(th[i]) as u32;
+                let offset = raw.saturating_sub(th[i]) as u32;
                 let delta_dbm = (DBM_POINTS[i + 1] - DBM_POINTS[i]) as u8;
                 return DBM_POINTS[i] + lerp_u8(0, delta_dbm, offset, span) as i16;
             }
@@ -474,5 +474,20 @@ mod tests {
         assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 75), -115);
         // At point 3
         assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 200), -73);
+    }
+
+    #[test]
+    fn test_non_monotonic_and_flat_curves_do_not_underflow() {
+        let non_mono_battery = [1400, 2200, 1800, 2300, 2400, 2600];
+        assert_eq!(calculate_battery_percentage(1900, &non_mono_battery), 12);
+        let flat_battery = [1400, 2000, 2000, 2000, 2400, 2600];
+        assert_eq!(calculate_battery_percentage(2200, &flat_battery), 70);
+
+        let mut bytes = [0u8; 512];
+        let cal = unsafe { &mut *(bytes.as_mut_ptr() as *mut CalibrationBlock) };
+        cal.rssi_vhf = [50, 140, 100, 200];
+        assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 110), -113);
+        cal.rssi_vhf = [50, 100, 100, 200];
+        assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 150), -78);
     }
 }
