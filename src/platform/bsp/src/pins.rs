@@ -205,17 +205,23 @@ pub fn park_for_stop(uart_rx_wake: bool) -> [u32; 6] {
 }
 
 /// Checks whether `KeyCode::Exit` (`PB3` -> `PB15`) is held while matrix pins are parked for STOP.
-/// Distinguishes `Exit` from `Side1` (direct `PB15 -> GND`) by briefly releasing `PB3` high.
+/// Distinguishes `Exit` from `Side1` (direct `PB15 -> GND`) by briefly floating `PB3` as Hi-Z input
+/// (preventing contention if both `Side1` and `Exit` are held simultaneously).
 pub fn is_exit_held_parked() -> bool {
+    use py32_pac::gpio as g;
+
+    KB_COLS[3].configure_output(g::SPEED_LOW);
     KB_COLS[3].set_low();
     cortex_m::asm::delay(160);
     if KB_ROWS[0].is_high() {
         return false;
     }
-    KB_COLS[3].set_high();
-    cortex_m::asm::delay(160);
+    KB_COLS[3].configure_input(g::PULL_NONE);
+    cortex_m::asm::delay(800);
     let released_high = KB_ROWS[0].is_high();
+    KB_COLS[3].configure_output(g::SPEED_LOW);
     KB_COLS[3].set_low();
+    cortex_m::asm::delay(32);
     released_high
 }
 

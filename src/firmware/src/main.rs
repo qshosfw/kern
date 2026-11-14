@@ -128,6 +128,7 @@ pub unsafe extern "C" fn EXTI4_15() {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn TIM6_LPTIM1_DAC() {
     hal::lptim::LowPowerTimer::clear_expired();
+    hal::exti::clear_pending(hal::exti::LINE_LPTIM1);
 }
 
 #[cfg(not(test))]

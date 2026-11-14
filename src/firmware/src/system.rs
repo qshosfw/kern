@@ -61,8 +61,8 @@ fn drain_keypad_matrix(hw: &mut SystemHardware) {
     hw.key_scanner.clear();
 }
 
-const WAKE_HOLD_STEPS: u8 = 9; // ~9 x 50 ms (~450 ms) hold to wake
-const LPTIM_IDLE_TICKS: u16 = 3072; // ~3.0 s @ 1024 Hz LSI/32 (safe margin < 6.0 s IWDG)
+const WAKE_HOLD_STEPS: u8 = 6; // ~6 x 50 ms (~300 ms) hold to wake
+const LPTIM_IDLE_TICKS: u16 = 1536; // ~1.5 s @ 1024 Hz LSI/32 (>2x safety margin under 6.0 s IWDG across LSI spread)
 const LPTIM_HOLD_TICKS: u16 = 52; // ~50 ms @ 1024 Hz
 
 /// Advances hold-to-wake state for `KeyCode::Exit` during STOP sleep.
@@ -148,11 +148,21 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     'sleep_loop: loop {
         py32_hal::wdt::Watchdog::feed();
 
-        let Some(sleep_ticks) =
-            next_stop_sleep_ticks(bsp::pins::is_exit_held_parked(), &mut exit_hold_steps)
-        else {
+        let wake_flags = WAKE_EXTI_FLAGS.load(core::sync::atomic::Ordering::Acquire);
+        let mut exit_held = bsp::pins::is_exit_held_parked();
+        // If EXTI15 just woke STOP (initial contact edge) and sampled during mechanical bounce,
+        // wait briefly (~10 ms on HSI) and re-sample so we don't fall back into multi-second idle sleep.
+        if !exit_held && (wake_flags & (1 << 15)) != 0 {
+            cortex_m::asm::delay(160_000);
+            exit_held = bsp::pins::is_exit_held_parked();
+        }
+
+        let Some(mut sleep_ticks) = next_stop_sleep_ticks(exit_held, &mut exit_hold_steps) else {
             break 'sleep_loop;
         };
+        if !exit_held && (wake_flags & (1 << 15)) != 0 {
+            sleep_ticks = LPTIM_HOLD_TICKS;
+        }
 
         // Guard WAKE_EXTI_FLAGS reset + pending-mask clear + STOP entry inside an
         // IRQ-free section so an EXTI4_15 edge cannot clear itself or race between
@@ -162,6 +172,10 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
             WAKE_EXTI_FLAGS.store(0, core::sync::atomic::Ordering::Release);
             py32_hal::lptim::LowPowerTimer::clear_expired();
             py32_hal::exti::clear_pending_mask(wakeup_mask);
+            unsafe {
+                py32_hal::pac::nvic_clear_pending(Interrupt::EXTI4_15 as u8);
+                py32_hal::pac::nvic_clear_pending(Interrupt::TIM6_LPTIM1_DAC as u8);
+            }
             py32_hal::lptim::LowPowerTimer::start_single_shot_irq(sleep_ticks, true);
             py32_hal::pwr::enter_stop();
         });

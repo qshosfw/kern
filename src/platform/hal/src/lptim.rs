@@ -13,8 +13,9 @@ impl LowPowerTimer {
         crate::rcc::enable_lptim1_lsi();
         unsafe {
             LPTIM_CR.write_volatile(0);
+            LPTIM_IER.write_volatile(0);
             LPTIM_CFGR.write_volatile(5 << 9); // PRESC = /32
-            LPTIM_ICR.write_volatile(ICR_ARRMCF);
+            LPTIM_ICR.write_volatile(ICR_ARRMCF | ICR_ARROKCF);
             LPTIM_CR.write_volatile(CR_ENABLE);
         }
     }
@@ -28,10 +29,22 @@ impl LowPowerTimer {
     pub fn start_single_shot_irq(ticks: u16, enable_irq: bool) {
         crate::rcc::enable_lptim1_lsi();
         unsafe {
-            LPTIM_CR.write_volatile(CR_ENABLE);
-            LPTIM_ICR.write_volatile(ICR_ARRMCF);
+            // IER and CFGR are hardware write-protected while LPTIM_CR.ENABLE == 1.
+            LPTIM_CR.write_volatile(0);
+            LPTIM_CFGR.write_volatile(5 << 9); // PRESC = /32
             LPTIM_IER.write_volatile(if enable_irq { IER_ARRMIE } else { 0 });
+            LPTIM_ICR.write_volatile(ICR_ARRMCF | ICR_ARROKCF);
+            LPTIM_CR.write_volatile(CR_ENABLE);
+
+            // ARR transfers asynchronously into the LSI clock domain; wait for ARROK
+            // before arming SNGSTRT and gating APB clocks on STOP entry.
             LPTIM_ARR.write_volatile(ticks.max(1) as u32);
+            for _ in 0..20_000 {
+                if (LPTIM_ISR.read_volatile() & ISR_ARROK) != 0 {
+                    break;
+                }
+            }
+            LPTIM_ICR.write_volatile(ICR_ARROKCF);
             LPTIM_CR.write_volatile(CR_ENABLE | CR_SNGSTRT);
         }
     }
@@ -59,9 +72,9 @@ impl LowPowerTimer {
     /// Stops LPTIM1 cleanly and clears pending interrupt.
     pub fn stop() {
         unsafe {
-            LPTIM_IER.write_volatile(0);
-            LPTIM_ICR.write_volatile(ICR_ARRMCF);
             LPTIM_CR.write_volatile(0);
+            LPTIM_IER.write_volatile(0);
+            LPTIM_ICR.write_volatile(ICR_ARRMCF | ICR_ARROKCF);
         }
     }
 }
