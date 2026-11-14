@@ -234,6 +234,12 @@ const _: () = {
     assert!(core::mem::align_of::<SystemCalibration>() >= 4);
 };
 
+#[inline(never)]
+fn read_valid_calib(vfs: &mut SystemStorage, path: &str, buf: &mut [u8; 512]) -> bool {
+    matches!(vfs.read_file(path, buf), Ok(512) if is_valid_calibration(buf))
+}
+
+#[inline(never)]
 fn write_protected_sys_file(
     vfs: &mut SystemStorage,
     path: &str,
@@ -250,6 +256,7 @@ fn write_protected_sys_file(
     res
 }
 
+#[inline(never)]
 fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 12]) {
     let sig = compute_device_signature(data, mcu_uid);
     let sig_bytes = sig.to_bytes();
@@ -265,8 +272,8 @@ pub fn reformat_storage(
 ) -> Result<(), ()> {
     let staging = crate::services::staging_buf();
     if keep_calib {
-        let loaded = matches!(vfs.read_file(CALIB_FILE_PATH, staging), Ok(512) if is_valid_calibration(staging))
-            || matches!(vfs.read_file(CALIB_BAK_PATH, staging), Ok(512) if is_valid_calibration(staging));
+        let loaded = read_valid_calib(vfs, CALIB_FILE_PATH, staging)
+            || read_valid_calib(vfs, CALIB_BAK_PATH, staging);
         if !loaded {
             staging.copy_from_slice(fallback_calib);
         }
@@ -388,32 +395,16 @@ impl SystemCalibration {
     /// Load calibration into self from VFS with fallback to backup, factory default, and signature verification.
     #[inline(never)]
     pub fn load_into(&mut self, vfs: &mut SystemStorage, mcu_uid: &[u8; 12]) {
-        let data = crate::services::staging_buf();
-        let mut loaded = false;
+        let mut loaded = read_valid_calib(vfs, CALIB_FILE_PATH, &mut self.raw);
 
-        // 1. Try primary calibration path
-        if let Ok(n) = vfs.read_file(CALIB_FILE_PATH, data) {
-            if n == 512 && is_valid_calibration(data) {
+        if !loaded {
+            if read_valid_calib(vfs, CALIB_BAK_PATH, &mut self.raw) {
                 loaded = true;
+            } else {
+                self.raw.copy_from_slice(DEV_TARGET_FACTORY_CALIB);
             }
-        }
-
-        // 2. Rollback to backup file if primary is missing or corrupted
-        if !loaded {
-            if let Ok(n) = vfs.read_file(CALIB_BAK_PATH, data) {
-                if n == 512 && is_valid_calibration(data) {
-                    let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, data);
-                    sign_and_save_sig(vfs, data, mcu_uid);
-                    loaded = true;
-                }
-            }
-        }
-
-        // 3. Last-resort fallback to embedded factory default
-        if !loaded {
-            data.copy_from_slice(DEV_TARGET_FACTORY_CALIB);
-            let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, data);
-            sign_and_save_sig(vfs, data, mcu_uid);
+            let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, &self.raw);
+            sign_and_save_sig(vfs, &self.raw, mcu_uid);
         }
 
         // Verify device binding signature (re-sign only if signature file is absent)
@@ -424,17 +415,16 @@ impl SystemCalibration {
             sig_present = true;
             if n >= 32 {
                 if let Some(sig) = CalibSignature::from_bytes(&sig_buf) {
-                    bound = verify_device_signature(data, &sig, mcu_uid);
+                    bound = verify_device_signature(&self.raw, &sig, mcu_uid);
                 }
             }
         }
 
         if !sig_present && loaded {
-            sign_and_save_sig(vfs, data, mcu_uid);
+            sign_and_save_sig(vfs, &self.raw, mcu_uid);
             bound = true;
         }
 
-        self.raw.copy_from_slice(data);
         self.valid = true;
         self.bound = bound;
     }
@@ -452,14 +442,8 @@ impl SystemCalibration {
 
         // Use TRANSIENT_ARENA tail staging_buf() ([4096..4608)) so RigWire payloads in [0..4096) never alias.
         let staging = crate::services::staging_buf();
-        let mut backed_up = false;
-        if let Ok(512) = vfs.read_file(CALIB_FILE_PATH, staging) {
-            if is_valid_calibration(staging)
-                && write_protected_sys_file(vfs, CALIB_BAK_PATH, staging).is_ok()
-            {
-                backed_up = true;
-            }
-        }
+        let backed_up = read_valid_calib(vfs, CALIB_FILE_PATH, staging)
+            && write_protected_sys_file(vfs, CALIB_BAK_PATH, staging).is_ok();
 
         let write_ok = write_protected_sys_file(vfs, CALIB_FILE_PATH, new_calib).is_ok();
         let read_ok = write_ok
