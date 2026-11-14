@@ -237,6 +237,15 @@ fn save_rescued_calibration<'a>(
 }
 
 #[cfg(feature = "filesystem")]
+#[inline]
+fn enable_boot_dialog_backlight(lcd: &mut St7565) {
+    // Set non-zero PWM duty alongside GPIO high so 20 kHz SysTick PWM does not zero BACKLIGHT.
+    drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
+    bsp::pins::BACKLIGHT.set_high();
+    lcd.turn_on();
+}
+
+#[cfg(feature = "filesystem")]
 #[inline(never)]
 fn prompt_and_format_storage<'a>(
     lcd: &mut St7565,
@@ -244,8 +253,7 @@ fn prompt_and_format_storage<'a>(
     radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
     fs: &mut KernFS<Py25q16FlashDriver<'a>>,
 ) {
-    bsp::pins::BACKLIGHT.set_high();
-    lcd.turn_on();
+    enable_boot_dialog_backlight(lcd);
     radio.set_status_led(bsp::StatusLed::Orange);
 
     render_dialog(
@@ -255,6 +263,14 @@ fn prompt_and_format_storage<'a>(
         "Press MENU to Format Storage",
         true,
     );
+
+    // Wait for any already-held keys (e.g. Exit held during reset/wake) to be released first.
+    while KeypadScanner::poll_matrix().is_some() {
+        bsp::Board::wdt_feed();
+        py32_hal::delay::delay_ms(10);
+    }
+    KeypadScanner::reset_gpio_pins();
+    key_scanner.clear();
 
     loop {
         match boot_wait_key(key_scanner, 2500) {
@@ -303,8 +319,7 @@ fn recover_calibration_to_fs<'a>(
     radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
     fs: &mut KernFS<Py25q16FlashDriver<'a>>,
 ) {
-    bsp::pins::BACKLIGHT.set_high();
-    lcd.turn_on();
+    enable_boot_dialog_backlight(lcd);
     radio.set_status_led(bsp::StatusLed::Orange);
     render_progress(
         lcd,

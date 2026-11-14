@@ -66,6 +66,19 @@ pub fn enable_line(line: u8, trigger: TriggerEdge) {
     }
 }
 
+/// Internal EXTI line routed to LPTIM1 wakeup on PY32F071 (`EXTI_IMR_IM29`).
+pub const LINE_LPTIM1: u8 = 29;
+
+/// Enable multiple EXTI interrupt lines simultaneously without altering edge triggers.
+/// Intended for internal peripheral wakeup lines (e.g. `LINE_LPTIM1`).
+#[inline(always)]
+pub fn enable_lines(mask: u32) {
+    unsafe {
+        let imr = exti::EXTI_IMR.read_volatile();
+        exti::EXTI_IMR.write_volatile(imr | mask);
+    }
+}
+
 pub fn disable_line(line: u8) {
     if line < 32 {
         disable_lines(1 << line);

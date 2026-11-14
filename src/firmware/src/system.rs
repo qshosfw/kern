@@ -62,7 +62,7 @@ fn drain_keypad_matrix(hw: &mut SystemHardware) {
 }
 
 const WAKE_HOLD_STEPS: u8 = 9; // ~9 x 50 ms (~450 ms) hold to wake
-const LPTIM_IDLE_TICKS: u16 = 4096; // ~4.0 s @ 1024 Hz LSI/32 (< 6.0 s IWDG)
+const LPTIM_IDLE_TICKS: u16 = 3072; // ~3.0 s @ 1024 Hz LSI/32 (safe margin < 6.0 s IWDG)
 const LPTIM_HOLD_TICKS: u16 = 52; // ~50 ms @ 1024 Hz
 
 /// Advances hold-to-wake state for `KeyCode::Exit` during STOP sleep.
@@ -138,7 +138,9 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     } else {
         1 << 15
     };
-    py32_hal::exti::clear_pending_mask(exti_mask);
+    let wakeup_mask: u32 = exti_mask | (1 << py32_hal::exti::LINE_LPTIM1);
+    py32_hal::exti::enable_lines(1 << py32_hal::exti::LINE_LPTIM1);
+    py32_hal::exti::clear_pending_mask(wakeup_mask);
 
     use py32_hal::pac::Interrupt;
     unsafe {
@@ -160,7 +162,8 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         };
 
         WAKE_EXTI_FLAGS.store(0, core::sync::atomic::Ordering::Release);
-        py32_hal::exti::clear_pending_mask(exti_mask);
+        py32_hal::lptim::LowPowerTimer::clear_expired();
+        py32_hal::exti::clear_pending_mask(wakeup_mask);
         py32_hal::lptim::LowPowerTimer::start_single_shot_irq(sleep_ticks, true);
         py32_hal::pwr::enter_stop();
 
@@ -180,7 +183,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         py32_hal::pac::nvic_disable(Interrupt::EXTI4_15 as u8);
         py32_hal::pac::nvic_disable(Interrupt::TIM6_LPTIM1_DAC as u8);
     }
-    py32_hal::exti::disable_lines(exti_mask);
+    py32_hal::exti::disable_lines(wakeup_mask);
     py32_hal::lptim::LowPowerTimer::stop();
 
     bsp::pins::restore_from_stop(&saved_pins);
@@ -588,10 +591,14 @@ mod tests {
             assert_eq!(steps, expected);
         }
 
-        // Releasing before threshold drops immediately back to 4s idle STOP ticks
+        // Releasing before threshold drops immediately back to idle STOP ticks
         assert_eq!(
             next_stop_sleep_ticks(false, &mut steps),
             Some(LPTIM_IDLE_TICKS)
+        );
+        assert!(
+            LPTIM_IDLE_TICKS <= 3500,
+            "Keep STOP sleep window well under 6s IWDG"
         );
         assert_eq!(steps, 0);
 

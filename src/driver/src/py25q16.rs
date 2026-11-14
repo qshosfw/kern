@@ -18,6 +18,8 @@ impl<'a> Py25q16FlashDriver<'a> {
 
     pub fn init(&mut self) {
         self.cs.set_high();
+        // Wake flash in case a reset (e.g. IWDG) occurred while it was in Deep Power-Down (0xB9).
+        self.release_power_down();
     }
 
     /// Enter Deep Power-Down (`0xB9`, <1 uA standby until `release_power_down()`).

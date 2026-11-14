@@ -208,12 +208,12 @@ pub fn park_for_stop(uart_rx_wake: bool) -> [u32; 6] {
 /// Distinguishes `Exit` from `Side1` (direct `PB15 -> GND`) by briefly releasing `PB3` high.
 pub fn is_exit_held_parked() -> bool {
     KB_COLS[3].set_low();
-    cortex_m::asm::delay(48);
+    cortex_m::asm::delay(160);
     if KB_ROWS[0].is_high() {
         return false;
     }
     KB_COLS[3].set_high();
-    cortex_m::asm::delay(48);
+    cortex_m::asm::delay(160);
     let released_high = KB_ROWS[0].is_high();
     KB_COLS[3].set_low();
     released_high
