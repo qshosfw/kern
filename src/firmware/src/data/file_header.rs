@@ -155,14 +155,12 @@ impl TableFileHeader {
 
     #[inline(always)]
     pub fn is_valid_channels(&self) -> bool {
-        (self.ident == TABLE_ID_CHANNELS || self.ident == 0x48434B7F)
-            && (self.record_stride == 64 || self.record_stride == 48)
+        self.ident == TABLE_ID_CHANNELS && self.record_stride == 64
     }
 
     #[inline(always)]
     pub fn is_valid_contacts(&self) -> bool {
-        (self.ident == TABLE_ID_CONTACTS || self.ident == 0x54434B7F)
-            && (self.record_stride == 32 || self.record_stride == 24)
+        self.ident == TABLE_ID_CONTACTS && self.record_stride == 32
     }
 
     #[inline(always)]
@@ -177,6 +175,55 @@ impl TableFileHeader {
 
     #[inline(always)]
     pub fn from_bytes(bytes: &[u8; 16]) -> Self {
-        unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
+        Self {
+            ident: u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            version: u16::from_ne_bytes([bytes[4], bytes[5]]),
+            record_count: u16::from_ne_bytes([bytes[6], bytes[7]]),
+            max_records: u16::from_ne_bytes([bytes[8], bytes[9]]),
+            record_stride: u16::from_ne_bytes([bytes[10], bytes[11]]),
+            active_bank: bytes[12],
+            flags: bytes[13],
+            crc16: u16::from_ne_bytes([bytes[14], bytes[15]]),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_header_roundtrip_and_strict_stride() {
+        let mut ch = TableFileHeader::new_channels(200);
+        ch.record_count = 42;
+        ch.active_bank = 3;
+        ch.flags = 0x15;
+        ch.crc16 = 0xA55A;
+        let decoded = TableFileHeader::from_bytes(ch.as_bytes());
+        assert_eq!(decoded, ch);
+        assert!(decoded.is_valid_channels());
+
+        let bad_ch_stride = TableFileHeader {
+            record_stride: 48,
+            ..ch
+        };
+        assert!(!bad_ch_stride.is_valid_channels());
+
+        let legacy_ch_id = TableFileHeader {
+            ident: 0x48434B7F,
+            ..ch
+        };
+        assert!(!legacy_ch_id.is_valid_channels());
+
+        let ct = TableFileHeader::new_contacts(64);
+        let decoded_ct = TableFileHeader::from_bytes(ct.as_bytes());
+        assert_eq!(decoded_ct, ct);
+        assert!(decoded_ct.is_valid_contacts());
+
+        let bad_ct_stride = TableFileHeader {
+            record_stride: 24,
+            ..ct
+        };
+        assert!(!bad_ct_stride.is_valid_contacts());
     }
 }

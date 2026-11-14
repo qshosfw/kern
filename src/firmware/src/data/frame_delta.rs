@@ -77,22 +77,15 @@ impl PageDeltaEngine {
             return 0;
         }
 
-        let hdr = FrameDeltaHeader {
-            seq: self.seq,
-            modified_pages: mask,
-            flags: 0,
-            payload_len: (changed_count * LCD_WIDTH) as u16,
-        };
+        let seq_bytes = self.seq.to_ne_bytes();
+        let len_bytes = ((changed_count * LCD_WIDTH) as u16).to_ne_bytes();
         self.seq = self.seq.wrapping_add(1);
 
-        // Write header
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                &hdr as *const FrameDeltaHeader as *const u8,
-                out.as_mut_ptr(),
-                FrameDeltaHeader::SIZE,
-            );
-        }
+        // Write [seq: u16][modified_pages: u8][flags: u8][payload_len: u16]
+        out[0..2].copy_from_slice(&seq_bytes);
+        out[2] = mask;
+        out[3] = 0;
+        out[4..6].copy_from_slice(&len_bytes);
 
         let mut offset = FrameDeltaHeader::SIZE;
         for p in 0..8 {
@@ -111,12 +104,11 @@ impl PageDeltaEngine {
             return Err(());
         }
 
-        let hdr: FrameDeltaHeader =
-            unsafe { core::ptr::read_unaligned(packet.as_ptr() as *const FrameDeltaHeader) };
+        let modified_pages = packet[2];
 
         let mut offset = FrameDeltaHeader::SIZE;
         for p in 0..8 {
-            if (hdr.modified_pages & (1 << p)) != 0 {
+            if (modified_pages & (1 << p)) != 0 {
                 if offset + LCD_WIDTH > packet.len() {
                     return Err(());
                 }
@@ -263,5 +255,30 @@ impl RleCompressor {
 
         canvas.mark_all_dirty();
         idx >= 1024
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_delta_encode_apply_roundtrip() {
+        let prev = Canvas::new();
+        let mut curr = Canvas::new();
+        curr.buffer[1][7] = 0xAA;
+        curr.buffer[6][120] = 0x55;
+
+        let mut engine = PageDeltaEngine::new();
+        let mut pkt = [0u8; FrameDeltaHeader::SIZE + 2 * LCD_WIDTH];
+        let written = engine.encode_frame(&prev, &curr, &mut pkt);
+        assert_eq!(written, FrameDeltaHeader::SIZE + 2 * LCD_WIDTH);
+        assert_eq!(pkt[2], (1 << 1) | (1 << 6));
+
+        let mut dst = Canvas::new();
+        PageDeltaEngine::apply_frame(&mut dst, &pkt[..written]).unwrap();
+        assert_eq!(dst.buffer[1], curr.buffer[1]);
+        assert_eq!(dst.buffer[6], curr.buffer[6]);
+        assert_eq!(dst.dirty, (1 << 1) | (1 << 6));
     }
 }

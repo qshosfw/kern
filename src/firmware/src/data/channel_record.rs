@@ -79,7 +79,11 @@ impl ChannelExtension {
 
     #[inline(always)]
     pub fn from_bytes(bytes: &[u8; 8]) -> Self {
-        unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
+        Self {
+            tag: u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            version: bytes[4],
+            payload: [bytes[5], bytes[6], bytes[7]],
+        }
     }
 }
 

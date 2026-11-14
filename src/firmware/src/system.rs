@@ -154,11 +154,17 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
             break 'sleep_loop;
         };
 
-        WAKE_EXTI_FLAGS.store(0, core::sync::atomic::Ordering::Release);
-        py32_hal::lptim::LowPowerTimer::clear_expired();
-        py32_hal::exti::clear_pending_mask(wakeup_mask);
-        py32_hal::lptim::LowPowerTimer::start_single_shot_irq(sleep_ticks, true);
-        py32_hal::pwr::enter_stop();
+        // Guard WAKE_EXTI_FLAGS reset + pending-mask clear + STOP entry inside an
+        // IRQ-free section so an EXTI4_15 edge cannot clear itself or race between
+        // store(0) and enter_stop(); any post-clear edge still wakes WFI immediately
+        // and runs EXTI4_15 ISR as soon as interrupts unmask.
+        cortex_m::interrupt::free(|_| {
+            WAKE_EXTI_FLAGS.store(0, core::sync::atomic::Ordering::Release);
+            py32_hal::lptim::LowPowerTimer::clear_expired();
+            py32_hal::exti::clear_pending_mask(wakeup_mask);
+            py32_hal::lptim::LowPowerTimer::start_single_shot_irq(sleep_ticks, true);
+            py32_hal::pwr::enter_stop();
+        });
 
         py32_hal::wdt::Watchdog::feed();
 
