@@ -128,11 +128,7 @@ pub fn reload_launcher(storage: &mut crate::services::SystemStorage) {
     let entries = load_entries(Some(storage));
     if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_LAUNCHER) {
         unsafe {
-            let app = &mut *(ptr as *mut LauncherApp);
-            app.model.items = entries;
-            if app.model.selected_idx >= entries.len() {
-                app.model.selected_idx = entries.len().saturating_sub(1);
-            }
+            (*(ptr as *mut LauncherApp)).set_entries(entries);
         }
     }
 }
@@ -163,6 +159,20 @@ impl LauncherApp {
         self.scroller.is_animating()
     }
 
+    fn set_entries(&mut self, entries: &'static [LauncherEntry]) {
+        self.model.items = entries;
+        if self.model.selected_idx >= entries.len() {
+            self.model.selected_idx = entries.len().saturating_sub(1);
+        }
+    }
+
+    #[inline(always)]
+    fn sync_config(&mut self, ctx: &SysContext) {
+        self.model.nav_layout = ctx.config.keys.nav_layout;
+        self.model.show_numbers = ctx.config.apps.show_numbers != 0;
+        self.model.show_labels = ctx.config.apps.show_labels != 0;
+    }
+
     fn adjust_scroll_for_selection(&mut self, animations_enabled: bool) {
         let prev_scroll = self.scroll_top;
         if self.model.selected_idx < self.scroll_top {
@@ -170,12 +180,11 @@ impl LauncherApp {
         } else if self.model.selected_idx >= self.scroll_top + 4 {
             self.scroll_top = self.model.selected_idx - 3;
         }
-        if self.scroll_top != prev_scroll {
-            if animations_enabled {
-                self.scroller.set_target((self.scroll_top as i16) * 13);
-            } else {
-                self.scroller.jump((self.scroll_top as i16) * 13);
-            }
+        let target_y = (self.scroll_top as i16) * 13;
+        if !animations_enabled {
+            self.scroller.jump(target_y);
+        } else if self.scroll_top != prev_scroll {
+            self.scroller.set_target(target_y);
         }
     }
 
@@ -237,7 +246,7 @@ impl LauncherApp {
         success
     }
 
-    fn handle_list_nav(&mut self, ctx: &mut SysContext, event: &Event) -> bool {
+    fn handle_list_nav(&mut self, event: &Event, animations_enabled: bool) -> bool {
         let total = self.model.items.len();
         if total == 0 {
             return false;
@@ -259,20 +268,16 @@ impl LauncherApp {
         };
 
         if let Some(dir) = nav_dir {
-            self.model.is_pressed = false;
             let prev_sel = self.model.selected_idx;
             let is_tick = matches!(event, Event::Tick);
+            let mut animate = animations_enabled;
             match dir {
                 gfx::gui::modules::menu::ListNavDir::Down => {
                     if self.model.selected_idx + 1 < total {
                         self.model.selected_idx += 1;
                     } else if !is_tick || total > 4 {
                         self.model.selected_idx = 0;
-                        self.scroll_top = 0;
-                        self.scroller.jump(0);
-                        if is_tick {
-                            self.view.repeater.pause(6);
-                        }
+                        animate = false;
                     }
                 }
                 gfx::gui::modules::menu::ListNavDir::Up => {
@@ -280,20 +285,16 @@ impl LauncherApp {
                         self.model.selected_idx -= 1;
                     } else if !is_tick || total > 4 {
                         self.model.selected_idx = total - 1;
-                        self.scroll_top = self.model.selected_idx.saturating_sub(3);
-                        self.scroller.jump((self.scroll_top as i16) * 13);
-                        if is_tick {
-                            self.view.repeater.pause(6);
-                        }
+                        animate = false;
                     }
                 }
             }
 
             if self.model.selected_idx != prev_sel {
-                if ctx.config.audio.key_beep != 0 && is_tick {
-                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
+                if !animate && is_tick {
+                    self.view.repeater.pause(6);
                 }
-                self.adjust_scroll_for_selection(ctx.config.display.animations_enabled());
+                self.adjust_scroll_for_selection(animate);
                 return true;
             }
         }
@@ -409,24 +410,16 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.is_launching = false;
         let entries = load_entries(Some(ctx.storage));
-        self.model.items = entries;
-        if self.model.selected_idx >= entries.len() {
-            self.model.selected_idx = entries.len().saturating_sub(1);
-        }
-        self.model.nav_layout = ctx.config.keys.nav_layout;
-        self.model.show_numbers = ctx.config.apps.show_numbers != 0;
-        self.model.show_labels = ctx.config.apps.show_labels != 0;
+        self.set_entries(entries);
+        self.sync_config(ctx);
         self.model.is_pressed = false;
         self.adjust_scroll_for_selection(false);
-        self.scroller.jump((self.scroll_top as i16) * 13);
         crate::orchestrator::compositor::present_next_system_alert(ctx);
     }
 
     #[inline(never)]
     fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
-        self.model.nav_layout = ctx.config.keys.nav_layout;
-        self.model.show_numbers = ctx.config.apps.show_numbers != 0;
-        self.model.show_labels = ctx.config.apps.show_labels != 0;
+        self.sync_config(ctx);
 
         let is_list_mode = ctx.config.apps.launcher_style == 1;
 
@@ -493,22 +486,21 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
             }
         }
 
-        if is_list_mode {
-            if self.handle_list_nav(ctx, event) {
-                return EventResult::Consumed;
-            }
+        let prev_sel = self.model.selected_idx;
+        let nav_handled = if is_list_mode {
+            self.handle_list_nav(event, ctx.config.display.animations_enabled())
         } else {
-            let prev_sel = self.model.selected_idx;
-            if self.view.on_event(&mut self.model, event) {
-                self.model.is_pressed = false;
-                if self.model.selected_idx != prev_sel
-                    && ctx.config.audio.key_beep != 0
-                    && matches!(event, Event::Tick)
-                {
-                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
-                }
-                return EventResult::Consumed;
+            self.view.on_event(&mut self.model, event)
+        };
+        if nav_handled {
+            self.model.is_pressed = false;
+            if self.model.selected_idx != prev_sel
+                && ctx.config.audio.key_beep != 0
+                && matches!(event, Event::Tick)
+            {
+                ctx.play_beep(crate::services::melody::BeepType::Scroll);
             }
+            return EventResult::Consumed;
         }
 
         if animating {

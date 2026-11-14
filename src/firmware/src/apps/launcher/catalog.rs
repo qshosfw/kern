@@ -58,25 +58,29 @@ impl PackageCatalog {
 
     #[inline(always)]
     pub fn matches_kind(e: &PackageCatalogEntry, is_service: bool) -> bool {
-        if is_service {
-            e.is_valid && e.exec_type != KrxExecType::App
-        } else {
-            !e.is_valid || e.exec_type == KrxExecType::App
-        }
+        (e.is_valid && e.exec_type != KrxExecType::App) == is_service
     }
 
-    pub fn get_entry(&self, is_service: bool, idx: usize) -> Option<&PackageCatalogEntry> {
-        self.entries
-            .iter()
-            .filter(|e| Self::matches_kind(e, is_service))
-            .nth(idx)
+    pub fn get_entry(&self, is_service: bool, mut idx: usize) -> Option<&PackageCatalogEntry> {
+        for e in self.entries.as_slice() {
+            if Self::matches_kind(e, is_service) {
+                if idx == 0 {
+                    return Some(e);
+                }
+                idx -= 1;
+            }
+        }
+        None
     }
 
     pub fn count_entries(&self, is_service: bool) -> usize {
-        self.entries
-            .iter()
-            .filter(|e| Self::matches_kind(e, is_service))
-            .count()
+        let mut n = 0;
+        for e in self.entries.as_slice() {
+            if Self::matches_kind(e, is_service) {
+                n += 1;
+            }
+        }
+        n
     }
 
     #[inline(always)]
@@ -169,27 +173,19 @@ impl PackageCatalog {
         entries: &mut heapless::Vec<PackageCatalogEntry, MAX_CATALOG_PACKAGES>,
     ) {
         let base_name = extract_filename(raw_name);
-        if base_name.is_empty() {
+        let len = entries.len();
+        if base_name.is_empty() || len >= MAX_CATALOG_PACKAGES {
             return;
         }
-        if entries
-            .push(PackageCatalogEntry {
-                title: heapless::String::new(),
-                path: heapless::String::new(),
-                size_bytes: size,
-                app_class: KrxClass::Declare,
-                exec_type: KrxExecType::App,
-                icon_id: 0,
-                caps: 0,
-                is_valid: false,
-            })
-            .is_err()
-        {
-            return;
-        }
-        let Some(entry) = entries.last_mut() else {
-            return;
+        let entry = unsafe {
+            let ptr = entries.as_mut_ptr().add(len);
+            core::ptr::write_bytes(ptr, 0, 1);
+            entries.set_len(len + 1);
+            &mut *ptr
         };
+        entry.size_bytes = size;
+        entry.app_class = KrxClass::Declare;
+        entry.exec_type = KrxExecType::App;
 
         let bytes = base_name.as_bytes();
         let n = bytes.len();
