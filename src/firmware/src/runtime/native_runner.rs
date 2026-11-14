@@ -318,15 +318,11 @@ pub fn load_native_from_storage(
     caps: CapabilitySet,
     pid: kernel::proc::Pid,
 ) -> Result<(), KrxLaunchError> {
+    init_native_slot();
     let slot = slot_mut();
-    slot.cache.reset();
-    slot.shadow_stack.clear();
-    slot.current_block = 0;
-    slot.current_slot = 0;
+    slot.cache.page_size = 1024;
+    slot.cache.active_slots = 2;
     slot.pid = pid;
-    slot.status_bar_has_custom = false;
-    slot.status_bar_left_count = 0;
-    slot.status_bar_center_count = 0;
 
     let buffer_bytes =
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };

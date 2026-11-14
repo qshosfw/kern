@@ -126,6 +126,7 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
 
     /// Configure the fixed-window cache from `SectionExecution` and optional `SectionBlockMap (0x0005)`.
     /// If no explicit `BlockMap` section is present, partitions the payload into uniform `page_size` blocks.
+    #[inline(never)]
     pub fn configure(
         &mut self,
         page_size: u16,
@@ -179,7 +180,7 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
 
     /// Lookup a block descriptor by `block_id`.
     pub fn get_block(&self, block_id: u8) -> Option<BlockEntry> {
-        let count = self.block_count as usize;
+        let count = (self.block_count as usize).min(MAX_BLOCKS);
         for i in 0..count {
             if self.blocks[i].block_id == block_id {
                 return Some(self.blocks[i]);
@@ -406,9 +407,15 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
         if self.is_dispatching {
             return Err(PagedError::ReentrantDispatchDenied);
         }
-        let leaf_idx = (0..(self.leaf_count as usize))
-            .find(|&i| self.leaves[i].leaf_id == leaf_id)
-            .ok_or(PagedError::InvalidLeafId)?;
+        let count = (self.leaf_count as usize).min(MAX_LEAVES);
+        let mut found = None;
+        for i in 0..count {
+            if self.leaves[i].leaf_id == leaf_id {
+                found = Some(i);
+                break;
+            }
+        }
+        let leaf_idx = found.ok_or(PagedError::InvalidLeafId)?;
 
         let is_hit = self.active_leaf == Some(leaf_id);
         if !is_hit {

@@ -31,7 +31,7 @@ pub fn dequeue_event() -> Option<Event> {
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 fn wake_and_notify_activity(hw: &mut SystemHardware) {
     hw.backlight.wake();
     unsafe {
@@ -117,6 +117,48 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     py32_hal::rcc::set_sysclk_16mhz();
 
     // 6. Park peripheral/matrix pins and arm LPTIM1 + EXTI15 (Exit) [+ EXTI10 UART] for true STOP mode
+    run_stop_sleep_cycle();
+
+    #[cfg(feature = "filesystem")]
+    hw.filesystem.fs.dev.release_power_down();
+
+    #[cfg(feature = "uart")]
+    py32_hal::uart::clear_errors();
+    #[cfg(feature = "usb")]
+    hw.usb.init();
+    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
+    hw.wire.reset_collector();
+
+    // Exit LCD sleep and restore clocks, UART baud, audio, and display hardware from master config
+    hw.lcd.exit_sleep();
+    crate::master_config().hw_dirty = 0x1F;
+    hw.apply_dirty_configs();
+
+    let canvas = crate::system_canvas();
+    canvas.mark_all_dirty();
+    hw.lcd.blit(canvas);
+
+    // Wake RF modem and re-apply listening VFO channel to RF hardware
+    hw.radio.wake();
+    {
+        use kernel::service::radio::RfChannel;
+        hw.radio
+            .configure_channel(crate::radio_state().coord.listening_channel());
+    }
+
+    // Sound unlock confirmation chime
+    hw.radio
+        .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+
+    // Ensure matrix is clean before returning to event dispatch
+    drain_keypad_matrix(hw);
+
+    // Wake backlight and reset power service inactivity tracking
+    wake_and_notify_activity(hw);
+}
+
+#[inline(never)]
+fn run_stop_sleep_cycle() {
     py32_hal::lptim::LowPowerTimer::init();
     let saved_pins = bsp::pins::park_for_stop(cfg!(feature = "uart"));
 
@@ -151,8 +193,6 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
 
         let wake_flags = WAKE_EXTI_FLAGS.load(core::sync::atomic::Ordering::Acquire);
         let mut exit_held = bsp::pins::is_exit_held_parked();
-        // If EXTI15 just woke STOP (initial contact edge) and sampled during mechanical bounce,
-        // wait briefly (~10 ms on HSI) and re-sample so we don't fall back into multi-second idle sleep.
         if !exit_held && (wake_flags & (1 << 15)) != 0 {
             cortex_m::asm::delay(160_000);
             exit_held = bsp::pins::is_exit_held_parked();
@@ -165,10 +205,6 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
             sleep_ticks = LPTIM_HOLD_TICKS;
         }
 
-        // Guard WAKE_EXTI_FLAGS reset + pending-mask clear + STOP entry inside an
-        // IRQ-free section so an EXTI4_15 edge cannot clear itself or race between
-        // store(0) and enter_stop(); any post-clear edge still wakes WFI immediately
-        // and runs EXTI4_15 ISR as soon as interrupts unmask.
         cortex_m::interrupt::free(|_| {
             WAKE_EXTI_FLAGS.store(0, core::sync::atomic::Ordering::Release);
             py32_hal::lptim::LowPowerTimer::clear_expired();
@@ -192,7 +228,7 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         }
     }
 
-    // 7. Disarm sleep wake IRQs and restore GPIOs & external peripherals
+    // 7. Disarm sleep wake IRQs and restore GPIOs
     unsafe {
         py32_hal::pac::nvic_disable(Interrupt::EXTI4_15 as u8);
         py32_hal::pac::nvic_disable(Interrupt::TIM6_LPTIM1_DAC as u8);
@@ -201,49 +237,6 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     py32_hal::lptim::LowPowerTimer::stop();
 
     bsp::pins::restore_from_stop(&saved_pins);
-
-    #[cfg(feature = "filesystem")]
-    hw.filesystem.fs.dev.release_power_down();
-
-    #[cfg(feature = "uart")]
-    py32_hal::uart::clear_errors();
-    #[cfg(feature = "usb")]
-    hw.usb.init();
-    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-    hw.wire.reset_collector();
-
-    // Exit LCD sleep and restore clocks, UART baud, audio, and display hardware from master config
-    hw.lcd.exit_sleep();
-    crate::master_config().hw_dirty = 0x1F;
-    hw.apply_dirty_configs();
-
-    let canvas = crate::system_canvas();
-    canvas.mark_all_dirty();
-    hw.lcd.blit(canvas);
-
-    // Wake RF modem and backlight
-    hw.radio.wake();
-    hw.backlight.wake();
-
-    // Re-apply listening VFO channel to RF hardware
-    {
-        use kernel::service::radio::RfChannel;
-        hw.radio
-            .configure_channel(crate::radio_state().coord.listening_channel());
-    }
-
-    // Sound unlock confirmation chime
-    hw.radio
-        .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
-
-    // Ensure matrix is clean before returning to event dispatch
-    drain_keypad_matrix(hw);
-
-    // Reset power service inactivity tracking
-    unsafe {
-        (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
-    }
-    hw.orchestrator.notify_activity();
 }
 
 #[inline(never)]
@@ -326,22 +319,20 @@ fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool)
     #[cfg(feature = "usb")]
     if let Some(usb_ev) = hw.usb.poll() {
         *dirty_render = true;
-        match usb_ev {
+        let new_clk = match usb_ev {
             kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
                 wake_and_notify_activity(hw);
-                if py32_hal::rcc::sysclk_hz() != 48_000_000 {
-                    py32_hal::rcc::set_sysclk_48mhz();
-                    #[cfg(feature = "uart")]
-                    bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
-                }
+                (py32_hal::rcc::sysclk_hz() != 48_000_000).then_some(1)
             }
             kernel::event::UsbEvent::Disconnected => {
-                let target_clk = crate::master_config_ref().system.cpu_clock;
-                py32_hal::rcc::set_sysclk_index(target_clk);
-                #[cfg(feature = "uart")]
-                bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
+                Some(crate::master_config_ref().system.cpu_clock)
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(clk_idx) = new_clk {
+            py32_hal::rcc::set_sysclk_index(clk_idx);
+            #[cfg(feature = "uart")]
+            bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
         }
         enqueue_event(Event::Usb(usb_ev));
     }
@@ -390,6 +381,21 @@ fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool
     }
 }
 
+#[inline(never)]
+fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
+    record_proc_activation(0xF3);
+    hw.key_scanner.scan_with_dt(dt);
+    while let Some((code, state)) = hw.key_scanner.pop_event() {
+        if !hw.orchestrator.is_keypad_locked() || matches!(code, KeyCode::Ptt) {
+            hw.backlight.wake();
+        }
+        unsafe {
+            (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
+        }
+        enqueue_event(Event::Key { code, state });
+    }
+}
+
 pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -> ! {
     let t0 = py32_hal::delay::millis();
     let mut last_tick = t0;
@@ -428,21 +434,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         if now.wrapping_sub(last_key_tick) >= 5 {
             let dt = now.wrapping_sub(last_key_tick).min(50) as u16;
             last_key_tick = now;
-            record_proc_activation(0xF3);
-            hw.key_scanner.scan_with_dt(dt);
-            while let Some((code, state)) = hw.key_scanner.pop_event() {
-                let is_locked = hw.orchestrator.is_keypad_locked();
-                let should_wake = !is_locked || matches!(code, KeyCode::Ptt);
-
-                if should_wake {
-                    hw.backlight.wake();
-                }
-                unsafe {
-                    (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
-                }
-
-                enqueue_event(Event::Key { code, state });
-            }
+            poll_keypad_tick(hw, dt);
         }
 
         let is_display_awake = hw.backlight.is_active();
