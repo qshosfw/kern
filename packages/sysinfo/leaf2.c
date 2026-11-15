@@ -1,6 +1,5 @@
 /*
- * P0 Leaf 2: Firmware Meta, UTC Civil Date, Active Model & BootROM Scanner.
- * Chained from Leaf 1 inside the shared 1024B P0 overlay window.
+ * P0 Leaf 2: Firmware Metadata, UTC Civil Date & Active Model Resolver.
  */
 
 #include "sysinfo_shared.h"
@@ -47,25 +46,24 @@ u32 leaf2_entry(u32 op, const KrxApiTable* api, void* param) {
     const CapServiceVTable* s = api->service;
     const CapStorageVTable* storage = api->storage;
 
-    // 1. Firmware metadata (version + git hash + civil date)
     KrxFirmwareMeta meta;
     si_zero((u8*)&meta, sizeof(meta));
     if (s && s->sys_query && s->sys_query(KRX_SYS_QUERY_FW_META, 0, (u8*)&meta, sizeof(meta)) == sizeof(meta)) {
         u8 pos = 0;
-        st->fw_badge[pos++] = 'v';
-        pos += si_put_uint(api, st->fw_badge + pos, meta.version_major);
-        st->fw_badge[pos++] = '.';
-        pos += si_put_uint(api, st->fw_badge + pos, meta.version_minor);
-        st->fw_badge[pos++] = '.';
-        pos += si_put_uint(api, st->fw_badge + pos, meta.version_patch);
-        st->fw_badge[pos++] = ' ';
-        for (u8 i = 0; i < 7 && meta.git_hash[i] && pos < 17; i++) {
-            st->fw_badge[pos++] = (char)meta.git_hash[i];
+        st->ver_short[pos++] = 'v';
+        pos += si_put_uint(api, st->ver_short + pos, meta.version_major);
+        st->ver_short[pos++] = '.';
+        pos += si_put_uint(api, st->ver_short + pos, meta.version_minor);
+        st->ver_short[pos++] = '.';
+        pos += si_put_uint(api, st->ver_short + pos, meta.version_patch);
+        st->ver_short[pos] = 0;
+
+        for (u8 i = 0; i < 7 && meta.git_hash[i]; i++) {
+            st->git_hash[i] = (char)meta.git_hash[i];
         }
         format_epoch_date(api, meta.build_epoch, st->build);
     }
 
-    // 2. Active hardware model string from /pref/system.cfg
     u8 cfg[44];
     si_zero(cfg, sizeof(cfg));
     si_copy((u8*)st->model, (const u8*)L2_MODEL_K1, 6);

@@ -6,14 +6,19 @@
 typedef struct {
     const KrxApiTable* api;
     u8   has_qs1;
-    u8   _pad;
-    char fw_badge[18];  // "v0.1.0 a1b2c3d"
+    u8   _pad[1];
+    u16  flash_kb;
+    char ver_short[10]; // "v0.1.0"
+    char git_hash[8];   // "701d5a4"
     char model[13];     // "UV-K1" / "UV-K5 V3" / custom
     char mcu[16];       // "PY32F071 128K"
     char boot[8];       // "7.02.02"
-    char build[12];     // "YYYY-MM-DD"
-    char sn[15];        // Crockford 14-char + NUL
-    char mac[18];       // XX:XX:XX:XX:XX:XX
+    char build[12];     // "2026-11-15"
+    char sn[15];        // Crockford 14-char
+    char mac[18];       // 02:XX:XX:XX:XX:XX
+    char hex_id64[19];  // "0x0123456789ABCDEF"
+    char hex_uid_hi[17];// High 64 bits of 128-bit UID (16 hex)
+    char hex_uid_lo[17];// Low 64 bits of 128-bit UID (16 hex)
     char qs1[17];       // 16-char QS-1 or "Present"
 } SysInfoState;
 
@@ -23,6 +28,16 @@ static inline void si_zero(u8* p, u16 n) {
 
 static inline void si_copy(u8* dst, const u8* src, u16 n) {
     for (u16 i = 0; i < n; i++) dst[i] = src[i];
+}
+
+static inline u8 si_len(const char* s) {
+    u8 n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+static inline char si_hex_nib(u8 v) {
+    return (char)(v < 10 ? ('0' + v) : ('A' + (v - 10)));
 }
 
 static inline u32 si_udivmod(const KrxApiTable* api, u32 n, u32 d, u32* rem_out) {

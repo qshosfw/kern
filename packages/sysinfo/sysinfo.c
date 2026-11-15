@@ -1,13 +1,15 @@
 /*
- * KERN System Information & Regulatory Module (/apps/sysinfo.krx)
+ * KERN System Information Module (/apps/sysinfo.krx)
  *
- * P0 Structured Paged KRX Module (KrxExecType::Module):
- * - Hidden from Launcher; exposed in Settings -> System when installed,
- *   CRC-valid, and capability-authorized.
- * - Resident Root renders the UI using native KRX ABI widgets (tag badge,
- *   proportional scrollbar, horizontal/vertical lines, FCC/CE bitmaps, status bar)
- *   while offloading heavy crypto/ROM/date initialization and live MCU/Power
- *   popup formatting into 1 KiB P0 Leaf overlays (`leaf1`, `leaf2`, `leaf3`).
+ * P0 Structured Paged KRX Module (`KrxExecType::Module`) using full KRX ABI
+ * UI widgets (`ui_draw_capsule_button`, `ui_draw_menu_item`, `ui_draw_scrollbar`,
+ * `ui_draw_tag_badge`, `ui_draw_battery`, `ui_draw_progress_bar`, `draw_bitmap`).
+ *
+ * 4 Tabbed Views (`INFO` / `HW` / `LIVE` / `REG`):
+ * - `INFO`: Device & Firmware card (`KERN OS`, version, model badge, commit, build) + MCU/Boot/Uptime
+ * - `HW`:   Interactive MenuView list (Serial, MAC, ID64, optional QS-1, UID1, UID2)
+ * - `LIVE`: Live 1 Hz Power, Stack/RAM headroom, Flash & CPU/Thermal telemetry meters
+ * - `REG`:  Clean FCC & CE conformity emblem card + Part 15 compliance notice
  */
 
 #include "sysinfo_shared.h"
@@ -19,8 +21,12 @@ void _start(void) {
     __asm__ volatile("push {lr}\n bl krx_main\n pop {pc}\n");
 }
 
-#define VISIBLE_ROWS  7
-#define BASE_ROWS    20
+#define TAB_INFO     0
+#define TAB_HW       1
+#define TAB_LIVE     2
+#define TAB_REG      3
+#define TAB_COUNT    4
+#define HW_VISIBLE   4
 
 // 15x11 MSB-first row-major FCC monogram bitmap (22B)
 static const u8 FCC_BMP[22] = {
@@ -34,79 +40,41 @@ static const u8 CE_BMP[20] = {
     0xC0, 0xC0, 0xC0, 0xC0, 0x7C, 0xFC, 0x3C, 0x7C
 };
 
-// Flat NUL-delimited strings (zero .rodata pointer relocations under -fPIC)
-static const char STRINGS[] =
-    "SYSTEM\0"                          // 0
-    "HARDWARE ID\0"                     // 1
-    "REGULATORY\0"                      // 2
-    "47 CFR PART 15B / 97\0"            // 3
-    "CE  RED 2014/53/EU\0"              // 4
-    "MCU\0"                             // 5
-    "BOOT\0"                            // 6
-    "BUILD\0"                           // 7
-    "PWR\0"                             // 8
-    "UPTIME\0"                          // 9
-    "S/N\0"                             // 10
-    "MAC\0"                             // 11
-    "QS-1\0"                            // 12
-    "This device complies with\0"       // 13
-    "Part 15 of the FCC Rules.\0"       // 14
-    "Operation is subject to two\0"     // 15
-    "conditions: (1) must not\0"        // 16
-    "cause harmful interference,\0"     // 17
-    "(2) must accept any received.\0"   // 18
-    "Live MCU & Power stats\0"          // 19
-    "KERN\0"                            // 20
-    "MENU\0"                            // 21
-    "System Info\0";                    // 22
+static const char STR_TAB_0[] = "INFO";
+static const char STR_TAB_1[] = "HW";
+static const char STR_TAB_2[] = "LIVE";
+static const char STR_TAB_3[] = "REG";
+static const char STR_SB[]    = "System Info";
+static const char STR_KERN[]  = "KERN OS";
+static const char STR_REV[]   = "REV ";
+static const char STR_MCU[]   = "MCU";
+static const char STR_BOOT[]  = "Boot";
+static const char STR_UP[]    = "Uptime";
 
-static u8           g_scroll;
+static const char STR_HW_0[]  = "Serial";
+static const char STR_HW_1[]  = "MAC";
+static const char STR_HW_2[]  = "ID64";
+static const char STR_HW_3[]  = "QS-1";
+static const char STR_HW_4[]  = "UID1";
+static const char STR_HW_5[]  = "UID2";
+
+static const char STR_FCC_1[] = "47 CFR";
+static const char STR_FCC_2[] = "15B / 97";
+static const char STR_CE_1[]  = "CE RED";
+static const char STR_CE_2[]  = "2014/53/EU";
+static const char STR_REG_1[] = "Complies with Part 15 FCC Rules.";
+static const char STR_REG_2[] = "(1) May not cause interference;";
+static const char STR_REG_3[] = "(2) Must accept any received.";
+
+static const char STR_STK[]   = "STK";
+static const char STR_RAM[]   = "RAM";
+static const char STR_FL[]    = "FLASH";
+
+static u8           g_tab;
+static u8           g_hw_sel;
+static u8           g_hw_scroll;
 static u32          g_last_sec;
 static SysInfoState g_state;
-
-static u8 c_len(const char* s) {
-    u8 n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
-static const char* nth_str(u8 idx) {
-    const char* p = STRINGS;
-    while (idx > 0) {
-        while (*p) p++;
-        p++;
-        idx--;
-    }
-    return p;
-}
-
-static void format_uptime(const KrxApiTable* api, u32 secs, char* out) {
-    u32 s = 0, mins = si_udivmod(api, secs, 60u, &s);
-    u32 m = 0, h = si_udivmod(api, mins > 5999u ? 5999u : mins, 60u, &m);
-    si_put_2d(api, out + 0, h);
-    out[2] = ':';
-    si_put_2d(api, out + 3, m);
-    out[5] = ':';
-    si_put_2d(api, out + 6, s);
-    out[8] = 0;
-}
-
-static void format_power(const KrxApiTable* api, char* out) {
-    u16 mv = (api->power && api->power->sys_battery_mv) ? api->power->sys_battery_mv() : 0;
-    u8 pct = (api->power && api->power->sys_battery_pct) ? api->power->sys_battery_pct() : 0;
-    u32 rem = 0;
-    u32 volts = si_udivmod(api, mv, 1000u, &rem);
-    u32 centi = si_udivmod(api, rem, 10u, 0);
-    u8 p = si_put_uint(api, out, volts);
-    out[p++] = '.';
-    si_put_2d(api, out + p, centi);
-    p += 2;
-    out[p++] = 'V';
-    out[p++] = ' ';
-    p += si_put_uint(api, out + p, pct);
-    out[p++] = '%';
-    out[p] = 0;
-}
 
 static void set_sb(const KrxApiTable* api, u8 enable) {
     if (!api->ui || !api->ui->ui_set_status_bar) return;
@@ -118,36 +86,208 @@ static void set_sb(const KrxApiTable* api, u8 enable) {
     si_zero((u8*)&sb, sizeof(sb));
     sb.flags = KRX_STATUS_VISIBLE | KRX_STATUS_DIVIDER | KRX_STATUS_CUSTOM_TITLE;
     sb.tray_icon_id = KRX_ICON_NONE;
-    si_copy(sb.title, (const u8*)nth_str(22), 11);
+    si_copy(sb.title, (const u8*)STR_SB, 11);
     api->ui->ui_set_status_bar(&sb);
 }
 
-static void draw_clipped_bmp(
-    const CapDisplayVTable* d,
-    i16 x,
-    i16 y,
-    u8 w,
-    u8 h,
-    const u8* bmp
-) {
-    i16 skip = (y < 8) ? (8 - y) : 0;
-    i16 end_y = y + (i16)h;
-    if (end_y > 64) end_y = 64;
-    i16 vis_h = end_y - (y + skip);
-    if (vis_h > 0) {
-        d->draw_bitmap(x, (i16)(y + skip), w, (u8)vis_h, bmp + skip * 2, COLOR_FILL);
+static void draw_round_card(const CapDisplayVTable* d, i16 x, i16 y, i16 w, i16 h) {
+    d->draw_rect(x, y, w, h, COLOR_FILL);
+    d->clear_corners(x, y, w, h);
+}
+
+static void fmt_uptime(const KrxApiTable* api, u32 secs, char* out) {
+    u32 s = 0, mins = si_udivmod(api, secs, 60u, &s);
+    u32 m = 0, h = si_udivmod(api, mins > 5999u ? 5999u : mins, 60u, &m);
+    si_put_2d(api, out + 0, h);
+    out[2] = ':';
+    si_put_2d(api, out + 3, m);
+    out[5] = ':';
+    si_put_2d(api, out + 6, s);
+    out[8] = 0;
+}
+
+static void render_tabs(const CapUiVTable* ui) {
+    if (!ui || !ui->ui_draw_capsule_button) return;
+    const char* labels[TAB_COUNT] = { STR_TAB_0, STR_TAB_1, STR_TAB_2, STR_TAB_3 };
+    const i16 xs[TAB_COUNT]       = { 2, 33, 64, 95 };
+    const u8  ws[TAB_COUNT]       = { 29, 29, 29, 31 };
+    for (u8 i = 0; i < TAB_COUNT; i++) {
+        ui->ui_draw_capsule_button(xs[i], 9, ws[i], 9, (const u8*)labels[i], si_len(labels[i]), g_tab == i);
     }
+}
+
+static void render_tab_info(const KrxApiTable* api) {
+    const CapDisplayVTable* d = api->display;
+    const CapUiVTable* ui = api->ui;
+
+    draw_round_card(d, 2, 20, 124, 17);
+    d->draw_str(6, 27, (const u8*)STR_KERN, 7, 1, COLOR_FILL);
+    d->draw_str(50, 27, (const u8*)g_state.ver_short, si_len(g_state.ver_short), 0, COLOR_FILL);
+
+    u8 mlen = si_len(g_state.model);
+    if (ui && ui->ui_draw_tag_badge && mlen > 0) {
+        i16 tw = d->str_width ? d->str_width((const u8*)g_state.model, mlen, 0) : (i16)(mlen * 4);
+        i16 bx = 123 - (tw + 6);
+        ui->ui_draw_tag_badge(bx, 21, (const u8*)g_state.model, mlen, 1);
+    }
+
+    char rev[14];
+    si_copy((u8*)rev, (const u8*)STR_REV, 4);
+    u8 ghl = si_len(g_state.git_hash);
+    si_copy((u8*)(rev + 4), (const u8*)g_state.git_hash, ghl);
+    rev[4 + ghl] = 0;
+    d->draw_str(6, 34, (const u8*)rev, (u16)(4 + ghl), 0, COLOR_FILL);
+    d->draw_str_align(122, 34, (const u8*)g_state.build, si_len(g_state.build), 0, COLOR_FILL, 2);
+
+    char up_buf[9];
+    u32 secs = (api->timer && api->timer->sys_uptime_secs) ? api->timer->sys_uptime_secs() : 0;
+    fmt_uptime(api, secs, up_buf);
+
+    const char* keys[3] = { STR_MCU, STR_BOOT, STR_UP };
+    const char* vals[3] = { g_state.mcu, g_state.boot, up_buf };
+    for (u8 i = 0; i < 3; i++) {
+        i16 y = (i16)(46 + i * 8);
+        d->draw_str(4, y, (const u8*)keys[i], si_len(keys[i]), 1, COLOR_FILL);
+        d->draw_str_align(124, y, (const u8*)vals[i], si_len(vals[i]), 1, COLOR_FILL, 2);
+    }
+}
+
+static void render_tab_hw(const KrxApiTable* api) {
+    const CapUiVTable* ui = api->ui;
+    if (!ui || !ui->ui_draw_menu_item) return;
+
+    u8 total = (u8)(5 + g_state.has_qs1);
+    const char* titles[6];
+    const char* vals[6];
+    u8 n = 0;
+    titles[n] = STR_HW_0; vals[n++] = g_state.sn;
+    titles[n] = STR_HW_1; vals[n++] = g_state.mac;
+    titles[n] = STR_HW_2; vals[n++] = g_state.hex_id64;
+    if (g_state.has_qs1) {
+        titles[n] = STR_HW_3; vals[n++] = g_state.qs1;
+    }
+    titles[n] = STR_HW_4; vals[n++] = g_state.hex_uid_hi;
+    titles[n] = STR_HW_5; vals[n++] = g_state.hex_uid_lo;
+
+    for (u8 v = 0; v < HW_VISIBLE; v++) {
+        u8 idx = g_hw_scroll + v;
+        if (idx >= total) break;
+        i16 y = (i16)(20 + v * 11);
+        ui->ui_draw_menu_item(
+            y,
+            (const u8*)titles[idx], si_len(titles[idx]),
+            (const u8*)vals[idx], si_len(vals[idx]),
+            idx == g_hw_sel,
+            0
+        );
+    }
+    if (ui->ui_draw_scrollbar) {
+        ui->ui_draw_scrollbar(124, 20, 43, g_hw_scroll, total, HW_VISIBLE);
+    }
+}
+
+static void render_tab_live(const KrxApiTable* api) {
+    const CapDisplayVTable* d = api->display;
+    const CapUiVTable* ui = api->ui;
+    char buf[16];
+
+    u16 mv = (api->power && api->power->sys_battery_mv) ? api->power->sys_battery_mv() : 0;
+    u8 pct = (api->power && api->power->sys_battery_pct) ? api->power->sys_battery_pct() : 0;
+    i16 temp_c = (api->power && api->power->sys_mcu_temp) ? api->power->sys_mcu_temp() : 0;
+    u32 mhz = (api->power && api->power->sys_cpu_freq_hz)
+        ? si_udivmod(api, api->power->sys_cpu_freq_hz(), 1000000u, 0) : 48u;
+    u16 stk_free = (api->service && api->service->sys_stack_margin)
+        ? api->service->sys_stack_margin() : 0;
+    u16 ram_free = (api->service && api->service->sys_ram_available)
+        ? api->service->sys_ram_available() : 0;
+
+    // 1. Battery voltage + icon + progress bar
+    if (ui && ui->ui_draw_battery) ui->ui_draw_battery(4, 22, pct, 0);
+    u32 rem = 0, volts = si_udivmod(api, mv, 1000u, &rem);
+    u32 centi = si_udivmod(api, rem, 10u, 0);
+    u8 p = si_put_uint(api, buf, volts);
+    buf[p++] = '.';
+    si_put_2d(api, buf + p, centi);
+    p += 2;
+    buf[p++] = 'V';
+    buf[p] = 0;
+    d->draw_str(19, 28, (const u8*)buf, p, 1, COLOR_FILL);
+    if (ui && ui->ui_draw_progress_bar) ui->ui_draw_progress_bar(56, 21, 48, 7, pct, 1);
+    p = si_put_uint(api, buf, pct);
+    buf[p++] = '%';
+    buf[p] = 0;
+    d->draw_str_align(125, 27, (const u8*)buf, p, 0, COLOR_FILL, 2);
+
+    // 2. Stack margin bar
+    d->draw_str(4, 38, (const u8*)STR_STK, 3, 1, COLOR_FILL);
+    u32 stk_pct = si_udivmod(api, (u32)stk_free * 100u, 2560u, 0);
+    if (stk_pct > 100u) stk_pct = 100u;
+    if (ui && ui->ui_draw_progress_bar) ui->ui_draw_progress_bar(29, 32, 62, 6, (u8)stk_pct, 1);
+    p = si_put_uint(api, buf, stk_free);
+    buf[p++] = 'B';
+    buf[p] = 0;
+    d->draw_str_align(125, 38, (const u8*)buf, p, 0, COLOR_FILL, 2);
+
+    // 3. RAM free / Flash capacity row
+    d->draw_str(4, 48, (const u8*)STR_RAM, 3, 1, COLOR_FILL);
+    u32 ram_pct = si_udivmod(api, (u32)ram_free * 100u, 4096u, 0);
+    if (ram_pct > 100u) ram_pct = 100u;
+    if (ui && ui->ui_draw_progress_bar) ui->ui_draw_progress_bar(29, 42, 62, 6, (u8)ram_pct, 1);
+    p = si_put_uint(api, buf, ram_free);
+    buf[p++] = 'B';
+    buf[p] = 0;
+    d->draw_str_align(125, 48, (const u8*)buf, p, 0, COLOR_FILL, 2);
+
+    // 4. CPU frequency, Flash & Temperature footer
+    d->draw_line_h(2, 51, 124, COLOR_FILL);
+    p = si_put_uint(api, buf, mhz);
+    buf[p++] = ' '; buf[p++] = 'M'; buf[p++] = 'H'; buf[p++] = 'z';
+    buf[p] = 0;
+    d->draw_str(4, 61, (const u8*)buf, p, 1, COLOR_FILL);
+
+    p = si_put_uint(api, buf, g_state.flash_kb);
+    buf[p++] = 'K'; buf[p++] = ' ';
+    si_copy((u8*)(buf + p), (const u8*)STR_FL, 5);
+    p += 5;
+    d->draw_str_align(66, 61, (const u8*)buf, p, 0, COLOR_FILL, 1);
+
+    p = 0;
+    if (temp_c < 0) { buf[p++] = '-'; temp_c = (i16)(-temp_c); }
+    p += si_put_uint(api, buf + p, (u32)(u16)temp_c);
+    buf[p++] = ' '; buf[p++] = 'C'; buf[p] = 0;
+    d->draw_str_align(125, 61, (const u8*)buf, p, 1, COLOR_FILL, 2);
+}
+
+static void render_tab_reg(const KrxApiTable* api) {
+    const CapDisplayVTable* d = api->display;
+
+    draw_round_card(d, 2, 20, 124, 17);
+    d->draw_bitmap(6, 23, 15, 11, FCC_BMP, sizeof(FCC_BMP));
+    d->draw_str(24, 27, (const u8*)STR_FCC_1, si_len(STR_FCC_1), 0, COLOR_FILL);
+    d->draw_str(24, 34, (const u8*)STR_FCC_2, si_len(STR_FCC_2), 0, COLOR_FILL);
+
+    d->draw_line_v(63, 22, 13, COLOR_FILL);
+
+    d->draw_bitmap(67, 23, 14, 10, CE_BMP, sizeof(CE_BMP));
+    d->draw_str(84, 27, (const u8*)STR_CE_1, si_len(STR_CE_1), 0, COLOR_FILL);
+    d->draw_str(84, 34, (const u8*)STR_CE_2, si_len(STR_CE_2), 0, COLOR_FILL);
+
+    d->draw_line_v(3, 40, 21, COLOR_FILL);
+    d->draw_str(7, 45, (const u8*)STR_REG_1, si_len(STR_REG_1), 0, COLOR_FILL);
+    d->draw_str(7, 53, (const u8*)STR_REG_2, si_len(STR_REG_2), 0, COLOR_FILL);
+    d->draw_str(7, 61, (const u8*)STR_REG_3, si_len(STR_REG_3), 0, COLOR_FILL);
 }
 
 int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     if (!api) return 0;
 
     if (op == KRX_OP_START) {
-        g_scroll = 0;
+        g_tab = TAB_INFO;
+        g_hw_sel = 0;
+        g_hw_scroll = 0;
         g_last_sec = (api->timer && api->timer->sys_uptime_secs) ? api->timer->sys_uptime_secs() : 0;
         si_zero((u8*)&g_state, sizeof(g_state));
         g_state.api = api;
-        // Leaf 1 populates crypto ID + QS-1, then chains via trampoline to Leaf 2
         if (api->service && api->service->leaf_call) {
             api->service->leaf_call(1, (u32)&g_state);
         }
@@ -159,33 +299,46 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         if (!param) return 0;
         const u8* ev = (const u8*)param;
         u8 kind = ev[0];
-        u8 max_scroll = (u8)((BASE_ROWS + g_state.has_qs1) - VISIBLE_ROWS);
 
         if (kind == KRX_EV_TICK) {
             u32 now = (api->timer && api->timer->sys_uptime_secs) ? api->timer->sys_uptime_secs() : 0;
             if (now != g_last_sec) {
                 g_last_sec = now;
-                return 1;
+                return (g_tab == TAB_INFO || g_tab == TAB_LIVE) ? 1 : 0;
             }
             return 0;
         }
 
+        u8 total_hw = (u8)(5 + g_state.has_qs1);
         i8 dir = 0;
+
         if (kind == KRX_EV_KEY) {
             u8 key = ev[1];
             u32 state = *(const u32*)(ev + 4);
             if (key == KEY_EXIT && state == 0) {
                 return 0; // Unhandled -> orchestrator pops back to Settings
             }
-            if (key == KEY_MENU && state == 0 && api->service && api->service->leaf_call) {
-                api->service->leaf_call(3, (u32)api);
-                return 1;
+            if (state == 0) {
+                if (key == KEY_1) { g_tab = TAB_INFO; return 1; }
+                if (key == KEY_2) { g_tab = TAB_HW; return 1; }
+                if (key == KEY_3) { g_tab = TAB_LIVE; return 1; }
+                if (key == KEY_4) { g_tab = TAB_REG; return 1; }
+                if (key == KEY_HASH || key == KEY_MENU) {
+                    g_tab = (u8)((g_tab + 1) % TAB_COUNT);
+                    return 1;
+                }
+                if (key == KEY_STAR) {
+                    g_tab = (u8)((g_tab + TAB_COUNT - 1) % TAB_COUNT);
+                    return 1;
+                }
+                if (key == KEY_F && api->service && api->service->leaf_call) {
+                    api->service->leaf_call(3, (u32)api);
+                    return 1;
+                }
             }
             if (state == 0 || state == 2) {
                 if (key == KEY_UP) dir = -1;
                 else if (key == KEY_DOWN) dir = 1;
-                else if (key == KEY_2) { g_scroll = 0; return 1; }
-                else if (key == KEY_8) { g_scroll = max_scroll; return 1; }
             }
         } else if (kind == KRX_EV_ENCODER) {
             i32 ed = *(const i32*)(ev + 4);
@@ -193,110 +346,26 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             else if (ed > 0) dir = 1;
         }
 
-        if (dir < 0) {
-            if (g_scroll > 0) g_scroll--;
-            return 1;
-        }
-        if (dir > 0) {
-            if (g_scroll < max_scroll) g_scroll++;
+        if (dir != 0 && g_tab == TAB_HW) {
+            if (dir < 0 && g_hw_sel > 0) g_hw_sel--;
+            else if (dir > 0 && (u8)(g_hw_sel + 1) < total_hw) g_hw_sel++;
+            if (g_hw_sel < g_hw_scroll) g_hw_scroll = g_hw_sel;
+            if (g_hw_sel >= g_hw_scroll + HW_VISIBLE) {
+                g_hw_scroll = (u8)(g_hw_sel - HW_VISIBLE + 1);
+            }
             return 1;
         }
         return (kind == KRX_EV_KEY);
     }
 
     if (op == KRX_OP_RENDER) {
-        const CapDisplayVTable* d = api->display;
-        const CapUiVTable* ui = api->ui;
-        if (!d) return 0;
-        d->clear();
-
-        u8 total_rows = (u8)(BASE_ROWS + g_state.has_qs1);
-        u8 max_scroll = total_rows - VISIBLE_ROWS;
-        u8 scroll = (g_scroll > max_scroll) ? max_scroll : g_scroll;
-
-        // Regulatory FCC & CE emblems flanking regulatory rows (`norm == 11..12`)
-        i16 badge_top = 14 + (i16)((11 + g_state.has_qs1) - (i16)scroll) * 8 - 4;
-        if (badge_top < 64 && badge_top + 11 > 8) {
-            i16 vy0 = (badge_top < 8) ? 8 : badge_top;
-            i16 vy1 = (badge_top + 11 > 64) ? 64 : (badge_top + 11);
-            if (vy1 > vy0) {
-                d->draw_line_v(19, vy0, vy1 - vy0, COLOR_FILL);
-                d->draw_line_v(105, vy0, vy1 - vy0, COLOR_FILL);
-            }
-            draw_clipped_bmp(d, 2, badge_top, 15, 11, FCC_BMP);
-            draw_clipped_bmp(d, 108, badge_top, 14, 10, CE_BMP);
-        }
-
-        char dyn_buf[14];
-        for (u8 vis = 0; vis < VISIBLE_ROWS; vis++) {
-            u8 row = scroll + vis;
-            if (row >= total_rows) break;
-            u8 y = (u8)(14 + vis * 8);
-            u8 left_x = 2;
-            const char* left = 0;
-            const char* right = 0;
-            u8 align = 0;
-
-            if (g_state.has_qs1 && row == 10) {
-                left = nth_str(12);
-                right = g_state.qs1;
-            } else {
-                u8 norm = (g_state.has_qs1 && row > 10) ? (row - 1) : row;
-                if (norm == 0) {
-                    if (ui && ui->ui_draw_tag_badge) {
-                        ui->ui_draw_tag_badge(2, 8, (const u8*)nth_str(20), 4, 1);
-                    }
-                    d->draw_str(27, 14, (const u8*)g_state.fw_badge, c_len(g_state.fw_badge), 0, COLOR_FILL);
-                    d->draw_str_align(122, 14, (const u8*)g_state.model, c_len(g_state.model), 0, COLOR_FILL, 2);
-                    d->draw_line_h(2, 16, 120, COLOR_FILL);
-                } else if (norm == 1 || norm == 7 || norm == 10) {
-                    d->fill_rect(2, (i16)y - 5, 2, 5, COLOR_FILL);
-                    d->draw_line_h(2, (i16)y + 1, 120, COLOR_FILL);
-                    left_x = 6;
-                    left = nth_str((norm == 1) ? 0 : (norm == 7 ? 1 : 2));
-                } else if (norm == 11 || norm == 12) {
-                    left_x = 62;
-                    align = 1;
-                    left = nth_str(norm - 8);
-                } else if (norm >= 13 && norm <= 18) {
-                    d->draw_line_v(2, (i16)y - 5, 6, COLOR_FILL);
-                    left_x = 4;
-                    left = nth_str(norm);
-                } else if (norm == 19) {
-                    if (ui && ui->ui_draw_key_badge) {
-                        ui->ui_draw_key_badge(2, (i16)y - 5, (const u8*)nth_str(21), 4,
-                            (const u8*)nth_str(19), c_len(nth_str(19)));
-                    }
-                } else {
-                    if (norm == 2)      { left = nth_str(5);  right = g_state.mcu; }
-                    else if (norm == 3) { left = nth_str(6);  right = g_state.boot; }
-                    else if (norm == 4) { left = nth_str(7);  right = g_state.build; }
-                    else if (norm == 5) {
-                        format_power(api, dyn_buf);
-                        left = nth_str(8);
-                        right = dyn_buf;
-                    } else if (norm == 6) {
-                        u32 secs = (api->timer && api->timer->sys_uptime_secs) ? api->timer->sys_uptime_secs() : 0;
-                        format_uptime(api, secs, dyn_buf);
-                        left = nth_str(9);
-                        right = dyn_buf;
-                    }
-                    else if (norm == 8) { left = nth_str(10); right = g_state.sn; }
-                    else                { left = nth_str(11); right = g_state.mac; }
-                }
-            }
-
-            if (left) {
-                d->draw_str_align(left_x, y, (const u8*)left, c_len(left), 0, COLOR_FILL, align);
-            }
-            if (right) {
-                d->draw_str_align(122, y, (const u8*)right, c_len(right), 0, COLOR_FILL, 2);
-            }
-        }
-
-        if (ui && ui->ui_draw_scrollbar) {
-            ui->ui_draw_scrollbar(124, 9, 54, scroll, total_rows, VISIBLE_ROWS);
-        }
+        if (!api->display) return 0;
+        api->display->clear();
+        render_tabs(api->ui);
+        if (g_tab == TAB_INFO)      render_tab_info(api);
+        else if (g_tab == TAB_HW)   render_tab_hw(api);
+        else if (g_tab == TAB_LIVE) render_tab_live(api);
+        else                        render_tab_reg(api);
         return 0;
     }
 
