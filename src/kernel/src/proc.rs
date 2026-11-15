@@ -238,6 +238,43 @@ impl<const N: usize> ProcessTable<N> {
         }
     }
 
+    #[inline(never)]
+    fn spawn_inner(
+        &mut self,
+        name: &str,
+        app_id: usize,
+        priority: crate::sched::Priority,
+        exec_type: ExecType,
+        caps: CapabilitySet,
+        allow_recycle: bool,
+    ) -> Result<Pid, ()> {
+        let mut target_idx = self
+            .slots
+            .iter()
+            .position(|s| s.state == ProcState::Dormant || s.state == ProcState::Dead);
+
+        if target_idx.is_none() && allow_recycle {
+            let mut min_ticks = u32::MAX;
+            for (i, slot) in self.slots.iter().enumerate() {
+                if (slot.state == ProcState::Suspended || slot.state == ProcState::Hibernated)
+                    && slot.app_id < 0xF0
+                    && slot.ledger.cpu_ticks < min_ticks
+                {
+                    min_ticks = slot.ledger.cpu_ticks;
+                    target_idx = Some(i);
+                }
+            }
+        }
+
+        let Some(idx) = target_idx else {
+            return Err(());
+        };
+        let pid = Pid(self.next_pid);
+        self.next_pid = self.next_pid.wrapping_add(1).max(1);
+        self.slots[idx] = Pcb::new(pid, name, app_id, priority, exec_type, caps);
+        Ok(pid)
+    }
+
     /// Allocate a PCB slot and assign a new Pid.
     pub fn spawn(
         &mut self,
@@ -247,15 +284,7 @@ impl<const N: usize> ProcessTable<N> {
         exec_type: ExecType,
         caps: CapabilitySet,
     ) -> Result<Pid, ()> {
-        for slot in self.slots.iter_mut() {
-            if slot.state == ProcState::Dormant || slot.state == ProcState::Dead {
-                let pid = Pid(self.next_pid);
-                self.next_pid = self.next_pid.wrapping_add(1).max(1);
-                *slot = Pcb::new(pid, name, app_id, priority, exec_type, caps);
-                return Ok(pid);
-            }
-        }
-        Err(())
+        self.spawn_inner(name, app_id, priority, exec_type, caps, false)
     }
 
     /// Allocate a PCB slot, recycling the least-recently-active suspended process if all slots are full.
@@ -269,31 +298,7 @@ impl<const N: usize> ProcessTable<N> {
         exec_type: ExecType,
         caps: CapabilitySet,
     ) -> Result<Pid, ()> {
-        if let Ok(pid) = self.spawn(name, app_id, priority, exec_type, caps) {
-            return Ok(pid);
-        }
-
-        let mut victim_idx = None;
-        let mut min_ticks = u32::MAX;
-        for (i, slot) in self.slots.iter().enumerate() {
-            if (slot.state == ProcState::Suspended || slot.state == ProcState::Hibernated)
-                && slot.app_id < 0xF0
-            {
-                if slot.ledger.cpu_ticks < min_ticks {
-                    min_ticks = slot.ledger.cpu_ticks;
-                    victim_idx = Some(i);
-                }
-            }
-        }
-
-        if let Some(idx) = victim_idx {
-            let pid = Pid(self.next_pid);
-            self.next_pid = self.next_pid.wrapping_add(1).max(1);
-            self.slots[idx] = Pcb::new(pid, name, app_id, priority, exec_type, caps);
-            Ok(pid)
-        } else {
-            Err(())
-        }
+        self.spawn_inner(name, app_id, priority, exec_type, caps, true)
     }
 
     /// Locate PCB by Pid.

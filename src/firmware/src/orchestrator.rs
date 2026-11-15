@@ -977,9 +977,7 @@ impl Orchestrator {
 
             // Track process activation in PCB table
             let table = proc_table_mut();
-            let pcb = if let Some(pcb) = table.find_mut_by_app(app_id) {
-                Some(pcb)
-            } else {
+            if table.find_mut_by_app(app_id).is_none() {
                 let name = crate::AppRegistry::descriptor(app_id)
                     .map(|m| m.name)
                     .unwrap_or("App");
@@ -996,9 +994,8 @@ impl Orchestrator {
                     exec_type,
                     caps,
                 );
-                table.find_mut_by_app(app_id)
-            };
-            if let Some(pcb) = pcb {
+            }
+            if let Some(pcb) = table.find_mut_by_app(app_id) {
                 pcb.set_state(ProcState::Running);
                 pcb.ledger.record_activation();
             }
