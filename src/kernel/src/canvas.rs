@@ -550,43 +550,43 @@ impl Canvas {
         }
     }
 
+    #[inline(never)]
+    fn apply_word_mask(&mut self, progress: u8, invert: bool) {
+        let mask_word = {
+            let w = u32::from_ne_bytes(Self::bayer_col_masks(progress));
+            if invert { !w } else { w }
+        };
+        let flat = self.buffer_flat_mut();
+        for chunk in flat.chunks_exact_mut(4) {
+            let word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let res = if invert {
+                word ^ mask_word
+            } else {
+                word & mask_word
+            };
+            chunk.copy_from_slice(&res.to_ne_bytes());
+        }
+    }
+
     /// Apply Bayer 4x4 dither reveal across the entire 128x64 canvas.
     /// Pixels where `threshold >= progress` are cleared (progress: 0..=16).
     pub fn apply_dither_mask(&mut self, progress: u8) {
         if progress == 0 {
-            self.buffer = [[0; LCD_WIDTH]; 8];
-        } else if progress < 16 {
-            let mask_word = u32::from_ne_bytes(Self::bayer_col_masks(progress));
-
-            let flat = self.buffer_flat_mut();
-            for chunk in flat.chunks_exact_mut(4) {
-                let word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                let res = (word & mask_word).to_ne_bytes();
-                chunk[0] = res[0];
-                chunk[1] = res[1];
-                chunk[2] = res[2];
-                chunk[3] = res[3];
+            self.clear();
+        } else {
+            if progress < 16 {
+                self.apply_word_mask(progress, false);
             }
+            self.sync_planes();
+            self.dirty = 0xFF;
         }
-        self.sync_planes();
-        self.dirty = 0xFF;
     }
 
     /// Apply 2D Bayer matrix invert dissolve across the entire 128x64 canvas.
     /// Pixels where `threshold >= progress` are inverted (progress: 0..=16).
     pub fn apply_invert_dissolve(&mut self, progress: u8) {
         if progress < 16 {
-            let inv_word = !u32::from_ne_bytes(Self::bayer_col_masks(progress));
-
-            let flat = self.buffer_flat_mut();
-            for chunk in flat.chunks_exact_mut(4) {
-                let word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                let res = (word ^ inv_word).to_ne_bytes();
-                chunk[0] = res[0];
-                chunk[1] = res[1];
-                chunk[2] = res[2];
-                chunk[3] = res[3];
-            }
+            self.apply_word_mask(progress, true);
         }
         self.sync_planes();
         self.dirty = 0xFF;

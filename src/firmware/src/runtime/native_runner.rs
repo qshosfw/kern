@@ -201,6 +201,7 @@ pub fn krx_return_thunk() -> Result<usize, PagedError> {
 }
 
 /// Invokes a P0 Structured Leaf Overlay from the resident root actor (§5.1 / KRX 3.2).
+#[inline(never)]
 pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     let slot = slot_mut();
     if !slot.is_loaded {

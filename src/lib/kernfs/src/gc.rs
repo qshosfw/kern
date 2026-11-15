@@ -6,7 +6,7 @@ use crate::fs::{KernFS, MetaQuery};
 
 impl<'a, D: BlockDevice> KernFS<'a, D> {
     pub(crate) fn has_free_room_for_new(&self) -> bool {
-        let (free, obs) = self.page_counts();
+        let (free, obs, _) = self.page_counts();
         (free + obs) as usize > RESERVE_BLOCKS * DATA_PAGES_PER_BLOCK + 2
     }
 
@@ -62,9 +62,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     #[inline(never)]
     fn read_block_ec(&mut self, block: usize) -> u32 {
-        let mut hdr_buf = [0u8; 16];
-        if self.dev.read(block * D::BLOCK_SIZE, &mut hdr_buf).is_ok() {
-            let h = BlockHeader::from_bytes(&hdr_buf);
+        let mut hdr_uninit = core::mem::MaybeUninit::<[u8; 16]>::uninit();
+        let hdr_buf = unsafe { &mut *hdr_uninit.as_mut_ptr() };
+        if self.dev.read(block * D::BLOCK_SIZE, hdr_buf).is_ok() {
+            let h = BlockHeader::from_bytes(hdr_buf);
             if h.fourcc == FOURCC_BLOCK_V2 && h.kind != BLOCK_KIND_BAD {
                 return h.erase_count;
             }
@@ -595,10 +596,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     /// Detect whether blocks 0..16 contain any legacy KernFS v1 headers.
     pub fn has_v1_volume(dev: &mut D) -> bool {
-        let mut hdr = [0u8; 64];
+        let mut hdr_uninit = core::mem::MaybeUninit::<[u8; 64]>::uninit();
+        let hdr = unsafe { &mut *hdr_uninit.as_mut_ptr() };
         let limit = D::TOTAL_BLOCKS.min(16);
         for s in 0..limit {
-            if dev.read(s * D::BLOCK_SIZE, &mut hdr).is_ok() && is_valid_v1_header(&hdr) {
+            if dev.read(s * D::BLOCK_SIZE, hdr).is_ok() && is_valid_v1_header(hdr) {
                 return true;
             }
         }

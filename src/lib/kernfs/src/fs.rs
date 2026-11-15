@@ -24,7 +24,12 @@ pub struct FsStats {
 
 #[repr(C)]
 pub struct KernFS<'a, D: BlockDevice> {
-    pub(crate) cur_tag: PageTag,
+    pub dev: &'a mut D,
+    pub(crate) format_epoch: u32,
+    pub(crate) super_seq: u32,
+    pub(crate) global_gen: u32,
+    pub(crate) total_erases: u32,
+    pub(crate) hot_hash: u32,
     pub(crate) block_seq: u16,
     pub(crate) cur_alloc_block: u16,
     pub(crate) hot_ino: u16,
@@ -33,13 +38,8 @@ pub struct KernFS<'a, D: BlockDevice> {
     pub(crate) low_power: bool,
     pub(crate) mounted: bool,
     pub(crate) in_gc: bool,
+    pub(crate) cur_tag: PageTag,
     pub(crate) cur_inode: Inode,
-    pub dev: &'a mut D,
-    pub(crate) format_epoch: u32,
-    pub(crate) super_seq: u32,
-    pub(crate) global_gen: u32,
-    pub(crate) total_erases: u32,
-    pub(crate) hot_hash: u32,
     pub(crate) page_buf: [u8; PAGE_SIZE],
     pub(crate) meta_pages: [u16; MAX_META_GROUPS],
     pub(crate) block_table: [u8; MAX_BLOCKS],
@@ -85,29 +85,26 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     #[inline(never)]
-    pub(crate) fn page_counts(&self) -> (u16, u16) {
+    pub(crate) fn page_counts(&self) -> (u16, u16, u16) {
         let mut free_pages = 0u16;
         let mut obs_pages = 0u16;
+        let mut bad_blocks = 0u16;
         for b in FIRST_DATA_BLOCK..D::TOTAL_BLOCKS {
             let v = self.block_table[b];
-            if v != BLOCK_TBL_BAD {
+            if v == BLOCK_TBL_BAD {
+                bad_blocks += 1;
+            } else {
                 free_pages += (v >> 4) as u16;
                 obs_pages += (v & 0x0F) as u16;
             }
         }
-        (free_pages, obs_pages)
+        (free_pages, obs_pages, bad_blocks)
     }
 
     #[inline(never)]
     pub fn stats(&self) -> FsStats {
         let total = D::TOTAL_BLOCKS as u16;
-        let (free_pages, obs_pages) = self.page_counts();
-        let mut bad_blocks = 0u16;
-        for b in FIRST_DATA_BLOCK..D::TOTAL_BLOCKS {
-            if self.block_table[b] == BLOCK_TBL_BAD {
-                bad_blocks += 1;
-            }
-        }
+        let (free_pages, obs_pages, bad_blocks) = self.page_counts();
         let usable_blocks = (D::TOTAL_BLOCKS - FIRST_DATA_BLOCK) as u16 - bad_blocks;
         let free_sectors = (((free_pages as u32) * 4369 + 4368) >> 16) as u16;
         let deleted_sectors = (((obs_pages as u32) * 4369 + 4368) >> 16) as u16;

@@ -161,6 +161,15 @@ fn active_radio_slot(
     (slot, coord.vfo_channel_mut(slot))
 }
 
+fn config_domain_idx(instance: u8) -> Result<usize, WireStatus> {
+    let idx = instance as usize;
+    if idx > 5 {
+        Err(WireStatus::BadRange)
+    } else {
+        Ok(idx)
+    }
+}
+
 #[inline(never)]
 fn read_sys_facet(
     facet: u16,
@@ -170,9 +179,7 @@ fn read_sys_facet(
 ) -> Result<(), WireStatus> {
     match facet {
         FACET_SYS_IDENTITY => {
-            let serial = bsp::uid::get_hardware_serial64();
-            w.write_u32_le(serial as u32);
-            w.write_u32_le((serial >> 32) as u32);
+            w.write_bytes(&bsp::uid::get_hardware_serial64().to_le_bytes());
             w.write_bytes(&bsp::uid::read_mac_address());
             w.write_bytes(&bsp::uid::get_crockford_serial()[..14]);
             let is_auth = hw.wire.session.is_authenticated;
@@ -246,12 +253,14 @@ fn on_handle_get(
     handle: ResourceHandle,
     hw: &mut SystemHardware,
     now: u32,
-    out: &mut [u8],
-) -> Result<usize, WireStatus> {
-    let mut w = ByteWriter::new(out);
+    w: &mut ByteWriter<'_>,
+) -> Result<(), WireStatus> {
+    if handle.domain > DOMAIN_STORAGE {
+        return Err(WireStatus::Unsupported);
+    }
     match (handle.domain, handle.facet) {
-        (DOMAIN_SYSTEM, facet) => read_sys_facet(facet, hw, now, &mut w)?,
-        (DOMAIN_RADIO, facet) => read_radio_facet(facet, handle.instance, hw, &mut w)?,
+        (DOMAIN_SYSTEM, facet) => return read_sys_facet(facet, hw, now, w),
+        (DOMAIN_RADIO, facet) => return read_radio_facet(facet, handle.instance, hw, w),
         (DOMAIN_UI, FACET_UI_SURFACE) => {
             const UI_SURFACE_INFO: [u8; 7] = [128, 0, 64, 0, 1, 0, 4];
             w.write_bytes(&UI_SURFACE_INFO);
@@ -271,10 +280,7 @@ fn on_handle_get(
             w.write_u8(crate::AppRegistry::app_count() as u8);
         }
         (DOMAIN_CONFIG, _) => {
-            let domain_idx = handle.instance as usize;
-            if domain_idx > 5 {
-                return Err(WireStatus::BadRange);
-            }
+            let domain_idx = config_domain_idx(handle.instance)?;
             w.write_bytes(crate::master_config_ref().config_bytes(domain_idx));
         }
         (DOMAIN_STORAGE, _) => {
@@ -290,10 +296,9 @@ fn on_handle_get(
             w.write_u32_le(stats.wear_cycles);
             w.write_u16_le(stats.total_sectors);
         }
-        (DOMAIN_UI | DOMAIN_INPUT | DOMAIN_APP, _) => return Err(WireStatus::UnsupportedField),
-        _ => return Err(WireStatus::Unsupported),
+        _ => return Err(WireStatus::UnsupportedField),
     }
-    Ok(w.position())
+    Ok(())
 }
 
 #[inline(never)]
@@ -382,10 +387,7 @@ fn handle_resource_set(
             _ => Err(WireStatus::UnsupportedField),
         },
         DOMAIN_CONFIG => {
-            let domain_idx = handle.instance as usize;
-            if domain_idx > 5 {
-                return Err(WireStatus::BadRange);
-            }
+            let domain_idx = config_domain_idx(handle.instance)?;
             let mcfg = crate::master_config();
             let dest = mcfg.config_bytes_mut(domain_idx);
             let copy_len = val.len().min(dest.len());
@@ -475,50 +477,46 @@ fn handle_control_service(
     if opcode < OP_HANDLE_GET || opcode > OP_HANDLE_STREAM {
         return None;
     }
-    let Some(handle) = ResourceHandle::parse(payload) else {
+    let mut r = utils::bytes::ByteReader::new(payload);
+    let Some(handle) = ResourceHandle::parse_from(&mut r) else {
         return Some(err_empty(WireStatus::BadLength));
     };
-    handle.write_bytes(&mut out[..4]);
+    out[..4].copy_from_slice(&payload[..4]);
 
-    let res = match opcode {
-        OP_HANDLE_GET => match on_handle_get(handle, hw, now, &mut out[4..100]) {
-            Ok(len) => ok_bytes(4 + len),
-            Err(status) => err_empty(status),
+    let mut w = ByteWriter::new(&mut out[4..136]);
+    let status = match opcode {
+        OP_HANDLE_GET => match on_handle_get(handle, hw, now, &mut w) {
+            Ok(()) => WireStatus::Ok,
+            Err(status) => return Some(err_empty(status)),
         },
-        OP_HANDLE_SET => {
-            let status = handle_resource_set(handle, &payload[4..], hw)
-                .err()
-                .unwrap_or(WireStatus::Ok);
-            (status, 4)
-        }
+        OP_HANDLE_SET => handle_resource_set(handle, r.remaining_slice(), hw)
+            .err()
+            .unwrap_or(WireStatus::Ok),
         OP_HANDLE_INVOKE => {
-            let Ok(req) = HandleInvokeReq::parse(payload) else {
+            let Some(action_id) = r.read_u16_le() else {
                 return Some(err_empty(WireStatus::BadLength));
             };
-            out[4..6].copy_from_slice(&req.action_id.to_le_bytes());
-            let status = handle_resource_invoke(handle, req.action_id, req.params, hw);
-            (status, 6)
+            w.write_u16_le(action_id);
+            handle_resource_invoke(handle, action_id, r.remaining_slice(), hw)
         }
         OP_HANDLE_STREAM => {
-            let Ok(req) = HandleStreamReq::parse(payload) else {
+            let (Some(offset), Some(length)) = (r.read_u32_le(), r.read_u16_le()) else {
                 return Some(err_empty(WireStatus::BadLength));
             };
             if handle.domain != DOMAIN_UI || handle.facet != FACET_UI_SURFACE {
                 return Some(err_empty(WireStatus::Unsupported));
             }
             let flat = crate::system_canvas().buffer_flat();
-            let total_sz = flat.len();
-            let off = (req.offset as usize).min(total_sz);
-            let len = (req.length as usize).min(100).min(total_sz - off);
-            let mut w = ByteWriter::new(&mut out[4..]);
+            let off = (offset as usize).min(flat.len());
+            let len = (length as usize).min(100).min(flat.len() - off);
             w.write_u32_le(off as u32);
             w.write_u16_le(len as u16);
             w.write_bytes(&flat[off..off + len]);
-            ok_bytes(4 + w.position())
+            WireStatus::Ok
         }
         _ => return None,
     };
-    Some(res)
+    Some((status, 4 + w.position()))
 }
 
 // ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
@@ -595,7 +593,8 @@ fn on_transfer_chunk(
         return err_empty(WireStatus::BadSession);
     };
 
-    out[0..2].copy_from_slice(&req.transfer_id.to_le_bytes());
+    let mut w = ByteWriter::new(&mut out[..]);
+    w.write_u16_le(req.transfer_id);
     if transfer.mode == TRANSFER_MODE_WRITE {
         let off = req.offset as usize;
         let chunk_len = req.data.len();
@@ -608,8 +607,8 @@ fn on_transfer_chunk(
         wire_file_staging_buf()[off..end].copy_from_slice(req.data);
         let new_len = end as u32;
         transfer.current_len = transfer.current_len.max(new_len);
-        out[2..4].copy_from_slice(&(chunk_len as u16).to_le_bytes());
-        out[4..8].copy_from_slice(&new_len.to_le_bytes());
+        w.write_u16_le(chunk_len as u16);
+        w.write_u32_le(new_len);
         ok_bytes(8)
     } else {
         let path = transfer.path_str();
@@ -619,8 +618,9 @@ fn on_transfer_chunk(
             .filesystem
             .read_file_at(path, off, &mut out[8..8 + len])
             .unwrap_or(0);
-        out[2..6].copy_from_slice(&(off as u32).to_le_bytes());
-        out[6..8].copy_from_slice(&(read_sz as u16).to_le_bytes());
+        let mut w = ByteWriter::new(&mut out[2..8]);
+        w.write_u32_le(off as u32);
+        w.write_u16_le(read_sz as u16);
         ok_bytes(8 + read_sz)
     }
 }

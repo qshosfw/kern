@@ -102,13 +102,15 @@ pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) 
     user_path_unit_op(path, path_len, false)
 }
 
+#[inline(never)]
+fn file_stat_size(path: *const u8, path_len: u8) -> Option<u32> {
+    let path_str = unsafe { parse_str(path, path_len as usize) }?;
+    let ctx = active_ctx_opt()?;
+    ctx.file_size(path_str).ok().map(|s| s as u32)
+}
+
 pub unsafe extern "C" fn api_storage_file_size(path: *const u8, path_len: u8) -> u32 {
-    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
-        if let Some(ctx) = active_ctx_opt() {
-            return ctx.file_size(path_str).unwrap_or(0) as u32;
-        }
-    }
-    0
+    file_stat_size(path, path_len).unwrap_or(0)
 }
 
 pub unsafe extern "C" fn api_storage_list_dir(
@@ -128,14 +130,7 @@ pub unsafe extern "C" fn api_storage_list_dir(
 }
 
 pub unsafe extern "C" fn api_storage_file_exists(path: *const u8, path_len: u8) -> u8 {
-    if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
-        if let Some(ctx) = active_ctx_opt() {
-            if ctx.exists(path_str) {
-                return 1;
-            }
-        }
-    }
-    0
+    u8::from(file_stat_size(path, path_len).is_some())
 }
 
 pub unsafe extern "C" fn api_storage_read_file_at(
