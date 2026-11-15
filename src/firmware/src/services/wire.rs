@@ -97,13 +97,10 @@ fn err_empty(status: WireStatus) -> (WireStatus, usize) {
 /// Main entry point for non-core RigWire records routed from the transport driver.
 #[inline(never)]
 pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u32) -> bool {
-    let plen = (header.payload_len as usize).min(128);
-    let mut payload_buf = core::mem::MaybeUninit::<[u8; 128]>::uninit();
-    let payload = unsafe {
-        let ptr = payload_buf.as_mut_ptr() as *mut u8;
-        core::ptr::copy_nonoverlapping(hw.wire.current_payload(header).as_ptr(), ptr, plen);
-        core::slice::from_raw_parts(ptr, plen)
-    };
+    let raw = hw.wire.current_payload(header);
+    let plen = raw.len().min(128);
+    // `handle_*_service` only reads `hw.wire.session` and never touches `rx_buf` until `send_response`.
+    let payload = unsafe { core::slice::from_raw_parts(raw.as_ptr(), plen) };
 
     let mut out_uninit = core::mem::MaybeUninit::<[u8; 192]>::uninit();
     let out = unsafe { &mut *out_uninit.as_mut_ptr() };
@@ -326,7 +323,7 @@ fn handle_resource_set(
             match handle.facet {
                 FACET_RADIO_TUNING => {
                     let freq_hz = get_u32_le(val)?;
-                    if freq_hz < 18_000_000 || freq_hz > 1_300_000_000 {
+                    if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
                         return Err(WireStatus::BadRange);
                     }
                     let freq = Frequency::new(freq_hz);
@@ -532,7 +529,7 @@ fn handle_control_service(
 // ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
 
 #[inline(never)]
-fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
+fn validate_file_path(path: &str, is_write: bool, allow_calib: bool) -> Result<(), WireStatus> {
     let b = path.as_bytes();
     if b.is_empty() || b.len() > 32 || b[0] != b'/' {
         return Err(WireStatus::BadRange);
@@ -545,7 +542,7 @@ fn validate_file_path(path: &str, is_write: bool) -> Result<(), WireStatus> {
     let is_sys = b.starts_with(b"/sys/");
     let allowed =
         is_sys || b.starts_with(b"/user/") || b.starts_with(b"/pref/") || b.starts_with(b"/apps/");
-    if !allowed || (is_write && is_sys && path != CALIB_FILE_PATH) {
+    if !allowed || (is_write && is_sys && (!allow_calib || path != CALIB_FILE_PATH)) {
         return Err(WireStatus::SafetyDenied);
     }
     Ok(())
@@ -558,7 +555,7 @@ fn on_transfer_open(
     w: &mut ByteWriter<'_>,
 ) -> Result<(), WireStatus> {
     let req = TransferOpenRequest::parse(payload).ok_or(WireStatus::BadLength)?;
-    validate_file_path(req.path, req.mode == TRANSFER_MODE_WRITE)?;
+    validate_file_path(req.path, req.mode == TRANSFER_MODE_WRITE, true)?;
     if req.mode == TRANSFER_MODE_WRITE {
         if req.total_size as usize > MAX_WIRE_FILE_SIZE {
             return Err(WireStatus::BadLength);
@@ -709,6 +706,7 @@ fn on_transfer_close(
     Ok(())
 }
 
+#[inline(never)]
 fn on_transfer_stat(
     payload: &[u8],
     hw: &mut SystemHardware,
@@ -720,7 +718,7 @@ fn on_transfer_stat(
         Ok(sz) => {
             let mut crc_val = 0xFFFF_FFFFu32;
             let mut cur_off = 0usize;
-            let mut chunk_buf = [0u8; 128];
+            let mut chunk_buf = [0u8; 64];
             while cur_off < sz {
                 let to_read = (sz - cur_off).min(chunk_buf.len());
                 match hw
@@ -813,14 +811,10 @@ fn handle_data_service(
         OP_TRANSFER_STAT => on_transfer_stat(payload, hw, &mut w),
         OP_TRANSFER_LIST => on_transfer_list(payload, hw, &mut w),
         OP_TRANSFER_REMOVE => match TransferRemoveRequest::parse(payload) {
-            Some(req) => validate_file_path(req.path, true).and_then(|()| {
-                if req.path == CALIB_FILE_PATH {
-                    Err(WireStatus::SafetyDenied)
-                } else {
-                    hw.filesystem
-                        .remove(req.path)
-                        .map_err(|_| WireStatus::NotFound)
-                }
+            Some(req) => validate_file_path(req.path, true, false).and_then(|()| {
+                hw.filesystem
+                    .remove(req.path)
+                    .map_err(|_| WireStatus::NotFound)
             }),
             None => Err(WireStatus::BadLength),
         },
