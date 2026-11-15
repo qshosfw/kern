@@ -227,14 +227,16 @@ fn draw_vfo(
     }
 
     // 4 & 5. Modulation Type and Channel Attributes Line
+    draw_tom_fill(canvas, 112, y + 6, ch.modulation.as_str());
     let attr_y = y + 22;
-    for (tx, ty, label) in [
-        (112, y + 6, ch.modulation.as_str()),
-        (32, attr_y, ch.power.as_str()),
-        (44, attr_y, ch.bandwidth.as_str()),
-        (56, attr_y, slot.default_name()),
+    let mut tx = 32;
+    for label in [
+        ch.power.as_str(),
+        ch.bandwidth.as_str(),
+        slot.default_name(),
     ] {
-        draw_tom_fill(canvas, tx, ty, label);
+        draw_tom_fill(canvas, tx, attr_y, label);
+        tx += 12;
     }
 }
 

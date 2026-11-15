@@ -70,25 +70,31 @@ fn render_badge_box(
     style: BadgeStyle,
     rounded: bool,
 ) -> Color {
-    let (bg, border, tc) = match style {
-        BadgeStyle::Empty => (Some(Color::Clear), Some(Color::Fill), Color::Fill),
-        BadgeStyle::Filled => (Some(Color::Fill), None, Color::Clear),
-        BadgeStyle::Dither(level) => {
-            canvas.fill_rect(xu, yu, w, h, Color::Clear);
-            canvas.fill_rect_dither(xu, yu, w, h, level);
-            let tc = if level >= 12 {
+    let is_filled = matches!(style, BadgeStyle::Filled);
+    canvas.fill_rect(
+        xu,
+        yu,
+        w,
+        h,
+        if is_filled { Color::Fill } else { Color::Clear },
+    );
+    if let BadgeStyle::Dither(level) = style {
+        canvas.fill_rect_dither(xu, yu, w, h, level);
+    }
+    let (border, tc) = match style {
+        BadgeStyle::Empty => (Some(Color::Fill), Color::Fill),
+        BadgeStyle::Filled => (None, Color::Clear),
+        BadgeStyle::Dither(level) => (
+            Some(Color::Fill),
+            if level >= 12 {
                 Color::Clear
             } else {
                 Color::Fill
-            };
-            (None, Some(Color::Fill), tc)
-        }
-        BadgeStyle::Dimmed => (Some(Color::Clear), Some(Color::DarkGray), Color::Fill),
-        BadgeStyle::Disabled => (Some(Color::Clear), Some(Color::LightGray), Color::LightGray),
+            },
+        ),
+        BadgeStyle::Dimmed => (Some(Color::DarkGray), Color::Fill),
+        BadgeStyle::Disabled => (Some(Color::LightGray), Color::LightGray),
     };
-    if let Some(c) = bg {
-        canvas.fill_rect(xu, yu, w, h, c);
-    }
     if let Some(c) = border {
         canvas.draw_rect(xu, yu, w, h, c);
     }

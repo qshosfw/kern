@@ -244,9 +244,6 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
         let start_idx = page * items_per_page;
         let end_idx = (start_idx + items_per_page).min(total_items);
 
-        let col_widths = [2u8, 44, 86]; // x coordinates for 3 columns (width 40px, margin 2px)
-        let row_heights = [8u8, 36]; // y coordinates for 2 rows (height 26px, margin 2px)
-
         // Micro-motion animation state: gentle 1px hop at ~3-4 Hz
         let anim_hop = if (model.tick_counter >> 3) & 1 == 1 {
             1i16
@@ -257,25 +254,26 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
         for idx in start_idx..end_idx {
             let page_rel = idx - start_idx;
             let (col_idx, row_idx) = if page_rel >= 3 {
-                (page_rel - 3, 1)
+                (page_rel - 3, 1u8)
             } else {
-                (page_rel, 0)
+                (page_rel, 0u8)
             };
-            let tx = col_widths[col_idx];
-            let ty = row_heights[row_idx];
+            // 3 columns (40px wide, 2px margin) x 2 rows (26px tall, 2px margin)
+            let tx = 2u8 + (col_idx as u8) * 42;
+            let ty = 8u8 + row_idx * 28;
             let is_selected = idx == model.selected_idx;
             let item = &model.items[idx];
 
             let fg_color = if is_selected {
-                if model.is_pressed {
+                let c = if model.is_pressed {
                     canvas.draw_rect(tx, ty, 40, 26, Color::Fill);
-                    canvas.clear_corners(tx, ty, 40, 26);
                     Color::Fill
                 } else {
                     canvas.fill_rect(tx, ty, 40, 26, Color::Fill);
-                    canvas.clear_corners(tx, ty, 40, 26);
                     Color::Clear
-                }
+                };
+                canvas.clear_corners(tx, ty, 40, 26);
+                c
             } else {
                 Color::Fill
             };
