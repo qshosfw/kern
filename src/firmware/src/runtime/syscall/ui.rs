@@ -38,43 +38,37 @@ pub unsafe extern "C" fn api_ui_has_modal() -> u8 {
 
 #[inline(never)]
 unsafe fn show_modal_raw(
-    tag: u8,
+    tag_and_confirm: u16,
+    lens: u32,
     title: *const u8,
-    t_len: usize,
     msg: *const u8,
-    m_len: usize,
     confirm: *const u8,
-    c_len: usize,
     cancel: *const u8,
-    cl_len: usize,
-    is_confirm: bool,
 ) {
+    let tag = tag_and_confirm as u8;
+    let is_confirm = (tag_and_confirm >> 8) != 0;
     let (def_title, def_ok, def_cancel) = if is_confirm {
         ("Confirm", "OK", "CANCEL")
     } else {
         ("Notice", "", "")
     };
-    let t_str = unsafe { str_or_default(title, t_len, def_title) };
-    let m_str = unsafe { str_or_default(msg, m_len, "") };
-    let c_str = unsafe { str_or_default(confirm, c_len, def_ok) };
-    let cl_str = unsafe { str_or_default(cancel, cl_len, def_cancel) };
+    let t_str = unsafe { str_or_default(title, (lens & 0xFF) as usize, def_title) };
+    let m_str = unsafe { str_or_default(msg, ((lens >> 8) & 0xFF) as usize, "") };
+    let c_str = unsafe { str_or_default(confirm, ((lens >> 16) & 0xFF) as usize, def_ok) };
+    let cl_str = unsafe { str_or_default(cancel, (lens >> 24) as usize, def_cancel) };
     modal_mut().show_confirm(tag, t_str, m_str, c_str, cl_str);
 }
 
 #[inline(never)]
-fn show_modal_default(tag: u8, title_len_flags: u32, title: *const u8, msg: *const u8) {
+fn show_modal_default(tag_and_confirm: u16, lens: u32, title: *const u8, msg: *const u8) {
     unsafe {
         show_modal_raw(
-            tag,
+            tag_and_confirm,
+            lens,
             title,
-            (title_len_flags & 0xFF) as usize,
             msg,
-            ((title_len_flags >> 8) & 0xFF) as usize,
             core::ptr::null(),
-            0,
             core::ptr::null(),
-            0,
-            (title_len_flags & 0x1_0000) != 0,
         );
     }
 }
@@ -86,7 +80,12 @@ pub unsafe extern "C" fn api_ui_show_popup(
     msg: *const u8,
     m_len: u8,
 ) {
-    show_modal_default(tag, (t_len as u32) | ((m_len as u32) << 8), title, msg);
+    show_modal_default(
+        tag as u16,
+        (t_len as u32) | ((m_len as u32) << 8),
+        title,
+        msg,
+    );
 }
 
 pub unsafe extern "C" fn api_ui_show_confirm(
@@ -97,8 +96,8 @@ pub unsafe extern "C" fn api_ui_show_confirm(
     m_len: u8,
 ) {
     show_modal_default(
-        tag,
-        (t_len as u32) | ((m_len as u32) << 8) | 0x1_0000,
+        (tag as u16) | 0x0100,
+        (t_len as u32) | ((m_len as u32) << 8),
         title,
         msg,
     );
@@ -379,19 +378,10 @@ pub unsafe extern "C" fn api_ui_show_confirm_labels(
     cancel: *const u8,
     cl_len: u8,
 ) {
+    let lens =
+        (t_len as u32) | ((m_len as u32) << 8) | ((c_len as u32) << 16) | ((cl_len as u32) << 24);
     unsafe {
-        show_modal_raw(
-            tag,
-            title,
-            t_len as usize,
-            msg,
-            m_len as usize,
-            confirm,
-            c_len as usize,
-            cancel,
-            cl_len as usize,
-            true,
-        );
+        show_modal_raw((tag as u16) | 0x0100, lens, title, msg, confirm, cancel);
     }
 }
 

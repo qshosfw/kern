@@ -88,22 +88,23 @@ impl TextInputView {
             return "";
         }
         let k = key as usize;
-        if charset == Charset::Numbers {
-            return &"0123456789"[k..k + 1];
-        }
-        if key == 0 {
-            return " ";
-        }
-        if key == 1 {
-            return ".,?!'-";
-        }
-        let (s, off) = match charset {
-            Charset::Symbols => ("@#$%&*()[]<>{}/\\|+-=\"'` :;_", &SYM_OFF[..]),
-            Charset::Upper => ("ABCDEFGHIJKLMNOPQRSTUVWXYZ", &ALPHA_OFF[..]),
-            _ => ("abcdefghijklmnopqrstuvwxyz", &ALPHA_OFF[..]),
+        let bytes: &[u8] = if charset == Charset::Numbers {
+            &b"0123456789"[k..k + 1]
+        } else if key == 0 {
+            b" "
+        } else if key == 1 {
+            b".,?!'-"
+        } else {
+            let (s, off): (&[u8], &[u8; 9]) = match charset {
+                Charset::Symbols => (b"@#$%&*()[]<>{}/\\|+-=\"'` :;_", &SYM_OFF),
+                Charset::Upper => (b"ABCDEFGHIJKLMNOPQRSTUVWXYZ", &ALPHA_OFF),
+                _ => (b"abcdefghijklmnopqrstuvwxyz", &ALPHA_OFF),
+            };
+            let tk = k - 2;
+            &s[off[tk] as usize..off[tk + 1] as usize]
         };
-        let tk = k - 2;
-        &s[off[tk] as usize..off[tk + 1] as usize]
+        // All slices above are pure ASCII literals indexed at valid byte offsets.
+        unsafe { core::str::from_utf8_unchecked(bytes) }
     }
 
     #[inline(never)]
