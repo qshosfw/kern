@@ -434,8 +434,11 @@ impl UsbDriver {
 
     fn ep0_start_product_transfer(&mut self, max_len: u16) {
         let len = (self.product_len as usize).min(31);
-        let name = self.product_name;
-        self.ep0_start_string_transfer(&name[..len], max_len);
+        // SAFETY: `ep0_start_string_transfer` copies the bytes into its stack
+        // descriptor buffer before mutating `self.ep0_transfer`; `product_name`
+        // is untouched during the call.
+        let s = unsafe { core::slice::from_raw_parts(self.product_name.as_ptr(), len) };
+        self.ep0_start_string_transfer(s, max_len);
     }
 
     fn ep0_start_telemetry_transfer(&mut self, max_len: u16) {
@@ -472,7 +475,10 @@ impl UsbDriver {
             DESC_TYPE_CONFIGURATION => Some(&CONFIG_DESCRIPTOR),
             DESC_TYPE_STRING => match desc_index {
                 0 => Some(&STRING_LANGID),
-                1 => Some(&STRING_MANUFACTURER),
+                1 => {
+                    self.ep0_start_string_transfer(b"Quansheng", w_length);
+                    return;
+                }
                 2 => {
                     self.ep0_start_product_transfer(w_length);
                     return;
@@ -483,7 +489,10 @@ impl UsbDriver {
                     return;
                 }
                 #[cfg(feature = "usb_cdc")]
-                4 => Some(&STRING_INTERFACE_SERIAL),
+                4 => {
+                    self.ep0_start_string_transfer(b"Serial", w_length);
+                    return;
+                }
                 5 => {
                     self.ep0_start_telemetry_transfer(w_length);
                     return;

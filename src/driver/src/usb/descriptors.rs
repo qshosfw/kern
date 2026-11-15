@@ -321,47 +321,6 @@ pub static STRING_LANGID: [u8; 4] = [
     0x04, // 0x0409 English (US)
 ];
 
-pub static STRING_MANUFACTURER: [u8; 20] = [
-    20,
-    DESC_TYPE_STRING,
-    b'Q',
-    0,
-    b'u',
-    0,
-    b'a',
-    0,
-    b'n',
-    0,
-    b's',
-    0,
-    b'h',
-    0,
-    b'e',
-    0,
-    b'n',
-    0,
-    b'g',
-    0,
-];
-
-#[cfg(feature = "usb_cdc")]
-pub static STRING_INTERFACE_SERIAL: [u8; 14] = [
-    14,
-    DESC_TYPE_STRING,
-    b'S',
-    0,
-    b'e',
-    0,
-    b'r',
-    0,
-    b'i',
-    0,
-    b'a',
-    0,
-    b'l',
-    0,
-];
-
 #[cfg(feature = "usb_msc")]
 pub static STRING_INTERFACE_STORAGE: [u8; 16] = [
     16,

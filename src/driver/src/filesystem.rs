@@ -76,16 +76,13 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.stats()
     }
 
-    #[inline(always)]
+    #[inline(never)]
     fn map_error(err: FsError) -> StorageError {
-        match err {
-            FsError::NotFound => StorageError::NotFound,
-            FsError::IoError | FsError::LowPower => StorageError::IoError,
-            FsError::CorruptedData => StorageError::CorruptedData,
-            FsError::CapacityFull => StorageError::CapacityFull,
-            FsError::AccessDenied => StorageError::AccessDenied,
-            FsError::InvalidPath => StorageError::InvalidPath,
+        if err as u8 == FsError::LowPower as u8 {
+            return StorageError::IoError;
         }
+        // FsError discriminants (0,1,2,4,5,7) match StorageError identically.
+        unsafe { core::mem::transmute::<FsError, StorageError>(err) }
     }
 
     #[inline(never)]
