@@ -704,13 +704,8 @@ impl RadioCoordinator {
         radio.set_power_level(target_power);
         radio.set_modulation(tx_mod);
         radio.set_bandwidth(tx_bw);
-        let pwr_level = match target_power {
-            RfPowerLevel::Low => 0,
-            RfPowerLevel::Medium => 1,
-            RfPowerLevel::High => 2,
-        };
         radio.tx_prepare();
-        radio.tx_ramp_up(pwr_level);
+        radio.tx_ramp_up(target_power as u8);
         radio.tx_unmute();
     }
 

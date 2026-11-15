@@ -1073,13 +1073,7 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
     }
 
     fn set_compander(&mut self, compander: kernel::service::radio::CompanderMode) {
-        let val = match compander {
-            kernel::service::radio::CompanderMode::Off => 0,
-            kernel::service::radio::CompanderMode::TxCompressor => 1,
-            kernel::service::radio::CompanderMode::RxExpander => 2,
-            kernel::service::radio::CompanderMode::Both => 3,
-        };
-        self.update_reg_bits(REG_MODULATION, 0b11 << 14, val << 14);
+        self.update_reg_bits(REG_MODULATION, 0b11 << 14, (compander as u16) << 14);
     }
 
     fn set_scrambler(&mut self, scrambler: kernel::service::radio::ScramblerMode) {
@@ -1169,18 +1163,21 @@ impl<'a, State> kernel::service::radio::RfSubaudible for Bk4829<'a, State> {
     fn send_css_tail(&mut self, mode: kernel::service::radio::CssTailMode) {
         use kernel::service::radio::CssTailMode;
         if mode == CssTailMode::Tone55Hz {
-            self.write_reg(REG_CXCSS_FREQ, subaudible::CSS_TAIL_55HZ_REG);
-            self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-            self.write_reg(REG_CXCSS_CTRL, subaudible::CXCSS_CTRL_CTCSS);
+            self.apply_reg_vals(&[
+                (REG_CXCSS_FREQ, subaudible::CSS_TAIL_55HZ_REG),
+                (REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL),
+                (REG_CXCSS_CTRL, subaudible::CXCSS_CTRL_CTCSS),
+            ]);
             return;
         }
-        let val = match mode {
-            CssTailMode::PhaseShift120Deg => subaudible::CXCSS_TAIL_SHIFT_120,
-            CssTailMode::PhaseShift180Deg => subaudible::CXCSS_TAIL_SHIFT_180,
-            CssTailMode::PhaseShift240Deg => subaudible::CXCSS_TAIL_SHIFT_240,
-            _ => subaudible::CXCSS_TAIL_NORMAL,
-        };
-        self.write_reg(REG_CXCSS_TAIL, val);
+        const TAIL_VALS: [u16; 5] = [
+            subaudible::CXCSS_TAIL_NORMAL,
+            subaudible::CXCSS_TAIL_NORMAL,
+            subaudible::CXCSS_TAIL_SHIFT_120,
+            subaudible::CXCSS_TAIL_SHIFT_180,
+            subaudible::CXCSS_TAIL_SHIFT_240,
+        ];
+        self.write_reg(REG_CXCSS_TAIL, TAIL_VALS[mode as usize]);
     }
 }
 
@@ -1197,39 +1194,26 @@ impl<'a, State> kernel::service::radio::RfFskPhy for Bk4829<'a, State> {
         py32_hal::delay::delay_ms(1);
         self.write_reg(REG_FSK_FIFO_CTRL, 0x0000);
 
-        // Enable Tone2 with gain 96 for FSK modulation
-        self.write_reg(REG_TONE_GAIN, 0x00E0);
-
-        // Baud rate divider (Reg 0x72)
-        self.write_reg(REG_TONE2_FREQ, fsk::build_baud_divider(config.baud_rate));
-
-        // Deviation (Reg 0x40)
+        // Deviation (Reg 0x40), then Tone2 gain + baud divider
         self.set_deviation(config.deviation_hz as u32);
 
-        // Control word (Reg 0x58) based on modulation profile
-        self.write_reg(REG_FSK_CTRL, fsk::build_fsk_ctrl_from_phy(config));
-
-        // Sync words (Reg 0x5A, 0x5B)
         let s = config.sync.bytes;
-        self.write_reg(REG_FSK_SYNC_0_1, ((s[0] as u16) << 8) | (s[1] as u16));
-        self.write_reg(REG_FSK_SYNC_2_3, ((s[2] as u16) << 8) | (s[3] as u16));
-
-        // Hardware CRC configuration (Reg 0x5C) - transparent raw FIFO IO
-        self.write_reg(REG_FSK_CRC, fsk::REG_FSK_CRC_TRANSPARENT);
-
-        // Packet length with even-byte rounding (Reg 0x5D)
-        self.write_reg(
-            REG_FSK_PACKET_LEN,
-            fsk::build_packet_length_reg(config.raw_length_bytes),
-        );
-
-        // FIFO thresholds (Reg 0x5E)
         let th = ((config.thresholds.almost_empty_words as u16) << 3)
             | (config.thresholds.almost_full_words as u16 & 0x07);
-        self.write_reg(REG_FSK_FIFO_STATUS, th);
-
-        // Preamble, sync len, polarity, and scrambler (Reg 0x59)
-        self.write_reg(REG_FSK_FIFO_CTRL, fsk::build_fsk_fifo_ctrl_from_phy(config));
+        self.apply_reg_vals(&[
+            (REG_TONE_GAIN, 0x00E0),
+            (REG_TONE2_FREQ, fsk::build_baud_divider(config.baud_rate)),
+            (REG_FSK_CTRL, fsk::build_fsk_ctrl_from_phy(config)),
+            (REG_FSK_SYNC_0_1, ((s[0] as u16) << 8) | (s[1] as u16)),
+            (REG_FSK_SYNC_2_3, ((s[2] as u16) << 8) | (s[3] as u16)),
+            (REG_FSK_CRC, fsk::REG_FSK_CRC_TRANSPARENT),
+            (
+                REG_FSK_PACKET_LEN,
+                fsk::build_packet_length_reg(config.raw_length_bytes),
+            ),
+            (REG_FSK_FIFO_STATUS, th),
+            (REG_FSK_FIFO_CTRL, fsk::build_fsk_fifo_ctrl_from_phy(config)),
+        ]);
 
         // Clear interrupt status
         self.clear_interrupts();
@@ -1447,13 +1431,13 @@ impl<'a, State> kernel::service::radio::RfAgc for Bk4829<'a, State> {
     }
 
     fn set_agc_speed(&mut self, speed: kernel::service::radio::AgcSpeed) {
-        let target_reg = match speed {
-            kernel::service::radio::AgcSpeed::Slow => (56 << 7) | 40,
-            kernel::service::radio::AgcSpeed::Medium => 0x2AB2,
-            kernel::service::radio::AgcSpeed::Fast => (2 << 14) | (48 << 7) | 32,
-            kernel::service::radio::AgcSpeed::SsbFast => (3 << 14) | (42 << 7) | 24,
-        };
-        self.write_reg(REG_AGC_TARGET, target_reg);
+        const AGC_SPEED_REGS: [u16; 4] = [
+            (56 << 7) | 40,
+            0x2AB2,
+            (2 << 14) | (48 << 7) | 32,
+            (3 << 14) | (42 << 7) | 24,
+        ];
+        self.write_reg(REG_AGC_TARGET, AGC_SPEED_REGS[speed as usize]);
     }
 
     fn compensate_am_linearity(&mut self, rssi_dbm: i16) {
@@ -1578,13 +1562,11 @@ impl<'a, State> kernel::service::radio::RfToneGenerator for Bk4829<'a, State> {
     }
 
     fn enable_tone1(&mut self, enable: bool) {
-        let bit = 1 << 15;
-        self.update_reg_bits(REG_TONE_GAIN, bit, if enable { bit } else { 0 });
+        self.rmw_reg_bit(REG_TONE_GAIN, 1 << 15, enable);
     }
 
     fn enable_tone2(&mut self, enable: bool) {
-        let bit = 1 << 7;
-        self.update_reg_bits(REG_TONE_GAIN, bit, if enable { bit } else { 0 });
+        self.rmw_reg_bit(REG_TONE_GAIN, 1 << 7, enable);
     }
 
     fn mute_tones(&mut self) {
@@ -1610,11 +1592,7 @@ impl<'a, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, State> {
             let block = calib::CalibrationBlock::from_bytes(calib);
             block.get_tx_power_bias(self.current_freq_hz, target_power_level)
         } else {
-            match target_power_level {
-                0 => 0x20,
-                1 => 0x60,
-                _ => 0xA0,
-            }
+            (target_power_level.min(2) << 6) | 0x20
         };
         self.tx_ramp_up_bias(bias);
     }
@@ -1635,8 +1613,10 @@ impl<'a, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, State> {
 
     fn tx_conclude(&mut self) {
         self.set_gpio_pin(0, true); // RX enable
-        self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX); // Restore 2.7V RX RF LDO for full sensitivity!
-        self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
+        self.apply_reg_vals(&[
+            (REG_POWER_CTRL, POWER_CTRL_RX), // Restore 2.7V RX RF LDO for full sensitivity!
+            (REG_SYS_POWER, SYS_POWER_RX),
+        ]);
         self.apply_subaudible_hw(self.rx_subaudible);
         if self.saved_tx_volume != 0 {
             self.set_volume_level(self.saved_tx_volume);
