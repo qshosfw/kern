@@ -96,20 +96,17 @@ pub trait RadioPrimitive {
 pub fn dtmf_tone_words(digit: u8) -> (u16, u16) {
     const ROW_WORDS: [u16; 4] = [7196, 7950, 8796, 9715];
     const COL_WORDS: [u16; 4] = [12482, 13793, 15249, 16860];
-    let (r, c) = match digit {
-        b'1'..=b'3' => (0, (digit - b'1') as usize),
-        b'A' | b'a' => (0, 3),
-        b'4'..=b'6' => (1, (digit - b'4') as usize),
-        b'B' | b'b' => (1, 3),
-        b'7'..=b'9' => (2, (digit - b'7') as usize),
-        b'C' | b'c' => (2, 3),
-        b'*' => (3, 0),
-        b'0' => (3, 1),
-        b'#' => (3, 2),
-        b'D' | b'd' => (3, 3),
-        _ => return (0, 0),
+    let norm = if digit >= b'a' && digit <= b'd' {
+        digit - (b'a' - b'A')
+    } else {
+        digit
     };
-    (ROW_WORDS[r], COL_WORDS[c])
+    for (idx, &key) in b"123A456B789C*0#D".iter().enumerate() {
+        if key == norm {
+            return (ROW_WORDS[idx >> 2], COL_WORDS[idx & 3]);
+        }
+    }
+    (0, 0)
 }
 
 // ── 3. Audio Primitive ──────────────────────────────────────────────────────

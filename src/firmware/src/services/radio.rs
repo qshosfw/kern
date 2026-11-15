@@ -57,15 +57,10 @@ impl<'a, State> RadioMelodyExt for drivers::bk4829::Bk4829<'a, State> {
     fn play_roger(&mut self, roger: RogerType) {
         if roger != RogerType::Off {
             let idx = (roger as usize).saturating_sub(1);
-            let defs = crate::services::melody::ROGER_DEFS;
-            if idx < defs.len() {
-                drivers::bk4829::Bk4829::play_tone_sequence(self, defs[idx].notes);
-            } else {
-                drivers::bk4829::Bk4829::play_tone_sequence(
-                    self,
-                    crate::services::melody::ROGER_CLASSIC_FALLBACK,
-                );
-            }
+            let notes = crate::services::melody::ROGER_DEFS
+                .get(idx)
+                .map_or(crate::services::melody::ROGER_CLASSIC_FALLBACK, |d| d.notes);
+            drivers::bk4829::Bk4829::play_tone_sequence(self, notes);
         }
     }
 
