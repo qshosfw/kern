@@ -6,8 +6,8 @@ use crate::{Canvas, Color};
 pub const ICON_WIDTH: u8 = 8;
 pub const ICON_HEIGHT: u8 = 8;
 
-pub static ICON_ANTENNA: [u8; 8] = [0x00, 0x55, 0x2A, 0x1C, 0x08, 0x08, 0x08, 0x00];
-pub static ICON_KEYPAD: [u8; 8] = [0x00, 0x6E, 0x6E, 0x00, 0x6E, 0x6E, 0x00, 0x00];
+pub const ICON_ANTENNA: &[u8; 8] = &ICONS_8X8[0];
+pub const ICON_KEYPAD: &[u8; 8] = &ICONS_8X8[5];
 
 static ICONS_8X8: [[u8; 8]; 11] = [
     [0x00, 0x55, 0x2A, 0x1C, 0x08, 0x08, 0x08, 0x00], // 0: Antenna

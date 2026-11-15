@@ -46,7 +46,7 @@ pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
         ),
         (b'S', gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO),
         (b'R', gfx::icons::ICON_APP_RADIO, &gfx::icons::ICON_16_RADIO),
-        (b'C', &gfx::icons::ICON_KEYPAD, &gfx::icons::ICON_16_APPS),
+        (b'C', gfx::icons::ICON_KEYPAD, &gfx::icons::ICON_16_APPS),
         (
             b'B',
             gfx::icons::ICON_APP_DIAG,
@@ -56,7 +56,7 @@ pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
     let b = title.as_bytes();
     let c0 = b.first().copied().unwrap_or(0) & !0x20;
     if c0 == b'B' && (b.get(2).copied().unwrap_or(0) & !0x20) == b'A' {
-        return (&gfx::icons::ICON_ANTENNA, &gfx::icons::ICON_16_SCANNER);
+        return (gfx::icons::ICON_ANTENNA, &gfx::icons::ICON_16_SCANNER);
     }
     for &(k, i8, i16) in &MAP {
         if c0 == k {
