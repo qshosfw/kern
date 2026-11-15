@@ -40,14 +40,15 @@ fn join_path<'a>(
 ) -> Option<&'a str> {
     let p = prefix.as_bytes();
     let n = name.as_bytes();
-    let total = p.len() + n.len();
+    let total = p.len() + 1 + n.len();
     if total > buf.len() {
         return None;
     }
     unsafe {
         let ptr = buf.as_mut_ptr() as *mut u8;
         core::ptr::copy_nonoverlapping(p.as_ptr(), ptr, p.len());
-        core::ptr::copy_nonoverlapping(n.as_ptr(), ptr.add(p.len()), n.len());
+        *ptr.add(p.len()) = b'/';
+        core::ptr::copy_nonoverlapping(n.as_ptr(), ptr.add(p.len() + 1), n.len());
         Some(core::str::from_utf8_unchecked(core::slice::from_raw_parts(
             ptr, total,
         )))
@@ -86,17 +87,10 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
 /// Execute the storage provisioning pass for dynamic application packages and configuration.
 #[inline(never)]
 pub fn provision_packages(filesystem: &mut SystemStorage) {
-    const PROV_DIRS: [&str; 7] = [
-        "/apps/",
-        "/pref/",
-        "/sys/",
-        "/user/",
-        "/user/splash/",
-        "/user/rogers/",
-        "/user/jingles/",
-    ];
-    for d in PROV_DIRS {
-        let _ = filesystem.create_dir(&d[..d.len() - 1]);
+    const PROV_DIRS: &[u8] =
+        b"/apps\0/pref\0/sys\0/user\0/user/splash\0/user/rogers\0/user/jingles\0";
+    for idx in 0..7u8 {
+        let _ = filesystem.create_dir(utils::format::nth_cstr(PROV_DIRS, idx));
     }
 
     ensure_core_packages(filesystem);
@@ -136,7 +130,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         let src_path = if raw_entry.as_bytes()[0] == b'/' {
             raw_entry
         } else {
-            let Some(s) = join_path(&mut src_arr, "/prov/", fname) else {
+            let Some(s) = join_path(&mut src_arr, "/prov", fname) else {
                 continue;
             };
             s
@@ -184,7 +178,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             }
             idx
         };
-        let prefix = PROV_DIRS[dir_idx];
+        let prefix = utils::format::nth_cstr(PROV_DIRS, dir_idx as u8);
 
         let mut dst_arr = [core::mem::MaybeUninit::<u8>::uninit(); 48];
         if let Some(dst_path) = join_path(&mut dst_arr, prefix, fname) {
