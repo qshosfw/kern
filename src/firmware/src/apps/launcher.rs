@@ -219,17 +219,11 @@ impl LauncherApp {
                 {
                     if let Some(pkg) = catalog::get_catalog().entries.get(_pkg_idx as usize) {
                         let path = pkg.path.as_str();
-                        match crate::apps::runtime::launch_krx_package(ctx, path) {
-                            Ok(_) => true,
-                            Err(err) => {
-                                ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
-                                ctx.play_dialog_sound(
-                                    crate::services::melody::DialogSoundType::Error,
-                                );
-                                reload_launcher(ctx.storage);
-                                false
-                            }
+                        let ok = crate::orchestrator::launch_krx_shortcut(ctx, path);
+                        if !ok {
+                            reload_launcher(ctx.storage);
                         }
+                        ok
                     } else {
                         false
                     }

@@ -158,11 +158,13 @@ fn record_proc_event_and_stack(app_id: usize) {
 }
 
 #[inline(never)]
-fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) {
+pub(crate) fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) -> bool {
     if let Err(err) = crate::apps::runtime::launch_krx_package(ctx, path) {
         ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
+        return false;
     }
+    true
 }
 
 impl Orchestrator {
