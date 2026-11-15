@@ -12,7 +12,7 @@ use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
-use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
+use kernel::proc::krx::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 use kernel::proc::memory::MemoryMapLayout;
 use kernel::proc::paged::{
     FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
@@ -323,24 +323,16 @@ pub fn load_native_from_storage(
     let aux = &summary.aux;
     let caps = summary.caps;
 
-    init_native_slot();
-    let slot = slot_mut();
-    slot.pid = pid;
-
-    let buffer_bytes =
-        unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
-
+    let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS * 4;
     let h_len = preamble.header_len as usize;
     if payload_len == 0 || payload_len < (exec.payload_size as usize) {
         return Err(KrxLaunchError::TruncatedPackage);
     }
-    if (exec.payload_size as usize) > (NATIVE_EXEC_BUFFER_WORDS * 4) {
+    if (exec.payload_size as usize) > max_arena_bytes {
         return Err(KrxLaunchError::PayloadTooLarge);
     }
 
     let load_base = arena_base_ptr() as u32;
-    let load_delta = load_base.wrapping_sub(preamble.link_base);
-
     let profile = KrxProfile::detect(
         preamble,
         exec,
@@ -353,10 +345,19 @@ pub fn load_native_from_storage(
         return Err(KrxLaunchError::RelocationFailed);
     }
 
+    init_native_slot();
+    let slot = slot_mut();
+    slot.pid = pid;
+
+    let buffer_bytes =
+        unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), max_arena_bytes) };
+    let load_delta = load_base.wrapping_sub(preamble.link_base);
+
     // 1. Configure Paged Fixed-Window Cache
-    let is_paged = preamble.execution_class() == Some(KrxClass::Paged)
-        || exec.page_size > 0
-        || aux.block_map.is_some();
+    let is_paged = matches!(
+        profile,
+        KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
+    );
     slot.is_paged = is_paged;
 
     if is_paged {

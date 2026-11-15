@@ -177,27 +177,34 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
         ram_vma: u32,
         ram_size: u32,
     ) {
-        self.reset();
-        let _ = self.add_region(MemoryRegionDescriptor::new(
+        self.regions[0] = MemoryRegionDescriptor::new(
             RegionKind::ImmutableCode,
             region_flags::READ | region_flags::EXEC,
             code_vma,
             code_size,
-        ));
-        if let Some((ov_vma, ov_size)) = overlay {
-            let _ = self.add_region(MemoryRegionDescriptor::new(
+        );
+        let mut idx = 1usize;
+        if let Some((ov_vma, ov_size)) = overlay
+            && MAX_REGIONS > 2
+        {
+            self.regions[1] = MemoryRegionDescriptor::new(
                 RegionKind::OverlayWindow,
                 region_flags::READ | region_flags::EXEC,
                 ov_vma,
                 ov_size,
-            ));
+            );
+            idx = 2;
         }
-        let _ = self.add_region(MemoryRegionDescriptor::new(
-            RegionKind::VirtualRam,
-            region_flags::READ | region_flags::WRITE,
-            ram_vma,
-            ram_size,
-        ));
+        if idx < MAX_REGIONS {
+            self.regions[idx] = MemoryRegionDescriptor::new(
+                RegionKind::VirtualRam,
+                region_flags::READ | region_flags::WRITE,
+                ram_vma,
+                ram_size,
+            );
+            idx += 1;
+        }
+        self.region_count = idx as u8;
     }
 
     /// Configure memory layout in-place for P0 Structured Paged applications (§5.1).

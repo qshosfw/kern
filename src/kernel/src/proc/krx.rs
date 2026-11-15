@@ -298,23 +298,6 @@ impl KrxLaunchError {
     }
 }
 
-#[cfg(target_endian = "little")]
-#[inline]
-pub(super) unsafe fn copy_le_pod<T: Copy>(buf: &[u8]) -> Option<T> {
-    if buf.len() < core::mem::size_of::<T>() {
-        return None;
-    }
-    let mut val = core::mem::MaybeUninit::<T>::uninit();
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            buf.as_ptr(),
-            val.as_mut_ptr().cast::<u8>(),
-            core::mem::size_of::<T>(),
-        );
-        Some(val.assume_init())
-    }
-}
-
 /// KRX Preamble (24 bytes, little-endian, non-ASCII format identifier)
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -335,17 +318,23 @@ const _: () = assert!(core::mem::size_of::<KrxPreamble>() == 24);
 impl KrxPreamble {
     pub const SIZE: usize = 24;
 
-    /// Parse preamble from little-endian byte slice
+    /// Parse preamble directly into `out` from a little-endian byte slice.
     #[inline(never)]
-    pub fn parse(buf: &[u8]) -> Result<Self, ()> {
+    pub fn parse_into(buf: &[u8], out: &mut Self) -> Result<(), ()> {
+        if buf.len() < Self::SIZE {
+            return Err(());
+        }
         #[cfg(target_endian = "little")]
-        let p = unsafe { copy_le_pod::<Self>(buf) }.ok_or(())?;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                buf.as_ptr(),
+                (out as *mut Self).cast::<u8>(),
+                Self::SIZE,
+            );
+        }
         #[cfg(not(target_endian = "little"))]
-        let p = {
-            if buf.len() < Self::SIZE {
-                return Err(());
-            }
-            Self {
+        {
+            *out = Self {
                 ident: [buf[0], buf[1], buf[2], buf[3]],
                 app_type: buf[4],
                 format_version: buf[5],
@@ -355,12 +344,19 @@ impl KrxPreamble {
                 payload_crc32: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
                 header_crc32: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
                 link_base: u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
-            }
-        };
-        if p.ident != KRX_IDENT || p.format_version == 0 || p.format_version > 5 {
+            };
+        }
+        if out.ident != KRX_IDENT || out.format_version == 0 || out.format_version > 5 {
             return Err(());
         }
-        Ok(p)
+        Ok(())
+    }
+
+    /// Parse preamble from little-endian byte slice
+    pub fn parse(buf: &[u8]) -> Result<Self, ()> {
+        let mut p = core::mem::MaybeUninit::<Self>::uninit();
+        Self::parse_into(buf, unsafe { &mut *p.as_mut_ptr() })?;
+        Ok(unsafe { p.assume_init() })
     }
 
     #[inline(always)]
@@ -773,7 +769,10 @@ impl KrxPreamble {
         buf: &'a [u8],
         out: &'b mut core::mem::MaybeUninit<KrxSummary<'a>>,
     ) -> Result<&'b mut KrxSummary<'a>, KrxLaunchError> {
-        let preamble = Self::parse(buf).map_err(|_| KrxLaunchError::InvalidPreamble)?;
+        let ptr = out.as_mut_ptr();
+        unsafe { core::ptr::write_bytes(ptr, 0, 1) };
+        let preamble = unsafe { &mut *core::ptr::addr_of_mut!((*ptr).preamble) };
+        Self::parse_into(buf, preamble).map_err(|_| KrxLaunchError::InvalidPreamble)?;
         let h_len = preamble.header_len as usize;
         if h_len < Self::SIZE || h_len > 512 || (h_len & 3) != 0 {
             return Err(KrxLaunchError::InvalidPreamble);
@@ -787,13 +786,8 @@ impl KrxPreamble {
             return Err(KrxLaunchError::CrcMismatch);
         }
 
-        let ptr = out.as_mut_ptr();
-        unsafe {
-            core::ptr::write_bytes(ptr, 0, 1);
-            core::ptr::addr_of_mut!((*ptr).preamble).write(preamble);
-            core::ptr::addr_of_mut!((*ptr).exec_type).write(KrxExecType::App);
-        }
         let out = unsafe { &mut *ptr };
+        out.exec_type = KrxExecType::App;
 
         let mut rest = &hdr[Self::SIZE..];
         while rest.len() >= SectionHeader::SIZE {
