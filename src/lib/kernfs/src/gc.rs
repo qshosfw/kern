@@ -263,7 +263,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.program_page_buf(new_p, ino, page_idx, kind)?;
 
         if kind == TAG_KIND_META {
-            self.meta_pages[idx & (MAX_META_GROUPS - 1)] = new_p;
+            self.meta_pages[idx] = new_p;
             let _ = self.set_tag_state(phys, TAG_STATE_OBSOLETE);
             return Ok(());
         }
@@ -283,7 +283,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             obs[1] = old_l1;
             obs_n = 2;
         }
-        if self.cur_inode.ino == inode.ino && inode.ino != 0 {
+        if self.cur_inode.ino == inode.ino {
             self.cur_inode.inline_data = inode.inline_data;
             self.cur_inode.depth = inode.depth;
         }
@@ -510,22 +510,22 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let dst_t = trim_slashes(dst);
         if src_inode.is_dir()
             && !src_t.is_empty()
-            && (dst_t == src_t
-                || (dst_t.starts_with(src_t) && dst_t.as_bytes().get(src_t.len()) == Some(&b'/')))
+            && let Some(rest) = dst_t.strip_prefix(src_t)
+            && (rest.is_empty() || rest.as_bytes()[0] == b'/')
         {
             return Err(FsError::InvalidPath);
         }
-        if self.resolve_path(dst, true)? {
+        let dst_existed = self.resolve_path(dst, true)?;
+        src_inode.parent_ino = self.cur_inode.parent_ino;
+        src_inode.name = self.cur_inode.name;
+        src_inode.name_len = self.cur_inode.name_len;
+        if dst_existed {
             if self.cur_inode.is_dir() || src_inode.is_dir() {
                 return Err(FsError::InvalidPath);
             }
             self.remove(dst)?;
-            let _ = self.resolve_path(dst, true)?;
         }
 
-        src_inode.parent_ino = self.cur_inode.parent_ino;
-        src_inode.name = self.cur_inode.name;
-        src_inode.name_len = self.cur_inode.name_len;
         src_inode.generation = self.global_gen + 1;
         self.commit_inode(&src_inode, &[])?;
         self.hot_ino = 0;
@@ -635,11 +635,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             return Err(FsError::LowPower);
         }
         let had_sb = self.load_latest_superblock();
-        self.format_epoch = if had_sb {
-            self.format_epoch.wrapping_add(1).max(1)
-        } else {
-            self.format_epoch.max(1)
-        };
+        self.format_epoch = self.format_epoch.wrapping_add(had_sb as u32).max(1);
         self.super_seq = if had_sb {
             self.super_seq.wrapping_add(1).max(1)
         } else {
@@ -657,8 +653,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.cur_alloc_block = 0;
         self.cur_alloc_page = 1;
 
-        self.dev.erase_sector(0)?;
-        self.dev.erase_sector(D::BLOCK_SIZE)?;
+        for s in 0..SUPER_BLOCKS {
+            self.dev.erase_sector(s * D::BLOCK_SIZE)?;
+        }
         let mut sb = SuperblockV2 {
             fourcc: FOURCC_SUPER_V2,
             version: 2,
