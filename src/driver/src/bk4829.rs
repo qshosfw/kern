@@ -117,24 +117,25 @@ impl Default for RegisterCache {
 
 // ── BK4829 Driver ───────────────────────────────────────────────────────────
 
+#[repr(C)]
 pub struct Bk4829<'a, State = Disabled> {
-    pub(crate) cache: RegisterCache,
-    pub(crate) bus: &'a mut dyn kern_platform_traits::radio::RadioBus,
     pub(crate) tone_gain: u8,
     pub(crate) saved_tx_volume: u8,
     pub(crate) active_demod_af: AfType,
     pub(crate) rx_demod_active: bool,
-    pub(crate) calib: Option<&'a [u8; 512]>,
-    pub(crate) current_freq_hz: u32,
     pub(crate) squelch_level: u8,
     pub(crate) squelch_open: bool,
     pub(crate) subaudible_matched: bool,
     pub(crate) tail_burst_latched: bool,
     pub(crate) loopback_active: bool,
     pub(crate) baseline_xtal_trim: i16,
+    pub(crate) current_freq_hz: u32,
+    pub(crate) bus: &'a mut dyn kern_platform_traits::radio::RadioBus,
+    pub(crate) calib: Option<&'a [u8; 512]>,
     pub(crate) rx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) tx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) am_tracker: kernel::service::radio::AmLinearityTracker,
+    pub(crate) cache: RegisterCache,
     pub(crate) _state: PhantomData<State>,
 }
 

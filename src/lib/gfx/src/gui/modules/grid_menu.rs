@@ -30,15 +30,16 @@ impl GridItem for GridMenuItem {
     }
 }
 
+#[repr(C)]
 pub struct GridMenuModel<T: GridItem + 'static = GridMenuItem> {
-    pub items: &'static [T],
-    pub selected_idx: usize,
-    pub title: &'static str,
     pub nav_layout: u8,
     pub tick_counter: u8,
     pub show_numbers: bool,
     pub show_labels: bool,
     pub is_pressed: bool,
+    pub selected_idx: usize,
+    pub items: &'static [T],
+    pub title: &'static str,
 }
 
 impl<T: GridItem + 'static> GridMenuModel<T> {
