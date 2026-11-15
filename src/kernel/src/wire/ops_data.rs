@@ -23,12 +23,20 @@ pub const OP_PACKET_RECEIVE: u8 = 0x90;
 pub const TRANSFER_MODE_READ: u8 = 0;
 pub const TRANSFER_MODE_WRITE: u8 = 1;
 
-use utils::bytes::ByteReader;
-
 #[inline(never)]
-fn read_len_ascii<'a>(r: &mut ByteReader<'a>) -> Option<&'a str> {
-    let len = r.read_u8()? as usize;
-    utils::format::ascii_str(r.read_bytes(len)?)
+fn read_len_ascii(s: &[u8]) -> Option<&str> {
+    let (&len, rest) = s.split_first()?;
+    utils::format::ascii_str(rest.get(..len as usize)?)
+}
+
+#[inline(always)]
+fn le16(b: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([b[off], b[off + 1]])
+}
+
+#[inline(always)]
+fn le32(b: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 
 /// TRANSFER_OPEN Request Parser
@@ -41,12 +49,14 @@ pub struct TransferOpenRequest<'a> {
 
 impl<'a> TransferOpenRequest<'a> {
     pub fn parse(payload: &'a [u8]) -> Option<Self> {
-        let mut r = ByteReader::new(payload);
+        if payload.len() < 8 {
+            return None;
+        }
         Some(Self {
-            mode: r.read_u8()?,
-            total_size: r.read_u32_le()?,
-            chunk_size: r.read_u16_le()?,
-            path: read_len_ascii(&mut r)?,
+            mode: payload[0],
+            total_size: le32(payload, 1),
+            chunk_size: le16(payload, 5),
+            path: read_len_ascii(&payload[7..])?,
         })
     }
 }
@@ -61,12 +71,14 @@ pub struct TransferChunkRequest<'a> {
 
 impl<'a> TransferChunkRequest<'a> {
     pub fn parse(payload: &'a [u8]) -> Option<Self> {
-        let mut r = ByteReader::new(payload);
+        if payload.len() < 8 {
+            return None;
+        }
         Some(Self {
-            transfer_id: r.read_u16_le()?,
-            offset: r.read_u32_le()?,
-            length: r.read_u16_le()?,
-            data: r.remaining_slice(),
+            transfer_id: le16(payload, 0),
+            offset: le32(payload, 2),
+            length: le16(payload, 6),
+            data: &payload[8..],
         })
     }
 }
@@ -79,10 +91,12 @@ pub struct TransferCloseRequest {
 
 impl TransferCloseRequest {
     pub fn parse(payload: &[u8]) -> Option<Self> {
-        let mut r = ByteReader::new(payload);
+        if payload.len() < 6 {
+            return None;
+        }
         Some(Self {
-            transfer_id: r.read_u16_le()?,
-            expected_crc32: r.read_u32_le()?,
+            transfer_id: le16(payload, 0),
+            expected_crc32: le32(payload, 2),
         })
     }
 }
@@ -95,10 +109,12 @@ pub struct TransferAbortRequest {
 
 impl TransferAbortRequest {
     pub fn parse(payload: &[u8]) -> Option<Self> {
-        let mut r = ByteReader::new(payload);
+        if payload.len() < 3 {
+            return None;
+        }
         Some(Self {
-            transfer_id: r.read_u16_le()?,
-            reason: r.read_u8()?,
+            transfer_id: le16(payload, 0),
+            reason: payload[2],
         })
     }
 }
@@ -111,7 +127,7 @@ pub struct TransferStatRequest<'a> {
 impl<'a> TransferStatRequest<'a> {
     pub fn parse(payload: &'a [u8]) -> Option<Self> {
         Some(Self {
-            path: read_len_ascii(&mut ByteReader::new(payload))?,
+            path: read_len_ascii(payload)?,
         })
     }
 }
@@ -124,10 +140,12 @@ pub struct TransferListRequest<'a> {
 
 impl<'a> TransferListRequest<'a> {
     pub fn parse(payload: &'a [u8]) -> Option<Self> {
-        let mut r = ByteReader::new(payload);
+        if payload.len() < 3 {
+            return None;
+        }
         Some(Self {
-            cursor: r.read_u16_le()?,
-            path: read_len_ascii(&mut r)?,
+            cursor: le16(payload, 0),
+            path: read_len_ascii(&payload[2..])?,
         })
     }
 }
@@ -140,7 +158,7 @@ pub struct TransferRemoveRequest<'a> {
 impl<'a> TransferRemoveRequest<'a> {
     pub fn parse(payload: &'a [u8]) -> Option<Self> {
         Some(Self {
-            path: read_len_ascii(&mut ByteReader::new(payload))?,
+            path: read_len_ascii(payload)?,
         })
     }
 }
