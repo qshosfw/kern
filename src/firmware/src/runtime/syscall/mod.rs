@@ -216,17 +216,15 @@ pub fn bind_cap_imports(
         return true;
     }
     let (_, r3) = utils::math::div3_u16((len as u16) >> 1);
-    let is_div_6 = (len & 1) == 0 && r3 == 0;
-    let is_div_8 = (len & 7) == 0;
-    let stride = if is_div_8 && !is_div_6 { 8 } else { 6 };
-    let mut offset = 0;
+    let stride = if (len & 7) == 0 && r3 != 0 { 8 } else { 6 };
+    let mut offset = 0usize;
     let mut slot_i = 0u16;
     while offset + stride <= len {
+        // SAFETY: loop guard ensures `offset + stride <= len` (stride is 6 or 8).
         let s = unsafe { cap_section_body.get_unchecked(offset..offset + stride) };
         let interface_id = u16::from_le_bytes([s[0], s[1]]);
-        let min_abi = u16::from_le_bytes([s[2], s[3]]);
-        let flags = u16::from_le_bytes([s[4], s[5]]);
-        let dst_slot = if stride >= 8 {
+        let flags = s[4];
+        let dst_slot = if stride == 8 {
             u16::from_le_bytes([s[6], s[7]])
         } else {
             slot_i
@@ -234,9 +232,9 @@ pub fn bind_cap_imports(
         let Some(dst) = got_words.get_mut(dst_slot as usize) else {
             return false;
         };
-        if let Some(vtable_addr) = resolve_capability_vtable(interface_id, min_abi, granted_caps) {
+        if let Some(vtable_addr) = resolve_capability_vtable(interface_id, 0, granted_caps) {
             *dst = vtable_addr as u32;
-        } else if (flags & CapBinding::FLAG_MANDATORY) != 0 {
+        } else if (flags as u16 & CapBinding::FLAG_MANDATORY) != 0 {
             return false;
         } else {
             *dst = 0;

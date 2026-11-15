@@ -896,32 +896,23 @@ pub fn active_usb_write(data: &[u8]) -> usize {
     }
 }
 
-pub fn is_active_usb_connected() -> bool {
-    unsafe {
-        if !ACTIVE_USB_DRIVER.is_null() {
-            (*ACTIVE_USB_DRIVER).is_connected()
-        } else {
-            false
-        }
+fn active_usb_driver() -> Option<&'static UsbDriver> {
+    let ptr = unsafe { ACTIVE_USB_DRIVER };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { &*ptr })
     }
+}
+
+pub fn is_active_usb_connected() -> bool {
+    active_usb_driver().is_some_and(|d| d.is_connected())
 }
 
 pub fn is_active_usb_configured() -> bool {
-    unsafe {
-        if !ACTIVE_USB_DRIVER.is_null() {
-            (*ACTIVE_USB_DRIVER).configured
-        } else {
-            false
-        }
-    }
+    active_usb_driver().is_some_and(|d| d.configured)
 }
 
 pub fn is_active_usb_dtr() -> bool {
-    unsafe {
-        if !ACTIVE_USB_DRIVER.is_null() {
-            (*ACTIVE_USB_DRIVER).is_dtr()
-        } else {
-            false
-        }
-    }
+    active_usb_driver().is_some_and(|d| d.is_dtr())
 }

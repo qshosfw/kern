@@ -73,13 +73,17 @@ impl KeypadLockManager {
     }
 
     #[inline(always)]
-    pub fn is_animating(&self) -> bool {
+    fn is_hold_active(&self) -> bool {
         let is_sleep_hold = self.held_code == Some(KeyCode::Exit);
-        (self.held_code.is_some()
+        self.held_code.is_some()
             && self.held_confirmed
             && (!self.is_long_press_triggered || is_sleep_hold)
-            && self.hold_elapsed_ms >= self.hold_start_threshold_ms)
-            || self.toast_remaining_ms > 0
+            && self.hold_elapsed_ms >= self.hold_start_threshold_ms
+    }
+
+    #[inline(always)]
+    pub fn is_animating(&self) -> bool {
+        self.is_hold_active() || self.toast_remaining_ms > 0
     }
 
     pub fn toggle_lock(&mut self) {
@@ -117,12 +121,13 @@ impl KeypadLockManager {
     }
 
     #[inline(never)]
-    fn begin_hold(&mut self, code: KeyCode, start_ms: u16, target_ms: u16) {
+    fn begin_hold(&mut self, code: KeyCode, start_ms: u16, profile: u8) {
+        const PROFILES: [(u16, u16); 4] = [(1000, 6553), (500, 13107), (850, 7710), (650, 10082)];
+        let (vis_dur, slope_q16) = PROFILES[(profile & 3) as usize];
         self.start_hold_tracking(code);
         self.hold_start_threshold_ms = start_ms;
-        self.hold_target_ms = target_ms;
-        let vis_target = target_ms.saturating_sub(start_ms).max(100) as u32;
-        self.progress_slope_q16 = ((100u32 << 16) / vis_target) as u16;
+        self.hold_target_ms = start_ms + vis_dur;
+        self.progress_slope_q16 = slope_q16;
     }
 
     /// Process system events, hold-to-lock/unlock gestures, sticky F-key timeouts, and auto-lock.
@@ -228,12 +233,7 @@ impl KeypadLockManager {
                 match state {
                     KeyState::Pressed => {
                         let start_threshold = base_hold_delay_ms.saturating_add(80).clamp(450, 550);
-                        let target = if can_sleep {
-                            (start_threshold + 1000).clamp(1400, 1600)
-                        } else {
-                            (start_threshold + 500).clamp(900, 1100)
-                        };
-                        self.begin_hold(KeyCode::Exit, start_threshold, target);
+                        self.begin_hold(KeyCode::Exit, start_threshold, !can_sleep as u8);
                         // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
                     }
                     KeyState::Held => {
@@ -262,12 +262,7 @@ impl KeypadLockManager {
                         // Normal key taps (< threshold) toggle functions with strictly ZERO UI popups or progress bars.
                         let start_threshold =
                             base_hold_delay_ms.saturating_add(150).clamp(550, 750);
-                        let target = if self.is_locked {
-                            (start_threshold + 850).clamp(1400, 2000)
-                        } else {
-                            (start_threshold + 650).clamp(1200, 1600)
-                        };
-                        self.begin_hold(*code, start_threshold, target);
+                        self.begin_hold(*code, start_threshold, 2 + (!self.is_locked as u8));
 
                         if !self.is_locked {
                             self.toast = LockToast::None;
@@ -331,10 +326,7 @@ impl KeypadLockManager {
     /// authentic inverted key badges for '#' and 'F', reusing standard system modal widgets.
     pub fn render_overlay(&self, canvas: &mut Canvas) {
         let is_sleep_hold = self.held_code == Some(KeyCode::Exit);
-        let show_hold = self.held_code.is_some()
-            && self.held_confirmed
-            && (!self.is_long_press_triggered || is_sleep_hold)
-            && self.hold_elapsed_ms >= self.hold_start_threshold_ms;
+        let show_hold = self.is_hold_active();
 
         if !show_hold && self.toast == LockToast::None {
             return;

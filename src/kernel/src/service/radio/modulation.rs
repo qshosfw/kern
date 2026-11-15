@@ -304,13 +304,21 @@ pub enum UpconverterShift {
 
 /// DSP channel filter bandwidth selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Bandwidth {
-    Wide25k,
-    Narrow12k5,
-    Narrow6k25,
+    Wide25k = 0,
+    Narrow12k5 = 1,
+    Narrow6k25 = 2,
 }
 
 impl Bandwidth {
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Wide25k,
+            2 => Self::Narrow6k25,
+            _ => Self::Narrow12k5,
+        }
+    }
     pub const fn in_hz(self) -> u32 {
         match self {
             Self::Wide25k => 25_000,

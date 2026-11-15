@@ -202,9 +202,11 @@ fn draw_vfo(
     }
 
     // 3. Authentic Big Frequency (x=30)
-    let mut fbuf = [0u8; 10];
+    let mut fbuf_uninit = core::mem::MaybeUninit::<[u8; 10]>::uninit();
+    // SAFETY: `format_freq_padded` writes all 10 bytes of `fbuf` before any read.
+    let fbuf = unsafe { &mut *fbuf_uninit.as_mut_ptr() };
     let (freq_10hz, _) = utils::math::div10_u32(ch.effective_rx_freq().raw());
-    let fbytes = gfx::text::format_u32(freq_10hz, &mut fbuf).as_bytes();
+    let fbytes = gfx::text::format_u32(freq_10hz, fbuf).as_bytes();
     let flen = fbytes.len();
     let mut cur_x = 30i16;
 
@@ -376,8 +378,10 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
         }
 
         // Display Uptime compactly next to S-Meter
-        let mut num_buf = [b' '; 5];
-        let uptime_str = gfx::text::format_u32(ctx.power.uptime_secs(), &mut num_buf);
+        let mut num_buf_uninit = core::mem::MaybeUninit::<[u8; 5]>::uninit();
+        // SAFETY: `format_u32` writes its output slice before returning `uptime_str`.
+        let num_buf = unsafe { &mut *num_buf_uninit.as_mut_ptr() };
+        let uptime_str = gfx::text::format_u32(ctx.power.uptime_secs(), num_buf);
         draw_tom_fill(canvas, 102, 57, "U:");
         draw_tom_fill(canvas, 114, 57, uptime_str);
     }

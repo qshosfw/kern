@@ -302,20 +302,27 @@ impl<const N: usize> IpcChannel<N> {
         }
     }
 
-    /// Enqueue a message into the IPC channel.
+    /// Enqueue a message into the IPC channel, overriding `sender_pid`.
     /// If seq is 0, auto-assigns the next monotonic sequence number.
-    pub fn send(&mut self, msg: KrxIpcMessage) -> bool {
+    pub fn send_from(&mut self, msg: &KrxIpcMessage, sender_pid: u8) -> bool {
         if self.len >= N {
             return false;
         }
         let slot = &mut self.messages[self.len];
-        *slot = msg;
+        *slot = *msg;
+        slot.sender_pid = sender_pid;
         if slot.seq == 0 {
             self.next_seq = self.next_seq.wrapping_add(1).max(1);
             slot.seq = self.next_seq;
         }
         self.len += 1;
         true
+    }
+
+    /// Enqueue a message into the IPC channel.
+    /// If seq is 0, auto-assigns the next monotonic sequence number.
+    pub fn send(&mut self, msg: KrxIpcMessage) -> bool {
+        self.send_from(&msg, msg.sender_pid)
     }
 
     /// Poll for the oldest pending message targeted to `receiver_pid`.

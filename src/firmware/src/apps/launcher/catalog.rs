@@ -151,11 +151,7 @@ impl PackageCatalog {
             let mut j = i;
             unsafe {
                 while j > 0 && !(*base.add(j)).is_valid && (*base.add(j - 1)).is_valid {
-                    let a = base.add(j - 1) as *mut u8;
-                    let b = base.add(j) as *mut u8;
-                    for k in 0..core::mem::size_of::<PackageCatalogEntry>() {
-                        core::ptr::swap(a.add(k), b.add(k));
-                    }
+                    core::ptr::swap(base.add(j - 1), base.add(j));
                     j -= 1;
                 }
             }

@@ -640,7 +640,6 @@ fn render_menu_row(
     let mut arrows = 0u8;
     let mut max_title_x = 110i16;
 
-    let mut right_icon: Option<(i16, i16, &'static [u8; 8])> = None;
     match &item.item_type {
         MenuItemType::Info(s) => val_str = s,
         MenuItemType::Value(v) => val_str = v.as_str(),
@@ -661,24 +660,19 @@ fn render_menu_row(
             val_str = text::format_range_val(*val as i32, *min as i32, unit, buf);
         }
         MenuItemType::Toggle(on) => {
-            right_icon = Some((
-                111,
-                row_y + 2,
-                if *on {
-                    icons::CHECKBOX_ON
-                } else {
-                    icons::CHECKBOX_OFF
-                },
-            ));
+            let bmp = if *on {
+                icons::CHECKBOX_ON
+            } else {
+                icons::CHECKBOX_OFF
+            };
+            icons::draw_icon_8(canvas, 111, row_y + 2, bmp, tc);
+            max_title_x = 105;
         }
         MenuItemType::Submenu => {
-            right_icon = Some((114, row_y + 3, icons::ARROW_RIGHT));
+            icons::draw_icon_8(canvas, 114, row_y + 3, icons::ARROW_RIGHT, tc);
+            max_title_x = 105;
         }
         _ => {}
-    }
-    if let Some((rx, ry, bmp)) = right_icon {
-        icons::draw_icon_8(canvas, rx, ry, bmp, tc);
-        max_title_x = 105;
     }
 
     let sw = if val_str.is_empty() {
@@ -828,13 +822,15 @@ impl MenuView {
             let is_hovered = idx == sheet.hover;
             let is_selected = idx == sheet.selected;
 
-            let mut tc = Color::Fill;
-            if is_hovered {
-                let ry = row_y as u8;
-                canvas.fill_rect(fill_x, ry, fill_w, 11, Color::Fill);
-                canvas.clear_corners(fill_x, ry, fill_w, 11);
-                tc = Color::Clear;
-            }
+            let tc = if is_hovered {
+                crate::widgets::draw_selection_capsule(
+                    canvas,
+                    [fill_x, row_y as u8, fill_w, 11],
+                    crate::widgets::CAPSULE_FILL | crate::widgets::CAPSULE_ROUND,
+                )
+            } else {
+                Color::Fill
+            };
 
             let sprite = if sheet.show_radio {
                 Some(if is_selected {

@@ -433,11 +433,14 @@ pub fn draw_status_bar_layout(
         draw_signal(canvas, left_x, 0, lvl, Color::Fill);
         left_x += (SIGNAL_WIDTH as i16) + 2;
     }
-    for s in [config.title, config.left_badge].into_iter().flatten() {
-        if !s.is_empty() {
-            left_x =
-                crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit)
-                    + 2;
+    let titles = [config.title, config.left_badge];
+    for opt in titles {
+        if let Some(s) = opt {
+            if !s.is_empty() {
+                left_x =
+                    crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit)
+                        + 2;
+            }
         }
     }
     for glyph in config.left_icons {

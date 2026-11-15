@@ -29,18 +29,21 @@ impl<'a> Py25q16FlashDriver<'a> {
         self.release_power_down();
     }
 
+    #[inline(never)]
+    fn send_cmd(&mut self, cmd: u8) {
+        self.cs_assert();
+        self.spi.write_byte(cmd);
+        self.cs_release();
+    }
+
     /// Enter Deep Power-Down (`0xB9`, <1 uA standby until `release_power_down()`).
     pub fn deep_power_down(&mut self) {
-        self.cs_assert();
-        self.spi.write_byte(0xB9);
-        self.cs_release();
+        self.send_cmd(0xB9);
     }
 
     /// Release from Deep Power-Down (`0xAB` + >=30 us recovery window).
     pub fn release_power_down(&mut self) {
-        self.cs_assert();
-        self.spi.write_byte(0xAB);
-        self.cs_release();
+        self.send_cmd(0xAB);
         #[cfg(target_arch = "arm")]
         py32_hal::delay::delay_us(30);
     }
@@ -82,9 +85,7 @@ impl<'a> Py25q16FlashDriver<'a> {
     }
 
     pub fn write_enable(&mut self) {
-        self.cs_assert();
-        self.spi.write_byte(0x06);
-        self.cs_release();
+        self.send_cmd(0x06);
     }
 
     fn write_address(&mut self, addr: u32) {

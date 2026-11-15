@@ -96,11 +96,13 @@ pub unsafe extern "C" fn api_ipc_send_msg(msg: *const KrxIpcMessage) -> u8 {
     if msg.is_null() {
         return 1;
     }
-    let mut m = unsafe { *msg };
-    if m.sender_pid == 0 {
-        m.sender_pid = active_caller_pid();
-    }
-    if ipc_channel_mut().send(m) {
+    let m = unsafe { &*msg };
+    let sender_pid = if m.sender_pid == 0 {
+        active_caller_pid()
+    } else {
+        m.sender_pid
+    };
+    if ipc_channel_mut().send_from(m, sender_pid) {
         if let Some(pcb) =
             crate::orchestrator::proc_table_mut().find_mut(kernel::proc::Pid(m.target_pid))
         {

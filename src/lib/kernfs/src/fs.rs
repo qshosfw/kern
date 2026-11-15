@@ -540,19 +540,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             let in_page = pos & 0xFF;
             let take = (to_read - copied).min(PAGE_SIZE - in_page);
             let phys = self.resolve_data_page(lpage)?;
-            if phys != 0 {
-                self.load_page(phys)?;
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        self.page_buf.as_ptr().add(in_page),
-                        buf.as_mut_ptr().add(copied),
-                        take,
-                    );
-                }
-            } else {
-                unsafe {
-                    core::ptr::write_bytes(buf.as_mut_ptr().add(copied), 0, take);
-                }
+            self.load_page_or_zero(phys)?;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self.page_buf.as_ptr().add(in_page),
+                    buf.as_mut_ptr().add(copied),
+                    take,
+                );
             }
             copied += take;
         }

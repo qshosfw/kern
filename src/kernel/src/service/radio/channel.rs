@@ -110,13 +110,22 @@ impl StepSetting {
 
 /// RF power stage amplifier level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum RfPowerLevel {
-    Low,    // ~0.5 W
-    Medium, // ~2.0 W
-    High,   // ~5.0 W
+    Low = 0,    // ~0.5 W
+    Medium = 1, // ~2.0 W
+    High = 2,   // ~5.0 W
 }
 
 impl RfPowerLevel {
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Low,
+            1 => Self::Medium,
+            _ => Self::High,
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Low => "L",

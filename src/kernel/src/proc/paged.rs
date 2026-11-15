@@ -39,24 +39,17 @@ impl BlockEntry {
         }
     }
 
-    /// Parse an 8-byte `BlockEntry` using zero-copy on little-endian targets.
+    /// Parse an 8-byte `BlockEntry` from little-endian bytes.
     pub fn parse(buf: &[u8]) -> Option<Self> {
-        #[cfg(target_endian = "little")]
-        {
-            unsafe { super::krx::copy_le_pod(buf) }
+        if buf.len() < Self::SIZE {
+            return None;
         }
-        #[cfg(not(target_endian = "little"))]
-        {
-            if buf.len() < Self::SIZE {
-                return None;
-            }
-            Some(Self {
-                block_id: buf[0],
-                flags: buf[1],
-                size: u16::from_le_bytes([buf[2], buf[3]]),
-                flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
-            })
-        }
+        Some(Self {
+            block_id: buf[0],
+            flags: buf[1],
+            size: u16::from_le_bytes([buf[2], buf[3]]),
+            flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+        })
     }
 
     #[inline(always)]
