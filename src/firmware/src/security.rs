@@ -156,19 +156,14 @@ pub fn format_storage_alert_message(
     match status {
         StorageSecurityStatus::LockedByPasscode { encrypted_files } => {
             if encrypted_files > 0 {
-                let _ = out.push_str("A device passcode protects ");
                 let _ = out.push_str(gfx::text::format_u32(encrypted_files as u32, &mut num_buf));
                 let _ = out.push_str(" encrypted file");
                 if encrypted_files != 1 {
                     let _ = out.push_str("s");
                 }
-                let _ = out.push_str(
-                    ", and Passcode unlock is disabled in this firmware. Private data remains safely sealed.",
-                );
+                let _ = out.push_str(", passcode unlock disabled.");
             } else {
-                let _ = out.push_str(
-                    "A passcode is set on this radio, but Passcode support is not in this firmware. Flash a Passcode build to unlock or manage it.",
-                );
+                let _ = out.push_str("Passcode set; Flash a Passcode build to unlock.");
             }
             Some("Storage Protected")
         }
@@ -179,9 +174,7 @@ pub fn format_storage_alert_message(
             } else {
                 " files are"
             });
-            let _ = out.push_str(
-                " encrypted on flash, but Secure Storage is disabled in this firmware build. Encrypted items remain unreadable.",
-            );
+            let _ = out.push_str(" encrypted; Secure Storage disabled.");
             Some("Encrypted Storage")
         }
         _ => None,

@@ -86,16 +86,17 @@ pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
 /// Execute the storage provisioning pass for dynamic application packages and configuration.
 #[inline(never)]
 pub fn provision_packages(filesystem: &mut SystemStorage) {
-    for d in [
-        "/apps",
-        "/pref",
-        "/sys",
-        "/user",
-        "/user/splash",
-        "/user/rogers",
-        "/user/jingles",
-    ] {
-        let _ = filesystem.create_dir(d);
+    const PROV_DIRS: [&str; 7] = [
+        "/apps/",
+        "/pref/",
+        "/sys/",
+        "/user/",
+        "/user/splash/",
+        "/user/rogers/",
+        "/user/jingles/",
+    ];
+    for d in PROV_DIRS {
+        let _ = filesystem.create_dir(&d[..d.len() - 1]);
     }
 
     ensure_core_packages(filesystem);
@@ -132,7 +133,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         }
 
         let mut src_arr = [core::mem::MaybeUninit::<u8>::uninit(); 48];
-        let src_path = if raw_entry.starts_with("/") {
+        let src_path = if raw_entry.as_bytes()[0] == b'/' {
             raw_entry
         } else {
             let Some(s) = join_path(&mut src_arr, "/prov/", fname) else {
@@ -159,16 +160,31 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         } else {
             b""
         };
-        let prefix = match ext {
-            b"app" | b"svc" | b"dmn" | b"krx" => "/apps/",
-            b"cfg" => "/pref/",
-            b"dat" | b"sig" => "/sys/",
-            b"rle" | b"img" => "/user/splash/",
-            b"rgr" => "/user/rogers/",
-            b"ton" if b.starts_with(b"jingle") => "/user/jingles/",
-            b"ton" => "/user/rogers/",
-            _ => "/user/",
+        const EXT_MAP: [([u8; 3], u8); 10] = [
+            (*b"app", 0),
+            (*b"svc", 0),
+            (*b"dmn", 0),
+            (*b"krx", 0),
+            (*b"cfg", 1),
+            (*b"dat", 2),
+            (*b"sig", 2),
+            (*b"rle", 4),
+            (*b"img", 4),
+            (*b"rgr", 5),
+        ];
+        let dir_idx = if ext == b"ton" {
+            if b.starts_with(b"jingle") { 6 } else { 5 }
+        } else {
+            let mut idx = 3usize;
+            for (pat, target) in &EXT_MAP {
+                if ext == pat {
+                    idx = *target as usize;
+                    break;
+                }
+            }
+            idx
         };
+        let prefix = PROV_DIRS[dir_idx];
 
         let mut dst_arr = [core::mem::MaybeUninit::<u8>::uninit(); 48];
         if let Some(dst_path) = join_path(&mut dst_arr, prefix, fname) {
