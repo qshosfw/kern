@@ -95,7 +95,7 @@ pub enum SheetOptions {
 }
 
 impl SheetOptions {
-    #[inline(always)]
+    #[inline(never)]
     pub fn len(&self) -> usize {
         match self {
             SheetOptions::Static(s) => s.len(),
@@ -117,7 +117,7 @@ impl SheetOptions {
         self.len() == 0
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn get(&self, idx: usize) -> &str {
         match self {
             SheetOptions::Static(s) => {
