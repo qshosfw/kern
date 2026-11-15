@@ -69,18 +69,19 @@ impl<S: SerialPort> WireDriver<S> {
 
             if b == crypto::cobs::COBS_DELIMITER {
                 if self.in_frame && self.rx_len > 0 {
-                    let decoded = if let Ok(raw_len) =
-                        Cobs::decode_inplace(&mut self.rx_buf, self.rx_len)
-                        && let Ok((header, _)) =
-                            self.session.validate_record(&self.rx_buf[..raw_len])
-                    {
-                        Some((header, raw_len))
-                    } else {
-                        None
-                    };
+                    let rx_len = self.rx_len;
                     self.rx_len = 0;
                     self.in_frame = false;
-                    if let Some((header, raw_len)) = decoded {
+                    let mut hdr_uninit = ::core::mem::MaybeUninit::<WireHeader>::uninit();
+                    if let Ok(raw_len) = Cobs::decode_inplace(&mut self.rx_buf, rx_len)
+                        && self
+                            .session
+                            .validate_record(&self.rx_buf[..raw_len], unsafe {
+                                &mut *hdr_uninit.as_mut_ptr()
+                            })
+                            == WireStatus::Ok
+                    {
+                        let header = unsafe { hdr_uninit.assume_init() };
                         if header.service == SERVICE_CORE {
                             self.handle_core_operation(&header, raw_len, uptime_ms);
                         } else {

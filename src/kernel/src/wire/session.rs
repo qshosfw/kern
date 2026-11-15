@@ -53,48 +53,37 @@ impl WireSession {
     }
 
     #[inline(never)]
-    pub fn validate_record<'a>(
-        &mut self,
-        raw_record: &'a [u8],
-    ) -> Result<(WireHeader, &'a [u8]), WireStatus> {
+    pub fn validate_record(&mut self, raw_record: &[u8], out: &mut WireHeader) -> WireStatus {
         if raw_record.len() < MIN_RECORD_LEN {
-            return Err(WireStatus::BadLength);
+            return WireStatus::BadLength;
         }
 
         let ident = raw_record[0];
         if ident != WIRE_SYNC_ID {
-            return Err(WireStatus::Unsupported);
+            return WireStatus::Unsupported;
         }
 
         let major = raw_record[1];
         if major != WIRE_MAJOR {
-            return Err(WireStatus::BadVersion);
+            return WireStatus::BadVersion;
         }
 
         let flags = raw_record[2];
-        if (flags & 0xFC) != 0 || ((flags & FLAG_RESPONSE) != 0 && (flags & FLAG_EVENT) != 0) {
-            return Err(WireStatus::BadFlags);
+        if flags > 2 {
+            return WireStatus::BadFlags;
         }
 
         let service = raw_record[3];
         let opcode = raw_record[4];
-        let session_id =
-            u32::from_le_bytes([raw_record[5], raw_record[6], raw_record[7], raw_record[8]]);
-        let sequence = u32::from_le_bytes([
-            raw_record[9],
-            raw_record[10],
-            raw_record[11],
-            raw_record[12],
-        ]);
         let payload_len = u16::from_le_bytes([raw_record[13], raw_record[14]]);
 
         let expected_total_len = HEADER_LEN + payload_len as usize + CRC_LEN;
         if raw_record.len() != expected_total_len {
-            return Err(WireStatus::BadLength);
+            return WireStatus::BadLength;
         }
 
         if payload_len > self.negotiated_max_payload {
-            return Err(WireStatus::BadRange);
+            return WireStatus::BadRange;
         }
 
         // Verify CRC-16/CCITT-FALSE
@@ -105,8 +94,17 @@ impl WireSession {
 
         if expected_crc != wire_crc {
             self.bad_crc_count = self.bad_crc_count.saturating_add(1);
-            return Err(WireStatus::Failed);
+            return WireStatus::Failed;
         }
+
+        let session_id =
+            u32::from_le_bytes([raw_record[5], raw_record[6], raw_record[7], raw_record[8]]);
+        let sequence = u32::from_le_bytes([
+            raw_record[9],
+            raw_record[10],
+            raw_record[11],
+            raw_record[12],
+        ]);
 
         // Validate session correlation
         if service == SERVICE_CORE {
@@ -119,20 +117,20 @@ impl WireSession {
                 // Core discovery, ping, status, and time sync operations are permitted
                 // before full session establishment or with session_id=0
             } else {
-                return Err(WireStatus::BadSession);
+                return WireStatus::BadSession;
             }
         } else {
             if self.active_session_id == 0 || session_id != self.active_session_id {
-                return Err(WireStatus::BadSession);
+                return WireStatus::BadSession;
             }
 
             if sequence == self.last_sequence && self.last_sequence != 0 {
                 if expected_crc != self.last_crc {
-                    return Err(WireStatus::DuplicateConflict);
+                    return WireStatus::DuplicateConflict;
                 }
                 self.duplicate_count = self.duplicate_count.saturating_add(1);
             } else if sequence != self.expected_sequence {
-                return Err(WireStatus::StaleSequence);
+                return WireStatus::StaleSequence;
             }
 
             self.last_sequence = sequence;
@@ -143,7 +141,7 @@ impl WireSession {
         }
 
         self.valid_records_count = self.valid_records_count.saturating_add(1);
-        let header = WireHeader {
+        *out = WireHeader {
             ident,
             major,
             flags,
@@ -153,8 +151,7 @@ impl WireSession {
             sequence,
             payload_len,
         };
-        let payload = &raw_record[HEADER_LEN..covered_bytes];
-        Ok((header, payload))
+        WireStatus::Ok
     }
 
     #[inline(never)]
