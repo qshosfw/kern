@@ -36,17 +36,17 @@ pub(crate) struct NativeExecSlot {
     pub(crate) current_block: u8,
     pub(crate) current_slot: u8,
     pub(crate) status_bar_has_custom: bool,
-    pub(crate) status_bar_left_count: usize,
-    pub(crate) status_bar_center_count: usize,
-    pub(crate) app_name: heapless::String<16>,
-    pub(crate) pkg_path: heapless::String<32>,
-    pub(crate) mem_layout: MemoryMapLayout<4>,
+    pub(crate) status_bar_left_count: u8,
+    pub(crate) status_bar_center_count: u8,
     pub(crate) cache: FixedWindowCache<16, 4>,
+    pub(crate) mem_layout: MemoryMapLayout<4>,
     pub(crate) shadow_stack: ShadowReturnStack<8>,
     pub(crate) leaf_mgr: StructuredLeafManager<16>,
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
     pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
+    pub(crate) app_name: heapless::String<16>,
+    pub(crate) pkg_path: heapless::String<32>,
 }
 
 pub fn init_native_slot() {
@@ -138,14 +138,15 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
         return 0;
     };
 
+    // Bounds check func_offset against declared block size
+    if func_offset >= block_entry.size {
+        return 0;
+    }
+
     let slot_byte_off = slot.cache.slot_byte_offset(slot_idx);
     let slot_vma = (arena_base_ptr() as usize) + slot_byte_off;
 
     if !is_hit {
-        // Bounds check func_offset against declared block size
-        if func_offset >= block_entry.size {
-            return 0;
-        }
         // Stream block from SPI Flash via active context storage
         let read_len = (block_entry.size as usize).min(slot.cache.page_size as usize);
         if slot_byte_off + read_len > PAGED_CACHE_MAX_BYTES {
@@ -160,8 +161,6 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
         if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(active_id) {
             pcb.ledger.record_page_fault();
         }
-    } else if func_offset >= block_entry.size {
-        return 0;
     }
 
     slot.current_block = block_id;
@@ -720,8 +719,8 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
         }
         let left_badge = c_str_to_str(&sb.badge);
         let center_text = c_str_to_str(&sb.center);
-        let left_icons = &slot.status_bar_left_icons[..slot.status_bar_left_count];
-        let center_icons = &slot.status_bar_center_icons[..slot.status_bar_center_count];
+        let left_icons = &slot.status_bar_left_icons[..slot.status_bar_left_count as usize];
+        let center_icons = &slot.status_bar_center_icons[..slot.status_bar_center_count as usize];
 
         *status_bar = StatusBarConfig {
             visible,
@@ -758,7 +757,7 @@ fn decode_icon_list(
     icons: &[u8],
     count: u8,
     out: &mut [kernel::canvas::StatusGlyph; 4],
-) -> usize {
+) -> u8 {
     let mut n = 0;
     let limit = (count as usize).min(4);
     for &id in &icons[..limit] {
@@ -767,7 +766,7 @@ fn decode_icon_list(
             n += 1;
         }
     }
-    n
+    n as u8
 }
 
 pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {

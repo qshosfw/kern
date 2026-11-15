@@ -635,7 +635,7 @@ fn render_menu_row(
         3
     };
 
-    let mut buf = [0u8; 16];
+    let mut buf_uninit = core::mem::MaybeUninit::<[u8; 16]>::uninit();
     let mut val_str = "";
     let mut arrows = 0u8;
     let mut max_title_x = 110i16;
@@ -657,7 +657,8 @@ fn render_menu_row(
             ..
         } => {
             arrows = arrow_bits(*val > *min, *val < *max);
-            val_str = text::format_range_val(*val as i32, *min as i32, unit, &mut buf);
+            let buf = unsafe { &mut *buf_uninit.as_mut_ptr() };
+            val_str = text::format_range_val(*val as i32, *min as i32, unit, buf);
         }
         MenuItemType::Toggle(on) => {
             right_icon = Some((

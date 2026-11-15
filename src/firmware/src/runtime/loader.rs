@@ -85,7 +85,11 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     }
 
     // 3. Verify RAM and stack headroom requirements against Execution Section
-    if let Some(ref exec) = summary.exec {
+    let exec = summary
+        .exec
+        .as_ref()
+        .ok_or(KrxLaunchError::MissingExecution)?;
+    {
         let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
         let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
         let min_stack = (exec.min_stack_bytes as usize).min(128);
@@ -111,14 +115,10 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
     #[cfg(feature = "krx_native")]
     let (vtable, instance) = {
-        let exec_sec = summary
-            .exec
-            .as_ref()
-            .ok_or(KrxLaunchError::MissingExecution)?;
         let arena_buf = super::native_runner::transient_arena_bytes_mut();
         let max_payload = arena_buf.len() - 256;
-        let to_read = if exec_sec.payload_size > 0 {
-            (exec_sec.payload_size as usize).min(max_payload)
+        let to_read = if exec.payload_size > 0 {
+            (exec.payload_size as usize).min(max_payload)
         } else {
             max_payload
         };

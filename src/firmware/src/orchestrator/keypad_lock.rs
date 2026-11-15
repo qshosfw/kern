@@ -117,11 +117,11 @@ impl KeypadLockManager {
     }
 
     #[inline(never)]
-    fn update_progress_slope(&mut self) {
-        let vis_target = self
-            .hold_target_ms
-            .saturating_sub(self.hold_start_threshold_ms)
-            .max(100) as u32;
+    fn begin_hold(&mut self, code: KeyCode, start_ms: u16, target_ms: u16) {
+        self.start_hold_tracking(code);
+        self.hold_start_threshold_ms = start_ms;
+        self.hold_target_ms = target_ms;
+        let vis_target = target_ms.saturating_sub(start_ms).max(100) as u32;
         self.progress_slope_q16 = ((100u32 << 16) / vis_target) as u16;
     }
 
@@ -227,18 +227,13 @@ impl KeypadLockManager {
                 self.can_sleep = can_sleep;
                 match state {
                     KeyState::Pressed => {
-                        self.start_hold_tracking(KeyCode::Exit);
-
-                        let start_threshold =
-                            (base_hold_delay_ms as u32 + 80).clamp(450, 550) as u16;
-                        self.hold_start_threshold_ms = start_threshold;
-
-                        self.hold_target_ms = if can_sleep {
-                            (start_threshold as u32 + 1000).clamp(1400, 1600) as u16
+                        let start_threshold = base_hold_delay_ms.saturating_add(80).clamp(450, 550);
+                        let target = if can_sleep {
+                            (start_threshold + 1000).clamp(1400, 1600)
                         } else {
-                            (start_threshold as u32 + 500).clamp(900, 1100) as u16
+                            (start_threshold + 500).clamp(900, 1100)
                         };
-                        self.update_progress_slope();
+                        self.begin_hold(KeyCode::Exit, start_threshold, target);
                         // Do NOT consume Pressed event immediately: apps/navigation still see Pressed if short tap
                     }
                     KeyState::Held => {
@@ -263,20 +258,16 @@ impl KeypadLockManager {
             } else if *code == KeyCode::Hash || *code == KeyCode::KeyF {
                 match state {
                     KeyState::Pressed => {
-                        self.start_hold_tracking(*code);
-
                         // Deliberate hold threshold before showing hold dialog & progress bar (~550ms).
                         // Normal key taps (< threshold) toggle functions with strictly ZERO UI popups or progress bars.
                         let start_threshold =
-                            (base_hold_delay_ms as u32 + 150).clamp(550, 750) as u16;
-                        self.hold_start_threshold_ms = start_threshold;
-
-                        let offset = if self.is_locked { 850 } else { 650 };
-                        let min_ms = if self.is_locked { 1400 } else { 1200 };
-                        let max_ms = if self.is_locked { 2000 } else { 1600 };
-                        self.hold_target_ms =
-                            (start_threshold as u32 + offset).clamp(min_ms, max_ms) as u16;
-                        self.update_progress_slope();
+                            base_hold_delay_ms.saturating_add(150).clamp(550, 750);
+                        let target = if self.is_locked {
+                            (start_threshold + 850).clamp(1400, 2000)
+                        } else {
+                            (start_threshold + 650).clamp(1200, 1600)
+                        };
+                        self.begin_hold(*code, start_threshold, target);
 
                         if !self.is_locked {
                             self.toast = LockToast::None;

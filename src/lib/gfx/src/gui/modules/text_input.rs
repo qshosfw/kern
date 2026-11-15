@@ -274,11 +274,11 @@ impl View<TextInputModel> for TextInputView {
         let is_passcode = false;
 
         if !is_passcode {
-            let mut num_buf = [0u8; 12];
+            let mut num_buf = core::mem::MaybeUninit::<[u8; 12]>::uninit();
             let count_s = text::format_fraction_u32(
                 model.buffer.len() as u32,
                 model.max_len as u32,
-                &mut num_buf,
+                unsafe { &mut *num_buf.as_mut_ptr() },
             );
             text::draw_str_align(
                 canvas,

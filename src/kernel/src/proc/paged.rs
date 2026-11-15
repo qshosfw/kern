@@ -90,12 +90,12 @@ impl CacheSlotMeta {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct FixedWindowCache<const MAX_BLOCKS: usize = 16, const MAX_SLOTS: usize = 4> {
+    pub active_slots: u8,
+    pub block_count: u8,
     pub page_size: u16,
     pub access_clock: u16,
     pub fault_count: u16,
     pub hit_count: u16,
-    pub active_slots: u8,
-    pub block_count: u8,
     pub slots: [CacheSlotMeta; MAX_SLOTS],
     pub blocks: [BlockEntry; MAX_BLOCKS],
 }
