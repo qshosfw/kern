@@ -12,16 +12,18 @@ use kernel::wire::*;
 pub const MAX_RAW_BUF_LEN: usize = 146;
 pub const MAX_WIRE_BUF_LEN: usize = 149;
 
+#[repr(C)]
 pub struct WireDriver<S: SerialPort> {
-    pub port: S,
-    pub session: WireSession,
-    pub transport_profile: u16,
-    rx_buf: [u8; MAX_WIRE_BUF_LEN],
-    rx_len: usize,
-    rx_stage: [u8; 64],
+    // Keep hot RX collector state in first 32 B for Cortex-M0+ Thumb-1 imm5.
     rx_stage_pos: u8,
     rx_stage_len: u8,
     in_frame: bool,
+    transport_profile: u16,
+    rx_len: usize,
+    pub session: WireSession,
+    pub port: S,
+    rx_stage: [u8; 64],
+    rx_buf: [u8; MAX_WIRE_BUF_LEN],
 }
 
 impl<S: SerialPort> WireDriver<S> {

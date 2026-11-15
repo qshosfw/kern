@@ -960,6 +960,7 @@ fn i2c_bus_op(addr: u8, reg: u8, op2: embedded_hal::i2c::Operation) -> Result<()
 }
 
 // ── 13. Low-Level Hardware & Bus Primitive ──────────────────────────────────
+#[inline(never)]
 fn spi_xfer_bytes(is_flash: bool, tx: &[u8], rx: &mut [u8]) -> Result<(), ()> {
     let count = tx.len().max(rx.len());
     for i in 0..count {

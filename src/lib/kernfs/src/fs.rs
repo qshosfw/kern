@@ -24,25 +24,26 @@ pub struct FsStats {
 
 #[repr(C)]
 pub struct KernFS<'a, D: BlockDevice> {
+    // Keep hot 1-byte/2-byte flags and counters within Thumb-1 imm5 offsets (<= 31 / <= 62).
+    pub(crate) cur_alloc_page: u8,
+    pub(crate) low_power: bool,
+    pub(crate) mounted: bool,
+    pub(crate) in_gc: bool,
+    pub(crate) block_seq: u16,
+    pub(crate) cur_alloc_block: u16,
+    pub(crate) hot_ino: u16,
+    pub(crate) active_files: u16,
     pub dev: &'a mut D,
     pub(crate) format_epoch: u32,
     pub(crate) super_seq: u32,
     pub(crate) global_gen: u32,
     pub(crate) total_erases: u32,
     pub(crate) hot_hash: u32,
-    pub(crate) block_seq: u16,
-    pub(crate) cur_alloc_block: u16,
-    pub(crate) hot_ino: u16,
-    pub(crate) active_files: u16,
-    pub(crate) cur_alloc_page: u8,
-    pub(crate) low_power: bool,
-    pub(crate) mounted: bool,
-    pub(crate) in_gc: bool,
     pub(crate) cur_tag: PageTag,
     pub(crate) cur_inode: Inode,
-    pub(crate) page_buf: [u8; PAGE_SIZE],
     pub(crate) meta_pages: [u16; MAX_META_GROUPS],
     pub(crate) block_table: [u8; MAX_BLOCKS],
+    pub(crate) page_buf: [u8; PAGE_SIZE],
 }
 
 impl<'a, D: BlockDevice> KernFS<'a, D> {

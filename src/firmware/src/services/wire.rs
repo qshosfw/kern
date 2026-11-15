@@ -432,12 +432,10 @@ fn handle_resource_invoke(
         }
         (DOMAIN_UI, ACTION_MODAL_CONFIRM | ACTION_MODAL_CANCEL | ACTION_VIEW_LAUNCHER)
         | (DOMAIN_APP, ACTION_APP_KILL) => {
-            let (code, state) = if handle.domain == DOMAIN_UI && action_id == ACTION_MODAL_CONFIRM {
-                (KeyCode::Menu, KeyState::Pressed)
-            } else if handle.domain == DOMAIN_UI && action_id == ACTION_MODAL_CANCEL {
-                (KeyCode::Exit, KeyState::Pressed)
-            } else {
-                (KeyCode::Exit, KeyState::Held)
+            let (code, state) = match (handle.domain, action_id) {
+                (DOMAIN_UI, ACTION_MODAL_CONFIRM) => (KeyCode::Menu, KeyState::Pressed),
+                (DOMAIN_UI, ACTION_MODAL_CANCEL) => (KeyCode::Exit, KeyState::Pressed),
+                _ => (KeyCode::Exit, KeyState::Held),
             };
             crate::system::enqueue_event(Event::Key { code, state });
             WireStatus::Ok
@@ -582,14 +580,9 @@ fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
     }
     let is_write = req.mode == TRANSFER_MODE_WRITE;
     validate_file_path(req.path, is_write, true)?;
-    let stat = ctx.hw.filesystem.stat_info(req.path);
-    let existing_size = match stat {
-        Ok((sz, is_dir)) => {
-            if is_dir {
-                return Err(WireStatus::BadRange);
-            }
-            sz as u32
-        }
+    let existing_size = match ctx.hw.filesystem.stat_info(req.path) {
+        Ok((_, true)) => return Err(WireStatus::BadRange),
+        Ok((sz, false)) => sz as u32,
         Err(_) if !is_write => return Err(WireStatus::NotFound),
         Err(_) => 0,
     };

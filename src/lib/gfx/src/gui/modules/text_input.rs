@@ -164,30 +164,18 @@ impl TextInputView {
         if model.digits_only {
             widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
         } else {
-            let star_label = match model.charset {
-                Charset::Upper | Charset::Lower => "123",
-                Charset::Numbers => "SYM",
-                _ => "ABC",
-            };
+            let star_label = utils::format::nth_cstr(b"123\0123\0SYM\0ABC", model.charset as u8);
             let hash_key = if model.is_k1 { "F" } else { "#" };
-            let case_label = match model.charset {
-                Charset::Upper => "abc",
-                Charset::Lower => "ABC",
-                _ => "Case",
-            };
+            let case_label = utils::format::nth_cstr(b"abc\0ABC\0Case\0Case", model.charset as u8);
             let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
             let enter_label = if show_grid || model.is_k1 {
                 "Enter"
             } else {
                 "OK"
             };
-            for &(bx, key, lbl) in &[
-                (x0, "*", star_label),
-                (x1, menu_key, enter_label),
-                (x2, hash_key, case_label),
-            ] {
-                widgets::draw_key_badge(canvas, bx, by, key, lbl);
-            }
+            widgets::draw_key_badge(canvas, x0, by, "*", star_label);
+            widgets::draw_key_badge(canvas, x1, by, menu_key, enter_label);
+            widgets::draw_key_badge(canvas, x2, by, hash_key, case_label);
             draw_exit = !show_grid;
         }
         if draw_exit {
@@ -260,12 +248,7 @@ impl View<TextInputModel> for TextInputView {
         // 2. Mode & Length Indicator Bar (DeltaFW layout below header)
         let header_y = 15i16;
         if !model.digits_only {
-            let charset_name = match model.charset {
-                Charset::Upper => "ABC",
-                Charset::Lower => "abc",
-                Charset::Numbers => "123",
-                Charset::Symbols => "#@$",
-            };
+            let charset_name = utils::format::nth_cstr(b"ABC\0abc\0123\0#@$", model.charset as u8);
             text::draw_str(canvas, 3, header_y, charset_name, &TOMTHUMB, Color::Fill);
         }
 
