@@ -17,6 +17,7 @@ pub enum PageId {
     BatteryInfo,
     BatteryTweaks,
     SystemInfo,
+    #[cfg(feature = "filesystem")]
     SystemStorage,
     Apps,
     BootSplash,
@@ -75,6 +76,8 @@ pub enum ActionId {
     #[cfg(feature = "filesystem")]
     Wipe0xFFBootloader = 8,
     RebootBootloader = 9,
+    ResetSettings = 10,
+    RebootFirmware = 11,
 }
 
 impl ActionId {
@@ -97,6 +100,8 @@ impl ActionId {
             #[cfg(feature = "filesystem")]
             8 => Some(ActionId::Wipe0xFFBootloader),
             9 => Some(ActionId::RebootBootloader),
+            10 => Some(ActionId::ResetSettings),
+            11 => Some(ActionId::RebootFirmware),
             _ => None,
         }
     }
@@ -105,11 +110,12 @@ impl ActionId {
         match self {
             #[cfg(feature = "filesystem")]
             ActionId::FormatKeepCalib => DestructiveLevel::UserDataLoss,
+            ActionId::ResetSettings => DestructiveLevel::UserDataLoss,
             #[cfg(feature = "filesystem")]
             ActionId::FormatWipeAll | ActionId::Wipe0xFFBootloader => {
                 DestructiveLevel::FactoryDataWipe
             }
-            ActionId::RebootBootloader => DestructiveLevel::Reboot,
+            ActionId::RebootBootloader | ActionId::RebootFirmware => DestructiveLevel::Reboot,
             _ => DestructiveLevel::None,
         }
     }
@@ -189,10 +195,11 @@ pub enum ChoiceId {
     LauncherStyle = 17,
     StartupApp = 18,
     CpuClock = 19,
+    #[cfg(feature = "uart")]
     UartBaud = 20,
 }
 
-pub static CHOICES: [&'static str; 21] = [
+pub static CHOICES: &[&'static str] = &[
     super::display::BACKLIGHT_TIME_OPTIONS,
     super::display::SHADING_OPTIONS,
     super::display::ANIMATION_OPTIONS,
@@ -213,6 +220,7 @@ pub static CHOICES: [&'static str; 21] = [
     super::apps::LAUNCHER_STYLE_OPTIONS,
     super::apps::STARTUP_APP_OPTIONS,
     super::system::CPU_CLOCK_OPTIONS,
+    #[cfg(feature = "uart")]
     super::system::UART_BAUD_OPTIONS,
 ];
 
@@ -250,17 +258,22 @@ pub enum MetricId {
     BatteryCoreTemp,
 
     // Storage
+    #[cfg(feature = "filesystem")]
     StorageUsed,
+    #[cfg(feature = "filesystem")]
     StorageFree,
+    #[cfg(feature = "filesystem")]
     StorageFiles,
+    #[cfg(feature = "filesystem")]
     StorageWear,
+    #[cfg(feature = "filesystem")]
     StorageDeleted,
 
     // System Identity & Health
     SystemFirmware,
     SystemBootloader,
     SystemSerial,
-    SystemFactoryId,
+    SystemQs1Serial,
     SystemMac,
     SystemFlashSize,
     SystemUptime,

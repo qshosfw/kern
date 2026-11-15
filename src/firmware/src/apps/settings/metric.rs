@@ -36,17 +36,14 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
             out.set_str(s);
             return;
         }
-        MetricId::SystemSerial | MetricId::SystemFactoryId => {
-            let serial = if id == MetricId::SystemSerial {
-                Some(bsp::uid::get_crockford_serial())
-            } else {
-                bsp::uid::get_factory_serial()
-            };
-            let s = serial
-                .as_ref()
-                .and_then(|b| utils::format::ascii_str(&b[..14]))
-                .unwrap_or("None");
+        MetricId::SystemSerial => {
+            let serial = bsp::uid::get_crockford_serial();
+            let s = utils::format::ascii_str(&serial[..14]).unwrap_or("None");
             out.set_str(s);
+            return;
+        }
+        MetricId::SystemQs1Serial => {
+            out.set_str(bsp::uid::factory_cert_status().as_str());
             return;
         }
         MetricId::SystemMac => {
@@ -118,6 +115,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         MetricId::BatteryCalibRef => (ctx.calibration.battery_calib_const() as i32, 0, ""),
         MetricId::BatteryCoreTemp => (ctx.power.mcu_temperature_deci_c() as i32, 1, " C"),
 
+        #[cfg(feature = "filesystem")]
         MetricId::StorageUsed
         | MetricId::StorageFree
         | MetricId::StorageFiles
@@ -129,7 +127,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
                 MetricId::StorageFree => (s.free_sectors as i32 * 4, 0, " KB"),
                 MetricId::StorageFiles => (s.active_files as i32, 0, ""),
                 MetricId::StorageWear => (s.wear_cycles as i32, 0, ""),
-                _ => (s.deleted_sectors as i32, 0, " sec"),
+                _ => (s.deleted_sectors as i32 * 4, 0, " KB"),
             }
         }
 

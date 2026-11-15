@@ -409,10 +409,15 @@ impl MasterConfig {
             }
         }
 
-        if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > 4 {
+        let max_clk = if cfg!(feature = "overclock_72mhz") {
+            4
+        } else {
+            3
+        };
+        if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > max_clk {
             self.system.model = self.system.model.min(2);
             self.system.uart_baud = self.system.uart_baud.min(1);
-            self.system.cpu_clock = self.system.cpu_clock.min(4);
+            self.system.cpu_clock = self.system.cpu_clock.min(max_clk);
             repaired |= DIRTY_SYSTEM;
         }
         if self

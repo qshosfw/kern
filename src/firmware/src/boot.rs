@@ -1,4 +1,6 @@
 use crate::services::SystemStorage;
+#[cfg(feature = "dfu")]
+pub mod dfu;
 pub mod orchestration;
 #[cfg(feature = "filesystem")]
 pub mod provision;
@@ -8,6 +10,8 @@ pub mod recovery;
 pub mod security;
 pub mod splash;
 
+#[cfg(feature = "dfu")]
+pub use dfu::enter_dfu_bootloader;
 pub use orchestration::*;
 
 #[cfg(feature = "crash_dialog")]
@@ -442,133 +446,42 @@ pub fn bootloader_version_str() -> &'static str {
     bsp::uid::bootloader_version_str()
 }
 
+#[cfg(feature = "dfu")]
 #[inline(always)]
 pub fn is_bootloader_hold_requested() -> bool {
-    (read_backup_tag().flags & kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD) != 0
+    let rtc_req =
+        (read_backup_tag().flags & kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD) != 0;
+    #[cfg(all(not(test), target_arch = "arm"))]
+    {
+        rtc_req || dfu::is_ptt_side2_chord(KeypadScanner::poll_raw_mask())
+    }
+    #[cfg(not(all(not(test), target_arch = "arm")))]
+    {
+        rtc_req
+    }
 }
 
 /// Board-aware reboot handler registered with `kernel::power::PowerControl`.
 pub fn firmware_reboot_handler(mode: kernel::power::RebootMode) -> ! {
     match mode {
         kernel::power::RebootMode::Firmware => prepare_clean_reboot(),
-        _ => {
-            let extra = if matches!(mode, kernel::power::RebootMode::Bootloader) {
-                kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
-            } else {
-                kernel::boot::BackupCrashTag::FLAG_SAFE_MODE_REQ
-            };
+        #[cfg(not(feature = "dfu"))]
+        kernel::power::RebootMode::Bootloader => prepare_clean_reboot(),
+        #[cfg(feature = "dfu")]
+        kernel::power::RebootMode::Bootloader => {
             let mut tag = read_backup_tag();
-            tag.flags |= extra | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
+            tag.flags |= kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
+                | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
+            write_backup_tag(tag);
+        }
+        kernel::power::RebootMode::SafeRecovery => {
+            let mut tag = read_backup_tag();
+            tag.flags |= kernel::boot::BackupCrashTag::FLAG_SAFE_MODE_REQ
+                | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
             write_backup_tag(tag);
         }
     }
     kernel::power::PowerControl::reboot_raw()
-}
-
-/// Enter the factory bootloader (`0x0800_0000`) at boot BEFORE `Watchdog::start()` is called
-/// so `IWDG` is completely disabled and never resets the radio during DFU flashing.
-#[inline(never)]
-pub fn enter_dfu_bootloader(lcd: &mut St7565) -> ! {
-    let mut tag = read_backup_tag();
-    tag.flags = (tag.flags & !kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD)
-        | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
-    write_backup_tag(tag);
-
-    bsp::set_status_led(bsp::StatusLed::Off);
-    drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
-    bsp::pins::BACKLIGHT.set_high();
-    lcd.turn_on();
-    let canvas = crate::system_canvas();
-    gfx::widgets::draw_dfu_screen(canvas, bootloader_version_str());
-    lcd.blit(canvas);
-
-    handoff_to_factory_bootloader();
-}
-
-/// Hand execution directly to the stock factory bootloader (`0x0800_0000`) while preserving
-/// GPIO state (`PF8` LCD backlight HIGH, ST7565 GDDRAM intact, and `PB10` PTT locked LOW)
-/// and cleanly tearing down firmware clocks, timers, UART/SPI peripherals, and SysTick.
-#[inline(never)]
-fn handoff_to_factory_bootloader() -> ! {
-    #[cfg(all(not(test), target_arch = "arm"))]
-    unsafe {
-        cortex_m::interrupt::disable();
-
-        // 1. Lock PB3..PB6 (KB_COLS) and PB14..PB15 (KB_ROWS[0..1]) as Input Pull-Up and
-        //    PB10 (PTT) as Open-Drain Output LOW via GPIOB->LCKR (0x5000_041C).
-        //    Why PB3..PB6 too? In GPIO_Init (0x0800_0688), the stock bootloader drives
-        //    PB3..PB6 LOW and checks at 0x0800_1384 that PB14/PB15 are HIGH before checking
-        //    PTT (PB10). If the user is still holding MENU (PB6 <-> PB15), an unlocked PB6
-        //    driven LOW would pull PB15 LOW and abort DFU entry! Locking PB3..PB6 as Input
-        //    Pull-Up ensures PB14/PB15 always read HIGH even while MENU is held.
-        let gpiob = py32_pac::gpio::GPIOB_BASE as *mut u32;
-        let ptt_pin = 1u32 << 10;
-        let lock_pins = 0xC478u32; // PB3..PB6 (0x0078) | PB10 (0x0400) | PB14..PB15 (0xC000)
-        let mask_2b = 0xF030_3FC0u32;
-        gpiob.byte_add(0x28).write_volatile(ptt_pin);
-        let otyper = gpiob.byte_add(0x04).read_volatile();
-        gpiob.byte_add(0x04).write_volatile(otyper | ptt_pin);
-        let pupdr = gpiob.byte_add(0x0C).read_volatile();
-        gpiob
-            .byte_add(0x0C)
-            .write_volatile((pupdr & !mask_2b) | 0x5000_1540);
-        let moder = gpiob.read_volatile();
-        gpiob.write_volatile((moder & !mask_2b) | (0b01 << 20));
-        let lckr = gpiob.byte_add(0x1C);
-        let lckk = (1u32 << 16) | lock_pins;
-        lckr.write_volatile(lckk);
-        lckr.write_volatile(lock_pins);
-        lckr.write_volatile(lckk);
-        let _ = lckr.read_volatile();
-
-        // 2. Switch SYSCLK back to direct HSI (SW = 0) and disable PLL directly via RCC
-        //    registers (do NOT call set_sysclk_24mhz, which re-enables SysTick and USART1!).
-        let rcc = py32_pac::rcc::RCC_BASE as *mut u32;
-        rcc.byte_add(0x08).write_volatile(0);
-        while (rcc.byte_add(0x08).read_volatile() & 0x38) != 0 {}
-        let cr = rcc.read_volatile();
-        rcc.write_volatile(cr & !py32_pac::rcc::CR_PLLON);
-
-        // 3. Reset DMA1, APB1, and APB2 peripherals (clearing USART1->CR1.UE so the stock
-        //    bootloader USART_Init at 0x0800_0CF8 does not abort!) while keeping RCC_IOPENR
-        //    (PF8 BACKLIGHT HIGH, PB2 LCD_CS HIGH, and PB10 PTT locked LOW) intact.
-        rcc.byte_add(0x28).write_volatile(1);
-        rcc.byte_add(0x28).write_volatile(0);
-        rcc.byte_add(0x2C).write_volatile(0xFFFF_FFFF);
-        rcc.byte_add(0x2C).write_volatile(0);
-        rcc.byte_add(0x30).write_volatile(0xFFFF_FFFF);
-        rcc.byte_add(0x30).write_volatile(0);
-        rcc.byte_add(0x3C).write_volatile(0);
-        rcc.byte_add(0x40).write_volatile(0);
-
-        // 4. Stop SysTick (bootloader vec[15] at 0x0800_00E4 is an infinite hang loop!),
-        //    clear PENDSTCLR and all NVIC enables/pending, and set VTOR = 0x0800_0000.
-        let scs = 0xE000_E000usize as *mut u32;
-        scs.byte_add(0x010).write_volatile(0);
-        scs.byte_add(0xD04).write_volatile(1 << 25);
-        scs.byte_add(0x180).write_volatile(0xFFFF_FFFF);
-        scs.byte_add(0x280).write_volatile(0xFFFF_FFFF);
-        scs.byte_add(0xD08).write_volatile(0x0800_0000);
-
-        let msp = (0x0800_0000 as *const u32).read_volatile();
-        let entry = (0x0800_0004 as *const u32).read_volatile();
-        core::arch::asm!(
-            "dsb",
-            "isb",
-            "msr msp, {msp}",
-            "cpsie i",
-            "bx {entry}",
-            msp = in(reg) msp,
-            entry = in(reg) entry,
-            options(noreturn)
-        );
-    }
-    #[cfg(not(all(not(test), target_arch = "arm")))]
-    {
-        loop {
-            core::hint::spin_loop();
-        }
-    }
 }
 
 #[cfg(test)]

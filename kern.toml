@@ -65,12 +65,16 @@ animations = true       # ✨ Smooth kinetic scrolling, slide transitions & adap
 grayscale = false       # 🌓 True 2-bit 4-level grayscale with 500 Hz temporal FRC (1-bit spatial dither when false)
 
 [features.diagnostics]
-panic_gui = true           # 🚨 On-screen recovery GUI and fault register display
+panic_gui = false           # 🚨 On-screen recovery GUI and fault register display
 crash_dialog = false       # 💬 Human-friendly crash & reboot dialog on startup
 flight_recorder = false    # 📊 Circular crash telemetry and reboot logging
 settings_calib = false     # 🎛️ Radio frequency and battery calibration submenu
 settings_debug = false     # 🛠️ Deep hardware register and memory debug submenu
 overclock_72mhz = true     # ⚡ Dynamic 72 MHz CPU overclocking menu option
+
+[features.bootloader]
+dfu = true                 # 🔌 Bootloader DFU entry (PTT+Side2 / Settings / RigWire) with watchdog & PC13 off
+dfu_hooks = true           # 🖥️ Custom DFU splash, live status/progress UI & EXIT guard
 
 # 🚨 Granular Panic & Crash Forensics
 panic_gui_extended = false  # 📑 Multi-page interactive forensic crash debugger (5 pages)

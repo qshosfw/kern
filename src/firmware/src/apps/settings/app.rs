@@ -424,12 +424,56 @@ mod tests {
     #[test]
     fn system_menu_groups_info_and_bootloader_cleanly() {
         let sys_defs = page_defs(PageId::System);
-        assert_eq!(sys_defs[0].title, "Clock");
-        assert_eq!(sys_defs[1].title, "UART Baud");
-        assert_eq!(sys_defs[2].title, "Info");
-        assert_eq!(PageId::from_u8(sys_defs[2].aux), Some(PageId::SystemInfo));
-        assert_eq!(sys_defs[3].title, "Storage");
-        assert_eq!(sys_defs.last().unwrap().title, "Bootloader");
+        let mut idx = 0usize;
+        assert_eq!(sys_defs[idx].title, "Clock");
+        idx += 1;
+        #[cfg(feature = "uart")]
+        {
+            assert_eq!(sys_defs[idx].title, "UART Baud");
+            idx += 1;
+        }
+        assert_eq!(sys_defs[idx].title, "Info");
+        assert_eq!(PageId::from_u8(sys_defs[idx].aux), Some(PageId::SystemInfo));
+        idx += 1;
+        #[cfg(feature = "filesystem")]
+        {
+            assert_eq!(sys_defs[idx].title, "Storage");
+            assert_eq!(
+                PageId::from_u8(sys_defs[idx].aux),
+                Some(PageId::SystemStorage)
+            );
+            idx += 1;
+        }
+        #[cfg(feature = "settings_calib")]
+        {
+            assert_eq!(sys_defs[idx].title, "Calibration");
+            idx += 1;
+        }
+        #[cfg(feature = "settings_debug")]
+        {
+            assert_eq!(sys_defs[idx].title, "Debug");
+            idx += 1;
+        }
+        assert_eq!(sys_defs[idx].title, "Reset Settings");
+        assert_eq!(
+            ActionId::from_u8(sys_defs[idx].aux),
+            Some(ActionId::ResetSettings)
+        );
+        idx += 1;
+        if cfg!(feature = "dfu") {
+            assert_eq!(sys_defs[idx].title, "DFU Update");
+            assert_eq!(
+                ActionId::from_u8(sys_defs[idx].aux),
+                Some(ActionId::RebootBootloader)
+            );
+            idx += 1;
+        }
+        assert_eq!(sys_defs[idx].title, "Restart");
+        assert_eq!(
+            ActionId::from_u8(sys_defs[idx].aux),
+            Some(ActionId::RebootFirmware)
+        );
+        assert_eq!(sys_defs.len(), idx + 1);
 
         let info_defs = page_defs(PageId::SystemInfo);
         assert_eq!(
@@ -439,9 +483,47 @@ mod tests {
         assert_eq!(info_defs[0].title, "Firmware");
         assert_eq!(info_defs[1].title, "Bootloader");
         assert_eq!(info_defs[2].title, "Serial");
-        assert_eq!(info_defs[3].title, "Factory ID");
+        assert_eq!(info_defs[3].title, "QS-1 S/N");
         assert_eq!(info_defs[4].title, "MAC");
         assert_eq!(info_defs[5].title, "MCU Flash");
         assert_eq!(info_defs[6].title, "Uptime");
+        assert_eq!(info_defs.len(), 7);
+
+        // Verify MenuView fits "QS-1 S/N" and raw QS-1 ASCII S/N without truncation (>= 4 px gap to 118 - val_w).
+        let qs1 = bsp::uid::factory_cert_status();
+        let val_w = gfx::text::str_width(qs1.as_str(), &gfx::fonts::tomthumb::FONT);
+        let title_w = gfx::text::str_width("QS-1 S/N", &gfx::fonts::mumatrix_regular::FONT);
+        let title_max = (114 - val_w).max(30);
+        assert!(6 + title_w <= title_max);
+        assert!((118 - val_w) - (6 + title_w) >= 4);
+
+        // Verify clock option count and config sanitization match overclock_72mhz gate.
+        let clk_opts =
+            gfx::gui::modules::menu::SheetOptions::Packed(super::super::system::CPU_CLOCK_OPTIONS);
+        let mut cfg = crate::config::MasterConfig::DEFAULT;
+        cfg.system.cpu_clock = 4;
+        cfg.sanitize();
+        if cfg!(feature = "overclock_72mhz") {
+            assert_eq!(clk_opts.len(), 5);
+            assert_eq!(cfg.system.cpu_clock, 4);
+        } else {
+            assert_eq!(clk_opts.len(), 4);
+            assert_eq!(cfg.system.cpu_clock, 3);
+        }
+
+        // Verify destructive levels and non-None recovery classifications.
+        use super::super::page::DestructiveLevel;
+        assert_eq!(
+            ActionId::ResetSettings.destructive_level(),
+            DestructiveLevel::UserDataLoss
+        );
+        assert_eq!(
+            ActionId::RebootFirmware.destructive_level(),
+            DestructiveLevel::Reboot
+        );
+        assert_eq!(
+            ActionId::RebootBootloader.destructive_level(),
+            DestructiveLevel::Reboot
+        );
     }
 }

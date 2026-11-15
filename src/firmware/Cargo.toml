@@ -40,7 +40,13 @@ default = [
     "dynamic_spi",
     "overclock_72mhz",
     "text_input",
+    "dfu",
+    "dfu_hooks",
 ]
+
+# 🔌 Bootloader DFU Handoff & Runtime Hooks
+dfu = []
+dfu_hooks = ["dfu"]
 
 # 📦 Media & Asset Provisioning
 provision_rogers = []

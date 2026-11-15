@@ -3,6 +3,7 @@
 use super::app::SettingsApp;
 use super::page::ActionId;
 use crate::SysContext;
+use crate::services::power::PowerServiceConfigExt;
 use gfx::gui::modules::menu::OptionSheet;
 use gfx::gui::modules::menu::ShortString;
 use kernel::app::EventResult;
@@ -26,9 +27,12 @@ pub const TAG_MODEL_INPUT: u8 = 13;
 pub const TAG_FORMAT_KEEP_CALIB: u8 = 16;
 #[cfg(feature = "filesystem")]
 pub const TAG_FORMAT_WIPE_ALL: u8 = 17;
-#[cfg(feature = "filesystem")]
+#[cfg(all(feature = "filesystem", feature = "dfu"))]
 pub const TAG_WIPE_0XFF_BL: u8 = 18;
+#[cfg(feature = "dfu")]
 pub const TAG_REBOOT_BL: u8 = 19;
+pub const TAG_RESET_SETTINGS: u8 = 20;
+pub const TAG_REBOOT_FW: u8 = 21;
 
 pub fn parse_u32_digits(s: &str) -> Option<u32> {
     if s.is_empty() {
@@ -123,7 +127,7 @@ static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
         title: "Erase All Data?",
         message: "Erases all files, settings &\nfactory radio calibration!",
     },
-    #[cfg(feature = "filesystem")]
+    #[cfg(all(feature = "filesystem", feature = "dfu"))]
     DestructiveConfirm {
         action: ActionId::Wipe0xFFBootloader,
         tag: TAG_WIPE_0XFF_BL,
@@ -131,12 +135,27 @@ static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
         title: "Blank 2MB Chip?",
         message: "Fills 2MB flash with 0xFF &\nreboots to DFU flash mode.",
     },
+    #[cfg(feature = "dfu")]
     DestructiveConfirm {
         action: ActionId::RebootBootloader,
         tag: TAG_REBOOT_BL,
         hold_ds: 10,
         title: "Enter DFU Mode",
         message: "Hold MENU to reboot into\nUSB-C DFU flash mode.",
+    },
+    DestructiveConfirm {
+        action: ActionId::ResetSettings,
+        tag: TAG_RESET_SETTINGS,
+        hold_ds: 15,
+        title: "Reset Settings?",
+        message: "Restores default settings.\nChannels & calib are kept.",
+    },
+    DestructiveConfirm {
+        action: ActionId::RebootFirmware,
+        tag: TAG_REBOOT_FW,
+        hold_ds: 8,
+        title: "Restart Radio?",
+        message: "Flushes pending changes &\nrestarts into Kern.",
     },
 ];
 
@@ -295,12 +314,12 @@ pub fn handle_text_input_done(
     EventResult::Consumed
 }
 
-#[cfg(feature = "filesystem")]
 fn reset_config_to_defaults(ctx: &mut SysContext) {
     unsafe {
         crate::config::MasterConfig::init_in_place(ctx.config);
     }
     ctx.config.sanitize();
+    #[cfg(feature = "filesystem")]
     let _ = ctx.config.save_all(ctx.storage);
 }
 
@@ -334,14 +353,31 @@ pub fn handle_confirm_result(
             }
             EventResult::Consumed
         }
-        #[cfg(feature = "filesystem")]
+        #[cfg(all(feature = "filesystem", feature = "dfu"))]
         TAG_WIPE_0XFF_BL => {
             let _ = ctx.storage.fs.wipe_raw();
             kernel::power::PowerControl::reboot_to_bootloader();
         }
+        TAG_RESET_SETTINGS => {
+            reset_config_to_defaults(ctx);
+            if let Some(ref mut display) = ctx.display {
+                display.apply_config(&ctx.config.display);
+            }
+            ctx.apply_audio_config();
+            ctx.power.load_battery_config(&ctx.config.battery);
+            ctx.config.hw_dirty = 0x3F;
+            app.populate_current_menu(ctx);
+            ctx.show_popup(TAG_POPUP_INFO, "System", "Settings Reset");
+            EventResult::Consumed
+        }
+        #[cfg(feature = "dfu")]
         TAG_REBOOT_BL => {
-            let _ = ctx.config.save_all(ctx.storage);
+            let _ = ctx.flush_config();
             kernel::power::PowerControl::reboot_to_bootloader();
+        }
+        TAG_REBOOT_FW => {
+            let _ = ctx.flush_config();
+            kernel::power::PowerControl::reboot();
         }
         _ => EventResult::Ignored,
     }

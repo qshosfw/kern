@@ -52,12 +52,12 @@ pub const FM_SDA: Pin = Pin::new(gpio::GPIOF_BASE, 6);
 pub fn init() {
     use py32_pac as pac;
 
-    // Pulse GPIOB port reset (RCC_IOPRSTR bit 1) so any GPIOB->LCKR pin lock applied
-    // during a software DFU handoff is cleared if the bootloader jumps back to app code.
+    // Pulse GPIOB + GPIOC port reset (RCC_IOPRSTR bits 1 & 2) so any LCKR pin locks applied
+    // during a software DFU handoff (side keys, PTT, PC13 flashlight) clear on app restart.
     #[cfg(all(not(test), target_arch = "arm"))]
     unsafe {
         let ioprstr = (pac::rcc::RCC_BASE + 0x24) as *mut u32;
-        ioprstr.write_volatile(1 << 1);
+        ioprstr.write_volatile((1 << 1) | (1 << 2));
         ioprstr.write_volatile(0);
     }
 

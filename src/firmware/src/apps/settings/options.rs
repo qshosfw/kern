@@ -18,6 +18,7 @@ pub static ROOT_DEFS: &[SettingDef] = &[
 fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut ShortString) {
     match action {
         ActionId::ChooseModel => out.set_str(ctx.config.system.model_str()),
+        #[cfg(feature = "dfu")]
         ActionId::RebootBootloader => out.set_str(crate::boot::bootloader_version_str()),
         #[cfg(feature = "text_input")]
         ActionId::EditOwner => {
@@ -185,6 +186,7 @@ pub fn page_title(page: PageId) -> &'static str {
         PageId::BatteryInfo => "Battery Info",
         PageId::BatteryTweaks => "Battery Tweaks",
         PageId::SystemInfo => "System Info",
+        #[cfg(feature = "filesystem")]
         PageId::SystemStorage => "Storage",
         PageId::Apps => "Apps",
         PageId::BootSplash => "Boot Splash",
@@ -214,6 +216,7 @@ pub fn page_defs(page: PageId) -> &'static [SettingDef] {
         PageId::BatteryInfo => &super::battery::BATTERY_INFO,
         PageId::BatteryTweaks => &super::battery::BATTERY_TWEAKS,
         PageId::SystemInfo => super::system::SYSTEM_INFO,
+        #[cfg(feature = "filesystem")]
         PageId::SystemStorage => super::system::SYSTEM_STORAGE,
         PageId::Apps => super::apps::APPS_DEFS,
         PageId::BootSplash => super::device::SPLASH_PAGE_DEFS,

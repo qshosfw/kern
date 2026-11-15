@@ -22,6 +22,101 @@ pub const VREFINT_MV_TYPICAL: u16 = 1200;
 pub const FACTORY_CERT_ADDR: usize = 0x0800_2700;
 pub const FACTORY_CERT_BYTES: usize = 104;
 
+/// USB identification metadata extracted from the factory bootloader ROM (`0x0800_1F00..0x0800_2700`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootloaderUsbInfo {
+    pub vid: u16,
+    pub pid: u16,
+    pub product: [u8; 16],
+    pub product_len: u8,
+}
+
+impl BootloaderUsbInfo {
+    pub const fn default_k1() -> Self {
+        let mut product = [0u8; 16];
+        product[0] = b'K';
+        product[1] = b'1';
+        product[2] = b' ';
+        product[3] = b'C';
+        product[4] = b'P';
+        product[5] = b'S';
+        Self {
+            vid: 0x36B7,
+            pid: 0x0001,
+            product,
+            product_len: 6,
+        }
+    }
+
+    #[inline(always)]
+    pub fn product_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.product[..self.product_len as usize]) }
+    }
+}
+
+/// Scans a bootloader ROM slice (`0x0800_1F00..0x0800_2700`) for the USB 2.0 Device
+/// Descriptor (`12 01 00 02 ...`) and its UTF-16LE `iProduct` string descriptor.
+pub fn parse_bootloader_usb_info(rom: &[u8]) -> BootloaderUsbInfo {
+    let mut info = BootloaderUsbInfo::default_k1();
+    let mut dev_end = None;
+    let mut i_product = 2u8;
+
+    let mut i = 0usize;
+    while i + 18 <= rom.len() {
+        if rom[i] == 0x12
+            && rom[i + 1] == 0x01
+            && rom[i + 2] == 0x00
+            && rom[i + 3] == 0x02
+            && rom[i + 7] == 0x40
+        {
+            info.vid = u16::from_le_bytes([rom[i + 8], rom[i + 9]]);
+            info.pid = u16::from_le_bytes([rom[i + 10], rom[i + 11]]);
+            i_product = rom[i + 15];
+            dev_end = Some(i + 18);
+            break;
+        }
+        i += 1;
+    }
+
+    if let Some(start) = dev_end {
+        // Locate String Descriptor 0 (`04 03 09 04`, US-English LangID) then walk to `i_product`.
+        let mut j = start;
+        while j + 4 <= rom.len() {
+            if rom[j] == 0x04 && rom[j + 1] == 0x03 && rom[j + 2] == 0x09 && rom[j + 3] == 0x04 {
+                let mut pos = j + 4;
+                let mut idx = 1u8;
+                while pos + 2 <= rom.len() {
+                    let len = rom[pos] as usize;
+                    if len < 2 || (len & 1) != 0 || rom[pos + 1] != 0x03 || pos + len > rom.len() {
+                        break;
+                    }
+                    if idx == i_product {
+                        let mut n = 0usize;
+                        let mut k = pos + 2;
+                        while k + 1 < pos + len && n < info.product.len() {
+                            if rom[k + 1] == 0 && (rom[k].is_ascii_graphic() || rom[k] == b' ') {
+                                info.product[n] = rom[k];
+                                n += 1;
+                            }
+                            k += 2;
+                        }
+                        if n > 0 {
+                            info.product_len = n as u8;
+                        }
+                        break;
+                    }
+                    pos += len;
+                    idx = idx.saturating_add(1);
+                }
+                break;
+            }
+            j += 1;
+        }
+    }
+
+    info
+}
+
 pub struct SystemInfo;
 
 impl SystemInfo {
@@ -64,6 +159,18 @@ impl SystemInfo {
             }
         }
         "7.02.02"
+    }
+
+    /// Extracts USB VID, PID, and product descriptor name directly from the bootloader ROM
+    /// (`0x0800_1F00..0x0800_2700`), falling back to `36B7:0001` / `"K1 CPS"` on host targets.
+    pub fn bootloader_usb_info() -> BootloaderUsbInfo {
+        #[cfg(all(not(test), target_arch = "arm"))]
+        unsafe {
+            let rom = core::slice::from_raw_parts(0x0800_1F00 as *const u8, 0x0800);
+            return parse_bootloader_usb_info(rom);
+        }
+        #[cfg(not(all(not(test), target_arch = "arm")))]
+        BootloaderUsbInfo::default_k1()
     }
 
     /// Returns a slice over the 104-byte factory provisioning certificate at `0x0800_2700..0x0800_2768`
@@ -155,5 +262,31 @@ impl SystemInfo {
             }
         }
         full
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_bootloader_usb_info_reads_vid_pid_and_product() {
+        let fixture: [u8; 0x9A] = [
+            0x12, 0x01, 0x00, 0x02, 0xEF, 0x02, 0x01, 0x40, 0xB7, 0x36, 0x01, 0x00, 0x00, 0x01,
+            0x01, 0x02, 0x03, 0x01, 0x09, 0x02, 0x4B, 0x00, 0x02, 0x01, 0x00, 0x80, 0x32, 0x08,
+            0x0B, 0x00, 0x02, 0x02, 0x02, 0x01, 0x00, 0x09, 0x04, 0x00, 0x00, 0x01, 0x02, 0x02,
+            0x01, 0x02, 0x05, 0x24, 0x00, 0x10, 0x01, 0x05, 0x24, 0x01, 0x00, 0x01, 0x04, 0x24,
+            0x02, 0x02, 0x05, 0x24, 0x06, 0x00, 0x01, 0x07, 0x05, 0x83, 0x03, 0x08, 0x00, 0x0A,
+            0x09, 0x04, 0x01, 0x00, 0x02, 0x0A, 0x00, 0x00, 0x00, 0x07, 0x05, 0x02, 0x02, 0x40,
+            0x00, 0x00, 0x07, 0x05, 0x81, 0x02, 0x40, 0x00, 0x00, 0x04, 0x03, 0x09, 0x04, 0x14,
+            0x03, 0x51, 0x00, 0x55, 0x00, 0x41, 0x00, 0x4E, 0x00, 0x53, 0x00, 0x48, 0x00, 0x45,
+            0x00, 0x4E, 0x00, 0x47, 0x00, 0x0E, 0x03, 0x4B, 0x00, 0x31, 0x00, 0x20, 0x00, 0x43,
+            0x00, 0x50, 0x00, 0x53, 0x00, 0x16, 0x03, 0x32, 0x00, 0x30, 0x00, 0x32, 0x00, 0x35,
+            0x00, 0x30, 0x00, 0x38, 0x00, 0x30, 0x00, 0x38, 0x00, 0x30, 0x00, 0x31, 0x00, 0x00,
+        ];
+        let info = parse_bootloader_usb_info(&fixture);
+        assert_eq!(info.vid, 0x36B7);
+        assert_eq!(info.pid, 0x0001);
+        assert_eq!(info.product_str(), "K1 CPS");
     }
 }
