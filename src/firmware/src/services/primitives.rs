@@ -11,7 +11,7 @@ use kernel::service::radio::{RfAudioPath, RfChannel, RfModulation, RfSquelch, Rf
 use kernel::service::{DisplayService, PowerService};
 
 // ── 1. Display Primitive ────────────────────────────────────────────────────
-#[inline(never)]
+#[inline(always)]
 pub fn color_from_u8(color: u8) -> gfx::Color {
     gfx::Color::from_u8(color)
 }

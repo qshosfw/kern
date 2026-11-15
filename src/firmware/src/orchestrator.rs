@@ -30,8 +30,8 @@ pub struct Orchestrator {
     owned_key: Option<KeyCode>,
     active_app_id: usize,
     previous_app: Option<usize>,
-    nav_stack: NavStack<6>,
     lock_mgr: KeypadLockManager,
+    nav_stack: NavStack<6>,
 }
 
 pub const MAX_PROCESSES: usize = 8;
@@ -343,7 +343,29 @@ impl Orchestrator {
         }
         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Success);
     }
+}
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum FilterFlow {
+    Continue,
+    DirtyContinue,
+    Stop(bool),
+}
+
+type EventFilter = for<'a, 'b> fn(
+    &mut Orchestrator,
+    &mut crate::services::SysContext<'a, 'b>,
+    &Event,
+) -> FilterFlow;
+
+const EVENT_FILTERS: &[EventFilter] = &[
+    Orchestrator::filter_modal_event,
+    Orchestrator::filter_keypad_lock,
+    Orchestrator::filter_hotkeys_and_system,
+    Orchestrator::filter_active_app,
+];
+
+impl Orchestrator {
     fn handle_f_key_action<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -380,11 +402,12 @@ impl Orchestrator {
         }
     }
 
-    fn supervise_lock<'a>(
+    #[inline(never)]
+    fn filter_keypad_lock<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
         event: &Event,
-    ) -> (bool, bool) {
+    ) -> FilterFlow {
         let was_locked = self.lock_mgr.is_locked;
         let was_f_active = self.lock_mgr.is_f_active;
 
@@ -405,7 +428,7 @@ impl Orchestrator {
         if self.lock_mgr.force_close_requested {
             self.lock_mgr.force_close_requested = false;
             self.force_close_active_app(ctx);
-            return (true, true);
+            return FilterFlow::Stop(true);
         }
 
         let state_changed =
@@ -424,7 +447,24 @@ impl Orchestrator {
             ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
         }
 
-        (intercepted, state_changed)
+        if intercepted {
+            return FilterFlow::Stop(true);
+        }
+
+        // When locked, any non-intercepted key event (except Ptt, Side1, Side2) must be sunk
+        if self.lock_mgr.is_locked {
+            if let Event::Key { code, .. } = *event {
+                if !matches!(code, KeyCode::Ptt | KeyCode::Side1 | KeyCode::Side2) {
+                    return FilterFlow::Stop(state_changed);
+                }
+            }
+        }
+
+        if state_changed {
+            FilterFlow::DirtyContinue
+        } else {
+            FilterFlow::Continue
+        }
     }
 
     fn update_key_ownership(&mut self, event: &Event, status: EventResult, fault_handled: bool) {
@@ -490,6 +530,44 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn filter_hotkeys_and_system<'a>(
+        &mut self,
+        ctx: &mut crate::services::SysContext<'a, '_>,
+        event: &Event,
+    ) -> FilterFlow {
+        if let Event::Key {
+            code,
+            state: KeyState::Pressed,
+        } = *event
+        {
+            if self.lock_mgr.is_f_active {
+                self.handle_f_key_action(ctx, code);
+                return FilterFlow::Stop(true);
+            }
+            if code != KeyCode::Ptt && code != KeyCode::KeyF && ctx.config.audio.key_beep != 0 {
+                ctx.play_beep(crate::services::melody::BeepType::from_u8(
+                    ctx.config.audio.key_beep,
+                ));
+            }
+        }
+
+        self.handle_system_audio_events(ctx, event);
+
+        if matches!(event, Event::Tick) {
+            self.tick_background_services(ctx);
+            record_proc_activation(self.active_app_id);
+        }
+
+        if let Event::Sys(sys_evt) = *event {
+            if self.handle_kernel_sys_event(ctx, sys_evt) {
+                return FilterFlow::Stop(true);
+            }
+        }
+
+        FilterFlow::Continue
+    }
+
+    #[inline(never)]
     pub fn dispatch_event<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -499,82 +577,41 @@ impl Orchestrator {
             self.lock_mgr.reset_input_tracking();
             return false;
         }
-        let handled = self.dispatch_active_event(ctx, event);
+        let mut handled = false;
+        for &filter in EVENT_FILTERS {
+            match filter(self, ctx, &event) {
+                FilterFlow::Continue => {}
+                FilterFlow::DirtyContinue => handled = true,
+                FilterFlow::Stop(res) => {
+                    handled |= res;
+                    break;
+                }
+            }
+        }
         self.drain_ipc_commands(ctx);
         handled
     }
 
-    fn dispatch_active_event<'a>(
+    #[inline(never)]
+    fn filter_active_app<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
-        event: Event,
-    ) -> bool {
+        event: &Event,
+    ) -> FilterFlow {
         let prev_app = self.active_app_id;
-
-        // 0. If an OS modal is active, modal compositor intercepts all input
-        if self.handle_modal_event(ctx, &event) {
-            self.lock_mgr.reset_input_tracking();
-            return true;
-        }
-
-        // 1. Keypad Lock & Hold Supervisor (strictly precedes all apps)
-        let (lock_intercepted, lock_state_changed) = self.supervise_lock(ctx, &event);
-        if lock_intercepted {
-            return true;
-        }
-
-        // When locked, any non-intercepted key event (except Ptt, Side1, Side2) must be sunk
-        if self.lock_mgr.is_locked {
-            if let Event::Key { code, .. } = event {
-                if !matches!(code, KeyCode::Ptt | KeyCode::Side1 | KeyCode::Side2) {
-                    return lock_state_changed;
-                }
-            }
-        }
-
-        // 2. Global F-Key modifier interception
-        if let Event::Key {
-            code,
-            state: KeyState::Pressed,
-        } = event
-        {
-            if self.lock_mgr.is_f_active {
-                self.handle_f_key_action(ctx, code);
-                return true;
-            }
-            if code != KeyCode::Ptt && code != KeyCode::KeyF && ctx.config.audio.key_beep != 0 {
-                ctx.play_beep(crate::services::melody::BeepType::from_u8(
-                    ctx.config.audio.key_beep,
-                ));
-            }
-        }
-
-        self.handle_system_audio_events(ctx, &event);
-
-        if matches!(event, Event::Tick) {
-            self.tick_background_services(ctx);
-            record_proc_activation(self.active_app_id);
-        }
-
-        // Intercept and dispatch Microkernel System & IPC Events
-        if let Event::Sys(sys_evt) = event {
-            if self.handle_kernel_sys_event(ctx, sys_evt) {
-                return true;
-            }
-        }
 
         // Key ownership tracking: if a key was consumed on Pressed, subsequent
         // Held/Released events for that key belong strictly to the active app.
-        let is_key_owned = match event {
+        let is_key_owned = match *event {
             Event::Key { code, .. } => self.owned_key == Some(code),
             _ => false,
         };
 
-        // 3. Forward event to active foreground app
-        let status = crate::AppRegistry::on_event(self.active_app_id, ctx, &event);
+        // Forward event to active foreground app
+        let status = crate::AppRegistry::on_event(self.active_app_id, ctx, event);
         record_proc_event_and_stack(self.active_app_id);
 
-        // 4. Dynamic Fault & Error Interception
+        // Dynamic Fault & Error Interception
         let mut fault_handled = false;
         match status {
             EventResult::Error(code) | EventResult::RecoverableFault(code) => {
@@ -584,25 +621,25 @@ impl Orchestrator {
             _ => {}
         }
 
-        // 5. Track key ownership or release
-        self.update_key_ownership(&event, status, fault_handled);
+        // Track key ownership or release
+        self.update_key_ownership(event, status, fault_handled);
 
-        // 6. If foreground app consumed the event, owns this key, or fault was handled, it is completely sunk!
+        // If foreground app consumed the event, owns this key, or fault was handled, it is sunk
         if status == EventResult::Consumed || is_key_owned || fault_handled {
             if matches!(event, Event::Key { .. }) {
                 self.lock_mgr.reset_input_tracking();
             }
-        } else {
-            // 7. Global navigation shortcuts & hotkeys (only if foreground app ignored the event and does not own the key)
-            self.handle_global_shortcuts(ctx, event);
+            return FilterFlow::Stop(
+                status == EventResult::Consumed || fault_handled || self.active_app_id != prev_app,
+            );
         }
 
-        status == EventResult::Consumed
-            || fault_handled
-            || self.active_app_id != prev_app
-            || lock_state_changed
+        // Global navigation shortcuts & hotkeys (only if foreground app ignored the event and does not own the key)
+        self.handle_global_shortcuts(ctx, *event);
+        FilterFlow::Stop(self.active_app_id != prev_app)
     }
 
+    #[cold]
     fn handle_dynamic_fault<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -629,11 +666,12 @@ impl Orchestrator {
         sink_exit_key();
     }
 
-    fn handle_modal_event<'a>(
+    #[inline(never)]
+    fn filter_modal_event<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
         event: &Event,
-    ) -> bool {
+    ) -> FilterFlow {
         unsafe {
             let modal_mut =
                 &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL);
@@ -693,9 +731,10 @@ impl Orchestrator {
                         crate::orchestrator::compositor::present_next_system_alert(ctx);
                     }
                 }
-                true
+                self.lock_mgr.reset_input_tracking();
+                FilterFlow::Stop(true)
             } else {
-                false
+                FilterFlow::Continue
             }
         }
     }

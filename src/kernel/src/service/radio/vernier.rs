@@ -44,7 +44,7 @@ impl VernierResult {
 /// alpha = (5000 * f_carrier_hz) / 26_000_000 (mHz per LSB).
 #[inline]
 pub fn compute_vernier_alpha(carrier_hz: u32) -> u32 {
-    carrier_hz / 5200
+    utils::div5200_u32(carrier_hz)
 }
 
 /// Solve for the optimal `(xtal_trim_offset, pll_comp_10hz)` pair to achieve `delta_dhz`.
@@ -72,9 +72,10 @@ pub fn solve_vernier(carrier_hz: u32, delta_dhz: i16) -> VernierResult {
 
     for xt in 0..=MAX_XTAL_TRIM {
         if numer >= 0 {
-            while numer >= PLL_STEP_MHZ {
-                numer -= PLL_STEP_MHZ;
-                pc += 1;
+            let step = utils::div10000_u32(numer as u32);
+            if step > 0 {
+                numer -= (step as i32) * PLL_STEP_MHZ;
+                pc += step as u16;
             }
             let err = (numer - (PLL_STEP_MHZ / 2)).abs();
             if err < min_err {

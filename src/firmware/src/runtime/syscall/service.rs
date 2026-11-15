@@ -91,6 +91,7 @@ pub unsafe extern "C" fn api_sys_self_pid() -> u8 {
     active_caller_pid()
 }
 
+#[inline(never)]
 pub unsafe extern "C" fn api_ipc_send_msg(msg: *const KrxIpcMessage) -> u8 {
     if msg.is_null() {
         return 1;

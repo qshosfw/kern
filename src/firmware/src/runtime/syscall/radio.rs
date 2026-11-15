@@ -366,35 +366,33 @@ pub unsafe extern "C" fn api_rf_set_vfo_config(
     };
     use utils::units::Frequency;
     let step = StepSetting::from_hz_x10(utils::math::div10_u32(cfg.step_hz).0 as u16);
-    {
-        let ch = ctx.state.coord.vfo_channel_mut(vfo);
-        ch.rx_freq = Frequency::new(cfg.rx_freq_hz);
-        ch.tx_shift = match cfg.tx_shift {
-            1 => RepeaterShift::Positive(Frequency::new(cfg.tx_offset_hz)),
-            2 => RepeaterShift::Negative(Frequency::new(cfg.tx_offset_hz)),
-            _ => RepeaterShift::Simplex,
-        };
-        ch.step = step;
-        ch.rx_subaudible = decode_subaudible(cfg.rx_subaudible.kind, cfg.rx_subaudible.value);
-        ch.tx_subaudible = decode_subaudible(cfg.tx_subaudible.kind, cfg.tx_subaudible.value);
-        ch.modulation = ModulationMode::from_u8(cfg.modulation);
-        ch.bandwidth = match cfg.bandwidth {
-            0 => Bandwidth::Wide25k,
-            2 => Bandwidth::Narrow6k25,
-            _ => Bandwidth::Narrow12k5,
-        };
-        ch.power = match cfg.power {
-            0 => RfPowerLevel::Low,
-            1 => RfPowerLevel::Medium,
-            _ => RfPowerLevel::High,
-        };
-        ch.squelch_level = cfg.squelch_level.min(9);
-        ch.reverse = cfg.reverse != 0;
-        ch.busy_lock = cfg.busy_lock != 0;
-    }
-    if !ctx.state.coord.is_transmitting && ctx.state.coord.listening_vfo == vfo {
-        ctx.radio
-            .configure_channel(ctx.state.coord.vfo_channel(vfo));
+    let needs_cfg = !ctx.state.coord.is_transmitting && ctx.state.coord.listening_vfo == vfo;
+    let ch = ctx.state.coord.vfo_channel_mut(vfo);
+    ch.rx_freq = Frequency::new(cfg.rx_freq_hz);
+    ch.tx_shift = match cfg.tx_shift {
+        1 => RepeaterShift::Positive(Frequency::new(cfg.tx_offset_hz)),
+        2 => RepeaterShift::Negative(Frequency::new(cfg.tx_offset_hz)),
+        _ => RepeaterShift::Simplex,
+    };
+    ch.step = step;
+    ch.rx_subaudible = decode_subaudible(cfg.rx_subaudible.kind, cfg.rx_subaudible.value);
+    ch.tx_subaudible = decode_subaudible(cfg.tx_subaudible.kind, cfg.tx_subaudible.value);
+    ch.modulation = ModulationMode::from_u8(cfg.modulation);
+    ch.bandwidth = match cfg.bandwidth {
+        0 => Bandwidth::Wide25k,
+        2 => Bandwidth::Narrow6k25,
+        _ => Bandwidth::Narrow12k5,
+    };
+    ch.power = match cfg.power {
+        0 => RfPowerLevel::Low,
+        1 => RfPowerLevel::Medium,
+        _ => RfPowerLevel::High,
+    };
+    ch.squelch_level = cfg.squelch_level.min(9);
+    ch.reverse = cfg.reverse != 0;
+    ch.busy_lock = cfg.busy_lock != 0;
+    if needs_cfg {
+        ctx.radio.configure_channel(ch);
     }
     0
 }

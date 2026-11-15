@@ -85,6 +85,7 @@ impl<T, const N: usize> EventQueue<T, N> {
 
 /// Generic lock-free inter-process communication event payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C, align(4))]
 pub struct SysEvent {
     pub target: u8,
     pub command: u8,
