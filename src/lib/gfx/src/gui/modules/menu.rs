@@ -135,19 +135,11 @@ impl SheetOptions {
                 }
             }
             SheetOptions::Packed(p) => {
-                let bytes = p.as_bytes();
-                let mut current = 0;
-                let mut start = 0;
-                for (i, &b) in bytes.iter().enumerate() {
-                    if b == 0 {
-                        if current == idx {
-                            return utils::format::ascii_str(&bytes[start..i]).unwrap_or("");
-                        }
-                        current += 1;
-                        start = i + 1;
-                    }
+                if idx <= u8::MAX as usize {
+                    utils::format::nth_cstr(p.as_bytes(), idx as u8)
+                } else {
+                    ""
                 }
-                ""
             }
         }
     }
