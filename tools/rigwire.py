@@ -14,10 +14,13 @@ Features:
 
 import argparse
 import os
+import re
+import socket
 import struct
 import sys
 import time
 import binascii
+import zlib
 
 try:
     import serial
@@ -34,6 +37,22 @@ FLAG_EVENT = 0x02
 HEADER_LEN = 15
 CRC_LEN = 2
 MIN_RECORD_LEN = 17
+MAX_WIRE_FILE_SIZE = 6144
+MAX_APP_PATH_LEN = 24
+MAX_CATALOG_PACKAGES = 6
+
+KRX_MAGIC = b"\xC0\xDE\x01\xFE"
+KRX_CLASSES = {0: "Native", 1: "Paged", 2: "VMachine", 3: "Declare"}
+KRX_EXEC_TYPES = {1: "App", 2: "Service", 3: "Daemon", 4: "Driver", 5: "Module"}
+KRX_PROFILES = {
+    0x10: "N0 (NativeFixed)",
+    0x11: "P0 (StructuredPaged)",
+    0x12: "N1 (NativePic)",
+    0x13: "P1 (TransparentPaged)",
+    0x20: "V0 (ResidentVm)",
+    0x30: "D0 (DeclareGraph)",
+    0x31: "F0 (FlowApp)",
+}
 
 # Service Domains (§8.5)
 SERVICE_CORE = 0x00
@@ -282,19 +301,260 @@ def crc32_ieee(data: bytes) -> int:
     return binascii.crc32(data) & 0xFFFFFFFF
 
 
+class RigWireError(RuntimeError):
+    """Typed RigWire protocol error carrying device status code."""
+
+    def __init__(self, status_code: int, status_name: str, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.status_name = status_name
+
+
+class _SocketTransport:
+    """pyserial-compatible buffered adapter over a TCP host:port socket."""
+
+    def __init__(self, host: str, port: int, timeout: float = 2.0):
+        self._sock = socket.create_connection((host, port), timeout=timeout)
+        self._sock.settimeout(timeout)
+        self._rx = bytearray()
+        self.is_open = True
+
+    def write(self, data: bytes) -> int:
+        self._sock.sendall(data)
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def reset_input_buffer(self):
+        self._rx.clear()
+        prev_timeout = self._sock.gettimeout()
+        try:
+            self._sock.settimeout(0.01)
+            while True:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    break
+        except (socket.timeout, BlockingIOError, OSError):
+            pass
+        finally:
+            self._sock.settimeout(prev_timeout)
+
+    def reset_output_buffer(self):
+        pass
+
+    def read_until_zero(self, deadline: float):
+        """Read one 0x00-delimited chunk from stream, or None on deadline."""
+        while True:
+            idx = self._rx.find(0)
+            if idx != -1:
+                frame = bytes(self._rx[:idx])
+                del self._rx[:idx + 1]
+                return frame
+            rem = deadline - time.time()
+            if rem <= 0:
+                return None
+            self._sock.settimeout(min(rem, 0.25))
+            try:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    return None
+                self._rx.extend(chunk)
+            except socket.timeout:
+                continue
+
+    def read(self, n: int = 1) -> bytes:
+        while len(self._rx) < n:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                break
+            self._rx.extend(chunk)
+        out = bytes(self._rx[:n])
+        del self._rx[:n]
+        return out
+
+    def close(self):
+        if self.is_open:
+            self.is_open = False
+            self._sock.close()
+
+
+def _parse_tcp_target(port_name: str):
+    target = port_name.strip()
+    for prefix in ("tcp://", "socket://"):
+        if target.startswith(prefix):
+            target = target[len(prefix):]
+            break
+    else:
+        if "://" in target or ":" not in target:
+            return None
+    host, _, port_str = target.rpartition(":")
+    if not port_str.isdigit():
+        return None
+    return (host or "127.0.0.1", int(port_str))
+
+
+def parse_dir_list_page(resp: bytes):
+    """Decode one TRANSFER_LIST response page into (next_cursor, entries)."""
+    if len(resp) < 3:
+        return 0xFFFF, []
+    next_cursor, count = struct.unpack("<HB", resp[:3])
+    entries = []
+    off = 3
+    for _ in range(count):
+        if off + 6 > len(resp):
+            break
+        is_dir = resp[off] != 0
+        size = struct.unpack("<I", resp[off + 1:off + 5])[0]
+        nlen = resp[off + 5]
+        if off + 6 + nlen > len(resp):
+            break
+        name = resp[off + 6:off + 6 + nlen].decode("utf-8", errors="replace")
+        off += 6 + nlen
+        entries.append({"name": name, "size": size, "is_dir": is_dir})
+    return next_cursor, entries
+
+
+def validate_krx_package(data: bytes) -> dict:
+    """Validate a .krx container against KRX-ABI preamble, sections, bounds, and CRC-32."""
+    if len(data) < 24:
+        raise ValueError(f"KRX too small ({len(data)} < 24 bytes)")
+    if len(data) > MAX_WIRE_FILE_SIZE:
+        raise ValueError(
+            f"KRX size ({len(data)} bytes) exceeds RigWire {MAX_WIRE_FILE_SIZE}-byte ceiling"
+        )
+    if data[:4] != KRX_MAGIC:
+        raise ValueError(f"Invalid KRX FourCC ident: {data[:4].hex()} (expected c0de01fe)")
+
+    app_class = data[4]
+    version = data[5]
+    if app_class not in KRX_CLASSES:
+        raise ValueError(f"Invalid KRX class: {app_class}")
+    if version == 0 or version > 5:
+        raise ValueError(f"Unsupported KRX version: {version}")
+
+    section_count, header_len, flags, payload_crc, header_crc, link_base = struct.unpack(
+        "<HHHIII", data[6:24]
+    )
+    if header_len < 24 or (header_len & 3) != 0 or header_len > len(data):
+        raise ValueError(f"Invalid KRX header_len: {header_len}")
+    if section_count == 0:
+        raise ValueError("KRX package contains 0 sections")
+
+    actual_hdr_crc = crc32_ieee(data[24:header_len])
+    if actual_hdr_crc != header_crc:
+        raise ValueError(
+            f"Header CRC-32 mismatch: expected {header_crc:#010x}, calculated {actual_hdr_crc:#010x}"
+        )
+
+    payload = data[header_len:]
+    actual_payload_crc = crc32_ieee(payload)
+    if actual_payload_crc != payload_crc:
+        raise ValueError(
+            f"Payload CRC-32 mismatch: expected {payload_crc:#010x}, calculated {actual_payload_crc:#010x}"
+        )
+
+    info = {
+        "class": app_class,
+        "class_name": KRX_CLASSES[app_class],
+        "version": version,
+        "section_count": section_count,
+        "header_len": header_len,
+        "payload_len": len(payload),
+        "header_crc32": actual_hdr_crc,
+        "payload_crc32": actual_payload_crc,
+        "file_crc32": crc32_ieee(data),
+        "name": None,
+        "semver": None,
+        "exec_type": 1,
+        "exec_type_name": "App",
+        "caps": 0,
+        "min_stack": 0,
+        "entry_point": 0,
+        "exec_payload_size": 0,
+        "profile_name": KRX_CLASSES[app_class],
+    }
+
+    off = 24
+    seen = set()
+    for _ in range(section_count):
+        if off + 4 > header_len:
+            raise ValueError("Truncated KRX section table")
+        sec_id, sec_len = struct.unpack("<HH", data[off:off + 4])
+        if sec_len < 4 or off + sec_len > header_len:
+            raise ValueError(f"Invalid KRX section 0x{sec_id:04X} length {sec_len}")
+        body = data[off + 4:off + sec_len]
+        seen.add(sec_id)
+
+        if sec_id == 0x0001 and len(body) >= 40:
+            name_off = struct.unpack("<H", body[0:2])[0]
+            info["semver"] = (body[2], body[3], body[4])
+            if name_off < header_len:
+                nul = data.find(b"\x00", name_off, header_len)
+                end = nul if nul != -1 else header_len
+                info["name"] = data[name_off:end].decode("utf-8", errors="replace")
+        elif sec_id == 0x0009 and len(body) >= 12:
+            exec_type = body[0]
+            if exec_type not in KRX_EXEC_TYPES:
+                raise ValueError(f"Invalid KRX exec_type: {exec_type}")
+            info["exec_type"] = exec_type
+            info["exec_type_name"] = KRX_EXEC_TYPES[exec_type]
+            info["caps"] = struct.unpack("<I", body[8:12])[0]
+        elif sec_id == 0x0002 and len(body) >= 28:
+            min_stack, _min_heap, page_sz, _cache_blks, _dma = struct.unpack("<HHHBB", body[0:8])
+            entry_pt, p_sz, _reloc_off, _reloc_cnt, _got_off, _rt_pin, _lat = struct.unpack(
+                "<IIHHHHH", body[8:26]
+            )
+            profile_raw = body[26]
+            info["min_stack"] = min_stack
+            info["entry_point"] = entry_pt
+            info["exec_payload_size"] = p_sz
+            if profile_raw in KRX_PROFILES:
+                info["profile_name"] = KRX_PROFILES[profile_raw]
+            if app_class == 0 and p_sz > 4096:
+                raise ValueError(f"Native resident payload ({p_sz}B) exceeds 4096B arena")
+            if len(payload) > 0 and app_class in (0, 1) and entry_pt >= len(payload):
+                raise ValueError(f"Entry point 0x{entry_pt:x} outside payload ({len(payload)}B)")
+        elif sec_id == 0x0005:  # BlockMap
+            for boff in range(0, len(body) - (len(body) % 8), 8):
+                blk_sz, blk_off = struct.unpack("<HI", body[boff + 2:boff + 8])
+                if blk_off < header_len or blk_off + blk_sz > len(data):
+                    raise ValueError(f"BlockMap entry out of bounds: off={blk_off}, sz={blk_sz}")
+        elif sec_id == 0x000A:  # LeafMap
+            for loff in range(0, len(body) - (len(body) % 16), 16):
+                leaf_sz, leaf_off = struct.unpack("<HI", body[loff + 2:loff + 8])
+                if leaf_off < header_len or leaf_off + leaf_sz > len(data):
+                    raise ValueError(f"LeafMap entry out of bounds: off={leaf_off}, sz={leaf_sz}")
+
+        off += (sec_len + 3) & ~3
+
+    if 0x0001 not in seen or 0x0002 not in seen:
+        raise ValueError("KRX package missing mandatory Identity or Execution section")
+
+    return info
+
+
 # ── RIGWIRE CLIENT ────────────────────────────────────────────────────────────
 class RigWireClient:
     def __init__(self, port_name: str, baudrate: int = 115200, timeout: float = 2.0):
-        if serial is None:
-            raise RuntimeError("pyserial is required: pip install pyserial")
-        self.ser = serial.Serial(port_name, baudrate=baudrate, timeout=timeout)
-        try:
-            self.ser.dtr = True
-            self.ser.rts = True
-            self.ser.reset_input_buffer()
-            self.ser.reset_output_buffer()
-        except Exception:
-            pass
+        tcp = _parse_tcp_target(port_name)
+        if tcp is not None:
+            self.ser = _SocketTransport(tcp[0], tcp[1], timeout=timeout)
+        else:
+            if serial is None:
+                raise RuntimeError("pyserial is required for serial ports: pip install pyserial")
+            if "://" in port_name:
+                self.ser = serial.serial_for_url(port_name, baudrate=baudrate, timeout=timeout)
+            else:
+                self.ser = serial.Serial(port_name, baudrate=baudrate, timeout=timeout)
+            try:
+                self.ser.dtr = True
+                self.ser.rts = True
+                self.ser.reset_input_buffer()
+                self.ser.reset_output_buffer()
+            except Exception:
+                pass
+        self.timeout = timeout
         self.session_id = 0x4B45524E  # "KERN"
         self.sequence = 1
         self.max_payload = 128
@@ -306,8 +566,9 @@ class RigWireClient:
     def send_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
         is_hello = (service == SERVICE_CORE and opcode == OP_CORE_HELLO)
         session = 0 if is_hello else self.session_id
-        seq = 0 if is_hello else self.sequence
-        if not is_hello:
+        # Firmware WireSession only advances expected_sequence for non-core services.
+        seq = 0 if service == SERVICE_CORE else self.sequence
+        if service != SERVICE_CORE:
             self.sequence = (self.sequence + 1) & 0xFFFFFFFF
 
         header = struct.pack(
@@ -332,38 +593,46 @@ class RigWireClient:
         return self.read_response(expected_service=service, expected_opcode=opcode)
 
     def read_response(self, expected_service: int, expected_opcode: int) -> bytes:
-        buf = bytearray()
-        start = time.time()
-        timeout = 2.5
+        deadline = time.time() + max(self.timeout, 2.5)
         decoded = None
 
-        while time.time() - start < timeout:
-            b = self.ser.read(1)
-            if not b:
-                continue
-            if b == b"\x00":
-                if buf:
-                    try:
-                        cand = cobs_decode(bytes(buf))
-                        if len(cand) >= MIN_RECORD_LEN and cand[0] == WIRE_MAGIC and cand[1] == WIRE_MAJOR:
-                            decoded = cand
-                            break
-                    except Exception:
-                        pass
-                    buf.clear()
+        while time.time() < deadline:
+            if hasattr(self.ser, "read_until_zero"):
+                raw_frame = self.ser.read_until_zero(deadline)
+                if raw_frame is None:
+                    break
             else:
-                buf.extend(b)
+                buf = bytearray()
+                while time.time() < deadline:
+                    b = self.ser.read(1)
+                    if not b:
+                        continue
+                    if b == b"\x00":
+                        break
+                    buf.extend(b)
+                else:
+                    raw_frame = None
+                    break
+                raw_frame = bytes(buf)
+
+            if not raw_frame:
+                continue
+            try:
+                cand = cobs_decode(raw_frame)
+            except Exception:
+                continue
+            if len(cand) < MIN_RECORD_LEN or cand[0] != WIRE_MAGIC or cand[1] != WIRE_MAJOR:
+                continue
+            flags = cand[2]
+            if (flags & FLAG_EVENT) != 0:
+                continue
+            if cand[3] != expected_service or cand[4] != expected_opcode:
+                continue
+            decoded = cand
+            break
 
         if decoded is None:
-            if buf:
-                try:
-                    cand = cobs_decode(bytes(buf))
-                    if len(cand) >= MIN_RECORD_LEN and cand[0] == WIRE_MAGIC and cand[1] == WIRE_MAJOR:
-                        decoded = cand
-                except Exception:
-                    pass
-            if decoded is None:
-                raise TimeoutError("No valid response frame received from radio (delimiter timeout)")
+            raise TimeoutError("No valid response frame received from radio (delimiter timeout)")
 
         magic, major, flags, service, opcode, session, seq, plen = struct.unpack(
             "<BBBBBIIH", decoded[:HEADER_LEN]
@@ -391,7 +660,11 @@ class RigWireClient:
         app_data = payload[1:]
 
         if status_code != 0:
-            raise RuntimeError(f"Radio responded with status {status_name} ({status_code})")
+            raise RigWireError(
+                status_code,
+                status_name,
+                f"Radio responded with status {status_name} ({status_code})",
+            )
 
         return app_data
 
@@ -777,11 +1050,27 @@ class RigWireClient:
 
     # ── HARDENED DATA SERVICE (0x03) ──────────────────────────────────────────
 
+    def _validate_remote_path(self, path: str):
+        raw = path.encode("utf-8")
+        if not path.startswith("/") or len(raw) > 32 or "//" in path or ".." in path:
+            raise ValueError(f"Invalid KernFS path '{path}' (must start with /, <= 32 bytes)")
+
+    def _abort_transfer(self, tid: int):
+        try:
+            self.send_record(SERVICE_DATA, OP_TRANSFER_ABORT, struct.pack("<H", tid))
+        except Exception:
+            pass
+
     def stat(self, path: str) -> dict:
         """Query metadata for remote file via TRANSFER_STAT."""
         path_b = path.encode("utf-8")
         req = struct.pack("<B", len(path_b)) + path_b
-        resp = self.send_record(SERVICE_DATA, OP_TRANSFER_STAT, req)
+        try:
+            resp = self.send_record(SERVICE_DATA, OP_TRANSFER_STAT, req)
+        except RigWireError as e:
+            if e.status_code == 22:  # NOT_FOUND
+                return {"path": path, "exists": False, "is_dir": False, "size": 0, "crc32": 0}
+            raise
         if len(resp) < 10:
             raise ValueError("Short TRANSFER_STAT response")
         exists, is_dir, size, crc32 = struct.unpack("<BBII", resp[:10])
@@ -794,40 +1083,41 @@ class RigWireClient:
         }
 
     def ls(self, path: str = "/") -> list:
-        """List files in directory via TRANSFER_LIST."""
+        """List files in directory via paginated TRANSFER_LIST."""
         path_b = path.encode("utf-8")
-        req = struct.pack("<HB", 0, len(path_b)) + path_b
-        resp = self.send_record(SERVICE_DATA, OP_TRANSFER_LIST, req)
-        if len(resp) < 3:
-            return []
-        next_cursor, count = struct.unpack("<HB", resp[:3])
         entries = []
-        off = 3
-        for _ in range(count):
-            if off + 6 > len(resp):
+        cursor = 0
+        while True:
+            req = struct.pack("<HB", cursor, len(path_b)) + path_b
+            resp = self.send_record(SERVICE_DATA, OP_TRANSFER_LIST, req)
+            next_cursor, page = parse_dir_list_page(resp)
+            entries.extend(page)
+            if next_cursor == 0xFFFF or not page or next_cursor <= cursor:
                 break
-            is_dir = resp[off] != 0
-            size = struct.unpack("<I", resp[off + 1:off + 5])[0]
-            nlen = resp[off + 5]
-            name = resp[off + 6:off + 6 + nlen].decode("utf-8", errors="replace")
-            off += 6 + nlen
-            entries.append({"name": name, "size": size, "is_dir": is_dir})
+            cursor = next_cursor
         return entries
 
     def rm(self, path: str):
         """Unlink file via TRANSFER_REMOVE."""
+        self._validate_remote_path(path)
         path_b = path.encode("utf-8")
         req = struct.pack("<B", len(path_b)) + path_b
         self.send_record(SERVICE_DATA, OP_TRANSFER_REMOVE, req)
 
     def push(self, local_path: str, remote_path: str):
-        """Upload file via chunked streaming TRANSFER_OPEN/CHUNK/CLOSE (enforces 8 KiB ceiling)."""
+        """Upload file via chunked streaming TRANSFER_OPEN/CHUNK/CLOSE (max 6 KiB)."""
         with open(local_path, "rb") as f:
             data = f.read()
+        self.push_bytes(data, remote_path)
 
+    def push_bytes(self, data: bytes, remote_path: str):
+        """Upload raw bytes via chunked streaming TRANSFER_OPEN/CHUNK/CLOSE."""
+        self._validate_remote_path(remote_path)
         total_size = len(data)
-        if total_size > 8192:
-            raise ValueError(f"File size ({total_size} bytes) exceeds hardened KernFS 8192-byte upload ceiling!")
+        if total_size > MAX_WIRE_FILE_SIZE:
+            raise ValueError(
+                f"File size ({total_size} bytes) exceeds hardened KernFS {MAX_WIRE_FILE_SIZE}-byte upload ceiling!"
+            )
 
         file_crc32 = crc32_ieee(data)
         chunk_size = 96
@@ -838,44 +1128,112 @@ class RigWireClient:
         resp_open = self.send_record(SERVICE_DATA, OP_TRANSFER_OPEN, req_open)
         if len(resp_open) < 8:
             raise ValueError("Invalid TRANSFER_OPEN response")
-        tid, negotiated_chunk, existing_sz = struct.unpack("<HHI", resp_open[:8])
+        tid, negotiated_chunk, _existing_sz = struct.unpack("<HHI", resp_open[:8])
 
         chunk_size = max(16, min(negotiated_chunk, 120))
-        print(f"  Transfer ID #{tid}: Uploading {total_size} bytes (chunk: {chunk_size}B)...")
+        print(f"  Transfer ID #{tid}: Uploading {total_size} bytes to {remote_path} (chunk: {chunk_size}B)...")
 
-        # 2. STREAM CHUNKS
-        offset = 0
-        t0 = time.time()
-        while offset < total_size:
-            chunk = data[offset:offset + chunk_size]
-            req_chunk = struct.pack("<HIH", tid, offset, len(chunk)) + chunk
-            self.send_record(SERVICE_DATA, OP_TRANSFER_CHUNK, req_chunk)
-            offset += len(chunk)
+        try:
+            # 2. STREAM CHUNKS
+            offset = 0
+            t0 = time.time()
+            while offset < total_size:
+                chunk = data[offset:offset + chunk_size]
+                req_chunk = struct.pack("<HIH", tid, offset, len(chunk)) + chunk
+                self.send_record(SERVICE_DATA, OP_TRANSFER_CHUNK, req_chunk)
+                offset += len(chunk)
 
-            # Progress Bar
-            pct = int((offset / total_size) * 100) if total_size > 0 else 100
-            bar = "=" * (pct // 5) + ">" + " " * (20 - (pct // 5))
-            sys.stdout.write(f"\r  [{bar[:20]}] {pct:3d}% ({offset}/{total_size}B)")
-            sys.stdout.flush()
+                pct = int((offset / total_size) * 100)
+                bar = "=" * (pct // 5) + ">" + " " * (20 - (pct // 5))
+                sys.stdout.write(f"\r  [{bar[:20]}] {pct:3d}% ({offset}/{total_size}B)")
+                sys.stdout.flush()
 
-        elapsed = max(time.time() - t0, 0.001)
-        speed = (total_size / elapsed) / 1024.0
-        print(f"\n  Streaming complete ({speed:.1f} KB/s). Committing...")
+            elapsed = max(time.time() - t0, 0.001)
+            speed = (total_size / elapsed) / 1024.0
+            print(f"\n  Streaming complete ({speed:.1f} KB/s). Committing...")
 
-        # 3. TRANSFER_CLOSE
-        req_close = struct.pack("<HI", tid, file_crc32)
-        resp_close = self.send_record(SERVICE_DATA, OP_TRANSFER_CLOSE, req_close)
+            # 3. TRANSFER_CLOSE
+            req_close = struct.pack("<HI", tid, file_crc32)
+            resp_close = self.send_record(SERVICE_DATA, OP_TRANSFER_CLOSE, req_close)
+        except Exception:
+            self._abort_transfer(tid)
+            raise
+
         if len(resp_close) < 6:
             raise ValueError("Short TRANSFER_CLOSE response")
-        close_tid, written_crc32 = struct.unpack("<HI", resp_close[:6])
+        _close_tid, written_crc32 = struct.unpack("<HI", resp_close[:6])
 
-        if file_crc32 != 0 and written_crc32 != file_crc32:
-            raise ValueError(f"CRC-32 verification mismatch! Sent: {file_crc32:#010x}, Device wrote: {written_crc32:#010x}")
+        if written_crc32 != file_crc32:
+            raise ValueError(
+                f"CRC-32 verification mismatch! Sent: {file_crc32:#010x}, Device wrote: {written_crc32:#010x}"
+            )
 
         print(f"  Verified CRC-32: {written_crc32:#010x} OK")
 
+    def sideload(self, local_path: str, name: str = None, verify: bool = True, force: bool = False) -> dict:
+        """Validate a .krx package and install it into /apps/ on the radio."""
+        with open(local_path, "rb") as f:
+            data = f.read()
+
+        info = validate_krx_package(data)
+        raw_name = name if name else os.path.basename(local_path)
+        base = os.path.basename(raw_name.strip())
+        if base.lower().endswith(".krx"):
+            base = base[:-4]
+        if not base or not re.fullmatch(r"[A-Za-z0-9_-]+", base):
+            raise ValueError(f"Invalid app filename stem '{base}' (use ASCII letters, digits, _, -)")
+        filename = f"{base}.krx"
+        remote_path = f"/apps/{filename}"
+        if len(remote_path) > MAX_APP_PATH_LEN:
+            raise ValueError(
+                f"Remote path '{remote_path}' ({len(remote_path)} chars) exceeds firmware catalog limit ({MAX_APP_PATH_LEN} chars)"
+            )
+
+        existing = self.stat(remote_path)
+        if existing["exists"]:
+            if existing["is_dir"]:
+                raise ValueError(f"Target path '{remote_path}' is a directory")
+            if not force:
+                raise FileExistsError(
+                    f"'{remote_path}' already exists ({existing['size']}B); pass --force to overwrite"
+                )
+        else:
+            apps_entries = self.ls("/apps")
+            pkg_count = sum(
+                1 for e in apps_entries if not e["is_dir"] and e["name"].endswith((".krx", ".app"))
+            )
+            if pkg_count >= MAX_CATALOG_PACKAGES and not force:
+                raise RuntimeError(
+                    f"/apps already has {pkg_count}/{MAX_CATALOG_PACKAGES} catalog packages; remove one or pass --force"
+                )
+
+        ver = info["semver"]
+        ver_str = f"{ver[0]}.{ver[1]}.{ver[2]}" if ver else "unknown"
+        print(
+            f"  Validated KRX '{info['name'] or base}' v{ver_str} "
+            f"[{info['profile_name']}, {info['exec_type_name']}, caps={info['caps']:#x}, "
+            f"{len(data)}B, crc={info['file_crc32']:#010x}]"
+        )
+
+        self.push_bytes(data, remote_path)
+
+        if verify:
+            st = self.stat(remote_path)
+            if (
+                not st["exists"]
+                or st["is_dir"]
+                or st["size"] != len(data)
+                or st["crc32"] != info["file_crc32"]
+            ):
+                raise RuntimeError(f"Post-install verification failed for {remote_path}: {st}")
+            print(f"  Installed and verified '{remote_path}' ({st['size']} B, CRC-32 {st['crc32']:#010x})")
+
+        info["remote_path"] = remote_path
+        return info
+
     def pull(self, remote_path: str, local_path: str):
-        """Download file via chunked streaming TRANSFER_OPEN/CHUNK/CLOSE without size limits."""
+        """Download file via chunked streaming TRANSFER_OPEN/CHUNK/CLOSE."""
+        self._validate_remote_path(remote_path)
         path_b = remote_path.encode("utf-8")
         chunk_size = 96
 
@@ -885,32 +1243,37 @@ class RigWireClient:
         if len(resp_open) < 8:
             raise ValueError("Invalid TRANSFER_OPEN response")
         tid, negotiated_chunk, total_size = struct.unpack("<HHI", resp_open[:8])
+        chunk_size = max(16, min(negotiated_chunk, 120))
 
         print(f"  Transfer ID #{tid}: Downloading {remote_path} ({total_size} bytes)...")
         received = bytearray()
         offset = 0
-        t0 = time.time()
 
-        while offset < total_size:
-            req_chunk = struct.pack("<HIH", tid, offset, chunk_size)
-            resp_chunk = self.send_record(SERVICE_DATA, OP_TRANSFER_CHUNK, req_chunk)
-            if len(resp_chunk) < 8:
-                break
-            rx_tid, rx_off, rx_len = struct.unpack("<HIH", resp_chunk[:8])
-            data = resp_chunk[8:8 + rx_len]
-            if not data:
-                break
-            received.extend(data)
-            offset += len(data)
+        try:
+            while offset < total_size:
+                req_len = min(chunk_size, total_size - offset)
+                req_chunk = struct.pack("<HIH", tid, offset, req_len)
+                resp_chunk = self.send_record(SERVICE_DATA, OP_TRANSFER_CHUNK, req_chunk)
+                if len(resp_chunk) < 8:
+                    raise RuntimeError("Short TRANSFER_CHUNK response")
+                _rx_tid, _rx_off, rx_len = struct.unpack("<HIH", resp_chunk[:8])
+                data = resp_chunk[8:8 + rx_len]
+                if not data:
+                    raise RuntimeError(f"Unexpected EOF at offset {offset}/{total_size}")
+                received.extend(data)
+                offset += len(data)
 
-            pct = int((offset / total_size) * 100) if total_size > 0 else 100
-            bar = "=" * (pct // 5) + ">" + " " * (20 - (pct // 5))
-            sys.stdout.write(f"\r  [{bar[:20]}] {pct:3d}% ({offset}/{total_size}B)")
-            sys.stdout.flush()
+                pct = int((offset / total_size) * 100)
+                bar = "=" * (pct // 5) + ">" + " " * (20 - (pct // 5))
+                sys.stdout.write(f"\r  [{bar[:20]}] {pct:3d}% ({offset}/{total_size}B)")
+                sys.stdout.flush()
 
-        # 3. TRANSFER_CLOSE
-        req_close = struct.pack("<HI", tid, 0)
-        self.send_record(SERVICE_DATA, OP_TRANSFER_CLOSE, req_close)
+            # 3. TRANSFER_CLOSE
+            req_close = struct.pack("<HI", tid, 0)
+            self.send_record(SERVICE_DATA, OP_TRANSFER_CLOSE, req_close)
+        except Exception:
+            self._abort_transfer(tid)
+            raise
 
         with open(local_path, "wb") as f:
             f.write(received)
@@ -1104,6 +1467,23 @@ def run_protocol_tests():
     assert first_char == chr(0x2849), f"Expected {chr(0x2849)} (0x2849), got {first_char} ({ord(first_char):#x})"
     print(f"PASSED (verified character '{first_char}')")
 
+    print("Test 8: KRX Validator & Paginated Dir-List Decoder...", end=" ")
+    sample_krx = os.path.join(os.path.dirname(os.path.dirname(__file__)), "packages", "beacon", "beacon.krx")
+    if os.path.exists(sample_krx):
+        kinfo = validate_krx_package(open(sample_krx, "rb").read())
+        assert kinfo["name"] and kinfo["class_name"] == "Native"
+    bad_crc = bytearray(open(sample_krx, "rb").read())
+    bad_crc[-1] ^= 0xFF
+    try:
+        validate_krx_package(bytes(bad_crc))
+        raise AssertionError("Corrupt KRX CRC should fail")
+    except ValueError:
+        pass
+    page_blob = struct.pack("<HBBIB", 4, 1, 0, 1234, 5) + b"a.krx"
+    nc, ents = parse_dir_list_page(page_blob)
+    assert nc == 4 and len(ents) == 1 and ents[0]["name"] == "a.krx" and ents[0]["size"] == 1234
+    print("PASSED")
+
     print("\n✨ All RigWire protocol self-tests passed with 100% conformance!")
     print("==================================================================")
 
@@ -1198,9 +1578,15 @@ def main():
     stat_p = subparsers.add_parser("stat", help="Query file existence, size, and CRC-32 metadata")
     stat_p.add_argument("path", help="Target path on radio filesystem")
 
-    push_p = subparsers.add_parser("push", help="Upload local file to radio filesystem (max 8 KiB)")
+    push_p = subparsers.add_parser("push", help="Upload local file to radio filesystem (max 6 KiB)")
     push_p.add_argument("local", help="Local file path")
     push_p.add_argument("remote", help="Remote file path on radio (e.g. /apps/game.krx, /sys/calib.dat)")
+
+    side_p = subparsers.add_parser("sideload", help="Validate and install a .krx package into /apps/")
+    side_p.add_argument("krx", help="Local .krx package path")
+    side_p.add_argument("-n", "--name", help="Optional target app stem name in /apps/ (default: filename stem)")
+    side_p.add_argument("-f", "--force", action="store_true", help="Overwrite existing app if present")
+    side_p.add_argument("--no-verify", action="store_true", help="Skip post-upload stat/CRC verification")
 
     pull_p = subparsers.add_parser("pull", help="Download file from radio to local machine")
     pull_p.add_argument("remote", help="Remote file path on radio")
@@ -1469,6 +1855,14 @@ def main():
 
         elif args.command == "push":
             client.push(args.local, args.remote)
+
+        elif args.command == "sideload":
+            client.sideload(
+                args.krx,
+                name=args.name,
+                verify=not args.no_verify,
+                force=args.force,
+            )
 
         elif args.command == "pull":
             client.pull(args.remote, args.local)

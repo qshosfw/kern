@@ -158,6 +158,19 @@ fn test_inline_direct_indirect_and_read_file_at() {
 }
 
 #[test]
+fn test_stat_info_distinguishes_files_and_dirs() {
+    let mut flash = SmallFlash::new();
+    let mut fs = KernFS::new(&mut flash);
+    fs.format(None).unwrap();
+    fs.create_dir("/apps").unwrap();
+    fs.write_file("/apps/demo.krx", &[0xA5; 42]).unwrap();
+
+    assert_eq!(fs.stat_info("/apps").unwrap(), (0, true));
+    assert_eq!(fs.stat_info("/apps/demo.krx").unwrap(), (42, false));
+    assert_eq!(fs.stat_info("/missing"), Err(FsError::NotFound));
+}
+
+#[test]
 fn test_directories_metadata_rename_and_remove() {
     let mut flash = SmallFlash::new();
     let mut fs = KernFS::new(&mut flash);

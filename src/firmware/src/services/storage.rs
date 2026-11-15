@@ -9,6 +9,9 @@ impl NoStorage {
     pub fn exists(&mut self, _path: &str) -> bool {
         false
     }
+    pub fn stat_info(&mut self, _path: &str) -> Result<(usize, bool), StorageError> {
+        Err(StorageError::NotFound)
+    }
     pub fn file_size(&mut self, _path: &str) -> Result<usize, StorageError> {
         Err(StorageError::NotFound)
     }

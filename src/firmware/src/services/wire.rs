@@ -110,7 +110,7 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     // `handle_*_service` only reads `hw.wire.session` and never touches `rx_buf` until `send_response`.
     let payload = unsafe { core::slice::from_raw_parts(raw.as_ptr(), plen) };
 
-    let mut out_uninit = core::mem::MaybeUninit::<[u8; 136]>::uninit();
+    let mut out_uninit = core::mem::MaybeUninit::<[u8; 128]>::uninit();
     let out = unsafe { &mut *out_uninit.as_mut_ptr() };
 
     let (status, resp_len) = if header.service == SERVICE_DATA && header.opcode == OP_TRANSFER_CHUNK
@@ -547,10 +547,53 @@ fn validate_file_path(path: &str, is_write: bool, allow_calib: bool) -> Result<(
     Ok(())
 }
 
+fn invalidate_apps_if_needed(path: &str) {
+    if path.starts_with("/apps/") {
+        crate::apps::launcher::catalog::get_catalog().mark_dirty();
+    }
+}
+
+#[inline(always)]
+fn trim_trailing_slash(path: &str) -> &str {
+    let b = path.as_bytes();
+    if b.len() > 1 && b[b.len() - 1] == b'/' {
+        &path[..b.len() - 1]
+    } else {
+        path
+    }
+}
+
+fn stat_or_root(
+    fs: &mut crate::services::SystemStorage,
+    path: &str,
+) -> Result<(usize, bool), crate::services::StorageError> {
+    let path = trim_trailing_slash(path);
+    if path == "/" {
+        Ok((0, true))
+    } else {
+        fs.stat_info(path)
+    }
+}
+
 fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferOpenRequest::parse(payload).ok_or(WireStatus::BadLength)?;
-    validate_file_path(req.path, req.mode == TRANSFER_MODE_WRITE, true)?;
-    if req.mode == TRANSFER_MODE_WRITE {
+    if req.mode > TRANSFER_MODE_WRITE {
+        return Err(WireStatus::BadRange);
+    }
+    let is_write = req.mode == TRANSFER_MODE_WRITE;
+    validate_file_path(req.path, is_write, true)?;
+    let stat = ctx.hw.filesystem.stat_info(req.path);
+    let existing_size = match stat {
+        Ok((sz, is_dir)) => {
+            if is_dir {
+                return Err(WireStatus::BadRange);
+            }
+            sz as u32
+        }
+        Err(_) if !is_write => return Err(WireStatus::NotFound),
+        Err(_) => 0,
+    };
+    if is_write {
         if req.total_size as usize > MAX_WIRE_FILE_SIZE {
             return Err(WireStatus::BadLength);
         }
@@ -559,7 +602,6 @@ fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
         }
     }
 
-    let existing_size = ctx.hw.filesystem.file_size(req.path).unwrap_or(0) as u32;
     let tid = unsafe {
         let next_ptr = core::ptr::addr_of_mut!(NEXT_TRANSFER_ID);
         let id = *next_ptr;
@@ -590,7 +632,7 @@ fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
 fn on_transfer_chunk(
     payload: &[u8],
     hw: &mut SystemHardware,
-    out: &mut [u8; 136],
+    out: &mut [u8; 128],
 ) -> (WireStatus, usize) {
     let Some(req) = TransferChunkRequest::parse(payload) else {
         return (WireStatus::BadLength, 0);
@@ -684,6 +726,7 @@ fn on_transfer_close(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wi
         {
             return Err(WireStatus::IoError);
         }
+        invalidate_apps_if_needed(path);
     }
 
     ctx.write_u16(req.transfer_id);
@@ -695,11 +738,12 @@ fn on_transfer_close(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wi
 fn on_transfer_stat(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferStatRequest::parse(payload).ok_or(WireStatus::BadLength)?;
 
-    let Ok(sz) = ctx.hw.filesystem.file_size(req.path) else {
+    let Ok((sz, is_dir)) = stat_or_root(ctx.hw.filesystem, req.path) else {
         ctx.w.write_zeroes(10);
-        return Err(WireStatus::NotFound);
+        return Ok(());
     };
 
+    let sz = if is_dir { 0 } else { sz };
     let mut crc_val = 0xFFFF_FFFFu32;
     let mut cur_off = 0usize;
     let mut uninit = core::mem::MaybeUninit::<[u8; 32]>::uninit();
@@ -718,7 +762,7 @@ fn on_transfer_stat(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
             _ => break,
         }
     }
-    ctx.write_u16(1);
+    ctx.write_u16(1 | (u16::from(is_dir) << 8));
     ctx.write_u32(sz as u32);
     ctx.write_u32(!crc_val);
     Ok(())
@@ -727,6 +771,7 @@ fn on_transfer_stat(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
 #[inline(never)]
 fn on_transfer_list(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferListRequest::parse(payload).ok_or(WireStatus::BadLength)?;
+    let path = trim_trailing_slash(req.path);
 
     let active_upload = unsafe {
         let t = &*core::ptr::addr_of!(CURRENT_TRANSFER);
@@ -736,27 +781,58 @@ fn on_transfer_list(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
         return Err(WireStatus::Busy);
     }
 
+    match stat_or_root(ctx.hw.filesystem, path) {
+        Ok((_, true)) => {}
+        Ok((_, false)) => return Err(WireStatus::BadRange),
+        Err(_) => return Err(WireStatus::NotFound),
+    }
+
+    const MAX_LIST_ENTRIES: usize = (crate::data::arena::TRANSIENT_ARENA_BYTES
+        - crate::data::arena::TRANSIENT_SCRATCH_OFFSET)
+        / core::mem::size_of::<DirEntryInfo>();
+    const {
+        assert!(MAX_LIST_ENTRIES >= 16);
+        assert!(
+            core::mem::align_of::<DirEntryInfo>()
+                <= core::mem::align_of::<crate::data::arena::AlignedArena>()
+        );
+    }
     let entries = unsafe {
-        let ptr = crate::runtime::arena_base_ptr() as *mut DirEntryInfo;
-        core::ptr::write_bytes(ptr, 0, 12);
-        core::slice::from_raw_parts_mut(ptr, 12)
+        let ptr = crate::data::arena::scratch_tail_bytes_mut().as_mut_ptr() as *mut DirEntryInfo;
+        core::ptr::write_bytes(ptr, 0, MAX_LIST_ENTRIES);
+        core::slice::from_raw_parts_mut(ptr, MAX_LIST_ENTRIES)
     };
-    let count = ctx.hw.filesystem.list_dir(req.path, entries).unwrap_or(0);
+    let count = ctx
+        .hw
+        .filesystem
+        .list_dir(path, entries)
+        .unwrap_or(0)
+        .min(MAX_LIST_ENTRIES);
 
-    ctx.write_u16(0xFFFFu16);
-    ctx.w.write_u8(count as u8);
+    let start = req.cursor as usize;
+    let mut next_cursor = 0xFFFFu16;
+    let mut written = 0u8;
+    ctx.w.write_zeroes(3);
 
-    for entry in &entries[..count] {
+    for (idx, entry) in entries[..count].iter().enumerate().skip(start) {
         let b = entry.path.as_str().as_bytes();
         let name_len = b.len().min(24);
         if ctx.w.remaining() < 6 + name_len {
+            next_cursor = idx as u16;
             break;
         }
         ctx.w.write_u8(entry.is_dir as u8);
         ctx.write_u32(entry.size as u32);
         ctx.w.write_u8(name_len as u8);
         ctx.w.write_bytes(&b[..name_len]);
+        written += 1;
     }
+
+    let hdr = ctx.w.as_mut_slice();
+    let nc = next_cursor.to_le_bytes();
+    hdr[0] = nc[0];
+    hdr[1] = nc[1];
+    hdr[2] = written;
     Ok(())
 }
 
@@ -783,10 +859,17 @@ fn handle_data_service(
         OP_TRANSFER_LIST => on_transfer_list(payload, ctx),
         OP_TRANSFER_REMOVE => match TransferRemoveRequest::parse(payload) {
             Some(req) => validate_file_path(req.path, true, false).and_then(|()| {
+                match ctx.hw.filesystem.stat_info(req.path) {
+                    Ok((_, true)) => return Err(WireStatus::BadRange),
+                    Ok((_, false)) => {}
+                    Err(_) => return Err(WireStatus::NotFound),
+                }
                 ctx.hw
                     .filesystem
                     .remove(req.path)
-                    .map_err(|_| WireStatus::NotFound)
+                    .map_err(|_| WireStatus::NotFound)?;
+                invalidate_apps_if_needed(req.path);
+                Ok(())
             }),
             None => Err(WireStatus::BadLength),
         },

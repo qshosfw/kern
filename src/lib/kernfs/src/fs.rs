@@ -448,9 +448,14 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     #[inline(never)]
-    pub fn file_size(&mut self, path: &str) -> Result<usize, FsError> {
+    pub fn stat_info(&mut self, path: &str) -> Result<(usize, bool), FsError> {
         self.lookup_inode(path)?;
-        Ok(self.cur_inode.size as usize)
+        Ok((self.cur_inode.size as usize, self.cur_inode.is_dir()))
+    }
+
+    #[inline(always)]
+    pub fn file_size(&mut self, path: &str) -> Result<usize, FsError> {
+        self.stat_info(path).map(|(sz, _)| sz)
     }
 
     #[inline(never)]

@@ -136,6 +136,10 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.remove(path).map_err(Self::map_error)
     }
 
+    pub fn stat_info(&mut self, path: &str) -> Result<(usize, bool), StorageError> {
+        self.fs.stat_info(path).map_err(Self::map_error)
+    }
+
     pub fn file_size(&mut self, path: &str) -> Result<usize, StorageError> {
         self.fs.file_size(path).map_err(Self::map_error)
     }
