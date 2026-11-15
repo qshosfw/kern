@@ -141,6 +141,20 @@ static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
 ];
 
 #[inline(never)]
+pub fn show_radio_sheet(
+    ctx: &mut SysContext,
+    tag: u8,
+    title: &'static str,
+    options: gfx::gui::modules::menu::SheetOptions,
+    selected: usize,
+) {
+    ctx.show_sheet(
+        tag,
+        OptionSheet::new(title, options, selected).with_radio(true),
+    );
+}
+
+#[inline(never)]
 pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
     for spec in DESTRUCTIVE_CONFIRMS {
         if spec.action == action_id {
@@ -159,10 +173,7 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
         ActionId::ChooseModel => {
             let opts = gfx::gui::modules::menu::SheetOptions::Packed(super::device::MODEL_OPTIONS);
             let sel = (ctx.config.system.model as usize).min(opts.len() - 1);
-            ctx.show_sheet(
-                TAG_MODEL_CHOOSER,
-                OptionSheet::new("Model", opts, sel).with_radio(true),
-            );
+            show_radio_sheet(ctx, TAG_MODEL_CHOOSER, "Model", opts, sel);
         }
         #[cfg(feature = "text_input")]
         ActionId::EditOwner => prompt_config_str(ctx, TAG_OWNER_INPUT),

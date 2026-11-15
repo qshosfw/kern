@@ -87,11 +87,10 @@ pub fn populate_package_list(
         if !crate::apps::launcher::catalog::PackageCatalog::matches_kind(entry, is_service) {
             continue;
         }
-        items[count] = MenuItem::new(
-            entry.title.as_str(),
-            MenuItemType::Value(ShortString::empty()),
-        );
-        if let MenuItemType::Value(ref mut s) = items[count].item_type {
+        let item = &mut items[count];
+        item.title = entry.title.as_str();
+        item.item_type = MenuItemType::Value(ShortString::empty());
+        if let MenuItemType::Value(ref mut s) = item.item_type {
             if is_service {
                 s.set_str(entry.exec_type.as_str());
             } else if entry.is_valid {
@@ -105,9 +104,11 @@ pub fn populate_package_list(
     }
 
     if count == 0 && !items.is_empty() {
-        items[0] = MenuItem::new(
+        add_detail_row(
+            items,
+            &mut count,
             if is_service { "No Services" } else { "No Apps" },
-            MenuItemType::Value(ShortString::from_str("In /apps/")),
+            "In /apps/",
         );
         if !icons.is_empty() {
             icons[0] = gfx::icons::ICON_APPS;
@@ -158,7 +159,7 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
     add_detail_row(items, &mut n, "Class", pkg.app_class.as_str());
     let mut size_s = ShortString::empty();
     format_size_into(pkg.size_bytes, &mut size_s);
-    push_item(items, &mut n, "Size", MenuItemType::Value(size_s));
+    add_detail_row(items, &mut n, "Size", size_s.as_str());
     add_detail_row(items, &mut n, "File", pkg.filename());
     push_item(items, &mut n, "Delete", MenuItemType::Action);
     n

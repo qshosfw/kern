@@ -3,9 +3,7 @@
 
 use crate::SysContext;
 use gfx::Canvas;
-use gfx::gui::modules::menu::{
-    MenuItem, MenuItemType, MenuModel, MenuModelMut, MenuView, OptionSheet,
-};
+use gfx::gui::modules::menu::{MenuItem, MenuItemType, MenuModel, MenuModelMut, MenuView};
 use gfx::gui::view::View;
 use kernel::app::{App, AppMetadata, EventResult, ModalResult, StatusBarConfig};
 use kernel::event::{Event, KeyCode, KeyState};
@@ -157,9 +155,12 @@ impl SettingsApp {
 
         let item = &self.items[sel_idx];
         if let MenuItemType::Choice { selected, options } = item.item_type {
-            ctx.show_sheet(
+            dialog::show_radio_sheet(
+                ctx,
                 dialog::TAG_CHOICE_SHEET,
-                OptionSheet::new(item.title, options, selected as usize).with_radio(true),
+                item.title,
+                options,
+                selected as usize,
             );
         }
     }
@@ -205,6 +206,21 @@ impl SettingsApp {
             self.slide_offset_x = 0;
         }
 
+        if self.is_editing
+            && matches!(
+                *event,
+                Event::Key {
+                    code: KeyCode::Exit | KeyCode::Menu | KeyCode::Key5,
+                    state: KeyState::Pressed,
+                }
+            )
+        {
+            self.view.repeater.reset();
+            self.reset_input_state();
+            let _ = ctx.flush_config();
+            return EventResult::Consumed;
+        }
+
         // 2. Handle Exit key (back navigation / cancel edit)
         if let Event::Key {
             code: KeyCode::Exit,
@@ -212,13 +228,6 @@ impl SettingsApp {
         } = *event
         {
             if state == KeyState::Pressed {
-                if self.is_editing {
-                    self.view.repeater.reset();
-                    self.reset_input_state();
-                    let _ = ctx.flush_config();
-                    return EventResult::Consumed;
-                }
-
                 if self.pop_submenu(ctx) {
                     return EventResult::Consumed;
                 }
@@ -240,13 +249,6 @@ impl SettingsApp {
         } = *event
         {
             if state == KeyState::Pressed {
-                if self.is_editing {
-                    self.view.repeater.reset();
-                    self.reset_input_state();
-                    let _ = ctx.flush_config();
-                    return EventResult::Consumed;
-                }
-
                 let sel_idx = self.selected_idx;
                 if sel_idx < self.items_len {
                     match self.items[sel_idx].item_type {
