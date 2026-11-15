@@ -38,15 +38,15 @@ pub(crate) struct NativeExecSlot {
     pub(crate) status_bar_has_custom: bool,
     pub(crate) status_bar_left_count: u8,
     pub(crate) status_bar_center_count: u8,
-    pub(crate) cache: FixedWindowCache<16, 4>,
-    pub(crate) mem_layout: MemoryMapLayout<4>,
-    pub(crate) shadow_stack: ShadowReturnStack<8>,
-    pub(crate) leaf_mgr: StructuredLeafManager<16>,
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
     pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) app_name: heapless::String<16>,
     pub(crate) pkg_path: heapless::String<32>,
+    pub(crate) cache: FixedWindowCache<16, 4>,
+    pub(crate) mem_layout: MemoryMapLayout<4>,
+    pub(crate) shadow_stack: ShadowReturnStack<8>,
+    pub(crate) leaf_mgr: StructuredLeafManager<16>,
 }
 
 pub fn init_native_slot() {

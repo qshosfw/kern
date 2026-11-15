@@ -4,28 +4,29 @@ use super::{active_ctx_opt, parse_str, parse_user_path};
 use kernel::proc::abi::{KrxDirEntry, StorageApi};
 use kernel::proc::primitives::*;
 
-pub unsafe extern "C" fn api_storage_load_config(buf: *mut u8, max_len: u16) -> u16 {
-    if let (Some(slice), Some(ctx)) = (
-        unsafe { super::ptr_slice_mut(buf, max_len as usize) },
-        active_ctx_opt(),
-    ) {
-        let app_name = super::super::native_runner::active_native_app_name();
-        ctx.load_config(app_name, slice).unwrap_or(0) as u16
-    } else {
-        0
-    }
-}
-
-pub unsafe extern "C" fn api_storage_save_config(buf: *const u8, len: u16) -> u8 {
-    if let (Some(slice), Some(ctx)) = (
+#[inline(never)]
+fn storage_config_op(buf: *const u8, len: u16, is_save: bool) -> u16 {
+    if let (Some(src), Some(ctx)) = (
         unsafe { super::ptr_slice(buf, len as usize) },
         active_ctx_opt(),
     ) {
         let app_name = super::super::native_runner::active_native_app_name();
-        u8::from(ctx.save_config(app_name, slice).is_err())
-    } else {
-        1
+        if is_save {
+            return u16::from(ctx.save_config(app_name, src).is_err());
+        } else {
+            let dst = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, src.len()) };
+            return ctx.load_config(app_name, dst).unwrap_or(0) as u16;
+        }
     }
+    u16::from(is_save)
+}
+
+pub unsafe extern "C" fn api_storage_load_config(buf: *mut u8, max_len: u16) -> u16 {
+    storage_config_op(buf, max_len, false)
+}
+
+pub unsafe extern "C" fn api_storage_save_config(buf: *const u8, len: u16) -> u8 {
+    storage_config_op(buf, len, true) as u8
 }
 
 pub unsafe extern "C" fn api_storage_read_asset(
