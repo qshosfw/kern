@@ -14,16 +14,24 @@ fn draw_bitmap_columns(canvas: &mut Canvas, x: i16, y: i16, cols: &[u8], color: 
 
 #[inline(never)]
 pub fn draw_digit(canvas: &mut Canvas, x: i16, y: i16, digit: u8, color: Color, big: bool) {
-    if digit <= 10 {
+    if digit < 10 {
         let idx = digit as usize;
         if big {
             let data = &crate::fonts::deltafw::FONT_BIG_DIGITS[idx];
-            draw_bitmap_columns(canvas, x, y, &data[0..13], color);
-            draw_bitmap_columns(canvas, x, y + 8, &data[13..26], color);
+            draw_bitmap_columns(canvas, x + 1, y, &data[0..11], color);
+            draw_bitmap_columns(canvas, x + 1, y + 8, &data[11..22], color);
         } else {
             let data = &crate::fonts::deltafw::FONT_SMALL_DIGITS[idx];
-            draw_bitmap_columns(canvas, x, y, &data[0..7], color);
+            draw_bitmap_columns(canvas, x, y, data, color);
         }
+    } else if digit == 10 {
+        draw_bitmap_columns(
+            canvas,
+            x + 1,
+            y + if big { 8 } else { 0 },
+            &[0x60, 0x60],
+            color,
+        );
     }
 }
 
