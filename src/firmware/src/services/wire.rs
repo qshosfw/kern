@@ -255,6 +255,7 @@ fn read_radio_facet(facet: u16, instance: u8, ctx: &mut WireCtx<'_, '_>) -> Resu
     Ok(())
 }
 
+#[inline(never)]
 fn on_handle_get(handle: ResourceHandle, ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     if handle.domain > DOMAIN_STORAGE {
         return Err(WireStatus::Unsupported);
@@ -310,6 +311,7 @@ fn set_keypad_lock(hw: &mut SystemHardware, locked: bool) {
     }
 }
 
+#[inline(never)]
 fn handle_resource_set(
     handle: ResourceHandle,
     val: &[u8],
@@ -387,6 +389,7 @@ fn handle_resource_set(
     }
 }
 
+#[inline(never)]
 fn handle_resource_invoke(
     handle: ResourceHandle,
     action_id: u16,
@@ -473,47 +476,51 @@ fn handle_control_service(
     let rest = &payload[4..];
     ctx.w.write_bytes(&payload[..4]);
 
-    let status = match opcode {
-        OP_HANDLE_GET => match on_handle_get(handle, ctx) {
-            Ok(()) => WireStatus::Ok,
-            Err(status) => {
-                ctx.w.reset();
-                status
-            }
-        },
-        OP_HANDLE_SET => handle_resource_set(handle, rest, ctx.hw)
-            .err()
-            .unwrap_or(WireStatus::Ok),
+    let res = match opcode {
+        OP_HANDLE_GET => on_handle_get(handle, ctx),
+        OP_HANDLE_SET => {
+            return Some(
+                handle_resource_set(handle, rest, ctx.hw)
+                    .err()
+                    .unwrap_or(WireStatus::Ok),
+            );
+        }
         OP_HANDLE_INVOKE => {
             if rest.len() < 2 {
-                ctx.w.reset();
-                return Some(WireStatus::BadLength);
+                Err(WireStatus::BadLength)
+            } else {
+                ctx.w.write_bytes(&rest[..2]);
+                let action_id = u16::from_le_bytes([rest[0], rest[1]]);
+                return Some(handle_resource_invoke(handle, action_id, &rest[2..], ctx.hw));
             }
-            ctx.w.write_bytes(&rest[..2]);
-            let action_id = u16::from_le_bytes([rest[0], rest[1]]);
-            handle_resource_invoke(handle, action_id, &rest[2..], ctx.hw)
         }
         OP_HANDLE_STREAM => {
             let mut r = ByteReader::new(rest);
-            let (Some(offset), Some(length)) = (r.read_u32_le(), r.read_u16_le()) else {
-                ctx.w.reset();
-                return Some(WireStatus::BadLength);
-            };
-            if handle.domain != DOMAIN_UI || handle.facet != FACET_UI_SURFACE {
-                ctx.w.reset();
-                return Some(WireStatus::Unsupported);
+            if let (Some(offset), Some(length)) = (r.read_u32_le(), r.read_u16_le()) {
+                if handle.domain == DOMAIN_UI && handle.facet == FACET_UI_SURFACE {
+                    let flat = crate::system_canvas().buffer_flat();
+                    let off = (offset as usize).min(flat.len());
+                    let len = (length as usize).min(100).min(flat.len() - off);
+                    ctx.write_u32(off as u32);
+                    ctx.write_u16(len as u16);
+                    ctx.w.write_bytes(&flat[off..off + len]);
+                    Ok(())
+                } else {
+                    Err(WireStatus::Unsupported)
+                }
+            } else {
+                Err(WireStatus::BadLength)
             }
-            let flat = crate::system_canvas().buffer_flat();
-            let off = (offset as usize).min(flat.len());
-            let len = (length as usize).min(100).min(flat.len() - off);
-            ctx.write_u32(off as u32);
-            ctx.write_u16(len as u16);
-            ctx.w.write_bytes(&flat[off..off + len]);
-            WireStatus::Ok
         }
         _ => return None,
     };
-    Some(status)
+    match res {
+        Ok(()) => Some(WireStatus::Ok),
+        Err(status) => {
+            ctx.w.reset();
+            Some(status)
+        }
+    }
 }
 
 // ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
@@ -677,6 +684,7 @@ fn on_transfer_close(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wi
     Ok(())
 }
 
+#[inline(never)]
 fn on_transfer_stat(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferStatRequest::parse(payload).ok_or(WireStatus::BadLength)?;
 
@@ -709,6 +717,7 @@ fn on_transfer_stat(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
     Ok(())
 }
 
+#[inline(never)]
 fn on_transfer_list(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferListRequest::parse(payload).ok_or(WireStatus::BadLength)?;
 

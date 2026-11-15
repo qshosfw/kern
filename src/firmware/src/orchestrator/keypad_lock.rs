@@ -352,12 +352,18 @@ impl KeypadLockManager {
             } else {
                 (gfx::icons::Icon::Unlock, "HOLD TO LOCK", 5i16)
             }
+        } else if self.toast == LockToast::Unlocked {
+            (gfx::icons::Icon::Unlock, "KEYPAD UNLOCKED", 11i16)
         } else {
-            match self.toast {
-                LockToast::Unlocked => (gfx::icons::Icon::Unlock, "KEYPAD UNLOCKED", 11i16),
-                LockToast::Locked => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 11i16),
-                _ => (gfx::icons::Icon::Lock, "KEYPAD LOCKED", 5i16),
-            }
+            (
+                gfx::icons::Icon::Lock,
+                "KEYPAD LOCKED",
+                if self.toast == LockToast::Locked {
+                    11i16
+                } else {
+                    5i16
+                },
+            )
         };
 
         let total_w = 12 + text::str_width(text_str, &TOMTHUMB);

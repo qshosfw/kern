@@ -358,7 +358,7 @@ impl View<TextInputModel> for TextInputView {
             if !is_passcode {
                 canvas.draw_horizontal_line(0, 52, 128, Color::Fill);
             }
-            if is_passcode { 55 } else { 54 }
+            54 + is_passcode as i16
         };
         Self::draw_bottom_badges(canvas, model, by, show_grid);
     }
@@ -516,8 +516,6 @@ fn confirm_and_push(model: &mut TextInputModel, ch: u8) {
     }
     #[cfg(feature = "passcode")]
     if model.is_passcode && model.expose_len && model.buffer.len() >= model.max_len {
-        model.last_key = None;
-        model.press_count = 0;
         model.is_done = true;
     }
 }
