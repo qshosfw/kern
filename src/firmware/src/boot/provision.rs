@@ -33,7 +33,11 @@ const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/leaf_app/le
 const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/paged_app/paged.krx");
 
 #[inline(never)]
-fn join_path<'a>(buf: &'a mut [u8; 48], prefix: &str, name: &str) -> Option<&'a str> {
+fn join_path<'a>(
+    buf: &'a mut [core::mem::MaybeUninit<u8>; 48],
+    prefix: &str,
+    name: &str,
+) -> Option<&'a str> {
     let p = prefix.as_bytes();
     let n = name.as_bytes();
     let total = p.len() + n.len();
@@ -41,9 +45,12 @@ fn join_path<'a>(buf: &'a mut [u8; 48], prefix: &str, name: &str) -> Option<&'a 
         return None;
     }
     unsafe {
-        core::ptr::copy_nonoverlapping(p.as_ptr(), buf.as_mut_ptr(), p.len());
-        core::ptr::copy_nonoverlapping(n.as_ptr(), buf.as_mut_ptr().add(p.len()), n.len());
-        Some(core::str::from_utf8_unchecked(buf.get_unchecked(..total)))
+        let ptr = buf.as_mut_ptr() as *mut u8;
+        core::ptr::copy_nonoverlapping(p.as_ptr(), ptr, p.len());
+        core::ptr::copy_nonoverlapping(n.as_ptr(), ptr.add(p.len()), n.len());
+        Some(core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+            ptr, total,
+        )))
     }
 }
 
@@ -124,7 +131,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             continue;
         }
 
-        let mut src_arr = [0u8; 48];
+        let mut src_arr = [core::mem::MaybeUninit::<u8>::uninit(); 48];
         let src_path = if raw_entry.starts_with("/") {
             raw_entry
         } else {
@@ -163,7 +170,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             _ => "/user/",
         };
 
-        let mut dst_arr = [0u8; 48];
+        let mut dst_arr = [core::mem::MaybeUninit::<u8>::uninit(); 48];
         if let Some(dst_path) = join_path(&mut dst_arr, prefix, fname) {
             let _ = filesystem.remove(dst_path);
             if filesystem.write_file(dst_path, buf).is_ok() {
