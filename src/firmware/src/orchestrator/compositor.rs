@@ -26,15 +26,16 @@ pub enum ActiveModal {
     Sheet(OptionSheet, KeyRepeater, gfx::gui::animation::SlideUpAnim) = 3,
 }
 
+#[repr(C)]
 pub struct ModalCompositor {
     pub tag: u8,
     pub last_hold_ms: u32,
+    pub modal: ActiveModal,
     pub toast: ToastModel,
     pub toast_view: ToastView,
     pub popup_view: PopupView,
     #[cfg(feature = "text_input")]
     pub text_view: TextInputView,
-    pub modal: ActiveModal,
 }
 
 impl ModalCompositor {
@@ -42,12 +43,12 @@ impl ModalCompositor {
         Self {
             tag: 0,
             last_hold_ms: 0,
+            modal: ActiveModal::None,
             toast: ToastModel::new(),
             toast_view: ToastView::new(),
             popup_view: PopupView::new(),
             #[cfg(feature = "text_input")]
             text_view: TextInputView::new(),
-            modal: ActiveModal::None,
         }
     }
 

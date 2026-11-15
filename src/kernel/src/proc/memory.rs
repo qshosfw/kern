@@ -126,9 +126,10 @@ impl MemoryRegionDescriptor {
 
 /// Bounded collection of memory region descriptors defining an application memory layout.
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct MemoryMapLayout<const MAX_REGIONS: usize = 8> {
-    pub regions: [MemoryRegionDescriptor; MAX_REGIONS],
     pub region_count: u8,
+    pub regions: [MemoryRegionDescriptor; MAX_REGIONS],
 }
 
 impl<const MAX_REGIONS: usize> Default for MemoryMapLayout<MAX_REGIONS> {
@@ -140,6 +141,7 @@ impl<const MAX_REGIONS: usize> Default for MemoryMapLayout<MAX_REGIONS> {
 impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
     pub const fn new() -> Self {
         Self {
+            region_count: 0,
             regions: [MemoryRegionDescriptor {
                 kind: 0,
                 flags: 0,
@@ -149,7 +151,6 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
                 alignment: 0,
                 pad: [0u8; 2],
             }; MAX_REGIONS],
-            region_count: 0,
         }
     }
 

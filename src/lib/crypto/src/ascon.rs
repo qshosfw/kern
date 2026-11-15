@@ -59,7 +59,8 @@ impl AsconPermutation {
     pub fn permute(&mut self, rounds: usize) {
         let start = 12usize.saturating_sub(rounds);
         for r in start..12 {
-            self.round(ROUND_CONSTANTS[r]);
+            // NIST SP 800-232 Table 2: round constant r is 0xf0 - r * 0x0f (low byte only).
+            self.round((0xf0usize - r * 0x0f) as u64);
         }
     }
 
