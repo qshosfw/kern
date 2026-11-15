@@ -62,10 +62,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     #[inline(never)]
     fn read_block_ec(&mut self, block: usize) -> u32 {
-        let mut hdr_uninit = core::mem::MaybeUninit::<[u8; 16]>::uninit();
-        let hdr_buf = unsafe { &mut *hdr_uninit.as_mut_ptr() };
-        if self.dev.read(block * D::BLOCK_SIZE, hdr_buf).is_ok() {
-            let h = BlockHeader::from_bytes(hdr_buf);
+        let mut hdr_uninit = core::mem::MaybeUninit::<BlockHeader>::uninit();
+        let hdr_bytes =
+            unsafe { core::slice::from_raw_parts_mut(hdr_uninit.as_mut_ptr() as *mut u8, 16) };
+        if self.dev.read(block * D::BLOCK_SIZE, hdr_bytes).is_ok() {
+            let h = unsafe { hdr_uninit.assume_init() };
             if h.fourcc == FOURCC_BLOCK_V2 && h.kind != BLOCK_KIND_BAD {
                 return h.erase_count;
             }
@@ -205,14 +206,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         obs_n: &mut usize,
     ) -> Result<u16, FsError> {
         let new_p = self.alloc_page(true)?;
-        if old_idx_p != 0 {
-            self.load_page(old_idx_p)?;
-            if *obs_n < obs.len() {
-                obs[*obs_n] = old_idx_p;
-                *obs_n += 1;
-            }
-        } else {
-            self.page_buf.fill(0);
+        self.load_page_or_zero(old_idx_p)?;
+        if old_idx_p != 0 && *obs_n < obs.len() {
+            obs[*obs_n] = old_idx_p;
+            *obs_n += 1;
         }
         let prev = read_idx_u16(&self.page_buf, slot);
         if prev != 0 && prev != new_ptr && *obs_n < obs.len() {
@@ -229,7 +226,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let page_idx = self.cur_tag.page_idx;
         let kind = self.cur_tag.kind;
         let idx = page_idx as usize;
-        let mut inode = Inode::EMPTY;
+        let mut inode_uninit = core::mem::MaybeUninit::<Inode>::uninit();
+        let inode = unsafe { &mut *inode_uninit.as_mut_ptr() };
         match kind {
             TAG_KIND_META => {
                 if idx >= MAX_META_GROUPS || self.meta_pages[idx] != phys {
@@ -237,7 +235,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 }
             }
             TAG_KIND_DATA | TAG_KIND_INDEX1 => {
-                if !self.read_inode(ino, Some(&mut inode))? {
+                if !self.read_inode(ino, Some(inode))? {
                     return Ok(());
                 }
                 let expected = if kind == TAG_KIND_INDEX1 || inode.depth == DEPTH_DIRECT {
@@ -289,7 +287,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             self.cur_inode.inline_data = inode.inline_data;
             self.cur_inode.depth = inode.depth;
         }
-        self.commit_inode(&inode, &obs[..obs_n])
+        self.commit_inode(inode, &obs[..obs_n])
     }
 
     /// Background idle maintenance hook: reclaims 1 dirty/obsolete block if pre-erased pool < 4.
@@ -321,9 +319,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         } else {
             DEPTH_SINGLE_INDIRECT
         };
-        let mut l1 = [0u8; PAGE_SIZE];
+        let mut l1_uninit = core::mem::MaybeUninit::<[u8; PAGE_SIZE]>::uninit();
+        let l1 = unsafe { &mut *l1_uninit.as_mut_ptr() };
         let mut lp = 0usize;
         while (lp << 8) < data.len() {
+            if !direct && (lp & 0x7F) == 0 {
+                l1.fill(0);
+            }
             let p = self.alloc_page(true)?;
             let start = lp << 8;
             let rem = data.len() - start;
@@ -341,14 +343,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 self.cur_inode.set_l1_page(lp, p);
             } else {
                 let slot = lp & 0x7F;
-                write_idx_u16(&mut l1, slot, p);
+                write_idx_u16(l1, slot, p);
                 if slot == 0x7F || rem <= PAGE_SIZE {
                     let l2_i = lp >> 7;
                     let l1_p = self.alloc_page(true)?;
-                    self.page_buf = l1;
+                    self.page_buf.copy_from_slice(l1);
                     self.program_page_buf(l1_p, ino, l2_i as u16, TAG_KIND_INDEX1)?;
                     self.cur_inode.set_l1_page(l2_i, l1_p);
-                    l1.fill(0);
                 }
             }
             lp += 1;
@@ -390,11 +391,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
             let new_p = self.alloc_page(true)?;
             let old_p = self.resolve_data_page(lpage)?;
-            if old_p != 0 {
-                self.load_page(old_p)?;
-            } else {
-                self.page_buf.fill(0);
-            }
+            self.load_page_or_zero(old_p)?;
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     data.as_ptr().add(pos),

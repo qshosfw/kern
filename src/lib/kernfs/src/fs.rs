@@ -142,6 +142,16 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     #[inline(never)]
+    pub(crate) fn load_page_or_zero(&mut self, phys: u16) -> Result<(), FsError> {
+        if phys != 0 {
+            self.load_page(phys)
+        } else {
+            self.page_buf.fill(0);
+            Ok(())
+        }
+    }
+
+    #[inline(never)]
     pub(crate) fn program_page_buf(
         &mut self,
         phys: u16,
@@ -233,16 +243,17 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             self.load_page(mp)?;
             for slot in 0..INODES_PER_PAGE {
                 let slot_ino = (g as u16 * 4) + (slot as u16) + 2;
+                let slot_free = Inode::slot_is_free(&self.page_buf, slot);
                 if matches!(query, MetaQuery::FreeSlot) {
-                    if Inode::slot_is_free(&self.page_buf, slot) {
+                    if slot_free {
                         return Ok(slot_ino);
                     }
                     continue;
                 }
-                Inode::read_slot_into(&self.page_buf, slot, &mut self.cur_inode);
-                if !self.cur_inode.is_active() {
+                if slot_free {
                     continue;
                 }
+                Inode::read_slot_into(&self.page_buf, slot, &mut self.cur_inode);
                 match query {
                     MetaQuery::Child(parent_ino, name_bytes) => {
                         if self.cur_inode.parent_ino == parent_ino
@@ -253,7 +264,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                     }
                     MetaQuery::ListDir(dir_ino) => {
                         if self.cur_inode.parent_ino == dir_ino {
-                            matched = matched.saturating_add(1);
+                            matched += 1;
                             if let Some(cb) = list_cb.as_deref_mut() {
                                 cb(
                                     self.cur_inode.name_str(),
@@ -266,7 +277,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                     }
                     MetaQuery::CountFiles => {
                         if !self.cur_inode.is_dir() {
-                            matched = matched.saturating_add(1);
+                            matched += 1;
                         }
                     }
                     MetaQuery::FreeSlot => {}
@@ -299,7 +310,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     pub(crate) fn init_new_cur_inode(&mut self, parent_ino: u16, name: &[u8]) {
         self.cur_inode = Inode::EMPTY;
         self.cur_inode.parent_ino = parent_ino;
-        self.cur_inode.set_name(name);
+        let l = name.len().min(MAX_NAME_LEN);
+        self.cur_inode.name[..l].copy_from_slice(&name[..l]);
+        self.cur_inode.name_len = l as u8;
     }
 
     /// Commits a modified or deleted (`inode.ino == 0`) inode at `target_ino` in a single atomic page write.
@@ -314,11 +327,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let g = (((target_ino - 2) >> 2) as usize) & (MAX_META_GROUPS - 1);
         let slot = ((target_ino - 2) & 3) as usize;
         let old_mp = self.meta_pages[g];
-        if old_mp != 0 {
-            self.load_page(old_mp)?;
-        } else {
-            self.page_buf.fill(0);
-        }
+        self.load_page_or_zero(old_mp)?;
         inode
             .unwrap_or(&self.cur_inode)
             .write_slot(&mut self.page_buf, slot);

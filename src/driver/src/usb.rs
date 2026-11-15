@@ -241,13 +241,11 @@ impl UsbDriver {
                 self.was_connected = false;
                 self.is_connected = true;
                 self.last_transition_ms = now;
-                if event.is_none() {
-                    event = Some(if self.configured {
-                        UsbEvent::Resumed
-                    } else {
-                        UsbEvent::Connected
-                    });
-                }
+                event = Some(if self.configured {
+                    UsbEvent::Resumed
+                } else {
+                    UsbEvent::Connected
+                });
             }
         }
 
@@ -348,9 +346,10 @@ impl UsbDriver {
             if (csr & EP0_RXPKTRDY) != 0 {
                 let count = unsafe { USBD_EP0_COUNT_U8.read_volatile() } as usize;
                 if count >= 7 {
-                    let mut coding = [0u8; 7];
-                    read_fifo(0, &mut coding);
-                    self.cdc.set_line_coding(&coding);
+                    let mut coding_uninit = core::mem::MaybeUninit::<[u8; 7]>::uninit();
+                    let coding = unsafe { &mut *coding_uninit.as_mut_ptr() };
+                    read_fifo(0, coding);
+                    self.cdc.set_line_coding(coding);
                 }
                 unsafe {
                     USBD_EP0_CSR_U8.write_volatile(EP0_SVRXPKTRDY | EP0_DATAEND);
@@ -365,9 +364,10 @@ impl UsbDriver {
             self.last_sof_ms = py32_hal::delay::millis();
             let count = unsafe { USBD_EP0_COUNT_U8.read_volatile() } as usize;
             if count >= 8 {
-                let mut setup = [0u8; 8];
-                read_fifo(0, &mut setup);
-                self.handle_setup_packet(&setup);
+                let mut setup_uninit = core::mem::MaybeUninit::<[u8; 8]>::uninit();
+                let setup = unsafe { &mut *setup_uninit.as_mut_ptr() };
+                read_fifo(0, setup);
+                self.handle_setup_packet(setup);
             }
         }
     }
@@ -658,7 +658,8 @@ impl UsbDriver {
         if (out_csr & OUTCSR1_OUTPKTRDY) != 0 {
             let count = (unsafe { USBD_OUT_COUNT_U16.read_volatile() } as usize).min(64);
             if count > 0 {
-                let mut temp = [0u8; 64];
+                let mut temp_uninit = core::mem::MaybeUninit::<[u8; 64]>::uninit();
+                let temp = unsafe { &mut *temp_uninit.as_mut_ptr() };
                 read_fifo(out_ep, &mut temp[..count]);
                 self.cdc.push_rx(&temp[..count]);
                 py32_hal::uart::mark_activity();
