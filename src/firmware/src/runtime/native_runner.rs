@@ -12,7 +12,7 @@ use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
-use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxPreamble, KrxProfile, SectionExecution};
+use kernel::proc::krx::{KrxClass, KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 use kernel::proc::memory::MemoryMapLayout;
 use kernel::proc::paged::{
     FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
@@ -312,30 +312,29 @@ pub fn load_native_from_storage(
     name: &str,
     path: &str,
     payload_len: usize,
-    preamble: &KrxPreamble,
-    exec: &SectionExecution,
-    aux: &KrxAuxSections,
-    caps: CapabilitySet,
+    summary: &KrxSummary<'_>,
     pid: kernel::proc::Pid,
 ) -> Result<(), KrxLaunchError> {
+    let preamble = &summary.preamble;
+    let exec = summary
+        .exec
+        .as_ref()
+        .ok_or(KrxLaunchError::MissingExecution)?;
+    let aux = &summary.aux;
+    let caps = summary.caps;
+
     init_native_slot();
     let slot = slot_mut();
-    slot.cache.page_size = 1024;
-    slot.cache.active_slots = 2;
     slot.pid = pid;
 
     let buffer_bytes =
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), NATIVE_EXEC_BUFFER_WORDS * 4) };
 
     let h_len = preamble.header_len as usize;
-    if payload_len == 0 {
+    if payload_len == 0 || payload_len < (exec.payload_size as usize) {
         return Err(KrxLaunchError::TruncatedPackage);
     }
-
-    if exec.payload_size > 0 && payload_len < (exec.payload_size as usize) {
-        return Err(KrxLaunchError::TruncatedPackage);
-    }
-    if exec.payload_size > 0 && (exec.payload_size as usize) > (NATIVE_EXEC_BUFFER_WORDS * 4) {
+    if (exec.payload_size as usize) > (NATIVE_EXEC_BUFFER_WORDS * 4) {
         return Err(KrxLaunchError::PayloadTooLarge);
     }
 
@@ -361,7 +360,6 @@ pub fn load_native_from_storage(
     slot.is_paged = is_paged;
 
     if is_paged {
-        slot.pkg_path.clear();
         let _ = slot.pkg_path.push_str(path);
         let pay_size = if exec.payload_size > 0 {
             exec.payload_size
@@ -462,7 +460,6 @@ pub fn load_native_from_storage(
     flush_instruction_pipeline();
 
     slot.entry_point = entry_thumb;
-    slot.app_name.clear();
     let _ = slot.app_name.push_str(name);
     slot.caps = caps;
     slot.is_loaded = true;

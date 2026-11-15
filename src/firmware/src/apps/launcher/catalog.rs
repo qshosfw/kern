@@ -200,21 +200,22 @@ impl PackageCatalog {
 
         if is_pkg && size >= KrxPreamble::SIZE {
             let hdr_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[..256];
-            if let Ok(read_len) = filesystem.read_file_at(entry.path.as_str(), 0, hdr_buf) {
-                let mut summary_uninit = core::mem::MaybeUninit::uninit();
-                if let Ok(summary) =
-                    KrxPreamble::summarize_into(&hdr_buf[..read_len], &mut summary_uninit)
-                {
-                    if let Some(cls) = summary.preamble.execution_class() {
-                        entry.is_valid = true;
-                        entry.app_class = cls;
-                    }
-                    entry.exec_type = summary.exec_type;
-                    entry.icon_id = summary.icon_id;
-                    entry.caps = summary.caps.raw();
-                    if !summary.title.is_empty() {
-                        let _ = entry.title.push_str(summary.title);
-                    }
+            let mut summary_uninit = core::mem::MaybeUninit::uninit();
+            if let Ok(summary) = crate::runtime::loader::read_krx_summary(
+                filesystem,
+                entry.path.as_str(),
+                hdr_buf,
+                &mut summary_uninit,
+            ) {
+                if let Some(cls) = summary.preamble.execution_class() {
+                    entry.is_valid = true;
+                    entry.app_class = cls;
+                }
+                entry.exec_type = summary.exec_type;
+                entry.icon_id = summary.icon_id;
+                entry.caps = summary.caps.raw();
+                if !summary.title.is_empty() {
+                    let _ = entry.title.push_str(summary.title);
                 }
             }
         }

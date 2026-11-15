@@ -39,17 +39,24 @@ impl BlockEntry {
         }
     }
 
-    /// Parse an 8-byte `BlockEntry` using explicit little-endian byte decoding (ARMv6-M safe).
+    /// Parse an 8-byte `BlockEntry` using zero-copy on little-endian targets.
     pub fn parse(buf: &[u8]) -> Option<Self> {
-        if buf.len() < Self::SIZE {
-            return None;
+        #[cfg(target_endian = "little")]
+        {
+            unsafe { super::krx::copy_le_pod(buf) }
         }
-        Some(Self {
-            block_id: buf[0],
-            flags: buf[1],
-            size: u16::from_le_bytes([buf[2], buf[3]]),
-            flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
-        })
+        #[cfg(not(target_endian = "little"))]
+        {
+            if buf.len() < Self::SIZE {
+                return None;
+            }
+            Some(Self {
+                block_id: buf[0],
+                flags: buf[1],
+                size: u16::from_le_bytes([buf[2], buf[3]]),
+                flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+            })
+        }
     }
 
     #[inline(always)]
@@ -100,6 +107,23 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> Default
     }
 }
 
+#[cfg(target_endian = "little")]
+#[inline]
+fn copy_record_table<T: Copy>(body: &[u8], dst: &mut [T]) -> u8 {
+    let sz = core::mem::size_of::<T>();
+    let count = (body.len() / sz).min(dst.len());
+    if count > 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                body.as_ptr(),
+                dst.as_mut_ptr().cast::<u8>(),
+                count * sz,
+            );
+        }
+    }
+    count as u8
+}
+
 impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCKS, MAX_SLOTS> {
     pub const fn new() -> Self {
         Self {
@@ -145,6 +169,11 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
         self.active_slots = cache_blocks.clamp(1, MAX_SLOTS as u8);
 
         if let Some(body) = block_map_body {
+            #[cfg(target_endian = "little")]
+            {
+                self.block_count = copy_record_table(body, &mut self.blocks);
+            }
+            #[cfg(not(target_endian = "little"))]
             for (dst, chunk) in self
                 .blocks
                 .iter_mut()
@@ -369,6 +398,11 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
         self.overlay_vma = overlay_vma;
         self.window_size = window_size;
         if let Some(leaf_body) = leaf_map_body {
+            #[cfg(target_endian = "little")]
+            {
+                self.leaf_count = copy_record_table(leaf_body, &mut self.leaves);
+            }
+            #[cfg(not(target_endian = "little"))]
             for (dst, chunk) in self
                 .leaves
                 .iter_mut()

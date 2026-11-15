@@ -7,7 +7,7 @@
 use crate::SysContext;
 use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
-use kernel::proc::krx::{KrxClass, KrxPreamble};
+use kernel::proc::krx::{KrxClass, KrxPreamble, KrxSummary};
 
 pub use kernel::proc::krx::KrxLaunchError;
 
@@ -27,24 +27,30 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
     }
 }
 
-/// Load and launch a verified KRX binary application package.
+/// Read and parse a KRX package header from storage into `out` (single shared read + summary path).
 #[inline(never)]
-pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let header_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[1792..2048];
-    let header_read = ctx
-        .storage
-        .read_file_at(path, 0, header_buf)
+pub fn read_krx_summary<'a, 'b>(
+    storage: &mut crate::services::SystemStorage,
+    path: &str,
+    hdr_buf: &'a mut [u8],
+    out: &'b mut core::mem::MaybeUninit<KrxSummary<'a>>,
+) -> Result<&'b mut KrxSummary<'a>, KrxLaunchError> {
+    let read_len = storage
+        .read_file_at(path, 0, hdr_buf)
         .map_err(|e| match e {
             kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
             _ => KrxLaunchError::ReadFailed,
         })?;
+    KrxPreamble::summarize_into(&hdr_buf[..read_len], out)
+}
 
+/// Load and launch a verified KRX binary application package.
+#[inline(never)]
+pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
+    let header_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[1792..2048];
     let mut summary_uninit = core::mem::MaybeUninit::uninit();
-    let summary = KrxPreamble::summarize_into(&header_buf[..header_read], &mut summary_uninit)?;
+    let summary = read_krx_summary(ctx.storage, path, header_buf, &mut summary_uninit)?;
     let header_len = summary.preamble.header_len as usize;
-    if header_len > header_read {
-        return Err(KrxLaunchError::TruncatedPackage);
-    }
 
     let exec_class = summary
         .preamble
@@ -125,10 +131,7 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
             app_name,
             path,
             payload_read,
-            &summary.preamble,
-            exec_sec,
-            &summary.aux,
-            required_caps,
+            summary,
             dyn_pid,
         )?;
 

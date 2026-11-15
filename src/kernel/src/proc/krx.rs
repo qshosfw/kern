@@ -298,7 +298,24 @@ impl KrxLaunchError {
     }
 }
 
-/// KRX Preamble (20 bytes, little-endian, non-ASCII format identifier)
+#[cfg(target_endian = "little")]
+#[inline]
+pub(super) unsafe fn copy_le_pod<T: Copy>(buf: &[u8]) -> Option<T> {
+    if buf.len() < core::mem::size_of::<T>() {
+        return None;
+    }
+    let mut val = core::mem::MaybeUninit::<T>::uninit();
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            buf.as_ptr(),
+            val.as_mut_ptr().cast::<u8>(),
+            core::mem::size_of::<T>(),
+        );
+        Some(val.assume_init())
+    }
+}
+
+/// KRX Preamble (24 bytes, little-endian, non-ASCII format identifier)
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct KrxPreamble {
@@ -313,41 +330,36 @@ pub struct KrxPreamble {
     pub link_base: u32,
 }
 
+const _: () = assert!(core::mem::size_of::<KrxPreamble>() == 24);
+
 impl KrxPreamble {
     pub const SIZE: usize = 24;
 
     /// Parse preamble from little-endian byte slice
     pub fn parse(buf: &[u8]) -> Result<Self, ()> {
-        if buf.len() < Self::SIZE {
+        #[cfg(target_endian = "little")]
+        let p = unsafe { copy_le_pod::<Self>(buf) }.ok_or(())?;
+        #[cfg(not(target_endian = "little"))]
+        let p = {
+            if buf.len() < Self::SIZE {
+                return Err(());
+            }
+            Self {
+                ident: [buf[0], buf[1], buf[2], buf[3]],
+                app_type: buf[4],
+                format_version: buf[5],
+                section_count: u16::from_le_bytes([buf[6], buf[7]]),
+                header_len: u16::from_le_bytes([buf[8], buf[9]]),
+                flags: u16::from_le_bytes([buf[10], buf[11]]),
+                payload_crc32: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
+                header_crc32: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
+                link_base: u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
+            }
+        };
+        if p.ident != KRX_IDENT || p.format_version == 0 || p.format_version > 5 {
             return Err(());
         }
-        let ident = [buf[0], buf[1], buf[2], buf[3]];
-        if ident != KRX_IDENT {
-            return Err(());
-        }
-        let app_type = buf[4];
-        let format_version = buf[5];
-        if format_version == 0 || format_version > 5 {
-            return Err(());
-        }
-        let section_count = u16::from_le_bytes([buf[6], buf[7]]);
-        let header_len = u16::from_le_bytes([buf[8], buf[9]]);
-        let flags = u16::from_le_bytes([buf[10], buf[11]]);
-        let payload_crc32 = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
-        let header_crc32 = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
-        let link_base = u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]);
-
-        Ok(Self {
-            ident,
-            app_type,
-            format_version,
-            section_count,
-            header_len,
-            flags,
-            payload_crc32,
-            header_crc32,
-            link_base,
-        })
+        Ok(p)
     }
 
     #[inline(always)]
@@ -539,13 +551,10 @@ impl SectionExecution {
             *dst = None;
             return;
         }
-        let sec = dst.insert(unsafe { core::mem::MaybeUninit::zeroed().assume_init() });
+        let mut val = core::mem::MaybeUninit::<Self>::uninit();
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                buf.as_ptr(),
-                (sec as *mut Self).cast::<u8>(),
-                Self::SIZE,
-            );
+            core::ptr::copy_nonoverlapping(buf.as_ptr(), val.as_mut_ptr().cast::<u8>(), Self::SIZE);
+            *dst = Some(val.assume_init());
         }
     }
 
@@ -758,36 +767,33 @@ impl KrxPreamble {
         buf: &'a [u8],
         out: &'b mut core::mem::MaybeUninit<KrxSummary<'a>>,
     ) -> Result<&'b mut KrxSummary<'a>, KrxLaunchError> {
-        let preamble = Self::parse(buf).map_err(|_| KrxLaunchError::InvalidPreamble)?;
-        let h_len = preamble.header_len as usize;
+        if buf.len() < Self::SIZE || buf[..4] != KRX_IDENT || !(1..=5).contains(&buf[5]) {
+            return Err(KrxLaunchError::InvalidPreamble);
+        }
+        let h_len = u16::from_le_bytes([buf[8], buf[9]]) as usize;
         if h_len < Self::SIZE || h_len > 512 || (h_len & 3) != 0 {
             return Err(KrxLaunchError::InvalidPreamble);
         }
-        if buf.len() < h_len {
-            return Err(KrxLaunchError::TruncatedPackage);
-        }
-        let hdr = &buf[..h_len];
+        let hdr = buf.get(..h_len).ok_or(KrxLaunchError::TruncatedPackage)?;
 
-        // Hardened CRC32 verification of the header payload
-        if preamble.header_crc32 != 0 {
-            let actual_crc = crypto::crc::CrcEngine::crc32(&hdr[Self::SIZE..]);
-            if actual_crc != preamble.header_crc32 {
-                return Err(KrxLaunchError::CrcMismatch);
-            }
+        // Hardened CRC32 verification of the header payload before populating `out`
+        let expected_crc = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
+        if expected_crc != 0 && crypto::crc::CrcEngine::crc32(&hdr[Self::SIZE..]) != expected_crc {
+            return Err(KrxLaunchError::CrcMismatch);
         }
 
+        let preamble = Self::parse(hdr).map_err(|_| KrxLaunchError::InvalidPreamble)?;
         let out = out.write(KrxSummary::default());
         out.preamble = preamble;
 
-        let mut off = Self::SIZE;
-        while off + SectionHeader::SIZE <= h_len {
-            let sec = &hdr[off..h_len];
-            let sec_id = u16::from_le_bytes([sec[0], sec[1]]);
-            let sec_len = u16::from_le_bytes([sec[2], sec[3]]) as usize;
-            if sec_len < SectionHeader::SIZE || off + sec_len > h_len {
+        let mut rest = &hdr[Self::SIZE..];
+        while rest.len() >= SectionHeader::SIZE {
+            let sec_id = u16::from_le_bytes([rest[0], rest[1]]);
+            let sec_len = u16::from_le_bytes([rest[2], rest[3]]) as usize;
+            if sec_len < SectionHeader::SIZE || sec_len > rest.len() {
                 break;
             }
-            let body = &sec[SectionHeader::SIZE..sec_len];
+            let body = &rest[SectionHeader::SIZE..sec_len];
             match sec_id {
                 SECTION_IDENTITY => {
                     if body.len() >= 25 {
@@ -826,7 +832,8 @@ impl KrxPreamble {
                 SECTION_SERVICE_EXPORTS => out.aux.service_exports = Some(body),
                 _ => {}
             }
-            off += (sec_len + 3) & !3;
+            let step = (sec_len + 3) & !3;
+            rest = rest.get(step..).unwrap_or(&[]);
         }
 
         Ok(out)
@@ -878,16 +885,23 @@ impl ServiceExport {
     }
 
     pub fn parse(buf: &[u8]) -> Option<Self> {
-        if buf.len() < Self::SIZE {
-            return None;
+        #[cfg(target_endian = "little")]
+        {
+            unsafe { copy_le_pod(buf) }
         }
-        Some(Self {
-            interface_id: u16::from_le_bytes([buf[0], buf[1]]),
-            abi_version: u16::from_le_bytes([buf[2], buf[3]]),
-            vtable_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
-            flags: u16::from_le_bytes([buf[8], buf[9]]),
-            reserved: [buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]],
-        })
+        #[cfg(not(target_endian = "little"))]
+        {
+            if buf.len() < Self::SIZE {
+                return None;
+            }
+            Some(Self {
+                interface_id: u16::from_le_bytes([buf[0], buf[1]]),
+                abi_version: u16::from_le_bytes([buf[2], buf[3]]),
+                vtable_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+                flags: u16::from_le_bytes([buf[8], buf[9]]),
+                reserved: [buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]],
+            })
+        }
     }
 
     #[inline(always)]
@@ -933,18 +947,25 @@ impl LeafEntry {
     }
 
     pub fn parse(buf: &[u8]) -> Option<Self> {
-        if buf.len() < Self::SIZE {
-            return None;
+        #[cfg(target_endian = "little")]
+        {
+            unsafe { copy_le_pod(buf) }
         }
-        Some(Self {
-            leaf_id: buf[0],
-            flags: buf[1],
-            size: u16::from_le_bytes([buf[2], buf[3]]),
-            flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
-            entry_offset: u16::from_le_bytes([buf[8], buf[9]]),
-            ram_scratch_bytes: u16::from_le_bytes([buf[10], buf[11]]),
-            reserved: [buf[12], buf[13], buf[14], buf[15]],
-        })
+        #[cfg(not(target_endian = "little"))]
+        {
+            if buf.len() < Self::SIZE {
+                return None;
+            }
+            Some(Self {
+                leaf_id: buf[0],
+                flags: buf[1],
+                size: u16::from_le_bytes([buf[2], buf[3]]),
+                flash_offset: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+                entry_offset: u16::from_le_bytes([buf[8], buf[9]]),
+                ram_scratch_bytes: u16::from_le_bytes([buf[10], buf[11]]),
+                reserved: [buf[12], buf[13], buf[14], buf[15]],
+            })
+        }
     }
 
     #[inline(always)]
