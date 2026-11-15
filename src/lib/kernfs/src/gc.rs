@@ -366,15 +366,18 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     ) -> Result<(), FsError> {
         let ino = self.cur_inode.ino;
         if self.cur_inode.is_inline() {
-            let phys = self.alloc_page(true)?;
-            let ilen = (self.cur_inode.size as usize).min(MAX_INLINE_LEN);
-            self.page_buf.fill(0);
-            self.page_buf[..ilen].copy_from_slice(&self.cur_inode.inline_data[..ilen]);
-            self.program_page_buf(phys, ino, 0, TAG_KIND_DATA)?;
+            if self.cur_inode.size > 0 {
+                let phys = self.alloc_page(true)?;
+                let ilen = (self.cur_inode.size as usize).min(MAX_INLINE_LEN);
+                self.page_buf.fill(0);
+                self.page_buf[..ilen].copy_from_slice(&self.cur_inode.inline_data[..ilen]);
+                self.program_page_buf(phys, ino, 0, TAG_KIND_DATA)?;
+                self.cur_inode.set_l1_page(0, phys);
+            } else {
+                self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
+            }
             self.cur_inode.flags &= !INODE_FLAG_INLINE;
-            self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
             self.cur_inode.depth = DEPTH_DIRECT;
-            self.cur_inode.set_l1_page(0, phys);
         }
 
         let mut pos = 0usize;
@@ -386,6 +389,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 offset + pos
             };
             let lpage = (abs_pos >> 8) as u16;
+            if (lpage as usize) >= 8 * INDEX_PTRS_PER_PAGE {
+                return Err(FsError::CapacityFull);
+            }
             let in_page = abs_pos & 0xFF;
             let chunk = (data.len() - pos).min(PAGE_SIZE - in_page);
 
@@ -443,23 +449,33 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 for s in 0..8 {
                     write_idx_u16(&mut self.page_buf, s, self.cur_inode.l1_page(s));
                 }
+                if l2_idx == 0 {
+                    write_idx_u16(&mut self.page_buf, l1_idx, new_data_p);
+                }
                 self.program_page_buf(l1_0, ino, 0, TAG_KIND_INDEX1)?;
                 self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
                 self.cur_inode.set_l1_page(0, l1_0);
+                self.cur_inode.depth = DEPTH_SINGLE_INDIRECT;
+                if l2_idx != 0 {
+                    // Commit promoted L1 root to flash before a second alloc can trigger GC.
+                    self.commit_cur_inode(&[])?;
+                }
             }
-            let old_l1 = self.cur_inode.l1_page(l2_idx);
-            let new_l1 = self.cow_set_idx_slot(
-                ino,
-                l2_idx as u16,
-                old_l1,
-                TAG_KIND_INDEX1,
-                l1_idx,
-                new_data_p,
-                &mut obs,
-                &mut obs_n,
-            )?;
-            self.cur_inode.set_l1_page(l2_idx, new_l1);
-            self.cur_inode.depth = DEPTH_SINGLE_INDIRECT;
+            if !(old_d == DEPTH_DIRECT && l2_idx == 0) {
+                let old_l1 = self.cur_inode.l1_page(l2_idx);
+                let new_l1 = self.cow_set_idx_slot(
+                    ino,
+                    l2_idx as u16,
+                    old_l1,
+                    TAG_KIND_INDEX1,
+                    l1_idx,
+                    new_data_p,
+                    &mut obs,
+                    &mut obs_n,
+                )?;
+                self.cur_inode.set_l1_page(l2_idx, new_l1);
+                self.cur_inode.depth = DEPTH_SINGLE_INDIRECT;
+            }
         }
 
         self.cur_inode.generation = self.global_gen + 1;

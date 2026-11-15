@@ -466,3 +466,78 @@ fn test_mount_restores_active_files_and_rename_safety() {
     );
     assert_eq!(fs2.read_file("/a/moved.txt", &mut buf).unwrap(), 1);
 }
+
+#[test]
+fn test_write_at_streaming_large_files_and_gc_promotion() {
+    let mut flash = FullFlash::new();
+    let mut fs = KernFS::new(&mut flash);
+    fs.format(None).unwrap();
+
+    // 1. write_at on missing file at non-zero offset creates zero-filled prefix.
+    fs.write_at("/user/sparse.bin", 300, b"TAIL").unwrap();
+    assert_eq!(fs.file_size("/user/sparse.bin").unwrap(), 304);
+    let mut sparse = vec![0u8; 304];
+    assert_eq!(fs.read_file("/user/sparse.bin", &mut sparse).unwrap(), 304);
+    assert!(sparse[..300].iter().all(|&b| b == 0));
+    assert_eq!(&sparse[300..304], b"TAIL");
+
+    // 2. Stream a 192 KiB file in 96-byte write_at chunks (crosses inline->direct->single_indirect & 6 L1 index pages).
+    let big_size = 192 * 1024;
+    let payload: Vec<u8> = (0..big_size)
+        .map(|i| ((i * 31 + (i >> 8) * 17) & 0xFF) as u8)
+        .collect();
+    fs.write_file("/apps/huge_app.krx", &[]).unwrap();
+    let mut off = 0usize;
+    while off < big_size {
+        let end = (off + 96).min(big_size);
+        fs.write_at("/apps/huge_app.krx", off, &payload[off..end])
+            .unwrap();
+        off = end;
+    }
+    assert_eq!(fs.file_size("/apps/huge_app.krx").unwrap(), big_size);
+    let mut readback = vec![0u8; big_size];
+    let mut r_off = 0usize;
+    while r_off < big_size {
+        let got = fs
+            .read_file_at("/apps/huge_app.krx", r_off, &mut readback[r_off..])
+            .unwrap();
+        assert!(got > 0);
+        r_off += got;
+    }
+    assert_eq!(readback, payload);
+
+    // 3. Reject single-indirect ceiling > 256 KiB cleanly without orphan corruption.
+    assert_eq!(
+        fs.write_at("/apps/huge_app.krx", 256 * 1024, b"X"),
+        Err(FsError::CapacityFull)
+    );
+    assert_eq!(fs.file_size("/apps/huge_app.krx").unwrap(), big_size);
+
+    // 4. Verify list_dir reports exact non-zero sizes for huge & small files.
+    let mut seen_huge = 0usize;
+    fs.list_dir("/apps", |name, sz, _, is_dir| {
+        if name == "huge_app.krx" {
+            assert!(!is_dir);
+            seen_huge = sz;
+        }
+    })
+    .unwrap();
+    assert_eq!(seen_huge, big_size);
+
+    // 5. Force GC during DEPTH_DIRECT -> DEPTH_SINGLE_INDIRECT promotion.
+    let mut sflash = SmallFlash::new();
+    let mut sfs = KernFS::new(&mut sflash);
+    sfs.format(None).unwrap();
+    let init_2k: Vec<u8> = (0..2048).map(|i| (i & 0xFF) as u8).collect();
+    sfs.write_file("/user/promo.bin", &init_2k).unwrap();
+    // Exhaust free blocks with churn so promoting past 2048 B must trigger GC mid-promotion.
+    for round in 0..80u8 {
+        sfs.write_file("/user/churn.bin", &[round; 256]).unwrap();
+    }
+    sfs.write_at("/user/promo.bin", 2048, b"PROMOTED_PAST_2K")
+        .unwrap();
+    let mut out = vec![0u8; 2064];
+    assert_eq!(sfs.read_file("/user/promo.bin", &mut out).unwrap(), 2064);
+    assert_eq!(&out[..2048], &init_2k[..]);
+    assert_eq!(&out[2048..2064], b"PROMOTED_PAST_2K");
+}

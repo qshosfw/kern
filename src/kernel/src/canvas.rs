@@ -247,28 +247,15 @@ impl Canvas {
         self.fill_rect(x, y, 1, length, color);
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn draw_rect(&mut self, x: u8, y: u8, width: u8, height: u8, color: Color) {
-        if width == 0 || height == 0 {
-            return;
-        }
-        self.draw_horizontal_line(x, y, width, color);
-        self.draw_horizontal_line(x, (y + height - 1).min(63), width, color);
-        self.draw_vertical_line(x, y, height, color);
-        self.draw_vertical_line((x + width - 1).min(127), y, height, color);
+        self.draw_rect_i(x as i16, y as i16, width as i16, height as i16, color);
     }
 
     /// Clear the four outermost corners of a rectangle (for rounded / chamfered UI elements)
-    #[inline(never)]
+    #[inline(always)]
     pub fn clear_corners(&mut self, x: u8, y: u8, width: u8, height: u8) {
-        if width < 2 || height < 2 {
-            return;
-        }
-        let right = (x + width - 1).min(127);
-        let bottom = (y + height - 1).min(63);
-        for (px, py) in [(x, y), (right, y), (x, bottom), (right, bottom)] {
-            self.draw_pixel(px, py, Color::Clear);
-        }
+        self.clear_corners_i(x as i16, y as i16, width as i16, height as i16);
     }
 
     #[inline(always)]

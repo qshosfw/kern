@@ -613,7 +613,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     pub fn write_at(&mut self, path: &str, offset: usize, data: &[u8]) -> Result<(), FsError> {
         match self.lookup_inode(path) {
             Ok(()) => {}
-            Err(FsError::NotFound) if self.mounted => return self.write_file(path, data),
+            Err(FsError::NotFound) if self.mounted => {
+                if offset == 0 {
+                    return self.write_file(path, data);
+                }
+                self.write_file(path, &[])?;
+            }
             Err(e) => return Err(e),
         }
         if self.cur_inode.is_dir() {
