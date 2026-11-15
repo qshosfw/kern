@@ -4,7 +4,6 @@ use super::header::*;
 use super::ops_core::*;
 use crypto::cobs::Cobs;
 use crypto::crc::CrcEngine;
-use utils::bytes::ByteWriter;
 
 pub struct WireSession {
     pub active_session_id: u32,
@@ -174,32 +173,45 @@ impl WireSession {
         if app_payload_len > u16::MAX as usize {
             return Err(WireStatus::BadLength);
         }
-        let raw_len = HEADER_LEN + app_payload_len + CRC_LEN;
+        let body_end = HEADER_LEN + app_payload_len;
+        let raw_len = body_end + CRC_LEN;
         let required_wire_len = Cobs::max_encoded_len(raw_len) + 2;
 
         if raw_buf.len() < raw_len || wire_out.len() < required_wire_len {
             return Err(WireStatus::BadLength);
         }
 
-        {
-            let mut w = ByteWriter::new(&mut raw_buf[..raw_len]);
-            w.write_u8(WIRE_SYNC_ID);
-            w.write_u8(WIRE_MAJOR);
-            w.write_u8(flags);
-            w.write_u8(service);
-            w.write_u8(opcode);
-            w.write_u32_le(self.active_session_id);
-            w.write_u32_le(sequence);
-            w.write_u16_le(app_payload_len as u16);
-            if let Some(s) = status_byte {
-                w.write_u8(s);
-            }
-            w.write_bytes(payload_data);
-        }
+        let buf = &mut raw_buf[..raw_len];
+        let [s0, s1, s2, s3] = self.active_session_id.to_le_bytes();
+        let [q0, q1, q2, q3] = sequence.to_le_bytes();
+        let [l0, l1] = (app_payload_len as u16).to_le_bytes();
+        buf[0] = WIRE_SYNC_ID;
+        buf[1] = WIRE_MAJOR;
+        buf[2] = flags;
+        buf[3] = service;
+        buf[4] = opcode;
+        buf[5] = s0;
+        buf[6] = s1;
+        buf[7] = s2;
+        buf[8] = s3;
+        buf[9] = q0;
+        buf[10] = q1;
+        buf[11] = q2;
+        buf[12] = q3;
+        buf[13] = l0;
+        buf[14] = l1;
+        let payload_start = if let Some(s) = status_byte {
+            buf[HEADER_LEN] = s;
+            HEADER_LEN + 1
+        } else {
+            HEADER_LEN
+        };
+        buf[payload_start..body_end].copy_from_slice(payload_data);
 
-        let crc = CrcEngine::crc16_ccitt(&raw_buf[..HEADER_LEN + app_payload_len]);
-        let mut crc_w = ByteWriter::new(&mut raw_buf[HEADER_LEN + app_payload_len..raw_len]);
-        crc_w.write_u16_le(crc);
+        let crc = CrcEngine::crc16_ccitt(&buf[..body_end]);
+        let [c0, c1] = crc.to_le_bytes();
+        buf[body_end] = c0;
+        buf[body_end + 1] = c1;
 
         wire_out[0] = crypto::cobs::COBS_DELIMITER;
         let cobs_len = Cobs::encode(&raw_buf[..raw_len], &mut wire_out[1..])

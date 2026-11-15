@@ -4,12 +4,12 @@
 //! hardware peripherals, and hosted applications using universal Resource Handles.
 
 use crate::hardware::SystemHardware;
-use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
+use crate::services::calibration::{is_valid_calibration, CALIB_FILE_PATH};
 use crate::services::storage::DirEntryInfo;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{ModulationMode, PowerService, RfFineTuning, RfModulation, RfSquelch};
 use kernel::wire::*;
-use utils::bytes::ByteWriter;
+use utils::bytes::{ByteReader, ByteWriter};
 use utils::units::Frequency;
 
 /// Maximum upload size accepted over RigWire (aligned to transient arena).
@@ -84,14 +84,22 @@ impl EventSubscription {
 
 pub static mut ACTIVE_SUBSCRIPTION: EventSubscription = EventSubscription::empty();
 
-#[inline(always)]
-fn ok_bytes(len: usize) -> (WireStatus, usize) {
-    (WireStatus::Ok, len)
+struct WireCtx<'a, 'b> {
+    hw: &'a mut SystemHardware<'b>,
+    w: ByteWriter<'a>,
+    now: u32,
 }
 
-#[inline(always)]
-fn err_empty(status: WireStatus) -> (WireStatus, usize) {
-    (status, 0)
+impl WireCtx<'_, '_> {
+    #[inline(always)]
+    fn write_u16(&mut self, v: u16) {
+        self.w.write_u16_le(v);
+    }
+
+    #[inline(always)]
+    fn write_u32(&mut self, v: u32) {
+        self.w.write_u32_le(v);
+    }
 }
 
 /// Main entry point for non-core RigWire records routed from the transport driver.
@@ -105,15 +113,25 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     let mut out_uninit = core::mem::MaybeUninit::<[u8; 136]>::uninit();
     let out = unsafe { &mut *out_uninit.as_mut_ptr() };
 
-    let res = match header.service {
-        SERVICE_CONTROL => handle_control_service(header.opcode, payload, hw, now, out),
-        SERVICE_DATA => handle_data_service(header.opcode, payload, hw, out),
-        SERVICE_EVENTS => handle_events_service(header.opcode, payload),
-        _ => return false,
-    };
-
-    let Some((status, resp_len)) = res else {
-        return false;
+    let (status, resp_len) = if header.service == SERVICE_DATA && header.opcode == OP_TRANSFER_CHUNK
+    {
+        on_transfer_chunk(payload, hw, out)
+    } else {
+        let mut ctx = WireCtx {
+            hw,
+            w: ByteWriter::new(&mut out[..]),
+            now,
+        };
+        let res = match header.service {
+            SERVICE_CONTROL => handle_control_service(header.opcode, payload, &mut ctx),
+            SERVICE_DATA => handle_data_service(header.opcode, payload, &mut ctx),
+            SERVICE_EVENTS => handle_events_service(header.opcode, payload),
+            _ => return false,
+        };
+        let Some(status) = res else {
+            return false;
+        };
+        (status, ctx.w.position())
     };
     let _ = hw.wire.send_response(header, status, &out[..resp_len]);
     true
@@ -128,20 +146,16 @@ fn get_u8(val: &[u8]) -> Result<u8, WireStatus> {
 
 #[inline(always)]
 fn get_u32_le(val: &[u8]) -> Result<u32, WireStatus> {
-    if val.len() >= 4 {
-        Ok(u32::from_le_bytes([val[0], val[1], val[2], val[3]]))
-    } else {
-        Err(WireStatus::BadLength)
-    }
+    ByteReader::new(val)
+        .read_u32_le()
+        .ok_or(WireStatus::BadLength)
 }
 
 #[inline(always)]
-fn get_i16_le(val: &[u8]) -> Result<i16, WireStatus> {
-    if val.len() >= 2 {
-        Ok(i16::from_le_bytes([val[0], val[1]]))
-    } else {
-        Err(WireStatus::BadLength)
-    }
+fn get_u16_le(val: &[u8]) -> Result<u16, WireStatus> {
+    ByteReader::new(val)
+        .read_u16_le()
+        .ok_or(WireStatus::BadLength)
 }
 
 #[inline(never)]
@@ -170,131 +184,119 @@ fn config_domain_idx(instance: u8) -> Result<usize, WireStatus> {
     }
 }
 
-#[inline(never)]
-fn read_sys_facet(
-    facet: u16,
-    hw: &SystemHardware,
-    now: u32,
-    w: &mut ByteWriter<'_>,
-) -> Result<(), WireStatus> {
+fn read_sys_facet(facet: u16, ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     match facet {
         FACET_SYS_IDENTITY => {
-            w.write_bytes(&bsp::uid::get_hardware_serial64().to_le_bytes());
-            w.write_bytes(&bsp::uid::read_mac_address());
-            w.write_bytes(&bsp::uid::get_crockford_serial()[..14]);
-            let is_auth = hw.wire.session.is_authenticated;
-            w.write_u8(is_auth as u8);
+            let serial = bsp::uid::get_hardware_serial64();
+            ctx.w.write_bytes(&serial.to_le_bytes());
+            ctx.w.write_bytes(&bsp::uid::read_mac_address());
+            ctx.w
+                .write_bytes(&bsp::uid::encode_crockford64(serial)[..14]);
+            let is_auth = ctx.hw.wire.session.is_authenticated;
+            ctx.w.write_u8(is_auth as u8);
             if is_auth {
-                w.write_bytes(&bsp::uid::read_mcu_uid());
+                ctx.w.write_bytes(&bsp::uid::read_mcu_uid());
             } else {
-                w.write_zeroes(12);
+                ctx.w.write_zeroes(12);
             }
         }
         FACET_SYS_METRICS => {
-            w.write_u32_le(now);
-            w.write_u32_le(py32_hal::rcc::sysclk_hz());
+            ctx.write_u32(ctx.now);
+            ctx.write_u32(py32_hal::rcc::sysclk_hz());
             let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-            w.write_u16_le(pwr.battery_voltage_mv());
-            w.write_bytes(&[
+            ctx.write_u16(pwr.battery_voltage_mv());
+            ctx.w.write_bytes(&[
                 pwr.battery_percentage(),
-                hw.orchestrator.active_app_id() as u8,
-                hw.orchestrator.is_keypad_locked() as u8,
+                ctx.hw.orchestrator.active_app_id() as u8,
+                ctx.hw.orchestrator.is_keypad_locked() as u8,
                 bsp::pins::FLASHLIGHT.is_high() as u8,
             ]);
         }
         FACET_SYS_CALIBRATION => {
             let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
-            w.write_u8(calib.is_valid() as u8);
-            w.write_i16_le(calib.xtal_freq_low());
-            w.write_u16_le(calib.battery_calib_const());
+            ctx.w.write_u8(calib.is_valid() as u8);
+            ctx.write_u16(calib.xtal_freq_low() as u16);
+            ctx.write_u16(calib.battery_calib_const());
         }
         _ => return Err(WireStatus::UnsupportedField),
     }
     Ok(())
 }
 
-#[inline(never)]
-fn read_radio_facet(
-    facet: u16,
-    instance: u8,
-    hw: &mut SystemHardware,
-    w: &mut ByteWriter<'_>,
-) -> Result<(), WireStatus> {
+fn read_radio_facet(facet: u16, instance: u8, ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let (slot, ch) = active_radio_slot(instance);
     let coord = &crate::radio_state_ref().coord;
     match facet {
         FACET_RADIO_TUNING => {
-            w.write_u32_le(ch.effective_rx_freq().raw());
-            w.write_u32_le(ch.step.in_hz());
-            w.write_u8(coord.active_vfo as u8);
+            ctx.write_u32(ch.effective_rx_freq().raw());
+            ctx.write_u32(ch.step.in_hz());
+            ctx.w.write_u8(coord.active_vfo as u8);
         }
         FACET_RADIO_MODULATION => {
-            w.write_u8(ch.modulation.to_u8());
-            w.write_u32_le(ch.bandwidth.in_hz());
+            ctx.w.write_u8(ch.modulation.to_u8());
+            ctx.write_u32(ch.bandwidth.in_hz());
         }
         FACET_RADIO_SQUELCH => {
-            w.write_u8(ch.squelch_level);
-            w.write_u16_le(hw.radio.get_rssi());
-            w.write_u8(hw.radio.is_squelch_open() as u8);
+            let rssi = ctx.hw.radio.get_rssi();
+            let open = ctx.hw.radio.is_squelch_open() as u8;
+            ctx.w.write_u8(ch.squelch_level);
+            ctx.write_u16(rssi);
+            ctx.w.write_u8(open);
         }
         FACET_RADIO_TRANSMIT => {
-            w.write_bytes(&[coord.is_slot_tx_active(slot) as u8, ch.power as u8]);
+            ctx.w
+                .write_bytes(&[coord.is_slot_tx_active(slot) as u8, ch.power as u8]);
         }
         FACET_RADIO_DIGITAL => {
-            w.write_i16_le(0);
+            ctx.w.write_zeroes(2);
         }
         _ => return Err(WireStatus::UnsupportedField),
     }
     Ok(())
 }
 
-#[inline(never)]
-fn on_handle_get(
-    handle: ResourceHandle,
-    hw: &mut SystemHardware,
-    now: u32,
-    w: &mut ByteWriter<'_>,
-) -> Result<(), WireStatus> {
+fn on_handle_get(handle: ResourceHandle, ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     if handle.domain > DOMAIN_STORAGE {
         return Err(WireStatus::Unsupported);
     }
     match (handle.domain, handle.facet) {
-        (DOMAIN_SYSTEM, facet) => return read_sys_facet(facet, hw, now, w),
-        (DOMAIN_RADIO, facet) => return read_radio_facet(facet, handle.instance, hw, w),
+        (DOMAIN_SYSTEM, facet) => return read_sys_facet(facet, ctx),
+        (DOMAIN_RADIO, facet) => return read_radio_facet(facet, handle.instance, ctx),
         (DOMAIN_UI, FACET_UI_SURFACE) => {
             const UI_SURFACE_INFO: [u8; 7] = [128, 0, 64, 0, 1, 0, 4];
-            w.write_bytes(&UI_SURFACE_INFO);
+            ctx.w.write_bytes(&UI_SURFACE_INFO);
         }
         (DOMAIN_UI, FACET_UI_MODAL) => {
             let modal =
                 unsafe { &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL) };
-            w.write_bytes(&[modal.is_active() as u8, modal.tag]);
+            ctx.w.write_bytes(&[modal.is_active() as u8, modal.tag]);
         }
         (DOMAIN_UI, FACET_UI_VIEW) | (DOMAIN_APP, FACET_APP_LIFECYCLE) => {
-            w.write_u8(hw.orchestrator.active_app_id() as u8);
+            ctx.w.write_u8(ctx.hw.orchestrator.active_app_id() as u8);
         }
         (DOMAIN_INPUT, FACET_INPUT_LOCK) => {
-            w.write_u8(hw.orchestrator.is_keypad_locked() as u8);
+            ctx.w.write_u8(ctx.hw.orchestrator.is_keypad_locked() as u8);
         }
         (DOMAIN_APP, FACET_APP_REGISTRY) => {
-            w.write_u8(crate::AppRegistry::app_count() as u8);
+            ctx.w.write_u8(crate::AppRegistry::app_count() as u8);
         }
         (DOMAIN_CONFIG, _) => {
             let domain_idx = config_domain_idx(handle.instance)?;
-            w.write_bytes(crate::master_config_ref().config_bytes(domain_idx));
+            ctx.w
+                .write_bytes(crate::master_config_ref().config_bytes(domain_idx));
         }
         (DOMAIN_STORAGE, _) => {
-            let stats = hw.filesystem.stats();
+            let stats = ctx.hw.filesystem.stats();
             for v in [
                 stats.active_files,
                 stats.used_sectors,
                 stats.free_sectors,
                 stats.deleted_sectors,
             ] {
-                w.write_u16_le(v);
+                ctx.write_u16(v);
             }
-            w.write_u32_le(stats.wear_cycles);
-            w.write_u16_le(stats.total_sectors);
+            ctx.write_u32(stats.wear_cycles);
+            ctx.write_u16(stats.total_sectors);
         }
         _ => return Err(WireStatus::UnsupportedField),
     }
@@ -308,43 +310,41 @@ fn set_keypad_lock(hw: &mut SystemHardware, locked: bool) {
     }
 }
 
-#[inline(never)]
 fn handle_resource_set(
     handle: ResourceHandle,
     val: &[u8],
     hw: &mut SystemHardware,
 ) -> Result<(), WireStatus> {
-    match handle.domain {
-        DOMAIN_SYSTEM if handle.facet == FACET_SYS_METRICS => {
-            if let Some(&lock) = val.first() {
-                set_keypad_lock(hw, lock != 0);
-            }
-            Ok(())
+    if (handle.domain == DOMAIN_SYSTEM && handle.facet == FACET_SYS_METRICS)
+        || (handle.domain == DOMAIN_INPUT && handle.facet == FACET_INPUT_LOCK)
+    {
+        if handle.domain == DOMAIN_INPUT || !val.is_empty() {
+            set_keypad_lock(hw, get_u8(val)? != 0);
         }
+        return Ok(());
+    }
+    match handle.domain {
         DOMAIN_RADIO => {
-            let (slot, ch) = active_radio_slot(handle.instance);
+            let (_slot, ch) = active_radio_slot(handle.instance);
             match handle.facet {
                 FACET_RADIO_TUNING => {
                     let freq_hz = get_u32_le(val)?;
-                    if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
+                    if freq_hz < 18_000_000 || freq_hz > 1_300_000_000 {
                         return Err(WireStatus::BadRange);
                     }
                     let freq = Frequency::new(freq_hz);
                     ch.rx_freq = freq;
                     let _ = hw.radio.set_frequency(freq);
-                    Ok(())
                 }
                 FACET_RADIO_MODULATION => {
                     let mode = ModulationMode::from_u8(get_u8(val)?);
                     ch.modulation = mode;
                     hw.radio.set_modulation(mode);
-                    Ok(())
                 }
                 FACET_RADIO_SQUELCH => {
                     let sql = get_u8(val)?.min(9);
                     ch.squelch_level = sql;
                     hw.radio.set_squelch_level(sql);
-                    Ok(())
                 }
                 FACET_RADIO_TRANSMIT => {
                     let should_tx = get_u8(val)? != 0;
@@ -354,38 +354,24 @@ fn handle_resource_set(
                     } else {
                         coord.stop_tx(&mut hw.radio);
                     }
-                    let _ = slot;
-                    Ok(())
                 }
                 FACET_RADIO_DIGITAL => {
-                    let offset_dhz = get_i16_le(val)?;
+                    let offset_dhz = get_u16_le(val)? as i16;
                     hw.radio.set_sub_hz_offset(ch.rx_freq.raw(), offset_dhz);
-                    Ok(())
                 }
-                _ => Err(WireStatus::UnsupportedField),
+                _ => return Err(WireStatus::UnsupportedField),
             }
+            Ok(())
         }
-        DOMAIN_INPUT => match handle.facet {
-            FACET_INPUT_KEY => {
-                let code_u8 = get_u8(val)?;
-                let state_u8 = val.get(1).copied().unwrap_or(0);
-                let Some(code) = KeyCode::from_u8(code_u8) else {
-                    return Err(WireStatus::BadRange);
-                };
-                let state = match state_u8 {
-                    0 => KeyState::Pressed,
-                    1 => KeyState::Held,
-                    _ => KeyState::Released,
-                };
-                crate::system::enqueue_event(Event::Key { code, state });
-                Ok(())
-            }
-            FACET_INPUT_LOCK => {
-                set_keypad_lock(hw, get_u8(val)? != 0);
-                Ok(())
-            }
-            _ => Err(WireStatus::UnsupportedField),
-        },
+        DOMAIN_INPUT if handle.facet == FACET_INPUT_KEY => {
+            let Some(code) = KeyCode::from_u8(get_u8(val)?) else {
+                return Err(WireStatus::BadRange);
+            };
+            let state = [KeyState::Pressed, KeyState::Held, KeyState::Released]
+                [val.get(1).copied().unwrap_or(0).min(2) as usize];
+            crate::system::enqueue_event(Event::Key { code, state });
+            Ok(())
+        }
         DOMAIN_CONFIG => {
             let domain_idx = config_domain_idx(handle.instance)?;
             let mcfg = crate::master_config();
@@ -396,12 +382,11 @@ fn handle_resource_set(
             let _ = mcfg.flush_dirty(hw.filesystem);
             Ok(())
         }
-        DOMAIN_SYSTEM => Err(WireStatus::UnsupportedField),
+        DOMAIN_SYSTEM | DOMAIN_INPUT => Err(WireStatus::UnsupportedField),
         _ => Err(WireStatus::Unsupported),
     }
 }
 
-#[inline(never)]
 fn handle_resource_invoke(
     handle: ResourceHandle,
     action_id: u16,
@@ -410,19 +395,23 @@ fn handle_resource_invoke(
 ) -> WireStatus {
     match (handle.domain, action_id) {
         (DOMAIN_SYSTEM, ACTION_SYS_REBOOT) => {
-            let mode = match params.first().copied() {
-                Some(1) => kernel::power::RebootMode::Bootloader,
-                Some(2) => kernel::power::RebootMode::SafeRecovery,
-                _ => kernel::power::RebootMode::Firmware,
-            };
+            let mode = [
+                kernel::power::RebootMode::Firmware,
+                kernel::power::RebootMode::Bootloader,
+                kernel::power::RebootMode::SafeRecovery,
+            ][params.first().copied().unwrap_or(0).min(2) as usize];
             kernel::power::PowerControl::reboot_with(mode);
         }
         (DOMAIN_SYSTEM, ACTION_SYS_FLASHLIGHT) => {
-            match params.first().copied().unwrap_or(2) {
-                0 => bsp::pins::FLASHLIGHT.set_low(),
-                1 => bsp::pins::FLASHLIGHT.set_high(),
-                _ if bsp::pins::FLASHLIGHT.is_high() => bsp::pins::FLASHLIGHT.set_low(),
-                _ => bsp::pins::FLASHLIGHT.set_high(),
+            let high = match params.first().copied().unwrap_or(2) {
+                0 => false,
+                1 => true,
+                _ => !bsp::pins::FLASHLIGHT.is_high(),
+            };
+            if high {
+                bsp::pins::FLASHLIGHT.set_high();
+            } else {
+                bsp::pins::FLASHLIGHT.set_low();
             }
             WireStatus::Ok
         }
@@ -438,14 +427,12 @@ fn handle_resource_invoke(
         }
         (DOMAIN_UI, ACTION_MODAL_CONFIRM | ACTION_MODAL_CANCEL | ACTION_VIEW_LAUNCHER)
         | (DOMAIN_APP, ACTION_APP_KILL) => {
-            let (code, state) = match action_id {
-                ACTION_MODAL_CONFIRM if handle.domain == DOMAIN_UI => {
-                    (KeyCode::Menu, KeyState::Pressed)
-                }
-                ACTION_MODAL_CANCEL if handle.domain == DOMAIN_UI => {
-                    (KeyCode::Exit, KeyState::Pressed)
-                }
-                _ => (KeyCode::Exit, KeyState::Held),
+            let (code, state) = if handle.domain == DOMAIN_UI && action_id == ACTION_MODAL_CONFIRM {
+                (KeyCode::Menu, KeyState::Pressed)
+            } else if handle.domain == DOMAIN_UI && action_id == ACTION_MODAL_CANCEL {
+                (KeyCode::Exit, KeyState::Pressed)
+            } else {
+                (KeyCode::Exit, KeyState::Held)
             };
             crate::system::enqueue_event(Event::Key { code, state });
             WireStatus::Ok
@@ -470,55 +457,63 @@ fn handle_resource_invoke(
 fn handle_control_service(
     opcode: u8,
     payload: &[u8],
-    hw: &mut SystemHardware,
-    now: u32,
-    out: &mut [u8; 136],
-) -> Option<(WireStatus, usize)> {
+    ctx: &mut WireCtx<'_, '_>,
+) -> Option<WireStatus> {
     if opcode < OP_HANDLE_GET || opcode > OP_HANDLE_STREAM {
         return None;
     }
-    let mut r = utils::bytes::ByteReader::new(payload);
-    let Some(handle) = ResourceHandle::parse_from(&mut r) else {
-        return Some(err_empty(WireStatus::BadLength));
+    if payload.len() < 4 {
+        return Some(WireStatus::BadLength);
+    }
+    let handle = ResourceHandle {
+        domain: payload[0],
+        instance: payload[1],
+        facet: u16::from_le_bytes([payload[2], payload[3]]),
     };
+    let rest = &payload[4..];
+    ctx.w.write_bytes(&payload[..4]);
 
-    let mut w = ByteWriter::new(&mut out[..]);
-    w.write_u8(handle.domain);
-    w.write_u8(handle.instance);
-    w.write_u16_le(handle.facet);
     let status = match opcode {
-        OP_HANDLE_GET => match on_handle_get(handle, hw, now, &mut w) {
+        OP_HANDLE_GET => match on_handle_get(handle, ctx) {
             Ok(()) => WireStatus::Ok,
-            Err(status) => return Some(err_empty(status)),
+            Err(status) => {
+                ctx.w.reset();
+                status
+            }
         },
-        OP_HANDLE_SET => handle_resource_set(handle, r.remaining_slice(), hw)
+        OP_HANDLE_SET => handle_resource_set(handle, rest, ctx.hw)
             .err()
             .unwrap_or(WireStatus::Ok),
         OP_HANDLE_INVOKE => {
-            let Some(action_id) = r.read_u16_le() else {
-                return Some(err_empty(WireStatus::BadLength));
-            };
-            w.write_u16_le(action_id);
-            handle_resource_invoke(handle, action_id, r.remaining_slice(), hw)
+            if rest.len() < 2 {
+                ctx.w.reset();
+                return Some(WireStatus::BadLength);
+            }
+            ctx.w.write_bytes(&rest[..2]);
+            let action_id = u16::from_le_bytes([rest[0], rest[1]]);
+            handle_resource_invoke(handle, action_id, &rest[2..], ctx.hw)
         }
         OP_HANDLE_STREAM => {
+            let mut r = ByteReader::new(rest);
             let (Some(offset), Some(length)) = (r.read_u32_le(), r.read_u16_le()) else {
-                return Some(err_empty(WireStatus::BadLength));
+                ctx.w.reset();
+                return Some(WireStatus::BadLength);
             };
             if handle.domain != DOMAIN_UI || handle.facet != FACET_UI_SURFACE {
-                return Some(err_empty(WireStatus::Unsupported));
+                ctx.w.reset();
+                return Some(WireStatus::Unsupported);
             }
             let flat = crate::system_canvas().buffer_flat();
             let off = (offset as usize).min(flat.len());
             let len = (length as usize).min(100).min(flat.len() - off);
-            w.write_u32_le(off as u32);
-            w.write_u16_le(len as u16);
-            w.write_bytes(&flat[off..off + len]);
+            ctx.write_u32(off as u32);
+            ctx.write_u16(len as u16);
+            ctx.w.write_bytes(&flat[off..off + len]);
             WireStatus::Ok
         }
         _ => return None,
     };
-    Some((status, w.position()))
+    Some(status)
 }
 
 // ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
@@ -538,24 +533,19 @@ fn validate_file_path(path: &str, is_write: bool, allow_calib: bool) -> Result<(
     Ok(())
 }
 
-#[inline(never)]
-fn on_transfer_open(
-    payload: &[u8],
-    hw: &mut SystemHardware,
-    w: &mut ByteWriter<'_>,
-) -> Result<(), WireStatus> {
+fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferOpenRequest::parse(payload).ok_or(WireStatus::BadLength)?;
     validate_file_path(req.path, req.mode == TRANSFER_MODE_WRITE, true)?;
     if req.mode == TRANSFER_MODE_WRITE {
         if req.total_size as usize > MAX_WIRE_FILE_SIZE {
             return Err(WireStatus::BadLength);
         }
-        if hw.filesystem.stats().free_sectors < 4 {
+        if ctx.hw.filesystem.stats().free_sectors < 4 {
             return Err(WireStatus::Failed);
         }
     }
 
-    let existing_size = hw.filesystem.file_size(req.path).unwrap_or(0) as u32;
+    let existing_size = ctx.hw.filesystem.file_size(req.path).unwrap_or(0) as u32;
     let tid = unsafe {
         let next_ptr = core::ptr::addr_of_mut!(NEXT_TRANSFER_ID);
         let id = *next_ptr;
@@ -576,9 +566,9 @@ fn on_transfer_open(
         t.path_len = path_bytes.len() as u8;
     }
 
-    w.write_u16_le(tid);
-    w.write_u16_le(chunk_size);
-    w.write_u32_le(existing_size);
+    ctx.write_u16(tid);
+    ctx.write_u16(chunk_size);
+    ctx.write_u32(existing_size);
     Ok(())
 }
 
@@ -589,41 +579,39 @@ fn on_transfer_chunk(
     out: &mut [u8; 136],
 ) -> (WireStatus, usize) {
     let Some(req) = TransferChunkRequest::parse(payload) else {
-        return err_empty(WireStatus::BadLength);
+        return (WireStatus::BadLength, 0);
     };
     let Some(transfer) = active_transfer_mut(req.transfer_id) else {
-        return err_empty(WireStatus::BadSession);
+        return (WireStatus::BadSession, 0);
     };
 
+    let off = req.offset as usize;
     let mut w = ByteWriter::new(&mut out[..]);
     w.write_u16_le(req.transfer_id);
     if transfer.mode == TRANSFER_MODE_WRITE {
-        let off = req.offset as usize;
         let chunk_len = req.data.len();
         let Some(end) = off.checked_add(chunk_len) else {
-            return err_empty(WireStatus::BadRange);
+            return (WireStatus::BadRange, 0);
         };
         if end > MAX_WIRE_FILE_SIZE {
-            return err_empty(WireStatus::BadLength);
+            return (WireStatus::BadLength, 0);
         }
         wire_file_staging_buf()[off..end].copy_from_slice(req.data);
         let new_len = end as u32;
         transfer.current_len = transfer.current_len.max(new_len);
         w.write_u16_le(chunk_len as u16);
         w.write_u32_le(new_len);
-        ok_bytes(8)
+        (WireStatus::Ok, 8)
     } else {
-        let path = transfer.path_str();
-        let off = req.offset as usize;
         let len = (req.length as usize).min(120);
         let read_sz = hw
             .filesystem
-            .read_file_at(path, off, &mut out[8..8 + len])
+            .read_file_at(transfer.path_str(), off, &mut out[8..8 + len])
             .unwrap_or(0);
         let mut w = ByteWriter::new(&mut out[2..8]);
         w.write_u32_le(off as u32);
         w.write_u16_le(read_sz as u16);
-        ok_bytes(8 + read_sz)
+        (WireStatus::Ok, 8 + read_sz)
     }
 }
 
@@ -658,12 +646,7 @@ fn commit_calibration_payload(
     Ok(())
 }
 
-#[inline(never)]
-fn on_transfer_close(
-    payload: &[u8],
-    hw: &mut SystemHardware,
-    w: &mut ByteWriter<'_>,
-) -> Result<(), WireStatus> {
+fn on_transfer_close(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferCloseRequest::parse(payload).ok_or(WireStatus::BadLength)?;
     let transfer = active_transfer_mut(req.transfer_id).ok_or(WireStatus::BadSession)?;
 
@@ -678,8 +661,9 @@ fn on_transfer_close(
         }
         let path = transfer.path_str();
         if path == CALIB_FILE_PATH {
-            commit_calibration_payload(staging, total_len, hw)?;
-        } else if hw
+            commit_calibration_payload(staging, total_len, ctx.hw)?;
+        } else if ctx
+            .hw
             .filesystem
             .write_file(path, &staging[..total_len])
             .is_err()
@@ -688,56 +672,44 @@ fn on_transfer_close(
         }
     }
 
-    w.write_u16_le(req.transfer_id);
-    w.write_u32_le(actual_crc);
+    ctx.write_u16(req.transfer_id);
+    ctx.write_u32(actual_crc);
     Ok(())
 }
 
-#[inline(never)]
-fn on_transfer_stat(
-    payload: &[u8],
-    hw: &mut SystemHardware,
-    w: &mut ByteWriter<'_>,
-) -> Result<(), WireStatus> {
+fn on_transfer_stat(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferStatRequest::parse(payload).ok_or(WireStatus::BadLength)?;
 
-    match hw.filesystem.file_size(req.path) {
-        Ok(sz) => {
-            let mut crc_val = 0xFFFF_FFFFu32;
-            let mut cur_off = 0usize;
-            let mut uninit = core::mem::MaybeUninit::<[u8; 64]>::uninit();
-            let chunk_buf = unsafe { &mut *uninit.as_mut_ptr() };
-            while cur_off < sz {
-                let to_read = (sz - cur_off).min(chunk_buf.len());
-                match hw
-                    .filesystem
-                    .read_file_at(req.path, cur_off, &mut chunk_buf[..to_read])
-                {
-                    Ok(n) if n > 0 => {
-                        crc_val = crypto::crc::CrcEngine::crc32_update(crc_val, &chunk_buf[..n]);
-                        cur_off += n;
-                    }
-                    _ => break,
-                }
+    let Ok(sz) = ctx.hw.filesystem.file_size(req.path) else {
+        ctx.w.write_zeroes(10);
+        return Err(WireStatus::NotFound);
+    };
+
+    let mut crc_val = 0xFFFF_FFFFu32;
+    let mut cur_off = 0usize;
+    let mut uninit = core::mem::MaybeUninit::<[u8; 32]>::uninit();
+    let chunk_buf = unsafe { &mut *uninit.as_mut_ptr() };
+    while cur_off < sz {
+        let to_read = (sz - cur_off).min(chunk_buf.len());
+        match ctx
+            .hw
+            .filesystem
+            .read_file_at(req.path, cur_off, &mut chunk_buf[..to_read])
+        {
+            Ok(n) if n > 0 => {
+                crc_val = crypto::crc::CrcEngine::crc32_update(crc_val, &chunk_buf[..n]);
+                cur_off += n;
             }
-            w.write_u16_le(1);
-            w.write_u32_le(sz as u32);
-            w.write_u32_le(!crc_val);
-            Ok(())
-        }
-        Err(_) => {
-            w.write_zeroes(10);
-            Err(WireStatus::NotFound)
+            _ => break,
         }
     }
+    ctx.write_u16(1);
+    ctx.write_u32(sz as u32);
+    ctx.write_u32(!crc_val);
+    Ok(())
 }
 
-#[inline(never)]
-fn on_transfer_list(
-    payload: &[u8],
-    hw: &mut SystemHardware,
-    w: &mut ByteWriter<'_>,
-) -> Result<(), WireStatus> {
+fn on_transfer_list(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferListRequest::parse(payload).ok_or(WireStatus::BadLength)?;
 
     let active_upload = unsafe {
@@ -753,21 +725,21 @@ fn on_transfer_list(
         core::ptr::write_bytes(ptr, 0, 12);
         core::slice::from_raw_parts_mut(ptr, 12)
     };
-    let count = hw.filesystem.list_dir(req.path, entries).unwrap_or(0);
+    let count = ctx.hw.filesystem.list_dir(req.path, entries).unwrap_or(0);
 
-    w.write_u16_le(0xFFFFu16);
-    w.write_u8(count as u8);
+    ctx.write_u16(0xFFFFu16);
+    ctx.w.write_u8(count as u8);
 
     for entry in &entries[..count] {
         let b = entry.path.as_str().as_bytes();
         let name_len = b.len().min(24);
-        if w.remaining() < 6 + name_len {
+        if ctx.w.remaining() < 6 + name_len {
             break;
         }
-        w.write_u8(entry.is_dir as u8);
-        w.write_u32_le(entry.size as u32);
-        w.write_u8(name_len as u8);
-        w.write_bytes(&b[..name_len]);
+        ctx.w.write_u8(entry.is_dir as u8);
+        ctx.write_u32(entry.size as u32);
+        ctx.w.write_u8(name_len as u8);
+        ctx.w.write_bytes(&b[..name_len]);
     }
     Ok(())
 }
@@ -776,31 +748,27 @@ fn on_transfer_list(
 fn handle_data_service(
     opcode: u8,
     payload: &[u8],
-    hw: &mut SystemHardware,
-    out: &mut [u8; 136],
-) -> Option<(WireStatus, usize)> {
-    if opcode == OP_TRANSFER_CHUNK {
-        return Some(on_transfer_chunk(payload, hw, out));
-    }
-    let mut w = ByteWriter::new(&mut out[..]);
+    ctx: &mut WireCtx<'_, '_>,
+) -> Option<WireStatus> {
     let res = match opcode {
-        OP_TRANSFER_OPEN => on_transfer_open(payload, hw, &mut w),
-        OP_TRANSFER_CLOSE => on_transfer_close(payload, hw, &mut w),
+        OP_TRANSFER_OPEN => on_transfer_open(payload, ctx),
+        OP_TRANSFER_CLOSE => on_transfer_close(payload, ctx),
         OP_TRANSFER_ABORT => match TransferAbortRequest::parse(payload) {
             Some(req) => {
                 if let Some(transfer) = active_transfer_mut(req.transfer_id) {
                     transfer.active = false;
                 }
-                w.write_u16_le(req.transfer_id);
+                ctx.write_u16(req.transfer_id);
                 Ok(())
             }
             None => Err(WireStatus::BadLength),
         },
-        OP_TRANSFER_STAT => on_transfer_stat(payload, hw, &mut w),
-        OP_TRANSFER_LIST => on_transfer_list(payload, hw, &mut w),
+        OP_TRANSFER_STAT => on_transfer_stat(payload, ctx),
+        OP_TRANSFER_LIST => on_transfer_list(payload, ctx),
         OP_TRANSFER_REMOVE => match TransferRemoveRequest::parse(payload) {
             Some(req) => validate_file_path(req.path, true, false).and_then(|()| {
-                hw.filesystem
+                ctx.hw
+                    .filesystem
                     .remove(req.path)
                     .map_err(|_| WireStatus::NotFound)
             }),
@@ -808,13 +776,12 @@ fn handle_data_service(
         },
         _ => return None,
     };
-    let status = res.err().unwrap_or(WireStatus::Ok);
-    Some((status, w.position()))
+    Some(res.err().unwrap_or(WireStatus::Ok))
 }
 
 // ── SERVICE_EVENTS (0x02) ────────────────────────────────────────────────────
 #[inline(never)]
-fn handle_events_service(opcode: u8, payload: &[u8]) -> Option<(WireStatus, usize)> {
+fn handle_events_service(opcode: u8, payload: &[u8]) -> Option<WireStatus> {
     let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
     let status = match opcode {
         OP_EVENTS_SUBSCRIBE => match EventSubscribeReq::parse(payload) {
@@ -841,7 +808,7 @@ fn handle_events_service(opcode: u8, payload: &[u8]) -> Option<(WireStatus, usiz
         }
         _ => return None,
     };
-    Some((status, 0))
+    Some(status)
 }
 
 /// Asynchronously emit an event frame over RigWire if the host holds a valid subscription with credits.

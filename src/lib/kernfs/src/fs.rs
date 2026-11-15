@@ -567,11 +567,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
 
         let mut old_depth = 0u8;
-        let mut old_ptrs = [0u8; MAX_INLINE_LEN];
+        let mut old_ptrs = core::mem::MaybeUninit::<[u8; MAX_INLINE_LEN]>::uninit();
         if has_existing {
             if !self.cur_inode.is_inline() {
                 old_depth = self.cur_inode.depth;
-                old_ptrs = self.cur_inode.inline_data;
+                old_ptrs.write(self.cur_inode.inline_data);
             }
             self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
         } else {
@@ -594,7 +594,10 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.hot_ino = self.cur_inode.ino;
 
         if has_existing {
-            self.mark_tree_obsolete(old_depth, &old_ptrs);
+            if old_depth != 0 {
+                // SAFETY: `old_ptrs` is written above whenever `old_depth != 0`.
+                self.mark_tree_obsolete(old_depth, unsafe { old_ptrs.assume_init_ref() });
+            }
         } else {
             self.active_files = self.active_files.saturating_add(1);
         }

@@ -29,6 +29,11 @@ impl<'a> ByteWriter<'a> {
     }
 
     #[inline(always)]
+    pub fn reset(&mut self) {
+        self.pos = 0;
+    }
+
+    #[inline(always)]
     pub fn as_slice(&self) -> &[u8] {
         &self.buf[..self.pos]
     }
