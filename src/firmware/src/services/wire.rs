@@ -4,7 +4,7 @@
 //! hardware peripherals, and hosted applications using universal Resource Handles.
 
 use crate::hardware::SystemHardware;
-use crate::services::calibration::{is_valid_calibration, CALIB_FILE_PATH};
+use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
 use crate::services::storage::DirEntryInfo;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{ModulationMode, PowerService, RfFineTuning, RfModulation, RfSquelch};
@@ -146,15 +146,17 @@ fn get_u8(val: &[u8]) -> Result<u8, WireStatus> {
 
 #[inline(always)]
 fn get_u32_le(val: &[u8]) -> Result<u32, WireStatus> {
-    ByteReader::new(val)
-        .read_u32_le()
+    val.get(..4)
+        .and_then(|s| s.try_into().ok())
+        .map(u32::from_le_bytes)
         .ok_or(WireStatus::BadLength)
 }
 
 #[inline(always)]
 fn get_u16_le(val: &[u8]) -> Result<u16, WireStatus> {
-    ByteReader::new(val)
-        .read_u16_le()
+    val.get(..2)
+        .and_then(|s| s.try_into().ok())
+        .map(u16::from_le_bytes)
         .ok_or(WireStatus::BadLength)
 }
 
@@ -491,7 +493,12 @@ fn handle_control_service(
             } else {
                 ctx.w.write_bytes(&rest[..2]);
                 let action_id = u16::from_le_bytes([rest[0], rest[1]]);
-                return Some(handle_resource_invoke(handle, action_id, &rest[2..], ctx.hw));
+                return Some(handle_resource_invoke(
+                    handle,
+                    action_id,
+                    &rest[2..],
+                    ctx.hw,
+                ));
             }
         }
         OP_HANDLE_STREAM => {

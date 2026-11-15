@@ -12,10 +12,6 @@ pub struct WireSession {
     pub last_crc: u16,
     pub negotiated_max_payload: u16,
     pub is_authenticated: bool,
-    pub bad_crc_count: u32,
-    pub malformed_count: u32,
-    pub duplicate_count: u32,
-    pub valid_records_count: u32,
 }
 
 impl WireSession {
@@ -27,10 +23,6 @@ impl WireSession {
             last_crc: 0,
             negotiated_max_payload: 128,
             is_authenticated: false,
-            bad_crc_count: 0,
-            malformed_count: 0,
-            duplicate_count: 0,
-            valid_records_count: 0,
         }
     }
 
@@ -93,7 +85,6 @@ impl WireSession {
             u16::from_le_bytes([raw_record[covered_bytes], raw_record[covered_bytes + 1]]);
 
         if expected_crc != wire_crc {
-            self.bad_crc_count = self.bad_crc_count.saturating_add(1);
             return WireStatus::Failed;
         }
 
@@ -128,7 +119,6 @@ impl WireSession {
                 if expected_crc != self.last_crc {
                     return WireStatus::DuplicateConflict;
                 }
-                self.duplicate_count = self.duplicate_count.saturating_add(1);
             } else if sequence != self.expected_sequence {
                 return WireStatus::StaleSequence;
             }
@@ -140,7 +130,6 @@ impl WireSession {
             }
         }
 
-        self.valid_records_count = self.valid_records_count.saturating_add(1);
         *out = WireHeader {
             ident,
             major,
