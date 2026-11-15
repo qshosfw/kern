@@ -10,15 +10,16 @@ use heapless::String;
 
 use crate::widgets;
 
+#[repr(C)]
 pub struct PopupModel {
+    pub hold_active: bool,
     pub anim: crate::gui::animation::TransitionProgress,
-    pub scroll_offset: usize,
-    pub confirm_label: Option<&'static str>,
-    pub cancel_label: Option<&'static str>,
     pub hold_ms_required: u16,
     pub hold_elapsed_ms: u16,
-    pub hold_active: bool,
+    pub scroll_offset: usize,
     pub repeater: crate::gui::repeater::KeyRepeater,
+    pub confirm_label: Option<&'static str>,
+    pub cancel_label: Option<&'static str>,
     pub custom_title: String<24>,
     pub custom_msg: String<192>,
 }
@@ -185,26 +186,8 @@ impl View<PopupModel> for PopupView {
             }
         }
 
-        // Hold-to-confirm live countdown in header + balanced 6px sub-pixel progress bar
+        // Hold-to-confirm balanced 6px sub-pixel progress bar
         if model.hold_ms_required > 0 && anim_p >= 8 {
-            let (rem_ds, _) = utils::math::div100_u16(
-                model
-                    .hold_ms_required
-                    .saturating_sub(model.hold_elapsed_ms)
-                    .saturating_add(50),
-            );
-            let (sec, tenth) = utils::math::div10_u16(rem_ds.min(99));
-            let t_buf = [b'0' + (sec as u8), b'.', b'0' + tenth, b's'];
-            let t_str = unsafe { core::str::from_utf8_unchecked(&t_buf) };
-            text::draw_str_align(
-                canvas,
-                125,
-                sheet_y + 6,
-                t_str,
-                &TOMTHUMB,
-                Color::Clear,
-                text::Align::Right,
-            );
             widgets::draw_progress_bar(canvas, 4, sheet_y + 25, 120, 6, model.hold_percent(), true);
         }
 
@@ -249,5 +232,31 @@ impl View<PopupModel> for PopupView {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hold_confirm_header_omits_countdown_text() {
+        let mut model = PopupModel::new().with_badges("Hold", "Cancel");
+        let _ = model.custom_title.push_str("DFU MODE");
+        let _ = model.custom_msg.push_str("Reboot to bootloader?");
+        model.hold_ms_required = 1000;
+        model.hold_elapsed_ms = 500;
+        model.anim.jump_complete();
+
+        let mut canvas = Canvas::new();
+        PopupView::new().render(&mut canvas, &model);
+
+        // Negated header bar occupies Y=18..26 (bits 2..=7 in page 2). Top-right X=100..=125
+        // must remain unbroken Fill with no cleared countdown glyph pixels.
+        for x in 100..=125 {
+            assert_eq!(canvas.buffer[2][x] & 0xFC, 0xFC);
+        }
+        // Hold progress bar outline at Y=43..48 (page 5 bits 3..=7) should still render.
+        assert_ne!(canvas.buffer[5][64] & 0xF8, 0);
     }
 }
