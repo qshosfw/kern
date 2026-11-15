@@ -168,13 +168,14 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
         self.region_count = 0;
     }
 
-    /// Configure memory layout in-place with optional overlay window.
+    /// Configure memory layout in-place with optional overlay window (`overlay_size == 0` disables overlay).
     #[inline(never)]
     pub fn init_regions(
         &mut self,
         code_vma: u32,
         code_size: u32,
-        overlay: Option<(u32, u32)>,
+        overlay_vma: u32,
+        overlay_size: u32,
         ram_vma: u32,
         ram_size: u32,
     ) {
@@ -185,14 +186,12 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
             code_size,
         );
         let mut idx = 1usize;
-        if let Some((ov_vma, ov_size)) = overlay
-            && MAX_REGIONS > 2
-        {
+        if overlay_size > 0 && MAX_REGIONS > 2 {
             self.regions[1] = MemoryRegionDescriptor::new(
                 RegionKind::OverlayWindow,
                 region_flags::READ | region_flags::EXEC,
-                ov_vma,
-                ov_size,
+                overlay_vma,
+                overlay_size,
             );
             idx = 2;
         }
@@ -222,7 +221,8 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
         self.init_regions(
             code_vma,
             code_size,
-            Some((overlay_vma, overlay_size)),
+            overlay_vma,
+            overlay_size,
             ram_vma,
             ram_size,
         );
@@ -252,7 +252,7 @@ impl<const MAX_REGIONS: usize> MemoryMapLayout<MAX_REGIONS> {
     /// Configure memory layout in-place for N1 Native PIC applications (§6.1).
     #[inline(always)]
     pub fn init_native_pic(&mut self, code_vma: u32, code_size: u32, ram_vma: u32, ram_size: u32) {
-        self.init_regions(code_vma, code_size, None, ram_vma, ram_size);
+        self.init_regions(code_vma, code_size, 0, 0, ram_vma, ram_size);
     }
 
     /// Construct a memory layout for N1 Native PIC applications (§6.1).

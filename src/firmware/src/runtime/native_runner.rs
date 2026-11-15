@@ -78,7 +78,7 @@ pub(crate) fn slot_ref() -> &'static NativeExecSlot {
 }
 
 #[inline(always)]
-fn slot_mut() -> &'static mut NativeExecSlot {
+pub(crate) fn slot_mut() -> &'static mut NativeExecSlot {
     unsafe { (*core::ptr::addr_of_mut!(NATIVE_SLOT)).assume_init_mut() }
 }
 
@@ -387,20 +387,27 @@ pub fn load_native_from_storage(
 
     // 2. Configure P0 Structured Leaf Manager
     let overlay_size = 1024u32;
-    let overlay_vma =
-        (load_base + (NATIVE_EXEC_BUFFER_WORDS as u32 * 4)).saturating_sub(overlay_size);
-    slot.leaf_mgr
-        .configure(overlay_vma, overlay_size as u16, aux.leaf_map);
+    let overlay_vma = load_base + (max_arena_bytes as u32 - overlay_size);
+    if aux.leaf_map.is_some() {
+        slot.leaf_mgr
+            .configure(overlay_vma, overlay_size as u16, aux.leaf_map);
+    }
+
+    // 2b. Verify unrelocated payload CRC32 before patching words in SRAM
+    if !slot.is_paged
+        && preamble.payload_crc32 != 0
+        && crypto::crc::CrcEngine::crc32(&buffer_bytes[..payload_len.min(max_arena_bytes)])
+            != preamble.payload_crc32
+    {
+        return Err(KrxLaunchError::CrcMismatch);
+    }
 
     // 3. Apply escape-capable delta relocations v2 (Section 6.2)
     apply_package_relocs(buffer_bytes, payload_len, exec, load_delta)?;
 
     // 4. Bind CapImports (0x0003) into the package GOT (Section 6.3 & Chapter 8)
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
-    let slot_start = load_base as usize;
-    let slot_end = slot_start + (NATIVE_EXEC_BUFFER_WORDS * 4);
-    let got_addr = slot.got_base as usize;
-    if (got_addr & 3) != 0 || got_addr < slot_start || got_addr >= slot_end {
+    if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= max_arena_bytes {
         return Err(KrxLaunchError::ImportBindingFailed);
     }
     if let Some(cap_body) = aux.cap_imports {
@@ -419,13 +426,12 @@ pub fn load_native_from_storage(
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
     let is_p0 = profile.is_structured_paged();
-    let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS as u32 * 4;
-    let limit_vma = if is_p0 {
-        overlay_vma
+    let code_limit = if is_p0 {
+        max_arena_bytes as u32 - overlay_size
     } else {
-        load_base + max_arena_bytes
+        max_arena_bytes as u32
     };
-    let code_limit = limit_vma.saturating_sub(load_base);
+    let limit_vma = load_base + code_limit;
 
     let code_size = if slot.is_paged && !is_p0 {
         (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
@@ -439,23 +445,22 @@ pub fn load_native_from_storage(
     let ram_vma = if !slot.is_paged && exec.got_offset > 0 {
         slot.got_base
     } else {
-        load_base.saturating_add(code_size)
+        load_base + code_size
     };
     let ram_size = limit_vma.saturating_sub(ram_vma);
-    let overlay = if is_p0 {
-        Some((overlay_vma, overlay_size))
-    } else {
-        None
-    };
-    slot.mem_layout
-        .init_regions(load_base, code_size, overlay, ram_vma, ram_size);
+    slot.mem_layout.init_regions(
+        load_base,
+        code_size,
+        overlay_vma,
+        if is_p0 { overlay_size } else { 0 },
+        ram_vma,
+        ram_size,
+    );
 
-    let raw_entry = load_base.wrapping_add(exec.entry_point);
-    let entry_thumb = (raw_entry | 1) as usize;
-    let code_addr = raw_entry & !1;
-    if code_addr < load_base || code_addr >= load_base.saturating_add(code_size) {
+    if (exec.entry_point & !1) >= code_size {
         return Err(KrxLaunchError::InvalidEntryPoint);
     }
+    let entry_thumb = (load_base.wrapping_add(exec.entry_point) | 1) as usize;
 
     // 6. Flush instruction pipeline before branching into SRAM arena
     flush_instruction_pipeline();
