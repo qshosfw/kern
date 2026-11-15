@@ -273,15 +273,9 @@ pub fn format_suffix_u32(val: u32, suffix: u8, buf: &mut [u8; 12]) -> &str {
 
 /// Format a fraction (e.g. "0/16", "5/12").
 pub fn format_fraction_u32(n: u32, d: u32, buf: &mut [u8; 12]) -> &str {
-    let mut tmp = [0u8; 6];
-    let s1 = format_u32(n, &mut tmp);
-    let l1 = s1.len();
-    buf[..l1].copy_from_slice(s1.as_bytes());
+    let l1 = format_u32(n, &mut buf[..6]).len();
     buf[l1] = b'/';
-    let mut tmp2 = [0u8; 6];
-    let s2 = format_u32(d, &mut tmp2);
-    let l2 = s2.len();
-    buf[l1 + 1..l1 + 1 + l2].copy_from_slice(s2.as_bytes());
+    let l2 = format_u32(d, &mut buf[l1 + 1..]).len();
     unsafe { core::str::from_utf8_unchecked(&buf[..l1 + 1 + l2]) }
 }
 
