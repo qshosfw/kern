@@ -135,6 +135,7 @@ impl From<Icon> for StatusGlyph {
     }
 }
 
+#[repr(C, align(4))]
 #[derive(Clone, Copy)]
 pub struct Canvas {
     pub buffer: [[u8; LCD_WIDTH]; 8],
@@ -556,15 +557,18 @@ impl Canvas {
             let w = u32::from_ne_bytes(Self::bayer_col_masks(progress));
             if invert { !w } else { w }
         };
-        let flat = self.buffer_flat_mut();
-        for chunk in flat.chunks_exact_mut(4) {
-            let word = u32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            let res = if invert {
-                word ^ mask_word
+        let words = unsafe {
+            core::slice::from_raw_parts_mut(
+                self.buffer_flat_mut().as_mut_ptr() as *mut u32,
+                (LCD_WIDTH * 8) / 4,
+            )
+        };
+        for word in words {
+            *word = if invert {
+                *word ^ mask_word
             } else {
-                word & mask_word
+                *word & mask_word
             };
-            chunk.copy_from_slice(&res.to_ne_bytes());
         }
     }
 

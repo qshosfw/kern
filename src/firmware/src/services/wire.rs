@@ -481,9 +481,11 @@ fn handle_control_service(
     let Some(handle) = ResourceHandle::parse_from(&mut r) else {
         return Some(err_empty(WireStatus::BadLength));
     };
-    out[..4].copy_from_slice(&payload[..4]);
 
-    let mut w = ByteWriter::new(&mut out[4..136]);
+    let mut w = ByteWriter::new(&mut out[..]);
+    w.write_u8(handle.domain);
+    w.write_u8(handle.instance);
+    w.write_u16_le(handle.facet);
     let status = match opcode {
         OP_HANDLE_GET => match on_handle_get(handle, hw, now, &mut w) {
             Ok(()) => WireStatus::Ok,
@@ -516,7 +518,7 @@ fn handle_control_service(
         }
         _ => return None,
     };
-    Some((status, 4 + w.position()))
+    Some((status, w.position()))
 }
 
 // ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
