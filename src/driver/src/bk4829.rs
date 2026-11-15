@@ -1478,16 +1478,15 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
     #[inline(never)]
     fn set_sub_hz_offset(&mut self, carrier_hz: u32, offset_dhz: i16) {
         let (nominal_10hz, _) = utils::div10_u32(carrier_hz);
-        let adjusted_10hz = if offset_dhz == 0 {
-            self.set_crystal_trim(self.baseline_xtal_trim);
-            nominal_10hz as i32
+        let (trim, adjusted_10hz) = if offset_dhz == 0 {
+            (self.baseline_xtal_trim, nominal_10hz as i32)
         } else {
             let res = kernel::service::radio::vernier::solve_vernier(carrier_hz, offset_dhz);
             let final_trim = (self.baseline_xtal_trim as i32 + res.xtal_trim_offset as i32)
                 .clamp(-300, 300) as i16;
-            self.set_crystal_trim(final_trim);
-            nominal_10hz as i32 + res.pll_comp_10hz as i32
+            (final_trim, nominal_10hz as i32 + res.pll_comp_10hz as i32)
         };
+        self.set_crystal_trim(trim);
 
         let low = (adjusted_10hz & 0xFFFF) as u16;
         let high = ((adjusted_10hz >> 16) & 0xFFFF) as u16;

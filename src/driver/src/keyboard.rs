@@ -135,35 +135,29 @@ impl KeypadScanner {
         self.raw_history[1] = self.raw_history[0];
         self.raw_history[0] = curr_raw;
 
-        // 1. Process newly pressed keys (commit debounced bit only if queued)
-        if newly_pressed != 0 {
-            for i in 0..19 {
+        // Process newly pressed and released keys in a single pass over ALL_KEYS.
+        let changed = newly_pressed | newly_released;
+        if changed != 0 {
+            for (i, &key) in ALL_KEYS.iter().enumerate() {
                 let bit = 1u32 << i;
-                if (newly_pressed & bit) != 0 {
-                    let key = ALL_KEYS[i];
-                    if self.event_queue.push_back((key, KeyState::Pressed)).is_ok() {
+                if (changed & bit) == 0 {
+                    continue;
+                }
+                let pressed = (newly_pressed & bit) != 0;
+                let state = if pressed {
+                    KeyState::Pressed
+                } else {
+                    KeyState::Released
+                };
+                if self.event_queue.push_back((key, state)).is_ok() {
+                    if pressed {
                         self.debounced |= bit;
                         if self.held_idx.is_none() {
                             self.held_idx = Some(i as u8);
                             self.held_ms = 0;
                             self.key_being_held = false;
                         }
-                    }
-                }
-            }
-        }
-
-        // 2. Process newly released keys (commit release only if queued)
-        if newly_released != 0 {
-            for i in 0..19 {
-                let bit = 1u32 << i;
-                if (newly_released & bit) != 0 {
-                    let key = ALL_KEYS[i];
-                    if self
-                        .event_queue
-                        .push_back((key, KeyState::Released))
-                        .is_ok()
-                    {
+                    } else {
                         self.debounced &= !bit;
                         if self.held_idx == Some(i as u8) {
                             self.last_held_duration_ms = self.held_ms;
