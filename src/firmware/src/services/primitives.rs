@@ -498,6 +498,15 @@ fn app_config_path(app_name: &str) -> heapless::String<32> {
 }
 
 // ── 4. Storage Primitive ────────────────────────────────────────────────────
+#[inline(never)]
+fn reject_sys_path(path: &str) -> Result<(), ()> {
+    if path.starts_with("/sys/") {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
 impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
     fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, ()> {
         self.storage.read_file(path, buf).map_err(|_| ())
@@ -508,16 +517,11 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
     }
 
     fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
-        if path.starts_with("/sys/") {
-            return Err(());
-        }
+        reject_sys_path(path)?;
         crate::security::write_classified_file(self.storage, path, data).map_err(|_| ())
     }
 
     fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), ()> {
-        if path.starts_with("/sys/") {
-            return Err(());
-        }
         let buf = crate::data::arena::staging_buf();
         let existing_len = match self.storage.read_file(path, buf) {
             Ok(n) => n,
@@ -528,18 +532,12 @@ impl<'a, 'hw> StoragePrimitive for SysContext<'a, 'hw> {
             return Err(());
         }
         buf[existing_len..existing_len + data.len()].copy_from_slice(data);
-        crate::security::write_classified_file(
-            self.storage,
-            path,
-            &buf[..existing_len + data.len()],
-        )
-        .map_err(|_| ())
+        let len = existing_len + data.len();
+        self.write_file(path, &buf[..len])
     }
 
     fn remove_file(&mut self, path: &str) -> Result<(), ()> {
-        if path.starts_with("/sys/") {
-            return Err(());
-        }
+        reject_sys_path(path)?;
         self.storage.remove(path).map_err(|_| ())
     }
 
@@ -962,6 +960,23 @@ fn i2c_bus_op(addr: u8, reg: u8, op2: embedded_hal::i2c::Operation) -> Result<()
 }
 
 // ── 13. Low-Level Hardware & Bus Primitive ──────────────────────────────────
+fn spi_xfer_bytes(is_flash: bool, tx: &[u8], rx: &mut [u8]) -> Result<(), ()> {
+    let count = tx.len().max(rx.len());
+    for i in 0..count {
+        let out_b = tx.get(i).copied().unwrap_or(0);
+        let in_b = if is_flash {
+            py32_hal::spi::spi2_transfer(out_b)
+        } else {
+            py32_hal::spi::transfer_byte(out_b)
+        }
+        .map_err(|_| ())?;
+        if let Some(slot) = rx.get_mut(i) {
+            *slot = in_b;
+        }
+    }
+    Ok(())
+}
+
 impl<'a, 'hw> HardwarePrimitive for SysContext<'a, 'hw> {
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> Result<usize, ()> {
         i2c_bus_op(addr, reg, embedded_hal::i2c::Operation::Read(buf))?;
@@ -979,19 +994,7 @@ impl<'a, 'hw> HardwarePrimitive for SysContext<'a, 'hw> {
         } else {
             bsp::pins::LCD_CS.set_low();
         }
-        let count = tx.len().max(rx.len());
-        for i in 0..count {
-            let out_b = tx.get(i).copied().unwrap_or(0);
-            let in_b = if is_flash {
-                py32_hal::spi::spi2_transfer(out_b)
-            } else {
-                py32_hal::spi::transfer_byte(out_b)
-            }
-            .map_err(|_| ())?;
-            if let Some(slot) = rx.get_mut(i) {
-                *slot = in_b;
-            }
-        }
+        let res = spi_xfer_bytes(is_flash, tx, rx);
         let _ = if is_flash {
             py32_hal::spi::spi2_wait_idle()
         } else {
@@ -1002,7 +1005,7 @@ impl<'a, 'hw> HardwarePrimitive for SysContext<'a, 'hw> {
         } else {
             bsp::pins::LCD_CS.set_high();
         }
-        Ok(())
+        res
     }
 
     fn gpio_read(&self, pin: u8) -> bool {
@@ -1045,15 +1048,10 @@ impl<'a, 'hw> HardwarePrimitive for SysContext<'a, 'hw> {
             (addr >> 8) as u8,
             (addr & 0xFF) as u8,
         ];
-        for &b in &cmd {
-            py32_hal::spi::spi2_transfer(b).map_err(|_| ())?;
-        }
-        for slot in buf.iter_mut() {
-            *slot = py32_hal::spi::spi2_transfer(0x00).map_err(|_| ())?;
-        }
+        let res = spi_xfer_bytes(true, &cmd, &mut []).and_then(|()| spi_xfer_bytes(true, &[], buf));
         let _ = py32_hal::spi::spi2_wait_idle();
         bsp::pins::FLASH_CS.set_high();
-        Ok(())
+        res
     }
 }
 

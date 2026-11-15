@@ -56,7 +56,7 @@ impl ModalCompositor {
         !matches!(self.modal, ActiveModal::None) || self.toast.is_active
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn is_animating(&self) -> bool {
         if self.toast.is_active {
             return true;
@@ -129,6 +129,7 @@ impl ModalCompositor {
     }
 
     #[cfg(feature = "text_input")]
+    #[inline(never)]
     fn init_text_prompt(
         &mut self,
         tag: u8,
@@ -401,7 +402,7 @@ pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<168>) {
             nl += 1;
         }
         if pos > 0 {
-            if out.push('\n').is_err() {
+            if out.push_str("\n").is_err() {
                 break;
             }
             line_px = 0;
@@ -424,13 +425,16 @@ pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<168>) {
 
             let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
             let need_space = line_px > 0;
-            let sep = if need_space && line_px + space_px + word_px > MAX_ALERT_LINE_PX {
+            let wrap = need_space && line_px + space_px + word_px > MAX_ALERT_LINE_PX;
+            if wrap {
                 line_px = 0;
-                '\n'
+            }
+            let sep_res = if need_space {
+                out.push_str(if wrap { "\n" } else { " " })
             } else {
-                ' '
+                Ok(())
             };
-            if (need_space && out.push(sep).is_err()) || out.push_str(word).is_err() {
+            if sep_res.is_err() || out.push_str(word).is_err() {
                 return;
             }
             line_px += if line_px > 0 {

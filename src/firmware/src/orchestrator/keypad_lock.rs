@@ -271,16 +271,11 @@ impl KeypadLockManager {
                             (base_hold_delay_ms as u32 + 150).clamp(550, 750) as u16;
                         self.hold_start_threshold_ms = start_threshold;
 
-                        // Asymmetric hold targets:
-                        // - Hold-to-Lock: deliberate (~1200ms) before pocketing
-                        // - Hold-to-Unlock: deliberate (~1500ms) against pocket bumps
-                        let lock_target = (start_threshold as u32 + 650).clamp(1200, 1600) as u16;
-                        let unlock_target = (start_threshold as u32 + 850).clamp(1400, 2000) as u16;
-                        self.hold_target_ms = if self.is_locked {
-                            unlock_target
-                        } else {
-                            lock_target
-                        };
+                        let offset = if self.is_locked { 850 } else { 650 };
+                        let min_ms = if self.is_locked { 1400 } else { 1200 };
+                        let max_ms = if self.is_locked { 2000 } else { 1600 };
+                        self.hold_target_ms =
+                            (start_threshold as u32 + offset).clamp(min_ms, max_ms) as u16;
                         self.update_progress_slope();
 
                         if !self.is_locked {
@@ -417,8 +412,7 @@ impl KeypadLockManager {
 /// Render the bottom hint line: "HOLD [#] / [F] TO UNLOCK" with authentic inverted badges centered at center_x
 fn draw_unlock_hint(canvas: &mut Canvas, center_x: i16, base_y: i16) {
     // Total width: HOLD (15) + 3 + [#] (7) + 2 + / (3) + 2 + [F] (7) + 3 + TO UNLOCK (35) = 77px
-    let total_w = 77i16;
-    let start_x = center_x - (total_w / 2);
+    let start_x = center_x - 38;
 
     text::draw_str(canvas, start_x, base_y + 5, "HOLD", &TOMTHUMB, Color::Fill);
     gfx::widgets::dialog::draw_key_badge(canvas, start_x + 18, base_y, "#", "");

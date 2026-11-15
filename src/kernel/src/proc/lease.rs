@@ -107,6 +107,7 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
     }
 
     /// Acquires an exclusive timed lease on a resource.
+    #[inline(never)]
     pub fn acquire(
         &mut self,
         owner: Pid,
@@ -114,37 +115,35 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
         timeout_ms: u32,
         current_tick: u32,
     ) -> Result<(), LeaseError> {
-        if let Some(holder) = self.holder(kind) {
-            if holder == owner {
-                // Refresh existing lease
-                for slot in self.leases.iter_mut().flatten() {
-                    if slot.kind == kind && slot.owner == owner {
-                        slot.acquired_tick = current_tick;
-                        slot.timeout_ms = timeout_ms;
+        let mut empty_slot: Option<usize> = None;
+        for (idx, slot) in self.leases.iter_mut().enumerate() {
+            if let Some(l) = slot {
+                if l.kind == kind {
+                    if l.owner == owner {
+                        l.acquired_tick = current_tick;
+                        l.timeout_ms = timeout_ms;
                         return Ok(());
                     }
+                    return Err(LeaseError::AlreadyLeased { holder: l.owner });
                 }
-            }
-            return Err(LeaseError::AlreadyLeased { holder });
-        }
-
-        // Allocate empty lease slot
-        for slot in self.leases.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(ResourceLease {
-                    kind,
-                    owner,
-                    acquired_tick: current_tick,
-                    timeout_ms,
-                });
-                return Ok(());
+            } else if empty_slot.is_none() {
+                empty_slot = Some(idx);
             }
         }
-
-        Err(LeaseError::LeaseTableFull)
+        let Some(idx) = empty_slot else {
+            return Err(LeaseError::LeaseTableFull);
+        };
+        self.leases[idx] = Some(ResourceLease {
+            kind,
+            owner,
+            acquired_tick: current_tick,
+            timeout_ms,
+        });
+        Ok(())
     }
 
     /// Releases a previously acquired lease.
+    #[inline(never)]
     pub fn release(&mut self, owner: Pid, kind: LeaseKind) -> Result<(), LeaseError> {
         for slot in self.leases.iter_mut() {
             if let Some(l) = slot {

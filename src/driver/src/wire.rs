@@ -141,8 +141,10 @@ impl<S: SerialPort> WireDriver<S> {
         status: Option<WireStatus>,
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
-        let mut raw_buf = [0u8; MAX_RAW_BUF_LEN];
-        let mut wire_out = [0u8; MAX_WIRE_BUF_LEN];
+        let mut raw_buf = ::core::mem::MaybeUninit::<[u8; MAX_RAW_BUF_LEN]>::uninit();
+        let mut wire_out = ::core::mem::MaybeUninit::<[u8; MAX_WIRE_BUF_LEN]>::uninit();
+        let raw_slice = unsafe { &mut *raw_buf.as_mut_ptr() };
+        let wire_slice = unsafe { &mut *wire_out.as_mut_ptr() };
 
         let frame_len = match status {
             Some(st) => self.session.frame_response(
@@ -151,20 +153,20 @@ impl<S: SerialPort> WireDriver<S> {
                 sequence,
                 st,
                 payload_data,
-                &mut raw_buf,
-                &mut wire_out,
+                raw_slice,
+                wire_slice,
             )?,
             None => self.session.frame_event(
                 service,
                 opcode,
                 sequence,
                 payload_data,
-                &mut raw_buf,
-                &mut wire_out,
+                raw_slice,
+                wire_slice,
             )?,
         };
 
-        self.port.write(&wire_out[..frame_len]);
+        self.port.write(&wire_slice[..frame_len]);
         Ok(frame_len)
     }
 

@@ -273,14 +273,12 @@ pub unsafe extern "C" fn api_hw_i2c_transfer(
     let Some(ctx) = active_ctx_opt() else {
         return 1;
     };
-    if !tx.is_null() && tx_len > 0 {
-        let tx_slice = unsafe { core::slice::from_raw_parts(tx, tx_len as usize) };
+    if let Some(tx_slice) = unsafe { super::ptr_slice(tx, tx_len as usize) } {
         if ctx.i2c_write(addr, reg, tx_slice).is_err() {
             return 1;
         }
     }
-    if !rx.is_null() && rx_len > 0 {
-        let rx_slice = unsafe { core::slice::from_raw_parts_mut(rx, rx_len as usize) };
+    if let Some(rx_slice) = unsafe { super::ptr_slice_mut(rx, rx_len as usize) } {
         if ctx.i2c_read(addr, reg, rx_slice).is_err() {
             return 1;
         }
@@ -297,21 +295,12 @@ pub unsafe extern "C" fn api_hw_spi_transfer(
     let Some(ctx) = active_ctx_opt() else {
         return 1;
     };
-    if len > 0 {
-        let tx_slice = if !tx.is_null() {
-            unsafe { core::slice::from_raw_parts(tx, len as usize) }
-        } else {
-            &[]
-        };
-        let rx_slice = if !rx.is_null() {
-            unsafe { core::slice::from_raw_parts_mut(rx, len as usize) }
-        } else {
-            &mut []
-        };
-        u8::from(ctx.spi_transfer(cs_pin, tx_slice, rx_slice).is_err())
-    } else {
-        1
+    if len == 0 {
+        return 1;
     }
+    let tx_slice = unsafe { super::slice_or_empty(tx, len as usize) };
+    let rx_slice = unsafe { super::ptr_slice_mut(rx, len as usize) }.unwrap_or(&mut []);
+    u8::from(ctx.spi_transfer(cs_pin, tx_slice, rx_slice).is_err())
 }
 
 pub unsafe extern "C" fn api_hw_gpio_set(pin: u8, high: u8) {
@@ -343,9 +332,8 @@ pub unsafe extern "C" fn api_hw_rf_write_reg(reg: u8, val: u16) {
 }
 
 pub unsafe extern "C" fn api_hw_flash_read(addr: u32, buf: *mut u8, len: u16) -> u8 {
-    if !buf.is_null() && len > 0 {
+    if let Some(dst) = unsafe { super::ptr_slice_mut(buf, len as usize) } {
         if let Some(ctx) = active_ctx_opt() {
-            let dst = unsafe { core::slice::from_raw_parts_mut(buf, len as usize) };
             return u8::from(ctx.raw_flash_read(addr, dst).is_err());
         }
     }

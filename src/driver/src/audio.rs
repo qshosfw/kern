@@ -236,6 +236,7 @@ impl AudioCaptureDriver {
         }
     }
 
+    #[inline(never)]
     pub fn start_capture(&mut self, rate_hz: u16) -> Result<(), ()> {
         if self.active {
             return Ok(());
@@ -285,6 +286,7 @@ impl AudioCaptureDriver {
         Ok(())
     }
 
+    #[inline(never)]
     pub fn read_samples(&mut self, out_samples: &mut [i16]) -> usize {
         if !self.active || out_samples.is_empty() {
             return 0;

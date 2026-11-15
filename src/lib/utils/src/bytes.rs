@@ -53,13 +53,7 @@ impl<'a> ByteWriter<'a> {
 
     #[inline(never)]
     pub fn write_u8(&mut self, val: u8) -> bool {
-        if self.pos < self.buf.len() {
-            self.buf[self.pos] = val;
-            self.pos += 1;
-            true
-        } else {
-            false
-        }
+        self.write_le32(val as u32, 1)
     }
 
     #[inline(never)]

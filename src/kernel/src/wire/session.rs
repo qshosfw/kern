@@ -53,6 +53,7 @@ impl WireSession {
         self.is_authenticated = false;
     }
 
+    #[inline(never)]
     pub fn validate_record<'a>(
         &mut self,
         raw_record: &'a [u8],

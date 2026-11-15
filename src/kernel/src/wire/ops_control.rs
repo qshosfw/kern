@@ -92,18 +92,16 @@ impl ResourceHandle {
         }
     }
 
-    pub fn parse(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 4 {
-            return None;
-        }
-        let domain = bytes[0];
-        let instance = bytes[1];
-        let facet = u16::from_le_bytes([bytes[2], bytes[3]]);
+    pub fn parse_from(r: &mut utils::bytes::ByteReader<'_>) -> Option<Self> {
         Some(Self {
-            domain,
-            instance,
-            facet,
+            domain: r.read_u8()?,
+            instance: r.read_u8()?,
+            facet: r.read_u16_le()?,
         })
+    }
+
+    pub fn parse(bytes: &[u8]) -> Option<Self> {
+        Self::parse_from(&mut utils::bytes::ByteReader::new(bytes))
     }
 
     pub fn write_bytes(&self, out: &mut [u8]) -> usize {
@@ -157,16 +155,13 @@ pub struct HandleInvokeReq<'a> {
 
 impl<'a> HandleInvokeReq<'a> {
     pub fn parse(payload: &'a [u8]) -> Result<Self, WireStatus> {
-        if payload.len() < 6 {
-            return Err(WireStatus::BadLength);
-        }
-        let handle = ResourceHandle::parse(&payload[..4]).ok_or(WireStatus::BadLength)?;
-        let action_id = u16::from_le_bytes([payload[4], payload[5]]);
-        let params = &payload[6..];
+        let mut r = utils::bytes::ByteReader::new(payload);
+        let handle = ResourceHandle::parse_from(&mut r).ok_or(WireStatus::BadLength)?;
+        let action_id = r.read_u16_le().ok_or(WireStatus::BadLength)?;
         Ok(Self {
             handle,
             action_id,
-            params,
+            params: r.remaining_slice(),
         })
     }
 }
@@ -181,12 +176,10 @@ pub struct HandleStreamReq {
 
 impl HandleStreamReq {
     pub fn parse(payload: &[u8]) -> Result<Self, WireStatus> {
-        if payload.len() < 10 {
-            return Err(WireStatus::BadLength);
-        }
-        let handle = ResourceHandle::parse(&payload[..4]).ok_or(WireStatus::BadLength)?;
-        let offset = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
-        let length = u16::from_le_bytes([payload[8], payload[9]]);
+        let mut r = utils::bytes::ByteReader::new(payload);
+        let handle = ResourceHandle::parse_from(&mut r).ok_or(WireStatus::BadLength)?;
+        let offset = r.read_u32_le().ok_or(WireStatus::BadLength)?;
+        let length = r.read_u16_le().ok_or(WireStatus::BadLength)?;
         Ok(Self {
             handle,
             offset,

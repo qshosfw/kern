@@ -240,6 +240,7 @@ impl LauncherApp {
         success
     }
 
+    #[inline(never)]
     fn handle_list_nav(&mut self, event: &Event, animations_enabled: bool) -> bool {
         let total = self.model.items.len();
         if total == 0 {
@@ -297,6 +298,7 @@ impl LauncherApp {
 }
 
 impl LauncherApp {
+    #[inline(never)]
     fn render_list(&self, canvas: &mut Canvas) {
         let total = self.model.items.len();
         if total == 0 {
@@ -322,15 +324,15 @@ impl LauncherApp {
             let item = &self.model.items[idx];
 
             let fg_color = if is_sel {
-                let fg = if is_active_selection {
-                    canvas.draw_rect(2, y, 120, 13, Color::Fill);
-                    Color::Fill
-                } else {
-                    canvas.fill_rect(2, y, 120, 13, Color::Fill);
-                    Color::Clear
-                };
-                canvas.clear_corners(2, y, 120, 13);
-                fg
+                gfx::widgets::draw_selection_capsule(
+                    canvas,
+                    [2, y, 120, 13],
+                    if is_active_selection {
+                        gfx::widgets::CAPSULE_ROUND
+                    } else {
+                        gfx::widgets::CAPSULE_FILL_ROUND
+                    },
+                )
             } else {
                 Color::Fill
             };
@@ -416,6 +418,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
         self.sync_config(ctx);
 
         let is_list_mode = ctx.config.apps.launcher_style == 1;
+        let animations_enabled = ctx.config.display.animations_enabled();
 
         let mut animating = false;
         if let Event::Tick = event {
@@ -424,7 +427,8 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
         }
 
         if let Event::Key { code, state } = *event {
-            let is_direct_key = code == KeyCode::Menu || matches!(code.to_digit(), Some(1..=6));
+            let digit_opt = code.to_digit();
+            let is_direct_key = code == KeyCode::Menu || matches!(digit_opt, Some(1..=6));
             match state {
                 KeyState::Pressed => {
                     if code == KeyCode::Exit {
@@ -440,7 +444,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
                     }
 
                     // Direct numeric keypad 1-touch app / tool launch matching 3x2 grid or list
-                    if let Some(digit) = code.to_digit() {
+                    if let Some(digit) = digit_opt {
                         if digit == 0 {
                             self.execute_target(
                                 ctx,
@@ -452,9 +456,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
                         if idx < self.model.items.len() {
                             self.model.selected_idx = idx;
                             if is_list_mode {
-                                self.adjust_scroll_for_selection(
-                                    ctx.config.display.animations_enabled(),
-                                );
+                                self.adjust_scroll_for_selection(animations_enabled);
                             }
                             self.model.is_pressed = true;
                             return EventResult::Consumed;
@@ -482,7 +484,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
 
         let prev_sel = self.model.selected_idx;
         let nav_handled = if is_list_mode {
-            self.handle_list_nav(event, ctx.config.display.animations_enabled())
+            self.handle_list_nav(event, animations_enabled)
         } else {
             self.view.on_event(&mut self.model, event)
         };
@@ -497,12 +499,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
             return EventResult::Consumed;
         }
 
-        if animating {
-            return EventResult::Consumed;
-        }
-
-        // Keep animated arrow oscillating smoothly at 20 Hz when animations are enabled
-        if matches!(event, Event::Tick) && ctx.config.display.animations_enabled() {
+        if animating || (matches!(event, Event::Tick) && animations_enabled) {
             return EventResult::Consumed;
         }
 

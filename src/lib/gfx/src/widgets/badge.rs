@@ -205,3 +205,24 @@ pub fn draw_toggle_tag_badge(
     };
     draw_tag_badge(canvas, x, y, label, style);
 }
+
+pub const CAPSULE_FILL: u8 = 1;
+pub const CAPSULE_ROUND: u8 = 2;
+pub const CAPSULE_FILL_ROUND: u8 = CAPSULE_FILL | CAPSULE_ROUND;
+
+/// Draw a row selection highlight bar and return the contrasting foreground text color.
+/// `bounds` = `[x, y, w, h]`; `flags` bit 0 = filled, bit 1 = rounded corners.
+#[inline(never)]
+pub fn draw_selection_capsule(canvas: &mut Canvas, bounds: [u8; 4], flags: u8) -> Color {
+    let [x, y, w, h] = bounds;
+    let filled = (flags & CAPSULE_FILL) != 0;
+    if filled {
+        canvas.fill_rect(x, y, w, h, Color::Fill);
+    } else {
+        canvas.draw_rect(x, y, w, h, Color::Fill);
+    }
+    if (flags & CAPSULE_ROUND) != 0 && h >= 4 {
+        canvas.clear_corners(x, y, w, h);
+    }
+    if filled { Color::Clear } else { Color::Fill }
+}

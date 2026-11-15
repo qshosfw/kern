@@ -7,6 +7,7 @@ use crate::{EVENT_QUEUE, POWER_SERVICE};
 use kernel::event::{Event, KeyCode};
 use py32_hal::adc::Adc;
 
+#[inline(never)]
 pub fn enqueue_event(event: Event) {
     #[cfg(target_arch = "arm")]
     cortex_m::interrupt::free(|cs| {
@@ -19,6 +20,7 @@ pub fn enqueue_event(event: Event) {
     }
 }
 
+#[inline(never)]
 pub fn dequeue_event() -> Option<Event> {
     #[cfg(target_arch = "arm")]
     {

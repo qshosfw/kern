@@ -15,6 +15,7 @@ impl Cobs {
     }
 
     /// Encode `src` into `dst`. Returns encoded byte length on success.
+    #[inline(never)]
     pub fn encode(src: &[u8], dst: &mut [u8]) -> Result<usize, ()> {
         let max_len = Self::max_encoded_len(src.len());
         if dst.len() < max_len {
@@ -99,10 +100,13 @@ impl Cobs {
 
     /// In-place COBS decoder. Decodes directly within `buf` in-place.
     /// Invariant: write_idx <= read_idx at all steps.
+    #[inline(never)]
     pub fn decode_inplace(buf: &mut [u8], len: usize) -> Result<usize, ()> {
+        let len = len.min(buf.len());
         if len == 0 {
             return Ok(0);
         }
+        let buf = &mut buf[..len];
 
         let mut read_idx = 0;
         let mut write_idx = 0;

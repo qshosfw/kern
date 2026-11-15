@@ -545,7 +545,7 @@ pub unsafe fn invoke_krx_native(
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 unsafe fn invoke_guest(
     op: u32,
     ctx: *mut SysContext<'static, 'static>,
@@ -739,14 +739,13 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
 }
 
 pub(crate) fn decode_status_glyph(
+    sb: &kernel::proc::abi::KrxStatusBar,
     id: u8,
-    c0: &[u8; 5],
-    c1: &[u8; 5],
 ) -> Option<kernel::canvas::StatusGlyph> {
     if id == kernel::proc::abi::KRX_ICON_CUSTOM_0 {
-        Some(kernel::canvas::StatusGlyph::Custom(*c0))
+        Some(kernel::canvas::StatusGlyph::Custom(sb.custom_icon_0))
     } else if id == kernel::proc::abi::KRX_ICON_CUSTOM_1 {
-        Some(kernel::canvas::StatusGlyph::Custom(*c1))
+        Some(kernel::canvas::StatusGlyph::Custom(sb.custom_icon_1))
     } else {
         kernel::canvas::Icon::from_u8(id).map(kernel::canvas::StatusGlyph::Builtin)
     }
@@ -754,16 +753,15 @@ pub(crate) fn decode_status_glyph(
 
 #[inline(never)]
 fn decode_icon_list(
+    sb: &kernel::proc::abi::KrxStatusBar,
     icons: &[u8],
     count: u8,
-    c0: &[u8; 5],
-    c1: &[u8; 5],
     out: &mut [kernel::canvas::StatusGlyph; 4],
 ) -> usize {
     let mut n = 0;
     let limit = (count as usize).min(4);
     for &id in &icons[..limit] {
-        if let Some(glyph) = decode_status_glyph(id, c0, c1) {
+        if let Some(glyph) = decode_status_glyph(sb, id) {
             out[n] = glyph;
             n += 1;
         }
@@ -789,18 +787,16 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
         let s = &slot.status_bar;
 
         slot.status_bar_left_count = decode_icon_list(
+            s,
             &s.left_icons,
             s.left_icon_count,
-            &s.custom_icon_0,
-            &s.custom_icon_1,
             &mut slot.status_bar_left_icons,
         );
 
         slot.status_bar_center_count = decode_icon_list(
+            s,
             &s.center_icons,
             s.center_icon_count,
-            &s.custom_icon_0,
-            &s.custom_icon_1,
             &mut slot.status_bar_center_icons,
         );
 

@@ -52,7 +52,7 @@ pub fn draw_signal(canvas: &mut Canvas, x: i16, y: i16, level: u8, color: Color)
 /// Dynamically places and renders a status glyph flowing right-to-left.
 /// Automatically calculates glyph width and applies standard item spacing (`width + 2`).
 /// Returns the updated `right_limit`.
-#[inline]
+#[inline(never)]
 pub fn draw_status_glyph_rtl(
     canvas: &mut Canvas,
     right_limit: i16,
@@ -349,7 +349,8 @@ impl<'a> StatusRightConfig<'a> {
         }
 
         // 4. Battery Text Reading (Voltage, Percentage, or MCU Temperature)
-        let mut nbuf = [0u8; 12];
+        let mut nbuf_uninit = core::mem::MaybeUninit::<[u8; 12]>::uninit();
+        let nbuf = unsafe { &mut *nbuf_uninit.as_mut_ptr() };
         let mut val = 0i32;
         let mut dec = 0u8;
         let suf = match self.battery_format {
@@ -374,7 +375,7 @@ impl<'a> StatusRightConfig<'a> {
             _ => "",
         };
         if !suf.is_empty() {
-            let bat_str = crate::text::format_int_fixed(val, dec, "", suf, &mut nbuf);
+            let bat_str = crate::text::format_int_fixed(val, dec, "", suf, nbuf);
             right_limit = draw_status_text(canvas, right_limit, y_text, bat_str, &FONT, fg);
         }
 
@@ -432,14 +433,7 @@ pub fn draw_status_bar_layout(
         draw_signal(canvas, left_x, 0, lvl, Color::Fill);
         left_x += (SIGNAL_WIDTH as i16) + 2;
     }
-    if let Some(s) = config.title {
-        if !s.is_empty() {
-            left_x =
-                crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit)
-                    + 2;
-        }
-    }
-    if let Some(s) = config.left_badge {
+    for s in [config.title, config.left_badge].into_iter().flatten() {
         if !s.is_empty() {
             left_x =
                 crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit)

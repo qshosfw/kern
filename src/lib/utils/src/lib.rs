@@ -6,6 +6,7 @@ pub mod format;
 pub mod gsm7;
 pub mod math;
 pub mod mbuf;
+pub mod path;
 pub mod serde;
 pub mod units;
 

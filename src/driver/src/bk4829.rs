@@ -154,11 +154,58 @@ impl<'a, State> Bk4829<'a, State> {
         }
     }
 
+    #[inline(never)]
+    pub(crate) fn apply_reg_vals(&mut self, regs: &[(u8, u16)]) {
+        for &(reg, val) in regs {
+            self.write_reg(reg, val);
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn apply_demod_af(&mut self, unmuted: bool) {
+        if unmuted {
+            self.set_af(self.active_demod_af);
+            self.write_reg(REG_TX_MUTE, 0x3B18);
+        } else {
+            self.set_af(AfType::Mute);
+            self.write_reg(REG_TX_MUTE, 0xBB18);
+        }
+    }
+
+    #[inline(never)]
+    fn finish_freq_tune(&mut self, freq_hz: u32, uhf_path: bool, low: u16, high: u16) {
+        let old_uhf = self.current_freq_hz >= 174_000_000;
+        self.current_freq_hz = freq_hz;
+        let new_uhf = freq_hz >= 174_000_000;
+        self.write_pll_words(low, high);
+        self.update_gpio_reg(0x000C, if uhf_path { 0x0008 } else { 0x0004 });
+        if old_uhf != new_uhf && self.squelch_level > 0 {
+            <Self as kernel::service::radio::RfSquelch>::set_squelch_level(
+                self,
+                self.squelch_level,
+            );
+        }
+    }
+
     /// Clear `clear_mask` bits and set `set_mask` bits on a cached register.
     #[inline(never)]
     pub(crate) fn update_reg_bits(&mut self, addr: u8, clear_mask: u16, set_mask: u16) {
         let val = (self.cache.read(addr) & !clear_mask) | set_mask;
         self.write_reg(addr, val);
+    }
+
+    #[inline(never)]
+    fn rmw_reg_bit(&mut self, addr: u8, mask: u16, set: bool) {
+        let cur = self.read_reg(addr);
+        let next = if set { cur | mask } else { cur & !mask };
+        self.write_reg(addr, next);
+    }
+
+    #[inline(never)]
+    fn pulse_fifo_bit(&mut self, mask: u16) {
+        let cur = self.read_reg(REG_FSK_FIFO_CTRL);
+        self.write_reg(REG_FSK_FIFO_CTRL, cur | mask);
+        self.write_reg(REG_FSK_FIFO_CTRL, cur & !mask);
     }
 
     /// Read Chip ID from register 0x00.
@@ -316,13 +363,8 @@ impl<'a, State> Bk4829<'a, State> {
         py32_hal::delay::delay_ms(5);
         self.write_reg(REG_SYS_POWER, rx_pwr);
 
-        if self.rx_demod_active && self.is_squelch_open() {
-            self.set_af(self.active_demod_af);
-            self.write_reg(REG_TX_MUTE, 0x3B18);
-        } else {
-            self.set_af(AfType::Mute);
-            self.write_reg(REG_TX_MUTE, 0xBB18);
-        }
+        let unmuted = self.rx_demod_active && self.is_squelch_open();
+        self.apply_demod_af(unmuted);
         crate::audio::AudioAmplifier::notify_tone_played();
     }
 
@@ -584,14 +626,12 @@ impl<'a, State> Bk4829<'a, State> {
         self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX);
         py32_hal::delay::delay_ms(5); // Essential 5ms startup delay for 26 MHz crystal oscillator to stabilize
 
-        // 2. Power on VCO calibration, RX link, AF DAC, DISC mode, PLL VCO, and RX DSP (REG_30)
-        self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
-
-        // 3. Ensure tone generator is cleared and muted to prevent audio pops
-        self.write_reg(REG_TONE1_FREQ, 0x0000);
-        self.write_reg(REG_TONE_GAIN, 0x0000);
-        self.set_af(AfType::Mute);
-        self.write_reg(REG_TX_MUTE, 0xBB18);
+        self.apply_reg_vals(&[
+            (REG_SYS_POWER, SYS_POWER_RX),
+            (REG_TONE1_FREQ, 0x0000),
+            (REG_TONE_GAIN, 0x0000),
+        ]);
+        self.apply_demod_af(false);
 
         // 4. Base GPIO state: RX enable (Pin 28) on, PA enable (Pin 29) off, LEDs off
         self.update_gpio_reg(0x0023, 0x0040);
@@ -628,33 +668,20 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_frequency(&mut self, freq: Frequency<Hertz>) {
-        let old_uhf = self.current_freq_hz >= 174_000_000;
         let freq_changed = self.current_freq_hz != freq.raw();
         let was_rx = self.rx_demod_active;
         if freq_changed && was_rx {
-            self.set_af(AfType::Mute);
-            self.write_reg(REG_TX_MUTE, 0xBB18);
+            self.apply_demod_af(false);
         }
 
-        self.current_freq_hz = freq.raw();
-        let new_uhf = self.current_freq_hz >= 174_000_000;
         let (low, high) = tuning::calculate_pll_dividers(freq);
-        self.write_pll_words(low, high);
-        self.set_filter_path(self.current_freq_hz);
-
-        // Dynamically switch squelch calibration bank if crossing VHF/UHF boundary
-        if old_uhf != new_uhf && self.squelch_level > 0 {
-            <Self as kernel::service::radio::RfSquelch>::set_squelch_level(
-                self,
-                self.squelch_level,
-            );
-        }
+        let f = freq.raw();
+        self.finish_freq_tune(f, f >= 280_000_000, low, high);
 
         if freq_changed {
             self.clear_interrupts();
             if was_rx && self.is_squelch_open() {
-                self.set_af(self.active_demod_af);
-                self.write_reg(REG_TX_MUTE, 0x3B18);
+                self.apply_demod_af(true);
             }
         }
     }
@@ -694,12 +721,7 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_agc(&mut self, enable: bool) {
-        let cur = self.cache.read(REG_AGC_CONFIG);
-        if enable {
-            self.write_reg(REG_AGC_CONFIG, cur & !(1 << 15));
-        } else {
-            self.write_reg(REG_AGC_CONFIG, cur | (1 << 15));
-        }
+        self.update_reg_bits(REG_AGC_CONFIG, 1 << 15, if enable { 0 } else { 1 << 15 });
     }
 }
 
@@ -783,8 +805,8 @@ impl<'a> Bk4829<'a, Disabled> {
         py32_hal::delay::delay_ms(2);
         self.write_reg(0x00, 0x0000);
 
-        // 2. Crystal oscillator, bandgap, RX LDO, AGC, filter, and base routing parameters
-        const INIT_REG_PATCHES: [(u8, u16); 15] = [
+        // 2. Crystal oscillator, bandgap, RX LDO, AGC, filter, routing, CXCSS, RX power & IRQ mask
+        const INIT_REG_PATCHES: [(u8, u16); 18] = [
             (REG_POWER_CTRL, POWER_CTRL_RX),
             (REG_PA_CTRL, 0x0022),
             (REG_AGC_TABLE_0, 0x0318),
@@ -800,53 +822,42 @@ impl<'a> Bk4829<'a, Disabled> {
             (REG_TX_MUTE, 0xBB18),
             (REG_GPIO, 0x9000), // Base GPIO state (Reg 0x33, LEDs off)
             (REG_CXCSS_FREQ, subaudible::CTC2_55HZ_DETECT_REG),
+            (REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL),
+            (REG_SYS_POWER, SYS_POWER_RX),
+            (
+                REG_INT_ENABLE,
+                INT_SQUELCH_FOUND
+                    | INT_SQUELCH_LOST
+                    | INT_CXCSS_TAIL
+                    | INT_CTCSS_FOUND
+                    | INT_CTCSS_LOST
+                    | INT_CDCSS_FOUND
+                    | INT_CDCSS_LOST
+                    | INT_VOX_FOUND
+                    | INT_VOX_LOST
+                    | INT_FSK_RX_FINISHED
+                    | INT_FSK_FIFO_ALMOST_FULL
+                    | INT_FSK_TX_FINISHED,
+            ),
         ];
-        for &(reg, val) in &INIT_REG_PATCHES {
-            self.write_reg(reg, val);
-        }
+        self.apply_reg_vals(&INIT_REG_PATCHES);
 
         // 3. Default volume level 5 (Reg 0x48)
         self.set_volume_level(5);
 
-        // 4. Arm CXCSS tail detector and power on RX link, AF DAC, DISC mode, PLL/VCO, RX DSP
-        self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-        self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
-
-        // 7. Squelch level 4 default profile and hardware amplifier shutdown
+        // 4. Squelch level 4 default profile and hardware amplifier shutdown
         self.squelch_level = 4;
         self.set_squelch_profile(&squelch::squelch_level_to_thresholds(4));
         bsp::pins::AUDIO_PA.set_low();
 
-        // 8. Configure hardware interrupt enable mask
-        let int_mask = INT_SQUELCH_FOUND
-            | INT_SQUELCH_LOST
-            | INT_CXCSS_TAIL
-            | INT_CTCSS_FOUND
-            | INT_CTCSS_LOST
-            | INT_CDCSS_FOUND
-            | INT_CDCSS_LOST
-            | INT_VOX_FOUND
-            | INT_VOX_LOST
-            | INT_FSK_RX_FINISHED
-            | INT_FSK_FIFO_ALMOST_FULL
-            | INT_FSK_TX_FINISHED;
-        self.write_reg(REG_INT_ENABLE, int_mask);
         self.clear_interrupts();
 
         Ok(())
     }
 
     pub fn into_rx(mut self) -> Bk4829<'a, Receiving> {
-        let mut reg33 = self.cache.read(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
-        reg33 &= !0x0003; // LEDs off in RX idle
-        reg33 |= 0x0040; // RX enable (Pin 28)
-        reg33 &= !0x0020; // PA disable (Pin 29)
-        self.write_reg(REG_GPIO, reg33);
+        self.update_gpio_reg(0x0023, 0x0040); // LEDs off, RX enable, PA disable
         self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX);
-        // RX power: VCO CALIB, RX LINK, AF DAC, DISC MODE, PLL VCO, RX DSP
         self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
         self.squelch_open = false;
         self.subaudible_matched = false;
@@ -856,17 +867,8 @@ impl<'a> Bk4829<'a, Disabled> {
     }
 
     pub fn into_tx(mut self) -> Bk4829<'a, Transmitting> {
-        let mut reg33 = self.cache.read(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
-        reg33 &= !0x0003;
-        reg33 |= 0x0001; // Red LED (bit 0)
-        reg33 &= !0x0040; // RX disable (Pin 28)
-        reg33 |= 0x0020; // PA enable (Pin 29)
-        self.write_reg(REG_GPIO, reg33);
+        self.update_gpio_reg(0x0043, 0x0021); // Red LED, RX disable, PA enable
         self.write_reg(REG_POWER_CTRL, POWER_CTRL_TX);
-        // TX power: VCO CALIB, UNKNOWN (bit 14), AF DAC, DISC MODE, PLL VCO, PA GAIN, MIC ADC, TX DSP
         self.write_reg(REG_SYS_POWER, SYS_POWER_TX);
         self.squelch_open = false;
         self.subaudible_matched = false;
@@ -941,23 +943,14 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
     }
 
     fn apply_precomputed_tune(&mut self, state: &kernel::service::radio::PrecomputedTuneState) {
-        let old_uhf = self.current_freq_hz >= 174_000_000;
-        self.current_freq_hz = state.freq_hz;
-        let new_uhf = self.current_freq_hz >= 174_000_000;
-        self.write_pll_words(state.pll_low, state.pll_high);
-        self.update_gpio_reg(0x000C, if state.uhf_path { 0x0008 } else { 0x0004 });
-        if old_uhf != new_uhf && self.squelch_level > 0 {
-            <Self as kernel::service::radio::RfSquelch>::set_squelch_level(
-                self,
-                self.squelch_level,
-            );
-        }
+        self.finish_freq_tune(state.freq_hz, state.uhf_path, state.pll_low, state.pll_high);
     }
 
     fn wait_pll_lock(&mut self, max_wait_us: u16) -> bool {
         // Trigger fast VCO calibration pulse on bit 15 of REG_30 if not already locked,
         // and poll RSSI/status stability in 25us increments instead of blind ms delays.
-        let steps = (max_wait_us / 25).max(1);
+        // Reciprocal multiply by 1/25 ≈ 41944 / 2^20 avoids Cortex-M0+ software division.
+        let steps = (((max_wait_us as u32) * 41_944) >> 20).max(1);
         let mut prev_rssi = self.read_reg(REG_RSSI_VAL);
         for _ in 0..steps {
             py32_hal::delay::delay_us(25);
@@ -979,52 +972,89 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
     }
 }
 
+// Packed per-mode profile bits (2 bytes per mode, 12 bytes total vs 72 bytes):
+// [2:0] AfType (0=Fm,1=Am,2=Bb2,3=Bb1,4=Byp), [3] skip_if, [4] if_zero,
+// [5] skip_filt_agc, [6] am_agc, [7] afc_en, [8] mod_set_12, [9] mod_clr_bw,
+// [10] filt_clr_8, [11] filt_set_8, [12] filt_set_0.
+const MP_SKIP_IF: u16 = 1 << 3;
+const MP_IF_ZERO: u16 = 1 << 4;
+const MP_SKIP_FA: u16 = 1 << 5;
+const MP_AM_AGC: u16 = 1 << 6;
+const MP_AFC_EN: u16 = 1 << 7;
+const MP_MOD_S12: u16 = 1 << 8;
+const MP_MOD_CBW: u16 = 1 << 9;
+const MP_FLT_C8: u16 = 1 << 10;
+const MP_FLT_S8: u16 = 1 << 11;
+const MP_FLT_S0: u16 = 1 << 12;
+
+static MOD_PROFILES: [u16; 6] = [
+    // 0: FM / WFM (AfType::Fm = 0)
+    MP_FLT_C8,
+    // 1: AM / AmB (AfType::Am = 1)
+    1 | MP_AM_AGC | MP_AFC_EN | MP_MOD_S12 | MP_FLT_S8,
+    // 2: USB / DSB / CW (AfType::Baseband2 = 2)
+    2 | MP_IF_ZERO | MP_AFC_EN | MP_MOD_S12 | MP_FLT_S8,
+    // 3: PktFm / Dig (AfType::Fm = 0)
+    MP_MOD_CBW | MP_FLT_S8 | MP_FLT_S0,
+    // 4: Raw (AfType::Baseband1 = 3)
+    3 | MP_SKIP_FA,
+    // 5: Byp (AfType::Byp = 4)
+    4 | MP_SKIP_IF | MP_SKIP_FA,
+];
+
+static MOD_AF_MAP: [AfType; 5] = [
+    AfType::Fm,
+    AfType::Am,
+    AfType::Baseband2,
+    AfType::Baseband1,
+    AfType::Byp,
+];
+
 impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
+    #[inline(never)]
     fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
         use kernel::service::radio::ModulationMode::*;
-        let is_am_or_ssb = matches!(mode, Am | AmB | Usb | Dsb | Cw);
-        let clear = if matches!(mode, PktFm | Dig) {
-            0x1000 | (0b11 << 14) // Clear AM bit + compander off
+        let idx = match mode {
+            Am | AmB => 1,
+            Usb | Dsb | Cw => 2,
+            PktFm | Dig => 3,
+            Raw => 4,
+            Byp => 5,
+            _ => 0,
+        };
+        let p = MOD_PROFILES[idx];
+        let mod_clr = if (p & MP_MOD_CBW) != 0 {
+            0x1000 | (0b11 << 14)
         } else {
             0x1000
         };
-        let set = if is_am_or_ssb { 0x1000 } else { 0 };
-        self.update_reg_bits(REG_MODULATION, clear, set);
-
-        if mode != Byp {
-            let if_coeff = if matches!(mode, Usb | Dsb | Cw) {
-                0x0000
-            } else {
-                0x2AAB
-            };
+        let mod_set = if (p & MP_MOD_S12) != 0 { 0x1000 } else { 0 };
+        self.update_reg_bits(REG_MODULATION, mod_clr, mod_set);
+        if (p & MP_SKIP_IF) == 0 {
+            let if_coeff = if (p & MP_IF_ZERO) != 0 { 0 } else { 0x2AAB };
             self.write_reg(REG_IF_COEFF, if_coeff);
         }
-
-        let af = match mode {
-            Am | AmB => AfType::Am,
-            Usb | Dsb | Cw => AfType::Baseband2,
-            Raw => AfType::Baseband1,
-            Byp => AfType::Byp,
-            _ => AfType::Fm,
-        };
+        let af = MOD_AF_MAP[(p & 7) as usize];
         self.active_demod_af = af;
         self.set_af(af);
-
-        if !matches!(mode, Raw | Byp) {
-            self.update_reg_bits(REG_AFC, 1 << 4, if is_am_or_ssb { 1 << 4 } else { 0 });
-
-            let (clr, set) = match mode {
-                Fm => (1 << 8, 0),
-                PktFm | Dig => (0, (1 << 0) | (1 << 8)),
-                _ => (0, 1 << 8),
-            };
-            self.update_reg_bits(REG_FILTERS, clr, set);
-
-            if matches!(mode, Am | AmB) {
-                self.write_reg(REG_AGC_TABLE_MIN, 0x0000);
-                self.write_reg(REG_AGC_TARGET, (50 << 7) | 32);
+        if (p & MP_SKIP_FA) == 0 {
+            let afc_set = if (p & MP_AFC_EN) != 0 { 1 << 4 } else { 0 };
+            self.update_reg_bits(REG_AFC, 1 << 4, afc_set);
+            let filt_clr = if (p & MP_FLT_C8) != 0 { 1 << 8 } else { 0 };
+            let mut filt_set = if (p & MP_FLT_S8) != 0 { 1 << 8 } else { 0 };
+            if (p & MP_FLT_S0) != 0 {
+                filt_set |= 1 << 0;
             }
-            self.set_agc(true);
+            self.update_reg_bits(REG_FILTERS, filt_clr, filt_set);
+            if (p & MP_AM_AGC) != 0 {
+                <Self as kernel::service::radio::RfAgc>::set_agc_mode(
+                    self,
+                    kernel::service::radio::AgcListeningMode::AmListening,
+                    false,
+                );
+            } else {
+                self.set_agc(true);
+            }
         }
     }
 
@@ -1137,25 +1167,20 @@ impl<'a, State> kernel::service::radio::RfSubaudible for Bk4829<'a, State> {
     }
 
     fn send_css_tail(&mut self, mode: kernel::service::radio::CssTailMode) {
-        match mode {
-            kernel::service::radio::CssTailMode::None => {
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-            }
-            kernel::service::radio::CssTailMode::Tone55Hz => {
-                self.write_reg(REG_CXCSS_FREQ, subaudible::CSS_TAIL_55HZ_REG);
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
-                self.write_reg(REG_CXCSS_CTRL, subaudible::CXCSS_CTRL_CTCSS);
-            }
-            kernel::service::radio::CssTailMode::PhaseShift120Deg => {
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_SHIFT_120);
-            }
-            kernel::service::radio::CssTailMode::PhaseShift180Deg => {
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_SHIFT_180);
-            }
-            kernel::service::radio::CssTailMode::PhaseShift240Deg => {
-                self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_SHIFT_240);
-            }
+        use kernel::service::radio::CssTailMode;
+        if mode == CssTailMode::Tone55Hz {
+            self.write_reg(REG_CXCSS_FREQ, subaudible::CSS_TAIL_55HZ_REG);
+            self.write_reg(REG_CXCSS_TAIL, subaudible::CXCSS_TAIL_NORMAL);
+            self.write_reg(REG_CXCSS_CTRL, subaudible::CXCSS_CTRL_CTCSS);
+            return;
         }
+        let val = match mode {
+            CssTailMode::PhaseShift120Deg => subaudible::CXCSS_TAIL_SHIFT_120,
+            CssTailMode::PhaseShift180Deg => subaudible::CXCSS_TAIL_SHIFT_180,
+            CssTailMode::PhaseShift240Deg => subaudible::CXCSS_TAIL_SHIFT_240,
+            _ => subaudible::CXCSS_TAIL_NORMAL,
+        };
+        self.write_reg(REG_CXCSS_TAIL, val);
     }
 }
 
@@ -1212,48 +1237,33 @@ impl<'a, State> kernel::service::radio::RfFskPhy for Bk4829<'a, State> {
     }
 
     fn fsk_enable(&mut self, enable: bool) {
-        let cur = self.read_reg(REG_FSK_CTRL);
-        if enable {
-            self.write_reg(REG_FSK_CTRL, cur | 0x0001);
-        } else {
-            self.write_reg(REG_FSK_CTRL, cur & !0x0001);
-        }
+        self.rmw_reg_bit(REG_FSK_CTRL, 0x0001, enable);
     }
 
     fn fsk_enable_rx(&mut self, enable: bool) {
-        let cur = self.read_reg(REG_FSK_FIFO_CTRL);
         if enable {
             let cur_irq = self.cache.read(REG_INT_ENABLE);
             self.write_reg(
                 REG_INT_ENABLE,
                 cur_irq | INT_FSK_RX_SYNC | INT_FSK_RX_FINISHED | INT_FSK_FIFO_ALMOST_FULL,
             );
-            self.write_reg(REG_FSK_FIFO_CTRL, cur | (1 << 12));
-        } else {
-            self.write_reg(REG_FSK_FIFO_CTRL, cur & !(1 << 12));
         }
+        self.rmw_reg_bit(REG_FSK_FIFO_CTRL, 1 << 12, enable);
     }
 
     fn fsk_enable_tx(&mut self, enable: bool) {
-        let cur = self.read_reg(REG_FSK_FIFO_CTRL);
         if enable {
             self.write_reg(REG_INT_ENABLE, INT_FSK_TX_FINISHED);
-            self.write_reg(REG_FSK_FIFO_CTRL, cur | (1 << 11));
-        } else {
-            self.write_reg(REG_FSK_FIFO_CTRL, cur & !(1 << 11));
         }
+        self.rmw_reg_bit(REG_FSK_FIFO_CTRL, 1 << 11, enable);
     }
 
     fn fsk_clear_rx_fifo(&mut self) {
-        let cur = self.read_reg(REG_FSK_FIFO_CTRL);
-        self.write_reg(REG_FSK_FIFO_CTRL, cur | (1 << 14));
-        self.write_reg(REG_FSK_FIFO_CTRL, cur & !(1 << 14));
+        self.pulse_fifo_bit(1 << 14);
     }
 
     fn fsk_clear_tx_fifo(&mut self) {
-        let cur = self.read_reg(REG_FSK_FIFO_CTRL);
-        self.write_reg(REG_FSK_FIFO_CTRL, cur | (1 << 15));
-        self.write_reg(REG_FSK_FIFO_CTRL, cur & !(1 << 15));
+        self.pulse_fifo_bit(1 << 15);
     }
 
     fn fsk_read_status(&mut self) -> kernel::service::radio::FskPhyStatus {
@@ -1307,7 +1317,8 @@ impl<'a, State> kernel::service::radio::RfFskPhy for Bk4829<'a, State> {
         py32_hal::delay::delay_ms(20); // Settling delay
         self.fsk_enable_tx(true);
 
-        let loops = (timeout_ms / 5).max(1);
+        // Reciprocal multiply by 1/5 ≈ 0xCCCD / 2^18 avoids Cortex-M0+ software division.
+        let loops = (((timeout_ms as u32) * 0xCCCD) >> 18).max(1);
         let mut finished = false;
         for _ in 0..loops {
             py32_hal::delay::delay_ms(5);
@@ -1385,20 +1396,14 @@ impl<'a, State> kernel::service::radio::RfAudioPath for Bk4829<'a, State> {
     }
 
     fn mute_audio(&mut self, mute: bool) {
+        self.rx_demod_active = !mute;
+        self.apply_demod_af(!mute);
         if mute {
-            self.rx_demod_active = false;
-            self.set_af(AfType::Mute);
-            self.write_reg(REG_TX_MUTE, 0xBB18);
             if !crate::audio::AudioAmplifier::is_hangover_active() {
                 bsp::pins::AUDIO_PA.set_low();
             }
-        } else {
-            self.rx_demod_active = true;
-            self.set_af(self.active_demod_af);
-            self.write_reg(REG_TX_MUTE, 0x3B18);
-            if self.cache.read(REG_AF_LEVEL) & 0x000F != 0 {
-                bsp::pins::AUDIO_PA.set_high();
-            }
+        } else if self.cache.read(REG_AF_LEVEL) & 0x000F != 0 {
+            bsp::pins::AUDIO_PA.set_high();
         }
     }
 
@@ -1421,30 +1426,24 @@ impl<'a, State> kernel::service::radio::RfAgc for Bk4829<'a, State> {
     }
 
     fn set_agc_mode(&mut self, mode: kernel::service::radio::AgcListeningMode, disable: bool) {
-        if disable {
-            self.set_agc(false);
-        } else {
-            match mode {
-                kernel::service::radio::AgcListeningMode::Fm => {
+        use kernel::service::radio::AgcListeningMode;
+        if !disable {
+            let (table_min, target) = match mode {
+                AgcListeningMode::Fm => {
                     self.am_tracker.reset();
                     self.write_reg(REG_AGC_TABLE_3, 0x03DF);
-                    self.write_reg(REG_AGC_TABLE_MIN, 0x0210);
-                    self.write_reg(REG_AGC_TARGET, 0x2AB2);
-                    self.set_agc(true);
+                    (0x0210, 0x2AB2)
                 }
-                kernel::service::radio::AgcListeningMode::AmListening => {
-                    self.write_reg(REG_AGC_TABLE_MIN, 0x0000);
-                    self.write_reg(REG_AGC_TARGET, (50 << 7) | 32);
-                    self.set_agc(true);
-                }
-                kernel::service::radio::AgcListeningMode::Ssb => {
+                AgcListeningMode::AmListening => (0x0000, (50 << 7) | 32),
+                AgcListeningMode::Ssb => {
                     self.am_tracker.reset();
-                    self.write_reg(REG_AGC_TABLE_MIN, 0x0000);
-                    self.write_reg(REG_AGC_TARGET, (1 << 14) | (44 << 7) | 28);
-                    self.set_agc(true);
+                    (0x0000, (1 << 14) | (44 << 7) | 28)
                 }
-            }
+            };
+            self.write_reg(REG_AGC_TABLE_MIN, table_min);
+            self.write_reg(REG_AGC_TARGET, target);
         }
+        self.set_agc(!disable);
     }
 
     fn set_agc_speed(&mut self, speed: kernel::service::radio::AgcSpeed) {
@@ -1523,23 +1522,41 @@ impl<'a, State> kernel::service::radio::RfFineTuning for Bk4829<'a, State> {
     }
 }
 
+impl<'a, State> Bk4829<'a, State> {
+    #[inline(never)]
+    fn set_tone_raw(&mut self, tone2_and_enabled: u8, freq_word: u16, gain: u8) {
+        let is_tone2 = (tone2_and_enabled & 2) != 0;
+        let enabled = (tone2_and_enabled & 1) != 0;
+        self.write_reg(
+            if is_tone2 {
+                REG_TONE2_FREQ
+            } else {
+                REG_TONE1_FREQ
+            },
+            freq_word,
+        );
+        let shift = if is_tone2 { 0 } else { 8 };
+        let field = (((enabled as u16) << 7) | (gain as u16 & 0x7F)) << shift;
+        self.update_reg_bits(REG_TONE_GAIN, 0x00FFu16 << shift, field);
+    }
+
+    #[inline(never)]
+    fn set_tone_gain_field(&mut self, shift: u8, gain: u8) {
+        self.update_reg_bits(
+            REG_TONE_GAIN,
+            0x7Fu16 << shift,
+            (gain as u16 & 0x7F) << shift,
+        );
+    }
+}
+
 impl<'a, State> kernel::service::radio::RfToneGenerator for Bk4829<'a, State> {
     fn set_tone1_raw(&mut self, freq_word: u16, gain: u8, enabled: bool) {
-        self.write_reg(REG_TONE1_FREQ, freq_word);
-
-        let cur = self.read_reg(REG_TONE_GAIN);
-        let enable_bit = if enabled { 1u16 } else { 0u16 };
-        let tone1_field = (enable_bit << 7) | (gain as u16 & 0x7F);
-        self.write_reg(REG_TONE_GAIN, (cur & 0x00FF) | (tone1_field << 8));
+        self.set_tone_raw(enabled as u8, freq_word, gain);
     }
 
     fn set_tone2_raw(&mut self, freq_word: u16, gain: u8, enabled: bool) {
-        self.write_reg(REG_TONE2_FREQ, freq_word);
-
-        let cur = self.read_reg(REG_TONE_GAIN);
-        let enable_bit = if enabled { 1u16 } else { 0u16 };
-        let tone2_field = (enable_bit << 7) | (gain as u16 & 0x7F);
-        self.write_reg(REG_TONE_GAIN, (cur & 0xFF00) | tone2_field);
+        self.set_tone_raw(2 | (enabled as u8), freq_word, gain);
     }
 
     #[inline(always)]
@@ -1553,33 +1570,21 @@ impl<'a, State> kernel::service::radio::RfToneGenerator for Bk4829<'a, State> {
     }
 
     fn set_tone1_gain(&mut self, gain: u8) {
-        let cur = self.read_reg(REG_TONE_GAIN);
-        let tone1_field = (cur & 0x8000) | ((gain as u16 & 0x7F) << 8);
-        self.write_reg(REG_TONE_GAIN, (cur & 0x00FF) | tone1_field);
+        self.set_tone_gain_field(8, gain);
     }
 
     fn set_tone2_gain(&mut self, gain: u8) {
-        let cur = self.read_reg(REG_TONE_GAIN);
-        let tone2_field = (cur & 0x0080) | (gain as u16 & 0x7F);
-        self.write_reg(REG_TONE_GAIN, (cur & 0xFF00) | tone2_field);
+        self.set_tone_gain_field(0, gain);
     }
 
     fn enable_tone1(&mut self, enable: bool) {
-        let cur = self.read_reg(REG_TONE_GAIN);
-        if enable {
-            self.write_reg(REG_TONE_GAIN, cur | (1 << 15));
-        } else {
-            self.write_reg(REG_TONE_GAIN, cur & !(1 << 15));
-        }
+        let bit = 1 << 15;
+        self.update_reg_bits(REG_TONE_GAIN, bit, if enable { bit } else { 0 });
     }
 
     fn enable_tone2(&mut self, enable: bool) {
-        let cur = self.read_reg(REG_TONE_GAIN);
-        if enable {
-            self.write_reg(REG_TONE_GAIN, cur | (1 << 7));
-        } else {
-            self.write_reg(REG_TONE_GAIN, cur & !(1 << 7));
-        }
+        let bit = 1 << 7;
+        self.update_reg_bits(REG_TONE_GAIN, bit, if enable { bit } else { 0 });
     }
 
     fn mute_tones(&mut self) {

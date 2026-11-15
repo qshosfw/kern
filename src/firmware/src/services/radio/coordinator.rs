@@ -1145,6 +1145,7 @@ impl RadioCoordinator {
 
     // ── Main 10ms System Tick ──
 
+    #[inline(never)]
     fn calc_watch_target(&self, idx: usize) -> Option<(u16, VfoSlot)> {
         match self.dual_watch {
             DualWatchMode::Off => None,
@@ -1172,6 +1173,7 @@ impl RadioCoordinator {
         }
     }
 
+    #[inline(never)]
     fn tick_tone_burst<R: RadioService>(&mut self, radio: &mut R) {
         if let AudioRoutingState::ToneBurstActive { remaining_ms } = self.audio_routing {
             if remaining_ms <= 10 {

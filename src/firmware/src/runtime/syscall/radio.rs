@@ -50,6 +50,7 @@ pub unsafe extern "C" fn api_rf_set_squelch(level: u8) {
     }
 }
 
+#[inline(never)]
 fn active_krx_token(exclusive: bool) -> kernel::service::radio::ClientToken {
     use kernel::service::radio::{ClientId, ClientToken, LockTier};
     let slot = crate::runtime::native_runner::slot_ref();
@@ -275,6 +276,7 @@ pub unsafe extern "C" fn api_rf_get_noise() -> u8 {
     }
 }
 
+#[inline(never)]
 fn decode_vfo_slot(slot: u8) -> Option<kernel::service::radio::VfoSlot> {
     use kernel::service::radio::VfoSlot;
     match slot {
@@ -303,6 +305,7 @@ fn encode_subaudible(
     }
 }
 
+#[inline(never)]
 fn decode_subaudible(kind: u8, value: u16) -> kernel::service::radio::SubaudibleTone {
     use kernel::service::radio::SubaudibleTone;
     match kind {
@@ -333,7 +336,7 @@ pub unsafe extern "C" fn api_rf_get_vfo_config(
     let dst = unsafe { &mut *out };
     dst.rx_freq_hz = ch.rx_freq.raw();
     dst.tx_offset_hz = tx_offset_hz;
-    dst.step_hz = (ch.step.in_hz_x10() as u32) * 10;
+    dst.step_hz = ch.step.in_hz();
     dst.rx_subaudible = encode_subaudible(ch.rx_subaudible);
     dst.tx_subaudible = encode_subaudible(ch.tx_subaudible);
     dst.modulation = ch.modulation as u8;

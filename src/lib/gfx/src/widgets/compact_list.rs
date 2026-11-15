@@ -101,16 +101,15 @@ pub fn draw_compact_list<F>(
         let is_selected = item_idx == selected_idx;
 
         if is_selected {
-            canvas.fill_rect(
-                config.x,
-                item_y as u8,
-                row_w,
-                config.row_height,
-                Color::Fill,
+            super::draw_selection_capsule(
+                canvas,
+                [config.x, item_y as u8, row_w, config.row_height],
+                if config.rounded_selection {
+                    super::CAPSULE_FILL_ROUND
+                } else {
+                    super::CAPSULE_FILL
+                },
             );
-            if config.rounded_selection {
-                canvas.clear_corners(config.x, item_y as u8, row_w, config.row_height);
-            }
         }
 
         render_row(

@@ -617,15 +617,14 @@ fn render_menu_row(
         if sel_bottom > sel_top {
             let ry = sel_top as u8;
             let rh = (sel_bottom - sel_top) as u8;
+            let mut cap_flags = 0u8;
             if (flags & 6) != 0 {
-                canvas.fill_rect(0, ry, 124, rh, Color::Fill);
-                tc = Color::Clear;
-            } else {
-                canvas.draw_rect(0, ry, 124, rh, Color::Fill);
+                cap_flags |= crate::widgets::CAPSULE_FILL;
             }
-            if row_y >= 8 && row_y + 13 <= 64 && rh >= 4 {
-                canvas.clear_corners(0, ry, 124, rh);
+            if row_y >= 8 && row_y + 13 <= 64 {
+                cap_flags |= crate::widgets::CAPSULE_ROUND;
             }
+            tc = crate::widgets::draw_selection_capsule(canvas, [0, ry, 124, rh], cap_flags);
         }
     }
 

@@ -106,6 +106,7 @@ impl TextInputView {
         &s[off[tk] as usize..off[tk + 1] as usize]
     }
 
+    #[inline(never)]
     fn confirm_current_char(model: &mut TextInputModel) {
         model.last_key = None;
         model.press_count = 0;
@@ -399,7 +400,7 @@ impl View<TextInputModel> for TextInputView {
                     }
                     _ => {
                         if let Some(digit) = code.to_digit() {
-                            confirm_and_push(model, (b'0' + digit) as char);
+                            confirm_and_push(model, b'0' + digit);
                             return true;
                         }
                     }
@@ -430,7 +431,7 @@ impl View<TextInputModel> for TextInputView {
             if is_pressed {
                 if let Some(key_num) = code.to_digit() {
                     if model.digits_only || model.charset == Charset::Numbers {
-                        confirm_and_push(model, (b'0' + key_num) as char);
+                        confirm_and_push(model, b'0' + key_num);
                         model.last_activity_tick = model.ticks;
                         return true;
                     }
@@ -450,12 +451,11 @@ impl View<TextInputModel> for TextInputView {
                             model.press_count = 0;
                         }
                         let char_idx = model.press_count;
-                        let new_ch = chars[char_idx] as char;
                         model.buffer.pop();
-                        let _ = model.buffer.push(new_ch);
+                        push_ascii(&mut model.buffer, chars[char_idx]);
                     } else {
                         // First tap on a new key
-                        confirm_and_push(model, chars[0] as char);
+                        confirm_and_push(model, chars[0]);
                         model.last_key = Some(key_num);
                         model.press_count = 0;
                     }
@@ -501,10 +501,18 @@ impl View<TextInputModel> for TextInputView {
 }
 
 #[inline(never)]
-fn confirm_and_push(model: &mut TextInputModel, ch: char) {
+fn push_ascii(buf: &mut String<32>, ch: u8) {
+    if ch.is_ascii() {
+        // SAFETY: 7-bit ASCII is always a valid single-byte UTF-8 sequence.
+        let _ = unsafe { buf.as_mut_vec().push(ch) };
+    }
+}
+
+#[inline(never)]
+fn confirm_and_push(model: &mut TextInputModel, ch: u8) {
     TextInputView::confirm_current_char(model);
     if model.buffer.len() < model.max_len {
-        let _ = model.buffer.push(ch);
+        push_ascii(&mut model.buffer, ch);
     }
     #[cfg(feature = "passcode")]
     if model.is_passcode && model.expose_len && model.buffer.len() >= model.max_len {

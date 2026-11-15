@@ -218,6 +218,26 @@ impl<const N: usize> ProcessTable<N> {
         }
     }
 
+    /// Zero-copy in-place initialization avoiding a ~484 B stack temporary on Cortex-M0+.
+    #[inline(never)]
+    pub fn init_in_place(dst: &mut core::mem::MaybeUninit<Self>) {
+        let ptr = dst.as_mut_ptr();
+        unsafe {
+            core::ptr::write_bytes(ptr, 0, 1);
+            let tbl = &mut *ptr;
+            tbl.next_pid = 1;
+            let mut i = 0;
+            while i < N {
+                tbl.slots[i].ident = PCB_IDENT;
+                tbl.slots[i].state = ProcState::Dormant;
+                tbl.slots[i].priority = crate::sched::Priority::Ui;
+                tbl.slots[i].exec_type = ExecType::StaticFirmware;
+                tbl.slots[i].restart_budget = 3;
+                i += 1;
+            }
+        }
+    }
+
     /// Allocate a PCB slot and assign a new Pid.
     pub fn spawn(
         &mut self,

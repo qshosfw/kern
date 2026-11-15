@@ -37,19 +37,46 @@ pub unsafe extern "C" fn api_ui_has_modal() -> u8 {
 }
 
 #[inline(never)]
-fn show_modal_confirm(
+unsafe fn show_modal_raw(
     tag: u8,
     title: *const u8,
-    t_len: u8,
-    default_title: &'static str,
+    t_len: usize,
     msg: *const u8,
-    m_len: u8,
-    confirm: &'static str,
-    cancel: &'static str,
+    m_len: usize,
+    confirm: *const u8,
+    c_len: usize,
+    cancel: *const u8,
+    cl_len: usize,
+    is_confirm: bool,
 ) {
-    let t_str = unsafe { str_or_default(title, t_len as usize, default_title) };
-    let m_str = unsafe { str_or_default(msg, m_len as usize, "") };
-    modal_mut().show_confirm(tag, t_str, m_str, confirm, cancel);
+    let (def_title, def_ok, def_cancel) = if is_confirm {
+        ("Confirm", "OK", "CANCEL")
+    } else {
+        ("Notice", "", "")
+    };
+    let t_str = unsafe { str_or_default(title, t_len, def_title) };
+    let m_str = unsafe { str_or_default(msg, m_len, "") };
+    let c_str = unsafe { str_or_default(confirm, c_len, def_ok) };
+    let cl_str = unsafe { str_or_default(cancel, cl_len, def_cancel) };
+    modal_mut().show_confirm(tag, t_str, m_str, c_str, cl_str);
+}
+
+#[inline(never)]
+fn show_modal_default(tag: u8, title_len_flags: u32, title: *const u8, msg: *const u8) {
+    unsafe {
+        show_modal_raw(
+            tag,
+            title,
+            (title_len_flags & 0xFF) as usize,
+            msg,
+            ((title_len_flags >> 8) & 0xFF) as usize,
+            core::ptr::null(),
+            0,
+            core::ptr::null(),
+            0,
+            (title_len_flags & 0x1_0000) != 0,
+        );
+    }
 }
 
 pub unsafe extern "C" fn api_ui_show_popup(
@@ -59,7 +86,7 @@ pub unsafe extern "C" fn api_ui_show_popup(
     msg: *const u8,
     m_len: u8,
 ) {
-    show_modal_confirm(tag, title, t_len, "Notice", msg, m_len, "", "");
+    show_modal_default(tag, (t_len as u32) | ((m_len as u32) << 8), title, msg);
 }
 
 pub unsafe extern "C" fn api_ui_show_confirm(
@@ -69,7 +96,12 @@ pub unsafe extern "C" fn api_ui_show_confirm(
     msg: *const u8,
     m_len: u8,
 ) {
-    show_modal_confirm(tag, title, t_len, "Confirm", msg, m_len, "OK", "CANCEL");
+    show_modal_default(
+        tag,
+        (t_len as u32) | ((m_len as u32) << 8) | 0x1_0000,
+        title,
+        msg,
+    );
 }
 
 pub unsafe extern "C" fn api_ui_prompt_text(
@@ -139,11 +171,7 @@ pub unsafe extern "C" fn api_ui_set_tray_icon(icon_id: u8) -> u8 {
         crate::orchestrator::status_tray_mut().clear_icon(pid);
         1
     } else {
-        let glyph = crate::runtime::native_runner::decode_status_glyph(
-            icon_id,
-            &slot.status_bar.custom_icon_0,
-            &slot.status_bar.custom_icon_1,
-        );
+        let glyph = crate::runtime::native_runner::decode_status_glyph(&slot.status_bar, icon_id);
         if let Some(g) = glyph {
             crate::orchestrator::status_tray_mut().set_glyph(pid, g) as u8
         } else {
@@ -255,8 +283,11 @@ pub unsafe extern "C" fn api_ui_draw_menu_item(
     let tc_u8 = if is_sel { 0 } else { 1 };
     let canvas = super::active_canvas_mut();
     if is_sel {
-        canvas.fill_rect(2, ry, 120, 10, gfx::Color::Fill);
-        canvas.clear_corners(2, ry, 120, 10);
+        gfx::widgets::draw_selection_capsule(
+            canvas,
+            [2, ry, 120, 10],
+            gfx::widgets::CAPSULE_FILL_ROUND,
+        );
     }
     let mut text_x = 5i16;
     if icon_id != 0 {
@@ -348,9 +379,20 @@ pub unsafe extern "C" fn api_ui_show_confirm_labels(
     cancel: *const u8,
     cl_len: u8,
 ) {
-    let c_str = unsafe { str_or_default(confirm, c_len as usize, "OK") };
-    let cl_str = unsafe { str_or_default(cancel, cl_len as usize, "CANCEL") };
-    show_modal_confirm(tag, title, t_len, "Confirm", msg, m_len, c_str, cl_str);
+    unsafe {
+        show_modal_raw(
+            tag,
+            title,
+            t_len as usize,
+            msg,
+            m_len as usize,
+            confirm,
+            c_len as usize,
+            cancel,
+            cl_len as usize,
+            true,
+        );
+    }
 }
 
 pub static UI_VTABLE: UiApi = UiApi {

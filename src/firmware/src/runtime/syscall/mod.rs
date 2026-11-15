@@ -100,11 +100,14 @@ pub unsafe fn parse_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
 #[inline(never)]
 pub unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     let path = unsafe { parse_str(ptr, len)? };
+    if !utils::path::is_clean_path(path.as_bytes()) {
+        return None;
+    }
     let caps = super::native_runner::active_native_caps();
 
     // Anti-Brick Lock 1: Factory Calibration & System Manifest (/sys/*)
     // Strictly requires Cap::FactoryCalib.
-    if path.starts_with("/sys/") {
+    if utils::path::root_bit(path.as_bytes()) == utils::path::ROOT_SYS {
         return if caps.contains(Cap::FactoryCalib) {
             Some(path)
         } else {
@@ -200,25 +203,6 @@ fn resolve_capability_vtable(
     None
 }
 
-#[inline(always)]
-fn bind_entry(binding: CapBinding, got_words: &mut [u32], granted_caps: CapabilitySet) -> bool {
-    let Some(dst) = got_words.get_mut(binding.slot_idx as usize) else {
-        return false;
-    };
-    match resolve_capability_vtable(binding.interface_id, binding.min_abi, granted_caps) {
-        Some(vtable_addr) => {
-            *dst = vtable_addr as u32;
-        }
-        None => {
-            if (binding.flags & CapBinding::FLAG_MANDATORY) != 0 {
-                return false;
-            }
-            *dst = 0; // NULL for OPTIONAL binding
-        }
-    }
-    true
-}
-
 /// Bind `SECTION_CAP_IMPORTS (0x0003)` into the loaded package's GOT slots (Appendix C).
 /// Returns `false` if any `FLAG_MANDATORY` import fails to resolve.
 #[inline(never)]
@@ -227,10 +211,10 @@ pub fn bind_cap_imports(
     got_words: &mut [u32],
     granted_caps: CapabilitySet,
 ) -> bool {
-    if cap_section_body.is_empty() {
+    let len = cap_section_body.len();
+    if len == 0 {
         return true;
     }
-    let len = cap_section_body.len();
     let (_, r3) = utils::math::div3_u16((len as u16) >> 1);
     let is_div_6 = (len & 1) == 0 && r3 == 0;
     let is_div_8 = (len & 7) == 0;
@@ -238,12 +222,24 @@ pub fn bind_cap_imports(
     let mut offset = 0;
     let mut slot_i = 0u16;
     while offset + stride <= len {
-        let slice = unsafe { cap_section_body.get_unchecked(offset..offset + stride) };
-        let Some(binding) = CapBinding::parse(slice, slot_i) else {
+        let s = unsafe { cap_section_body.get_unchecked(offset..offset + stride) };
+        let interface_id = u16::from_le_bytes([s[0], s[1]]);
+        let min_abi = u16::from_le_bytes([s[2], s[3]]);
+        let flags = u16::from_le_bytes([s[4], s[5]]);
+        let dst_slot = if stride >= 8 {
+            u16::from_le_bytes([s[6], s[7]])
+        } else {
+            slot_i
+        };
+        let Some(dst) = got_words.get_mut(dst_slot as usize) else {
             return false;
         };
-        if !bind_entry(binding, got_words, granted_caps) {
+        if let Some(vtable_addr) = resolve_capability_vtable(interface_id, min_abi, granted_caps) {
+            *dst = vtable_addr as u32;
+        } else if (flags & CapBinding::FLAG_MANDATORY) != 0 {
             return false;
+        } else {
+            *dst = 0;
         }
         offset += stride;
         slot_i = slot_i.wrapping_add(1);

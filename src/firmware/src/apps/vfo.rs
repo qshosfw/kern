@@ -148,6 +148,11 @@ fn step_freq(ctx: &mut SysContext, up: bool) -> EventResult {
 }
 
 #[inline(never)]
+fn draw_tom_fill(canvas: &mut Canvas, x: i16, y: i16, text: &str) {
+    gfx::text::draw_str(canvas, x, y, text, &gfx::fonts::tomthumb::FONT, Color::Fill);
+}
+
+#[inline(never)]
 fn draw_vfo(
     canvas: &mut Canvas,
     y: i16,
@@ -164,17 +169,23 @@ fn draw_vfo(
     } else {
         "V2"
     };
-    let (badge_text, fg_color) = if selected {
-        canvas.fill_rect(0, y as u8, 19, 7, Color::Fill);
-        let t = match coord.vfo_memory_index[slot.index()] {
+    let fg_color = gfx::widgets::draw_selection_capsule(
+        canvas,
+        [0, y as u8, 19, 7],
+        if selected {
+            gfx::widgets::CAPSULE_FILL
+        } else {
+            0
+        },
+    );
+    let badge_text = if selected {
+        match coord.vfo_memory_index[slot.index()] {
             Some(num) if num < 10 => "M0",
             Some(_) => "M",
             None => v_name,
-        };
-        (t, Color::Clear)
+        }
     } else {
-        canvas.draw_rect(0, y as u8, 19, 7, Color::Fill);
-        (v_name, Color::Fill)
+        v_name
     };
     gfx::text::draw_str(canvas, 2, y + 6, badge_text, font, fg_color);
 
@@ -187,7 +198,7 @@ fn draw_vfo(
         ""
     };
     if !status_txt.is_empty() {
-        gfx::text::draw_str(canvas, 2, y + 14, status_txt, font, Color::Fill);
+        draw_tom_fill(canvas, 2, y + 14, status_txt);
     }
 
     // 3. Authentic Big Frequency (x=30)
@@ -213,21 +224,16 @@ fn draw_vfo(
         }
     }
 
-    // 4. Modulation Type (top right)
-    gfx::text::draw_str(
-        canvas,
-        112,
-        y + 6,
-        ch.modulation.as_str(),
-        font,
-        Color::Fill,
-    );
-
-    // 5. Attributes Line (beneath frequency)
+    // 4 & 5. Modulation Type and Channel Attributes Line
     let attr_y = y + 22;
-    gfx::text::draw_str(canvas, 32, attr_y, ch.power.as_str(), font, Color::Fill);
-    gfx::text::draw_str(canvas, 44, attr_y, ch.bandwidth.as_str(), font, Color::Fill);
-    gfx::text::draw_str(canvas, 56, attr_y, slot.default_name(), font, Color::Fill);
+    for (tx, ty, label) in [
+        (112, y + 6, ch.modulation.as_str()),
+        (32, attr_y, ch.power.as_str()),
+        (44, attr_y, ch.bandwidth.as_str()),
+        (56, attr_y, slot.default_name()),
+    ] {
+        draw_tom_fill(canvas, tx, ty, label);
+    }
 }
 
 #[inline(never)]
@@ -269,13 +275,7 @@ fn handle_vfo_key_press(ctx: &mut SysContext, code: KeyCode) -> EventResult {
             ctx.toggle_reverse(slot);
             EventResult::Consumed
         }
-        KeyCode::Menu => {
-            ctx.post_event(
-                crate::apps::Shortcut::LaunchApp(crate::apps::APP_ID_LAUNCHER as u8).into(),
-            );
-            EventResult::Consumed
-        }
-        KeyCode::Exit => {
+        KeyCode::Menu | KeyCode::Exit => {
             ctx.post_event(
                 crate::apps::Shortcut::LaunchApp(crate::apps::APP_ID_LAUNCHER as u8).into(),
             );
@@ -339,14 +339,12 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
         } else {
             kernel::service::radio::VfoSlot::VfoB
         };
-        draw_vfo(
-            canvas,
-            8,
-            coord,
-            kernel::service::radio::VfoSlot::VfoA,
-            active == kernel::service::radio::VfoSlot::VfoA,
-        );
-        draw_vfo(canvas, 34, coord, slot_b, active == slot_b);
+        for (i, slot) in [kernel::service::radio::VfoSlot::VfoA, slot_b]
+            .into_iter()
+            .enumerate()
+        {
+            draw_vfo(canvas, 8 + (i as i16) * 26, coord, slot, active == slot);
+        }
 
         // Dotted Divider Line (y: 32)
         gfx::draw::draw_dotted_line_h(canvas, 0, 127, 32, 2, Color::Fill);
@@ -365,26 +363,23 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
         );
 
         // Active Mode Indicators (DW / TW / XB / R) in footer between S-Meter and Uptime
-        let font = &gfx::fonts::tomthumb::FONT;
-        let mut draw_footer = |x, text| gfx::text::draw_str(canvas, x, 57, text, font, Color::Fill);
-
         match ctx.state.coord.dual_watch {
             DualWatchMode::Off => {}
-            DualWatchMode::TripleWatch { .. } => draw_footer(68, "TW"),
-            _ => draw_footer(68, "DW"),
+            DualWatchMode::TripleWatch { .. } => draw_tom_fill(canvas, 68, 57, "TW"),
+            _ => draw_tom_fill(canvas, 68, 57, "DW"),
         }
         if ctx.state.coord.cross_band != CrossBandMode::Off {
-            draw_footer(79, "XB");
+            draw_tom_fill(canvas, 79, 57, "XB");
         }
         if ctx.state.coord.active_channel().reverse {
-            draw_footer(90, "R");
+            draw_tom_fill(canvas, 90, 57, "R");
         }
 
         // Display Uptime compactly next to S-Meter
         let mut num_buf = [b' '; 5];
         let uptime_str = gfx::text::format_u32(ctx.power.uptime_secs(), &mut num_buf);
-        draw_footer(102, "U:");
-        draw_footer(114, uptime_str);
+        draw_tom_fill(canvas, 102, 57, "U:");
+        draw_tom_fill(canvas, 114, 57, uptime_str);
     }
 
     fn on_exit(&mut self, _ctx: &mut SysContext) {}

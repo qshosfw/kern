@@ -2,6 +2,7 @@ use crate::{Canvas, Color, GfxFont};
 pub use utils::format::*;
 
 /// Draw a single ASCII character using the provided GfxFont.
+#[inline(never)]
 pub fn draw_char(
     canvas: &mut Canvas,
     x: i16,
@@ -60,11 +61,13 @@ pub fn draw_char(
 }
 
 /// Draw a string onto the canvas using the provided GfxFont.
+#[inline(never)]
 pub fn draw_str(canvas: &mut Canvas, x: i16, y: i16, text: &str, font: &GfxFont, color: Color) {
     draw_str_max_x(canvas, x, y, text, font, color, 128);
 }
 
 /// Draw a string onto the canvas up to a maximum X coordinate. Returns the advanced X.
+#[inline(never)]
 pub fn draw_str_max_x(
     canvas: &mut Canvas,
     mut x: i16,

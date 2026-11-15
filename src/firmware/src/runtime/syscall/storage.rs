@@ -53,21 +53,38 @@ pub unsafe extern "C" fn api_storage_read_file(
     unsafe { api_storage_read_file_at(path, path_len, 0, buf, max_len) }
 }
 
-fn storage_write_op(path: *const u8, path_len: u8, data: *const u8, len: u16, append: bool) -> u8 {
-    if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
-        if !data.is_null() {
+#[inline(never)]
+fn storage_write_op(path: *const u8, path_len_and_append: u16, data: *const u8, len: u16) -> u8 {
+    let append = (path_len_and_append & 0x8000) != 0;
+    let path_len = (path_len_and_append & 0xFF) as usize;
+    if !data.is_null() {
+        if let (Some(path_str), Some(ctx)) =
+            (unsafe { parse_user_path(path, path_len) }, active_ctx_opt())
+        {
             let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            if let Some(ctx) = active_ctx_opt() {
-                let res = if append {
-                    ctx.append_file(path_str, src)
-                } else {
-                    ctx.write_file(path_str, src)
-                };
-                if res.is_ok() {
-                    return 0;
-                }
-            }
+            let res = if append {
+                ctx.append_file(path_str, src)
+            } else {
+                ctx.write_file(path_str, src)
+            };
+            return u8::from(res.is_err());
         }
+    }
+    1
+}
+
+#[inline(never)]
+fn user_path_unit_op(path: *const u8, path_len: u8, create_dir: bool) -> u8 {
+    if let (Some(p_str), Some(ctx)) = (
+        unsafe { parse_user_path(path, path_len as usize) },
+        active_ctx_opt(),
+    ) {
+        let res = if create_dir {
+            ctx.create_dir(p_str)
+        } else {
+            ctx.remove_file(p_str)
+        };
+        return u8::from(res.is_err());
     }
     1
 }
@@ -78,18 +95,11 @@ pub unsafe extern "C" fn api_storage_write_file(
     data: *const u8,
     len: u16,
 ) -> u8 {
-    storage_write_op(path, path_len, data, len, false)
+    storage_write_op(path, path_len as u16, data, len)
 }
 
 pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) -> u8 {
-    if let Some(path_str) = unsafe { parse_user_path(path, path_len as usize) } {
-        if let Some(ctx) = active_ctx_opt() {
-            if ctx.remove_file(path_str).is_ok() {
-                return 0;
-            }
-        }
-    }
-    1
+    user_path_unit_op(path, path_len, false)
 }
 
 pub unsafe extern "C" fn api_storage_file_size(path: *const u8, path_len: u8) -> u32 {
@@ -153,7 +163,7 @@ pub unsafe extern "C" fn api_storage_append_file(
     data: *const u8,
     len: u16,
 ) -> u8 {
-    storage_write_op(path, path_len, data, len, true)
+    storage_write_op(path, (path_len as u16) | 0x8000, data, len)
 }
 
 pub unsafe extern "C" fn api_storage_rename_file(
@@ -176,14 +186,7 @@ pub unsafe extern "C" fn api_storage_rename_file(
 }
 
 pub unsafe extern "C" fn api_storage_create_dir(path: *const u8, path_len: u8) -> u8 {
-    if let Some(p_str) = unsafe { parse_user_path(path, path_len as usize) } {
-        if let Some(ctx) = active_ctx_opt() {
-            if ctx.create_dir(p_str).is_ok() {
-                return 0;
-            }
-        }
-    }
-    1
+    user_path_unit_op(path, path_len, true)
 }
 
 pub static STORAGE_VTABLE: StorageApi = StorageApi {

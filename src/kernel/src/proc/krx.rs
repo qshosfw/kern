@@ -336,6 +336,7 @@ impl KrxPreamble {
     pub const SIZE: usize = 24;
 
     /// Parse preamble from little-endian byte slice
+    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Result<Self, ()> {
         #[cfg(target_endian = "little")]
         let p = unsafe { copy_le_pod::<Self>(buf) }.ok_or(())?;
@@ -393,6 +394,7 @@ pub struct SectionHeader {
 impl SectionHeader {
     pub const SIZE: usize = 4;
 
+    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -471,6 +473,7 @@ const _: () = {
 impl SectionIdentity {
     pub const SIZE: usize = 40;
 
+    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -546,6 +549,7 @@ impl SectionExecution {
         out
     }
 
+    #[inline(never)]
     pub fn parse_into(buf: &[u8], dst: &mut Option<Self>) {
         if buf.len() < Self::SIZE {
             *dst = None;
@@ -597,6 +601,7 @@ impl CapBinding {
     pub const FLAG_PIN_PROVIDER: u16 = 1 << 3;
 
     /// Parse a `CapBinding` record from little-endian bytes (6-byte or 8-byte record).
+    #[inline(never)]
     pub fn parse(buf: &[u8], default_slot_idx: u16) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -664,6 +669,7 @@ impl SectionType {
         KrxExecType::from_u8(self.exec_type)
     }
 
+    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;
@@ -767,24 +773,27 @@ impl KrxPreamble {
         buf: &'a [u8],
         out: &'b mut core::mem::MaybeUninit<KrxSummary<'a>>,
     ) -> Result<&'b mut KrxSummary<'a>, KrxLaunchError> {
-        if buf.len() < Self::SIZE || buf[..4] != KRX_IDENT || !(1..=5).contains(&buf[5]) {
-            return Err(KrxLaunchError::InvalidPreamble);
-        }
-        let h_len = u16::from_le_bytes([buf[8], buf[9]]) as usize;
+        let preamble = Self::parse(buf).map_err(|_| KrxLaunchError::InvalidPreamble)?;
+        let h_len = preamble.header_len as usize;
         if h_len < Self::SIZE || h_len > 512 || (h_len & 3) != 0 {
             return Err(KrxLaunchError::InvalidPreamble);
         }
         let hdr = buf.get(..h_len).ok_or(KrxLaunchError::TruncatedPackage)?;
 
         // Hardened CRC32 verification of the header payload before populating `out`
-        let expected_crc = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
-        if expected_crc != 0 && crypto::crc::CrcEngine::crc32(&hdr[Self::SIZE..]) != expected_crc {
+        if preamble.header_crc32 != 0
+            && crypto::crc::CrcEngine::crc32(&hdr[Self::SIZE..]) != preamble.header_crc32
+        {
             return Err(KrxLaunchError::CrcMismatch);
         }
 
-        let preamble = Self::parse(hdr).map_err(|_| KrxLaunchError::InvalidPreamble)?;
-        let out = out.write(KrxSummary::default());
-        out.preamble = preamble;
+        let ptr = out.as_mut_ptr();
+        unsafe {
+            core::ptr::write_bytes(ptr, 0, 1);
+            core::ptr::addr_of_mut!((*ptr).preamble).write(preamble);
+            core::ptr::addr_of_mut!((*ptr).exec_type).write(KrxExecType::App);
+        }
+        let out = unsafe { &mut *ptr };
 
         let mut rest = &hdr[Self::SIZE..];
         while rest.len() >= SectionHeader::SIZE {
@@ -799,12 +808,8 @@ impl KrxPreamble {
                     if body.len() >= 25 {
                         let name_off = u16::from_le_bytes([body[0], body[1]]) as usize;
                         if name_off >= Self::SIZE && name_off < h_len {
-                            let tail = &hdr[name_off..h_len];
-                            let max_len = tail.len().min(32);
-                            let mut len = 0usize;
-                            while len < max_len && tail[len] != 0 {
-                                len += 1;
-                            }
+                            let tail = &hdr[name_off..h_len.min(name_off + 32)];
+                            let len = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
                             if len > 0 {
                                 if let Some(s) = utils::format::ascii_str(&tail[..len]) {
                                     out.title = s;
@@ -1262,6 +1267,7 @@ impl KrxSwapHeader {
         }
     }
 
+    #[inline(never)]
     pub fn parse(buf: &[u8]) -> Option<Self> {
         if buf.len() < Self::SIZE {
             return None;

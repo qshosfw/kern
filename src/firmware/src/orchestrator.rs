@@ -50,11 +50,9 @@ pub fn proc_table_mut() -> &'static mut ProcessTable<MAX_PROCESSES> {
     unsafe { (*core::ptr::addr_of_mut!(PROC_TABLE)).assume_init_mut() }
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn init_proc_table() {
-    unsafe {
-        *core::ptr::addr_of_mut!(PROC_TABLE) = core::mem::MaybeUninit::new(ProcessTable::new());
-    }
+    ProcessTable::init_in_place(unsafe { &mut *core::ptr::addr_of_mut!(PROC_TABLE) });
     #[cfg(feature = "krx_native")]
     crate::runtime::init_native_slot();
 }
@@ -99,6 +97,12 @@ pub fn sink_key(key: KeyCode) {
     let bit = key_to_bit(key);
     unsafe {
         SUNK_KEYS |= bit;
+    }
+}
+
+pub fn sink_modal_keys() {
+    unsafe {
+        SUNK_KEYS |= BIT_MENU | BIT_KEY5 | BIT_EXIT;
     }
 }
 
@@ -149,6 +153,7 @@ pub fn record_proc_activation(app_id: usize) {
     }
 }
 
+#[inline(never)]
 fn record_proc_event_and_stack(app_id: usize) {
     if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
         pcb.ledger.record_event();
@@ -188,48 +193,50 @@ impl Orchestrator {
             }
         }
 
-        // 1. Core Kernel Daemon (PID 1)
-        spawn_proc(
-            table,
-            "Kernel",
-            0xF0,
-            kernel::sched::Priority::Safety,
-            kernel::caps::CapabilitySet::ALL,
-            ProcState::Running,
-        );
-
-        // 2. Radio Coordinator Service (PID 2)
         let radio_caps = CapabilitySet::empty()
             .with(kernel::caps::Cap::RadioRx)
-            .with(kernel::caps::Cap::RadioTx);
-        spawn_proc(
-            table,
-            "Radio",
-            0xF1,
-            kernel::sched::Priority::Radio,
-            radio_caps,
-            ProcState::ServiceIdle,
-        );
-
-        // 3. Power Management Service (PID 3)
-        spawn_proc(
-            table,
-            "Power",
-            0xF2,
-            kernel::sched::Priority::Safety,
-            CapabilitySet::empty(),
-            ProcState::ServiceIdle,
-        );
-
-        // 4. Input & Keypad Daemon (PID 4)
-        spawn_proc(
-            table,
-            "Input",
-            0xF3,
-            kernel::sched::Priority::Ui,
-            CapabilitySet::empty(),
-            ProcState::ServiceIdle,
-        );
+            .with(kernel::caps::Cap::RadioTx)
+            .raw();
+        let core_daemons: [(&str, u8, kernel::sched::Priority, u32, ProcState); 4] = [
+            (
+                "Kernel",
+                0xF0,
+                kernel::sched::Priority::Safety,
+                u32::MAX,
+                ProcState::Running,
+            ),
+            (
+                "Radio",
+                0xF1,
+                kernel::sched::Priority::Radio,
+                radio_caps,
+                ProcState::ServiceIdle,
+            ),
+            (
+                "Power",
+                0xF2,
+                kernel::sched::Priority::Safety,
+                0,
+                ProcState::ServiceIdle,
+            ),
+            (
+                "Input",
+                0xF3,
+                kernel::sched::Priority::Ui,
+                0,
+                ProcState::ServiceIdle,
+            ),
+        ];
+        for &(name, app_id, prio, caps_raw, state) in &core_daemons {
+            spawn_proc(
+                table,
+                name,
+                app_id as usize,
+                prio,
+                CapabilitySet::from_raw(caps_raw),
+                state,
+            );
+        }
 
         // 5. Active Foreground Startup Application (PID 5)
         let name = crate::AppRegistry::descriptor(startup_app)
@@ -467,6 +474,7 @@ impl Orchestrator {
         }
     }
 
+    #[inline(never)]
     fn update_key_ownership(&mut self, event: &Event, status: EventResult, fault_handled: bool) {
         if !fault_handled {
             if let Event::Key { code, state } = *event {
@@ -483,49 +491,43 @@ impl Orchestrator {
         }
     }
 
+    #[inline(never)]
     fn handle_system_audio_events<'a>(
         &self,
         ctx: &mut crate::services::SysContext<'a, '_>,
         event: &Event,
     ) {
-        if let Event::Charging(true) = event {
-            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Charging);
-        }
-        #[cfg(feature = "usb")]
-        if let Event::Usb(usb_ev) = event {
-            match usb_ev {
+        use crate::services::melody::DialogSoundType;
+        let sound = match event {
+            Event::Charging(true) => Some(DialogSoundType::Charging),
+            #[cfg(feature = "usb")]
+            Event::Usb(usb_ev) => match usb_ev {
                 kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
-                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbConnect);
+                    Some(DialogSoundType::UsbConnect)
                 }
                 kernel::event::UsbEvent::Disconnected | kernel::event::UsbEvent::Suspended => {
-                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::UsbDisconnect);
+                    Some(DialogSoundType::UsbDisconnect)
                 }
-                _ => {}
-            }
-        }
-        #[cfg(feature = "radio")]
-        if let Event::Bus(bus_evt) = event {
-            if bus_evt.topic == kernel::ipc::Topic::RADIO {
-                if let Some(r_ev) = crate::services::radio::RadioEvent::from_bus_event(bus_evt) {
-                    match r_ev {
-                        crate::services::radio::RadioEvent::TotWarning { .. } => {
-                            if ctx.config.audio.key_beep != 0 {
-                                ctx.play_dialog_sound(
-                                    crate::services::melody::DialogSoundType::Warning,
-                                );
-                            }
-                        }
-                        crate::services::radio::RadioEvent::TotExpired => {
-                            if ctx.config.audio.key_beep != 0 {
-                                ctx.play_dialog_sound(
-                                    crate::services::melody::DialogSoundType::Error,
-                                );
-                            }
-                        }
-                        _ => {}
+                _ => None,
+            },
+            #[cfg(feature = "radio")]
+            Event::Bus(bus_evt)
+                if bus_evt.topic == kernel::ipc::Topic::RADIO && ctx.config.audio.key_beep != 0 =>
+            {
+                match crate::services::radio::RadioEvent::from_bus_event(bus_evt) {
+                    Some(crate::services::radio::RadioEvent::TotWarning { .. }) => {
+                        Some(DialogSoundType::Warning)
                     }
+                    Some(crate::services::radio::RadioEvent::TotExpired) => {
+                        Some(DialogSoundType::Error)
+                    }
+                    _ => None,
                 }
             }
+            _ => None,
+        };
+        if let Some(s) = sound {
+            ctx.play_dialog_sound(s);
         }
     }
 
@@ -600,8 +602,7 @@ impl Orchestrator {
     ) -> FilterFlow {
         let prev_app = self.active_app_id;
 
-        // Key ownership tracking: if a key was consumed on Pressed, subsequent
-        // Held/Released events for that key belong strictly to the active app.
+        let is_key = matches!(*event, Event::Key { .. });
         let is_key_owned = match *event {
             Event::Key { code, .. } => self.owned_key == Some(code),
             _ => false,
@@ -626,7 +627,7 @@ impl Orchestrator {
 
         // If foreground app consumed the event, owns this key, or fault was handled, it is sunk
         if status == EventResult::Consumed || is_key_owned || fault_handled {
-            if matches!(event, Event::Key { .. }) {
+            if is_key {
                 self.lock_mgr.reset_input_tracking();
             }
             return FilterFlow::Stop(
@@ -662,8 +663,7 @@ impl Orchestrator {
                 &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL);
             modal_mut.show_confirm(TAG_FAULT_CONFIRM, "Fault", err_desc, "Stop", "Retry");
         }
-        sink_enter_keys();
-        sink_exit_key();
+        sink_modal_keys();
     }
 
     #[inline(never)]
@@ -739,6 +739,7 @@ impl Orchestrator {
         }
     }
 
+    #[inline(never)]
     fn handle_global_shortcuts<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -933,6 +934,7 @@ impl Orchestrator {
         self.switch_app_internal(ctx, app_id, true);
     }
 
+    #[inline(never)]
     fn switch_app_internal<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -967,8 +969,7 @@ impl Orchestrator {
             self.active_app_id = app_id;
             self.owned_key = None;
             self.lock_mgr.reset_input_tracking();
-            sink_enter_keys();
-            sink_exit_key();
+            sink_modal_keys();
 
             // Resume app if hibernated in swap slot
             #[cfg(feature = "app_hibernation")]

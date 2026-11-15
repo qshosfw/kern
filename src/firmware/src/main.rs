@@ -132,10 +132,31 @@ pub unsafe extern "C" fn TIM6_LPTIM1_DAC() {
 }
 
 #[cfg(not(test))]
-#[entry]
-fn main() -> ! {
-    // High-Assurance Stack Painting for memory introspection & watermarking (§13.1)
-    // Painted immediately upon entry before deep call frames are allocated.
+#[unsafe(export_name = "__pre_init")]
+unsafe extern "C" fn pre_init() {
+    // Stop SysTick and restore application VTOR before crt0 stack/BSS setup touches upper SRAM,
+    // ensuring a hooked DFU session cannot vector into overwritten SRAM during jumpback.
+    unsafe {
+        (0xE000_E010 as *mut u32).write_volatile(0);
+        (0xE000_ED04 as *mut u32).write_volatile(1 << 25);
+        pac::SCB_VTOR.write_volatile(0x0800_2800);
+    }
+}
+
+/// Bind active factory/user calibration bytes and battery discharge curve to runtime drivers.
+#[inline(never)]
+pub(crate) fn apply_active_calibration<'a>(radio: &mut Bk4829<'a>) {
+    let calib = unsafe { &*core::ptr::addr_of!(CALIBRATION) };
+    radio.attach_calibration(calib.raw_bytes());
+    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
+    power_service
+        .battery_driver
+        .load_calibration_curve(calib.battery_curve());
+}
+
+#[cfg(not(test))]
+#[inline(never)]
+fn init_core_services_and_board() -> Board {
     kernel::sys::SystemDiagnostics::paint_stack();
 
     unsafe {
@@ -143,24 +164,89 @@ fn main() -> ! {
         CONFIG_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
         RadioState::init_in_place(core::ptr::addr_of_mut!(RADIO_STATE) as *mut RadioState);
         (*core::ptr::addr_of_mut!(CALIBRATION)).init_defaults();
-    }
-
-    // 0. CRITICAL: Set Vector Table Offset Register (VTOR) to 0x0800_2800!
-    unsafe {
         pac::SCB_VTOR.write_volatile(0x0800_2800);
         cortex_m::interrupt::enable();
     }
 
-    // 1. Initialize Board (Clocks, GPIOs, SysTick, TIM2, SPI1, USART1)
-    let mut board = Board::init();
+    let board = Board::init();
     boot::check_reset_cause();
-
-    // Ensure Display Backlight is OFF during bring-up
     bsp::pins::BACKLIGHT.set_low();
 
     let _ = hal::uart::write_line("KERN v0.1.0");
     let _ = hal::uart::write_line(build_info::BUILD_STAMP);
+    board
+}
 
+#[cfg(not(test))]
+#[inline(never)]
+fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
+    // Screen stays blanked until passcode prompt or splash reveals
+    hw.lcd.init();
+    bsp::pins::BACKLIGHT.set_low();
+    let canvas = system_canvas();
+    canvas.clear();
+    hw.lcd.blit(canvas);
+    hw.backlight.init();
+    kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
+    #[cfg(feature = "dfu")]
+    if boot::is_bootloader_hold_requested() {
+        boot::enter_dfu_bootloader(&mut hw.lcd);
+    }
+
+    // Start Independent Watchdog with generous 6000ms timeout after DFU bootloader check
+    hal::wdt::Watchdog::start(6000);
+
+    #[cfg(feature = "filesystem")]
+    boot::mount_or_format(
+        &mut hw.lcd,
+        &mut hw.key_scanner,
+        hw.filesystem,
+        &mut hw.radio,
+    );
+
+    bsp::Board::wdt_feed();
+
+    let mut boot_hw = boot::BootHardware {
+        lcd: &mut hw.lcd,
+        backlight: &mut hw.backlight,
+        key_scanner: &mut hw.key_scanner,
+        audio: &mut hw.audio,
+        radio: &mut hw.radio,
+        filesystem: hw.filesystem,
+        #[cfg(feature = "usb")]
+        usb: &mut hw.usb,
+    };
+    boot::boot_orchestration(&mut boot_hw)
+}
+
+#[cfg(not(test))]
+#[inline(never)]
+fn finalize_boot_startup(hw: &mut SystemHardware) {
+    apply_active_calibration(&mut hw.radio);
+
+    let startup_app = if master_config_ref().apps.startup_app == 1 {
+        crate::apps::APP_ID_VFO
+    } else {
+        crate::apps::APP_ID_LAUNCHER
+    };
+    hw.orchestrator.set_startup_app(startup_app);
+
+    #[cfg(feature = "uart")]
+    bsp::Board::uart_set_baud(master_config_ref().system.baud_rate());
+
+    #[cfg(feature = "filesystem")]
+    crate::apps::launcher::catalog::get_catalog().scan(hw.filesystem);
+
+    hw.init_startup_app();
+
+    // Re-paint stack watermark after boot provisioning so steady-state introspection is clean
+    kernel::sys::SystemDiagnostics::paint_stack();
+}
+
+#[cfg(not(test))]
+#[entry]
+fn main() -> ! {
+    let mut board = init_core_services_and_board();
     let boot_start_ms = hal::delay::millis();
 
     #[cfg(feature = "filesystem")]
@@ -195,72 +281,8 @@ fn main() -> ! {
     #[cfg(feature = "usb")]
     drivers::usb::register_active_usb_driver(&mut hw.usb as *mut _);
 
-    // 2. Initialize Display & Keypad (screen remains blanked until passcode or splash)
-    hw.lcd.init();
-    bsp::pins::BACKLIGHT.set_low();
-    let canvas = system_canvas();
-    canvas.clear();
-    hw.lcd.blit(canvas);
-    hw.backlight.init();
-    kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
-    if boot::is_bootloader_hold_requested() {
-        boot::enter_dfu_bootloader(&mut hw.lcd);
-    }
+    let adc = run_display_and_boot_pipeline(&mut hw);
+    finalize_boot_startup(&mut hw);
 
-    // Start Independent Watchdog with generous 6000ms timeout after DFU bootloader check
-    hal::wdt::Watchdog::start(6000);
-
-    // 3. Storage & Drivers (Fast mount without heavy provisioning stalls)
-    #[cfg(feature = "filesystem")]
-    boot::mount_or_format(
-        &mut hw.lcd,
-        &mut hw.key_scanner,
-        hw.filesystem,
-        &mut hw.radio,
-    );
-
-    bsp::Board::wdt_feed();
-
-    // 4. Execute Instant Boot Pipeline (Passcode Prompt -> Splash -> Concurrent Hardware Init)
-    let adc = {
-        let mut boot_hw = boot::BootHardware {
-            lcd: &mut hw.lcd,
-            backlight: &mut hw.backlight,
-            key_scanner: &mut hw.key_scanner,
-            audio: &mut hw.audio,
-            radio: &mut hw.radio,
-            filesystem: hw.filesystem,
-            #[cfg(feature = "usb")]
-            usb: &mut hw.usb,
-        };
-        boot::boot_orchestration(&mut boot_hw)
-    };
-
-    let calib_ref = unsafe { (*core::ptr::addr_of!(CALIBRATION)).raw_bytes() };
-    hw.radio.attach_calibration(calib_ref);
-    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
-    power_service
-        .battery_driver
-        .load_calibration_curve(unsafe { (*core::ptr::addr_of!(CALIBRATION)).battery_curve() });
-
-    let startup_app = if master_config_ref().apps.startup_app == 1 {
-        crate::apps::APP_ID_VFO
-    } else {
-        crate::apps::APP_ID_LAUNCHER
-    };
-    hw.orchestrator.set_startup_app(startup_app);
-
-    #[cfg(feature = "uart")]
-    bsp::Board::uart_set_baud(master_config_ref().system.baud_rate());
-
-    #[cfg(feature = "filesystem")]
-    crate::apps::launcher::catalog::get_catalog().scan(hw.filesystem);
-
-    hw.init_startup_app();
-
-    // Re-paint stack watermark after boot provisioning so steady-state introspection is clean
-    kernel::sys::SystemDiagnostics::paint_stack();
-
-    // 7. Transition to System Event Loop
     system::run_system_loop(&mut hw, adc, boot_start_ms);
 }

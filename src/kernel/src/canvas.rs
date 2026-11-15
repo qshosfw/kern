@@ -246,6 +246,7 @@ impl Canvas {
         self.fill_rect(x, y, 1, length, color);
     }
 
+    #[inline(never)]
     pub fn draw_rect(&mut self, x: u8, y: u8, width: u8, height: u8, color: Color) {
         if width == 0 || height == 0 {
             return;
@@ -357,6 +358,7 @@ impl Canvas {
         }
     }
 
+    #[inline(never)]
     pub fn fill_rect(&mut self, x: u8, y: u8, width: u8, height: u8, color: Color) {
         if (x as usize) >= LCD_WIDTH || (y as usize) >= LCD_HEIGHT || width == 0 || height == 0 {
             return;

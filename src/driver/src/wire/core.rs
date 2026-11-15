@@ -17,7 +17,10 @@ impl<S: SerialPort> WireDriver<S> {
             return;
         }
         let payload = &self.rx_buf[HEADER_LEN..covered];
-        let mut resp_buf = [0u8; 20];
+        #[repr(C, align(4))]
+        struct Aligned20([u8; 20]);
+        let mut resp_buf_aligned = Aligned20([0u8; 20]);
+        let resp_buf = &mut resp_buf_aligned.0;
         let mut override_slice: Option<&[u8]> = None;
         let mut do_reset = false;
         let mut do_reboot = false;
@@ -49,19 +52,11 @@ impl<S: SerialPort> WireDriver<S> {
                         resp_buf[1] = max_p[0];
                         resp_buf[2] = max_p[1];
                         resp_buf[3] = 1; // catalogue generation = 1
-                        resp_buf[4] = 0;
-                        resp_buf[5] = 0;
-                        resp_buf[6] = 0;
                         resp_buf[7] = tp[0];
                         resp_buf[8] = tp[1];
                         resp_buf[9] = 1; // UV-K1 (0x0001_0001)
-                        resp_buf[10] = 0;
                         resp_buf[11] = 1;
-                        resp_buf[12] = 0;
-                        resp_buf[13] = 0; // KERN 1.0 (0x0001_0000)
-                        resp_buf[14] = 0;
-                        resp_buf[15] = 1;
-                        resp_buf[16] = 0;
+                        resp_buf[15] = 1; // KERN 1.0 (0x0001_0000)
                         (WireStatus::Ok, 17)
                     }
                 }

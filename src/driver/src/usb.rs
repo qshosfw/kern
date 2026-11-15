@@ -152,34 +152,39 @@ impl UsbDriver {
         py32_hal::rcc::enable_usbd();
 
         unsafe {
-            // 2. Select EP0 and clear device address
+            // 2. Select EP0, clear device address, and engage Soft Connect
             set_active_ep(0);
-            USBD_ADDR_U8.write_volatile(0);
+            self.reset_bus_state();
 
-            // 3. Enable Suspend mode detection and engage Soft Connect (D+ 1.5k pullup) in POWER register
-            let pwr = USBD_POWER_U8.read_volatile();
-            USBD_POWER_U8.write_volatile(
-                (pwr | USB_POWER_SUSPENDENB | USB_POWER_SOFTCONN) & !USB_POWER_HSENAB,
-            );
-
-            // 4. Arm bus lifecycle interrupts: Reset, Resume, Suspend, SOF
+            // 3. Arm bus lifecycle interrupts: Reset, Resume, Suspend, SOF
             USBD_INT_USBE_U8
                 .write_volatile(USB_INTR_RESET | USB_INTR_RESUME | USB_INTR_SUSPEND | USB_INTR_SOF);
 
-            // 5. Arm EP0 interrupts
+            // 4. Arm EP0 interrupts
             USBD_INT_IN1E_U8.write_volatile(1); // EP0
             USBD_INT_OUT1E_U8.write_volatile(0);
 
-            // 6. Clear initial interrupt flags by reading INT_USB
+            // 5. Clear initial interrupt flags by reading INT_USB
             let _ = USBD_INT_USB_U8.read_volatile();
         }
 
+        self.last_sof_ms = 0;
+        self.is_initialized = true;
+    }
+
+    #[inline(never)]
+    fn reset_bus_state(&mut self) {
         self.dev_addr = 0;
         self.pending_addr = 0;
         self.ep0_transfer = None;
         self.configured = false;
-        self.last_sof_ms = 0;
-        self.is_initialized = true;
+        unsafe {
+            USBD_ADDR_U8.write_volatile(0);
+            let pwr = USBD_POWER_U8.read_volatile();
+            USBD_POWER_U8.write_volatile(
+                (pwr | USB_POWER_SUSPENDENB | USB_POWER_SOFTCONN) & !USB_POWER_HSENAB,
+            );
+        }
     }
 
     /// Poll hardware registers non-blockingly to handle bus events, control transfers, and endpoints.
@@ -207,10 +212,7 @@ impl UsbDriver {
         // ── 1. Bus Lifecycle Events ──────────────────────────────────────────
         if (int_usb & USB_INTR_RESET) != 0 {
             self.consecutive_sof = 0;
-            self.dev_addr = 0;
-            self.pending_addr = 0;
-            self.ep0_transfer = None;
-            self.configured = false;
+            self.reset_bus_state();
             // Bus reset is SE0 (both D+ and D- low). Note: do NOT update last_sof_ms here!
             // When a cable is unplugged, D+ drops to 0V causing continuous SE0 (RESET).
             // Updating last_sof_ms on reset would mask the unplug state indefinitely.
@@ -223,13 +225,6 @@ impl UsbDriver {
                 unsafe {
                     USBD_IN_CSR1_U8.write_volatile(INCSR1_FLUSHFIFO);
                 }
-            }
-            unsafe {
-                USBD_ADDR_U8.write_volatile(0);
-                let pwr = USBD_POWER_U8.read_volatile();
-                USBD_POWER_U8.write_volatile(
-                    (pwr | USB_POWER_SUSPENDENB | USB_POWER_SOFTCONN) & !USB_POWER_HSENAB,
-                );
             }
         }
 
@@ -425,7 +420,8 @@ impl UsbDriver {
     #[inline(never)]
     fn ep0_start_string_transfer(&mut self, ascii: &[u8], max_len: u16) {
         let len = ascii.len().min(31);
-        let mut desc = [0u8; 64];
+        let mut desc = core::mem::MaybeUninit::<[u8; 64]>::uninit();
+        let desc = unsafe { &mut *desc.as_mut_ptr() };
         let total_bytes = 2 + len * 2;
         desc[0] = total_bytes as u8;
         desc[1] = DESC_TYPE_STRING;
@@ -443,10 +439,11 @@ impl UsbDriver {
     }
 
     fn ep0_start_telemetry_transfer(&mut self, max_len: u16) {
-        let mut buf = [0u8; 31];
+        let mut uninit = core::mem::MaybeUninit::<[u8; 31]>::uninit();
+        let buf = unsafe { &mut *uninit.as_mut_ptr() };
         let c_volts = ((self.battery_voltage_mv as u32 * 52429) >> 19) as i32;
         let suffix = if self.is_charging { "v [CHG]" } else { "v (" };
-        let s = utils::format::format_int_fixed(c_volts, 2, "Supply: ", suffix, &mut buf);
+        let s = utils::format::format_int_fixed(c_volts, 2, "Supply: ", suffix, buf);
         let mut pos = s.len();
         if !self.is_charging {
             let pct = self.battery_pct.min(100) as i32;
@@ -458,11 +455,12 @@ impl UsbDriver {
 
     fn ep0_start_mac_transfer(&mut self, max_len: u16) {
         let mac = bsp::uid::read_mac_address();
-        let mut buf = [0u8; 22];
+        let mut uninit = core::mem::MaybeUninit::<[u8; 22]>::uninit();
+        let buf = unsafe { &mut *uninit.as_mut_ptr() };
         buf[..5].copy_from_slice(b"MAC: ");
-        let mac_dst: &mut [u8; 17] = (&mut buf[5..22]).try_into().unwrap();
+        let mac_dst = unsafe { &mut *(buf.as_mut_ptr().add(5) as *mut [u8; 17]) };
         let _ = utils::format::format_mac_address(&mac, mac_dst);
-        self.ep0_start_string_transfer(&buf, max_len);
+        self.ep0_start_string_transfer(buf, max_len);
     }
 
     fn handle_get_descriptor(&mut self, w_value: u16, w_length: u16) {

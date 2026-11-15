@@ -13,29 +13,25 @@ pub use types::*;
 
 use crate::services::SystemStorage;
 
-enum KtSink<'a> {
-    Slice(&'a mut [ToneNote; MAX_MELODY_NOTES]),
-    Buffer(&'a mut MelodyBuffer),
-}
-
 #[inline(never)]
 fn read_kt_file(
     storage: &mut SystemStorage,
     path: &str,
     allow_krgr: bool,
-    sink: KtSink<'_>,
+    out: &mut [ToneNote; MAX_MELODY_NOTES],
 ) -> usize {
     if path.is_empty() {
         return 0;
     }
-    let mut raw = [0u8; 140];
-    let Ok(n) = storage.read_file(path, &mut raw) else {
+    let mut raw = core::mem::MaybeUninit::<[u8; 140]>::uninit();
+    let raw_buf = unsafe { &mut *raw.as_mut_ptr() };
+    let Ok(n) = storage.read_file(path, raw_buf) else {
         return 0;
     };
-    parse_kt_bytes(&raw[..n], allow_krgr, sink)
+    parse_kt_bytes(&raw_buf[..n], allow_krgr, out)
 }
 
-fn parse_kt_bytes(raw: &[u8], allow_krgr: bool, mut sink: KtSink<'_>) -> usize {
+fn parse_kt_bytes(raw: &[u8], allow_krgr: bool, out: &mut [ToneNote; MAX_MELODY_NOTES]) -> usize {
     let n = raw.len();
     let (mut pos, count_raw) = if n >= 4 && &raw[0..2] == b"KT" && raw[2] == 1 {
         let count = if raw[3] > 0 {
@@ -54,13 +50,7 @@ fn parse_kt_bytes(raw: &[u8], allow_krgr: bool, mut sink: KtSink<'_>) -> usize {
     while pos + 4 <= n && written < count {
         let freq = u16::from_be_bytes([raw[pos], raw[pos + 1]]);
         let dur = u16::from_be_bytes([raw[pos + 2], raw[pos + 3]]);
-        let note = ToneNote::new(freq, dur);
-        match &mut sink {
-            KtSink::Slice(out) => out[written] = note,
-            KtSink::Buffer(buf) => {
-                let _ = buf.push(note);
-            }
-        }
+        out[written] = ToneNote::new(freq, dur);
         written += 1;
         pos += 4;
     }
@@ -84,7 +74,7 @@ pub fn load_roger_notes(
     path: &str,
     out: &mut [ToneNote; MAX_MELODY_NOTES],
 ) -> usize {
-    let n = read_kt_file(storage, path, true, KtSink::Slice(out));
+    let n = read_kt_file(storage, path, true, out);
     if n > 0 {
         return n;
     }
@@ -99,13 +89,16 @@ pub fn load_jingle_melody(
     path: &str,
 ) -> MelodyBuffer {
     let mut buf = MelodyBuffer::new();
-    if boot_jingle_mode == 0 {
-        return buf;
-    }
-    let n = read_kt_file(storage, path, false, KtSink::Buffer(&mut buf));
-    if n == 0 {
-        for note in MelodyEngine::boot_jingle_notes(BootJingleType::from_u8(boot_jingle_mode)) {
-            let _ = buf.push(*note);
+    if boot_jingle_mode != 0 && buf.resize(MAX_MELODY_NOTES, ToneNote::new(0, 0)).is_ok() {
+        let tmp = unsafe { &mut *(buf.as_mut_ptr() as *mut [ToneNote; MAX_MELODY_NOTES]) };
+        let n = read_kt_file(storage, path, false, tmp);
+        if n > 0 {
+            buf.truncate(n);
+        } else {
+            buf.clear();
+            let _ = buf.extend_from_slice(MelodyEngine::boot_jingle_notes(
+                BootJingleType::from_u8(boot_jingle_mode),
+            ));
         }
     }
     buf
@@ -278,20 +271,16 @@ mod tests {
         let explicit = [
             b'K', b'T', 1, 2, 0x03, 0xE8, 0x00, 0x32, 0x07, 0xD0, 0x00, 0x64,
         ];
-        let mut buf = MelodyBuffer::new();
-        assert_eq!(
-            parse_kt_bytes(&explicit, false, KtSink::Buffer(&mut buf)),
-            2
-        );
-        assert_eq!(buf[0], ToneNote::new(1000, 50));
-        assert_eq!(buf[1], ToneNote::new(2000, 100));
+        let mut out = [ToneNote::new(0, 0); MAX_MELODY_NOTES];
+        assert_eq!(parse_kt_bytes(&explicit, false, &mut out), 2);
+        assert_eq!(out[0], ToneNote::new(1000, 50));
+        assert_eq!(out[1], ToneNote::new(2000, 100));
 
         // Dynamic count = 0 derives note count from remaining 4-byte pairs
         let dynamic = [
             b'K', b'T', 1, 0, 0x01, 0xB8, 0x00, 0x28, 0x02, 0x58, 0x00, 0x50,
         ];
-        let mut out = [ToneNote::new(0, 0); MAX_MELODY_NOTES];
-        assert_eq!(parse_kt_bytes(&dynamic, false, KtSink::Slice(&mut out)), 2);
+        assert_eq!(parse_kt_bytes(&dynamic, false, &mut out), 2);
         assert_eq!(out[0], ToneNote::new(440, 40));
         assert_eq!(out[1], ToneNote::new(600, 80));
     }

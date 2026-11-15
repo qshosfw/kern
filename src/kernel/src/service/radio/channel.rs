@@ -95,6 +95,7 @@ impl StepSetting {
         (Self::STEP_HZ_X10[self as usize] as u32) * 10
     }
 
+    #[inline(never)]
     pub const fn from_hz_x10(val: u16) -> Self {
         let mut i = 0;
         while i < 10 {
@@ -173,9 +174,8 @@ impl ChannelConfig {
         }
     }
 
-    /// Calculate effective TX frequency taking into account repeater shift and reverse mode
-    pub fn effective_tx_freq(&self) -> Frequency<Hertz> {
-        if self.reverse {
+    fn shifted_freq(&self, apply: bool) -> Frequency<Hertz> {
+        if !apply {
             return self.rx_freq;
         }
         match self.tx_shift {
@@ -189,20 +189,14 @@ impl ChannelConfig {
         }
     }
 
+    /// Calculate effective TX frequency taking into account repeater shift and reverse mode
+    pub fn effective_tx_freq(&self) -> Frequency<Hertz> {
+        self.shifted_freq(!self.reverse)
+    }
+
     /// Calculate effective RX frequency taking into account reverse mode
     pub fn effective_rx_freq(&self) -> Frequency<Hertz> {
-        if !self.reverse {
-            return self.rx_freq;
-        }
-        match self.tx_shift {
-            RepeaterShift::Simplex => self.rx_freq,
-            RepeaterShift::Positive(offset) => {
-                Frequency::new(self.rx_freq.raw().saturating_add(offset.raw()))
-            }
-            RepeaterShift::Negative(offset) => {
-                Frequency::new(self.rx_freq.raw().saturating_sub(offset.raw()))
-            }
-        }
+        self.shifted_freq(self.reverse)
     }
 }
 
