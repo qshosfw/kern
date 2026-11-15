@@ -130,6 +130,14 @@ impl TransitionProgress {
         }
     }
 
+    pub const fn closed(step: u8) -> Self {
+        Self {
+            progress: 0,
+            target: 0,
+            step: if step == 0 { 2 } else { step },
+        }
+    }
+
     #[inline(always)]
     pub fn progress(&self) -> u8 {
         self.progress
@@ -138,6 +146,32 @@ impl TransitionProgress {
     #[inline(always)]
     pub fn is_complete(&self) -> bool {
         self.progress == self.target
+    }
+
+    #[inline(always)]
+    pub fn is_opening(&self) -> bool {
+        self.target == 16
+    }
+
+    #[inline(always)]
+    pub fn open(&mut self) {
+        self.target = 16;
+    }
+
+    #[inline(always)]
+    pub fn close(&mut self) {
+        self.target = 0;
+    }
+
+    /// Quadratic ease-out vertical slide offset from `height` down to `0`.
+    #[inline]
+    pub fn slide_offset(&self, height: u8) -> i8 {
+        if self.progress >= 16 {
+            0
+        } else {
+            let rem = (16 - self.progress) as u32;
+            (((rem * rem) * height as u32) >> 8) as i8
+        }
     }
 
     pub fn reset_in(&mut self) {
@@ -299,6 +333,71 @@ impl SlideUpAnim {
     }
 }
 
+/// Shared hold-to-confirm progress tracker with springy 3x rewind on early release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct HoldProgress {
+    pub active: bool,
+    pub elapsed_ms: u16,
+    pub required_ms: u16,
+}
+
+impl HoldProgress {
+    pub const fn new() -> Self {
+        Self {
+            active: false,
+            elapsed_ms: 0,
+            required_ms: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_animating(&self) -> bool {
+        self.active
+            || (self.required_ms > 0 && self.elapsed_ms > 0 && self.elapsed_ms < self.required_ms)
+    }
+
+    #[inline(never)]
+    pub fn percent(&self) -> u8 {
+        if self.required_ms == 0 {
+            return 0;
+        }
+        (((self.elapsed_ms as u32) * 100) / (self.required_ms as u32)).min(100) as u8
+    }
+
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.active = false;
+        self.elapsed_ms = 0;
+    }
+
+    /// Advance forward while `active` (returns `true` once on reaching `required_ms`),
+    /// or springily rewind at 3x speed back to 0 when released early.
+    #[inline(never)]
+    pub fn advance(&mut self, dt_ms: u16) -> bool {
+        if self.required_ms == 0 {
+            return false;
+        }
+        if self.active {
+            self.elapsed_ms = self.elapsed_ms.saturating_add(dt_ms);
+            if self.elapsed_ms >= self.required_ms {
+                self.elapsed_ms = self.required_ms;
+                self.active = false;
+                return true;
+            }
+        } else if self.elapsed_ms > 0 {
+            self.elapsed_ms = self.elapsed_ms.saturating_sub(dt_ms.saturating_mul(3));
+        }
+        false
+    }
+}
+
+impl Default for HoldProgress {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +487,47 @@ mod tests {
         slide.jump_close();
         assert_eq!(slide.offset(), 20);
         assert!(slide.is_closed());
+    }
+
+    #[test]
+    fn test_hold_progress_advance_and_spring_rewind() {
+        let mut hold = HoldProgress::new();
+        hold.required_ms = 300;
+        assert!(!hold.is_animating());
+        assert_eq!(hold.percent(), 0);
+
+        hold.active = true;
+        assert!(!hold.advance(150));
+        assert_eq!(hold.percent(), 50);
+        assert!(hold.is_animating());
+
+        // Early release springs back 3x faster (50ms -> -150ms => 0)
+        hold.active = false;
+        assert!(!hold.advance(50));
+        assert_eq!(hold.elapsed_ms, 0);
+        assert!(!hold.is_animating());
+
+        // Sustained hold reaches 100% and returns true once
+        hold.active = true;
+        assert!(!hold.advance(200));
+        assert!(hold.advance(100));
+        assert_eq!(hold.percent(), 100);
+        assert!(!hold.active);
+    }
+
+    #[test]
+    fn test_transition_progress_ease_slide_offset() {
+        let mut trans = TransitionProgress::closed(4);
+        assert_eq!(trans.slide_offset(40), 40);
+        trans.open();
+        assert!(trans.tick()); // 4
+        assert_eq!(trans.slide_offset(40), 22);
+        assert!(trans.tick()); // 8
+        assert_eq!(trans.slide_offset(40), 10);
+        assert!(trans.tick()); // 12
+        assert_eq!(trans.slide_offset(40), 2);
+        assert!(trans.tick()); // 16
+        assert_eq!(trans.slide_offset(40), 0);
+        assert!(trans.is_complete());
     }
 }

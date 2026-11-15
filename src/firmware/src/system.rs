@@ -131,14 +131,11 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     hw.wire.reset_collector();
 
-    // Exit LCD sleep and restore clocks, UART baud, audio, and display hardware from master config
-    hw.lcd.exit_sleep();
+    // Restore clocks, UART baud, audio, and display hardware, render clean UI, then exit LCD sleep
     crate::master_config().hw_dirty = 0x1F;
     hw.apply_dirty_configs();
-
-    let canvas = crate::system_canvas();
-    canvas.mark_all_dirty();
-    hw.lcd.blit(canvas);
+    hw.render_frame();
+    hw.lcd.exit_sleep();
 
     // Wake RF modem and re-apply listening VFO channel to RF hardware
     hw.radio.wake();
@@ -526,7 +523,6 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
         // Check if deep sleep mode was requested (e.g. via long-press Exit).
         if hw.orchestrator.take_sleep_requested() {
-            hw.render_frame();
             handle_deep_sleep_mode(hw);
             dirty_render = true;
         }

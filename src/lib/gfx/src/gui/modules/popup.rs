@@ -12,10 +12,8 @@ use crate::widgets;
 
 #[repr(C)]
 pub struct PopupModel {
-    pub hold_active: bool,
+    pub hold: crate::gui::animation::HoldProgress,
     pub anim: crate::gui::animation::TransitionProgress,
-    pub hold_ms_required: u16,
-    pub hold_elapsed_ms: u16,
     pub scroll_offset: usize,
     pub repeater: crate::gui::repeater::KeyRepeater,
     pub confirm_label: Option<&'static str>,
@@ -27,13 +25,11 @@ pub struct PopupModel {
 impl PopupModel {
     pub const fn new() -> Self {
         Self {
+            hold: crate::gui::animation::HoldProgress::new(),
             anim: crate::gui::animation::TransitionProgress::new(4),
             scroll_offset: 0,
             confirm_label: None,
             cancel_label: None,
-            hold_ms_required: 0,
-            hold_elapsed_ms: 0,
-            hold_active: false,
             repeater: crate::gui::repeater::KeyRepeater::new(8, 2),
             custom_title: String::new(),
             custom_msg: String::new(),
@@ -48,34 +44,17 @@ impl PopupModel {
 
     #[inline(always)]
     pub fn is_hold_animating(&self) -> bool {
-        self.hold_active
-            || (self.hold_ms_required > 0
-                && self.hold_elapsed_ms > 0
-                && self.hold_elapsed_ms < self.hold_ms_required)
+        self.hold.is_animating()
     }
 
+    #[inline(always)]
     pub fn hold_percent(&self) -> u8 {
-        if self.hold_ms_required == 0 {
-            return 0;
-        }
-        (((self.hold_elapsed_ms as u32) * 100) / (self.hold_ms_required as u32)).min(100) as u8
+        self.hold.percent()
     }
 
+    #[inline(always)]
     pub fn advance_hold(&mut self, dt_ms: u16) -> bool {
-        if self.hold_ms_required == 0 {
-            return false;
-        }
-        if self.hold_active {
-            self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_add(dt_ms);
-            if self.hold_elapsed_ms >= self.hold_ms_required {
-                self.hold_elapsed_ms = self.hold_ms_required;
-                self.hold_active = false;
-                return true;
-            }
-        } else if self.hold_elapsed_ms > 0 {
-            self.hold_elapsed_ms = self.hold_elapsed_ms.saturating_sub(dt_ms.saturating_mul(3));
-        }
-        false
+        self.hold.advance(dt_ms)
     }
 
     #[inline(always)]
@@ -100,7 +79,7 @@ impl Default for PopupView {
 
 #[inline(always)]
 fn popup_visible_lines(model: &PopupModel) -> usize {
-    if model.hold_ms_required > 0 {
+    if model.hold.required_ms > 0 {
         2
     } else if model.confirm_label.is_some() || model.cancel_label.is_some() {
         3
@@ -150,15 +129,11 @@ impl View<PopupModel> for PopupView {
 
         // Standard bottom sheet occupies Y=18 to Y=63 (46px high)
         let sheet_h = 46u8;
-        let y_offset = if anim_p < 16 {
-            ((16 - anim_p) as i8) * 3
-        } else {
-            0
-        };
+        let y_offset = model.anim.slide_offset(sheet_h);
         let sheet_y = 18i16 + y_offset as i16;
 
         let badges = has_badges.then(|| {
-            let confirm = if model.hold_active {
+            let confirm = if model.hold.active {
                 "Holding..."
             } else {
                 model.confirm_label.unwrap_or("")
@@ -187,7 +162,7 @@ impl View<PopupModel> for PopupView {
         }
 
         // Hold-to-confirm balanced 6px sub-pixel progress bar
-        if model.hold_ms_required > 0 && anim_p >= 8 {
+        if model.hold.required_ms > 0 && anim_p >= 8 {
             widgets::draw_progress_bar(canvas, 4, sheet_y + 25, 120, 6, model.hold_percent(), true);
         }
 
@@ -220,8 +195,8 @@ impl View<PopupModel> for PopupView {
 
         if let Event::Key { code, state } = event {
             model.repeater.handle_key(*code, *state);
-            if matches!(code, KeyCode::Menu | KeyCode::Key5) && model.hold_ms_required > 0 {
-                model.hold_active = *state != KeyState::Released;
+            if matches!(code, KeyCode::Menu | KeyCode::Key5) && model.hold.required_ms > 0 {
+                model.hold.active = *state != KeyState::Released;
                 return true;
             }
             if *state == KeyState::Pressed {
@@ -244,8 +219,8 @@ mod tests {
         let mut model = PopupModel::new().with_badges("Hold", "Cancel");
         let _ = model.custom_title.push_str("DFU MODE");
         let _ = model.custom_msg.push_str("Reboot to bootloader?");
-        model.hold_ms_required = 1000;
-        model.hold_elapsed_ms = 500;
+        model.hold.required_ms = 1000;
+        model.hold.elapsed_ms = 500;
         model.anim.jump_complete();
 
         let mut canvas = Canvas::new();

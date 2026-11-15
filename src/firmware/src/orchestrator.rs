@@ -8,6 +8,25 @@ use crate::services::radio::RfSquelch;
 pub mod compositor;
 pub mod keypad_lock;
 
+/// Shared monotonic tick delta helper for compositor and lock/sleep hold timers.
+#[inline(never)]
+pub(super) fn tick_dt_ms(last_ms: &mut u32, max_dt: u16) -> u16 {
+    #[cfg(target_arch = "arm")]
+    let (now, dt) = {
+        let now = py32_hal::delay::millis();
+        let dt = if *last_ms == 0 {
+            20
+        } else {
+            now.wrapping_sub(*last_ms).min(max_dt as u32) as u16
+        };
+        (now, dt)
+    };
+    #[cfg(not(target_arch = "arm"))]
+    let (now, dt) = (last_ms.wrapping_add(50), 50u16.min(max_dt));
+    *last_ms = now;
+    dt
+}
+
 use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
 use compositor::OsCompositor;
 use gfx::Canvas;
@@ -288,10 +307,9 @@ impl Orchestrator {
     }
 
     pub fn take_sleep_requested(&mut self) -> bool {
-        let is_root = self.active_app_id == APP_ID_LAUNCHER;
         let req = self.lock_mgr.sleep_requested;
         self.lock_mgr.sleep_requested = false;
-        req && is_root
+        req
     }
 
     pub fn reset_hold_tracking(&mut self) {
@@ -435,6 +453,7 @@ impl Orchestrator {
         if self.lock_mgr.force_close_requested {
             self.lock_mgr.force_close_requested = false;
             self.force_close_active_app(ctx);
+            self.lock_mgr.reset_hold_tracking();
             return FilterFlow::Stop(true);
         }
 
@@ -969,6 +988,7 @@ impl Orchestrator {
             self.active_app_id = app_id;
             self.owned_key = None;
             self.lock_mgr.reset_input_tracking();
+            self.lock_mgr.reset_hold_tracking();
             sink_modal_keys();
 
             // Resume app if hibernated in swap slot

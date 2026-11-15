@@ -7,7 +7,7 @@ pub mod scene;
 pub mod view;
 
 pub use animation::{
-    KineticScroller, ListScrollMode, MarqueeScroller, SlideUpAnim, TransitionProgress,
+    HoldProgress, KineticScroller, ListScrollMode, MarqueeScroller, SlideUpAnim, TransitionProgress,
 };
 pub use repeater::KeyRepeater;
 pub use scene::{Scene, SceneId};

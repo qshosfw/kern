@@ -120,7 +120,7 @@ impl ModalCompositor {
         self.show_confirm(tag, title, message, confirm, cancel);
         crate::orchestrator::clear_sunk_keys();
         if let ActiveModal::Popup(model) = &mut self.modal {
-            model.hold_ms_required = hold_ms;
+            model.hold.required_ms = hold_ms;
         }
     }
 
@@ -202,19 +202,7 @@ impl ModalCompositor {
             ActiveModal::Popup(model) => {
                 if self.popup_view.on_event(model, event) {
                     if matches!(event, Event::Tick) && model.is_hold_animating() {
-                        #[cfg(target_arch = "arm")]
-                        let (now, dt) = {
-                            let now = py32_hal::delay::millis();
-                            let dt = if self.last_hold_ms == 0 {
-                                20
-                            } else {
-                                now.wrapping_sub(self.last_hold_ms).min(250) as u16
-                            };
-                            (now, dt)
-                        };
-                        #[cfg(not(target_arch = "arm"))]
-                        let (now, dt) = (self.last_hold_ms.wrapping_add(50), 50u16);
-                        self.last_hold_ms = now;
+                        let dt = super::tick_dt_ms(&mut self.last_hold_ms, 250);
                         if model.advance_hold(dt) {
                             return Some(ModalResult::Confirmed(tag));
                         }
