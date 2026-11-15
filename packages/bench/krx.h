@@ -289,7 +289,28 @@ typedef struct {
     u8 (*fm_get_rssi)(void);
 } CapFmVTable;
 
-// 12. CapServiceVTable (26 APIs)
+// sys_query() selectors
+#define KRX_SYS_QUERY_UID16           0
+#define KRX_SYS_QUERY_FLASH_SIZE_KB   1
+#define KRX_SYS_QUERY_FACTORY_CERT    2
+#define KRX_SYS_QUERY_BOOTLOADER_ROM  3
+#define KRX_SYS_QUERY_FW_META         4
+#define KRX_SYS_QUERY_MAC             5
+#define KRX_SYS_QUERY_SERIAL64        6
+#define KRX_SYS_QUERY_SERIAL_STR      7
+
+typedef struct __attribute__((packed)) {
+    u8  ident[4]; // "KERN"
+    u8  version_major;
+    u8  version_minor;
+    u8  version_patch;
+    u8  target_id;
+    u32 build_epoch;
+    u8  git_hash[8];
+    u32 flags;
+} KrxFirmwareMeta;
+
+// 12. CapServiceVTable (27 APIs)
 typedef struct {
     u8 (*svc_register)(u16 interface_id, u16 abi_version, u32 vtable_ptr);
     u32 (*svc_resolve)(u16 interface_id, u16 min_abi);
@@ -317,6 +338,7 @@ typedef struct {
     u8 (*ipc_reply)(const void* req, const u8* payload, u8 len);
     u8 (*sys_find_proc)(const u8* name, u8 len);
     u8 (*sys_self_pid)(void);
+    u16 (*sys_query)(u8 kind, u32 arg, u8* out_buf, u16 max_len);
 } CapServiceVTable;
 
 // 13. CapHwBusVTable (7 APIs)

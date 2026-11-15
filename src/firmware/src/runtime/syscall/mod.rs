@@ -315,6 +315,108 @@ mod tests {
         let send_res = unsafe { api_ipc_send(b"Radio".as_ptr(), 5, b"CMD_SET_FREQ".as_ptr(), 12) };
         assert_eq!(send_res, 0);
 
+        // 4. Raw sys_query descriptors & FactoryCalib gating
+        let mut fw_meta = [0u8; core::mem::size_of::<crate::build_info::FirmwareMeta>()];
+        assert_eq!(
+            unsafe {
+                super::service::api_sys_query(
+                    kernel::proc::abi::SYS_QUERY_FW_META,
+                    0,
+                    fw_meta.as_mut_ptr(),
+                    fw_meta.len() as u16,
+                )
+            },
+            fw_meta.len() as u16
+        );
+        assert_eq!(&fw_meta[..4], b"KERN");
+
+        let mut kb = [0u8; 2];
+        assert_eq!(
+            unsafe {
+                super::service::api_sys_query(
+                    kernel::proc::abi::SYS_QUERY_FLASH_SIZE_KB,
+                    0,
+                    kb.as_mut_ptr(),
+                    2,
+                )
+            },
+            2
+        );
+        assert_eq!(u16::from_le_bytes(kb), 128);
+
+        let mut mac = [0u8; 6];
+        assert_eq!(
+            unsafe {
+                super::service::api_sys_query(
+                    kernel::proc::abi::SYS_QUERY_MAC,
+                    0,
+                    mac.as_mut_ptr(),
+                    6,
+                )
+            },
+            6
+        );
+        assert_eq!(mac, bsp::uid::read_mac_address());
+
+        let mut ser64 = [0u8; 8];
+        assert_eq!(
+            unsafe {
+                super::service::api_sys_query(
+                    kernel::proc::abi::SYS_QUERY_SERIAL64,
+                    0,
+                    ser64.as_mut_ptr(),
+                    8,
+                )
+            },
+            8
+        );
+        assert_eq!(u64::from_le_bytes(ser64), bsp::uid::get_hardware_serial64());
+
+        let mut crock = [0u8; 14];
+        assert_eq!(
+            unsafe {
+                super::service::api_sys_query(
+                    kernel::proc::abi::SYS_QUERY_SERIAL_STR,
+                    0,
+                    crock.as_mut_ptr(),
+                    14,
+                )
+            },
+            14
+        );
+        assert_eq!(crock, bsp::uid::get_crockford_serial()[..14]);
+
+        let slot = crate::runtime::native_runner::slot_mut();
+        slot.is_loaded = true;
+        slot.caps = kernel::caps::CapabilitySet::empty();
+        let mut cert = [0u8; 104];
+        assert_eq!(
+            unsafe {
+                super::service::api_sys_query(
+                    kernel::proc::abi::SYS_QUERY_FACTORY_CERT,
+                    0,
+                    cert.as_mut_ptr(),
+                    104,
+                )
+            },
+            0
+        );
+        slot.caps = kernel::caps::CapabilitySet::empty().with(kernel::caps::Cap::FactoryCalib);
+        assert_eq!(
+            unsafe {
+                super::service::api_sys_query(
+                    kernel::proc::abi::SYS_QUERY_FACTORY_CERT,
+                    0,
+                    cert.as_mut_ptr(),
+                    104,
+                )
+            },
+            104
+        );
+        assert_eq!(&cert[80..84], b"1-sq");
+        slot.is_loaded = false;
+        slot.caps = kernel::caps::CapabilitySet::empty();
+
         // Clear IPC channel on test completion
         ipc_channel_mut().purge_pid(radio_pid);
         ipc_channel_mut().purge_pid(1);

@@ -446,7 +446,8 @@ impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {
             .with(kernel::caps::Cap::UsbComm)
             .with(kernel::caps::Cap::HardwareCrc)
             .with(kernel::caps::Cap::RealTimeClock)
-            .with(kernel::caps::Cap::PowerManage);
+            .with(kernel::caps::Cap::PowerManage)
+            .with(kernel::caps::Cap::FactoryCalib);
 
         #[allow(unused_mut)]
         let mut c = BASE_CAPS;

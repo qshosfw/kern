@@ -5,7 +5,11 @@
 //! and hardware-accelerated math routines (`MathApi`).
 
 use kernel::ipc::{IpcChannel, KrxIpcMessage, ipc_msg_type, ipc_target};
-use kernel::proc::abi::{KRX_ABI_VERSION_3_0, KrxProcInfo, MathApi, ServiceApi};
+use kernel::proc::abi::{
+    KRX_ABI_VERSION_3_0, KrxProcInfo, MathApi, SYS_QUERY_BOOTLOADER_ROM, SYS_QUERY_FACTORY_CERT,
+    SYS_QUERY_FLASH_SIZE_KB, SYS_QUERY_FW_META, SYS_QUERY_MAC, SYS_QUERY_SERIAL_STR,
+    SYS_QUERY_SERIAL64, SYS_QUERY_UID16, ServiceApi,
+};
 use kernel::proc::primitives::*;
 pub use kernel::proc::service_registry::ServiceRegistry;
 
@@ -394,6 +398,85 @@ pub unsafe extern "C" fn api_math_isqrt(val: u32) -> u32 {
     kernel::proc::abi::isqrt(val)
 }
 
+#[inline(always)]
+fn caller_has_cap(cap: kernel::caps::Cap) -> bool {
+    let slot = super::super::native_runner::slot_ref();
+    !slot.is_loaded || slot.caps.contains(cap)
+}
+
+#[inline(never)]
+fn copy_sys_slice(src: &[u8], out_buf: *mut u8, max_len: u16) -> u16 {
+    let n = src.len().min(max_len as usize);
+    if n > 0 {
+        unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), out_buf, n) };
+    }
+    n as u16
+}
+
+/// Expose raw hardware, bootloader ROM, factory cert, and build metadata descriptors to KRX modules.
+pub unsafe extern "C" fn api_sys_query(kind: u8, arg: u32, out_buf: *mut u8, max_len: u16) -> u16 {
+    if out_buf.is_null() || max_len == 0 {
+        return 0;
+    }
+    match kind {
+        SYS_QUERY_UID16 => {
+            let uid = py32_hal::uid::SystemInfo::read_uid_16();
+            copy_sys_slice(&uid, out_buf, max_len)
+        }
+        SYS_QUERY_FLASH_SIZE_KB => {
+            let kb = py32_hal::uid::SystemInfo::flash_size_kb().to_le_bytes();
+            copy_sys_slice(&kb, out_buf, max_len)
+        }
+        SYS_QUERY_FACTORY_CERT => {
+            if !caller_has_cap(kernel::caps::Cap::FactoryCalib) {
+                return 0;
+            }
+            match py32_hal::uid::SystemInfo::factory_cert_slice() {
+                Some(cert) => copy_sys_slice(cert, out_buf, max_len),
+                None => 0,
+            }
+        }
+        SYS_QUERY_BOOTLOADER_ROM => {
+            if !caller_has_cap(kernel::caps::Cap::FactoryCalib) {
+                return 0;
+            }
+            let off = arg as usize;
+            #[cfg(all(not(test), target_arch = "arm"))]
+            let rom: &[u8] =
+                unsafe { core::slice::from_raw_parts(0x0800_1F00 as *const u8, 0x0800) };
+            #[cfg(not(all(not(test), target_arch = "arm")))]
+            let rom: &[u8] = b"7.02.02\0K1 CPS\0";
+            if off >= rom.len() {
+                return 0;
+            }
+            copy_sys_slice(&rom[off..], out_buf, max_len)
+        }
+        SYS_QUERY_FW_META => {
+            let meta = unsafe {
+                core::slice::from_raw_parts(
+                    (&crate::build_info::FW_METADATA as *const crate::build_info::FirmwareMeta)
+                        .cast::<u8>(),
+                    core::mem::size_of::<crate::build_info::FirmwareMeta>(),
+                )
+            };
+            copy_sys_slice(meta, out_buf, max_len)
+        }
+        SYS_QUERY_MAC => {
+            let mac = bsp::uid::read_mac_address();
+            copy_sys_slice(&mac, out_buf, max_len)
+        }
+        SYS_QUERY_SERIAL64 => {
+            let ser = bsp::uid::get_hardware_serial64().to_le_bytes();
+            copy_sys_slice(&ser, out_buf, max_len)
+        }
+        SYS_QUERY_SERIAL_STR => {
+            let crock = bsp::uid::get_crockford_serial();
+            copy_sys_slice(&crock[..14], out_buf, max_len)
+        }
+        _ => 0,
+    }
+}
+
 pub static SERVICE_VTABLE: ServiceApi = ServiceApi {
     svc_register: api_svc_register,
     svc_resolve: api_svc_resolve,
@@ -421,6 +504,7 @@ pub static SERVICE_VTABLE: ServiceApi = ServiceApi {
     ipc_reply: api_ipc_reply,
     sys_find_proc: api_sys_find_proc,
     sys_self_pid: api_sys_self_pid,
+    sys_query: api_sys_query,
 };
 
 pub static MATH_VTABLE: MathApi = MathApi {

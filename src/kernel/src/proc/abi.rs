@@ -567,6 +567,17 @@ pub struct FmApi {
     pub fm_get_rssi: unsafe extern "C" fn() -> u8,
 }
 
+/// System query selectors for `ServiceApi::sys_query`.
+/// Expose raw hardware/ROM/build descriptors so system modules handle parsing/formatting directly.
+pub const SYS_QUERY_UID16: u8 = 0;
+pub const SYS_QUERY_FLASH_SIZE_KB: u8 = 1;
+pub const SYS_QUERY_FACTORY_CERT: u8 = 2;
+pub const SYS_QUERY_BOOTLOADER_ROM: u8 = 3;
+pub const SYS_QUERY_FW_META: u8 = 4;
+pub const SYS_QUERY_MAC: u8 = 5;
+pub const SYS_QUERY_SERIAL64: u8 = 6;
+pub const SYS_QUERY_SERIAL_STR: u8 = 7;
+
 /// 12. `ServiceApi` Table (`interface_id = 0x000C`)
 #[repr(C)]
 pub struct ServiceApi {
@@ -605,6 +616,7 @@ pub struct ServiceApi {
         unsafe extern "C" fn(req: *const KrxIpcMessage, payload: *const u8, len: u8) -> u8,
     pub sys_find_proc: unsafe extern "C" fn(name: *const u8, len: u8) -> u8,
     pub sys_self_pid: unsafe extern "C" fn() -> u8,
+    pub sys_query: unsafe extern "C" fn(kind: u8, arg: u32, out_buf: *mut u8, max_len: u16) -> u16,
 }
 
 /// 13. `HwBusApi` Table (`interface_id = 0x000D`)
@@ -1509,6 +1521,10 @@ pub static STUB_FM_VTABLE: FmApi = FmApi {
     fm_get_rssi: noop_fm_get_rssi,
 };
 
+unsafe extern "C" fn noop_sys_query(_kind: u8, _arg: u32, _out_buf: *mut u8, _max_len: u16) -> u16 {
+    0
+}
+
 pub static STUB_SERVICE_VTABLE: ServiceApi = ServiceApi {
     svc_register: noop_svc_register,
     svc_resolve: noop_svc_resolve,
@@ -1536,6 +1552,7 @@ pub static STUB_SERVICE_VTABLE: ServiceApi = ServiceApi {
     ipc_reply: noop_ipc_reply,
     sys_find_proc: noop_sys_find_proc,
     sys_self_pid: noop_sys_self_pid,
+    sys_query: noop_sys_query,
 };
 
 pub static STUB_HW_BUS_VTABLE: HwBusApi = HwBusApi {
