@@ -78,17 +78,17 @@ pub struct SystemHardware<'a> {
     pub backlight: BacklightController,
     pub audio: AudioAmplifier,
     pub filesystem: &'a mut SystemStorage<'a>,
-    pub lcd: St7565<'a>,
-    #[cfg(feature = "usb")]
-    pub usb: drivers::usb::UsbDriver,
     #[cfg(feature = "uart")]
     pub uart: drivers::uart::HardwareUart,
-    pub orchestrator: crate::orchestrator::Orchestrator,
     pub key_scanner: KeypadScanner,
-    pub radio: Bk4829<'a, drivers::bk4829::Disabled>,
     pub ipc_queue: kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
+    #[cfg(feature = "usb")]
+    pub usb: drivers::usb::UsbDriver,
+    pub orchestrator: crate::orchestrator::Orchestrator,
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     pub wire: drivers::wire::WireDriver<SystemSerialPort>,
+    pub radio: Bk4829<'a, drivers::bk4829::Disabled>,
+    pub lcd: St7565<'a>,
 }
 
 pub fn apply_audio_hardware(
