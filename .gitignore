@@ -5,6 +5,7 @@
 !packages/bench/bench.bin
 **/*.bkp
 __pycache__/
+/packages/dfu/build/
 
 # Local reference & working directories (not tracked in public repository)
 /inspo/
