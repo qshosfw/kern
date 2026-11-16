@@ -6,17 +6,17 @@ A relocatable **P0 Structured Paged (`FLAG_SYSTEM_ACTION`)** KRX system module t
 
 ## Screenshots
 
-| Confirmation Modal (`Settings → System → DFU Update`) | Standby (`Plug in cable`) |
+| Services List (`Settings → Apps → Services`) | Hold-Confirm Bottom Sheet (`Settings → System`) |
 | :---: | :---: |
-| ![Settings DFU Confirm](screenshots/settings_confirm.png) | ![DFU Standby](screenshots/dfu_standby.png) |
+| ![Settings Services List](screenshots/settings_services.png) | ![Settings DFU Confirm](screenshots/settings_confirm.png) |
 
-| USB Enumerated (`Ready to flash`) | Active Flash (`Flashing page 18/64`) |
+| Standby (`Plug in cable`) | USB Enumerated (`Ready to flash`) |
 | :---: | :---: |
-| ![DFU USB Ready](screenshots/dfu_usb_ready.png) | ![DFU Flashing](screenshots/dfu_flashing.png) |
+| ![DFU Standby](screenshots/dfu_standby.png) | ![DFU USB Ready](screenshots/dfu_usb_ready.png) |
 
-| Flash Complete (`100%` / elapsed seconds) |
-| :---: |
-| ![DFU Complete](screenshots/dfu_complete.png) |
+| Active Flash (`Flashing page 18/64`) | Flash Complete (`100%` / elapsed seconds) |
+| :---: | :---: |
+| ![DFU Flashing](screenshots/dfu_flashing.png) | ![DFU Complete](screenshots/dfu_complete.png) |
 
 ---
 
@@ -24,7 +24,7 @@ A relocatable **P0 Structured Paged (`FLAG_SYSTEM_ACTION`)** KRX system module t
 
 - **Dual Entry Paths**:
   - **Cold Boot Chord**: Hold `PTT + Side Key 2` at power-on (`try_launch_boot_module("/apps/dfu.mod")`).
-  - **In-OS Settings Action**: Auto-discovered under `Settings → System → DFU Update` via `FLAG_SYSTEM_ACTION` with a **Hold MENU (1 s)** safety confirmation modal (`leaf2_modal.c`), config flush, and clean reboot into DFU.
+  - **In-OS Settings Action & Service Icon**: Auto-discovered under `Settings → System → DFU Update` via `FLAG_SYSTEM_ACTION`, and listed in `Settings → Apps → Services` with an 8×8 upward upload-arrow icon (`--icon 49`, `ICON_UPLOAD`). Pressing `DFU Update` opens the bottom-sheet **Hold MENU (1 s)** safety confirmation (`leaf2_modal.c`), flushes config, and reboots into DFU.
 - **Zero-Allocation Split Leaf Overlay Architecture (P0)**:
   - **Resident Root (`src/dfu.c`, 4,708 B)**: KRX entry dispatch (`_start` / `krx_main`), GPIO/RCC/USB hardware quiescing, `MSP` evacuation to `0x2000_2FC0`, factory bootloader RVCT trampoline verification (`0x0800_0000`), and `VTOR` SRAM handoff.
   - **`leaf1_splash.c` (1,008 B)**: Decompresses the 128×64 PackBits RLE DFU splash (`DFU_SPLASH_RLE`), parses the factory bootloader version (`0x0800_1F00`) + USB ROM descriptor `VID:PID` and build date, and renders the top header line.
@@ -82,6 +82,31 @@ packages/dfu/
 bash packages/dfu/build.sh
 ```
 
-`build.sh` compiles `src/dfu_hook.S`, `src/dfu.c`, and all three leaves with `-fPIC -fPIE -fvisibility=hidden`, enforces zero undefined symbols, zero ELF relocations, zero `.got` sections, exact `0x00000000` entry offsets, and strict size bounds (`root <= 4900 B`, each leaf `<= 1024 B`), then packs `packages/dfu/dfu.mod` via [pack_krx.py](../../tools/pack_krx.py).
+`build.sh` compiles `src/dfu_hook.S`, `src/dfu.c`, and all three leaves with `-fPIC -fPIE -fvisibility=hidden`, enforces zero undefined symbols, zero ELF relocations, zero `.got` sections, exact `0x00000000` entry offsets, and strict size bounds (`root <= 4900 B`, each leaf `<= 1024 B`), then packs `packages/dfu/dfu.mod` with `--icon 49` (`ICON_UPLOAD`) via [pack_krx.py](../../tools/pack_krx.py).
 
-Copy `packages/dfu/dfu.mod` to `/apps/dfu.mod` on the radio filesystem.
+---
+
+## Sideloading & Installation
+
+Install `packages/dfu/dfu.mod` to `/apps/dfu.mod` on the radio's LittleFS storage using RigWire (over USB-C CDC or UART @ 115200 baud):
+
+```bash
+# Recommended: validates KRX header, profile, capabilities, and CRC-32 before & after upload
+./kern wire sideload packages/dfu/dfu.mod --force
+
+# Specify serial port explicitly if needed (e.g. /dev/ttyACM0, /dev/ttyUSB0, COM3)
+./kern wire -p /dev/ttyACM0 sideload packages/dfu/dfu.mod --force
+
+# Or run RigWire directly and verify the installed file on KernFS
+python3 tools/rigwire.py sideload packages/dfu/dfu.mod --force
+./kern wire stat /apps/dfu.mod
+./kern wire ls /apps
+```
+
+> **Note:** Keep the `.mod` filename (do not pass `--name dfu` without `.mod`, which defaults the extension to `.krx`) so the cold-boot `PTT + Side Key 2` launcher resolves `/apps/dfu.mod` directly.
+
+To inspect or remove the module later on the radio, open **Settings → Apps → Services → DFU Update**, or delete via wire:
+
+```bash
+./kern wire rm /apps/dfu.mod
+```

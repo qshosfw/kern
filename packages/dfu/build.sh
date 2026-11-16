@@ -59,7 +59,7 @@ done
 
 # Caps: StorageRead (1<<2) | DisplayDirect (1<<5) | PowerManage (1<<10) | Keypad (1<<18) | ServiceRegistry (1<<20) | StorageAdmin (1<<23) | FactoryCalib (1<<24) = 0x01940424
 python3 "$DIR/../../tools/pack_krx.py" "$DIR/dfu.mod" \
-    --name "DFU Update" --author "KERN-SYS" --type module --profile p0 --system-action \
+    --name "DFU Update" --author "KERN-SYS" --type module --profile p0 --system-action --icon 49 \
     --caps 0x01940424 --payload "$OUT/root.bin" \
     --leaf "1:$OUT/leaf1_splash.bin" \
     --leaf "2:$OUT/leaf2_modal.bin" \

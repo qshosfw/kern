@@ -20,14 +20,14 @@ static ICONS_8X8: [[u8; 8]; 11] = [
     [0x00, 0x24, 0x66, 0xE7, 0xE7, 0x66, 0x24, 0x00], // 7: Mesh
     [0x00, 0x36, 0x36, 0x7F, 0x7F, 0x3E, 0x08, 0x08], // 8: Plug / SerialActive
     [0x0C, 0x18, 0x30, 0x7E, 0x0C, 0x18, 0x10, 0x00], // 9: Bolt
-    [0x0C, 0x3C, 0x70, 0xE0, 0xE0, 0x70, 0x3C, 0x0C], // 10: Moon
+    [0x0C, 0x1E, 0x3C, 0x78, 0x78, 0x3C, 0x1E, 0x0C], // 10: Moon
 ];
 
 static ICON_8X8_IDX: [u8; 22] = [
     0, 1, 2, 3, 4, 5, 6, 7, 5, 8, 8, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10,
 ];
 
-static ICONS_5X5: [[u8; 5]; 18] = [
+static ICONS_5X5: [[u8; 5]; 19] = [
     [0b10101000, 0b01110000, 0b00100000, 0b00100000, 0b00100000], // 0: Antenna
     [0b01110000, 0b10001000, 0b11111000, 0b11111000, 0b11111000], // 1: Lock
     [0b01110000, 0b10000000, 0b11111000, 0b11111000, 0b11111000], // 2: Unlock
@@ -46,15 +46,16 @@ static ICONS_5X5: [[u8; 5]; 18] = [
     [0b01110000, 0b01001000, 0b01001000, 0b01001000, 0b01110000], // 15: Roger
     [0b00011000, 0b01111000, 0b01111000, 0b01111000, 0b00011000], // 16: Beep
     [0b00100000, 0b11101010, 0b11100100, 0b11101010, 0b00100000], // 17: NoListen (7x5)
+    [0b01100000, 0b11110000, 0b11000000, 0b11110000, 0b01100000], // 18: Moon (5x5)
 ];
 
 static ICON_5X5_IDX: [u8; 22] = [
-    0, 1, 2, 3, 1, 1, 4, 1, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 1,
+    0, 1, 2, 3, 1, 1, 4, 1, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
 ];
 
 // 8x8 Special Symbols (from fagci-k1-fw):
 pub static ICON_MELODY: [u8; 8] = [0x04, 0x06, 0x04, 0x0C, 0x0C, 0x04, 0x06, 0x06];
-pub static SYSTEM_ICONS_8: [[u8; 8]; 27] = [
+pub static SYSTEM_ICONS_8: [[u8; 8]; 28] = [
     [0xE0, 0x9F, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF], // 0: ICON_FOLDER (22)
     [0x88, 0xD8, 0xA8, 0x88, 0x06, 0x05, 0x06, 0x05], // 1: ICON_CH (23)
     [0xA0, 0xA0, 0x48, 0x10, 0x1A, 0x15, 0x05, 0x02], // 2: ICON_VFO (24)
@@ -82,6 +83,7 @@ pub static SYSTEM_ICONS_8: [[u8; 8]; 27] = [
     [0x30, 0x30, 0xFC, 0x3F, 0x3F, 0xFC, 0xCC, 0x00], // 24: ICON_APPS (46)
     [0x3C, 0x42, 0x42, 0xFF, 0xE7, 0xE7, 0xFF, 0x7E], // 25: ICON_SECURITY (47)
     [0x19, 0x33, 0x1E, 0x18, 0x18, 0x3C, 0x3C, 0x3C], // 26: ICON_SYSTEM (48)
+    [0x18, 0x3C, 0x7E, 0x18, 0x18, 0x00, 0x81, 0xFF], // 27: ICON_UPLOAD (49)
 ];
 
 pub const ICON_FOLDER: &[u8; 8] = &SYSTEM_ICONS_8[0];
@@ -290,6 +292,7 @@ pub const ICON_DEVICE: &[u8; 8] = &SYSTEM_ICONS_8[23];
 pub const ICON_APPS: &[u8; 8] = &SYSTEM_ICONS_8[24];
 pub const ICON_SECURITY: &[u8; 8] = &SYSTEM_ICONS_8[25];
 pub const ICON_SYSTEM: &[u8; 8] = &SYSTEM_ICONS_8[26];
+pub const ICON_UPLOAD: &[u8; 8] = &SYSTEM_ICONS_8[27];
 
 /// Draw an 8x8 standard 1-bit monochrome icon bitmap.
 pub fn draw_icon_8(canvas: &mut Canvas, x: i16, y: i16, bits: &[u8; 8], color: Color) {
