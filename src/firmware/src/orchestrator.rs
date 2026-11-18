@@ -489,7 +489,10 @@ impl Orchestrator {
                 .filter(|&d| d >= 1)
                 .map(|d| 5 + (d - 1) as usize),
         };
-        let target_id = slot.map_or(0, |i| ctx.config.keys.actions[i]);
+        let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
+        let target_id = slot.map_or(0, |i| {
+            crate::apps::shortcut::resolve_slot(&ctx.config.keys, i, cur_ctx)
+        });
         self.execute_shortcut_target(ctx, target_id, true);
     }
 
@@ -497,12 +500,12 @@ impl Orchestrator {
     pub fn execute_shortcut_target<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
-        target_id: u32,
+        target_id: u16,
         warn_if_empty: bool,
     ) -> bool {
         let cat = crate::apps::launcher::catalog::get_catalog();
         #[cfg(feature = "filesystem")]
-        if (target_id & 0x8000_0000) != 0 && !cat.scanned {
+        if (target_id & 0x8000) != 0 && !cat.scanned {
             cat.scan(ctx.storage);
         }
         match crate::apps::shortcut::resolve(target_id, cat) {
@@ -511,6 +514,15 @@ impl Orchestrator {
                 true
             }
             crate::apps::shortcut::ResolvedShortcut::App { path, action_id } => {
+                #[cfg(feature = "krx_native")]
+                if self.active_app_id >= crate::AppRegistry::count()
+                    && crate::runtime::native_runner::active_pkg_matches(path)
+                {
+                    if action_id != 0 {
+                        crate::runtime::native_runner::dispatch_action(ctx, action_id);
+                    }
+                    return true;
+                }
                 let mut path_copy = heapless::String::<24>::new();
                 let _ = path_copy.push_str(path);
                 launch_krx_shortcut_arg(ctx, path_copy.as_str(), action_id as u32)
@@ -900,19 +912,14 @@ impl Orchestrator {
                 code: code @ (KeyCode::Side1 | KeyCode::Side2),
                 state,
             } => {
-                let (held, long, short) = if code == KeyCode::Side1 {
-                    (
-                        &mut self.side1_held,
-                        ctx.config.keys.actions[1],
-                        ctx.config.keys.actions[0],
-                    )
+                let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
+                let (held, base_slot) = if code == KeyCode::Side1 {
+                    (&mut self.side1_held, 0usize)
                 } else {
-                    (
-                        &mut self.side2_held,
-                        ctx.config.keys.actions[3],
-                        ctx.config.keys.actions[2],
-                    )
+                    (&mut self.side2_held, 2usize)
                 };
+                let long = crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot + 1, cur_ctx);
+                let short = crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot, cur_ctx);
                 if let Some(target_id) = Self::handle_side_key(held, state, long, short) {
                     self.execute_shortcut_target(ctx, target_id, false);
                 }
@@ -921,7 +928,9 @@ impl Orchestrator {
                 code: KeyCode::Menu,
                 state: KeyState::Held,
             } => {
-                self.execute_shortcut_target(ctx, ctx.config.keys.actions[4], false);
+                let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
+                let target_id = crate::apps::shortcut::resolve_slot(&ctx.config.keys, 4, cur_ctx);
+                self.execute_shortcut_target(ctx, target_id, false);
             }
             _ => {}
         }
@@ -993,9 +1002,9 @@ impl Orchestrator {
     fn handle_side_key(
         held_flag: &mut bool,
         state: KeyState,
-        long_cfg: u32,
-        short_cfg: u32,
-    ) -> Option<u32> {
+        long_cfg: u16,
+        short_cfg: u16,
+    ) -> Option<u16> {
         match state {
             KeyState::Held => {
                 *held_flag = true;

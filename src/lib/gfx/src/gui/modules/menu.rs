@@ -149,6 +149,7 @@ impl SheetOptions {
 pub struct OptionSheet {
     pub title: &'static str,
     pub options: SheetOptions,
+    pub icons: Option<&'static [&'static [u8; 8]]>,
     pub selected: usize,
     pub hover: usize,
     pub show_radio: bool,
@@ -165,6 +166,7 @@ impl OptionSheet {
         Self {
             title,
             options,
+            icons: None,
             selected,
             hover,
             show_radio: false,
@@ -189,6 +191,7 @@ impl OptionSheet {
         Self {
             title,
             options: SheetOptions::Dynamic(labels),
+            icons: None,
             selected,
             hover,
             show_radio: false,
@@ -198,6 +201,11 @@ impl OptionSheet {
 
     pub const fn with_radio(mut self, show_radio: bool) -> Self {
         self.show_radio = show_radio;
+        self
+    }
+
+    pub const fn with_icons(mut self, icons: &'static [&'static [u8; 8]]) -> Self {
+        self.icons = Some(icons);
         self
     }
 }
@@ -229,6 +237,7 @@ pub enum MenuItemType {
     Submenu,
     Info(&'static str),
     Value(ShortString),
+    Shortcut(ShortString),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -628,6 +637,32 @@ fn render_menu_row(
         }
     }
 
+    if let MenuItemType::Shortcut(ref action_label) = item.item_type {
+        let box_w = crate::widgets::draw_key_badge_box(
+            canvas,
+            3,
+            row_y + 3,
+            item.title,
+            tc == Color::Clear,
+        );
+        let mut x = 3 + box_w as i16 + 3;
+        if let Some(bmp) = icon {
+            icons::draw_icon_8(canvas, x, row_y + 2, bmp, tc);
+            x += 11;
+        }
+        text::draw_str_max_x(
+            canvas,
+            x,
+            row_y + 9,
+            action_label.as_str(),
+            &MUMATRIX,
+            tc,
+            112,
+        );
+        icons::draw_icon_8(canvas, 115, row_y + 3, icons::ARROW_RIGHT, tc);
+        return;
+    }
+
     let text_x = if let Some(bmp) = icon {
         icons::draw_icon_8(canvas, 3, row_y + 2, bmp, tc);
         16
@@ -832,13 +867,15 @@ impl MenuView {
                 Color::Fill
             };
 
+            let row_icon = sheet.icons.and_then(|arr| arr.get(idx).copied());
+            let mut tx = if sheet.show_radio { 16 } else { 15 };
             let sprite = if sheet.show_radio {
                 Some(if is_selected {
                     icons::RADIO_ON
                 } else {
                     icons::RADIO_OFF
                 })
-            } else if is_hovered {
+            } else if is_hovered && row_icon.is_none() {
                 Some(icons::ARROW_RIGHT)
             } else {
                 None
@@ -846,7 +883,11 @@ impl MenuView {
             if let Some(s) = sprite {
                 icons::draw_icon_8(canvas, 5, row_y + 2, s, tc);
             }
-            let tx = if sheet.show_radio { 16 } else { 15 };
+            if let Some(bmp) = row_icon {
+                let ix = if sheet.show_radio { 16 } else { 5 };
+                icons::draw_icon_8(canvas, ix, row_y + 2, bmp, tc);
+                tx = ix + 11;
+            }
             text::draw_str(canvas, tx, row_y + 8, sheet.options.get(idx), &MUMATRIX, tc);
         }
 
@@ -1303,5 +1344,23 @@ mod tests {
             handle_sheet_event_with_repeater(&mut rep, &mut sheet, &Event::Tick);
         }
         assert_eq!(sheet.hover, 0, "OptionSheet repeat hold Up must clamp at 0");
+    }
+
+    #[test]
+    fn shortcut_menu_row_and_icon_sheet_render_cleanly() {
+        let mut canvas = Canvas::new();
+        let label = ShortString::from_str("Tasks");
+        let item = MenuItem::new("M", MenuItemType::Shortcut(label));
+        render_menu_row(&mut canvas, &item, 0b11, 14, Some(icons::ICON_FOLDER));
+        assert!(canvas.buffer.iter().flatten().any(|&b| b != 0));
+
+        static TEST_ICONS: [&[u8; 8]; 2] = [icons::ICON_FOLDER, icons::ICON_VFO];
+        static TEST_OPTS: [&str; 2] = ["Tasks", "VFO"];
+        let sheet = OptionSheet::new_static("Bind", &TEST_OPTS, 0)
+            .with_radio(true)
+            .with_icons(&TEST_ICONS);
+        canvas.clear();
+        MenuView::render_sheet(&mut canvas, &sheet);
+        assert!(canvas.buffer.iter().flatten().any(|&b| b != 0));
     }
 }

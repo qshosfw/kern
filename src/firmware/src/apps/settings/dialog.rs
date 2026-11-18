@@ -27,12 +27,11 @@ pub const TAG_MODEL_INPUT: u8 = 13;
 pub const TAG_FORMAT_KEEP_CALIB: u8 = 16;
 #[cfg(feature = "filesystem")]
 pub const TAG_FORMAT_WIPE_ALL: u8 = 17;
-#[cfg(all(feature = "filesystem", feature = "dfu"))]
-pub const TAG_WIPE_0XFF_BL: u8 = 18;
-#[cfg(feature = "dfu")]
-pub const TAG_REBOOT_BL: u8 = 19;
 pub const TAG_RESET_SETTINGS: u8 = 20;
 pub const TAG_REBOOT_FW: u8 = 21;
+#[cfg(feature = "filesystem")]
+pub const TAG_DELETE_PACKAGE: u8 = 22;
+pub const TAG_SHORTCUT_SHEET: u8 = 23;
 
 pub fn parse_u32_digits(s: &str) -> Option<u32> {
     if s.is_empty() {
@@ -117,7 +116,7 @@ static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
         tag: TAG_FORMAT_KEEP_CALIB,
         hold_ds: 15,
         title: "Format Storage?",
-        message: "Erases user files & settings.\nFactory calibration is kept.",
+        message: "Wipes user files & settings.\nCalib is kept.",
     },
     #[cfg(feature = "filesystem")]
     DestructiveConfirm {
@@ -125,37 +124,21 @@ static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
         tag: TAG_FORMAT_WIPE_ALL,
         hold_ds: 20,
         title: "Erase All Data?",
-        message: "Erases all files, settings &\nfactory radio calibration!",
-    },
-    #[cfg(all(feature = "filesystem", feature = "dfu"))]
-    DestructiveConfirm {
-        action: ActionId::Wipe0xFFBootloader,
-        tag: TAG_WIPE_0XFF_BL,
-        hold_ds: 25,
-        title: "Blank 2MB Chip?",
-        message: "Fills 2MB flash with 0xFF &\nreboots to DFU flash mode.",
-    },
-    #[cfg(feature = "dfu")]
-    DestructiveConfirm {
-        action: ActionId::RebootBootloader,
-        tag: TAG_REBOOT_BL,
-        hold_ds: 10,
-        title: "Enter DFU Mode",
-        message: "Hold MENU to reboot into\nUSB-C DFU flash mode.",
+        message: "Wipes ALL files, settings\n& radio calibration!",
     },
     DestructiveConfirm {
         action: ActionId::ResetSettings,
         tag: TAG_RESET_SETTINGS,
         hold_ds: 15,
         title: "Reset Settings?",
-        message: "Restores default settings.\nChannels & calib are kept.",
+        message: "Restores default config.\nChannels & calib kept.",
     },
     DestructiveConfirm {
         action: ActionId::RebootFirmware,
         tag: TAG_REBOOT_FW,
         hold_ds: 8,
         title: "Restart Radio?",
-        message: "Flushes pending changes &\nrestarts into Kern.",
+        message: "Save & restart into Kern.",
     },
 ];
 
@@ -174,17 +157,28 @@ pub fn show_radio_sheet(
 }
 
 #[inline(never)]
+pub fn show_destructive_hold_confirm(
+    ctx: &mut SysContext,
+    tag: u8,
+    title: &str,
+    message: &str,
+    hold_ds: u8,
+) {
+    ctx.show_hold_confirm(
+        tag,
+        title,
+        message,
+        "Hold",
+        "Cancel",
+        (hold_ds as u16) * 100,
+    );
+}
+
+#[inline(never)]
 pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
     for spec in DESTRUCTIVE_CONFIRMS {
         if spec.action == action_id {
-            ctx.show_hold_confirm(
-                spec.tag,
-                spec.title,
-                spec.message,
-                "Hold",
-                "Cancel",
-                (spec.hold_ds as u16) * 100,
-            );
+            show_destructive_hold_confirm(ctx, spec.tag, spec.title, spec.message, spec.hold_ds);
             return;
         }
     }
@@ -202,7 +196,6 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
         ActionId::EditRadioId => prompt_config_str(ctx, TAG_RADIO_ID_INPUT),
         #[cfg(feature = "settings_debug")]
         ActionId::ClearLogs => {
-            #[cfg(feature = "flight_recorder")]
             crate::panic::BOOT_RECORD.get_mut().reset_all();
             ctx.show_popup(TAG_POPUP_INFO, "Debug", "Crash logs cleared");
         }
@@ -241,6 +234,26 @@ pub fn handle_sheet_selected(
         }
         TAG_CHOICE_SHEET => {
             app.handle_radio_confirmed(ctx, idx);
+        }
+        TAG_SHORTCUT_SHEET => {
+            if let Some(target_id) = crate::apps::shortcut::picker_target_at(idx) {
+                if app.current_page == super::page::PageId::ShortcutRule {
+                    let r = &mut ctx.config.keys.ctx_rules[app.editing_rule.min(2) as usize];
+                    if r.ctx == 0 {
+                        r.ctx = crate::apps::shortcut::CTX_VFO;
+                    }
+                    r.action = target_id;
+                    ctx.config.mark_keys_dirty();
+                } else {
+                    let slot = app.selected_idx;
+                    if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT
+                        && ctx.config.keys.actions[slot] != target_id
+                    {
+                        ctx.config.keys.actions[slot] = target_id;
+                        ctx.config.mark_keys_dirty();
+                    }
+                }
+            }
         }
         _ => return EventResult::Ignored,
     }
@@ -353,11 +366,6 @@ pub fn handle_confirm_result(
             }
             EventResult::Consumed
         }
-        #[cfg(all(feature = "filesystem", feature = "dfu"))]
-        TAG_WIPE_0XFF_BL => {
-            let _ = ctx.storage.fs.wipe_raw();
-            kernel::power::PowerControl::reboot_to_bootloader();
-        }
         TAG_RESET_SETTINGS => {
             reset_config_to_defaults(ctx);
             if let Some(ref mut display) = ctx.display {
@@ -370,14 +378,14 @@ pub fn handle_confirm_result(
             ctx.show_popup(TAG_POPUP_INFO, "System", "Settings Reset");
             EventResult::Consumed
         }
-        #[cfg(feature = "dfu")]
-        TAG_REBOOT_BL => {
-            let _ = ctx.flush_config();
-            kernel::power::PowerControl::reboot_to_bootloader();
-        }
         TAG_REBOOT_FW => {
             let _ = ctx.flush_config();
             kernel::power::PowerControl::reboot();
+        }
+        #[cfg(feature = "filesystem")]
+        TAG_DELETE_PACKAGE => {
+            super::apps::delete_selected_package(app, ctx);
+            EventResult::Consumed
         }
         _ => EventResult::Ignored,
     }

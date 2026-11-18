@@ -108,6 +108,14 @@ impl ModalCompositor {
     }
 
     #[inline(never)]
+    pub fn set_hold_ms(&mut self, hold_ms: u16) {
+        crate::orchestrator::clear_sunk_keys();
+        if let ActiveModal::Popup(model) = &mut self.modal {
+            model.hold.required_ms = hold_ms;
+        }
+    }
+
+    #[inline(never)]
     pub fn show_hold_confirm(
         &mut self,
         tag: u8,
@@ -118,10 +126,7 @@ impl ModalCompositor {
         hold_ms: u16,
     ) {
         self.show_confirm(tag, title, message, confirm, cancel);
-        crate::orchestrator::clear_sunk_keys();
-        if let ActiveModal::Popup(model) = &mut self.modal {
-            model.hold.required_ms = hold_ms;
-        }
+        self.set_hold_ms(hold_ms);
     }
 
     #[inline(never)]
@@ -530,10 +535,79 @@ impl OsCompositor {
             if is_text_input {
                 ctx.draw_status_bar_right_mode(canvas, true, true);
             }
+        } else if lock_mgr.should_show_f_drawer() && ctx.config.keys.f_drawer != 0 {
+            render_f_shortcut_drawer(canvas, &ctx.config.keys, active_app_id);
         }
 
         // Render Keypad Lock Toast Modal overlay on top of screen if active
         lock_mgr.render_overlay(canvas);
+    }
+}
+
+/// Slide-up `[F]` key shortcut quick-glance HUD: 2x3 grid of `[key]` inverted badges + 8x8 icons.
+#[inline(never)]
+fn render_f_shortcut_drawer(
+    canvas: &mut Canvas,
+    keys: &crate::config::keys::KeyConfig,
+    active_app_id: usize,
+) {
+    use crate::apps::shortcut::{
+        F_DRAWER_START_SLOT, KEY_SHORTCUT_COUNT, TARGET_NONE, active_context, describe,
+        drawer_badge, resolve_slot,
+    };
+
+    const DRAWER_H: u8 = 40;
+    gfx::widgets::draw_sheet_slide_up(canvas, "F Shortcuts", DRAWER_H, None, 0);
+
+    let cat = crate::apps::launcher::catalog::get_catalog();
+    let cur_ctx = active_context(active_app_id);
+    let mut shown = 0usize;
+    let base_y = (64 - DRAWER_H) as i16 + 10;
+
+    for slot in F_DRAWER_START_SLOT..KEY_SHORTCUT_COUNT {
+        let target_id = resolve_slot(keys, slot, cur_ctx);
+        if target_id == TARGET_NONE {
+            continue;
+        }
+        if shown >= 6 {
+            break;
+        }
+        let col = shown & 1;
+        let row = shown >> 1;
+        let cell_x = if col == 0 { 4i16 } else { 65i16 };
+        let cell_y = base_y + (row as i16 * 10);
+
+        let box_w = gfx::widgets::draw_key_badge_box(
+            canvas,
+            cell_x,
+            cell_y + 1,
+            drawer_badge(slot),
+            false,
+        );
+        let (label, icon) = describe(target_id, cat);
+        let icon_x = cell_x + box_w as i16 + 2;
+        gfx::icons::draw_icon_8(canvas, icon_x, cell_y, icon, gfx::Color::Fill);
+        gfx::text::draw_str_max_x(
+            canvas,
+            icon_x + 9,
+            cell_y + 6,
+            label.as_str(),
+            &gfx::fonts::tomthumb::FONT,
+            gfx::Color::Fill,
+            cell_x + 59,
+        );
+        shown += 1;
+    }
+
+    if shown == 0 {
+        gfx::text::draw_str(
+            canvas,
+            18,
+            base_y + 16,
+            "No F-key shortcuts",
+            &gfx::fonts::tomthumb::FONT,
+            gfx::Color::Fill,
+        );
     }
 }
 

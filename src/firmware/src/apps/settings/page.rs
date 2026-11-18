@@ -16,6 +16,7 @@ pub enum PageId {
     ButtonsShortcuts,
     BatteryInfo,
     BatteryTweaks,
+    #[cfg(feature = "settings_info")]
     SystemInfo,
     #[cfg(feature = "filesystem")]
     SystemStorage,
@@ -29,10 +30,12 @@ pub enum PageId {
     AppDetail,
     ManageServices,
     ServiceDetail,
+    ShortcutRules,
+    ShortcutRule,
 }
 
 impl PageId {
-    pub const COUNT: usize = PageId::ServiceDetail as usize + 1;
+    pub const COUNT: usize = PageId::ShortcutRule as usize + 1;
 
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
@@ -73,11 +76,10 @@ pub enum ActionId {
     FormatKeepCalib = 6,
     #[cfg(feature = "filesystem")]
     FormatWipeAll = 7,
-    #[cfg(feature = "filesystem")]
-    Wipe0xFFBootloader = 8,
-    RebootBootloader = 9,
     ResetSettings = 10,
     RebootFirmware = 11,
+    #[cfg(feature = "filesystem")]
+    DeletePackage = 12,
 }
 
 impl ActionId {
@@ -97,11 +99,10 @@ impl ActionId {
             6 => Some(ActionId::FormatKeepCalib),
             #[cfg(feature = "filesystem")]
             7 => Some(ActionId::FormatWipeAll),
-            #[cfg(feature = "filesystem")]
-            8 => Some(ActionId::Wipe0xFFBootloader),
-            9 => Some(ActionId::RebootBootloader),
             10 => Some(ActionId::ResetSettings),
             11 => Some(ActionId::RebootFirmware),
+            #[cfg(feature = "filesystem")]
+            12 => Some(ActionId::DeletePackage),
             _ => None,
         }
     }
@@ -109,13 +110,13 @@ impl ActionId {
     pub const fn destructive_level(&self) -> DestructiveLevel {
         match self {
             #[cfg(feature = "filesystem")]
+            ActionId::FormatKeepCalib | ActionId::DeletePackage => DestructiveLevel::UserDataLoss,
+            #[cfg(not(feature = "filesystem"))]
             ActionId::FormatKeepCalib => DestructiveLevel::UserDataLoss,
             ActionId::ResetSettings => DestructiveLevel::UserDataLoss,
             #[cfg(feature = "filesystem")]
-            ActionId::FormatWipeAll | ActionId::Wipe0xFFBootloader => {
-                DestructiveLevel::FactoryDataWipe
-            }
-            ActionId::RebootBootloader | ActionId::RebootFirmware => DestructiveLevel::Reboot,
+            ActionId::FormatWipeAll => DestructiveLevel::FactoryDataWipe,
+            ActionId::RebootFirmware => DestructiveLevel::Reboot,
             _ => DestructiveLevel::None,
         }
     }
@@ -186,17 +187,16 @@ pub enum ChoiceId {
     FKeyTimeout = 8,
     HoldDelay = 9,
     RepeatRate = 10,
-    Shortcut = 11,
-    BatteryFormat = 12,
-    AutoPowerOff = 13,
-    PowerProfile = 14,
-    SplashAnim = 15,
-    SplashDuration = 16,
-    LauncherStyle = 17,
-    StartupApp = 18,
-    CpuClock = 19,
+    BatteryFormat = 11,
+    AutoPowerOff = 12,
+    PowerProfile = 13,
+    SplashAnim = 14,
+    SplashDuration = 15,
+    LauncherStyle = 16,
+    StartupApp = 17,
+    CpuClock = 18,
     #[cfg(feature = "uart")]
-    UartBaud = 20,
+    UartBaud = 19,
 }
 
 pub static CHOICES: &[&'static str] = &[
@@ -211,7 +211,6 @@ pub static CHOICES: &[&'static str] = &[
     super::buttons::F_KEY_TIMEOUT_OPTIONS,
     super::buttons::HOLD_DELAY_OPTIONS,
     super::buttons::REPEAT_RATE_OPTIONS,
-    crate::apps::Shortcut::PACKED_NAMES,
     super::battery::BATTERY_FORMAT_OPTIONS,
     super::battery::AUTO_POWER_OFF_OPTIONS,
     super::battery::POWER_PROFILE_OPTIONS,
@@ -268,15 +267,6 @@ pub enum MetricId {
     StorageWear,
     #[cfg(feature = "filesystem")]
     StorageDeleted,
-
-    // System Identity & Health
-    SystemFirmware,
-    SystemBootloader,
-    SystemSerial,
-    SystemQs1Serial,
-    SystemMac,
-    SystemFlashSize,
-    SystemUptime,
 
     // Calibration
     #[cfg(feature = "settings_calib")]
@@ -362,27 +352,14 @@ impl SettingField {
     pub const BOOT_JINGLE: Self = Self::byte(1, 7);
     pub const AUDIO_PROFILE: Self = Self::byte(1, 8);
 
-    // Keys (domain 2)
-    pub const F1_SHORT: Self = Self::byte(2, 2);
-    pub const F1_LONG: Self = Self::byte(2, 3);
-    pub const F2_SHORT: Self = Self::byte(2, 4);
-    pub const F2_LONG: Self = Self::byte(2, 5);
-    pub const M_LONG: Self = Self::byte(2, 6);
-    pub const AUTO_LOCK: Self = Self::byte(2, 7);
-    pub const F_KEY_TIMEOUT: Self = Self::byte(2, 8);
-    pub const FAST_SCROLL: Self = Self::byte(2, 9);
-    pub const HOLD_DELAY: Self = Self::byte(2, 10);
-    pub const REPEAT_RATE: Self = Self::byte(2, 11);
-    #[inline(always)]
-    pub const fn f_digit(idx: u8) -> Self {
-        Self::byte(2, 12 + idx)
-    }
-    pub const PTT_MODE: Self = Self::byte(2, 21);
-    pub const F_0: Self = Self::byte(2, 22);
-    pub const F_STAR: Self = Self::byte(2, 23);
-    pub const F_MENU: Self = Self::byte(2, 24);
-    pub const F_SIDE1: Self = Self::byte(2, 25);
-    pub const F_SIDE2: Self = Self::byte(2, 26);
+    // Keys (domain 2, KeyConfig v3)
+    pub const AUTO_LOCK: Self = Self::byte(2, 2);
+    pub const F_KEY_TIMEOUT: Self = Self::byte(2, 3);
+    pub const FAST_SCROLL: Self = Self::byte(2, 4);
+    pub const HOLD_DELAY: Self = Self::byte(2, 5);
+    pub const REPEAT_RATE: Self = Self::byte(2, 6);
+    pub const PTT_MODE: Self = Self::byte(2, 7);
+    pub const F_DRAWER: Self = Self::byte(2, 8);
 
     // System (domain 3)
     pub const UART_BAUD: Self = Self::byte(3, 2);
@@ -490,10 +467,6 @@ impl SettingDef {
             tag: TAG_CHOICE,
             aux: choice as u8,
         }
-    }
-
-    pub const fn shortcut(title: &'static str, field: SettingField) -> Self {
-        Self::choice(title, ChoiceId::Shortcut, field)
     }
 
     pub const fn range(title: &'static str, range: RangeId, field: SettingField) -> Self {

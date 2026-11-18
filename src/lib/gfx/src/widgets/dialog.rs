@@ -89,11 +89,19 @@ fn key_badge_key_width(key_str: &str) -> u8 {
     }
 }
 
-pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label: &str) {
+/// Render an inverted key badge box at `(x, y)` (7px tall) and return its pixel width.
+/// When `on_dark` is true (e.g. inside a dark selection capsule), colors invert to Clear box + Fill glyph.
+#[inline(never)]
+pub fn draw_key_badge_box(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, on_dark: bool) -> u8 {
     let font = &crate::fonts::tomthumb::FONT;
     let box_w = key_badge_key_width(key_str) + 4;
+    let (box_col, fg_col) = if on_dark {
+        (Color::Clear, Color::Fill)
+    } else {
+        (Color::Fill, Color::Clear)
+    };
 
-    canvas.fill_rect(x as u8, y as u8, box_w, 7, Color::Fill);
+    canvas.fill_rect(x as u8, y as u8, box_w, 7, box_col);
 
     match key_str {
         "^" | "v" | "V" => {
@@ -101,19 +109,24 @@ pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label:
             for dx in 0..5u8 {
                 let d = dx.abs_diff(2) as i16;
                 let py = if is_up { y + 2 + d } else { y + 4 - d };
-                canvas.draw_pixel((x + 2 + dx as i16) as u8, py as u8, Color::Clear);
+                canvas.draw_pixel((x + 2 + dx as i16) as u8, py as u8, fg_col);
             }
         }
-        _ => text::draw_str(canvas, x + 2, y + 5, key_str, font, Color::Clear),
+        _ => text::draw_str(canvas, x + 2, y + 5, key_str, font, fg_col),
     }
 
+    box_w
+}
+
+pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label: &str) {
+    let box_w = draw_key_badge_box(canvas, x, y, key_str, false);
     if !label.is_empty() {
         text::draw_str(
             canvas,
             x + (box_w as i16) + 2,
             y + 5,
             label,
-            font,
+            &crate::fonts::tomthumb::FONT,
             Color::Fill,
         );
     }
@@ -193,6 +206,21 @@ pub fn draw_dialog_progress(
 ) {
     draw_dialog_header(canvas, 0, big_title, sub_title);
     draw_progress_bar(canvas, 4, 44, 120, 8, progress_percent, true);
+}
+
+/// System hold-to-confirm dialog with progress bar and Hold/Cancel key badges.
+pub fn draw_dialog_hold_prompt(
+    canvas: &mut Canvas,
+    big_title: &str,
+    sub_title: &str,
+    confirm_label: &str,
+    cancel_label: &str,
+    progress_percent: u8,
+) {
+    draw_dialog_header(canvas, 0, big_title, sub_title);
+    draw_progress_bar(canvas, 4, 43, 120, 6, progress_percent, true);
+    draw_key_badge(canvas, 4, 55, "M", confirm_label);
+    draw_key_badge_right(canvas, 124, 55, "EXIT", cancel_label);
 }
 
 /// Shared bottom-sheet modal frame (inverted header, outer border, clear background, optional badges)
@@ -355,5 +383,31 @@ pub fn draw_modal_popup_materialize(
             line_y += step_y;
             is_first = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_dialog_hold_prompt_renders_header_progress_and_badges() {
+        let mut canvas = Canvas::new();
+        draw_dialog_hold_prompt(
+            &mut canvas,
+            "Invalid Storage",
+            "Calib OK (0x10000)",
+            "Hold",
+            "Cancel",
+            50,
+        );
+
+        // Negated top header at Y=0..8
+        assert_ne!(canvas.buffer[0][64], 0);
+        // Hold progress bar at Y=43..48 (page 5 bits 3..=7)
+        assert_ne!(canvas.buffer[5][64] & 0xF8, 0);
+        // Bottom key badges at Y=55..61 (page 6/7)
+        assert_ne!(canvas.buffer[7][6], 0);
+        assert_ne!(canvas.buffer[7][120], 0);
     }
 }

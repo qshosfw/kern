@@ -37,33 +37,62 @@ fn format_size_into(bytes: usize, s: &mut ShortString) {
     s.push_int_fixed(val, dec, "", unit);
 }
 
-pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
-    static MAP: [(u8, &'static [u8; 8], &'static [u8; 32]); 5] = [
-        (
-            b'T',
-            gfx::icons::ICON_APP_TORCH,
-            &gfx::icons::ICON_16_FLASHLIGHT,
-        ),
-        (b'S', gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO),
-        (b'R', gfx::icons::ICON_APP_RADIO, &gfx::icons::ICON_16_RADIO),
-        (b'C', gfx::icons::ICON_KEYPAD, &gfx::icons::ICON_16_APPS),
-        (
-            b'B',
-            gfx::icons::ICON_APP_DIAG,
-            &gfx::icons::ICON_16_DIAGNOSTICS,
-        ),
-    ];
+#[inline(never)]
+fn resolve_icon_id(title: &str, icon_id: u16) -> u16 {
+    if icon_id >= 22 {
+        return icon_id;
+    }
     let b = title.as_bytes();
     let c0 = b.first().copied().unwrap_or(0) & !0x20;
-    if c0 == b'B' && (b.get(2).copied().unwrap_or(0) & !0x20) == b'A' {
-        return (gfx::icons::ICON_ANTENNA, &gfx::icons::ICON_16_SCANNER);
+    match c0 {
+        b'B' if (b.get(2).copied().unwrap_or(0) & !0x20) == b'A' => 0xFF,
+        b'T' => 28,
+        b'S' => 30,
+        b'R' => 25,
+        b'C' => 1,
+        b'B' => 29,
+        _ => 46,
     }
-    for &(k, i8, i16) in &MAP {
-        if c0 == k {
-            return (i8, i16);
+}
+
+/// Resolves only the 8x8 monochrome icon bitmap without referencing 16x16 atlases.
+#[inline(never)]
+pub fn package_icon_8(title: &str, icon_id: u16) -> &'static [u8; 8] {
+    let eff = resolve_icon_id(title, icon_id);
+    if eff == 0xFF {
+        return gfx::icons::ICON_ANTENNA;
+    }
+    if eff == 1 {
+        return gfx::icons::ICON_KEYPAD;
+    }
+    if eff >= 22 {
+        if let Some(bmp) = gfx::icons::SYSTEM_ICONS_8.get((eff - 22) as usize) {
+            return bmp;
         }
     }
-    (gfx::icons::ICON_APPS, &gfx::icons::ICON_16_APPS)
+    gfx::icons::ICON_APPS
+}
+
+/// Resolves 8x8 and 16x16 icons for a packaged `.krx` entry using its embedded
+/// `icon_id` (`SYSTEM_ICONS_8` offset `22 + idx`, e.g. `30` = `ICON_APP_ABOUT`),
+/// falling back to title matching for packages built with the default `icon_id <= 1`.
+pub fn package_icons(title: &str, icon_id: u16) -> (&'static [u8; 8], &'static [u8; 32]) {
+    let eff = resolve_icon_id(title, icon_id);
+    let icon_8 = package_icon_8(title, icon_id);
+    let icon_16 = match eff {
+        0xFF => &gfx::icons::ICON_16_SCANNER,
+        25 => &gfx::icons::ICON_16_RADIO,
+        26 | 38 => &gfx::icons::ICON_16_SETTINGS,
+        28 => &gfx::icons::ICON_16_FLASHLIGHT,
+        29 => &gfx::icons::ICON_16_DIAGNOSTICS,
+        30 => &gfx::icons::ICON_16_INFO,
+        _ => &gfx::icons::ICON_16_APPS,
+    };
+    (icon_8, icon_16)
+}
+
+pub fn app_icons(title: &str) -> (&'static [u8; 8], &'static [u8; 32]) {
+    package_icons(title, 0)
 }
 
 #[inline(never)]
@@ -99,7 +128,7 @@ pub fn populate_package_list(
                 s.set_str("Invalid");
             }
         }
-        icons[count] = app_icons(entry.title.as_str()).0;
+        icons[count] = package_icons(entry.title.as_str(), entry.icon_id).0;
         count += 1;
     }
 
@@ -165,6 +194,39 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
     n
 }
 
+#[cfg(feature = "filesystem")]
+#[inline(never)]
+pub fn prompt_delete_package(app: &super::app::SettingsApp, ctx: &mut SysContext) {
+    let is_service = app.current_page == PageId::ServiceDetail;
+    let cat = get_catalog();
+    if let Some(pkg) = cat.get_entry(is_service, app.selected_pkg_idx) {
+        let mut msg = heapless::String::<48>::new();
+        let _ = msg.push_str(pkg.filename());
+        let _ = msg.push_str("\nCannot be undone.");
+        super::dialog::show_destructive_hold_confirm(
+            ctx,
+            super::dialog::TAG_DELETE_PACKAGE,
+            "Delete Package?",
+            msg.as_str(),
+            15,
+        );
+    }
+}
+
+#[cfg(feature = "filesystem")]
+#[inline(never)]
+pub fn delete_selected_package(app: &mut super::app::SettingsApp, ctx: &mut SysContext) {
+    let is_service = app.current_page == PageId::ServiceDetail;
+    let cat = get_catalog();
+    if let Some(pkg) = cat.get_entry(is_service, app.selected_pkg_idx) {
+        let path = pkg.path.clone();
+        let _ = ctx.storage.remove(path.as_str());
+        crate::apps::launcher::reload_launcher(ctx.storage);
+        ctx.show_popup(super::dialog::TAG_POPUP_INFO, "Package", "Deleted");
+        app.pop_submenu(ctx);
+    }
+}
+
 pub fn handle_package_press(
     app: &mut super::app::SettingsApp,
     ctx: &mut SysContext,
@@ -198,21 +260,18 @@ pub fn handle_package_press(
 
             if !is_service && pkg.is_valid && sel_idx == 0 {
                 let path = pkg.path.as_str();
+                app.resume_nav = true;
                 if let Err(err) = crate::apps::runtime::launch_krx_package(ctx, path) {
-                    ctx.show_popup(super::dialog::TAG_POPUP_INFO, err.title(), err.message());
+                    app.resume_nav = false;
+                    crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
                 }
-            } else if (!is_service && pkg.is_valid && sel_idx == 5)
-                || ((is_service || !pkg.is_valid) && sel_idx == if is_service { 5 } else { 4 })
+            } else if app
+                .items
+                .get(sel_idx)
+                .is_some_and(|it| it.title == "Delete")
             {
-                let path = pkg.path.clone();
-                let _ = ctx.storage.remove(path.as_str());
-                crate::apps::launcher::reload_launcher(ctx.storage);
-                ctx.show_popup(
-                    super::dialog::TAG_POPUP_INFO,
-                    "Package",
-                    "Deleted from /apps/",
-                );
-                app.pop_submenu(ctx);
+                #[cfg(feature = "filesystem")]
+                prompt_delete_package(app, ctx);
             }
             true
         }

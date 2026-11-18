@@ -25,6 +25,25 @@ impl SettingsApp {
             );
             return;
         }
+        if self.current_page == PageId::ButtonsShortcuts {
+            self.items_len =
+                super::buttons::populate_shortcuts(&mut self.items, &mut self.item_icons, ctx);
+            return;
+        }
+        if self.current_page == PageId::ShortcutRules {
+            self.items_len =
+                super::buttons::populate_shortcut_rules(&mut self.items, &mut self.item_icons, ctx);
+            return;
+        }
+        if self.current_page == PageId::ShortcutRule {
+            self.items_len = super::buttons::populate_shortcut_rule_detail(
+                &mut self.items,
+                &mut self.item_icons,
+                self.editing_rule,
+                ctx,
+            );
+            return;
+        }
         if self.current_page == PageId::AppDetail || self.current_page == PageId::ServiceDetail {
             let is_srv = self.current_page == PageId::ServiceDetail;
             self.items_len = super::apps::populate_package_detail(
@@ -38,6 +57,58 @@ impl SettingsApp {
         let defs = page_defs(self.current_page);
         populate_defs(&mut self.items, defs, ctx);
         self.items_len = defs.len().min(self.items.len());
+
+        #[cfg(feature = "krx_native")]
+        if self.current_page == PageId::System && self.items_len < self.items.len() {
+            let cat = crate::apps::launcher::catalog::get_catalog();
+            cat.scan(ctx.storage);
+            let sys_caps = ctx.caps();
+            let menu_ins = super::system::system_modules_insert_idx().min(self.items_len);
+            let menu_count = self.insert_system_entries(
+                cat,
+                sys_caps,
+                kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU,
+                menu_ins,
+                MenuItemType::Submenu,
+            );
+            let act_ins =
+                (super::system::system_actions_insert_idx() + menu_count).min(self.items_len);
+            self.insert_system_entries(
+                cat,
+                sys_caps,
+                kernel::proc::krx::SectionType::FLAG_SYSTEM_ACTION,
+                act_ins,
+                MenuItemType::Action,
+            );
+        }
+    }
+
+    #[cfg(feature = "krx_native")]
+    fn insert_system_entries(
+        &mut self,
+        cat: &'static crate::apps::launcher::catalog::PackageCatalog,
+        sys_caps: kernel::caps::CapabilitySet,
+        flag: u8,
+        ins: usize,
+        item_type: MenuItemType,
+    ) -> usize {
+        let avail = self.items.len().saturating_sub(self.items_len);
+        let count = cat.system_entry_count(sys_caps, flag).min(avail);
+        if count > 0 {
+            let mut i = self.items_len;
+            while i > ins {
+                self.items[i + count - 1] = self.items[i - 1];
+                i -= 1;
+            }
+            for k in 0..count {
+                if let Some(entry) = cat.system_entry_at(sys_caps, flag, k) {
+                    self.items[ins + k].title = entry.title.as_str();
+                    self.items[ins + k].item_type = item_type;
+                }
+            }
+            self.items_len += count;
+        }
+        count
     }
 
     fn enter_page(
@@ -137,6 +208,16 @@ impl SettingsApp {
     pub fn handle_radio_confirmed(&mut self, ctx: &mut SysContext, sel: usize) {
         let sel_idx = self.selected_idx;
         if sel_idx < self.items_len {
+            if self.current_page == PageId::ShortcutRule {
+                let rule = &mut ctx.config.keys.ctx_rules[self.editing_rule.min(2) as usize];
+                if sel_idx == 0 {
+                    rule.ctx = (sel as u8).min(4);
+                } else if sel_idx == 1 {
+                    rule.slot = (sel as u8).min(18);
+                }
+                ctx.config.mark_keys_dirty();
+                return;
+            }
             #[cfg(feature = "passcode")]
             if self.current_page == PageId::Security {
                 super::security::update_security_option(ctx, sel_idx, sel);

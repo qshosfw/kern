@@ -49,6 +49,8 @@ FLAG_RESTART_ON_FAIL = 1 << 2
 FLAG_SINGLETON = 1 << 3
 FLAG_AUTO_UPDATE_OK = 1 << 4
 FLAG_RTC = 1 << 5
+FLAG_SYSTEM_MENU = 1 << 6
+FLAG_SYSTEM_ACTION = 1 << 7
 
 # KRX Profiles (raw codes)
 PROFILE_N0_FIXED = 0x10
@@ -80,6 +82,7 @@ SEC_CONFIG = 0x0007
 SEC_SEAL = 0x0008
 SEC_TYPE_LIFECYCLE = 0x0009
 SEC_LEAF_MAP = 0x000A
+SEC_ACTIONS = 0x000B
 
 SEC_NAMES = {
     SEC_IDENTITY: "Identity",
@@ -92,6 +95,7 @@ SEC_NAMES = {
     SEC_SEAL: "Seal",
     SEC_TYPE_LIFECYCLE: "TypeLifecycle",
     SEC_LEAF_MAP: "LeafMap",
+    SEC_ACTIONS: "Actions",
 }
 
 # Capability Bitmask Constants (Synchronized with kernel::caps::Cap)
@@ -160,6 +164,7 @@ class KrxPackageBuilder:
         self.block_files = []
         self.resident_payload_size = 0
         self.service_exports = []
+        self.actions = []
 
     def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0), icon_asset: int = 1):
         self.name = name
@@ -212,6 +217,9 @@ class KrxPackageBuilder:
     def add_service_export(self, interface_id: int, vtable_offset: int, abi_version: int = 1, pinned: bool = False):
         flags = 0x0001 if pinned else 0x0000
         self.service_exports.append((interface_id, abi_version, vtable_offset, flags))
+
+    def add_action(self, action_id: int, scope_mask: int, label: str, flags: int = 0):
+        self.actions.append((action_id & 0xFFFF, scope_mask & 0xFF, flags & 0xFF, label.encode("utf-8")[:12]))
 
     def set_payload(self, payload_data: bytes):
         self.payload = bytearray(payload_data)
@@ -275,6 +283,8 @@ class KrxPackageBuilder:
             sec_sizes.append(4 + num_leaves * 16)
         if self.service_exports:
             sec_sizes.append(4 + len(self.service_exports) * 16)
+        if self.actions:
+            sec_sizes.append(4 + len(self.actions) * 16)
 
         sec_hdr_len = 0
         for sz in sec_sizes:
@@ -282,7 +292,7 @@ class KrxPackageBuilder:
             pad = (4 - (sz % 4)) % 4
             sec_hdr_len += pad
 
-        str_pool_off = 20 + sec_hdr_len
+        str_pool_off = 24 + sec_hdr_len
         tot_hdr = str_pool_off + len(string_pool)
         h_pad = (4 - (tot_hdr % 4)) % 4
         tot_hdr += h_pad
@@ -424,6 +434,15 @@ class KrxPackageBuilder:
             assert len(export_body) % 16 == 0
             sections.append((SEC_SERVICE_EXPORTS, export_body))
 
+        # 8. Actions Section (if present, 16 bytes per entry)
+        if self.actions:
+            act_body = bytearray()
+            for action_id, scope_mask, aflags, label_bytes in self.actions:
+                act_body.extend(struct.pack("<HBB", action_id, scope_mask, aflags))
+                act_body.extend(label_bytes.ljust(12, b"\x00")[:12])
+            assert len(act_body) % 16 == 0
+            sections.append((SEC_ACTIONS, act_body))
+
         # Calculate section headers offset
         # Preamble is 24 bytes (KRX_MAGIC..link_base)
         preamble_len = 24
@@ -441,6 +460,7 @@ class KrxPackageBuilder:
         # Pad total header to 4-byte boundary
         hdr_pad = (4 - (total_header_len % 4)) % 4
         total_header_len += hdr_pad
+        assert total_header_len == tot_hdr, f"Precomputed header len {tot_hdr} != actual {total_header_len}"
 
         # Serialize Section Headers
         encoded_sections = bytearray()
@@ -546,6 +566,8 @@ def main():
     parser.add_argument("--persistent", action="store_true", help="Mark package with FLAG_PERSISTENT (exempt from reaper)")
     parser.add_argument("--singleton", action="store_true", help="Mark package with FLAG_SINGLETON (single instance)")
     parser.add_argument("--restart-on-fail", action="store_true", help="Mark package with FLAG_RESTART_ON_FAIL")
+    parser.add_argument("--system-menu", action="store_true", help="Mark module with FLAG_SYSTEM_MENU (appear in Settings -> System)")
+    parser.add_argument("--system-action", action="store_true", help="Mark module with FLAG_SYSTEM_ACTION (in-place action button in Settings -> System)")
     parser.add_argument("--icon", type=lambda x: int(x, 0), default=1, help="Icon asset ID (0..255)")
     parser.add_argument("--version", default="1.0.0", help="Package semantic version (e.g. 1.2.0)")
     parser.add_argument("--payload", help="Binary payload input file")
@@ -571,6 +593,12 @@ def main():
         action="append",
         default=[],
         help="Import capability: <iface_id>:<slot_idx>[:min_abi][:mandatory]",
+    )
+    parser.add_argument(
+        "--action",
+        action="append",
+        default=[],
+        help="Declare app action: <action_id>:<scope_mask>:<label>[:flags]",
     )
     parser.add_argument("--verify", action="store_true", help="Print detailed verification report")
 
@@ -610,6 +638,10 @@ def main():
         flags |= FLAG_SINGLETON
     if args.restart_on_fail:
         flags |= FLAG_RESTART_ON_FAIL
+    if args.system_menu:
+        flags |= FLAG_SYSTEM_MENU
+    if args.system_action:
+        flags |= FLAG_SYSTEM_ACTION
 
     builder.set_lifecycle(type_map[args.type], flags)
 
@@ -660,6 +692,14 @@ def main():
         min_abi = int(parts[2], 0) if len(parts) > 2 else 1
         mandatory = bool(int(parts[3], 0)) if len(parts) > 3 else True
         builder.add_cap_import(iface_id, slot_idx, min_abi, mandatory)
+
+    for item in args.action:
+        parts = item.split(":")
+        action_id = int(parts[0], 0)
+        scope_mask = int(parts[1], 0)
+        label = parts[2]
+        aflags = int(parts[3], 0) if len(parts) > 3 else 0
+        builder.add_action(action_id, scope_mask, label, aflags)
 
     package_bytes = builder.build()
 

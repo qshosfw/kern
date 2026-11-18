@@ -44,12 +44,26 @@ pub fn read_krx_summary<'a, 'b>(
     KrxPreamble::summarize_into(&hdr_buf[..read_len], out)
 }
 
-/// Load and launch a verified KRX binary application package.
+/// Shared header validation, capability/RAM check, and native/paged payload loader.
 #[inline(never)]
-pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let header_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[1792..2048];
-    let mut summary_uninit = core::mem::MaybeUninit::uninit();
-    let summary = read_krx_summary(ctx.storage, path, header_buf, &mut summary_uninit)?;
+fn load_krx_into_slot(
+    storage: &mut crate::services::SystemStorage<'_>,
+    path: &str,
+    sys_caps: Option<kernel::caps::CapabilitySet>,
+    pid: kernel::proc::Pid,
+) -> Result<(kernel::caps::CapabilitySet, &'static str, u16), KrxLaunchError> {
+    const HDR_RESERVE: usize = kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE;
+    const SUMMARY_RESERVE: usize =
+        (core::mem::size_of::<kernel::proc::krx::KrxSummary<'static>>() + 7) & !7;
+    let tail = crate::data::arena::scratch_tail_bytes_mut();
+    let tail_len = tail.len();
+    let (pre_hdr, hdr_buf) = tail.split_at_mut(tail_len - HDR_RESERVE);
+    let summary_offset = pre_hdr.len() - SUMMARY_RESERVE;
+    let summary_slot = unsafe {
+        &mut *(pre_hdr.as_mut_ptr().add(summary_offset)
+            as *mut core::mem::MaybeUninit<kernel::proc::krx::KrxSummary<'_>>)
+    };
+    let summary = read_krx_summary(storage, path, hdr_buf, summary_slot)?;
     let header_len = summary.preamble.header_len as usize;
 
     let exec_class = summary
@@ -61,7 +75,6 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     #[cfg(not(feature = "krx_native"))]
     let is_native_or_paged = false;
     if !is_native_or_paged {
-        let _ = (ctx, path);
         return Err(match exec_class {
             KrxClass::Declare | KrxClass::VMachine => KrxLaunchError::VmDisabled,
             _ => KrxLaunchError::ExecutionFailed,
@@ -74,86 +87,94 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
         "App"
     };
 
-    // 2. Verify Hardware Capabilities
     let required_caps = summary.caps;
-    if !ctx.caps().contains_all(required_caps) {
-        let missing = required_caps.without(ctx.caps());
-        let cap_msg = missing
-            .first_cap()
-            .map_or("Missing Cap", |c| c.required_message());
-        return Err(KrxLaunchError::CapabilityDenied(cap_msg));
+    let icon_id = summary.icon_id;
+    if let Some(granted) = sys_caps {
+        if !granted.contains_all(required_caps) {
+            let missing = required_caps.without(granted);
+            let cap_msg = missing
+                .first_cap()
+                .map_or("Missing Cap", |c| c.required_message());
+            return Err(KrxLaunchError::CapabilityDenied(cap_msg));
+        }
     }
 
-    // 3. Verify RAM and stack headroom requirements against Execution Section
     let exec = summary
         .exec
         .as_ref()
         .ok_or(KrxLaunchError::MissingExecution)?;
     {
-        let avail = kernel::sys::SystemDiagnostics::ram_available_bytes();
-        let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
-        let min_stack = (exec.min_stack_bytes as usize).min(128);
-        if margin < min_stack.min(96) {
-            return Err(KrxLaunchError::InsufficientStack);
+        let avail = crate::data::arena::TRANSIENT_ARENA_BYTES;
+        if sys_caps.is_some() {
+            let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
+            let min_stack = (exec.min_stack_bytes as usize).min(96);
+            if margin < min_stack.saturating_add(32) {
+                return Err(KrxLaunchError::InsufficientStack);
+            }
         }
-        if !exec.can_execute(avail, margin.min(128)) {
+        if !exec.can_execute(avail, 64) {
             return Err(KrxLaunchError::InsufficientRam);
         }
     }
 
     let app_name = store_dynamic_app_name(raw_name);
-    let dyn_id = AppRegistry::count();
-    let dyn_pid = crate::orchestrator::proc_table_mut()
-        .spawn_or_recycle(
-            app_name,
-            dyn_id,
-            kernel::sched::Priority::Ui,
-            kernel::proc::ExecType::RelocatableNative,
-            required_caps,
-        )
-        .unwrap_or(kernel::proc::Pid(dyn_id as u8));
-
     #[cfg(feature = "krx_native")]
-    let (vtable, instance) = {
+    {
         let arena_buf = super::native_runner::transient_arena_bytes_mut();
-        let max_payload = arena_buf.len() - 256;
+        let max_payload = arena_buf.len() - HDR_RESERVE - SUMMARY_RESERVE;
         let to_read = if exec.payload_size > 0 {
             (exec.payload_size as usize).min(max_payload)
         } else {
             max_payload
         };
-        let payload_read = ctx
-            .storage
+        let payload_read = storage
             .read_file_at(path, header_len, &mut arena_buf[..to_read])
             .map_err(|_| KrxLaunchError::ReadFailed)?;
 
-        super::native_runner::load_native_from_storage(
-            app_name,
-            path,
-            payload_read,
-            summary,
-            dyn_pid,
-        )?;
+        super::native_runner::load_native_from_storage(app_name, path, payload_read, summary, pid)?;
+    }
+    #[cfg(not(feature = "krx_native"))]
+    {
+        let _ = (app_name, pid, header_len);
+        return Err(KrxLaunchError::ExecutionFailed);
+    }
 
-        (
-            super::native_runner::NATIVE_RUNNER_VTABLE,
-            core::ptr::null_mut(),
-        )
-    };
+    Ok((required_caps, app_name, icon_id))
+}
+
+/// Load and launch a verified KRX binary application package.
+#[inline(never)]
+pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
+    let dyn_id = AppRegistry::count();
+    let dyn_pid = kernel::proc::Pid(dyn_id as u8);
+    let (required_caps, app_name, icon_id) =
+        load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), dyn_pid)?;
+
+    let _ = crate::orchestrator::proc_table_mut().spawn_or_recycle(
+        app_name,
+        dyn_id,
+        kernel::sched::Priority::Ui,
+        kernel::proc::ExecType::RelocatableNative,
+        required_caps,
+    );
+
+    #[cfg(feature = "krx_native")]
+    let (vtable, instance) = (
+        super::native_runner::NATIVE_RUNNER_VTABLE,
+        core::ptr::null_mut(),
+    );
     #[cfg(not(feature = "krx_native"))]
     let (vtable, instance): (
         &'static kernel::app::AppVTable<SysContext<'static, 'static>>,
         *mut (),
-    ) = {
-        let _ = (ctx, path, app_name, dyn_pid, required_caps);
-        return Err(KrxLaunchError::ExecutionFailed);
-    };
+    ) = return Err(KrxLaunchError::ExecutionFailed);
 
+    let (icon_8, icon_16) = crate::apps::settings::apps::package_icons(app_name, icon_id);
     let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
         metadata: AppMetadata {
             name: app_name,
-            icon: &gfx::icons::ICON_16_DIAGNOSTICS,
-            icon_8: gfx::icons::ICON_APP_DIAG,
+            icon: icon_16,
+            icon_8,
         },
         vtable,
         instance,
@@ -161,4 +182,131 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
     });
     ctx.post_event(crate::apps::Shortcut::LaunchApp(dyn_id as u8).into());
     Ok(dyn_id)
+}
+
+/// Load and launch a verified KRX binary application package with a specific action ID argument.
+#[inline(never)]
+pub fn launch_krx_package_with_arg(
+    ctx: &mut SysContext,
+    path: &str,
+    arg: u32,
+) -> Result<usize, KrxLaunchError> {
+    #[cfg(feature = "krx_native")]
+    super::native_runner::set_pending_start_arg(arg);
+    let _ = arg;
+    let res = launch_krx_package(ctx, path);
+    if res.is_err() {
+        #[cfg(feature = "krx_native")]
+        super::native_runner::set_pending_start_arg(0);
+    }
+    res
+}
+
+/// Load and invoke an in-place system action module (`FLAG_SYSTEM_ACTION`) without switching apps.
+#[cfg(all(feature = "filesystem", feature = "krx_native"))]
+#[inline(never)]
+pub fn invoke_action_krx_package<'a, 'hw>(
+    ctx: &mut SysContext<'a, 'hw>,
+    path: &str,
+) -> Result<(), KrxLaunchError> {
+    load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), kernel::proc::Pid(0))?;
+    unsafe {
+        let static_ctx =
+            &mut *(ctx as *mut SysContext<'a, 'hw> as *mut SysContext<'static, 'static>);
+        super::native_runner::native_on_start(core::ptr::null_mut(), static_ctx);
+    }
+    Ok(())
+}
+
+/// Forward a modal result to an in-place action module and unload its transient slot.
+#[cfg(all(feature = "filesystem", feature = "krx_native"))]
+#[inline(never)]
+pub fn finish_action_krx_package<'a, 'hw>(
+    ctx: &mut SysContext<'a, 'hw>,
+    result: &kernel::app::ModalResult<'_>,
+) -> kernel::app::EventResult {
+    unsafe {
+        let static_ctx =
+            &mut *(ctx as *mut SysContext<'a, 'hw> as *mut SysContext<'static, 'static>);
+        let res =
+            super::native_runner::native_on_modal_result(core::ptr::null_mut(), static_ctx, result);
+        super::native_runner::native_on_exit(core::ptr::null_mut(), static_ctx);
+        res
+    }
+}
+
+/// Load and execute a standalone KRX module directly during early boot (before `SysContext` exists).
+#[cfg(all(feature = "filesystem", feature = "krx_native"))]
+#[inline(never)]
+pub fn try_launch_boot_module(
+    lcd: &mut drivers::st7565::St7565<'_>,
+    storage: &mut crate::services::SystemStorage<'_>,
+    path: &str,
+    param: usize,
+) -> Result<u32, KrxLaunchError> {
+    load_krx_into_slot(storage, path, None, kernel::proc::Pid(0))?;
+
+    let res = unsafe {
+        super::syscall::ACTIVE_CANVAS = crate::system_canvas() as *mut gfx::Canvas;
+        super::syscall::display::BOOT_LCD = lcd as *mut drivers::st7565::St7565<'_> as *mut _;
+        super::native_runner::BOOT_STORAGE =
+            storage as *mut crate::services::SystemStorage<'_> as *mut _;
+        let rc = super::native_runner::invoke_boot_start(param);
+        super::native_runner::BOOT_STORAGE = core::ptr::null_mut();
+        super::syscall::display::BOOT_LCD = core::ptr::null_mut();
+        super::native_runner::slot_mut().is_loaded = false;
+        rc
+    };
+    Ok(res)
+}
+
+/// Display a dynamic human-language error dialog for KRX package launch failures.
+/// Title format: `"<ExecType>: <filename>"` (e.g. `"Module: sysinfo.krx"`, `"App: counter.krx"`).
+#[inline(never)]
+pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
+    let fname = crate::apps::launcher::catalog::extract_filename(path);
+    let exec_type = crate::apps::launcher::catalog::get_catalog()
+        .entries
+        .iter()
+        .find(|e| e.path == path)
+        .map(|e| e.exec_type)
+        .unwrap_or(kernel::proc::krx::KrxExecType::App);
+
+    let mut title = heapless::String::<32>::new();
+    let _ = title.push_str(exec_type.as_str());
+    let _ = title.push_str(": ");
+    let _ = title.push_str(fname);
+
+    const HUMAN_MSGS: &[u8] = b"\
+File not found\0\
+Read failed\0\
+Bad header\0\
+Bad CRC-32\0\
+No manifest\0\
+No exec code\0\
+Cap denied\0\
+Low RAM\0\
+Low stack\0\
+Reloc failed\0\
+Bind failed\0\
+VM disabled\0\
+Too large\0\
+Exec failed\0\
+Bad entry\0\
+Truncated\0\
+Bad profile\0";
+
+    let msg = if let KrxLaunchError::CapabilityDenied(cap) = err {
+        cap
+    } else {
+        utils::format::nth_cstr(HUMAN_MSGS, err.index())
+    };
+
+    ctx.show_confirm(
+        crate::apps::settings::dialog::TAG_POPUP_INFO,
+        title.as_str(),
+        msg,
+        "OK",
+        "",
+    );
 }

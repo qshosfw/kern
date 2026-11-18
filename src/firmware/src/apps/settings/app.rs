@@ -20,6 +20,9 @@ pub struct SettingsApp {
     pub(crate) current_page: PageId,
     pub(crate) is_editing: bool,
     pub(crate) is_pressed: bool,
+    pub(crate) resume_nav: bool,
+    pub(crate) active_action_module: bool,
+    pub(crate) editing_rule: u8,
     pub(crate) dirty_timer_ms: u16,
     pub(crate) last_poll_sec: u16,
     pub slide_offset_x: i16,
@@ -37,8 +40,8 @@ pub struct SettingsApp {
     // ── Cold/large structures ──
     pub(crate) stack: [MenuFrame; 4],
     pub(crate) view: MenuView,
-    pub(crate) item_icons: [&'static [u8; 8]; 8],
-    pub(crate) items: [MenuItem; 16],
+    pub(crate) item_icons: [&'static [u8; 8]; 20],
+    pub(crate) items: [MenuItem; 20],
 }
 
 impl SettingsApp {
@@ -47,6 +50,9 @@ impl SettingsApp {
             (*ptr).title = "Settings";
             (*ptr).view = MenuView::new();
             (*ptr).selected_pkg_idx = 0;
+            (*ptr).resume_nav = false;
+            (*ptr).active_action_module = false;
+            (*ptr).editing_rule = 0;
             (*ptr).slide_offset_x = 0;
             (*ptr).dirty_timer_ms = 0;
             (*ptr).last_poll_sec = u16::MAX;
@@ -88,9 +94,14 @@ impl SettingsApp {
     fn build_menu_model<'a>(&'a self, is_editing: bool) -> MenuModel<'a> {
         let icons = if self.current_page == PageId::Root {
             Some(Self::ROOT_ICONS)
-        } else if self.current_page == PageId::ManageApps
-            || self.current_page == PageId::ManageServices
-        {
+        } else if matches!(
+            self.current_page,
+            PageId::ManageApps
+                | PageId::ManageServices
+                | PageId::ButtonsShortcuts
+                | PageId::ShortcutRules
+                | PageId::ShortcutRule
+        ) {
             Some(&self.item_icons[..self.items_len])
         } else {
             None
@@ -125,8 +136,112 @@ impl SettingsApp {
             return;
         }
 
+        if self.current_page == PageId::ButtonsShortcuts {
+            if sel_idx < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
+                let cat = crate::apps::launcher::catalog::get_catalog();
+                cat.scan(ctx.storage);
+                let sheet = crate::apps::shortcut::build_picker_sheet(
+                    crate::apps::shortcut::slot_label(sel_idx),
+                    ctx.config.keys.actions[sel_idx],
+                    cat,
+                );
+                ctx.show_sheet(dialog::TAG_SHORTCUT_SHEET, sheet);
+            }
+            return;
+        }
+        if self.current_page == PageId::ShortcutRules {
+            if sel_idx < 3 {
+                self.editing_rule = sel_idx as u8;
+                self.push_submenu(PageId::ShortcutRule, ctx);
+            }
+            return;
+        }
+        if self.current_page == PageId::ShortcutRule && sel_idx == 2 {
+            let cat = crate::apps::launcher::catalog::get_catalog();
+            cat.scan(ctx.storage);
+            let r = ctx.config.keys.ctx_rules[self.editing_rule.min(2) as usize];
+            let slot = (r.slot as usize).min(crate::apps::shortcut::KEY_SHORTCUT_COUNT - 1);
+            let sheet = crate::apps::shortcut::build_picker_sheet(
+                crate::apps::shortcut::slot_label(slot),
+                r.action,
+                cat,
+            );
+            ctx.show_sheet(dialog::TAG_SHORTCUT_SHEET, sheet);
+            return;
+        }
+
         let defs = page_defs(self.current_page);
-        if let Some(def) = defs.get(sel_idx) {
+        #[cfg(feature = "krx_native")]
+        let def_idx = if self.current_page == PageId::System {
+            let cat = crate::apps::launcher::catalog::get_catalog();
+            cat.scan(ctx.storage);
+            let sys_caps = ctx.caps();
+            let menu_flag = kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU;
+            let act_flag = kernel::proc::krx::SectionType::FLAG_SYSTEM_ACTION;
+            let menu_count = cat.system_entry_count(sys_caps, menu_flag);
+            let act_count = cat.system_entry_count(sys_caps, act_flag);
+            let ins_menu = super::system::system_modules_insert_idx().min(defs.len());
+            let ins_act = (super::system::system_actions_insert_idx() + menu_count)
+                .min(defs.len() + menu_count);
+
+            let picked: Option<(&str, bool)> =
+                if sel_idx >= ins_menu && sel_idx < ins_menu + menu_count {
+                    cat.system_entry_at(sys_caps, menu_flag, sel_idx - ins_menu)
+                        .map(|e| (e.path.as_str(), false))
+                } else if sel_idx >= ins_act && sel_idx < ins_act + act_count {
+                    cat.system_entry_at(sys_caps, act_flag, sel_idx - ins_act)
+                        .map(|e| (e.path.as_str(), true))
+                } else {
+                    None
+                };
+
+            if let Some((path, is_action)) = picked {
+                let res = if is_action {
+                    #[cfg(feature = "filesystem")]
+                    {
+                        self.active_action_module = true;
+                        let r = crate::runtime::loader::invoke_action_krx_package(ctx, path);
+                        if r.is_err() {
+                            self.active_action_module = false;
+                        }
+                        r
+                    }
+                    #[cfg(not(feature = "filesystem"))]
+                    Ok(())
+                } else {
+                    self.resume_nav = true;
+                    let r = crate::apps::runtime::launch_krx_package(ctx, path).map(|_| ());
+                    if r.is_err() {
+                        self.resume_nav = false;
+                    }
+                    r
+                };
+                if let Err(err) = res {
+                    crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
+                    crate::apps::launcher::catalog::get_catalog().mark_dirty();
+                    self.populate_current_menu(ctx);
+                    if self.selected_idx >= self.items_len {
+                        self.selected_idx = self.items_len.saturating_sub(1);
+                    }
+                }
+                return;
+            }
+
+            let mut idx = sel_idx;
+            if sel_idx >= ins_act + act_count {
+                idx -= act_count;
+            }
+            if sel_idx >= ins_menu + menu_count {
+                idx -= menu_count;
+            }
+            idx
+        } else {
+            sel_idx
+        };
+        #[cfg(not(feature = "krx_native"))]
+        let def_idx = sel_idx;
+
+        if let Some(def) = defs.get(def_idx) {
             match def.tag {
                 TAG_SUBMENU => {
                     if let Some(target_page) = PageId::from_u8(def.aux) {
@@ -302,11 +417,63 @@ impl SettingsApp {
         }
 
         // 5. Handle directional navigation & list scrolling (Up, Down, Encoder, etc.)
+        #[cfg(feature = "settings_info")]
+        if self.current_page == PageId::SystemInfo {
+            let dir: isize = match *event {
+                Event::Key {
+                    code: KeyCode::Up | KeyCode::Key2,
+                    state: KeyState::Pressed | KeyState::Held,
+                } => -1,
+                Event::Key {
+                    code: KeyCode::Down | KeyCode::Key8,
+                    state: KeyState::Pressed | KeyState::Held,
+                } => 1,
+                Event::Encoder(d) => d as isize,
+                _ => 0,
+            };
+            if dir != 0 {
+                let max = super::system::system_info_row_count()
+                    - super::system::SYSTEM_INFO_VISIBLE_ROWS;
+                let prev = self.selected_idx;
+                self.selected_idx =
+                    (self.selected_idx as isize + dir).clamp(0, max as isize) as usize;
+                if self.selected_idx != prev && ctx.config.audio.key_beep != 0 {
+                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
+                }
+                return EventResult::Consumed;
+            }
+            if matches!(
+                *event,
+                Event::Key {
+                    code: KeyCode::Up | KeyCode::Down | KeyCode::Key2 | KeyCode::Key8,
+                    state: KeyState::Released,
+                }
+            ) {
+                return EventResult::Consumed;
+            }
+        }
+
         if self.dispatch_view_event(ctx, event) {
             return EventResult::Consumed;
         }
 
         EventResult::Ignored
+    }
+
+    #[inline(always)]
+    fn begin_start(&mut self) {
+        if self.resume_nav {
+            self.resume_nav = false;
+            return;
+        }
+        self.active_action_module = false;
+        self.current_page = PageId::Root;
+        self.stack_top = 0;
+        self.title = "Settings";
+        self.selected_idx = 0;
+        self.dirty_timer_ms = 0;
+        self.last_poll_sec = u16::MAX;
+        self.view.reset_scroll();
     }
 }
 
@@ -327,20 +494,15 @@ impl App<SysContext<'_, '_>> for SettingsApp {
         }
     }
 
+    #[inline(never)]
     fn on_start(&mut self, ctx: &mut SysContext) {
-        self.current_page = PageId::Root;
-        self.stack_top = 0;
-        self.title = "Settings";
-        self.selected_idx = 0;
-        self.dirty_timer_ms = 0;
-        self.last_poll_sec = u16::MAX;
-
-        self.view.reset_scroll();
+        self.begin_start();
         self.populate_current_menu(ctx);
     }
 
     #[inline(never)]
     fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
+        let mut polled_info = false;
         if let Event::Tick = *event {
             let now_ms = kernel::proc::primitives::TimerPrimitive::uptime_ms(ctx);
             let dt = if self.last_tick_ms == 0 {
@@ -351,31 +513,55 @@ impl App<SysContext<'_, '_>> for SettingsApp {
             self.last_tick_ms = now_ms;
 
             // Live metric polling (refresh once per second transition to save CPU and battery)
-            if self.current_page == PageId::BatteryInfo || self.current_page == PageId::SystemInfo {
+            let on_uptime_page = {
+                #[cfg(feature = "settings_info")]
+                {
+                    self.current_page == PageId::BatteryInfo
+                        || self.current_page == PageId::SystemInfo
+                }
+                #[cfg(not(feature = "settings_info"))]
+                {
+                    self.current_page == PageId::BatteryInfo
+                }
+            };
+            if on_uptime_page {
                 let cur_sec = ctx.power.uptime_secs as u16;
                 if cur_sec != self.last_poll_sec {
                     self.last_poll_sec = cur_sec;
-                    self.populate_current_menu(ctx);
+                    polled_info = true;
+                    if self.current_page == PageId::BatteryInfo {
+                        self.populate_current_menu(ctx);
+                    }
                 }
             }
             if self.dirty_timer_ms > 0 {
                 self.dirty_timer_ms = self.dirty_timer_ms.saturating_sub(dt);
                 if self.dirty_timer_ms == 0 {
                     if ctx.flush_config().is_err() {
-                        ctx.show_popup(
-                            dialog::TAG_POPUP_INFO,
-                            "Save Error",
-                            "Failed to write configuration",
-                        );
+                        ctx.show_popup(dialog::TAG_POPUP_INFO, "Save Error", "Write failed");
                     }
                 }
             }
         }
 
-        self.handle_menu_screen_event(ctx, event)
+        match self.handle_menu_screen_event(ctx, event) {
+            EventResult::Consumed => EventResult::Consumed,
+            other => {
+                if polled_info {
+                    EventResult::Consumed
+                } else {
+                    other
+                }
+            }
+        }
     }
 
     fn on_modal_result(&mut self, ctx: &mut SysContext, result: &ModalResult<'_>) -> EventResult {
+        #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+        if self.active_action_module {
+            self.active_action_module = false;
+            return crate::runtime::loader::finish_action_krx_package(ctx, result);
+        }
         match result {
             ModalResult::SheetSelected { tag, index } => {
                 dialog::handle_sheet_selected(self, ctx, *tag, *index)
@@ -391,8 +577,17 @@ impl App<SysContext<'_, '_>> for SettingsApp {
 
     #[inline(never)]
     fn render(&self, canvas: &mut Canvas, _ctx: &SysContext) {
-        let model = self.build_menu_model(self.is_editing);
-        self.view.render(canvas, &model);
+        #[cfg(feature = "settings_info")]
+        let is_info = self.current_page == PageId::SystemInfo;
+        #[cfg(not(feature = "settings_info"))]
+        let is_info = false;
+        if is_info {
+            #[cfg(feature = "settings_info")]
+            super::system::render_system_info_page(canvas, _ctx, self.selected_idx);
+        } else {
+            let model = self.build_menu_model(self.is_editing);
+            self.view.render(canvas, &model);
+        }
         if self.slide_offset_x != 0 {
             canvas.scroll_horizontal(self.slide_offset_x as i8, 0);
         }
@@ -432,9 +627,12 @@ mod tests {
             assert_eq!(sys_defs[idx].title, "UART Baud");
             idx += 1;
         }
-        assert_eq!(sys_defs[idx].title, "Info");
-        assert_eq!(PageId::from_u8(sys_defs[idx].aux), Some(PageId::SystemInfo));
-        idx += 1;
+        #[cfg(feature = "settings_info")]
+        {
+            assert_eq!(sys_defs[idx].title, "Info");
+            assert_eq!(PageId::from_u8(sys_defs[idx].aux), Some(PageId::SystemInfo));
+            idx += 1;
+        }
         #[cfg(feature = "filesystem")]
         {
             assert_eq!(sys_defs[idx].title, "Storage");
@@ -460,14 +658,6 @@ mod tests {
             Some(ActionId::ResetSettings)
         );
         idx += 1;
-        if cfg!(feature = "dfu") {
-            assert_eq!(sys_defs[idx].title, "DFU Update");
-            assert_eq!(
-                ActionId::from_u8(sys_defs[idx].aux),
-                Some(ActionId::RebootBootloader)
-            );
-            idx += 1;
-        }
         assert_eq!(sys_defs[idx].title, "Restart");
         assert_eq!(
             ActionId::from_u8(sys_defs[idx].aux),
@@ -475,27 +665,27 @@ mod tests {
         );
         assert_eq!(sys_defs.len(), idx + 1);
 
-        let info_defs = page_defs(PageId::SystemInfo);
-        assert_eq!(
-            super::super::options::page_title(PageId::SystemInfo),
-            "System Info"
-        );
-        assert_eq!(info_defs[0].title, "Firmware");
-        assert_eq!(info_defs[1].title, "Bootloader");
-        assert_eq!(info_defs[2].title, "Serial");
-        assert_eq!(info_defs[3].title, "QS-1 S/N");
-        assert_eq!(info_defs[4].title, "MAC");
-        assert_eq!(info_defs[5].title, "MCU Flash");
-        assert_eq!(info_defs[6].title, "Uptime");
-        assert_eq!(info_defs.len(), 7);
+        #[cfg(feature = "settings_info")]
+        {
+            assert_eq!(
+                super::super::options::page_title(PageId::SystemInfo),
+                "System Info"
+            );
+            assert!(page_defs(PageId::SystemInfo).is_empty());
 
-        // Verify MenuView fits "QS-1 S/N" and raw QS-1 ASCII S/N without truncation (>= 4 px gap to 118 - val_w).
-        let qs1 = bsp::uid::factory_cert_status();
-        let val_w = gfx::text::str_width(qs1.as_str(), &gfx::fonts::tomthumb::FONT);
-        let title_w = gfx::text::str_width("QS-1 S/N", &gfx::fonts::mumatrix_regular::FONT);
-        let title_max = (114 - val_w).max(30);
-        assert!(6 + title_w <= title_max);
-        assert!((118 - val_w) - (6 + title_w) >= 4);
+            let qs1 = bsp::uid::factory_cert_status();
+            let val_w = gfx::text::str_width(qs1.as_str(), &gfx::fonts::tomthumb::FONT);
+            let key_w = gfx::text::str_width("QS-1", &gfx::fonts::tomthumb::FONT);
+            assert!((122 - val_w) - (2 + key_w) >= 8);
+
+            // Verify all wrapped FCC notice lines fit between X=4 and scrollbar gap X=123
+            for line in super::super::system::FCC_NOTICE.split('\0') {
+                assert!(
+                    gfx::text::str_width(line, &gfx::fonts::tomthumb::FONT) <= 119,
+                    "FCC line too wide: {line}"
+                );
+            }
+        }
 
         // Verify clock option count and config sanitization match overclock_72mhz gate.
         let clk_opts =
@@ -517,13 +707,106 @@ mod tests {
             ActionId::ResetSettings.destructive_level(),
             DestructiveLevel::UserDataLoss
         );
+        #[cfg(feature = "filesystem")]
+        {
+            assert_eq!(ActionId::from_u8(12), Some(ActionId::DeletePackage));
+            assert_eq!(
+                ActionId::DeletePackage.destructive_level(),
+                DestructiveLevel::UserDataLoss
+            );
+        }
         assert_eq!(
             ActionId::RebootFirmware.destructive_level(),
             DestructiveLevel::Reboot
         );
+    }
+
+    #[cfg(feature = "krx_native")]
+    #[test]
+    fn system_module_gate_requires_valid_module_flag_and_supported_caps() {
+        use crate::apps::launcher::catalog::PackageCatalogEntry;
+        use kernel::caps::{Cap, CapabilitySet};
+        use kernel::proc::krx::{KrxClass, KrxExecType, SectionType};
+
+        let mut path = heapless::String::new();
+        let _ = path.push_str("/apps/sysinfo.mod");
+        let e = PackageCatalogEntry {
+            title: heapless::String::new(),
+            path,
+            size_bytes: 4238,
+            app_class: KrxClass::Native,
+            exec_type: KrxExecType::Module,
+            lifecycle_flags: SectionType::FLAG_SYSTEM_MENU,
+            icon_id: 1,
+            caps: (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::FactoryCalib as u32),
+            is_valid: true,
+        };
+
+        let full_caps = CapabilitySet::empty()
+            .with(Cap::DisplayDirect)
+            .with(Cap::Keypad)
+            .with(Cap::FactoryCalib);
+        assert!(e.is_system_module(full_caps));
+
+        // Missing FLAG_SYSTEM_MENU must hide the menu button.
+        let mut no_flag = e.clone();
+        no_flag.lifecycle_flags = 0;
+        assert!(!no_flag.is_system_module(full_caps));
+
+        // Corrupt / failed CRC header must hide the menu button.
+        let mut invalid = e.clone();
+        invalid.is_valid = false;
+        assert!(!invalid.is_system_module(full_caps));
+
+        // Standalone App instead of Module must hide the menu button.
+        let mut as_app = e.clone();
+        as_app.exec_type = KrxExecType::App;
+        assert!(!as_app.is_system_module(full_caps));
+
+        // Requesting ungranted capability must hide the menu button.
+        let limited_caps = CapabilitySet::empty().with(Cap::DisplayDirect);
+        assert!(!e.is_system_module(limited_caps));
+    }
+
+    #[test]
+    fn settings_app_preserves_page_and_focus_when_resuming_from_child_module() {
+        let mut raw = core::mem::MaybeUninit::<SettingsApp>::uninit();
+        unsafe { SettingsApp::init_at(raw.as_mut_ptr()) };
+        let app = unsafe { raw.assume_init_mut() };
+
+        app.current_page = PageId::System;
+        app.stack_top = 1;
+        app.selected_idx = 4;
+        app.title = "System";
+        app.resume_nav = true;
+
+        app.begin_start();
+        assert_eq!(app.current_page, PageId::System);
+        assert_eq!(app.stack_top, 1);
+        assert_eq!(app.selected_idx, 4);
+        assert_eq!(app.title, "System");
+        assert!(!app.resume_nav);
+
+        // Next cold entry (without resume_nav) resets to Root.
+        app.begin_start();
+        assert_eq!(app.current_page, PageId::Root);
+        assert_eq!(app.stack_top, 0);
+        assert_eq!(app.selected_idx, 0);
+    }
+
+    #[test]
+    fn package_icons_honors_krx_icon_id_and_falls_back_cleanly() {
         assert_eq!(
-            ActionId::RebootBootloader.destructive_level(),
-            DestructiveLevel::Reboot
+            super::super::apps::package_icons("Info", 30),
+            (gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO)
+        );
+        assert_eq!(
+            super::super::apps::package_icons("Bench", 1),
+            (gfx::icons::ICON_APP_DIAG, &gfx::icons::ICON_16_DIAGNOSTICS)
+        );
+        assert_eq!(
+            super::super::apps::package_icons("DFU Update", 49).0,
+            gfx::icons::ICON_UPLOAD
         );
     }
 }

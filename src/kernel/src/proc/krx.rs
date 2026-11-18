@@ -263,7 +263,7 @@ Unsupported Profile\0Unsupported profile\0";
 
 impl KrxLaunchError {
     #[inline(never)]
-    const fn index(&self) -> u8 {
+    pub const fn index(&self) -> u8 {
         match self {
             Self::FileNotFound => 0,
             Self::ReadFailed => 1,
@@ -317,6 +317,7 @@ const _: () = assert!(core::mem::size_of::<KrxPreamble>() == 24);
 
 impl KrxPreamble {
     pub const SIZE: usize = 24;
+    pub const MAX_HEADER_SIZE: usize = 512;
 
     /// Parse preamble directly into `out` from a little-endian byte slice.
     #[inline(never)]
@@ -378,6 +379,7 @@ pub const SECTION_CONFIG: u16 = 0x0007;
 pub const SECTION_SEAL: u16 = 0x0008;
 pub const SECTION_TYPE_LIFECYCLE: u16 = 0x0009;
 pub const SECTION_LEAF_MAP: u16 = 0x000A;
+pub const SECTION_ACTIONS: u16 = 0x000B;
 
 /// Standard 4-byte Section Header prefix
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -660,6 +662,10 @@ impl SectionType {
     pub const FLAG_SINGLETON: u8 = 1 << 3;
     pub const FLAG_AUTO_UPDATE_OK: u8 = 1 << 4;
     pub const FLAG_RTC: u8 = 1 << 5;
+    /// Module exposes an entry in the OS Settings -> System menu.
+    pub const FLAG_SYSTEM_MENU: u8 = 1 << 6;
+    /// Module exposes an action/dialog button in the OS Settings -> System maintenance group.
+    pub const FLAG_SYSTEM_ACTION: u8 = 1 << 7;
 
     pub fn exec_type(&self) -> Option<KrxExecType> {
         KrxExecType::from_u8(self.exec_type)
@@ -701,7 +707,56 @@ pub struct KrxAuxSections<'a> {
     pub block_map: Option<&'a [u8]>,
     pub leaf_map: Option<&'a [u8]>,
     pub service_exports: Option<&'a [u8]>,
+    pub actions: Option<&'a [u8]>,
 }
+
+/// Declared App Action Entry (`SECTION_ACTIONS = 0x000B`, 16 bytes)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct KrxActionDecl {
+    /// App-local action ID passed to `entry(event)` via launch args (0 = default launch)
+    pub action_id: u16,
+    /// Scope mask: bit 0 = shortcut binder, bit 1 = `[F]` drawer, bit 2 = system action
+    pub scope_mask: u8,
+    pub flags: u8,
+    /// ASCII NUL-terminated label
+    pub label: [u8; 12],
+}
+
+impl KrxActionDecl {
+    pub const SIZE: usize = 16;
+    pub const SCOPE_SHORTCUT: u8 = 1 << 0;
+    pub const SCOPE_DRAWER: u8 = 1 << 1;
+    pub const SCOPE_SYSTEM: u8 = 1 << 2;
+
+    #[inline(always)]
+    pub const fn count(body: &[u8]) -> usize {
+        body.len() >> 4
+    }
+
+    pub fn parse(body: &[u8], idx: usize) -> Option<Self> {
+        let off = idx << 4;
+        if off + Self::SIZE > body.len() {
+            return None;
+        }
+        let s = &body[off..off + Self::SIZE];
+        let mut label = [0u8; 12];
+        label.copy_from_slice(&s[4..16]);
+        Some(Self {
+            action_id: u16::from_le_bytes([s[0], s[1]]),
+            scope_mask: s[2],
+            flags: s[3],
+            label,
+        })
+    }
+
+    pub fn label_str(&self) -> &str {
+        let len = self.label.iter().position(|&b| b == 0).unwrap_or(12);
+        utils::format::ascii_str(&self.label[..len]).unwrap_or("")
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<KrxActionDecl>() == 16);
 
 #[derive(Debug, Clone, Copy)]
 pub struct KrxSummary<'a> {
@@ -730,6 +785,16 @@ impl<'a> KrxSummary<'a> {
     pub fn is_singleton(&self) -> bool {
         (self.type_flags & SectionType::FLAG_SINGLETON) != 0
     }
+
+    #[inline(always)]
+    pub fn is_system_menu(&self) -> bool {
+        (self.type_flags & SectionType::FLAG_SYSTEM_MENU) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_system_action(&self) -> bool {
+        (self.type_flags & SectionType::FLAG_SYSTEM_ACTION) != 0
+    }
 }
 
 impl<'a> Default for KrxSummary<'a> {
@@ -757,6 +822,7 @@ impl<'a> Default for KrxSummary<'a> {
                 block_map: None,
                 leaf_map: None,
                 service_exports: None,
+                actions: None,
             },
         }
     }
@@ -774,7 +840,7 @@ impl KrxPreamble {
         let preamble = unsafe { &mut *core::ptr::addr_of_mut!((*ptr).preamble) };
         Self::parse_into(buf, preamble).map_err(|_| KrxLaunchError::InvalidPreamble)?;
         let h_len = preamble.header_len as usize;
-        if h_len < Self::SIZE || h_len > 512 || (h_len & 3) != 0 {
+        if h_len < Self::SIZE || h_len > Self::MAX_HEADER_SIZE || (h_len & 3) != 0 {
             return Err(KrxLaunchError::InvalidPreamble);
         }
         let hdr = buf.get(..h_len).ok_or(KrxLaunchError::TruncatedPackage)?;
@@ -829,6 +895,7 @@ impl KrxPreamble {
                 SECTION_BLOCK_MAP => out.aux.block_map = Some(body),
                 SECTION_LEAF_MAP => out.aux.leaf_map = Some(body),
                 SECTION_SERVICE_EXPORTS => out.aux.service_exports = Some(body),
+                SECTION_ACTIONS => out.aux.actions = Some(body),
                 _ => {}
             }
             let step = (sec_len + 3) & !3;
@@ -2530,7 +2597,14 @@ mod tests {
                 runtime_ticks: 0,
                 memory_bytes: 0,
                 name: [0; 12],
-                reserved: [0; 10],
+                exec_type: 0,
+                flags: 0,
+                stack_watermark: 0,
+                ipc_events: 0,
+                page_faults: 0,
+                slice_overruns: 0,
+                hibernations: 0,
+                fault_count: 0,
             };
             assert_eq!((svc.sys_proc_info)(0, &mut p_info), 1);
             assert_eq!((svc.sys_proc_kill)(99), 1);
@@ -3250,5 +3324,26 @@ mod tests {
         pkg[16..20].copy_from_slice(&header_crc_mod.to_le_bytes());
         let summary_mod = KrxPreamble::summarize(&pkg[..128]).expect("Valid module summary");
         assert_eq!(summary_mod.exec_type, KrxExecType::Module);
+    }
+
+    #[test]
+    fn test_section_actions_parse() {
+        let mut body = [0u8; 32];
+        body[0..2].copy_from_slice(&1u16.to_le_bytes());
+        body[2] = KrxActionDecl::SCOPE_SHORTCUT | KrxActionDecl::SCOPE_DRAWER;
+        body[4..9].copy_from_slice(b"Sched");
+
+        body[16..18].copy_from_slice(&2u16.to_le_bytes());
+        body[18] = KrxActionDecl::SCOPE_SHORTCUT;
+        body[20..25].copy_from_slice(b"IpcLv");
+
+        assert_eq!(KrxActionDecl::count(&body), 2);
+        let a0 = KrxActionDecl::parse(&body, 0).unwrap();
+        assert_eq!(a0.action_id, 1);
+        assert_eq!(a0.label_str(), "Sched");
+        let a1 = KrxActionDecl::parse(&body, 1).unwrap();
+        assert_eq!(a1.action_id, 2);
+        assert_eq!(a1.label_str(), "IpcLv");
+        assert!(KrxActionDecl::parse(&body, 2).is_none());
     }
 }

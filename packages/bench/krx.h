@@ -474,6 +474,7 @@ typedef KrxApiTable KrxSysTable;
 #define KRX_EV_POWER    6
 #define KRX_EV_MODAL    7
 #define KRX_EV_IPC      8
+#define KRX_IPC_ACTION_FLAG 0xAC
 
 // Key Codes (1:1 Hardware Matrix & Microkernel Mapping)
 typedef enum {

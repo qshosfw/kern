@@ -1,54 +1,71 @@
+use crate::apps::shortcut::{
+    KEY_SHORTCUT_COUNT, TARGET_FLASHLIGHT, TARGET_LOCK_KEYPAD, TARGET_MONITOR, TARGET_MUTE,
+    TARGET_NONE, TARGET_RADIO, TARGET_SETTINGS, TARGET_SLEEP, TARGET_TOGGLE_VFO,
+    TARGET_TX_POWER, hash_app,
+};
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CtxRule {
+    pub slot: u8,
+    pub ctx: u8, // 0=Off/Disabled, 1=VFO, 2=Home, 3=Settings, 4=Apps
+    pub action: u16,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KeyConfig {
-    pub version: u8,    // 2
-    pub nav_layout: u8, // 0=K1, 1=K5
-    pub f1_short: u8,
-    pub f1_long: u8,
-    pub f2_short: u8,
-    pub f2_long: u8,
-    pub m_long: u8,
-    pub auto_lock: u8,     // 0=Off, 1=15s, 2=30s, 3=1m, 4=2m
-    pub f_key_timeout: u8, // 0=Toggle, 1=1s, 2=2s, 3=3s, 4=5s
-    pub fast_scroll: u8,   // 0=Off, 1=On
-    pub hold_delay: u8,    // 0=250ms, 1=350ms, 2=500ms, 3=750ms
-    pub repeat_rate: u8,   // 0=30ms (turbo), 1=50ms (fast), 2=80ms (normal), 3=120ms (slow)
-    pub f_digits: [u8; 9], // Preset shortcuts for F+1 through F+9
-    pub ptt_mode: u8,      // 0=Momentary, 1=Toggle/Latch, 2=Double-press Latch
-    pub f_0: u8,           // Shortcut for F + 0
-    pub f_star: u8,        // Shortcut for F + *
-    pub f_menu: u8,        // Shortcut for F + Menu
-    pub f_side1: u8,       // Shortcut for F + Side1
-    pub f_side2: u8,       // Shortcut for F + Side2
-    pub _pad: [u8; 5],     // Explicit 4-byte alignment padding (total 36 bytes)
-    pub crc32: u32,
+    pub version: u8,                        // 3
+    pub nav_layout: u8,                     // 0=K1, 1=K5
+    pub auto_lock: u8,                      // 0=Off, 1=15s, 2=30s, 3=1m, 4=2m
+    pub f_key_timeout: u8,                  // 0=Toggle, 1=1s, 2=2s, 3=3s, 4=5s
+    pub fast_scroll: u8,                    // 0=Off, 1=On
+    pub hold_delay: u8,                     // 0=250ms, 1=350ms, 2=500ms, 3=750ms
+    pub repeat_rate: u8,                    // 0=30ms, 1=50ms, 2=80ms, 3=120ms
+    pub ptt_mode: u8,                       // 0=Momentary, 1=Toggle/Latch, 2=Double-press Latch
+    pub f_drawer: u8,                       // 0=Off, 1=Slide-up F-shortcut badge drawer
+    pub _pad: u8,                           // 2-byte alignment for actions: [u16; 19]
+    pub actions: [u16; KEY_SHORTCUT_COUNT], // 38 B: 0..4 side/menu, 5..18 F+keys
+    pub ctx_rules: [CtxRule; 3],            // 12 B: 3 contextual overrides
+    pub crc32: u32,                         // offset 60 -> 64 B total (2^6)
 }
 
 impl KeyConfig {
     pub const DEFAULT: Self = Self::new();
 
     pub const fn new() -> Self {
+        let mut actions = [TARGET_NONE; KEY_SHORTCUT_COUNT];
+        actions[0] = TARGET_FLASHLIGHT; // S1 short
+        actions[1] = TARGET_MONITOR; // S1 long
+        actions[2] = hash_app("/apps/explorer.krx"); // S2 short
+        actions[3] = TARGET_TX_POWER; // S2 long
+        actions[4] = hash_app("/apps/tasks.krx"); // Menu long -> Processes!
+        actions[6] = TARGET_TX_POWER; // F+2
+        actions[9] = TARGET_TOGGLE_VFO; // F+5
+        actions[12] = TARGET_MUTE; // F+8
+        actions[13] = TARGET_LOCK_KEYPAD; // F+9
+        actions[14] = TARGET_RADIO; // F+0
+        actions[15] = hash_app("/apps/scanner.krx"); // F+*
+        actions[16] = TARGET_SETTINGS; // F+Menu
+        let _ = TARGET_SLEEP;
+
         Self {
-            version: 2,
+            version: 3,
             nav_layout: 0,
-            f1_short: 1,                           // Flashlight
-            f1_long: 2,                            // Monitor (Squelch open)
-            f2_short: 4,                           // Explorer
-            f2_long: 8,                            // Toggle TX Power
-            m_long: 11,                            // Task Manager
-            auto_lock: 0,                          // Off
-            f_key_timeout: 3,                      // 3s
-            fast_scroll: 1,                        // On
-            hold_delay: 1,                         // 400ms (DeltaFW)
-            repeat_rate: 1,                        // 80ms (DeltaFW)
-            f_digits: [0, 8, 0, 0, 7, 0, 0, 9, 6], // F+2=Power, F+5=VFO, F+8=Mute, F+9=Lock
-            ptt_mode: 0,                           // Momentary default
-            f_0: 10,                               // FM Radio
-            f_star: 3,                             // Scanner
-            f_menu: 5,                             // Settings
-            f_side1: 0,
-            f_side2: 0,
-            _pad: [0; 5],
+            auto_lock: 0,
+            f_key_timeout: 3,
+            fast_scroll: 1,
+            hold_delay: 1,
+            repeat_rate: 1,
+            ptt_mode: 0,
+            f_drawer: 1,
+            _pad: 0,
+            actions,
+            ctx_rules: [CtxRule {
+                slot: 0,
+                ctx: 0,
+                action: 0,
+            }; 3],
             crc32: 0,
         }
     }
@@ -112,4 +129,4 @@ impl KeyConfig {
     }
 }
 
-crate::config_block!(KeyConfig, "/pref/keys.cfg", 2);
+crate::config_block!(KeyConfig, "/pref/keys.cfg", 3);

@@ -17,6 +17,7 @@ pub struct PackageCatalogEntry {
     pub size_bytes: usize,
     pub app_class: KrxClass,
     pub exec_type: KrxExecType,
+    pub lifecycle_flags: u8,
     pub icon_id: u16,
     pub caps: u32,
     pub is_valid: bool,
@@ -27,6 +28,32 @@ impl PackageCatalogEntry {
     pub fn filename(&self) -> &str {
         extract_filename(self.path.as_str())
     }
+
+    #[inline(always)]
+    pub fn is_system_entry(&self, sys_caps: kernel::caps::CapabilitySet, flag: u8) -> bool {
+        self.is_valid
+            && self.exec_type == KrxExecType::Module
+            && (self.lifecycle_flags & flag) != 0
+            && sys_caps.contains_all(kernel::caps::CapabilitySet(self.caps))
+    }
+
+    #[inline(always)]
+    pub fn is_system_module(&self, sys_caps: kernel::caps::CapabilitySet) -> bool {
+        self.is_system_entry(sys_caps, kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU)
+    }
+}
+
+#[inline(always)]
+fn is_package_ext(bytes: &[u8]) -> bool {
+    let n = bytes.len();
+    if n <= 4 {
+        return false;
+    }
+    let ext = &bytes[n - 4..];
+    matches!(
+        ext,
+        b".app" | b".svc" | b".dmn" | b".drv" | b".mod" | b".krx"
+    )
 }
 
 pub fn extract_filename(path: &str) -> &str {
@@ -34,11 +61,29 @@ pub fn extract_filename(path: &str) -> &str {
     &path[start..]
 }
 
-pub const MAX_CATALOG_PACKAGES: usize = 6;
+pub const MAX_CATALOG_PACKAGES: usize = 8;
+pub const MAX_CATALOG_ACTIONS: usize = 16;
+
+/// Cached declared action from a KRX app's `SECTION_ACTIONS` (16 B).
+#[derive(Debug, Clone, Copy)]
+pub struct CatalogAction {
+    pub pkg_idx: u8,
+    pub scope_mask: u8,
+    pub action_id: u16,
+    pub label: [u8; 12],
+}
+
+impl CatalogAction {
+    pub fn label_str(&self) -> &str {
+        let len = self.label.iter().position(|&b| b == 0).unwrap_or(12);
+        utils::format::ascii_str(&self.label[..len]).unwrap_or("")
+    }
+}
 
 /// In-memory catalog of discovered dynamic packages.
 pub struct PackageCatalog {
     pub entries: heapless::Vec<PackageCatalogEntry, MAX_CATALOG_PACKAGES>,
+    pub actions: heapless::Vec<CatalogAction, MAX_CATALOG_ACTIONS>,
     pub scanned: bool,
 }
 
@@ -46,6 +91,7 @@ impl PackageCatalog {
     pub const fn new() -> Self {
         Self {
             entries: heapless::Vec::new(),
+            actions: heapless::Vec::new(),
             scanned: false,
         }
     }
@@ -93,6 +139,30 @@ impl PackageCatalog {
         self.count_entries(true)
     }
 
+    pub fn system_entry_at(
+        &self,
+        sys_caps: kernel::caps::CapabilitySet,
+        flag: u8,
+        mut idx: usize,
+    ) -> Option<&PackageCatalogEntry> {
+        for e in self.entries.as_slice() {
+            if e.is_system_entry(sys_caps, flag) {
+                if idx == 0 {
+                    return Some(e);
+                }
+                idx -= 1;
+            }
+        }
+        None
+    }
+
+    pub fn system_entry_count(&self, sys_caps: kernel::caps::CapabilitySet, flag: u8) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.is_system_entry(sys_caps, flag))
+            .count()
+    }
+
     /// Perform a zero-allocation discovery pass across `/apps/` in storage.
     #[inline(always)]
     #[cfg(feature = "filesystem")]
@@ -107,9 +177,10 @@ impl PackageCatalog {
     #[cfg(feature = "filesystem")]
     fn scan_internal(&mut self, filesystem: &mut SystemStorage) {
         self.entries.clear();
+        self.actions.clear();
 
         // Keep scan scratch strictly inside TRANSIENT_ARENA[4096..6144) so [0..4096) KRX code is never clobbered.
-        const HDR_SCRATCH_BYTES: usize = 256;
+        const HDR_SCRATCH_BYTES: usize = kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE;
         const {
             assert!(
                 core::mem::align_of::<kernel::service::DirEntryInfo>()
@@ -140,18 +211,33 @@ impl PackageCatalog {
                             path_ptr, path_len,
                         ))
                     };
-                    Self::inspect_package(filesystem, path_str, size, &mut self.entries);
+                    Self::inspect_package(
+                        filesystem,
+                        path_str,
+                        size,
+                        &mut self.entries,
+                        &mut self.actions,
+                    );
                 }
             }
         }
 
-        // Sort invalid/corrupted packages to the top so they are immediately visible for cleanup
+        // Sort invalid/corrupted packages to the top, keeping action `pkg_idx` synced
         let base = self.entries.as_mut_ptr();
         for i in 1..self.entries.len() {
             let mut j = i;
             unsafe {
                 while j > 0 && !(*base.add(j)).is_valid && (*base.add(j - 1)).is_valid {
                     core::ptr::swap(base.add(j - 1), base.add(j));
+                    let a = (j - 1) as u8;
+                    let b = j as u8;
+                    for act in self.actions.iter_mut() {
+                        if act.pkg_idx == a {
+                            act.pkg_idx = b;
+                        } else if act.pkg_idx == b {
+                            act.pkg_idx = a;
+                        }
+                    }
                     j -= 1;
                 }
             }
@@ -167,6 +253,7 @@ impl PackageCatalog {
         raw_name: &str,
         size: usize,
         entries: &mut heapless::Vec<PackageCatalogEntry, MAX_CATALOG_PACKAGES>,
+        actions: &mut heapless::Vec<CatalogAction, MAX_CATALOG_ACTIONS>,
     ) {
         let base_name = extract_filename(raw_name);
         let len = entries.len();
@@ -185,7 +272,7 @@ impl PackageCatalog {
 
         let bytes = base_name.as_bytes();
         let n = bytes.len();
-        let is_pkg = n > 4 && (&bytes[n - 4..] == b".app" || &bytes[n - 4..] == b".krx");
+        let is_pkg = is_package_ext(bytes);
 
         if !raw_name.starts_with("/apps/") {
             let _ = entry.path.push_str("/apps/");
@@ -195,7 +282,8 @@ impl PackageCatalog {
             .push_str(&raw_name[..raw_name.len().min(24 - entry.path.len())]);
 
         if is_pkg && size >= KrxPreamble::SIZE {
-            let hdr_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[..256];
+            let hdr_buf = &mut crate::data::arena::scratch_tail_bytes_mut()
+                [..kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE];
             let mut summary_uninit = core::mem::MaybeUninit::uninit();
             if let Ok(summary) = crate::runtime::loader::read_krx_summary(
                 filesystem,
@@ -208,10 +296,30 @@ impl PackageCatalog {
                     entry.app_class = cls;
                 }
                 entry.exec_type = summary.exec_type;
+                entry.lifecycle_flags = summary.type_flags;
                 entry.icon_id = summary.icon_id;
                 entry.caps = summary.caps.raw();
                 if !summary.title.is_empty() {
                     let _ = entry.title.push_str(summary.title);
+                }
+                if entry.is_valid && entry.exec_type == KrxExecType::App {
+                    if let Some(act_body) = summary.aux.actions {
+                        let count = kernel::proc::krx::KrxActionDecl::count(act_body);
+                        for k in 0..count {
+                            if actions.len() >= MAX_CATALOG_ACTIONS {
+                                break;
+                            }
+                            if let Some(decl) = kernel::proc::krx::KrxActionDecl::parse(act_body, k)
+                            {
+                                let _ = actions.push(CatalogAction {
+                                    pkg_idx: len as u8,
+                                    scope_mask: decl.scope_mask,
+                                    action_id: decl.action_id,
+                                    label: decl.label,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -234,4 +342,34 @@ pub static mut PACKAGE_CATALOG: PackageCatalog = PackageCatalog::new();
 
 pub fn get_catalog() -> &'static mut PackageCatalog {
     unsafe { &mut *core::ptr::addr_of_mut!(PACKAGE_CATALOG) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panic_mod_header_validates_within_max_header_size() {
+        const PANIC_MOD: &[u8] = include_bytes!("../../../../../packages/panic/panic.mod");
+        let hdr_len = KrxPreamble::MAX_HEADER_SIZE.min(PANIC_MOD.len());
+        let summary = KrxPreamble::summarize(&PANIC_MOD[..hdr_len])
+            .expect("panic.mod header must parse within KrxPreamble::MAX_HEADER_SIZE");
+
+        assert!(
+            summary.preamble.header_len as usize > 256,
+            "panic.mod header exceeds legacy 256B limit"
+        );
+        assert_eq!(
+            summary.preamble.execution_class(),
+            Some(kernel::proc::krx::KrxClass::Paged)
+        );
+        assert_eq!(summary.exec_type, KrxExecType::Module);
+        assert_ne!(
+            summary.type_flags & kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU,
+            0
+        );
+        assert_eq!(summary.title, "Crash Logs");
+        assert!(summary.exec.is_some());
+        assert_eq!(summary.aux.leaf_map.map(|m| m.len()), Some(17 * 16));
+    }
 }

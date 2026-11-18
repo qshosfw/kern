@@ -51,6 +51,7 @@ pub const KRX_EV_USB: u8 = 5;
 pub const KRX_EV_POWER: u8 = 6;
 pub const KRX_EV_MODAL: u8 = 7;
 pub const KRX_EV_IPC: u8 = 8;
+pub const KRX_IPC_ACTION_FLAG: u8 = 0xAC;
 
 pub const MODAL_RESULT_DISMISSED: u8 = 0;
 pub const MODAL_RESULT_CONFIRMED: u8 = 1;

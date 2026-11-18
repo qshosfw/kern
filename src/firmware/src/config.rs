@@ -163,8 +163,8 @@ const _: () = {
     assert!(core::mem::offset_of!(DisplayConfig, crc32) == 44);
     assert!(core::mem::size_of::<AudioConfig>() == 80);
     assert!(core::mem::offset_of!(AudioConfig, crc32) == 76);
-    assert!(core::mem::size_of::<KeyConfig>() == 36);
-    assert!(core::mem::offset_of!(KeyConfig, crc32) == 32);
+    assert!(core::mem::size_of::<KeyConfig>() == 64);
+    assert!(core::mem::offset_of!(KeyConfig, crc32) == 60);
     assert!(core::mem::size_of::<SystemConfig>() == 44);
     assert!(core::mem::offset_of!(SystemConfig, crc32) == 40);
     assert!(core::mem::size_of::<BatteryConfig>() == 20);
@@ -176,14 +176,12 @@ const _: () = {
 };
 
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
-    let mut temp = core::mem::MaybeUninit::<[u8; 128]>::uninit();
+    let mut temp = core::mem::MaybeUninit::<[u8; 80]>::uninit();
     let temp_buf = unsafe { &mut *temp.as_mut_ptr() };
-    let n = buf.len().min(128);
-    let loaded = if let Ok(len) = storage.read_file(path, &mut temp_buf[..n]) {
-        len >= n && is_raw_valid(&temp_buf[..n], version)
-    } else {
-        false
-    };
+    let n = buf.len().min(80);
+    let loaded = storage
+        .read_file(path, &mut temp_buf[..n])
+        .is_ok_and(|len| len >= n && is_raw_valid(&temp_buf[..n], version));
     if loaded {
         buf[..n].copy_from_slice(&temp_buf[..n]);
     } else {
@@ -199,7 +197,7 @@ struct ConfigMeta {
     path: &'static str,
 }
 
-static ALL_BOUND_RULES: [[u8; 2]; 38] = [
+static ALL_BOUND_RULES: [[u8; 2]; 40] = [
     // 0: Display (0..11)
     [1, 5],
     [2, 10],
@@ -220,19 +218,21 @@ static ALL_BOUND_RULES: [[u8; 2]; 38] = [
     [6, 10],
     [7, 4],
     [8, 4],
-    // 2: Keys (18..24)
-    [7, 5],
-    [8, 4],
-    [9, 2],
-    [10, 3],
-    [11, 3],
-    [21, 2],
-    // 4: Battery (24..28)
+    // 2: Keys (18..26)
+    [1, 1],
+    [2, 4],
+    [3, 4],
+    [4, 1],
+    [5, 3],
+    [6, 3],
+    [7, 2],
+    [8, 1],
+    // 4: Battery (26..30)
     [2, 8],
     [3, 3],
     [4, 5],
     [5, 1],
-    // 5: Apps (28..38)
+    // 5: Apps (30..40)
     [1, 1],   // launcher_style: 0..=1
     [2, 1],   // show_numbers: 0..=1
     [3, 1],   // show_labels: 0..=1
@@ -261,7 +261,7 @@ static CONFIG_METAS: [ConfigMeta; 6] = [
     ConfigMeta {
         version: KeyConfig::VERSION,
         rules_start: 18,
-        rules_len: 6,
+        rules_len: 8,
         path: KeyConfig::PATH,
     },
     ConfigMeta {
@@ -272,13 +272,13 @@ static CONFIG_METAS: [ConfigMeta; 6] = [
     },
     ConfigMeta {
         version: BatteryConfig::VERSION,
-        rules_start: 24,
+        rules_start: 26,
         rules_len: 4,
         path: BatteryConfig::PATH,
     },
     ConfigMeta {
         version: AppsConfig::VERSION,
-        rules_start: 28,
+        rules_start: 30,
         rules_len: 10,
         path: AppsConfig::PATH,
     },
@@ -596,5 +596,28 @@ mod tests {
         assert_ne!(repaired & (DIRTY_KEYS | DIRTY_BATTERY), 0);
         assert!(is_raw_valid(cfg.config_bytes(2), CONFIG_METAS[2].version));
         assert!(is_raw_valid(cfg.config_bytes(4), CONFIG_METAS[4].version));
+    }
+
+    #[test]
+    fn test_key_config_v3_64b_and_ctx_rules() {
+        let mut cfg = KeyConfig::new();
+        assert_eq!(core::mem::size_of::<KeyConfig>(), 64);
+        assert_eq!(
+            crate::apps::shortcut::resolve_slot(&cfg, 2, crate::apps::shortcut::CTX_GLOBAL),
+            cfg.actions[2]
+        );
+        cfg.ctx_rules[0] = keys::CtxRule {
+            slot: 2,
+            ctx: crate::apps::shortcut::CTX_VFO,
+            action: crate::apps::shortcut::TARGET_TOGGLE_VFO,
+        };
+        assert_eq!(
+            crate::apps::shortcut::resolve_slot(&cfg, 2, crate::apps::shortcut::CTX_VFO),
+            crate::apps::shortcut::TARGET_TOGGLE_VFO
+        );
+        assert_eq!(
+            crate::apps::shortcut::resolve_slot(&cfg, 2, crate::apps::shortcut::CTX_HOME),
+            cfg.actions[2]
+        );
     }
 }

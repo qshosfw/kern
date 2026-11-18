@@ -18,8 +18,6 @@ pub static ROOT_DEFS: &[SettingDef] = &[
 fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut ShortString) {
     match action {
         ActionId::ChooseModel => out.set_str(ctx.config.system.model_str()),
-        #[cfg(feature = "dfu")]
-        ActionId::RebootBootloader => out.set_str(crate::boot::bootloader_version_str()),
         #[cfg(feature = "text_input")]
         ActionId::EditOwner => {
             super::metric::format_metric(super::page::MetricId::DeviceOwner, ctx, out)
@@ -148,7 +146,11 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
             ctx.config.mark_audio_dirty();
             ctx.apply_audio_config();
         }
-        PageId::Buttons | PageId::ButtonsTweaks | PageId::ButtonsShortcuts => {
+        PageId::Buttons
+        | PageId::ButtonsTweaks
+        | PageId::ButtonsShortcuts
+        | PageId::ShortcutRules
+        | PageId::ShortcutRule => {
             ctx.config.mark_keys_dirty();
         }
         PageId::Battery | PageId::BatteryTweaks => {
@@ -185,6 +187,7 @@ pub fn page_title(page: PageId) -> &'static str {
         PageId::ButtonsShortcuts => "Shortcuts",
         PageId::BatteryInfo => "Battery Info",
         PageId::BatteryTweaks => "Battery Tweaks",
+        #[cfg(feature = "settings_info")]
         PageId::SystemInfo => "System Info",
         #[cfg(feature = "filesystem")]
         PageId::SystemStorage => "Storage",
@@ -198,6 +201,8 @@ pub fn page_title(page: PageId) -> &'static str {
         PageId::AppDetail => "App Info",
         PageId::ManageServices => "Services",
         PageId::ServiceDetail => "Service Info",
+        PageId::ShortcutRules => "Context Rules",
+        PageId::ShortcutRule => "Edit Rule",
     }
 }
 
@@ -215,7 +220,6 @@ pub fn page_defs(page: PageId) -> &'static [SettingDef] {
         PageId::ButtonsShortcuts => &super::buttons::BUTTONS_SHORTCUTS,
         PageId::BatteryInfo => &super::battery::BATTERY_INFO,
         PageId::BatteryTweaks => &super::battery::BATTERY_TWEAKS,
-        PageId::SystemInfo => super::system::SYSTEM_INFO,
         #[cfg(feature = "filesystem")]
         PageId::SystemStorage => super::system::SYSTEM_STORAGE,
         PageId::Apps => super::apps::APPS_DEFS,

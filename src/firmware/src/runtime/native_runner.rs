@@ -62,6 +62,10 @@ pub fn init_native_slot() {
 #[unsafe(link_section = ".uninit")]
 static mut NATIVE_SLOT: core::mem::MaybeUninit<NativeExecSlot> = core::mem::MaybeUninit::uninit();
 
+#[cfg(feature = "filesystem")]
+pub(crate) static mut BOOT_STORAGE: *mut crate::services::SystemStorage<'static> =
+    core::ptr::null_mut();
+
 #[inline(always)]
 pub fn arena_base_ptr() -> *mut u8 {
     crate::data::arena::arena_base_ptr()
@@ -107,10 +111,15 @@ fn flush_instruction_pipeline() {
 #[inline(never)]
 fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bool {
     let ok = unsafe {
-        if !ACTIVE_CTX.is_null() {
+        let storage_ptr = if !ACTIVE_CTX.is_null() {
+            (*ACTIVE_CTX).storage as *mut crate::services::SystemStorage
+        } else {
+            BOOT_STORAGE as *mut crate::services::SystemStorage
+        };
+        if !storage_ptr.is_null() {
             let path = slot_ref().pkg_path.as_str();
             let dst = core::slice::from_raw_parts_mut(dst_vma as *mut u8, len);
-            read_file_region((*ACTIVE_CTX).storage, path, flash_offset, dst)
+            read_file_region(&mut *storage_ptr, path, flash_offset, dst)
         } else {
             false
         }
@@ -325,13 +334,6 @@ pub fn load_native_from_storage(
 
     let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS * 4;
     let h_len = preamble.header_len as usize;
-    if payload_len == 0 || payload_len < (exec.payload_size as usize) {
-        return Err(KrxLaunchError::TruncatedPackage);
-    }
-    if (exec.payload_size as usize) > max_arena_bytes {
-        return Err(KrxLaunchError::PayloadTooLarge);
-    }
-
     let load_base = arena_base_ptr() as u32;
     let profile = KrxProfile::detect(
         preamble,
@@ -339,6 +341,17 @@ pub fn load_native_from_storage(
         aux.block_map.is_some(),
         aux.leaf_map.is_some(),
     );
+    let is_paged = matches!(
+        profile,
+        KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
+    );
+
+    if payload_len == 0 || (!is_paged && payload_len < (exec.payload_size as usize)) {
+        return Err(KrxLaunchError::TruncatedPackage);
+    }
+    if !is_paged && (exec.payload_size as usize) > max_arena_bytes {
+        return Err(KrxLaunchError::PayloadTooLarge);
+    }
 
     // Hardened check for N0 (NativeFixed): link_base must strictly match load_base!
     if profile == KrxProfile::N0NativeFixed && preamble.link_base != load_base {
@@ -354,10 +367,6 @@ pub fn load_native_from_storage(
     let load_delta = load_base.wrapping_sub(preamble.link_base);
 
     // 1. Configure Paged Fixed-Window Cache
-    let is_paged = matches!(
-        profile,
-        KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
-    );
     slot.is_paged = is_paged;
 
     if is_paged {
@@ -394,7 +403,7 @@ pub fn load_native_from_storage(
     }
 
     // 2b. Verify unrelocated payload CRC32 before patching words in SRAM
-    if !slot.is_paged
+    if !is_paged
         && preamble.payload_crc32 != 0
         && crypto::crc::CrcEngine::crc32(&buffer_bytes[..payload_len.min(max_arena_bytes)])
             != preamble.payload_crc32
@@ -433,7 +442,7 @@ pub fn load_native_from_storage(
     };
     let limit_vma = load_base + code_limit;
 
-    let code_size = if slot.is_paged && !is_p0 {
+    let code_size = if is_paged && !is_p0 {
         (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
             .min(PAGED_CACHE_MAX_BYTES as u32)
     } else if exec.got_offset > 0 {
@@ -442,7 +451,7 @@ pub fn load_native_from_storage(
         (payload_len as u32).min(code_limit)
     };
 
-    let ram_vma = if !slot.is_paged && exec.got_offset > 0 {
+    let ram_vma = if !is_paged && exec.got_offset > 0 {
         slot.got_base
     } else {
         load_base + code_size
@@ -578,13 +587,65 @@ unsafe fn invoke_guest(
     }
 }
 
+pub unsafe fn invoke_boot_start(param: usize) -> u32 {
+    let slot = slot_ref();
+    if !slot.is_loaded {
+        return 0xFFFF_FFFF;
+    }
+    unsafe {
+        invoke_krx_native(
+            slot.entry_point,
+            slot.got_base,
+            KRX_OP_START,
+            &raw const NATIVE_API_TABLE,
+            param as *const (),
+        )
+    }
+}
+
+static mut PENDING_START_ARG: u32 = 0;
+
+#[inline(always)]
+pub fn set_pending_start_arg(arg: u32) {
+    unsafe {
+        PENDING_START_ARG = arg;
+    }
+}
+
+#[inline(always)]
+fn take_pending_start_arg() -> u32 {
+    unsafe {
+        let a = PENDING_START_ARG;
+        PENDING_START_ARG = 0;
+        a
+    }
+}
+
+#[inline(always)]
+pub fn active_pkg_matches(path: &str) -> bool {
+    let slot = slot_ref();
+    slot.is_loaded && slot.pkg_path.as_str() == path
+}
+
+#[inline(never)]
+pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventResult {
+    dispatch_krx_event(
+        ctx as *mut _ as *mut _,
+        kernel::proc::abi::KRX_EV_IPC,
+        0,
+        kernel::proc::abi::KRX_IPC_ACTION_FLAG,
+        action_id as u32,
+    )
+}
+
 pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
+    let arg = take_pending_start_arg();
     let res = unsafe {
         invoke_guest(
             KRX_OP_START,
             ctx as *mut _,
             core::ptr::null_mut(),
-            core::ptr::null(),
+            arg as usize as *const (),
         )
     };
     if res == 0xFFFF_FFFF {
@@ -870,7 +931,6 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
         slot.is_loaded = false;
         slot.entry_point = 0;
     }
-    let slot = slot_mut();
     let persist_tray = slot.status_bar_has_custom
         && (slot.status_bar.custom_flags & kernel::proc::abi::KRX_CUSTOM_TRAY_PERSIST) != 0;
     if !persist_tray {
