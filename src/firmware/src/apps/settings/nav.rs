@@ -43,10 +43,36 @@ impl SettingsApp {
             );
             return;
         }
+        if self.current_page == PageId::AppPrefs {
+            self.items_len =
+                super::app_prefs::populate_app_prefs(&mut self.items, self.selected_pkg_idx, ctx);
+            return;
+        }
 
         let defs = page_defs(self.current_page);
         populate_defs(&mut self.items, defs, ctx);
         self.items_len = defs.len().min(self.items.len());
+
+        if self.current_page == PageId::Apps {
+            let cat = crate::apps::launcher::catalog::get_catalog();
+            #[cfg(feature = "filesystem")]
+            cat.scan(ctx.storage);
+            for e in &cat.entries {
+                if self.items_len >= self.items.len() {
+                    break;
+                }
+                if crate::apps::launcher::catalog::PackageCatalog::matches_kind(e, false)
+                    && e.has_config
+                {
+                    self.items[self.items_len] = gfx::gui::modules::menu::MenuItem::new(
+                        e.title.as_str(),
+                        MenuItemType::Submenu,
+                    );
+                    self.items_len += 1;
+                }
+            }
+            return;
+        }
 
         #[cfg(feature = "krx_native")]
         if self.current_page == PageId::System && self.items_len < self.items.len() {
@@ -177,8 +203,21 @@ impl SettingsApp {
             return;
         }
 
-        let defs = page_defs(self.current_page);
         let idx = self.selected_idx;
+        if self.current_page == PageId::AppPrefs {
+            if idx < self.items_len {
+                let val = match self.items[idx].item_type {
+                    MenuItemType::Range { val, .. } => Some(val as i32),
+                    MenuItemType::Toggle(b) => Some(b as i32),
+                    _ => None,
+                };
+                if let Some(v) = val {
+                    super::app_prefs::commit_app_pref(idx, v, ctx);
+                }
+            }
+            return;
+        }
+        let defs = page_defs(self.current_page);
         if idx < self.items_len && idx < defs.len() {
             let def = &defs[idx];
             let val = match self.items[idx].item_type {
@@ -201,6 +240,10 @@ impl SettingsApp {
     pub fn handle_radio_confirmed(&mut self, ctx: &mut SysContext, sel: usize) {
         let sel_idx = self.selected_idx;
         if sel_idx < self.items_len {
+            if self.current_page == PageId::AppPrefs {
+                super::app_prefs::commit_app_pref(sel_idx, sel as i32, ctx);
+                return;
+            }
             if self.current_page == PageId::ButtonsShortcuts && sel_idx == 0 {
                 self.shortcut_ctx = (sel as u8).min(4);
                 return;

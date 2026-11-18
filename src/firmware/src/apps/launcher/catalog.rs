@@ -21,6 +21,7 @@ pub struct PackageCatalogEntry {
     pub icon_id: u16,
     pub caps: u32,
     pub is_valid: bool,
+    pub has_config: bool,
 }
 
 impl PackageCatalogEntry {
@@ -303,6 +304,7 @@ impl PackageCatalog {
                     let _ = entry.title.push_str(summary.title);
                 }
                 if entry.is_valid && entry.exec_type == KrxExecType::App {
+                    entry.has_config = summary.aux.config.is_some();
                     if let Some(act_body) = summary.aux.actions {
                         let count = kernel::proc::krx::KrxActionDecl::count(act_body);
                         for k in 0..count {

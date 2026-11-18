@@ -28,6 +28,7 @@ pub enum PageId {
     SystemDebug,
     ManageApps,
     AppDetail,
+    AppPrefs,
     ManageServices,
     ServiceDetail,
 }

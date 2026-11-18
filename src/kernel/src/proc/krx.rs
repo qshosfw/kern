@@ -707,8 +707,85 @@ pub struct KrxAuxSections<'a> {
     pub block_map: Option<&'a [u8]>,
     pub leaf_map: Option<&'a [u8]>,
     pub service_exports: Option<&'a [u8]>,
+    pub config: Option<&'a [u8]>,
     pub actions: Option<&'a [u8]>,
 }
+
+/// Declarative App Config Header (`SECTION_CONFIG = 0x0007`, 16 bytes)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct KrxConfigHeader {
+    pub version: u16,
+    pub item_count: u8,
+    pub cfg_bytes: u8,
+    pub schema_crc: u32,
+    pub reserved: [u8; 8],
+}
+
+impl KrxConfigHeader {
+    pub const SIZE: usize = 16;
+
+    pub fn parse(body: &[u8]) -> Option<Self> {
+        if body.len() < Self::SIZE {
+            return None;
+        }
+        Some(Self {
+            version: u16::from_le_bytes([body[0], body[1]]),
+            item_count: body[2],
+            cfg_bytes: body[3],
+            schema_crc: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+            reserved: [0; 8],
+        })
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<KrxConfigHeader>() == 16);
+
+pub const CFG_KIND_TOGGLE: u8 = 0;
+pub const CFG_KIND_CHOICE: u8 = 1;
+pub const CFG_KIND_RANGE: u8 = 2;
+
+/// Declarative App Config Field Descriptor (`SECTION_CONFIG = 0x0007`, 16 bytes per field)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct KrxConfigItem {
+    pub offset: u8,
+    pub kind: u8,
+    pub flags: u8,
+    pub step: u8,
+    pub default_v: i16,
+    pub min_v: i16,
+    pub max_v: i16,
+    pub label_off: u16,
+    pub aux_off: u16,
+    pub reserved: u16,
+}
+
+impl KrxConfigItem {
+    pub const SIZE: usize = 16;
+
+    pub fn parse(body: &[u8], idx: usize) -> Option<Self> {
+        let off = (idx + 1) << 4;
+        if off + Self::SIZE > body.len() {
+            return None;
+        }
+        let s = &body[off..off + Self::SIZE];
+        Some(Self {
+            offset: s[0],
+            kind: s[1],
+            flags: s[2],
+            step: s[3],
+            default_v: i16::from_le_bytes([s[4], s[5]]),
+            min_v: i16::from_le_bytes([s[6], s[7]]),
+            max_v: i16::from_le_bytes([s[8], s[9]]),
+            label_off: u16::from_le_bytes([s[10], s[11]]),
+            aux_off: u16::from_le_bytes([s[12], s[13]]),
+            reserved: 0,
+        })
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<KrxConfigItem>() == 16);
 
 /// Declared App Action Entry (`SECTION_ACTIONS = 0x000B`, 16 bytes)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -822,6 +899,7 @@ impl<'a> Default for KrxSummary<'a> {
                 block_map: None,
                 leaf_map: None,
                 service_exports: None,
+                config: None,
                 actions: None,
             },
         }
@@ -829,6 +907,44 @@ impl<'a> Default for KrxSummary<'a> {
 }
 
 impl KrxPreamble {
+    /// Read a NUL-terminated ASCII string from a parsed KRX header buffer at `off`.
+    #[inline(never)]
+    pub fn read_hdr_str(hdr: &[u8], off: u16) -> Option<&str> {
+        Self::scan_hdr_str(hdr, off, false)
+    }
+
+    /// Read a `\0\0`-terminated packed Choice options slice (preserving internal `\0` separators).
+    #[inline(never)]
+    pub fn read_hdr_packed(hdr: &[u8], off: u16) -> Option<&str> {
+        Self::scan_hdr_str(hdr, off, true)
+    }
+
+    #[inline(never)]
+    fn scan_hdr_str(hdr: &[u8], off: u16, packed: bool) -> Option<&str> {
+        let s = off as usize;
+        if s < Self::SIZE || s >= hdr.len() {
+            return None;
+        }
+        let max = if packed { hdr.len() } else { hdr.len().min(s + 32) };
+        let mut i = s;
+        while i < max {
+            if hdr[i] == 0 {
+                if !packed {
+                    return (i > s).then(|| utils::format::ascii_str(&hdr[s..i])).flatten();
+                }
+                if i + 1 < max && hdr[i + 1] == 0 {
+                    return utils::format::ascii_str(&hdr[s..=i]);
+                }
+            }
+            i += 1;
+        }
+        if !packed && i > s {
+            utils::format::ascii_str(&hdr[s..i])
+        } else {
+            None
+        }
+    }
+
     /// Zero-allocation, single-pass inspection of a KRX package header buffer into uninitialized `out`.
     #[inline(never)]
     pub fn summarize_into<'a, 'b>(
@@ -866,15 +982,10 @@ impl KrxPreamble {
             match sec_id {
                 SECTION_IDENTITY => {
                     if body.len() >= 25 {
-                        let name_off = u16::from_le_bytes([body[0], body[1]]) as usize;
-                        if name_off >= Self::SIZE && name_off < h_len {
-                            let tail = &hdr[name_off..h_len.min(name_off + 32)];
-                            let len = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
-                            if len > 0 {
-                                if let Some(s) = utils::format::ascii_str(&tail[..len]) {
-                                    out.title = s;
-                                }
-                            }
+                        if let Some(s) =
+                            Self::read_hdr_str(hdr, u16::from_le_bytes([body[0], body[1]]))
+                        {
+                            out.title = s;
                         }
                         out.icon_id = u16::from_le_bytes([body[23], body[24]]);
                     }
@@ -895,6 +1006,7 @@ impl KrxPreamble {
                 SECTION_BLOCK_MAP => out.aux.block_map = Some(body),
                 SECTION_LEAF_MAP => out.aux.leaf_map = Some(body),
                 SECTION_SERVICE_EXPORTS => out.aux.service_exports = Some(body),
+                SECTION_CONFIG => out.aux.config = Some(body),
                 SECTION_ACTIONS => out.aux.actions = Some(body),
                 _ => {}
             }
@@ -3345,5 +3457,37 @@ mod tests {
         assert_eq!(a1.action_id, 2);
         assert_eq!(a1.label_str(), "IpcLv");
         assert!(KrxActionDecl::parse(&body, 2).is_none());
+    }
+
+    #[test]
+    fn test_section_config_parse_and_strings() {
+        let mut body = [0u8; 32];
+        body[0..2].copy_from_slice(&1u16.to_le_bytes()); // version
+        body[2] = 1; // item_count
+        body[3] = 16; // cfg_bytes
+        body[16] = 1; // offset
+        body[17] = CFG_KIND_CHOICE;
+        body[19] = 1; // step
+        body[20..22].copy_from_slice(&1i16.to_le_bytes());
+        body[24..26].copy_from_slice(&2i16.to_le_bytes());
+        body[26..28].copy_from_slice(&64u16.to_le_bytes());
+        body[28..30].copy_from_slice(&70u16.to_le_bytes());
+
+        let hdr_info = KrxConfigHeader::parse(&body).unwrap();
+        assert_eq!(hdr_info.version, 1);
+        assert_eq!(hdr_info.cfg_bytes, 16);
+        let item = KrxConfigItem::parse(&body, 0).unwrap();
+        assert_eq!(item.kind, CFG_KIND_CHOICE);
+        assert_eq!(item.max_v, 2);
+        assert!(KrxConfigItem::parse(&body, 1).is_none());
+
+        let mut pool = [0u8; 96];
+        pool[64..68].copy_from_slice(b"Tab\0");
+        pool[70..83].copy_from_slice(b"Proc\0Sch\0Kr\0\0");
+        assert_eq!(KrxPreamble::read_hdr_str(&pool, 64), Some("Tab"));
+        assert_eq!(
+            KrxPreamble::read_hdr_packed(&pool, 70),
+            Some("Proc\0Sch\0Kr\0")
+        );
     }
 }

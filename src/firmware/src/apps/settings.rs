@@ -2,6 +2,7 @@
 //! Provides modular submodules for Display, Audio, Buttons, Battery, and System.
 
 pub mod app;
+pub mod app_prefs;
 pub mod apps;
 #[cfg(feature = "filesystem")]
 pub mod asset_chooser;

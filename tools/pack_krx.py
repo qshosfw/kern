@@ -165,6 +165,8 @@ class KrxPackageBuilder:
         self.resident_payload_size = 0
         self.service_exports = []
         self.actions = []
+        self.cfg_bytes = 16
+        self.settings = []
 
     def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0), icon_asset: int = 1):
         self.name = name
@@ -221,6 +223,9 @@ class KrxPackageBuilder:
     def add_action(self, action_id: int, scope_mask: int, label: str, flags: int = 0):
         self.actions.append((action_id & 0xFFFF, scope_mask & 0xFF, flags & 0xFF, label.encode("utf-8")[:12]))
 
+    def add_setting(self, offset: int, kind: int, default_v: int, min_v: int, max_v: int, step: int, label: str, aux: str = "", flags: int = 0):
+        self.settings.append((offset & 0xFF, kind & 0xFF, flags & 0xFF, step & 0xFF, default_v, min_v, max_v, label, aux))
+
     def set_payload(self, payload_data: bytes):
         self.payload = bytearray(payload_data)
 
@@ -256,6 +261,17 @@ class KrxPackageBuilder:
             return offset
 
         name_str_offset = add_string(self.name)
+        setting_pool_offs = []
+        for s in self.settings:
+            l_off = add_string(s[7])
+            if s[1] == 1 and s[8]:
+                a_off = len(string_pool)
+                string_pool.extend(s[8].replace("|", "\x00").encode("utf-8") + b"\x00\x00")
+            elif s[8]:
+                a_off = add_string(s[8])
+            else:
+                a_off = 0xFFFF
+            setting_pool_offs.append((l_off, a_off))
 
         # Pre-compute total_header_len to resolve leaf / block flash offsets
         num_leaves = len(self.leaf_files) if self.leaf_files else len(self.leaf_map)
@@ -285,6 +301,8 @@ class KrxPackageBuilder:
             sec_sizes.append(4 + len(self.service_exports) * 16)
         if self.actions:
             sec_sizes.append(4 + len(self.actions) * 16)
+        if self.settings:
+            sec_sizes.append(4 + 16 + len(self.settings) * 16)
 
         sec_hdr_len = 0
         for sz in sec_sizes:
@@ -434,7 +452,17 @@ class KrxPackageBuilder:
             assert len(export_body) % 16 == 0
             sections.append((SEC_SERVICE_EXPORTS, export_body))
 
-        # 8. Actions Section (if present, 16 bytes per entry)
+        # 8. Config Section (if present, 16B header + 16B per item)
+        cfg_body = None
+        if self.settings:
+            cfg_body = bytearray()
+            cfg_body.extend(struct.pack("<HBBI", 1, len(self.settings), self.cfg_bytes, 0))
+            cfg_body.extend(b"\x00" * 8)
+            for idx, s in enumerate(self.settings):
+                cfg_body.extend(struct.pack("<BBBBhhhHHH", s[0], s[1], s[2], s[3], s[4], s[5], s[6], 0, 0, 0))
+            sections.append((SEC_CONFIG, cfg_body))
+
+        # 9. Actions Section (if present, 16 bytes per entry)
         if self.actions:
             act_body = bytearray()
             for action_id, scope_mask, aflags, label_bytes in self.actions:
@@ -453,8 +481,13 @@ class KrxPackageBuilder:
             sec_header_len += pad
 
         str_pool_offset = preamble_len + sec_header_len
-        # Fixup name_str offset in Identity Section
+        # Fixup name_str offset in Identity Section and Config string pool offsets
         ident_body[0:2] = struct.pack("<H", str_pool_offset + name_str_offset)
+        if cfg_body is not None:
+            for idx, (l_off, a_off) in enumerate(setting_pool_offs):
+                base = 16 + idx * 16
+                cfg_body[base + 10 : base + 12] = struct.pack("<H", str_pool_offset + l_off)
+                cfg_body[base + 12 : base + 14] = struct.pack("<H", 0 if a_off == 0xFFFF else str_pool_offset + a_off)
 
         total_header_len = str_pool_offset + len(string_pool)
         # Pad total header to 4-byte boundary
@@ -600,6 +633,13 @@ def main():
         default=[],
         help="Declare app action: <action_id>:<scope_mask>:<label>[:flags]",
     )
+    parser.add_argument("--cfg-bytes", type=int, default=16, help="App preference struct size in bytes")
+    parser.add_argument(
+        "--setting",
+        action="append",
+        default=[],
+        help="Declare app setting: <offset>:<toggle|choice|range>:<def>:<min>:<max>:<step>:<label>[:aux]",
+    )
     parser.add_argument("--verify", action="store_true", help="Print detailed verification report")
 
     args = parser.parse_args()
@@ -700,6 +740,20 @@ def main():
         label = parts[2]
         aflags = int(parts[3], 0) if len(parts) > 3 else 0
         builder.add_action(action_id, scope_mask, label, aflags)
+
+    builder.cfg_bytes = args.cfg_bytes
+    kind_map = {"toggle": 0, "choice": 1, "range": 2}
+    for item in args.setting:
+        parts = item.split(":", 7)
+        off = int(parts[0], 0)
+        kind = kind_map[parts[1]] if parts[1] in kind_map else int(parts[1], 0)
+        def_v = int(parts[2], 0)
+        min_v = int(parts[3], 0)
+        max_v = int(parts[4], 0)
+        step = int(parts[5], 0)
+        label = parts[6]
+        aux = parts[7] if len(parts) > 7 else ""
+        builder.add_setting(off, kind, def_v, min_v, max_v, step, label, aux)
 
     package_bytes = builder.build()
 

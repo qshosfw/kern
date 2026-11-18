@@ -195,6 +195,7 @@ pub fn page_title(page: PageId) -> &'static str {
         PageId::SystemDebug => "Debug",
         PageId::ManageApps => "Installed",
         PageId::AppDetail => "App Info",
+        PageId::AppPrefs => "App Settings",
         PageId::ManageServices => "Services",
         PageId::ServiceDetail => "Service Info",
     }

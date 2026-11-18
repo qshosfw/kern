@@ -137,11 +137,8 @@ impl SettingsApp {
             if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
                 let cat = crate::apps::launcher::catalog::get_catalog();
                 cat.scan(ctx.storage);
-                let cur_id = crate::apps::shortcut::resolve_slot(
-                    &ctx.config.keys,
-                    slot,
-                    self.shortcut_ctx,
-                );
+                let cur_id =
+                    crate::apps::shortcut::resolve_slot(&ctx.config.keys, slot, self.shortcut_ctx);
                 let sheet = crate::apps::shortcut::build_picker_sheet(
                     crate::apps::shortcut::slot_label(slot),
                     cur_id,
@@ -153,6 +150,25 @@ impl SettingsApp {
         }
 
         let defs = page_defs(self.current_page);
+        if self.current_page == PageId::Apps && sel_idx >= defs.len() {
+            let mut target = sel_idx - defs.len();
+            let cat = crate::apps::launcher::catalog::get_catalog();
+            let mut app_idx = 0usize;
+            for e in &cat.entries {
+                if crate::apps::launcher::catalog::PackageCatalog::matches_kind(e, false) {
+                    if e.has_config {
+                        if target == 0 {
+                            self.selected_pkg_idx = app_idx;
+                            self.push_submenu(PageId::AppPrefs, ctx);
+                            return;
+                        }
+                        target -= 1;
+                    }
+                    app_idx += 1;
+                }
+            }
+            return;
+        }
         #[cfg(feature = "krx_native")]
         let def_idx = if self.current_page == PageId::System {
             let cat = crate::apps::launcher::catalog::get_catalog();
@@ -722,6 +738,7 @@ mod tests {
             icon_id: 1,
             caps: (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::FactoryCalib as u32),
             is_valid: true,
+            has_config: false,
         };
 
         let full_caps = CapabilitySet::empty()

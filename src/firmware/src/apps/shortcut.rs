@@ -15,15 +15,17 @@ pub const KEY_SHORTCUT_COUNT: usize = 19;
 pub const F_DRAWER_START_SLOT: usize = 5;
 
 /// Packed trigger slot labels shared by settings lists, rule picker, and F-key drawer.
-pub static SLOT_OPTIONS: &str =
-    "S1\0S1+\0S2\0S2+\0M+\0F+1\0F+2\0F+3\0F+4\0F+5\0F+6\0F+7\0F+8\0F+9\0F+0\0F+*\0F+M\0F+S1\0F+S2\0";
+pub static SLOT_OPTIONS: &str = "S1\0S1+\0S2\0S2+\0M+\0F+1\0F+2\0F+3\0F+4\0F+5\0F+6\0F+7\0F+8\0F+9\0F+0\0F+*\0F+M\0F+S1\0F+S2\0";
 
 /// Packed context scope labels shared by settings selector and shortcut engine.
 pub static CTX_OPTIONS: &str = "Global\0VFO\0Home\0Prefs\0App\0";
 
 #[inline(never)]
 pub fn slot_label(slot: usize) -> &'static str {
-    utils::format::nth_cstr(SLOT_OPTIONS.as_bytes(), slot.min(KEY_SHORTCUT_COUNT - 1) as u8)
+    utils::format::nth_cstr(
+        SLOT_OPTIONS.as_bytes(),
+        slot.min(KEY_SHORTCUT_COUNT - 1) as u8,
+    )
 }
 
 #[inline(always)]
@@ -131,11 +133,31 @@ pub struct BuiltinTarget {
 
 /// Pure OS built-in system shortcuts ordered 1..=5 matching `TARGET_FLASHLIGHT..=TARGET_SLEEP`.
 pub const BUILTIN_TARGETS: [BuiltinTarget; 5] = [
-    BuiltinTarget { label: "Flashlight", cmd: Shortcut::Flashlight, icon_idx: 6 },
-    BuiltinTarget { label: "Settings", cmd: Shortcut::Settings, icon_idx: 4 },
-    BuiltinTarget { label: "Lock Keys", cmd: Shortcut::LockKeypad, icon_idx: 25 },
-    BuiltinTarget { label: "Home", cmd: Shortcut::LaunchApp(APP_ID_LAUNCHER as u8), icon_idx: 24 },
-    BuiltinTarget { label: "Sleep", cmd: Shortcut::Sleep, icon_idx: 22 },
+    BuiltinTarget {
+        label: "Flashlight",
+        cmd: Shortcut::Flashlight,
+        icon_idx: 6,
+    },
+    BuiltinTarget {
+        label: "Settings",
+        cmd: Shortcut::Settings,
+        icon_idx: 4,
+    },
+    BuiltinTarget {
+        label: "Lock Keys",
+        cmd: Shortcut::LockKeypad,
+        icon_idx: 25,
+    },
+    BuiltinTarget {
+        label: "Home",
+        cmd: Shortcut::LaunchApp(APP_ID_LAUNCHER as u8),
+        icon_idx: 24,
+    },
+    BuiltinTarget {
+        label: "Sleep",
+        cmd: Shortcut::Sleep,
+        icon_idx: 22,
+    },
 ];
 
 pub const fn hash_app_action(path: &str, action_id: u16) -> u16 {
@@ -307,16 +329,31 @@ pub fn build_picker_sheet(
 
     push_picker(ps, &mut n, TARGET_NONE, "None", "", gfx::icons::RADIO_OFF);
     for (idx, b) in BUILTIN_TARGETS.iter().enumerate() {
-        push_picker(ps, &mut n, (idx + 1) as u16, b.label, "", builtin_icon(b.icon_idx));
+        push_picker(
+            ps,
+            &mut n,
+            (idx + 1) as u16,
+            b.label,
+            "",
+            builtin_icon(b.icon_idx),
+        );
     }
     for (pkg_idx, e) in catalog.entries.iter().enumerate() {
         if !e.is_valid || e.exec_type != KrxExecType::App {
             continue;
         }
         let icon = crate::apps::settings::apps::package_icon_8(e.title.as_str(), e.icon_id);
-        push_picker(ps, &mut n, hash_app(e.path.as_str()), e.title.as_str(), "", icon);
+        push_picker(
+            ps,
+            &mut n,
+            hash_app(e.path.as_str()),
+            e.title.as_str(),
+            "",
+            icon,
+        );
         for act in catalog.actions.iter() {
-            if act.pkg_idx as usize == pkg_idx && (act.scope_mask & KrxActionDecl::SCOPE_SHORTCUT) != 0
+            if act.pkg_idx as usize == pkg_idx
+                && (act.scope_mask & KrxActionDecl::SCOPE_SHORTCUT) != 0
             {
                 push_picker(
                     ps,
@@ -331,7 +368,10 @@ pub fn build_picker_sheet(
     }
 
     ps.count = n;
-    let selected = ps.ids[..n].iter().position(|&id| id == current_id).unwrap_or(0);
+    let selected = ps.ids[..n]
+        .iter()
+        .position(|&id| id == current_id)
+        .unwrap_or(0);
     OptionSheet::new_dynamic(title, &ps.labels[..n], selected)
         .with_radio(true)
         .with_icons(&ps.icons[..n])
@@ -386,6 +426,7 @@ mod tests {
             icon_id: 29,
             caps: 0,
             is_valid: true,
+            has_config: false,
         });
         let mut label = [0u8; 12];
         label[..5].copy_from_slice(b"Sched");

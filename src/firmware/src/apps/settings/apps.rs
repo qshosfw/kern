@@ -179,6 +179,9 @@ pub fn populate_package_detail(items: &mut [MenuItem], is_service: bool, idx: us
 
     if !is_service && pkg.is_valid {
         push_item(items, &mut n, "Launch App", MenuItemType::Action);
+        if pkg.has_config {
+            push_item(items, &mut n, "App Settings", MenuItemType::Submenu);
+        }
     }
 
     add_detail_row(items, &mut n, "Name", pkg.title.as_str());
@@ -265,13 +268,13 @@ pub fn handle_package_press(
                     app.resume_nav = false;
                     crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
                 }
-            } else if app
-                .items
-                .get(sel_idx)
-                .is_some_and(|it| it.title == "Delete")
-            {
-                #[cfg(feature = "filesystem")]
-                prompt_delete_package(app, ctx);
+            } else if let Some(item) = app.items.get(sel_idx) {
+                if item.title == "App Settings" {
+                    app.push_submenu(PageId::AppPrefs, ctx);
+                } else if item.title == "Delete" {
+                    #[cfg(feature = "filesystem")]
+                    prompt_delete_package(app, ctx);
+                }
             }
             true
         }
