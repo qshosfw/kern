@@ -26,6 +26,20 @@ pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window c
 pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
 pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
 
+#[repr(C)]
+pub(crate) struct PagedWindowState {
+    pub(crate) cache: FixedWindowCache<16, 4>,
+    pub(crate) shadow_stack: ShadowReturnStack<8>,
+}
+
+/// Mutually exclusive overlay state: P1 uses `window` (fixed-window cache + shadow return stack),
+/// P0 uses `leaf` (structured leaf manager). Overlapping them saves ~192 B of SRAM for runtime stack.
+#[repr(C)]
+pub(crate) union PagedOverlay {
+    pub(crate) window: core::mem::ManuallyDrop<PagedWindowState>,
+    pub(crate) leaf: core::mem::ManuallyDrop<StructuredLeafManager<16>>,
+}
+
 #[repr(C, align(4))]
 pub(crate) struct NativeExecSlot {
     pub(crate) pid: kernel::proc::Pid,
@@ -40,15 +54,33 @@ pub(crate) struct NativeExecSlot {
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
     pub(crate) caps: CapabilitySet,
-    pub(crate) shadow_stack: ShadowReturnStack<8>,
     pub(crate) app_name: heapless::String<16>,
     pub(crate) pkg_path: heapless::String<32>,
     pub(crate) mem_layout: MemoryMapLayout<4>,
-    pub(crate) cache: FixedWindowCache<16, 4>,
-    pub(crate) leaf_mgr: StructuredLeafManager<16>,
+    pub(crate) overlay: PagedOverlay,
     pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
+}
+
+impl NativeExecSlot {
+    #[inline(never)]
+    fn window_mut(&mut self) -> Option<&mut PagedWindowState> {
+        if self.is_loaded && self.is_paged && !self.profile.is_structured_paged() {
+            Some(unsafe { &mut *self.overlay.window })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn leaf_mut(&mut self) -> Option<&mut StructuredLeafManager<16>> {
+        if self.is_loaded && self.profile.is_structured_paged() {
+            Some(unsafe { &mut *self.overlay.leaf })
+        } else {
+            None
+        }
+    }
 }
 
 pub fn init_native_slot() {
@@ -139,11 +171,12 @@ fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bo
 #[inline(never)]
 pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
     let slot = slot_mut();
-    if !slot.is_loaded || !slot.is_paged {
-        return slot.entry_point;
-    }
+    let entry_fallback = slot.entry_point;
+    let Some(win) = slot.window_mut() else {
+        return entry_fallback;
+    };
 
-    let Ok((slot_idx, is_hit, block_entry)) = slot.cache.resolve_or_select_slot(block_id) else {
+    let Ok((slot_idx, is_hit, block_entry)) = win.cache.resolve_or_select_slot(block_id) else {
         return 0;
     };
 
@@ -152,12 +185,12 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
         return 0;
     }
 
-    let slot_byte_off = slot.cache.slot_byte_offset(slot_idx);
+    let slot_byte_off = win.cache.slot_byte_offset(slot_idx);
     let slot_vma = (arena_base_ptr() as usize) + slot_byte_off;
 
     if !is_hit {
         // Stream block from SPI Flash via active context storage
-        let read_len = (block_entry.size as usize).min(slot.cache.page_size as usize);
+        let read_len = (block_entry.size as usize).min(win.cache.page_size as usize);
         if slot_byte_off + read_len > PAGED_CACHE_MAX_BYTES {
             return 0;
         }
@@ -184,14 +217,19 @@ pub fn krx_call_paged(
     return_offset: u16,
 ) -> Result<usize, PagedError> {
     let slot = slot_mut();
-    slot.shadow_stack.push(ReturnFrame {
-        caller_block_id: slot.current_block,
-        caller_slot: slot.current_slot,
+    let caller_block_id = slot.current_block;
+    let caller_slot = slot.current_slot;
+    let win = slot.window_mut().ok_or(PagedError::InvalidBlockId)?;
+    win.shadow_stack.push(ReturnFrame {
+        caller_block_id,
+        caller_slot,
         return_offset,
     })?;
     let target_addr = krx_page_fault(target_block_id, target_offset);
     if target_addr == 0 {
-        let _ = slot.shadow_stack.pop();
+        if let Some(w) = slot_mut().window_mut() {
+            let _ = w.shadow_stack.pop();
+        }
         return Err(PagedError::StorageReadFailed);
     }
     Ok(target_addr)
@@ -200,7 +238,8 @@ pub fn krx_call_paged(
 /// Normative OS Return-Thunk (`krx_return_thunk`, KRX-ABI 2.5.0 Section 7.2).
 /// Restores caller's block into the fixed-window cache if it was evicted while the callee ran.
 pub fn krx_return_thunk() -> Result<usize, PagedError> {
-    let frame = slot_mut().shadow_stack.pop()?;
+    let win = slot_mut().window_mut().ok_or(PagedError::InvalidBlockId)?;
+    let frame = win.shadow_stack.pop()?;
     let resume_addr = krx_page_fault(frame.caller_block_id, frame.return_offset);
     if resume_addr == 0 {
         return Err(PagedError::StorageReadFailed);
@@ -212,44 +251,42 @@ pub fn krx_return_thunk() -> Result<usize, PagedError> {
 #[inline(never)]
 pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     let slot = slot_mut();
-    if !slot.is_loaded {
-        return 0xFFFF_FFFF;
-    }
-
-    let overlay_vma = slot.leaf_mgr.overlay_vma;
-    let window_size = slot.leaf_mgr.window_size;
     let got_base = slot.got_base;
+    let Some(leaf_mgr) = slot.leaf_mut() else {
+        return 0xFFFF_FFFF;
+    };
 
-    let res = slot
-        .leaf_mgr
-        .dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
-            if !is_hit {
-                let read_len = (leaf_entry.size as usize).min(window_size as usize);
-                if !read_active_pkg_region(
-                    leaf_entry.flash_offset as usize,
-                    overlay_vma as usize,
-                    read_len,
-                ) {
-                    return Err(PagedError::StorageReadFailed);
-                }
+    let overlay_vma = leaf_mgr.overlay_vma;
+    let window_size = leaf_mgr.window_size;
+
+    let res = leaf_mgr.dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
+        if !is_hit {
+            let read_len = (leaf_entry.size as usize).min(window_size as usize);
+            if !read_active_pkg_region(
+                leaf_entry.flash_offset as usize,
+                overlay_vma as usize,
+                read_len,
+            ) {
+                return Err(PagedError::StorageReadFailed);
             }
+        }
 
-            if leaf_entry.entry_offset >= leaf_entry.size {
-                return Err(PagedError::InvalidLeafId);
-            }
+        if leaf_entry.entry_offset >= leaf_entry.size {
+            return Err(PagedError::InvalidLeafId);
+        }
 
-            let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;
-            let raw_res = unsafe {
-                invoke_krx_native(
-                    entry_addr,
-                    got_base,
-                    KRX_OP_START,
-                    &raw const NATIVE_API_TABLE,
-                    ctx as *mut _ as *const (),
-                )
-            };
-            Ok(raw_res)
-        });
+        let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;
+        let raw_res = unsafe {
+            invoke_krx_native(
+                entry_addr,
+                got_base,
+                KRX_OP_START,
+                &raw const NATIVE_API_TABLE,
+                ctx as *mut _ as *const (),
+            )
+        };
+        Ok(raw_res)
+    });
 
     res.unwrap_or(0xFFFF_FFFF)
 }
@@ -366,17 +403,25 @@ pub fn load_native_from_storage(
         unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), max_arena_bytes) };
     let load_delta = load_base.wrapping_sub(preamble.link_base);
 
-    // 1. Configure Paged Fixed-Window Cache
+    // 1. Configure Paged Fixed-Window Cache (P1) or Structured Leaf Manager (P0)
     slot.is_paged = is_paged;
+    let _ = slot.pkg_path.push_str(path);
+    let is_p0 = profile.is_structured_paged();
+    let overlay_size = 1024u32;
+    let overlay_vma = load_base + (max_arena_bytes as u32 - overlay_size);
 
-    if is_paged {
-        let _ = slot.pkg_path.push_str(path);
+    if is_p0 {
+        let leaf_mgr = unsafe { &mut *slot.overlay.leaf };
+        leaf_mgr.configure(overlay_vma, overlay_size as u16, aux.leaf_map);
+    } else if is_paged {
+        let win = unsafe { &mut *slot.overlay.window };
+        win.shadow_stack.clear();
         let pay_size = if exec.payload_size > 0 {
             exec.payload_size
         } else {
             payload_len as u32
         };
-        slot.cache.configure(
+        win.cache.configure(
             exec.page_size,
             exec.cache_blocks,
             h_len as u32,
@@ -384,22 +429,14 @@ pub fn load_native_from_storage(
             aux.block_map,
         );
         // Mark block 0 as already resident in slot 0 from initial load
-        if slot.cache.block_count > 0 {
-            slot.cache.access_clock = 1;
-            slot.cache.slots[0] = kernel::proc::paged::CacheSlotMeta {
+        if win.cache.block_count > 0 {
+            win.cache.access_clock = 1;
+            win.cache.slots[0] = kernel::proc::paged::CacheSlotMeta {
                 resident_block: Some(0),
-                pinned: slot.cache.blocks[0].is_pinned(),
+                pinned: win.cache.blocks[0].is_pinned(),
                 last_access_tick: 1,
             };
         }
-    }
-
-    // 2. Configure P0 Structured Leaf Manager
-    let overlay_size = 1024u32;
-    let overlay_vma = load_base + (max_arena_bytes as u32 - overlay_size);
-    if aux.leaf_map.is_some() {
-        slot.leaf_mgr
-            .configure(overlay_vma, overlay_size as u16, aux.leaf_map);
     }
 
     // 2b. Verify unrelocated payload CRC32 before patching words in SRAM
@@ -434,7 +471,6 @@ pub fn load_native_from_storage(
 
     // 4b. Configure normative memory regions for the detected execution profile
     slot.profile = profile;
-    let is_p0 = profile.is_structured_paged();
     let code_limit = if is_p0 {
         max_arena_bytes as u32 - overlay_size
     } else {
@@ -443,7 +479,8 @@ pub fn load_native_from_storage(
     let limit_vma = load_base + code_limit;
 
     let code_size = if is_paged && !is_p0 {
-        (slot.cache.active_slots as u32 * slot.cache.page_size as u32)
+        let win = unsafe { &*slot.overlay.window };
+        (win.cache.active_slots as u32 * win.cache.page_size as u32)
             .min(PAGED_CACHE_MAX_BYTES as u32)
     } else if exec.got_offset > 0 {
         (exec.got_offset as u32).min(code_limit)
