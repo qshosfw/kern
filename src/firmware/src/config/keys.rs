@@ -1,7 +1,6 @@
 use crate::apps::shortcut::{
-    KEY_SHORTCUT_COUNT, TARGET_FLASHLIGHT, TARGET_LOCK_KEYPAD, TARGET_MONITOR, TARGET_MUTE,
-    TARGET_NONE, TARGET_RADIO, TARGET_SETTINGS, TARGET_SLEEP, TARGET_TOGGLE_VFO,
-    TARGET_TX_POWER, hash_app,
+    KEY_SHORTCUT_COUNT, TARGET_FLASHLIGHT, TARGET_HOME, TARGET_LOCK_KEYPAD, TARGET_NONE,
+    TARGET_SETTINGS, TARGET_SLEEP, hash_app,
 };
 
 #[repr(C)]
@@ -36,15 +35,12 @@ impl KeyConfig {
     pub const fn new() -> Self {
         let mut actions = [TARGET_NONE; KEY_SHORTCUT_COUNT];
         actions[0] = TARGET_FLASHLIGHT; // S1 short
-        actions[1] = TARGET_MONITOR; // S1 long
+        actions[1] = TARGET_LOCK_KEYPAD; // S1 long
         actions[2] = hash_app("/apps/explorer.krx"); // S2 short
-        actions[3] = TARGET_TX_POWER; // S2 long
+        actions[3] = TARGET_SETTINGS; // S2 long
         actions[4] = hash_app("/apps/tasks.krx"); // Menu long -> Processes!
-        actions[6] = TARGET_TX_POWER; // F+2
-        actions[9] = TARGET_TOGGLE_VFO; // F+5
-        actions[12] = TARGET_MUTE; // F+8
         actions[13] = TARGET_LOCK_KEYPAD; // F+9
-        actions[14] = TARGET_RADIO; // F+0
+        actions[14] = TARGET_HOME; // F+0
         actions[15] = hash_app("/apps/scanner.krx"); // F+*
         actions[16] = TARGET_SETTINGS; // F+Menu
         let _ = TARGET_SLEEP;

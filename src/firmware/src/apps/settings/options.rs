@@ -146,11 +146,7 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
             ctx.config.mark_audio_dirty();
             ctx.apply_audio_config();
         }
-        PageId::Buttons
-        | PageId::ButtonsTweaks
-        | PageId::ButtonsShortcuts
-        | PageId::ShortcutRules
-        | PageId::ShortcutRule => {
+        PageId::Buttons | PageId::ButtonsTweaks | PageId::ButtonsShortcuts => {
             ctx.config.mark_keys_dirty();
         }
         PageId::Battery | PageId::BatteryTweaks => {
@@ -201,8 +197,6 @@ pub fn page_title(page: PageId) -> &'static str {
         PageId::AppDetail => "App Info",
         PageId::ManageServices => "Services",
         PageId::ServiceDetail => "Service Info",
-        PageId::ShortcutRules => "Context Rules",
-        PageId::ShortcutRule => "Edit Rule",
     }
 }
 

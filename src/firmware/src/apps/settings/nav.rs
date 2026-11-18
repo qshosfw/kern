@@ -26,20 +26,10 @@ impl SettingsApp {
             return;
         }
         if self.current_page == PageId::ButtonsShortcuts {
-            self.items_len =
-                super::buttons::populate_shortcuts(&mut self.items, &mut self.item_icons, ctx);
-            return;
-        }
-        if self.current_page == PageId::ShortcutRules {
-            self.items_len =
-                super::buttons::populate_shortcut_rules(&mut self.items, &mut self.item_icons, ctx);
-            return;
-        }
-        if self.current_page == PageId::ShortcutRule {
-            self.items_len = super::buttons::populate_shortcut_rule_detail(
+            self.items_len = super::buttons::populate_shortcuts(
                 &mut self.items,
                 &mut self.item_icons,
-                self.editing_rule,
+                self.shortcut_ctx,
                 ctx,
             );
             return;
@@ -121,6 +111,9 @@ impl SettingsApp {
         self.current_page = page;
         self.selected_idx = selected_idx;
         self.title = page_title(page);
+        if page == PageId::ButtonsShortcuts && slide_dir > 0 {
+            self.shortcut_ctx = 0;
+        }
         self.populate_current_menu(ctx);
         if self.selected_idx >= self.items_len {
             self.selected_idx = self.items_len.saturating_sub(1);
@@ -208,14 +201,8 @@ impl SettingsApp {
     pub fn handle_radio_confirmed(&mut self, ctx: &mut SysContext, sel: usize) {
         let sel_idx = self.selected_idx;
         if sel_idx < self.items_len {
-            if self.current_page == PageId::ShortcutRule {
-                let rule = &mut ctx.config.keys.ctx_rules[self.editing_rule.min(2) as usize];
-                if sel_idx == 0 {
-                    rule.ctx = (sel as u8).min(4);
-                } else if sel_idx == 1 {
-                    rule.slot = (sel as u8).min(18);
-                }
-                ctx.config.mark_keys_dirty();
+            if self.current_page == PageId::ButtonsShortcuts && sel_idx == 0 {
+                self.shortcut_ctx = (sel as u8).min(4);
                 return;
             }
             #[cfg(feature = "passcode")]

@@ -22,7 +22,7 @@ pub struct SettingsApp {
     pub(crate) is_pressed: bool,
     pub(crate) resume_nav: bool,
     pub(crate) active_action_module: bool,
-    pub(crate) editing_rule: u8,
+    pub(crate) shortcut_ctx: u8,
     pub(crate) dirty_timer_ms: u16,
     pub(crate) last_poll_sec: u16,
     pub slide_offset_x: i16,
@@ -52,7 +52,7 @@ impl SettingsApp {
             (*ptr).selected_pkg_idx = 0;
             (*ptr).resume_nav = false;
             (*ptr).active_action_module = false;
-            (*ptr).editing_rule = 0;
+            (*ptr).shortcut_ctx = 0;
             (*ptr).slide_offset_x = 0;
             (*ptr).dirty_timer_ms = 0;
             (*ptr).last_poll_sec = u16::MAX;
@@ -96,11 +96,7 @@ impl SettingsApp {
             Some(Self::ROOT_ICONS)
         } else if matches!(
             self.current_page,
-            PageId::ManageApps
-                | PageId::ManageServices
-                | PageId::ButtonsShortcuts
-                | PageId::ShortcutRules
-                | PageId::ShortcutRule
+            PageId::ManageApps | PageId::ManageServices | PageId::ButtonsShortcuts
         ) {
             Some(&self.item_icons[..self.items_len])
         } else {
@@ -136,37 +132,23 @@ impl SettingsApp {
             return;
         }
 
-        if self.current_page == PageId::ButtonsShortcuts {
-            if sel_idx < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
+        if self.current_page == PageId::ButtonsShortcuts && sel_idx > 0 {
+            let slot = sel_idx - 1;
+            if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
                 let cat = crate::apps::launcher::catalog::get_catalog();
                 cat.scan(ctx.storage);
+                let cur_id = crate::apps::shortcut::resolve_slot(
+                    &ctx.config.keys,
+                    slot,
+                    self.shortcut_ctx,
+                );
                 let sheet = crate::apps::shortcut::build_picker_sheet(
-                    crate::apps::shortcut::slot_label(sel_idx),
-                    ctx.config.keys.actions[sel_idx],
+                    crate::apps::shortcut::slot_label(slot),
+                    cur_id,
                     cat,
                 );
                 ctx.show_sheet(dialog::TAG_SHORTCUT_SHEET, sheet);
             }
-            return;
-        }
-        if self.current_page == PageId::ShortcutRules {
-            if sel_idx < 3 {
-                self.editing_rule = sel_idx as u8;
-                self.push_submenu(PageId::ShortcutRule, ctx);
-            }
-            return;
-        }
-        if self.current_page == PageId::ShortcutRule && sel_idx == 2 {
-            let cat = crate::apps::launcher::catalog::get_catalog();
-            cat.scan(ctx.storage);
-            let r = ctx.config.keys.ctx_rules[self.editing_rule.min(2) as usize];
-            let slot = (r.slot as usize).min(crate::apps::shortcut::KEY_SHORTCUT_COUNT - 1);
-            let sheet = crate::apps::shortcut::build_picker_sheet(
-                crate::apps::shortcut::slot_label(slot),
-                r.action,
-                cat,
-            );
-            ctx.show_sheet(dialog::TAG_SHORTCUT_SHEET, sheet);
             return;
         }
 

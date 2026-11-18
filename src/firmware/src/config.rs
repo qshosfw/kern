@@ -609,11 +609,11 @@ mod tests {
         cfg.ctx_rules[0] = keys::CtxRule {
             slot: 2,
             ctx: crate::apps::shortcut::CTX_VFO,
-            action: crate::apps::shortcut::TARGET_TOGGLE_VFO,
+            action: crate::apps::shortcut::TARGET_HOME,
         };
         assert_eq!(
             crate::apps::shortcut::resolve_slot(&cfg, 2, crate::apps::shortcut::CTX_VFO),
-            crate::apps::shortcut::TARGET_TOGGLE_VFO
+            crate::apps::shortcut::TARGET_HOME
         );
         assert_eq!(
             crate::apps::shortcut::resolve_slot(&cfg, 2, crate::apps::shortcut::CTX_HOME),

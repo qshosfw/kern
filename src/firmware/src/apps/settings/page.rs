@@ -30,12 +30,10 @@ pub enum PageId {
     AppDetail,
     ManageServices,
     ServiceDetail,
-    ShortcutRules,
-    ShortcutRule,
 }
 
 impl PageId {
-    pub const COUNT: usize = PageId::ShortcutRule as usize + 1;
+    pub const COUNT: usize = PageId::ServiceDetail as usize + 1;
 
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {

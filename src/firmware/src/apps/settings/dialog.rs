@@ -236,21 +236,41 @@ pub fn handle_sheet_selected(
             app.handle_radio_confirmed(ctx, idx);
         }
         TAG_SHORTCUT_SHEET => {
+            let slot = app.selected_idx.saturating_sub(1);
             if let Some(target_id) = crate::apps::shortcut::picker_target_at(idx) {
-                if app.current_page == super::page::PageId::ShortcutRule {
-                    let r = &mut ctx.config.keys.ctx_rules[app.editing_rule.min(2) as usize];
-                    if r.ctx == 0 {
-                        r.ctx = crate::apps::shortcut::CTX_VFO;
-                    }
-                    r.action = target_id;
-                    ctx.config.mark_keys_dirty();
-                } else {
-                    let slot = app.selected_idx;
-                    if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT
-                        && ctx.config.keys.actions[slot] != target_id
-                    {
-                        ctx.config.keys.actions[slot] = target_id;
-                        ctx.config.mark_keys_dirty();
+                if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
+                    if app.shortcut_ctx == 0 {
+                        if ctx.config.keys.actions[slot] != target_id {
+                            ctx.config.keys.actions[slot] = target_id;
+                            ctx.config.mark_keys_dirty();
+                        }
+                    } else {
+                        let cur_ctx = app.shortcut_ctx;
+                        let is_default = ctx.config.keys.actions[slot] == target_id;
+                        let mut done = false;
+                        for r in &mut ctx.config.keys.ctx_rules {
+                            if r.ctx == cur_ctx && r.slot as usize == slot {
+                                r.ctx = if is_default { 0 } else { cur_ctx };
+                                r.action = if is_default { 0 } else { target_id };
+                                done = true;
+                                break;
+                            }
+                        }
+                        if !done && !is_default {
+                            if let Some(free) =
+                                ctx.config.keys.ctx_rules.iter_mut().find(|r| r.ctx == 0)
+                            {
+                                free.slot = slot as u8;
+                                free.ctx = cur_ctx;
+                                free.action = target_id;
+                                done = true;
+                            } else {
+                                ctx.show_popup(TAG_POPUP_INFO, "Context Rules", "Max 3 overrides");
+                            }
+                        }
+                        if done {
+                            ctx.config.mark_keys_dirty();
+                        }
                     }
                 }
             }

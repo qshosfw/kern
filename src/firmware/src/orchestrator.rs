@@ -1,6 +1,4 @@
 use crate::services::display::DisplayService;
-#[cfg(feature = "radio")]
-use crate::services::radio::RfSquelch;
 // Microkernel OS Orchestrator & Shell Compositor
 // Routes hardware events to the active foreground application, manages background execution,
 // and orchestrates global microkernel services like IPC shortcut dispatching.
@@ -44,8 +42,6 @@ use keypad_lock::KeypadLockManager;
 pub struct Orchestrator {
     side1_held: bool,
     side2_held: bool,
-    is_muted: bool,
-    is_monitoring: bool,
     owned_key: Option<KeyCode>,
     active_app_id: usize,
     previous_app: Option<usize>,
@@ -1155,39 +1151,11 @@ impl Orchestrator {
             }
             Shortcut::Settings => self.switch_app(ctx, APP_ID_SETTINGS),
             Shortcut::LockKeypad => self.toggle_keypad_lock(),
-            Shortcut::ToggleVfo => ctx.state.coord.toggle_vfo(ctx.radio),
-            Shortcut::ToggleTxPower => {
-                use kernel::service::radio::{RfChannel, RfPowerLevel};
-                let ch = ctx.state.coord.active_channel_mut();
-                ch.power = match ch.power {
-                    RfPowerLevel::Low => RfPowerLevel::Medium,
-                    RfPowerLevel::Medium => RfPowerLevel::High,
-                    RfPowerLevel::High => RfPowerLevel::Low,
-                };
-                ctx.radio.set_power_level(ch.power);
-            }
             Shortcut::PlayBeep {
                 freq_hz,
                 duration_ms,
             } => {
                 ctx.play_tone(freq_hz, duration_ms);
-            }
-            Shortcut::Monitor => {
-                self.is_monitoring = !self.is_monitoring;
-                let sql = if self.is_monitoring {
-                    0
-                } else {
-                    ctx.state.coord.active_channel().squelch_level.clamp(1, 9)
-                };
-                ctx.radio.set_squelch_level(sql);
-            }
-            Shortcut::MuteAudio => {
-                self.is_muted = !self.is_muted;
-                if self.is_muted {
-                    ctx.set_volume(0);
-                } else {
-                    ctx.set_volume(ctx.config.audio.volume);
-                }
             }
             Shortcut::Reboot => kernel::power::PowerControl::reboot(),
             Shortcut::Sleep => {

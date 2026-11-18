@@ -18,17 +18,12 @@ pub const F_DRAWER_START_SLOT: usize = 5;
 pub static SLOT_OPTIONS: &str =
     "S1\0S1+\0S2\0S2+\0M+\0F+1\0F+2\0F+3\0F+4\0F+5\0F+6\0F+7\0F+8\0F+9\0F+0\0F+*\0F+M\0F+S1\0F+S2\0";
 
-/// Packed context scope labels shared by rule summary, rule editor, and F-key drawer.
-pub static CTX_OPTIONS: &str = "Off\0VFO\0Home\0Prefs\0App\0";
+/// Packed context scope labels shared by settings selector and shortcut engine.
+pub static CTX_OPTIONS: &str = "Global\0VFO\0Home\0Prefs\0App\0";
 
 #[inline(never)]
 pub fn slot_label(slot: usize) -> &'static str {
     utils::format::nth_cstr(SLOT_OPTIONS.as_bytes(), slot.min(KEY_SHORTCUT_COUNT - 1) as u8)
-}
-
-#[inline(never)]
-pub fn ctx_label(ctx: u8) -> &'static str {
-    utils::format::nth_cstr(CTX_OPTIONS.as_bytes(), ctx.min(4))
 }
 
 #[inline(always)]
@@ -63,12 +58,8 @@ pub const fn active_context(app_id: usize) -> u8 {
 pub enum Shortcut {
     None,
     Flashlight,
-    Monitor,
     Settings,
     LockKeypad,
-    ToggleVfo,
-    ToggleTxPower,
-    MuteAudio,
     Sleep,
     Reboot,
     LaunchApp(u8),
@@ -81,12 +72,8 @@ impl Shortcut {
         match self {
             Shortcut::None => (0, 0),
             Shortcut::Flashlight => (1, 0),
-            Shortcut::Monitor => (2, 0),
             Shortcut::Settings => (5, 0),
             Shortcut::LockKeypad => (6, 0),
-            Shortcut::ToggleVfo => (7, 0),
-            Shortcut::ToggleTxPower => (8, 0),
-            Shortcut::MuteAudio => (9, 0),
             Shortcut::Sleep => (13, 0),
             Shortcut::Reboot => (14, 0),
             Shortcut::LaunchApp(app_id) => (15, app_id as u16),
@@ -114,12 +101,8 @@ impl From<SysEvent> for Shortcut {
     fn from(evt: SysEvent) -> Self {
         match evt.command {
             1 => Shortcut::Flashlight,
-            2 => Shortcut::Monitor,
             5 => Shortcut::Settings,
             6 => Shortcut::LockKeypad,
-            7 => Shortcut::ToggleVfo,
-            8 => Shortcut::ToggleTxPower,
-            9 => Shortcut::MuteAudio,
             13 => Shortcut::Sleep,
             14 => Shortcut::Reboot,
             15 => Shortcut::LaunchApp(evt.arg as u8),
@@ -135,15 +118,10 @@ impl From<SysEvent> for Shortcut {
 
 pub const TARGET_NONE: u16 = 0;
 pub const TARGET_FLASHLIGHT: u16 = 1;
-pub const TARGET_MONITOR: u16 = 2;
-pub const TARGET_SETTINGS: u16 = 3;
-pub const TARGET_LOCK_KEYPAD: u16 = 4;
-pub const TARGET_TOGGLE_VFO: u16 = 5;
-pub const TARGET_TX_POWER: u16 = 6;
-pub const TARGET_MUTE: u16 = 7;
-pub const TARGET_RADIO: u16 = 8;
-pub const TARGET_LAUNCHER: u16 = 9;
-pub const TARGET_SLEEP: u16 = 10;
+pub const TARGET_SETTINGS: u16 = 2;
+pub const TARGET_LOCK_KEYPAD: u16 = 3;
+pub const TARGET_HOME: u16 = 4;
+pub const TARGET_SLEEP: u16 = 5;
 
 pub struct BuiltinTarget {
     pub label: &'static str,
@@ -151,17 +129,12 @@ pub struct BuiltinTarget {
     pub icon_idx: u8,
 }
 
-/// Ordered 1..=10 matching `TARGET_FLASHLIGHT..=TARGET_SLEEP` for $O(1)$ indexing.
-pub const BUILTIN_TARGETS: [BuiltinTarget; 10] = [
+/// Pure OS built-in system shortcuts ordered 1..=5 matching `TARGET_FLASHLIGHT..=TARGET_SLEEP`.
+pub const BUILTIN_TARGETS: [BuiltinTarget; 5] = [
     BuiltinTarget { label: "Flashlight", cmd: Shortcut::Flashlight, icon_idx: 6 },
-    BuiltinTarget { label: "Monitor", cmd: Shortcut::Monitor, icon_idx: 0xFF },
     BuiltinTarget { label: "Settings", cmd: Shortcut::Settings, icon_idx: 4 },
     BuiltinTarget { label: "Lock Keys", cmd: Shortcut::LockKeypad, icon_idx: 25 },
-    BuiltinTarget { label: "VFO A/B", cmd: Shortcut::ToggleVfo, icon_idx: 2 },
-    BuiltinTarget { label: "TX Power", cmd: Shortcut::ToggleTxPower, icon_idx: 7 },
-    BuiltinTarget { label: "Mute", cmd: Shortcut::MuteAudio, icon_idx: 21 },
-    BuiltinTarget { label: "Radio", cmd: Shortcut::LaunchApp(APP_ID_VFO as u8), icon_idx: 3 },
-    BuiltinTarget { label: "Launcher", cmd: Shortcut::LaunchApp(APP_ID_LAUNCHER as u8), icon_idx: 24 },
+    BuiltinTarget { label: "Home", cmd: Shortcut::LaunchApp(APP_ID_LAUNCHER as u8), icon_idx: 24 },
     BuiltinTarget { label: "Sleep", cmd: Shortcut::Sleep, icon_idx: 22 },
 ];
 
@@ -218,13 +191,9 @@ enum TargetMeta<'a> {
 
 #[inline(always)]
 fn builtin_icon(icon_idx: u8) -> &'static [u8; 8] {
-    if icon_idx == 0xFF {
-        gfx::icons::ICON_ANTENNA
-    } else {
-        gfx::icons::SYSTEM_ICONS_8
-            .get(icon_idx as usize)
-            .unwrap_or(gfx::icons::ICON_FOLDER)
-    }
+    gfx::icons::SYSTEM_ICONS_8
+        .get(icon_idx as usize)
+        .unwrap_or(gfx::icons::ICON_FOLDER)
 }
 
 #[inline(never)]
@@ -388,12 +357,8 @@ mod tests {
         for sc in [
             Shortcut::None,
             Shortcut::Flashlight,
-            Shortcut::Monitor,
             Shortcut::Settings,
             Shortcut::LockKeypad,
-            Shortcut::ToggleVfo,
-            Shortcut::ToggleTxPower,
-            Shortcut::MuteAudio,
             Shortcut::Sleep,
             Shortcut::Reboot,
             Shortcut::LaunchApp(42),
