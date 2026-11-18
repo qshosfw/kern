@@ -172,6 +172,39 @@ pub fn record_proc_activation(app_id: usize) {
     }
 }
 
+/// Returns true if process `app_id` is currently suspended, dormant, stopped, or dead.
+pub fn is_proc_paused(app_id: usize) -> bool {
+    proc_table().find_by_app(app_id).is_some_and(|pcb| {
+        matches!(
+            pcb.state,
+            ProcState::Suspended | ProcState::Dormant | ProcState::Stopped | ProcState::Dead
+        )
+    })
+}
+
+/// Atomically reap a terminated non-protected process across PCB, Leases, Tray, Services, and dynamic registry.
+pub fn reap_pid_resources(target_pid: u8) -> bool {
+    if target_pid <= 4 {
+        return false;
+    }
+    let Some(pcb) = proc_table().find(kernel::proc::Pid(target_pid)) else {
+        return false;
+    };
+    let app_id = pcb.app_id;
+    let pid = pcb.pid;
+
+    lease_manager_mut().revoke_all_for_owner(pid);
+    status_tray_mut().clear_icon(pid);
+    #[cfg(feature = "krx_runtime")]
+    crate::runtime::syscall::service::service_registry_mut().unbind_provider(pid);
+
+    let _ = proc_table_mut().terminate(pid);
+    if app_id >= crate::AppRegistry::count() {
+        crate::AppRegistry::unregister_dynamic();
+    }
+    true
+}
+
 #[inline(never)]
 fn record_proc_event_and_stack(app_id: usize) {
     if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
@@ -182,17 +215,27 @@ fn record_proc_event_and_stack(app_id: usize) {
 }
 
 #[inline(never)]
-pub(crate) fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) -> bool {
-    if let Err(err) = crate::apps::runtime::launch_krx_package(ctx, path) {
-        ctx.show_confirm(0, err.title(), err.message(), "OK", "EXIT");
+pub(crate) fn launch_krx_shortcut_arg(
+    ctx: &mut crate::services::SysContext,
+    path: &str,
+    action_id: u32,
+) -> bool {
+    if let Err(err) = crate::apps::runtime::launch_krx_package_with_arg(ctx, path, action_id) {
+        crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
         return false;
     }
     true
 }
 
+#[inline(never)]
+pub(crate) fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) -> bool {
+    launch_krx_shortcut_arg(ctx, path, 0)
+}
+
 impl Orchestrator {
-    pub fn new(startup_app: usize) -> Self {
+    /// Initialize an `Orchestrator` directly in caller storage without a stack temporary.
+    pub unsafe fn init_in_place(dst: *mut Self, startup_app: usize) {
         init_proc_table();
         let table = proc_table_mut();
 
@@ -205,10 +248,14 @@ impl Orchestrator {
             caps: CapabilitySet,
             state: ProcState,
         ) {
-            let _ = table.spawn(name, app_id, priority, ExecType::StaticFirmware, caps);
-            if let Some(pcb) = table.find_mut_by_app(app_id) {
-                pcb.set_state(state);
-                pcb.ledger.record_activation();
+            if table
+                .spawn(name, app_id, priority, ExecType::StaticFirmware, caps)
+                .is_ok()
+            {
+                if let Some(pcb) = table.find_mut_by_app(app_id) {
+                    pcb.set_state(state);
+                    pcb.ledger.record_activation();
+                }
             }
         }
 
@@ -271,16 +318,24 @@ impl Orchestrator {
             ProcState::Running,
         );
 
-        Self {
-            active_app_id: startup_app,
-            previous_app: None,
-            nav_stack: NavStack::new(),
-            owned_key: None,
-            lock_mgr: KeypadLockManager::new(),
-            side1_held: false,
-            side2_held: false,
-            is_muted: false,
-            is_monitoring: false,
+        unsafe {
+            core::ptr::write_bytes(dst as *mut u8, 0, core::mem::size_of::<Self>());
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).active_app_id), startup_app);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).previous_app), None);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).nav_stack), NavStack::new());
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).owned_key), None);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).lock_mgr),
+                KeypadLockManager::new(),
+            );
+        }
+    }
+
+    pub fn new(startup_app: usize) -> Self {
+        let mut uninit = core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            Self::init_in_place(uninit.as_mut_ptr(), startup_app);
+            uninit.assume_init()
         }
     }
 
@@ -416,24 +471,49 @@ impl Orchestrator {
             return;
         }
 
-        let action = match code {
-            KeyCode::Key0 => ctx.config.keys.f_0,
-            KeyCode::Star => ctx.config.keys.f_star,
-            KeyCode::Menu => ctx.config.keys.f_menu,
-            KeyCode::Side1 => ctx.config.keys.f_side1,
-            KeyCode::Side2 => ctx.config.keys.f_side2,
-            _ => {
-                if let Some(d) = code.to_digit().filter(|&d| d >= 1) {
-                    ctx.config.keys.f_digits[(d - 1) as usize]
-                } else {
-                    0
-                }
-            }
+        let slot = match code {
+            KeyCode::Key0 => Some(14),
+            KeyCode::Star => Some(15),
+            KeyCode::Menu => Some(16),
+            KeyCode::Side1 => Some(17),
+            KeyCode::Side2 => Some(18),
+            _ => code
+                .to_digit()
+                .filter(|&d| d >= 1)
+                .map(|d| 5 + (d - 1) as usize),
         };
-        if action != 0 {
-            self.process_ipc_command(ctx, Shortcut::from_u8(action));
-        } else {
-            ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+        let target_id = slot.map_or(0, |i| ctx.config.keys.actions[i]);
+        self.execute_shortcut_target(ctx, target_id, true);
+    }
+
+    #[inline(never)]
+    pub fn execute_shortcut_target<'a>(
+        &mut self,
+        ctx: &mut crate::services::SysContext<'a, '_>,
+        target_id: u32,
+        warn_if_empty: bool,
+    ) -> bool {
+        let cat = crate::apps::launcher::catalog::get_catalog();
+        #[cfg(feature = "filesystem")]
+        if (target_id & 0x8000_0000) != 0 && !cat.scanned {
+            cat.scan(ctx.storage);
+        }
+        match crate::apps::shortcut::resolve(target_id, cat) {
+            crate::apps::shortcut::ResolvedShortcut::Builtin(cmd) => {
+                self.process_ipc_command(ctx, cmd);
+                true
+            }
+            crate::apps::shortcut::ResolvedShortcut::App { path, action_id } => {
+                let mut path_copy = heapless::String::<24>::new();
+                let _ = path_copy.push_str(path);
+                launch_krx_shortcut_arg(ctx, path_copy.as_str(), action_id as u32)
+            }
+            crate::apps::shortcut::ResolvedShortcut::None => {
+                if warn_if_empty {
+                    ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+                }
+                false
+            }
         }
     }
 
@@ -696,6 +776,28 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn pop_active_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
+        if self.active_app_id == APP_ID_LAUNCHER {
+            return;
+        }
+        self.lock_mgr.reset_input_tracking();
+        while let Some(prev) = self.nav_stack.pop() {
+            let is_valid = if prev < crate::AppRegistry::count() {
+                true
+            } else if prev < crate::AppRegistry::app_count() {
+                crate::AppRegistry::is_dynamic_loaded()
+            } else {
+                false
+            };
+            if prev != self.active_app_id && is_valid {
+                self.switch_app_internal(ctx, prev, false);
+                return;
+            }
+        }
+        self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+    }
+
+    #[inline(never)]
     fn filter_modal_event<'a>(
         &mut self,
         ctx: &mut crate::services::SysContext<'a, '_>,
@@ -784,24 +886,8 @@ impl Orchestrator {
                 if self.active_app_id == APP_ID_LAUNCHER {
                     return;
                 }
-                self.lock_mgr.reset_input_tracking();
-                while let Some(prev) = self.nav_stack.pop() {
-                    let is_valid = if prev < crate::AppRegistry::count() {
-                        true
-                    } else if prev < crate::AppRegistry::app_count() {
-                        crate::AppRegistry::is_dynamic_loaded()
-                    } else {
-                        false
-                    };
-                    if prev != self.active_app_id && is_valid {
-                        self.switch_app_internal(ctx, prev, false);
-                        return;
-                    }
-                }
-                if self.active_app_id != APP_ID_LAUNCHER {
-                    self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
-                    return;
-                }
+                self.pop_active_app(ctx);
+                return;
             }
             Event::Key {
                 code: code @ (KeyCode::Side1 | KeyCode::Side2),
@@ -810,25 +896,25 @@ impl Orchestrator {
                 let (held, long, short) = if code == KeyCode::Side1 {
                     (
                         &mut self.side1_held,
-                        ctx.config.keys.f1_long,
-                        ctx.config.keys.f1_short,
+                        ctx.config.keys.actions[1],
+                        ctx.config.keys.actions[0],
                     )
                 } else {
                     (
                         &mut self.side2_held,
-                        ctx.config.keys.f2_long,
-                        ctx.config.keys.f2_short,
+                        ctx.config.keys.actions[3],
+                        ctx.config.keys.actions[2],
                     )
                 };
-                if let Some(cfg) = Self::handle_side_key(held, state, long, short) {
-                    self.process_ipc_command(ctx, Shortcut::from_u8(cfg));
+                if let Some(target_id) = Self::handle_side_key(held, state, long, short) {
+                    self.execute_shortcut_target(ctx, target_id, false);
                 }
             }
             Event::Key {
                 code: KeyCode::Menu,
                 state: KeyState::Held,
             } => {
-                self.process_ipc_command(ctx, Shortcut::from_u8(ctx.config.keys.m_long));
+                self.execute_shortcut_target(ctx, ctx.config.keys.actions[4], false);
             }
             _ => {}
         }
@@ -900,9 +986,9 @@ impl Orchestrator {
     fn handle_side_key(
         held_flag: &mut bool,
         state: KeyState,
-        long_cfg: u8,
-        short_cfg: u8,
-    ) -> Option<u8> {
+        long_cfg: u32,
+        short_cfg: u32,
+    ) -> Option<u32> {
         match state {
             KeyState::Held => {
                 *held_flag = true;
@@ -981,7 +1067,7 @@ impl Orchestrator {
                 if push_history && self.active_app_id != APP_ID_LAUNCHER {
                     self.nav_stack.push(self.active_app_id);
 
-                    // Dynamic Max Foreground Apps enforcement based on live memory pressure:
+                    // Dynamic Max Foreground Apps & RAM cache trimming
                     let max_apps = kernel::sys::SystemDiagnostics::dynamic_max_foreground_apps();
                     if let Some(_evicted_app) =
                         self.nav_stack.trim_oldest(max_apps.saturating_sub(1))
@@ -1043,18 +1129,13 @@ impl Orchestrator {
         match cmd {
             Shortcut::None => {}
             Shortcut::LaunchApp(id) => self.switch_app(ctx, id as usize),
+            Shortcut::CloseApp => self.pop_active_app(ctx),
             Shortcut::Flashlight => {
                 if bsp::pins::FLASHLIGHT.is_high() {
                     bsp::pins::FLASHLIGHT.set_low();
                 } else {
                     bsp::pins::FLASHLIGHT.set_high();
                 }
-            }
-            Shortcut::Scanner | Shortcut::Explorer => {
-                launch_krx_shortcut(ctx, "/apps/explorer.krx");
-            }
-            Shortcut::TaskManager => {
-                launch_krx_shortcut(ctx, "/apps/sysinfo.krx");
             }
             Shortcut::Settings => self.switch_app(ctx, APP_ID_SETTINGS),
             Shortcut::LockKeypad => self.toggle_keypad_lock(),
@@ -1092,15 +1173,9 @@ impl Orchestrator {
                     ctx.set_volume(ctx.config.audio.volume);
                 }
             }
-            Shortcut::FmRadio => {
-                self.switch_app(ctx, APP_ID_VFO);
-            }
             Shortcut::Reboot => kernel::power::PowerControl::reboot(),
             Shortcut::Sleep => {
                 self.lock_mgr.sleep_requested = true;
-            }
-            Shortcut::Fault => {
-                panic!("Test panic");
             }
         }
     }
@@ -1165,5 +1240,49 @@ mod tests {
             .find_by_app(crate::apps::APP_ID_VFO)
             .expect("startup app PCB updated to new app_id");
         assert_eq!(pcb.app_id, crate::apps::APP_ID_VFO);
+    }
+
+    #[test]
+    fn init_in_place_initializes_active_app_without_corruption() {
+        let mut uninit = core::mem::MaybeUninit::<Orchestrator>::uninit();
+        unsafe {
+            Orchestrator::init_in_place(uninit.as_mut_ptr(), crate::apps::APP_ID_SETTINGS);
+        }
+        let orch = unsafe { uninit.assume_init() };
+        assert_eq!(orch.active_app_id(), crate::apps::APP_ID_SETTINGS);
+    }
+
+    #[test]
+    fn reap_pid_resources_protects_core_daemons_and_cleans_user_process() {
+        let mut orch = Orchestrator::new(crate::apps::APP_ID_LAUNCHER);
+        // Core daemons PID 1..=4 must never be killable.
+        assert!(!reap_pid_resources(1));
+        assert!(!reap_pid_resources(4));
+
+        // Spawn user process PID > 4 with an active lease.
+        let pid = orch
+            .proc_table_mut()
+            .spawn(
+                "Worker",
+                77,
+                kernel::sched::Priority::Ui,
+                ExecType::RelocatableNative,
+                CapabilitySet::empty(),
+            )
+            .expect("worker slot");
+        assert!(pid.0 > 4);
+        assert!(
+            lease_manager_mut()
+                .acquire(pid, kernel::proc::LeaseKind::RadioRx, 1000, 0)
+                .is_ok()
+        );
+
+        assert!(reap_pid_resources(pid.0));
+        assert!(
+            lease_manager()
+                .holder(kernel::proc::LeaseKind::RadioRx)
+                .is_none()
+        );
+        assert_eq!(orch.proc_table().find(pid).unwrap().state, ProcState::Dead);
     }
 }

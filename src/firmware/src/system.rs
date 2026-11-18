@@ -435,7 +435,9 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         #[cfg(feature = "radio")]
         if now.wrapping_sub(last_radio_tick) >= 10 {
             last_radio_tick = now;
-            hw.tick_radio_services();
+            if !crate::orchestrator::is_proc_paused(0xF1) {
+                hw.tick_radio_services();
+            }
         }
 
         // Clear crash-loop strike counter only after >= 10 s of healthy main loop execution (§38.4)
@@ -520,7 +522,9 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         };
         if now.wrapping_sub(last_battery_tick) >= batt_interval {
             last_battery_tick = now;
-            poll_battery_tick(hw, &adc, &mut dirty_render);
+            if !crate::orchestrator::is_proc_paused(0xF2) {
+                poll_battery_tick(hw, &adc, &mut dirty_render);
+            }
         }
 
         // 4. 1-second system tick for uptime, telemetry, activity & Auto-Power-Off (APO)

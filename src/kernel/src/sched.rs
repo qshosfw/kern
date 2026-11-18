@@ -7,6 +7,7 @@
 use crate::event::Event;
 
 /// Scheduling Priority Band
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
     /// Background telemetry, housekeeping, diagnostics
@@ -19,6 +20,20 @@ pub enum Priority {
     Capture = 3,
     /// Emergency power cutoff, thermal/battery safety
     Safety = 4,
+}
+
+impl Priority {
+    /// Convert a raw byte priority value back into a `Priority` variant.
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        match val {
+            0 => Some(Self::Idle),
+            1 => Some(Self::Ui),
+            2 => Some(Self::Radio),
+            3 => Some(Self::Capture),
+            4 => Some(Self::Safety),
+            _ => None,
+        }
+    }
 }
 
 /// Cooperative Run-to-Completion Task State
