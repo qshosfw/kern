@@ -9,30 +9,27 @@ pub use matrix::*;
 use heapless::Deque;
 use kernel::event::{KeyCode, KeyState};
 
+#[repr(C)]
 pub struct KeypadScanner {
-    /// Multi-sample raw contact bitmask history (for robust flutter-free debounce confirmation)
-    raw_history: [u32; 3],
-    /// Currently debounced active key bitmask
-    debounced: u32,
-
+    // Keep hot scalars in the first 32 bytes for Cortex-M0+ Thumb-1 imm5 offsets.
     /// Key index currently tracked for Hold and Repeat (0..19)
     held_idx: Option<u8>,
-    /// Accumulated duration of currently held key in milliseconds
-    held_ms: u16,
     /// Flag indicating whether the active key has crossed the initial hold threshold
     key_being_held: bool,
-
+    pub fast_scroll_enabled: bool,
+    /// Accumulated duration of currently held key in milliseconds
+    held_ms: u16,
     /// Exact duration in milliseconds of the last released key (for Morse/CW)
     last_held_duration_ms: u16,
-
-    /// Monotonic timestamp of last scan call
-    last_scan_ms: u32,
-
     /// Timing configuration
     pub hold_delay_ms: u16,
     pub repeat_rate_ms: u16,
-    pub fast_scroll_enabled: bool,
-
+    /// Currently debounced active key bitmask
+    debounced: u32,
+    /// Monotonic timestamp of last scan call
+    last_scan_ms: u32,
+    /// Multi-sample raw contact bitmask history (for robust flutter-free debounce confirmation)
+    raw_history: [u32; 3],
     /// FIFO event queue for dispatched key transitions
     event_queue: Deque<(KeyCode, KeyState), 16>,
 }

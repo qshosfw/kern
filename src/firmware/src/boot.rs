@@ -147,7 +147,7 @@ fn rescue_raw_calibration<'a>(
     let valid_at_10k = fs.dev.read_data(0x010000, raw_calib).is_ok()
         && crate::services::calibration::is_valid_calibration(raw_calib);
     if !valid_at_10k {
-        raw_calib.copy_from_slice(crate::services::calibration::DEV_TARGET_FACTORY_CALIB);
+        crate::services::calibration::fill_default_calibration(raw_calib);
     }
     valid_at_10k
 }
@@ -169,7 +169,7 @@ fn save_rescued_calibration<'a>(
     radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
 ) {
     if !crate::services::calibration::is_valid_calibration(raw_calib) {
-        raw_calib.copy_from_slice(crate::services::calibration::DEV_TARGET_FACTORY_CALIB);
+        crate::services::calibration::fill_default_calibration(raw_calib);
     }
     let _ = fs.create_dir("/sys");
     let _ = fs.write_file("/sys/calib.dat", raw_calib);

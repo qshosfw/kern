@@ -4,6 +4,44 @@ use super::WireDriver;
 use kernel::service::SerialPort;
 use kernel::wire::*;
 
+const CAPS_REPLY: [u8; 35] = [
+    1,
+    0,
+    0,
+    0, // generation = 1
+    0xFF,
+    0xFF, // next cursor = 0xFFFF (end)
+    7,    // 7 components
+    1,
+    2,
+    1,
+    COMPONENT_CLASS_RADIO,
+    1,
+    2,
+    2,
+    COMPONENT_CLASS_MCU,
+    1,
+    2,
+    3,
+    COMPONENT_CLASS_DISPLAY,
+    1,
+    2,
+    4,
+    COMPONENT_CLASS_KEYPAD,
+    1,
+    2,
+    5,
+    COMPONENT_CLASS_AUDIO,
+    1,
+    2,
+    6,
+    COMPONENT_CLASS_POWER,
+    1,
+    2,
+    7,
+    COMPONENT_CLASS_STORAGE,
+];
+
 impl<S: SerialPort> WireDriver<S> {
     #[inline(never)]
     pub(super) fn handle_core_operation(
@@ -17,46 +55,32 @@ impl<S: SerialPort> WireDriver<S> {
             return;
         }
         let payload = &self.rx_buf[HEADER_LEN..covered];
-        #[repr(C, align(4))]
-        struct Aligned20([u8; 20]);
-        let mut resp_buf_aligned = Aligned20([0u8; 20]);
-        let resp_buf = &mut resp_buf_aligned.0;
+        let mut words = [0u32; 5];
         let mut override_slice: Option<&[u8]> = None;
-        let mut do_reset = false;
-        let mut do_reboot = false;
+        let mut post_op = 0u8; // 1 = reset session, 2 = reboot
 
         let (status, resp_len) = match header.opcode {
             OP_CORE_HELLO => {
                 if payload.len() < 8 {
                     (WireStatus::BadLength, 0)
                 } else {
-                    let min_minor = payload[0];
-                    let max_minor = payload[1];
                     let host_session =
                         u32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
                     let req_payload = u16::from_le_bytes([payload[6], payload[7]]);
 
-                    if min_minor > 1 || max_minor < 1 || host_session == 0 {
-                        resp_buf[0] = WireStatus::BadVersion.to_u8();
-                        resp_buf[1] = 1;
-                        resp_buf[2] = 1;
-                        do_reset = true;
+                    if payload[0] > 1 || payload[1] < 1 || host_session == 0 {
+                        words[0] = (WireStatus::BadVersion.to_u8() as u32) | (1 << 8) | (1 << 16);
+                        post_op = 1;
                         (WireStatus::BadVersion, 3)
                     } else {
                         self.session
                             .begin_session(host_session, req_payload.clamp(32, 128));
-
-                        let max_p = self.session.negotiated_max_payload.to_le_bytes();
-                        let tp = self.transport_profile.to_le_bytes();
-                        resp_buf[0] = 1; // minor version = 1
-                        resp_buf[1] = max_p[0];
-                        resp_buf[2] = max_p[1];
-                        resp_buf[3] = 1; // catalogue generation = 1
-                        resp_buf[7] = tp[0];
-                        resp_buf[8] = tp[1];
-                        resp_buf[9] = 1; // UV-K1 (0x0001_0001)
-                        resp_buf[11] = 1;
-                        resp_buf[15] = 1; // KERN 1.0 (0x0001_0000)
+                        let max_p = self.session.negotiated_max_payload as u32;
+                        let tp = self.transport_profile as u32;
+                        words[0] = 1 | (max_p << 8) | (1 << 24);
+                        words[1] = tp << 24;
+                        words[2] = (tp >> 8) | (1 << 8) | (1 << 24);
+                        words[3] = 1 << 24;
                         (WireStatus::Ok, 17)
                     }
                 }
@@ -66,106 +90,61 @@ impl<S: SerialPort> WireDriver<S> {
                 if payload.len() < 4 {
                     return;
                 }
-                resp_buf[0..4].copy_from_slice(&payload[0..4]);
-                resp_buf[4..8].copy_from_slice(&uptime_ms.to_le_bytes());
+                words[0] = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                words[1] = uptime_ms;
                 (WireStatus::Ok, 8)
             }
 
             OP_CORE_GET_CAPS => {
-                const CAPS_REPLY: [u8; 35] = [
-                    1,
-                    0,
-                    0,
-                    0, // generation = 1
-                    0xFF,
-                    0xFF, // next cursor = 0xFFFF (end)
-                    7,    // 7 components
-                    1,
-                    2,
-                    1,
-                    COMPONENT_CLASS_RADIO,
-                    1,
-                    2,
-                    2,
-                    COMPONENT_CLASS_MCU,
-                    1,
-                    2,
-                    3,
-                    COMPONENT_CLASS_DISPLAY,
-                    1,
-                    2,
-                    4,
-                    COMPONENT_CLASS_KEYPAD,
-                    1,
-                    2,
-                    5,
-                    COMPONENT_CLASS_AUDIO,
-                    1,
-                    2,
-                    6,
-                    COMPONENT_CLASS_POWER,
-                    1,
-                    2,
-                    7,
-                    COMPONENT_CLASS_STORAGE,
-                ];
                 override_slice = Some(&CAPS_REPLY);
-                (WireStatus::Ok, 35)
+                (WireStatus::Ok, CAPS_REPLY.len())
             }
 
             OP_CORE_GET_STATUS => {
-                resp_buf[0] = 0;
-                resp_buf[1] = 0;
-                resp_buf[2] = 0xD0;
-                resp_buf[3] = 0x20; // nominal=8400mV
-                resp_buf[4..8].copy_from_slice(&uptime_ms.to_le_bytes());
+                words[0] = 8400u32 << 16; // nominal = 8400 mV
+                words[1] = uptime_ms;
                 (WireStatus::Ok, 8)
             }
 
             OP_CORE_GET_RESULT => {
-                resp_buf[0] = WireStatus::Ok.to_u8();
-                resp_buf[1..5].copy_from_slice(&header.sequence.to_le_bytes());
+                words[0] = (WireStatus::Ok.to_u8() as u32) | (header.sequence << 8);
+                words[1] = header.sequence >> 24;
                 (WireStatus::Ok, 5)
             }
 
             OP_CORE_REBOOT => {
-                do_reboot = true;
+                post_op = 2;
                 (WireStatus::Ok, 0)
             }
 
             OP_CORE_TIME_SYNC => {
-                let host_tx_us = if payload.len() >= 4 {
+                words[0] = if payload.len() >= 4 {
                     u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]])
                 } else {
                     0
                 };
-                let dev_rx_us = py32_hal::time::now_us();
-                let dev_tx_us = py32_hal::time::now_us();
-
-                resp_buf[0..4].copy_from_slice(&host_tx_us.to_le_bytes());
-                resp_buf[4..8].copy_from_slice(&dev_rx_us.to_le_bytes());
-                resp_buf[8..12].copy_from_slice(&dev_tx_us.to_le_bytes());
-                resp_buf[12..16].copy_from_slice(&uptime_ms.to_le_bytes());
+                words[1] = py32_hal::time::now_us();
+                words[2] = py32_hal::time::now_us();
+                words[3] = uptime_ms;
                 (WireStatus::Ok, 16)
             }
 
             OP_CORE_GET_TIME => {
-                let now_us = py32_hal::time::now_us();
-                resp_buf[0..4].copy_from_slice(&now_us.to_le_bytes());
-                resp_buf[4..8].copy_from_slice(&uptime_ms.to_le_bytes());
+                words[0] = py32_hal::time::now_us();
+                words[1] = uptime_ms;
                 (WireStatus::Ok, 8)
             }
 
             _ => (WireStatus::Unsupported, 0),
         };
 
-        let resp_slice = override_slice.unwrap_or(&resp_buf[..resp_len]);
+        let resp_bytes = unsafe { core::slice::from_raw_parts(words.as_ptr() as *const u8, 20) };
+        let resp_slice = override_slice.unwrap_or(&resp_bytes[..resp_len]);
         let _ = self.send_response(header, status, resp_slice);
 
-        if do_reset {
+        if post_op == 1 {
             self.session.reset();
-        }
-        if do_reboot {
+        } else if post_op == 2 {
             kernel::power::PowerControl::reboot();
         }
     }

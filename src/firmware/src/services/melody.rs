@@ -219,10 +219,13 @@ impl MelodyEngine {
     pub fn boot_jingle_notes(jingle: BootJingleType) -> &'static [ToneNote] {
         match jingle {
             BootJingleType::Off => &[],
-            BootJingleType::Chime => JINGLE_CHIME,
+            #[cfg(feature = "boot_jingle")]
             BootJingleType::Nokia => JINGLE_NOKIA,
+            #[cfg(feature = "boot_jingle")]
             BootJingleType::Chirp => JINGLE_CHIRP,
+            #[cfg(feature = "boot_jingle")]
             BootJingleType::GameBoy => JINGLE_GAMEBOY,
+            _ => JINGLE_CHIME,
         }
     }
 }
