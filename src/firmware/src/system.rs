@@ -4,7 +4,7 @@ use crate::hardware::SystemHardware;
 use crate::services::RadioMelodyExt;
 use crate::services::power::PowerService;
 use crate::{EVENT_QUEUE, POWER_SERVICE};
-use kernel::event::{Event, KeyCode};
+use kernel::event::Event;
 use py32_hal::adc::Adc;
 
 #[inline(never)]
@@ -94,6 +94,9 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         .play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
     py32_hal::delay::delay_ms(100);
 
+    // Clear any active hold UI before shutting down display
+    hw.orchestrator.reset_hold_tracking();
+
     // 2. Shut down power-hungry subsystems and enter chip standby states
     hw.backlight.turn_off();
     hw.lcd.enter_sleep();
@@ -131,11 +134,21 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     hw.wire.reset_collector();
 
-    // Restore clocks, UART baud, audio, and display hardware, render clean UI, then exit LCD sleep
+    // Restore clocks, UART baud, audio, and display hardware
     crate::master_config().hw_dirty = 0x1F;
     hw.apply_dirty_configs();
-    hw.render_frame();
+
+    // Reset hold tracking so no leftover hold sheet or toast lingers
+    hw.orchestrator.reset_hold_tracking();
+
+    // Wake LCD first so SPI blit succeeds
     hw.lcd.exit_sleep();
+
+    // Render clean UI frame into the awake LCD
+    hw.render_frame();
+
+    // Immediately wake backlight so screen appears instantly to the user
+    hw.backlight.wake();
 
     // Wake RF modem and re-apply listening VFO channel to RF hardware
     hw.radio.wake();
@@ -145,14 +158,14 @@ fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
             .configure_channel(crate::radio_state().coord.listening_channel());
     }
 
-    // Sound unlock confirmation chime
+    // Sound unlock confirmation chime with display already active and responsive
     hw.radio
         .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
 
     // Ensure matrix is clean before returning to event dispatch
     drain_keypad_matrix(hw);
 
-    // Wake backlight and reset power service inactivity tracking
+    // Reset power service inactivity tracking
     wake_and_notify_activity(hw);
 }
 
@@ -385,11 +398,11 @@ fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
     record_proc_activation(0xF3);
     hw.key_scanner.scan_with_dt(dt);
     while let Some((code, state)) = hw.key_scanner.pop_event() {
-        if !hw.orchestrator.is_keypad_locked() || matches!(code, KeyCode::Ptt) {
+        if !hw.orchestrator.is_keypad_locked() {
             hw.backlight.wake();
-        }
-        unsafe {
-            (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
+            unsafe {
+                (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
+            }
         }
         enqueue_event(Event::Key { code, state });
     }
@@ -406,6 +419,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
     #[cfg(feature = "grayscale")]
     let mut last_subframe_tick = t0;
     let mut dirty_render = true;
+    let mut dimmed_dirty = false;
+    let mut initial_render = true;
     let mut crash_loop_cleared = false;
     let mut low_batt_warning_timer = 0u8;
 
@@ -437,7 +452,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         }
 
         let is_display_awake = hw.backlight.is_active();
-        let is_anim = hw.orchestrator.is_animating() && is_display_awake;
+        let lock_animating = hw.orchestrator.is_lock_overlay_animating();
+        let is_anim = (hw.orchestrator.is_animating() && is_display_awake) || lock_animating;
 
         // Keep microkernel PowerService state in sync with display activity
         unsafe {
@@ -515,7 +531,12 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         }
 
         while let Some(ev) = dequeue_event() {
+            let had_lock_overlay = hw.orchestrator.is_lock_overlay_active();
             let consumed = hw.dispatch_event_and_actions(ev);
+            let has_lock_overlay = hw.orchestrator.is_lock_overlay_active();
+            if had_lock_overlay || has_lock_overlay {
+                dimmed_dirty = true;
+            }
             if !matches!(ev, Event::Tick) || consumed || is_anim {
                 dirty_render = true;
             }
@@ -527,10 +548,17 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             dirty_render = true;
         }
 
-        // Render loop: skip expensive CPU view traversal and 1024-byte SPI blits when display is dark
-        if dirty_render && is_display_awake {
+        // Render loop: always complete initial OS frame so LCD never stays white/blank (even if backlight is Off),
+        // and allow keypad-lock notifications/unlock holds to render on a dimmed screen without waking backlight.
+        if initial_render || (dirty_render && (is_display_awake || dimmed_dirty)) {
             hw.render_frame();
             dirty_render = false;
+            dimmed_dirty = false;
+            if initial_render {
+                initial_render = false;
+                hw.lcd.turn_on();
+                hw.backlight.wake();
+            }
             #[cfg(feature = "grayscale")]
             {
                 last_subframe_tick = py32_hal::delay::millis();

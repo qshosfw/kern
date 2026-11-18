@@ -125,6 +125,16 @@ impl KeypadLockManager {
         self.hold_ui_open || self.hold.is_animating() || !self.sheet_anim.is_complete()
     }
 
+    #[inline(always)]
+    pub fn is_overlay_active(&self) -> bool {
+        self.is_animating() || self.toast != LockToast::None
+    }
+
+    #[inline(always)]
+    pub fn should_show_f_drawer(&self) -> bool {
+        self.is_f_active && !self.is_locked && !self.hold_ui_open && self.toast == LockToast::None
+    }
+
     fn show_toast(&mut self, toast: LockToast) {
         self.toast = toast;
         self.toast_remaining_ms = TOAST_DURATION_MS;
@@ -170,6 +180,18 @@ impl KeypadLockManager {
         self.held_confirmed = false;
         self.is_long_press_triggered = false;
         self.hold.active = false;
+    }
+
+    #[inline(never)]
+    fn finish_hold_release(&mut self) -> bool {
+        let was_long_press = self.is_long_press_triggered;
+        let had_started_hold = self.hold_ui_open;
+        if had_started_hold && !was_long_press {
+            self.release_active_hold();
+        } else {
+            self.reset_hold_tracking();
+        }
+        was_long_press || had_started_hold
     }
 
     #[inline(never)]
@@ -259,8 +281,20 @@ impl KeypadLockManager {
                 if self.hold.advance(dt) && !self.is_long_press_triggered {
                     self.is_long_press_triggered = true;
                     match self.hold_kind {
-                        HoldKind::Sleep => self.sleep_requested = true,
-                        HoldKind::CloseApp => self.force_close_requested = true,
+                        HoldKind::Sleep => {
+                            self.sleep_requested = true;
+                            self.hold.reset();
+                            self.hold.required_ms = 0;
+                            self.hold_ui_open = false;
+                            self.sheet_anim.reset_closed();
+                        }
+                        HoldKind::CloseApp => {
+                            self.force_close_requested = true;
+                            self.hold.reset();
+                            self.hold.required_ms = 0;
+                            self.hold_ui_open = false;
+                            self.sheet_anim.reset_closed();
+                        }
                         HoldKind::Lock | HoldKind::Unlock => {
                             self.toggle_lock();
                             self.hold.reset();
@@ -325,19 +359,12 @@ impl KeypadLockManager {
                         return true;
                     }
                     KeyState::Released => {
-                        let was_long_press = self.is_long_press_triggered;
-                        let had_started_hold = self.hold_ui_open;
-                        if had_started_hold && !was_long_press {
-                            self.release_active_hold();
-                        } else {
-                            self.reset_hold_tracking();
-                        }
-
+                        let cancelled_hold = self.finish_hold_release();
                         if self.is_locked {
-                            if !was_long_press && !had_started_hold {
+                            if !cancelled_hold {
                                 self.show_toast(LockToast::PromptUnlock);
                             }
-                        } else if !was_long_press && !had_started_hold && *code == KeyCode::KeyF {
+                        } else if !cancelled_hold && *code == KeyCode::KeyF {
                             self.is_f_active = !self.is_f_active;
                             self.f_key_remaining_ms = if self.is_f_active {
                                 f_timeout_ms.min(10000) as u16
@@ -376,15 +403,7 @@ impl KeypadLockManager {
                         }
                     }
                     KeyState::Released => {
-                        let was_long_press = self.is_long_press_triggered;
-                        let had_started_hold = self.hold_ui_open;
-                        if had_started_hold && !was_long_press {
-                            self.release_active_hold();
-                        } else {
-                            self.reset_hold_tracking();
-                        }
-
-                        if was_long_press || had_started_hold {
+                        if self.finish_hold_release() {
                             return true;
                         }
                     }
@@ -457,24 +476,15 @@ impl KeypadLockManager {
     }
 }
 
-/// Render the bottom hint line: "HOLD [#] / [F] TO UNLOCK" with authentic inverted badges centered at center_x
+/// Render the bottom hint line: "HOLD [#] TO UNLOCK" with authentic inverted badge centered at center_x
 fn draw_unlock_hint(canvas: &mut Canvas, center_x: i16, base_y: i16) {
-    let start_x = center_x - 38;
+    let start_x = center_x - 32;
 
     text::draw_str(canvas, start_x, base_y + 5, "HOLD", &TOMTHUMB, Color::Fill);
     gfx::widgets::dialog::draw_key_badge(canvas, start_x + 18, base_y, "#", "");
     text::draw_str(
         canvas,
-        start_x + 27,
-        base_y + 5,
-        "/",
-        &TOMTHUMB,
-        Color::Fill,
-    );
-    gfx::widgets::dialog::draw_key_badge(canvas, start_x + 32, base_y, "F", "");
-    text::draw_str(
-        canvas,
-        start_x + 41,
+        start_x + 30,
         base_y + 5,
         "TO UNLOCK",
         &TOMTHUMB,

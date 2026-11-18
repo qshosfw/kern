@@ -298,6 +298,16 @@ impl Orchestrator {
         self.lock_mgr.is_locked
     }
 
+    #[inline(always)]
+    pub fn is_lock_overlay_active(&self) -> bool {
+        self.lock_mgr.is_overlay_active()
+    }
+
+    #[inline(always)]
+    pub fn is_lock_overlay_animating(&self) -> bool {
+        self.lock_mgr.is_animating()
+    }
+
     pub fn is_f_active(&self) -> bool {
         self.lock_mgr.is_f_active
     }

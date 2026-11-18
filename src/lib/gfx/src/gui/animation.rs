@@ -184,6 +184,12 @@ impl TransitionProgress {
         self.target = 0;
     }
 
+    #[inline(always)]
+    pub fn reset_closed(&mut self) {
+        self.progress = 0;
+        self.target = 0;
+    }
+
     pub fn jump_complete(&mut self) {
         self.progress = self.target;
     }
