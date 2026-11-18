@@ -120,16 +120,14 @@ impl AppRegistry {
 
     pub fn unregister_dynamic() {
         let dyn_id = APP_TABLE.len();
-        let pid = if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(dyn_id) {
-            pcb.set_state(kernel::proc::ProcState::Dead);
-            pcb.pid
-        } else {
-            kernel::proc::Pid(dyn_id as u8)
-        };
-        crate::orchestrator::lease_manager_mut().revoke_all_for_owner(pid);
-        crate::orchestrator::status_tray_mut().clear_icon(pid);
+        let dyn_pid = crate::orchestrator::proc_table()
+            .find_by_app(dyn_id)
+            .map(|p| p.pid);
         unsafe {
             *core::ptr::addr_of_mut!(DYNAMIC_APP) = None;
+        }
+        if let Some(pid) = dyn_pid {
+            crate::orchestrator::reap_pid_only(pid);
         }
     }
 

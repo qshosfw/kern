@@ -653,9 +653,16 @@ pub fn run_exhaustive_abi_bench_from_api(table_ptr: *const KrxApiTable) -> Bench
             state: 0,
             priority: 0,
             memory_bytes: 0,
-            name: [0u8; 12],
+            name: [0; 12],
             runtime_ticks: 0,
-            reserved: [0u8; 10],
+            exec_type: 0,
+            flags: 0,
+            stack_watermark: 0,
+            ipc_events: 0,
+            page_faults: 0,
+            slice_overruns: 0,
+            hibernations: 0,
+            fault_count: 0,
         };
         let _ = (svc.sys_proc_info)(0, &mut p_info);
         let _ = (svc.sys_proc_kill)(255);

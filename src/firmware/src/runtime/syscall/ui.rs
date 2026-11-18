@@ -322,29 +322,53 @@ pub unsafe extern "C" fn api_ui_draw_small_digit(x: i16, y: i16, digit: u8, colo
 }
 
 pub unsafe extern "C" fn api_ui_draw_battery(x: i16, y: i16, pct: u8, charging: u8) {
-    if (x as u16) > (128 - 15) || (y as u16) > (64 - 6) {
-        return;
+    gfx::widgets::draw_battery(super::active_canvas_mut(), x, y, pct, charging != 0);
+}
+
+pub unsafe extern "C" fn api_ui_draw_widget(
+    kind: u8,
+    desc: *const kernel::proc::abi::KrxWidget,
+) -> u8 {
+    use kernel::proc::abi::{
+        KRX_TAB_FLAG_BOTTOM_BORDER, KRX_TAB_FLAG_INTEGRATED_86, KRX_WIDGET_NEGATED_HEADER,
+        KRX_WIDGET_ROUNDED_BOX, KRX_WIDGET_SHEET_FRAME, KRX_WIDGET_TABBED_SHEET,
+    };
+    if desc.is_null() {
+        return 1;
     }
+    let d = unsafe { &*desc };
     let canvas = super::active_canvas_mut();
-    let ux = x as u8;
-    let uy = y as u8;
-    canvas.draw_rect(ux, uy, 13, 6, gfx::Color::Fill);
-    canvas.draw_vertical_line(ux + 13, uy + 1, 4, gfx::Color::Fill);
-    canvas.fill_rect(ux + 1, uy + 1, 11, 4, gfx::Color::Clear);
-    if charging != 0 {
-        gfx::icons::draw_icon_5x5(
-            canvas,
-            x + 4,
-            y + 1,
-            gfx::icons::Icon::Bolt,
-            gfx::Color::Fill,
-        );
-    } else {
-        let fill_w = ((pct.min(100) as u16 * 28) >> 8) as u8;
-        if fill_w > 0 {
-            canvas.fill_rect(ux + 1, uy + 1, fill_w, 4, gfx::Color::Fill);
+    let ux = d.x.max(0) as u8;
+    let uy = d.y.max(0) as u8;
+    let raw = unsafe { super::slice_or_empty(d.p0, d.len0 as usize) };
+    let str_p0 = utils::format::ascii_str(raw).unwrap_or("");
+    match kind {
+        KRX_WIDGET_TABBED_SHEET => {
+            let mut cfg = gfx::gui::modules::TabbedSheetConfig::new(ux, uy, d.w, d.h)
+                .with_bottom_border((d.b & KRX_TAB_FLAG_BOTTOM_BORDER) != 0);
+            if (d.b & KRX_TAB_FLAG_INTEGRATED_86) != 0 {
+                cfg = cfg.with_status_bar_integrated(86);
+            }
+            gfx::gui::modules::TabbedSheet::render_chrome_packed(
+                canvas,
+                &cfg,
+                d.a as usize,
+                d.extra.max(1) as usize,
+                raw,
+            );
         }
+        KRX_WIDGET_ROUNDED_BOX => {
+            gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h);
+        }
+        KRX_WIDGET_NEGATED_HEADER => {
+            gfx::widgets::draw_negated_header(canvas, d.y, str_p0);
+        }
+        KRX_WIDGET_SHEET_FRAME => {
+            gfx::widgets::draw_sheet_frame(canvas, str_p0, d.y, d.h, None);
+        }
+        _ => return 1,
     }
+    0
 }
 
 pub unsafe extern "C" fn api_ui_draw_signal(x: i16, y: i16, level: u8, color: u8) {
@@ -385,6 +409,10 @@ pub unsafe extern "C" fn api_ui_show_confirm_labels(
     }
 }
 
+pub unsafe extern "C" fn api_ui_set_modal_hold(hold_ms: u16) {
+    modal_mut().set_hold_ms(hold_ms);
+}
+
 pub static UI_VTABLE: UiApi = UiApi {
     ui_close_modal: api_ui_close_modal,
     ui_has_modal: api_ui_has_modal,
@@ -410,4 +438,6 @@ pub static UI_VTABLE: UiApi = UiApi {
     ui_draw_signal: api_ui_draw_signal,
     ui_draw_modal_box: api_ui_draw_modal_box,
     ui_show_confirm_labels: api_ui_show_confirm_labels,
+    ui_set_modal_hold: api_ui_set_modal_hold,
+    ui_draw_widget: api_ui_draw_widget,
 };

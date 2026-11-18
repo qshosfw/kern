@@ -106,6 +106,24 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
         self.holder(kind).is_some()
     }
 
+    /// Number of currently occupied lease slots.
+    pub fn active_count(&self) -> usize {
+        self.leases.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Forcibly revoke any active lease of `kind` regardless of owner.
+    pub fn revoke_kind(&mut self, kind: LeaseKind) -> bool {
+        for slot in self.leases.iter_mut() {
+            if let Some(l) = slot {
+                if l.kind == kind {
+                    *slot = None;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Acquires an exclusive timed lease on a resource.
     #[inline(never)]
     pub fn acquire(

@@ -182,6 +182,14 @@ pub fn is_proc_paused(app_id: usize) -> bool {
     })
 }
 
+pub(crate) fn reap_pid_only(pid: kernel::proc::Pid) {
+    lease_manager_mut().revoke_all_for_owner(pid);
+    status_tray_mut().clear_icon(pid);
+    #[cfg(feature = "krx_runtime")]
+    crate::runtime::syscall::service::service_registry_mut().unbind_provider(pid);
+    let _ = proc_table_mut().terminate(pid);
+}
+
 /// Atomically reap a terminated non-protected process across PCB, Leases, Tray, Services, and dynamic registry.
 pub fn reap_pid_resources(target_pid: u8) -> bool {
     if target_pid <= 4 {
@@ -193,13 +201,8 @@ pub fn reap_pid_resources(target_pid: u8) -> bool {
     let app_id = pcb.app_id;
     let pid = pcb.pid;
 
-    lease_manager_mut().revoke_all_for_owner(pid);
-    status_tray_mut().clear_icon(pid);
-    #[cfg(feature = "krx_runtime")]
-    crate::runtime::syscall::service::service_registry_mut().unbind_provider(pid);
-
-    let _ = proc_table_mut().terminate(pid);
-    if app_id >= crate::AppRegistry::count() {
+    reap_pid_only(pid);
+    if app_id == crate::AppRegistry::count() {
         crate::AppRegistry::unregister_dynamic();
     }
     true
@@ -427,7 +430,11 @@ impl Orchestrator {
         self.nav_stack.clear();
         self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
         if closing_app >= crate::AppRegistry::count() {
-            crate::AppRegistry::unregister_dynamic();
+            if let Some(pcb) = proc_table().find_by_app(closing_app) {
+                reap_pid_resources(pcb.pid.0);
+            } else {
+                crate::AppRegistry::unregister_dynamic();
+            }
         } else if let Some(pcb) = proc_table_mut().find_mut_by_app(closing_app) {
             pcb.set_state(ProcState::Stopped);
         }

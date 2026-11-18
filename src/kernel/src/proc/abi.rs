@@ -127,6 +127,13 @@ pub struct KrxDirEntry {
 
 const _: () = assert!(core::mem::size_of::<KrxDirEntry>() == 32);
 
+/// `KrxProcInfo::flags` bitmasks.
+pub const KRX_PROC_FLAG_PERSISTENT: u8 = 1 << 0;
+pub const KRX_PROC_FLAG_SUSPENDED: u8 = 1 << 1;
+pub const KRX_PROC_FLAG_FOREGROUND: u8 = 1 << 2;
+pub const KRX_PROC_FLAG_HAS_LEASE: u8 = 1 << 3;
+pub const KRX_PROC_FLAG_KILLABLE: u8 = 1 << 4;
+
 /// Process state descriptor record (§8.5 / KRX 3.2) with $O(1)$ power-of-two geometry (32 bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -138,10 +145,34 @@ pub struct KrxProcInfo {
     pub runtime_ticks: u32,
     pub memory_bytes: u16,
     pub name: [u8; 12],
-    pub reserved: [u8; 10],
+    pub exec_type: u8,
+    pub flags: u8,
+    pub stack_watermark: u16,
+    pub ipc_events: u16,
+    pub page_faults: u8,
+    pub slice_overruns: u8,
+    pub hibernations: u8,
+    pub fault_count: u8,
 }
 
 const _: () = assert!(core::mem::size_of::<KrxProcInfo>() == 32);
+
+/// `sys_proc_ctl` opcodes passed in `(op_and_id & 0xFF)` with `target = (op_and_id >> 8)`.
+///
+/// Control operations (`buf == NULL`, gated by `Cap::TaskControl`):
+pub const PROC_CTL_KILL: u8 = 0;
+pub const PROC_CTL_SET_STATE: u8 = 1;
+pub const PROC_CTL_SET_PRIORITY: u8 = 2;
+pub const PROC_CTL_FOCUS_APP: u8 = 3;
+pub const PROC_CTL_REVOKE_LEASE: u8 = 4;
+pub const PROC_CTL_RESET_STATS: u8 = 5;
+
+/// 16-byte power-of-two record readers (`buf != NULL && len >= 16`):
+pub const PROC_CTL_SYS_OVERVIEW: u8 = 0x80;
+pub const PROC_CTL_LEASE_ENTRY: u8 = 0x81;
+pub const PROC_CTL_SVC_ENTRY: u8 = 0x82;
+pub const PROC_CTL_IPC_ENTRY: u8 = 0x83;
+pub const PROC_CTL_PROC_EXT: u8 = 0x84;
 
 pub const KRX_OP_START: u32 = 0;
 pub const KRX_OP_EVENT: u32 = 1;
@@ -353,6 +384,7 @@ pub struct StorageApi {
         new_len: u8,
     ) -> u8,
     pub storage_create_dir: unsafe extern "C" fn(path: *const u8, path_len: u8) -> u8,
+    pub storage_format: unsafe extern "C" fn(mode: u8) -> u8,
 }
 
 /// 5. `KeypadApi` Table (`interface_id = 0x0005`)
@@ -387,6 +419,8 @@ pub struct PowerApi {
     pub sys_wake_backlight: unsafe extern "C" fn(),
     pub sys_set_flashlight: unsafe extern "C" fn(on: u8),
     pub sys_cpu_freq_hz: unsafe extern "C" fn() -> u32,
+    pub sys_reboot: unsafe extern "C" fn(mode: u8),
+    pub sys_flush_config: unsafe extern "C" fn() -> u8,
 }
 
 /// 7. `SerialApi` Table (`interface_id = 0x0007`)
@@ -473,6 +507,35 @@ impl KrxStatusBar {
     }
 }
 
+pub const KRX_WIDGET_TABBED_SHEET: u8 = 1;
+pub const KRX_WIDGET_ROUNDED_BOX: u8 = 2;
+pub const KRX_WIDGET_NEGATED_HEADER: u8 = 3;
+pub const KRX_WIDGET_SHEET_FRAME: u8 = 4;
+
+pub const KRX_TAB_FLAG_INTEGRATED_86: u8 = 1 << 0;
+pub const KRX_TAB_FLAG_BOTTOM_BORDER: u8 = 1 << 1;
+
+/// Compact widget draw descriptor ($2^4 = 16$ bytes on 32-bit ARM Cortex-M0+).
+///
+/// Passed as 2-register call `(kind, *const KrxWidget)` to avoid >4-arg Thumb-1
+/// stack spilling and per-widget VTable explosion.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct KrxWidget {
+    pub x: i16,
+    pub y: i16,
+    pub w: u8,
+    pub h: u8,
+    pub a: u8,
+    pub b: u8,
+    pub p0: *const u8,
+    pub len0: u16,
+    pub extra: u16,
+}
+
+unsafe impl Sync for KrxWidget {}
+unsafe impl Send for KrxWidget {}
+
 /// 9. `UiApi` Table (`interface_id = 0x0009`)
 #[repr(C)]
 pub struct UiApi {
@@ -545,6 +608,8 @@ pub struct UiApi {
         cancel: *const u8,
         cl_len: u8,
     ),
+    pub ui_set_modal_hold: unsafe extern "C" fn(hold_ms: u16),
+    pub ui_draw_widget: unsafe extern "C" fn(kind: u8, desc: *const KrxWidget) -> u8,
 }
 
 /// 10. `MathApi` Table (`interface_id = 0x000A`)
@@ -567,16 +632,45 @@ pub struct FmApi {
     pub fm_get_rssi: unsafe extern "C" fn() -> u8,
 }
 
-/// System query selectors for `ServiceApi::sys_query`.
-/// Expose raw hardware/ROM/build descriptors so system modules handle parsing/formatting directly.
-pub const SYS_QUERY_UID16: u8 = 0;
-pub const SYS_QUERY_FLASH_SIZE_KB: u8 = 1;
-pub const SYS_QUERY_FACTORY_CERT: u8 = 2;
-pub const SYS_QUERY_BOOTLOADER_ROM: u8 = 3;
-pub const SYS_QUERY_FW_META: u8 = 4;
-pub const SYS_QUERY_MAC: u8 = 5;
-pub const SYS_QUERY_SERIAL64: u8 = 6;
-pub const SYS_QUERY_SERIAL_STR: u8 = 7;
+pub const KRX_SYS_INFO_FLAG_HAS_CERT: u16 = 1 << 0;
+pub const KRX_SYS_INFO_FLAG_RDP_PROTECTED: u16 = 1 << 1;
+pub const KRX_SYS_INFO_FLAG_CALIB_VALID: u16 = 1 << 2;
+
+pub const KRX_QS1_NONE: u8 = 0;
+pub const KRX_QS1_EMPTY: u8 = 1;
+pub const KRX_QS1_INVALID: u8 = 2;
+pub const KRX_QS1_UNVERIFIED: u8 = 3;
+pub const KRX_QS1_VERIFIED: u8 = 4;
+
+/// Canonical hardware, firmware build, and provisioning identity (`2^7 = 128` bytes).
+///
+/// Fixed-width zero-copy descriptor populated directly from BSP/OS sources via
+/// `ServiceApi::sys_info`, avoiding raw ROM/cert dumps or duplicate parsing in apps.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct KrxSysInfo {
+    pub flash_kb: u16,
+    pub sram_kb: u16,
+    pub flags: u16,
+    pub mac: [u8; 6],
+    pub fw_major: u8,
+    pub fw_minor: u8,
+    pub fw_patch: u8,
+    pub target_id: u8,
+    pub model: [u8; 12],
+    pub mcu: [u8; 12],
+    pub boot_ver: [u8; 8],
+    pub git_hash: [u8; 22],
+    pub build_date: [u8; 12],
+    pub serial: [u8; 15],
+    pub qs1_len: u8,
+    pub qs1: [u8; 17],
+    pub mcu_uid: [u8; 12],
+    pub qs1_status: u8,
+}
+
+unsafe impl Sync for KrxSysInfo {}
+unsafe impl Send for KrxSysInfo {}
 
 /// 12. `ServiceApi` Table (`interface_id = 0x000C`)
 #[repr(C)]
@@ -616,7 +710,9 @@ pub struct ServiceApi {
         unsafe extern "C" fn(req: *const KrxIpcMessage, payload: *const u8, len: u8) -> u8,
     pub sys_find_proc: unsafe extern "C" fn(name: *const u8, len: u8) -> u8,
     pub sys_self_pid: unsafe extern "C" fn() -> u8,
-    pub sys_query: unsafe extern "C" fn(kind: u8, arg: u32, out_buf: *mut u8, max_len: u16) -> u16,
+    pub sys_info: unsafe extern "C" fn(out_info: *mut KrxSysInfo) -> u8,
+    pub sys_proc_ctl:
+        unsafe extern "C" fn(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8,
 }
 
 /// 13. `HwBusApi` Table (`interface_id = 0x000D`)
@@ -1112,6 +1208,7 @@ unsafe extern "C" fn noop_ui_show_confirm_labels(
     _cl_len: u8,
 ) {
 }
+unsafe extern "C" fn noop_ui_set_modal_hold(_hold_ms: u16) {}
 
 unsafe extern "C" fn noop_sys_rand32() -> u32 {
     0x5A5A_5A5A
@@ -1324,11 +1421,18 @@ unsafe extern "C" fn noop_storage_rename_file(
 unsafe extern "C" fn noop_storage_create_dir(_path: *const u8, _path_len: u8) -> u8 {
     1
 }
+unsafe extern "C" fn noop_storage_format(_mode: u8) -> u8 {
+    1
+}
 unsafe extern "C" fn noop_sys_is_keypad_locked() -> u8 {
     0
 }
 unsafe extern "C" fn noop_sys_cpu_freq_hz() -> u32 {
     48_000_000
+}
+unsafe extern "C" fn noop_sys_reboot(_mode: u8) {}
+unsafe extern "C" fn noop_sys_flush_config() -> u8 {
+    1
 }
 unsafe extern "C" fn noop_sys_rtc_get(_out_time: *mut u8) -> u8 {
     1
@@ -1431,6 +1535,7 @@ pub static STUB_STORAGE_VTABLE: StorageApi = StorageApi {
     storage_append_file: noop_storage_append_file,
     storage_rename_file: noop_storage_rename_file,
     storage_create_dir: noop_storage_create_dir,
+    storage_format: noop_storage_format,
 };
 
 pub static STUB_KEYPAD_VTABLE: KeypadApi = KeypadApi {
@@ -1461,6 +1566,8 @@ pub static STUB_POWER_VTABLE: PowerApi = PowerApi {
     sys_wake_backlight: noop_sys_wake_backlight,
     sys_set_flashlight: noop_sys_set_flashlight,
     sys_cpu_freq_hz: noop_sys_cpu_freq_hz,
+    sys_reboot: noop_sys_reboot,
+    sys_flush_config: noop_sys_flush_config,
 };
 
 pub static STUB_SERIAL_VTABLE: SerialApi = SerialApi {
@@ -1477,6 +1584,10 @@ pub static STUB_TIMER_VTABLE: TimerApi = TimerApi {
     sys_delay_us: noop_sys_delay_us,
     sys_rtc_get: noop_sys_rtc_get,
 };
+
+unsafe extern "C" fn noop_ui_draw_widget(_kind: u8, _desc: *const KrxWidget) -> u8 {
+    1
+}
 
 pub static STUB_UI_VTABLE: UiApi = UiApi {
     ui_close_modal: noop_ui_close_modal,
@@ -1503,6 +1614,8 @@ pub static STUB_UI_VTABLE: UiApi = UiApi {
     ui_draw_signal: noop_ui_draw_signal,
     ui_draw_modal_box: noop_ui_draw_modal_box,
     ui_show_confirm_labels: noop_ui_show_confirm_labels,
+    ui_set_modal_hold: noop_ui_set_modal_hold,
+    ui_draw_widget: noop_ui_draw_widget,
 };
 
 pub static STUB_MATH_VTABLE: MathApi = MathApi {
@@ -1521,8 +1634,16 @@ pub static STUB_FM_VTABLE: FmApi = FmApi {
     fm_get_rssi: noop_fm_get_rssi,
 };
 
-unsafe extern "C" fn noop_sys_query(_kind: u8, _arg: u32, _out_buf: *mut u8, _max_len: u16) -> u16 {
-    0
+unsafe extern "C" fn noop_sys_info(_out_info: *mut KrxSysInfo) -> u8 {
+    1
+}
+unsafe extern "C" fn noop_sys_proc_ctl(
+    _op_and_id: u16,
+    _arg: u32,
+    _buf: *mut u8,
+    _len: u16,
+) -> u8 {
+    1
 }
 
 pub static STUB_SERVICE_VTABLE: ServiceApi = ServiceApi {
@@ -1552,7 +1673,8 @@ pub static STUB_SERVICE_VTABLE: ServiceApi = ServiceApi {
     ipc_reply: noop_ipc_reply,
     sys_find_proc: noop_sys_find_proc,
     sys_self_pid: noop_sys_self_pid,
-    sys_query: noop_sys_query,
+    sys_info: noop_sys_info,
+    sys_proc_ctl: noop_sys_proc_ctl,
 };
 
 pub static STUB_HW_BUS_VTABLE: HwBusApi = HwBusApi {
@@ -1670,6 +1792,12 @@ mod tests {
         assert_eq!(core::mem::size_of::<KrxProcInfo>(), 32);
         assert_eq!(core::mem::align_of::<KrxProcInfo>(), 4);
 
+        assert_eq!(core::mem::size_of::<KrxSysInfo>(), 128);
+        assert_eq!(core::mem::align_of::<KrxSysInfo>(), 2);
+
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(core::mem::size_of::<KrxWidget>(), 16);
+
         #[cfg(target_pointer_width = "32")]
         assert_eq!(core::mem::size_of::<KrxApiTable>(), 64);
         #[cfg(target_pointer_width = "64")]
@@ -1775,6 +1903,9 @@ mod tests {
             assert_eq!((svc.leaf_call)(1, 0), 0xFFFF_FFFF);
             assert_eq!((svc.lease_acquire)(1, 1000), 1);
             assert_eq!((svc.lease_release)(1), 1);
+            assert_eq!((svc.sys_proc_ctl)(0, 0, core::ptr::null_mut(), 0), 1);
+            let ui = &*table.ui;
+            assert_eq!((ui.ui_draw_widget)(0, core::ptr::null()), 1);
         }
     }
 

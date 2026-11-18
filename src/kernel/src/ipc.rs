@@ -435,6 +435,15 @@ impl<const N: usize> IpcChannel<N> {
     pub fn pending_count(&self) -> usize {
         self.len
     }
+
+    /// Non-destructive peek at queued IPC slot `idx` for kernel observability.
+    pub fn peek_at(&self, idx: usize) -> Option<&KrxIpcMessage> {
+        if idx < self.len {
+            Some(&self.messages[idx])
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]

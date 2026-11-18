@@ -161,6 +161,7 @@ typedef struct {
     u8 (*storage_append_file)(const u8* path, u8 path_len, const u8* data, u16 len);
     u8 (*storage_rename_file)(const u8* old_path, u8 old_len, const u8* new_path, u8 new_len);
     u8 (*storage_create_dir)(const u8* path, u8 path_len);
+    u8 (*storage_format)(u8 mode);
 } CapStorageVTable;
 
 // 5. CapKeypadVTable (10 APIs)
@@ -193,6 +194,8 @@ typedef struct {
     void (*sys_wake_backlight)(void);
     void (*sys_set_flashlight)(u8 on);
     u32 (*sys_cpu_freq_hz)(void);
+    void (*sys_reboot)(u8 mode);
+    u8 (*sys_flush_config)(void);
 } CapPowerVTable;
 
 // 7. CapSerialVTable (4 APIs)
@@ -243,7 +246,27 @@ typedef struct __attribute__((packed)) {
     u8 custom_flags;
 } KrxStatusBar;
 
-// 9. CapUiVTable (24 APIs)
+#define KRX_WIDGET_TABBED_SHEET    1
+#define KRX_WIDGET_ROUNDED_BOX     2
+#define KRX_WIDGET_NEGATED_HEADER  3
+#define KRX_WIDGET_SHEET_FRAME     4
+
+#define KRX_TAB_FLAG_INTEGRATED_86 (1u << 0)
+#define KRX_TAB_FLAG_BOTTOM_BORDER (1u << 1)
+
+typedef struct {
+    i16 x;
+    i16 y;
+    u8 w;
+    u8 h;
+    u8 a;
+    u8 b;
+    const u8* p0;
+    u16 len0;
+    u16 extra;
+} KrxWidget;
+
+// 9. CapUiVTable (26 APIs)
 typedef struct {
     void (*ui_close_modal)(void);
     u8 (*ui_has_modal)(void);
@@ -269,6 +292,8 @@ typedef struct {
     void (*ui_draw_signal)(i16 x, i16 y, u8 level, u8 color);
     void (*ui_draw_modal_box)(u8 w, u8 h, u8* out_origin);
     void (*ui_show_confirm_labels)(u8 tag, const u8* title, u8 t_len, const u8* msg, u8 m_len, const u8* confirm, u8 c_len, const u8* cancel, u8 cl_len);
+    void (*ui_set_modal_hold)(u16 hold_ms);
+    u8 (*ui_draw_widget)(u8 kind, const KrxWidget* desc);
 } CapUiVTable;
 
 // 10. CapMathVTable (6 APIs)
@@ -289,28 +314,77 @@ typedef struct {
     u8 (*fm_get_rssi)(void);
 } CapFmVTable;
 
-// sys_query() selectors
-#define KRX_SYS_QUERY_UID16           0
-#define KRX_SYS_QUERY_FLASH_SIZE_KB   1
-#define KRX_SYS_QUERY_FACTORY_CERT    2
-#define KRX_SYS_QUERY_BOOTLOADER_ROM  3
-#define KRX_SYS_QUERY_FW_META         4
-#define KRX_SYS_QUERY_MAC             5
-#define KRX_SYS_QUERY_SERIAL64        6
-#define KRX_SYS_QUERY_SERIAL_STR      7
+#define KRX_SYS_INFO_FLAG_HAS_CERT       (1u << 0)
+#define KRX_SYS_INFO_FLAG_RDP_PROTECTED  (1u << 1)
+#define KRX_SYS_INFO_FLAG_CALIB_VALID    (1u << 2)
 
-typedef struct __attribute__((packed)) {
-    u8  ident[4]; // "KERN"
-    u8  version_major;
-    u8  version_minor;
-    u8  version_patch;
+#define KRX_QS1_NONE       0u
+#define KRX_QS1_EMPTY      1u
+#define KRX_QS1_INVALID    2u
+#define KRX_QS1_UNVERIFIED 3u
+#define KRX_QS1_VERIFIED   4u
+
+// Canonical hardware, firmware, and provisioning identity (128B = 2^7)
+typedef struct {
+    u16 flash_kb;
+    u16 sram_kb;
+    u16 flags;
+    u8  mac[6];
+    u8  fw_major;
+    u8  fw_minor;
+    u8  fw_patch;
     u8  target_id;
-    u32 build_epoch;
-    u8  git_hash[8];
-    u32 flags;
-} KrxFirmwareMeta;
+    char model[12];
+    char mcu[12];
+    char boot_ver[8];
+    char git_hash[22];
+    char build_date[12];
+    char serial[15];
+    u8  qs1_len;
+    char qs1[17];
+    u8  mcu_uid[12];
+    u8  qs1_status;
+} KrxSysInfo;
 
-// 12. CapServiceVTable (27 APIs)
+// Process & Kernel Resource Control Opcodes + Flags
+#define KRX_PROC_FLAG_PERSISTENT  (1u << 0)
+#define KRX_PROC_FLAG_SUSPENDED   (1u << 1)
+#define KRX_PROC_FLAG_FOREGROUND  (1u << 2)
+#define KRX_PROC_FLAG_HAS_LEASE   (1u << 3)
+#define KRX_PROC_FLAG_KILLABLE    (1u << 4)
+
+typedef struct {
+    u8  pid;
+    u8  app_id;
+    u8  state;
+    u8  priority;
+    u32 runtime_ticks;
+    u16 memory_bytes;
+    u8  name[12];
+    u8  exec_type;
+    u8  flags;
+    u16 stack_watermark;
+    u16 ipc_events;
+    u8  page_faults;
+    u8  slice_overruns;
+    u8  hibernations;
+    u8  fault_count;
+} KrxProcInfo;
+
+#define PROC_CTL_KILL         0u
+#define PROC_CTL_SET_STATE    1u
+#define PROC_CTL_SET_PRIORITY 2u
+#define PROC_CTL_FOCUS_APP    3u
+#define PROC_CTL_REVOKE_LEASE 4u
+#define PROC_CTL_RESET_STATS  5u
+
+#define PROC_CTL_SYS_OVERVIEW 0x80u
+#define PROC_CTL_LEASE_ENTRY  0x81u
+#define PROC_CTL_SVC_ENTRY    0x82u
+#define PROC_CTL_IPC_ENTRY    0x83u
+#define PROC_CTL_PROC_EXT     0x84u
+
+// 12. CapServiceVTable (28 APIs)
 typedef struct {
     u8 (*svc_register)(u16 interface_id, u16 abi_version, u32 vtable_ptr);
     u32 (*svc_resolve)(u16 interface_id, u16 min_abi);
@@ -338,7 +412,8 @@ typedef struct {
     u8 (*ipc_reply)(const void* req, const u8* payload, u8 len);
     u8 (*sys_find_proc)(const u8* name, u8 len);
     u8 (*sys_self_pid)(void);
-    u16 (*sys_query)(u8 kind, u32 arg, u8* out_buf, u16 max_len);
+    u8 (*sys_info)(KrxSysInfo* out_info);
+    u8 (*sys_proc_ctl)(u16 op_and_id, u32 arg, u8* buf, u16 len);
 } CapServiceVTable;
 
 // 13. CapHwBusVTable (7 APIs)
@@ -431,6 +506,8 @@ typedef enum {
 #define MODAL_RESULT_SHEET_SELECTED 3
 #define MODAL_RESULT_CANCELED       4
 
+#define KRX_SYS_EV_CLOSE_APP        17u
+
 // Structured Event Packet (passed in r2 on KRX_OP_EVENT)
 typedef struct __attribute__((packed)) {
     u8 kind;
@@ -487,6 +564,38 @@ static inline void krx_print(const KrxApiTable* api, const char* str) {
     if (api && api->serial) {
         api->serial->serial_write((const u8*)str, krx_strlen(str));
     }
+}
+
+static inline u8 krx_draw_tabbed_sheet(
+    const KrxApiTable* api,
+    u8 x, u8 y, u8 w, u8 h,
+    u8 selected, u8 tab_count, u8 flags,
+    const char* packed_titles, u16 packed_len
+) {
+    KrxWidget w_desc = {
+        (i16)x, (i16)y, w, h, selected, flags,
+        (const u8*)packed_titles, packed_len, (u16)tab_count
+    };
+    return (api && api->ui) ? api->ui->ui_draw_widget(KRX_WIDGET_TABBED_SHEET, &w_desc) : 1;
+}
+
+static inline u8 krx_draw_rounded_box(const KrxApiTable* api, u8 x, u8 y, u8 w, u8 h) {
+    KrxWidget w_desc = { (i16)x, (i16)y, w, h, 0, 0, (const u8*)0, 0, 0 };
+    return (api && api->ui) ? api->ui->ui_draw_widget(KRX_WIDGET_ROUNDED_BOX, &w_desc) : 1;
+}
+
+static inline u8 krx_draw_negated_header(
+    const KrxApiTable* api, i16 y, const char* title, u16 len
+) {
+    KrxWidget w_desc = { 0, y, 0, 0, 0, 0, (const u8*)title, len, 0 };
+    return (api && api->ui) ? api->ui->ui_draw_widget(KRX_WIDGET_NEGATED_HEADER, &w_desc) : 1;
+}
+
+static inline u8 krx_draw_sheet_frame(
+    const KrxApiTable* api, i16 y, u8 h, const char* title, u16 len
+) {
+    KrxWidget w_desc = { 0, y, 0, h, 0, 0, (const u8*)title, len, 0 };
+    return (api && api->ui) ? api->ui->ui_draw_widget(KRX_WIDGET_SHEET_FRAME, &w_desc) : 1;
 }
 
 #endif // KRX_H
