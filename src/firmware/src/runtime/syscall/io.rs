@@ -11,6 +11,7 @@ use kernel::proc::primitives::*;
 // ── 5. CapKeypad C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_sys_poll_key() -> u8 {
+    bsp::Board::wdt_feed();
     drivers::keyboard::KeypadScanner::poll_matrix()
         .map(|k| k as u8)
         .unwrap_or(0)
@@ -39,11 +40,7 @@ pub unsafe extern "C" fn api_sys_is_key_pressed(key_code: u8) -> u8 {
 }
 
 pub unsafe extern "C" fn api_sys_is_f_active() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_f_active { 1 } else { 0 }
-    } else {
-        0
-    }
+    active_ctx_opt().map_or(0, |ctx| ctx.is_f_active as u8)
 }
 
 pub unsafe extern "C" fn api_sys_is_ptt_pressed() -> u8 {
@@ -63,11 +60,7 @@ pub unsafe extern "C" fn api_sys_clear_key_buffer() {
 }
 
 pub unsafe extern "C" fn api_sys_is_keypad_locked() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_keypad_locked { 1 } else { 0 }
-    } else {
-        0
-    }
+    active_ctx_opt().map_or(0, |ctx| ctx.is_keypad_locked as u8)
 }
 
 pub static KEYPAD_VTABLE: KeypadApi = KeypadApi {
@@ -90,47 +83,57 @@ fn power_ref() -> &'static drivers::battery::SystemPower {
     unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) }
 }
 
-pub unsafe extern "C" fn api_sys_battery_mv() -> u16 {
+#[inline(never)]
+fn pwr_u16(op: u8) -> u16 {
     use kernel::service::PowerService;
-    power_ref().battery_voltage_mv()
+    let p = power_ref();
+    match op {
+        0 => p.battery_voltage_mv(),
+        1 => p.battery_percentage() as u16,
+        2 => p.battery_current_ma(),
+        3 => p.battery_type() as u16,
+        4 => p.raw_battery_adc(),
+        5 => p.mcu_temperature_deci_c() as u16,
+        6 => u16::from(p.is_charging),
+        7 => u16::from(p.is_low()),
+        _ => u16::from(p.is_critical()),
+    }
+}
+
+pub unsafe extern "C" fn api_sys_battery_mv() -> u16 {
+    pwr_u16(0)
 }
 
 pub unsafe extern "C" fn api_sys_battery_pct() -> u8 {
-    use kernel::service::PowerService;
-    power_ref().battery_percentage()
+    pwr_u16(1) as u8
 }
 
 pub unsafe extern "C" fn api_sys_battery_ma() -> u16 {
-    use kernel::service::PowerService;
-    power_ref().battery_current_ma()
+    pwr_u16(2)
 }
 
 pub unsafe extern "C" fn api_sys_battery_type() -> u8 {
-    power_ref().battery_type() as u8
+    pwr_u16(3) as u8
 }
 
 pub unsafe extern "C" fn api_sys_raw_battery_adc() -> u16 {
-    use kernel::service::PowerService;
-    power_ref().raw_battery_adc()
+    pwr_u16(4)
 }
 
 pub unsafe extern "C" fn api_sys_mcu_temp() -> i16 {
-    use kernel::service::PowerService;
-    power_ref().mcu_temperature_deci_c()
+    pwr_u16(5) as i16
 }
 
 pub unsafe extern "C" fn api_sys_is_charging() -> u8 {
-    if power_ref().is_charging { 1 } else { 0 }
+    pwr_u16(6) as u8
 }
 
 pub unsafe extern "C" fn api_sys_is_low() -> u8 {
-    use kernel::service::PowerService;
-    if power_ref().is_low() { 1 } else { 0 }
+    pwr_u16(7) as u8
 }
 
 pub unsafe extern "C" fn api_sys_is_critical() -> u8 {
-    use kernel::service::PowerService;
-    if power_ref().is_critical() { 1 } else { 0 }
+    pwr_u16(8) as u8
 }
 
 pub unsafe extern "C" fn api_sys_set_backlight(mode: u8, timeout_s: u8) {
@@ -148,6 +151,9 @@ pub unsafe extern "C" fn api_sys_set_backlight_brightness(max: u8, min: u8) {
 pub unsafe extern "C" fn api_sys_wake_backlight() {
     if let Some(ctx) = active_ctx_opt() {
         ctx.wake_backlight();
+    } else {
+        drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
+        bsp::pins::BACKLIGHT.set_high();
     }
 }
 
@@ -161,6 +167,22 @@ pub unsafe extern "C" fn api_sys_set_flashlight(on: u8) {
 
 pub unsafe extern "C" fn api_sys_cpu_freq_hz() -> u32 {
     py32_hal::rcc::sysclk_hz()
+}
+
+pub unsafe extern "C" fn api_sys_reboot(mode: u8) {
+    if !super::super::native_runner::active_native_caps().contains(kernel::caps::Cap::PowerManage) {
+        return;
+    }
+    let reboot_mode = match mode {
+        1 => kernel::power::RebootMode::Bootloader,
+        2 => kernel::power::RebootMode::SafeRecovery,
+        _ => kernel::power::RebootMode::Firmware,
+    };
+    kernel::power::PowerControl::reboot_with(reboot_mode);
+}
+
+pub unsafe extern "C" fn api_sys_flush_config() -> u8 {
+    active_ctx_opt().map_or(0, |ctx| u8::from(ctx.flush_config().is_err()))
 }
 
 pub static POWER_VTABLE: PowerApi = PowerApi {
@@ -178,19 +200,29 @@ pub static POWER_VTABLE: PowerApi = PowerApi {
     sys_wake_backlight: api_sys_wake_backlight,
     sys_set_flashlight: api_sys_set_flashlight,
     sys_cpu_freq_hz: api_sys_cpu_freq_hz,
+    sys_reboot: api_sys_reboot,
+    sys_flush_config: api_sys_flush_config,
 };
 
 // ── 7. CapSerial C-ABI Handlers ─────────────────────────────────────────────
 
 pub unsafe extern "C" fn api_serial_write(data: *const u8, len: u16) -> u16 {
-    if let (Some(slice), Some(ctx)) = (
-        unsafe { super::ptr_slice(data, len as usize) },
-        active_ctx_opt(),
-    ) {
+    let Some(slice) = (unsafe { super::ptr_slice(data, len as usize) }) else {
+        return 0;
+    };
+    if let Some(ctx) = active_ctx_opt() {
         ctx.write(slice);
         len
     } else {
-        0
+        #[cfg(feature = "uart")]
+        {
+            let _ = py32_hal::uart::write_bytes(slice);
+            len
+        }
+        #[cfg(not(feature = "uart"))]
+        {
+            0
+        }
     }
 }
 
@@ -206,11 +238,7 @@ pub unsafe extern "C" fn api_serial_read(buf: *mut u8, max_len: u16) -> u16 {
 }
 
 pub unsafe extern "C" fn api_serial_is_connected() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_usb_active() { 1 } else { 0 }
-    } else {
-        0
-    }
+    active_ctx_opt().map_or(0, |ctx| ctx.is_usb_active() as u8)
 }
 
 pub unsafe extern "C" fn api_serial_flush() {
@@ -235,7 +263,16 @@ pub unsafe extern "C" fn api_sys_uptime_secs() -> u32 {
 }
 
 pub unsafe extern "C" fn api_sys_delay_ms(ms: u32) {
-    py32_hal::delay::delay_ms(ms);
+    let mut rem = ms;
+    while rem > 50 {
+        bsp::Board::wdt_feed();
+        py32_hal::delay::delay_ms(50);
+        rem -= 50;
+    }
+    if rem > 0 {
+        bsp::Board::wdt_feed();
+        py32_hal::delay::delay_ms(rem);
+    }
 }
 
 pub unsafe extern "C" fn api_sys_delay_us(us: u32) {
@@ -310,19 +347,11 @@ pub unsafe extern "C" fn api_hw_gpio_set(pin: u8, high: u8) {
 }
 
 pub unsafe extern "C" fn api_hw_gpio_get(pin: u8) -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.gpio_read(pin) { 1 } else { 0 }
-    } else {
-        0
-    }
+    active_ctx_opt().map_or(0, |ctx| ctx.gpio_read(pin) as u8)
 }
 
 pub unsafe extern "C" fn api_hw_rf_read_reg(reg: u8) -> u16 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.read_register(reg)
-    } else {
-        0
-    }
+    active_ctx_opt().map_or(0, |ctx| ctx.read_register(reg))
 }
 
 pub unsafe extern "C" fn api_hw_rf_write_reg(reg: u8, val: u16) {

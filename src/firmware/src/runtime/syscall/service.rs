@@ -7,8 +7,8 @@
 use kernel::ipc::{IpcChannel, KrxIpcMessage, ipc_msg_type, ipc_target};
 use kernel::proc::abi::{
     KRX_ABI_VERSION_3_0, KRX_QS1_EMPTY, KRX_QS1_INVALID, KRX_QS1_NONE, KRX_QS1_UNVERIFIED,
-    KRX_QS1_VERIFIED, KRX_SYS_INFO_FLAG_CALIB_VALID, KRX_SYS_INFO_FLAG_HAS_CERT,
-    KRX_SYS_INFO_FLAG_RDP_PROTECTED, KrxProcInfo, KrxSysInfo, MathApi, ServiceApi,
+    KRX_SYS_INFO_FLAG_CALIB_VALID, KRX_SYS_INFO_FLAG_HAS_CERT, KRX_SYS_INFO_FLAG_RDP_PROTECTED,
+    KrxProcInfo, KrxSysInfo, MathApi, ServiceApi,
 };
 use kernel::proc::primitives::*;
 pub use kernel::proc::service_registry::ServiceRegistry;
@@ -135,6 +135,24 @@ pub unsafe extern "C" fn api_ipc_recv_msg(out_msg: *mut KrxIpcMessage) -> u8 {
     }
 }
 
+#[inline(never)]
+unsafe fn ipc_send_raw(
+    sender_pid: u8,
+    target_pid: u8,
+    msg_type: u16,
+    flags_and_seq: u32,
+    ptr: *const u8,
+    len: u8,
+) -> u8 {
+    let slice = unsafe { super::slice_or_empty(ptr, (len as usize).min(24)) };
+    let mut msg = KrxIpcMessage::new(sender_pid, target_pid, msg_type, slice);
+    if flags_and_seq != 0 {
+        msg.flags = (flags_and_seq >> 16) as u8;
+        msg.seq = flags_and_seq as u16;
+    }
+    unsafe { api_ipc_send_msg(&msg) }
+}
+
 pub unsafe extern "C" fn api_ipc_reply(
     req: *const KrxIpcMessage,
     payload: *const u8,
@@ -144,9 +162,17 @@ pub unsafe extern "C" fn api_ipc_reply(
         return 1;
     }
     let req_msg = unsafe { &*req };
-    let slice = unsafe { super::slice_or_empty(payload, (len as usize).min(24)) };
-    let reply_msg = req_msg.reply_to(slice, false);
-    unsafe { api_ipc_send_msg(&reply_msg) }
+    let f_seq = (req_msg.seq as u32) | ((kernel::ipc::ipc_flags::REPLY as u32) << 16);
+    unsafe {
+        ipc_send_raw(
+            req_msg.target_pid,
+            req_msg.sender_pid,
+            req_msg.msg_type,
+            f_seq,
+            payload,
+            len,
+        )
+    }
 }
 
 pub unsafe extern "C" fn api_ipc_send(
@@ -169,16 +195,16 @@ pub unsafe extern "C" fn api_ipc_send(
         } else {
             ipc_target::FOREGROUND_APP
         };
-
-    let payload_slice = unsafe { super::slice_or_empty(msg, (msg_len as usize).min(24)) };
-
-    let ipc_msg = KrxIpcMessage::new(
-        active_caller_pid(),
-        target_pid,
-        ipc_msg_type::APP_DATA_TRANSFER,
-        payload_slice,
-    );
-    unsafe { api_ipc_send_msg(&ipc_msg) }
+    unsafe {
+        ipc_send_raw(
+            active_caller_pid(),
+            target_pid,
+            ipc_msg_type::APP_DATA_TRANSFER,
+            0,
+            msg,
+            msg_len,
+        )
+    }
 }
 
 pub unsafe extern "C" fn api_ipc_poll(out_buf: *mut u8, max_len: u8) -> u8 {
@@ -360,37 +386,36 @@ pub unsafe extern "C" fn api_mem_query(
     1
 }
 
-pub unsafe extern "C" fn api_sys_post_event(event_id: u32) -> u8 {
+#[inline(never)]
+unsafe fn evt_op(op: u8, arg: u32, data: *const u8, len: u8) -> u8 {
     use kernel::proc::primitives::ServicePrimitive;
-    if let Some(ctx) = super::active_ctx_opt() {
-        if <crate::services::SysContext as ServicePrimitive>::post_event(ctx, event_id) {
-            0
-        } else {
-            1
+    let slice = unsafe { super::slice_or_empty(data, len as usize) };
+    let Some(ctx) = super::active_ctx_opt() else {
+        return 1;
+    };
+    let ok = match op {
+        0 => <crate::services::SysContext as ServicePrimitive>::post_event(ctx, arg),
+        1 => <crate::services::SysContext as ServicePrimitive>::publish_event(
+            ctx, arg as u16, slice,
+        ),
+        _ => {
+            ctx.rand32();
+            return 0;
         }
-    } else {
-        1
-    }
+    };
+    u8::from(!ok)
+}
+
+pub unsafe extern "C" fn api_sys_post_event(event_id: u32) -> u8 {
+    unsafe { evt_op(0, event_id, core::ptr::null(), 0) }
 }
 
 pub unsafe extern "C" fn api_sys_publish_event(topic: u16, data: *const u8, len: u8) -> u8 {
-    let slice = unsafe { super::slice_or_empty(data, len as usize) };
-    use kernel::proc::primitives::ServicePrimitive;
-    if let Some(ctx) = super::active_ctx_opt() {
-        u8::from(
-            !<crate::services::SysContext as ServicePrimitive>::publish_event(ctx, topic, slice),
-        )
-    } else {
-        1
-    }
+    unsafe { evt_op(1, topic as u32, data, len) }
 }
 
 pub unsafe extern "C" fn api_sys_rand32() -> u32 {
-    if let Some(ctx) = super::active_ctx_opt() {
-        ctx.rand32()
-    } else {
-        0
-    }
+    super::active_ctx_opt().map_or(0, |ctx| ctx.rand32())
 }
 
 pub unsafe extern "C" fn api_math_crc32(data: *const u8, len: u16) -> u32 {
@@ -428,9 +453,9 @@ pub unsafe extern "C" fn api_math_isqrt(val: u32) -> u32 {
 }
 
 #[inline(never)]
-fn copy_cstr(dst: &mut [u8], src: &[u8]) {
-    let n = src.len().min(dst.len().saturating_sub(1));
-    dst[..n].copy_from_slice(&src[..n]);
+unsafe fn copy_cstr_raw(dst: *mut u8, cap: usize, src: &[u8]) {
+    let n = src.len().min(cap.saturating_sub(1));
+    unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, n) };
 }
 
 /// Populate a typed zero-copy `KrxSysInfo` descriptor from canonical BSP/OS sources.
@@ -446,9 +471,14 @@ pub unsafe extern "C" fn api_sys_info(out_info: *mut KrxSysInfo) -> u8 {
     if bsp::uid::is_mcu_read_protected() {
         out.flags |= KRX_SYS_INFO_FLAG_RDP_PROTECTED;
     }
-    if super::active_ctx_opt().is_some_and(|ctx| ctx.calibration.is_valid()) {
-        out.flags |= KRX_SYS_INFO_FLAG_CALIB_VALID;
-    }
+    let model = if let Some(ctx) = super::active_ctx_opt() {
+        if ctx.calibration.is_valid() {
+            out.flags |= KRX_SYS_INFO_FLAG_CALIB_VALID;
+        }
+        ctx.config.system.model_str().as_bytes()
+    } else {
+        b"UV-K1"
+    };
     out.mac = bsp::uid::read_mac_address();
 
     let meta = &crate::build_info::FW_METADATA;
@@ -457,167 +487,154 @@ pub unsafe extern "C" fn api_sys_info(out_info: *mut KrxSysInfo) -> u8 {
     out.fw_patch = meta.version_patch;
     out.target_id = meta.target_id;
 
-    let model = super::active_ctx_opt().map_or(b"UV-K1" as &[u8], |ctx| {
-        ctx.config.system.model_str().as_bytes()
-    });
-    copy_cstr(&mut out.model, model);
-    copy_cstr(&mut out.mcu, b"PY32F071xB");
-    copy_cstr(
-        &mut out.boot_ver,
-        bsp::uid::bootloader_version_str().as_bytes(),
-    );
-    copy_cstr(&mut out.git_hash, crate::build_info::GIT_HASH.as_bytes());
-    copy_cstr(
-        &mut out.build_date,
-        crate::build_info::BUILD_DATE.as_bytes(),
-    );
+    let base = out_info as *mut u8;
+    unsafe {
+        copy_cstr_raw(base.add(core::mem::offset_of!(KrxSysInfo, model)), 16, model);
+        copy_cstr_raw(
+            base.add(core::mem::offset_of!(KrxSysInfo, mcu)),
+            16,
+            b"PY32F071xB",
+        );
+        copy_cstr_raw(
+            base.add(core::mem::offset_of!(KrxSysInfo, boot_ver)),
+            16,
+            bsp::uid::bootloader_version_str().as_bytes(),
+        );
+        copy_cstr_raw(
+            base.add(core::mem::offset_of!(KrxSysInfo, git_hash)),
+            16,
+            crate::build_info::GIT_HASH.as_bytes(),
+        );
+        copy_cstr_raw(
+            base.add(core::mem::offset_of!(KrxSysInfo, build_date)),
+            16,
+            crate::build_info::BUILD_DATE.as_bytes(),
+        );
+    }
 
     out.serial = bsp::uid::get_crockford_serial();
     out.mcu_uid = bsp::uid::read_mcu_uid();
 
-    let qs1 = bsp::uid::qs1_inspection();
-    let (status, qs1_slice): (u8, Option<&[u8]>) = match &qs1 {
-        bsp::uid::Qs1Validation::None => (KRX_QS1_NONE, None),
-        bsp::uid::Qs1Validation::Empty => (KRX_QS1_EMPTY, None),
-        bsp::uid::Qs1Validation::Invalid => (KRX_QS1_INVALID, None),
-        bsp::uid::Qs1Validation::Unverified { buf, len } => (
-            KRX_QS1_UNVERIFIED,
-            Some(&buf[..(*len as usize).min(buf.len())]),
-        ),
-        bsp::uid::Qs1Validation::Verified { buf, len } => (
-            KRX_QS1_VERIFIED,
-            Some(&buf[..(*len as usize).min(buf.len())]),
-        ),
-    };
-    out.qs1_status = status;
-    if status != KRX_QS1_NONE {
-        out.flags |= KRX_SYS_INFO_FLAG_HAS_CERT;
-    }
-    if let Some(s) = qs1_slice {
-        copy_cstr(&mut out.qs1, s);
-        out.qs1_len = s.len().min(16) as u8;
+    // Non-AES certificate classification keeps AES-128-CBC out of resident firmware Flash;
+    // packages requiring cryptographic QS-1 checks (e.g. sysinfo leaf 2) verify on demand.
+    match bsp::uid::factory_cert_status() {
+        bsp::uid::FactoryCertStatus::Erased => {
+            out.qs1_status = KRX_QS1_NONE;
+        }
+        bsp::uid::FactoryCertStatus::Present => {
+            out.flags |= KRX_SYS_INFO_FLAG_HAS_CERT;
+            let empty_tail = py32_hal::uid::SystemInfo::factory_cert_slice()
+                .is_some_and(|c| c[80..104].iter().all(|&b| matches!(b, 0x00 | 0xFF | b' ')));
+            out.qs1_status = if empty_tail {
+                KRX_QS1_EMPTY
+            } else {
+                KRX_QS1_INVALID
+            };
+        }
+        bsp::uid::FactoryCertStatus::Qs1Ascii { buf, len } => {
+            out.flags |= KRX_SYS_INFO_FLAG_HAS_CERT;
+            out.qs1_status = KRX_QS1_UNVERIFIED;
+            let n = (len as usize).min(16);
+            unsafe {
+                copy_cstr_raw(
+                    base.add(core::mem::offset_of!(KrxSysInfo, qs1)),
+                    17,
+                    &buf[..n],
+                );
+            }
+            out.qs1_len = n as u8;
+        }
     }
     0
 }
 
-pub unsafe extern "C" fn api_sys_proc_ctl(
-    op_and_id: u16,
-    arg: u32,
-    buf: *mut u8,
-    len: u16,
-) -> u8 {
+#[inline(never)]
+fn proc_ctl_read(op: u8, target: u8, out: &mut [u32; 4]) -> bool {
+    use kernel::proc::abi::*;
+    use kernel::proc::{Pid, ProcState};
+
+    match op {
+        PROC_CTL_SYS_OVERVIEW => {
+            let mut procs = 0u32;
+            let mut fg_pid = 0u32;
+            for s in &crate::orchestrator::proc_table().slots {
+                if !matches!(s.state, ProcState::Dormant | ProcState::Dead) {
+                    procs += 1;
+                    if s.state == ProcState::Running && s.app_id < 0xF0 {
+                        fg_pid = s.pid.0 as u32;
+                    }
+                }
+            }
+            out[0] = (kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as u32 & 0xFFFF)
+                | ((kernel::sys::SystemDiagnostics::memory_pressure() as u32 & 0xFF) << 16)
+                | (fg_pid << 24);
+            out[1] = procs
+                | ((crate::orchestrator::lease_manager().active_count() as u32) << 8)
+                | ((service_registry_mut().active_count() as u32) << 16)
+                | ((ipc_channel_mut().pending_count() as u32) << 24);
+            out[2] = kernel::sys::SystemDiagnostics::ram_static_used_bytes() as u32;
+            out[3] = kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32;
+            true
+        }
+        PROC_CTL_LEASE_ENTRY => {
+            let mut n = 0u8;
+            for slot in &crate::orchestrator::lease_manager().leases {
+                if let Some(l) = slot {
+                    if n == target {
+                        out[0] = (l.kind as u32) | ((l.owner.0 as u32) << 8);
+                        out[1] = l.acquired_tick;
+                        out[2] = l.timeout_ms;
+                        return true;
+                    }
+                    n += 1;
+                }
+            }
+            false
+        }
+        PROC_CTL_SVC_ENTRY => {
+            let mut n = 0u8;
+            for e in &service_registry_mut().entries {
+                if e.is_active() {
+                    if n == target {
+                        out[0] = (e.interface_id as u32) | ((e.abi_version as u32) << 16);
+                        out[1] = (e.provider_pid.0 as u32)
+                            | ((e.pinned as u32) << 8)
+                            | ((e.client_count as u32) << 16);
+                        out[2] = e.vtable_ptr as u32;
+                        return true;
+                    }
+                    n += 1;
+                }
+            }
+            false
+        }
+        PROC_CTL_PROC_EXT => {
+            let Some(pcb) = crate::orchestrator::proc_table().find(Pid(target)) else {
+                return false;
+            };
+            out[0] = pcb.caps.raw();
+            out[1] = (pcb.restart_budget as u32) | ((pcb.stack_cost as u32) << 8);
+            out[2] = pcb.compressed_bytes as u32;
+            out[3] = pcb.ledger.ipc_events;
+            true
+        }
+        _ => false,
+    }
+}
+
+#[inline(never)]
+fn proc_ctl_write(op: u8, target: u8, arg: u32) -> u8 {
     use kernel::proc::abi::*;
     use kernel::proc::{LeaseKind, Pid, ProcState};
 
-    let op = (op_and_id & 0xFF) as u8;
-    let target = (op_and_id >> 8) as u8;
-
-    if op >= 0x80 {
-        if buf.is_null() || len < 16 {
-            return 1;
-        }
-        if op == PROC_CTL_IPC_ENTRY {
-            let Some(m) = ipc_channel_mut().peek_at(target as usize) else {
-                return 1;
-            };
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    m as *const KrxIpcMessage as *const u8,
-                    buf,
-                    16,
-                );
-            }
-            return 0;
-        }
-        let mut out = [0u32; 4];
-        match op {
-            PROC_CTL_SYS_OVERVIEW => {
-                let mut procs = 0u32;
-                let mut fg_pid = 0u32;
-                for s in &crate::orchestrator::proc_table().slots {
-                    if !matches!(s.state, ProcState::Dormant | ProcState::Dead) {
-                        procs += 1;
-                        if s.state == ProcState::Running && s.app_id < 0xF0 {
-                            fg_pid = s.pid.0 as u32;
-                        }
-                    }
-                }
-                let stack_peak = kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as u32;
-                let press = kernel::sys::SystemDiagnostics::memory_pressure() as u32;
-                out[0] = (stack_peak & 0xFFFF) | ((press & 0xFF) << 16) | (fg_pid << 24);
-                out[1] = procs
-                    | ((crate::orchestrator::lease_manager().active_count() as u32) << 8)
-                    | ((service_registry_mut().active_count() as u32) << 16)
-                    | ((ipc_channel_mut().pending_count() as u32) << 24);
-                out[2] = kernel::sys::SystemDiagnostics::ram_static_used_bytes() as u32;
-                out[3] = unsafe { api_sys_stack_free() as u32 };
-            }
-            PROC_CTL_LEASE_ENTRY => {
-                let mut n = 0u8;
-                let mut found = false;
-                for slot in &crate::orchestrator::lease_manager().leases {
-                    if let Some(l) = slot {
-                        if n == target {
-                            out[0] = (l.kind as u32) | ((l.owner.0 as u32) << 8);
-                            out[1] = l.acquired_tick;
-                            out[2] = l.timeout_ms;
-                            found = true;
-                            break;
-                        }
-                        n += 1;
-                    }
-                }
-                if !found {
-                    return 1;
-                }
-            }
-            PROC_CTL_SVC_ENTRY => {
-                let mut n = 0u8;
-                let mut found = false;
-                for e in &service_registry_mut().entries {
-                    if e.is_active() {
-                        if n == target {
-                            out[0] = (e.interface_id as u32) | ((e.abi_version as u32) << 16);
-                            out[1] = (e.provider_pid.0 as u32)
-                                | ((e.pinned as u32) << 8)
-                                | ((e.client_count as u32) << 16);
-                            out[2] = e.vtable_ptr as u32;
-                            found = true;
-                            break;
-                        }
-                        n += 1;
-                    }
-                }
-                if !found {
-                    return 1;
-                }
-            }
-            PROC_CTL_PROC_EXT => {
-                let Some(pcb) = crate::orchestrator::proc_table().find(Pid(target)) else {
-                    return 1;
-                };
-                out[0] = pcb.caps.raw();
-                out[1] = (pcb.restart_budget as u32) | ((pcb.stack_cost as u32) << 8);
-                out[2] = pcb.compressed_bytes as u32;
-                out[3] = pcb.ledger.ipc_events;
-            }
-            _ => return 1,
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(out.as_ptr() as *const u8, buf, 16);
-        }
-        return 0;
-    }
-
-    if !super::super::native_runner::active_native_caps().contains(kernel::caps::Cap::TaskControl)
-    {
+    if !super::super::native_runner::active_native_caps().contains(kernel::caps::Cap::TaskControl) {
         return 2;
     }
-
     match op {
         PROC_CTL_KILL => unsafe { api_sys_proc_kill(target) },
-        PROC_CTL_REVOKE_LEASE => LeaseKind::from_u8(target)
-            .map_or(1, |lk| u8::from(!crate::orchestrator::lease_manager_mut().revoke_kind(lk))),
+        PROC_CTL_REVOKE_LEASE => LeaseKind::from_u8(target).map_or(1, |lk| {
+            u8::from(!crate::orchestrator::lease_manager_mut().revoke_kind(lk))
+        }),
         PROC_CTL_RESET_STATS => {
             for slot in &mut crate::orchestrator::proc_table_mut().slots {
                 slot.ledger.slice_overruns = 0;
@@ -640,14 +657,12 @@ pub unsafe extern "C" fn api_sys_proc_ctl(
                         _ if target <= 4 => ProcState::ServiceIdle,
                         _ => ProcState::Running,
                     });
-                    0
                 }
                 PROC_CTL_SET_PRIORITY => {
                     let Some(prio) = kernel::sched::Priority::from_u8(arg as u8) else {
                         return 1;
                     };
                     pcb.priority = prio;
-                    0
                 }
                 _ => {
                     if pcb.app_id >= crate::AppRegistry::app_count() {
@@ -660,12 +675,41 @@ pub unsafe extern "C" fn api_sys_proc_ctl(
                             arg: pcb.app_id as u16,
                         },
                     ));
-                    0
                 }
             }
+            0
         }
         _ => 1,
     }
+}
+
+pub unsafe extern "C" fn api_sys_proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
+    let op = op_and_id as u8;
+    let target = (op_and_id >> 8) as u8;
+
+    if op < 0x80 {
+        return proc_ctl_write(op, target, arg);
+    }
+    if buf.is_null() || len < 16 {
+        return 1;
+    }
+    if op == kernel::proc::abi::PROC_CTL_IPC_ENTRY {
+        let Some(m) = ipc_channel_mut().peek_at(target as usize) else {
+            return 1;
+        };
+        unsafe {
+            core::ptr::copy_nonoverlapping(m as *const KrxIpcMessage as *const u8, buf, 16);
+        }
+        return 0;
+    }
+    let mut out = [0u32; 4];
+    if !proc_ctl_read(op, target, &mut out) {
+        return 1;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(out.as_ptr() as *const u8, buf, 16);
+    }
+    0
 }
 
 pub static SERVICE_VTABLE: ServiceApi = ServiceApi {

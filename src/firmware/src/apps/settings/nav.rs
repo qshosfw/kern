@@ -50,6 +50,13 @@ impl SettingsApp {
         }
 
         let defs = page_defs(self.current_page);
+
+        #[cfg(feature = "krx_native")]
+        if self.current_page == PageId::System {
+            self.populate_system_page(defs, ctx);
+            return;
+        }
+
         populate_defs(&mut self.items, defs, ctx);
         self.items_len = defs.len().min(self.items.len());
 
@@ -71,60 +78,73 @@ impl SettingsApp {
                     self.items_len += 1;
                 }
             }
-            return;
-        }
-
-        #[cfg(feature = "krx_native")]
-        if self.current_page == PageId::System && self.items_len < self.items.len() {
-            let cat = crate::apps::launcher::catalog::get_catalog();
-            cat.scan(ctx.storage);
-            let sys_caps = ctx.caps();
-            let menu_ins = super::system::system_modules_insert_idx().min(self.items_len);
-            let menu_count = self.insert_system_entries(
-                cat,
-                sys_caps,
-                kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU,
-                menu_ins,
-                MenuItemType::Submenu,
-            );
-            let act_ins =
-                (super::system::system_actions_insert_idx() + menu_count).min(self.items_len);
-            self.insert_system_entries(
-                cat,
-                sys_caps,
-                kernel::proc::krx::SectionType::FLAG_SYSTEM_ACTION,
-                act_ins,
-                MenuItemType::Action,
-            );
         }
     }
 
     #[cfg(feature = "krx_native")]
-    fn insert_system_entries(
+    #[inline(never)]
+    fn append_system_flag_items(
         &mut self,
         cat: &'static crate::apps::launcher::catalog::PackageCatalog,
         sys_caps: kernel::caps::CapabilitySet,
         flag: u8,
-        ins: usize,
         item_type: MenuItemType,
-    ) -> usize {
-        let avail = self.items.len().saturating_sub(self.items_len);
-        let count = cat.system_entry_count(sys_caps, flag).min(avail);
-        if count > 0 {
-            let mut i = self.items_len;
-            while i > ins {
-                self.items[i + count - 1] = self.items[i - 1];
-                i -= 1;
-            }
-            for k in 0..count {
-                if let Some(entry) = cat.system_entry_at(sys_caps, flag, k) {
-                    self.items[ins + k].title = entry.title.as_str();
-                    self.items[ins + k].item_type = item_type;
-                }
-            }
-            self.items_len += count;
+    ) {
+        let mut k = 0usize;
+        while self.items_len < self.items.len() {
+            let Some(entry) = cat.system_entry_at(sys_caps, flag, k) else {
+                break;
+            };
+            self.items[self.items_len].title = entry.title.as_str();
+            self.items[self.items_len].item_type = item_type;
+            self.items_len += 1;
+            k += 1;
         }
-        count
+    }
+
+    #[cfg(feature = "krx_native")]
+    #[inline(never)]
+    fn append_defs_slice(
+        &mut self,
+        defs: &[super::page::SettingDef],
+        ctx: &mut SysContext,
+    ) {
+        let start = self.items_len;
+        let n = defs.len().min(self.items.len() - start);
+        populate_defs(&mut self.items[start..start + n], &defs[..n], ctx);
+        self.items_len = start + n;
+    }
+
+    #[cfg(feature = "krx_native")]
+    fn populate_system_page(
+        &mut self,
+        defs: &[super::page::SettingDef],
+        ctx: &mut SysContext,
+    ) {
+        let cat = crate::apps::launcher::catalog::get_catalog();
+        cat.scan(ctx.storage);
+        let sys_caps = ctx.caps();
+        let menu_ins = super::system::system_modules_insert_idx().min(defs.len());
+        let act_ins = super::system::system_actions_insert_idx()
+            .min(defs.len())
+            .max(menu_ins);
+
+        self.items_len = 0;
+        self.append_defs_slice(&defs[..menu_ins], ctx);
+        self.append_system_flag_items(
+            cat,
+            sys_caps,
+            kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU,
+            MenuItemType::Submenu,
+        );
+        self.append_defs_slice(&defs[menu_ins..act_ins], ctx);
+        self.append_system_flag_items(
+            cat,
+            sys_caps,
+            kernel::proc::krx::SectionType::FLAG_SYSTEM_ACTION,
+            MenuItemType::Action,
+        );
+        self.append_defs_slice(&defs[act_ins..], ctx);
     }
 
     fn enter_page(

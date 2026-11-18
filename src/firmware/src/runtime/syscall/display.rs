@@ -5,29 +5,75 @@ use crate::services::primitives::{color_from_u8, font_from_u8};
 use kernel::proc::abi::DisplayApi;
 use kernel::proc::primitives::DisplayPrimitive;
 
+#[inline(never)]
+fn draw_prim(op: u8, x: i16, y: i16, a: i16, b: i16, color: u8) {
+    let canvas = active_canvas_mut();
+    let col = color_from_u8(color);
+    match op {
+        0 => gfx::draw::draw_line(canvas, x, y, a, b, col),
+        1 => canvas.draw_rect_i(x, y, a, b, col),
+        2 => canvas.fill_rect_i(x, y, a, b, col),
+        3 => gfx::draw::draw_dotted_line_h(canvas, x, y, a, b as u8, col),
+        4 => canvas.clear(),
+        5 => canvas.draw_pixel_i(x, y, col),
+        6 => canvas.draw_horizontal_line_i(x, y, a, col),
+        7 => canvas.draw_vertical_line_i(x, y, a, col),
+        8 => canvas.clear_corners_i(x, y, a, b),
+        9 => canvas.fill_rect_dither_i(x, y, a, b, color),
+        _ => canvas.fill_rect_i(x, y, a, b, gfx::Color::Invert),
+    }
+}
+
 pub unsafe extern "C" fn api_display_clear() {
-    active_canvas_mut().clear();
+    draw_prim(4, 0, 0, 0, 0, 0);
 }
 
 pub unsafe extern "C" fn api_draw_pixel(x: i16, y: i16, color: u8) {
-    active_canvas_mut().draw_pixel_i(x, y, color_from_u8(color));
+    draw_prim(5, x, y, 0, 0, color);
 }
 
 pub unsafe extern "C" fn api_draw_line(x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
-    gfx::draw::draw_line(active_canvas_mut(), x0, y0, x1, y1, color_from_u8(color));
+    draw_prim(0, x0, y0, x1, y1, color);
 }
 
 pub unsafe extern "C" fn api_draw_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    active_canvas_mut().draw_rect_i(x, y, w, h, color_from_u8(color));
+    draw_prim(1, x, y, w, h, color);
 }
 
 pub unsafe extern "C" fn api_fill_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    active_canvas_mut().fill_rect_i(x, y, w, h, color_from_u8(color));
+    draw_prim(2, x, y, w, h, color);
 }
 
 pub unsafe extern "C" fn api_draw_bitmap(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16) {
     if let Some(slice) = unsafe { super::ptr_slice(data, len as usize) } {
         gfx::draw::draw_bitmap(active_canvas_mut(), x, y, w, h, slice, gfx::Color::Fill);
+    }
+}
+
+#[inline(never)]
+unsafe fn draw_str_dispatch(
+    x: i16,
+    y: i16,
+    text: *const u8,
+    len: u16,
+    font_and_color: u16,
+    mode_and_arg: i16,
+) {
+    let Some(s) = (unsafe { parse_str(text, len as usize) }) else {
+        return;
+    };
+    let font = font_from_u8(font_and_color as u8);
+    let col = color_from_u8((font_and_color >> 8) as u8);
+    let canvas = active_canvas_mut();
+    if mode_and_arg < 0 {
+        let al = match mode_and_arg & 3 {
+            1 => gfx::text::Align::Center,
+            2 => gfx::text::Align::Right,
+            _ => gfx::text::Align::Left,
+        };
+        gfx::text::draw_str_align(canvas, x, y, s, font, col, al);
+    } else {
+        gfx::text::draw_str_max_x(canvas, x, y, s, font, col, (x + mode_and_arg).max(0));
     }
 }
 
@@ -51,36 +97,28 @@ pub unsafe extern "C" fn api_draw_str_align(
     color: u8,
     align: u8,
 ) {
-    if let Some(s) = unsafe { parse_str(text, len as usize) } {
-        let al = match align {
-            1 => gfx::text::Align::Center,
-            2 => gfx::text::Align::Right,
-            _ => gfx::text::Align::Left,
-        };
-        gfx::text::draw_str_align(
-            active_canvas_mut(),
-            x,
-            y,
-            s,
-            font_from_u8(font),
-            color_from_u8(color),
-            al,
-        );
-    }
+    let fc = (font as u16) | ((color as u16) << 8);
+    unsafe { draw_str_dispatch(x, y, text, len, fc, -16 | ((align as i16) & 3)) }
 }
 
 pub unsafe extern "C" fn api_commit_frame() {
     unsafe { api_commit_rows(0) }
 }
 
+pub static mut BOOT_LCD: *mut drivers::st7565::St7565<'static> = core::ptr::null_mut();
+
 pub unsafe extern "C" fn api_commit_rows(row_mask: u8) {
     if let Some(ctx) = active_ctx_opt() {
         ctx.commit_rows(row_mask);
+    } else if unsafe { !BOOT_LCD.is_null() } {
+        unsafe { (*BOOT_LCD).blit(active_canvas_mut()) };
     }
 }
 
 pub unsafe extern "C" fn api_get_framebuffer() -> *mut u8 {
-    active_canvas_mut().buffer.as_mut_ptr() as *mut u8
+    let canvas = active_canvas_mut();
+    canvas.mark_all_dirty();
+    canvas.buffer.as_mut_ptr() as *mut u8
 }
 
 pub unsafe extern "C" fn api_draw_str_max(
@@ -92,17 +130,8 @@ pub unsafe extern "C" fn api_draw_str_max(
     color: u8,
     max_w: i16,
 ) {
-    if let Some(s) = unsafe { parse_str(text, len as usize) } {
-        gfx::text::draw_str_max_x(
-            active_canvas_mut(),
-            x,
-            y,
-            s,
-            font_from_u8(font),
-            color_from_u8(color),
-            (x + max_w).max(0),
-        );
-    }
+    let fc = (font as u16) | ((color as u16) << 8);
+    unsafe { draw_str_dispatch(x, y, text, len, fc, max_w.max(0)) }
 }
 
 pub unsafe extern "C" fn api_set_inverted(inverted: u8) {
@@ -118,27 +147,27 @@ pub unsafe extern "C" fn api_set_contrast(contrast: u8) {
 }
 
 pub unsafe extern "C" fn api_draw_line_h(x: i16, y: i16, len: i16, color: u8) {
-    active_canvas_mut().draw_horizontal_line_i(x, y, len, color_from_u8(color));
+    draw_prim(6, x, y, len, 0, color);
 }
 
 pub unsafe extern "C" fn api_draw_line_v(x: i16, y: i16, len: i16, color: u8) {
-    active_canvas_mut().draw_vertical_line_i(x, y, len, color_from_u8(color));
+    draw_prim(7, x, y, len, 0, color);
 }
 
 pub unsafe extern "C" fn api_draw_dotted_line_h(x0: i16, x1: i16, y: i16, step: u8, color: u8) {
-    gfx::draw::draw_dotted_line_h(active_canvas_mut(), x0, x1, y, step, color_from_u8(color));
+    draw_prim(3, x0, y, x1, step as i16, color);
 }
 
 pub unsafe extern "C" fn api_clear_corners(x: i16, y: i16, w: i16, h: i16) {
-    active_canvas_mut().clear_corners_i(x, y, w, h);
+    draw_prim(8, x, y, w, h, 0);
 }
 
 pub unsafe extern "C" fn api_fill_rect_dither(x: i16, y: i16, w: i16, h: i16, progress: u8) {
-    active_canvas_mut().fill_rect_dither_i(x, y, w, h, progress);
+    draw_prim(9, x, y, w, h, progress);
 }
 
 pub unsafe extern "C" fn api_invert_rect(x: i16, y: i16, w: i16, h: i16) {
-    active_canvas_mut().fill_rect_i(x, y, w, h, gfx::Color::Invert);
+    draw_prim(10, x, y, w, h, 0);
 }
 
 pub unsafe extern "C" fn api_str_width(text: *const u8, len: u16, font: u8) -> i16 {
@@ -210,3 +239,18 @@ pub static DISPLAY_VTABLE: DisplayApi = DisplayApi {
     draw_icon: api_draw_icon,
     scroll: api_scroll,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_framebuffer_marks_all_pages_dirty() {
+        let canvas = active_canvas_mut();
+        canvas.clear();
+        canvas.dirty = 0;
+        let fb = unsafe { api_get_framebuffer() };
+        assert_eq!(fb, canvas.buffer.as_mut_ptr() as *mut u8);
+        assert_eq!(canvas.dirty, 0xFF);
+    }
+}

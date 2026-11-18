@@ -201,6 +201,32 @@ pub unsafe extern "C" fn api_ui_draw_s_meter(x: i16, y: i16, rssi_dbm: i16, peak
     );
 }
 
+#[inline(never)]
+unsafe fn badge_op(
+    is_key: bool,
+    x: i16,
+    y: i16,
+    style: u8,
+    p0: *const u8,
+    l0: u8,
+    p1: *const u8,
+    l1: u8,
+) {
+    let s0 = unsafe { super::parse_str(p0, l0 as usize) }.unwrap_or("");
+    let canvas = super::active_canvas_mut();
+    if is_key {
+        let s1 = unsafe { super::parse_str(p1, l1 as usize) }.unwrap_or("");
+        gfx::widgets::draw_key_badge(canvas, x, y, s0, s1);
+    } else if !s0.is_empty() {
+        let st = if style == 1 {
+            gfx::widgets::BadgeStyle::Filled
+        } else {
+            gfx::widgets::BadgeStyle::Empty
+        };
+        gfx::widgets::draw_tag_badge(canvas, x, y, s0, st);
+    }
+}
+
 pub unsafe extern "C" fn api_ui_draw_tag_badge(
     x: i16,
     y: i16,
@@ -208,14 +234,7 @@ pub unsafe extern "C" fn api_ui_draw_tag_badge(
     len: u8,
     style: u8,
 ) {
-    if let Some(s) = unsafe { super::parse_str(text, len as usize) } {
-        let st = if style == 1 {
-            gfx::widgets::BadgeStyle::Filled
-        } else {
-            gfx::widgets::BadgeStyle::Empty
-        };
-        gfx::widgets::draw_tag_badge(super::active_canvas_mut(), x, y, s, st);
-    }
+    unsafe { badge_op(false, x, y, style, text, len, core::ptr::null(), 0) };
 }
 
 pub unsafe extern "C" fn api_ui_draw_key_badge(
@@ -226,9 +245,7 @@ pub unsafe extern "C" fn api_ui_draw_key_badge(
     label: *const u8,
     l_len: u8,
 ) {
-    let k_s = unsafe { super::parse_str(key_str, k_len as usize) }.unwrap_or("");
-    let l_s = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
-    gfx::widgets::draw_key_badge(super::active_canvas_mut(), x, y, k_s, l_s);
+    unsafe { badge_op(true, x, y, 0, key_str, k_len, label, l_len) };
 }
 
 pub unsafe extern "C" fn api_ui_draw_capsule_button(
@@ -240,12 +257,12 @@ pub unsafe extern "C" fn api_ui_draw_capsule_button(
     l_len: u8,
     selected: u8,
 ) {
-    let s = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
     let st = if selected != 0 {
         gfx::widgets::BadgeStyle::Filled
     } else {
         gfx::widgets::BadgeStyle::Empty
     };
+    let s = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
     gfx::widgets::draw_capsule_button(super::active_canvas_mut(), x, y, w, h, s, st);
 }
 

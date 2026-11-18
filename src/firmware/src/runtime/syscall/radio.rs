@@ -4,6 +4,46 @@ use super::active_ctx_opt;
 use kernel::proc::abi::{FmApi, KrxSymbol, RadioApi};
 use kernel::proc::primitives::*;
 
+#[inline(never)]
+fn coord_u32(op: u8) -> u32 {
+    let coord = &crate::radio_state_ref().coord;
+    let ch = coord.active_channel();
+    match op {
+        0 => ch.rx_freq.raw(),
+        1 => ch.bandwidth.in_hz(),
+        2 => ch.modulation as u32,
+        _ => coord.is_transmitting as u32,
+    }
+}
+
+#[inline(never)]
+fn rf_set_u8(op: u8, val: u8) {
+    if let Some(ctx) = active_ctx_opt() {
+        match op {
+            0 => ctx.set_modulation(val),
+            1 => ctx.set_squelch(val),
+            2 => ctx.set_tx_power(val),
+            3 => ctx.set_af_mode(val),
+            4 => ctx.mute_mic(val != 0),
+            _ => ctx.set_agc(val),
+        }
+    }
+}
+
+#[inline(never)]
+fn rf_get_i16(op: u8) -> i16 {
+    let Some(ctx) = active_ctx_opt() else {
+        return if op == 0 { -130 } else { 0 };
+    };
+    match op {
+        0 => ctx.get_rssi_dbm(),
+        1 => ctx.is_carrier_detected() as i16,
+        2 => ctx.get_glitch() as i16,
+        3 => ctx.get_snr() as i16,
+        _ => ctx.get_noise() as i16,
+    }
+}
+
 pub unsafe extern "C" fn api_rf_tune(freq_hz: u32, bw: u8, step_hz: u32) -> u8 {
     let bw_hz = if bw == 1 { 25_000 } else { 12_500 };
     if let Some(ctx) = active_ctx_opt() {
@@ -15,39 +55,23 @@ pub unsafe extern "C" fn api_rf_tune(freq_hz: u32, bw: u8, step_hz: u32) -> u8 {
 }
 
 pub unsafe extern "C" fn api_rf_get_freq() -> u32 {
-    crate::radio_state_ref()
-        .coord
-        .active_channel()
-        .rx_freq
-        .raw()
+    coord_u32(0)
 }
 
 pub unsafe extern "C" fn api_rf_get_rssi() -> i16 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_rssi_dbm()
-    } else {
-        -130
-    }
+    rf_get_i16(0)
 }
 
 pub unsafe extern "C" fn api_rf_is_carrier() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_carrier_detected() { 1 } else { 0 }
-    } else {
-        0
-    }
+    rf_get_i16(1) as u8
 }
 
 pub unsafe extern "C" fn api_rf_set_modulation(mod_type: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_modulation(mod_type);
-    }
+    rf_set_u8(0, mod_type);
 }
 
 pub unsafe extern "C" fn api_rf_set_squelch(level: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_squelch(level);
-    }
+    rf_set_u8(1, level);
 }
 
 #[inline(never)]
@@ -87,15 +111,11 @@ pub unsafe extern "C" fn api_rf_set_tx(active: u8) -> u8 {
 }
 
 pub unsafe extern "C" fn api_rf_set_tx_power(level: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_tx_power(level);
-    }
+    rf_set_u8(2, level);
 }
 
 pub unsafe extern "C" fn api_rf_set_af_mode(mode: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_af_mode(mode);
-    }
+    rf_set_u8(3, mode);
 }
 
 pub unsafe extern "C" fn api_rf_sweep(
@@ -190,9 +210,7 @@ pub unsafe extern "C" fn api_rf_fsk_recv(_buf: *mut u8, _max_len: u16) -> u16 {
 }
 
 pub unsafe extern "C" fn api_rf_set_mic_mute(muted: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.mute_mic(muted != 0);
-    }
+    rf_set_u8(4, muted);
 }
 
 pub unsafe extern "C" fn api_rf_set_subaudible_ctcss(freq_tenths_hz: u16) {
@@ -214,33 +232,23 @@ pub unsafe extern "C" fn api_rf_send_tail() {
 }
 
 pub unsafe extern "C" fn api_rf_get_bandwidth() -> u32 {
-    crate::radio_state_ref()
-        .coord
-        .active_channel()
-        .bandwidth
-        .in_hz()
+    coord_u32(1)
 }
 
 pub unsafe extern "C" fn api_rf_get_modulation() -> u8 {
-    crate::radio_state_ref().coord.active_channel().modulation as u8
+    coord_u32(2) as u8
 }
 
 pub unsafe extern "C" fn api_rf_get_tx_state() -> u8 {
-    crate::radio_state_ref().coord.is_transmitting as u8
+    coord_u32(3) as u8
 }
 
 pub unsafe extern "C" fn api_rf_get_glitch() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_glitch()
-    } else {
-        0
-    }
+    rf_get_i16(2) as u8
 }
 
 pub unsafe extern "C" fn api_rf_set_agc(table_idx: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_agc(table_idx);
-    }
+    rf_set_u8(5, table_idx);
 }
 
 pub unsafe extern "C" fn api_rf_set_dual_tones_hz(
@@ -261,19 +269,11 @@ pub unsafe extern "C" fn api_rf_set_dtmf(digit: u8, gain: u8) {
 }
 
 pub unsafe extern "C" fn api_rf_get_snr() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_snr()
-    } else {
-        0
-    }
+    rf_get_i16(3) as u8
 }
 
 pub unsafe extern "C" fn api_rf_get_noise() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.get_noise()
-    } else {
-        0
-    }
+    rf_get_i16(4) as u8
 }
 
 #[inline(never)]
@@ -287,6 +287,7 @@ fn decode_vfo_slot(slot: u8) -> Option<kernel::service::radio::VfoSlot> {
     }
 }
 
+#[inline(never)]
 fn encode_subaudible(
     tone: kernel::service::radio::SubaudibleTone,
 ) -> kernel::proc::abi::KrxSubaudible {
@@ -462,21 +463,27 @@ pub unsafe extern "C" fn api_rf_set_watch_mode(
         };
     }
     if cross_band != 0xFF {
-        ctx.state.coord.cross_band = match cross_band {
-            0 => CrossBandMode::Off,
-            1 => CrossBandMode::FixedTxOnA,
-            2 => CrossBandMode::FixedTxOnB,
-            3 => CrossBandMode::MasterFollowsRx,
-            _ => return 1,
+        const CROSS_BANDS: [CrossBandMode; 4] = [
+            CrossBandMode::Off,
+            CrossBandMode::FixedTxOnA,
+            CrossBandMode::FixedTxOnB,
+            CrossBandMode::MasterFollowsRx,
+        ];
+        let Some(&cb) = CROSS_BANDS.get(cross_band as usize) else {
+            return 1;
         };
+        ctx.state.coord.cross_band = cb;
     }
     if bclo != 0xFF {
-        ctx.state.coord.bclo_policy = match bclo {
-            0 => BcloPolicy::Disabled,
-            1 => BcloPolicy::CarrierOnly,
-            2 => BcloPolicy::ToneMismatchOnly,
-            _ => return 1,
+        const BCLOS: [BcloPolicy; 3] = [
+            BcloPolicy::Disabled,
+            BcloPolicy::CarrierOnly,
+            BcloPolicy::ToneMismatchOnly,
+        ];
+        let Some(&bp) = BCLOS.get(bclo as usize) else {
+            return 1;
         };
+        ctx.state.coord.bclo_policy = bp;
     }
     0
 }
@@ -520,11 +527,7 @@ pub unsafe extern "C" fn api_rf_unlock_vfo() -> u8 {
         return 1;
     };
     let id = active_krx_token(false).id;
-    if ctx.state.coord.release_client_lock(ctx.radio, id) {
-        0
-    } else {
-        1
-    }
+    u8::from(!ctx.state.coord.release_client_lock(ctx.radio, id))
 }
 
 pub unsafe extern "C" fn api_rf_trigger_burst(_freq_hz: u16, duration_ms: u16) -> u8 {
@@ -533,12 +536,9 @@ pub unsafe extern "C" fn api_rf_trigger_burst(_freq_hz: u16, duration_ms: u16) -
     };
     if duration_ms == 0 {
         ctx.state.coord.stop_1750hz_burst(ctx.radio);
-        return 0;
-    }
-    if ctx.state.coord.trigger_1750hz_burst(ctx.radio, duration_ms) {
         0
     } else {
-        1
+        u8::from(!ctx.state.coord.trigger_1750hz_burst(ctx.radio, duration_ms))
     }
 }
 
