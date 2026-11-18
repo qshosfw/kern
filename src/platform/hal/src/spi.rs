@@ -195,7 +195,7 @@ pub fn spi2_write_byte(data: u8) -> Result<(), SpiError> {
 }
 
 /// Transmit a slice of bytes over SPI2.
-#[inline]
+#[inline(never)]
 pub fn spi2_write_bytes(data: &[u8]) -> Result<(), SpiError> {
     for &b in data {
         spi2_write_byte(b)?;
@@ -204,7 +204,7 @@ pub fn spi2_write_bytes(data: &[u8]) -> Result<(), SpiError> {
 }
 
 /// Read multiple bytes over SPI2 by clocking out 0xFF dummy bytes.
-#[inline]
+#[inline(never)]
 pub fn spi2_read_bytes(buffer: &mut [u8]) -> Result<(), SpiError> {
     for b in buffer.iter_mut() {
         *b = spi2_transfer(0xFF)?;

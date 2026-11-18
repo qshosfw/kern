@@ -118,6 +118,7 @@ pub fn draw_key_badge_box(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, on
     box_w
 }
 
+#[inline(never)]
 pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label: &str) {
     let box_w = draw_key_badge_box(canvas, x, y, key_str, false);
     if !label.is_empty() {
@@ -147,6 +148,7 @@ pub fn draw_key_badge_right(canvas: &mut Canvas, right_x: i16, y: i16, key_str: 
 }
 
 /// Draw standard inverted (negated) header bar across the screen width.
+#[inline(never)]
 pub fn draw_negated_header(canvas: &mut Canvas, y: i16, title: &str) {
     let yu = y as u8;
     canvas.fill_rect(0, yu, 128, 9, Color::Fill);
@@ -163,6 +165,7 @@ pub fn draw_negated_header(canvas: &mut Canvas, y: i16, title: &str) {
     );
 }
 
+#[inline(never)]
 fn draw_dialog_header(canvas: &mut Canvas, dy: i16, big_title: &str, sub_title: &str) {
     canvas.clear();
     draw_negated_header(canvas, dy, "KERN");
@@ -292,6 +295,7 @@ pub fn draw_dialog_slide_up(
 }
 
 /// Shared bottom-sheet modal frame rendered with a vertical slide-up offset
+#[inline(never)]
 pub fn draw_sheet_slide_up(
     canvas: &mut Canvas,
     title: &str,

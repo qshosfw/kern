@@ -232,6 +232,12 @@ pub const fn nth_cstr<'a>(packed: &'a [u8], mut idx: u8) -> &'a str {
         }
         i += 1;
     }
+    if idx == 0 && start < packed.len() {
+        let slice = unsafe {
+            core::slice::from_raw_parts(packed.as_ptr().add(start), packed.len() - start)
+        };
+        return unsafe { core::str::from_utf8_unchecked(slice) };
+    }
     ""
 }
 
@@ -298,5 +304,9 @@ mod tests {
         assert_eq!(nth_cstr(TABLE, 2), "");
         assert_eq!(nth_cstr(TABLE, 3), "delta");
         assert_eq!(nth_cstr(TABLE, 4), "");
+
+        const UNTERM: &[u8] = b"System\0Device\0Status\0Legal";
+        assert_eq!(nth_cstr(UNTERM, 3), "Legal");
+        assert_eq!(nth_cstr(UNTERM, 4), "");
     }
 }

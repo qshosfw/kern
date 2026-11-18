@@ -25,6 +25,7 @@ pub(crate) fn write_cstr(buf: &mut [u8], path: &str) {
     buf[..copy_len].copy_from_slice(&path.as_bytes()[..copy_len]);
 }
 
+#[inline(never)]
 pub fn update_raw_crc(buf: &mut [u8]) {
     let len = buf.len();
     if len > 4 {
@@ -38,6 +39,7 @@ pub fn update_raw_crc(buf: &mut [u8]) {
     }
 }
 
+#[inline(never)]
 pub fn is_raw_valid(buf: &[u8], expected_version: u8) -> bool {
     let len = buf.len();
     if len <= 4 || buf[0] != expected_version {
@@ -49,6 +51,7 @@ pub fn is_raw_valid(buf: &[u8], expected_version: u8) -> bool {
     stored_crc == calc_crc
 }
 
+#[inline(never)]
 pub fn save_config_raw(
     storage: &mut SystemStorage,
     path: &str,
@@ -175,6 +178,7 @@ const _: () = {
     assert!(core::mem::offset_of!(AppsConfig, crc32) == 60);
 };
 
+#[inline(never)]
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
     let mut temp = core::mem::MaybeUninit::<[u8; 80]>::uninit();
     let temp_buf = unsafe { &mut *temp.as_mut_ptr() };
@@ -190,11 +194,26 @@ pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut S
     }
 }
 
+#[repr(C)]
 struct ConfigMeta {
+    offset: u16,
+    size: u8,
     version: u8,
     rules_start: u8,
     rules_len: u8,
-    path: &'static str,
+}
+
+static CONFIG_PATHS: &[u8] = b"\
+/pref/display.cfg\0\
+/pref/audio.cfg\0\
+/pref/keys.cfg\0\
+/pref/system.cfg\0\
+/pref/battery.cfg\0\
+/pref/apps.cfg\0";
+
+#[inline(always)]
+fn config_path(idx: usize) -> &'static str {
+    utils::format::nth_cstr(CONFIG_PATHS, idx as u8)
 }
 
 static ALL_BOUND_RULES: [[u8; 2]; 40] = [
@@ -247,40 +266,46 @@ static ALL_BOUND_RULES: [[u8; 2]; 40] = [
 
 static CONFIG_METAS: [ConfigMeta; 6] = [
     ConfigMeta {
+        offset: core::mem::offset_of!(MasterConfig, display) as u16,
+        size: core::mem::size_of::<DisplayConfig>() as u8,
         version: DisplayConfig::VERSION,
         rules_start: 0,
         rules_len: 11,
-        path: DisplayConfig::PATH,
     },
     ConfigMeta {
+        offset: core::mem::offset_of!(MasterConfig, audio) as u16,
+        size: core::mem::size_of::<AudioConfig>() as u8,
         version: AudioConfig::VERSION,
         rules_start: 11,
         rules_len: 7,
-        path: AudioConfig::PATH,
     },
     ConfigMeta {
+        offset: core::mem::offset_of!(MasterConfig, keys) as u16,
+        size: core::mem::size_of::<KeyConfig>() as u8,
         version: KeyConfig::VERSION,
         rules_start: 18,
         rules_len: 8,
-        path: KeyConfig::PATH,
     },
     ConfigMeta {
+        offset: core::mem::offset_of!(MasterConfig, system) as u16,
+        size: core::mem::size_of::<SystemConfig>() as u8,
         version: SystemConfig::VERSION,
         rules_start: 0,
         rules_len: 0,
-        path: SystemConfig::PATH,
     },
     ConfigMeta {
+        offset: core::mem::offset_of!(MasterConfig, battery) as u16,
+        size: core::mem::size_of::<BatteryConfig>() as u8,
         version: BatteryConfig::VERSION,
         rules_start: 26,
         rules_len: 4,
-        path: BatteryConfig::PATH,
     },
     ConfigMeta {
+        offset: core::mem::offset_of!(MasterConfig, apps) as u16,
+        size: core::mem::size_of::<AppsConfig>() as u8,
         version: AppsConfig::VERSION,
         rules_start: 30,
         rules_len: 10,
-        path: AppsConfig::PATH,
     },
 ];
 
@@ -457,31 +482,31 @@ impl MasterConfig {
         repaired
     }
 
+    #[inline(never)]
     pub fn config_bytes(&self, idx: usize) -> &[u8] {
-        match idx {
-            0 => self.display.as_bytes(),
-            1 => self.audio.as_bytes(),
-            2 => self.keys.as_bytes(),
-            3 => self.system.as_bytes(),
-            4 => self.battery.as_bytes(),
-            _ => self.apps.as_bytes(),
+        let m = &CONFIG_METAS[idx.min(5)];
+        unsafe {
+            core::slice::from_raw_parts(
+                (self as *const Self as *const u8).add(m.offset as usize),
+                m.size as usize,
+            )
         }
     }
 
+    #[inline(always)]
     pub fn config_bytes_mut(&mut self, idx: usize) -> &mut [u8] {
-        match idx {
-            0 => self.display.as_bytes_mut(),
-            1 => self.audio.as_bytes_mut(),
-            2 => self.keys.as_bytes_mut(),
-            3 => self.system.as_bytes_mut(),
-            4 => self.battery.as_bytes_mut(),
-            _ => self.apps.as_bytes_mut(),
-        }
+        let s = self.config_bytes(idx);
+        unsafe { core::slice::from_raw_parts_mut(s.as_ptr() as *mut u8, s.len()) }
     }
 
     pub fn load_into(&mut self, storage: &mut SystemStorage) {
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
-            load_or_init_raw(self.config_bytes_mut(i), meta.version, meta.path, storage);
+            load_or_init_raw(
+                self.config_bytes_mut(i),
+                meta.version,
+                config_path(i),
+                storage,
+            );
         }
         let repaired = self.sanitize();
         self.seal_all();
@@ -496,6 +521,7 @@ impl MasterConfig {
     }
 
     /// Persist dirty blocks to storage atomically with CRC32 protection.
+    #[inline(never)]
     pub fn flush_dirty(&mut self, storage: &mut SystemStorage) -> Result<(), ConfigError> {
         if self.dirty == 0 {
             return Ok(());
@@ -508,14 +534,15 @@ impl MasterConfig {
             if (self.dirty & flag) == 0 {
                 continue;
             }
+            let path = config_path(i);
             if !is_raw_valid(self.config_bytes(i), meta.version) {
-                load_or_init_raw(self.config_bytes_mut(i), meta.version, meta.path, storage);
+                load_or_init_raw(self.config_bytes_mut(i), meta.version, path, storage);
                 self.seal(i);
                 self.dirty &= !flag;
                 continue;
             }
             let buf = self.config_bytes_mut(i);
-            if let Err(e) = save_config_raw(storage, meta.path, buf) {
+            if let Err(e) = save_config_raw(storage, path, buf) {
                 first_err = first_err.or(Some(e));
             } else {
                 self.dirty &= !flag;

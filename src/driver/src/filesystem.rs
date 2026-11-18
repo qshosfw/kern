@@ -28,6 +28,24 @@ pub struct FileSystemDriver<'a, D: BlockDevice> {
 }
 
 impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
+    /// Initialize a `FileSystemDriver` and its `KernFS` directly in uninitialized
+    /// storage to avoid large stack copy temporaries on Cortex-M0+.
+    pub unsafe fn init_in_place(dst: *mut Self, dev: &'a mut D) {
+        unsafe {
+            KernFS::init_in_place(core::ptr::addr_of_mut!((*dst).fs), dev);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).session_unlocked),
+                !cfg!(feature = "secure_fs"),
+            );
+            #[cfg(feature = "secure_fs")]
+            {
+                core::ptr::write_bytes(core::ptr::addr_of_mut!((*dst).enc_key) as *mut u8, 0, 16);
+                core::ptr::write(core::ptr::addr_of_mut!((*dst).key_installed), false);
+                core::ptr::write(core::ptr::addr_of_mut!((*dst).nonce_ctr), 1);
+            }
+        }
+    }
+
     pub fn new(fs: KernFS<'a, D>) -> Self {
         Self {
             fs,

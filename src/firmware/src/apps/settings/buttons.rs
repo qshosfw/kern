@@ -3,9 +3,9 @@
 use super::page::{ChoiceId, PageId, SettingDef, SettingField};
 use crate::SysContext;
 use crate::apps::shortcut::{
-    CTX_OPTIONS, KEY_SHORTCUT_COUNT, describe, format_label, resolve_slot, slot_label,
+    CTX_OPTIONS, KEY_SHORTCUT_COUNT, describe_into, resolve_slot_override, slot_label,
 };
-use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions};
+use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions, ShortString};
 
 pub static PTT_MODE_OPTIONS: &str = "Momentary\0Toggle / Latch\02x Press Latch\0";
 
@@ -51,32 +51,21 @@ pub fn populate_shortcuts(
 ) -> usize {
     let cat = crate::apps::launcher::catalog::get_catalog();
     cat.scan(ctx.storage);
-    items[0] = MenuItem::new(
-        "Scope",
-        MenuItemType::Choice {
-            selected: cur_ctx.min(4) as u16,
-            options: SheetOptions::Packed(CTX_OPTIONS),
-        },
-    );
+    items[0].title = "Scope";
+    items[0].item_type = MenuItemType::Choice {
+        selected: cur_ctx.min(4) as u16,
+        options: SheetOptions::Packed(CTX_OPTIONS),
+    };
     icons[0] = gfx::icons::ICON_APPS;
     let count = KEY_SHORTCUT_COUNT
         .min(items.len().saturating_sub(1))
         .min(icons.len().saturating_sub(1));
     for i in 0..count {
-        let target_id = resolve_slot(&ctx.config.keys, i, cur_ctx);
-        let (mut label, icon) = describe(target_id, cat);
-        if cur_ctx != 0
-            && ctx
-                .config
-                .keys
-                .ctx_rules
-                .iter()
-                .any(|r| r.ctx == cur_ctx && r.slot as usize == i)
-        {
-            label = format_label("*", label.as_str());
-        }
-        items[1 + i] = MenuItem::new(slot_label(i), MenuItemType::Shortcut(label));
-        icons[1 + i] = icon;
+        let (target_id, overridden) = resolve_slot_override(&ctx.config.keys, i, cur_ctx);
+        let mut label = ShortString::empty();
+        icons[1 + i] = describe_into(target_id, cat, overridden, &mut label);
+        items[1 + i].title = slot_label(i);
+        items[1 + i].item_type = MenuItemType::Shortcut(label);
     }
     count + 1
 }

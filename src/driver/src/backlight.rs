@@ -5,17 +5,55 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 pub static BACKLIGHT_DUTY: AtomicU8 = AtomicU8::new(0);
 static BACKLIGHT_ACC: AtomicU8 = AtomicU8::new(0);
+/// Active RGB channel bitmask (`bit0=R, bit1=G, bit2=B`) on RGB-capable targets.
+#[cfg(feature = "rgb_backlight")]
+pub static RGB_CHANNEL_MASK: AtomicU8 = AtomicU8::new(0b111);
+
+#[inline(always)]
+fn drive_backlight_pins(on: bool) {
+    #[cfg(not(feature = "rgb_backlight"))]
+    {
+        if on {
+            bsp::pins::BACKLIGHT.set_high();
+        } else {
+            bsp::pins::BACKLIGHT.set_low();
+        }
+    }
+    #[cfg(feature = "rgb_backlight")]
+    {
+        let mask = if on {
+            RGB_CHANNEL_MASK.load(Ordering::Relaxed)
+        } else {
+            0
+        };
+        if (mask & 0b001) != 0 {
+            bsp::pins::LCD_RLED.set_high();
+        } else {
+            bsp::pins::LCD_RLED.set_low();
+        }
+        if (mask & 0b010) != 0 {
+            bsp::pins::LCD_GLED.set_high();
+        } else {
+            bsp::pins::LCD_GLED.set_low();
+        }
+        if (mask & 0b100) != 0 {
+            bsp::pins::LCD_BLED.set_high();
+        } else {
+            bsp::pins::LCD_BLED.set_low();
+        }
+    }
+}
 
 /// SysTick 20 kHz Delta-Sigma Rate Multiplier Software PWM Tick (called inside 50 µs SysTick interrupt handler)
 #[inline(always)]
 pub fn systick_pwm_tick() {
     let duty = BACKLIGHT_DUTY.load(Ordering::Relaxed);
     if duty == 0 {
-        bsp::pins::BACKLIGHT.set_low();
+        drive_backlight_pins(false);
         return;
     }
     if duty >= 10 {
-        bsp::pins::BACKLIGHT.set_high();
+        drive_backlight_pins(true);
         return;
     }
 
@@ -26,10 +64,10 @@ pub fn systick_pwm_tick() {
     let next = acc + duty;
     if next >= 10 {
         BACKLIGHT_ACC.store(next - 10, Ordering::Relaxed);
-        bsp::pins::BACKLIGHT.set_high();
+        drive_backlight_pins(true);
     } else {
         BACKLIGHT_ACC.store(next, Ordering::Relaxed);
-        bsp::pins::BACKLIGHT.set_low();
+        drive_backlight_pins(false);
     }
 }
 
@@ -74,7 +112,7 @@ impl BacklightController {
 
     pub fn init(&mut self) {
         self.apply_hardware();
-        bsp::pins::BACKLIGHT.set_low();
+        drive_backlight_pins(false);
     }
 
     pub fn set_mode(&mut self, mode: BacklightMode) {
@@ -164,7 +202,7 @@ impl BacklightController {
                 self.current_level = 0;
                 self.target_level = 0;
                 self.apply_hardware();
-                bsp::pins::BACKLIGHT.set_low();
+                drive_backlight_pins(false);
                 return false;
             }
             BacklightMode::On => {
@@ -204,7 +242,7 @@ impl BacklightController {
     fn apply_hardware(&self) {
         if self.mode == BacklightMode::Off || self.current_level == 0 {
             BACKLIGHT_DUTY.store(0, Ordering::Relaxed);
-            bsp::pins::BACKLIGHT.set_low();
+            drive_backlight_pins(false);
         } else {
             BACKLIGHT_DUTY.store(self.current_level.min(10), Ordering::Relaxed);
         }

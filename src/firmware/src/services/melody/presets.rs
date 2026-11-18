@@ -239,7 +239,3 @@ pub static ROGER_DEFS: &[RogerDef] = &[
         ],
     },
 ];
-
-pub static ROGER_PRESET_OPTIONS: [&'static str; 8] = [
-    "Off", "Classic", "Tiny", "MotoTRBO", "APX6000", "T40", "TLKR T80", "Cobra",
-];

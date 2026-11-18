@@ -5,6 +5,8 @@
 //! - Class 1 (`Paged`): Demand-paged fixed-window overlay cache with LR-thunking.
 //! - `syscall`: Modular per-capability VTables, `ServiceRegistry`, and GOT binder.
 
+#[cfg(feature = "krx_native")]
+pub mod fault;
 #[cfg(feature = "krx_runtime")]
 pub mod loader;
 #[cfg(feature = "krx_native")]
@@ -32,7 +34,7 @@ pub fn launch_krx_package(
     _ctx: &mut crate::services::SysContext<'_, '_>,
     _path: &str,
 ) -> Result<usize, kernel::proc::krx::KrxLaunchError> {
-    Err(kernel::proc::krx::KrxLaunchError::VmDisabled)
+    Err(kernel::proc::krx::KrxLaunchError::UnsupportedProfile)
 }
 
 #[cfg(not(feature = "krx_runtime"))]
@@ -41,7 +43,7 @@ pub fn launch_krx_package_with_arg(
     _path: &str,
     _arg: u32,
 ) -> Result<usize, kernel::proc::krx::KrxLaunchError> {
-    Err(kernel::proc::krx::KrxLaunchError::VmDisabled)
+    Err(kernel::proc::krx::KrxLaunchError::UnsupportedProfile)
 }
 
 #[cfg(not(feature = "krx_runtime"))]

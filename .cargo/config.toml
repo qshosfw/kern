@@ -10,6 +10,7 @@ rustflags = [
   "-C", "no-vectorize-loops",
   "-C", "opt-level=z",
   "-Z", "location-detail=none",
+  "-Z", "fmt-debug=none",
 ]
 
 #[unstable]

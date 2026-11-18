@@ -47,10 +47,18 @@ macro_rules! define_os_apps {
         pub fn init_app(app_id: usize) {
             if let Some(entry) = APP_TABLE.get(app_id) {
                 unsafe {
-                    let ptr = (core::ptr::addr_of_mut!(OS_APP_STORAGE) as *mut u8)
+                    let base = (core::ptr::addr_of_mut!(OS_APP_STORAGE) as *mut u8)
                         .add(entry.offset as usize);
-                    core::ptr::write_bytes(ptr, 0, entry.instance_size as usize);
-                    (entry.init)(ptr as *mut ());
+                    core::ptr::write_bytes(base, 0, entry.instance_size as usize);
+                    match app_id {
+                        $(
+                            $(#[$meta])*
+                            x if x == OsAppId::$name as usize => {
+                                <$app_type>::init_at(base as *mut $app_type);
+                            }
+                        )*
+                        _ => {}
+                    }
                 }
             }
         }
@@ -67,10 +75,6 @@ macro_rules! define_os_apps {
                 $(#[$meta])*
                 crate::apps::registry::OsAppDescriptor {
                     metadata: $app_meta,
-                    vtable: kernel::app::AppVTable::from_app::<$app_type>(),
-                    init: |ptr| unsafe {
-                        <$app_type>::init_at(ptr as *mut $app_type);
-                    },
                     required_capabilities: $caps,
                     offset: core::mem::offset_of!(OsAppStorage, $name) as u16,
                     instance_size: core::mem::size_of::<$app_type>() as u16,

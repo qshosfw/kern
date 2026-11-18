@@ -75,6 +75,7 @@ pub struct SystemMetrics {
 }
 
 /// Memory pressure classification tier based on SRAM available and stack margin headroom
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryPressure {
     /// Plentiful headroom: >= 4096 bytes SRAM free and >= 1024 bytes stack margin
@@ -189,7 +190,7 @@ impl SystemDiagnostics {
     }
 
     /// Calculate current stack margin remaining (distance between MSP and _stack_end)
-    #[inline(always)]
+    #[inline(never)]
     pub fn stack_margin_bytes() -> usize {
         #[cfg(target_arch = "arm")]
         {
@@ -244,14 +245,12 @@ impl SystemDiagnostics {
 
     /// Assess current system memory pressure tier based on available SRAM and stack margin.
     pub fn memory_pressure() -> MemoryPressure {
-        let avail = Self::ram_available_bytes();
-        let margin = Self::stack_margin_bytes();
-
-        if avail < 1024 || margin < 256 {
+        let avail = Self::stack_margin_bytes();
+        if avail < 1024 {
             MemoryPressure::Critical
-        } else if avail < 2048 || margin < 512 {
+        } else if avail < 2048 {
             MemoryPressure::Constrained
-        } else if avail < 4096 || margin < 1024 {
+        } else if avail < 4096 {
             MemoryPressure::Moderate
         } else {
             MemoryPressure::Normal

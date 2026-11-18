@@ -66,27 +66,27 @@ fn murmur3_64(bytes: &[u8]) -> u64 {
 
 /// Generates a deterministic 64-bit serial from the 16-byte CPU ID at 0x1FFF3000.
 /// 100% bitwise identical to DeltaFW's `GetSerial()` in `identifier.c`.
+#[inline(never)]
 pub fn get_hardware_serial64() -> u64 {
     let id_bytes = read_cpu_id_16();
     murmur3_64(&id_bytes)
 }
 
+/// Derives an IEEE EUI-48 (6-byte) MAC address from a precomputed 64-bit hardware serial.
+#[inline(never)]
+pub fn mac_from_serial64(serial: u64) -> [u8; 6] {
+    let bytes = serial.to_be_bytes();
+    let mut mac = [bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
+    mac[0] = (mac[0] | 0x02) & !0x01;
+    mac
+}
+
 /// Computes an IEEE EUI-48 (6-byte) MAC address derived from hardware serial.
 /// 100% bitwise identical to DeltaFW's `GetMacAddress()`.
 /// Format: 02:XX:XX:XX:XX:XX (Locally Administered, Unicast).
+#[inline(always)]
 pub fn read_mac_address() -> [u8; 6] {
-    let serial = get_hardware_serial64();
-    let mut mac = [
-        ((serial >> 40) & 0xFF) as u8,
-        ((serial >> 32) & 0xFF) as u8,
-        ((serial >> 24) & 0xFF) as u8,
-        ((serial >> 16) & 0xFF) as u8,
-        ((serial >> 8) & 0xFF) as u8,
-        (serial & 0xFF) as u8,
-    ];
-    mac[0] |= 0x02; // Locally Administered
-    mac[0] &= !0x01; // Unicast
-    mac
+    mac_from_serial64(get_hardware_serial64())
 }
 
 static mut MAC_TAG_CACHED: [u8; 4] = [0; 4];
@@ -166,10 +166,58 @@ impl FactoryCertStatus {
             Self::Present => "Present",
             Self::Qs1Ascii { buf, len } => {
                 let n = (*len as usize).min(buf.len());
-                core::str::from_utf8(&buf[..n]).unwrap_or("Present")
+                utils::format::ascii_str(&buf[..n]).unwrap_or("Present")
             }
         }
     }
+}
+
+#[inline(always)]
+fn is_qs1_tag(w: &[u8]) -> bool {
+    (w[0] == b'1' && w[1] == b'-' && (w[2] | 0x20) == b's' && (w[3] | 0x20) == b'q')
+        || ((w[0] | 0x20) == b'q' && (w[1] | 0x20) == b's' && w[2] == b'-' && w[3] == b'1')
+}
+
+fn find_qs1_tag_end(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() >= 84 && is_qs1_tag(&bytes[80..84]) {
+        return Some(84);
+    }
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        if is_qs1_tag(&bytes[i..i + 4]) {
+            return Some(i + 4);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Scans `bytes` for a `1-sq` / `qs-1` tag (case-insensitive) and returns a slice of up to 16
+/// printable serial bytes, or falls back to an un-tagged `>= 8`-char ASCII run in `[80..]` if present.
+pub fn extract_qs1_slice(bytes: &[u8]) -> Option<&[u8]> {
+    let tag_end = find_qs1_tag_end(bytes);
+    let mut start = tag_end.unwrap_or(80);
+    if start >= bytes.len() {
+        return None;
+    }
+
+    while start < bytes.len() && matches!(bytes[start], 0x00 | 0xFF | b' ' | b':' | b'=') {
+        start += 1;
+    }
+
+    let max = (bytes.len() - start).min(16);
+    let mut len = 0usize;
+    while len < max {
+        let b = bytes[start + len];
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/') {
+            len += 1;
+        } else {
+            break;
+        }
+    }
+
+    let min_len = if tag_end.is_some() { 1 } else { 8 };
+    (len >= min_len).then(|| &bytes[start..start + len])
 }
 
 /// Parses a 104-byte factory provisioning certificate into its UI status and raw `1-sq` ASCII S/N.
@@ -177,26 +225,15 @@ pub fn parse_factory_cert_status(cert: Option<&[u8; 104]>) -> FactoryCertStatus 
     let Some(cert) = cert else {
         return FactoryCertStatus::Erased;
     };
-    if &cert[80..84] != b"1-sq" && &cert[80..84] != b"qs-1" {
-        return FactoryCertStatus::Present;
-    }
-    let mut buf = [0u8; 16];
-    let mut len = 0usize;
-    for &b in &cert[84..100] {
-        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
-            buf[len] = b;
-            len += 1;
-        } else {
-            break;
-        }
-    }
-    if len == 0 {
-        FactoryCertStatus::Present
-    } else {
+    if let Some(s) = extract_qs1_slice(cert) {
+        let mut buf = [0u8; 16];
+        buf[..s.len()].copy_from_slice(s);
         FactoryCertStatus::Qs1Ascii {
             buf,
-            len: len as u8,
+            len: s.len() as u8,
         }
+    } else {
+        FactoryCertStatus::Present
     }
 }
 
@@ -311,5 +348,22 @@ mod tests {
         // Erased block yields `Erased` -> `"None"`.
         assert_eq!(parse_factory_cert_status(None), FactoryCertStatus::Erased);
         assert_eq!(parse_factory_cert_status(None).as_str(), "None");
+
+        // Shifted / uppercase / colon-delimited `QS-1` tags are extracted cleanly.
+        let mut shifted = [0x00u8; 104];
+        shifted[72..78].copy_from_slice(b"QS-1: ");
+        shifted[78..88].copy_from_slice(b"K1-SN98765");
+        assert_eq!(
+            parse_factory_cert_status(Some(&shifted)).as_str(),
+            "K1-SN98765"
+        );
+
+        // Un-tagged 8+ char ASCII serial at [80..] is also extracted.
+        let mut untagged = [0x00u8; 104];
+        untagged[80..92].copy_from_slice(b"BATCH2026A12");
+        assert_eq!(
+            parse_factory_cert_status(Some(&untagged)).as_str(),
+            "BATCH2026A12"
+        );
     }
 }

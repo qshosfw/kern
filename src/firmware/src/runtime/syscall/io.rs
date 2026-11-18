@@ -6,7 +6,6 @@
 
 use super::active_ctx_opt;
 use kernel::proc::abi::{HwBusApi, KeypadApi, PowerApi, SerialApi, TimerApi};
-use kernel::proc::primitives::*;
 
 // ── 5. CapKeypad C-ABI Handlers ─────────────────────────────────────────────
 
@@ -307,20 +306,10 @@ pub unsafe extern "C" fn api_hw_i2c_transfer(
     rx: *mut u8,
     rx_len: u16,
 ) -> u8 {
-    let Some(ctx) = active_ctx_opt() else {
-        return 1;
-    };
-    if let Some(tx_slice) = unsafe { super::ptr_slice(tx, tx_len as usize) } {
-        if ctx.i2c_write(addr, reg, tx_slice).is_err() {
-            return 1;
-        }
-    }
-    if let Some(rx_slice) = unsafe { super::ptr_slice_mut(rx, rx_len as usize) } {
-        if ctx.i2c_read(addr, reg, rx_slice).is_err() {
-            return 1;
-        }
-    }
-    0
+    let mut i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
+    let tx_opt = unsafe { super::ptr_slice(tx, tx_len as usize) };
+    let rx_opt = unsafe { super::ptr_slice_mut(rx, rx_len as usize) };
+    u8::from(i2c.xfer_reg(addr, reg, tx_opt, rx_opt).is_err())
 }
 
 pub unsafe extern "C" fn api_hw_spi_transfer(

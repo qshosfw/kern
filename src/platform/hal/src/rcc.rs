@@ -46,6 +46,14 @@ pub fn enable_usart1() {
     }
 }
 
+/// Enable the USART3 peripheral clock (APB1).
+pub fn enable_usart3() {
+    unsafe {
+        let val = rcc::RCC_APB1ENR.read_volatile();
+        rcc::RCC_APB1ENR.write_volatile(val | rcc::APB1ENR_USART3);
+    }
+}
+
 /// Enable the ADC1 peripheral clock (APB2) and set PCLK/4 prescaler.
 pub fn enable_adc1() {
     unsafe {
@@ -318,6 +326,8 @@ pub fn set_sysclk_index(idx: u8) {
     crate::time::update_tim2_freq(hz);
     crate::spi::resync_clock(hz);
     crate::uart::resync_clock(hz);
+    #[cfg(feature = "target_k10pro")]
+    crate::uart::resync_usart3_clock(hz);
 }
 
 #[inline]

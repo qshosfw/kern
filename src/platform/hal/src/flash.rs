@@ -3,7 +3,8 @@
 //! Page Size: 256 bytes (64 words).
 //! Sector Size: 512 bytes (2 pages).
 //! Base Address: 0x0800_0000 (up to 128 KB).
-//! Bootloader Protected Region: 0x0800_0000..0x0800_2800 (10 KB).
+//! Bootloader Protected Region: `0x0800_0000..FIRMWARE_MIN_ADDR`
+//! (10 KB on UV-K1/K5v3, 8 KB on UV-K10 Pro).
 //!
 //! Erase and program sequences execute from `.data.ramfunc` (SRAM) with IRQs
 //! masked so AHB instruction fetches never stall or HardFault the active bank.
@@ -12,7 +13,11 @@ use pac::flash::*;
 
 pub const FLASH_PAGE_SIZE: usize = 256;
 pub const FLASH_BASE_ADDR: u32 = 0x0800_0000;
-pub const FIRMWARE_MIN_ADDR: u32 = 0x0800_2800;
+pub const FIRMWARE_MIN_ADDR: u32 = if cfg!(feature = "target_k10pro") {
+    0x0800_2000
+} else {
+    0x0800_2800
+};
 pub const FLASH_END_ADDR: u32 = 0x0802_0000;
 const FLASH_WAIT_TIMEOUT: u32 = 250_000;
 
@@ -184,19 +189,40 @@ impl InternalFlash {
     /// Reads raw 32-bit `FLASH_OPTR` register from Flash controller.
     #[inline(always)]
     pub fn raw_optr() -> u32 {
-        unsafe { pac::flash::FLASH_OPTR.read_volatile() }
+        #[cfg(all(not(test), target_arch = "arm"))]
+        {
+            unsafe { pac::flash::FLASH_OPTR.read_volatile() }
+        }
+        #[cfg(not(all(not(test), target_arch = "arm")))]
+        {
+            pac::flash::FLASH_OPTR_RDP_LEVEL_0 as u32
+        }
     }
 
     /// Reads raw 32-bit `FLASH_WRPR` write protection register.
     #[inline(always)]
     pub fn raw_wrpr() -> u32 {
-        unsafe { pac::flash::FLASH_WRPR.read_volatile() }
+        #[cfg(all(not(test), target_arch = "arm"))]
+        {
+            unsafe { pac::flash::FLASH_WRPR.read_volatile() }
+        }
+        #[cfg(not(all(not(test), target_arch = "arm")))]
+        {
+            0
+        }
     }
 
     /// Reads raw 32-bit `FLASH_BORCR` brown-out reset configuration register.
     #[inline(always)]
     pub fn raw_borcr() -> u32 {
-        unsafe { pac::flash::FLASH_BORCR.read_volatile() }
+        #[cfg(all(not(test), target_arch = "arm"))]
+        {
+            unsafe { pac::flash::FLASH_BORCR.read_volatile() }
+        }
+        #[cfg(not(all(not(test), target_arch = "arm")))]
+        {
+            0
+        }
     }
 
     /// Reads the raw 8-bit Flash Read Protection (RDP) byte from `FLASH_OPTR` (0xAA = Level 0 / Open, 0x55 = Level 1 / Locked).

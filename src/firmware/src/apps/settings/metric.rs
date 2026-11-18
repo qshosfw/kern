@@ -15,48 +15,15 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
     #[allow(unreachable_patterns)]
     let (val, dec, unit) = match id {
         // 1. Direct string & buffer metrics that format directly into `out` and return:
-        MetricId::BatteryStatus
-        | MetricId::SystemFirmware
-        | MetricId::SystemBootloader
-        | MetricId::DeviceOwner
-        | MetricId::DeviceTag => {
+        MetricId::BatteryStatus | MetricId::DeviceOwner | MetricId::DeviceTag => {
             let s = match id {
                 MetricId::BatteryStatus => {
-                    if ctx.power.is_charging {
-                        "Charging"
-                    } else {
-                        "Discharging"
-                    }
+                    utils::format::nth_cstr(b"Discharging\0Charging\0", ctx.power.is_charging as u8)
                 }
-                MetricId::SystemFirmware => crate::build_info::BUILD_STAMP,
-                MetricId::SystemBootloader => bsp::uid::bootloader_version_str(),
                 MetricId::DeviceOwner => ctx.config.system.owner_str(),
                 _ => ctx.config.system.tag_str(),
             };
             out.set_str(s);
-            return;
-        }
-        MetricId::SystemSerial => {
-            let serial = bsp::uid::get_crockford_serial();
-            let s = utils::format::ascii_str(&serial[..14]).unwrap_or("None");
-            out.set_str(s);
-            return;
-        }
-        MetricId::SystemQs1Serial => {
-            out.set_str(bsp::uid::factory_cert_status().as_str());
-            return;
-        }
-        MetricId::SystemMac => {
-            let mac = bsp::uid::read_mac_address();
-            let arr = unsafe { &mut *(out.bytes.as_mut_ptr() as *mut [u8; 17]) };
-            let _ = utils::format::format_mac_address(&mac, arr);
-            out.len = 17;
-            return;
-        }
-        MetricId::SystemUptime => {
-            let arr = unsafe { &mut *(out.bytes.as_mut_ptr() as *mut [u8; 8]) };
-            let _ = utils::format::format_uptime_hms(ctx.power.uptime_secs, arr);
-            out.len = 8;
             return;
         }
         #[cfg(feature = "settings_calib")]
@@ -131,7 +98,6 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
             }
         }
 
-        MetricId::SystemFlashSize => (py32_hal::uid::SystemInfo::flash_size_kb() as i32, 0, " KB"),
         MetricId::DeviceRadioId => (ctx.config.system.radio_id as i32, 0, ""),
 
         #[cfg(feature = "settings_calib")]
@@ -159,13 +125,10 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         ),
         #[cfg(feature = "settings_debug")]
         MetricId::DebugCrashes => {
-            #[cfg(feature = "flight_recorder")]
             let c = crate::panic::BOOT_RECORD
                 .get()
                 .latest_valid_slot()
                 .map_or(0, |s| s.crash_count as i32);
-            #[cfg(not(feature = "flight_recorder"))]
-            let c = 0;
             (c, 0, "")
         }
         _ => return,

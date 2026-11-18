@@ -4,22 +4,20 @@
 //! execution structures for static firmware apps and installable application bundles.
 
 pub mod abi;
-pub mod declare;
+pub mod fault;
 pub mod krx;
 pub mod lease;
 pub mod ledger;
 pub mod memory;
 pub mod paged;
-pub mod primitives;
 pub mod reloc;
 pub mod service_registry;
 pub mod status_tray;
-#[cfg(feature = "krx_vm")]
-pub mod vm;
 
 pub use crate::boot::{BOOT_RECORD_IDENT, BootRecord, BootSlot, ResetReason};
 pub use crate::mem::{CellSlab, SlabCell};
 pub use abi::*;
+pub use fault::{AppFault, Exception, KRX_FAULT_SENTINEL};
 pub use krx::{
     BOOT_IDENT, CALIB_IDENT, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, KERNFS_IDENT,
     KRX_IDENT, KRX_PCB_IDENT, KrxClass, KrxExecType, KrxIndexEntry, KrxPreamble, KrxProfile,
@@ -33,12 +31,9 @@ pub use paged::{
     BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_PINNED, BLOCK_FLAG_RT, CacheSlotMeta, FixedWindowCache,
     PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
 };
-pub use primitives::*;
 pub use reloc::{RelocError, apply_relocs};
 pub use service_registry::{MAX_REGISTERED_SERVICES, ServiceEntry, ServiceRegistry};
 pub use status_tray::StatusTray;
-#[cfg(feature = "krx_vm")]
-pub use vm::{Kvm16, VmError, VmStatus};
 
 use crate::caps::CapabilitySet;
 
@@ -53,8 +48,6 @@ pub enum ExecType {
     StaticFirmware,
     /// Native relocatable ELF/KRX executable loaded in flash
     RelocatableNative,
-    /// Sandboxed bytecode or interpreted applet
-    SandboxedBytecode,
 }
 
 /// Process Lifecycle State (§12.3 / KRX-ABI 2.5.0)
@@ -89,34 +82,36 @@ impl ProcState {
 /// Process Control Block (PCB)
 ///
 /// Designed with fixed geometry and packed fields to fit within minimal SRAM footprint.
+/// Hot `u8`/`u16` scalar fields sit at offsets `0..16` for single-instruction Thumb-1 `imm5` access.
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Pcb {
-    /// Ident verification tag (FourCC 'C0DE')
-    pub ident: u16,
     /// Process ID
     pub pid: Pid,
-    /// Human-readable process name
-    pub name: heapless::String<16>,
-    /// Associated App ID in AppRegistry or VTable catalog
-    pub app_id: usize,
     /// Current execution state
     pub state: ProcState,
     /// Execution priority band
     pub priority: crate::sched::Priority,
     /// Execution classification
     pub exec_type: ExecType,
-    /// Capability set granted to process
-    pub caps: CapabilitySet,
+    /// Restart attempts budget remaining before hard quarantine
+    pub restart_budget: u8,
+    /// Ident verification tag (FourCC 'C0DE')
+    pub ident: u16,
     /// Static or dynamic memory usage watermark
     pub mem_bytes: u16,
     /// Size of hibernated compressed swap payload (0 when resident)
     pub compressed_bytes: u16,
-    /// Restart attempts budget remaining before hard quarantine
-    pub restart_budget: u8,
     /// Measured peak stack cost (in bytes)
     pub stack_cost: u16,
+    /// Associated App ID in AppRegistry or VTable catalog
+    pub app_id: usize,
+    /// Capability set granted to process
+    pub caps: CapabilitySet,
     /// Resource telemetry ledger
     pub ledger: ResourceLedger,
+    /// Human-readable process name
+    pub name: heapless::String<16>,
 }
 
 pub const PCB_IDENT: u16 = 0x06F9;
@@ -226,14 +221,10 @@ impl<const N: usize> ProcessTable<N> {
             core::ptr::write_bytes(ptr, 0, 1);
             let tbl = &mut *ptr;
             tbl.next_pid = 1;
-            let mut i = 0;
-            while i < N {
-                tbl.slots[i].ident = PCB_IDENT;
-                tbl.slots[i].state = ProcState::Dormant;
-                tbl.slots[i].priority = crate::sched::Priority::Ui;
-                tbl.slots[i].exec_type = ExecType::StaticFirmware;
-                tbl.slots[i].restart_budget = 3;
-                i += 1;
+            for slot in &mut tbl.slots {
+                slot.ident = PCB_IDENT;
+                slot.priority = crate::sched::Priority::Ui;
+                slot.restart_budget = 3;
             }
         }
     }
@@ -301,68 +292,67 @@ impl<const N: usize> ProcessTable<N> {
         self.spawn_inner(name, app_id, priority, exec_type, caps, true)
     }
 
-    /// Locate PCB by Pid.
-    pub fn find(&self, pid: Pid) -> Option<&Pcb> {
-        for p in &self.slots {
-            if p.pid == pid && p.state != ProcState::Dormant {
-                return Some(p);
+    #[inline(never)]
+    fn find_idx(&self, by_app: bool, id: usize) -> Option<usize> {
+        for (i, p) in self.slots.iter().enumerate() {
+            let hit = if by_app {
+                p.app_id == id
+            } else {
+                p.pid.0 as usize == id
+            };
+            if hit && p.state != ProcState::Dormant {
+                return Some(i);
             }
         }
         None
+    }
+
+    #[inline(never)]
+    fn find_idx_name(&self, name: &str) -> Option<usize> {
+        for (i, p) in self.slots.iter().enumerate() {
+            if p.state != ProcState::Dormant
+                && utils::format::ascii_eq_ignore_case(p.name.as_str(), name)
+            {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Locate PCB by Pid.
+    pub fn find(&self, pid: Pid) -> Option<&Pcb> {
+        self.find_idx(false, pid.0 as usize)
+            .map(|i| unsafe { self.slots.get_unchecked(i) })
     }
 
     /// Locate mutable PCB by Pid.
     pub fn find_mut(&mut self, pid: Pid) -> Option<&mut Pcb> {
-        for p in &mut self.slots {
-            if p.pid == pid && p.state != ProcState::Dormant {
-                return Some(p);
-            }
-        }
-        None
+        self.find_idx(false, pid.0 as usize)
+            .map(|i| unsafe { self.slots.get_unchecked_mut(i) })
     }
 
     /// Locate PCB by app_id.
     pub fn find_by_app(&self, app_id: usize) -> Option<&Pcb> {
-        for p in &self.slots {
-            if p.app_id == app_id && p.state != ProcState::Dormant {
-                return Some(p);
-            }
-        }
-        None
+        self.find_idx(true, app_id)
+            .map(|i| unsafe { self.slots.get_unchecked(i) })
     }
 
     /// Locate mutable PCB by app_id.
     pub fn find_mut_by_app(&mut self, app_id: usize) -> Option<&mut Pcb> {
-        for p in &mut self.slots {
-            if p.app_id == app_id && p.state != ProcState::Dormant {
-                return Some(p);
-            }
-        }
-        None
+        self.find_idx(true, app_id)
+            .map(|i| unsafe { self.slots.get_unchecked_mut(i) })
     }
 
     /// Locate PCB by process name (case-insensitive ASCII match).
     pub fn find_by_name(&self, name: &str) -> Option<&Pcb> {
-        for p in &self.slots {
-            if p.state != ProcState::Dormant
-                && utils::format::ascii_eq_ignore_case(p.name.as_str(), name)
-            {
-                return Some(p);
-            }
-        }
-        None
+        self.find_idx_name(name)
+            .map(|i| unsafe { self.slots.get_unchecked(i) })
     }
 
     /// Locate mutable PCB by process name (case-insensitive ASCII match).
     pub fn find_mut_by_name(&mut self, name: &str) -> Option<&mut Pcb> {
-        for p in &mut self.slots {
-            if p.state != ProcState::Dormant
-                && utils::format::ascii_eq_ignore_case(p.name.as_str(), name)
-            {
-                return Some(p);
-            }
-        }
-        None
+        self.find_idx_name(name)
+            .map(|i| unsafe { self.slots.get_unchecked_mut(i) })
     }
 
     /// Terminate process and recycle slot.

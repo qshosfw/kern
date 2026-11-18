@@ -23,15 +23,24 @@ pub struct BootHardware<'a, 'b> {
     pub usb: &'a mut drivers::usb::UsbDriver,
 }
 
+#[cfg(not(all(target_arch = "arm", not(test))))]
+static TEST_BACKUP_TAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 #[inline(never)]
 pub fn read_backup_tag() -> kernel::boot::BackupCrashTag {
-    kernel::boot::BackupCrashTag::decode(py32_hal::rtc::RealTimeClock::read_alarm_raw())
-        .unwrap_or(kernel::boot::BackupCrashTag::empty())
+    #[cfg(all(target_arch = "arm", not(test)))]
+    let raw = py32_hal::rtc::RealTimeClock::read_alarm_raw();
+    #[cfg(not(all(target_arch = "arm", not(test))))]
+    let raw = TEST_BACKUP_TAG.load(core::sync::atomic::Ordering::Relaxed);
+    kernel::boot::BackupCrashTag::decode(raw).unwrap_or(kernel::boot::BackupCrashTag::empty())
 }
 
 #[inline(never)]
 pub fn write_backup_tag(tag: kernel::boot::BackupCrashTag) {
+    #[cfg(all(target_arch = "arm", not(test)))]
     py32_hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
+    #[cfg(not(all(target_arch = "arm", not(test))))]
+    TEST_BACKUP_TAG.store(tag.encode(), core::sync::atomic::Ordering::Relaxed);
 }
 
 pub fn check_reset_cause() {
@@ -180,8 +189,6 @@ pub fn run_boot_splash(
     init_system_services(hw, master_cfg, passcode_state, adc);
 
     if !show_splash && !play_jingle {
-        hw.lcd.turn_on();
-        hw.backlight.wake();
         return;
     }
 
@@ -222,9 +229,11 @@ pub fn run_boot_splash(
         &*(slice.as_ptr() as *const [u8; 1024])
     };
 
-    // Immediately illuminate display and wake backlight — zero black-screen lag!
-    hw.lcd.turn_on();
-    hw.backlight.wake();
+    // Immediately illuminate display and wake backlight when splash is visible — zero black-screen lag!
+    if show_splash {
+        hw.lcd.turn_on();
+        hw.backlight.wake();
+    }
 
     let mut note_idx = 0usize;
     let mut note_end_ms = 0u32;
@@ -291,6 +300,23 @@ pub fn run_boot_splash(
     }
 }
 
+#[cfg(all(feature = "filesystem", feature = "krx_native"))]
+#[inline(never)]
+fn launch_crash_module(hw: &mut BootHardware, mode: usize) -> bool {
+    hw.lcd.turn_on();
+    hw.backlight.wake();
+    bsp::set_status_led(bsp::StatusLed::Orange);
+    let launched = crate::runtime::loader::try_launch_boot_module(
+        hw.lcd,
+        hw.filesystem,
+        "/apps/panic.mod",
+        mode,
+    )
+    .is_ok();
+    bsp::set_status_led(bsp::StatusLed::Off);
+    launched
+}
+
 #[inline(never)]
 fn boot_stage_security_check(
     hw: &mut BootHardware,
@@ -299,6 +325,9 @@ fn boot_stage_security_check(
     adc: &Adc,
 ) {
     let _ = (&hw, &master_cfg, &passcode_state, adc);
+    #[cfg(feature = "filesystem")]
+    super::flush_crash_log_if_pending(hw.filesystem);
+
     let crash_slot = crate::panic::BOOT_RECORD.get().latest_valid_slot().copied();
     let backup_strikes = read_backup_tag().strikes;
     let crash_count = crash_slot
@@ -307,14 +336,13 @@ fn boot_stage_security_check(
         .max(backup_strikes);
 
     if crash_count >= 2 {
-        #[cfg(feature = "panic_gui")]
-        if let Some(ref slot) = crash_slot {
-            super::recovery::run_safe_mode_recovery(hw, slot, master_cfg);
-        } else {
-            let fallback = kernel::boot::BootSlot::empty();
-            super::recovery::run_safe_mode_recovery(hw, &fallback, master_cfg);
+        #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+        {
+            hw.lcd.set_contrast(50);
+            if launch_crash_module(hw, 2) {
+                master_cfg.load_into(hw.filesystem);
+            }
         }
-        #[cfg(not(feature = "panic_gui"))]
         super::clear_crash_strikes();
         return;
     }
@@ -387,9 +415,19 @@ pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
     // ── STAGE 3: Instant Boot Splash & Concurrent System Bring-up ───
     run_boot_splash(hw, master_cfg, passcode_state, &adc);
 
-    // ── STAGE 4: Post-Boot Recovery Prompt (System Alerts Wait for Launcher) ───
-    #[cfg(feature = "crash_dialog")]
-    super::show_crash_dialog_if_needed(hw);
+    // ── STAGE 4: Post-Boot Recovery Prompt (Offloaded to /apps/panic.mod) ───
+    #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+    {
+        let crash_slot = crate::panic::BOOT_RECORD.get().latest_valid_slot();
+        if crash_slot.is_some_and(|s| s.crash_count > 0 && s.is_crash()) {
+            use crate::services::radio::RadioMelodyExt;
+            hw.radio
+                .play_beep(crate::services::melody::BeepType::Warning);
+            hw.key_scanner.clear();
+            let _ = launch_crash_module(hw, 1);
+            hw.key_scanner.clear();
+        }
+    }
 
     #[cfg(feature = "usb")]
     if hw.usb.is_connected() || hw.usb.consecutive_sof() > 0 {

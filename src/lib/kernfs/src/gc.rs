@@ -308,56 +308,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     #[inline(never)]
-    pub(crate) fn write_fresh_extent_tree(&mut self, data: &[u8]) -> Result<(), FsError> {
-        if data.len() > 8 * INDEX_PTRS_PER_PAGE * PAGE_SIZE {
-            return Err(FsError::CapacityFull);
-        }
-        let ino = self.cur_inode.ino;
-        let direct = data.len() <= 8 * PAGE_SIZE;
-        self.cur_inode.depth = if direct {
-            DEPTH_DIRECT
-        } else {
-            DEPTH_SINGLE_INDIRECT
-        };
-        let mut l1_uninit = core::mem::MaybeUninit::<[u8; PAGE_SIZE]>::uninit();
-        let l1 = unsafe { &mut *l1_uninit.as_mut_ptr() };
-        let mut lp = 0usize;
-        while (lp << 8) < data.len() {
-            if !direct && (lp & 0x7F) == 0 {
-                l1.fill(0);
-            }
-            let p = self.alloc_page(true)?;
-            let start = lp << 8;
-            let rem = data.len() - start;
-            let len = rem.min(PAGE_SIZE);
-            self.page_buf.fill(0);
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(start),
-                    self.page_buf.as_mut_ptr(),
-                    len,
-                );
-            }
-            self.program_page_buf(p, ino, lp as u16, TAG_KIND_DATA)?;
-            if direct {
-                self.cur_inode.set_l1_page(lp, p);
-            } else {
-                let slot = lp & 0x7F;
-                write_idx_u16(l1, slot, p);
-                if slot == 0x7F || rem <= PAGE_SIZE {
-                    let l2_i = lp >> 7;
-                    let l1_p = self.alloc_page(true)?;
-                    self.page_buf.copy_from_slice(l1);
-                    self.program_page_buf(l1_p, ino, l2_i as u16, TAG_KIND_INDEX1)?;
-                    self.cur_inode.set_l1_page(l2_i, l1_p);
-                }
-            }
-            lp += 1;
-        }
-        Ok(())
-    }
-
-    #[inline(never)]
     pub(crate) fn write_pages_at(
         &mut self,
         offset: usize,
@@ -380,14 +330,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             self.cur_inode.depth = DEPTH_DIRECT;
         }
 
+        let cap = ring_cap.unwrap_or(0);
         let mut pos = 0usize;
-        let total_cap = ring_cap.unwrap_or(usize::MAX);
         while pos < data.len() {
-            let abs_pos = if let Some(cap) = ring_cap {
-                (offset + pos) % cap
-            } else {
-                offset + pos
-            };
+            let mut abs_pos = offset + pos;
+            if cap != 0 && abs_pos >= cap {
+                abs_pos %= cap;
+            }
             let lpage = (abs_pos >> 8) as u16;
             if (lpage as usize) >= 8 * INDEX_PTRS_PER_PAGE {
                 return Err(FsError::CapacityFull);
@@ -407,10 +356,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             }
             self.program_page_buf(new_p, ino, lpage, TAG_KIND_DATA)?;
             let new_end = (abs_pos + chunk) as u32;
-            if ring_cap.is_none() && new_end > self.cur_inode.size {
-                self.cur_inode.size = new_end;
-            } else if ring_cap.is_some() {
-                self.cur_inode.size = self.cur_inode.size.max(new_end).min(total_cap as u32);
+            if cap == 0 {
+                if new_end > self.cur_inode.size {
+                    self.cur_inode.size = new_end;
+                }
+            } else {
+                self.cur_inode.size = self.cur_inode.size.max(new_end).min(cap as u32);
             }
             self.cow_update_data_ptr(lpage, new_p)?;
             pos += chunk;
@@ -585,10 +536,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.commit_cur_inode(&[])
     }
 
-    pub fn list_dir<F: FnMut(&str, usize, u8, bool)>(
+    #[inline(never)]
+    fn list_dir_dyn(
         &mut self,
         dir_path: &str,
-        mut cb: F,
+        cb: &mut dyn FnMut(&str, usize, u8, bool),
     ) -> Result<usize, FsError> {
         let dir_ino = if dir_path == "/" {
             if !self.mounted {
@@ -603,8 +555,16 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 Err(e) => return Err(e),
             }
         };
-        let count = self.scan_meta(crate::fs::MetaQuery::ListDir(dir_ino), Some(&mut cb))?;
+        let count = self.scan_meta(crate::fs::MetaQuery::ListDir(dir_ino), Some(cb))?;
         Ok(count as usize)
+    }
+
+    pub fn list_dir<F: FnMut(&str, usize, u8, bool)>(
+        &mut self,
+        dir_path: &str,
+        mut cb: F,
+    ) -> Result<usize, FsError> {
+        self.list_dir_dyn(dir_path, &mut cb)
     }
 
     /// Detect whether blocks 0..16 contain any legacy KernFS v1 headers.

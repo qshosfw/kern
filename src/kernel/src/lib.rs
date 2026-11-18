@@ -15,6 +15,7 @@
 
 #![no_std]
 
+pub mod abi;
 pub mod app;
 pub mod boot;
 pub mod canvas;

@@ -29,8 +29,6 @@ pub const TAG_FORMAT_KEEP_CALIB: u8 = 16;
 pub const TAG_FORMAT_WIPE_ALL: u8 = 17;
 pub const TAG_RESET_SETTINGS: u8 = 20;
 pub const TAG_REBOOT_FW: u8 = 21;
-#[cfg(feature = "filesystem")]
-pub const TAG_DELETE_PACKAGE: u8 = 22;
 pub const TAG_SHORTCUT_SHEET: u8 = 23;
 
 pub fn parse_u32_digits(s: &str) -> Option<u32> {
@@ -105,9 +103,13 @@ struct DestructiveConfirm {
     action: ActionId,
     tag: u8,
     hold_ds: u8,
-    title: &'static str,
-    message: &'static str,
 }
+
+static DESTRUCTIVE_STRS: &[u8] = b"\
+Format Storage?\0Wipes user files & settings.\nCalib is kept.\0\
+Erase All Data?\0Wipes ALL files, settings\n& radio calibration!\0\
+Reset Settings?\0Restores default config.\nChannels & calib kept.\0\
+Restart Radio?\0Save & restart into Kern.\0";
 
 static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
     #[cfg(feature = "filesystem")]
@@ -115,32 +117,29 @@ static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
         action: ActionId::FormatKeepCalib,
         tag: TAG_FORMAT_KEEP_CALIB,
         hold_ds: 15,
-        title: "Format Storage?",
-        message: "Wipes user files & settings.\nCalib is kept.",
     },
     #[cfg(feature = "filesystem")]
     DestructiveConfirm {
         action: ActionId::FormatWipeAll,
         tag: TAG_FORMAT_WIPE_ALL,
         hold_ds: 20,
-        title: "Erase All Data?",
-        message: "Wipes ALL files, settings\n& radio calibration!",
     },
     DestructiveConfirm {
         action: ActionId::ResetSettings,
         tag: TAG_RESET_SETTINGS,
         hold_ds: 15,
-        title: "Reset Settings?",
-        message: "Restores default config.\nChannels & calib kept.",
     },
     DestructiveConfirm {
         action: ActionId::RebootFirmware,
         tag: TAG_REBOOT_FW,
         hold_ds: 8,
-        title: "Restart Radio?",
-        message: "Save & restart into Kern.",
     },
 ];
+
+#[inline(never)]
+pub(super) fn info_popup(ctx: &mut SysContext, title: &str, msg: &str) {
+    ctx.show_popup(TAG_POPUP_INFO, title, msg);
+}
 
 #[inline(never)]
 pub fn show_radio_sheet(
@@ -176,9 +175,21 @@ pub fn show_destructive_hold_confirm(
 
 #[inline(never)]
 pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
-    for spec in DESTRUCTIVE_CONFIRMS {
+    for (i, spec) in DESTRUCTIVE_CONFIRMS.iter().enumerate() {
         if spec.action == action_id {
-            show_destructive_hold_confirm(ctx, spec.tag, spec.title, spec.message, spec.hold_ds);
+            let base = if cfg!(feature = "filesystem") {
+                i
+            } else {
+                i + 2
+            } as u8
+                * 2;
+            show_destructive_hold_confirm(
+                ctx,
+                spec.tag,
+                utils::format::nth_cstr(DESTRUCTIVE_STRS, base),
+                utils::format::nth_cstr(DESTRUCTIVE_STRS, base + 1),
+                spec.hold_ds,
+            );
             return;
         }
     }
@@ -238,40 +249,15 @@ pub fn handle_sheet_selected(
         TAG_SHORTCUT_SHEET => {
             let slot = app.selected_idx.saturating_sub(1);
             if let Some(target_id) = crate::apps::shortcut::picker_target_at(idx) {
-                if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
-                    if app.shortcut_ctx == 0 {
-                        if ctx.config.keys.actions[slot] != target_id {
-                            ctx.config.keys.actions[slot] = target_id;
-                            ctx.config.mark_keys_dirty();
-                        }
-                    } else {
-                        let cur_ctx = app.shortcut_ctx;
-                        let is_default = ctx.config.keys.actions[slot] == target_id;
-                        let mut done = false;
-                        for r in &mut ctx.config.keys.ctx_rules {
-                            if r.ctx == cur_ctx && r.slot as usize == slot {
-                                r.ctx = if is_default { 0 } else { cur_ctx };
-                                r.action = if is_default { 0 } else { target_id };
-                                done = true;
-                                break;
-                            }
-                        }
-                        if !done && !is_default {
-                            if let Some(free) =
-                                ctx.config.keys.ctx_rules.iter_mut().find(|r| r.ctx == 0)
-                            {
-                                free.slot = slot as u8;
-                                free.ctx = cur_ctx;
-                                free.action = target_id;
-                                done = true;
-                            } else {
-                                ctx.show_popup(TAG_POPUP_INFO, "Context Rules", "Max 3 overrides");
-                            }
-                        }
-                        if done {
-                            ctx.config.mark_keys_dirty();
-                        }
-                    }
+                match crate::apps::shortcut::assign_rule(
+                    &mut ctx.config.keys,
+                    app.shortcut_ctx,
+                    slot,
+                    target_id,
+                ) {
+                    1 => ctx.config.mark_keys_dirty(),
+                    2 => info_popup(ctx, "Context Rules", "Max 3 overrides"),
+                    _ => {}
                 }
             }
         }
@@ -347,6 +333,7 @@ pub fn handle_text_input_done(
     EventResult::Consumed
 }
 
+#[inline(never)]
 fn reset_config_to_defaults(ctx: &mut SysContext) {
     unsafe {
         crate::config::MasterConfig::init_in_place(ctx.config);
@@ -362,7 +349,7 @@ pub fn handle_confirm_result(
     ctx: &mut SysContext,
     tag: u8,
 ) -> EventResult {
-    match tag {
+    let (title, msg) = match tag {
         #[cfg(feature = "filesystem")]
         TAG_FORMAT_KEEP_CALIB | TAG_FORMAT_WIPE_ALL => {
             let keep = tag == TAG_FORMAT_KEEP_CALIB;
@@ -375,16 +362,17 @@ pub fn handle_confirm_result(
             {
                 reset_config_to_defaults(ctx);
                 app.flush_and_refresh(ctx);
-                let msg = if keep {
-                    "Formatted (Calib Kept)"
-                } else {
-                    "Full Wipe Complete"
-                };
-                ctx.show_popup(TAG_POPUP_INFO, "Storage", msg);
+                (
+                    "Storage",
+                    if keep {
+                        "Formatted (Calib Kept)"
+                    } else {
+                        "Full Wipe Complete"
+                    },
+                )
             } else {
-                ctx.show_popup(TAG_POPUP_INFO, "Storage", "Format Failed");
+                ("Storage", "Format Failed")
             }
-            EventResult::Consumed
         }
         TAG_RESET_SETTINGS => {
             reset_config_to_defaults(ctx);
@@ -395,18 +383,14 @@ pub fn handle_confirm_result(
             ctx.power.load_battery_config(&ctx.config.battery);
             ctx.config.hw_dirty = 0x3F;
             app.populate_current_menu(ctx);
-            ctx.show_popup(TAG_POPUP_INFO, "System", "Settings Reset");
-            EventResult::Consumed
+            ("System", "Settings Reset")
         }
         TAG_REBOOT_FW => {
             let _ = ctx.flush_config();
             kernel::power::PowerControl::reboot();
         }
-        #[cfg(feature = "filesystem")]
-        TAG_DELETE_PACKAGE => {
-            super::apps::delete_selected_package(app, ctx);
-            EventResult::Consumed
-        }
-        _ => EventResult::Ignored,
-    }
+        _ => return EventResult::Ignored,
+    };
+    info_popup(ctx, title, msg);
+    EventResult::Consumed
 }

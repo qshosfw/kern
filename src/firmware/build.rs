@@ -6,14 +6,26 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
+    let is_k10pro = env::var_os("CARGO_FEATURE_TARGET_K10PRO").is_some();
+    let (flash_origin, flash_len, target_label) = if is_k10pro {
+        ("0x08002000", "120K", "UV-K10 Pro / PY32")
+    } else {
+        ("0x08002800", "118K", "UV-K1 / PY32")
+    };
+    let memory_x = format!(
+        "MEMORY\n{{\n  FLASH (rx) : ORIGIN = {}, LENGTH = {}\n  RAM (rwx)  : ORIGIN = 0x20000000, LENGTH = 16K\n}}\n",
+        flash_origin, flash_len
+    );
+
     // Put `memory.x` in our output directory and ensure it's
     // on the linker search path.
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
     File::create(out.join("memory.x"))
         .unwrap()
-        .write_all(include_bytes!("memory.x"))
+        .write_all(memory_x.as_bytes())
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_TARGET_K10PRO");
     println!("cargo:rerun-if-changed=memory.x");
 
     // Capture Git commit hash
@@ -32,6 +44,22 @@ fn main() {
         })
         .unwrap_or_else(|| "release".to_string());
 
+    let git_branch = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                String::from_utf8(out.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "head".to_string());
+
     let git_dirty = Command::new("git")
         .args(["status", "--porcelain"])
         .output()
@@ -43,6 +71,16 @@ fn main() {
         format!("{}-mod", git_hash)
     } else {
         git_hash
+    };
+
+    const MAX_REF_LEN: usize = 21;
+    let suffix_len = 1 + full_hash.len();
+    let branch_max = MAX_REF_LEN.saturating_sub(suffix_len);
+    let git_ref = if branch_max > 0 {
+        let b_trunc: String = git_branch.chars().take(branch_max).collect();
+        format!("{}-{}", b_trunc, full_hash)
+    } else {
+        full_hash.chars().take(MAX_REF_LEN).collect()
     };
 
     // Calculate UTC Date and Time without external dependencies
@@ -98,15 +136,17 @@ fn main() {
         };
 
     println!("cargo:rustc-env=KERN_GIT_HASH={}", full_hash);
+    println!("cargo:rustc-env=KERN_GIT_REF={}", git_ref);
     println!("cargo:rustc-env=KERN_BUILD_EPOCH={}", now);
     println!("cargo:rustc-env=KERN_BUILD_DATE={}", date_str);
     println!("cargo:rustc-env=KERN_BUILD_TIME={}", time_str);
     println!("cargo:rustc-env=KERN_BUILD_STAMP={}", stamp_display);
     println!(
-        "cargo:rustc-env=KERN_ABOUT_TEXT=KERN OS v{}\nBuild: {}\nGit: {}\nTarget: UV-K1 / PY32",
+        "cargo:rustc-env=KERN_ABOUT_TEXT=KERN OS v{}\nBuild: {}\nGit: {}\nTarget: {}",
         env!("CARGO_PKG_VERSION"),
         date_str,
-        full_hash
+        full_hash,
+        target_label
     );
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=.git/HEAD");

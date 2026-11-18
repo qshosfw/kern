@@ -1,62 +1,60 @@
-use kern_platform_traits::{gpio::OutputPin, spi::SpiDevice};
+use bsp::board::{Py32OutputPin, Py32Spi1};
+use bsp::pins::{LCD_A0, LCD_CS};
+use core::marker::PhantomData;
+use kern_platform_traits::spi::SpiDevice;
 use kernel::canvas::Canvas;
 
 pub const LCD_WIDTH: usize = 128;
 pub const LCD_HEIGHT: usize = 64;
 
 pub struct St7565<'a> {
-    spi: &'a mut dyn SpiDevice,
-    cs: &'a mut dyn OutputPin,
-    a0: &'a mut dyn OutputPin,
     pub subframe: u8,
     pub motion_bypass: bool,
     pub shading_mode: u8,
+    _lt: PhantomData<&'a mut ()>,
 }
 
 impl<'a> St7565<'a> {
     pub fn new(
-        spi: &'a mut dyn SpiDevice,
-        cs: &'a mut dyn OutputPin,
-        a0: &'a mut dyn OutputPin,
+        _spi: &'a mut Py32Spi1,
+        _cs: &'a mut Py32OutputPin,
+        _a0: &'a mut Py32OutputPin,
     ) -> Self {
         Self {
-            spi,
-            cs,
-            a0,
             subframe: 0,
             motion_bypass: false,
             shading_mode: 1,
+            _lt: PhantomData,
         }
     }
 
     #[inline(always)]
     fn write_cmd(&mut self, cmd: u8) {
-        self.a0.set_low();
-        self.spi.write_byte(cmd);
+        LCD_A0.set_low();
+        Py32Spi1.write_byte(cmd);
     }
 
     #[inline(always)]
     fn end_transfer(&mut self) {
-        self.spi.wait_idle();
-        self.cs.set_high();
+        Py32Spi1.wait_idle();
+        LCD_CS.set_high();
     }
 
     #[allow(dead_code)]
     #[inline(always)]
     fn write_data(&mut self, data: u8) {
-        self.a0.set_high();
-        self.spi.write_byte(data);
+        LCD_A0.set_high();
+        Py32Spi1.write_byte(data);
     }
 
     #[inline(never)]
     fn send_cmds(&mut self, cmds: &[u8]) {
-        self.cs.set_low();
-        self.a0.set_low();
+        LCD_CS.set_low();
+        LCD_A0.set_low();
         for &cmd in cmds {
-            self.spi.write_byte(cmd);
+            Py32Spi1.write_byte(cmd);
         }
-        self.spi.wait_idle();
-        self.cs.set_high();
+        self.end_transfer();
     }
 
     pub fn init(&mut self) {
@@ -153,39 +151,39 @@ impl<'a> St7565<'a> {
             return;
         }
 
-        self.cs.set_low();
+        LCD_CS.set_low();
         self.write_cmd(0x40); // Set start line 0
 
         for page in 0..8 {
             if (canvas.dirty & (1 << page)) != 0 {
                 // Select Page and Column (Offset 4 for K1 ST7565 panel)
-                self.a0.set_low();
+                LCD_A0.set_low();
                 const COL_OFFSET: u8 = 4;
-                self.spi.write_byte(0xB0 | (page as u8 & 0x0F));
-                self.spi.write_byte(0x10 | (COL_OFFSET >> 4));
-                self.spi.write_byte(COL_OFFSET & 0x0F);
+                Py32Spi1.write_byte(0xB0 | (page as u8 & 0x0F));
+                Py32Spi1.write_byte(0x10 | (COL_OFFSET >> 4));
+                Py32Spi1.write_byte(COL_OFFSET & 0x0F);
 
                 // Transmit 128 data bytes for this page
-                self.a0.set_high();
+                LCD_A0.set_high();
                 #[cfg(feature = "grayscale")]
                 if self.shading_mode == 0 {
                     for col in 0..LCD_WIDTH {
                         let byte = canvas.get_subframe_byte(page, col, subframe);
-                        self.spi.write_byte(byte);
+                        Py32Spi1.write_byte(byte);
                     }
                 } else if self.shading_mode == 1 {
                     for col in 0..LCD_WIDTH {
                         let byte = canvas.get_dither_byte(page, col);
-                        self.spi.write_byte(byte);
+                        Py32Spi1.write_byte(byte);
                     }
                 } else {
                     for &byte in &canvas.buffer[page] {
-                        self.spi.write_byte(byte);
+                        Py32Spi1.write_byte(byte);
                     }
                 }
                 #[cfg(not(feature = "grayscale"))]
                 for &byte in &canvas.buffer[page] {
-                    self.spi.write_byte(byte);
+                    Py32Spi1.write_byte(byte);
                 }
             }
         }

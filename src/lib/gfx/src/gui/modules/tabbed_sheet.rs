@@ -152,27 +152,45 @@ impl TabbedSheetState {
     }
 }
 
-#[inline(always)]
-fn format_tab_title<'b>(title: &str, buf: &'b mut [u8; 16]) -> &'b str {
-    if title.is_empty() {
-        return "";
-    }
-    let bytes = title.as_bytes();
-    let len = bytes.len().min(buf.len());
-    let mut capitalize_next = true;
-    for i in 0..len {
-        let b = bytes[i];
-        if b == b' ' || b == b'-' || b == b'_' || b == b'/' {
-            buf[i] = b;
-            capitalize_next = true;
-        } else if capitalize_next {
-            buf[i] = b.to_ascii_uppercase();
-            capitalize_next = false;
-        } else {
-            buf[i] = b.to_ascii_lowercase();
+#[derive(Clone, Copy)]
+enum TabTitles<'a> {
+    Slice(&'a [&'a str]),
+    Packed(&'a [u8]),
+}
+
+impl<'a> TabTitles<'a> {
+    fn get(&self, idx: usize) -> &'a str {
+        match *self {
+            TabTitles::Slice(s) => s.get(idx).copied().unwrap_or(""),
+            TabTitles::Packed(p) => utils::format::nth_cstr(p, idx as u8),
         }
     }
-    utils::format::ascii_str(&buf[..len]).unwrap_or("")
+}
+
+#[inline(never)]
+fn draw_tab_pill(
+    canvas: &mut Canvas,
+    tx: u8,
+    ty: u8,
+    tw: u8,
+    pill_h: u8,
+    text_y: i16,
+    title: &str,
+) {
+    canvas.draw_horizontal_line(tx + 1, ty, tw.saturating_sub(2), Color::Fill);
+    canvas.draw_pixel(tx, ty, Color::Clear);
+    canvas.draw_pixel(tx + tw - 1, ty, Color::Clear);
+    canvas.draw_vertical_line(tx, ty + 1, pill_h, Color::Fill);
+    canvas.draw_vertical_line(tx + tw - 1, ty + 1, pill_h, Color::Fill);
+    text::draw_str_max_x(
+        canvas,
+        (tx + 4) as i16,
+        text_y,
+        title,
+        &FONT,
+        Color::Fill,
+        (tx + tw).saturating_sub(3) as i16,
+    );
 }
 
 pub struct TabbedSheet;
@@ -187,212 +205,181 @@ impl TabbedSheet {
     ) where
         F: FnOnce(&mut Canvas, usize, u8, u8, u8, u8, i8),
     {
+        let body_y = config.y + config.tab_height;
+        let body_h = config.h.saturating_sub(config.tab_height);
+        canvas.fill_rect(
+            config.x + 1,
+            body_y + 1,
+            config.w.saturating_sub(2),
+            body_h.saturating_sub(2),
+            Color::Clear,
+        );
+        let inner_h = body_h.saturating_sub(if config.bottom_border { 4 } else { 3 });
+        let anim_offset = if state.is_animating() {
+            (16 - state.anim.progress()) as i8 * state.slide_dir
+        } else {
+            0
+        };
+        render_content(
+            canvas,
+            state.selected_idx,
+            config.x + 2,
+            body_y + 2,
+            config.w.saturating_sub(4),
+            inner_h,
+            anim_offset,
+        );
+        Self::render_chrome(canvas, config, state, tab_titles);
+    }
+
+    /// Renders only the tab headers, borders, baseline, and overflow arrows without
+    /// clearing the container interior.
+    pub fn render_chrome(
+        canvas: &mut Canvas,
+        config: &TabbedSheetConfig,
+        state: &TabbedSheetState,
+        tab_titles: &[&str],
+    ) {
+        Self::render_chrome_impl(canvas, config, state, TabTitles::Slice(tab_titles));
+    }
+
+    /// Zero-alloc variant for NUL-delimited packed tab titles (e.g. C-ABI KRX modules).
+    pub fn render_chrome_packed(
+        canvas: &mut Canvas,
+        config: &TabbedSheetConfig,
+        selected_idx: usize,
+        tab_count: usize,
+        packed_titles: &[u8],
+    ) {
+        let state = TabbedSheetState {
+            selected_idx: selected_idx.min(tab_count.saturating_sub(1)),
+            prev_selected_idx: 0,
+            tab_count,
+            anim: crate::gui::animation::TransitionProgress::completed(4),
+            slide_dir: 0,
+        };
+        Self::render_chrome_impl(canvas, config, &state, TabTitles::Packed(packed_titles));
+    }
+
+    #[inline(never)]
+    fn render_chrome_impl(
+        canvas: &mut Canvas,
+        config: &TabbedSheetConfig,
+        state: &TabbedSheetState,
+        titles: TabTitles<'_>,
+    ) {
         let x = config.x;
         let y = config.y;
         let w = config.w;
         let h = config.h;
         let th = config.tab_height;
         let max_x = config.max_tab_x.min(x.saturating_add(w));
-        let count = state.tab_count.max(1);
+        let count = state.tab_count.max(1).min(8);
+        let sel = state.selected_idx.min(count - 1);
 
-        let pad_left = 4u8;
-        let pad_right = 4u8;
-        let tab_gap = 2u8;
-
-        // 1. Measure tabs and format titles
-        let mut tab_widths = [0u8; 8];
-        let mut formatted_titles: [[u8; 16]; 8] = [[0u8; 16]; 8];
-
-        for i in 0..count.min(8) {
-            let raw = tab_titles.get(i).copied().unwrap_or("");
-            let formatted = format_tab_title(raw, &mut formatted_titles[i]);
-            let text_w = text::str_width(formatted, &FONT) as u8;
-            tab_widths[i] = (text_w + pad_left + pad_right).max(12);
+        let mut tab_w = [0u8; 8];
+        for (i, slot) in tab_w[..count].iter_mut().enumerate() {
+            let tw = text::str_width(titles.get(i), &FONT) as u8;
+            *slot = (tw + 8).max(12);
         }
 
-        // 2. Compute windowing so selected_idx is guaranteed visible within max_x
+        // Compute visible tab window keeping `sel` in view within `max_x`
         let mut start_tab = 0usize;
-        let end_tab;
-
+        let mut end_tab;
         loop {
-            let mut cur_x = x;
-            if start_tab > 0 {
-                cur_x = cur_x.saturating_add(7); // space for left arrow
-            }
+            let mut cur_x = x + if start_tab > 0 { 7 } else { 0 };
             let mut fit_end = start_tab;
             while fit_end < count {
-                let tw = tab_widths[fit_end.min(7)];
-                let need_right_arrow = (fit_end + 1) < count;
-                let right_arrow_space = if need_right_arrow { 7 } else { 0 };
-                if cur_x + tw + right_arrow_space <= max_x {
-                    cur_x += tw + tab_gap;
-                    fit_end += 1;
-                } else {
+                let arrow_pad = if fit_end + 1 < count { 7 } else { 0 };
+                let need = tab_w[fit_end] + arrow_pad;
+                if cur_x + need > max_x {
                     break;
                 }
+                cur_x += tab_w[fit_end] + 2;
+                fit_end += 1;
             }
-            if state.selected_idx >= fit_end && start_tab < state.selected_idx {
+            end_tab = fit_end.max(start_tab + 1).min(count);
+            if sel >= end_tab && start_tab < sel {
                 start_tab += 1;
             } else {
-                end_tab = fit_end.max(start_tab + 1).min(count);
                 break;
             }
         }
 
-        // 3. Compute tab positions (aligned on left, starting at x if start_tab == 0)
         let mut tab_x = [0u8; 8];
-        let mut tab_w = [0u8; 8];
-        let mut cur_tx = x;
-        if start_tab > 0 {
-            cur_tx += 7;
-        }
+        let mut cur_tx = x + if start_tab > 0 { 7 } else { 0 };
         for i in start_tab..end_tab {
-            let tw = tab_widths[i.min(7)];
-            tab_x[i.min(7)] = cur_tx;
-            tab_w[i.min(7)] = tw;
-            cur_tx += tw + tab_gap;
+            tab_x[i] = cur_tx;
+            cur_tx += tab_w[i] + 2;
         }
-
-        // 4. Slide animation offset & active tab indicator position
-        let anim_offset = if state.is_animating() {
-            let p = state.anim.progress(); // 0..16
-            let remaining = (16 - p) as i8;
-            remaining * state.slide_dir
-        } else {
-            0
-        };
-
-        let target_tx = tab_x[state.selected_idx.min(7)];
-        let target_tw = tab_w[state.selected_idx.min(7)];
 
         let (active_tx, active_tw) = if state.is_animating()
             && state.prev_selected_idx >= start_tab
             && state.prev_selected_idx < end_tab
         {
-            let prev_tx = tab_x[state.prev_selected_idx.min(7)];
-            let prev_tw = tab_w[state.prev_selected_idx.min(7)];
+            let prev = state.prev_selected_idx;
             let p = state.anim.progress() as i16;
-            let itx = (prev_tx as i16 + ((target_tx as i16 - prev_tx as i16) * p) / 16) as u8;
-            let itw = (prev_tw as i16 + ((target_tw as i16 - prev_tw as i16) * p) / 16) as u8;
+            let itx =
+                (tab_x[prev] as i16 + (((tab_x[sel] as i16 - tab_x[prev] as i16) * p) >> 4)) as u8;
+            let itw =
+                (tab_w[prev] as i16 + (((tab_w[sel] as i16 - tab_w[prev] as i16) * p) >> 4)) as u8;
             (itx, itw)
         } else {
-            (target_tx, target_tw)
+            (tab_x[sel], tab_w[sel])
         };
 
-        // 5. Container Body Geometry
-        // Baseline dividing header from body is at body_y = y + th (1px lower so unfocused tabs are 1px taller with proper title padding)
+        // Container borders & merged baseline
         let body_y = y + th;
         let body_h = h.saturating_sub(th);
-
-        // Clear interior of container body
-        canvas.fill_rect(
-            x + 1,
-            body_y + 1,
-            w.saturating_sub(2),
-            body_h.saturating_sub(2),
-            Color::Clear,
-        );
-
-        // 6. Render Child Content
-        let inner_x = x + 2;
-        let inner_y = body_y + 2;
-        let inner_w = w.saturating_sub(4);
-        let inner_h = if config.bottom_border {
-            body_h.saturating_sub(4)
-        } else {
-            body_h.saturating_sub(3)
-        };
-
-        render_content(
-            canvas,
-            state.selected_idx,
-            inner_x,
-            inner_y,
-            inner_w,
-            inner_h,
-            anim_offset,
-        );
-
-        // 7. Draw Container Body Borders & Merged Baseline
-        // Left & Right borders
         canvas.draw_vertical_line(x, body_y, body_h, Color::Fill);
         canvas.draw_vertical_line(x + w - 1, body_y, body_h, Color::Fill);
-
-        // Bottom border with rounded corners (if enabled)
         if config.bottom_border {
             canvas.draw_horizontal_line(x + 1, y + h - 1, w.saturating_sub(2), Color::Fill);
             canvas.draw_pixel(x, y + h - 1, Color::Clear);
             canvas.draw_pixel(x + w - 1, y + h - 1, Color::Clear);
         }
 
-        // Baseline (top border of body):
-        // Segment before active tab:
         if active_tx > x {
             canvas.draw_horizontal_line(x, body_y, active_tx - x, Color::Fill);
         }
-        // Under active tab: NO LINE (Clear - merges tab interior directly into frame)
         canvas.draw_horizontal_line(active_tx, body_y, active_tw, Color::Clear);
-        // Segment after active tab:
         let right_start = active_tx + active_tw;
         if right_start < x + w {
             canvas.draw_horizontal_line(right_start, body_y, (x + w) - right_start, Color::Fill);
         }
 
-        // 8. Render Tab Headers
-        let focused_text_y = (y + th - 3) as i16; // 1px below focused top border (y)
-        let unfocused_text_y = (y + th - 2) as i16; // 1px below unfocused top border (y + 1), matching focused padding
-
+        // Tab headers
         for i in start_tab..end_tab {
-            let tx = tab_x[i.min(7)];
-            let tw = tab_w[i.min(7)];
-            let title_bytes = &formatted_titles[i.min(7)];
-            let title = utils::format::ascii_str(title_bytes)
-                .unwrap_or("")
-                .trim_matches('\0');
-            let text_x = (tx + pad_left) as i16;
-
-            if i == state.selected_idx {
-                // Active Tab: Open pill merging into body container
-                canvas.draw_horizontal_line(
-                    active_tx + 1,
-                    y,
-                    active_tw.saturating_sub(2),
-                    Color::Fill,
-                );
-                canvas.draw_pixel(active_tx, y, Color::Clear);
-                canvas.draw_pixel(active_tx + active_tw - 1, y, Color::Clear);
-                canvas.draw_vertical_line(active_tx, y + 1, th, Color::Fill);
-                canvas.draw_vertical_line(active_tx + active_tw - 1, y + 1, th, Color::Fill);
-
-                text::draw_str(canvas, text_x, focused_text_y, title, &FONT, Color::Fill);
+            let is_active = i == sel;
+            let (tx, tw, ty, pill_h, text_y) = if is_active {
+                (active_tx, active_tw, y, th, (y + th - 3) as i16)
             } else {
-                // Inactive Tab: 1px taller (top border at y + 1, resting on body_y = y + th)
-                canvas.draw_horizontal_line(tx + 1, y + 1, tw.saturating_sub(2), Color::Fill);
-                canvas.draw_pixel(tx, y + 1, Color::Clear);
-                canvas.draw_pixel(tx + tw - 1, y + 1, Color::Clear);
-                canvas.draw_vertical_line(tx, y + 2, th.saturating_sub(2), Color::Fill);
-                canvas.draw_vertical_line(tx + tw - 1, y + 2, th.saturating_sub(2), Color::Fill);
-
-                text::draw_str(canvas, text_x, unfocused_text_y, title, &FONT, Color::Fill);
-            }
+                (
+                    tab_x[i],
+                    tab_w[i],
+                    y + 1,
+                    th.saturating_sub(2),
+                    (y + th - 2) as i16,
+                )
+            };
+            draw_tab_pill(canvas, tx, ty, tw, pill_h, text_y, titles.get(i));
         }
 
-        // 9. Overflow Arrow Indicators (using submenu arrows from icons.rs)
+        // Overflow arrows if clipped
         if start_tab > 0 {
             crate::icons::draw_icon_8(
                 canvas,
                 x as i16,
-                (y as i16) + 1,
+                (y + 1) as i16,
                 crate::icons::ARROW_LEFT,
                 Color::Fill,
             );
         }
         if end_tab < count {
-            let arrow_x = (cur_tx as i16) - 1;
             crate::icons::draw_icon_8(
                 canvas,
-                arrow_x,
-                (y as i16) + 1,
+                (cur_tx as i16) - 1,
+                (y + 1) as i16,
                 crate::icons::ARROW_RIGHT,
                 Color::Fill,
             );
@@ -576,13 +563,57 @@ mod tests {
     }
 
     #[test]
-    fn test_format_tab_title_cases() {
-        let mut buf = [0u8; 16];
-        assert_eq!(format_tab_title("TASKS", &mut buf), "Tasks");
-        assert_eq!(format_tab_title("MEMORY", &mut buf), "Memory");
-        assert_eq!(format_tab_title("SERVICES", &mut buf), "Services");
-        assert_eq!(format_tab_title("tasks", &mut buf), "Tasks");
-        assert_eq!(format_tab_title("vfo a", &mut buf), "Vfo A");
-        assert_eq!(format_tab_title("", &mut buf), "");
+    fn test_tabbed_sheet_render_chrome_packed() {
+        let mut cv_slice = Canvas::new();
+        let mut cv_packed = Canvas::new();
+        let config = TabbedSheetConfig::new(0, 0, 128, 64).with_status_bar_integrated(86);
+        let state = TabbedSheetState::new(4);
+        let titles = ["System", "Device", "Status", "Legal"];
+        TabbedSheet::render_chrome(&mut cv_slice, &config, &state, &titles);
+        TabbedSheet::render_chrome_packed(
+            &mut cv_packed,
+            &config,
+            0,
+            4,
+            b"System\0Device\0Status\0Legal\0",
+        );
+        assert_eq!(cv_slice.buffer_flat(), cv_packed.buffer_flat());
+
+        // Also verify 4th tab renders identically without trailing NUL.
+        let mut cv_slice_3 = Canvas::new();
+        let mut cv_packed_3 = Canvas::new();
+        let mut state_3 = TabbedSheetState::new(4);
+        state_3.selected_idx = 3;
+        TabbedSheet::render_chrome(&mut cv_slice_3, &config, &state_3, &titles);
+        TabbedSheet::render_chrome_packed(
+            &mut cv_packed_3,
+            &config,
+            3,
+            4,
+            b"System\0Device\0Status\0Legal",
+        );
+        assert_eq!(cv_slice_3.buffer_flat(), cv_packed_3.buffer_flat());
+    }
+
+    #[test]
+    fn test_tabbed_sheet_render_chrome_preserves_content() {
+        let mut cv = Canvas::new();
+        // Pre-draw a pixel inside inner body (x=20, y=20)
+        cv.draw_pixel(20, 20, Color::Fill);
+        let config = TabbedSheetConfig::new(0, 0, 128, 64).with_status_bar_integrated(86);
+        let state = TabbedSheetState::new(4);
+        let titles = ["Info", "Hw", "Live", "Reg"];
+        TabbedSheet::render_chrome(&mut cv, &config, &state, &titles);
+
+        assert!(
+            is_pixel_set(&cv, 20, 20),
+            "Pre-drawn body pixel must remain"
+        );
+        assert!(is_pixel_set(&cv, 0, 9), "Left body border must be drawn");
+        assert!(is_pixel_set(&cv, 127, 9), "Right body border must be drawn");
+        assert!(
+            is_pixel_set(&cv, 64, 63),
+            "Bottom body border must be drawn"
+        );
     }
 }

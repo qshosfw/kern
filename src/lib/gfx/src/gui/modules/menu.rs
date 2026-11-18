@@ -637,45 +637,35 @@ fn render_menu_row(
         }
     }
 
-    if let MenuItemType::Shortcut(ref action_label) = item.item_type {
-        let box_w = crate::widgets::draw_key_badge_box(
+    let mut text_x = 3i16;
+    let is_shortcut = matches!(item.item_type, MenuItemType::Shortcut(_));
+    if is_shortcut {
+        text_x += crate::widgets::draw_key_badge_box(
             canvas,
             3,
             row_y + 3,
             item.title,
             tc == Color::Clear,
-        );
-        let mut x = 3 + box_w as i16 + 3;
-        if let Some(bmp) = icon {
-            icons::draw_icon_8(canvas, x, row_y + 2, bmp, tc);
-            x += 11;
-        }
-        text::draw_str_max_x(
-            canvas,
-            x,
-            row_y + 9,
-            action_label.as_str(),
-            &MUMATRIX,
-            tc,
-            112,
-        );
-        icons::draw_icon_8(canvas, 115, row_y + 3, icons::ARROW_RIGHT, tc);
-        return;
+        ) as i16
+            + 3;
+    }
+    if let Some(bmp) = icon {
+        icons::draw_icon_8(canvas, text_x, row_y + 2, bmp, tc);
+        text_x += if is_shortcut { 11 } else { 13 };
     }
 
-    let text_x = if let Some(bmp) = icon {
-        icons::draw_icon_8(canvas, 3, row_y + 2, bmp, tc);
-        16
-    } else {
-        3
-    };
-
     let mut buf_uninit = core::mem::MaybeUninit::<[u8; 16]>::uninit();
+    let mut title_str = item.title;
     let mut val_str = "";
     let mut arrows = 0u8;
     let mut max_title_x = 110i16;
 
     match &item.item_type {
+        MenuItemType::Shortcut(action_label) => {
+            title_str = action_label.as_str();
+            icons::draw_icon_8(canvas, 114, row_y + 3, icons::ARROW_RIGHT, tc);
+            max_title_x = 112;
+        }
         MenuItemType::Info(s) => val_str = s,
         MenuItemType::Value(v) => val_str = v.as_str(),
         MenuItemType::Choice { selected, options } => {
@@ -724,7 +714,7 @@ fn render_menu_row(
         canvas,
         text_x,
         row_y + 9,
-        item.title,
+        title_str,
         &MUMATRIX,
         tc,
         title_max,

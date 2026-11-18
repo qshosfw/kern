@@ -25,6 +25,7 @@ pub struct AssetDescriptor {
 }
 
 impl AssetDescriptor {
+    #[inline(never)]
     fn get_path<'a>(&self, cfg: &'a crate::config::MasterConfig) -> (bool, &'a str) {
         match self.kind {
             AssetKind::Splash => (
@@ -36,29 +37,28 @@ impl AssetDescriptor {
         }
     }
 
+    #[inline(never)]
     fn set_path(&self, cfg: &mut crate::config::MasterConfig, opt: Option<&str>) {
+        let on = opt.is_some() as u8;
         match self.kind {
-            AssetKind::Splash => match opt {
-                Some(path) => {
-                    cfg.display.boot_splash_mode = 1;
-                    cfg.display.set_splash_path(path);
+            AssetKind::Splash => {
+                cfg.display.boot_splash_mode = on;
+                if let Some(p) = opt {
+                    cfg.display.set_splash_path(p);
                 }
-                None => cfg.display.boot_splash_mode = 0,
-            },
-            AssetKind::Roger => match opt {
-                Some(path) => {
-                    cfg.audio.roger_beep = 1;
-                    cfg.audio.set_roger_path(path);
+            }
+            AssetKind::Roger => {
+                cfg.audio.roger_beep = on;
+                if let Some(p) = opt {
+                    cfg.audio.set_roger_path(p);
                 }
-                None => cfg.audio.roger_beep = 0,
-            },
-            AssetKind::Jingle => match opt {
-                Some(path) => {
-                    cfg.audio.boot_jingle = 1;
-                    cfg.audio.set_jingle_path(path);
+            }
+            AssetKind::Jingle => {
+                cfg.audio.boot_jingle = on;
+                if let Some(p) = opt {
+                    cfg.audio.set_jingle_path(p);
                 }
-                None => cfg.audio.boot_jingle = 0,
-            },
+            }
         }
     }
 
@@ -71,70 +71,52 @@ impl AssetDescriptor {
         let (active, cur_path) = self.get_path(config);
         let storage = storage_mut();
 
-        storage.count = 0;
         storage.labels[0].set_str(self.none_label);
 
-        let scan_count = storage_fs
-            .list_dir(self.dir, &mut storage.dir_entries)
-            .unwrap_or(0)
-            .min(MAX_CHOOSER_ASSETS);
-
-        let mut order = [0u8; MAX_CHOOSER_ASSETS];
-        for i in 0..scan_count {
-            order[i] = i as u8;
-            let mut j = i;
-            while j > 0 {
-                let cur = (order[j] as usize) & (MAX_CHOOSER_ASSETS - 1);
-                let prev = (order[j - 1] as usize) & (MAX_CHOOSER_ASSETS - 1);
-                if storage.dir_entries[cur].path.as_str() >= storage.dir_entries[prev].path.as_str()
+        let mut count = 0usize;
+        #[cfg(feature = "filesystem")]
+        let _ = storage_fs
+            .fs
+            .list_dir(self.dir, |entry_name, _size, _perm, is_dir| {
+                if count < MAX_CHOOSER_ASSETS
+                    && !is_dir
+                    && has_extension(entry_name, self.extensions)
+                    && build_full_asset_path(self.dir, entry_name, &mut storage.paths[count])
+                        .is_ok()
                 {
-                    break;
+                    count += 1;
                 }
-                order.swap(j, j - 1);
+            });
+        #[cfg(not(feature = "filesystem"))]
+        let _ = storage_fs;
+
+        for i in 1..count {
+            let mut j = i;
+            while j > 0 && storage.paths[j].as_str() < storage.paths[j - 1].as_str() {
+                storage.paths.swap(j, j - 1);
                 j -= 1;
             }
         }
 
         let mut current_sel = 0;
-
-        for &idx in &order[..scan_count] {
-            let found = storage.count;
-            if found >= MAX_CHOOSER_ASSETS {
-                break;
-            }
-            let entry = &storage.dir_entries[(idx as usize) & (MAX_CHOOSER_ASSETS - 1)];
-            if entry.is_dir {
-                continue;
-            }
-            let entry_name = entry.path.as_str();
-            if !has_extension(entry_name, self.extensions) {
-                continue;
-            }
-
-            if build_full_asset_path(self.dir, entry_name, &mut storage.paths[found]).is_err() {
-                continue;
-            }
-            let full_path = storage.paths[found].as_str();
-            format_asset_name_into(entry_name, &mut storage.labels[found + 1]);
-
+        for idx in 0..count {
+            let full_path = storage.paths[idx].as_str();
+            format_asset_name_into(full_path, &mut storage.labels[idx + 1]);
             if active
                 && current_sel == 0
-                && (full_path == cur_path || (!cur_path.starts_with("/") && entry_name == cur_path))
+                && (full_path == cur_path
+                    || (!cur_path.starts_with('/') && full_path.ends_with(cur_path)))
             {
-                current_sel = found + 1;
+                current_sel = idx + 1;
             }
-
-            storage.count = found + 1;
         }
-
-        if active && current_sel == 0 && storage.count > 0 {
+        if active && current_sel == 0 && count > 0 {
             current_sel = 1;
         }
+        storage.count = count;
 
-        let total_options = storage.count + 1;
         let labels_slice: &'static [ShortString] =
-            unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), total_options) };
-
+            unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), count + 1) };
         OptionSheet::new_dynamic(self.title, labels_slice, current_sel).with_radio(true)
     }
 
@@ -166,10 +148,9 @@ impl AssetDescriptor {
 }
 
 struct AssetChooserStorage {
-    dir_entries: [crate::services::storage::DirEntryInfo; MAX_CHOOSER_ASSETS],
-    paths: [heapless::String<32>; MAX_CHOOSER_ASSETS],
-    labels: [ShortString; MAX_CHOOSER_ASSETS + 1],
     count: usize,
+    labels: [ShortString; MAX_CHOOSER_ASSETS + 1],
+    paths: [heapless::String<32>; MAX_CHOOSER_ASSETS],
 }
 
 const _: () = {
@@ -208,50 +189,45 @@ fn storage_mut() -> &'static mut AssetChooserStorage {
 
 /// Universal dynamic display name formatter for filesystem assets.
 /// Converts e.g. "/user/rogers/01_roger.ton" -> "Roger", "02_mini_kong.rle" -> "Mini Kong"
+#[inline(never)]
 pub fn format_asset_name_into(path: &str, out: &mut ShortString) {
     let raw = path.as_bytes();
-    let mut name_start = 0usize;
-    let mut dot_idx = raw.len();
-    let mut i = raw.len();
-    while i > 0 {
-        i -= 1;
-        if raw[i] == b'/' {
-            name_start = i + 1;
-            break;
-        }
-        if raw[i] == b'.' && dot_idx == raw.len() {
-            dot_idx = i;
-        }
+    let mut name_start = raw.len();
+    while name_start > 0 && raw[name_start - 1] != b'/' {
+        name_start -= 1;
     }
-    let base = &raw[name_start..dot_idx.max(name_start)];
+    let tail = &raw[name_start..];
+    let mut dot = tail.len();
+    while dot > 0 && tail[dot - 1] != b'.' {
+        dot -= 1;
+    }
+    let base = if dot > 0 { &tail[..dot - 1] } else { tail };
 
-    // Strip leading numerical index prefix if present (e.g. "01_", "02-", "1_")
-    let mut start = 0;
-    while start < base.len() && base[start].is_ascii_digit() {
-        start += 1;
+    let mut digits = 0usize;
+    while digits < base.len() && base[digits].is_ascii_digit() {
+        digits += 1;
     }
-    if start > 0 && start < base.len() && (base[start] == b'_' || base[start] == b'-') {
-        start += 1;
+    let clean = if digits > 0 && matches!(base.get(digits), Some(b'_' | b'-')) {
+        &base[digits + 1..]
     } else {
-        start = 0;
-    }
-    let clean = &base[start..];
+        base
+    };
     if clean.is_empty() {
         out.set_str("Asset");
         return;
     }
 
     out.len = 0;
-    let mut capitalize_next = true;
+    let mut cap = true;
     for &b in clean {
         if (out.len as usize) >= out.bytes.len() {
             break;
         }
         let ch = if b == b'_' || b == b'-' {
-            capitalize_next = true;
+            cap = true;
             b' '
-        } else if capitalize_next {
-            capitalize_next = false;
+        } else if cap {
+            cap = false;
             b.to_ascii_uppercase()
         } else {
             b
@@ -275,31 +251,20 @@ fn has_extension(path: &str, extensions: &[&str]) -> bool {
     false
 }
 
+#[inline(never)]
 fn build_full_asset_path(
     dir: &str,
     entry_name: &str,
     out: &mut heapless::String<32>,
 ) -> Result<(), ()> {
     out.clear();
-    if entry_name.starts_with("/") {
-        if entry_name.len() > 31 {
-            return Err(());
-        }
-        return out.push_str(entry_name);
+    if !entry_name.starts_with('/') {
+        out.push_str(utils::format::trim_trailing_slashes(dir))?;
+        out.push('/')?;
     }
-    let clean_dir = utils::format::trim_trailing_slashes(dir);
-    let dir_prefix = if clean_dir.is_empty() {
-        0
-    } else {
-        clean_dir.len()
-    };
-    if dir_prefix + 1 + entry_name.len() > 31 {
+    if out.len() + entry_name.len() > 31 {
         return Err(());
     }
-    if !clean_dir.is_empty() {
-        out.push_str(clean_dir)?;
-    }
-    out.push('/')?;
     out.push_str(entry_name)
 }
 

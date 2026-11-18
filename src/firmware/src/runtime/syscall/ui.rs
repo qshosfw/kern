@@ -37,26 +37,20 @@ pub unsafe extern "C" fn api_ui_has_modal() -> u8 {
 }
 
 #[inline(never)]
-unsafe fn show_modal_raw(
-    tag_and_confirm: u16,
-    lens: u32,
-    title: *const u8,
-    msg: *const u8,
-    confirm: *const u8,
-    cancel: *const u8,
-) {
-    let tag = tag_and_confirm as u8;
-    let is_confirm = (tag_and_confirm >> 8) != 0;
-    let (def_title, def_ok, def_cancel) = if is_confirm {
-        ("Confirm", "OK", "CANCEL")
-    } else {
-        ("Notice", "", "")
-    };
-    let t_str = unsafe { str_or_default(title, (lens & 0xFF) as usize, def_title) };
-    let m_str = unsafe { str_or_default(msg, ((lens >> 8) & 0xFF) as usize, "") };
-    let c_str = unsafe { str_or_default(confirm, ((lens >> 16) & 0xFF) as usize, def_ok) };
-    let cl_str = unsafe { str_or_default(cancel, (lens >> 24) as usize, def_cancel) };
-    modal_mut().show_confirm(tag, t_str, m_str, c_str, cl_str);
+unsafe fn show_modal_raw(tag_and_confirm: u16, lens: u32, ptrs: &[*const u8; 4]) {
+    const DEFS: &[u8] = b"Notice\0\0\0\0Confirm\0\0OK\0CANCEL\0";
+    let base = ((tag_and_confirm >> 8) != 0) as u8 * 4;
+    let mut s = [""; 4];
+    for i in 0..4usize {
+        s[i] = unsafe {
+            str_or_default(
+                ptrs[i],
+                ((lens >> (i * 8)) & 0xFF) as usize,
+                utils::format::nth_cstr(DEFS, base + i as u8),
+            )
+        };
+    }
+    modal_mut().show_confirm(tag_and_confirm as u8, s[0], s[1], s[2], s[3]);
 }
 
 #[inline(never)]
@@ -65,10 +59,7 @@ fn show_modal_default(tag_and_confirm: u16, lens: u32, title: *const u8, msg: *c
         show_modal_raw(
             tag_and_confirm,
             lens,
-            title,
-            msg,
-            core::ptr::null(),
-            core::ptr::null(),
+            &[title, msg, core::ptr::null(), core::ptr::null()],
         );
     }
 }
@@ -201,32 +192,6 @@ pub unsafe extern "C" fn api_ui_draw_s_meter(x: i16, y: i16, rssi_dbm: i16, peak
     );
 }
 
-#[inline(never)]
-unsafe fn badge_op(
-    is_key: bool,
-    x: i16,
-    y: i16,
-    style: u8,
-    p0: *const u8,
-    l0: u8,
-    p1: *const u8,
-    l1: u8,
-) {
-    let s0 = unsafe { super::parse_str(p0, l0 as usize) }.unwrap_or("");
-    let canvas = super::active_canvas_mut();
-    if is_key {
-        let s1 = unsafe { super::parse_str(p1, l1 as usize) }.unwrap_or("");
-        gfx::widgets::draw_key_badge(canvas, x, y, s0, s1);
-    } else if !s0.is_empty() {
-        let st = if style == 1 {
-            gfx::widgets::BadgeStyle::Filled
-        } else {
-            gfx::widgets::BadgeStyle::Empty
-        };
-        gfx::widgets::draw_tag_badge(canvas, x, y, s0, st);
-    }
-}
-
 pub unsafe extern "C" fn api_ui_draw_tag_badge(
     x: i16,
     y: i16,
@@ -234,7 +199,15 @@ pub unsafe extern "C" fn api_ui_draw_tag_badge(
     len: u8,
     style: u8,
 ) {
-    unsafe { badge_op(false, x, y, style, text, len, core::ptr::null(), 0) };
+    let s = unsafe { super::parse_str(text, len as usize) }.unwrap_or("");
+    if !s.is_empty() {
+        let st = if style == 1 {
+            gfx::widgets::BadgeStyle::Filled
+        } else {
+            gfx::widgets::BadgeStyle::Empty
+        };
+        gfx::widgets::draw_tag_badge(super::active_canvas_mut(), x, y, s, st);
+    }
 }
 
 pub unsafe extern "C" fn api_ui_draw_key_badge(
@@ -245,7 +218,9 @@ pub unsafe extern "C" fn api_ui_draw_key_badge(
     label: *const u8,
     l_len: u8,
 ) {
-    unsafe { badge_op(true, x, y, 0, key_str, k_len, label, l_len) };
+    let k = unsafe { super::parse_str(key_str, k_len as usize) }.unwrap_or("");
+    let l = unsafe { super::parse_str(label, l_len as usize) }.unwrap_or("");
+    gfx::widgets::draw_key_badge(super::active_canvas_mut(), x, y, k, l);
 }
 
 pub unsafe extern "C" fn api_ui_draw_capsule_button(
@@ -358,7 +333,6 @@ pub unsafe extern "C" fn api_ui_draw_widget(
     let ux = d.x.max(0) as u8;
     let uy = d.y.max(0) as u8;
     let raw = unsafe { super::slice_or_empty(d.p0, d.len0 as usize) };
-    let str_p0 = utils::format::ascii_str(raw).unwrap_or("");
     match kind {
         KRX_WIDGET_TABBED_SHEET => {
             let mut cfg = gfx::gui::modules::TabbedSheetConfig::new(ux, uy, d.w, d.h)
@@ -374,14 +348,14 @@ pub unsafe extern "C" fn api_ui_draw_widget(
                 raw,
             );
         }
-        KRX_WIDGET_ROUNDED_BOX => {
-            gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h);
-        }
-        KRX_WIDGET_NEGATED_HEADER => {
-            gfx::widgets::draw_negated_header(canvas, d.y, str_p0);
-        }
-        KRX_WIDGET_SHEET_FRAME => {
-            gfx::widgets::draw_sheet_frame(canvas, str_p0, d.y, d.h, None);
+        KRX_WIDGET_ROUNDED_BOX => gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h),
+        KRX_WIDGET_NEGATED_HEADER | KRX_WIDGET_SHEET_FRAME => {
+            let s = utils::format::ascii_str(raw).unwrap_or("");
+            if kind == KRX_WIDGET_NEGATED_HEADER {
+                gfx::widgets::draw_negated_header(canvas, d.y, s);
+            } else {
+                gfx::widgets::draw_sheet_frame(canvas, s, d.y, d.h, None);
+            }
         }
         _ => return 1,
     }
@@ -422,7 +396,7 @@ pub unsafe extern "C" fn api_ui_show_confirm_labels(
     let lens =
         (t_len as u32) | ((m_len as u32) << 8) | ((c_len as u32) << 16) | ((cl_len as u32) << 24);
     unsafe {
-        show_modal_raw((tag as u16) | 0x0100, lens, title, msg, confirm, cancel);
+        show_modal_raw((tag as u16) | 0x0100, lens, &[title, msg, confirm, cancel]);
     }
 }
 

@@ -133,11 +133,13 @@ impl View<PopupModel> for PopupView {
         let sheet_y = 18i16 + y_offset as i16;
 
         let badges = has_badges.then(|| {
-            let confirm = if model.hold.active {
-                "Holding..."
-            } else {
-                model.confirm_label.unwrap_or("")
-            };
+            let confirm = model
+                .confirm_label
+                .unwrap_or(if model.hold.required_ms > 0 {
+                    "Hold"
+                } else {
+                    ""
+                });
             (confirm, model.cancel_label.unwrap_or(""))
         });
         widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, badges, y_offset);
@@ -233,5 +235,30 @@ mod tests {
         }
         // Hold progress bar outline at Y=43..48 (page 5 bits 3..=7) should still render.
         assert_ne!(canvas.buffer[5][64] & 0xF8, 0);
+    }
+
+    #[test]
+    fn test_hold_badge_displays_hold_when_active() {
+        let mut model = PopupModel::new().with_badges("Hold", "Cancel");
+        let _ = model.custom_title.push_str("DELETE");
+        let _ = model.custom_msg.push_str("file.krx\nCannot be undone.");
+        model.hold.required_ms = 1500;
+        model.hold.elapsed_ms = 750;
+        model.hold.active = true;
+        model.anim.jump_complete();
+
+        let mut canvas_active = Canvas::new();
+        PopupView::new().render(&mut canvas_active, &model);
+
+        model.hold.active = false;
+        let mut canvas_inactive = Canvas::new();
+        PopupView::new().render(&mut canvas_inactive, &model);
+
+        // Badge area on bottom bar (page 6/7, X=3..25) must match exactly
+        // whether active or inactive because the badge shows "Hold" in both states.
+        for x in 3..25 {
+            assert_eq!(canvas_active.buffer[6][x], canvas_inactive.buffer[6][x]);
+            assert_eq!(canvas_active.buffer[7][x], canvas_inactive.buffer[7][x]);
+        }
     }
 }

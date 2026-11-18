@@ -107,4 +107,6 @@ Kern builds on the reverse-engineering work and firmware ecosystem established b
 
 ## License
 
-Mozilla Public License 2.0 ([MPL-2.0](LICENSE)).
+GNU General Public License v3.0 ([GPL-3.0-or-later](LICENSE)), with a narrow [KRX syscall exception](COPYING) for standalone third-party userland applications that interact with the kernel exclusively through the published KRX-ABI system call table.
+
+The kernel, drivers, platform layers, libraries, firmware, and any modifications or forks thereof are fully GPL v3. See [COPYING](COPYING) for the complete licensing terms.

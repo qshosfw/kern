@@ -140,30 +140,6 @@ impl PackageCatalog {
         self.count_entries(true)
     }
 
-    pub fn system_entry_at(
-        &self,
-        sys_caps: kernel::caps::CapabilitySet,
-        flag: u8,
-        mut idx: usize,
-    ) -> Option<&PackageCatalogEntry> {
-        for e in self.entries.as_slice() {
-            if e.is_system_entry(sys_caps, flag) {
-                if idx == 0 {
-                    return Some(e);
-                }
-                idx -= 1;
-            }
-        }
-        None
-    }
-
-    pub fn system_entry_count(&self, sys_caps: kernel::caps::CapabilitySet, flag: u8) -> usize {
-        self.entries
-            .iter()
-            .filter(|e| e.is_system_entry(sys_caps, flag))
-            .count()
-    }
-
     /// Perform a zero-allocation discovery pass across `/apps/` in storage.
     #[inline(always)]
     #[cfg(feature = "filesystem")]
@@ -182,40 +158,22 @@ impl PackageCatalog {
 
         // Keep scan scratch strictly inside TRANSIENT_ARENA[4096..6144) so [0..4096) KRX code is never clobbered.
         const HDR_SCRATCH_BYTES: usize = kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE;
-        const {
-            assert!(
-                core::mem::align_of::<kernel::service::DirEntryInfo>()
-                    <= core::mem::align_of::<crate::data::arena::AlignedArena>()
-            );
-            assert!(
-                HDR_SCRATCH_BYTES + 8 * core::mem::size_of::<kernel::service::DirEntryInfo>()
-                    <= crate::data::arena::TRANSIENT_ARENA_BYTES
-                        - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
-            );
-        }
         let dir_ptr = crate::data::arena::scratch_tail_bytes_mut()[HDR_SCRATCH_BYTES..].as_mut_ptr()
-            as *mut kernel::service::DirEntryInfo;
-        unsafe {
-            core::ptr::write_bytes(dir_ptr, 0, 8);
-        }
+            as *mut kernel::proc::abi::KrxDirEntry;
         let dir_entries = unsafe { core::slice::from_raw_parts_mut(dir_ptr, 8) };
 
-        if let Ok(count) = filesystem.list_dir("/apps", dir_entries) {
+        if let Ok(count) =
+            crate::services::primitives::list_krx_dir(filesystem, "/apps", dir_entries)
+        {
             for i in 0..count {
-                let (is_dir, size, path_ptr, path_len) = {
-                    let e = &dir_entries[i];
-                    (e.is_dir, e.size, e.path.as_ptr(), e.path.len())
-                };
-                if !is_dir && self.entries.len() < MAX_CATALOG_PACKAGES {
-                    let path_str = unsafe {
-                        core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                            path_ptr, path_len,
-                        ))
-                    };
+                let e = &dir_entries[i];
+                if e.is_dir == 0 && self.entries.len() < MAX_CATALOG_PACKAGES {
+                    let len = e.name.iter().position(|&b| b == 0).unwrap_or(24);
+                    let path_str = unsafe { core::str::from_utf8_unchecked(&e.name[..len]) };
                     Self::inspect_package(
                         filesystem,
                         path_str,
-                        size,
+                        e.size as usize,
                         &mut self.entries,
                         &mut self.actions,
                     );
@@ -268,7 +226,7 @@ impl PackageCatalog {
             &mut *ptr
         };
         entry.size_bytes = size;
-        entry.app_class = KrxClass::Declare;
+        entry.app_class = KrxClass::Native;
         entry.exec_type = KrxExecType::App;
 
         let bytes = base_name.as_bytes();

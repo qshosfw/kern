@@ -14,52 +14,36 @@ pub struct TraySlot {
 }
 
 pub struct StatusTray<const N: usize = 4> {
-    slots: [Option<TraySlot>; N],
-    cached: [StatusGlyph; N],
     count: usize,
+    owners: [Pid; N],
+    glyphs: [StatusGlyph; N],
 }
 
 impl<const N: usize> StatusTray<N> {
     pub const fn new() -> Self {
         Self {
-            slots: [None; N],
-            cached: [StatusGlyph::default_builtin(); N],
             count: 0,
-        }
-    }
-
-    fn rebuild(&mut self) {
-        self.count = 0;
-        for slot in self.slots.iter() {
-            if let Some(entry) = slot {
-                self.cached[self.count] = entry.glyph;
-                self.count += 1;
-            }
+            owners: [Pid(0); N],
+            glyphs: [StatusGlyph::default_builtin(); N],
         }
     }
 
     /// Register or update a status glyph (built-in or custom 5x5 bitmap) for owner.
     pub fn set_glyph(&mut self, owner: Pid, glyph: StatusGlyph) -> bool {
-        // 1. Update existing slot if present
-        for slot in self.slots.iter_mut() {
-            if let Some(entry) = slot {
-                if entry.owner == owner {
-                    entry.glyph = glyph;
-                    self.rebuild();
-                    return true;
-                }
-            }
-        }
-
-        // 2. Insert into first free slot
-        for slot in self.slots.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(TraySlot { owner, glyph });
-                self.rebuild();
+        let mut i = 0;
+        while i < self.count {
+            if self.owners[i] == owner {
+                self.glyphs[i] = glyph;
                 return true;
             }
+            i += 1;
         }
-
+        if self.count < N {
+            self.owners[self.count] = owner;
+            self.glyphs[self.count] = glyph;
+            self.count += 1;
+            return true;
+        }
         false
     }
 
@@ -75,26 +59,30 @@ impl<const N: usize> StatusTray<N> {
 
     /// Clear the tray icon for the specified owner process.
     pub fn clear_icon(&mut self, owner: Pid) -> bool {
-        for slot in self.slots.iter_mut() {
-            if let Some(entry) = slot {
-                if entry.owner == owner {
-                    *slot = None;
-                    self.rebuild();
-                    return true;
+        let mut i = 0;
+        while i < self.count {
+            if self.owners[i] == owner {
+                self.count -= 1;
+                while i < self.count {
+                    self.owners[i] = self.owners[i + 1];
+                    self.glyphs[i] = self.glyphs[i + 1];
+                    i += 1;
                 }
+                return true;
             }
+            i += 1;
         }
         false
     }
 
     /// Get the active glyph for an owner process.
     pub fn get_glyph(&self, owner: Pid) -> Option<StatusGlyph> {
-        for slot in self.slots.iter() {
-            if let Some(entry) = slot {
-                if entry.owner == owner {
-                    return Some(entry.glyph);
-                }
+        let mut i = 0;
+        while i < self.count {
+            if self.owners[i] == owner {
+                return Some(self.glyphs[i]);
             }
+            i += 1;
         }
         None
     }
@@ -110,7 +98,7 @@ impl<const N: usize> StatusTray<N> {
     /// Returns a slice of all currently active tray glyphs.
     #[inline(always)]
     pub fn active_glyphs(&self) -> &[StatusGlyph] {
-        &self.cached[..self.count]
+        &self.glyphs[..self.count]
     }
 
     /// Returns the number of currently active tray icons.
@@ -127,9 +115,6 @@ impl<const N: usize> StatusTray<N> {
 
     /// Clear all registered tray icons.
     pub fn clear_all(&mut self) {
-        for slot in self.slots.iter_mut() {
-            *slot = None;
-        }
         self.count = 0;
     }
 }

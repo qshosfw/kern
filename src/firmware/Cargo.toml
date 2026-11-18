@@ -32,7 +32,6 @@ default = [
     "hw_crc",
     "rtc",
     "internal_flash",
-    "panic_gui",
     "krx_runtime",
     "krx_native",
     "flashlight",
@@ -40,13 +39,10 @@ default = [
     "dynamic_spi",
     "overclock_72mhz",
     "text_input",
-    "dfu",
-    "dfu_hooks",
 ]
 
-# 🔌 Bootloader DFU Handoff & Runtime Hooks
+# 🔌 Bootloader DFU Raw Fallback (optional; primary UI/hooks offloaded to /apps/dfu.mod)
 dfu = []
-dfu_hooks = ["dfu"]
 
 # 📦 Media & Asset Provisioning
 provision_rogers = []
@@ -54,6 +50,7 @@ provision_apps = []
 provision_bench = []
 
 # ⚙️ Granular Settings & Diagnostics
+settings_info = []
 settings_calib = []
 settings_debug = []
 overclock_72mhz = []
@@ -98,15 +95,17 @@ animations = []
 grayscale = ["kernel/grayscale", "drivers/grayscale", "gfx/grayscale"]
 dynamic_spi = []
 
-# 🛡️ Diagnostics, Telemetry & Forensics
-flight_recorder = []
-panic_gui = []
-panic_gui_extended = ["panic_gui"]
-panic_disasm = []
-panic_uart = ["uart"]
-crash_dialog = []
+# 📻 Hardware Target Board Profiles (base default supports UV-K1 and UV-K5v3 identically)
+target_k10pro = [
+    "bsp/target_k10pro",
+    "drivers/target_k10pro",
+    "py32-hal/target_k10pro",
+    "gnss",
+]
+gnss = ["drivers/gnss"]
+swd_debug = ["bsp/swd_debug", "drivers/swd_debug"]
 
 # 📦 Feature Bundles & Group Configurations
-full = ["default", "passcode", "panic_gui", "panic_uart"]
+full = ["default", "passcode"]
 security = ["filesystem", "secure_fs", "passcode"]
 lean = ["radio", "audio"]

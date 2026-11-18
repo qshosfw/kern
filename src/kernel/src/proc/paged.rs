@@ -299,9 +299,10 @@ impl ReturnFrame {
 
 /// Bounded zero-allocation Shadow Return Stack for demand-paged return safety.
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct ShadowReturnStack<const DEPTH: usize = 8> {
-    pub frames: [ReturnFrame; DEPTH],
     pub sp: usize,
+    pub frames: [ReturnFrame; DEPTH],
 }
 
 impl<const DEPTH: usize> Default for ShadowReturnStack<DEPTH> {
@@ -313,8 +314,8 @@ impl<const DEPTH: usize> Default for ShadowReturnStack<DEPTH> {
 impl<const DEPTH: usize> ShadowReturnStack<DEPTH> {
     pub const fn new() -> Self {
         Self {
-            frames: [const { ReturnFrame::empty() }; DEPTH],
             sp: 0,
+            frames: [const { ReturnFrame::empty() }; DEPTH],
         }
     }
 
@@ -351,12 +352,12 @@ impl<const DEPTH: usize> ShadowReturnStack<DEPTH> {
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct StructuredLeafManager<const MAX_LEAVES: usize = 16> {
-    pub overlay_vma: u32,
-    pub window_size: u16,
-    pub total_swaps: u16,
     pub leaf_count: u8,
     pub is_dispatching: bool,
     pub active_leaf: Option<u8>,
+    pub window_size: u16,
+    pub total_swaps: u16,
+    pub overlay_vma: u32,
     pub leaves: [LeafEntry; MAX_LEAVES],
 }
 

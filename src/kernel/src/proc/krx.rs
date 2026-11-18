@@ -20,8 +20,6 @@ pub const SIG_IDENT: [u8; 4] = [0xC0, 0xDE, 0x08, 0xF7];
 pub enum KrxClass {
     Native = 0,
     Paged = 1,
-    VMachine = 2,
-    Declare = 3,
 }
 
 impl KrxClass {
@@ -29,20 +27,17 @@ impl KrxClass {
         match val {
             0 => Some(Self::Native),
             1 => Some(Self::Paged),
-            2 => Some(Self::VMachine),
-            3 => Some(Self::Declare),
             _ => None,
         }
     }
 
     pub const fn as_str(&self) -> &'static str {
-        const NAMES: &[u8] = b"Native\0Paged\0VM\0Declare\0";
+        const NAMES: &[u8] = b"Native\0Paged\0";
         utils::format::nth_cstr(NAMES, *self as u8)
     }
 }
 
-/// KRX v3.2 Execution Profile & Executable Memory Paradigm taxonomy.
-/// Encodes the exact trust, placement, and memory model of an executable package (§1).
+/// KRX Execution Profile & Executable Memory Paradigm taxonomy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum KrxProfile {
@@ -54,12 +49,6 @@ pub enum KrxProfile {
     N1NativePic = 2,
     /// P1: Transparent Paged (trusted native, demand-paged fixed window with LR-thunking shadow return stack)
     P1TransparentPaged = 3,
-    /// V0: Resident KVM-16 (software-sandboxed bytecode, resident image)
-    V0ResidentVm = 4,
-    /// D0: Declare Graph (software-sandboxed declarative UI/data graph)
-    D0DeclareGraph = 5,
-    /// F0: Declare Flow / Stream Graph (software-sandboxed DSP/audio dataflow pipeline)
-    F0DeclareFlow = 6,
 }
 
 impl KrxProfile {
@@ -69,42 +58,19 @@ impl KrxProfile {
             1 => Some(Self::P0StructuredPaged),
             2 => Some(Self::N1NativePic),
             3 => Some(Self::P1TransparentPaged),
-            4 => Some(Self::V0ResidentVm),
-            5 => Some(Self::D0DeclareGraph),
-            6 => Some(Self::F0DeclareFlow),
             _ => None,
         }
     }
 
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::N0NativeFixed => "N0 (Native-Fixed)",
-            Self::P0StructuredPaged => "P0 (Structured-Paged)",
-            Self::N1NativePic => "N1 (Native-PIC)",
-            Self::P1TransparentPaged => "P1 (Transparent-Paged)",
-            Self::V0ResidentVm => "V0 (Resident-VM)",
-            Self::D0DeclareGraph => "D0 (Declare-Graph)",
-            Self::F0DeclareFlow => "F0 (Declare-Flow)",
-        }
+        const NAMES: &[u8] =
+            b"N0 (Native-Fixed)\0P0 (Structured-Paged)\0N1 (Native-PIC)\0P1 (Transparent-Paged)\0";
+        utils::format::nth_cstr(NAMES, *self as u8)
     }
 
     #[inline(always)]
     pub const fn is_trusted_native(&self) -> bool {
-        matches!(
-            self,
-            Self::N0NativeFixed
-                | Self::P0StructuredPaged
-                | Self::N1NativePic
-                | Self::P1TransparentPaged
-        )
-    }
-
-    #[inline(always)]
-    pub const fn is_sandboxed(&self) -> bool {
-        matches!(
-            self,
-            Self::V0ResidentVm | Self::D0DeclareGraph | Self::F0DeclareFlow
-        )
+        true
     }
 
     #[inline(always)]
@@ -114,39 +80,17 @@ impl KrxProfile {
 
     #[inline(always)]
     pub const fn uses_fixed_vma(&self) -> bool {
-        matches!(
-            self,
-            Self::N0NativeFixed
-                | Self::P0StructuredPaged
-                | Self::V0ResidentVm
-                | Self::D0DeclareGraph
-                | Self::F0DeclareFlow
-        )
+        matches!(self, Self::N0NativeFixed | Self::P0StructuredPaged)
     }
 
+    #[inline(always)]
     pub const fn raw_code(&self) -> u8 {
-        match self {
-            Self::N0NativeFixed => 0x10,
-            Self::P0StructuredPaged => 0x11,
-            Self::N1NativePic => 0x12,
-            Self::P1TransparentPaged => 0x13,
-            Self::V0ResidentVm => 0x20,
-            Self::D0DeclareGraph => 0x30,
-            Self::F0DeclareFlow => 0x31,
-        }
+        0x10 + (*self as u8)
     }
 
+    #[inline(always)]
     pub const fn from_raw_code(code: u8) -> Option<Self> {
-        match code {
-            0x10 => Some(Self::N0NativeFixed),
-            0x11 => Some(Self::P0StructuredPaged),
-            0x12 => Some(Self::N1NativePic),
-            0x13 => Some(Self::P1TransparentPaged),
-            0x20 => Some(Self::V0ResidentVm),
-            0x30 => Some(Self::D0DeclareGraph),
-            0x31 => Some(Self::F0DeclareFlow),
-            _ => None,
-        }
+        Self::from_u8(code.wrapping_sub(0x10))
     }
 
     /// Automatically infers the normative execution profile from package metadata.
@@ -160,13 +104,6 @@ impl KrxProfile {
             return p;
         }
         match preamble.execution_class() {
-            Some(KrxClass::Native) => {
-                if exec.reloc_count == 0 && preamble.link_base != 0 {
-                    Self::N0NativeFixed
-                } else {
-                    Self::N1NativePic
-                }
-            }
             Some(KrxClass::Paged) => {
                 if has_leaf_map {
                     Self::P0StructuredPaged
@@ -174,8 +111,13 @@ impl KrxProfile {
                     Self::P1TransparentPaged
                 }
             }
-            Some(KrxClass::VMachine) => Self::V0ResidentVm,
-            Some(KrxClass::Declare) | None => Self::D0DeclareGraph,
+            Some(KrxClass::Native) | None => {
+                if exec.reloc_count == 0 && preamble.link_base != 0 {
+                    Self::N0NativeFixed
+                } else {
+                    Self::N1NativePic
+                }
+            }
         }
     }
 }
@@ -234,7 +176,6 @@ pub enum KrxLaunchError {
     InsufficientStack,
     RelocationFailed,
     ImportBindingFailed,
-    VmDisabled,
     PayloadTooLarge,
     ExecutionFailed,
     InvalidEntryPoint,
@@ -254,7 +195,6 @@ Out of RAM\0Not enough RAM\0\
 Stack Overflow\0Stack headroom low\0\
 Reloc Error\0Relocation failed\0\
 API Unresolved\0API not available\0\
-VM Disabled\0VM disabled\0\
 Package Too Large\0Package too large\0\
 Launch Failed\0Execution failed\0\
 Bad Entry Point\0Invalid entry point\0\
@@ -276,12 +216,11 @@ impl KrxLaunchError {
             Self::InsufficientStack => 8,
             Self::RelocationFailed => 9,
             Self::ImportBindingFailed => 10,
-            Self::VmDisabled => 11,
-            Self::PayloadTooLarge => 12,
-            Self::ExecutionFailed => 13,
-            Self::InvalidEntryPoint => 14,
-            Self::TruncatedPackage => 15,
-            Self::UnsupportedProfile => 16,
+            Self::PayloadTooLarge => 11,
+            Self::ExecutionFailed => 12,
+            Self::InvalidEntryPoint => 13,
+            Self::TruncatedPackage => 14,
+            Self::UnsupportedProfile => 15,
         }
     }
 
@@ -925,12 +864,18 @@ impl KrxPreamble {
         if s < Self::SIZE || s >= hdr.len() {
             return None;
         }
-        let max = if packed { hdr.len() } else { hdr.len().min(s + 32) };
+        let max = if packed {
+            hdr.len()
+        } else {
+            hdr.len().min(s + 32)
+        };
         let mut i = s;
         while i < max {
             if hdr[i] == 0 {
                 if !packed {
-                    return (i > s).then(|| utils::format::ascii_str(&hdr[s..i])).flatten();
+                    return (i > s)
+                        .then(|| utils::format::ascii_str(&hdr[s..i]))
+                        .flatten();
                 }
                 if i + 1 < max && hdr[i + 1] == 0 {
                     return utils::format::ascii_str(&hdr[s..=i]);
@@ -1285,68 +1230,6 @@ pub struct AssetDescriptor {
     pub meta2: u32,
 }
 
-// ── Declare 3.0 Declarative Records (Section 10.2 normative) ────────────────
-
-/// Declare Rule Record (12 bytes)
-#[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
-pub struct RuleRecord {
-    pub rule_id: u16,
-    pub trigger: u8,
-    pub flags: u8,
-    pub trigger_ref: u16,
-    pub cond_expr: u16,
-    pub action_list: u16,
-    pub action_count: u8,
-    pub priority: u8,
-    pub reserved: u16,
-}
-
-/// Declare Action Record (8 bytes)
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct ActionRecord {
-    pub op: u8,
-    pub flags: u8,
-    pub a: u16,
-    pub b: u16,
-    pub c: u16,
-}
-
-/// Declare Schedule Record (8 bytes)
-#[derive(Debug, Clone, Copy)]
-#[repr(C, packed)]
-pub struct ScheduleRecord {
-    pub schedule_id: u16,
-    pub kind: u8,
-    pub rule_ref: u16,
-    pub param: u32,
-}
-
-/// Declare UI Projection Node (8 bytes)
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct DeclareNode {
-    pub node_id: u16,
-    pub layout: u8,
-    pub item_count: u8,
-    pub title_offset: u16,
-    pub first_item_offset: u16,
-}
-
-/// Declare UI Item Record (12 bytes)
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct DeclareItem {
-    pub kind: u8,
-    pub flags: u8,
-    pub label_offset: u16,
-    pub target: u16,
-    pub value_ref: u16,
-    pub aux: u16,
-    pub reserved: u16,
-}
-
 /// Fixed-size 32-byte Index Entry for two-pass zero-alloc launcher scanner
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
@@ -1678,10 +1561,6 @@ mod tests {
         let err_stack = KrxLaunchError::InsufficientStack;
         assert_eq!(err_stack.title(), "Stack Overflow");
         assert_eq!(err_stack.message(), "Stack headroom low");
-
-        let err_vm = KrxLaunchError::VmDisabled;
-        assert_eq!(err_vm.title(), "VM Disabled");
-        assert_eq!(err_vm.message(), "VM disabled");
 
         let err_fnf = KrxLaunchError::FileNotFound;
         assert_eq!(err_fnf.title(), "File Not Found");
@@ -2942,62 +2821,6 @@ mod tests {
         assert_eq!(cache.fault_count, 3);
         assert_eq!(cache.slots[1].resident_block, Some(2));
         assert_eq!(cache.slots[0].resident_block, Some(0)); // Block 0 kept
-    }
-
-    #[test]
-    fn test_declarative_framework_and_compositor_bench() {
-        use crate::event::KeyCode;
-        use crate::proc::declare::*;
-
-        let mut walker = DeclareWalker::new("Telemetry");
-        let _ = walker.nodes.push(DeclareNode {
-            node_id: 0,
-            layout: LAYOUT_MENU,
-            item_count: 4,
-            title_offset: 0,
-            first_item_offset: 0,
-        });
-        for i in 0..4 {
-            let _ = walker.items.push(DeclareItem {
-                kind: ITEM_ACTION,
-                flags: 0,
-                label_offset: i as u16,
-                target: 0,
-                value_ref: 0,
-                aux: 0,
-                reserved: 0,
-            });
-        }
-
-        // Verify initial state
-        assert_eq!(walker.current_node_idx, 0);
-        assert_eq!(walker.selected_item, 0);
-
-        // Test key navigation (Down)
-        let handled_down = walker.handle_key(KeyCode::Down);
-        assert!(handled_down);
-        assert_eq!(walker.selected_item, 1);
-
-        // Test key navigation (Up)
-        let handled_up = walker.handle_key(KeyCode::Up);
-        assert!(handled_up);
-        assert_eq!(walker.selected_item, 0);
-
-        // Test rule triggering with boot event
-        walker.trigger_rules(TRIGGER_BOOT, 0);
-        assert_eq!(walker.take_command(), DeclareCommand::None);
-
-        // Verify navigation stack push and pop
-        assert_eq!(walker.nav_stack.len(), 0);
-        let frame = NavFrame {
-            node_idx: 0,
-            selected_item: 0,
-            scroll_top: 0,
-        };
-        assert!(walker.nav_stack.push(frame).is_ok());
-        assert_eq!(walker.nav_stack.len(), 1);
-        assert_eq!(walker.nav_stack.pop(), Some(frame));
-        assert_eq!(walker.nav_stack.len(), 0);
     }
 
     #[test]

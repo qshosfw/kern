@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 description = "Hardware Abstraction Layer for PY32F071 — thin, safe wrappers over PAC registers"
 
+[features]
+target_k10pro = []
+
 [dependencies]
 pac = { path = "../pac", package = "py32f071-pac" }
 cortex-m = { workspace = true }

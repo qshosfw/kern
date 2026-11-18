@@ -5,28 +5,56 @@ use kernel::event::KeyCode;
 
 // GPIOB memory-mapped register offsets for atomic single-cycle register access
 const GPIOB_BASE: u32 = py32_hal::pac::gpio::GPIOB_BASE;
+#[cfg(not(feature = "target_k10pro"))]
 const BSRR_OFFSET: u32 = py32_hal::pac::gpio::BSRR_OFFSET;
 const IDR_OFFSET: u32 = py32_hal::pac::gpio::IDR_OFFSET;
 
 // PB6, PB5, PB4, PB3
+#[cfg(not(feature = "target_k10pro"))]
 const PIN_MASK_COLS: u32 = (1 << 6) | (1 << 5) | (1 << 4) | (1 << 3);
 // PB15, PB14, PB13, PB12
 const PIN_MASK_ROWS: u32 = (1 << 15) | (1 << 14) | (1 << 13) | (1 << 12);
 
 #[inline(always)]
 fn set_cols_high() {
-    let bsrr = (GPIOB_BASE + BSRR_OFFSET) as *mut u32;
-    unsafe {
-        bsrr.write_volatile(PIN_MASK_COLS);
+    #[cfg(not(feature = "target_k10pro"))]
+    {
+        let bsrr = (GPIOB_BASE + BSRR_OFFSET) as *mut u32;
+        unsafe {
+            bsrr.write_volatile(PIN_MASK_COLS);
+        }
+    }
+    #[cfg(feature = "target_k10pro")]
+    {
+        for (idx, col) in bsp::pins::KB_COLS.iter().enumerate() {
+            #[cfg(feature = "swd_debug")]
+            if idx == 3 {
+                continue;
+            }
+            let _ = idx;
+            col.set_high();
+        }
     }
 }
 
 #[inline(always)]
 fn clear_col(col_idx: usize) {
-    let pin = 6 - col_idx;
-    let bsrr = (GPIOB_BASE + BSRR_OFFSET) as *mut u32;
-    unsafe {
-        bsrr.write_volatile(1 << (pin + 16));
+    #[cfg(not(feature = "target_k10pro"))]
+    {
+        let pin = 6 - col_idx;
+        let bsrr = (GPIOB_BASE + BSRR_OFFSET) as *mut u32;
+        unsafe {
+            bsrr.write_volatile(1 << (pin + 16));
+        }
+    }
+    #[cfg(feature = "target_k10pro")]
+    {
+        // KB_COLS order is [KEY_OUT1..KEY_OUT4]; col_idx 0..=3 sweeps left-to-right.
+        #[cfg(feature = "swd_debug")]
+        if col_idx == 3 {
+            return;
+        }
+        bsp::pins::KB_COLS[col_idx].set_low();
     }
 }
 
@@ -38,8 +66,15 @@ fn read_rows_raw() -> u32 {
 
 #[inline(always)]
 fn read_ptt_raw() -> bool {
-    let idr = (GPIOB_BASE + IDR_OFFSET) as *const u32;
-    unsafe { (idr.read_volatile() & (1 << 10)) == 0 }
+    #[cfg(not(feature = "target_k10pro"))]
+    {
+        let idr = (GPIOB_BASE + IDR_OFFSET) as *const u32;
+        unsafe { (idr.read_volatile() & (1 << 10)) == 0 }
+    }
+    #[cfg(feature = "target_k10pro")]
+    {
+        bsp::pins::PTT.is_low()
+    }
 }
 
 /// Scans the complete 5-column matrix and dedicated PTT pin into a 19-bit bitmask.

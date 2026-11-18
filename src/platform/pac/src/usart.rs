@@ -3,9 +3,12 @@
 //! USART1 is on APB2 and is used for the debug serial console and Rigwire.
 //! Pin mapping: PA9=TX (AF1), PA10=RX (AF1).
 
-use crate::APB2_BASE;
+use crate::{APB1_BASE, APB2_BASE};
 
 pub const USART1_BASE: u32 = APB2_BASE + 0x3800; // 0x4001_3800
+pub const USART2_BASE: u32 = APB1_BASE + 0x4400; // 0x4000_4400
+pub const USART3_BASE: u32 = APB1_BASE + 0x4800; // 0x4000_4800
+pub const USART4_BASE: u32 = APB1_BASE + 0x4C00; // 0x4000_4C00
 
 // ── Register Addresses ──────────────────────────────────────────────────────
 

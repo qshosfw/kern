@@ -32,13 +32,13 @@ impl LineCoding {
 pub const CDC_RX_BUF_SIZE: usize = 128;
 
 pub struct CdcEngine {
-    line_coding: LineCoding,
     dtr: bool,
     rts: bool,
     tx_ready: bool,
-    rx_buf: [u8; CDC_RX_BUF_SIZE],
+    line_coding: LineCoding,
     rx_head: usize,
     rx_tail: usize,
+    rx_buf: [u8; CDC_RX_BUF_SIZE],
 }
 
 impl CdcEngine {

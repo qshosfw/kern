@@ -67,30 +67,10 @@ impl Icon {
 
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
-        match val {
-            0 => Some(Icon::Antenna),
-            1 => Some(Icon::Lock),
-            2 => Some(Icon::Unlock),
-            3 => Some(Icon::Speaker),
-            4 => Some(Icon::Shield),
-            5 => Some(Icon::Keypad),
-            6 => Some(Icon::Flashlight),
-            7 => Some(Icon::Mesh),
-            8 => Some(Icon::Function),
-            9 => Some(Icon::Plug),
-            10 => Some(Icon::SerialActive),
-            11 => Some(Icon::Bolt),
-            12 => Some(Icon::Broadcast),
-            13 => Some(Icon::Storage),
-            14 => Some(Icon::Scan),
-            15 => Some(Icon::Beacon),
-            16 => Some(Icon::Monitor),
-            17 => Some(Icon::Converter),
-            18 => Some(Icon::Roger),
-            19 => Some(Icon::Beep),
-            20 => Some(Icon::NoListen),
-            21 => Some(Icon::Moon),
-            _ => None,
+        if val <= 21 {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
         }
     }
 }
@@ -460,15 +440,11 @@ impl Canvas {
         }
     }
 
+    #[inline(never)]
     pub fn load_raw_vram(&mut self, data: &[u8]) {
-        for page in 0..8 {
-            let start = page * LCD_WIDTH;
-            let end = (start + LCD_WIDTH).min(data.len());
-            if start < data.len() {
-                let slice = &data[start..end];
-                self.buffer[page][..slice.len()].copy_from_slice(slice);
-                self.dirty |= 1 << page;
-            }
+        let n = data.len().min(LCD_WIDTH * 8);
+        unsafe {
+            core::ptr::copy_nonoverlapping(data.as_ptr(), self.buffer_flat_mut().as_mut_ptr(), n);
         }
         self.sync_planes();
     }

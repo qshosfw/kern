@@ -74,6 +74,7 @@ case "$1" in
         echo ""
         echo "Options forwarded to builder:"
         echo "  --config, -c  Path to custom TOML config file"
+        echo "  --target, -t  Override device target (UV-K1, UV-K5v3, UV-K10Pro)"
         echo "  --preset      Build using predefined preset ('full', 'lean', 'security')"
         echo "  --features    Comma-separated list of additional features to activate"
         echo "  --port, -p    Serial device port for flasher (e.g. /dev/ttyACM0)"

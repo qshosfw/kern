@@ -152,6 +152,35 @@ impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> 
         }
         self.stop()
     }
+
+    /// Direct register write/read avoiding generic `embedded_hal::i2c::Operation` trait machinery.
+    #[inline(never)]
+    pub fn xfer_reg(
+        &mut self,
+        addr: u8,
+        reg: u8,
+        tx: Option<&[u8]>,
+        rx: Option<&mut [u8]>,
+    ) -> Result<(), BitbangI2cError> {
+        self.start()?;
+        self.write_byte(addr << 1)?;
+        self.write_byte(reg)?;
+        if let Some(data) = tx {
+            for &b in data {
+                self.write_byte(b)?;
+            }
+            self.stop()?;
+        } else if let Some(buf) = rx {
+            self.start()?;
+            self.write_byte((addr << 1) | 1)?;
+            let len = buf.len();
+            for (i, dst) in buf.iter_mut().enumerate() {
+                *dst = self.read_byte(i + 1 < len)?;
+            }
+            self.stop()?;
+        }
+        Ok(())
+    }
 }
 
 impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> I2c for BitbangI2c<SCL, SDA> {

@@ -12,6 +12,7 @@ pub mod subaudible;
 pub mod tuning;
 
 use core::marker::PhantomData;
+use kern_platform_traits::radio::RadioBus;
 use registers::*;
 use utils::units::{Frequency, Hertz};
 
@@ -130,7 +131,7 @@ pub struct Bk4829<'a, State = Disabled> {
     pub(crate) loopback_active: bool,
     pub(crate) baseline_xtal_trim: i16,
     pub(crate) current_freq_hz: u32,
-    pub(crate) bus: &'a mut dyn kern_platform_traits::radio::RadioBus,
+    pub(crate) bus: bsp::board::RadioBus,
     pub(crate) calib: Option<&'a [u8; 512]>,
     pub(crate) rx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) tx_subaudible: kernel::service::radio::SubaudibleTone,
@@ -771,10 +772,10 @@ impl<'a, State> Bk4829<'a, State> {
 // ── Boot & Power Transitions ────────────────────────────────────────────────
 
 impl<'a> Bk4829<'a, Disabled> {
-    pub fn new(bus: &'a mut dyn kern_platform_traits::radio::RadioBus) -> Self {
+    pub fn new(_bus: &'a mut bsp::board::RadioBus) -> Self {
         Self {
             cache: RegisterCache::new(),
-            bus,
+            bus: bsp::board::RadioBus,
             tone_gain: 96,
             saved_tx_volume: 5,
             active_demod_af: AfType::Fm,

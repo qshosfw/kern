@@ -126,40 +126,37 @@ pub const TARGET_HOME: u16 = 4;
 pub const TARGET_SLEEP: u16 = 5;
 
 pub struct BuiltinTarget {
-    pub label: &'static str,
     pub cmd: Shortcut,
     pub icon_idx: u8,
 }
 
+static BUILTIN_LABELS: &[u8] = b"Flashlight\0Settings\0Lock Keys\0Home\0Sleep\0None\0Missing\0";
+
 /// Pure OS built-in system shortcuts ordered 1..=5 matching `TARGET_FLASHLIGHT..=TARGET_SLEEP`.
 pub const BUILTIN_TARGETS: [BuiltinTarget; 5] = [
     BuiltinTarget {
-        label: "Flashlight",
         cmd: Shortcut::Flashlight,
         icon_idx: 6,
     },
     BuiltinTarget {
-        label: "Settings",
         cmd: Shortcut::Settings,
         icon_idx: 4,
     },
     BuiltinTarget {
-        label: "Lock Keys",
         cmd: Shortcut::LockKeypad,
         icon_idx: 25,
     },
     BuiltinTarget {
-        label: "Home",
         cmd: Shortcut::LaunchApp(APP_ID_LAUNCHER as u8),
         icon_idx: 24,
     },
     BuiltinTarget {
-        label: "Sleep",
         cmd: Shortcut::Sleep,
         icon_idx: 22,
     },
 ];
 
+#[inline(never)]
 pub const fn hash_app_action(path: &str, action_id: u16) -> u16 {
     let bytes = path.as_bytes();
     let mut h = 2_166_136_261u32;
@@ -181,20 +178,26 @@ pub const fn hash_app(path: &str) -> u16 {
     hash_app_action(path, 0)
 }
 
-/// Resolve the effective 16-bit target for `slot` under active context `cur_ctx`.
+/// Resolve effective 16-bit target for `slot` under `cur_ctx`, returning `(id, overridden)`.
 #[inline(never)]
-pub fn resolve_slot(keys: &KeyConfig, slot: usize, cur_ctx: u8) -> u16 {
+pub fn resolve_slot_override(keys: &KeyConfig, slot: usize, cur_ctx: u8) -> (u16, bool) {
     if slot >= KEY_SHORTCUT_COUNT {
-        return TARGET_NONE;
+        return (TARGET_NONE, false);
     }
     if cur_ctx != CTX_GLOBAL {
         for r in &keys.ctx_rules {
             if r.ctx == cur_ctx && r.slot as usize == slot {
-                return r.action;
+                return (r.action, true);
             }
         }
     }
-    keys.actions[slot]
+    (keys.actions[slot], false)
+}
+
+/// Resolve the effective 16-bit target for `slot` under active context `cur_ctx`.
+#[inline(always)]
+pub fn resolve_slot(keys: &KeyConfig, slot: usize, cur_ctx: u8) -> u16 {
+    resolve_slot_override(keys, slot, cur_ctx).0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,13 +205,6 @@ pub enum ResolvedShortcut<'a> {
     None,
     Builtin(Shortcut),
     App { path: &'a str, action_id: u16 },
-}
-
-enum TargetMeta<'a> {
-    None,
-    Missing,
-    Builtin(&'static BuiltinTarget),
-    Dynamic(&'a PackageCatalogEntry, u16, &'a str),
 }
 
 #[inline(always)]
@@ -219,63 +215,133 @@ fn builtin_icon(icon_idx: u8) -> &'static [u8; 8] {
 }
 
 #[inline(never)]
-pub fn format_label(title: &str, suffix: &str) -> ShortString {
-    let mut s = ShortString::from_str(title);
+pub fn format_label_into(out: &mut ShortString, title: &str, suffix: &str) {
+    out.set_str(title);
     if !suffix.is_empty() {
-        s.push_byte(b':');
-        s.push_str(suffix);
+        out.push_byte(b':');
+        out.push_str(suffix);
     }
-    s
 }
 
 #[inline(never)]
-fn find_target<'a>(id: u16, cat: &'a PackageCatalog) -> TargetMeta<'a> {
-    if id == TARGET_NONE {
-        return TargetMeta::None;
-    }
-    if (id & 0x8000) == 0 {
-        return BUILTIN_TARGETS
-            .get((id as usize).wrapping_sub(1))
-            .map_or(TargetMeta::None, TargetMeta::Builtin);
-    }
+fn find_dynamic<'a>(
+    id: u16,
+    cat: &'a PackageCatalog,
+) -> Option<(&'a PackageCatalogEntry, u16, &'a str)> {
     for e in cat.entries.as_slice() {
         if e.is_valid && e.exec_type == KrxExecType::App && hash_app(e.path.as_str()) == id {
-            return TargetMeta::Dynamic(e, 0, "");
+            return Some((e, 0, ""));
         }
     }
     for act in cat.actions.as_slice() {
         if let Some(e) = cat.entries.get(act.pkg_idx as usize) {
             if e.is_valid && hash_app_action(e.path.as_str(), act.action_id) == id {
-                return TargetMeta::Dynamic(e, act.action_id, act.label_str());
+                return Some((e, act.action_id, act.label_str()));
             }
         }
     }
-    TargetMeta::Missing
+    None
 }
 
 #[inline(never)]
 pub fn resolve<'a>(id: u16, cat: &'a PackageCatalog) -> ResolvedShortcut<'a> {
-    match find_target(id, cat) {
-        TargetMeta::Builtin(b) => ResolvedShortcut::Builtin(b.cmd),
-        TargetMeta::Dynamic(e, act, _) => ResolvedShortcut::App {
+    if id == TARGET_NONE {
+        return ResolvedShortcut::None;
+    }
+    if (id & 0x8000) == 0 {
+        return BUILTIN_TARGETS
+            .get((id as usize).wrapping_sub(1))
+            .map_or(ResolvedShortcut::None, |b| ResolvedShortcut::Builtin(b.cmd));
+    }
+    match find_dynamic(id, cat) {
+        Some((e, act, _)) => ResolvedShortcut::App {
             path: e.path.as_str(),
             action_id: act,
         },
-        _ => ResolvedShortcut::None,
+        None => ResolvedShortcut::None,
     }
 }
 
 #[inline(never)]
-pub fn describe(id: u16, cat: &PackageCatalog) -> (ShortString, &'static [u8; 8]) {
-    match find_target(id, cat) {
-        TargetMeta::None => (ShortString::from_str("None"), gfx::icons::RADIO_OFF),
-        TargetMeta::Missing => (ShortString::from_str("Missing"), gfx::icons::ICON_FOLDER),
-        TargetMeta::Builtin(b) => (ShortString::from_str(b.label), builtin_icon(b.icon_idx)),
-        TargetMeta::Dynamic(e, _, suffix) => (
-            format_label(e.title.as_str(), suffix),
-            crate::apps::settings::apps::package_icon_8(e.title.as_str(), e.icon_id),
-        ),
+pub fn describe_into(
+    id: u16,
+    cat: &PackageCatalog,
+    starred: bool,
+    out: &mut ShortString,
+) -> &'static [u8; 8] {
+    out.set_str(if starred { "*:" } else { "" });
+    let mut lbl_idx = 5u8;
+    if id != TARGET_NONE {
+        if (id & 0x8000) == 0 {
+            let i = (id as usize).wrapping_sub(1);
+            if let Some(b) = BUILTIN_TARGETS.get(i) {
+                out.push_str(utils::format::nth_cstr(BUILTIN_LABELS, i as u8));
+                return builtin_icon(b.icon_idx);
+            }
+        } else if let Some((e, _, suffix)) = find_dynamic(id, cat) {
+            out.push_str(e.title.as_str());
+            if !suffix.is_empty() {
+                out.push_byte(b':');
+                out.push_str(suffix);
+            }
+            return crate::apps::settings::apps::package_icon_8(e.title.as_str(), e.icon_id);
+        } else {
+            lbl_idx = 6;
+        }
     }
+    out.push_str(utils::format::nth_cstr(BUILTIN_LABELS, lbl_idx));
+    if lbl_idx == 6 {
+        gfx::icons::ICON_FOLDER
+    } else {
+        gfx::icons::RADIO_OFF
+    }
+}
+
+#[inline(never)]
+pub fn assign_rule(keys: &mut KeyConfig, cur_ctx: u8, slot: usize, target_id: u16) -> u8 {
+    if slot >= KEY_SHORTCUT_COUNT {
+        return 0;
+    }
+    if cur_ctx == 0 {
+        if keys.actions[slot] != target_id {
+            keys.actions[slot] = target_id;
+            return 1;
+        }
+        return 0;
+    }
+    let clear = keys.actions[slot] == target_id;
+    let mut free_idx = usize::MAX;
+    for i in 0..keys.ctx_rules.len() {
+        let r = &mut keys.ctx_rules[i];
+        if r.ctx == cur_ctx && r.slot as usize == slot {
+            r.ctx = if clear { 0 } else { cur_ctx };
+            r.action = if clear { 0 } else { target_id };
+            return 1;
+        }
+        if free_idx == usize::MAX && r.ctx == 0 {
+            free_idx = i;
+        }
+    }
+    if clear {
+        return 0;
+    }
+    if free_idx < keys.ctx_rules.len() {
+        keys.ctx_rules[free_idx] = crate::config::keys::CtxRule {
+            ctx: cur_ctx,
+            slot: slot as u8,
+            action: target_id,
+        };
+        1
+    } else {
+        2
+    }
+}
+
+#[cfg(test)]
+pub fn describe(id: u16, cat: &PackageCatalog) -> (ShortString, &'static [u8; 8]) {
+    let mut s = ShortString::empty();
+    let icon = describe_into(id, cat, false, &mut s);
+    (s, icon)
 }
 
 pub const MAX_PICKER_ITEMS: usize = 28;
@@ -301,19 +367,23 @@ fn picker_scratch() -> &'static mut PickerScratch {
 }
 
 #[inline(never)]
-fn push_picker(
-    ps: &mut PickerScratch,
-    n: &mut usize,
-    id: u16,
-    title: &str,
-    suffix: &str,
-    icon: &'static [u8; 8],
-) {
-    if *n < MAX_PICKER_ITEMS {
-        ps.ids[*n] = id;
-        ps.labels[*n] = format_label(title, suffix);
-        ps.icons[*n] = icon;
-        *n += 1;
+fn push_entry(id: u16, icon: &'static [u8; 8], title: &str) {
+    let ps = picker_scratch();
+    let n = ps.count;
+    if n < MAX_PICKER_ITEMS {
+        ps.ids[n] = id;
+        ps.icons[n] = icon;
+        ps.labels[n].set_str(title);
+        ps.count = n + 1;
+    }
+}
+
+#[inline(never)]
+fn append_last_suffix(suffix: &str) {
+    let ps = picker_scratch();
+    if let Some(last) = ps.labels.get_mut(ps.count.wrapping_sub(1)) {
+        last.push_byte(b':');
+        last.push_str(suffix);
     }
 }
 
@@ -325,17 +395,18 @@ pub fn build_picker_sheet(
     catalog: &PackageCatalog,
 ) -> OptionSheet {
     let ps = picker_scratch();
-    let mut n = 0usize;
+    ps.count = 0;
 
-    push_picker(ps, &mut n, TARGET_NONE, "None", "", gfx::icons::RADIO_OFF);
-    for (idx, b) in BUILTIN_TARGETS.iter().enumerate() {
-        push_picker(
-            ps,
-            &mut n,
-            (idx + 1) as u16,
-            b.label,
-            "",
+    push_entry(
+        TARGET_NONE,
+        gfx::icons::RADIO_OFF,
+        utils::format::nth_cstr(BUILTIN_LABELS, 5),
+    );
+    for (i, b) in BUILTIN_TARGETS.iter().enumerate() {
+        push_entry(
+            (i + 1) as u16,
             builtin_icon(b.icon_idx),
+            utils::format::nth_cstr(BUILTIN_LABELS, i as u8),
         );
     }
     for (pkg_idx, e) in catalog.entries.iter().enumerate() {
@@ -343,35 +414,27 @@ pub fn build_picker_sheet(
             continue;
         }
         let icon = crate::apps::settings::apps::package_icon_8(e.title.as_str(), e.icon_id);
-        push_picker(
-            ps,
-            &mut n,
-            hash_app(e.path.as_str()),
-            e.title.as_str(),
-            "",
-            icon,
-        );
+        let t = e.title.as_str();
+        let p = e.path.as_str();
+        push_entry(hash_app(p), icon, t);
         for act in catalog.actions.iter() {
             if act.pkg_idx as usize == pkg_idx
                 && (act.scope_mask & KrxActionDecl::SCOPE_SHORTCUT) != 0
             {
-                push_picker(
-                    ps,
-                    &mut n,
-                    hash_app_action(e.path.as_str(), act.action_id),
-                    e.title.as_str(),
-                    act.label_str(),
-                    icon,
-                );
+                push_entry(hash_app_action(p, act.action_id), icon, t);
+                append_last_suffix(act.label_str());
             }
         }
     }
 
-    ps.count = n;
-    let selected = ps.ids[..n]
-        .iter()
-        .position(|&id| id == current_id)
-        .unwrap_or(0);
+    let n = ps.count;
+    let mut selected = 0usize;
+    for i in 0..n {
+        if ps.ids[i] == current_id {
+            selected = i;
+            break;
+        }
+    }
     OptionSheet::new_dynamic(title, &ps.labels[..n], selected)
         .with_radio(true)
         .with_icons(&ps.icons[..n])

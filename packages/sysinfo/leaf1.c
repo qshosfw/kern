@@ -1,122 +1,99 @@
 /*
- * P0 Leaf 1: Hardware Identity, UID16, QS-1 Factory Cert & BootROM Scanner.
- * Populates canonical serial/MAC/ID64/UID128 directly from `sys_query`,
- * then chains into Leaf 2 (`KRX_LEAF_KIND_CALL_LEAF`).
+ * P0 Leaf 1: Flash-resident Legal & Regulatory Tab Renderer (< 1 KB).
+ * Content aligned with the Quansheng UV-K1 / K5 V3 User Manuals:
+ * - Page 0: FCC Part 15B / 97 & CE RED 2014/53/EU marks
+ * - Page 1: FCC Part 15.19 compliance statement
+ * - Page 2: RF Exposure / SAR (25mm face, belt clip) & operating limits (0-40 C, <2000m)
+ * - Page 3: Battery & TX safety precautions
  */
 
 #include "sysinfo_shared.h"
 
-static const char L1_PRES[]    = "Present";
-static const char L1_MCU_PFX[] = "PY32F071 ";
+// 15x11 MSB-first row-major FCC monogram bitmap (22B)
+static const u8 FCC_BMP[22] = {
+    0xF8, 0xFC, 0xF9, 0xFE, 0xC3, 0x9E, 0xF3, 0x3C, 0xF3, 0x30, 0xC3, 0x30,
+    0xC3, 0x30, 0xC3, 0x3C, 0xC3, 0x9E, 0xC1, 0xFE, 0xC0, 0xFC
+};
 
-static void fmt_hex_bytes(const u8* src, u8 count, char* out) {
-    for (u8 i = 0; i < count; i++) {
-        out[i * 2 + 0] = si_hex_nib(src[i] >> 4);
-        out[i * 2 + 1] = si_hex_nib(src[i] & 0x0Fu);
-    }
-    out[count * 2] = 0;
+// 14x10 MSB-first row-major CE conformity bitmap (20B)
+static const u8 CE_BMP[20] = {
+    0x3C, 0x7C, 0x7C, 0xFC, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xF8, 0xC0, 0xF8,
+    0xC0, 0xC0, 0xC0, 0xC0, 0x7C, 0xFC, 0x3C, 0x7C
+};
+
+static const char REG_STR[] =
+    "FCC Part 15B / 97\0"
+    "Class B & Amateur\0"
+    "CE RED 2014/53/EU\0"
+    "SAR EN 62209-1528\0"
+    "FCC PART 15\0"
+    "47 CFR 15.19\0"
+    "Complies with FCC Part 15.\0"
+    "1. No harmful interf.\0"
+    "2. Accept all interf.\0"
+    "Mods void user authority.\0"
+    "RF SAFETY\0"
+    "2014/53/EU SAR\0"
+    "Hold TX ~25mm from face.\0"
+    "Belt clip for body-worn.\0"
+    "0-40 C, alt < 2000m.\0"
+    "Valid license required.\0"
+    "SAFETY\0"
+    "BATTERY & TX\0"
+    "Use std pack/charger.\0"
+    "Never short/burn cell.\0"
+    "No TX without antenna.\0"
+    "Tech service only.";
+
+static void draw_mark_card(
+    const KrxApiTable* api, u8 y,
+    const u8* bmp, u8 bw, u8 bh, u8 bsz,
+    u8 title_idx, u8 sub_idx
+) {
+    const CapDisplayVTable* d = api->display;
+    const char* t = si_nth(REG_STR, title_idx);
+    const char* s = si_nth(REG_STR, sub_idx);
+    krx_draw_rounded_box(api, 4, y, 117, 22);
+    d->draw_bitmap(9, (i16)(y + (u8)((22u - bh) >> 1)), bw, bh, bmp, bsz);
+    d->draw_str(28, (i16)(y + 9), (const u8*)t, si_len(t), 1, COLOR_FILL);
+    d->draw_str(28, (i16)(y + 17), (const u8*)s, si_len(s), 0, COLOR_FILL);
 }
 
 __attribute__((section(".text.entry")))
 u32 leaf1_entry(u32 op, const KrxApiTable* api, void* param) {
     (void)op;
     KrxLeafContext* ctx = (KrxLeafContext*)param;
-    if (!ctx || !api || !ctx->arg) return 1;
+    if (!ctx || !api || !api->display) return 1;
 
-    SysInfoState* st = (SysInfoState*)ctx->arg;
-    const CapServiceVTable* s = api->service;
+    const CapDisplayVTable* d = api->display;
+    const CapUiVTable* ui = api->ui;
+    u8 page = (u8)ctx->arg;
+    if (page > 3u) page = 3u;
 
-    // 1. Canonical Crockford Base32 serial & EUI-48 MAC
-    if (s && s->sys_query && s->sys_query(KRX_SYS_QUERY_SERIAL_STR, 0, (u8*)st->sn, 14) == 14) {
-        st->sn[14] = 0;
-    }
-
-    u8 mac[6];
-    si_zero(mac, 6);
-    if (s && s->sys_query) s->sys_query(KRX_SYS_QUERY_MAC, 0, mac, 6);
-    for (u8 i = 0; i < 6; i++) {
-        st->mac[i * 3 + 0] = si_hex_nib(mac[i] >> 4);
-        st->mac[i * 3 + 1] = si_hex_nib(mac[i] & 0x0Fu);
-        st->mac[i * 3 + 2] = (i < 5) ? ':' : 0;
-    }
-
-    // 2. Canonical 64-bit hardware ID (`0x...`) & 128-bit raw UID
-    u8 ser64[8];
-    si_zero(ser64, 8);
-    if (s && s->sys_query) s->sys_query(KRX_SYS_QUERY_SERIAL64, 0, ser64, 8);
-    st->hex_id64[0] = '0';
-    st->hex_id64[1] = 'x';
-    for (u8 i = 0; i < 8; i++) {
-        u8 b = ser64[7 - i];
-        st->hex_id64[2 + i * 2] = si_hex_nib(b >> 4);
-        st->hex_id64[3 + i * 2] = si_hex_nib(b & 0x0Fu);
-    }
-    st->hex_id64[18] = 0;
-
-    u8 uid16[16];
-    si_zero(uid16, 16);
-    if (s && s->sys_query) s->sys_query(KRX_SYS_QUERY_UID16, 0, uid16, 16);
-    fmt_hex_bytes(uid16, 8, st->hex_uid_hi);
-    fmt_hex_bytes(uid16 + 8, 8, st->hex_uid_lo);
-
-    // 3. MCU Flash size
-    u8 kb_raw[2] = { 0, 0 };
-    u16 flash_kb = 128;
-    if (s && s->sys_query && s->sys_query(KRX_SYS_QUERY_FLASH_SIZE_KB, 0, kb_raw, 2) == 2) {
-        flash_kb = (u16)kb_raw[0] | ((u16)kb_raw[1] << 8);
-    }
-    st->flash_kb = flash_kb;
-    si_copy((u8*)st->mcu, (const u8*)L1_MCU_PFX, 9);
-    u8 klen = si_put_uint(api, st->mcu + 9, flash_kb);
-    st->mcu[9 + klen] = 'K';
-    st->mcu[10 + klen] = 0;
-
-    // 4. Factory certificate (`1-sq` QS-1 tag)
-    u8 cert[104];
-    if (s && s->sys_query && s->sys_query(KRX_SYS_QUERY_FACTORY_CERT, 0, cert, 104) == 104) {
-        st->has_qs1 = 1;
-        u8 ok = (cert[80] == '1' && cert[81] == '-' && cert[82] == 's' && cert[83] == 'q');
-        for (u8 i = 0; ok && i < 16; i++) {
-            if (cert[84 + i] < 0x20 || cert[84 + i] > 0x7E) ok = 0;
+    if (page == 0u) {
+        draw_mark_card(api, 13, FCC_BMP, 15, 11, sizeof(FCC_BMP), 0, 1);
+        draw_mark_card(api, 37, CE_BMP, 14, 10, sizeof(CE_BMP), 2, 3);
+    } else {
+        u8 base = (u8)(4u + (page - 1u) * 6u);
+        const char* tag = si_nth(REG_STR, base);
+        const char* sub = si_nth(REG_STR, (u8)(base + 1u));
+        if (ui && ui->ui_draw_tag_badge) {
+            ui->ui_draw_tag_badge(5, 13, (const u8*)tag, si_len(tag), 1);
         }
-        if (ok) {
-            si_copy((u8*)st->qs1, &cert[84], 16);
-            st->qs1[16] = 0;
-        } else {
-            si_copy((u8*)st->qs1, (const u8*)L1_PRES, 8);
+        d->draw_str_align(120, 19, (const u8*)sub, si_len(sub), 0, COLOR_FILL, 2);
+        d->draw_dotted_line_h(5, 120, 24, 2, COLOR_FILL);
+        for (u8 i = 0; i < 4u; i++) {
+            const char* ln = si_nth(REG_STR, (u8)(base + 2u + i));
+            d->draw_str(6, (i16)(33 + i * 8), (const u8*)ln, si_len(ln), 0, COLOR_FILL);
         }
     }
 
-    // 5. Scan raw bootloader ROM (`0x0800_1F00..0x0800_2700`) for X.YY.ZZ\0
-    st->boot[0] = '-';
-    st->boot[1] = '-';
-    st->boot[2] = 0;
-    if (s && s->sys_query) {
-        u8 rom[128];
-        u8 found = 0;
-        for (u32 off = 0; off < 2048 && !found; off += 120) {
-            u16 n = s->sys_query(KRX_SYS_QUERY_BOOTLOADER_ROM, off, rom, sizeof(rom));
-            if (n < 8) break;
-            for (u16 i = 0; i + 8 <= n; i++) {
-                if (rom[i + 1] == '.' && rom[i + 4] == '.' && rom[i + 7] == 0 &&
-                    rom[i] >= '0' && rom[i] <= '9' &&
-                    rom[i + 2] >= '0' && rom[i + 2] <= '9' &&
-                    rom[i + 3] >= '0' && rom[i + 3] <= '9' &&
-                    rom[i + 5] >= '0' && rom[i + 5] <= '9' &&
-                    rom[i + 6] >= '0' && rom[i + 6] <= '9') {
-                    si_copy((u8*)st->boot, &rom[i], 7);
-                    st->boot[7] = 0;
-                    found = 1;
-                    break;
-                }
-            }
-            if (n < sizeof(rom)) break;
-        }
+    if (ui && ui->ui_draw_scrollbar) {
+        ui->ui_draw_scrollbar(123, 11, 51, page, 4, 1);
     }
 
-    // Chain straight to Leaf 2 (Firmware Meta, Civil Date & Active Model)
-    ctx->continuation.kind = KRX_LEAF_KIND_CALL_LEAF;
-    ctx->continuation.target_or_code = 2;
-    ctx->continuation.payload = ctx->arg;
+    ctx->continuation.kind = KRX_LEAF_KIND_DONE;
+    ctx->continuation.target_or_code = 0;
+    ctx->continuation.payload = 0;
     return 0;
 }

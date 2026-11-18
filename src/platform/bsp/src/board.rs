@@ -256,6 +256,28 @@ impl Board {
         bus.write_reg(0x33, reg33);
     }
 
+    /// Control an individual BK4829 GPIO output pin (0..=6) in Reg 0x33 without altering other bits.
+    /// Used on K10 Pro for `BT_EN` (`GPIO5`) and `GPS_EN` + `BL1551B` mux (`GPIO6`).
+    pub fn set_bk_gpio(bus: &mut RadioBus, gpio_idx: u8, high: bool) {
+        use kern_platform_traits::radio::RadioBus as _;
+        if gpio_idx > 6 {
+            return;
+        }
+        let mut reg33 = bus.read_reg(0x33);
+        if reg33 == 0xFFFF {
+            reg33 = 0x9000;
+        }
+        // BK4829 Reg 0x33 bits [6:0] are GPIO6..GPIO0 output values (bit (6 - idx) or direct idx?
+        // Per Reg 0x33 mapping: bit 0..=2 correspond to GPIO0..GPIO2, GPIO5/6 occupy bits 5/6).
+        let mask = 1u16 << gpio_idx;
+        if high {
+            reg33 |= mask;
+        } else {
+            reg33 &= !mask;
+        }
+        bus.write_reg(0x33, reg33);
+    }
+
     pub fn wdt_feed() {
         hal::wdt::Watchdog::feed();
     }
@@ -298,6 +320,8 @@ impl Board {
         hal::spi::init();
         hal::spi::init_spi2();
         hal::uart::init();
+        #[cfg(feature = "target_k10pro")]
+        hal::uart::init_usart3(115_200);
 
         // Create the trait wrappers
         Self {
@@ -314,6 +338,32 @@ impl Board {
                 pin: board_pins::FLASH_CS,
             },
         }
+    }
+}
+
+#[cfg(feature = "target_k10pro")]
+pub struct Usart3Serial;
+
+#[cfg(feature = "target_k10pro")]
+impl kern_platform_traits::serial::SerialBackend for Usart3Serial {
+    fn write_bytes(&mut self, data: &[u8]) {
+        let _ = hal::uart::UsartInstance::USART3.write_bytes(data);
+    }
+
+    #[inline(always)]
+    fn try_read_byte(&mut self) -> Option<u8> {
+        hal::uart::UsartInstance::USART3.try_read_byte()
+    }
+}
+
+#[cfg(feature = "target_k10pro")]
+impl kern_platform_traits::serial::SerialControl for Usart3Serial {
+    fn set_baud(&mut self, baud: u32) {
+        hal::uart::set_usart3_baud(baud);
+    }
+
+    fn flush(&mut self) {
+        hal::uart::UsartInstance::USART3.wait_tx_complete();
     }
 }
 

@@ -5,32 +5,29 @@
 
 use crate::hardware::SystemHardware;
 use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
-use crate::services::storage::DirEntryInfo;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{ModulationMode, PowerService, RfFineTuning, RfModulation, RfSquelch};
 use kernel::wire::*;
 use utils::units::Frequency;
 
-/// Maximum upload size accepted over RigWire (aligned to transient arena).
-pub const MAX_WIRE_FILE_SIZE: usize = crate::data::arena::TRANSIENT_ARENA_BYTES;
+/// Single-indirect KernFS page limit: 8 L1 index pages x 128 pages x 256 B = 256 KiB.
+const MAX_WIRE_FILE_SIZE: usize = 8 * 128 * 256;
 
-/// Reuses the shared transient arena so it incurs zero static SRAM overhead.
-#[inline(always)]
-pub fn wire_file_staging_buf() -> &'static mut [u8; MAX_WIRE_FILE_SIZE] {
-    crate::data::arena::transient_arena_bytes_mut()
-}
-
-/// Active transfer session state.
+/// Active transfer session state. Coalesces writes in the 512 B `staging_buf`
+/// so arbitrary-size files stream straight to KernFS with zero RAM limit.
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ActiveTransfer {
     pub active: bool,
-    pub transfer_id: u16,
     pub mode: u8,
+    pub path_len: u8,
+    pub transfer_id: u16,
+    pub chunk_size: u16,
+    pub buf_len: u16,
     pub total_size: u32,
     pub current_len: u32,
-    pub chunk_size: u16,
+    pub buf_offset: u32,
     pub path: [u8; 32],
-    pub path_len: u8,
 }
 
 impl ActiveTransfer {
@@ -42,6 +39,8 @@ impl ActiveTransfer {
             total_size: 0,
             current_len: 0,
             chunk_size: 0,
+            buf_offset: 0,
+            buf_len: 0,
             path: [0u8; 32],
             path_len: 0,
         }
@@ -107,23 +106,23 @@ impl WireCtx<'_, '_> {
     }
 
     #[inline(never)]
-    fn write_u8(&mut self, v: u8) {
-        self.write_bytes(&[v]);
-    }
-
-    #[inline(never)]
-    fn write_u16(&mut self, v: u16) {
-        self.write_bytes(&v.to_le_bytes());
-    }
-
-    #[inline(never)]
-    fn write_u32(&mut self, v: u32) {
-        self.write_bytes(&v.to_le_bytes());
+    fn write_le(&mut self, v: u32, n: usize) {
+        self.write_bytes(&v.to_le_bytes()[..n]);
     }
 
     #[inline(always)]
-    fn remaining(&self) -> usize {
-        128usize.saturating_sub(self.pos)
+    fn write_u8(&mut self, v: u8) {
+        self.write_le(v as u32, 1);
+    }
+
+    #[inline(always)]
+    fn write_u16(&mut self, v: u16) {
+        self.write_le(v as u32, 2);
+    }
+
+    #[inline(always)]
+    fn write_u32(&mut self, v: u32) {
+        self.write_le(v, 4);
     }
 }
 
@@ -138,27 +137,22 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     let mut out_uninit = core::mem::MaybeUninit::<[u8; 128]>::uninit();
     let out = unsafe { &mut *out_uninit.as_mut_ptr() };
 
-    let (status, resp_len) = if header.service == SERVICE_DATA && header.opcode == OP_TRANSFER_CHUNK
-    {
-        on_transfer_chunk(payload, hw, out)
-    } else {
-        let mut ctx = WireCtx {
-            hw,
-            out,
-            pos: 0,
-            now,
-        };
-        let res = match header.service {
-            SERVICE_CONTROL => handle_control_service(header.opcode, payload, &mut ctx),
-            SERVICE_DATA => handle_data_service(header.opcode, payload, &mut ctx),
-            SERVICE_EVENTS => handle_events_service(header.opcode, payload),
-            _ => return false,
-        };
-        let Some(status) = res else {
-            return false;
-        };
-        (status, ctx.pos)
+    let mut ctx = WireCtx {
+        hw,
+        out,
+        pos: 0,
+        now,
     };
+    let res = match header.service {
+        SERVICE_CONTROL => handle_control_service(header.opcode, payload, &mut ctx),
+        SERVICE_DATA => handle_data_service(header.opcode, payload, &mut ctx),
+        SERVICE_EVENTS => handle_events_service(header.opcode, payload),
+        _ => return false,
+    };
+    let Some(status) = res else {
+        return false;
+    };
+    let resp_len = if status == WireStatus::Ok { ctx.pos } else { 0 };
     let _ = hw.wire.send_response(header, status, &out[..resp_len]);
     true
 }
@@ -214,21 +208,21 @@ fn config_domain_idx(instance: u8) -> Result<usize, WireStatus> {
     }
 }
 
+#[inline(never)]
 fn read_sys_facet(facet: u16, ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     match facet {
         FACET_SYS_IDENTITY => {
             let serial = bsp::uid::get_hardware_serial64();
             ctx.write_bytes(&serial.to_le_bytes());
-            ctx.write_bytes(&bsp::uid::read_mac_address());
+            ctx.write_bytes(&bsp::uid::mac_from_serial64(serial));
             ctx.write_bytes(&bsp::uid::encode_crockford64(serial)[..14]);
             let is_auth = ctx.hw.wire.session.is_authenticated;
             ctx.write_u8(is_auth as u8);
-            let uid = if is_auth {
-                bsp::uid::read_mcu_uid()
+            if is_auth {
+                ctx.write_bytes(&bsp::uid::read_mcu_uid());
             } else {
-                [0u8; 12]
-            };
-            ctx.write_bytes(&uid);
+                ctx.write_zeroes(12);
+            }
         }
         FACET_SYS_METRICS => {
             ctx.write_u32(ctx.now);
@@ -253,6 +247,7 @@ fn read_sys_facet(facet: u16, ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatu
     Ok(())
 }
 
+#[inline(never)]
 fn read_radio_facet(facet: u16, instance: u8, ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let (slot, ch) = active_radio_slot(instance);
     let coord = &crate::radio_state_ref().coord;
@@ -422,11 +417,23 @@ fn handle_resource_invoke(
 ) -> WireStatus {
     match (handle.domain, action_id) {
         (DOMAIN_SYSTEM, ACTION_SYS_REBOOT) => {
-            let mode = [
-                kernel::power::RebootMode::Firmware,
-                kernel::power::RebootMode::Bootloader,
-                kernel::power::RebootMode::SafeRecovery,
-            ][params.first().copied().unwrap_or(0).min(2) as usize];
+            let arg = params.first().copied().unwrap_or(0);
+            if arg == 3 {
+                panic!("Wire test panic");
+            }
+            if arg == 4 {
+                #[cfg(target_arch = "arm")]
+                unsafe {
+                    core::arch::asm!("udf #0x7F", options(noreturn));
+                }
+                #[cfg(not(target_arch = "arm"))]
+                panic!("Wire test fault");
+            }
+            let mode = match arg {
+                1 => kernel::power::RebootMode::Bootloader,
+                2 => kernel::power::RebootMode::SafeRecovery,
+                _ => kernel::power::RebootMode::Firmware,
+            };
             kernel::power::PowerControl::reboot_with(mode);
         }
         (DOMAIN_SYSTEM, ACTION_SYS_FLASHLIGHT) => {
@@ -566,6 +573,7 @@ fn validate_file_path(path: &str, is_write: bool, allow_calib: bool) -> Result<(
     Ok(())
 }
 
+#[inline(never)]
 fn invalidate_apps_if_needed(path: &str) {
     if path.starts_with("/apps/") {
         crate::apps::launcher::catalog::get_catalog().mark_dirty();
@@ -610,6 +618,60 @@ fn check_regular_file(
     }
 }
 
+#[inline(never)]
+fn flush_transfer_buf(
+    transfer: &mut ActiveTransfer,
+    fs: &mut crate::services::SystemStorage,
+    flush_all: bool,
+) -> Result<(), WireStatus> {
+    let staging = crate::data::arena::staging_buf();
+    let path = utils::format::ascii_str(&transfer.path[..transfer.path_len as usize]).unwrap_or("");
+    loop {
+        let len = transfer.buf_len as usize;
+        let write_len = if len >= 256 {
+            256
+        } else if flush_all && len > 0 {
+            len
+        } else {
+            return Ok(());
+        };
+        if fs
+            .fs
+            .write_at(path, transfer.buf_offset as usize, &staging[..write_len])
+            .is_err()
+        {
+            return Err(WireStatus::IoError);
+        }
+        let rem = len - write_len;
+        if rem > 0 {
+            let (dst, src) = staging.split_at_mut(write_len);
+            let n = rem.min(dst.len()).min(src.len());
+            dst[..n].copy_from_slice(&src[..n]);
+        }
+        transfer.buf_offset += write_len as u32;
+        transfer.buf_len = rem as u16;
+    }
+}
+
+#[inline(never)]
+fn stream_file_crc32(fs: &mut crate::services::SystemStorage, path: &str, size: usize) -> u32 {
+    let mut crc_val = 0xFFFF_FFFFu32;
+    let mut cur_off = 0usize;
+    let buf = &mut crate::data::arena::staging_buf()[..256];
+    while cur_off < size {
+        let to_read = (size - cur_off).min(buf.len());
+        match fs.read_file_at(path, cur_off, &mut buf[..to_read]) {
+            Ok(n) if n > 0 => {
+                crc_val = crypto::crc::CrcEngine::crc32_update(crc_val, &buf[..n]);
+                cur_off += n;
+            }
+            _ => break,
+        }
+    }
+    !crc_val
+}
+
+#[inline(never)]
 fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferOpenRequest::parse(payload).ok_or(WireStatus::BadLength)?;
     if req.mode > TRANSFER_MODE_WRITE {
@@ -618,11 +680,20 @@ fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
     let is_write = req.mode == TRANSFER_MODE_WRITE;
     let existing_size = check_regular_file(ctx.hw.filesystem, req.path, is_write, is_write)?;
     if is_write {
-        if req.total_size as usize > MAX_WIRE_FILE_SIZE {
+        let req_sz = req.total_size as usize;
+        if req_sz > MAX_WIRE_FILE_SIZE {
             return Err(WireStatus::BadLength);
         }
-        if ctx.hw.filesystem.stats().free_sectors < 4 {
+        let is_calib = req.path == CALIB_FILE_PATH;
+        if is_calib && req_sz != 512 {
+            return Err(WireStatus::SafetyDenied);
+        }
+        let free_bytes = (ctx.hw.filesystem.stats().free_sectors as usize) * 15 * 256;
+        if req_sz > free_bytes + existing_size as usize {
             return Err(WireStatus::Failed);
+        }
+        if !is_calib && ctx.hw.filesystem.write_file(req.path, &[]).is_err() {
+            return Err(WireStatus::IoError);
         }
     }
 
@@ -642,6 +713,8 @@ fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
         t.total_size = req.total_size;
         t.current_len = 0;
         t.chunk_size = chunk_size;
+        t.buf_offset = 0;
+        t.buf_len = 0;
         t.path[..path_bytes.len()].copy_from_slice(path_bytes);
         t.path_len = path_bytes.len() as u8;
     }
@@ -653,64 +726,68 @@ fn on_transfer_open(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
 }
 
 #[inline(never)]
-fn on_transfer_chunk(
-    payload: &[u8],
-    hw: &mut SystemHardware,
-    out: &mut [u8; 128],
-) -> (WireStatus, usize) {
-    let Some(req) = TransferChunkRequest::parse(payload) else {
-        return (WireStatus::BadLength, 0);
-    };
-    let Some(transfer) = active_transfer_mut(req.transfer_id) else {
-        return (WireStatus::BadSession, 0);
-    };
+fn on_transfer_chunk(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+    let req = TransferChunkRequest::parse(payload).ok_or(WireStatus::BadLength)?;
+    let transfer = active_transfer_mut(req.transfer_id).ok_or(WireStatus::BadSession)?;
 
     let off = req.offset as usize;
-    out[..2].copy_from_slice(&req.transfer_id.to_le_bytes());
+    ctx.write_u16(req.transfer_id);
     if transfer.mode == TRANSFER_MODE_WRITE {
         let chunk_len = req.data.len();
-        let Some(end) = off.checked_add(chunk_len) else {
-            return (WireStatus::BadRange, 0);
-        };
+        let end = off.checked_add(chunk_len).ok_or(WireStatus::BadRange)?;
         if end > MAX_WIRE_FILE_SIZE {
-            return (WireStatus::BadLength, 0);
+            return Err(WireStatus::BadLength);
         }
-        wire_file_staging_buf()[off..end].copy_from_slice(req.data);
+        let is_calib = transfer.path_str() == CALIB_FILE_PATH;
+        let staging = crate::data::arena::staging_buf();
+        if is_calib {
+            if end > staging.len() {
+                return Err(WireStatus::BadLength);
+            }
+            staging[off..end].copy_from_slice(req.data);
+        } else {
+            let expected_off = transfer.buf_offset as usize + transfer.buf_len as usize;
+            if off != expected_off || transfer.buf_len as usize + chunk_len > staging.len() {
+                flush_transfer_buf(transfer, ctx.hw.filesystem, true)?;
+                transfer.buf_offset = off as u32;
+            }
+            let pos = transfer.buf_len as usize;
+            staging[pos..pos + chunk_len].copy_from_slice(req.data);
+            transfer.buf_len = (pos + chunk_len) as u16;
+            flush_transfer_buf(transfer, ctx.hw.filesystem, false)?;
+        }
         let new_len = end as u32;
         transfer.current_len = transfer.current_len.max(new_len);
-        out[2..4].copy_from_slice(&(chunk_len as u16).to_le_bytes());
-        out[4..8].copy_from_slice(&new_len.to_le_bytes());
-        (WireStatus::Ok, 8)
+        ctx.write_u16(chunk_len as u16);
+        ctx.write_u32(new_len);
     } else {
         let len = (req.length as usize).min(120);
-        let read_sz = hw
+        let read_sz = ctx
+            .hw
             .filesystem
-            .read_file_at(transfer.path_str(), off, &mut out[8..8 + len])
+            .read_file_at(transfer.path_str(), off, &mut ctx.out[8..8 + len])
             .unwrap_or(0);
-        out[2..6].copy_from_slice(&(off as u32).to_le_bytes());
-        out[6..8].copy_from_slice(&(read_sz as u16).to_le_bytes());
-        (WireStatus::Ok, 8 + read_sz)
+        ctx.write_u32(off as u32);
+        ctx.write_u16(read_sz as u16);
+        ctx.pos = 8 + read_sz;
     }
+    Ok(())
 }
 
 #[inline(never)]
 fn commit_calibration_payload(
-    staging: &[u8; MAX_WIRE_FILE_SIZE],
+    staging: &[u8; 512],
     total_len: usize,
     hw: &mut SystemHardware,
 ) -> Result<(), WireStatus> {
-    if total_len != 512 {
-        return Err(WireStatus::SafetyDenied);
-    }
-    let calib_slice: &[u8; 512] = unsafe { &*(staging.as_ptr() as *const [u8; 512]) };
-    if !is_valid_calibration(calib_slice) {
+    if total_len != 512 || !is_valid_calibration(staging) {
         return Err(WireStatus::SafetyDenied);
     }
 
     let mcu_uid = bsp::uid::read_mcu_uid();
     let calib = unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
     if calib
-        .commit_with_backup(hw.filesystem, calib_slice, &mcu_uid)
+        .commit_with_backup(hw.filesystem, staging, &mcu_uid)
         .is_err()
     {
         return Err(WireStatus::IoError);
@@ -724,6 +801,7 @@ fn commit_calibration_payload(
     Ok(())
 }
 
+#[inline(never)]
 fn on_transfer_close(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let req = TransferCloseRequest::parse(payload).ok_or(WireStatus::BadLength)?;
     let transfer = active_transfer_mut(req.transfer_id).ok_or(WireStatus::BadSession)?;
@@ -731,24 +809,24 @@ fn on_transfer_close(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wi
     transfer.active = false;
     let mut actual_crc = 0u32;
     if transfer.mode == TRANSFER_MODE_WRITE {
-        let staging = wire_file_staging_buf();
-        let total_len = (transfer.current_len as usize).min(staging.len());
-        actual_crc = crypto::crc::CrcEngine::crc32(&staging[..total_len]);
-        if req.expected_crc32 != 0 && req.expected_crc32 != actual_crc {
-            return Err(WireStatus::Failed);
-        }
-        let path = transfer.path_str();
-        if path == CALIB_FILE_PATH {
+        let total_len = transfer.current_len as usize;
+        if transfer.path_str() == CALIB_FILE_PATH {
+            let staging = crate::data::arena::staging_buf();
             commit_calibration_payload(staging, total_len, ctx.hw)?;
-        } else if ctx
-            .hw
-            .filesystem
-            .write_file(path, &staging[..total_len])
-            .is_err()
-        {
-            return Err(WireStatus::IoError);
+            actual_crc = crypto::crc::CrcEngine::crc32(staging);
+            if req.expected_crc32 != 0 && req.expected_crc32 != actual_crc {
+                return Err(WireStatus::Failed);
+            }
+        } else {
+            flush_transfer_buf(transfer, ctx.hw.filesystem, true)?;
+            let path = transfer.path_str();
+            actual_crc = stream_file_crc32(ctx.hw.filesystem, path, total_len);
+            if req.expected_crc32 != 0 && req.expected_crc32 != actual_crc {
+                let _ = ctx.hw.filesystem.remove(path);
+                return Err(WireStatus::Failed);
+            }
         }
-        invalidate_apps_if_needed(path);
+        invalidate_apps_if_needed(transfer.path_str());
     }
 
     ctx.write_u16(req.transfer_id);
@@ -766,27 +844,14 @@ fn on_transfer_stat(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
     };
 
     let sz = if is_dir { 0 } else { sz };
-    let mut crc_val = 0xFFFF_FFFFu32;
-    let mut cur_off = 0usize;
-    let mut uninit = core::mem::MaybeUninit::<[u8; 32]>::uninit();
-    let chunk_buf = unsafe { &mut *uninit.as_mut_ptr() };
-    while cur_off < sz {
-        let to_read = (sz - cur_off).min(chunk_buf.len());
-        match ctx
-            .hw
-            .filesystem
-            .read_file_at(req.path, cur_off, &mut chunk_buf[..to_read])
-        {
-            Ok(n) if n > 0 => {
-                crc_val = crypto::crc::CrcEngine::crc32_update(crc_val, &chunk_buf[..n]);
-                cur_off += n;
-            }
-            _ => break,
-        }
-    }
+    let crc = if sz > 0 {
+        stream_file_crc32(ctx.hw.filesystem, req.path, sz)
+    } else {
+        0
+    };
     ctx.write_u16(1 | (u16::from(is_dir) << 8));
     ctx.write_u32(sz as u32);
-    ctx.write_u32(!crc_val);
+    ctx.write_u32(crc);
     Ok(())
 }
 
@@ -809,51 +874,46 @@ fn on_transfer_list(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
         Err(_) => return Err(WireStatus::NotFound),
     }
 
-    const MAX_LIST_ENTRIES: usize = (crate::data::arena::TRANSIENT_ARENA_BYTES
-        - crate::data::arena::TRANSIENT_SCRATCH_OFFSET)
-        / core::mem::size_of::<DirEntryInfo>();
-    const {
-        assert!(MAX_LIST_ENTRIES >= 16);
-        assert!(
-            core::mem::align_of::<DirEntryInfo>()
-                <= core::mem::align_of::<crate::data::arena::AlignedArena>()
-        );
-    }
-    let entries = unsafe {
-        let ptr = crate::data::arena::scratch_tail_bytes_mut().as_mut_ptr() as *mut DirEntryInfo;
-        core::ptr::write_bytes(ptr, 0, MAX_LIST_ENTRIES);
-        core::slice::from_raw_parts_mut(ptr, MAX_LIST_ENTRIES)
-    };
-    let count = ctx
-        .hw
-        .filesystem
-        .list_dir(path, entries)
-        .unwrap_or(0)
-        .min(MAX_LIST_ENTRIES);
-
-    let start = req.cursor as usize;
+    let start = req.cursor;
+    let mut idx = 0u16;
     let mut next_cursor = 0xFFFFu16;
     let mut written = 0u8;
-    ctx.write_zeroes(3);
+    let out = &mut *ctx.out;
+    let mut pos = 3usize;
 
-    for (idx, entry) in entries[..count].iter().enumerate().skip(start) {
-        let b = entry.path.as_str().as_bytes();
-        let name_len = b.len().min(24);
-        if ctx.remaining() < 6 + name_len {
-            next_cursor = idx as u16;
-            break;
-        }
-        ctx.write_u8(entry.is_dir as u8);
-        ctx.write_u32(entry.size as u32);
-        ctx.write_u8(name_len as u8);
-        ctx.write_bytes(&b[..name_len]);
-        written += 1;
-    }
+    let _ = ctx
+        .hw
+        .filesystem
+        .fs
+        .list_dir(path, |name, size, _perm, is_dir| {
+            if next_cursor == 0xFFFF {
+                if idx >= start {
+                    let b = name.as_bytes();
+                    let name_len = b.len().min(24);
+                    if pos + 6 + name_len > out.len() {
+                        next_cursor = idx;
+                        return;
+                    }
+                    out[pos] = is_dir as u8;
+                    let sb = (size as u32).to_le_bytes();
+                    out[pos + 1] = sb[0];
+                    out[pos + 2] = sb[1];
+                    out[pos + 3] = sb[2];
+                    out[pos + 4] = sb[3];
+                    out[pos + 5] = name_len as u8;
+                    out[pos + 6..pos + 6 + name_len].copy_from_slice(&b[..name_len]);
+                    pos += 6 + name_len;
+                    written += 1;
+                }
+                idx += 1;
+            }
+        });
 
     let nc = next_cursor.to_le_bytes();
-    ctx.out[0] = nc[0];
-    ctx.out[1] = nc[1];
-    ctx.out[2] = written;
+    out[0] = nc[0];
+    out[1] = nc[1];
+    out[2] = written;
+    ctx.pos = pos;
     Ok(())
 }
 
@@ -865,11 +925,17 @@ fn handle_data_service(
 ) -> Option<WireStatus> {
     let res = match opcode {
         OP_TRANSFER_OPEN => on_transfer_open(payload, ctx),
+        OP_TRANSFER_CHUNK => on_transfer_chunk(payload, ctx),
         OP_TRANSFER_CLOSE => on_transfer_close(payload, ctx),
         OP_TRANSFER_ABORT => match TransferAbortRequest::parse(payload) {
             Some(req) => {
                 if let Some(transfer) = active_transfer_mut(req.transfer_id) {
                     transfer.active = false;
+                    let path = transfer.path_str();
+                    if transfer.mode == TRANSFER_MODE_WRITE && path != CALIB_FILE_PATH {
+                        let _ = ctx.hw.filesystem.remove(path);
+                        invalidate_apps_if_needed(path);
+                    }
                 }
                 ctx.write_u16(req.transfer_id);
                 Ok(())

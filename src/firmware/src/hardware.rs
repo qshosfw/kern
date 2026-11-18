@@ -91,6 +91,7 @@ pub struct SystemHardware<'a> {
     pub lcd: St7565<'a>,
 }
 
+#[inline(never)]
 pub fn apply_audio_hardware(
     audio_cfg: &crate::config::AudioConfig,
     audio: &mut AudioAmplifier,
@@ -100,6 +101,7 @@ pub fn apply_audio_hardware(
     radio.set_volume_level(audio_cfg.volume);
     radio.set_tone_gain((audio_cfg.beep_gain as u16 * 12).min(127) as u8);
     radio.set_mic_gain(audio_cfg.mic_gain);
+    radio.set_audio_profile(audio_cfg.audio_profile);
 }
 
 #[inline(always)]
@@ -126,36 +128,36 @@ enum CtxOp {
 }
 
 fn fill_sys_context<'a, 'hw>(
-    radio: &'a mut crate::services::SystemRadio<'hw>,
+    radio: &'a mut drivers::bk4829::Bk4829<'hw, drivers::bk4829::Disabled>,
     filesystem: &'a mut crate::services::SystemStorage<'hw>,
-    audio: &'a mut crate::services::SystemAudio,
-    #[cfg(feature = "usb")] usb: Option<&'a mut crate::services::SystemUsb>,
+    audio: &'a mut drivers::audio::AudioAmplifier,
+    #[cfg(feature = "usb")] usb: Option<&'a mut drivers::usb::UsbDriver>,
     #[cfg(not(feature = "usb"))] _usb: Option<&'a mut ()>,
-    #[cfg(feature = "uart")] uart: &'a mut crate::services::SystemUart,
+    #[cfg(feature = "uart")] uart: &'a mut drivers::uart::HardwareUart,
     display: Option<&'a mut DisplayHardware<'a, 'hw>>,
     ipc: Option<&'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>>,
     is_locked: bool,
     is_f: bool,
 ) -> SysContext<'a, 'hw> {
     SysContext {
+        is_keypad_locked: is_locked,
+        is_f_active: is_f,
         state: crate::radio_state(),
         radio,
         power: unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) },
-        audio: Some(audio),
-        display,
-        ipc,
         config: crate::master_config(),
-        is_keypad_locked: is_locked,
-        is_f_active: is_f,
-        #[cfg(feature = "usb")]
-        usb,
-        #[cfg(not(feature = "usb"))]
-        usb: None,
         storage: filesystem,
         calibration: unsafe { &*core::ptr::addr_of!(CALIBRATION) },
         passcode: unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) },
         #[cfg(feature = "uart")]
         uart,
+        audio: Some(audio),
+        display,
+        ipc,
+        #[cfg(feature = "usb")]
+        usb,
+        #[cfg(not(feature = "usb"))]
+        usb: None,
     }
 }
 

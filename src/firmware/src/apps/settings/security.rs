@@ -79,7 +79,7 @@ pub fn update_security_option(ctx: &mut crate::SysContext, sel_idx: usize, sel: 
 }
 
 fn show_progress_wdt(
-    disp: &mut Option<&mut crate::services::SystemDisplay<'_, '_>>,
+    disp: &mut Option<&mut crate::services::DisplayHardware<'_, '_>>,
     title: &str,
     pct: u8,
 ) {
@@ -90,7 +90,7 @@ fn show_progress_wdt(
 }
 
 struct ProgressCtx<'a, 'b, 'c, 'd> {
-    disp: &'a mut Option<&'b mut crate::services::SystemDisplay<'c, 'd>>,
+    disp: &'a mut Option<&'b mut crate::services::DisplayHardware<'c, 'd>>,
     title: &'static str,
 }
 
@@ -106,7 +106,7 @@ fn make_progress_hook(pctx: &mut ProgressCtx<'_, '_, '_, '_>) -> crate::security
 
 #[inline(never)]
 pub(crate) fn with_passcode_progress<F, R>(
-    disp: &mut Option<&mut crate::services::SystemDisplay<'_, '_>>,
+    disp: &mut Option<&mut crate::services::DisplayHardware<'_, '_>>,
     title: &'static str,
     f: F,
 ) -> R

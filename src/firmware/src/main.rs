@@ -139,7 +139,7 @@ unsafe extern "C" fn pre_init() {
     unsafe {
         (0xE000_E010 as *mut u32).write_volatile(0);
         (0xE000_ED04 as *mut u32).write_volatile(1 << 25);
-        pac::SCB_VTOR.write_volatile(0x0800_2800);
+        pac::SCB_VTOR.write_volatile(hal::flash::FIRMWARE_MIN_ADDR);
     }
 }
 
@@ -164,7 +164,7 @@ fn init_core_services_and_board() -> Board {
         CONFIG_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
         RadioState::init_in_place(core::ptr::addr_of_mut!(RADIO_STATE) as *mut RadioState);
         (*core::ptr::addr_of_mut!(CALIBRATION)).init_defaults();
-        pac::SCB_VTOR.write_volatile(0x0800_2800);
+        pac::SCB_VTOR.write_volatile(hal::flash::FIRMWARE_MIN_ADDR);
         cortex_m::interrupt::enable();
     }
 
@@ -188,9 +188,35 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
     hw.lcd.blit(canvas);
     hw.backlight.init();
     kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
-    #[cfg(feature = "dfu")]
-    if boot::is_bootloader_hold_requested() {
-        boot::enter_dfu_bootloader(&mut hw.lcd);
+    #[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
+    {
+        let bl_hold = boot::is_bootloader_hold_requested();
+        if bl_hold || boot::is_ptt_side2_requested() {
+            if bl_hold {
+                boot::clear_bootloader_hold_flag();
+            }
+            #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+            if hw.filesystem.fs.mount().is_ok() {
+                hw.lcd.turn_on();
+                drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
+                bsp::pins::BACKLIGHT.set_high();
+                let _ = crate::runtime::loader::try_launch_boot_module(
+                    &mut hw.lcd,
+                    hw.filesystem,
+                    "/apps/dfu.mod",
+                    1,
+                );
+                #[cfg(not(feature = "dfu"))]
+                {
+                    drivers::backlight::BACKLIGHT_DUTY
+                        .store(0, core::sync::atomic::Ordering::Relaxed);
+                    bsp::pins::BACKLIGHT.set_low();
+                    hw.lcd.turn_off();
+                }
+            }
+            #[cfg(feature = "dfu")]
+            boot::enter_dfu_bootloader(&mut hw.lcd);
+        }
     }
 
     // Start Independent Watchdog with generous 6000ms timeout after DFU bootloader check
@@ -256,33 +282,72 @@ fn main() -> ! {
     storage_service.init();
 
     #[cfg(feature = "filesystem")]
-    let mut filesystem =
-        drivers::filesystem::FileSystemDriver::new(kernfs::KernFS::new(&mut storage_service));
+    let mut fs_uninit = core::mem::MaybeUninit::uninit();
+    #[cfg(feature = "filesystem")]
+    let filesystem = unsafe {
+        drivers::filesystem::FileSystemDriver::init_in_place(
+            fs_uninit.as_mut_ptr(),
+            &mut storage_service,
+        );
+        fs_uninit.assume_init_mut()
+    };
     #[cfg(not(feature = "filesystem"))]
-    let mut filesystem = crate::services::storage::NoStorage;
+    let mut no_fs = crate::services::storage::NoStorage;
+    #[cfg(not(feature = "filesystem"))]
+    let filesystem = &mut no_fs;
 
-    let mut hw = SystemHardware {
-        orchestrator: orchestrator::Orchestrator::new(crate::apps::APP_ID_LAUNCHER),
-        lcd: St7565::new(&mut board.spi_lcd, &mut board.lcd_cs, &mut board.lcd_a0),
-        backlight: drivers::backlight::BacklightController::new(),
-        key_scanner: drivers::keyboard::KeypadScanner::new(),
-        audio: drivers::audio::AudioAmplifier::new(),
-        radio: Bk4829::new(&mut board.radio_bus),
-        ipc_queue: kernel::ipc::MessageQueue::<kernel::ipc::SysEvent, 8>::new(),
-        filesystem: &mut filesystem,
+    let mut hw_uninit = core::mem::MaybeUninit::<SystemHardware>::uninit();
+    let hw = unsafe {
+        let p = hw_uninit.as_mut_ptr();
+        core::ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<SystemHardware>());
+        orchestrator::Orchestrator::init_in_place(
+            core::ptr::addr_of_mut!((*p).orchestrator),
+            crate::apps::APP_ID_LAUNCHER,
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*p).lcd),
+            St7565::new(&mut board.spi_lcd, &mut board.lcd_cs, &mut board.lcd_a0),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*p).backlight),
+            drivers::backlight::BacklightController::new(),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*p).key_scanner),
+            drivers::keyboard::KeypadScanner::new(),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*p).audio),
+            drivers::audio::AudioAmplifier::new(),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*p).radio),
+            Bk4829::new(&mut board.radio_bus),
+        );
+        core::ptr::write(core::ptr::addr_of_mut!((*p).filesystem), filesystem);
         #[cfg(feature = "usb")]
-        usb: drivers::usb::UsbDriver::new(),
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*p).usb),
+            drivers::usb::UsbDriver::new(),
+        );
         #[cfg(feature = "uart")]
-        uart: drivers::uart::HardwareUart::new(),
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*p).uart),
+            drivers::uart::HardwareUart::new(),
+        );
         #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-        wire: drivers::wire::WireDriver::new(hardware::SystemSerialPort::new()),
+        drivers::wire::WireDriver::init_in_place(
+            core::ptr::addr_of_mut!((*p).wire),
+            hardware::SystemSerialPort::new(),
+        );
+        hw_uninit.assume_init_mut()
     };
 
     #[cfg(feature = "usb")]
     drivers::usb::register_active_usb_driver(&mut hw.usb as *mut _);
 
-    let adc = run_display_and_boot_pipeline(&mut hw);
-    finalize_boot_startup(&mut hw);
+    let adc = run_display_and_boot_pipeline(hw);
+    finalize_boot_startup(hw);
 
-    system::run_system_loop(&mut hw, adc, boot_start_ms);
+    system::run_system_loop(hw, adc, boot_start_ms);
 }

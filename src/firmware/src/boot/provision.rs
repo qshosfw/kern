@@ -13,8 +13,10 @@
 //! rather than consuming resident MCU ROM/SRAM.
 
 use crate::services::SystemStorage;
+#[cfg(feature = "provision_apps")]
 use crate::services::storage::DirEntryInfo;
 
+#[cfg(feature = "provision_apps")]
 pub const PROV_BUF_CAP: usize = 4096;
 
 // Native ARM Thumb-1 binary payload for `/apps/beacon.krx`
@@ -32,6 +34,7 @@ const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/leaf_app/le
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
 const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/paged_app/paged.krx");
 
+#[cfg(feature = "provision_apps")]
 #[inline(never)]
 fn join_path<'a>(
     buf: &'a mut [core::mem::MaybeUninit<u8>; 48],
@@ -95,6 +98,15 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
 
     ensure_core_packages(filesystem);
 
+    #[cfg(feature = "provision_apps")]
+    stage_prov_dir(filesystem, PROV_DIRS);
+
+    crate::apps::launcher::reload_launcher(filesystem);
+}
+
+#[cfg(feature = "provision_apps")]
+#[inline(never)]
+fn stage_prov_dir(filesystem: &mut SystemStorage, prov_dirs: &[u8]) {
     let (arena_head, arena_tail) =
         crate::runtime::transient_arena_bytes_mut().split_at_mut(PROV_BUF_CAP);
     const {
@@ -109,7 +121,6 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
     };
     let count = filesystem.list_dir("/prov", entries).unwrap_or(0);
     if count == 0 {
-        crate::apps::launcher::reload_launcher(filesystem);
         return;
     }
 
@@ -154,10 +165,12 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
         } else {
             b""
         };
-        const EXT_MAP: [([u8; 3], u8); 10] = [
+        const EXT_MAP: [([u8; 3], u8); 12] = [
             (*b"app", 0),
             (*b"svc", 0),
             (*b"dmn", 0),
+            (*b"drv", 0),
+            (*b"mod", 0),
             (*b"krx", 0),
             (*b"cfg", 1),
             (*b"dat", 2),
@@ -178,7 +191,7 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             }
             idx
         };
-        let prefix = utils::format::nth_cstr(PROV_DIRS, dir_idx as u8);
+        let prefix = utils::format::nth_cstr(prov_dirs, dir_idx as u8);
 
         let mut dst_arr = [core::mem::MaybeUninit::<u8>::uninit(); 48];
         if let Some(dst_path) = join_path(&mut dst_arr, prefix, fname) {
@@ -188,6 +201,4 @@ pub fn provision_packages(filesystem: &mut SystemStorage) {
             }
         }
     }
-
-    crate::apps::launcher::reload_launcher(filesystem);
 }

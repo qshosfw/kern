@@ -12,6 +12,174 @@ use pac::gpio;
 use pac::usart;
 
 static CURRENT_BAUD: AtomicU32 = AtomicU32::new(115_200);
+#[cfg(feature = "target_k10pro")]
+static USART3_BAUD: AtomicU32 = AtomicU32::new(115_200);
+
+/// Generic register-level handle for any PY32F071 USART peripheral instance (`USART1..4`).
+#[derive(Clone, Copy)]
+pub struct UsartInstance {
+    pub base: u32,
+}
+
+impl UsartInstance {
+    pub const USART1: Self = Self {
+        base: usart::USART1_BASE,
+    };
+    pub const USART3: Self = Self {
+        base: usart::USART3_BASE,
+    };
+
+    #[inline(always)]
+    const fn sr(self) -> *const u32 {
+        self.base as *const u32
+    }
+
+    #[inline(always)]
+    const fn dr(self) -> *mut u32 {
+        (self.base + 0x04) as *mut u32
+    }
+
+    #[inline(always)]
+    const fn brr(self) -> *mut u32 {
+        (self.base + 0x08) as *mut u32
+    }
+
+    #[inline(always)]
+    const fn cr1(self) -> *mut u32 {
+        (self.base + 0x0C) as *mut u32
+    }
+
+    #[inline(always)]
+    const fn cr2(self) -> *mut u32 {
+        (self.base + 0x10) as *mut u32
+    }
+
+    #[inline(always)]
+    const fn cr3(self) -> *mut u32 {
+        (self.base + 0x14) as *mut u32
+    }
+
+    /// Enable TX/RX 8N1 and apply initial baud rate for this USART instance.
+    pub fn enable_8n1(self, baud: u32) {
+        unsafe {
+            self.cr1().write_volatile(0);
+            self.cr2().write_volatile(0);
+            self.cr3().write_volatile(0);
+            self.cr1()
+                .write_volatile(usart::CR1_UE | usart::CR1_TE | usart::CR1_RE);
+        }
+        self.apply_baud(rcc::sysclk_hz(), baud);
+    }
+
+    /// Recompute `USART_BRR` for `pclk_hz` and `baud`.
+    pub fn apply_baud(self, pclk_hz: u32, baud: u32) {
+        let baud = if baud == 0 { 115_200 } else { baud };
+        unsafe {
+            let cr1 = self.cr1().read_volatile();
+            if (cr1 & usart::CR1_UE) == 0 {
+                return;
+            }
+            self.cr1().write_volatile(cr1 & !usart::CR1_UE);
+            self.brr().write_volatile((pclk_hz + (baud >> 1)) / baud);
+            self.cr1().write_volatile(cr1);
+        }
+    }
+
+    /// Blocking single-byte write with timeout.
+    pub fn write_byte(self, byte: u8) -> Result<(), UartError> {
+        unsafe {
+            let mut timeout = 100_000u32;
+            while self.sr().read_volatile() & usart::SR_TXE == 0 {
+                timeout -= 1;
+                if timeout == 0 {
+                    return Err(UartError::Timeout);
+                }
+            }
+            self.dr().write_volatile(byte as u32);
+            Ok(())
+        }
+    }
+
+    /// Write a slice of bytes synchronously.
+    pub fn write_bytes(self, data: &[u8]) -> Result<(), UartError> {
+        for &b in data {
+            self.write_byte(b)?;
+        }
+        Ok(())
+    }
+
+    /// Wait until all queued TX bits have shifted out onto the line (`SR.TC`).
+    pub fn wait_tx_complete(self) {
+        unsafe {
+            let mut timeout = 100_000u32;
+            while self.sr().read_volatile() & usart::SR_TC == 0 {
+                timeout -= 1;
+                if timeout == 0 {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Clear overrun/noise/framing errors and check whether a byte is ready in RX.
+    #[inline]
+    pub fn is_readable(self) -> bool {
+        unsafe {
+            let sr = self.sr().read_volatile();
+            if (sr & usart::SR_RXNE) != 0 {
+                return true;
+            }
+            if sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE) != 0 {
+                let _ = self.dr().read_volatile();
+            }
+            false
+        }
+    }
+
+    /// Non-blocking single-byte read.
+    #[inline]
+    pub fn try_read_byte(self) -> Option<u8> {
+        if self.is_readable() {
+            Some(unsafe { self.dr().read_volatile() as u8 })
+        } else {
+            None
+        }
+    }
+}
+
+/// Initialize USART3 on `PB10`/`PB11` (`AF4`) for the K10 Pro coprocessor link (`PHY6235SC`).
+#[cfg(feature = "target_k10pro")]
+pub fn init_usart3(baud: u32) {
+    let baud = if baud == 0 { 115_200 } else { baud };
+    USART3_BAUD.store(baud, Ordering::Relaxed);
+    rcc::enable_usart3();
+    rcc::enable_syscfg();
+
+    let tx = Pin::new(gpio::GPIOB_BASE, 10);
+    tx.configure_af(pac::gpio::AF4, pac::gpio::SPEED_MEDIUM);
+    let rx = Pin::new(gpio::GPIOB_BASE, 11);
+    rx.set_pull(pac::gpio::PULL_UP);
+    rx.configure_af(pac::gpio::AF4, pac::gpio::SPEED_MEDIUM);
+
+    UsartInstance::USART3.enable_8n1(baud);
+}
+
+/// Update `USART3` baud rate dynamically (for coprocessor link speed negotiation).
+#[cfg(feature = "target_k10pro")]
+pub fn set_usart3_baud(baud: u32) {
+    let baud = if baud == 0 { 115_200 } else { baud };
+    USART3_BAUD.store(baud, Ordering::Relaxed);
+    resync_usart3_clock(rcc::sysclk_hz());
+}
+
+/// Recompute `USART3_BRR` after a system clock switch (`rcc::set_sysclk_*`).
+#[cfg(feature = "target_k10pro")]
+pub fn resync_usart3_clock(pclk_hz: u32) {
+    if unsafe { (pac::rcc::RCC_APB1ENR.read_volatile() & pac::rcc::APB1ENR_USART3) == 0 } {
+        return;
+    }
+    UsartInstance::USART3.apply_baud(pclk_hz, USART3_BAUD.load(Ordering::Relaxed));
+}
 
 /// Initialize USART1 at 115200 baud, 8N1.
 pub fn init() {

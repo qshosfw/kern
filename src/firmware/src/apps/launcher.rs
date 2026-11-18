@@ -103,7 +103,8 @@ pub fn load_entries(
                 continue;
             }
 
-            let (icon_8, icon_16) = crate::apps::settings::apps::app_icons(app.title.as_str());
+            let (icon_8, icon_16) =
+                crate::apps::settings::apps::package_icons(app.title.as_str(), app.icon_id);
             entries[count] = LauncherEntry {
                 title: app.title.as_str(),
                 icon_8,
@@ -148,9 +149,7 @@ impl LauncherApp {
             let entries = load_entries(None);
             (*ptr).model = GridMenuModel::new(entries, "Home");
             (*ptr).view = GridMenuView::new();
-            (*ptr).scroll_top = 0;
             (*ptr).scroller = gfx::gui::animation::KineticScroller::new(2);
-            (*ptr).is_launching = false;
         }
     }
 

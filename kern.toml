@@ -15,7 +15,7 @@ flash_budget = 120832   # 118 KB (safe margin below 128KB)
 ram_budget = 16384      # 16 KB SRAM
 
 [target]
-device = "UV-K1"        # Options: "UV-K1", "UV-K5v3", "Custom"
+device = "UV-K1"        # Options: "UV-K1", "UV-K5v3" (shared profile), "UV-K10Pro", "Custom"
 cpu_clock = 48          # Options: 48, 72 (MHz)
 nav_layout = "k1"       # Options: "k1", "k5"
 
@@ -65,18 +65,10 @@ animations = true       # ✨ Smooth kinetic scrolling, slide transitions & adap
 grayscale = false       # 🌓 True 2-bit 4-level grayscale with 500 Hz temporal FRC (1-bit spatial dither when false)
 
 [features.diagnostics]
-panic_gui = false           # 🚨 On-screen recovery GUI and fault register display
-crash_dialog = false       # 💬 Human-friendly crash & reboot dialog on startup
-flight_recorder = false    # 📊 Circular crash telemetry and reboot logging
+settings_info = false      # ℹ️ Compiled-in System Info fallback (off when using /apps/sysinfo.krx module)
 settings_calib = false     # 🎛️ Radio frequency and battery calibration submenu
 settings_debug = false     # 🛠️ Deep hardware register and memory debug submenu
 overclock_72mhz = true     # ⚡ Dynamic 72 MHz CPU overclocking menu option
 
 [features.bootloader]
-dfu = true                 # 🔌 Bootloader DFU entry (PTT+Side2 / Settings / RigWire) with watchdog & PC13 off
-dfu_hooks = true           # 🖥️ Custom DFU splash, live status/progress UI & EXIT guard
-
-# 🚨 Granular Panic & Crash Forensics
-panic_gui_extended = false  # 📑 Multi-page interactive forensic crash debugger (5 pages)
-panic_disasm = false        # 🔍 Bare-metal Thumb-16 instruction disassembler
-panic_uart = false          # 🔌 Low-level bare-metal UART crash forensics streamer
+dfu = false                # 🔌 Compiled-in 398B raw DFU fallback (off when using /apps/dfu.mod)

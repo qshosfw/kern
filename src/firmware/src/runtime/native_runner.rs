@@ -8,7 +8,7 @@
 use super::syscall::{ACTIVE_CANVAS, ACTIVE_CTX, NATIVE_API_TABLE, bind_cap_imports};
 use crate::services::SysContext;
 use gfx::Canvas;
-use kernel::app::{AppVTable, EventResult, ModalResult, StatusBarConfig};
+use kernel::app::{EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
@@ -26,9 +26,6 @@ pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATC
 
 #[repr(C, align(4))]
 pub(crate) struct NativeExecSlot {
-    pub(crate) entry_point: usize,
-    pub(crate) got_base: u32,
-    pub(crate) caps: CapabilitySet,
     pub(crate) pid: kernel::proc::Pid,
     pub(crate) is_loaded: bool,
     pub(crate) is_paged: bool,
@@ -38,15 +35,18 @@ pub(crate) struct NativeExecSlot {
     pub(crate) status_bar_has_custom: bool,
     pub(crate) status_bar_left_count: u8,
     pub(crate) status_bar_center_count: u8,
-    pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
-    pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
-    pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
+    pub(crate) entry_point: usize,
+    pub(crate) got_base: u32,
+    pub(crate) caps: CapabilitySet,
+    pub(crate) shadow_stack: ShadowReturnStack<8>,
     pub(crate) app_name: heapless::String<16>,
     pub(crate) pkg_path: heapless::String<32>,
-    pub(crate) cache: FixedWindowCache<16, 4>,
     pub(crate) mem_layout: MemoryMapLayout<4>,
-    pub(crate) shadow_stack: ShadowReturnStack<8>,
+    pub(crate) cache: FixedWindowCache<16, 4>,
     pub(crate) leaf_mgr: StructuredLeafManager<16>,
+    pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
+    pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
+    pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
 }
 
 pub fn init_native_slot() {
@@ -520,31 +520,18 @@ pub unsafe fn invoke_krx_native(
 
     // 2. Fast stack margin guard (prevent Cortex-M0+ stack exhaustion)
     if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 96 {
-        return 0xFFFF_FFFF;
+        super::fault::raise_contract_fault(kernel::proc::fault::Exception::Stack, op as u8, 0);
+        return kernel::proc::fault::KRX_FAULT_SENTINEL;
     }
 
-    #[cfg(target_arch = "arm")]
+    #[cfg(all(target_arch = "arm", not(test)))]
     {
-        let res: u32;
         unsafe {
-            core::arch::asm!(
-                "mov r4, r9",       // save host GOT base register
-                "mov r9, {got}",    // load guest app's GOT base into r9 (Static Base)
-                "blx {entry}",      // call native entry point
-                "mov r9, r4",       // restore host GOT base register
-                got = in(reg) got_base,
-                entry = in(reg) entry_point,
-                in("r0") op,
-                in("r1") api_table,
-                in("r2") param,
-                lateout("r0") res,
-                out("r4") _,
-                clobber_abi("C"),
-            );
+            super::fault::GUEST_GOT_BASE = got_base;
+            super::fault::invoke_krx_trampoline(op, api_table as *const (), param, entry_point)
         }
-        res
     }
-    #[cfg(not(target_arch = "arm"))]
+    #[cfg(not(all(target_arch = "arm", not(test))))]
     {
         let _ = got_base;
         let entry: KrxNativeEntryFn = unsafe {
@@ -583,6 +570,12 @@ unsafe fn invoke_guest(
         );
         ACTIVE_CANVAS = core::ptr::null_mut();
         ACTIVE_CTX = core::ptr::null_mut();
+        if res == kernel::proc::fault::KRX_FAULT_SENTINEL || super::fault::has_pending_fault() {
+            if !ctx.is_null() {
+                super::fault::finish_fault_cleanup(&mut *ctx);
+            }
+            return 0xFFFF_FFFF;
+        }
         res
     }
 }
@@ -638,7 +631,7 @@ pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventRes
     )
 }
 
-pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
+pub unsafe fn native_on_start(ctx: &mut SysContext<'static, 'static>) {
     let arg = take_pending_start_arg();
     let res = unsafe {
         invoke_guest(
@@ -653,11 +646,7 @@ pub unsafe fn native_on_start(_ptr: *mut (), ctx: &mut SysContext<'static, 'stat
     }
 }
 
-pub unsafe fn native_on_event(
-    _ptr: *mut (),
-    ctx: &mut SysContext<'static, 'static>,
-    ev: &Event,
-) -> EventResult {
+pub unsafe fn native_on_event(ctx: &mut SysContext<'static, 'static>, ev: &Event) -> EventResult {
     let (kind, key, flags, payload) = match ev {
         Event::Key { code, state } => {
             let s_val = match state {
@@ -719,7 +708,6 @@ fn dispatch_krx_event(
 }
 
 pub unsafe fn native_on_modal_result(
-    _ptr: *mut (),
     ctx: &mut SysContext<'static, 'static>,
     r: &ModalResult<'_>,
 ) -> EventResult {
@@ -766,6 +754,7 @@ fn c_str_to_str(buf: &[u8]) -> Option<&str> {
 }
 
 fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBarConfig<'a>) {
+    *status_bar = StatusBarConfig::new(slot.app_name.as_str());
     if slot.status_bar_has_custom {
         let sb = &slot.status_bar;
         let visible = (sb.flags & kernel::proc::abi::KRX_STATUS_VISIBLE) != 0;
@@ -776,32 +765,21 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
         } else {
             None
         };
-        let title = if (sb.flags & kernel::proc::abi::KRX_STATUS_CUSTOM_TITLE) != 0 {
-            c_str_to_str(&sb.title)
-        } else {
-            Some(slot.app_name.as_str())
-        };
-        if visible && !show_divider && title.is_none() && signal_level.is_none() {
+        if (sb.flags & kernel::proc::abi::KRX_STATUS_CUSTOM_TITLE) != 0 {
+            status_bar.title = c_str_to_str(&sb.title);
+        }
+        if visible && !show_divider && status_bar.title.is_none() && signal_level.is_none() {
             partial = true;
         }
-        let left_badge = c_str_to_str(&sb.badge);
-        let center_text = c_str_to_str(&sb.center);
-        let left_icons = &slot.status_bar_left_icons[..slot.status_bar_left_count as usize];
-        let center_icons = &slot.status_bar_center_icons[..slot.status_bar_center_count as usize];
-
-        *status_bar = StatusBarConfig {
-            visible,
-            partial,
-            title,
-            center_text,
-            signal_level,
-            left_badge,
-            left_icons,
-            center_icons,
-            show_divider,
-        };
-    } else {
-        *status_bar = StatusBarConfig::new(slot.app_name.as_str());
+        status_bar.visible = visible;
+        status_bar.partial = partial;
+        status_bar.show_divider = show_divider;
+        status_bar.signal_level = signal_level;
+        status_bar.left_badge = c_str_to_str(&sb.badge);
+        status_bar.center_text = c_str_to_str(&sb.center);
+        status_bar.left_icons = &slot.status_bar_left_icons[..slot.status_bar_left_count as usize];
+        status_bar.center_icons =
+            &slot.status_bar_center_icons[..slot.status_bar_center_count as usize];
     }
 }
 
@@ -895,7 +873,6 @@ pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
 }
 
 pub unsafe fn native_on_render(
-    _ptr: *const (),
     canvas: &mut Canvas,
     ctx: &SysContext<'static, 'static>,
     status_bar: &mut StatusBarConfig<'_>,
@@ -911,8 +888,36 @@ pub unsafe fn native_on_render(
     apply_slot_status_bar(slot_ref(), status_bar);
 }
 
-pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'static>) {
+pub(crate) fn teardown_slot_and_hw(
+    ctx: &mut SysContext<'_, '_>,
+    pid: kernel::proc::Pid,
+    persist_tray: bool,
+) {
     let slot = slot_mut();
+    crate::audio_capture_mut().stop_capture();
+    if pid.0 != 0 {
+        super::syscall::ipc_channel_mut().purge_pid(pid.0);
+        if !persist_tray {
+            crate::orchestrator::status_tray_mut().clear_icon(pid);
+        }
+        let client_id = kernel::service::radio::ClientId::for_krx_pid(pid.0);
+        ctx.state.coord.release_client_lock(ctx.radio, client_id);
+    }
+    if ctx.state.coord.is_transmitting {
+        ctx.state.coord.request_ptt_stop(ctx.radio);
+    }
+    slot.is_loaded = false;
+    slot.entry_point = 0;
+    slot.status_bar_has_custom = false;
+    slot.status_bar_left_count = 0;
+    slot.status_bar_center_count = 0;
+    slot.app_name.clear();
+    slot.pkg_path.clear();
+}
+
+pub unsafe fn native_on_exit(ctx: &mut SysContext<'static, 'static>) {
+    let slot = slot_mut();
+    let pid = slot.pid;
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
             invoke_guest(
@@ -922,39 +927,9 @@ pub unsafe fn native_on_exit(_ptr: *mut (), ctx: &mut SysContext<'static, 'stati
                 core::ptr::null(),
             );
         }
-        // Unbind any service interfaces exported by this package
-        super::syscall::service_registry_mut().unbind_provider(slot.pid);
-        // Cleanly purge any pending unread IPC messages for this process
-        super::syscall::ipc_channel_mut().purge_pid(slot.pid.0);
-        // Ensure continuous audio capture is stopped on exit
-        crate::audio_capture_mut().stop_capture();
-        slot.is_loaded = false;
-        slot.entry_point = 0;
+        super::syscall::service_registry_mut().unbind_provider(pid);
     }
     let persist_tray = slot.status_bar_has_custom
         && (slot.status_bar.custom_flags & kernel::proc::abi::KRX_CUSTOM_TRAY_PERSIST) != 0;
-    if !persist_tray {
-        crate::orchestrator::status_tray_mut().clear_icon(slot.pid);
-    }
-    slot.status_bar_has_custom = false;
-    slot.status_bar_left_count = 0;
-    slot.status_bar_center_count = 0;
-    slot.app_name.clear();
-    slot.pkg_path.clear();
-    // Safety cleanup: ensure radio TX and arbitrator VFO locks are released on exit
-    if ctx.state.coord.is_transmitting {
-        ctx.state.coord.request_ptt_stop(ctx.radio);
-    }
-    if slot.pid.0 != 0 {
-        let client_id = kernel::service::radio::ClientId::for_krx_pid(slot.pid.0 as u8);
-        ctx.state.coord.release_client_lock(ctx.radio, client_id);
-    }
+    teardown_slot_and_hw(ctx, pid, persist_tray);
 }
-
-pub static NATIVE_RUNNER_VTABLE: AppVTable<SysContext<'static, 'static>> = AppVTable {
-    on_start: native_on_start,
-    on_event: native_on_event,
-    on_modal_result: native_on_modal_result,
-    render: native_on_render,
-    on_exit: native_on_exit,
-};

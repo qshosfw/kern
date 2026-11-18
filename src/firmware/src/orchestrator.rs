@@ -162,6 +162,7 @@ fn filter_sunk_keys(event: &Event) -> bool {
     false
 }
 
+#[inline(never)]
 pub fn record_proc_activation(app_id: usize) {
     if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
         pcb.ledger.record_activation();
@@ -169,6 +170,7 @@ pub fn record_proc_activation(app_id: usize) {
 }
 
 /// Returns true if process `app_id` is currently suspended, dormant, stopped, or dead.
+#[inline(never)]
 pub fn is_proc_paused(app_id: usize) -> bool {
     proc_table().find_by_app(app_id).is_some_and(|pcb| {
         matches!(
@@ -258,48 +260,34 @@ impl Orchestrator {
             }
         }
 
+        const CORE_NAMES: &[u8] = b"Kernel\0Radio\0Power\0Input\0";
+        const CORE_PRIOS: [kernel::sched::Priority; 4] = [
+            kernel::sched::Priority::Safety,
+            kernel::sched::Priority::Radio,
+            kernel::sched::Priority::Safety,
+            kernel::sched::Priority::Ui,
+        ];
         let radio_caps = CapabilitySet::empty()
             .with(kernel::caps::Cap::RadioRx)
             .with(kernel::caps::Cap::RadioTx)
             .raw();
-        let core_daemons: [(&str, u8, kernel::sched::Priority, u32, ProcState); 4] = [
-            (
-                "Kernel",
-                0xF0,
-                kernel::sched::Priority::Safety,
-                u32::MAX,
-                ProcState::Running,
-            ),
-            (
-                "Radio",
-                0xF1,
-                kernel::sched::Priority::Radio,
-                radio_caps,
-                ProcState::ServiceIdle,
-            ),
-            (
-                "Power",
-                0xF2,
-                kernel::sched::Priority::Safety,
-                0,
-                ProcState::ServiceIdle,
-            ),
-            (
-                "Input",
-                0xF3,
-                kernel::sched::Priority::Ui,
-                0,
-                ProcState::ServiceIdle,
-            ),
-        ];
-        for &(name, app_id, prio, caps_raw, state) in &core_daemons {
+        for i in 0..4u8 {
+            let caps_raw = match i {
+                0 => u32::MAX,
+                1 => radio_caps,
+                _ => 0,
+            };
             spawn_proc(
                 table,
-                name,
-                app_id as usize,
-                prio,
+                utils::format::nth_cstr(CORE_NAMES, i),
+                (0xF0 + i) as usize,
+                CORE_PRIOS[i as usize],
                 CapabilitySet::from_raw(caps_raw),
-                state,
+                if i == 0 {
+                    ProcState::Running
+                } else {
+                    ProcState::ServiceIdle
+                },
             );
         }
 
@@ -438,25 +426,11 @@ impl Orchestrator {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
 enum FilterFlow {
     Continue,
     DirtyContinue,
     Stop(bool),
 }
-
-type EventFilter = for<'a, 'b> fn(
-    &mut Orchestrator,
-    &mut crate::services::SysContext<'a, 'b>,
-    &Event,
-) -> FilterFlow;
-
-const EVENT_FILTERS: &[EventFilter] = &[
-    Orchestrator::filter_modal_event,
-    Orchestrator::filter_keypad_lock,
-    Orchestrator::filter_hotkeys_and_system,
-    Orchestrator::filter_active_app,
-];
 
 impl Orchestrator {
     fn handle_f_key_action<'a>(
@@ -704,8 +678,15 @@ impl Orchestrator {
             return false;
         }
         let mut handled = false;
-        for &filter in EVENT_FILTERS {
-            match filter(self, ctx, &event) {
+        let filters: [fn(&mut Self, &mut crate::services::SysContext<'_, '_>, &Event) -> FilterFlow;
+            4] = [
+            Self::filter_modal_event,
+            Self::filter_keypad_lock,
+            Self::filter_hotkeys_and_system,
+            Self::filter_active_app,
+        ];
+        for f in filters {
+            match f(self, ctx, &event) {
                 FilterFlow::Continue => {}
                 FilterFlow::DirtyContinue => handled = true,
                 FilterFlow::Stop(res) => {
@@ -833,6 +814,26 @@ impl Orchestrator {
                     }
 
                     if tag == TAG_FAULT_CONFIRM {
+                        #[cfg(feature = "krx_native")]
+                        if let Some(pkg) = crate::runtime::fault::fault_pkg_path() {
+                            let mut path_buf = [0u8; 32];
+                            let n = pkg.len().min(32);
+                            path_buf[..n].copy_from_slice(&pkg.as_bytes()[..n]);
+                            crate::runtime::fault::clear_fault_pkg();
+                            match res {
+                                kernel::app::ModalResult::Confirmed(_) => {
+                                    // SAFETY: copied from valid UTF-8 `fault_pkg_path()`.
+                                    let path = core::str::from_utf8_unchecked(&path_buf[..n]);
+                                    if !launch_krx_shortcut_arg(ctx, path, 0) {
+                                        self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+                                    }
+                                }
+                                _ => {
+                                    self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
+                                }
+                            }
+                            return FilterFlow::Stop(true);
+                        }
                         match res {
                             kernel::app::ModalResult::Confirmed(_) => {
                                 // User selected Stop -> Safely stop app and return to VFO
@@ -891,6 +892,8 @@ impl Orchestrator {
         ctx: &mut crate::services::SysContext<'a, '_>,
         event: Event,
     ) {
+        let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
+        let mut fire_slot: Option<u16> = None;
         match event {
             Event::Key {
                 code: KeyCode::Exit,
@@ -898,37 +901,40 @@ impl Orchestrator {
             } => {
                 // When already in Launcher (root launcher screen), Exit does not navigate back.
                 // This ensures holding Exit to sleep does not trigger an accidental switch to VFO.
-                if self.active_app_id == APP_ID_LAUNCHER {
-                    return;
+                if self.active_app_id != APP_ID_LAUNCHER {
+                    self.pop_active_app(ctx);
                 }
-                self.pop_active_app(ctx);
                 return;
             }
             Event::Key {
                 code: code @ (KeyCode::Side1 | KeyCode::Side2),
                 state,
             } => {
-                let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
                 let (held, base_slot) = if code == KeyCode::Side1 {
                     (&mut self.side1_held, 0usize)
                 } else {
                     (&mut self.side2_held, 2usize)
                 };
-                let long = crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot + 1, cur_ctx);
-                let short = crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot, cur_ctx);
-                if let Some(target_id) = Self::handle_side_key(held, state, long, short) {
-                    self.execute_shortcut_target(ctx, target_id, false);
-                }
+                let long =
+                    crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot + 1, cur_ctx);
+                let short =
+                    crate::apps::shortcut::resolve_slot(&ctx.config.keys, base_slot, cur_ctx);
+                fire_slot = Self::handle_side_key(held, state, long, short);
             }
             Event::Key {
                 code: KeyCode::Menu,
                 state: KeyState::Held,
             } => {
-                let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
-                let target_id = crate::apps::shortcut::resolve_slot(&ctx.config.keys, 4, cur_ctx);
-                self.execute_shortcut_target(ctx, target_id, false);
+                fire_slot = Some(crate::apps::shortcut::resolve_slot(
+                    &ctx.config.keys,
+                    4,
+                    cur_ctx,
+                ));
             }
             _ => {}
+        }
+        if let Some(target_id) = fire_slot {
+            self.execute_shortcut_target(ctx, target_id, false);
         }
     }
 

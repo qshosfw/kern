@@ -254,7 +254,9 @@ impl<'a> StatusRightConfig<'a> {
         let work_end_x = start_x + 11;
 
         canvas.draw_rect(start_x, y, 12, 5, fg);
-        canvas.draw_vertical_line(start_x - 1, y + 1, 3, fg);
+        if start_x > 0 {
+            canvas.draw_vertical_line(start_x - 1, y + 1, 3, fg);
+        }
         canvas.fill_rect(start_x + 1, y + 1, 10, 3, bg);
 
         let (full_bars, partial) = if self.shading_mode == 2 {
@@ -303,7 +305,31 @@ impl<'a> StatusRightConfig<'a> {
             canvas.draw_vertical_line(work_end_x - full_bars - 1, y + 1, 3, partial_color);
         }
     }
+}
 
+/// Shared standalone battery icon widget reusing the OS status bar renderer.
+#[inline(never)]
+pub fn draw_battery(canvas: &mut Canvas, x: i16, y: i16, pct: u8, charging: bool) {
+    if (x as u16) > 115 || (y as u16) > 58 {
+        return;
+    }
+    let ux = (x as u8).max(1);
+    let uy = y as u8;
+    let mut cfg = StatusRightConfig::new(pct, 3, 0);
+    cfg.shading_mode = 2;
+    cfg.draw_battery(canvas, ux, uy);
+    if charging {
+        crate::icons::draw_icon_5x5(
+            canvas,
+            ux as i16 + 4,
+            uy as i16,
+            crate::icons::Icon::Bolt,
+            Color::Fill,
+        );
+    }
+}
+
+impl<'a> StatusRightConfig<'a> {
     /// Renders all right-side status elements dynamically flowing right-to-left.
     /// Preserves battery and bolt geometry while handling USB plug and dynamic icons.
     #[inline(never)]
@@ -437,9 +463,15 @@ pub fn draw_status_bar_layout(
     for opt in titles {
         if let Some(s) = opt {
             if !s.is_empty() {
-                left_x =
-                    crate::text::draw_str_max_x(canvas, left_x, 4, s, &FONT, Color::Fill, right_limit)
-                        + 2;
+                left_x = crate::text::draw_str_max_x(
+                    canvas,
+                    left_x,
+                    4,
+                    s,
+                    &FONT,
+                    Color::Fill,
+                    right_limit,
+                ) + 2;
             }
         }
     }

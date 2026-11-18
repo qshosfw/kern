@@ -2,7 +2,7 @@
 
 use crate::services::SysContext;
 
-use kernel::app::{AppMetadata, AppVTable, EventResult, ModalResult, StatusBarConfig};
+use kernel::app::{App, AppMetadata, EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::Event;
 
@@ -10,19 +10,15 @@ use kernel::event::Event;
 #[derive(Clone, Copy)]
 pub struct OsAppDescriptor {
     pub metadata: AppMetadata,
-    pub vtable: AppVTable<SysContext<'static, 'static>>,
-    pub init: unsafe fn(*mut ()),
     pub required_capabilities: CapabilitySet,
     pub offset: u16,
     pub instance_size: u16,
 }
 
-/// Dynamic application slot for installable application bundles (.app)
+/// Dynamic application slot for installable application bundles (.krx)
 #[derive(Clone, Copy)]
 pub struct DynamicAppRecord {
     pub metadata: AppMetadata,
-    pub vtable: AppVTable<SysContext<'static, 'static>>,
-    pub instance: *mut (),
     pub required_capabilities: CapabilitySet,
 }
 
@@ -132,63 +128,123 @@ impl AppRegistry {
     }
 
     #[inline(never)]
-    fn get_target(
-        app_id: usize,
-    ) -> Option<(*mut (), &'static AppVTable<SysContext<'static, 'static>>)> {
-        if let Some(entry) = APP_TABLE.get(app_id) {
-            let ptr = unsafe {
-                (core::ptr::addr_of_mut!(OS_APP_STORAGE) as *mut u8).add(entry.offset as usize)
-                    as *mut ()
-            };
-            Some((ptr, &entry.vtable))
-        } else {
-            unsafe {
-                let dyn_ref = (*core::ptr::addr_of!(DYNAMIC_APP)).as_ref()?;
-                Some((dyn_ref.instance, &dyn_ref.vtable))
+    pub fn on_start<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
+        unsafe {
+            let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
+            match app_id {
+                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_start(ctx),
+                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_start(ctx),
+                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_start(ctx),
+                _ if Self::is_dynamic_loaded() => {
+                    #[cfg(feature = "krx_native")]
+                    crate::runtime::native_runner::native_on_start(core::mem::transmute(ctx));
+                }
+                _ => {}
             }
         }
     }
 
-    pub fn on_start<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
-        if let Some((ptr, vtable)) = Self::get_target(app_id) {
-            unsafe { (vtable.on_start)(ptr, core::mem::transmute(ctx)) }
-        }
-    }
-
+    #[inline(never)]
     pub fn on_event<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>, event: &Event) -> EventResult {
-        if let Some((ptr, vtable)) = Self::get_target(app_id) {
-            unsafe { (vtable.on_event)(ptr, core::mem::transmute(ctx), event) }
-        } else {
-            EventResult::Ignored
+        unsafe {
+            let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
+            match app_id {
+                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_event(ctx, event),
+                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_event(ctx, event),
+                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_event(ctx, event),
+                _ if Self::is_dynamic_loaded() => {
+                    #[cfg(feature = "krx_native")]
+                    return crate::runtime::native_runner::native_on_event(
+                        core::mem::transmute(ctx),
+                        event,
+                    );
+                    #[cfg(not(feature = "krx_native"))]
+                    EventResult::Ignored
+                }
+                _ => EventResult::Ignored,
+            }
         }
     }
 
+    #[inline(never)]
     pub fn on_modal_result<'a>(
         app_id: usize,
         ctx: &mut SysContext<'a, '_>,
         result: &ModalResult<'_>,
     ) -> EventResult {
-        if let Some((ptr, vtable)) = Self::get_target(app_id) {
-            unsafe { (vtable.on_modal_result)(ptr, core::mem::transmute(ctx), result) }
-        } else {
-            EventResult::Ignored
+        unsafe {
+            let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
+            match app_id {
+                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_modal_result(ctx, result),
+                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_modal_result(ctx, result),
+                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_modal_result(ctx, result),
+                _ if Self::is_dynamic_loaded() => {
+                    #[cfg(feature = "krx_native")]
+                    return crate::runtime::native_runner::native_on_modal_result(
+                        core::mem::transmute(ctx),
+                        result,
+                    );
+                    #[cfg(not(feature = "krx_native"))]
+                    EventResult::Ignored
+                }
+                _ => EventResult::Ignored,
+            }
         }
     }
 
+    #[inline(never)]
     pub fn render<'a>(
         app_id: usize,
         canvas: &mut gfx::Canvas,
         ctx: &'a SysContext<'a, '_>,
         sb_cfg: &mut StatusBarConfig<'_>,
     ) {
-        if let Some((ptr, vtable)) = Self::get_target(app_id) {
-            unsafe { (vtable.render)(ptr, canvas, core::mem::transmute(ctx), sb_cfg) }
+        unsafe {
+            let st = &*core::ptr::addr_of!(OS_APP_STORAGE);
+            let title = match app_id {
+                APP_ID_LAUNCHER => {
+                    (*st.APP_ID_LAUNCHER.as_ptr()).render(canvas, ctx);
+                    "Home"
+                }
+                APP_ID_VFO => {
+                    (*st.APP_ID_VFO.as_ptr()).render(canvas, ctx);
+                    "Radio"
+                }
+                APP_ID_SETTINGS => {
+                    let app = &*st.APP_ID_SETTINGS.as_ptr();
+                    app.render(canvas, ctx);
+                    app.title
+                }
+                _ => {
+                    #[cfg(feature = "krx_native")]
+                    if Self::is_dynamic_loaded() {
+                        crate::runtime::native_runner::native_on_render(
+                            canvas,
+                            core::mem::transmute(ctx),
+                            sb_cfg,
+                        );
+                    }
+                    return;
+                }
+            };
+            *sb_cfg = StatusBarConfig::new(title);
         }
     }
 
+    #[inline(never)]
     pub fn on_exit<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
-        if let Some((ptr, vtable)) = Self::get_target(app_id) {
-            unsafe { (vtable.on_exit)(ptr, core::mem::transmute(ctx)) }
+        unsafe {
+            let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
+            match app_id {
+                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_exit(ctx),
+                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_exit(ctx),
+                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_exit(ctx),
+                _ if Self::is_dynamic_loaded() => {
+                    #[cfg(feature = "krx_native")]
+                    crate::runtime::native_runner::native_on_exit(core::mem::transmute(ctx));
+                }
+                _ => {}
+            }
         }
     }
 }

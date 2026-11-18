@@ -31,6 +31,26 @@ GRAY    = "\033[90m"
 DEFAULT_FLASH_BUDGET = 118 * 1024  # 120,832 bytes (safe margin below 128KB)
 DEFAULT_RAM_BUDGET   = 16 * 1024   # 16,384 bytes (16 KB SRAM)
 
+# Target hardware profiles: keep compatible variants (UV-K1, UV-K5v3) on the unified base image
+TARGET_PROFILES = {
+    "uv-k1": {
+        "display": "UV-K1",
+        "flash_budget": 118 * 1024,
+        "features": [],
+    },
+    "uv-k5v3": {
+        "display": "UV-K5v3",
+        "flash_budget": 118 * 1024,
+        "features": [],
+    },
+    "uv-k10pro": {
+        "display": "UV-K10Pro",
+        "flash_budget": 120 * 1024,
+        "features": ["target_k10pro"],
+        "strip_features": {"flashlight"},
+    },
+}
+
 def print_header(title="Kern Firmware Builder & Analyzer"):
     print(f"\n  ⚡ {BOLD}{CYAN}{title}{RESET}")
     print(f"  ══════════════════════════════════════════════════════════════════")
@@ -123,6 +143,10 @@ def display_config_summary(cfg: dict | None, categories: dict, active_features: 
     cpu_clock = target.get("cpu_clock", 48)
 
     print(f"  {BOLD}Target:{RESET} {CYAN}{device}{RESET} ({chip}) @ {BOLD}{cpu_clock} MHz{RESET}")
+    if active_features:
+        board_feats = [f for f in active_features if f.startswith("target_") or f in ("gnss", "rgb_backlight")]
+        if board_feats:
+            print(f"  {BOLD}Profile:{RESET} {MAGENTA}{', '.join(board_feats)}{RESET}")
     print(f"  {BOLD}Active Features ({len(active_features)}):{RESET}")
 
     if categories:
@@ -146,6 +170,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Kern Firmware CLI Builder & Memory Analyzer")
     parser.add_argument("--config", "-c", default="kern.toml", help="Path to config TOML (default: kern.toml)")
+    parser.add_argument("--target", "-t", help="Override [target].device (e.g. UV-K1, UV-K5v3, UV-K10Pro)")
     parser.add_argument("--preset", choices=["full", "security", "lean"], help="Build using a predefined feature preset")
     parser.add_argument("--features", help="Comma-separated list of extra features to enable")
     parser.add_argument("--no-config", action="store_true", help="Ignore kern.toml and use Cargo default features")
@@ -170,13 +195,33 @@ def main():
     else:
         print(f"  {BOLD}Config:{RESET} {YELLOW}None (using defaults){RESET}")
 
+    # Resolve target profile cleanly so binary-compatible models share one image
+    if args.target:
+        cfg = dict(cfg) if cfg else {}
+        target_tbl = dict(cfg.get("target", {}))
+        target_tbl["device"] = args.target
+        cfg["target"] = target_tbl
+
+    device_raw = (cfg.get("target", {}).get("device", "UV-K1") if cfg else "UV-K1").strip()
+    profile = TARGET_PROFILES.get(device_raw.lower(), {"display": device_raw, "flash_budget": DEFAULT_FLASH_BUDGET, "features": []})
+
     # Memory budget from config
-    flash_budget = cfg.get("project", {}).get("flash_budget", DEFAULT_FLASH_BUDGET) if cfg else DEFAULT_FLASH_BUDGET
+    cfg_flash = cfg.get("project", {}).get("flash_budget") if cfg else None
+    flash_budget = cfg_flash if (cfg_flash is not None and profile["flash_budget"] == DEFAULT_FLASH_BUDGET and not args.target) else profile["flash_budget"]
     ram_budget   = cfg.get("project", {}).get("ram_budget", DEFAULT_RAM_BUDGET) if cfg else DEFAULT_RAM_BUDGET
 
     # Resolve features
-    extra_feats = args.features.split(",") if args.features else None
-    categories, active_features = resolve_features(cfg, preset=args.preset, extra_features=extra_feats)
+    extra_feats = list(profile["features"])
+    if args.features:
+        extra_feats.extend(args.features.split(","))
+    categories, active_features = resolve_features(cfg, preset=args.preset, extra_features=extra_feats or None)
+    strip_feats = profile.get("strip_features", set())
+    if strip_feats:
+        active_features = [f for f in active_features if f not in strip_feats]
+        for cat in categories.values():
+            for sf in strip_feats:
+                if sf in cat:
+                    cat[sf] = False
 
     display_config_summary(cfg, categories, active_features)
 

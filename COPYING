@@ -1,0 +1,62 @@
+Kern Microkernel — Licensing
+============================
+
+Copyright (C) 2024-2026 Drew (indirecta)
+
+The Kern microkernel, including the kernel, platform abstraction layers,
+hardware drivers, libraries, firmware, and all bundled applications, is
+licensed under the GNU General Public License version 3 (or any later
+version), with the following additional permission granted under
+section 7 of the GPL v3:
+
+------------------------------------------------------------------------
+
+KERN RUNTIME EXECUTABLE (KRX) SYSCALL EXCEPTION
+
+  As a special exception, the copyright holders of the Kern microkernel
+  give you permission to use, copy, modify, and distribute third-party
+  KRX application programs that interact with the kernel exclusively
+  through the published KRX Application Binary Interface (KRX-ABI)
+  system call table ("KrxApiTable"), without those application programs
+  being considered derivative works of the kernel under the GPL.
+
+  This exception applies ONLY to standalone third-party KRX userland
+  applications (.krx executables) that:
+
+    1. Interact with the kernel solely through the published KRX-ABI
+       system call table (KrxApiTable) and its documented primitives;
+
+    2. Do NOT include, embed, copy, or statically link any kernel source
+       code, driver source code, or library source code from this
+       repository; and
+
+    3. Do NOT modify, extend, or replace any kernel, driver, or platform
+       component of the Kern system.
+
+  This exception does NOT apply to, and the full terms of the GPL v3
+  remain in force for:
+
+    • The kernel itself and all code under src/kernel/
+    • All hardware drivers under src/driver/
+    • All platform abstraction layers under src/platform/
+    • All libraries under src/lib/
+    • The firmware runtime under src/firmware/
+    • Any code that includes, links against, or is derived from
+      the above components
+    • Any modifications or forks of the kernel or its subsystems
+    • Any KRX applications that are bundled with, distributed as part
+      of, or considered integral to the Kern operating system
+
+  If you create or distribute a modified version of the Kern kernel,
+  drivers, platform layers, libraries, or firmware, your modifications
+  are subject to the full terms of the GPL v3 and you must release
+  the complete corresponding source code.
+
+  If in doubt, it is GPL v3.
+
+------------------------------------------------------------------------
+
+The full text of the GNU General Public License version 3 is contained
+in the file LICENSE in this repository, and is also available at:
+
+  https://www.gnu.org/licenses/gpl-3.0.html

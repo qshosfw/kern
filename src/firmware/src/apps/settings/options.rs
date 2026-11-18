@@ -124,14 +124,17 @@ fn populate_item(
 }
 
 #[inline(never)]
-pub fn populate_defs(items: &mut [MenuItem], defs: &[SettingDef], ctx: &mut crate::SysContext) {
+pub fn populate_defs(
+    items: &mut [MenuItem],
+    defs: &[SettingDef],
+    ctx: &mut crate::SysContext,
+) -> usize {
     let nav_layout = ctx.config.keys.nav_layout;
-    for (i, def) in defs.iter().enumerate() {
-        if i >= items.len() {
-            break;
-        }
-        populate_item(&mut items[i], def, ctx, nav_layout);
+    let n = defs.len().min(items.len());
+    for i in 0..n {
+        populate_item(&mut items[i], &defs[i], ctx, nav_layout);
     }
+    n
 }
 
 pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
@@ -169,36 +172,34 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
 
 #[inline(never)]
 pub fn page_title(page: PageId) -> &'static str {
-    match page {
-        PageId::Root => "Settings",
-        PageId::Display => "Display",
-        PageId::Audio => "Audio",
-        PageId::Buttons => "Buttons",
-        PageId::Battery => "Battery",
-        PageId::Device => "Device",
-        #[cfg(feature = "passcode")]
-        PageId::Security => "Security",
-        PageId::System => "System",
-        PageId::ButtonsTweaks => "Tweaks",
-        PageId::ButtonsShortcuts => "Shortcuts",
-        PageId::BatteryInfo => "Battery Info",
-        PageId::BatteryTweaks => "Battery Tweaks",
-        #[cfg(feature = "settings_info")]
-        PageId::SystemInfo => "System Info",
-        #[cfg(feature = "filesystem")]
-        PageId::SystemStorage => "Storage",
-        PageId::Apps => "Apps",
-        PageId::BootSplash => "Boot Splash",
-        #[cfg(feature = "settings_calib")]
-        PageId::SystemCalibration => "Calibration",
-        #[cfg(feature = "settings_debug")]
-        PageId::SystemDebug => "Debug",
-        PageId::ManageApps => "Installed",
-        PageId::AppDetail => "App Info",
-        PageId::AppPrefs => "App Settings",
-        PageId::ManageServices => "Services",
-        PageId::ServiceDetail => "Service Info",
+    let bytes: &[u8] = b"\
+Settings\0Display\0Audio\0Buttons\0Battery\0Device\0\
+Security\0System\0Tweaks\0Shortcuts\0Battery Info\0Battery Tweaks\0\
+System Info\0Storage\0Apps\0Boot Splash\0Calibration\0Debug\0\
+App Settings\0";
+    let mut idx = page as u8;
+    #[cfg(not(feature = "passcode"))]
+    if page as u8 >= PageId::System as u8 {
+        idx += 1;
     }
+    #[cfg(not(feature = "settings_info"))]
+    if page as u8 >= PageId::SystemStorage as u8 {
+        idx += 1;
+    }
+    #[cfg(not(feature = "filesystem"))]
+    if page as u8 >= PageId::Apps as u8 {
+        idx += 1;
+    }
+    #[cfg(not(feature = "settings_calib"))]
+    if page as u8 >= PageId::AppPrefs as u8 {
+        idx += 2;
+    } else if false {
+    }
+    #[cfg(all(feature = "settings_calib", not(feature = "settings_debug")))]
+    if page as u8 >= PageId::AppPrefs as u8 {
+        idx += 1;
+    }
+    utils::format::nth_cstr(bytes, idx)
 }
 
 #[inline(never)]

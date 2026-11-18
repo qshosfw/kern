@@ -65,7 +65,17 @@ pub fn delay_ms(ms: u32) {
         return;
     }
 
-    if !cortex_m::register::primask::read().is_inactive() {
+    #[cfg(target_arch = "arm")]
+    let (primask, ipsr): (u32, u32) = unsafe {
+        let p: u32;
+        let i: u32;
+        core::arch::asm!("mrs {}, PRIMASK", out(reg) p, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, IPSR", out(reg) i, options(nomem, nostack, preserves_flags));
+        (p, i)
+    };
+    #[cfg(not(target_arch = "arm"))]
+    let (primask, ipsr): (u32, u32) = (0, 0);
+    if (primask & 1) != 0 || ipsr != 0 {
         let mut rem = ms;
         while rem > 0 {
             let chunk = rem.min(50);

@@ -26,15 +26,11 @@ pub enum PageId {
     SystemCalibration,
     #[cfg(feature = "settings_debug")]
     SystemDebug,
-    ManageApps,
-    AppDetail,
     AppPrefs,
-    ManageServices,
-    ServiceDetail,
 }
 
 impl PageId {
-    pub const COUNT: usize = PageId::ServiceDetail as usize + 1;
+    pub const COUNT: usize = PageId::AppPrefs as usize + 1;
 
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {

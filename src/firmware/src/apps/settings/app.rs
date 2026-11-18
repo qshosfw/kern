@@ -42,6 +42,7 @@ pub struct SettingsApp {
     pub(crate) view: MenuView,
     pub(crate) item_icons: [&'static [u8; 8]; 20],
     pub(crate) items: [MenuItem; 20],
+    pub(crate) item_tags: [u8; 20],
 }
 
 impl SettingsApp {
@@ -49,18 +50,7 @@ impl SettingsApp {
         unsafe {
             (*ptr).title = "Settings";
             (*ptr).view = MenuView::new();
-            (*ptr).selected_pkg_idx = 0;
-            (*ptr).resume_nav = false;
-            (*ptr).active_action_module = false;
-            (*ptr).shortcut_ctx = 0;
-            (*ptr).slide_offset_x = 0;
-            (*ptr).dirty_timer_ms = 0;
             (*ptr).last_poll_sec = u16::MAX;
-            (*ptr).last_tick_ms = 0;
-            #[cfg(feature = "filesystem")]
-            {
-                (*ptr).active_asset = None;
-            }
         }
     }
 
@@ -94,10 +84,7 @@ impl SettingsApp {
     fn build_menu_model<'a>(&'a self, is_editing: bool) -> MenuModel<'a> {
         let icons = if self.current_page == PageId::Root {
             Some(Self::ROOT_ICONS)
-        } else if matches!(
-            self.current_page,
-            PageId::ManageApps | PageId::ManageServices | PageId::ButtonsShortcuts
-        ) {
+        } else if self.current_page == PageId::ButtonsShortcuts {
             Some(&self.item_icons[..self.items_len])
         } else {
             None
@@ -109,6 +96,31 @@ impl SettingsApp {
             icons,
             is_editing,
             is_pressed: if is_editing { self.is_pressed } else { false },
+        }
+    }
+
+    #[inline(never)]
+    pub(super) fn launch_pkg(&mut self, ctx: &mut SysContext, path: &str, is_action: bool) {
+        if is_action {
+            #[cfg(feature = "filesystem")]
+            {
+                self.active_action_module = true;
+                if let Err(err) = crate::runtime::loader::invoke_action_krx_package(ctx, path) {
+                    self.active_action_module = false;
+                    crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
+                }
+            }
+            return;
+        }
+        self.resume_nav = true;
+        if let Err(err) = crate::apps::runtime::launch_krx_package(ctx, path) {
+            self.resume_nav = false;
+            crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
+            crate::apps::launcher::catalog::get_catalog().mark_dirty();
+            self.populate_current_menu(ctx);
+            if self.selected_idx >= self.items_len {
+                self.selected_idx = self.items_len.saturating_sub(1);
+            }
         }
     }
 
@@ -128,15 +140,10 @@ impl SettingsApp {
             }
         }
 
-        if super::apps::handle_package_press(self, ctx, sel_idx) {
-            return;
-        }
-
         if self.current_page == PageId::ButtonsShortcuts && sel_idx > 0 {
             let slot = sel_idx - 1;
             if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
                 let cat = crate::apps::launcher::catalog::get_catalog();
-                cat.scan(ctx.storage);
                 let cur_id =
                     crate::apps::shortcut::resolve_slot(&ctx.config.keys, slot, self.shortcut_ctx);
                 let sheet = crate::apps::shortcut::build_picker_sheet(
@@ -149,97 +156,28 @@ impl SettingsApp {
             return;
         }
 
-        let defs = page_defs(self.current_page);
-        if self.current_page == PageId::Apps && sel_idx >= defs.len() {
-            let mut target = sel_idx - defs.len();
-            let cat = crate::apps::launcher::catalog::get_catalog();
-            let mut app_idx = 0usize;
-            for e in &cat.entries {
-                if crate::apps::launcher::catalog::PackageCatalog::matches_kind(e, false) {
-                    if e.has_config {
-                        if target == 0 {
-                            self.selected_pkg_idx = app_idx;
-                            self.push_submenu(PageId::AppPrefs, ctx);
-                            return;
-                        }
-                        target -= 1;
-                    }
-                    app_idx += 1;
+        let tag = self.item_tags[sel_idx];
+        if tag >= 0x80 {
+            let idx = (tag & 0x3F) as usize;
+            if self.current_page == PageId::Apps {
+                self.selected_pkg_idx = idx;
+                self.push_submenu(PageId::AppPrefs, ctx);
+                return;
+            }
+            #[cfg(feature = "krx_native")]
+            if self.current_page == PageId::System {
+                if let Some(entry) = crate::apps::launcher::catalog::get_catalog()
+                    .entries
+                    .get(idx)
+                {
+                    self.launch_pkg(ctx, entry.path.as_str(), tag >= 0xC0);
                 }
             }
             return;
         }
-        #[cfg(feature = "krx_native")]
-        let def_idx = if self.current_page == PageId::System {
-            let cat = crate::apps::launcher::catalog::get_catalog();
-            cat.scan(ctx.storage);
-            let sys_caps = ctx.caps();
-            let menu_flag = kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU;
-            let act_flag = kernel::proc::krx::SectionType::FLAG_SYSTEM_ACTION;
-            let menu_count = cat.system_entry_count(sys_caps, menu_flag);
-            let act_count = cat.system_entry_count(sys_caps, act_flag);
-            let ins_menu = super::system::system_modules_insert_idx().min(defs.len());
-            let ins_act = (super::system::system_actions_insert_idx() + menu_count)
-                .min(defs.len() + menu_count);
 
-            let picked: Option<(&str, bool)> =
-                if sel_idx >= ins_menu && sel_idx < ins_menu + menu_count {
-                    cat.system_entry_at(sys_caps, menu_flag, sel_idx - ins_menu)
-                        .map(|e| (e.path.as_str(), false))
-                } else if sel_idx >= ins_act && sel_idx < ins_act + act_count {
-                    cat.system_entry_at(sys_caps, act_flag, sel_idx - ins_act)
-                        .map(|e| (e.path.as_str(), true))
-                } else {
-                    None
-                };
-
-            if let Some((path, is_action)) = picked {
-                let res = if is_action {
-                    #[cfg(feature = "filesystem")]
-                    {
-                        self.active_action_module = true;
-                        let r = crate::runtime::loader::invoke_action_krx_package(ctx, path);
-                        if r.is_err() {
-                            self.active_action_module = false;
-                        }
-                        r
-                    }
-                    #[cfg(not(feature = "filesystem"))]
-                    Ok(())
-                } else {
-                    self.resume_nav = true;
-                    let r = crate::apps::runtime::launch_krx_package(ctx, path).map(|_| ());
-                    if r.is_err() {
-                        self.resume_nav = false;
-                    }
-                    r
-                };
-                if let Err(err) = res {
-                    crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
-                    crate::apps::launcher::catalog::get_catalog().mark_dirty();
-                    self.populate_current_menu(ctx);
-                    if self.selected_idx >= self.items_len {
-                        self.selected_idx = self.items_len.saturating_sub(1);
-                    }
-                }
-                return;
-            }
-
-            let mut idx = sel_idx;
-            if sel_idx >= ins_act + act_count {
-                idx -= act_count;
-            }
-            if sel_idx >= ins_menu + menu_count {
-                idx -= menu_count;
-            }
-            idx
-        } else {
-            sel_idx
-        };
-        #[cfg(not(feature = "krx_native"))]
-        let def_idx = sel_idx;
-
-        if let Some(def) = defs.get(def_idx) {
+        let defs = page_defs(self.current_page);
+        if let Some(def) = defs.get(tag as usize) {
             match def.tag {
                 TAG_SUBMENU => {
                     if let Some(target_page) = PageId::from_u8(def.aux) {
@@ -502,7 +440,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
     fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
         let mut polled_info = false;
         if let Event::Tick = *event {
-            let now_ms = kernel::proc::primitives::TimerPrimitive::uptime_ms(ctx);
+            let now_ms = py32_hal::delay::millis();
             let dt = if self.last_tick_ms == 0 {
                 50
             } else {
@@ -536,7 +474,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
                 self.dirty_timer_ms = self.dirty_timer_ms.saturating_sub(dt);
                 if self.dirty_timer_ms == 0 {
                     if ctx.flush_config().is_err() {
-                        ctx.show_popup(dialog::TAG_POPUP_INFO, "Save Error", "Write failed");
+                        dialog::info_popup(ctx, "Save Error", "Write failed");
                     }
                 }
             }

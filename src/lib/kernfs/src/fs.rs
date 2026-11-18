@@ -47,27 +47,49 @@ pub struct KernFS<'a, D: BlockDevice> {
 }
 
 impl<'a, D: BlockDevice> KernFS<'a, D> {
+    /// Initialize a `KernFS` directly in uninitialized storage to avoid large
+    /// by-value stack copy temporaries during firmware startup.
+    pub unsafe fn init_in_place(dst: *mut Self, dev: &'a mut D) {
+        unsafe {
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_alloc_page), 1);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).low_power), false);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).mounted), false);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).in_gc), false);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).block_seq), 1);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_alloc_block), 0);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).hot_ino), 0);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).active_files), 0);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).dev), dev);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).format_epoch), 1);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).super_seq), 1);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).global_gen), 1);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).total_erases), 0);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).hot_hash), 0);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_tag), PageTag::EMPTY);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_inode), Inode::EMPTY);
+            core::ptr::write_bytes(
+                core::ptr::addr_of_mut!((*dst).meta_pages) as *mut u8,
+                0,
+                MAX_META_GROUPS * 2,
+            );
+            core::ptr::write_bytes(
+                core::ptr::addr_of_mut!((*dst).block_table) as *mut u8,
+                BLOCK_TBL_ERASED,
+                MAX_BLOCKS,
+            );
+            core::ptr::write_bytes(
+                core::ptr::addr_of_mut!((*dst).page_buf) as *mut u8,
+                0,
+                PAGE_SIZE,
+            );
+        }
+    }
+
     pub fn new(dev: &'a mut D) -> Self {
-        Self {
-            cur_tag: PageTag::EMPTY,
-            block_seq: 1,
-            cur_alloc_block: 0,
-            hot_ino: 0,
-            active_files: 0,
-            cur_alloc_page: 1,
-            low_power: false,
-            mounted: false,
-            in_gc: false,
-            cur_inode: Inode::EMPTY,
-            dev,
-            format_epoch: 1,
-            super_seq: 1,
-            global_gen: 1,
-            total_erases: 0,
-            hot_hash: 0,
-            page_buf: [0; PAGE_SIZE],
-            meta_pages: [0; MAX_META_GROUPS],
-            block_table: [BLOCK_TBL_ERASED; MAX_BLOCKS],
+        let mut fs = core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            Self::init_in_place(fs.as_mut_ptr(), dev);
+            fs.assume_init()
         }
     }
 
@@ -590,12 +612,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             self.cur_inode.flags = INODE_FLAG_INLINE;
             self.cur_inode.depth = DEPTH_NONE_OR_INLINE;
             self.cur_inode.inline_data[..data.len()].copy_from_slice(data);
+            self.commit_cur_inode(&[])?;
         } else {
             self.cur_inode.flags = 0;
-            self.write_fresh_extent_tree(data)?;
+            self.cur_inode.size = 0;
+            self.cur_inode.depth = DEPTH_DIRECT;
+            self.write_pages_at(0, data, None)?;
         }
-
-        self.commit_cur_inode(&[])?;
         self.hot_hash = CrcEngine::crc32(path.as_bytes());
         self.hot_ino = self.cur_inode.ino;
 

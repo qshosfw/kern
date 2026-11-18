@@ -75,9 +75,13 @@ impl UsbDriver {
             last_transition_ms: 0,
             ep0_transfer: None,
             battery_voltage_mv: 0,
-            product_len: 15,
+            product_len: bsp::pins::BOARD_SPEC.usb_product_default.len() as u8,
             battery_pct: 0,
-            product_name: *b"Quansheng UV-K1                 ",
+            product_name: if cfg!(feature = "target_k10pro") {
+                *b"Quansheng UV-K10 Pro            "
+            } else {
+                *b"Quansheng UV-K1                 "
+            },
             is_connected: false,
             was_connected: false,
             consecutive_sof: 0,

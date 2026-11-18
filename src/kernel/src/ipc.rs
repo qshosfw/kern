@@ -281,9 +281,9 @@ impl KrxIpcMessage {
 /// Zero-heap multi-process IPC Channel and Message Router (§8.4 / KRX 3.2).
 /// Manages up to N concurrent 32-byte messages in strict FIFO order.
 pub struct IpcChannel<const N: usize = 8> {
-    messages: [KrxIpcMessage; N],
     len: usize,
     next_seq: u16,
+    messages: [KrxIpcMessage; N],
 }
 
 impl<const N: usize> Default for IpcChannel<N> {
@@ -296,9 +296,9 @@ impl<const N: usize> IpcChannel<N> {
     pub const fn new() -> Self {
         assert!(N > 0, "IpcChannel capacity must be non-zero");
         Self {
-            messages: [const { KrxIpcMessage::empty() }; N],
             len: 0,
             next_seq: 0,
+            messages: [const { KrxIpcMessage::empty() }; N],
         }
     }
 

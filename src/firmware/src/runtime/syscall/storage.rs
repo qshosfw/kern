@@ -2,7 +2,6 @@
 
 use super::{active_ctx_opt, parse_str, parse_user_path};
 use kernel::proc::abi::{KrxDirEntry, StorageApi};
-use kernel::proc::primitives::*;
 
 #[inline(never)]
 fn active_storage_mut() -> Option<&'static mut crate::services::SystemStorage<'static>> {
@@ -28,43 +27,33 @@ fn has_proc_read_cap() -> bool {
     super::super::native_runner::active_native_caps().contains(kernel::caps::Cap::ServiceRegistry)
 }
 
-fn copy_proc_seg(
-    dst: &mut [u8],
-    offset: usize,
-    written: &mut usize,
-    seg_start: &mut usize,
-    src: &[u8],
-) {
-    let seg_end = *seg_start + src.len();
-    let cur = offset + *written;
-    if cur >= *seg_start && cur < seg_end && *written < dst.len() {
-        let s_off = cur - *seg_start;
-        let n = (dst.len() - *written).min(src.len() - s_off);
-        dst[*written..*written + n].copy_from_slice(&src[s_off..s_off + n]);
-        *written += n;
-    }
-    *seg_start = seg_end;
-}
-
 #[inline(never)]
 fn proc_read(path: &str, offset: usize, dst: &mut [u8]) -> Option<usize> {
     if !is_proc_boot_path(path) || !has_proc_read_cap() {
         return None;
     }
     let tag_bytes = crate::boot::read_backup_tag().encode().to_le_bytes();
-    let segs: [(*const u8, usize); 3] = [
+    let mut written = 0usize;
+    let mut seg_start = 0usize;
+    for (ptr, len) in [
         (
             crate::panic::BOOT_RECORD.get() as *const kernel::boot::BootRecord as *const u8,
-            260,
+            260usize,
         ),
         (core::ptr::addr_of!(crate::FAULT_EXTRA) as *const u8, 52),
         (tag_bytes.as_ptr(), 4),
-    ];
-    let mut written = 0usize;
-    let mut seg_start = 0usize;
-    for &(ptr, len) in &segs {
-        let src = unsafe { core::slice::from_raw_parts(ptr, len) };
-        copy_proc_seg(dst, offset, &mut written, &mut seg_start, src);
+    ] {
+        let seg_end = seg_start + len;
+        let cur = offset + written;
+        if cur >= seg_start && cur < seg_end && written < dst.len() {
+            let s_off = cur - seg_start;
+            let n = (dst.len() - written).min(len - s_off);
+            unsafe {
+                core::ptr::copy_nonoverlapping(ptr.add(s_off), dst.as_mut_ptr().add(written), n);
+            }
+            written += n;
+        }
+        seg_start = seg_end;
     }
     Some(written)
 }
@@ -136,34 +125,29 @@ pub unsafe extern "C" fn api_storage_read_file(
 }
 
 #[inline(never)]
+fn user_storage<'a>(
+    path: *const u8,
+    path_len: u8,
+) -> Option<(&'a str, &'a mut crate::services::SystemStorage<'static>)> {
+    let p_str = unsafe { parse_user_path(path, path_len as usize) }?;
+    if utils::path::root_bit(p_str.as_bytes()) == utils::path::ROOT_SYS {
+        return None;
+    }
+    Some((p_str, active_storage_mut()?))
+}
+
+#[inline(never)]
 fn storage_write_op(path: *const u8, path_len_and_append: u16, data: *const u8, len: u16) -> u8 {
     let append = (path_len_and_append & 0x8000) != 0;
-    let path_len = (path_len_and_append & 0xFF) as usize;
     if !data.is_null() {
-        if let (Some(path_str), Some(st)) = (
-            unsafe { parse_user_path(path, path_len) },
-            active_storage_mut(),
-        ) {
-            if utils::path::root_bit(path_str.as_bytes()) == utils::path::ROOT_SYS {
-                return 1;
-            }
+        if let Some((path_str, st)) = user_storage(path, path_len_and_append as u8) {
             let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            let res = if append {
-                let buf = crate::data::arena::staging_buf();
-                let cur_len = match st.read_file(path_str, buf) {
-                    Ok(n) => n,
-                    Err(kernel::service::StorageError::NotFound) => 0,
-                    Err(_) => return 1,
-                };
-                if cur_len + src.len() > buf.len() {
-                    return 1;
-                }
-                buf[cur_len..cur_len + src.len()].copy_from_slice(src);
-                crate::security::write_classified_file(st, path_str, &buf[..cur_len + src.len()])
+            let ok = if append {
+                st.fs.append_file(path_str, src).is_ok()
             } else {
-                crate::security::write_classified_file(st, path_str, src)
+                crate::security::write_classified_file(st, path_str, src).is_ok()
             };
-            return u8::from(res.is_err());
+            return u8::from(!ok);
         }
     }
     1
@@ -178,13 +162,7 @@ fn user_path_unit_op(path: *const u8, path_len: u8, create_dir: bool) -> u8 {
             }
         }
     }
-    if let (Some(p_str), Some(st)) = (
-        unsafe { parse_user_path(path, path_len as usize) },
-        active_storage_mut(),
-    ) {
-        if utils::path::root_bit(p_str.as_bytes()) == utils::path::ROOT_SYS {
-            return 1;
-        }
+    if let Some((p_str, st)) = user_storage(path, path_len) {
         let res = if create_dir {
             st.create_dir(p_str)
         } else {
@@ -279,14 +257,12 @@ pub unsafe extern "C" fn api_storage_rename_file(
     new_path: *const u8,
     new_len: u8,
 ) -> u8 {
-    if let (Some(o_str), Some(n_str)) = (
-        unsafe { parse_user_path(old_path, old_len as usize) },
-        unsafe { parse_user_path(new_path, new_len as usize) },
+    if let (Some((o_str, st)), Some((n_str, _))) = (
+        user_storage(old_path, old_len),
+        user_storage(new_path, new_len),
     ) {
-        if let Some(ctx) = active_ctx_opt() {
-            if ctx.rename_file(o_str, n_str).is_ok() {
-                return 0;
-            }
+        if st.rename(o_str, n_str).is_ok() {
+            return 0;
         }
     }
     1

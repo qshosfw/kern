@@ -383,61 +383,50 @@ impl AlertQueue {
 static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 
 /// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
+#[inline(never)]
 pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<168>) {
     out.clear();
-    let mut line_px: i16 = 0;
     let space_px = gfx::text::str_width(" ", &gfx::fonts::tomthumb::FONT);
     let b = raw.as_bytes();
-    let mut pos = 0usize;
+    let n = b.len();
+    let mut i = 0usize;
+    let mut line_px: i16 = 0;
 
-    while pos < b.len() {
-        let mut nl = pos;
-        while nl < b.len() && b[nl] != b'\n' {
-            nl += 1;
-        }
-        if pos > 0 {
-            if out.push_str("\n").is_err() {
-                break;
-            }
-            line_px = 0;
-        }
-        let mut p = pos;
-        while p < nl {
-            while p < nl && b[p] == b' ' {
-                p += 1;
-            }
-            if p >= nl {
-                break;
-            }
-            let mut end = p;
-            while end < nl && b[end] != b' ' {
-                end += 1;
-            }
-            // SAFETY: `b` is valid UTF-8 and splitting on ASCII `' '` / `'\n'` preserves char boundaries.
-            let word = unsafe { core::str::from_utf8_unchecked(&b[p..end]) };
-            p = end;
-
-            let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
-            let need_space = line_px > 0;
-            let wrap = need_space && line_px + space_px + word_px > MAX_ALERT_LINE_PX;
-            if wrap {
-                line_px = 0;
-            }
-            let sep_res = if need_space {
-                out.push_str(if wrap { "\n" } else { " " })
-            } else {
-                Ok(())
-            };
-            if sep_res.is_err() || out.push_str(word).is_err() {
+    while i < n {
+        if b[i] == b'\n' {
+            if out.push('\n').is_err() {
                 return;
             }
-            line_px += if line_px > 0 {
-                space_px + word_px
-            } else {
-                word_px
-            };
+            line_px = 0;
+            i += 1;
+            continue;
         }
-        pos = nl + 1;
+        if b[i] == b' ' {
+            i += 1;
+            continue;
+        }
+        let s = i;
+        while i < n && b[i] != b' ' && b[i] != b'\n' {
+            i += 1;
+        }
+        let word = &raw[s..i];
+        let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
+        if line_px > 0 {
+            let sep = if line_px + space_px + word_px > MAX_ALERT_LINE_PX {
+                line_px = 0;
+                '\n'
+            } else {
+                line_px += space_px;
+                ' '
+            };
+            if out.push(sep).is_err() {
+                return;
+            }
+        }
+        if out.push_str(word).is_err() {
+            return;
+        }
+        line_px += word_px;
     }
 }
 
@@ -552,7 +541,7 @@ fn render_f_shortcut_drawer(
     active_app_id: usize,
 ) {
     use crate::apps::shortcut::{
-        F_DRAWER_START_SLOT, KEY_SHORTCUT_COUNT, TARGET_NONE, active_context, describe,
+        F_DRAWER_START_SLOT, KEY_SHORTCUT_COUNT, TARGET_NONE, active_context, describe_into,
         drawer_badge, resolve_slot,
     };
 
@@ -563,6 +552,7 @@ fn render_f_shortcut_drawer(
     let cur_ctx = active_context(active_app_id);
     let mut shown = 0usize;
     let base_y = (64 - DRAWER_H) as i16 + 10;
+    let mut label = gfx::gui::modules::menu::ShortString::empty();
 
     for slot in F_DRAWER_START_SLOT..KEY_SHORTCUT_COUNT {
         let target_id = resolve_slot(keys, slot, cur_ctx);
@@ -577,14 +567,9 @@ fn render_f_shortcut_drawer(
         let cell_x = if col == 0 { 4i16 } else { 65i16 };
         let cell_y = base_y + (row as i16 * 10);
 
-        let box_w = gfx::widgets::draw_key_badge_box(
-            canvas,
-            cell_x,
-            cell_y + 1,
-            drawer_badge(slot),
-            false,
-        );
-        let (label, icon) = describe(target_id, cat);
+        let box_w =
+            gfx::widgets::draw_key_badge_box(canvas, cell_x, cell_y + 1, drawer_badge(slot), false);
+        let icon = describe_into(target_id, cat, false, &mut label);
         let icon_x = cell_x + box_w as i16 + 2;
         gfx::icons::draw_icon_8(canvas, icon_x, cell_y, icon, gfx::Color::Fill);
         gfx::text::draw_str_max_x(

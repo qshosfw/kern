@@ -712,8 +712,7 @@ pub struct ServiceApi {
     pub sys_find_proc: unsafe extern "C" fn(name: *const u8, len: u8) -> u8,
     pub sys_self_pid: unsafe extern "C" fn() -> u8,
     pub sys_info: unsafe extern "C" fn(out_info: *mut KrxSysInfo) -> u8,
-    pub sys_proc_ctl:
-        unsafe extern "C" fn(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8,
+    pub sys_proc_ctl: unsafe extern "C" fn(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8,
 }
 
 /// 13. `HwBusApi` Table (`interface_id = 0x000D`)
@@ -1638,12 +1637,7 @@ pub static STUB_FM_VTABLE: FmApi = FmApi {
 unsafe extern "C" fn noop_sys_info(_out_info: *mut KrxSysInfo) -> u8 {
     1
 }
-unsafe extern "C" fn noop_sys_proc_ctl(
-    _op_and_id: u16,
-    _arg: u32,
-    _buf: *mut u8,
-    _len: u16,
-) -> u8 {
+unsafe extern "C" fn noop_sys_proc_ctl(_op_and_id: u16, _arg: u32, _buf: *mut u8, _len: u16) -> u8 {
     1
 }
 

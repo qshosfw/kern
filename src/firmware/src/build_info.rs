@@ -60,6 +60,7 @@ const fn compile_git_hash() -> [u8; 8] {
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const GIT_HASH: &str = env!("KERN_GIT_HASH");
+pub const GIT_REF: &str = env!("KERN_GIT_REF");
 pub const BUILD_DATE: &str = env!("KERN_BUILD_DATE");
 pub const BUILD_TIME: &str = env!("KERN_BUILD_TIME");
 pub const BUILD_STAMP: &str = env!("KERN_BUILD_STAMP");

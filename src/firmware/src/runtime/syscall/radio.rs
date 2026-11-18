@@ -2,7 +2,6 @@
 
 use super::active_ctx_opt;
 use kernel::proc::abi::{FmApi, KrxSymbol, RadioApi};
-use kernel::proc::primitives::*;
 
 #[inline(never)]
 fn coord_u32(op: u8) -> u32 {
@@ -38,9 +37,14 @@ fn rf_get_i16(op: u8) -> i16 {
     match op {
         0 => ctx.get_rssi_dbm(),
         1 => ctx.is_carrier_detected() as i16,
-        2 => ctx.get_glitch() as i16,
-        3 => ctx.get_snr() as i16,
-        _ => ctx.get_noise() as i16,
+        _ => {
+            let reg = match op {
+                2 => 0x63,
+                3 => 0x66,
+                _ => 0x65,
+            };
+            (ctx.read_register(reg) & 0xFF) as i16
+        }
     }
 }
 
@@ -124,30 +128,28 @@ pub unsafe extern "C" fn api_rf_sweep(
     count: u16,
     out_rssi: *mut i16,
 ) -> u16 {
-    if !out_rssi.is_null() && count > 0 {
-        if let Some(ctx) = active_ctx_opt() {
-            let slice = unsafe { core::slice::from_raw_parts_mut(out_rssi, count as usize) };
-            ctx.sweep(start_hz, step_hz, slice) as u16
-        } else {
-            0
-        }
+    if let (Some(bytes), Some(ctx)) = (
+        unsafe { super::ptr_slice_mut(out_rssi as *mut u8, (count as usize) * 2) },
+        active_ctx_opt(),
+    ) {
+        let slice = unsafe {
+            core::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut i16, count as usize)
+        };
+        ctx.sweep(start_hz, step_hz, slice) as u16
     } else {
         0
     }
 }
 
 pub unsafe extern "C" fn api_rf_symbol_tx_emit(symbols: *const KrxSymbol, count: u16) -> u8 {
-    if !symbols.is_null() && count > 0 {
-        if let Some(ctx) = active_ctx_opt() {
-            let slice = unsafe { core::slice::from_raw_parts(symbols, count as usize) };
-            if ctx.emit_symbols(slice).is_ok() {
-                0
-            } else {
-                1
-            }
-        } else {
-            1
-        }
+    if let (Some(bytes), Some(ctx)) = (
+        unsafe { super::ptr_slice(symbols as *const u8, (count as usize) * 4) },
+        active_ctx_opt(),
+    ) {
+        let slice = unsafe {
+            core::slice::from_raw_parts(bytes.as_ptr() as *const KrxSymbol, count as usize)
+        };
+        u8::from(ctx.emit_symbols(slice).is_err())
     } else {
         1
     }
@@ -175,13 +177,11 @@ pub unsafe extern "C" fn api_rf_fsk_init(_baud: u16) {}
 
 #[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_send(data: *const u8, len: u16) -> u8 {
-    if !data.is_null() && len > 0 {
-        if let Some(ctx) = active_ctx_opt() {
-            let slice = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            if ctx.fsk_send(slice).is_ok() { 0 } else { 1 }
-        } else {
-            1
-        }
+    if let (Some(slice), Some(ctx)) = (
+        unsafe { super::ptr_slice(data, len as usize) },
+        active_ctx_opt(),
+    ) {
+        u8::from(ctx.fsk_send(slice).is_err())
     } else {
         1
     }
@@ -193,13 +193,11 @@ pub unsafe extern "C" fn api_rf_fsk_send(_data: *const u8, _len: u16) -> u8 {
 
 #[cfg(feature = "rf_fsk")]
 pub unsafe extern "C" fn api_rf_fsk_recv(buf: *mut u8, max_len: u16) -> u16 {
-    if !buf.is_null() && max_len > 0 {
-        if let Some(ctx) = active_ctx_opt() {
-            let slice = unsafe { core::slice::from_raw_parts_mut(buf, max_len as usize) };
-            ctx.fsk_receive(slice) as u16
-        } else {
-            0
-        }
+    if let (Some(slice), Some(ctx)) = (
+        unsafe { super::ptr_slice_mut(buf, max_len as usize) },
+        active_ctx_opt(),
+    ) {
+        ctx.fsk_receive(slice) as u16
     } else {
         0
     }
@@ -214,15 +212,11 @@ pub unsafe extern "C" fn api_rf_set_mic_mute(muted: u8) {
 }
 
 pub unsafe extern "C" fn api_rf_set_subaudible_ctcss(freq_tenths_hz: u16) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_subaudible_ctcss(freq_tenths_hz);
-    }
+    let _ = set_subaudible_mask(3, 1, freq_tenths_hz);
 }
 
 pub unsafe extern "C" fn api_rf_set_subaudible_dcs(code: u16, inverted: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_subaudible_dcs(code, inverted != 0);
-    }
+    let _ = set_subaudible_mask(3, 2 + u8::from(inverted != 0), code);
 }
 
 pub unsafe extern "C" fn api_rf_send_tail() {
@@ -277,6 +271,16 @@ pub unsafe extern "C" fn api_rf_get_noise() -> u8 {
 }
 
 #[inline(never)]
+fn ctx_vfo(
+    slot: u8,
+) -> Option<(
+    &'static mut crate::SysContext<'static, 'static>,
+    kernel::service::radio::VfoSlot,
+)> {
+    Some((active_ctx_opt()?, decode_vfo_slot(slot)?))
+}
+
+#[inline(never)]
 fn decode_vfo_slot(slot: u8) -> Option<kernel::service::radio::VfoSlot> {
     use kernel::service::radio::VfoSlot;
     match slot {
@@ -309,12 +313,28 @@ fn encode_subaudible(
 #[inline(never)]
 fn decode_subaudible(kind: u8, value: u16) -> kernel::service::radio::SubaudibleTone {
     use kernel::service::radio::SubaudibleTone;
+    if value == 0 {
+        return SubaudibleTone::None;
+    }
     match kind {
-        1 if value > 0 => SubaudibleTone::Ctcss(value),
+        1 => SubaudibleTone::Ctcss(value),
         2 => SubaudibleTone::DcsNormal(value),
         3 => SubaudibleTone::DcsInverted(value),
         _ => SubaudibleTone::None,
     }
+}
+
+#[inline(never)]
+fn set_subaudible_mask(mask: u8, kind: u8, value: u16) -> u8 {
+    let Some(ctx) = active_ctx_opt() else {
+        return 1;
+    };
+    ctx.apply_subaudible_split(
+        (mask & 1) != 0,
+        (mask & 2) != 0,
+        decode_subaudible(kind, value),
+    );
+    0
 }
 
 pub unsafe extern "C" fn api_rf_get_vfo_config(
@@ -355,13 +375,7 @@ pub unsafe extern "C" fn api_rf_set_vfo_config(
     slot: u8,
     cfg_ptr: *const kernel::proc::abi::KrxVfoConfig,
 ) -> u8 {
-    let Some(vfo) = decode_vfo_slot(slot) else {
-        return 1;
-    };
-    if cfg_ptr.is_null() {
-        return 1;
-    }
-    let Some(ctx) = active_ctx_opt() else {
+    let (Some((ctx, vfo)), false) = (ctx_vfo(slot), cfg_ptr.is_null()) else {
         return 1;
     };
     let cfg = unsafe { &*cfg_ptr };
@@ -489,12 +503,7 @@ pub unsafe extern "C" fn api_rf_set_watch_mode(
 }
 
 pub unsafe extern "C" fn api_rf_set_rx_tx_subaudible(is_tx: u8, kind: u8, value: u16) -> u8 {
-    let Some(ctx) = active_ctx_opt() else {
-        return 1;
-    };
-    let tone = decode_subaudible(kind, value);
-    ctx.apply_subaudible_split(is_tx == 0, is_tx != 0, tone);
-    0
+    set_subaudible_mask(if is_tx == 0 { 1 } else { 2 }, kind, value)
 }
 
 pub unsafe extern "C" fn api_rf_lock_vfo(
@@ -503,23 +512,16 @@ pub unsafe extern "C" fn api_rf_lock_vfo(
     timeout_ms: u16,
     exclusive: u8,
 ) -> u8 {
-    let Some(vfo) = decode_vfo_slot(slot) else {
-        return 1;
-    };
-    let Some(ctx) = active_ctx_opt() else {
+    let Some((ctx, vfo)) = ctx_vfo(slot) else {
         return 1;
     };
     let res = kernel::service::radio::RfResourceMask(resources as u8);
     let token = active_krx_token(exclusive != 0);
-    if ctx
-        .state
-        .coord
-        .request_resource_lock(token, res, vfo, timeout_ms, false)
-    {
-        0
-    } else {
-        1
-    }
+    u8::from(
+        !ctx.state
+            .coord
+            .request_resource_lock(token, res, vfo, timeout_ms, false),
+    )
 }
 
 pub unsafe extern "C" fn api_rf_unlock_vfo() -> u8 {

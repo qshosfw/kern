@@ -2,7 +2,6 @@ use crate::services::power::PowerService;
 use crate::services::radio::{
     ClientId, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant, TxPermission,
 };
-use kernel::service::RadioCoordinator;
 // Main Dual VFO & Telemetry Application
 
 use crate::SysContext;
@@ -37,7 +36,6 @@ impl VfoApp {
     pub unsafe fn init_at(ptr: *mut Self) {
         unsafe {
             (*ptr).repeater = gfx::gui::KeyRepeater::new(8, 2);
-            (*ptr).latched = false;
             // Offset initial timestamp past the 400ms double-press window so a first PTT press right after boot does not false-latch.
             (*ptr).last_ptt_press_ms = u32::MAX - 500;
         }
@@ -96,7 +94,7 @@ impl VfoApp {
             }
             PttMode::DoublePressLatch => {
                 if state == KeyState::Pressed {
-                    let now_ms = kernel::proc::primitives::TimerPrimitive::uptime_ms(ctx);
+                    let now_ms = py32_hal::delay::millis();
                     let diff_ms = now_ms.wrapping_sub(self.last_ptt_press_ms);
                     self.last_ptt_press_ms = now_ms;
 

@@ -15,31 +15,12 @@ impl SettingsApp {
             return;
         }
 
-        if self.current_page == PageId::ManageApps || self.current_page == PageId::ManageServices {
-            let is_srv = self.current_page == PageId::ManageServices;
-            self.items_len = super::apps::populate_package_list(
-                &mut self.items,
-                &mut self.item_icons,
-                ctx,
-                is_srv,
-            );
-            return;
-        }
         if self.current_page == PageId::ButtonsShortcuts {
             self.items_len = super::buttons::populate_shortcuts(
                 &mut self.items,
                 &mut self.item_icons,
                 self.shortcut_ctx,
                 ctx,
-            );
-            return;
-        }
-        if self.current_page == PageId::AppDetail || self.current_page == PageId::ServiceDetail {
-            let is_srv = self.current_page == PageId::ServiceDetail;
-            self.items_len = super::apps::populate_package_detail(
-                &mut self.items,
-                is_srv,
-                self.selected_pkg_idx,
             );
             return;
         }
@@ -57,28 +38,44 @@ impl SettingsApp {
             return;
         }
 
-        populate_defs(&mut self.items, defs, ctx);
-        self.items_len = defs.len().min(self.items.len());
+        self.items_len = 0;
+        self.populate_def_tags(defs, 0, ctx);
 
         if self.current_page == PageId::Apps {
             let cat = crate::apps::launcher::catalog::get_catalog();
             #[cfg(feature = "filesystem")]
             cat.scan(ctx.storage);
+            let mut app_idx = 0usize;
             for e in &cat.entries {
                 if self.items_len >= self.items.len() {
                     break;
                 }
-                if crate::apps::launcher::catalog::PackageCatalog::matches_kind(e, false)
-                    && e.has_config
-                {
-                    self.items[self.items_len] = gfx::gui::modules::menu::MenuItem::new(
-                        e.title.as_str(),
-                        MenuItemType::Submenu,
-                    );
-                    self.items_len += 1;
+                if crate::apps::launcher::catalog::PackageCatalog::matches_kind(e, false) {
+                    if e.has_config {
+                        self.items[self.items_len].title = e.title.as_str();
+                        self.items[self.items_len].item_type = MenuItemType::Submenu;
+                        self.item_tags[self.items_len] = 0x80 | (app_idx as u8);
+                        self.items_len += 1;
+                    }
+                    app_idx += 1;
                 }
             }
         }
+    }
+
+    #[inline(never)]
+    fn populate_def_tags(
+        &mut self,
+        defs: &[super::page::SettingDef],
+        base_idx: usize,
+        ctx: &mut SysContext,
+    ) {
+        let s = self.items_len;
+        let n = populate_defs(&mut self.items[s..], defs, ctx);
+        for i in 0..n {
+            self.item_tags[s + i] = (base_idx + i) as u8;
+        }
+        self.items_len = s + n;
     }
 
     #[cfg(feature = "krx_native")]
@@ -88,39 +85,25 @@ impl SettingsApp {
         cat: &'static crate::apps::launcher::catalog::PackageCatalog,
         sys_caps: kernel::caps::CapabilitySet,
         flag: u8,
+        tag_base: u8,
         item_type: MenuItemType,
     ) {
-        let mut k = 0usize;
-        while self.items_len < self.items.len() {
-            let Some(entry) = cat.system_entry_at(sys_caps, flag, k) else {
+        const _: () = assert!(crate::apps::launcher::catalog::MAX_CATALOG_PACKAGES <= 64);
+        for (cat_idx, entry) in cat.entries.as_slice().iter().enumerate() {
+            if self.items_len >= self.items.len() {
                 break;
-            };
-            self.items[self.items_len].title = entry.title.as_str();
-            self.items[self.items_len].item_type = item_type;
-            self.items_len += 1;
-            k += 1;
+            }
+            if entry.is_system_entry(sys_caps, flag) {
+                self.items[self.items_len].title = entry.title.as_str();
+                self.items[self.items_len].item_type = item_type;
+                self.item_tags[self.items_len] = tag_base | (cat_idx as u8);
+                self.items_len += 1;
+            }
         }
     }
 
     #[cfg(feature = "krx_native")]
-    #[inline(never)]
-    fn append_defs_slice(
-        &mut self,
-        defs: &[super::page::SettingDef],
-        ctx: &mut SysContext,
-    ) {
-        let start = self.items_len;
-        let n = defs.len().min(self.items.len() - start);
-        populate_defs(&mut self.items[start..start + n], &defs[..n], ctx);
-        self.items_len = start + n;
-    }
-
-    #[cfg(feature = "krx_native")]
-    fn populate_system_page(
-        &mut self,
-        defs: &[super::page::SettingDef],
-        ctx: &mut SysContext,
-    ) {
+    fn populate_system_page(&mut self, defs: &[super::page::SettingDef], ctx: &mut SysContext) {
         let cat = crate::apps::launcher::catalog::get_catalog();
         cat.scan(ctx.storage);
         let sys_caps = ctx.caps();
@@ -130,21 +113,23 @@ impl SettingsApp {
             .max(menu_ins);
 
         self.items_len = 0;
-        self.append_defs_slice(&defs[..menu_ins], ctx);
+        self.populate_def_tags(&defs[..menu_ins], 0, ctx);
         self.append_system_flag_items(
             cat,
             sys_caps,
             kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU,
+            0x80,
             MenuItemType::Submenu,
         );
-        self.append_defs_slice(&defs[menu_ins..act_ins], ctx);
+        self.populate_def_tags(&defs[menu_ins..act_ins], menu_ins, ctx);
         self.append_system_flag_items(
             cat,
             sys_caps,
             kernel::proc::krx::SectionType::FLAG_SYSTEM_ACTION,
+            0xC0,
             MenuItemType::Action,
         );
-        self.append_defs_slice(&defs[act_ins..], ctx);
+        self.populate_def_tags(&defs[act_ins..], act_ins, ctx);
     }
 
     fn enter_page(
@@ -238,15 +223,19 @@ impl SettingsApp {
             return;
         }
         let defs = page_defs(self.current_page);
-        if idx < self.items_len && idx < defs.len() {
-            let def = &defs[idx];
-            let val = match self.items[idx].item_type {
-                MenuItemType::Range { val, .. } => Some(val as i32),
-                MenuItemType::Toggle(b) => Some(b as i32),
-                _ => None,
-            };
-            if let Some(v) = val {
-                self.commit_field(def.field, v, ctx);
+        if idx < self.items_len {
+            let tag = self.item_tags[idx];
+            if tag < 0x80 {
+                if let Some(def) = defs.get(tag as usize) {
+                    let val = match self.items[idx].item_type {
+                        MenuItemType::Range { val, .. } => Some(val as i32),
+                        MenuItemType::Toggle(b) => Some(b as i32),
+                        _ => None,
+                    };
+                    if let Some(v) = val {
+                        self.commit_field(def.field, v, ctx);
+                    }
+                }
             }
         }
     }
@@ -273,8 +262,12 @@ impl SettingsApp {
                 super::security::update_security_option(ctx, sel_idx, sel);
                 return;
             }
+            let tag = self.item_tags[sel_idx];
+            if tag >= 0x80 {
+                return;
+            }
             let defs = page_defs(self.current_page);
-            if let Some(def) = defs.get(sel_idx) {
+            if let Some(def) = defs.get(tag as usize) {
                 if def.field == SettingField::KEY_BEEP {
                     ctx.play_beep(crate::services::melody::BeepType::from_u8(sel as u8));
                 } else if def.field == SettingField::BOOT_JINGLE {

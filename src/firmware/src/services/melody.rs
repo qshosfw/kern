@@ -23,8 +23,7 @@ fn read_kt_file(
     if path.is_empty() {
         return 0;
     }
-    let mut raw = core::mem::MaybeUninit::<[u8; 140]>::uninit();
-    let raw_buf = unsafe { &mut *raw.as_mut_ptr() };
+    let raw_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[1900..2040];
     let Ok(n) = storage.read_file(path, raw_buf) else {
         return 0;
     };
@@ -194,43 +193,12 @@ impl MelodyEngine {
     pub fn beep_notes(beep: BeepType) -> &'static [ToneNote] {
         match beep {
             BeepType::Off => &[],
-            BeepType::Tone => BEEP_TONE,
+            BeepType::Tone | BeepType::Custom => BEEP_TONE,
             BeepType::Click => BEEP_CLICK,
             BeepType::Double => BEEP_DOUBLE,
             BeepType::Warning => BEEP_WARNING,
             BeepType::Scroll => BEEP_SCROLL,
-            BeepType::Custom => BEEP_TONE, // fallback; real custom handled by beep_melody
         }
-    }
-
-    /// Generate a Keypress Beep melody. For built-in types this copies from const .rodata;
-    /// for Custom it uses caller-supplied parameters.
-    pub fn beep_melody(
-        beep: BeepType,
-        custom_freq_hz: u16,
-        custom_duration_ms: u16,
-    ) -> MelodyBuffer {
-        let mut buf = MelodyBuffer::new();
-
-        if beep == BeepType::Custom {
-            let freq = if custom_freq_hz == 0 {
-                700
-            } else {
-                custom_freq_hz
-            };
-            let dur = if custom_duration_ms == 0 {
-                50
-            } else {
-                custom_duration_ms
-            };
-            let _ = buf.push(ToneNote::new(freq, dur));
-        } else {
-            for note in Self::beep_notes(beep) {
-                let _ = buf.push(*note);
-            }
-        }
-
-        buf
     }
 
     /// Return the const note slice for a dialog/notification sound.

@@ -3,45 +3,34 @@
 use super::{active_canvas_mut, active_ctx_opt, parse_str};
 use crate::services::primitives::{color_from_u8, font_from_u8};
 use kernel::proc::abi::DisplayApi;
-use kernel::proc::primitives::DisplayPrimitive;
 
-#[inline(never)]
-fn draw_prim(op: u8, x: i16, y: i16, a: i16, b: i16, color: u8) {
-    let canvas = active_canvas_mut();
-    let col = color_from_u8(color);
-    match op {
-        0 => gfx::draw::draw_line(canvas, x, y, a, b, col),
-        1 => canvas.draw_rect_i(x, y, a, b, col),
-        2 => canvas.fill_rect_i(x, y, a, b, col),
-        3 => gfx::draw::draw_dotted_line_h(canvas, x, y, a, b as u8, col),
-        4 => canvas.clear(),
-        5 => canvas.draw_pixel_i(x, y, col),
-        6 => canvas.draw_horizontal_line_i(x, y, a, col),
-        7 => canvas.draw_vertical_line_i(x, y, a, col),
-        8 => canvas.clear_corners_i(x, y, a, b),
-        9 => canvas.fill_rect_dither_i(x, y, a, b, color),
-        _ => canvas.fill_rect_i(x, y, a, b, gfx::Color::Invert),
-    }
+#[inline(always)]
+fn canvas_col(color: u8) -> (&'static mut gfx::Canvas, gfx::Color) {
+    (active_canvas_mut(), color_from_u8(color))
 }
 
 pub unsafe extern "C" fn api_display_clear() {
-    draw_prim(4, 0, 0, 0, 0, 0);
+    active_canvas_mut().clear();
 }
 
 pub unsafe extern "C" fn api_draw_pixel(x: i16, y: i16, color: u8) {
-    draw_prim(5, x, y, 0, 0, color);
+    let (c, col) = canvas_col(color);
+    c.draw_pixel_i(x, y, col);
 }
 
 pub unsafe extern "C" fn api_draw_line(x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
-    draw_prim(0, x0, y0, x1, y1, color);
+    let (c, col) = canvas_col(color);
+    gfx::draw::draw_line(c, x0, y0, x1, y1, col);
 }
 
 pub unsafe extern "C" fn api_draw_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    draw_prim(1, x, y, w, h, color);
+    let (c, col) = canvas_col(color);
+    c.draw_rect_i(x, y, w, h, col);
 }
 
 pub unsafe extern "C" fn api_fill_rect(x: i16, y: i16, w: i16, h: i16, color: u8) {
-    draw_prim(2, x, y, w, h, color);
+    let (c, col) = canvas_col(color);
+    c.fill_rect_i(x, y, w, h, col);
 }
 
 pub unsafe extern "C" fn api_draw_bitmap(x: i16, y: i16, w: u8, h: u8, data: *const u8, len: u16) {
@@ -51,19 +40,15 @@ pub unsafe extern "C" fn api_draw_bitmap(x: i16, y: i16, w: u8, h: u8, data: *co
 }
 
 #[inline(never)]
-unsafe fn draw_str_dispatch(
-    x: i16,
-    y: i16,
-    text: *const u8,
-    len: u16,
-    font_and_color: u16,
-    mode_and_arg: i16,
-) {
+unsafe fn draw_str_dispatch(xy: u32, text: *const u8, len: u16, cfg: u32) {
     let Some(s) = (unsafe { parse_str(text, len as usize) }) else {
         return;
     };
-    let font = font_from_u8(font_and_color as u8);
-    let col = color_from_u8((font_and_color >> 8) as u8);
+    let x = xy as i16;
+    let y = (xy >> 16) as i16;
+    let font = font_from_u8(cfg as u8);
+    let col = color_from_u8((cfg >> 8) as u8);
+    let mode_and_arg = (cfg >> 16) as i16;
     let canvas = active_canvas_mut();
     if mode_and_arg < 0 {
         let al = match mode_and_arg & 3 {
@@ -75,6 +60,11 @@ unsafe fn draw_str_dispatch(
     } else {
         gfx::text::draw_str_max_x(canvas, x, y, s, font, col, (x + mode_and_arg).max(0));
     }
+}
+
+#[inline(always)]
+fn pack_xy(x: i16, y: i16) -> u32 {
+    (x as u16 as u32) | ((y as u16 as u32) << 16)
 }
 
 pub unsafe extern "C" fn api_draw_str(
@@ -97,8 +87,10 @@ pub unsafe extern "C" fn api_draw_str_align(
     color: u8,
     align: u8,
 ) {
-    let fc = (font as u16) | ((color as u16) << 8);
-    unsafe { draw_str_dispatch(x, y, text, len, fc, -16 | ((align as i16) & 3)) }
+    let cfg = (font as u32)
+        | ((color as u32) << 8)
+        | ((((-16i16 | ((align as i16) & 3)) as u16) as u32) << 16);
+    unsafe { draw_str_dispatch(pack_xy(x, y), text, len, cfg) }
 }
 
 pub unsafe extern "C" fn api_commit_frame() {
@@ -130,8 +122,8 @@ pub unsafe extern "C" fn api_draw_str_max(
     color: u8,
     max_w: i16,
 ) {
-    let fc = (font as u16) | ((color as u16) << 8);
-    unsafe { draw_str_dispatch(x, y, text, len, fc, max_w.max(0)) }
+    let cfg = (font as u32) | ((color as u32) << 8) | (((max_w.max(0) as u16) as u32) << 16);
+    unsafe { draw_str_dispatch(pack_xy(x, y), text, len, cfg) }
 }
 
 pub unsafe extern "C" fn api_set_inverted(inverted: u8) {
@@ -147,27 +139,30 @@ pub unsafe extern "C" fn api_set_contrast(contrast: u8) {
 }
 
 pub unsafe extern "C" fn api_draw_line_h(x: i16, y: i16, len: i16, color: u8) {
-    draw_prim(6, x, y, len, 0, color);
+    let (c, col) = canvas_col(color);
+    c.draw_horizontal_line_i(x, y, len, col);
 }
 
 pub unsafe extern "C" fn api_draw_line_v(x: i16, y: i16, len: i16, color: u8) {
-    draw_prim(7, x, y, len, 0, color);
+    let (c, col) = canvas_col(color);
+    c.draw_vertical_line_i(x, y, len, col);
 }
 
 pub unsafe extern "C" fn api_draw_dotted_line_h(x0: i16, x1: i16, y: i16, step: u8, color: u8) {
-    draw_prim(3, x0, y, x1, step as i16, color);
+    let (c, col) = canvas_col(color);
+    gfx::draw::draw_dotted_line_h(c, x0, y, x1, step, col);
 }
 
 pub unsafe extern "C" fn api_clear_corners(x: i16, y: i16, w: i16, h: i16) {
-    draw_prim(8, x, y, w, h, 0);
+    active_canvas_mut().clear_corners_i(x, y, w, h);
 }
 
 pub unsafe extern "C" fn api_fill_rect_dither(x: i16, y: i16, w: i16, h: i16, progress: u8) {
-    draw_prim(9, x, y, w, h, progress);
+    active_canvas_mut().fill_rect_dither_i(x, y, w, h, progress);
 }
 
 pub unsafe extern "C" fn api_invert_rect(x: i16, y: i16, w: i16, h: i16) {
-    draw_prim(10, x, y, w, h, 0);
+    active_canvas_mut().fill_rect_i(x, y, w, h, gfx::Color::Invert);
 }
 
 pub unsafe extern "C" fn api_str_width(text: *const u8, len: u16, font: u8) -> i16 {

@@ -17,7 +17,6 @@ void _start(void) {
 }
 
 static u8 g_tab = 0;           // 0 = Widgets, 1 = Menu, 2 = Modal
-static u8 g_prev_tab = 0;
 static u8 g_anim_prog = 16;    // 0..16 kinetic transition progress
 static i8 g_slide_dir = 0;     // -1 left, +1 right, 0 idle
 static u8 g_menu_selected = 0; // 0..5
@@ -61,13 +60,7 @@ static const DomainSpec DOMAINS[12] = {
     { "HW_BUS",         7 },
 };
 
-static const char TAB_TITLES[3][6] = {
-    "UI",
-    "Menu",
-    "Modal",
-};
-static const u8 TAB_X[3] = { 0, 18, 44 };
-static const u8 TAB_W[3] = { 16, 24, 28 };
+static const char TAB_TITLES[] = "UI\0Menu\0Modal";
 
 static const char MENU_TITLES[6][10] = {
     "Squelch",
@@ -92,7 +85,6 @@ static const u8 MENU_ICONS[6] = { 43, 45, 41, 24, 46, 47 };
 static void select_tab(u8 next) {
     if (next < 3 && next != g_tab) {
         g_slide_dir = (next > g_tab) ? 1 : -1;
-        g_prev_tab = g_tab;
         g_tab = next;
         g_anim_prog = 0;
     }
@@ -155,6 +147,11 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             sb.flags = KRX_STATUS_VISIBLE | KRX_STATUS_CUSTOM_TITLE | KRX_STATUS_PARTIAL;
             u->ui_set_status_bar(&sb);
             u->ui_set_tray_icon(0xFF);
+            krx_draw_tabbed_sheet(
+                api, 0, 0, 128, 53, 0, 3,
+                KRX_TAB_FLAG_INTEGRATED_86 | KRX_TAB_FLAG_BOTTOM_BORDER,
+                TAB_TITLES, (u16)(sizeof(TAB_TITLES) - 1)
+            );
         }
 
         if (api->serial && api->serial->serial_write) {
@@ -180,7 +177,6 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         uart_log(api, "TOTAL: 179/179 APIS EXHAUSTIVELY VALIDATED: PASS");
 
         g_tab = 0;
-        g_prev_tab = 0;
         g_anim_prog = 16;
         g_slide_dir = 0;
         g_menu_selected = 0;
@@ -269,18 +265,8 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
 
         d->clear();
 
-        // 1. Compute kinetic slide offset & interpolated active tab pill geometry
+        // 1. Compute kinetic slide offset
         i8 anim_off = (g_anim_prog < 16) ? (i8)((16 - g_anim_prog) * g_slide_dir) : 0;
-        u8 target_tx = TAB_X[g_tab];
-        u8 target_tw = TAB_W[g_tab];
-        u8 active_tx = target_tx;
-        u8 active_tw = target_tw;
-        if (g_anim_prog < 16) {
-            i16 ptx = TAB_X[g_prev_tab];
-            i16 ptw = TAB_W[g_prev_tab];
-            active_tx = (u8)(ptx + ((((i16)target_tx - ptx) * (i16)g_anim_prog) >> 4));
-            active_tw = (u8)(ptw + ((((i16)target_tw - ptw) * (i16)g_anim_prog) >> 4));
-        }
 
         // 2. Render active tab child content inside container body (y=11..51)
         i16 bx = 2 + (i16)anim_off;
@@ -325,45 +311,14 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             d->draw_str(bx + 4, 46, (const u8*)"Press MENU for Dialog", 21, 0, COLOR_FILL);
         }
 
-        // 3. Draw TabbedSheet Container Borders & Merged Baseline (body_y = 9, h = 53)
-        d->draw_line_v(0, 9, 44, COLOR_FILL);
-        d->draw_line_v(127, 9, 44, COLOR_FILL);
-        d->draw_line_h(1, 52, 126, COLOR_FILL);
-        d->draw_pixel(0, 52, COLOR_CLEAR);
-        d->draw_pixel(127, 52, COLOR_CLEAR);
+        // 3. Render TabbedSheet Chrome in x=0..86, y=0..9 (leaving x=86..128 for OS status bar icons)
+        krx_draw_tabbed_sheet(
+            api, 0, 0, 128, 53, g_tab, 3,
+            KRX_TAB_FLAG_INTEGRATED_86 | KRX_TAB_FLAG_BOTTOM_BORDER,
+            TAB_TITLES, (u16)(sizeof(TAB_TITLES) - 1)
+        );
 
-        if (active_tx > 0) {
-            d->draw_line_h(0, 9, active_tx, COLOR_FILL);
-        }
-        d->draw_line_h(active_tx, 9, active_tw, COLOR_CLEAR);
-        u8 right_start = active_tx + active_tw;
-        if (right_start < 128) {
-            d->draw_line_h(right_start, 9, 128 - right_start, COLOR_FILL);
-        }
-
-        // 4. Render Tab Headers in x=0..86, y=0..9 (leaving x=86..128 for OS status bar icons)
-        for (u8 i = 0; i < 3; i++) {
-            u8 tx = TAB_X[i];
-            u8 tw = TAB_W[i];
-            u8 tlen = str_len(TAB_TITLES[i]);
-            if (i == g_tab) {
-                d->draw_line_h(active_tx + 1, 0, active_tw - 2, COLOR_FILL);
-                d->draw_pixel(active_tx, 0, COLOR_CLEAR);
-                d->draw_pixel(active_tx + active_tw - 1, 0, COLOR_CLEAR);
-                d->draw_line_v(active_tx, 1, 9, COLOR_FILL);
-                d->draw_line_v(active_tx + active_tw - 1, 1, 9, COLOR_FILL);
-                d->draw_str(tx + 4, 6, (const u8*)TAB_TITLES[i], tlen, 0, COLOR_FILL);
-            } else {
-                d->draw_line_h(tx + 1, 1, tw - 2, COLOR_FILL);
-                d->draw_pixel(tx, 1, COLOR_CLEAR);
-                d->draw_pixel(tx + tw - 1, 1, COLOR_CLEAR);
-                d->draw_line_v(tx, 2, 7, COLOR_FILL);
-                d->draw_line_v(tx + tw - 1, 2, 7, COLOR_FILL);
-                d->draw_str(tx + 4, 7, (const u8*)TAB_TITLES[i], tlen, 0, COLOR_FILL);
-            }
-        }
-
-        // 5. Bottom Command Bar (Y=55..61, matching Task Manager layout)
+        // 4. Bottom Command Bar (Y=55..61, matching Task Manager layout)
         u->ui_draw_key_badge(2, 55, (const u8*)"< >", 3, (const u8*)"Tab", 3);
         if (g_tab == 2) {
             u->ui_draw_key_badge(44, 55, (const u8*)"M", 1, (const u8*)"Dialog", 6);

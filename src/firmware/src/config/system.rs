@@ -82,6 +82,7 @@ impl SystemConfig {
         field_str(&self.custom_model, "Custom", true)
     }
 
+    #[inline(never)]
     pub fn set_custom_model(&mut self, s: &str) {
         self.custom_model = [b' '; 12];
         let bytes = utils::format::trim_ascii_bytes(s.as_bytes());
@@ -89,17 +90,20 @@ impl SystemConfig {
         self.custom_model[..l].copy_from_slice(&bytes[..l]);
         let trimmed = unsafe { core::str::from_utf8_unchecked(bytes) };
 
-        use utils::format::ascii_eq_ignore_case as eq_ic;
-        if eq_ic(trimmed, "UV-K1") || eq_ic(trimmed, "K1") {
-            self.model = 0;
-        } else if eq_ic(trimmed, "UV-K5 V3")
-            || eq_ic(trimmed, "k5v3")
-            || eq_ic(trimmed, "UV-K5")
-            || eq_ic(trimmed, "K5")
-        {
-            self.model = 1;
-        } else {
-            self.model = 2; // Custom
+        const KNOWN: [(&str, u8); 6] = [
+            ("UV-K1", 0),
+            ("K1", 0),
+            ("UV-K5 V3", 1),
+            ("k5v3", 1),
+            ("UV-K5", 1),
+            ("K5", 1),
+        ];
+        self.model = 2;
+        for &(pat, id) in &KNOWN {
+            if utils::format::ascii_eq_ignore_case(trimmed, pat) {
+                self.model = id;
+                break;
+            }
         }
     }
 

@@ -15,12 +15,27 @@ pub const TSENSOR_CAL2_ADDR: usize = 0x1FFF_3230;
 pub const TSENSOR_CAL_ADDR: usize = TSENSOR_CAL1_ADDR;
 pub const VREFINT_MV_TYPICAL: u16 = 1200;
 
-/// Base address of the 104-byte (`0x68`) factory provisioning certificate written via bootloader
-/// command `0x0516` into the protected bootloader tail page (`0x0800_2700..0x0800_2767`).
-/// Contains 80 bytes of interleaved challenge/AES-128-CBC signature words (`0x0800_2700..0x0800_274F`)
-/// bound to the MCU 128-bit UID (`0x1FFF_3000`) followed by a 24-byte factory stamp (`0x0800_2750..0x0800_2767`).
-pub const FACTORY_CERT_ADDR: usize = 0x0800_2700;
+/// Base address of the 104-byte (`0x68`) factory provisioning certificate.
+/// - UV-K1 / UV-K5v3 (10 KB bootloader): `0x0800_2700..0x0800_2767`
+/// - UV-K10 Pro (8 KB bootloader): `0x0800_1F00..0x0800_1F67`
+pub const FACTORY_CERT_ADDR: usize = if cfg!(feature = "target_k10pro") {
+    0x0800_1F00
+} else {
+    0x0800_2700
+};
 pub const FACTORY_CERT_BYTES: usize = 104;
+
+/// Bootloader metadata scan window in internal Flash (avoids reading application space).
+pub const BOOTLOADER_ROM_SCAN_BASE: usize = if cfg!(feature = "target_k10pro") {
+    0x0800_1800
+} else {
+    0x0800_1F00
+};
+pub const BOOTLOADER_ROM_SCAN_LEN: usize = if cfg!(feature = "target_k10pro") {
+    0x0700
+} else {
+    0x0800
+};
 
 /// USB identification metadata extracted from the factory bootloader ROM (`0x0800_1F00..0x0800_2700`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +63,30 @@ impl BootloaderUsbInfo {
         }
     }
 
+    pub const fn default_k8() -> Self {
+        let mut product = [0u8; 16];
+        product[0] = b'K';
+        product[1] = b'8';
+        product[2] = b' ';
+        product[3] = b'C';
+        product[4] = b'P';
+        product[5] = b'S';
+        Self {
+            vid: 0x36B7,
+            pid: 0x0001,
+            product,
+            product_len: 6,
+        }
+    }
+
+    pub const fn default_for_target() -> Self {
+        if cfg!(feature = "target_k10pro") {
+            Self::default_k8()
+        } else {
+            Self::default_k1()
+        }
+    }
+
     #[inline(always)]
     pub fn product_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.product[..self.product_len as usize]) }
@@ -57,7 +96,7 @@ impl BootloaderUsbInfo {
 /// Scans a bootloader ROM slice (`0x0800_1F00..0x0800_2700`) for the USB 2.0 Device
 /// Descriptor (`12 01 00 02 ...`) and its UTF-16LE `iProduct` string descriptor.
 pub fn parse_bootloader_usb_info(rom: &[u8]) -> BootloaderUsbInfo {
-    let mut info = BootloaderUsbInfo::default_k1();
+    let mut info = BootloaderUsbInfo::default_for_target();
     let mut dev_end = None;
     let mut i_product = 2u8;
 
@@ -136,11 +175,14 @@ impl SystemInfo {
     }
 
     /// Reads the factory bootloader version string (e.g. `"7.02.02"`) directly from internal MCU
-    /// Flash (`0x0800_1F00..0x0800_2700`), falling back to `"7.02.02"` on host unit-test targets.
+    /// Flash (`BOOTLOADER_ROM_SCAN_BASE..+BOOTLOADER_ROM_SCAN_LEN`), falling back to `"7.02.02"` on host targets.
     pub fn bootloader_version_str() -> &'static str {
         #[cfg(all(not(test), target_arch = "arm"))]
         unsafe {
-            let rom = core::slice::from_raw_parts(0x0800_1F00 as *const u8, 0x0800);
+            let rom = core::slice::from_raw_parts(
+                BOOTLOADER_ROM_SCAN_BASE as *const u8,
+                BOOTLOADER_ROM_SCAN_LEN,
+            );
             let mut i = 0usize;
             while i + 8 <= rom.len() {
                 let w = &rom[i..i + 8];
@@ -162,15 +204,18 @@ impl SystemInfo {
     }
 
     /// Extracts USB VID, PID, and product descriptor name directly from the bootloader ROM
-    /// (`0x0800_1F00..0x0800_2700`), falling back to `36B7:0001` / `"K1 CPS"` on host targets.
+    /// (`BOOTLOADER_ROM_SCAN_BASE..+BOOTLOADER_ROM_SCAN_LEN`), falling back to `36B7:0001` / `"K1 CPS"` on host targets.
     pub fn bootloader_usb_info() -> BootloaderUsbInfo {
         #[cfg(all(not(test), target_arch = "arm"))]
         unsafe {
-            let rom = core::slice::from_raw_parts(0x0800_1F00 as *const u8, 0x0800);
+            let rom = core::slice::from_raw_parts(
+                BOOTLOADER_ROM_SCAN_BASE as *const u8,
+                BOOTLOADER_ROM_SCAN_LEN,
+            );
             return parse_bootloader_usb_info(rom);
         }
         #[cfg(not(all(not(test), target_arch = "arm")))]
-        BootloaderUsbInfo::default_k1()
+        BootloaderUsbInfo::default_for_target()
     }
 
     /// Returns a slice over the 104-byte factory provisioning certificate at `0x0800_2700..0x0800_2768`
@@ -223,6 +268,7 @@ impl SystemInfo {
     }
 
     /// Reads the first 12 bytes (96-bit) of the unique device identifier.
+    #[inline(never)]
     pub fn read_uid_12() -> [u8; 12] {
         #[allow(unused_mut)]
         let mut uid = [0u8; 12];

@@ -81,6 +81,7 @@ impl TextInputView {
         Self
     }
 
+    #[inline(never)]
     fn get_charset_chars(charset: Charset, key: u8) -> &'static str {
         const ALPHA_OFF: [u8; 9] = [0, 3, 6, 9, 12, 15, 19, 22, 26];
         const SYM_OFF: [u8; 9] = [0, 3, 6, 10, 14, 17, 20, 23, 26];
@@ -275,16 +276,13 @@ impl View<TextInputModel> for TextInputView {
             );
         }
 
-        let show_grid = if model.digits_only {
-            false
-        } else {
-            model.show_grid
+        let show_grid = !model.digits_only
+            && (model.show_grid
                 || match model.charset {
                     Charset::Numbers => false,
                     Charset::Symbols => true,
                     Charset::Upper | Charset::Lower => !model.is_k1,
-                }
-        };
+                });
 
         let is_cycling =
             model.last_key.is_some() && (model.ticks.wrapping_sub(model.last_activity_tick) < 15);
@@ -312,7 +310,9 @@ impl View<TextInputModel> for TextInputView {
 
             let cursor_x = (text_x - scroll_x) + str_w;
             if is_cycling && !model.buffer.is_empty() {
-                let last_char_str = &model.buffer[model.buffer.len() - 1..];
+                let b = model.buffer.as_bytes();
+                // Input buffer only receives ASCII bytes from numeric/T9 charsets.
+                let last_char_str = unsafe { core::str::from_utf8_unchecked(&b[b.len() - 1..]) };
                 let last_w = text::str_width(last_char_str, &MUMATRIX);
                 let char_x = cursor_x - last_w;
                 canvas.fill_rect(

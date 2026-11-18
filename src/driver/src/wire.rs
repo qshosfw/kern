@@ -27,6 +27,19 @@ pub struct WireDriver<S: SerialPort> {
 }
 
 impl<S: SerialPort> WireDriver<S> {
+    /// Initialize a `WireDriver` directly in uninitialized memory without a stack temporary.
+    pub unsafe fn init_in_place(dst: *mut Self, port: S) {
+        unsafe {
+            ::core::ptr::write_bytes(dst as *mut u8, 0, ::core::mem::size_of::<Self>());
+            ::core::ptr::write(::core::ptr::addr_of_mut!((*dst).port), port);
+            ::core::ptr::write(
+                ::core::ptr::addr_of_mut!((*dst).session),
+                WireSession::new(),
+            );
+            ::core::ptr::write(::core::ptr::addr_of_mut!((*dst).transport_profile), 0x0101);
+        }
+    }
+
     pub const fn new(port: S) -> Self {
         Self::new_with_transport(port, 0x0101) // Default: UART 115200 (§5.1 profile)
     }
@@ -144,30 +157,22 @@ impl<S: SerialPort> WireDriver<S> {
         status: Option<WireStatus>,
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
-        let mut raw_buf = ::core::mem::MaybeUninit::<[u8; MAX_RAW_BUF_LEN]>::uninit();
         let mut wire_out = ::core::mem::MaybeUninit::<[u8; MAX_WIRE_BUF_LEN]>::uninit();
-        let raw_slice = unsafe { &mut *raw_buf.as_mut_ptr() };
         let wire_slice = unsafe { &mut *wire_out.as_mut_ptr() };
-
-        let frame_len = match status {
-            Some(st) => self.session.frame_response(
-                service,
-                opcode,
-                sequence,
-                st,
-                payload_data,
-                raw_slice,
-                wire_slice,
-            )?,
-            None => self.session.frame_event(
-                service,
-                opcode,
-                sequence,
-                payload_data,
-                raw_slice,
-                wire_slice,
-            )?,
+        let (flags, status_byte) = match status {
+            Some(st) => (FLAG_RESPONSE, Some(st.to_u8())),
+            None => (FLAG_EVENT, None),
         };
+        let frame_len = self.session.frame_record_raw(
+            service,
+            opcode,
+            flags,
+            sequence,
+            status_byte,
+            payload_data,
+            &mut self.rx_buf[..MAX_RAW_BUF_LEN],
+            wire_slice,
+        )?;
 
         self.port.write(&wire_slice[..frame_len]);
         Ok(frame_len)

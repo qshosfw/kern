@@ -2,7 +2,6 @@
 
 use super::active_ctx_opt;
 use kernel::proc::abi::AudioApi;
-use kernel::proc::primitives::*;
 
 pub unsafe extern "C" fn api_audio_play_tone(freq_hz: u16, duration_ms: u16) {
     if let Some(ctx) = active_ctx_opt() {
@@ -12,7 +11,7 @@ pub unsafe extern "C" fn api_audio_play_tone(freq_hz: u16, duration_ms: u16) {
 
 pub unsafe extern "C" fn api_audio_play_beep(beep_type: u8) {
     if let Some(ctx) = active_ctx_opt() {
-        AudioPrimitive::play_beep(ctx, beep_type);
+        ctx.play_beep(crate::services::melody::BeepType::from_u8(beep_type));
     }
 }
 

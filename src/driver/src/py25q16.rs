@@ -4,7 +4,10 @@ pub const FLASH_PAGE_SIZE: usize = 256;
 pub const FLASH_SECTOR_SIZE: usize = 4096;
 pub const FLASH_TOTAL_SIZE: usize = 2 * 1024 * 1024; // 2MB
 
-use kern_platform_traits::{gpio::OutputPin, spi::SpiDevice};
+use bsp::board::{Py32OutputPin, Py32Spi2};
+use bsp::pins::FLASH_CS;
+use core::marker::PhantomData;
+use kern_platform_traits::spi::SpiDevice;
 
 #[inline(always)]
 fn range_within_flash(address: u32, len: usize) -> bool {
@@ -14,17 +17,16 @@ fn range_within_flash(address: u32, len: usize) -> bool {
 }
 
 pub struct Py25q16FlashDriver<'a> {
-    spi: &'a mut dyn SpiDevice,
-    cs: &'a mut dyn OutputPin,
+    _lt: PhantomData<&'a mut ()>,
 }
 
 impl<'a> Py25q16FlashDriver<'a> {
-    pub fn new(spi: &'a mut dyn SpiDevice, cs: &'a mut dyn OutputPin) -> Self {
-        Self { spi, cs }
+    pub fn new(_spi: &'a mut Py32Spi2, _cs: &'a mut Py32OutputPin) -> Self {
+        Self { _lt: PhantomData }
     }
 
     pub fn init(&mut self) {
-        self.cs.set_high();
+        FLASH_CS.set_high();
         // Wake flash in case a reset (e.g. IWDG) occurred while it was in Deep Power-Down (0xB9).
         self.release_power_down();
     }
@@ -32,7 +34,7 @@ impl<'a> Py25q16FlashDriver<'a> {
     #[inline(never)]
     fn send_cmd(&mut self, cmd: u8) {
         self.cs_assert();
-        self.spi.write_byte(cmd);
+        Py32Spi2.write_byte(cmd);
         self.cs_release();
     }
 
@@ -50,30 +52,30 @@ impl<'a> Py25q16FlashDriver<'a> {
 
     #[inline(always)]
     fn cs_assert(&mut self) {
-        self.cs.set_low();
+        FLASH_CS.set_low();
     }
 
     #[inline(always)]
     fn cs_release(&mut self) {
-        self.spi.wait_idle();
-        self.cs.set_high();
+        Py32Spi2.wait_idle();
+        FLASH_CS.set_high();
     }
 
     /// Read JEDEC Manufacturer and Device ID.
     pub fn read_jedec_id(&mut self) -> u32 {
         self.cs_assert();
-        self.spi.transfer_byte(0x9F);
-        let b1 = self.spi.transfer_byte(0xFF) as u32;
-        let b2 = self.spi.transfer_byte(0xFF) as u32;
-        let b3 = self.spi.transfer_byte(0xFF) as u32;
+        Py32Spi2.transfer_byte(0x9F);
+        let b1 = Py32Spi2.transfer_byte(0xFF) as u32;
+        let b2 = Py32Spi2.transfer_byte(0xFF) as u32;
+        let b3 = Py32Spi2.transfer_byte(0xFF) as u32;
         self.cs_release();
         (b1 << 16) | (b2 << 8) | b3
     }
 
     fn read_status_reg(&mut self) -> u8 {
         self.cs_assert();
-        self.spi.transfer_byte(0x05);
-        let status = self.spi.transfer_byte(0xFF);
+        Py32Spi2.transfer_byte(0x05);
+        let status = Py32Spi2.transfer_byte(0xFF);
         self.cs_release();
         status
     }
@@ -88,10 +90,13 @@ impl<'a> Py25q16FlashDriver<'a> {
         self.send_cmd(0x06);
     }
 
-    fn write_address(&mut self, addr: u32) {
-        self.spi.write_byte(((addr >> 16) & 0xFF) as u8);
-        self.spi.write_byte(((addr >> 8) & 0xFF) as u8);
-        self.spi.write_byte((addr & 0xFF) as u8);
+    #[inline(never)]
+    fn begin_addr_cmd(&mut self, cmd: u8, addr: u32) {
+        self.cs_assert();
+        Py32Spi2.write_byte(cmd);
+        Py32Spi2.write_byte(((addr >> 16) & 0xFF) as u8);
+        Py32Spi2.write_byte(((addr >> 8) & 0xFF) as u8);
+        Py32Spi2.write_byte((addr & 0xFF) as u8);
     }
 
     pub fn erase_sector(&mut self, sector_addr: u32) -> Result<(), ()> {
@@ -102,9 +107,7 @@ impl<'a> Py25q16FlashDriver<'a> {
         self.wait_while_busy();
         self.write_enable();
 
-        self.cs_assert();
-        self.spi.write_byte(0x20); // Sector Erase
-        self.write_address(addr);
+        self.begin_addr_cmd(0x20, addr);
         self.cs_release();
 
         self.wait_while_busy();
@@ -118,10 +121,8 @@ impl<'a> Py25q16FlashDriver<'a> {
         self.wait_while_busy();
         self.write_enable();
 
-        self.cs_assert();
-        self.spi.write_byte(0x02); // Page Program
-        self.write_address(address);
-        self.spi.write_bytes(data);
+        self.begin_addr_cmd(0x02, address);
+        Py32Spi2.write_bytes(data);
         self.cs_release();
 
         self.wait_while_busy();
@@ -134,10 +135,8 @@ impl<'a> Py25q16FlashDriver<'a> {
         }
         self.wait_while_busy();
 
-        self.cs_assert();
-        self.spi.write_byte(0x03); // Normal Read
-        self.write_address(address);
-        self.spi.read_bytes(buffer);
+        self.begin_addr_cmd(0x03, address);
+        Py32Spi2.read_bytes(buffer);
         self.cs_release();
         Ok(())
     }

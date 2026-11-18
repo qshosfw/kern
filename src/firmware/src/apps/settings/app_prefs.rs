@@ -8,19 +8,16 @@ use crate::SysContext;
 use crate::apps::launcher::catalog::get_catalog;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions};
 use kernel::proc::krx::{CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, KrxPreamble};
-#[cfg(feature = "filesystem")]
-use kernel::proc::primitives::StoragePrimitive;
 
 #[repr(C)]
 struct AppPrefsScratch {
-    hdr: [u8; KrxPreamble::MAX_HEADER_SIZE],
+    pkg_idx: u8,
+    cfg_len: u8,
+    hdr_len: u16,
+    sec_off: u16,
+    sec_len: u16,
     cfg: [u8; 64],
-    hdr_len: usize,
-    sec_off: usize,
-    sec_len: usize,
-    cfg_len: usize,
-    pkg_name: [u8; 16],
-    pkg_name_len: u8,
+    hdr: [u8; KrxPreamble::MAX_HEADER_SIZE],
 }
 
 const _: () = assert!(
@@ -35,41 +32,48 @@ fn scratch() -> &'static mut AppPrefsScratch {
     }
 }
 
-#[inline(always)]
-fn le16(s: &[u8], off: usize) -> i16 {
-    i16::from_le_bytes([s[off], s[off + 1]])
+#[inline(never)]
+fn unpack_item(raw: &[u8]) -> kernel::proc::krx::KrxConfigItem {
+    unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const kernel::proc::krx::KrxConfigItem) }
 }
 
 #[inline(never)]
-pub fn read_cfg_val(buf: &[u8], item: &[u8]) -> i16 {
-    let off = item[0] as usize;
-    let min_v = le16(item, 6);
-    let max_v = le16(item, 8);
+fn read_cfg_it(buf: &[u8], it: &kernel::proc::krx::KrxConfigItem) -> i16 {
+    let off = it.offset as usize;
     let raw = if off < buf.len() {
-        if min_v < 0 {
+        if it.min_v < 0 {
             (buf[off] as i8) as i16
         } else {
             buf[off] as i16
         }
     } else {
-        le16(item, 4)
+        it.default_v
     };
-    raw.clamp(min_v, max_v)
+    raw.clamp(it.min_v, it.max_v)
 }
 
 #[inline(never)]
-pub fn write_cfg_val(buf: &mut [u8], item: &[u8], val: i16) {
-    let off = item[0] as usize;
+fn write_cfg_it(buf: &mut [u8], it: &kernel::proc::krx::KrxConfigItem, val: i16) {
+    let off = it.offset as usize;
     if off < buf.len() {
-        buf[off] = val.clamp(le16(item, 6), le16(item, 8)) as i8 as u8;
+        buf[off] = val.clamp(it.min_v, it.max_v) as i8 as u8;
     }
 }
 
+#[cfg(test)]
+pub fn read_cfg_val(buf: &[u8], item: &[u8]) -> i16 {
+    read_cfg_it(buf, &unpack_item(item))
+}
+
+#[cfg(test)]
+pub fn write_cfg_val(buf: &mut [u8], item: &[u8], val: i16) {
+    write_cfg_it(buf, &unpack_item(item), val)
+}
+
+#[cfg(test)]
 #[inline(never)]
 pub fn seed_defaults(cfg: &mut [u8], sec: &[u8], ver: u8) {
-    for b in cfg.iter_mut() {
-        *b = 0;
-    }
+    cfg.fill(0);
     if !cfg.is_empty() {
         cfg[0] = ver;
     }
@@ -82,8 +86,8 @@ pub fn seed_defaults(cfg: &mut [u8], sec: &[u8], ver: u8) {
         if off + 16 > sec.len() {
             break;
         }
-        let item = &sec[off..off + 16];
-        write_cfg_val(cfg, item, le16(item, 4));
+        let it = unpack_item(&sec[off..off + 16]);
+        write_cfg_it(cfg, &it, it.default_v);
     }
 }
 
@@ -93,24 +97,18 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
     let Some(pkg) = get_catalog().get_entry(false, pkg_idx) else {
         return 0;
     };
-    let mut path_buf = [0u8; 24];
-    let plen = pkg.path.len().min(24);
-    path_buf[..plen].copy_from_slice(&pkg.path.as_bytes()[..plen]);
-    let tlen = pkg.title.len().min(16);
-    let mut title_buf = [0u8; 16];
-    title_buf[..tlen].copy_from_slice(&pkg.title.as_bytes()[..tlen]);
-
     let sc = scratch();
-    sc.pkg_name = title_buf;
-    sc.pkg_name_len = tlen as u8;
+    sc.pkg_idx = pkg_idx as u8;
     sc.cfg_len = 0;
     let hdr_base = sc.hdr.as_ptr() as usize;
 
-    let path = utils::format::ascii_str(&path_buf[..plen]).unwrap_or("");
     let mut summary_uninit = core::mem::MaybeUninit::uninit();
-    let Ok(summary) =
-        crate::runtime::loader::read_krx_summary(ctx.storage, path, &mut sc.hdr, &mut summary_uninit)
-    else {
+    let Ok(summary) = crate::runtime::loader::read_krx_summary(
+        ctx.storage,
+        pkg.path.as_str(),
+        &mut sc.hdr,
+        &mut summary_uninit,
+    ) else {
         return 0;
     };
     let Some(sec) = summary.aux.config else {
@@ -125,58 +123,63 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
     let ver = sec[0];
     let item_count = sec[2] as usize;
     let cfg_len = (sec[3] as usize).clamp(1, sc.cfg.len());
-    sc.hdr_len = hdr_len;
-    sc.sec_off = sec_off;
-    sc.sec_len = sec_len;
-    sc.cfg_len = cfg_len;
+    sc.hdr_len = hdr_len as u16;
+    sc.sec_off = sec_off as u16;
+    sc.sec_len = sec_len as u16;
+    sc.cfg_len = cfg_len as u8;
 
-    let name = utils::format::ascii_str(&sc.pkg_name[..tlen]).unwrap_or("");
-    let loaded = StoragePrimitive::load_config(ctx, name, &mut sc.cfg[..cfg_len])
+    let loaded = ctx
+        .load_config(pkg.title.as_str(), &mut sc.cfg[..cfg_len])
         .is_ok_and(|n| n >= cfg_len && sc.cfg[0] == ver);
     if !loaded {
-        seed_defaults(&mut sc.cfg[..cfg_len], &sc.hdr[sec_off..sec_off + sec_len], ver);
+        sc.cfg[..cfg_len].fill(0);
+        sc.cfg[0] = ver;
     }
 
-    let hdr_slice = &sc.hdr[..hdr_len];
-    let sec_slice = &sc.hdr[sec_off..sec_off + sec_len];
-    let count = item_count.min(items.len());
     let mut n = 0usize;
-    for i in 0..count {
+    for i in 0..item_count {
         let off = (i + 1) << 4;
-        if off + 16 > sec_slice.len() {
+        if off + 16 > sec_len {
             break;
         }
-        let item = &sec_slice[off..off + 16];
-        let l_off = le16(item, 10) as u16;
-        let a_off = le16(item, 12) as u16;
-        let title = KrxPreamble::read_hdr_str(hdr_slice, l_off).unwrap_or("Setting");
-        let cur = read_cfg_val(&sc.cfg[..cfg_len], item);
-        let ty = match item[1] {
+        let it = unpack_item(&sc.hdr[sec_off + off..sec_off + off + 16]);
+        if !loaded {
+            write_cfg_it(&mut sc.cfg[..cfg_len], &it, it.default_v);
+        }
+        let Some(dst) = items.get_mut(n) else {
+            continue;
+        };
+        let hdr_slice = &sc.hdr[..hdr_len];
+        let cur = read_cfg_it(&sc.cfg[..cfg_len], &it);
+        dst.item_type = match it.kind {
             CFG_KIND_TOGGLE => MenuItemType::Toggle(cur != 0),
-            CFG_KIND_CHOICE => {
-                let opts = KrxPreamble::read_hdr_packed(hdr_slice, a_off).unwrap_or("Off\0");
-                MenuItemType::Choice {
-                    selected: (cur.max(0)) as u16,
-                    options: SheetOptions::Packed(opts),
-                }
-            }
+            CFG_KIND_CHOICE => MenuItemType::Choice {
+                selected: cur.max(0) as u16,
+                options: SheetOptions::Packed(
+                    KrxPreamble::read_hdr_packed(hdr_slice, it.aux_off).unwrap_or("Off\0"),
+                ),
+            },
             CFG_KIND_RANGE => MenuItemType::Range {
                 val: cur,
-                min: le16(item, 6),
-                max: le16(item, 8),
-                step: (item[3].max(1)) as i16,
-                unit: KrxPreamble::read_hdr_str(hdr_slice, a_off).unwrap_or(""),
+                min: it.min_v,
+                max: it.max_v,
+                step: it.step.max(1) as i16,
+                unit: KrxPreamble::read_hdr_str(hdr_slice, it.aux_off).unwrap_or(""),
             },
             _ => continue,
         };
-        items[n] = MenuItem::new(title, ty);
+        dst.title = KrxPreamble::read_hdr_str(hdr_slice, it.label_off).unwrap_or("Setting");
         n += 1;
     }
     n
 }
 
 #[cfg(not(feature = "filesystem"))]
-pub fn populate_app_prefs(_items: &mut [MenuItem], _pkg_idx: usize, _ctx: &mut SysContext) -> usize {
+pub fn populate_app_prefs(
+    _items: &mut [MenuItem],
+    _pkg_idx: usize,
+    _ctx: &mut SysContext,
+) -> usize {
     0
 }
 
@@ -185,13 +188,17 @@ pub fn populate_app_prefs(_items: &mut [MenuItem], _pkg_idx: usize, _ctx: &mut S
 pub fn commit_app_pref(idx: usize, val: i32, ctx: &mut SysContext) {
     let sc = scratch();
     let off = (idx + 1) << 4;
-    if sc.cfg_len == 0 || off + 16 > sc.sec_len {
+    let cfg_len = sc.cfg_len as usize;
+    let sec_off = sc.sec_off as usize;
+    if cfg_len == 0 || off + 16 > sc.sec_len as usize {
         return;
     }
-    let item = &sc.hdr[sc.sec_off + off..sc.sec_off + off + 16];
-    write_cfg_val(&mut sc.cfg[..sc.cfg_len], item, val as i16);
-    let name = utils::format::ascii_str(&sc.pkg_name[..sc.pkg_name_len as usize]).unwrap_or("");
-    let _ = StoragePrimitive::save_config(ctx, name, &sc.cfg[..sc.cfg_len]);
+    let Some(pkg) = get_catalog().get_entry(false, sc.pkg_idx as usize) else {
+        return;
+    };
+    let it = unpack_item(&sc.hdr[sec_off + off..sec_off + off + 16]);
+    write_cfg_it(&mut sc.cfg[..cfg_len], &it, val as i16);
+    let _ = ctx.save_config(pkg.title.as_str(), &sc.cfg[..cfg_len]);
 }
 
 #[cfg(not(feature = "filesystem"))]

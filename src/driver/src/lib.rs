@@ -29,3 +29,6 @@ pub mod usb;
 
 #[cfg(feature = "display")]
 pub mod st7565;
+
+#[cfg(feature = "gnss")]
+pub mod gnss;

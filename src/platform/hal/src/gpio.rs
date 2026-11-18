@@ -31,6 +31,18 @@ impl Pin {
         }
     }
 
+    /// Sentinel unassigned pin for hardware targets omitting a specific optional peripheral.
+    #[inline(always)]
+    pub const fn none() -> Self {
+        Self { packed: 0xFF }
+    }
+
+    /// Returns `true` if this is an unassigned sentinel pin.
+    #[inline(always)]
+    pub const fn is_none(self) -> bool {
+        self.packed == 0xFF
+    }
+
     #[inline(always)]
     const fn port_base(self) -> u32 {
         0x5000_0000 + (((self.packed >> 4) as u32) << 10)
@@ -42,8 +54,11 @@ impl Pin {
     }
 
     /// Drive the pin HIGH via the BSRR set bits (lower 16 bits).
-    #[inline(always)]
+    #[inline(never)]
     pub fn set_high(self) {
+        if self.is_none() {
+            return;
+        }
         let bsrr = (self.port_base() + gpio::BSRR_OFFSET) as *mut u32;
         unsafe {
             bsrr.write_volatile(1 << self.pin());
@@ -51,8 +66,11 @@ impl Pin {
     }
 
     /// Drive the pin LOW via the BSRR reset bits (upper 16 bits).
-    #[inline(always)]
+    #[inline(never)]
     pub fn set_low(self) {
+        if self.is_none() {
+            return;
+        }
         let bsrr = (self.port_base() + gpio::BSRR_OFFSET) as *mut u32;
         unsafe {
             bsrr.write_volatile(1 << (self.pin() + 16));
@@ -60,8 +78,11 @@ impl Pin {
     }
 
     /// Read the pin level from the IDR register.
-    #[inline(always)]
+    #[inline(never)]
     pub fn is_high(self) -> bool {
+        if self.is_none() {
+            return false;
+        }
         let idr = (self.port_base() + gpio::IDR_OFFSET) as *const u32;
         unsafe { (idr.read_volatile() >> self.pin()) & 1 != 0 }
     }
@@ -69,11 +90,17 @@ impl Pin {
     /// Read the pin level (inverse of `is_high`).
     #[inline(always)]
     pub fn is_low(self) -> bool {
+        if self.is_none() {
+            return false;
+        }
         !self.is_high()
     }
 
     #[inline(never)]
     fn modify_2bit(self, offset: u32, mode: u32) {
+        if self.is_none() {
+            return;
+        }
         let reg = (self.port_base() + offset) as *mut u32;
         let shift = (self.pin() as u32) * 2;
         cortex_m::interrupt::free(|_| unsafe {
@@ -112,6 +139,9 @@ impl Pin {
     /// Each pin occupies 4 bits.
     #[inline(never)]
     pub fn set_af(self, af: u32) {
+        if self.is_none() {
+            return;
+        }
         let pin = self.pin();
         let (reg_offset, shift) = if pin < 8 {
             (gpio::AFRL_OFFSET, (pin as u32) * 4)
@@ -127,6 +157,9 @@ impl Pin {
 
     #[inline(never)]
     fn configure_out(self, speed: u32, open_drain: bool) {
+        if self.is_none() {
+            return;
+        }
         self.set_mode(gpio::MODE_OUTPUT);
         self.set_speed(speed);
         let otyper = (self.port_base() + gpio::OTYPER_OFFSET) as *mut u32;

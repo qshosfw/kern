@@ -3,6 +3,10 @@ name = "bsp"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+target_k10pro = ["py32-hal/target_k10pro"]
+swd_debug = []
+
 [dependencies]
 cortex-m = { workspace = true }
 py32-hal = { path = "../hal" }

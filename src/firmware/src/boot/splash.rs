@@ -185,8 +185,7 @@ pub fn load_and_render_splash(
     if path.is_empty() || !storage.exists(path) {
         return false;
     }
-    let mut buf_uninit = core::mem::MaybeUninit::<[u32; 258]>::uninit();
-    let buf = unsafe { core::slice::from_raw_parts_mut(buf_uninit.as_mut_ptr() as *mut u8, 1032) };
+    let buf = &mut crate::data::arena::scratch_tail_bytes_mut()[..1032];
     if let Ok(n) = storage.read_file(path, buf) {
         if n == 1024 {
             canvas.load_raw_vram(&buf[..1024]);

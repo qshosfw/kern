@@ -13,6 +13,7 @@ Features:
 """
 
 import argparse
+import glob
 import os
 import re
 import socket
@@ -37,9 +38,9 @@ FLAG_EVENT = 0x02
 HEADER_LEN = 15
 CRC_LEN = 2
 MIN_RECORD_LEN = 17
-MAX_WIRE_FILE_SIZE = 6144
+MAX_WIRE_FILE_SIZE = 262144
 MAX_APP_PATH_LEN = 24
-MAX_CATALOG_PACKAGES = 6
+MAX_CATALOG_PACKAGES = 8
 
 KRX_MAGIC = b"\xC0\xDE\x01\xFE"
 KRX_CLASSES = {0: "Native", 1: "Paged", 2: "VMachine", 3: "Declare"}
@@ -788,6 +789,16 @@ class RigWireClient:
             pass
         print("  Reboot command dispatched.")
 
+    def panic_test(self, hardfault: bool = False):
+        """Trigger an intentional panic (3) or ARM HardFault (4) via ACTION_SYS_REBOOT."""
+        mode = 4 if hardfault else 3
+        try:
+            self.handle_invoke(DOMAIN_SYSTEM, 0, FACET_SYS_IDENTITY, ACTION_SYS_REBOOT, bytes([mode]))
+        except Exception:
+            pass
+        kind = "HardFault (udf #0x7F)" if hardfault else "Rust panic"
+        print(f"  Triggered {kind} test on target.")
+
     # ── UNIVERSAL RESOURCE HANDLE RPC (SERVICE_CONTROL 0x01) ─────────────────
 
     def handle_get(self, domain: int, instance: int, facet: int, params: bytes = b"") -> bytes:
@@ -1176,13 +1187,18 @@ class RigWireClient:
             data = f.read()
 
         info = validate_krx_package(data)
+        PKG_EXTS = (".krx", ".app", ".svc", ".dmn", ".drv", ".mod")
         raw_name = name if name else os.path.basename(local_path)
         base = os.path.basename(raw_name.strip())
-        if base.lower().endswith(".krx"):
-            base = base[:-4]
+        ext = ".krx"
+        for candidate in PKG_EXTS:
+            if base.lower().endswith(candidate):
+                ext = candidate
+                base = base[:-len(candidate)]
+                break
         if not base or not re.fullmatch(r"[A-Za-z0-9_-]+", base):
             raise ValueError(f"Invalid app filename stem '{base}' (use ASCII letters, digits, _, -)")
-        filename = f"{base}.krx"
+        filename = f"{base}{ext}"
         remote_path = f"/apps/{filename}"
         if len(remote_path) > MAX_APP_PATH_LEN:
             raise ValueError(
@@ -1200,7 +1216,7 @@ class RigWireClient:
         else:
             apps_entries = self.ls("/apps")
             pkg_count = sum(
-                1 for e in apps_entries if not e["is_dir"] and e["name"].endswith((".krx", ".app"))
+                1 for e in apps_entries if not e["is_dir"] and e["name"].lower().endswith(PKG_EXTS)
             )
             if pkg_count >= MAX_CATALOG_PACKAGES and not force:
                 raise RuntimeError(
@@ -1503,6 +1519,23 @@ def parse_frequency(val_str: str) -> int:
         return int(s)
 
 
+def detect_default_port() -> str:
+    env_port = os.environ.get("RIGWIRE_PORT")
+    if env_port:
+        return env_port
+
+    for pattern in (
+        "/dev/serial/by-id/*Quansheng*",
+        "/dev/ttyACM*",
+        "/dev/ttyUSB*",
+    ):
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            return os.path.realpath(matches[0])
+
+    return "/dev/ttyACM0"
+
+
 # ── MAIN ENTRY POINT ──────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
@@ -1511,8 +1544,8 @@ def main():
     )
     parser.add_argument(
         "-p", "--port",
-        default=os.environ.get("RIGWIRE_PORT", "/dev/ttyACM0"),
-        help="Serial port path (e.g. /dev/ttyACM0, /dev/ttyUSB0, COM3). Default: /dev/ttyACM0",
+        default=detect_default_port(),
+        help="Serial port path (e.g. /dev/ttyACM0, /dev/ttyUSB0, COM3). Default: auto-detect",
     )
     parser.add_argument(
         "-b", "--baud",
@@ -1599,6 +1632,8 @@ def main():
     sync_p.add_argument("--rounds", type=int, default=5, help="Number of NTP handshake rounds (default: 5)")
 
     subparsers.add_parser("reboot", help="Reboot radio")
+    pt_p = subparsers.add_parser("panic-test", help="Trigger an intentional panic or HardFault for crash handler testing")
+    pt_p.add_argument("--hardfault", action="store_true", help="Trigger hardware HardFault (udf #0x7F) instead of software panic")
     subparsers.add_parser("test", help="Execute protocol unit self-tests (no hardware needed)")
 
     args = parser.parse_args()
@@ -1873,6 +1908,9 @@ def main():
 
         elif args.command == "reboot":
             client.reboot()
+
+        elif args.command == "panic-test":
+            client.panic_test(hardfault=args.hardfault)
 
         elif args.command == "sync":
             print(f"Synchronizing clock with radio ({args.rounds} rounds)...")

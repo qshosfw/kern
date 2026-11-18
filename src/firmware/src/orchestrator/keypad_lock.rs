@@ -34,34 +34,31 @@ enum HoldKind {
 }
 
 struct HoldSpec {
-    title: &'static str,
-    prompt: &'static str,
     icon: Icon,
     required_ms: u16,
 }
 
+static HOLD_STRINGS: &[u8] = b"\
+Deep Sleep\0Hold EXIT for sleep\0\
+Close App\0Hold EXIT to close\0\
+Keypad Locked\0Hold to unlock\0\
+Keypad Lock\0Hold to lock\0\
+Keypad\0Keypad Unlocked\0Keypad Locked\0";
+
 const HOLD_SPECS: [HoldSpec; 4] = [
     HoldSpec {
-        title: "Deep Sleep",
-        prompt: "Hold EXIT for sleep",
         icon: Icon::Moon,
         required_ms: 1000,
     },
     HoldSpec {
-        title: "Close App",
-        prompt: "Hold EXIT to close",
         icon: Icon::Keypad,
         required_ms: 500,
     },
     HoldSpec {
-        title: "Keypad Locked",
-        prompt: "Hold to unlock",
         icon: Icon::Lock,
         required_ms: 850,
     },
     HoldSpec {
-        title: "Keypad Lock",
-        prompt: "Hold to lock",
         icon: Icon::Unlock,
         required_ms: 650,
     },
@@ -157,7 +154,7 @@ impl KeypadLockManager {
         self.inactivity_ms = 0;
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn reset_hold_tracking(&mut self) {
         self.held_code = None;
         self.delay_elapsed_ms = 0;
@@ -180,6 +177,16 @@ impl KeypadLockManager {
         self.held_confirmed = false;
         self.is_long_press_triggered = false;
         self.hold.active = false;
+    }
+
+    #[inline(never)]
+    fn clear_hold_overlay(&mut self, reset_anim: bool) {
+        self.hold.reset();
+        self.hold.required_ms = 0;
+        self.hold_ui_open = false;
+        if reset_anim {
+            self.sheet_anim.reset_closed();
+        }
     }
 
     #[inline(never)]
@@ -280,27 +287,16 @@ impl KeypadLockManager {
             if self.hold_ui_open {
                 if self.hold.advance(dt) && !self.is_long_press_triggered {
                     self.is_long_press_triggered = true;
-                    match self.hold_kind {
-                        HoldKind::Sleep => {
+                    if matches!(self.hold_kind, HoldKind::Sleep | HoldKind::CloseApp) {
+                        if self.hold_kind == HoldKind::Sleep {
                             self.sleep_requested = true;
-                            self.hold.reset();
-                            self.hold.required_ms = 0;
-                            self.hold_ui_open = false;
-                            self.sheet_anim.reset_closed();
-                        }
-                        HoldKind::CloseApp => {
+                        } else {
                             self.force_close_requested = true;
-                            self.hold.reset();
-                            self.hold.required_ms = 0;
-                            self.hold_ui_open = false;
-                            self.sheet_anim.reset_closed();
                         }
-                        HoldKind::Lock | HoldKind::Unlock => {
-                            self.toggle_lock();
-                            self.hold.reset();
-                            self.hold.required_ms = 0;
-                            self.hold_ui_open = false;
-                        }
+                        self.clear_hold_overlay(true);
+                    } else {
+                        self.toggle_lock();
+                        self.clear_hold_overlay(false);
                     }
                     return true;
                 }
@@ -337,76 +333,69 @@ impl KeypadLockManager {
                 }
             }
 
-            if *code == KeyCode::Hash || *code == KeyCode::KeyF {
+            let is_hash_f = *code == KeyCode::Hash || *code == KeyCode::KeyF;
+            if is_hash_f || (!self.is_locked && *code == KeyCode::Exit) {
                 match state {
                     KeyState::Pressed => {
-                        let start_threshold =
-                            base_hold_delay_ms.saturating_add(150).clamp(550, 750);
-                        let kind = if self.is_locked {
-                            HoldKind::Unlock
+                        let (threshold, kind) = if is_hash_f {
+                            (
+                                base_hold_delay_ms.saturating_add(150).clamp(550, 750),
+                                if self.is_locked {
+                                    HoldKind::Unlock
+                                } else {
+                                    HoldKind::Lock
+                                },
+                            )
                         } else {
-                            HoldKind::Lock
+                            (
+                                base_hold_delay_ms.saturating_add(80).max(450),
+                                if can_sleep {
+                                    HoldKind::Sleep
+                                } else {
+                                    HoldKind::CloseApp
+                                },
+                            )
                         };
-                        self.begin_hold(*code, start_threshold, kind);
-                        if !self.is_locked {
+                        self.begin_hold(*code, threshold, kind);
+                        if is_hash_f && !self.is_locked {
                             self.toast = LockToast::None;
                             self.toast_remaining_ms = 0;
                         }
-                        return true;
+                        if is_hash_f {
+                            return true;
+                        }
                     }
                     KeyState::Held => {
                         self.held_confirmed = true;
-                        return true;
+                        if is_hash_f || self.held_code == Some(KeyCode::Exit) {
+                            return true;
+                        }
                     }
                     KeyState::Released => {
                         let cancelled_hold = self.finish_hold_release();
-                        if self.is_locked {
-                            if !cancelled_hold {
+                        if is_hash_f {
+                            if self.is_locked && !cancelled_hold {
                                 self.show_toast(LockToast::PromptUnlock);
+                            } else if !self.is_locked && !cancelled_hold && *code == KeyCode::KeyF {
+                                self.is_f_active = !self.is_f_active;
+                                self.f_key_remaining_ms = if self.is_f_active {
+                                    f_timeout_ms.min(10000) as u16
+                                } else {
+                                    0
+                                };
                             }
-                        } else if !cancelled_hold && *code == KeyCode::KeyF {
-                            self.is_f_active = !self.is_f_active;
-                            self.f_key_remaining_ms = if self.is_f_active {
-                                f_timeout_ms.min(10000) as u16
-                            } else {
-                                0
-                            };
+                            return true;
+                        } else if cancelled_hold {
+                            return true;
                         }
-                        return true;
                     }
                 }
-            }
-
-            if self.is_locked {
-                let is_allowed = matches!(code, KeyCode::Ptt | KeyCode::Side1 | KeyCode::Side2);
-                if !is_allowed {
+            } else if self.is_locked {
+                if !matches!(code, KeyCode::Ptt | KeyCode::Side1 | KeyCode::Side2) {
                     if *state == KeyState::Pressed {
                         self.show_toast(LockToast::PromptUnlock);
                     }
                     return true;
-                }
-            } else if *code == KeyCode::Exit {
-                match state {
-                    KeyState::Pressed => {
-                        let start_threshold = base_hold_delay_ms.saturating_add(80).max(450);
-                        let kind = if can_sleep {
-                            HoldKind::Sleep
-                        } else {
-                            HoldKind::CloseApp
-                        };
-                        self.begin_hold(KeyCode::Exit, start_threshold, kind);
-                    }
-                    KeyState::Held => {
-                        self.held_confirmed = true;
-                        if self.held_code == Some(KeyCode::Exit) {
-                            return true;
-                        }
-                    }
-                    KeyState::Released => {
-                        if self.finish_hold_release() {
-                            return true;
-                        }
-                    }
                 }
             } else if *state == KeyState::Pressed {
                 self.reset_hold_tracking();
@@ -428,13 +417,38 @@ impl KeypadLockManager {
         }
 
         let (title, msg, icon, show_bar, show_hint) = if self.hold_ui_open {
-            let spec = &HOLD_SPECS[self.hold_kind as usize];
-            (spec.title, spec.prompt, spec.icon, true, false)
+            let k = self.hold_kind as u8;
+            (
+                utils::format::nth_cstr(HOLD_STRINGS, k * 2),
+                utils::format::nth_cstr(HOLD_STRINGS, k * 2 + 1),
+                HOLD_SPECS[k as usize].icon,
+                true,
+                false,
+            )
         } else {
+            let kt = utils::format::nth_cstr(HOLD_STRINGS, 8);
             match self.toast {
-                LockToast::Unlocked => ("Keypad", "Keypad Unlocked", Icon::Unlock, false, false),
-                LockToast::Locked => ("Keypad", "Keypad Locked", Icon::Lock, false, false),
-                LockToast::PromptUnlock => ("Keypad Locked", "", Icon::Lock, false, true),
+                LockToast::Unlocked => (
+                    kt,
+                    utils::format::nth_cstr(HOLD_STRINGS, 9),
+                    Icon::Unlock,
+                    false,
+                    false,
+                ),
+                LockToast::Locked => (
+                    kt,
+                    utils::format::nth_cstr(HOLD_STRINGS, 10),
+                    Icon::Lock,
+                    false,
+                    false,
+                ),
+                LockToast::PromptUnlock => (
+                    utils::format::nth_cstr(HOLD_STRINGS, 4),
+                    "",
+                    Icon::Lock,
+                    false,
+                    true,
+                ),
                 LockToast::None => return,
             }
         };

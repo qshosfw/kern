@@ -22,18 +22,12 @@ pub enum LeaseKind {
 }
 
 impl LeaseKind {
+    #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
-        match val {
-            1 => Some(Self::RadioRx),
-            2 => Some(Self::RadioTx),
-            3 => Some(Self::AudioCapture),
-            4 => Some(Self::AudioOutput),
-            5 => Some(Self::DisplayCanvas),
-            6 => Some(Self::SpiBus),
-            7 => Some(Self::DmaChannel),
-            8 => Some(Self::OverlayWindow),
-            9 => Some(Self::StorageTransaction),
-            _ => None,
+        if val >= 1 && val <= 9 {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
         }
     }
 
@@ -62,19 +56,36 @@ pub enum LeaseError {
     InvalidLeaseKind,
 }
 
-/// An active timed resource lease.
+/// An active timed resource lease (`kind.is_none()` / `owner.0 == 0` indicates an empty slot,
+/// and all-zero representation places `ResourceLeaseManager` in `.bss`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceLease {
-    pub kind: LeaseKind,
+    pub kind: Option<LeaseKind>,
     pub owner: Pid,
     pub acquired_tick: u32,
     pub timeout_ms: u32,
 }
 
+impl ResourceLease {
+    pub const fn empty() -> Self {
+        Self {
+            kind: None,
+            owner: Pid(0),
+            acquired_tick: 0,
+            timeout_ms: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn is_active(&self) -> bool {
+        self.kind.is_some()
+    }
+}
+
 /// Zero-allocation bounded resource lease manager.
 #[derive(Debug, Clone)]
 pub struct ResourceLeaseManager<const MAX_LEASES: usize = 12> {
-    pub leases: [Option<ResourceLease>; MAX_LEASES],
+    pub leases: [ResourceLease; MAX_LEASES],
 }
 
 impl<const MAX_LEASES: usize> Default for ResourceLeaseManager<MAX_LEASES> {
@@ -86,14 +97,29 @@ impl<const MAX_LEASES: usize> Default for ResourceLeaseManager<MAX_LEASES> {
 impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
     pub const fn new() -> Self {
         Self {
-            leases: [None; MAX_LEASES],
+            leases: [const { ResourceLease::empty() }; MAX_LEASES],
         }
+    }
+
+    /// Returns the active lease at slot `idx`, if occupied.
+    #[inline(always)]
+    pub fn entry(&self, idx: usize) -> Option<&ResourceLease> {
+        self.leases.get(idx).filter(|l| l.is_active())
+    }
+
+    /// Whether `owner` holds at least one active lease.
+    pub fn has_owner(&self, owner: Pid) -> bool {
+        owner.0 != 0
+            && self
+                .leases
+                .iter()
+                .any(|l| l.is_active() && l.owner == owner)
     }
 
     /// Finds the holder of a specific resource lease.
     pub fn holder(&self, kind: LeaseKind) -> Option<Pid> {
-        for slot in self.leases.iter().flatten() {
-            if slot.kind == kind {
+        for slot in &self.leases {
+            if slot.kind == Some(kind) {
                 return Some(slot.owner);
             }
         }
@@ -108,20 +134,13 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
 
     /// Number of currently occupied lease slots.
     pub fn active_count(&self) -> usize {
-        self.leases.iter().filter(|s| s.is_some()).count()
+        self.leases.iter().filter(|s| s.is_active()).count()
     }
 
     /// Forcibly revoke any active lease of `kind` regardless of owner.
+    #[inline(always)]
     pub fn revoke_kind(&mut self, kind: LeaseKind) -> bool {
-        for slot in self.leases.iter_mut() {
-            if let Some(l) = slot {
-                if l.kind == kind {
-                    *slot = None;
-                    return true;
-                }
-            }
-        }
-        false
+        self.release(Pid(0), kind).is_ok()
     }
 
     /// Acquires an exclusive timed lease on a resource.
@@ -135,44 +154,39 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
     ) -> Result<(), LeaseError> {
         let mut empty_slot: Option<usize> = None;
         for (idx, slot) in self.leases.iter_mut().enumerate() {
-            if let Some(l) = slot {
-                if l.kind == kind {
-                    if l.owner == owner {
-                        l.acquired_tick = current_tick;
-                        l.timeout_ms = timeout_ms;
-                        return Ok(());
-                    }
-                    return Err(LeaseError::AlreadyLeased { holder: l.owner });
+            if slot.kind == Some(kind) {
+                if slot.owner == owner {
+                    slot.acquired_tick = current_tick;
+                    slot.timeout_ms = timeout_ms;
+                    return Ok(());
                 }
-            } else if empty_slot.is_none() {
+                return Err(LeaseError::AlreadyLeased { holder: slot.owner });
+            } else if !slot.is_active() && empty_slot.is_none() {
                 empty_slot = Some(idx);
             }
         }
         let Some(idx) = empty_slot else {
             return Err(LeaseError::LeaseTableFull);
         };
-        self.leases[idx] = Some(ResourceLease {
-            kind,
+        self.leases[idx] = ResourceLease {
+            kind: Some(kind),
             owner,
             acquired_tick: current_tick,
             timeout_ms,
-        });
+        };
         Ok(())
     }
 
-    /// Releases a previously acquired lease.
+    /// Releases a previously acquired lease (`owner.0 == 0` revokes regardless of owner).
     #[inline(never)]
     pub fn release(&mut self, owner: Pid, kind: LeaseKind) -> Result<(), LeaseError> {
         for slot in self.leases.iter_mut() {
-            if let Some(l) = slot {
-                if l.kind == kind {
-                    if l.owner == owner {
-                        *slot = None;
-                        return Ok(());
-                    } else {
-                        return Err(LeaseError::NotOwner);
-                    }
+            if slot.kind == Some(kind) {
+                if owner.0 == 0 || slot.owner == owner {
+                    slot.kind = None;
+                    return Ok(());
                 }
+                return Err(LeaseError::NotOwner);
             }
         }
         Err(LeaseError::NotLeased)
@@ -182,10 +196,10 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
     /// Returns the number of leases revoked.
     pub fn revoke_all_for_owner(&mut self, owner: Pid) -> u8 {
         let mut count = 0u8;
-        for slot in self.leases.iter_mut() {
-            if let Some(l) = slot {
-                if l.owner == owner {
-                    *slot = None;
+        if owner.0 != 0 {
+            for slot in self.leases.iter_mut() {
+                if slot.is_active() && slot.owner == owner {
+                    slot.kind = None;
                     count += 1;
                 }
             }
@@ -200,13 +214,12 @@ impl<const MAX_LEASES: usize> ResourceLeaseManager<MAX_LEASES> {
         mut on_timeout: impl FnMut(LeaseKind, Pid),
     ) {
         for slot in self.leases.iter_mut() {
-            if let Some(l) = slot {
-                if l.timeout_ms > 0 {
-                    let elapsed = current_tick.wrapping_sub(l.acquired_tick);
-                    if elapsed >= l.timeout_ms {
-                        let kind = l.kind;
-                        let owner = l.owner;
-                        *slot = None;
+            if let Some(kind) = slot.kind {
+                if slot.timeout_ms > 0 {
+                    let elapsed = current_tick.wrapping_sub(slot.acquired_tick);
+                    if elapsed >= slot.timeout_ms {
+                        let owner = slot.owner;
+                        slot.kind = None;
                         on_timeout(kind, owner);
                     }
                 }

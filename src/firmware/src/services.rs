@@ -28,37 +28,34 @@ pub use usb::*;
 #[cfg(feature = "wire")]
 pub use wire::*;
 
-pub type SystemRadio<'a> = drivers::bk4829::Bk4829<'a, drivers::bk4829::Disabled>;
-pub use drivers::audio::AudioAmplifier as SystemAudio;
 pub use drivers::battery::SystemPower;
-pub type SystemDisplay<'a, 'b> = display::DisplayHardware<'a, 'b>;
-#[cfg(feature = "uart")]
-pub use drivers::uart::HardwareUart as SystemUart;
-pub use drivers::usb::UsbDriver as SystemUsb;
 
 /// Dependency-injected System Context provided to applications during event dispatch and rendering.
+#[repr(C)]
 pub struct SysContext<'a, 'hw> {
-    pub state: &'a mut RadioState,
-    pub radio: &'a mut SystemRadio<'hw>,
-    pub power: &'a mut SystemPower,
-    pub audio: Option<&'a mut SystemAudio>,
-    pub display: Option<&'a mut SystemDisplay<'a, 'hw>>,
-    pub ipc: Option<&'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>>,
-    pub config: &'a mut crate::config::MasterConfig,
     pub is_keypad_locked: bool,
     pub is_f_active: bool,
-    pub usb: Option<&'a mut SystemUsb>,
-
+    pub state: &'a mut RadioState,
+    pub radio: &'a mut drivers::bk4829::Bk4829<'hw, drivers::bk4829::Disabled>,
+    pub power: &'a mut SystemPower,
+    pub config: &'a mut crate::config::MasterConfig,
     pub storage: &'a mut SystemStorage<'hw>,
     pub calibration: &'a SystemCalibration,
     pub passcode: &'a mut crate::security::PasscodeState,
-
     #[cfg(feature = "uart")]
-    pub uart: &'a mut SystemUart,
+    pub uart: &'a mut drivers::uart::HardwareUart,
+    pub audio: Option<&'a mut drivers::audio::AudioAmplifier>,
+    pub display: Option<&'a mut display::DisplayHardware<'a, 'hw>>,
+    pub ipc: Option<&'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>>,
+    pub usb: Option<&'a mut drivers::usb::UsbDriver>,
 }
 
 #[inline(never)]
-fn play_tone_file(storage: &mut SystemStorage, radio: &mut SystemRadio, path: &str) {
+fn play_tone_file(
+    storage: &mut SystemStorage,
+    radio: &mut drivers::bk4829::Bk4829<'_, drivers::bk4829::Disabled>,
+    path: &str,
+) {
     let mut notes = [melody::ToneNote::new(0, 0); melody::MAX_MELODY_NOTES];
     let n = crate::services::melody::load_roger_notes(storage, path, &mut notes);
     if n > 0 {
@@ -280,15 +277,9 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     pub fn apply_audio_config(&mut self) {
-        let cfg = self.config.audio;
         if let Some(ref mut audio) = self.audio {
-            audio.set_volume(cfg.volume);
+            crate::hardware::apply_audio_hardware(&self.config.audio, audio, self.radio);
         }
-        self.radio.set_volume_level(cfg.volume);
-        self.radio
-            .set_tone_gain((cfg.beep_gain as u16 * 12).min(127) as u8);
-        self.radio.set_mic_gain(cfg.mic_gain);
-        self.radio.set_audio_profile(cfg.audio_profile);
     }
 
     /// Play single keypress or system feedback beep
@@ -451,6 +442,10 @@ impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {
 
         #[allow(unused_mut)]
         let mut c = BASE_CAPS;
+        #[cfg(feature = "filesystem")]
+        {
+            c = c.with(kernel::caps::Cap::StorageAdmin);
+        }
         #[cfg(feature = "fm_radio")]
         {
             c = c.with(kernel::caps::Cap::BroadcastFm);

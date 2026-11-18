@@ -79,6 +79,10 @@ pub const APB1ENR_WWDG: u32 = 1 << 11;
 pub const APB1ENR_SPI2: u32 = 1 << 14;
 /// USART2 clock enable
 pub const APB1ENR_USART2: u32 = 1 << 17;
+/// USART3 clock enable
+pub const APB1ENR_USART3: u32 = 1 << 18;
+/// USART4 clock enable
+pub const APB1ENR_USART4: u32 = 1 << 19;
 /// I2C1 clock enable
 pub const APB1ENR_I2C1: u32 = 1 << 21;
 /// USBD (USB 2.0 Full-Speed) clock enable

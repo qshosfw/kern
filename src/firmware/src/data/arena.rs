@@ -1,10 +1,10 @@
 //! Shared Transient Scratch Memory Arena.
 //!
-//! Provides a zero-alloc 6 KiB aligned scratch buffer in `.uninit` RAM
+//! Provides a zero-alloc 6.0 KiB aligned scratch buffer in `.uninit` RAM
 //! partitioned between active KRX execution (`[0..4096)`) and scratch/staging
 //! buffers (`[4096..6144)`).
 
-pub const TRANSIENT_ARENA_WORDS: usize = 1536; // 6 KiB aligned scratch buffer
+pub const TRANSIENT_ARENA_WORDS: usize = 1536; // 6.0 KiB aligned scratch buffer
 pub const TRANSIENT_ARENA_BYTES: usize = TRANSIENT_ARENA_WORDS * 4;
 pub const TRANSIENT_SCRATCH_OFFSET: usize = 4096;
 
