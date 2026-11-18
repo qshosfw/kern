@@ -106,8 +106,14 @@ impl WireCtx<'_, '_> {
     }
 
     #[inline(never)]
-    fn write_le(&mut self, v: u32, n: usize) {
-        self.write_bytes(&v.to_le_bytes()[..n]);
+    fn write_le(&mut self, mut v: u32, n: usize) {
+        let mut i = 0;
+        while i < n && self.pos < 128 {
+            self.out[self.pos] = v as u8;
+            self.pos += 1;
+            v >>= 8;
+            i += 1;
+        }
     }
 
     #[inline(always)]
@@ -134,8 +140,9 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     // `handle_*_service` only reads `hw.wire.session` and never touches `rx_buf` until `send_response`.
     let payload = unsafe { core::slice::from_raw_parts(raw.as_ptr(), plen) };
 
-    let mut out_uninit = core::mem::MaybeUninit::<[u8; 128]>::uninit();
-    let out = unsafe { &mut *out_uninit.as_mut_ptr() };
+    let out: &mut [u8; 128] = unsafe {
+        &mut *(crate::data::arena::scratch_tail_bytes_mut()[1900..].as_mut_ptr() as *mut [u8; 128])
+    };
 
     let mut ctx = WireCtx {
         hw,
@@ -895,11 +902,7 @@ fn on_transfer_list(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
                         return;
                     }
                     out[pos] = is_dir as u8;
-                    let sb = (size as u32).to_le_bytes();
-                    out[pos + 1] = sb[0];
-                    out[pos + 2] = sb[1];
-                    out[pos + 3] = sb[2];
-                    out[pos + 4] = sb[3];
+                    out[pos + 1..pos + 5].copy_from_slice(&(size as u32).to_le_bytes());
                     out[pos + 5] = name_len as u8;
                     out[pos + 6..pos + 6 + name_len].copy_from_slice(&b[..name_len]);
                     pos += 6 + name_len;
@@ -909,9 +912,7 @@ fn on_transfer_list(payload: &[u8], ctx: &mut WireCtx<'_, '_>) -> Result<(), Wir
             }
         });
 
-    let nc = next_cursor.to_le_bytes();
-    out[0] = nc[0];
-    out[1] = nc[1];
+    out[0..2].copy_from_slice(&next_cursor.to_le_bytes());
     out[2] = written;
     ctx.pos = pos;
     Ok(())

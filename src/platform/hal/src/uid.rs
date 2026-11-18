@@ -189,11 +189,9 @@ impl SystemInfo {
                 if w[1] == b'.'
                     && w[4] == b'.'
                     && w[7] == 0
-                    && w[0].is_ascii_digit()
-                    && w[2].is_ascii_digit()
-                    && w[3].is_ascii_digit()
-                    && w[5].is_ascii_digit()
-                    && w[6].is_ascii_digit()
+                    && [w[0], w[2], w[3], w[5], w[6]]
+                        .iter()
+                        .all(|b| b.is_ascii_digit())
                 {
                     return core::str::from_utf8_unchecked(&w[..7]);
                 }

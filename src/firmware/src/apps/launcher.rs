@@ -38,13 +38,22 @@ impl GridItem for LauncherEntry {
 
 pub const MAX_LAUNCHER_ENTRIES: usize = 12;
 
-#[unsafe(link_section = ".uninit")]
-static mut ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
-    title: "",
-    icon_8: gfx::icons::ICON_APP_RADIO,
-    icon_16: &gfx::icons::ICON_16_RADIO,
-    target: LauncherTarget::App(APP_ID_VFO as u8),
-}; MAX_LAUNCHER_ENTRIES];
+#[inline(always)]
+fn launcher_entries_mut() -> &'static mut [LauncherEntry; MAX_LAUNCHER_ENTRIES] {
+    const _: () = {
+        assert!(
+            core::mem::size_of::<[LauncherEntry; MAX_LAUNCHER_ENTRIES]>()
+                <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET
+        );
+        assert!(
+            core::mem::align_of::<LauncherEntry>()
+                <= core::mem::align_of::<crate::data::arena::AlignedArena>()
+        );
+    };
+    unsafe {
+        &mut *(crate::data::arena::arena_base_ptr() as *mut [LauncherEntry; MAX_LAUNCHER_ENTRIES])
+    }
+}
 
 static BUILTIN_HEAD: [LauncherEntry; 2] = [
     LauncherEntry {
@@ -88,7 +97,7 @@ pub fn load_entries(
     }
 
     unsafe {
-        let entries = &mut *core::ptr::addr_of_mut!(ENTRIES);
+        let entries = launcher_entries_mut();
         entries[..2].copy_from_slice(&BUILTIN_HEAD);
         let mut count = 2usize;
 

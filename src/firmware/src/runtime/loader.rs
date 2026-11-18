@@ -238,7 +238,6 @@ pub fn try_launch_boot_module(
     load_krx_into_slot(storage, path, None, kernel::proc::Pid(0))?;
 
     let res = unsafe {
-        super::syscall::ACTIVE_CANVAS = crate::system_canvas() as *mut gfx::Canvas;
         super::syscall::display::BOOT_LCD = lcd as *mut drivers::st7565::St7565<'_> as *mut _;
         super::native_runner::BOOT_STORAGE =
             storage as *mut crate::services::SystemStorage<'_> as *mut _;

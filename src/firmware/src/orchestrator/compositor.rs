@@ -296,7 +296,7 @@ const MAX_ALERT_LINE_PX: i16 = 116;
 #[derive(Clone)]
 pub struct SystemAlert {
     pub title: heapless::String<24>,
-    pub message: heapless::String<168>,
+    pub message: heapless::String<120>,
 }
 
 impl SystemAlert {
@@ -384,7 +384,7 @@ static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 
 /// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
 #[inline(never)]
-pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<168>) {
+pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<120>) {
     out.clear();
     let space_px = gfx::text::str_width(" ", &gfx::fonts::tomthumb::FONT);
     let b = raw.as_bytes();
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn wrap_alert_text_fits_within_bottom_sheet_width() {
-        let mut out = heapless::String::<168>::new();
+        let mut out = heapless::String::<120>::new();
         wrap_alert_text(
             "A device passcode protects 3 encrypted files, and Passcode unlock is disabled in this firmware.",
             &mut out,

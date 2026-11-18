@@ -201,16 +201,14 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
         slot.pid
     };
 
-    // Snapshot app name and package path before clearing the slot so [Retry] can relaunch.
-    let mut name_buf = [0u8; 16];
-    let name_len = slot.app_name.len().min(name_buf.len());
-    name_buf[..name_len].copy_from_slice(&slot.app_name.as_bytes()[..name_len]);
-    let name_str = unsafe { core::str::from_utf8_unchecked(&name_buf[..name_len]) };
+    // Snapshot package path & format dialog text BEFORE clearing the slot.
+    let mut msg_buf = [0u8; 64];
+    let msg = fault.format_message(slot.app_name.as_str(), &mut msg_buf);
 
     let pkg = slot.pkg_path.as_bytes();
     let pkg_len = pkg.len().min(32);
     unsafe {
-        FAULT_PKG_PATH[..pkg_len].copy_from_slice(&pkg[..pkg_len]);
+        (&mut *core::ptr::addr_of_mut!(FAULT_PKG_PATH))[..pkg_len].copy_from_slice(&pkg[..pkg_len]);
         FAULT_PKG_LEN = pkg_len as u8;
     }
 
@@ -222,8 +220,6 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
     super::native_runner::teardown_slot_and_hw(ctx, pid, false);
 
     // 2. Present firmware Exception Dialog ([Retry] / [Close]) without rebooting.
-    let mut msg_buf = [0u8; 64];
-    let msg = fault.format_message(name_str, &mut msg_buf);
     ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
     ctx.show_confirm(
         crate::orchestrator::TAG_FAULT_CONFIRM,

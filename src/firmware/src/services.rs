@@ -56,8 +56,11 @@ fn play_tone_file(
     radio: &mut drivers::bk4829::Bk4829<'_, drivers::bk4829::Disabled>,
     path: &str,
 ) {
-    let mut notes = [melody::ToneNote::new(0, 0); melody::MAX_MELODY_NOTES];
-    let n = crate::services::melody::load_roger_notes(storage, path, &mut notes);
+    let notes: &mut [melody::ToneNote; melody::MAX_MELODY_NOTES] = unsafe {
+        &mut *(crate::data::arena::scratch_tail_bytes_mut()[1760..].as_mut_ptr()
+            as *mut [melody::ToneNote; melody::MAX_MELODY_NOTES])
+    };
+    let n = crate::services::melody::load_roger_notes(storage, path, notes);
     if n > 0 {
         radio.play_tone_sequence(&notes[..n]);
     }

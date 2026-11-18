@@ -41,7 +41,7 @@ pub use crate::apps::AppRegistry;
 pub use crate::services::SysContext;
 
 /// Global event queue for zero-alloc event-driven kernel dispatch
-pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 16>>> = Mutex::new(RefCell::new(Deque::new()));
+pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 8>>> = Mutex::new(RefCell::new(Deque::new()));
 
 /// Global memory buffer allocator for zero-copy IPC
 pub static MBUF_POOL: utils::mbuf::MBufPool = utils::mbuf::MBufPool::new();
@@ -232,17 +232,7 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
 
     bsp::Board::wdt_feed();
 
-    let mut boot_hw = boot::BootHardware {
-        lcd: &mut hw.lcd,
-        backlight: &mut hw.backlight,
-        key_scanner: &mut hw.key_scanner,
-        audio: &mut hw.audio,
-        radio: &mut hw.radio,
-        filesystem: hw.filesystem,
-        #[cfg(feature = "usb")]
-        usb: &mut hw.usb,
-    };
-    boot::boot_orchestration(&mut boot_hw)
+    boot::boot_orchestration(hw)
 }
 
 #[cfg(not(test))]
@@ -270,35 +260,57 @@ fn finalize_boot_startup(hw: &mut SystemHardware) {
 }
 
 #[cfg(not(test))]
+#[unsafe(link_section = ".uninit")]
+static mut KERN_BOARD: core::mem::MaybeUninit<Board> = core::mem::MaybeUninit::uninit();
+
+#[cfg(all(not(test), feature = "filesystem"))]
+#[unsafe(link_section = ".uninit")]
+static mut KERN_FLASH: core::mem::MaybeUninit<drivers::py25q16::Py25q16FlashDriver<'static>> =
+    core::mem::MaybeUninit::uninit();
+
+#[cfg(not(test))]
+#[unsafe(link_section = ".uninit")]
+static mut KERN_FS: core::mem::MaybeUninit<crate::services::SystemStorage<'static>> =
+    core::mem::MaybeUninit::uninit();
+
+#[cfg(not(test))]
+#[unsafe(link_section = ".uninit")]
+static mut KERN_HW: core::mem::MaybeUninit<SystemHardware<'static>> =
+    core::mem::MaybeUninit::uninit();
+
+#[cfg(not(test))]
 #[entry]
 fn main() -> ! {
-    let mut board = init_core_services_and_board();
+    let board = unsafe {
+        let p = core::ptr::addr_of_mut!(KERN_BOARD) as *mut Board;
+        core::ptr::write(p, init_core_services_and_board());
+        &mut *p
+    };
     let boot_start_ms = hal::delay::millis();
 
     #[cfg(feature = "filesystem")]
-    let mut storage_service =
-        drivers::py25q16::Py25q16FlashDriver::new(&mut board.spi_flash, &mut board.flash_cs);
-    #[cfg(feature = "filesystem")]
-    storage_service.init();
-
-    #[cfg(feature = "filesystem")]
-    let mut fs_uninit = core::mem::MaybeUninit::uninit();
-    #[cfg(feature = "filesystem")]
     let filesystem = unsafe {
-        drivers::filesystem::FileSystemDriver::init_in_place(
-            fs_uninit.as_mut_ptr(),
-            &mut storage_service,
+        let flash_p = core::ptr::addr_of_mut!(KERN_FLASH)
+            as *mut drivers::py25q16::Py25q16FlashDriver<'static>;
+        core::ptr::write(
+            flash_p,
+            drivers::py25q16::Py25q16FlashDriver::new(&mut board.spi_flash, &mut board.flash_cs),
         );
-        fs_uninit.assume_init_mut()
+        let flash = &mut *flash_p;
+        flash.init();
+        let fs_p = core::ptr::addr_of_mut!(KERN_FS) as *mut crate::services::SystemStorage<'static>;
+        drivers::filesystem::FileSystemDriver::init_in_place(fs_p, flash);
+        &mut *fs_p
     };
     #[cfg(not(feature = "filesystem"))]
-    let mut no_fs = crate::services::storage::NoStorage;
-    #[cfg(not(feature = "filesystem"))]
-    let filesystem = &mut no_fs;
+    let filesystem = unsafe {
+        let fs_p = core::ptr::addr_of_mut!(KERN_FS) as *mut crate::services::SystemStorage<'static>;
+        core::ptr::write(fs_p, crate::services::storage::NoStorage);
+        &mut *fs_p
+    };
 
-    let mut hw_uninit = core::mem::MaybeUninit::<SystemHardware>::uninit();
     let hw = unsafe {
-        let p = hw_uninit.as_mut_ptr();
+        let p = core::ptr::addr_of_mut!(KERN_HW) as *mut SystemHardware<'static>;
         core::ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<SystemHardware>());
         orchestrator::Orchestrator::init_in_place(
             core::ptr::addr_of_mut!((*p).orchestrator),
@@ -340,7 +352,7 @@ fn main() -> ! {
             core::ptr::addr_of_mut!((*p).wire),
             hardware::SystemSerialPort::new(),
         );
-        hw_uninit.assume_init_mut()
+        &mut *p
     };
 
     #[cfg(feature = "usb")]

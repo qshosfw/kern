@@ -64,7 +64,7 @@ impl AppFault {
         !matches!(self.kind, Exception::None)
     }
 
-    /// Formats a concise multi-line exception summary (e.g. `"myapp: HardFault\n+0x01A4"`)
+    /// Formats a concise exception summary (e.g. `"myapp: HardFault\n0x01A4"`)
     /// into `out` without heap allocation or `core::fmt`.
     #[inline(never)]
     pub fn format_message<'a>(&self, app_name: &str, out: &'a mut [u8; 64]) -> &'a str {
@@ -75,37 +75,26 @@ impl AppFault {
             b": " as &[u8],
             self.kind.label().as_bytes(),
         ] {
-            for &b in s {
-                if pos < out.len() {
-                    out[pos] = b;
-                    pos += 1;
-                }
-            }
+            let n = s.len().min(out.len() - pos);
+            out[pos..pos + n].copy_from_slice(&s[..n]);
+            pos += n;
         }
-        if (self.pc_off != 0 || self.op != 0) && pos + 8 <= out.len() {
+        let val = if matches!(self.kind, Exception::Fault) {
+            self.pc_off
+        } else {
+            self.op as u16
+        };
+        if val != 0 && pos + 8 <= out.len() {
             let hex = utils::format::HEX_CHARS;
             out[pos] = b'\n';
-            pos += 1;
-            if matches!(self.kind, Exception::Fault) {
-                let off = self.pc_off;
-                out[pos] = b'+';
-                out[pos + 1] = b'0';
-                out[pos + 2] = b'x';
-                out[pos + 3] = hex[((off >> 12) & 0xF) as usize];
-                out[pos + 4] = hex[((off >> 8) & 0xF) as usize];
-                out[pos + 5] = hex[((off >> 4) & 0xF) as usize];
-                out[pos + 6] = hex[(off & 0xF) as usize];
-                pos += 7;
-            } else {
-                let op = self.op;
-                out[pos] = b'o';
-                out[pos + 1] = b'p';
-                out[pos + 2] = b' ';
-                out[pos + 3] = b'0';
-                out[pos + 4] = b'x';
-                out[pos + 5] = hex[((op >> 4) & 0xF) as usize];
-                out[pos + 6] = hex[(op & 0xF) as usize];
-                pos += 7;
+            out[pos + 1] = b'0';
+            out[pos + 2] = b'x';
+            pos += 3;
+            let mut shift = 12i8;
+            while shift >= 0 {
+                out[pos] = hex[((val >> shift) & 0xF) as usize];
+                pos += 1;
+                shift -= 4;
             }
         }
 
@@ -133,7 +122,7 @@ mod tests {
         assert!(f.is_active());
         assert_eq!(
             f.format_message("scanner", &mut buf),
-            "scanner: HardFault\n+0x01A4"
+            "scanner: HardFault\n0x01A4"
         );
 
         let c = AppFault {
@@ -147,7 +136,7 @@ mod tests {
         };
         assert_eq!(
             c.format_message("demo", &mut buf),
-            "demo: Cap Denied\nop 0x42"
+            "demo: Cap Denied\n0x0042"
         );
         assert!(!AppFault::NONE.is_active());
     }

@@ -41,8 +41,6 @@ pub use storage::STORAGE_VTABLE;
 pub use ui::{UI_VTABLE, store_modal_text};
 
 pub static mut ACTIVE_CTX: *mut SysContext<'static, 'static> = core::ptr::null_mut();
-pub static mut ACTIVE_CANVAS: *mut Canvas = core::ptr::null_mut();
-pub static mut ACTIVE_SWAP: *mut () = core::ptr::null_mut();
 
 #[inline(never)]
 pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
@@ -62,11 +60,6 @@ pub fn active_canvas_mut() -> &'static mut Canvas {
 #[inline(always)]
 pub unsafe fn active_ctx() -> &'static mut SysContext<'static, 'static> {
     unsafe { &mut *ACTIVE_CTX }
-}
-
-#[inline(always)]
-pub unsafe fn active_canvas() -> &'static mut Canvas {
-    unsafe { &mut *ACTIVE_CANVAS }
 }
 
 #[inline(never)]

@@ -15,6 +15,31 @@ use super::page::TAG_ASSET;
 use super::page::{ActionId, MenuFrame, PageId, TAG_ACTION, TAG_SUBMENU};
 
 #[repr(C)]
+pub(crate) struct SettingsArena {
+    pub(crate) items: [MenuItem; 20],
+    pub(crate) item_icons: [&'static [u8; 8]; 20],
+    pub(crate) item_tags: [u8; 20],
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<SettingsArena>() <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET);
+    assert!(
+        core::mem::align_of::<SettingsArena>()
+            <= core::mem::align_of::<crate::data::arena::AlignedArena>()
+    );
+};
+
+#[inline(always)]
+pub(crate) fn settings_arena_ref() -> &'static SettingsArena {
+    unsafe { &*(crate::data::arena::arena_base_ptr() as *const SettingsArena) }
+}
+
+#[inline(always)]
+pub(crate) fn settings_arena_mut() -> &'static mut SettingsArena {
+    unsafe { &mut *(crate::data::arena::arena_base_ptr() as *mut SettingsArena) }
+}
+
+#[repr(C)]
 pub struct SettingsApp {
     // ── Hot 1- & 2-byte scalars inside first 32B (Thumb-1 imm5 ldrb/ldrh) ──
     pub(crate) current_page: PageId,
@@ -40,9 +65,6 @@ pub struct SettingsApp {
     // ── Cold/large structures ──
     pub(crate) stack: [MenuFrame; 4],
     pub(crate) view: MenuView,
-    pub(crate) item_icons: [&'static [u8; 8]; 20],
-    pub(crate) items: [MenuItem; 20],
-    pub(crate) item_tags: [u8; 20],
 }
 
 impl SettingsApp {
@@ -65,7 +87,7 @@ impl SettingsApp {
     }
 
     fn active_items(&self) -> &[MenuItem] {
-        &self.items[..self.items_len]
+        &settings_arena_ref().items[..self.items_len]
     }
 
     pub const ROOT_ICONS: &'static [&'static [u8; 8]] = &[
@@ -85,7 +107,7 @@ impl SettingsApp {
         let icons = if self.current_page == PageId::Root {
             Some(Self::ROOT_ICONS)
         } else if self.current_page == PageId::ButtonsShortcuts {
-            Some(&self.item_icons[..self.items_len])
+            Some(&settings_arena_ref().item_icons[..self.items_len])
         } else {
             None
         };
@@ -156,7 +178,7 @@ impl SettingsApp {
             return;
         }
 
-        let tag = self.item_tags[sel_idx];
+        let tag = settings_arena_ref().item_tags[sel_idx];
         if tag >= 0x80 {
             let idx = (tag & 0x3F) as usize;
             if self.current_page == PageId::Apps {
@@ -204,7 +226,7 @@ impl SettingsApp {
             }
         }
 
-        let item = &self.items[sel_idx];
+        let item = &settings_arena_ref().items[sel_idx];
         if let MenuItemType::Choice { selected, options } = item.item_type {
             dialog::show_radio_sheet(
                 ctx,
@@ -220,7 +242,7 @@ impl SettingsApp {
         let prev_idx = self.selected_idx;
         let was_editing = self.is_editing;
         let mut model = MenuModelMut {
-            items: &mut self.items[..self.items_len],
+            items: &mut settings_arena_mut().items[..self.items_len],
             selected_idx: self.selected_idx,
             nav_layout: ctx.config.keys.nav_layout,
             is_editing: self.is_editing,
@@ -302,7 +324,7 @@ impl SettingsApp {
             if state == KeyState::Pressed {
                 let sel_idx = self.selected_idx;
                 if sel_idx < self.items_len {
-                    match self.items[sel_idx].item_type {
+                    match settings_arena_mut().items[sel_idx].item_type {
                         MenuItemType::Range { .. } => {
                             self.view.repeater.reset();
                             self.is_editing = true;

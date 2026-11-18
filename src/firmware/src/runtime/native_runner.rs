@@ -5,7 +5,7 @@
 //! shared transient SRAM execution arena (`NATIVE_SLOT`), linked against the
 //! modular capability VTables (`syscall`) and delta relocation engine (`apply_relocs`).
 
-use super::syscall::{ACTIVE_CANVAS, ACTIVE_CTX, NATIVE_API_TABLE, bind_cap_imports};
+use super::syscall::{ACTIVE_CTX, NATIVE_API_TABLE, bind_cap_imports};
 use crate::services::SysContext;
 use gfx::Canvas;
 use kernel::app::{EventResult, ModalResult, StatusBarConfig};
@@ -548,19 +548,13 @@ pub unsafe fn invoke_krx_native(
 }
 
 #[inline(never)]
-unsafe fn invoke_guest(
-    op: u32,
-    ctx: *mut SysContext<'static, 'static>,
-    canvas: *mut Canvas,
-    param: *const (),
-) -> u32 {
+unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *const ()) -> u32 {
     let slot = slot_ref();
     if !slot.is_loaded || slot.entry_point == 0 {
         return 0xFFFF_FFFF;
     }
     unsafe {
         ACTIVE_CTX = ctx;
-        ACTIVE_CANVAS = canvas;
         let res = invoke_krx_native(
             slot.entry_point,
             slot.got_base,
@@ -568,7 +562,6 @@ unsafe fn invoke_guest(
             &raw const NATIVE_API_TABLE,
             param,
         );
-        ACTIVE_CANVAS = core::ptr::null_mut();
         ACTIVE_CTX = core::ptr::null_mut();
         if res == kernel::proc::fault::KRX_FAULT_SENTINEL || super::fault::has_pending_fault() {
             if !ctx.is_null() {
@@ -633,14 +626,7 @@ pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventRes
 
 pub unsafe fn native_on_start(ctx: &mut SysContext<'static, 'static>) {
     let arg = take_pending_start_arg();
-    let res = unsafe {
-        invoke_guest(
-            KRX_OP_START,
-            ctx as *mut _,
-            core::ptr::null_mut(),
-            arg as usize as *const (),
-        )
-    };
+    let res = unsafe { invoke_guest(KRX_OP_START, ctx as *mut _, arg as usize as *const ()) };
     if res == 0xFFFF_FFFF {
         slot_mut().is_loaded = false;
     }
@@ -692,14 +678,7 @@ fn dispatch_krx_event(
         reserved: 0,
         payload,
     };
-    let res = unsafe {
-        invoke_guest(
-            KRX_OP_EVENT,
-            ctx,
-            core::ptr::null_mut(),
-            &krx_ev as *const _ as *const (),
-        )
-    };
+    let res = unsafe { invoke_guest(KRX_OP_EVENT, ctx, &krx_ev as *const _ as *const ()) };
     if res != 0 && res != 0xFFFF_FFFF {
         EventResult::Consumed
     } else {
@@ -873,17 +852,12 @@ pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
 }
 
 pub unsafe fn native_on_render(
-    canvas: &mut Canvas,
+    _canvas: &mut Canvas,
     ctx: &SysContext<'static, 'static>,
     status_bar: &mut StatusBarConfig<'_>,
 ) {
     unsafe {
-        invoke_guest(
-            KRX_OP_RENDER,
-            ctx as *const _ as *mut _,
-            canvas as *mut _,
-            core::ptr::null(),
-        );
+        invoke_guest(KRX_OP_RENDER, ctx as *const _ as *mut _, core::ptr::null());
     }
     apply_slot_status_bar(slot_ref(), status_bar);
 }
@@ -920,12 +894,7 @@ pub unsafe fn native_on_exit(ctx: &mut SysContext<'static, 'static>) {
     let pid = slot.pid;
     if slot.is_loaded && slot.entry_point != 0 {
         unsafe {
-            invoke_guest(
-                KRX_OP_EXIT,
-                ctx as *mut _,
-                core::ptr::null_mut(),
-                core::ptr::null(),
-            );
+            invoke_guest(KRX_OP_EXIT, ctx as *mut _, core::ptr::null());
         }
         super::syscall::service_registry_mut().unbind_provider(pid);
     }

@@ -135,7 +135,7 @@ pub fn handle_unlock_failure(
 
 #[inline(never)]
 fn process_unlock_submission(
-    hw: &mut crate::boot::BootHardware,
+    hw: &mut crate::hardware::SystemHardware,
     text_model: &mut gfx::gui::modules::text_input::TextInputModel,
     passcode_state: &mut PasscodeState,
     master_cfg: &MasterConfig,
@@ -192,7 +192,7 @@ fn process_unlock_submission(
 
 #[inline(never)]
 pub fn run_boot_unlock_prompt(
-    hw: &mut crate::boot::BootHardware,
+    hw: &mut crate::hardware::SystemHardware,
     passcode_state: &mut PasscodeState,
     master_cfg: &MasterConfig,
     adc: &py32_hal::adc::Adc,

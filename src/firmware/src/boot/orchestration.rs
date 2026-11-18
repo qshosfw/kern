@@ -1,27 +1,10 @@
 //! Hardware Initialization, Reset Cause Introspection & Boot Orchestration.
 
 use crate::config::MasterConfig;
-use crate::services::SystemStorage;
+use crate::hardware::SystemHardware;
 use crate::services::power::PowerServiceConfigExt;
 use crate::{CALIBRATION, PASSCODE_STATE, POWER_SERVICE};
-use drivers::audio::AudioAmplifier;
-use drivers::backlight::BacklightController;
-use drivers::bk4829::Bk4829;
-use drivers::keyboard::KeypadScanner;
-use drivers::st7565::St7565;
 use py32_hal::adc::Adc;
-
-/// Encapsulated peripheral and subsystem hardware context for the boot pipeline.
-pub struct BootHardware<'a, 'b> {
-    pub lcd: &'a mut St7565<'b>,
-    pub backlight: &'a mut BacklightController,
-    pub key_scanner: &'a mut KeypadScanner,
-    pub audio: &'a mut AudioAmplifier,
-    pub radio: &'a mut Bk4829<'b, drivers::bk4829::Disabled>,
-    pub filesystem: &'a mut SystemStorage<'b>,
-    #[cfg(feature = "usb")]
-    pub usb: &'a mut drivers::usb::UsbDriver,
-}
 
 #[cfg(not(all(target_arch = "arm", not(test))))]
 static TEST_BACKUP_TAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
@@ -117,7 +100,7 @@ pub fn clear_crash_strikes() {
 }
 
 fn init_system_services(
-    hw: &mut BootHardware,
+    hw: &mut SystemHardware,
     master_cfg: &MasterConfig,
     passcode_state: &crate::security::PasscodeState,
     adc: &Adc,
@@ -155,14 +138,14 @@ fn init_system_services(
     crate::apps::init_all_apps();
 
     #[cfg(feature = "usb")]
-    crate::hardware::SystemHardware::sync_usb_telemetry(hw.usb, master_cfg);
+    crate::hardware::SystemHardware::sync_usb_telemetry(&mut hw.usb, master_cfg);
     #[cfg(feature = "filesystem")]
     crate::apps::launcher::catalog::get_catalog().scan(hw.filesystem);
 }
 
 #[inline(never)]
 pub fn run_boot_splash(
-    hw: &mut BootHardware,
+    hw: &mut SystemHardware,
     master_cfg: &MasterConfig,
     passcode_state: &crate::security::PasscodeState,
     adc: &Adc,
@@ -178,12 +161,18 @@ pub fn run_boot_splash(
         _ => 1000,
     };
     let show_splash = target_splash_ms > 0 && disp_cfg.boot_splash_mode != 0;
-    let jingle = crate::services::melody::load_jingle_melody(
+    let jingle_buf: &mut [crate::services::melody::ToneNote;
+             crate::services::melody::MAX_MELODY_NOTES] = unsafe {
+        &mut *(crate::data::arena::scratch_tail_bytes_mut()[1760..].as_mut_ptr()
+            as *mut [crate::services::melody::ToneNote; crate::services::melody::MAX_MELODY_NOTES])
+    };
+    let jingle_len = crate::services::melody::load_jingle_notes(
         hw.filesystem,
         audio_cfg.boot_jingle,
         audio_cfg.jingle_path_str(),
+        jingle_buf,
     );
-    let jingle_notes = jingle.as_slice();
+    let jingle_notes = &jingle_buf[..jingle_len];
     let play_jingle = !jingle_notes.is_empty();
 
     init_system_services(hw, master_cfg, passcode_state, adc);
@@ -220,7 +209,7 @@ pub fn run_boot_splash(
             let arr = &*(slice.as_ptr() as *const [u8; 1024]);
             render_splash_frame(
                 canvas,
-                hw.lcd,
+                &mut hw.lcd,
                 arr,
                 disp_cfg.boot_splash_anim,
                 first_frame as u8,
@@ -273,7 +262,7 @@ pub fn run_boot_splash(
                 cur_frame += 1;
                 render_splash_frame(
                     canvas,
-                    hw.lcd,
+                    &mut hw.lcd,
                     base_vram,
                     disp_cfg.boot_splash_anim,
                     cur_frame as u8,
@@ -302,12 +291,12 @@ pub fn run_boot_splash(
 
 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
-fn launch_crash_module(hw: &mut BootHardware, mode: usize) -> bool {
+fn launch_crash_module(hw: &mut SystemHardware, mode: usize) -> bool {
     hw.lcd.turn_on();
     hw.backlight.wake();
     bsp::set_status_led(bsp::StatusLed::Orange);
     let launched = crate::runtime::loader::try_launch_boot_module(
-        hw.lcd,
+        &mut hw.lcd,
         hw.filesystem,
         "/apps/panic.mod",
         mode,
@@ -319,7 +308,7 @@ fn launch_crash_module(hw: &mut BootHardware, mode: usize) -> bool {
 
 #[inline(never)]
 fn boot_stage_security_check(
-    hw: &mut BootHardware,
+    hw: &mut SystemHardware,
     master_cfg: &mut MasterConfig,
     passcode_state: &mut crate::security::PasscodeState,
     adc: &Adc,
@@ -328,10 +317,10 @@ fn boot_stage_security_check(
     #[cfg(feature = "filesystem")]
     super::flush_crash_log_if_pending(hw.filesystem);
 
-    let crash_slot = crate::panic::BOOT_RECORD.get().latest_valid_slot().copied();
     let backup_strikes = read_backup_tag().strikes;
-    let crash_count = crash_slot
-        .as_ref()
+    let crash_count = crate::panic::BOOT_RECORD
+        .get()
+        .latest_valid_slot()
         .map_or(0, |s| s.crash_count)
         .max(backup_strikes);
 
@@ -384,7 +373,7 @@ fn boot_stage_security_check(
 }
 
 #[inline(never)]
-pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
+pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     let master_cfg = crate::master_config();
     let passcode_state = unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) };
     *passcode_state = crate::security::PasscodeState::new();
@@ -406,10 +395,14 @@ pub fn boot_orchestration(hw: &mut BootHardware) -> Adc {
 
     let _ = hw.radio.init();
     hw.audio.init();
-    crate::hardware::apply_audio_hardware(&master_cfg.audio, hw.audio, hw.radio);
+    crate::hardware::apply_audio_hardware(&master_cfg.audio, &mut hw.audio, &mut hw.radio);
 
     if !passcode_state.is_locked {
-        crate::hardware::apply_display_hardware(&master_cfg.display, hw.lcd, hw.backlight);
+        crate::hardware::apply_display_hardware(
+            &master_cfg.display,
+            &mut hw.lcd,
+            &mut hw.backlight,
+        );
     }
 
     // ── STAGE 3: Instant Boot Splash & Concurrent System Bring-up ───

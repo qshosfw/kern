@@ -1,6 +1,6 @@
 //! Navigation Stack & Menu State Synchronization for OS Settings
 
-use super::app::SettingsApp;
+use super::app::{SettingsApp, settings_arena_mut, settings_arena_ref};
 use super::options::{apply_page_changes, page_defs, page_title, populate_defs};
 use super::page::{MenuFrame, PageId, SettingField, TAG_BATTERY_TYPE};
 use crate::SysContext;
@@ -9,16 +9,17 @@ use gfx::gui::modules::menu::MenuItemType;
 impl SettingsApp {
     #[inline(never)]
     pub fn populate_current_menu(&mut self, ctx: &mut SysContext) {
+        let arena = settings_arena_mut();
         #[cfg(feature = "passcode")]
         if self.current_page == PageId::Security {
-            self.items_len = super::security::populate_security(&mut self.items, ctx);
+            self.items_len = super::security::populate_security(&mut arena.items, ctx);
             return;
         }
 
         if self.current_page == PageId::ButtonsShortcuts {
             self.items_len = super::buttons::populate_shortcuts(
-                &mut self.items,
-                &mut self.item_icons,
+                &mut arena.items,
+                &mut arena.item_icons,
                 self.shortcut_ctx,
                 ctx,
             );
@@ -26,7 +27,7 @@ impl SettingsApp {
         }
         if self.current_page == PageId::AppPrefs {
             self.items_len =
-                super::app_prefs::populate_app_prefs(&mut self.items, self.selected_pkg_idx, ctx);
+                super::app_prefs::populate_app_prefs(&mut arena.items, self.selected_pkg_idx, ctx);
             return;
         }
 
@@ -47,14 +48,14 @@ impl SettingsApp {
             cat.scan(ctx.storage);
             let mut app_idx = 0usize;
             for e in &cat.entries {
-                if self.items_len >= self.items.len() {
+                if self.items_len >= arena.items.len() {
                     break;
                 }
                 if crate::apps::launcher::catalog::PackageCatalog::matches_kind(e, false) {
                     if e.has_config {
-                        self.items[self.items_len].title = e.title.as_str();
-                        self.items[self.items_len].item_type = MenuItemType::Submenu;
-                        self.item_tags[self.items_len] = 0x80 | (app_idx as u8);
+                        arena.items[self.items_len].title = e.title.as_str();
+                        arena.items[self.items_len].item_type = MenuItemType::Submenu;
+                        arena.item_tags[self.items_len] = 0x80 | (app_idx as u8);
                         self.items_len += 1;
                     }
                     app_idx += 1;
@@ -70,10 +71,11 @@ impl SettingsApp {
         base_idx: usize,
         ctx: &mut SysContext,
     ) {
+        let arena = settings_arena_mut();
         let s = self.items_len;
-        let n = populate_defs(&mut self.items[s..], defs, ctx);
+        let n = populate_defs(&mut arena.items[s..], defs, ctx);
         for i in 0..n {
-            self.item_tags[s + i] = (base_idx + i) as u8;
+            arena.item_tags[s + i] = (base_idx + i) as u8;
         }
         self.items_len = s + n;
     }
@@ -89,14 +91,15 @@ impl SettingsApp {
         item_type: MenuItemType,
     ) {
         const _: () = assert!(crate::apps::launcher::catalog::MAX_CATALOG_PACKAGES <= 64);
+        let arena = settings_arena_mut();
         for (cat_idx, entry) in cat.entries.as_slice().iter().enumerate() {
-            if self.items_len >= self.items.len() {
+            if self.items_len >= arena.items.len() {
                 break;
             }
             if entry.is_system_entry(sys_caps, flag) {
-                self.items[self.items_len].title = entry.title.as_str();
-                self.items[self.items_len].item_type = item_type;
-                self.item_tags[self.items_len] = tag_base | (cat_idx as u8);
+                arena.items[self.items_len].title = entry.title.as_str();
+                arena.items[self.items_len].item_type = item_type;
+                arena.item_tags[self.items_len] = tag_base | (cat_idx as u8);
                 self.items_len += 1;
             }
         }
@@ -197,11 +200,12 @@ impl SettingsApp {
 
     #[inline(never)]
     pub fn update_config_from_menu(&mut self, ctx: &mut SysContext) {
+        let arena = settings_arena_ref();
         #[cfg(feature = "passcode")]
         if self.current_page == PageId::Security {
             let idx = self.selected_idx;
             if idx < self.items_len {
-                if let MenuItemType::Toggle(b) = self.items[idx].item_type {
+                if let MenuItemType::Toggle(b) = arena.items[idx].item_type {
                     super::security::update_security_toggle(ctx, idx, b);
                 }
             }
@@ -211,7 +215,7 @@ impl SettingsApp {
         let idx = self.selected_idx;
         if self.current_page == PageId::AppPrefs {
             if idx < self.items_len {
-                let val = match self.items[idx].item_type {
+                let val = match arena.items[idx].item_type {
                     MenuItemType::Range { val, .. } => Some(val as i32),
                     MenuItemType::Toggle(b) => Some(b as i32),
                     _ => None,
@@ -224,10 +228,10 @@ impl SettingsApp {
         }
         let defs = page_defs(self.current_page);
         if idx < self.items_len {
-            let tag = self.item_tags[idx];
+            let tag = arena.item_tags[idx];
             if tag < 0x80 {
                 if let Some(def) = defs.get(tag as usize) {
-                    let val = match self.items[idx].item_type {
+                    let val = match arena.items[idx].item_type {
                         MenuItemType::Range { val, .. } => Some(val as i32),
                         MenuItemType::Toggle(b) => Some(b as i32),
                         _ => None,
@@ -262,7 +266,7 @@ impl SettingsApp {
                 super::security::update_security_option(ctx, sel_idx, sel);
                 return;
             }
-            let tag = self.item_tags[sel_idx];
+            let tag = settings_arena_ref().item_tags[sel_idx];
             if tag >= 0x80 {
                 return;
             }

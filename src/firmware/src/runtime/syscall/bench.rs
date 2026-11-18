@@ -4,7 +4,7 @@
 //! across all 13 capability VTables, validating return values, state changes,
 //! and hardware peripheral behavior on Cortex-M0+ silicon and QEMU emulator.
 
-use super::{ACTIVE_CANVAS, ACTIVE_CTX, NATIVE_API_TABLE};
+use super::{ACTIVE_CTX, NATIVE_API_TABLE};
 use crate::services::SysContext;
 use kernel::ipc::{KrxIpcMessage, Topic, ipc_msg_type};
 use kernel::proc::abi::*;
@@ -63,9 +63,6 @@ pub static mut LAST_BENCH_SUMMARY: BenchSummary = BenchSummary::empty();
 pub fn run_exhaustive_abi_bench(ctx: &mut SysContext) -> BenchSummary {
     unsafe {
         ACTIVE_CTX = ctx as *mut _ as *mut _;
-        if let Some(ref mut d) = ctx.display {
-            ACTIVE_CANVAS = d.canvas as *mut _;
-        }
     }
 
     let summary = run_exhaustive_abi_bench_from_api(&raw const NATIVE_API_TABLE);

@@ -80,27 +80,25 @@ pub fn load_roger_notes(
     fill_notes(ROGER_CLASSIC_FALLBACK, out)
 }
 
-/// Load jingle melody from storage path, or fallback to selected preset
+/// Load jingle melody notes into `out` from storage path, or fallback to selected preset.
 #[inline(never)]
-pub fn load_jingle_melody(
+pub fn load_jingle_notes(
     storage: &mut SystemStorage,
     boot_jingle_mode: u8,
     path: &str,
-) -> MelodyBuffer {
-    let mut buf = MelodyBuffer::new();
-    if boot_jingle_mode != 0 && buf.resize(MAX_MELODY_NOTES, ToneNote::new(0, 0)).is_ok() {
-        let tmp = unsafe { &mut *(buf.as_mut_ptr() as *mut [ToneNote; MAX_MELODY_NOTES]) };
-        let n = read_kt_file(storage, path, false, tmp);
-        if n > 0 {
-            buf.truncate(n);
-        } else {
-            buf.clear();
-            let _ = buf.extend_from_slice(MelodyEngine::boot_jingle_notes(
-                BootJingleType::from_u8(boot_jingle_mode),
-            ));
-        }
+    out: &mut [ToneNote; MAX_MELODY_NOTES],
+) -> usize {
+    if boot_jingle_mode == 0 {
+        return 0;
     }
-    buf
+    let n = read_kt_file(storage, path, false, out);
+    if n > 0 {
+        return n;
+    }
+    fill_notes(
+        MelodyEngine::boot_jingle_notes(BootJingleType::from_u8(boot_jingle_mode)),
+        out,
+    )
 }
 
 #[cfg(all(

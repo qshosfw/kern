@@ -33,13 +33,14 @@ impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> 
         Self { scl, sda }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     fn delay(&self) {
         // ~1 us half-bit delay scaled to active SYSCLK without hardware division.
         let cycles = (crate::rcc::sysclk_hz() >> 20).max(4);
         cortex_m::asm::delay(cycles);
     }
 
+    #[inline(never)]
     fn release_scl_and_wait(&mut self) -> Result<(), BitbangI2cError> {
         self.scl.set_high().map_err(|_| BitbangI2cError::Timeout)?;
         let mut spins = 1_000u32;
