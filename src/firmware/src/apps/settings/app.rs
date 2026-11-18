@@ -129,7 +129,14 @@ impl SettingsApp {
                 self.active_action_module = true;
                 if let Err(err) = crate::runtime::loader::invoke_action_krx_package(ctx, path) {
                     self.active_action_module = false;
+                    self.populate_current_menu(ctx);
                     crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
+                } else if unsafe {
+                    !(*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                        .is_active()
+                } {
+                    self.active_action_module = false;
+                    self.populate_current_menu(ctx);
                 }
             }
             return;
@@ -419,6 +426,15 @@ impl SettingsApp {
     }
 
     #[inline(always)]
+    fn render_menu_body(&self, canvas: &mut Canvas) {
+        if self.active_action_module {
+            return;
+        }
+        let model = self.build_menu_model(self.is_editing);
+        self.view.render(canvas, &model);
+    }
+
+    #[inline(always)]
     fn begin_start(&mut self) {
         if self.resume_nav {
             self.resume_nav = false;
@@ -460,6 +476,9 @@ impl App<SysContext<'_, '_>> for SettingsApp {
 
     #[inline(never)]
     fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
+        if self.active_action_module {
+            return EventResult::Ignored;
+        }
         let mut polled_info = false;
         if let Event::Tick = *event {
             let now_ms = py32_hal::delay::millis();
@@ -518,7 +537,9 @@ impl App<SysContext<'_, '_>> for SettingsApp {
         #[cfg(all(feature = "filesystem", feature = "krx_native"))]
         if self.active_action_module {
             self.active_action_module = false;
-            return crate::runtime::loader::finish_action_krx_package(ctx, result);
+            let res = crate::runtime::loader::finish_action_krx_package(ctx, result);
+            self.populate_current_menu(ctx);
+            return res;
         }
         match result {
             ModalResult::SheetSelected { tag, index } => {
@@ -535,6 +556,9 @@ impl App<SysContext<'_, '_>> for SettingsApp {
 
     #[inline(never)]
     fn render(&self, canvas: &mut Canvas, _ctx: &SysContext) {
+        if self.active_action_module {
+            return;
+        }
         #[cfg(feature = "settings_info")]
         let is_info = self.current_page == PageId::SystemInfo;
         #[cfg(not(feature = "settings_info"))]
@@ -543,8 +567,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
             #[cfg(feature = "settings_info")]
             super::system::render_system_info_page(canvas, _ctx, self.selected_idx);
         } else {
-            let model = self.build_menu_model(self.is_editing);
-            self.view.render(canvas, &model);
+            self.render_menu_body(canvas);
         }
         if self.slide_offset_x != 0 {
             canvas.scroll_horizontal(self.slide_offset_x as i8, 0);
@@ -767,5 +790,28 @@ mod tests {
             super::super::apps::package_icons("DFU Update", 49).0,
             gfx::icons::ICON_UPLOAD
         );
+    }
+
+    #[test]
+    fn active_action_module_skips_clobbered_settings_arena_on_render() {
+        let mut raw = core::mem::MaybeUninit::<SettingsApp>::uninit();
+        unsafe { SettingsApp::init_at(raw.as_mut_ptr()) };
+        let app = unsafe { raw.assume_init_mut() };
+
+        app.current_page = PageId::System;
+        app.items_len = 8;
+        app.selected_idx = 5;
+        app.active_action_module = true;
+
+        // Simulate an in-place KRX action module (e.g. /apps/dfu.mod) overwriting TRANSIENT_ARENA.
+        crate::data::arena::transient_arena_bytes_mut().fill(0xFF);
+
+        let mut canvas = Canvas::new();
+        app.render_menu_body(&mut canvas);
+
+        assert_eq!(app.current_page, PageId::System);
+        assert_eq!(app.selected_idx, 5);
+        assert!(app.active_action_module);
+        assert!(canvas.buffer.iter().flatten().all(|&b| b == 0));
     }
 }

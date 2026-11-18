@@ -13,8 +13,14 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param);
 
 __attribute__((visibility("default"), naked, section(".text.entry")))
 void _start(void) {
-    __asm__ volatile("push {lr}\n bl krx_main\n pop {pc}\n");
+    __asm__ volatile(
+        ".hidden dfu_root_base\n"
+        "dfu_root_base:\n"
+        "push {lr}\n bl krx_main\n pop {pc}\n"
+    );
 }
+
+__attribute__((visibility("hidden"))) extern const u8 dfu_root_base[];
 
 __asm__(
     ".section .rodata.dfu_hook,\"a\",%progbits\n"
@@ -122,6 +128,17 @@ static void quiesce_hw_for_dfu(u32 apb2_keep) {
     scs[0x280 / 4] = 0xFFFFFFFFu;
 }
 
+static void dfu_move_bytes(u8* dst, const u8* src, u32 len) {
+    if ((u32)dst > (u32)src) {
+        while (len > 0u) {
+            len--;
+            dst[len] = src[len];
+        }
+    } else {
+        dfu_copy_bytes(dst, src, len);
+    }
+}
+
 __attribute__((noreturn, noinline))
 static void handoff_to_factory_bootloader(u32 vid_pid) {
     u32 tramp[3] = {0, 0, 0};
@@ -130,9 +147,9 @@ static void handoff_to_factory_bootloader(u32 vid_pid) {
     u8 is_stock_k1 = (vid_pid == 0x36B70001u) ? 1u : 0u;
 
     if (use_hook && is_stock_k1 && g_state.has_stage) {
-        dfu_copy_bytes((u8*)DFU_SRAM_BANNERS, g_state.sram_banners, sizeof(g_state.sram_banners));
-        dfu_copy_bytes((u8*)DFU_SRAM_ARROW, g_state.sram_arrow, sizeof(g_state.sram_arrow));
-        dfu_copy_bytes((u8*)DFU_SRAM_VIDPID, g_state.sram_vidpid, sizeof(g_state.sram_vidpid));
+        dfu_move_bytes((u8*)DFU_SRAM_VIDPID, g_state.sram_vidpid, sizeof(g_state.sram_vidpid));
+        dfu_move_bytes((u8*)DFU_SRAM_ARROW, g_state.sram_arrow, sizeof(g_state.sram_arrow));
+        dfu_move_bytes((u8*)DFU_SRAM_BANNERS, g_state.sram_banners, sizeof(g_state.sram_banners));
     }
 
     quiesce_hw_for_dfu(use_hook ? (1u << 12) : 0u);
@@ -195,8 +212,10 @@ static void enter_dfu_with_hooks(const KrxApiTable* api) {
         api->service->leaf_call(1, (u32)&g_state);
         api->service->leaf_call(3, (u32)&g_state);
     }
+    u32 base_addr = ((u32)dfu_root_base) & ~7u;
+    u32 evac_sp = (base_addr >= 0x20000400u) ? base_addr : 0x20002FC0u;
     register u32 r0_vp __asm__("r0") = g_state.vid_pid;
-    register u32 r1_sp __asm__("r1") = 0x20002FC0u;
+    register u32 r1_sp __asm__("r1") = evac_sp;
     register u32 r2_fn __asm__("r2") = (u32)handoff_to_factory_bootloader;
     __asm__ volatile(
         "cpsid i\n"
