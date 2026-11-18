@@ -360,15 +360,19 @@ pub unsafe extern "C" fn api_mem_query(
 }
 
 pub unsafe extern "C" fn api_sys_post_event(event_id: u32) -> u8 {
-    let Some(ctx) = super::active_ctx_opt() else {
-        return 1;
-    };
-    let ok = ctx.post_event(kernel::ipc::SysEvent {
+    let ev = kernel::ipc::SysEvent {
         target: (event_id >> 16) as u8,
         command: (event_id & 0xFF) as u8,
         arg: ((event_id >> 8) & 0xFF) as u16,
-    });
-    u8::from(!ok)
+    };
+    #[cfg(not(test))]
+    {
+        u8::from(crate::kern_hw().ipc_queue.try_push(ev).is_err())
+    }
+    #[cfg(test)]
+    {
+        super::active_ctx_opt().map_or(1, |ctx| u8::from(!ctx.post_event(ev)))
+    }
 }
 
 pub unsafe extern "C" fn api_sys_publish_event(topic: u16, data: *const u8, len: u8) -> u8 {
@@ -382,7 +386,17 @@ pub unsafe extern "C" fn api_sys_publish_event(topic: u16, data: *const u8, len:
 }
 
 pub unsafe extern "C" fn api_sys_rand32() -> u32 {
-    super::active_ctx_opt().map_or(0, |ctx| ctx.rand32())
+    #[cfg(not(test))]
+    let noise = crate::kern_hw()
+        .radio
+        .read_reg(drivers::bk4829::registers::REG_NOISE_VAL) as u32;
+    #[cfg(test)]
+    let noise = super::active_ctx_opt().map_or(0, |ctx| {
+        ctx.radio
+            .read_reg(drivers::bk4829::registers::REG_NOISE_VAL) as u32
+    });
+    let seed = py32_hal::delay::millis() ^ (noise << 16);
+    crypto::crc::CrcEngine::crc32(&seed.to_le_bytes())
 }
 
 pub unsafe extern "C" fn api_math_crc32(data: *const u8, len: u16) -> u32 {
@@ -438,14 +452,15 @@ pub unsafe extern "C" fn api_sys_info(out_info: *mut KrxSysInfo) -> u8 {
     if bsp::uid::is_mcu_read_protected() {
         out.flags |= KRX_SYS_INFO_FLAG_RDP_PROTECTED;
     }
-    let model = if let Some(ctx) = super::active_ctx_opt() {
-        if ctx.calibration.is_valid() {
-            out.flags |= KRX_SYS_INFO_FLAG_CALIB_VALID;
-        }
+    if unsafe { (*core::ptr::addr_of!(crate::CALIBRATION)).is_valid() } {
+        out.flags |= KRX_SYS_INFO_FLAG_CALIB_VALID;
+    }
+    #[cfg(not(test))]
+    let model = crate::master_config_ref().system.model_str().as_bytes();
+    #[cfg(test)]
+    let model = super::active_ctx_opt().map_or(b"UV-K1".as_slice(), |ctx| {
         ctx.config.system.model_str().as_bytes()
-    } else {
-        b"UV-K1"
-    };
+    });
     let serial64 = bsp::uid::get_hardware_serial64();
     out.mac = bsp::uid::mac_from_serial64(serial64);
     out.serial = bsp::uid::encode_crockford64(serial64);

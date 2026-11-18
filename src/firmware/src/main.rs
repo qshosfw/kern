@@ -101,6 +101,18 @@ pub fn audio_capture_mut() -> &'static mut drivers::audio::AudioCaptureDriver {
     unsafe { &mut *core::ptr::addr_of_mut!(AUDIO_CAPTURE) }
 }
 
+#[cfg(not(test))]
+#[inline(always)]
+pub fn kern_hw() -> &'static mut SystemHardware<'static> {
+    unsafe { (*core::ptr::addr_of_mut!(KERN_HW)).assume_init_mut() }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+pub fn kern_fs() -> &'static mut crate::services::SystemStorage<'static> {
+    unsafe { (*core::ptr::addr_of_mut!(KERN_FS)).assume_init_mut() }
+}
+
 /// SysTick interrupt handler for system uptime tracking
 #[exception]
 fn SysTick() {

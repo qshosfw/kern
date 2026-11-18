@@ -5,7 +5,9 @@
 //! shared transient SRAM execution arena (`NATIVE_SLOT`), linked against the
 //! modular capability VTables (`syscall`) and delta relocation engine (`apply_relocs`).
 
-use super::syscall::{ACTIVE_CTX, NATIVE_API_TABLE, bind_cap_imports};
+#[cfg(any(test, feature = "settings_debug"))]
+use super::syscall::ACTIVE_CTX;
+use super::syscall::{NATIVE_API_TABLE, bind_cap_imports};
 use crate::services::SysContext;
 use gfx::Canvas;
 use kernel::app::{EventResult, ModalResult, StatusBarConfig};
@@ -62,10 +64,6 @@ pub fn init_native_slot() {
 #[unsafe(link_section = ".uninit")]
 static mut NATIVE_SLOT: core::mem::MaybeUninit<NativeExecSlot> = core::mem::MaybeUninit::uninit();
 
-#[cfg(feature = "filesystem")]
-pub(crate) static mut BOOT_STORAGE: *mut crate::services::SystemStorage<'static> =
-    core::ptr::null_mut();
-
 #[inline(always)]
 pub fn arena_base_ptr() -> *mut u8 {
     crate::data::arena::arena_base_ptr()
@@ -111,17 +109,19 @@ fn flush_instruction_pipeline() {
 #[inline(never)]
 fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bool {
     let ok = unsafe {
-        let storage_ptr = if !ACTIVE_CTX.is_null() {
-            (*ACTIVE_CTX).storage as *mut crate::services::SystemStorage
-        } else {
-            BOOT_STORAGE as *mut crate::services::SystemStorage
-        };
-        if !storage_ptr.is_null() {
-            let path = slot_ref().pkg_path.as_str();
-            let dst = core::slice::from_raw_parts_mut(dst_vma as *mut u8, len);
-            read_file_region(&mut *storage_ptr, path, flash_offset, dst)
-        } else {
-            false
+        let path = slot_ref().pkg_path.as_str();
+        let dst = core::slice::from_raw_parts_mut(dst_vma as *mut u8, len);
+        #[cfg(not(test))]
+        {
+            read_file_region(crate::kern_fs(), path, flash_offset, dst)
+        }
+        #[cfg(test)]
+        {
+            if !ACTIVE_CTX.is_null() {
+                read_file_region((*ACTIVE_CTX).storage, path, flash_offset, dst)
+            } else {
+                false
+            }
         }
     };
     if ok {
@@ -554,7 +554,10 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *
         return 0xFFFF_FFFF;
     }
     unsafe {
-        ACTIVE_CTX = ctx;
+        #[cfg(any(test, feature = "settings_debug"))]
+        {
+            ACTIVE_CTX = ctx;
+        }
         let res = invoke_krx_native(
             slot.entry_point,
             slot.got_base,
@@ -562,7 +565,10 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *
             &raw const NATIVE_API_TABLE,
             param,
         );
-        ACTIVE_CTX = core::ptr::null_mut();
+        #[cfg(any(test, feature = "settings_debug"))]
+        {
+            ACTIVE_CTX = core::ptr::null_mut();
+        }
         if res == kernel::proc::fault::KRX_FAULT_SENTINEL || super::fault::has_pending_fault() {
             if !ctx.is_null() {
                 super::fault::finish_fault_cleanup(&mut *ctx);

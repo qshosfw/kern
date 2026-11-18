@@ -1,6 +1,6 @@
 //! Display Subsystem System Call Handlers (`DisplayApi`, `interface_id = 0x0001`).
 
-use super::{active_canvas_mut, active_ctx_opt, parse_str};
+use super::{active_canvas_mut, parse_str};
 use crate::services::primitives::{color_from_u8, font_from_u8};
 use kernel::proc::abi::DisplayApi;
 
@@ -97,13 +97,17 @@ pub unsafe extern "C" fn api_commit_frame() {
     unsafe { api_commit_rows(0) }
 }
 
-pub static mut BOOT_LCD: *mut drivers::st7565::St7565<'static> = core::ptr::null_mut();
-
 pub unsafe extern "C" fn api_commit_rows(row_mask: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.commit_rows(row_mask);
-    } else if unsafe { !BOOT_LCD.is_null() } {
-        unsafe { (*BOOT_LCD).blit(active_canvas_mut()) };
+    let canvas = active_canvas_mut();
+    canvas.dirty |= row_mask;
+    #[cfg(not(test))]
+    crate::kern_hw().lcd.blit(canvas);
+    #[cfg(test)]
+    if let Some(ctx) = super::active_ctx_opt() {
+        if let Some(ref mut d) = ctx.display {
+            d.canvas.dirty |= row_mask;
+            d.lcd.blit(d.canvas);
+        }
     }
 }
 
@@ -127,14 +131,24 @@ pub unsafe extern "C" fn api_draw_str_max(
 }
 
 pub unsafe extern "C" fn api_set_inverted(inverted: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_inverted(inverted != 0);
+    #[cfg(not(test))]
+    crate::kern_hw().lcd.set_inverted(inverted != 0);
+    #[cfg(test)]
+    if let Some(ctx) = super::active_ctx_opt() {
+        if let Some(ref mut d) = ctx.display {
+            kernel::service::DisplayService::set_inverted(*d, inverted != 0);
+        }
     }
 }
 
 pub unsafe extern "C" fn api_set_contrast(contrast: u8) {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.set_contrast(contrast);
+    #[cfg(not(test))]
+    crate::kern_hw().lcd.set_contrast(contrast);
+    #[cfg(test)]
+    if let Some(ctx) = super::active_ctx_opt() {
+        if let Some(ref mut d) = ctx.display {
+            kernel::service::DisplayService::set_contrast(*d, contrast);
+        }
     }
 }
 

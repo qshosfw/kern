@@ -1,19 +1,21 @@
 //! Storage & Filesystem Subsystem System Call Handlers (`StorageApi`, `interface_id = 0x0004`).
 
-use super::{active_ctx_opt, parse_str, parse_user_path};
+#[cfg(test)]
+use super::active_ctx_opt;
+use super::{parse_str, parse_user_path};
 use kernel::proc::abi::{KrxDirEntry, StorageApi};
 
-#[inline(never)]
+#[inline(always)]
 fn active_storage_mut() -> Option<&'static mut crate::services::SystemStorage<'static>> {
-    if let Some(ctx) = active_ctx_opt() {
-        Some(unsafe { &mut *(ctx.storage as *mut crate::services::SystemStorage<'_> as *mut _) })
-    } else {
-        let ptr = unsafe { super::super::native_runner::BOOT_STORAGE };
-        if ptr.is_null() {
-            None
-        } else {
-            Some(unsafe { &mut *(ptr as *mut crate::services::SystemStorage<'static>) })
-        }
+    #[cfg(not(test))]
+    {
+        Some(crate::kern_fs())
+    }
+    #[cfg(test)]
+    {
+        active_ctx_opt().map(|ctx| unsafe {
+            &mut *(ctx.storage as *mut crate::services::SystemStorage<'_> as *mut _)
+        })
     }
 }
 
@@ -76,16 +78,19 @@ fn proc_remove(path: &str) -> Option<u8> {
 
 #[inline(never)]
 fn storage_config_op(buf: *const u8, len: u16, is_save: bool) -> u16 {
-    if let (Some(src), Some(ctx)) = (
+    if let (Some(src), Some(st)) = (
         unsafe { super::ptr_slice(buf, len as usize) },
-        active_ctx_opt(),
+        active_storage_mut(),
     ) {
         let app_name = super::super::native_runner::active_native_app_name();
         if is_save {
-            return u16::from(ctx.save_config(app_name, src).is_err());
+            return u16::from(
+                crate::services::primitives::save_app_config(st, app_name, src).is_err(),
+            );
         } else {
             let dst = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, src.len()) };
-            return ctx.load_config(app_name, dst).unwrap_or(0) as u16;
+            return crate::services::primitives::load_app_config(st, app_name, dst).unwrap_or(0)
+                as u16;
         }
     }
     u16::from(is_save)
@@ -100,19 +105,24 @@ pub unsafe extern "C" fn api_storage_save_config(buf: *const u8, len: u16) -> u8
 }
 
 pub unsafe extern "C" fn api_storage_read_asset(
-    asset_id: u16,
+    _asset_id: u16,
     offset: u32,
     buf: *mut u8,
     len: u16,
 ) -> u16 {
-    if let (Some(slice), Some(ctx)) = (
+    if let (Some(slice), Some(st)) = (
         unsafe { super::ptr_slice_mut(buf, len as usize) },
-        active_ctx_opt(),
+        active_storage_mut(),
     ) {
-        ctx.read_asset(asset_id, offset, slice).unwrap_or(0) as u16
-    } else {
-        0
+        #[cfg(feature = "krx_native")]
+        {
+            return crate::runtime::native_runner::read_active_pkg_asset(st, offset, slice)
+                .unwrap_or(0) as u16;
+        }
+        #[cfg(not(feature = "krx_native"))]
+        let _ = (st, offset, slice);
     }
+    0
 }
 
 pub unsafe extern "C" fn api_storage_read_file(
@@ -211,8 +221,8 @@ pub unsafe extern "C" fn api_storage_list_dir(
     if !out_entries.is_null() && max_entries > 0 {
         let dir_str = unsafe { super::str_or_default(dir_path, dir_len as usize, "/") };
         let dst = unsafe { core::slice::from_raw_parts_mut(out_entries, max_entries as usize) };
-        if let Some(ctx) = active_ctx_opt() {
-            return ctx.list_dir(dir_str, dst).unwrap_or(0) as u8;
+        if let Some(st) = active_storage_mut() {
+            return crate::services::primitives::list_krx_dir(st, dir_str, dst).unwrap_or(0) as u8;
         }
     }
     0
@@ -281,14 +291,13 @@ pub unsafe extern "C" fn api_storage_format(mode: u8) -> u8 {
         return 1;
     }
     #[cfg(feature = "filesystem")]
-    if let Some(ctx) = active_ctx_opt() {
+    if let Some(st) = active_storage_mut() {
+        let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
         let res = match mode {
-            0 | 1 => crate::services::calibration::reformat_storage(
-                ctx.storage,
-                ctx.calibration.raw_bytes(),
-                mode == 0,
-            ),
-            2 => ctx.storage.fs.wipe_raw().map_err(|_| ()),
+            0 | 1 => {
+                crate::services::calibration::reformat_storage(st, calib.raw_bytes(), mode == 0)
+            }
+            2 => st.fs.wipe_raw().map_err(|_| ()),
             _ => Err(()),
         };
         return u8::from(res.is_err());

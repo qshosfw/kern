@@ -1,32 +1,54 @@
 //! Audio Subsystem System Call Handlers (`AudioApi`, `interface_id = 0x0003`).
 
+#[cfg(test)]
 use super::active_ctx_opt;
+#[cfg(not(test))]
+use crate::services::radio::RadioMelodyExt;
 use kernel::proc::abi::AudioApi;
 
 pub unsafe extern "C" fn api_audio_play_tone(freq_hz: u16, duration_ms: u16) {
+    #[cfg(not(test))]
+    crate::kern_hw().radio.play_tone(freq_hz, duration_ms);
+    #[cfg(test)]
     if let Some(ctx) = active_ctx_opt() {
         ctx.play_tone(freq_hz, duration_ms);
     }
 }
 
 pub unsafe extern "C" fn api_audio_play_beep(beep_type: u8) {
+    let beep = crate::services::melody::BeepType::from_u8(beep_type);
+    #[cfg(not(test))]
+    crate::kern_hw().radio.play_beep(beep);
+    #[cfg(test)]
     if let Some(ctx) = active_ctx_opt() {
-        ctx.play_beep(crate::services::melody::BeepType::from_u8(beep_type));
+        ctx.play_beep(beep);
     }
 }
 
 pub unsafe extern "C" fn api_audio_set_path(on: u8) {
+    #[cfg(not(test))]
+    {
+        let aud = &mut crate::kern_hw().audio;
+        if on != 0 {
+            aud.enable();
+        } else {
+            aud.disable();
+        }
+    }
+    #[cfg(test)]
     if let Some(ctx) = active_ctx_opt() {
-        ctx.set_audio_path(on != 0);
+        if let Some(ref mut aud) = ctx.audio {
+            if on != 0 {
+                aud.enable();
+            } else {
+                aud.disable();
+            }
+        }
     }
 }
 
 pub unsafe extern "C" fn api_audio_capture_start(rate_hz: u16) -> u8 {
-    if crate::audio_capture_mut().start_capture(rate_hz).is_ok() {
-        0
-    } else {
-        1
-    }
+    u8::from(crate::audio_capture_mut().start_capture(rate_hz).is_err())
 }
 
 pub unsafe extern "C" fn api_audio_capture_read(out_samples: *mut i16, max_samples: u16) -> u16 {
@@ -43,6 +65,14 @@ pub unsafe extern "C" fn api_audio_capture_stop() {
 }
 
 pub unsafe extern "C" fn api_audio_set_volume(volume: u8) {
+    #[cfg(not(test))]
+    {
+        let hw = crate::kern_hw();
+        hw.audio.set_volume(volume);
+        hw.radio.set_volume_level(volume);
+        crate::master_config().audio.volume = volume;
+    }
+    #[cfg(test)]
     if let Some(ctx) = active_ctx_opt() {
         ctx.set_volume(volume);
     }
@@ -57,24 +87,40 @@ pub unsafe extern "C" fn api_audio_stop() {
 }
 
 pub unsafe extern "C" fn api_audio_is_playing() -> u8 {
-    if let Some(ctx) = active_ctx_opt() {
-        if ctx.is_audio_playing() { 1 } else { 0 }
-    } else {
-        0
+    #[cfg(not(test))]
+    {
+        crate::kern_hw().audio.is_active() as u8
+    }
+    #[cfg(test)]
+    {
+        active_ctx_opt().map_or(0, |ctx| {
+            ctx.audio.as_ref().is_some_and(|a| a.is_active()) as u8
+        })
     }
 }
 
 pub unsafe extern "C" fn api_audio_set_mic_gain(gain: u8) {
+    #[cfg(not(test))]
+    crate::kern_hw().radio.set_mic_gain(gain);
+    #[cfg(test)]
     if let Some(ctx) = active_ctx_opt() {
-        ctx.set_mic_gain(gain);
+        ctx.radio.set_mic_gain(gain);
     }
 }
 
 pub unsafe extern "C" fn api_audio_read_mic_sample() -> u16 {
-    if let Some(ctx) = active_ctx_opt() {
-        ctx.read_mic_sample()
-    } else {
-        0
+    #[cfg(not(test))]
+    {
+        crate::kern_hw()
+            .radio
+            .read_reg(drivers::bk4829::registers::REG_AUDIO_AMP)
+    }
+    #[cfg(test)]
+    {
+        active_ctx_opt().map_or(0, |ctx| {
+            ctx.radio
+                .read_reg(drivers::bk4829::registers::REG_AUDIO_AMP)
+        })
     }
 }
 

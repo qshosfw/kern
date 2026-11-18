@@ -4,6 +4,7 @@
 //! Implements per-capability domain VTables (`display`, `ui`, `radio`, `audio`, `storage`, `io`, `service`),
 //! the dynamic `ServiceRegistry`, and the `CapImports` GOT binder (`bind_cap_imports`).
 
+#[cfg(any(test, feature = "settings_debug"))]
 use crate::services::SysContext;
 use gfx::Canvas;
 use kernel::caps::{Cap, CapabilitySet};
@@ -40,8 +41,10 @@ pub use service::{
 pub use storage::STORAGE_VTABLE;
 pub use ui::{UI_VTABLE, store_modal_text};
 
+#[cfg(any(test, feature = "settings_debug"))]
 pub static mut ACTIVE_CTX: *mut SysContext<'static, 'static> = core::ptr::null_mut();
 
+#[cfg(test)]
 #[inline(never)]
 pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
     let ptr = unsafe { ACTIVE_CTX };
@@ -55,11 +58,6 @@ pub fn active_ctx_opt() -> Option<&'static mut SysContext<'static, 'static>> {
 #[inline(always)]
 pub fn active_canvas_mut() -> &'static mut Canvas {
     crate::system_canvas()
-}
-
-#[inline(always)]
-pub unsafe fn active_ctx() -> &'static mut SysContext<'static, 'static> {
-    unsafe { &mut *ACTIVE_CTX }
 }
 
 #[inline(never)]

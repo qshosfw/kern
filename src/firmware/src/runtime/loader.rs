@@ -230,7 +230,7 @@ pub fn finish_action_krx_package<'a, 'hw>(
 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 pub fn try_launch_boot_module(
-    lcd: &mut drivers::st7565::St7565<'_>,
+    _lcd: &mut drivers::st7565::St7565<'_>,
     storage: &mut crate::services::SystemStorage<'_>,
     path: &str,
     param: usize,
@@ -238,12 +238,7 @@ pub fn try_launch_boot_module(
     load_krx_into_slot(storage, path, None, kernel::proc::Pid(0))?;
 
     let res = unsafe {
-        super::syscall::display::BOOT_LCD = lcd as *mut drivers::st7565::St7565<'_> as *mut _;
-        super::native_runner::BOOT_STORAGE =
-            storage as *mut crate::services::SystemStorage<'_> as *mut _;
         let rc = super::native_runner::invoke_boot_start(param);
-        super::native_runner::BOOT_STORAGE = core::ptr::null_mut();
-        super::syscall::display::BOOT_LCD = core::ptr::null_mut();
         super::native_runner::slot_mut().is_loaded = false;
         rc
     };
