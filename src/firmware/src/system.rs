@@ -418,11 +418,19 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
     let mut last_radio_tick = t0;
     #[cfg(feature = "grayscale")]
     let mut last_subframe_tick = t0;
-    let mut dirty_render = true;
+    let mut dirty_render = false;
     let mut dimmed_dirty = false;
-    let mut initial_render = true;
     let mut crash_loop_cleared = false;
     let mut low_batt_warning_timer = 0u8;
+
+    // Complete initial OS frame before entering the event loop so LCD never stays blank.
+    hw.render_frame();
+    hw.lcd.turn_on();
+    hw.backlight.wake();
+    #[cfg(feature = "grayscale")]
+    {
+        last_subframe_tick = py32_hal::delay::millis();
+    }
 
     loop {
         // Feed Independent Watchdog
@@ -536,7 +544,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 
         while let Some(ev) = dequeue_event() {
             let had_lock_overlay = hw.orchestrator.is_lock_overlay_active();
-            let consumed = hw.dispatch_event_and_actions(ev);
+            let consumed = hw.dispatch_event_and_actions(&ev);
             let has_lock_overlay = hw.orchestrator.is_lock_overlay_active();
             if had_lock_overlay || has_lock_overlay {
                 dimmed_dirty = true;
@@ -552,17 +560,11 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             dirty_render = true;
         }
 
-        // Render loop: always complete initial OS frame so LCD never stays white/blank (even if backlight is Off),
-        // and allow keypad-lock notifications/unlock holds to render on a dimmed screen without waking backlight.
-        if initial_render || (dirty_render && (is_display_awake || dimmed_dirty)) {
+        // Render when awake or when keypad-lock notifications/unlock holds need a dimmed update.
+        if dirty_render && (is_display_awake || dimmed_dirty) {
             hw.render_frame();
             dirty_render = false;
             dimmed_dirty = false;
-            if initial_render {
-                initial_render = false;
-                hw.lcd.turn_on();
-                hw.backlight.wake();
-            }
             #[cfg(feature = "grayscale")]
             {
                 last_subframe_tick = py32_hal::delay::millis();

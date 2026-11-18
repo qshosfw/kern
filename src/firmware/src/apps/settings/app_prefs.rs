@@ -102,12 +102,17 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
     sc.cfg_len = 0;
     let hdr_base = sc.hdr.as_ptr() as usize;
 
-    let mut summary_uninit = core::mem::MaybeUninit::uninit();
+    // `AppPrefsScratch` sits in the lower arena; place `KrxSummary` in the disjoint scratch tail
+    // to keep `populate_app_prefs` off the main runtime stack (-180 B peak stack).
+    let summary_slot = unsafe {
+        &mut *(crate::data::arena::scratch_tail_bytes_mut().as_mut_ptr()
+            as *mut core::mem::MaybeUninit<kernel::proc::krx::KrxSummary<'_>>)
+    };
     let Ok(summary) = crate::runtime::loader::read_krx_summary(
         ctx.storage,
         pkg.path.as_str(),
         &mut sc.hdr,
-        &mut summary_uninit,
+        summary_slot,
     ) else {
         return 0;
     };

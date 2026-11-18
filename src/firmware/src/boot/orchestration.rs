@@ -365,8 +365,13 @@ fn boot_stage_security_check(
     #[cfg(not(feature = "passcode"))]
     {
         let status = crate::security::sync_filesystem_security(hw.filesystem, passcode_state);
-        let mut msg = heapless::String::<168>::new();
-        if let Some(title) = crate::security::format_storage_alert_message(status, &mut msg) {
+        let msg = unsafe {
+            let ptr = crate::data::arena::scratch_tail_bytes_mut().as_mut_ptr()
+                as *mut heapless::String<168>;
+            ptr.write(heapless::String::new());
+            &mut *ptr
+        };
+        if let Some(title) = crate::security::format_storage_alert_message(status, msg) {
             crate::orchestrator::compositor::queue_system_alert(title, msg.as_str());
         }
     }

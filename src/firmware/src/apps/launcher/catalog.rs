@@ -241,14 +241,17 @@ impl PackageCatalog {
             .push_str(&raw_name[..raw_name.len().min(24 - entry.path.len())]);
 
         if is_pkg && size >= KrxPreamble::SIZE {
-            let hdr_buf = &mut crate::data::arena::scratch_tail_bytes_mut()
-                [..kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE];
-            let mut summary_uninit = core::mem::MaybeUninit::uninit();
+            let (hdr_buf, summary_tail) = crate::data::arena::scratch_tail_bytes_mut()
+                .split_at_mut(kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE);
+            let summary_slot = unsafe {
+                &mut *(summary_tail.as_mut_ptr()
+                    as *mut core::mem::MaybeUninit<kernel::proc::krx::KrxSummary<'_>>)
+            };
             if let Ok(summary) = crate::runtime::loader::read_krx_summary(
                 filesystem,
                 entry.path.as_str(),
                 hdr_buf,
-                &mut summary_uninit,
+                summary_slot,
             ) {
                 if let Some(cls) = summary.preamble.execution_class() {
                     entry.is_valid = true;

@@ -121,10 +121,10 @@ pub fn apply_display_hardware(
 }
 
 #[derive(Clone, Copy)]
-enum CtxOp {
+enum CtxOp<'e> {
     Start,
     Render,
-    Dispatch(Event),
+    Dispatch(&'e Event),
 }
 
 fn fill_sys_context<'a, 'hw>(
@@ -227,7 +227,7 @@ impl<'a> SystemHardware<'a> {
     }
 
     #[inline(never)]
-    fn exec_with_ctx(&mut self, op: CtxOp) -> bool {
+    fn exec_with_ctx(&mut self, op: CtxOp<'_>) -> bool {
         let is_locked = self.orchestrator.is_keypad_locked();
         let is_f = self.orchestrator.is_f_active();
         let with_display = !matches!(op, CtxOp::Render);
@@ -268,11 +268,11 @@ impl<'a> SystemHardware<'a> {
                 self.orchestrator.render(crate::system_canvas(), &ctx);
                 false
             }
-            CtxOp::Dispatch(ev) => self.orchestrator.dispatch_event(&mut ctx, ev),
+            CtxOp::Dispatch(ev) => self.orchestrator.dispatch_event(&mut ctx, *ev),
         }
     }
 
-    pub fn dispatch_event_and_actions(&mut self, ev: Event) -> bool {
+    pub fn dispatch_event_and_actions(&mut self, ev: &Event) -> bool {
         let consumed = self.exec_with_ctx(CtxOp::Dispatch(ev));
         self.apply_dirty_configs();
         consumed

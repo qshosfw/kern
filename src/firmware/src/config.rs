@@ -180,8 +180,7 @@ const _: () = {
 
 #[inline(never)]
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
-    let mut temp = core::mem::MaybeUninit::<[u8; 80]>::uninit();
-    let temp_buf = unsafe { &mut *temp.as_mut_ptr() };
+    let temp_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[1920..2000];
     let n = buf.len().min(80);
     let loaded = storage
         .read_file(path, &mut temp_buf[..n])
