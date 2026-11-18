@@ -213,6 +213,14 @@ impl SettingsApp {
         }
 
         let idx = self.selected_idx;
+        if self.current_page == PageId::ButtonsShortcuts {
+            if idx == 1 && idx < self.items_len {
+                if let MenuItemType::Toggle(b) = arena.items[idx].item_type {
+                    self.commit_field(SettingField::F_DRAWER, b as i32, ctx);
+                }
+            }
+            return;
+        }
         if self.current_page == PageId::AppPrefs {
             if idx < self.items_len {
                 let val = match arena.items[idx].item_type {

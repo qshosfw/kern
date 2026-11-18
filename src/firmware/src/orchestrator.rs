@@ -438,7 +438,7 @@ impl Orchestrator {
         ctx: &mut crate::services::SysContext<'a, '_>,
         code: KeyCode,
     ) {
-        self.lock_mgr.is_f_active = false;
+        self.lock_mgr.clear_f_active();
         if code == KeyCode::Exit {
             if self.active_app_id != APP_ID_LAUNCHER {
                 self.nav_stack.clear();
@@ -514,6 +514,7 @@ impl Orchestrator {
     ) -> FilterFlow {
         let was_locked = self.lock_mgr.is_locked;
         let was_f_active = self.lock_mgr.is_f_active;
+        let was_f_drawer_animating = self.lock_mgr.is_f_drawer_animating();
 
         let is_modal_active = unsafe {
             (*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL)).is_active()
@@ -529,6 +530,12 @@ impl Orchestrator {
             can_sleep,
         );
 
+        if ctx.config.keys.f_drawer == 0 {
+            self.lock_mgr.snap_f_drawer(true);
+        } else if !ctx.config.display.animations_enabled() {
+            self.lock_mgr.snap_f_drawer(false);
+        }
+
         if self.lock_mgr.force_close_requested {
             self.lock_mgr.force_close_requested = false;
             self.force_close_active_app(ctx);
@@ -536,8 +543,10 @@ impl Orchestrator {
             return FilterFlow::Stop(true);
         }
 
-        let state_changed =
-            was_locked != self.lock_mgr.is_locked || was_f_active != self.lock_mgr.is_f_active;
+        let state_changed = was_locked != self.lock_mgr.is_locked
+            || was_f_active != self.lock_mgr.is_f_active
+            || was_f_drawer_animating
+            || self.lock_mgr.is_f_drawer_animating();
 
         if was_locked != self.lock_mgr.is_locked {
             if self.lock_mgr.is_locked {

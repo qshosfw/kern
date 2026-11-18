@@ -525,7 +525,12 @@ impl OsCompositor {
                 ctx.draw_status_bar_right_mode(canvas, true, true);
             }
         } else if lock_mgr.should_show_f_drawer() && ctx.config.keys.f_drawer != 0 {
-            render_f_shortcut_drawer(canvas, &ctx.config.keys, active_app_id);
+            let y_offset = if ctx.config.display.animations_enabled() {
+                lock_mgr.f_drawer_y_offset(40)
+            } else {
+                0
+            };
+            render_f_shortcut_drawer(canvas, &ctx.config.keys, active_app_id, y_offset);
         }
 
         // Render Keypad Lock Toast Modal overlay on top of screen if active
@@ -539,6 +544,7 @@ fn render_f_shortcut_drawer(
     canvas: &mut Canvas,
     keys: &crate::config::keys::KeyConfig,
     active_app_id: usize,
+    y_offset: i8,
 ) {
     use crate::apps::shortcut::{
         F_DRAWER_START_SLOT, KEY_SHORTCUT_COUNT, TARGET_NONE, active_context, describe_into,
@@ -546,12 +552,15 @@ fn render_f_shortcut_drawer(
     };
 
     const DRAWER_H: u8 = 40;
-    gfx::widgets::draw_sheet_slide_up(canvas, "F Shortcuts", DRAWER_H, None, 0);
+    if y_offset >= DRAWER_H as i8 {
+        return;
+    }
+    gfx::widgets::draw_sheet_slide_up(canvas, "F Shortcuts", DRAWER_H, None, y_offset);
 
     let cat = crate::apps::launcher::catalog::get_catalog();
     let cur_ctx = active_context(active_app_id);
     let mut shown = 0usize;
-    let base_y = (64 - DRAWER_H) as i16 + 10;
+    let base_y = (64 - DRAWER_H as i16) + y_offset.max(0) as i16 + 10;
     let mut label = gfx::gui::modules::menu::ShortString::empty();
 
     for slot in F_DRAWER_START_SLOT..KEY_SHORTCUT_COUNT {
@@ -566,6 +575,9 @@ fn render_f_shortcut_drawer(
         let row = shown >> 1;
         let cell_x = if col == 0 { 4i16 } else { 65i16 };
         let cell_y = base_y + (row as i16 * 10);
+        if cell_y >= 64 {
+            break;
+        }
 
         let box_w =
             gfx::widgets::draw_key_badge_box(canvas, cell_x, cell_y + 1, drawer_badge(slot), false);
@@ -585,14 +597,17 @@ fn render_f_shortcut_drawer(
     }
 
     if shown == 0 {
-        gfx::text::draw_str(
-            canvas,
-            18,
-            base_y + 16,
-            "No F-key shortcuts",
-            &gfx::fonts::tomthumb::FONT,
-            gfx::Color::Fill,
-        );
+        let msg_y = base_y + 16;
+        if msg_y < 64 {
+            gfx::text::draw_str(
+                canvas,
+                18,
+                msg_y,
+                "No F-key shortcuts",
+                &gfx::fonts::tomthumb::FONT,
+                gfx::Color::Fill,
+            );
+        }
     }
 }
 

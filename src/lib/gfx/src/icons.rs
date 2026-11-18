@@ -55,7 +55,7 @@ static ICON_5X5_IDX: [u8; 22] = [
 
 // 8x8 Special Symbols (from fagci-k1-fw):
 pub static ICON_MELODY: [u8; 8] = [0x04, 0x06, 0x04, 0x0C, 0x0C, 0x04, 0x06, 0x06];
-pub static SYSTEM_ICONS_8: [[u8; 8]; 28] = [
+pub static SYSTEM_ICONS_8: [[u8; 8]; 29] = [
     [0xE0, 0x9F, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF], // 0: ICON_FOLDER (22)
     [0x88, 0xD8, 0xA8, 0x88, 0x06, 0x05, 0x06, 0x05], // 1: ICON_CH (23)
     [0xA0, 0xA0, 0x48, 0x10, 0x1A, 0x15, 0x05, 0x02], // 2: ICON_VFO (24)
@@ -84,6 +84,7 @@ pub static SYSTEM_ICONS_8: [[u8; 8]; 28] = [
     [0x3C, 0x42, 0x42, 0xFF, 0xE7, 0xE7, 0xFF, 0x7E], // 25: ICON_SECURITY (47)
     [0x19, 0x33, 0x1E, 0x18, 0x18, 0x3C, 0x3C, 0x3C], // 26: ICON_SYSTEM (48)
     [0x18, 0x3C, 0x7E, 0x18, 0x18, 0x00, 0x81, 0xFF], // 27: ICON_UPLOAD (49)
+    [0x18, 0x3C, 0x7E, 0xFF, 0x7E, 0x66, 0x66, 0x66], // 28: ICON_HOME (50)
 ];
 
 pub const ICON_FOLDER: &[u8; 8] = &SYSTEM_ICONS_8[0];
@@ -293,6 +294,8 @@ pub const ICON_APPS: &[u8; 8] = &SYSTEM_ICONS_8[24];
 pub const ICON_SECURITY: &[u8; 8] = &SYSTEM_ICONS_8[25];
 pub const ICON_SYSTEM: &[u8; 8] = &SYSTEM_ICONS_8[26];
 pub const ICON_UPLOAD: &[u8; 8] = &SYSTEM_ICONS_8[27];
+pub const ICON_HOME: &[u8; 8] = &SYSTEM_ICONS_8[28];
+pub static ICON_NONE: [u8; 8] = [0u8; 8];
 
 /// Draw an 8x8 standard 1-bit monochrome icon bitmap.
 pub fn draw_icon_8(canvas: &mut Canvas, x: i16, y: i16, bits: &[u8; 8], color: Color) {

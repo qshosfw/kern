@@ -81,6 +81,7 @@ pub struct KeypadLockManager {
     // ── Shared animation & springy hold progress ────────────────────
     hold: HoldProgress,
     sheet_anim: TransitionProgress,
+    f_drawer_anim: TransitionProgress,
 
     // ── 2-byte scalars ──────────────────────────────────────────────
     pub f_key_remaining_ms: u16,
@@ -108,6 +109,7 @@ impl KeypadLockManager {
             held_code: None,
             hold: HoldProgress::new(),
             sheet_anim: TransitionProgress::closed(4),
+            f_drawer_anim: TransitionProgress::closed(4),
             f_key_remaining_ms: 0,
             delay_elapsed_ms: 0,
             hold_start_threshold_ms: 550,
@@ -119,7 +121,10 @@ impl KeypadLockManager {
 
     #[inline(always)]
     pub fn is_animating(&self) -> bool {
-        self.hold_ui_open || self.hold.is_animating() || !self.sheet_anim.is_complete()
+        self.hold_ui_open
+            || self.hold.is_animating()
+            || !self.sheet_anim.is_complete()
+            || !self.f_drawer_anim.is_complete()
     }
 
     #[inline(always)]
@@ -129,7 +134,34 @@ impl KeypadLockManager {
 
     #[inline(always)]
     pub fn should_show_f_drawer(&self) -> bool {
-        self.is_f_active && !self.is_locked && !self.hold_ui_open && self.toast == LockToast::None
+        (self.is_f_active || self.f_drawer_anim.progress() > 0)
+            && !self.is_locked
+            && !self.hold_ui_open
+            && self.toast == LockToast::None
+    }
+
+    #[inline(always)]
+    pub fn is_f_drawer_animating(&self) -> bool {
+        !self.f_drawer_anim.is_complete()
+    }
+
+    #[inline(always)]
+    pub fn f_drawer_y_offset(&self, height: u8) -> i8 {
+        self.f_drawer_anim.slide_offset(height)
+    }
+
+    pub fn clear_f_active(&mut self) {
+        self.is_f_active = false;
+        self.f_key_remaining_ms = 0;
+        self.f_drawer_anim.close();
+    }
+
+    pub fn snap_f_drawer(&mut self, force_close: bool) {
+        if force_close || !self.is_f_active {
+            self.f_drawer_anim.reset_closed();
+        } else {
+            self.f_drawer_anim = TransitionProgress::completed(4);
+        }
     }
 
     fn show_toast(&mut self, toast: LockToast) {
@@ -143,6 +175,7 @@ impl KeypadLockManager {
         if self.is_locked {
             self.is_f_active = false;
             self.f_key_remaining_ms = 0;
+            self.f_drawer_anim.reset_closed();
             self.show_toast(LockToast::Locked);
         } else {
             self.show_toast(LockToast::Unlocked);
@@ -243,7 +276,7 @@ impl KeypadLockManager {
             if self.is_f_active && self.f_key_remaining_ms > 0 {
                 self.f_key_remaining_ms = self.f_key_remaining_ms.saturating_sub(dt);
                 if self.f_key_remaining_ms == 0 {
-                    self.is_f_active = false;
+                    self.clear_f_active();
                     consumed = true;
                 }
             }
@@ -312,6 +345,7 @@ impl KeypadLockManager {
             }
 
             let _ = self.sheet_anim.tick();
+            let _ = self.f_drawer_anim.tick();
             if self.toast != LockToast::None
                 && self.toast_remaining_ms == 0
                 && !self.sheet_anim.is_opening()
@@ -378,11 +412,13 @@ impl KeypadLockManager {
                                 self.show_toast(LockToast::PromptUnlock);
                             } else if !self.is_locked && !cancelled_hold && *code == KeyCode::KeyF {
                                 self.is_f_active = !self.is_f_active;
-                                self.f_key_remaining_ms = if self.is_f_active {
-                                    f_timeout_ms.min(10000) as u16
+                                if self.is_f_active {
+                                    self.f_key_remaining_ms = f_timeout_ms.min(10000) as u16;
+                                    self.f_drawer_anim.open();
                                 } else {
-                                    0
-                                };
+                                    self.f_key_remaining_ms = 0;
+                                    self.f_drawer_anim.close();
+                                }
                             }
                             return true;
                         } else if cancelled_hold {
@@ -541,7 +577,10 @@ mod tests {
         };
         assert!(mgr.handle_event(&released, 400, 3000, 0, false));
         assert!(!mgr.is_locked);
+        assert!(!mgr.hold_ui_open);
         assert!(mgr.is_f_active);
+        assert!(mgr.is_f_drawer_animating());
+        tick_n(&mut mgr, 4, false);
         assert!(!mgr.is_animating());
     }
 
@@ -775,5 +814,49 @@ mod tests {
         tick_n(&mut mgr, 3, false);
         mgr.handle_event(&released, 400, 3000, 0, false);
         assert!(mgr.is_f_active);
+    }
+
+    #[test]
+    fn test_f_drawer_animates_slide_up_and_slide_down() {
+        let mut mgr = KeypadLockManager::new();
+        assert!(!mgr.should_show_f_drawer());
+        assert!(!mgr.is_f_drawer_animating());
+
+        let press = Event::Key {
+            code: KeyCode::KeyF,
+            state: KeyState::Pressed,
+        };
+        let release = Event::Key {
+            code: KeyCode::KeyF,
+            state: KeyState::Released,
+        };
+        mgr.handle_event(&press, 400, 3000, 0, false);
+        mgr.handle_event(&release, 400, 3000, 0, false);
+
+        assert!(mgr.is_f_active);
+        assert!(mgr.should_show_f_drawer());
+        assert!(mgr.is_f_drawer_animating());
+        assert_eq!(mgr.f_drawer_y_offset(40), 40);
+
+        // Advance 4 ticks (step = 4 -> 4, 8, 12, 16)
+        tick_n(&mut mgr, 1, false);
+        assert_eq!(mgr.f_drawer_y_offset(40), 22);
+        tick_n(&mut mgr, 3, false);
+        assert_eq!(mgr.f_drawer_y_offset(40), 0);
+        assert!(!mgr.is_f_drawer_animating());
+
+        // Closing slides back down smoothly before hiding
+        mgr.clear_f_active();
+        assert!(!mgr.is_f_active);
+        assert!(mgr.should_show_f_drawer());
+        assert!(mgr.is_f_drawer_animating());
+
+        tick_n(&mut mgr, 1, false);
+        assert!(mgr.f_drawer_y_offset(40) > 0);
+        assert!(mgr.should_show_f_drawer());
+
+        tick_n(&mut mgr, 3, false);
+        assert!(!mgr.should_show_f_drawer());
+        assert!(!mgr.is_f_drawer_animating());
     }
 }

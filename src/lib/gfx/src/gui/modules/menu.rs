@@ -650,8 +650,10 @@ fn render_menu_row(
             + 3;
     }
     if let Some(bmp) = icon {
-        icons::draw_icon_8(canvas, text_x, row_y + 2, bmp, tc);
-        text_x += if is_shortcut { 11 } else { 13 };
+        if *bmp != [0u8; 8] {
+            icons::draw_icon_8(canvas, text_x, row_y + 2, bmp, tc);
+            text_x += if is_shortcut { 11 } else { 13 };
+        }
     }
 
     let mut buf_uninit = core::mem::MaybeUninit::<[u8; 16]>::uninit();

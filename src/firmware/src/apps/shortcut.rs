@@ -148,7 +148,7 @@ pub const BUILTIN_TARGETS: [BuiltinTarget; 5] = [
     },
     BuiltinTarget {
         cmd: Shortcut::LaunchApp(APP_ID_LAUNCHER as u8),
-        icon_idx: 24,
+        icon_idx: 28,
     },
     BuiltinTarget {
         cmd: Shortcut::Sleep,

@@ -17,7 +17,8 @@ pub static F_KEY_TIMEOUT_OPTIONS: &str = "Toggle\01s\02s\03s\05s\0";
 
 pub static AUTO_LOCK_OPTIONS: &str = "Off\015s\030s\01 min\02 min\0";
 
-pub static BUTTONS_ROOT: [SettingDef; 7] = [
+pub static BUTTONS_ROOT: [SettingDef; 6] = [
+    SettingDef::submenu("Shortcuts", PageId::ButtonsShortcuts),
     SettingDef::choice("PTT Mode", ChoiceId::PttMode, SettingField::PTT_MODE),
     SettingDef::choice("Auto Lock", ChoiceId::AutoLock, SettingField::AUTO_LOCK),
     SettingDef::choice(
@@ -25,10 +26,8 @@ pub static BUTTONS_ROOT: [SettingDef; 7] = [
         ChoiceId::FKeyTimeout,
         SettingField::F_KEY_TIMEOUT,
     ),
-    SettingDef::toggle("F-Drawer", SettingField::F_DRAWER),
     SettingDef::toggle("Fast Scroll", SettingField::FAST_SCROLL),
     SettingDef::submenu("Tweaks", PageId::ButtonsTweaks),
-    SettingDef::submenu("Shortcuts", PageId::ButtonsShortcuts),
 ];
 
 pub static BUTTONS_TWEAKS: [SettingDef; 2] = [
@@ -56,16 +55,35 @@ pub fn populate_shortcuts(
         selected: cur_ctx.min(4) as u16,
         options: SheetOptions::Packed(CTX_OPTIONS),
     };
-    icons[0] = gfx::icons::ICON_APPS;
+    icons[0] = &gfx::icons::ICON_NONE;
+    items[1].title = "Show Drawer";
+    items[1].item_type = MenuItemType::Toggle(ctx.config.keys.f_drawer != 0);
+    icons[1] = &gfx::icons::ICON_NONE;
     let count = KEY_SHORTCUT_COUNT
-        .min(items.len().saturating_sub(1))
-        .min(icons.len().saturating_sub(1));
+        .min(items.len().saturating_sub(2))
+        .min(icons.len().saturating_sub(2));
     for i in 0..count {
         let (target_id, overridden) = resolve_slot_override(&ctx.config.keys, i, cur_ctx);
         let mut label = ShortString::empty();
-        icons[1 + i] = describe_into(target_id, cat, overridden, &mut label);
-        items[1 + i].title = slot_label(i);
-        items[1 + i].item_type = MenuItemType::Shortcut(label);
+        icons[2 + i] = describe_into(target_id, cat, overridden, &mut label);
+        items[2 + i].title = slot_label(i);
+        items[2 + i].item_type = MenuItemType::Shortcut(label);
     }
-    count + 1
+    count + 2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcuts_is_first_in_buttons_root_and_f_drawer_moved() {
+        assert_eq!(BUTTONS_ROOT[0].title, "Shortcuts");
+        assert!(
+            BUTTONS_ROOT
+                .iter()
+                .all(|d| d.field != SettingField::F_DRAWER),
+            "F-Drawer should live inside Shortcuts, not Buttons root"
+        );
+    }
 }

@@ -16,9 +16,9 @@ use super::page::{ActionId, MenuFrame, PageId, TAG_ACTION, TAG_SUBMENU};
 
 #[repr(C)]
 pub(crate) struct SettingsArena {
-    pub(crate) items: [MenuItem; 20],
-    pub(crate) item_icons: [&'static [u8; 8]; 20],
-    pub(crate) item_tags: [u8; 20],
+    pub(crate) items: [MenuItem; 22],
+    pub(crate) item_icons: [&'static [u8; 8]; 22],
+    pub(crate) item_tags: [u8; 22],
 }
 
 const _: () = {
@@ -162,8 +162,8 @@ impl SettingsApp {
             }
         }
 
-        if self.current_page == PageId::ButtonsShortcuts && sel_idx > 0 {
-            let slot = sel_idx - 1;
+        if self.current_page == PageId::ButtonsShortcuts && sel_idx >= 2 {
+            let slot = sel_idx - 2;
             if slot < crate::apps::shortcut::KEY_SHORTCUT_COUNT {
                 let cat = crate::apps::launcher::catalog::get_catalog();
                 let cur_id =
