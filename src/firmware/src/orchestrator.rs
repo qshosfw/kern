@@ -404,11 +404,29 @@ impl Orchestrator {
     }
 
     #[inline(never)]
+    fn cleanup_app_radio<'a>(
+        app_id: usize,
+        stop_tx: bool,
+        ctx: &mut crate::services::SysContext<'a, '_>,
+    ) {
+        if stop_tx && ctx.state.coord.is_transmitting {
+            ctx.request_ptt_stop();
+        }
+        if app_id >= crate::AppRegistry::count() {
+            if let Some(pcb) = proc_table().find_by_app(app_id) {
+                let cid = kernel::service::radio::ClientId::for_krx_pid(pcb.pid.0);
+                let _ = ctx.state.coord.release_client_lock(ctx.radio, cid);
+            }
+        }
+    }
+
+    #[inline(never)]
     pub fn force_close_active_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
         if self.active_app_id == APP_ID_LAUNCHER {
             return;
         }
         let closing_app = self.active_app_id;
+        Self::cleanup_app_radio(closing_app, true, ctx);
         self.lock_mgr.reset_input_tracking();
         self.nav_stack.clear();
         self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
@@ -757,6 +775,7 @@ impl Orchestrator {
         ctx: &mut crate::services::SysContext<'a, '_>,
         code: u8,
     ) {
+        Self::cleanup_app_radio(self.active_app_id, true, ctx);
         if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
             pcb.restart_budget = pcb.restart_budget.saturating_sub(1);
             if pcb.restart_budget == 0 {
@@ -809,6 +828,13 @@ impl Orchestrator {
             let modal_mut =
                 &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL);
             if modal_mut.is_active() {
+                if let Event::Key {
+                    code: KeyCode::Ptt,
+                    state: KeyState::Released,
+                } = *event
+                {
+                    ctx.handle_system_ptt(KeyState::Released);
+                }
                 let tag = modal_mut.tag;
                 if let Some(res) = modal_mut.handle_event(event) {
                     if let Event::Key {
@@ -904,6 +930,13 @@ impl Orchestrator {
         let cur_ctx = crate::apps::shortcut::active_context(self.active_app_id);
         let mut fire_slot: Option<u16> = None;
         match event {
+            Event::Key {
+                code: KeyCode::Ptt,
+                state,
+            } => {
+                ctx.handle_system_ptt(state);
+                return;
+            }
             Event::Key {
                 code: KeyCode::Exit,
                 state: KeyState::Pressed,
@@ -1081,6 +1114,9 @@ impl Orchestrator {
     ) {
         if app_id < crate::AppRegistry::app_count() {
             if self.active_app_id < crate::AppRegistry::app_count() {
+                if self.active_app_id != app_id {
+                    Self::cleanup_app_radio(self.active_app_id, false, ctx);
+                }
                 if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
                     pcb.set_state(ProcState::Suspended);
                 }

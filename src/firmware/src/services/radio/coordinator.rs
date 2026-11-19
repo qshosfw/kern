@@ -55,6 +55,34 @@ pub enum DualWatchTxPolicy {
     FollowCarrier,
 }
 
+/// Physical PTT key behavior policy (`/pref/keys.cfg`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PttMode {
+    Momentary = 0,
+    Toggle = 1,
+    DoublePressLatch = 2,
+}
+
+impl PttMode {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            1 => Self::Toggle,
+            2 => Self::DoublePressLatch,
+            _ => Self::Momentary,
+        }
+    }
+}
+
+/// High-level outcome of processing a physical or logical PTT key transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PttEventOutcome {
+    None,
+    Started(TxPermission),
+    Stopped,
+}
+
 /// Snapshot of real-time channel activity and signal telemetry for UI widgets and applications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelTelemetry {
@@ -158,6 +186,10 @@ pub struct RadioCoordinator {
     pub adaptive_tick_div: u8,
     /// True if PA power was folded back due to high die/board temperature during prolonged TX.
     pub pa_thermal_foldback_active: bool,
+    /// True when manual Monitor (squelch defeat) is active on the listening VFO.
+    pub monitor_active: bool,
+    /// True when PTT is latched on in `PttMode::Toggle` or `PttMode::DoublePressLatch`.
+    pub ptt_latched: bool,
 
     // ── Hot compact sub-controllers (offset 18..36: byte fields < 32) ─────
     /// Real-time RX Squelch Tail Elimination (STE) controller.
@@ -172,6 +204,8 @@ pub struct RadioCoordinator {
     pub tot_elapsed_10ms: u16,
     pub activity_count: [u16; 3],
     pub rssi_moving_avg: [i16; 3],
+    /// Timestamp (ms) of the last PTT press for `PttMode::DoublePressLatch` detection.
+    pub last_ptt_press_ms: u32,
 
     // ── Sub-controllers and state machines ───────────────────────────────
     pub dwell: DwellController,
@@ -219,10 +253,13 @@ impl RadioCoordinator {
             adaptive_squelch_enabled: true,
             adaptive_tick_div: 0,
             pa_thermal_foldback_active: false,
+            monitor_active: false,
+            ptt_latched: false,
             tot_limit_seconds: 60, // Default 60-second TOT
             tot_elapsed_10ms: 0,
             activity_count: [0, 0, 0],
             rssi_moving_avg: [-120, -120, -120],
+            last_ptt_press_ms: u32::MAX - 500,
             ste: RxSteController::new(),
             dwell: DwellController::new(),
             audio_routing: AudioRoutingState::NormalVoice,
@@ -263,6 +300,7 @@ impl RadioCoordinator {
         self.bclo_policy = BcloPolicy::CarrierOnly;
         self.tot_limit_seconds = 60;
         self.tot_warning_lead_seconds = 10;
+        self.last_ptt_press_ms = u32::MAX - 500;
         self.adaptive_squelch = [AdaptiveSquelchTracker::new(); 3];
         self.adaptive_squelch_enabled = true;
     }
@@ -726,6 +764,102 @@ impl RadioCoordinator {
         self.can_transmit_on(self.effective_tx_slot())
     }
 
+    /// Enable or disable manual Monitor (squelch defeat) on the listening VFO.
+    ///
+    /// When enabled, unmutes receiver audio regardless of carrier/subaudible thresholds,
+    /// illuminates the green RX status LED, and pauses Dual Watch hopping on the monitored channel.
+    pub fn set_monitor<R: RadioService>(&mut self, radio: &mut R, enabled: bool) {
+        if self.is_transmitting && enabled {
+            return;
+        }
+        self.monitor_active = enabled;
+        if enabled {
+            bsp::set_status_led(bsp::StatusLed::Green);
+            self.set_audio_muted(radio, false);
+        } else if !self.carrier_active {
+            if !self.is_transmitting {
+                bsp::set_status_led(bsp::StatusLed::Off);
+            }
+            self.set_audio_muted(radio, true);
+        }
+    }
+
+    /// Toggle manual Monitor (squelch defeat) mode and return the new state.
+    pub fn toggle_monitor<R: RadioService>(&mut self, radio: &mut R) -> bool {
+        let next = !self.monitor_active;
+        self.set_monitor(radio, next);
+        self.monitor_active
+    }
+
+    /// Unified OS-level PTT state machine supporting `Momentary`, `Toggle`, and `DoublePressLatch`
+    /// modes across all foreground and background applications.
+    pub fn handle_ptt_key<R: RadioService>(
+        &mut self,
+        radio: &mut R,
+        mode: PttMode,
+        pressed: bool,
+        now_ms: u32,
+        client: ClientToken,
+    ) -> PttEventOutcome {
+        if self.ptt_latched && !self.is_transmitting {
+            self.ptt_latched = false;
+        }
+
+        let should_start = match mode {
+            PttMode::Momentary => Some(pressed),
+            PttMode::Toggle => {
+                if pressed {
+                    if self.is_transmitting {
+                        Some(false)
+                    } else {
+                        self.ptt_latched = true;
+                        Some(true)
+                    }
+                } else {
+                    None
+                }
+            }
+            PttMode::DoublePressLatch => {
+                if pressed {
+                    let diff_ms = now_ms.wrapping_sub(self.last_ptt_press_ms);
+                    self.last_ptt_press_ms = now_ms;
+                    if self.ptt_latched {
+                        Some(false)
+                    } else {
+                        if diff_ms <= 400 {
+                            self.ptt_latched = true;
+                        }
+                        Some(true)
+                    }
+                } else if !self.ptt_latched {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+        };
+
+        match should_start {
+            Some(true) => {
+                let perm = self.request_ptt_start(radio, client);
+                if !perm.is_granted() {
+                    self.ptt_latched = false;
+                }
+                PttEventOutcome::Started(perm)
+            }
+            Some(false) => {
+                self.ptt_latched = false;
+                if self.is_transmitting {
+                    self.request_ptt_stop(radio);
+                    PttEventOutcome::Stopped
+                } else {
+                    PttEventOutcome::None
+                }
+            }
+            None => PttEventOutcome::None,
+        }
+    }
+
     /// Called when the physical PTT key is released. Clears TOT lockout penalty.
     pub fn on_ptt_released(&mut self) {
         self.tot_locked_out = false;
@@ -734,6 +868,7 @@ impl RadioCoordinator {
     }
 
     pub fn start_tx<R: RadioService>(&mut self, radio: &mut R) {
+        self.monitor_active = false;
         self.is_transmitting = true;
         let slot = self.effective_tx_slot();
         self.listening_vfo = slot;
@@ -786,9 +921,10 @@ impl RadioCoordinator {
             self.audio_routing = AudioRoutingState::NormalVoice;
         }
         self.is_transmitting = false;
+        self.ptt_latched = false;
         self.tx_state = TxState::Idle;
         self.pa_thermal_foldback_active = false;
-        bsp::set_status_led(if self.carrier_active {
+        bsp::set_status_led(if self.carrier_active || self.monitor_active {
             bsp::StatusLed::Green
         } else {
             bsp::StatusLed::Off
@@ -1395,11 +1531,13 @@ impl RadioCoordinator {
             };
             self.subaudible_matched = tone_present;
             let tail_burst = radio.has_tail_burst_detected();
-            if let Some(should_mute) =
-                self.ste
-                    .process_tick_with_tail(true, tone_cfg, tone_present, tail_burst)
-            {
-                self.set_audio_muted(radio, should_mute);
+            if !self.monitor_active {
+                if let Some(should_mute) =
+                    self.ste
+                        .process_tick_with_tail(true, tone_cfg, tone_present, tail_burst)
+                {
+                    self.set_audio_muted(radio, should_mute);
+                }
             }
 
             RadioEvent::None
@@ -1459,10 +1597,12 @@ impl RadioCoordinator {
             self.carrier_active = false;
             self.subaudible_matched = false;
             self.ste.reset();
-            if !self.is_transmitting {
-                bsp::set_status_led(bsp::StatusLed::Off);
+            if !self.monitor_active {
+                if !self.is_transmitting {
+                    bsp::set_status_led(bsp::StatusLed::Off);
+                }
+                self.set_audio_muted(radio, true);
             }
-            self.set_audio_muted(radio, true);
             return RadioEvent::CarrierClosed(self.listening_vfo);
         }
 
@@ -1472,8 +1612,8 @@ impl RadioCoordinator {
             return RadioEvent::None;
         }
 
-        // 4. Freeze Dual Watch dwelling if VFO is held by an application or FSK sidecar
-        if self.arbitrator.is_locked() {
+        // 4. Freeze Dual Watch dwelling if VFO is held by an application, FSK sidecar, or Monitor mode
+        if self.arbitrator.is_locked() || self.monitor_active {
             return RadioEvent::None;
         }
 
@@ -1978,5 +2118,86 @@ mod tests {
         assert_eq!(coord.lock_depth(), 1);
         assert_eq!(coord.listening_vfo, VfoSlot::VfoA);
         assert_eq!(coord.arbitrator.active_client(), scanner);
+    }
+
+    #[test]
+    fn test_coordinator_ptt_modes_and_monitor_squelch_defeat() {
+        let mut coord = RadioCoordinator::new();
+        let mut radio = MockRadio::new();
+        let ui = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+
+        // 1. Monitor mode (Squelch Defeat) unmutes audio without carrier and freezes Dual Watch
+        coord.dual_watch = DualWatchMode::EqualDwell { dwell_ms: 20 };
+        coord.listening_vfo = VfoSlot::VfoA;
+        radio.muted = true;
+        assert!(coord.toggle_monitor(&mut radio));
+        assert!(coord.monitor_active);
+        assert!(!radio.muted);
+
+        // Even after 50ms of ticks without carrier, Monitor mode keeps audio unmuted and stays on VfoA
+        for _ in 0..5 {
+            assert_eq!(coord.tick_10ms(&mut radio), RadioEvent::None);
+        }
+        assert_eq!(coord.listening_vfo, VfoSlot::VfoA);
+        assert!(!radio.muted);
+
+        // Toggling Monitor off mutes audio and resumes Dual Watch
+        assert!(!coord.toggle_monitor(&mut radio));
+        assert!(!coord.monitor_active);
+        assert!(radio.muted);
+
+        // 2. PttMode::Toggle latches on first press and stops on second press
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::Toggle, true, 1000, ui),
+            PttEventOutcome::Started(TxPermission::Granted)
+        );
+        assert!(coord.is_transmitting);
+        assert!(coord.ptt_latched);
+        // Key release in Toggle mode does not stop TX
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::Toggle, false, 1100, ui),
+            PttEventOutcome::None
+        );
+        assert!(coord.is_transmitting);
+        // Second press stops TX and clears latch
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::Toggle, true, 1500, ui),
+            PttEventOutcome::Stopped
+        );
+        assert!(!coord.is_transmitting);
+        assert!(!coord.ptt_latched);
+
+        // 3. PttMode::DoublePressLatch: single press (>400ms gap) acts as momentary;
+        //    second press within <=400ms latches TX on release!
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::DoublePressLatch, true, 3000, ui),
+            PttEventOutcome::Started(TxPermission::Granted)
+        );
+        assert!(!coord.ptt_latched);
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::DoublePressLatch, false, 3100, ui),
+            PttEventOutcome::Stopped
+        );
+        assert!(!coord.is_transmitting);
+
+        // Second press at 3250ms (250ms after 3000ms press <= 400ms) -> LATCHES!
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::DoublePressLatch, true, 3250, ui),
+            PttEventOutcome::Started(TxPermission::Granted)
+        );
+        assert!(coord.ptt_latched);
+        // Releasing while latched keeps transmitting
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::DoublePressLatch, false, 3350, ui),
+            PttEventOutcome::None
+        );
+        assert!(coord.is_transmitting);
+        // Next press unlatches and stops TX
+        assert_eq!(
+            coord.handle_ptt_key(&mut radio, PttMode::DoublePressLatch, true, 4000, ui),
+            PttEventOutcome::Stopped
+        );
+        assert!(!coord.is_transmitting);
+        assert!(!coord.ptt_latched);
     }
 }

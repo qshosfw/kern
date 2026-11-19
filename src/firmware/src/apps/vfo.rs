@@ -1,6 +1,6 @@
 use crate::services::power::PowerService;
 use crate::services::radio::{
-    ClientId, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant, TxPermission,
+    ClientId, CrossBandMode, DualWatchMode, LockTier, RfClientParticipant,
 };
 // Main Dual VFO & Telemetry Application
 
@@ -9,119 +9,15 @@ use gfx::{Canvas, Color};
 use kernel::app::{App, EventResult};
 use kernel::event::{Event, KeyCode, KeyState};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PttMode {
-    Momentary = 0,
-    Toggle = 1,
-    DoublePressLatch = 2,
-}
-
-impl PttMode {
-    pub fn from_u8(val: u8) -> Self {
-        match val {
-            1 => PttMode::Toggle,
-            2 => PttMode::DoublePressLatch,
-            _ => PttMode::Momentary,
-        }
-    }
-}
-
 pub struct VfoApp {
     repeater: gfx::gui::KeyRepeater,
-    latched: bool,
-    last_ptt_press_ms: u32,
 }
 
 impl VfoApp {
     pub unsafe fn init_at(ptr: *mut Self) {
         unsafe {
             (*ptr).repeater = gfx::gui::KeyRepeater::new(8, 2);
-            // Offset initial timestamp past the 400ms double-press window so a first PTT press right after boot does not false-latch.
-            (*ptr).last_ptt_press_ms = u32::MAX - 500;
         }
-    }
-
-    #[inline(never)]
-    fn start_transmitting(&mut self, ctx: &mut SysContext) {
-        let perm = ctx.request_ptt_start();
-        if !perm.is_granted() {
-            self.latched = false;
-            match perm {
-                TxPermission::BlockedBusyChannel
-                | TxPermission::BlockedTotPenalty
-                | TxPermission::BlockedBatteryCritical => {
-                    if ctx.config.audio.key_beep != 0 {
-                        ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    #[inline(never)]
-    fn stop_transmitting(&mut self, ctx: &mut SysContext) {
-        self.latched = false;
-        if ctx.is_transmitting() {
-            ctx.request_ptt_stop();
-            if ctx.config.audio.roger_beep != 0 {
-                ctx.play_active_roger();
-            }
-        }
-    }
-
-    #[inline(never)]
-    fn handle_ptt_event(&mut self, ctx: &mut SysContext, state: KeyState) -> EventResult {
-        let mode = PttMode::from_u8(ctx.config.keys.ptt_mode);
-
-        match mode {
-            PttMode::Momentary => {
-                if state == KeyState::Pressed {
-                    self.start_transmitting(ctx);
-                } else if state == KeyState::Released {
-                    self.stop_transmitting(ctx);
-                }
-            }
-            PttMode::Toggle => {
-                if state == KeyState::Pressed {
-                    if ctx.state.coord.is_transmitting {
-                        self.stop_transmitting(ctx);
-                    } else {
-                        self.latched = true;
-                        self.start_transmitting(ctx);
-                    }
-                }
-            }
-            PttMode::DoublePressLatch => {
-                if state == KeyState::Pressed {
-                    let now_ms = ctx.millis();
-                    let diff_ms = now_ms.wrapping_sub(self.last_ptt_press_ms);
-                    self.last_ptt_press_ms = now_ms;
-
-                    if self.latched && !ctx.is_transmitting() {
-                        // TOT or external stop cleared TX while latched; clear stale latch before handling the new press.
-                        self.latched = false;
-                    }
-                    if self.latched {
-                        // Any press while latched turns TX off
-                        self.stop_transmitting(ctx);
-                    } else if diff_ms <= 400 {
-                        // Double-press within 400ms: latch TX!
-                        self.latched = true;
-                        self.start_transmitting(ctx);
-                    } else {
-                        // First press: momentary transmit start
-                        self.start_transmitting(ctx);
-                    }
-                } else if state == KeyState::Released {
-                    // In double-press latch mode: if not latched, release stops momentary TX
-                    if !self.latched {
-                        self.stop_transmitting(ctx);
-                    }
-                }
-            }
-        }
-        EventResult::Consumed
     }
 }
 
@@ -285,20 +181,17 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
     fn on_start(&mut self, ctx: &mut SysContext) {
         let slot = ctx.active_vfo();
         ctx.select_vfo(slot);
-        ctx.state.rssi_dbm = ctx.radio.get_rssi_dbm();
-        self.latched = false;
     }
 
     #[inline(never)]
     fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
-        ctx.state.rssi_dbm = ctx.radio.get_rssi_dbm();
-
         match *event {
             Event::Tick => handle_vfo_repeat_tick(&mut self.repeater, ctx),
             Event::Key { code, state } => {
                 self.repeater.handle_key(code, state);
                 if code == KeyCode::Ptt {
-                    self.handle_ptt_event(ctx, state)
+                    ctx.handle_system_ptt(state);
+                    EventResult::Consumed
                 } else if state == KeyState::Pressed {
                     handle_vfo_key_press(ctx, code)
                 } else {

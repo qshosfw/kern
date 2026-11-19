@@ -263,7 +263,9 @@ impl<'a> SystemHardware<'a> {
                     kernel::proc::ProcState::ServiceIdle
                 });
             }
-            let radio_ev = crate::radio_state().coord.tick_10ms(&mut self.radio);
+            let state = crate::radio_state();
+            let radio_ev = state.coord.tick_10ms(&mut self.radio);
+            state.rssi_dbm = state.coord.vfo_rssi(state.coord.listening_vfo);
             if let Some(bus_ev) = radio_ev.to_bus_event(2) {
                 crate::system::enqueue_event(kernel::event::Event::Bus(bus_ev));
             }

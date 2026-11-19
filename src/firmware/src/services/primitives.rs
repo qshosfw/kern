@@ -415,4 +415,49 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
             self.state.coord.request_ptt_stop(self.radio);
         }
     }
+
+    pub fn toggle_monitor(&mut self) -> bool {
+        self.state.coord.toggle_monitor(self.radio)
+    }
+
+    /// System-wide PTT key event handler (`Momentary`, `Toggle`, `DoublePressLatch`),
+    /// including acoustic BCLO/TOT/battery refusal warnings and post-TX roger beep playback.
+    #[inline(never)]
+    pub fn handle_system_ptt(&mut self, state: kernel::event::KeyState) {
+        use crate::services::radio::{PttEventOutcome, PttMode};
+        use kernel::event::KeyState;
+
+        let pressed = match state {
+            KeyState::Pressed => true,
+            KeyState::Released => false,
+            KeyState::Held => return,
+        };
+        let mode = PttMode::from_u8(self.config.keys.ptt_mode);
+        let now_ms = self.millis();
+        let client = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+        match self
+            .state
+            .coord
+            .handle_ptt_key(self.radio, mode, pressed, now_ms, client)
+        {
+            PttEventOutcome::Started(perm) if !perm.is_granted() => {
+                if matches!(
+                    perm,
+                    TxPermission::BlockedBusyChannel
+                        | TxPermission::BlockedTotPenalty
+                        | TxPermission::BlockedBatteryCritical
+                        | TxPermission::BlockedTxInhibited
+                ) && self.config.audio.key_beep != 0
+                {
+                    self.play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+                }
+            }
+            PttEventOutcome::Stopped => {
+                if self.config.audio.roger_beep != 0 {
+                    self.play_active_roger();
+                }
+            }
+            _ => {}
+        }
+    }
 }
