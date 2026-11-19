@@ -255,4 +255,65 @@ mod tests {
         ipc_channel_mut().purge_pid(radio_pid);
         ipc_channel_mut().purge_pid(1);
     }
+
+    #[test]
+    fn fuzz_kern_call_invalid_and_null_boundary() {
+        use kernel::abi::domain;
+        super::super::native_runner::init_native_slot();
+        // Exercise invalid domains, invalid op indices, and null-pointer boundary args
+        // across safe non-rebooting ops to prove zero panics or UB.
+        for dom in 0u8..16 {
+            for idx in 0u8..16 {
+                let op = ((dom as u32) << 4) | (idx as u32);
+                // Skip reboot/delay/hardware-bus ops that spin or halt on target/host.
+                if op == Op::SysReboot.u32_id()
+                    || dom == domain::IO
+                    || dom == domain::RF
+                    || dom == domain::AUD
+                    || (dom == domain::PROC && idx == 4)
+                {
+                    continue;
+                }
+                let _ = unsafe { kern_call(op, 0, 0, 0) };
+                let a0_is_ptr = op == Op::SysInfo.u32_id()
+                    || op == Op::FsRename.u32_id()
+                    || op == Op::GfxText.u32_id()
+                    || op == Op::ProcFind.u32_id()
+                    || dom == domain::IPC;
+                if !a0_is_ptr {
+                    let _ = unsafe { kern_call(op, 0xFF, 0, 0) };
+                }
+            }
+        }
+        // Misaligned destination pointers must be rejected cleanly (prevent Cortex-M0+ HardFault / UB).
+        let mut raw = [0u8; core::mem::size_of::<KrxSysInfo>() + 4];
+        let unaligned_ptr = unsafe { raw.as_mut_ptr().add(1) } as usize;
+        assert_ne!(
+            unsafe { kern_call(Op::SysInfo.u32_id(), unaligned_ptr, 0, 0) },
+            0
+        );
+        assert_ne!(
+            unsafe { kern_call(Op::ProcInfo.u32_id(), 0, unaligned_ptr, 0) },
+            0
+        );
+        // Division by zero must never trap.
+        let mut rem = 0xDEAD_BEEFu32;
+        assert_eq!(
+            unsafe { kern_call(Op::SysDiv.u32_id(), 42, 0, &raw mut rem as usize) },
+            0
+        );
+        assert_eq!(rem, 42);
+        assert_eq!(
+            unsafe {
+                kern_call(
+                    Op::SysIdiv.u32_id(),
+                    (-42i32) as u32 as usize,
+                    0,
+                    &raw mut rem as usize,
+                )
+            },
+            0
+        );
+        assert_eq!(rem as i32, -42);
+    }
 }

@@ -69,6 +69,12 @@ fn play_tone_file(
 }
 
 impl<'a, 'hw> SysContext<'a, 'hw> {
+    /// Monotonic system uptime in milliseconds.
+    #[inline(always)]
+    pub fn millis(&self) -> u32 {
+        py32_hal::delay::millis()
+    }
+
     /// Global factory hardware calibration block.
     #[inline(always)]
     pub fn calibration(&self) -> &'static SystemCalibration {

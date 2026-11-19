@@ -488,7 +488,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
         }
         let mut polled_info = false;
         if let Event::Tick = *event {
-            let now_ms = py32_hal::delay::millis();
+            let now_ms = ctx.millis();
             let dt = if self.last_tick_ms == 0 {
                 50
             } else {
@@ -821,5 +821,64 @@ mod tests {
         assert_eq!(app.selected_idx, 5);
         assert!(app.active_action_module);
         assert!(canvas.buffer.iter().flatten().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn settings_all_pages_specs_titles_and_fuzz_formatters() {
+        use super::super::options::{page_spec, page_title};
+        use super::super::page::{PageId, RANGES, TAG_CHOICE, TAG_RANGE, choice_options};
+
+        // 1. Exhaustively validate every PageId discriminant has a non-empty title & coherent spec.
+        for raw in 0..(PageId::COUNT as u8) {
+            let pid = PageId::from_u8(raw).expect("valid PageId");
+            let title = page_title(pid);
+            assert!(!title.is_empty(), "empty title for PageId {:?}", pid);
+            let spec = page_spec(pid);
+            for (idx, def) in spec.defs.iter().enumerate() {
+                assert!(
+                    !spec.title(idx).is_empty(),
+                    "empty item title at {:?}[{}]",
+                    pid,
+                    idx
+                );
+                if def.tag == TAG_CHOICE {
+                    let opts = choice_options(def.aux).expect("valid choice_options");
+                    assert!(!opts.is_empty());
+                } else if def.tag == TAG_RANGE {
+                    let r = &RANGES[def.aux as usize];
+                    assert!(r.min <= r.max && r.step > 0);
+                }
+            }
+        }
+        assert!(PageId::from_u8(PageId::COUNT as u8).is_none());
+
+        // 2. Deterministic fuzz of asset name formatter, digit parser, and alert wrapper.
+        let mut rng = 0x1357_9BDFu32;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            rng
+        };
+        let mut raw_buf = [0u8; 48];
+        let mut out_short = gfx::gui::modules::menu::ShortString::empty();
+        let mut wrapped = heapless::String::<120>::new();
+
+        for _ in 0..500 {
+            let len = (next() as usize) % raw_buf.len();
+            for b in &mut raw_buf[..len] {
+                // Printable ASCII + '/', '.', '_', '-', digits, spaces, newlines
+                let v = (next() % 96) as u8;
+                *b = if v == 95 { b'\n' } else { 0x20 + v };
+            }
+            let s = core::str::from_utf8(&raw_buf[..len]).unwrap();
+            super::super::asset_chooser::format_asset_name_into(s, &mut out_short);
+            assert!(!out_short.as_str().is_empty());
+
+            let _ = super::super::dialog::parse_u32_digits(s);
+
+            crate::orchestrator::compositor::wrap_alert_text(s, &mut wrapped);
+            assert!(wrapped.len() <= 120);
+        }
     }
 }

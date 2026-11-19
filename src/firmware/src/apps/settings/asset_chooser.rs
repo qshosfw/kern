@@ -9,11 +9,12 @@ use gfx::gui::modules::menu::{OptionSheet, ShortString};
 pub const MAX_CHOOSER_ASSETS: usize = 8;
 pub const TAG_ASSET_CHOOSER: u8 = 16;
 
-#[derive(Clone, Copy)]
-pub enum AssetKind {
-    Splash,
-    Roger,
-    Jingle,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AssetId {
+    Splash = 0,
+    Roger = 1,
+    Jingle = 2,
 }
 
 pub struct AssetDescriptor {
@@ -22,19 +23,19 @@ pub struct AssetDescriptor {
     /// NUL-delimited packed lowercase suffixes (e.g. `".ton\0.rgr\0"`).
     pub extensions: &'static str,
     pub none_label: &'static str,
-    pub kind: AssetKind,
+    pub kind: AssetId,
 }
 
 impl AssetDescriptor {
     #[inline(never)]
     fn get_path<'a>(&self, cfg: &'a crate::config::MasterConfig) -> (bool, &'a str) {
         match self.kind {
-            AssetKind::Splash => (
+            AssetId::Splash => (
                 cfg.display.boot_splash_mode != 0,
                 cfg.display.splash_path_str(),
             ),
-            AssetKind::Roger => (cfg.audio.roger_beep != 0, cfg.audio.roger_path_str()),
-            AssetKind::Jingle => (cfg.audio.boot_jingle != 0, cfg.audio.jingle_path_str()),
+            AssetId::Roger => (cfg.audio.roger_beep != 0, cfg.audio.roger_path_str()),
+            AssetId::Jingle => (cfg.audio.boot_jingle != 0, cfg.audio.jingle_path_str()),
         }
     }
 
@@ -42,19 +43,19 @@ impl AssetDescriptor {
     fn set_path(&self, cfg: &mut crate::config::MasterConfig, opt: Option<&str>) {
         let on = opt.is_some() as u8;
         match self.kind {
-            AssetKind::Splash => {
+            AssetId::Splash => {
                 cfg.display.boot_splash_mode = on;
                 if let Some(p) = opt {
                     cfg.display.set_splash_path(p);
                 }
             }
-            AssetKind::Roger => {
+            AssetId::Roger => {
                 cfg.audio.roger_beep = on;
                 if let Some(p) = opt {
                     cfg.audio.set_roger_path(p);
                 }
             }
-            AssetKind::Jingle => {
+            AssetId::Jingle => {
                 cfg.audio.boot_jingle = on;
                 if let Some(p) = opt {
                     cfg.audio.set_jingle_path(p);

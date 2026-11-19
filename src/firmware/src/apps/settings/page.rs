@@ -279,13 +279,7 @@ pub fn choice_options(idx: u8) -> Option<&'static str> {
 }
 
 #[cfg(feature = "filesystem")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum AssetId {
-    Splash = 0,
-    Roger = 1,
-    Jingle = 2,
-}
+pub use super::asset_chooser::AssetId;
 
 #[cfg(feature = "filesystem")]
 pub static ASSETS: [&'static super::asset_chooser::AssetDescriptor; 3] = [

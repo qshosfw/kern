@@ -165,3 +165,73 @@ impl Default for CdcEngine {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuzz_cdc_ring_buffer_and_line_coding() {
+        let mut cdc = CdcEngine::new();
+        let mut model = [0u8; CDC_RX_BUF_SIZE];
+        let mut m_head = 0usize;
+        let mut m_tail = 0usize;
+        let mut rng = 0xC0DE_1234u32;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            rng
+        };
+
+        let mut tmp_in = [0u8; 32];
+        let mut tmp_out = [0u8; 32];
+
+        for _ in 0..2000 {
+            let avail = m_head.wrapping_sub(m_tail) & (CDC_RX_BUF_SIZE - 1);
+            assert_eq!(cdc.rx_available(), avail);
+
+            if (next() & 1) == 0 {
+                let n = (next() as usize) % 29;
+                for b in &mut tmp_in[..n] {
+                    *b = next() as u8;
+                }
+                cdc.push_rx(&tmp_in[..n]);
+                for &b in &tmp_in[..n] {
+                    let nh = (m_head + 1) & (CDC_RX_BUF_SIZE - 1);
+                    if nh != m_tail {
+                        model[m_head] = b;
+                        m_head = nh;
+                    }
+                }
+            } else {
+                let n = (next() as usize) % 29;
+                let got = cdc.pop_rx(&mut tmp_out[..n]);
+                let mut exp = 0usize;
+                while m_head != m_tail && exp < n {
+                    assert_eq!(tmp_out[exp], model[m_tail]);
+                    m_tail = (m_tail + 1) & (CDC_RX_BUF_SIZE - 1);
+                    exp += 1;
+                }
+                assert_eq!(got, exp);
+            }
+        }
+
+        // LineCoding serialization/deserialization roundtrip across arbitrary byte patterns.
+        for _ in 0..256 {
+            let raw = [
+                next() as u8,
+                next() as u8,
+                next() as u8,
+                next() as u8,
+                next() as u8,
+                next() as u8,
+                next() as u8,
+            ];
+            cdc.set_line_coding(&raw);
+            let mut out = [0u8; 7];
+            cdc.get_line_coding(&mut out);
+            assert_eq!(out, raw);
+        }
+    }
+}

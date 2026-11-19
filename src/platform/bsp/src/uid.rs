@@ -360,4 +360,57 @@ mod tests {
             "BATCH2026A12"
         );
     }
+
+    #[test]
+    fn fuzz_qs1_extractor_matches_byte_oracle() {
+        fn oracle_find_tag_end(bytes: &[u8]) -> Option<usize> {
+            let mut i = 0;
+            while i + 4 <= bytes.len() {
+                let w = &bytes[i..i + 4];
+                let m1 =
+                    w[0] == b'1' && w[1] == b'-' && (w[2] | 0x20) == b's' && (w[3] | 0x20) == b'q';
+                let m2 =
+                    (w[0] | 0x20) == b'q' && (w[1] | 0x20) == b's' && w[2] == b'-' && w[3] == b'1';
+                if m1 || m2 {
+                    return Some(i + 4);
+                }
+                i += 1;
+            }
+            None
+        }
+
+        let mut rng = 0x5A17_BEEFu32;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            rng
+        };
+
+        let tags: [&[u8; 4]; 8] = [
+            b"1-sq", b"1-SQ", b"1-Sq", b"1-sQ", b"qs-1", b"QS-1", b"Qs-1", b"qS-1",
+        ];
+        let mut buf = [0u8; 128];
+
+        for iter in 0..1000usize {
+            let len = (next() as usize) % 129;
+            for b in &mut buf[..len] {
+                *b = next() as u8;
+            }
+            if (iter & 1) == 0 && len >= 8 {
+                let pos = (next() as usize) % (len - 4);
+                buf[pos..pos + 4].copy_from_slice(tags[iter & 7]);
+            }
+            let slice = &buf[..len];
+            assert_eq!(find_qs1_tag_end(slice), oracle_find_tag_end(slice));
+            if let Some(sn) = extract_qs1_slice(slice) {
+                assert!(sn.len() <= 16);
+                assert!(
+                    sn.iter().all(
+                        |b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/')
+                    )
+                );
+            }
+        }
+    }
 }

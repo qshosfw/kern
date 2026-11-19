@@ -203,7 +203,7 @@ impl KeypadLockManager {
     }
 
     /// Stop advancing hold and let the progress bar springily rewind to 0 before closing.
-    #[inline(always)]
+    #[inline(never)]
     fn release_active_hold(&mut self) {
         self.held_code = None;
         self.delay_elapsed_ms = 0;

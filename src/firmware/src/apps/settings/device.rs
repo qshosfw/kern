@@ -1,9 +1,7 @@
 //! Device Domain Settings Declarations
 
 #[cfg(feature = "filesystem")]
-use super::asset_chooser::{AssetDescriptor, AssetKind};
-#[cfg(feature = "filesystem")]
-use super::page::AssetId;
+use super::asset_chooser::{AssetDescriptor, AssetId};
 #[cfg(not(feature = "text_input"))]
 use super::page::MetricId;
 use super::page::{ActionId, ChoiceId, PageId, SettingDef, SettingField, setting_page};
@@ -22,7 +20,7 @@ pub static SPLASH_ASSET: AssetDescriptor = AssetDescriptor {
     dir: "/user/splash",
     extensions: ".rle\0.img\0.bin\0",
     none_label: "None",
-    kind: AssetKind::Splash,
+    kind: AssetId::Splash,
 };
 
 setting_page!(pub SPLASH_PAGE = [

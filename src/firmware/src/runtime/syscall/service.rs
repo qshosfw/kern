@@ -82,7 +82,7 @@ fn copy_cstr(dst: &mut [u8], src: &[u8]) {
 
 #[inline(never)]
 unsafe fn fill_sys_info(out_info: *mut KrxSysInfo) -> usize {
-    if out_info.is_null() {
+    if out_info.is_null() || !out_info.is_aligned() {
         return 1;
     }
     unsafe { core::ptr::write_bytes(out_info, 0, 1) };
@@ -409,7 +409,7 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         op::ProcCount => active_slot_scan(u8::MAX).0 as usize,
         op::ProcInfo => {
             let out_info = a1 as *mut KrxProcInfo;
-            if out_info.is_null() {
+            if out_info.is_null() || !out_info.is_aligned() {
                 return 1;
             }
             let (_, Some(slot)) = active_slot_scan(a0 as u8) else {

@@ -3016,4 +3016,55 @@ mod tests {
             Some("Proc\0Sch\0Kr\0")
         );
     }
+
+    #[test]
+    fn fuzz_krx_summary_and_header_parsers() {
+        let mut rng = 0xA1B2_C3D4u32;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            rng
+        };
+
+        let mut buf = [0u8; KrxPreamble::MAX_HEADER_SIZE + 16];
+        for iter in 0..2000usize {
+            let len = (next() as usize) % buf.len();
+            for b in &mut buf[..len] {
+                *b = next() as u8;
+            }
+            // Half the iterations craft a valid ident + plausible header_len & zero CRC
+            // so the section walker, string scanner, and config/action parsers are deeply exercised.
+            if (iter & 1) == 0 && len >= KrxPreamble::SIZE {
+                buf[0..4].copy_from_slice(&KRX_IDENT);
+                let h_len = (((next() as usize) % (len + 1)) & !3).max(KrxPreamble::SIZE);
+                buf[8..10].copy_from_slice(&(h_len as u16).to_le_bytes());
+                buf[16..20].copy_from_slice(&0u32.to_le_bytes()); // bypass header_crc32 to fuzz section parsing
+            }
+
+            let slice = &buf[..len];
+            let mut slot = core::mem::MaybeUninit::<KrxSummary<'_>>::uninit();
+            if let Ok(summary) = KrxPreamble::summarize_into(slice, &mut slot) {
+                assert!(summary.preamble.header_len as usize >= KrxPreamble::SIZE);
+                assert!(summary.preamble.header_len as usize <= len);
+                if let Some(acts) = summary.aux.actions {
+                    let n = KrxActionDecl::count(acts);
+                    for k in 0..n.min(8) {
+                        let decl = KrxActionDecl::parse(acts, k).unwrap();
+                        let _ = decl.label_str();
+                    }
+                }
+                if let Some(cfg) = summary.aux.config {
+                    let _ = KrxConfigHeader::parse(cfg);
+                    for k in 0..4 {
+                        let _ = KrxConfigItem::parse(cfg, k);
+                    }
+                }
+            }
+
+            let off = (next() as u16) % (buf.len() as u16 + 16);
+            let _ = KrxPreamble::read_hdr_str(slice, off);
+            let _ = KrxPreamble::read_hdr_packed(slice, off);
+        }
+    }
 }

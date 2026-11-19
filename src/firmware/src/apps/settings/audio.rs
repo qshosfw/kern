@@ -1,9 +1,7 @@
 //! Audio Domain Settings Declarations & Hardware Binding
 
 #[cfg(feature = "filesystem")]
-use super::asset_chooser::{AssetDescriptor, AssetKind};
-#[cfg(feature = "filesystem")]
-use super::page::AssetId;
+use super::asset_chooser::{AssetDescriptor, AssetId};
 use super::page::{ChoiceId, RangeId, SettingDef, SettingField, setting_page};
 
 pub const KEY_BEEP_OPTIONS: &str = "Off\0Tone\0Click\0Double\0Warning\0Scroll\0";
@@ -16,7 +14,7 @@ pub static ROGER_ASSET: AssetDescriptor = AssetDescriptor {
     dir: "/user/rogers",
     extensions: ".ton\0.rgr\0",
     none_label: "Off",
-    kind: AssetKind::Roger,
+    kind: AssetId::Roger,
 };
 
 #[cfg(feature = "filesystem")]
@@ -25,7 +23,7 @@ pub static JINGLE_ASSET: AssetDescriptor = AssetDescriptor {
     dir: "/user/jingles",
     extensions: ".ton\0",
     none_label: "Off",
-    kind: AssetKind::Jingle,
+    kind: AssetId::Jingle,
 };
 
 setting_page!(pub AUDIO_PAGE = [
