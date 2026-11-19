@@ -1871,21 +1871,15 @@ mod tests {
         }
         assert!(scanned_ident && scanned_exec && scanned_type);
 
-        // ── 3. Validate Capability Binding & Simulated GOT Resolution ──
-        let mut got_table = [0usize; 8];
-        // Slot 0: Display VTable
-        got_table[0] = &STUB_DISPLAY_VTABLE as *const _ as usize;
-        // Slot 1: Radio VTable
-        got_table[1] = &STUB_RADIO_VTABLE as *const _ as usize;
-        // Slot 2: Audio VTable
-        got_table[2] = &STUB_AUDIO_VTABLE as *const _ as usize;
-
+        // ── 3. Validate Unified Single-Entry ABI Dispatch ──
+        let stub_api = KrxApiTable::safe_stub(required_caps);
         unsafe {
-            let radio = &*(got_table[1] as *const RadioApi);
-            assert_eq!((radio.rf_get_freq)(), 0);
-            assert_eq!((radio.rf_tune)(145_000_000, 25, 12_500), 1);
-            let display = &*(got_table[0] as *const DisplayApi);
-            assert_eq!((display.get_framebuffer)(), core::ptr::null_mut());
+            assert_eq!(stub_api.invoke(crate::abi::Op::RfGet, 0, 0, 0), 0);
+            assert_eq!(
+                stub_api.invoke(crate::abi::Op::RfTune, 145_000_000, 1, 12_500),
+                1
+            );
+            assert_eq!(stub_api.invoke(crate::abi::Op::GfxFb, 0, 0, 0), 0);
         }
 
         // ── 4. Validate Process Lifecycle & PCB Ledger Integration ──
@@ -1953,7 +1947,7 @@ mod tests {
                     if ev.is_key() {
                         1 // Consumed
                     } else if ev.is_radio_bus() {
-                        let _freq = unsafe { ((*table.radio).rf_get_freq)() };
+                        let _freq = unsafe { table.invoke(crate::abi::Op::RfGet, 0, 0, 0) };
                         1 // Consumed
                     } else {
                         0 // Ignored
@@ -1961,8 +1955,8 @@ mod tests {
                 }
                 KRX_OP_RENDER => {
                     unsafe {
-                        ((*table.display).draw_rect)(0, 0, 128, 64, 1);
-                        ((*table.display).commit_frame)();
+                        table.invoke(crate::abi::Op::GfxDraw, 2 | (1 << 8), 0, (128) | (64 << 16));
+                        table.invoke(crate::abi::Op::GfxCommit, 0, 0, 0);
                     }
                     0
                 }
@@ -2193,7 +2187,7 @@ mod tests {
             match op {
                 KRX_OP_START => {
                     state.freq = 145_500_000;
-                    unsafe { ((*table.radio).rf_tune)(state.freq, 25, 12_500) };
+                    unsafe { table.invoke(crate::abi::Op::RfTune, state.freq as usize, 1, 12_500) };
                     0
                 }
                 KRX_OP_EVENT => {
@@ -2214,10 +2208,21 @@ mod tests {
                 }
                 KRX_OP_RENDER => {
                     state.rendered_frames += 1;
+                    let req = KrxTextReq {
+                        text: b"BEACON".as_ptr(),
+                        x: 16,
+                        y: 26,
+                        len: 6,
+                        arg: 0,
+                        font: 0,
+                        color: 1,
+                        flags: 0,
+                        _pad: 0,
+                    };
                     unsafe {
-                        ((*table.display).draw_rect)(0, 0, 128, 64, 1);
-                        ((*table.display).draw_str)(16, 26, b"BEACON".as_ptr(), 6, 0, 1);
-                        ((*table.display).commit_frame)();
+                        table.invoke(crate::abi::Op::GfxDraw, 2 | (1 << 8), 0, 128 | (64 << 16));
+                        table.invoke(crate::abi::Op::GfxText, &raw const req as usize, 0, 0);
+                        table.invoke(crate::abi::Op::GfxCommit, 0, 0, 0);
                     }
                     0
                 }
@@ -2296,356 +2301,57 @@ mod tests {
 
     #[test]
     fn test_exhaustive_abi_vtable_verification_bench() {
+        use crate::abi::Op;
         use crate::proc::abi::*;
 
         let api = KrxApiTable::safe_stub(0xFFFF_FFFF);
 
-        // 1. CapDisplayVTable
         unsafe {
-            let d = &*api.display;
-            (d.clear)();
-            (d.draw_pixel)(10, 20, 1);
-            (d.draw_line)(0, 0, 128, 64, 1);
-            (d.draw_rect)(5, 5, 20, 20, 1);
-            (d.fill_rect)(10, 10, 15, 15, 1);
-            let bmp = [0xFFu8; 8];
-            (d.draw_bitmap)(0, 0, 8, 8, bmp.as_ptr(), 8);
-            let s = b"TEST\0";
-            (d.draw_str)(0, 0, s.as_ptr(), 4, 0, 1);
-            (d.draw_str_align)(0, 0, s.as_ptr(), 4, 0, 1, 0);
-            (d.draw_str_max)(0, 0, s.as_ptr(), 4, 0, 1, 64);
-            (d.commit_frame)();
-            (d.commit_rows)(0b00000001);
-            let _fb = (d.get_framebuffer)();
-            (d.set_inverted)(1);
-            (d.set_contrast)(31);
-            (d.draw_line_h)(0, 10, 50, 1);
-            (d.draw_line_v)(10, 0, 50, 1);
-            (d.draw_dotted_line_h)(0, 100, 25, 2, 1);
-            (d.clear_corners)(10, 10, 30, 20);
-            (d.fill_rect_dither)(10, 10, 30, 20, 8);
-            (d.invert_rect)(10, 10, 30, 20);
-            assert_eq!((d.str_width)(s.as_ptr(), 4, 0), 0);
-            assert_eq!((d.draw_char)(0, 0, b'A', 0, 1), 6);
-            (d.draw_icon)(0, 0, 0, 1);
-            (d.scroll)(0, 1, 0);
-        }
-
-        // 2. CapRadioVTable
-        unsafe {
-            let r = &*api.radio;
-            assert_eq!((r.rf_tune)(145_500_000, 25, 12_500), 1);
-            assert_eq!((r.rf_get_freq)(), 0);
-            assert_eq!((r.rf_get_rssi)(), -140);
-            assert_eq!((r.rf_is_carrier)(), 0);
-            (r.rf_set_modulation)(0);
-            (r.rf_set_squelch)(3);
-            assert_eq!((r.rf_set_tx)(0), 1);
-            (r.rf_set_tx_power)(1);
-            (r.rf_set_af_mode)(0);
-            let mut sweep_buf = [0i16; 8];
+            // SYS & MATH
             assert_eq!(
-                (r.rf_sweep)(144_000_000, 25_000, 8, sweep_buf.as_mut_ptr()),
-                0
+                api.invoke(Op::SysQuery, 0, 0, 0),
+                KRX_ABI_VERSION_3_0 as usize
             );
-            let sym = KrxSymbol {
-                freq_word: 1200,
-                duration_us: 833,
-            };
-            assert_eq!((r.rf_symbol_tx_emit)(&sym, 1), 1);
-            (r.rf_set_dual_tones)(100, 10, 200, 10);
-            (r.rf_fsk_init)(1200);
-            let fsk_data = b"FSK_TEST";
-            assert_eq!((r.rf_fsk_send)(fsk_data.as_ptr(), 8), 1);
-            let mut fsk_rx = [0u8; 16];
-            assert_eq!((r.rf_fsk_recv)(fsk_rx.as_mut_ptr(), 16), 0);
-            (r.rf_set_mic_mute)(1);
-            assert_eq!((r.rf_set_tx_carrier)(0), 1);
-            (r.rf_set_subaudible_ctcss)(670);
-            (r.rf_set_subaudible_dcs)(0o023, 0);
-            (r.rf_send_tail)();
-            assert_eq!((r.rf_get_bandwidth)(), 12_500);
-            assert_eq!((r.rf_get_modulation)(), 0);
-            assert_eq!((r.rf_get_tx_state)(), 0);
-            assert_eq!((r.rf_get_glitch)(), 0);
-            (r.rf_set_agc)(0);
-            (r.rf_set_dual_tones_hz)(700, 15, 900, 15);
-            (r.rf_set_dtmf)(1, 20);
-            assert_eq!((r.rf_get_snr)(), 0);
-            assert_eq!((r.rf_get_noise)(), 0);
-        }
+            assert_eq!(api.invoke(Op::SysQuery, 1, 0, 0), 1024);
+            assert_eq!(api.invoke(Op::SysQuery, 2, 0, 0), 48_000_000);
+            assert_eq!(api.invoke(Op::SysQuery, 5, 144, 0), 12);
+            assert_eq!(api.invoke(Op::SysQuery, 5, 256, 0), 16);
+            assert_eq!(api.invoke(Op::SysInfo, 0, 0, 0), 1);
 
-        // 3. CapAudioVTable
-        unsafe {
-            let a = &*api.audio;
-            (a.audio_play_tone)(800, 50);
-            (a.audio_play_beep)(1);
-            (a.audio_set_path)(1);
-            assert_eq!((a.audio_capture_start)(8000), 1);
-            let mut audio_buf = [0i16; 16];
-            assert_eq!((a.audio_capture_read)(audio_buf.as_mut_ptr(), 16), 0);
-            (a.audio_capture_stop)();
-            (a.audio_set_volume)(7);
-            assert_eq!((a.audio_get_volume)(), 5);
-            (a.audio_stop)();
-            assert_eq!((a.audio_is_playing)(), 0);
-            (a.audio_set_mic_gain)(16);
-            assert_eq!((a.audio_read_mic_sample)(), 0);
-            assert_eq!((a.audio_is_capturing)(), 0);
-        }
+            // PROC & IPC
+            assert_eq!(api.invoke(Op::ProcLeaf, 0, 100, 0), 0xFFFF_FFFF);
+            assert_eq!(api.invoke(Op::ProcSvc, 0 | (0x1234 << 8), 1, 0), 1);
+            assert_eq!(api.invoke(Op::ProcSvc, 1 | (0x1234 << 8), 1, 0), 0);
+            assert_eq!(api.invoke(Op::ProcCtl, 0, 0, 0), 1);
+            assert_eq!(api.invoke(Op::IpcSend, 0, 0, 0), 1);
+            assert_eq!(api.invoke(Op::IpcRecv, 0, 0, 0), 1);
+            assert_eq!(api.invoke(Op::IpcPoll, 0, 16, 0), 0xFF);
 
-        // 4. CapStorageVTable
-        unsafe {
-            let s = &*api.storage;
-            let mut cfg_buf = [0u8; 16];
-            assert_eq!((s.storage_load_config)(cfg_buf.as_mut_ptr(), 16), 0);
-            assert_eq!((s.storage_save_config)(cfg_buf.as_ptr(), 16), 1);
-            assert_eq!((s.storage_read_asset)(1, 0, cfg_buf.as_mut_ptr(), 16), 0);
-            let path = b"/user/test.txt\0";
-            assert_eq!(
-                (s.storage_read_file)(path.as_ptr(), 14, cfg_buf.as_mut_ptr(), 16),
-                0
-            );
-            assert_eq!(
-                (s.storage_write_file)(path.as_ptr(), 14, cfg_buf.as_ptr(), 16),
-                1
-            );
-            assert_eq!((s.storage_remove_file)(path.as_ptr(), 14), 1);
-            assert_eq!((s.storage_file_size)(path.as_ptr(), 14), 0);
-            let mut entries = [KrxDirEntry {
-                name: [0; 24],
-                size: 0,
-                is_dir: 0,
-                reserved: [0; 3],
-            }];
-            assert_eq!(
-                (s.storage_list_dir)(b"/\0".as_ptr(), 1, entries.as_mut_ptr(), 1),
-                0
-            );
-            assert_eq!((s.storage_file_exists)(path.as_ptr(), 14), 0);
-            assert_eq!(
-                (s.storage_read_file_at)(path.as_ptr(), 14, 0, cfg_buf.as_mut_ptr(), 16),
-                0
-            );
-            assert_eq!(
-                (s.storage_append_file)(path.as_ptr(), 14, cfg_buf.as_ptr(), 16),
-                1
-            );
-            let new_path = b"/user/new.txt\0";
-            assert_eq!(
-                (s.storage_rename_file)(path.as_ptr(), 14, new_path.as_ptr(), 13),
-                1
-            );
-            assert_eq!((s.storage_create_dir)(b"/user/data\0".as_ptr(), 10), 1);
-        }
+            // FS
+            assert_eq!(api.invoke(Op::FsRead, 0, 0, 0), 0);
+            assert_eq!(api.invoke(Op::FsWrite, 0, 0, 0), 1);
+            assert_eq!(api.invoke(Op::FsMeta, 2, 0, 0), 1);
+            assert_eq!(api.invoke(Op::FsRename, 0, 0, 0), 1);
 
-        // 5. CapKeypadVTable
-        unsafe {
-            let k = &*api.keypad;
-            assert_eq!((k.sys_poll_key)(), 0);
-            assert_eq!((k.sys_nav_dir)(1), 0);
-            assert_eq!((k.sys_nav_dir)(2), 0);
-            assert_eq!((k.sys_key_matrix)(), 0);
-            assert_eq!((k.sys_is_key_pressed)(1), 0);
-            assert_eq!((k.sys_is_f_active)(), 0);
-            assert_eq!((k.sys_is_ptt_pressed)(), 0);
-            assert_eq!((k.sys_is_side1_pressed)(), 0);
-            assert_eq!((k.sys_is_side2_pressed)(), 0);
-            (k.sys_clear_key_buffer)();
-            assert_eq!((k.sys_is_keypad_locked)(), 0);
-        }
+            // RF & AUD
+            assert_eq!(api.invoke(Op::RfTune, 145_500_000, 1, 12_500), 1);
+            assert_eq!(api.invoke(Op::RfGet, 0, 0, 0), 0);
+            assert_eq!(api.invoke(Op::RfGet, 1, 0, 0) as u32 as i32, -140);
+            assert_eq!(api.invoke(Op::RfSet, 6, 0, 0), 1);
+            assert_eq!(api.invoke(Op::AudCtl, 6, 8000, 0), 1);
 
-        // 6. CapPowerVTable
-        unsafe {
-            let p = &*api.power;
-            assert_eq!((p.sys_battery_mv)(), 4000);
-            assert_eq!((p.sys_battery_pct)(), 100);
-            assert_eq!((p.sys_battery_ma)(), 0);
-            assert_eq!((p.sys_battery_type)(), 0);
-            assert_eq!((p.sys_raw_battery_adc)(), 0);
-            assert_eq!((p.sys_mcu_temp)(), 250);
-            assert_eq!((p.sys_is_charging)(), 0);
-            assert_eq!((p.sys_is_low)(), 0);
-            assert_eq!((p.sys_is_critical)(), 0);
-            (p.sys_set_backlight)(1, 10);
-            (p.sys_set_backlight_brightness)(255, 32);
-            (p.sys_wake_backlight)();
-            (p.sys_set_flashlight)(0);
-            assert_eq!((p.sys_cpu_freq_hz)(), 48_000_000);
-        }
+            // GFX & UI
+            assert_eq!(api.invoke(Op::GfxClear, 0, 0, 0), 0);
+            assert_eq!(api.invoke(Op::GfxDraw, 9 | (1 << 8), 0, b'A' as usize), 6);
+            assert_eq!(api.invoke(Op::GfxCommit, 0, 0, 0), 0);
+            assert_eq!(api.invoke(Op::UiWidget, 1, 0, 0), 1);
 
-        // 7. CapSerialVTable
-        unsafe {
-            let ser = &*api.serial;
-            let msg = b"TELEMETRY";
-            assert_eq!((ser.serial_write)(msg.as_ptr(), 9), 0);
-            let mut ser_rx = [0u8; 16];
-            assert_eq!((ser.serial_read)(ser_rx.as_mut_ptr(), 16), 0);
-            assert_eq!((ser.serial_is_connected)(), 0);
-            (ser.serial_flush)();
-        }
-
-        // 8. CapTimerVTable
-        unsafe {
-            let t = &*api.timer;
-            let _ = (t.sys_ticks_ms)();
-            let _ = (t.sys_uptime_secs)();
-            (t.sys_delay_ms)(0);
-            (t.sys_delay_us)(0);
-            let mut rtc_buf = [0u8; 7];
-            assert_eq!((t.sys_rtc_get)(rtc_buf.as_mut_ptr()), 1);
-        }
-
-        // 9. CapUiVTable (Compositor Spaces)
-        unsafe {
-            let u = &*api.ui;
-            (u.ui_close_modal)();
-            assert_eq!((u.ui_has_modal)(), 0);
-            let title = b"PROMPT\0";
-            let msg = b"BODY\0";
-            (u.ui_show_popup)(1, title.as_ptr(), 6, msg.as_ptr(), 4);
-            (u.ui_show_confirm)(2, title.as_ptr(), 6, msg.as_ptr(), 4);
-            (u.ui_prompt_text)(3, title.as_ptr(), 6, b"\0".as_ptr(), 0, 16);
-            let mut modal_res = [0u8; 16];
-            assert_eq!((u.ui_get_modal_text)(modal_res.as_mut_ptr(), 16), 0);
-            (u.ui_show_toast)(b"ALERT\0".as_ptr(), 5, 1500);
-            assert_eq!((u.ui_is_animating)(), 0);
-            let sb = KrxStatusBar::empty();
-            assert_eq!((u.ui_set_status_bar)(&sb), 1);
-            let mut read_sb = KrxStatusBar::empty();
-            (u.ui_get_status_bar)(&mut read_sb);
-            assert_eq!((u.ui_set_tray_icon)(15), 1);
-            (u.ui_draw_progress_bar)(0, 0, 50, 6, 75, 1);
-            (u.ui_draw_s_meter)(0, 10, -90, 8);
-            (u.ui_draw_tag_badge)(0, 20, b"FM\0".as_ptr(), 2, 1);
-            (u.ui_draw_key_badge)(0, 30, b"M\0".as_ptr(), 1, b"Menu\0".as_ptr(), 4);
-            (u.ui_draw_capsule_button)(0, 40, 40, 10, b"OK\0".as_ptr(), 2, 1);
-            (u.ui_draw_scrollbar)(120, 0, 50, 1, 10, 4);
-            (u.ui_draw_menu_item)(0, b"Item\0".as_ptr(), 4, b"Val\0".as_ptr(), 3, 1, 0);
-            (u.ui_draw_big_digit)(0, 0, 5, 1);
-            (u.ui_draw_small_digit)(20, 0, 9, 1);
-            (u.ui_draw_battery)(0, 50, 85, 1);
-            (u.ui_draw_signal)(0, 55, 4, 1);
-            let mut origin = [0u8; 2];
-            (u.ui_draw_modal_box)(60, 40, origin.as_mut_ptr());
-            (u.ui_show_confirm_labels)(
-                4,
-                title.as_ptr(),
-                6,
-                msg.as_ptr(),
-                4,
-                b"YES\0".as_ptr(),
-                3,
-                b"NO\0".as_ptr(),
-                2,
-            );
-        }
-
-        // 10. CapMathVTable
-        unsafe {
-            let m = &*api.math;
-            assert_eq!((m.sys_rand32)(), 0x5A5A_5A5A);
-            assert_eq!((m.crc32)(b"123456789".as_ptr(), 9), 0);
-            assert_eq!((m.crc16)(b"123456789".as_ptr(), 9), 0);
-            assert_eq!((m.isqrt)(144), 12);
-            assert_eq!((m.isqrt)(256), 16);
-            assert_eq!((m.idivmod)(100, 7), 0);
-            assert_eq!((m.uidivmod)(100, 7), 0);
-        }
-
-        // 11. CapFmVTable
-        unsafe {
-            let f = &*api.fm;
-            (f.fm_tune)(1043);
-            (f.fm_set_volume)(12);
-            (f.fm_mute)(0);
-            assert_eq!((f.fm_get_rssi)(), 0);
-        }
-
-        // 12. CapServiceVTable
-        unsafe {
-            let svc = &*api.service;
-            assert_eq!((svc.svc_register)(0x1234, 1, 0x2000_0000), 1);
-            assert_eq!((svc.svc_resolve)(0x1234, 1), 0);
-            assert_eq!((svc.svc_release)(0x1234), 1);
-            assert_eq!(
-                (svc.ipc_send)(b"Radio\0".as_ptr(), 5, b"TUNE\0".as_ptr(), 4),
-                1
-            );
-            let mut ipc_out = [0u8; 16];
-            assert_eq!((svc.ipc_poll)(ipc_out.as_mut_ptr(), 16), 0xFF);
-            let mut uid = [0u8; 12];
-            (svc.sys_device_uid)(uid.as_mut_ptr());
-            assert_eq!((svc.sys_os_version)(), 0x0003_0000);
-            assert_eq!((svc.sys_ram_available)(), 4096);
-            assert_eq!((svc.sys_stack_margin)(), 1024);
-            assert_eq!((svc.sys_proc_count)(), 0);
-            let mut p_info = KrxProcInfo {
-                pid: 0,
-                app_id: 0,
-                state: 0,
-                priority: 0,
-                runtime_ticks: 0,
-                memory_bytes: 0,
-                name: [0; 12],
-                exec_type: 0,
-                flags: 0,
-                stack_watermark: 0,
-                ipc_events: 0,
-                page_faults: 0,
-                slice_overruns: 0,
-                hibernations: 0,
-                fault_count: 0,
-            };
-            assert_eq!((svc.sys_proc_info)(0, &mut p_info), 1);
-            assert_eq!((svc.sys_proc_kill)(99), 1);
-            assert_eq!((svc.paged_call)(2, 0x40, 0x88), 0);
-            assert_eq!((svc.paged_return)(), 0);
-            assert_eq!((svc.leaf_call)(0, 100), 0xFFFF_FFFF);
-            assert_eq!((svc.lease_acquire)(0, 1000), 1);
-            assert_eq!((svc.lease_release)(0), 1);
-            let mut mem_desc = crate::proc::MemoryRegionDescriptor {
-                kind: 0,
-                flags: 0,
-                reserved: 0,
-                base_vma: 0,
-                size_bytes: 0,
-                alignment: 4,
-                pad: [0; 2],
-            };
-            assert_eq!((svc.mem_query)(0, &mut mem_desc), 1);
-            assert_eq!((svc.sys_post_event)(1), 0);
-            assert_eq!((svc.sys_publish_event)(100, b"DATA".as_ptr(), 4), 0);
-            assert_eq!((svc.sys_stack_free_min)(), 1024);
-            let ipc_msg =
-                crate::ipc::KrxIpcMessage::new(1, 2, crate::ipc::ipc_msg_type::PING, b"PING");
-            assert_eq!((svc.ipc_send_msg)(&ipc_msg), 1);
-            let mut recv_msg = crate::ipc::KrxIpcMessage::empty();
-            assert_eq!((svc.ipc_recv_msg)(&mut recv_msg), 1);
-            assert_eq!((svc.ipc_reply)(&ipc_msg, b"PONG".as_ptr(), 4), 1);
-            assert_eq!((svc.sys_find_proc)(b"Radio\0".as_ptr(), 5), 0);
-            assert_eq!((svc.sys_self_pid)(), 1);
-        }
-
-        // 13. CapHwBusVTable
-        unsafe {
-            let hw = &*api.hw_bus;
-            let tx = [0x12, 0x34];
-            let mut rx = [0u8; 2];
-            assert_eq!(
-                (hw.hw_i2c_transfer)(0x38, 0x10, tx.as_ptr(), 2, rx.as_mut_ptr(), 2),
-                1
-            );
-            assert_eq!((hw.hw_spi_transfer)(1, tx.as_ptr(), rx.as_mut_ptr(), 2), 1);
-            (hw.hw_gpio_set)(5, 1);
-            assert_eq!((hw.hw_gpio_get)(5), 0);
-            assert_eq!((hw.hw_rf_read_reg)(0x30), 0);
-            (hw.hw_rf_write_reg)(0x30, 0x1234);
-            let mut flash_buf = [0u8; 16];
-            assert_eq!(
-                (hw.hw_flash_read)(0x0800_0000, flash_buf.as_mut_ptr(), 16),
-                1
-            );
+            // IO
+            assert_eq!(api.invoke(Op::IoPower, 0, 0, 0), 4000);
+            assert_eq!(api.invoke(Op::IoPower, 5, 0, 0), 250);
+            assert_eq!(api.invoke(Op::IoTime, 4, 0, 0), 1);
+            assert_eq!(api.invoke(Op::IoBus, 0, 0, 0), 1);
+            assert_eq!(api.invoke(Op::IoBus, 6, 0, 0), 1);
         }
     }
 

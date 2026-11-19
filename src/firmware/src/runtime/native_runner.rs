@@ -7,7 +7,7 @@
 
 #[cfg(any(test, feature = "settings_debug"))]
 use super::syscall::ACTIVE_CTX;
-use super::syscall::{NATIVE_API_TABLE, bind_cap_imports};
+use super::syscall::NATIVE_API_TABLE;
 use crate::services::SysContext;
 use gfx::Canvas;
 use kernel::app::{EventResult, ModalResult, StatusBarConfig};
@@ -451,22 +451,10 @@ pub fn load_native_from_storage(
     // 3. Apply escape-capable delta relocations v2 (Section 6.2)
     apply_package_relocs(buffer_bytes, payload_len, exec, load_delta)?;
 
-    // 4. Bind CapImports (0x0003) into the package GOT (Section 6.3 & Chapter 8)
+    // 4. Configure package GOT base (all kernel ops route via single-entry `api->call`)
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
     if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= max_arena_bytes {
         return Err(KrxLaunchError::ImportBindingFailed);
-    }
-    if let Some(cap_body) = aux.cap_imports {
-        let got_word_off = (exec.got_offset as usize) / 4;
-        let got_slice = unsafe {
-            core::slice::from_raw_parts_mut(
-                (arena_base_ptr() as *mut u32).add(got_word_off),
-                NATIVE_EXEC_BUFFER_WORDS - got_word_off,
-            )
-        };
-        if !bind_cap_imports(cap_body, got_slice, caps) {
-            return Err(KrxLaunchError::ImportBindingFailed);
-        }
     }
 
     // 4b. Configure normative memory regions for the detected execution profile
@@ -869,9 +857,7 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
 
         // Auto-register or clear status tray icon requested by app
         if s.tray_icon_id != 0 {
-            unsafe {
-                super::syscall::ui::api_ui_set_tray_icon(s.tray_icon_id);
-            }
+            super::syscall::ui::set_tray_icon(s.tray_icon_id);
         }
     }
 }

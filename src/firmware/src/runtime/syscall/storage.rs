@@ -1,9 +1,9 @@
-//! Storage & Filesystem Subsystem System Call Handlers (`StorageApi`, `interface_id = 0x0004`).
+//! Storage & Filesystem System Call Dispatcher (`Op::Fs*`, domain `0x3`).
 
 #[cfg(test)]
 use super::active_ctx_opt;
-use super::{parse_str, parse_user_path};
-use kernel::proc::abi::{KrxDirEntry, StorageApi};
+use super::{parse_str, parse_user_path, ptr_slice, ptr_slice_mut, str_or_default};
+use kernel::proc::abi::{KrxDirEntry, KrxFsReq};
 
 #[inline(always)]
 fn active_storage_mut() -> Option<&'static mut crate::services::SystemStorage<'static>> {
@@ -77,64 +77,6 @@ fn proc_remove(path: &str) -> Option<u8> {
 }
 
 #[inline(never)]
-fn storage_config_op(buf: *const u8, len: u16, is_save: bool) -> u16 {
-    if let (Some(src), Some(st)) = (
-        unsafe { super::ptr_slice(buf, len as usize) },
-        active_storage_mut(),
-    ) {
-        let app_name = super::super::native_runner::active_native_app_name();
-        if is_save {
-            return u16::from(
-                crate::services::primitives::save_app_config(st, app_name, src).is_err(),
-            );
-        } else {
-            let dst = unsafe { core::slice::from_raw_parts_mut(buf as *mut u8, src.len()) };
-            return crate::services::primitives::load_app_config(st, app_name, dst).unwrap_or(0)
-                as u16;
-        }
-    }
-    u16::from(is_save)
-}
-
-pub unsafe extern "C" fn api_storage_load_config(buf: *mut u8, max_len: u16) -> u16 {
-    storage_config_op(buf, max_len, false)
-}
-
-pub unsafe extern "C" fn api_storage_save_config(buf: *const u8, len: u16) -> u8 {
-    storage_config_op(buf, len, true) as u8
-}
-
-pub unsafe extern "C" fn api_storage_read_asset(
-    _asset_id: u16,
-    offset: u32,
-    buf: *mut u8,
-    len: u16,
-) -> u16 {
-    if let (Some(slice), Some(st)) = (
-        unsafe { super::ptr_slice_mut(buf, len as usize) },
-        active_storage_mut(),
-    ) {
-        #[cfg(feature = "krx_native")]
-        {
-            return crate::runtime::native_runner::read_active_pkg_asset(st, offset, slice)
-                .unwrap_or(0) as u16;
-        }
-        #[cfg(not(feature = "krx_native"))]
-        let _ = (st, offset, slice);
-    }
-    0
-}
-
-pub unsafe extern "C" fn api_storage_read_file(
-    path: *const u8,
-    path_len: u8,
-    buf: *mut u8,
-    max_len: u16,
-) -> u16 {
-    unsafe { api_storage_read_file_at(path, path_len, 0, buf, max_len) }
-}
-
-#[inline(never)]
 fn user_storage<'a>(
     path: *const u8,
     path_len: u8,
@@ -144,56 +86,6 @@ fn user_storage<'a>(
         return None;
     }
     Some((p_str, active_storage_mut()?))
-}
-
-#[inline(never)]
-fn storage_write_op(path: *const u8, path_len_and_append: u16, data: *const u8, len: u16) -> u8 {
-    let append = (path_len_and_append & 0x8000) != 0;
-    if !data.is_null() {
-        if let Some((path_str, st)) = user_storage(path, path_len_and_append as u8) {
-            let src = unsafe { core::slice::from_raw_parts(data, len as usize) };
-            let ok = if append {
-                st.fs.append_file(path_str, src).is_ok()
-            } else {
-                crate::security::write_classified_file(st, path_str, src).is_ok()
-            };
-            return u8::from(!ok);
-        }
-    }
-    1
-}
-
-#[inline(never)]
-fn user_path_unit_op(path: *const u8, path_len: u8, create_dir: bool) -> u8 {
-    if !create_dir {
-        if let Some(raw) = unsafe { parse_str(path, path_len as usize) } {
-            if let Some(rc) = proc_remove(raw) {
-                return rc;
-            }
-        }
-    }
-    if let Some((p_str, st)) = user_storage(path, path_len) {
-        let res = if create_dir {
-            st.create_dir(p_str)
-        } else {
-            st.remove(p_str)
-        };
-        return u8::from(res.is_err());
-    }
-    1
-}
-
-pub unsafe extern "C" fn api_storage_write_file(
-    path: *const u8,
-    path_len: u8,
-    data: *const u8,
-    len: u16,
-) -> u8 {
-    storage_write_op(path, path_len as u16, data, len)
-}
-
-pub unsafe extern "C" fn api_storage_remove_file(path: *const u8, path_len: u8) -> u8 {
-    user_path_unit_op(path, path_len, false)
 }
 
 #[inline(never)]
@@ -208,119 +100,188 @@ fn file_stat_size(path: *const u8, path_len: u8) -> Option<u32> {
         .map(|s| s as u32)
 }
 
-pub unsafe extern "C" fn api_storage_file_size(path: *const u8, path_len: u8) -> u32 {
-    file_stat_size(path, path_len).unwrap_or(0)
-}
-
-pub unsafe extern "C" fn api_storage_list_dir(
-    dir_path: *const u8,
-    dir_len: u8,
-    out_entries: *mut KrxDirEntry,
-    max_entries: u8,
-) -> u8 {
-    if !out_entries.is_null() && max_entries > 0 {
-        let dir_str = unsafe { super::str_or_default(dir_path, dir_len as usize, "/") };
-        let dst = unsafe { core::slice::from_raw_parts_mut(out_entries, max_entries as usize) };
-        if let Some(st) = active_storage_mut() {
-            return crate::services::primitives::list_krx_dir(st, dir_str, dst).unwrap_or(0) as u8;
-        }
-    }
-    0
-}
-
-pub unsafe extern "C" fn api_storage_file_exists(path: *const u8, path_len: u8) -> u8 {
-    u8::from(file_stat_size(path, path_len).is_some())
-}
-
-pub unsafe extern "C" fn api_storage_read_file_at(
-    path: *const u8,
-    path_len: u8,
-    offset: u32,
-    buf: *mut u8,
-    max_len: u16,
-) -> u16 {
-    if let (Some(path_str), Some(dst)) = (unsafe { parse_str(path, path_len as usize) }, unsafe {
-        super::ptr_slice_mut(buf, max_len as usize)
-    }) {
-        if let Some(n) = proc_read(path_str, offset as usize, dst) {
-            return n as u16;
-        }
-        if let Some(st) = active_storage_mut() {
-            return st.read_file_at(path_str, offset as usize, dst).unwrap_or(0) as u16;
-        }
-    }
-    0
-}
-
-pub unsafe extern "C" fn api_storage_append_file(
-    path: *const u8,
-    path_len: u8,
-    data: *const u8,
-    len: u16,
-) -> u8 {
-    storage_write_op(path, (path_len as u16) | 0x8000, data, len)
-}
-
-pub unsafe extern "C" fn api_storage_rename_file(
-    old_path: *const u8,
-    old_len: u8,
-    new_path: *const u8,
-    new_len: u8,
-) -> u8 {
-    if let (Some((o_str, st)), Some((n_str, _))) = (
-        user_storage(old_path, old_len),
-        user_storage(new_path, new_len),
-    ) {
-        if st.rename(o_str, n_str).is_ok() {
-            return 0;
-        }
-    }
-    1
-}
-
-pub unsafe extern "C" fn api_storage_create_dir(path: *const u8, path_len: u8) -> u8 {
-    user_path_unit_op(path, path_len, true)
-}
-
-pub unsafe extern "C" fn api_storage_format(mode: u8) -> u8 {
-    let caps = super::super::native_runner::active_native_caps();
-    if !caps.contains(kernel::caps::Cap::StorageAdmin) {
-        return 1;
-    }
-    if mode > 0 && !caps.contains(kernel::caps::Cap::FactoryCalib) {
-        return 1;
-    }
-    #[cfg(feature = "filesystem")]
-    if let Some(st) = active_storage_mut() {
-        let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
-        let res = match mode {
-            0 | 1 => {
-                crate::services::calibration::reformat_storage(st, calib.raw_bytes(), mode == 0)
+#[inline(never)]
+pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    match idx {
+        // FsRead: a0 = mode (0=file_at, 1=load_cfg, 2=read_asset, 3=list_dir), a1 = *const KrxFsReq
+        0 => {
+            let req = a1 as *const KrxFsReq;
+            if req.is_null() {
+                return 0;
             }
-            2 => st.fs.wipe_raw().map_err(|_| ()),
-            _ => Err(()),
-        };
-        return u8::from(res.is_err());
+            let r = unsafe { &*req };
+            match a0 as u8 {
+                0 => {
+                    if let (Some(path_str), Some(dst)) =
+                        (unsafe { parse_str(r.path, r.path_len as usize) }, unsafe {
+                            ptr_slice_mut(r.buf, r.len as usize)
+                        })
+                    {
+                        if let Some(n) = proc_read(path_str, r.offset as usize, dst) {
+                            return n;
+                        }
+                        if let Some(st) = active_storage_mut() {
+                            return st
+                                .read_file_at(path_str, r.offset as usize, dst)
+                                .unwrap_or(0);
+                        }
+                    }
+                    0
+                }
+                1 => {
+                    if let (Some(dst), Some(st)) = (
+                        unsafe { ptr_slice_mut(r.buf, r.len as usize) },
+                        active_storage_mut(),
+                    ) {
+                        let name = super::super::native_runner::active_native_app_name();
+                        crate::services::primitives::load_app_config(st, name, dst).unwrap_or(0)
+                    } else {
+                        0
+                    }
+                }
+                2 => {
+                    if let (Some(slice), Some(st)) = (
+                        unsafe { ptr_slice_mut(r.buf, r.len as usize) },
+                        active_storage_mut(),
+                    ) {
+                        #[cfg(feature = "krx_native")]
+                        {
+                            return crate::runtime::native_runner::read_active_pkg_asset(
+                                st, r.offset, slice,
+                            )
+                            .unwrap_or(0);
+                        }
+                        #[cfg(not(feature = "krx_native"))]
+                        let _ = (st, slice);
+                    }
+                    0
+                }
+                3 => {
+                    let out = r.buf as *mut KrxDirEntry;
+                    let max = r.len as u8;
+                    if !out.is_null() && max > 0 {
+                        let dir_str = unsafe { str_or_default(r.path, r.path_len as usize, "/") };
+                        let dst = unsafe { core::slice::from_raw_parts_mut(out, max as usize) };
+                        if let Some(st) = active_storage_mut() {
+                            return crate::services::primitives::list_krx_dir(st, dir_str, dst)
+                                .unwrap_or(0);
+                        }
+                    }
+                    0
+                }
+                _ => 0,
+            }
+        }
+        // FsWrite: a0 = mode (0=write, 1=append, 2=save_cfg), a1 = *const KrxFsReq
+        1 => {
+            let req = a1 as *const KrxFsReq;
+            if req.is_null() {
+                return 1;
+            }
+            let r = unsafe { &*req };
+            match a0 as u8 {
+                0 | 1 => {
+                    if !r.buf.is_null() {
+                        if let Some((path_str, st)) = user_storage(r.path, r.path_len) {
+                            let src = unsafe { core::slice::from_raw_parts(r.buf, r.len as usize) };
+                            let ok = if (a0 as u8) == 1 {
+                                st.fs.append_file(path_str, src).is_ok()
+                            } else {
+                                crate::security::write_classified_file(st, path_str, src).is_ok()
+                            };
+                            return usize::from(!ok);
+                        }
+                    }
+                    1
+                }
+                2 => {
+                    if let (Some(src), Some(st)) = (
+                        unsafe { ptr_slice(r.buf, r.len as usize) },
+                        active_storage_mut(),
+                    ) {
+                        let name = super::super::native_runner::active_native_app_name();
+                        usize::from(
+                            crate::services::primitives::save_app_config(st, name, src).is_err(),
+                        )
+                    } else {
+                        1
+                    }
+                }
+                _ => 1,
+            }
+        }
+        // FsMeta: a0 = sub (0=size, 1=exists, 2=remove, 3=create_dir, 4=format)
+        2 => {
+            let path = a1 as *const u8;
+            let plen = a2 as u8;
+            match a0 as u8 {
+                0 => file_stat_size(path, plen).unwrap_or(0) as usize,
+                1 => usize::from(file_stat_size(path, plen).is_some()),
+                2 | 3 => {
+                    let create_dir = (a0 as u8) == 3;
+                    if !create_dir {
+                        if let Some(raw) = unsafe { parse_str(path, plen as usize) } {
+                            if let Some(rc) = proc_remove(raw) {
+                                return rc as usize;
+                            }
+                        }
+                    }
+                    if let Some((p_str, st)) = user_storage(path, plen) {
+                        let res = if create_dir {
+                            st.create_dir(p_str)
+                        } else {
+                            st.remove(p_str)
+                        };
+                        return usize::from(res.is_err());
+                    }
+                    1
+                }
+                4 => {
+                    let mode = a1 as u8;
+                    let caps = super::super::native_runner::active_native_caps();
+                    if !caps.contains(kernel::caps::Cap::StorageAdmin)
+                        || (mode > 0 && !caps.contains(kernel::caps::Cap::FactoryCalib))
+                    {
+                        return 1;
+                    }
+                    #[cfg(feature = "filesystem")]
+                    if let Some(st) = active_storage_mut() {
+                        let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
+                        let res = match mode {
+                            0 | 1 => crate::services::calibration::reformat_storage(
+                                st,
+                                calib.raw_bytes(),
+                                mode == 0,
+                            ),
+                            2 => st.fs.wipe_raw().map_err(|_| ()),
+                            _ => Err(()),
+                        };
+                        return usize::from(res.is_err());
+                    }
+                    1
+                }
+                _ => 1,
+            }
+        }
+        // FsRename: a0 = *const KrxFsReq (path/path_len = old, buf/len = new)
+        3 => {
+            let req = a0 as *const KrxFsReq;
+            if !req.is_null() {
+                let r = unsafe { &*req };
+                if let (Some((o_str, st)), Some((n_str, _))) = (
+                    user_storage(r.path, r.path_len),
+                    user_storage(r.buf as *const u8, r.len as u8),
+                ) {
+                    if st.rename(o_str, n_str).is_ok() {
+                        return 0;
+                    }
+                }
+            }
+            1
+        }
+        _ => 1,
     }
-    1
 }
-
-pub static STORAGE_VTABLE: StorageApi = StorageApi {
-    storage_load_config: api_storage_load_config,
-    storage_save_config: api_storage_save_config,
-    storage_read_asset: api_storage_read_asset,
-    storage_read_file: api_storage_read_file,
-    storage_write_file: api_storage_write_file,
-    storage_remove_file: api_storage_remove_file,
-    storage_file_size: api_storage_file_size,
-    storage_list_dir: api_storage_list_dir,
-    storage_file_exists: api_storage_file_exists,
-    storage_read_file_at: api_storage_read_file_at,
-    storage_append_file: api_storage_append_file,
-    storage_rename_file: api_storage_rename_file,
-    storage_create_dir: api_storage_create_dir,
-    storage_format: api_storage_format,
-};
 
 #[cfg(test)]
 mod tests {
@@ -336,12 +297,9 @@ mod tests {
             slot.caps = CapabilitySet::empty();
         }
         let mut buf = [0u8; 316];
-        // Without ServiceRegistry, /proc/boot read is denied
         assert!(proc_read("/proc/boot", 0, &mut buf).is_none());
-        // Without PowerManage, /proc/boot remove returns error (1)
         assert_eq!(proc_remove("/proc/boot"), Some(1));
 
-        // Populate BackupCrashTag, FaultExtraRegs, and a BootSlot entry
         let initial_tag = kernel::boot::BackupCrashTag {
             strikes: 3,
             flags: kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH
@@ -359,7 +317,6 @@ mod tests {
             rec.slot_a.crc32 = rec.slot_a.compute_crc();
         }
 
-        // Grant ServiceRegistry: full 316-byte read succeeds
         super::super::super::native_runner::slot_mut().caps =
             CapabilitySet::empty().with(Cap::ServiceRegistry);
         assert_eq!(proc_read("/proc/boot", 0, &mut buf), Some(316));
@@ -379,12 +336,10 @@ mod tests {
             initial_tag.encode()
         );
 
-        // Chunked offset read at offset 260 yields 56 bytes (52B extra + 4B tag)
         let mut tail = [0u8; 64];
         assert_eq!(proc_read("/proc/boot", 260, &mut tail), Some(56));
         assert_eq!(&tail[..56], &buf[260..316]);
 
-        // Grant PowerManage + StorageAdmin and remove /proc/boot -> clears strikes & resets BOOT_RECORD
         super::super::super::native_runner::slot_mut().caps = CapabilitySet::empty()
             .with(Cap::PowerManage)
             .with(Cap::StorageAdmin);

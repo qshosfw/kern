@@ -1,15 +1,13 @@
-//! Modular Capability Router & System Call Dispatch Engine (KRX-ABI 2.5.0 Chapter 8).
+//! Unified Single-Entry System Call Router (`kern_call`).
 //!
-//! Provides the primary system call boundary between userland executables and microkernel services.
-//! Implements per-capability domain VTables (`display`, `ui`, `radio`, `audio`, `storage`, `io`, `service`),
-//! the dynamic `ServiceRegistry`, and the `CapImports` GOT binder (`bind_cap_imports`).
+//! Routes all KRX system calls through one AAPCS-Thumb entry point (`kern_call(op, a0, a1, a2)`)
+//! into 9 `#[inline(never)]` domain dispatchers (`SYS`, `PROC`, `IPC`, `FS`, `RF`, `AUD`, `GFX`, `UI`, `IO`).
 
 #[cfg(any(test, feature = "settings_debug"))]
 use crate::services::SysContext;
 use gfx::Canvas;
-use kernel::caps::{Cap, CapabilitySet};
-use kernel::proc::abi::*;
-use kernel::proc::krx::CapBinding;
+use kernel::caps::Cap;
+use kernel::proc::abi::{KRX_ABI_VERSION_3_0, KrxApiTable};
 
 pub mod audio;
 #[cfg(any(test, feature = "settings_debug"))]
@@ -21,25 +19,10 @@ pub mod service;
 pub mod storage;
 pub mod ui;
 
-pub use audio::{AUDIO_VTABLE, api_audio_capture_start, api_audio_play_tone};
 #[cfg(any(test, feature = "settings_debug"))]
 pub use bench::*;
-pub use display::{
-    DISPLAY_VTABLE, api_commit_frame, api_commit_rows, api_draw_line, api_draw_pixel,
-    api_draw_rect, api_draw_str, api_draw_str_align, api_fill_rect, api_get_framebuffer,
-};
-pub use io::{HW_BUS_VTABLE, KEYPAD_VTABLE, POWER_VTABLE, SERIAL_VTABLE, TIMER_VTABLE};
-pub use radio::{
-    FM_VTABLE, RADIO_VTABLE, api_rf_get_freq, api_rf_get_rssi, api_rf_set_tx, api_rf_sweep,
-    api_rf_tune,
-};
-pub use service::{
-    MATH_VTABLE, SERVICE_VTABLE, ServiceRegistry, active_caller_pid, api_ipc_poll,
-    api_ipc_recv_msg, api_ipc_reply, api_ipc_send, api_ipc_send_msg, api_sys_find_proc,
-    api_sys_self_pid, ipc_channel_mut, service_registry_mut,
-};
-pub use storage::STORAGE_VTABLE;
-pub use ui::{UI_VTABLE, store_modal_text};
+pub use service::{ServiceRegistry, active_caller_pid, ipc_channel_mut, service_registry_mut};
+pub use ui::{set_tray_icon, store_modal_text};
 
 #[cfg(any(test, feature = "settings_debug"))]
 pub static mut ACTIVE_CTX: *mut SysContext<'static, 'static> = core::ptr::null_mut();
@@ -107,10 +90,6 @@ pub unsafe fn parse_user_path<'a>(ptr: *const u8, len: usize) -> Option<&'a str>
     }
 
     // Anti-Brick Locks 2 & 3: Operational & User Filesystem (/user/*, /pref/*)
-    // System tools (File Explorers, Package Managers, Hex Editors) holding
-    // Cap::StorageWrite or Cap::StorageAdmin have access across operational paths.
-    // Physical protection: MCU internal flash (0x0800_0000) is memory-mapped ROM;
-    // filesystem driver communicates solely with external SPI NOR flash (Py25q16).
     if caps.contains(Cap::StorageWrite) || caps.contains(Cap::StorageAdmin) {
         Some(path)
     } else {
@@ -123,122 +102,41 @@ pub unsafe fn str_or_default<'a>(ptr: *const u8, len: usize, default: &'a str) -
     unsafe { parse_str(ptr, len) }.unwrap_or(default)
 }
 
-// ── Composite C-ABI Dispatch Table in XIP Flash (.rodata) ───────────────────
+// ── Single-Entry System Call Dispatcher & API Table ──────────────────────────
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> usize {
+    let op_byte = op as u8;
+    let idx = op_byte & 0x0F;
+    unsafe {
+        match op_byte >> 4 {
+            0 => service::dispatch_sys(idx, a0, a1, a2),
+            1 => service::dispatch_proc(idx, a0, a1, a2),
+            2 => service::dispatch_ipc(idx, a0, a1, a2),
+            3 => storage::dispatch_fs(idx, a0, a1, a2),
+            4 => radio::dispatch_rf(idx, a0, a1, a2),
+            5 => audio::dispatch_aud(idx, a0, a1, a2),
+            6 => display::dispatch_gfx(idx, a0, a1, a2),
+            7 => ui::dispatch_ui(idx, a0, a1, a2),
+            8 => io::dispatch_io(idx, a0, a1, a2),
+            _ => 0,
+        }
+    }
+}
 
 pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
     abi_version: KRX_ABI_VERSION_3_0,
     table_size: core::mem::size_of::<KrxApiTable>() as u16,
     _pad0: 0,
     granted_caps: 0xFFFF_FFFF,
-    display: &raw const DISPLAY_VTABLE,
-    radio: &raw const RADIO_VTABLE,
-    audio: &raw const AUDIO_VTABLE,
-    storage: &raw const STORAGE_VTABLE,
-    keypad: &raw const KEYPAD_VTABLE,
-    power: &raw const POWER_VTABLE,
-    serial: &raw const SERIAL_VTABLE,
-    timer: &raw const TIMER_VTABLE,
-    ui: &raw const UI_VTABLE,
-    math: &raw const MATH_VTABLE,
-    fm: &raw const FM_VTABLE,
-    service: &raw const SERVICE_VTABLE,
-    hw_bus: &raw const HW_BUS_VTABLE,
+    call: kern_call,
 };
-
-// ── Dynamic Linker / GOT Resolution ─────────────────────────────────────────
-
-static INTERFACE_CAP_MASKS: [u32; 13] = [
-    // 0x0001: INTERFACE_DISPLAY
-    Cap::DisplayDirect as u32,
-    // 0x0002: INTERFACE_RADIO
-    (Cap::RadioRx as u32) | (Cap::RadioTx as u32) | (Cap::BroadBandRx as u32),
-    // 0x0003: INTERFACE_AUDIO
-    (Cap::AudioOutput as u32) | (Cap::AudioCapture as u32),
-    // 0x0004: INTERFACE_STORAGE
-    (Cap::StorageRead as u32) | (Cap::StorageWrite as u32) | (Cap::StorageAdmin as u32),
-    // 0x0005: INTERFACE_KEYPAD
-    Cap::Keypad as u32,
-    // 0x0006: INTERFACE_POWER
-    Cap::PowerManage as u32,
-    // 0x0007: INTERFACE_SERIAL
-    (Cap::SerialComm as u32) | (Cap::UsbComm as u32),
-    // 0x0008: INTERFACE_TIMER
-    0,
-    // 0x0009: INTERFACE_UI
-    Cap::DisplayDirect as u32,
-    // 0x000A: INTERFACE_MATH
-    0,
-    // 0x000B: INTERFACE_FM
-    Cap::BroadcastFm as u32,
-    // 0x000C: INTERFACE_SERVICE
-    0,
-    // 0x000D: INTERFACE_HW_BUS
-    Cap::RawPeripheral as u32,
-];
-
-#[inline(always)]
-fn resolve_capability_vtable(
-    interface_id: u16,
-    _min_abi: u16,
-    granted_caps: CapabilitySet,
-) -> Option<usize> {
-    let idx = interface_id.wrapping_sub(INTERFACE_DISPLAY) as usize;
-    if idx < INTERFACE_CAP_MASKS.len() {
-        let mask = INTERFACE_CAP_MASKS[idx];
-        if mask == 0 || (granted_caps.raw() & mask) != 0 {
-            let vtable =
-                unsafe { *(&raw const NATIVE_API_TABLE.display as *const *const ()).add(idx) };
-            return Some(vtable as usize);
-        }
-    }
-    None
-}
-
-/// Bind `SECTION_CAP_IMPORTS (0x0003)` into the loaded package's GOT slots (Appendix C).
-/// Returns `false` if any `FLAG_MANDATORY` import fails to resolve.
-#[inline(never)]
-pub fn bind_cap_imports(
-    cap_section_body: &[u8],
-    got_words: &mut [u32],
-    granted_caps: CapabilitySet,
-) -> bool {
-    let len = cap_section_body.len();
-    if len == 0 {
-        return true;
-    }
-    let (_, r3) = utils::math::div3_u16((len as u16) >> 1);
-    let stride = if (len & 7) == 0 && r3 != 0 { 8 } else { 6 };
-    let mut offset = 0usize;
-    let mut slot_i = 0u16;
-    while offset + stride <= len {
-        // SAFETY: loop guard ensures `offset + stride <= len` (stride is 6 or 8).
-        let s = unsafe { cap_section_body.get_unchecked(offset..offset + stride) };
-        let interface_id = u16::from_le_bytes([s[0], s[1]]);
-        let flags = s[4];
-        let dst_slot = if stride == 8 {
-            u16::from_le_bytes([s[6], s[7]])
-        } else {
-            slot_i
-        };
-        let Some(dst) = got_words.get_mut(dst_slot as usize) else {
-            return false;
-        };
-        if let Some(vtable_addr) = resolve_capability_vtable(interface_id, 0, granted_caps) {
-            *dst = vtable_addr as u32;
-        } else if (flags as u16 & CapBinding::FLAG_MANDATORY) != 0 {
-            return false;
-        } else {
-            *dst = 0;
-        }
-        offset += stride;
-        slot_i = slot_i.wrapping_add(1);
-    }
-    true
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kernel::abi::Op;
+    use kernel::proc::abi::{KrxIpcSendReq, KrxSysInfo};
 
     #[test]
     fn test_abi_cross_process_ipc_and_discovery() {
@@ -266,28 +164,38 @@ mod tests {
             kernel::caps::CapabilitySet::empty(),
         );
 
-        // 1. Verify process discovery via ABI
-        let radio_pid = unsafe { api_sys_find_proc(b"Radio\0".as_ptr(), 5) };
+        let api = &NATIVE_API_TABLE;
+
+        // 1. Verify process discovery via single-entry kern_call
+        let radio_pid =
+            unsafe { api.invoke(Op::ProcFind, b"Radio\0".as_ptr() as usize, 5, 0) } as u8;
         assert_eq!(radio_pid, 2);
 
-        let power_pid = unsafe { api_sys_find_proc(b"power\0".as_ptr(), 5) };
+        let power_pid =
+            unsafe { api.invoke(Op::ProcFind, b"power\0".as_ptr() as usize, 5, 0) } as u8;
         assert_eq!(power_pid, 3);
 
-        let non_existent = unsafe { api_sys_find_proc(b"ghost\0".as_ptr(), 5) };
+        let non_existent =
+            unsafe { api.invoke(Op::ProcFind, b"ghost\0".as_ptr() as usize, 5, 0) } as u8;
         assert_eq!(non_existent, 0);
 
-        // 2. Structured messaging via C-ABI
+        // 2. Structured messaging via kern_call
         let msg = kernel::ipc::KrxIpcMessage::new(
             radio_pid,
             1,
             kernel::ipc::ipc_msg_type::SERVICE_REQUEST,
             b"GET_CONFIG",
         );
-        assert_eq!(unsafe { api_ipc_send_msg(&msg) }, 0);
+        assert_eq!(
+            unsafe { api.invoke(Op::IpcSend, &raw const msg as usize, 0, 0) },
+            0
+        );
 
-        // Poll as PID 1
         let mut received = kernel::ipc::KrxIpcMessage::empty();
-        assert_eq!(unsafe { api_ipc_recv_msg(&mut received) }, 0);
+        assert_eq!(
+            unsafe { api.invoke(Op::IpcRecv, &raw mut received as usize, 0, 0) },
+            0
+        );
         assert_eq!(received.sender_pid, radio_pid);
         assert_eq!(received.target_pid, 1);
         assert_eq!(
@@ -296,20 +204,35 @@ mod tests {
         );
         assert_eq!(&received.payload[..10], b"GET_CONFIG");
 
-        // Reply via C-ABI
         assert_eq!(
-            unsafe { api_ipc_reply(&received, b"CONFIG_DATA".as_ptr(), 11) },
+            unsafe {
+                api.invoke(
+                    Op::IpcReply,
+                    &raw const received as usize,
+                    b"CONFIG_DATA".as_ptr() as usize,
+                    11,
+                )
+            },
             0
         );
 
-        // 3. String-based send and poll round-trip
-        let send_res = unsafe { api_ipc_send(b"Radio".as_ptr(), 5, b"CMD_SET_FREQ".as_ptr(), 12) };
-        assert_eq!(send_res, 0);
+        // 3. String-based send round-trip
+        let sreq = KrxIpcSendReq {
+            target: b"Radio".as_ptr(),
+            msg: b"CMD_SET_FREQ".as_ptr(),
+            target_len: 5,
+            msg_len: 12,
+            _pad: [0; 2],
+        };
+        assert_eq!(
+            unsafe { api.invoke(Op::IpcSendStr, &raw const sreq as usize, 0, 0) },
+            0
+        );
 
         // 4. Typed KrxSysInfo descriptor validation
-        let mut info = core::mem::MaybeUninit::<kernel::proc::abi::KrxSysInfo>::uninit();
+        let mut info = core::mem::MaybeUninit::<KrxSysInfo>::uninit();
         assert_eq!(
-            unsafe { super::service::api_sys_info(info.as_mut_ptr()) },
+            unsafe { api.invoke(Op::SysInfo, info.as_mut_ptr() as usize, 0, 0) },
             0
         );
         let info = unsafe { info.assume_init() };
@@ -326,9 +249,8 @@ mod tests {
         assert_eq!(info.qs1[info.qs1_len as usize], 0);
         assert_eq!(info.qs1_status, kernel::proc::abi::KRX_QS1_UNVERIFIED);
         assert_eq!(&info.boot_ver[..7], b"7.02.02");
-        assert!(unsafe { super::service::api_sys_info(core::ptr::null_mut()) } != 0);
+        assert_ne!(unsafe { api.invoke(Op::SysInfo, 0, 0, 0) }, 0);
 
-        // Clear IPC channel on test completion
         ipc_channel_mut().purge_pid(radio_pid);
         ipc_channel_mut().purge_pid(1);
     }
