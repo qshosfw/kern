@@ -96,6 +96,7 @@
 #define SUB_FS_READ_LOAD_CFG       1u
 #define SUB_FS_READ_ASSET          2u
 #define SUB_FS_READ_LIST_DIR       3u
+#define SUB_FS_READ_EXTENTS        4u
 
 /* fs_write */
 #define SUB_FS_WRITE_FILE          0u

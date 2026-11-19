@@ -1,12 +1,7 @@
 /*
- * DFU Leaf 8: Peer Flash (Spacious DFU-Matched Radio -> Radio View)
- *
- * Mirrors the exact visual balance of the DFU screen:
- *   - y=1..31:  Two DFU-identical UV-K1 radios + centered right-pointing arrow
- *   - y=39/47:  Spacious two-line centered status (zero cramped list boxes)
- *   - y=54..60: Native square soft bar ([MENU] Start / [EXIT] Back)
+ * Recovery Leaf 3: Peer Flash (Spacious DFU-Matched Radio -> Radio View)
  */
-#include "dfu_shared.h"
+#include "rec_shared.h"
 
 static const u8 PEER_RLE[96] = {
     0xFD, 0x00, 0x02, 0xFC, 0xFE, 0xFC, 0xF3, 0x00, 0x01, 0x80, 0x80, 0xDC, 0x00, 0x13, 0xE0, 0xF8,
@@ -31,10 +26,9 @@ static void draw_peer_art(u8* fb, u8* tmp, u8 show_arrow) {
         }
     }
     for (u32 p = 0u; p < 4u; p++) {
-        dfu_copy_bytes(fb + (p << 7) + 13u, tmp + p * 60u, show_arrow ? 60u : 27u);
-        dfu_copy_bytes(fb + (p << 7) + 88u, tmp + p * 60u, 27u);
+        rec_copy(fb + (p << 7) + 13u, tmp + p * 60u, show_arrow ? 60u : 27u);
+        rec_copy(fb + (p << 7) + 88u, tmp + p * 60u, 27u);
     }
-    /* Left source radio LCD: clean 3-bar icon; right peer radio keeps "DFU" */
     for (u32 x = 21u; x <= 32u; x++) {
         fb[128u + x] = (u8)((fb[128u + x] & 0x0Fu) | ((x > 21u && x < 32u) ? 0x40u : 0u));
         fb[256u + x] = (u8)((fb[256u + x] & 0xE0u) | ((x > 21u && x < 30u) ? 0x05u : 0u));
@@ -42,31 +36,22 @@ static void draw_peer_art(u8* fb, u8* tmp, u8 show_arrow) {
 }
 
 __attribute__((noinline))
-static void draw_ctr(const KrxApiTable* api, i16 y, const char* s) {
-    krx_draw_str_align(api, 64, y, (const u8*)s, (u16)krx_strlen(s),
-                       KRX_FONT_TOMTHUMB, 1u, KRX_ALIGN_CENTER);
-}
-
-__attribute__((noinline))
-static void render_peer(const KrxApiTable* api, DfuSharedState* st, u8 waiting, u8 arrow) {
+static void render_peer(const KrxApiTable* api, RecState* st, u8 waiting, u8 arrow) {
     krx_clear(api);
-    draw_peer_art(krx_get_framebuffer(api), st->stage_buf, arrow);
-    draw_ctr(api, 39, waiting ? "Waiting for peer..." : "Peer Flash");
-    draw_ctr(api, 47, waiting ? "Hold PTT + power on" : "Connect 2-pin cable");
-    if (waiting) {
-        st->ui.softbar(api, "", "", "EXIT", "Cancel");
-    } else {
-        st->ui.softbar(api, "MENU", "Start", "EXIT", "Back");
-    }
+    draw_peer_art(krx_get_framebuffer(api), (u8*)st->sc->con_ring, arrow);
+    st->ui.draw_ctr(api, 39, waiting ? "Waiting for peer..." : "Peer Flash");
+    st->ui.draw_ctr(api, 47, waiting ? "Hold PTT + power on" : "Connect 2-pin cable");
+    if (waiting) st->ui.softbar(api, "", "", "EXIT", "Cancel");
+    else         st->ui.softbar(api, "MENU", "Start", "EXIT", "Back");
     krx_commit_frame(api);
 }
 
 __attribute__((visibility("default"), section(".text.entry")))
-u32 leaf8_entry(u32 op, const KrxApiTable* api, void* param) {
+u32 leaf3_entry(u32 op, const KrxApiTable* api, void* param) {
     (void)op;
     KrxLeafContext* ctx = (KrxLeafContext*)param;
     if (!ctx || !api || !ctx->arg) return 1u;
-    DfuSharedState* st = (DfuSharedState*)ctx->arg;
+    RecState* st = (RecState*)ctx->arg;
 
     for (;;) {
         render_peer(api, st, 0u, 1u);

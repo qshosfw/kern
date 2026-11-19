@@ -69,6 +69,7 @@
 .equ FLAG_BL_OFF,       0x20
 .equ FLAG_NO_TAP,       0x40
 .equ FLAG_KBHP_VALID,   0x80
+.equ FLAG_HAS_RECOVERY, 0x100
 
 /* ── KbhpEnvelope Live Telemetry Block (base = KBHP_SRAM_ADDR + 0x30, 16 B) ─── */
 .equ KBHP_LIVE_BASE,    0x30

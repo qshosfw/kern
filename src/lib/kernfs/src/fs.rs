@@ -529,6 +529,25 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(p)
     }
 
+    /// Return `(depth, size)` and the up-to-8 L1 physical page IDs for a non-inline file.
+    /// Used by bare-metal SRAM flashers / Stage-2 `kboot` to stream files from SPI flash
+    /// without invoking internal-flash filesystem code during erase/program cycles.
+    #[inline(never)]
+    pub fn file_extents(
+        &mut self,
+        path: &str,
+        out_l1: &mut [u16; 8],
+    ) -> Result<(u8, u32), FsError> {
+        self.lookup_inode(path)?;
+        if self.cur_inode.is_dir() || self.cur_inode.is_inline() {
+            return Err(FsError::InvalidPath);
+        }
+        for i in 0..8 {
+            out_l1[i] = self.cur_inode.l1_page(i);
+        }
+        Ok((self.cur_inode.depth, self.cur_inode.size))
+    }
+
     pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, FsError> {
         self.read_file_at(path, 0, buf)
     }

@@ -35,21 +35,14 @@ compile_unit() {
     arm-none-eabi-objcopy -O binary "$OUT/$stem.elf" "$OUT/$stem.bin"
 }
 
-# 2. Compile resident root + 11 P0 overlay leaves (with _Static_assert ABI checks)
-compile_unit dfu.c            root           _start
-compile_unit leaf1_splash.c   leaf1_splash   leaf1_entry
-compile_unit leaf2_modal.c    leaf2_modal    leaf2_entry
-compile_unit leaf3_stage.c    leaf3_stage    leaf3_entry
-compile_unit leaf4_probe.c    leaf4_probe    leaf4_entry
-compile_unit leaf5_tools.c    leaf5_tools    leaf5_entry
-compile_unit leaf6_info.c     leaf6_info     leaf6_entry
-compile_unit leaf8_rescue.c   leaf8_rescue   leaf8_entry
-compile_unit leaf9_scan.c     leaf9_scan     leaf9_entry
-compile_unit leaf10_files.c   leaf10_files   leaf10_entry
-compile_unit leaf11_inspect.c leaf11_inspect leaf11_entry
-compile_unit leaf12_console.c leaf12_console leaf12_entry
+# 2. Compile lean resident root + 4 P0 overlay leaves
+compile_unit dfu.c          root         _start
+compile_unit leaf1_splash.c leaf1_splash leaf1_entry
+compile_unit leaf2_modal.c  leaf2_modal  leaf2_entry
+compile_unit leaf3_stage.c  leaf3_stage  leaf3_entry
+compile_unit leaf4_probe.c  leaf4_probe  leaf4_entry
 
-LEAVES=(leaf1_splash leaf2_modal leaf3_stage leaf4_probe leaf5_tools leaf6_info leaf8_rescue leaf9_scan leaf10_files leaf11_inspect leaf12_console)
+LEAVES=(leaf1_splash leaf2_modal leaf3_stage leaf4_probe)
 
 # 3. Verify strict PIC hygiene (0 undefs, 0 relocs, 0 GOT)
 for elf in root "${LEAVES[@]}"; do
@@ -64,7 +57,7 @@ for elf in root "${LEAVES[@]}"; do
     fi
 done
 
-# 4. Enforce strict P0 SRAM window limits (root.bin <= 4160 B leaves 960 B staging before 5120 B leaf window)
+# 4. Enforce strict P0 SRAM window limits
 root_sz=$(stat -c %s "$OUT/root.bin")
 if [ "$root_sz" -gt 4160 ]; then
     echo "ERROR: root.bin ($root_sz B) exceeds safe P0 resident limit (4160 B before stage_buf)!" >&2
@@ -80,21 +73,14 @@ for leaf in "${LEAVES[@]}"; do
 done
 
 # 5. Pack verified P0 Structured Paged module (/apps/dfu.mod)
-# Caps: StorageRead (1<<2) | StorageWrite (1<<3) | DisplayDirect (1<<5) | PowerManage (1<<10) | Keypad (1<<18) | ServiceRegistry (1<<20) | StorageAdmin (1<<23) = 0x0094042C
+# Caps: StorageRead (1<<2) | DisplayDirect (1<<5) | PowerManage (1<<10) | Keypad (1<<18) | ServiceRegistry (1<<20) = 0x00140424
 python3 "$DIR/../../tools/pack_krx.py" "$DIR/dfu.mod" \
     --name "DFU Update" --author "KERN-SYS" --type module --profile p0 --system-action --icon 49 \
-    --caps 0x0094042C --payload "$OUT/root.bin" \
+    --caps 0x00140424 --payload "$OUT/root.bin" \
     --leaf "1:$OUT/leaf1_splash.bin" \
     --leaf "2:$OUT/leaf2_modal.bin" \
     --leaf "3:$OUT/leaf3_stage.bin" \
     --leaf "4:$OUT/leaf4_probe.bin" \
-    --leaf "5:$OUT/leaf5_tools.bin" \
-    --leaf "6:$OUT/leaf6_info.bin" \
-    --leaf "7:$OUT/leaf8_rescue.bin" \
-    --leaf "8:$OUT/leaf9_scan.bin" \
-    --leaf "9:$OUT/leaf10_files.bin" \
-    --leaf "10:$OUT/leaf11_inspect.bin" \
-    --leaf "11:$OUT/leaf12_console.bin" \
     --verify
 
-echo "Built dfu.mod ($(stat -c %s "$DIR/dfu.mod") bytes, P0 Structured Paged Module, 11 leaves)"
+echo "Built dfu.mod ($(stat -c %s "$DIR/dfu.mod") bytes, P0 Structured Paged Module, 4 leaves)"

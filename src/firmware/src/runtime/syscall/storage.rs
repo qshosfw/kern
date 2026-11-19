@@ -153,6 +153,40 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         0
                     }
                 }
+                fs_read::EXTENTS => {
+                    #[cfg(feature = "filesystem")]
+                    {
+                        if dst.len() >= 20
+                            && super::super::native_runner::active_native_caps()
+                                .contains(kernel::caps::Cap::StorageAdmin)
+                        {
+                            if let Some(path_str) =
+                                unsafe { parse_str(r.path, r.path_len as usize) }
+                            {
+                                let mut l1 = [0u16; 8];
+                                if let Ok((depth, sz)) = st.fs.file_extents(path_str, &mut l1) {
+                                    dst[0] = depth;
+                                    dst[1] = 0;
+                                    dst[2] = 0;
+                                    dst[3] = 0;
+                                    dst[4..8].copy_from_slice(&sz.to_le_bytes());
+                                    for i in 0..8 {
+                                        let b = l1[i].to_le_bytes();
+                                        dst[8 + i * 2] = b[0];
+                                        dst[9 + i * 2] = b[1];
+                                    }
+                                    return 20;
+                                }
+                            }
+                        }
+                        0
+                    }
+                    #[cfg(not(feature = "filesystem"))]
+                    {
+                        let _ = dst;
+                        0
+                    }
+                }
                 _ => 0,
             }
         }

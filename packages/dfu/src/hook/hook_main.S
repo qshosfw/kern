@@ -67,7 +67,9 @@ dfu_systick_isr:
     adds r6, #3
     adds r7, #1
     cmp r7, #3
-    blo 191b
+    bhs 1f
+    lsrs r0, r5, #9             // bit 8 = FLAG_HAS_RECOVERY: only scan MENU if /apps/recovery.mod exists
+    bcs 191b
     b 1f                        // Released high
 121:
     movs r0, #FLAG_NO_TAP       // EXIT/MENU suppress short-press backlight toggle
@@ -263,8 +265,8 @@ dfu_systick_isr:
     beq 441f
     subs r1, r1, #1
 441:
-    ldr r0, =RCC_APB2ENR
-    ldr r0, [r0]
+    ldr r0, =RCC_APB1ENR
+    ldr r0, [r0, #4]            // RCC_APB2ENR
     lsrs r0, r0, #15            // bit 14 = USART1EN
     bcc 443f
     ldr r0, =USART1_BASE
@@ -711,8 +713,8 @@ dfu_systick_isr:
     ldrb r0, [r4, #ST_UART_TIMER]
     cmp r0, #0
     beq 810f
-    ldr r0, =RCC_APB2ENR
-    ldr r0, [r0]
+    ldr r0, =RCC_APB1ENR
+    ldr r0, [r0, #4]            // RCC_APB2ENR
     lsrs r0, r0, #15            // bit 14 = USART1EN
     bcc 810f
     ldr r0, =USART1_BASE
@@ -724,15 +726,14 @@ dfu_systick_isr:
     blo 810f
     ldr r0, =48000000
     bl udiv32
-    movs r1, #150
-    lsls r1, r1, #3             // 1200
-    lsrs r2, r1, #1             // 600
+    movs r6, #150
+    lsls r6, r6, #3             // 1200
+    lsrs r2, r6, #1             // 600
     adds r0, r0, r2
+    movs r1, r6
     bl udiv32
-    movs r1, #150
-    lsls r1, r1, #3             // 1200
-    muls r0, r0, r1
-    cmp r0, r1
+    muls r0, r6, r0
+    cmp r0, r6
     blo 810f
     movs r5, r0
 810:

@@ -383,6 +383,26 @@ def main():
     else:
         print(f" {YELLOW}{INVERT} SKIP  {RESET} tools/pack.py not found, skipping bootloader packaging.")
 
+    # Step 4.05: Pack MCU-OTA .kfw v1.0 Container (verifiable & flashable on-device from Recovery)
+    target_kfw = "target/kern.kfw"
+    kfw_tool = root_dir / "tools" / "kfw.py"
+    if kfw_tool.exists():
+        kfw_slug = "uv-k10pro" if profile_name == "k10pro" else "uv-k1"
+        fw_ver = (cfg.get("project", {}) if cfg else {}).get("version", "0.1.0")
+        print(f" {BLUE}{INVERT} KFW   {RESET} Packing & verifying MCU-OTA .kfw v1.0 container ({kfw_slug})...")
+        kfw_cmd = (
+            f"python3 {kfw_tool} pack {target_kfw} --kind firmware --mcu-ota "
+            f"--name 'Kern OS' --version {fw_ver} --fw {kfw_slug}:{target_bin}"
+        )
+        code, stdout, stderr = run_cmd(kfw_cmd)
+        if code != 0:
+            print(f" {RED}{INVERT} ERROR {RESET} KFW packing failed: {stderr or stdout}")
+            sys.exit(1)
+        vcode, vout, verr = run_cmd(f"python3 {kfw_tool} verify {target_kfw}")
+        if vcode != 0:
+            print(f" {RED}{INVERT} ERROR {RESET} KFW verification failed: {verr or vout}")
+            sys.exit(1)
+
     # Step 4.1: Wrap Raw Binary in ELF for QEMU Hardware Emulation
     target_elf = "target/kern_firmware.elf"
     emu_dir = Path(os.environ.get("KERN_EMU_DIR", str(root_dir / "inspo" / "uv-k5-v3-emulator")))
@@ -396,6 +416,8 @@ def main():
     print(f"   • Raw Binary:    {WHITE}{target_bin}{RESET} ({total_flash:,} bytes)")
     if Path(target_packed).exists():
         print(f"   • Packed Binary: {WHITE}{target_packed}{RESET} ({os.path.getsize(target_packed):,} bytes)")
+    if Path(target_kfw).exists():
+        print(f"   • KFW Container: {WHITE}{target_kfw}{RESET} ({os.path.getsize(target_kfw):,} bytes, MCU-OTA verified)")
     if Path(target_elf).exists():
         print(f"   • Emulator ELF:  {WHITE}{target_elf}{RESET} ({os.path.getsize(target_elf):,} bytes)")
 

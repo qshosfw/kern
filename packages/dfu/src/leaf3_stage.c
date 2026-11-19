@@ -43,7 +43,11 @@ u32 leaf3_entry(u32 op, const KrxApiTable* api, void* param) {
     if (!ctx || !api || !ctx->arg) return 1u;
     DfuSharedState* st = (DfuSharedState*)ctx->arg;
 
-    st->ui.softbar(api, "MENU", "Tools", "EXIT", "Reboot");
+    if (st->has_recovery) {
+        st->ui.softbar(api, "MENU", "Tools", "EXIT", "Reboot");
+    } else {
+        st->ui.softbar(api, "", "", "EXIT", "Reboot");
+    }
     draw_page_line(api, 4u, 64, 39, KRX_ALIGN_CENTER, (const char*)(DFU_TITLES_PACKED + 1), 8u);
 
     if (st->keys_held) {

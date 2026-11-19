@@ -269,6 +269,7 @@ abi_sub! {
         LOAD_CFG   = 1,
         ASSET      = 2,
         LIST_DIR   = 3,
+        EXTENTS    = 4,
     }
     fs_write {
         FILE       = 0,

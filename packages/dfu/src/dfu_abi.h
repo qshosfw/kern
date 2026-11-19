@@ -119,6 +119,7 @@
 #define HOOK_FLAG_BL_OFF        (1u << 5)
 #define HOOK_FLAG_NO_TAP_TOGGLE (1u << 6)
 #define HOOK_FLAG_KBHP_VALID    (1u << 7)
+#define HOOK_FLAG_HAS_RECOVERY  (1u << 8)
 
 /*
  * 64-byte (2^6) KBHP v1.0 Handoff Envelope at 0x2000_35C0.

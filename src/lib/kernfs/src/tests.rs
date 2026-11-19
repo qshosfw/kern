@@ -541,3 +541,34 @@ fn test_write_at_streaming_large_files_and_gc_promotion() {
     assert_eq!(&out[..2048], &init_2k[..]);
     assert_eq!(&out[2048..2064], b"PROMOTED_PAST_2K");
 }
+
+#[test]
+fn test_file_extents_indirect_physical_walk() {
+    let mut sflash = SmallFlash::new();
+    let mut fs = KernFS::new(&mut sflash);
+    fs.format(None).unwrap();
+    fs.create_dir("/boot").unwrap();
+    let mut payload = [0u8; 4096];
+    for (i, b) in payload.iter_mut().enumerate() {
+        *b = ((i * 37) ^ (i >> 4)) as u8;
+    }
+    fs.write_file("/boot/test.kfw", &payload).unwrap();
+
+    let mut l1 = [0u16; 8];
+    let (depth, size) = fs.file_extents("/boot/test.kfw", &mut l1).unwrap();
+    assert_eq!(depth, crate::format::DEPTH_SINGLE_INDIRECT);
+    assert_eq!(size, 4096);
+    assert_ne!(l1[0], 0);
+
+    // Simulate bare-metal SPI2 read directly from raw flash backing store via L1 extents
+    let raw = &fs.dev.data;
+    for lpage in 0u16..16u16 {
+        let idx_page = l1[(lpage >> 7) as usize] as usize;
+        let idx_off = (idx_page << 8) + (((lpage & 0x7F) as usize) << 1);
+        let phys = u16::from_le_bytes([raw[idx_off], raw[idx_off + 1]]) as usize;
+        assert_ne!(phys, 0);
+        let page_bytes = &raw[(phys << 8)..(phys << 8) + 256];
+        let off = (lpage as usize) << 8;
+        assert_eq!(page_bytes, &payload[off..off + 256]);
+    }
+}

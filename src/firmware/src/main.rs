@@ -239,19 +239,53 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
         let bl_hold = boot::is_bootloader_hold_requested();
         if bl_hold || boot::is_ptt_side2_requested() {
             if bl_hold {
-                boot::clear_bootloader_hold_flag();
+                let mut tag = boot::read_backup_tag();
+                tag.flags = (tag.flags & !WARM_DFU_TOOLS_MASK)
+                    | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
+                boot::write_backup_tag(tag);
             }
             #[cfg(all(feature = "filesystem", feature = "krx_native"))]
             if hw.filesystem.fs.mount().is_ok() {
                 hw.lcd.turn_on();
                 drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
                 bsp::pins::BACKLIGHT.set_high();
-                let _ = crate::runtime::loader::try_launch_boot_module(
-                    &mut hw.lcd,
-                    hw.filesystem,
-                    "/apps/dfu.mod",
-                    1,
-                );
+                // Cooperative boot-module chain (0=boot OS, 2=dfu, 3=multiboot, 4=calib, 5=recovery)
+                let mut next: Option<&str> = Some(if warm_dfu_tools {
+                    "/apps/recovery.mod"
+                } else {
+                    "/apps/dfu.mod"
+                });
+                while let Some(mod_path) = next.take() {
+                    match crate::runtime::loader::try_launch_boot_module(
+                        &mut hw.lcd,
+                        hw.filesystem,
+                        mod_path,
+                        1,
+                    ) {
+                        Ok(2) => next = Some("/apps/dfu.mod"),
+                        Ok(3) => {
+                            let _ = crate::runtime::loader::try_launch_boot_module(
+                                &mut hw.lcd,
+                                hw.filesystem,
+                                "/apps/multiboot.mod",
+                                1,
+                            );
+                            next = Some("/apps/recovery.mod");
+                        }
+                        Ok(4) => {
+                            let _ = crate::runtime::loader::try_launch_boot_module(
+                                &mut hw.lcd,
+                                hw.filesystem,
+                                "/apps/calib.mod",
+                                1,
+                            );
+                            next = Some("/apps/recovery.mod");
+                        }
+                        Ok(5) => next = Some("/apps/recovery.mod"),
+                        Err(_) if mod_path == "/apps/recovery.mod" => next = Some("/apps/dfu.mod"),
+                        _ => {}
+                    }
+                }
                 #[cfg(not(feature = "dfu"))]
                 {
                     drivers::backlight::BACKLIGHT_DUTY

@@ -412,6 +412,22 @@ static inline u32 krx_leaf_call(const KrxApiTable* api, u8 leaf_id, u32 arg) {
 
 // ── Inline Helpers: FS ───────────────────────────────────────────────────────
 
+typedef struct {
+    u8  depth;
+    u8  _pad[3];
+    u32 size;
+    u16 l1[8];
+} KrxFileExtents;
+
+static inline u16 krx_fs_extents(
+    const KrxApiTable* api, const u8* path, u8 path_len, KrxFileExtents* out
+) {
+    KrxFsReq r;
+    r.path = path; r.buf = (u8*)out; r.offset = 0u; r.len = sizeof(KrxFileExtents);
+    r.path_len = path_len; r.extra = 0u;
+    return (u16)krx_call(api, OP_FS_READ, SUB_FS_READ_EXTENTS, (u32)&r, 0u);
+}
+
 static inline u16 krx_fs_read_at(
     const KrxApiTable* api, const u8* path, u8 path_len, u32 offset, u8* buf, u16 max_len
 ) {
