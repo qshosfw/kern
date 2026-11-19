@@ -26,6 +26,7 @@ u32 leaf9_entry(u32 op, const KrxApiTable* api, void* param) {
     DfuSharedState* st = (DfuSharedState*)ctx->arg;
     u8 applets = st->tool_sub;
 
+    DfuToolsScratch* ts = (DfuToolsScratch*)st->stage_buf;
     DfuDirEntry ents[12];
     static const char DIRS[] = "/boot\0/apps\0/\0";
     u8 count = 0u;
@@ -47,7 +48,7 @@ u32 leaf9_entry(u32 op, const KrxApiTable* api, void* param) {
             u8 ok = applets ? (eq_ext(nm, ".krx") || eq_ext(nm, ".ram") || eq_ext(nm, ".mod"))
                             : (eq_ext(nm, ".kfw") || eq_ext(nm, ".uf2") || eq_ext(nm, ".bin"));
             if (!ok) continue;
-            DfuFlatFile* dst = &st->buf.tools.files[count];
+            DfuFlatFile* dst = &ts->files[count];
             u32 j = 0u;
             while (nm[j] && j < 19u) { dst->name[j] = nm[j]; j++; }
             dst->name[j] = 0;
@@ -58,7 +59,7 @@ u32 leaf9_entry(u32 op, const KrxApiTable* api, void* param) {
         while (*dp) dp++;
         dp++;
     }
-    st->buf.tools.file_count = count;
-    st->buf.tools.file_sel = 0u;
+    ts->file_count = count;
+    ts->file_sel = 0u;
     return 0u;
 }

@@ -9,11 +9,9 @@
 #define KRX_ALIGN_CENTER  1u
 #define KRX_ALIGN_RIGHT   2u
 
-#define DFU_FLASH_PREFIX_X   22u
-#define DFU_FLASH_DIGITS_COL 76u
-
-#define TAG_CONFIRM_DFU   1u
-#define DFU_MAX_FILES     12u
+#define DFU_FLASH_PREFIX_X   24u
+#define TAG_CONFIRM_DFU      1u
+#define DFU_MAX_FILES        12u
 
 /* P0 Overlay Leaf IDs (StructuredLeafManager<16> supports 1..=16) */
 #define DFU_LEAF_SPLASH   1u
@@ -28,15 +26,15 @@
 #define DFU_LEAF_FILES    10u
 #define DFU_LEAF_INSPECT  11u
 
-/* Tools menu dispatch actions */
+/* Recovery menu dispatch actions */
 #define DFU_TOOL_ACT_DFU       0u /* Return to live DFU bootloader handoff */
 #define DFU_TOOL_ACT_OPEN      1u /* Open selected sub-leaf */
 #define DFU_TOOL_ACT_INSPECT   2u /* Open leaf11_inspect for selected file */
 
-/* Tools menu items */
+/* Recovery menu items */
 #define DFU_TOOL_ITEM_FLASH    0u /* Flat firmware image browser (.kfw/.uf2/.bin) */
 #define DFU_TOOL_ITEM_APPLETS  1u /* Flat applet browser (.krx/.ram/.mod) */
-#define DFU_TOOL_ITEM_RESCUE   2u /* Buddy Rescue (2-pin UART) */
+#define DFU_TOOL_ITEM_CLONE    2u /* Radio Clone (2-pin serial transfer) */
 #define DFU_TOOL_ITEM_CALIB    3u /* Calibration inspect & backup */
 #define DFU_TOOL_ITEM_INFO     4u /* Bootloader & hardware information */
 #define DFU_TOOL_ITEM_COUNT    5u
@@ -48,42 +46,54 @@ typedef struct {
     u8   _pad[3];
 } DfuFlatFile;
 
+/*
+ * Transient scratch hosted inside TRANSIENT_ARENA[4160..5120) (`st->stage_buf`, 960 B):
+ *   - During Recovery menu: holds DfuToolsScratch (380 B <= 960 B)
+ *   - During DFU staging:   holds 640 B Page-5 banners + 320 B Page-4 titles (960 B)
+ * Zero bytes added to root.bin!
+ */
 typedef struct {
-    void (*header)(const KrxApiTable* api, const char* title);
+    DfuFlatFile files[DFU_MAX_FILES]; /* 336 B */
+    u32         sel_size;             /* 4 B */
+    char        sel_path[32];         /* 32 B */
+    u8          file_count;           /* 1 B */
+    u8          file_sel;             /* 1 B */
+    u8          _pad[2];              /* 2 B */
+} DfuToolsScratch;
+
+_Static_assert(sizeof(DfuToolsScratch) <= (DFU_BANNERS_BYTES + DFU_TITLES_BYTES),
+               "DfuToolsScratch must fit inside 960 B stage_buf");
+
+typedef struct {
     void (*softbar)(const KrxApiTable* api, const char* lk, const char* ll, const char* rk, const char* rl);
     void (*kv)(const KrxApiTable* api, i16 y, const char* k, const char* v);
     u8   (*wait_key)(const KrxApiTable* api);
     u32  (*u32_dec)(char* dst, u32 val);
 } DfuUiOps;
 
+static inline void dfu_draw_header(const KrxApiTable* api, const char* title) {
+    KrxWidget d;
+    d.p0 = (const u8*)title; d.len0 = krx_strlen(title); d.y = 0;
+    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_NEGATED_HEADER, (u32)&d, 0u);
+}
+
 typedef struct {
     KbhpEnvelope kbhp;             /* 64 B: Prepared KBHP v1.0 handoff envelope */
     u32          tramp[3];         /* 12 B: [0]=MSP, [1]=SystemInit, [2]=__main */
     u32          op;               /* 4 B:  KRX_OP_* forwarded to modal leaf */
     const void*  param;            /* 4 B:  KRX event/param forwarded to modal leaf */
-    u8           bl_date[8];       /* 8 B:  YYYYMMDD ASCII build date or zeroed */
     u8           keys_held;        /* 1 B:  Non-zero if boot chord keys still pressed */
     u8           has_stage;        /* 1 B:  Non-zero if SRAM UI strips were staged */
     u8           use_hook;         /* 1 B:  Non-zero if SysTick hook should attach */
-    u8           tool_sel;         /* 1 B:  Active selection in DFU Tools menu */
+    u8           tool_sel;         /* 1 B:  Active selection in Recovery menu */
     u8           tool_sub;         /* 1 B:  Sub-mode (0=Flash Image, 1=Applets) */
     u8           tool_action;      /* 1 B:  DFU_TOOL_ACT_* return status */
     u8           tools_active;     /* 1 B:  Non-zero once RTC tools flag was consumed */
     u8           _pad0;            /* 1 B */
     DfuUiOps     ui;               /* 20 B: Resident shared UI helpers */
-    union {
-        u8 sram_banners[8 * 84];   /* 672 B: Page 5 status banners (staged right before handoff) */
-        struct {
-            DfuFlatFile files[DFU_MAX_FILES]; /* 336 B */
-            u32  sel_size;                    /* 4 B */
-            char sel_path[32];                /* 32 B */
-            char sel_name[20];                /* 20 B */
-            u8   file_count;                  /* 1 B */
-            u8   file_sel;                    /* 1 B */
-        } tools;
-    } buf;
-    u8           sram_arrow[38];   /* 38 B:  2 x 19 B connection arrow */
-    u8           sram_vidpid[40];  /* 40 B:  Page 1 USB VID:PID badge */
+    u8*          stage_buf;        /* 4 B:  TRANSIENT_ARENA[4160..5120) = 960 B scratch/staging */
+    u8           sram_arrow[38];   /* 38 B: 2 x 19 B connection arrow */
+    u8           sram_vidpid[40];  /* 40 B: Page 1 USB VID:PID badge */
 } DfuSharedState;
 
 typedef struct {

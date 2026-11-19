@@ -10,31 +10,32 @@ A relocatable, zero-firmware-bloat **P0 Structured Paged (`FLAG_SYSTEM_ACTION`)*
 
 The 128×64 ST7565 DFU screen is vertically balanced with strict page-aligned zones and zero visual clutter:
 
-- **Top Header (Page 0):** Auto-detected bootloader version & build date (e.g. `v7.02.02 (2025-08-08)`, `Moto BL`, or `Custom`).
+- **Top Header (Page 0):** Auto-detected bootloader version & build date (e.g. `v7.02.02 (2025-08-08)`, `Moto BL`, or `Custom`) alongside the taller UV-K1 antenna (`y = 1..9`).
 - **Radio · Connection Arrow · USB-C Cable (Pages 1–3):** Vertically centered across `y = 10..31` with equal 9 px horizontal spacing.
-  - **Connection Arrow (`x = 49..67`):** Represents live link status — slow ~1 Hz blink in Standby (`Plug in cable`), solid steady when USB or UART is connected / ready / flashing / complete, brisk activity pulse on active command traffic (`Link active`), and hidden on mid-flash abort.
+  - **Connection Arrow (`x = 49..67`):** Represents live link status — slow ~1 Hz blink in Standby, solid steady when USB or UART is connected / ready / writing / complete, brisk activity pulse on active command traffic (`Link active`), and hidden on mid-flash abort.
   - **Link Badge (`x = 76..115`, Page 1):** Displays USB `VID:PID` (`36B7:0001`) or live UART baud (`115200bps`) directly above the USB-C plug when connected.
-  - **Radio LCD Cutout (`x = 19..34`):** Displays `"DFU"` at rest, live percentage (`0%..100%`) during flashing, and alternates `100%` / `<N>s` elapsed time on completion.
-- **On-Demand Progress Bar (Page 4, `y = 34..39`):** Hidden in Standby, Connected, and Ready states; appears **only** while flashing, complete, or aborted (dashed bar on stall/abort).
-- **Status Banner (Page 5, `y = 43..47`):** Single-page status text (`Plug in cable`, `USB connected`, `Ready to flash`, `Flashing page X/Y`, `Flash complete`, `UART connected`, `Aborted - reflash`).
-- **Two-Sided Soft Bar (`y = 54..60`, crisp square key badges):**
-  - Left: **`[MENU] Tools`** — tap when idle to jump seamlessly into the on-device **DFU Tools** menu (signaled across warm reset via backup-domain `RTC_ALR` bit 6 while keeping ST7565 & backlight continuously lit — zero LCD reset blink).
+  - **Radio LCD Cutout (`x = 19..34`):** Displays `"DFU"` at rest, live percentage (`0%..100%`) during writes, and alternates `100%` / `<N>s` elapsed time on completion.
+- **Dual-Mode Status & Progress Band (Pages 4–5, `y = 32..47`):**
+  - **When Idle / Connected / Ready:** Displays an expressive, tool-agnostic **two-line** status (`DFU Mode` / `Plug in USB or serial`, `USB connected` / `Waiting for host...`, `Host ready` / `Ready for transfer`, `Link active` / `Exchanging data...`, `Serial connected` / `Ready on 2-pin serial`). All Page-5 glyphs including lowercase descenders sit cleanly at baseline `y = 46` (zero Page-6 bleed).
+  - **When Writing / Complete / Aborted:** Page 4 (`y = 34..39`) transforms into a sleek 6 px rounded progress bar (dashed on stall/abort) while Page 5 shows `Writing page X/Y`, `Transfer complete`, or `Aborted - retry`.
+- **Two-Sided Soft Bar (`y = 54..60`, native square Kern key badges):**
+  - Left: **`[MENU] Tools`** — tap when idle to jump seamlessly into the on-device **Recovery** menu (signaled across warm reset via `BackupCrashTag::FLAG_DFU_TOOLS_REQ` while keeping `BACKLIGHT_DUTY = 10` and ST7565 continuously lit — zero LCD reset or PWM blink).
   - Right: **`[EXIT] Reboot`** — hold 0.5 s when idle to verify application vectors and reboot into Kern OS.
   - Side Key 1 short press toggles LCD backlight; long hold (0.5 s) also performs a verified reboot.
 
 ---
 
-## 🧰 DFU Tools Menu (`[MENU] Tools`)
+## 🧰 Recovery Menu (`[MENU] Tools`)
 
-Pressing **`MENU`** from idle DFU opens a clean, icon-driven utility menu backed by dedicated 1 KB P0 overlay leaves:
+Pressing **`MENU`** from idle DFU opens an icon-driven **Recovery** menu rendered with Kern's **Comfortable (`13 px`)** row density (icons + right chevrons matching Settings), while flat file lists use **Compact (`10 px`)** density (4 rows visible):
 
 | Item | Purpose |
 | :--- | :--- |
-| **Flash Image** | Flat browser listing flashable firmware files (`.kfw`, `.uf2`, `.bin`) across `/boot`, `/apps`, and `/` (no folder or icon clutter) with pre-flight format (`KFW1`, `UF2`, Raw ARM) and 118 KB size verification. |
-| **Applets** | Flat browser listing executable packages and diagnostic applets (`.krx`, `.ram`, `.mod`) with format & size inspection. |
-| **Buddy Rescue** | Measures the active local firmware image at `0x0800_2800` and reports 2-pin K1 (`38400` baud) radio-to-radio recovery readiness. |
+| **Flash Image** | Compact flat browser listing flashable images (`.kfw`, `.uf2`, `.bin`) across `/boot`, `/apps`, and `/` (no folder or icon clutter) with pre-flight format (`KFW1`, `UF2`, Raw ARM) and 118 KB size verification. |
+| **Applets** | Compact flat browser listing executable packages and diagnostic applets (`.krx`, `.ram`, `.mod`) with format & size inspection. |
+| **Radio Clone** | Measures the active local image at `0x0800_2800` and reports 2-pin K1 (`38400` baud) radio-to-radio serial transfer readiness. |
 | **Calibration** | Inspects `/sys/calib.dat`, `/sys/calib.sig` (Ascon-128 MAC), and `0x0800_2750` (`QS-1` factory page), with one-press backup to `/boot/calib.bkp`. |
-| **Information** | Displays bootloader family & version, USB `VID:PID`, `QS-1` factory ID status, battery voltage, MCU target (`PY32F071`), and `KBHP 1.0`. |
+| **Information** | Displays bootloader family & version, USB `VID:PID`, `QS-1` factory ID status, battery voltage / app flash region, MCU target (`PY32F071`), and `KBHP 1.0`. |
 
 Pressing **`[EXIT] DFU`** returns seamlessly to live DFU mode.
 
@@ -64,27 +65,27 @@ Because `/apps/dfu.mod` loads from 2 MB KernFS (`PY25Q16`) via **P0 Structured P
 packages/dfu/
 ├── README.md                    # Module documentation, UX guide, KBHP v1.0 overview & install guide
 ├── build.sh                     # Cortex-M0+ PIC build, _Static_assert ABI checks, size/reloc guards & packer
-├── dfu.mod                      # Verified P0 Structured Paged module (13,256 B, install to /apps/dfu.mod)
+├── dfu.mod                      # Verified P0 Structured Paged module (12,857 B, install to /apps/dfu.mod)
 ├── krx.ld                       # Shared Thumb-1 PIC linker script (.text.entry pinned at 0x00000000)
 ├── screenshots/                 # Rendered ST7565 128x64 UI screenshots
 └── src/
     ├── dfu_abi.h                # Single-source SRAM map, RTC_ALR tools tag, KBHP v1.0 & DfuHookState contracts
-    ├── dfu_shared.h             # DfuSharedState (union-shared scratch), resident DfuUiOps & inline helpers
-    ├── dfu_quiesce.h            # Hardware quiescing, GPIO LCKR hardening & USB SE0 detach (SWD-safe)
-    ├── dfu.c                    # Resident root (4,888 B): shared UI ops, P0 dispatch, MSP evac & handoff
-    ├── leaf1_splash.c           # Leaf 1  (904 B): Balanced PackBits RLE splash & bootloader-aware header
+    ├── dfu_shared.h             # DfuSharedState, TRANSIENT_ARENA staging scratch & resident DfuUiOps
+    ├── dfu_quiesce.h            # Hardware quiescing, GPIO LCKR hardening, PF8 backlight latch & USB SE0 detach
+    ├── dfu.c                    # Resident root (4,116 B): native badge soft bar, P0 dispatch, MSP evac & handoff
+    ├── leaf1_splash.c           # Leaf 1  (880 B): Taller-antenna PackBits RLE splash & bootloader header
     ├── leaf2_modal.c            # Leaf 2  (411 B): Settings hold-confirm modal + low-battery brownout warning
-    ├── leaf3_stage.c            # Leaf 3  (824 B): Key-release guard, soft bar & Page-5 SRAM strip staging
+    ├── leaf3_stage.c            # Leaf 3  (992 B): Key-release guard, soft bar & double-line SRAM strip staging
     ├── leaf4_probe.c            # Leaf 4 (1,013 B): Multi-BL ROM fingerprint, 0x0800_2750 check & KBHP prep
-    ├── leaf5_tools.c            # Leaf 5  (696 B): RTC_ALR tools gate & icon-driven DFU Tools menu
-    ├── leaf6_info.c             # Leaf 6  (715 B): Bootloader & hardware Information screen
-    ├── leaf7_calib.c            # Leaf 7  (869 B): Calibration inspector & /boot/calib.bkp backup
-    ├── leaf8_rescue.c           # Leaf 8  (502 B): Buddy Rescue 2-pin UART readiness screen
-    ├── leaf9_scan.c             # Leaf 9  (459 B): Flat filesystem scanner (/boot, /apps, /)
-    ├── leaf10_files.c           # Leaf 10 (983 B): Flat firmware image & applet browser
-    ├── leaf11_inspect.c         # Leaf 11 (672 B): Pre-flight KFW1/UF2/KRX/ARM format & 118 KB fit check
+    ├── leaf5_tools.c            # Leaf 5  (750 B): RTC_ALR tools gate & Comfortable 13 px Recovery menu
+    ├── leaf6_info.c             # Leaf 6  (770 B): Bootloader & hardware Information screen
+    ├── leaf7_calib.c            # Leaf 7  (897 B): Calibration inspector & /boot/calib.bkp backup
+    ├── leaf8_rescue.c           # Leaf 8  (540 B): Radio Clone 2-pin serial readiness screen
+    ├── leaf9_scan.c             # Leaf 9  (447 B): Flat filesystem scanner (/boot, /apps, /)
+    ├── leaf10_files.c           # Leaf 10 (1,016 B): Compact 10 px flat image & applet browser
+    ├── leaf11_inspect.c         # Leaf 11 (705 B): Pre-flight KFW1/UF2/KRX/ARM format & 118 KB fit check
     └── hook/
-        ├── dfu_hook.S           # Top-level modular bare-metal SysTick hook assembler unit (2,240 B)
+        ├── dfu_hook.S           # Top-level modular bare-metal SysTick hook assembler unit (2,260 B)
         ├── hook_defs.inc        # Symbolic SRAM/MMIO/struct offsets (compile-time verified vs dfu_abi.h)
         ├── hook_main.S          # 30 Hz SysTick ISR: safety lock, EXIT/MENU guard, arrow/bar & KBHP mirror
         └── hook_drivers.S       # Bare-metal drivers: RTC_ALR tools reboot, ST7565 SPI1, BK4829 LED & glyphs
@@ -132,14 +133,16 @@ To let **any** firmware (Kern, F4HWN, DeltaFW, Egzumer/CEC, UV-KX, custom C/Rust
 | Region | Size | Purpose |
 | :--- | :--- | :--- |
 | `0x2000_0000..dfu_root_base` | ~7.3 KB | Evacuated `MSP` stack (growing down below `TRANSIENT_ARENA`) during handoff |
-| `TRANSIENT_ARENA[0..4888)` | 4,888 B | Resident root (`dfu.c`, shared UI ops, embedded `dfu_hook.bin`, union `g_state`) |
+| `TRANSIENT_ARENA[0..4116)` | 4,116 B | Resident root (`dfu.c`, native badge soft bar, embedded `dfu_hook.bin`, `g_state`) |
+| `TRANSIENT_ARENA[4160..5120)` | 960 B | Dual-use scratch (`DfuToolsScratch` in Recovery; staged banners + titles before handoff) |
 | `TRANSIENT_ARENA[5120..6144)` | 1,024 B | Shared P0 leaf overlay window (`leaf1..leaf11`, 11 on-demand leaves) |
-| `0x2000_3000..0x2000_329F` | 672 B | Staged Page-5 status banners (`8 × 84 B`, zero Page-6 overlap) |
+| `0x2000_3000..0x2000_327F` | 640 B | Staged Page-5 status subtitles (`8 × 80 B`, baseline `y = 46`, descender-safe) |
+| `0x2000_3280..0x2000_33BF` | 320 B | Staged Page-4 idle primary titles (`5 × 64 B`, baseline `y = 38`, power-of-2 stride) |
 | `0x2000_3540..0x2000_35A7` | 78 B | Staged connection arrow (`38 B`) & Page-1 `VID:PID` badge (`40 B`) |
 | `0x2000_35C0..0x2000_35FF` | 64 B | **KBHP v1.0 Handoff Envelope** (48 B signed header + 16 B live telemetry) |
 | `0x2000_3600..0x2000_36BF` | 192 B | Relocated Cortex-M0+ `VTOR` vector table (SysTick -> `0x2000_3701`) |
 | `0x2000_36C0..0x2000_36FF` | 64 B | Live SysTick hook runtime state (`DfuHookState`) |
-| `0x2000_3700..0x2000_3FFF` | 2,304 B | Live `dfu_hook.bin` SysTick ISR + drivers (`2,240 B`) |
+| `0x2000_3700..0x2000_3FFF` | 2,304 B | Live `dfu_hook.bin` SysTick ISR + drivers (`2,260 B`) |
 
 ---
 

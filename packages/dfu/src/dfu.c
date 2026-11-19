@@ -5,12 +5,12 @@
  * Resident root hosts shared UI helpers once and orchestrates 11 P0 overlay leaves:
  *   - Leaf 1  (`leaf1_splash`):  Splash RLE decode & bootloader-aware header
  *   - Leaf 2  (`leaf2_modal`):   Settings hold-confirm modal + low-battery warning
- *   - Leaf 3  (`leaf3_stage`):   Key-release guard, soft bar & SRAM strip pre-renderer
+ *   - Leaf 3  (`leaf3_stage`):   Key-release guard, soft bar & double-line strip staging
  *   - Leaf 4  (`leaf4_probe`):   ROM fingerprint (Stock K1/Safe/Moto/Custom) & KBHP prep
- *   - Leaf 5  (`leaf5_tools`):   RTC tools gate & DFU Tools menu
+ *   - Leaf 5  (`leaf5_tools`):   RTC tools gate & Recovery menu
  *   - Leaf 6  (`leaf6_info`):    Bootloader & hardware Information screen
  *   - Leaf 7  (`leaf7_calib`):   Calibration inspect & /boot/calib.bkp backup
- *   - Leaf 8  (`leaf8_rescue`):  Buddy Rescue 2-pin UART readiness screen
+ *   - Leaf 8  (`leaf8_rescue`):  Radio Clone 2-pin serial readiness screen
  *   - Leaf 9  (`leaf9_scan`):    Flat firmware/applet filesystem scanner
  *   - Leaf 10 (`leaf10_files`):  Flat firmware/applet list browser
  *   - Leaf 11 (`leaf11_inspect`): Pre-flight image/applet format & fit inspector
@@ -47,27 +47,15 @@ __attribute__((visibility("hidden"))) extern const u8 dfu_hook_end[];
 
 static DfuSharedState g_state;
 
-/* ── Compact Resident UI Helpers (shared by leaves via g_state.ui) ──────────── */
+/* ── Compact Resident UI Helpers (delegating to native Kern widgets) ────────── */
 
 __attribute__((noinline))
-static void root_text(const KrxApiTable* api, i16 x, i16 y, const char* s, u8 col, u8 align) {
-    krx_draw_str_align(api, x, y, (const u8*)s, krx_strlen(s), KRX_FONT_TOMTHUMB, col, align);
-}
-
-static void root_draw_header(const KrxApiTable* api, const char* title) {
+static void root_emit_badge(const KrxApiTable* api, i16 x, const char* k, const char* l) {
     KrxWidget d;
-    dfu_zero_bytes((u8*)&d, sizeof(d));
-    d.p0 = (const u8*)title;
-    d.len0 = krx_strlen(title);
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_NEGATED_HEADER, (u32)&d, 0u);
-}
-
-__attribute__((noinline))
-static void root_draw_badge(const KrxApiTable* api, i16 x, const char* key, const char* lbl) {
-    i16 bw = (i16)(krx_strlen(key) * 4u + 3u);
-    krx_fill_rect(api, x, 54, bw, 7, 1u);
-    root_text(api, x + 2, 59, key, 0u, KRX_ALIGN_LEFT);
-    if (lbl[0]) root_text(api, x + bw + 2, 59, lbl, 1u, KRX_ALIGN_LEFT);
+    d.p0 = (const u8*)k; d.len0 = krx_strlen(k);
+    d.p1 = (const u8*)l; d.len1 = krx_strlen(l);
+    d.x = x; d.y = 54;
+    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_KEY_BADGE, (u32)&d, 0u);
 }
 
 static void root_draw_softbar(
@@ -75,17 +63,27 @@ static void root_draw_softbar(
     const char* lk, const char* ll,
     const char* rk, const char* rl
 ) {
-    if (lk[0]) root_draw_badge(api, 2, lk, ll);
+    if (lk[0]) root_emit_badge(api, 2, lk, ll);
     if (rk[0]) {
-        u16 kl = krx_strlen(rk), ll2 = krx_strlen(rl);
-        i16 tw = (i16)(kl * 4u + 3u + (ll2 ? (ll2 * 4u + 1u) : 0u));
-        root_draw_badge(api, 126 - tw, rk, rl);
+        KrxTextReq tr;
+        tr.font = KRX_FONT_TOMTHUMB; tr.flags = 1u;
+        tr.text = (const u8*)rk; tr.len = krx_strlen(rk);
+        i16 tw = (i16)krx_call(api, OP_GFX_TEXT, (u32)&tr, 0u, 0u) + 4;
+        if (rl[0]) {
+            tr.text = (const u8*)rl; tr.len = krx_strlen(rl);
+            tw += (i16)krx_call(api, OP_GFX_TEXT, (u32)&tr, 0u, 0u) + 2;
+        }
+        root_emit_badge(api, 126 - tw, rk, rl);
     }
 }
 
 static void root_draw_kv(const KrxApiTable* api, i16 y, const char* k, const char* v) {
-    root_text(api, 3, y, k, 1u, KRX_ALIGN_LEFT);
-    root_text(api, 125, y, v, 1u, KRX_ALIGN_RIGHT);
+    KrxTextReq r;
+    r.text = (const u8*)k; r.x = 3; r.y = y; r.len = krx_strlen(k);
+    r.arg = KRX_ALIGN_LEFT; r.font = KRX_FONT_TOMTHUMB; r.color = 1u; r.flags = 0u; r._pad = 0u;
+    krx_call(api, OP_GFX_TEXT, (u32)&r, 0u, 0u);
+    r.text = (const u8*)v; r.x = 125; r.len = krx_strlen(v); r.arg = KRX_ALIGN_RIGHT;
+    krx_call(api, OP_GFX_TEXT, (u32)&r, 0u, 0u);
 }
 
 static u8 root_wait_key(const KrxApiTable* api) {
@@ -113,6 +111,7 @@ static u32 root_u32_dec(char* dst, u32 val) {
     return n;
 }
 
+__attribute__((noinline))
 static void dfu_move_bytes(u8* dst, const u8* src, u32 len) {
     if ((u32)dst > (u32)src) {
         while (len > 0u) { len--; dst[len] = src[len]; }
@@ -134,7 +133,8 @@ static void handoff_to_bootloader(void) {
     if (use_hook && is_stock_k1 && g_state.has_stage) {
         dfu_move_bytes((u8*)DFU_SRAM_VIDPID, g_state.sram_vidpid, sizeof(g_state.sram_vidpid));
         dfu_move_bytes((u8*)DFU_SRAM_ARROW, g_state.sram_arrow, sizeof(g_state.sram_arrow));
-        dfu_move_bytes((u8*)DFU_SRAM_BANNERS, g_state.buf.sram_banners, sizeof(g_state.buf.sram_banners));
+        /* Banners (640 B) + Titles (320 B) are contiguous at 0x2000_3000..0x2000_33BF */
+        dfu_move_bytes((u8*)DFU_SRAM_BANNERS, g_state.stage_buf, DFU_BANNERS_BYTES + DFU_TITLES_BYTES);
     }
 
     dfu_quiesce_hw(use_hook ? (1u << 12) : 0u);
@@ -144,7 +144,7 @@ static void handoff_to_bootloader(void) {
 
     if (use_hook) {
         volatile u32* dst_vec = (volatile u32*)DFU_SRAM_VTOR;
-        dfu_copy_bytes((u8*)dst_vec, (const u8*)DFU_BL_FLASH_BASE, 192u);
+        dfu_move_bytes((u8*)dst_vec, (const u8*)DFU_BL_FLASH_BASE, 192u);
         dst_vec[15] = DFU_SRAM_CODE | 1u;
 
         DfuHookState* hs = (DfuHookState*)DFU_SRAM_STATE;
@@ -153,14 +153,12 @@ static void handoff_to_bootloader(void) {
         hs->last_capsule     = 0xFFFFFFFFu;
         hs->usb_miss_cnt     = 4u;
         hs->kbhp_addr        = KBHP_SRAM_ADDR;
-        hs->last_banner      = 0xFFFFu;
-        hs->last_led         = 0xFFu;
+        *(u32*)&hs->last_banner     = 0x00FFFFFFu; /* last_banner=0xFFFF, last_led=0xFF, pulse=0 */
         hs->last_serial_hash = 0x00000800u;
-        hs->flash_elapsed_s  = 0xFFFFu;
-        hs->last_cutout      = 0xFFFFu;
+        *(u32*)&hs->flash_elapsed_s = 0xFFFFFFFFu; /* flash_elapsed_s=0xFFFF, last_cutout=0xFFFF */
         hs->prev_cndtr       = 2048u;
 
-        dfu_copy_bytes((u8*)DFU_SRAM_CODE, dfu_hook_start, hook_len);
+        dfu_move_bytes((u8*)DFU_SRAM_CODE, dfu_hook_start, hook_len);
 
         void (*sys_init_fn)(void) = (void (*)(void))(g_state.tramp[1]);
         sys_init_fn();
@@ -192,11 +190,12 @@ __attribute__((noreturn))
 static void enter_dfu_session(const KrxApiTable* api) {
     krx_leaf_call(api, DFU_LEAF_PROBE, (u32)&g_state);
 
-    g_state.ui.header   = root_draw_header;
+    u32 base_addr = (u32)dfu_root_base;
     g_state.ui.softbar  = root_draw_softbar;
     g_state.ui.kv       = root_draw_kv;
     g_state.ui.wait_key = root_wait_key;
     g_state.ui.u32_dec  = root_u32_dec;
+    g_state.stage_buf   = (u8*)(base_addr + DFU_STAGE_OFFSET);
 
     /* Leaf 5 checks RTC_ALR TOOLS flag; immediately returns DFU_TOOL_ACT_DFU on normal boot */
     for (;;) {
@@ -222,8 +221,7 @@ static void enter_dfu_session(const KrxApiTable* api) {
     krx_leaf_call(api, DFU_LEAF_SPLASH, (u32)&g_state);
     krx_leaf_call(api, DFU_LEAF_STAGE, (u32)&g_state);
 
-    u32 base_addr = ((u32)dfu_root_base) & ~7u;
-    u32 evac_sp = (base_addr >= 0x20000400u) ? base_addr : 0x20002FC0u;
+    u32 evac_sp = ((base_addr & ~7u) >= 0x20000400u) ? (base_addr & ~7u) : 0x20002FC0u;
     register u32 r1_sp __asm__("r1") = evac_sp;
     register u32 r2_fn __asm__("r2") = (u32)handoff_to_bootloader;
     __asm__ volatile(
@@ -235,22 +233,13 @@ static void enter_dfu_session(const KrxApiTable* api) {
 
 int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     if (!api) return 0;
-
-    if (op == KRX_OP_START) {
-        if (param != 0) {
-            enter_dfu_session(api);
-        }
-        g_state.op = op;
-        g_state.param = param;
-        krx_leaf_call(api, DFU_LEAF_MODAL, (u32)&g_state);
-        return 0;
+    if (op == KRX_OP_START && param != 0) {
+        enter_dfu_session(api);
     }
-
-    if (op == KRX_OP_EVENT || op == KRX_OP_RENDER) {
+    if (op <= KRX_OP_RENDER) {
         g_state.op = op;
         g_state.param = param;
         return (int)krx_leaf_call(api, DFU_LEAF_MODAL, (u32)&g_state);
     }
-
     return 0;
 }

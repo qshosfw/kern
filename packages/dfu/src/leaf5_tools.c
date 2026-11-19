@@ -1,9 +1,12 @@
 /*
- * DFU Leaf 5: RTC_ALR Tools Gate & Interactive DFU Tools Menu
+ * DFU Leaf 5: RTC_ALR Tools Gate & Comfortable Recovery Menu
  *
  * On first call, inspects backup-domain RTC_ALRH/ALRL for KBHP_RTC_FLAG_TOOLS:
  *   - Not set -> returns immediately so normal DFU boot has zero latency.
- *   - Set     -> clears bit 6 (preserving crash strikes) and enters DFU Tools menu.
+ *   - Set     -> clears bit 6 (preserving crash strikes) and opens Recovery menu.
+ *
+ * Uses Kern's Comfortable (13 px) menu density (3 visible rows + icons + chevrons)
+ * matching Settings UI padding.
  */
 #include "dfu_shared.h"
 
@@ -52,32 +55,32 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
     static const char TITLES[] =
         "Flash Image\0"
         "Applets\0"
-        "Buddy Rescue\0"
+        "Radio Clone\0"
         "Calibration\0"
         "Information\0";
-    /* Built-in 8x8 Kern system icons: Upload(49), Apps(46), Radio(25), System/Wrench(48), Info(30) */
+    /* Built-in 8x8 Kern icons: Upload(49), Apps(46), Radio(25), Wrench(48), Info(30) */
     static const u8 ICONS[DFU_TOOL_ITEM_COUNT] = { 49u, 46u, 25u, 48u, 30u };
 
     u8 sel = st->tool_sel;
     if (sel >= DFU_TOOL_ITEM_COUNT) sel = 0u;
-    u8 top = (sel >= 4u) ? (u8)(sel - 3u) : 0u;
+    u8 top = (sel >= 3u) ? (u8)(sel - 2u) : 0u;
 
     for (;;) {
         krx_clear(api);
-        st->ui.header(api, "DFU Tools");
+        dfu_draw_header(api, "Recovery");
 
-        for (u8 row = 0u; row < 4u; row++) {
+        for (u8 row = 0u; row < 3u; row++) {
             u8 idx = (u8)(top + row);
             if (idx >= DFU_TOOL_ITEM_COUNT) break;
             const char* t = nth_str(TITLES, idx);
-            krx_ui_draw_menu_item(
-                api, (i16)(10 + row * 11),
+            u8 flags = KRX_MENU_FLAG_ARROW | ((idx == sel) ? KRX_MENU_FLAG_SEL : 0u);
+            krx_ui_draw_menu_item_ex(
+                api, (i16)(11 + row * 14), KRX_MENU_COMFORTABLE,
                 (const u8*)t, (u8)krx_strlen(t),
-                (const u8*)"", 0u,
-                (idx == sel) ? 1u : 0u, ICONS[idx]
+                (const u8*)"", 0u, flags, ICONS[idx]
             );
         }
-        krx_ui_draw_scrollbar(api, 124u, 10u, 43u, (u16)sel, (u16)DFU_TOOL_ITEM_COUNT, 4u);
+        krx_ui_draw_scrollbar(api, 124u, 11u, 41u, (u16)sel, (u16)DFU_TOOL_ITEM_COUNT, 3u);
         st->ui.softbar(api, "MENU", "Open", "EXIT", "DFU");
         krx_commit_frame(api);
 
@@ -96,6 +99,6 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
             return 0u;
         }
         if (sel < top) top = sel;
-        if (sel >= top + 4u) top = (u8)(sel - 3u);
+        if (sel >= top + 3u) top = (u8)(sel - 2u);
     }
 }

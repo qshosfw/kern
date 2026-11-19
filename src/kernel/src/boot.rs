@@ -406,6 +406,7 @@ impl BackupCrashTag {
     pub const FLAG_DIRTY_CRASH: u8 = 1 << 1;
     pub const FLAG_SAFE_MODE_REQ: u8 = 1 << 2;
     pub const FLAG_BOOTLOADER_HOLD: u8 = 1 << 3;
+    pub const FLAG_DFU_TOOLS_REQ: u8 = 1 << 6;
 
     pub const fn empty() -> Self {
         Self {

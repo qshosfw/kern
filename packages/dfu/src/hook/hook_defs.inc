@@ -6,7 +6,8 @@
  */
 
 /* ── Upper-SRAM Arena ───────────────────────────────────────────────────────── */
-.equ DFU_SRAM_BANNERS,  0x20003000  /* 8 x 84 B = 672 B (Page 5 only) */
+.equ DFU_SRAM_BANNERS,  0x20003000  /* 8 x 80 B = 640 B (Page 5 subtitles) */
+.equ DFU_SRAM_TITLES,   0x20003280  /* 5 x 64 B = 320 B (Page 4 idle titles) */
 .equ DFU_SRAM_ARROW,    0x20003540  /* 2 x 19 B = 38 B (Pages 2-3) */
 .equ DFU_SRAM_VIDPID,   0x20003580  /* 40 B (Page 1) */
 .equ KBHP_SRAM_ADDR,    0x200035C0  /* 64 B (KBHP v1.0 Handoff Envelope) */

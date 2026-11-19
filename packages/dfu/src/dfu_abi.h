@@ -7,7 +7,8 @@
  *
  * SRAM Map during DFU handoff (PY32F071xB, 16 KB: 0x2000_0000..0x2000_3FFF):
  *   0x2000_0000..0x2000_2FFF  Stock bootloader .data/.bss/stack (untouched)
- *   0x2000_3000..0x2000_329F  DFU_SRAM_BANNERS (8 x 84 B = 672 B, Page 5 only)
+ *   0x2000_3000..0x2000_327F  DFU_SRAM_BANNERS (8 x 80 B = 640 B, Page 5 subtitles)
+ *   0x2000_3280..0x2000_33BF  DFU_SRAM_TITLES  (5 x 64 B = 320 B, Page 4 idle titles)
  *   0x2000_3540..0x2000_3565  DFU_SRAM_ARROW   (38 B, 2 x 19 B)
  *   0x2000_3580..0x2000_35A7  DFU_SRAM_VIDPID  (40 B)
  *   0x2000_35C0..0x2000_35FF  KBHP_SRAM_ADDR   (64 B, KBHP v1.0 Handoff Envelope)
@@ -33,7 +34,8 @@
 #define DFU_TARGET_UV_K1     0x51530101u /* Canonical KfwTargetDesc UV-K1/K5v3 ID */
 
 /* ── Upper-SRAM Runtime Arena (invisible to stock BL & Moto) ────────────────── */
-#define DFU_SRAM_BANNERS     0x20003000u
+#define DFU_SRAM_BANNERS     0x20003000u /* 8 x 80 B = 640 B (Page 5) */
+#define DFU_SRAM_TITLES      0x20003280u /* 5 x 64 B = 320 B (Page 4 idle titles) */
 #define DFU_SRAM_ARROW       0x20003540u
 #define DFU_SRAM_VIDPID      0x20003580u
 #define KBHP_SRAM_ADDR       0x200035C0u
@@ -41,6 +43,11 @@
 #define DFU_SRAM_STATE       0x200036C0u
 #define DFU_SRAM_CODE        0x20003700u
 #define DFU_SRAM_CODE_MAX    0x00000900u /* 2,304 B */
+
+/* Staging window inside TRANSIENT_ARENA[4160..5120): 960 B = 640 B banners + 320 B titles */
+#define DFU_STAGE_OFFSET     4160u
+#define DFU_BANNERS_BYTES    (8u * 80u)
+#define DFU_TITLES_BYTES     (5u * 64u)
 
 /* ── Backup-Domain RTC_ALR Bridge (zero-FW-cost MENU Tools wakeup) ──────────── */
 #define KBHP_RTC_IDENT          0xA5u       /* Matches kernel::boot::BackupCrashTag::IDENT_BYTE */

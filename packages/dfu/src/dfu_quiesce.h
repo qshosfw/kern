@@ -14,6 +14,7 @@
 #pragma once
 #include "dfu_abi.h"
 
+__attribute__((noinline))
 static void dfu_gpio_apply_and_lock(
     u32 base,
     u32 clear_2b,
@@ -85,6 +86,10 @@ static void dfu_quiesce_hw(u32 apb2_keep) {
     scs[0xD04 / 4] = 1u << 25;
     scs[0x180 / 4] = 0xFFFFFFFFu;
     scs[0x280 / 4] = 0xFFFFFFFFu;
+
+    /* 8. Latch PF8 LCD backlight solidly HIGH after SysTick PWM is stopped so
+     *    sub-100% brightness settings can never freeze the DFU screen dark. */
+    *(volatile u32*)0x50001418u = 1u << 8;
 }
 
 static inline u8 dfu_vectors_sane(u32 msp, u32 entry) {

@@ -691,12 +691,25 @@ static inline void krx_ui_draw_scrollbar(
     krx_call(api, OP_UI_WIDGET, KRX_WIDGET_SCROLLBAR, (u32)&d, 0u);
 }
 
+#define KRX_MENU_COMPACT     10u
+#define KRX_MENU_COMFORTABLE 13u
+#define KRX_MENU_FLAG_SEL    (1u << 0)
+#define KRX_MENU_FLAG_ARROW  (1u << 1)
+
+static inline void krx_ui_draw_menu_item_ex(
+    const KrxApiTable* api, i16 y, u8 row_h, const u8* title, u8 t_len,
+    const u8* val, u8 v_len, u8 flags, u8 icon
+) {
+    KrxWidget d;
+    d.p0 = title; d.p1 = val; d.x = 0; d.y = y; d.len0 = (u16)t_len; d.len1 = (u16)v_len;
+    d.w = 0u; d.h = row_h; d.a = flags; d.b = icon;
+    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_MENU_ITEM, (u32)&d, 0u);
+}
+
 static inline void krx_ui_draw_menu_item(
     const KrxApiTable* api, i16 y, const u8* title, u8 t_len, const u8* val, u8 v_len, u8 sel, u8 icon
 ) {
-    KrxWidget d;
-    d.p0 = title; d.p1 = val; d.x = 0; d.y = y; d.len0 = (u16)t_len; d.len1 = (u16)v_len; d.a = sel; d.b = icon;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_MENU_ITEM, (u32)&d, 0u);
+    krx_ui_draw_menu_item_ex(api, y, KRX_MENU_COMPACT, title, t_len, val, v_len, sel, icon);
 }
 
 static inline void krx_ui_draw_big_digit(const KrxApiTable* api, i16 x, i16 y, u8 dig, u8 col) {

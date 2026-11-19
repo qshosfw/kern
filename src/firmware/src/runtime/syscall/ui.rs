@@ -145,18 +145,23 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             );
         }
         KRX_WIDGET_MENU_ITEM => {
-            let is_sel = d.a != 0;
+            let is_sel = (d.a & 1) != 0;
+            let has_chevron = (d.a & 2) != 0;
+            let comfortable = d.h >= 12;
+            let row_h: u8 = if comfortable { 13 } else { 10 };
+            let icon_dy: i16 = if comfortable { 2 } else { 1 };
+            let text_dy: i16 = if comfortable { 9 } else { 7 };
             let tc_u8 = if is_sel { 0 } else { 1 };
             let col = color_from_u8(tc_u8);
             if is_sel {
                 gfx::widgets::draw_selection_capsule(
                     canvas,
-                    [2, uy, 120, 10],
+                    [2, uy, 120, row_h],
                     gfx::widgets::CAPSULE_FILL_ROUND,
                 );
             }
             let text_x = if d.b != 0 {
-                super::display::draw_icon(4, d.y + 1, d.b, tc_u8);
+                super::display::draw_icon(4, d.y + icon_dy, d.b, tc_u8);
                 15
             } else {
                 5
@@ -165,20 +170,24 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             gfx::text::draw_str(
                 canvas,
                 text_x,
-                d.y + 7,
+                d.y + text_dy,
                 s0,
                 &gfx::fonts::mumatrix_regular::FONT,
                 col,
             );
-            gfx::text::draw_str_align(
-                canvas,
-                119,
-                d.y + 7,
-                s1,
-                &gfx::fonts::tomthumb::FONT,
-                col,
-                gfx::text::Align::Right,
-            );
+            if !s1.is_empty() {
+                gfx::text::draw_str_align(
+                    canvas,
+                    119,
+                    d.y + text_dy,
+                    s1,
+                    &gfx::fonts::tomthumb::FONT,
+                    col,
+                    gfx::text::Align::Right,
+                );
+            } else if has_chevron {
+                super::display::draw_icon(113, d.y + icon_dy + i16::from(comfortable), 35, tc_u8);
+            }
         }
         KRX_WIDGET_BIG_DIGIT | KRX_WIDGET_SMALL_DIGIT => {
             gfx::widgets::spectrum::draw_digit(

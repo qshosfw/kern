@@ -33,7 +33,7 @@ u32 leaf7_entry(u32 op, const KrxApiTable* api, void* param) {
         u8  has_bkp = krx_fs_exists(api, (const u8*)p_bkp, sizeof(p_bkp) - 1u);
 
         krx_clear(api);
-        st->ui.header(api, "Calibration");
+        dfu_draw_header(api, "Calibration");
         st->ui.kv(api, 17, "calib.dat", (dat_sz == 512u) ? "512 B OK" : "Missing");
         st->ui.kv(api, 25, "Ascon MAC", has_sig ? "Present" : "Missing");
         st->ui.kv(api, 33, "Factory Page",

@@ -514,7 +514,8 @@ dfu_systick_isr:
     strh r0, [r3, #KBHP_LIVE_ELAPSED]
 700:
 
-    // 6a. Page 4 progress bar (y=34..39, 100% inside Page 4): shown ONLY while flashing/complete/aborted
+    // 6a. Page 4 (`0xB4`): shows 6 px progress bar while flashing/complete/aborted,
+    //     or expressive primary status title (`DFU_SRAM_TITLES`, 64 B @ X=32..95) when idle.
     lsls r2, r5, #8
     orrs r2, r2, r6
     lsls r0, r7, #24
@@ -527,9 +528,21 @@ dfu_systick_isr:
     cmp r5, #0xFF
     bne 705f
     movs r0, #0xB4
-    movs r1, #16                // HW col 12 + 4 = 16
-    movs r2, #0                 // zero-fill -> completely hidden when idle
+    movs r1, #16                // Clear full 104-col bar track (X=12..115, HW col 16)
+    movs r2, #0
     movs r3, #104
+    bl st7565_write_strip
+    movs r0, r7                 // Map idle r7 ({0,1,2,3,6}) -> title index {0,1,2,3,4}
+    cmp r0, #6
+    bne 704f
+    movs r0, #4
+704:
+    lsls r0, r0, #6             // * 64 B
+    ldr r2, =DFU_SRAM_TITLES
+    adds r2, r2, r0
+    movs r0, #0xB4
+    movs r1, #36                // HW col 32 + 4 = 36
+    movs r3, #64
     bl st7565_write_strip
     b 78f
 705:
@@ -564,7 +577,7 @@ dfu_systick_isr:
     bl st7565_end
 
 78:
-    // 6b. Page 5 ONLY status banner redraw on (banner << 12) | cur_page_lsb change
+    // 6b. Page 5 ONLY status subtitle redraw on (banner << 12) | cur_page_lsb change
     lsls r0, r7, #12
     ldr r1, [sp, #0]
     lsls r1, r1, #20
@@ -575,12 +588,12 @@ dfu_systick_isr:
     beq 79f
     strh r0, [r4, #ST_LAST_BANNER]
 
-    ldr r5, =DFU_SRAM_BANNERS   // 8 x 84 B (Page 5 only, cols 22..105)
-    movs r0, #84
+    ldr r5, =DFU_SRAM_BANNERS   // 8 x 80 B (Page 5 only, cols 24..103, baseline y=46)
+    movs r0, #80
     muls r0, r0, r7
     adds r5, r5, r0
 
-    // When flashing (banner == 4), stamp dynamic "<cur>/<tot>" at X=76 (+54 inside slice) on Page 5
+    // When writing (banner == 4), stamp dynamic "<cur>/<tot>" at X=75 (+51 inside slice) at baseline y=46
     cmp r7, #4
     bne 76f
     movs r0, #0
@@ -597,25 +610,24 @@ dfu_systick_isr:
     ldr r0, [sp, #36]           // tot_pages
     bl stamp_dec
 
-    adds r5, #54
+    adds r5, #51
     movs r2, #0
 75:
     mov r0, sp
-    ldrb r3, [r0, r2]           // raw 3x5 glyph byte (bits 2..6)
-    lsls r3, r3, #1             // -> y=43..47 on Page 5 (bits 3..7, zero Page 6 spill)
+    ldrb r3, [r0, r2]           // raw 3x5 glyph byte (already bits 2..6 = y=42..46, zero shift)
     strb r3, [r5, r2]
     adds r2, r2, #1
     cmp r2, #28
     blo 75b
-    subs r5, #54
+    subs r5, #51
     add sp, #32
     ldr r4, =DFU_SRAM_STATE
 
 76:
     movs r0, #0xB5
-    movs r1, #26                // HW col 22 + 4 = 26
+    movs r1, #28                // HW col 24 + 4 = 28
     movs r2, r5
-    movs r3, #84
+    movs r3, #80
     bl st7565_write_strip
 
 79:

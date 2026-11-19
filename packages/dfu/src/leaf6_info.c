@@ -20,7 +20,7 @@ u32 leaf6_entry(u32 op, const KrxApiTable* api, void* param) {
     const KbhpEnvelope* env = &st->kbhp;
 
     krx_clear(api);
-    st->ui.header(api, "Information");
+    dfu_draw_header(api, "Information");
 
     char buf[20];
     u32 n = 0u;
@@ -54,11 +54,10 @@ u32 leaf6_entry(u32 op, const KrxApiTable* api, void* param) {
         buf[n++] = '%'; buf[n++] = ')'; buf[n] = 0;
         st->ui.kv(api, 41, "Battery", buf);
     } else {
-        st->ui.kv(api, 41, "Battery", "Standby");
+        st->ui.kv(api, 41, "App Region", "118 KB @ 0x2800");
     }
 
     st->ui.kv(api, 49, "Target", "PY32F071 / KBHP 1.0");
-
     st->ui.softbar(api, "", "", "EXIT", "Back");
     krx_commit_frame(api);
 

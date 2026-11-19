@@ -64,10 +64,10 @@ for elf in root "${LEAVES[@]}"; do
     fi
 done
 
-# 4. Enforce strict P0 SRAM window limits
+# 4. Enforce strict P0 SRAM window limits (root.bin <= 4160 B leaves 960 B staging before 5120 B leaf window)
 root_sz=$(stat -c %s "$OUT/root.bin")
-if [ "$root_sz" -gt 4900 ]; then
-    echo "ERROR: root.bin ($root_sz B) exceeds safe P0 resident limit (4900 B)!" >&2
+if [ "$root_sz" -gt 4160 ]; then
+    echo "ERROR: root.bin ($root_sz B) exceeds safe P0 resident limit (4160 B before stage_buf)!" >&2
     exit 1
 fi
 

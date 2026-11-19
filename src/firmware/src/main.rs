@@ -182,7 +182,10 @@ fn init_core_services_and_board() -> Board {
 
     let board = Board::init();
     boot::check_reset_cause();
-    if (boot::read_backup_tag().flags & 0x48) == 0x48 {
+    const WARM_DFU_TOOLS_MASK: u8 = kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
+        | kernel::boot::BackupCrashTag::FLAG_DFU_TOOLS_REQ;
+    if (boot::read_backup_tag().flags & WARM_DFU_TOOLS_MASK) == WARM_DFU_TOOLS_MASK {
+        drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
         bsp::pins::BACKLIGHT.set_high();
     } else {
         bsp::pins::BACKLIGHT.set_low();
@@ -196,17 +199,21 @@ fn init_core_services_and_board() -> Board {
 #[cfg(not(test))]
 #[inline(never)]
 fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
-    // Keep ST7565 & backlight live during warm DFU -> DFU Tools transition (avoids 42 ms LCD reset blink)
-    let warm_dfu_tools = (boot::read_backup_tag().flags & 0x48) == 0x48;
-    if !warm_dfu_tools {
+    // Keep ST7565 & backlight live during warm DFU -> Recovery transition (zero 42 ms LCD reset or PWM drop)
+    const WARM_DFU_TOOLS_MASK: u8 = kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
+        | kernel::boot::BackupCrashTag::FLAG_DFU_TOOLS_REQ;
+    let warm_dfu_tools = (boot::read_backup_tag().flags & WARM_DFU_TOOLS_MASK) == WARM_DFU_TOOLS_MASK;
+    if warm_dfu_tools {
+        hw.backlight.wake();
+    } else {
         // Screen stays blanked until passcode prompt or splash reveals
         hw.lcd.init();
         bsp::pins::BACKLIGHT.set_low();
         let canvas = system_canvas();
         canvas.clear();
         hw.lcd.blit(canvas);
+        hw.backlight.init();
     }
-    hw.backlight.init();
     kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
     #[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
     {

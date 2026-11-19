@@ -1,5 +1,5 @@
 /*
- * DFU Leaf 10: Flat Firmware Image & Applet List Browser
+ * DFU Leaf 10: Compact Flat Firmware Image & Applet List Browser
  */
 #include "dfu_shared.h"
 
@@ -10,19 +10,20 @@ u32 leaf10_entry(u32 op, const KrxApiTable* api, void* param) {
     if (!ctx || !api || !ctx->arg) return 1u;
     DfuSharedState* st = (DfuSharedState*)ctx->arg;
 
+    DfuToolsScratch* ts = (DfuToolsScratch*)st->stage_buf;
     u8 applets = st->tool_sub;
-    u8 count = st->buf.tools.file_count;
-    u8 sel = st->buf.tools.file_sel;
+    u8 count = ts->file_count;
+    u8 sel = ts->file_sel;
     if (sel >= count) sel = 0u;
     u8 top = (sel >= 4u) ? (u8)(sel - 3u) : 0u;
     const char* hdr = applets ? "Applets" : "Flash Image";
 
     for (;;) {
         krx_clear(api);
-        st->ui.header(api, hdr);
+        dfu_draw_header(api, hdr);
 
         if (count == 0u) {
-            const char* empty = applets ? "No applets found" : "No firmware files";
+            const char* empty = applets ? "No applets found" : "No image files";
             const char* hint  = applets ? "Copy .krx to /apps" : "Copy .kfw/.uf2 to /boot";
             krx_draw_str_align(api, 64, 28, (const u8*)empty, krx_strlen(empty),
                                KRX_FONT_TOMTHUMB, 1u, KRX_ALIGN_CENTER);
@@ -33,17 +34,17 @@ u32 leaf10_entry(u32 op, const KrxApiTable* api, void* param) {
             for (u8 row = 0u; row < 4u; row++) {
                 u8 idx = (u8)(top + row);
                 if (idx >= count) break;
-                const DfuFlatFile* f = &st->buf.tools.files[idx];
+                const DfuFlatFile* f = &ts->files[idx];
                 char sz[8];
                 u32 v = f->size;
                 u32 sn = st->ui.u32_dec(sz, (v >= 1024u) ? (v >> 10) : v);
                 sz[sn++] = (v >= 1024u) ? 'K' : 'B';
                 sz[sn] = 0;
-                krx_ui_draw_menu_item(
-                    api, (i16)(10 + row * 11),
+                krx_ui_draw_menu_item_ex(
+                    api, (i16)(10 + row * 11), KRX_MENU_COMPACT,
                     (const u8*)f->name, (u8)krx_strlen(f->name),
                     (const u8*)sz, (u8)sn,
-                    (idx == sel) ? 1u : 0u, 0u
+                    (idx == sel) ? KRX_MENU_FLAG_SEL : 0u, 0u
                 );
             }
             if (count > 4u) {
@@ -61,18 +62,14 @@ u32 leaf10_entry(u32 op, const KrxApiTable* api, void* param) {
         } else if (k == KEY_DOWN) {
             sel = (sel + 1u >= count) ? 0u : (u8)(sel + 1u);
         } else if (k == KEY_MENU) {
-            const DfuFlatFile* f = &st->buf.tools.files[sel];
+            const DfuFlatFile* f = &ts->files[sel];
             const char* pfx = (f->dir_idx == 0u) ? "/boot/" : (f->dir_idx == 1u) ? "/apps/" : "/";
             u32 pn = 0u, j = 0u;
-            while (*pfx) st->buf.tools.sel_path[pn++] = *pfx++;
-            while (f->name[j] && pn < 31u) {
-                st->buf.tools.sel_name[j] = f->name[j];
-                st->buf.tools.sel_path[pn++] = f->name[j++];
-            }
-            st->buf.tools.sel_name[j] = 0;
-            st->buf.tools.sel_path[pn] = 0;
-            st->buf.tools.sel_size = f->size;
-            st->buf.tools.file_sel = sel;
+            while (*pfx) ts->sel_path[pn++] = *pfx++;
+            while (f->name[j] && pn < 31u) ts->sel_path[pn++] = f->name[j++];
+            ts->sel_path[pn] = 0;
+            ts->sel_size = f->size;
+            ts->file_sel = sel;
             st->tool_action = DFU_TOOL_ACT_INSPECT;
             return 0u;
         }

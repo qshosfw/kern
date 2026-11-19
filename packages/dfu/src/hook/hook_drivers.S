@@ -45,14 +45,7 @@ dfu_reboot_tools:
     str r1, [r0, #0x20]
     // Write 0xA500_4900 to RTC_ALRH/ALRL with RTOFF/CNF handshake
     ldr r0, =RTC_BASE
-    ldr r3, =50000
-1003:
-    ldr r1, [r0, #0x04]
-    lsrs r1, r1, #6             // bit 5 = RTOFF
-    bcs 1004f
-    subs r3, r3, #1
-    bne 1003b
-1004:
+    bl rtc_wait_rtoff
     ldr r1, [r0, #0x04]
     movs r2, #0x10              // CRL_CNF
     orrs r1, r1, r2
@@ -64,16 +57,20 @@ dfu_reboot_tools:
     movs r2, #0x10
     bics r1, r1, r2
     str r1, [r0, #0x04]         // clear CNF to commit write
+    bl rtc_wait_rtoff
+    movs r4, #1                 // keep PF8 backlight ON across warm reset into Recovery menu
+    b dfu_reboot_common
+
+rtc_wait_rtoff:
     ldr r3, =50000
 1005:
     ldr r1, [r0, #0x04]
-    lsrs r1, r1, #6             // wait RTOFF
+    lsrs r1, r1, #6             // bit 5 = RTOFF
     bcs 1006f
     subs r3, r3, #1
     bne 1005b
 1006:
-    movs r4, #1                 // keep PF8 backlight ON across warm reset into DFU Tools
-    b dfu_reboot_common
+    bx lr
 
 dfu_reboot:
     movs r4, #0                 // normal EXIT reboot: turn PF8 backlight OFF
