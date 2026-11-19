@@ -56,22 +56,22 @@ pub fn package_icon_8(title: &str, icon_id: u16) -> &'static [u8; 8] {
 /// `icon_id` (`SYSTEM_ICONS_8` offset `22 + idx`, e.g. `30` = `ICON_APP_ABOUT`),
 /// falling back to title matching for packages built with the default `icon_id <= 1`.
 pub fn package_icons(title: &str, icon_id: u16) -> (&'static [u8; 8], &'static [u8; 32]) {
-    const MAP_16: [(u8, &'static [u8; 32]); 7] = [
-        (0xFF, &gfx::icons::ICON_16_SCANNER),
-        (25, &gfx::icons::ICON_16_RADIO),
-        (26, &gfx::icons::ICON_16_SETTINGS),
-        (38, &gfx::icons::ICON_16_SETTINGS),
-        (28, &gfx::icons::ICON_16_FLASHLIGHT),
-        (29, &gfx::icons::ICON_16_DIAGNOSTICS),
-        (30, &gfx::icons::ICON_16_INFO),
+    const MAP_16: [(u8, u8); 7] = [
+        (0xFF, 2),
+        (25, 0),
+        (26, 1),
+        (38, 1),
+        (28, 3),
+        (29, 4),
+        (30, 5),
     ];
     let eff = resolve_icon_id(title, icon_id);
-    let mut icon_16: &'static [u8; 32] = &gfx::icons::ICON_16_APPS;
-    for &(id, bmp) in &MAP_16 {
+    let mut idx16 = 6usize;
+    for &(id, i) in &MAP_16 {
         if eff == id as u16 {
-            icon_16 = bmp;
+            idx16 = i as usize;
             break;
         }
     }
-    (icon_8_from_eff(eff), icon_16)
+    (icon_8_from_eff(eff), &gfx::icons::ICONS_16[idx16])
 }

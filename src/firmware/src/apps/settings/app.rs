@@ -109,7 +109,6 @@ impl SettingsApp {
         gfx::icons::ICON_SYSTEM,
     ];
 
-    #[inline(never)]
     fn build_menu_model<'a>(&'a self, is_editing: bool) -> MenuModel<'a> {
         let icons = if self.current_page == PageId::Root {
             Some(Self::ROOT_ICONS)
@@ -252,6 +251,7 @@ impl SettingsApp {
         }
     }
 
+    #[inline(never)]
     fn dispatch_view_event(&mut self, ctx: &mut SysContext, event: &Event) -> bool {
         let prev_idx = self.selected_idx;
         let was_editing = self.is_editing;
@@ -462,7 +462,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
     fn meta() -> AppMetadata {
         AppMetadata {
             name: "Settings",
-            icon: &gfx::icons::ICON_16_SETTINGS,
+            icon: gfx::icons::ICON_16_SETTINGS,
             icon_8: gfx::icons::ICON_APP_SETTINGS,
         }
     }
@@ -788,11 +788,11 @@ mod tests {
     fn package_icons_honors_krx_icon_id_and_falls_back_cleanly() {
         assert_eq!(
             super::super::apps::package_icons("Info", 30),
-            (gfx::icons::ICON_APP_ABOUT, &gfx::icons::ICON_16_INFO)
+            (gfx::icons::ICON_APP_ABOUT, gfx::icons::ICON_16_INFO)
         );
         assert_eq!(
             super::super::apps::package_icons("Bench", 1),
-            (gfx::icons::ICON_APP_DIAG, &gfx::icons::ICON_16_DIAGNOSTICS)
+            (gfx::icons::ICON_APP_DIAG, gfx::icons::ICON_16_DIAGNOSTICS)
         );
         assert_eq!(
             super::super::apps::package_icons("DFU Update", 49).0,

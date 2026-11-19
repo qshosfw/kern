@@ -43,7 +43,10 @@ pub fn draw_modal_progress(canvas: &mut Canvas, title: &str, subtitle: &str, pro
     let (bx, by) = draw_modal_box(canvas, w, h);
     let center_x = (bx as i16) + ((w as i16) >> 1);
 
+    #[cfg(feature = "passcode")]
     let has_title = !title.is_empty() && !text::ascii_eq_ignore_case(title, "passcode");
+    #[cfg(not(feature = "passcode"))]
+    let has_title = !title.is_empty();
 
     if has_title {
         text::draw_str_align(
@@ -171,13 +174,13 @@ pub fn draw_negated_header(canvas: &mut Canvas, y: i16, title: &str) {
 }
 
 #[inline(never)]
-fn draw_dialog_header(canvas: &mut Canvas, dy: i16, big_title: &str, sub_title: &str) {
+fn draw_dialog_header(canvas: &mut Canvas, big_title: &str, sub_title: &str) {
     canvas.clear();
-    draw_negated_header(canvas, dy, "KERN");
+    draw_negated_header(canvas, 0, "KERN");
     text::draw_str(
         canvas,
         4,
-        22 + dy,
+        22,
         big_title,
         &crate::fonts::mumatrix_regular::FONT,
         Color::Fill,
@@ -186,7 +189,7 @@ fn draw_dialog_header(canvas: &mut Canvas, dy: i16, big_title: &str, sub_title: 
         text::draw_str(
             canvas,
             4,
-            34 + dy,
+            34,
             sub_title,
             &crate::fonts::tomthumb::FONT,
             Color::Fill,
@@ -195,6 +198,7 @@ fn draw_dialog_header(canvas: &mut Canvas, dy: i16, big_title: &str, sub_title: 
 }
 
 /// Minimalist full-screen system recovery or modal notification dialog
+#[inline(never)]
 pub fn draw_dialog(
     canvas: &mut Canvas,
     big_title: &str,
@@ -202,7 +206,21 @@ pub fn draw_dialog(
     hint: &str,
     has_btns: bool,
 ) {
-    draw_dialog_slide_up(canvas, big_title, sub_title, hint, has_btns, 0);
+    draw_dialog_header(canvas, big_title, sub_title);
+    if !hint.is_empty() {
+        text::draw_str(
+            canvas,
+            4,
+            44,
+            hint,
+            &crate::fonts::tomthumb::FONT,
+            Color::Fill,
+        );
+    }
+    if has_btns {
+        draw_key_badge(canvas, 4, 55, "M", "Format");
+        draw_key_badge_right(canvas, 124, 55, "EXIT", "Cancel");
+    }
 }
 
 /// System dialog with a Hawk5-style progress bar
@@ -212,7 +230,7 @@ pub fn draw_dialog_progress(
     sub_title: &str,
     progress_percent: u8,
 ) {
-    draw_dialog_header(canvas, 0, big_title, sub_title);
+    draw_dialog_header(canvas, big_title, sub_title);
     draw_progress_bar(canvas, 4, 44, 120, 8, progress_percent, true);
 }
 
@@ -225,7 +243,7 @@ pub fn draw_dialog_hold_prompt(
     cancel_label: &str,
     progress_percent: u8,
 ) {
-    draw_dialog_header(canvas, 0, big_title, sub_title);
+    draw_dialog_header(canvas, big_title, sub_title);
     draw_progress_bar(canvas, 4, 43, 120, 6, progress_percent, true);
     draw_key_badge(canvas, 4, 55, "M", confirm_label);
     draw_key_badge_right(canvas, 124, 55, "EXIT", cancel_label);
@@ -266,37 +284,6 @@ pub fn draw_scrollbar(
     let thumb_y = track_y + ((cur * rem_h) / max_scroll) as u8;
     let thumb_y = thumb_y.min(track_y + track_h - thumb_h);
     canvas.fill_rect(track_x, thumb_y, 3, thumb_h, Color::Fill);
-}
-
-/// Dialog rendered with a vertical slide-up offset (y_offset = 0 is docked; y_offset > 0 shifts down)
-#[inline(never)]
-pub fn draw_dialog_slide_up(
-    canvas: &mut Canvas,
-    big_title: &str,
-    sub_title: &str,
-    hint: &str,
-    has_btns: bool,
-    y_offset: i8,
-) {
-    let dy = y_offset.max(0) as i16;
-    if dy >= 64 {
-        return;
-    }
-    draw_dialog_header(canvas, dy, big_title, sub_title);
-    if !hint.is_empty() && (44 + dy) < 64 {
-        text::draw_str(
-            canvas,
-            4,
-            44 + dy,
-            hint,
-            &crate::fonts::tomthumb::FONT,
-            Color::Fill,
-        );
-    }
-    if has_btns && (55 + dy) < 64 {
-        draw_key_badge(canvas, 4, 55 + dy, "M", "Format");
-        draw_key_badge_right(canvas, 124, 55 + dy, "EXIT", "Cancel");
-    }
 }
 
 /// Shared bottom-sheet modal frame rendered with a vertical slide-up offset
@@ -353,8 +340,11 @@ pub fn draw_modal_popup_materialize(
     if p >= 8 {
         let center_x = 64i16;
         let tc = Color::Fill;
+        #[cfg(feature = "passcode")]
         let has_title =
             title.is_some_and(|t| !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode"));
+        #[cfg(not(feature = "passcode"))]
+        let has_title = title.is_some_and(|t| !t.is_empty());
 
         let (mut line_y, step_y) = if has_title {
             text::draw_str_align(

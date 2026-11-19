@@ -642,7 +642,6 @@ impl SectionType {
 /// Compact, zero-allocation metadata summary extracted from a KRX package header.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KrxAuxSections<'a> {
-    pub cap_imports: Option<&'a [u8]>,
     pub block_map: Option<&'a [u8]>,
     pub leaf_map: Option<&'a [u8]>,
     pub service_exports: Option<&'a [u8]>,
@@ -834,7 +833,6 @@ impl<'a> Default for KrxSummary<'a> {
             caps: crate::caps::CapabilitySet::NONE,
             exec: None,
             aux: KrxAuxSections {
-                cap_imports: None,
                 block_map: None,
                 leaf_map: None,
                 service_exports: None,
@@ -947,7 +945,6 @@ impl KrxPreamble {
                     }
                 }
                 SECTION_EXECUTION => SectionExecution::parse_into(body, &mut out.exec),
-                SECTION_CAP_IMPORTS => out.aux.cap_imports = Some(body),
                 SECTION_BLOCK_MAP => out.aux.block_map = Some(body),
                 SECTION_LEAF_MAP => out.aux.leaf_map = Some(body),
                 SECTION_SERVICE_EXPORTS => out.aux.service_exports = Some(body),

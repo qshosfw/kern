@@ -229,30 +229,38 @@ pub fn page_title(page: PageId) -> &'static str {
     utils::format::nth_cstr(&PAGE_TITLES, page as u8)
 }
 
-#[inline(never)]
+static EMPTY_PAGE: PageSpec = PageSpec::EMPTY;
+
+static PAGE_SPECS: [&'static PageSpec; PageId::COUNT] = [
+    &ROOT_PAGE,
+    &super::display::DISPLAY_PAGE,
+    &super::audio::AUDIO_PAGE,
+    &super::buttons::BUTTONS_ROOT_PAGE,
+    &super::battery::BATTERY_ROOT_PAGE,
+    &super::device::DEVICE_ROOT_PAGE,
+    #[cfg(feature = "passcode")]
+    &EMPTY_PAGE,
+    &super::system::SYSTEM_ROOT_PAGE,
+    &super::buttons::BUTTONS_TWEAKS_PAGE,
+    &EMPTY_PAGE,
+    &super::battery::BATTERY_INFO_PAGE,
+    &super::battery::BATTERY_TWEAKS_PAGE,
+    #[cfg(feature = "settings_info")]
+    &EMPTY_PAGE,
+    #[cfg(feature = "filesystem")]
+    &super::system::SYSTEM_STORAGE_PAGE,
+    &super::apps::APPS_PAGE,
+    &super::device::SPLASH_PAGE,
+    #[cfg(feature = "settings_calib")]
+    &super::system::SYSTEM_CALIBRATION_PAGE,
+    #[cfg(feature = "settings_debug")]
+    &super::system::SYSTEM_DEBUG_PAGE,
+    &EMPTY_PAGE,
+];
+
+#[inline(always)]
 pub fn page_spec(page: PageId) -> &'static PageSpec {
-    static EMPTY: PageSpec = PageSpec::EMPTY;
-    match page {
-        PageId::Root => &ROOT_PAGE,
-        PageId::Display => &super::display::DISPLAY_PAGE,
-        PageId::Audio => &super::audio::AUDIO_PAGE,
-        PageId::Buttons => &super::buttons::BUTTONS_ROOT_PAGE,
-        PageId::Battery => &super::battery::BATTERY_ROOT_PAGE,
-        PageId::Device => &super::device::DEVICE_ROOT_PAGE,
-        PageId::System => &super::system::SYSTEM_ROOT_PAGE,
-        PageId::ButtonsTweaks => &super::buttons::BUTTONS_TWEAKS_PAGE,
-        PageId::BatteryInfo => &super::battery::BATTERY_INFO_PAGE,
-        PageId::BatteryTweaks => &super::battery::BATTERY_TWEAKS_PAGE,
-        #[cfg(feature = "filesystem")]
-        PageId::SystemStorage => &super::system::SYSTEM_STORAGE_PAGE,
-        PageId::Apps => &super::apps::APPS_PAGE,
-        PageId::BootSplash => &super::device::SPLASH_PAGE,
-        #[cfg(feature = "settings_calib")]
-        PageId::SystemCalibration => &super::system::SYSTEM_CALIBRATION_PAGE,
-        #[cfg(feature = "settings_debug")]
-        PageId::SystemDebug => &super::system::SYSTEM_DEBUG_PAGE,
-        _ => &EMPTY,
-    }
+    PAGE_SPECS[page as usize]
 }
 
 #[inline(always)]
