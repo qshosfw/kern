@@ -261,12 +261,15 @@ pub enum ArbitrationEvent {
 
 /// System RF Hardware Resource Arbitrator.
 ///
-/// Provides fine-grained conflict arbitration, priority-tiered lock preemption,
-/// and automatic stack restoration for multi-task radio operations (§1.1 / §1.5).
+/// Provides fine-grained conflict arbitration, 3-tier priority lock preemption
+/// (`active_lock` + 2-level stashed stack `saved_lock`, `saved_lock_2`), same-client
+/// tier upgrade/downgrade without self-preemption, and automatic stack restoration
+/// for multi-task radio operations (§1.1 / §1.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RadioArbitrator {
     pub active_lock: VfoArbitrationLock,
     pub saved_lock: Option<VfoArbitrationLock>,
+    pub saved_lock_2: Option<VfoArbitrationLock>,
 }
 
 impl RadioArbitrator {
@@ -274,6 +277,7 @@ impl RadioArbitrator {
         Self {
             active_lock: VfoArbitrationLock::IDLE,
             saved_lock: None,
+            saved_lock_2: None,
         }
     }
 
@@ -299,11 +303,13 @@ impl RadioArbitrator {
         }
     }
 
-    /// Current arbitration lock stack depth (0 = idle, 1 = active, 2 = active + preempted).
+    /// Current arbitration lock stack depth (0 = idle, 1..=3 = active + stashed preemption stack).
     #[inline(always)]
     pub fn lock_depth(&self) -> u8 {
         if !self.active_lock.is_active() {
             0
+        } else if self.saved_lock_2.is_some() {
+            3
         } else if self.saved_lock.is_some() {
             2
         } else {
@@ -311,7 +317,61 @@ impl RadioArbitrator {
         }
     }
 
-    /// Check if a specific resource is locked by any client other than `exempt_client`.
+    /// Push a preempted lock onto the 2-level priority-ordered stash (`saved_lock`, `saved_lock_2`),
+    /// deduplicating by `ClientId`.
+    fn push_saved(&mut self, lock: VfoArbitrationLock) {
+        if !lock.is_active() {
+            return;
+        }
+        // Remove any existing stash entry for the same ClientId
+        if self
+            .saved_lock
+            .is_some_and(|l| l.client.id == lock.client.id)
+        {
+            self.saved_lock = self.saved_lock_2.take();
+        } else if self
+            .saved_lock_2
+            .is_some_and(|l| l.client.id == lock.client.id)
+        {
+            self.saved_lock_2 = None;
+        }
+
+        match self.saved_lock {
+            None => {
+                self.saved_lock = Some(lock);
+            }
+            Some(top) => {
+                if lock.client.priority() >= top.client.priority() {
+                    self.saved_lock_2 = Some(top);
+                    self.saved_lock = Some(lock);
+                } else {
+                    // Insert into second slot if empty or higher/equal priority than slot 2
+                    if self
+                        .saved_lock_2
+                        .is_none_or(|s2| lock.client.priority() >= s2.client.priority())
+                    {
+                        self.saved_lock_2 = Some(lock);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Remove any stashed entry matching `id` and compact the stash stack.
+    fn remove_saved_by_id(&mut self, id: ClientId) -> bool {
+        let mut removed = false;
+        if self.saved_lock_2.is_some_and(|l| l.client.id == id) {
+            self.saved_lock_2 = None;
+            removed = true;
+        }
+        if self.saved_lock.is_some_and(|l| l.client.id == id) {
+            self.saved_lock = self.saved_lock_2.take();
+            removed = true;
+        }
+        removed
+    }
+
+    /// Check if a specific resource is locked by any client other than `exempt_client` (matched by `ClientId`).
     #[inline]
     pub fn is_resource_locked(
         &self,
@@ -322,14 +382,36 @@ impl RadioArbitrator {
             return false;
         }
         if let Some(exempt) = exempt_client {
-            if self.active_lock.client == exempt {
+            if self.active_lock.client.id == exempt.id {
                 return false;
             }
         }
         self.active_lock.resources.intersects(resources)
     }
 
-    /// Request fine-grained resource locks with priority preemption.
+    /// Check whether `client` is permitted to tune or reconfigure `slot` right now.
+    ///
+    /// Returns `true` if:
+    /// - No lock is active,
+    /// - `client.id` is the active lock owner,
+    /// - `client` has strictly higher priority than the active lock owner, or
+    /// - The active lock only covers resources disjoint from `slot` (e.g. background app locked VFO B
+    ///   without locking VFO A, and `client` is tuning VFO A at equal or higher tier).
+    #[inline]
+    pub fn can_client_control_slot(&self, client: ClientToken, slot: VfoSlot) -> bool {
+        if !self.active_lock.is_active() || self.active_lock.client.id == client.id {
+            return true;
+        }
+        if client.priority() > self.active_lock.client.priority() {
+            return true;
+        }
+        let slot_res = RfResourceMask::for_vfo(slot);
+        self.active_lock.slot != slot
+            && !self.active_lock.resources.intersects(slot_res)
+            && client.priority() >= self.active_lock.client.priority()
+    }
+
+    /// Request fine-grained resource locks with priority preemption and same-client upgrade/downgrade.
     pub fn request_lock(
         &mut self,
         client: ClientToken,
@@ -339,41 +421,115 @@ impl RadioArbitrator {
         mute_audio: bool,
         is_transmitting: bool,
     ) -> bool {
-        if is_transmitting && resources.intersects(RfResourceMask::TRANSMITTER) {
+        if is_transmitting
+            && resources.intersects(RfResourceMask::TRANSMITTER)
+            && (!self.active_lock.is_active() || self.active_lock.client.id != client.id)
+        {
             return false;
         }
 
-        if self.active_lock.is_active() && self.active_lock.client != client {
-            if client.priority() <= self.active_lock.client.priority() {
-                return false; // Lower or equal priority cannot preempt active owner
-            }
-            // Preempt active lock: stash into saved_lock
-            self.saved_lock = Some(self.active_lock);
-        }
-
-        self.active_lock = VfoArbitrationLock {
+        let new_lock = VfoArbitrationLock {
             client,
             resources,
             slot,
             remaining_ms: timeout_ms.max(10),
             audio_muted: mute_audio,
         };
+
+        if self.active_lock.is_active() {
+            if self.active_lock.client.id == client.id {
+                // Same client updating its own lock (renew, slot switch, or tier upgrade/downgrade).
+                // If it downgraded below the top stashed lock, swap with the higher-priority stashed lock.
+                if let Some(saved) = self.saved_lock {
+                    if saved.client.priority() > client.priority() {
+                        let promoted = self.saved_lock.take().unwrap();
+                        self.saved_lock = self.saved_lock_2.take();
+                        self.active_lock = promoted;
+                        self.push_saved(new_lock);
+                        return true;
+                    }
+                }
+                self.active_lock = new_lock;
+                return true;
+            }
+
+            if client.priority() <= self.active_lock.client.priority() {
+                return false; // Lower or equal priority cannot preempt active owner
+            }
+
+            // Ensure client does not have a duplicate stale entry in the saved stack
+            self.remove_saved_by_id(client.id);
+
+            // Preempt active lock: push onto 2-level priority-sorted saved stack
+            let prev = self.active_lock;
+            self.push_saved(prev);
+        }
+
+        self.active_lock = new_lock;
         true
     }
 
-    /// Extend the active lock duration for the holding client.
-    pub fn extend_lock(&mut self, client: ClientToken, timeout_ms: u16) -> bool {
-        if self.active_lock.is_active() && self.active_lock.client == client {
-            self.active_lock.remaining_ms = timeout_ms.max(self.active_lock.remaining_ms);
-            true
-        } else {
-            false
+    /// Register or queue a background/service lock even while a higher-priority foreground client
+    /// holds `active_lock`. If no higher-priority lock is active, acquires `active_lock` immediately;
+    /// otherwise inserts into the stashed preemption stack so it automatically activates when the
+    /// foreground lock releases.
+    pub fn request_or_queue_lock(
+        &mut self,
+        client: ClientToken,
+        resources: RfResourceMask,
+        slot: VfoSlot,
+        timeout_ms: u16,
+        mute_audio: bool,
+        is_transmitting: bool,
+    ) -> bool {
+        if self.request_lock(
+            client,
+            resources,
+            slot,
+            timeout_ms,
+            mute_audio,
+            is_transmitting,
+        ) {
+            return true;
         }
+        if self.active_lock.is_active() && client.priority() < self.active_lock.client.priority() {
+            self.push_saved(VfoArbitrationLock {
+                client,
+                resources,
+                slot,
+                remaining_ms: timeout_ms.max(10),
+                audio_muted: mute_audio,
+            });
+            return true;
+        }
+        false
     }
 
-    /// Pop active lock and restore preempted saved lock, if any.
+    /// Extend lock duration for `client` (whether currently active or temporarily preempted in stash).
+    pub fn extend_lock(&mut self, client: ClientToken, timeout_ms: u16) -> bool {
+        if self.active_lock.is_active() && self.active_lock.client.id == client.id {
+            self.active_lock.remaining_ms = timeout_ms.max(self.active_lock.remaining_ms);
+            return true;
+        }
+        if let Some(ref mut saved) = self.saved_lock {
+            if saved.client.id == client.id {
+                saved.remaining_ms = timeout_ms.max(saved.remaining_ms);
+                return true;
+            }
+        }
+        if let Some(ref mut saved2) = self.saved_lock_2 {
+            if saved2.client.id == client.id {
+                saved2.remaining_ms = timeout_ms.max(saved2.remaining_ms);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Pop active lock and restore the highest-priority preempted saved lock, if any.
     pub fn pop_and_restore(&mut self) -> Option<VfoArbitrationLock> {
         if let Some(saved) = self.saved_lock.take() {
+            self.saved_lock = self.saved_lock_2.take();
             self.active_lock = saved;
             Some(saved)
         } else {
@@ -384,33 +540,19 @@ impl RadioArbitrator {
 
     /// Explicitly release a lock held by a client.
     pub fn release_lock(&mut self, client: ClientToken) -> bool {
-        if self.active_lock.client == client {
-            self.pop_and_restore();
-            true
-        } else if let Some(saved) = self.saved_lock {
-            if saved.client == client {
-                self.saved_lock = None;
-                return true;
-            }
-            false
-        } else {
-            false
-        }
+        self.release_client(client.id)
     }
 
-    /// Force-release all locks.
+    /// Force-release all locks across all stack levels.
     pub fn force_release_all(&mut self) {
         self.active_lock = VfoArbitrationLock::IDLE;
         self.saved_lock = None;
+        self.saved_lock_2 = None;
     }
 
     /// Release any active and/or stashed lock held by `id`, restoring any stashed lock underneath.
     pub fn release_client(&mut self, id: ClientId) -> bool {
-        let mut released = false;
-        if self.saved_lock.is_some_and(|l| l.client.id == id) {
-            self.saved_lock = None;
-            released = true;
-        }
+        let mut released = self.remove_saved_by_id(id);
         if self.active_lock.is_active() && self.active_lock.client.id == id {
             self.pop_and_restore();
             released = true;
@@ -732,5 +874,165 @@ mod tests {
             false
         ));
         assert_eq!(arb.active_client(), emergency);
+    }
+
+    #[test]
+    fn test_arbitrator_three_tier_vfo_fsk_scanner_coexistence_and_unwind() {
+        let mut arb = RadioArbitrator::new();
+        let scanner = ClientToken::new(ClientId::SCANNER, LockTier::BACKGROUND);
+        let fsk = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::SERVICE);
+        let vfo_krx = ClientToken::new(ClientId::for_krx_pid(1), LockTier::FOREGROUND);
+
+        // 1. Background scanner acquires VFO A
+        assert!(arb.request_lock(
+            scanner,
+            RfResourceMask::VFO_A,
+            VfoSlot::VfoA,
+            500,
+            true,
+            false
+        ));
+        assert_eq!(arb.lock_depth(), 1);
+
+        // 2. FSK Sidecar (SERVICE) hears APRS/packet preamble on VFO B and preempts Scanner
+        assert!(arb.request_lock(
+            fsk,
+            RfResourceMask::VFO_B.union(RfResourceMask::BASEBAND_MODEM),
+            VfoSlot::VfoB,
+            300,
+            true,
+            false,
+        ));
+        assert_eq!(arb.lock_depth(), 2);
+        assert_eq!(arb.active_client(), fsk);
+
+        // 3. External VFO KRX app (FOREGROUND) tunes VFO A -> preempts FSK while preserving Scanner at level 2!
+        assert!(arb.can_client_control_slot(vfo_krx, VfoSlot::VfoA));
+        assert!(arb.request_lock(
+            vfo_krx,
+            RfResourceMask::VFO_A.union(RfResourceMask::AUDIO_OUTPUT),
+            VfoSlot::VfoA,
+            100,
+            false,
+            false,
+        ));
+        assert_eq!(arb.lock_depth(), 3);
+        assert_eq!(arb.active_client(), vfo_krx);
+        assert_eq!(arb.saved_lock.unwrap().client, fsk);
+        assert_eq!(arb.saved_lock_2.unwrap().client, scanner);
+
+        // 4. While preempted, FSK Sidecar extends its stashed lease
+        assert!(arb.extend_lock(fsk, 450));
+        assert_eq!(arb.saved_lock.unwrap().remaining_ms, 450);
+
+        // 5. VFO app temporarily upgrades its own lock to EXCLUSIVE for TX/Burst without self-preemption!
+        let vfo_excl = ClientToken::new(ClientId::for_krx_pid(1), LockTier::EXCLUSIVE);
+        assert!(arb.request_lock(
+            vfo_excl,
+            RfResourceMask::VFO_A.union(RfResourceMask::TRANSMITTER),
+            VfoSlot::VfoA,
+            80,
+            false,
+            true,
+        ));
+        assert_eq!(arb.lock_depth(), 3);
+        assert_eq!(arb.active_client(), vfo_excl);
+        assert_eq!(arb.saved_lock.unwrap().client, fsk);
+        assert_eq!(arb.saved_lock_2.unwrap().client, scanner);
+
+        // 6. VFO app downgrades back to FOREGROUND after TX finishes
+        assert!(arb.request_lock(
+            vfo_krx,
+            RfResourceMask::VFO_A,
+            VfoSlot::VfoA,
+            40,
+            false,
+            false,
+        ));
+        assert_eq!(arb.lock_depth(), 3);
+        assert_eq!(arb.active_client(), vfo_krx);
+
+        // 7. VFO app lock expires -> FSK Sidecar (450ms) automatically restored
+        assert!(matches!(
+            arb.tick(40),
+            Some(ArbitrationEvent::LockRestored {
+                client,
+                slot: VfoSlot::VfoB,
+                needs_mute: true,
+                ..
+            }) if client == fsk
+        ));
+        assert_eq!(arb.lock_depth(), 2);
+        assert_eq!(arb.active_client(), fsk);
+
+        // 8. FSK Sidecar finishes frame and releases -> Background Scanner (500ms) automatically restored!
+        assert!(arb.release_lock(fsk));
+        assert_eq!(arb.lock_depth(), 1);
+        assert_eq!(arb.active_client(), scanner);
+        assert_eq!(arb.locked_slot(), Some(VfoSlot::VfoA));
+
+        // 9. Scanner expires -> returns cleanly to idle
+        assert!(matches!(
+            arb.tick(500),
+            Some(ArbitrationEvent::LockReleased {
+                client,
+                slot: VfoSlot::VfoA,
+                ..
+            }) if client == scanner
+        ));
+        assert_eq!(arb.lock_depth(), 0);
+        assert!(!arb.is_locked());
+    }
+
+    #[test]
+    fn test_arbitrator_background_queueing_and_disjoint_vfo_control() {
+        let mut arb = RadioArbitrator::new();
+        let vfo_app = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
+        let aprs_bg = ClientToken::new(ClientId::APRS, LockTier::SERVICE);
+        let mesh_bg = ClientToken::new(ClientId::MESH_ROUTER, LockTier::BACKGROUND);
+
+        // Foreground VFO app holds lock on VFO A
+        assert!(arb.request_lock(
+            vfo_app,
+            RfResourceMask::VFO_A,
+            VfoSlot::VfoA,
+            200,
+            false,
+            false
+        ));
+
+        // Background APRS and Mesh daemons queue their background locks while VFO app is active
+        assert!(arb.request_or_queue_lock(
+            mesh_bg,
+            RfResourceMask::VFO_B,
+            VfoSlot::VfoB,
+            300,
+            true,
+            false
+        ));
+        assert!(arb.request_or_queue_lock(
+            aprs_bg,
+            RfResourceMask::VFO_B,
+            VfoSlot::VfoB,
+            400,
+            true,
+            false
+        ));
+        assert_eq!(arb.lock_depth(), 3);
+        assert_eq!(arb.active_client(), vfo_app);
+        // Priority-ordered stash: APRS (SERVICE) is above Mesh (BACKGROUND)
+        assert_eq!(arb.saved_lock.unwrap().client, aprs_bg);
+        assert_eq!(arb.saved_lock_2.unwrap().client, mesh_bg);
+
+        // When VFO app releases, APRS activates first, then Mesh
+        assert!(arb.release_lock(vfo_app));
+        assert_eq!(arb.active_client(), aprs_bg);
+        // While APRS (SERVICE) locks only VFO_B, another SERVICE client can still control disjoint VFO_A
+        let peer_svc = ClientToken::new(ClientId::DIGMODE, LockTier::SERVICE);
+        assert!(arb.can_client_control_slot(peer_svc, VfoSlot::VfoA));
+        assert!(!arb.can_client_control_slot(peer_svc, VfoSlot::VfoB));
+        // And Foreground VFO app can control BOTH VFO_A and VFO_B because FOREGROUND > SERVICE
+        assert!(arb.can_client_control_slot(vfo_app, VfoSlot::VfoA));
+        assert!(arb.can_client_control_slot(vfo_app, VfoSlot::VfoB));
     }
 }

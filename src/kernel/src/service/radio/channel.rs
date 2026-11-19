@@ -1,8 +1,8 @@
 //! Channel Configurations, Repeater Offsets, Step Frequencies, and VFO Descriptors.
 
 use super::af::AfResponse;
-use super::modulation::{Bandwidth, ModulationMode};
-use super::tone::SubaudibleTone;
+use super::modulation::{Bandwidth, CompanderMode, ModulationMode, ScramblerMode};
+use super::tone::{CssTailMode, SubaudibleTone};
 use utils::units::{Frequency, Hertz};
 
 /// VFO Slot identifier supporting up to 4 concurrent VFOs.
@@ -143,8 +143,9 @@ pub enum RepeaterShift {
     Negative(Frequency<Hertz>),
 }
 
-/// Rich, comprehensive Channel and VFO profile.
-#[derive(Debug, Clone, Copy)]
+/// Rich, comprehensive Channel and VFO profile with full cross-firmware parity
+/// (IJV FW5, F4HWN, EGZUMER, OpenGD77) and relational contact/protocol binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelConfig {
     pub rx_freq: Frequency<Hertz>,
     pub tx_shift: RepeaterShift,
@@ -156,7 +157,27 @@ pub struct ChannelConfig {
     pub tx_subaudible: SubaudibleTone,
     pub squelch_level: u8,
     pub reverse: bool,
+    pub talkaround: bool,
     pub busy_lock: bool,
+    pub tone_bclo: bool,
+    pub tx_inhibit: bool,
+    pub call_match_mute: bool,
+    pub freq_lock: bool,
+    pub lna_boost: bool,
+    pub vox_enabled: bool,
+    pub compander: CompanderMode,
+    pub scrambler: ScramblerMode,
+    pub ste_mode: CssTailMode,
+    pub mic_gain_db: u8,
+    pub roger_id: u8,
+    /// Per-channel Time-Out Timer in 15-second increments (`0` = use global coordinator TOT).
+    pub tot_limit_15s: u8,
+    /// Signaling protocol selector (`0 = Analog`, `1 = MDC1200`, `2 = DTMF`, `3 = 5-Tone`, `4 = FSK`, etc.).
+    pub proto: u8,
+    /// Relational index into `/user/contacts.ct` (`ContactRecord` endpoint, group, or topic).
+    pub proto_ref: u16,
+    /// Sub-Hz Fractional-N Vernier carrier offset in deci-Hertz (0.1 Hz units).
+    pub fine_offset_dhz: i16,
     pub af_response: AfResponse,
 }
 
@@ -173,7 +194,23 @@ impl ChannelConfig {
             tx_subaudible: SubaudibleTone::None,
             squelch_level: 4,
             reverse: false,
+            talkaround: false,
             busy_lock: false,
+            tone_bclo: false,
+            tx_inhibit: false,
+            call_match_mute: false,
+            freq_lock: false,
+            lna_boost: false,
+            vox_enabled: false,
+            compander: CompanderMode::Off,
+            scrambler: ScramblerMode::Off,
+            ste_mode: CssTailMode::Tone55Hz,
+            mic_gain_db: 0,
+            roger_id: 0,
+            tot_limit_15s: 0,
+            proto: 0,
+            proto_ref: 0,
+            fine_offset_dhz: 0,
             af_response: AfResponse {
                 rx_300: 0,
                 rx_3k: 0,
@@ -198,14 +235,40 @@ impl ChannelConfig {
         }
     }
 
-    /// Calculate effective TX frequency taking into account repeater shift and reverse mode
+    /// Calculate effective TX frequency taking into account talkaround, repeater shift, and reverse mode.
     pub fn effective_tx_freq(&self) -> Frequency<Hertz> {
+        if self.talkaround {
+            return self.rx_freq;
+        }
         self.shifted_freq(!self.reverse)
     }
 
-    /// Calculate effective RX frequency taking into account reverse mode
+    /// Calculate effective RX frequency taking into account talkaround and reverse mode.
     pub fn effective_rx_freq(&self) -> Frequency<Hertz> {
+        if self.talkaround {
+            return self.rx_freq;
+        }
         self.shifted_freq(self.reverse)
+    }
+
+    /// Calculate effective RX subaudible tone (swapped when `reverse` is active and not `talkaround`).
+    #[inline(always)]
+    pub const fn effective_rx_subaudible(&self) -> SubaudibleTone {
+        if self.reverse && !self.talkaround {
+            self.tx_subaudible
+        } else {
+            self.rx_subaudible
+        }
+    }
+
+    /// Calculate effective TX subaudible tone (swapped when `reverse` is active and not `talkaround`).
+    #[inline(always)]
+    pub const fn effective_tx_subaudible(&self) -> SubaudibleTone {
+        if self.reverse && !self.talkaround {
+            self.rx_subaudible
+        } else {
+            self.tx_subaudible
+        }
     }
 }
 
