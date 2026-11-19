@@ -1,112 +1,118 @@
 # kern
 
-Kern is an experimental `no_std` Rust microkernel for the Quansheng UV-K1 and UV-K5 v3 handheld transceivers, powered by the Puya PY32F071xB ARM Cortex-M0+ microcontroller.
+Kern is an experimental `no_std` Rust microkernel for the Quansheng UV-K1, UV-K5 v3, and UV-K10Pro handheld transceivers, built for the Puya PY32F071xB ARM Cortex-M0+ microcontroller.
 
-The project explores whether a memory-safe, modular microkernel architecture with relocatable userland applications can run effectively within the tight constraints of low-cost amateur radio hardware (128 KB Flash, 16 KB SRAM).
+The project explores running a memory-safe, modular microkernel with capability-checked relocatable userland executables inside tight MCU constraints (128 KB internal Flash, 16 KB SRAM).
 
-> **Project Status**: Under active development. Core kernel abstractions, hardware drivers, filesystem storage, and development tooling are functional. Application layers (Dual VFO, settings, and userland apps) are currently prototypes undergoing active bring-up.
+> **Status**: Under active development. Core kernel abstractions, peripheral drivers, KernFS storage, RigWire protocol, KRX runtime, and system modules (`dfu.mod`, `panic.mod`, `sysinfo.krx`) are functional. Radio applications (Dual VFO, scanner, channel workflows) are prototypes undergoing active bring-up.
 
 ---
 
 ## Hardware Targets
 
-- **Microcontroller**: Puya PY32F071xB (ARM Cortex-M0+, 48 MHz, optional 72 MHz overclock)
-- **Memory**: 128 KB Internal Flash, 16 KB SRAM
+- **Radios**: Quansheng UV-K1, UV-K5 v3 (shared base image), UV-K10Pro (`--target UV-K10Pro`)
+- **MCU**: Puya PY32F071xB (ARM Cortex-M0+, 48 MHz, optional 72 MHz overclock)
+- **Internal Memory**: 128 KB Flash (`0x08002800` application base after 10 KB stock bootloader), 16 KB SRAM
 - **External Storage**: 2 MB SPI Flash (PY25Q16)
-- **RF Transceiver**: Beken BK4829 (BK4819 compatible)
+- **RF Transceiver**: Beken BK4829 (BK4819 register compatible)
 - **Display**: ST7565 monochrome LCD (128×64)
 
 ---
 
-## Technical Constraints & Design Principles
+## Design Principles
 
-1. **Zero Dynamic Allocation**: `alloc` is completely disabled. All buffers are statically allocated or bounded at compile time using `heapless`. The firmware maintains a hard invariant of 0 bytes heap usage.
-2. **Layered Decoupling**: Application code never interacts directly with peripheral registers. Radio, display, audio, and storage operations are mediated through high-level microkernel traits (`RfChannel`, `RfTuning`, `DisplayBackend`, `StorageBackend`).
-3. **Power-of-Two Geometries (ORDS-01)**: The Cortex-M0+ core lacks a hardware division instruction. Database records (16-byte headers, 32-byte contacts/zones, 64-byte channels) use power-of-two lengths so record offsets can be computed with a single bit-shift (`16 + (index << N)`).
-4. **Relocatable Userland Runtime (KRX)**: Userland programs are compiled as separate `.krx` binaries that execute via a capability-checked system call interface.
-5. **Framed Serial Protocol (RigWire)**: A binary serial protocol using Consistent Overhead Byte Stuffing (COBS) and CRC32 verification replaces ad-hoc ASCII/hex dumps for telemetry, control, and filesystem transfers.
+1. **Zero Heap Allocation**: `#![no_std]` across the entire workspace with `alloc` disabled. All buffers are statically arena-backed or compile-time bounded with `heapless`.
+2. **Layered Decoupling**: Application and userland code never touch hardware registers directly. Radio, display, audio, and storage operations pass through microkernel traits (`RfChannel`, `RfTuning`, `DisplayBackend`, `StorageBackend`).
+3. **Power-of-Two Geometries (ORDS-01)**: Cortex-M0+ lacks a hardware divider. Table records (16 B headers, 32 B contacts/zones/bands, 64 B channels) use power-of-two strides so record offsets resolve via single bit-shifts (`16 + (index << N)`).
+4. **Relocatable Userland Packages (KRX)**: System modules and userland applications compile as independent position-independent `.krx` / `.mod` binaries (supporting N1 native PIC, P0 structured leaf paging, and P1 transparent paging) talking to the kernel over a single-entry `kern_call` syscall ABI.
+5. **Framed Binary Serial Protocol (RigWire)**: COBS-framed packets with CRC-32 verification handle KernFS file transfers, package sideloading, telemetry, and device control over USB-C CDC or UART.
 
 ---
 
 ## Repository Layout
 
-The repository is structured into four primary directories:
-
-- `src/` — Firmware source code and microkernel workspace crates:
-  - `src/kernel/`: Core microkernel, scheduler, capability broker, and memory monitoring.
-  - `src/platform/`: Hardware traits, PAC, HAL, and board support packages (BSP).
-  - `src/driver/`: Peripheral drivers (BK4829 transceiver, ST7565 LCD, PY25Q16 flash, keypad).
-  - `src/lib/`: Modular libraries (KernFS filesystem, graphics engine, crypto, calibration, byte utilities).
-  - `src/firmware/`: Main application runtime, system services, and boot orchestration.
-- `packages/` — Userland application packages (`bench`, `leaf_app`, `paged_app`, `beacon`).
-- `tools/` — Developer toolchain, QEMU emulator wrapper, and analysis scripts.
-- `media/` — Project media and presentation assets.
+- `src/` — Rust workspace crates:
+  - `src/kernel/` — Microkernel core, scheduler, KRX ABI (`abi.rs`), capability checks, boot records.
+  - `src/platform/` — Hardware traits, PAC, HAL, and board support packages (BSP).
+  - `src/driver/` — Peripheral drivers (BK4829, ST7565, PY25Q16, USB CDC, UART, keypad, audio, battery).
+  - `src/lib/` — Shared libraries (`kernfs`, `gfx`, `crypto`, `calib`, `utils`).
+  - `src/firmware/` — Runtime entrypoint, syscall dispatcher, UI compositor, RigWire service, built-in shell.
+- [`packages/`](packages/README.md) — Canonical KRX C SDK (`packages/sdk/`) and relocatable packages (`dfu`, `panic`, `sysinfo`, `beacon`, `bench`, `leaf_app`, `paged_app`).
+- [`tools/`](tools/README.md) — Build driver, ABI header generator, ELF bloat analyzer, static arch linter, KRX packer, RigWire client, flasher, and QEMU helper.
+- [`media/`](media/README.md) — Project media and presentation assets.
 
 ---
 
 ## Quick Start
 
-The repository includes a developer CLI script (`./kern`) that wraps cargo and the project toolchain:
+### Prerequisites
+- Rust nightly toolchain (configured automatically via `rust-toolchain.toml`, with `thumbv6m-none-eabi` target and `rust-src`)
+- Python 3.11+
+- `arm-none-eabi-gcc` & `binutils-arm-none-eabi` (for building C KRX packages and extracting binaries)
+
+### Common Commands
+
+The `./kern` script wraps the workspace build, test, package, and provisioning tools:
 
 ```bash
-# Check syntax and types across the workspace (0 warnings policy)
+# Type and syntax check (0 warnings policy)
 ./kern check
 
-# Run host unit tests
+# Verify Rust ABI and C SDK header (packages/sdk/krx_ops.h) match
+./kern abi --check
+
+# Run host unit tests across the workspace
 ./kern test
 
-# Build the release firmware binary
+# Build and verify all KRX C packages under packages/
+./kern pkg
+
+# Compile release firmware and check Flash/SRAM budgets
 ./kern build
+./kern build --target UV-K10Pro
 
-# Inspect Flash and SRAM memory section breakdown
+# Print detailed Flash/SRAM section breakdown or symbol bloat report
 ./kern size
+./kern bloat report
 
-# Launch the interactive QEMU emulator on localhost:8080 (no hardware required)
-./kern emu
-
-# Run the native desktop UI simulator (Linux / macOS via SDL2)
-cargo run --bin sim
-
-# Flash release binary to a connected radio via bootloader
+# Flash packed firmware over serial bootloader or sideload modules via RigWire
 ./kern flash --port /dev/ttyACM0
+./kern wire sideload packages/dfu/dfu.mod --force
+
+# Launch external QEMU hardware emulator Web UI (requires KERN_EMU_DIR / KERN_QEMU_BIN)
+./kern emu
 ```
 
 ---
 
-## Memory Budget
+## Memory Budgets
 
-Target bounds for the release firmware:
-
-| Section | Allocated Budget | Notes |
-|:---|:---|:---|
-| **Flash** | 120,832 bytes (118 KB) | 10 KB reserved for permanent bootloader |
-| **SRAM** | 16,384 bytes (16 KB) | Static arena bump-allocation; `.ramfunc` execution |
-| **Heap** | 0 bytes | Hard compile-time boundary |
-
-Check current usage with `./kern size`.
+| Region | UV-K1 / UV-K5 v3 | UV-K10Pro | Notes |
+|:---|:---|:---|:---|
+| **Flash** | 120,832 B (118 KB) | 122,880 B (120 KB) | Application budget above 10 KB stock bootloader |
+| **SRAM** | 16,384 B (16 KB) | 16,384 B (16 KB) | Static arena allocation; `.ramfunc` hot paths |
+| **Heap** | 0 B | 0 B | Enforced at compile time (`no_std`, no `alloc`) |
 
 ---
 
 ## Safety & Legal Notices
 
-- **Calibration Data**: Before flashing custom firmware, back up your radio's factory calibration block (`/sys/calib.dat`). Calibration data contains device-specific crystal oscillator offsets and RF gain tables.
-- **Amateur Radio Licensing**: A valid amateur radio license is required to transmit on amateur frequencies. Ensure your transmissions comply with local spectrum regulations (FCC, CE, IARU).
+- **Calibration Backup**: Back up your radio's factory calibration data before flashing any custom firmware. See [`SAFETY.md`](SAFETY.md) for memory, RF, and recovery details.
+- **Amateur Radio Licensing**: Transmitting on amateur frequencies requires an appropriate amateur radio license and compliance with local spectrum regulations (FCC, CE, IARU).
 
 ---
 
-## Lineage & Prior Art
+## Prior Art
 
-Kern builds on the reverse-engineering work and firmware ecosystem established by the Quansheng community:
+Kern draws hardware knowledge and inspiration from the Quansheng open-source firmware community:
 - [DualTachyon](https://github.com/DualTachyon) — Original open-source UV-K5 firmware.
-- [Egzumer](https://github.com/egzumer) — Spectrum analyzer integration and custom features.
-- [Armel (F4HWN)](https://github.com/armel) & [@muzkr](https://github.com/muzkr) — Porting to the Puya PY32F071 MCU.
-- [DeltaFW](https://github.com/qshosfw/deltafw-k1-k5v3) — UI design and ergonomics reference.
-- [GoguFW](https://github.com/Gogu-Qs/GOGUFW-UV-K1-Messenger) — Messenger and range-check features.
+- [Egzumer](https://github.com/egzumer) — Spectrum analyzer and custom feature integration.
+- [Armel (F4HWN)](https://github.com/armel) & [@muzkr](https://github.com/muzkr) — Puya PY32F071 port and bootloader tooling.
+- [DeltaFW](https://github.com/qshosfw/deltafw-k1-k5v3) — UI layout and ergonomics reference.
+- [GoguFW](https://github.com/Gogu-Qs/GOGUFW-UV-K1-Messenger) — Radio messaging and range-check concepts.
 
 ---
 
 ## License
 
-GNU General Public License v3.0 ([GPL-3.0-or-later](LICENSE)), with a narrow [KRX syscall exception](COPYING) for standalone third-party userland applications that interact with the kernel exclusively through the published KRX-ABI system call table.
-
-The kernel, drivers, platform layers, libraries, firmware, and any modifications or forks thereof are fully GPL v3. See [COPYING](COPYING) for the complete licensing terms.
+Licensed under the **GNU General Public License v3.0 or later** ([`LICENSE`](LICENSE)), with the **KRX Syscall Exception** ([`COPYING`](COPYING)) permitting standalone third-party `.krx` applications that interact solely through the published KRX-ABI.

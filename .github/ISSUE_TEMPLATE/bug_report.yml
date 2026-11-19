@@ -14,8 +14,8 @@ body:
       options:
         - Quansheng UV-K1 (Puya PY32F071xB)
         - Quansheng UV-K5 v3 (Puya PY32F071xB)
+        - Quansheng UV-K10Pro (Puya PY32F071xB)
         - QEMU Hardware Emulator (`./kern emu`)
-        - Desktop SDL2 Simulator (`cargo run --bin sim`)
         - Other / Custom Mod
     validations:
       required: true

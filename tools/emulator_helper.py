@@ -24,8 +24,8 @@ GRAY    = "\033[90m"
 INVERT  = "\033[7m"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-EMU_DIR = ROOT_DIR / "inspo" / "uv-k5-v3-emulator"
-QEMU_BIN = ROOT_DIR / "inspo" / "qemu-7.2" / "build" / "qemu-system-arm"
+EMU_DIR = Path(os.environ.get("KERN_EMU_DIR", str(ROOT_DIR / "inspo" / "uv-k5-v3-emulator")))
+QEMU_BIN = Path(os.environ.get("KERN_QEMU_BIN", str(ROOT_DIR / "inspo" / "qemu-7.2" / "build" / "qemu-system-arm")))
 FLASH_IMG = EMU_DIR / "assets" / "flash.img"
 KERN_ELF = ROOT_DIR / "target" / "kern_firmware.elf"
 SITE_PACKAGES = EMU_DIR / "tools" / "site-packages"
@@ -48,7 +48,8 @@ def ensure_qemu() -> bool:
     """Verifies that the patched QEMU binary exists."""
     if not QEMU_BIN.exists():
         print(f" {RED}{INVERT} ERROR {RESET} QEMU binary not found at: {QEMU_BIN}")
-        print(f"   Run tools/setup_qemu.sh inside inspo/uv-k5-v3-emulator first.")
+        print(f"   Set KERN_EMU_DIR and KERN_QEMU_BIN to your uv-k5-v3-emulator and qemu-system-arm paths,")
+        print(f"   or run tools/setup_qemu.sh inside your emulator checkout.")
         return False
     return True
 

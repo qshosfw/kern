@@ -4,47 +4,143 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Staging version label for dry-run artifact build (e.g. v0.1.0-rc1)"
+        required: true
+        default: "v0.1.0-rc1"
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build-release:
-    name: Build & Package Release Artifacts
+  verify:
+    name: Verify ABI & Host Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
-          targets: thumbv6m-none-eabi, x86_64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-verify
+
+      - name: Verify KRX ABI header sync
+        run: ./kern abi --check
+
+      - name: Run workspace unit tests
+        run: ./kern test
+
+  build-artifacts:
+    name: Build Release Bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [verify]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: thumbv6m-none-eabi
           components: rust-src, llvm-tools-preview
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-build
 
       - name: Install ARM GNU Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi python3
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
 
-      - name: Build Release Firmware
-        run: ./kern build
-
-      - name: Generate Checksums
+      - name: Determine release label
+        id: meta
         run: |
-          cd target
-          sha256sum firmware.bin firmware_packed.bin > SHA256SUMS
-          cat SHA256SUMS
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "label=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build firmware targets & system modules
+        env:
+          REL_LABEL: ${{ steps.meta.outputs.label }}
+        run: |
+          mkdir -p dist/modules dist/tools
+
+          ./kern build --target UV-K1 --deny-warnings --json "dist/kern-uv-k1-k5v3-${REL_LABEL}-size.json"
+          cp target/firmware.bin "dist/kern-uv-k1-k5v3-${REL_LABEL}.bin"
+          cp target/firmware_packed.bin "dist/kern-uv-k1-k5v3-${REL_LABEL}-packed.bin"
+
+          ./kern build --target UV-K10Pro --deny-warnings --json "dist/kern-uv-k10pro-${REL_LABEL}-size.json"
+          cp target/firmware.bin "dist/kern-uv-k10pro-${REL_LABEL}.bin"
+          cp target/firmware_packed.bin "dist/kern-uv-k10pro-${REL_LABEL}-packed.bin"
+
+          ./kern pkg
+          cp packages/dfu/dfu.mod dist/modules/dfu.mod
+          cp packages/panic/panic.mod dist/modules/panic.mod
+          cp packages/sysinfo/sysinfo.krx dist/modules/sysinfo.krx
+          cp tools/rigwire.py dist/tools/rigwire.py
+          cp tools/flasher.py dist/tools/flasher.py
+
+          (
+            cd dist
+            sha256sum *.bin modules/* tools/* > SHA256SUMS.txt
+            cat SHA256SUMS.txt
+          )
+
+      - name: Upload release bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kern-release-${{ steps.meta.outputs.label }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build-artifacts]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: kern-release-${{ github.ref_name }}
+          path: dist/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/firmware.bin
-            target/firmware_packed.bin
-            target/SHA256SUMS
-            tools/rigwire.py
-          draft: false
-          prerelease: false
+            dist/*.bin
+            dist/*.json
+            dist/SHA256SUMS.txt
+            dist/modules/*
+            dist/tools/*
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true

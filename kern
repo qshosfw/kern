@@ -1,10 +1,30 @@
 #!/usr/bin/env bash
-# ⚡ kern - Developer CLI for Kern Microkernel & Firmware
+# kern - Developer CLI for Kern Microkernel & Firmware
 set -e
 
 export PATH="$HOME/.cargo/bin:$PATH"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+build_packages() {
+    if [ $# -eq 0 ] || [ "$1" = "all" ]; then
+        for script in "$DIR"/packages/*/build.sh; do
+            pkg_name="$(basename "$(dirname "$script")")"
+            echo "==> Building package: $pkg_name"
+            bash "$script"
+        done
+    else
+        for pkg_name in "$@"; do
+            script="$DIR/packages/$pkg_name/build.sh"
+            if [ ! -f "$script" ]; then
+                echo "Error: unknown package '$pkg_name' (no $script)" >&2
+                exit 1
+            fi
+            echo "==> Building package: $pkg_name"
+            bash "$script"
+        done
+    fi
+}
 
 case "$1" in
     build)
@@ -38,47 +58,69 @@ case "$1" in
         ;;
     clean)
         cargo clean
-        rm -f "$DIR/target/firmware.bin" "$DIR/target/firmware_packed.bin"
+        rm -f "$DIR/target/firmware.bin" "$DIR/target/firmware_packed.bin" "$DIR/target/kern_firmware.elf"
         echo "Clean complete."
         ;;
     size)
         shift
         python3 "$DIR/tools/builder.py" --size "$@"
         ;;
+    pkg|packages)
+        shift
+        build_packages "$@"
+        ;;
+    abi)
+        shift
+        python3 "$DIR/tools/gen_abi.py" "$@"
+        ;;
+    bloat)
+        shift
+        python3 "$DIR/tools/bloat.py" "$@"
+        ;;
+    lint)
+        shift
+        python3 "$DIR/tools/archlint.py" "$@"
+        ;;
     wire)
         shift
         python3 "$DIR/tools/rigwire.py" "$@"
         ;;
-    emu|sim)
+    emu)
         shift
         python3 "$DIR/tools/emulator_helper.py" "$@"
         ;;
     help|--help|-h)
-        echo "⚡ kern - Developer CLI"
+        echo "kern - Developer CLI"
         echo ""
         echo "Usage: ./kern [command] [options]"
         echo ""
         echo "Commands:"
-        echo "  build         Build firmware using kern.toml configuration (default)"
-        echo "  check         Run fast type and syntax check without emitting binary"
-        echo "  test          Run native host unit tests across workspace"
-        echo "  emu           Launch QEMU hardware emulator with interactive Web UI"
-        echo "  fmt           Format all Rust code in the workspace"
-        echo "  disasm        Disassemble compiled firmware image"
-        echo "  flash         Build and flash firmware to radio via bootloader"
-        echo "  info          Display target MCU, device, and active feature gates"
-        echo "  clean         Clean target build directory"
-        echo "  size          Display section memory allocation breakdown"
-        echo "  wire          RigWire serial host tool and file provisioning client"
-        echo "  help          Show this help text"
+        echo "  build           Build firmware using kern.toml configuration (default)"
+        echo "  check           Run fast type and syntax check without emitting binary"
+        echo "  test            Run native host unit tests across workspace"
+        echo "  pkg [name|all]  Build one or all KRX C packages under packages/"
+        echo "  abi [--check]   Regenerate or verify packages/sdk/krx_ops.h from abi.rs"
+        echo "  size            Display Flash and SRAM section memory breakdown"
+        echo "  bloat [cmd]     Run binary ELF symbol/section bloat analyzer"
+        echo "  lint [cmd]      Run static architectural linter (tools/archlint.py)"
+        echo "  fmt             Format all Rust code in the workspace"
+        echo "  disasm          Disassemble compiled firmware image"
+        echo "  flash           Build and flash firmware to radio via bootloader"
+        echo "  wire            RigWire serial host tool and file provisioning client"
+        echo "  emu             Launch QEMU hardware emulator with interactive Web UI"
+        echo "  info            Display target MCU, device, and active feature gates"
+        echo "  clean           Clean target build directory"
+        echo "  help            Show this help text"
         echo ""
         echo "Options forwarded to builder:"
-        echo "  --config, -c  Path to custom TOML config file"
-        echo "  --target, -t  Override device target (UV-K1, UV-K5v3, UV-K10Pro)"
-        echo "  --preset      Build using predefined preset ('full', 'lean', 'security')"
-        echo "  --features    Comma-separated list of additional features to activate"
-        echo "  --port, -p    Serial device port for flasher (e.g. /dev/ttyACM0)"
-        echo "  --dev         Compile using development profile"
+        echo "  --config, -c    Path to custom TOML config file"
+        echo "  --target, -t    Override device target (UV-K1, UV-K5v3, UV-K10Pro)"
+        echo "  --preset        Build using predefined preset ('full', 'lean', 'security')"
+        echo "  --features      Comma-separated list of additional features to activate"
+        echo "  --port, -p      Serial device port for flasher (e.g. /dev/ttyACM0)"
+        echo "  --dev           Compile using development profile"
+        echo "  --deny-warnings Fail build/check if any compiler warnings are emitted"
+        echo "  --json FILE     Export structured Flash/SRAM telemetry to JSON"
         echo ""
         ;;
     *)

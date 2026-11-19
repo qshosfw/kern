@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability Report
+    url: https://github.com/indirecta/kern/security/advisories/new
+    about: Please report security, memory-isolation, or RF-lockout vulnerabilities privately (see SECURITY.md).

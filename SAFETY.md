@@ -1,26 +1,29 @@
-# Safety Guarantees & Calibration Guidelines
+# Safety Guarantees, Calibration & Recovery
 
-This document outlines the safety guarantees, memory isolation rules, and hardware calibration safeguards enforced by `kern`.
-
----
-
-## 1. Zero-Heap Memory Safety
-
-1. **No Dynamic Allocation**: `alloc` is completely disabled. The firmware operates entirely on statically allocated memory buffers and a bump-allocated kernel arena.
-2. **Stack Overflow Prevention**: Stack regions are painted with `0xDEADBEEF`. A background task watermarks stack usage and halts execution if unused space drops below 128 bytes.
-3. **Struct Magic Guarding**: All key kernel structures maintain a `0x4B45524E` magic header tag to catch dangling or corrupted pointers.
+This document outlines the memory safety invariants, RF hardware safeguards, and bootloader recovery behavior enforced by Kern.
 
 ---
 
-## 2. RF Hardware Protection
+## 1. Memory & Runtime Safety
 
-1. **Calibration Checksums**: SPI Flash calibration data is validated via CRC32 + HMAC at boot. Corrupted parameters trigger safe default fallback values.
-2. **Out-of-Band Lockouts**: Transmit capability is hard-coded to respect amateur radio band boundaries unless override keys are supplied.
-3. **Thermal Protection**: Power amplifier bias voltage and transmit duration are limited by software timers to prevent thermal destruction of the RF PA MOSFET.
+- **Zero Dynamic Allocation**: `alloc` is disabled across the entire workspace. All kernel and service buffers are statically allocated, arena-backed, or bounded with `heapless`.
+- **Stack Watermarking**: Unused stack regions are painted at boot so live and minimum-free stack margins can be audited (and viewed via `/apps/sysinfo.krx`).
+- **Typed Format Identifiers**: Persistent records and boot slots use fixed FourCC / `FILE_ID_*` / `BOOT_RECORD_IDENT` identifiers and CRC-32 validation to detect uninitialized or corrupted state.
+- **Contained KRX Faults**: Exceptions triggered inside userland KRX applications are caught, recorded to the boot slot, and surfaced cleanly via the `/apps/panic.mod` crash inspector and safe-boot menu.
 
 ---
 
-## 3. Unbrick Warranties
+## 2. RF Hardware & Calibration Protection
 
-1. The first 10KB of internal Flash (`0x08000000`) is reserved for the `kern` Visual DFU Bootloader.
-2. Even if the application image is corrupted, holding **PTT + Side Key** on boot forces the bootloader to start DFU mode for easy serial recovery.
+- **Calibration Integrity**: Hardware calibration parameters (`/sys/calib.dat`, paired with `/sys/calib.sig` Ascon-128 MAC) are validated before use. Missing or corrupted calibration falls back to safe defaults rather than driving invalid PA/oscillator values.
+- **Back Up First**: Always keep a full backup of your radio's factory calibration region before flashing custom firmware.
+- **Transmit Compliance**: Operators are solely responsible for holding a valid license and complying with local amateur radio band limits and power regulations.
+
+---
+
+## 3. Bootloader & Unbrick Recovery
+
+- **Stock Bootloader Preserved**: Kern links application firmware at `0x0800_2800` (`LENGTH = 118K` on UV-K1 / UV-K5 v3), leaving the 10 KB stock factory bootloader at `0x0800_0000..0x0800_27FF` untouched.
+- **DFU Entry & Stall Guard**:
+  - Holding **PTT + Power On** enters the stock factory bootloader directly regardless of application Flash contents.
+  - Holding **PTT + Side Key 2** at boot (or triggering `Settings → System → DFU Update`) launches `/apps/dfu.mod`, which quiesces RF/PTT/flashlight GPIOs, hands off cleanly to the factory bootloader, and guards against accidental reboot if a flash write stalls mid-transfer.

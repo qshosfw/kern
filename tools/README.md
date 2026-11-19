@@ -1,32 +1,29 @@
 # Kern Developer Tools
 
-This directory contains host-side tooling, build drivers, emulators, and binary packaging utilities for the Kern project.
+Host-side build drivers, binary analyzers, ABI code generators, KRX packers, serial provisioning tools, and QEMU emulator helpers.
 
-Most utilities are invoked automatically via the root `./kern` CLI script.
+Most workflows are exposed through the root `./kern` CLI (`./kern help`).
 
 ---
 
 ## Tool Catalog
 
-### 1. Build & Analysis Engine
-- **`builder.py`**: Core backend for `./kern`. Handles configuration loading from `kern.toml`, feature flag synthesis, cargo invocation, and bootloader payload generation.
-- **`bloat.py`**: Flash memory and RAM symbol analyzer. Disassembles and measures symbol-level size contributions against the 118 KB flash budget.
-- **`archlint.py`**: Static architectural compliance linter. Enforces zero-heap constraints, unsafe safety comments, non-circular crate layering, and naming invariants.
+### Build, ABI & Static Analysis
+- `builder.py` — Core backend for `./kern build`, `./kern check`, `./kern size`, `./kern info`, and `./kern flash`. Resolves `kern.toml` feature gates and hardware target profiles (`UV-K1`, `UV-K5v3`, `UV-K10Pro`), enforces Flash/SRAM budgets, extracts raw/packed binaries, and optionally exports JSON memory telemetry (`--json`).
+- `gen_abi.py` — Single-source-of-truth KRX ABI code generator (`./kern abi [--check]`). Parses the declarative `abi!` and `abi_sub!` tables in `src/kernel/src/abi.rs` and emits `packages/sdk/krx_ops.h`.
+- `bloat.py` — ELF symbol, section, rodata, call-site, and monomorphization analyzer (`./kern bloat`). Supports baseline capture and delta diffing across commits.
+- `archlint.py` — Heuristic static architectural smell scanner (`./kern lint`). Flags layer violations, division traps, unaligned packed fields, oversized functions, and duplicate logic.
 
-### 2. Simulation & Hardware Emulation
-- **`emulator_helper.py`**: Driver for the QEMU-based UV-K1 hardware emulator. Starts the simulation and serves the interactive Web UI (LCD display mirror, keyboard injection, serial telemetry).
-- **`test_kern_emulator.py`**: Headless automated integration test suite running against the QEMU emulator. Verifies boot sequences, app switching, and frame captures.
+### Packaging & Assets
+- `pack_krx.py` — KRX relocatable package packer and verifier used by `packages/*/build.sh`. Validates headers, capability bitmasks, P0/P1 paged sections, and CRC-32 checksums.
+- `pack.py` — Stock Quansheng bootloader XOR obfuscator called by `builder.py` to emit `target/firmware_packed.bin`.
+- `png_to_splash.py` — Converts PNG artwork to 128×64 1-bit monochrome splash images (`.img` or PackBits `.rle`).
 
-### 3. Packaging & Bootloader
-- **`pack_krx.py`**: Relocatable application packer for userland KRX executables (`.krx`). Validates section headers and generates relocation tables.
-- **`pack.py`**: Bootloader XOR obfuscation helper used by `builder.py` to prepare firmware payloads for stock bootloader flashing.
-- **`qsh_packer.py`**: Container packaging utility for multi-app slot management.
-- **`png_to_splash.py`**: Converts PNG images into ST7565 LCD splash screens (1-bit binary or PackBits RLE).
+### Serial, Flashing & Provisioning
+- `rigwire.py` — Host CLI and Python client library for the RigWire COBS-framed binary protocol (`./kern wire` / `./rigwire`). Supports KernFS file operations, KRX sideloading, memory inspection, and live telemetry over USB-C CDC or UART.
+- `flasher.py` — Serial bootloader flashing utility invoked by `./kern flash`.
 
-### 4. Serial & Provisioning
-- **`rigwire.py`**: Host-side CLI and client library for the RigWire COBS binary serial protocol. Supports file transfers to KernFS, memory inspection, and live telemetry.
-- **`flasher.py`**: Serial bootloader programming client for flashing firmware payloads over UART / USB-C.
-
-### 5. Font & Asset Generation
-- **`convert_fonts_modular.py`**: Build-time modular font converter and glyph subsetter.
-- **`gen_tomthumb.py`**: Generator for the ultra-compact TomThumb 3×5 proportional font.
+### Hardware Emulation & Integration Tests
+- `emulator_helper.py` — Launcher for the external QEMU `uv-k5-v3` hardware emulator and Web UI (`./kern emu`). Respects `KERN_EMU_DIR` and `KERN_QEMU_BIN` environment overrides.
+- `test_kern_emulator.py` — Headless QEMU integration suite verifying boot sequences, keypad navigation, app lifecycle, and display rendering.
+- `test_wire_emu.py` — Headless QEMU integration test for RigWire protocol commands over virtualized serial.

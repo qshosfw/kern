@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,32 +17,52 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: Code Style & Syntax Check
+  lint-and-abi:
+    name: Format, ABI & Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           targets: thumbv6m-none-eabi, x86_64-unknown-linux-gnu
-          components: rust-src, llvm-tools-preview, clippy, rustfmt
+          components: rust-src, llvm-tools-preview, rustfmt
 
-      - name: Verify Formatting (cargo fmt)
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: lint-check
+
+      - name: Verify Rust formatting
         run: cargo fmt --all -- --check
 
-      - name: Type & Invariant Check (./kern check)
-        run: ./kern check
+      - name: Verify KRX ABI header sync
+        run: ./kern abi --check
 
-  test:
+      - name: Syntax-check Python tooling
+        run: python3 -m py_compile tools/*.py
+
+      - name: Check firmware (UV-K1 / UV-K5v3, 0 warnings)
+        run: ./kern check --deny-warnings
+
+      - name: Check firmware (UV-K10Pro, 0 warnings)
+        run: ./kern check --target UV-K10Pro --deny-warnings
+
+  host-tests:
     name: Host Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -50,16 +70,49 @@ jobs:
           toolchain: nightly
           targets: x86_64-unknown-linux-gnu
 
-      - name: Run Workspace Unit Tests (./kern test)
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: host-tests
+
+      - name: Run workspace unit tests
         run: ./kern test
 
-  build-and-size:
-    name: Firmware Build & Size Guard
+  packages:
+    name: Build & Verify KRX Packages
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install ARM GNU Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
+
+      - name: Verify KRX ABI header sync
+        run: ./kern abi --check
+
+      - name: Build and verify all KRX packages
+        run: ./kern pkg
+
+  firmware-build:
+    name: Firmware Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint-and-abi, host-tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ["UV-K1", "UV-K10Pro"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -68,35 +121,43 @@ jobs:
           targets: thumbv6m-none-eabi
           components: rust-src, llvm-tools-preview
 
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: fw-${{ matrix.target }}
+
       - name: Install ARM GNU Toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi python3
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
 
-      - name: Build Release Firmware (./kern build)
-        run: ./kern build
+      - name: Build release firmware & enforce memory budget
+        run: ./kern build --target ${{ matrix.target }} --deny-warnings --json target/size-${{ matrix.target }}.json
 
-      - name: Inspect Section Breakdown (./kern size)
-        run: ./kern size
-
-      - name: Enforce Flash Budget Ceiling (118 KB / 120,832 B)
+      - name: Publish memory budget summary
         run: |
-          MAX_FLASH=120832
-          BIN_SIZE=$(stat -c %s target/firmware.bin)
-          echo "Firmware binary size: $BIN_SIZE bytes (Limit: $MAX_FLASH bytes)"
-          if [ "$BIN_SIZE" -gt "$MAX_FLASH" ]; then
-            echo "ERROR: Firmware size ($BIN_SIZE B) exceeds hard flash ceiling ($MAX_FLASH B)!"
-            exit 1
-          fi
-          RESERVE=$((MAX_FLASH - BIN_SIZE))
-          echo "SUCCESS: Firmware is within budget with $RESERVE bytes of flash headroom remaining."
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          with open("target/size-${{ matrix.target }}.json") as f:
+              d = json.load(f)
+          s = d["sections"]
+          print(f"### Memory Budget — `{d['target']}` (`{d['chip']}`)")
+          print("")
+          print("| Region | Used | Budget | Free | Utilization |")
+          print("|:---|---:|---:|---:|---:|")
+          print(f"| **Flash** | {d['flash_used']:,} B | {d['flash_budget']:,} B | {d['flash_free']:,} B | {d['flash_pct']:.2f}% |")
+          print(f"| **SRAM** | {d['ram_used']:,} B | {d['ram_budget']:,} B | {d['ram_free']:,} B | {d['ram_pct']:.2f}% |")
+          print("")
+          print(f"Sections: `.vector_table` {s['vectors']:,} B · `.text` {s['text']:,} B · `.rodata` {s['rodata']:,} B · `.data` {s['data']:,} B · `.bss` {s['bss']:,} B · `.uninit` {s['uninit']:,} B")
+          EOF
 
-      - name: Upload Firmware Artifacts
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kern-firmware
+          name: kern-firmware-${{ matrix.target }}
           path: |
             target/firmware.bin
             target/firmware_packed.bin
+            target/size-${{ matrix.target }}.json
           if-no-files-found: error
           retention-days: 14

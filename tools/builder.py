@@ -8,6 +8,8 @@ and optionally flashes the radio.
 
 import sys
 import os
+import json
+import shutil
 import subprocess
 import argparse
 import tomllib
@@ -181,6 +183,8 @@ def main():
     parser.add_argument("--clean", action="store_true", help="Clean cargo build artifacts before compiling")
     parser.add_argument("--dev", action="store_true", help="Build or check using dev profile (optimized for flash)")
     parser.add_argument("--size", action="store_true", help="Display memory section allocation breakdown")
+    parser.add_argument("--deny-warnings", action="store_true", help="Fail the build if any compiler warnings are emitted")
+    parser.add_argument("--json", dest="json_out", help="Write structured memory usage telemetry to a JSON file")
 
     args = parser.parse_args()
 
@@ -264,6 +268,9 @@ def main():
             print(f"   {YELLOW}• {w}{RESET}")
         if len(warnings) > 5:
             print(f"   {GRAY}...and {len(warnings) - 5} more{RESET}")
+        if args.deny_warnings:
+            print(f"\n {RED}{INVERT} ERROR {RESET} Failing build due to --deny-warnings.")
+            sys.exit(1)
     else:
         print(f" {GREEN}{INVERT}  OK   {RESET} Compilation successful with 0 warnings.")
 
@@ -272,9 +279,25 @@ def main():
         return
 
     # Step 2: Size & Memory Allocation Analysis
+    elf_path = root_dir / "target" / "thumbv6m-none-eabi" / ("debug" if args.dev else "release") / "firmware"
+    sections = {}
     size_cmd = f"cargo size {profile_flag} -p firmware {std_flags} {feature_flags} -- -A".strip()
     code, stdout, stderr = run_cmd(size_cmd)
-    sections = parse_cargo_size(stdout) if code == 0 else {}
+    if code == 0:
+        sections = parse_cargo_size(stdout)
+    if not sections and elf_path.exists():
+        for tool in ("arm-none-eabi-size", "llvm-size"):
+            if shutil.which(tool):
+                code, stdout, stderr = run_cmd(f"{tool} -A {elf_path}")
+                if code == 0:
+                    sections = parse_cargo_size(stdout)
+                    break
+
+    if not sections or ".text" not in sections:
+        print(f" {RED}{INVERT} ERROR {RESET} Failed to measure ELF section sizes (install cargo-binutils or arm-none-eabi-size).")
+        if stderr:
+            print(stderr)
+        sys.exit(1)
 
     vec_size    = sections.get(".vector_table", 192)
     text_size   = sections.get(".text", 0)
@@ -295,6 +318,33 @@ def main():
     print(f"  Data:    {data_size:>6} B | BSS:  {bss_size:>6} B | Uninit: {uninit_size:>6} B")
     print(f" ══════════════════════════════════════════════════════════════════")
 
+    if args.json_out:
+        out_path = Path(args.json_out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        telemetry = {
+            "target": profile["display"],
+            "chip": (cfg.get("project", {}) if cfg else {}).get("chip", "PY32F071xB"),
+            "profile": profile_name,
+            "flash_used": total_flash,
+            "flash_budget": flash_budget,
+            "flash_free": flash_budget - total_flash,
+            "flash_pct": round((total_flash / flash_budget) * 100.0, 2) if flash_budget else 0.0,
+            "ram_used": total_ram,
+            "ram_budget": ram_budget,
+            "ram_free": ram_budget - total_ram,
+            "ram_pct": round((total_ram / ram_budget) * 100.0, 2) if ram_budget else 0.0,
+            "warnings": len(warnings),
+            "sections": {
+                "vectors": vec_size,
+                "text": text_size,
+                "rodata": rodata_size,
+                "data": data_size,
+                "bss": bss_size,
+                "uninit": uninit_size,
+            },
+        }
+        out_path.write_text(json.dumps(telemetry, indent=2) + "\n")
+
     if total_flash > flash_budget:
         print(f"\n {RED}{INVERT} CRITICAL {RESET} Flash budget exceeded by {total_flash - flash_budget:,} bytes!")
         sys.exit(1)
@@ -312,6 +362,12 @@ def main():
 
     print(f" {BLUE}{INVERT} BIN   {RESET} Extracting raw ARM Cortex-M0+ binary...")
     code, stdout, stderr = run_cmd(f"cargo objcopy {profile_flag} -p firmware {std_flags} {feature_flags} -- -O binary {target_bin}".strip())
+    if code != 0 and elf_path.exists():
+        for tool in ("arm-none-eabi-objcopy", "llvm-objcopy"):
+            if shutil.which(tool):
+                code, stdout, stderr = run_cmd(f"{tool} -O binary {elf_path} {target_bin}")
+                if code == 0:
+                    break
     if code != 0:
         print(f" {RED}{INVERT} ERROR {RESET} Objcopy failed: {stderr}")
         sys.exit(1)
@@ -329,7 +385,8 @@ def main():
 
     # Step 4.1: Wrap Raw Binary in ELF for QEMU Hardware Emulation
     target_elf = "target/kern_firmware.elf"
-    bin2elf_tool = root_dir / "inspo" / "uv-k5-v3-emulator" / "tools" / "bin2elf.py"
+    emu_dir = Path(os.environ.get("KERN_EMU_DIR", str(root_dir / "inspo" / "uv-k5-v3-emulator")))
+    bin2elf_tool = emu_dir / "tools" / "bin2elf.py"
     if bin2elf_tool.exists():
         code, stdout, stderr = run_cmd(f"python3 {bin2elf_tool} {target_bin} -o {target_elf}")
         if code != 0:

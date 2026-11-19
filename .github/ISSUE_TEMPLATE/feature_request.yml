@@ -41,4 +41,4 @@ body:
     id: architectural-impact
     attributes:
       label: Architectural & Memory Footprint Impact
-      description: Estimate the Flash and SRAM budget impact (remember: strict zero dynamic heap allocation!).
+      description: "Estimate the Flash and SRAM budget impact (strict zero dynamic heap allocation)."

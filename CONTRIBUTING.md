@@ -36,19 +36,22 @@ Always use the `./kern` CLI for common developer operations:
 ./kern fmt
 
 # 2. Fast syntax and type verification (must pass with 0 warnings)
-./kern check
+./kern check --deny-warnings
 
-# 3. Execute host unit tests
+# 3. Verify Rust ABI and C SDK header (packages/sdk/krx_ops.h) match
+./kern abi --check
+
+# 4. Execute host unit tests
 ./kern test
 
-# 4. Compile release firmware and pack bootloader payload
-./kern build
+# 5. Build and verify KRX C packages under packages/
+./kern pkg
 
-# 5. Inspect Flash and SRAM memory section allocation
+# 6. Compile release firmware and check Flash/SRAM budgets
+./kern build --deny-warnings
+
+# 7. Inspect Flash and SRAM memory section allocation
 ./kern size
-
-# 6. Test in the interactive hardware emulator (no radio needed)
-./kern emu
 ```
 
 ---
