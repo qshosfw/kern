@@ -4,7 +4,7 @@ use gfx::Canvas;
 use gfx::Color;
 use gfx::gui::modules::grid_menu::{GridItem, GridMenuModel, GridMenuView};
 use gfx::gui::view::View;
-use kernel::app::{App, AppMetadata, EventResult};
+use kernel::app::{App, EventResult};
 use kernel::event::{Event, KeyCode, KeyState};
 
 pub mod catalog;
@@ -403,14 +403,6 @@ impl LauncherApp {
 }
 
 impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
-    fn meta() -> AppMetadata {
-        AppMetadata {
-            name: "Home",
-            icon: &[0; 32],
-            icon_8: &[0; 8],
-        }
-    }
-
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.is_launching = false;
         let entries = load_entries(Some(ctx.storage));
@@ -512,10 +504,6 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
         }
 
         EventResult::Ignored
-    }
-
-    fn status_bar_config(&self) -> kernel::app::StatusBarConfig<'_> {
-        kernel::app::StatusBarConfig::new("Home")
     }
 
     #[inline(never)]

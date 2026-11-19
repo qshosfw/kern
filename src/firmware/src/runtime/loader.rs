@@ -64,7 +64,7 @@ fn load_krx_into_slot(
     path: &str,
     sys_caps: Option<kernel::caps::CapabilitySet>,
     pid: kernel::proc::Pid,
-) -> Result<(kernel::caps::CapabilitySet, &'static str, u16), KrxLaunchError> {
+) -> Result<(kernel::caps::CapabilitySet, &'static str), KrxLaunchError> {
     const HDR_RESERVE: usize = kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
         (core::mem::size_of::<kernel::proc::krx::KrxSummary<'static>>() + 7) & !7;
@@ -97,7 +97,6 @@ fn load_krx_into_slot(
     };
 
     let required_caps = summary.caps;
-    let icon_id = summary.icon_id;
     if let Some(granted) = sys_caps {
         if !granted.contains_all(required_caps) {
             #[cfg(feature = "settings_debug")]
@@ -151,7 +150,7 @@ fn load_krx_into_slot(
         return Err(KrxLaunchError::ExecutionFailed);
     }
 
-    Ok((required_caps, app_name, icon_id))
+    Ok((required_caps, app_name))
 }
 
 /// Load and launch a verified KRX binary application package.
@@ -159,7 +158,7 @@ fn load_krx_into_slot(
 pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
     let dyn_id = AppRegistry::count();
     let dyn_pid = kernel::proc::Pid(dyn_id as u8);
-    let (required_caps, app_name, icon_id) =
+    let (required_caps, app_name) =
         load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), dyn_pid)?;
 
     let _ = crate::orchestrator::proc_table_mut().spawn_or_recycle(
@@ -175,13 +174,8 @@ pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, Krx
 
     #[cfg(feature = "krx_native")]
     {
-        let (icon_8, icon_16) = crate::apps::settings::apps::package_icons(app_name, icon_id);
         let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
-            metadata: AppMetadata {
-                name: app_name,
-                icon: icon_16,
-                icon_8,
-            },
+            metadata: AppMetadata { name: app_name },
             required_capabilities: required_caps,
         });
         ctx.post_event(crate::apps::Shortcut::LaunchApp(dyn_id as u8).into());

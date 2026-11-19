@@ -61,90 +61,117 @@ pub fn init() {
         ioprstr.write_volatile(0);
     }
 
-    // ── Input Pins ──────────────────────────────────────────────────────
-    for &pin in &[KB_ROWS[0], KB_ROWS[1], KB_ROWS[2], KB_ROWS[3], PTT] {
-        pin.configure_input(pac::gpio::PULL_UP);
-    }
+    const CFG_IN_PU: u8 = 1 << 2;
+    const CFG_OUT_L: u8 = pac::gpio::SPEED_LOW as u8;
+    const CFG_OUT_L_LO: u8 = CFG_OUT_L | (1 << 5);
+    const CFG_OUT_L_HI: u8 = CFG_OUT_L | (1 << 4);
+    const CFG_OUT_M_HI: u8 = (pac::gpio::SPEED_MEDIUM as u8) | (1 << 4);
+    const CFG_OUT_H_HI: u8 = (pac::gpio::SPEED_HIGH as u8) | (1 << 4);
+    const CFG_OD_L_HI: u8 = CFG_OUT_L | (1 << 3) | (1 << 4);
 
-    // ── Output Pins (high speed for keyboard columns to ensure crisp edges) ────
-    for &col in &KB_COLS {
-        col.configure_output(pac::gpio::SPEED_HIGH);
-        col.set_high(); // Idle high
-    }
-    AUDIO_PA.configure_output(pac::gpio::SPEED_LOW);
-    FLASHLIGHT.configure_output(pac::gpio::SPEED_LOW);
-    BACKLIGHT.configure_output(pac::gpio::SPEED_LOW);
-    BACKLIGHT.set_low();
+    static INIT_PINS: [(Pin, u8); 20] = [
+        (KB_ROWS[0], CFG_IN_PU),
+        (KB_ROWS[1], CFG_IN_PU),
+        (KB_ROWS[2], CFG_IN_PU),
+        (KB_ROWS[3], CFG_IN_PU),
+        (PTT, CFG_IN_PU),
+        (KB_COLS[0], CFG_OUT_H_HI),
+        (KB_COLS[1], CFG_OUT_H_HI),
+        (KB_COLS[2], CFG_OUT_H_HI),
+        (KB_COLS[3], CFG_OUT_H_HI),
+        (AUDIO_PA, CFG_OUT_L),
+        (FLASHLIGHT, CFG_OUT_L),
+        (BACKLIGHT, CFG_OUT_L_LO),
+        (FM_SCL, CFG_OD_L_HI),
+        (FM_SDA, CFG_OD_L_HI),
+        (LCD_A0, CFG_OUT_L_HI),
+        (LCD_CS, CFG_OUT_L_HI),
+        (FLASH_CS, CFG_OUT_L_HI),
+        (BK_SDA, CFG_OUT_L_HI),
+        (BK_CSN, CFG_OUT_L_HI),
+        (BK_SCL, CFG_OUT_M_HI),
+    ];
 
-    // ── BK1080 I2C Pins ─────────────────────────────────────────────────
-    FM_SCL.configure_output_od(pac::gpio::SPEED_LOW);
-    FM_SDA.configure_output_od(pac::gpio::SPEED_LOW);
-    FM_SCL.set_high();
-    FM_SDA.set_high();
-
-    // ── LCD & BK4819 idle-high pins ─────────────────────────────────────
-    for &pin in &[LCD_A0, LCD_CS, FLASH_CS, BK_SDA, BK_CSN] {
-        pin.configure_output(pac::gpio::SPEED_LOW);
-        pin.set_high();
+    for &(pin, cfg) in &INIT_PINS {
+        if (cfg & CFG_IN_PU) != 0 {
+            pin.configure_input(pac::gpio::PULL_UP);
+        } else {
+            let speed = (cfg & 0x03) as u32;
+            if (cfg & (1 << 3)) != 0 {
+                pin.configure_output_od(speed);
+            } else {
+                pin.configure_output(speed);
+            }
+            if (cfg & (1 << 4)) != 0 {
+                pin.set_high();
+            } else if (cfg & (1 << 5)) != 0 {
+                pin.set_low();
+            }
+        }
     }
-    BK_SCL.configure_output(pac::gpio::SPEED_MEDIUM);
-    BK_SCL.set_high();
 
     // ── Unused & ADC pins → analog (minimize leakage & electromagnetic pickup) ───
-    py32_hal::gpio::set_pins_analog(
-        pac::gpio::GPIOA_BASE,
-        pac::gpio::PIN_0
-            | pac::gpio::PIN_1
-            | pac::gpio::PIN_2
-            | pac::gpio::PIN_4
-            | pac::gpio::PIN_5
-            | pac::gpio::PIN_7
-            | pac::gpio::PIN_15,
-    );
-    py32_hal::gpio::set_pins_analog(
-        pac::gpio::GPIOB_BASE,
-        pac::gpio::PIN_0 | pac::gpio::PIN_1 | pac::gpio::PIN_7 | pac::gpio::PIN_11,
-    );
-    py32_hal::gpio::set_pins_analog(
-        pac::gpio::GPIOC_BASE,
-        pac::gpio::PIN_0
-            | pac::gpio::PIN_1
-            | pac::gpio::PIN_2
-            | pac::gpio::PIN_3
-            | pac::gpio::PIN_4
-            | pac::gpio::PIN_5
-            | pac::gpio::PIN_6
-            | pac::gpio::PIN_7
-            | pac::gpio::PIN_8
-            | pac::gpio::PIN_9
-            | pac::gpio::PIN_10
-            | pac::gpio::PIN_11
-            | pac::gpio::PIN_12
-            | pac::gpio::PIN_14
-            | pac::gpio::PIN_15,
-    );
-    py32_hal::gpio::set_pins_analog(
-        pac::gpio::GPIOF_BASE,
-        pac::gpio::PIN_0
-            | pac::gpio::PIN_1
-            | pac::gpio::PIN_2
-            | pac::gpio::PIN_3
-            | pac::gpio::PIN_4
-            | pac::gpio::PIN_7,
-    );
-}
-
-/// Disables SWD debugging interface on PA13 (SWDIO) and PA14 (SWCLK) by putting them into Analog mode.
-pub fn disable_swd() {
-    #[cfg(not(feature = "swd_debug"))]
-    {
-        use py32_pac as pac;
+    const SWD_MASK: u16 = if cfg!(feature = "swd_debug") {
+        0
+    } else {
+        (pac::gpio::PIN_13 | pac::gpio::PIN_14) as u16
+    };
+    static ANALOG_PORTS: [(u8, u16); 4] = [
+        (
+            0,
+            (pac::gpio::PIN_0
+                | pac::gpio::PIN_1
+                | pac::gpio::PIN_2
+                | pac::gpio::PIN_4
+                | pac::gpio::PIN_5
+                | pac::gpio::PIN_7
+                | pac::gpio::PIN_15) as u16
+                | SWD_MASK,
+        ),
+        (
+            1,
+            (pac::gpio::PIN_0 | pac::gpio::PIN_1 | pac::gpio::PIN_7 | pac::gpio::PIN_11) as u16,
+        ),
+        (
+            2,
+            (pac::gpio::PIN_0
+                | pac::gpio::PIN_1
+                | pac::gpio::PIN_2
+                | pac::gpio::PIN_3
+                | pac::gpio::PIN_4
+                | pac::gpio::PIN_5
+                | pac::gpio::PIN_6
+                | pac::gpio::PIN_7
+                | pac::gpio::PIN_8
+                | pac::gpio::PIN_9
+                | pac::gpio::PIN_10
+                | pac::gpio::PIN_11
+                | pac::gpio::PIN_12
+                | pac::gpio::PIN_14
+                | pac::gpio::PIN_15) as u16,
+        ),
+        (
+            5,
+            (pac::gpio::PIN_0
+                | pac::gpio::PIN_1
+                | pac::gpio::PIN_2
+                | pac::gpio::PIN_3
+                | pac::gpio::PIN_4
+                | pac::gpio::PIN_7) as u16,
+        ),
+    ];
+    for &(port_idx, mask) in &ANALOG_PORTS {
         py32_hal::gpio::set_pins_analog(
-            pac::gpio::GPIOA_BASE,
-            pac::gpio::PIN_13 | pac::gpio::PIN_14,
+            pac::gpio::GPIOA_BASE + ((port_idx as u32) << 10),
+            mask as u32,
         );
     }
 }
+
+/// Disables SWD debugging interface on PA13 (SWDIO) and PA14 (SWCLK).
+/// Already folded into `init()`'s `GPIOA` analog mask on the K1 family.
+#[inline(always)]
+pub fn disable_swd() {}
 
 const STOP_PORTS: [u32; 3] = [
     py32_pac::gpio::GPIOA_BASE,

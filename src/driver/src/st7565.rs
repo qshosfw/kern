@@ -58,20 +58,26 @@ impl<'a> St7565<'a> {
     }
 
     pub fn init(&mut self) {
-        // 1. Software Reset (20ms is 20x ST7565 spec requirement of 1ms)
-        self.send_cmds(&[0xE2]);
-        py32_hal::delay::delay_ms(20);
-
-        // 2-4a. Bias, scan, normal display, regulation, contrast, power step 1
-        self.send_cmds(&[0xA2, 0xC0, 0xA1, 0xA6, 0xA4, 0x24, 0x81, 31, 0x28 | 0b011]);
-        py32_hal::delay::delay_ms(1);
-        self.send_cmds(&[0x28 | 0b110]); // VB=1, VR=1, VF=0
-        py32_hal::delay::delay_ms(1);
-        self.send_cmds(&[0x2F, 0x2F, 0x2F, 0x2F]); // VB=1, VR=1, VF=1 x4
-        py32_hal::delay::delay_ms(20); // Voltage booster stabilization
-
-        // 5. Set Start Line 0 & Turn Display ON (0xAF)
-        self.send_cmds(&[0x40, 0xAF]);
+        // Packed init steps: [cmd_len, cmd_bytes..., delay_ms]
+        static INIT_SEQ: [u8; 27] = [
+            1, 0xE2, 20, // Software Reset
+            9, 0xA2, 0xC0, 0xA1, 0xA6, 0xA4, 0x24, 0x81, 31, 0x2B, 1, // Bias..power step 1
+            1, 0x2E, 1, // VB=1, VR=1, VF=0
+            4, 0x2F, 0x2F, 0x2F, 0x2F, 20, // VB=1, VR=1, VF=1 x4
+            2, 0x40, 0xAF, 0, // Start line 0 & ON
+        ];
+        let mut i = 0usize;
+        while i < INIT_SEQ.len() {
+            let n = INIT_SEQ[i] as usize;
+            let start = i + 1;
+            let end = start + n;
+            self.send_cmds(&INIT_SEQ[start..end]);
+            let ms = INIT_SEQ[end] as u32;
+            if ms != 0 {
+                py32_hal::delay::delay_ms(ms);
+            }
+            i = end + 1;
+        }
     }
 
     /// Turn on the LCD panel output (0xAF) cleanly

@@ -28,15 +28,15 @@ static mut DYNAMIC_APP: Option<DynamicAppRecord> = None;
 kernel::define_os_apps! {
     context: crate::services::SysContext<'static, 'static>;
     APP_ID_LAUNCHER => crate::apps::LauncherApp [
-        meta: AppMetadata { name: "Home", icon: &[0u8; 32], icon_8: &[0u8; 8] },
+        meta: AppMetadata { name: "Home" },
         caps: CapabilitySet::NONE
     ],
     APP_ID_VFO => crate::apps::VfoApp [
-        meta: AppMetadata { name: "Radio", icon: gfx::icons::ICON_16_RADIO, icon_8: gfx::icons::ICON_APP_RADIO },
+        meta: AppMetadata { name: "Radio" },
         caps: CapabilitySet::NONE.with(kernel::caps::Cap::RadioRx).with(kernel::caps::Cap::RadioTx)
     ],
     APP_ID_SETTINGS => crate::apps::SettingsApp [
-        meta: AppMetadata { name: "Settings", icon: gfx::icons::ICON_16_SETTINGS, icon_8: gfx::icons::ICON_APP_SETTINGS },
+        meta: AppMetadata { name: "Settings" },
         caps: CapabilitySet::NONE
     ],
 }
@@ -227,7 +227,8 @@ impl AppRegistry {
                     return;
                 }
             };
-            *sb_cfg = StatusBarConfig::new(title);
+            sb_cfg.visible = true;
+            sb_cfg.title = Some(title);
         }
     }
 

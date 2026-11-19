@@ -3,12 +3,10 @@
 use crate::canvas::StatusGlyph;
 use crate::event::Event;
 
-/// Static metadata describing an App for the OS GUI launcher.
+/// Static metadata describing an App for the OS registry and compositor.
 #[derive(Debug, Clone, Copy)]
 pub struct AppMetadata {
     pub name: &'static str,
-    pub icon: &'static [u8; 32],
-    pub icon_8: &'static [u8; 8],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,16 +146,6 @@ pub enum ModalResult<'a> {
 
 /// Declarative Application interface for microkernel GUI and foreground modules.
 pub trait App<C> {
-    /// Static metadata for launcher registration.
-    fn meta() -> AppMetadata
-    where
-        Self: Sized;
-
-    /// Returns status bar configuration for the OS compositor. Defaults to visible with app name.
-    fn status_bar_config(&self) -> StatusBarConfig<'_> {
-        StatusBarConfig::default()
-    }
-
     /// Called by the OS when launched into the foreground.
     fn on_start(&mut self, ctx: &mut C);
 

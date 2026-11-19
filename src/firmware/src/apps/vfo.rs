@@ -6,7 +6,7 @@ use crate::services::radio::{
 
 use crate::SysContext;
 use gfx::{Canvas, Color};
-use kernel::app::{App, AppMetadata, EventResult};
+use kernel::app::{App, EventResult};
 use kernel::event::{Event, KeyCode, KeyState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,14 +282,6 @@ fn handle_vfo_key_press(ctx: &mut SysContext, code: KeyCode) -> EventResult {
 }
 
 impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
-    fn meta() -> AppMetadata {
-        AppMetadata {
-            name: "Radio",
-            icon: gfx::icons::ICON_16_RADIO,
-            icon_8: gfx::icons::ICON_APP_RADIO,
-        }
-    }
-
     fn on_start(&mut self, ctx: &mut SysContext) {
         let slot = ctx.active_vfo();
         ctx.select_vfo(slot);
@@ -318,29 +310,18 @@ impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
         }
     }
 
-    fn status_bar_config(&self) -> kernel::app::StatusBarConfig<'_> {
-        kernel::app::StatusBarConfig {
-            visible: true,
-            title: Some("Radio"),
-            ..Default::default()
-        }
-    }
-
     #[inline(never)]
     fn render(&self, canvas: &mut Canvas, ctx: &SysContext) {
+        use kernel::service::radio::VfoSlot;
         let coord = &ctx.state.coord;
         let active = coord.active_vfo;
-        let slot_b = if active == kernel::service::radio::VfoSlot::VfoC {
-            kernel::service::radio::VfoSlot::VfoC
+        let slot_b = if active == VfoSlot::VfoC {
+            VfoSlot::VfoC
         } else {
-            kernel::service::radio::VfoSlot::VfoB
+            VfoSlot::VfoB
         };
-        for (i, slot) in [kernel::service::radio::VfoSlot::VfoA, slot_b]
-            .into_iter()
-            .enumerate()
-        {
-            draw_vfo(canvas, 8 + (i as i16) * 26, coord, slot, active == slot);
-        }
+        draw_vfo(canvas, 8, coord, VfoSlot::VfoA, active == VfoSlot::VfoA);
+        draw_vfo(canvas, 34, coord, slot_b, active == slot_b);
 
         // Dotted Divider Line (y: 32)
         gfx::draw::draw_dotted_line_h(canvas, 0, 127, 32, 2, Color::Fill);

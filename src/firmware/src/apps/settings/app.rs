@@ -5,7 +5,7 @@ use crate::SysContext;
 use gfx::Canvas;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, MenuModel, MenuModelMut, MenuView};
 use gfx::gui::view::View;
-use kernel::app::{App, AppMetadata, EventResult, ModalResult, StatusBarConfig};
+use kernel::app::{App, EventResult, ModalResult};
 use kernel::event::{Event, KeyCode, KeyState};
 
 use super::dialog;
@@ -458,22 +458,6 @@ impl SettingsApp {
 }
 
 impl App<SysContext<'_, '_>> for SettingsApp {
-    fn meta() -> AppMetadata {
-        AppMetadata {
-            name: "Settings",
-            icon: gfx::icons::ICON_16_SETTINGS,
-            icon_8: gfx::icons::ICON_APP_SETTINGS,
-        }
-    }
-
-    fn status_bar_config(&self) -> StatusBarConfig<'_> {
-        StatusBarConfig {
-            visible: true,
-            title: Some(self.title),
-            ..Default::default()
-        }
-    }
-
     #[inline(never)]
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.begin_start();

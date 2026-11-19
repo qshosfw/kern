@@ -109,7 +109,7 @@ impl CalibSignature {
 /// Compute a 32-byte silicon binding signature linking calibration data to the MCU UID.
 #[inline(never)]
 pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibSignature {
-    const NONCE: [u8; 16] = [0x5Au8; 16];
+    static NONCE: [u8; 16] = [0x5Au8; 16];
     let hw_serial = bsp::uid::get_hardware_serial64();
     let mut key16 = [0u8; 16];
     key16[..4].copy_from_slice(CALIB_SIG_IDENT);
