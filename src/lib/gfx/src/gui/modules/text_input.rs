@@ -83,8 +83,8 @@ impl TextInputView {
 
     #[inline(never)]
     fn get_charset_chars(charset: Charset, key: u8) -> &'static str {
-        const ALPHA_OFF: [u8; 9] = [0, 3, 6, 9, 12, 15, 19, 22, 26];
-        const SYM_OFF: [u8; 9] = [0, 3, 6, 10, 14, 17, 20, 23, 26];
+        static ALPHA_OFF: [u8; 9] = [0, 3, 6, 9, 12, 15, 19, 22, 26];
+        static SYM_OFF: [u8; 9] = [0, 3, 6, 10, 14, 17, 20, 23, 26];
         if key > 9 {
             return "";
         }
@@ -165,9 +165,15 @@ impl TextInputView {
         if model.digits_only {
             widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
         } else {
-            let star_label = utils::format::nth_cstr(b"123\0123\0SYM\0ABC", model.charset as u8);
+            utils::static_bytes!(
+                static STAR_LABELS = b"123\0123\0SYM\0ABC\0";
+            );
+            utils::static_bytes!(
+                static CASE_LABELS = b"abc\0ABC\0Case\0Case\0";
+            );
+            let star_label = utils::format::nth_cstr(&STAR_LABELS, model.charset as u8);
             let hash_key = if model.is_k1 { "F" } else { "#" };
-            let case_label = utils::format::nth_cstr(b"abc\0ABC\0Case\0Case", model.charset as u8);
+            let case_label = utils::format::nth_cstr(&CASE_LABELS, model.charset as u8);
             let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
             let enter_label = if show_grid || model.is_k1 {
                 "Enter"
@@ -249,7 +255,10 @@ impl View<TextInputModel> for TextInputView {
         // 2. Mode & Length Indicator Bar (DeltaFW layout below header)
         let header_y = 15i16;
         if !model.digits_only {
-            let charset_name = utils::format::nth_cstr(b"ABC\0abc\0123\0#@$", model.charset as u8);
+            utils::static_bytes!(
+                static CHARSET_NAMES = b"ABC\0abc\0123\0#@$\0";
+            );
+            let charset_name = utils::format::nth_cstr(&CHARSET_NAMES, model.charset as u8);
             text::draw_str(canvas, 3, header_y, charset_name, &TOMTHUMB, Color::Fill);
         }
 

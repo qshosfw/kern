@@ -250,15 +250,18 @@ impl KrxIpcMessage {
         msg
     }
 
+    pub fn make_reply_in_place(&mut self, payload_data: &[u8], is_error: bool) {
+        core::mem::swap(&mut self.sender_pid, &mut self.target_pid);
+        let len = payload_data.len().min(24);
+        self.payload_len = len as u8;
+        self.payload[..len].copy_from_slice(&payload_data[..len]);
+        self.payload[len..].fill(0);
+        self.flags = ipc_flags::REPLY | if is_error { ipc_flags::ERROR } else { 0 };
+    }
+
     pub fn reply_to(&self, payload_data: &[u8], is_error: bool) -> Self {
-        let mut rep = Self::new(
-            self.target_pid,
-            self.sender_pid,
-            self.msg_type,
-            payload_data,
-        );
-        rep.seq = self.seq;
-        rep.flags = ipc_flags::REPLY | if is_error { ipc_flags::ERROR } else { 0 };
+        let mut rep = *self;
+        rep.make_reply_in_place(payload_data, is_error);
         rep
     }
 

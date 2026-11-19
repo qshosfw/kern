@@ -12,8 +12,9 @@ pub const UID_BASE_ADDR: usize = 0x1FFF3000;
 pub const UID_BYTES: usize = 12;
 pub const UID_FULL_BYTES: usize = 256;
 
-const CROCKFORD_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const CHECKSUM_ALPHABET: &[u8; 37] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U";
+utils::static_bytes!(
+    static CHECKSUM_ALPHABET = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U";
+);
 
 /// Reads the raw 96-bit (12-byte) hardware Unique ID from system memory.
 #[inline(always)]
@@ -44,24 +45,39 @@ fn fmix64(mut k: u64) -> u64 {
     k
 }
 
-/// Shared MurmurHash3 64-bit chunk-mixing accumulator over 8-byte little-endian blocks.
+/// Shared MurmurHash3 64-bit chunk-mixing accumulator over aligned 32-bit little-endian word pairs.
 #[inline(never)]
-fn murmur3_64(bytes: &[u8]) -> u64 {
+fn murmur3_64_words(words: &[u32]) -> u64 {
     let mut h: u64 = 0x9e3779b97f4a7c15; // DeltaFW golden ratio seed
     let mut i = 0;
-    let n = bytes.len() & !7;
+    let n = words.len() & !1;
     while i < n {
-        let chunk = unsafe { u64::from_le_bytes(*bytes.as_ptr().add(i).cast::<[u8; 8]>()) };
+        let chunk = (words[i] as u64) | ((words[i + 1] as u64) << 32);
         let mut k = chunk.wrapping_mul(0x87c37b91114253d5);
         k = k.rotate_left(31);
         k = k.wrapping_mul(0x4cf5ad432745937f);
         h ^= k;
         h = h.rotate_left(27);
         h = (h << 2).wrapping_add(h).wrapping_add(0x52dce729);
-        i += 8;
+        i += 2;
     }
-    h ^= bytes.len() as u64;
+    h ^= (words.len() * 4) as u64;
     fmix64(h)
+}
+
+#[cfg(test)]
+fn murmur3_64(bytes: &[u8]) -> u64 {
+    let mut words = [0u32; 64];
+    let n = (bytes.len() / 4).min(64);
+    for i in 0..n {
+        words[i] = u32::from_le_bytes([
+            bytes[i * 4],
+            bytes[i * 4 + 1],
+            bytes[i * 4 + 2],
+            bytes[i * 4 + 3],
+        ]);
+    }
+    murmur3_64_words(&words[..n])
 }
 
 /// Generates a deterministic 64-bit serial from the 16-byte CPU ID at 0x1FFF3000.
@@ -69,7 +85,16 @@ fn murmur3_64(bytes: &[u8]) -> u64 {
 #[inline(never)]
 pub fn get_hardware_serial64() -> u64 {
     let id_bytes = read_cpu_id_16();
-    murmur3_64(&id_bytes)
+    let mut words = [0u32; 4];
+    // SAFETY: both arrays are 16 bytes; copying into `[u32; 4]` guarantees 4-byte alignment on M0+.
+    unsafe {
+        core::ptr::copy_nonoverlapping(id_bytes.as_ptr(), words.as_mut_ptr().cast::<u8>(), 16);
+    }
+    #[cfg(target_endian = "big")]
+    for w in &mut words {
+        *w = w.swap_bytes();
+    }
+    murmur3_64_words(&words)
 }
 
 /// Derives an IEEE EUI-48 (6-byte) MAC address from a precomputed 64-bit hardware serial.
@@ -119,11 +144,12 @@ pub fn get_mac_tag_str() -> &'static str {
 #[inline(never)]
 pub fn encode_crockford64(serial: u64) -> [u8; 15] {
     let mut val = serial;
-    let mut out = [0u8; 15];
+    let mut out = core::mem::MaybeUninit::<[u8; 15]>::uninit();
+    let ptr = out.as_mut_ptr().cast::<u8>();
 
-    // Encode 64 bits into 13 characters
+    // Encode 64 bits into 13 characters (first 32 bytes of CHECKSUM_ALPHABET == Crockford Base32)
     for i in (0..13).rev() {
-        out[i] = CROCKFORD_ALPHABET[(val & 0x1F) as usize];
+        unsafe { *ptr.add(i) = *CHECKSUM_ALPHABET.get_unchecked((val & 0x1F) as usize) };
         val >>= 5;
     }
 
@@ -132,10 +158,11 @@ pub fn encode_crockford64(serial: u64) -> [u8; 15] {
         rem = rem * 9 + utils::math::div37_u16((serial >> shift) as u16).1 as u16;
     }
     let mod37 = utils::math::div37_u16(rem).1 as usize;
-    out[13] = unsafe { *CHECKSUM_ALPHABET.get_unchecked(mod37) };
-    out[14] = b'\0';
-
-    out
+    unsafe {
+        *ptr.add(13) = *CHECKSUM_ALPHABET.get_unchecked(mod37);
+        *ptr.add(14) = b'\0';
+        out.assume_init()
+    }
 }
 
 /// Generates a Crockford Base32 serial string with Mod-37 Checksum (e.g. "7K9MP3R2W8VFXC").
@@ -253,7 +280,15 @@ pub fn bootloader_usb_info() -> py32_hal::uid::BootloaderUsbInfo {
 /// Ideal for cryptographic PRNG seeding and physical device fingerprinting.
 pub fn get_hardware_fingerprint256() -> u64 {
     let raw = read_uid_256();
-    murmur3_64(&raw)
+    let mut words = [0u32; 64];
+    unsafe {
+        core::ptr::copy_nonoverlapping(raw.as_ptr(), words.as_mut_ptr().cast::<u8>(), 256);
+    }
+    #[cfg(target_endian = "big")]
+    for w in &mut words {
+        *w = w.swap_bytes();
+    }
+    murmur3_64_words(&words)
 }
 
 /// Formats the 96-bit MCU UID into a null-terminated 25-byte Hex ASCII string buffer.
