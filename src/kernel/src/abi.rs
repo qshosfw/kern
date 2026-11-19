@@ -293,6 +293,10 @@ abi_sub! {
         SNR        = 7,
         NOISE      = 8,
         FM_RSSI    = 9,
+        AFC        = 10,
+        AF_FREQ    = 11,
+        AF_AMP     = 12,
+        CTCSS_SCAN = 13,
     }
     rf_set {
         MODULATION = 0,
@@ -312,11 +316,14 @@ abi_sub! {
         FM_MUTE    = 14,
     }
     rf_vfo {
-        GET_CFG    = 0,
-        SET_CFG    = 1,
-        STATE      = 2,
-        WATCH_MODE = 3,
-        LOCK       = 4,
+        GET_CFG     = 0,
+        SET_CFG     = 1,
+        STATE       = 2,
+        WATCH_MODE  = 3,
+        LOCK        = 4,
+        GET_RECORD  = 5,
+        LOAD_RECORD = 6,
+        MONITOR     = 7,
     }
     rf_bulk {
         SWEEP      = 0,

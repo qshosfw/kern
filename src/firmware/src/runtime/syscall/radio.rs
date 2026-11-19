@@ -132,7 +132,7 @@ unsafe fn dispatch_rf_vfo(
             dst.squelch_level = ch.squelch_level;
             dst.reverse = ch.reverse as u8;
             dst.busy_lock = ch.busy_lock as u8;
-            dst._reserved = 0;
+            dst._reserved = ((ch.flags >> 5) & 0x7F) as u8;
             0
         }
         rf_vfo::SET_CFG => {
@@ -142,7 +142,7 @@ unsafe fn dispatch_rf_vfo(
             };
             let cfg = unsafe { &*cfg_ptr };
             let step = StepSetting::from_hz_x10(utils::math::div10_u32(cfg.step_hz).0 as u16);
-            let needs_cfg = !coord.is_transmitting && coord.listening_vfo == vfo;
+            let needs_cfg = coord.is_slot_hardware_active(vfo);
             let ch = coord.vfo_channel_mut(vfo);
             ch.rx_freq = utils::units::Frequency::new(cfg.rx_freq_hz);
             let offset = utils::units::Frequency::new(cfg.tx_offset_hz);
@@ -160,6 +160,7 @@ unsafe fn dispatch_rf_vfo(
             ch.squelch_level = cfg.squelch_level.min(9);
             ch.reverse = cfg.reverse != 0;
             ch.busy_lock = cfg.busy_lock != 0;
+            ch.flags = (ch.flags & !0x0FE0) | (((cfg._reserved & 0x7F) as u16) << 5);
             if needs_cfg {
                 radio.configure_channel(ch);
             }
@@ -192,7 +193,11 @@ unsafe fn dispatch_rf_vfo(
             dst.tot_locked_out = coord.tot_locked_out as u8;
             dst.lock_active = coord.is_vfo_locked() as u8;
             dst.tx_perm = coord.check_tx_permission(tx_slot, active_krx_token(false)) as u8;
-            dst._reserved = 0;
+            dst._reserved = (coord.monitor_active as u8)
+                | ((coord.fsk_sync_active as u8) << 1)
+                | ((coord.pa_thermal_foldback_active as u8) << 2)
+                | ((coord.dwell.is_rx_held() as u8) << 3)
+                | (((coord.lock_depth() as u8) & 0x03) << 4);
             dst.tot_remaining_s = coord.tot_limit_seconds.saturating_sub(tot_elapsed_s);
             dst.rssi_dbm = coord.vfo_rssi(coord.listening_vfo);
             0
@@ -250,6 +255,47 @@ unsafe fn dispatch_rf_vfo(
             let res = RfResourceMask(a1 as u8);
             let token = active_krx_token(exclusive);
             usize::from(!coord.request_resource_lock(token, res, vfo, a2 as u16, false))
+        }
+        rf_vfo::GET_RECORD => {
+            let Some(vfo) = decode_vfo_slot(a1 as u8) else {
+                return usize::MAX;
+            };
+            let Some(bytes) = (unsafe { ptr_slice_mut(a2 as *mut u8, 64) }) else {
+                return usize::MAX;
+            };
+            let mut rec = crate::data::ChannelRecord::from_bytes(unsafe {
+                &*(bytes.as_ptr() as *const [u8; 64])
+            });
+            coord.save_vfo_to_channel(vfo, &mut rec);
+            bytes.copy_from_slice(rec.as_bytes());
+            coord.vfo_memory_index[vfo.index()].map_or(0, |idx| (idx as usize) + 1)
+        }
+        rf_vfo::LOAD_RECORD => {
+            let Some(vfo) = decode_vfo_slot(a1 as u8) else {
+                return 1;
+            };
+            let Some(bytes) = (unsafe { ptr_slice(a2 as *const u8, 64) }) else {
+                return 1;
+            };
+            let raw_idx = (a1 >> 16) as u16;
+            let mem_idx = if raw_idx == 0 {
+                None
+            } else {
+                Some(raw_idx - 1)
+            };
+            let rec = crate::data::ChannelRecord::from_bytes(unsafe {
+                &*(bytes.as_ptr() as *const [u8; 64])
+            });
+            coord.load_channel_into_vfo(radio, vfo, mem_idx, &rec);
+            0
+        }
+        rf_vfo::MONITOR => {
+            if a1 >= 2 {
+                coord.toggle_monitor(radio);
+            } else {
+                coord.set_monitor(radio, a1 != 0);
+            }
+            usize::from(coord.monitor_active)
         }
         _ => 1,
     }
@@ -343,12 +389,12 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 rf_get::RSSI => radio.get_rssi_dbm() as i32 as u32 as usize,
                 rf_get::CARRIER => usize::from(coord.carrier_active || radio.is_carrier_open()),
                 rf_get::GLITCH | rf_get::SNR | rf_get::NOISE => {
-                    let reg = match sub {
-                        rf_get::GLITCH => 0x63,
-                        rf_get::SNR => 0x66,
-                        _ => 0x65,
-                    };
-                    (radio.read_reg(reg) & 0xFF) as usize
+                    const REG_LUT: [u8; 3] = [0x63, 0x66, 0x65];
+                    (radio.read_reg(REG_LUT[(sub - rf_get::GLITCH) as usize]) & 0xFF) as usize
+                }
+                rf_get::AFC..=rf_get::CTCSS_SCAN => {
+                    const EXT_LUT: [u8; 4] = [0x6D, 0x6E, 0x6F, 0x68];
+                    radio.read_reg(EXT_LUT[(sub - rf_get::AFC) as usize]) as usize
                 }
                 rf_get::FM_RSSI => {
                     #[cfg(feature = "fm_radio")]

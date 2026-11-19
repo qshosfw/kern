@@ -120,6 +120,10 @@
 #define SUB_RF_GET_SNR             7u
 #define SUB_RF_GET_NOISE           8u
 #define SUB_RF_GET_FM_RSSI         9u
+#define SUB_RF_GET_AFC             10u
+#define SUB_RF_GET_AF_FREQ         11u
+#define SUB_RF_GET_AF_AMP          12u
+#define SUB_RF_GET_CTCSS_SCAN      13u
 
 /* rf_set */
 #define SUB_RF_SET_MODULATION      0u
@@ -144,6 +148,9 @@
 #define SUB_RF_VFO_STATE           2u
 #define SUB_RF_VFO_WATCH_MODE      3u
 #define SUB_RF_VFO_LOCK            4u
+#define SUB_RF_VFO_GET_RECORD      5u
+#define SUB_RF_VFO_LOAD_RECORD     6u
+#define SUB_RF_VFO_MONITOR         7u
 
 /* rf_bulk */
 #define SUB_RF_BULK_SWEEP          0u
