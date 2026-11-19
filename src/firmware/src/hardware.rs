@@ -1,7 +1,9 @@
 //! System Hardware Abstraction, Dirty Config Synchronization & Context Building.
 
+#[cfg(feature = "passcode")]
+use crate::PASSCODE_STATE;
+use crate::POWER_SERVICE;
 use crate::services::{DisplayHardware, PowerServiceConfigExt, SysContext, SystemStorage};
-use crate::{CALIBRATION, PASSCODE_STATE, POWER_SERVICE};
 use drivers::audio::AudioAmplifier;
 use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
@@ -127,40 +129,6 @@ enum CtxOp<'e> {
     Dispatch(&'e Event),
 }
 
-fn fill_sys_context<'a, 'hw>(
-    radio: &'a mut drivers::bk4829::Bk4829<'hw, drivers::bk4829::Disabled>,
-    filesystem: &'a mut crate::services::SystemStorage<'hw>,
-    audio: &'a mut drivers::audio::AudioAmplifier,
-    #[cfg(feature = "usb")] usb: Option<&'a mut drivers::usb::UsbDriver>,
-    #[cfg(not(feature = "usb"))] _usb: Option<&'a mut ()>,
-    #[cfg(feature = "uart")] uart: &'a mut drivers::uart::HardwareUart,
-    display: Option<&'a mut DisplayHardware<'a, 'hw>>,
-    ipc: Option<&'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>>,
-    is_locked: bool,
-    is_f: bool,
-) -> SysContext<'a, 'hw> {
-    SysContext {
-        is_keypad_locked: is_locked,
-        is_f_active: is_f,
-        state: crate::radio_state(),
-        radio,
-        power: unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) },
-        config: crate::master_config(),
-        storage: filesystem,
-        calibration: unsafe { &*core::ptr::addr_of!(CALIBRATION) },
-        passcode: unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) },
-        #[cfg(feature = "uart")]
-        uart,
-        audio: Some(audio),
-        display,
-        ipc,
-        #[cfg(feature = "usb")]
-        usb,
-        #[cfg(not(feature = "usb"))]
-        usb: None,
-    }
-}
-
 impl<'a> SystemHardware<'a> {
     #[inline(never)]
     pub fn apply_dirty_configs(&mut self) {
@@ -236,29 +204,26 @@ impl<'a> SystemHardware<'a> {
             canvas: crate::system_canvas(),
             backlight: &mut self.backlight,
         };
-        let mut ctx = fill_sys_context(
-            &mut self.radio,
-            self.filesystem,
-            &mut self.audio,
-            #[cfg(feature = "usb")]
-            Some(&mut self.usb),
-            #[cfg(not(feature = "usb"))]
-            None,
-            #[cfg(feature = "uart")]
-            &mut self.uart,
-            if with_display {
-                Some(&mut display_hw)
-            } else {
-                None
-            },
-            if with_display {
-                Some(&mut self.ipc_queue)
-            } else {
-                None
-            },
-            is_locked,
-            is_f,
-        );
+        let mut ctx = SysContext {
+            is_keypad_locked: is_locked,
+            is_f_active: is_f,
+            state: crate::radio_state(),
+            radio: &mut self.radio,
+            power: unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) },
+            config: crate::master_config(),
+            storage: self.filesystem,
+            audio: &mut self.audio,
+            ipc: &mut self.ipc_queue,
+            display: with_display.then_some(&mut display_hw),
+            #[cfg(feature = "passcode")]
+            passcode: unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) },
+            #[cfg(all(test, feature = "uart"))]
+            uart: &mut self.uart,
+            #[cfg(all(test, feature = "usb"))]
+            usb: Some(&mut self.usb),
+            #[cfg(all(test, not(feature = "usb")))]
+            usb: None,
+        };
         match op {
             CtxOp::Start => {
                 crate::AppRegistry::on_start(self.orchestrator.active_app_id(), &mut ctx);

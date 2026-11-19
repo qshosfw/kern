@@ -997,16 +997,8 @@ impl Orchestrator {
 
     #[inline(never)]
     fn drain_ipc_commands<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
-        loop {
-            let next_cmd = match ctx.ipc {
-                Some(ref mut queue) => queue.pop().map(Shortcut::from),
-                None => None,
-            };
-            if let Some(cmd) = next_cmd {
-                self.process_ipc_command(ctx, cmd);
-            } else {
-                break;
-            }
+        while let Some(ev) = ctx.ipc.pop() {
+            self.process_ipc_command(ctx, Shortcut::from(ev));
         }
     }
 

@@ -28,7 +28,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         }
         #[cfg(feature = "settings_calib")]
         MetricId::CalibSig => {
-            out.set_str(if ctx.calibration.is_valid() {
+            out.set_str(if ctx.calibration().is_valid() {
                 "Valid"
             } else {
                 "None"
@@ -79,7 +79,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         }
         MetricId::BatteryPercentage => (ctx.power.battery_percentage() as i32, 0, "%"),
         MetricId::BatteryVdda => (ctx.power.vdda_voltage_mv() as i32, 0, " mV"),
-        MetricId::BatteryCalibRef => (ctx.calibration.battery_calib_const() as i32, 0, ""),
+        MetricId::BatteryCalibRef => (ctx.calibration().battery_calib_const() as i32, 0, ""),
         MetricId::BatteryCoreTemp => (ctx.power.mcu_temperature_deci_c() as i32, 1, " C"),
 
         #[cfg(feature = "filesystem")]
@@ -101,15 +101,15 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
         MetricId::DeviceRadioId => (ctx.config.system.radio_id as i32, 0, ""),
 
         #[cfg(feature = "settings_calib")]
-        MetricId::CalibXtal => (ctx.calibration.xtal_freq_low() as i32, 0, " Hz"),
+        MetricId::CalibXtal => (ctx.calibration().xtal_freq_low() as i32, 0, " Hz"),
         #[cfg(feature = "settings_calib")]
-        MetricId::CalibBatt => (ctx.calibration.battery_calib_const() as i32, 0, ""),
+        MetricId::CalibBatt => (ctx.calibration().battery_calib_const() as i32, 0, ""),
         #[cfg(feature = "settings_calib")]
-        MetricId::CalibLna => (ctx.calibration.lna_calib() as i32, 0, ""),
+        MetricId::CalibLna => (ctx.calibration().lna_calib() as i32, 0, ""),
         #[cfg(feature = "settings_calib")]
-        MetricId::CalibMix => (ctx.calibration.mix_calib() as i32, 0, ""),
+        MetricId::CalibMix => (ctx.calibration().mix_calib() as i32, 0, ""),
         #[cfg(feature = "settings_calib")]
-        MetricId::CalibVol => (ctx.calibration.volume_gain() as i32, 0, ""),
+        MetricId::CalibVol => (ctx.calibration().volume_gain() as i32, 0, ""),
 
         #[cfg(feature = "settings_debug")]
         MetricId::DebugStackMargin => (

@@ -40,13 +40,14 @@ pub struct SysContext<'a, 'hw> {
     pub power: &'a mut SystemPower,
     pub config: &'a mut crate::config::MasterConfig,
     pub storage: &'a mut SystemStorage<'hw>,
-    pub calibration: &'a SystemCalibration,
-    pub passcode: &'a mut crate::security::PasscodeState,
-    #[cfg(feature = "uart")]
-    pub uart: &'a mut drivers::uart::HardwareUart,
-    pub audio: Option<&'a mut drivers::audio::AudioAmplifier>,
+    pub audio: &'a mut drivers::audio::AudioAmplifier,
+    pub ipc: &'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
     pub display: Option<&'a mut display::DisplayHardware<'a, 'hw>>,
-    pub ipc: Option<&'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>>,
+    #[cfg(feature = "passcode")]
+    pub passcode: &'a mut crate::security::PasscodeState,
+    #[cfg(all(test, feature = "uart"))]
+    pub uart: &'a mut drivers::uart::HardwareUart,
+    #[cfg(test)]
     pub usb: Option<&'a mut drivers::usb::UsbDriver>,
 }
 
@@ -67,12 +68,20 @@ fn play_tone_file(
 }
 
 impl<'a, 'hw> SysContext<'a, 'hw> {
+    /// Global factory hardware calibration block.
+    #[inline(always)]
+    pub fn calibration(&self) -> &'static SystemCalibration {
+        unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) }
+    }
+
     /// Check if current session is authorized for given trust scope
+    #[cfg(feature = "passcode")]
     pub fn is_authorized(&mut self, scope: crate::security::TrustScope) -> bool {
         crate::security::check_authorization(self.passcode, self.storage, scope).is_ok()
     }
 
     /// Obtain an AuthToken capability if session is authorized
+    #[cfg(feature = "passcode")]
     pub fn require_auth(
         &mut self,
         scope: crate::security::TrustScope,
@@ -81,6 +90,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     /// Execute a closure requiring privileged authorization by verifying passcode or using existing session authorization
+    #[cfg(feature = "passcode")]
     pub fn with_auth<R, F: FnOnce(&crate::security::AuthToken) -> R>(
         &mut self,
         scope: crate::security::TrustScope,
@@ -97,11 +107,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
 
     /// Send high-level SysEvent IPC request to the microkernel/OS dispatcher
     pub fn post_event(&mut self, event: kernel::ipc::SysEvent) -> bool {
-        if let Some(ref mut queue) = self.ipc {
-            queue.try_push(event).is_ok()
-        } else {
-            false
-        }
+        self.ipc.try_push(event).is_ok()
     }
 
     /// Check if system supports a specific hardware or subsystem capability token
@@ -272,17 +278,13 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     pub fn set_volume(&mut self, level: u8) {
-        if let Some(ref mut audio) = self.audio {
-            audio.set_volume(level);
-        }
+        self.audio.set_volume(level);
         self.radio.set_volume_level(level);
         self.config.audio.volume = level;
     }
 
     pub fn apply_audio_config(&mut self) {
-        if let Some(ref mut audio) = self.audio {
-            crate::hardware::apply_audio_hardware(&self.config.audio, audio, self.radio);
-        }
+        crate::hardware::apply_audio_hardware(&self.config.audio, self.audio, self.radio);
     }
 
     /// Play single keypress or system feedback beep
@@ -332,20 +334,12 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         inverted: bool,
         partial: bool,
     ) -> i16 {
-        let is_usb = self
-            .usb
-            .as_ref()
-            .map(|u| u.is_connected())
-            .unwrap_or_else(|| {
-                #[cfg(feature = "usb")]
-                {
-                    drivers::usb::is_active_usb_connected()
-                }
-                #[cfg(not(feature = "usb"))]
-                {
-                    false
-                }
-            });
+        #[cfg(test)]
+        let is_usb = self.usb.as_ref().is_some_and(|u| u.is_connected());
+        #[cfg(all(not(test), feature = "usb"))]
+        let is_usb = drivers::usb::is_active_usb_connected();
+        #[cfg(all(not(test), not(feature = "usb")))]
+        let is_usb = false;
 
         let pct = self.power.battery_percentage();
         let is_charging = self.power.is_charging();

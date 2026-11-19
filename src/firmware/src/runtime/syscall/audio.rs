@@ -47,12 +47,10 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             #[cfg(test)]
             if let Some(ctx) = active_ctx_opt() {
-                if let Some(ref mut aud) = ctx.audio {
-                    if on {
-                        aud.enable();
-                    } else {
-                        aud.disable();
-                    }
+                if on {
+                    ctx.audio.enable();
+                } else {
+                    ctx.audio.disable();
                 }
             }
             0
@@ -80,9 +78,7 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             #[cfg(test)]
             {
-                active_ctx_opt().map_or(0, |ctx| {
-                    ctx.audio.as_ref().is_some_and(|a| a.is_active()) as usize
-                })
+                active_ctx_opt().map_or(0, |ctx| ctx.audio.is_active() as usize)
             }
         }
         aud_ctl::MIC_GAIN => {

@@ -355,7 +355,7 @@ pub fn handle_confirm_result(
             let keep = tag == TAG_FORMAT_KEEP_CALIB;
             if crate::services::calibration::reformat_storage(
                 ctx.storage,
-                ctx.calibration.raw_bytes(),
+                ctx.calibration().raw_bytes(),
                 keep,
             )
             .is_ok()
