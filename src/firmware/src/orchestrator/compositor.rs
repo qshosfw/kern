@@ -309,24 +309,24 @@ impl SystemAlert {
 }
 
 struct AlertQueue {
+    head: u8,
+    len: u8,
     slots: [SystemAlert; MAX_SYSTEM_ALERTS],
-    head: usize,
-    len: usize,
 }
 
 impl AlertQueue {
     const fn new() -> Self {
         Self {
-            slots: [const { SystemAlert::empty() }; MAX_SYSTEM_ALERTS],
             head: 0,
             len: 0,
+            slots: [const { SystemAlert::empty() }; MAX_SYSTEM_ALERTS],
         }
     }
 
     fn push_alert(&mut self, title: &str, message: &str) {
         let mut target = None;
-        for i in 0..self.len {
-            let idx = (self.head + i) & (MAX_SYSTEM_ALERTS - 1);
+        for i in 0..self.len as usize {
+            let idx = (self.head as usize + i) & (MAX_SYSTEM_ALERTS - 1);
             if self.slots[idx].title.as_str() == title {
                 target = Some(idx);
                 break;
@@ -334,13 +334,13 @@ impl AlertQueue {
         }
         let idx = match target {
             Some(i) => i,
-            None if self.len == MAX_SYSTEM_ALERTS => {
-                let i = self.head;
-                self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
+            None if self.len as usize == MAX_SYSTEM_ALERTS => {
+                let i = self.head as usize;
+                self.head = ((self.head as usize + 1) & (MAX_SYSTEM_ALERTS - 1)) as u8;
                 i
             }
             None => {
-                let i = (self.head + self.len) & (MAX_SYSTEM_ALERTS - 1);
+                let i = (self.head as usize + self.len as usize) & (MAX_SYSTEM_ALERTS - 1);
                 self.len += 1;
                 i
             }
@@ -355,13 +355,13 @@ impl AlertQueue {
         if self.len == 0 {
             None
         } else {
-            Some(&self.slots[self.head])
+            Some(&self.slots[self.head as usize])
         }
     }
 
     fn discard_head(&mut self) {
         if self.len > 0 {
-            self.head = (self.head + 1) & (MAX_SYSTEM_ALERTS - 1);
+            self.head = ((self.head as usize + 1) & (MAX_SYSTEM_ALERTS - 1)) as u8;
             self.len -= 1;
         }
     }

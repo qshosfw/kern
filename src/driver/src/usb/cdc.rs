@@ -9,7 +9,7 @@ pub const CDC_REQ_SET_LINE_CODING: u8 = 0x20;
 pub const CDC_REQ_GET_LINE_CODING: u8 = 0x21;
 pub const CDC_REQ_SET_CONTROL_LINE_STATE: u8 = 0x22;
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct LineCoding {
     pub baudrate: u32,
@@ -31,13 +31,14 @@ impl LineCoding {
 
 pub const CDC_RX_BUF_SIZE: usize = 128;
 
+#[repr(C)]
 pub struct CdcEngine {
+    line_coding: LineCoding,
     dtr: bool,
     rts: bool,
     tx_ready: bool,
-    line_coding: LineCoding,
-    rx_head: usize,
-    rx_tail: usize,
+    rx_head: u8,
+    rx_tail: u8,
     rx_buf: [u8; CDC_RX_BUF_SIZE],
 }
 
@@ -64,9 +65,9 @@ impl CdcEngine {
 
     pub fn push_rx(&mut self, data: &[u8]) {
         for &b in data {
-            let next_head = (self.rx_head + 1) & (CDC_RX_BUF_SIZE - 1);
+            let next_head = self.rx_head.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
             if next_head != self.rx_tail {
-                self.rx_buf[self.rx_head] = b;
+                self.rx_buf[self.rx_head as usize] = b;
                 self.rx_head = next_head;
             }
         }
@@ -75,19 +76,15 @@ impl CdcEngine {
     pub fn pop_rx(&mut self, buf: &mut [u8]) -> usize {
         let mut count = 0;
         while self.rx_head != self.rx_tail && count < buf.len() {
-            buf[count] = self.rx_buf[self.rx_tail];
-            self.rx_tail = (self.rx_tail + 1) & (CDC_RX_BUF_SIZE - 1);
+            buf[count] = self.rx_buf[self.rx_tail as usize];
+            self.rx_tail = self.rx_tail.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
             count += 1;
         }
         count
     }
 
     pub fn rx_available(&self) -> usize {
-        if self.rx_head >= self.rx_tail {
-            self.rx_head - self.rx_tail
-        } else {
-            CDC_RX_BUF_SIZE - (self.rx_tail - self.rx_head)
-        }
+        self.rx_head.wrapping_sub(self.rx_tail) as usize & (CDC_RX_BUF_SIZE - 1)
     }
 
     #[inline(always)]

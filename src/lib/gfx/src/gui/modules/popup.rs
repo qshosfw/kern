@@ -14,12 +14,12 @@ use crate::widgets;
 pub struct PopupModel {
     pub hold: crate::gui::animation::HoldProgress,
     pub anim: crate::gui::animation::TransitionProgress,
-    pub scroll_offset: usize,
+    pub scroll_offset: u8,
     pub repeater: crate::gui::repeater::KeyRepeater,
     pub confirm_label: Option<&'static str>,
     pub cancel_label: Option<&'static str>,
     pub custom_title: String<24>,
-    pub custom_msg: String<192>,
+    pub custom_msg: String<168>,
 }
 
 impl PopupModel {
@@ -102,7 +102,7 @@ fn scroll_popup(model: &mut PopupModel, code: KeyCode) -> bool {
             true
         }
         KeyCode::Down | KeyCode::Key8 => {
-            if model.scroll_offset < popup_max_scroll(model) {
+            if (model.scroll_offset as usize) < popup_max_scroll(model) {
                 model.scroll_offset += 1;
             }
             true
@@ -150,7 +150,7 @@ impl View<PopupModel> for PopupView {
         let start_y = sheet_y + 14;
 
         let max_scroll = total_lines.saturating_sub(visible_lines);
-        let scroll_offset = model.scroll_offset.min(max_scroll);
+        let scroll_offset = (model.scroll_offset as usize).min(max_scroll);
 
         if anim_p >= 8 {
             for (idx, line) in text::lines(msg).enumerate() {

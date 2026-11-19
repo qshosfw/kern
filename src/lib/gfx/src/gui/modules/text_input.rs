@@ -399,7 +399,8 @@ impl View<TextInputModel> for TextInputView {
                         if model.last_key.is_some() {
                             Self::confirm_current_char(model);
                         } else if !model.buffer.is_empty() {
-                            model.buffer.pop();
+                            // SAFETY: `model.buffer` only ever contains 7-bit ASCII bytes.
+                            let _ = unsafe { model.buffer.as_mut_vec().pop() };
                         } else {
                             // Buffer is empty: short tap on Exit cancels immediately ("Back")!
                             cancel_input(model);
@@ -435,7 +436,8 @@ impl View<TextInputModel> for TextInputView {
                             model.press_count = 0;
                         }
                         let char_idx = model.press_count;
-                        model.buffer.pop();
+                        // SAFETY: `model.buffer` only ever contains 7-bit ASCII bytes.
+                        let _ = unsafe { model.buffer.as_mut_vec().pop() };
                         push_ascii(&mut model.buffer, chars[char_idx]);
                     } else {
                         // First tap on a new key

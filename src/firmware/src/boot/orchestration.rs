@@ -152,14 +152,11 @@ pub fn run_boot_splash(
 ) {
     let disp_cfg = &master_cfg.display;
     let audio_cfg = &master_cfg.audio;
-    let target_splash_ms: u32 = match disp_cfg.boot_splash_duration {
-        0 => 0,
-        1 => 500,
-        2 => 1000,
-        3 => 2000,
-        4 => 3000,
-        _ => 1000,
-    };
+    const SPLASH_DUR_MS: [u16; 5] = [0, 500, 1000, 2000, 3000];
+    let target_splash_ms: u32 = SPLASH_DUR_MS
+        .get(disp_cfg.boot_splash_duration as usize)
+        .copied()
+        .unwrap_or(1000) as u32;
     let show_splash = target_splash_ms > 0 && disp_cfg.boot_splash_mode != 0;
     let jingle_buf: &mut [crate::services::melody::ToneNote;
              crate::services::melody::MAX_MELODY_NOTES] = unsafe {
@@ -188,6 +185,7 @@ pub fn run_boot_splash(
         FRAMES
     };
 
+    #[inline(never)]
     fn render_splash_frame(
         canvas: &mut gfx::Canvas,
         lcd: &mut drivers::st7565::St7565,

@@ -58,10 +58,11 @@ pub struct UsbDriver {
     battery_voltage_mv: u16,
 
     ep0_transfer: Option<Ep0MultiPacket>,
-    product_name: [u8; 32],
 
     #[cfg(feature = "usb_cdc")]
     cdc: CdcEngine,
+
+    product_name: [u8; 32],
 
     #[cfg(feature = "usb_msc")]
     msc: MscEngine,
