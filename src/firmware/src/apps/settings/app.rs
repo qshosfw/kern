@@ -457,7 +457,7 @@ impl SettingsApp {
     }
 }
 
-impl App<SysContext<'_, '_>> for SettingsApp {
+impl App<SysContext<'_, '_>, Canvas> for SettingsApp {
     #[inline(never)]
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.begin_start();

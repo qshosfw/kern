@@ -93,7 +93,7 @@ boot_jingle = []
 extra_rogers = []
 flashlight = []
 animations = []
-grayscale = ["kernel/grayscale", "drivers/grayscale", "gfx/grayscale"]
+grayscale = ["drivers/grayscale", "gfx/grayscale"]
 dynamic_spi = []
 
 # 📻 Hardware Target Board Profiles (base default supports UV-K1 and UV-K5v3 identically)

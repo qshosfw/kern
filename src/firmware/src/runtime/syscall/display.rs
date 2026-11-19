@@ -14,7 +14,7 @@ pub fn draw_icon(x: i16, y: i16, icon_id: u8, color: u8) {
     let canvas = active_canvas_mut();
     if let Some(bits) = system_icon_8(icon_id) {
         gfx::icons::draw_icon_8(canvas, x, y, bits, col);
-    } else if let Some(icon) = kernel::canvas::Icon::from_u8(icon_id) {
+    } else if let Some(icon) = kernel::ui::Icon::from_u8(icon_id) {
         gfx::icons::draw_icon(canvas, x, y, icon, col);
     }
 }

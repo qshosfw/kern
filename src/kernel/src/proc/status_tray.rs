@@ -4,8 +4,8 @@
 //! displayed on the OS status bar for foreground apps, background daemons,
 //! and system services.
 
-use crate::canvas::{Icon, StatusGlyph};
 use crate::proc::Pid;
+use crate::ui::{Icon, StatusGlyph};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TraySlot {

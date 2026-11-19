@@ -5,13 +5,14 @@ edition = "2024"
 description = "Graphics library and font rendering for kern firmware"
 
 [dependencies]
+kern-platform-traits = { path = "../../platform/traits" }
 kernel = { path = "../../kernel" }
 utils = { path = "../utils" }
 heapless = { workspace = true }
 
 [features]
 default = []
-grayscale = ["kernel/grayscale"]
+grayscale = []
 inverted_status = []
 passcode = []
 

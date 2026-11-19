@@ -177,7 +177,7 @@ fn handle_vfo_key_press(ctx: &mut SysContext, code: KeyCode) -> EventResult {
     }
 }
 
-impl<'a> App<crate::services::SysContext<'a, '_>> for VfoApp {
+impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for VfoApp {
     fn on_start(&mut self, ctx: &mut SysContext) {
         let slot = ctx.active_vfo();
         ctx.select_vfo(slot);

@@ -1,8 +1,8 @@
 use bsp::board::{Py32OutputPin, Py32Spi1};
 use bsp::pins::{LCD_A0, LCD_CS};
 use core::marker::PhantomData;
+use kern_platform_traits::display::PagedFramebuffer;
 use kern_platform_traits::spi::SpiDevice;
-use kernel::canvas::Canvas;
 
 pub const LCD_WIDTH: usize = 128;
 pub const LCD_HEIGHT: usize = 64;
@@ -138,7 +138,7 @@ impl<'a> St7565<'a> {
     /// Transmit canvas data to ST7565 LCD over hardware SPI.
     /// In grayscale mode with temporal FRC enabled and motion_bypass false,
     /// transmits the spatio-temporal phase slice corresponding to `self.subframe`.
-    pub fn blit(&mut self, canvas: &mut Canvas) {
+    pub fn blit<F: PagedFramebuffer>(&mut self, canvas: &mut F) {
         let subframe = self.subframe;
         self.blit_subframe(canvas, subframe);
         #[cfg(feature = "grayscale")]
@@ -152,8 +152,13 @@ impl<'a> St7565<'a> {
     }
 
     /// Blit an explicit subframe slice (0..3) to the ST7565 LCD.
-    pub fn blit_subframe(&mut self, canvas: &mut Canvas, #[allow(unused_variables)] subframe: u8) {
-        if canvas.dirty == 0 {
+    pub fn blit_subframe<F: PagedFramebuffer>(
+        &mut self,
+        canvas: &mut F,
+        #[allow(unused_variables)] subframe: u8,
+    ) {
+        let dirty = canvas.dirty_mask();
+        if dirty == 0 {
             return;
         }
 
@@ -161,7 +166,7 @@ impl<'a> St7565<'a> {
         self.write_cmd(0x40); // Set start line 0
 
         for page in 0..8 {
-            if (canvas.dirty & (1 << page)) != 0 {
+            if (dirty & (1 << page)) != 0 {
                 // Select Page and Column (Offset 4 for K1 ST7565 panel)
                 LCD_A0.set_low();
                 const COL_OFFSET: u8 = 4;
@@ -174,27 +179,27 @@ impl<'a> St7565<'a> {
                 #[cfg(feature = "grayscale")]
                 if self.shading_mode == 0 {
                     for col in 0..LCD_WIDTH {
-                        let byte = canvas.get_subframe_byte(page, col, subframe);
+                        let byte = canvas.subframe_byte(page, col, subframe);
                         Py32Spi1.write_byte(byte);
                     }
                 } else if self.shading_mode == 1 {
                     for col in 0..LCD_WIDTH {
-                        let byte = canvas.get_dither_byte(page, col);
+                        let byte = canvas.dither_byte(page, col);
                         Py32Spi1.write_byte(byte);
                     }
                 } else {
-                    for &byte in &canvas.buffer[page] {
+                    for &byte in canvas.page_bytes(page) {
                         Py32Spi1.write_byte(byte);
                     }
                 }
                 #[cfg(not(feature = "grayscale"))]
-                for &byte in &canvas.buffer[page] {
+                for &byte in canvas.page_bytes(page) {
                     Py32Spi1.write_byte(byte);
                 }
             }
         }
 
-        canvas.dirty = 0;
+        canvas.clear_dirty();
         self.end_transfer();
     }
 }

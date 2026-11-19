@@ -18,7 +18,6 @@
 pub mod abi;
 pub mod app;
 pub mod boot;
-pub mod canvas;
 pub mod caps;
 pub mod dev;
 pub mod error;
@@ -35,4 +34,5 @@ pub mod security;
 pub mod service;
 pub mod sys;
 pub mod tag;
+pub mod ui;
 pub mod wire;

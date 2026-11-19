@@ -91,7 +91,7 @@ pub const ICON_FOLDER: &[u8; 8] = &SYSTEM_ICONS_8[0];
 pub const ICON_CH: &[u8; 8] = &SYSTEM_ICONS_8[1];
 pub const ICON_VFO: &[u8; 8] = &SYSTEM_ICONS_8[2];
 
-pub use kernel::canvas::{Icon, StatusGlyph};
+pub use kernel::ui::{Icon, StatusGlyph};
 
 pub fn draw_status_glyph(canvas: &mut Canvas, x: i16, y: i16, glyph: &StatusGlyph, color: Color) {
     match glyph {

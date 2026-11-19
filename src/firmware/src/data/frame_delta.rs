@@ -3,7 +3,7 @@
 //! Provides zero-allocation display frame differencing (delta encoding) and RLE
 //! compression interfaces for remote screen-sharing, mirror streaming, and screenshot archiving.
 
-use kernel::canvas::{Canvas, LCD_WIDTH};
+use gfx::{Canvas, LCD_WIDTH};
 
 /// Header for a frame difference packet in a screen-sharing stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -60,8 +60,8 @@ pub(crate) struct NativeExecSlot {
     pub(crate) caps: CapabilitySet,
     pub(crate) pkg_path: [u8; 31],
     pub(crate) overlay: PagedOverlay,
-    pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
-    pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
+    pub(crate) status_bar_left_icons: [kernel::ui::StatusGlyph; 4],
+    pub(crate) status_bar_center_icons: [kernel::ui::StatusGlyph; 4],
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
 }
 
@@ -851,13 +851,13 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
 pub(crate) fn decode_status_glyph(
     sb: &kernel::proc::abi::KrxStatusBar,
     id: u8,
-) -> Option<kernel::canvas::StatusGlyph> {
+) -> Option<kernel::ui::StatusGlyph> {
     if id == kernel::proc::abi::KRX_ICON_CUSTOM_0 {
-        Some(kernel::canvas::StatusGlyph::Custom(sb.custom_icon_0))
+        Some(kernel::ui::StatusGlyph::Custom(sb.custom_icon_0))
     } else if id == kernel::proc::abi::KRX_ICON_CUSTOM_1 {
-        Some(kernel::canvas::StatusGlyph::Custom(sb.custom_icon_1))
+        Some(kernel::ui::StatusGlyph::Custom(sb.custom_icon_1))
     } else {
-        kernel::canvas::Icon::from_u8(id).map(kernel::canvas::StatusGlyph::Builtin)
+        kernel::ui::Icon::from_u8(id).map(kernel::ui::StatusGlyph::Builtin)
     }
 }
 
@@ -866,7 +866,7 @@ fn decode_icon_list(
     sb: &kernel::proc::abi::KrxStatusBar,
     icons: &[u8],
     count: u8,
-    out: &mut [kernel::canvas::StatusGlyph; 4],
+    out: &mut [kernel::ui::StatusGlyph; 4],
 ) -> u8 {
     let mut n = 0;
     let limit = (count as usize).min(4);

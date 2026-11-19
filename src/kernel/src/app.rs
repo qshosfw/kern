@@ -1,7 +1,7 @@
 //! Declarative modular Application system and generic dependency-injected system context.
 
-use crate::canvas::StatusGlyph;
 use crate::event::Event;
+use crate::ui::StatusGlyph;
 
 /// Static metadata describing an App for the OS registry and compositor.
 #[derive(Debug, Clone, Copy)]
@@ -145,7 +145,7 @@ pub enum ModalResult<'a> {
 }
 
 /// Declarative Application interface for microkernel GUI and foreground modules.
-pub trait App<C> {
+pub trait App<C, Fb> {
     /// Called by the OS when launched into the foreground.
     fn on_start(&mut self, ctx: &mut C);
 
@@ -158,7 +158,7 @@ pub trait App<C> {
     }
 
     /// Called during the OS render loop.
-    fn render(&self, canvas: &mut crate::canvas::Canvas, ctx: &C);
+    fn render(&self, canvas: &mut Fb, ctx: &C);
 
     /// Called when backgrounded or closed.
     fn on_exit(&mut self, ctx: &mut C);

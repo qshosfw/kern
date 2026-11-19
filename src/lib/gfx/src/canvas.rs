@@ -27,93 +27,7 @@ impl Color {
     }
 }
 
-/// Standardized monochromatic icon glyph identifier for UI and status bars.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Icon {
-    Antenna = 0,
-    Lock = 1,
-    Unlock = 2,
-    Speaker = 3,
-    Shield = 4,
-    Keypad = 5,
-    Flashlight = 6,
-    Mesh = 7,
-    Function = 8,
-    Plug = 9,
-    SerialActive = 10,
-    Bolt = 11,
-    Broadcast = 12,
-    Storage = 13,
-    Scan = 14,
-    Beacon = 15,
-    Monitor = 16,
-    Converter = 17,
-    Roger = 18,
-    Beep = 19,
-    NoListen = 20,
-    Moon = 21,
-}
-
-impl Icon {
-    #[inline(always)]
-    pub const fn width(self) -> u8 {
-        match self {
-            Icon::Plug | Icon::SerialActive | Icon::Storage | Icon::NoListen => 7,
-            Icon::Beacon => 6,
-            _ => 5,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn from_u8(val: u8) -> Option<Self> {
-        if val <= 21 {
-            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
-        } else {
-            None
-        }
-    }
-}
-
-/// A status bar glyph: either a standardized built-in icon or a custom 5x5 bitmap.
-#[repr(C, align(4))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StatusGlyph {
-    Builtin(Icon),
-    Custom([u8; 5]),
-}
-
-impl StatusGlyph {
-    #[inline(always)]
-    pub const fn width(&self) -> u8 {
-        match self {
-            StatusGlyph::Builtin(ic) => ic.width(),
-            StatusGlyph::Custom(_) => 5,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn builtin(icon: Icon) -> Self {
-        StatusGlyph::Builtin(icon)
-    }
-
-    #[inline(always)]
-    pub const fn custom(bmp: [u8; 5]) -> Self {
-        StatusGlyph::Custom(bmp)
-    }
-
-    #[inline(always)]
-    pub const fn default_builtin() -> Self {
-        StatusGlyph::Builtin(Icon::Antenna)
-    }
-}
-
-impl From<Icon> for StatusGlyph {
-    #[inline(always)]
-    fn from(icon: Icon) -> Self {
-        StatusGlyph::Builtin(icon)
-    }
-}
+use kern_platform_traits::display::PagedFramebuffer;
 
 #[repr(C, align(4))]
 #[derive(Clone, Copy)]
@@ -771,6 +685,35 @@ fn scroll_plane_horizontal(plane: &mut [[u8; LCD_WIDTH]; 8], dx: i8, fill_byte: 
             &mut row[keep..]
         };
         fill_slice.fill(fill_byte);
+    }
+}
+
+impl PagedFramebuffer for Canvas {
+    #[inline(always)]
+    fn dirty_mask(&self) -> u8 {
+        self.dirty
+    }
+
+    #[inline(always)]
+    fn clear_dirty(&mut self) {
+        self.dirty = 0;
+    }
+
+    #[inline(always)]
+    fn page_bytes(&self, page: usize) -> &[u8; 128] {
+        &self.buffer[page]
+    }
+
+    #[cfg(feature = "grayscale")]
+    #[inline(always)]
+    fn subframe_byte(&self, page: usize, col: usize, subframe: u8) -> u8 {
+        self.get_subframe_byte(page, col, subframe)
+    }
+
+    #[cfg(feature = "grayscale")]
+    #[inline(always)]
+    fn dither_byte(&self, page: usize, col: usize) -> u8 {
+        self.get_dither_byte(page, col)
     }
 }
 

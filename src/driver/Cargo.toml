@@ -34,5 +34,5 @@ usb = []
 usb_cdc = ["usb"]
 usb_msc = ["usb"]
 usb_msc_fat = ["usb_msc"]
-grayscale = ["kernel/grayscale"]
+grayscale = []
 

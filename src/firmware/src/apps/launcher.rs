@@ -402,7 +402,7 @@ impl LauncherApp {
     }
 }
 
-impl<'a> App<crate::services::SysContext<'a, '_>> for LauncherApp {
+impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
     fn on_start(&mut self, ctx: &mut SysContext) {
         self.is_launching = false;
         let entries = load_entries(Some(ctx.storage));

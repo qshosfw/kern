@@ -1,14 +1,16 @@
 #![no_std]
 
-pub use kernel::canvas::{Canvas, Color};
-
 pub mod bmp;
+pub mod canvas;
 pub mod draw;
 pub mod fonts;
 pub mod gui;
 pub mod icons;
 pub mod text;
 pub mod widgets;
+
+pub use canvas::{Canvas, Color, LCD_HEIGHT, LCD_WIDTH};
+pub use kernel::ui::{Icon, StatusGlyph};
 
 #[derive(Debug, Clone, Copy)]
 pub struct GfxGlyph {
