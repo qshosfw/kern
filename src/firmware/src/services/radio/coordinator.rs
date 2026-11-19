@@ -1443,7 +1443,7 @@ impl RadioCoordinator {
             }
         }
 
-        if !carrier && self.carrier_active {
+        if self.carrier_active {
             self.carrier_active = false;
             self.subaudible_matched = false;
             self.ste.reset();

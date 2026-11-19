@@ -32,8 +32,8 @@ pub fn font_from_u8(font_id: u8) -> &'static gfx::GfxFont {
 /// Convert DTMF character to BK4819/BK4829 dual DDS control words.
 #[inline(never)]
 pub fn dtmf_tone_words(digit: u8) -> (u16, u16) {
-    const ROW_WORDS: [u16; 4] = [7196, 7950, 8796, 9715];
-    const COL_WORDS: [u16; 4] = [12482, 13793, 15249, 16860];
+    static ROW_WORDS: [u16; 4] = [7196, 7950, 8796, 9715];
+    static COL_WORDS: [u16; 4] = [12482, 13793, 15249, 16860];
     let norm = if digit >= b'a' && digit <= b'd' {
         digit - (b'a' - b'A')
     } else {

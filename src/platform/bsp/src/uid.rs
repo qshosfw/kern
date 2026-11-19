@@ -143,19 +143,26 @@ pub fn get_mac_tag_str() -> &'static str {
 /// ASCII buffer (13 Crockford Base32 chars + 1 Mod-37 checksum + null).
 #[inline(never)]
 pub fn encode_crockford64(serial: u64) -> [u8; 15] {
-    let mut val = serial;
+    let (mut lo, mut hi) = (serial as u32, (serial >> 32) as u32);
     let mut out = core::mem::MaybeUninit::<[u8; 15]>::uninit();
     let ptr = out.as_mut_ptr().cast::<u8>();
 
-    // Encode 64 bits into 13 characters (first 32 bytes of CHECKSUM_ALPHABET == Crockford Base32)
+    // Encode 64 bits into 13 characters using 32-bit shifts (avoids __aeabi_llsr on Cortex-M0+).
     for i in (0..13).rev() {
-        unsafe { *ptr.add(i) = *CHECKSUM_ALPHABET.get_unchecked((val & 0x1F) as usize) };
-        val >>= 5;
+        unsafe { *ptr.add(i) = *CHECKSUM_ALPHABET.get_unchecked((lo & 0x1F) as usize) };
+        lo = (lo >> 5) | (hi << 27);
+        hi >>= 5;
     }
 
+    let (s_lo, s_hi) = (serial as u32, (serial >> 32) as u32);
     let mut rem = 0u16;
-    for shift in [48u8, 32, 16, 0] {
-        rem = rem * 9 + utils::math::div37_u16((serial >> shift) as u16).1 as u16;
+    for limb in [
+        (s_hi >> 16) as u16,
+        s_hi as u16,
+        (s_lo >> 16) as u16,
+        s_lo as u16,
+    ] {
+        rem = rem * 9 + utils::math::div37_u16(limb).1 as u16;
     }
     let mod37 = utils::math::div37_u16(rem).1 as usize;
     unsafe {

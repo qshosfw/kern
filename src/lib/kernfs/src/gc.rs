@@ -199,13 +199,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         ino: u16,
         page_idx: u16,
         old_idx_p: u16,
-        kind: u8,
+        allow_gc: bool,
         slot: usize,
         new_ptr: u16,
         obs: &mut [u16; 3],
         obs_n: &mut usize,
     ) -> Result<u16, FsError> {
-        let new_p = self.alloc_page(true)?;
+        let new_p = self.alloc_page(allow_gc)?;
         self.load_page_or_zero(old_idx_p)?;
         if old_idx_p != 0 && *obs_n < obs.len() {
             obs[*obs_n] = old_idx_p;
@@ -217,7 +217,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             *obs_n += 1;
         }
         write_idx_u16(&mut self.page_buf, slot, new_ptr);
-        self.program_page_buf(new_p, ino, page_idx, kind)
+        self.program_page_buf(new_p, ino, page_idx, TAG_KIND_INDEX1)
     }
 
     #[inline(never)]
@@ -268,20 +268,26 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             return Ok(());
         }
 
-        let mut obs = [phys, 0];
-        let mut obs_n = 1usize;
+        let mut obs = [0u16; 3];
+        let mut obs_n = 0usize;
         if kind == TAG_KIND_INDEX1 || inode.depth == DEPTH_DIRECT {
             inode.set_l1_page(idx, new_p);
+            obs[0] = phys;
+            obs_n = 1;
         } else {
             let l2_idx = idx >> 7;
             let old_l1 = inode.l1_page(l2_idx);
-            let new_l1 = self.alloc_page(false)?;
-            self.load_page(old_l1)?;
-            write_idx_u16(&mut self.page_buf, idx & 0x7F, new_p);
-            self.program_page_buf(new_l1, inode.ino, l2_idx as u16, TAG_KIND_INDEX1)?;
+            let new_l1 = self.cow_set_idx_slot(
+                inode.ino,
+                l2_idx as u16,
+                old_l1,
+                false,
+                idx & 0x7F,
+                new_p,
+                &mut obs,
+                &mut obs_n,
+            )?;
             inode.set_l1_page(l2_idx, new_l1);
-            obs[1] = old_l1;
-            obs_n = 2;
         }
         if self.cur_inode.ino == inode.ino {
             self.cur_inode.inline_data = inode.inline_data;
@@ -418,7 +424,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                     ino,
                     l2_idx as u16,
                     old_l1,
-                    TAG_KIND_INDEX1,
+                    true,
                     l1_idx,
                     new_data_p,
                     &mut obs,
