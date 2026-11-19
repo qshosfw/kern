@@ -129,10 +129,12 @@ pub fn write_classified_file(
     path: &str,
     data: &[u8],
 ) -> Result<(), crate::services::storage::StorageError> {
-    let sec = FileSecurityLevel::classify_path(path);
     filesystem.write_file(path, data)?;
     #[cfg(feature = "secure_fs")]
-    if sec.encrypts_at_rest() && data.len() <= 512 && filesystem.is_session_unlocked() {
+    if FileSecurityLevel::classify_path(path).encrypts_at_rest()
+        && data.len() <= 512
+        && filesystem.is_session_unlocked()
+    {
         let mut attrs = filesystem
             .get_attributes(path)
             .unwrap_or(crate::services::storage::FileAttributes { permission: 0 });
@@ -142,7 +144,6 @@ pub fn write_classified_file(
             filesystem.write_file(path, data)?;
         }
     }
-    let _ = sec;
     Ok(())
 }
 
@@ -153,32 +154,41 @@ pub fn format_storage_alert_message(
 ) -> Option<&'static str> {
     out.clear();
     let mut num_buf = [0u8; 12];
-    match status {
-        StorageSecurityStatus::LockedByPasscode { encrypted_files } => {
-            if encrypted_files > 0 {
-                let _ = out.push_str(gfx::text::format_u32(encrypted_files as u32, &mut num_buf));
-                let _ = out.push_str(" encrypted file");
-                if encrypted_files != 1 {
-                    let _ = out.push_str("s");
-                }
-                let _ = out.push_str(", passcode unlock disabled.");
+    let (title, count, mid, tail) = match status {
+        StorageSecurityStatus::LockedByPasscode { encrypted_files: 0 } => (
+            "Storage Protected",
+            0,
+            "",
+            "Passcode set; Flash a Passcode build to unlock.",
+        ),
+        StorageSecurityStatus::LockedByPasscode { encrypted_files } => (
+            "Storage Protected",
+            encrypted_files,
+            if encrypted_files == 1 {
+                " encrypted file"
             } else {
-                let _ = out.push_str("Passcode set; Flash a Passcode build to unlock.");
-            }
-            Some("Storage Protected")
-        }
-        StorageSecurityStatus::EncryptedWithoutEngine { encrypted_files } => {
-            let _ = out.push_str(gfx::text::format_u32(encrypted_files as u32, &mut num_buf));
-            let _ = out.push_str(if encrypted_files == 1 {
+                " encrypted files"
+            },
+            ", passcode unlock disabled.",
+        ),
+        StorageSecurityStatus::EncryptedWithoutEngine { encrypted_files } => (
+            "Encrypted Storage",
+            encrypted_files,
+            if encrypted_files == 1 {
                 " file is"
             } else {
                 " files are"
-            });
-            let _ = out.push_str(" encrypted; Secure Storage disabled.");
-            Some("Encrypted Storage")
-        }
-        _ => None,
+            },
+            " encrypted; Secure Storage disabled.",
+        ),
+        _ => return None,
+    };
+    if count > 0 {
+        let _ = out.push_str(gfx::text::format_u32(count as u32, &mut num_buf));
     }
+    let _ = out.push_str(mid);
+    let _ = out.push_str(tail);
+    Some(title)
 }
 
 #[cfg(not(feature = "passcode"))]

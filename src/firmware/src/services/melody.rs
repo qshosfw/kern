@@ -77,7 +77,7 @@ pub fn load_roger_notes(
     if n > 0 {
         return n;
     }
-    fill_notes(ROGER_CLASSIC_FALLBACK, out)
+    fill_notes(pool_slice(RANGE_ROGER_CLASSIC), out)
 }
 
 /// Load jingle melody notes into `out` from storage path, or fallback to selected preset.
@@ -189,29 +189,29 @@ pub struct MelodyEngine;
 impl MelodyEngine {
     /// Return the const note slice for a built-in beep preset.
     pub fn beep_notes(beep: BeepType) -> &'static [ToneNote] {
-        match beep {
-            BeepType::Off => &[],
-            BeepType::Tone | BeepType::Custom => BEEP_TONE,
-            BeepType::Click => BEEP_CLICK,
-            BeepType::Double => BEEP_DOUBLE,
-            BeepType::Warning => BEEP_WARNING,
-            BeepType::Scroll => BEEP_SCROLL,
-        }
+        pool_slice(BEEP_RANGES[beep as usize])
     }
 
     /// Return the const note slice for a dialog/notification sound.
     pub fn dialog_notes(sound: DialogSoundType) -> &'static [ToneNote] {
-        match sound {
-            DialogSoundType::Lock => DIALOG_LOCK,
-            DialogSoundType::Unlock => DIALOG_UNLOCK,
-            DialogSoundType::Prompt => DIALOG_PROMPT,
-            DialogSoundType::Confirm => DIALOG_CONFIRM,
-            DialogSoundType::Success => DIALOG_SUCCESS,
-            DialogSoundType::Warning => DIALOG_WARNING,
-            DialogSoundType::Error => DIALOG_ERROR,
-            DialogSoundType::Charging => CHIME_CHARGING,
-            DialogSoundType::UsbConnect => CHIME_USB_CONNECT,
-            DialogSoundType::UsbDisconnect => CHIME_USB_DISCONNECT,
+        pool_slice(DIALOG_RANGES[sound as usize])
+    }
+
+    /// Return the const note slice for a built-in roger preset.
+    pub fn roger_notes(roger: RogerType) -> &'static [ToneNote] {
+        match roger {
+            RogerType::Off => &[],
+            RogerType::Tiny => pool_slice(RANGE_ROGER_TINY),
+            #[cfg(feature = "extra_rogers")]
+            other => {
+                let idx = (other as usize).saturating_sub(3);
+                EXTRA_ROGER_NOTES
+                    .get(idx)
+                    .copied()
+                    .unwrap_or_else(|| pool_slice(RANGE_ROGER_CLASSIC))
+            }
+            #[cfg(not(feature = "extra_rogers"))]
+            _ => pool_slice(RANGE_ROGER_CLASSIC),
         }
     }
 
@@ -225,7 +225,7 @@ impl MelodyEngine {
             BootJingleType::Chirp => JINGLE_CHIRP,
             #[cfg(feature = "boot_jingle")]
             BootJingleType::GameBoy => JINGLE_GAMEBOY,
-            _ => JINGLE_CHIME,
+            _ => pool_slice(RANGE_JINGLE_CHIME),
         }
     }
 }

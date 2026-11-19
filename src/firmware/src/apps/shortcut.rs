@@ -82,7 +82,11 @@ impl Shortcut {
             Shortcut::PlayBeep {
                 freq_hz,
                 duration_ms,
-            } => (16, ((freq_hz / 10) << 6) | ((duration_ms / 10).min(63))),
+            } => (
+                16,
+                (utils::math::div10_u16(freq_hz).0 << 6)
+                    | utils::math::div10_u16(duration_ms).0.min(63),
+            ),
             Shortcut::CloseApp => (17, 0),
         }
     }

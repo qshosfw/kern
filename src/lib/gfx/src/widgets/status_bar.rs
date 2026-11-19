@@ -5,24 +5,13 @@ pub const STATUS_ITEM_SPACING: i16 = 2;
 
 /// Draw DeltaFW-style inverted F-key badge (5x5 pixels with outer border and inverted 'F' inside)
 pub fn draw_f_key(canvas: &mut Canvas, x: i16, y: i16) {
-    if x < 0 || y < 0 || x + 5 > 128 {
+    if x < 0 || y != 0 || x + 5 > 128 {
         return;
     }
+    const F_KEY_COLS: [u8; 5] = [0x1F, 0x11, 0x19, 0x1D, 0x1F];
     let ux = x as usize;
-    if y == 0 {
-        const F_KEY_COLS: [u8; 5] = [0x1F, 0x11, 0x19, 0x1D, 0x1F];
-        let mut i = 0usize;
-        while i < 5 {
-            canvas.buffer[0][ux + i] |= F_KEY_COLS[i];
-            i += 1;
-        }
-    } else {
-        let ux = x as u8;
-        let uy = y as u8;
-        canvas.fill_rect(ux, uy, 5, 5, Color::Fill);
-        canvas.draw_horizontal_line(ux + 1, uy + 1, 3, Color::Clear);
-        canvas.draw_vertical_line(ux + 1, uy + 1, 3, Color::Clear);
-        canvas.draw_horizontal_line(ux + 1, uy + 2, 2, Color::Clear);
+    for i in 0..5 {
+        canvas.buffer[0][ux + i] |= F_KEY_COLS[i];
     }
 }
 

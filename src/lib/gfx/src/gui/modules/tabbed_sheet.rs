@@ -244,6 +244,7 @@ impl TabbedSheet {
     }
 
     /// Zero-alloc variant for NUL-delimited packed tab titles (e.g. C-ABI KRX modules).
+    #[inline(never)]
     pub fn render_chrome_packed(
         canvas: &mut Canvas,
         config: &TabbedSheetConfig,
@@ -261,7 +262,7 @@ impl TabbedSheet {
         Self::render_chrome_impl(canvas, config, &state, TabTitles::Packed(packed_titles));
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn render_chrome_impl(
         canvas: &mut Canvas,
         config: &TabbedSheetConfig,

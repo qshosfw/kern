@@ -46,28 +46,26 @@ impl RadioState {
     }
 }
 
+#[inline(never)]
+fn play_preset_notes<State>(
+    radio: &mut drivers::bk4829::Bk4829<'_, State>,
+    notes: &[drivers::audio::ToneNote],
+) {
+    if !notes.is_empty() {
+        drivers::bk4829::Bk4829::play_tone_sequence(radio, notes);
+    }
+}
+
 impl<'a, State> RadioMelodyExt for drivers::bk4829::Bk4829<'a, State> {
     fn play_beep(&mut self, beep: BeepType) {
-        let notes = MelodyEngine::beep_notes(beep);
-        if !notes.is_empty() {
-            drivers::bk4829::Bk4829::play_tone_sequence(self, notes);
-        }
+        play_preset_notes(self, MelodyEngine::beep_notes(beep));
     }
 
     fn play_roger(&mut self, roger: RogerType) {
-        if roger != RogerType::Off {
-            let idx = (roger as usize).saturating_sub(1);
-            let notes = crate::services::melody::ROGER_DEFS
-                .get(idx)
-                .map_or(crate::services::melody::ROGER_CLASSIC_FALLBACK, |d| d.notes);
-            drivers::bk4829::Bk4829::play_tone_sequence(self, notes);
-        }
+        play_preset_notes(self, MelodyEngine::roger_notes(roger));
     }
 
     fn play_dialog_sound(&mut self, sound: DialogSoundType) {
-        let notes = MelodyEngine::dialog_notes(sound);
-        if !notes.is_empty() {
-            drivers::bk4829::Bk4829::play_tone_sequence(self, notes);
-        }
+        play_preset_notes(self, MelodyEngine::dialog_notes(sound));
     }
 }

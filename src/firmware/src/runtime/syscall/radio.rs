@@ -96,7 +96,13 @@ fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
 }
 
 #[inline(never)]
-unsafe fn dispatch_rf_vfo(sub: u8, a1: usize, a2: usize) -> usize {
+unsafe fn dispatch_rf_vfo(
+    coord: &mut RadioCoordinator,
+    radio: &mut Bk4829<'_, Disabled>,
+    sub: u8,
+    a1: usize,
+    a2: usize,
+) -> usize {
     use kernel::abi::sub::rf_vfo;
     match sub {
         rf_vfo::GET_CFG => {
@@ -107,7 +113,7 @@ unsafe fn dispatch_rf_vfo(sub: u8, a1: usize, a2: usize) -> usize {
             if out.is_null() {
                 return 1;
             }
-            let ch = crate::radio_state_ref().coord.vfo_channel(vfo);
+            let ch = coord.vfo_channel(vfo);
             let (tx_shift, tx_offset_hz) = match ch.tx_shift {
                 RepeaterShift::Simplex => (0, 0),
                 RepeaterShift::Positive(f) => (1, f.raw()),
@@ -135,33 +141,29 @@ unsafe fn dispatch_rf_vfo(sub: u8, a1: usize, a2: usize) -> usize {
                 return 1;
             };
             let cfg = unsafe { &*cfg_ptr };
-            with_radio(1, |coord, radio| {
-                let step = StepSetting::from_hz_x10(utils::math::div10_u32(cfg.step_hz).0 as u16);
-                let needs_cfg = !coord.is_transmitting && coord.listening_vfo == vfo;
-                let ch = coord.vfo_channel_mut(vfo);
-                ch.rx_freq = utils::units::Frequency::new(cfg.rx_freq_hz);
-                let offset = utils::units::Frequency::new(cfg.tx_offset_hz);
-                ch.tx_shift = match cfg.tx_shift {
-                    1 => RepeaterShift::Positive(offset),
-                    2 => RepeaterShift::Negative(offset),
-                    _ => RepeaterShift::Simplex,
-                };
-                ch.step = step;
-                ch.rx_subaudible =
-                    decode_subaudible(cfg.rx_subaudible.kind, cfg.rx_subaudible.value);
-                ch.tx_subaudible =
-                    decode_subaudible(cfg.tx_subaudible.kind, cfg.tx_subaudible.value);
-                ch.modulation = ModulationMode::from_u8(cfg.modulation);
-                ch.bandwidth = Bandwidth::from_u8(cfg.bandwidth);
-                ch.power = RfPowerLevel::from_u8(cfg.power);
-                ch.squelch_level = cfg.squelch_level.min(9);
-                ch.reverse = cfg.reverse != 0;
-                ch.busy_lock = cfg.busy_lock != 0;
-                if needs_cfg {
-                    radio.configure_channel(ch);
-                }
-                0
-            })
+            let step = StepSetting::from_hz_x10(utils::math::div10_u32(cfg.step_hz).0 as u16);
+            let needs_cfg = !coord.is_transmitting && coord.listening_vfo == vfo;
+            let ch = coord.vfo_channel_mut(vfo);
+            ch.rx_freq = utils::units::Frequency::new(cfg.rx_freq_hz);
+            let offset = utils::units::Frequency::new(cfg.tx_offset_hz);
+            ch.tx_shift = match cfg.tx_shift {
+                1 => RepeaterShift::Positive(offset),
+                2 => RepeaterShift::Negative(offset),
+                _ => RepeaterShift::Simplex,
+            };
+            ch.step = step;
+            ch.rx_subaudible = decode_subaudible(cfg.rx_subaudible.kind, cfg.rx_subaudible.value);
+            ch.tx_subaudible = decode_subaudible(cfg.tx_subaudible.kind, cfg.tx_subaudible.value);
+            ch.modulation = ModulationMode::from_u8(cfg.modulation);
+            ch.bandwidth = Bandwidth::from_u8(cfg.bandwidth);
+            ch.power = RfPowerLevel::from_u8(cfg.power);
+            ch.squelch_level = cfg.squelch_level.min(9);
+            ch.reverse = cfg.reverse != 0;
+            ch.busy_lock = cfg.busy_lock != 0;
+            if needs_cfg {
+                radio.configure_channel(ch);
+            }
+            0
         }
         rf_vfo::STATE => {
             let out = a1 as *mut KrxRadioState;
@@ -169,31 +171,30 @@ unsafe fn dispatch_rf_vfo(sub: u8, a1: usize, a2: usize) -> usize {
                 return 1;
             }
             use crate::services::radio::coordinator::DualWatchMode;
-            let c = &crate::radio_state_ref().coord;
-            let dw = match c.dual_watch {
+            let dw = match coord.dual_watch {
                 DualWatchMode::Off => 0,
                 DualWatchMode::EqualDwell { .. } => 1,
                 DualWatchMode::Priority { .. } => 2,
                 DualWatchMode::Adaptive => 3,
                 DualWatchMode::TripleWatch { .. } => 4,
             };
-            let tot_elapsed_s = utils::math::div100_u16(c.tot_elapsed_10ms).0;
-            let tx_slot = c.effective_tx_slot();
+            let tot_elapsed_s = utils::math::div100_u16(coord.tot_elapsed_10ms).0;
+            let tx_slot = coord.effective_tx_slot();
             let dst = unsafe { &mut *out };
-            dst.active_vfo = c.active_vfo as u8;
-            dst.listening_vfo = c.listening_vfo as u8;
+            dst.active_vfo = coord.active_vfo as u8;
+            dst.listening_vfo = coord.listening_vfo as u8;
             dst.dual_watch = dw;
-            dst.cross_band = c.cross_band as u8;
-            dst.bclo_policy = c.bclo_policy as u8;
-            dst.ptt_active = c.is_transmitting as u8;
-            dst.squelch_open = c.carrier_active as u8;
-            dst.subaudible_matched = c.subaudible_matched as u8;
-            dst.tot_locked_out = c.tot_locked_out as u8;
-            dst.lock_active = c.is_vfo_locked() as u8;
-            dst.tx_perm = c.check_tx_permission(tx_slot, active_krx_token(false)) as u8;
+            dst.cross_band = coord.cross_band as u8;
+            dst.bclo_policy = coord.bclo_policy as u8;
+            dst.ptt_active = coord.is_transmitting as u8;
+            dst.squelch_open = coord.carrier_active as u8;
+            dst.subaudible_matched = coord.subaudible_matched as u8;
+            dst.tot_locked_out = coord.tot_locked_out as u8;
+            dst.lock_active = coord.is_vfo_locked() as u8;
+            dst.tx_perm = coord.check_tx_permission(tx_slot, active_krx_token(false)) as u8;
             dst._reserved = 0;
-            dst.tot_remaining_s = c.tot_limit_seconds.saturating_sub(tot_elapsed_s);
-            dst.rssi_dbm = c.vfo_rssi(c.listening_vfo);
+            dst.tot_remaining_s = coord.tot_limit_seconds.saturating_sub(tot_elapsed_s);
+            dst.rssi_dbm = coord.vfo_rssi(coord.listening_vfo);
             0
         }
         rf_vfo::WATCH_MODE => {
@@ -202,56 +203,54 @@ unsafe fn dispatch_rf_vfo(sub: u8, a1: usize, a2: usize) -> usize {
             let dual_watch = (a1 >> 8) as u8;
             let cross_band = (a1 >> 16) as u8;
             let bclo = (a1 >> 24) as u8;
-            with_radio(1, |coord, radio| {
-                if active_vfo != 0xFF {
-                    let Some(vfo) = decode_vfo_slot(active_vfo) else {
-                        return 1;
-                    };
-                    if !coord.is_transmitting {
-                        coord.select_vfo(radio, vfo);
-                    } else {
-                        coord.active_vfo = vfo;
-                    }
+            if active_vfo != 0xFF {
+                let Some(vfo) = decode_vfo_slot(active_vfo) else {
+                    return 1;
+                };
+                if !coord.is_transmitting {
+                    coord.select_vfo(radio, vfo);
+                } else {
+                    coord.active_vfo = vfo;
                 }
-                if dual_watch != 0xFF {
-                    let priority_vfo = coord.active_vfo;
-                    coord.dual_watch = match dual_watch {
-                        0 => DualWatchMode::Off,
-                        1 => DualWatchMode::EqualDwell { dwell_ms: 250 },
-                        2 => DualWatchMode::Priority {
-                            priority_vfo,
-                            check_interval_ms: 250,
-                        },
-                        3 => DualWatchMode::Adaptive,
-                        4 => DualWatchMode::TripleWatch { dwell_ms: 250 },
-                        _ => return 1,
-                    };
-                }
-                if cross_band != 0xFF {
-                    const CROSS_BANDS: [CrossBandMode; 4] = [
-                        CrossBandMode::Off,
-                        CrossBandMode::FixedTxOnA,
-                        CrossBandMode::FixedTxOnB,
-                        CrossBandMode::MasterFollowsRx,
-                    ];
-                    let Some(&cb) = CROSS_BANDS.get(cross_band as usize) else {
-                        return 1;
-                    };
-                    coord.cross_band = cb;
-                }
-                if bclo != 0xFF {
-                    const BCLOS: [BcloPolicy; 3] = [
-                        BcloPolicy::Disabled,
-                        BcloPolicy::CarrierOnly,
-                        BcloPolicy::ToneMismatchOnly,
-                    ];
-                    let Some(&bp) = BCLOS.get(bclo as usize) else {
-                        return 1;
-                    };
-                    coord.bclo_policy = bp;
-                }
-                0
-            })
+            }
+            if dual_watch != 0xFF {
+                let priority_vfo = coord.active_vfo;
+                coord.dual_watch = match dual_watch {
+                    0 => DualWatchMode::Off,
+                    1 => DualWatchMode::EqualDwell { dwell_ms: 250 },
+                    2 => DualWatchMode::Priority {
+                        priority_vfo,
+                        check_interval_ms: 250,
+                    },
+                    3 => DualWatchMode::Adaptive,
+                    4 => DualWatchMode::TripleWatch { dwell_ms: 250 },
+                    _ => return 1,
+                };
+            }
+            if cross_band != 0xFF {
+                const CROSS_BANDS: [CrossBandMode; 4] = [
+                    CrossBandMode::Off,
+                    CrossBandMode::FixedTxOnA,
+                    CrossBandMode::FixedTxOnB,
+                    CrossBandMode::MasterFollowsRx,
+                ];
+                let Some(&cb) = CROSS_BANDS.get(cross_band as usize) else {
+                    return 1;
+                };
+                coord.cross_band = cb;
+            }
+            if bclo != 0xFF {
+                const BCLOS: [BcloPolicy; 3] = [
+                    BcloPolicy::Disabled,
+                    BcloPolicy::CarrierOnly,
+                    BcloPolicy::ToneMismatchOnly,
+                ];
+                let Some(&bp) = BCLOS.get(bclo as usize) else {
+                    return 1;
+                };
+                coord.bclo_policy = bp;
+            }
+            0
         }
         rf_vfo::LOCK => {
             let slot = (a1 >> 16) as u8;
@@ -259,18 +258,21 @@ unsafe fn dispatch_rf_vfo(sub: u8, a1: usize, a2: usize) -> usize {
             let Some(vfo) = decode_vfo_slot(slot) else {
                 return 1;
             };
-            with_radio(1, |coord, _| {
-                let res = RfResourceMask(a1 as u8);
-                let token = active_krx_token(exclusive);
-                usize::from(!coord.request_resource_lock(token, res, vfo, a2 as u16, false))
-            })
+            let res = RfResourceMask(a1 as u8);
+            let token = active_krx_token(exclusive);
+            usize::from(!coord.request_resource_lock(token, res, vfo, a2 as u16, false))
         }
         _ => 1,
     }
 }
 
 #[inline(never)]
-unsafe fn dispatch_rf_bulk(sub: u8, a1: usize, a2: usize) -> usize {
+unsafe fn dispatch_rf_bulk(
+    radio: &mut Bk4829<'_, Disabled>,
+    sub: u8,
+    a1: usize,
+    a2: usize,
+) -> usize {
     use kernel::abi::sub::rf_bulk;
     match sub {
         rf_bulk::SWEEP => {
@@ -287,9 +289,7 @@ unsafe fn dispatch_rf_bulk(sub: u8, a1: usize, a2: usize) -> usize {
             let slice = unsafe {
                 core::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut i16, r.count as usize)
             };
-            with_radio(0, |_, radio| {
-                primitives::rf_sweep(radio, r.start_hz, r.step_hz, slice)
-            })
+            primitives::rf_sweep(radio, r.start_hz, r.step_hz, slice)
         }
         rf_bulk::SYMBOLS => {
             let count = a2 as u16;
@@ -299,13 +299,11 @@ unsafe fn dispatch_rf_bulk(sub: u8, a1: usize, a2: usize) -> usize {
             let slice = unsafe {
                 core::slice::from_raw_parts(bytes.as_ptr() as *const KrxSymbol, count as usize)
             };
-            with_radio(1, |_, radio| {
-                usize::from(primitives::rf_emit_symbols(radio, slice).is_err())
-            })
+            usize::from(primitives::rf_emit_symbols(radio, slice).is_err())
         }
         #[cfg(feature = "rf_fsk")]
         rf_bulk::FSK_INIT => {
-            with_radio((), |_, radio| primitives::rf_fsk_init(radio, a1 as u16));
+            primitives::rf_fsk_init(radio, a1 as u16);
             0
         }
         #[cfg(feature = "rf_fsk")]
@@ -313,9 +311,7 @@ unsafe fn dispatch_rf_bulk(sub: u8, a1: usize, a2: usize) -> usize {
             let Some(slice) = (unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }) else {
                 return 1;
             };
-            with_radio(1, |_, radio| {
-                usize::from(primitives::rf_fsk_send(radio, slice).is_err())
-            })
+            usize::from(primitives::rf_fsk_send(radio, slice).is_err())
         }
         #[cfg(feature = "rf_fsk")]
         rf_bulk::FSK_RECV => {
@@ -323,7 +319,7 @@ unsafe fn dispatch_rf_bulk(sub: u8, a1: usize, a2: usize) -> usize {
             else {
                 return 0;
             };
-            with_radio(0, |_, radio| primitives::rf_fsk_receive(radio, slice))
+            primitives::rf_fsk_receive(radio, slice)
         }
         #[cfg(not(feature = "rf_fsk"))]
         rf_bulk::FSK_SEND => 1,
@@ -337,19 +333,16 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         idx as op,
         sub::{rf_get, rf_set},
     };
-    match idx {
+    with_radio(0, |coord, radio| match idx {
         op::RfTune => {
             let bw_hz = if (a1 as u8) == 1 { 25_000 } else { 12_500 };
-            with_radio(1, |coord, radio| {
-                primitives::rf_tune(coord, radio, a0 as u32, bw_hz, a2 as u32);
-                0
-            })
+            primitives::rf_tune(coord, radio, a0 as u32, bw_hz, a2 as u32);
+            0
         }
         op::RfGet => {
             let sub = a0 as u8;
             match sub {
                 rf_get::FREQ | rf_get::BANDWIDTH | rf_get::MODULATION | rf_get::TX_STATE => {
-                    let coord = &crate::radio_state_ref().coord;
                     let ch = coord.active_channel();
                     match sub {
                         rf_get::FREQ => ch.rx_freq.raw() as usize,
@@ -358,19 +351,15 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         _ => coord.is_transmitting as usize,
                     }
                 }
-                rf_get::RSSI => {
-                    with_radio(-130i16, |_, radio| radio.get_rssi_dbm()) as i32 as u32 as usize
-                }
-                rf_get::CARRIER => with_radio(0, |coord, radio| {
-                    usize::from(coord.carrier_active || radio.is_carrier_open())
-                }),
+                rf_get::RSSI => radio.get_rssi_dbm() as i32 as u32 as usize,
+                rf_get::CARRIER => usize::from(coord.carrier_active || radio.is_carrier_open()),
                 rf_get::GLITCH | rf_get::SNR | rf_get::NOISE => {
                     let reg = match sub {
                         rf_get::GLITCH => 0x63,
                         rf_get::SNR => 0x66,
                         _ => 0x65,
                     };
-                    with_radio(0, |_, radio| (radio.read_reg(reg) & 0xFF) as usize)
+                    (radio.read_reg(reg) & 0xFF) as usize
                 }
                 rf_get::FM_RSSI => {
                     #[cfg(feature = "fm_radio")]
@@ -389,12 +378,10 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let sub = a0 as u8;
             match sub {
                 rf_set::MODULATION..=rf_set::AGC => {
-                    with_radio((), |coord, radio| {
-                        primitives::rf_set_param(coord, radio, sub, a1 as u8);
-                    });
+                    primitives::rf_set_param(coord, radio, sub, a1 as u8);
                     0
                 }
-                rf_set::TX => with_radio(1, |coord, radio| {
+                rf_set::TX => {
                     if a1 != 0 {
                         let perm = coord.request_ptt_start(radio, active_krx_token(false));
                         if perm.is_granted() {
@@ -406,32 +393,28 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         coord.request_ptt_stop(radio);
                         0
                     }
-                }),
+                }
                 rf_set::TAIL => {
-                    with_radio((), |_, radio| radio.send_css_tail(CssTailMode::Tone55Hz));
+                    radio.send_css_tail(CssTailMode::Tone55Hz);
                     0
                 }
                 rf_set::SUBAUDIBLE => {
                     let mask = a1 as u8;
                     let kind = (a1 >> 8) as u8;
-                    with_radio(1, |coord, radio| {
-                        primitives::rf_apply_subaudible_split(
-                            coord,
-                            radio,
-                            (mask & 1) != 0,
-                            (mask & 2) != 0,
-                            decode_subaudible(kind, a2 as u16),
-                        );
-                        0
-                    })
-                }
-                rf_set::DTMF => {
-                    with_radio((), |_, radio| {
-                        primitives::rf_set_dtmf(radio, a1 as u8, a2 as u8);
-                    });
+                    primitives::rf_apply_subaudible_split(
+                        coord,
+                        radio,
+                        (mask & 1) != 0,
+                        (mask & 2) != 0,
+                        decode_subaudible(kind, a2 as u16),
+                    );
                     0
                 }
-                rf_set::BURST => with_radio(1, |coord, radio| {
+                rf_set::DTMF => {
+                    primitives::rf_set_dtmf(radio, a1 as u8, a2 as u8);
+                    0
+                }
+                rf_set::BURST => {
                     let dur = a2 as u16;
                     if dur == 0 {
                         coord.stop_1750hz_burst(radio);
@@ -439,11 +422,11 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     } else {
                         usize::from(!coord.trigger_1750hz_burst(radio, dur))
                     }
-                }),
-                rf_set::UNLOCK_VFO => with_radio(1, |coord, radio| {
+                }
+                rf_set::UNLOCK_VFO => {
                     let id = active_krx_token(false).id;
                     usize::from(!coord.release_client_lock(radio, id))
-                }),
+                }
                 #[cfg(feature = "fm_radio")]
                 rf_set::FM_TUNE => {
                     let _ = fm_tuner().set_frequency_10khz((a1 as u16).saturating_mul(10));
@@ -467,19 +450,17 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let g1 = (a1 >> 16) as u8;
             let t2 = a2 as u16;
             let g2 = (a2 >> 16) as u8;
-            with_radio((), |_, radio| {
-                if a0 != 0 {
-                    primitives::rf_set_dual_tones_hz(radio, t1, g1, t2, g2);
-                } else {
-                    radio.set_dual_tones_raw(t1, g1, t2, g2);
-                }
-            });
+            if a0 != 0 {
+                primitives::rf_set_dual_tones_hz(radio, t1, g1, t2, g2);
+            } else {
+                radio.set_dual_tones_raw(t1, g1, t2, g2);
+            }
             0
         }
-        op::RfVfo => unsafe { dispatch_rf_vfo(a0 as u8, a1, a2) },
-        op::RfBulk => unsafe { dispatch_rf_bulk(a0 as u8, a1, a2) },
+        op::RfVfo => unsafe { dispatch_rf_vfo(coord, radio, a0 as u8, a1, a2) },
+        op::RfBulk => unsafe { dispatch_rf_bulk(radio, a0 as u8, a1, a2) },
         _ => 0,
-    }
+    })
 }
 
 #[cfg(test)]

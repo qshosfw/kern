@@ -89,7 +89,6 @@ impl ShortString {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SheetOptions {
-    Static(&'static [&'static str]),
     Dynamic(&'static [ShortString]),
     Packed(&'static str),
 }
@@ -98,7 +97,6 @@ impl SheetOptions {
     #[inline(never)]
     pub fn len(&self) -> usize {
         match self {
-            SheetOptions::Static(s) => s.len(),
             SheetOptions::Dynamic(d) => d.len(),
             SheetOptions::Packed(p) => {
                 let mut count = 0;
@@ -120,13 +118,6 @@ impl SheetOptions {
     #[inline(never)]
     pub fn get(&self, idx: usize) -> &str {
         match self {
-            SheetOptions::Static(s) => {
-                if idx < s.len() {
-                    s[idx]
-                } else {
-                    ""
-                }
-            }
             SheetOptions::Dynamic(d) => {
                 if idx < d.len() {
                     d[idx].as_str()
@@ -172,14 +163,6 @@ impl OptionSheet {
             show_radio: false,
             is_pressed: false,
         }
-    }
-
-    pub fn new_static(
-        title: &'static str,
-        options: &'static [&'static str],
-        selected: usize,
-    ) -> Self {
-        Self::new(title, SheetOptions::Static(options), selected)
     }
 
     pub fn new_dynamic(
@@ -1275,8 +1258,7 @@ mod tests {
 
     #[test]
     fn test_option_sheet_small_repeat_clamps() {
-        static OPTS: [&str; 3] = ["Off", "Tone", "Voice"];
-        let mut sheet = OptionSheet::new_static("Beep", &OPTS, 0);
+        let mut sheet = OptionSheet::new("Beep", SheetOptions::Packed("Off\0Tone\0Voice\0"), 0);
         let mut rep = crate::gui::KeyRepeater::new(4, 2);
 
         // 1. Single tap wraps
@@ -1347,8 +1329,7 @@ mod tests {
         assert!(canvas.buffer.iter().flatten().any(|&b| b != 0));
 
         static TEST_ICONS: [&[u8; 8]; 2] = [icons::ICON_FOLDER, icons::ICON_VFO];
-        static TEST_OPTS: [&str; 2] = ["Tasks", "VFO"];
-        let sheet = OptionSheet::new_static("Bind", &TEST_OPTS, 0)
+        let sheet = OptionSheet::new("Bind", SheetOptions::Packed("Tasks\0VFO\0"), 0)
             .with_radio(true)
             .with_icons(&TEST_ICONS);
         canvas.clear();

@@ -77,27 +77,22 @@ fn proc_remove(path: &str) -> Option<u8> {
 }
 
 #[inline(never)]
-fn user_storage<'a>(
-    path: *const u8,
-    path_len: u8,
-) -> Option<(&'a str, &'a mut crate::services::SystemStorage<'static>)> {
+fn parse_non_sys_user_path<'a>(path: *const u8, path_len: u8) -> Option<&'a str> {
     let p_str = unsafe { parse_user_path(path, path_len as usize) }?;
-    if utils::path::root_bit(p_str.as_bytes()) == utils::path::ROOT_SYS {
-        return None;
-    }
-    Some((p_str, active_storage_mut()?))
+    (utils::path::root_bit(p_str.as_bytes()) != utils::path::ROOT_SYS).then_some(p_str)
 }
 
 #[inline(never)]
-fn file_stat_size(path: *const u8, path_len: u8) -> Option<u32> {
+fn file_stat_size(
+    st: &mut crate::services::SystemStorage<'static>,
+    path: *const u8,
+    path_len: u8,
+) -> Option<u32> {
     let path_str = unsafe { parse_str(path, path_len as usize) }?;
     if is_proc_boot_path(path_str) && has_proc_read_cap() {
         return Some(316);
     }
-    active_storage_mut()?
-        .file_size(path_str)
-        .ok()
-        .map(|s| s as u32)
+    st.file_size(path_str).ok().map(|s| s as u32)
 }
 
 #[inline(never)]
@@ -106,6 +101,9 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         idx as op,
         sub::{fs_meta, fs_read, fs_write},
     };
+    let Some(st) = active_storage_mut() else {
+        return usize::from(idx != op::FsRead);
+    };
     match idx {
         op::FsRead => {
             let req = a1 as *const KrxFsReq;
@@ -113,64 +111,47 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 return 0;
             }
             let r = unsafe { &*req };
-            match a0 as u8 {
+            let sub = a0 as u8;
+            if sub == fs_read::LIST_DIR {
+                let out = r.buf as *mut KrxDirEntry;
+                let max = r.len as u8;
+                if !out.is_null() && max > 0 {
+                    let dir_str = unsafe { str_or_default(r.path, r.path_len as usize, "/") };
+                    let dst = unsafe { core::slice::from_raw_parts_mut(out, max as usize) };
+                    return crate::services::primitives::list_krx_dir(st, dir_str, dst)
+                        .unwrap_or(0);
+                }
+                return 0;
+            }
+            let Some(dst) = (unsafe { ptr_slice_mut(r.buf, r.len as usize) }) else {
+                return 0;
+            };
+            match sub {
                 fs_read::FILE_AT => {
-                    if let (Some(path_str), Some(dst)) =
-                        (unsafe { parse_str(r.path, r.path_len as usize) }, unsafe {
-                            ptr_slice_mut(r.buf, r.len as usize)
-                        })
-                    {
-                        if let Some(n) = proc_read(path_str, r.offset as usize, dst) {
-                            return n;
-                        }
-                        if let Some(st) = active_storage_mut() {
-                            return st
-                                .read_file_at(path_str, r.offset as usize, dst)
-                                .unwrap_or(0);
-                        }
+                    let Some(path_str) = (unsafe { parse_str(r.path, r.path_len as usize) }) else {
+                        return 0;
+                    };
+                    if let Some(n) = proc_read(path_str, r.offset as usize, dst) {
+                        return n;
                     }
-                    0
+                    st.read_file_at(path_str, r.offset as usize, dst)
+                        .unwrap_or(0)
                 }
                 fs_read::LOAD_CFG => {
-                    if let (Some(dst), Some(st)) = (
-                        unsafe { ptr_slice_mut(r.buf, r.len as usize) },
-                        active_storage_mut(),
-                    ) {
-                        let name = super::super::native_runner::active_native_app_name();
-                        crate::services::primitives::load_app_config(st, name, dst).unwrap_or(0)
-                    } else {
-                        0
-                    }
+                    let name = super::super::native_runner::active_native_app_name();
+                    crate::services::primitives::load_app_config(st, name, dst).unwrap_or(0)
                 }
                 fs_read::ASSET => {
-                    if let (Some(slice), Some(st)) = (
-                        unsafe { ptr_slice_mut(r.buf, r.len as usize) },
-                        active_storage_mut(),
-                    ) {
-                        #[cfg(feature = "krx_native")]
-                        {
-                            return crate::runtime::native_runner::read_active_pkg_asset(
-                                st, r.offset, slice,
-                            )
-                            .unwrap_or(0);
-                        }
-                        #[cfg(not(feature = "krx_native"))]
-                        let _ = (st, slice);
+                    #[cfg(feature = "krx_native")]
+                    {
+                        crate::runtime::native_runner::read_active_pkg_asset(st, r.offset, dst)
+                            .unwrap_or(0)
                     }
-                    0
-                }
-                fs_read::LIST_DIR => {
-                    let out = r.buf as *mut KrxDirEntry;
-                    let max = r.len as u8;
-                    if !out.is_null() && max > 0 {
-                        let dir_str = unsafe { str_or_default(r.path, r.path_len as usize, "/") };
-                        let dst = unsafe { core::slice::from_raw_parts_mut(out, max as usize) };
-                        if let Some(st) = active_storage_mut() {
-                            return crate::services::primitives::list_krx_dir(st, dir_str, dst)
-                                .unwrap_or(0);
-                        }
+                    #[cfg(not(feature = "krx_native"))]
+                    {
+                        let _ = dst;
+                        0
                     }
-                    0
                 }
                 _ => 0,
             }
@@ -184,7 +165,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             match a0 as u8 {
                 fs_write::FILE | fs_write::APPEND => {
                     if !r.buf.is_null() {
-                        if let Some((path_str, st)) = user_storage(r.path, r.path_len) {
+                        if let Some(path_str) = parse_non_sys_user_path(r.path, r.path_len) {
                             let src = unsafe { core::slice::from_raw_parts(r.buf, r.len as usize) };
                             let ok = if (a0 as u8) == fs_write::APPEND {
                                 st.fs.append_file(path_str, src).is_ok()
@@ -197,10 +178,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     1
                 }
                 fs_write::SAVE_CFG => {
-                    if let (Some(src), Some(st)) = (
-                        unsafe { ptr_slice(r.buf, r.len as usize) },
-                        active_storage_mut(),
-                    ) {
+                    if let Some(src) = unsafe { ptr_slice(r.buf, r.len as usize) } {
                         let name = super::super::native_runner::active_native_app_name();
                         usize::from(
                             crate::services::primitives::save_app_config(st, name, src).is_err(),
@@ -216,8 +194,8 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let path = a1 as *const u8;
             let plen = a2 as u8;
             match a0 as u8 {
-                fs_meta::SIZE => file_stat_size(path, plen).unwrap_or(0) as usize,
-                fs_meta::EXISTS => usize::from(file_stat_size(path, plen).is_some()),
+                fs_meta::SIZE => file_stat_size(st, path, plen).unwrap_or(0) as usize,
+                fs_meta::EXISTS => usize::from(file_stat_size(st, path, plen).is_some()),
                 fs_meta::REMOVE | fs_meta::MKDIR => {
                     let create_dir = (a0 as u8) == fs_meta::MKDIR;
                     if !create_dir {
@@ -227,7 +205,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                             }
                         }
                     }
-                    if let Some((p_str, st)) = user_storage(path, plen) {
+                    if let Some(p_str) = parse_non_sys_user_path(path, plen) {
                         let res = if create_dir {
                             st.create_dir(p_str)
                         } else {
@@ -246,7 +224,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         return 1;
                     }
                     #[cfg(feature = "filesystem")]
-                    if let Some(st) = active_storage_mut() {
+                    {
                         let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
                         let res = match mode {
                             0 | 1 => crate::services::calibration::reformat_storage(
@@ -257,8 +235,9 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                             2 => st.fs.wipe_raw().map_err(|_| ()),
                             _ => Err(()),
                         };
-                        return usize::from(res.is_err());
+                        usize::from(res.is_err())
                     }
+                    #[cfg(not(feature = "filesystem"))]
                     1
                 }
                 _ => 1,
@@ -268,9 +247,9 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let req = a0 as *const KrxFsReq;
             if !req.is_null() {
                 let r = unsafe { &*req };
-                if let (Some((o_str, st)), Some((n_str, _))) = (
-                    user_storage(r.path, r.path_len),
-                    user_storage(r.buf as *const u8, r.len as u8),
+                if let (Some(o_str), Some(n_str)) = (
+                    parse_non_sys_user_path(r.path, r.path_len),
+                    parse_non_sys_user_path(r.buf as *const u8, r.len as u8),
                 ) {
                     if st.rename(o_str, n_str).is_ok() {
                         return 0;
