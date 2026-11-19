@@ -1,25 +1,25 @@
 //! Modular UART Driver implementation backing kernel UartService
 
-use bsp::Board;
+use kern_platform_traits::serial::SerialBackend;
 
 #[derive(Clone, Copy, Default)]
-pub struct HardwareUart;
-
-impl HardwareUart {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct HardwareUart<S> {
+    backend: S,
 }
 
-impl HardwareUart {
+impl<S: SerialBackend> HardwareUart<S> {
+    pub const fn new(backend: S) -> Self {
+        Self { backend }
+    }
+
     pub fn write(&mut self, data: &[u8]) {
-        Board::uart_write_bytes(data);
+        self.backend.write_bytes(data);
     }
 
     pub fn read(&mut self, buf: &mut [u8]) -> usize {
         let mut count = 0;
         for byte in buf.iter_mut() {
-            if let Some(b) = Board::uart_try_read_byte() {
+            if let Some(b) = self.backend.try_read_byte() {
                 *byte = b;
                 count += 1;
             } else {
@@ -30,19 +30,14 @@ impl HardwareUart {
     }
 }
 
-impl kernel::service::SerialPort for HardwareUart {
+impl<S: SerialBackend> kernel::service::SerialPort for HardwareUart<S> {
     fn write(&mut self, data: &[u8]) {
-        py32_hal::uart::mark_activity();
         self.write(data);
     }
 
     fn read(&mut self, buf: &mut [u8]) -> usize {
-        let count = self.read(buf);
-        if count > 0 {
-            py32_hal::uart::mark_activity();
-        }
-        count
+        self.read(buf)
     }
 }
 
-impl kernel::service::UartService for HardwareUart {}
+impl<S: SerialBackend> kernel::service::UartService for HardwareUart<S> {}

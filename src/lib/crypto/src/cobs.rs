@@ -54,6 +54,30 @@ impl Cobs {
         Ok(write_idx)
     }
 
+    /// In-place COBS encoder for frames with `raw_len <= 253`.
+    ///
+    /// Caller places the `raw_len` unencoded bytes at `buf[1..1 + raw_len]` inside a slice of
+    /// length at least `raw_len + 1`. Because `raw_len <= 253`, COBS never emits an `0xFF`
+    /// overhead byte, so every non-zero byte stays in place and each `0x00` is overwritten with
+    /// the forward distance to the next `0x00` (or end of frame). Returns `raw_len + 1`.
+    #[inline(never)]
+    pub fn encode_inplace_short(buf: &mut [u8], raw_len: usize) -> Result<usize, ()> {
+        if raw_len > 253 || buf.len() < raw_len + 1 {
+            return Err(());
+        }
+        let mut next_zero = raw_len + 1;
+        let mut i = raw_len;
+        while i > 0 {
+            if buf[i] == 0 {
+                buf[i] = (next_zero - i) as u8;
+                next_zero = i;
+            }
+            i -= 1;
+        }
+        buf[0] = next_zero as u8;
+        Ok(raw_len + 1)
+    }
+
     /// Decode `src` into `dst`. Returns decoded byte length on success.
     pub fn decode(src: &[u8], dst: &mut [u8]) -> Result<usize, ()> {
         if src.is_empty() {
@@ -182,7 +206,35 @@ mod tests {
             inplace_buf[..enc_len].copy_from_slice(&enc_buf[..enc_len]);
             let in_len = Cobs::decode_inplace(&mut inplace_buf, enc_len).expect("inplace");
             assert_eq!(&inplace_buf[..in_len], raw);
+
+            let mut enc_in_buf = [0u8; 16];
+            enc_in_buf[1..1 + raw.len()].copy_from_slice(raw);
+            let ein_len = Cobs::encode_inplace_short(&mut enc_in_buf, raw.len()).expect("enc_in");
+            assert_eq!(&enc_in_buf[..ein_len], expected_enc);
         }
+    }
+
+    #[test]
+    fn test_cobs_encode_inplace_short_matches_encode_all_edge_cases() {
+        let mut raw = [0u8; 253];
+        for (i, b) in raw.iter_mut().enumerate() {
+            *b = if i % 17 == 0 {
+                0
+            } else {
+                (i as u8).wrapping_mul(3) | 1
+            };
+        }
+        for len in [0usize, 1, 2, 16, 146, 253] {
+            let mut enc = [0u8; 256];
+            let enc_len = Cobs::encode(&raw[..len], &mut enc).unwrap();
+            let mut inplace = [0u8; 256];
+            inplace[1..1 + len].copy_from_slice(&raw[..len]);
+            let in_len = Cobs::encode_inplace_short(&mut inplace, len).unwrap();
+            assert_eq!(in_len, enc_len);
+            assert_eq!(&inplace[..in_len], &enc[..enc_len]);
+        }
+        let mut too_long = [1u8; 256];
+        assert!(Cobs::encode_inplace_short(&mut too_long, 254).is_err());
     }
 
     #[test]

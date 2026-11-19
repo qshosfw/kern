@@ -1,58 +1,51 @@
-use bsp::board::{Py32OutputPin, Py32Spi1};
-use bsp::pins::{LCD_A0, LCD_CS};
-use core::marker::PhantomData;
-use kern_platform_traits::display::PagedFramebuffer;
-use kern_platform_traits::spi::SpiDevice;
+use kern_platform_traits::display::{CommandDisplayBus, PagedFramebuffer};
+use kern_platform_traits::spi::SpiSpeed;
 
 pub const LCD_WIDTH: usize = 128;
 pub const LCD_HEIGHT: usize = 64;
 
-pub struct St7565<'a> {
+pub struct St7565<B> {
+    bus: B,
     pub subframe: u8,
     pub motion_bypass: bool,
     pub shading_mode: u8,
-    _lt: PhantomData<&'a mut ()>,
 }
 
-impl<'a> St7565<'a> {
-    pub fn new(
-        _spi: &'a mut Py32Spi1,
-        _cs: &'a mut Py32OutputPin,
-        _a0: &'a mut Py32OutputPin,
-    ) -> Self {
+impl<B: CommandDisplayBus> St7565<B> {
+    pub const fn new(bus: B) -> Self {
         Self {
+            bus,
             subframe: 0,
             motion_bypass: false,
             shading_mode: 1,
-            _lt: PhantomData,
         }
     }
 
     #[inline(always)]
     fn write_cmd(&mut self, cmd: u8) {
-        LCD_A0.set_low();
-        Py32Spi1.write_byte(cmd);
+        self.bus.dc_low();
+        self.bus.write_byte(cmd);
     }
 
     #[inline(always)]
     fn end_transfer(&mut self) {
-        Py32Spi1.wait_idle();
-        LCD_CS.set_high();
+        self.bus.wait_idle();
+        self.bus.cs_high();
     }
 
     #[allow(dead_code)]
     #[inline(always)]
     fn write_data(&mut self, data: u8) {
-        LCD_A0.set_high();
-        Py32Spi1.write_byte(data);
+        self.bus.dc_high();
+        self.bus.write_byte(data);
     }
 
     #[inline(never)]
     fn send_cmds(&mut self, cmds: &[u8]) {
-        LCD_CS.set_low();
-        LCD_A0.set_low();
+        self.bus.cs_low();
+        self.bus.dc_low();
         for &cmd in cmds {
-            Py32Spi1.write_byte(cmd);
+            self.bus.write_byte(cmd);
         }
         self.end_transfer();
     }
@@ -74,7 +67,7 @@ impl<'a> St7565<'a> {
             self.send_cmds(&INIT_SEQ[start..end]);
             let ms = INIT_SEQ[end] as u32;
             if ms != 0 {
-                py32_hal::delay::delay_ms(ms);
+                self.bus.delay_ms(ms);
             }
             i = end + 1;
         }
@@ -100,7 +93,7 @@ impl<'a> St7565<'a> {
     pub fn exit_sleep(&mut self) {
         self.send_cmds(&[0x2F]); // Re-enable VB/VR/VF power circuits
         #[cfg(target_arch = "arm")]
-        py32_hal::delay::delay_ms(2);
+        self.bus.delay_ms(2);
         self.send_cmds(&[0xA4, 0x40, 0xAF]);
     }
 
@@ -123,16 +116,16 @@ impl<'a> St7565<'a> {
     /// frames to prevent STN liquid crystal ghosting and smearing.
     pub fn set_motion_bypass(&mut self, bypass: bool) {
         self.motion_bypass = bypass;
-        if bypass {
-            py32_hal::spi::set_spi1_speed(py32_hal::spi::Spi1Speed::Turbo);
+        self.bus.set_speed(if bypass {
+            SpiSpeed::Turbo
         } else {
-            py32_hal::spi::set_spi1_speed(py32_hal::spi::Spi1Speed::Standard);
-        }
+            SpiSpeed::Standard
+        });
     }
 
-    /// Explicitly set the SPI1 interface speed profile.
-    pub fn set_speed(&mut self, speed: py32_hal::spi::Spi1Speed) {
-        py32_hal::spi::set_spi1_speed(speed);
+    /// Explicitly set the SPI interface speed profile.
+    pub fn set_speed(&mut self, speed: SpiSpeed) {
+        self.bus.set_speed(speed);
     }
 
     /// Transmit canvas data to ST7565 LCD over hardware SPI.
@@ -162,39 +155,39 @@ impl<'a> St7565<'a> {
             return;
         }
 
-        LCD_CS.set_low();
+        self.bus.cs_low();
         self.write_cmd(0x40); // Set start line 0
 
         for page in 0..8 {
             if (dirty & (1 << page)) != 0 {
                 // Select Page and Column (Offset 4 for K1 ST7565 panel)
-                LCD_A0.set_low();
+                self.bus.dc_low();
                 const COL_OFFSET: u8 = 4;
-                Py32Spi1.write_byte(0xB0 | (page as u8 & 0x0F));
-                Py32Spi1.write_byte(0x10 | (COL_OFFSET >> 4));
-                Py32Spi1.write_byte(COL_OFFSET & 0x0F);
+                self.bus.write_byte(0xB0 | (page as u8 & 0x0F));
+                self.bus.write_byte(0x10 | (COL_OFFSET >> 4));
+                self.bus.write_byte(COL_OFFSET & 0x0F);
 
                 // Transmit 128 data bytes for this page
-                LCD_A0.set_high();
+                self.bus.dc_high();
                 #[cfg(feature = "grayscale")]
                 if self.shading_mode == 0 {
                     for col in 0..LCD_WIDTH {
                         let byte = canvas.subframe_byte(page, col, subframe);
-                        Py32Spi1.write_byte(byte);
+                        self.bus.write_byte(byte);
                     }
                 } else if self.shading_mode == 1 {
                     for col in 0..LCD_WIDTH {
                         let byte = canvas.dither_byte(page, col);
-                        Py32Spi1.write_byte(byte);
+                        self.bus.write_byte(byte);
                     }
                 } else {
                     for &byte in canvas.page_bytes(page) {
-                        Py32Spi1.write_byte(byte);
+                        self.bus.write_byte(byte);
                     }
                 }
                 #[cfg(not(feature = "grayscale"))]
                 for &byte in canvas.page_bytes(page) {
-                    Py32Spi1.write_byte(byte);
+                    self.bus.write_byte(byte);
                 }
             }
         }

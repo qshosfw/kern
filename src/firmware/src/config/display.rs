@@ -71,7 +71,10 @@ impl DisplayConfig {
         }
     }
 
-    pub fn apply_to_backlight(&self, backlight: &mut drivers::backlight::BacklightController) {
+    pub fn apply_to_backlight<O: drivers::backlight::BacklightOutput>(
+        &self,
+        backlight: &mut drivers::backlight::BacklightController<O>,
+    ) {
         let mode = match self.backlight_timeout_code() {
             0 => drivers::backlight::BacklightMode::Off,
             u16::MAX => drivers::backlight::BacklightMode::On,

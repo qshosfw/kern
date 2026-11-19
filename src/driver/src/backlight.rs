@@ -2,6 +2,7 @@
 //! Provides SysTick-driven 1000 Hz 10-step software PWM with zero extra hardware interrupts.
 
 use core::sync::atomic::{AtomicU8, Ordering};
+pub use kern_platform_traits::display::BacklightOutput;
 
 pub static BACKLIGHT_DUTY: AtomicU8 = AtomicU8::new(0);
 static BACKLIGHT_ACC: AtomicU8 = AtomicU8::new(0);
@@ -10,50 +11,28 @@ static BACKLIGHT_ACC: AtomicU8 = AtomicU8::new(0);
 pub static RGB_CHANNEL_MASK: AtomicU8 = AtomicU8::new(0b111);
 
 #[inline(always)]
-fn drive_backlight_pins(on: bool) {
-    #[cfg(not(feature = "rgb_backlight"))]
-    {
-        if on {
-            bsp::pins::BACKLIGHT.set_high();
-        } else {
-            bsp::pins::BACKLIGHT.set_low();
-        }
-    }
+fn current_rgb_mask() -> u8 {
     #[cfg(feature = "rgb_backlight")]
     {
-        let mask = if on {
-            RGB_CHANNEL_MASK.load(Ordering::Relaxed)
-        } else {
-            0
-        };
-        if (mask & 0b001) != 0 {
-            bsp::pins::LCD_RLED.set_high();
-        } else {
-            bsp::pins::LCD_RLED.set_low();
-        }
-        if (mask & 0b010) != 0 {
-            bsp::pins::LCD_GLED.set_high();
-        } else {
-            bsp::pins::LCD_GLED.set_low();
-        }
-        if (mask & 0b100) != 0 {
-            bsp::pins::LCD_BLED.set_high();
-        } else {
-            bsp::pins::LCD_BLED.set_low();
-        }
+        RGB_CHANNEL_MASK.load(Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "rgb_backlight"))]
+    {
+        0b111
     }
 }
 
 /// SysTick 20 kHz Delta-Sigma Rate Multiplier Software PWM Tick (called inside 50 µs SysTick interrupt handler)
 #[inline(always)]
-pub fn systick_pwm_tick() {
+pub fn systick_pwm_tick<O: BacklightOutput>(out: &mut O) {
     let duty = BACKLIGHT_DUTY.load(Ordering::Relaxed);
+    let mask = current_rgb_mask();
     if duty == 0 {
-        drive_backlight_pins(false);
+        out.set_output(false, 0);
         return;
     }
     if duty >= 10 {
-        drive_backlight_pins(true);
+        out.set_output(true, mask);
         return;
     }
 
@@ -64,10 +43,10 @@ pub fn systick_pwm_tick() {
     let next = acc + duty;
     if next >= 10 {
         BACKLIGHT_ACC.store(next - 10, Ordering::Relaxed);
-        drive_backlight_pins(true);
+        out.set_output(true, mask);
     } else {
         BACKLIGHT_ACC.store(next, Ordering::Relaxed);
-        drive_backlight_pins(false);
+        out.set_output(false, 0);
     }
 }
 
@@ -79,7 +58,8 @@ pub enum BacklightMode {
 }
 
 #[repr(align(4))]
-pub struct BacklightController {
+pub struct BacklightController<O> {
+    output: O,
     mode: BacklightMode,
     keypad_mode: u8, // 0=Off, 1=Sync Screen, 2=5s, 3=10s, 4=30s, 5=Always On
     keypad_elapsed_ms: u16,
@@ -93,9 +73,10 @@ pub struct BacklightController {
     is_active: bool,
 }
 
-impl BacklightController {
-    pub const fn new() -> Self {
+impl<O: BacklightOutput> BacklightController<O> {
+    pub const fn new(output: O) -> Self {
         Self {
+            output,
             mode: BacklightMode::Auto(5000), // Default 5s
             keypad_mode: 1,                  // Default Sync Screen
             keypad_elapsed_ms: 0,
@@ -236,18 +217,18 @@ impl BacklightController {
         self.is_active
     }
 
-    fn apply_hardware(&self) {
+    fn apply_hardware(&mut self) {
         if self.mode == BacklightMode::Off || self.current_level == 0 {
             BACKLIGHT_DUTY.store(0, Ordering::Relaxed);
-            drive_backlight_pins(false);
+            self.output.set_output(false, 0);
         } else {
             BACKLIGHT_DUTY.store(self.current_level.min(10), Ordering::Relaxed);
         }
     }
 }
 
-impl Default for BacklightController {
+impl<O: BacklightOutput + Default> Default for BacklightController<O> {
     fn default() -> Self {
-        Self::new()
+        Self::new(O::default())
     }
 }

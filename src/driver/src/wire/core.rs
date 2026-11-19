@@ -1,6 +1,7 @@
 //! Core Protocol Operations (HELLO, PING, GET_CAPS, REBOOT).
 
 use super::WireDriver;
+use kern_platform_traits::time::TimeSource;
 use kernel::service::SerialPort;
 use kernel::wire::*;
 
@@ -42,7 +43,7 @@ const CAPS_REPLY: [u8; 35] = [
     COMPONENT_CLASS_STORAGE,
 ];
 
-impl<S: SerialPort> WireDriver<S> {
+impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
     #[inline(never)]
     pub(super) fn handle_core_operation(
         &mut self,
@@ -123,14 +124,14 @@ impl<S: SerialPort> WireDriver<S> {
                 } else {
                     0
                 };
-                words[1] = py32_hal::time::now_us();
-                words[2] = py32_hal::time::now_us();
+                words[1] = self.time.now_us();
+                words[2] = self.time.now_us();
                 words[3] = uptime_ms;
                 (WireStatus::Ok, 16)
             }
 
             OP_CORE_GET_TIME => {
-                words[0] = py32_hal::time::now_us();
+                words[0] = self.time.now_us();
                 words[1] = uptime_ms;
                 (WireStatus::Ok, 8)
             }

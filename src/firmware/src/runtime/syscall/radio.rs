@@ -15,7 +15,7 @@ use kernel::service::radio::{
 #[inline(always)]
 fn with_radio<R>(
     _default: R,
-    f: impl FnOnce(&mut RadioCoordinator, &mut Bk4829<'_, Disabled>) -> R,
+    f: impl FnOnce(&mut RadioCoordinator, &mut Bk4829<'_, bsp::RadioBus, Disabled>) -> R,
 ) -> R {
     #[cfg(not(test))]
     {
@@ -33,11 +33,14 @@ fn with_radio<R>(
 
 #[cfg(feature = "fm_radio")]
 #[inline(always)]
-fn fm_tuner() -> drivers::bk1080::Bk1080<py32_hal::i2c::BitbangI2c> {
-    drivers::bk1080::Bk1080::new(py32_hal::i2c::BitbangI2c::new(
-        bsp::pins::FM_SCL,
-        bsp::pins::FM_SDA,
-    ))
+fn fm_tuner() -> drivers::bk1080::Bk1080<
+    py32_hal::i2c::BitbangI2c<py32_hal::gpio::Pin, py32_hal::gpio::Pin>,
+    bsp::BspDelay,
+> {
+    drivers::bk1080::Bk1080::new(
+        py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA),
+        bsp::BspDelay,
+    )
 }
 
 #[inline(never)]
@@ -98,7 +101,7 @@ fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
 #[inline(never)]
 unsafe fn dispatch_rf_vfo(
     coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
     sub: u8,
     a1: usize,
     a2: usize,
@@ -271,7 +274,7 @@ unsafe fn dispatch_rf_vfo(
 
 #[inline(never)]
 unsafe fn dispatch_rf_bulk(
-    radio: &mut Bk4829<'_, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
     sub: u8,
     a1: usize,
     a2: usize,

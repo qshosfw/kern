@@ -143,8 +143,8 @@ impl WireSession {
         WireStatus::Ok
     }
 
-    #[inline(never)]
-    pub fn frame_record_raw(
+    #[inline(always)]
+    fn write_raw_record(
         &self,
         service: u8,
         opcode: u8,
@@ -153,7 +153,6 @@ impl WireSession {
         status_byte: Option<u8>,
         payload_data: &[u8],
         raw_buf: &mut [u8],
-        wire_out: &mut [u8],
     ) -> Result<usize, WireStatus> {
         let app_payload_len = status_byte.map_or(0, |_| 1) + payload_data.len();
         if app_payload_len > u16::MAX as usize {
@@ -161,9 +160,7 @@ impl WireSession {
         }
         let body_end = HEADER_LEN + app_payload_len;
         let raw_len = body_end + CRC_LEN;
-        let required_wire_len = Cobs::max_encoded_len(raw_len) + 2;
-
-        if raw_buf.len() < raw_len || wire_out.len() < required_wire_len {
+        if raw_buf.len() < raw_len {
             return Err(WireStatus::BadLength);
         }
 
@@ -198,6 +195,67 @@ impl WireSession {
         let [c0, c1] = crc.to_le_bytes();
         buf[body_end] = c0;
         buf[body_end + 1] = c1;
+        Ok(raw_len)
+    }
+
+    /// Encode a complete delimited RigWire frame in-place inside `wire_buf` (zero extra buffers).
+    /// Requires `raw_len <= 253` and `wire_buf.len() >= raw_len + 3`.
+    #[inline(never)]
+    pub fn frame_record_inplace(
+        &self,
+        service: u8,
+        opcode: u8,
+        flags: u8,
+        sequence: u32,
+        status_byte: Option<u8>,
+        payload_data: &[u8],
+        wire_buf: &mut [u8],
+    ) -> Result<usize, WireStatus> {
+        if wire_buf.len() < HEADER_LEN + CRC_LEN + 3 {
+            return Err(WireStatus::BadLength);
+        }
+        let max_raw = (wire_buf.len() - 3).min(253);
+        let raw_len = self.write_raw_record(
+            service,
+            opcode,
+            flags,
+            sequence,
+            status_byte,
+            payload_data,
+            &mut wire_buf[2..2 + max_raw],
+        )?;
+        wire_buf[0] = crypto::cobs::COBS_DELIMITER;
+        let cobs_len = Cobs::encode_inplace_short(&mut wire_buf[1..], raw_len)
+            .map_err(|_| WireStatus::BadLength)?;
+        wire_buf[1 + cobs_len] = crypto::cobs::COBS_DELIMITER;
+        Ok(2 + cobs_len)
+    }
+
+    #[inline(never)]
+    pub fn frame_record_raw(
+        &self,
+        service: u8,
+        opcode: u8,
+        flags: u8,
+        sequence: u32,
+        status_byte: Option<u8>,
+        payload_data: &[u8],
+        raw_buf: &mut [u8],
+        wire_out: &mut [u8],
+    ) -> Result<usize, WireStatus> {
+        let raw_len = self.write_raw_record(
+            service,
+            opcode,
+            flags,
+            sequence,
+            status_byte,
+            payload_data,
+            raw_buf,
+        )?;
+        let required_wire_len = Cobs::max_encoded_len(raw_len) + 2;
+        if wire_out.len() < required_wire_len {
+            return Err(WireStatus::BadLength);
+        }
 
         wire_out[0] = crypto::cobs::COBS_DELIMITER;
         let cobs_len = Cobs::encode(&raw_buf[..raw_len], &mut wire_out[1..])

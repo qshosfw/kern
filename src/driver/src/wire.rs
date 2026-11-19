@@ -6,6 +6,7 @@
 pub mod core;
 
 use crypto::cobs::Cobs;
+use kern_platform_traits::time::TimeSource;
 use kernel::service::SerialPort;
 use kernel::wire::*;
 
@@ -13,7 +14,7 @@ pub const MAX_RAW_BUF_LEN: usize = 146;
 pub const MAX_WIRE_BUF_LEN: usize = 149;
 
 #[repr(C)]
-pub struct WireDriver<S: SerialPort> {
+pub struct WireDriver<S: SerialPort, T: TimeSource> {
     // Keep hot RX collector state in first 32 B for Cortex-M0+ Thumb-1 imm5.
     rx_stage_pos: u8,
     rx_stage_len: u8,
@@ -22,16 +23,18 @@ pub struct WireDriver<S: SerialPort> {
     rx_len: usize,
     pub session: WireSession,
     pub port: S,
+    time: T,
     rx_stage: [u8; 64],
     rx_buf: [u8; MAX_WIRE_BUF_LEN],
 }
 
-impl<S: SerialPort> WireDriver<S> {
+impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
     /// Initialize a `WireDriver` directly in uninitialized memory without a stack temporary.
-    pub unsafe fn init_in_place(dst: *mut Self, port: S) {
+    pub unsafe fn init_in_place(dst: *mut Self, port: S, time: T) {
         unsafe {
             ::core::ptr::write_bytes(dst as *mut u8, 0, ::core::mem::size_of::<Self>());
             ::core::ptr::write(::core::ptr::addr_of_mut!((*dst).port), port);
+            ::core::ptr::write(::core::ptr::addr_of_mut!((*dst).time), time);
             ::core::ptr::write(
                 ::core::ptr::addr_of_mut!((*dst).session),
                 WireSession::new(),
@@ -40,13 +43,14 @@ impl<S: SerialPort> WireDriver<S> {
         }
     }
 
-    pub const fn new(port: S) -> Self {
-        Self::new_with_transport(port, 0x0101) // Default: UART 115200 (§5.1 profile)
+    pub const fn new(port: S, time: T) -> Self {
+        Self::new_with_transport(port, time, 0x0101) // Default: UART 115200 (§5.1 profile)
     }
 
-    pub const fn new_with_transport(port: S, transport_profile: u16) -> Self {
+    pub const fn new_with_transport(port: S, time: T, transport_profile: u16) -> Self {
         Self {
             port,
+            time,
             session: WireSession::new(),
             transport_profile,
             rx_buf: [0; MAX_WIRE_BUF_LEN],
@@ -157,24 +161,21 @@ impl<S: SerialPort> WireDriver<S> {
         status: Option<WireStatus>,
         payload_data: &[u8],
     ) -> Result<usize, WireStatus> {
-        let mut wire_out = ::core::mem::MaybeUninit::<[u8; MAX_WIRE_BUF_LEN]>::uninit();
-        let wire_slice = unsafe { &mut *wire_out.as_mut_ptr() };
         let (flags, status_byte) = match status {
             Some(st) => (FLAG_RESPONSE, Some(st.to_u8())),
             None => (FLAG_EVENT, None),
         };
-        let frame_len = self.session.frame_record_raw(
+        let frame_len = self.session.frame_record_inplace(
             service,
             opcode,
             flags,
             sequence,
             status_byte,
             payload_data,
-            &mut self.rx_buf[..MAX_RAW_BUF_LEN],
-            wire_slice,
+            &mut self.rx_buf,
         )?;
 
-        self.port.write(&wire_slice[..frame_len]);
+        self.port.write(&self.rx_buf[..frame_len]);
         Ok(frame_len)
     }
 
@@ -242,6 +243,16 @@ mod tests {
         }
     }
 
+    struct MockTime;
+    impl TimeSource for MockTime {
+        fn now_us(&self) -> u32 {
+            1_000
+        }
+        fn now_ms(&self) -> u32 {
+            1
+        }
+    }
+
     #[test]
     fn test_coalesced_frames_in_single_read_and_max_128b_response() {
         let mut session = WireSession::new();
@@ -281,7 +292,7 @@ mod tests {
         port.rx[n1..n1 + n2].copy_from_slice(&wire2[..n2]);
         port.rx_len = n1 + n2;
 
-        let mut drv = WireDriver::new(port);
+        let mut drv = WireDriver::new(port, MockTime);
         drv.session.begin_session(0x1122_3344, 128);
 
         let (hdr1, _) = drv.poll(100).expect("first coalesced frame");

@@ -3,13 +3,13 @@ pub use kernel::service::{BacklightMode, DisplayService, LedService};
 use drivers::backlight::BacklightController;
 use drivers::st7565::St7565;
 
-pub struct DisplayHardware<'a, 'b> {
-    pub lcd: &'a mut St7565<'b>,
+pub struct DisplayHardware<'a> {
+    pub lcd: &'a mut St7565<bsp::LcdBus>,
     pub canvas: &'a mut gfx::Canvas,
-    pub backlight: &'a mut BacklightController,
+    pub backlight: &'a mut BacklightController<bsp::BspBacklight>,
 }
 
-impl<'a, 'b> DisplayService for DisplayHardware<'a, 'b> {
+impl<'a> DisplayService for DisplayHardware<'a> {
     fn set_contrast(&mut self, contrast: u8) {
         self.lcd.set_contrast(contrast);
     }
@@ -49,7 +49,7 @@ impl<'a, 'b> DisplayService for DisplayHardware<'a, 'b> {
     }
 }
 
-impl<'a, 'b> DisplayHardware<'a, 'b> {
+impl<'a> DisplayHardware<'a> {
     pub fn apply_config(&mut self, cfg: &crate::config::DisplayConfig) {
         self.lcd.set_contrast(cfg.contrast);
         self.lcd.set_inverted(cfg.inverted != 0);

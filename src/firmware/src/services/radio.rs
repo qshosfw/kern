@@ -47,8 +47,8 @@ impl RadioState {
 }
 
 #[inline(never)]
-fn play_preset_notes<State>(
-    radio: &mut drivers::bk4829::Bk4829<'_, State>,
+fn play_preset_notes<B: drivers::bk4829::Bk4829Bus, State>(
+    radio: &mut drivers::bk4829::Bk4829<'_, B, State>,
     notes: &[drivers::audio::ToneNote],
 ) {
     if !notes.is_empty() {
@@ -56,7 +56,9 @@ fn play_preset_notes<State>(
     }
 }
 
-impl<'a, State> RadioMelodyExt for drivers::bk4829::Bk4829<'a, State> {
+impl<'a, B: drivers::bk4829::Bk4829Bus, State> RadioMelodyExt
+    for drivers::bk4829::Bk4829<'a, B, State>
+{
     fn play_beep(&mut self, beep: BeepType) {
         play_preset_notes(self, MelodyEngine::beep_notes(beep));
     }

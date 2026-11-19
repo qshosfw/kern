@@ -28,8 +28,15 @@ CRATE_NAMES = {"driver": "drivers", "py32_hal": "hal", "py32f071_pac": "pac"}
 EXTERN = {"py32_hal": "hal", "py32f071_pac": "pac", "drivers": "drivers", "kernel": "kernel", "gfx": "gfx",
           "kernfs": "kernfs", "utils": "utils", "crypto": "crypto", "bsp": "bsp", "traits": "traits", "calib": "calib",
           "cortex_m": "cortex_m"}
-# Module-level rules inside firmware (AGENTS.md: apps never touch hardware)
-APP_RULES = [(r"firmware/src/apps/", {"drivers", "hal", "pac", "bsp", "cortex_m"}, "APPS-TOUCH-HW")]
+# Module-level rules inside firmware & drivers (AGENTS.md: apps never touch hardware; chip drivers are portable)
+APP_RULES = [
+    (r"firmware/src/apps/", {"drivers", "hal", "pac", "bsp", "cortex_m"}, "APPS-TOUCH-HW"),
+    (
+        r"driver/src/(st7565|py25q16|bk4829|bk1080|backlight|uart|wire|audio|battery|filesystem|gnss)",
+        {"hal", "pac", "bsp"},
+        "DRIVER-TOUCH-MCU",
+    ),
+]
 
 
 def files():

@@ -5,6 +5,7 @@
 //! Communicates over I2C at 7-bit address 0x40 (8-bit 0x80 write / 0x81 read).
 
 use embedded_hal::i2c::I2c;
+use kern_platform_traits::time::Delay;
 
 pub const I2C_ADDR_BK1080: u8 = 0x40;
 
@@ -26,17 +27,19 @@ const REGISTER_INIT_TABLE: [u16; 34] = [
     0x51E1, 0xA8BC, 0x2645, 0x00E4, 0x1CD8, 0x3A50, 0xEAE0, 0x3000, 0x0200, 0x0000,
 ];
 
-pub struct Bk1080<I2C> {
+pub struct Bk1080<I2C, D> {
     i2c: I2C,
+    delay: D,
     is_initialized: bool,
     frequency_10khz: u16,
     is_muted: bool,
 }
 
-impl<I2C: I2c> Bk1080<I2C> {
-    pub const fn new(i2c: I2C) -> Self {
+impl<I2C: I2c, D: Delay> Bk1080<I2C, D> {
+    pub const fn new(i2c: I2C, delay: D) -> Self {
         Self {
             i2c,
+            delay,
             is_initialized: false,
             frequency_10khz: 0,
             is_muted: false,
@@ -65,12 +68,12 @@ impl<I2C: I2c> Bk1080<I2C> {
         }
 
         // Delay ~250ms for PLL stabilization
-        py32_hal::delay::delay_ms(250);
+        self.delay.delay_ms(250);
 
         self.write_reg(REG_INTERNAL_25, 0xA83C)?;
         self.write_reg(REG_INTERNAL_25, 0xA8BC)?;
 
-        py32_hal::delay::delay_ms(62);
+        self.delay.delay_ms(62);
 
         self.is_initialized = true;
         Ok(())
@@ -96,7 +99,7 @@ impl<I2C: I2c> Bk1080<I2C> {
         self.write_reg(REG_SYSTEM_CONFIG2, updated_reg5)?;
 
         self.write_reg(REG_CHANNEL, channel)?;
-        py32_hal::delay::delay_ms(10);
+        self.delay.delay_ms(10);
         self.write_reg(REG_CHANNEL, channel | 0x8000)?; // Tune bit
 
         Ok(())

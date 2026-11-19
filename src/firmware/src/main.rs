@@ -68,8 +68,8 @@ pub static mut PASSCODE_STATE: crate::security::PasscodeState =
 pub static mut RADIO_STATE: core::mem::MaybeUninit<RadioState> = core::mem::MaybeUninit::uninit();
 pub static mut POWER_SERVICE: SystemPower = SystemPower::empty();
 pub static mut CANVAS: gfx::Canvas = gfx::Canvas::new();
-pub static mut AUDIO_CAPTURE: drivers::audio::AudioCaptureDriver =
-    drivers::audio::AudioCaptureDriver::new();
+pub static mut AUDIO_CAPTURE: drivers::audio::AudioCaptureDriver<bsp::BspVoiceAdc> =
+    drivers::audio::AudioCaptureDriver::new(bsp::BspVoiceAdc);
 
 #[inline(always)]
 pub fn master_config() -> &'static mut MasterConfig {
@@ -97,7 +97,7 @@ pub fn system_canvas() -> &'static mut gfx::Canvas {
 }
 
 #[inline(always)]
-pub fn audio_capture_mut() -> &'static mut drivers::audio::AudioCaptureDriver {
+pub fn audio_capture_mut() -> &'static mut drivers::audio::AudioCaptureDriver<bsp::BspVoiceAdc> {
     unsafe { &mut *core::ptr::addr_of_mut!(AUDIO_CAPTURE) }
 }
 
@@ -117,7 +117,7 @@ pub fn kern_fs() -> &'static mut crate::services::SystemStorage<'static> {
 #[exception]
 fn SysTick() {
     hal::delay::on_systick();
-    drivers::backlight::systick_pwm_tick();
+    drivers::backlight::systick_pwm_tick(&mut bsp::BspBacklight);
 }
 
 /// EXTI lines 4..=15 interrupt handler (deep-sleep Exit key PB15 & UART RX PA10 wake).
@@ -157,7 +157,7 @@ unsafe extern "C" fn pre_init() {
 
 /// Bind active factory/user calibration bytes and battery discharge curve to runtime drivers.
 #[inline(never)]
-pub(crate) fn apply_active_calibration<'a>(radio: &mut Bk4829<'a>) {
+pub(crate) fn apply_active_calibration<'a>(radio: &mut Bk4829<'a, bsp::RadioBus>) {
     let calib = unsafe { &*core::ptr::addr_of!(CALIBRATION) };
     radio.attach_calibration(calib.raw_bytes());
     let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
@@ -288,7 +288,7 @@ static mut KERN_BOARD: core::mem::MaybeUninit<Board> = core::mem::MaybeUninit::u
 
 #[cfg(all(not(test), feature = "filesystem"))]
 #[unsafe(link_section = ".uninit")]
-static mut KERN_FLASH: core::mem::MaybeUninit<drivers::py25q16::Py25q16FlashDriver<'static>> =
+static mut KERN_FLASH: core::mem::MaybeUninit<drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>> =
     core::mem::MaybeUninit::uninit();
 
 #[cfg(not(test))]
@@ -304,7 +304,7 @@ static mut KERN_HW: core::mem::MaybeUninit<SystemHardware<'static>> =
 #[cfg(not(test))]
 #[entry]
 fn main() -> ! {
-    let board = unsafe {
+    let _board = unsafe {
         let p = core::ptr::addr_of_mut!(KERN_BOARD) as *mut Board;
         core::ptr::write(p, init_core_services_and_board());
         &mut *p
@@ -314,10 +314,10 @@ fn main() -> ! {
     #[cfg(feature = "filesystem")]
     let filesystem = unsafe {
         let flash_p = core::ptr::addr_of_mut!(KERN_FLASH)
-            as *mut drivers::py25q16::Py25q16FlashDriver<'static>;
+            as *mut drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>;
         core::ptr::write(
             flash_p,
-            drivers::py25q16::Py25q16FlashDriver::new(&mut board.spi_flash, &mut board.flash_cs),
+            drivers::py25q16::Py25q16FlashDriver::new(bsp::FlashBus),
         );
         let flash = &mut *flash_p;
         flash.init();
@@ -339,13 +339,10 @@ fn main() -> ! {
             core::ptr::addr_of_mut!((*p).orchestrator),
             crate::apps::APP_ID_LAUNCHER,
         );
-        core::ptr::write(
-            core::ptr::addr_of_mut!((*p).lcd),
-            St7565::new(&mut board.spi_lcd, &mut board.lcd_cs, &mut board.lcd_a0),
-        );
+        core::ptr::write(core::ptr::addr_of_mut!((*p).lcd), St7565::new(bsp::LcdBus));
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).backlight),
-            drivers::backlight::BacklightController::new(),
+            drivers::backlight::BacklightController::new(bsp::BspBacklight),
         );
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).key_scanner),
@@ -353,11 +350,11 @@ fn main() -> ! {
         );
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).audio),
-            drivers::audio::AudioAmplifier::new(),
+            drivers::audio::AudioAmplifier::new(bsp::BspAudioPa),
         );
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).radio),
-            Bk4829::new(&mut board.radio_bus),
+            Bk4829::new(bsp::RadioBus),
         );
         core::ptr::write(core::ptr::addr_of_mut!((*p).filesystem), filesystem);
         #[cfg(feature = "usb")]
@@ -368,12 +365,13 @@ fn main() -> ! {
         #[cfg(feature = "uart")]
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).uart),
-            drivers::uart::HardwareUart::new(),
+            drivers::uart::HardwareUart::new(bsp::Uart1Serial),
         );
         #[cfg(any(feature = "uart", feature = "usb_cdc"))]
         drivers::wire::WireDriver::init_in_place(
             core::ptr::addr_of_mut!((*p).wire),
             hardware::SystemSerialPort::new(),
+            bsp::BspTime,
         );
         &mut *p
     };

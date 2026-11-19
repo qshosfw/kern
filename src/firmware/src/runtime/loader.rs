@@ -230,7 +230,7 @@ pub fn finish_action_krx_package<'a, 'hw>(
 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 pub fn try_launch_boot_module(
-    _lcd: &mut drivers::st7565::St7565<'_>,
+    _lcd: &mut drivers::st7565::St7565<bsp::LcdBus>,
     storage: &mut crate::services::SystemStorage<'_>,
     path: &str,
     param: usize,

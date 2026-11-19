@@ -1,5 +1,13 @@
 //! SPI bus abstraction.
 
+/// Bus clock speed profile for SPI peripherals that support dynamic rate switching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SpiSpeed {
+    Standard = 0,
+    Turbo = 1,
+}
+
 /// An SPI master device.
 pub trait SpiDevice {
     /// Write a single byte, blocking until complete.
@@ -22,4 +30,7 @@ pub trait SpiDevice {
     }
     /// Wait until the SPI peripheral is idle.
     fn wait_idle(&mut self);
+    /// Optionally switch SPI bus clock profile (no-op on fixed-rate buses).
+    #[inline(always)]
+    fn set_speed(&mut self, _speed: SpiSpeed) {}
 }

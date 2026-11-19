@@ -37,3 +37,83 @@ pub trait PagedFramebuffer {
         self.page_bytes(page)[col]
     }
 }
+
+/// Hardware status LED color state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum StatusLed {
+    Off = 0,
+    Red = 1,
+    Green = 2,
+    Orange = 3,
+}
+
+/// Time-varying indicator pattern evaluated from monotonic uptime milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedPattern {
+    Off,
+    Solid(StatusLed),
+    BlinkFast(StatusLed),
+    BlinkMedium(StatusLed),
+    BlinkSlow(StatusLed),
+    Pulse(StatusLed),
+    Alternate(StatusLed, StatusLed),
+}
+
+impl LedPattern {
+    #[inline(always)]
+    pub fn evaluate(&self, now_ms: u32) -> StatusLed {
+        match self {
+            Self::Off => StatusLed::Off,
+            Self::Solid(c) => *c,
+            Self::BlinkFast(c) => {
+                if (now_ms / 100) & 1 == 0 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::BlinkMedium(c) => {
+                if (now_ms / 250) & 1 == 0 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::BlinkSlow(c) => {
+                if (now_ms / 500) & 1 == 0 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::Pulse(c) => {
+                if (now_ms % 1000) < 50 {
+                    *c
+                } else {
+                    StatusLed::Off
+                }
+            }
+            Self::Alternate(c1, c2) => {
+                if (now_ms / 250) & 1 == 0 {
+                    *c1
+                } else {
+                    *c2
+                }
+            }
+        }
+    }
+}
+
+/// Board-level backlight LED output driver (monochrome or 3-bit RGB channel mask).
+pub trait BacklightOutput {
+    fn set_output(&mut self, on: bool, rgb_mask: u8);
+}
+
+/// 4-wire SPI + CS + DC/A0 + Delay bus for command/data LCD controllers (ST7565, ST7735, etc.).
+pub trait CommandDisplayBus: crate::spi::SpiDevice + crate::time::Delay {
+    fn cs_low(&mut self);
+    fn cs_high(&mut self);
+    fn dc_low(&mut self);
+    fn dc_high(&mut self);
+}

@@ -79,27 +79,27 @@ impl kernel::service::SerialPort for SystemSerialPort {
 
 #[repr(C)]
 pub struct SystemHardware<'a> {
-    pub backlight: BacklightController,
-    pub audio: AudioAmplifier,
+    pub backlight: BacklightController<bsp::BspBacklight>,
+    pub audio: AudioAmplifier<bsp::BspAudioPa>,
     pub filesystem: &'a mut SystemStorage<'a>,
     #[cfg(feature = "uart")]
-    pub uart: drivers::uart::HardwareUart,
+    pub uart: drivers::uart::HardwareUart<bsp::Uart1Serial>,
     pub key_scanner: KeypadScanner,
     pub ipc_queue: kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
     #[cfg(feature = "usb")]
     pub usb: drivers::usb::UsbDriver,
     pub orchestrator: crate::orchestrator::Orchestrator,
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-    pub wire: drivers::wire::WireDriver<SystemSerialPort>,
-    pub radio: Bk4829<'a, drivers::bk4829::Disabled>,
-    pub lcd: St7565<'a>,
+    pub wire: drivers::wire::WireDriver<SystemSerialPort, bsp::BspTime>,
+    pub radio: Bk4829<'a, bsp::RadioBus, drivers::bk4829::Disabled>,
+    pub lcd: St7565<bsp::LcdBus>,
 }
 
 #[inline(never)]
 pub fn apply_audio_hardware(
     audio_cfg: &crate::config::AudioConfig,
-    audio: &mut AudioAmplifier,
-    radio: &mut Bk4829<drivers::bk4829::Disabled>,
+    audio: &mut AudioAmplifier<bsp::BspAudioPa>,
+    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) {
     audio.set_volume(audio_cfg.volume);
     radio.set_volume_level(audio_cfg.volume);
@@ -109,7 +109,7 @@ pub fn apply_audio_hardware(
 }
 
 #[inline(always)]
-pub fn apply_lcd_hardware(disp_cfg: &crate::config::DisplayConfig, lcd: &mut St7565) {
+pub fn apply_lcd_hardware(disp_cfg: &crate::config::DisplayConfig, lcd: &mut St7565<bsp::LcdBus>) {
     lcd.set_contrast(disp_cfg.contrast);
     lcd.set_inverted(disp_cfg.inverted != 0);
     lcd.shading_mode = disp_cfg.shading_mode;
@@ -117,8 +117,8 @@ pub fn apply_lcd_hardware(disp_cfg: &crate::config::DisplayConfig, lcd: &mut St7
 
 pub fn apply_display_hardware(
     disp_cfg: &crate::config::DisplayConfig,
-    lcd: &mut St7565,
-    backlight: &mut BacklightController,
+    lcd: &mut St7565<bsp::LcdBus>,
+    backlight: &mut BacklightController<bsp::BspBacklight>,
 ) {
     apply_lcd_hardware(disp_cfg, lcd);
     disp_cfg.apply_to_backlight(backlight);

@@ -36,18 +36,18 @@ pub struct SysContext<'a, 'hw> {
     pub is_keypad_locked: bool,
     pub is_f_active: bool,
     pub state: &'a mut RadioState,
-    pub radio: &'a mut drivers::bk4829::Bk4829<'hw, drivers::bk4829::Disabled>,
+    pub radio: &'a mut drivers::bk4829::Bk4829<'hw, bsp::RadioBus, drivers::bk4829::Disabled>,
     pub power: &'a mut SystemPower,
     pub config: &'a mut crate::config::MasterConfig,
     pub storage: &'a mut SystemStorage<'hw>,
-    pub audio: &'a mut drivers::audio::AudioAmplifier,
+    pub audio: &'a mut drivers::audio::AudioAmplifier<bsp::BspAudioPa>,
     pub ipc: &'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
     #[cfg(any(test, feature = "passcode"))]
-    pub display: Option<&'a mut display::DisplayHardware<'a, 'hw>>,
+    pub display: Option<&'a mut display::DisplayHardware<'a>>,
     #[cfg(feature = "passcode")]
     pub passcode: &'a mut crate::security::PasscodeState,
     #[cfg(all(test, feature = "uart"))]
-    pub uart: &'a mut drivers::uart::HardwareUart,
+    pub uart: &'a mut drivers::uart::HardwareUart<bsp::Uart1Serial>,
     #[cfg(test)]
     pub usb: Option<&'a mut drivers::usb::UsbDriver>,
 }
@@ -55,7 +55,7 @@ pub struct SysContext<'a, 'hw> {
 #[inline(never)]
 fn play_tone_file(
     storage: &mut SystemStorage,
-    radio: &mut drivers::bk4829::Bk4829<'_, drivers::bk4829::Disabled>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     path: &str,
 ) {
     let notes: &mut [melody::ToneNote; melody::MAX_MELODY_NOTES] = unsafe {

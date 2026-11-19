@@ -1,5 +1,7 @@
 use crate::hw::{InputPin, OutputPin, SpiDevice};
 use crate::pins as board_pins;
+pub use kern_platform_traits::display::{LedPattern, StatusLed};
+use kern_platform_traits::spi::SpiSpeed;
 use py32_hal as hal;
 
 // --- GPIO Wrappers ---
@@ -56,6 +58,13 @@ impl SpiDevice for Py32Spi1 {
     #[inline(always)]
     fn wait_idle(&mut self) {
         let _ = hal::spi::wait_idle();
+    }
+    #[inline(always)]
+    fn set_speed(&mut self, speed: SpiSpeed) {
+        hal::spi::set_spi1_speed(match speed {
+            SpiSpeed::Turbo => hal::spi::Spi1Speed::Turbo,
+            SpiSpeed::Standard => hal::spi::Spi1Speed::Standard,
+        });
     }
 }
 
@@ -166,6 +175,256 @@ impl kern_platform_traits::radio::RadioBus for RadioBus {
     }
 }
 
+impl kern_platform_traits::audio::AudioPa for RadioBus {
+    #[inline(always)]
+    fn enable(&mut self) {
+        board_pins::AUDIO_PA.set_high();
+    }
+
+    #[inline(always)]
+    fn disable(&mut self) {
+        board_pins::AUDIO_PA.set_low();
+    }
+
+    #[inline(always)]
+    fn is_enabled(&self) -> bool {
+        board_pins::AUDIO_PA.is_high()
+    }
+}
+
+impl kern_platform_traits::time::Delay for RadioBus {
+    #[inline(always)]
+    fn delay_us(&mut self, us: u32) {
+        hal::delay::delay_us(us);
+    }
+
+    #[inline(always)]
+    fn delay_ms(&mut self, ms: u32) {
+        hal::delay::delay_ms(ms);
+    }
+}
+
+// --- Zero-Cost ZST Board Adapters ---
+
+#[derive(Clone, Copy, Default)]
+pub struct BspDelay;
+
+impl kern_platform_traits::time::Delay for BspDelay {
+    #[inline(always)]
+    fn delay_us(&mut self, us: u32) {
+        hal::delay::delay_us(us);
+    }
+
+    #[inline(always)]
+    fn delay_ms(&mut self, ms: u32) {
+        hal::delay::delay_ms(ms);
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct BspTime;
+
+impl kern_platform_traits::time::TimeSource for BspTime {
+    #[inline(always)]
+    fn now_us(&self) -> u32 {
+        hal::time::now_us()
+    }
+
+    #[inline(always)]
+    fn now_ms(&self) -> u32 {
+        hal::delay::millis()
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct BspWatchdog;
+
+impl kern_platform_traits::wdt::WatchdogDevice for BspWatchdog {
+    #[inline(always)]
+    fn feed(&mut self) {
+        hal::wdt::Watchdog::feed();
+    }
+
+    #[inline(always)]
+    fn is_watchdog_reset(&self) -> bool {
+        matches!(
+            hal::wdt::Watchdog::reset_cause(),
+            hal::wdt::ResetCause::IndependentWatchdog | hal::wdt::ResetCause::WindowWatchdog
+        )
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct LcdBus;
+
+impl SpiDevice for LcdBus {
+    #[inline(always)]
+    fn write_byte(&mut self, byte: u8) {
+        Py32Spi1.write_byte(byte);
+    }
+    #[inline(always)]
+    fn transfer_byte(&mut self, byte: u8) -> u8 {
+        Py32Spi1.transfer_byte(byte)
+    }
+    #[inline(always)]
+    fn wait_idle(&mut self) {
+        Py32Spi1.wait_idle();
+    }
+    #[inline(always)]
+    fn set_speed(&mut self, speed: SpiSpeed) {
+        Py32Spi1.set_speed(speed);
+    }
+}
+
+impl kern_platform_traits::time::Delay for LcdBus {
+    #[inline(always)]
+    fn delay_us(&mut self, us: u32) {
+        hal::delay::delay_us(us);
+    }
+    #[inline(always)]
+    fn delay_ms(&mut self, ms: u32) {
+        hal::delay::delay_ms(ms);
+    }
+}
+
+impl kern_platform_traits::display::CommandDisplayBus for LcdBus {
+    #[inline(always)]
+    fn cs_low(&mut self) {
+        board_pins::LCD_CS.set_low();
+    }
+    #[inline(always)]
+    fn cs_high(&mut self) {
+        board_pins::LCD_CS.set_high();
+    }
+    #[inline(always)]
+    fn dc_low(&mut self) {
+        board_pins::LCD_A0.set_low();
+    }
+    #[inline(always)]
+    fn dc_high(&mut self) {
+        board_pins::LCD_A0.set_high();
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct FlashBus;
+
+impl SpiDevice for FlashBus {
+    #[inline(always)]
+    fn write_byte(&mut self, byte: u8) {
+        Py32Spi2.write_byte(byte);
+    }
+    #[inline(always)]
+    fn transfer_byte(&mut self, byte: u8) -> u8 {
+        Py32Spi2.transfer_byte(byte)
+    }
+    #[inline(always)]
+    fn read_bytes(&mut self, buf: &mut [u8]) {
+        Py32Spi2.read_bytes(buf);
+    }
+    #[inline(always)]
+    fn write_bytes(&mut self, buf: &[u8]) {
+        Py32Spi2.write_bytes(buf);
+    }
+    #[inline(always)]
+    fn wait_idle(&mut self) {
+        Py32Spi2.wait_idle();
+    }
+}
+
+impl kern_platform_traits::time::Delay for FlashBus {
+    #[inline(always)]
+    fn delay_us(&mut self, us: u32) {
+        hal::delay::delay_us(us);
+    }
+    #[inline(always)]
+    fn delay_ms(&mut self, ms: u32) {
+        hal::delay::delay_ms(ms);
+    }
+}
+
+impl kern_platform_traits::wdt::WatchdogDevice for FlashBus {
+    #[inline(always)]
+    fn feed(&mut self) {
+        hal::wdt::Watchdog::feed();
+    }
+    #[inline(always)]
+    fn is_watchdog_reset(&self) -> bool {
+        matches!(
+            hal::wdt::Watchdog::reset_cause(),
+            hal::wdt::ResetCause::IndependentWatchdog | hal::wdt::ResetCause::WindowWatchdog
+        )
+    }
+}
+
+impl kern_platform_traits::flash::SpiFlashBus for FlashBus {
+    #[inline(always)]
+    fn cs_low(&mut self) {
+        board_pins::FLASH_CS.set_low();
+    }
+    #[inline(always)]
+    fn cs_high(&mut self) {
+        board_pins::FLASH_CS.set_high();
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct BspBacklight;
+
+impl kern_platform_traits::display::BacklightOutput for BspBacklight {
+    #[inline(always)]
+    fn set_output(&mut self, on: bool, rgb_mask: u8) {
+        #[cfg(not(feature = "target_k10pro"))]
+        {
+            let _ = rgb_mask;
+            if on {
+                board_pins::BACKLIGHT.set_high();
+            } else {
+                board_pins::BACKLIGHT.set_low();
+            }
+        }
+        #[cfg(feature = "target_k10pro")]
+        {
+            let mask = if on { rgb_mask } else { 0 };
+            if (mask & 0b001) != 0 {
+                board_pins::LCD_RLED.set_high();
+            } else {
+                board_pins::LCD_RLED.set_low();
+            }
+            if (mask & 0b010) != 0 {
+                board_pins::LCD_GLED.set_high();
+            } else {
+                board_pins::LCD_GLED.set_low();
+            }
+            if (mask & 0b100) != 0 {
+                board_pins::LCD_BLED.set_high();
+            } else {
+                board_pins::LCD_BLED.set_low();
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Uart1Serial;
+
+impl kern_platform_traits::serial::SerialBackend for Uart1Serial {
+    #[inline(always)]
+    fn write_bytes(&mut self, data: &[u8]) {
+        hal::uart::mark_activity();
+        let _ = hal::uart::write_bytes(data);
+    }
+
+    #[inline(always)]
+    fn try_read_byte(&mut self) -> Option<u8> {
+        let byte = hal::uart::try_read_byte();
+        if byte.is_some() {
+            hal::uart::mark_activity();
+        }
+        byte
+    }
+}
+
 // --- Board Struct ---
 pub struct Board {
     pub spi_lcd: Py32Spi1,
@@ -174,71 +433,6 @@ pub struct Board {
     pub lcd_cs: Py32OutputPin,
     pub lcd_a0: Py32OutputPin,
     pub flash_cs: Py32OutputPin,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum StatusLed {
-    Off = 0,
-    Red = 1,
-    Green = 2,
-    Orange = 3,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LedPattern {
-    Off,
-    Solid(StatusLed),
-    BlinkFast(StatusLed),
-    BlinkMedium(StatusLed),
-    BlinkSlow(StatusLed),
-    Pulse(StatusLed),
-    Alternate(StatusLed, StatusLed),
-}
-
-impl LedPattern {
-    #[inline(always)]
-    pub fn evaluate(&self, now_ms: u32) -> StatusLed {
-        match self {
-            Self::Off => StatusLed::Off,
-            Self::Solid(c) => *c,
-            Self::BlinkFast(c) => {
-                if (now_ms / 100) & 1 == 0 {
-                    *c
-                } else {
-                    StatusLed::Off
-                }
-            }
-            Self::BlinkMedium(c) => {
-                if (now_ms / 250) & 1 == 0 {
-                    *c
-                } else {
-                    StatusLed::Off
-                }
-            }
-            Self::BlinkSlow(c) => {
-                if (now_ms / 500) & 1 == 0 {
-                    *c
-                } else {
-                    StatusLed::Off
-                }
-            }
-            Self::Pulse(c) => {
-                if (now_ms % 1000) < 50 {
-                    *c
-                } else {
-                    StatusLed::Off
-                }
-            }
-            Self::Alternate(c1, c2) => {
-                if (now_ms / 250) & 1 == 0 {
-                    *c1
-                } else {
-                    *c2
-                }
-            }
-        }
-    }
 }
 
 impl Board {
@@ -394,6 +588,7 @@ pub fn bk4829_fault_quench() {
     bus.write_reg(0x30, 0x0000); // Disable TX, RX, VCO, PLL, AF, DSP
 }
 
+#[derive(Clone, Copy, Default)]
 pub struct BspAudioPa;
 
 impl kern_platform_traits::audio::AudioPa for BspAudioPa {
@@ -410,5 +605,255 @@ impl kern_platform_traits::audio::AudioPa for BspAudioPa {
     #[inline(always)]
     fn is_enabled(&self) -> bool {
         board_pins::AUDIO_PA.is_high()
+    }
+}
+
+// --- Board Keypad Matrix Scanner (PY32F071 GPIOB / K10 Pro) ---
+
+#[derive(Clone, Copy, Default)]
+pub struct BspKeyMatrix;
+
+impl BspKeyMatrix {
+    const GPIOB_BASE: u32 = py32_pac::gpio::GPIOB_BASE;
+    #[cfg(not(feature = "target_k10pro"))]
+    const BSRR_OFFSET: u32 = py32_pac::gpio::BSRR_OFFSET;
+    const IDR_OFFSET: u32 = py32_pac::gpio::IDR_OFFSET;
+    #[cfg(not(feature = "target_k10pro"))]
+    const PIN_MASK_COLS: u32 = (1 << 6) | (1 << 5) | (1 << 4) | (1 << 3);
+    const PIN_MASK_ROWS: u32 = (1 << 15) | (1 << 14) | (1 << 13) | (1 << 12);
+
+    #[inline(always)]
+    fn set_cols_high() {
+        #[cfg(not(feature = "target_k10pro"))]
+        {
+            let bsrr = (Self::GPIOB_BASE + Self::BSRR_OFFSET) as *mut u32;
+            unsafe {
+                bsrr.write_volatile(Self::PIN_MASK_COLS);
+            }
+        }
+        #[cfg(feature = "target_k10pro")]
+        {
+            for (idx, col) in board_pins::KB_COLS.iter().enumerate() {
+                #[cfg(feature = "swd_debug")]
+                if idx == 3 {
+                    continue;
+                }
+                let _ = idx;
+                col.set_high();
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn clear_col(col_idx: usize) {
+        #[cfg(not(feature = "target_k10pro"))]
+        {
+            let pin = 6 - col_idx;
+            let bsrr = (Self::GPIOB_BASE + Self::BSRR_OFFSET) as *mut u32;
+            unsafe {
+                bsrr.write_volatile(1 << (pin + 16));
+            }
+        }
+        #[cfg(feature = "target_k10pro")]
+        {
+            #[cfg(feature = "swd_debug")]
+            if col_idx == 3 {
+                return;
+            }
+            board_pins::KB_COLS[col_idx].set_low();
+        }
+    }
+
+    #[inline(always)]
+    fn read_rows_raw() -> u32 {
+        let idr = (Self::GPIOB_BASE + Self::IDR_OFFSET) as *const u32;
+        unsafe { idr.read_volatile() & Self::PIN_MASK_ROWS }
+    }
+
+    #[inline(always)]
+    fn read_ptt_raw() -> bool {
+        #[cfg(not(feature = "target_k10pro"))]
+        {
+            let idr = (Self::GPIOB_BASE + Self::IDR_OFFSET) as *const u32;
+            unsafe { (idr.read_volatile() & (1 << 10)) == 0 }
+        }
+        #[cfg(feature = "target_k10pro")]
+        {
+            board_pins::PTT.is_low()
+        }
+    }
+
+    /// Scan the 5-column matrix and dedicated PTT pin into a 19-bit active-key bitmask.
+    pub fn scan_raw_mask() -> u32 {
+        let settle_2us = (hal::rcc::sysclk_hz() >> 19) + 5;
+        let settle_1us = (settle_2us >> 1).max(16);
+        let mut mask: u32 = 0;
+
+        let mut side_keys = 0u32;
+        for j in 0..5 {
+            Self::set_cols_high();
+            if j > 0 {
+                Self::clear_col(j - 1);
+            }
+
+            cortex_m::asm::delay(settle_2us);
+
+            let mut reg = 0u32;
+            let mut i = 0usize;
+            let mut k = 0usize;
+            while i < 3 && k < 12 {
+                cortex_m::asm::delay(settle_1us);
+                let reg2 = Self::read_rows_raw();
+                if reg == reg2 {
+                    i += 1;
+                } else {
+                    i = 0;
+                    reg = reg2;
+                }
+                k += 1;
+            }
+
+            if i >= 2 {
+                let row_bits = (!reg >> 12) & 0x0F;
+                let rev = ((row_bits & 1) << 3)
+                    | ((row_bits & 2) << 1)
+                    | ((row_bits & 4) >> 1)
+                    | ((row_bits & 8) >> 3);
+                if j == 0 {
+                    side_keys = rev & 0x03;
+                    mask |= side_keys;
+                } else {
+                    let col_rev = rev & !side_keys;
+                    mask |= col_rev << (4 * j - 2);
+                }
+            }
+        }
+
+        Self::set_cols_high();
+
+        if Self::read_ptt_raw() {
+            mask |= 1 << 18;
+        }
+
+        mask
+    }
+
+    pub fn reset_gpio_pins() {
+        for col in &board_pins::KB_COLS {
+            col.configure_output(py32_pac::gpio::SPEED_HIGH);
+            col.set_high();
+        }
+        for row in &board_pins::KB_ROWS {
+            row.configure_input(py32_pac::gpio::PULL_UP);
+        }
+        board_pins::PTT.configure_input(py32_pac::gpio::PULL_UP);
+    }
+}
+
+impl kern_platform_traits::input::KeyMatrix for BspKeyMatrix {
+    #[inline(always)]
+    fn poll_raw_mask(&self) -> u32 {
+        Self::scan_raw_mask()
+    }
+
+    #[inline(always)]
+    fn reset_pins(&self) {
+        Self::reset_gpio_pins();
+    }
+}
+
+// --- On-Chip Voice ADC/DAC Frontend (PA4 / ADC1 CH4 + DAC1 CH1) ---
+
+#[derive(Clone, Copy, Default)]
+pub struct BspVoiceAdc;
+
+impl BspVoiceAdc {
+    #[inline(never)]
+    unsafe fn adc_convert_single(cr2: u32) -> i32 {
+        use py32_pac as pac;
+        unsafe {
+            pac::adc::ADC_SR.write_volatile(!pac::adc::SR_EOC);
+            pac::adc::ADC_CR2.write_volatile(cr2 | pac::adc::CR2_EXTTRIG | pac::adc::CR2_SWSTART);
+            let mut timeout = 2000;
+            while (pac::adc::ADC_SR.read_volatile() & pac::adc::SR_EOC) == 0 && timeout > 0 {
+                timeout -= 1;
+            }
+            (pac::adc::ADC_DR.read_volatile() & 0x0FFF) as i32
+        }
+    }
+
+    #[inline(never)]
+    unsafe fn adc_select_channel(ch: u32) {
+        use py32_pac as pac;
+        unsafe {
+            pac::adc::ADC_SQR1.write_volatile(0);
+            pac::adc::ADC_SQR3.write_volatile(ch);
+        }
+    }
+}
+
+impl kern_platform_traits::time::Delay for BspVoiceAdc {
+    #[inline(always)]
+    fn delay_us(&mut self, us: u32) {
+        hal::delay::delay_us(us);
+    }
+    #[inline(always)]
+    fn delay_ms(&mut self, ms: u32) {
+        hal::delay::delay_ms(ms);
+    }
+}
+
+impl kern_platform_traits::audio::VoiceAdcBackend for BspVoiceAdc {
+    fn begin_voice_bias(&mut self) {
+        use py32_pac as pac;
+        unsafe {
+            board_pins::VOICE_DAC.configure_analog();
+            let apb1 = pac::rcc::RCC_APB1ENR.read_volatile();
+            pac::rcc::RCC_APB1ENR.write_volatile(apb1 | pac::rcc::APB1ENR_DAC);
+
+            pac::dac::DAC_DHR12R1.write_volatile(2048);
+            pac::dac::DAC_CR.write_volatile(pac::dac::CR_EN1);
+            pac::dac::DAC_SWTRIGR.write_volatile(pac::dac::SWTRIGR_SWTRIG1);
+
+            let mut cr2 = pac::adc::ADC_CR2.read_volatile();
+            if (cr2 & pac::adc::CR2_ADON) == 0 {
+                cr2 |= pac::adc::CR2_ADON | pac::adc::CR2_EXTSEL_SWSTART;
+                pac::adc::ADC_CR2.write_volatile(cr2);
+                hal::delay::delay_us(150);
+            }
+            Self::adc_select_channel(4);
+            hal::delay::delay_us(50);
+        }
+    }
+
+    #[inline(always)]
+    fn select_voice_channel(&mut self) {
+        unsafe {
+            Self::adc_select_channel(4);
+        }
+    }
+
+    #[inline(always)]
+    fn read_voice_sample(&mut self) -> i32 {
+        unsafe {
+            let cr2 = py32_pac::adc::ADC_CR2.read_volatile();
+            Self::adc_convert_single(cr2)
+        }
+    }
+
+    fn end_voice_bias(&mut self) {
+        use py32_pac as pac;
+        unsafe {
+            pac::dac::DAC_CR.write_volatile(0);
+            let apb1 = pac::rcc::RCC_APB1ENR.read_volatile();
+            pac::rcc::RCC_APB1ENR.write_volatile(apb1 & !pac::rcc::APB1ENR_DAC);
+            board_pins::VOICE_DAC.configure_analog();
+            Self::adc_select_channel(8);
+        }
+    }
+
+    #[inline(always)]
+    fn should_abort(&self) -> bool {
+        BspKeyMatrix::scan_raw_mask() != 0
     }
 }

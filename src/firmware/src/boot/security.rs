@@ -32,8 +32,8 @@ pub fn draw_locked_screen(canvas: &mut gfx::Canvas, sub_msg: &str) {
 }
 
 pub fn handle_lockout_penalty(
-    lcd: &mut St7565,
-    radio: &mut Bk4829<drivers::bk4829::Disabled>,
+    lcd: &mut St7565<bsp::LcdBus>,
+    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     storage: &mut SystemStorage,
     failed: u8,
     max_tries: u8,
@@ -59,7 +59,7 @@ pub fn handle_lockout_penalty(
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
-pub fn flash_error_and_pause(radio: &mut Bk4829<drivers::bk4829::Disabled>) {
+pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>) {
     radio.play_beep(crate::services::melody::BeepType::Warning);
     for _ in 0..3 {
         radio.set_status_led(bsp::StatusLed::Red);
@@ -70,7 +70,7 @@ pub fn flash_error_and_pause(radio: &mut Bk4829<drivers::bk4829::Disabled>) {
     py32_hal::delay::delay_ms(600);
 }
 
-pub fn render_verify_modal(lcd: &mut St7565, pct: u8) {
+pub fn render_verify_modal(lcd: &mut St7565<bsp::LcdBus>, pct: u8) {
     let canvas = crate::system_canvas();
     gfx::widgets::draw_modal_progress(canvas, "", "Verifying...", pct);
     lcd.blit(canvas);
@@ -78,8 +78,8 @@ pub fn render_verify_modal(lcd: &mut St7565, pct: u8) {
 
 #[inline(always)]
 pub fn handle_unlock_success(
-    backlight: &mut BacklightController,
-    radio: &mut Bk4829<drivers::bk4829::Disabled>,
+    backlight: &mut BacklightController<bsp::BspBacklight>,
+    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     master_cfg: &MasterConfig,
     stealth: bool,
 ) {
@@ -97,8 +97,8 @@ pub fn handle_unlock_success(
 }
 
 pub fn handle_unlock_failure(
-    lcd: &mut St7565,
-    radio: &mut Bk4829<drivers::bk4829::Disabled>,
+    lcd: &mut St7565<bsp::LcdBus>,
+    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     storage: &mut SystemStorage,
     text_view: &gfx::gui::modules::text_input::TextInputView,
     text_model: &gfx::gui::modules::text_input::TextInputModel,
@@ -143,7 +143,7 @@ fn process_unlock_submission(
     stealth: bool,
 ) -> bool {
     fn on_verify_progress(ctx: *mut (), pct: u8) {
-        let lcd = unsafe { &mut *(ctx as *mut drivers::st7565::St7565) };
+        let lcd = unsafe { &mut *(ctx as *mut drivers::st7565::St7565<bsp::LcdBus>) };
         py32_hal::wdt::Watchdog::feed();
         render_verify_modal(lcd, pct);
     }

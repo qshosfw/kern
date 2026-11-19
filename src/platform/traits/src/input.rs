@@ -42,3 +42,9 @@ pub trait InputBackend {
     /// Scan the input matrix and return an event if a key state changed.
     fn scan(&mut self) -> Option<(KeyCode, KeyState)>;
 }
+
+/// Low-level board keypad matrix scanner returning a 19-bit active-key bitmask.
+pub trait KeyMatrix {
+    fn poll_raw_mask(&self) -> u32;
+    fn reset_pins(&self);
+}

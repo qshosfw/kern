@@ -133,6 +133,6 @@ impl StorageService for NoStorage {
 
 #[cfg(feature = "filesystem")]
 pub type SystemStorage<'a> =
-    drivers::filesystem::FileSystemDriver<'a, drivers::py25q16::Py25q16FlashDriver<'a>>;
+    drivers::filesystem::FileSystemDriver<'a, drivers::py25q16::Py25q16FlashDriver<bsp::FlashBus>>;
 #[cfg(not(feature = "filesystem"))]
 pub type SystemStorage<'a> = NoStorage;

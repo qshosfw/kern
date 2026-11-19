@@ -13,8 +13,9 @@
 //!    - BK4829 REG_70: Tone generator synthesis gain (bits 6:0, 0..=127).
 //!    - BK1080 REG_05: Digital volume attenuation for the FM broadcast receiver.
 
-use bsp::pins::AUDIO_PA;
 use core::sync::atomic::{AtomicU16, Ordering};
+use kern_platform_traits::audio::{AudioPa, VoiceAdcBackend};
+use kern_platform_traits::time::Delay;
 
 /// 11-step digital AF Preamp / DAC Gain curve for BK4829 REG_48.
 /// Maps digital level 0..=10 to (rx_gain2: 0..=63, dac_gain: 0..=15).
@@ -40,15 +41,17 @@ pub use kernel::service::ToneNote;
 
 static HANGOVER_MS: AtomicU16 = AtomicU16::new(0);
 
-/// Hardware driver for the external LN4898 Audio Power Amplifier on GPIOA Pin 8.
-pub struct AudioAmplifier {
+/// Hardware driver for the external LN4898 Audio Power Amplifier.
+pub struct AudioAmplifier<P> {
+    pa: P,
     enabled: bool,
     volume: u8,
 }
 
-impl AudioAmplifier {
-    pub const fn new() -> Self {
+impl<P: AudioPa> AudioAmplifier<P> {
+    pub const fn new(pa: P) -> Self {
         Self {
+            pa,
             enabled: false,
             volume: 5,
         }
@@ -58,18 +61,18 @@ impl AudioAmplifier {
         self.disable();
     }
 
-    /// Enable LN4898 power amplifier by driving PA8 High.
+    /// Enable LN4898 power amplifier.
     pub fn enable(&mut self) {
         self.enabled = true;
         HANGOVER_MS.store(0, Ordering::Relaxed);
-        AUDIO_PA.set_high();
+        self.pa.enable();
     }
 
-    /// Disable LN4898 power amplifier by driving PA8 Low (ultra-low power shutdown).
+    /// Disable LN4898 power amplifier (ultra-low power shutdown).
     pub fn disable(&mut self) {
         self.enabled = false;
         HANGOVER_MS.store(0, Ordering::Relaxed);
-        AUDIO_PA.set_low();
+        self.pa.disable();
     }
 
     /// Keep amplifier energized after tone playback to eliminate key repeat pops.
@@ -84,9 +87,9 @@ impl AudioAmplifier {
     }
 
     /// Immediately cancel any active hangover and shut down the LN4898 amplifier.
-    pub fn cancel_hangover() {
+    pub fn cancel_hangover(&mut self) {
         HANGOVER_MS.store(0, Ordering::Relaxed);
-        AUDIO_PA.set_low();
+        self.pa.disable();
     }
 
     /// Periodic system tick to step hangover shutdown timer (called every 16ms).
@@ -96,7 +99,7 @@ impl AudioAmplifier {
             if rem > 0 {
                 if elapsed_ms >= rem {
                     HANGOVER_MS.store(0, Ordering::Relaxed);
-                    AUDIO_PA.set_low();
+                    self.pa.disable();
                 } else {
                     HANGOVER_MS.store(rem - elapsed_ms, Ordering::Relaxed);
                 }
@@ -109,7 +112,7 @@ impl AudioAmplifier {
     }
 
     pub fn is_active(&self) -> bool {
-        self.enabled || HANGOVER_MS.load(Ordering::Relaxed) > 0 || AUDIO_PA.is_high()
+        self.enabled || HANGOVER_MS.load(Ordering::Relaxed) > 0 || self.pa.is_enabled()
     }
 
     pub fn volume(&self) -> u8 {
@@ -125,31 +128,31 @@ impl AudioAmplifier {
     }
 }
 
-impl Default for AudioAmplifier {
+impl<P: AudioPa + Default> Default for AudioAmplifier<P> {
     fn default() -> Self {
-        Self::new()
+        Self::new(P::default())
     }
 }
 
 /// RAII Mute Guard that temporarily mutes speaker during FSK bursts and unmutes on drop.
-pub struct MuteGuard<'a> {
-    amp: &'a mut AudioAmplifier,
+pub struct MuteGuard<'a, P: AudioPa> {
+    amp: &'a mut AudioAmplifier<P>,
 }
 
-impl<'a> MuteGuard<'a> {
-    pub fn new(amp: &'a mut AudioAmplifier) -> Self {
+impl<'a, P: AudioPa> MuteGuard<'a, P> {
+    pub fn new(amp: &'a mut AudioAmplifier<P>) -> Self {
         amp.disable();
         Self { amp }
     }
 }
 
-impl<'a> Drop for MuteGuard<'a> {
+impl<'a, P: AudioPa> Drop for MuteGuard<'a, P> {
     fn drop(&mut self) {
         self.amp.enable();
     }
 }
 
-impl kernel::service::AudioService for AudioAmplifier {
+impl<P: AudioPa> kernel::service::AudioService for AudioAmplifier<P> {
     fn set_volume(&mut self, level: u8) {
         Self::set_volume(self, level);
     }
@@ -173,7 +176,7 @@ impl kernel::service::AudioService for AudioAmplifier {
     }
 }
 
-impl kern_platform_traits::audio::AudioPa for AudioAmplifier {
+impl<P: AudioPa> kern_platform_traits::audio::AudioPa for AudioAmplifier<P> {
     fn enable(&mut self) {
         Self::enable(self);
     }
@@ -187,49 +190,23 @@ impl kern_platform_traits::audio::AudioPa for AudioAmplifier {
 
 // ── Continuous Audio Input & ADC Sampling Driver ───────────────────────────
 
-/// Hardware driver for Continuous Audio Input & ADC Sampling on Quansheng UV-K1 / K5.
+/// Portable Continuous Audio Input & ADC Sampling Driver.
 ///
-/// Uses PA4 (VOICE_DAC) in analog mode with DAC1 Channel 1 providing a stable 1.65V DC midpoint bias,
-/// and ADC1 Channel 4 sampling the AC-coupled voice signal.
-///
-/// Hardening & Anti-Glitch Invariants:
-/// - Baseline DC offset pre-calibration (averages 8 startup conversions to eliminate startup transient pops)
-/// - Adaptive 64-sample IIR DC-removal high-pass filter: `dc_bias += (raw - dc_bias) >> 6`
-/// - Hardware ADC channel conflict protection: re-verifies `ADC_SQR3 = 4` per batch to prevent battery telemetry hijacking
-/// - Non-blocking abort check: polls keypad matrix every 64 samples to keep the UI interactive
-/// - Microsecond timing precision across all supported MCU clock speeds
-#[inline(never)]
-unsafe fn adc_convert_single(cr2: u32) -> i32 {
-    use py32_pac as pac;
-    unsafe {
-        pac::adc::ADC_SR.write_volatile(!pac::adc::SR_EOC);
-        pac::adc::ADC_CR2.write_volatile(cr2 | pac::adc::CR2_EXTTRIG | pac::adc::CR2_SWSTART);
-        let mut timeout = 2000;
-        while (pac::adc::ADC_SR.read_volatile() & pac::adc::SR_EOC) == 0 && timeout > 0 {
-            timeout -= 1;
-        }
-        (pac::adc::ADC_DR.read_volatile() & 0x0FFF) as i32
-    }
-}
-
-#[inline(never)]
-unsafe fn adc_select_channel(ch: u32) {
-    use py32_pac as pac;
-    unsafe {
-        pac::adc::ADC_SQR1.write_volatile(0);
-        pac::adc::ADC_SQR3.write_volatile(ch);
-    }
-}
-
-pub struct AudioCaptureDriver {
+/// Delegates MCU ADC/DAC register access to `VoiceAdcBackend + Delay` while owning:
+/// - Baseline 8-sample DC offset pre-calibration
+/// - Adaptive 64-sample IIR DC-removal high-pass filter (`dc_bias += (raw - dc_bias) >> 6`)
+/// - 12-bit centered to 16-bit PCM scaling and non-blocking abort polling every 64 samples
+pub struct AudioCaptureDriver<B> {
+    backend: B,
     active: bool,
     period_us: u16,
     dc_bias_est: i32,
 }
 
-impl AudioCaptureDriver {
-    pub const fn new() -> Self {
+impl<B: VoiceAdcBackend + Delay> AudioCaptureDriver<B> {
+    pub const fn new(backend: B) -> Self {
         Self {
+            backend,
             active: false,
             period_us: 125,
             dc_bias_est: 2048,
@@ -242,47 +219,22 @@ impl AudioCaptureDriver {
             return Ok(());
         }
 
-        unsafe {
-            use py32_pac as pac;
+        self.backend.begin_voice_bias();
 
-            // 1. Configure VOICE_DAC pin (PA4) in analog mode to receive AC-coupled signal
-            bsp::pins::VOICE_DAC.configure_analog();
-
-            // 2. Enable DAC1 peripheral clock in RCC APB1ENR (bit 29)
-            let apb1 = pac::rcc::RCC_APB1ENR.read_volatile();
-            pac::rcc::RCC_APB1ENR.write_volatile(apb1 | pac::rcc::APB1ENR_DAC);
-
-            // 3. Configure DAC1 Channel 1: enable output buffer, inject 1.65V DC midpoint bias (2048)
-            pac::dac::DAC_DHR12R1.write_volatile(2048);
-            pac::dac::DAC_CR.write_volatile(pac::dac::CR_EN1);
-            pac::dac::DAC_SWTRIGR.write_volatile(pac::dac::SWTRIGR_SWTRIG1);
-
-            // 4. Ensure ADC1 is powered and select Channel 4 (PA4 / ADC_IN4)
-            let mut cr2 = pac::adc::ADC_CR2.read_volatile();
-            if (cr2 & pac::adc::CR2_ADON) == 0 {
-                cr2 |= pac::adc::CR2_ADON | pac::adc::CR2_EXTSEL_SWSTART;
-                pac::adc::ADC_CR2.write_volatile(cr2);
-                py32_hal::delay::delay_us(150);
-            }
-            adc_select_channel(4); // Channel 4
-
-            py32_hal::delay::delay_us(50);
-
-            // 5. Calibrate baseline DC bias: take 8 initial conversions and average them
-            let mut sum: i32 = 0;
-            for _ in 0..8 {
-                sum += adc_convert_single(cr2);
-            }
-
-            let rate = if rate_hz == 0 {
-                8000
-            } else {
-                rate_hz.clamp(1000, 24000)
-            };
-            self.period_us = (1_000_000 / (rate as u32)).max(10) as u16;
-            self.dc_bias_est = sum >> 3;
-            self.active = true;
+        // Calibrate baseline DC bias: average 8 initial conversions
+        let mut sum: i32 = 0;
+        for _ in 0..8 {
+            sum += self.backend.read_voice_sample();
         }
+
+        let rate = if rate_hz == 0 {
+            8000
+        } else {
+            rate_hz.clamp(1000, 24000)
+        };
+        self.period_us = (1_000_000 / (rate as u32)).max(10) as u16;
+        self.dc_bias_est = sum >> 3;
+        self.active = true;
         Ok(())
     }
 
@@ -292,63 +244,35 @@ impl AudioCaptureDriver {
             return 0;
         }
 
-        unsafe {
-            use py32_pac as pac;
+        self.backend.select_voice_channel();
+        let period_us = self.period_us as u32;
 
-            // Re-verify ADC is set to Channel 4 (in case battery telemetry polled Channel 8)
-            adc_select_channel(4);
-
-            let period_us = self.period_us as u32;
-            let cr2 = pac::adc::ADC_CR2.read_volatile();
-
-            for (i, sample) in out_samples.iter_mut().enumerate() {
-                // Check keypad every 64 samples for non-blocking abort
-                if (i & 0x3F) == 0 && i > 0 {
-                    let key_mask = crate::keyboard::KeypadScanner::poll_raw_mask();
-                    if key_mask != 0 {
-                        return i;
-                    }
-                }
-
-                let raw = adc_convert_single(cr2);
-
-                // Adaptive 64-sample IIR DC-removal filter
-                self.dc_bias_est += (raw - self.dc_bias_est) >> 6;
-                let centered = raw - self.dc_bias_est;
-
-                // Scale 12-bit centered audio (-2048..+2047) to 16-bit PCM (-32768..+32767)
-                *sample = (centered << 4).clamp(-32768, 32767) as i16;
-
-                py32_hal::delay::delay_us(period_us);
+        for (i, sample) in out_samples.iter_mut().enumerate() {
+            if (i & 0x3F) == 0 && i > 0 && self.backend.should_abort() {
+                return i;
             }
 
-            out_samples.len()
+            let raw = self.backend.read_voice_sample();
+
+            // Adaptive 64-sample IIR DC-removal filter
+            self.dc_bias_est += (raw - self.dc_bias_est) >> 6;
+            let centered = raw - self.dc_bias_est;
+
+            // Scale 12-bit centered audio (-2048..+2047) to 16-bit PCM (-32768..+32767)
+            *sample = (centered << 4).clamp(-32768, 32767) as i16;
+
+            self.backend.delay_us(period_us);
         }
+
+        out_samples.len()
     }
 
     pub fn stop_capture(&mut self) {
         if !self.active {
             return;
         }
-
-        unsafe {
-            use py32_pac as pac;
-
-            // 1. Disable DAC1 output
-            pac::dac::DAC_CR.write_volatile(0);
-
-            // 2. Disable DAC clock in APB1ENR
-            let apb1 = pac::rcc::RCC_APB1ENR.read_volatile();
-            pac::rcc::RCC_APB1ENR.write_volatile(apb1 & !pac::rcc::APB1ENR_DAC);
-
-            // 3. Put PA4 back into low-leakage analog mode
-            bsp::pins::VOICE_DAC.configure_analog();
-
-            // 4. Restore ADC sequence to Channel 8 (Battery voltage)
-            adc_select_channel(8);
-
-            self.active = false;
-        }
+        self.backend.end_voice_bias();
+        self.active = false;
     }
 
     pub fn is_capturing(&self) -> bool {
@@ -356,13 +280,15 @@ impl AudioCaptureDriver {
     }
 }
 
-impl Default for AudioCaptureDriver {
+impl<B: VoiceAdcBackend + Delay + Default> Default for AudioCaptureDriver<B> {
     fn default() -> Self {
-        Self::new()
+        Self::new(B::default())
     }
 }
 
-impl kern_platform_traits::audio::AudioCapture for AudioCaptureDriver {
+impl<B: VoiceAdcBackend + Delay> kern_platform_traits::audio::AudioCapture
+    for AudioCaptureDriver<B>
+{
     fn start_capture(&mut self, rate_hz: u16) -> Result<(), ()> {
         Self::start_capture(self, rate_hz)
     }
@@ -380,7 +306,7 @@ impl kern_platform_traits::audio::AudioCapture for AudioCaptureDriver {
     }
 }
 
-impl kernel::service::AudioCaptureService for AudioCaptureDriver {
+impl<B: VoiceAdcBackend + Delay> kernel::service::AudioCaptureService for AudioCaptureDriver<B> {
     fn start_capture(&mut self, rate_hz: u16) -> Result<(), ()> {
         Self::start_capture(self, rate_hz)
     }

@@ -18,7 +18,7 @@ pub const fn is_ptt_side2_chord(raw_mask: u32) -> bool {
 
 /// Minimal raw DFU handoff when `/apps/dfu.mod` is unavailable or `FLAG_BOOTLOADER_HOLD` is set.
 #[inline(never)]
-pub fn enter_dfu_bootloader(lcd: &mut St7565) -> ! {
+pub fn enter_dfu_bootloader(lcd: &mut St7565<bsp::LcdBus>) -> ! {
     let mut tag = read_backup_tag();
     tag.flags = (tag.flags & !kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD)
         | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;

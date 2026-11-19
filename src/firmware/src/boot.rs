@@ -99,7 +99,7 @@ pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
 }
 
 pub fn render_dialog(
-    lcd: &mut St7565,
+    lcd: &mut St7565<bsp::LcdBus>,
     big_title: &str,
     sub_title: &str,
     hint: &str,
@@ -112,7 +112,12 @@ pub fn render_dialog(
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-pub fn render_progress(lcd: &mut St7565, big_title: &str, sub_title: &str, progress_percent: u8) {
+pub fn render_progress(
+    lcd: &mut St7565<bsp::LcdBus>,
+    big_title: &str,
+    sub_title: &str,
+    progress_percent: u8,
+) {
     let canvas = crate::system_canvas();
     gfx::widgets::draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
     lcd.blit(canvas);
@@ -121,7 +126,7 @@ pub fn render_progress(lcd: &mut St7565, big_title: &str, sub_title: &str, progr
 #[cfg(feature = "filesystem")]
 #[inline(never)]
 pub fn render_hold_prompt(
-    lcd: &mut St7565,
+    lcd: &mut St7565<bsp::LcdBus>,
     big_title: &str,
     sub_title: &str,
     progress_percent: u8,
@@ -140,8 +145,8 @@ pub fn render_hold_prompt(
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn rescue_raw_calibration<'a>(
-    fs: &mut KernFS<Py25q16FlashDriver<'a>>,
+fn rescue_raw_calibration(
+    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
     raw_calib: &mut [u8; 512],
 ) -> bool {
     let valid_at_10k = fs.dev.read_data(0x010000, raw_calib).is_ok()
@@ -153,7 +158,7 @@ fn rescue_raw_calibration<'a>(
 }
 
 #[cfg(feature = "filesystem")]
-fn has_valid_calib_file<'a>(fs: &mut KernFS<Py25q16FlashDriver<'a>>) -> bool {
+fn has_valid_calib_file(fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>) -> bool {
     let buf = crate::services::staging_buf();
     (fs.read_file("/sys/calib.dat", buf) == Ok(512)
         && crate::services::calibration::is_valid_calibration(buf))
@@ -163,10 +168,10 @@ fn has_valid_calib_file<'a>(fs: &mut KernFS<Py25q16FlashDriver<'a>>) -> bool {
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn save_rescued_calibration<'a>(
-    fs: &mut KernFS<Py25q16FlashDriver<'a>>,
+fn save_rescued_calibration(
+    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
     raw_calib: &mut [u8; 512],
-    radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) {
     if !crate::services::calibration::is_valid_calibration(raw_calib) {
         crate::services::calibration::fill_default_calibration(raw_calib);
@@ -195,8 +200,8 @@ fn wait_keys_released(key_scanner: &mut KeypadScanner) {
 #[cfg(feature = "filesystem")]
 #[inline(never)]
 fn prepare_boot_dialog(
-    lcd: &mut St7565,
-    radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
+    lcd: &mut St7565<bsp::LcdBus>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) {
     // Set non-zero PWM duty alongside GPIO high so 20 kHz SysTick PWM does not zero BACKLIGHT.
     drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
@@ -207,7 +212,7 @@ fn prepare_boot_dialog(
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn halt_with_boot_dialog(lcd: &mut St7565, title: &str, sub: &str, hint: &str) -> ! {
+fn halt_with_boot_dialog(lcd: &mut St7565<bsp::LcdBus>, title: &str, sub: &str, hint: &str) -> ! {
     render_dialog(lcd, title, sub, hint, false);
     loop {
         bsp::Board::wdt_feed();
@@ -217,11 +222,11 @@ fn halt_with_boot_dialog(lcd: &mut St7565, title: &str, sub: &str, hint: &str) -
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn prompt_and_format_storage<'a>(
-    lcd: &mut St7565,
+fn prompt_and_format_storage(
+    lcd: &mut St7565<bsp::LcdBus>,
     key_scanner: &mut KeypadScanner,
-    radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
-    fs: &mut KernFS<Py25q16FlashDriver<'a>>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
 ) {
     let raw_calib = crate::services::staging_buf();
     let has_hw_calib = rescue_raw_calibration(fs, raw_calib);
@@ -305,10 +310,10 @@ fn prompt_and_format_storage<'a>(
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn recover_calibration_to_fs<'a>(
-    lcd: &mut St7565,
-    radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
-    fs: &mut KernFS<Py25q16FlashDriver<'a>>,
+fn recover_calibration_to_fs(
+    lcd: &mut St7565<bsp::LcdBus>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
 ) {
     render_progress(lcd, "Calib Recovery", "Restoring /sys/calib.dat", 50);
     prepare_boot_dialog(lcd, radio);
@@ -327,10 +332,10 @@ fn recover_calibration_to_fs<'a>(
 #[cfg(feature = "filesystem")]
 #[inline(never)]
 pub fn mount_or_format<'a>(
-    lcd: &mut St7565,
+    lcd: &mut St7565<bsp::LcdBus>,
     key_scanner: &mut KeypadScanner,
-    filesystem: &mut FileSystemDriver<'a, Py25q16FlashDriver<'a>>,
-    radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
+    filesystem: &mut FileSystemDriver<'a, Py25q16FlashDriver<bsp::FlashBus>>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) {
     let fs = &mut filesystem.fs;
 
@@ -400,10 +405,10 @@ pub fn ensure_default_files(filesystem: &mut SystemStorage) {
 }
 
 #[cfg(not(feature = "filesystem"))]
-pub fn mount_or_format<'a>(
-    _lcd: &mut St7565,
+pub fn mount_or_format(
+    _lcd: &mut St7565<bsp::LcdBus>,
     _key_scanner: &mut KeypadScanner,
-    _radio: &mut drivers::bk4829::Bk4829<drivers::bk4829::Disabled>,
+    _radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) -> crate::services::storage::NoStorage {
     crate::services::storage::NoStorage
 }

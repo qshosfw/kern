@@ -188,7 +188,7 @@ pub fn run_boot_splash(
     #[inline(never)]
     fn render_splash_frame(
         canvas: &mut gfx::Canvas,
-        lcd: &mut drivers::st7565::St7565,
+        lcd: &mut drivers::st7565::St7565<bsp::LcdBus>,
         base_vram: &[u8; 1024],
         anim: u8,
         frame: u8,
