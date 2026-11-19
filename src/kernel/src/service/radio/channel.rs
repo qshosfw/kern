@@ -157,14 +157,7 @@ pub struct ChannelConfig {
     pub tx_subaudible: SubaudibleTone,
     pub squelch_level: u8,
     pub reverse: bool,
-    pub talkaround: bool,
     pub busy_lock: bool,
-    pub tone_bclo: bool,
-    pub tx_inhibit: bool,
-    pub call_match_mute: bool,
-    pub freq_lock: bool,
-    pub lna_boost: bool,
-    pub vox_enabled: bool,
     pub compander: CompanderMode,
     pub scrambler: ScramblerMode,
     pub ste_mode: CssTailMode,
@@ -174,6 +167,8 @@ pub struct ChannelConfig {
     pub tot_limit_15s: u8,
     /// Signaling protocol selector (`0 = Analog`, `1 = MDC1200`, `2 = DTMF`, `3 = 5-Tone`, `4 = FSK`, etc.).
     pub proto: u8,
+    /// Packed ORDS-01 channel option bitflags (`FLAG_*` in `ChannelRecord`).
+    pub flags: u16,
     /// Relational index into `/user/contacts.ct` (`ContactRecord` endpoint, group, or topic).
     pub proto_ref: u16,
     /// Sub-Hz Fractional-N Vernier carrier offset in deci-Hertz (0.1 Hz units).
@@ -182,6 +177,23 @@ pub struct ChannelConfig {
 }
 
 impl ChannelConfig {
+    pub const FLAG_BUSY_LOCKOUT: u16 = 1 << 0;
+    pub const FLAG_SCAN_SKIP: u16 = 1 << 1;
+    pub const FLAG_REVERSE: u16 = 1 << 2;
+    pub const FLAG_PRIORITY_1: u16 = 1 << 3;
+    pub const FLAG_PRIORITY_2: u16 = 1 << 4;
+    pub const FLAG_TX_INHIBIT: u16 = 1 << 5;
+    pub const FLAG_TONE_BCLO: u16 = 1 << 6;
+    pub const FLAG_PTT_ID_START: u16 = 1 << 7;
+    pub const FLAG_PTT_ID_END: u16 = 1 << 8;
+    pub const FLAG_TALKAROUND: u16 = 1 << 9;
+    pub const FLAG_FAVORITE: u16 = 1 << 10;
+    pub const FLAG_CALL_MATCH_MUTE: u16 = 1 << 11;
+    pub const FLAG_FREQ_LOCK: u16 = 1 << 12;
+    pub const FLAG_WIDE_FILTER: u16 = 1 << 13;
+    pub const FLAG_LNA_BOOST: u16 = 1 << 14;
+    pub const FLAG_VOX_ENABLE: u16 = 1 << 15;
+
     pub const fn new(rx_freq_hz: u32) -> Self {
         Self {
             rx_freq: Frequency::new(rx_freq_hz),
@@ -194,14 +206,7 @@ impl ChannelConfig {
             tx_subaudible: SubaudibleTone::None,
             squelch_level: 4,
             reverse: false,
-            talkaround: false,
             busy_lock: false,
-            tone_bclo: false,
-            tx_inhibit: false,
-            call_match_mute: false,
-            freq_lock: false,
-            lna_boost: false,
-            vox_enabled: false,
             compander: CompanderMode::Off,
             scrambler: ScramblerMode::Off,
             ste_mode: CssTailMode::Tone55Hz,
@@ -209,6 +214,7 @@ impl ChannelConfig {
             roger_id: 0,
             tot_limit_15s: 0,
             proto: 0,
+            flags: 0,
             proto_ref: 0,
             fine_offset_dhz: 0,
             af_response: AfResponse {
@@ -218,6 +224,49 @@ impl ChannelConfig {
                 tx_3k: 0,
             },
         }
+    }
+
+    #[inline(always)]
+    pub const fn talkaround(&self) -> bool {
+        (self.flags & Self::FLAG_TALKAROUND) != 0
+    }
+
+    #[inline(always)]
+    pub fn set_talkaround(&mut self, enabled: bool) {
+        if enabled {
+            self.flags |= Self::FLAG_TALKAROUND;
+        } else {
+            self.flags &= !Self::FLAG_TALKAROUND;
+        }
+    }
+
+    #[inline(always)]
+    pub const fn tx_inhibit(&self) -> bool {
+        (self.flags & Self::FLAG_TX_INHIBIT) != 0
+    }
+
+    #[inline(always)]
+    pub fn set_tx_inhibit(&mut self, enabled: bool) {
+        if enabled {
+            self.flags |= Self::FLAG_TX_INHIBIT;
+        } else {
+            self.flags &= !Self::FLAG_TX_INHIBIT;
+        }
+    }
+
+    #[inline(always)]
+    pub const fn tone_bclo(&self) -> bool {
+        (self.flags & Self::FLAG_TONE_BCLO) != 0
+    }
+
+    #[inline(always)]
+    pub const fn freq_lock(&self) -> bool {
+        (self.flags & Self::FLAG_FREQ_LOCK) != 0
+    }
+
+    #[inline(always)]
+    pub const fn call_match_mute(&self) -> bool {
+        (self.flags & Self::FLAG_CALL_MATCH_MUTE) != 0
     }
 
     fn shifted_freq(&self, apply: bool) -> Frequency<Hertz> {
@@ -237,7 +286,7 @@ impl ChannelConfig {
 
     /// Calculate effective TX frequency taking into account talkaround, repeater shift, and reverse mode.
     pub fn effective_tx_freq(&self) -> Frequency<Hertz> {
-        if self.talkaround {
+        if self.talkaround() {
             return self.rx_freq;
         }
         self.shifted_freq(!self.reverse)
@@ -245,7 +294,7 @@ impl ChannelConfig {
 
     /// Calculate effective RX frequency taking into account talkaround and reverse mode.
     pub fn effective_rx_freq(&self) -> Frequency<Hertz> {
-        if self.talkaround {
+        if self.talkaround() {
             return self.rx_freq;
         }
         self.shifted_freq(self.reverse)
@@ -254,7 +303,7 @@ impl ChannelConfig {
     /// Calculate effective RX subaudible tone (swapped when `reverse` is active and not `talkaround`).
     #[inline(always)]
     pub const fn effective_rx_subaudible(&self) -> SubaudibleTone {
-        if self.reverse && !self.talkaround {
+        if self.reverse && !self.talkaround() {
             self.tx_subaudible
         } else {
             self.rx_subaudible
@@ -264,7 +313,7 @@ impl ChannelConfig {
     /// Calculate effective TX subaudible tone (swapped when `reverse` is active and not `talkaround`).
     #[inline(always)]
     pub const fn effective_tx_subaudible(&self) -> SubaudibleTone {
-        if self.reverse && !self.talkaround {
+        if self.reverse && !self.talkaround() {
             self.rx_subaudible
         } else {
             self.tx_subaudible

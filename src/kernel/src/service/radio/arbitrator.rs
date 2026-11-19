@@ -323,37 +323,16 @@ impl RadioArbitrator {
         if !lock.is_active() {
             return;
         }
-        // Remove any existing stash entry for the same ClientId
-        if self
-            .saved_lock
-            .is_some_and(|l| l.client.id == lock.client.id)
-        {
-            self.saved_lock = self.saved_lock_2.take();
-        } else if self
-            .saved_lock_2
-            .is_some_and(|l| l.client.id == lock.client.id)
-        {
-            self.saved_lock_2 = None;
-        }
-
-        match self.saved_lock {
-            None => {
+        self.remove_saved_by_id(lock.client.id);
+        if let Some(top) = self.saved_lock {
+            if lock.client.priority() >= top.client.priority() {
+                self.saved_lock_2 = Some(top);
                 self.saved_lock = Some(lock);
+            } else {
+                self.saved_lock_2 = Some(lock);
             }
-            Some(top) => {
-                if lock.client.priority() >= top.client.priority() {
-                    self.saved_lock_2 = Some(top);
-                    self.saved_lock = Some(lock);
-                } else {
-                    // Insert into second slot if empty or higher/equal priority than slot 2
-                    if self
-                        .saved_lock_2
-                        .is_none_or(|s2| lock.client.priority() >= s2.client.priority())
-                    {
-                        self.saved_lock_2 = Some(lock);
-                    }
-                }
-            }
+        } else {
+            self.saved_lock = Some(lock);
         }
     }
 

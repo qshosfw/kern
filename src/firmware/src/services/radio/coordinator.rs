@@ -234,10 +234,13 @@ impl RadioCoordinator {
             (144_800_000, RfPowerLevel::Low, Bandwidth::Narrow12k5),
         ];
         for (i, &(freq, power, bw)) in INIT_CH.iter().enumerate() {
-            let mut ch = ChannelConfig::new(freq);
+            let ch = &mut self.channels[i];
+            ch.rx_freq = Frequency::new(freq);
+            ch.step = StepSetting::Step12_5k;
             ch.power = power;
             ch.bandwidth = bw;
-            self.channels[i] = ch;
+            ch.squelch_level = 4;
+            ch.ste_mode = CssTailMode::Tone55Hz;
         }
         self.fsk_config = FskSidecarConfig::DEFAULT;
         self.vfo_memory_index[1] = Some(1);
@@ -633,8 +636,8 @@ impl RadioCoordinator {
     ) -> bool {
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &mut self.channels[idx];
-        ch.talkaround = !ch.talkaround;
-        let enabled = ch.talkaround;
+        let enabled = !ch.talkaround();
+        ch.set_talkaround(enabled);
         let rx_freq = ch.effective_rx_freq();
         let rx_sub = ch.effective_rx_subaudible();
         if self.is_slot_hardware_active(slot) {
@@ -675,12 +678,12 @@ impl RadioCoordinator {
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &self.channels[idx];
         let tx_inhibited =
-            ch.tx_inhibit || ch.rx_freq.raw() == 0 || ch.effective_tx_freq().raw() == 0;
+            ch.tx_inhibit() || ch.rx_freq.raw() == 0 || ch.effective_tx_freq().raw() == 0;
         let carrier_active = ch.busy_lock && self.carrier_active && self.listening_vfo == slot;
         let tone_matched = ch.effective_rx_subaudible() != SubaudibleTone::None
             && self.subaudible_matched
             && self.listening_vfo == slot;
-        let effective_bclo = if ch.tone_bclo {
+        let effective_bclo = if ch.tone_bclo() {
             BcloPolicy::ToneMismatchOnly
         } else {
             self.bclo_policy
@@ -926,7 +929,7 @@ impl RadioCoordinator {
     /// Respects per-channel `freq_lock` (`FLAG_FREQ_LOCK`).
     pub fn step_vfo_freq<R: RfChannel>(&mut self, radio: &mut R, slot: VfoSlot, step_hz: i32) {
         let idx = slot.index().min(self.channels.len() - 1);
-        if self.channels[idx].freq_lock {
+        if self.channels[idx].freq_lock() {
             return;
         }
         let cur = self.channels[idx].rx_freq.raw() as i64;
@@ -1047,15 +1050,9 @@ impl RadioCoordinator {
         ch.rx_subaudible = rec.rx_subaudible_tone();
         ch.tx_subaudible = rec.tx_subaudible_tone();
         ch.squelch_level = rec.squelch_level;
+        ch.flags = rec.flags;
         ch.reverse = (rec.flags & ChannelRecord::FLAG_REVERSE) != 0;
-        ch.talkaround = (rec.flags & ChannelRecord::FLAG_TALKAROUND) != 0;
         ch.busy_lock = (rec.flags & ChannelRecord::FLAG_BUSY_LOCKOUT) != 0;
-        ch.tone_bclo = (rec.flags & ChannelRecord::FLAG_TONE_BCLO) != 0;
-        ch.tx_inhibit = (rec.flags & ChannelRecord::FLAG_TX_INHIBIT) != 0;
-        ch.call_match_mute = (rec.flags & ChannelRecord::FLAG_CALL_MATCH_MUTE) != 0;
-        ch.freq_lock = (rec.flags & ChannelRecord::FLAG_FREQ_LOCK) != 0;
-        ch.lna_boost = (rec.flags & ChannelRecord::FLAG_LNA_BOOST) != 0;
-        ch.vox_enabled = (rec.flags & ChannelRecord::FLAG_VOX_ENABLE) != 0;
         ch.compander = match rec.compand {
             1 => CompanderMode::TxCompressor,
             2 => CompanderMode::RxExpander,
@@ -1111,42 +1108,13 @@ impl RadioCoordinator {
         rec.set_tx_subaudible_tone(ch.tx_subaudible);
         rec.squelch_level = ch.squelch_level;
 
-        let mut flags = rec.flags
-            & !(ChannelRecord::FLAG_REVERSE
-                | ChannelRecord::FLAG_TALKAROUND
-                | ChannelRecord::FLAG_BUSY_LOCKOUT
-                | ChannelRecord::FLAG_TONE_BCLO
-                | ChannelRecord::FLAG_TX_INHIBIT
-                | ChannelRecord::FLAG_CALL_MATCH_MUTE
-                | ChannelRecord::FLAG_FREQ_LOCK
-                | ChannelRecord::FLAG_LNA_BOOST
-                | ChannelRecord::FLAG_VOX_ENABLE);
+        let mut flags =
+            ch.flags & !(ChannelRecord::FLAG_REVERSE | ChannelRecord::FLAG_BUSY_LOCKOUT);
         if ch.reverse {
             flags |= ChannelRecord::FLAG_REVERSE;
         }
-        if ch.talkaround {
-            flags |= ChannelRecord::FLAG_TALKAROUND;
-        }
         if ch.busy_lock {
             flags |= ChannelRecord::FLAG_BUSY_LOCKOUT;
-        }
-        if ch.tone_bclo {
-            flags |= ChannelRecord::FLAG_TONE_BCLO;
-        }
-        if ch.tx_inhibit {
-            flags |= ChannelRecord::FLAG_TX_INHIBIT;
-        }
-        if ch.call_match_mute {
-            flags |= ChannelRecord::FLAG_CALL_MATCH_MUTE;
-        }
-        if ch.freq_lock {
-            flags |= ChannelRecord::FLAG_FREQ_LOCK;
-        }
-        if ch.lna_boost {
-            flags |= ChannelRecord::FLAG_LNA_BOOST;
-        }
-        if ch.vox_enabled {
-            flags |= ChannelRecord::FLAG_VOX_ENABLE;
         }
         rec.flags = flags;
         rec.compand = match ch.compander {
@@ -1969,12 +1937,12 @@ mod tests {
         assert_ne!(saved.flags & ChannelRecord::FLAG_CALL_MATCH_MUTE, 0);
 
         // 5. Per-channel FLAG_TX_INHIBIT blocks TX; clearing it permits TX with custom 180-deg STE tail
-        coord.channels[0].tx_inhibit = true;
+        coord.channels[0].set_tx_inhibit(true);
         assert_eq!(
             coord.check_tx_permission(VfoSlot::VfoA, vfo_app),
             TxPermission::BlockedTxInhibited
         );
-        coord.channels[0].tx_inhibit = false;
+        coord.channels[0].set_tx_inhibit(false);
         coord.channels[0].tx_subaudible = SubaudibleTone::Ctcss(1035);
         assert_eq!(
             coord.request_ptt_start(&mut radio, vfo_app),

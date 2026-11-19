@@ -918,17 +918,8 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
             self.set_af(AfType::Mute);
         }
         self.set_rx_frequency(config.effective_rx_freq());
-        if config.fine_offset_dhz != 0 {
-            <Self as kernel::service::radio::RfFineTuning>::set_sub_hz_offset(
-                self,
-                config.effective_rx_freq().raw(),
-                config.fine_offset_dhz,
-            );
-        }
         <Self as kernel::service::radio::RfModulation>::set_bandwidth(self, config.bandwidth);
         <Self as kernel::service::radio::RfModulation>::set_modulation(self, config.modulation);
-        <Self as kernel::service::radio::RfModulation>::set_compander(self, config.compander);
-        <Self as kernel::service::radio::RfModulation>::set_scrambler(self, config.scrambler);
         self.set_power_level(config.power);
         <Self as kernel::service::radio::RfSubaudible>::set_rx_subaudible(
             self,
