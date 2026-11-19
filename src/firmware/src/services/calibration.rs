@@ -391,13 +391,18 @@ impl SystemCalibration {
         }
 
         // Verify device binding signature (re-sign only if signature file is absent)
-        let mut sig = CalibSignature::empty();
+        const _: () = {
+            assert!(core::mem::offset_of!(CalibSignature, hardware_serial) == 8);
+            assert!(core::mem::offset_of!(CalibSignature, auth_tag) == 16);
+        };
+        let sig_buf = &mut crate::services::staging_buf()[..32];
         let mut sig_present = false;
         let mut bound = !loaded;
-        if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, sig.as_bytes_mut()) {
+        if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, sig_buf) {
             sig_present = true;
-            if n >= 32 {
-                bound = verify_device_signature(&self.raw, &sig, mcu_uid);
+            if n >= 32 && &sig_buf[..4] == CALIB_SIG_IDENT {
+                let computed = compute_device_signature(&self.raw, mcu_uid);
+                bound = sig_buf[8..32] == computed.as_bytes()[8..32];
             }
         }
 

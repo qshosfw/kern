@@ -4,7 +4,7 @@
 //! dynamic name extraction (e.g. "01_roger.ton" -> "Roger"), and OptionSheet generation.
 //! Completely decoupled from specific asset domains: takes directory paths and extensions dynamically.
 
-use gfx::gui::modules::menu::{OptionSheet, ShortString};
+use gfx::gui::modules::menu::{SheetOptions, ShortString};
 
 pub const MAX_CHOOSER_ASSETS: usize = 8;
 pub const TAG_ASSET_CHOOSER: u8 = 16;
@@ -65,32 +65,26 @@ impl AssetDescriptor {
     }
 
     #[inline(never)]
-    pub fn build_sheet(
-        &self,
-        config: &crate::config::MasterConfig,
-        storage_fs: &mut crate::services::SystemStorage,
-    ) -> OptionSheet {
-        let (active, cur_path) = self.get_path(config);
+    pub fn open_sheet(&self, ctx: &mut crate::SysContext) {
+        let (active, cur_path) = self.get_path(&ctx.config);
         let storage = storage_mut();
 
         storage.labels[0].set_str(self.none_label);
 
         let mut count = 0usize;
         #[cfg(feature = "filesystem")]
-        let _ = storage_fs
+        let _ = ctx
+            .storage
             .fs
             .list_dir(self.dir, |entry_name, _size, _perm, is_dir| {
                 if count < MAX_CHOOSER_ASSETS
                     && !is_dir
                     && has_extension(entry_name, self.extensions)
                     && build_full_asset_path(self.dir, entry_name, &mut storage.paths[count])
-                        .is_ok()
                 {
                     count += 1;
                 }
             });
-        #[cfg(not(feature = "filesystem"))]
-        let _ = storage_fs;
 
         for i in 0..count {
             storage.order[i] = i as u8;
@@ -121,11 +115,17 @@ impl AssetDescriptor {
         if active && current_sel == 0 && count > 0 {
             current_sel = 1;
         }
-        storage.count = count;
+        storage.count = count as u8;
 
         let labels_slice: &'static [ShortString] =
             unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), count + 1) };
-        OptionSheet::new_dynamic(self.title, labels_slice, current_sel).with_radio(true)
+        super::dialog::show_radio_sheet(
+            ctx,
+            super::dialog::TAG_ASSET_CHOOSER,
+            self.title,
+            SheetOptions::Dynamic(labels_slice),
+            current_sel,
+        );
     }
 
     pub fn apply_choice(&self, sel: usize, config: &mut crate::config::MasterConfig) -> bool {
@@ -155,11 +155,34 @@ impl AssetDescriptor {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PathBuf32 {
+    bytes: [u8; 31],
+    len: u8,
+}
+
+impl PathBuf32 {
+    #[cfg(test)]
+    const fn empty() -> Self {
+        Self {
+            bytes: [0; 31],
+            len: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn as_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.bytes[..self.len as usize]) }
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<PathBuf32>() == 32);
+
 struct AssetChooserStorage {
-    count: usize,
+    count: u8,
     order: [u8; MAX_CHOOSER_ASSETS],
     labels: [ShortString; MAX_CHOOSER_ASSETS + 1],
-    paths: [heapless::String<32>; MAX_CHOOSER_ASSETS],
+    paths: [PathBuf32; MAX_CHOOSER_ASSETS],
 }
 
 const _: () = {
@@ -268,20 +291,26 @@ fn has_extension(path: &str, extensions: &str) -> bool {
 }
 
 #[inline(never)]
-fn build_full_asset_path(
-    dir: &str,
-    entry_name: &str,
-    out: &mut heapless::String<32>,
-) -> Result<(), ()> {
-    out.clear();
-    if !entry_name.starts_with('/') {
-        out.push_str(utils::format::trim_trailing_slashes(dir))?;
-        out.push('/')?;
+fn build_full_asset_path(dir: &str, entry_name: &str, out: &mut PathBuf32) -> bool {
+    let name = entry_name.as_bytes();
+    let need_slash = usize::from(name.first() != Some(&b'/'));
+    let prefix = if need_slash == 0 {
+        b"".as_slice()
+    } else {
+        utils::format::trim_trailing_slashes(dir).as_bytes()
+    };
+    let total = prefix.len() + need_slash + name.len();
+    if total > 31 {
+        return false;
     }
-    if out.len() + entry_name.len() > 31 {
-        return Err(());
+    out.bytes[..prefix.len()].copy_from_slice(prefix);
+    if need_slash != 0 {
+        out.bytes[prefix.len()] = b'/';
     }
-    out.push_str(entry_name)
+    let off = prefix.len() + need_slash;
+    out.bytes[off..total].copy_from_slice(name);
+    out.len = total as u8;
+    true
 }
 
 /// Retrieve the selected asset path from storage
@@ -291,9 +320,9 @@ pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
     }
     let storage = storage_ref();
     let idx = sel - 1;
-    if idx < storage.count.min(MAX_CHOOSER_ASSETS) {
+    if idx < (storage.count as usize).min(MAX_CHOOSER_ASSETS) {
         let slot = storage.order[idx] as usize;
-        if slot < MAX_CHOOSER_ASSETS && !storage.paths[slot].is_empty() {
+        if slot < MAX_CHOOSER_ASSETS && storage.paths[slot].len > 0 {
             return Some(storage.paths[slot].as_str());
         }
     }
@@ -306,16 +335,26 @@ mod tests {
 
     #[test]
     fn test_build_full_asset_path() {
-        let mut out = heapless::String::<32>::new();
-        assert!(build_full_asset_path("/user/splash", "01_quansheng.rle", &mut out).is_ok());
+        let mut out = PathBuf32::empty();
+        assert!(build_full_asset_path(
+            "/user/splash",
+            "01_quansheng.rle",
+            &mut out
+        ));
         assert_eq!(out.as_str(), "/user/splash/01_quansheng.rle");
 
-        assert!(build_full_asset_path("/user/rogers/", "03_mototrbo.ton", &mut out).is_ok());
+        assert!(build_full_asset_path(
+            "/user/rogers/",
+            "03_mototrbo.ton",
+            &mut out
+        ));
         assert_eq!(out.as_str(), "/user/rogers/03_mototrbo.ton");
 
-        assert!(
-            build_full_asset_path("/user/jingles", "/user/jingles/01_chime.ton", &mut out).is_ok()
-        );
+        assert!(build_full_asset_path(
+            "/user/jingles",
+            "/user/jingles/01_chime.ton",
+            &mut out
+        ));
         assert_eq!(out.as_str(), "/user/jingles/01_chime.ton");
     }
 }

@@ -161,21 +161,20 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 5
             };
             let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
-            gfx::text::draw_str_align(
+            gfx::text::draw_str(
                 canvas,
                 text_x,
                 d.y + 7,
                 s0,
-                crate::services::primitives::font_from_u8(1),
+                &gfx::fonts::mumatrix_regular::FONT,
                 col,
-                gfx::text::Align::Left,
             );
             gfx::text::draw_str_align(
                 canvas,
                 119,
                 d.y + 7,
                 s1,
-                crate::services::primitives::font_from_u8(0),
+                &gfx::fonts::tomthumb::FONT,
                 col,
                 gfx::text::Align::Right,
             );

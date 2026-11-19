@@ -443,10 +443,15 @@ impl KeypadLockManager {
 
     /// Renders a menu-consistent springy bottom-sheet overlay for lock/unlock, deep sleep,
     /// app close, and keypad lock status toasts.
+    #[inline(always)]
     pub fn render_overlay(&self, canvas: &mut Canvas) {
-        if !self.hold_ui_open && self.toast == LockToast::None {
-            return;
+        if self.hold_ui_open || self.toast != LockToast::None {
+            self.render_overlay_active(canvas);
         }
+    }
+
+    #[inline(never)]
+    fn render_overlay_active(&self, canvas: &mut Canvas) {
         let y_offset = self.sheet_anim.slide_offset(SHEET_H);
         if y_offset >= SHEET_H as i8 {
             return;

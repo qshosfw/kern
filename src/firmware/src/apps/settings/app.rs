@@ -230,8 +230,7 @@ impl SettingsApp {
                 TAG_ASSET => {
                     if let Some(&desc) = super::page::ASSETS.get(def.aux as usize) {
                         self.active_asset = Some(desc);
-                        let sheet = desc.build_sheet(&ctx.config, ctx.storage);
-                        ctx.show_sheet(dialog::TAG_ASSET_CHOOSER, sheet);
+                        desc.open_sheet(ctx);
                     }
                     return;
                 }

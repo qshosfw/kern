@@ -168,15 +168,8 @@ impl<'a> TabTitles<'a> {
 }
 
 #[inline(never)]
-fn draw_tab_pill(
-    canvas: &mut Canvas,
-    tx: u8,
-    ty: u8,
-    tw: u8,
-    pill_h: u8,
-    text_y: i16,
-    title: &str,
-) {
+fn draw_tab_pill(canvas: &mut Canvas, rect: [u8; 4], text_y: i16, title: &str) {
+    let [tx, ty, tw, pill_h] = rect;
     canvas.draw_horizontal_line(tx + 1, ty, tw.saturating_sub(2), Color::Fill);
     canvas.draw_pixel(tx, ty, Color::Clear);
     canvas.draw_pixel(tx + tw - 1, ty, Color::Clear);
@@ -240,7 +233,17 @@ impl TabbedSheet {
         state: &TabbedSheetState,
         tab_titles: &[&str],
     ) {
-        Self::render_chrome_impl(canvas, config, state, TabTitles::Slice(tab_titles));
+        let anim = state
+            .is_animating()
+            .then_some((state.prev_selected_idx, state.anim.progress() as i16));
+        Self::render_chrome_impl(
+            canvas,
+            config,
+            state.selected_idx,
+            state.tab_count,
+            anim,
+            TabTitles::Slice(tab_titles),
+        );
     }
 
     /// Zero-alloc variant for NUL-delimited packed tab titles (e.g. C-ABI KRX modules).
@@ -252,21 +255,23 @@ impl TabbedSheet {
         tab_count: usize,
         packed_titles: &[u8],
     ) {
-        let state = TabbedSheetState {
-            selected_idx: selected_idx.min(tab_count.saturating_sub(1)),
-            prev_selected_idx: 0,
+        Self::render_chrome_impl(
+            canvas,
+            config,
+            selected_idx,
             tab_count,
-            anim: crate::gui::animation::TransitionProgress::completed(4),
-            slide_dir: 0,
-        };
-        Self::render_chrome_impl(canvas, config, &state, TabTitles::Packed(packed_titles));
+            None,
+            TabTitles::Packed(packed_titles),
+        );
     }
 
     #[inline(always)]
     fn render_chrome_impl(
         canvas: &mut Canvas,
         config: &TabbedSheetConfig,
-        state: &TabbedSheetState,
+        selected_idx: usize,
+        tab_count: usize,
+        anim: Option<(usize, i16)>,
         titles: TabTitles<'_>,
     ) {
         let x = config.x;
@@ -275,8 +280,8 @@ impl TabbedSheet {
         let h = config.h;
         let th = config.tab_height;
         let max_x = config.max_tab_x.min(x.saturating_add(w));
-        let count = state.tab_count.max(1).min(8);
-        let sel = state.selected_idx.min(count - 1);
+        let count = tab_count.clamp(1, 8);
+        let sel = selected_idx.min(count - 1);
 
         let mut tab_w = [0u8; 8];
         for (i, slot) in tab_w[..count].iter_mut().enumerate() {
@@ -316,18 +321,18 @@ impl TabbedSheet {
             if i == sel {
                 active_tx = cur_tx;
             }
-            if i == state.prev_selected_idx {
+            if let Some((prev, _)) = anim
+                && i == prev
+            {
                 prev_tx = cur_tx;
             }
             cur_tx += tab_w[i] + 2;
         }
 
-        if state.is_animating()
-            && state.prev_selected_idx >= start_tab
-            && state.prev_selected_idx < end_tab
+        if let Some((prev, p)) = anim
+            && prev >= start_tab
+            && prev < end_tab
         {
-            let prev = state.prev_selected_idx;
-            let p = state.anim.progress() as i16;
             active_tx = (prev_tx as i16 + (((active_tx as i16 - prev_tx as i16) * p) >> 4)) as u8;
             active_tw =
                 (tab_w[prev] as i16 + (((active_tw as i16 - tab_w[prev] as i16) * p) >> 4)) as u8;
@@ -356,19 +361,15 @@ impl TabbedSheet {
         // Tab headers
         let mut pill_tx = base_tx;
         for i in start_tab..end_tab {
-            let is_active = i == sel;
-            let (tx, tw, ty, pill_h, text_y) = if is_active {
-                (active_tx, active_tw, y, th, (y + th - 3) as i16)
+            let (rect, text_y) = if i == sel {
+                ([active_tx, y, active_tw, th], (y + th - 3) as i16)
             } else {
                 (
-                    pill_tx,
-                    tab_w[i],
-                    y + 1,
-                    th.saturating_sub(2),
+                    [pill_tx, y + 1, tab_w[i], th.saturating_sub(2)],
                     (y + th - 2) as i16,
                 )
             };
-            draw_tab_pill(canvas, tx, ty, tw, pill_h, text_y, titles.get(i));
+            draw_tab_pill(canvas, rect, text_y, titles.get(i));
             pill_tx += tab_w[i] + 2;
         }
 
