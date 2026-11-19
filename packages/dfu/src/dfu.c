@@ -198,23 +198,19 @@ static void enter_dfu_session(const KrxApiTable* api) {
     g_state.stage_buf   = (u8*)(base_addr + DFU_STAGE_OFFSET);
 
     /* Leaf 5 checks RTC_ALR TOOLS flag; immediately returns DFU_TOOL_ACT_DFU on normal boot */
+    static const u8 ENTRY_LEAF[DFU_TOOL_ITEM_COUNT] = {
+        DFU_LEAF_SCAN, DFU_LEAF_SCAN, DFU_LEAF_RESCUE, DFU_LEAF_CALIO, DFU_LEAF_INFO
+    };
     for (;;) {
         g_state.tool_action = DFU_TOOL_ACT_DFU;
         krx_leaf_call(api, DFU_LEAF_TOOLS, (u32)&g_state);
         if (g_state.tool_action != DFU_TOOL_ACT_OPEN) break;
-        u8 sel = g_state.tool_sel;
-        if (sel <= DFU_TOOL_ITEM_APPLETS) {
-            g_state.tool_sub = sel;
-            krx_leaf_call(api, DFU_LEAF_SCAN, (u32)&g_state);
-            for (;;) {
-                g_state.tool_action = DFU_TOOL_ACT_DFU;
-                krx_leaf_call(api, DFU_LEAF_FILES, (u32)&g_state);
-                if (g_state.tool_action != DFU_TOOL_ACT_INSPECT) break;
-                krx_leaf_call(api, DFU_LEAF_INSPECT, (u32)&g_state);
-            }
-        } else {
-            static const u8 SUB_LEAF[3] = { DFU_LEAF_RESCUE, DFU_LEAF_CALIB, DFU_LEAF_INFO };
-            krx_leaf_call(api, SUB_LEAF[sel - 2u], (u32)&g_state);
+        g_state.tool_sub = (g_state.tool_sel == DFU_TOOL_ITEM_APPLETS) ? 1u : 0u;
+        u8 leaf = ENTRY_LEAF[g_state.tool_sel];
+        while (leaf != 0u) {
+            g_state.next_leaf = 0u;
+            krx_leaf_call(api, leaf, (u32)&g_state);
+            leaf = g_state.next_leaf;
         }
     }
 

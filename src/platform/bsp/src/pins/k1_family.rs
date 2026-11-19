@@ -63,7 +63,6 @@ pub fn init() {
 
     const CFG_IN_PU: u8 = 1 << 2;
     const CFG_OUT_L: u8 = pac::gpio::SPEED_LOW as u8;
-    const CFG_OUT_L_LO: u8 = CFG_OUT_L | (1 << 5);
     const CFG_OUT_L_HI: u8 = CFG_OUT_L | (1 << 4);
     const CFG_OUT_M_HI: u8 = (pac::gpio::SPEED_MEDIUM as u8) | (1 << 4);
     const CFG_OUT_H_HI: u8 = (pac::gpio::SPEED_HIGH as u8) | (1 << 4);
@@ -81,7 +80,7 @@ pub fn init() {
         (KB_COLS[3], CFG_OUT_H_HI),
         (AUDIO_PA, CFG_OUT_L),
         (FLASHLIGHT, CFG_OUT_L),
-        (BACKLIGHT, CFG_OUT_L_LO),
+        (BACKLIGHT, CFG_OUT_L),
         (FM_SCL, CFG_OD_L_HI),
         (FM_SDA, CFG_OD_L_HI),
         (LCD_A0, CFG_OUT_L_HI),
@@ -104,8 +103,6 @@ pub fn init() {
             }
             if (cfg & (1 << 4)) != 0 {
                 pin.set_high();
-            } else if (cfg & (1 << 5)) != 0 {
-                pin.set_low();
             }
         }
     }

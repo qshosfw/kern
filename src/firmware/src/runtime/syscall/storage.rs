@@ -165,8 +165,32 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             match a0 as u8 {
                 fs_write::FILE | fs_write::APPEND => {
                     if !r.buf.is_null() {
+                        let src = unsafe { core::slice::from_raw_parts(r.buf, r.len as usize) };
+                        // Authenticated calibration write + hardware-UID Ascon-128 re-signing
+                        if (a0 as u8) == fs_write::FILE && src.len() == 512 {
+                            if let Some(raw_path) = unsafe { parse_str(r.path, r.path_len as usize) } {
+                                if raw_path == crate::services::calibration::CALIB_FILE_PATH
+                                    && super::super::native_runner::active_native_caps()
+                                        .contains(kernel::caps::Cap::FactoryCalib)
+                                    && crate::services::calibration::is_valid_calibration(src)
+                                {
+                                    let arr: &[u8; 512] = unsafe { &*(src.as_ptr() as *const [u8; 512]) };
+                                    let mcu_uid = bsp::uid::read_mcu_uid();
+                                    let sig = crate::services::calibration::compute_device_signature(
+                                        arr, &mcu_uid,
+                                    );
+                                    let ok = st.write_file(raw_path, src).is_ok()
+                                        && st
+                                            .write_file(
+                                                crate::services::calibration::CALIB_SIG_PATH,
+                                                &sig.to_bytes(),
+                                            )
+                                            .is_ok();
+                                    return usize::from(!ok);
+                                }
+                            }
+                        }
                         if let Some(path_str) = parse_non_sys_user_path(r.path, r.path_len) {
-                            let src = unsafe { core::slice::from_raw_parts(r.buf, r.len as usize) };
                             let ok = if (a0 as u8) == fs_write::APPEND {
                                 st.fs.append_file(path_str, src).is_ok()
                             } else {

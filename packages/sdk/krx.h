@@ -693,8 +693,9 @@ static inline void krx_ui_draw_scrollbar(
 
 #define KRX_MENU_COMPACT     10u
 #define KRX_MENU_COMFORTABLE 13u
-#define KRX_MENU_FLAG_SEL    (1u << 0)
-#define KRX_MENU_FLAG_ARROW  (1u << 1)
+#define KRX_MENU_FLAG_SEL     (1u << 0)
+#define KRX_MENU_FLAG_ARROW   (1u << 1)
+#define KRX_MENU_FLAG_OUTLINE (1u << 2)
 
 static inline void krx_ui_draw_menu_item_ex(
     const KrxApiTable* api, i16 y, u8 row_h, const u8* title, u8 t_len,

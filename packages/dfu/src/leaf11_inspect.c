@@ -53,6 +53,9 @@ u32 leaf11_entry(u32 op, const KrxApiTable* api, void* param) {
 
     for (;;) {
         u8 k = st->ui.wait_key(api);
-        if (k == KEY_EXIT || k == KEY_MENU) return 0u;
+        if (k == KEY_EXIT || k == KEY_MENU) {
+            st->next_leaf = DFU_LEAF_FILES;
+            return 0u;
+        }
     }
 }

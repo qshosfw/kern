@@ -147,18 +147,21 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
         KRX_WIDGET_MENU_ITEM => {
             let is_sel = (d.a & 1) != 0;
             let has_chevron = (d.a & 2) != 0;
+            let is_outline = (d.a & 4) != 0;
             let comfortable = d.h >= 12;
             let row_h: u8 = if comfortable { 13 } else { 10 };
             let icon_dy: i16 = if comfortable { 2 } else { 1 };
             let text_dy: i16 = if comfortable { 9 } else { 7 };
-            let tc_u8 = if is_sel { 0 } else { 1 };
+            let filled_sel = is_sel && !is_outline;
+            let tc_u8 = if filled_sel { 0 } else { 1 };
             let col = color_from_u8(tc_u8);
             if is_sel {
-                gfx::widgets::draw_selection_capsule(
-                    canvas,
-                    [2, uy, 120, row_h],
-                    gfx::widgets::CAPSULE_FILL_ROUND,
-                );
+                let cap_flags = if is_outline {
+                    gfx::widgets::CAPSULE_ROUND
+                } else {
+                    gfx::widgets::CAPSULE_FILL_ROUND
+                };
+                gfx::widgets::draw_selection_capsule(canvas, [2, uy, 120, row_h], cap_flags);
             }
             let text_x = if d.b != 0 {
                 super::display::draw_icon(4, d.y + icon_dy, d.b, tc_u8);

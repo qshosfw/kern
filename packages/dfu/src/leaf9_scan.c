@@ -61,5 +61,6 @@ u32 leaf9_entry(u32 op, const KrxApiTable* api, void* param) {
     }
     ts->file_count = count;
     ts->file_sel = 0u;
+    st->next_leaf = DFU_LEAF_FILES;
     return 0u;
 }

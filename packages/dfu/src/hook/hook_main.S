@@ -114,7 +114,7 @@ dfu_systick_isr:
     movs r1, #15                // 0.5 s hold for EXIT / Side1 reboot
     cmp r7, #2
     bne 20f
-    movs r1, #2                 // ~66 ms tap debounce for MENU -> Tools
+    movs r1, #1                 // immediate 1-tick tap for MENU -> Recovery
 20:
     cmp r0, r1
     blo 4f
@@ -593,7 +593,7 @@ dfu_systick_isr:
     muls r0, r0, r7
     adds r5, r5, r0
 
-    // When writing (banner == 4), stamp dynamic "<cur>/<tot>" at X=75 (+51 inside slice) at baseline y=46
+    // When writing (banner == 4), stamp dynamic "<cur>/<tot>" at X=70 (+46 inside slice) at baseline y=47
     cmp r7, #4
     bne 76f
     movs r0, #0
@@ -610,16 +610,17 @@ dfu_systick_isr:
     ldr r0, [sp, #36]           // tot_pages
     bl stamp_dec
 
-    adds r5, #51
+    adds r5, #46
     movs r2, #0
 75:
     mov r0, sp
-    ldrb r3, [r0, r2]           // raw 3x5 glyph byte (already bits 2..6 = y=42..46, zero shift)
+    ldrb r3, [r0, r2]           // raw 3x5 glyph byte (bits 2..6) -> shift << 1 to y=43..47
+    lsls r3, r3, #1
     strb r3, [r5, r2]
     adds r2, r2, #1
     cmp r2, #28
     blo 75b
-    subs r5, #51
+    subs r5, #46
     add sp, #32
     ldr r4, =DFU_SRAM_STATE
 
@@ -672,7 +673,8 @@ dfu_systick_isr:
     movs r0, #14                // 's'
 83: bl stamp_glyph_3x5
 
-    // Stream Page 1 (<< 3 + 0x0C bezel / 0x0F antenna cols 0..2) and Page 2 (>> 5 + 0x70 bezel)
+    // Stream Page 1 (<< 3 + 0x0F antenna cols 0..1 & knob cols 12..15, else 0x0C bezel)
+    // and Page 2 (>> 5 + 0xB8 bezel + top speaker slot).
     movs r4, #0
 101:
     movs r0, #0xB1
@@ -686,14 +688,16 @@ dfu_systick_isr:
     cmp r4, #0
     bne 103f
     lsls r0, r0, #3
-    movs r1, #0x0C
-    cmp r6, #3
-    bhs 105f
     movs r1, #0x0F
+    cmp r6, #2
+    blo 105f
+    cmp r6, #12
+    bhs 105f
+    movs r1, #0x0C
     b 105f
 103:
     lsrs r0, r0, #5
-    movs r1, #0x70
+    movs r1, #0xB8
 105:
     orrs r0, r0, r1
     bl spi_tx

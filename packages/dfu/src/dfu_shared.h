@@ -25,11 +25,13 @@
 #define DFU_LEAF_SCAN     9u
 #define DFU_LEAF_FILES    10u
 #define DFU_LEAF_INSPECT  11u
+#define DFU_LEAF_CONSOLE  12u
+#define DFU_LEAF_CALIO    13u
+#define DFU_LEAF_CALEDIT  14u
 
 /* Recovery menu dispatch actions */
 #define DFU_TOOL_ACT_DFU       0u /* Return to live DFU bootloader handoff */
 #define DFU_TOOL_ACT_OPEN      1u /* Open selected sub-leaf */
-#define DFU_TOOL_ACT_INSPECT   2u /* Open leaf11_inspect for selected file */
 
 /* Recovery menu items */
 #define DFU_TOOL_ITEM_FLASH    0u /* Flat firmware image browser (.kfw/.uf2/.bin) */
@@ -87,10 +89,10 @@ typedef struct {
     u8           use_hook;         /* 1 B:  Non-zero if SysTick hook should attach */
     u8           tool_sel;         /* 1 B:  Active selection in Recovery menu */
     u8           tool_sub;         /* 1 B:  Sub-mode (0=Flash Image, 1=Applets) */
-    u8           tool_action;      /* 1 B:  DFU_TOOL_ACT_* return status */
+    u8           tool_action;      /* 1 B:  DFU_TOOL_ACT_* / CalIO status code */
     u8           tools_active;     /* 1 B:  Non-zero once RTC tools flag was consumed */
-    u8           _pad0;            /* 1 B */
-    DfuUiOps     ui;               /* 20 B: Resident shared UI helpers */
+    u8           next_leaf;        /* 1 B:  Next P0 leaf continuation (0 = back to Recovery menu) */
+    DfuUiOps     ui;               /* 16 B: Resident shared UI helpers */
     u8*          stage_buf;        /* 4 B:  TRANSIENT_ARENA[4160..5120) = 960 B scratch/staging */
     u8           sram_arrow[38];   /* 38 B: 2 x 19 B connection arrow */
     u8           sram_vidpid[40];  /* 40 B: Page 1 USB VID:PID badge */

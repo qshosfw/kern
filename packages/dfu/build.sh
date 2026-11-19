@@ -35,7 +35,7 @@ compile_unit() {
     arm-none-eabi-objcopy -O binary "$OUT/$stem.elf" "$OUT/$stem.bin"
 }
 
-# 2. Compile resident root + 11 P0 overlay leaves (with _Static_assert ABI checks)
+# 2. Compile resident root + 14 P0 overlay leaves (with _Static_assert ABI checks)
 compile_unit dfu.c            root           _start
 compile_unit leaf1_splash.c   leaf1_splash   leaf1_entry
 compile_unit leaf2_modal.c    leaf2_modal    leaf2_entry
@@ -48,8 +48,11 @@ compile_unit leaf8_rescue.c   leaf8_rescue   leaf8_entry
 compile_unit leaf9_scan.c     leaf9_scan     leaf9_entry
 compile_unit leaf10_files.c   leaf10_files   leaf10_entry
 compile_unit leaf11_inspect.c leaf11_inspect leaf11_entry
+compile_unit leaf12_console.c leaf12_console leaf12_entry
+compile_unit leaf13_calio.c   leaf13_calio   leaf13_entry
+compile_unit leaf14_caledit.c leaf14_caledit leaf14_entry
 
-LEAVES=(leaf1_splash leaf2_modal leaf3_stage leaf4_probe leaf5_tools leaf6_info leaf7_calib leaf8_rescue leaf9_scan leaf10_files leaf11_inspect)
+LEAVES=(leaf1_splash leaf2_modal leaf3_stage leaf4_probe leaf5_tools leaf6_info leaf7_calib leaf8_rescue leaf9_scan leaf10_files leaf11_inspect leaf12_console leaf13_calio leaf14_caledit)
 
 # 3. Verify strict PIC hygiene (0 undefs, 0 relocs, 0 GOT)
 for elf in root "${LEAVES[@]}"; do
@@ -95,6 +98,9 @@ python3 "$DIR/../../tools/pack_krx.py" "$DIR/dfu.mod" \
     --leaf "9:$OUT/leaf9_scan.bin" \
     --leaf "10:$OUT/leaf10_files.bin" \
     --leaf "11:$OUT/leaf11_inspect.bin" \
+    --leaf "12:$OUT/leaf12_console.bin" \
+    --leaf "13:$OUT/leaf13_calio.bin" \
+    --leaf "14:$OUT/leaf14_caledit.bin" \
     --verify
 
-echo "Built dfu.mod ($(stat -c %s "$DIR/dfu.mod") bytes, P0 Structured Paged Module, 11 leaves)"
+echo "Built dfu.mod ($(stat -c %s "$DIR/dfu.mod") bytes, P0 Structured Paged Module, 14 leaves)"

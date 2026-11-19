@@ -1,5 +1,5 @@
 /*
- * DFU Leaf 8: Radio Clone (2-Pin Serial Radio-to-Radio Transfer)
+ * DFU Leaf 8: Peer Flash (2-Pin Serial Radio-to-Radio Transfer)
  */
 #include "dfu_shared.h"
 
@@ -24,7 +24,7 @@ u32 leaf8_entry(u32 op, const KrxApiTable* api, void* param) {
     sz[n++] = ' '; sz[n++] = 'K'; sz[n++] = 'B'; sz[n] = 0;
 
     krx_clear(api);
-    dfu_draw_header(api, "Radio Clone");
+    dfu_draw_header(api, "Peer Flash");
     st->ui.kv(api, 17, "Local Image", sz);
     st->ui.kv(api, 25, "Serial Link", "2-Pin K1 (38400)");
     st->ui.kv(api, 33, "Protocol",
