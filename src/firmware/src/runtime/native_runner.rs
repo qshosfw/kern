@@ -5,7 +5,7 @@
 //! shared transient SRAM execution arena (`NATIVE_SLOT`), linked against the
 //! modular capability VTables (`syscall`) and delta relocation engine (`apply_relocs`).
 
-#[cfg(any(test, feature = "settings_debug"))]
+#[cfg(test)]
 use super::syscall::ACTIVE_CTX;
 use super::syscall::NATIVE_API_TABLE;
 use crate::services::SysContext;
@@ -638,7 +638,7 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *
         return 0xFFFF_FFFF;
     }
     unsafe {
-        #[cfg(any(test, feature = "settings_debug"))]
+        #[cfg(test)]
         {
             ACTIVE_CTX = ctx;
         }
@@ -649,7 +649,7 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *
             &raw const NATIVE_API_TABLE,
             param,
         );
-        #[cfg(any(test, feature = "settings_debug"))]
+        #[cfg(test)]
         {
             ACTIVE_CTX = core::ptr::null_mut();
         }

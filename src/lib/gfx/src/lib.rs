@@ -8,7 +8,6 @@ pub mod fonts;
 pub mod gui;
 pub mod icons;
 pub mod text;
-pub mod viewers;
 pub mod widgets;
 
 #[derive(Debug, Clone, Copy)]

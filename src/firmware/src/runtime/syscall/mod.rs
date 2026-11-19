@@ -3,15 +3,13 @@
 //! Routes all KRX system calls through one AAPCS-Thumb entry point (`kern_call(op, a0, a1, a2)`)
 //! into 9 `#[inline(never)]` domain dispatchers (`SYS`, `PROC`, `IPC`, `FS`, `RF`, `AUD`, `GFX`, `UI`, `IO`).
 
-#[cfg(any(test, feature = "settings_debug"))]
+#[cfg(test)]
 use crate::services::SysContext;
 use gfx::Canvas;
 use kernel::caps::Cap;
 use kernel::proc::abi::{KRX_ABI_VERSION_3_0, KrxApiTable};
 
 pub mod audio;
-#[cfg(any(test, feature = "settings_debug"))]
-pub mod bench;
 pub mod display;
 pub mod io;
 pub mod radio;
@@ -19,12 +17,10 @@ pub mod service;
 pub mod storage;
 pub mod ui;
 
-#[cfg(any(test, feature = "settings_debug"))]
-pub use bench::*;
 pub use service::{ServiceRegistry, active_caller_pid, ipc_channel_mut, service_registry_mut};
 pub use ui::{set_tray_icon, store_modal_text};
 
-#[cfg(any(test, feature = "settings_debug"))]
+#[cfg(test)]
 pub static mut ACTIVE_CTX: *mut SysContext<'static, 'static> = core::ptr::null_mut();
 
 #[cfg(test)]
