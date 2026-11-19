@@ -439,8 +439,7 @@ mod tests {
 
     #[test]
     fn test_rssi_and_vox_calibration() {
-        let mut bytes = [0u8; 512];
-        let cal = unsafe { &mut *(bytes.as_mut_ptr() as *mut CalibrationBlock) };
+        let mut cal: CalibrationBlock = unsafe { core::mem::zeroed() };
         cal.rssi_vhf = [50, 100, 150, 200];
         cal.vox0_thresholds[0] = 780;
         cal.vox1_thresholds[0] = 820;
@@ -467,8 +466,7 @@ mod tests {
         let flat_battery = [1400, 2000, 2000, 2000, 2400, 2600];
         assert_eq!(calculate_battery_percentage(2200, &flat_battery), 70);
 
-        let mut bytes = [0u8; 512];
-        let cal = unsafe { &mut *(bytes.as_mut_ptr() as *mut CalibrationBlock) };
+        let mut cal: CalibrationBlock = unsafe { core::mem::zeroed() };
         cal.rssi_vhf = [50, 140, 100, 200];
         assert_eq!(cal.raw_rssi_to_dbm(144_000_000, 110), -113);
         cal.rssi_vhf = [50, 100, 100, 200];

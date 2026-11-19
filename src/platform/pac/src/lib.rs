@@ -20,9 +20,8 @@
 
 #![no_std]
 
-/// Re-export official svd2rust-generated PAC from crates.io
-pub use PY32f071xx_pac as raw;
-pub use PY32f071xx_pac::Interrupt;
+pub mod interrupt;
+pub use interrupt::{Interrupt, NVIC_PRIO_BITS};
 
 pub mod adc;
 pub mod comp;

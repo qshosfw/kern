@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "PY32f071xx-pac"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4af5291a3a0223e4e2147026a6d787f115f2034aa7c46b7bc426d653b214837"
-dependencies = [
- "cortex-m",
- "cortex-m-rt",
- "vcell",
-]
-
-[[package]]
 name = "bare-metal"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -152,7 +141,6 @@ dependencies = [
  "cortex-m-rt",
  "crypto",
  "drivers",
- "embedded-hal 1.0.0",
  "gfx",
  "heapless",
  "kernel",
@@ -255,8 +243,8 @@ dependencies = [
 name = "py32f071-pac"
 version = "0.1.0"
 dependencies = [
- "PY32f071xx-pac",
  "cortex-m",
+ "cortex-m-rt",
 ]
 
 [[package]]
