@@ -218,7 +218,6 @@ pub enum MenuItemType {
         options: SheetOptions,
     },
     Submenu,
-    Info(&'static str),
     Value(ShortString),
     Shortcut(ShortString),
 }
@@ -463,10 +462,7 @@ impl MenuView {
             let item = &mut model.items[model.selected_idx];
             let is_action = matches!(
                 item.item_type,
-                MenuItemType::Action
-                    | MenuItemType::Submenu
-                    | MenuItemType::Info(_)
-                    | MenuItemType::Value(_)
+                MenuItemType::Action | MenuItemType::Submenu | MenuItemType::Value(_)
             );
 
             if is_released {
@@ -651,7 +647,6 @@ fn render_menu_row(
             icons::draw_icon_8(canvas, 114, row_y + 3, icons::ARROW_RIGHT, tc);
             max_title_x = 112;
         }
-        MenuItemType::Info(s) => val_str = s,
         MenuItemType::Value(v) => val_str = v.as_str(),
         MenuItemType::Choice { selected, options } => {
             let sel = *selected as usize;

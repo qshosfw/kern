@@ -114,9 +114,7 @@ fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut cra
             }
         }
         #[allow(unreachable_patterns)]
-        _ => {
-            item.item_type = MenuItemType::Info("Ascon-128");
-        }
+        _ => {}
     }
 }
 
@@ -136,34 +134,46 @@ pub fn populate_spec_range(
     n
 }
 
+static PAGE_DIRTY_MASK: [u8; PageId::COUNT] = [
+    0,                   // Root
+    1 << 0,              // Display
+    1 << 1,              // Audio
+    1 << 2,              // Buttons
+    1 << 4,              // Battery
+    (1 << 3) | (1 << 0), // Device
+    #[cfg(feature = "passcode")]
+    0, // Security
+    1 << 3,              // System
+    1 << 2,              // ButtonsTweaks
+    1 << 2,              // ButtonsShortcuts
+    0,                   // BatteryInfo
+    1 << 4,              // BatteryTweaks
+    #[cfg(feature = "settings_info")]
+    0, // SystemInfo
+    #[cfg(feature = "filesystem")]
+    0, // SystemStorage
+    1 << 5,              // Apps
+    (1 << 3) | (1 << 0), // BootSplash
+    #[cfg(feature = "settings_calib")]
+    0, // SystemCalibration
+    #[cfg(feature = "settings_debug")]
+    0, // SystemDebug
+    0,                   // AppPrefs
+];
+
+#[inline(never)]
 pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
-    match page {
-        PageId::Display => {
-            ctx.config.mark_display_dirty();
-            ctx.apply_display_config();
-        }
-        PageId::Audio => {
-            ctx.config.mark_audio_dirty();
-            ctx.apply_audio_config();
-        }
-        PageId::Buttons | PageId::ButtonsTweaks | PageId::ButtonsShortcuts => {
-            ctx.config.mark_keys_dirty();
-        }
-        PageId::Battery | PageId::BatteryTweaks => {
-            ctx.config.mark_battery_dirty();
-            ctx.power.load_battery_config(&ctx.config.battery);
-        }
-        PageId::System => {
-            ctx.config.mark_system_dirty();
-        }
-        PageId::Device | PageId::BootSplash => {
-            ctx.config.mark_system_dirty();
-            ctx.config.mark_display_dirty();
-        }
-        PageId::Apps => {
-            ctx.config.mark_apps_dirty();
-        }
-        _ => {}
+    let mask = PAGE_DIRTY_MASK[page as usize];
+    if mask == 0 {
+        return;
+    }
+    ctx.config.mark_dirty_mask(mask);
+    if page == PageId::Display {
+        ctx.apply_display_config();
+    } else if page == PageId::Audio {
+        ctx.apply_audio_config();
+    } else if (mask & (1 << 4)) != 0 {
+        ctx.power.load_battery_config(&ctx.config.battery);
     }
 }
 

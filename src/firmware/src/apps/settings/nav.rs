@@ -203,54 +203,35 @@ impl SettingsApp {
 
     #[inline(never)]
     pub fn update_config_from_menu(&mut self, ctx: &mut SysContext) {
-        let arena = settings_arena_ref();
-        #[cfg(feature = "passcode")]
-        if self.current_page == PageId::Security {
-            let idx = self.selected_idx;
-            if idx < self.items_len {
-                if let MenuItemType::Toggle(b) = arena.items[idx].item_type {
-                    super::security::update_security_toggle(ctx, idx, b);
-                }
-            }
+        let idx = self.selected_idx;
+        if idx >= self.items_len {
             return;
         }
-
-        let idx = self.selected_idx;
+        let arena = settings_arena_ref();
+        let val = match arena.items[idx].item_type {
+            MenuItemType::Range { val, .. } => val as i32,
+            MenuItemType::Toggle(b) => b as i32,
+            _ => return,
+        };
+        #[cfg(feature = "passcode")]
+        if self.current_page == PageId::Security {
+            super::security::update_security_toggle(ctx, idx, val != 0);
+            return;
+        }
         if self.current_page == PageId::ButtonsShortcuts {
-            if idx == 1 && idx < self.items_len {
-                if let MenuItemType::Toggle(b) = arena.items[idx].item_type {
-                    self.commit_field(SettingField::F_DRAWER, b as i32, ctx);
-                }
+            if idx == 1 {
+                self.commit_field(SettingField::F_DRAWER, val, ctx);
             }
             return;
         }
         if self.current_page == PageId::AppPrefs {
-            if idx < self.items_len {
-                let val = match arena.items[idx].item_type {
-                    MenuItemType::Range { val, .. } => Some(val as i32),
-                    MenuItemType::Toggle(b) => Some(b as i32),
-                    _ => None,
-                };
-                if let Some(v) = val {
-                    super::app_prefs::commit_app_pref(idx, v, ctx);
-                }
-            }
+            super::app_prefs::commit_app_pref(idx, val, ctx);
             return;
         }
-        let defs = page_defs(self.current_page);
-        if idx < self.items_len {
-            let tag = arena.item_tags[idx];
-            if tag < 0x80 {
-                if let Some(def) = defs.get(tag as usize) {
-                    let val = match arena.items[idx].item_type {
-                        MenuItemType::Range { val, .. } => Some(val as i32),
-                        MenuItemType::Toggle(b) => Some(b as i32),
-                        _ => None,
-                    };
-                    if let Some(v) = val {
-                        self.commit_field(def.field, v, ctx);
-                    }
-                }
+        let tag = arena.item_tags[idx];
+        if tag < 0x80 {
+            if let Some(def) = page_defs(self.current_page).get(tag as usize) {
+                self.commit_field(def.field, val, ctx);
             }
         }
     }

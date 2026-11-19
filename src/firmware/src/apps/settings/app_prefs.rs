@@ -94,6 +94,42 @@ pub fn seed_defaults(cfg: &mut [u8], sec: &[u8], ver: u8) {
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
+fn build_app_pref_item(dst: Option<&mut MenuItem>, off: usize, loaded: bool) -> bool {
+    let sc = scratch();
+    let sec_off = sc.sec_off as usize;
+    let cfg_len = sc.cfg_len as usize;
+    let it = unpack_item(&sc.hdr[sec_off + off..sec_off + off + 16]);
+    if !loaded {
+        write_cfg_it(&mut sc.cfg[..cfg_len], &it, it.default_v);
+    }
+    let Some(dst) = dst else {
+        return false;
+    };
+    let hdr_slice = &sc.hdr[..sc.hdr_len as usize];
+    let cur = read_cfg_it(&sc.cfg[..cfg_len], &it);
+    dst.item_type = match it.kind {
+        CFG_KIND_TOGGLE => MenuItemType::Toggle(cur != 0),
+        CFG_KIND_CHOICE => MenuItemType::Choice {
+            selected: cur.max(0) as u16,
+            options: SheetOptions::Packed(
+                KrxPreamble::read_hdr_packed(hdr_slice, it.aux_off).unwrap_or("Off\0"),
+            ),
+        },
+        CFG_KIND_RANGE => MenuItemType::Range {
+            val: cur,
+            min: it.min_v,
+            max: it.max_v,
+            step: it.step.max(1) as i16,
+            unit: KrxPreamble::read_hdr_str(hdr_slice, it.aux_off).unwrap_or(""),
+        },
+        _ => return false,
+    };
+    dst.title = KrxPreamble::read_hdr_str(hdr_slice, it.label_off).unwrap_or("Setting");
+    true
+}
+
+#[cfg(feature = "filesystem")]
+#[inline(never)]
 pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysContext) -> usize {
     let Some(pkg) = get_catalog().get_entry(false, pkg_idx) else {
         return 0;
@@ -126,13 +162,11 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
     if sec_len < 16 {
         return 0;
     }
-    let sec_off = sec.as_ptr() as usize - hdr_base;
-    let hdr_len = (summary.preamble.header_len as usize).min(KrxPreamble::MAX_HEADER_SIZE);
     let ver = sec[0];
     let item_count = sec[2] as usize;
     let cfg_len = (sec[3] as usize).clamp(1, sc.cfg.len());
-    sc.hdr_len = hdr_len as u16;
-    sc.sec_off = sec_off as u16;
+    sc.hdr_len = (summary.preamble.header_len as usize).min(KrxPreamble::MAX_HEADER_SIZE) as u16;
+    sc.sec_off = (sec.as_ptr() as usize - hdr_base) as u16;
     sc.sec_len = sec_len as u16;
     sc.cfg_len = cfg_len as u8;
 
@@ -147,37 +181,12 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
     let mut n = 0usize;
     for i in 0..item_count {
         let off = (i + 1) << 4;
-        if off + 16 > sec_len {
+        if off + 16 > sc.sec_len as usize {
             break;
         }
-        let it = unpack_item(&sc.hdr[sec_off + off..sec_off + off + 16]);
-        if !loaded {
-            write_cfg_it(&mut sc.cfg[..cfg_len], &it, it.default_v);
+        if build_app_pref_item(items.get_mut(n), off, loaded) {
+            n += 1;
         }
-        let Some(dst) = items.get_mut(n) else {
-            continue;
-        };
-        let hdr_slice = &sc.hdr[..hdr_len];
-        let cur = read_cfg_it(&sc.cfg[..cfg_len], &it);
-        dst.item_type = match it.kind {
-            CFG_KIND_TOGGLE => MenuItemType::Toggle(cur != 0),
-            CFG_KIND_CHOICE => MenuItemType::Choice {
-                selected: cur.max(0) as u16,
-                options: SheetOptions::Packed(
-                    KrxPreamble::read_hdr_packed(hdr_slice, it.aux_off).unwrap_or("Off\0"),
-                ),
-            },
-            CFG_KIND_RANGE => MenuItemType::Range {
-                val: cur,
-                min: it.min_v,
-                max: it.max_v,
-                step: it.step.max(1) as i16,
-                unit: KrxPreamble::read_hdr_str(hdr_slice, it.aux_off).unwrap_or(""),
-            },
-            _ => continue,
-        };
-        dst.title = KrxPreamble::read_hdr_str(hdr_slice, it.label_off).unwrap_or("Setting");
-        n += 1;
     }
     n
 }

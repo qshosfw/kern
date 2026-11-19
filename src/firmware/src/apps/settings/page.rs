@@ -487,8 +487,7 @@ pub const TAG_RANGE: u8 = 3;
 pub const TAG_TOGGLE: u8 = 4;
 pub const TAG_METRIC: u8 = 5;
 pub const TAG_ACTION: u8 = 6;
-pub const TAG_INFO: u8 = 7;
-pub const TAG_ASSET: u8 = 8;
+pub const TAG_ASSET: u8 = 7;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -594,14 +593,6 @@ impl SettingDef {
         Self {
             field: SettingField::BATTERY_TYPE,
             tag: TAG_BATTERY_TYPE,
-            aux: 0,
-        }
-    }
-
-    pub const fn info() -> Self {
-        Self {
-            field: SettingField::None,
-            tag: TAG_INFO,
             aux: 0,
         }
     }

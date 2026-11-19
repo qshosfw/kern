@@ -369,6 +369,18 @@ impl MasterConfig {
         self.seal(idx);
     }
 
+    #[inline(never)]
+    pub fn mark_dirty_mask(&mut self, mut mask: u8) {
+        let mut idx = 0usize;
+        while mask != 0 {
+            if (mask & 1) != 0 {
+                self.mark_domain_dirty(idx);
+            }
+            mask >>= 1;
+            idx += 1;
+        }
+    }
+
     pub fn mark_display_dirty(&mut self) {
         self.mark_domain_dirty(0);
     }
