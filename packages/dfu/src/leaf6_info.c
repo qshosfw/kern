@@ -73,7 +73,7 @@ u32 leaf6_entry(u32 op, const KrxApiTable* api, void* param) {
                 n += st->ui.u32_dec(buf + n, si.fw_minor); buf[n++] = '.';
                 n += st->ui.u32_dec(buf + n, si.fw_patch); buf[n] = 0;
             } else {
-                v = (si.flags & KRX_SYS_INFO_FLAG_CALIB_VALID) ? "KBHP 1.0 (Cal)" : "KBHP 1.0";
+                v = "KBHP 1.0";
             }
             st->ui.kv(api, (i16)(7 + r * 7), nth_s(KEYS, idx), v);
         }
