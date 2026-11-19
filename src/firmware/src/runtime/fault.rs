@@ -202,7 +202,7 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
     };
 
     // Snapshot package path & format dialog text BEFORE clearing the slot.
-    let mut msg_buf = [0u8; 64];
+    let mut msg_buf = [0u8; 96];
     let msg = fault.format_message(slot.app_name.as_str(), &mut msg_buf);
 
     let pkg = slot.pkg_path.as_bytes();
@@ -223,7 +223,7 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
     ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
     ctx.show_confirm(
         crate::orchestrator::TAG_FAULT_CONFIRM,
-        "App Exception",
+        "App Stopped",
         msg,
         "Retry",
         "Close",

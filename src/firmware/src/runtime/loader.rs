@@ -91,9 +91,9 @@ fn load_krx_into_slot(
             let cap_msg = required_caps
                 .without(granted)
                 .first_cap()
-                .map_or("Missing Cap", |c| c.required_message());
+                .map_or("", |c| c.required_message());
             #[cfg(not(feature = "settings_debug"))]
-            let cap_msg = "Cap denied";
+            let cap_msg = "";
             return Err(KrxLaunchError::CapabilityDenied(cap_msg));
         }
     }
@@ -251,27 +251,32 @@ pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunch
     let fname = crate::apps::launcher::catalog::extract_filename(path);
 
     const HUMAN_MSGS: &[u8] = b"\
-File not found\0\
-Read failed\0\
-Bad header\0\
-Bad CRC-32\0\
-No manifest\0\
-No exec code\0\
-Cap denied\0\
-Low RAM\0\
-Low stack\0\
-Reloc failed\0\
-Bind failed\0\
-Too large\0\
-Exec failed\0\
-Bad entry\0\
-Truncated\0\
-Bad profile\0";
+App file was not found\non storage.\0\
+Could not read app file\nfrom storage.\0\
+App file is invalid or\ncorrupted.\0\
+App checksum failed.\nPlease reinstall it.\0\
+App info is missing.\nPlease reinstall it.\0\
+App has no runnable code.\0\
+Permission required to\nrun this app.\0\
+Not enough free memory\nto open this app.\0\
+Not enough free stack\nto open this app.\0\
+Could not load app into\nmemory.\0\
+App requires a newer\nfirmware version.\0\
+App is too large for\navailable memory.\0\
+App could not be started.\0\
+App start point is\ninvalid.\0\
+App file is incomplete.\nPlease reinstall it.\0\
+App format is not\nsupported on this radio.\0";
 
-    let msg = if let KrxLaunchError::CapabilityDenied(cap) = err {
-        cap
-    } else {
-        utils::format::nth_cstr(HUMAN_MSGS, err.index())
+    let mut cap_buf = heapless::String::<64>::new();
+    let msg = match err {
+        KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
+            let _ = cap_buf.push_str("Needs ");
+            let _ = cap_buf.push_str(cap);
+            let _ = cap_buf.push_str("\nto run this app.");
+            cap_buf.as_str()
+        }
+        _ => utils::format::nth_cstr(HUMAN_MSGS, err.index()),
     };
 
     ctx.show_confirm(

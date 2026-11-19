@@ -27,16 +27,16 @@ pub enum KernelError {
 }
 
 const ERROR_NAMES: &[u8] = b"\
-Unspecified\0\
-Access Denied\0\
-Not Found\0\
-Out of Res\0\
-HW Timeout\0\
-Corrupt Data\0\
-Invalid Arg\0\
-Stack Low\0\
-Deadline Exceeded\0\
-Stopped\0";
+Something went wrong\0\
+Permission denied\0\
+Item not found\0\
+Not enough memory\0\
+Hardware did not reply\0\
+Data is corrupted\0\
+Invalid request\0\
+Ran out of stack space\0\
+App stopped responding\0\
+App was stopped\0";
 
 impl KernelError {
     pub const fn to_code(self) -> u8 {

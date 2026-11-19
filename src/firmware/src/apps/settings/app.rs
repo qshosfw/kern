@@ -522,7 +522,7 @@ impl App<SysContext<'_, '_>> for SettingsApp {
                 self.dirty_timer_ms = self.dirty_timer_ms.saturating_sub(dt);
                 if self.dirty_timer_ms == 0 {
                     if ctx.flush_config().is_err() {
-                        dialog::info_popup(ctx, "Save Error", "Write failed");
+                        dialog::info_popup(ctx, "Could Not Save", "Failed to save settings.");
                     }
                 }
             }

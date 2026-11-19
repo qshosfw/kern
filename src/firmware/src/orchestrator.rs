@@ -775,7 +775,7 @@ impl Orchestrator {
         unsafe {
             let modal_mut =
                 &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL);
-            modal_mut.show_confirm(TAG_FAULT_CONFIRM, "Fault", err_desc, "Stop", "Retry");
+            modal_mut.show_confirm(TAG_FAULT_CONFIRM, "App Stopped", err_desc, "Stop", "Retry");
         }
         sink_modal_keys();
     }

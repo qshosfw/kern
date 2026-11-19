@@ -28,10 +28,26 @@ pub enum Exception {
 const EXCEPTION_LABELS: &[u8] =
     b"OK\0HardFault\0Stack\0Hang\0Cap Denied\0Bad Ptr\0Bad Arg\0Unleased\0Bad Op\0";
 
+const EXCEPTION_DESCS: &[u8] = b"\
+had no error.\0\
+crashed unexpectedly.\nInvalid memory or code.\0\
+ran out of stack space.\nToo much memory used.\0\
+stopped responding and\nwas closed safely.\0\
+lacked permission.\nBlocked by system policy.\0\
+used a bad address.\nBlocked for safety.\0\
+sent an invalid request.\nBlocked for safety.\0\
+used a busy device.\nHardware not owned.\0\
+called an unknown API.\nUpdate app or firmware.\0";
+
 impl Exception {
     #[inline(always)]
     pub fn label(self) -> &'static str {
         utils::format::nth_cstr(EXCEPTION_LABELS, self as u8)
+    }
+
+    #[inline(always)]
+    pub fn description(self) -> &'static str {
+        utils::format::nth_cstr(EXCEPTION_DESCS, self as u8)
     }
 }
 
@@ -64,32 +80,37 @@ impl AppFault {
         !matches!(self.kind, Exception::None)
     }
 
-    /// Formats a concise exception summary (e.g. `"myapp: HardFault\n0x01A4"`)
+    /// Formats a human-readable exception summary (e.g.
+    /// `"scanner crashed unexpectedly.\nInvalid memory or code.\nAt +0x01A4"`)
     /// into `out` without heap allocation or `core::fmt`.
     #[inline(never)]
-    pub fn format_message<'a>(&self, app_name: &str, out: &'a mut [u8; 64]) -> &'a str {
+    pub fn format_message<'a>(&self, app_name: &str, out: &'a mut [u8; 96]) -> &'a str {
         let mut pos = 0usize;
         let name = if app_name.is_empty() { "App" } else { app_name };
         for s in [
             name.as_bytes(),
-            b": " as &[u8],
-            self.kind.label().as_bytes(),
+            b" " as &[u8],
+            self.kind.description().as_bytes(),
         ] {
             let n = s.len().min(out.len() - pos);
             out[pos..pos + n].copy_from_slice(&s[..n]);
             pos += n;
         }
-        let val = if matches!(self.kind, Exception::Fault) {
+        let is_hw_fault = matches!(self.kind, Exception::Fault);
+        let val = if is_hw_fault {
             self.pc_off
         } else {
             self.op as u16
         };
-        if val != 0 && pos + 8 <= out.len() {
+        let detail_prefix: &[u8] = if is_hw_fault {
+            b"\nAt +0x"
+        } else {
+            b"\nCall 0x"
+        };
+        if val != 0 && pos + detail_prefix.len() + 4 <= out.len() {
             let hex = utils::format::HEX_CHARS;
-            out[pos] = b'\n';
-            out[pos + 1] = b'0';
-            out[pos + 2] = b'x';
-            pos += 3;
+            out[pos..pos + detail_prefix.len()].copy_from_slice(detail_prefix);
+            pos += detail_prefix.len();
             let mut shift = 12i8;
             while shift >= 0 {
                 out[pos] = hex[((val >> shift) & 0xF) as usize];
@@ -98,7 +119,7 @@ impl AppFault {
             }
         }
 
-        // SAFETY: all pushed bytes are valid UTF-8 (`name` is &str, labels/hex are ASCII).
+        // SAFETY: all pushed bytes are valid UTF-8 (`name` is &str, descriptions/hex are ASCII).
         unsafe { core::str::from_utf8_unchecked(&out[..pos]) }
     }
 }
@@ -109,7 +130,7 @@ mod tests {
 
     #[test]
     fn format_message_renders_fault_and_contract_details() {
-        let mut buf = [0u8; 64];
+        let mut buf = [0u8; 96];
         let f = AppFault {
             pid: Pid(5),
             kind: Exception::Fault,
@@ -122,7 +143,7 @@ mod tests {
         assert!(f.is_active());
         assert_eq!(
             f.format_message("scanner", &mut buf),
-            "scanner: HardFault\n0x01A4"
+            "scanner crashed unexpectedly.\nInvalid memory or code.\nAt +0x01A4"
         );
 
         let c = AppFault {
@@ -136,7 +157,7 @@ mod tests {
         };
         assert_eq!(
             c.format_message("demo", &mut buf),
-            "demo: Cap Denied\n0x0042"
+            "demo lacked permission.\nBlocked by system policy.\nCall 0x0042"
         );
         assert!(!AppFault::NONE.is_active());
     }

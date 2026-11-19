@@ -106,10 +106,10 @@ struct DestructiveConfirm {
 }
 
 static DESTRUCTIVE_STRS: &[u8] = b"\
-Format Storage?\0Wipes user files & settings.\nCalib is kept.\0\
-Erase All Data?\0Wipes ALL files, settings\n& radio calibration!\0\
-Reset Settings?\0Restores default config.\nChannels & calib kept.\0\
-Restart Radio?\0Save & restart into Kern.\0";
+Format Storage?\0Erases user files & settings.\nCalibration is kept.\0\
+Erase All Data?\0Erases all files, settings,\nand radio calibration!\0\
+Reset Settings?\0Restores default settings.\nChannels & calib are kept.\0\
+Restart Radio?\0Saves settings and restarts\nthe radio.\0";
 
 static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
     #[cfg(feature = "filesystem")]
@@ -208,7 +208,7 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
         #[cfg(feature = "settings_debug")]
         ActionId::ClearLogs => {
             crate::panic::BOOT_RECORD.get_mut().reset_all();
-            ctx.show_popup(TAG_POPUP_INFO, "Debug", "Crash logs cleared");
+            ctx.show_popup(TAG_POPUP_INFO, "Debug", "Crash logs were cleared.");
         }
         #[allow(unreachable_patterns)]
         _ => {}
@@ -256,7 +256,7 @@ pub fn handle_sheet_selected(
                     target_id,
                 ) {
                     1 => ctx.config.mark_keys_dirty(),
-                    2 => info_popup(ctx, "Context Rules", "Max 3 overrides"),
+                    2 => info_popup(ctx, "Shortcuts", "Up to 3 custom rules\nare allowed."),
                     _ => {}
                 }
             }
@@ -306,7 +306,7 @@ pub fn handle_text_input_done(
         TAG_PASSCODE_NEW => {
             if text.is_empty() {
                 let _ = crate::security::passcode::disable_passcode(ctx.storage, ctx.passcode);
-                ctx.show_popup(TAG_POPUP_INFO, "", "Passcode Removed");
+                ctx.show_popup(TAG_POPUP_INFO, "", "Passcode removed.");
             } else {
                 app.passcode_candidate.clear();
                 let _ = app.passcode_candidate.push_str(text);
@@ -365,13 +365,13 @@ pub fn handle_confirm_result(
                 (
                     "Storage",
                     if keep {
-                        "Formatted (Calib Kept)"
+                        "Storage formatted.\nCalibration was kept."
                     } else {
-                        "Full Wipe Complete"
+                        "All data erased."
                     },
                 )
             } else {
-                ("Storage", "Format Failed")
+                ("Storage", "Could not format storage.")
             }
         }
         TAG_RESET_SETTINGS => {
@@ -383,7 +383,7 @@ pub fn handle_confirm_result(
             ctx.power.load_battery_config(&ctx.config.battery);
             ctx.config.hw_dirty = 0x3F;
             app.populate_current_menu(ctx);
-            ("System", "Settings Reset")
+            ("Settings", "Settings restored to\ndefaults.")
         }
         TAG_REBOOT_FW => {
             let _ = ctx.flush_config();

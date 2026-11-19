@@ -480,8 +480,8 @@ pub fn show_low_battery_popup() {
     unsafe {
         (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_popup(
             TAG_LOW_BATTERY_POPUP,
-            "LOW BATTERY",
-            "Please Charge",
+            "Low Battery",
+            "Please charge your radio.",
         );
     }
 }
