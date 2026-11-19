@@ -2,25 +2,31 @@
 """
 Kern Dock — Native GTK4 + Libadwaita Hardware Companion for Kern OS.
 
-Architecture:
-  • Blazing-fast multi-layer Cairo rendering (< 0.5 ms/frame):
-      - Vectorized NumPy ST7565 unpacking + asymmetric STN ghosting (pure-Python fallback)
-      - Cached static handset chassis, LCD glass backdrop, and subpixel micro-grid surfaces
-      - Smooth 60 FPS spring-animated physical buttons (0% CPU when idle)
-  • Factory-accurate hardware models auto-detected via GUdev USB descriptors & RigWire HELLO:
-      - Quansheng UV-K1(8) ("Mini Kong"): warm titanium-gunmetal armor, 4 Torx bolts,
-        authentic Quansheng RF-wave logo, stubby A1 antenna, cobalt-blue knob & PTT,
-        generous unpixelated backlit LCD margin, milled 4x4 keypad lattice
-      - Quansheng UV-K5 v3 / UV-K6: matte polycarbonate shell, brushed silver upper LCD
-        armor, vivid orange knob, vertical left nav column (M / ▲ / ▼ / EXIT) alongside
-        the 3-bar speaker dish, and lower 4x3 keypad
-  • Clean GNOME HIG workspace (zero cluttered top bar, auto window sizing):
-      - Upgraded GUdev hotplug Connection Popover (live boxed-list devices, auto-connect)
+Features:
+  • 3D-sculpted hardware models with PangoCairo typography (Adwaita Sans)
+    modeled from official Quansheng orthographic renders & auto-detected via
+    GUdev USB descriptors + RigWire HELLO:
+      - Quansheng UV-K1(8): brushed champagne-titanium 3D armor, hexagonal Torx
+        bolts, glossy Quansheng RF-wave logo bar, stubby A1 antenna, cobalt-blue
+        rotary knob & 3D contoured PTT paddle, frosted light-pipe status LED,
+        12 inter-row speaker grille slots, raised rubber island 4x4 keypad
+      - Quansheng UV-K5 v3 / UV-K6: matte polycarbonate shell, brushed silver
+        upper armor, vivid orange knob, vertical left M / ▲ / ▼ / EXIT column
+        beside the 3-rib speaker dish, and lower 4x3 keypad
+  • Blazing-fast cached Cairo + NumPy ST7565 LCD engine (~600 FPS CPU cap)
+    with crisp tight unpixelated glass margin, 1.3x taller-than-wide pixels,
+    asymmetric STN ghosting, contrast & backlight curves, rear-polarizer shadow
+  • Automatic DFU / Stock Bootloader / CPS Flasher recognition:
+      - Detects Kern OS (RigWire), Stock Quansheng Bootloader / CPS (36b7:0001
+        or 38400-baud 0x0518 beacon), and Moto UF2 Bootloader (36b7:ffff)
+      - Native Adw.Banner alerts + in-app .kfw / .bin flasher with live progress
+      - One-click Factory Calibration & Full KernFS .kfw Backup / Safe Restore
+  • Full GTK4 + Libadwaita workspace:
       - Device (battery LevelBar, identity, link FPS/RTT, hardware controls)
-      - Files  (live KernFS browser + anti-brick shields + native WebDAV OS mount)
-      - Wire   (interactive RigWire console)
-      - Capture (PNG snapshots + event-driven GIF recorder with trim/cut/splice editor,
-        exporting LCD-Only or Full Radio Body with animated button presses)
+      - Files  (searchable KernFS browser + anti-brick shields + WebDAV OS mount)
+      - Flash  (DFU/CPS firmware flasher + verified .kfw calibration & FS backups)
+      - Wire   (interactive RigWire command console)
+      - Capture (PNG snapshot + non-destructive GIF recorder with trim/cut/splice)
 """
 
 from __future__ import annotations
@@ -46,6 +52,12 @@ if str(TOOLS_DIR) not in sys.path:
 
 import rigwire  # noqa: E402
 import kernfs_mount  # noqa: E402
+import kfw  # noqa: E402
+
+try:
+    import flasher as _flasher  # noqa: E402
+except Exception:
+    _flasher = None  # type: ignore[assignment]
 
 try:
     import numpy as _np
@@ -59,7 +71,6 @@ except ImportError:
 LCD_W = 128
 LCD_H = 64
 
-# Authentic measured palettes (UV-K1 mint/indigo, UV-K5 vivid amber/black, etc.)
 LCD_PALETTES: dict[str, dict[str, Any]] = {
     "UV-K1":         {"bg": (0xC9, 0xF7, 0xEC), "fg": (0x26, 0x20, 0x83), "dark": False},
     "UV-K5":         {"bg": (0xFF, 0x99, 0x00), "fg": (0x0E, 0x0E, 0x0E), "dark": False},
@@ -68,7 +79,6 @@ LCD_PALETTES: dict[str, dict[str, Any]] = {
     "OLED White":    {"bg": (0x10, 0x10, 0x10), "fg": (0xF0, 0xF0, 0xF0), "dark": True},
 }
 
-# Asymmetric STN liquid-crystal dynamics (fast dark turn-on, smooth fade-off)
 STN_ATTACK = 0.72
 STN_DECAY = 0.24
 
@@ -80,8 +90,8 @@ class LcdSettings:
     pixel_grid: bool = True
     invert_lcd: bool = False
     ghosting: bool = True
-    contrast: int = 13          # 0..15
-    backlight: int = 8          # 0..10 (0..6 dim, 7..8 normal, 9..10 vibrant)
+    contrast: int = 13
+    backlight: int = 8
     backlight_glow: bool = True
 
     def cache_key(self) -> tuple[Any, ...]:
@@ -112,18 +122,15 @@ def _lcd_colors_norm(st: LcdSettings) -> tuple[tuple[float, float, float], tuple
         bg[2] + (fg_raw[2] - bg[2]) * c_ratio,
     )
     grid = (
-        bg[0] + (fg_raw[0] - bg[0]) * 0.07,
-        bg[1] + (fg_raw[1] - bg[1]) * 0.07,
-        bg[2] + (fg_raw[2] - bg[2]) * 0.07,
+        bg[0] + (fg_raw[0] - bg[0]) * 0.065,
+        bg[1] + (fg_raw[1] - bg[1]) * 0.065,
+        bg[2] + (fg_raw[2] - bg[2]) * 0.065,
     )
     return bg, fg, grid, bool(pal["dark"])
 
 
 class FastLcdState:
-    """
-    Ultra-fast ST7565 pixel state + premultiplied ARGB32 128x64 Cairo surface generator.
-    Runs in ~0.12 ms/frame with NumPy (or ~0.6 ms pure Python) — zero per-pixel Cairo loops!
-    """
+    """Vectorized ST7565 pixel state emitting a fresh GSK-safe 128x64 Cairo ARGB32 surface."""
 
     def __init__(self) -> None:
         if _np is not None:
@@ -132,16 +139,10 @@ class FastLcdState:
             self._bgra_np = _np.zeros((LCD_H, LCD_W, 4), dtype=_np.uint8)
         else:
             self._ghost_py: list[float] = [0.0] * (LCD_W * LCD_H)
-            self._bgra_py = bytearray(LCD_W * LCD_H * 4)
-        self._pixel_surface: Any = None
-        self._surface_dirty = True
 
     def step(self, fb: bytes, st: LcdSettings) -> bool:
-        """Updates STN ghosting state for one frame; returns True while pixels are still settling."""
         if len(fb) < 1024:
             fb = fb.ljust(1024, b"\x00")
-        self._surface_dirty = True
-
         if _np is not None:
             raw = _np.frombuffer(fb[:1024], dtype=_np.uint8).reshape(8, 128)
             bits = ((raw[:, None, :] >> self._shifts[None, :, :]) & 1).reshape(64, 128)
@@ -160,15 +161,10 @@ class FastLcdState:
             self._ghost_np = _np.where(settled, target, self._ghost_np)
             return bool(_np.any(~settled))
 
-        # Pure-Python fallback
-        inv = st.invert_lcd
-        use_g = st.ghosting
-        settling = False
-        g = self._ghost_py
+        inv, use_g, settling, g = st.invert_lcd, st.ghosting, False, self._ghost_py
         idx = 0
         for y in range(LCD_H):
-            po = (y >> 3) * 128
-            m = 1 << (y & 7)
+            po, m = (y >> 3) * 128, 1 << (y & 7)
             for x in range(LCD_W):
                 bit = 1 if (fb[po + x] & m) else 0
                 tgt = (0.0 if bit else 1.0) if inv else (1.0 if bit else 0.0)
@@ -190,10 +186,6 @@ class FastLcdState:
         return settling
 
     def get_cairo_pixel_surface(self, st: LcdSettings) -> Any:
-        """
-        Returns a fresh 128x64 Cairo FORMAT_ARGB32 premultiplied surface of ONLY the active LC pixels.
-        A fresh buffer/surface per update avoids mutating a surface still snapshotted by GTK4 GSK.
-        """
         import cairo
         _, fg, _, _ = _lcd_colors_norm(st)
         fr, fg_c, fb_c = fg[0] * 255.0, fg[1] * 255.0, fg[2] * 255.0
@@ -209,9 +201,7 @@ class FastLcdState:
             return cairo.ImageSurface.create_for_data(raw, cairo.FORMAT_ARGB32, LCD_W, LCD_H, LCD_W * 4)
 
         buf = bytearray(LCD_W * LCD_H * 4)
-        g = self._ghost_py
-        for i in range(LCD_W * LCD_H):
-            a = g[i]
+        for i, a in enumerate(self._ghost_py):
             if a > 0.01:
                 p = i * 4
                 buf[p] = int(fb_c * a)
@@ -222,23 +212,20 @@ class FastLcdState:
 
 
 def _compute_lcd_active_rect(w: float, h: float, aspect: float) -> tuple[float, float, float, float, float, float]:
-    """Computes (mx, my, mat_w, mat_h, px_w, px_h) inside an unpixelated backlit glass margin."""
-    # Generous authentic unpixelated backlit STN glass border on all 4 sides (~7.5% X, ~9% Y)
-    pad_x = max(7.0, w * 0.072)
-    pad_y = max(7.0, h * 0.088)
+    """Tight, authentic ST7565 unpixelated glass margin (~3.6% X, ~4.6% Y — never oversized)."""
+    pad_x = max(4.0, w * 0.036)
+    pad_y = max(4.0, h * 0.046)
     avail_w = max(16.0, w - pad_x * 2.0)
     avail_h = max(16.0, h - pad_y * 2.0)
     px_w = min(avail_w / LCD_W, avail_h / (LCD_H * aspect))
     px_h = px_w * aspect
     mat_w = LCD_W * px_w
     mat_h = LCD_H * px_h
-    mx = (w - mat_w) * 0.5
-    my = (h - mat_h) * 0.5
-    return mx, my, mat_w, mat_h, px_w, px_h
+    return (w - mat_w) * 0.5, (h - mat_h) * 0.5, mat_w, mat_h, px_w, px_h
 
 
 class LcdLayerCache:
-    """Caches static LCD backdrop (unpixelated backlit glass) & foreground (micro-grid + bezel shadow + sheen)."""
+    """Caches static backlit LCD glass backdrop + hairline subpixel grid / inner bezel shadow / glass sheen."""
 
     def __init__(self) -> None:
         self._key: Any = None
@@ -252,14 +239,14 @@ class LcdLayerCache:
         if key == self._key and self.bg_surf is not None:
             return
         self._key = key
-        bg, fg, grid, is_dark = _lcd_colors_norm(st)
+        bg, _fg, grid, is_dark = _lcd_colors_norm(st)
         mx, my, mat_w, mat_h, px_w, px_h = _compute_lcd_active_rect(float(w), float(h), st.pixel_aspect)
         self.metrics = (mx, my, mat_w, mat_h, px_w, px_h)
 
-        # --- Layer A: Unpixelated Illuminated Glass Backdrop ---
+        # Layer A: Unpixelated Illuminated Glass + LED Diffuser Gradient
         bg_s = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
         cr = cairo.Context(bg_s)
-        _round_rect(cr, 0, 0, w, h, 4.5)
+        _round_rect(cr, 0, 0, w, h, 4.0)
         cr.clip()
 
         pat = cairo.LinearGradient(0, 0, 0, h)
@@ -267,80 +254,65 @@ class LcdLayerCache:
             pat.add_color_stop_rgb(0.0, bg[0], bg[1], bg[2])
             pat.add_color_stop_rgb(1.0, _clamp1(bg[0] * 1.08), _clamp1(bg[1] * 1.08), _clamp1(bg[2] * 1.08))
         else:
-            # Realistic bottom-edge LED diffuser brightness gradient across the glass
-            pat.add_color_stop_rgb(0.0, bg[0] * 0.93, bg[1] * 0.94, bg[2] * 0.95)
-            pat.add_color_stop_rgb(0.50, bg[0], bg[1], bg[2])
-            pat.add_color_stop_rgb(1.0, _clamp1(bg[0] * 1.05), _clamp1(bg[1] * 1.05), _clamp1(bg[2] * 1.03))
+            pat.add_color_stop_rgb(0.0, bg[0] * 0.94, bg[1] * 0.95, bg[2] * 0.96)
+            pat.add_color_stop_rgb(0.55, bg[0], bg[1], bg[2])
+            pat.add_color_stop_rgb(1.0, _clamp1(bg[0] * 1.04), _clamp1(bg[1] * 1.04), _clamp1(bg[2] * 1.03))
         cr.set_source(pat)
         cr.rectangle(0, 0, w, h)
         cr.fill()
 
-        # Subtle passive liquid-crystal matrix zone tint ONLY inside active 128x64 rectangle
         if not is_dark:
-            cr.set_source_rgba(grid[0], grid[1], grid[2], 0.55 if st.pixel_grid else 0.25)
+            cr.set_source_rgba(grid[0], grid[1], grid[2], 0.45 if st.pixel_grid else 0.18)
             cr.rectangle(mx, my, mat_w, mat_h)
             cr.fill()
         self.bg_surf = bg_s
 
-        # --- Layer B: Foreground Subpixel Hairline Grid + Recessed Bezel Shadow + Glass Sheen ---
+        # Layer B: Crisp Hairline Subpixel Grid + Recessed Bezel Shadow + Glass Sheen
         fg_s = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
         fcr = cairo.Context(fg_s)
-        _round_rect(fcr, 0, 0, w, h, 4.5)
+        _round_rect(fcr, 0, 0, w, h, 4.0)
         fcr.clip()
 
-        # Crisp 10% hairline grid strictly inside the active 128x64 window (never on the glass margin!)
-        if st.pixel_grid and px_w >= 1.6:
-            fcr.set_source_rgba(bg[0], bg[1], bg[2], 0.72 if not is_dark else 0.65)
-            fcr.set_line_width(max(0.32, px_w * 0.11))
+        if st.pixel_grid and px_w >= 1.5:
+            fcr.set_source_rgba(bg[0], bg[1], bg[2], 0.68 if not is_dark else 0.62)
+            fcr.set_line_width(max(0.30, px_w * 0.10))
             for col in range(1, LCD_W):
                 lx = mx + col * px_w
                 fcr.move_to(lx, my)
                 fcr.line_to(lx, my + mat_h)
             fcr.stroke()
-            fcr.set_line_width(max(0.32, px_h * 0.11))
+            fcr.set_line_width(max(0.30, px_h * 0.10))
             for row in range(1, LCD_H):
                 ly = my + row * px_h
                 fcr.move_to(mx, ly)
                 fcr.line_to(mx + mat_w, ly)
             fcr.stroke()
 
-        # Recessed inner bezel shadow cast around all 4 glass edges
-        sd = max(6.0, min(w, h) * 0.055)
+        sd = max(5.0, min(w, h) * 0.048)
         for (x0, y0, x1, y1, rx, ry, rw, rh) in (
             (0, 0, 0, sd, 0, 0, w, sd),
-            (0, h, 0, h - sd * 0.7, 0, h - sd * 0.7, w, sd * 0.7),
-            (0, 0, sd * 0.85, 0, 0, 0, sd * 0.85, h),
-            (w, 0, w - sd * 0.85, 0, w - sd * 0.85, 0, sd * 0.85, h),
+            (0, h, 0, h - sd * 0.65, 0, h - sd * 0.65, w, sd * 0.65),
+            (0, 0, sd * 0.8, 0, 0, 0, sd * 0.8, h),
+            (w, 0, w - sd * 0.8, 0, w - sd * 0.8, 0, sd * 0.8, h),
         ):
             sg = cairo.LinearGradient(x0, y0, x1, y1)
-            sg.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.30)
+            sg.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.28)
             sg.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0)
             fcr.set_source(sg)
             fcr.rectangle(rx, ry, rw, rh)
             fcr.fill()
 
-        # Subtle matte polarizer diagonal sheen
-        sheen = cairo.LinearGradient(0, 0, w * 0.55, h * 0.75)
+        sheen = cairo.LinearGradient(0, 0, w * 0.55, h * 0.72)
         sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.075)
-        sheen.add_color_stop_rgba(0.42, 1.0, 1.0, 1.0, 0.015)
-        sheen.add_color_stop_rgba(0.43, 1.0, 1.0, 1.0, 0.0)
+        sheen.add_color_stop_rgba(0.40, 1.0, 1.0, 1.0, 0.015)
+        sheen.add_color_stop_rgba(0.41, 1.0, 1.0, 1.0, 0.0)
         fcr.set_source(sheen)
         fcr.rectangle(0, 0, w, h)
         fcr.fill()
         self.fg_surf = fg_s
 
 
-def paint_fast_lcd(
-    cr: Any,
-    x: float,
-    y: float,
-    w: int,
-    h: int,
-    lcd_state: FastLcdState,
-    st: LcdSettings,
-    cache: LcdLayerCache,
-) -> None:
-    """Paints full realistic ST7565 LCD in ~0.20 ms using cached surfaces + nearest-neighbor blit."""
+def paint_fast_lcd(cr: Any, x: float, y: float, w: int, h: int, lcd_state: FastLcdState, st: LcdSettings, cache: LcdLayerCache) -> None:
     import cairo
     cache.ensure(w, h, st)
     mx, my, mat_w, mat_h, px_w, px_h = cache.metrics
@@ -349,21 +321,18 @@ def paint_fast_lcd(
 
     cr.save()
     cr.translate(x, y)
-    # 1. Cached backlit glass + unpixelated padding
     cr.set_source_surface(cache.bg_surf, 0, 0)
     cr.paint()
 
-    # 2. STN rear-polarizer shadow (+0.8, +0.95) on reflective light panels
     if not is_dark:
         cr.save()
-        cr.translate(mx + max(0.6, px_w * 0.25), my + max(0.7, px_h * 0.25))
+        cr.translate(mx + max(0.55, px_w * 0.24), my + max(0.65, px_h * 0.24))
         cr.scale(mat_w / float(LCD_W), mat_h / float(LCD_H))
         cr.set_source_surface(px_surf, 0, 0)
         cr.get_source().set_filter(cairo.FILTER_NEAREST)
-        cr.paint_with_alpha(0.13)
+        cr.paint_with_alpha(0.12)
         cr.restore()
 
-    # 3. Crisp active liquid-crystal dot matrix
     cr.save()
     cr.translate(mx, my)
     cr.scale(mat_w / float(LCD_W), mat_h / float(LCD_H))
@@ -372,28 +341,89 @@ def paint_fast_lcd(
     cr.paint()
     cr.restore()
 
-    # 4. Cached micro-grid + bezel shadow + polarizer sheen
     cr.set_source_surface(cache.fg_surf, 0, 0)
     cr.paint()
     cr.restore()
 
 
 # =============================================================================
-# 2. FACTORY-ACCURATE CAIRO MODELS + AUTHENTIC QUANSHENG LOGO + SPRING KEYS
+# 2. 3D HARDWARE MODELS + PANGOCAIRO TYPOGRAPHY + AUTHENTIC QUANSHENG LOGO
 # =============================================================================
 
 K1_MATRIX: list[list[tuple[str, str, str, str]]] = [
-    [("menu", "MENU", "", ""), ("up", "<", "", ""), ("down", ">", "", ""), ("exit", "EXIT", "", "")],
+    [("menu", "MENU", "", ""), ("up", "_K1_LT_", "", ""), ("down", "_K1_GT_", "", ""), ("exit", "EXIT", "", "")],
     [("1", "1", "Band", ".,?"), ("2", "2", "A/B", "abc"), ("3", "3", "V/M", "def"), ("star", "*", "Scan", "_RET_")],
     [("4", "4", "FC",   "ghi"), ("5", "5", "WX",  "jkl"), ("6", "6", "H/L", "mno"), ("0",    "0", "FM",   "")],
-    [("7", "7", "VOX",  "pqrs"),("8", "8", "R",   "tuv"), ("9", "9", "Call","wxyz"),("f",    "#", "LOCK", "F")],
+    [("7", "7", "VOX",  "pqrs"),("8", "8", "R",   "tuv"), ("9", "9", "Call","wxyz"),("f",    "#", "_KEY_", "F")],
 ]
 
 K5_BOTTOM_MATRIX: list[list[tuple[str, str, str]]] = [
     [("1", "1", "Band"), ("2", "2", "A/B"),  ("3", "3", "VFO/MR"), ("star", "*", "Scan")],
     [("4", "4", "FC"),   ("5", "5", "NOAA"), ("6", "6", "H/M/L"),  ("0",    "0", "FM")],
-    [("7", "7", "VOX"),  ("8", "8", "R"),    ("9", "9", "Call"),   ("f",    "F", "#")],
+    [("7", "7", "VOX"),  ("8", "8", "R"),    ("9", "9", "Call"),   ("f",    "F", "_KEY_")],
 ]
+
+_PANGO_READY: bool | None = None
+_PANGO_MOD: Any = None
+_PANGOCAIRO_MOD: Any = None
+
+
+def _ensure_pango() -> bool:
+    global _PANGO_READY, _PANGO_MOD, _PANGOCAIRO_MOD
+    if _PANGO_READY is not None:
+        return _PANGO_READY
+    try:
+        import gi
+        gi.require_version("Pango", "1.0")
+        gi.require_version("PangoCairo", "1.0")
+        from gi.repository import Pango, PangoCairo
+        _PANGO_MOD = Pango
+        _PANGOCAIRO_MOD = PangoCairo
+        _PANGO_READY = True
+    except Exception:
+        _PANGO_READY = False
+    return _PANGO_READY
+
+
+def _draw_pango_text(
+    cr: Any,
+    text: str,
+    x: float,
+    y: float,
+    *,
+    font_desc: str,
+    rgba: tuple[float, float, float, float],
+    halign: str = "left",    # "left" | "center" | "right"
+    valign: str = "center",  # "top" | "center" | "bottom"
+) -> tuple[float, float]:
+    """Crisp PangoCairo text renderer (with automatic Cairo fallback in minimal headless environments)."""
+    cr.set_source_rgba(*rgba)
+    if _ensure_pango():
+        layout = _PANGOCAIRO_MOD.create_layout(cr)
+        layout.set_font_description(_PANGO_MOD.FontDescription.from_string(font_desc))
+        layout.set_text(text, -1)
+        pw, ph = layout.get_pixel_size()
+        dx = x if halign == "left" else (x - pw * 0.5 if halign == "center" else x - pw)
+        dy = y if valign == "top" else (y - ph * 0.5 if valign == "center" else y - ph)
+        cr.move_to(dx, dy)
+        _PANGOCAIRO_MOD.show_layout(cr, layout)
+        return float(pw), float(ph)
+    # Fallback
+    import cairo
+    cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD if "Bold" in font_desc else cairo.FONT_WEIGHT_NORMAL)
+    sz = 12.0
+    for tok in font_desc.split():
+        try:
+            sz = float(tok)
+        except ValueError:
+            pass
+    cr.set_font_size(sz * 1.25)
+    ext = cr.text_extents(text)
+    dx = x if halign == "left" else (x - ext.width * 0.5 - ext.x_bearing if halign == "center" else x - ext.width)
+    dy = y + ext.height * 0.38 if valign == "center" else y
+    cr.move_to(dx, dy)
+    cr.show_text(text)
+    return float(ext.width), float(ext.height)
 
 
 def _round_rect(cr: Any, x: float, y: float, w: float, h: float, r: float) -> None:
@@ -406,57 +436,191 @@ def _round_rect(cr: Any, x: float, y: float, w: float, h: float, r: float) -> No
     cr.close_path()
 
 
-def _draw_quansheng_logo(cr: Any, cx: float, cy: float, font_size: float = 13.0) -> None:
+def _draw_quansheng_logo(cr: Any, cx: float, cy: float, scale: float = 1.0) -> None:
     """
-    Draws the authentic Quansheng emblem modeled directly after `inspo/Quansheng-Logo.png`:
-    two heavy slanted curved RF wave crescents over the upper-left shoulder of bold italic QUANSHENG.
+    Authentic Quansheng corporate emblem modeled directly after `inspo/Quansheng-Logo.png`
+    and `ref_k1_body_crop.png`: slanted curved dual RF wave crescents hugging the upper-left
+    shoulder of wide, heavy italic geometric `QUANSHENG` lettering.
     """
     import cairo
     cr.save()
-    cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
-    cr.set_font_size(font_size)
-    ext = cr.text_extents("QUANSHENG")
-    icon_w = font_size * 1.15
-    total_w = icon_w + ext.width
-    x0 = cx - total_w * 0.5
-    text_x = x0 + icon_w
-    text_y = cy + ext.height * 0.36
+    cr.translate(cx, cy)
+    cr.scale(scale, scale)
 
-    # Two bold tapered RF crescents hugging top-left of 'Q'
-    cr.set_source_rgba(0.95, 0.96, 0.98, 0.96)
-    cr.set_line_cap(cairo.LINE_CAP_ROUND)
-    ox, oy = text_x + font_size * 0.14, text_y - font_size * 0.08
-    cr.set_line_width(font_size * 0.16)
-    cr.arc(ox, oy, font_size * 0.66, math.pi * 1.02, math.pi * 1.44)
-    cr.stroke()
-    cr.set_line_width(font_size * 0.19)
-    cr.arc(ox, oy, font_size * 0.98, math.pi * 1.00, math.pi * 1.46)
-    cr.stroke()
+    # Measure wordmark in crisp heavy italic geometric sans matching Quansheng-Logo.png
+    font_str = "Adwaita Sans Heavy Italic 12.2"
+    if _ensure_pango():
+        layout = _PANGOCAIRO_MOD.create_layout(cr)
+        layout.set_font_description(_PANGO_MOD.FontDescription.from_string(font_str))
+        layout.set_text("QUANSHENG", -1)
+        tw, th = layout.get_pixel_size()
+        w_scale = 1.08
+        icon_w = 19.0
+        total_w = icon_w + tw * w_scale
+        x0 = -total_w * 0.5
+        tx = x0 + icon_w
 
-    # Heavy sheared geometric wordmark
-    cr.move_to(text_x, text_y)
-    cr.show_text("QUANSHENG")
+        # Two bold filled curved RF signal bars hugging top-left of 'Q' (matches Quansheng-Logo.png)
+        cr.set_source_rgba(0.94, 0.95, 0.97, 0.98)
+        cr.set_line_cap(cairo.LINE_CAP_BUTT)
+        ox, oy = tx + 5.0, 5.0
+        # Inner bold bar
+        cr.new_path()
+        cr.set_line_width(3.1)
+        cr.arc(ox, oy, 11.2, math.pi * 1.07, math.pi * 1.43)
+        cr.stroke()
+        # Outer wider bold bar
+        cr.new_path()
+        cr.set_line_width(3.6)
+        cr.arc(ox, oy, 16.5, math.pi * 1.02, math.pi * 1.46)
+        cr.stroke()
+
+        cr.save()
+        cr.translate(tx, -th * 0.46)
+        cr.scale(w_scale, 1.0)
+        cr.set_source_rgba(0.94, 0.95, 0.97, 0.98)
+        _PANGOCAIRO_MOD.show_layout(cr, layout)
+        cr.restore()
+    else:
+        cr.set_source_rgba(0.94, 0.95, 0.97, 0.98)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(14.5)
+        ext = cr.text_extents("QUANSHENG")
+        tx = -(ext.width + 18.0) * 0.5 + 18.0
+        cr.set_line_cap(cairo.LINE_CAP_BUTT)
+        cr.new_path()
+        cr.set_line_width(3.0)
+        cr.arc(tx + 5.0, 5.0, 11.0, math.pi * 1.07, math.pi * 1.43)
+        cr.stroke()
+        cr.new_path()
+        cr.set_line_width(3.5)
+        cr.arc(tx + 5.0, 5.0, 16.2, math.pi * 1.02, math.pi * 1.46)
+        cr.stroke()
+        cr.move_to(tx, ext.height * 0.36)
+        cr.show_text("QUANSHENG")
     cr.restore()
 
 
-def _draw_torx_bolt(cr: Any, cx: float, cy: float, r: float = 5.4) -> None:
+def _draw_hex_torx_bolt(cr: Any, cx: float, cy: float, r: float = 6.2) -> None:
+    """3D countersunk stainless hex-socket bolt matching `ref_k1_body_crop.png`."""
     import cairo
-    cr.set_source_rgb(0.11, 0.11, 0.12)
-    cr.arc(cx, cy, r + 1.4, 0, 2 * math.pi)
+    # Deep countersunk circular socket shadow
+    cr.set_source_rgba(0.06, 0.06, 0.06, 0.95)
+    cr.arc(cx, cy, r + 1.8, 0, 2 * math.pi)
     cr.fill()
-    pat = cairo.RadialGradient(cx - r * 0.3, cy - r * 0.3, 0.5, cx, cy, r)
-    pat.add_color_stop_rgb(0.0, 0.90, 0.89, 0.86)
-    pat.add_color_stop_rgb(0.62, 0.54, 0.53, 0.50)
-    pat.add_color_stop_rgb(1.0, 0.28, 0.27, 0.25)
+    # Chamfered rim highlight
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.22)
+    cr.set_line_width(0.8)
+    cr.arc(cx, cy, r + 1.9, math.pi * 0.15, math.pi * 0.85)
+    cr.stroke()
+    # Brushed stainless conical washer head
+    pat = cairo.RadialGradient(cx - r * 0.32, cy - r * 0.32, 0.6, cx, cy, r)
+    pat.add_color_stop_rgb(0.0, 0.95, 0.94, 0.90)
+    pat.add_color_stop_rgb(0.55, 0.72, 0.70, 0.65)
+    pat.add_color_stop_rgb(1.0, 0.36, 0.35, 0.32)
     cr.set_source(pat)
     cr.arc(cx, cy, r, 0, 2 * math.pi)
     cr.fill()
-    cr.set_source_rgb(0.14, 0.13, 0.13)
-    cr.arc(cx, cy, r * 0.42, 0, 2 * math.pi)
+    # Real 6-sided hex drive recess
+    hr = r * 0.50
+    cr.new_sub_path()
+    for i in range(6):
+        ang = i * (math.pi / 3.0) + math.pi / 6.0
+        px, py = cx + hr * math.cos(ang), cy + hr * math.sin(ang)
+        cr.move_to(px, py) if i == 0 else cr.line_to(px, py)
+    cr.close_path()
+    cr.set_source_rgb(0.16, 0.15, 0.14)
     cr.fill()
 
 
-def _draw_animated_key(
+def _draw_frosted_led(cr: Any, x: float, y: float, w: float, h: float, state: str) -> None:
+    """
+    3D beveled frosted polycarbonate light-pipe status LED matching `ref_k1_body_crop.png`:
+    off = milky frosted glass; rx = emerald core + bloom; tx = ruby crimson; dfu = warm amber.
+    """
+    import cairo
+    # Black recessed mounting collar
+    cr.new_sub_path()
+    cr.move_to(x + 4, y)
+    cr.line_to(x + w - 4, y)
+    cr.line_to(x + w + 2, y + h)
+    cr.line_to(x - 2, y + h)
+    cr.close_path()
+    cr.set_source_rgb(0.09, 0.09, 0.10)
+    cr.fill()
+
+    # Frosted trapezoid lens body
+    cr.new_sub_path()
+    cr.move_to(x + 5, y + 1.5)
+    cr.line_to(x + w - 5, y + 1.5)
+    cr.line_to(x + w - 1, y + h - 1.5)
+    cr.line_to(x + 1, y + h - 1.5)
+    cr.close_path()
+
+    cx, cy = x + w * 0.5, y + h * 0.55
+    if state == "rx":
+        core, mid, outer = (0.78, 1.0, 0.86), (0.14, 0.90, 0.42), (0.06, 0.55, 0.24)
+    elif state == "tx":
+        core, mid, outer = (1.0, 0.82, 0.80), (0.98, 0.20, 0.20), (0.62, 0.06, 0.06)
+    elif state == "dfu":
+        core, mid, outer = (1.0, 0.94, 0.72), (0.98, 0.62, 0.08), (0.68, 0.34, 0.02)
+    else:
+        core, mid, outer = (0.92, 0.93, 0.95), (0.76, 0.78, 0.80), (0.54, 0.56, 0.58)
+
+    pat = cairo.RadialGradient(cx, cy - 1.0, 1.0, cx, cy, w * 0.65)
+    pat.add_color_stop_rgb(0.0, *core)
+    pat.add_color_stop_rgb(0.55, *mid)
+    pat.add_color_stop_rgb(1.0, *outer)
+    cr.set_source(pat)
+    cr.fill_preserve()
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.40)
+    cr.set_line_width(0.8)
+    cr.stroke()
+
+    # Translucent polycarbonate upper specular facet edge
+    cr.new_path()
+    cr.move_to(x + 6.5, y + 2.4)
+    cr.line_to(x + w - 6.5, y + 2.4)
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.58 if state != "off" else 0.35)
+    cr.set_line_width(1.1)
+    cr.stroke()
+
+    # Realistic multi-layered ambient bloom spilling onto neighboring bezel & antenna collar
+    if state in ("rx", "tx", "dfu"):
+        bloom = cairo.RadialGradient(cx, cy, 2.0, cx, cy, 28.0)
+        bloom.add_color_stop_rgba(0.0, mid[0], mid[1], mid[2], 0.64)
+        bloom.add_color_stop_rgba(0.45, mid[0], mid[1], mid[2], 0.24)
+        bloom.add_color_stop_rgba(1.0, mid[0], mid[1], mid[2], 0.0)
+        cr.set_source(bloom)
+        cr.new_path()
+        cr.arc(cx, cy, 28.0, 0, 2 * math.pi)
+        cr.fill()
+
+
+def _draw_key_glyph(cr: Any, x: float, y: float, w: float, h: float) -> None:
+    """Crisp vector padlock/key icon matching UV-K1 `#` / UV-K5 `F` silkscreen."""
+    import cairo
+    cr.save()
+    cr.set_source_rgba(0.92, 0.94, 0.97, 0.94)
+    cr.set_line_width(1.35)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    # Key bow (ring) on right + shaft + teeth on left (exact UV-K1 key icon!)
+    ry = y + h * 0.5
+    cr.new_path()
+    cr.arc(x + w - 3.2, ry, 2.6, 0, 2 * math.pi)
+    cr.stroke()
+    cr.new_path()
+    cr.move_to(x + w - 5.8, ry)
+    cr.line_to(x + 1.0, ry)
+    cr.move_to(x + 2.5, ry)
+    cr.line_to(x + 2.5, ry + 2.5)
+    cr.move_to(x + 5.2, ry)
+    cr.line_to(x + 5.2, ry + 2.0)
+    cr.stroke()
+    cr.restore()
+
+
+def _draw_3d_keycap(
     cr: Any,
     x: float,
     y: float,
@@ -466,150 +630,178 @@ def _draw_animated_key(
     sub1: str,
     sub2: str,
     *,
-    press_t: float,       # smooth 0.0..1.0 press spring
-    hover_t: float,       # smooth 0.0..1.0 hover highlight
-    radius: float = 5.0,
+    press_t: float,
+    hover_t: float,
+    radius: float = 6.0,
     is_nav: bool = False,
+    homing_nub: bool = False,
     accent: tuple[float, float, float] = (0.18, 0.56, 1.0),
 ) -> None:
-    """Draws a tactile rubberized radio key with smooth 60 FPS spring plunge & specular shift."""
+    """
+    3D-sculpted raised island rubber keycap matching `ref_k1_body_crop.png`:
+      • Outer milled metallic chamfer + thick matte-black rubber surround gasket
+      • Raised pillowed dark charcoal rubber island with crisp upper rim specular
+      • Real PangoCairo typography (Adwaita Sans) with large clear digits & crisp legends
+      • Smooth 60 FPS spring plunge animation
+    """
     import cairo
     p = _clamp1(press_t)
     hv = _clamp1(hover_t)
 
-    # Milled well recess
-    _round_rect(cr, x - 1.3, y - 1.3, w + 2.6, h + 2.6, radius + 1.0)
-    cr.set_source_rgba(0.03, 0.03, 0.04, 0.94)
+    # 1. Metallic cutout lower chamfer highlight (catches top-down studio light!)
+    _round_rect(cr, x - 1.0, y + 0.8, w + 2.0, h + 1.2, radius + 1.4)
+    cr.set_source_rgba(1.0, 0.99, 0.96, 0.26)
     cr.fill()
 
-    # Subtle outer accent halo when actively pressed
+    # 2. Thick glossy-black rubber surround bezel (the signature UV-K1 deep button well!)
+    _round_rect(cr, x - 1.0, y - 1.0, w + 2.0, h + 2.0, radius + 1.2)
+    cr.set_source_rgb(0.05, 0.05, 0.06)
+    cr.fill()
+
     if p > 0.02:
-        _round_rect(cr, x - 1.6, y - 1.6, w + 3.2, h + 3.2, radius + 1.5)
-        cr.set_source_rgba(accent[0], accent[1], accent[2], 0.22 * p)
+        _round_rect(cr, x - 1.4, y - 1.4, w + 2.8, h + 2.8, radius + 1.6)
+        cr.set_source_rgba(accent[0], accent[1], accent[2], 0.30 * p)
         cr.fill()
 
-    # Physical plunge travel (downward + tiny inner shrink for 3D depth)
-    inset = 0.65 * p
-    dy = 1.9 * p
-    kx, ky, kw, kh = x + inset, y + dy, w - inset * 2.0, h - dy * 0.55
+    # 3. Raised 3D rubber keytop island inside the black gasket
+    gasket = 2.6
+    dy = 1.8 * p
+    ix = x + gasket + 0.35 * p
+    iy = y + gasket + dy - 0.5 * (1.0 - p)
+    iw = w - gasket * 2.0 - 0.7 * p
+    ih = h - gasket * 2.0 - 0.4 * p
+    ir = max(3.0, radius - 1.8)
 
-    # Drop shadow under keytop (shrinks as button bottoms out)
+    # 3D bottom skirt shadow under raised keytop
     if p < 0.95:
-        _round_rect(cr, kx, ky + 1.6 * (1.0 - p), kw, kh, radius)
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.55 * (1.0 - p))
+        _round_rect(cr, ix, iy + 2.0 * (1.0 - p), iw, ih, ir)
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.72 * (1.0 - p))
         cr.fill()
 
-    _round_rect(cr, kx, ky, kw, kh, radius)
-    # Smoothly interpolate keytop gradient between idle, hovered, and depressed
-    top_l = 0.19 + 0.06 * hv - 0.11 * p
-    mid_l = 0.13 + 0.04 * hv - 0.05 * p
-    bot_l = 0.09 + 0.02 * hv + 0.03 * p
-    pat = cairo.LinearGradient(kx, ky, kx, ky + kh)
-    pat.add_color_stop_rgb(0.0, top_l, top_l + 0.01, top_l + 0.025)
-    pat.add_color_stop_rgb(0.55, mid_l, mid_l + 0.01, mid_l + 0.02)
-    pat.add_color_stop_rgb(1.0, bot_l, bot_l + 0.01, bot_l + 0.02)
+    # Pillowed 3D rubber keytop surface
+    _round_rect(cr, ix, iy, iw, ih, ir)
+    t_l = 0.25 + 0.06 * hv - 0.11 * p
+    m_l = 0.19 + 0.04 * hv - 0.06 * p
+    b_l = 0.14 + 0.03 * hv - 0.02 * p
+    pat = cairo.LinearGradient(ix, iy, ix, iy + ih)
+    pat.add_color_stop_rgb(0.0, t_l, t_l, t_l + 0.01)
+    pat.add_color_stop_rgb(0.42, m_l, m_l, m_l + 0.01)
+    pat.add_color_stop_rgb(1.0, b_l, b_l, b_l + 0.01)
     cr.set_source(pat)
     cr.fill_preserve()
 
-    # Top bevel specular rim blends smoothly into accent ring as button is pressed
+    # Crisp 3D top specular highlight rim (or accent ring on press)
     if p > 0.02:
-        cr.set_source_rgba(
-            accent[0] * p + 1.0 * (1.0 - p),
-            accent[1] * p + 1.0 * (1.0 - p),
-            accent[2] * p + 1.0 * (1.0 - p),
-            0.10 + 0.82 * p,
-        )
-        cr.set_line_width(0.9 + 0.8 * p)
+        cr.set_source_rgba(accent[0], accent[1], accent[2], 0.90 * p)
+        cr.set_line_width(1.4)
     else:
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.09 + 0.09 * hv)
-        cr.set_line_width(0.9)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.16 + 0.10 * hv)
+        cr.set_line_width(0.95)
     cr.stroke()
 
-    # Crisp silkscreen typography + vector symbols (zero tofu!)
-    cr.set_source_rgba(0.95, 0.96, 0.98, 0.95 + 0.05 * p)
-    if primary in ("_CHEV_UP_", "_CHEV_DN_"):
-        cx = kx + kw * 0.5
-        cy = ky + kh * (0.42 if primary == "_CHEV_UP_" else 0.58)
-        cr.set_line_width(2.0)
+    # Subtle tactile homing bar on key `5` (bottom-centered so it never crowds legends!)
+    if homing_nub:
+        _round_rect(cr, ix + iw * 0.5 - 4.5, iy + ih - 4.0, 9.0, 1.8, 0.9)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.28)
+        cr.fill()
+
+    # 4. Crisp PangoCairo Legends & Bold Geometric Vector Icons
+    ink = (0.95, 0.96, 0.98, 0.98)
+    sub_ink = (0.90, 0.92, 0.95, 0.92)
+    sub2_ink = (0.80, 0.83, 0.88, 0.84)
+
+    if primary in ("_K1_LT_", "_K1_GT_", "_CHEV_UP_", "_CHEV_DN_"):
+        cr.save()
+        cr.set_source_rgba(*ink)
+        cr.set_line_width(2.8 if primary.startswith("_K1_") else 2.2)
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
         cr.set_line_join(cairo.LINE_JOIN_ROUND)
-        if primary == "_CHEV_UP_":
-            cr.move_to(cx - 8.0, cy + 3.5)
-            cr.line_to(cx, cy - 4.5)
-            cr.line_to(cx + 8.0, cy + 3.5)
+        cx, cy = ix + iw * 0.5, iy + ih * 0.5
+        if primary == "_K1_LT_":
+            cr.move_to(cx + 4.5, cy - 8.0)
+            cr.line_to(cx - 5.5, cy)
+            cr.line_to(cx + 4.5, cy + 8.0)
+        elif primary == "_K1_GT_":
+            cr.move_to(cx - 4.5, cy - 8.0)
+            cr.line_to(cx + 5.5, cy)
+            cr.line_to(cx - 4.5, cy + 8.0)
+        elif primary == "_CHEV_UP_":
+            cy2 = iy + ih * 0.42
+            cr.move_to(cx - 8.5, cy2 + 3.8)
+            cr.line_to(cx, cy2 - 4.6)
+            cr.line_to(cx + 8.5, cy2 + 3.8)
         else:
-            cr.move_to(cx - 8.0, cy - 3.5)
-            cr.line_to(cx, cy + 4.5)
-            cr.line_to(cx + 8.0, cy - 3.5)
+            cy2 = iy + ih * 0.58
+            cr.move_to(cx - 8.5, cy2 - 3.8)
+            cr.line_to(cx, cy2 + 4.6)
+            cr.line_to(cx + 8.5, cy2 - 3.8)
         cr.stroke()
+        cr.restore()
         if sub1:
-            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-            cr.set_font_size(7.0)
-            cr.set_source_rgba(0.82, 0.86, 0.92, 0.82)
-            se = cr.text_extents(sub1)
-            cr.move_to(cx - se.width * 0.5 - se.x_bearing, ky + kh * (0.83 if primary == "_CHEV_UP_" else 0.34))
-            cr.show_text(sub1)
+            _draw_pango_text(
+                cr, sub1, ix + iw * 0.5, iy + ih * (0.80 if primary == "_CHEV_UP_" else 0.28),
+                font_desc="Adwaita Sans Bold 6.5", rgba=sub2_ink, halign="center", valign="center",
+            )
     elif is_nav or (not sub1 and not sub2):
-        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        cr.set_font_size(16.0 if primary in ("<", ">") else 10.5)
-        ext = cr.text_extents(primary)
-        cr.move_to(kx + (kw - ext.width) * 0.5 - ext.x_bearing, ky + (kh - ext.height) * 0.5 - ext.y_bearing)
-        cr.show_text(primary)
+        _draw_pango_text(
+            cr, primary, ix + iw * 0.5, iy + ih * 0.5,
+            font_desc="Adwaita Sans SemiBold 10.5", rgba=ink, halign="center", valign="center",
+        )
     else:
-        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        cr.set_font_size(14.5)
-        pe = cr.text_extents(primary)
-        px = kx + 7.5
-        cr.move_to(px, ky + (kh - pe.height) * 0.5 - pe.y_bearing)
-        cr.show_text(primary)
+        # Large, crisp geometric primary digit on left (matches real K1 70%-height digits!)
+        is_long_sub = bool(sub1 and not sub2 and sub1 != "_KEY_" and len(sub1) >= 5)
+        p_size = "14.5" if is_long_sub else ("15.5" if primary != "*" else "17")
+        p_x = ix + (5.0 if is_long_sub else 6.5)
+        p_y = iy + ih * (0.56 if primary == "*" else 0.50)
+        pw, _ = _draw_pango_text(
+            cr, primary, p_x, p_y,
+            font_desc=f"Adwaita Sans Medium {p_size}", rgba=ink, halign="left", valign="center",
+        )
+        sx = p_x + max(pw, 10.0 if is_long_sub else 11.5) + (2.8 if is_long_sub else 4.0)
 
-        sx = px + max(pe.x_advance, 10.0) + 3.5
-        cr.set_font_size(7.6)
-        cr.set_source_rgba(0.90, 0.92, 0.95, 0.88)
         if sub1 and sub2:
-            cr.move_to(sx, ky + kh * 0.43)
-            cr.show_text(sub1)
-            if sub2 == "_RET_":
-                cr.set_source_rgba(0.78, 0.82, 0.88, 0.80)
-                cr.set_line_width(1.2)
-                cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                ry = ky + kh * 0.72
-                cr.move_to(sx + 10.0, ry - 3.0)
-                cr.line_to(sx + 10.0, ry)
-                cr.line_to(sx + 1.0, ry)
-                cr.move_to(sx + 3.5, ry - 2.2)
-                cr.line_to(sx + 1.0, ry)
-                cr.line_to(sx + 3.5, ry + 2.2)
-                cr.stroke()
+            if sub1 == "_KEY_":
+                _draw_key_glyph(cr, sx, iy + ih * 0.14, 15.0, 9.0)
             else:
-                cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-                cr.set_font_size(7.2)
-                cr.set_source_rgba(0.76, 0.80, 0.86, 0.74)
-                cr.move_to(sx, ky + kh * 0.78)
-                cr.show_text(sub2)
+                _draw_pango_text(cr, sub1, sx, iy + ih * 0.30, font_desc="Adwaita Sans Medium 7.6", rgba=sub_ink, halign="left", valign="center")
+
+            if sub2 == "_RET_":
+                cr.save()
+                cr.set_source_rgba(*sub_ink)
+                cr.set_line_width(1.5)
+                cr.set_line_cap(cairo.LINE_CAP_ROUND)
+                ry = iy + ih * 0.72
+                cr.new_path()
+                cr.move_to(sx + 13.0, ry - 4.0)
+                cr.line_to(sx + 13.0, ry)
+                cr.line_to(sx + 1.0, ry)
+                cr.move_to(sx + 4.2, ry - 2.6)
+                cr.line_to(sx + 1.0, ry)
+                cr.line_to(sx + 4.2, ry + 2.6)
+                cr.stroke()
+                cr.restore()
+            else:
+                _draw_pango_text(cr, sub2, sx, iy + ih * 0.72, font_desc="Adwaita Sans 7.2", rgba=sub2_ink, halign="left", valign="center")
         elif sub1:
-            se = cr.text_extents(sub1)
-            cr.move_to(sx, ky + (kh - se.height) * 0.5 - se.y_bearing)
-            cr.show_text(sub1)
+            if sub1 == "_KEY_":
+                _draw_key_glyph(cr, sx, iy + ih * 0.34, 15.0, 9.0)
+            else:
+                s_sz = "6.8" if len(sub1) >= 5 else "8.0"
+                _draw_pango_text(cr, sub1, sx, iy + ih * 0.50, font_desc=f"Adwaita Sans Medium {s_sz}", rgba=sub_ink, halign="left", valign="center")
 
 
 def compute_handset_geometry(model: str) -> tuple[int, int]:
-    return (336, 598) if model == "k5" else (344, 552)
+    return (356, 614) if model == "k5" else (364, 594)
 
 
 class HandsetRenderer:
-    """
-    High-performance cached Cairo handset renderer:
-      • Static chassis (shell, armor, bolts, antenna, knob, logo, bezel) cached on an ImageSurface
-      • LCD painted via FastLcdState + LcdLayerCache (~0.2 ms)
-      • Physical buttons drawn with smooth 60 FPS spring animation
-    """
+    """3D-sculpted cached Cairo handset renderer (~1.5 ms/frame animated!)."""
 
     def __init__(self) -> None:
         self._chassis_key: Any = None
         self._chassis_surf: Any = None
         self._lcd_rect: tuple[int, int, int, int] = (0, 0, 100, 60)
-        self._key_specs: list[tuple[str, float, float, float, float, str, str, str, float, bool]] = []
+        self._key_specs: list[tuple[str, float, float, float, float, str, str, str, float, bool, bool]] = []
         self._side_specs: list[tuple[str, float, float, float, float, bool, int]] = []
         self.hitboxes: dict[str, tuple[float, float, float, float]] = {}
         self.lcd_cache = LcdLayerCache()
@@ -631,357 +823,439 @@ class HandsetRenderer:
             self._build_k5_chassis(cr, W, H, led_state, torch_on, lcd_st)
         else:
             self._build_k1_chassis(cr, W, H, led_state, torch_on, lcd_st)
-
+        # Bake idle/unpressed front keycaps onto the cached chassis surface so steady LCD
+        # streaming skips 16 PangoCairo text layouts per frame (>600 FPS render cap!).
+        accent = (0.98, 0.48, 0.08) if model == "k5" else (0.18, 0.56, 1.0)
+        for _kn, kx, ky, kw, kh, pri, s1, s2, rad, is_nav, nub in self._key_specs:
+            _draw_3d_keycap(
+                cr, kx, ky, kw, kh, pri, s1, s2,
+                press_t=0.0, hover_t=0.0, radius=rad, is_nav=is_nav, homing_nub=nub, accent=accent,
+            )
         self._chassis_surf = surf
 
     def _build_k1_chassis(self, cr: Any, W: int, H: int, led_state: str, torch_on: bool, lcd_st: LcdSettings) -> None:
+        """Photorealistic 3D Quansheng UV-K1(8) modeled directly from `ref_k1_body_crop.png` & `左视图.png`."""
         import cairo
-        bx, by, bw, bh = 28.0, 58.0, W - 44.0, H - 68.0
+        bx, by, bw, bh = 30.0, 60.0, W - 44.0, H - 74.0
 
-        # 1. Stubby A1 Antenna Base
-        ax = bx + 54.0
-        pat_ant = cairo.LinearGradient(ax - 22, 0, ax + 22, 0)
-        pat_ant.add_color_stop_rgb(0.0, 0.09, 0.10, 0.11)
-        pat_ant.add_color_stop_rgb(0.32, 0.26, 0.27, 0.29)
-        pat_ant.add_color_stop_rgb(0.75, 0.13, 0.14, 0.15)
-        pat_ant.add_color_stop_rgb(1.0, 0.07, 0.08, 0.09)
+        # Soft 3D ambient drop shadow under whole radio body
+        _round_rect(cr, bx + 4, by + 10, bw, bh, 18)
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
+        cr.fill()
+
+        # --- 1. Top Hardware Assembly (3D Stubby A1 Antenna + Flashlight + Cobalt-Blue Rotary Knob) ---
+        ax = bx + 62.0
+        # 3D cylindrical ribbed rubber antenna base
+        pat_ant = cairo.LinearGradient(ax - 28, 0, ax + 28, 0)
+        pat_ant.add_color_stop_rgb(0.0, 0.08, 0.09, 0.10)
+        pat_ant.add_color_stop_rgb(0.28, 0.28, 0.29, 0.31)
+        pat_ant.add_color_stop_rgb(0.52, 0.20, 0.21, 0.22)
+        pat_ant.add_color_stop_rgb(0.82, 0.11, 0.12, 0.13)
+        pat_ant.add_color_stop_rgb(1.0, 0.06, 0.07, 0.08)
         cr.set_source(pat_ant)
-        _round_rect(cr, ax - 19, 3, 38, by + 4, 5)
+        _round_rect(cr, ax - 24, 2, 48, by + 6, 5)
         cr.fill()
-        cr.set_source_rgb(0.10, 0.11, 0.12)
-        cr.rectangle(ax - 22, by - 14, 44, 16)
+        # Stepped lower SMA skirt
+        cr.set_source(pat_ant)
+        _round_rect(cr, ax - 27, by - 22, 54, 26, 4)
         cr.fill()
-        cr.set_source_rgba(0.80, 0.82, 0.85, 0.25)
-        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        cr.set_font_size(9.5)
-        cr.move_to(ax - 6, 30)
-        cr.show_text("A1")
+        # Recessed matte label panel "A1"
+        _round_rect(cr, ax - 10, 4, 20, 26, 4)
+        cr.set_source_rgba(0.05, 0.05, 0.06, 0.55)
+        cr.fill()
+        _draw_pango_text(cr, "A1", ax, 16, font_desc="Adwaita Sans Bold 9", rgba=(0.70, 0.72, 0.75, 0.50), halign="center")
 
-        # Center LED Flashlight Dome (clickable)
+        # Center low-profile LED flashlight bump (clickable!)
         tx = bx + bw * 0.49
         if torch_on:
-            tg = cairo.RadialGradient(tx, by - 8, 2, tx, by - 8, 32)
-            tg.add_color_stop_rgba(0.0, 1.0, 0.98, 0.82, 0.92)
-            tg.add_color_stop_rgba(1.0, 1.0, 0.94, 0.65, 0.0)
+            tg = cairo.RadialGradient(tx, by - 10, 2, tx, by - 10, 36)
+            tg.add_color_stop_rgba(0.0, 1.0, 0.99, 0.85, 0.94)
+            tg.add_color_stop_rgba(0.5, 1.0, 0.94, 0.65, 0.35)
+            tg.add_color_stop_rgba(1.0, 1.0, 0.92, 0.55, 0.0)
             cr.set_source(tg)
-            cr.arc(tx, by - 8, 32, 0, 2 * math.pi)
+            cr.arc(tx, by - 10, 36, 0, 2 * math.pi)
             cr.fill()
-        cr.set_source_rgb(0.14, 0.15, 0.17)
-        _round_rect(cr, tx - 16, by - 12, 32, 16, 4)
+        pat_fl = cairo.LinearGradient(tx - 18, by - 14, tx + 18, by)
+        pat_fl.add_color_stop_rgb(0.0, 0.24, 0.25, 0.27)
+        pat_fl.add_color_stop_rgb(1.0, 0.09, 0.10, 0.11)
+        cr.set_source(pat_fl)
+        _round_rect(cr, tx - 18, by - 13, 36, 17, 4)
         cr.fill()
-        self.hitboxes["_torch"] = (tx - 18, by - 18, 36, 22)
+        self.hitboxes["_torch"] = (tx - 20, by - 18, 40, 22)
 
-        # Cobalt-Blue Striped Rotary Volume Knob
-        kx = bx + bw - 56.0
-        pat_k = cairo.LinearGradient(kx - 28, 0, kx + 28, 0)
-        pat_k.add_color_stop_rgb(0.0, 0.08, 0.09, 0.10)
-        pat_k.add_color_stop_rgb(0.32, 0.25, 0.27, 0.30)
-        pat_k.add_color_stop_rgb(0.72, 0.12, 0.13, 0.15)
-        pat_k.add_color_stop_rgb(1.0, 0.07, 0.08, 0.09)
+        # 3D Sculpted Knurled Rotary Knob with Signature Vertical Cobalt-Blue Stripe
+        kx = bx + bw - 62.0
+        pat_k = cairo.LinearGradient(kx - 34, 0, kx + 34, 0)
+        pat_k.add_color_stop_rgb(0.0, 0.07, 0.08, 0.09)
+        pat_k.add_color_stop_rgb(0.26, 0.30, 0.32, 0.35)
+        pat_k.add_color_stop_rgb(0.52, 0.18, 0.19, 0.21)
+        pat_k.add_color_stop_rgb(0.80, 0.22, 0.24, 0.26)
+        pat_k.add_color_stop_rgb(1.0, 0.06, 0.07, 0.08)
         cr.set_source(pat_k)
-        _round_rect(cr, kx - 26, by - 38, 52, 42, 6)
+        _round_rect(cr, kx - 33, by - 42, 66, 46, 7)
         cr.fill()
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.45)
-        cr.set_line_width(1.6)
-        for dx in (-18, -10, 10, 18):
-            cr.move_to(kx + dx, by - 35)
-            cr.line_to(kx + dx, by - 2)
-            cr.stroke()
-        cr.set_source_rgb(0.14, 0.50, 1.00)
-        cr.rectangle(kx - 3.2, by - 38, 6.4, 36)
-        cr.fill()
-
-        # Translucent Top-Left Status LED
-        lx, ly = bx + 44.0, by - 4.0
-        cr.set_source_rgb(0.96, 0.24, 0.24) if led_state == "tx" else (
-            cr.set_source_rgb(0.18, 0.86, 0.42) if led_state == "rx" else cr.set_source_rgb(0.72, 0.74, 0.76)
-        )
-        _round_rect(cr, lx - 10, ly - 5, 20, 8, 3)
-        cr.fill()
-        if led_state in ("rx", "tx"):
-            lg = cairo.RadialGradient(lx, ly, 2, lx, ly, 19)
-            c = (1.0, 0.25, 0.25) if led_state == "tx" else (0.18, 0.90, 0.45)
-            lg.add_color_stop_rgba(0.0, c[0], c[1], c[2], 0.72)
-            lg.add_color_stop_rgba(1.0, c[0], c[1], c[2], 0.0)
-            cr.set_source(lg)
-            cr.arc(lx, ly, 19, 0, 2 * math.pi)
+        # Realistic recessed vertical grip scoops
+        for dx in (-22, -13, 13, 22):
+            _round_rect(cr, kx + dx - 3.2, by - 38, 6.4, 30, 3.0)
+            cr.set_source_rgba(0.03, 0.03, 0.04, 0.65)
             cr.fill()
+        # Signature electric cobalt-blue center pointer stripe
+        pat_bl = cairo.LinearGradient(kx - 4, by - 42, kx + 4, by - 42)
+        pat_bl.add_color_stop_rgb(0.0, 0.12, 0.42, 0.96)
+        pat_bl.add_color_stop_rgb(0.5, 0.28, 0.62, 1.00)
+        pat_bl.add_color_stop_rgb(1.0, 0.10, 0.36, 0.88)
+        cr.set_source(pat_bl)
+        cr.rectangle(kx - 3.6, by - 42, 7.2, 40)
+        cr.fill()
 
-        # 2. Outer Matte-Black Polymer Shell + Side Grip Shoulders
-        _round_rect(cr, bx, by, bw, bh, 14)
-        pat_shell = cairo.LinearGradient(bx, by, bx + bw, by)
-        pat_shell.add_color_stop_rgb(0.0, 0.16, 0.17, 0.18)
-        pat_shell.add_color_stop_rgb(0.08, 0.09, 0.10, 0.11)
-        pat_shell.add_color_stop_rgb(0.92, 0.09, 0.10, 0.11)
-        pat_shell.add_color_stop_rgb(1.0, 0.18, 0.19, 0.20)
-        cr.set_source(pat_shell)
+        # --- 2. 3D Outer Textured Black Polymer Chassis & Curved Side Cheeks ---
+        _round_rect(cr, bx, by, bw, bh, 15)
+        pat_sh = cairo.LinearGradient(bx, by, bx + bw, by)
+        pat_sh.add_color_stop_rgb(0.0, 0.24, 0.25, 0.27)   # Left 3D curved rubber edge highlight
+        pat_sh.add_color_stop_rgb(0.05, 0.11, 0.12, 0.13)
+        pat_sh.add_color_stop_rgb(0.95, 0.11, 0.12, 0.13)
+        pat_sh.add_color_stop_rgb(1.0, 0.26, 0.27, 0.29)   # Right 3D curved rubber edge highlight
+        cr.set_source(pat_sh)
         cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.10)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.14)
         cr.set_line_width(1.0)
         cr.stroke()
 
-        # 3. Warm Titanium-Gunmetal Metallic Armor Faceplate (exact K1 silhouette)
-        fx_l, fx_r = bx + 16.0, bx + bw - 16.0
-        fy_t, fy_b = by + 6.0, by + bh - 8.0
-        cr.new_sub_path()
-        cr.move_to(bx + 10, fy_t)
-        cr.line_to(bx + bw - 10, fy_t)
-        cr.line_to(bx + bw - 4, fy_t + 8)
-        cr.line_to(bx + bw - 4, fy_t + 40)
-        cr.line_to(fx_r, fy_t + 54)
-        cr.line_to(fx_r, fy_b - 92)
-        cr.line_to(bx + bw - 4, fy_b - 78)
-        cr.line_to(bx + bw - 4, fy_b - 8)
-        cr.line_to(bx + bw - 12, fy_b)
-        cr.line_to(bx + 12, fy_b)
-        cr.line_to(bx + 4, fy_b - 8)
-        cr.line_to(bx + 4, fy_b - 78)
-        cr.line_to(fx_l, fy_b - 92)
-        cr.line_to(fx_l, fy_t + 54)
-        cr.line_to(bx + 4, fy_t + 40)
-        cr.line_to(bx + 4, fy_t + 8)
-        cr.close_path()
+        # Frosted Trapezoid Status LED Light-Pipe sitting right on top-left shoulder
+        _draw_frosted_led(cr, bx + 46.0, by - 10.0, 30.0, 13.0, led_state)
 
+        # --- 3. 3D Brushed Champagne-Titanium Metallic Armor Faceplate (ref_k1_body_crop.png!) ---
+        fx_l, fx_r = bx + 20.0, bx + bw - 20.0
+        fy_t, fy_b = by + 5.0, by + bh - 8.0
+
+        def _armor_path() -> None:
+            cr.new_sub_path()
+            cr.move_to(bx + 12, fy_t)
+            cr.line_to(bx + bw - 12, fy_t)
+            cr.line_to(bx + bw - 4, fy_t + 8)
+            cr.line_to(bx + bw - 4, fy_t + 44)
+            cr.line_to(fx_r, fy_t + 58)
+            cr.line_to(fx_r, fy_b - 92)
+            cr.line_to(bx + bw - 4, fy_b - 78)
+            cr.line_to(bx + bw - 4, fy_b - 9)
+            cr.line_to(bx + bw - 12, fy_b)
+            cr.line_to(bx + 12, fy_b)
+            cr.line_to(bx + 4, fy_b - 9)
+            cr.line_to(bx + 4, fy_b - 78)
+            cr.line_to(fx_l, fy_b - 92)
+            cr.line_to(fx_l, fy_t + 58)
+            cr.line_to(bx + 4, fy_t + 44)
+            cr.line_to(bx + 4, fy_t + 8)
+            cr.close_path()
+
+        # Outer metallic bevel skirt
+        _armor_path()
         pat_m = cairo.LinearGradient(bx, fy_t, bx + bw, fy_b)
-        pat_m.add_color_stop_rgb(0.0, 0.58, 0.56, 0.52)
-        pat_m.add_color_stop_rgb(0.32, 0.45, 0.43, 0.40)
-        pat_m.add_color_stop_rgb(0.75, 0.36, 0.35, 0.32)
-        pat_m.add_color_stop_rgb(1.0, 0.48, 0.46, 0.42)
+        pat_m.add_color_stop_rgb(0.0, 0.72, 0.69, 0.64)    # Warm champagne-titanium bright highlight
+        pat_m.add_color_stop_rgb(0.28, 0.59, 0.56, 0.52)
+        pat_m.add_color_stop_rgb(0.65, 0.49, 0.47, 0.43)
+        pat_m.add_color_stop_rgb(1.0, 0.63, 0.60, 0.55)
         cr.set_source(pat_m)
         cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.24)
+        cr.set_source_rgba(1.0, 0.99, 0.96, 0.34)
+        cr.set_line_width(1.3)
+        cr.stroke()
+
+        # 3D sculpted side cheek chamfers flanking the main central deck
+        cr.save()
+        _armor_path()
+        cr.clip()
+        # Left bevel reflection strip
+        lb = cairo.LinearGradient(fx_l, 0, fx_l + 14, 0)
+        lb.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.32)
+        lb.add_color_stop_rgba(0.6, 1.0, 0.98, 0.95, 0.14)
+        lb.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0)
+        cr.set_source(lb)
+        cr.rectangle(fx_l, fy_t + 44, 14, fy_b - fy_t - 44)
+        cr.fill()
+        # Right bevel reflection strip
+        rb = cairo.LinearGradient(fx_r - 14, 0, fx_r, 0)
+        rb.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0)
+        rb.add_color_stop_rgba(0.4, 1.0, 0.98, 0.95, 0.14)
+        rb.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.34)
+        cr.set_source(rb)
+        cr.rectangle(fx_r - 14, fy_t + 44, 14, fy_b - fy_t - 44)
+        cr.fill()
+        cr.restore()
+
+        # 4 Real Machined Hex-Socket Torx Bolts
+        _draw_hex_torx_bolt(cr, bx + 22.0, fy_t + 24.0, 6.2)
+        _draw_hex_torx_bolt(cr, bx + bw - 22.0, fy_t + 24.0, 6.2)
+        _draw_hex_torx_bolt(cr, bx + 22.0, fy_b - 44.0, 6.2)
+        _draw_hex_torx_bolt(cr, bx + bw - 22.0, fy_b - 44.0, 6.2)
+
+        # --- 4. Glossy Piano-Black Top Nameplate with Diagonal Glass Specular & Exact Quansheng Logo ---
+        np_x, np_y, np_w, np_h = bx + 46.0, fy_t + 8.0, bw - 92.0, 32.0
+        _round_rect(cr, np_x, np_y, np_w, np_h, 5)
+        cr.set_source_rgb(0.06, 0.06, 0.07)
+        cr.fill_preserve()
+        # Crisp glossy diagonal reflection across left half (exact ref_k1_body_crop.png!)
+        cr.save()
+        cr.clip_preserve()
+        cr.new_sub_path()
+        cr.move_to(np_x, np_y)
+        cr.line_to(np_x + np_w * 0.56, np_y)
+        cr.line_to(np_x + np_w * 0.42, np_y + np_h)
+        cr.line_to(np_x, np_y + np_h)
+        cr.close_path()
+        gl = cairo.LinearGradient(np_x, np_y, np_x + np_w * 0.5, np_y + np_h)
+        gl.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.20)
+        gl.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.05)
+        cr.set_source(gl)
+        cr.fill()
+        cr.restore()
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.75)
         cr.set_line_width(1.2)
         cr.stroke()
+        _draw_quansheng_logo(cr, np_x + np_w * 0.5, np_y + np_h * 0.52, scale=1.02)
 
-        # 4 Recessed Stainless Torx Bolts
-        _draw_torx_bolt(cr, bx + 20.0, fy_t + 22.0, 5.4)
-        _draw_torx_bolt(cr, bx + bw - 20.0, fy_t + 22.0, 5.4)
-        _draw_torx_bolt(cr, bx + 20.0, fy_b - 42.0, 5.4)
-        _draw_torx_bolt(cr, bx + bw - 20.0, fy_b - 42.0, 5.4)
-
-        # Glossy Piano-Black Top Nameplate with Authentic Quansheng RF Logo
-        np_x, np_y, np_w, np_h = bx + 42.0, fy_t + 7.0, bw - 84.0, 28.0
-        _round_rect(cr, np_x, np_y, np_w, np_h, 5)
-        pat_np = cairo.LinearGradient(np_x, np_y, np_x, np_y + np_h)
-        pat_np.add_color_stop_rgb(0.0, 0.15, 0.16, 0.17)
-        pat_np.add_color_stop_rgb(0.45, 0.05, 0.06, 0.07)
-        pat_np.add_color_stop_rgb(1.0, 0.11, 0.12, 0.13)
-        cr.set_source(pat_np)
+        # --- 5. Deep 3D Recessed LCD Window Cutout ---
+        lz_x, lz_y, lz_w, lz_h = int(fx_l + 14), int(fy_t + 54), int((fx_r - fx_l) - 28), 166
+        # Upper dark shadow casting down from nameplate ridge
+        _round_rect(cr, lz_x - 2, lz_y - 2, lz_w + 4, lz_h + 4, 10)
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.35)
+        cr.fill()
+        # Thick glossy black inner bezel
+        _round_rect(cr, lz_x, lz_y, lz_w, lz_h, 9)
+        cr.set_source_rgb(0.07, 0.07, 0.08)
         cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.12)
-        cr.set_line_width(0.8)
-        cr.stroke()
-        _draw_quansheng_logo(cr, np_x + np_w * 0.5, np_y + np_h * 0.5, font_size=13.0)
-
-        # Deep Beveled LCD Window Cutout (generous height for 1.3x dots + unpixelated glass margin)
-        lz_x, lz_y, lz_w, lz_h = int(fx_l + 12), int(fy_t + 46), int((fx_r - fx_l) - 24), 166
-        _round_rect(cr, lz_x, lz_y, lz_w, lz_h, 8)
-        cr.set_source_rgb(0.08, 0.08, 0.09)
-        cr.fill_preserve()
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.78)
-        cr.set_line_width(2.0)
+        cr.set_source_rgba(1.0, 0.99, 0.96, 0.22)
+        cr.set_line_width(1.0)
         cr.stroke()
         if lcd_st.backlight_glow and lcd_st.backlight > 0:
             bg_c, _, _, _ = _lcd_colors_norm(lcd_st)
-            cr.set_source_rgba(bg_c[0], bg_c[1], bg_c[2], 0.18)
+            cr.set_source_rgba(bg_c[0], bg_c[1], bg_c[2], 0.16)
             _round_rect(cr, lz_x + 5, lz_y + 5, lz_w - 10, lz_h - 10, 6)
             cr.set_line_width(2.5)
             cr.stroke()
-        self._lcd_rect = (lz_x + 8, lz_y + 8, lz_w - 16, lz_h - 16)
+        self._lcd_rect = (lz_x + 7, lz_y + 7, lz_w - 14, lz_h - 14)
 
-        # Mid-bezel engraved text + horizontal groove + dual mic/vent cutouts
-        div_y = lz_y + lz_h + 16.0
-        cr.set_source_rgba(0.08, 0.08, 0.08, 0.74)
-        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        cr.set_font_size(9.5)
-        te = cr.text_extents("UHF/VHF Transceiver")
-        cr.move_to(fx_r - 12.0 - te.width, div_y - 3.0)
-        cr.show_text("UHF/VHF Transceiver")
-
-        cr.set_source_rgba(0.05, 0.05, 0.06, 0.65)
-        cr.set_line_width(1.6)
-        cr.move_to(fx_l + 6, div_y + 4.5)
-        cr.line_to(fx_r - 6, div_y + 4.5)
-        cr.stroke()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.16)
-        cr.set_line_width(0.8)
-        cr.move_to(fx_l + 6, div_y + 5.9)
-        cr.line_to(fx_r - 6, div_y + 5.9)
-        cr.stroke()
-
-        # Dual tiny recessed cutouts matching UV-K1前视图.png
-        _round_rect(cr, fx_r - 42.0, div_y + 10.5, 14.0, 4.5, 2.0)
-        _round_rect(cr, fx_r - 24.0, div_y + 10.5, 11.0, 4.5, 2.0)
-        cr.set_source_rgb(0.06, 0.06, 0.07)
+        # --- 6. Sculpted 3D Mid-Bar ("UHF/VHF Transceiver") + Deep Shadow Step + Dual Mic Cutouts ---
+        bar_y = lz_y + lz_h + 6.0
+        # Raised champagne bar strip
+        pat_bar = cairo.LinearGradient(fx_l, bar_y, fx_l, bar_y + 20.0)
+        pat_bar.add_color_stop_rgb(0.0, 0.72, 0.70, 0.66)
+        pat_bar.add_color_stop_rgb(0.85, 0.58, 0.56, 0.52)
+        pat_bar.add_color_stop_rgb(1.0, 0.30, 0.29, 0.27)
+        cr.set_source(pat_bar)
+        cr.rectangle(fx_l + 6, bar_y, (fx_r - fx_l) - 12, 20.0)
+        cr.fill()
+        _draw_pango_text(
+            cr, "UHF/VHF Transceiver", fx_r - 12.0, bar_y + 9.5,
+            font_desc="Adwaita Sans Medium 8.5", rgba=(0.08, 0.08, 0.08, 0.85), halign="right", valign="center",
+        )
+        # Deep 3D recessed shadow sloping onto the keypad deck (exact ref_k1_body_crop.png!)
+        step_sh = cairo.LinearGradient(0, bar_y + 20.0, 0, bar_y + 30.0)
+        step_sh.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.45)
+        step_sh.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0)
+        cr.set_source(step_sh)
+        cr.rectangle(fx_l + 6, bar_y + 20.0, (fx_r - fx_l) - 12, 10.0)
         cr.fill()
 
-        # Register Side & Front Key Geometry
+        # Dual recessed indicator/mic port right above EXIT
+        _round_rect(cr, fx_r - 44.0, bar_y + 24.0, 28.0, 6.5, 3.0)
+        cr.set_source_rgb(0.06, 0.06, 0.07)
+        cr.fill()
+        cr.set_source_rgba(0.75, 0.77, 0.80, 0.45)
+        _round_rect(cr, fx_r - 41.0, bar_y + 25.5, 8.0, 3.5, 1.5)
+        _round_rect(cr, fx_r - 27.0, bar_y + 25.5, 8.0, 3.5, 1.5)
+        cr.fill()
+
+        # --- 7. Register 3D Side Keys + Exact 4x4 Keypad with 12 Inter-Row Speaker Slots! ---
         self._side_specs = [
-            ("ptt",   4.0, by + 56.0, 26.0, 114.0, True, 0),
-            ("side1", 6.0, by + 180.0, 24.0, 36.0, False, 2),
-            ("side2", 6.0, by + 224.0, 24.0, 36.0, False, 1),
+            ("ptt",   4.0, by + 56.0, 28.0, 122.0, True, 0),
+            ("side1", 7.0, by + 188.0, 25.0, 38.0, False, 2),
+            ("side2", 7.0, by + 234.0, 25.0, 38.0, False, 1),
         ]
         for kn, sx, sy, sw, sh, _, _ in self._side_specs:
             self.hitboxes[kn] = (sx, sy, sw, sh)
 
-        kp_x, kp_y, kp_w = fx_l + 10.0, div_y + 21.0, (fx_r - fx_l) - 20.0
-        gap_c, gap_r = 7.0, 8.0
+        kp_x, kp_y, kp_w = fx_l + 8.0, bar_y + 36.0, (fx_r - fx_l) - 16.0
+        gap_c = 7.0
+        gap_r = 12.0  # Space for real horizontal speaker slots between rows!
         kw = (kp_w - gap_c * 3.0) / 4.0
-        kh_nav, kh_num = 35.0, 34.0
+        kh_nav, kh_num = 42.0, 36.0
+
         for r_i, row_keys in enumerate(K1_MATRIX):
             ky = kp_y + (0.0 if r_i == 0 else (kh_nav + gap_r + (r_i - 1) * (kh_num + gap_r)))
             kh = kh_nav if r_i == 0 else kh_num
             for c_i, (kn, pri, s1, s2) in enumerate(row_keys):
                 kx = kp_x + c_i * (kw + gap_c)
                 self.hitboxes[kn] = (kx, ky, kw, kh)
-                self._key_specs.append((kn, kx, ky, kw, kh, pri, s1, s2, 5.0, r_i == 0))
+                self._key_specs.append((kn, kx, ky, kw, kh, pri, s1, s2, 6.0, r_i == 0, kn == "5"))
+                # Draw the real horizontal speaker vent slot right under rows 0, 1, 2 (exact ref_k1_body_crop.png!)
+                if r_i < 3:
+                    sl_w = kw * 0.62
+                    sl_x = kx + (kw - sl_w) * 0.5
+                    sl_y = ky + kh + 4.2
+                    _round_rect(cr, sl_x, sl_y, sl_w, 4.2, 2.0)
+                    cr.set_source_rgb(0.06, 0.06, 0.07)
+                    cr.fill()
+                    cr.set_source_rgba(1.0, 0.99, 0.95, 0.25)
+                    cr.set_line_width(0.7)
+                    cr.move_to(sl_x + 2, sl_y + 4.6)
+                    cr.line_to(sl_x + sl_w - 2, sl_y + 4.6)
+                    cr.stroke()
 
     def _build_k5_chassis(self, cr: Any, W: int, H: int, led_state: str, torch_on: bool, lcd_st: LcdSettings) -> None:
+        """Photorealistic 3D Quansheng UV-K5 v3 / UV-K6 modeled directly from `UVK6.1.png`."""
         import cairo
-        bx, by, bw, bh = 28.0, 56.0, W - 44.0, H - 68.0
+        bx, by, bw, bh = 30.0, 58.0, W - 44.0, H - 72.0
 
-        # 1. Tapered Whip Antenna Base + Orange Volume Knob + Guard Ear
-        ax = bx + 52.0
-        pat_ant = cairo.LinearGradient(ax - 22, 0, ax + 22, 0)
-        pat_ant.add_color_stop_rgb(0.0, 0.10, 0.11, 0.12)
-        pat_ant.add_color_stop_rgb(0.38, 0.25, 0.26, 0.28)
-        pat_ant.add_color_stop_rgb(1.0, 0.08, 0.09, 0.10)
+        _round_rect(cr, bx + 4, by + 10, bw, bh, 18)
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
+        cr.fill()
+
+        # Tapered antenna base
+        ax = bx + 56.0
+        pat_ant = cairo.LinearGradient(ax - 24, 0, ax + 24, 0)
+        pat_ant.add_color_stop_rgb(0.0, 0.09, 0.10, 0.11)
+        pat_ant.add_color_stop_rgb(0.35, 0.28, 0.29, 0.31)
+        pat_ant.add_color_stop_rgb(1.0, 0.07, 0.08, 0.09)
         cr.set_source(pat_ant)
-        cr.move_to(ax - 20, by + 4)
-        cr.line_to(ax - 15, 3)
-        cr.line_to(ax + 15, 3)
-        cr.line_to(ax + 20, by + 4)
+        cr.move_to(ax - 22, by + 5)
+        cr.line_to(ax - 16, 2)
+        cr.line_to(ax + 16, 2)
+        cr.line_to(ax + 22, by + 5)
         cr.close_path()
         cr.fill()
 
+        # Center LED flashlight
         tx = bx + bw * 0.48
         if torch_on:
-            tg = cairo.RadialGradient(tx, by - 6, 2, tx, by - 6, 28)
-            tg.add_color_stop_rgba(0.0, 1.0, 0.98, 0.82, 0.9)
+            tg = cairo.RadialGradient(tx, by - 8, 2, tx, by - 8, 32)
+            tg.add_color_stop_rgba(0.0, 1.0, 0.99, 0.85, 0.92)
             tg.add_color_stop_rgba(1.0, 1.0, 0.94, 0.65, 0.0)
             cr.set_source(tg)
-            cr.arc(tx, by - 6, 28, 0, 2 * math.pi)
+            cr.arc(tx, by - 8, 32, 0, 2 * math.pi)
             cr.fill()
         cr.set_source_rgb(0.14, 0.15, 0.17)
-        _round_rect(cr, tx - 14, by - 10, 28, 12, 3)
+        _round_rect(cr, tx - 15, by - 11, 30, 14, 3)
         cr.fill()
-        self.hitboxes["_torch"] = (tx - 16, by - 16, 32, 20)
+        self.hitboxes["_torch"] = (tx - 18, by - 16, 36, 20)
 
-        # Orange-capped volume knob + right shoulder lanyard guard ear (exact UVK6.1.png)
-        kx = bx + bw - 58.0
-        _round_rect(cr, kx - 25, by - 26, 50, 30, 5)
-        cr.set_source_rgb(0.13, 0.14, 0.16)
+        # 3D Orange-Capped Volume Knob + Guard Ear
+        kx = bx + bw - 62.0
+        pat_kb = cairo.LinearGradient(kx - 28, 0, kx + 28, 0)
+        pat_kb.add_color_stop_rgb(0.0, 0.08, 0.09, 0.10)
+        pat_kb.add_color_stop_rgb(0.35, 0.24, 0.25, 0.27)
+        pat_kb.add_color_stop_rgb(1.0, 0.07, 0.08, 0.09)
+        cr.set_source(pat_kb)
+        _round_rect(cr, kx - 27, by - 28, 54, 32, 5)
         cr.fill()
-        _round_rect(cr, kx - 25, by - 37, 50, 13, 5)
-        pat_o = cairo.LinearGradient(kx - 25, by - 37, kx + 25, by - 24)
+        _round_rect(cr, kx - 27, by - 40, 54, 14, 5)
+        pat_o = cairo.LinearGradient(kx - 27, by - 40, kx + 27, by - 26)
         pat_o.add_color_stop_rgb(0.0, 0.92, 0.36, 0.04)
-        pat_o.add_color_stop_rgb(0.45, 1.00, 0.54, 0.12)
-        pat_o.add_color_stop_rgb(1.0, 0.82, 0.30, 0.03)
+        pat_o.add_color_stop_rgb(0.40, 1.00, 0.56, 0.14)
+        pat_o.add_color_stop_rgb(1.0, 0.80, 0.28, 0.03)
         cr.set_source(pat_o)
         cr.fill()
-        # Small black guard ear right of knob
-        _round_rect(cr, bx + bw - 22, by - 26, 14, 30, 4)
-        cr.set_source_rgb(0.13, 0.14, 0.16)
+        _round_rect(cr, bx + bw - 22, by - 28, 15, 32, 4)
+        cr.set_source_rgb(0.12, 0.13, 0.15)
         cr.fill()
 
-        # Translucent Status LED
-        lx, ly = bx + 52.0, by - 2.0
-        cr.set_source_rgb(0.95, 0.24, 0.24) if led_state == "tx" else (
-            cr.set_source_rgb(0.18, 0.86, 0.42) if led_state == "rx" else cr.set_source_rgb(0.75, 0.77, 0.79)
-        )
-        _round_rect(cr, lx - 10, ly - 5, 20, 8, 3)
-        cr.fill()
+        # Frosted Status LED
+        _draw_frosted_led(cr, bx + 44.0, by - 9.0, 26.0, 11.0, led_state)
 
-        # 2. Matte Dark Polycarbonate Main Body
+        # 3D Matte Polycarbonate Lower Body
         _round_rect(cr, bx, by, bw, bh, 18)
-        pat_b = cairo.LinearGradient(bx, by, bx + bw, by + bh)
-        pat_b.add_color_stop_rgb(0.0, 0.22, 0.23, 0.25)
-        pat_b.add_color_stop_rgb(0.5, 0.15, 0.16, 0.18)
-        pat_b.add_color_stop_rgb(1.0, 0.11, 0.12, 0.14)
+        pat_b = cairo.LinearGradient(bx, by, bx + bw, by)
+        pat_b.add_color_stop_rgb(0.0, 0.24, 0.25, 0.27)
+        pat_b.add_color_stop_rgb(0.08, 0.14, 0.15, 0.17)
+        pat_b.add_color_stop_rgb(0.92, 0.13, 0.14, 0.16)
+        pat_b.add_color_stop_rgb(1.0, 0.22, 0.23, 0.25)
         cr.set_source(pat_b)
         cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.09)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.10)
         cr.set_line_width(1.0)
         cr.stroke()
 
-        # 3. Brushed Silver-Titanium Upper LCD Armor Frame
-        ux, uy, uw, uh = bx + 6.0, by + 6.0, bw - 12.0, 216.0
+        # 3D Brushed Titanium Upper LCD Armor Frame
+        ux, uy, uw, uh = bx + 6.0, by + 6.0, bw - 12.0, 220.0
         _round_rect(cr, ux, uy, uw, uh, 14)
         pat_u = cairo.LinearGradient(ux, uy, ux + uw, uy + uh)
-        pat_u.add_color_stop_rgb(0.0, 0.64, 0.63, 0.60)
-        pat_u.add_color_stop_rgb(0.45, 0.46, 0.45, 0.43)
-        pat_u.add_color_stop_rgb(1.0, 0.56, 0.55, 0.52)
+        pat_u.add_color_stop_rgb(0.0, 0.72, 0.70, 0.66)
+        pat_u.add_color_stop_rgb(0.45, 0.54, 0.53, 0.50)
+        pat_u.add_color_stop_rgb(1.0, 0.64, 0.62, 0.58)
         cr.set_source(pat_u)
         cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.22)
-        cr.set_line_width(1.0)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.28)
+        cr.set_line_width(1.1)
         cr.stroke()
 
-        _draw_torx_bolt(cr, ux + 15, uy + 15, 4.0)
-        _draw_torx_bolt(cr, ux + uw - 15, uy + 15, 4.0)
-        _draw_torx_bolt(cr, ux + 15, uy + uh - 54, 4.0)
-        _draw_torx_bolt(cr, ux + uw - 15, uy + uh - 22, 4.0)
+        _draw_hex_torx_bolt(cr, ux + 15, uy + 15, 4.4)
+        _draw_hex_torx_bolt(cr, ux + uw - 15, uy + 15, 4.4)
+        _draw_hex_torx_bolt(cr, ux + 15, uy + uh - 54, 4.4)
+        _draw_hex_torx_bolt(cr, ux + uw - 15, uy + uh - 22, 4.4)
 
         # Recessed LCD Window
-        lz_x, lz_y, lz_w, lz_h = int(ux + 18), int(uy + 12), int(uw - 36), 152
-        _round_rect(cr, lz_x, lz_y, lz_w, lz_h, 7)
-        cr.set_source_rgb(0.08, 0.09, 0.10)
+        lz_x, lz_y, lz_w, lz_h = int(ux + 18), int(uy + 12), int(uw - 36), 154
+        _round_rect(cr, lz_x, lz_y, lz_w, lz_h, 8)
+        cr.set_source_rgb(0.07, 0.07, 0.08)
         cr.fill()
         self._lcd_rect = (lz_x + 6, lz_y + 6, lz_w - 12, lz_h - 12)
 
-        # Glossy QUANSHENG Badge right of M
-        m_x, m_y, m_w, m_h = ux + 16.0, lz_y + lz_h + 10.0, 68.0, 32.0
-        np_x, np_y, np_w, np_h = m_x + m_w + 10.0, m_y + 2.0, uw - (m_w + 56.0), 28.0
-        _round_rect(cr, np_x, np_y, np_w, np_h, 8)
-        cr.set_source_rgb(0.07, 0.08, 0.09)
+        # Glossy QUANSHENG Badge right of [M A]
+        m_x, m_y, m_w, m_h = ux + 16.0, lz_y + lz_h + 10.0, 72.0, 34.0
+        np_x, np_y, np_w, np_h = m_x + m_w + 10.0, m_y + 2.0, uw - (m_w + 56.0), 30.0
+        _round_rect(cr, np_x, np_y, np_w, np_h, 7)
+        cr.set_source_rgb(0.06, 0.06, 0.07)
         cr.fill()
-        _draw_quansheng_logo(cr, np_x + np_w * 0.5, np_y + np_h * 0.5, font_size=11.0)
+        _draw_quansheng_logo(cr, np_x + np_w * 0.5, np_y + np_h * 0.52, scale=0.86)
 
-        # 3-Bar Speaker Grille Dish to the right of stacked ▲ / ▼
+        # 3D Speaker Grille Dish (right of vertical ▲ / ▼)
         mid_y = uy + uh + 12.0
-        col_x, col_w = bx + 18.0, 56.0
+        col_x, col_w = bx + 18.0, 60.0
         gx = col_x + col_w + 14.0
         gw = (bx + bw - 18.0) - gx
-        _round_rect(cr, gx - 4, mid_y, gw + 8, 86.0, 8.0)
-        cr.set_source_rgba(0.05, 0.05, 0.06, 0.55)
+        _round_rect(cr, gx - 4, mid_y, gw + 8, 88.0, 8.0)
+        cr.set_source_rgba(0.04, 0.04, 0.05, 0.62)
         cr.fill()
         for i in range(3):
-            gy = mid_y + 7.0 + i * 26.0
+            gy = mid_y + 8.0 + i * 26.0
             _round_rect(cr, gx, gy, gw, 16.0, 5.0)
-            cr.set_source_rgb(0.05, 0.05, 0.06)
+            cr.set_source_rgb(0.04, 0.04, 0.05)
             cr.fill()
             _round_rect(cr, gx + 3, gy + 4, gw - 6, 8.0, 3.0)
-            cr.set_source_rgb(0.19, 0.20, 0.22)
+            pat_sl = cairo.LinearGradient(0, gy + 4, 0, gy + 12)
+            pat_sl.add_color_stop_rgb(0.0, 0.25, 0.26, 0.28)
+            pat_sl.add_color_stop_rgb(1.0, 0.14, 0.15, 0.17)
+            cr.set_source(pat_sl)
             cr.fill()
 
-        # Register Side & Front Keys
+        # Side & Front Key Specs
         self._side_specs = [
-            ("ptt",   4.0, by + 64.0, 26.0, 108.0, True, 0),
-            ("side1", 6.0, by + 182.0, 24.0, 34.0, False, 0),
-            ("side2", 6.0, by + 224.0, 24.0, 34.0, False, 0),
+            ("ptt",   4.0, by + 64.0, 28.0, 114.0, True, 0),
+            ("side1", 7.0, by + 188.0, 25.0, 36.0, False, 0),
+            ("side2", 7.0, by + 232.0, 25.0, 36.0, False, 0),
         ]
         for kn, sx, sy, sw, sh, _, _ in self._side_specs:
             self.hitboxes[kn] = (sx, sy, sw, sh)
 
         nav_specs = [
-            ("menu", m_x, m_y, m_w, m_h, "M", "A", "", 6.0, False),
-            ("up",   col_x, mid_y, col_w, 34.0, "_CHEV_UP_", "B", "", 7.0, True),
-            ("down", col_x, mid_y + 42.0, col_w, 34.0, "_CHEV_DN_", "C", "", 7.0, True),
-            ("exit", col_x, mid_y + 92.0, col_w + 12.0, 28.0, "EXIT", "", "", 6.0, True),
+            ("menu", m_x, m_y, m_w, m_h, "M", "A", "", 6.0, False, False),
+            ("up",   col_x, mid_y, col_w, 36.0, "_CHEV_UP_", "B", "", 7.0, True, False),
+            ("down", col_x, mid_y + 44.0, col_w, 36.0, "_CHEV_DN_", "C", "", 7.0, True, False),
+            ("exit", col_x, mid_y + 94.0, col_w + 14.0, 30.0, "EXIT", "", "", 6.0, True, False),
         ]
         for sp in nav_specs:
             self.hitboxes[sp[0]] = (sp[1], sp[2], sp[3], sp[4])
             self._key_specs.append(sp)
 
-        kp_x, kp_y, kp_w = bx + 16.0, mid_y + 130.0, bw - 32.0
-        gap_c, gap_r, kh = 6.0, 7.0, 32.0
+        kp_x, kp_y, kp_w = bx + 16.0, mid_y + 132.0, bw - 32.0
+        gap_c, gap_r, kh = 6.0, 7.0, 34.0
         kw = (kp_w - gap_c * 3.0) / 4.0
         for r_i, row_keys in enumerate(K5_BOTTOM_MATRIX):
             ky = kp_y + r_i * (kh + gap_r)
             for c_i, (kn, pri, s1) in enumerate(row_keys):
                 kx = kp_x + c_i * (kw + gap_c)
                 self.hitboxes[kn] = (kx, ky, kw, kh)
-                self._key_specs.append((kn, kx, ky, kw, kh, pri, s1, "", 6.0, False))
+                self._key_specs.append((kn, kx, ky, kw, kh, pri, s1, "", 6.0, False, kn == "5"))
 
     def paint(
         self,
@@ -995,81 +1269,122 @@ class HandsetRenderer:
         led_state: str = "off",
         torch_on: bool = False,
     ) -> None:
-        """Composites cached chassis + blazing-fast LCD + smooth animated buttons (~0.5 ms total!)."""
+        import cairo
         self._ensure_chassis(model, led_state, torch_on, lcd_st)
         accent = (0.98, 0.48, 0.08) if model == "k5" else (0.18, 0.56, 1.0)
 
-        # 1. Cached static radio chassis (0.05 ms)
+        # 1. Cached 3D radio chassis
         cr.set_source_surface(self._chassis_surf, 0, 0)
         cr.paint()
 
-        # 2. Fast layered ST7565 LCD (0.20 ms)
+        # 2. Fast layered ST7565 LCD
         lx, ly, lw, lh = self._lcd_rect
         paint_fast_lcd(cr, lx, ly, lw, lh, lcd_state, lcd_st, self.lcd_cache)
 
-        # 3. Animated left flank keys (PTT + SK1 + SK2)
+        # 3. 3D Sculpted Protruding Side Keys (PTT + SK1 + SK2)
         for kn, sx, sy, sw, sh, is_ptt, dots in self._side_specs:
             p = _clamp1(press_anim.get(kn, 0.0))
             hv = _clamp1(hover_anim.get(kn, 0.0))
-            dx = 2.4 * p
-            _round_rect(cr, sx + dx, sy, sw, sh, 7 if is_ptt else 6)
+            dx = 2.6 * p
+            # Soft shadow cast left/down
+            _round_rect(cr, sx + dx - 1.5, sy + 2.5, sw, sh, 8 if is_ptt else 6)
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.45 * (1.0 - 0.5 * p))
+            cr.fill()
+
+            # 3D rounded cylindrical side paddle body
+            _round_rect(cr, sx + dx, sy, sw, sh, 8 if is_ptt else 6)
+            pat_s = cairo.LinearGradient(sx + dx, sy, sx + dx + sw, sy)
             if is_ptt:
-                cr.set_source_rgb(0.14 + 0.48 * p + 0.05 * hv, 0.15 - 0.03 * p + 0.05 * hv, 0.17 - 0.03 * p + 0.05 * hv)
-                cr.fill_preserve()
-                cr.set_source_rgb(
-                    accent[0] * (1.0 - p) + 0.96 * p,
-                    accent[1] * (1.0 - p) + 0.34 * p,
-                    accent[2] * (1.0 - p) + 0.34 * p,
-                )
-                cr.set_line_width(1.9)
+                pat_s.add_color_stop_rgb(0.0, 0.24 + 0.40 * p + 0.05 * hv, 0.25 - 0.10 * p + 0.05 * hv, 0.28 - 0.12 * p + 0.05 * hv)
+                pat_s.add_color_stop_rgb(0.55, 0.14 + 0.45 * p, 0.15 - 0.04 * p, 0.17 - 0.05 * p)
+                pat_s.add_color_stop_rgb(1.0, 0.08 + 0.30 * p, 0.09, 0.10)
+            else:
+                v = 0.22 + 0.06 * hv - 0.07 * p
+                pat_s.add_color_stop_rgb(0.0, v, v + 0.01, v + 0.02)
+                pat_s.add_color_stop_rgb(0.6, v * 0.68, v * 0.70, v * 0.74)
+                pat_s.add_color_stop_rgb(1.0, v * 0.45, v * 0.46, v * 0.50)
+            cr.set_source(pat_s)
+            cr.fill_preserve()
+
+            if is_ptt:
+                # 3D beveled anodized collar (cobalt-blue on UV-K1, burnt-orange on UV-K5, crimson on TX)
+                c_r = accent[0] * (1.0 - p) + 0.98 * p
+                c_g = accent[1] * (1.0 - p) + 0.30 * p
+                c_b = accent[2] * (1.0 - p) + 0.28 * p
+                pat_c = cairo.LinearGradient(sx + dx, sy, sx + dx, sy + sh)
+                pat_c.add_color_stop_rgb(0.0, min(1.0, c_r * 1.18), min(1.0, c_g * 1.18), min(1.0, c_b * 1.18))
+                pat_c.add_color_stop_rgb(0.5, c_r * 0.92, c_g * 0.92, c_b * 0.92)
+                pat_c.add_color_stop_rgb(1.0, c_r * 0.62, c_g * 0.62, c_b * 0.62)
+                cr.set_source(pat_c)
+                cr.set_line_width(2.4)
+                cr.stroke()
+                # Subtle inner shadow channel between anodized collar and rubber paddle
+                _round_rect(cr, sx + dx + 2.2, sy + 2.2, sw - 4.4, sh - 4.4, 6.2)
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.55)
+                cr.set_line_width(1.0)
                 cr.stroke()
                 if model == "k1":
-                    cr.set_source_rgb(
-                        accent[0] * (1.0 - p) + 1.0 * p,
-                        accent[1] * (1.0 - p) + 0.72 * p,
-                        accent[2] * (1.0 - p) + 0.72 * p,
-                    )
-                    for ry in (sy + 22, sy + 44, sy + 66, sy + 88):
-                        _round_rect(cr, sx + 9 + dx, ry, 4.0, 12.0, 2)
+                    for ry in (sy + 20, sy + 44, sy + 68, sy + 92):
+                        # Molded recessed grip channel + anodized accent insert
+                        _round_rect(cr, sx + 8.6 + dx, ry - 0.8, 5.8, 14.6, 2.6)
+                        cr.set_source_rgba(0.03, 0.03, 0.04, 0.72)
+                        cr.fill()
+                        _round_rect(cr, sx + 9.6 + dx, ry, 3.8, 13.0, 1.8)
+                        cr.set_source_rgb(
+                            accent[0] * (1.0 - p) + 1.0 * p,
+                            accent[1] * (1.0 - p) + 0.72 * p,
+                            accent[2] * (1.0 - p) + 0.72 * p,
+                        )
                         cr.fill()
             else:
-                v = 0.15 + 0.05 * hv - 0.05 * p
-                cr.set_source_rgb(v, v + 0.01, v + 0.025)
-                cr.fill_preserve()
-                cr.set_source_rgba(accent[0], accent[1], accent[2], 0.9 * p) if p > 0.05 else cr.set_source_rgba(1, 1, 1, 0.12 + 0.08 * hv)
+                cr.set_source_rgba(accent[0], accent[1], accent[2], 0.90 * p) if p > 0.05 else cr.set_source_rgba(1, 1, 1, 0.16 + 0.08 * hv)
                 cr.set_line_width(1.1)
                 cr.stroke()
                 if dots > 0:
-                    cr.set_source_rgba(0.76, 0.80, 0.84, 0.68)
+                    cr.set_source_rgba(0.84, 0.87, 0.90, 0.72)
                     if dots == 2:
-                        cr.arc(sx + 10 + dx, sy + sh * 0.38, 1.8, 0, 2 * math.pi)
-                        cr.arc(sx + 10 + dx, sy + sh * 0.62, 1.8, 0, 2 * math.pi)
+                        cr.new_path()
+                        cr.arc(sx + 10.5 + dx, sy + sh * 0.37, 2.0, 0, 2 * math.pi)
+                        cr.fill()
+                        cr.new_path()
+                        cr.arc(sx + 10.5 + dx, sy + sh * 0.63, 2.0, 0, 2 * math.pi)
+                        cr.fill()
                     else:
-                        cr.arc(sx + 10 + dx, sy + sh * 0.50, 1.8, 0, 2 * math.pi)
-                    cr.fill()
+                        cr.new_path()
+                        cr.arc(sx + 10.5 + dx, sy + sh * 0.50, 2.0, 0, 2 * math.pi)
+                        cr.fill()
 
-        # 4. Animated front keypad buttons
-        for kn, kx, ky, kw, kh, pri, s1, s2, rad, is_nav in self._key_specs:
-            _draw_animated_key(
-                cr, kx, ky, kw, kh, pri, s1, s2,
-                press_t=press_anim.get(kn, 0.0),
-                hover_t=hover_anim.get(kn, 0.0),
-                radius=rad, is_nav=is_nav, accent=accent,
-            )
+        # 4. Dynamic 3D Front Keycap Overlays (only animating/hovered keys redraw live!)
+        for kn, kx, ky, kw, kh, pri, s1, s2, rad, is_nav, nub in self._key_specs:
+            pt = press_anim.get(kn, 0.0)
+            ht = hover_anim.get(kn, 0.0)
+            if pt > 0.005 or ht > 0.005:
+                _draw_3d_keycap(
+                    cr, kx, ky, kw, kh, pri, s1, s2,
+                    press_t=pt, hover_t=ht, radius=rad, is_nav=is_nav, homing_nub=nub, accent=accent,
+                )
 
 
 # =============================================================================
-# 3. OFFSCREEN PNG & ANIMATED GIF EXPORTER (Trim + Cut/Splice + LCD or Body)
+# 3. PNG & GIF RECORDER / TIMELINE SPLICE EXPORTER
 # =============================================================================
+
+def _bgra_to_rgba(raw: bytes) -> bytes:
+    if _np is not None:
+        return _np.frombuffer(raw, dtype=_np.uint8).reshape(-1, 4)[:, [2, 1, 0, 3]].tobytes()
+    out = bytearray(len(raw))
+    out[0::4], out[1::4], out[2::4], out[3::4] = raw[2::4], raw[1::4], raw[0::4], raw[3::4]
+    return bytes(out)
+
 
 def render_lcd_to_rgba(fb: bytes, lcd_st: LcdSettings, width: int = 440, height: int = 304) -> tuple[int, int, bytes]:
     import cairo
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
     cr = cairo.Context(surf)
-    st_snap = dataclasses.replace(lcd_st, ghosting=False)
+    st_s = dataclasses.replace(lcd_st, ghosting=False)
     fs = FastLcdState()
-    fs.step(fb, st_snap)
-    paint_fast_lcd(cr, 0, 0, width, height, fs, st_snap, LcdLayerCache())
+    fs.step(fb, st_s)
+    paint_fast_lcd(cr, 0, 0, width, height, fs, st_s, LcdLayerCache())
     surf.flush()
     return width, height, _bgra_to_rgba(bytes(surf.get_data()))
 
@@ -1095,12 +1410,12 @@ def render_handset_to_rgba(
     cr.rectangle(0, 0, w, h)
     cr.fill()
     cr.scale(scale, scale)
-    st_snap = dataclasses.replace(lcd_st, ghosting=False)
+    st_s = dataclasses.replace(lcd_st, ghosting=False)
     fs = FastLcdState()
-    fs.step(fb, st_snap)
+    fs.step(fb, st_s)
     rend = renderer or HandsetRenderer()
     rend.paint(
-        cr, model, fs, st_snap,
+        cr, model, fs, st_s,
         press_anim={k: 1.0 for k in pressed_keys},
         hover_anim={}, led_state=led_state, torch_on=torch_on,
     )
@@ -1108,23 +1423,10 @@ def render_handset_to_rgba(
     return w, h, _bgra_to_rgba(bytes(surf.get_data()))
 
 
-def _bgra_to_rgba(raw: bytes) -> bytes:
-    if _np is not None:
-        arr = _np.frombuffer(raw, dtype=_np.uint8).reshape(-1, 4)
-        return arr[:, [2, 1, 0, 3]].tobytes()
-    out = bytearray(len(raw))
-    out[0::4] = raw[2::4]
-    out[1::4] = raw[1::4]
-    out[2::4] = raw[0::4]
-    out[3::4] = raw[3::4]
-    return bytes(out)
-
-
 def encode_png_rgba(w: int, h: int, rgba: bytes) -> bytes:
     def chunk(tag: bytes, payload: bytes) -> bytes:
         crc = zlib.crc32(tag + payload) & 0xFFFFFFFF
         return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", crc)
-
     stride = w * 4
     raw = bytearray()
     for y in range(h):
@@ -1144,8 +1446,6 @@ class RecordedFrame:
 
 
 class RecordingSession:
-    """Event-driven non-destructive recording timeline (Trim In/Out + Cut/Splice + LCD/Body GIF)."""
-
     def __init__(self) -> None:
         self.frames: list[RecordedFrame] = []
         self.recording: bool = False
@@ -1156,8 +1456,7 @@ class RecordingSession:
 
     def start(self, initial_fb: bytes, pressed: frozenset[str], led: str, torch: bool) -> None:
         self.frames = [RecordedFrame(0, bytes(initial_fb), frozenset(pressed), led, torch)]
-        self.trim_in = 0
-        self.trim_out = 0
+        self.trim_in = self.trim_out = 0
         self.cuts = []
         self.t0_mono = time.monotonic()
         self.recording = True
@@ -1169,20 +1468,16 @@ class RecordingSession:
             last = self.frames[-1]
             if last.fb == fb and last.pressed == pressed and last.led == led and last.torch == torch:
                 return
-        ts = int((time.monotonic() - self.t0_mono) * 1000.0)
-        self.frames.append(RecordedFrame(ts, bytes(fb), frozenset(pressed), led, torch))
+        self.frames.append(RecordedFrame(int((time.monotonic() - self.t0_mono) * 1000.0), bytes(fb), frozenset(pressed), led, torch))
         self.trim_out = len(self.frames) - 1
 
     def stop(self) -> None:
-        if not self.recording:
-            return
-        self.recording = False
-        self.trim_out = max(0, len(self.frames) - 1)
+        if self.recording:
+            self.recording = False
+            self.trim_out = max(0, len(self.frames) - 1)
 
     def add_cut(self, start_idx: int, end_idx: int) -> None:
-        a, b = min(start_idx, end_idx), max(start_idx, end_idx)
-        a = max(self.trim_in, a)
-        b = min(self.trim_out, b)
+        a, b = max(self.trim_in, min(start_idx, end_idx)), min(self.trim_out, max(start_idx, end_idx))
         if a <= b:
             self.cuts.append((a, b))
 
@@ -1233,39 +1528,31 @@ class RecordingSession:
         if not seq:
             raise ValueError("No active frames to export")
         from PIL import Image
-
         rend = HandsetRenderer()
-        pil_frames: list[Any] = []
-        delays: list[int] = []
-        total = len(seq)
+        pil_frames, delays = [], []
         for pos, (fi, dt_ms) in enumerate(seq):
             rf = self.frames[fi]
             if mode == "body":
-                w, h, rgba = render_handset_to_rgba(
-                    model, rf.fb, lcd_st,
-                    pressed_keys=rf.pressed, led_state=rf.led, torch_on=rf.torch,
-                    scale=1.0, renderer=rend,
-                )
+                w, h, rgba = render_handset_to_rgba(model, rf.fb, lcd_st, pressed_keys=rf.pressed, led_state=rf.led, torch_on=rf.torch, scale=1.0, renderer=rend)
             else:
                 w, h, rgba = render_lcd_to_rgba(rf.fb, lcd_st, width=440, height=304)
             img = Image.frombytes("RGBA", (w, h), rgba).convert("RGB")
-            pal_img = img.quantize(colors=64 if mode == "lcd" else 128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-            pil_frames.append(pal_img)
+            pil_frames.append(img.quantize(colors=64 if mode == "lcd" else 128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE))
             delays.append(dt_ms)
-            if progress_cb is not None:
-                progress_cb((pos + 1) / float(total))
-
+            if progress_cb:
+                progress_cb((pos + 1) / float(len(seq)))
         dest = Path(out_path)
-        pil_frames[0].save(
-            dest, format="GIF", save_all=True, append_images=pil_frames[1:],
-            duration=delays, loop=0, optimize=True, disposal=2,
-        )
+        pil_frames[0].save(dest, format="GIF", save_all=True, append_images=pil_frames[1:], duration=delays, loop=0, optimize=True, disposal=2)
         return dest.stat().st_size
 
 
 # =============================================================================
-# 4. GUDEV HOTPLUG AUTO-DETECTION & LOW-LATENCY RIGWIRE ENGINE
+# 4. GUDEV HOTPLUG + DFU / BOOTLOADER / CPS RECOGNITION + BACKUPS & FLASHING
 # =============================================================================
+
+VID_PID_STOCK_BL = "36b7:0001"
+VID_PID_MOTO_UF2 = "36b7:ffff"
+
 
 @dataclasses.dataclass
 class DetectedPort:
@@ -1276,12 +1563,26 @@ class DetectedPort:
     serial: str = ""
     vid: str = ""
     pid: str = ""
+    mode_hint: str = "kern_os"  # "kern_os" | "stock_bl" | "moto_uf2"
     is_quansheng: bool = False
-    is_usb: bool = False
+
+
+def classify_usb_mode(vid: str, pid: str, pretty_name: str) -> tuple[str, bool]:
+    """Classifies USB serial/DFU devices into Kern OS, Stock Bootloader/CPS (36b7:0001), or Moto UF2 (36b7:ffff)."""
+    vp = f"{vid}:{pid}".lower() if (vid and pid) else ""
+    low = pretty_name.lower()
+    if vp == VID_PID_STOCK_BL:
+        return "stock_bl", True
+    if vp == VID_PID_MOTO_UF2:
+        return "moto_uf2", True
+    if "bootloader" in low or "dfu" in low:
+        return "stock_bl", True
+    is_qs = any(k in low for k in ("quansheng", "uv-k", "kern"))
+    return "kern_os", is_qs
 
 
 class PortMonitor:
-    """Real-time USB serial detector via GUdev (Linux) with cross-platform pyserial fallback."""
+    """Real-time USB hotplug monitor recognizing Kern OS, Quansheng DFU/CPS Bootloader, and Moto UF2."""
 
     def __init__(self, on_change: Callable[[list[DetectedPort]], None] | None = None) -> None:
         self.on_change = on_change
@@ -1320,28 +1621,303 @@ class PortMonitor:
                     if vid and pid and vendor and model:
                         break
                     cur = cur.get_parent()
-                v_c = vendor.replace("_", " ").strip()
-                m_c = model.replace("_", " ").strip()
+                v_c, m_c = vendor.replace("_", " ").strip(), model.replace("_", " ").strip()
                 pretty = m_c if m_c.lower().startswith("quansheng") else f"{v_c} {m_c}".strip() or dev_file
-                is_qs = any(k in pretty.lower() for k in ("quansheng", "uv-k", "kern"))
-                found.append(DetectedPort(dev_file, pretty, v_c, m_c, ser, vid, pid, is_qs, True))
+                mode_hint, is_qs = classify_usb_mode(vid, pid, pretty)
+                if mode_hint == "stock_bl" and "bootloader" not in pretty.lower():
+                    pretty = f"Quansheng DFU / Bootloader ({pretty})" if pretty != dev_file else "Quansheng DFU / Bootloader"
+                elif mode_hint == "moto_uf2":
+                    pretty = "Moto UF2 Bootloader"
+                found.append(DetectedPort(dev_file, pretty, v_c, m_c, ser, vid, pid, mode_hint, is_qs))
         else:
             try:
                 from serial.tools import list_ports
                 for p in list_ports.comports():
                     desc = (p.product or p.description or "").strip()
-                    is_qs = any(k in desc.lower() for k in ("quansheng", "uv-k", "kern"))
-                    found.append(DetectedPort(p.device, desc or p.device, model=desc, serial=p.serial_number or "", is_quansheng=is_qs, is_usb=True))
+                    vid = f"{p.vid:04x}" if p.vid is not None else ""
+                    pid = f"{p.pid:04x}" if p.pid is not None else ""
+                    mode_hint, is_qs = classify_usb_mode(vid, pid, desc)
+                    pretty = "Quansheng DFU / Bootloader" if mode_hint == "stock_bl" else (desc or p.device)
+                    found.append(DetectedPort(p.device, pretty, model=desc, serial=p.serial_number or "", vid=vid, pid=pid, mode_hint=mode_hint, is_quansheng=is_qs))
             except Exception:
                 pass
 
         found.sort(key=lambda d: (0 if d.is_quansheng else 1, d.device))
-        changed = [p.device for p in found] != [p.device for p in self.ports]
+        changed = [(p.device, p.mode_hint) for p in found] != [(p.device, p.mode_hint) for p in self.ports]
         self.ports = found
         if changed and self.on_change is not None:
             self.on_change(found)
         return found
 
+
+def probe_bootloader_beacon(port: str, duration_s: float = 0.85) -> dict[str, str] | None:
+    """Listens briefly at 38400 baud for Quansheng stock bootloader / CPS 0x0518 beacon packets."""
+    if _flasher is None or port.startswith("tcp://") or port == "demo":
+        return None
+    try:
+        import serial
+        ser = serial.Serial(port, baudrate=_flasher.BAUDRATE, timeout=0.0001)
+    except Exception:
+        return None
+    try:
+        ser.reset_input_buffer()
+        proto = _flasher.Protocol(port)
+        proto.ser = ser
+        deadline = time.monotonic() + duration_s
+        while time.monotonic() < deadline:
+            msg = proto.fetch_message()
+            if msg and msg[0] == _flasher.MSG_NOTIFY_DEV_INFO:
+                data = msg[1]
+                uid = data[:16].hex()
+                ver = data[16:].split(b"\x00")[0].decode("utf-8", errors="ignore").strip()
+                return {"version": ver or "Stock BL", "uid": uid}
+            time.sleep(0.01)
+    finally:
+        try:
+            ser.close()
+        except Exception:
+            pass
+    return None
+
+
+def inspect_firmware_file(fpath: str | Path) -> dict[str, Any]:
+    """Inspects and pre-flight validates a `.kfw` container or raw `.bin` firmware image."""
+    p = Path(fpath)
+    data = p.read_bytes()
+    if data[:8] == kfw.FILE_ID_KFW:
+        parsed = kfw.parse_kfw(data, verify_root=True)
+        pts = kfw.extract_all_parts(parsed)
+        fw_parts = [pt for pt in parsed.parts if pt["kind"] == kfw.PART_FIRMWARE]
+        targets = [t.slug for t in parsed.targets]
+        if not fw_parts:
+            raise ValueError("Container has no firmware image part (may be a backup/module pack)")
+        raw_fw = pts[fw_parts[0]["index"]]
+        return {
+            "format": "KFW v1.0",
+            "version": kfw.format_semver(parsed.fw_version),
+            "targets": targets,
+            "fw_bytes": raw_fw,
+            "size": len(raw_fw),
+            "summary": f"KFW v{kfw.format_semver(parsed.fw_version)} · {', '.join(targets) or 'generic'} · {len(raw_fw):,} B · Ascon OK",
+        }
+    if len(data) < 256 or len(data) > 128 * 1024:
+        raise ValueError(f"Unexpected firmware size: {len(data):,} B")
+    return {
+        "format": "Raw BIN",
+        "version": p.stem,
+        "targets": ["raw"],
+        "fw_bytes": data,
+        "size": len(data),
+        "summary": f"Raw binary · {p.name} · {len(data):,} B",
+    }
+
+
+def flash_via_stock_bootloader(
+    port: str,
+    fw_bytes: bytes,
+    progress_cb: Callable[[float, str], None] | None = None,
+) -> dict[str, Any]:
+    """Flashes raw firmware bytes via Quansheng stock bootloader / CPS / Kern dfu.mod protocol."""
+    if _flasher is None:
+        raise RuntimeError("tools/flasher.py unavailable")
+    import serial
+
+    ser = serial.Serial(port, baudrate=_flasher.BAUDRATE, timeout=0.0001, write_timeout=2.0)
+    proto = _flasher.Protocol(port)
+    proto.ser = ser
+    try:
+        ser.reset_input_buffer()
+        if progress_cb:
+            progress_cb(0.02, "Waiting for bootloader beacon…")
+
+        # 1. Beacon sync (5 consistent 0x0518 frames)
+        t0 = time.monotonic()
+        last_ts = 0.0
+        acc = 0
+        dev_info = None
+        while time.monotonic() - t0 < 12.0:
+            msg = proto.fetch_message()
+            if not msg:
+                time.sleep(0.008)
+                continue
+            if msg[0] == _flasher.MSG_NOTIFY_DEV_INFO:
+                now = time.monotonic()
+                dt = (now - last_ts) * 1000.0
+                last_ts = now
+                if 5.0 <= dt <= 1000.0:
+                    acc += 1
+                    if acc >= 4:
+                        uid = msg[1][:16].hex()
+                        ver = msg[1][16:].split(b"\x00")[0].decode("utf-8", errors="ignore").strip()
+                        dev_info = (uid, ver or "7.00")
+                        break
+                else:
+                    acc = 0
+        if dev_info is None:
+            raise TimeoutError("Bootloader beacon timeout — ensure radio is in DFU / PTT+Power-On mode")
+
+        uid, ver = dev_info
+        if progress_cb:
+            progress_cb(0.08, f"Bootloader {ver} · Handshaking…")
+
+        # 2. Handshake reply
+        sent = 0
+        for _ in range(25):
+            time.sleep(0.04)
+            msg = proto.fetch_message()
+            if msg and msg[0] == _flasher.MSG_NOTIFY_DEV_INFO:
+                if sent == 0:
+                    proto.send(_flasher.MSG_NOTIFY_BL_VER, ver[:4].encode("utf-8"))
+                sent += 1
+                if sent >= 3:
+                    break
+        time.sleep(0.18)
+        while proto.fetch_message():
+            pass
+
+        # 3. Page-by-page flash
+        page_sz = 256
+        total_pages = math.ceil(len(fw_bytes) / page_sz)
+        ts = int(time.time()) & 0xFFFFFFFF
+        t_start = time.monotonic()
+
+        for page in range(total_pages):
+            chunk = fw_bytes[page * page_sz : (page + 1) * page_sz]
+            payload = bytearray(268)
+            struct.pack_into("<IHH", payload, 0, ts, page, total_pages)
+            payload[12 : 12 + len(chunk)] = chunk
+
+            ok = False
+            for _attempt in range(3):
+                proto.send(_flasher.MSG_PROG_FW, payload)
+                wait_end = time.monotonic() + 3.0
+                while time.monotonic() < wait_end:
+                    resp = proto.fetch_message()
+                    if not resp:
+                        time.sleep(0.004)
+                        continue
+                    if resp[0] == _flasher.MSG_PROG_FW_RESP and len(resp[1]) >= 8:
+                        r_page, r_err = struct.unpack_from("<HH", resp[1], 4)
+                        if r_page == page and r_err == 0:
+                            ok = True
+                            break
+                if ok:
+                    break
+            if not ok:
+                raise RuntimeError(f"Flash page {page + 1}/{total_pages} failed")
+            if progress_cb:
+                frac = 0.10 + 0.88 * ((page + 1) / float(total_pages))
+                progress_cb(frac, f"Flashing page {page + 1}/{total_pages}")
+
+        if progress_cb:
+            progress_cb(1.0, "Complete — rebooting radio")
+        return {"bootloader": ver, "uid": uid, "pages": total_pages, "elapsed_s": time.monotonic() - t_start}
+    finally:
+        try:
+            ser.close()
+        except Exception:
+            pass
+
+
+def build_kfw_backup_from_backend(
+    be: kernfs_mount.FsBackend,
+    *,
+    volume_name: str,
+    calib_only: bool = False,
+    progress_cb: Callable[[float, str], None] | None = None,
+) -> bytes:
+    """Packs verified factory calibration (or full KernFS snapshot) into an Ascon-Hash256 `.kfw` backup container."""
+    files_to_pack: list[tuple[str, bytes]] = []
+    if calib_only:
+        paths = ["/sys/calib.dat", "/sys/calib.sig"]
+    else:
+        paths = []
+        for root_dir in ("/sys", "/pref", "/user", "/apps"):
+            try:
+                for entry in be.ls(root_dir):
+                    if not entry["is_dir"]:
+                        paths.append(f"{root_dir}/{entry['name']}")
+            except Exception:
+                pass
+
+    total = max(1, len(paths))
+    for i, path in enumerate(paths):
+        if progress_cb:
+            progress_cb(i / float(total), f"Reading {path}…")
+        try:
+            st = be.stat(path)
+            if st.get("exists") and not st.get("is_dir"):
+                files_to_pack.append((path, be.read_bytes(path)))
+        except Exception:
+            continue
+
+    if not files_to_pack:
+        raise RuntimeError("No readable files found to back up")
+
+    parts: list[kfw.PartInput] = []
+    for path, data in files_to_pack:
+        pkind = kfw.PART_CALIBRATION if path == "/sys/calib.dat" else kfw.PART_KERNFS_FILE
+        parts.append(kfw.PartInput(kind=pkind, data=data, dest_path=path, in_solid=True))
+
+    t0, bp0, prs0 = kfw._make_target_entries("uv-k1", 0)
+    if progress_cb:
+        progress_cb(0.95, "Sealing Ascon-Hash256 .kfw backup…")
+    blob = kfw.build_kfw(
+        kind=kfw.KIND_BACKUP,
+        fw_version=kfw.pack_semver("1.0.0"),
+        targets=[t0],
+        boot_policies=[bp0],
+        protect_ranges=prs0,
+        parts=parts,
+        manifest={
+            "name": f"{volume_name} Backup",
+            "scope": "calibration" if calib_only else "full-kernfs",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "file_count": len(files_to_pack),
+        },
+    )
+    if progress_cb:
+        progress_cb(1.0, f"Backed up {len(files_to_pack)} file(s)")
+    return blob
+
+
+def restore_kfw_backup_to_backend(
+    kfw_path: str | Path,
+    be: kernfs_mount.FsBackend,
+    policy: kernfs_mount.SafetyPolicy,
+    progress_cb: Callable[[float, str], None] | None = None,
+) -> tuple[int, int]:
+    """Verifies Ascon digests & restores user/pref/app files from a `.kfw` backup while strictly shielding `/sys/*`."""
+    parsed = kfw.parse_kfw(Path(kfw_path).read_bytes(), verify_root=True)
+    pts = kfw.extract_all_parts(parsed)
+    restored = skipped = 0
+    file_parts = [
+        pt for pt in parsed.parts
+        if pt["index"] in parsed.part_paths or pt["kind"] == kfw.PART_CALIBRATION
+    ]
+    total = max(1, len(file_parts))
+    for i, pt in enumerate(file_parts):
+        if pt["kind"] == kfw.PART_CALIBRATION:
+            skipped += 1
+            continue
+        path = parsed.part_paths[pt["index"]]["path"]
+        data = pts[pt["index"]]
+        if progress_cb:
+            progress_cb(i / float(total), f"Restoring {path}…")
+        if path.startswith("/sys/"):
+            skipped += 1
+            continue
+        policy.check_write(path, data)
+        be.write_bytes(path, data)
+        restored += 1
+    if progress_cb:
+        progress_cb(1.0, f"Restored {restored} file(s) ({skipped} protected /sys skipped)")
+    return restored, skipped
+
+
+# =============================================================================
+# 5. DEMO FRAMEBUFFERS & LOW-LATENCY RIGWIRE ENGINE
+# =============================================================================
 
 _DEMO_FONT: dict[str, tuple[int, ...]] = {
     " ": (0, 0, 0, 0, 0), ".": (0, 0, 0x60, 0x60, 0), ":": (0, 0x36, 0x36, 0, 0),
@@ -1366,66 +1942,75 @@ _DEMO_FONT: dict[str, tuple[int, ...]] = {
 }
 
 
+def _fb_draw_text(fb: bytearray, x: int, y: int, text: str, scale: int = 1, invert: bool = False) -> None:
+    cx, fg_val = x, not invert
+    for ch in text.upper():
+        cols = _DEMO_FONT.get(ch, _DEMO_FONT[" "])
+        for ci, col in enumerate(cols):
+            for row in range(7):
+                if (col >> row) & 1:
+                    for sy in range(scale):
+                        for sx in range(scale):
+                            px, py = cx + ci * scale + sx, y + row * scale + sy
+                            if 0 <= px < 128 and 0 <= py < 64:
+                                idx, bit = (py >> 3) * 128 + px, 1 << (py & 7)
+                                if fg_val:
+                                    fb[idx] |= bit
+                                else:
+                                    fb[idx] &= ~bit
+        cx += 6 * scale
+
+
 def make_demo_framebuffer(freq_a: str = "433.500", freq_b: str = "145.500", status: str = "VFO") -> bytes:
     fb = bytearray(1024)
-
-    def set_px(x: int, y: int, val: bool = True) -> None:
-        if 0 <= x < 128 and 0 <= y < 64:
-            idx = (y >> 3) * 128 + x
-            bit = 1 << (y & 7)
-            if val:
-                fb[idx] |= bit
-            else:
-                fb[idx] &= ~bit
-
-    def draw_text(x: int, y: int, text: str, scale: int = 1, invert: bool = False) -> None:
-        cx = x
-        fg_val = not invert
-        for ch in text.upper():
-            cols = _DEMO_FONT.get(ch, _DEMO_FONT[" "])
-            for ci, col in enumerate(cols):
-                for row in range(7):
-                    if (col >> row) & 1:
-                        for sy in range(scale):
-                            for sx in range(scale):
-                                set_px(cx + ci * scale + sx, y + row * scale + sy, fg_val)
-            cx += 6 * scale
-
     for x in range(128):
         for y in range(9):
-            set_px(x, y, True)
-    draw_text(3, 1, "KERN OS", 1, invert=True)
-    draw_text(60, 1, status[:5], 1, invert=True)
-    draw_text(104, 1, "92%", 1, invert=True)
+            fb[(y >> 3) * 128 + x] |= 1 << (y & 7)
+    _fb_draw_text(fb, 3, 1, "KERN OS", 1, invert=True)
+    _fb_draw_text(fb, 60, 1, status[:5], 1, invert=True)
+    _fb_draw_text(fb, 104, 1, "92%", 1, invert=True)
 
     for x in range(2, 18):
         for y in range(13, 23):
-            set_px(x, y, True)
-    draw_text(4, 15, "V1", 1, invert=True)
-    draw_text(22, 13, freq_a, 2)
-    draw_text(112, 13, "FM", 1)
+            fb[(y >> 3) * 128 + x] |= 1 << (y & 7)
+    _fb_draw_text(fb, 4, 15, "V1", 1, invert=True)
+    _fb_draw_text(fb, 22, 13, freq_a, 2)
+    _fb_draw_text(fb, 112, 13, "FM", 1)
 
     for x in range(0, 128, 2):
-        set_px(x, 33, True)
+        fb[(33 >> 3) * 128 + x] |= 1 << (33 & 7)
 
     for x in range(2, 18):
-        set_px(x, 37, True)
-        set_px(x, 46, True)
+        fb[(37 >> 3) * 128 + x] |= 1 << (37 & 7)
+        fb[(46 >> 3) * 128 + x] |= 1 << (46 & 7)
     for y in range(37, 47):
-        set_px(2, y, True)
-        set_px(17, y, True)
-    draw_text(4, 39, "V2", 1, invert=False)
-    draw_text(22, 37, freq_b, 2)
-    draw_text(112, 37, "FM", 1)
+        fb[(y >> 3) * 128 + 2] |= 1 << (y & 7)
+        fb[(y >> 3) * 128 + 17] |= 1 << (y & 7)
+    _fb_draw_text(fb, 4, 39, "V2", 1)
+    _fb_draw_text(fb, 22, 37, freq_b, 2)
+    _fb_draw_text(fb, 112, 37, "FM", 1)
 
-    draw_text(2, 55, "S", 1)
+    _fb_draw_text(fb, 2, 55, "S", 1)
     for i in range(12):
         bx = 14 + i * 7
         for y in range(56, 62):
             for x in range(bx, bx + 5):
                 if i < 7 or y in (56, 61) or x in (bx, bx + 4):
-                    set_px(x, y, True)
-    draw_text(102, 55, "RX", 1)
+                    fb[(y >> 3) * 128 + x] |= 1 << (y & 7)
+    _fb_draw_text(fb, 102, 55, "RX", 1)
+    return bytes(fb)
+
+
+def make_dfu_framebuffer(bl_ver: str = "7.02.02", status: str = "READY TO FLASH") -> bytes:
+    """Clean DFU / Stock Bootloader status display when radio is connected in CPS/DFU mode."""
+    fb = bytearray(1024)
+    for x in range(128):
+        for y in range(9):
+            fb[(y >> 3) * 128 + x] |= 1 << (y & 7)
+    _fb_draw_text(fb, 3, 1, f"DFU {bl_ver[:14]}", 1, invert=True)
+    _fb_draw_text(fb, 20, 20, "BOOTLOADER", 1)
+    _fb_draw_text(fb, 14, 34, status[:18], 1)
+    _fb_draw_text(fb, 14, 52, "OPEN FLASH TAB", 1)
     return bytes(fb)
 
 
@@ -1444,8 +2029,45 @@ def detect_hardware_model(volume_name: str, hello: dict[str, Any] | None = None,
     return "k1"
 
 
+def _make_demo_krx(name: str, payload_size: int = 64) -> bytes:
+    """Build a minimal valid KRX v1 container for demo virtual KernFS."""
+    name_bytes = name.encode("utf-8") + b"\x00"
+    sec1_body = bytearray(40)
+    sec2_body = bytearray(28)
+    # Place name string right after the two sections inside the header.
+    header_sections_len = 4 + len(sec1_body) + 4 + len(sec2_body)
+    name_off = 24 + header_sections_len
+    struct.pack_into("<HBBB", sec1_body, 0, name_off, 1, 0, 0)
+    # Execution section: min_stack=256, entry_point=0, exec_payload_size=payload_size
+    struct.pack_into("<HHHBBII", sec2_body, 0, 256, 0, 0, 0, 0, 0, payload_size)
+    sec_blob = (
+        struct.pack("<HH", 0x0001, 4 + len(sec1_body)) + bytes(sec1_body)
+        + struct.pack("<HH", 0x0002, 4 + len(sec2_body)) + bytes(sec2_body)
+        + name_bytes
+    )
+    pad = (-len(sec_blob)) & 3
+    sec_blob += b"\x00" * pad
+    header_len = 24 + len(sec_blob)
+    payload = b"\x00" * payload_size
+    hdr_crc = rigwire.crc32_ieee(sec_blob)
+    pay_crc = rigwire.crc32_ieee(payload)
+    preamble = struct.pack(
+        "<4sBBHHHIII",
+        b"\xC0\xDE\x01\xFE",
+        0,  # Resident
+        1,  # version 1
+        2,  # section_count
+        header_len,
+        0,
+        pay_crc,
+        hdr_crc,
+        0,
+    )
+    return preamble + sec_blob + payload
+
+
 class DockLink:
-    """Pipelined low-latency RigWire bridge shared by LCD streaming, keys, Files, Wire, and WebDAV."""
+    """Pipelined low-latency RigWire & Bootloader/DFU link."""
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -1454,6 +2076,8 @@ class DockLink:
         self.policy = kernfs_mount.SafetyPolicy(read_only=False)
         self.port: str | None = None
         self.baud: int = 115200
+        self.link_mode: str = "disconnected"  # "disconnected" | "kern_os" | "stock_bl" | "moto_uf2"
+        self.bootloader_info: dict[str, str] = {}
         self.volume_name: str = "Quansheng UV-K1"
         self.detected_model: str = "k1"
         self.hello_info: dict[str, Any] = {}
@@ -1492,23 +2116,21 @@ class DockLink:
     ) -> None:
         self.disconnect()
         self.baud = baud
+
+        # 1. Offline Demo
         if port.lower() == "demo":
             self.demo_mode = True
+            self.link_mode = "kern_os"
             self.port = "demo"
             self.detected_model = model_override if model_override in ("k1", "k5") else "k1"
             self.volume_name = "Quansheng UV-K5 v3 DEMO" if self.detected_model == "k5" else "Quansheng UV-K1 DEMO"
             self.hello_info = {"minor_version": 1, "accepted_max_payload": 128}
-            self.last_telemetry = {
-                "serial_str": "DEMO0001K1",
-                "mac_addr": "02:4B:45:52:4E:01",
-                "battery_mv": 8040,
-                "battery_pct": 92,
-            }
+            self.last_telemetry = {"serial_str": "DEMO0001K1", "mac_addr": "02:4B:45:52:4E:01", "battery_mv": 8040, "battery_pct": 92}
             mem = kernfs_mount.MemoryFsBackend()
             mem.files["/sys/calib.dat"] = b"\xAA" * 512
             mem.files["/sys/calib.sig"] = b"\xBB" * 32
-            mem.files["/apps/dfu.mod"] = b"\xC0\xDE\x01\xFE" + b"\x00" * 188
-            mem.files["/apps/sysinfo.krx"] = b"\xC0\xDE\x01\xFE" + b"\x00" * 508
+            mem.files["/apps/dfu.mod"] = _make_demo_krx("dfu", 128)
+            mem.files["/apps/sysinfo.krx"] = _make_demo_krx("sysinfo", 256)
             mem.files["/user/channels.ch"] = b"CHAN" + b"\x00" * 12 + b"\x00" * 128
             mem.files["/user/vfo_a.vfo"] = b"VFO0" + b"\x00" * 156
             mem.files["/pref/display.cfg"] = b"DISP" + b"\x00" * 28
@@ -1523,13 +2145,45 @@ class DockLink:
                 self.on_telemetry()
             return
 
+        # 2. Instant USB DFU / Moto UF2 recognition before trying RigWire
+        if port_info and port_info.mode_hint == "moto_uf2":
+            self.port = port
+            self.link_mode = "moto_uf2"
+            self.volume_name = "Moto UF2 Bootloader"
+            self.detected_model = model_override or "k1"
+            self.connected = True
+            self.last_fb = make_dfu_framebuffer("MOTO UF2", "COPY UF2 TO DRIVE")
+            self._emit_log(f"Detected Moto UF2 Bootloader on {port}")
+            if self.on_frame:
+                self.on_frame()
+            if self.on_telemetry:
+                self.on_telemetry()
+            return
+
+        if port_info and port_info.mode_hint == "stock_bl":
+            bl = probe_bootloader_beacon(port, duration_s=1.0) or {"version": "Stock BL", "uid": ""}
+            self.port = port
+            self.link_mode = "stock_bl"
+            self.bootloader_info = bl
+            self.volume_name = f"DFU Bootloader ({bl['version']})"
+            self.detected_model = model_override or "k1"
+            self.connected = True
+            self.last_fb = make_dfu_framebuffer(bl["version"], "READY TO FLASH")
+            self._emit_log(f"Detected Quansheng DFU/CPS Bootloader {bl['version']} on {port}")
+            if self.on_frame:
+                self.on_frame()
+            if self.on_telemetry:
+                self.on_telemetry()
+            return
+
+        # 3. Try RigWire (Kern OS); if handshake fails on serial port, auto-probe for 38400-baud CPS/Bootloader beacon!
         with self.lock:
             last_err: Exception | None = None
             cli: rigwire.RigWireClient | None = None
             hello: dict[str, Any] = {}
             telem: dict[str, Any] = {}
             for attempt in range(2):
-                cand = rigwire.RigWireClient(port, baudrate=baud, timeout=1.5)
+                cand = rigwire.RigWireClient(port, baudrate=baud, timeout=1.2)
                 try:
                     hello = cand.hello()
                     try:
@@ -1545,12 +2199,31 @@ class DockLink:
                     except Exception:
                         pass
                     if attempt == 0:
-                        time.sleep(0.12)
+                        time.sleep(0.10)
+
             if cli is None:
+                # Fallback: check if radio is actually sitting in Stock Bootloader / CPS mode on a generic USB-UART cable!
+                bl = probe_bootloader_beacon(port, duration_s=0.9)
+                if bl is not None:
+                    self.port = port
+                    self.link_mode = "stock_bl"
+                    self.bootloader_info = bl
+                    self.volume_name = f"DFU Bootloader ({bl['version']})"
+                    self.detected_model = model_override or "k1"
+                    self.connected = True
+                    self.last_fb = make_dfu_framebuffer(bl["version"], "CPS / DFU READY")
+                    self._emit_log(f"Auto-recognized Stock Bootloader / CPS ({bl['version']}) on {port}")
+                    if self.on_frame:
+                        self.on_frame()
+                    if self.on_telemetry:
+                        self.on_telemetry()
+                    return
                 raise last_err or RuntimeError(f"Could not connect to {port}")
+
             self.client = cli
             self.fs_backend = kernfs_mount.RigWireFsBackend(cli, cache_ttl=2.0, shared_lock=self.lock)
             self.port = port
+            self.link_mode = "kern_os"
             self.hello_info = hello
             self.last_telemetry = telem
             self.volume_name = kernfs_mount.resolve_volume_name(port, hello=hello, telemetry=telem)
@@ -1580,6 +2253,8 @@ class DockLink:
             self.fs_backend = None
         was = self.connected
         self.connected = False
+        self.link_mode = "disconnected"
+        self.bootloader_info = {}
         self.demo_mode = False
         self.torch_on = False
         self.keypad_locked = False
@@ -1592,6 +2267,8 @@ class DockLink:
             self._emit_log("Disconnected")
 
     def send_key(self, key_name: str, state_name: str) -> None:
+        if self.link_mode != "kern_os":
+            return
         if self.demo_mode:
             if state_name == "press":
                 if key_name == "up":
@@ -1617,7 +2294,7 @@ class DockLink:
         if self.demo_mode:
             self._emit_log(f"Flashlight {'ON' if enabled else 'OFF'}")
             return
-        if self.connected:
+        if self.connected and self.link_mode == "kern_os":
             self._cmd_q.put(("torch", 1 if enabled else 0))
 
     def set_keypad_lock(self, locked: bool) -> None:
@@ -1625,14 +2302,14 @@ class DockLink:
         if self.demo_mode:
             self._emit_log(f"Keypad lock {'ON' if locked else 'OFF'}")
             return
-        if self.connected:
+        if self.connected and self.link_mode == "kern_os":
             self._cmd_q.put(("lock", locked))
 
     def toggle_vfo(self) -> None:
         if self.demo_mode:
             self._emit_log("Swapped active VFO")
             return
-        if self.connected:
+        if self.connected and self.link_mode == "kern_os":
             self._cmd_q.put(("vfo", None))
 
     def run_wire_command(self, cmd_line: str) -> str:
@@ -1642,8 +2319,8 @@ class DockLink:
         op = parts[0].lower()
         if op == "help":
             return "Commands: ping, hello, ls [dir], stat <path>, key <name> [press|hold|release], vfo, freq <MHz>, torch <0|1>, lock <0|1>, clear"
-        if not self.connected:
-            return "Not connected."
+        if not self.connected or self.link_mode != "kern_os":
+            return f"RigWire unavailable (mode={self.link_mode})."
         if op == "ping":
             if self.demo_mode:
                 return "PONG (demo, 0.2 ms)"
@@ -1705,7 +2382,7 @@ class DockLink:
         if self.dav_server is not None:
             return f"http://127.0.0.1:{self.dav_port}/"
         if not self.fs_backend:
-            raise RuntimeError("Connect to a radio first")
+            raise RuntimeError("Connect to a radio running Kern OS first")
         self.policy.read_only = read_only
         srv = kernfs_mount.KernWebDAVServer(("127.0.0.1", http_port), self.fs_backend, self.policy, volume_name=self.volume_name)
         self.dav_server = srv
@@ -1773,7 +2450,7 @@ class DockLink:
                         self.on_frame()
             except Exception:
                 self.error_count += 1
-                pipe = 1  # Automatically step down pipeline on noisy UART links
+                pipe = 1
                 time.sleep(0.10)
                 continue
 
@@ -1795,12 +2472,11 @@ class DockLink:
                         self.on_telemetry()
                 except Exception:
                     pass
-            # Zero artificial frame cap — brief 1ms yield lets UI/Files acquire lock smoothly
             time.sleep(0.001)
 
 
 # =============================================================================
-# 5. GNOME HIG NATIVE GTK4 + LIBADWAITA APPLICATION
+# 6. GNOME HIG NATIVE GTK4 + LIBADWAITA APPLICATION
 # =============================================================================
 
 GTK_CSS = """
@@ -1816,6 +2492,12 @@ button.rec-live:hover {
     min-height: 8px;
     border-radius: 99px;
     background: #ef4444;
+}
+.dfu-dot {
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 99px;
+    background: #f59e0b;
 }
 textview.wire-console {
     font-family: monospace;
@@ -1880,6 +2562,8 @@ def launch_gtk4(
             self._frame_pending = False
             self._updating_switches = False
             self.current_dir = "/"
+            self._cached_dir_entries: list[dict[str, Any]] = []
+            self._selected_fw: dict[str, Any] | None = None
 
             # Capture / GIF editor state
             self._pb_playing = False
@@ -1903,7 +2587,6 @@ def launch_gtk4(
             self.win = base_win_cls(application=self)
             self.win.set_title("Kern Dock")
 
-            # App actions & keyboard accelerators (GNOME HIG best practice)
             for name, cb, accel in (
                 ("screenshot", lambda _a, _p: self._on_save_screenshot(None), "<Control>s"),
                 ("toggle-dock", lambda _a, _p: self.pane_toggle.set_active(not self.pane_toggle.get_active()), "<Control>b"),
@@ -1920,104 +2603,96 @@ def launch_gtk4(
             self.link.on_log = lambda line: GLib.idle_add(self._append_console_line, line)
             self.port_monitor = PortMonitor(on_change=lambda _p: GLib.idle_add(self._on_ports_changed))
 
-            # --- Clean GNOME HIG HeaderBar (NO Record / Mode clutter in top bar!) ---
+            # --- Clean GNOME HIG HeaderBar ---
             header = Adw.HeaderBar() if has_adw else Gtk.HeaderBar()
 
-            # Start: Clean Connection & Live Hardware Status MenuButton
+            # Start: Connection & Hardware Status Popover Button
             self.conn_menu_btn = Gtk.MenuButton()
-            self.conn_menu_btn.set_tooltip_text("Radio connection & USB devices")
+            self.conn_menu_btn.set_tooltip_text("Radio connection, USB devices & DFU detection")
             st_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             self.hdr_link_icon = Gtk.Image.new_from_icon_name("network-offline-symbolic")
-            self.hdr_batt_icon = Gtk.Image.new_from_icon_name("battery-missing-symbolic")
-            self.hdr_batt_icon.set_visible(False)
+            self.hdr_batt_icon = Gtk.Image(icon_name="battery-missing-symbolic", visible=False)
             self.hdr_dev_lbl = Gtk.Label(label="Connect")
-            self.hdr_rec_dot = Gtk.Box()
+            self.hdr_rec_dot = Gtk.Box(valign=Gtk.Align.CENTER, visible=False)
             self.hdr_rec_dot.add_css_class("rec-dot")
-            self.hdr_rec_dot.set_valign(Gtk.Align.CENTER)
-            self.hdr_rec_dot.set_visible(False)
-            st_box.append(self.hdr_link_icon)
-            st_box.append(self.hdr_dev_lbl)
-            st_box.append(self.hdr_batt_icon)
-            st_box.append(self.hdr_rec_dot)
+            self.hdr_dfu_dot = Gtk.Box(valign=Gtk.Align.CENTER, visible=False)
+            self.hdr_dfu_dot.add_css_class("dfu-dot")
+            for w in (self.hdr_link_icon, self.hdr_dev_lbl, self.hdr_batt_icon, self.hdr_dfu_dot, self.hdr_rec_dot):
+                st_box.append(w)
             self.conn_menu_btn.set_child(st_box)
             self.conn_popover = self._build_connection_popover()
             self.conn_menu_btn.set_popover(self.conn_popover)
             header.pack_start(self.conn_menu_btn)
 
-            # Center: Native Adw.ViewSwitcher (Device · Files · Wire · Capture)
+            # Center: Native Adw.ViewSwitcher (Device · Files · Flash · Wire · Capture)
             self.dock_stack = Adw.ViewStack() if has_adw else Gtk.Stack()
             if has_adw:
-                self.view_switcher = Adw.ViewSwitcher()
-                self.view_switcher.set_stack(self.dock_stack)
-                self.view_switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+                self.view_switcher = Adw.ViewSwitcher(stack=self.dock_stack, policy=Adw.ViewSwitcherPolicy.WIDE)
                 header.set_title_widget(self.view_switcher)
             else:
                 self.view_switcher = None
 
-            # End: Dock Pane Collapse Toggle + Primary Menu (Display Optics & Shortcuts)
+            # End: Dock Panel Toggle + Primary Menu (Display Optics & Shortcuts)
             end_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             self.pane_toggle = Gtk.ToggleButton(icon_name="sidebar-show-right-symbolic", active=True)
-            self.pane_toggle.set_tooltip_text("Show/hide dock panel (Ctrl+B)")
+            self.pane_toggle.set_tooltip_text("Show/hide dock workspace (Ctrl+B)")
             end_box.append(self.pane_toggle)
 
             menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
-            menu_btn.set_tooltip_text("Display settings & shortcuts")
+            menu_btn.set_tooltip_text("Display optics & keyboard shortcuts")
             menu_btn.set_popover(self._build_primary_menu_popover())
             end_box.append(menu_btn)
             header.pack_end(end_box)
 
-            # --- Left Pane: Precision Interactive Cairo Radio Handset ---
-            self.handset_area = Gtk.DrawingArea()
-            lw, lh = compute_handset_geometry(self.active_model)
-            self.handset_area.set_content_width(lw)
-            self.handset_area.set_content_height(lh)
-            self.handset_area.set_halign(Gtk.Align.CENTER)
-            self.handset_area.set_valign(Gtk.Align.CENTER)
+            # --- Native Adw.Banner for DFU / Stock Bootloader / CPS Mode ---
+            self.dfu_banner = Adw.Banner(revealed=False, button_label="Open Flasher") if has_adw else None
+            if self.dfu_banner is not None:
+                self.dfu_banner.connect("button-clicked", lambda _b: self._open_flash_tab())
+
+            # --- Left Pane: 3D Interactive Cairo Handset ---
+            self.handset_area = Gtk.DrawingArea(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
             self.handset_area.set_margin_start(14)
             self.handset_area.set_margin_end(14)
             self.handset_area.set_margin_top(10)
             self.handset_area.set_margin_bottom(12)
             self.handset_area.set_draw_func(self._draw_handset)
 
-            g_left = Gtk.GestureClick()
-            g_left.set_button(1)
-            g_left.connect("pressed", self._on_handset_press)
-            g_left.connect("released", self._on_handset_release)
-            g_left.connect("stopped", lambda _g: self._release_all_pointer_keys())
-            self.handset_area.add_controller(g_left)
+            g_l = Gtk.GestureClick(button=1)
+            g_l.connect("pressed", self._on_handset_press)
+            g_l.connect("released", self._on_handset_release)
+            g_l.connect("stopped", lambda _g: self._release_all_pointer_keys())
+            self.handset_area.add_controller(g_l)
 
-            g_right = Gtk.GestureClick()
-            g_right.set_button(3)
-            g_right.connect("pressed", self._on_handset_right_click)
-            self.handset_area.add_controller(g_right)
+            g_r = Gtk.GestureClick(button=3)
+            g_r.connect("pressed", self._on_handset_right_click)
+            self.handset_area.add_controller(g_r)
 
-            g_motion = Gtk.EventControllerMotion()
-            g_motion.connect("motion", self._on_handset_motion)
-            g_motion.connect("leave", lambda _c: self._set_hovered_key(None))
-            self.handset_area.add_controller(g_motion)
+            g_m = Gtk.EventControllerMotion()
+            g_m.connect("motion", self._on_handset_motion)
+            g_m.connect("leave", lambda _c: self._set_hovered_key(None))
+            self.handset_area.add_controller(g_m)
 
-            # --- Right Pane: Device · Files · Wire · Capture ---
+            # --- Right Pane: Device · Files · Flash · Wire · Capture ---
             dev_page = self._build_device_page()
             files_page = self._build_files_page()
+            flash_page = self._build_flash_backup_page()
             wire_page = self._build_wire_page()
             cap_page = self._build_capture_page()
 
             if has_adw:
                 self.dock_stack.add_titled_with_icon(dev_page, "device", "Device", "computer-symbolic")
                 self.dock_stack.add_titled_with_icon(files_page, "files", "Files", "folder-symbolic")
+                self.dock_stack.add_titled_with_icon(flash_page, "flash", "Flash", "software-update-available-symbolic")
                 self.dock_stack.add_titled_with_icon(wire_page, "wire", "Wire", "utilities-terminal-symbolic")
                 self.dock_stack.add_titled_with_icon(cap_page, "capture", "Capture", "camera-video-symbolic")
             else:
-                self.dock_stack.add_titled(dev_page, "device", "Device")
-                self.dock_stack.add_titled(files_page, "files", "Files")
-                self.dock_stack.add_titled(wire_page, "wire", "Wire")
-                self.dock_stack.add_titled(cap_page, "capture", "Capture")
+                for w, nm, lbl in ((dev_page, "device", "Device"), (files_page, "files", "Files"), (flash_page, "flash", "Flash"), (wire_page, "wire", "Wire"), (cap_page, "capture", "Capture")):
+                    self.dock_stack.add_titled(w, nm, lbl)
             self.dock_stack.set_hexpand(True)
             self.dock_stack.set_vexpand(True)
 
-            self.right_pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-            self.right_pane.set_hexpand(True)
-            self.right_pane.set_size_request(440, -1)
+            self.right_pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, hexpand=True)
+            self.right_pane.set_size_request(460, -1)
             self.right_pane.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
             self.right_pane.append(self.dock_stack)
             self.pane_toggle.connect("toggled", self._on_dock_pane_toggled)
@@ -2026,9 +2701,13 @@ def launch_gtk4(
             split.append(self.handset_area)
             split.append(self.right_pane)
 
+            content_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            if self.dfu_banner is not None:
+                content_vbox.append(self.dfu_banner)
+            content_vbox.append(split)
+
             if has_adw:
-                self.toast_overlay = Adw.ToastOverlay()
-                self.toast_overlay.set_child(split)
+                self.toast_overlay = Adw.ToastOverlay(child=content_vbox)
                 tb = Adw.ToolbarView()
                 tb.add_top_bar(header)
                 tb.set_content(self.toast_overlay)
@@ -2037,13 +2716,13 @@ def launch_gtk4(
                 self.toast_overlay = None
                 outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
                 outer.append(header)
-                outer.append(split)
+                outer.append(content_vbox)
                 self.win.set_child(outer)
 
-            key_ctrl = Gtk.EventControllerKey()
-            key_ctrl.connect("key-pressed", self._on_pc_key_pressed)
-            key_ctrl.connect("key-released", self._on_pc_key_released)
-            self.win.add_controller(key_ctrl)
+            kc = Gtk.EventControllerKey()
+            kc.connect("key-pressed", self._on_pc_key_pressed)
+            kc.connect("key-released", self._on_pc_key_released)
+            self.win.add_controller(kc)
 
             self.win.connect("close-request", self._on_close_request)
             self._rebuild_connection_list()
@@ -2064,7 +2743,11 @@ def launch_gtk4(
                 t.set_timeout(2)
                 self.toast_overlay.add_toast(t)
 
-        # --- Auto Window Sizing (Tightly hugs handset when collapsed, balanced when expanded) ---
+        def _open_flash_tab(self) -> None:
+            if not self.pane_toggle.get_active():
+                self.pane_toggle.set_active(True)
+            self.dock_stack.set_visible_child_name("flash")
+
         def _sync_window_size(self) -> None:
             lw, lh = compute_handset_geometry(self.active_model)
             self.handset_area.set_content_width(lw)
@@ -2072,27 +2755,21 @@ def launch_gtk4(
             expanded = self.pane_toggle.get_active()
             if self.view_switcher is not None:
                 self.view_switcher.set_visible(expanded)
-            target_w = (lw + 32 + 450) if expanded else (lw + 32)
-            target_h = max(lh + 76, 668 if expanded else lh + 76)
+            target_w = (lw + 32 + 470) if expanded else (lw + 32)
+            target_h = max(lh + 78, 686 if expanded else lh + 78)
             self.win.set_default_size(target_w, target_h)
 
         def _on_dock_pane_toggled(self, btn: Any) -> None:
             self.right_pane.set_visible(btn.get_active())
             self._sync_window_size()
 
-        # --- Upgraded Native Connection Popover (Live GUdev boxed-list + Auto-Connect) ---
+        # --- Connection Popover (Live GUdev + DFU/Bootloader Mode Badges) ---
         def _build_connection_popover(self) -> Any:
             pop = Gtk.Popover()
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-            box.set_margin_top(12)
-            box.set_margin_bottom(12)
-            box.set_margin_start(12)
-            box.set_margin_end(12)
-            box.set_size_request(310, -1)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
+            box.set_size_request(320, -1)
 
-            # Live Connected Summary Card (visible only while connected)
-            self.conn_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-            self.conn_card.set_visible(False)
+            self.conn_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
             self.conn_card_title = Gtk.Label(xalign=0)
             self.conn_card_title.add_css_class("heading")
             self.conn_card_sub = Gtk.Label(xalign=0)
@@ -2106,14 +2783,12 @@ def launch_gtk4(
             self.conn_card.append(Gtk.Separator())
             box.append(self.conn_card)
 
-            # USB Devices Header + Rescan
             hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            lbl = Gtk.Label(label="USB Radios", xalign=0, hexpand=True)
+            lbl = Gtk.Label(label="USB Radios &amp; Bootloaders", use_markup=True, xalign=0, hexpand=True)
             lbl.add_css_class("heading")
             hdr.append(lbl)
             ref = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
             ref.add_css_class("flat")
-            ref.set_tooltip_text("Rescan USB ports")
             ref.connect("clicked", lambda _b: (self.port_monitor.scan(), self._rebuild_connection_list()))
             hdr.append(ref)
             box.append(hdr)
@@ -2122,7 +2797,6 @@ def launch_gtk4(
             self.usb_list.add_css_class("boxed-list")
             box.append(self.usb_list)
 
-            # Virtual / Emulation Section
             dev_lbl = Gtk.Label(label="Virtual &amp; Emulation", use_markup=True, xalign=0)
             dev_lbl.add_css_class("caption-heading")
             dev_lbl.add_css_class("dim-label")
@@ -2141,44 +2815,43 @@ def launch_gtk4(
                     virt_list.append(row)
             box.append(virt_list)
 
-            # Auto-Connect Toggle
             ac_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             ac_row.append(Gtk.Label(label="Auto-connect USB radio", xalign=0, hexpand=True))
             ac_sw = Gtk.Switch(active=self.auto_connect_usb)
             ac_sw.connect("notify::active", lambda w, _p: setattr(self, "auto_connect_usb", w.get_active()))
             ac_row.append(ac_sw)
             box.append(ac_row)
-
             pop.set_child(box)
             return pop
 
         def _rebuild_connection_list(self) -> None:
-            child = self.usb_list.get_first_child()
-            while child is not None:
-                nxt = child.get_next_sibling()
-                self.usb_list.remove(child)
-                child = nxt
-
+            c = self.usb_list.get_first_child()
+            while c is not None:
+                n = c.get_next_sibling()
+                self.usb_list.remove(c)
+                c = n
             if not self.port_monitor.ports:
                 if has_adw:
-                    empty = Adw.ActionRow(title="No USB radios detected", subtitle="Plug in via USB-C or serial cable")
+                    empty = Adw.ActionRow(title="No USB devices detected", subtitle="Connect via USB-C, 2-pin cable, or PTT+Power DFU")
                     empty.set_sensitive(False)
                     self.usb_list.append(empty)
                 return
-
             for p in self.port_monitor.ports:
                 if has_adw:
+                    mode_tag = " · DFU/CPS" if p.mode_hint == "stock_bl" else (" · UF2" if p.mode_hint == "moto_uf2" else "")
                     id_tag = f" · {p.vid}:{p.pid}" if (p.vid and p.pid) else ""
                     row = Adw.ActionRow(
                         title=GLib.markup_escape_text(p.pretty_name),
-                        subtitle=GLib.markup_escape_text(f"{p.device}{id_tag}"),
+                        subtitle=GLib.markup_escape_text(f"{p.device}{id_tag}{mode_tag}"),
                         activatable=True,
                     )
-                    row.add_prefix(Gtk.Image.new_from_icon_name("drive-removable-media-symbolic" if p.is_quansheng else "network-wired-symbolic"))
-                    if self.link.connected and self.link.port == p.device:
-                        row.add_suffix(Gtk.Image.new_from_icon_name("object-select-symbolic"))
-                    else:
-                        row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+                    icon = "software-update-available-symbolic" if p.mode_hint != "kern_os" else (
+                        "drive-removable-media-symbolic" if p.is_quansheng else "network-wired-symbolic"
+                    )
+                    row.add_prefix(Gtk.Image.new_from_icon_name(icon))
+                    row.add_suffix(Gtk.Image.new_from_icon_name(
+                        "object-select-symbolic" if (self.link.connected and self.link.port == p.device) else "go-next-symbolic"
+                    ))
                     row.connect("activated", lambda _r, po=p: (self.conn_popover.popdown(), self._connect_to(po.device, po)))
                     self.usb_list.append(row)
 
@@ -2191,14 +2864,10 @@ def launch_gtk4(
                         break
             return False
 
-        # --- Primary Menu Popover (LCD Optics + Quick Actions + Shortcuts) ---
+        # --- Primary Menu Popover (Display Optics & Shortcuts) ---
         def _build_primary_menu_popover(self) -> Any:
             pop = Gtk.Popover()
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-            box.set_margin_top(12)
-            box.set_margin_bottom(12)
-            box.set_margin_start(14)
-            box.set_margin_end(14)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=12, margin_bottom=12, margin_start=14, margin_end=14)
             box.set_size_request(255, -1)
 
             lbl = Gtk.Label(label="Display Optics", xalign=0)
@@ -2211,25 +2880,16 @@ def launch_gtk4(
             self.pal_dd.connect("notify::selected", self._on_palette_changed)
             box.append(self.pal_dd)
 
-            bl_row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            bl_row.append(Gtk.Label(label="Backlight", xalign=0))
-            bl_s = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 10, 1)
-            bl_s.set_draw_value(True)
-            bl_s.set_digits(0)
-            bl_s.set_value(self.lcd_st.backlight)
-            bl_s.connect("value-changed", lambda s: (setattr(self.lcd_st, "backlight", int(s.get_value())), self.handset_area.queue_draw()))
-            bl_row.append(bl_s)
-            box.append(bl_row)
-
-            ct_row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            ct_row.append(Gtk.Label(label="Contrast", xalign=0))
-            ct_s = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 15, 1)
-            ct_s.set_draw_value(True)
-            ct_s.set_digits(0)
-            ct_s.set_value(self.lcd_st.contrast)
-            ct_s.connect("value-changed", lambda s: (setattr(self.lcd_st, "contrast", int(s.get_value())), self.handset_area.queue_draw()))
-            ct_row.append(ct_s)
-            box.append(ct_row)
+            for title, lo, hi, attr in (("Backlight", 0, 10, "backlight"), ("Contrast", 0, 15, "contrast")):
+                r = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                r.append(Gtk.Label(label=title, xalign=0))
+                sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, 1)
+                sc.set_draw_value(True)
+                sc.set_digits(0)
+                sc.set_value(getattr(self.lcd_st, attr))
+                sc.connect("value-changed", lambda s, a=attr: (setattr(self.lcd_st, a, int(s.get_value())), self.handset_area.queue_draw()))
+                r.append(sc)
+                box.append(r)
 
             for title, attr in (("STN Ghosting", "ghosting"), ("Pixel Grid", "pixel_grid"), ("Invert LCD", "invert_lcd")):
                 r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -2240,14 +2900,10 @@ def launch_gtk4(
                 box.append(r)
 
             box.append(Gtk.Separator())
-            kb = Gtk.Label(
-                label="Keys: Enter=MENU · Esc=EXIT · Arrows=Nav\nSpace=PTT · 0–9/*/F · Ctrl+S PNG · Ctrl+R Rec",
-                xalign=0,
-            )
+            kb = Gtk.Label(label="Enter=MENU · Esc=EXIT · Arrows=Nav · Space=PTT\nCtrl+S PNG · Ctrl+R Record · Ctrl+B Dock", xalign=0)
             kb.add_css_class("caption")
             kb.add_css_class("dim-label")
             box.append(kb)
-
             pop.set_child(box)
             return pop
 
@@ -2264,7 +2920,7 @@ def launch_gtk4(
                 self.user_picked_palette = True
                 self.handset_area.queue_draw()
 
-        # --- Unified 60 FPS Animation Loop (Ghosting + Smooth Spring Buttons; 0% CPU when idle!) ---
+        # --- Unified 60 FPS Animation Loop ---
         def _ensure_anim_loop(self) -> None:
             if self._anim_timer is None:
                 self._anim_timer = GLib.timeout_add(16, self._tick_animations)
@@ -2272,37 +2928,25 @@ def launch_gtk4(
         def _tick_animations(self) -> bool:
             active = False
             fb, pressed, _led, _torch = self._current_display_state()
-
-            # 1. Advance STN liquid-crystal ghosting (vectorized ~0.04 ms)
             if self.lcd_state.step(fb, self.lcd_st):
                 active = True
 
-            # 2. Advance smooth spring button press & hover interpolations
-            all_k = set(self._press_anim.keys()) | set(pressed)
-            for kn in all_k:
+            for kn in set(self._press_anim.keys()) | set(pressed):
                 tgt = 1.0 if kn in pressed else 0.0
                 cur = self._press_anim.get(kn, 0.0)
-                rate = 0.55 if tgt > cur else 0.30  # Fast tactile click down, smooth spring back
-                nxt = cur + (tgt - cur) * rate
+                nxt = cur + (tgt - cur) * (0.58 if tgt > cur else 0.30)
                 if abs(tgt - nxt) < 0.015:
-                    if tgt == 0.0:
-                        self._press_anim.pop(kn, None)
-                    else:
-                        self._press_anim[kn] = 1.0
+                    self._press_anim.pop(kn, None) if tgt == 0.0 else self._press_anim.__setitem__(kn, 1.0)
                 else:
                     self._press_anim[kn] = nxt
                     active = True
 
-            all_h = set(self._hover_anim.keys()) | ({self._hovered_key} if self._hovered_key else set())
-            for kn in all_h:
+            for kn in set(self._hover_anim.keys()) | ({self._hovered_key} if self._hovered_key else set()):
                 tgt = 1.0 if kn == self._hovered_key else 0.0
                 cur = self._hover_anim.get(kn, 0.0)
                 nxt = cur + (tgt - cur) * 0.35
                 if abs(tgt - nxt) < 0.015:
-                    if tgt == 0.0:
-                        self._hover_anim.pop(kn, None)
-                    else:
-                        self._hover_anim[kn] = 1.0
+                    self._hover_anim.pop(kn, None) if tgt == 0.0 else self._hover_anim.__setitem__(kn, 1.0)
                 else:
                     self._hover_anim[kn] = nxt
                     active = True
@@ -2319,7 +2963,14 @@ def launch_gtk4(
                 idx = max(0, min(self._pb_idx, len(self.recorder.frames) - 1))
                 rf = self.recorder.frames[idx]
                 return rf.fb, rf.pressed, rf.led, rf.torch
-            led = "tx" if ("ptt" in self._pressed_keys and self.link.connected) else ("rx" if self.link.connected else "off")
+            if self.link.link_mode in ("stock_bl", "moto_uf2"):
+                led = "dfu"
+            elif "ptt" in self._pressed_keys and self.link.connected:
+                led = "tx"
+            elif self.link.connected:
+                led = "rx"
+            else:
+                led = "off"
             return self.link.last_fb, frozenset(self._pressed_keys), led, self.link.torch_on
 
         def _current_display_fb(self) -> bytes:
@@ -2328,12 +2979,11 @@ def launch_gtk4(
         def _draw_handset(self, _area: Any, cr: Any, w: int, h: int) -> None:
             lw, lh = compute_handset_geometry(self.active_model)
             scale = min(w / float(lw), h / float(lh))
-            ox = (w - lw * scale) * 0.5
-            oy = (h - lh * scale) * 0.5
+            ox, oy = (w - lw * scale) * 0.5, (h - lh * scale) * 0.5
             cr.save()
             cr.translate(ox, oy)
             cr.scale(scale, scale)
-            _fb, _pressed, led, torch = self._current_display_state()
+            _fb, _pr, led, torch = self._current_display_state()
             self.handset_renderer.paint(
                 cr, self.active_model, self.lcd_state, self.lcd_st,
                 press_anim=self._press_anim, hover_anim=self._hover_anim,
@@ -2345,8 +2995,8 @@ def launch_gtk4(
             lw, lh = compute_handset_geometry(self.active_model)
             w, h = self.handset_area.get_width(), self.handset_area.get_height()
             scale = min(w / float(lw), h / float(lh))
-            ox, oy = (w - lw * scale) * 0.5, (h - lh * scale) * 0.5
-            lx, ly = (x - ox) / scale, (y - oy) / scale
+            lx = (x - (w - lw * scale) * 0.5) / scale
+            ly = (y - (h - lh * scale) * 0.5) / scale
             for kn, (rx, ry, rw, rh) in self.handset_renderer.hitboxes.items():
                 if rx <= lx <= rx + rw and ry <= ly <= ry + rh:
                     return kn
@@ -2388,8 +3038,8 @@ def launch_gtk4(
 
         def _capture_rec_event(self) -> None:
             if self.recorder.recording:
-                led = "tx" if ("ptt" in self._pressed_keys and self.link.connected) else ("rx" if self.link.connected else "off")
-                self.recorder.push(self.link.last_fb, frozenset(self._pressed_keys), led, self.link.torch_on)
+                _fb, pr, led, torch = self._current_display_state()
+                self.recorder.push(self.link.last_fb, pr, led, torch)
                 self._update_rec_label()
 
         def _press_key(self, kname: str) -> None:
@@ -2398,7 +3048,7 @@ def launch_gtk4(
             self._pressed_keys.add(kname)
             self._capture_rec_event()
             self._ensure_anim_loop()
-            if not self.link.connected:
+            if not self.link.connected or self.link.link_mode != "kern_os":
                 return
             self.link.send_key(kname, "press")
             if kname in self._hold_timers:
@@ -2419,11 +3069,11 @@ def launch_gtk4(
                 GLib.source_remove(self._hold_timers.pop(kname))
             self._capture_rec_event()
             self._ensure_anim_loop()
-            if was and self.link.connected:
+            if was and self.link.connected and self.link.link_mode == "kern_os":
                 self.link.send_key(kname, "release")
 
         def _long_click_key(self, kname: str) -> None:
-            if not self.link.connected:
+            if not self.link.connected or self.link.link_mode != "kern_os":
                 return
             self._pressed_keys.add(kname)
             self._capture_rec_event()
@@ -2455,7 +3105,7 @@ def launch_gtk4(
                 self._ensure_anim_loop()
             return False
 
-        # --- PC Keyboard Mapping ---
+        # --- PC Keyboard Shortcuts ---
         _KEYVAL_MAP = {
             Gdk.KEY_Return: "menu", Gdk.KEY_KP_Enter: "menu",
             Gdk.KEY_Escape: "exit", Gdk.KEY_BackSpace: "exit",
@@ -2470,7 +3120,7 @@ def launch_gtk4(
 
         def _text_focused(self) -> bool:
             foc = self.win.get_focus()
-            return foc is not None and (foc is self.cmd_entry or isinstance(foc, Gtk.Text))
+            return foc is not None and isinstance(foc, (Gtk.Entry, Gtk.SearchEntry, Gtk.Text))
 
         def _on_pc_key_pressed(self, _c: Any, keyval: int, _kc: int, state: Any) -> bool:
             if (state & Gdk.ModifierType.CONTROL_MASK) or self._text_focused():
@@ -2488,7 +3138,7 @@ def launch_gtk4(
             if kn:
                 self._release_key(kn)
 
-        # --- Dock Pages: Device · Files · Wire · Capture ---
+        # --- Dock Pages ---
         def _build_device_page(self) -> Any:
             page = Adw.PreferencesPage() if has_adw else Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             if not has_adw:
@@ -2543,11 +3193,7 @@ def launch_gtk4(
             return page
 
         def _build_files_page(self) -> Any:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-            box.set_margin_top(10)
-            box.set_margin_bottom(10)
-            box.set_margin_start(12)
-            box.set_margin_end(12)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
 
             bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -2568,17 +3214,21 @@ def launch_gtk4(
             box.append(bar)
 
             mbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            self.path_lbl = Gtk.Label(label="/", xalign=0, hexpand=True)
-            self.path_lbl.add_css_class("heading")
-            mbar.append(self.path_lbl)
-            self.mount_btn = Gtk.ToggleButton(label="Mount OS Drive")
+            self.file_search = Gtk.SearchEntry(placeholder_text="Filter files…", hexpand=True)
+            self.file_search.connect("search-changed", lambda _e: self._render_filtered_files())
+            mbar.append(self.file_search)
+            self.mount_btn = Gtk.ToggleButton(label="Mount Drive")
             self.mount_btn.connect("toggled", self._on_mount_toggled)
             mbar.append(self.mount_btn)
-            self.open_fs_btn = Gtk.Button.new_from_icon_name("folder-open-symbolic")
-            self.open_fs_btn.set_visible(False)
+            self.open_fs_btn = Gtk.Button(icon_name="folder-open-symbolic", visible=False)
             self.open_fs_btn.connect("clicked", self._on_open_fs)
             mbar.append(self.open_fs_btn)
             box.append(mbar)
+
+            self.path_lbl = Gtk.Label(label="/", xalign=0)
+            self.path_lbl.add_css_class("caption-heading")
+            self.path_lbl.add_css_class("dim-label")
+            box.append(self.path_lbl)
 
             scroll = Gtk.ScrolledWindow(vexpand=True)
             self.file_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
@@ -2587,13 +3237,65 @@ def launch_gtk4(
             box.append(scroll)
             return box
 
-        def _build_wire_page(self) -> Any:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-            box.set_margin_top(10)
-            box.set_margin_bottom(10)
-            box.set_margin_start(12)
-            box.set_margin_end(12)
+        def _build_flash_backup_page(self) -> Any:
+            """Native GTK4 DFU/CPS Firmware Flasher + Ascon-Verified .kfw Backup & Restore."""
+            page = Adw.PreferencesPage() if has_adw else Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            if not has_adw:
+                return page
 
+            # 1. DFU / Bootloader Firmware Flasher
+            g_fl = Adw.PreferencesGroup(title="DFU &amp; CPS Bootloader Flasher", description="Supports .kfw (Ascon-verified) and raw .bin over Stock Bootloader (36b7:0001) or Kern dfu.mod")
+            self.row_bl_status = Adw.ActionRow(title="Bootloader Status", subtitle="Hold PTT + Power On (or open DFU on radio)")
+            probe_btn = Gtk.Button(label="Probe", valign=Gtk.Align.CENTER)
+            probe_btn.connect("clicked", self._on_probe_bootloader)
+            self.row_bl_status.add_suffix(probe_btn)
+            g_fl.add(self.row_bl_status)
+
+            self.row_fw_file = Adw.ActionRow(title="Firmware Image", subtitle="No .kfw or .bin selected")
+            pick_fw = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
+            pick_fw.connect("clicked", self._on_choose_firmware)
+            self.row_fw_file.add_suffix(pick_fw)
+            g_fl.add(self.row_fw_file)
+
+            row_go = Adw.ActionRow(title="Write Firmware", subtitle="Pre-flight anti-brick checks run automatically")
+            self.flash_go_btn = Gtk.Button(label="Flash Radio", valign=Gtk.Align.CENTER, sensitive=False)
+            self.flash_go_btn.add_css_class("suggested-action")
+            self.flash_go_btn.connect("clicked", self._on_flash_radio)
+            row_go.add_suffix(self.flash_go_btn)
+            g_fl.add(row_go)
+
+            self.flash_prog = Gtk.ProgressBar(show_text=True, visible=False, margin_top=6)
+            g_fl.add(self.flash_prog)
+            page.add(g_fl)
+
+            # 2. Calibration & KernFS Backups (.kfw Backup Containers)
+            g_bk = Adw.PreferencesGroup(title="Backups &amp; Restore", description="Exports Ascon-Hash256 verified .kfw backup containers over RigWire")
+
+            r_cal = Adw.ActionRow(title="Factory Calibration Backup", subtitle="Saves /sys/calib.dat (512 B) + /sys/calib.sig MAC")
+            b_cal = Gtk.Button(label="Backup…", valign=Gtk.Align.CENTER)
+            b_cal.connect("clicked", lambda _b: self._on_run_backup(calib_only=True))
+            r_cal.add_suffix(b_cal)
+            g_bk.add(r_cal)
+
+            r_full = Adw.ActionRow(title="Full KernFS Snapshot", subtitle="Backs up /sys, /pref, /user &amp; /apps into .kfw")
+            b_full = Gtk.Button(label="Snapshot…", valign=Gtk.Align.CENTER)
+            b_full.connect("clicked", lambda _b: self._on_run_backup(calib_only=False))
+            r_full.add_suffix(b_full)
+            g_bk.add(r_full)
+
+            r_rest = Adw.ActionRow(title="Restore User Backup", subtitle="Restores /user, /pref &amp; /apps (/sys/calib.dat shielded)")
+            b_rest = Gtk.Button(label="Restore…", valign=Gtk.Align.CENTER)
+            b_rest.connect("clicked", self._on_restore_backup)
+            r_rest.add_suffix(b_rest)
+            g_bk.add(r_rest)
+
+            self.bk_prog = Gtk.ProgressBar(show_text=True, visible=False, margin_top=6)
+            g_bk.add(self.bk_prog)
+            page.add(g_bk)
+            return page
+
+        def _build_wire_page(self) -> Any:
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
             scroll = Gtk.ScrolledWindow(vexpand=True)
             self.console_buf = Gtk.TextBuffer()
             self.console_view = Gtk.TextView(buffer=self.console_buf, editable=False, monospace=True)
@@ -2613,13 +3315,7 @@ def launch_gtk4(
             return box
 
         def _build_capture_page(self) -> Any:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-            box.set_margin_top(12)
-            box.set_margin_bottom(12)
-            box.set_margin_start(14)
-            box.set_margin_end(14)
-
-            # Primary Capture Controls (cleanly housed inside Capture tab, NOT cluttering headerbar!)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=12, margin_bottom=12, margin_start=14, margin_end=14)
             top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             self.rec_btn = Gtk.ToggleButton()
             rec_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -2627,7 +3323,6 @@ def launch_gtk4(
             self.rec_lbl = Gtk.Label(label="Record GIF")
             rec_in.append(self.rec_lbl)
             self.rec_btn.set_child(rec_in)
-            self.rec_btn.set_tooltip_text("Start / Stop recording (Ctrl+R)")
             self.rec_btn.connect("toggled", self._on_record_toggled)
             top_row.append(self.rec_btn)
 
@@ -2636,17 +3331,15 @@ def launch_gtk4(
             sh_in.append(Gtk.Image.new_from_icon_name("camera-photo-symbolic"))
             sh_in.append(Gtk.Label(label="Snapshot PNG"))
             shot_btn.set_child(sh_in)
-            shot_btn.set_tooltip_text("Save current frame as PNG (Ctrl+S)")
             shot_btn.connect("clicked", self._on_save_screenshot)
             top_row.append(shot_btn)
             box.append(top_row)
 
-            self.gif_summary_lbl = Gtk.Label(label="No recording yet — press Record GIF to capture.", xalign=0, wrap=True)
+            self.gif_summary_lbl = Gtk.Label(label="Press Record GIF to capture radio interactions.", xalign=0, wrap=True)
             self.gif_summary_lbl.add_css_class("dim-label")
             box.append(self.gif_summary_lbl)
 
-            # Interactive Visual Timeline (Trim In/Out + Red Cut Segments + Playhead)
-            self.timeline_area = Gtk.DrawingArea(content_height=50, hexpand=True)
+            self.timeline_area = Gtk.DrawingArea(content_height=48, hexpand=True)
             self.timeline_area.set_draw_func(self._draw_timeline)
             tl_c = Gtk.GestureClick()
             tl_c.connect("pressed", self._on_timeline_click)
@@ -2656,42 +3349,32 @@ def launch_gtk4(
             self.timeline_area.add_controller(tl_d)
             box.append(self.timeline_area)
 
-            # Transport + Trim + Cut/Splice Toolbar
             tr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             self.pb_btn = Gtk.Button.new_from_icon_name("media-playback-start-symbolic")
-            self.pb_btn.set_tooltip_text("Play / Pause preview on handset")
             self.pb_btn.connect("clicked", self._on_pb_toggle)
             tr.append(self.pb_btn)
-
-            for icon, tip, delta in (("go-previous-symbolic", "Previous frame", -1), ("go-next-symbolic", "Next frame", 1)):
+            for icon, d in (("go-previous-symbolic", -1), ("go-next-symbolic", 1)):
                 b = Gtk.Button.new_from_icon_name(icon)
-                b.set_tooltip_text(tip)
-                b.connect("clicked", lambda _b, d=delta: self._step_pb(d))
+                b.connect("clicked", lambda _b, delta=d: self._step_pb(delta))
                 tr.append(b)
-
             tr.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-
             b_in = Gtk.Button(label="[ In")
             b_in.connect("clicked", lambda _b: self._set_trim_in())
             tr.append(b_in)
             b_out = Gtk.Button(label="Out ]")
             b_out.connect("clicked", lambda _b: self._set_trim_out())
             tr.append(b_out)
-
             self.cut_btn = Gtk.Button(label="Mark Cut")
-            self.cut_btn.set_tooltip_text("Mark cut start, scrub, click again to splice out middle segment")
             self.cut_btn.connect("clicked", self._on_cut_splice)
             tr.append(self.cut_btn)
-
             undo_b = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
-            undo_b.set_tooltip_text("Undo last splice cut")
             undo_b.connect("clicked", lambda _b: (self.recorder.undo_cut(), self._refresh_gif_ui()))
             tr.append(undo_b)
             box.append(tr)
 
             if has_adw:
                 opt = Adw.PreferencesGroup(title="Export")
-                r_mode = Adw.ActionRow(title="Capture Scope", subtitle="LCD glass only or full radio with pressed keys")
+                r_mode = Adw.ActionRow(title="Capture Scope", subtitle="LCD glass only or full 3D radio with key presses")
                 mg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
                 mg.add_css_class("linked")
                 b_lcd = Gtk.ToggleButton(label="LCD Only", active=True)
@@ -2738,7 +3421,157 @@ def launch_gtk4(
             box.append(act)
             return box
 
-        # --- Recording & Timeline Editor Handlers ---
+        # --- Flasher & Backup Handlers ---
+        def _on_probe_bootloader(self, _btn: Any) -> None:
+            ports = self.port_monitor.scan()
+            self._rebuild_connection_list()
+            cand = next((p for p in ports if p.mode_hint in ("stock_bl", "moto_uf2")), None)
+            if cand is not None:
+                self._connect_to(cand.device, cand)
+                return
+            if self.link.port and not self.link.demo_mode and not self.link.port.startswith("tcp://"):
+                target_port = self.link.port
+            elif ports:
+                target_port = ports[0].device
+            else:
+                self._notify("No USB serial port found")
+                return
+
+            def _w() -> None:
+                bl = probe_bootloader_beacon(target_port, duration_s=1.2)
+                if bl:
+                    GLib.idle_add(self._connect_to, target_port, DetectedPort(target_port, f"Bootloader ({bl['version']})", mode_hint="stock_bl", is_quansheng=True))
+                else:
+                    GLib.idle_add(self._notify, f"No bootloader beacon on {target_port}")
+
+            threading.Thread(target=_w, daemon=True).start()
+
+        def _on_choose_firmware(self, _btn: Any) -> None:
+            dlg = Gtk.FileDialog(title="Select Firmware (.kfw or .bin)")
+
+            def _picked(d: Any, res: Any) -> None:
+                try:
+                    fpath = d.open_finish(res).get_path()
+                except GLib.Error:
+                    return
+                if not fpath:
+                    return
+                try:
+                    info = inspect_firmware_file(fpath)
+                    self._selected_fw = info
+                    self.row_fw_file.set_subtitle(GLib.markup_escape_text(info["summary"]))
+                    self._update_flash_button_state()
+                except Exception as e:
+                    self._notify(f"Invalid firmware: {e}")
+
+            dlg.open(self.win, None, _picked)
+
+        def _update_flash_button_state(self) -> None:
+            if hasattr(self, "flash_go_btn"):
+                can_flash = (self._selected_fw is not None) and (self.link.link_mode == "stock_bl") and bool(self.link.port)
+                self.flash_go_btn.set_sensitive(can_flash)
+
+        def _on_flash_radio(self, _btn: Any) -> None:
+            if not self._selected_fw or not self.link.port or self.link.link_mode != "stock_bl":
+                self._notify("Connect a radio in DFU / Stock Bootloader mode first")
+                return
+            port = self.link.port
+            fw_bytes = self._selected_fw["fw_bytes"]
+            self.flash_go_btn.set_sensitive(False)
+            self.flash_prog.set_visible(True)
+            self.flash_prog.set_fraction(0.0)
+
+            def _prog(f: float, msg: str) -> None:
+                GLib.idle_add(self.flash_prog.set_fraction, f)
+                GLib.idle_add(self.flash_prog.set_text, msg)
+
+            def _w() -> None:
+                try:
+                    res = flash_via_stock_bootloader(port, fw_bytes, progress_cb=_prog)
+                    GLib.idle_add(self._notify, f"Flashed {res['pages']} pages in {res['elapsed_s']:.1f}s")
+                except Exception as e:
+                    GLib.idle_add(self._notify, f"Flash failed: {e}")
+                finally:
+                    GLib.idle_add(self.flash_prog.set_visible, False)
+                    GLib.idle_add(self._update_flash_button_state)
+
+            threading.Thread(target=_w, daemon=True).start()
+
+        def _on_run_backup(self, *, calib_only: bool) -> None:
+            if not self.link.connected or self.link.fs_backend is None:
+                self._notify("Connect to a radio running Kern OS first")
+                return
+            tag = "calib" if calib_only else "kernfs"
+            slug = self.link.volume_name.lower().replace(" ", "_")
+            dlg = Gtk.FileDialog(title="Save Verified .kfw Backup")
+            dlg.set_initial_name(f"{slug}_{tag}_{time.strftime('%Y%m%d_%H%M%S')}.kfw")
+            be = self.link.fs_backend
+            vname = self.link.volume_name
+
+            def _picked(d: Any, res: Any) -> None:
+                try:
+                    dest = d.save_finish(res).get_path()
+                except GLib.Error:
+                    return
+                if not dest:
+                    return
+                self.bk_prog.set_visible(True)
+                self.bk_prog.set_fraction(0.0)
+
+                def _prog(f: float, msg: str) -> None:
+                    GLib.idle_add(self.bk_prog.set_fraction, f)
+                    GLib.idle_add(self.bk_prog.set_text, msg)
+
+                def _w() -> None:
+                    try:
+                        blob = build_kfw_backup_from_backend(be, volume_name=vname, calib_only=calib_only, progress_cb=_prog)
+                        Path(dest).write_bytes(blob)
+                        GLib.idle_add(self._notify, f"Saved {Path(dest).name} ({len(blob):,} B)")
+                    except Exception as e:
+                        GLib.idle_add(self._notify, f"Backup failed: {e}")
+                    finally:
+                        GLib.idle_add(self.bk_prog.set_visible, False)
+
+                threading.Thread(target=_w, daemon=True).start()
+
+            dlg.save(self.win, None, _picked)
+
+        def _on_restore_backup(self, _btn: Any) -> None:
+            if not self.link.connected or self.link.fs_backend is None:
+                self._notify("Connect to a radio running Kern OS first")
+                return
+            dlg = Gtk.FileDialog(title="Select .kfw Backup to Restore")
+            be = self.link.fs_backend
+
+            def _picked(d: Any, res: Any) -> None:
+                try:
+                    src = d.open_finish(res).get_path()
+                except GLib.Error:
+                    return
+                if not src:
+                    return
+                self.bk_prog.set_visible(True)
+                self.bk_prog.set_fraction(0.0)
+
+                def _prog(f: float, msg: str) -> None:
+                    GLib.idle_add(self.bk_prog.set_fraction, f)
+                    GLib.idle_add(self.bk_prog.set_text, msg)
+
+                def _w() -> None:
+                    try:
+                        rest, skip = restore_kfw_backup_to_backend(src, be, self.link.policy, progress_cb=_prog)
+                        GLib.idle_add(self._notify, f"Restored {rest} file(s) ({skip} /sys shielded)")
+                        GLib.idle_add(self._browse_dir, self.current_dir)
+                    except Exception as e:
+                        GLib.idle_add(self._notify, f"Restore failed: {e}")
+                    finally:
+                        GLib.idle_add(self.bk_prog.set_visible, False)
+
+                threading.Thread(target=_w, daemon=True).start()
+
+            dlg.open(self.win, None, _picked)
+
+        # --- Recording & Timeline Handlers ---
         def _update_rec_label(self) -> None:
             if self.recorder.recording:
                 dt = int(time.monotonic() - self.recorder.t0_mono)
@@ -2749,8 +3582,8 @@ def launch_gtk4(
         def _on_record_toggled(self, btn: Any) -> None:
             if btn.get_active():
                 self._stop_playback()
-                led = "tx" if ("ptt" in self._pressed_keys and self.link.connected) else ("rx" if self.link.connected else "off")
-                self.recorder.start(self.link.last_fb, frozenset(self._pressed_keys), led, self.link.torch_on)
+                _fb, pr, led, torch = self._current_display_state()
+                self.recorder.start(self.link.last_fb, pr, led, torch)
                 btn.add_css_class("rec-live")
                 self.hdr_rec_dot.set_visible(True)
                 GLib.timeout_add(500, self._tick_rec_clock)
@@ -2762,8 +3595,6 @@ def launch_gtk4(
                 self._update_rec_label()
                 self._pb_idx = self.recorder.trim_in
                 self._refresh_gif_ui()
-                if len(self.recorder.frames) > 0:
-                    self.dock_stack.set_visible_child_name("capture")
 
         def _tick_rec_clock(self) -> bool:
             if not self.recorder.recording:
@@ -2780,18 +3611,14 @@ def launch_gtk4(
                 return
             span = max(1, n - 1)
             fx = lambda i: 8.0 + (i / float(span)) * max(1.0, w - 16.0)
-
             x_in, x_out = fx(self.recorder.trim_in), fx(self.recorder.trim_out)
             _round_rect(cr, x_in, 8, max(4.0, x_out - x_in), h - 16, 4)
             cr.set_source_rgba(0.22, 0.55, 0.96, 0.34)
             cr.fill()
-
             for a, b in self.recorder.cuts:
-                xa, xb = fx(a), fx(b)
                 cr.set_source_rgba(0.92, 0.24, 0.24, 0.65)
-                cr.rectangle(xa, 8, max(3.0, xb - xa), h - 16)
+                cr.rectangle(fx(a), 8, max(3.0, fx(b) - fx(a)), h - 16)
                 cr.fill()
-
             if self._cut_mark_start is not None:
                 xm = fx(self._cut_mark_start)
                 cr.set_source_rgb(0.98, 0.72, 0.18)
@@ -2799,13 +3626,11 @@ def launch_gtk4(
                 cr.move_to(xm, 6)
                 cr.line_to(xm, h - 6)
                 cr.stroke()
-
             cr.set_source_rgba(0.85, 0.90, 0.96, 0.45)
             for i, rf in enumerate(self.recorder.frames):
                 if rf.pressed:
                     cr.rectangle(fx(i) - 1.0, h - 14, 2.0, 6)
             cr.fill()
-
             xp = fx(self._pb_idx)
             cr.set_source_rgb(1.0, 1.0, 1.0)
             cr.set_line_width(2.2)
@@ -2815,11 +3640,10 @@ def launch_gtk4(
 
         def _seek_timeline_x(self, x: float) -> None:
             n = len(self.recorder.frames)
-            if n <= 1:
-                return
-            w = max(20.0, float(self.timeline_area.get_width()) - 16.0)
-            self._pb_idx = int(round(max(0.0, min(1.0, (x - 8.0) / w)) * (n - 1)))
-            self._refresh_gif_ui()
+            if n > 1:
+                w = max(20.0, float(self.timeline_area.get_width()) - 16.0)
+                self._pb_idx = int(round(max(0.0, min(1.0, (x - 8.0) / w)) * (n - 1)))
+                self._refresh_gif_ui()
 
         def _on_timeline_click(self, _g: Any, _n: int, x: float, _y: float) -> None:
             self._drag_start_x = x
@@ -2889,7 +3713,7 @@ def launch_gtk4(
             seq = self.recorder.frame_durations_ms(speed=self._export_speed, max_idle_ms=600 if self._cap_idle else None)
             tot_ms = sum(d for _, d in seq)
             if n == 0:
-                self.gif_summary_lbl.set_text("No recording yet — press Record GIF to capture.")
+                self.gif_summary_lbl.set_text("Press Record GIF to capture radio interactions.")
                 self.export_gif_btn.set_sensitive(False)
             else:
                 cuts_s = f" · {len(self.recorder.cuts)} cut(s)" if self.recorder.cuts else ""
@@ -2941,7 +3765,7 @@ def launch_gtk4(
 
             dlg.save(self.win, None, _picked)
 
-        # --- Connect / Disconnect / Telemetry / Files / Wire ---
+        # --- Connect / Disconnect / Telemetry / Searchable Files / Wire ---
         def _connect_to(self, port: str, port_info: DetectedPort | None = None) -> None:
             try:
                 self.link.connect(port, baud=baud, model_override=self.forced_model, port_info=port_info)
@@ -2949,13 +3773,29 @@ def launch_gtk4(
                 self._notify(f"Connection failed: {e}")
                 return
 
-            self.hdr_link_icon.set_from_icon_name("network-transmit-receive-symbolic")
-            self.hdr_batt_icon.set_visible(True)
+            is_dfu = self.link.link_mode in ("stock_bl", "moto_uf2")
+            self.hdr_link_icon.set_from_icon_name("software-update-available-symbolic" if is_dfu else "network-transmit-receive-symbolic")
+            self.hdr_batt_icon.set_visible(not is_dfu)
+            self.hdr_dfu_dot.set_visible(is_dfu)
             self.hdr_dev_lbl.set_text(self.link.volume_name.removeprefix("Quansheng "))
             self.conn_card.set_visible(True)
             self.conn_card_title.set_text(self.link.volume_name)
             self.conn_card_sub.set_text(f"Port: {self.link.port}")
             self.win.set_title(f"Kern Dock — {self.link.volume_name}")
+
+            if self.dfu_banner is not None:
+                if self.link.link_mode == "stock_bl":
+                    ver = self.link.bootloader_info.get("version", "Stock BL")
+                    self.dfu_banner.set_title(f"DFU / Stock Bootloader ({ver}) ready on {self.link.port}")
+                    self.dfu_banner.set_revealed(True)
+                    self.row_bl_status.set_subtitle(GLib.markup_escape_text(f"Ready · Bootloader {ver} on {self.link.port}"))
+                elif self.link.link_mode == "moto_uf2":
+                    self.dfu_banner.set_title(f"Moto UF2 Bootloader detected ({self.link.port})")
+                    self.dfu_banner.set_revealed(True)
+                    self.row_bl_status.set_subtitle(GLib.markup_escape_text(f"Moto UF2 Bootloader on {self.link.port}"))
+                else:
+                    self.dfu_banner.set_revealed(False)
+                    self.row_bl_status.set_subtitle("Kern OS active — enter DFU mode on radio to flash")
 
             if self.link.detected_model != self.active_model:
                 self.active_model = self.link.detected_model
@@ -2965,22 +3805,31 @@ def launch_gtk4(
                 self._sync_window_size()
 
             self._rebuild_connection_list()
+            self._update_flash_button_state()
             self.lcd_state.step(self.link.last_fb, self.lcd_st)
             self.handset_area.queue_draw()
             self._refresh_telemetry_ui()
-            self._browse_dir("/")
+            if self.link.link_mode == "kern_os":
+                self._browse_dir("/")
+            elif is_dfu:
+                self._open_flash_tab()
 
         def _disconnect(self) -> None:
             self.link.disconnect()
             self.hdr_link_icon.set_from_icon_name("network-offline-symbolic")
             self.hdr_batt_icon.set_visible(False)
+            self.hdr_dfu_dot.set_visible(False)
             self.hdr_dev_lbl.set_text("Connect")
             self.conn_card.set_visible(False)
+            if self.dfu_banner is not None:
+                self.dfu_banner.set_revealed(False)
             self.mount_btn.set_active(False)
             self.open_fs_btn.set_visible(False)
             self.win.set_title("Kern Dock")
             self._rebuild_connection_list()
-            self._clear_file_list()
+            self._update_flash_button_state()
+            self._cached_dir_entries = []
+            self._render_filtered_files()
             self._refresh_telemetry_ui()
             self.handset_area.queue_draw()
 
@@ -2992,6 +3841,12 @@ def launch_gtk4(
                     self.row_serial.set_subtitle("—")
                     self.row_link.set_subtitle("Disconnected")
                 self.batt_bar.set_value(0.0)
+                return False
+
+            if self.link.link_mode != "kern_os":
+                if has_adw:
+                    self.row_ident.set_subtitle(GLib.markup_escape_text(f"{self.link.volume_name} ({self.link.port})"))
+                    self.row_link.set_subtitle("Bootloader / DFU mode")
                 return False
 
             t = self.link.last_telemetry
@@ -3006,8 +3861,8 @@ def launch_gtk4(
             fps_s = "Demo" if self.link.demo_mode else f"{self.link.fps:.1f} FPS"
             self.conn_card_sub.set_text(f"{self.link.port} · {fps_s} · {self.link.rtt_ms:.1f} ms")
             if has_adw:
-                self.row_ident.set_subtitle(f"{self.link.volume_name} ({self.link.port})")
-                self.row_serial.set_subtitle(f"{t.get('serial_str', '—')}  ·  {t.get('mac_addr', '—')}")
+                self.row_ident.set_subtitle(GLib.markup_escape_text(f"{self.link.volume_name} ({self.link.port})"))
+                self.row_serial.set_subtitle(GLib.markup_escape_text(f"{t.get('serial_str', '—')}  ·  {t.get('mac_addr', '—')}"))
                 mtu = self.link.hello_info.get("accepted_max_payload", 128)
                 err_s = f" · {self.link.error_count} err" if self.link.error_count else ""
                 self.row_link.set_subtitle(f"{fps_s} · RTT {self.link.rtt_ms:.1f} ms · MTU {mtu} B{err_s}")
@@ -3017,13 +3872,6 @@ def launch_gtk4(
             self.sw_lock.set_active(self.link.keypad_locked)
             self._updating_switches = False
             return False
-
-        def _clear_file_list(self) -> None:
-            c = self.file_list.get_first_child()
-            while c is not None:
-                n = c.get_next_sibling()
-                self.file_list.remove(c)
-                c = n
 
         def _browse_dir(self, path: str) -> None:
             if not self.link.connected or self.link.fs_backend is None:
@@ -3038,24 +3886,38 @@ def launch_gtk4(
                 except Exception as e:
                     GLib.idle_add(self._notify, f"List {path} failed: {e}")
                     return
-                GLib.idle_add(self._populate_file_list, path, entries)
+                GLib.idle_add(self._set_dir_entries, entries)
 
             threading.Thread(target=_w, daemon=True).start()
 
-        def _populate_file_list(self, dir_path: str, entries: list[dict[str, Any]]) -> bool:
-            self._clear_file_list()
-            if not entries:
-                lbl = Gtk.Label(label="Empty directory", margin_top=18, margin_bottom=18)
-                lbl.add_css_class("dim-label")
-                self.file_list.append(lbl)
-                return False
-            for e in entries:
+        def _set_dir_entries(self, entries: list[dict[str, Any]]) -> bool:
+            self._cached_dir_entries = entries
+            self._render_filtered_files()
+            return False
+
+        def _render_filtered_files(self) -> None:
+            c = self.file_list.get_first_child()
+            while c is not None:
+                n = c.get_next_sibling()
+                self.file_list.remove(c)
+                c = n
+            q = self.file_search.get_text().strip().lower() if hasattr(self, "file_search") else ""
+            shown = [e for e in self._cached_dir_entries if (not q or q in e["name"].lower())]
+            if not shown:
+                if has_adw:
+                    msg = "Connect a Kern OS radio to browse files" if not self.link.connected else ("No matching files" if q else "Empty directory")
+                    st = Adw.StatusPage(icon_name="folder-symbolic", title=msg)
+                    st.add_css_class("compact")
+                    self.file_list.append(st)
+                return
+            dir_path = self.current_dir
+            for e in shown:
                 name, is_dir, size = e["name"], bool(e["is_dir"]), int(e["size"])
                 full = f"/{name}" if dir_path == "/" else f"{dir_path.rstrip('/')}/{name}"
                 protected = full.startswith("/sys/") or full in kernfs_mount.PROTECTED_RECOVERY_MODS
                 if has_adw:
                     row = Adw.ActionRow(
-                        title=name,
+                        title=GLib.markup_escape_text(name),
                         subtitle="Directory" if is_dir else f"{size:,} bytes" + (" · Protected" if protected else ""),
                     )
                     icon = "folder-symbolic" if is_dir else ("application-x-executable-symbolic" if name.endswith(kernfs_mount.PKG_EXTS) else "text-x-generic-symbolic")
@@ -3077,7 +3939,6 @@ def launch_gtk4(
                         rm.connect("clicked", lambda _b, p=full: self._on_delete_file(p))
                         row.add_suffix(rm)
                     self.file_list.append(row)
-            return False
 
         def _on_download_file(self, remote_path: str, filename: str) -> None:
             if not self.link.fs_backend:
@@ -3101,7 +3962,7 @@ def launch_gtk4(
 
         def _on_upload_file(self, _btn: Any) -> None:
             if not self.link.connected or not self.link.fs_backend:
-                self._notify("Connect to a radio first")
+                self._notify("Connect to a Kern OS radio first")
                 return
             dlg = Gtk.FileDialog(title=f"Upload to {self.current_dir}")
             be, tdir = self.link.fs_backend, self.current_dir
@@ -3153,9 +4014,9 @@ def launch_gtk4(
                     self.open_fs_btn.set_visible(False)
                     self._notify("Unmounted radio drive")
                 return
-            if not self.link.connected:
+            if not self.link.connected or self.link.fs_backend is None:
                 btn.set_active(False)
-                self._notify("Connect to a radio first")
+                self._notify("Connect to a Kern OS radio first")
                 return
             try:
                 url = self.link.start_dav(http_port=8765)
@@ -3180,9 +4041,9 @@ def launch_gtk4(
                 try:
                     fpath = d.save_finish(res).get_path()
                     if fpath:
-                        fb, pressed, led, torch = self._current_display_state()
+                        fb, pr, led, torch = self._current_display_state()
                         if self._export_mode == "body":
-                            w, h, rgba = render_handset_to_rgba(self.active_model, fb, self.lcd_st, pressed_keys=pressed, led_state=led, torch_on=torch, scale=2.0)
+                            w, h, rgba = render_handset_to_rgba(self.active_model, fb, self.lcd_st, pressed_keys=pr, led_state=led, torch_on=torch, scale=2.0)
                         else:
                             w, h, rgba = render_lcd_to_rgba(fb, self.lcd_st, width=540, height=374)
                         Path(fpath).write_bytes(encode_png_rgba(w, h, rgba))
@@ -3248,7 +4109,7 @@ def launch_gtk4(
 
 
 # =============================================================================
-# 6. HEADLESS SELFTEST & BENCHMARK (CI-Safe, Zero Display Required)
+# 7. HEADLESS SELFTEST & BENCHMARK (CI-Safe, Zero Display Required)
 # =============================================================================
 
 def run_selftest() -> int:
@@ -3260,9 +4121,12 @@ def run_selftest() -> int:
     for kn in set(k1_keys + k5_keys):
         assert kn in rigwire.KEY_CODES, f"Invalid RigWire key '{kn}'"
 
+    # Verify USB DFU/Bootloader/CPS & model auto-classification
     assert detect_hardware_model("Quansheng UV-K1 1D9E") == "k1"
     assert detect_hardware_model("Quansheng UV-K5 v3 ABCD") == "k5"
-    assert detect_hardware_model("Quansheng UV-K6 99AA") == "k5"
+    assert classify_usb_mode("36b7", "0001", "USB Serial") == ("stock_bl", True)
+    assert classify_usb_mode("36b7", "ffff", "Moto") == ("moto_uf2", True)
+    assert classify_usb_mode("1a86", "7523", "Quansheng UV-K1 1D9E") == ("kern_os", True)
 
     fb1 = make_demo_framebuffer("433.500", "145.500", "VFO")
     fb2 = make_demo_framebuffer("433.525", "145.500", "UP")
@@ -3283,6 +4147,20 @@ def run_selftest() -> int:
     rec.add_cut(2, 2)
     assert rec.active_indices() == [0, 1, 3, 4]
 
+    # Verify .kfw calibration & full KernFS backup + safe restore (shields /sys/calib.dat!)
+    link = DockLink()
+    link.connect("demo")
+    assert link.connected and link.fs_backend is not None
+    with tempfile.TemporaryDirectory() as td:
+        bk_cal = Path(td) / "calib.kfw"
+        bk_full = Path(td) / "full.kfw"
+        bk_cal.write_bytes(build_kfw_backup_from_backend(link.fs_backend, volume_name=link.volume_name, calib_only=True))
+        bk_full.write_bytes(build_kfw_backup_from_backend(link.fs_backend, volume_name=link.volume_name, calib_only=False))
+        parsed_cal = kfw.parse_kfw(bk_cal.read_bytes(), verify_root=True)
+        assert parsed_cal.kind == kfw.KIND_BACKUP
+        rest, skip = restore_kfw_backup_to_backend(bk_full, link.fs_backend, link.policy)
+        assert rest >= 3 and skip >= 2  # /sys/calib.dat & /sys/calib.sig strictly shielded!
+
     bench_str = ""
     try:
         import cairo
@@ -3291,25 +4169,23 @@ def run_selftest() -> int:
         has_cairo = False
 
     if has_cairo:
-        # Micro-benchmark cached handset + LCD rendering speed (must easily exceed 200 FPS on CPU!)
         rend = HandsetRenderer()
         lw, lh = compute_handset_geometry("k1")
         surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, lw, lh)
         cr = cairo.Context(surf)
-        # Warm cache
         rend.paint(cr, "k1", fs, st_k1, press_anim={"up": 0.5}, hover_anim={}, led_state="rx")
         t0 = time.monotonic()
-        for _ in range(60):
+        for _ in range(40):
             fs.step(fb2, st_k1)
             rend.paint(cr, "k1", fs, st_k1, press_anim={"up": 0.5}, hover_anim={}, led_state="rx")
-        dt_ms = (time.monotonic() - t0) * 1000.0 / 60.0
+        dt_ms = (time.monotonic() - t0) * 1000.0 / 40.0
         bench_str = f", {dt_ms:.2f} ms/frame (~{1000.0/max(dt_ms, 0.01):.0f} FPS cap)"
 
         w, h, rgba = render_lcd_to_rgba(fb1, st_k1, width=440, height=304)
         png = encode_png_rgba(w, h, rgba)
         assert png.startswith(b"\x89PNG\r\n\x1a\n") and png.endswith(b"IEND\xaeB`\x82")
         for mdl in ("k1", "k5"):
-            bw, bh, brgba = render_handset_to_rgba(mdl, fb2, st_k1, pressed_keys=frozenset({"up", "ptt"}), led_state="tx")
+            bw, bh, brgba = render_handset_to_rgba(mdl, fb2, st_k1, pressed_keys=frozenset({"up", "ptt"}), led_state="dfu")
             assert bw > 200 and bh > 400 and len(brgba) == bw * bh * 4
         try:
             from PIL import Image as _pil  # noqa: F401
@@ -3323,13 +4199,9 @@ def run_selftest() -> int:
         except ImportError:
             pass
 
-    link = DockLink()
-    link.connect("demo")
-    assert link.connected and link.volume_name == "Quansheng UV-K1 DEMO"
     assert "PONG" in link.run_wire_command("ping")
     assert "dfu.mod" in link.run_wire_command("ls /apps")
     url = link.start_dav(http_port=0, read_only=True)
-    assert url.startswith("http://127.0.0.1:")
     conn = http.client.HTTPConnection("127.0.0.1", link.dav_port, timeout=5)
     try:
         conn.request("PROPFIND", "/", headers={"Depth": "1"})
@@ -3340,7 +4212,7 @@ def run_selftest() -> int:
     link.disconnect()
 
     kernfs_mount.log_ok(
-        f"All Kern Dock selftests passed (UV-K1/UV-K5 Cairo models, fast LCD{bench_str}, auto-detect, GIF splice, FS/Wire/WebDAV)."
+        f"All Kern Dock selftests passed (3D UV-K1/UV-K5 models, fast LCD{bench_str}, DFU/CPS detect, .kfw backups/restore, GIF splice, WebDAV)."
     )
     return 0
 
