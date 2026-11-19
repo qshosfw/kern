@@ -357,10 +357,10 @@ K1_MATRIX: list[list[tuple[str, str, str, str]]] = [
     [("7", "7", "VOX",  "pqrs"),("8", "8", "R",   "tuv"), ("9", "9", "Call","wxyz"),("f",    "#", "_KEY_", "F")],
 ]
 
-K5_BOTTOM_MATRIX: list[list[tuple[str, str, str]]] = [
-    [("1", "1", "Band"), ("2", "2", "A/B"),  ("3", "3", "VFO/MR"), ("star", "*", "Scan")],
-    [("4", "4", "FC"),   ("5", "5", "NOAA"), ("6", "6", "H/M/L"),  ("0",    "0", "FM")],
-    [("7", "7", "VOX"),  ("8", "8", "R"),    ("9", "9", "Call"),   ("f",    "F", "_KEY_")],
+K5_BOTTOM_MATRIX: list[list[tuple[str, str, str, str]]] = [
+    [("1", "1", "Band", ""), ("2", "2", "A/B",  ""), ("3", "3", "VFO", "MR"),  ("star", "*", "Scan", "")],
+    [("4", "4", "FC",   ""), ("5", "5", "NO",   "AA"),("6", "6", "H/",  "M/L"), ("0",    "0", "FM",   "")],
+    [("7", "7", "VOX",  ""), ("8", "8", "R",    ""), ("9", "9", "Call",""),    ("f",    "F", "#",    "_KEY_")],
 ]
 
 _PANGO_READY: bool | None = None
@@ -620,6 +620,17 @@ def _draw_key_glyph(cr: Any, x: float, y: float, w: float, h: float) -> None:
     cr.restore()
 
 
+def _draw_boxed_badge(cr: Any, letter: str, cx: float, cy: float, size: float = 9.5) -> None:
+    """Crisp inverted white square letter badge ([A], [B], [C], [D]) matching UV-K5 v3 / UV-K6."""
+    _round_rect(cr, cx - size * 0.5, cy - size * 0.5, size, size, 2.0)
+    cr.set_source_rgba(0.94, 0.95, 0.97, 0.94)
+    cr.fill()
+    _draw_pango_text(
+        cr, letter, cx, cy,
+        font_desc="Adwaita Sans Bold 6.2", rgba=(0.08, 0.08, 0.09, 0.98), halign="center", valign="center",
+    )
+
+
 def _draw_3d_keycap(
     cr: Any,
     x: float,
@@ -738,55 +749,71 @@ def _draw_3d_keycap(
         cr.stroke()
         cr.restore()
         if sub1:
-            _draw_pango_text(
-                cr, sub1, ix + iw * 0.5, iy + ih * (0.80 if primary == "_CHEV_UP_" else 0.28),
-                font_desc="Adwaita Sans Bold 6.5", rgba=sub2_ink, halign="center", valign="center",
-            )
+            if sub1.startswith("[") and sub1.endswith("]") and len(sub1) == 3:
+                _draw_boxed_badge(cr, sub1[1], ix + iw * 0.5, iy + ih * (0.76 if primary == "_CHEV_UP_" else 0.26), 9.0)
+            else:
+                _draw_pango_text(
+                    cr, sub1, ix + iw * 0.5, iy + ih * (0.80 if primary == "_CHEV_UP_" else 0.28),
+                    font_desc="Adwaita Sans Bold 6.5", rgba=sub2_ink, halign="center", valign="center",
+                )
     elif is_nav or (not sub1 and not sub2):
-        _draw_pango_text(
-            cr, primary, ix + iw * 0.5, iy + ih * 0.5,
-            font_desc="Adwaita Sans SemiBold 10.5", rgba=ink, halign="center", valign="center",
-        )
+        if sub1.startswith("[") and sub1.endswith("]") and len(sub1) == 3:
+            is_exit = (primary == "EXIT")
+            _draw_pango_text(
+                cr, primary, ix + iw * (0.35 if is_exit else 0.36), iy + ih * 0.50,
+                font_desc="Adwaita Sans Bold Italic 8.6" if is_exit else "Adwaita Sans Bold Italic 13.5",
+                rgba=ink, halign="center", valign="center",
+            )
+            _draw_boxed_badge(cr, sub1[1], ix + iw * (0.80 if is_exit else 0.76), iy + ih * 0.50, 8.6 if is_exit else 9.5)
+        else:
+            _draw_pango_text(
+                cr, primary, ix + iw * 0.5, iy + ih * 0.5,
+                font_desc="Adwaita Sans SemiBold 10.2", rgba=ink, halign="center", valign="center",
+            )
     else:
-        # Large, crisp geometric primary digit on left (matches real K1 70%-height digits!)
-        is_long_sub = bool(sub1 and not sub2 and sub1 != "_KEY_" and len(sub1) >= 5)
-        p_size = "14.5" if is_long_sub else ("15.5" if primary != "*" else "17")
-        p_x = ix + (5.0 if is_long_sub else 6.5)
+        # Large, crisp geometric primary digit on left (matches real K1 & K5v3 70%-height digits!)
+        is_compact = iw < 54.0
+        p_size = ("13.2" if is_compact else "15.0") if primary != "*" else ("15.0" if is_compact else "16.5")
+        p_x = ix + (5.0 if is_compact else 6.0)
         p_y = iy + ih * (0.56 if primary == "*" else 0.50)
         pw, _ = _draw_pango_text(
             cr, primary, p_x, p_y,
             font_desc=f"Adwaita Sans Medium {p_size}", rgba=ink, halign="left", valign="center",
         )
-        sx = p_x + max(pw, 10.0 if is_long_sub else 11.5) + (2.8 if is_long_sub else 4.0)
+        sx = p_x + max(pw, 9.5 if is_compact else 11.0) + (2.5 if is_compact else 3.5)
 
         if sub1 and sub2:
             if sub1 == "_KEY_":
-                _draw_key_glyph(cr, sx, iy + ih * 0.14, 15.0, 9.0)
+                _draw_key_glyph(cr, sx, iy + ih * 0.14, 14.0, 8.5)
             else:
-                _draw_pango_text(cr, sub1, sx, iy + ih * 0.30, font_desc="Adwaita Sans Medium 7.6", rgba=sub_ink, halign="left", valign="center")
+                s1_sz = "6.3" if is_compact else "7.2"
+                _draw_pango_text(cr, sub1, sx, iy + ih * 0.30, font_desc=f"Adwaita Sans Medium {s1_sz}", rgba=sub_ink, halign="left", valign="center")
 
             if sub2 == "_RET_":
                 cr.save()
                 cr.set_source_rgba(*sub_ink)
-                cr.set_line_width(1.5)
+                cr.set_line_width(1.4)
                 cr.set_line_cap(cairo.LINE_CAP_ROUND)
                 ry = iy + ih * 0.72
                 cr.new_path()
-                cr.move_to(sx + 13.0, ry - 4.0)
-                cr.line_to(sx + 13.0, ry)
+                cr.move_to(sx + 12.0, ry - 3.6)
+                cr.line_to(sx + 12.0, ry)
                 cr.line_to(sx + 1.0, ry)
-                cr.move_to(sx + 4.2, ry - 2.6)
+                cr.move_to(sx + 4.0, ry - 2.4)
                 cr.line_to(sx + 1.0, ry)
-                cr.line_to(sx + 4.2, ry + 2.6)
+                cr.line_to(sx + 4.0, ry + 2.4)
                 cr.stroke()
                 cr.restore()
+            elif sub2 == "_KEY_":
+                _draw_key_glyph(cr, sx, iy + ih * 0.56, 13.5, 8.0)
             else:
-                _draw_pango_text(cr, sub2, sx, iy + ih * 0.72, font_desc="Adwaita Sans 7.2", rgba=sub2_ink, halign="left", valign="center")
+                s2_sz = "6.1" if is_compact else "6.8"
+                _draw_pango_text(cr, sub2, sx, iy + ih * 0.72, font_desc=f"Adwaita Sans {s2_sz}", rgba=sub2_ink, halign="left", valign="center")
         elif sub1:
             if sub1 == "_KEY_":
-                _draw_key_glyph(cr, sx, iy + ih * 0.34, 15.0, 9.0)
+                _draw_key_glyph(cr, sx, iy + ih * 0.34, 14.0, 8.5)
             else:
-                s_sz = "6.8" if len(sub1) >= 5 else "8.0"
+                s_sz = "6.6" if (is_compact or len(sub1) >= 5) else "7.6"
                 _draw_pango_text(cr, sub1, sx, iy + ih * 0.50, font_desc=f"Adwaita Sans Medium {s_sz}", rgba=sub_ink, halign="left", valign="center")
 
 
@@ -904,7 +931,8 @@ def _draw_top_flashlight(cr: Any, tx: float, by: float, torch_on: bool, *, compa
 
 
 def compute_handset_geometry(model: str) -> tuple[int, int]:
-    return (356, 614) if model == "k5" else (364, 594)
+    """True-to-hardware proportions matching factory front renders (UV-K1 ~1:1.80, UV-K5 v3 ~1:1.88)."""
+    return (344, 624) if model == "k5" else (348, 616)
 
 
 class HandsetRenderer:
@@ -955,23 +983,27 @@ class HandsetRenderer:
     def _build_k1_chassis(self, back_cr: Any, cr: Any, W: int, H: int, led_state: str, lcd_st: LcdSettings) -> None:
         """Photorealistic 3D Quansheng UV-K1(8) modeled directly from `ref_k1_body_crop.png` & `左视图.png`."""
         import cairo
-        bx, by, bw, bh = 30.0, 60.0, W - 44.0, H - 74.0
+        bx, by, bw, bh = 30.0, 60.0, W - 46.0, H - 74.0
         self._body_bx = bx
 
         # Register 3D side key specs first (tucked cleanly into left back-shell behind front bezel lip!)
         self._side_specs = [
-            ("ptt",   8.0, by + 56.0, 26.0, 122.0, True, 0),
-            ("side1", 11.0, by + 188.0, 23.0, 38.0, False, 2),
-            ("side2", 11.0, by + 234.0, 23.0, 38.0, False, 1),
+            ("ptt",   8.0, by + 58.0, 26.0, 126.0, True, 0),
+            ("side1", 11.0, by + 194.0, 23.0, 38.0, False, 2),
+            ("side2", 11.0, by + 240.0, 23.0, 38.0, False, 1),
         ]
         for kn, sx, sy, sw, sh, _, _ in self._side_specs:
             self.hitboxes[kn] = (sx - 3.0, sy, sw, sh)
 
-        # Back layer: ambient drop shadow + full-height left back-plastic shell + recessed button wells
+        # Back layer: ambient drop shadow + full-height left & right back-plastic flanks + recessed wells
         _round_rect(back_cr, bx + 4, by + 10, bw, bh, 18)
         back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
         back_cr.fill()
         _draw_side_profile_shroud(back_cr, bx, by, bh, self._side_specs)
+        # Subtle right-side matte rubber grip cheek bumper (balances 3D depth)
+        _round_rect(back_cr, bx + bw - 6.0, by + 54.0, 11.0, bh - 120.0, 5.0)
+        back_cr.set_source_rgb(0.10, 0.11, 0.12)
+        back_cr.fill()
 
         # --- 1. Top Hardware Assembly (3D Stubby A1 Antenna + Flashlight + Cobalt-Blue Rotary Knob) ---
         ax = bx + 62.0
@@ -1131,8 +1163,11 @@ class HandsetRenderer:
         cr.stroke()
         _draw_quansheng_logo(cr, np_x + np_w * 0.5, np_y + np_h * 0.52, scale=1.02)
 
-        # --- 5. Deep 3D Recessed LCD Window Cutout ---
-        lz_x, lz_y, lz_w, lz_h = int(fx_l + 14), int(fy_t + 54), int((fx_r - fx_l) - 28), 166
+        # --- 5. Deep 3D Recessed LCD Window Cutout (authentic ~1.48:1 aspect ratio with wide metallic cheeks!) ---
+        lz_w = int((fx_r - fx_l) - 44)
+        lz_h = int(round(lz_w / 1.46))
+        lz_x = int(fx_l + ((fx_r - fx_l) - lz_w) * 0.5)
+        lz_y = int(fy_t + 56)
         # Upper dark shadow casting down from nameplate ridge
         _round_rect(cr, lz_x - 2, lz_y - 2, lz_w + 4, lz_h + 4, 10)
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.35)
@@ -1184,11 +1219,11 @@ class HandsetRenderer:
         cr.fill()
 
         # --- 7. Exact 4x4 Keypad with 12 Inter-Row Speaker Slots! ---
-        kp_x, kp_y, kp_w = fx_l + 8.0, bar_y + 36.0, (fx_r - fx_l) - 16.0
-        gap_c = 7.0
-        gap_r = 12.0  # Space for real horizontal speaker slots between rows!
+        kp_x, kp_y, kp_w = fx_l + 6.0, bar_y + 38.0, (fx_r - fx_l) - 12.0
+        gap_c = 6.0
+        gap_r = 13.0  # Space for real horizontal speaker slots between rows!
         kw = (kp_w - gap_c * 3.0) / 4.0
-        kh_nav, kh_num = 42.0, 36.0
+        kh_nav, kh_num = 43.0, 38.0
 
         for r_i, row_keys in enumerate(K1_MATRIX):
             ky = kp_y + (0.0 if r_i == 0 else (kh_nav + gap_r + (r_i - 1) * (kh_num + gap_r)))
@@ -1212,154 +1247,261 @@ class HandsetRenderer:
                     cr.stroke()
 
     def _build_k5_chassis(self, back_cr: Any, cr: Any, W: int, H: int, led_state: str, lcd_st: LcdSettings) -> None:
-        """Photorealistic 3D Quansheng UV-K5 v3 / UV-K6 modeled directly from `UVK6.1.png`."""
+        """Photorealistic 3D Quansheng UV-K5 v3 / UV-K6 modeled directly from `ref_k5_body_crop.png` & `UVK6.2.png`."""
         import cairo
-        bx, by, bw, bh = 30.0, 58.0, W - 44.0, H - 72.0
+        bx, by, bw, bh = 30.0, 62.0, W - 46.0, H - 76.0
         self._body_bx = bx
 
+        # 3D Side Buttons tucked behind textured left cheek bumper
         self._side_specs = [
-            ("ptt",   8.0, by + 64.0, 26.0, 114.0, True, 0),
-            ("side1", 11.0, by + 188.0, 23.0, 36.0, False, 0),
-            ("side2", 11.0, by + 232.0, 23.0, 36.0, False, 0),
+            ("ptt",   11.0, by + 76.0, 23.0, 114.0, True, 0),
+            ("side1", 13.0, by + 204.0, 21.0, 34.0, False, 0),
+            ("side2", 13.0, by + 246.0, 21.0, 34.0, False, 0),
         ]
         for kn, sx, sy, sw, sh, _, _ in self._side_specs:
             self.hitboxes[kn] = (sx - 3.0, sy, sw, sh)
 
-        _round_rect(back_cr, bx + 4, by + 10, bw, bh, 18)
-        back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
+        # Back layer: drop shadow + full-height left & right textured polymer side bumpers
+        _round_rect(back_cr, bx + 4, by + 10, bw, bh, 20)
+        back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.38)
+        back_cr.fill()
+        _draw_side_profile_shroud(back_cr, bx, by, bh, self._side_specs)
+        # Right-side textured polymer bumper (houses 2-pin & USB-C port door from UVK6.2.png!)
+        _round_rect(back_cr, bx + bw - 8.0, by + 44.0, 14.0, bh - 170.0, 6.0)
+        pat_rb = cairo.LinearGradient(bx + bw - 8.0, 0, bx + bw + 6.0, 0)
+        pat_rb.add_color_stop_rgb(0.0, 0.06, 0.065, 0.075)
+        pat_rb.add_color_stop_rgb(0.65, 0.16, 0.17, 0.19)
+        pat_rb.add_color_stop_rgb(1.0, 0.07, 0.075, 0.085)
+        back_cr.set_source(pat_rb)
         back_cr.fill()
 
-        # Shadowed 3D full-height left side-profile back plastic behind PTT / SK1 / SK2
-        _draw_side_profile_shroud(back_cr, bx, by, bh, self._side_specs)
-
-        # Tapered antenna base
-        ax = bx + 56.0
+        # --- 1. Top Hardware: Tapered Antenna + Frosted LED + Flashlight + Iconic Orange V-Notch Knob ---
+        ax = bx + 62.0
         pat_ant = cairo.LinearGradient(ax - 24, 0, ax + 24, 0)
-        pat_ant.add_color_stop_rgb(0.0, 0.09, 0.10, 0.11)
-        pat_ant.add_color_stop_rgb(0.35, 0.28, 0.29, 0.31)
-        pat_ant.add_color_stop_rgb(1.0, 0.07, 0.08, 0.09)
+        pat_ant.add_color_stop_rgb(0.0, 0.08, 0.09, 0.10)
+        pat_ant.add_color_stop_rgb(0.32, 0.28, 0.29, 0.31)
+        pat_ant.add_color_stop_rgb(0.65, 0.17, 0.18, 0.19)
+        pat_ant.add_color_stop_rgb(1.0, 0.06, 0.07, 0.08)
         cr.set_source(pat_ant)
-        cr.move_to(ax - 22, by + 5)
-        cr.line_to(ax - 16, 2)
-        cr.line_to(ax + 16, 2)
-        cr.line_to(ax + 22, by + 5)
+        cr.new_path()
+        cr.move_to(ax - 25, by + 4)
+        cr.line_to(ax - 23, 2)
+        cr.line_to(ax + 23, 2)
+        cr.line_to(ax + 25, by + 4)
         cr.close_path()
         cr.fill()
 
-        # Center LED flashlight anchor (drawn dynamically in paint() for 60 FPS page-flash strobe!)
-        tx = bx + bw * 0.48
+        # Center low-profile LED flashlight anchor (drawn dynamically in paint()!)
+        tx = bx + bw * 0.49
         self._torch_anchor = (tx, by, True)
         self.hitboxes["_torch"] = (tx - 18, by - 16, 36, 20)
 
-        # 3D Orange-Capped Volume Knob + Guard Ear
+        # Iconic UV-K5 v3 / UV-K6 Orange-Capped Volume Knob with Center V-Tab & Side Orange Windows!
         kx = bx + bw - 62.0
-        pat_kb = cairo.LinearGradient(kx - 28, 0, kx + 28, 0)
-        pat_kb.add_color_stop_rgb(0.0, 0.08, 0.09, 0.10)
-        pat_kb.add_color_stop_rgb(0.35, 0.24, 0.25, 0.27)
-        pat_kb.add_color_stop_rgb(1.0, 0.07, 0.08, 0.09)
+        # Black knurled barrel
+        pat_kb = cairo.LinearGradient(kx - 32, 0, kx + 32, 0)
+        pat_kb.add_color_stop_rgb(0.0, 0.06, 0.07, 0.08)
+        pat_kb.add_color_stop_rgb(0.32, 0.24, 0.25, 0.27)
+        pat_kb.add_color_stop_rgb(1.0, 0.06, 0.07, 0.08)
         cr.set_source(pat_kb)
-        _round_rect(cr, kx - 27, by - 28, 54, 32, 5)
+        _round_rect(cr, kx - 31, by - 32, 62, 36, 6)
         cr.fill()
-        _round_rect(cr, kx - 27, by - 40, 54, 14, 5)
-        pat_o = cairo.LinearGradient(kx - 27, by - 40, kx + 27, by - 26)
-        pat_o.add_color_stop_rgb(0.0, 0.92, 0.36, 0.04)
-        pat_o.add_color_stop_rgb(0.40, 1.00, 0.56, 0.14)
-        pat_o.add_color_stop_rgb(1.0, 0.80, 0.28, 0.03)
+        # Vivid sculpted orange cap + signature downward center V-tab!
+        pat_o = cairo.LinearGradient(kx - 30, by - 44, kx + 30, by - 22)
+        pat_o.add_color_stop_rgb(0.0, 0.90, 0.34, 0.04)
+        pat_o.add_color_stop_rgb(0.42, 1.00, 0.54, 0.12)
+        pat_o.add_color_stop_rgb(1.0, 0.80, 0.26, 0.02)
         cr.set_source(pat_o)
+        _round_rect(cr, kx - 30, by - 44, 60, 13, 5)
         cr.fill()
-        _round_rect(cr, bx + bw - 22, by - 28, 15, 32, 4)
-        cr.set_source_rgb(0.12, 0.13, 0.15)
+        # Center downward orange V-pointer tab
+        cr.new_path()
+        cr.move_to(kx - 8.0, by - 33)
+        cr.line_to(kx + 8.0, by - 33)
+        cr.line_to(kx + 3.5, by - 16)
+        cr.line_to(kx - 3.5, by - 16)
+        cr.close_path()
+        cr.fill()
+        # Left & right orange side accent windows on barrel
+        _round_rect(cr, kx - 26.5, by - 28, 7.0, 12.0, 2.5)
+        _round_rect(cr, kx + 19.5, by - 28, 7.0, 12.0, 2.5)
+        cr.fill()
+        # Protective black corner guard ear curving up on right shoulder
+        cr.new_path()
+        cr.move_to(bx + bw - 22, by + 6)
+        cr.line_to(bx + bw - 22, by - 14)
+        cr.curve_to(bx + bw - 14, by - 16, bx + bw - 12, by - 36, bx + bw - 9, by - 40)
+        cr.line_to(bx + bw - 2, by - 40)
+        cr.line_to(bx + bw + 2, by + 6)
+        cr.close_path()
+        cr.set_source_rgb(0.11, 0.12, 0.14)
         cr.fill()
 
-        # Frosted Status LED
-        _draw_frosted_led(cr, bx + 44.0, by - 9.0, 26.0, 11.0, led_state)
+        # Subtle top-left rectangular frosted white status LED sitting right under antenna collar
+        _draw_frosted_led(cr, bx + 54.0, by - 8.0, 22.0, 10.0, led_state)
 
-        # 3D Matte Polycarbonate Lower Body
-        _round_rect(cr, bx, by, bw, bh, 18)
+        # --- 2. 3D Textured Matte-Black Polycarbonate Main Body ---
+        _round_rect(cr, bx, by, bw, bh, 20)
         pat_b = cairo.LinearGradient(bx, by, bx + bw, by)
-        pat_b.add_color_stop_rgb(0.0, 0.24, 0.25, 0.27)
-        pat_b.add_color_stop_rgb(0.08, 0.14, 0.15, 0.17)
-        pat_b.add_color_stop_rgb(0.92, 0.13, 0.14, 0.16)
-        pat_b.add_color_stop_rgb(1.0, 0.22, 0.23, 0.25)
+        pat_b.add_color_stop_rgb(0.0, 0.22, 0.23, 0.25)
+        pat_b.add_color_stop_rgb(0.07, 0.13, 0.14, 0.16)
+        pat_b.add_color_stop_rgb(0.93, 0.12, 0.13, 0.15)
+        pat_b.add_color_stop_rgb(1.0, 0.21, 0.22, 0.24)
         cr.set_source(pat_b)
         cr.fill_preserve()
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.10)
         cr.set_line_width(1.0)
         cr.stroke()
 
-        # 3D Brushed Titanium Upper LCD Armor Frame
-        ux, uy, uw, uh = bx + 6.0, by + 6.0, bw - 12.0, 220.0
-        _round_rect(cr, ux, uy, uw, uh, 14)
-        pat_u = cairo.LinearGradient(ux, uy, ux + uw, uy + uh)
-        pat_u.add_color_stop_rgb(0.0, 0.72, 0.70, 0.66)
-        pat_u.add_color_stop_rgb(0.45, 0.54, 0.53, 0.50)
-        pat_u.add_color_stop_rgb(1.0, 0.64, 0.62, 0.58)
+        # Subtle bottom rubber feet tabs (exact ref_k5_body_crop.png!)
+        cr.set_source_rgb(0.08, 0.085, 0.095)
+        _round_rect(cr, bx + 28, by + bh - 2, 26, 6, 2)
+        _round_rect(cr, bx + bw - 54, by + bh - 2, 26, 6, 2)
+        cr.fill()
+
+        # --- 3. Sculpted 3D Brushed Titanium Upper Armor Plate (exact chamfered chin & 4 bosses!) ---
+        ux, uy, uw, uh = bx + 5.0, by + 4.0, bw - 10.0, 228.0
+
+        def _k5_armor_path() -> None:
+            cr.new_sub_path()
+            cr.move_to(ux + 14, uy)
+            cr.line_to(ux + uw - 14, uy)
+            cr.line_to(ux + uw, uy + 14)
+            cr.line_to(ux + uw, uy + uh - 28)
+            cr.line_to(ux + uw - 24, uy + uh)
+            cr.line_to(ux + 24, uy + uh)
+            cr.line_to(ux, uy + uh - 28)
+            cr.line_to(ux, uy + 14)
+            cr.close_path()
+
+        _k5_armor_path()
+        pat_u = cairo.LinearGradient(ux, uy, ux + uw, uy)
+        pat_u.add_color_stop_rgb(0.0, 0.48, 0.47, 0.45)
+        pat_u.add_color_stop_rgb(0.14, 0.72, 0.70, 0.67)
+        pat_u.add_color_stop_rgb(0.50, 0.62, 0.61, 0.58)
+        pat_u.add_color_stop_rgb(0.86, 0.70, 0.68, 0.65)
+        pat_u.add_color_stop_rgb(1.0, 0.44, 0.43, 0.41)
         cr.set_source(pat_u)
         cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.28)
+        cr.set_source_rgba(1.0, 0.99, 0.96, 0.30)
         cr.set_line_width(1.1)
         cr.stroke()
 
-        _draw_hex_torx_bolt(cr, ux + 15, uy + 15, 4.4)
-        _draw_hex_torx_bolt(cr, ux + uw - 15, uy + 15, 4.4)
-        _draw_hex_torx_bolt(cr, ux + 15, uy + uh - 54, 4.4)
-        _draw_hex_torx_bolt(cr, ux + uw - 15, uy + uh - 22, 4.4)
-
-        # Recessed LCD Window
-        lz_x, lz_y, lz_w, lz_h = int(ux + 18), int(uy + 12), int(uw - 36), 154
-        _round_rect(cr, lz_x, lz_y, lz_w, lz_h, 8)
-        cr.set_source_rgb(0.07, 0.07, 0.08)
+        # Sculpted 3D recessed center bezel surround around LCD
+        lz_w = int(uw - 82)  # ~196 px wide -> authentic wide titanium vertical cheeks!
+        lz_h = int(round(lz_w / 1.46))  # ~134 px tall -> exact 1.46:1 ST7565 window!
+        lz_x = int(ux + (uw - lz_w) * 0.5)
+        lz_y = int(uy + 34)
+        _round_rect(cr, lz_x - 4, lz_y - 4, lz_w + 8, lz_h + 8, 10)
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.28)
         cr.fill()
+        _round_rect(cr, lz_x, lz_y, lz_w, lz_h, 8)
+        cr.set_source_rgb(0.06, 0.06, 0.07)
+        cr.fill_preserve()
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.22)
+        cr.set_line_width(0.9)
+        cr.stroke()
         self._lcd_rect = (lz_x + 6, lz_y + 6, lz_w - 12, lz_h - 12)
 
-        # Glossy QUANSHENG Badge right of [M A]
-        m_x, m_y, m_w, m_h = ux + 16.0, lz_y + lz_h + 10.0, 72.0, 34.0
-        np_x, np_y, np_w, np_h = m_x + m_w + 10.0, m_y + 2.0, uw - (m_w + 56.0), 30.0
-        _round_rect(cr, np_x, np_y, np_w, np_h, 7)
-        cr.set_source_rgb(0.06, 0.06, 0.07)
-        cr.fill()
-        _draw_quansheng_logo(cr, np_x + np_w * 0.5, np_y + np_h * 0.52, scale=0.86)
+        # [M A] button + Glossy QUANSHENG Badge right below LCD inside titanium armor
+        m_w, m_h = 62.0, 34.0
+        m_x, m_y = ux + 28.0, lz_y + lz_h + 14.0
+        np_x, np_y, np_w, np_h = m_x + m_w + 14.0, m_y + 1.0, uw - (m_w + 92.0), 32.0
+        _round_rect(cr, np_x, np_y, np_w, np_h, 6)
+        cr.set_source_rgb(0.24, 0.24, 0.25)
+        cr.fill_preserve()
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.45)
+        cr.set_line_width(1.0)
+        cr.stroke()
+        _draw_quansheng_logo(cr, np_x + np_w * 0.5, np_y + np_h * 0.52, scale=0.72)
 
-        # 3D Speaker Grille Dish (right of vertical ▲ / ▼)
-        mid_y = uy + uh + 12.0
-        col_x, col_w = bx + 18.0, 60.0
-        gx = col_x + col_w + 14.0
-        gw = (bx + bw - 18.0) - gx
-        _round_rect(cr, gx - 4, mid_y, gw + 8, 88.0, 8.0)
-        cr.set_source_rgba(0.04, 0.04, 0.05, 0.62)
-        cr.fill()
-        for i in range(3):
-            gy = mid_y + 8.0 + i * 26.0
-            _round_rect(cr, gx, gy, gw, 16.0, 5.0)
-            cr.set_source_rgb(0.04, 0.04, 0.05)
+        # 4 Machined Hex-Socket Stainless Bolts in their EXACT real ref_k5_body_crop.png positions!
+        for bx_s, by_s in (
+            (lz_x + 4.0, uy + 16.0),                  # Top-left boss framing LCD
+            (lz_x + lz_w - 4.0, uy + 16.0),           # Top-right boss framing LCD
+            (ux + 20.0, lz_y + lz_h - 12.0),          # Mid-left boss beside lower-left LCD
+            (ux + uw - 24.0, np_y + np_h * 0.5),      # Lower-right boss beside QUANSHENG badge
+        ):
+            # Raised machined boss collar
+            cr.new_path()
+            cr.arc(bx_s, by_s, 11.0, 0, 2 * math.pi)
+            cr.set_source_rgba(0.28, 0.27, 0.26, 0.55)
             cr.fill()
-            _round_rect(cr, gx + 3, gy + 4, gw - 6, 8.0, 3.0)
-            pat_sl = cairo.LinearGradient(0, gy + 4, 0, gy + 12)
-            pat_sl.add_color_stop_rgb(0.0, 0.25, 0.26, 0.28)
-            pat_sl.add_color_stop_rgb(1.0, 0.14, 0.15, 0.17)
+            _draw_hex_torx_bolt(cr, bx_s, by_s, 6.2)
+
+        # --- 4. Mid Section: Vertical [▲ B] / [▼ C] + EXACT 2 Deep Pill-Shaped Speaker Bars! ---
+        mid_y = uy + uh + 18.0
+        col_x, col_w = bx + 20.0, 44.0
+        gx = col_x + col_w + 18.0
+        gw = (bx + bw - 22.0) - gx
+        # Two bold deep pill-shaped horizontal speaker bars (exact ref_k5_body_crop.png!)
+        for i in range(2):
+            gy = mid_y + 4.0 + i * 44.0
+            # Outer deep molded pill recess
+            _round_rect(cr, gx - 4, gy, gw + 4, 30.0, 11.0)
+            cr.set_source_rgb(0.04, 0.045, 0.05)
+            cr.fill()
+            # Inner 3D pillowed speaker bar
+            _round_rect(cr, gx + 1, gy + 5.0, gw - 6, 20.0, 7.0)
+            pat_sl = cairo.LinearGradient(0, gy + 5.0, 0, gy + 25.0)
+            pat_sl.add_color_stop_rgb(0.0, 0.26, 0.27, 0.29)
+            pat_sl.add_color_stop_rgb(0.55, 0.17, 0.18, 0.20)
+            pat_sl.add_color_stop_rgb(1.0, 0.10, 0.11, 0.12)
             cr.set_source(pat_sl)
-            cr.fill()
+            cr.fill_preserve()
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.10)
+            cr.set_line_width(0.8)
+            cr.stroke()
 
-        # Front Key Specs (side specs already registered above before shroud)
+        # Tiny recessed mic port on lower-right above numeric keypad
+        _round_rect(cr, bx + bw - 40.0, mid_y + 102.0, 14.0, 7.0, 3.5)
+        cr.set_source_rgb(0.04, 0.04, 0.05)
+        cr.fill()
+
+        # --- 5. Stepped Diagonal Keypad Dish cradling [EXIT D] + Pill-Rounded 4x3 Numeric Keys ---
+        dish_top = mid_y + 94.0
+        dish_step = dish_top + 28.0
+        dish_bot = by + bh - 16.0
+        cr.new_path()
+        cr.move_to(bx + 20, dish_top)
+        cr.line_to(bx + 76, dish_top)
+        cr.curve_to(bx + 92, dish_top, bx + 98, dish_step, bx + 114, dish_step)
+        cr.line_to(bx + bw - 20, dish_step)
+        cr.curve_to(bx + bw - 12, dish_step, bx + bw - 10, dish_step + 8, bx + bw - 10, dish_step + 16)
+        cr.line_to(bx + bw - 10, dish_bot - 14)
+        cr.curve_to(bx + bw - 10, dish_bot, bx + bw - 20, dish_bot, bx + bw - 30, dish_bot)
+        cr.line_to(bx + 30, dish_bot)
+        cr.curve_to(bx + 18, dish_bot, bx + 12, dish_bot - 6, bx + 12, dish_bot - 16)
+        cr.line_to(bx + 12, dish_top + 10)
+        cr.curve_to(bx + 12, dish_top, bx + 16, dish_top, bx + 20, dish_top)
+        cr.close_path()
+        cr.set_source_rgba(0.04, 0.045, 0.055, 0.65)
+        cr.fill_preserve()
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.08)
+        cr.set_line_width(1.0)
+        cr.stroke()
+
+        # Register Nav Keys: [M A], [▲ B], [▼ C], [EXIT D]
         nav_specs = [
-            ("menu", m_x, m_y, m_w, m_h, "M", "A", "", 6.0, False, False),
-            ("up",   col_x, mid_y, col_w, 36.0, "_CHEV_UP_", "B", "", 7.0, True, False),
-            ("down", col_x, mid_y + 44.0, col_w, 36.0, "_CHEV_DN_", "C", "", 7.0, True, False),
-            ("exit", col_x, mid_y + 94.0, col_w + 14.0, 30.0, "EXIT", "", "", 6.0, True, False),
+            ("menu", m_x, m_y, m_w, m_h, "M", "[A]", "", 8.0, True, False),
+            ("up",   col_x, mid_y, col_w, 38.0, "_CHEV_UP_", "[B]", "", 9.0, True, False),
+            ("down", col_x, mid_y + 46.0, col_w, 38.0, "_CHEV_DN_", "[C]", "", 9.0, True, False),
+            ("exit", bx + 20.0, dish_top + 5.0, 56.0, 26.0, "EXIT", "[D]", "", 10.0, True, False),
         ]
         for sp in nav_specs:
             self.hitboxes[sp[0]] = (sp[1], sp[2], sp[3], sp[4])
             self._key_specs.append(sp)
 
-        kp_x, kp_y, kp_w = bx + 16.0, mid_y + 132.0, bw - 32.0
-        gap_c, gap_r, kh = 6.0, 7.0, 34.0
+        # Register Pill-Rounded 4x3 Numeric Keypad Keys (exact ref_k5_body_crop.png lozenge caps!)
+        kp_x, kp_y, kp_w = bx + 20.0, dish_step + 10.0, bw - 40.0
+        gap_c, gap_r, kh = 6.0, 7.0, 30.0
         kw = (kp_w - gap_c * 3.0) / 4.0
         for r_i, row_keys in enumerate(K5_BOTTOM_MATRIX):
             ky = kp_y + r_i * (kh + gap_r)
-            for c_i, (kn, pri, s1) in enumerate(row_keys):
+            for c_i, (kn, pri, s1, s2) in enumerate(row_keys):
                 kx = kp_x + c_i * (kw + gap_c)
                 self.hitboxes[kn] = (kx, ky, kw, kh)
-                self._key_specs.append((kn, kx, ky, kw, kh, pri, s1, "", 6.0, False, kn == "5"))
+                self._key_specs.append((kn, kx, ky, kw, kh, pri, s1, s2, 12.0, False, kn == "5"))
 
     def paint(
         self,
@@ -1410,18 +1552,18 @@ class HandsetRenderer:
             cr.fill_preserve()
 
             if is_ptt:
-                # 3D beveled anodized collar (cobalt-blue on UV-K1, burnt-orange on UV-K5, crimson on TX)
-                c_r = accent[0] * (1.0 - p) + 0.98 * p
-                c_g = accent[1] * (1.0 - p) + 0.30 * p
-                c_b = accent[2] * (1.0 - p) + 0.28 * p
-                pat_c = cairo.LinearGradient(sx + dx, sy, sx + dx, sy + sh)
-                pat_c.add_color_stop_rgb(0.0, min(1.0, c_r * 1.15), min(1.0, c_g * 1.15), min(1.0, c_b * 1.15))
-                pat_c.add_color_stop_rgb(0.5, c_r * 0.88, c_g * 0.88, c_b * 0.88)
-                pat_c.add_color_stop_rgb(1.0, c_r * 0.56, c_g * 0.56, c_b * 0.56)
-                cr.set_source(pat_c)
-                cr.set_line_width(2.2)
-                cr.stroke()
                 if model == "k1":
+                    # 3D beveled cobalt-blue anodized collar (crimson on TX) + 4 molded grip ribs
+                    c_r = accent[0] * (1.0 - p) + 0.98 * p
+                    c_g = accent[1] * (1.0 - p) + 0.30 * p
+                    c_b = accent[2] * (1.0 - p) + 0.28 * p
+                    pat_c = cairo.LinearGradient(sx + dx, sy, sx + dx, sy + sh)
+                    pat_c.add_color_stop_rgb(0.0, min(1.0, c_r * 1.15), min(1.0, c_g * 1.15), min(1.0, c_b * 1.15))
+                    pat_c.add_color_stop_rgb(0.5, c_r * 0.88, c_g * 0.88, c_b * 0.88)
+                    pat_c.add_color_stop_rgb(1.0, c_r * 0.56, c_g * 0.56, c_b * 0.56)
+                    cr.set_source(pat_c)
+                    cr.set_line_width(2.2)
+                    cr.stroke()
                     for ry in (sy + 20, sy + 44, sy + 68, sy + 92):
                         _round_rect(cr, sx + 6.4 + dx, ry - 0.8, 5.2, 14.6, 2.4)
                         cr.set_source_rgba(0.02, 0.02, 0.03, 0.75)
@@ -1433,6 +1575,24 @@ class HandsetRenderer:
                             accent[2] * (1.0 - p) + 0.72 * p,
                         )
                         cr.fill()
+                else:
+                    # UV-K5 v3 / UV-K6 authentic matte textured dark polymer PTT paddle (subtle rim, crimson on TX)
+                    if p > 0.05:
+                        cr.set_source_rgba(0.98, 0.30, 0.28, 0.92 * p)
+                        cr.set_line_width(1.6)
+                    else:
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.14 + 0.08 * hv)
+                        cr.set_line_width(1.0)
+                    cr.stroke()
+                    # Subtle horizontal knurled texture lines on K5 PTT
+                    cr.set_source_rgba(0.02, 0.02, 0.03, 0.55)
+                    cr.set_line_width(1.1)
+                    for i in range(9):
+                        ry = sy + 18.0 + i * 9.5
+                        cr.new_path()
+                        cr.move_to(sx + 4.0 + dx, ry)
+                        cr.line_to(sx + 13.0 + dx, ry)
+                        cr.stroke()
             else:
                 cr.set_source_rgba(accent[0], accent[1], accent[2], 0.88 * p) if p > 0.05 else cr.set_source_rgba(1, 1, 1, 0.14 + 0.08 * hv)
                 cr.set_line_width(1.0)
@@ -2195,7 +2355,7 @@ class DockLink:
         self.demo_status: str = "VFO"
         self.torch_on: bool = False
         self.keypad_locked: bool = False
-        self.last_fb: bytes = make_demo_framebuffer()
+        self.last_fb: bytes = bytes(1024)  # Clean blank unlit LCD when disconnected (no fake demo data!)
         self.fps: float = 0.0
         self.rtt_ms: float = 0.0
         self.error_count: int = 0
@@ -2210,6 +2370,7 @@ class DockLink:
         self.dav_unmount_cmd: list[str] | None = None
         self.on_frame: Callable[[], None] | None = None
         self.on_telemetry: Callable[[], None] | None = None
+        self.on_disconnect: Callable[[str], None] | None = None
         self.on_log: Callable[[str], None] | None = None
 
     def _emit_log(self, line: str) -> None:
@@ -2344,6 +2505,7 @@ class DockLink:
         self.demo_mode = False
         self.torch_on = False
         self.keypad_locked = False
+        self.last_fb = bytes(1024)
         self.volume_name = "Quansheng UV-K1"
         self.hello_info = {}
         self.last_telemetry = {}
@@ -2533,6 +2695,7 @@ class DockLink:
         # auto-resync via HELLO on any dropped packet (prevents StaleSequence freezes!).
         target_dt = 1.0 / 45.0
         frames = 0
+        consec_fail = 0
         t_fps = time.monotonic()
         last_telem = time.monotonic()
         while not self._stop.is_set() and self.connected:
@@ -2544,13 +2707,24 @@ class DockLink:
                     self._drain_priority_cmds()
                     fb = self.client.screencap(on_between_chunks=self._drain_priority_cmds, pipeline=1, delta=True)
                     self.rtt_ms = self.client.last_rtt_ms
+                consec_fail = 0
                 if len(fb) == 1024:
                     changed = fb != self.last_fb
                     self.last_fb = fb
                     frames += 1
                     if changed and self.on_frame is not None:
                         self.on_frame()
-            except Exception:
+            except OSError:
+                # Physical USB unplug or port vanished — disconnect cleanly immediately!
+                if not self._stop.is_set() and self.on_disconnect is not None:
+                    self.on_disconnect("Radio disconnected (USB link lost)")
+                break
+            except Exception as exc:
+                # Distinguish pyserial SerialException (device unplugged) from transient frame timeout
+                if type(exc).__name__ == "SerialException":
+                    if not self._stop.is_set() and self.on_disconnect is not None:
+                        self.on_disconnect("Radio disconnected (serial port closed)")
+                    break
                 # Auto-resync RigWire sequence=1 immediately so one dropped USB frame NEVER freezes the stream!
                 recovered = False
                 try:
@@ -2560,9 +2734,16 @@ class DockLink:
                             recovered = True
                 except Exception:
                     pass
-                if not recovered:
+                if recovered:
+                    consec_fail = 0
+                else:
                     self.error_count += 1
-                    self._wake_ev.wait(0.08)
+                    consec_fail += 1
+                    if consec_fail >= 4:
+                        if not self._stop.is_set() and self.on_disconnect is not None:
+                            self.on_disconnect("Radio stopped responding")
+                        break
+                    self._wake_ev.wait(0.10)
                     self._wake_ev.clear()
                 continue
 
@@ -2699,6 +2880,7 @@ def launch_gtk4(
             self.auto_connect_usb = (initial_port is None)
             self.allow_usb_tx = False  # Hard RF RFI safety lock: PTT blocked over USB unless explicitly armed!
             self._flashing_active = False
+            self._connecting = False
             self._pressed_keys: set[str] = set()
             self._hovered_key: str | None = None
             self._press_anim: dict[str, float] = {}
@@ -2746,6 +2928,7 @@ def launch_gtk4(
 
             self.link.on_frame = self._schedule_frame_update
             self.link.on_telemetry = lambda: GLib.idle_add(self._refresh_telemetry_ui)
+            self.link.on_disconnect = lambda msg: GLib.idle_add(self._on_link_lost, msg)
             self.link.on_log = lambda line: GLib.idle_add(self._append_console_line, line)
             self.port_monitor = PortMonitor(on_change=lambda _p: GLib.idle_add(self._on_ports_changed))
 
@@ -3067,10 +3250,29 @@ def launch_gtk4(
 
         def _on_ports_changed(self) -> bool:
             self._rebuild_connection_list()
-            if self.auto_connect_usb and not self.link.connected:
+            active_devs = {p.device for p in self.port_monitor.ports}
+            # Immediately disconnect if the currently connected USB serial device was unplugged!
+            if (
+                self.link.connected
+                and not self.link.demo_mode
+                and self.link.port
+                and not self.link.port.startswith("tcp://")
+                and self.link.port not in active_devs
+            ):
+                self._on_link_lost("USB radio unplugged")
+                return False
+
+            if self.auto_connect_usb and not self.link.connected and not self._connecting:
                 for p in self.port_monitor.ports:
                     if p.is_quansheng:
-                        self._connect_to(p.device, p)
+                        # Brief settle delay lets Linux cdc_acm & PY32F071 finish USB enumeration cleanly
+                        GLib.timeout_add(
+                            280,
+                            lambda dev=p.device, pi=p: (
+                                (self._connect_to(dev, pi, silent_retry=True) if (not self.link.connected and not self._connecting) else None),
+                                False,
+                            )[1],
+                        )
                         break
             return False
 
@@ -3173,6 +3375,9 @@ def launch_gtk4(
                 idx = max(0, min(self._pb_idx, len(self.recorder.frames) - 1))
                 rf = self.recorder.frames[idx]
                 return rf.fb, rf.pressed, rf.led, rf.torch
+            if not self.link.connected:
+                # Disconnected: authentic unlit blank LCD (never show fake demo data!)
+                return bytes(1024), frozenset(self._pressed_keys), "off", False
             if self._flashing_active or self.link.link_mode == "stock_bl":
                 # Authentic Stock Bootloader hardware state: LCD is OFF (blank), top flashlight LED shows activity!
                 return bytes(1024), frozenset(self._pressed_keys), ("tx" if self._flashing_active else "off"), self.link.torch_on
@@ -3195,11 +3400,8 @@ def launch_gtk4(
             cr.translate(ox, oy)
             cr.scale(scale, scale)
             _fb, _pr, led, torch = self._current_display_state()
-            eff_st = (
-                dataclasses.replace(self.lcd_st, backlight=0)
-                if (self._flashing_active or self.link.link_mode == "stock_bl")
-                else self.lcd_st
-            )
+            lcd_off = (not self.link.connected) or self._flashing_active or (self.link.link_mode == "stock_bl")
+            eff_st = dataclasses.replace(self.lcd_st, backlight=0) if lcd_off else self.lcd_st
             self.handset_renderer.paint(
                 cr, self.active_model, self.lcd_state, eff_st,
                 press_anim=self._press_anim, hover_anim=self._hover_anim,
@@ -3929,14 +4131,45 @@ def launch_gtk4(
 
             dlg.save(self.win, None, _picked)
 
-        # --- Connect / Disconnect / Telemetry / Searchable Files / Wire ---
-        def _connect_to(self, port: str, port_info: DetectedPort | None = None) -> None:
-            try:
-                self.link.connect(port, baud=baud, model_override=self.forced_model, port_info=port_info)
-            except Exception as e:
-                self._notify(f"Connection failed: {e}")
+        # --- Connect / Disconnect / Auto-Reconnect / Telemetry ---
+        def _connect_to(self, port: str, port_info: DetectedPort | None = None, *, silent_retry: bool = False) -> None:
+            if self._connecting:
                 return
+            self._connecting = True
+            self.hdr_dev_lbl.set_text("Connecting…")
+            if self.win_title is not None:
+                self.win_title.set_subtitle(f"Connecting to {port}…")
 
+            def _worker() -> None:
+                try:
+                    self.link.connect(port, baud=baud, model_override=self.forced_model, port_info=port_info)
+                    GLib.idle_add(self._on_connect_success)
+                except Exception as exc:
+                    GLib.idle_add(self._on_connect_failed, port, port_info, str(exc), silent_retry)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        def _on_connect_failed(self, port: str, port_info: DetectedPort | None, err: str, silent_retry: bool) -> bool:
+            self._connecting = False
+            self.hdr_dev_lbl.set_text("Connect")
+            if self.win_title is not None:
+                self.win_title.set_subtitle("Not connected")
+            if silent_retry and self.auto_connect_usb and not self.link.connected:
+                # One quiet retry in case radio is still finishing boot after USB hotplug
+                if any(p.device == port for p in self.port_monitor.ports):
+                    GLib.timeout_add(
+                        650,
+                        lambda: (
+                            (self._connect_to(port, port_info, silent_retry=False) if (not self.link.connected and not self._connecting) else None),
+                            False,
+                        )[1],
+                    )
+                    return False
+            self._notify(f"Connection failed: {err}")
+            return False
+
+        def _on_connect_success(self) -> bool:
+            self._connecting = False
             # Always re-arm USB TX safety lock on every new radio connection!
             self.allow_usb_tx = False
             if hasattr(self, "sw_allow_tx"):
@@ -3979,10 +4212,18 @@ def launch_gtk4(
             self._refresh_telemetry_ui()
             if self.link.link_mode == "kern_os":
                 self._browse_dir("/")
+            return False
+
+        def _on_link_lost(self, reason: str) -> bool:
+            if self.link.connected:
+                self._disconnect()
+                self._notify(reason)
+            return False
 
         def _disconnect(self) -> None:
             self._release_all_keys()
             self.link.disconnect()
+            self._connecting = False
             self.allow_usb_tx = False
             if hasattr(self, "sw_allow_tx"):
                 self.sw_allow_tx.set_active(False)
@@ -4002,6 +4243,7 @@ def launch_gtk4(
             self._cached_dir_entries = []
             self._render_filtered_files()
             self._refresh_telemetry_ui()
+            self.lcd_state.step(bytes(1024), dataclasses.replace(self.lcd_st, ghosting=False, backlight=0))
             self.handset_area.queue_draw()
 
         def _refresh_telemetry_ui(self) -> bool:
