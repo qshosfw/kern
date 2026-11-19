@@ -818,7 +818,7 @@ impl<'a> Bk4829<'a, Disabled> {
         self.write_reg(0x00, 0x0000);
 
         // 2. Crystal oscillator, bandgap, RX LDO, AGC, filter, routing, CXCSS, RX power & IRQ mask
-        const INIT_REG_PATCHES: [(u8, u16); 18] = [
+        static INIT_REG_PATCHES: [(u8, u16); 18] = [
             (REG_POWER_CTRL, POWER_CTRL_RX),
             (REG_PA_CTRL, 0x0022),
             (REG_AGC_TABLE_0, 0x0318),

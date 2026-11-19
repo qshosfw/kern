@@ -263,23 +263,25 @@ pub fn try_launch_boot_module(
 pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
     let fname = crate::apps::launcher::catalog::extract_filename(path);
 
-    const HUMAN_MSGS: &[u8] = b"\
-App file was not found\non storage.\0\
-Could not read app file\nfrom storage.\0\
-App file is invalid or\ncorrupted.\0\
-App checksum failed.\nPlease reinstall it.\0\
-App info is missing.\nPlease reinstall it.\0\
-App has no runnable code.\0\
-Permission required to\nrun this app.\0\
-Not enough free memory\nto open this app.\0\
-Not enough free stack\nto open this app.\0\
-Could not load app into\nmemory.\0\
-App requires a newer\nfirmware version.\0\
-App is too large for\navailable memory.\0\
-App could not be started.\0\
-App start point is\ninvalid.\0\
-App file is incomplete.\nPlease reinstall it.\0\
-App format is not\nsupported on this radio.\0";
+    utils::static_bytes!(
+        static HUMAN_MSGS = b"\
+    App file was not found\non storage.\0\
+    Could not read app file\nfrom storage.\0\
+    App file is invalid or\ncorrupted.\0\
+    App checksum failed.\nPlease reinstall it.\0\
+    App info is missing.\nPlease reinstall it.\0\
+    App has no runnable code.\0\
+    Permission required to\nrun this app.\0\
+    Not enough free memory\nto open this app.\0\
+    Not enough free stack\nto open this app.\0\
+    Could not load app into\nmemory.\0\
+    App requires a newer\nfirmware version.\0\
+    App is too large for\navailable memory.\0\
+    App could not be started.\0\
+    App start point is\ninvalid.\0\
+    App file is incomplete.\nPlease reinstall it.\0\
+    App format is not\nsupported on this radio.\0";
+    );
 
     let msg = match err {
         #[cfg(any(test, feature = "settings_debug"))]
@@ -294,7 +296,7 @@ App format is not\nsupported on this radio.\0";
             // SAFETY: all parts are valid UTF-8 (`cap` is `&str`, literals are ASCII).
             unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
         }
-        _ => utils::format::nth_cstr(HUMAN_MSGS, err.index()),
+        _ => utils::format::nth_cstr(&HUMAN_MSGS, err.index()),
     };
 
     ctx.show_confirm(

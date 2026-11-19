@@ -3,7 +3,7 @@
 use crate::services::display::DisplayService;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions, ShortString};
 
-pub static TRIES_OPTS: &str = "3\05\010\0";
+pub const TRIES_OPTS: &str = "3\05\010\0";
 
 #[inline(never)]
 pub fn populate_security(items: &mut [MenuItem], ctx: &mut crate::SysContext) -> usize {

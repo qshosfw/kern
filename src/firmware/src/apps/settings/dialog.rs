@@ -105,11 +105,13 @@ struct DestructiveConfirm {
     hold_ds: u8,
 }
 
-static DESTRUCTIVE_STRS: &[u8] = b"\
+utils::static_bytes!(
+    static DESTRUCTIVE_STRS = b"\
 Format Storage?\0Erases user files & settings.\nCalibration is kept.\0\
 Erase All Data?\0Erases all files, settings,\nand radio calibration!\0\
 Reset Settings?\0Restores default settings.\nChannels & calib are kept.\0\
 Restart Radio?\0Saves settings and restarts\nthe radio.\0";
+);
 
 static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
     #[cfg(feature = "filesystem")]
@@ -186,8 +188,8 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
             show_destructive_hold_confirm(
                 ctx,
                 spec.tag,
-                utils::format::nth_cstr(DESTRUCTIVE_STRS, base),
-                utils::format::nth_cstr(DESTRUCTIVE_STRS, base + 1),
+                utils::format::nth_cstr(&DESTRUCTIVE_STRS, base),
+                utils::format::nth_cstr(&DESTRUCTIVE_STRS, base + 1),
                 spec.hold_ds,
             );
             return;

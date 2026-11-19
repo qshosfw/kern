@@ -202,17 +202,19 @@ struct ConfigMeta {
     rules_len: u8,
 }
 
-static CONFIG_PATHS: &[u8] = b"\
+utils::static_bytes!(
+    static CONFIG_PATHS = b"\
 /pref/display.cfg\0\
 /pref/audio.cfg\0\
 /pref/keys.cfg\0\
 /pref/system.cfg\0\
 /pref/battery.cfg\0\
 /pref/apps.cfg\0";
+);
 
 #[inline(always)]
 fn config_path(idx: usize) -> &'static str {
-    utils::format::nth_cstr(CONFIG_PATHS, idx as u8)
+    utils::format::nth_cstr(&CONFIG_PATHS, idx as u8)
 }
 
 static ALL_BOUND_RULES: [[u8; 2]; 40] = [

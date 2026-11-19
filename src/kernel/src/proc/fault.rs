@@ -25,10 +25,13 @@ pub enum Exception {
     NoOp = 8,
 }
 
-const EXCEPTION_LABELS: &[u8] =
-    b"OK\0HardFault\0Stack\0Hang\0Cap Denied\0Bad Ptr\0Bad Arg\0Unleased\0Bad Op\0";
+utils::static_bytes!(
+    static EXCEPTION_LABELS =
+        b"OK\0HardFault\0Stack\0Hang\0Cap Denied\0Bad Ptr\0Bad Arg\0Unleased\0Bad Op\0";
+);
 
-const EXCEPTION_DESCS: &[u8] = b"\
+utils::static_bytes!(
+    static EXCEPTION_DESCS = b"\
 had no error.\0\
 crashed unexpectedly.\nInvalid memory or code.\0\
 ran out of stack space.\nToo much memory used.\0\
@@ -38,16 +41,17 @@ used a bad address.\nBlocked for safety.\0\
 sent an invalid request.\nBlocked for safety.\0\
 used a busy device.\nHardware not owned.\0\
 called an unknown API.\nUpdate app or firmware.\0";
+);
 
 impl Exception {
     #[inline(always)]
     pub fn label(self) -> &'static str {
-        utils::format::nth_cstr(EXCEPTION_LABELS, self as u8)
+        utils::format::nth_cstr(&EXCEPTION_LABELS, self as u8)
     }
 
     #[inline(always)]
     pub fn description(self) -> &'static str {
-        utils::format::nth_cstr(EXCEPTION_DESCS, self as u8)
+        utils::format::nth_cstr(&EXCEPTION_DESCS, self as u8)
     }
 }
 

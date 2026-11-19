@@ -15,10 +15,10 @@ pub const KEY_SHORTCUT_COUNT: usize = 19;
 pub const F_DRAWER_START_SLOT: usize = 5;
 
 /// Packed trigger slot labels shared by settings lists, rule picker, and F-key drawer.
-pub static SLOT_OPTIONS: &str = "S1\0S1+\0S2\0S2+\0M+\0F+1\0F+2\0F+3\0F+4\0F+5\0F+6\0F+7\0F+8\0F+9\0F+0\0F+*\0F+M\0F+S1\0F+S2\0";
+pub const SLOT_OPTIONS: &str = "S1\0S1+\0S2\0S2+\0M+\0F+1\0F+2\0F+3\0F+4\0F+5\0F+6\0F+7\0F+8\0F+9\0F+0\0F+*\0F+M\0F+S1\0F+S2\0";
 
 /// Packed context scope labels shared by settings selector and shortcut engine.
-pub static CTX_OPTIONS: &str = "Global\0VFO\0Home\0Prefs\0App\0";
+pub const CTX_OPTIONS: &str = "Global\0VFO\0Home\0Prefs\0App\0";
 
 #[inline(never)]
 pub fn slot_label(slot: usize) -> &'static str {
@@ -134,10 +134,12 @@ pub struct BuiltinTarget {
     pub icon_idx: u8,
 }
 
-static BUILTIN_LABELS: &[u8] = b"Flashlight\0Settings\0Lock Keys\0Home\0Sleep\0None\0Missing\0";
+utils::static_bytes!(
+    static BUILTIN_LABELS = b"Flashlight\0Settings\0Lock Keys\0Home\0Sleep\0None\0Missing\0";
+);
 
 /// Pure OS built-in system shortcuts ordered 1..=5 matching `TARGET_FLASHLIGHT..=TARGET_SLEEP`.
-pub const BUILTIN_TARGETS: [BuiltinTarget; 5] = [
+pub static BUILTIN_TARGETS: [BuiltinTarget; 5] = [
     BuiltinTarget {
         cmd: Shortcut::Flashlight,
         icon_idx: 6,
@@ -279,7 +281,7 @@ pub fn describe_into(
         if (id & 0x8000) == 0 {
             let i = (id as usize).wrapping_sub(1);
             if let Some(b) = BUILTIN_TARGETS.get(i) {
-                out.push_str(utils::format::nth_cstr(BUILTIN_LABELS, i as u8));
+                out.push_str(utils::format::nth_cstr(&BUILTIN_LABELS, i as u8));
                 return builtin_icon(b.icon_idx);
             }
         } else if let Some((e, _, suffix)) = find_dynamic(id, cat) {
@@ -293,7 +295,7 @@ pub fn describe_into(
             lbl_idx = 6;
         }
     }
-    out.push_str(utils::format::nth_cstr(BUILTIN_LABELS, lbl_idx));
+    out.push_str(utils::format::nth_cstr(&BUILTIN_LABELS, lbl_idx));
     if lbl_idx == 6 {
         gfx::icons::ICON_FOLDER
     } else {
@@ -404,13 +406,13 @@ pub fn build_picker_sheet(
     push_entry(
         TARGET_NONE,
         gfx::icons::RADIO_OFF,
-        utils::format::nth_cstr(BUILTIN_LABELS, 5),
+        utils::format::nth_cstr(&BUILTIN_LABELS, 5),
     );
     for (i, b) in BUILTIN_TARGETS.iter().enumerate() {
         push_entry(
             (i + 1) as u16,
             builtin_icon(b.icon_idx),
-            utils::format::nth_cstr(BUILTIN_LABELS, i as u8),
+            utils::format::nth_cstr(&BUILTIN_LABELS, i as u8),
         );
     }
     for (pkg_idx, e) in catalog.entries.iter().enumerate() {

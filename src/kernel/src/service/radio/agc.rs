@@ -23,7 +23,7 @@ pub const AGC_DEFAULT_TABLE: [u16; 5] = [0x0000, 0x1020, 0x2040, 0x3060, 0x4080]
 
 /// 43-entry calibrated front-end gain table `(reg_13_val, gain_db)` for linearizing
 /// high-modulation-depth AM signals (`-93 dB` down to `0 dB`).
-pub const AM_LINEARITY_GAIN_TABLE: [(u16, i8); 43] = [
+pub static AM_LINEARITY_GAIN_TABLE: [(u16, i8); 43] = [
     (0x03BE, -7),  // 0: original base reference
     (0x0000, -93), // 1
     (0x0008, -91), // 2

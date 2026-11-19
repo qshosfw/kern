@@ -71,7 +71,7 @@ pub static DEVICE_DESCRIPTOR: [u8; 18] = [
 
 // ── Configuration Descriptor ────────────────────────────────────────────────
 #[cfg(all(feature = "usb_cdc", feature = "usb_msc"))]
-pub const CONFIG_DESCRIPTOR: [u8; 9 + 8 + 9 + 5 + 5 + 4 + 5 + 7 + 9 + 7 + 7 + 9 + 7 + 7] = [
+pub static CONFIG_DESCRIPTOR: [u8; 9 + 8 + 9 + 5 + 5 + 4 + 5 + 7 + 9 + 7 + 7 + 9 + 7 + 7] = [
     // 1. Configuration Header (9 bytes)
     9,
     DESC_TYPE_CONFIGURATION,
@@ -187,7 +187,7 @@ pub const CONFIG_DESCRIPTOR: [u8; 9 + 8 + 9 + 5 + 5 + 4 + 5 + 7 + 9 + 7 + 7 + 9 
 ];
 
 #[cfg(all(feature = "usb_msc", not(feature = "usb_cdc")))]
-pub const CONFIG_DESCRIPTOR: [u8; 9 + 9 + 7 + 7] = [
+pub static CONFIG_DESCRIPTOR: [u8; 9 + 9 + 7 + 7] = [
     // 1. Configuration Header (9 bytes)
     9,
     DESC_TYPE_CONFIGURATION,
@@ -311,7 +311,7 @@ pub static CONFIG_DESCRIPTOR: [u8; 9 + 8 + 9 + 5 + 5 + 4 + 5 + 7 + 9 + 7 + 7] = 
 
 // Fallback if neither is active (base USB)
 #[cfg(all(not(feature = "usb_cdc"), not(feature = "usb_msc")))]
-pub const CONFIG_DESCRIPTOR: [u8; 9] = [9, DESC_TYPE_CONFIGURATION, 9, 0, 0, 1, 0, 0xC0, 50];
+pub static CONFIG_DESCRIPTOR: [u8; 9] = [9, DESC_TYPE_CONFIGURATION, 9, 0, 0, 1, 0, 0xC0, 50];
 
 // ── Standard String Descriptors ─────────────────────────────────────────────
 pub static STRING_LANGID: [u8; 4] = [

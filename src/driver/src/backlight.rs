@@ -112,7 +112,6 @@ impl BacklightController {
 
     pub fn init(&mut self) {
         self.apply_hardware();
-        drive_backlight_pins(false);
     }
 
     pub fn set_mode(&mut self, mode: BacklightMode) {
@@ -142,7 +141,6 @@ impl BacklightController {
         self.target_level = 0;
         self.fade_accumulator_ms = 0;
         self.apply_hardware();
-        bsp::pins::BACKLIGHT.set_low();
     }
 
     pub fn set_keypad_mode(&mut self, mode: u8) {
@@ -202,7 +200,6 @@ impl BacklightController {
                 self.current_level = 0;
                 self.target_level = 0;
                 self.apply_hardware();
-                drive_backlight_pins(false);
                 return false;
             }
             BacklightMode::On => {

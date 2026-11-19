@@ -12,7 +12,7 @@ use kernel::service::radio::squelch::SquelchThresholds;
 pub fn squelch_level_to_thresholds(level: u8) -> SquelchThresholds {
     const HYST: u16 = 4;
     // (open_rssi, open_noise, open_glitch) for levels 1..=9
-    const TABLE: [(u16, u16, u16); 9] = [
+    static TABLE: [(u16, u16, u16); 9] = [
         (63, 59, 90),
         (76, 54, 80),
         (89, 49, 70),

@@ -38,14 +38,16 @@ struct HoldSpec {
     required_ms: u16,
 }
 
-static HOLD_STRINGS: &[u8] = b"\
+utils::static_bytes!(
+    static HOLD_STRINGS = b"\
 Deep Sleep\0Hold EXIT for sleep\0\
 Close App\0Hold EXIT to close\0\
 Keypad Locked\0Hold to unlock\0\
 Keypad Lock\0Hold to lock\0\
-Keypad\0Keypad Unlocked\0Keypad Locked\0";
+Keypad\0Keypad Unlocked\0";
+);
 
-const HOLD_SPECS: [HoldSpec; 4] = [
+static HOLD_SPECS: [HoldSpec; 4] = [
     HoldSpec {
         icon: Icon::Moon,
         required_ms: 1000,
@@ -460,31 +462,31 @@ impl KeypadLockManager {
         let (title, msg, icon, show_bar, show_hint) = if self.hold_ui_open {
             let k = self.hold_kind as u8;
             (
-                utils::format::nth_cstr(HOLD_STRINGS, k * 2),
-                utils::format::nth_cstr(HOLD_STRINGS, k * 2 + 1),
+                utils::format::nth_cstr(&HOLD_STRINGS, k * 2),
+                utils::format::nth_cstr(&HOLD_STRINGS, k * 2 + 1),
                 HOLD_SPECS[k as usize].icon,
                 true,
                 false,
             )
         } else {
-            let kt = utils::format::nth_cstr(HOLD_STRINGS, 8);
+            let kt = utils::format::nth_cstr(&HOLD_STRINGS, 8);
             match self.toast {
                 LockToast::Unlocked => (
                     kt,
-                    utils::format::nth_cstr(HOLD_STRINGS, 9),
+                    utils::format::nth_cstr(&HOLD_STRINGS, 9),
                     Icon::Unlock,
                     false,
                     false,
                 ),
                 LockToast::Locked => (
                     kt,
-                    utils::format::nth_cstr(HOLD_STRINGS, 10),
+                    utils::format::nth_cstr(&HOLD_STRINGS, 4),
                     Icon::Lock,
                     false,
                     false,
                 ),
                 LockToast::PromptUnlock => (
-                    utils::format::nth_cstr(HOLD_STRINGS, 4),
+                    utils::format::nth_cstr(&HOLD_STRINGS, 4),
                     "",
                     Icon::Lock,
                     false,

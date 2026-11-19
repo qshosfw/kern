@@ -216,12 +216,14 @@ impl BatteryDriver {
         }
     }
 
+    #[inline(never)]
     fn ema_u16(cur: u16, sample: u16, shift: u32) -> u16 {
         let weight = (1u32 << shift) - 1;
         let round = 1u32 << (shift - 1);
         ((cur as u32 * weight + sample as u32 + round) >> shift) as u16
     }
 
+    #[inline(never)]
     fn eval_hysteresis(active: bool, ocv_mv: u16, pct: u8, limit_mv: u16, enter_pct: u8) -> bool {
         if active {
             !(ocv_mv >= limit_mv.saturating_add(150) && pct >= enter_pct - 2)

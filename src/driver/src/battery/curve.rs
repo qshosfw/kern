@@ -50,7 +50,7 @@ pub struct CurveDefinition {
     pub segments: [CurveSegment; 6],
 }
 
-pub const VOLTAGE_CURVES: [CurveDefinition; 5] = [
+pub static VOLTAGE_CURVES: [CurveDefinition; 5] = [
     // 1600 mAh Standard Pack (UV-K5)
     CurveDefinition {
         v_max: 838,
