@@ -54,21 +54,20 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
         let _ = (t_str, init_str);
         return;
     }
-    const DEFS: &[u8] = b"Notice\0\0\0\0Confirm\0\0OK\0CANCEL\0";
+    utils::static_bytes!(
+        static DEFS = b"Notice\0\0\0\0Confirm\0\0OK\0CANCEL\0";
+    );
     let base = u8::from(r.kind != 0) * 4;
-    let ptrs = [r.title, r.msg, r.ok, r.cancel];
-    let lens = [r.t_len, r.m_len, r.o_len, r.c_len];
-    let mut s = [""; 4];
-    for i in 0..4usize {
-        s[i] = unsafe {
-            str_or_default(
-                ptrs[i],
-                lens[i] as usize,
-                utils::format::nth_cstr(DEFS, base + i as u8),
-            )
-        };
-    }
-    modal_mut().show_confirm(r.tag, s[0], s[1], s[2], s[3]);
+    let pick = |p: *const u8, len: u8, off: u8| unsafe {
+        str_or_default(p, len as usize, utils::format::nth_cstr(&DEFS, base + off))
+    };
+    modal_mut().show_confirm(
+        r.tag,
+        pick(r.title, r.t_len, 0),
+        pick(r.msg, r.m_len, 1),
+        pick(r.ok, r.o_len, 2),
+        pick(r.cancel, r.c_len, 3),
+    );
 }
 
 #[inline(never)]

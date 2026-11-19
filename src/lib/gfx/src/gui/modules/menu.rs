@@ -629,7 +629,7 @@ fn render_menu_row(
             + 3;
     }
     if let Some(bmp) = icon {
-        if *bmp != [0u8; 8] {
+        if !core::ptr::eq(bmp, &icons::ICON_NONE) {
             icons::draw_icon_8(canvas, text_x, row_y + 2, bmp, tc);
             text_x += if is_shortcut { 11 } else { 13 };
         }
