@@ -20,14 +20,11 @@
 #define DFU_LEAF_PROBE    4u
 #define DFU_LEAF_TOOLS    5u
 #define DFU_LEAF_INFO     6u
-#define DFU_LEAF_CALIB    7u
-#define DFU_LEAF_RESCUE   8u
-#define DFU_LEAF_SCAN     9u
-#define DFU_LEAF_FILES    10u
-#define DFU_LEAF_INSPECT  11u
-#define DFU_LEAF_CONSOLE  12u
-#define DFU_LEAF_CALIO    13u
-#define DFU_LEAF_CALEDIT  14u
+#define DFU_LEAF_RESCUE   7u
+#define DFU_LEAF_SCAN     8u
+#define DFU_LEAF_FILES    9u
+#define DFU_LEAF_INSPECT  10u
+#define DFU_LEAF_CONSOLE  11u
 
 /* Recovery menu dispatch actions */
 #define DFU_TOOL_ACT_DFU       0u /* Return to live DFU bootloader handoff */
@@ -36,10 +33,9 @@
 /* Recovery menu items */
 #define DFU_TOOL_ITEM_FLASH    0u /* Flat firmware image browser (.kfw/.uf2/.bin) */
 #define DFU_TOOL_ITEM_APPLETS  1u /* Flat applet browser (.krx/.ram/.mod) */
-#define DFU_TOOL_ITEM_CLONE    2u /* Radio Clone (2-pin serial transfer) */
-#define DFU_TOOL_ITEM_CALIB    3u /* Calibration inspect & backup */
-#define DFU_TOOL_ITEM_INFO     4u /* Bootloader & hardware information */
-#define DFU_TOOL_ITEM_COUNT    5u
+#define DFU_TOOL_ITEM_PEER     2u /* Peer Flash (2-pin radio-to-radio transfer) */
+#define DFU_TOOL_ITEM_INFO     3u /* Bootloader & hardware information */
+#define DFU_TOOL_ITEM_COUNT    4u
 
 typedef struct {
     char name[20];
@@ -50,7 +46,7 @@ typedef struct {
 
 /*
  * Transient scratch hosted inside TRANSIENT_ARENA[4160..5120) (`st->stage_buf`, 960 B):
- *   - During Recovery menu: holds DfuToolsScratch (380 B <= 960 B)
+ *   - During Recovery menu: holds DfuToolsScratch (380 B) + applet console log ring
  *   - During DFU staging:   holds 640 B Page-5 banners + 320 B Page-4 titles (960 B)
  * Zero bytes added to root.bin!
  */
@@ -73,12 +69,6 @@ typedef struct {
     u32  (*u32_dec)(char* dst, u32 val);
 } DfuUiOps;
 
-static inline void dfu_draw_header(const KrxApiTable* api, const char* title) {
-    KrxWidget d;
-    d.p0 = (const u8*)title; d.len0 = krx_strlen(title); d.y = 0;
-    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_NEGATED_HEADER, (u32)&d, 0u);
-}
-
 typedef struct {
     KbhpEnvelope kbhp;             /* 64 B: Prepared KBHP v1.0 handoff envelope */
     u32          tramp[3];         /* 12 B: [0]=MSP, [1]=SystemInit, [2]=__main */
@@ -89,7 +79,7 @@ typedef struct {
     u8           use_hook;         /* 1 B:  Non-zero if SysTick hook should attach */
     u8           tool_sel;         /* 1 B:  Active selection in Recovery menu */
     u8           tool_sub;         /* 1 B:  Sub-mode (0=Flash Image, 1=Applets) */
-    u8           tool_action;      /* 1 B:  DFU_TOOL_ACT_* / CalIO status code */
+    u8           tool_action;      /* 1 B:  DFU_TOOL_ACT_* dispatch result */
     u8           tools_active;     /* 1 B:  Non-zero once RTC tools flag was consumed */
     u8           next_leaf;        /* 1 B:  Next P0 leaf continuation (0 = back to Recovery menu) */
     DfuUiOps     ui;               /* 16 B: Resident shared UI helpers */

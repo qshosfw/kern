@@ -4,7 +4,7 @@
 #include "dfu_shared.h"
 
 #define INFO_ROWS 9u
-#define INFO_VIS  6u
+#define INFO_VIS  7u
 
 static const char* nth_s(const char* p, u8 i) {
     while (i--) { while (*p) p++; p++; }
@@ -37,7 +37,6 @@ u32 leaf6_entry(u32 op, const KrxApiTable* api, void* param) {
     u8 top = 0u;
     for (;;) {
         krx_clear(api);
-        dfu_draw_header(api, "Information");
         for (u8 r = 0u; r < INFO_VIS; r++) {
             u8 idx = (u8)(top + r);
             if (idx >= INFO_ROWS) break;
@@ -76,9 +75,9 @@ u32 leaf6_entry(u32 op, const KrxApiTable* api, void* param) {
             } else {
                 v = (si.flags & KRX_SYS_INFO_FLAG_CALIB_VALID) ? "KBHP 1.0 (Cal)" : "KBHP 1.0";
             }
-            st->ui.kv(api, (i16)(16 + r * 7), nth_s(KEYS, idx), v);
+            st->ui.kv(api, (i16)(7 + r * 7), nth_s(KEYS, idx), v);
         }
-        krx_ui_draw_scrollbar(api, 125u, 11u, 41u, (u16)top, (u16)INFO_ROWS, INFO_VIS);
+        krx_ui_draw_scrollbar(api, 125u, 1u, 50u, (u16)top, (u16)INFO_ROWS, INFO_VIS);
         st->ui.softbar(api, "", "", "EXIT", "Back");
         krx_commit_frame(api);
 

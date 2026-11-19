@@ -41,13 +41,20 @@ dfu_systick_isr:
     lsls r0, r0, #16
     bpl 13f                     // PB15 low directly -> Side Key 1 pressed
 
-    // Test EXIT: drive PB3 (Col 4) LOW briefly, sample PB15, restore MODER
-    movs r2, #8                 // PB3
-    str r2, [r1, #0x28]         // GPIOB->BRR = PB3
+    // Test EXIT (PB3, col bit 3) then MENU (PB6, col bit 6) by pulsing column LOW & sampling PB15
+    movs r6, #3                 // col bit 3 = PB3 (EXIT)
+    movs r7, #1
+191:
+    movs r2, #1
+    lsls r2, r2, r6
+    str r2, [r1, #0x28]         // GPIOB->BRR = (1 << col)
     ldr r3, [r1, #0x00]         // MODER
-    movs r2, #0xC0              // PB3 bits [7:6]
-    bics r3, r2
-    movs r2, #0x40              // PB3 Output
+    lsls r0, r6, #1             // shift = col * 2
+    movs r2, #3
+    lsls r2, r2, r0             // mask = 3 << (col * 2)
+    bics r3, r2                 // clear col mode bits (restores Input=00 cleanly!)
+    movs r2, #1
+    lsls r2, r2, r0             // Output = 1 << (col * 2)
     orrs r2, r3
     str r2, [r1, #0x00]
     movs r2, #16
@@ -56,30 +63,12 @@ dfu_systick_isr:
     ldr r0, [r1, #0x10]
     str r3, [r1, #0x00]
     lsls r0, r0, #16
-    bpl 120f                    // EXIT pressed -> r7 = 1
-
-    // Test MENU: drive PB6 (Col 1) LOW briefly, sample PB15, restore MODER
-    movs r2, #0x40              // PB6
-    str r2, [r1, #0x28]         // GPIOB->BRR = PB6
-    ldr r3, [r1, #0x00]         // MODER
-    movs r2, #0x30
-    lsls r2, r2, #8             // 0x3000: PB6 bits [13:12]
-    bics r3, r2
-    movs r2, #0x10
-    lsls r2, r2, #8             // 0x1000: PB6 Output
-    orrs r2, r3
-    str r2, [r1, #0x00]
-    movs r2, #16
-190: subs r2, r2, #1
-    bne 190b
-    ldr r0, [r1, #0x10]
-    str r3, [r1, #0x00]
-    lsls r0, r0, #16
-    bmi 1f                      // Released high
-    movs r7, #2                 // MENU pressed
-    b 121f
-120:
-    movs r7, #1                 // EXIT pressed
+    bpl 121f                    // Pressed! r7 holds 1 (EXIT) or 2 (MENU)
+    adds r6, #3
+    adds r7, #1
+    cmp r7, #3
+    blo 191b
+    b 1f                        // Released high
 121:
     movs r0, #FLAG_NO_TAP       // EXIT/MENU suppress short-press backlight toggle
     orrs r5, r5, r0
@@ -361,6 +350,8 @@ dfu_systick_isr:
     ldr r0, [r4, #ST_TICK]
     str r0, [r4, #ST_FLASH_START]
 53:
+    movs r3, #150
+    lsls r3, r3, #1             // 300 ticks = 10 s @ 30 Hz
     ldrh r0, [r2, #6]           // cur
     ldrh r1, [r4, #ST_FLASH_CUR]
     cmp r0, r1
@@ -373,20 +364,16 @@ dfu_systick_isr:
     cmp r0, #0
     beq 55f
     ldrh r1, [r4, #ST_STALL_TICKS]
-    movs r3, #150
-    lsls r3, r3, #1             // 300 ticks = 10 s @ 30 Hz
     cmp r1, r3
     bhs 55f
     adds r1, r1, #1
     strh r1, [r4, #ST_STALL_TICKS]
 55:
-    movs r7, #4                 // banner 4: "Flashing page X/Y"
+    movs r7, #4                 // banner 4: "Write block X/Y"
     ldrh r1, [r4, #ST_STALL_TICKS]
-    movs r3, #150
-    lsls r3, r3, #1
     cmp r1, r3
     blo 56f
-    movs r7, #7                 // banner 7: "Aborted - reflash" (stalled)
+    movs r7, #7                 // banner 7: "Halted - reconnect" (stalled)
 56:
     adds r0, r0, #1             // cur_page_1based
     str r0, [sp, #0]
@@ -673,8 +660,8 @@ dfu_systick_isr:
     movs r0, #14                // 's'
 83: bl stamp_glyph_3x5
 
-    // Stream Page 1 (<< 3 + 0x0F antenna cols 0..1 & knob cols 12..15, else 0x0C bezel)
-    // and Page 2 (>> 5 + 0xB8 bezel + top speaker slot).
+    // Stream Page 1 (<< 4 + 0x0F antenna col 0 & knob cols 14..15, else 0x0C bezel)
+    // and Page 2 (>> 4 + 0xE0 solid lower bezel below taller Y=12..20 LCD).
     movs r4, #0
 101:
     movs r0, #0xB1
@@ -687,17 +674,17 @@ dfu_systick_isr:
     ldrb r0, [r5, r6]
     cmp r4, #0
     bne 103f
-    lsls r0, r0, #3
+    lsls r0, r0, #4
     movs r1, #0x0F
-    cmp r6, #2
+    cmp r6, #1
     blo 105f
-    cmp r6, #12
+    cmp r6, #14
     bhs 105f
     movs r1, #0x0C
     b 105f
 103:
-    lsrs r0, r0, #5
-    movs r1, #0xB8
+    lsrs r0, r0, #4
+    movs r1, #0xE0
 105:
     orrs r0, r0, r1
     bl spi_tx
@@ -826,17 +813,16 @@ dfu_systick_isr:
     movs r6, #0
     b 97f
 970:
+    ldr r0, [r4, #ST_TICK]
     cmp r7, #0
     bne 971f
-    ldr r0, [r4, #ST_TICK]
     lsrs r0, r0, #4             // ~1 Hz waiting blink
-    eors r6, r6, r0
-    b 97f
+    b 972f
 971:
     cmp r7, #3
     bne 97f
-    ldr r0, [r4, #ST_TICK]
     lsrs r0, r0, #2             // brisk activity pulse
+972:
     eors r6, r6, r0
 97:
     movs r1, #1
@@ -886,15 +872,13 @@ dfu_systick_isr:
     cmp r7, #4
     bne 902f
     ldr r1, [sp, #0]            // Flashing -> Green/Orange alternating every flash page
-    movs r0, #1
-    ands r0, r0, r1
-    adds r0, r0, #2
-    b 905f
+    b 904f
 902:
     cmp r7, #3
     bne 903f
     ldr r1, [r4, #ST_TICK]      // Link active -> Green/Orange flutter
     lsrs r1, r1, #1
+904:
     movs r0, #1
     ands r0, r0, r1
     adds r0, r0, #2

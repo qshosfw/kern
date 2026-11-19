@@ -9,8 +9,7 @@
  *   - Leaf 4  (`leaf4_probe`):   ROM fingerprint (Stock K1/Safe/Moto/Custom) & KBHP prep
  *   - Leaf 5  (`leaf5_tools`):   RTC tools gate & Recovery menu
  *   - Leaf 6  (`leaf6_info`):    Bootloader & hardware Information screen
- *   - Leaf 7  (`leaf7_calib`):   Calibration inspect & /boot/calib.bkp backup
- *   - Leaf 8  (`leaf8_rescue`):  Radio Clone 2-pin serial readiness screen
+ *   - Leaf 8  (`leaf8_rescue`):  Peer Flash radio-to-radio hub
  *   - Leaf 9  (`leaf9_scan`):    Flat firmware/applet filesystem scanner
  *   - Leaf 10 (`leaf10_files`):  Flat firmware/applet list browser
  *   - Leaf 11 (`leaf11_inspect`): Pre-flight image/applet format & fit inspector
@@ -199,7 +198,7 @@ static void enter_dfu_session(const KrxApiTable* api) {
 
     /* Leaf 5 checks RTC_ALR TOOLS flag; immediately returns DFU_TOOL_ACT_DFU on normal boot */
     static const u8 ENTRY_LEAF[DFU_TOOL_ITEM_COUNT] = {
-        DFU_LEAF_SCAN, DFU_LEAF_SCAN, DFU_LEAF_RESCUE, DFU_LEAF_CALIO, DFU_LEAF_INFO
+        DFU_LEAF_SCAN, DFU_LEAF_SCAN, DFU_LEAF_RESCUE, DFU_LEAF_INFO
     };
     for (;;) {
         g_state.tool_action = DFU_TOOL_ACT_DFU;

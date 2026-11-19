@@ -11,23 +11,23 @@
  */
 #include "dfu_shared.h"
 
-/* 5 agnostic, zero-descender Page-4 titles (baseline y=39) for states 0, 1, 2, 3, 6 */
+/* 5 agnostic, zero-descender Page-4 titles (baseline y=39, strictly inside X=32..95) */
 static const u8 DFU_TITLES_PACKED[] =
     "\x08" "DFU Mode"
     "\x0d" "USB connected"
     "\x0b" "Host linked"
     "\x0b" "Link active"
-    "\x10" "Serial connected";
+    "\x0d" "Serial linked";
 
-/* 8 agnostic, zero-descender Page-5 subtitles (baseline y=47) for states 0..=7 */
+/* 8 agnostic, zero-descender Page-5 subtitles (baseline y=47, strictly inside X=24..103) */
 static const u8 DFU_BANNERS_PACKED[] =
-    "\x15" "Connect USB or serial"
+    "\x12" "Connect USB/serial"
     "\x10" "Wait for host..."
     "\x12" "Clear for transfer"
     "\x12" "Data in transit..."
     "\x0c" "Write block "
     "\x0d" "Transfer done"
-    "\x11" "2-pin serial link"
+    "\x11" "Serial cable link"
     "\x12" "Halted - reconnect";
 
 static void draw_page_line(const KrxApiTable* api, u8 page, i16 x, i16 y, u8 align, const char* s, u16 len) {
@@ -47,7 +47,7 @@ u32 leaf3_entry(u32 op, const KrxApiTable* api, void* param) {
     draw_page_line(api, 4u, 64, 39, KRX_ALIGN_CENTER, (const char*)(DFU_TITLES_PACKED + 1), 8u);
 
     if (st->keys_held) {
-        static const char rel[] = "Release side key...";
+        static const char rel[] = "Release button...";
         draw_page_line(api, 5u, 64, 47, KRX_ALIGN_CENTER, rel, sizeof(rel) - 1u);
         krx_commit_frame(api);
         while (((*(const volatile u32*)0x50000410u) & 0xC000u) != 0xC000u) {
@@ -56,7 +56,7 @@ u32 leaf3_entry(u32 op, const KrxApiTable* api, void* param) {
         krx_delay_ms(api, 20u);
     }
 
-    draw_page_line(api, 5u, 64, 47, KRX_ALIGN_CENTER, (const char*)(DFU_BANNERS_PACKED + 1), 21u);
+    draw_page_line(api, 5u, 64, 47, KRX_ALIGN_CENTER, (const char*)(DFU_BANNERS_PACKED + 1), 18u);
     krx_commit_frame(api);
 
     if (st->kbhp.bl_kind == KBHP_BL_STOCK_K1) {

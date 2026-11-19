@@ -30,7 +30,7 @@ dfu_reboot_tools:
     movs r2, #1
     orrs r1, r1, r2
     str r1, [r0, #0x24]
-    ldr r3, =50000
+    lsls r3, r2, #16            // 65536 timeout
 1001:
     ldr r1, [r0, #0x24]
     lsrs r1, r1, #2             // bit 1 = LSIRDY
@@ -40,7 +40,8 @@ dfu_reboot_tools:
 1002:
     // Ensure RTC clocked by LSI and enabled: RCC_BDCR (+0x20 from APB1ENR) |= 0x8200
     ldr r1, [r0, #0x20]
-    ldr r2, =0x8200
+    movs r2, #0x82
+    lsls r2, r2, #8
     orrs r1, r1, r2
     str r1, [r0, #0x20]
     // Write 0xA500_4900 to RTC_ALRH/ALRL with RTOFF/CNF handshake
@@ -50,19 +51,22 @@ dfu_reboot_tools:
     movs r2, #0x10              // CRL_CNF
     orrs r1, r1, r2
     str r1, [r0, #0x04]
-    ldr r2, =KBHP_RTC_TOOLS_HI
+    movs r2, #0xA5
+    lsls r2, r2, #8
     str r2, [r0, #0x20]         // RTC_ALRH = 0xA500
-    ldr r2, =KBHP_RTC_TOOLS_LO
+    movs r2, #0x49
+    lsls r2, r2, #8
     str r2, [r0, #0x24]         // RTC_ALRL = 0x4900
     movs r2, #0x10
     bics r1, r1, r2
     str r1, [r0, #0x04]         // clear CNF to commit write
     bl rtc_wait_rtoff
-    movs r4, #1                 // keep PF8 backlight ON across warm reset into Recovery menu
+    movs r4, #1                 // instant warm EXC_RETURN jump into Kern Recovery
     b dfu_reboot_common
 
 rtc_wait_rtoff:
-    ldr r3, =50000
+    movs r3, #1
+    lsls r3, r3, #16
 1005:
     ldr r1, [r0, #0x04]
     lsrs r1, r1, #6             // bit 5 = RTOFF
@@ -73,38 +77,76 @@ rtc_wait_rtoff:
     bx lr
 
 dfu_reboot:
-    movs r4, #0                 // normal EXIT reboot: turn PF8 backlight OFF
+    movs r4, #0                 // normal EXIT reboot: full SYSRESETREQ with PF8 OFF
 dfu_reboot_common:
     movs r0, #0
     bl bk4829_set_led
     cpsid i
     ldr r3, =SCS_SYSTICK_CSR
     movs r1, #0
-    str r1, [r3]
+    str r1, [r3]                // stop SysTick
     movs r2, #0x17
-    lsls r2, r2, #4             // 0xE000_E180 (NVIC->ICER[0])
+    lsls r2, r2, #4             // +0x170 -> NVIC->ICER[0]
     mvns r1, r1
     str r1, [r3, r2]
+    adds r2, #0x80
+    adds r2, #0x80              // +0x270 -> NVIC->ICPR[0]
+    str r1, [r3, r2]
     ldr r0, =RCC_APB1ENR
-    subs r0, #0x10              // 0x4002_102C (RCC->APB1RSTR)
+    subs r0, #0x10              // 0x4002_102C (RCC->APBRSTR1)
     movs r1, #1
-    lsls r1, r1, #23
+    lsls r1, r1, #23            // USBRST
     str r1, [r0]
-    movs r1, #0
-    str r1, [r0]
+    movs r2, #0
+    str r2, [r0]
+    ldr r3, =0xE000ED08         // SCB->VTOR (+0), SCB->AIRCR (+4)
     cmp r4, #0
     bne 1007f
     ldr r0, =0x50001428         // GPIOF->BRR
     movs r1, #1
     lsls r1, r1, #8             // PF8 backlight OFF
     str r1, [r0]
-1007:
     dsb
-    ldr r0, =SCB_AIRCR
     ldr r1, =AIRCR_SYSRESETREQ
-    str r1, [r0]
+    str r1, [r3, #4]            // SCB->AIRCR
     dsb
 0:  b 0b
+
+1007:
+    // Instant zero-flash DFU -> Recovery handoff: reset DMA1 + USART1, feed IWDG,
+    // keep PF8 backlight & ST7565 live, and exit Handler mode directly into Kern (0x0800_2800)
+    // via Cortex-M0+ EXC_RETURN (0xFFFF_FFF9), bypassing stock BL (0x0800_0000) completely.
+    subs r0, #4                 // 0x4002_1028 (RCC->AHBRSTR)
+    movs r1, #1                 // DMARST
+    str r1, [r0, #0]
+    str r2, [r0, #0]
+    lsls r1, r1, #14            // USART1RST (APBRSTR2 = [r0, #8])
+    str r1, [r0, #8]
+    str r2, [r0, #8]
+    ldr r0, =RTC_BASE
+    movs r1, #8
+    lsls r1, r1, #8             // +0x800 -> 0x4000_3000 (IWDG->KR)
+    adds r0, r0, r1
+    movs r1, #0xAA
+    lsls r2, r1, #8
+    orrs r1, r1, r2             // 0xAAAA feed
+    str r1, [r0]
+    ldr r0, =APP_FLASH_BASE
+    str r0, [r3, #0]            // SCB->VTOR = 0x0800_2800
+    ldr r1, [r0, #0]            // app MSP
+    ldr r2, [r0, #4]            // app Reset handler (Thumb, bit 0 set)
+    subs r2, r2, #1             // ARMv6-M: stacked return PC must have bit 0 clear
+    subs r1, #32                // synthetic 8-word Cortex-M0+ exception frame
+    str r2, [r1, #24]           // frame.pc = app_reset
+    movs r2, #1
+    lsls r2, r2, #24            // frame.xpsr = 0x0100_0000 (Thumb=1, IPSR=0 Thread mode)
+    str r2, [r1, #28]
+    msr msp, r1
+    dsb
+    isb
+    movs r0, #6
+    mvns r0, r0                 // 0xFFFF_FFF9 (EXC_RETURN: Thread mode, MSP)
+    bx r0
     .ltorg
 
 // Bitbang BK4829 REG_33 status LED: r0 = led (0=Off, 1=Red, 2=Green, 3=Orange); clobbers r0..r3

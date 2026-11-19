@@ -39,10 +39,9 @@ static void render_menu(const KrxApiTable* api, const DfuSharedState* st, u8 sel
         "Flash Image\0"
         "Applets\0"
         "Peer Flash\0"
-        "Calibration\0"
         "Information\0";
-    /* Built-in 8x8 Kern icons: Upload(49), Apps(46), Radio(25), Wrench(48), Info(30) */
-    static const u8 ICONS[DFU_TOOL_ITEM_COUNT] = { 49u, 46u, 25u, 48u, 30u };
+    /* Built-in 8x8 Kern icons: Upload(49), Apps(46), Radio(25), Info(30) */
+    static const u8 ICONS[DFU_TOOL_ITEM_COUNT] = { 49u, 46u, 25u, 30u };
 
     krx_clear(api);
     for (u8 row = 0u; row < 4u; row++) {
@@ -60,7 +59,6 @@ static void render_menu(const KrxApiTable* api, const DfuSharedState* st, u8 sel
             (const u8*)"", 0u, flags, ICONS[idx]
         );
     }
-    krx_ui_draw_scrollbar(api, 124u, 1u, 51u, (u16)sel, (u16)DFU_TOOL_ITEM_COUNT, 4u);
     st->ui.softbar(api, "MENU", "Open", "EXIT", "DFU");
     krx_commit_frame(api);
 }

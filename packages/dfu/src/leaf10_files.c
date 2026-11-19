@@ -10,14 +10,13 @@ static void render_list(const KrxApiTable* api, const DfuSharedState* st, u8 sel
     u8 count = ts->file_count;
 
     krx_clear(api);
-    dfu_draw_header(api, applets ? "Applets" : "Flash Image");
 
     if (count == 0u) {
         const char* msg = applets ? "No .krx in /apps or /boot" : "No .kfw/.uf2 in /boot";
-        krx_draw_str_align(api, 64, 32, (const u8*)msg, krx_strlen(msg), KRX_FONT_TOMTHUMB, 1u, KRX_ALIGN_CENTER);
+        krx_draw_str_align(api, 64, 28, (const u8*)msg, krx_strlen(msg), KRX_FONT_TOMTHUMB, 1u, KRX_ALIGN_CENTER);
         st->ui.softbar(api, "", "", "EXIT", "Back");
     } else {
-        for (u8 row = 0u; row < 4u; row++) {
+        for (u8 row = 0u; row < 5u; row++) {
             u8 idx = (u8)(top + row);
             if (idx >= count) break;
             const DfuFlatFile* f = &ts->files[idx];
@@ -28,11 +27,11 @@ static void render_list(const KrxApiTable* api, const DfuSharedState* st, u8 sel
             sz[sn] = 0;
             u8 flags = (idx == sel) ? (KRX_MENU_FLAG_SEL | (solid ? 0u : KRX_MENU_FLAG_OUTLINE)) : 0u;
             krx_ui_draw_menu_item_ex(
-                api, (i16)(10 + row * 11), KRX_MENU_COMPACT,
+                api, (i16)(1 + row * 10), KRX_MENU_COMPACT,
                 (const u8*)f->name, (u8)krx_strlen(f->name), (const u8*)sz, (u8)sn, flags, 0u
             );
         }
-        if (count > 4u) krx_ui_draw_scrollbar(api, 124u, 10u, 43u, (u16)sel, (u16)count, 4u);
+        if (count > 5u) krx_ui_draw_scrollbar(api, 124u, 1u, 50u, (u16)sel, (u16)count, 5u);
         st->ui.softbar(api, "MENU", applets ? "Run" : "Inspect", "EXIT", "Back");
     }
     krx_commit_frame(api);
@@ -48,7 +47,7 @@ u32 leaf10_entry(u32 op, const KrxApiTable* api, void* param) {
     DfuToolsScratch* ts = (DfuToolsScratch*)st->stage_buf;
     u8 count = ts->file_count;
     u8 sel = (ts->file_sel < count) ? ts->file_sel : 0u;
-    u8 top = (sel >= 4u) ? (u8)(sel - 3u) : 0u;
+    u8 top = (sel >= 5u) ? (u8)(sel - 4u) : 0u;
 
     for (;;) {
         render_list(api, st, sel, top, 0u);
@@ -72,6 +71,6 @@ u32 leaf10_entry(u32 op, const KrxApiTable* api, void* param) {
             return 0u;
         }
         if (sel < top) top = sel;
-        if (sel >= top + 4u) top = (u8)(sel - 3u);
+        if (sel >= top + 5u) top = (u8)(sel - 4u);
     }
 }

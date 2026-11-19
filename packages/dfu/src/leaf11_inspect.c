@@ -43,11 +43,11 @@ u32 leaf11_entry(u32 op, const KrxApiTable* api, void* param) {
                           ? "Fits 118 KB" : "Too Large";
 
     krx_clear(api);
-    dfu_draw_header(api, base);
-    st->ui.kv(api, 17, "Path", path);
-    st->ui.kv(api, 25, "Format", kind);
-    st->ui.kv(api, 33, "Size", sz);
-    st->ui.kv(api, 41, "Check", fit);
+    st->ui.kv(api,  9, "File", base);
+    st->ui.kv(api, 18, "Path", path);
+    st->ui.kv(api, 27, "Format", kind);
+    st->ui.kv(api, 36, "Size", sz);
+    st->ui.kv(api, 45, "Check", fit);
     st->ui.softbar(api, "", "", "EXIT", "Back");
     krx_commit_frame(api);
 
