@@ -400,10 +400,9 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
 
 #[inline(never)]
 pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{
-        idx as op,
-        sub::{proc_paged, proc_svc},
-    };
+    #[cfg(feature = "krx_paged")]
+    use kernel::abi::sub::proc_paged;
+    use kernel::abi::{idx as op, sub::proc_svc};
     match idx {
         op::ProcSelf => active_caller_pid() as usize,
         op::ProcFind => find_proc_by_ptr(a0 as *const u8, a1 as u8) as usize,
@@ -458,6 +457,7 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             proc_ctl(a0 as u16, a1 as u32, a2 as *mut u8, (a0 >> 16) as u16) as usize
         },
         op::ProcLeaf => super::super::native_runner::krx_leaf_call(a0 as u8, a1 as u32) as usize,
+        #[cfg(feature = "krx_paged")]
         op::ProcPaged => match a0 as u8 {
             proc_paged::CALL => {
                 super::super::native_runner::krx_call_paged(a1 as u8, (a1 >> 16) as u16, a2 as u16)

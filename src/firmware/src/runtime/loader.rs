@@ -268,13 +268,18 @@ App start point is\ninvalid.\0\
 App file is incomplete.\nPlease reinstall it.\0\
 App format is not\nsupported on this radio.\0";
 
-    let mut cap_buf = heapless::String::<64>::new();
     let msg = match err {
+        #[cfg(any(test, feature = "settings_debug"))]
         KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
-            let _ = cap_buf.push_str("Needs ");
-            let _ = cap_buf.push_str(cap);
-            let _ = cap_buf.push_str("\nto run this app.");
-            cap_buf.as_str()
+            let buf = &mut crate::data::arena::staging_buf()[..64];
+            let mut pos = 0usize;
+            for part in [b"Needs ".as_slice(), cap.as_bytes(), b"\nto run this app."] {
+                let n = part.len().min(buf.len() - pos);
+                buf[pos..pos + n].copy_from_slice(&part[..n]);
+                pos += n;
+            }
+            // SAFETY: all parts are valid UTF-8 (`cap` is `&str`, literals are ASCII).
+            unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
         }
         _ => utils::format::nth_cstr(HUMAN_MSGS, err.index()),
     };

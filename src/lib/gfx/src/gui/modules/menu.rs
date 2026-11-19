@@ -799,6 +799,7 @@ impl MenuView {
         Self::render_sheet_slide_up(canvas, sheet, 0);
     }
 
+    #[inline(never)]
     pub fn render_sheet_slide_up(canvas: &mut Canvas, sheet: &OptionSheet, y_offset: i8) {
         if sheet.options.is_empty() {
             return;

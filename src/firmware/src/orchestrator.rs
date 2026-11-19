@@ -1,4 +1,3 @@
-use crate::services::display::DisplayService;
 // Microkernel OS Orchestrator & Shell Compositor
 // Routes hardware events to the active foreground application, manages background execution,
 // and orchestrates global microkernel services like IPC shortcut dispatching.
@@ -552,9 +551,7 @@ impl Orchestrator {
             if self.lock_mgr.is_locked {
                 ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
             } else {
-                if let Some(ref mut display) = ctx.display {
-                    display.wake();
-                }
+                ctx.wake_display();
                 ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
             }
         } else if !was_f_active && self.lock_mgr.is_f_active {

@@ -376,9 +376,7 @@ pub fn handle_confirm_result(
         }
         TAG_RESET_SETTINGS => {
             reset_config_to_defaults(ctx);
-            if let Some(ref mut display) = ctx.display {
-                display.apply_config(&ctx.config.display);
-            }
+            ctx.apply_display_config();
             ctx.apply_audio_config();
             ctx.power.load_battery_config(&ctx.config.battery);
             ctx.config.hw_dirty = 0x3F;

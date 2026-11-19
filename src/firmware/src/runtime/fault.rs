@@ -201,9 +201,12 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
         slot.pid
     };
 
-    // Snapshot package path & format dialog text BEFORE clearing the slot.
-    let mut msg_buf = [0u8; 96];
-    let msg = fault.format_message(slot.app_name.as_str(), &mut msg_buf);
+    // Snapshot package path & format dialog text into the transient staging buffer BEFORE
+    // clearing the slot (`slot.app_name` lives in `NATIVE_SLOT`, disjoint from `TRANSIENT_ARENA`,
+    // and `show_confirm` copies the text into `ACTIVE_MODAL` before returning).
+    let msg_buf =
+        unsafe { &mut *(crate::data::arena::staging_buf().as_mut_ptr() as *mut [u8; 96]) };
+    let msg = fault.format_message(slot.app_name.as_str(), msg_buf);
 
     let pkg = slot.pkg_path.as_bytes();
     let pkg_len = pkg.len().min(32);

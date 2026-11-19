@@ -51,7 +51,8 @@ app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
 [features.runtime]
 krx_runtime = true      # ⚙️ KRX runtime subsystem
-krx_native = true       # 🚀 Class N0/P0 Thumb-1 Native & Paged Execution
+krx_native = true       # 🚀 Class N0/N1/P0 Thumb-1 Native & Structured-Leaf Execution
+krx_paged = true        # 📄 Class P1 Transparent Demand-Paged Window Cache (~1.1 KB Flash)
 
 [features.provisioning]
 provision_apps = false        # 📱 Mode B: Embed & provision built-in KRX packages (delivered via RigWire / kern flash --assets)

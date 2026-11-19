@@ -20,8 +20,9 @@ struct AppPrefsScratch {
     hdr: [u8; KrxPreamble::MAX_HEADER_SIZE],
 }
 
+const SUMMARY_OFFSET: usize = (core::mem::size_of::<AppPrefsScratch>() + 7) & !7;
 const _: () = assert!(
-    core::mem::size_of::<AppPrefsScratch>()
+    SUMMARY_OFFSET + core::mem::size_of::<kernel::proc::krx::KrxSummary<'static>>()
         <= crate::data::arena::TRANSIENT_ARENA_BYTES - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
 );
 
@@ -102,10 +103,12 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
     sc.cfg_len = 0;
     let hdr_base = sc.hdr.as_ptr() as usize;
 
-    // `AppPrefsScratch` sits in the lower arena; place `KrxSummary` in the disjoint scratch tail
-    // to keep `populate_app_prefs` off the main runtime stack (-180 B peak stack).
+    // Place `KrxSummary` immediately after `AppPrefsScratch` in the scratch tail so the two
+    // never alias while keeping `populate_app_prefs` off the main runtime stack (-180 B peak stack).
     let summary_slot = unsafe {
-        &mut *(crate::data::arena::scratch_tail_bytes_mut().as_mut_ptr()
+        &mut *(crate::data::arena::scratch_tail_bytes_mut()
+            .as_mut_ptr()
+            .add(SUMMARY_OFFSET)
             as *mut core::mem::MaybeUninit<kernel::proc::krx::KrxSummary<'_>>)
     };
     let Ok(summary) = crate::runtime::loader::read_krx_summary(

@@ -140,9 +140,7 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
     match page {
         PageId::Display => {
             ctx.config.mark_display_dirty();
-            if let Some(ref mut display) = ctx.display {
-                display.apply_config(&ctx.config.display);
-            }
+            ctx.apply_display_config();
         }
         PageId::Audio => {
             ctx.config.mark_audio_dirty();

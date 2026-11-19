@@ -34,6 +34,7 @@ default = [
     "internal_flash",
     "krx_runtime",
     "krx_native",
+    "krx_paged",
     "flashlight",
     "animations",
     "dynamic_spi",
@@ -58,6 +59,7 @@ overclock_72mhz = []
 # ⚙️ Execution Runtime Engines
 krx_runtime = ["text_input"]
 krx_native = ["krx_runtime"]
+krx_paged = ["krx_native"]
 
 # 📡 Hardware Peripheral & RF Subsystems
 radio = ["drivers/radio"]

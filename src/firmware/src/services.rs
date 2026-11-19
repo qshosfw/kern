@@ -42,6 +42,7 @@ pub struct SysContext<'a, 'hw> {
     pub storage: &'a mut SystemStorage<'hw>,
     pub audio: &'a mut drivers::audio::AudioAmplifier,
     pub ipc: &'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
+    #[cfg(any(test, feature = "passcode"))]
     pub display: Option<&'a mut display::DisplayHardware<'a, 'hw>>,
     #[cfg(feature = "passcode")]
     pub passcode: &'a mut crate::security::PasscodeState,
@@ -285,6 +286,31 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
 
     pub fn apply_audio_config(&mut self) {
         crate::hardware::apply_audio_hardware(&self.config.audio, self.audio, self.radio);
+    }
+
+    pub fn apply_display_config(&mut self) {
+        #[cfg(not(any(test, feature = "passcode")))]
+        {
+            let hw = crate::kern_hw();
+            crate::hardware::apply_display_hardware(
+                &self.config.display,
+                &mut hw.lcd,
+                &mut hw.backlight,
+            );
+        }
+        #[cfg(any(test, feature = "passcode"))]
+        if let Some(ref mut display) = self.display {
+            display.apply_config(&self.config.display);
+        }
+    }
+
+    pub fn wake_display(&mut self) {
+        #[cfg(not(any(test, feature = "passcode")))]
+        crate::kern_hw().backlight.wake();
+        #[cfg(any(test, feature = "passcode"))]
+        if let Some(ref mut display) = self.display {
+            display.wake();
+        }
     }
 
     /// Play single keypress or system feedback beep

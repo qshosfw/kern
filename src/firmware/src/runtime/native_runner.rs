@@ -16,9 +16,9 @@ use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::krx::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 use kernel::proc::memory::MemoryMapLayout;
-use kernel::proc::paged::{
-    FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
-};
+#[cfg(feature = "krx_paged")]
+use kernel::proc::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
+use kernel::proc::paged::{PagedError, StructuredLeafManager};
 use kernel::proc::reloc::apply_relocs;
 
 pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_WORDS;
@@ -26,6 +26,7 @@ pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window c
 pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
 pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
 
+#[cfg(feature = "krx_paged")]
 #[repr(C)]
 pub(crate) struct PagedWindowState {
     pub(crate) cache: FixedWindowCache<16, 4>,
@@ -36,6 +37,7 @@ pub(crate) struct PagedWindowState {
 /// P0 uses `leaf` (structured leaf manager). Overlapping them saves ~192 B of SRAM for runtime stack.
 #[repr(C)]
 pub(crate) union PagedOverlay {
+    #[cfg(feature = "krx_paged")]
     pub(crate) window: core::mem::ManuallyDrop<PagedWindowState>,
     pub(crate) leaf: core::mem::ManuallyDrop<StructuredLeafManager<16>>,
 }
@@ -64,6 +66,7 @@ pub(crate) struct NativeExecSlot {
 }
 
 impl NativeExecSlot {
+    #[cfg(feature = "krx_paged")]
     #[inline(never)]
     fn window_mut(&mut self) -> Option<&mut PagedWindowState> {
         if self.is_loaded && self.is_paged && !self.profile.is_structured_paged() {
@@ -168,6 +171,7 @@ fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bo
 /// streams the block from `slot.pkg_path` in KernFS into the selected cache slot,
 /// executes `DSB; ISB`, tallies the page fault in the process ledger, and returns
 /// the executable Thumb-1 target address (`(slot_vma + func_offset) | 1`).
+#[cfg(feature = "krx_paged")]
 #[inline(never)]
 pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
     let slot = slot_mut();
@@ -211,6 +215,7 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
 }
 
 /// Cross-block PLT call helper with LR-thunking shadow stack push (KRX-ABI 2.5.0 Section 7.2).
+#[cfg(feature = "krx_paged")]
 pub fn krx_call_paged(
     target_block_id: u8,
     target_offset: u16,
@@ -237,6 +242,7 @@ pub fn krx_call_paged(
 
 /// Normative OS Return-Thunk (`krx_return_thunk`, KRX-ABI 2.5.0 Section 7.2).
 /// Restores caller's block into the fixed-window cache if it was evicted while the callee ran.
+#[cfg(feature = "krx_paged")]
 pub fn krx_return_thunk() -> Result<usize, PagedError> {
     let win = slot_mut().window_mut().ok_or(PagedError::InvalidBlockId)?;
     let frame = win.shadow_stack.pop()?;
@@ -378,6 +384,10 @@ pub fn load_native_from_storage(
         aux.block_map.is_some(),
         aux.leaf_map.is_some(),
     );
+    #[cfg(not(feature = "krx_paged"))]
+    if profile == KrxProfile::P1TransparentPaged {
+        return Err(KrxLaunchError::UnsupportedProfile);
+    }
     let is_paged = matches!(
         profile,
         KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
@@ -414,28 +424,36 @@ pub fn load_native_from_storage(
         let leaf_mgr = unsafe { &mut *slot.overlay.leaf };
         leaf_mgr.configure(overlay_vma, overlay_size as u16, aux.leaf_map);
     } else if is_paged {
-        let win = unsafe { &mut *slot.overlay.window };
-        win.shadow_stack.clear();
-        let pay_size = if exec.payload_size > 0 {
-            exec.payload_size
-        } else {
-            payload_len as u32
-        };
-        win.cache.configure(
-            exec.page_size,
-            exec.cache_blocks,
-            h_len as u32,
-            pay_size,
-            aux.block_map,
-        );
-        // Mark block 0 as already resident in slot 0 from initial load
-        if win.cache.block_count > 0 {
-            win.cache.access_clock = 1;
-            win.cache.slots[0] = kernel::proc::paged::CacheSlotMeta {
-                resident_block: Some(0),
-                pinned: win.cache.blocks[0].is_pinned(),
-                last_access_tick: 1,
+        #[cfg(feature = "krx_paged")]
+        {
+            let win = unsafe { &mut *slot.overlay.window };
+            win.shadow_stack.clear();
+            let pay_size = if exec.payload_size > 0 {
+                exec.payload_size
+            } else {
+                payload_len as u32
             };
+            win.cache.configure(
+                exec.page_size,
+                exec.cache_blocks,
+                h_len as u32,
+                pay_size,
+                aux.block_map,
+            );
+            // Mark block 0 as already resident in slot 0 from initial load
+            if win.cache.block_count > 0 {
+                win.cache.access_clock = 1;
+                win.cache.slots[0] = kernel::proc::paged::CacheSlotMeta {
+                    resident_block: Some(0),
+                    pinned: win.cache.blocks[0].is_pinned(),
+                    last_access_tick: 1,
+                };
+            }
+        }
+        #[cfg(not(feature = "krx_paged"))]
+        {
+            let _ = h_len;
+            return Err(KrxLaunchError::UnsupportedProfile);
         }
     }
 
@@ -466,11 +484,18 @@ pub fn load_native_from_storage(
     };
     let limit_vma = load_base + code_limit;
 
+    #[cfg(feature = "krx_paged")]
     let code_size = if is_paged && !is_p0 {
         let win = unsafe { &*slot.overlay.window };
         (win.cache.active_slots as u32 * win.cache.page_size as u32)
             .min(PAGED_CACHE_MAX_BYTES as u32)
     } else if exec.got_offset > 0 {
+        (exec.got_offset as u32).min(code_limit)
+    } else {
+        (payload_len as u32).min(code_limit)
+    };
+    #[cfg(not(feature = "krx_paged"))]
+    let code_size = if exec.got_offset > 0 {
         (exec.got_offset as u32).min(code_limit)
     } else {
         (payload_len as u32).min(code_limit)
