@@ -60,7 +60,7 @@ fn active_krx_token(exclusive: bool) -> kernel::service::radio::ClientToken {
     ClientToken::new(id, tier)
 }
 
-#[inline(never)]
+#[inline(always)]
 fn decode_vfo_slot(slot: u8) -> Option<VfoSlot> {
     match slot {
         0 => Some(VfoSlot::VfoA),

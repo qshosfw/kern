@@ -191,26 +191,24 @@ pub struct RadioCoordinator {
     /// True when PTT is latched on in `PttMode::Toggle` or `PttMode::DoublePressLatch`.
     pub ptt_latched: bool,
 
-    // ── Hot compact sub-controllers (offset 18..36: byte fields < 32) ─────
-    /// Real-time RX Squelch Tail Elimination (STE) controller.
-    pub ste: RxSteController,
-    pub fsk_config: FskSidecarConfig,
-
-    // ── Hot 2-byte scalar fields (offset 36..58: 1-insn ldrh/strh) ─────────
+    // ── Hot 2-byte scalar fields (offset 20..58: 1-insn ldrh/strh) ─────────
     pub dual_watch: DualWatchMode,
     /// Time-Out Timer limit in seconds (0 = disabled).
     pub tot_limit_seconds: u16,
     /// Current transmission elapsed time in 10ms ticks.
     pub tot_elapsed_10ms: u16,
+    pub dwell: DwellController,
     pub activity_count: [u16; 3],
     pub rssi_moving_avg: [i16; 3],
     /// Timestamp (ms) of the last PTT press for `PttMode::DoublePressLatch` detection.
     pub last_ptt_press_ms: u32,
 
     // ── Sub-controllers and state machines ───────────────────────────────
-    pub dwell: DwellController,
-    pub audio_routing: AudioRoutingState,
+    /// Real-time RX Squelch Tail Elimination (STE) controller.
+    pub ste: RxSteController,
+    pub fsk_config: FskSidecarConfig,
     pub arbitrator: RadioArbitrator,
+    pub audio_routing: AudioRoutingState,
     pub vfo_memory_index: [Option<u16>; 3],
     /// Per-VFO dynamic noise-floor estimator for Adaptive Squelch tracking.
     pub adaptive_squelch: [AdaptiveSquelchTracker; 3],
@@ -713,6 +711,7 @@ impl RadioCoordinator {
     }
 
     /// Check granular transmission permission for a specific VFO slot and client token.
+    #[inline(never)]
     pub fn check_tx_permission(&self, slot: VfoSlot, client: ClientToken) -> TxPermission {
         if self.is_transmitting && matches!(self.tx_state, TxState::Active | TxState::LeadIn { .. })
         {

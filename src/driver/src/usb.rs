@@ -30,7 +30,7 @@ pub const USB_EP0_MAX_PACKET_SIZE: usize = 64;
 
 #[derive(Copy, Clone)]
 struct Ep0MultiPacket {
-    ptr: *const u8,
+    ptr: core::ptr::NonNull<u8>,
     total_len: u16,
     sent_len: u16,
 }
@@ -318,8 +318,9 @@ impl UsbDriver {
         {
             let remaining = (xfer.total_len - xfer.sent_len) as usize;
             let chunk = remaining.min(USB_EP0_MAX_PACKET_SIZE);
-            let slice =
-                unsafe { core::slice::from_raw_parts(xfer.ptr.add(xfer.sent_len as usize), chunk) };
+            let slice = unsafe {
+                core::slice::from_raw_parts(xfer.ptr.as_ptr().add(xfer.sent_len as usize), chunk)
+            };
             write_fifo(0, slice);
             xfer.sent_len += chunk as u16;
 
@@ -707,7 +708,7 @@ impl UsbDriver {
             self.ep0_transfer = None;
         } else {
             self.ep0_transfer = Some(Ep0MultiPacket {
-                ptr: data.as_ptr(),
+                ptr: core::ptr::NonNull::new(data.as_ptr() as *mut u8).unwrap(),
                 total_len: total as u16,
                 sent_len: chunk as u16,
             });

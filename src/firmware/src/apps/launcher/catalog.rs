@@ -271,7 +271,7 @@ impl PackageCatalog {
         filesystem: &mut SystemStorage,
         dir: &kernel::proc::abi::KrxDirEntry,
     ) {
-        let name_len = dir.name.iter().position(|&b| b == 0).unwrap_or(24);
+        let name_len = gfx::text::find_byte(&dir.name, 0).unwrap_or(24);
         let raw_name = unsafe { core::str::from_utf8_unchecked(&dir.name[..name_len]) };
         let base_name = extract_filename(raw_name);
         let len = self.entries.len();

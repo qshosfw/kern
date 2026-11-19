@@ -773,15 +773,17 @@ impl KrxActionDecl {
 const _: () = assert!(core::mem::size_of::<KrxActionDecl>() == 16);
 
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct KrxSummary<'a> {
-    pub preamble: KrxPreamble,
-    pub title: Option<&'a str>,
-    pub icon_id: u16,
+    // Hot scalars first (offsets 0..12) for 1-insn Cortex-M0+ Thumb-1 ldrb/ldrh.
     pub exec_type: KrxExecType,
     pub type_flags: u8,
     pub has_exec: bool,
+    pub icon_id: u16,
     pub caps: crate::caps::CapabilitySet,
     pub exec_raw: SectionExecution,
+    pub preamble: KrxPreamble,
+    pub title: Option<&'a str>,
     pub aux: KrxAuxSections<'a>,
 }
 

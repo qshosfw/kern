@@ -33,12 +33,13 @@ pub const CDC_RX_BUF_SIZE: usize = 128;
 
 #[repr(C)]
 pub struct CdcEngine {
-    line_coding: LineCoding,
-    dtr: bool,
-    rts: bool,
-    tx_ready: bool,
+    // Keep hot 1-byte fields first so UsbDriver places them within Thumb-1 imm5 (< 32 B).
     rx_head: u8,
     rx_tail: u8,
+    tx_ready: bool,
+    dtr: bool,
+    rts: bool,
+    line_coding: LineCoding,
     rx_buf: [u8; CDC_RX_BUF_SIZE],
 }
 
