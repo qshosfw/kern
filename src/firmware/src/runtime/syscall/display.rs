@@ -49,13 +49,17 @@ pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
 
 #[inline(never)]
 pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::{
+        idx as op,
+        sub::{gfx_ctl, gfx_draw},
+    };
     let canvas = active_canvas_mut();
     match idx {
-        0 => {
+        op::GfxClear => {
             canvas.clear();
             0
         }
-        1 => {
+        op::GfxDraw => {
             let sub = a0 as u8;
             let col_u8 = (a0 >> 8) as u8;
             let extra = (a0 >> 16) as u8;
@@ -65,16 +69,16 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let h = (a2 >> 16) as i16;
             let col = color_from_u8(col_u8);
             match sub {
-                0 => canvas.draw_pixel_i(x, y, col),
-                1 => gfx::draw::draw_line(canvas, x, y, w, h, col),
-                2 => canvas.draw_rect_i(x, y, w, h, col),
-                3 => canvas.fill_rect_i(x, y, w, h, col),
-                4 => canvas.draw_horizontal_line_i(x, y, w, col),
-                5 => canvas.draw_vertical_line_i(x, y, w, col),
-                6 => canvas.clear_corners_i(x, y, w, h),
-                7 => canvas.fill_rect_dither_i(x, y, w, h, extra),
-                8 => canvas.fill_rect_i(x, y, w, h, gfx::Color::Invert),
-                9 => {
+                gfx_draw::PIXEL => canvas.draw_pixel_i(x, y, col),
+                gfx_draw::LINE => gfx::draw::draw_line(canvas, x, y, w, h, col),
+                gfx_draw::RECT => canvas.draw_rect_i(x, y, w, h, col),
+                gfx_draw::FILL_RECT => canvas.fill_rect_i(x, y, w, h, col),
+                gfx_draw::HLINE => canvas.draw_horizontal_line_i(x, y, w, col),
+                gfx_draw::VLINE => canvas.draw_vertical_line_i(x, y, w, col),
+                gfx_draw::CLR_CORNER => canvas.clear_corners_i(x, y, w, h),
+                gfx_draw::DITHER => canvas.fill_rect_dither_i(x, y, w, h, extra),
+                gfx_draw::INVERT => canvas.fill_rect_i(x, y, w, h, gfx::Color::Invert),
+                gfx_draw::CHAR => {
                     return gfx::text::draw_char(
                         canvas,
                         x,
@@ -84,8 +88,8 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         col,
                     ) as u16 as usize;
                 }
-                10 => draw_icon(x, y, a2 as u8, col_u8),
-                11 => {
+                gfx_draw::ICON => draw_icon(x, y, a2 as u8, col_u8),
+                gfx_draw::SCROLL => {
                     let dx = a1 as i8;
                     let dy = (a1 >> 8) as i8;
                     if dy != 0 {
@@ -95,13 +99,13 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         canvas.scroll_horizontal(dx, col_u8);
                     }
                 }
-                12 => gfx::draw::draw_dotted_line_h(canvas, x, y, w, extra, col),
+                gfx_draw::DOTTED_H => gfx::draw::draw_dotted_line_h(canvas, x, y, w, extra, col),
                 _ => {}
             }
             0
         }
-        2 => unsafe { draw_text_req(a0 as *const KrxTextReq) as u16 as usize },
-        3 => {
+        op::GfxText => unsafe { draw_text_req(a0 as *const KrxTextReq) as u16 as usize },
+        op::GfxCommit => {
             let row_mask = a0 as u8;
             canvas.dirty |= row_mask;
             #[cfg(not(test))]
@@ -115,13 +119,13 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        4 => {
+        op::GfxFb => {
             canvas.mark_all_dirty();
             canvas.buffer.as_mut_ptr() as usize
         }
-        5 => {
+        op::GfxCtl => {
             match a0 as u8 {
-                0 => {
+                gfx_ctl::INVERTED => {
                     #[cfg(not(test))]
                     crate::kern_hw().lcd.set_inverted(a1 != 0);
                     #[cfg(test)]
@@ -131,7 +135,7 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         }
                     }
                 }
-                1 => {
+                gfx_ctl::CONTRAST => {
                     #[cfg(not(test))]
                     crate::kern_hw().lcd.set_contrast(a1 as u8);
                     #[cfg(test)]
@@ -141,7 +145,7 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         }
                     }
                 }
-                2 => {
+                gfx_ctl::BITMAP => {
                     let desc = a1 as *const KrxWidget;
                     if !desc.is_null() {
                         let d = unsafe { &*desc };

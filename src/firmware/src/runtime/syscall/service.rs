@@ -157,13 +157,16 @@ fn post_event_id(event_id: u32) -> usize {
 
 #[inline(never)]
 pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::{idx as op, sub::sys_query};
     match idx {
-        0 => unsafe { fill_sys_info(a0 as *mut KrxSysInfo) },
-        1 => match a0 as u8 {
-            0 => KRX_ABI_VERSION_3_0 as usize,
-            1 => kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16 as usize,
-            2 => py32_hal::rcc::sysclk_hz() as usize,
-            3 => {
+        op::SysInfo => unsafe { fill_sys_info(a0 as *mut KrxSysInfo) },
+        op::SysQuery => match a0 as u8 {
+            sys_query::OS_VERSION => KRX_ABI_VERSION_3_0 as usize,
+            sys_query::STACK_FREE => {
+                kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16 as usize
+            }
+            sys_query::CPU_HZ => py32_hal::rcc::sysclk_hz() as usize,
+            sys_query::DEVICE_UID => {
                 let out = a1 as *mut u8;
                 if !out.is_null() {
                     let uid = bsp::uid::read_mcu_uid();
@@ -173,7 +176,7 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     1
                 }
             }
-            4 => {
+            sys_query::RAND32 => {
                 #[cfg(not(test))]
                 let noise = crate::kern_hw()
                     .radio
@@ -188,16 +191,17 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 let seed = py32_hal::delay::millis() ^ (noise << 16);
                 crypto::crc::CrcEngine::crc32(&seed.to_le_bytes()) as usize
             }
-            5 => kernel::proc::abi::isqrt(a1 as u32) as usize,
-            6 => unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }
+            sys_query::ISQRT => kernel::proc::abi::isqrt(a1 as u32) as usize,
+            sys_query::CRC32 => unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }
                 .map_or(0, crypto::crc::CrcEngine::crc32) as usize,
-            7 => unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }
-                .map_or(0, crypto::crc::CrcEngine::crc16_ccitt) as usize,
+            sys_query::CRC16 => unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }
+                .map_or(0, crypto::crc::CrcEngine::crc16_ccitt)
+                as usize,
             _ => 0,
         },
-        // SysDiv (2, unsigned) / SysIdiv (3, signed): optional remainder written to `a2`
-        2 | 3 => {
-            let signed = idx == 3;
+        // SysDiv (unsigned) / SysIdiv (signed): optional remainder written to `a2`
+        op::SysDiv | op::SysIdiv => {
+            let signed = idx == op::SysIdiv;
             let n = a0 as u32;
             let d = a1 as u32;
             let m_n = if signed { ((n as i32) >> 31) as u32 } else { 0 };
@@ -214,8 +218,7 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             q as usize
         }
-        // SysReboot
-        4 => {
+        op::SysReboot => {
             if !super::super::native_runner::active_native_caps()
                 .contains(kernel::caps::Cap::PowerManage)
             {
@@ -229,7 +232,7 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             kernel::power::PowerControl::reboot_with(reboot_mode);
         }
         // SysEvent: 0=post_event(a1), 1=publish_event(topic=a1 as u16, len=(a1>>16) as u8, data=a2)
-        5 => {
+        op::SysEvent => {
             if a0 == 0 {
                 post_event_id(a1 as u32)
             } else {
@@ -245,8 +248,7 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 post_event_id(ev)
             }
         }
-        // SysFlush
-        6 => {
+        op::SysFlush => {
             #[cfg(not(test))]
             {
                 usize::from(
@@ -344,68 +346,69 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
     if buf.is_null() || len < 16 {
         return 1;
     }
-    let ipc = ipc_channel_mut();
-    if op == PROC_CTL_IPC_ENTRY {
-        let Some(m) = ipc.peek_at(target as usize) else {
+    let mut w = [0u32; 4];
+    let src: *const u8 = if op == PROC_CTL_IPC_ENTRY {
+        let Some(m) = ipc_channel_mut().peek_at(target as usize) else {
             return 1;
         };
-        unsafe {
-            core::ptr::copy_nonoverlapping(m as *const KrxIpcMessage as *const u8, buf, 16);
+        m as *const KrxIpcMessage as *const u8
+    } else {
+        match op {
+            PROC_CTL_SYS_OVERVIEW => {
+                w[0] = (kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as u32 & 0xFFFF)
+                    | ((kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32) << 16);
+                w[1] = kernel::sys::SystemDiagnostics::ram_static_used_bytes() as u32;
+            }
+            PROC_CTL_LEASE_ENTRY => {
+                let Some(l) = crate::orchestrator::lease_manager().entry(target as usize) else {
+                    return 1;
+                };
+                w[0] = (l.kind.map_or(0, |k| k as u32)) | ((l.owner.0 as u32) << 8);
+                w[1] = l.acquired_tick;
+                w[2] = l.timeout_ms;
+            }
+            PROC_CTL_SVC_ENTRY => {
+                let Some(e) = service_registry_mut()
+                    .entries
+                    .get(target as usize)
+                    .filter(|e| e.is_active())
+                else {
+                    return 1;
+                };
+                w[0] = (e.interface_id as u32) | ((e.abi_version as u32) << 16);
+                w[1] = (e.provider_pid.0 as u32)
+                    | ((e.pinned as u32) << 8)
+                    | ((e.client_count as u32) << 16);
+                w[2] = e.vtable_ptr as u32;
+            }
+            PROC_CTL_PROC_EXT => {
+                let Some(pcb) = crate::orchestrator::proc_table().find(Pid(target)) else {
+                    return 1;
+                };
+                w[0] = pcb.caps.raw();
+                w[1] = (pcb.restart_budget as u32) | ((pcb.stack_cost as u32) << 8);
+                w[2] = pcb.compressed_bytes as u32;
+                w[3] = pcb.ledger.ipc_events;
+            }
+            _ => return 1,
         }
-        return 0;
-    }
-
-    let mut w = [0u32; 4];
-    match op {
-        PROC_CTL_SYS_OVERVIEW => {
-            w[0] = (kernel::sys::SystemDiagnostics::stack_peak_used_bytes() as u32 & 0xFFFF)
-                | ((kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32) << 16);
-            w[1] = kernel::sys::SystemDiagnostics::ram_static_used_bytes() as u32;
-        }
-        PROC_CTL_LEASE_ENTRY => {
-            let Some(l) = crate::orchestrator::lease_manager().entry(target as usize) else {
-                return 1;
-            };
-            w[0] = (l.kind.map_or(0, |k| k as u32)) | ((l.owner.0 as u32) << 8);
-            w[1] = l.acquired_tick;
-            w[2] = l.timeout_ms;
-        }
-        PROC_CTL_SVC_ENTRY => {
-            let Some(e) = service_registry_mut()
-                .entries
-                .get(target as usize)
-                .filter(|e| e.is_active())
-            else {
-                return 1;
-            };
-            w[0] = (e.interface_id as u32) | ((e.abi_version as u32) << 16);
-            w[1] = (e.provider_pid.0 as u32)
-                | ((e.pinned as u32) << 8)
-                | ((e.client_count as u32) << 16);
-            w[2] = e.vtable_ptr as u32;
-        }
-        PROC_CTL_PROC_EXT => {
-            let Some(pcb) = crate::orchestrator::proc_table().find(Pid(target)) else {
-                return 1;
-            };
-            w[0] = pcb.caps.raw();
-            w[1] = (pcb.restart_budget as u32) | ((pcb.stack_cost as u32) << 8);
-            w[2] = pcb.compressed_bytes as u32;
-            w[3] = pcb.ledger.ipc_events;
-        }
-        _ => return 1,
-    }
-    unsafe { core::ptr::copy_nonoverlapping(w.as_ptr() as *const u8, buf, 16) };
+        w.as_ptr() as *const u8
+    };
+    unsafe { core::ptr::copy_nonoverlapping(src, buf, 16) };
     0
 }
 
 #[inline(never)]
 pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::{
+        idx as op,
+        sub::{proc_paged, proc_svc},
+    };
     match idx {
-        0 => active_caller_pid() as usize,
-        1 => find_proc_by_ptr(a0 as *const u8, a1 as u8) as usize,
-        2 => active_slot_scan(u8::MAX).0 as usize,
-        3 => {
+        op::ProcSelf => active_caller_pid() as usize,
+        op::ProcFind => find_proc_by_ptr(a0 as *const u8, a1 as u8) as usize,
+        op::ProcCount => active_slot_scan(u8::MAX).0 as usize,
+        op::ProcInfo => {
             let out_info = a1 as *mut KrxProcInfo;
             if out_info.is_null() {
                 return 1;
@@ -451,18 +454,20 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        4 => unsafe { proc_ctl(a0 as u16, a1 as u32, a2 as *mut u8, (a0 >> 16) as u16) as usize },
-        5 => super::super::native_runner::krx_leaf_call(a0 as u8, a1 as u32) as usize,
-        6 => match a0 as u8 {
-            0 => {
+        op::ProcCtl => unsafe {
+            proc_ctl(a0 as u16, a1 as u32, a2 as *mut u8, (a0 >> 16) as u16) as usize
+        },
+        op::ProcLeaf => super::super::native_runner::krx_leaf_call(a0 as u8, a1 as u32) as usize,
+        op::ProcPaged => match a0 as u8 {
+            proc_paged::CALL => {
                 super::super::native_runner::krx_call_paged(a1 as u8, (a1 >> 16) as u16, a2 as u16)
                     .unwrap_or(0)
             }
-            1 => super::super::native_runner::krx_return_thunk().unwrap_or(0),
-            2 => super::super::native_runner::krx_page_fault(a1 as u8, a2 as u16),
+            proc_paged::RETURN => super::super::native_runner::krx_return_thunk().unwrap_or(0),
+            proc_paged::FAULT => super::super::native_runner::krx_page_fault(a1 as u8, a2 as u16),
             _ => 0,
         },
-        7 => {
+        op::ProcLease => {
             let Some(kind) = kernel::proc::LeaseKind::from_u8(a0 as u8) else {
                 return 1;
             };
@@ -475,7 +480,7 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             };
             usize::from(res.is_err())
         }
-        8 => {
+        op::ProcMem => {
             let out_desc = a1 as *mut kernel::proc::MemoryRegionDescriptor;
             let slot = super::super::native_runner::slot_ref();
             if out_desc.is_null() || !slot.is_loaded {
@@ -489,21 +494,21 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             1
         }
-        9 => {
+        op::ProcSvc => {
             let sub = a0 as u8;
             let iface = (a0 >> 8) as u16;
             match sub {
-                0 => usize::from(!service_registry_mut().register(
+                proc_svc::REGISTER => usize::from(!service_registry_mut().register(
                     iface,
                     a1 as u16,
                     kernel::proc::Pid(active_caller_pid()),
                     a2,
                     false,
                 )),
-                1 => service_registry_mut()
+                proc_svc::RESOLVE => service_registry_mut()
                     .resolve(iface, a1 as u16)
                     .unwrap_or(0),
-                2 => usize::from(!service_registry_mut().release(iface)),
+                proc_svc::RELEASE => usize::from(!service_registry_mut().release(iface)),
                 _ => 1,
             }
         }
@@ -562,10 +567,11 @@ unsafe fn ipc_send_raw(pids_type: u32, flags_and_seq: u32, ptr: *const u8, len: 
 
 #[inline(never)]
 pub unsafe fn dispatch_ipc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::idx as op;
     match idx {
-        0 => unsafe { ipc_send_msg(a0 as *const KrxIpcMessage) as usize },
-        1 => unsafe { ipc_recv_msg(a0 as *mut KrxIpcMessage) as usize },
-        2 => {
+        op::IpcSend => unsafe { ipc_send_msg(a0 as *const KrxIpcMessage) as usize },
+        op::IpcRecv => unsafe { ipc_recv_msg(a0 as *mut KrxIpcMessage) as usize },
+        op::IpcReply => {
             let req = a0 as *const KrxIpcMessage;
             if req.is_null() {
                 return 1;
@@ -577,7 +583,7 @@ pub unsafe fn dispatch_ipc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let f_seq = (req_msg.seq as u32) | ((kernel::ipc::ipc_flags::REPLY as u32) << 16);
             unsafe { ipc_send_raw(pids_type, f_seq, a1 as *const u8, a2 as u8) as usize }
         }
-        3 => {
+        op::IpcPoll => {
             let out_buf = a0 as *mut u8;
             let max_len = a1 as u8;
             if out_buf.is_null() || max_len == 0 {
@@ -595,7 +601,7 @@ pub unsafe fn dispatch_ipc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 0xFF
             }
         }
-        4 => {
+        op::IpcSendStr => {
             let req = a0 as *const KrxIpcSendReq;
             if req.is_null() {
                 return 1;

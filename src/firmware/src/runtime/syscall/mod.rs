@@ -106,19 +106,20 @@ pub unsafe fn str_or_default<'a>(ptr: *const u8, len: usize, default: &'a str) -
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::domain;
     let op_byte = op as u8;
     let idx = op_byte & 0x0F;
     unsafe {
         match op_byte >> 4 {
-            0 => service::dispatch_sys(idx, a0, a1, a2),
-            1 => service::dispatch_proc(idx, a0, a1, a2),
-            2 => service::dispatch_ipc(idx, a0, a1, a2),
-            3 => storage::dispatch_fs(idx, a0, a1, a2),
-            4 => radio::dispatch_rf(idx, a0, a1, a2),
-            5 => audio::dispatch_aud(idx, a0, a1, a2),
-            6 => display::dispatch_gfx(idx, a0, a1, a2),
-            7 => ui::dispatch_ui(idx, a0, a1, a2),
-            8 => io::dispatch_io(idx, a0, a1, a2),
+            domain::SYS => service::dispatch_sys(idx, a0, a1, a2),
+            domain::PROC => service::dispatch_proc(idx, a0, a1, a2),
+            domain::IPC => service::dispatch_ipc(idx, a0, a1, a2),
+            domain::FS => storage::dispatch_fs(idx, a0, a1, a2),
+            domain::RF => radio::dispatch_rf(idx, a0, a1, a2),
+            domain::AUD => audio::dispatch_aud(idx, a0, a1, a2),
+            domain::GFX => display::dispatch_gfx(idx, a0, a1, a2),
+            domain::UI => ui::dispatch_ui(idx, a0, a1, a2),
+            domain::IO => io::dispatch_io(idx, a0, a1, a2),
             _ => 0,
         }
     }

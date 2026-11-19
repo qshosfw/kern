@@ -7,7 +7,8 @@ use crate::services::radio::RadioMelodyExt;
 
 #[inline(never)]
 pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    if idx == 0 {
+    use kernel::abi::{idx as op, sub::aud_ctl};
+    if idx == op::AudTone {
         let dur = a1 as u16;
         if dur == 0xFFFF {
             let beep = crate::services::melody::BeepType::from_u8(a0 as u8);
@@ -28,12 +29,12 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         return 0;
     }
 
-    if idx != 1 {
+    if idx != op::AudCtl {
         return 0;
     }
 
     match a0 as u8 {
-        0 => {
+        aud_ctl::PATH => {
             let on = a1 != 0;
             #[cfg(not(test))]
             {
@@ -56,7 +57,7 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        1 => {
+        aud_ctl::SET_VOL => {
             let vol = a1 as u8;
             #[cfg(not(test))]
             {
@@ -71,8 +72,8 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        2 => crate::master_config_ref().audio.volume as usize,
-        3 => {
+        aud_ctl::GET_VOL => crate::master_config_ref().audio.volume as usize,
+        aud_ctl::IS_PLAYING => {
             #[cfg(not(test))]
             {
                 crate::kern_hw().audio.is_active() as usize
@@ -84,7 +85,7 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 })
             }
         }
-        4 => {
+        aud_ctl::MIC_GAIN => {
             #[cfg(not(test))]
             crate::kern_hw().radio.set_mic_gain(a1 as u8);
             #[cfg(test)]
@@ -93,7 +94,7 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        5 => {
+        aud_ctl::MIC_SAMPLE => {
             #[cfg(not(test))]
             {
                 crate::kern_hw()
@@ -109,8 +110,10 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 })
             }
         }
-        6 => usize::from(crate::audio_capture_mut().start_capture(a1 as u16).is_err()),
-        7 => {
+        aud_ctl::CAP_START => {
+            usize::from(crate::audio_capture_mut().start_capture(a1 as u16).is_err())
+        }
+        aud_ctl::CAP_READ => {
             let out = a1 as *mut i16;
             let max = a2 as u16;
             if !out.is_null() && max > 0 {
@@ -120,11 +123,11 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 0
             }
         }
-        8 => {
+        aud_ctl::CAP_STOP => {
             crate::audio_capture_mut().stop_capture();
             0
         }
-        9 => crate::audio_capture_mut().is_capturing() as usize,
+        aud_ctl::IS_CAP => crate::audio_capture_mut().is_capturing() as usize,
         _ => 0,
     }
 }

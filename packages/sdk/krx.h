@@ -355,10 +355,10 @@ typedef struct __attribute__((packed)) {
 
 #define KRX_PAGED_INVOKE(api, block_id, fn_type, offset, ret_offset, ...) \
     ({ \
-        u32 _target = krx_call((api), OP_PROC_PAGED, 0u, ((u32)(block_id)) | (((u32)(offset)) << 16), (u32)(ret_offset)); \
+        u32 _target = krx_call((api), OP_PROC_PAGED, SUB_PROC_PAGED_CALL, ((u32)(block_id)) | (((u32)(offset)) << 16), (u32)(ret_offset)); \
         fn_type _fn = (fn_type)_target; \
         u32 _res = _fn(__VA_ARGS__); \
-        krx_call((api), OP_PROC_PAGED, 1u, 0u, 0u); \
+        krx_call((api), OP_PROC_PAGED, SUB_PROC_PAGED_RETURN, 0u, 0u); \
         _res; \
     })
 
@@ -375,23 +375,23 @@ static inline u8 krx_sys_info(const KrxApiTable* api, KrxSysInfo* out) {
 }
 
 static inline u32 krx_sys_os_version(const KrxApiTable* api) {
-    return krx_call(api, OP_SYS_QUERY, 0u, 0u, 0u);
+    return krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_OS_VERSION, 0u, 0u);
 }
 
 static inline u16 krx_sys_stack_free(const KrxApiTable* api) {
-    return (u16)krx_call(api, OP_SYS_QUERY, 1u, 0u, 0u);
+    return (u16)krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_STACK_FREE, 0u, 0u);
 }
 
 static inline u32 krx_sys_cpu_freq_hz(const KrxApiTable* api) {
-    return krx_call(api, OP_SYS_QUERY, 2u, 0u, 0u);
+    return krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_CPU_HZ, 0u, 0u);
 }
 
 static inline u32 krx_sys_rand32(const KrxApiTable* api) {
-    return krx_call(api, OP_SYS_QUERY, 4u, 0u, 0u);
+    return krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_RAND32, 0u, 0u);
 }
 
 static inline u32 krx_crc32(const KrxApiTable* api, const u8* data, u16 len) {
-    return krx_call(api, OP_SYS_QUERY, 6u, (u32)data, (u32)len);
+    return krx_call(api, OP_SYS_QUERY, SUB_SYS_QUERY_CRC32, (u32)data, (u32)len);
 }
 
 static inline u32 krx_udivmod(const KrxApiTable* api, u32 n, u32 d, u32* rem) {
@@ -417,7 +417,7 @@ static inline u16 krx_fs_read_at(
 ) {
     KrxFsReq r;
     r.path = path; r.buf = buf; r.offset = offset; r.len = max_len; r.path_len = path_len; r.extra = 0u;
-    return (u16)krx_call(api, OP_FS_READ, 0u, (u32)&r, 0u);
+    return (u16)krx_call(api, OP_FS_READ, SUB_FS_READ_FILE_AT, (u32)&r, 0u);
 }
 
 static inline u16 krx_fs_read(
@@ -431,7 +431,7 @@ static inline u8 krx_fs_write(
 ) {
     KrxFsReq r;
     r.path = path; r.buf = (u8*)data; r.offset = 0u; r.len = len; r.path_len = path_len; r.extra = 0u;
-    return (u8)krx_call(api, OP_FS_WRITE, 0u, (u32)&r, 0u);
+    return (u8)krx_call(api, OP_FS_WRITE, SUB_FS_WRITE_FILE, (u32)&r, 0u);
 }
 
 static inline u8 krx_fs_append(
@@ -439,23 +439,23 @@ static inline u8 krx_fs_append(
 ) {
     KrxFsReq r;
     r.path = path; r.buf = (u8*)data; r.offset = 0u; r.len = len; r.path_len = path_len; r.extra = 0u;
-    return (u8)krx_call(api, OP_FS_WRITE, 1u, (u32)&r, 0u);
+    return (u8)krx_call(api, OP_FS_WRITE, SUB_FS_WRITE_APPEND, (u32)&r, 0u);
 }
 
 static inline u32 krx_fs_size(const KrxApiTable* api, const u8* path, u8 path_len) {
-    return krx_call(api, OP_FS_META, 0u, (u32)path, (u32)path_len);
+    return krx_call(api, OP_FS_META, SUB_FS_META_SIZE, (u32)path, (u32)path_len);
 }
 
 static inline u8 krx_fs_exists(const KrxApiTable* api, const u8* path, u8 path_len) {
-    return (u8)krx_call(api, OP_FS_META, 1u, (u32)path, (u32)path_len);
+    return (u8)krx_call(api, OP_FS_META, SUB_FS_META_EXISTS, (u32)path, (u32)path_len);
 }
 
 static inline u8 krx_fs_remove(const KrxApiTable* api, const u8* path, u8 path_len) {
-    return (u8)krx_call(api, OP_FS_META, 2u, (u32)path, (u32)path_len);
+    return (u8)krx_call(api, OP_FS_META, SUB_FS_META_REMOVE, (u32)path, (u32)path_len);
 }
 
 static inline u8 krx_fs_mkdir(const KrxApiTable* api, const u8* path, u8 path_len) {
-    return (u8)krx_call(api, OP_FS_META, 3u, (u32)path, (u32)path_len);
+    return (u8)krx_call(api, OP_FS_META, SUB_FS_META_MKDIR, (u32)path, (u32)path_len);
 }
 
 // ── Inline Helpers: RF & AUD ─────────────────────────────────────────────────
@@ -465,11 +465,11 @@ static inline u8 krx_rf_tune(const KrxApiTable* api, u32 freq_hz, u8 bw, u32 ste
 }
 
 static inline u32 krx_rf_get_freq(const KrxApiTable* api) {
-    return krx_call(api, OP_RF_GET, 0u, 0u, 0u);
+    return krx_call(api, OP_RF_GET, SUB_RF_GET_FREQ, 0u, 0u);
 }
 
 static inline u8 krx_aud_get_volume(const KrxApiTable* api) {
-    return (u8)krx_call(api, OP_AUD_CTL, 2u, 0u, 0u);
+    return (u8)krx_call(api, OP_AUD_CTL, SUB_AUD_CTL_GET_VOL, 0u, 0u);
 }
 
 // ── Inline Helpers: GFX ──────────────────────────────────────────────────────
@@ -479,60 +479,60 @@ static inline void krx_clear(const KrxApiTable* api) {
 }
 
 static inline void krx_draw_pixel(const KrxApiTable* api, i16 x, i16 y, u8 color) {
-    krx_call(api, OP_GFX_DRAW, 0u | ((u32)color << 8), krx_pack_xy(x, y), 0u);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_PIXEL | ((u32)color << 8), krx_pack_xy(x, y), 0u);
 }
 
 static inline void krx_draw_line(const KrxApiTable* api, i16 x0, i16 y0, i16 x1, i16 y1, u8 color) {
-    krx_call(api, OP_GFX_DRAW, 1u | ((u32)color << 8), krx_pack_xy(x0, y0), krx_pack_xy(x1, y1));
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_LINE | ((u32)color << 8), krx_pack_xy(x0, y0), krx_pack_xy(x1, y1));
 }
 
 static inline void krx_draw_rect(const KrxApiTable* api, i16 x, i16 y, i16 w, i16 h, u8 color) {
-    krx_call(api, OP_GFX_DRAW, 2u | ((u32)color << 8), krx_pack_xy(x, y), krx_pack_xy(w, h));
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_RECT | ((u32)color << 8), krx_pack_xy(x, y), krx_pack_xy(w, h));
 }
 
 static inline void krx_fill_rect(const KrxApiTable* api, i16 x, i16 y, i16 w, i16 h, u8 color) {
-    krx_call(api, OP_GFX_DRAW, 3u | ((u32)color << 8), krx_pack_xy(x, y), krx_pack_xy(w, h));
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_FILL_RECT | ((u32)color << 8), krx_pack_xy(x, y), krx_pack_xy(w, h));
 }
 
 static inline void krx_draw_line_h(const KrxApiTable* api, i16 x, i16 y, i16 len, u8 color) {
-    krx_call(api, OP_GFX_DRAW, 4u | ((u32)color << 8), krx_pack_xy(x, y), (u32)(u16)len);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_HLINE | ((u32)color << 8), krx_pack_xy(x, y), (u32)(u16)len);
 }
 
 static inline void krx_draw_line_v(const KrxApiTable* api, i16 x, i16 y, i16 len, u8 color) {
-    krx_call(api, OP_GFX_DRAW, 5u | ((u32)color << 8), krx_pack_xy(x, y), (u32)(u16)len);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_VLINE | ((u32)color << 8), krx_pack_xy(x, y), (u32)(u16)len);
 }
 
 static inline void krx_clear_corners(const KrxApiTable* api, i16 x, i16 y, i16 w, i16 h) {
-    krx_call(api, OP_GFX_DRAW, 6u, krx_pack_xy(x, y), krx_pack_xy(w, h));
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_CLR_CORNER, krx_pack_xy(x, y), krx_pack_xy(w, h));
 }
 
 static inline void krx_fill_rect_dither(const KrxApiTable* api, i16 x, i16 y, i16 w, i16 h, u8 prog) {
-    krx_call(api, OP_GFX_DRAW, 7u | ((u32)prog << 16), krx_pack_xy(x, y), krx_pack_xy(w, h));
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_DITHER | ((u32)prog << 16), krx_pack_xy(x, y), krx_pack_xy(w, h));
 }
 
 static inline void krx_invert_rect(const KrxApiTable* api, i16 x, i16 y, i16 w, i16 h) {
-    krx_call(api, OP_GFX_DRAW, 8u, krx_pack_xy(x, y), krx_pack_xy(w, h));
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_INVERT, krx_pack_xy(x, y), krx_pack_xy(w, h));
 }
 
 static inline i16 krx_draw_char(const KrxApiTable* api, i16 x, i16 y, u8 ch, u8 font, u8 color) {
     return (i16)krx_call(
-        api, OP_GFX_DRAW, 9u | ((u32)color << 8) | ((u32)font << 16), krx_pack_xy(x, y), (u32)ch
+        api, OP_GFX_DRAW, SUB_GFX_DRAW_CHAR | ((u32)color << 8) | ((u32)font << 16), krx_pack_xy(x, y), (u32)ch
     );
 }
 
 static inline void krx_draw_icon(const KrxApiTable* api, i16 x, i16 y, u8 icon_id, u8 color) {
-    krx_call(api, OP_GFX_DRAW, 10u | ((u32)color << 8), krx_pack_xy(x, y), (u32)icon_id);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_ICON | ((u32)color << 8), krx_pack_xy(x, y), (u32)icon_id);
 }
 
 static inline void krx_scroll(const KrxApiTable* api, i8 dx, i8 dy, u8 fill) {
-    krx_call(api, OP_GFX_DRAW, 11u | ((u32)fill << 8), ((u32)(u8)dx) | (((u32)(u8)dy) << 8), 0u);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_SCROLL | ((u32)fill << 8), ((u32)(u8)dx) | (((u32)(u8)dy) << 8), 0u);
 }
 
 static inline void krx_draw_dotted_line_h(
     const KrxApiTable* api, i16 x0, i16 x1, i16 y, u8 step, u8 color
 ) {
     krx_call(
-        api, OP_GFX_DRAW, 12u | ((u32)color << 8) | ((u32)step << 16),
+        api, OP_GFX_DRAW, SUB_GFX_DRAW_DOTTED_H | ((u32)color << 8) | ((u32)step << 16),
         krx_pack_xy(x0, y), (u32)(u16)x1
     );
 }
@@ -578,11 +578,11 @@ static inline u8* krx_get_framebuffer(const KrxApiTable* api) {
 }
 
 static inline void krx_set_inverted(const KrxApiTable* api, u8 inv) {
-    krx_call(api, OP_GFX_CTL, 0u, (u32)inv, 0u);
+    krx_call(api, OP_GFX_CTL, SUB_GFX_CTL_INVERTED, (u32)inv, 0u);
 }
 
 static inline void krx_set_contrast(const KrxApiTable* api, u8 c) {
-    krx_call(api, OP_GFX_CTL, 1u, (u32)c, 0u);
+    krx_call(api, OP_GFX_CTL, SUB_GFX_CTL_CONTRAST, (u32)c, 0u);
 }
 
 static inline void krx_draw_bitmap(
@@ -590,17 +590,17 @@ static inline void krx_draw_bitmap(
 ) {
     KrxWidget d;
     d.p0 = data; d.x = x; d.y = y; d.len0 = len; d.w = w; d.h = h;
-    krx_call(api, OP_GFX_CTL, 2u, (u32)&d, 0u);
+    krx_call(api, OP_GFX_CTL, SUB_GFX_CTL_BITMAP, (u32)&d, 0u);
 }
 
 // ── Inline Helpers: UI & Widgets ─────────────────────────────────────────────
 
 static inline void krx_ui_close_modal(const KrxApiTable* api) {
-    krx_call(api, OP_UI_MODAL, 0u, 0u, 0u);
+    krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_CLOSE, 0u, 0u);
 }
 
 static inline void krx_ui_set_modal_hold(const KrxApiTable* api, u16 hold_ms) {
-    krx_call(api, OP_UI_MODAL, 3u, (u32)hold_ms, 0u);
+    krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_SET_HOLD, (u32)hold_ms, 0u);
 }
 
 static inline void krx_ui_show_confirm_labels(
@@ -612,19 +612,19 @@ static inline void krx_ui_show_confirm_labels(
     r.title = title; r.msg = msg; r.ok = ok; r.cancel = cancel;
     r.tag = tag; r.kind = 1u; r.t_len = t_len; r.m_len = m_len;
     r.o_len = o_len; r.c_len = c_len; r.max_len = 0u;
-    krx_call(api, OP_UI_MODAL, 5u, (u32)&r, 0u);
+    krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_SHOW, (u32)&r, 0u);
 }
 
 static inline void krx_ui_show_toast(const KrxApiTable* api, const u8* msg, u8 len, u16 dur_ms) {
-    krx_call(api, OP_UI_MODAL, 6u, (u32)msg, ((u32)len) | (((u32)dur_ms) << 16));
+    krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_TOAST, (u32)msg, ((u32)len) | (((u32)dur_ms) << 16));
 }
 
 static inline u8 krx_ui_set_status_bar(const KrxApiTable* api, const KrxStatusBar* sb) {
-    return (u8)krx_call(api, OP_UI_STATUS, 0u, (u32)sb, 0u);
+    return (u8)krx_call(api, OP_UI_STATUS, SUB_UI_STATUS_SET_BAR, (u32)sb, 0u);
 }
 
 static inline u8 krx_ui_set_tray_icon(const KrxApiTable* api, u8 icon_id) {
-    return (u8)krx_call(api, OP_UI_STATUS, 2u, (u32)icon_id, 0u);
+    return (u8)krx_call(api, OP_UI_STATUS, SUB_UI_STATUS_TRAY_ICON, (u32)icon_id, 0u);
 }
 
 static inline u8 krx_draw_tabbed_sheet(
@@ -732,11 +732,11 @@ static inline void krx_ui_draw_modal_box(const KrxApiTable* api, u8 w, u8 h, u8*
 // ── Inline Helpers: IO (Key / Power / Serial / Time) ─────────────────────────
 
 static inline u8 krx_poll_key(const KrxApiTable* api) {
-    return (u8)krx_call(api, OP_IO_KEY, 0u, 0u, 0u);
+    return (u8)krx_call(api, OP_IO_KEY, SUB_IO_KEY_POLL, 0u, 0u);
 }
 
 static inline u32 krx_key_matrix(const KrxApiTable* api) {
-    return krx_call(api, OP_IO_KEY, 2u, 0u, 0u);
+    return krx_call(api, OP_IO_KEY, SUB_IO_KEY_MATRIX, 0u, 0u);
 }
 
 static inline u16 krx_pwr_u16(const KrxApiTable* api, u8 sub) {
@@ -744,11 +744,11 @@ static inline u16 krx_pwr_u16(const KrxApiTable* api, u8 sub) {
 }
 
 static inline void krx_wake_backlight(const KrxApiTable* api) {
-    krx_call(api, OP_IO_POWER, 11u, 0u, 0u);
+    krx_call(api, OP_IO_POWER, SUB_IO_POWER_BL_WAKE, 0u, 0u);
 }
 
 static inline u16 krx_serial_write(const KrxApiTable* api, const u8* data, u16 len) {
-    return (u16)krx_call(api, OP_IO_SERIAL, 0u, (u32)data, (u32)len);
+    return (u16)krx_call(api, OP_IO_SERIAL, SUB_IO_SERIAL_WRITE, (u32)data, (u32)len);
 }
 
 static inline void krx_print(const KrxApiTable* api, const char* str) {
@@ -758,15 +758,15 @@ static inline void krx_print(const KrxApiTable* api, const char* str) {
 }
 
 static inline u32 krx_ticks_ms(const KrxApiTable* api) {
-    return krx_call(api, OP_IO_TIME, 0u, 0u, 0u);
+    return krx_call(api, OP_IO_TIME, SUB_IO_TIME_TICKS_MS, 0u, 0u);
 }
 
 static inline u32 krx_uptime_secs(const KrxApiTable* api) {
-    return krx_call(api, OP_IO_TIME, 1u, 0u, 0u);
+    return krx_call(api, OP_IO_TIME, SUB_IO_TIME_UPTIME_S, 0u, 0u);
 }
 
 static inline void krx_delay_ms(const KrxApiTable* api, u32 ms) {
-    krx_call(api, OP_IO_TIME, 2u, ms, 0u);
+    krx_call(api, OP_IO_TIME, SUB_IO_TIME_DELAY_MS, ms, 0u);
 }
 
 #endif // KRX_H

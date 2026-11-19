@@ -70,4 +70,178 @@
 
 #define KRX_OP_COUNT       48u
 
+/* Sub-opcodes (mirrored from kernel::abi::sub) */
+/* sys_query */
+#define SUB_SYS_QUERY_OS_VERSION   0u
+#define SUB_SYS_QUERY_STACK_FREE   1u
+#define SUB_SYS_QUERY_CPU_HZ       2u
+#define SUB_SYS_QUERY_DEVICE_UID   3u
+#define SUB_SYS_QUERY_RAND32       4u
+#define SUB_SYS_QUERY_ISQRT        5u
+#define SUB_SYS_QUERY_CRC32        6u
+#define SUB_SYS_QUERY_CRC16        7u
+
+/* proc_paged */
+#define SUB_PROC_PAGED_CALL        0u
+#define SUB_PROC_PAGED_RETURN      1u
+#define SUB_PROC_PAGED_FAULT       2u
+
+/* proc_svc */
+#define SUB_PROC_SVC_REGISTER      0u
+#define SUB_PROC_SVC_RESOLVE       1u
+#define SUB_PROC_SVC_RELEASE       2u
+
+/* fs_read */
+#define SUB_FS_READ_FILE_AT        0u
+#define SUB_FS_READ_LOAD_CFG       1u
+#define SUB_FS_READ_ASSET          2u
+#define SUB_FS_READ_LIST_DIR       3u
+
+/* fs_write */
+#define SUB_FS_WRITE_FILE          0u
+#define SUB_FS_WRITE_APPEND        1u
+#define SUB_FS_WRITE_SAVE_CFG      2u
+
+/* fs_meta */
+#define SUB_FS_META_SIZE           0u
+#define SUB_FS_META_EXISTS         1u
+#define SUB_FS_META_REMOVE         2u
+#define SUB_FS_META_MKDIR          3u
+#define SUB_FS_META_FORMAT         4u
+
+/* rf_get */
+#define SUB_RF_GET_FREQ            0u
+#define SUB_RF_GET_RSSI            1u
+#define SUB_RF_GET_CARRIER         2u
+#define SUB_RF_GET_BANDWIDTH       3u
+#define SUB_RF_GET_MODULATION      4u
+#define SUB_RF_GET_TX_STATE        5u
+#define SUB_RF_GET_GLITCH          6u
+#define SUB_RF_GET_SNR             7u
+#define SUB_RF_GET_NOISE           8u
+#define SUB_RF_GET_FM_RSSI         9u
+
+/* rf_set */
+#define SUB_RF_SET_MODULATION      0u
+#define SUB_RF_SET_SQUELCH         1u
+#define SUB_RF_SET_TX_POWER        2u
+#define SUB_RF_SET_AF_MODE         3u
+#define SUB_RF_SET_MIC_MUTE        4u
+#define SUB_RF_SET_AGC             5u
+#define SUB_RF_SET_TX              6u
+#define SUB_RF_SET_TAIL            7u
+#define SUB_RF_SET_SUBAUDIBLE      8u
+#define SUB_RF_SET_DTMF            9u
+#define SUB_RF_SET_BURST           10u
+#define SUB_RF_SET_UNLOCK_VFO      11u
+#define SUB_RF_SET_FM_TUNE         12u
+#define SUB_RF_SET_FM_VOLUME       13u
+#define SUB_RF_SET_FM_MUTE         14u
+
+/* rf_vfo */
+#define SUB_RF_VFO_GET_CFG         0u
+#define SUB_RF_VFO_SET_CFG         1u
+#define SUB_RF_VFO_STATE           2u
+#define SUB_RF_VFO_WATCH_MODE      3u
+#define SUB_RF_VFO_LOCK            4u
+
+/* rf_bulk */
+#define SUB_RF_BULK_SWEEP          0u
+#define SUB_RF_BULK_SYMBOLS        1u
+#define SUB_RF_BULK_FSK_INIT       2u
+#define SUB_RF_BULK_FSK_SEND       3u
+#define SUB_RF_BULK_FSK_RECV       4u
+
+/* aud_ctl */
+#define SUB_AUD_CTL_PATH           0u
+#define SUB_AUD_CTL_SET_VOL        1u
+#define SUB_AUD_CTL_GET_VOL        2u
+#define SUB_AUD_CTL_IS_PLAYING     3u
+#define SUB_AUD_CTL_MIC_GAIN       4u
+#define SUB_AUD_CTL_MIC_SAMPLE     5u
+#define SUB_AUD_CTL_CAP_START      6u
+#define SUB_AUD_CTL_CAP_READ       7u
+#define SUB_AUD_CTL_CAP_STOP       8u
+#define SUB_AUD_CTL_IS_CAP         9u
+
+/* gfx_draw */
+#define SUB_GFX_DRAW_PIXEL         0u
+#define SUB_GFX_DRAW_LINE          1u
+#define SUB_GFX_DRAW_RECT          2u
+#define SUB_GFX_DRAW_FILL_RECT     3u
+#define SUB_GFX_DRAW_HLINE         4u
+#define SUB_GFX_DRAW_VLINE         5u
+#define SUB_GFX_DRAW_CLR_CORNER    6u
+#define SUB_GFX_DRAW_DITHER        7u
+#define SUB_GFX_DRAW_INVERT        8u
+#define SUB_GFX_DRAW_CHAR          9u
+#define SUB_GFX_DRAW_ICON          10u
+#define SUB_GFX_DRAW_SCROLL        11u
+#define SUB_GFX_DRAW_DOTTED_H      12u
+
+/* gfx_ctl */
+#define SUB_GFX_CTL_INVERTED       0u
+#define SUB_GFX_CTL_CONTRAST       1u
+#define SUB_GFX_CTL_BITMAP         2u
+
+/* ui_modal */
+#define SUB_UI_MODAL_CLOSE         0u
+#define SUB_UI_MODAL_ACTIVE        1u
+#define SUB_UI_MODAL_ANIMATING     2u
+#define SUB_UI_MODAL_SET_HOLD      3u
+#define SUB_UI_MODAL_GET_TEXT      4u
+#define SUB_UI_MODAL_SHOW          5u
+#define SUB_UI_MODAL_TOAST         6u
+
+/* ui_status */
+#define SUB_UI_STATUS_SET_BAR      0u
+#define SUB_UI_STATUS_GET_BAR      1u
+#define SUB_UI_STATUS_TRAY_ICON    2u
+
+/* io_key */
+#define SUB_IO_KEY_POLL            0u
+#define SUB_IO_KEY_NAV_DIR         1u
+#define SUB_IO_KEY_MATRIX          2u
+#define SUB_IO_KEY_IS_PRESSED      3u
+#define SUB_IO_KEY_IS_F            4u
+#define SUB_IO_KEY_CLEAR           5u
+#define SUB_IO_KEY_IS_LOCKED       6u
+
+/* io_power */
+#define SUB_IO_POWER_BATT_MV       0u
+#define SUB_IO_POWER_BATT_PCT      1u
+#define SUB_IO_POWER_BATT_MA       2u
+#define SUB_IO_POWER_BATT_TYPE     3u
+#define SUB_IO_POWER_BATT_ADC      4u
+#define SUB_IO_POWER_MCU_TEMP      5u
+#define SUB_IO_POWER_CHARGING      6u
+#define SUB_IO_POWER_LOW           7u
+#define SUB_IO_POWER_CRITICAL      8u
+#define SUB_IO_POWER_BL_MODE       9u
+#define SUB_IO_POWER_BL_LEVELS     10u
+#define SUB_IO_POWER_BL_WAKE       11u
+#define SUB_IO_POWER_FLASHLIGHT    12u
+
+/* io_serial */
+#define SUB_IO_SERIAL_WRITE        0u
+#define SUB_IO_SERIAL_READ         1u
+#define SUB_IO_SERIAL_CONNECTED    2u
+#define SUB_IO_SERIAL_FLUSH        3u
+
+/* io_time */
+#define SUB_IO_TIME_TICKS_MS       0u
+#define SUB_IO_TIME_UPTIME_S       1u
+#define SUB_IO_TIME_DELAY_MS       2u
+#define SUB_IO_TIME_DELAY_US       3u
+#define SUB_IO_TIME_RTC_GET        4u
+
+/* io_bus */
+#define SUB_IO_BUS_I2C             0u
+#define SUB_IO_BUS_SPI             1u
+#define SUB_IO_BUS_GPIO_SET        2u
+#define SUB_IO_BUS_GPIO_GET        3u
+#define SUB_IO_BUS_RF_RD           4u
+#define SUB_IO_BUS_RF_WR           5u
+#define SUB_IO_BUS_FLASH_RD        6u
+
 #endif /* KRX_OPS_H */

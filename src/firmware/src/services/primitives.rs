@@ -125,7 +125,6 @@ const HW_GPIO_PINS: [py32_hal::gpio::Pin; 4] = [
     bsp::pins::BACKLIGHT,
 ];
 
-#[inline(always)]
 pub fn hw_spi_transfer(cs_pin: u8, tx: &[u8], rx: &mut [u8]) -> Result<(), ()> {
     let is_flash = cs_pin == 0;
     let cs = if is_flash {
@@ -144,7 +143,6 @@ pub fn hw_spi_transfer(cs_pin: u8, tx: &[u8], rx: &mut [u8]) -> Result<(), ()> {
     res
 }
 
-#[inline(always)]
 pub fn hw_gpio_read(pin: u8) -> bool {
     if let Some(&p) = HW_GPIO_PINS.get(pin as usize) {
         p.is_high() ^ (pin == 1)
@@ -155,7 +153,6 @@ pub fn hw_gpio_read(pin: u8) -> bool {
     }
 }
 
-#[inline(always)]
 pub fn hw_gpio_write(pin: u8, high: bool) {
     if matches!(pin, 0 | 2 | 3) {
         let p = HW_GPIO_PINS[pin as usize];
@@ -169,7 +166,6 @@ pub fn hw_gpio_write(pin: u8, high: bool) {
 
 // ── Shared Radio Operations ─────────────────────────────────────────────────
 
-#[inline(always)]
 pub fn rf_apply_subaudible_split(
     coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, Disabled>,
@@ -194,7 +190,6 @@ pub fn rf_apply_subaudible_split(
     }
 }
 
-#[inline(always)]
 pub fn rf_tune(
     coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, Disabled>,
@@ -221,7 +216,7 @@ pub fn rf_tune(
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn rf_set_param(
     coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, Disabled>,
@@ -266,7 +261,6 @@ pub fn rf_set_param(
     }
 }
 
-#[inline(always)]
 pub fn rf_sweep(
     radio: &mut Bk4829<'_, Disabled>,
     start_hz: u32,
@@ -283,7 +277,6 @@ pub fn rf_sweep(
     count
 }
 
-#[inline(always)]
 pub fn rf_emit_symbols(
     radio: &mut Bk4829<'_, Disabled>,
     symbols: &[kernel::proc::abi::KrxSymbol],
@@ -295,7 +288,6 @@ pub fn rf_emit_symbols(
     Ok(())
 }
 
-#[inline(always)]
 pub fn rf_set_dual_tones_hz(
     radio: &mut Bk4829<'_, Disabled>,
     tone1_hz: u16,
@@ -312,7 +304,6 @@ pub fn rf_set_dual_tones_hz(
     );
 }
 
-#[inline(always)]
 pub fn rf_set_dtmf(radio: &mut Bk4829<'_, Disabled>, digit: u8, gain: u8) {
     let (w1, w2) = dtmf_tone_words(digit);
     radio.set_dual_tones_raw(w1, gain, w2, gain);

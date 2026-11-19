@@ -102,16 +102,19 @@ fn file_stat_size(path: *const u8, path_len: u8) -> Option<u32> {
 
 #[inline(never)]
 pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::{
+        idx as op,
+        sub::{fs_meta, fs_read, fs_write},
+    };
     match idx {
-        // FsRead: a0 = mode (0=file_at, 1=load_cfg, 2=read_asset, 3=list_dir), a1 = *const KrxFsReq
-        0 => {
+        op::FsRead => {
             let req = a1 as *const KrxFsReq;
             if req.is_null() {
                 return 0;
             }
             let r = unsafe { &*req };
             match a0 as u8 {
-                0 => {
+                fs_read::FILE_AT => {
                     if let (Some(path_str), Some(dst)) =
                         (unsafe { parse_str(r.path, r.path_len as usize) }, unsafe {
                             ptr_slice_mut(r.buf, r.len as usize)
@@ -128,7 +131,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     }
                     0
                 }
-                1 => {
+                fs_read::LOAD_CFG => {
                     if let (Some(dst), Some(st)) = (
                         unsafe { ptr_slice_mut(r.buf, r.len as usize) },
                         active_storage_mut(),
@@ -139,7 +142,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         0
                     }
                 }
-                2 => {
+                fs_read::ASSET => {
                     if let (Some(slice), Some(st)) = (
                         unsafe { ptr_slice_mut(r.buf, r.len as usize) },
                         active_storage_mut(),
@@ -156,7 +159,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     }
                     0
                 }
-                3 => {
+                fs_read::LIST_DIR => {
                     let out = r.buf as *mut KrxDirEntry;
                     let max = r.len as u8;
                     if !out.is_null() && max > 0 {
@@ -172,19 +175,18 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 _ => 0,
             }
         }
-        // FsWrite: a0 = mode (0=write, 1=append, 2=save_cfg), a1 = *const KrxFsReq
-        1 => {
+        op::FsWrite => {
             let req = a1 as *const KrxFsReq;
             if req.is_null() {
                 return 1;
             }
             let r = unsafe { &*req };
             match a0 as u8 {
-                0 | 1 => {
+                fs_write::FILE | fs_write::APPEND => {
                     if !r.buf.is_null() {
                         if let Some((path_str, st)) = user_storage(r.path, r.path_len) {
                             let src = unsafe { core::slice::from_raw_parts(r.buf, r.len as usize) };
-                            let ok = if (a0 as u8) == 1 {
+                            let ok = if (a0 as u8) == fs_write::APPEND {
                                 st.fs.append_file(path_str, src).is_ok()
                             } else {
                                 crate::security::write_classified_file(st, path_str, src).is_ok()
@@ -194,7 +196,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     }
                     1
                 }
-                2 => {
+                fs_write::SAVE_CFG => {
                     if let (Some(src), Some(st)) = (
                         unsafe { ptr_slice(r.buf, r.len as usize) },
                         active_storage_mut(),
@@ -210,15 +212,14 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 _ => 1,
             }
         }
-        // FsMeta: a0 = sub (0=size, 1=exists, 2=remove, 3=create_dir, 4=format)
-        2 => {
+        op::FsMeta => {
             let path = a1 as *const u8;
             let plen = a2 as u8;
             match a0 as u8 {
-                0 => file_stat_size(path, plen).unwrap_or(0) as usize,
-                1 => usize::from(file_stat_size(path, plen).is_some()),
-                2 | 3 => {
-                    let create_dir = (a0 as u8) == 3;
+                fs_meta::SIZE => file_stat_size(path, plen).unwrap_or(0) as usize,
+                fs_meta::EXISTS => usize::from(file_stat_size(path, plen).is_some()),
+                fs_meta::REMOVE | fs_meta::MKDIR => {
+                    let create_dir = (a0 as u8) == fs_meta::MKDIR;
                     if !create_dir {
                         if let Some(raw) = unsafe { parse_str(path, plen as usize) } {
                             if let Some(rc) = proc_remove(raw) {
@@ -236,7 +237,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     }
                     1
                 }
-                4 => {
+                fs_meta::FORMAT => {
                     let mode = a1 as u8;
                     let caps = super::super::native_runner::active_native_caps();
                     if !caps.contains(kernel::caps::Cap::StorageAdmin)
@@ -263,8 +264,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 _ => 1,
             }
         }
-        // FsRename: a0 = *const KrxFsReq (path/path_len = old, buf/len = new)
-        3 => {
+        op::FsRename => {
             let req = a0 as *const KrxFsReq;
             if !req.is_null() {
                 let r = unsafe { &*req };

@@ -211,21 +211,24 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
 
 #[inline(never)]
 pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::{
+        idx as op,
+        sub::{ui_modal, ui_status},
+    };
     match idx {
-        // UiModal
-        0 => match a0 as u8 {
-            0 => {
+        op::UiModal => match a0 as u8 {
+            ui_modal::CLOSE => {
                 crate::orchestrator::sink_enter_keys();
                 modal_mut().close();
                 0
             }
-            1 => modal_mut().is_active() as usize,
-            2 => modal_mut().is_animating() as usize,
-            3 => {
+            ui_modal::ACTIVE => modal_mut().is_active() as usize,
+            ui_modal::ANIMATING => modal_mut().is_animating() as usize,
+            ui_modal::SET_HOLD => {
                 modal_mut().set_hold_ms(a1 as u16);
                 0
             }
-            4 => {
+            ui_modal::GET_TEXT => {
                 let buf = a1 as *mut u8;
                 let max_len = a2 as u8;
                 if buf.is_null() || max_len == 0 {
@@ -241,11 +244,11 @@ pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     copy_len
                 }
             }
-            5 => {
+            ui_modal::SHOW => {
                 unsafe { show_modal_req(a1 as *const KrxModalReq) };
                 0
             }
-            6 => {
+            ui_modal::TOAST => {
                 let msg_str = unsafe { str_or_default(a1 as *const u8, (a2 as u8) as usize, "") };
                 if !msg_str.is_empty() {
                     modal_mut().show_toast(msg_str, (a2 >> 16) as u16);
@@ -254,21 +257,19 @@ pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             _ => 0,
         },
-        // UiStatus
-        1 => match a0 as u8 {
-            0 => {
+        op::UiStatus => match a0 as u8 {
+            ui_status::SET_BAR => {
                 crate::runtime::native_runner::set_slot_status_bar(a1 as *const KrxStatusBar);
                 1
             }
-            1 => {
+            ui_status::GET_BAR => {
                 crate::runtime::native_runner::get_slot_status_bar(a1 as *mut KrxStatusBar);
                 0
             }
-            2 => set_tray_icon(a1 as u8) as usize,
+            ui_status::TRAY_ICON => set_tray_icon(a1 as u8) as usize,
             _ => 0,
         },
-        // UiWidget
-        2 => unsafe { draw_widget(a0 as u8, a1 as *const KrxWidget) },
+        op::UiWidget => unsafe { draw_widget(a0 as u8, a1 as *const KrxWidget) },
         _ => 0,
     }
 }

@@ -12,26 +12,27 @@ fn power_ref() -> &'static drivers::battery::SystemPower {
 
 #[inline(never)]
 fn dispatch_io_key(sub: u8, a1: usize) -> usize {
+    use kernel::abi::sub::io_key;
     match sub {
-        0 => {
+        io_key::POLL => {
             bsp::Board::wdt_feed();
             drivers::keyboard::KeypadScanner::poll_matrix()
                 .map(|k| k as usize)
                 .unwrap_or(0)
         }
-        1 => match a1 as u8 {
+        io_key::NAV_DIR => match a1 as u8 {
             1 => (-1i8 as u8) as usize,
             2 => 1,
             _ => 0,
         },
-        2 => drivers::keyboard::KeypadScanner::poll_raw_mask() as usize,
-        3 => {
+        io_key::MATRIX => drivers::keyboard::KeypadScanner::poll_raw_mask() as usize,
+        io_key::IS_PRESSED => {
             let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
             kernel::event::KeyCode::from_u8(a1 as u8)
                 .is_some_and(|kc| (mask & drivers::keyboard::key_to_bit(kc)) != 0)
                 as usize
         }
-        4 => {
+        io_key::IS_F => {
             #[cfg(not(test))]
             {
                 crate::kern_hw().orchestrator.is_f_active() as usize
@@ -41,11 +42,11 @@ fn dispatch_io_key(sub: u8, a1: usize) -> usize {
                 active_ctx_opt().map_or(0, |ctx| ctx.is_f_active as usize)
             }
         }
-        5 => {
+        io_key::CLEAR => {
             drivers::keyboard::KeypadScanner::reset_gpio_pins();
             0
         }
-        6 => {
+        io_key::IS_LOCKED => {
             #[cfg(not(test))]
             {
                 crate::kern_hw().orchestrator.is_keypad_locked() as usize
@@ -61,19 +62,20 @@ fn dispatch_io_key(sub: u8, a1: usize) -> usize {
 
 #[inline(never)]
 fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
+    use kernel::abi::sub::io_power;
     use kernel::service::PowerService;
     let p = power_ref();
     match sub {
-        0 => p.battery_voltage_mv() as usize,
-        1 => p.battery_percentage() as usize,
-        2 => p.battery_current_ma() as usize,
-        3 => p.battery_type() as usize,
-        4 => p.raw_battery_adc() as usize,
-        5 => p.mcu_temperature_deci_c() as u16 as usize,
-        6 => usize::from(p.is_charging),
-        7 => usize::from(p.is_low()),
-        8 => usize::from(p.is_critical()),
-        9 => {
+        io_power::BATT_MV => p.battery_voltage_mv() as usize,
+        io_power::BATT_PCT => p.battery_percentage() as usize,
+        io_power::BATT_MA => p.battery_current_ma() as usize,
+        io_power::BATT_TYPE => p.battery_type() as usize,
+        io_power::BATT_ADC => p.raw_battery_adc() as usize,
+        io_power::MCU_TEMP => p.mcu_temperature_deci_c() as u16 as usize,
+        io_power::CHARGING => usize::from(p.is_charging),
+        io_power::LOW => usize::from(p.is_low()),
+        io_power::CRITICAL => usize::from(p.is_critical()),
+        io_power::BL_MODE => {
             let mode = a1 as u8;
             let timeout_ms = ((a2 as u16) * 1000).min(60000);
             #[cfg(not(test))]
@@ -98,7 +100,7 @@ fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        10 => {
+        io_power::BL_LEVELS => {
             #[cfg(not(test))]
             crate::kern_hw().backlight.set_levels(a1 as u8, a2 as u8);
             #[cfg(test)]
@@ -111,7 +113,7 @@ fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        11 => {
+        io_power::BL_WAKE => {
             #[cfg(not(test))]
             crate::kern_hw().backlight.wake();
             #[cfg(test)]
@@ -122,7 +124,7 @@ fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        12 => {
+        io_power::FLASHLIGHT => {
             if a1 != 0 {
                 bsp::pins::FLASHLIGHT.set_high();
             } else {
@@ -136,8 +138,9 @@ fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
 
 #[inline(never)]
 unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
+    use kernel::abi::sub::io_serial;
     match sub {
-        0 => {
+        io_serial::WRITE => {
             let len = a2 as u16;
             let Some(slice) = (unsafe { ptr_slice(a1 as *const u8, len as usize) }) else {
                 return 0;
@@ -175,7 +178,7 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
                 }
             }
         }
-        1 => {
+        io_serial::READ => {
             let Some(slice) = (unsafe { ptr_slice_mut(a1 as *mut u8, (a2 as u16) as usize) })
             else {
                 return 0;
@@ -213,7 +216,7 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
                 }
             }
         }
-        2 => {
+        io_serial::CONNECTED => {
             #[cfg(all(not(test), feature = "usb"))]
             {
                 crate::kern_hw().usb.is_connected() as usize
@@ -229,7 +232,7 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
                 0
             }
         }
-        3 => {
+        io_serial::FLUSH => {
             py32_hal::uart::wait_tx_complete();
             0
         }
@@ -239,8 +242,9 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
 
 #[inline(never)]
 unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
+    use kernel::abi::sub::io_bus;
     match sub {
-        0 => {
+        io_bus::I2C => {
             let req = a1 as *const KrxBusReq;
             if req.is_null() {
                 return 1;
@@ -254,7 +258,7 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
                     .is_err(),
             )
         }
-        1 => {
+        io_bus::SPI => {
             let req = a1 as *const KrxBusReq;
             if req.is_null() {
                 return 1;
@@ -271,12 +275,12 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
                     .is_err(),
             )
         }
-        2 => {
+        io_bus::GPIO_SET => {
             crate::services::primitives::hw_gpio_write(a1 as u8, a2 != 0);
             0
         }
-        3 => crate::services::primitives::hw_gpio_read(a1 as u8) as usize,
-        4 => {
+        io_bus::GPIO_GET => crate::services::primitives::hw_gpio_read(a1 as u8) as usize,
+        io_bus::RF_RD => {
             #[cfg(not(test))]
             {
                 crate::kern_hw().radio.read_reg(a1 as u8) as usize
@@ -286,7 +290,7 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
                 active_ctx_opt().map_or(0, |ctx| ctx.radio.read_reg(a1 as u8) as usize)
             }
         }
-        5 => {
+        io_bus::RF_WR => {
             #[cfg(not(test))]
             crate::kern_hw().radio.write_reg(a1 as u8, a2 as u16);
             #[cfg(test)]
@@ -295,7 +299,7 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        6 => {
+        io_bus::FLASH_RD => {
             let req = a1 as *const KrxBusReq;
             if !req.is_null() {
                 let r = unsafe { &*req };
@@ -320,14 +324,15 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
 
 #[inline(never)]
 pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
+    use kernel::abi::{idx as op, sub::io_time};
     match idx {
-        0 => dispatch_io_key(a0 as u8, a1),
-        1 => dispatch_io_power(a0 as u8, a1, a2),
-        2 => unsafe { dispatch_io_serial(a0 as u8, a1, a2) },
-        3 => match a0 as u8 {
-            0 => py32_hal::delay::millis() as usize,
-            1 => utils::math::div1000_u32(py32_hal::delay::millis()) as usize,
-            2 => {
+        op::IoKey => dispatch_io_key(a0 as u8, a1),
+        op::IoPower => dispatch_io_power(a0 as u8, a1, a2),
+        op::IoSerial => unsafe { dispatch_io_serial(a0 as u8, a1, a2) },
+        op::IoTime => match a0 as u8 {
+            io_time::TICKS_MS => py32_hal::delay::millis() as usize,
+            io_time::UPTIME_S => utils::math::div1000_u32(py32_hal::delay::millis()) as usize,
+            io_time::DELAY_MS => {
                 let mut rem = a1 as u32;
                 while rem > 50 {
                     bsp::Board::wdt_feed();
@@ -340,11 +345,11 @@ pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 }
                 0
             }
-            3 => {
+            io_time::DELAY_US => {
                 py32_hal::delay::delay_us(a1 as u32);
                 0
             }
-            4 => {
+            io_time::RTC_GET => {
                 let out = a1 as *mut u8;
                 if !out.is_null() {
                     let dst = unsafe { core::slice::from_raw_parts_mut(out, 7) };
@@ -356,7 +361,7 @@ pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             _ => 0,
         },
-        4 => unsafe { dispatch_io_bus(a0 as u8, a1, a2) },
+        op::IoBus => unsafe { dispatch_io_bus(a0 as u8, a1, a2) },
         _ => 0,
     }
 }
