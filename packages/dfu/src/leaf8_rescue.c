@@ -1,9 +1,10 @@
 /*
- * DFU Leaf 8: Peer Flash (Exact DFU-Style Radio -> Radio Splash & Clean Menu)
+ * DFU Leaf 8: Peer Flash (Spacious DFU-Matched Radio -> Radio View)
  *
- * Uses the identical minimalist UV-K1 radio silhouette and connection arrow
- * from leaf1_splash.c (161 B PackBits RLE across Pages 0..3) with clean
- * chevron rows and zero right-hand acronyms or redundant labels.
+ * Mirrors the exact visual balance of the DFU screen:
+ *   - y=1..31:  Two DFU-identical UV-K1 radios + centered right-pointing arrow
+ *   - y=39/47:  Spacious two-line centered status (zero cramped list boxes)
+ *   - y=54..60: Native square soft bar ([MENU] Start / [EXIT] Back)
  */
 #include "dfu_shared.h"
 
@@ -16,7 +17,7 @@ static const u8 PEER_RLE[96] = {
     0xFD, 0xFF, 0xF1, 0xF6, 0xFD, 0xFF, 0x00, 0x7F, 0xE6, 0x00, 0x02, 0x07, 0x03, 0x01, 0xFE, 0x00,
 };
 
-static void draw_peer_art(u8* fb, u8* tmp) {
+static void draw_peer_art(u8* fb, u8* tmp, u8 show_arrow) {
     u32 si = 0u, di = 0u;
     while (si < sizeof(PEER_RLE) && di < 240u) {
         u8 h = PEER_RLE[si++];
@@ -30,9 +31,10 @@ static void draw_peer_art(u8* fb, u8* tmp) {
         }
     }
     for (u32 p = 0u; p < 4u; p++) {
-        dfu_copy_bytes(fb + (p << 7) + 13u, tmp + p * 60u, 60u);
+        dfu_copy_bytes(fb + (p << 7) + 13u, tmp + p * 60u, show_arrow ? 60u : 27u);
         dfu_copy_bytes(fb + (p << 7) + 88u, tmp + p * 60u, 27u);
     }
+    /* Left source radio LCD: clean 3-bar icon; right peer radio keeps "DFU" */
     for (u32 x = 21u; x <= 32u; x++) {
         fb[128u + x] = (u8)((fb[128u + x] & 0x0Fu) | ((x > 21u && x < 32u) ? 0x40u : 0u));
         fb[256u + x] = (u8)((fb[256u + x] & 0xE0u) | ((x > 21u && x < 30u) ? 0x05u : 0u));
@@ -46,23 +48,15 @@ static void draw_ctr(const KrxApiTable* api, i16 y, const char* s) {
 }
 
 __attribute__((noinline))
-static void render_peer(const KrxApiTable* api, DfuSharedState* st, u8 sel, u8 mode, u8 solid) {
+static void render_peer(const KrxApiTable* api, DfuSharedState* st, u8 waiting, u8 arrow) {
     krx_clear(api);
-    draw_peer_art(krx_get_framebuffer(api), st->stage_buf);
-
-    if (mode == 0u) {
-        for (u8 r = 0u; r < 2u; r++) {
-            const char* lbl = r ? "Connection Guide" : "Start Peer Flash";
-            u8 flags = KRX_MENU_FLAG_ARROW;
-            if (r == sel) flags |= KRX_MENU_FLAG_SEL | (solid ? 0u : KRX_MENU_FLAG_OUTLINE);
-            krx_ui_draw_menu_item_ex(api, (i16)(33 + r * 10), KRX_MENU_COMPACT,
-                (const u8*)lbl, 16u, (const u8*)"", 0u, flags, 0u);
-        }
-        st->ui.softbar(api, "MENU", "Open", "EXIT", "Back");
+    draw_peer_art(krx_get_framebuffer(api), st->stage_buf, arrow);
+    draw_ctr(api, 39, waiting ? "Waiting for peer..." : "Peer Flash");
+    draw_ctr(api, 47, waiting ? "Hold PTT + power on" : "Connect 2-pin cable");
+    if (waiting) {
+        st->ui.softbar(api, "", "", "EXIT", "Cancel");
     } else {
-        draw_ctr(api, 39, (mode == 1u) ? "Hold PTT + power on peer" : "Connect 2-pin serial cable");
-        draw_ctr(api, 47, (mode == 1u) ? "Waiting for peer radio..." : "USB port is device-only");
-        st->ui.softbar(api, "", "", "EXIT", "Back");
+        st->ui.softbar(api, "MENU", "Start", "EXIT", "Back");
     }
     krx_commit_frame(api);
 }
@@ -74,20 +68,24 @@ u32 leaf8_entry(u32 op, const KrxApiTable* api, void* param) {
     if (!ctx || !api || !ctx->arg) return 1u;
     DfuSharedState* st = (DfuSharedState*)ctx->arg;
 
-    u8 sel = 0u, mode = 0u;
     for (;;) {
-        render_peer(api, st, sel, mode, 0u);
+        render_peer(api, st, 0u, 1u);
         u8 k = st->ui.wait_key(api);
-        if (k == KEY_EXIT) {
-            if (mode != 0u) { mode = 0u; continue; }
-            return 0u;
-        }
-        if (mode != 0u) continue;
-        if (k == KEY_UP || k == KEY_DOWN) sel ^= 1u;
-        else if (k == KEY_MENU) {
-            render_peer(api, st, sel, mode, 1u);
+        if (k == KEY_EXIT) return 0u;
+        if (k == KEY_MENU) {
             while (krx_poll_key(api) == KEY_MENU) krx_delay_ms(api, 10u);
-            mode = (u8)(sel + 1u);
+            u8 arrow = 1u;
+            for (u32 tick = 0u; ; tick++) {
+                if ((tick & 31u) == 0u) {
+                    render_peer(api, st, 1u, arrow);
+                    arrow ^= 1u;
+                }
+                if (krx_poll_key(api) == KEY_EXIT) {
+                    while (krx_poll_key(api) == KEY_EXIT) krx_delay_ms(api, 10u);
+                    break;
+                }
+                krx_delay_ms(api, 15u);
+            }
         }
     }
 }
