@@ -697,7 +697,11 @@ mod tests {
         );
         #[cfg(feature = "filesystem")]
         {
-            assert_eq!(ActionId::from_u8(12), Some(ActionId::DeletePackage));
+            assert_eq!(
+                ActionId::from_u8(ActionId::DeletePackage as u8),
+                Some(ActionId::DeletePackage)
+            );
+            assert_eq!(ActionId::from_u8(ActionId::COUNT as u8), None);
             assert_eq!(
                 ActionId::DeletePackage.destructive_level(),
                 DestructiveLevel::UserDataLoss

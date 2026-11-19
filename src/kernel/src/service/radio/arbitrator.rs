@@ -187,13 +187,25 @@ pub trait RfClientParticipant {
 
 /// Busy Channel Lockout (BCLO) arbitration policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum BcloPolicy {
     /// Transmission always allowed regardless of channel carrier.
-    Disabled,
+    Disabled = 0,
     /// Transmission blocked if carrier is present (carrier squelch open).
-    CarrierOnly,
+    CarrierOnly = 1,
     /// Transmission blocked only if carrier is present and subaudible CTCSS/DCS does not match.
-    ToneMismatchOnly,
+    ToneMismatchOnly = 2,
+}
+
+impl BcloPolicy {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        if val <= 2 {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
+        }
+    }
 }
 
 /// Detailed result when evaluating or requesting RF transmission.

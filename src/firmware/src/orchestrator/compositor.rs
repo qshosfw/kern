@@ -385,8 +385,8 @@ static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 /// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
 #[inline(never)]
 pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<120>) {
+    const SPACE_PX: i16 = 4; // TomThumb ' ' glyph x_advance
     out.clear();
-    let space_px = gfx::text::str_width(" ", &gfx::fonts::tomthumb::FONT);
     let b = raw.as_bytes();
     let n = b.len();
     let mut i = 0usize;
@@ -394,7 +394,7 @@ pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<120>) {
 
     while i < n {
         if b[i] == b'\n' {
-            if out.push('\n').is_err() {
+            if unsafe { out.as_mut_vec().push(b'\n') }.is_err() {
                 return;
             }
             line_px = 0;
@@ -409,17 +409,18 @@ pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<120>) {
         while i < n && b[i] != b' ' && b[i] != b'\n' {
             i += 1;
         }
-        let word = &raw[s..i];
+        // SAFETY: `s` and `i` land on ASCII space/newline or slice bounds of valid UTF-8 `raw`.
+        let word = unsafe { core::str::from_utf8_unchecked(&b[s..i]) };
         let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
         if line_px > 0 {
-            let sep = if line_px + space_px + word_px > MAX_ALERT_LINE_PX {
+            let sep = if line_px + SPACE_PX + word_px > MAX_ALERT_LINE_PX {
                 line_px = 0;
-                '\n'
+                b'\n'
             } else {
-                line_px += space_px;
-                ' '
+                line_px += SPACE_PX;
+                b' '
             };
-            if out.push(sep).is_err() {
+            if unsafe { out.as_mut_vec().push(sep) }.is_err() {
                 return;
             }
         }

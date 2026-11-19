@@ -50,26 +50,29 @@ fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut cra
     let def = spec.defs[idx];
     item.title = spec.title(idx);
     match def.tag {
-        TAG_CHOICE => {
-            if let Some(opts) = choice_options(def.aux) {
-                item.item_type = make_choice(opts, def.field.get_u8(&ctx.config));
-            }
-        }
-        TAG_BATTERY_TYPE => {
-            let (opts, types) =
-                super::battery::battery_options_and_types(ctx.config.keys.nav_layout);
+        TAG_CHOICE | TAG_BATTERY_TYPE | TAG_TOGGLE => {
             let raw_byte = def.field.get_u8(&ctx.config);
-            let mut sel = 0u16;
-            for (i, &t) in types.iter().enumerate() {
-                if t == raw_byte {
-                    sel = i as u16;
-                    break;
+            if def.tag == TAG_TOGGLE {
+                item.item_type = MenuItemType::Toggle(raw_byte != 0);
+            } else if def.tag == TAG_CHOICE {
+                if let Some(opts) = choice_options(def.aux) {
+                    item.item_type = make_choice(opts, raw_byte);
                 }
+            } else {
+                let (opts, types) =
+                    super::battery::battery_options_and_types(ctx.config.keys.nav_layout);
+                let mut sel = 0u16;
+                for (i, &t) in types.iter().enumerate() {
+                    if t == raw_byte {
+                        sel = i as u16;
+                        break;
+                    }
+                }
+                item.item_type = MenuItemType::Choice {
+                    selected: sel,
+                    options: gfx::gui::modules::menu::SheetOptions::Packed(opts),
+                };
             }
-            item.item_type = MenuItemType::Choice {
-                selected: sel,
-                options: gfx::gui::modules::menu::SheetOptions::Packed(opts),
-            };
         }
         TAG_RANGE => {
             if let Some(range) = RANGES.get(def.aux as usize) {
@@ -86,9 +89,6 @@ fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut cra
                     unit: range.unit,
                 };
             }
-        }
-        TAG_TOGGLE => {
-            item.item_type = MenuItemType::Toggle(def.field.get_u8(&ctx.config) != 0);
         }
         TAG_SUBMENU => {
             item.item_type = MenuItemType::Submenu;

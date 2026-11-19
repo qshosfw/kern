@@ -213,7 +213,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     #[cfg(feature = "text_input")]
     #[inline(always)]
     pub fn prompt_text(
-        &mut self,
+        &self,
         tag: u8,
         title: &str,
         initial: &str,
@@ -234,7 +234,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     #[cfg(not(feature = "text_input"))]
     #[inline(always)]
     pub fn prompt_text(
-        &mut self,
+        &self,
         _tag: u8,
         _title: &str,
         _initial: &str,

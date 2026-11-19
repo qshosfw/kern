@@ -97,12 +97,21 @@ pub fn get_hardware_serial64() -> u64 {
     murmur3_64_words(&words)
 }
 
-/// Derives an IEEE EUI-48 (6-byte) MAC address from a precomputed 64-bit hardware serial.
+/// Derives an IEEE EUI-48 (6-byte) MAC address from a precomputed 64-bit hardware serial into `dst`.
 #[inline(never)]
-pub fn mac_from_serial64(serial: u64) -> [u8; 6] {
+pub fn mac_from_serial64_into(serial: u64, dst: &mut [u8; 6]) {
     let bytes = serial.to_be_bytes();
-    let mut mac = [bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
-    mac[0] = (mac[0] | 0x02) & !0x01;
+    for i in 0..6 {
+        dst[i] = bytes[i + 2];
+    }
+    dst[0] = (dst[0] | 0x02) & !0x01;
+}
+
+/// Derives an IEEE EUI-48 (6-byte) MAC address from a precomputed 64-bit hardware serial.
+#[inline(always)]
+pub fn mac_from_serial64(serial: u64) -> [u8; 6] {
+    let mut mac = [0u8; 6];
+    mac_from_serial64_into(serial, &mut mac);
     mac
 }
 
@@ -139,13 +148,11 @@ pub fn get_mac_tag_str() -> &'static str {
     }
 }
 
-/// Encodes any 64-bit hardware identifier into a 15-byte null-terminated Crockford Base32
-/// ASCII buffer (13 Crockford Base32 chars + 1 Mod-37 checksum + null).
+/// Encodes any 64-bit hardware identifier into `dst` (13 Crockford Base32 chars + 1 Mod-37 checksum + NUL).
 #[inline(never)]
-pub fn encode_crockford64(serial: u64) -> [u8; 15] {
+pub fn encode_crockford64_into(serial: u64, dst: &mut [u8; 15]) {
     let (mut lo, mut hi) = (serial as u32, (serial >> 32) as u32);
-    let mut out = core::mem::MaybeUninit::<[u8; 15]>::uninit();
-    let ptr = out.as_mut_ptr().cast::<u8>();
+    let ptr = dst.as_mut_ptr();
 
     // Encode 64 bits into 13 characters using 32-bit shifts (avoids __aeabi_llsr on Cortex-M0+).
     for i in (0..13).rev() {
@@ -168,6 +175,16 @@ pub fn encode_crockford64(serial: u64) -> [u8; 15] {
     unsafe {
         *ptr.add(13) = *CHECKSUM_ALPHABET.get_unchecked(mod37);
         *ptr.add(14) = b'\0';
+    }
+}
+
+/// Encodes any 64-bit hardware identifier into a 15-byte null-terminated Crockford Base32
+/// ASCII buffer (13 Crockford Base32 chars + 1 Mod-37 checksum + null).
+#[inline(always)]
+pub fn encode_crockford64(serial: u64) -> [u8; 15] {
+    let mut out = core::mem::MaybeUninit::<[u8; 15]>::uninit();
+    unsafe {
+        encode_crockford64_into(serial, &mut *out.as_mut_ptr());
         out.assume_init()
     }
 }

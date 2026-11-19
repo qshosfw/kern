@@ -58,47 +58,37 @@ pub enum DestructiveLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ActionId {
-    ChooseModel = 1,
+    ChooseModel = 0,
     #[cfg(feature = "text_input")]
-    EditOwner = 2,
+    EditOwner,
     #[cfg(feature = "text_input")]
-    EditTag = 3,
+    EditTag,
     #[cfg(feature = "text_input")]
-    EditRadioId = 4,
+    EditRadioId,
     #[cfg(feature = "settings_debug")]
-    ClearLogs = 5,
+    ClearLogs,
     #[cfg(feature = "filesystem")]
-    FormatKeepCalib = 6,
+    FormatKeepCalib,
     #[cfg(feature = "filesystem")]
-    FormatWipeAll = 7,
-    ResetSettings = 10,
-    RebootFirmware = 11,
+    FormatWipeAll,
+    ResetSettings,
+    RebootFirmware,
     #[cfg(feature = "filesystem")]
-    DeletePackage = 12,
+    DeletePackage,
 }
 
 impl ActionId {
+    #[cfg(feature = "filesystem")]
+    pub const COUNT: usize = ActionId::DeletePackage as usize + 1;
+    #[cfg(not(feature = "filesystem"))]
+    pub const COUNT: usize = ActionId::RebootFirmware as usize + 1;
+
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
-        match val {
-            1 => Some(ActionId::ChooseModel),
-            #[cfg(feature = "text_input")]
-            2 => Some(ActionId::EditOwner),
-            #[cfg(feature = "text_input")]
-            3 => Some(ActionId::EditTag),
-            #[cfg(feature = "text_input")]
-            4 => Some(ActionId::EditRadioId),
-            #[cfg(feature = "settings_debug")]
-            5 => Some(ActionId::ClearLogs),
-            #[cfg(feature = "filesystem")]
-            6 => Some(ActionId::FormatKeepCalib),
-            #[cfg(feature = "filesystem")]
-            7 => Some(ActionId::FormatWipeAll),
-            10 => Some(ActionId::ResetSettings),
-            11 => Some(ActionId::RebootFirmware),
-            #[cfg(feature = "filesystem")]
-            12 => Some(ActionId::DeletePackage),
-            _ => None,
+        if (val as usize) < Self::COUNT {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
         }
     }
 

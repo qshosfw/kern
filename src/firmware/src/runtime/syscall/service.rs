@@ -103,8 +103,8 @@ unsafe fn fill_sys_info(out_info: *mut KrxSysInfo) -> usize {
         ctx.config.system.model_str().as_bytes()
     });
     let serial64 = bsp::uid::get_hardware_serial64();
-    out.mac = bsp::uid::mac_from_serial64(serial64);
-    out.serial = bsp::uid::encode_crockford64(serial64);
+    bsp::uid::mac_from_serial64_into(serial64, &mut out.mac);
+    bsp::uid::encode_crockford64_into(serial64, &mut out.serial);
     out.mcu_uid = bsp::uid::read_mcu_uid();
 
     let meta = &crate::build_info::FW_METADATA;

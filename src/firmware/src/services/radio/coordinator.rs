@@ -27,11 +27,23 @@ pub enum DualWatchMode {
 
 /// Cross-band RF transmit and receive routing policies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum CrossBandMode {
-    Off,
-    FixedTxOnA,
-    FixedTxOnB,
-    MasterFollowsRx,
+    Off = 0,
+    FixedTxOnA = 1,
+    FixedTxOnB = 2,
+    MasterFollowsRx = 3,
+}
+
+impl CrossBandMode {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        if val <= 3 {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
+        }
+    }
 }
 
 /// Transmit target selection policy when Dual Watch / Multi-VFO is active.

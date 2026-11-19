@@ -228,24 +228,13 @@ unsafe fn dispatch_rf_vfo(
                 };
             }
             if cross_band != 0xFF {
-                const CROSS_BANDS: [CrossBandMode; 4] = [
-                    CrossBandMode::Off,
-                    CrossBandMode::FixedTxOnA,
-                    CrossBandMode::FixedTxOnB,
-                    CrossBandMode::MasterFollowsRx,
-                ];
-                let Some(&cb) = CROSS_BANDS.get(cross_band as usize) else {
+                let Some(cb) = CrossBandMode::from_u8(cross_band) else {
                     return 1;
                 };
                 coord.cross_band = cb;
             }
             if bclo != 0xFF {
-                const BCLOS: [BcloPolicy; 3] = [
-                    BcloPolicy::Disabled,
-                    BcloPolicy::CarrierOnly,
-                    BcloPolicy::ToneMismatchOnly,
-                ];
-                let Some(&bp) = BCLOS.get(bclo as usize) else {
+                let Some(bp) = BcloPolicy::from_u8(bclo) else {
                     return 1;
                 };
                 coord.bclo_policy = bp;

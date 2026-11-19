@@ -19,7 +19,7 @@ fn active_storage_mut() -> Option<&'static mut crate::services::SystemStorage<'s
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 fn is_proc_boot_path(path: &str) -> bool {
     path == "/proc/boot"
 }

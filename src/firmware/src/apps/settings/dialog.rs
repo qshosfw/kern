@@ -54,19 +54,18 @@ pub fn copy_padded(dst: &mut [u8], src: &[u8]) {
 #[inline(never)]
 pub fn prompt_config_str(ctx: &mut SysContext, tag: u8) {
     let mut buf = ShortString::empty();
-    let (title, max_len, digits) = if tag == TAG_RADIO_ID_INPUT {
+    let (title, initial, max_len, digits) = if tag == TAG_RADIO_ID_INPUT {
         buf.push_int_fixed(ctx.config.system.radio_id as i32, 0, "", "");
-        ("Radio ID", 8, true)
+        ("Radio ID", buf.as_str(), 8, true)
     } else {
         let (title, s, max_len) = match tag {
             TAG_OWNER_INPUT => ("Owner", ctx.config.system.owner_str(), 12),
             TAG_TAG_INPUT => ("Tag", ctx.config.system.tag_str(), 8),
             _ => ("Model", ctx.config.system.custom_model_str(), 12),
         };
-        buf.set_str(s);
-        (title, max_len, false)
+        (title, s, max_len, false)
     };
-    ctx.prompt_text(tag, title, buf.as_str(), max_len, digits);
+    ctx.prompt_text(tag, title, initial, max_len, digits);
 }
 
 #[cfg(feature = "passcode")]
@@ -113,7 +112,12 @@ Reset Settings?\0Restores default settings.\nChannels & calib are kept.\0\
 Restart Radio?\0Saves settings and restarts\nthe radio.\0";
 );
 
-static DESTRUCTIVE_CONFIRMS: &[DestructiveConfirm] = &[
+#[cfg(feature = "filesystem")]
+const DESTRUCTIVE_COUNT: usize = 4;
+#[cfg(not(feature = "filesystem"))]
+const DESTRUCTIVE_COUNT: usize = 2;
+
+static DESTRUCTIVE_CONFIRMS: [DestructiveConfirm; DESTRUCTIVE_COUNT] = [
     #[cfg(feature = "filesystem")]
     DestructiveConfirm {
         action: ActionId::FormatKeepCalib,
