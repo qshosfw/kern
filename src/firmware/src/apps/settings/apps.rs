@@ -1,24 +1,16 @@
 //! Applications Settings Page & Package Icon Resolution for OS Settings.
 
-use super::page::{ChoiceId, SettingDef, SettingField};
+use super::page::{ChoiceId, SettingDef, SettingField, setting_page};
 
-pub static LAUNCHER_STYLE_OPTIONS: &str = "Grid\0List\0";
-pub static STARTUP_APP_OPTIONS: &str = "Home\0Radio\0";
+pub const LAUNCHER_STYLE_OPTIONS: &str = "Grid\0List\0";
+pub const STARTUP_APP_OPTIONS: &str = "Home\0Radio\0";
 
-pub static APPS_DEFS: &[SettingDef] = &[
-    SettingDef::choice(
-        "Style",
-        ChoiceId::LauncherStyle,
-        SettingField::LAUNCHER_STYLE,
-    ),
-    SettingDef::toggle("Key Badges", SettingField::SHOW_NUMBERS),
-    SettingDef::toggle("App Titles", SettingField::SHOW_LABELS),
-    SettingDef::choice(
-        "Startup App",
-        ChoiceId::StartupApp,
-        SettingField::STARTUP_APP,
-    ),
-];
+setting_page!(pub APPS_PAGE = [
+    ("Style", SettingDef::choice(ChoiceId::LauncherStyle, SettingField::LAUNCHER_STYLE)),
+    ("Key Badges", SettingDef::toggle(SettingField::SHOW_NUMBERS)),
+    ("App Titles", SettingDef::toggle(SettingField::SHOW_LABELS)),
+    ("Startup App", SettingDef::choice(ChoiceId::StartupApp, SettingField::STARTUP_APP)),
+]);
 
 fn resolve_icon_id(title: &str, icon_id: u16) -> u16 {
     if icon_id >= 22 {

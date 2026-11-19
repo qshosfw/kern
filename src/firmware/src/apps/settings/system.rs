@@ -6,7 +6,7 @@
     feature = "settings_debug"
 ))]
 use super::page::MetricId;
-use super::page::{ActionId, ChoiceId, PageId, SettingDef, SettingField};
+use super::page::{ActionId, ChoiceId, PageId, SettingDef, SettingField, setting_page};
 #[cfg(feature = "settings_info")]
 use crate::SysContext;
 #[cfg(feature = "settings_info")]
@@ -17,12 +17,12 @@ use gfx::text::{Align, draw_str_align};
 use gfx::{Canvas, Color};
 
 #[cfg(feature = "overclock_72mhz")]
-pub static CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0";
+pub const CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0";
 #[cfg(not(feature = "overclock_72mhz"))]
-pub static CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\0";
+pub const CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\0";
 
 #[cfg(feature = "uart")]
-pub static UART_BAUD_OPTIONS: &str = "115200\038400\0";
+pub const UART_BAUD_OPTIONS: &str = "115200\038400\0";
 
 /// Index in `PageId::System` where declarative `FLAG_SYSTEM_MENU` modules are inserted.
 #[cfg(feature = "krx_native")]
@@ -39,28 +39,25 @@ pub(crate) const fn system_modules_insert_idx() -> usize {
 /// Index in `PageId::System` where declarative `FLAG_SYSTEM_ACTION` buttons are inserted (before Restart).
 #[cfg(feature = "krx_native")]
 #[inline(always)]
-pub(crate) const fn system_actions_insert_idx() -> usize {
-    SYSTEM_ROOT.len().saturating_sub(1)
+pub(crate) fn system_actions_insert_idx() -> usize {
+    SYSTEM_ROOT_PAGE.defs.len().saturating_sub(1)
 }
 
-pub static SYSTEM_ROOT: &[SettingDef] = &[
-    // Hardware & Bus Tuning
-    SettingDef::choice("Clock", ChoiceId::CpuClock, SettingField::CPU_CLOCK),
+setting_page!(pub SYSTEM_ROOT_PAGE = [
+    ("Clock", SettingDef::choice(ChoiceId::CpuClock, SettingField::CPU_CLOCK)),
     #[cfg(feature = "uart")]
-    SettingDef::choice("UART Baud", ChoiceId::UartBaud, SettingField::UART_BAUD),
-    // Identity, Storage & Diagnostics
+    ("UART Baud", SettingDef::choice(ChoiceId::UartBaud, SettingField::UART_BAUD)),
     #[cfg(feature = "settings_info")]
-    SettingDef::submenu("Info", PageId::SystemInfo),
+    ("Info", SettingDef::submenu(PageId::SystemInfo)),
     #[cfg(feature = "filesystem")]
-    SettingDef::submenu("Storage", PageId::SystemStorage),
+    ("Storage", SettingDef::submenu(PageId::SystemStorage)),
     #[cfg(feature = "settings_calib")]
-    SettingDef::submenu("Calibration", PageId::SystemCalibration),
+    ("Calibration", SettingDef::submenu(PageId::SystemCalibration)),
     #[cfg(feature = "settings_debug")]
-    SettingDef::submenu("Debug", PageId::SystemDebug),
-    // Maintenance & Power Control
-    SettingDef::action("Reset Settings", ActionId::ResetSettings),
-    SettingDef::action("Restart", ActionId::RebootFirmware),
-];
+    ("Debug", SettingDef::submenu(PageId::SystemDebug)),
+    ("Reset Settings", SettingDef::action(ActionId::ResetSettings)),
+    ("Restart", SettingDef::action(ActionId::RebootFirmware)),
+]);
 
 #[cfg(feature = "settings_info")]
 pub const SYSTEM_INFO_VISIBLE_ROWS: usize = 7;
@@ -378,34 +375,34 @@ pub fn render_system_info_with(
 }
 
 #[cfg(feature = "filesystem")]
-pub static SYSTEM_STORAGE: &[SettingDef] = &[
-    SettingDef::metric("Used", MetricId::StorageUsed),
-    SettingDef::metric("Free", MetricId::StorageFree),
-    SettingDef::metric("Files", MetricId::StorageFiles),
-    SettingDef::metric("Wear Cycles", MetricId::StorageWear),
-    SettingDef::metric("Deleted", MetricId::StorageDeleted),
-    SettingDef::action("Format Storage", ActionId::FormatKeepCalib),
-    SettingDef::action("Erase All Data", ActionId::FormatWipeAll),
-];
+setting_page!(pub SYSTEM_STORAGE_PAGE = [
+    ("Used", SettingDef::metric(MetricId::StorageUsed)),
+    ("Free", SettingDef::metric(MetricId::StorageFree)),
+    ("Files", SettingDef::metric(MetricId::StorageFiles)),
+    ("Wear Cycles", SettingDef::metric(MetricId::StorageWear)),
+    ("Deleted", SettingDef::metric(MetricId::StorageDeleted)),
+    ("Format Storage", SettingDef::action(ActionId::FormatKeepCalib)),
+    ("Erase All Data", SettingDef::action(ActionId::FormatWipeAll)),
+]);
 
 #[cfg(feature = "settings_calib")]
-pub static SYSTEM_CALIBRATION: [SettingDef; 6] = [
-    SettingDef::metric("Calib Sig", MetricId::CalibSig),
-    SettingDef::metric("XTAL Trim", MetricId::CalibXtal),
-    SettingDef::metric("Batt Ref", MetricId::CalibBatt),
-    SettingDef::metric("LNA Gain", MetricId::CalibLna),
-    SettingDef::metric("Mixer Gain", MetricId::CalibMix),
-    SettingDef::metric("Volume Gain", MetricId::CalibVol),
-];
+setting_page!(pub SYSTEM_CALIBRATION_PAGE = [
+    ("Calib Sig", SettingDef::metric(MetricId::CalibSig)),
+    ("XTAL Trim", SettingDef::metric(MetricId::CalibXtal)),
+    ("Batt Ref", SettingDef::metric(MetricId::CalibBatt)),
+    ("LNA Gain", SettingDef::metric(MetricId::CalibLna)),
+    ("Mixer Gain", SettingDef::metric(MetricId::CalibMix)),
+    ("Volume Gain", SettingDef::metric(MetricId::CalibVol)),
+]);
 
 #[cfg(feature = "settings_debug")]
-pub static SYSTEM_DEBUG: [SettingDef; 8] = [
-    SettingDef::metric("Stack Margin", MetricId::DebugStackMargin),
-    SettingDef::metric("Peak Stack", MetricId::DebugStackPeak),
-    SettingDef::metric("Crashes", MetricId::DebugCrashes),
-    SettingDef::metric("SWD Port", MetricId::DebugSwd),
-    SettingDef::metric("MCU RDP", MetricId::DebugRdp),
-    SettingDef::metric("Dev Key", MetricId::DebugDevKey),
-    SettingDef::metric("MK Hash", MetricId::DebugMkHash),
-    SettingDef::action("Clear Logs", ActionId::ClearLogs),
-];
+setting_page!(pub SYSTEM_DEBUG_PAGE = [
+    ("Stack Margin", SettingDef::metric(MetricId::DebugStackMargin)),
+    ("Peak Stack", SettingDef::metric(MetricId::DebugStackPeak)),
+    ("Crashes", SettingDef::metric(MetricId::DebugCrashes)),
+    ("SWD Port", SettingDef::metric(MetricId::DebugSwd)),
+    ("MCU RDP", SettingDef::metric(MetricId::DebugRdp)),
+    ("Dev Key", SettingDef::metric(MetricId::DebugDevKey)),
+    ("MK Hash", SettingDef::metric(MetricId::DebugMkHash)),
+    ("Clear Logs", SettingDef::action(ActionId::ClearLogs)),
+]);

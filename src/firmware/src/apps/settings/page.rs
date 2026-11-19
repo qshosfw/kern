@@ -194,7 +194,51 @@ pub enum ChoiceId {
     UartBaud = 19,
 }
 
-pub static CHOICES: &[&'static str] = &[
+pub const fn packed_strs_len(items: &[&str], nul_sep: bool) -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while i < items.len() {
+        n += items[i].len() + if nul_sep { 1 } else { 0 };
+        i += 1;
+    }
+    n
+}
+
+pub const fn pack_strs<const N: usize>(items: &[&str], nul_sep: bool) -> [u8; N] {
+    let mut out = [0u8; N];
+    let mut pos = 0;
+    let mut i = 0;
+    while i < items.len() {
+        let b = items[i].as_bytes();
+        let mut j = 0;
+        while j < b.len() {
+            out[pos] = b[j];
+            pos += 1;
+            j += 1;
+        }
+        if nul_sep {
+            out[pos] = 0;
+            pos += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+pub const fn pack_offsets<const M: usize>(items: &[&str]) -> [u16; M] {
+    let mut out = [0u16; M];
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    while i < items.len() {
+        out[i] = pos as u16;
+        pos += items[i].len();
+        i += 1;
+    }
+    out[items.len()] = pos as u16;
+    out
+}
+
+const RAW_CHOICES: &[&str] = &[
     super::display::BACKLIGHT_TIME_OPTIONS,
     super::display::SHADING_OPTIONS,
     super::display::ANIMATION_OPTIONS,
@@ -217,6 +261,22 @@ pub static CHOICES: &[&'static str] = &[
     #[cfg(feature = "uart")]
     super::system::UART_BAUD_OPTIONS,
 ];
+
+const CHOICE_BLOB_LEN: usize = packed_strs_len(RAW_CHOICES, false);
+static CHOICE_BLOB: [u8; CHOICE_BLOB_LEN] = pack_strs(RAW_CHOICES, false);
+static CHOICE_OFFS: [u16; RAW_CHOICES.len() + 1] = pack_offsets(RAW_CHOICES);
+
+#[inline(always)]
+pub fn choice_options(idx: u8) -> Option<&'static str> {
+    let i = idx as usize;
+    if i + 1 >= CHOICE_OFFS.len() {
+        return None;
+    }
+    let start = CHOICE_OFFS[i] as usize;
+    let end = CHOICE_OFFS[i + 1] as usize;
+    // SAFETY: `CHOICE_BLOB` is concatenated purely from `&'static str` UTF-8 literals.
+    Some(unsafe { core::str::from_utf8_unchecked(&CHOICE_BLOB[start..end]) })
+}
 
 #[cfg(feature = "filesystem")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,52 +499,80 @@ pub const TAG_ASSET: u8 = 8;
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SettingDef {
-    pub title: &'static str,
     pub field: SettingField,
     pub tag: u8,
     pub aux: u8,
 }
 
+#[derive(Clone, Copy)]
+pub struct PageSpec {
+    pub titles: &'static [u8],
+    pub defs: &'static [SettingDef],
+}
+
+impl PageSpec {
+    pub const EMPTY: Self = Self {
+        titles: b"",
+        defs: &[],
+    };
+
+    #[inline(always)]
+    pub fn title(&self, idx: usize) -> &'static str {
+        utils::format::nth_cstr(self.titles, idx as u8)
+    }
+}
+
+macro_rules! setting_page {
+    ($vis:vis $name:ident = [ $( $(#[$m:meta])* ($title:literal, $def:expr) ),* $(,)? ]) => {
+        $vis static $name: crate::apps::settings::page::PageSpec = {
+            const RAW: &[&str] = &[ $( $(#[$m])* $title, )* ];
+            const LEN: usize = crate::apps::settings::page::packed_strs_len(RAW, true);
+            static TITLES: [u8; LEN] = crate::apps::settings::page::pack_strs(RAW, true);
+            static DEFS: &[crate::apps::settings::page::SettingDef] = &[ $( $(#[$m])* $def, )* ];
+            crate::apps::settings::page::PageSpec {
+                titles: &TITLES,
+                defs: DEFS,
+            }
+        };
+    };
+}
+pub(super) use setting_page;
+
 impl SettingDef {
-    pub const fn submenu(title: &'static str, target: PageId) -> Self {
+    pub const fn submenu(target: PageId) -> Self {
         Self {
-            title,
             field: SettingField::None,
             tag: TAG_SUBMENU,
             aux: target as u8,
         }
     }
 
-    pub const fn choice(title: &'static str, choice: ChoiceId, field: SettingField) -> Self {
+    pub const fn choice(choice: ChoiceId, field: SettingField) -> Self {
         Self {
-            title,
             field,
             tag: TAG_CHOICE,
             aux: choice as u8,
         }
     }
 
-    pub const fn range(title: &'static str, range: RangeId, field: SettingField) -> Self {
+    pub const fn range(range: RangeId, field: SettingField) -> Self {
         Self {
-            title,
             field,
             tag: TAG_RANGE,
             aux: range as u8,
         }
     }
 
-    pub const fn toggle(title: &'static str, field: SettingField) -> Self {
+    pub const fn toggle(field: SettingField) -> Self {
         Self {
-            title,
             field,
             tag: TAG_TOGGLE,
             aux: 0,
         }
     }
 
-    pub const fn metric(title: &'static str, metric: MetricId) -> Self {
+    pub const fn metric(metric: MetricId) -> Self {
         Self {
-            title,
             field: SettingField::None,
             tag: TAG_METRIC,
             aux: metric as u8,
@@ -492,36 +580,32 @@ impl SettingDef {
     }
 
     #[cfg(feature = "filesystem")]
-    pub const fn asset(title: &'static str, asset: AssetId) -> Self {
+    pub const fn asset(asset: AssetId) -> Self {
         Self {
-            title,
             field: SettingField::None,
             tag: TAG_ASSET,
             aux: asset as u8,
         }
     }
 
-    pub const fn action(title: &'static str, action: ActionId) -> Self {
+    pub const fn action(action: ActionId) -> Self {
         Self {
-            title,
             field: SettingField::None,
             tag: TAG_ACTION,
             aux: action as u8,
         }
     }
 
-    pub const fn battery_type(title: &'static str) -> Self {
+    pub const fn battery_type() -> Self {
         Self {
-            title,
             field: SettingField::BATTERY_TYPE,
             tag: TAG_BATTERY_TYPE,
             aux: 0,
         }
     }
 
-    pub const fn info(title: &'static str) -> Self {
+    pub const fn info() -> Self {
         Self {
-            title,
             field: SettingField::None,
             tag: TAG_INFO,
             aux: 0,

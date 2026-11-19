@@ -606,24 +606,25 @@ mod tests {
 
     #[test]
     fn system_menu_groups_info_and_bootloader_cleanly() {
-        let sys_defs = page_defs(PageId::System);
+        let sys_spec = super::super::options::page_spec(PageId::System);
+        let sys_defs = sys_spec.defs;
         let mut idx = 0usize;
-        assert_eq!(sys_defs[idx].title, "Clock");
+        assert_eq!(sys_spec.title(idx), "Clock");
         idx += 1;
         #[cfg(feature = "uart")]
         {
-            assert_eq!(sys_defs[idx].title, "UART Baud");
+            assert_eq!(sys_spec.title(idx), "UART Baud");
             idx += 1;
         }
         #[cfg(feature = "settings_info")]
         {
-            assert_eq!(sys_defs[idx].title, "Info");
+            assert_eq!(sys_spec.title(idx), "Info");
             assert_eq!(PageId::from_u8(sys_defs[idx].aux), Some(PageId::SystemInfo));
             idx += 1;
         }
         #[cfg(feature = "filesystem")]
         {
-            assert_eq!(sys_defs[idx].title, "Storage");
+            assert_eq!(sys_spec.title(idx), "Storage");
             assert_eq!(
                 PageId::from_u8(sys_defs[idx].aux),
                 Some(PageId::SystemStorage)
@@ -632,21 +633,21 @@ mod tests {
         }
         #[cfg(feature = "settings_calib")]
         {
-            assert_eq!(sys_defs[idx].title, "Calibration");
+            assert_eq!(sys_spec.title(idx), "Calibration");
             idx += 1;
         }
         #[cfg(feature = "settings_debug")]
         {
-            assert_eq!(sys_defs[idx].title, "Debug");
+            assert_eq!(sys_spec.title(idx), "Debug");
             idx += 1;
         }
-        assert_eq!(sys_defs[idx].title, "Reset Settings");
+        assert_eq!(sys_spec.title(idx), "Reset Settings");
         assert_eq!(
             ActionId::from_u8(sys_defs[idx].aux),
             Some(ActionId::ResetSettings)
         );
         idx += 1;
-        assert_eq!(sys_defs[idx].title, "Restart");
+        assert_eq!(sys_spec.title(idx), "Restart");
         assert_eq!(
             ActionId::from_u8(sys_defs[idx].aux),
             Some(ActionId::RebootFirmware)

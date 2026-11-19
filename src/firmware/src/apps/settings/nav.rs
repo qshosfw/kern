@@ -1,8 +1,8 @@
 //! Navigation Stack & Menu State Synchronization for OS Settings
 
 use super::app::{SettingsApp, settings_arena_mut, settings_arena_ref};
-use super::options::{apply_page_changes, page_defs, page_title, populate_defs};
-use super::page::{MenuFrame, PageId, SettingField, TAG_BATTERY_TYPE};
+use super::options::{apply_page_changes, page_defs, page_spec, page_title, populate_spec_range};
+use super::page::{MenuFrame, PageId, PageSpec, SettingField, TAG_BATTERY_TYPE};
 use crate::SysContext;
 use gfx::gui::modules::menu::MenuItemType;
 
@@ -31,16 +31,16 @@ impl SettingsApp {
             return;
         }
 
-        let defs = page_defs(self.current_page);
+        let spec = page_spec(self.current_page);
 
         #[cfg(feature = "krx_native")]
         if self.current_page == PageId::System {
-            self.populate_system_page(defs, ctx);
+            self.populate_system_page(spec, ctx);
             return;
         }
 
         self.items_len = 0;
-        self.populate_def_tags(defs, 0, ctx);
+        self.populate_def_tags(spec, 0, spec.defs.len(), ctx);
 
         if self.current_page == PageId::Apps {
             let cat = crate::apps::launcher::catalog::get_catalog();
@@ -67,15 +67,16 @@ impl SettingsApp {
     #[inline(never)]
     fn populate_def_tags(
         &mut self,
-        defs: &[super::page::SettingDef],
-        base_idx: usize,
+        spec: &PageSpec,
+        start: usize,
+        end: usize,
         ctx: &mut SysContext,
     ) {
         let arena = settings_arena_mut();
         let s = self.items_len;
-        let n = populate_defs(&mut arena.items[s..], defs, ctx);
+        let n = populate_spec_range(&mut arena.items[s..], spec, start, end, ctx);
         for i in 0..n {
-            arena.item_tags[s + i] = (base_idx + i) as u8;
+            arena.item_tags[s + i] = (start + i) as u8;
         }
         self.items_len = s + n;
     }
@@ -106,17 +107,18 @@ impl SettingsApp {
     }
 
     #[cfg(feature = "krx_native")]
-    fn populate_system_page(&mut self, defs: &[super::page::SettingDef], ctx: &mut SysContext) {
+    fn populate_system_page(&mut self, spec: &PageSpec, ctx: &mut SysContext) {
         let cat = crate::apps::launcher::catalog::get_catalog();
         cat.scan(ctx.storage);
         let sys_caps = ctx.caps();
-        let menu_ins = super::system::system_modules_insert_idx().min(defs.len());
+        let len = spec.defs.len();
+        let menu_ins = super::system::system_modules_insert_idx().min(len);
         let act_ins = super::system::system_actions_insert_idx()
-            .min(defs.len())
+            .min(len)
             .max(menu_ins);
 
         self.items_len = 0;
-        self.populate_def_tags(&defs[..menu_ins], 0, ctx);
+        self.populate_def_tags(spec, 0, menu_ins, ctx);
         self.append_system_flag_items(
             cat,
             sys_caps,
@@ -124,7 +126,7 @@ impl SettingsApp {
             0x80,
             MenuItemType::Submenu,
         );
-        self.populate_def_tags(&defs[menu_ins..act_ins], menu_ins, ctx);
+        self.populate_def_tags(spec, menu_ins, act_ins, ctx);
         self.append_system_flag_items(
             cat,
             sys_caps,
@@ -132,7 +134,7 @@ impl SettingsApp {
             0xC0,
             MenuItemType::Action,
         );
-        self.populate_def_tags(&defs[act_ins..], act_ins, ctx);
+        self.populate_def_tags(spec, act_ins, len, ctx);
     }
 
     fn enter_page(

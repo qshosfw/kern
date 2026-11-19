@@ -3,17 +3,17 @@ use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
 
 pub use super::page::*;
 
-pub static ROOT_DEFS: &[SettingDef] = &[
-    SettingDef::submenu("Display", PageId::Display),
-    SettingDef::submenu("Audio", PageId::Audio),
-    SettingDef::submenu("Buttons", PageId::Buttons),
-    SettingDef::submenu("Battery", PageId::Battery),
-    SettingDef::submenu("Device", PageId::Device),
-    SettingDef::submenu("Apps", PageId::Apps),
+setting_page!(pub ROOT_PAGE = [
+    ("Display", SettingDef::submenu(PageId::Display)),
+    ("Audio", SettingDef::submenu(PageId::Audio)),
+    ("Buttons", SettingDef::submenu(PageId::Buttons)),
+    ("Battery", SettingDef::submenu(PageId::Battery)),
+    ("Device", SettingDef::submenu(PageId::Device)),
+    ("Apps", SettingDef::submenu(PageId::Apps)),
     #[cfg(feature = "passcode")]
-    SettingDef::submenu("Security", PageId::Security),
-    SettingDef::submenu("System", PageId::System),
-];
+    ("Security", SettingDef::submenu(PageId::Security)),
+    ("System", SettingDef::submenu(PageId::System)),
+]);
 
 fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut ShortString) {
     match action {
@@ -46,21 +46,18 @@ fn make_choice(packed: &'static str, raw_byte: u8) -> MenuItemType {
 }
 
 #[inline(never)]
-fn populate_item(
-    item: &mut MenuItem,
-    def: &SettingDef,
-    ctx: &mut crate::SysContext,
-    nav_layout: u8,
-) {
-    item.title = def.title;
+fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut crate::SysContext) {
+    let def = spec.defs[idx];
+    item.title = spec.title(idx);
     match def.tag {
         TAG_CHOICE => {
-            if let Some(&opts) = CHOICES.get(def.aux as usize) {
+            if let Some(opts) = choice_options(def.aux) {
                 item.item_type = make_choice(opts, def.field.get_u8(&ctx.config));
             }
         }
         TAG_BATTERY_TYPE => {
-            let (opts, types) = super::battery::battery_options_and_types(nav_layout);
+            let (opts, types) =
+                super::battery::battery_options_and_types(ctx.config.keys.nav_layout);
             let raw_byte = def.field.get_u8(&ctx.config);
             let mut sel = 0u16;
             for (i, &t) in types.iter().enumerate() {
@@ -124,15 +121,17 @@ fn populate_item(
 }
 
 #[inline(never)]
-pub fn populate_defs(
+pub fn populate_spec_range(
     items: &mut [MenuItem],
-    defs: &[SettingDef],
+    spec: &PageSpec,
+    start: usize,
+    end: usize,
     ctx: &mut crate::SysContext,
 ) -> usize {
-    let nav_layout = ctx.config.keys.nav_layout;
-    let n = defs.len().min(items.len());
+    let end = end.min(spec.defs.len());
+    let n = end.saturating_sub(start).min(items.len());
     for i in 0..n {
-        populate_item(&mut items[i], &defs[i], ctx, nav_layout);
+        populate_item(&mut items[i], spec, start + i, ctx);
     }
     n
 }
@@ -203,27 +202,32 @@ App Settings\0";
 }
 
 #[inline(never)]
-pub fn page_defs(page: PageId) -> &'static [SettingDef] {
+pub fn page_spec(page: PageId) -> &'static PageSpec {
+    static EMPTY: PageSpec = PageSpec::EMPTY;
     match page {
-        PageId::Root => ROOT_DEFS,
-        PageId::Display => super::display::DISPLAY_DEFS,
-        PageId::Audio => &super::audio::AUDIO_DEFS,
-        PageId::Buttons => &super::buttons::BUTTONS_ROOT,
-        PageId::Battery => &super::battery::BATTERY_ROOT,
-        PageId::Device => &super::device::DEVICE_ROOT,
-        PageId::System => super::system::SYSTEM_ROOT,
-        PageId::ButtonsTweaks => &super::buttons::BUTTONS_TWEAKS,
-        PageId::ButtonsShortcuts => &super::buttons::BUTTONS_SHORTCUTS,
-        PageId::BatteryInfo => &super::battery::BATTERY_INFO,
-        PageId::BatteryTweaks => &super::battery::BATTERY_TWEAKS,
+        PageId::Root => &ROOT_PAGE,
+        PageId::Display => &super::display::DISPLAY_PAGE,
+        PageId::Audio => &super::audio::AUDIO_PAGE,
+        PageId::Buttons => &super::buttons::BUTTONS_ROOT_PAGE,
+        PageId::Battery => &super::battery::BATTERY_ROOT_PAGE,
+        PageId::Device => &super::device::DEVICE_ROOT_PAGE,
+        PageId::System => &super::system::SYSTEM_ROOT_PAGE,
+        PageId::ButtonsTweaks => &super::buttons::BUTTONS_TWEAKS_PAGE,
+        PageId::BatteryInfo => &super::battery::BATTERY_INFO_PAGE,
+        PageId::BatteryTweaks => &super::battery::BATTERY_TWEAKS_PAGE,
         #[cfg(feature = "filesystem")]
-        PageId::SystemStorage => super::system::SYSTEM_STORAGE,
-        PageId::Apps => super::apps::APPS_DEFS,
-        PageId::BootSplash => super::device::SPLASH_PAGE_DEFS,
+        PageId::SystemStorage => &super::system::SYSTEM_STORAGE_PAGE,
+        PageId::Apps => &super::apps::APPS_PAGE,
+        PageId::BootSplash => &super::device::SPLASH_PAGE,
         #[cfg(feature = "settings_calib")]
-        PageId::SystemCalibration => &super::system::SYSTEM_CALIBRATION,
+        PageId::SystemCalibration => &super::system::SYSTEM_CALIBRATION_PAGE,
         #[cfg(feature = "settings_debug")]
-        PageId::SystemDebug => &super::system::SYSTEM_DEBUG,
-        _ => &[],
+        PageId::SystemDebug => &super::system::SYSTEM_DEBUG_PAGE,
+        _ => &EMPTY,
     }
+}
+
+#[inline(always)]
+pub fn page_defs(page: PageId) -> &'static [SettingDef] {
+    page_spec(page).defs
 }

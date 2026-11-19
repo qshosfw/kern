@@ -1,45 +1,31 @@
 //! Buttons Domain Settings, Key Tweaks & Dynamic Badge-Backed Shortcut Binder
 
-use super::page::{ChoiceId, PageId, SettingDef, SettingField};
+use super::page::{ChoiceId, PageId, SettingDef, SettingField, setting_page};
 use crate::SysContext;
 use crate::apps::shortcut::{
     CTX_OPTIONS, KEY_SHORTCUT_COUNT, describe_into, resolve_slot_override, slot_label,
 };
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions, ShortString};
 
-pub static PTT_MODE_OPTIONS: &str = "Momentary\0Toggle / Latch\02x Press Latch\0";
+pub const PTT_MODE_OPTIONS: &str = "Momentary\0Toggle / Latch\02x Press Latch\0";
+pub const HOLD_DELAY_OPTIONS: &str = "250ms\0350ms\0500ms\0750ms\0";
+pub const REPEAT_RATE_OPTIONS: &str = "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0";
+pub const F_KEY_TIMEOUT_OPTIONS: &str = "Toggle\01s\02s\03s\05s\0";
+pub const AUTO_LOCK_OPTIONS: &str = "Off\015s\030s\01 min\02 min\0";
 
-pub static HOLD_DELAY_OPTIONS: &str = "250ms\0350ms\0500ms\0750ms\0";
+setting_page!(pub BUTTONS_ROOT_PAGE = [
+    ("Shortcuts", SettingDef::submenu(PageId::ButtonsShortcuts)),
+    ("PTT Mode", SettingDef::choice(ChoiceId::PttMode, SettingField::PTT_MODE)),
+    ("Auto Lock", SettingDef::choice(ChoiceId::AutoLock, SettingField::AUTO_LOCK)),
+    ("Sticky F-Key", SettingDef::choice(ChoiceId::FKeyTimeout, SettingField::F_KEY_TIMEOUT)),
+    ("Fast Scroll", SettingDef::toggle(SettingField::FAST_SCROLL)),
+    ("Tweaks", SettingDef::submenu(PageId::ButtonsTweaks)),
+]);
 
-pub static REPEAT_RATE_OPTIONS: &str = "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0";
-
-pub static F_KEY_TIMEOUT_OPTIONS: &str = "Toggle\01s\02s\03s\05s\0";
-
-pub static AUTO_LOCK_OPTIONS: &str = "Off\015s\030s\01 min\02 min\0";
-
-pub static BUTTONS_ROOT: [SettingDef; 6] = [
-    SettingDef::submenu("Shortcuts", PageId::ButtonsShortcuts),
-    SettingDef::choice("PTT Mode", ChoiceId::PttMode, SettingField::PTT_MODE),
-    SettingDef::choice("Auto Lock", ChoiceId::AutoLock, SettingField::AUTO_LOCK),
-    SettingDef::choice(
-        "Sticky F-Key",
-        ChoiceId::FKeyTimeout,
-        SettingField::F_KEY_TIMEOUT,
-    ),
-    SettingDef::toggle("Fast Scroll", SettingField::FAST_SCROLL),
-    SettingDef::submenu("Tweaks", PageId::ButtonsTweaks),
-];
-
-pub static BUTTONS_TWEAKS: [SettingDef; 2] = [
-    SettingDef::choice("Hold Delay", ChoiceId::HoldDelay, SettingField::HOLD_DELAY),
-    SettingDef::choice(
-        "Repeat Rate",
-        ChoiceId::RepeatRate,
-        SettingField::REPEAT_RATE,
-    ),
-];
-
-pub static BUTTONS_SHORTCUTS: [SettingDef; 0] = [];
+setting_page!(pub BUTTONS_TWEAKS_PAGE = [
+    ("Hold Delay", SettingDef::choice(ChoiceId::HoldDelay, SettingField::HOLD_DELAY)),
+    ("Repeat Rate", SettingDef::choice(ChoiceId::RepeatRate, SettingField::REPEAT_RATE)),
+]);
 
 #[inline(never)]
 pub fn populate_shortcuts(
@@ -78,9 +64,10 @@ mod tests {
 
     #[test]
     fn shortcuts_is_first_in_buttons_root_and_f_drawer_moved() {
-        assert_eq!(BUTTONS_ROOT[0].title, "Shortcuts");
+        assert_eq!(BUTTONS_ROOT_PAGE.title(0), "Shortcuts");
         assert!(
-            BUTTONS_ROOT
+            BUTTONS_ROOT_PAGE
+                .defs
                 .iter()
                 .all(|d| d.field != SettingField::F_DRAWER),
             "F-Drawer should live inside Shortcuts, not Buttons root"

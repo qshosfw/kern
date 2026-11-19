@@ -307,27 +307,31 @@ impl TabbedSheet {
             }
         }
 
-        let mut tab_x = [0u8; 8];
-        let mut cur_tx = x + if start_tab > 0 { 7 } else { 0 };
+        let base_tx = x + if start_tab > 0 { 7 } else { 0 };
+        let mut active_tx = base_tx;
+        let mut active_tw = tab_w[sel];
+        let mut prev_tx = base_tx;
+        let mut cur_tx = base_tx;
         for i in start_tab..end_tab {
-            tab_x[i] = cur_tx;
+            if i == sel {
+                active_tx = cur_tx;
+            }
+            if i == state.prev_selected_idx {
+                prev_tx = cur_tx;
+            }
             cur_tx += tab_w[i] + 2;
         }
 
-        let (active_tx, active_tw) = if state.is_animating()
+        if state.is_animating()
             && state.prev_selected_idx >= start_tab
             && state.prev_selected_idx < end_tab
         {
             let prev = state.prev_selected_idx;
             let p = state.anim.progress() as i16;
-            let itx =
-                (tab_x[prev] as i16 + (((tab_x[sel] as i16 - tab_x[prev] as i16) * p) >> 4)) as u8;
-            let itw =
-                (tab_w[prev] as i16 + (((tab_w[sel] as i16 - tab_w[prev] as i16) * p) >> 4)) as u8;
-            (itx, itw)
-        } else {
-            (tab_x[sel], tab_w[sel])
-        };
+            active_tx = (prev_tx as i16 + (((active_tx as i16 - prev_tx as i16) * p) >> 4)) as u8;
+            active_tw =
+                (tab_w[prev] as i16 + (((active_tw as i16 - tab_w[prev] as i16) * p) >> 4)) as u8;
+        }
 
         // Container borders & merged baseline
         let body_y = y + th;
@@ -350,13 +354,14 @@ impl TabbedSheet {
         }
 
         // Tab headers
+        let mut pill_tx = base_tx;
         for i in start_tab..end_tab {
             let is_active = i == sel;
             let (tx, tw, ty, pill_h, text_y) = if is_active {
                 (active_tx, active_tw, y, th, (y + th - 3) as i16)
             } else {
                 (
-                    tab_x[i],
+                    pill_tx,
                     tab_w[i],
                     y + 1,
                     th.saturating_sub(2),
@@ -364,6 +369,7 @@ impl TabbedSheet {
                 )
             };
             draw_tab_pill(canvas, tx, ty, tw, pill_h, text_y, titles.get(i));
+            pill_tx += tab_w[i] + 2;
         }
 
         // Overflow arrows if clipped

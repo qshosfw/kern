@@ -19,7 +19,8 @@ pub enum AssetKind {
 pub struct AssetDescriptor {
     pub title: &'static str,
     pub dir: &'static str,
-    pub extensions: &'static [&'static str],
+    /// NUL-delimited packed lowercase suffixes (e.g. `".ton\0.rgr\0"`).
+    pub extensions: &'static str,
     pub none_label: &'static str,
     pub kind: AssetKind,
 }
@@ -90,17 +91,23 @@ impl AssetDescriptor {
         #[cfg(not(feature = "filesystem"))]
         let _ = storage_fs;
 
+        for i in 0..count {
+            storage.order[i] = i as u8;
+        }
         for i in 1..count {
             let mut j = i;
-            while j > 0 && storage.paths[j].as_str() < storage.paths[j - 1].as_str() {
-                storage.paths.swap(j, j - 1);
+            while j > 0
+                && storage.paths[storage.order[j] as usize].as_str()
+                    < storage.paths[storage.order[j - 1] as usize].as_str()
+            {
+                storage.order.swap(j, j - 1);
                 j -= 1;
             }
         }
 
         let mut current_sel = 0;
         for idx in 0..count {
-            let full_path = storage.paths[idx].as_str();
+            let full_path = storage.paths[storage.order[idx] as usize].as_str();
             format_asset_name_into(full_path, &mut storage.labels[idx + 1]);
             if active
                 && current_sel == 0
@@ -149,6 +156,7 @@ impl AssetDescriptor {
 
 struct AssetChooserStorage {
     count: usize,
+    order: [u8; MAX_CHOOSER_ASSETS],
     labels: [ShortString; MAX_CHOOSER_ASSETS + 1],
     paths: [heapless::String<32>; MAX_CHOOSER_ASSETS],
 }
@@ -237,16 +245,23 @@ pub fn format_asset_name_into(path: &str, out: &mut ShortString) {
     }
 }
 
-fn has_extension(path: &str, extensions: &[&str]) -> bool {
-    if extensions.is_empty() {
+fn has_extension(path: &str, extensions: &str) -> bool {
+    let eb_all = extensions.as_bytes();
+    if eb_all.is_empty() {
         return true;
     }
     let b = path.as_bytes();
-    for &ext in extensions {
-        let eb = ext.as_bytes();
-        if b.len() >= eb.len() && &b[b.len() - eb.len()..] == eb {
-            return true;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i <= eb_all.len() {
+        if i == eb_all.len() || eb_all[i] == 0 {
+            let eb = &eb_all[start..i];
+            if !eb.is_empty() && b.len() >= eb.len() && &b[b.len() - eb.len()..] == eb {
+                return true;
+            }
+            start = i + 1;
         }
+        i += 1;
     }
     false
 }
@@ -275,11 +290,13 @@ pub fn get_chosen_asset_path(sel: usize) -> Option<&'static str> {
     }
     let storage = storage_ref();
     let idx = sel - 1;
-    if idx < storage.count.min(MAX_CHOOSER_ASSETS) && !storage.paths[idx].is_empty() {
-        Some(storage.paths[idx].as_str())
-    } else {
-        None
+    if idx < storage.count.min(MAX_CHOOSER_ASSETS) {
+        let slot = storage.order[idx] as usize;
+        if slot < MAX_CHOOSER_ASSETS && !storage.paths[slot].is_empty() {
+            return Some(storage.paths[slot].as_str());
+        }
     }
+    None
 }
 
 #[cfg(test)]
