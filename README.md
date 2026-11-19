@@ -75,7 +75,11 @@ The `./kern` script wraps the workspace build, test, package, and provisioning t
 ./kern size
 ./kern bloat report
 
-# Flash packed firmware over serial bootloader or sideload modules via RigWire
+# Pack, inspect, or verify a .kfw release container
+./kern kfw pack target/kern.kfw --version 0.1.0 --fw uv-k1:target/firmware.bin --mod packages/dfu/dfu.mod
+./kern kfw verify target/kern.kfw
+
+# Flash firmware (.kfw or .bin) over serial bootloader or sideload modules via RigWire
 ./kern flash --port /dev/ttyACM0
 ./kern wire sideload packages/dfu/dfu.mod --force
 

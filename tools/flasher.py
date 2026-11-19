@@ -352,75 +352,35 @@ def flash_process(proto, fw_data):
     # Reboot
     proto.send(MSG_REBOOT)
 
-# ========== QSH CONTAINER PARSER ==========
+# ========== KFW CONTAINER LOADER ==========
 
-def parse_qsh(file_path):
-    # Instead of importing (which might have path issues), 
-    # we'll implement a clean loader for the new spec.
-    with open(file_path, 'rb') as f:
-        raw = f.read()
-    
-    if len(raw) < 10 or raw[:8] != b'\xe6QSH\r\n\x1a\n':
-        return None
-
-    # Verify Hash
-    body = raw[:-32]
-    file_hash = raw[-32:]
-    calc_hash = hashlib.sha256(body).digest()
-    if file_hash != calc_hash:
-        log_err("QSH Integrity Check Failed (Hash mismatch)")
-
-    log_info("QSH Container Detected")
-    
-    # Simple TLV Parser for what we need
-    def get_tlvs(data, start):
-        res = {}
-        ptr = start
-        while ptr + 4 <= len(data):
-            tag = struct.unpack('<H', data[ptr:ptr+2])[0]
-            length = struct.unpack('<H', data[ptr+2:ptr+4])[0]
-            ptr += 4
-            if tag == 0: break
-            val = data[ptr : ptr+length]
-            res[tag] = val
-            ptr += length
-        return res, ptr
-
-    # Global
-    g_meta, ptr = get_tlvs(body, 10)
-    
-    # Find Firmware Blob
-    while ptr < len(body):
-        # Read Blob Size
-        if ptr + 4 > len(body): break
-        b_size = struct.unpack('<I', body[ptr:ptr+4])[0]
-        ptr += 4
-        b_content = body[ptr : ptr+b_size]
-        ptr += b_size
-        
-        b_meta, b_head_len = get_tlvs(b_content, 0)
-        b_data = b_content[b_head_len:]
-        
-        # Is it firmware? (TAG_F_NAME=0x11, TAG_F_VERSION=0x12)
-        if 0x11 in b_meta or 0x12 in b_meta:
-            name = b_meta.get(0x11, b"Unknown").decode('ascii', errors='ignore')
-            ver = b_meta.get(0x12, b"Unknown").decode('ascii', errors='ignore')
-            target = b_meta.get(0x17, b"Unknown").decode('ascii', errors='ignore')
-            
-            log_ok(f"Found Firmware: {BOLD}{name}{RESET} v{BOLD}{ver}{RESET}")
-            log_info(f"Target HW: {BOLD}{target}{RESET}")
-            
-            if 0x19 in b_meta: # TAG_F_GIT
-                 log_info(f"Git Hash: {BOLD}{b_meta[0x19].decode()}{RESET}")
-            
-            return b_data
-            
-    return None
+def load_kfw(file_path, target=None, mac_key=None, lms_pubkey=None, decrypt_key=None):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import kfw
+    try:
+        fw_bytes, tgt, parsed = kfw.select_firmware_for_target(
+            file_path,
+            target_slug=target,
+            mac_key=kfw._parse_hex_key(mac_key, 16),
+            lms_pubkey=kfw._parse_hex_key(lms_pubkey, 32),
+            decrypt_key=kfw._parse_hex_key(decrypt_key, 16),
+        )
+    except kfw.KfwError as e:
+        log_err(f"KFW Verification Failed: {e}")
+    log_ok(
+        f"Verified .kfw v{kfw.format_semver(parsed.fw_version)} "
+        f"(target={tgt.slug}, sec_cnt={parsed.sec_cnt}, ascon={parsed.root_digest.hex()[:12]}..)"
+    )
+    return fw_bytes
 
 def main():
     parser = argparse.ArgumentParser("flasher")
     parser.add_argument("--port", "-p", help="Serial port")
-    parser.add_argument("file", nargs="?", help="Firmware file")
+    parser.add_argument("--target", "-t", help="Target slug when flashing multi-target .kfw (e.g. uv-k1, uv-k10pro)")
+    parser.add_argument("--mac-key", help="16-byte hex key (or file) to verify Ascon-128-MAC auth")
+    parser.add_argument("--lms-pubkey", help="32-byte hex public key (or file) to verify PQ LMS-Ascon signature")
+    parser.add_argument("--decrypt-key", help="16-byte hex key (or file) for encrypted .kfw payloads")
+    parser.add_argument("file", nargs="?", help="Firmware file (.kfw or .bin)")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
     
@@ -429,27 +389,27 @@ def main():
     # Resolve File
     fw_file = args.file
     if not fw_file:
-        # Priority: target/firmware_packed.bin -> target/firmware.bin -> build/*.qsh -> build/*.bin
-        candidates = [
-            "target/firmware_packed.bin",
-            "target/firmware.bin",
-            "firmware_packed.bin",
-            "firmware.bin",
-        ]
-        for c in candidates:
-            if os.path.exists(c):
-                fw_file = c
-                break
+        # Priority: target/*.kfw -> target/firmware_packed.bin -> target/firmware.bin
+        kfws = sorted(glob.glob("target/*.kfw") + glob.glob("dist/*.kfw"), key=os.path.getmtime, reverse=True)
+        if kfws:
+            fw_file = kfws[0]
+        else:
+            candidates = [
+                "target/firmware_packed.bin",
+                "target/firmware.bin",
+                "firmware_packed.bin",
+                "firmware.bin",
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    fw_file = c
+                    break
 
         if not fw_file:
-            qshs = sorted(glob.glob("build/*.qsh") + glob.glob("target/*.qsh"), key=os.path.getmtime, reverse=True)
-            if qshs:
-                fw_file = qshs[0]
-            else:
-                bins = sorted(glob.glob("build/*.bin") + glob.glob("target/*.bin"), key=os.path.getmtime, reverse=True)
-                valid = [b for b in bins if not b.endswith("packed.bin")]
-                if valid:
-                    fw_file = valid[0]
+            bins = sorted(glob.glob("build/*.bin") + glob.glob("target/*.bin"), key=os.path.getmtime, reverse=True)
+            valid = [b for b in bins if not b.endswith("packed.bin")]
+            if valid:
+                fw_file = valid[0]
             
     if not fw_file or not os.path.exists(fw_file):
         log_err("No firmware file found.")
@@ -457,13 +417,19 @@ def main():
     # File Info
     size = os.path.getsize(fw_file)
     
-    # Try Parsers
+    # Try .kfw Container Loader first
     fw_data = None
-    if fw_file.endswith(".qsh"):
-        fw_data = parse_qsh(fw_file)
+    if fw_file.endswith(".kfw"):
+        fw_data = load_kfw(
+            fw_file,
+            target=args.target,
+            mac_key=args.mac_key,
+            lms_pubkey=args.lms_pubkey,
+            decrypt_key=args.decrypt_key,
+        )
         
     if fw_data:
-        log_ok(f"Validated Container ({len(fw_data)/1024:.1f} KB payload)")
+        log_ok(f"Validated Container ({len(fw_data)/1024:.1f} KB plaintext payload)")
     else:
         log_info(f"Firmware: {BOLD}{os.path.basename(fw_file)}{RESET} ({size/1024:.1f} KB)")
         with open(fw_file, 'rb') as f:

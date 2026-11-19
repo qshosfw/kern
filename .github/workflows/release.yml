@@ -100,12 +100,23 @@ jobs:
           cp packages/dfu/dfu.mod dist/modules/dfu.mod
           cp packages/panic/panic.mod dist/modules/panic.mod
           cp packages/sysinfo/sysinfo.krx dist/modules/sysinfo.krx
+          cp tools/kfw.py dist/tools/kfw.py
           cp tools/rigwire.py dist/tools/rigwire.py
           cp tools/flasher.py dist/tools/flasher.py
 
+          ./kern kfw pack "dist/kern-${REL_LABEL}.kfw" \
+            --version "${REL_LABEL}" \
+            --fw "uv-k1:dist/kern-uv-k1-k5v3-${REL_LABEL}.bin" \
+            --fw "uv-k10pro:dist/kern-uv-k10pro-${REL_LABEL}.bin" \
+            --mod "packages/dfu/dfu.mod:/apps/dfu.mod:always" \
+            --mod "packages/panic/panic.mod:/apps/panic.mod:always" \
+            --mod "packages/sysinfo/sysinfo.krx:/apps/sysinfo.krx:always"
+          ./kern kfw verify "dist/kern-${REL_LABEL}.kfw"
+          ./kern kfw inspect "dist/kern-${REL_LABEL}.kfw"
+
           (
             cd dist
-            sha256sum *.bin modules/* tools/* > SHA256SUMS.txt
+            sha256sum *.kfw *.bin modules/* tools/* > SHA256SUMS.txt
             cat SHA256SUMS.txt
           )
 
@@ -136,6 +147,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/*.kfw
             dist/*.bin
             dist/*.json
             dist/SHA256SUMS.txt

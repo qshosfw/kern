@@ -48,6 +48,9 @@ jobs:
       - name: Syntax-check Python tooling
         run: python3 -m py_compile tools/*.py
 
+      - name: Run .kfw container & Ascon selftest
+        run: ./kern kfw selftest
+
       - name: Check firmware (UV-K1 / UV-K5v3, 0 warnings)
         run: ./kern check --deny-warnings
 
