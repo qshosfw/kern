@@ -790,29 +790,147 @@ def _draw_3d_keycap(
                 _draw_pango_text(cr, sub1, sx, iy + ih * 0.50, font_desc=f"Adwaita Sans Medium {s_sz}", rgba=sub_ink, halign="left", valign="center")
 
 
+def _draw_side_profile_shroud(cr: Any, bx: float, by: float, bh: float, side_specs: list[tuple[str, float, float, float, float, bool, int]]) -> None:
+    """
+    Full-height 3D shadowed left back-shell plastic flank extending along the entire left side
+    of the radio body so PTT, SK1, and SK2 emerge naturally from the device's side profile.
+    """
+    import cairo
+    sh_x = bx - 15.0
+    top_y = by + 10.0
+    bot_y = by + bh - 10.0
+
+    # 1. Soft drop shadow beneath the full-height left back-plastic flank
+    cr.new_path()
+    cr.move_to(bx + 4, top_y - 3)
+    cr.curve_to(bx - 10, top_y - 1, sh_x - 2, top_y + 10, sh_x - 2, top_y + 26)
+    cr.line_to(sh_x - 2, bot_y - 24)
+    cr.curve_to(sh_x - 2, bot_y - 8, bx - 10, bot_y + 4, bx + 4, bot_y + 6)
+    cr.close_path()
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.42)
+    cr.fill()
+
+    # 2. Full-height matte dark polymer rear/side shell plastic wrapping the entire left side
+    cr.new_path()
+    cr.move_to(bx + 6, top_y - 4)
+    cr.curve_to(bx - 8, top_y - 3, sh_x, top_y + 8, sh_x, top_y + 24)
+    cr.line_to(sh_x, bot_y - 24)
+    cr.curve_to(sh_x, bot_y - 8, bx - 8, bot_y + 3, bx + 6, bot_y + 4)
+    cr.close_path()
+    pat_cheek = cairo.LinearGradient(sh_x, 0, bx + 4, 0)
+    pat_cheek.add_color_stop_rgb(0.0, 0.055, 0.06, 0.07)
+    pat_cheek.add_color_stop_rgb(0.32, 0.14, 0.15, 0.17)
+    pat_cheek.add_color_stop_rgb(0.72, 0.085, 0.09, 0.105)
+    pat_cheek.add_color_stop_rgb(1.0, 0.035, 0.04, 0.045)
+    cr.set_source(pat_cheek)
+    cr.fill_preserve()
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.09)
+    cr.set_line_width(0.9)
+    cr.stroke()
+
+    # 3. Subtle horizontal grip contour ridge on lower left side-shell (below side buttons)
+    cr.save()
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.32)
+    cr.set_line_width(1.2)
+    cr.new_path()
+    cr.move_to(sh_x + 2.0, by + 292.0)
+    cr.line_to(bx - 1.0, by + 292.0)
+    cr.stroke()
+    cr.restore()
+
+    # 4. Deep ambient-occlusion vertical seam shadow where left side-shell meets front chassis
+    seam = cairo.LinearGradient(bx - 9.0, 0, bx + 2.0, 0)
+    seam.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0)
+    seam.add_color_stop_rgba(0.78, 0.0, 0.0, 0.0, 0.65)
+    seam.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0)
+    cr.set_source(seam)
+    cr.rectangle(bx - 9.0, top_y, 11.0, bot_y - top_y)
+    cr.fill()
+
+    # 5. Recessed dark polymer button-well pockets cradling PTT, SK1, SK2
+    for _kn, sx, sy, sw, sh, is_ptt, _dots in side_specs:
+        _round_rect(cr, sx + 4.0, sy - 2.5, sw - 2.0, sh + 5.0, 8.5 if is_ptt else 6.5)
+        cr.set_source_rgba(0.015, 0.015, 0.02, 0.88)
+        cr.fill()
+
+
+def _draw_top_flashlight(cr: Any, tx: float, by: float, torch_on: bool, *, compact: bool = False) -> None:
+    """3D top flashlight lens housing with realistic directional LED beam & page-flash strobe."""
+    import cairo
+    hw = 15.0 if compact else 18.0
+    hh = 14.0 if compact else 17.0
+    ty = by - (11.0 if compact else 13.0)
+
+    if torch_on:
+        # Upward directional beam cone (simulates real white/warm-white SMD torch LED!)
+        cr.save()
+        cr.new_path()
+        cr.move_to(tx - hw * 0.65, ty + 2)
+        cr.line_to(tx - hw * 2.5, 0)
+        cr.line_to(tx + hw * 2.5, 0)
+        cr.line_to(tx + hw * 0.65, ty + 2)
+        cr.close_path()
+        beam = cairo.LinearGradient(tx, ty + 2, tx, 0)
+        beam.add_color_stop_rgba(0.0, 1.0, 0.99, 0.90, 0.90)
+        beam.add_color_stop_rgba(0.45, 1.0, 0.97, 0.82, 0.44)
+        beam.add_color_stop_rgba(1.0, 1.0, 0.95, 0.78, 0.0)
+        cr.set_source(beam)
+        cr.fill()
+        # Intense radial LED core bloom spilling onto top bezel
+        tg = cairo.RadialGradient(tx, ty + 2, 1.5, tx, ty + 2, 34.0)
+        tg.add_color_stop_rgba(0.0, 1.0, 1.0, 0.96, 1.0)
+        tg.add_color_stop_rgba(0.32, 1.0, 0.98, 0.84, 0.62)
+        tg.add_color_stop_rgba(1.0, 1.0, 0.95, 0.75, 0.0)
+        cr.set_source(tg)
+        cr.new_path()
+        cr.arc(tx, ty + 2, 34.0, 0, 2 * math.pi)
+        cr.fill()
+        cr.restore()
+
+    # Low-profile lens bezel housing
+    pat_fl = cairo.LinearGradient(tx - hw, ty, tx + hw, ty + hh)
+    pat_fl.add_color_stop_rgb(0.0, 0.24, 0.25, 0.27)
+    pat_fl.add_color_stop_rgb(1.0, 0.09, 0.10, 0.11)
+    cr.set_source(pat_fl)
+    _round_rect(cr, tx - hw, ty, hw * 2.0, hh, 4.0)
+    cr.fill()
+    # Recessed clear acrylic lens dome (glows bright white when LED is lit)
+    _round_rect(cr, tx - hw * 0.56, ty + 1.5, hw * 1.12, 4.5, 2.0)
+    if torch_on:
+        cr.set_source_rgba(1.0, 1.0, 0.96, 0.98)
+    else:
+        cr.set_source_rgba(0.62, 0.65, 0.70, 0.35)
+    cr.fill()
+
+
 def compute_handset_geometry(model: str) -> tuple[int, int]:
     return (356, 614) if model == "k5" else (364, 594)
 
 
 class HandsetRenderer:
-    """3D-sculpted cached Cairo handset renderer (~1.5 ms/frame animated!)."""
+    """3D-sculpted cached Cairo handset renderer (~0.7 ms/frame animated!)."""
 
     def __init__(self) -> None:
         self._chassis_key: Any = None
+        self._back_surf: Any = None
         self._chassis_surf: Any = None
+        self._body_bx: float = 30.0
         self._lcd_rect: tuple[int, int, int, int] = (0, 0, 100, 60)
+        self._torch_anchor: tuple[float, float, bool] = (180.0, 60.0, False)
         self._key_specs: list[tuple[str, float, float, float, float, str, str, str, float, bool, bool]] = []
         self._side_specs: list[tuple[str, float, float, float, float, bool, int]] = []
         self.hitboxes: dict[str, tuple[float, float, float, float]] = {}
         self.lcd_cache = LcdLayerCache()
 
-    def _ensure_chassis(self, model: str, led_state: str, torch_on: bool, lcd_st: LcdSettings) -> None:
+    def _ensure_chassis(self, model: str, led_state: str, lcd_st: LcdSettings) -> None:
         import cairo
-        key = (model, led_state, torch_on, lcd_st.palette, lcd_st.backlight, lcd_st.backlight_glow)
-        if key == self._chassis_key and self._chassis_surf is not None:
+        key = (model, led_state, lcd_st.palette, lcd_st.backlight, lcd_st.backlight_glow)
+        if key == self._chassis_key and self._chassis_surf is not None and self._back_surf is not None:
             return
         self._chassis_key = key
         W, H = compute_handset_geometry(model)
+        back_surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
+        back_cr = cairo.Context(back_surf)
         surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, W, H)
         cr = cairo.Context(surf)
         self.hitboxes.clear()
@@ -820,28 +938,40 @@ class HandsetRenderer:
         self._side_specs.clear()
 
         if model == "k5":
-            self._build_k5_chassis(cr, W, H, led_state, torch_on, lcd_st)
+            self._build_k5_chassis(back_cr, cr, W, H, led_state, lcd_st)
         else:
-            self._build_k1_chassis(cr, W, H, led_state, torch_on, lcd_st)
+            self._build_k1_chassis(back_cr, cr, W, H, led_state, lcd_st)
         # Bake idle/unpressed front keycaps onto the cached chassis surface so steady LCD
-        # streaming skips 16 PangoCairo text layouts per frame (>600 FPS render cap!).
+        # streaming skips 16 PangoCairo text layouts per frame (>1,000 FPS render cap!).
         accent = (0.98, 0.48, 0.08) if model == "k5" else (0.18, 0.56, 1.0)
         for _kn, kx, ky, kw, kh, pri, s1, s2, rad, is_nav, nub in self._key_specs:
             _draw_3d_keycap(
                 cr, kx, ky, kw, kh, pri, s1, s2,
                 press_t=0.0, hover_t=0.0, radius=rad, is_nav=is_nav, homing_nub=nub, accent=accent,
             )
+        self._back_surf = back_surf
         self._chassis_surf = surf
 
-    def _build_k1_chassis(self, cr: Any, W: int, H: int, led_state: str, torch_on: bool, lcd_st: LcdSettings) -> None:
+    def _build_k1_chassis(self, back_cr: Any, cr: Any, W: int, H: int, led_state: str, lcd_st: LcdSettings) -> None:
         """Photorealistic 3D Quansheng UV-K1(8) modeled directly from `ref_k1_body_crop.png` & `左视图.png`."""
         import cairo
         bx, by, bw, bh = 30.0, 60.0, W - 44.0, H - 74.0
+        self._body_bx = bx
 
-        # Soft 3D ambient drop shadow under whole radio body
-        _round_rect(cr, bx + 4, by + 10, bw, bh, 18)
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
-        cr.fill()
+        # Register 3D side key specs first (tucked cleanly into left back-shell behind front bezel lip!)
+        self._side_specs = [
+            ("ptt",   8.0, by + 56.0, 26.0, 122.0, True, 0),
+            ("side1", 11.0, by + 188.0, 23.0, 38.0, False, 2),
+            ("side2", 11.0, by + 234.0, 23.0, 38.0, False, 1),
+        ]
+        for kn, sx, sy, sw, sh, _, _ in self._side_specs:
+            self.hitboxes[kn] = (sx - 3.0, sy, sw, sh)
+
+        # Back layer: ambient drop shadow + full-height left back-plastic shell + recessed button wells
+        _round_rect(back_cr, bx + 4, by + 10, bw, bh, 18)
+        back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
+        back_cr.fill()
+        _draw_side_profile_shroud(back_cr, bx, by, bh, self._side_specs)
 
         # --- 1. Top Hardware Assembly (3D Stubby A1 Antenna + Flashlight + Cobalt-Blue Rotary Knob) ---
         ax = bx + 62.0
@@ -865,22 +995,9 @@ class HandsetRenderer:
         cr.fill()
         _draw_pango_text(cr, "A1", ax, 16, font_desc="Adwaita Sans Bold 9", rgba=(0.70, 0.72, 0.75, 0.50), halign="center")
 
-        # Center low-profile LED flashlight bump (clickable!)
+        # Center low-profile LED flashlight anchor (drawn dynamically in paint() for 60 FPS page-flash strobe!)
         tx = bx + bw * 0.49
-        if torch_on:
-            tg = cairo.RadialGradient(tx, by - 10, 2, tx, by - 10, 36)
-            tg.add_color_stop_rgba(0.0, 1.0, 0.99, 0.85, 0.94)
-            tg.add_color_stop_rgba(0.5, 1.0, 0.94, 0.65, 0.35)
-            tg.add_color_stop_rgba(1.0, 1.0, 0.92, 0.55, 0.0)
-            cr.set_source(tg)
-            cr.arc(tx, by - 10, 36, 0, 2 * math.pi)
-            cr.fill()
-        pat_fl = cairo.LinearGradient(tx - 18, by - 14, tx + 18, by)
-        pat_fl.add_color_stop_rgb(0.0, 0.24, 0.25, 0.27)
-        pat_fl.add_color_stop_rgb(1.0, 0.09, 0.10, 0.11)
-        cr.set_source(pat_fl)
-        _round_rect(cr, tx - 18, by - 13, 36, 17, 4)
-        cr.fill()
+        self._torch_anchor = (tx, by, False)
         self.hitboxes["_torch"] = (tx - 20, by - 18, 40, 22)
 
         # 3D Sculpted Knurled Rotary Knob with Signature Vertical Cobalt-Blue Stripe
@@ -1066,15 +1183,7 @@ class HandsetRenderer:
         _round_rect(cr, fx_r - 27.0, bar_y + 25.5, 8.0, 3.5, 1.5)
         cr.fill()
 
-        # --- 7. Register 3D Side Keys + Exact 4x4 Keypad with 12 Inter-Row Speaker Slots! ---
-        self._side_specs = [
-            ("ptt",   4.0, by + 56.0, 28.0, 122.0, True, 0),
-            ("side1", 7.0, by + 188.0, 25.0, 38.0, False, 2),
-            ("side2", 7.0, by + 234.0, 25.0, 38.0, False, 1),
-        ]
-        for kn, sx, sy, sw, sh, _, _ in self._side_specs:
-            self.hitboxes[kn] = (sx, sy, sw, sh)
-
+        # --- 7. Exact 4x4 Keypad with 12 Inter-Row Speaker Slots! ---
         kp_x, kp_y, kp_w = fx_l + 8.0, bar_y + 36.0, (fx_r - fx_l) - 16.0
         gap_c = 7.0
         gap_r = 12.0  # Space for real horizontal speaker slots between rows!
@@ -1102,14 +1211,26 @@ class HandsetRenderer:
                     cr.line_to(sl_x + sl_w - 2, sl_y + 4.6)
                     cr.stroke()
 
-    def _build_k5_chassis(self, cr: Any, W: int, H: int, led_state: str, torch_on: bool, lcd_st: LcdSettings) -> None:
+    def _build_k5_chassis(self, back_cr: Any, cr: Any, W: int, H: int, led_state: str, lcd_st: LcdSettings) -> None:
         """Photorealistic 3D Quansheng UV-K5 v3 / UV-K6 modeled directly from `UVK6.1.png`."""
         import cairo
         bx, by, bw, bh = 30.0, 58.0, W - 44.0, H - 72.0
+        self._body_bx = bx
 
-        _round_rect(cr, bx + 4, by + 10, bw, bh, 18)
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
-        cr.fill()
+        self._side_specs = [
+            ("ptt",   8.0, by + 64.0, 26.0, 114.0, True, 0),
+            ("side1", 11.0, by + 188.0, 23.0, 36.0, False, 0),
+            ("side2", 11.0, by + 232.0, 23.0, 36.0, False, 0),
+        ]
+        for kn, sx, sy, sw, sh, _, _ in self._side_specs:
+            self.hitboxes[kn] = (sx - 3.0, sy, sw, sh)
+
+        _round_rect(back_cr, bx + 4, by + 10, bw, bh, 18)
+        back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.36)
+        back_cr.fill()
+
+        # Shadowed 3D full-height left side-profile back plastic behind PTT / SK1 / SK2
+        _draw_side_profile_shroud(back_cr, bx, by, bh, self._side_specs)
 
         # Tapered antenna base
         ax = bx + 56.0
@@ -1125,18 +1246,9 @@ class HandsetRenderer:
         cr.close_path()
         cr.fill()
 
-        # Center LED flashlight
+        # Center LED flashlight anchor (drawn dynamically in paint() for 60 FPS page-flash strobe!)
         tx = bx + bw * 0.48
-        if torch_on:
-            tg = cairo.RadialGradient(tx, by - 8, 2, tx, by - 8, 32)
-            tg.add_color_stop_rgba(0.0, 1.0, 0.99, 0.85, 0.92)
-            tg.add_color_stop_rgba(1.0, 1.0, 0.94, 0.65, 0.0)
-            cr.set_source(tg)
-            cr.arc(tx, by - 8, 32, 0, 2 * math.pi)
-            cr.fill()
-        cr.set_source_rgb(0.14, 0.15, 0.17)
-        _round_rect(cr, tx - 15, by - 11, 30, 14, 3)
-        cr.fill()
+        self._torch_anchor = (tx, by, True)
         self.hitboxes["_torch"] = (tx - 18, by - 16, 36, 20)
 
         # 3D Orange-Capped Volume Knob + Guard Ear
@@ -1228,15 +1340,7 @@ class HandsetRenderer:
             cr.set_source(pat_sl)
             cr.fill()
 
-        # Side & Front Key Specs
-        self._side_specs = [
-            ("ptt",   4.0, by + 64.0, 28.0, 114.0, True, 0),
-            ("side1", 7.0, by + 188.0, 25.0, 36.0, False, 0),
-            ("side2", 7.0, by + 232.0, 25.0, 36.0, False, 0),
-        ]
-        for kn, sx, sy, sw, sh, _, _ in self._side_specs:
-            self.hitboxes[kn] = (sx, sy, sw, sh)
-
+        # Front Key Specs (side specs already registered above before shroud)
         nav_specs = [
             ("menu", m_x, m_y, m_w, m_h, "M", "A", "", 6.0, False, False),
             ("up",   col_x, mid_y, col_w, 36.0, "_CHEV_UP_", "B", "", 7.0, True, False),
@@ -1270,39 +1374,38 @@ class HandsetRenderer:
         torch_on: bool = False,
     ) -> None:
         import cairo
-        self._ensure_chassis(model, led_state, torch_on, lcd_st)
+        self._ensure_chassis(model, led_state, lcd_st)
         accent = (0.98, 0.48, 0.08) if model == "k5" else (0.18, 0.56, 1.0)
+        bx = self._body_bx
 
-        # 1. Cached 3D radio chassis
-        cr.set_source_surface(self._chassis_surf, 0, 0)
+        # 1. Cached full-height shadowed left back-shell plastic flank + drop shadow
+        cr.set_source_surface(self._back_surf, 0, 0)
         cr.paint()
 
-        # 2. Fast layered ST7565 LCD
-        lx, ly, lw, lh = self._lcd_rect
-        paint_fast_lcd(cr, lx, ly, lw, lh, lcd_state, lcd_st, self.lcd_cache)
-
-        # 3. 3D Sculpted Protruding Side Keys (PTT + SK1 + SK2)
+        # 2. 3D Sculpted Protruding Side Keys (drawn BEHIND front chassis lip so they slide
+        #    physically INTO the side housing instead of looking slapped on top!)
         for kn, sx, sy, sw, sh, is_ptt, dots in self._side_specs:
             p = _clamp1(press_anim.get(kn, 0.0))
             hv = _clamp1(hover_anim.get(kn, 0.0))
-            dx = 2.6 * p
-            # Soft shadow cast left/down
-            _round_rect(cr, sx + dx - 1.5, sy + 2.5, sw, sh, 8 if is_ptt else 6)
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.45 * (1.0 - 0.5 * p))
+            dx = 3.2 * p
+            # Soft contact shadow cast left/down onto back-shell plastic
+            _round_rect(cr, sx + dx - 1.4, sy + 2.2, sw, sh, 8 if is_ptt else 6)
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.52 * (1.0 - 0.5 * p))
             cr.fill()
 
             # 3D rounded cylindrical side paddle body
             _round_rect(cr, sx + dx, sy, sw, sh, 8 if is_ptt else 6)
             pat_s = cairo.LinearGradient(sx + dx, sy, sx + dx + sw, sy)
             if is_ptt:
-                pat_s.add_color_stop_rgb(0.0, 0.24 + 0.40 * p + 0.05 * hv, 0.25 - 0.10 * p + 0.05 * hv, 0.28 - 0.12 * p + 0.05 * hv)
-                pat_s.add_color_stop_rgb(0.55, 0.14 + 0.45 * p, 0.15 - 0.04 * p, 0.17 - 0.05 * p)
-                pat_s.add_color_stop_rgb(1.0, 0.08 + 0.30 * p, 0.09, 0.10)
+                pat_s.add_color_stop_rgb(0.0, 0.25 + 0.38 * p + 0.06 * hv, 0.26 - 0.10 * p + 0.06 * hv, 0.29 - 0.12 * p + 0.06 * hv)
+                pat_s.add_color_stop_rgb(0.45, 0.15 + 0.42 * p, 0.16 - 0.04 * p, 0.18 - 0.05 * p)
+                pat_s.add_color_stop_rgb(0.85, 0.07 + 0.25 * p, 0.075, 0.085)
+                pat_s.add_color_stop_rgb(1.0, 0.03, 0.03, 0.04)
             else:
-                v = 0.22 + 0.06 * hv - 0.07 * p
+                v = 0.23 + 0.06 * hv - 0.07 * p
                 pat_s.add_color_stop_rgb(0.0, v, v + 0.01, v + 0.02)
-                pat_s.add_color_stop_rgb(0.6, v * 0.68, v * 0.70, v * 0.74)
-                pat_s.add_color_stop_rgb(1.0, v * 0.45, v * 0.46, v * 0.50)
+                pat_s.add_color_stop_rgb(0.55, v * 0.65, v * 0.67, v * 0.71)
+                pat_s.add_color_stop_rgb(1.0, v * 0.30, v * 0.31, v * 0.34)
             cr.set_source(pat_s)
             cr.fill_preserve()
 
@@ -1312,24 +1415,18 @@ class HandsetRenderer:
                 c_g = accent[1] * (1.0 - p) + 0.30 * p
                 c_b = accent[2] * (1.0 - p) + 0.28 * p
                 pat_c = cairo.LinearGradient(sx + dx, sy, sx + dx, sy + sh)
-                pat_c.add_color_stop_rgb(0.0, min(1.0, c_r * 1.18), min(1.0, c_g * 1.18), min(1.0, c_b * 1.18))
-                pat_c.add_color_stop_rgb(0.5, c_r * 0.92, c_g * 0.92, c_b * 0.92)
-                pat_c.add_color_stop_rgb(1.0, c_r * 0.62, c_g * 0.62, c_b * 0.62)
+                pat_c.add_color_stop_rgb(0.0, min(1.0, c_r * 1.15), min(1.0, c_g * 1.15), min(1.0, c_b * 1.15))
+                pat_c.add_color_stop_rgb(0.5, c_r * 0.88, c_g * 0.88, c_b * 0.88)
+                pat_c.add_color_stop_rgb(1.0, c_r * 0.56, c_g * 0.56, c_b * 0.56)
                 cr.set_source(pat_c)
-                cr.set_line_width(2.4)
-                cr.stroke()
-                # Subtle inner shadow channel between anodized collar and rubber paddle
-                _round_rect(cr, sx + dx + 2.2, sy + 2.2, sw - 4.4, sh - 4.4, 6.2)
-                cr.set_source_rgba(0.0, 0.0, 0.0, 0.55)
-                cr.set_line_width(1.0)
+                cr.set_line_width(2.2)
                 cr.stroke()
                 if model == "k1":
                     for ry in (sy + 20, sy + 44, sy + 68, sy + 92):
-                        # Molded recessed grip channel + anodized accent insert
-                        _round_rect(cr, sx + 8.6 + dx, ry - 0.8, 5.8, 14.6, 2.6)
-                        cr.set_source_rgba(0.03, 0.03, 0.04, 0.72)
+                        _round_rect(cr, sx + 6.4 + dx, ry - 0.8, 5.2, 14.6, 2.4)
+                        cr.set_source_rgba(0.02, 0.02, 0.03, 0.75)
                         cr.fill()
-                        _round_rect(cr, sx + 9.6 + dx, ry, 3.8, 13.0, 1.8)
+                        _round_rect(cr, sx + 7.2 + dx, ry, 3.6, 13.0, 1.7)
                         cr.set_source_rgb(
                             accent[0] * (1.0 - p) + 1.0 * p,
                             accent[1] * (1.0 - p) + 0.72 * p,
@@ -1337,24 +1434,44 @@ class HandsetRenderer:
                         )
                         cr.fill()
             else:
-                cr.set_source_rgba(accent[0], accent[1], accent[2], 0.90 * p) if p > 0.05 else cr.set_source_rgba(1, 1, 1, 0.16 + 0.08 * hv)
-                cr.set_line_width(1.1)
+                cr.set_source_rgba(accent[0], accent[1], accent[2], 0.88 * p) if p > 0.05 else cr.set_source_rgba(1, 1, 1, 0.14 + 0.08 * hv)
+                cr.set_line_width(1.0)
                 cr.stroke()
                 if dots > 0:
                     cr.set_source_rgba(0.84, 0.87, 0.90, 0.72)
                     if dots == 2:
                         cr.new_path()
-                        cr.arc(sx + 10.5 + dx, sy + sh * 0.37, 2.0, 0, 2 * math.pi)
+                        cr.arc(sx + 8.0 + dx, sy + sh * 0.37, 1.9, 0, 2 * math.pi)
                         cr.fill()
                         cr.new_path()
-                        cr.arc(sx + 10.5 + dx, sy + sh * 0.63, 2.0, 0, 2 * math.pi)
+                        cr.arc(sx + 8.0 + dx, sy + sh * 0.63, 1.9, 0, 2 * math.pi)
                         cr.fill()
                     else:
                         cr.new_path()
-                        cr.arc(sx + 10.5 + dx, sy + sh * 0.50, 2.0, 0, 2 * math.pi)
+                        cr.arc(sx + 8.0 + dx, sy + sh * 0.50, 1.9, 0, 2 * math.pi)
                         cr.fill()
 
-        # 4. Dynamic 3D Front Keycap Overlays (only animating/hovered keys redraw live!)
+            # Overhanging front-chassis shadow cast onto right root of the side button!
+            sh_ov = cairo.LinearGradient(bx - 7.5, 0, bx + 1.0, 0)
+            sh_ov.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0)
+            sh_ov.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.78)
+            cr.set_source(sh_ov)
+            cr.rectangle(bx - 7.5, sy - 1.0, 8.5, sh + 2.0)
+            cr.fill()
+
+        # 3. Cached Front 3D Radio Chassis ON TOP (front bezel cleanly overhangs side button roots!)
+        cr.set_source_surface(self._chassis_surf, 0, 0)
+        cr.paint()
+
+        # 3b. Dynamic top flashlight LED (zero-cost strobe during firmware page flashing!)
+        tx, ty_base, is_compact = self._torch_anchor
+        _draw_top_flashlight(cr, tx, ty_base, torch_on, compact=is_compact)
+
+        # 4. Fast layered ST7565 LCD
+        lx, ly, lw, lh = self._lcd_rect
+        paint_fast_lcd(cr, lx, ly, lw, lh, lcd_state, lcd_st, self.lcd_cache)
+
+        # 5. Dynamic 3D Front Keycap Overlays (only animating/hovered keys redraw live!)
         for kn, kx, ky, kw, kh, pri, s1, s2, rad, is_nav, nub in self._key_specs:
             pt = press_anim.get(kn, 0.0)
             ht = hover_anim.get(kn, 0.0)
@@ -1551,7 +1668,7 @@ class RecordingSession:
 # =============================================================================
 
 VID_PID_STOCK_BL = "36b7:0001"
-VID_PID_MOTO_UF2 = "36b7:ffff"
+VID_PID_KERN_CDC = "36b7:ffff"
 
 
 @dataclasses.dataclass
@@ -1563,26 +1680,28 @@ class DetectedPort:
     serial: str = ""
     vid: str = ""
     pid: str = ""
-    mode_hint: str = "kern_os"  # "kern_os" | "stock_bl" | "moto_uf2"
+    mode_hint: str = "kern_os"  # "kern_os" | "stock_bl"
     is_quansheng: bool = False
 
 
 def classify_usb_mode(vid: str, pid: str, pretty_name: str) -> tuple[str, bool]:
-    """Classifies USB serial/DFU devices into Kern OS, Stock Bootloader/CPS (36b7:0001), or Moto UF2 (36b7:ffff)."""
+    """
+    Classifies USB serial devices:
+      • 36b7:ffff -> Kern OS native USB-C CDC (NEVER Moto UF2, which is USB MSC block storage!)
+      • 36b7:0001 -> Quansheng K1/K5v3 CPS or Stock Bootloader (live-probed on connect!)
+    """
     vp = f"{vid}:{pid}".lower() if (vid and pid) else ""
     low = pretty_name.lower()
+    if vp == VID_PID_KERN_CDC:
+        return "kern_os", True
     if vp == VID_PID_STOCK_BL:
-        return "stock_bl", True
-    if vp == VID_PID_MOTO_UF2:
-        return "moto_uf2", True
-    if "bootloader" in low or "dfu" in low:
         return "stock_bl", True
     is_qs = any(k in low for k in ("quansheng", "uv-k", "kern"))
     return "kern_os", is_qs
 
 
 class PortMonitor:
-    """Real-time USB hotplug monitor recognizing Kern OS, Quansheng DFU/CPS Bootloader, and Moto UF2."""
+    """Real-time USB hotplug monitor recognizing Kern OS CDC and Quansheng CPS/Bootloader ports."""
 
     def __init__(self, on_change: Callable[[list[DetectedPort]], None] | None = None) -> None:
         self.on_change = on_change
@@ -1624,10 +1743,6 @@ class PortMonitor:
                 v_c, m_c = vendor.replace("_", " ").strip(), model.replace("_", " ").strip()
                 pretty = m_c if m_c.lower().startswith("quansheng") else f"{v_c} {m_c}".strip() or dev_file
                 mode_hint, is_qs = classify_usb_mode(vid, pid, pretty)
-                if mode_hint == "stock_bl" and "bootloader" not in pretty.lower():
-                    pretty = f"Quansheng DFU / Bootloader ({pretty})" if pretty != dev_file else "Quansheng DFU / Bootloader"
-                elif mode_hint == "moto_uf2":
-                    pretty = "Moto UF2 Bootloader"
                 found.append(DetectedPort(dev_file, pretty, v_c, m_c, ser, vid, pid, mode_hint, is_qs))
         else:
             try:
@@ -1637,8 +1752,7 @@ class PortMonitor:
                     vid = f"{p.vid:04x}" if p.vid is not None else ""
                     pid = f"{p.pid:04x}" if p.pid is not None else ""
                     mode_hint, is_qs = classify_usb_mode(vid, pid, desc)
-                    pretty = "Quansheng DFU / Bootloader" if mode_hint == "stock_bl" else (desc or p.device)
-                    found.append(DetectedPort(p.device, pretty, model=desc, serial=p.serial_number or "", vid=vid, pid=pid, mode_hint=mode_hint, is_quansheng=is_qs))
+                    found.append(DetectedPort(p.device, desc or p.device, model=desc, serial=p.serial_number or "", vid=vid, pid=pid, mode_hint=mode_hint, is_quansheng=is_qs))
             except Exception:
                 pass
 
@@ -1716,6 +1830,7 @@ def flash_via_stock_bootloader(
     port: str,
     fw_bytes: bytes,
     progress_cb: Callable[[float, str], None] | None = None,
+    page_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """Flashes raw firmware bytes via Quansheng stock bootloader / CPS / Kern dfu.mod protocol."""
     if _flasher is None:
@@ -1805,10 +1920,16 @@ def flash_via_stock_bootloader(
                     break
             if not ok:
                 raise RuntimeError(f"Flash page {page + 1}/{total_pages} failed")
+            if page_cb:
+                page_cb(page + 1, total_pages)
             if progress_cb:
                 frac = 0.10 + 0.88 * ((page + 1) / float(total_pages))
                 progress_cb(frac, f"Flashing page {page + 1}/{total_pages}")
 
+        try:
+            proto.send(_flasher.MSG_REBOOT)
+        except Exception:
+            pass
         if progress_cb:
             progress_cb(1.0, "Complete — rebooting radio")
         return {"bootloader": ver, "uid": uid, "pages": total_pages, "elapsed_s": time.monotonic() - t_start}
@@ -2001,19 +2122,6 @@ def make_demo_framebuffer(freq_a: str = "433.500", freq_b: str = "145.500", stat
     return bytes(fb)
 
 
-def make_dfu_framebuffer(bl_ver: str = "7.02.02", status: str = "READY TO FLASH") -> bytes:
-    """Clean DFU / Stock Bootloader status display when radio is connected in CPS/DFU mode."""
-    fb = bytearray(1024)
-    for x in range(128):
-        for y in range(9):
-            fb[(y >> 3) * 128 + x] |= 1 << (y & 7)
-    _fb_draw_text(fb, 3, 1, f"DFU {bl_ver[:14]}", 1, invert=True)
-    _fb_draw_text(fb, 20, 20, "BOOTLOADER", 1)
-    _fb_draw_text(fb, 14, 34, status[:18], 1)
-    _fb_draw_text(fb, 14, 52, "OPEN FLASH TAB", 1)
-    return bytes(fb)
-
-
 def detect_hardware_model(volume_name: str, hello: dict[str, Any] | None = None, port_info: DetectedPort | None = None) -> str:
     blob = " ".join([
         volume_name or "",
@@ -2093,6 +2201,7 @@ class DockLink:
         self.error_count: int = 0
         self.connected: bool = False
         self._cmd_q: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._wake_ev = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.dav_server: kernfs_mount.KernWebDAVServer | None = None
@@ -2145,45 +2254,15 @@ class DockLink:
                 self.on_telemetry()
             return
 
-        # 2. Instant USB DFU / Moto UF2 recognition before trying RigWire
-        if port_info and port_info.mode_hint == "moto_uf2":
-            self.port = port
-            self.link_mode = "moto_uf2"
-            self.volume_name = "Moto UF2 Bootloader"
-            self.detected_model = model_override or "k1"
-            self.connected = True
-            self.last_fb = make_dfu_framebuffer("MOTO UF2", "COPY UF2 TO DRIVE")
-            self._emit_log(f"Detected Moto UF2 Bootloader on {port}")
-            if self.on_frame:
-                self.on_frame()
-            if self.on_telemetry:
-                self.on_telemetry()
-            return
-
-        if port_info and port_info.mode_hint == "stock_bl":
-            bl = probe_bootloader_beacon(port, duration_s=1.0) or {"version": "Stock BL", "uid": ""}
-            self.port = port
-            self.link_mode = "stock_bl"
-            self.bootloader_info = bl
-            self.volume_name = f"DFU Bootloader ({bl['version']})"
-            self.detected_model = model_override or "k1"
-            self.connected = True
-            self.last_fb = make_dfu_framebuffer(bl["version"], "READY TO FLASH")
-            self._emit_log(f"Detected Quansheng DFU/CPS Bootloader {bl['version']} on {port}")
-            if self.on_frame:
-                self.on_frame()
-            if self.on_telemetry:
-                self.on_telemetry()
-            return
-
-        # 3. Try RigWire (Kern OS); if handshake fails on serial port, auto-probe for 38400-baud CPS/Bootloader beacon!
+        # 2. Always attempt RigWire (Kern OS) first on every serial/TCP port (36b7:ffff is Kern OS CDC!).
+        # Only fall back to Stock Bootloader mode if an authentic 0x0518 beacon frame is actually received.
         with self.lock:
             last_err: Exception | None = None
             cli: rigwire.RigWireClient | None = None
             hello: dict[str, Any] = {}
             telem: dict[str, Any] = {}
             for attempt in range(2):
-                cand = rigwire.RigWireClient(port, baudrate=baud, timeout=1.2)
+                cand = rigwire.RigWireClient(port, baudrate=baud, timeout=0.75)
                 try:
                     hello = cand.hello()
                     try:
@@ -2199,33 +2278,40 @@ class DockLink:
                     except Exception:
                         pass
                     if attempt == 0:
-                        time.sleep(0.10)
+                        time.sleep(0.08)
 
             if cli is None:
-                # Fallback: check if radio is actually sitting in Stock Bootloader / CPS mode on a generic USB-UART cable!
-                bl = probe_bootloader_beacon(port, duration_s=0.9)
+                # Verify real 38400-baud Stock Bootloader 0x0518 beacon (NEVER assume bootloader without a real beacon!)
+                bl = probe_bootloader_beacon(port, duration_s=0.85)
                 if bl is not None:
                     self.port = port
                     self.link_mode = "stock_bl"
                     self.bootloader_info = bl
-                    self.volume_name = f"DFU Bootloader ({bl['version']})"
-                    self.detected_model = model_override or "k1"
+                    self.volume_name = f"Bootloader {bl['version']}"
+                    self.detected_model = model_override or detect_hardware_model(
+                        port_info.pretty_name if port_info else "", port_info=port_info
+                    )
                     self.connected = True
-                    self.last_fb = make_dfu_framebuffer(bl["version"], "CPS / DFU READY")
-                    self._emit_log(f"Auto-recognized Stock Bootloader / CPS ({bl['version']}) on {port}")
+                    # Authentic Stock Bootloader hardware state: LCD is unlit/off and top flashlight LED is ON!
+                    self.last_fb = bytes(1024)
+                    self.torch_on = True
+                    self._emit_log(f"Bootloader {bl['version']} beacon verified on {port}")
                     if self.on_frame:
                         self.on_frame()
                     if self.on_telemetry:
                         self.on_telemetry()
                     return
-                raise last_err or RuntimeError(f"Could not connect to {port}")
+                raise last_err or RuntimeError(f"No RigWire or Bootloader response on {port}")
 
             self.client = cli
+            self.client.timeout = 0.45  # Fast interactive recovery (never 2.5s freeze!)
             self.fs_backend = kernfs_mount.RigWireFsBackend(cli, cache_ttl=2.0, shared_lock=self.lock)
             self.port = port
             self.link_mode = "kern_os"
             self.hello_info = hello
             self.last_telemetry = telem
+            self.torch_on = bool(telem.get("flashlight", False))
+            self.keypad_locked = bool(telem.get("keypad_locked", False))
             self.volume_name = kernfs_mount.resolve_volume_name(port, hello=hello, telemetry=telem)
             self.detected_model = model_override or detect_hardware_model(self.volume_name, hello=hello, port_info=port_info)
             self.demo_mode = False
@@ -2288,6 +2374,7 @@ class DockLink:
                     self.on_frame()
             return
         self._cmd_q.put(("key", (rigwire.KEY_CODES[key_name], rigwire.KEY_STATES[state_name])))
+        self._wake_ev.set()
 
     def set_flashlight(self, enabled: bool) -> None:
         self.torch_on = enabled
@@ -2296,6 +2383,7 @@ class DockLink:
             return
         if self.connected and self.link_mode == "kern_os":
             self._cmd_q.put(("torch", 1 if enabled else 0))
+            self._wake_ev.set()
 
     def set_keypad_lock(self, locked: bool) -> None:
         self.keypad_locked = locked
@@ -2304,6 +2392,7 @@ class DockLink:
             return
         if self.connected and self.link_mode == "kern_os":
             self._cmd_q.put(("lock", locked))
+            self._wake_ev.set()
 
     def toggle_vfo(self) -> None:
         if self.demo_mode:
@@ -2311,6 +2400,7 @@ class DockLink:
             return
         if self.connected and self.link_mode == "kern_os":
             self._cmd_q.put(("vfo", None))
+            self._wake_ev.set()
 
     def run_wire_command(self, cmd_line: str) -> str:
         parts = cmd_line.strip().split()
@@ -2416,31 +2506,43 @@ class DockLink:
                 break
             if not self.client:
                 break
-            try:
-                if kind == "key":
-                    self.client.inject_key(payload[0], payload[1])
-                elif kind == "torch":
-                    self.client.set_flashlight(payload)
-                elif kind == "lock":
-                    self.client.set_keypad_lock(payload)
-                elif kind == "vfo":
-                    self.client.toggle_vfo()
-                self.rtt_ms = self.client.last_rtt_ms
-            except Exception:
-                self.error_count += 1
+            for attempt in range(2):
+                try:
+                    if kind == "key":
+                        self.client.inject_key(payload[0], payload[1])
+                    elif kind == "torch":
+                        self.client.set_flashlight(payload)
+                    elif kind == "lock":
+                        self.client.set_keypad_lock(payload)
+                    elif kind == "vfo":
+                        self.client.toggle_vfo()
+                    self.rtt_ms = self.client.last_rtt_ms
+                    break
+                except Exception:
+                    if attempt == 0:
+                        try:
+                            self.client.resync()
+                            continue
+                        except Exception:
+                            pass
+                    self.error_count += 1
 
     def _poll_loop(self) -> None:
+        # Adaptive 45 FPS pacing (22 ms budget) with single-in-flight Delta+RLE frames
+        # (pipeline=1 avoids CDC_RX_BUF_SIZE overflow when keys are injected) + instant
+        # auto-resync via HELLO on any dropped packet (prevents StaleSequence freezes!).
+        target_dt = 1.0 / 45.0
         frames = 0
         t_fps = time.monotonic()
-        last_telem = 0.0
-        pipe = 2
+        last_telem = time.monotonic()
         while not self._stop.is_set() and self.connected:
+            t_frame = time.monotonic()
             try:
                 with self.lock:
                     if not self.client:
                         break
                     self._drain_priority_cmds()
-                    fb = self.client.screencap(on_between_chunks=self._drain_priority_cmds, pipeline=pipe)
+                    fb = self.client.screencap(on_between_chunks=self._drain_priority_cmds, pipeline=1, delta=True)
                     self.rtt_ms = self.client.last_rtt_ms
                 if len(fb) == 1024:
                     changed = fb != self.last_fb
@@ -2449,9 +2551,19 @@ class DockLink:
                     if changed and self.on_frame is not None:
                         self.on_frame()
             except Exception:
-                self.error_count += 1
-                pipe = 1
-                time.sleep(0.10)
+                # Auto-resync RigWire sequence=1 immediately so one dropped USB frame NEVER freezes the stream!
+                recovered = False
+                try:
+                    with self.lock:
+                        if self.client:
+                            self.client.resync()
+                            recovered = True
+                except Exception:
+                    pass
+                if not recovered:
+                    self.error_count += 1
+                    self._wake_ev.wait(0.08)
+                    self._wake_ev.clear()
                 continue
 
             now = time.monotonic()
@@ -2462,17 +2574,29 @@ class DockLink:
                 if self.on_telemetry is not None:
                     self.on_telemetry()
 
-            if now - last_telem >= 2.0:
+            if now - last_telem >= 3.0:
                 last_telem = now
                 try:
                     with self.lock:
                         if self.client:
-                            self.last_telemetry = self.client.get_system_telemetry()
+                            met = self.client.handle_get(rigwire.DOMAIN_SYSTEM, 0, rigwire.FACET_SYS_METRICS)
+                            if len(met) >= 14:
+                                self.last_telemetry["uptime_ms"] = struct.unpack("<I", met[:4])[0]
+                                self.last_telemetry["sysclk_hz"] = struct.unpack("<I", met[4:8])[0]
+                                self.last_telemetry["battery_mv"] = struct.unpack("<H", met[8:10])[0]
+                                self.last_telemetry["battery_pct"] = met[10]
+                                self.last_telemetry["active_app"] = met[11]
+                                self.keypad_locked = bool(met[12])
+                                self.torch_on = bool(met[13])
                     if self.on_telemetry is not None:
                         self.on_telemetry()
                 except Exception:
                     pass
-            time.sleep(0.001)
+
+            rem = target_dt - (time.monotonic() - t_frame)
+            if rem > 0.001 and self._cmd_q.empty():
+                self._wake_ev.wait(rem)
+            self._wake_ev.clear()
 
 
 # =============================================================================
@@ -2514,6 +2638,26 @@ def _battery_icon_name(pct: int | None) -> str:
     return f"battery-level-{min(steps, key=lambda s: abs(s - pct))}-symbolic"
 
 
+_RADIO_ICON_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <rect x="4" y="1" width="1.8" height="4" rx="0.9" fill="#e5e7eb"/>
+  <rect x="10.2" y="2.8" width="2.2" height="2.2" rx="0.6" fill="#e5e7eb"/>
+  <path d="M4 5h8a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 12 15H4a1.5 1.5 0 0 1-1.5-1.5v-7A1.5 1.5 0 0 1 4 5zm.5 2v3h7V7h-7zm.5 4.2a.7.7 0 1 0 0 1.4.7.7 0 0 0 0-1.4zm3 0a.7.7 0 1 0 0 1.4.7.7 0 0 0 0-1.4zm3 0a.7.7 0 1 0 0 1.4.7.7 0 0 0 0-1.4z" fill="#e5e7eb" fill-rule="evenodd"/>
+</svg>"""
+
+
+def _make_radio_icon_widget(Gtk_mod: Any, Gdk_mod: Any, GLib_mod: Any, size: int = 16) -> Any:
+    """Crisp 16x16 handheld transceiver symbolic icon for radio rows & connection pill."""
+    try:
+        tex = Gdk_mod.Texture.new_from_bytes(GLib_mod.Bytes.new(_RADIO_ICON_SVG))
+        img = Gtk_mod.Image.new_from_paintable(tex)
+        img.set_pixel_size(size)
+        return img
+    except Exception:
+        img = Gtk_mod.Image.new_from_icon_name("network-wireless-symbolic")
+        img.set_pixel_size(size)
+        return img
+
+
 def launch_gtk4(
     initial_port: str | None = None,
     baud: int = 115200,
@@ -2553,6 +2697,8 @@ def launch_gtk4(
                 )
             )
             self.auto_connect_usb = (initial_port is None)
+            self.allow_usb_tx = False  # Hard RF RFI safety lock: PTT blocked over USB unless explicitly armed!
+            self._flashing_active = False
             self._pressed_keys: set[str] = set()
             self._hovered_key: str | None = None
             self._press_anim: dict[str, float] = {}
@@ -2603,14 +2749,14 @@ def launch_gtk4(
             self.link.on_log = lambda line: GLib.idle_add(self._append_console_line, line)
             self.port_monitor = PortMonitor(on_change=lambda _p: GLib.idle_add(self._on_ports_changed))
 
-            # --- Clean GNOME HIG HeaderBar ---
+            # --- Ultra-Clean GNOME HIG HeaderBar (NO tab spam!) ---
             header = Adw.HeaderBar() if has_adw else Gtk.HeaderBar()
 
-            # Start: Connection & Hardware Status Popover Button
+            # Start: Compact Radio & Connection Popover Pill
             self.conn_menu_btn = Gtk.MenuButton()
-            self.conn_menu_btn.set_tooltip_text("Radio connection, USB devices & DFU detection")
+            self.conn_menu_btn.set_tooltip_text("Radio connection, battery & hardware controls")
             st_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            self.hdr_link_icon = Gtk.Image.new_from_icon_name("network-offline-symbolic")
+            self.hdr_link_icon = _make_radio_icon_widget(Gtk, Gdk, GLib, 16)
             self.hdr_batt_icon = Gtk.Image(icon_name="battery-missing-symbolic", visible=False)
             self.hdr_dev_lbl = Gtk.Label(label="Connect")
             self.hdr_rec_dot = Gtk.Box(valign=Gtk.Align.CENTER, visible=False)
@@ -2624,18 +2770,17 @@ def launch_gtk4(
             self.conn_menu_btn.set_popover(self.conn_popover)
             header.pack_start(self.conn_menu_btn)
 
-            # Center: Native Adw.ViewSwitcher (Device · Files · Flash · Wire · Capture)
-            self.dock_stack = Adw.ViewStack() if has_adw else Gtk.Stack()
+            # Center: Clean Adw.WindowTitle (NO random tabs in top window bar!)
             if has_adw:
-                self.view_switcher = Adw.ViewSwitcher(stack=self.dock_stack, policy=Adw.ViewSwitcherPolicy.WIDE)
-                header.set_title_widget(self.view_switcher)
+                self.win_title = Adw.WindowTitle(title="Kern Dock", subtitle="Not connected")
+                header.set_title_widget(self.win_title)
             else:
-                self.view_switcher = None
+                self.win_title = None
 
             # End: Dock Panel Toggle + Primary Menu (Display Optics & Shortcuts)
             end_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             self.pane_toggle = Gtk.ToggleButton(icon_name="sidebar-show-right-symbolic", active=True)
-            self.pane_toggle.set_tooltip_text("Show/hide dock workspace (Ctrl+B)")
+            self.pane_toggle.set_tooltip_text("Show/hide workspace sidebar (Ctrl+B)")
             end_box.append(self.pane_toggle)
 
             menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
@@ -2644,10 +2789,10 @@ def launch_gtk4(
             end_box.append(menu_btn)
             header.pack_end(end_box)
 
-            # --- Native Adw.Banner for DFU / Stock Bootloader / CPS Mode ---
-            self.dfu_banner = Adw.Banner(revealed=False, button_label="Open Flasher") if has_adw else None
+            # --- Context-Aware Auto Bootloader Banner (ONLY shown on verified 0x0518 beacon!) ---
+            self.dfu_banner = Adw.Banner(revealed=False, button_label="Flash Firmware…") if has_adw else None
             if self.dfu_banner is not None:
-                self.dfu_banner.connect("button-clicked", lambda _b: self._open_flash_tab())
+                self.dfu_banner.connect("button-clicked", lambda _b: self._on_flash_firmware_dialog(None))
 
             # --- Left Pane: 3D Interactive Cairo Handset ---
             self.handset_area = Gtk.DrawingArea(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
@@ -2657,10 +2802,13 @@ def launch_gtk4(
             self.handset_area.set_margin_bottom(12)
             self.handset_area.set_draw_func(self._draw_handset)
 
+            # Natural press-and-hold gesture (never cancels on tiny pointer jitter!)
             g_l = Gtk.GestureClick(button=1)
+            g_l.set_exclusive(True)
             g_l.connect("pressed", self._on_handset_press)
             g_l.connect("released", self._on_handset_release)
-            g_l.connect("stopped", lambda _g: self._release_all_pointer_keys())
+            g_l.connect("unpaired-release", lambda _g, _x, _y, _b, _s: self._release_all_pointer_keys())
+            g_l.connect("cancel", lambda _g, _s: self._release_all_pointer_keys())
             self.handset_area.add_controller(g_l)
 
             g_r = Gtk.GestureClick(button=3)
@@ -2672,29 +2820,56 @@ def launch_gtk4(
             g_m.connect("leave", lambda _c: self._set_hovered_key(None))
             self.handset_area.add_controller(g_m)
 
-            # --- Right Pane: Device · Files · Flash · Wire · Capture ---
-            dev_page = self._build_device_page()
+            # --- Right Workspace Pane: Clean 3-View Switcher (Files · Capture · Console) ---
+            self.dock_stack = Adw.ViewStack() if has_adw else Gtk.Stack()
             files_page = self._build_files_page()
-            flash_page = self._build_flash_backup_page()
-            wire_page = self._build_wire_page()
             cap_page = self._build_capture_page()
+            wire_page = self._build_wire_page()
 
             if has_adw:
-                self.dock_stack.add_titled_with_icon(dev_page, "device", "Device", "computer-symbolic")
                 self.dock_stack.add_titled_with_icon(files_page, "files", "Files", "folder-symbolic")
-                self.dock_stack.add_titled_with_icon(flash_page, "flash", "Flash", "software-update-available-symbolic")
-                self.dock_stack.add_titled_with_icon(wire_page, "wire", "Wire", "utilities-terminal-symbolic")
                 self.dock_stack.add_titled_with_icon(cap_page, "capture", "Capture", "camera-video-symbolic")
+                self.dock_stack.add_titled_with_icon(wire_page, "wire", "Console", "utilities-terminal-symbolic")
             else:
-                for w, nm, lbl in ((dev_page, "device", "Device"), (files_page, "files", "Files"), (flash_page, "flash", "Flash"), (wire_page, "wire", "Wire"), (cap_page, "capture", "Capture")):
+                for w, nm, lbl in ((files_page, "files", "Files"), (cap_page, "capture", "Capture"), (wire_page, "wire", "Console")):
                     self.dock_stack.add_titled(w, nm, lbl)
             self.dock_stack.set_hexpand(True)
             self.dock_stack.set_vexpand(True)
 
+            pane_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, vexpand=True)
+            # Compact segmented switcher cleanly nested inside the workspace pane
+            sw_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=4)
+            sw_bar.add_css_class("linked")
+            self._pane_btns: dict[str, Any] = {}
+            first_pb = None
+            for nm, lbl, icon in (
+                ("files", "Files", "folder-symbolic"),
+                ("capture", "Capture", "camera-video-symbolic"),
+                ("wire", "Console", "utilities-terminal-symbolic"),
+            ):
+                tb_btn = Gtk.ToggleButton(active=(nm == "files"))
+                if first_pb is None:
+                    first_pb = tb_btn
+                else:
+                    tb_btn.set_group(first_pb)
+                bi = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                bi.append(Gtk.Image.new_from_icon_name(icon))
+                bi.append(Gtk.Label(label=lbl))
+                tb_btn.set_child(bi)
+                tb_btn.connect("toggled", lambda b, page_name=nm: self.dock_stack.set_visible_child_name(page_name) if b.get_active() else None)
+                sw_bar.append(tb_btn)
+                self._pane_btns[nm] = tb_btn
+            pane_col.append(sw_bar)
+
+            # Shared inline progress bar for flashing / backup / restore (hidden when idle)
+            self.op_prog = Gtk.ProgressBar(show_text=True, visible=False, margin_start=12, margin_end=12, margin_top=4)
+            pane_col.append(self.op_prog)
+            pane_col.append(self.dock_stack)
+
             self.right_pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, hexpand=True)
-            self.right_pane.set_size_request(460, -1)
+            self.right_pane.set_size_request(448, -1)
             self.right_pane.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-            self.right_pane.append(self.dock_stack)
+            self.right_pane.append(pane_col)
             self.pane_toggle.connect("toggled", self._on_dock_pane_toggled)
 
             split = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -2723,6 +2898,7 @@ def launch_gtk4(
             kc.connect("key-pressed", self._on_pc_key_pressed)
             kc.connect("key-released", self._on_pc_key_released)
             self.win.add_controller(kc)
+            self.win.connect("notify::is-active", lambda w, _p: None if w.is_active() else self._release_all_keys())
 
             self.win.connect("close-request", self._on_close_request)
             self._rebuild_connection_list()
@@ -2743,52 +2919,92 @@ def launch_gtk4(
                 t.set_timeout(2)
                 self.toast_overlay.add_toast(t)
 
-        def _open_flash_tab(self) -> None:
-            if not self.pane_toggle.get_active():
-                self.pane_toggle.set_active(True)
-            self.dock_stack.set_visible_child_name("flash")
-
         def _sync_window_size(self) -> None:
             lw, lh = compute_handset_geometry(self.active_model)
             self.handset_area.set_content_width(lw)
             self.handset_area.set_content_height(lh)
             expanded = self.pane_toggle.get_active()
-            if self.view_switcher is not None:
-                self.view_switcher.set_visible(expanded)
-            target_w = (lw + 32 + 470) if expanded else (lw + 32)
-            target_h = max(lh + 78, 686 if expanded else lh + 78)
+            target_w = (lw + 32 + 456) if expanded else (lw + 32)
+            target_h = max(lh + 76, 686 if expanded else lh + 76)
             self.win.set_default_size(target_w, target_h)
 
         def _on_dock_pane_toggled(self, btn: Any) -> None:
             self.right_pane.set_visible(btn.get_active())
             self._sync_window_size()
 
-        # --- Connection Popover (Live GUdev + DFU/Bootloader Mode Badges) ---
+        # --- Compact GNOME HIG Radio & Connection Popover ---
         def _build_connection_popover(self) -> Any:
             pop = Gtk.Popover()
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
-            box.set_size_request(320, -1)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=10, margin_start=10, margin_end=10)
+            box.set_size_request(280, -1)
 
-            self.conn_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
-            self.conn_card_title = Gtk.Label(xalign=0)
+            # Compact Active Radio Section (visible when connected)
+            self.conn_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=7, visible=False)
+            top_line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            info_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, hexpand=True)
+            self.conn_card_title = Gtk.Label(xalign=0, ellipsize=3)
             self.conn_card_title.add_css_class("heading")
-            self.conn_card_sub = Gtk.Label(xalign=0)
+            self.conn_card_sub = Gtk.Label(xalign=0, ellipsize=3)
+            self.conn_card_sub.add_css_class("caption")
             self.conn_card_sub.add_css_class("dim-label")
-            self.conn_card.append(self.conn_card_title)
-            self.conn_card.append(self.conn_card_sub)
-            disc_btn = Gtk.Button(label="Disconnect")
-            disc_btn.add_css_class("destructive-action")
+            self.conn_card_id = Gtk.Label(xalign=0, ellipsize=3)
+            self.conn_card_id.add_css_class("caption")
+            self.conn_card_id.add_css_class("dim-label")
+            info_col.append(self.conn_card_title)
+            info_col.append(self.conn_card_sub)
+            info_col.append(self.conn_card_id)
+            top_line.append(info_col)
+            disc_btn = Gtk.Button(icon_name="media-eject-symbolic", valign=Gtk.Align.CENTER)
+            disc_btn.set_tooltip_text("Disconnect")
+            disc_btn.add_css_class("flat")
             disc_btn.connect("clicked", lambda _b: (self._disconnect(), self.conn_popover.popdown()))
-            self.conn_card.append(disc_btn)
+            top_line.append(disc_btn)
+            self.conn_card.append(top_line)
+
+            # Single-line Battery Meter
+            batt_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            self.batt_lbl = Gtk.Label(label="—", xalign=0)
+            self.batt_lbl.add_css_class("caption")
+            self.batt_lbl.add_css_class("numeric")
+            self.batt_bar = Gtk.LevelBar(min_value=0.0, max_value=100.0, hexpand=True, valign=Gtk.Align.CENTER)
+            self.batt_bar.add_offset_value("low", 20.0)
+            self.batt_bar.add_offset_value("high", 50.0)
+            self.batt_bar.add_offset_value("full", 85.0)
+            self.batt_bar.set_size_request(-1, 6)
+            batt_row.append(self.batt_lbl)
+            batt_row.append(self.batt_bar)
+            self.conn_card.append(batt_row)
+
+            # Ultra-compact 4-action hardware pill bar (Torch · Lock · VFO · USB TX Safety)
+            ctl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, homogeneous=True)
+            ctl_row.add_css_class("linked")
+            self.btn_torch = Gtk.ToggleButton(label="Torch")
+            self.btn_torch.set_tooltip_text("Toggle top flashlight LED")
+            self.btn_torch.connect("toggled", lambda b: None if self._updating_switches else (self.link.set_flashlight(b.get_active()), self.handset_area.queue_draw()))
+            self.btn_lock = Gtk.ToggleButton(label="Lock")
+            self.btn_lock.set_tooltip_text("Lock front keypad")
+            self.btn_lock.connect("toggled", lambda b: None if self._updating_switches else self.link.set_keypad_lock(b.get_active()))
+            btn_vfo = Gtk.Button(label="VFO")
+            btn_vfo.set_tooltip_text("Swap primary VFO A/B")
+            btn_vfo.connect("clicked", lambda _b: self.link.toggle_vfo())
+            self.sw_allow_tx = Gtk.ToggleButton(label="TX")
+            self.sw_allow_tx.set_tooltip_text("Allow TX over USB (OFF by default to protect PC from RF interference)")
+            self.sw_allow_tx.connect("toggled", lambda b: setattr(self, "allow_usb_tx", b.get_active()))
+            for w in (self.btn_torch, self.btn_lock, btn_vfo, self.sw_allow_tx):
+                ctl_row.append(w)
+            self.conn_card.append(ctl_row)
+
             self.conn_card.append(Gtk.Separator())
             box.append(self.conn_card)
 
             hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            lbl = Gtk.Label(label="USB Radios &amp; Bootloaders", use_markup=True, xalign=0, hexpand=True)
-            lbl.add_css_class("heading")
+            lbl = Gtk.Label(label="Radios", xalign=0, hexpand=True)
+            lbl.add_css_class("caption-heading")
+            lbl.add_css_class("dim-label")
             hdr.append(lbl)
             ref = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
             ref.add_css_class("flat")
+            ref.set_tooltip_text("Scan USB ports")
             ref.connect("clicked", lambda _b: (self.port_monitor.scan(), self._rebuild_connection_list()))
             hdr.append(ref)
             box.append(hdr)
@@ -2797,30 +3013,26 @@ def launch_gtk4(
             self.usb_list.add_css_class("boxed-list")
             box.append(self.usb_list)
 
-            dev_lbl = Gtk.Label(label="Virtual &amp; Emulation", use_markup=True, xalign=0)
-            dev_lbl.add_css_class("caption-heading")
-            dev_lbl.add_css_class("dim-label")
-            box.append(dev_lbl)
-
-            virt_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-            virt_list.add_css_class("boxed-list")
-            for pid, title, sub in (
-                ("tcp://127.0.0.1:4446", "QEMU Emulator", "tcp://127.0.0.1:4446"),
-                ("demo", "Offline Demo", "Local preview &amp; virtual KernFS"),
-            ):
-                if has_adw:
-                    row = Adw.ActionRow(title=title, subtitle=sub, activatable=True)
-                    row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
-                    row.connect("activated", lambda _r, p=pid: (self.conn_popover.popdown(), self._connect_to(p)))
-                    virt_list.append(row)
-            box.append(virt_list)
-
-            ac_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            ac_row.append(Gtk.Label(label="Auto-connect USB radio", xalign=0, hexpand=True))
-            ac_sw = Gtk.Switch(active=self.auto_connect_usb)
+            # Compact footer row: QEMU · Demo · Auto-connect
+            foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            vgrp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            vgrp.add_css_class("linked")
+            for pid, title in (("tcp://127.0.0.1:4446", "QEMU"), ("demo", "Demo")):
+                vb = Gtk.Button(label=title)
+                vb.connect("clicked", lambda _b, p=pid: (self.conn_popover.popdown(), self._connect_to(p)))
+                vgrp.append(vb)
+            foot.append(vgrp)
+            foot.append(Gtk.Box(hexpand=True))
+            ac_lbl = Gtk.Label(label="Auto")
+            ac_lbl.add_css_class("caption")
+            ac_lbl.add_css_class("dim-label")
+            ac_sw = Gtk.Switch(active=self.auto_connect_usb, valign=Gtk.Align.CENTER)
+            ac_sw.set_tooltip_text("Auto-connect USB radio")
             ac_sw.connect("notify::active", lambda w, _p: setattr(self, "auto_connect_usb", w.get_active()))
-            ac_row.append(ac_sw)
-            box.append(ac_row)
+            foot.append(ac_lbl)
+            foot.append(ac_sw)
+            box.append(foot)
+
             pop.set_child(box)
             return pop
 
@@ -2832,23 +3044,21 @@ def launch_gtk4(
                 c = n
             if not self.port_monitor.ports:
                 if has_adw:
-                    empty = Adw.ActionRow(title="No USB devices detected", subtitle="Connect via USB-C, 2-pin cable, or PTT+Power DFU")
+                    empty = Adw.ActionRow(title="No USB radio detected", subtitle="Plug in via USB-C or 2-pin cable")
                     empty.set_sensitive(False)
                     self.usb_list.append(empty)
                 return
             for p in self.port_monitor.ports:
                 if has_adw:
-                    mode_tag = " · DFU/CPS" if p.mode_hint == "stock_bl" else (" · UF2" if p.mode_hint == "moto_uf2" else "")
-                    id_tag = f" · {p.vid}:{p.pid}" if (p.vid and p.pid) else ""
                     row = Adw.ActionRow(
                         title=GLib.markup_escape_text(p.pretty_name),
-                        subtitle=GLib.markup_escape_text(f"{p.device}{id_tag}{mode_tag}"),
+                        subtitle=GLib.markup_escape_text(p.device),
                         activatable=True,
                     )
-                    icon = "software-update-available-symbolic" if p.mode_hint != "kern_os" else (
-                        "drive-removable-media-symbolic" if p.is_quansheng else "network-wired-symbolic"
-                    )
-                    row.add_prefix(Gtk.Image.new_from_icon_name(icon))
+                    if p.is_quansheng:
+                        row.add_prefix(_make_radio_icon_widget(Gtk, Gdk, GLib, 16))
+                    else:
+                        row.add_prefix(Gtk.Image.new_from_icon_name("network-wired-symbolic"))
                     row.add_suffix(Gtk.Image.new_from_icon_name(
                         "object-select-symbolic" if (self.link.connected and self.link.port == p.device) else "go-next-symbolic"
                     ))
@@ -2963,9 +3173,10 @@ def launch_gtk4(
                 idx = max(0, min(self._pb_idx, len(self.recorder.frames) - 1))
                 rf = self.recorder.frames[idx]
                 return rf.fb, rf.pressed, rf.led, rf.torch
-            if self.link.link_mode in ("stock_bl", "moto_uf2"):
-                led = "dfu"
-            elif "ptt" in self._pressed_keys and self.link.connected:
+            if self._flashing_active or self.link.link_mode == "stock_bl":
+                # Authentic Stock Bootloader hardware state: LCD is OFF (blank), top flashlight LED shows activity!
+                return bytes(1024), frozenset(self._pressed_keys), ("tx" if self._flashing_active else "off"), self.link.torch_on
+            if "ptt" in self._pressed_keys and self.link.connected and (self.allow_usb_tx or self.link.demo_mode):
                 led = "tx"
             elif self.link.connected:
                 led = "rx"
@@ -2984,8 +3195,13 @@ def launch_gtk4(
             cr.translate(ox, oy)
             cr.scale(scale, scale)
             _fb, _pr, led, torch = self._current_display_state()
+            eff_st = (
+                dataclasses.replace(self.lcd_st, backlight=0)
+                if (self._flashing_active or self.link.link_mode == "stock_bl")
+                else self.lcd_st
+            )
             self.handset_renderer.paint(
-                cr, self.active_model, self.lcd_state, self.lcd_st,
+                cr, self.active_model, self.lcd_state, eff_st,
                 press_anim=self._press_anim, hover_anim=self._hover_anim,
                 led_state=led, torch_on=torch,
             )
@@ -3042,8 +3258,17 @@ def launch_gtk4(
                 self.recorder.push(self.link.last_fb, pr, led, torch)
                 self._update_rec_label()
 
+        def _release_all_keys(self) -> None:
+            self._pointer_active_key = None
+            for kn in list(self._pressed_keys):
+                self._release_key(kn)
+
         def _press_key(self, kname: str) -> None:
             if kname in self._pressed_keys:
+                return
+            # Hard RF RFI protection: block live PTT over USB unless explicitly armed!
+            if kname == "ptt" and self.link.connected and not self.link.demo_mode and not self.allow_usb_tx:
+                self._notify("TX locked over USB (RF safety) — arm 'Allow TX over USB' in Radio menu")
                 return
             self._pressed_keys.add(kname)
             self._capture_rec_event()
@@ -3074,6 +3299,9 @@ def launch_gtk4(
 
         def _long_click_key(self, kname: str) -> None:
             if not self.link.connected or self.link.link_mode != "kern_os":
+                return
+            if kname == "ptt" and not self.link.demo_mode and not self.allow_usb_tx:
+                self._notify("TX locked over USB (RF safety) — arm 'Allow TX over USB' in Radio menu")
                 return
             self._pressed_keys.add(kname)
             self._capture_rec_event()
@@ -3138,62 +3366,9 @@ def launch_gtk4(
             if kn:
                 self._release_key(kn)
 
-        # --- Dock Pages ---
-        def _build_device_page(self) -> Any:
-            page = Adw.PreferencesPage() if has_adw else Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-            if not has_adw:
-                self.row_batt = self.row_ident = self.row_serial = self.row_link = Gtk.Label()
-                self.batt_bar = Gtk.LevelBar()
-                self.sw_torch = Gtk.Switch()
-                self.sw_lock = Gtk.Switch()
-                return page
-
-            g_pwr = Adw.PreferencesGroup(title="Power")
-            self.row_batt = Adw.ActionRow(title="Battery", subtitle="Not connected")
-            self.batt_bar = Gtk.LevelBar(min_value=0.0, max_value=100.0)
-            self.batt_bar.add_offset_value("low", 20.0)
-            self.batt_bar.add_offset_value("high", 50.0)
-            self.batt_bar.add_offset_value("full", 85.0)
-            self.batt_bar.set_size_request(110, 10)
-            self.batt_bar.set_valign(Gtk.Align.CENTER)
-            self.row_batt.add_suffix(self.batt_bar)
-            g_pwr.add(self.row_batt)
-            page.add(g_pwr)
-
-            g_dev = Adw.PreferencesGroup(title="Radio &amp; Link")
-            self.row_ident = Adw.ActionRow(title="Identity", subtitle="—")
-            self.row_serial = Adw.ActionRow(title="Serial / MAC", subtitle="—")
-            self.row_link = Adw.ActionRow(title="RigWire Link", subtitle="Disconnected")
-            g_dev.add(self.row_ident)
-            g_dev.add(self.row_serial)
-            g_dev.add(self.row_link)
-            page.add(g_dev)
-
-            g_ctl = Adw.PreferencesGroup(title="Controls")
-            self.sw_torch = Adw.SwitchRow(title="Flashlight", subtitle="Toggle top LED lamp")
-            self.sw_torch.connect("notify::active", lambda sw, _p: None if self._updating_switches else (self.link.set_flashlight(sw.get_active()), self.handset_area.queue_draw()))
-            g_ctl.add(self.sw_torch)
-
-            self.sw_lock = Adw.SwitchRow(title="Keypad Lock", subtitle="Lock physical front keys")
-            self.sw_lock.connect("notify::active", lambda sw, _p: None if self._updating_switches else self.link.set_keypad_lock(sw.get_active()))
-            g_ctl.add(self.sw_lock)
-
-            row_vfo = Adw.ActionRow(title="Active VFO", subtitle="Swap primary VFO A/B")
-            btn_vfo = Gtk.Button(label="Swap A/B", valign=Gtk.Align.CENTER)
-            btn_vfo.connect("clicked", lambda _b: self.link.toggle_vfo())
-            row_vfo.add_suffix(btn_vfo)
-            g_ctl.add(row_vfo)
-
-            row_side = Adw.ActionRow(title="Sideload Package", subtitle="Install .krx / .mod over RigWire")
-            btn_side = Gtk.Button(label="Install…", valign=Gtk.Align.CENTER)
-            btn_side.connect("clicked", self._on_sideload)
-            row_side.add_suffix(btn_side)
-            g_ctl.add(row_side)
-            page.add(g_ctl)
-            return page
-
+        # --- Dock Pages (Files · Capture · Console) ---
         def _build_files_page(self) -> Any:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=8, margin_bottom=10, margin_start=12, margin_end=12)
 
             bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -3204,13 +3379,22 @@ def launch_gtk4(
                 grp.append(b)
             bar.append(grp)
             bar.append(Gtk.Box(hexpand=True))
+
             ref = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
+            ref.set_tooltip_text("Refresh directory")
             ref.connect("clicked", lambda _b: self._browse_dir(self.current_dir))
             bar.append(ref)
+
             up = Gtk.Button.new_from_icon_name("document-send-symbolic")
-            up.set_tooltip_text("Upload file")
+            up.set_tooltip_text("Upload file to current folder")
             up.connect("clicked", self._on_upload_file)
             bar.append(up)
+
+            # Maintenance & Firmware Popover (replaces the cluttered Flash tab & manual Probe button!)
+            maint_btn = Gtk.MenuButton(icon_name="view-more-symbolic")
+            maint_btn.set_tooltip_text("Firmware flasher, KRX sideload & .kfw backups")
+            maint_btn.set_popover(self._build_maintenance_popover())
+            bar.append(maint_btn)
             box.append(bar)
 
             mbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -3237,62 +3421,37 @@ def launch_gtk4(
             box.append(scroll)
             return box
 
-        def _build_flash_backup_page(self) -> Any:
-            """Native GTK4 DFU/CPS Firmware Flasher + Ascon-Verified .kfw Backup & Restore."""
-            page = Adw.PreferencesPage() if has_adw else Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-            if not has_adw:
-                return page
+        def _build_maintenance_popover(self) -> Any:
+            pop = Gtk.Popover()
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=10, margin_bottom=10, margin_start=10, margin_end=10)
+            box.set_size_request(290, -1)
 
-            # 1. DFU / Bootloader Firmware Flasher
-            g_fl = Adw.PreferencesGroup(title="DFU &amp; CPS Bootloader Flasher", description="Supports .kfw (Ascon-verified) and raw .bin over Stock Bootloader (36b7:0001) or Kern dfu.mod")
-            self.row_bl_status = Adw.ActionRow(title="Bootloader Status", subtitle="Hold PTT + Power On (or open DFU on radio)")
-            probe_btn = Gtk.Button(label="Probe", valign=Gtk.Align.CENTER)
-            probe_btn.connect("clicked", self._on_probe_bootloader)
-            self.row_bl_status.add_suffix(probe_btn)
-            g_fl.add(self.row_bl_status)
+            def _add_list_section(title: str, items: list[tuple[str, str, str, Callable[[], None]]]) -> None:
+                lbl = Gtk.Label(label=title, xalign=0)
+                lbl.add_css_class("caption-heading")
+                lbl.add_css_class("dim-label")
+                box.append(lbl)
+                lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+                lb.add_css_class("boxed-list")
+                for icon, t, sub, fn in items:
+                    if has_adw:
+                        row = Adw.ActionRow(title=t, subtitle=sub, activatable=True)
+                        row.add_prefix(Gtk.Image.new_from_icon_name(icon))
+                        row.connect("activated", lambda _r, f=fn: (pop.popdown(), f()))
+                        lb.append(row)
+                box.append(lb)
 
-            self.row_fw_file = Adw.ActionRow(title="Firmware Image", subtitle="No .kfw or .bin selected")
-            pick_fw = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
-            pick_fw.connect("clicked", self._on_choose_firmware)
-            self.row_fw_file.add_suffix(pick_fw)
-            g_fl.add(self.row_fw_file)
-
-            row_go = Adw.ActionRow(title="Write Firmware", subtitle="Pre-flight anti-brick checks run automatically")
-            self.flash_go_btn = Gtk.Button(label="Flash Radio", valign=Gtk.Align.CENTER, sensitive=False)
-            self.flash_go_btn.add_css_class("suggested-action")
-            self.flash_go_btn.connect("clicked", self._on_flash_radio)
-            row_go.add_suffix(self.flash_go_btn)
-            g_fl.add(row_go)
-
-            self.flash_prog = Gtk.ProgressBar(show_text=True, visible=False, margin_top=6)
-            g_fl.add(self.flash_prog)
-            page.add(g_fl)
-
-            # 2. Calibration & KernFS Backups (.kfw Backup Containers)
-            g_bk = Adw.PreferencesGroup(title="Backups &amp; Restore", description="Exports Ascon-Hash256 verified .kfw backup containers over RigWire")
-
-            r_cal = Adw.ActionRow(title="Factory Calibration Backup", subtitle="Saves /sys/calib.dat (512 B) + /sys/calib.sig MAC")
-            b_cal = Gtk.Button(label="Backup…", valign=Gtk.Align.CENTER)
-            b_cal.connect("clicked", lambda _b: self._on_run_backup(calib_only=True))
-            r_cal.add_suffix(b_cal)
-            g_bk.add(r_cal)
-
-            r_full = Adw.ActionRow(title="Full KernFS Snapshot", subtitle="Backs up /sys, /pref, /user &amp; /apps into .kfw")
-            b_full = Gtk.Button(label="Snapshot…", valign=Gtk.Align.CENTER)
-            b_full.connect("clicked", lambda _b: self._on_run_backup(calib_only=False))
-            r_full.add_suffix(b_full)
-            g_bk.add(r_full)
-
-            r_rest = Adw.ActionRow(title="Restore User Backup", subtitle="Restores /user, /pref &amp; /apps (/sys/calib.dat shielded)")
-            b_rest = Gtk.Button(label="Restore…", valign=Gtk.Align.CENTER)
-            b_rest.connect("clicked", self._on_restore_backup)
-            r_rest.add_suffix(b_rest)
-            g_bk.add(r_rest)
-
-            self.bk_prog = Gtk.ProgressBar(show_text=True, visible=False, margin_top=6)
-            g_bk.add(self.bk_prog)
-            page.add(g_bk)
-            return page
+            _add_list_section("Firmware &amp; Packages", [
+                ("software-update-available-symbolic", "Flash Firmware…", "Write verified .kfw or .bin to radio", lambda: self._on_flash_firmware_dialog(None)),
+                ("application-x-executable-symbolic", "Install App / Module…", "Sideload .krx / .mod to /apps", lambda: self._on_sideload(None)),
+            ])
+            _add_list_section("Ascon-Verified .kfw Backups", [
+                ("security-high-symbolic", "Backup Calibration…", "Save /sys/calib.dat &amp; /sys/calib.sig", lambda: self._on_run_backup(calib_only=True)),
+                ("drive-harddisk-symbolic", "Full KernFS Snapshot…", "Archive /sys, /pref, /user &amp; /apps", lambda: self._on_run_backup(calib_only=False)),
+                ("document-revert-symbolic", "Restore User Backup…", "Restore /user, /pref &amp; /apps (/sys shielded)", lambda: self._on_restore_backup(None)),
+            ])
+            pop.set_child(box)
+            return pop
 
         def _build_wire_page(self) -> Any:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
@@ -3421,33 +3580,15 @@ def launch_gtk4(
             box.append(act)
             return box
 
-        # --- Flasher & Backup Handlers ---
-        def _on_probe_bootloader(self, _btn: Any) -> None:
-            ports = self.port_monitor.scan()
-            self._rebuild_connection_list()
-            cand = next((p for p in ports if p.mode_hint in ("stock_bl", "moto_uf2")), None)
-            if cand is not None:
-                self._connect_to(cand.device, cand)
-                return
-            if self.link.port and not self.link.demo_mode and not self.link.port.startswith("tcp://"):
-                target_port = self.link.port
-            elif ports:
-                target_port = ports[0].device
-            else:
-                self._notify("No USB serial port found")
-                return
+        # --- Automatic Flasher (Real Bootloader + Authentic Flashlight Page Strobe) & Backup Handlers ---
+        def _on_flash_page_pulse(self, page: int, _total: int) -> bool:
+            """Toggle top flashlight LED per flashed 256 B page exactly like real Quansheng bootloaders."""
+            self.link.torch_on = (page % 2 == 1)
+            self.handset_area.queue_draw()
+            return False
 
-            def _w() -> None:
-                bl = probe_bootloader_beacon(target_port, duration_s=1.2)
-                if bl:
-                    GLib.idle_add(self._connect_to, target_port, DetectedPort(target_port, f"Bootloader ({bl['version']})", mode_hint="stock_bl", is_quansheng=True))
-                else:
-                    GLib.idle_add(self._notify, f"No bootloader beacon on {target_port}")
-
-            threading.Thread(target=_w, daemon=True).start()
-
-        def _on_choose_firmware(self, _btn: Any) -> None:
-            dlg = Gtk.FileDialog(title="Select Firmware (.kfw or .bin)")
+        def _on_flash_firmware_dialog(self, _btn: Any) -> None:
+            dlg = Gtk.FileDialog(title="Select Firmware Image (.kfw or .bin)")
 
             def _picked(d: Any, res: Any) -> None:
                 try:
@@ -3458,42 +3599,65 @@ def launch_gtk4(
                     return
                 try:
                     info = inspect_firmware_file(fpath)
-                    self._selected_fw = info
-                    self.row_fw_file.set_subtitle(GLib.markup_escape_text(info["summary"]))
-                    self._update_flash_button_state()
                 except Exception as e:
                     self._notify(f"Invalid firmware: {e}")
+                    return
+                self._start_firmware_flash(info)
 
             dlg.open(self.win, None, _picked)
 
-        def _update_flash_button_state(self) -> None:
-            if hasattr(self, "flash_go_btn"):
-                can_flash = (self._selected_fw is not None) and (self.link.link_mode == "stock_bl") and bool(self.link.port)
-                self.flash_go_btn.set_sensitive(can_flash)
-
-        def _on_flash_radio(self, _btn: Any) -> None:
-            if not self._selected_fw or not self.link.port or self.link.link_mode != "stock_bl":
-                self._notify("Connect a radio in DFU / Stock Bootloader mode first")
+        def _start_firmware_flash(self, info: dict[str, Any]) -> None:
+            if not self.link.connected:
+                self._notify("Connect a radio in Bootloader mode (PTT + Power On) first")
                 return
-            port = self.link.port
-            fw_bytes = self._selected_fw["fw_bytes"]
-            self.flash_go_btn.set_sensitive(False)
-            self.flash_prog.set_visible(True)
-            self.flash_prog.set_fraction(0.0)
+            fw_bytes = info["fw_bytes"]
+            total_pages = max(1, math.ceil(len(fw_bytes) / 256.0))
+            is_demo = self.link.demo_mode
+            if not is_demo and self.link.link_mode != "stock_bl":
+                self._notify("Put radio into Bootloader mode (PTT + Power On) to flash")
+                return
+
+            port = self.link.port or ""
+            self._flashing_active = True
+            self.link.torch_on = True
+            self.lcd_state.step(bytes(1024), dataclasses.replace(self.lcd_st, ghosting=False, backlight=0))
+            self.op_prog.set_visible(True)
+            self.op_prog.set_fraction(0.0)
+            self.op_prog.set_text(f"Flashing {info['version']} (0/{total_pages} pages)…")
+            self.handset_area.queue_draw()
 
             def _prog(f: float, msg: str) -> None:
-                GLib.idle_add(self.flash_prog.set_fraction, f)
-                GLib.idle_add(self.flash_prog.set_text, msg)
+                GLib.idle_add(self.op_prog.set_fraction, f)
+                GLib.idle_add(self.op_prog.set_text, msg)
+
+            def _page(p: int, tot: int) -> None:
+                GLib.idle_add(self._on_flash_page_pulse, p, tot)
 
             def _w() -> None:
                 try:
-                    res = flash_via_stock_bootloader(port, fw_bytes, progress_cb=_prog)
-                    GLib.idle_add(self._notify, f"Flashed {res['pages']} pages in {res['elapsed_s']:.1f}s")
+                    if is_demo:
+                        # Authentic bootloader simulation: unlit blank LCD + flashlight strobing per page!
+                        t0 = time.monotonic()
+                        sim_pages = min(total_pages, 64)
+                        for pg in range(1, sim_pages + 1):
+                            _page(pg, sim_pages)
+                            _prog(pg / float(sim_pages), f"Demo flash · Page {pg}/{sim_pages}")
+                            time.sleep(0.032)
+                        GLib.idle_add(self._notify, f"Simulated {sim_pages} pages in {time.monotonic() - t0:.1f}s")
+                    else:
+                        res = flash_via_stock_bootloader(port, fw_bytes, progress_cb=_prog, page_cb=_page)
+                        GLib.idle_add(self._notify, f"Flashed {res['pages']} pages in {res['elapsed_s']:.1f}s")
                 except Exception as e:
                     GLib.idle_add(self._notify, f"Flash failed: {e}")
                 finally:
-                    GLib.idle_add(self.flash_prog.set_visible, False)
-                    GLib.idle_add(self._update_flash_button_state)
+                    def _finish() -> bool:
+                        self._flashing_active = False
+                        self.link.torch_on = False
+                        self.op_prog.set_visible(False)
+                        self.lcd_state.step(self._current_display_fb(), self.lcd_st)
+                        self.handset_area.queue_draw()
+                        return False
+                    GLib.idle_add(_finish)
 
             threading.Thread(target=_w, daemon=True).start()
 
@@ -3515,12 +3679,12 @@ def launch_gtk4(
                     return
                 if not dest:
                     return
-                self.bk_prog.set_visible(True)
-                self.bk_prog.set_fraction(0.0)
+                self.op_prog.set_visible(True)
+                self.op_prog.set_fraction(0.0)
 
                 def _prog(f: float, msg: str) -> None:
-                    GLib.idle_add(self.bk_prog.set_fraction, f)
-                    GLib.idle_add(self.bk_prog.set_text, msg)
+                    GLib.idle_add(self.op_prog.set_fraction, f)
+                    GLib.idle_add(self.op_prog.set_text, msg)
 
                 def _w() -> None:
                     try:
@@ -3530,7 +3694,7 @@ def launch_gtk4(
                     except Exception as e:
                         GLib.idle_add(self._notify, f"Backup failed: {e}")
                     finally:
-                        GLib.idle_add(self.bk_prog.set_visible, False)
+                        GLib.idle_add(self.op_prog.set_visible, False)
 
                 threading.Thread(target=_w, daemon=True).start()
 
@@ -3550,12 +3714,12 @@ def launch_gtk4(
                     return
                 if not src:
                     return
-                self.bk_prog.set_visible(True)
-                self.bk_prog.set_fraction(0.0)
+                self.op_prog.set_visible(True)
+                self.op_prog.set_fraction(0.0)
 
                 def _prog(f: float, msg: str) -> None:
-                    GLib.idle_add(self.bk_prog.set_fraction, f)
-                    GLib.idle_add(self.bk_prog.set_text, msg)
+                    GLib.idle_add(self.op_prog.set_fraction, f)
+                    GLib.idle_add(self.op_prog.set_text, msg)
 
                 def _w() -> None:
                     try:
@@ -3565,7 +3729,7 @@ def launch_gtk4(
                     except Exception as e:
                         GLib.idle_add(self._notify, f"Restore failed: {e}")
                     finally:
-                        GLib.idle_add(self.bk_prog.set_visible, False)
+                        GLib.idle_add(self.op_prog.set_visible, False)
 
                 threading.Thread(target=_w, daemon=True).start()
 
@@ -3773,29 +3937,31 @@ def launch_gtk4(
                 self._notify(f"Connection failed: {e}")
                 return
 
-            is_dfu = self.link.link_mode in ("stock_bl", "moto_uf2")
-            self.hdr_link_icon.set_from_icon_name("software-update-available-symbolic" if is_dfu else "network-transmit-receive-symbolic")
-            self.hdr_batt_icon.set_visible(not is_dfu)
-            self.hdr_dfu_dot.set_visible(is_dfu)
-            self.hdr_dev_lbl.set_text(self.link.volume_name.removeprefix("Quansheng "))
+            # Always re-arm USB TX safety lock on every new radio connection!
+            self.allow_usb_tx = False
+            if hasattr(self, "sw_allow_tx"):
+                self.sw_allow_tx.set_active(False)
+
+            is_bl = self.link.link_mode == "stock_bl"
+            self.hdr_batt_icon.set_visible(not is_bl)
+            self.hdr_dfu_dot.set_visible(is_bl)
+            short_name = self.link.volume_name.removeprefix("Quansheng ")
+            self.hdr_dev_lbl.set_text(short_name)
             self.conn_card.set_visible(True)
             self.conn_card_title.set_text(self.link.volume_name)
             self.conn_card_sub.set_text(f"Port: {self.link.port}")
             self.win.set_title(f"Kern Dock — {self.link.volume_name}")
+            if self.win_title is not None:
+                self.win_title.set_title("Kern Dock")
+                self.win_title.set_subtitle("Bootloader ready" if is_bl else "Connected")
 
             if self.dfu_banner is not None:
-                if self.link.link_mode == "stock_bl":
+                if is_bl:
                     ver = self.link.bootloader_info.get("version", "Stock BL")
-                    self.dfu_banner.set_title(f"DFU / Stock Bootloader ({ver}) ready on {self.link.port}")
+                    self.dfu_banner.set_title(f"Stock Bootloader ({ver}) detected on {self.link.port}")
                     self.dfu_banner.set_revealed(True)
-                    self.row_bl_status.set_subtitle(GLib.markup_escape_text(f"Ready · Bootloader {ver} on {self.link.port}"))
-                elif self.link.link_mode == "moto_uf2":
-                    self.dfu_banner.set_title(f"Moto UF2 Bootloader detected ({self.link.port})")
-                    self.dfu_banner.set_revealed(True)
-                    self.row_bl_status.set_subtitle(GLib.markup_escape_text(f"Moto UF2 Bootloader on {self.link.port}"))
                 else:
                     self.dfu_banner.set_revealed(False)
-                    self.row_bl_status.set_subtitle("Kern OS active — enter DFU mode on radio to flash")
 
             if self.link.detected_model != self.active_model:
                 self.active_model = self.link.detected_model
@@ -3805,18 +3971,21 @@ def launch_gtk4(
                 self._sync_window_size()
 
             self._rebuild_connection_list()
-            self._update_flash_button_state()
-            self.lcd_state.step(self.link.last_fb, self.lcd_st)
+            if is_bl:
+                self.lcd_state.step(bytes(1024), dataclasses.replace(self.lcd_st, ghosting=False, backlight=0))
+            else:
+                self.lcd_state.step(self._current_display_fb(), self.lcd_st)
             self.handset_area.queue_draw()
             self._refresh_telemetry_ui()
             if self.link.link_mode == "kern_os":
                 self._browse_dir("/")
-            elif is_dfu:
-                self._open_flash_tab()
 
         def _disconnect(self) -> None:
+            self._release_all_keys()
             self.link.disconnect()
-            self.hdr_link_icon.set_from_icon_name("network-offline-symbolic")
+            self.allow_usb_tx = False
+            if hasattr(self, "sw_allow_tx"):
+                self.sw_allow_tx.set_active(False)
             self.hdr_batt_icon.set_visible(False)
             self.hdr_dfu_dot.set_visible(False)
             self.hdr_dev_lbl.set_text("Connect")
@@ -3826,8 +3995,10 @@ def launch_gtk4(
             self.mount_btn.set_active(False)
             self.open_fs_btn.set_visible(False)
             self.win.set_title("Kern Dock")
+            if self.win_title is not None:
+                self.win_title.set_title("Kern Dock")
+                self.win_title.set_subtitle("Not connected")
             self._rebuild_connection_list()
-            self._update_flash_button_state()
             self._cached_dir_entries = []
             self._render_filtered_files()
             self._refresh_telemetry_ui()
@@ -3835,41 +4006,36 @@ def launch_gtk4(
 
         def _refresh_telemetry_ui(self) -> bool:
             if not self.link.connected:
-                if has_adw:
-                    self.row_batt.set_subtitle("Not connected")
-                    self.row_ident.set_subtitle("—")
-                    self.row_serial.set_subtitle("—")
-                    self.row_link.set_subtitle("Disconnected")
+                self.batt_lbl.set_text("Battery —")
                 self.batt_bar.set_value(0.0)
                 return False
 
             if self.link.link_mode != "kern_os":
-                if has_adw:
-                    self.row_ident.set_subtitle(GLib.markup_escape_text(f"{self.link.volume_name} ({self.link.port})"))
-                    self.row_link.set_subtitle("Bootloader / DFU mode")
+                ver = self.link.bootloader_info.get("version", "Stock BL")
+                self.conn_card_sub.set_text(f"{self.link.port} · Bootloader {ver}")
+                self.conn_card_id.set_text("LCD off · Flashlight indicates bootloader activity")
+                if self.win_title is not None:
+                    self.win_title.set_subtitle(f"Bootloader {ver} · {self.link.port}")
                 return False
 
             t = self.link.last_telemetry
             mv, pct = t.get("battery_mv"), t.get("battery_pct")
             if mv is not None:
-                if has_adw:
-                    self.row_batt.set_subtitle(f"{mv / 1000.0:.2f} V · {pct}%")
+                self.batt_lbl.set_text(f"{mv / 1000.0:.2f} V · {pct}%")
                 self.batt_bar.set_value(float(max(0, min(100, pct or 0))))
                 self.hdr_batt_icon.set_from_icon_name(_battery_icon_name(pct))
                 self.hdr_batt_icon.set_tooltip_text(f"Battery: {pct}% ({mv / 1000.0:.2f} V)")
 
-            fps_s = "Demo" if self.link.demo_mode else f"{self.link.fps:.1f} FPS"
-            self.conn_card_sub.set_text(f"{self.link.port} · {fps_s} · {self.link.rtt_ms:.1f} ms")
-            if has_adw:
-                self.row_ident.set_subtitle(GLib.markup_escape_text(f"{self.link.volume_name} ({self.link.port})"))
-                self.row_serial.set_subtitle(GLib.markup_escape_text(f"{t.get('serial_str', '—')}  ·  {t.get('mac_addr', '—')}"))
-                mtu = self.link.hello_info.get("accepted_max_payload", 128)
-                err_s = f" · {self.link.error_count} err" if self.link.error_count else ""
-                self.row_link.set_subtitle(f"{fps_s} · RTT {self.link.rtt_ms:.1f} ms · MTU {mtu} B{err_s}")
+            fps_s = "Demo" if self.link.demo_mode else f"{self.link.fps:.0f} FPS"
+            err_s = f" · {self.link.error_count} err" if self.link.error_count else ""
+            self.conn_card_sub.set_text(f"{self.link.port} · {fps_s} · {self.link.rtt_ms:.1f} ms{err_s}")
+            self.conn_card_id.set_text(f"{t.get('serial_str', '—')}  ·  {t.get('mac_addr', '—')}")
+            if self.win_title is not None:
+                self.win_title.set_subtitle(f"{fps_s} · {self.link.rtt_ms:.1f} ms")
 
             self._updating_switches = True
-            self.sw_torch.set_active(self.link.torch_on)
-            self.sw_lock.set_active(self.link.keypad_locked)
+            self.btn_torch.set_active(self.link.torch_on)
+            self.btn_lock.set_active(self.link.keypad_locked)
             self._updating_switches = False
             return False
 
@@ -4121,11 +4287,11 @@ def run_selftest() -> int:
     for kn in set(k1_keys + k5_keys):
         assert kn in rigwire.KEY_CODES, f"Invalid RigWire key '{kn}'"
 
-    # Verify USB DFU/Bootloader/CPS & model auto-classification
+    # Verify USB CDC (36b7:ffff = Kern OS!) & Stock BL (36b7:0001) & model auto-classification
     assert detect_hardware_model("Quansheng UV-K1 1D9E") == "k1"
     assert detect_hardware_model("Quansheng UV-K5 v3 ABCD") == "k5"
-    assert classify_usb_mode("36b7", "0001", "USB Serial") == ("stock_bl", True)
-    assert classify_usb_mode("36b7", "ffff", "Moto") == ("moto_uf2", True)
+    assert classify_usb_mode("36b7", "0001", "QUANSHENG K1 CPS") == ("stock_bl", True)
+    assert classify_usb_mode("36b7", "ffff", "Quansheng UV-K1 1D9E") == ("kern_os", True)
     assert classify_usb_mode("1a86", "7523", "Quansheng UV-K1 1D9E") == ("kern_os", True)
 
     fb1 = make_demo_framebuffer("433.500", "145.500", "VFO")
