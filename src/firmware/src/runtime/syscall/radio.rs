@@ -257,11 +257,12 @@ unsafe fn dispatch_rf_vfo(
             usize::from(!coord.request_resource_lock(token, res, vfo, a2 as u16, false))
         }
         rf_vfo::MONITOR => {
-            if a1 >= 2 {
-                coord.toggle_monitor(radio);
+            let target = if a1 >= 2 {
+                !coord.monitor_active
             } else {
-                coord.set_monitor(radio, a1 != 0);
-            }
+                a1 != 0
+            };
+            coord.set_monitor(radio, target);
             usize::from(coord.monitor_active)
         }
         _ => 1,

@@ -278,7 +278,7 @@ impl BatteryDriver {
             } else {
                 2227
             };
-            let eff_adc = ((ocv as u32 * cal) / 7600) as u16;
+            let eff_adc = utils::math::div7600_u32(ocv as u32 * cal) as u16;
             calib::calculate_battery_percentage(eff_adc, &self.calib_curve)
         } else {
             mv_to_percentage(ocv, self.battery_type.get())

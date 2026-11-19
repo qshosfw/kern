@@ -252,22 +252,22 @@ pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunch
 
     utils::static_bytes!(
         static HUMAN_MSGS = b"\
-    App file was not found\non storage.\0\
-    Could not read app file\nfrom storage.\0\
-    App file is invalid or\ncorrupted.\0\
-    App checksum failed.\nPlease reinstall it.\0\
-    App info is missing.\nPlease reinstall it.\0\
-    App has no runnable code.\0\
-    Permission required to\nrun this app.\0\
-    Not enough free memory\nto open this app.\0\
-    Not enough free stack\nto open this app.\0\
-    Could not load app into\nmemory.\0\
-    App requires a newer\nfirmware version.\0\
-    App is too large for\navailable memory.\0\
-    App could not be started.\0\
-    App start point is\ninvalid.\0\
-    App file is incomplete.\nPlease reinstall it.\0\
-    App format is not\nsupported on this radio.\0";
+    App not found.\0\
+    Failed to read app.\0\
+    Invalid app file.\0\
+    Checksum failed.\nReinstall app.\0\
+    Missing app info.\nReinstall app.\0\
+    No runnable code.\0\
+    Permission denied.\0\
+    Not enough RAM.\0\
+    Not enough stack.\0\
+    App load failed.\0\
+    Update firmware.\0\
+    App too large.\0\
+    Start failed.\0\
+    Invalid entry point.\0\
+    Incomplete file.\nReinstall app.\0\
+    Unsupported format.\0";
     );
 
     let msg = match err {

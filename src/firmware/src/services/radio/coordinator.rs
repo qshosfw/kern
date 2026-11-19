@@ -768,6 +768,7 @@ impl RadioCoordinator {
     ///
     /// When enabled, unmutes receiver audio regardless of carrier/subaudible thresholds,
     /// illuminates the green RX status LED, and pauses Dual Watch hopping on the monitored channel.
+    #[inline(never)]
     pub fn set_monitor<R: RadioService>(&mut self, radio: &mut R, enabled: bool) {
         if self.is_transmitting && enabled {
             return;

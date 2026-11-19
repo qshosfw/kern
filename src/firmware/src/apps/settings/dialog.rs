@@ -106,10 +106,10 @@ struct DestructiveConfirm {
 
 utils::static_bytes!(
     static DESTRUCTIVE_STRS = b"\
-Format Storage?\0Erases user files & settings.\nCalibration is kept.\0\
-Erase All Data?\0Erases all files, settings,\nand radio calibration!\0\
-Reset Settings?\0Restores default settings.\nChannels & calib are kept.\0\
-Restart Radio?\0Saves settings and restarts\nthe radio.\0";
+Format Storage?\0Erases user files.\nCalib is kept.\0\
+Erase All Data?\0Erases all files,\nsettings & calib!\0\
+Reset Settings?\0Restores defaults.\nChannels/calib kept.\0\
+Restart Radio?\0Saves settings and\nrestarts radio.\0";
 );
 
 #[cfg(feature = "filesystem")]
