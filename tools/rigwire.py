@@ -586,8 +586,7 @@ class RigWireClient:
             if chunk:
                 rx.extend(chunk)
 
-    def send_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
-        t0 = time.monotonic()
+    def _encode_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
         is_hello = (service == SERVICE_CORE and opcode == OP_CORE_HELLO)
         session = 0 if is_hello else self.session_id
         # Firmware WireSession only advances expected_sequence for non-core services.
@@ -609,10 +608,12 @@ class RigWireClient:
         raw = header + payload
         crc = crc16_ccitt(raw)
         raw += struct.pack("<H", crc)
+        return b"\x00" + cobs_encode(raw) + b"\x00"
 
-        frame = b"\x00" + cobs_encode(raw) + b"\x00"
+    def send_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
+        t0 = time.monotonic()
+        frame = self._encode_record(service, opcode, payload)
         self.ser.write(frame)
-
         resp = self.read_response(expected_service=service, expected_opcode=opcode)
         self.last_rtt_ms = (time.monotonic() - t0) * 1000.0
         return resp
@@ -1040,20 +1041,41 @@ class RigWireClient:
         payload = bytes([key_code, key_state])
         self.handle_set(DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, FACET_INPUT_KEY, payload)
 
-    def screencap(self, on_between_chunks=None) -> bytes:
-        """Stream complete 1024-byte framebuffer (128x64 bits) from primary display surface."""
+    def screencap(self, on_between_chunks=None, pipeline: int = 2) -> bytes:
+        """
+        Stream complete 1024-byte framebuffer (128x64 bits) from primary display surface.
+        Uses bounded pipelining (2 x 30B requests = 60B <= 64B USB FS packet & 128B CDC RX ring)
+        for ~2x higher refresh rate while still yielding between bursts for low-latency key injection.
+        """
         buffer = bytearray(1024)
-        offset = 0
         chunk_len = 100
-        while offset < 1024:
+        offsets = list(range(0, 1024, chunk_len))
+        win = max(1, min(2, int(pipeline)))
+        idx = 0
+        total = len(offsets)
+        while idx < total:
             if on_between_chunks is not None:
                 on_between_chunks()
-            req_len = min(chunk_len, 1024 - offset)
-            chunk = self.handle_stream(DOMAIN_UI, UI_INSTANCE_PRIMARY, FACET_UI_SURFACE, offset, req_len)
-            if not chunk:
-                break
-            buffer[offset:offset + len(chunk)] = chunk
-            offset += len(chunk)
+            batch_end = min(total, idx + win)
+            t0 = time.monotonic()
+            frames = bytearray()
+            for j in range(idx, batch_end):
+                off = offsets[j]
+                req_len = min(chunk_len, 1024 - off)
+                payload = struct.pack("<BBHIH", DOMAIN_UI, UI_INSTANCE_PRIMARY, FACET_UI_SURFACE, off, req_len)
+                frames.extend(self._encode_record(SERVICE_CONTROL, OP_HANDLE_STREAM, payload))
+            self.ser.write(bytes(frames))
+            for _ in range(idx, batch_end):
+                resp = self.read_response(expected_service=SERVICE_CONTROL, expected_opcode=OP_HANDLE_STREAM)
+                if len(resp) < 10:
+                    raise ValueError(f"Short HANDLE_STREAM response: {len(resp)} bytes")
+                rx_off, rx_len = struct.unpack("<IH", resp[4:10])
+                chunk = resp[10:10 + rx_len]
+                if rx_off < 1024 and chunk:
+                    end_off = min(1024, rx_off + len(chunk))
+                    buffer[rx_off:end_off] = chunk[:end_off - rx_off]
+            self.last_rtt_ms = ((time.monotonic() - t0) * 1000.0) / max(1, batch_end - idx)
+            idx = batch_end
         return bytes(buffer)
 
     def modal_action(self, action_name: str) -> dict:
