@@ -164,18 +164,103 @@ impl ChannelRecord {
     pub const SIZE: usize = 64;
     pub const STRIDE_SHIFT: u32 = 6; // 1 << 6 == 64 bytes
 
-    // Channel Option Bitflags (Keel Table 3.3)
+    // Channel Option Bitflags (Keel Table 3.3 & Cross-Firmware Parity)
     pub const FLAG_BUSY_LOCKOUT: u16 = 1 << 0;
     pub const FLAG_SCAN_SKIP: u16 = 1 << 1;
     pub const FLAG_REVERSE: u16 = 1 << 2;
     pub const FLAG_PRIORITY_1: u16 = 1 << 3;
     pub const FLAG_PRIORITY_2: u16 = 1 << 4;
     pub const FLAG_TX_INHIBIT: u16 = 1 << 5;
+    /// Busy Channel Lockout only blocks when carrier is present with mismatched subaudible tone.
+    pub const FLAG_TONE_BCLO: u16 = 1 << 6;
     pub const FLAG_PTT_ID_START: u16 = 1 << 7;
     pub const FLAG_PTT_ID_END: u16 = 1 << 8;
     pub const FLAG_TALKAROUND: u16 = 1 << 9;
     pub const FLAG_FAVORITE: u16 = 1 << 10;
+    /// Selective squelch: remain muted until incoming signaling matches `proto_ref` contact/group/topic.
+    pub const FLAG_CALL_MATCH_MUTE: u16 = 1 << 11;
+    /// Lock VFO frequency against accidental encoder tuning.
+    pub const FLAG_FREQ_LOCK: u16 = 1 << 12;
     pub const FLAG_WIDE_FILTER: u16 = 1 << 13;
+    /// Enable front-end LNA max gain boost for weak-signal reception.
+    pub const FLAG_LNA_BOOST: u16 = 1 << 14;
+    /// Enable hands-free VOX transmission on this channel.
+    pub const FLAG_VOX_ENABLE: u16 = 1 << 15;
+
+    // Canonical 16-bit Subaudible Tone Tag Masks
+    pub const SUBAUDIBLE_DCS_FLAG: u16 = 0x8000;
+    pub const SUBAUDIBLE_DCS_INV_FLAG: u16 = 0x4000;
+    pub const SUBAUDIBLE_VALUE_MASK: u16 = 0x3FFF;
+
+    /// Encode a `SubaudibleTone` into the compact 16-bit ORDS-01 `rx_subaudible` / `tx_subaudible` word.
+    #[inline(always)]
+    pub const fn encode_subaudible(tone: kernel::service::radio::SubaudibleTone) -> u16 {
+        match tone {
+            kernel::service::radio::SubaudibleTone::None => 0,
+            kernel::service::radio::SubaudibleTone::Ctcss(deci_hz) => {
+                deci_hz & Self::SUBAUDIBLE_VALUE_MASK
+            }
+            kernel::service::radio::SubaudibleTone::DcsNormal(code) => {
+                Self::SUBAUDIBLE_DCS_FLAG | (code & 0x03FF)
+            }
+            kernel::service::radio::SubaudibleTone::DcsInverted(code) => {
+                Self::SUBAUDIBLE_DCS_FLAG | Self::SUBAUDIBLE_DCS_INV_FLAG | (code & 0x03FF)
+            }
+        }
+    }
+
+    /// Decode a 16-bit ORDS-01 subaudible word back into a `SubaudibleTone`.
+    #[inline(always)]
+    pub const fn decode_subaudible(raw: u16) -> kernel::service::radio::SubaudibleTone {
+        if raw == 0 {
+            kernel::service::radio::SubaudibleTone::None
+        } else if (raw & Self::SUBAUDIBLE_DCS_FLAG) != 0 {
+            let code = raw & 0x03FF;
+            if (raw & Self::SUBAUDIBLE_DCS_INV_FLAG) != 0 {
+                kernel::service::radio::SubaudibleTone::DcsInverted(code)
+            } else {
+                kernel::service::radio::SubaudibleTone::DcsNormal(code)
+            }
+        } else {
+            kernel::service::radio::SubaudibleTone::Ctcss(raw & Self::SUBAUDIBLE_VALUE_MASK)
+        }
+    }
+
+    #[inline(always)]
+    pub const fn rx_subaudible_tone(&self) -> kernel::service::radio::SubaudibleTone {
+        Self::decode_subaudible(self.rx_subaudible)
+    }
+
+    #[inline(always)]
+    pub const fn tx_subaudible_tone(&self) -> kernel::service::radio::SubaudibleTone {
+        Self::decode_subaudible(self.tx_subaudible)
+    }
+
+    #[inline(always)]
+    pub fn set_rx_subaudible_tone(&mut self, tone: kernel::service::radio::SubaudibleTone) {
+        self.rx_subaudible = Self::encode_subaudible(tone);
+    }
+
+    #[inline(always)]
+    pub fn set_tx_subaudible_tone(&mut self, tone: kernel::service::radio::SubaudibleTone) {
+        self.tx_subaudible = Self::encode_subaudible(tone);
+    }
+
+    #[inline(always)]
+    pub const fn in_zone(&self, zone_index: u8) -> bool {
+        zone_index < 16 && (self.zone_mask & (1u16 << zone_index)) != 0
+    }
+
+    #[inline(always)]
+    pub fn set_zone(&mut self, zone_index: u8, member: bool) {
+        if zone_index < 16 {
+            if member {
+                self.zone_mask |= 1u16 << zone_index;
+            } else {
+                self.zone_mask &= !(1u16 << zone_index);
+            }
+        }
+    }
 
     pub const fn empty() -> Self {
         Self {
@@ -307,5 +392,29 @@ impl ChannelRecord {
     #[inline(always)]
     pub fn from_bytes(bytes: &[u8; 64]) -> Self {
         unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernel::service::radio::SubaudibleTone;
+
+    #[test]
+    fn channel_record_subaudible_and_zone_roundtrip() {
+        let mut ch = ChannelRecord::new_repeater(145_700_000, 145_100_000, 0, "R4 LOCAL");
+        ch.set_rx_subaudible_tone(SubaudibleTone::Ctcss(885));
+        ch.set_tx_subaudible_tone(SubaudibleTone::DcsInverted(0o023));
+        ch.set_zone(3, true);
+        ch.record_crc = ch.compute_crc();
+
+        let dec = ChannelRecord::from_bytes(ch.as_bytes());
+        assert_eq!(dec, ch);
+        assert!(dec.is_crc_valid());
+        assert_eq!(dec.rx_subaudible_tone(), SubaudibleTone::Ctcss(885));
+        assert_eq!(dec.tx_subaudible_tone(), SubaudibleTone::DcsInverted(0o023));
+        assert!(dec.in_zone(0));
+        assert!(dec.in_zone(3));
+        assert!(!dec.in_zone(2));
     }
 }

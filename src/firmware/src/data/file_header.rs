@@ -20,10 +20,14 @@ pub enum FileType {
     RleBitmap = 10,
     Log = 11,
     RawData = 12,
+    Zones = 13,
+    ScannerHits = 14,
+    ToneSequence = 15,
+    Calibration = 16,
 }
 
 impl FileType {
-    /// Return the canonical natural file extension for this file type.
+    /// Return the canonical natural file extension for this file type (ORDS-01).
     pub const fn extension(&self) -> &'static str {
         match self {
             FileType::GenericFile => "bin",
@@ -33,12 +37,16 @@ impl FileType {
             FileType::VfoSnapshot => "vfo",
             FileType::BandPlan => "bnd",
             FileType::FmBroadcast => "fm",
-            FileType::Settings => "set",
-            FileType::AppExecutable => "app",
+            FileType::Settings => "cfg",
+            FileType::AppExecutable => "krx",
             FileType::Bitmap => "bmp",
             FileType::RleBitmap => "rle",
             FileType::Log => "log",
             FileType::RawData => "raw",
+            FileType::Zones => "zn",
+            FileType::ScannerHits => "hit",
+            FileType::ToneSequence => "ton",
+            FileType::Calibration => "dat",
         }
     }
 
@@ -52,12 +60,20 @@ impl FileType {
             FileType::VfoSnapshot
         } else if name.ends_with(".bnd") {
             FileType::BandPlan
+        } else if name.ends_with(".zn") {
+            FileType::Zones
+        } else if name.ends_with(".hit") {
+            FileType::ScannerHits
         } else if name.ends_with(".fm") {
             FileType::FmBroadcast
-        } else if name.ends_with(".set") || name.ends_with(".sys") {
+        } else if name.ends_with(".cfg") || name.ends_with(".set") || name.ends_with(".sys") {
             FileType::Settings
-        } else if name.ends_with(".app") || name.ends_with(".krx") {
+        } else if name.ends_with(".krx") || name.ends_with(".app") {
             FileType::AppExecutable
+        } else if name.ends_with(".ton") {
+            FileType::ToneSequence
+        } else if name.ends_with(".dat") || name.ends_with(".sig") {
+            FileType::Calibration
         } else if name.ends_with(".bmp") {
             FileType::Bitmap
         } else if name.ends_with(".rle") {
@@ -86,6 +102,10 @@ impl FileType {
             FileType::Bitmap | FileType::RleBitmap => 'I',
             FileType::Log => 'L',
             FileType::RawData => 'W',
+            FileType::Zones => 'Z',
+            FileType::ScannerHits => 'H',
+            FileType::ToneSequence => 'M',
+            FileType::Calibration => 'K',
         }
     }
 }
@@ -127,40 +147,92 @@ const _: () = {
 impl TableFileHeader {
     pub const SIZE: usize = 16;
 
-    pub const fn new_channels(max_records: u16) -> Self {
+    pub const fn new_table(ident: u32, record_stride: u16, max_records: u16) -> Self {
         Self {
-            ident: TABLE_ID_CHANNELS,
+            ident,
             version: 0x0100,
             record_count: 0,
             max_records,
-            record_stride: 64, // 64 bytes power-of-two aligned
+            record_stride,
             active_bank: 0,
             flags: 0,
             crc16: 0,
         }
     }
 
+    pub const fn new_channels(max_records: u16) -> Self {
+        Self::new_table(TABLE_ID_CHANNELS, 64, max_records)
+    }
+
     pub const fn new_contacts(max_records: u16) -> Self {
-        Self {
-            ident: TABLE_ID_CONTACTS,
-            version: 0x0100,
-            record_count: 0,
-            max_records,
-            record_stride: 32, // 32 bytes power-of-two aligned
-            active_bank: 0,
-            flags: 0,
-            crc16: 0,
+        Self::new_table(TABLE_ID_CONTACTS, 32, max_records)
+    }
+
+    pub const fn new_zones(max_records: u16) -> Self {
+        Self::new_table(TABLE_ID_ZONE, 32, max_records)
+    }
+
+    pub const fn new_bandplans(max_records: u16) -> Self {
+        Self::new_table(TABLE_ID_BANDPLAN, 32, max_records)
+    }
+
+    pub const fn new_hits(max_records: u16) -> Self {
+        Self::new_table(TABLE_ID_HITS, 32, max_records)
+    }
+
+    pub const fn new_fm_stations(max_records: u16) -> Self {
+        Self::new_table(TABLE_ID_FM_STATION, 16, max_records)
+    }
+
+    /// Return the power-of-two shift $N$ such that `record_stride == (1 << N)`.
+    /// Returns `None` if `record_stride` is not a valid ORDS-01 power-of-two stride (`16`, `32`, `64`).
+    #[inline(always)]
+    pub const fn stride_shift(&self) -> Option<u32> {
+        match self.record_stride {
+            16 => Some(4),
+            32 => Some(5),
+            64 => Some(6),
+            _ => None,
+        }
+    }
+
+    /// Compute the exact byte offset `16 + (index << N)` in $O(1)$ without division or multiplication.
+    #[inline(always)]
+    pub const fn record_offset(&self, index: u16) -> Option<usize> {
+        match self.stride_shift() {
+            Some(shift) => Some(Self::SIZE + ((index as usize) << shift)),
+            None => None,
         }
     }
 
     #[inline(always)]
-    pub fn is_valid_channels(&self) -> bool {
+    pub const fn is_valid_channels(&self) -> bool {
         self.ident == TABLE_ID_CHANNELS && self.record_stride == 64
     }
 
     #[inline(always)]
-    pub fn is_valid_contacts(&self) -> bool {
+    pub const fn is_valid_contacts(&self) -> bool {
         self.ident == TABLE_ID_CONTACTS && self.record_stride == 32
+    }
+
+    #[inline(always)]
+    pub const fn is_valid_zones(&self) -> bool {
+        self.ident == TABLE_ID_ZONE && self.record_stride == 32
+    }
+
+    #[inline(always)]
+    pub const fn is_valid_bandplans(&self) -> bool {
+        self.ident == TABLE_ID_BANDPLAN && self.record_stride == 32
+    }
+
+    #[inline(always)]
+    pub const fn is_valid_hits(&self) -> bool {
+        self.ident == TABLE_ID_HITS && self.record_stride == 32
+    }
+
+    #[inline(always)]
+    pub const fn is_valid_fm_stations(&self) -> bool {
+        self.ident == TABLE_ID_FM_STATION && self.record_stride == 16
     }
 
     #[inline(always)]

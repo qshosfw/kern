@@ -11,6 +11,7 @@ pub mod contact_record;
 pub mod cursor;
 pub mod file_header;
 pub mod frame_delta;
+pub mod records;
 
 pub use app_bundle::{
     KRX_IDENT, KrxClass, KrxExecType, KrxPreamble, KrxProfile, SectionExecution, SectionIdentity,
@@ -20,7 +21,7 @@ pub use arena::*;
 pub use channel_record::{
     ChannelExtension, ChannelRecord, ExtensionTag, PowerChannelExt, ScanChannelExt,
 };
-pub use contact_record::ContactRecord;
+pub use contact_record::{AddressScheme, ContactKind, ContactRecord, TransportClass, fnv1a_hash64};
 pub use cursor::{RecordCursor, SliceRecordCursor};
 pub use file_header::{
     FILE_ID_APP_BUNDLE, FILE_ID_APP_LEGACY, FILE_ID_BMP, FILE_ID_KRX, FILE_ID_RLE_BITMAP,
@@ -29,4 +30,8 @@ pub use file_header::{
 };
 pub use frame_delta::{
     FrameDeltaDecoder, FrameDeltaEncoder, FrameDeltaHeader, PageDeltaEngine, RleCompressor,
+};
+pub use records::{
+    BandPlanRecord, FmStationRecord, ScanHitRecord, VfoFileHeader, VfoOperatingMode,
+    VfoSnapshotFile, ZoneRecord,
 };
