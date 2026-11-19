@@ -167,36 +167,66 @@ pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
     }
 }
 
+const PAGE_TITLE_LIST: &[&str] = &[
+    "Settings",
+    "Display",
+    "Audio",
+    "Buttons",
+    "Battery",
+    "Device",
+    #[cfg(feature = "passcode")]
+    "Security",
+    "System",
+    "Tweaks",
+    "Shortcuts",
+    "Battery Info",
+    "Battery Tweaks",
+    #[cfg(feature = "settings_info")]
+    "System Info",
+    #[cfg(feature = "filesystem")]
+    "Storage",
+    "Apps",
+    "Boot Splash",
+    #[cfg(feature = "settings_calib")]
+    "Calibration",
+    #[cfg(feature = "settings_debug")]
+    "Debug",
+    "App Settings",
+];
+
+const _: () = assert!(PAGE_TITLE_LIST.len() == PageId::COUNT);
+
+const PAGE_TITLES_LEN: usize = {
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while i < PAGE_TITLE_LIST.len() {
+        n += PAGE_TITLE_LIST[i].len() + 1;
+        i += 1;
+    }
+    n
+};
+
+static PAGE_TITLES: [u8; PAGE_TITLES_LEN] = {
+    let mut buf = [0u8; PAGE_TITLES_LEN];
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    while i < PAGE_TITLE_LIST.len() {
+        let s = PAGE_TITLE_LIST[i].as_bytes();
+        let mut j = 0usize;
+        while j < s.len() {
+            buf[pos] = s[j];
+            pos += 1;
+            j += 1;
+        }
+        pos += 1;
+        i += 1;
+    }
+    buf
+};
+
 #[inline(never)]
 pub fn page_title(page: PageId) -> &'static str {
-    let bytes: &[u8] = b"\
-Settings\0Display\0Audio\0Buttons\0Battery\0Device\0\
-Security\0System\0Tweaks\0Shortcuts\0Battery Info\0Battery Tweaks\0\
-System Info\0Storage\0Apps\0Boot Splash\0Calibration\0Debug\0\
-App Settings\0";
-    let mut idx = page as u8;
-    #[cfg(not(feature = "passcode"))]
-    if page as u8 >= PageId::System as u8 {
-        idx += 1;
-    }
-    #[cfg(not(feature = "settings_info"))]
-    if page as u8 >= PageId::SystemStorage as u8 {
-        idx += 1;
-    }
-    #[cfg(not(feature = "filesystem"))]
-    if page as u8 >= PageId::Apps as u8 {
-        idx += 1;
-    }
-    #[cfg(not(feature = "settings_calib"))]
-    if page as u8 >= PageId::AppPrefs as u8 {
-        idx += 2;
-    } else if false {
-    }
-    #[cfg(all(feature = "settings_calib", not(feature = "settings_debug")))]
-    if page as u8 >= PageId::AppPrefs as u8 {
-        idx += 1;
-    }
-    utils::format::nth_cstr(bytes, idx)
+    utils::format::nth_cstr(&PAGE_TITLES, page as u8)
 }
 
 #[inline(never)]

@@ -137,6 +137,7 @@ impl SettingsApp {
         self.populate_def_tags(spec, act_ins, len, ctx);
     }
 
+    #[inline(never)]
     fn enter_page(
         &mut self,
         page: PageId,

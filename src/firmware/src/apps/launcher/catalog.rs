@@ -241,10 +241,18 @@ impl PackageCatalog {
             .push_str(&raw_name[..raw_name.len().min(24 - entry.path.len())]);
 
         if is_pkg && size >= KrxPreamble::SIZE {
-            let (hdr_buf, summary_tail) = crate::data::arena::scratch_tail_bytes_mut()
-                .split_at_mut(kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE);
+            const HDR_BYTES: usize = kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE;
+            const DIR_RESERVE: usize = core::mem::size_of::<kernel::proc::abi::KrxDirEntry>() * 8;
+            const SUMMARY_OFF: usize = HDR_BYTES + DIR_RESERVE;
+            const _: () = assert!(
+                SUMMARY_OFF + core::mem::size_of::<kernel::proc::krx::KrxSummary<'static>>()
+                    <= crate::data::arena::TRANSIENT_ARENA_BYTES
+                        - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
+            );
+            let (hdr_buf, tail) =
+                crate::data::arena::scratch_tail_bytes_mut().split_at_mut(HDR_BYTES);
             let summary_slot = unsafe {
-                &mut *(summary_tail.as_mut_ptr()
+                &mut *(tail.as_mut_ptr().add(DIR_RESERVE)
                     as *mut core::mem::MaybeUninit<kernel::proc::krx::KrxSummary<'_>>)
             };
             if let Ok(summary) = crate::runtime::loader::read_krx_summary(

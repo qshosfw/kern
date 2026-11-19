@@ -172,19 +172,13 @@ impl FactoryCertStatus {
     }
 }
 
-#[inline(always)]
-fn is_qs1_tag(w: &[u8]) -> bool {
-    (w[0] == b'1' && w[1] == b'-' && (w[2] | 0x20) == b's' && (w[3] | 0x20) == b'q')
-        || ((w[0] | 0x20) == b'q' && (w[1] | 0x20) == b's' && w[2] == b'-' && w[3] == b'1')
-}
-
 fn find_qs1_tag_end(bytes: &[u8]) -> Option<usize> {
-    if bytes.len() >= 84 && is_qs1_tag(&bytes[80..84]) {
-        return Some(84);
-    }
     let mut i = 0;
     while i + 4 <= bytes.len() {
-        if is_qs1_tag(&bytes[i..i + 4]) {
+        let v = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+        if (v | 0x2020_0000) == u32::from_le_bytes(*b"1-sq")
+            || (v | 0x0000_2020) == u32::from_le_bytes(*b"qs-1")
+        {
             return Some(i + 4);
         }
         i += 1;
