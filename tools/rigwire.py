@@ -316,6 +316,10 @@ class _SocketTransport:
 
     def __init__(self, host: str, port: int, timeout: float = 2.0):
         self._sock = socket.create_connection((host, port), timeout=timeout)
+        try:
+            self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
         self._sock.settimeout(timeout)
         self._rx = bytearray()
         self.is_open = True
@@ -545,9 +549,9 @@ class RigWireClient:
             if serial is None:
                 raise RuntimeError("pyserial is required for serial ports: pip install pyserial")
             if "://" in port_name:
-                self.ser = serial.serial_for_url(port_name, baudrate=baudrate, timeout=timeout)
+                self.ser = serial.serial_for_url(port_name, baudrate=baudrate, timeout=min(timeout, 0.05))
             else:
-                self.ser = serial.Serial(port_name, baudrate=baudrate, timeout=timeout)
+                self.ser = serial.Serial(port_name, baudrate=baudrate, timeout=min(timeout, 0.05))
             try:
                 self.ser.dtr = True
                 self.ser.rts = True
@@ -559,12 +563,31 @@ class RigWireClient:
         self.session_id = 0x4B45524E  # "KERN"
         self.sequence = 1
         self.max_payload = 128
+        self._ser_rx = bytearray()
+        self.last_rtt_ms = 0.0
 
     def close(self):
         if self.ser and self.ser.is_open:
             self.ser.close()
 
+    def _read_serial_frame_until_zero(self, deadline: float):
+        """Buffered 0x00-delimited reader for pyserial (avoids 1-byte read() syscall overhead)."""
+        rx = self._ser_rx
+        while True:
+            idx = rx.find(0)
+            if idx != -1:
+                frame = bytes(rx[:idx])
+                del rx[:idx + 1]
+                return frame
+            if time.monotonic() >= deadline:
+                return None
+            waiting = getattr(self.ser, "in_waiting", 0) or 0
+            chunk = self.ser.read(waiting if waiting > 0 else 1)
+            if chunk:
+                rx.extend(chunk)
+
     def send_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
+        t0 = time.monotonic()
         is_hello = (service == SERVICE_CORE and opcode == OP_CORE_HELLO)
         session = 0 if is_hello else self.session_id
         # Firmware WireSession only advances expected_sequence for non-core services.
@@ -589,32 +612,23 @@ class RigWireClient:
 
         frame = b"\x00" + cobs_encode(raw) + b"\x00"
         self.ser.write(frame)
-        self.ser.flush()
 
-        return self.read_response(expected_service=service, expected_opcode=opcode)
+        resp = self.read_response(expected_service=service, expected_opcode=opcode)
+        self.last_rtt_ms = (time.monotonic() - t0) * 1000.0
+        return resp
 
     def read_response(self, expected_service: int, expected_opcode: int) -> bytes:
-        deadline = time.time() + max(self.timeout, 2.5)
+        wall_deadline = time.time() + max(self.timeout, 2.5)
+        mono_deadline = time.monotonic() + max(self.timeout, 2.5)
         decoded = None
 
-        while time.time() < deadline:
+        while time.monotonic() < mono_deadline:
             if hasattr(self.ser, "read_until_zero"):
-                raw_frame = self.ser.read_until_zero(deadline)
-                if raw_frame is None:
-                    break
+                raw_frame = self.ser.read_until_zero(wall_deadline)
             else:
-                buf = bytearray()
-                while time.time() < deadline:
-                    b = self.ser.read(1)
-                    if not b:
-                        continue
-                    if b == b"\x00":
-                        break
-                    buf.extend(b)
-                else:
-                    raw_frame = None
-                    break
-                raw_frame = bytes(buf)
+                raw_frame = self._read_serial_frame_until_zero(mono_deadline)
+            if raw_frame is None:
+                break
 
             if not raw_frame:
                 continue
@@ -1026,12 +1040,14 @@ class RigWireClient:
         payload = bytes([key_code, key_state])
         self.handle_set(DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, FACET_INPUT_KEY, payload)
 
-    def screencap(self) -> bytes:
+    def screencap(self, on_between_chunks=None) -> bytes:
         """Stream complete 1024-byte framebuffer (128x64 bits) from primary display surface."""
         buffer = bytearray(1024)
         offset = 0
-        chunk_len = 96
+        chunk_len = 100
         while offset < 1024:
+            if on_between_chunks is not None:
+                on_between_chunks()
             req_len = min(chunk_len, 1024 - offset)
             chunk = self.handle_stream(DOMAIN_UI, UI_INSTANCE_PRIMARY, FACET_UI_SURFACE, offset, req_len)
             if not chunk:
