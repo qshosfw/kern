@@ -1,33 +1,99 @@
+/*
+ * KERN DFU Shared Module State, Resident UI Dispatch Table & Inline Primitives
+ */
 #pragma once
-#include <krx.h>
+#include "dfu_abi.h"
 
 #define KRX_FONT_TOMTHUMB 0u
 #define KRX_ALIGN_LEFT    0u
 #define KRX_ALIGN_CENTER  1u
 #define KRX_ALIGN_RIGHT   2u
 
-#define DFU_SRAM_BANNERS 0x20003000u
-#define DFU_SRAM_ARROW   0x20003540u
-#define DFU_SRAM_VIDPID  0x20003580u
-
 #define DFU_FLASH_PREFIX_X   22u
 #define DFU_FLASH_DIGITS_COL 76u
 
-#define TAG_CONFIRM_DFU   1
-#define TAG_CONFIRM_BLANK 2
+#define TAG_CONFIRM_DFU   1u
+#define DFU_MAX_FILES     12u
+
+/* P0 Overlay Leaf IDs (StructuredLeafManager<16> supports 1..=16) */
+#define DFU_LEAF_SPLASH   1u
+#define DFU_LEAF_MODAL    2u
+#define DFU_LEAF_STAGE    3u
+#define DFU_LEAF_PROBE    4u
+#define DFU_LEAF_TOOLS    5u
+#define DFU_LEAF_INFO     6u
+#define DFU_LEAF_CALIB    7u
+#define DFU_LEAF_RESCUE   8u
+#define DFU_LEAF_SCAN     9u
+#define DFU_LEAF_FILES    10u
+#define DFU_LEAF_INSPECT  11u
+
+/* Tools menu dispatch actions */
+#define DFU_TOOL_ACT_DFU       0u /* Return to live DFU bootloader handoff */
+#define DFU_TOOL_ACT_OPEN      1u /* Open selected sub-leaf */
+#define DFU_TOOL_ACT_INSPECT   2u /* Open leaf11_inspect for selected file */
+
+/* Tools menu items */
+#define DFU_TOOL_ITEM_FLASH    0u /* Flat firmware image browser (.kfw/.uf2/.bin) */
+#define DFU_TOOL_ITEM_APPLETS  1u /* Flat applet browser (.krx/.ram/.mod) */
+#define DFU_TOOL_ITEM_RESCUE   2u /* Buddy Rescue (2-pin UART) */
+#define DFU_TOOL_ITEM_CALIB    3u /* Calibration inspect & backup */
+#define DFU_TOOL_ITEM_INFO     4u /* Bootloader & hardware information */
+#define DFU_TOOL_ITEM_COUNT    5u
 
 typedef struct {
-    u32 vid_pid;
-    u32 op;
-    const void* param;
-    u8  sel;
-    u8  action; // 0 = none, 1 = enter_dfu, 2 = blank_and_dfu
-    u8  keys_held;
-    u8  has_stage;
-    u8  sram_banners[8 * 168];
-    u8  sram_arrow[38];
-    u8  sram_vidpid[40];
+    char name[20];
+    u32  size;
+    u8   dir_idx; /* 0="/boot/", 1="/apps/", 2="/" */
+    u8   _pad[3];
+} DfuFlatFile;
+
+typedef struct {
+    void (*header)(const KrxApiTable* api, const char* title);
+    void (*softbar)(const KrxApiTable* api, const char* lk, const char* ll, const char* rk, const char* rl);
+    void (*kv)(const KrxApiTable* api, i16 y, const char* k, const char* v);
+    u8   (*wait_key)(const KrxApiTable* api);
+    u32  (*u32_dec)(char* dst, u32 val);
+} DfuUiOps;
+
+typedef struct {
+    KbhpEnvelope kbhp;             /* 64 B: Prepared KBHP v1.0 handoff envelope */
+    u32          tramp[3];         /* 12 B: [0]=MSP, [1]=SystemInit, [2]=__main */
+    u32          op;               /* 4 B:  KRX_OP_* forwarded to modal leaf */
+    const void*  param;            /* 4 B:  KRX event/param forwarded to modal leaf */
+    u8           bl_date[8];       /* 8 B:  YYYYMMDD ASCII build date or zeroed */
+    u8           keys_held;        /* 1 B:  Non-zero if boot chord keys still pressed */
+    u8           has_stage;        /* 1 B:  Non-zero if SRAM UI strips were staged */
+    u8           use_hook;         /* 1 B:  Non-zero if SysTick hook should attach */
+    u8           tool_sel;         /* 1 B:  Active selection in DFU Tools menu */
+    u8           tool_sub;         /* 1 B:  Sub-mode (0=Flash Image, 1=Applets) */
+    u8           tool_action;      /* 1 B:  DFU_TOOL_ACT_* return status */
+    u8           tools_active;     /* 1 B:  Non-zero once RTC tools flag was consumed */
+    u8           _pad0;            /* 1 B */
+    DfuUiOps     ui;               /* 20 B: Resident shared UI helpers */
+    union {
+        u8 sram_banners[8 * 84];   /* 672 B: Page 5 status banners (staged right before handoff) */
+        struct {
+            DfuFlatFile files[DFU_MAX_FILES]; /* 336 B */
+            u32  sel_size;                    /* 4 B */
+            char sel_path[32];                /* 32 B */
+            char sel_name[20];                /* 20 B */
+            u8   file_count;                  /* 1 B */
+            u8   file_sel;                    /* 1 B */
+        } tools;
+    } buf;
+    u8           sram_arrow[38];   /* 38 B:  2 x 19 B connection arrow */
+    u8           sram_vidpid[40];  /* 40 B:  Page 1 USB VID:PID badge */
 } DfuSharedState;
+
+typedef struct {
+    u8  name[24];
+    u32 size;
+    u8  is_dir;
+    u8  reserved[3];
+} DfuDirEntry;
+
+_Static_assert(sizeof(DfuDirEntry) == 32u, "DfuDirEntry must match kernel KrxDirEntry (32 B)");
 
 static inline void dfu_copy_bytes(u8* dst, const u8* src, u32 len) {
     for (u32 i = 0; i < len; i++) {
@@ -35,19 +101,18 @@ static inline void dfu_copy_bytes(u8* dst, const u8* src, u32 len) {
     }
 }
 
-static inline void dfu_read_bl_version(char out[8]) {
-    const u8* rom = (const u8*)0x08001F00u;
-    for (u32 i = 0; i + 8u <= 0x0800u; i++) {
-        const u8* w = rom + i;
-        if (w[1] == '.' && w[4] == '.' && w[7] == 0 &&
-            w[0] >= '0' && w[0] <= '9' &&
-            w[2] >= '0' && w[2] <= '9' &&
-            w[3] >= '0' && w[3] <= '9' &&
-            w[5] >= '0' && w[5] <= '9' &&
-            w[6] >= '0' && w[6] <= '9') {
-            dfu_copy_bytes((u8*)out, w, 8);
-            return;
-        }
+static inline void dfu_zero_bytes(u8* dst, u32 len) {
+    for (u32 i = 0; i < len; i++) {
+        dst[i] = 0u;
     }
-    dfu_copy_bytes((u8*)out, (const u8*)"7.02.02", 8);
+}
+
+static inline u32 kbhp_checksum(const KbhpEnvelope* env) {
+    const u8* p = (const u8*)env;
+    u32 h = 0x811C9DC5u; /* FNV-1a 32-bit offset basis */
+    for (u32 i = 0; i < KBHP_HEADER_HASH_LEN; i++) {
+        h ^= p[i];
+        h *= 0x01000193u;
+    }
+    return h;
 }

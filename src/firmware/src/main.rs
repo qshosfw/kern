@@ -182,7 +182,11 @@ fn init_core_services_and_board() -> Board {
 
     let board = Board::init();
     boot::check_reset_cause();
-    bsp::pins::BACKLIGHT.set_low();
+    if (boot::read_backup_tag().flags & 0x48) == 0x48 {
+        bsp::pins::BACKLIGHT.set_high();
+    } else {
+        bsp::pins::BACKLIGHT.set_low();
+    }
 
     let _ = hal::uart::write_line("KERN v0.1.0");
     let _ = hal::uart::write_line(build_info::BUILD_STAMP);
@@ -192,12 +196,16 @@ fn init_core_services_and_board() -> Board {
 #[cfg(not(test))]
 #[inline(never)]
 fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
-    // Screen stays blanked until passcode prompt or splash reveals
-    hw.lcd.init();
-    bsp::pins::BACKLIGHT.set_low();
-    let canvas = system_canvas();
-    canvas.clear();
-    hw.lcd.blit(canvas);
+    // Keep ST7565 & backlight live during warm DFU -> DFU Tools transition (avoids 42 ms LCD reset blink)
+    let warm_dfu_tools = (boot::read_backup_tag().flags & 0x48) == 0x48;
+    if !warm_dfu_tools {
+        // Screen stays blanked until passcode prompt or splash reveals
+        hw.lcd.init();
+        bsp::pins::BACKLIGHT.set_low();
+        let canvas = system_canvas();
+        canvas.clear();
+        hw.lcd.blit(canvas);
+    }
     hw.backlight.init();
     kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
     #[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
@@ -229,6 +237,9 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
             #[cfg(feature = "dfu")]
             boot::enter_dfu_bootloader(&mut hw.lcd);
         }
+    }
+    if warm_dfu_tools {
+        hw.lcd.init();
     }
 
     // Start Independent Watchdog with generous 6000ms timeout after DFU bootloader check

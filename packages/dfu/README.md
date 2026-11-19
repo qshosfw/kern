@@ -1,10 +1,46 @@
-# KERN DFU Update Module (`/apps/dfu.mod`)
+# 📤 KERN DFU Update Module (`/apps/dfu.mod`)
 
-A relocatable **P0 Structured Paged (`FLAG_SYSTEM_ACTION`)** KRX system module that provides full USB-C / UART DFU bootloader UI, splash graphics, hardware quiescing, and a live 30 Hz SRAM SysTick telemetry runtime on Quansheng UV-K1 / UV-K5 (`PY32F071xB`) without compiling DFU UI or hook payloads into the main firmware image.
+A relocatable, zero-firmware-bloat **P0 Structured Paged (`FLAG_SYSTEM_ACTION`)** KRX system module providing a balanced USB-C / UART DFU UI, an on-device **DFU Tools** menu (flat firmware/applet browser, Calibration manager, Buddy Rescue, and Bootloader Information), multi-bootloader fingerprinting, hardware quiescing, the open **KBHP v1.0** firmware-to-bootloader handoff protocol, and a modular 30 Hz bare-metal SRAM SysTick telemetry & anti-brick runtime on Quansheng UV-K1 / UV-K5 v3 (`PY32F071xB`).
+
+> 🛡️ **Zero-SWD-Brick Guarantee:** `/apps/dfu.mod` **never** erases or writes below `0x0800_2800`, never modifies `0x0800_2700` (factory provisioning), never touches Option Bytes (`RDP`/`WRP`), and never reconfigures `PA13`/`PA14` (`SWDIO`/`SWCLK`).
 
 ---
 
-## Screenshots
+## 🎨 DFU Interface & Controls
+
+The 128×64 ST7565 DFU screen is vertically balanced with strict page-aligned zones and zero visual clutter:
+
+- **Top Header (Page 0):** Auto-detected bootloader version & build date (e.g. `v7.02.02 (2025-08-08)`, `Moto BL`, or `Custom`).
+- **Radio · Connection Arrow · USB-C Cable (Pages 1–3):** Vertically centered across `y = 10..31` with equal 9 px horizontal spacing.
+  - **Connection Arrow (`x = 49..67`):** Represents live link status — slow ~1 Hz blink in Standby (`Plug in cable`), solid steady when USB or UART is connected / ready / flashing / complete, brisk activity pulse on active command traffic (`Link active`), and hidden on mid-flash abort.
+  - **Link Badge (`x = 76..115`, Page 1):** Displays USB `VID:PID` (`36B7:0001`) or live UART baud (`115200bps`) directly above the USB-C plug when connected.
+  - **Radio LCD Cutout (`x = 19..34`):** Displays `"DFU"` at rest, live percentage (`0%..100%`) during flashing, and alternates `100%` / `<N>s` elapsed time on completion.
+- **On-Demand Progress Bar (Page 4, `y = 34..39`):** Hidden in Standby, Connected, and Ready states; appears **only** while flashing, complete, or aborted (dashed bar on stall/abort).
+- **Status Banner (Page 5, `y = 43..47`):** Single-page status text (`Plug in cable`, `USB connected`, `Ready to flash`, `Flashing page X/Y`, `Flash complete`, `UART connected`, `Aborted - reflash`).
+- **Two-Sided Soft Bar (`y = 54..60`, crisp square key badges):**
+  - Left: **`[MENU] Tools`** — tap when idle to jump seamlessly into the on-device **DFU Tools** menu (signaled across warm reset via backup-domain `RTC_ALR` bit 6 while keeping ST7565 & backlight continuously lit — zero LCD reset blink).
+  - Right: **`[EXIT] Reboot`** — hold 0.5 s when idle to verify application vectors and reboot into Kern OS.
+  - Side Key 1 short press toggles LCD backlight; long hold (0.5 s) also performs a verified reboot.
+
+---
+
+## 🧰 DFU Tools Menu (`[MENU] Tools`)
+
+Pressing **`MENU`** from idle DFU opens a clean, icon-driven utility menu backed by dedicated 1 KB P0 overlay leaves:
+
+| Item | Purpose |
+| :--- | :--- |
+| **Flash Image** | Flat browser listing flashable firmware files (`.kfw`, `.uf2`, `.bin`) across `/boot`, `/apps`, and `/` (no folder or icon clutter) with pre-flight format (`KFW1`, `UF2`, Raw ARM) and 118 KB size verification. |
+| **Applets** | Flat browser listing executable packages and diagnostic applets (`.krx`, `.ram`, `.mod`) with format & size inspection. |
+| **Buddy Rescue** | Measures the active local firmware image at `0x0800_2800` and reports 2-pin K1 (`38400` baud) radio-to-radio recovery readiness. |
+| **Calibration** | Inspects `/sys/calib.dat`, `/sys/calib.sig` (Ascon-128 MAC), and `0x0800_2750` (`QS-1` factory page), with one-press backup to `/boot/calib.bkp`. |
+| **Information** | Displays bootloader family & version, USB `VID:PID`, `QS-1` factory ID status, battery voltage, MCU target (`PY32F071`), and `KBHP 1.0`. |
+
+Pressing **`[EXIT] DFU`** returns seamlessly to live DFU mode.
+
+---
+
+## 📸 Screenshots
 
 | Services List (`Settings → Apps → Services`) | Hold-Confirm Bottom Sheet (`Settings → System`) |
 | :---: | :---: |
@@ -20,75 +56,106 @@ A relocatable **P0 Structured Paged (`FLAG_SYSTEM_ACTION`)** KRX system module t
 
 ---
 
-## Features
+## 🏗️ Architecture & Modular Layout
 
-- **Dual Entry Paths**:
-  - **Cold Boot Chord**: Hold `PTT + Side Key 2` at power-on (`try_launch_boot_module("/apps/dfu.mod")`).
-  - **In-OS Settings Action & Service Icon**: Auto-discovered under `Settings → System → DFU Update` via `FLAG_SYSTEM_ACTION`, and listed in `Settings → Apps → Services` with an 8×8 upward upload-arrow icon (`--icon 49`, `ICON_UPLOAD`). Pressing `DFU Update` opens the bottom-sheet **Hold MENU (1 s)** safety confirmation (`leaf2_modal.c`), flushes config, and reboots into DFU.
-- **Zero-Allocation Split Leaf Overlay Architecture (P0)**:
-  - **Resident Root (`src/dfu.c`, 4,708 B)**: KRX entry dispatch (`_start` / `krx_main`), GPIO/RCC/USB hardware quiescing, `MSP` evacuation to `0x2000_2FC0`, factory bootloader RVCT trampoline verification (`0x0800_0000`), and `VTOR` SRAM handoff.
-  - **`leaf1_splash.c` (1,008 B)**: Decompresses the 128×64 PackBits RLE DFU splash (`DFU_SPLASH_RLE`), parses the factory bootloader version (`0x0800_1F00`) + USB ROM descriptor `VID:PID` and build date, and renders the top header line.
-  - **`leaf2_modal.c` (266 B)**: Presents the `"Enter DFU Mode"` hold-to-confirm modal inside `Settings → System` and triggers `sys_flush_config()` + bootloader reboot upon confirmation.
-  - **`leaf3_stage.c` (773 B)**: Waits cleanly for `PTT` / `Side Key 2` release, renders `"Press [EXIT] to reboot"` and initial status, and stages pre-rendered banners, blink-arrow bitmap, and `VID:PID` label into `g_state` prior to `MSP` evacuation.
-- **30 Hz Live SRAM SysTick Telemetry Hook (`src/dfu_hook.S`, 2,124 B)**:
-  - **Live Link Detection**: Automatically distinguishes active USB enumeration (`36B7:0001` via `USBD_ADDR` + advancing `USBD_FRAME`), UART activity (`USART1` + `DMA1_Channel2` RX ring, displaying detected baud rate e.g. `115200bps`), and idle standby.
-  - **Rich Live Telemetry**:
-    - Animates the Page 4 capsule pill (`Standby` / `USB connected` / `Ready to flash` / `UART connected`) and switches to a proportional `0..=100%` progress bar during active flashing (`"Flashing page X/Y"`).
-    - Stamps percentage (`0%..100%`) and alternates completion duration (`<N>s`) directly inside the miniature radio LCD cutout (`X=17..=32, Pages 1..2`).
-    - Blinks the splash arrow in standby (`~1 Hz`) and pulses USB/UART link activity.
-  - **Hardware & Anti-Brick Protection**:
-    - Locks `PC13` flashlight low and PTT GPIOs safe before handoff.
-    - **Backlight & Exit Controls**: Short-pressing `Side Key 1` toggles backlight (`PF8`); holding `Side Key 1` or `EXIT` (`PB3 + PB15`) for ≥ 0.5 s reboots cleanly after validating firmware vectors (`0x0800_2800..0x0802_0000`).
-    - **Mid-Flash Stall Guard**: Detects a 10 s flash stall (`300` ticks @ 30 Hz), switches to `"Aborted - reflash"` with a dashed capsule bar, and blocks accidental reboot away from the bootloader if flash state was interrupted mid-write.
+Because `/apps/dfu.mod` loads from 2 MB KernFS (`PY25Q16`) via **P0 Structured Paging** (1 resident root + up to 16 × 1,024 B on-demand overlay leaves), all DFU UI, Tools screens, ROM probing, and SysTick hook payloads cost **0 bytes of resident main firmware Flash**.
 
----
-
-## Package Structure
-
-```
+```text
 packages/dfu/
-├── README.md                 # Module documentation and screenshots
-├── build.sh                  # Cortex-M0+ PIC build + relocation/size checks + KRX packer
-├── dfu.mod                   # Packed P0 Structured Paged module (~6.9 KB, install to /apps/dfu.mod)
-├── krx.ld                    # Shared Thumb-1 PIC linker script (.text.entry pinned at offset 0x0)
-├── screenshots/              # Rendered ST7565 128x64 UI screenshots
+├── README.md                    # Module documentation, UX guide, KBHP v1.0 overview & install guide
+├── build.sh                     # Cortex-M0+ PIC build, _Static_assert ABI checks, size/reloc guards & packer
+├── dfu.mod                      # Verified P0 Structured Paged module (13,256 B, install to /apps/dfu.mod)
+├── krx.ld                       # Shared Thumb-1 PIC linker script (.text.entry pinned at 0x00000000)
+├── screenshots/                 # Rendered ST7565 128x64 UI screenshots
 └── src/
-    ├── dfu.c                 # Resident root, hardware quiesce & bootloader handoff
-    ├── dfu_shared.h          # Shared DfuSharedState & ROM bootloader version helper
-    ├── dfu_hook.S            # Position-independent 30 Hz SysTick SRAM runtime hook
-    ├── leaf1_splash.c        # Leaf 1: Splash RLE + USB ROM metadata & header
-    ├── leaf2_modal.c         # Leaf 2: Settings hold-to-confirm modal
-    └── leaf3_stage.c         # Leaf 3: Key-release guard & SRAM asset pre-renderer
+    ├── dfu_abi.h                # Single-source SRAM map, RTC_ALR tools tag, KBHP v1.0 & DfuHookState contracts
+    ├── dfu_shared.h             # DfuSharedState (union-shared scratch), resident DfuUiOps & inline helpers
+    ├── dfu_quiesce.h            # Hardware quiescing, GPIO LCKR hardening & USB SE0 detach (SWD-safe)
+    ├── dfu.c                    # Resident root (4,888 B): shared UI ops, P0 dispatch, MSP evac & handoff
+    ├── leaf1_splash.c           # Leaf 1  (904 B): Balanced PackBits RLE splash & bootloader-aware header
+    ├── leaf2_modal.c            # Leaf 2  (411 B): Settings hold-confirm modal + low-battery brownout warning
+    ├── leaf3_stage.c            # Leaf 3  (824 B): Key-release guard, soft bar & Page-5 SRAM strip staging
+    ├── leaf4_probe.c            # Leaf 4 (1,013 B): Multi-BL ROM fingerprint, 0x0800_2750 check & KBHP prep
+    ├── leaf5_tools.c            # Leaf 5  (696 B): RTC_ALR tools gate & icon-driven DFU Tools menu
+    ├── leaf6_info.c             # Leaf 6  (715 B): Bootloader & hardware Information screen
+    ├── leaf7_calib.c            # Leaf 7  (869 B): Calibration inspector & /boot/calib.bkp backup
+    ├── leaf8_rescue.c           # Leaf 8  (502 B): Buddy Rescue 2-pin UART readiness screen
+    ├── leaf9_scan.c             # Leaf 9  (459 B): Flat filesystem scanner (/boot, /apps, /)
+    ├── leaf10_files.c           # Leaf 10 (983 B): Flat firmware image & applet browser
+    ├── leaf11_inspect.c         # Leaf 11 (672 B): Pre-flight KFW1/UF2/KRX/ARM format & 118 KB fit check
+    └── hook/
+        ├── dfu_hook.S           # Top-level modular bare-metal SysTick hook assembler unit (2,240 B)
+        ├── hook_defs.inc        # Symbolic SRAM/MMIO/struct offsets (compile-time verified vs dfu_abi.h)
+        ├── hook_main.S          # 30 Hz SysTick ISR: safety lock, EXIT/MENU guard, arrow/bar & KBHP mirror
+        └── hook_drivers.S       # Bare-metal drivers: RTC_ALR tools reboot, ST7565 SPI1, BK4829 LED & glyphs
 ```
 
 ---
 
-## Memory Map During Bootloader Handoff
+## 🧭 Multi-Bootloader Detection & Compatibility Matrix
+
+`leaf4_probe.c` non-destructively fingerprints `0x0800_0000..0x0800_27FF` before handoff and chooses the safest mode automatically:
+
+| Detected Family (`KBHP_BL_*`) | Fingerprint Criteria | Handoff Behavior |
+| :--- | :--- | :--- |
+| **`KBHP_BL_STOCK_K1` (`1`)** | Valid RVCT trampoline + `36B7:0001` USB descriptor + 16 B Quansheng XOR key + verified `7.00..7.03` version | Attaches full 30 Hz SRAM SysTick hook: connection arrow state, on-demand progress bar, page counter, LED choreography, 10 s stall detector, `[EXIT]` anti-brick reboot, `[MENU] Tools` bridge, and KBHP live telemetry mirror. |
+| **`KBHP_BL_STOCK_SAFE` (`2`)** | Valid RVCT trampoline, unrecognized version or descriptor | Attaches **safe guard-only hook** (`HOOK_FLAG_STOCK_K1 = 0`): enforces `PC13` flashlight lock, Side Key 1 backlight toggle, and hardened `0x0800_2800` vector check on `EXIT`/`MENU` without reading unverified stock SRAM offsets. |
+| **`KBHP_BL_MOTO` (`3`)** | `36B7:FFFF` USB descriptor or `"Moto"` ROM signature | Displays `"Moto BL"`, locks `PB10` LOW and `PB14`/`PB15` HIGH (matching Moto's exact `!PB10 && PB14 && PB15` UF2 DFU entry chord), publishes KBHP envelope, validates `0x0800_0000` vectors, and hands off cleanly. |
+| **`KBHP_BL_UNKNOWN` (`0`)** | Any other custom primary bootloader | Displays `"Custom"`, publishes KBHP envelope, validates `0x0800_0000` vectors (refusing wild jumps via clean `AIRCR` reset), and performs raw handoff. |
+
+---
+
+## 🔗 Open Firmware ↔ Bootloader Protocol (`KBHP v1.0`)
+
+To let **any** firmware (Kern, F4HWN, DeltaFW, Egzumer/CEC, UV-KX, custom C/Rust) exchange structured identity, policy, and live telemetry with hooks and future Stage-2 / custom bootloaders **without breaking factory ROM bootloaders**, `dfu.c` publishes a 64-byte (`2^6`), naturally aligned `KbhpEnvelope` at **`0x2000_35C0..0x2000_35FF`**:
+
+- **100% Factory-Safe:** Stock Quansheng bootloaders (`7.00..7.03`) keep `.data`/`.bss`/stack strictly inside `0x2000_0000..0x2000_2FFF` and never touch `0x2000_35C0..0x2000_35FF`. Moto re-initializes SRAM cleanly on entry.
+- **Checksum-Invariant Split Layout ([`src/dfu_abi.h`](src/dfu_abi.h)):**
+  - **Bytes `[0x00..0x2F]` (48 B — Immutable Signed Header):** `ident` (`"KBHP"`), `version` (`0x0100`), `cmd`, `bl_kind`, `flags`, `target_id` (`0x5153_0101`), vendor-neutral `origin_tag` (`"KERN"`), `bl_vid_pid`, `fw_version`, `battery_mv`, `app_max_pages`, `bl_ver[8]`, `app_flash_base`, sealed by FNV-1a 32-bit `header_checksum` at `+0x2C`.
+  - **Bytes `[0x30..0x3F]` (16 B — Mutable Live Telemetry Block):** `status`, `error_code`, `hook_ver`, `flags_live`, `flashed_pages`, `total_pages`, `elapsed_sec`, `boot_strikes`, `hook_state_addr` — updated at 30 Hz without invalidating `header_checksum`.
+- **Full Normative Spec & Roadmap:** See [`docs/bootloader-protocol.md`](../../docs/bootloader-protocol.md).
+
+---
+
+## 🛡️ Hardened Anti-Brick Safeguards
+
+- **Dynamic `MSP` Evacuation:** Evacuates `MSP` strictly below `dfu_root_base & ~7` before staging copies (never colliding with `g_state` or upper SRAM) and copies UI strips in overlap-safe reverse order (`dfu_move_bytes`).
+- **Battery Brownout Warning (`leaf2_modal.c`):** Checks `OP_IO_POWER` (`LOW` / `CRITICAL` / `CHARGING`) before showing the Settings hold-confirm sheet and warns users to plug in USB-C power first when battery is low.
+- **Mid-Flash & Stall Lockout (`hook_main.S`):** Blocks `EXIT`, `Side Key 1`, and `MENU` reboots whenever `FLASH->SR.BSY == 1`, `FLASH->CR.LOCK == 0`, active flashing (`state == 2`), or mid-flash abort (`FLAG_WAS_FLASH`) is latched. Detects 10-second stalls (`300` ticks @ 30 Hz) and displays `"Aborted - reflash"` with a red blinking LED, dashed bar, and hidden connection arrow.
+- **4-Point Vector Verification (`hook_main.S` & `dfu_quiesce.h`):** Before rebooting to application firmware, opening DFU Tools, or jumping to an unknown bootloader, validates 4-byte-aligned SRAM `MSP`, odd Thumb `Reset`/`NMI`/`HardFault` vectors inside valid flash bounds, and non-erased entry code.
+- **Hardware Pin Locking (`dfu_quiesce.h`):** Locks `PB10` (PTT LOW), `PB14`/`PB15` (side keys HIGH), and `PC13` (flashlight LOW) via `GPIOx->LCKR`; keeps `PB3` (`EXIT`) and `PB6` (`MENU`) pulse-scannable; never alters `PA13`/`PA14` (SWD).
+
+---
+
+## 🗺️ Memory Map During Bootloader Handoff
 
 | Region | Size | Purpose |
 | :--- | :--- | :--- |
-| `TRANSIENT_ARENA[0..4708)` | 4,708 B | Resident root (`dfu.c` code, embedded `dfu_hook.bin`, `g_state` staging) |
-| `TRANSIENT_ARENA[5120..6144)` | 1,024 B | Shared P0 leaf overlay window (`leaf1_splash` / `leaf2_modal` / `leaf3_stage`) |
-| `0x2000_2FC0` (growing down) | — | Evacuated `MSP` used by `handoff_to_factory_bootloader()` before staging copy |
-| `0x2000_3000..0x2000_35A8` | 1,448 B | Copied SRAM UI strips (`sram_banners`, `sram_arrow`, `sram_vidpid`) |
-| `0x2000_3600..0x2000_36FF` | 256 B | Relocated `VTOR` vector table + hook runtime state (`0x2000_36C0`) |
-| `0x2000_3700..0x2000_3FFF` | 2,304 B | Live `dfu_hook.bin` SysTick ISR + 3×5 glyph table (`2,124 B`) |
+| `0x2000_0000..dfu_root_base` | ~7.3 KB | Evacuated `MSP` stack (growing down below `TRANSIENT_ARENA`) during handoff |
+| `TRANSIENT_ARENA[0..4888)` | 4,888 B | Resident root (`dfu.c`, shared UI ops, embedded `dfu_hook.bin`, union `g_state`) |
+| `TRANSIENT_ARENA[5120..6144)` | 1,024 B | Shared P0 leaf overlay window (`leaf1..leaf11`, 11 on-demand leaves) |
+| `0x2000_3000..0x2000_329F` | 672 B | Staged Page-5 status banners (`8 × 84 B`, zero Page-6 overlap) |
+| `0x2000_3540..0x2000_35A7` | 78 B | Staged connection arrow (`38 B`) & Page-1 `VID:PID` badge (`40 B`) |
+| `0x2000_35C0..0x2000_35FF` | 64 B | **KBHP v1.0 Handoff Envelope** (48 B signed header + 16 B live telemetry) |
+| `0x2000_3600..0x2000_36BF` | 192 B | Relocated Cortex-M0+ `VTOR` vector table (SysTick -> `0x2000_3701`) |
+| `0x2000_36C0..0x2000_36FF` | 64 B | Live SysTick hook runtime state (`DfuHookState`) |
+| `0x2000_3700..0x2000_3FFF` | 2,304 B | Live `dfu_hook.bin` SysTick ISR + drivers (`2,240 B`) |
 
 ---
 
-## Build & Verify
+## 🔧 Build & Verify
 
 ```bash
 bash packages/dfu/build.sh
 ```
 
-`build.sh` compiles `src/dfu_hook.S`, `src/dfu.c`, and all three leaves with `-fPIC -fPIE -fvisibility=hidden`, enforces zero undefined symbols, zero ELF relocations, zero `.got` sections, exact `0x00000000` entry offsets, and strict size bounds (`root <= 4900 B`, each leaf `<= 1024 B`), then packs `packages/dfu/dfu.mod` with `--icon 49` (`ICON_UPLOAD`) via [pack_krx.py](../../tools/pack_krx.py).
+`build.sh` assembles `src/hook/dfu_hook.S`, compiles `src/dfu.c` and all 11 leaves with `-fPIC -fPIE -fvisibility=hidden`, enforces `_Static_assert` ABI alignment, zero undefined symbols, zero ELF relocations, zero `.got` sections, exact `0x00000000` entry offsets, and strict SRAM limits (`hook <= 2304 B`, `root <= 4900 B`, each leaf `<= 1024 B`), then packs and verifies `packages/dfu/dfu.mod` via [pack_krx.py](../../tools/pack_krx.py).
 
 ---
 
-## Sideloading & Installation
+## ⚡ Sideloading & Installation (RigWire)
 
-Install `packages/dfu/dfu.mod` to `/apps/dfu.mod` on the radio's LittleFS storage using RigWire (over USB-C CDC or UART @ 115200 baud):
+Install `packages/dfu/dfu.mod` to `/apps/dfu.mod` on KernFS using RigWire (USB-C CDC or UART @ 115200 baud):
 
 ```bash
 # Recommended: validates KRX header, profile, capabilities, and CRC-32 before & after upload
@@ -97,16 +164,18 @@ Install `packages/dfu/dfu.mod` to `/apps/dfu.mod` on the radio's LittleFS storag
 # Specify serial port explicitly if needed (e.g. /dev/ttyACM0, /dev/ttyUSB0, COM3)
 ./kern wire -p /dev/ttyACM0 sideload packages/dfu/dfu.mod --force
 
-# Or run RigWire directly and verify the installed file on KernFS
-python3 tools/rigwire.py sideload packages/dfu/dfu.mod --force
+# Verify installation on KernFS
 ./kern wire stat /apps/dfu.mod
-./kern wire ls /apps
 ```
 
-> **Note:** Keep the `.mod` filename (do not pass `--name dfu` without `.mod`, which defaults the extension to `.krx`) so the cold-boot `PTT + Side Key 2` launcher resolves `/apps/dfu.mod` directly.
+> 💡 **Note:** Keep the `.mod` extension so cold-boot `PTT + Side Key 2` resolves `/apps/dfu.mod` directly. To inspect or remove the module on-device, open **Settings → Apps → Services → DFU Update**, or run `./kern wire rm /apps/dfu.mod`.
 
-To inspect or remove the module later on the radio, open **Settings → Apps → Services → DFU Update**, or delete via wire:
+---
 
-```bash
-./kern wire rm /apps/dfu.mod
-```
+## 📚 Related Specifications
+
+- [`docs/bootloader-protocol.md`](../../docs/bootloader-protocol.md) — Normative **KBHP v1.0** open handoff standard, bootloader audit (`moto` / `ichi` / `TinyK5BL`), RigWire integration & next-gen anti-brick roadmap
+- [`docs/stage2-boot-architecture.md`](../../docs/stage2-boot-architecture.md) — Stage-2 `kboot` anchor (`0x0801_E800`), volatile `PY25Q16` guest lock & 3-strike auto-rollback
+- [`docs/kfw-spec.md`](../../docs/kfw-spec.md) — `.kfw` Ascon-verified firmware & device backup container format
+- [`docs/rigwire.md`](../../docs/rigwire.md) — RigWire v2 serial control, `CORE::RUNLEVEL`, and streaming storage fabric
+- [`docs/stock-bootloader-provisioning.md`](../../docs/stock-bootloader-provisioning.md) — Stock Quansheng PY32F071 bootloader & `0x0800_2700` factory provisioning analysis
