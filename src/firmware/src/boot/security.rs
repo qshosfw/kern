@@ -147,7 +147,8 @@ fn process_unlock_submission(
         py32_hal::wdt::Watchdog::feed();
         render_verify_modal(lcd, pct);
     }
-    let hook = crate::security::ProgressHook::new(hw.lcd as *mut _ as *mut (), on_verify_progress);
+    let hook =
+        crate::security::ProgressHook::new(&mut hw.lcd as *mut _ as *mut (), on_verify_progress);
     let res = crate::security::passcode::verify_passcode(
         hw.filesystem,
         text_model.buffer.as_bytes(),
@@ -158,13 +159,13 @@ fn process_unlock_submission(
     let mut unlocked = false;
     match res {
         Ok(true) => {
-            handle_unlock_success(hw.backlight, hw.radio, master_cfg, stealth);
+            handle_unlock_success(&mut hw.backlight, &mut hw.radio, master_cfg, stealth);
             unlocked = true;
         }
         Ok(false) => {
             handle_unlock_failure(
-                hw.lcd,
-                hw.radio,
+                &mut hw.lcd,
+                &mut hw.radio,
                 hw.filesystem,
                 text_view,
                 text_model,
@@ -176,8 +177,8 @@ fn process_unlock_submission(
                 .play_beep(crate::services::melody::BeepType::Warning);
             let pcfg = crate::security::passcode::get_passcode_config(hw.filesystem);
             handle_lockout_penalty(
-                hw.lcd,
-                hw.radio,
+                &mut hw.lcd,
+                &mut hw.radio,
                 hw.filesystem,
                 pcfg.failed_attempts,
                 pcfg.max_tries,
@@ -212,8 +213,8 @@ pub fn run_boot_unlock_prompt(
 
     // 1. Initial Lockout check if device rebooted while locked out
     handle_lockout_penalty(
-        hw.lcd,
-        hw.radio,
+        &mut hw.lcd,
+        &mut hw.radio,
         hw.filesystem,
         cfg.failed_attempts,
         cfg.max_tries,
@@ -226,7 +227,7 @@ pub fn run_boot_unlock_prompt(
             .set_mode(drivers::backlight::BacklightMode::Off);
         hw.backlight.turn_off();
     } else {
-        master_cfg.display.apply_to_backlight(hw.backlight);
+        master_cfg.display.apply_to_backlight(&mut hw.backlight);
         hw.backlight.wake();
     }
 

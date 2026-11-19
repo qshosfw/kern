@@ -344,7 +344,7 @@ fn boot_stage_security_check(
         crate::services::telemetry::sample_battery_and_system(adc, false);
 
         // Configure LCD parameters (contrast, inversion, shading) without waking the backlight
-        crate::hardware::apply_lcd_hardware(&master_cfg.display, hw.lcd);
+        crate::hardware::apply_lcd_hardware(&master_cfg.display, &mut hw.lcd);
 
         if pcfg.stealth {
             // Stealth / Dimmed mode: ensure backlight remains strictly OFF during boot and passcode entry
@@ -352,7 +352,7 @@ fn boot_stage_security_check(
                 .set_mode(drivers::backlight::BacklightMode::Off);
             hw.backlight.turn_off();
         } else {
-            master_cfg.display.apply_to_backlight(hw.backlight);
+            master_cfg.display.apply_to_backlight(&mut hw.backlight);
             hw.backlight.wake();
         }
 
