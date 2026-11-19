@@ -22,6 +22,7 @@ Most workflows are exposed through the root `./kern` CLI (`./kern help`).
 
 ### Serial, Flashing & Provisioning
 - `rigwire.py` — Host CLI and Python client library for the RigWire COBS-framed binary protocol (`./kern wire` / `./rigwire`). Supports KernFS file operations, KRX sideloading, memory inspection, and live telemetry over USB-C CDC or UART.
+- `kernfs_mount.py` — Universal multi-platform KernFS filesystem mounter (`./kern mount`). Exposes the radio's LittleFS over RigWire as a localhost-only WebDAV Class 2 drive (native Linux GIO/Nautilus/Dolphin, macOS Finder/`mount_webdav`, Windows Explorer/`net use` — zero kernel drivers), with OS junk filtering, `/sys/*` & recovery-module protection, pre-write KRX & ORDS-01 validation, idempotent zero-wear writes, and post-write CRC-32 verification.
 - `flasher.py` — Serial bootloader flashing utility invoked by `./kern flash`.
 
 ### Hardware Emulation & Integration Tests

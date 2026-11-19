@@ -79,8 +79,9 @@ The `./kern` script wraps the workspace build, test, package, and provisioning t
 ./kern kfw pack target/kern.kfw --version 0.1.0 --fw uv-k1:target/firmware.bin --mod packages/dfu/dfu.mod
 ./kern kfw verify target/kern.kfw
 
-# Flash firmware (.kfw or .bin) over serial bootloader or sideload modules via RigWire
+# Flash firmware (.kfw or .bin) over serial bootloader, mount KernFS, or sideload via RigWire
 ./kern flash --port /dev/ttyACM0
+./kern mount --port /dev/ttyACM0 --auto-mount
 ./kern wire sideload packages/dfu/dfu.mod --force
 
 # Launch external QEMU hardware emulator Web UI (requires KERN_EMU_DIR / KERN_QEMU_BIN)

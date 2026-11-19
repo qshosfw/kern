@@ -51,6 +51,9 @@ jobs:
       - name: Run .kfw container & Ascon selftest
         run: ./kern kfw selftest
 
+      - name: Run KernFS WebDAV mounter selftest
+        run: ./kern mount --selftest
+
       - name: Check firmware (UV-K1 / UV-K5v3, 0 warnings)
         run: ./kern check --deny-warnings
 
