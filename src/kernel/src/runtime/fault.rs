@@ -5,7 +5,7 @@
 //! so the firmware can unwind the offending KRX process, revoke its leases, and
 //! display an interactive Exception Dialog without rebooting the radio.
 
-use super::Pid;
+use crate::proc::Pid;
 
 /// Sentinel return value produced when a guest invocation unwinds via fault landing.
 pub const KRX_FAULT_SENTINEL: u32 = 0xFFFF_FFFE;

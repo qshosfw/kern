@@ -5,7 +5,7 @@
 //! immunity, and the block-relative shadow return stack (`ShadowReturnStack`)
 //! for LR-thunking across overlay evictions on Cortex-M0+ (no MMU).
 
-use super::krx::{BlockEntry, LeafContext, LeafContinuation, LeafEntry};
+use super::image::{BlockEntry, LeafContext, LeafContinuation, LeafEntry};
 
 /// Block flag: pinned in cache (never evicted once loaded; e.g., DSP inner loops)
 pub const BLOCK_FLAG_PINNED: u8 = 1 << 0;
@@ -546,7 +546,7 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proc::FLAG_LEAF_RT;
+    use crate::runtime::FLAG_LEAF_RT;
 
     #[test]
     fn test_fixed_window_cache_lru_and_pinned() {

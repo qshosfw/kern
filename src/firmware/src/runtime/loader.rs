@@ -7,9 +7,9 @@
 use crate::SysContext;
 use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
-use kernel::proc::krx::{KrxClass, KrxPreamble, KrxSummary};
+use kernel::runtime::{KrxClass, KrxPreamble, KrxSummary};
 
-pub use kernel::proc::krx::KrxLaunchError;
+pub use kernel::runtime::KrxLaunchError;
 
 static mut DYNAMIC_APP_NAME_BUF: [u8; 32] = [0u8; 32];
 static mut DYNAMIC_APP_NAME_LEN: u8 = 0;
@@ -65,16 +65,16 @@ fn load_krx_into_slot(
     sys_caps: Option<kernel::caps::CapabilitySet>,
     pid: kernel::proc::Pid,
 ) -> Result<(kernel::caps::CapabilitySet, &'static str), KrxLaunchError> {
-    const HDR_RESERVE: usize = kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE;
+    const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
-        (core::mem::size_of::<kernel::proc::krx::KrxSummary<'static>>() + 7) & !7;
+        (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
     let tail = crate::data::arena::scratch_tail_bytes_mut();
     let tail_len = tail.len();
     let (pre_hdr, hdr_buf) = tail.split_at_mut(tail_len - HDR_RESERVE);
     let summary_offset = pre_hdr.len() - SUMMARY_RESERVE;
     let summary_slot = unsafe {
         &mut *(pre_hdr.as_mut_ptr().add(summary_offset)
-            as *mut core::mem::MaybeUninit<kernel::proc::krx::KrxSummary<'_>>)
+            as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
     };
     let summary = read_krx_summary(storage, path, hdr_buf, summary_slot)?;
     let header_len = summary.preamble.header_len as usize;
@@ -90,11 +90,7 @@ fn load_krx_into_slot(
         return Err(KrxLaunchError::UnsupportedProfile);
     }
 
-    let raw_name = if !summary.title.is_empty() {
-        summary.title
-    } else {
-        "App"
-    };
+    let raw_name = summary.title.unwrap_or("App");
 
     let required_caps = summary.caps;
     if let Some(granted) = sys_caps {
@@ -110,10 +106,7 @@ fn load_krx_into_slot(
         }
     }
 
-    let exec = summary
-        .exec
-        .as_ref()
-        .ok_or(KrxLaunchError::MissingExecution)?;
+    let exec = summary.exec().ok_or(KrxLaunchError::MissingExecution)?;
     {
         let avail = crate::data::arena::TRANSIENT_ARENA_BYTES;
         if sys_caps.is_some() {

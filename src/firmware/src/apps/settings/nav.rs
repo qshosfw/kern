@@ -122,7 +122,7 @@ impl SettingsApp {
         self.append_system_flag_items(
             cat,
             sys_caps,
-            kernel::proc::krx::SectionType::FLAG_SYSTEM_MENU,
+            kernel::runtime::SectionType::FLAG_SYSTEM_MENU,
             0x80,
             MenuItemType::Submenu,
         );
@@ -130,7 +130,7 @@ impl SettingsApp {
         self.append_system_flag_items(
             cat,
             sys_caps,
-            kernel::proc::krx::SectionType::FLAG_SYSTEM_ACTION,
+            kernel::runtime::SectionType::FLAG_SYSTEM_ACTION,
             0xC0,
             MenuItemType::Action,
         );

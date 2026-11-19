@@ -11,8 +11,8 @@
 
 use crate::services::SysContext;
 #[cfg(all(target_arch = "arm", not(test)))]
-use kernel::proc::fault::KRX_FAULT_SENTINEL;
-use kernel::proc::fault::{AppFault, Exception};
+use kernel::runtime::fault::KRX_FAULT_SENTINEL;
+use kernel::runtime::fault::{AppFault, Exception};
 
 /// Non-zero while executing inside a KRX guest invocation (`invoke_krx_trampoline`).
 #[unsafe(no_mangle)]

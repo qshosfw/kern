@@ -700,15 +700,13 @@ mod tests {
     #[cfg(feature = "krx_native")]
     #[test]
     fn system_module_gate_requires_valid_module_flag_and_supported_caps() {
-        use crate::apps::launcher::catalog::PackageCatalogEntry;
+        use crate::apps::launcher::catalog::{PackageCatalogEntry, SmallStr};
         use kernel::caps::{Cap, CapabilitySet};
-        use kernel::proc::krx::{KrxClass, KrxExecType, SectionType};
+        use kernel::runtime::{KrxClass, KrxExecType, SectionType};
 
-        let mut path = heapless::String::new();
-        let _ = path.push_str("/apps/sysinfo.mod");
         let e = PackageCatalogEntry {
-            title: heapless::String::new(),
-            path,
+            title: SmallStr::new(),
+            path: SmallStr::from_str("/apps/sysinfo.mod"),
             size_bytes: 4238,
             app_class: KrxClass::Native,
             exec_type: KrxExecType::Module,
@@ -717,6 +715,8 @@ mod tests {
             caps: (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::FactoryCalib as u32),
             is_valid: true,
             has_config: false,
+            _pad: [0; 3],
+            _pad2: [0; 4],
         };
 
         let full_caps = CapabilitySet::empty()

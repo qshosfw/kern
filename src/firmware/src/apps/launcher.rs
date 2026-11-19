@@ -106,7 +106,7 @@ pub fn load_entries(
             &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
         for (pkg_idx, app) in cat_ref.entries.iter().enumerate() {
             if !app.is_valid
-                || app.exec_type != kernel::proc::krx::KrxExecType::App
+                || app.exec_type != kernel::runtime::KrxExecType::App
                 || count >= (MAX_LAUNCHER_ENTRIES - 2)
             {
                 continue;

@@ -29,6 +29,7 @@ pub mod mem;
 pub mod nav;
 pub mod power;
 pub mod proc;
+pub mod runtime;
 pub mod sched;
 pub mod security;
 pub mod service;

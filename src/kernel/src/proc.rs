@@ -4,34 +4,18 @@
 //! execution structures for static firmware apps and installable application bundles.
 
 pub mod abi;
-pub mod fault;
-pub mod krx;
 pub mod lease;
 pub mod ledger;
 pub mod memory;
-pub mod paged;
-pub mod reloc;
 pub mod service_registry;
 pub mod status_tray;
 
 pub use crate::boot::{BOOT_RECORD_IDENT, BootRecord, BootSlot, ResetReason};
 pub use crate::mem::{CellSlab, SlabCell};
 pub use abi::*;
-pub use fault::{AppFault, Exception, KRX_FAULT_SENTINEL};
-pub use krx::{
-    BOOT_IDENT, CALIB_IDENT, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, KERNFS_IDENT,
-    KRX_IDENT, KRX_PCB_IDENT, KrxClass, KrxExecType, KrxIndexEntry, KrxPreamble, KrxProfile,
-    KrxSwapHeader, LeafContext, LeafContinuation, LeafEntry, SECTION_LEAF_MAP, SIG_IDENT,
-    SLAB_IDENT, SWAP_FLAG_COMPRESSED_RLE, SWAP_IDENT, ServiceExport,
-};
 pub use lease::{LeaseError, LeaseKind, ResourceLease, ResourceLeaseManager};
 pub use ledger::ResourceLedger;
 pub use memory::{MemoryMapLayout, MemoryRegionDescriptor, RegionKind, region_flags};
-pub use paged::{
-    BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_PINNED, BLOCK_FLAG_RT, CacheSlotMeta, FixedWindowCache,
-    PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
-};
-pub use reloc::{RelocError, apply_relocs};
 pub use service_registry::{MAX_REGISTERED_SERVICES, ServiceEntry, ServiceRegistry};
 pub use status_tray::StatusTray;
 

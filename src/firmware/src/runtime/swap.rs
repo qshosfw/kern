@@ -3,7 +3,7 @@
 //! Provides zero-allocation, bounded state hibernation with PackBits RLE compression
 //! and 16-byte `KrxSwapHeader` integrity validation.
 
-use kernel::proc::krx::{KrxSwapHeader, SWAP_FLAG_COMPRESSED_RLE};
+use kernel::runtime::{KrxSwapHeader, SWAP_FLAG_COMPRESSED_RLE};
 
 /// Maximum concurrent hibernated application slots in volatile memory
 pub const MAX_SWAP_SLOTS: usize = 3;
@@ -54,7 +54,7 @@ impl SwapSlot {
 pub static mut SWAP_SLOTS: [SwapSlot; MAX_SWAP_SLOTS] =
     [const { SwapSlot::empty() }; MAX_SWAP_SLOTS];
 
-pub use kernel::proc::krx::{packbits_compress, packbits_decompress};
+pub use kernel::runtime::{packbits_compress, packbits_decompress};
 
 /// Zero-allocation Application State Hibernation Manager
 pub struct AppSwapManager;

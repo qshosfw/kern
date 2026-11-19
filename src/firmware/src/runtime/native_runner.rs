@@ -14,12 +14,12 @@ use kernel::app::{EventResult, ModalResult, StatusBarConfig};
 use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
-use kernel::proc::krx::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
 #[cfg(feature = "krx_paged")]
-use kernel::proc::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
-use kernel::proc::paged::{PagedError, StructuredLeafManager};
-use kernel::proc::reloc::apply_relocs;
+use kernel::runtime::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
+use kernel::runtime::paged::{PagedError, StructuredLeafManager};
+use kernel::runtime::reloc::apply_relocs;
+use kernel::runtime::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 
 pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_WORDS;
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
@@ -414,7 +414,7 @@ fn apply_package_relocs(
     Ok(())
 }
 
-pub use kernel::proc::krx::KrxAuxSections;
+pub use kernel::runtime::KrxAuxSections;
 
 /// Loads a Native (`KrxClass::Native`) or Demand-Paged (`KrxClass::Paged`) binary from flash
 /// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
@@ -426,10 +426,7 @@ pub fn load_native_from_storage(
     pid: kernel::proc::Pid,
 ) -> Result<(), KrxLaunchError> {
     let preamble = &summary.preamble;
-    let exec = summary
-        .exec
-        .as_ref()
-        .ok_or(KrxLaunchError::MissingExecution)?;
+    let exec = summary.exec().ok_or(KrxLaunchError::MissingExecution)?;
     let aux = &summary.aux;
     let caps = summary.caps;
 
@@ -502,7 +499,7 @@ pub fn load_native_from_storage(
             // Mark block 0 as already resident in slot 0 from initial load
             if win.cache.block_count > 0 {
                 win.cache.access_clock = 1;
-                win.cache.slots[0] = kernel::proc::paged::CacheSlotMeta {
+                win.cache.slots[0] = kernel::runtime::paged::CacheSlotMeta {
                     resident_block: Some(0),
                     pinned: win.cache.blocks[0].is_pinned(),
                     last_access_tick: 1,
@@ -532,7 +529,6 @@ pub fn load_native_from_storage(
     // 4b. Record profile & code window size for `ProcMem` region queries
     slot.profile = profile;
     let code_limit = max_arena_bytes as u32 - if is_p0 { overlay_size } else { 0 };
-
     #[cfg(feature = "krx_paged")]
     let code_size = if is_paged && !is_p0 {
         let win = unsafe { &*slot.overlay.window };
@@ -565,8 +561,8 @@ pub fn load_native_from_storage(
 
     // 7. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
     if let Some(exports_body) = aux.service_exports {
-        for chunk in exports_body.chunks_exact(kernel::proc::ServiceExport::SIZE) {
-            if let Some(export) = kernel::proc::ServiceExport::parse(chunk) {
+        for chunk in exports_body.chunks_exact(kernel::runtime::ServiceExport::SIZE) {
+            if let Some(export) = kernel::runtime::ServiceExport::parse(chunk) {
                 let vtable_ptr = (load_base + export.vtable_offset) as usize;
                 super::syscall::service_registry_mut().register(
                     export.interface_id,
@@ -604,8 +600,8 @@ pub unsafe fn invoke_krx_native(
 
     // 2. Fast stack margin guard (prevent Cortex-M0+ stack exhaustion)
     if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 96 {
-        super::fault::raise_contract_fault(kernel::proc::fault::Exception::Stack, op as u8, 0);
-        return kernel::proc::fault::KRX_FAULT_SENTINEL;
+        super::fault::raise_contract_fault(kernel::runtime::fault::Exception::Stack, op as u8, 0);
+        return kernel::runtime::fault::KRX_FAULT_SENTINEL;
     }
 
     #[cfg(all(target_arch = "arm", not(test)))]
@@ -653,7 +649,7 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *
         {
             ACTIVE_CTX = core::ptr::null_mut();
         }
-        if res == kernel::proc::fault::KRX_FAULT_SENTINEL || super::fault::has_pending_fault() {
+        if res == kernel::runtime::fault::KRX_FAULT_SENTINEL || super::fault::has_pending_fault() {
             if !ctx.is_null() {
                 super::fault::finish_fault_cleanup(&mut *ctx);
             }

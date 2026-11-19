@@ -33,8 +33,8 @@ pub use syscall::*;
 pub fn launch_krx_package(
     _ctx: &mut crate::services::SysContext<'_, '_>,
     _path: &str,
-) -> Result<usize, kernel::proc::krx::KrxLaunchError> {
-    Err(kernel::proc::krx::KrxLaunchError::UnsupportedProfile)
+) -> Result<usize, kernel::runtime::KrxLaunchError> {
+    Err(kernel::runtime::KrxLaunchError::UnsupportedProfile)
 }
 
 #[cfg(not(feature = "krx_runtime"))]
@@ -42,14 +42,14 @@ pub fn launch_krx_package_with_arg(
     _ctx: &mut crate::services::SysContext<'_, '_>,
     _path: &str,
     _arg: u32,
-) -> Result<usize, kernel::proc::krx::KrxLaunchError> {
-    Err(kernel::proc::krx::KrxLaunchError::UnsupportedProfile)
+) -> Result<usize, kernel::runtime::KrxLaunchError> {
+    Err(kernel::runtime::KrxLaunchError::UnsupportedProfile)
 }
 
 #[cfg(not(feature = "krx_runtime"))]
 pub fn show_launch_error_dialog(
     _ctx: &mut crate::services::SysContext<'_, '_>,
     _path: &str,
-    _err: kernel::proc::krx::KrxLaunchError,
+    _err: kernel::runtime::KrxLaunchError,
 ) {
 }

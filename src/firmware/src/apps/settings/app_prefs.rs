@@ -7,7 +7,7 @@ use crate::SysContext;
 #[cfg(feature = "filesystem")]
 use crate::apps::launcher::catalog::get_catalog;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions};
-use kernel::proc::krx::{CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, KrxPreamble};
+use kernel::runtime::{CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, KrxPreamble};
 
 #[repr(C)]
 struct AppPrefsScratch {
@@ -22,7 +22,7 @@ struct AppPrefsScratch {
 
 const SUMMARY_OFFSET: usize = (core::mem::size_of::<AppPrefsScratch>() + 7) & !7;
 const _: () = assert!(
-    SUMMARY_OFFSET + core::mem::size_of::<kernel::proc::krx::KrxSummary<'static>>()
+    SUMMARY_OFFSET + core::mem::size_of::<kernel::runtime::KrxSummary<'static>>()
         <= crate::data::arena::TRANSIENT_ARENA_BYTES - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
 );
 
@@ -34,12 +34,12 @@ fn scratch() -> &'static mut AppPrefsScratch {
 }
 
 #[inline(never)]
-fn unpack_item(raw: &[u8]) -> kernel::proc::krx::KrxConfigItem {
-    unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const kernel::proc::krx::KrxConfigItem) }
+fn unpack_item(raw: &[u8]) -> kernel::runtime::KrxConfigItem {
+    unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const kernel::runtime::KrxConfigItem) }
 }
 
 #[inline(never)]
-fn read_cfg_it(buf: &[u8], it: &kernel::proc::krx::KrxConfigItem) -> i16 {
+fn read_cfg_it(buf: &[u8], it: &kernel::runtime::KrxConfigItem) -> i16 {
     let off = it.offset as usize;
     let raw = if off < buf.len() {
         if it.min_v < 0 {
@@ -54,7 +54,7 @@ fn read_cfg_it(buf: &[u8], it: &kernel::proc::krx::KrxConfigItem) -> i16 {
 }
 
 #[inline(never)]
-fn write_cfg_it(buf: &mut [u8], it: &kernel::proc::krx::KrxConfigItem, val: i16) {
+fn write_cfg_it(buf: &mut [u8], it: &kernel::runtime::KrxConfigItem, val: i16) {
     let off = it.offset as usize;
     if off < buf.len() {
         buf[off] = val.clamp(it.min_v, it.max_v) as i8 as u8;
@@ -145,7 +145,7 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
         &mut *(crate::data::arena::scratch_tail_bytes_mut()
             .as_mut_ptr()
             .add(SUMMARY_OFFSET)
-            as *mut core::mem::MaybeUninit<kernel::proc::krx::KrxSummary<'_>>)
+            as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
     };
     let Ok(summary) = crate::runtime::loader::read_krx_summary(
         ctx.storage,

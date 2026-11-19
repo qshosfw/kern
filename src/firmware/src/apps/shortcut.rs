@@ -9,7 +9,7 @@ use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO};
 use crate::config::keys::KeyConfig;
 use gfx::gui::modules::menu::{OptionSheet, ShortString};
 use kernel::ipc::SysEvent;
-use kernel::proc::krx::{KrxActionDecl, KrxExecType};
+use kernel::runtime::{KrxActionDecl, KrxExecType};
 
 pub const KEY_SHORTCUT_COUNT: usize = 19;
 pub const F_DRAWER_START_SLOT: usize = 5;
@@ -437,7 +437,7 @@ pub fn picker_target_at(idx: usize) -> Option<u16> {
 mod tests {
     use super::*;
     use crate::apps::launcher::catalog::{CatalogAction, PackageCatalogEntry};
-    use kernel::proc::krx::KrxClass;
+    use kernel::runtime::KrxClass;
 
     #[test]
     fn shortcut_ipc_roundtrip() {
@@ -456,14 +456,11 @@ mod tests {
 
     #[test]
     fn dynamic_shortcut_resolves_app_and_declared_action_with_icons() {
+        use crate::apps::launcher::catalog::SmallStr;
         let mut cat = PackageCatalog::new();
-        let mut title = heapless::String::<16>::new();
-        let _ = title.push_str("Tasks");
-        let mut path = heapless::String::<24>::new();
-        let _ = path.push_str("/apps/tasks.krx");
         let _ = cat.entries.push(PackageCatalogEntry {
-            title,
-            path,
+            title: SmallStr::from_str("Tasks"),
+            path: SmallStr::from_str("/apps/tasks.krx"),
             size_bytes: 2048,
             app_class: KrxClass::Paged,
             exec_type: KrxExecType::App,
@@ -472,6 +469,8 @@ mod tests {
             caps: 0,
             is_valid: true,
             has_config: false,
+            _pad: [0; 3],
+            _pad2: [0; 4],
         });
         let mut label = [0u8; 12];
         label[..5].copy_from_slice(b"Sched");
