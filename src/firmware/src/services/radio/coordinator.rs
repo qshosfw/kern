@@ -1201,24 +1201,13 @@ impl RadioCoordinator {
         ch.flags = rec.flags;
         ch.reverse = (rec.flags & ChannelRecord::FLAG_REVERSE) != 0;
         ch.busy_lock = (rec.flags & ChannelRecord::FLAG_BUSY_LOCKOUT) != 0;
-        ch.compander = match rec.compand {
-            1 => CompanderMode::TxCompressor,
-            2 => CompanderMode::RxExpander,
-            3 => CompanderMode::Both,
-            _ => CompanderMode::Off,
-        };
+        ch.compander = CompanderMode::from_u8(rec.compand);
         ch.scrambler = if rec.scram_mode == 0 {
             ScramblerMode::Off
         } else {
             ScramblerMode::InvertFrequency(rec.scram_param.max(rec.scram_mode))
         };
-        ch.ste_mode = match rec.ste {
-            0 => CssTailMode::None,
-            2 => CssTailMode::PhaseShift120Deg,
-            3 => CssTailMode::PhaseShift180Deg,
-            4 => CssTailMode::PhaseShift240Deg,
-            _ => CssTailMode::Tone55Hz,
-        };
+        ch.ste_mode = CssTailMode::from_u8(rec.ste);
         ch.mic_gain_db = rec.mic_gain;
         ch.roger_id = rec.roger;
         ch.tot_limit_15s = rec.tx_limit;
@@ -1231,6 +1220,8 @@ impl RadioCoordinator {
     /// Serialize current VFO tuning parameters into a ChannelRecord with zero attribute loss.
     pub fn save_vfo_to_channel(&self, slot: VfoSlot, rec: &mut crate::data::ChannelRecord) {
         use crate::data::ChannelRecord;
+        const BW_50HZ: [u16; 3] = [500, 250, 125];
+        const PWR_MW: [u16; 3] = [500, 2000, 5000];
         let idx = slot.index().min(self.channels.len() - 1);
         let ch = &self.channels[idx];
 
@@ -1241,17 +1232,9 @@ impl RadioCoordinator {
             RepeaterShift::Negative(off) => ch.rx_freq.raw().saturating_sub(off.raw()),
         };
         rec.step_hz_x10 = ch.step.in_hz_x10();
-        rec.bandwidth_50hz = match ch.bandwidth {
-            Bandwidth::Wide25k => 500,    // 25 kHz
-            Bandwidth::Narrow6k25 => 125, // 6.25 kHz
-            Bandwidth::Narrow12k5 => 250, // 12.5 kHz
-        };
+        rec.bandwidth_50hz = BW_50HZ[ch.bandwidth as usize];
         rec.modulation = ch.modulation.to_u8();
-        rec.power_mw = match ch.power {
-            RfPowerLevel::Low => 500,
-            RfPowerLevel::Medium => 2000,
-            RfPowerLevel::High => 5000,
-        };
+        rec.power_mw = PWR_MW[ch.power as usize];
         rec.set_rx_subaudible_tone(ch.rx_subaudible);
         rec.set_tx_subaudible_tone(ch.tx_subaudible);
         rec.squelch_level = ch.squelch_level;
@@ -1265,12 +1248,7 @@ impl RadioCoordinator {
             flags |= ChannelRecord::FLAG_BUSY_LOCKOUT;
         }
         rec.flags = flags;
-        rec.compand = match ch.compander {
-            CompanderMode::Off => 0,
-            CompanderMode::TxCompressor => 1,
-            CompanderMode::RxExpander => 2,
-            CompanderMode::Both => 3,
-        };
+        rec.compand = ch.compander as u8;
         match ch.scrambler {
             ScramblerMode::Off => {
                 rec.scram_mode = 0;
@@ -1281,13 +1259,7 @@ impl RadioCoordinator {
                 rec.scram_param = code;
             }
         }
-        rec.ste = match ch.ste_mode {
-            CssTailMode::None => 0,
-            CssTailMode::Tone55Hz => 1,
-            CssTailMode::PhaseShift120Deg => 2,
-            CssTailMode::PhaseShift180Deg => 3,
-            CssTailMode::PhaseShift240Deg => 4,
-        };
+        rec.ste = ch.ste_mode as u8;
         rec.mic_gain = ch.mic_gain_db;
         rec.roger = ch.roger_id;
         rec.tx_limit = ch.tot_limit_15s;

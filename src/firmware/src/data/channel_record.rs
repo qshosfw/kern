@@ -389,9 +389,13 @@ impl ChannelRecord {
         unsafe { &mut *(self as *mut Self as *mut [u8; 64]) }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn from_bytes(bytes: &[u8; 64]) -> Self {
-        unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const Self) }
+        let mut out = core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out.as_mut_ptr() as *mut u8, 64);
+            out.assume_init()
+        }
     }
 }
 

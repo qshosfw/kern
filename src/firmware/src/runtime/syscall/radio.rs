@@ -256,39 +256,6 @@ unsafe fn dispatch_rf_vfo(
             let token = active_krx_token(exclusive);
             usize::from(!coord.request_resource_lock(token, res, vfo, a2 as u16, false))
         }
-        rf_vfo::GET_RECORD => {
-            let Some(vfo) = decode_vfo_slot(a1 as u8) else {
-                return usize::MAX;
-            };
-            let Some(bytes) = (unsafe { ptr_slice_mut(a2 as *mut u8, 64) }) else {
-                return usize::MAX;
-            };
-            let mut rec = crate::data::ChannelRecord::from_bytes(unsafe {
-                &*(bytes.as_ptr() as *const [u8; 64])
-            });
-            coord.save_vfo_to_channel(vfo, &mut rec);
-            bytes.copy_from_slice(rec.as_bytes());
-            coord.vfo_memory_index[vfo.index()].map_or(0, |idx| (idx as usize) + 1)
-        }
-        rf_vfo::LOAD_RECORD => {
-            let Some(vfo) = decode_vfo_slot(a1 as u8) else {
-                return 1;
-            };
-            let Some(bytes) = (unsafe { ptr_slice(a2 as *const u8, 64) }) else {
-                return 1;
-            };
-            let raw_idx = (a1 >> 16) as u16;
-            let mem_idx = if raw_idx == 0 {
-                None
-            } else {
-                Some(raw_idx - 1)
-            };
-            let rec = crate::data::ChannelRecord::from_bytes(unsafe {
-                &*(bytes.as_ptr() as *const [u8; 64])
-            });
-            coord.load_channel_into_vfo(radio, vfo, mem_idx, &rec);
-            0
-        }
         rf_vfo::MONITOR => {
             if a1 >= 2 {
                 coord.toggle_monitor(radio);

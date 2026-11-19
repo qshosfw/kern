@@ -28,16 +28,30 @@ impl SubaudibleTone {
 
 /// Squelch tail note elimination mode (reverse burst / CSS tail).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum CssTailMode {
-    None,
+    None = 0,
     /// 55 Hz audio tone burst prior to unkeying (traditional Motorola/Kenwood reverse burst).
-    Tone55Hz,
+    Tone55Hz = 1,
     /// 120-degree phase shift in subaudible tone prior to unkeying.
-    PhaseShift120Deg,
+    PhaseShift120Deg = 2,
     /// 180-degree phase shift in subaudible tone prior to unkeying.
-    PhaseShift180Deg,
+    PhaseShift180Deg = 3,
     /// 240-degree phase shift in subaudible tone prior to unkeying.
-    PhaseShift240Deg,
+    PhaseShift240Deg = 4,
+}
+
+impl CssTailMode {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::None,
+            2 => Self::PhaseShift120Deg,
+            3 => Self::PhaseShift180Deg,
+            4 => Self::PhaseShift240Deg,
+            _ => Self::Tone55Hz,
+        }
+    }
 }
 
 /// Compute the 23-bit TIA-603 Golay (23,12) codeword for an octal DCS code (e.g., `23` for D023N).

@@ -360,11 +360,24 @@ impl DeviationLimit {
 
 /// Dynamic range compression and expansion (compander).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum CompanderMode {
-    Off,
-    TxCompressor,
-    RxExpander,
-    Both,
+    Off = 0,
+    TxCompressor = 1,
+    RxExpander = 2,
+    Both = 3,
+}
+
+impl CompanderMode {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            1 => Self::TxCompressor,
+            2 => Self::RxExpander,
+            3 => Self::Both,
+            _ => Self::Off,
+        }
+    }
 }
 
 /// Voice frequency inversion scrambler modes.

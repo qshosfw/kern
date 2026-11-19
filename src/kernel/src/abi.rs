@@ -316,14 +316,12 @@ abi_sub! {
         FM_MUTE    = 14,
     }
     rf_vfo {
-        GET_CFG     = 0,
-        SET_CFG     = 1,
-        STATE       = 2,
-        WATCH_MODE  = 3,
-        LOCK        = 4,
-        GET_RECORD  = 5,
-        LOAD_RECORD = 6,
-        MONITOR     = 7,
+        GET_CFG    = 0,
+        SET_CFG    = 1,
+        STATE      = 2,
+        WATCH_MODE = 3,
+        LOCK       = 4,
+        MONITOR    = 5,
     }
     rf_bulk {
         SWEEP      = 0,
