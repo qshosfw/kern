@@ -193,31 +193,28 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         Ok(true)
     }
 
+    /// Allocates a COW L1 index page with `slot = new_ptr`, returning `(new_l1, prev_ptr)` packed as `u32`.
+    /// Arguments are packed into 4 AAPCS register slots to avoid caller stack spills:
+    /// - `ino_l2`: `(ino as u32) | ((l2_idx as u32) << 16)`
+    /// - `old_slot`: `(old_idx_p as u32) | ((slot as u32) << 16)`
+    /// - `new_gc`: `(new_ptr as u32) | ((allow_gc as u32) << 16)`
     #[inline(never)]
     fn cow_set_idx_slot(
         &mut self,
-        ino: u16,
-        page_idx: u16,
-        old_idx_p: u16,
-        allow_gc: bool,
-        slot: usize,
-        new_ptr: u16,
-        obs: &mut [u16; 3],
-        obs_n: &mut usize,
-    ) -> Result<u16, FsError> {
-        let new_p = self.alloc_page(allow_gc)?;
+        ino_l2: u32,
+        old_slot: u32,
+        new_gc: u32,
+    ) -> Result<u32, FsError> {
+        let new_p = self.alloc_page((new_gc >> 16) != 0)?;
+        let old_idx_p = old_slot as u16;
+        let slot = (old_slot >> 16) as usize;
+        let new_ptr = new_gc as u16;
         self.load_page_or_zero(old_idx_p)?;
-        if old_idx_p != 0 && *obs_n < obs.len() {
-            obs[*obs_n] = old_idx_p;
-            *obs_n += 1;
-        }
         let prev = read_idx_u16(&self.page_buf, slot);
-        if prev != 0 && prev != new_ptr && *obs_n < obs.len() {
-            obs[*obs_n] = prev;
-            *obs_n += 1;
-        }
         write_idx_u16(&mut self.page_buf, slot, new_ptr);
-        self.program_page_buf(new_p, ino, page_idx, TAG_KIND_INDEX1)
+        let written =
+            self.program_page_buf(new_p, ino_l2 as u16, (ino_l2 >> 16) as u16, TAG_KIND_INDEX1)?;
+        Ok((written as u32) | ((prev as u32) << 16))
     }
 
     #[inline(never)]
@@ -268,32 +265,25 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             return Ok(());
         }
 
-        let mut obs = [0u16; 3];
-        let mut obs_n = 0usize;
+        let mut obs = [phys, 0u16];
         if kind == TAG_KIND_INDEX1 || inode.depth == DEPTH_DIRECT {
             inode.set_l1_page(idx, new_p);
-            obs[0] = phys;
-            obs_n = 1;
         } else {
             let l2_idx = idx >> 7;
             let old_l1 = inode.l1_page(l2_idx);
-            let new_l1 = self.cow_set_idx_slot(
-                inode.ino,
-                l2_idx as u16,
-                old_l1,
-                false,
-                idx & 0x7F,
-                new_p,
-                &mut obs,
-                &mut obs_n,
+            let packed = self.cow_set_idx_slot(
+                (inode.ino as u32) | ((l2_idx as u32) << 16),
+                (old_l1 as u32) | (((idx & 0x7F) as u32) << 16),
+                new_p as u32,
             )?;
-            inode.set_l1_page(l2_idx, new_l1);
+            inode.set_l1_page(l2_idx, packed as u16);
+            obs[1] = old_l1;
         }
         if self.cur_inode.ino == inode.ino {
             self.cur_inode.inline_data = inode.inline_data;
             self.cur_inode.depth = inode.depth;
         }
-        self.commit_inode(inode, &obs[..obs_n])
+        self.commit_inode(inode, &obs)
     }
 
     /// Background idle maintenance hook: reclaims 1 dirty/obsolete block if pre-erased pool < 4.
@@ -382,15 +372,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         new_data_p: u16,
     ) -> Result<(), FsError> {
         let ino = self.cur_inode.ino;
-        let mut obs = [0u16; 3];
-        let mut obs_n = 0usize;
+        let mut obs = [0u16; 2];
         let old_d = self.cur_inode.depth;
 
         if old_d <= DEPTH_DIRECT && lpage < 8 {
             let old_p = self.cur_inode.l1_page(lpage as usize);
-            if old_d == DEPTH_DIRECT && old_p != 0 && old_p != new_data_p {
+            if old_d == DEPTH_DIRECT && old_p != new_data_p {
                 obs[0] = old_p;
-                obs_n = 1;
             }
             self.cur_inode.depth = DEPTH_DIRECT;
             self.cur_inode.set_l1_page(lpage as usize, new_data_p);
@@ -420,23 +408,23 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             }
             if !(old_d == DEPTH_DIRECT && l2_idx == 0) {
                 let old_l1 = self.cur_inode.l1_page(l2_idx);
-                let new_l1 = self.cow_set_idx_slot(
-                    ino,
-                    l2_idx as u16,
-                    old_l1,
-                    true,
-                    l1_idx,
-                    new_data_p,
-                    &mut obs,
-                    &mut obs_n,
+                let packed = self.cow_set_idx_slot(
+                    (ino as u32) | ((l2_idx as u32) << 16),
+                    (old_l1 as u32) | ((l1_idx as u32) << 16),
+                    (new_data_p as u32) | (1 << 16),
                 )?;
-                self.cur_inode.set_l1_page(l2_idx, new_l1);
+                let prev = (packed >> 16) as u16;
+                obs[0] = old_l1;
+                if prev != new_data_p {
+                    obs[1] = prev;
+                }
+                self.cur_inode.set_l1_page(l2_idx, packed as u16);
                 self.cur_inode.depth = DEPTH_SINGLE_INDIRECT;
             }
         }
 
         self.cur_inode.generation = self.global_gen + 1;
-        self.commit_cur_inode(&obs[..obs_n])
+        self.commit_cur_inode(&obs)
     }
 
     #[inline(never)]

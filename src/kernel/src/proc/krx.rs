@@ -134,14 +134,12 @@ pub enum KrxExecType {
 }
 
 impl KrxExecType {
+    #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
-        match val {
-            1 => Some(Self::App),
-            2 => Some(Self::Service),
-            3 => Some(Self::Daemon),
-            4 => Some(Self::Driver),
-            5 => Some(Self::Module),
-            _ => None,
+        if val >= 1 && val <= 5 {
+            Some(unsafe { core::mem::transmute::<u8, Self>(val) })
+        } else {
+            None
         }
     }
 
@@ -285,7 +283,10 @@ impl KrxPreamble {
                 link_base: u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
             };
         }
-        if out.ident != KRX_IDENT || out.format_version == 0 || out.format_version > 5 {
+        if u32::from_ne_bytes(out.ident) != u32::from_ne_bytes(KRX_IDENT)
+            || out.format_version == 0
+            || out.format_version > 5
+        {
             return Err(());
         }
         Ok(())
@@ -485,6 +486,7 @@ impl SectionExecution {
         out
     }
 
+    #[inline(always)]
     pub fn parse_into(buf: &[u8], dst: &mut Option<Self>) {
         if buf.len() < Self::SIZE {
             *dst = None;
@@ -951,7 +953,10 @@ impl KrxPreamble {
                 _ => {}
             }
             let step = (sec_len + 3) & !3;
-            rest = rest.get(step..).unwrap_or(&[]);
+            if step >= rest.len() {
+                break;
+            }
+            rest = &rest[step..];
         }
 
         Ok(out)

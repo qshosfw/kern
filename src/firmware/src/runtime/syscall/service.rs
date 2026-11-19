@@ -275,7 +275,8 @@ fn proc_kill(pid: u8) -> u8 {
         return 1;
     }
     if is_fg {
-        post_sys_event(0, 17, 0);
+        let ev: kernel::ipc::SysEvent = crate::apps::Shortcut::CloseApp.into();
+        post_sys_event(ev.target, ev.command, ev.arg);
     }
     0
 }
@@ -336,7 +337,9 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
                 if pcb.app_id >= crate::AppRegistry::app_count() {
                     return 1;
                 }
-                post_sys_event(0, 15, pcb.app_id as u16);
+                let ev: kernel::ipc::SysEvent =
+                    crate::apps::Shortcut::LaunchApp(pcb.app_id as u8).into();
+                post_sys_event(ev.target, ev.command, ev.arg);
             }
             _ => return 1,
         }

@@ -1157,15 +1157,7 @@ impl Orchestrator {
                     bsp::pins::FLASHLIGHT.set_high();
                 }
             }
-            Shortcut::Settings => self.switch_app(ctx, APP_ID_SETTINGS),
             Shortcut::LockKeypad => self.toggle_keypad_lock(),
-            Shortcut::PlayBeep {
-                freq_hz,
-                duration_ms,
-            } => {
-                ctx.play_tone(freq_hz, duration_ms);
-            }
-            Shortcut::Reboot => kernel::power::PowerControl::reboot(),
             Shortcut::Sleep => {
                 self.lock_mgr.sleep_requested = true;
             }

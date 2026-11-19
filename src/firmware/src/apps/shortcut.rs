@@ -57,44 +57,27 @@ pub const fn active_context(app_id: usize) -> u8 {
 
 /// Internal Microkernel IPC Command Enum (`SysEvent`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Shortcut {
-    None,
-    Flashlight,
-    Settings,
-    LockKeypad,
-    Sleep,
-    Reboot,
-    LaunchApp(u8),
-    PlayBeep { freq_hz: u16, duration_ms: u16 },
-    CloseApp,
-}
-
-impl Shortcut {
-    pub fn to_cmd_arg(self) -> (u8, u16) {
-        match self {
-            Shortcut::None => (0, 0),
-            Shortcut::Flashlight => (1, 0),
-            Shortcut::Settings => (5, 0),
-            Shortcut::LockKeypad => (6, 0),
-            Shortcut::Sleep => (13, 0),
-            Shortcut::Reboot => (14, 0),
-            Shortcut::LaunchApp(app_id) => (15, app_id as u16),
-            Shortcut::PlayBeep {
-                freq_hz,
-                duration_ms,
-            } => (
-                16,
-                (utils::math::div10_u16(freq_hz).0 << 6)
-                    | utils::math::div10_u16(duration_ms).0.min(63),
-            ),
-            Shortcut::CloseApp => (17, 0),
-        }
-    }
+    None = 0,
+    Flashlight = 1,
+    LockKeypad = 2,
+    Sleep = 3,
+    CloseApp = 4,
+    LaunchApp(u8) = 5,
 }
 
 impl From<Shortcut> for SysEvent {
+    #[inline]
     fn from(val: Shortcut) -> Self {
-        let (command, arg) = val.to_cmd_arg();
+        let (command, arg) = match val {
+            Shortcut::None => (0, 0),
+            Shortcut::Flashlight => (1, 0),
+            Shortcut::LockKeypad => (2, 0),
+            Shortcut::Sleep => (3, 0),
+            Shortcut::CloseApp => (4, 0),
+            Shortcut::LaunchApp(app_id) => (5, app_id as u16),
+        };
         SysEvent {
             target: 0,
             command,
@@ -104,19 +87,14 @@ impl From<Shortcut> for SysEvent {
 }
 
 impl From<SysEvent> for Shortcut {
+    #[inline]
     fn from(evt: SysEvent) -> Self {
         match evt.command {
             1 => Shortcut::Flashlight,
-            5 => Shortcut::Settings,
-            6 => Shortcut::LockKeypad,
-            13 => Shortcut::Sleep,
-            14 => Shortcut::Reboot,
-            15 => Shortcut::LaunchApp(evt.arg as u8),
-            16 => Shortcut::PlayBeep {
-                freq_hz: (evt.arg >> 6) * 10,
-                duration_ms: (evt.arg & 0x3F) * 10,
-            },
-            17 => Shortcut::CloseApp,
+            2 => Shortcut::LockKeypad,
+            3 => Shortcut::Sleep,
+            4 => Shortcut::CloseApp,
+            5 => Shortcut::LaunchApp(evt.arg as u8),
             _ => Shortcut::None,
         }
     }
@@ -145,7 +123,7 @@ pub static BUILTIN_TARGETS: [BuiltinTarget; 5] = [
         icon_idx: 6,
     },
     BuiltinTarget {
-        cmd: Shortcut::Settings,
+        cmd: Shortcut::LaunchApp(APP_ID_SETTINGS as u8),
         icon_idx: 4,
     },
     BuiltinTarget {
@@ -466,10 +444,8 @@ mod tests {
         for sc in [
             Shortcut::None,
             Shortcut::Flashlight,
-            Shortcut::Settings,
             Shortcut::LockKeypad,
             Shortcut::Sleep,
-            Shortcut::Reboot,
             Shortcut::LaunchApp(42),
             Shortcut::CloseApp,
         ] {

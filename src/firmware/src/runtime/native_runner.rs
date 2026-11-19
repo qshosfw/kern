@@ -531,11 +531,7 @@ pub fn load_native_from_storage(
 
     // 4b. Record profile & code window size for `ProcMem` region queries
     slot.profile = profile;
-    let code_limit = if is_p0 {
-        max_arena_bytes as u32 - overlay_size
-    } else {
-        max_arena_bytes as u32
-    };
+    let code_limit = max_arena_bytes as u32 - if is_p0 { overlay_size } else { 0 };
 
     #[cfg(feature = "krx_paged")]
     let code_size = if is_paged && !is_p0 {

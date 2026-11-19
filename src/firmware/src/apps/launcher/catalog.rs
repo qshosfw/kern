@@ -44,17 +44,31 @@ impl PackageCatalogEntry {
     }
 }
 
-#[inline(always)]
+utils::static_bytes!(static PKG_EXTS = b"appsvcdmndrvmodkrx";);
+
 fn is_package_ext(bytes: &[u8]) -> bool {
     let n = bytes.len();
-    if n <= 4 {
+    if n <= 4 || bytes[n - 4] != b'.' {
         return false;
     }
-    let ext = &bytes[n - 4..];
-    matches!(
-        ext,
-        b".app" | b".svc" | b".dmn" | b".drv" | b".mod" | b".krx"
-    )
+    let ext = &bytes[n - 3..];
+    for e in PKG_EXTS.chunks_exact(3) {
+        if ext == e {
+            return true;
+        }
+    }
+    false
+}
+
+/// Truncate UTF-8 `&str` to at most `max_bytes` without pulling in `<str as Index<RangeTo>>::index`.
+#[inline(always)]
+fn trunc_str(s: &str, max_bytes: usize) -> &str {
+    let b = s.as_bytes();
+    let mut n = b.len().min(max_bytes);
+    while n > 0 && n < b.len() && (b[n] & 0xC0) == 0x80 {
+        n -= 1;
+    }
+    unsafe { core::str::from_utf8_unchecked(&b[..n]) }
 }
 
 pub fn extract_filename(path: &str) -> &str {
@@ -248,7 +262,7 @@ impl PackageCatalog {
         }
         let _ = entry
             .path
-            .push_str(&raw_name[..raw_name.len().min(24 - entry.path.len())]);
+            .push_str(trunc_str(raw_name, 24 - entry.path.len()));
 
         if is_pkg && size >= KrxPreamble::SIZE {
             const HDR_BYTES: usize = kernel::proc::krx::KrxPreamble::MAX_HEADER_SIZE;
@@ -280,24 +294,27 @@ impl PackageCatalog {
                 entry.icon_id = summary.icon_id;
                 entry.caps = summary.caps.raw();
                 if !summary.title.is_empty() {
-                    let _ = entry.title.push_str(summary.title);
+                    let _ = entry.title.push_str(trunc_str(summary.title, 16));
                 }
                 if entry.is_valid && entry.exec_type == KrxExecType::App {
                     entry.has_config = summary.aux.config.is_some();
                     if let Some(act_body) = summary.aux.actions {
-                        let count = kernel::proc::krx::KrxActionDecl::count(act_body);
-                        for k in 0..count {
-                            if actions.len() >= MAX_CATALOG_ACTIONS {
+                        for chunk in act_body.chunks_exact(kernel::proc::krx::KrxActionDecl::SIZE) {
+                            let alen = actions.len();
+                            if alen >= MAX_CATALOG_ACTIONS {
                                 break;
                             }
-                            if let Some(decl) = kernel::proc::krx::KrxActionDecl::parse(act_body, k)
-                            {
-                                let _ = actions.push(CatalogAction {
-                                    pkg_idx: len as u8,
-                                    scope_mask: decl.scope_mask,
-                                    action_id: decl.action_id,
-                                    label: decl.label,
-                                });
+                            unsafe {
+                                let dst = actions.as_mut_ptr().add(alen);
+                                (*dst).pkg_idx = len as u8;
+                                (*dst).scope_mask = chunk[2];
+                                (*dst).action_id = u16::from_le_bytes([chunk[0], chunk[1]]);
+                                core::ptr::copy_nonoverlapping(
+                                    chunk.as_ptr().add(4),
+                                    (*dst).label.as_mut_ptr(),
+                                    12,
+                                );
+                                actions.set_len(alen + 1);
                             }
                         }
                     }
@@ -306,12 +323,9 @@ impl PackageCatalog {
         }
 
         if entry.title.is_empty() {
-            let stem = if is_pkg {
-                &base_name[..n - 4]
-            } else {
-                base_name
-            };
-            let _ = entry.title.push_str(&stem[..stem.len().min(16)]);
+            let stem_len = if is_pkg { n - 4 } else { n };
+            let stem = unsafe { core::str::from_utf8_unchecked(&bytes[..stem_len]) };
+            let _ = entry.title.push_str(trunc_str(stem, 16));
         }
     }
 
