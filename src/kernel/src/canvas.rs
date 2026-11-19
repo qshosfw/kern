@@ -549,6 +549,36 @@ impl Canvas {
         }
     }
 
+    /// Dim `start_y..64` with an idempotent 50% dim + 12.5% diagonal micro-dot stipple
+    /// to visually recess background content behind foreground modals and dialogs.
+    #[inline(never)]
+    pub fn dim_backdrop(&mut self, start_y: u8) {
+        const DIM_LUT: [u8; 4] = [0x55, 0xAA, 0x55, 0xAA];
+        const DOT_LUT: [u8; 4] = [0x11, 0x00, 0x44, 0x00];
+        if start_y >= LCD_HEIGHT as u8 {
+            return;
+        }
+        let first_page = (start_y >> 3) as usize;
+        let first_bit = start_y & 7;
+        for page in first_page..8 {
+            let keep_above = if page == first_page && first_bit != 0 {
+                (1u8 << first_bit) - 1
+            } else {
+                0
+            };
+            let edit_mask = !keep_above;
+            let row = &mut self.buffer[page];
+            for (col, byte) in row.iter_mut().enumerate() {
+                let idx = col & 3;
+                let cur = *byte;
+                let dimmed = (cur & DIM_LUT[idx]) | DOT_LUT[idx];
+                *byte = (cur & keep_above) | (dimmed & edit_mask);
+            }
+        }
+        self.sync_planes();
+        self.dirty = 0xFF;
+    }
+
     /// Apply 2D Bayer matrix invert dissolve across the entire 128x64 canvas.
     /// Pixels where `threshold >= progress` are inverted (progress: 0..=16).
     pub fn apply_invert_dissolve(&mut self, progress: u8) {
@@ -1078,5 +1108,32 @@ mod tests {
                 assert_eq!(canvas.buffer[page][col], 0xFF);
             }
         }
+    }
+
+    #[test]
+    fn test_canvas_dim_backdrop_preserves_header_and_is_idempotent() {
+        let mut canvas = Canvas::new();
+        // Top status bar (y = 0..9) filled solid, lower half mixed (empty cols 0..64, solid cols 64..128)
+        canvas.fill_rect(0, 0, 128, 9, Color::Fill);
+        canvas.fill_rect(64, 16, 64, 48, Color::Fill);
+
+        canvas.dim_backdrop(9);
+
+        // Status bar rows 0..8 (page 0) and divider y=8 (page 1 bit 0) remain untouched
+        assert!(canvas.buffer[0].iter().all(|&b| b == 0xFF));
+        assert!(canvas.buffer[1].iter().all(|&b| (b & 1) == 1));
+
+        // Empty region gets 12.5% diagonal micro-dot stipple; solid region softens to 50% checkerboard
+        assert_eq!(canvas.buffer[2][0], 0x11);
+        assert_eq!(canvas.buffer[2][1], 0x00);
+        assert_eq!(canvas.buffer[2][2], 0x44);
+        assert_eq!(canvas.buffer[2][3], 0x00);
+        assert_eq!(canvas.buffer[2][64], 0x55);
+        assert_eq!(canvas.buffer[2][65], 0xAA);
+
+        // Applying dim_backdrop repeatedly is strictly idempotent (required for DFU preserved backdrop)
+        let snapshot = canvas.buffer;
+        canvas.dim_backdrop(9);
+        assert_eq!(canvas.buffer, snapshot);
     }
 }

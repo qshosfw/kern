@@ -39,6 +39,13 @@ pub(crate) fn settings_arena_mut() -> &'static mut SettingsArena {
     unsafe { &mut *(crate::data::arena::arena_base_ptr() as *mut SettingsArena) }
 }
 
+/// Returns true while an in-place `FLAG_SYSTEM_ACTION` KRX module owns `TRANSIENT_ARENA`.
+#[inline(always)]
+pub fn is_action_module_active() -> bool {
+    crate::apps::registry::AppRegistry::app_instance(crate::apps::registry::APP_ID_SETTINGS)
+        .is_some_and(|ptr| unsafe { (*(ptr as *const SettingsApp)).active_action_module })
+}
+
 #[repr(C)]
 pub struct SettingsApp {
     // ── Hot 1- & 2-byte scalars inside first 32B (Thumb-1 imm5 ldrb/ldrh) ──

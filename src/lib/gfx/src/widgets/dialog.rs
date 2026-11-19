@@ -18,10 +18,15 @@ pub fn draw_rounded_box(canvas: &mut Canvas, x: u8, y: u8, w: u8, h: u8) {
     }
 }
 
-/// Center-Screen Modal Outer Box with Clear background and rounded border
+/// Center-Screen Modal Outer Box with 1px clear halo, clear interior, and rounded border
 pub fn draw_modal_box(canvas: &mut Canvas, w: u8, h: u8) -> (u8, u8) {
     let x = canvas.width().saturating_sub(w) >> 1;
     let y = canvas.height().saturating_sub(h) >> 1;
+    let hx = x.saturating_sub(1);
+    let hy = y.saturating_sub(1);
+    let hw = (x.saturating_add(w).saturating_add(1)).min(canvas.width()) - hx;
+    let hh = (y.saturating_add(h).saturating_add(1)).min(canvas.height()) - hy;
+    canvas.fill_rect(hx, hy, hw, hh, Color::Clear);
     draw_rounded_box(canvas, x, y, w, h);
     (x, y)
 }
@@ -310,6 +315,9 @@ pub fn draw_sheet_slide_up(
     }
     let visible_h = (64 - sheet_y).min(sheet_h as i16) as u8;
     let sy = sheet_y as u8;
+    if sy > 0 {
+        canvas.draw_horizontal_line(0, sy - 1, 128, Color::Clear);
+    }
     draw_rounded_box(canvas, 0, sy, 128, visible_h);
     draw_negated_header(canvas, sheet_y, title);
 
@@ -413,5 +421,29 @@ mod tests {
         // Bottom key badges at Y=55..61 (page 6/7)
         assert_ne!(canvas.buffer[7][6], 0);
         assert_ne!(canvas.buffer[7][120], 0);
+    }
+
+    #[test]
+    fn modal_box_and_sheet_carve_clear_border_over_dithered_backdrop() {
+        let mut canvas = Canvas::new();
+        canvas.fill_rect(0, 0, 128, 64, Color::Fill);
+        canvas.dim_backdrop(0);
+
+        let (bx, by) = draw_modal_box(&mut canvas, 60, 30);
+        // 1px clear halo directly above the modal's top border
+        for x in (bx - 1)..=(bx + 60) {
+            let page = ((by - 1) >> 3) as usize;
+            let bit = 1u8 << ((by - 1) & 7);
+            assert_eq!(canvas.buffer[page][x as usize] & bit, 0);
+        }
+
+        let mut sheet_canvas = Canvas::new();
+        sheet_canvas.fill_rect(0, 0, 128, 64, Color::Fill);
+        sheet_canvas.dim_backdrop(9);
+        draw_sheet_slide_up(&mut sheet_canvas, "Enter DFU Mode", 46, None, 0);
+        // Sheet docks at y = 18; row y = 17 (page 2 bit 1) must be a clean 1px clear separator
+        for x in 0..128usize {
+            assert_eq!(sheet_canvas.buffer[2][x] & (1 << 1), 0);
+        }
     }
 }

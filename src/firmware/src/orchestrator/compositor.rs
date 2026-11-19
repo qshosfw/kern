@@ -496,19 +496,28 @@ impl OsCompositor {
         ctx: &'a SysContext<'a, '_>,
         lock_mgr: &KeypadLockManager,
     ) {
-        canvas.clear();
+        let modal_ref = unsafe { &*core::ptr::addr_of!(ACTIVE_MODAL) };
+        let has_modal = modal_ref.is_active();
+        let has_blocking_modal = !matches!(modal_ref.modal, ActiveModal::None);
+        #[cfg(feature = "text_input")]
+        let is_text_input = matches!(modal_ref.modal, ActiveModal::TextInput(_));
+        #[cfg(not(feature = "text_input"))]
+        let is_text_input = false;
+
+        let preserve_bg = has_blocking_modal
+            && active_app_id == crate::apps::registry::APP_ID_SETTINGS
+            && crate::apps::settings::app::is_action_module_active();
+        if !preserve_bg {
+            canvas.clear();
+        }
 
         let mut sb_cfg = kernel::app::StatusBarConfig::default();
         crate::AppRegistry::render(active_app_id, canvas, ctx, &mut sb_cfg);
 
-        let modal_ref = unsafe { &*core::ptr::addr_of!(ACTIVE_MODAL) };
-        let has_modal = modal_ref.is_active();
-        #[cfg(feature = "text_input")]
-        let is_text_input = has_modal && matches!(modal_ref.modal, ActiveModal::TextInput(_));
-        #[cfg(not(feature = "text_input"))]
-        let is_text_input = false;
-
         if sb_cfg.visible && !is_text_input {
+            if preserve_bg {
+                canvas.fill_rect(0, 0, 128, 9, gfx::Color::Clear);
+            }
             if !sb_cfg.partial && sb_cfg.title.is_none() {
                 if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
                     sb_cfg.title = Some(meta.name);
@@ -519,6 +528,9 @@ impl OsCompositor {
 
         // Render OS modal overlay on top of screen if active
         if has_modal {
+            if has_blocking_modal && !is_text_input {
+                canvas.dim_backdrop(if sb_cfg.visible { 9 } else { 0 });
+            }
             modal_ref.render_overlay(canvas);
             #[cfg(feature = "text_input")]
             if is_text_input {
