@@ -1,5 +1,5 @@
 #pragma once
-#include "krx.h"
+#include <krx.h>
 
 #define KRX_FONT_TOMTHUMB 0u
 #define KRX_ALIGN_LEFT    0u

@@ -7,17 +7,16 @@ __attribute__((visibility("default"), section(".text.entry")))
 u32 leaf13_entry(u32 op, const KrxApiTable* api, void* param) {
     (void)op;
     KrxLeafContext* ctx = (KrxLeafContext*)param;
-    if (!ctx || !api || !ctx->arg || !api->display) return 1;
+    if (!ctx || !api || !ctx->arg) return 1;
     PanicState* st = (PanicState*)ctx->arg;
-    const CapDisplayVTable* d = api->display;
     const BootSlot* s = &st->cur_slot;
 
     char ln[32];
-    d->draw_str_max(29, 10, (const u8*)st->ana.line1, p_len(st->ana.line1), FONT_TOMTHUMB, COLOR_FILL, 98);
+    krx_draw_str_max(api, 29, 10, (const u8*)st->ana.line1, p_len(st->ana.line1), FONT_TOMTHUMB, COLOR_FILL, 98);
     u8 p = p_copy_cstr(ln, (const char*)s->actor_tag, 12u);
     ln[p++] = ' ';
     p += p_copy_cstr(ln + p, st->ana.line2, 14u);
-    d->draw_str_max(29, 17, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 98);
+    krx_draw_str_max(api, 29, 17, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 98);
 
     static const char LBLS[] = "PC\0LR\0SP\0PS\0R0\0OP\0BT\0R4";
     u32 vals[8];
@@ -43,20 +42,17 @@ u32 leaf13_entry(u32 op, const KrxApiTable* api, void* param) {
             } else {
                 q += p_put_hex(ln + 3, vals[idx], 8u);
             }
-            d->draw_str((i16)(29 + c * 50), y, (const u8*)ln, q, FONT_TOMTHUMB, COLOR_FILL);
+            krx_draw_str_ex(api, (i16)(29 + c * 50), y, (const u8*)ln, q, FONT_TOMTHUMB, COLOR_FILL);
         }
     }
 
-    // Edge-to-edge bottom action bar (y=55..63)
-    d->draw_line_h(0, 55, 128, COLOR_FILL);
-    if (api->ui && api->ui->ui_draw_key_badge) {
-        static const u8 BX[4] = { 1, 36, 64, 90 };
-        static const char BT[] = "OK\0Boot\0v\0Dbg\0*\0QR\0S1\0Log";
-        for (u8 i = 0; i < 4u; i++) {
-            const char* k = p_nth(BT, (u8)(i * 2u));
-            const char* v = p_nth(BT, (u8)(i * 2u + 1u));
-            api->ui->ui_draw_key_badge(BX[i], 57, (const u8*)k, p_len(k), (const u8*)v, p_len(v));
-        }
+    krx_draw_line_h(api, 0, 55, 128, COLOR_FILL);
+    static const u8 BX[4] = { 1, 36, 64, 90 };
+    static const char BT[] = "OK\0Boot\0v\0Dbg\0*\0QR\0S1\0Log";
+    for (u8 i = 0; i < 4u; i++) {
+        const char* k = p_nth(BT, (u8)(i * 2u));
+        const char* v = p_nth(BT, (u8)(i * 2u + 1u));
+        krx_ui_draw_key_badge(api, BX[i], 57, (const u8*)k, p_len(k), (const u8*)v, p_len(v));
     }
 
     ctx->continuation.kind = KRX_LEAF_KIND_DONE;

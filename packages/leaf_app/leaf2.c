@@ -1,4 +1,4 @@
-#include "../bench/krx.h"
+#include <krx.h>
 
 __attribute__((section(".text.entry")))
 u32 leaf2_entry(u32 op, const KrxApiTable* api, void* param) {

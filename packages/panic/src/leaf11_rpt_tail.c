@@ -9,9 +9,9 @@ static void rpt_kv(const KrxApiTable* api, PanicState* st, const char* k, u32 v,
     u8 p = (u8)(3u + p_put_hex(b + 3, v, 8u));
     if (nl) { b[p++] = '\r'; b[p++] = '\n'; } else { b[p++] = ' '; }
     if (st->leaf_arg == REPORT_UART) {
-        if (api->serial && api->serial->serial_write) api->serial->serial_write((const u8*)b, p);
-    } else if (api->storage && api->storage->storage_append_file) {
-        api->storage->storage_append_file((const u8*)"/log/crash.txt", 14, (const u8*)b, p);
+        krx_serial_write(api, (const u8*)b, p);
+    } else {
+        krx_fs_append(api, (const u8*)"/log/crash.txt", 14u, (const u8*)b, p);
     }
 }
 

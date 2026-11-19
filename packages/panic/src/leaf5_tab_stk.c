@@ -16,13 +16,12 @@ __attribute__((visibility("default"), section(".text.entry")))
 u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
     (void)op;
     KrxLeafContext* ctx = (KrxLeafContext*)param;
-    if (!ctx || !api || !ctx->arg || !api->display) return 1;
+    if (!ctx || !api || !ctx->arg) return 1;
     PanicState* st = (PanicState*)ctx->arg;
-    const CapDisplayVTable* d = api->display;
     const BootSlot* s = &st->cur_slot;
 
     if (!st->has_slot) {
-        d->draw_str(8, 28, (const u8*)"No crash records", 16, FONT_TOMTHUMB, COLOR_FILL);
+        krx_draw_str_ex(api, 8, 28, (const u8*)"No crash records", 16u, FONT_TOMTHUMB, COLOR_FILL);
         goto done;
     }
 
@@ -50,11 +49,11 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
         ln[p++] = ' ';
         p = p_app_s(ln, p, addr_tag(val));
         ln[p] = 0;
-        d->draw_str(4, (i16)(14 + v * 9), (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
+        krx_draw_str_ex(api, 4, (i16)(14 + v * 9), (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
     }
 
-    if (api->ui && api->ui->ui_draw_scrollbar && total > 5u) {
-        api->ui->ui_draw_scrollbar(123, 12, 48, sc, total, 5);
+    if (total > 5u) {
+        krx_ui_draw_scrollbar(api, 123u, 12u, 48u, sc, total, 5u);
     }
 
 done:

@@ -1,7 +1,7 @@
 #ifndef PANIC_SHARED_H
 #define PANIC_SHARED_H
 
-#include "krx.h"
+#include <krx.h>
 
 #define FONT_TOMTHUMB 0u
 #define ALIGN_LEFT    0u
@@ -187,17 +187,7 @@ static inline u8 p_put_hex0x(char* out, u32 v, u8 digits) {
 }
 
 static inline u32 p_udivmod(const KrxApiTable* api, u32 n, u32 d, u32* rem_out) {
-    if (api && api->math && api->math->uidivmod) {
-        u64 r = api->math->uidivmod(n, d);
-        if (rem_out) *rem_out = (u32)(r >> 32);
-        return (u32)r;
-    }
-    u32 q = 0;
-    if (d != 0u) {
-        while (n >= d) { n -= d; q++; }
-    }
-    if (rem_out) *rem_out = n;
-    return q;
+    return krx_udivmod(api, n, d, rem_out);
 }
 
 static inline u8 p_put_uint(const KrxApiTable* api, char* out, u32 v) {
@@ -242,10 +232,7 @@ static inline u8 p_slot_valid(const KrxApiTable* api, const BootSlot* s) {
         s->ident[2] != BOOT_IDENT_2 || s->ident[3] != BOOT_IDENT_3) {
         return 0u;
     }
-    if (api && api->math && api->math->crc32) {
-        return (api->math->crc32((const u8*)s, 124u) == s->crc32) ? 1u : 0u;
-    }
-    return 1u;
+    return (krx_crc32(api, (const u8*)s, 124u) == s->crc32) ? 1u : 0u;
 }
 
 static inline const BootSlot* p_latest_slot(const KrxApiTable* api, const BootRecord* rec) {

@@ -87,7 +87,7 @@ u32 leaf1_entry(u32 op, const KrxApiTable* api, void* param) {
     if (!ctx || !api || !ctx->arg) return 1;
     DfuSharedState* st = (DfuSharedState*)ctx->arg;
 
-    if (api->power && api->power->sys_wake_backlight) api->power->sys_wake_backlight();
+    krx_wake_backlight(api);
     *(volatile u32*)0x50001418u = 1u << 8;
 
     st->keys_held = ((*(const volatile u32*)0x50000410u) & 0xC000u) != 0xC000u;
@@ -96,7 +96,7 @@ u32 leaf1_entry(u32 op, const KrxApiTable* api, void* param) {
     u8 bl_date[8];
     st->vid_pid = read_bl_rom_meta(bl_date);
 
-    u8* fb = api->display->get_framebuffer();
+    u8* fb = krx_get_framebuffer(api);
     decode_rle_1024(fb, DFU_SPLASH_RLE, sizeof(DFU_SPLASH_RLE));
 
     char line[32];
@@ -105,14 +105,17 @@ u32 leaf1_entry(u32 op, const KrxApiTable* api, void* param) {
     u32 hdr_len = 8u;
     if (bl_date[0] != 0) {
         line[hdr_len++] = ' '; line[hdr_len++] = '(';
-        dfu_copy_bytes((u8*)(line + hdr_len), bl_date, 4); hdr_len += 4;
-        line[hdr_len++] = '-';
-        dfu_copy_bytes((u8*)(line + hdr_len), bl_date + 4, 2); hdr_len += 2;
-        line[hdr_len++] = '-';
-        dfu_copy_bytes((u8*)(line + hdr_len), bl_date + 6, 2); hdr_len += 2;
+        for (u32 k = 0; k < 8u; k++) {
+            if (k == 4u || k == 6u) line[hdr_len++] = '-';
+            line[hdr_len++] = (char)bl_date[k];
+        }
         line[hdr_len++] = ')';
     }
-    if (api->display->str_width((const u8*)line, (u16)hdr_len, KRX_FONT_TOMTHUMB) > 84) hdr_len = 8u;
-    api->display->draw_str_align(125, 5, (const u8*)line, (u16)hdr_len, KRX_FONT_TOMTHUMB, 1, KRX_ALIGN_RIGHT);
+    KrxTextReq tr;
+    tr.text = (const u8*)line; tr.x = 125; tr.y = 5; tr.len = (u16)hdr_len;
+    tr.arg = KRX_ALIGN_RIGHT; tr.font = KRX_FONT_TOMTHUMB; tr.color = 1u; tr.flags = 1u; tr._pad = 0u;
+    if ((i16)krx_call(api, OP_GFX_TEXT, (u32)&tr, 0u, 0u) > 84) tr.len = 8u;
+    tr.flags = 0u;
+    krx_call(api, OP_GFX_TEXT, (u32)&tr, 0u, 0u);
     return 0;
 }

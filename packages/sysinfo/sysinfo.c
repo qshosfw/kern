@@ -61,16 +61,15 @@ static char       g_mac_str[18];
 static char       g_chip_id[11];
 
 static void set_sb(const KrxApiTable* api, u8 enable) {
-    if (!api->ui || !api->ui->ui_set_status_bar) return;
     if (!enable) {
-        api->ui->ui_set_status_bar(0);
+        krx_ui_set_status_bar(api, 0);
         return;
     }
     KrxStatusBar sb;
     for (u8 i = 0; i < sizeof(sb); i++) ((u8*)&sb)[i] = 0;
     sb.flags = KRX_STATUS_VISIBLE | KRX_STATUS_PARTIAL;
     sb.tray_icon_id = KRX_ICON_NONE;
-    api->ui->ui_set_status_bar(&sb);
+    krx_ui_set_status_bar(api, &sb);
 }
 
 static u8 tab_item_count(u8 tab) {
@@ -104,13 +103,12 @@ static u8 put_str(char* dst, const char* src, u8 max_n) {
     return n;
 }
 
-static void draw_glyph_5x5(const CapDisplayVTable* d, i16 x, i16 y, const u8* rows, u8 color) {
-    if (!d || !d->draw_pixel) return;
+static void draw_glyph_5x5(const KrxApiTable* api, i16 x, i16 y, const u8* rows, u8 color) {
     for (u8 r = 0; r < 5u; r++) {
         u8 bits = rows[r];
         for (u8 c = 0; c < 5u; c++) {
             if (bits & (0x80u >> c)) {
-                d->draw_pixel((i16)(x + c), (i16)(y + r), color);
+                krx_draw_pixel(api, (i16)(x + c), (i16)(y + r), color);
             }
         }
     }
@@ -152,8 +150,7 @@ static const char* format_system_val(const KrxApiTable* api, u8 idx, char* buf) 
     if (idx == 2u) return g_info.git_hash[0] ? g_info.git_hash : S_UNK;
     if (idx == 3u) return g_info.boot_ver[0] ? g_info.boot_ver : S_UNK;
     if (idx == 4u) {
-        u32 mhz = (api->power && api->power->sys_cpu_freq_hz)
-            ? si_udivmod(api, api->power->sys_cpu_freq_hz(), 1000000u, 0) : 48u;
+        u32 mhz = si_udivmod(api, krx_sys_cpu_freq_hz(api), 1000000u, 0);
         u8 p = si_put_uint(api, buf, mhz);
         put_str(buf + p, " MHz", 4u);
         return buf;
@@ -191,11 +188,11 @@ static const char* format_device_val(const KrxApiTable* api, u8 idx, char* buf) 
 
 static const char* format_status_val(const KrxApiTable* api, u8 idx, char* buf) {
     if (idx == 0u) {
-        u16 mv = (api->power && api->power->sys_battery_mv) ? api->power->sys_battery_mv() : 0u;
-        u8 pct = (api->power && api->power->sys_battery_pct) ? api->power->sys_battery_pct() : 0u;
-        u8 chg = (api->power && api->power->sys_is_charging) ? api->power->sys_is_charging() : 0u;
-        u8 crit = (api->power && api->power->sys_is_critical) ? api->power->sys_is_critical() : 0u;
-        u8 low = (api->power && api->power->sys_is_low) ? api->power->sys_is_low() : 0u;
+        u16 mv = krx_pwr_u16(api, 0u);
+        u8 pct = (u8)krx_pwr_u16(api, 1u);
+        u8 chg = (u8)krx_pwr_u16(api, 6u);
+        u8 crit = (u8)krx_pwr_u16(api, 8u);
+        u8 low = (u8)krx_pwr_u16(api, 7u);
         u32 rem = 0, volts = si_udivmod(api, mv, 1000u, &rem);
         u32 centi = si_udivmod(api, rem, 10u, 0);
         u8 p = si_put_uint(api, buf, volts);
@@ -218,19 +215,19 @@ static const char* format_status_val(const KrxApiTable* api, u8 idx, char* buf) 
         return buf;
     }
     if (idx == 1u) {
-        u8 btype = (api->power && api->power->sys_battery_type) ? api->power->sys_battery_type() : 0u;
+        u8 btype = (u8)krx_pwr_u16(api, 3u);
         if (btype > 5u) btype = 5u;
         return si_nth(BATT_PACKS, btype);
     }
     if (idx == 2u) {
-        u16 raw = (api->power && api->power->sys_raw_battery_adc) ? api->power->sys_raw_battery_adc() : 0u;
+        u16 raw = krx_pwr_u16(api, 4u);
         u8 p = put_str(buf, "raw ", 4u);
         p += si_put_uint(api, buf + p, raw);
         buf[p] = 0;
         return buf;
     }
     if (idx == 3u) {
-        i16 deci_c = (api->power && api->power->sys_mcu_temp) ? api->power->sys_mcu_temp() : 0;
+        i16 deci_c = (i16)krx_pwr_u16(api, 5u);
         u8 p = 0;
         if (deci_c < 0) {
             buf[p++] = '-';
@@ -247,7 +244,7 @@ static const char* format_status_val(const KrxApiTable* api, u8 idx, char* buf) 
         return buf;
     }
     if (idx == 4u) {
-        u32 secs = (api->timer && api->timer->sys_uptime_secs) ? api->timer->sys_uptime_secs() : 0u;
+        u32 secs = krx_uptime_secs(api);
         u32 s = 0, mins = si_udivmod(api, secs, 60u, &s);
         u32 m = 0, h = si_udivmod(api, mins > 5999u ? 5999u : mins, 60u, &m);
         si_put_2d(api, buf + 0, h);
@@ -258,25 +255,14 @@ static const char* format_status_val(const KrxApiTable* api, u8 idx, char* buf) 
         buf[8] = 0;
         return buf;
     }
-    u16 cur = (api->service && api->service->sys_stack_margin)
-        ? api->service->sys_stack_margin() : 0u;
-    u16 min_b = (api->service && api->service->sys_stack_free_min)
-        ? api->service->sys_stack_free_min() : 0u;
+    u16 cur = krx_sys_stack_free(api);
     u8 p = si_put_uint(api, buf, cur);
     buf[p++] = 'B';
-    if (min_b > 0u && min_b != cur) {
-        p += put_str(buf + p, " / ", 3u);
-        p += si_put_uint(api, buf + p, min_b);
-        buf[p++] = 'B';
-    }
     buf[p] = 0;
     return buf;
 }
 
 static void render_kv_tab(const KrxApiTable* api, u8 tab, u8 inner_y, u8 inner_h) {
-    const CapUiVTable* ui = api->ui;
-    if (!ui || !ui->ui_draw_menu_item) return;
-
     const char* keys =
         (tab == TAB_SYSTEM) ? SYSTEM_KEYS : ((tab == TAB_DEVICE) ? DEVICE_KEYS : STATUS_KEYS);
     u8 total = tab_item_count(tab);
@@ -295,17 +281,15 @@ static void render_kv_tab(const KrxApiTable* api, u8 tab, u8 inner_y, u8 inner_h
         const char* k = si_nth(keys, idx);
         i16 y = (i16)(inner_y + 1u + v * 12u);
         u8 is_sel = (idx == sel) ? 1u : 0u;
-        ui->ui_draw_menu_item(y, (const u8*)k, si_len(k), (const u8*)val, si_len(val), is_sel, 0);
+        krx_ui_draw_menu_item(api, y, (const u8*)k, si_len(k), (const u8*)val, si_len(val), is_sel, 0u);
 
-        if (tab == TAB_DEVICE && idx == 6u && api->display) {
+        if (tab == TAB_DEVICE && idx == 6u) {
             const u8* glyph =
                 (g_info.qs1_status == KRX_QS1_VERIFIED) ? GLYPH_CHECK : GLYPH_CROSS;
-            draw_glyph_5x5(api->display, 32, (i16)(y + 3), glyph, is_sel ? COLOR_CLEAR : COLOR_FILL);
+            draw_glyph_5x5(api, 32, (i16)(y + 3), glyph, is_sel ? COLOR_CLEAR : COLOR_FILL);
         }
     }
-    if (ui->ui_draw_scrollbar) {
-        ui->ui_draw_scrollbar(123, inner_y, inner_h, sc, total, LIST_VISIBLE);
-    }
+    krx_ui_draw_scrollbar(api, 123u, inner_y, inner_h, sc, total, LIST_VISIBLE);
 }
 
 int krx_main(u32 op, const KrxApiTable* api, const void* param) {
@@ -317,13 +301,11 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             g_sel[i] = 0;
             g_scroll[i] = 0;
         }
-        g_last_sec = (api->timer && api->timer->sys_uptime_secs) ? api->timer->sys_uptime_secs() : 0u;
+        g_last_sec = krx_uptime_secs(api);
         for (u8 i = 0; i < sizeof(g_info); i++) ((u8*)&g_info)[i] = 0;
-        if (api->service && api->service->sys_info) {
-            api->service->sys_info(&g_info);
-        }
+        krx_sys_info(api, &g_info);
         if (g_info.qs1_len > 0u) {
-            u32 ok = (api->service && api->service->leaf_call) ? api->service->leaf_call(2, 0) : 0u;
+            u32 ok = krx_leaf_call(api, 2u, 0u);
             g_info.qs1_status = (ok == 1u) ? KRX_QS1_VERIFIED : KRX_QS1_UNVERIFIED;
         } else if (g_info.qs1_status == 0u) {
             g_info.qs1_status = (g_info.flags & KRX_SYS_INFO_FLAG_HAS_CERT)
@@ -340,7 +322,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         u8 kind = ev[0];
 
         if (kind == KRX_EV_TICK) {
-            u32 now = (api->timer && api->timer->sys_uptime_secs) ? api->timer->sys_uptime_secs() : 0u;
+            u32 now = krx_uptime_secs(api);
             if (now != g_last_sec) {
                 g_last_sec = now;
                 return (g_tab == TAB_STATUS) ? 1 : 0;
@@ -389,23 +371,20 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     }
 
     if (op == KRX_OP_RENDER) {
-        if (!api->display) return 0;
-        api->display->clear();
+        krx_clear(api);
 
         if (g_tab == TAB_LEGAL) {
-            u32 rc = (api->service && api->service->leaf_call)
-                ? api->service->leaf_call(1, (u32)g_scroll[TAB_LEGAL])
-                : 1u;
-            if (rc != 0u && api->ui && api->ui->ui_draw_menu_item) {
+            u32 rc = krx_leaf_call(api, 1u, (u32)g_scroll[TAB_LEGAL]);
+            if (rc != 0u) {
                 u8 sel = g_sel[TAB_LEGAL] & 3u;
                 for (u8 i = 0; i < 4u; i++) {
                     const char* k = si_nth(LEGAL_KEYS, i);
                     const char* v = si_nth(LEGAL_VALS, i);
-                    api->ui->ui_draw_menu_item(
-                        (i16)(12u + i * 12u),
+                    krx_ui_draw_menu_item(
+                        api, (i16)(12u + i * 12u),
                         (const u8*)k, si_len(k),
                         (const u8*)v, si_len(v),
-                        i == sel, 0
+                        i == sel, 0u
                     );
                 }
             }
@@ -414,7 +393,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         }
 
         krx_draw_tabbed_sheet(
-            api, 0, 0, 128, 64,
+            api, 0u, 0u, 128u, 64u,
             g_tab, TAB_COUNT,
             KRX_TAB_FLAG_INTEGRATED_86 | KRX_TAB_FLAG_BOTTOM_BORDER,
             TAB_TITLES, (u16)sizeof(TAB_TITLES)

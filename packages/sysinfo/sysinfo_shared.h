@@ -1,7 +1,7 @@
 #ifndef SYSINFO_SHARED_H
 #define SYSINFO_SHARED_H
 
-#include "krx.h"
+#include <krx.h>
 
 static inline u8 si_len(const char* s) {
     u8 n = 0;
@@ -23,17 +23,7 @@ static inline char si_hex_nib(u8 v) {
 }
 
 static inline u32 si_udivmod(const KrxApiTable* api, u32 n, u32 d, u32* rem_out) {
-    if (api && api->math && api->math->uidivmod) {
-        u64 res = api->math->uidivmod(n, d);
-        if (rem_out) *rem_out = (u32)(res >> 32);
-        return (u32)res;
-    }
-    u32 q = 0;
-    if (d != 0) {
-        while (n >= d) { n -= d; q++; }
-    }
-    if (rem_out) *rem_out = n;
-    return q;
+    return krx_udivmod(api, n, d, rem_out);
 }
 
 static inline u8 si_put_uint(const KrxApiTable* api, char* out, u32 v) {

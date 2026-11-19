@@ -1,15 +1,9 @@
-#include "../bench/krx.h"
+#include <krx.h>
 
 static u32 g_paged_res = 0;
 static u32 g_status = 0;
 
 typedef u32 (*Block1Fn)(const KrxApiTable* api, u32 arg);
-
-static void p_log(const KrxApiTable* api, const char* s, u16 len) {
-    if (api && api->serial && api->serial->serial_write) {
-        api->serial->serial_write((const u8*)s, len);
-    }
-}
 
 __attribute__((section(".text.entry")))
 u32 krx_entry(u32 op, const KrxApiTable* api, void* param) {
@@ -17,17 +11,17 @@ u32 krx_entry(u32 op, const KrxApiTable* api, void* param) {
 
     if (op == KRX_OP_START) {
         g_status = 1;
-        p_log(api, "ROOT: P1 PAGED START\n", 21);
+        krx_serial_write(api, (const u8*)"ROOT: P1 PAGED START\n", 21u);
 
-        u32 res = KRX_PAGED_INVOKE(api, 1, Block1Fn, 0, 0, api, 40);
+        u32 res = KRX_PAGED_INVOKE(api, 1u, Block1Fn, 0u, 0u, api, 40u);
         g_paged_res = res;
 
-        if (res == 47) {
+        if (res == 47u) {
             g_status = 2;
-            p_log(api, "ROOT: DEMAND STREAM RES=47 PASS\n", 32);
+            krx_serial_write(api, (const u8*)"ROOT: DEMAND STREAM RES=47 PASS\n", 32u);
         } else {
             g_status = 3;
-            p_log(api, "ROOT: DEMAND STREAM MISMATCH\n", 29);
+            krx_serial_write(api, (const u8*)"ROOT: DEMAND STREAM MISMATCH\n", 29u);
         }
         return 0;
     }
@@ -43,14 +37,12 @@ u32 krx_entry(u32 op, const KrxApiTable* api, void* param) {
     }
 
     if (op == KRX_OP_RENDER) {
-        if (api->display) {
-            api->display->clear();
-            api->display->draw_str(4, 12, (const u8*)"PAGED P1 DEMAND", 15, 0, 1);
-            if (g_status == 2) {
-                api->display->draw_str(4, 24, (const u8*)"STREAM OK: 47", 13, 0, 1);
-            } else if (g_status == 3) {
-                api->display->draw_str(4, 24, (const u8*)"STREAM FAILED", 13, 0, 1);
-            }
+        krx_clear(api);
+        krx_draw_str_ex(api, 4, 12, (const u8*)"PAGED P1 DEMAND", 15u, 0u, 1u);
+        if (g_status == 2u) {
+            krx_draw_str_ex(api, 4, 24, (const u8*)"STREAM OK: 47", 13u, 0u, 1u);
+        } else if (g_status == 3u) {
+            krx_draw_str_ex(api, 4, 24, (const u8*)"STREAM FAILED", 13u, 0u, 1u);
         }
         return 0;
     }

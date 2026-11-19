@@ -17,14 +17,14 @@ u32 leaf1_entry(u32 op, const KrxApiTable* api, void* param) {
 
     if (s->forensics.crash_signature != 0u) {
         a->crash_sig = s->forensics.crash_signature;
-    } else if (api->math && api->math->crc32) {
+    } else {
         u32 sig_in[5];
         sig_in[0] = s->fault_pc;
         sig_in[1] = s->fault_lr;
         sig_in[2] = s->panic_file_hash;
         sig_in[3] = (u32)s->panic_line;
         sig_in[4] = s->reset_reason;
-        a->crash_sig = api->math->crc32((const u8*)sig_in, 20u);
+        a->crash_sig = krx_crc32(api, (const u8*)sig_in, 20u);
     }
 
     u32 pc_even = s->fault_pc & ~1u;

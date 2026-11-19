@@ -5,9 +5,9 @@
 
 static void rpt_raw(const KrxApiTable* api, PanicState* st, const char* s, u8 len) {
     if (st->leaf_arg == REPORT_UART) {
-        if (api->serial && api->serial->serial_write) api->serial->serial_write((const u8*)s, len);
-    } else if (api->storage && api->storage->storage_append_file) {
-        api->storage->storage_append_file((const u8*)"/log/crash.txt", 14, (const u8*)s, len);
+        krx_serial_write(api, (const u8*)s, len);
+    } else {
+        krx_fs_append(api, (const u8*)"/log/crash.txt", 14u, (const u8*)s, len);
     }
 }
 
@@ -33,11 +33,9 @@ u32 leaf10_entry(u32 op, const KrxApiTable* api, void* param) {
     const BootSlot* s = &st->cur_slot;
 
     static const char HDR[] = "=== KERN CRASH REPORT ===\r\n";
-    if (st->leaf_arg == REPORT_FILE && api->storage) {
-        if (api->storage->storage_create_dir) api->storage->storage_create_dir((const u8*)"/log", 4);
-        if (api->storage->storage_write_file) {
-            api->storage->storage_write_file((const u8*)"/log/crash.txt", 14, (const u8*)HDR, sizeof(HDR) - 1u);
-        }
+    if (st->leaf_arg == REPORT_FILE) {
+        krx_fs_mkdir(api, (const u8*)"/log", 4u);
+        krx_fs_write(api, (const u8*)"/log/crash.txt", 14u, (const u8*)HDR, sizeof(HDR) - 1u);
     } else {
         rpt_raw(api, st, HDR, sizeof(HDR) - 1u);
     }

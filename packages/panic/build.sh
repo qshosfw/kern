@@ -5,7 +5,7 @@ SRC="$DIR/src"
 OUT="$DIR/build"
 mkdir -p "$OUT"
 
-CC_FLAGS="-mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -fvisibility=hidden -nostdlib -fno-builtin -fno-tree-loop-distribute-patterns -fno-jump-tables -ffunction-sections -fdata-sections -I$SRC -I$DIR/../bench"
+CC_FLAGS="-mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -fvisibility=hidden -nostdlib -fno-builtin -fno-tree-loop-distribute-patterns -fno-jump-tables -ffunction-sections -fdata-sections -I$SRC -I$DIR/../sdk"
 LD_FLAGS="-Wl,--gc-sections -T $DIR/krx.ld -Wl,--no-dynamic-linker"
 
 compile_unit() {

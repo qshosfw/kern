@@ -1,4 +1,4 @@
-#include "../bench/krx.h"
+#include <krx.h>
 
 __attribute__((section(".text.entry")))
 u32 block1_compute(const KrxApiTable* api, u32 arg) {

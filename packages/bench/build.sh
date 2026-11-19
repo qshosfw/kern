@@ -2,7 +2,7 @@
 set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 arm-none-eabi-gcc -mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -nostdlib -fno-builtin -fno-jump-tables \
-    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -I"$DIR/../sdk" \
     -T "$DIR/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/bench.elf" "$DIR/bench.c"
 arm-none-eabi-objcopy -O binary "$DIR/bench.elf" "$DIR/bench.bin"
 # Caps: RadioRx|RadioTx|StorageRd|StorageWr|AudioOut|Display|Serial|Usb|HwCrc|RTC|Power|AudioCap|Keypad|TaskControl|Service = 0x1D07FF

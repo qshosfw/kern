@@ -1,4 +1,4 @@
-#include "../bench/krx.h"
+#include <krx.h>
 
 int krx_main(u32 op, const KrxApiTable* api, const void* param);
 
@@ -11,9 +11,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     if (!api) return 0;
 
     if (op == KRX_OP_START) {
-        if (api->radio && api->radio->rf_tune) {
-            api->radio->rf_tune(145500000, 25, 12500);
-        }
+        krx_rf_tune(api, 145500000u, 1u, 12500u);
         return 0;
     }
 
@@ -21,23 +19,15 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         if (param) {
             const KrxEvent* ev = (const KrxEvent*)param;
             if (ev->kind == KRX_EV_KEY && ev->key == KEY_EXIT) {
-                return 0; // Unhandled -> request OS exit
+                return 0;
             }
         }
-        return 1; // Consumed
+        return 1;
     }
 
     if (op == KRX_OP_RENDER) {
-        if (api->display) {
-            if (api->display->clear) api->display->clear();
-            if (api->display->draw_str) {
-                api->display->draw_str(16, 26, (const u8*)"BEACON 145.500", 14, 0, 1);
-            }
-        }
-        return 0;
-    }
-
-    if (op == KRX_OP_EXIT) {
+        krx_clear(api);
+        krx_draw_str_ex(api, 16, 26, (const u8*)"BEACON 145.500", 14u, 0u, 1u);
         return 0;
     }
 

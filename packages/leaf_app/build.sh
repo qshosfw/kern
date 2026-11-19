@@ -4,17 +4,17 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Compile Root
 arm-none-eabi-gcc -mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -nostdlib -fno-builtin -fno-jump-tables \
-    -T "$DIR/../bench/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/root.elf" "$DIR/leaf_app.c"
+    -I"$DIR/../sdk" -T "$DIR/../sdk/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/root.elf" "$DIR/leaf_app.c"
 arm-none-eabi-objcopy -O binary "$DIR/root.elf" "$DIR/root.bin"
 
 # Compile Leaf 1
 arm-none-eabi-gcc -mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -nostdlib -fno-builtin -fno-jump-tables \
-    -T "$DIR/../bench/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/leaf1.elf" "$DIR/leaf1.c"
+    -I"$DIR/../sdk" -T "$DIR/../sdk/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/leaf1.elf" "$DIR/leaf1.c"
 arm-none-eabi-objcopy -O binary "$DIR/leaf1.elf" "$DIR/leaf1.bin"
 
 # Compile Leaf 2
 arm-none-eabi-gcc -mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -nostdlib -fno-builtin -fno-jump-tables \
-    -T "$DIR/../bench/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/leaf2.elf" "$DIR/leaf2.c"
+    -I"$DIR/../sdk" -T "$DIR/../sdk/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/leaf2.elf" "$DIR/leaf2.c"
 arm-none-eabi-objcopy -O binary "$DIR/leaf2.elf" "$DIR/leaf2.bin"
 
 # Pack into P0 Structured Paged package

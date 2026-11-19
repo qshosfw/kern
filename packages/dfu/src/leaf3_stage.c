@@ -14,12 +14,12 @@ static const u8 DFU_BANNERS_PACKED[] =
     "\x11" "Aborted - reflash";
 
 static void clear_draw_page5(const KrxApiTable* api, i16 x, u8 align, const char* s, u16 len) {
-    u8* fb = api->display->get_framebuffer();
+    u8* fb = krx_get_framebuffer(api);
     for (u32 c = 0; c < 128u; c++) {
         fb[(5u << 7) + c] &= 0x03u;
         fb[(6u << 7) + c] &= 0xF8u;
     }
-    api->display->draw_str_align(x, 49, (const u8*)s, len, KRX_FONT_TOMTHUMB, 1, align);
+    krx_draw_str_align(api, x, 49, (const u8*)s, len, KRX_FONT_TOMTHUMB, 1u, align);
 }
 
 __attribute__((visibility("default"), section(".text.entry")))
@@ -34,26 +34,26 @@ u32 leaf3_entry(u32 op, const KrxApiTable* api, void* param) {
     static const char post[] = "to reboot";
     const i16 x0 = (128 - (24 + 20 + 5 + 36)) >> 1;
     const i16 bx = x0 + 24;
-    api->display->draw_str(x0, 58, (const u8*)pre, sizeof(pre) - 1, KRX_FONT_TOMTHUMB, 1);
-    api->display->fill_rect(bx, 53, 20, 7, 1);
-    api->display->draw_str(bx + 2, 58, (const u8*)key, sizeof(key) - 1, KRX_FONT_TOMTHUMB, 0);
-    api->display->draw_str(bx + 25, 58, (const u8*)post, sizeof(post) - 1, KRX_FONT_TOMTHUMB, 1);
+    krx_draw_str_ex(api, x0, 58, (const u8*)pre, sizeof(pre) - 1, KRX_FONT_TOMTHUMB, 1u);
+    krx_fill_rect(api, bx, 53, 20, 7, 1u);
+    krx_draw_str_ex(api, bx + 2, 58, (const u8*)key, sizeof(key) - 1, KRX_FONT_TOMTHUMB, 0u);
+    krx_draw_str_ex(api, bx + 25, 58, (const u8*)post, sizeof(post) - 1, KRX_FONT_TOMTHUMB, 1u);
 
     if (st->keys_held) {
         static const char rel[] = "Release side key...";
         clear_draw_page5(api, 64, KRX_ALIGN_CENTER, rel, sizeof(rel) - 1);
-        api->display->commit_frame();
+        krx_commit_frame(api);
         while (((*(const volatile u32*)0x50000410u) & 0xC000u) != 0xC000u) {
-            if (api->timer && api->timer->sys_delay_ms) api->timer->sys_delay_ms(10);
+            krx_delay_ms(api, 10u);
         }
-        if (api->timer && api->timer->sys_delay_ms) api->timer->sys_delay_ms(20);
+        krx_delay_ms(api, 20u);
     }
 
     clear_draw_page5(api, 64, KRX_ALIGN_CENTER, (const char*)(DFU_BANNERS_PACKED + 1), 13);
-    api->display->commit_frame();
+    krx_commit_frame(api);
 
     if (st->vid_pid == 0x36B70001u) {
-        u8* fb = api->display->get_framebuffer();
+        u8* fb = krx_get_framebuffer(api);
         const u8* p = DFU_BANNERS_PACKED;
         for (u8 idx = 0; idx < 8u; idx++) {
             u32 len = *p++;
@@ -74,7 +74,7 @@ u32 leaf3_entry(u32 op, const KrxApiTable* api, void* param) {
             if (j == 4u) vp[j] = ':';
             else { u8 nib = (u8)(tv >> 28); tv <<= 4; vp[j] = (char)(nib + (nib < 10 ? '0' : ('A' - 10))); }
         }
-        api->display->draw_str_align(93, 13, (const u8*)vp, 9, KRX_FONT_TOMTHUMB, 1, KRX_ALIGN_CENTER);
+        krx_draw_str_align(api, 93, 13, (const u8*)vp, 9, KRX_FONT_TOMTHUMB, 1u, KRX_ALIGN_CENTER);
         dfu_copy_bytes(st->sram_vidpid, fb + (1u << 7) + 73u, 40u);
         st->has_stage = 1u;
     } else {

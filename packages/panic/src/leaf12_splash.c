@@ -1,5 +1,5 @@
 /*
- * P0 Leaf 12: Crash Splash Top Bar, Animated Sad-Radio Art & Bottom Action Bar (<= 1 KB).
+ * P0 Leaf 12: Crash Splash Top Bar, Animated Sad-Radio Art & Micro Telemetry (<= 1 KB).
  */
 #include "panic_shared.h"
 
@@ -14,65 +14,71 @@ static const u8 SAD_RADIO_BMP[81] = {
     0x3F,0xFF,0xF8, 0x3F,0xFF,0xF8, 0x1F,0xFF,0xF0,
 };
 
+// Packed 1px points [x, y]: frown (9), idle 2x2 eyes + spark (10), glitch X-eyes + spark (12)
+static const u8 FROWN_PTS[9][2] = {
+    {11,24}, {12,24}, {13,24}, {14,24}, {15,24}, {10,25}, {16,25}, {9,26}, {17,26},
+};
+static const u8 IDLE_PTS[10][2] = {
+    {9,20}, {10,20}, {9,21}, {10,21}, {16,20}, {17,20}, {16,21}, {17,21}, {9,11}, {11,9},
+};
+static const u8 GLITCH_PTS[12][2] = {
+    {9,20}, {11,20}, {10,21}, {9,22}, {11,22},
+    {15,20}, {17,20}, {16,21}, {15,22}, {17,22},
+    {10,10}, {12,12},
+};
+
+static __attribute__((noinline)) void draw_pts(const KrxApiTable* api, const u8 (*pts)[2], u8 n) {
+    for (u8 i = 0; i < n; i++) {
+        krx_draw_pixel(api, pts[i][0], pts[i][1], 1u);
+    }
+}
+
+static __attribute__((noinline)) void txt(
+    const KrxApiTable* api, i16 x, i16 y, const char* s, u8 len, u8 col_al
+) {
+    krx_draw_str_align(api, x, y, (const u8*)s, len, FONT_TOMTHUMB, col_al & 1u, col_al >> 1);
+}
+
 __attribute__((visibility("default"), section(".text.entry")))
 u32 leaf12_entry(u32 op, const KrxApiTable* api, void* param) {
     (void)op;
     KrxLeafContext* ctx = (KrxLeafContext*)param;
-    if (!ctx || !api || !ctx->arg || !api->display) return 1;
+    if (!ctx || !api || !ctx->arg) return 1;
     PanicState* st = (PanicState*)ctx->arg;
-    const CapDisplayVTable* d = api->display;
     const BootSlot* s = &st->cur_slot;
-    d->clear();
+    krx_clear(api);
 
-    // Full-bleed edge-to-edge inverted header bar (y=0..8)
-    d->fill_rect(0, 0, 128, 8, COLOR_FILL);
+    krx_fill_rect(api, 0, 0, 128, 8, COLOR_FILL);
     char ln[24];
     u8 p = p_app_s(ln, 0u, ":( ");
     p = p_app_s(ln, p, p_reason_name(s->reset_reason));
     p = p_app_s(ln, p, " #");
     p += p_put_uint(api, ln + p, s->crash_count);
-    d->draw_str(2, 1, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_CLEAR);
+    txt(api, 2, 1, ln, p, COLOR_CLEAR);
 
     if (st->boot_rem == 255u) {
-        d->draw_str_align(126, 1, (const u8*)"HOLD", 4u, FONT_TOMTHUMB, COLOR_CLEAR, ALIGN_RIGHT);
+        txt(api, 126, 1, "HOLD", 4u, COLOR_CLEAR | (ALIGN_RIGHT << 1));
     } else {
         p = p_put_uint(api, ln, st->boot_rem);
         ln[p++] = 's';
-        d->draw_str_align(126, 1, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_CLEAR, ALIGN_RIGHT);
+        txt(api, 126, 1, ln, p, COLOR_CLEAR | (ALIGN_RIGHT << 1));
     }
 
-    // Left: DFU-style radio icon @ (1, 10) with animated :( / X( inside LCD + antenna spark
-    d->draw_bitmap(1, 10, 24, 27, SAD_RADIO_BMP, sizeof(SAD_RADIO_BMP));
+    krx_draw_bitmap(api, 1, 10, 24u, 27u, SAD_RADIO_BMP, sizeof(SAD_RADIO_BMP));
     if (st->boot_anim & 1u) {
-        // X( glitch eyes + spark
-        for (i8 k = 0; k < 3; k++) {
-            for (u8 e = 0; e < 2u; e++) {
-                i16 ex = (i16)((e ? 15 : 9) + k);
-                d->draw_pixel(ex, (i16)(20 + k), 1);
-                d->draw_pixel((i16)((e ? 17 : 11) - k), (i16)(20 + k), 1);
-            }
-        }
-        d->draw_pixel(10, 10, 1); d->draw_pixel(12, 12, 1);
+        draw_pts(api, GLITCH_PTS, 12u);
     } else {
-        d->fill_rect(9, 20, 2, 2, 1);
-        d->fill_rect(16, 20, 2, 2, 1);
-        d->draw_pixel(9, 11, 1); d->draw_pixel(11, 9, 1);
+        draw_pts(api, IDLE_PTS, 10u);
     }
-    // Sad frown mouth inside radio LCD
-    d->fill_rect(11, 24, 5, 1, 1);
-    d->draw_pixel(10, 25, 1); d->draw_pixel(16, 25, 1);
-    d->draw_pixel(9, 26, 1); d->draw_pixel(17, 26, 1);
+    draw_pts(api, FROWN_PTS, 9u);
 
-    // Micro telemetry under radio icon (x=1..27)
     p = p_app_s(ln, 0u, "IQ:");
     p += p_put_uint(api, ln + p, s->forensics.ipsr_num);
-    d->draw_str(1, 40, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
+    txt(api, 1, 40, ln, p, COLOR_FILL);
     p = p_app_s(ln, 0u, "S:");
     p += p_put_hex(ln + p, st->ana.crash_sig >> 16, 4u);
-    d->draw_str(1, 47, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
+    txt(api, 1, 47, ln, p, COLOR_FILL);
 
     ctx->continuation.kind = KRX_LEAF_KIND_DONE;
-    ctx->continuation.target_or_code = 0;
-    ctx->continuation.payload = 0;
     return 0;
 }

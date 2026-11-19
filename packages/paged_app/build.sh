@@ -4,12 +4,12 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Compile Block 0
 arm-none-eabi-gcc -mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -nostdlib -fno-builtin -fno-jump-tables \
-    -T "$DIR/../bench/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/block0.elf" "$DIR/paged_app.c"
+    -I"$DIR/../sdk" -T "$DIR/../sdk/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/block0.elf" "$DIR/paged_app.c"
 arm-none-eabi-objcopy -O binary "$DIR/block0.elf" "$DIR/block0.bin"
 
 # Compile Block 1
 arm-none-eabi-gcc -mthumb -mcpu=cortex-m0plus -Os -fPIC -fPIE -nostdlib -fno-builtin -fno-jump-tables \
-    -T "$DIR/../bench/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/block1.elf" "$DIR/block1.c"
+    -I"$DIR/../sdk" -T "$DIR/../sdk/krx.ld" -Wl,--no-dynamic-linker -o "$DIR/block1.elf" "$DIR/block1.c"
 arm-none-eabi-objcopy -O binary "$DIR/block1.elf" "$DIR/block1.bin"
 
 # Pack into P1 Transparent Paged package

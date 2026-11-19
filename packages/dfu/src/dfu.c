@@ -208,10 +208,8 @@ static void handoff_to_factory_bootloader(u32 vid_pid) {
 
 __attribute__((noreturn))
 static void enter_dfu_with_hooks(const KrxApiTable* api) {
-    if (api->service && api->service->leaf_call) {
-        api->service->leaf_call(1, (u32)&g_state);
-        api->service->leaf_call(3, (u32)&g_state);
-    }
+    krx_leaf_call(api, 1u, (u32)&g_state);
+    krx_leaf_call(api, 3u, (u32)&g_state);
     u32 base_addr = ((u32)dfu_root_base) & ~7u;
     u32 evac_sp = (base_addr >= 0x20000400u) ? base_addr : 0x20002FC0u;
     register u32 r0_vp __asm__("r0") = g_state.vid_pid;
@@ -238,19 +236,14 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         }
         g_state.op = op;
         g_state.param = param;
-        if (api->service && api->service->leaf_call) {
-            api->service->leaf_call(2, (u32)&g_state);
-        }
+        krx_leaf_call(api, 2u, (u32)&g_state);
         return 0;
     }
 
     if (op == KRX_OP_EVENT || op == KRX_OP_RENDER) {
         g_state.op = op;
         g_state.param = param;
-        if (api->service && api->service->leaf_call) {
-            return (int)api->service->leaf_call(2, (u32)&g_state);
-        }
-        return 0;
+        return (int)krx_leaf_call(api, 2u, (u32)&g_state);
     }
 
     return 0;
