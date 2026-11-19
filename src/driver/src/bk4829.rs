@@ -38,6 +38,7 @@ pub enum AfType {
 pub enum FilterBw {
     Wide = 0,
     Narrow = 1,
+    UltraNarrow = 2,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,7 +361,13 @@ impl<'a, State> Bk4829<'a, State> {
     #[inline(never)]
     fn restore_post_tone_state(&mut self, rx_pwr: u16) {
         self.write_reg(REG_TONE1_FREQ, 0x0000);
-        self.write_reg(REG_TONE_GAIN, 0x0000);
+        // Preserve Tone2 / FSK subcarrier gain (bits [7:0]) if hardware FSK modem is active
+        let fsk_active = {
+            let fsk_ctrl = self.cache.read(REG_FSK_CTRL);
+            fsk_ctrl != 0xFFFF && (fsk_ctrl & 0x0001) != 0
+        };
+        let restored_tone_gain = if fsk_active { 0x00E0 } else { 0x0000 };
+        self.write_reg(REG_TONE_GAIN, restored_tone_gain);
         py32_hal::delay::delay_ms(5);
         self.write_reg(REG_SYS_POWER, rx_pwr);
 
@@ -641,7 +648,11 @@ impl<'a, State> Bk4829<'a, State> {
     }
 
     pub fn set_filter_bandwidth(&mut self, bw: FilterBw) {
-        let bw_val = if bw == FilterBw::Wide { 0 } else { 1 };
+        let bw_val = match bw {
+            FilterBw::Wide => 0,
+            FilterBw::Narrow => 1,
+            FilterBw::UltraNarrow => 2,
+        };
         self.update_reg_bits(REG_FILTER_BW, 0b111 << 12, bw_val << 12);
     }
 
@@ -907,16 +918,25 @@ impl<'a, State> kernel::service::radio::RfChannel for Bk4829<'a, State> {
             self.set_af(AfType::Mute);
         }
         self.set_rx_frequency(config.effective_rx_freq());
+        if config.fine_offset_dhz != 0 {
+            <Self as kernel::service::radio::RfFineTuning>::set_sub_hz_offset(
+                self,
+                config.effective_rx_freq().raw(),
+                config.fine_offset_dhz,
+            );
+        }
         <Self as kernel::service::radio::RfModulation>::set_bandwidth(self, config.bandwidth);
         <Self as kernel::service::radio::RfModulation>::set_modulation(self, config.modulation);
+        <Self as kernel::service::radio::RfModulation>::set_compander(self, config.compander);
+        <Self as kernel::service::radio::RfModulation>::set_scrambler(self, config.scrambler);
         self.set_power_level(config.power);
         <Self as kernel::service::radio::RfSubaudible>::set_rx_subaudible(
             self,
-            config.rx_subaudible,
+            config.effective_rx_subaudible(),
         );
         <Self as kernel::service::radio::RfSubaudible>::set_tx_subaudible(
             self,
-            config.tx_subaudible,
+            config.effective_tx_subaudible(),
         );
         <Self as kernel::service::radio::RfSquelch>::set_squelch_level(self, config.squelch_level);
         <Self as kernel::service::radio::RfAudioPath>::set_af_response(self, &config.af_response);
@@ -1060,13 +1080,12 @@ impl<'a, State> kernel::service::radio::RfModulation for Bk4829<'a, State> {
     }
 
     fn set_bandwidth(&mut self, bw: kernel::service::radio::Bandwidth) {
-        match bw {
-            kernel::service::radio::Bandwidth::Wide25k => self.set_filter_bandwidth(FilterBw::Wide),
-            kernel::service::radio::Bandwidth::Narrow12k5
-            | kernel::service::radio::Bandwidth::Narrow6k25 => {
-                self.set_filter_bandwidth(FilterBw::Narrow)
-            }
-        }
+        let filter_bw = match bw {
+            kernel::service::radio::Bandwidth::Wide25k => FilterBw::Wide,
+            kernel::service::radio::Bandwidth::Narrow12k5 => FilterBw::Narrow,
+            kernel::service::radio::Bandwidth::Narrow6k25 => FilterBw::UltraNarrow,
+        };
+        self.set_filter_bandwidth(filter_bw);
     }
 
     fn set_deviation(&mut self, dev: kernel::service::radio::DeviationLimit) {
