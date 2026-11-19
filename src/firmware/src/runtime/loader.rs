@@ -12,6 +12,18 @@ use kernel::proc::krx::{KrxClass, KrxPreamble, KrxSummary};
 pub use kernel::proc::krx::KrxLaunchError;
 
 static mut DYNAMIC_APP_NAME_BUF: [u8; 32] = [0u8; 32];
+static mut DYNAMIC_APP_NAME_LEN: u8 = 0;
+
+pub(crate) fn dynamic_app_name() -> &'static str {
+    unsafe {
+        let len = (DYNAMIC_APP_NAME_LEN as usize).min(31);
+        let bytes = core::slice::from_raw_parts(
+            core::ptr::addr_of!(DYNAMIC_APP_NAME_BUF).cast::<u8>(),
+            len,
+        );
+        core::str::from_utf8_unchecked(bytes)
+    }
+}
 
 fn store_dynamic_app_name(name: &str) -> &'static str {
     let bytes = name.as_bytes();
@@ -22,6 +34,7 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
     unsafe {
         DYNAMIC_APP_NAME_BUF[..len].copy_from_slice(&bytes[..len]);
         DYNAMIC_APP_NAME_BUF[len] = 0;
+        DYNAMIC_APP_NAME_LEN = len as u8;
         // Safety: `name` is valid `&str` and `len` lands on a UTF-8 codepoint boundary.
         core::str::from_utf8_unchecked(&DYNAMIC_APP_NAME_BUF[..len])
     }
@@ -130,7 +143,7 @@ fn load_krx_into_slot(
             .read_file_at(path, header_len, &mut arena_buf[..to_read])
             .map_err(|_| KrxLaunchError::ReadFailed)?;
 
-        super::native_runner::load_native_from_storage(app_name, path, payload_read, summary, pid)?;
+        super::native_runner::load_native_from_storage(path, payload_read, summary, pid)?;
     }
     #[cfg(not(feature = "krx_native"))]
     {

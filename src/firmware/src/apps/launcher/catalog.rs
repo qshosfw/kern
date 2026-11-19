@@ -182,12 +182,22 @@ impl PackageCatalog {
         }
 
         // Sort invalid/corrupted packages to the top, keeping action `pkg_idx` synced
+        const _: () = {
+            assert!(core::mem::align_of::<PackageCatalogEntry>() >= 4);
+            assert!(core::mem::size_of::<PackageCatalogEntry>() % 4 == 0);
+        };
         let base = self.entries.as_mut_ptr();
         for i in 1..self.entries.len() {
             let mut j = i;
             unsafe {
                 while j > 0 && !(*base.add(j)).is_valid && (*base.add(j - 1)).is_valid {
-                    core::ptr::swap(base.add(j - 1), base.add(j));
+                    let pa = base.add(j - 1) as *mut u32;
+                    let pb = base.add(j) as *mut u32;
+                    for w in 0..(core::mem::size_of::<PackageCatalogEntry>() / 4) {
+                        let tmp = *pa.add(w);
+                        *pa.add(w) = *pb.add(w);
+                        *pb.add(w) = tmp;
+                    }
                     let a = (j - 1) as u8;
                     let b = j as u8;
                     for act in self.actions.iter_mut() {

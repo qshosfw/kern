@@ -206,9 +206,9 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
     // and `show_confirm` copies the text into `ACTIVE_MODAL` before returning).
     let msg_buf =
         unsafe { &mut *(crate::data::arena::staging_buf().as_mut_ptr() as *mut [u8; 96]) };
-    let msg = fault.format_message(slot.app_name.as_str(), msg_buf);
+    let msg = fault.format_message(super::native_runner::active_native_app_name(), msg_buf);
 
-    let pkg = slot.pkg_path.as_bytes();
+    let pkg = slot.pkg_path_str().as_bytes();
     let pkg_len = pkg.len().min(32);
     unsafe {
         (&mut *core::ptr::addr_of_mut!(FAULT_PKG_PATH))[..pkg_len].copy_from_slice(&pkg[..pkg_len]);

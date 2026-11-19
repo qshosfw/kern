@@ -259,7 +259,6 @@ impl KrxPreamble {
     pub const MAX_HEADER_SIZE: usize = 512;
 
     /// Parse preamble directly into `out` from a little-endian byte slice.
-    #[inline(never)]
     pub fn parse_into(buf: &[u8], out: &mut Self) -> Result<(), ()> {
         if buf.len() < Self::SIZE {
             return Err(());
@@ -486,7 +485,6 @@ impl SectionExecution {
         out
     }
 
-    #[inline(never)]
     pub fn parse_into(buf: &[u8], dst: &mut Option<Self>) {
         if buf.len() < Self::SIZE {
             *dst = None;
@@ -845,13 +843,13 @@ impl<'a> Default for KrxSummary<'a> {
 
 impl KrxPreamble {
     /// Read a NUL-terminated ASCII string from a parsed KRX header buffer at `off`.
-    #[inline(never)]
+    #[inline(always)]
     pub fn read_hdr_str(hdr: &[u8], off: u16) -> Option<&str> {
         Self::scan_hdr_str(hdr, off, false)
     }
 
     /// Read a `\0\0`-terminated packed Choice options slice (preserving internal `\0` separators).
-    #[inline(never)]
+    #[inline(always)]
     pub fn read_hdr_packed(hdr: &[u8], off: u16) -> Option<&str> {
         Self::scan_hdr_str(hdr, off, true)
     }

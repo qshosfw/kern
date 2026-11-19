@@ -15,7 +15,7 @@ use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::krx::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
-use kernel::proc::memory::MemoryMapLayout;
+use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
 #[cfg(feature = "krx_paged")]
 use kernel::proc::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
 use kernel::proc::paged::{PagedError, StructuredLeafManager};
@@ -53,12 +53,12 @@ pub(crate) struct NativeExecSlot {
     pub(crate) status_bar_has_custom: bool,
     pub(crate) status_bar_left_count: u8,
     pub(crate) status_bar_center_count: u8,
+    pub(crate) code_size: u16,
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
     pub(crate) caps: CapabilitySet,
-    pub(crate) app_name: heapless::String<16>,
-    pub(crate) pkg_path: heapless::String<32>,
-    pub(crate) mem_layout: MemoryMapLayout<4>,
+    pub(crate) pkg_path: [u8; 31],
+    pub(crate) pkg_path_len: u8,
     pub(crate) overlay: PagedOverlay,
     pub(crate) status_bar_left_icons: [kernel::canvas::StatusGlyph; 4],
     pub(crate) status_bar_center_icons: [kernel::canvas::StatusGlyph; 4],
@@ -66,6 +66,61 @@ pub(crate) struct NativeExecSlot {
 }
 
 impl NativeExecSlot {
+    #[inline(always)]
+    pub(crate) fn pkg_path_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.pkg_path[..self.pkg_path_len as usize]) }
+    }
+
+    pub(crate) fn set_pkg_path(&mut self, path: &str) {
+        let bytes = path.as_bytes();
+        let n = bytes.len().min(self.pkg_path.len());
+        self.pkg_path[..n].copy_from_slice(&bytes[..n]);
+        self.pkg_path_len = n as u8;
+    }
+
+    #[inline(never)]
+    pub(crate) fn query_region(&self, rk: RegionKind) -> Option<MemoryRegionDescriptor> {
+        let load_base = arena_base_ptr() as u32;
+        let max_arena = (NATIVE_EXEC_BUFFER_WORDS * 4) as u32;
+        let is_p0 = self.profile.is_structured_paged();
+        let overlay_size = 1024u32;
+        let code_size = self.code_size as u32;
+        match rk {
+            RegionKind::ImmutableCode => Some(MemoryRegionDescriptor::new(
+                RegionKind::ImmutableCode,
+                region_flags::READ | region_flags::EXEC,
+                load_base,
+                code_size,
+            )),
+            RegionKind::OverlayWindow if is_p0 => Some(MemoryRegionDescriptor::new(
+                RegionKind::OverlayWindow,
+                region_flags::READ | region_flags::EXEC,
+                load_base + (max_arena - overlay_size),
+                overlay_size,
+            )),
+            RegionKind::VirtualRam => {
+                let code_limit = if is_p0 {
+                    max_arena - overlay_size
+                } else {
+                    max_arena
+                };
+                let limit_vma = load_base + code_limit;
+                let ram_vma = if !self.is_paged && self.got_base > load_base {
+                    self.got_base
+                } else {
+                    load_base + code_size
+                };
+                Some(MemoryRegionDescriptor::new(
+                    RegionKind::VirtualRam,
+                    region_flags::READ | region_flags::WRITE,
+                    ram_vma,
+                    limit_vma.saturating_sub(ram_vma),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     #[cfg(feature = "krx_paged")]
     #[inline(never)]
     fn window_mut(&mut self) -> Option<&mut PagedWindowState> {
@@ -119,9 +174,13 @@ pub(crate) fn slot_mut() -> &'static mut NativeExecSlot {
     unsafe { (*core::ptr::addr_of_mut!(NATIVE_SLOT)).assume_init_mut() }
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn active_native_app_name() -> &'static str {
-    slot_ref().app_name.as_str()
+    if slot_ref().is_loaded {
+        super::loader::dynamic_app_name()
+    } else {
+        ""
+    }
 }
 
 #[inline(always)]
@@ -144,7 +203,7 @@ fn flush_instruction_pipeline() {
 #[inline(never)]
 fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bool {
     let ok = unsafe {
-        let path = slot_ref().pkg_path.as_str();
+        let path = slot_ref().pkg_path_str();
         let dst = core::slice::from_raw_parts_mut(dst_vma as *mut u8, len);
         #[cfg(not(test))]
         {
@@ -304,10 +363,10 @@ pub fn read_active_pkg_asset(
     dst: &mut [u8],
 ) -> Result<usize, ()> {
     let slot = slot_ref();
-    if !slot.is_loaded || slot.pkg_path.is_empty() || dst.is_empty() {
+    if !slot.is_loaded || slot.pkg_path_len == 0 || dst.is_empty() {
         return Err(());
     }
-    if read_file_region(storage, slot.pkg_path.as_str(), offset as usize, dst) {
+    if read_file_region(storage, slot.pkg_path_str(), offset as usize, dst) {
         Ok(dst.len())
     } else {
         Err(())
@@ -361,7 +420,6 @@ pub use kernel::proc::krx::KrxAuxSections;
 /// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
 #[inline(never)]
 pub fn load_native_from_storage(
-    name: &str,
     path: &str,
     payload_len: usize,
     summary: &KrxSummary<'_>,
@@ -386,6 +444,7 @@ pub fn load_native_from_storage(
     );
     #[cfg(not(feature = "krx_paged"))]
     if profile == KrxProfile::P1TransparentPaged {
+        let _ = h_len;
         return Err(KrxLaunchError::UnsupportedProfile);
     }
     let is_paged = matches!(
@@ -415,7 +474,7 @@ pub fn load_native_from_storage(
 
     // 1. Configure Paged Fixed-Window Cache (P1) or Structured Leaf Manager (P0)
     slot.is_paged = is_paged;
-    let _ = slot.pkg_path.push_str(path);
+    slot.set_pkg_path(path);
     let is_p0 = profile.is_structured_paged();
     let overlay_size = 1024u32;
     let overlay_vma = load_base + (max_arena_bytes as u32 - overlay_size);
@@ -450,11 +509,6 @@ pub fn load_native_from_storage(
                 };
             }
         }
-        #[cfg(not(feature = "krx_paged"))]
-        {
-            let _ = h_len;
-            return Err(KrxLaunchError::UnsupportedProfile);
-        }
     }
 
     // 2b. Verify unrelocated payload CRC32 before patching words in SRAM
@@ -475,14 +529,13 @@ pub fn load_native_from_storage(
         return Err(KrxLaunchError::ImportBindingFailed);
     }
 
-    // 4b. Configure normative memory regions for the detected execution profile
+    // 4b. Record profile & code window size for `ProcMem` region queries
     slot.profile = profile;
     let code_limit = if is_p0 {
         max_arena_bytes as u32 - overlay_size
     } else {
         max_arena_bytes as u32
     };
-    let limit_vma = load_base + code_limit;
 
     #[cfg(feature = "krx_paged")]
     let code_size = if is_paged && !is_p0 {
@@ -500,21 +553,7 @@ pub fn load_native_from_storage(
     } else {
         (payload_len as u32).min(code_limit)
     };
-
-    let ram_vma = if !is_paged && exec.got_offset > 0 {
-        slot.got_base
-    } else {
-        load_base + code_size
-    };
-    let ram_size = limit_vma.saturating_sub(ram_vma);
-    slot.mem_layout.init_regions(
-        load_base,
-        code_size,
-        overlay_vma,
-        if is_p0 { overlay_size } else { 0 },
-        ram_vma,
-        ram_size,
-    );
+    slot.code_size = code_size as u16;
 
     if (exec.entry_point & !1) >= code_size {
         return Err(KrxLaunchError::InvalidEntryPoint);
@@ -525,7 +564,6 @@ pub fn load_native_from_storage(
     flush_instruction_pipeline();
 
     slot.entry_point = entry_thumb;
-    let _ = slot.app_name.push_str(name);
     slot.caps = caps;
     slot.is_loaded = true;
 
@@ -666,7 +704,7 @@ fn take_pending_start_arg() -> u32 {
 #[inline(always)]
 pub fn active_pkg_matches(path: &str) -> bool {
     let slot = slot_ref();
-    slot.is_loaded && slot.pkg_path.as_str() == path
+    slot.is_loaded && slot.pkg_path_str() == path
 }
 
 #[inline(never)]
@@ -789,7 +827,7 @@ fn c_str_to_str(buf: &[u8]) -> Option<&str> {
 }
 
 fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBarConfig<'a>) {
-    *status_bar = StatusBarConfig::new(slot.app_name.as_str());
+    *status_bar = StatusBarConfig::new(active_native_app_name());
     if slot.status_bar_has_custom {
         let sb = &slot.status_bar;
         let visible = (sb.flags & kernel::proc::abi::KRX_STATUS_VISIBLE) != 0;
@@ -939,8 +977,7 @@ pub(crate) fn teardown_slot_and_hw(
     slot.status_bar_has_custom = false;
     slot.status_bar_left_count = 0;
     slot.status_bar_center_count = 0;
-    slot.app_name.clear();
-    slot.pkg_path.clear();
+    slot.pkg_path_len = 0;
 }
 
 pub unsafe fn native_on_exit(ctx: &mut SysContext<'static, 'static>) {
@@ -955,4 +992,68 @@ pub unsafe fn native_on_exit(ctx: &mut SysContext<'static, 'static>) {
     let persist_tray = slot.status_bar_has_custom
         && (slot.status_bar.custom_flags & kernel::proc::abi::KRX_CUSTOM_TRAY_PERSIST) != 0;
     teardown_slot_and_hw(ctx, pid, persist_tray);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernel::proc::memory::MemoryMapLayout;
+
+    #[test]
+    fn query_region_matches_memory_map_layout_for_native_and_p0() {
+        let load_base = arena_base_ptr() as u32;
+        let max_arena = (NATIVE_EXEC_BUFFER_WORDS * 4) as u32;
+        let overlay_size = 1024u32;
+        let overlay_vma = load_base + max_arena - overlay_size;
+
+        for (profile, is_paged, code_size, got_off) in [
+            (KrxProfile::N1NativePic, false, 1200u16, 1200u32),
+            (KrxProfile::N1NativePic, false, 900u16, 0u32),
+            (KrxProfile::P0StructuredPaged, true, 2048u16, 2048u32),
+            (KrxProfile::P1TransparentPaged, true, 4096u16, 0u32),
+        ] {
+            init_native_slot();
+            let slot = slot_mut();
+            slot.profile = profile;
+            slot.is_paged = is_paged;
+            slot.code_size = code_size;
+            slot.got_base = load_base.wrapping_add(got_off);
+
+            let is_p0 = profile.is_structured_paged();
+            let code_limit = if is_p0 {
+                max_arena - overlay_size
+            } else {
+                max_arena
+            };
+            let ram_vma = if !is_paged && got_off > 0 {
+                slot.got_base
+            } else {
+                load_base + code_size as u32
+            };
+            let ram_size = (load_base + code_limit).saturating_sub(ram_vma);
+            let mut layout = MemoryMapLayout::<4>::new();
+            layout.init_regions(
+                load_base,
+                code_size as u32,
+                overlay_vma,
+                if is_p0 { overlay_size } else { 0 },
+                ram_vma,
+                ram_size,
+            );
+
+            for rk in [
+                RegionKind::ImmutableCode,
+                RegionKind::OverlayWindow,
+                RegionKind::VirtualRam,
+                RegionKind::PersistentState,
+                RegionKind::IoBuffer,
+            ] {
+                assert_eq!(
+                    slot.query_region(rk),
+                    layout.find_region_by_kind(rk).copied(),
+                    "mismatch for profile={profile:?} rk={rk:?}"
+                );
+            }
+        }
+    }
 }

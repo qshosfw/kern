@@ -483,14 +483,14 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         op::ProcMem => {
             let out_desc = a1 as *mut kernel::proc::MemoryRegionDescriptor;
             let slot = super::super::native_runner::slot_ref();
-            if out_desc.is_null() || !slot.is_loaded {
+            if out_desc.is_null() || !out_desc.is_aligned() || !slot.is_loaded {
                 return 1;
             }
-            if let Some(rk) = kernel::proc::RegionKind::from_u8(a0 as u8) {
-                if let Some(desc) = slot.mem_layout.find_region_by_kind(rk) {
-                    unsafe { core::ptr::copy_nonoverlapping(desc as *const _, out_desc, 1) };
-                    return 0;
-                }
+            if let Some(rk) = kernel::proc::RegionKind::from_u8(a0 as u8)
+                && let Some(desc) = slot.query_region(rk)
+            {
+                unsafe { *out_desc = desc };
+                return 0;
             }
             1
         }
