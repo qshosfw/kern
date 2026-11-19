@@ -913,35 +913,26 @@ pub fn handle_sheet_event_with_repeater(
     sheet: &mut OptionSheet,
     event: &Event,
 ) -> SheetResult {
-    if sheet.options.is_empty() {
+    let total = sheet.options.len();
+    if total == 0 {
         return SheetResult::None;
     }
-    let total = sheet.options.len();
 
     if let Event::Tick = event {
         if let Some(code) = repeater.tick()
             && let Some(down) = sheet_nav_dir(code)
         {
             let prev = sheet.hover;
-            if total <= 4 {
-                // Small sheet: clamp between 0 and total - 1 without wrapping
-                if down {
-                    if sheet.hover + 1 < total {
-                        sheet.hover += 1;
-                    }
-                } else if sheet.hover > 0 {
-                    sheet.hover -= 1;
-                }
-            } else if down {
-                if sheet.hover + 1 < total {
-                    sheet.hover += 1;
-                } else {
+            if down {
+                if prev + 1 < total {
+                    sheet.hover = prev + 1;
+                } else if total > 4 {
                     sheet.hover = 0;
                     repeater.pause(6);
                 }
-            } else if sheet.hover > 0 {
-                sheet.hover -= 1;
-            } else {
+            } else if prev > 0 {
+                sheet.hover = prev - 1;
+            } else if total > 4 {
                 sheet.hover = total - 1;
                 repeater.pause(6);
             }

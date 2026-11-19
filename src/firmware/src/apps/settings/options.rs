@@ -35,29 +35,24 @@ fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut Sho
     }
 }
 
-#[inline(always)]
-fn make_choice(packed: &'static str, raw_byte: u8) -> MenuItemType {
-    let opts = gfx::gui::modules::menu::SheetOptions::Packed(packed);
-    let sel = (raw_byte as usize).min(opts.len().saturating_sub(1)) as u16;
-    MenuItemType::Choice {
-        selected: sel,
-        options: opts,
-    }
-}
-
 #[inline(never)]
 fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut crate::SysContext) {
     let def = spec.defs[idx];
     item.title = spec.title(idx);
     match def.tag {
-        TAG_CHOICE | TAG_BATTERY_TYPE | TAG_TOGGLE => {
+        TAG_TOGGLE => {
+            item.item_type = MenuItemType::Toggle(def.field.get_u8(&ctx.config) != 0);
+        }
+        TAG_CHOICE | TAG_BATTERY_TYPE => {
             let raw_byte = def.field.get_u8(&ctx.config);
-            if def.tag == TAG_TOGGLE {
-                item.item_type = MenuItemType::Toggle(raw_byte != 0);
-            } else if def.tag == TAG_CHOICE {
-                if let Some(opts) = choice_options(def.aux) {
-                    item.item_type = make_choice(opts, raw_byte);
-                }
+            let (packed, sel) = if def.tag == TAG_CHOICE {
+                let Some(opts) = choice_options(def.aux) else {
+                    return;
+                };
+                let max_sel = gfx::gui::modules::menu::SheetOptions::Packed(opts)
+                    .len()
+                    .saturating_sub(1);
+                (opts, (raw_byte as usize).min(max_sel) as u16)
             } else {
                 let (opts, types) =
                     super::battery::battery_options_and_types(ctx.config.keys.nav_layout);
@@ -68,25 +63,22 @@ fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut cra
                         break;
                     }
                 }
-                item.item_type = MenuItemType::Choice {
-                    selected: sel,
-                    options: gfx::gui::modules::menu::SheetOptions::Packed(opts),
-                };
-            }
+                (opts, sel)
+            };
+            item.item_type = MenuItemType::Choice {
+                selected: sel,
+                options: gfx::gui::modules::menu::SheetOptions::Packed(packed),
+            };
         }
         TAG_RANGE => {
-            if let Some(range) = RANGES.get(def.aux as usize) {
-                let raw_val = if def.field == SettingField::CALIB_TWEAK_MV {
-                    def.field.get_i16(&ctx.config)
-                } else {
-                    def.field.get_u8(&ctx.config) as i16
-                };
+            if let Some(&range) = RANGES.get(def.aux as usize) {
+                let raw_val = def.field.get_i16(&ctx.config);
                 item.item_type = MenuItemType::Range {
                     val: raw_val.clamp(range.min, range.max),
                     min: range.min,
                     max: range.max,
-                    step: range.step,
-                    unit: range.unit,
+                    step: range.step as i16,
+                    unit: range.unit(),
                 };
             }
         }
@@ -108,8 +100,8 @@ fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut cra
                 }
             } else {
                 #[cfg(feature = "filesystem")]
-                if let Some(&desc) = ASSETS.get(def.aux as usize) {
-                    desc.format_status(&ctx.config, s);
+                if let Some(asset) = AssetId::from_u8(def.aux) {
+                    asset.format_status(&ctx.config, s);
                 }
             }
         }

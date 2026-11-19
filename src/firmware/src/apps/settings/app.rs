@@ -66,7 +66,7 @@ pub struct SettingsApp {
     pub selected_pkg_idx: usize,
     pub(crate) title: &'static str,
     #[cfg(feature = "filesystem")]
-    pub(crate) active_asset: Option<&'static super::asset_chooser::AssetDescriptor>,
+    pub(crate) active_asset: Option<super::asset_chooser::AssetId>,
     #[cfg(feature = "passcode")]
     pub(crate) passcode_candidate: heapless::String<16>,
     // ── Cold/large structures ──
@@ -228,9 +228,9 @@ impl SettingsApp {
                 }
                 #[cfg(feature = "filesystem")]
                 TAG_ASSET => {
-                    if let Some(&desc) = super::page::ASSETS.get(def.aux as usize) {
-                        self.active_asset = Some(desc);
-                        desc.open_sheet(ctx);
+                    if let Some(asset) = super::page::AssetId::from_u8(def.aux) {
+                        self.active_asset = Some(asset);
+                        asset.open_sheet(ctx);
                     }
                     return;
                 }

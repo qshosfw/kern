@@ -17,56 +17,104 @@ pub enum AssetId {
     Jingle = 2,
 }
 
-pub struct AssetDescriptor {
-    pub title: &'static str,
-    pub dir: &'static str,
-    /// NUL-delimited packed lowercase suffixes (e.g. `".ton\0.rgr\0"`).
-    pub extensions: &'static str,
-    pub none_label: &'static str,
-    pub kind: AssetId,
+#[repr(C)]
+struct AssetMeta {
+    dom: u8,
+    flag_off: u8,
+    path_off: u8,
+    _pad: u8,
 }
 
-impl AssetDescriptor {
-    #[inline(never)]
-    fn get_path<'a>(&self, cfg: &'a crate::config::MasterConfig) -> (bool, &'a str) {
-        match self.kind {
-            AssetId::Splash => (
-                cfg.display.boot_splash_mode != 0,
-                cfg.display.splash_path_str(),
-            ),
-            AssetId::Roger => (cfg.audio.roger_beep != 0, cfg.audio.roger_path_str()),
-            AssetId::Jingle => (cfg.audio.boot_jingle != 0, cfg.audio.jingle_path_str()),
+static ASSET_META: [AssetMeta; 3] = [
+    AssetMeta {
+        dom: 0,
+        flag_off: core::mem::offset_of!(crate::config::DisplayConfig, boot_splash_mode) as u8,
+        path_off: core::mem::offset_of!(crate::config::DisplayConfig, splash_path) as u8,
+        _pad: 0,
+    },
+    AssetMeta {
+        dom: 1,
+        flag_off: core::mem::offset_of!(crate::config::AudioConfig, roger_beep) as u8,
+        path_off: core::mem::offset_of!(crate::config::AudioConfig, roger_path) as u8,
+        _pad: 0,
+    },
+    AssetMeta {
+        dom: 1,
+        flag_off: core::mem::offset_of!(crate::config::AudioConfig, boot_jingle) as u8,
+        path_off: core::mem::offset_of!(crate::config::AudioConfig, jingle_path) as u8,
+        _pad: 0,
+    },
+];
+
+const _: () = {
+    assert!(
+        core::mem::offset_of!(crate::config::DisplayConfig, splash_path) + 32
+            <= core::mem::size_of::<crate::config::DisplayConfig>()
+    );
+    assert!(
+        core::mem::offset_of!(crate::config::AudioConfig, roger_path) + 32
+            <= core::mem::size_of::<crate::config::AudioConfig>()
+    );
+    assert!(
+        core::mem::offset_of!(crate::config::AudioConfig, jingle_path) + 32
+            <= core::mem::size_of::<crate::config::AudioConfig>()
+    );
+};
+
+utils::static_bytes!(
+    static ASSET_STRS = b"\
+Boot Splash\0/user/splash\0.rle|.img|.bin\0None\0\
+Roger Beep\0/user/rogers\0.ton|.rgr\0Off\0\
+Boot Jingle\0/user/jingles\0.ton\0Off\0";
+);
+
+impl AssetId {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Option<Self> {
+        match val {
+            0 => Some(Self::Splash),
+            1 => Some(Self::Roger),
+            2 => Some(Self::Jingle),
+            _ => None,
         }
     }
 
     #[inline(never)]
-    fn set_path(&self, cfg: &mut crate::config::MasterConfig, opt: Option<&str>) {
-        let on = opt.is_some() as u8;
-        match self.kind {
-            AssetId::Splash => {
-                cfg.display.boot_splash_mode = on;
-                if let Some(p) = opt {
-                    cfg.display.set_splash_path(p);
-                }
-            }
-            AssetId::Roger => {
-                cfg.audio.roger_beep = on;
-                if let Some(p) = opt {
-                    cfg.audio.set_roger_path(p);
-                }
-            }
-            AssetId::Jingle => {
-                cfg.audio.boot_jingle = on;
-                if let Some(p) = opt {
-                    cfg.audio.set_jingle_path(p);
-                }
-            }
+    fn str_field(self, field: u8) -> &'static str {
+        utils::format::nth_cstr(&ASSET_STRS, (self as u8) * 4 + field)
+    }
+
+    #[inline(never)]
+    fn get_path(self, cfg: &crate::config::MasterConfig) -> (bool, &str) {
+        let m = &ASSET_META[self as usize];
+        let bytes = cfg.config_bytes(m.dom as usize);
+        let off = m.path_off as usize;
+        // SAFETY: `ASSET_META` offsets are validated against `DisplayConfig`/`AudioConfig` lengths.
+        let path_buf = unsafe { core::slice::from_raw_parts(bytes.as_ptr().add(off), 32) };
+        (
+            unsafe { *bytes.as_ptr().add(m.flag_off as usize) } != 0,
+            crate::config::read_cstr(path_buf),
+        )
+    }
+
+    #[inline(never)]
+    fn set_path(self, cfg: &mut crate::config::MasterConfig, opt: Option<&str>) {
+        let m = &ASSET_META[self as usize];
+        let bytes = cfg.config_bytes_mut(m.dom as usize);
+        unsafe {
+            *bytes.as_mut_ptr().add(m.flag_off as usize) = opt.is_some() as u8;
+        }
+        if let Some(p) = opt {
+            let off = m.path_off as usize;
+            let path_buf =
+                unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr().add(off), 32) };
+            crate::config::write_cstr(path_buf, p);
         }
     }
 
     #[inline(never)]
     fn finalize_entries(
-        &self,
+        self,
         cfg: &crate::config::MasterConfig,
         storage: &mut AssetChooserStorage,
     ) -> usize {
@@ -108,21 +156,23 @@ impl AssetDescriptor {
     }
 
     #[inline(never)]
-    pub fn open_sheet(&self, ctx: &mut crate::SysContext) {
+    pub fn open_sheet(self, ctx: &mut crate::SysContext) {
         let storage = storage_mut();
-        storage.labels[0].set_str(self.none_label);
+        storage.labels[0].set_str(self.str_field(3));
         storage.count = 0;
+        let dir = self.str_field(1);
+        let exts = self.str_field(2);
 
         #[cfg(feature = "filesystem")]
         let _ = ctx
             .storage
             .fs
-            .list_dir(self.dir, |entry_name, _size, _perm, is_dir| {
+            .list_dir(dir, |entry_name, _size, _perm, is_dir| {
                 let c = storage.count as usize;
                 if c < MAX_CHOOSER_ASSETS
                     && !is_dir
-                    && has_extension(entry_name, self.extensions)
-                    && build_full_asset_path(self.dir, entry_name, &mut storage.paths[c])
+                    && has_extension(entry_name, exts)
+                    && build_full_asset_path(dir, entry_name, &mut storage.paths[c])
                 {
                     storage.count = (c + 1) as u8;
                 }
@@ -135,13 +185,13 @@ impl AssetDescriptor {
         super::dialog::show_radio_sheet(
             ctx,
             super::dialog::TAG_ASSET_CHOOSER,
-            self.title,
+            self.str_field(0),
             SheetOptions::Dynamic(labels_slice),
             current_sel,
         );
     }
 
-    pub fn apply_choice(&self, sel: usize, config: &mut crate::config::MasterConfig) -> bool {
+    pub fn apply_choice(self, sel: usize, config: &mut crate::config::MasterConfig) -> bool {
         let is_active = self.get_path(config).0;
         if sel == 0 {
             if is_active {
@@ -158,10 +208,10 @@ impl AssetDescriptor {
         }
     }
 
-    pub fn format_status(&self, config: &crate::config::MasterConfig, out: &mut ShortString) {
+    pub fn format_status(self, config: &crate::config::MasterConfig, out: &mut ShortString) {
         let (active, path) = self.get_path(config);
         if !active {
-            out.set_str(self.none_label);
+            out.set_str(self.str_field(3));
         } else {
             format_asset_name_into(path, out);
         }
@@ -184,8 +234,13 @@ impl PathBuf32 {
     }
 
     #[inline(always)]
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
+    #[inline(always)]
     fn as_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(&self.bytes[..self.len as usize]) }
+        unsafe { core::str::from_utf8_unchecked(self.as_bytes()) }
     }
 }
 
@@ -291,7 +346,7 @@ fn has_extension(path: &str, extensions: &str) -> bool {
     let mut start = 0usize;
     let mut i = 0usize;
     while i <= eb_all.len() {
-        if i == eb_all.len() || eb_all[i] == 0 {
+        if i == eb_all.len() || eb_all[i] == b'|' {
             let eb = &eb_all[start..i];
             if !eb.is_empty() && b.len() >= eb.len() && &b[b.len() - eb.len()..] == eb {
                 return true;

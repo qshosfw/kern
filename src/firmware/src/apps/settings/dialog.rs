@@ -231,8 +231,8 @@ pub fn handle_sheet_selected(
     match tag {
         #[cfg(feature = "filesystem")]
         TAG_ASSET_CHOOSER => {
-            if let Some(desc) = app.active_asset.take() {
-                if desc.apply_choice(idx, &mut ctx.config) {
+            if let Some(asset) = app.active_asset.take() {
+                if asset.apply_choice(idx, &mut ctx.config) {
                     super::options::apply_page_changes(app.current_page, ctx);
                 }
             }
@@ -371,13 +371,13 @@ pub fn handle_confirm_result(
                 (
                     "Storage",
                     if keep {
-                        "Storage formatted.\nCalibration was kept."
+                        "Formatted.\nCalib kept."
                     } else {
                         "All data erased."
                     },
                 )
             } else {
-                ("Storage", "Could not format storage.")
+                ("Storage", "Format failed.")
             }
         }
         TAG_RESET_SETTINGS => {
@@ -387,7 +387,7 @@ pub fn handle_confirm_result(
             ctx.power.load_battery_config(&ctx.config.battery);
             ctx.config.hw_dirty = 0x3F;
             app.populate_current_menu(ctx);
-            ("Settings", "Settings restored to\ndefaults.")
+            ("Settings", "Defaults restored.")
         }
         TAG_REBOOT_FW => {
             let _ = ctx.flush_config();

@@ -386,31 +386,31 @@ static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 #[inline(never)]
 pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<120>) {
     const SPACE_PX: i16 = 4; // TomThumb ' ' glyph x_advance
-    out.clear();
+    let vec = unsafe { out.as_mut_vec() };
+    vec.clear();
     let b = raw.as_bytes();
-    let n = b.len();
     let mut i = 0usize;
     let mut line_px: i16 = 0;
 
-    while i < n {
-        if b[i] == b'\n' {
-            if unsafe { out.as_mut_vec().push(b'\n') }.is_err() {
-                return;
+    while i < b.len() {
+        let ch = b[i];
+        if ch == b'\n' || ch == b' ' {
+            if ch == b'\n' {
+                if vec.push(b'\n').is_err() {
+                    return;
+                }
+                line_px = 0;
             }
-            line_px = 0;
-            i += 1;
-            continue;
-        }
-        if b[i] == b' ' {
             i += 1;
             continue;
         }
         let s = i;
-        while i < n && b[i] != b' ' && b[i] != b'\n' {
+        while i < b.len() && b[i] != b' ' && b[i] != b'\n' {
             i += 1;
         }
+        let word_bytes = &b[s..i];
         // SAFETY: `s` and `i` land on ASCII space/newline or slice bounds of valid UTF-8 `raw`.
-        let word = unsafe { core::str::from_utf8_unchecked(&b[s..i]) };
+        let word = unsafe { core::str::from_utf8_unchecked(word_bytes) };
         let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
         if line_px > 0 {
             let sep = if line_px + SPACE_PX + word_px > MAX_ALERT_LINE_PX {
@@ -420,11 +420,11 @@ pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<120>) {
                 line_px += SPACE_PX;
                 b' '
             };
-            if unsafe { out.as_mut_vec().push(sep) }.is_err() {
+            if vec.push(sep).is_err() {
                 return;
             }
         }
-        if out.push_str(word).is_err() {
+        if vec.extend_from_slice(word_bytes).is_err() {
             return;
         }
         line_px += word_px;

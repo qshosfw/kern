@@ -108,11 +108,23 @@ impl ActionId {
 }
 
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct RangeDef {
     pub min: i16,
     pub max: i16,
-    pub step: i16,
-    pub unit: &'static str,
+    pub step: u8,
+    pub unit_idx: u8,
+}
+
+utils::static_bytes!(
+    static RANGE_UNITS = b"\0dB\0%\0mV\0";
+);
+
+impl RangeDef {
+    #[inline(always)]
+    pub fn unit(self) -> &'static str {
+        utils::format::nth_cstr(&RANGE_UNITS, self.unit_idx)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,31 +142,31 @@ pub static RANGES: [RangeDef; 5] = [
         min: 0,
         max: 10,
         step: 1,
-        unit: "",
+        unit_idx: 0,
     },
     RangeDef {
         min: 1,
         max: 10,
         step: 1,
-        unit: "",
+        unit_idx: 0,
     },
     RangeDef {
         min: 0,
         max: 31,
         step: 1,
-        unit: "dB",
+        unit_idx: 1,
     },
     RangeDef {
         min: 0,
         max: 100,
         step: 5,
-        unit: "%",
+        unit_idx: 2,
     },
     RangeDef {
         min: -500,
         max: 500,
         step: 10,
-        unit: "mV",
+        unit_idx: 3,
     },
 ];
 
@@ -270,13 +282,6 @@ pub fn choice_options(idx: u8) -> Option<&'static str> {
 
 #[cfg(feature = "filesystem")]
 pub use super::asset_chooser::AssetId;
-
-#[cfg(feature = "filesystem")]
-pub static ASSETS: [&'static super::asset_chooser::AssetDescriptor; 3] = [
-    &super::device::SPLASH_ASSET,
-    &super::audio::ROGER_ASSET,
-    &super::audio::JINGLE_ASSET,
-];
 
 #[derive(Clone, Copy)]
 pub struct MenuFrame {
