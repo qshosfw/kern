@@ -497,7 +497,7 @@ impl KeypadLockManager {
         };
 
         let sheet_y = 64i16 - SHEET_H as i16 + y_offset as i16;
-        gfx::widgets::draw_sheet_slide_up(canvas, title, SHEET_H, None, y_offset);
+        gfx::widgets::draw_sheet_slide_up(canvas, title, SHEET_H, y_offset);
 
         if self.sheet_anim.progress() < 8 {
             return;

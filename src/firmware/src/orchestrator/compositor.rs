@@ -585,15 +585,15 @@ fn render_f_shortcut_drawer(
     };
 
     const DRAWER_H: u8 = 40;
-    if y_offset >= DRAWER_H as i8 {
+    let sheet_y = gfx::widgets::draw_sheet_slide_up(canvas, "F Shortcuts", DRAWER_H, y_offset);
+    if sheet_y >= 64 {
         return;
     }
-    gfx::widgets::draw_sheet_slide_up(canvas, "F Shortcuts", DRAWER_H, None, y_offset);
 
     let cat = crate::apps::launcher::catalog::get_catalog();
     let cur_ctx = active_context(active_app_id);
     let mut shown = 0usize;
-    let base_y = (64 - DRAWER_H as i16) + y_offset.max(0) as i16 + 10;
+    let base_y = sheet_y + 10;
     let mut label = gfx::gui::modules::menu::ShortString::empty();
 
     for slot in F_DRAWER_START_SLOT..KEY_SHORTCUT_COUNT {

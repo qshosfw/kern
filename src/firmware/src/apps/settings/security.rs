@@ -83,7 +83,7 @@ fn show_progress_wdt(
     title: &str,
     pct: u8,
 ) {
-    py32_hal::wdt::Watchdog::feed();
+    crate::services::primitives::feed_watchdog();
     if let Some(d) = disp {
         d.show_progress("", title, pct);
     }

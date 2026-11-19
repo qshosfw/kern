@@ -223,10 +223,7 @@ fn draw_reg_marks(canvas: &mut Canvas, by: isize) {
 #[cfg(feature = "settings_info")]
 #[inline(never)]
 pub fn system_info_row_count() -> usize {
-    if matches!(
-        bsp::uid::factory_cert_status(),
-        bsp::uid::FactoryCertStatus::Qs1Ascii { .. }
-    ) {
+    if crate::services::primitives::has_factory_qs1() {
         BASE_INFO_ROWS + 1
     } else {
         BASE_INFO_ROWS
@@ -237,21 +234,25 @@ pub fn system_info_row_count() -> usize {
 #[cfg(feature = "settings_info")]
 #[inline(always)]
 pub fn render_system_info_page(canvas: &mut Canvas, ctx: &SysContext, scroll_row: usize) {
-    render_system_info_with(canvas, ctx, scroll_row, bsp::uid::factory_cert_status());
+    let qs1 = crate::services::primitives::factory_qs1_bytes();
+    let qs1_str = qs1
+        .as_ref()
+        .map(|(buf, len)| unsafe { core::str::from_utf8_unchecked(&buf[..*len]) });
+    render_system_info_with(canvas, ctx, scroll_row, qs1_str);
 }
 
-/// Inner renderer parameterized on `FactoryCertStatus` for deterministic unit testing.
+/// Inner renderer parameterized on optional QS-1 string for deterministic unit testing.
 #[cfg(feature = "settings_info")]
 #[inline(never)]
 pub fn render_system_info_with(
     canvas: &mut Canvas,
     ctx: &SysContext,
     scroll_row: usize,
-    qs1: bsp::uid::FactoryCertStatus,
+    qs1: Option<&str>,
 ) {
     canvas.clear();
 
-    let has_qs1 = matches!(qs1, bsp::uid::FactoryCertStatus::Qs1Ascii { .. });
+    let has_qs1 = qs1.is_some();
     let total_rows = BASE_INFO_ROWS + usize::from(has_qs1);
     let max_scroll = total_rows - SYSTEM_INFO_VISIBLE_ROWS;
     let scroll = scroll_row.min(max_scroll);
@@ -275,9 +276,11 @@ pub fn render_system_info_with(
         let mut right = "";
         let mut cfg = 0u8;
 
-        if has_qs1 && row == 9 {
+        if let Some(qs1_val) = qs1
+            && row == 9
+        {
             left = info_str(11);
-            right = qs1.as_str();
+            right = qs1_val;
         } else {
             let norm = if has_qs1 && row > 9 { row - 1 } else { row };
             match norm {
@@ -315,7 +318,7 @@ pub fn render_system_info_with(
                         2 => {
                             fmt_buf[..9].copy_from_slice(b"PY32F071 ");
                             let kb_len = utils::format::format_u32(
-                                u32::from(py32_hal::uid::SystemInfo::flash_size_kb()),
+                                u32::from(crate::services::primitives::flash_size_kb()),
                                 unsafe { &mut *(fmt_buf.as_mut_ptr().add(9) as *mut [u8; 8]) },
                             )
                             .len();
@@ -326,7 +329,7 @@ pub fn render_system_info_with(
                             5
                         }
                         3 => {
-                            right = bsp::uid::bootloader_version_str();
+                            right = crate::services::primitives::bootloader_version_str();
                             6
                         }
                         4 => {
@@ -339,12 +342,12 @@ pub fn render_system_info_with(
                             8
                         }
                         7 => {
-                            sn = bsp::uid::get_crockford_serial();
+                            sn = crate::services::primitives::crockford_serial();
                             right = unsafe { core::str::from_utf8_unchecked(&sn[..14]) };
                             9
                         }
                         _ => {
-                            let mac = bsp::uid::read_mac_address();
+                            let mac = crate::services::primitives::mac_address();
                             let mac_buf = unsafe { &mut *(fmt_buf.as_mut_ptr() as *mut [u8; 17]) };
                             right = utils::format::format_mac_address(&mac, mac_buf);
                             10

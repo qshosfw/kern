@@ -795,74 +795,80 @@ impl MenuView {
     }
 
     #[inline(never)]
+    fn render_sheet_row(canvas: &mut Canvas, sheet: &OptionSheet, idx: usize, row_y_scroll: i16) {
+        let has_scroll = row_y_scroll < 0;
+        let row_y = if has_scroll {
+            !row_y_scroll
+        } else {
+            row_y_scroll
+        };
+        let is_hovered = idx == sheet.hover;
+        let is_selected = idx == sheet.selected;
+        let (fill_x, fill_w) = if has_scroll { (2, 118) } else { (3, 122) };
+
+        let tc = if is_hovered {
+            crate::widgets::draw_selection_capsule(
+                canvas,
+                [fill_x, row_y as u8, fill_w, 11],
+                crate::widgets::CAPSULE_FILL | crate::widgets::CAPSULE_ROUND,
+            )
+        } else {
+            Color::Fill
+        };
+
+        let row_icon = sheet.icons.and_then(|arr| arr.get(idx).copied());
+        let mut tx = if sheet.show_radio { 16 } else { 15 };
+        let sprite = if sheet.show_radio {
+            Some(if is_selected {
+                icons::RADIO_ON
+            } else {
+                icons::RADIO_OFF
+            })
+        } else if is_hovered && row_icon.is_none() {
+            Some(icons::ARROW_RIGHT)
+        } else {
+            None
+        };
+        if let Some(s) = sprite {
+            icons::draw_icon_8(canvas, 5, row_y + 2, s, tc);
+        }
+        if let Some(bmp) = row_icon {
+            let ix = if sheet.show_radio { 16 } else { 5 };
+            icons::draw_icon_8(canvas, ix, row_y + 2, bmp, tc);
+            tx = ix + 11;
+        }
+        text::draw_str(canvas, tx, row_y + 8, sheet.options.get(idx), &MUMATRIX, tc);
+    }
+
+    #[inline(never)]
     pub fn render_sheet_slide_up(canvas: &mut Canvas, sheet: &OptionSheet, y_offset: i8) {
-        if sheet.options.is_empty() {
+        let total = sheet.options.len();
+        if total == 0 {
             return;
         }
 
         let sheet_h = 48u8;
-        let base_y = 64i16.saturating_sub(sheet_h as i16);
-        let sheet_y = (base_y + y_offset.max(0) as i16).min(64);
+        let sheet_y = crate::widgets::draw_sheet_slide_up(canvas, sheet.title, sheet_h, y_offset);
         if sheet_y >= 64 {
             return;
         }
 
-        crate::widgets::draw_sheet_slide_up(canvas, sheet.title, sheet_h, None, y_offset);
-
         let visible_count = 3usize;
-        let total = sheet.options.len();
         let (page_u16, _) = utils::math::div3_u16(sheet.hover as u16);
-        let page = page_u16 as usize;
-        let start_idx = page * visible_count;
+        let start_idx = page_u16 as usize * visible_count;
         let end_idx = (start_idx + visible_count).min(total);
+        let has_scroll = total > visible_count;
 
-        let row_start_y = sheet_y + 11;
-        let fill_w = if total > visible_count { 118 } else { 122 };
-        let fill_x = if total > visible_count { 2 } else { 3 };
-
-        for (slot, idx) in (start_idx..end_idx).enumerate() {
-            let row_y = row_start_y + (slot as i16 * 12);
-            if row_y >= 64 || row_y + 11 <= sheet_y + 10 {
-                continue;
+        let mut row_y = sheet_y + 11;
+        for idx in start_idx..end_idx {
+            if row_y < 64 && row_y + 11 > sheet_y + 10 {
+                let packed = if has_scroll { !row_y } else { row_y };
+                Self::render_sheet_row(canvas, sheet, idx, packed);
             }
-            let is_hovered = idx == sheet.hover;
-            let is_selected = idx == sheet.selected;
-
-            let tc = if is_hovered {
-                crate::widgets::draw_selection_capsule(
-                    canvas,
-                    [fill_x, row_y as u8, fill_w, 11],
-                    crate::widgets::CAPSULE_FILL | crate::widgets::CAPSULE_ROUND,
-                )
-            } else {
-                Color::Fill
-            };
-
-            let row_icon = sheet.icons.and_then(|arr| arr.get(idx).copied());
-            let mut tx = if sheet.show_radio { 16 } else { 15 };
-            let sprite = if sheet.show_radio {
-                Some(if is_selected {
-                    icons::RADIO_ON
-                } else {
-                    icons::RADIO_OFF
-                })
-            } else if is_hovered && row_icon.is_none() {
-                Some(icons::ARROW_RIGHT)
-            } else {
-                None
-            };
-            if let Some(s) = sprite {
-                icons::draw_icon_8(canvas, 5, row_y + 2, s, tc);
-            }
-            if let Some(bmp) = row_icon {
-                let ix = if sheet.show_radio { 16 } else { 5 };
-                icons::draw_icon_8(canvas, ix, row_y + 2, bmp, tc);
-                tx = ix + 11;
-            }
-            text::draw_str(canvas, tx, row_y + 8, sheet.options.get(idx), &MUMATRIX, tc);
+            row_y += 12;
         }
 
-        if total > visible_count && sheet_y + 10 < 60 {
+        if has_scroll && sheet_y + 10 < 60 {
             let track_y = (sheet_y + 10) as u8;
             let track_h = (64 - sheet_y - 12).clamp(8, 36) as u8;
             crate::widgets::draw_scrollbar(

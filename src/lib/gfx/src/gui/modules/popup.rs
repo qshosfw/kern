@@ -130,9 +130,8 @@ impl View<PopupModel> for PopupView {
         // Standard bottom sheet occupies Y=18 to Y=63 (46px high)
         let sheet_h = 46u8;
         let y_offset = model.anim.slide_offset(sheet_h);
-        let sheet_y = 18i16 + y_offset as i16;
-
-        let badges = has_badges.then(|| {
+        let sheet_y = widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, y_offset);
+        if has_badges {
             let confirm = model
                 .confirm_label
                 .unwrap_or(if model.hold.required_ms > 0 {
@@ -140,9 +139,14 @@ impl View<PopupModel> for PopupView {
                 } else {
                     ""
                 });
-            (confirm, model.cancel_label.unwrap_or(""))
-        });
-        widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, badges, y_offset);
+            widgets::draw_sheet_badges(
+                canvas,
+                sheet_y,
+                sheet_h,
+                confirm,
+                model.cancel_label.unwrap_or(""),
+            );
+        }
 
         // Body text rendering (TomThumb, multi-line aware with padding)
         let visible_lines = popup_visible_lines(model);

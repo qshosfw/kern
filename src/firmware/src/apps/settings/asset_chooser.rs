@@ -65,27 +65,12 @@ impl AssetDescriptor {
     }
 
     #[inline(never)]
-    pub fn open_sheet(&self, ctx: &mut crate::SysContext) {
-        let (active, cur_path) = self.get_path(&ctx.config);
-        let storage = storage_mut();
-
-        storage.labels[0].set_str(self.none_label);
-
-        let mut count = 0usize;
-        #[cfg(feature = "filesystem")]
-        let _ = ctx
-            .storage
-            .fs
-            .list_dir(self.dir, |entry_name, _size, _perm, is_dir| {
-                if count < MAX_CHOOSER_ASSETS
-                    && !is_dir
-                    && has_extension(entry_name, self.extensions)
-                    && build_full_asset_path(self.dir, entry_name, &mut storage.paths[count])
-                {
-                    count += 1;
-                }
-            });
-
+    fn finalize_entries(
+        &self,
+        cfg: &crate::config::MasterConfig,
+        storage: &mut AssetChooserStorage,
+    ) -> usize {
+        let count = storage.count as usize;
         for i in 0..count {
             storage.order[i] = i as u8;
         }
@@ -100,14 +85,18 @@ impl AssetDescriptor {
             }
         }
 
+        let (active, cur_path) = self.get_path(cfg);
+        let cb = cur_path.as_bytes();
         let mut current_sel = 0;
         for idx in 0..count {
             let full_path = storage.paths[storage.order[idx] as usize].as_str();
             format_asset_name_into(full_path, &mut storage.labels[idx + 1]);
+            let fb = full_path.as_bytes();
             if active
                 && current_sel == 0
-                && (full_path == cur_path
-                    || (!cur_path.starts_with('/') && full_path.ends_with(cur_path)))
+                && fb.len() >= cb.len()
+                && (cb.first() != Some(&b'/') || fb.len() == cb.len())
+                && &fb[fb.len() - cb.len()..] == cb
             {
                 current_sel = idx + 1;
             }
@@ -115,8 +104,32 @@ impl AssetDescriptor {
         if active && current_sel == 0 && count > 0 {
             current_sel = 1;
         }
-        storage.count = count as u8;
+        current_sel
+    }
 
+    #[inline(never)]
+    pub fn open_sheet(&self, ctx: &mut crate::SysContext) {
+        let storage = storage_mut();
+        storage.labels[0].set_str(self.none_label);
+        storage.count = 0;
+
+        #[cfg(feature = "filesystem")]
+        let _ = ctx
+            .storage
+            .fs
+            .list_dir(self.dir, |entry_name, _size, _perm, is_dir| {
+                let c = storage.count as usize;
+                if c < MAX_CHOOSER_ASSETS
+                    && !is_dir
+                    && has_extension(entry_name, self.extensions)
+                    && build_full_asset_path(self.dir, entry_name, &mut storage.paths[c])
+                {
+                    storage.count = (c + 1) as u8;
+                }
+            });
+
+        let current_sel = self.finalize_entries(&ctx.config, storage);
+        let count = storage.count as usize;
         let labels_slice: &'static [ShortString] =
             unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), count + 1) };
         super::dialog::show_radio_sheet(

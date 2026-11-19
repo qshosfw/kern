@@ -249,17 +249,12 @@ pub fn draw_dialog_hold_prompt(
     draw_key_badge_right(canvas, 124, 55, "EXIT", cancel_label);
 }
 
-/// Shared bottom-sheet modal frame (inverted header, outer border, clear background, optional badges)
-pub fn draw_sheet_frame(
-    canvas: &mut Canvas,
-    title: &str,
-    sheet_y: i16,
-    sheet_h: u8,
-    badges: Option<(&str, &str)>,
-) {
+/// Shared bottom-sheet modal frame (inverted header, outer border, clear background).
+#[inline(always)]
+pub fn draw_sheet_frame(canvas: &mut Canvas, title: &str, sheet_y: i16, sheet_h: u8) -> i16 {
     let base_y = 64i16.saturating_sub(sheet_h as i16);
     let y_offset = (sheet_y - base_y).max(0) as i8;
-    draw_sheet_slide_up(canvas, title, sheet_h, badges, y_offset);
+    draw_sheet_slide_up(canvas, title, sheet_h, y_offset)
 }
 
 /// Shared ultra-compact scrollbar renderer
@@ -281,24 +276,18 @@ pub fn draw_scrollbar(
     let max_scroll = (total - visible) as u32;
     let rem_h = (track_h - thumb_h) as u32;
     let cur = current.min(total - visible) as u32;
-    let thumb_y = track_y + ((cur * rem_h) / max_scroll) as u8;
-    let thumb_y = thumb_y.min(track_y + track_h - thumb_h);
+    let thumb_y = (track_y + ((cur * rem_h) / max_scroll) as u8).min(track_y + track_h - thumb_h);
     canvas.fill_rect(track_x, thumb_y, 3, thumb_h, Color::Fill);
 }
 
-/// Shared bottom-sheet modal frame rendered with a vertical slide-up offset
+/// Shared bottom-sheet modal frame rendered with a vertical slide-up offset.
+/// Returns the computed top `sheet_y` (`>= 64` when fully off-screen).
 #[inline(never)]
-pub fn draw_sheet_slide_up(
-    canvas: &mut Canvas,
-    title: &str,
-    sheet_h: u8,
-    badges: Option<(&str, &str)>,
-    y_offset: i8,
-) {
+pub fn draw_sheet_slide_up(canvas: &mut Canvas, title: &str, sheet_h: u8, y_offset: i8) -> i16 {
     let base_y = 64i16.saturating_sub(sheet_h as i16);
     let sheet_y = (base_y + y_offset.max(0) as i16).min(64);
     if sheet_y >= 64 {
-        return;
+        return 64;
     }
     let visible_h = (64 - sheet_y).min(sheet_h as i16) as u8;
     let sy = sheet_y as u8;
@@ -307,16 +296,25 @@ pub fn draw_sheet_slide_up(
     }
     draw_rounded_box(canvas, 0, sy, 128, visible_h);
     draw_negated_header(canvas, sheet_y, title);
+    sheet_y
+}
 
-    if let Some((confirm, cancel)) = badges {
-        let by = (sheet_y + sheet_h as i16).saturating_sub(10);
-        if by < 64 {
-            if !confirm.is_empty() {
-                draw_key_badge(canvas, 3, by, "M", confirm);
-            }
-            if !cancel.is_empty() {
-                draw_key_badge_right(canvas, 125, by, "EXIT", cancel);
-            }
+/// Render optional bottom-left `[M]` confirm and bottom-right `[EXIT]` cancel badges on a sheet.
+#[inline(never)]
+pub fn draw_sheet_badges(
+    canvas: &mut Canvas,
+    sheet_y: i16,
+    sheet_h: u8,
+    confirm: &str,
+    cancel: &str,
+) {
+    let by = (sheet_y + sheet_h as i16).saturating_sub(10);
+    if by < 64 {
+        if !confirm.is_empty() {
+            draw_key_badge(canvas, 3, by, "M", confirm);
+        }
+        if !cancel.is_empty() {
+            draw_key_badge_right(canvas, 125, by, "EXIT", cancel);
         }
     }
 }
@@ -430,7 +428,7 @@ mod tests {
         let mut sheet_canvas = Canvas::new();
         sheet_canvas.fill_rect(0, 0, 128, 64, Color::Fill);
         sheet_canvas.dim_backdrop(9);
-        draw_sheet_slide_up(&mut sheet_canvas, "Enter DFU Mode", 46, None, 0);
+        draw_sheet_slide_up(&mut sheet_canvas, "Enter DFU Mode", 46, 0);
         // Sheet docks at y = 18; row y = 17 (page 2 bit 1) must be a clean 1px clear separator
         for x in 0..128usize {
             assert_eq!(sheet_canvas.buffer[2][x] & (1 << 1), 0);

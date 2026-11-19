@@ -105,7 +105,9 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
         }
         KRX_WIDGET_ROUNDED_BOX => gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h),
         KRX_WIDGET_NEGATED_HEADER => gfx::widgets::draw_negated_header(canvas, d.y, s0),
-        KRX_WIDGET_SHEET_FRAME => gfx::widgets::draw_sheet_frame(canvas, s0, d.y, d.h, None),
+        KRX_WIDGET_SHEET_FRAME => {
+            gfx::widgets::draw_sheet_frame(canvas, s0, d.y, d.h);
+        }
         KRX_WIDGET_PROGRESS_BAR => {
             gfx::widgets::draw_progress_bar(canvas, d.x, d.y, d.w, d.h, d.a, d.b != 0);
         }

@@ -21,6 +21,58 @@ pub fn color_from_u8(color: u8) -> gfx::Color {
 }
 
 #[inline(always)]
+pub fn feed_watchdog() {
+    py32_hal::wdt::Watchdog::feed();
+}
+
+#[inline(always)]
+pub fn mcu_rdp_short_str() -> &'static str {
+    bsp::uid::get_mcu_rdp_level().short_str()
+}
+
+#[cfg(feature = "settings_info")]
+#[inline(always)]
+pub fn has_factory_qs1() -> bool {
+    matches!(
+        bsp::uid::factory_cert_status(),
+        bsp::uid::FactoryCertStatus::Qs1Ascii { .. }
+    )
+}
+
+#[cfg(feature = "settings_info")]
+#[inline(always)]
+pub fn factory_qs1_bytes() -> Option<([u8; 16], usize)> {
+    match bsp::uid::factory_cert_status() {
+        bsp::uid::FactoryCertStatus::Qs1Ascii { buf, len } => Some((buf, len as usize)),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "settings_info")]
+#[inline(always)]
+pub fn flash_size_kb() -> u16 {
+    py32_hal::uid::SystemInfo::flash_size_kb()
+}
+
+#[cfg(feature = "settings_info")]
+#[inline(always)]
+pub fn bootloader_version_str() -> &'static str {
+    bsp::uid::bootloader_version_str()
+}
+
+#[cfg(feature = "settings_info")]
+#[inline(always)]
+pub fn crockford_serial() -> [u8; 15] {
+    bsp::uid::get_crockford_serial()
+}
+
+#[cfg(feature = "settings_info")]
+#[inline(always)]
+pub fn mac_address() -> [u8; 6] {
+    bsp::uid::read_mac_address()
+}
+
+#[inline(always)]
 pub fn font_from_u8(font_id: u8) -> &'static gfx::GfxFont {
     if font_id == 1 {
         &gfx::fonts::mumatrix_regular::FONT

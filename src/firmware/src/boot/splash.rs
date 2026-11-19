@@ -203,7 +203,7 @@ pub fn load_and_render_splash(
 /// Render procedural high-tech KERN banner fallback
 pub fn render_default_banner(canvas: &mut Canvas) {
     canvas.clear();
-    gfx::widgets::draw_sheet_frame(canvas, "KERN OS", 12, 40, None);
+    gfx::widgets::draw_sheet_frame(canvas, "KERN OS", 12, 40);
     gfx::text::draw_str_align(
         canvas,
         64,

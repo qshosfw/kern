@@ -64,7 +64,7 @@ pub fn format_metric(id: MetricId, ctx: &mut SysContext, out: &mut ShortString) 
                             "Locked"
                         }
                     }
-                    MetricId::DebugRdp => bsp::uid::get_mcu_rdp_level().short_str(),
+                    MetricId::DebugRdp => crate::services::primitives::mcu_rdp_short_str(),
                     _ => "None",
                 };
                 out.set_str(s);
