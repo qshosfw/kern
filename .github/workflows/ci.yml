@@ -54,6 +54,9 @@ jobs:
       - name: Run KernFS WebDAV mounter selftest
         run: ./kern mount --selftest
 
+      - name: Run Kern Dock GUI headless selftest
+        run: ./kern dock --selftest
+
       - name: Check firmware (UV-K1 / UV-K5v3, 0 warnings)
         run: ./kern check --deny-warnings
 

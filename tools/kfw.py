@@ -32,6 +32,26 @@ from pathlib import Path
 from typing import Any
 
 # =============================================================================
+# 0. KERN TUI STYLE HELPERS (Matches tools/builder.py & tools/flasher.py)
+# =============================================================================
+
+_USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+_RESET  = "\033[0m"  if _USE_COLOR else ""
+_BOLD   = "\033[1m"  if _USE_COLOR else ""
+_INVERT = "\033[7m"  if _USE_COLOR else ""
+_RED    = "\033[31m" if _USE_COLOR else ""
+_GREEN  = "\033[32m" if _USE_COLOR else ""
+_YELLOW = "\033[33m" if _USE_COLOR else ""
+_BLUE   = "\033[34m" if _USE_COLOR else ""
+_CYAN   = "\033[36m" if _USE_COLOR else ""
+_GRAY   = "\033[90m" if _USE_COLOR else ""
+
+
+def _log_info(msg: str) -> None: print(f" {_BLUE}{_INVERT} INFO  {_RESET} {msg}")
+def _log_ok(msg: str) -> None:   print(f" {_GREEN}{_INVERT}  OK   {_RESET} {msg}")
+def _log_err(msg: str) -> None:  print(f" {_RED}{_INVERT} FAIL  {_RESET} {msg}", file=sys.stderr)
+
+# =============================================================================
 # 1. FORMAT CONSTANTS & REGISTRY
 # =============================================================================
 
@@ -1726,17 +1746,18 @@ def cmd_pack(args: argparse.Namespace) -> int:
 
     raw_total = sum(len(p.data) for p in parts)
     pct = (len(out_bytes) * 100.0 / raw_total) if raw_total else 0.0
-    print(f"OK: Packed {out_path} ({len(out_bytes):,} B vs {raw_total:,} B raw = {pct:.1f}%)")
+    _log_ok(f"Packed {_BOLD}{out_path}{_RESET} ({len(out_bytes):,} B vs {raw_total:,} B raw = {pct:.1f}%)")
     return 0
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
     data = Path(args.file).read_bytes()
     p = parse_kfw(data, verify_root=not args.no_verify)
-    print(f"KFW Container: {args.file} ({len(data):,} B, body={p.body_size:,} B)")
-    print(f"  Spec:       v{p.version >> 4}.{p.version & 0xF} | Kind: {KIND_NAMES.get(p.kind, p.kind)}")
+    print(f"\n  ⚡ {_BOLD}{_CYAN}KFW Container{_RESET} — {args.file} ({len(data):,} B, body={p.body_size:,} B)")
+    print("  ══════════════════════════════════════════════════════════════════")
+    print(f"  Spec:       v{p.version >> 4}.{p.version & 0xF} | Kind: {_BOLD}{KIND_NAMES.get(p.kind, p.kind)}{_RESET}")
     print(f"  Version:    {format_semver(p.fw_version)} | sec_cnt={p.sec_cnt} | KRX-ABI={format_abi(p.krx_abi_ver)}")
-    print(f"  Root Ascon: {p.root_digest.hex()}")
+    print(f"  Root Ascon: {_GRAY}{p.root_digest.hex()}{_RESET}")
     print(f"  Flags:      0x{p.flags:08X} | TLVs: {p.tlv_size} B | Parts: {len(p.parts)}")
     if p.targets:
         print("  Targets:")
@@ -1776,9 +1797,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
     dec_key = _parse_hex_key(args.decrypt_key, 16)
     auths = verify_auth(p, mac_key=mac_key, lms_pubkey=lms_pk, require_auth=args.require_auth)
     pts = extract_all_parts(p, decrypt_key=dec_key)
-    print(f"OK: Verified {args.file} — Ascon-Hash256 root + {len(pts)} part digest(s) + anti-brick checks passed.")
+    _log_ok(f"Verified {_BOLD}{args.file}{_RESET} — Ascon-Hash256 root + {len(pts)} part digest(s) + anti-brick checks passed.")
     for a in auths:
-        print(f"    Auth OK: {a}")
+        _log_info(f"Auth OK: {a}")
     return 0
 
 
@@ -1798,7 +1819,7 @@ def cmd_sign(args: argparse.Namespace) -> int:
         raise KfwError("Supply --mac-key and/or --lms-key")
     out_path = Path(args.output) if args.output else path
     out_path.write_bytes(data + bytes(trailer))
-    print(f"OK: Appended {len(trailer)} B auth trailer to {out_path} (body & root_digest unchanged).")
+    _log_ok(f"Appended {len(trailer)} B auth trailer to {_BOLD}{out_path}{_RESET} (body & root_digest unchanged).")
     return 0
 
 
@@ -1810,9 +1831,9 @@ def cmd_keygen(args: argparse.Namespace) -> int:
         out = lms_keygen(args.signer, height=args.height)
     if args.output:
         Path(args.output).write_text(json.dumps(out, indent=2) + "\n")
-        print(f"OK: Wrote {out['alg']} key to {args.output} (key_id={out['key_id_hex']})")
+        _log_ok(f"Wrote {out['alg']} key to {_BOLD}{args.output}{_RESET} (key_id={out['key_id_hex']})")
         if "pubkey_hex" in out:
-            print(f"    Public key (32 B): {out['pubkey_hex']}")
+            _log_info(f"Public key (32 B): {out['pubkey_hex']}")
     else:
         print(json.dumps(out, indent=2))
     return 0
@@ -1939,7 +1960,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     except KfwError:
         pass
 
-    print("OK: All .kfw selftests passed (Ascon-Hash256, Ascon-AEAD128, Ascon-128-MAC, PQ LMS-Ascon, Solid ARMTHUMB+LZMA2, RLE, anti-brick guards).")
+    _log_ok("All .kfw selftests passed (Ascon-Hash256, Ascon-AEAD128, Ascon-128-MAC, PQ LMS-Ascon, Solid ARMTHUMB+LZMA2, RLE, anti-brick guards).")
     return 0
 
 
@@ -2009,7 +2030,7 @@ def main() -> int:
     try:
         return args.func(args)
     except KfwError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        _log_err(str(e))
         return 1
 
 

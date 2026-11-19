@@ -93,6 +93,10 @@ case "$1" in
         shift
         python3 "$DIR/tools/kernfs_mount.py" "$@"
         ;;
+    dock)
+        shift
+        python3 "$DIR/tools/kern_dock.py" "$@"
+        ;;
     emu)
         shift
         python3 "$DIR/tools/emulator_helper.py" "$@"
@@ -116,6 +120,7 @@ case "$1" in
         echo "  flash           Build and flash firmware to radio via bootloader"
         echo "  kfw             Pack, inspect, verify, sign, or extract .kfw containers"
         echo "  mount           Mount radio KernFS over RigWire via cross-platform WebDAV"
+        echo "  dock            Launch graphical radio companion (live LCD, keypad, FS mount)"
         echo "  wire            RigWire serial host tool and file provisioning client"
         echo "  emu             Launch QEMU hardware emulator with interactive Web UI"
         echo "  info            Display target MCU, device, and active feature gates"

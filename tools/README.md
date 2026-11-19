@@ -22,7 +22,8 @@ Most workflows are exposed through the root `./kern` CLI (`./kern help`).
 
 ### Serial, Flashing & Provisioning
 - `rigwire.py` — Host CLI and Python client library for the RigWire COBS-framed binary protocol (`./kern wire` / `./rigwire`). Supports KernFS file operations, KRX sideloading, memory inspection, and live telemetry over USB-C CDC or UART.
-- `kernfs_mount.py` — Universal multi-platform KernFS filesystem mounter (`./kern mount`). Exposes the radio's LittleFS over RigWire as a localhost-only WebDAV Class 2 drive (native Linux GIO/Nautilus/Dolphin, macOS Finder/`mount_webdav`, Windows Explorer/`net use` — zero kernel drivers), with OS junk filtering, `/sys/*` & recovery-module protection, pre-write KRX & ORDS-01 validation, idempotent zero-wear writes, and post-write CRC-32 verification.
+- `kernfs_mount.py` — Universal multi-platform KernFS filesystem mounter (`./kern mount`). Exposes the radio's LittleFS over RigWire as a hardened localhost-only WebDAV Class 2 drive (native Linux GIO/Nautilus/Dolphin, macOS Finder/`mount_webdav`, Windows Explorer/`net use` — zero kernel drivers) with USB-style volume naming (`Quansheng UV-K1 XXXX`), DNS-rebinding/CSRF guards, RFC 4331 SPI flash quota reporting, ETag caching, OS junk filtering, `/sys/*` & recovery-module protection, pre-write KRX & ORDS-01 validation, and zero-wear idempotent writes.
+- `kern_dock.py` — Multi-platform graphical radio companion (`./kern dock`). Zero-dependency `tkinter` window rendering a realistic 128×64 ST7565 dot-matrix LCD (5 backlight themes + pixel grid), interactive front/side hardware keys (press/hold/release + PC keyboard shortcuts), live telemetry, pure-stdlib PNG screenshot export, KRX sideloading, and integrated KernFS WebDAV mounting over the shared RigWire link.
 - `flasher.py` — Serial bootloader flashing utility invoked by `./kern flash`.
 
 ### Hardware Emulation & Integration Tests
