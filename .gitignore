@@ -12,3 +12,4 @@ __pycache__/
 /backups/
 /tmp/
 *.zip.html
+/.agents/
