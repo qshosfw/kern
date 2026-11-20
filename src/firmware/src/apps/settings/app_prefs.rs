@@ -4,7 +4,6 @@
 //! KRX header without hardcoded per-app Rust UI code or static `.bss` storage.
 
 use crate::SysContext;
-#[cfg(feature = "filesystem")]
 use crate::apps::launcher::catalog::get_catalog;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions};
 use kernel::runtime::{CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, KrxPreamble};
@@ -92,7 +91,6 @@ pub fn seed_defaults(cfg: &mut [u8], sec: &[u8], ver: u8) {
     }
 }
 
-#[cfg(feature = "filesystem")]
 #[inline(never)]
 fn build_app_pref_item(dst: Option<&mut MenuItem>, off: usize, loaded: bool) -> bool {
     let sc = scratch();
@@ -128,7 +126,6 @@ fn build_app_pref_item(dst: Option<&mut MenuItem>, off: usize, loaded: bool) -> 
     true
 }
 
-#[cfg(feature = "filesystem")]
 #[inline(never)]
 pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysContext) -> usize {
     let Some(pkg) = get_catalog().get_entry(false, pkg_idx) else {
@@ -188,16 +185,6 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
     n
 }
 
-#[cfg(not(feature = "filesystem"))]
-pub fn populate_app_prefs(
-    _items: &mut [MenuItem],
-    _pkg_idx: usize,
-    _ctx: &mut SysContext,
-) -> usize {
-    0
-}
-
-#[cfg(feature = "filesystem")]
 #[inline(never)]
 pub fn commit_app_pref(idx: usize, val: i32, ctx: &mut SysContext) {
     let sc = scratch();
@@ -214,9 +201,6 @@ pub fn commit_app_pref(idx: usize, val: i32, ctx: &mut SysContext) {
     write_cfg_it(&mut sc.cfg[..cfg_len], &it, val as i16);
     let _ = ctx.save_config(pkg.title.as_str(), &sc.cfg[..cfg_len]);
 }
-
-#[cfg(not(feature = "filesystem"))]
-pub fn commit_app_pref(_idx: usize, _val: i32, _ctx: &mut SysContext) {}
 
 #[cfg(test)]
 mod tests {

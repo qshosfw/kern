@@ -17,6 +17,7 @@ use kernel::event::{KeyCode, KeyState};
 #[cfg(feature = "filesystem")]
 use kernfs::KernFS;
 
+#[cfg(feature = "filesystem")]
 use super::backup;
 
 /// Append a valid crash `BootSlot` (128 B) into the `/log/crash.bin` 1 KB ring (`8 x 128 B`).

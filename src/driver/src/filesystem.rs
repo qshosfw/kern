@@ -94,6 +94,25 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.stats()
     }
 
+    /// Stream directory entries `(name, size, permission, is_dir)` without buffering.
+    #[inline(always)]
+    pub fn for_each_entry<F: FnMut(&str, usize, u8, bool)>(
+        &mut self,
+        dir_path: &str,
+        cb: F,
+    ) -> Result<usize, StorageError> {
+        self.fs.list_dir(dir_path, cb).map_err(Self::map_error)
+    }
+
+    /// Raw positional write used by host transfers (no attribute policy, no encryption);
+    /// callers are responsible for path authorisation.
+    #[inline(always)]
+    pub fn write_at(&mut self, path: &str, offset: usize, data: &[u8]) -> Result<(), StorageError> {
+        self.fs
+            .write_at(path, offset, data)
+            .map_err(Self::map_error)
+    }
+
     #[inline(never)]
     fn map_error(err: FsError) -> StorageError {
         if err as u8 == FsError::LowPower as u8 {

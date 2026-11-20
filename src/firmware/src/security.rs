@@ -35,19 +35,10 @@ const SCAN_DIRS: [&str; 4] = ["/user", "/pref", "/pref/app", "/user/vault"];
 
 /// Counts files marked `ATTR_ENCRYPTED` across user and preference storage directories.
 pub fn count_encrypted_files(filesystem: &mut crate::services::SystemStorage) -> usize {
-    #[cfg(not(feature = "filesystem"))]
-    {
-        let _ = filesystem;
-        0
-    }
-    #[cfg(feature = "filesystem")]
-    {
-        let mut count = 0usize;
-        for dir in SCAN_DIRS {
-            count += filesystem.count_encrypted_in_dir(dir);
-        }
-        count
-    }
+    SCAN_DIRS
+        .iter()
+        .map(|dir| filesystem.count_encrypted_in_dir(dir))
+        .sum()
 }
 
 /// Synchronizes `FileSystemDriver` session key/lock state with the active security tier.

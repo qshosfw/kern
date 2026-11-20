@@ -57,6 +57,12 @@ pub fn pool_slice(range: (u8, u8)) -> &'static [ToneNote] {
     unsafe { NOTE_POOL.get_unchecked(start..end) }
 }
 
+/// Compile-time `NOTE_POOL[start..end]` for static tables (range `Index` is not `const`).
+#[cfg(feature = "boot_jingle")]
+const fn pool_const(start: usize, end: usize) -> &'static [ToneNote] {
+    NOTE_POOL.split_at(end).0.split_at(start).1
+}
+
 // ── Compact 2-Byte (offset, len) Lookup Tables ──────────────────────────────
 
 /// Indexed by `BeepType as usize` (`0..=6`).
@@ -125,7 +131,7 @@ pub static JINGLE_DEFS: &[JingleDef] = &[
     JingleDef {
         file_name: "01_chime.ton",
         name: "Chime",
-        notes: &NOTE_POOL[32..36],
+        notes: pool_const(32, 36),
     },
     JingleDef {
         file_name: "02_nokia.ton",
@@ -184,12 +190,12 @@ pub static ROGER_DEFS: &[RogerDef] = &[
     RogerDef {
         file_name: "01_classic.ton",
         name: "Classic",
-        notes: &NOTE_POOL[36..38],
+        notes: pool_const(36, 38),
     },
     RogerDef {
         file_name: "02_tiny.ton",
         name: "Tiny",
-        notes: &NOTE_POOL[38..41],
+        notes: pool_const(38, 41),
     },
     #[cfg(feature = "extra_rogers")]
     RogerDef {

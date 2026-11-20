@@ -25,6 +25,7 @@ impl SettingsApp {
             );
             return;
         }
+        #[cfg(feature = "filesystem")]
         if self.current_page == PageId::AppPrefs {
             self.items_len =
                 super::app_prefs::populate_app_prefs(&mut arena.items, self.selected_pkg_idx, ctx);
@@ -223,6 +224,7 @@ impl SettingsApp {
             }
             return;
         }
+        #[cfg(feature = "filesystem")]
         if self.current_page == PageId::AppPrefs {
             super::app_prefs::commit_app_pref(idx, val, ctx);
             return;
@@ -244,6 +246,7 @@ impl SettingsApp {
     pub fn handle_radio_confirmed(&mut self, ctx: &mut SysContext, sel: usize) {
         let sel_idx = self.selected_idx;
         if sel_idx < self.items_len {
+            #[cfg(feature = "filesystem")]
             if self.current_page == PageId::AppPrefs {
                 super::app_prefs::commit_app_pref(sel_idx, sel as i32, ctx);
                 return;

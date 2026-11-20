@@ -229,6 +229,7 @@ pub(crate) fn launch_krx_shortcut_arg(
     true
 }
 
+#[cfg(feature = "filesystem")]
 #[inline(never)]
 pub(crate) fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) -> bool {
     launch_krx_shortcut_arg(ctx, path, 0)

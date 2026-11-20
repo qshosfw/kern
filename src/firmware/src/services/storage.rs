@@ -63,6 +63,24 @@ impl NoStorage {
     ) -> Result<usize, StorageError> {
         Ok(0)
     }
+    pub fn for_each_entry<F: FnMut(&str, usize, u8, bool)>(
+        &mut self,
+        _dir_path: &str,
+        _cb: F,
+    ) -> Result<usize, StorageError> {
+        Ok(0)
+    }
+    pub fn write_at(
+        &mut self,
+        _path: &str,
+        _offset: usize,
+        _data: &[u8],
+    ) -> Result<(), StorageError> {
+        Err(StorageError::NotFound)
+    }
+    pub fn count_encrypted_in_dir(&mut self, _dir_path: &str) -> usize {
+        0
+    }
     pub fn stats(&mut self) -> kernfs::FsStats {
         kernfs::FsStats::default()
     }

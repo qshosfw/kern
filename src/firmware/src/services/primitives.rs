@@ -136,8 +136,7 @@ pub fn list_krx_dir(
 ) -> Result<usize, ()> {
     let mut count = 0usize;
     storage
-        .fs
-        .list_dir(dir_path, |path, size, _perm, is_dir| {
+        .for_each_entry(dir_path, |path, size, _perm, is_dir| {
             if let Some(dst) = out_entries.get_mut(count) {
                 unsafe { core::ptr::write_bytes(dst, 0, 1) };
                 let b = path.as_bytes();

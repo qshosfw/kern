@@ -97,6 +97,7 @@ impl PackageCatalogEntry {
 
 utils::static_bytes!(static PKG_EXTS = b"appsvcdmndrvmodkrx";);
 
+#[cfg(feature = "filesystem")]
 fn is_package_ext(bytes: &[u8]) -> bool {
     let n = bytes.len();
     if n <= 4 || bytes[n - 4] != b'.' {

@@ -6,7 +6,7 @@
     feature = "settings_debug"
 ))]
 use super::page::MetricId;
-use super::page::{ActionId, ChoiceId, PageId, SettingDef, SettingField, setting_page};
+use super::page::{ActionId, ChoiceId, SettingDef, SettingField, setting_page};
 #[cfg(feature = "settings_info")]
 use crate::SysContext;
 #[cfg(feature = "settings_info")]
@@ -48,13 +48,13 @@ setting_page!(pub SYSTEM_ROOT_PAGE = [
     #[cfg(feature = "uart")]
     ("UART Baud", SettingDef::choice(ChoiceId::UartBaud, SettingField::UART_BAUD)),
     #[cfg(feature = "settings_info")]
-    ("Info", SettingDef::submenu(PageId::SystemInfo)),
+    ("Info", SettingDef::submenu(super::page::PageId::SystemInfo)),
     #[cfg(feature = "filesystem")]
-    ("Storage", SettingDef::submenu(PageId::SystemStorage)),
+    ("Storage", SettingDef::submenu(super::page::PageId::SystemStorage)),
     #[cfg(feature = "settings_calib")]
-    ("Calibration", SettingDef::submenu(PageId::SystemCalibration)),
+    ("Calibration", SettingDef::submenu(super::page::PageId::SystemCalibration)),
     #[cfg(feature = "settings_debug")]
-    ("Debug", SettingDef::submenu(PageId::SystemDebug)),
+    ("Debug", SettingDef::submenu(super::page::PageId::SystemDebug)),
     ("Reset Settings", SettingDef::action(ActionId::ResetSettings)),
     ("Restart", SettingDef::action(ActionId::RebootFirmware)),
 ]);

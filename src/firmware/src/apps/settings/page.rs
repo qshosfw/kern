@@ -96,8 +96,6 @@ impl ActionId {
         match self {
             #[cfg(feature = "filesystem")]
             ActionId::FormatKeepCalib | ActionId::DeletePackage => DestructiveLevel::UserDataLoss,
-            #[cfg(not(feature = "filesystem"))]
-            ActionId::FormatKeepCalib => DestructiveLevel::UserDataLoss,
             ActionId::ResetSettings => DestructiveLevel::UserDataLoss,
             #[cfg(feature = "filesystem")]
             ActionId::FormatWipeAll => DestructiveLevel::FactoryDataWipe,

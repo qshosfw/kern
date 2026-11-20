@@ -199,8 +199,6 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
     let mut last_ui_tick = t0;
     #[cfg(feature = "radio")]
     let mut last_radio_tick = t0;
-    #[cfg(feature = "grayscale")]
-    let mut last_subframe_tick = t0;
     let mut dirty_render = false;
     let mut dimmed_dirty = false;
     let mut crash_loop_cleared = false;
@@ -213,9 +211,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         hw.backlight.wake();
     }
     #[cfg(feature = "grayscale")]
-    {
-        last_subframe_tick = py32_hal::delay::millis();
-    }
+    let mut last_subframe_tick = py32_hal::delay::millis();
 
     loop {
         py32_hal::wdt::Watchdog::feed();

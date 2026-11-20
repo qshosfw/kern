@@ -738,8 +738,7 @@ fn flush_transfer_buf(
         } else {
             return Ok(());
         };
-        fs.fs
-            .write_at(path, transfer.buf_offset as usize, &staging[..write_len])
+        fs.write_at(path, transfer.buf_offset as usize, &staging[..write_len])
             .map_err(|_| WireStatus::IoError)?;
         let rem = len - write_len;
         if rem > 0 {
@@ -980,7 +979,7 @@ fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let out_ptr = c.out.as_mut_ptr();
     let mut pos = 3usize;
 
-    let _ = c.fs().fs.list_dir(path, |name, size, _perm, is_dir| {
+    let _ = c.fs().for_each_entry(path, |name, size, _perm, is_dir| {
         if next_cursor == 0xFFFF {
             if idx >= start {
                 let b = name.as_bytes();
