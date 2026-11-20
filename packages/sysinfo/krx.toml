@@ -1,0 +1,17 @@
+name = "Info"
+output = "sysinfo.krx"
+author = "KERN-SYS"
+type = "module"
+profile = "p0"
+icon = "APP_ABOUT"
+caps = ["DISPLAY_DIRECT", "REAL_TIME_CLOCK", "POWER_MANAGE", "KEYPAD", "SERVICE_REGISTRY"]
+root = "sysinfo.c"
+leaves = [
+    "leaf1.c",
+    "leaf2.c",
+]
+
+# Placement in Settings -> System.
+[[action]]
+scope = ["SYSTEM_PAGE"]
+label = "Info"

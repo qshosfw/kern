@@ -51,8 +51,7 @@ A relocatable **P0 Structured Paged (`FLAG_SYSTEM_MENU`)** KRX system module tha
 ```
 packages/sysinfo/
 ├── README.md                 # Module documentation and screenshots
-├── build.sh                  # Cortex-M0+ PIC build + 0-reloc/1KB leaf checks + KRX packer
-├── krx.ld                    # Shared Thumb-1 PIC linker script
+├── krx.toml                  # Package manifest: units, size windows, capabilities, icon, Settings placement
 ├── leaf1.c                   # Leaf 1: Flash-paged Legal & Regulatory renderer (< 1 KB)
 ├── leaf2.c                   # Leaf 2: Flash-paged AES-128-CBC QS-1 verifier (< 1 KB)
 ├── screenshots/              # Rendered ST7565 128x64 UI screenshots
@@ -66,6 +65,6 @@ packages/sysinfo/
 ## Build & Install
 
 ```bash
-./packages/sysinfo/build.sh
+./kern pkg sysinfo
 ./kern wire sideload ./packages/sysinfo/sysinfo.krx --force
 ```

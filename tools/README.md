@@ -10,13 +10,14 @@ Most workflows are exposed through the root `./kern` CLI (`./kern help`).
 
 ### Build, ABI & Static Analysis
 - `builder.py` — Core backend for `./kern build`, `./kern check`, `./kern size`, `./kern info`, and `./kern flash`. Resolves `kern.toml` feature gates and hardware target profiles (`UV-K1`, `UV-K5v3`, `UV-K10Pro`), enforces Flash/SRAM budgets, extracts raw/packed binaries, and optionally exports JSON memory telemetry (`--json`).
-- `gen_abi.py` — Single-source-of-truth KRX ABI code generator (`./kern abi [--check]`). Parses the declarative `abi!` and `abi_sub!` tables in `src/kernel/src/abi.rs` and emits `packages/sdk/krx_ops.h`.
+- `./kern abi [--check]` — KRX ABI header generator. Not a script: it runs the `abigen` host binary of the `src/abi` crate, which prints `packages/sdk/krx_ops.h` from the compiled `abi!` and `abi_sub!` tables.
 - `bloat.py` — ELF symbol, section, rodata, call-site, and monomorphization analyzer (`./kern bloat`). Supports baseline capture and delta diffing across commits.
 - `archlint.py` — Heuristic static architectural smell scanner (`./kern lint`). Flags layer violations, division traps, unaligned packed fields, oversized functions, and duplicate logic.
 
 ### Packaging & Assets
 - `kfw.py` — `.kfw` v1.0 firmware container packer, inspector, verifier, signer, and extractor (`./kern kfw`). Zero-dependency Python stdlib implementation using 100% Ascon cryptography (`Ascon-Hash256`, `Ascon-AEAD128`, `Ascon-128-MAC`, post-quantum `LMS-Ascon`) and Solid `ARMTHUMB+LZMA2` compression.
-- `pack_krx.py` — KRX relocatable package packer and verifier used by `packages/*/build.sh`. Validates headers, capability bitmasks, P0/P1 paged sections, and CRC-32 checksums.
+- `pkg.py` — `./kern pkg` backend: builds every package from its `packages/<name>/krx.toml` manifest with one compiler invocation, the shared `packages/sdk/krx.ld`, and one set of position-independence and size guards.
+- `pack_krx.py` — KRX relocatable package packer and verifier used by `pkg.py`. Capability, icon and scope names resolve against the generated `packages/sdk/krx_ops.h`. Validates headers, capability bitmasks, P0/P1 paged sections, and CRC-32 checksums.
 - `pack.py` — Stock Quansheng bootloader XOR obfuscator called by `builder.py` to emit `target/firmware_packed.bin`.
 - `png_to_splash.py` — Converts PNG artwork to 128×64 1-bit monochrome splash images (`.img` or PackBits `.rle`).
 

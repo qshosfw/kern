@@ -197,7 +197,6 @@ static u8 mod_exists(const KrxApiTable* api, const char* path) {
 }
 
 int krx_main(u32 op, const KrxApiTable* api, const void* param) {
-    (void)param;
     if (!api || op != KRX_OP_START) return 0;
 
     g_rec.ui.softbar   = op_softbar;
@@ -215,9 +214,10 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     g_rec.ui.probe_bl  = op_probe_bl;
     g_rec.sc           = (RecScratch*)((u32)rec_root_base + REC_SCRATCH_OFFSET);
 
-    g_rec.has_dfu       = mod_exists(api, "/apps/dfu.mod");
-    g_rec.has_multiboot = mod_exists(api, "/apps/multiboot.mod");
-    g_rec.has_calib     = mod_exists(api, "/apps/calib.mod");
+    g_rec.boot_mode     = (param != 0) ? 1u : 0u;
+    g_rec.has_dfu       = g_rec.boot_mode && mod_exists(api, "/apps/dfu.mod");
+    g_rec.has_multiboot = g_rec.boot_mode && mod_exists(api, "/apps/multiboot.mod");
+    g_rec.has_calib     = g_rec.boot_mode && mod_exists(api, "/apps/calib.mod");
     g_rec.menu_sel      = 0u;
 
     for (;;) {
@@ -225,6 +225,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         g_rec.exit_code = REC_EXIT_OS;
         krx_leaf_call(api, REC_LEAF_MENU, (u32)&g_rec);
         if (g_rec.next_leaf == 0u) {
+            if (!g_rec.boot_mode) krx_call(api, OP_SYS_EVENT, 0u, 4u, 0u); /* CloseApp */
             return (int)g_rec.exit_code;
         }
         u8 leaf = g_rec.next_leaf;

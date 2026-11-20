@@ -11,7 +11,7 @@ static void render_list(const KrxApiTable* api, const RecState* st, u8 sel, u8 t
 
     krx_clear(api);
     if (count == 0u) {
-        st->ui.draw_ctr(api, 28, applets ? "No .krx in /apps or /boot" : "No .kfw/.uf2/.bin in /boot");
+        st->ui.draw_ctr(api, 28, applets ? "No .krx in /apps or /boot" : "No .kfw/.uf2/.bin in /boot or /user");
         st->ui.softbar(api, "", "", "EXIT", "Back");
     } else {
         for (u8 row = 0u; row < 5u; row++) {
@@ -29,7 +29,7 @@ static void render_list(const KrxApiTable* api, const RecState* st, u8 sel, u8 t
                 (const u8*)f->name, (u8)krx_strlen(f->name), (const u8*)sz, (u8)sn, flags, 0u
             );
         }
-        if (count > 5u) krx_ui_draw_scrollbar(api, 124u, 1u, 50u, (u16)sel, (u16)count, 5u);
+        if (count > 5u) krx_ui_draw_scrollbar(api, 124u, 1u, 50u, (u16)top, (u16)count, 5u);
         st->ui.softbar(api, "MENU", applets ? "Run" : "Inspect", "EXIT", "Back");
     }
     krx_commit_frame(api);
@@ -58,7 +58,9 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
             render_list(api, st, sel, top, 1u);
             while (krx_poll_key(api) == KEY_MENU) krx_delay_ms(api, 10u);
             const RecFlatFile* f = &sc->files[sel];
-            const char* pfx = (f->dir_idx == 0u) ? "/boot/" : (f->dir_idx == 1u) ? "/apps/" : "/";
+            const char* pfx = (f->dir_idx == 0u) ? "/boot/" :
+                              (f->dir_idx == 1u) ? "/apps/" :
+                              (f->dir_idx == 2u) ? "/user/" : "/";
             u32 pn = 0u, j = 0u;
             while (*pfx) sc->sel_path[pn++] = *pfx++;
             while (f->name[j] && pn < 31u) sc->sel_path[pn++] = f->name[j++];

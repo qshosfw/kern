@@ -32,8 +32,7 @@ A standalone, borderless **P0 Structured Paged (`FLAG_SYSTEM_ACTION`)** KRX reco
 ```text
 packages/recovery/
 ├── README.md
-├── build.sh                     # Cortex-M0+ PIC build, size/reloc/GOT guards & KRX packer
-├── krx.ld                       # Shared Thumb-1 PIC linker script (.text.entry at 0x00000000)
+├── krx.toml                     # Package manifest: units, size windows, capabilities, icon, Settings placement
 ├── recovery.mod                 # Verified P0 Structured Paged module (10,344 B -> /apps/recovery.mod)
 └── src/
     ├── rec_shared.h             # RecState, RecScratch, RecFlashJob & resident RecUiOps
@@ -55,6 +54,6 @@ packages/recovery/
 ## 🔧 Build & Sideload
 
 ```bash
-bash packages/recovery/build.sh
+./kern pkg recovery
 ./kern wire sideload packages/recovery/recovery.mod --force
 ```

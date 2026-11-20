@@ -1,0 +1,5 @@
+name = "Beacon"
+output = "beacon.krx"
+profile = "n1"
+caps = ["RADIO_RX", "RADIO_TX", "DISPLAY_DIRECT", "KEYPAD"]
+root = "beacon.c"

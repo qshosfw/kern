@@ -1,0 +1,9 @@
+name = "Bench"
+output = "bench.krx"
+profile = "n1"
+caps = [
+    "RADIO_RX", "RADIO_TX", "STORAGE_READ", "STORAGE_WRITE", "AUDIO_OUTPUT", "DISPLAY_DIRECT",
+    "SERIAL_COMM", "USB_COMM", "HARDWARE_CRC", "REAL_TIME_CLOCK", "POWER_MANAGE", "AUDIO_CAPTURE",
+    "KEYPAD", "TASK_CONTROL", "SERVICE_REGISTRY",
+]
+root = "bench.c"

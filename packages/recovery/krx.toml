@@ -1,0 +1,28 @@
+name = "Recovery"
+output = "recovery.mod"
+author = "KERN-SYS"
+type = "module"
+profile = "p0"
+icon = "SYSTEM"
+caps = ["STORAGE_READ", "STORAGE_WRITE", "DISPLAY_DIRECT", "POWER_MANAGE", "KEYPAD", "SERVICE_REGISTRY", "STORAGE_ADMIN"]
+src = "src"
+root = "recovery.c"
+# Resident root must end before REC_SCRATCH_OFFSET.
+root_max = 3584
+leaves = [
+    "leaf1_menu.c",
+    "leaf2_info.c",
+    "leaf3_peer.c",
+    "leaf4_scan.c",
+    "leaf5_files.c",
+    "leaf6_inspect.c",
+    "leaf7_console.c",
+    "leaf8_flash_chk.c",
+    "leaf9_flash_ui.c",
+    "leaf10_flash_sram.c",
+]
+
+# Placement in Settings -> System.
+[[action]]
+scope = ["SYSTEM_PAGE"]
+label = "Recovery"

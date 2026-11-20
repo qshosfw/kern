@@ -35,9 +35,8 @@ The 128×64 ST7565 DFU screen is vertically balanced with strict page-aligned zo
 ```text
 packages/dfu/
 ├── README.md                    # Module documentation & install guide
-├── build.sh                     # Cortex-M0+ PIC build, ABI checks, size/reloc guards & packer
+├── krx.toml                     # Package manifest: units, size windows, capabilities, icon, Settings placement
 ├── dfu.mod                      # Verified P0 Structured Paged module (7,349 B -> /apps/dfu.mod)
-├── krx.ld                       # Shared Thumb-1 PIC linker script (.text.entry at 0x00000000)
 ├── screenshots/                 # Rendered ST7565 128x64 UI screenshots
 └── src/
     ├── dfu_abi.h                # SRAM map, RTC_ALR tag, HOOK_FLAG_HAS_RECOVERY & KBHP v1.0
@@ -60,7 +59,7 @@ packages/dfu/
 ## 🔧 Build & Sideload
 
 ```bash
-bash packages/dfu/build.sh
+./kern pkg dfu
 ./kern wire sideload packages/dfu/dfu.mod --force
 ```
 

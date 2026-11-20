@@ -1,0 +1,28 @@
+name = "DFU Update"
+output = "dfu.mod"
+author = "KERN-SYS"
+type = "module"
+profile = "p0"
+icon = "UPLOAD"
+caps = ["STORAGE_READ", "DISPLAY_DIRECT", "POWER_MANAGE", "KEYPAD", "SERVICE_REGISTRY"]
+src = "src"
+root = "dfu.c"
+# Resident root must end before stage_buf.
+root_max = 4160
+leaves = [
+    "leaf1_splash.c",
+    "leaf2_modal.c",
+    "leaf3_stage.c",
+    "leaf4_probe.c",
+]
+
+# Bare-metal SRAM SysTick hook, `.incbin`'d by the root; bounded by DFU_SRAM_CODE_MAX.
+[[blob]]
+src = "src/hook/dfu_hook.S"
+entry = "__dfu_hook_start"
+max = 2304
+
+# Placement in Settings -> System.
+[[action]]
+scope = ["SYSTEM_ACTION"]
+label = "DFU Update"

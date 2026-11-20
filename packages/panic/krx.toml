@@ -1,0 +1,37 @@
+name = "Crash Logs"
+output = "panic.mod"
+author = "KERN-SYS"
+type = "module"
+profile = "p0"
+icon = "APP_ABOUT"
+caps = [
+    "STORAGE_READ", "STORAGE_WRITE", "DISPLAY_DIRECT", "SERIAL_COMM", "USB_COMM", "POWER_MANAGE",
+    "KEYPAD", "SERVICE_REGISTRY", "STORAGE_ADMIN",
+]
+src = "src"
+root = "panic.c"
+root_max = 4900
+leaves = [
+    "leaf1_prep.c",
+    "leaf2_cause.c",
+    "leaf3_tab_sum.c",
+    "leaf4_tab_reg.c",
+    "leaf5_tab_stk.c",
+    "leaf6_dis_lo.c",
+    "leaf7_dis_mid.c",
+    "leaf8_dis_hi.c",
+    "leaf9_asm_draw.c",
+    "leaf10_rpt_head.c",
+    "leaf11_rpt_tail.c",
+    "leaf12_splash.c",
+    "leaf13_splash_info.c",
+    "leaf14_safemenu.c",
+    "leaf15_qr_encode.c",
+    "leaf16_qr_matrix.c",
+    "leaf17_qr_draw.c",
+]
+
+# Placement in Settings -> System.
+[[action]]
+scope = ["SYSTEM_PAGE"]
+label = "Crash Logs"

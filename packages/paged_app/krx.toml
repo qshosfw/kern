@@ -1,0 +1,4 @@
+name = "Paged Demo"
+output = "paged.krx"
+profile = "p1"
+blocks = ["paged_app.c", "block1.c"]

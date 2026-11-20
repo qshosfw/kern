@@ -1,0 +1,26 @@
+name = "Multiboot"
+output = "multiboot.mod"
+author = "KERN-SYS"
+type = "module"
+profile = "p0"
+icon = "SECURITY"
+caps = ["STORAGE_READ", "STORAGE_WRITE", "DISPLAY_DIRECT", "POWER_MANAGE", "KEYPAD", "SERVICE_REGISTRY", "STORAGE_ADMIN"]
+src = "src"
+root = "multiboot.c"
+# Resident root must end before MB_SCRATCH_OFFSET.
+root_max = 3584
+leaves = [
+    "leaf1_menu.c",
+    "leaf2_status.c",
+    "leaf3_backup.c",
+    "leaf4_slots.c",
+    "leaf5_inspect.c",
+    "leaf6_flash_chk.c",
+    "leaf7_flash_ui.c",
+    "leaf8_flash_sram.c",
+]
+
+# Placement in Settings -> System.
+[[action]]
+scope = ["SYSTEM_PAGE"]
+label = "Multiboot"

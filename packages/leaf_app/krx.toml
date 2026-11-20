@@ -1,0 +1,5 @@
+name = "Leaf Demo"
+output = "leaf.krx"
+profile = "p0"
+root = "leaf_app.c"
+leaves = ["leaf1.c", "leaf2.c"]

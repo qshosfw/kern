@@ -30,9 +30,10 @@ typedef struct {
     u8           keys_held;        /* 1 B:  Non-zero if boot chord keys still pressed */
     u8           has_stage;        /* 1 B:  Non-zero if SRAM UI strips were staged */
     u8           use_hook;         /* 1 B:  Non-zero if SysTick hook should attach */
-    u8           has_recovery;     /* 1 B:  Non-zero if /apps/recovery.mod is installed */
-    DfuUiOps     ui;               /* 4 B:  Resident softbar helper */
+    u8           _pad0;
+    DfuUiOps     ui;               /* 4 B:  Resident softbar helper (preserved across leaf4_probe) */
     u8*          stage_buf;        /* 4 B:  TRANSIENT_ARENA[4160..5120) = 960 B strip staging */
+    u8           has_recovery;     /* 1 B:  Non-zero if /apps/recovery.mod or /apps/multiboot.mod exists */
     u8           sram_arrow[38];   /* 38 B: 2 x 19 B connection arrow */
     u8           sram_vidpid[40];  /* 40 B: Page 1 USB VID:PID badge */
 } DfuSharedState;

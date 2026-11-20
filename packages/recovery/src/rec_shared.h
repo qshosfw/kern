@@ -44,7 +44,7 @@
 typedef struct {
     char name[20];
     u32  size;
-    u8   dir_idx; /* 0="/boot/", 1="/apps/", 2="/" */
+    u8   dir_idx; /* 0="/boot/", 1="/apps/", 2="/user/", 3="/" */
     u8   _pad[3];
 } RecFlatFile;
 
@@ -100,6 +100,7 @@ typedef struct {
     u8          has_multiboot;
     u8          has_calib;
     u8          flash_err;      /* 0=OK, 1=LowBatt, 2=ExtErr, 3=DecodeErr, 4=BadVec */
+    u8          boot_mode;      /* 1 = early-boot DFU chain, 0 = launched from Settings OS */
 } RecState;
 
 static inline void rec_copy(u8* d, const u8* s, u32 n) {

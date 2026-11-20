@@ -11,7 +11,7 @@ Keeping non-essential system UI (DFU graphics, crash forensics, system info) in 
 ### C SDK
 - `sdk/` — Canonical KRX C SDK:
   - `krx.h`: Core ABI types, `kern_call` trampoline, and helper inline wrappers.
-  - `krx_ops.h`: Auto-generated opcodes and sub-opcodes synced from `src/kernel/src/abi.rs` via `./kern abi`.
+  - `krx_ops.h`: Auto-generated opcodes and sub-opcodes synced from `src/abi` via `./kern abi`.
   - `krx.ld`: Shared Cortex-M0+ Thumb-1 PIC linker script.
 
 ### System Modules
@@ -39,7 +39,7 @@ Requires `arm-none-eabi-gcc` and Python 3.
 ./kern pkg dfu
 ./kern pkg sysinfo
 
-# Verify C SDK opcodes match src/kernel/src/abi.rs
+# Verify C SDK opcodes match src/abi
 ./kern abi --check
 
 # Sideload a built package onto a connected radio over RigWire

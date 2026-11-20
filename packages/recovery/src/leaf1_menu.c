@@ -18,8 +18,8 @@ static void render_menu(const KrxApiTable* api, const RecState* st,
                         const u8* items, u8 count, u8 sel, u8 top, u8 solid) {
     static const char TITLES[] =
         "Flash Image\0Applets\0Peer Flash\0Multiboot\0Calibration\0Information\0";
-    /* Built-in 8x8 Kern icons: Upload(49), Apps(46), Radio(25), Layers(47), Wrench(48), Info(30) */
-    static const u8 ICONS[6] = { 49u, 46u, 25u, 47u, 48u, 30u };
+    static const u8 ICONS[6] = { KRX_ICON_UPLOAD, KRX_ICON_APPS, KRX_ICON_APP_RADIO,
+                                 KRX_ICON_SECURITY, KRX_ICON_SYSTEM, KRX_ICON_APP_ABOUT };
 
     krx_clear(api);
     for (u8 row = 0u; row < 4u; row++) {
@@ -37,8 +37,8 @@ static void render_menu(const KrxApiTable* api, const RecState* st,
             (const u8*)"", 0u, flags, ICONS[id]
         );
     }
-    if (count > 4u) krx_ui_draw_scrollbar(api, 124u, 1u, 51u, (u16)sel, (u16)count, 4u);
-    st->ui.softbar(api, "MENU", "Open", "EXIT", st->has_dfu ? "DFU" : "Exit");
+    if (count > 4u) krx_ui_draw_scrollbar(api, 124u, 1u, 51u, (u16)top, (u16)count, 4u);
+    st->ui.softbar(api, "MENU", "Open", "EXIT", st->has_dfu ? "DFU" : "Back");
     krx_commit_frame(api);
 }
 

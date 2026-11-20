@@ -33,8 +33,9 @@ u32 leaf4_entry(u32 op, const KrxApiTable* api, void* param) {
     sc->file_sel   = 0u;
     u8 applets = st->tool_sub;
 
-    static const char DIRS[] = "/boot\0/apps\0/\0";
-    for (u8 d = 0u; d < 3u && sc->file_count < REC_MAX_FILES; d++) {
+    static const char DIRS[] = "/boot\0/apps\0/user\0/\0";
+    for (u8 d = 0u; d < 4u && sc->file_count < REC_MAX_FILES; d++) {
+        if (applets && d == 2u) continue; /* skip /user when scanning applets */
         const char* dir = st->ui.nth_s(DIRS, d);
         RecDirEntry ents[12];
         KrxFsReq req;

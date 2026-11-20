@@ -145,10 +145,12 @@ static void handoff_to_bootloader(void) {
 __attribute__((noreturn))
 static void enter_dfu_session(const KrxApiTable* api) {
     static const char REC_PATH[] = "/apps/recovery.mod";
+    static const char MB_PATH[]  = "/apps/multiboot.mod";
     u32 base_addr = (u32)dfu_root_base;
     g_state.ui.softbar   = root_draw_softbar;
     g_state.stage_buf    = (u8*)(base_addr + DFU_STAGE_OFFSET);
-    g_state.has_recovery = krx_fs_exists(api, (const u8*)REC_PATH, sizeof(REC_PATH) - 1u) ? 1u : 0u;
+    g_state.has_recovery = (krx_fs_exists(api, (const u8*)REC_PATH, sizeof(REC_PATH) - 1u) ||
+                            krx_fs_exists(api, (const u8*)MB_PATH,  sizeof(MB_PATH)  - 1u)) ? 1u : 0u;
 
     krx_leaf_call(api, DFU_LEAF_PROBE,  (u32)&g_state);
     krx_leaf_call(api, DFU_LEAF_SPLASH, (u32)&g_state);

@@ -72,7 +72,8 @@ static const char MENU_VALS[6][8] = {
     "Auto",
 };
 
-static const u8 MENU_ICONS[6] = { 43, 45, 41, 24, 46, 47 };
+static const u8 MENU_ICONS[6] = { KRX_ICON_AUDIO, KRX_ICON_DEVICE, KRX_ICON_DISPLAY,
+                                  KRX_ICON_VFO, KRX_ICON_APPS, KRX_ICON_SECURITY };
 
 static void select_tab(u8 next) {
     if (next < 3u && next != g_tab) {
@@ -97,7 +98,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         krx_invert_rect(api, 10, 10, 20, 20);
         krx_str_width(api, (const u8*)"B", 1u, 0u);
         krx_draw_char(api, 0, 0, 'K', 0u, 1u);
-        krx_draw_icon(api, 5, 5, 0u, 1u);
+        krx_draw_icon(api, 5, 5, KRX_ICON_ANTENNA, 1u);
         krx_scroll(api, 1, 0, 0u);
 
         (void)krx_pwr_u16(api, 0u);
@@ -248,7 +249,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
                     MENU_ICONS[idx]
                 );
             }
-            krx_ui_draw_scrollbar(api, 124u, 12u, 38u, g_menu_selected, 6u, 3u);
+            krx_ui_draw_scrollbar(api, 124u, 12u, 38u, start_row, 6u, 3u);
         } else {
             krx_ui_draw_big_digit(api, (i16)(bx + 4), 15, 1u, COLOR_FILL);
             krx_ui_draw_big_digit(api, (i16)(bx + 18), 15, 4u, COLOR_FILL);

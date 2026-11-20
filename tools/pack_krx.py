@@ -49,8 +49,6 @@ FLAG_RESTART_ON_FAIL = 1 << 2
 FLAG_SINGLETON = 1 << 3
 FLAG_AUTO_UPDATE_OK = 1 << 4
 FLAG_RTC = 1 << 5
-FLAG_SYSTEM_MENU = 1 << 6
-FLAG_SYSTEM_ACTION = 1 << 7
 
 # KRX Profiles (raw codes)
 PROFILE_N0_FIXED = 0x10
@@ -98,33 +96,38 @@ SEC_NAMES = {
     SEC_ACTIONS: "Actions",
 }
 
-# Capability Bitmask Constants (Synchronized with kernel::caps::Cap)
-CAP_NONE = 0
-CAP_RADIO_RX = 1 << 0
-CAP_RADIO_TX = 1 << 1
-CAP_STORAGE_RD = 1 << 2
-CAP_STORAGE_WR = 1 << 3
-CAP_AUDIO_OUT = 1 << 4
-CAP_DISPLAY = 1 << 5
-CAP_SERIAL = 1 << 6
-CAP_USB = 1 << 7
-CAP_HW_CRC = 1 << 8
-CAP_RTC = 1 << 9
-CAP_POWER = 1 << 10
-CAP_CRYPTO = 1 << 11
-CAP_RAW_PERIPH = 1 << 12
-CAP_BROADBAND_RX = 1 << 13
-CAP_GNSS = 1 << 14
-CAP_WIRELESS_LINK = 1 << 15
-CAP_AUDIO_CAP = 1 << 16
-CAP_BROADCAST_FM = 1 << 17
-CAP_KEYPAD = 1 << 18
-CAP_TASK_CONTROL = 1 << 19
-CAP_SERVICE_REG = 1 << 20
-CAP_BUS_ACCESS = 1 << 21
-CAP_GPIO_ACCESS = 1 << 22
-CAP_STORAGE_ADMIN = 1 << 23
-CAP_FACTORY_CALIB = 1 << 24
+SDK_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "packages", "sdk", "krx_ops.h")
+
+
+def sdk_names(prefix: str) -> dict[str, int]:
+    """Identifiers `<prefix>_<NAME>` from the generated SDK header (`./kern abi`), keyed by NAME."""
+    names = {}
+    with open(SDK_HEADER) as f:
+        for line in f:
+            parts = line.split(None, 2)
+            if len(parts) == 3 and parts[0] == "#define" and parts[1].startswith(prefix + "_"):
+                expr = parts[2].split("/*")[0].strip().replace("u", "")
+                names[parts[1][len(prefix) + 1 :]] = eval(expr, {"__builtins__": {}})
+    return names
+
+
+def resolve_mask(prefix: str, value) -> int:
+    """Accept an integer, or `|`-separated / listed identifier names from the SDK header."""
+    if isinstance(value, int):
+        return value
+    items = value if isinstance(value, list) else value.split("|")
+    try:
+        return int(items[0], 0) if len(items) == 1 else sum(int(i, 0) for i in items)
+    except ValueError:
+        pass
+    table = sdk_names(prefix)
+    mask = 0
+    for item in items:
+        key = item.strip().upper()
+        if key not in table:
+            raise SystemExit(f"ERROR: unknown {prefix}_{key}; see packages/sdk/krx_ops.h")
+        mask |= table[key]
+    return mask
 
 
 def align4(data: bytearray) -> bytearray:
@@ -155,7 +158,7 @@ class KrxPackageBuilder:
         self.reloc_offset = 0
         self.reloc_count = 0
         self.auto_page = False
-        self.caps = CAP_DISPLAY | CAP_KEYPAD
+        self.caps = resolve_mask("KRX_CAP", "DISPLAY_DIRECT|KEYPAD")
         self.payload = bytearray()
         self.cap_imports = []
         self.leaf_map = []
@@ -599,9 +602,7 @@ def main():
     parser.add_argument("--persistent", action="store_true", help="Mark package with FLAG_PERSISTENT (exempt from reaper)")
     parser.add_argument("--singleton", action="store_true", help="Mark package with FLAG_SINGLETON (single instance)")
     parser.add_argument("--restart-on-fail", action="store_true", help="Mark package with FLAG_RESTART_ON_FAIL")
-    parser.add_argument("--system-menu", action="store_true", help="Mark module with FLAG_SYSTEM_MENU (appear in Settings -> System)")
-    parser.add_argument("--system-action", action="store_true", help="Mark module with FLAG_SYSTEM_ACTION (in-place action button in Settings -> System)")
-    parser.add_argument("--icon", type=lambda x: int(x, 0), default=1, help="Icon asset ID (0..255)")
+    parser.add_argument("--icon", type=lambda x: resolve_mask("KRX_ICON", x), default=1, help="Icon: KRX_ICON_* name or ID")
     parser.add_argument("--version", default="1.0.0", help="Package semantic version (e.g. 1.2.0)")
     parser.add_argument("--payload", help="Binary payload input file")
     parser.add_argument("--entry", type=lambda x: int(x, 0), default=0, help="Entry point offset")
@@ -612,7 +613,7 @@ def main():
     parser.add_argument("--page-size", type=lambda x: int(x, 0), default=1024, help="Page/block size")
     parser.add_argument("--cache-blocks", type=int, default=2, help="Number of cache blocks")
     parser.add_argument("--auto-page", action="store_true", help="Automatically partition continuous payload into page-sized demand blocks")
-    parser.add_argument("--caps", type=lambda x: int(x, 0), default=None, help="Capability bitmask (hex or decimal)")
+    parser.add_argument("--caps", type=lambda x: resolve_mask("KRX_CAP", x), default=None, help="Capabilities: `|`-separated KRX_CAP_* names or a bitmask")
     parser.add_argument("--leaf", action="append", default=[], help="Add leaf overlay: <id>:<path>")
     parser.add_argument("--block", action="append", default=[], help="Add demand block: <id>:<path>")
     parser.add_argument(
@@ -631,7 +632,7 @@ def main():
         "--action",
         action="append",
         default=[],
-        help="Declare app action: <action_id>:<scope_mask>:<label>[:flags]",
+        help="Declare action: <action_id>:<KRX_SCOPE_* names or mask>:<label>[:flags]",
     )
     parser.add_argument("--cfg-bytes", type=int, default=16, help="App preference struct size in bytes")
     parser.add_argument(
@@ -678,10 +679,6 @@ def main():
         flags |= FLAG_SINGLETON
     if args.restart_on_fail:
         flags |= FLAG_RESTART_ON_FAIL
-    if args.system_menu:
-        flags |= FLAG_SYSTEM_MENU
-    if args.system_action:
-        flags |= FLAG_SYSTEM_ACTION
 
     builder.set_lifecycle(type_map[args.type], flags)
 
@@ -736,7 +733,7 @@ def main():
     for item in args.action:
         parts = item.split(":")
         action_id = int(parts[0], 0)
-        scope_mask = int(parts[1], 0)
+        scope_mask = resolve_mask("KRX_SCOPE", parts[1])
         label = parts[2]
         aflags = int(parts[3], 0) if len(parts) > 3 else 0
         builder.add_action(action_id, scope_mask, label, aflags)

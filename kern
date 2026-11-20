@@ -6,26 +6,6 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-build_packages() {
-    if [ $# -eq 0 ] || [ "$1" = "all" ]; then
-        for script in "$DIR"/packages/*/build.sh; do
-            pkg_name="$(basename "$(dirname "$script")")"
-            echo "==> Building package: $pkg_name"
-            bash "$script"
-        done
-    else
-        for pkg_name in "$@"; do
-            script="$DIR/packages/$pkg_name/build.sh"
-            if [ ! -f "$script" ]; then
-                echo "Error: unknown package '$pkg_name' (no $script)" >&2
-                exit 1
-            fi
-            echo "==> Building package: $pkg_name"
-            bash "$script"
-        done
-    fi
-}
-
 case "$1" in
     build)
         shift
@@ -67,11 +47,13 @@ case "$1" in
         ;;
     pkg|packages)
         shift
-        build_packages "$@"
+        python3 "$DIR/tools/pkg.py" "$@"
         ;;
     abi)
         shift
-        python3 "$DIR/tools/gen_abi.py" "$@"
+        HOST_TARGET="$(rustc -vV | sed -n 's|host: ||p')"
+        cargo run --quiet --profile host --target "$HOST_TARGET" -p abi --features describe --bin abigen -- \
+            "$DIR/packages/sdk/krx_ops.h" "$@"
         ;;
     bloat)
         shift
