@@ -60,6 +60,24 @@ fn active_krx_token(exclusive: bool) -> kernel::service::radio::ClientToken {
     ClientToken::new(id, tier)
 }
 
+/// Result of an operation refused because the image may not key the transmitter.
+pub const RF_TX_DENIED: usize = 0xFF;
+
+/// True when the RF operation keys the transmitter and so needs `Cap::RadioTx`
+/// on top of the `Cap::RadioRx` every RF operation declares.
+#[inline(always)]
+fn keys_transmitter(idx: u8, sub: u8, a1: usize, a2: usize) -> bool {
+    use ::abi::{
+        idx as op,
+        sub::{rf_bulk, rf_set},
+    };
+    match idx {
+        op::RfSet => (sub == rf_set::TX && a1 != 0) || (sub == rf_set::BURST && a2 as u16 != 0),
+        op::RfBulk => sub == rf_bulk::FSK_SEND,
+        _ => false,
+    }
+}
+
 #[inline(always)]
 fn decode_vfo_slot(slot: u8) -> Option<VfoSlot> {
     match slot {
@@ -274,6 +292,7 @@ unsafe fn dispatch_rf_vfo(
 
 #[inline(never)]
 unsafe fn dispatch_rf_bulk(
+    #[cfg_attr(not(feature = "rf_fsk"), allow(unused_variables))] coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
     sub: u8,
     a1: usize,
@@ -317,6 +336,13 @@ unsafe fn dispatch_rf_bulk(
             let Some(slice) = (unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }) else {
                 return 1;
             };
+            // A data burst is a transmission: same BCLO, time-out, inhibit and battery
+            // rules as PTT.
+            let perm =
+                coord.check_tx_permission(coord.effective_tx_slot(), active_krx_token(false));
+            if !perm.is_granted() {
+                return (perm as usize) + 1;
+            }
             usize::from(primitives::rf_fsk_send(radio, slice).is_err())
         }
         #[cfg(feature = "rf_fsk")]
@@ -339,6 +365,11 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         idx as op,
         sub::{rf_get, rf_set},
     };
+    if keys_transmitter(idx, a0 as u8, a1, a2)
+        && !crate::runtime::native_runner::active_native_caps().contains(::abi::Cap::RadioTx)
+    {
+        return RF_TX_DENIED;
+    }
     with_radio(0, |coord, radio| match idx {
         op::RfTune => {
             let bw_hz = if (a1 as u8) == 1 { 25_000 } else { 12_500 };
@@ -464,7 +495,7 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             0
         }
         op::RfVfo => unsafe { dispatch_rf_vfo(coord, radio, a0 as u8, a1, a2) },
-        op::RfBulk => unsafe { dispatch_rf_bulk(radio, a0 as u8, a1, a2) },
+        op::RfBulk => unsafe { dispatch_rf_bulk(coord, radio, a0 as u8, a1, a2) },
         _ => 0,
     })
 }
@@ -491,6 +522,28 @@ mod tests {
         }
 
         assert_eq!(core::mem::size_of::<KrxVfoConfig>(), 28);
+    }
+
+    #[test]
+    fn keying_the_transmitter_needs_radio_tx_not_just_radio_rx() {
+        use ::abi::{Cap, CapabilitySet, Op, idx, sub};
+        assert!(keys_transmitter(idx::RfSet, sub::rf_set::TX, 1, 0));
+        assert!(!keys_transmitter(idx::RfSet, sub::rf_set::TX, 0, 0));
+        assert!(keys_transmitter(idx::RfSet, sub::rf_set::BURST, 0, 500));
+        assert!(!keys_transmitter(idx::RfSet, sub::rf_set::BURST, 0, 0));
+        assert!(keys_transmitter(idx::RfBulk, sub::rf_bulk::FSK_SEND, 0, 0));
+        assert!(!keys_transmitter(idx::RfBulk, sub::rf_bulk::SWEEP, 0, 0));
+        assert!(!keys_transmitter(idx::RfGet, sub::rf_get::RSSI, 1, 1));
+
+        let slot = crate::runtime::native_runner::slot_mut();
+        slot.is_loaded = true;
+        slot.caps = CapabilitySet::empty().with(Cap::RadioRx);
+        let key = |a1| unsafe {
+            crate::runtime::syscall::kern_call(Op::RfSet.u32_id(), sub::rf_set::TX as usize, a1, 0)
+        };
+        assert_eq!(key(1), RF_TX_DENIED);
+        assert_ne!(key(0), RF_TX_DENIED);
+        crate::runtime::native_runner::init_native_slot();
         assert_eq!(core::mem::size_of::<KrxRadioState>(), 16);
     }
 }
