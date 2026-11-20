@@ -321,8 +321,17 @@ pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
     }
     with_radio(0, |coord, radio| match idx {
         op::RfTune => {
-            let bw_hz = if (a1 as u8) == 1 { 25_000 } else { 12_500 };
-            primitives::rf_tune(coord, radio, a0 as u32, bw_hz, a2 as u32);
+            use kernel::service::radio::{Bandwidth, StepSetting};
+            let bandwidth = match a1 {
+                0 => Bandwidth::Narrow12k5,
+                1 => Bandwidth::Wide25k,
+                2 => Bandwidth::Narrow6k25,
+                _ => return 1,
+            };
+            let Some(step) = StepSetting::from_request_hz(a2 as u32) else {
+                return 1;
+            };
+            primitives::rf_tune(coord, radio, a0 as u32, bandwidth, step);
             0
         }
         op::RfGet => {

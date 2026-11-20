@@ -521,6 +521,11 @@ static inline u8 krx_vfo_set(const KrxApiTable* api, u8 slot, u16 memory, const 
     return (u8)krx_call(api, OP_RF_VFO, SUB_RF_VFO_SET_CHANNEL, (u32)slot | ((u32)memory << 8), (u32)ch);
 }
 
+#define KRX_RF_WIDTH_12K5 0u
+#define KRX_RF_WIDTH_25K  1u
+#define KRX_RF_WIDTH_6K25 2u
+
+/* Returns 1 for an invalid width or a step outside 10..655350 Hz in 10 Hz units. */
 static inline u8 krx_rf_tune(const KrxApiTable* api, u32 freq_hz, u8 bw, u32 step_hz) {
     return (u8)krx_call(api, OP_RF_TUNE, freq_hz, (u32)bw, step_hz);
 }

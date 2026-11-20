@@ -283,7 +283,7 @@ impl RadioCoordinator {
         for (i, &(freq, power, bw)) in INIT_CH.iter().enumerate() {
             let ch = &mut self.channels[i];
             ch.rx_freq = Frequency::new(freq);
-            ch.step = StepSetting::Step12_5k;
+            ch.step = StepSetting::DEFAULT;
             ch.power = power;
             ch.bandwidth = bw;
             ch.squelch_level = 4;
@@ -1981,6 +1981,29 @@ mod tests {
         assert_eq!(coord.listening_vfo, VfoSlot::VfoA);
         assert_eq!(coord.arbitrator.active_client(), fsk);
         assert!(coord.fsk_sync_active);
+    }
+
+    #[test]
+    fn channel_recall_preserves_reference_tuning_steps() {
+        let mut coord = RadioCoordinator::new();
+        let mut radio = MockRadio::new();
+        let mut record =
+            crate::data::ChannelRecord::new_repeater(145_750_000, 145_150_000, 0, "GRID");
+
+        for units in [
+            0, 1, 2, 5, 10, 25, 50, 100, 125, 250, 500, 625, 833, 900, 1000, 1250, 1500, 2000,
+            2500, 3000, 5000, 10000, 12500, 20000, 25000, 50000, u16::MAX,
+        ] {
+            record.step_hz_x10 = units;
+            record.record_crc = record.compute_crc();
+            coord.load_channel_into_vfo(&mut radio, VfoSlot::VfoA, Some(0), &record);
+            assert_eq!(
+                coord.vfo_channel(VfoSlot::VfoA).step.in_hz(),
+                if units == 0 { 12_500 } else { u32::from(units) * 10 },
+            );
+            coord.save_vfo_to_channel(VfoSlot::VfoA, &mut record);
+            assert_eq!(record.step_hz_x10, units);
+        }
     }
 
     #[test]

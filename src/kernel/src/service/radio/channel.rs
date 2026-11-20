@@ -54,57 +54,49 @@ pub enum VfoState {
     VoltageHigh,
 }
 
-/// Frequency synthesizer tuning step options.
+/// Dial increment as stored in a channel record, in units of 10 Hz.
+/// A stored zero uses the default increment while retaining its record value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepSetting {
-    Step1_25k, // 1.25 kHz
-    Step2_5k,  // 2.50 kHz
-    Step5k,    // 5.00 kHz
-    Step6_25k, // 6.25 kHz (PMR446)
-    Step8_33k, // 8.33 kHz (Airband)
-    Step10k,   // 10.0 kHz
-    Step12_5k, // 12.5 kHz
-    Step25k,   // 25.0 kHz
-    Step50k,   // 50.0 kHz
-    Step100k,  // 100.0 kHz
-}
+pub struct StepSetting(u16);
 
 impl StepSetting {
-    pub const ALL: [Self; 10] = [
-        Self::Step1_25k,
-        Self::Step2_5k,
-        Self::Step5k,
-        Self::Step6_25k,
-        Self::Step8_33k,
-        Self::Step10k,
-        Self::Step12_5k,
-        Self::Step25k,
-        Self::Step50k,
-        Self::Step100k,
-    ];
+    pub const DEFAULT: Self = Self(1250);
 
-    pub const STEP_HZ_X10: [u16; 10] = [125, 250, 500, 625, 833, 1000, 1250, 2500, 5000, 10000];
-
-    #[inline(always)]
     pub const fn in_hz_x10(self) -> u16 {
-        Self::STEP_HZ_X10[self as usize]
+        self.0
     }
 
-    #[inline(always)]
     pub const fn in_hz(self) -> u32 {
-        (Self::STEP_HZ_X10[self as usize] as u32) * 10
+        let units = if self.0 == 0 { Self::DEFAULT.0 } else { self.0 };
+        units as u32 * 10
     }
 
-    #[inline(never)]
     pub const fn from_hz_x10(val: u16) -> Self {
-        let mut i = 0;
-        while i < 10 {
-            if Self::STEP_HZ_X10[i] == val {
-                return Self::ALL[i];
-            }
-            i += 1;
+        Self(val)
+    }
+
+    pub const fn from_request_hz(hz: u32) -> Option<Self> {
+        let (units, remainder) = utils::math::div10_u32(hz);
+        if units == 0 || units > u16::MAX as u32 || remainder != 0 {
+            return None;
         }
-        Self::Step12_5k
+        Some(Self(units as u16))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StepSetting;
+
+    #[test]
+    fn tuning_request_rejects_unrepresentable_steps() {
+        for hz in [0, 1, 11, 8_333, 655_351, 655_360, u32::MAX] {
+            assert_eq!(StepSetting::from_request_hz(hz), None);
+        }
+        for units in 1..=u16::MAX {
+            let step = StepSetting::from_request_hz(u32::from(units) * 10).unwrap();
+            assert_eq!(step.in_hz_x10(), units);
+        }
     }
 }
 
@@ -198,7 +190,7 @@ impl ChannelConfig {
         Self {
             rx_freq: Frequency::new(rx_freq_hz),
             tx_shift: RepeaterShift::Simplex,
-            step: StepSetting::Step12_5k,
+            step: StepSetting::DEFAULT,
             bandwidth: Bandwidth::Narrow12k5,
             modulation: ModulationMode::Fm,
             power: RfPowerLevel::High,

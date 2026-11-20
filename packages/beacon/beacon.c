@@ -11,7 +11,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
     if (!api) return 0;
 
     if (op == KRX_OP_START) {
-        krx_rf_tune(api, 145500000u, 1u, 12500u);
+        krx_rf_tune(api, 145500000u, KRX_RF_WIDTH_25K, 12500u);
         return 0;
     }
 

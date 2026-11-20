@@ -246,21 +246,14 @@ pub fn rf_tune(
     coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
     freq_hz: u32,
-    bw_hz: u32,
-    step_hz: u32,
+    bandwidth: Bandwidth,
+    step: StepSetting,
 ) {
-    let bw = if bw_hz <= 12_500 {
-        Bandwidth::Narrow12k5
-    } else {
-        Bandwidth::Wide25k
-    };
-    let (step_10hz, _) = utils::math::div10_u32(step_hz);
-    let step = StepSetting::from_hz_x10(step_10hz as u16);
     let slot = coord.active_vfo;
     {
         let ch = coord.vfo_channel_mut(slot);
         ch.rx_freq = utils::units::Frequency::new(freq_hz);
-        ch.bandwidth = bw;
+        ch.bandwidth = bandwidth;
         ch.step = step;
     }
     if !coord.is_transmitting {
