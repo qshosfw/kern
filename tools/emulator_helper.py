@@ -22,6 +22,7 @@ CYAN    = "\033[36m"
 RED     = "\033[31m"
 GRAY    = "\033[90m"
 INVERT  = "\033[7m"
+WHITE = "\033[97m"  
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 EMU_DIR = Path(os.environ.get("KERN_EMU_DIR", str(ROOT_DIR / "inspo" / "uv-k5-v3-emulator")))

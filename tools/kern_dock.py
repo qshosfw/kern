@@ -112,9 +112,26 @@ def _clamp1(v: float) -> float:
 
 def _lcd_colors_norm(st: LcdSettings) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float], bool]:
     pal = LCD_PALETTES.get(st.palette, LCD_PALETTES["UV-K1"])
-    bright = _backlight_mult(st.backlight)
-    bg = tuple(_clamp1((c / 255.0) * bright) for c in pal["bg"])
-    fg_raw = tuple(_clamp1((c / 255.0) * bright) for c in pal["fg"])
+    is_dark = bool(pal["dark"])
+    # Real passive transflective ST7565 glass: at backlight=0 the LED is OFF so the panel shows
+    # dim reflective dark-slate polarizer glass rather than dimmed neon amber/cyan.
+    if st.backlight <= 0 and not is_dark:
+        bg = (0.125, 0.138, 0.132)
+        fg_raw = (0.035, 0.040, 0.042)
+    else:
+        bright = _backlight_mult(st.backlight)
+        if not is_dark and st.backlight <= 2:
+            # Smoothly blend from reflective neutral glass into LED color at very low backlight levels
+            t = st.backlight / 2.0
+            led_bg = tuple(_clamp1((c / 255.0) * bright) for c in pal["bg"])
+            bg = (
+                0.125 * (1.0 - t) + led_bg[0] * t,
+                0.138 * (1.0 - t) + led_bg[1] * t,
+                0.132 * (1.0 - t) + led_bg[2] * t,
+            )
+        else:
+            bg = tuple(_clamp1((c / 255.0) * bright) for c in pal["bg"])
+        fg_raw = tuple(_clamp1((c / 255.0) * bright) for c in pal["fg"])
     c_ratio = 0.15 + (max(0, min(15, st.contrast)) / 15.0) * 0.85
     fg = (
         bg[0] + (fg_raw[0] - bg[0]) * c_ratio,
@@ -122,11 +139,11 @@ def _lcd_colors_norm(st: LcdSettings) -> tuple[tuple[float, float, float], tuple
         bg[2] + (fg_raw[2] - bg[2]) * c_ratio,
     )
     grid = (
-        bg[0] + (fg_raw[0] - bg[0]) * 0.065,
-        bg[1] + (fg_raw[1] - bg[1]) * 0.065,
-        bg[2] + (fg_raw[2] - bg[2]) * 0.065,
+        bg[0] + (fg_raw[0] - bg[0]) * 0.075,
+        bg[1] + (fg_raw[1] - bg[1]) * 0.075,
+        bg[2] + (fg_raw[2] - bg[2]) * 0.075,
     )
-    return bg, fg, grid, bool(pal["dark"])
+    return bg, fg, grid, is_dark
 
 
 class FastLcdState:
@@ -225,27 +242,37 @@ def _compute_lcd_active_rect(w: float, h: float, aspect: float) -> tuple[float, 
 
 
 class LcdLayerCache:
-    """Caches static backlit LCD glass backdrop + hairline subpixel grid / inner bezel shadow / glass sheen."""
+    """
+    Supersampled (2x) cached LCD optics + moire-free 4x integer-aligned STN pixel-matrix grid.
+    Zero per-frame grid/bezel cost while keeping every column & row razor-sharp on K5 v3 and K1!
+    """
 
     def __init__(self) -> None:
         self._key: Any = None
         self.bg_surf: Any = None
         self.fg_surf: Any = None
+        self.grid_surf: Any = None
+        self._px3_surf: Any = None
+        self.ss: int = 2
         self.metrics: tuple[float, float, float, float, float, float] = (0, 0, 1, 1, 1, 1)
 
-    def ensure(self, w: int, h: int, st: LcdSettings) -> None:
+    def ensure(self, w: int, h: int, st: LcdSettings, dev_scale: float = 1.0) -> None:
         import cairo
-        key = (w, h, st.cache_key())
+        ds_bucket = round(max(1.0, min(3.0, dev_scale)) * 2.0) / 2.0
+        key = (w, h, ds_bucket, st.cache_key())
         if key == self._key and self.bg_surf is not None:
             return
         self._key = key
-        bg, _fg, grid, is_dark = _lcd_colors_norm(st)
+        ss = 2
+        self.ss = ss
+        bg, fg, grid, is_dark = _lcd_colors_norm(st)
         mx, my, mat_w, mat_h, px_w, px_h = _compute_lcd_active_rect(float(w), float(h), st.pixel_aspect)
         self.metrics = (mx, my, mat_w, mat_h, px_w, px_h)
 
-        # Layer A: Unpixelated Illuminated Glass + LED Diffuser Gradient
-        bg_s = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        # Layer A (2x supersampled): Unpixelated Illuminated Glass + Authentic Side/Edge LED Diffuser
+        bg_s = cairo.ImageSurface(cairo.FORMAT_ARGB32, w * ss, h * ss)
         cr = cairo.Context(bg_s)
+        cr.scale(ss, ss)
         _round_rect(cr, 0, 0, w, h, 4.0)
         cr.clip()
 
@@ -253,59 +280,88 @@ class LcdLayerCache:
         if is_dark:
             pat.add_color_stop_rgb(0.0, bg[0], bg[1], bg[2])
             pat.add_color_stop_rgb(1.0, _clamp1(bg[0] * 1.08), _clamp1(bg[1] * 1.08), _clamp1(bg[2] * 1.08))
-        else:
-            pat.add_color_stop_rgb(0.0, bg[0] * 0.94, bg[1] * 0.95, bg[2] * 0.96)
+        elif st.backlight <= 0:
+            pat.add_color_stop_rgb(0.0, bg[0] * 0.90, bg[1] * 0.90, bg[2] * 0.90)
             pat.add_color_stop_rgb(0.55, bg[0], bg[1], bg[2])
-            pat.add_color_stop_rgb(1.0, _clamp1(bg[0] * 1.04), _clamp1(bg[1] * 1.04), _clamp1(bg[2] * 1.03))
+            pat.add_color_stop_rgb(1.0, bg[0] * 1.06, bg[1] * 1.06, bg[2] * 1.06)
+        else:
+            pat.add_color_stop_rgb(0.0, bg[0] * 0.93, bg[1] * 0.94, bg[2] * 0.95)
+            pat.add_color_stop_rgb(0.50, bg[0], bg[1], bg[2])
+            pat.add_color_stop_rgb(1.0, _clamp1(bg[0] * 1.05), _clamp1(bg[1] * 1.04), _clamp1(bg[2] * 1.02))
         cr.set_source(pat)
         cr.rectangle(0, 0, w, h)
         cr.fill()
 
+        # Subtle horizontal LED edge diffuser bloom (authentic Quansheng side-lit backlight film!)
+        if not is_dark and st.backlight > 0:
+            hdiff = cairo.LinearGradient(0, 0, w, 0)
+            hdiff.add_color_stop_rgba(0.0, 1.0, 0.98, 0.92, 0.10)
+            hdiff.add_color_stop_rgba(0.18, 1.0, 0.98, 0.92, 0.0)
+            hdiff.add_color_stop_rgba(0.82, 1.0, 0.98, 0.92, 0.0)
+            hdiff.add_color_stop_rgba(1.0, 1.0, 0.98, 0.92, 0.10)
+            cr.set_source(hdiff)
+            cr.rectangle(0, 0, w, h)
+            cr.fill()
+
+        # Subtle active STN polarizer field tint inside the unpixelated glass margin
         if not is_dark:
-            cr.set_source_rgba(grid[0], grid[1], grid[2], 0.45 if st.pixel_grid else 0.18)
+            cr.set_source_rgba(grid[0], grid[1], grid[2], 0.38 if st.pixel_grid else 0.16)
             cr.rectangle(mx, my, mat_w, mat_h)
             cr.fill()
         self.bg_surf = bg_s
 
-        # Layer B: Crisp Hairline Subpixel Grid + Recessed Bezel Shadow + Glass Sheen
-        fg_s = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        # Layer B + C (2x supersampled & CACHED): Bake prefiltered 6x STN pixel-matrix hairline grid
+        # ONCE via FILTER_BEST directly onto fg_surf (0.00 ms per-frame cost, zero moire at 1x & 2x!)
+        fg_s = cairo.ImageSurface(cairo.FORMAT_ARGB32, w * ss, h * ss)
         fcr = cairo.Context(fg_s)
+        fcr.scale(ss, ss)
         _round_rect(fcr, 0, 0, w, h, 4.0)
         fcr.clip()
 
-        if st.pixel_grid and px_w >= 1.5:
-            fcr.set_source_rgba(bg[0], bg[1], bg[2], 0.68 if not is_dark else 0.62)
-            fcr.set_line_width(max(0.30, px_w * 0.10))
+        eff_px_w = px_w * ds_bucket
+        grid_alpha = _clamp1((eff_px_w - 0.95) / 1.35)
+        if st.pixel_grid and grid_alpha > 0.08:
+            gs = cairo.ImageSurface(cairo.FORMAT_ARGB32, LCD_W * 6, LCD_H * 6)
+            gcr = cairo.Context(gs)
+            gcr.set_antialias(cairo.ANTIALIAS_NONE)
+            if not is_dark and st.backlight > 0:
+                gcr.set_source_rgba(fg[0], fg[1], fg[2], 0.028)
+                gcr.rectangle(0, 0, LCD_W * 6, LCD_H * 6)
+                gcr.fill()
+            gcr.set_operator(cairo.OPERATOR_SOURCE)
+            gcr.set_source_rgba(bg[0], bg[1], bg[2], 0.42 if not is_dark else 0.50)
             for col in range(1, LCD_W):
-                lx = mx + col * px_w
-                fcr.move_to(lx, my)
-                fcr.line_to(lx, my + mat_h)
-            fcr.stroke()
-            fcr.set_line_width(max(0.30, px_h * 0.10))
+                gcr.rectangle(col * 6 - 1, 0, 1, LCD_H * 6)
             for row in range(1, LCD_H):
-                ly = my + row * px_h
-                fcr.move_to(mx, ly)
-                fcr.line_to(mx + mat_w, ly)
-            fcr.stroke()
+                gcr.rectangle(0, row * 6 - 1, LCD_W * 6, 1)
+            gcr.fill()
+            fcr.save()
+            fcr.translate(mx, my)
+            fcr.scale(mat_w / float(LCD_W * 6), mat_h / float(LCD_H * 6))
+            fcr.set_source_surface(gs, 0, 0)
+            fcr.get_source().set_filter(cairo.FILTER_BEST)
+            fcr.paint_with_alpha(grid_alpha)
+            fcr.restore()
+        self.grid_surf = None
 
-        sd = max(5.0, min(w, h) * 0.048)
-        for (x0, y0, x1, y1, rx, ry, rw, rh) in (
-            (0, 0, 0, sd, 0, 0, w, sd),
-            (0, h, 0, h - sd * 0.65, 0, h - sd * 0.65, w, sd * 0.65),
-            (0, 0, sd * 0.8, 0, 0, 0, sd * 0.8, h),
-            (w, 0, w - sd * 0.8, 0, w - sd * 0.8, 0, sd * 0.8, h),
+        sd = max(5.5, min(w, h) * 0.052)
+        for (x0, y0, x1, y1, rx, ry, rw, rh, a0) in (
+            (0, 0, 0, sd, 0, 0, w, sd, 0.34),
+            (0, h, 0, h - sd * 0.65, 0, h - sd * 0.65, w, sd * 0.65, 0.22),
+            (0, 0, sd * 0.85, 0, 0, 0, sd * 0.85, h, 0.28),
+            (w, 0, w - sd * 0.85, 0, w - sd * 0.85, 0, sd * 0.85, h, 0.26),
         ):
             sg = cairo.LinearGradient(x0, y0, x1, y1)
-            sg.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.28)
+            sg.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, a0)
             sg.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0)
             fcr.set_source(sg)
             fcr.rectangle(rx, ry, rw, rh)
             fcr.fill()
 
-        sheen = cairo.LinearGradient(0, 0, w * 0.55, h * 0.72)
-        sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.075)
-        sheen.add_color_stop_rgba(0.40, 1.0, 1.0, 1.0, 0.015)
-        sheen.add_color_stop_rgba(0.41, 1.0, 1.0, 1.0, 0.0)
+        sheen = cairo.LinearGradient(0, 0, w * 0.56, h * 0.74)
+        sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.085 if st.backlight > 0 else 0.11)
+        sheen.add_color_stop_rgba(0.38, 1.0, 1.0, 1.0, 0.02)
+        sheen.add_color_stop_rgba(0.40, 1.0, 1.0, 1.0, 0.0)
         fcr.set_source(sheen)
         fcr.rectangle(0, 0, w, h)
         fcr.fill()
@@ -314,35 +370,62 @@ class LcdLayerCache:
 
 def paint_fast_lcd(cr: Any, x: float, y: float, w: int, h: int, lcd_state: FastLcdState, st: LcdSettings, cache: LcdLayerCache) -> None:
     import cairo
-    cache.ensure(w, h, st)
+    ctm = cr.get_matrix()
+    dev_scale = max(1.0, math.hypot(ctm.xx, ctm.yx))
+    cache.ensure(w, h, st, dev_scale=dev_scale)
     mx, my, mat_w, mat_h, px_w, px_h = cache.metrics
     _, _, _, is_dark = _lcd_colors_norm(st)
     px_surf = lcd_state.get_cairo_pixel_surface(st)
 
+    # Fast 2x integer nearest -> FILTER_GOOD downsample (uniform strokes, zero moire, <1 ms/frame!)
+    if cache._px3_surf is None:
+        cache._px3_surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, LCD_W * 2, LCD_H * 2)
+    p2_cr = cairo.Context(cache._px3_surf)
+    p2_cr.set_operator(cairo.OPERATOR_SOURCE)
+    p2_cr.scale(2.0, 2.0)
+    p2_cr.set_source_surface(px_surf, 0, 0)
+    p2_cr.get_source().set_filter(cairo.FILTER_NEAREST)
+    p2_cr.paint()
+
+    ss_inv = 1.0 / float(cache.ss)
     cr.save()
     cr.translate(x, y)
-    cr.set_source_surface(cache.bg_surf, 0, 0)
-    cr.paint()
 
-    if not is_dark:
-        cr.save()
-        cr.translate(mx + max(0.55, px_w * 0.24), my + max(0.65, px_h * 0.24))
-        cr.scale(mat_w / float(LCD_W), mat_h / float(LCD_H))
-        cr.set_source_surface(px_surf, 0, 0)
-        cr.get_source().set_filter(cairo.FILTER_NEAREST)
-        cr.paint_with_alpha(0.12)
-        cr.restore()
-
+    # 1. Cached 2x backlit glass backdrop
     cr.save()
-    cr.translate(mx, my)
-    cr.scale(mat_w / float(LCD_W), mat_h / float(LCD_H))
-    cr.set_source_surface(px_surf, 0, 0)
-    cr.get_source().set_filter(cairo.FILTER_NEAREST)
+    cr.scale(ss_inv, ss_inv)
+    cr.set_source_surface(cache.bg_surf, 0, 0)
+    cr.get_source().set_filter(cairo.FILTER_GOOD)
     cr.paint()
     cr.restore()
 
-    cr.set_source_surface(cache.fg_surf, 0, 0)
+    # 2. Rear-polarizer liquid crystal drop shadow (authentic depth on lit reflective STN glass)
+    if not is_dark and st.backlight > 0:
+        cr.save()
+        cr.translate(mx + max(0.50, px_w * 0.26), my + max(0.60, px_h * 0.26))
+        cr.scale(mat_w / float(LCD_W * 2), mat_h / float(LCD_H * 2))
+        cr.set_source_surface(cache._px3_surf, 0, 0)
+        cr.get_source().set_filter(cairo.FILTER_GOOD)
+        cr.paint_with_alpha(0.14)
+        cr.restore()
+
+    # 3. Crisp uniform STN pixels
+    cr.save()
+    cr.translate(mx, my)
+    cr.scale(mat_w / float(LCD_W * 2), mat_h / float(LCD_H * 2))
+    cr.set_source_surface(cache._px3_surf, 0, 0)
+    cr.get_source().set_filter(cairo.FILTER_GOOD)
     cr.paint()
+    cr.restore()
+
+    # 4. Cached 2x prefiltered STN pixel grid + inner bezel shadow + glass sheen (single fast blit!)
+    cr.save()
+    cr.scale(ss_inv, ss_inv)
+    cr.set_source_surface(cache.fg_surf, 0, 0)
+    cr.get_source().set_filter(cairo.FILTER_GOOD)
+    cr.paint()
+    cr.restore()
+
     cr.restore()
 
 
@@ -533,36 +616,42 @@ def _draw_hex_torx_bolt(cr: Any, cx: float, cy: float, r: float = 6.2) -> None:
     cr.fill()
 
 
-def _draw_frosted_led(cr: Any, x: float, y: float, w: float, h: float, state: str) -> None:
+def _draw_frosted_led(cr: Any, x: float, y: float, w: float, h: float, state: str, *, rectangular: bool = False) -> None:
     """
-    3D beveled frosted polycarbonate light-pipe status LED matching `ref_k1_body_crop.png`:
-    off = milky frosted glass; rx = emerald core + bloom; tx = ruby crimson; dfu = warm amber.
+    3D beveled frosted polycarbonate light-pipe status LED matching BK4829 GPIO REG_0x33:
+    off = milky frosted glass; rx = emerald green; tx = ruby crimson; orange/dfu = warm amber.
     """
     import cairo
     # Black recessed mounting collar
-    cr.new_sub_path()
-    cr.move_to(x + 4, y)
-    cr.line_to(x + w - 4, y)
-    cr.line_to(x + w + 2, y + h)
-    cr.line_to(x - 2, y + h)
-    cr.close_path()
+    if rectangular:
+        _round_rect(cr, x - 1.5, y - 1.0, w + 3.0, h + 2.5, 3.2)
+    else:
+        cr.new_sub_path()
+        cr.move_to(x + 4, y)
+        cr.line_to(x + w - 4, y)
+        cr.line_to(x + w + 2, y + h)
+        cr.line_to(x - 2, y + h)
+        cr.close_path()
     cr.set_source_rgb(0.09, 0.09, 0.10)
     cr.fill()
 
-    # Frosted trapezoid lens body
-    cr.new_sub_path()
-    cr.move_to(x + 5, y + 1.5)
-    cr.line_to(x + w - 5, y + 1.5)
-    cr.line_to(x + w - 1, y + h - 1.5)
-    cr.line_to(x + 1, y + h - 1.5)
-    cr.close_path()
+    # Frosted polycarbonate lens body
+    if rectangular:
+        _round_rect(cr, x, y + 0.5, w, h - 0.5, 2.4)
+    else:
+        cr.new_sub_path()
+        cr.move_to(x + 5, y + 1.5)
+        cr.line_to(x + w - 5, y + 1.5)
+        cr.line_to(x + w - 1, y + h - 1.5)
+        cr.line_to(x + 1, y + h - 1.5)
+        cr.close_path()
 
     cx, cy = x + w * 0.5, y + h * 0.55
-    if state == "rx":
+    if state in ("rx", "green"):
         core, mid, outer = (0.78, 1.0, 0.86), (0.14, 0.90, 0.42), (0.06, 0.55, 0.24)
-    elif state == "tx":
+    elif state in ("tx", "red"):
         core, mid, outer = (1.0, 0.82, 0.80), (0.98, 0.20, 0.20), (0.62, 0.06, 0.06)
-    elif state == "dfu":
+    elif state in ("dfu", "orange"):
         core, mid, outer = (1.0, 0.94, 0.72), (0.98, 0.62, 0.08), (0.68, 0.34, 0.02)
     else:
         core, mid, outer = (0.92, 0.93, 0.95), (0.76, 0.78, 0.80), (0.54, 0.56, 0.58)
@@ -579,21 +668,22 @@ def _draw_frosted_led(cr: Any, x: float, y: float, w: float, h: float, state: st
 
     # Translucent polycarbonate upper specular facet edge
     cr.new_path()
-    cr.move_to(x + 6.5, y + 2.4)
-    cr.line_to(x + w - 6.5, y + 2.4)
-    cr.set_source_rgba(1.0, 1.0, 1.0, 0.58 if state != "off" else 0.35)
+    inset = 2.5 if rectangular else 6.5
+    cr.move_to(x + inset, y + 2.0)
+    cr.line_to(x + w - inset, y + 2.0)
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.60 if state != "off" else 0.36)
     cr.set_line_width(1.1)
     cr.stroke()
 
     # Realistic multi-layered ambient bloom spilling onto neighboring bezel & antenna collar
-    if state in ("rx", "tx", "dfu"):
-        bloom = cairo.RadialGradient(cx, cy, 2.0, cx, cy, 28.0)
-        bloom.add_color_stop_rgba(0.0, mid[0], mid[1], mid[2], 0.64)
+    if state in ("rx", "green", "tx", "red", "dfu", "orange"):
+        bloom = cairo.RadialGradient(cx, cy, 2.0, cx, cy, 26.0)
+        bloom.add_color_stop_rgba(0.0, mid[0], mid[1], mid[2], 0.66)
         bloom.add_color_stop_rgba(0.45, mid[0], mid[1], mid[2], 0.24)
         bloom.add_color_stop_rgba(1.0, mid[0], mid[1], mid[2], 0.0)
         cr.set_source(bloom)
         cr.new_path()
-        cr.arc(cx, cy, 28.0, 0, 2 * math.pi)
+        cr.arc(cx, cy, 26.0, 0, 2 * math.pi)
         cr.fill()
 
 
@@ -710,10 +800,10 @@ def _draw_3d_keycap(
         cr.set_line_width(0.95)
     cr.stroke()
 
-    # Subtle tactile homing bar on key `5` (bottom-centered so it never crowds legends!)
+    # Subtle tactile homing bar on key `5` (positioned cleanly at bottom-center without touching legends!)
     if homing_nub:
-        _round_rect(cr, ix + iw * 0.5 - 4.5, iy + ih - 4.0, 9.0, 1.8, 0.9)
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.28)
+        _round_rect(cr, ix + iw * 0.5 - 4.0, iy + ih - 2.6, 8.0, 1.4, 0.7)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.24)
         cr.fill()
 
     # 4. Crisp PangoCairo Legends & Bold Geometric Vector Icons
@@ -760,11 +850,11 @@ def _draw_3d_keycap(
         if sub1.startswith("[") and sub1.endswith("]") and len(sub1) == 3:
             is_exit = (primary == "EXIT")
             _draw_pango_text(
-                cr, primary, ix + iw * (0.35 if is_exit else 0.36), iy + ih * 0.50,
-                font_desc="Adwaita Sans Bold Italic 8.6" if is_exit else "Adwaita Sans Bold Italic 13.5",
+                cr, primary, ix + iw * (0.33 if is_exit else 0.35), iy + ih * 0.50,
+                font_desc="Adwaita Sans Bold Italic 8.4" if is_exit else "Adwaita Sans Bold Italic 13.5",
                 rgba=ink, halign="center", valign="center",
             )
-            _draw_boxed_badge(cr, sub1[1], ix + iw * (0.80 if is_exit else 0.76), iy + ih * 0.50, 8.6 if is_exit else 9.5)
+            _draw_boxed_badge(cr, sub1[1], ix + iw * (0.81 if is_exit else 0.76), iy + ih * 0.50, 8.6 if is_exit else 9.5)
         else:
             _draw_pango_text(
                 cr, primary, ix + iw * 0.5, iy + ih * 0.5,
@@ -881,6 +971,102 @@ def _draw_side_profile_shroud(cr: Any, bx: float, by: float, bh: float, side_spe
         cr.fill()
 
 
+def _draw_k5_side_profile_shroud(cr: Any, bx: float, by: float, bh: float, side_specs: list[tuple[str, float, float, float, float, bool, int]]) -> None:
+    """
+    Sculpted UV-K5 v3 / UV-K6 matte polymer left side-guard & rear battery flank
+    modeled from `UVK6.3.png` & `ref_k5_body_crop.png`:
+      • Full-height subtle contoured rear polymer shell curving smoothly along the lower waist
+      • Sculpted upper side-button guard rail swelling around PTT, SK1 & SK2 and tapering
+        cleanly into the waist notch right above [EXIT D]
+      • Deep beveled individual button collars + molded divider bridges
+    """
+    import cairo
+    rear_x = bx - 8.0
+    guard_x = bx - 14.5
+    top_y = by + 16.0
+    guard_top = by + 38.0
+    waist_y = by + 296.0
+    bot_y = by + bh - 12.0
+
+    # 1. Soft studio drop shadow beneath contoured left polymer profile
+    cr.new_path()
+    cr.move_to(bx + 4, top_y)
+    cr.curve_to(bx - 5, top_y + 2, rear_x - 2, guard_top - 4, rear_x - 2, guard_top + 6)
+    cr.curve_to(guard_x - 2, guard_top + 12, guard_x - 2, guard_top + 20, guard_x - 2, guard_top + 28)
+    cr.line_to(guard_x - 2, waist_y - 14)
+    cr.curve_to(guard_x - 2, waist_y + 2, rear_x - 2, waist_y + 8, rear_x - 2, waist_y + 18)
+    cr.line_to(rear_x - 2, bot_y - 18)
+    cr.curve_to(rear_x - 2, bot_y - 4, bx - 5, bot_y + 4, bx + 4, bot_y + 6)
+    cr.close_path()
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.42)
+    cr.fill()
+
+    # 2. Full-height rear matte polymer shell edge (clean & slim below waist!)
+    cr.new_path()
+    cr.move_to(bx + 6, top_y - 2)
+    cr.curve_to(bx - 4, top_y, rear_x, top_y + 14, rear_x, top_y + 28)
+    cr.line_to(rear_x, bot_y - 20)
+    cr.curve_to(rear_x, bot_y - 6, bx - 4, bot_y + 2, bx + 6, bot_y + 4)
+    cr.close_path()
+    pat_rear = cairo.LinearGradient(rear_x, 0, bx + 4, 0)
+    pat_rear.add_color_stop_rgb(0.0, 0.07, 0.075, 0.085)
+    pat_rear.add_color_stop_rgb(0.45, 0.145, 0.155, 0.17)
+    pat_rear.add_color_stop_rgb(1.0, 0.04, 0.045, 0.055)
+    cr.set_source(pat_rear)
+    cr.fill_preserve()
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.08)
+    cr.set_line_width(0.85)
+    cr.stroke()
+
+    # 3. Sculpted upper textured polymer side-button housing guard (swells cleanly around PTT + SK1 + SK2!)
+    cr.new_path()
+    cr.move_to(bx + 4, guard_top - 4)
+    cr.curve_to(bx - 6, guard_top - 2, guard_x, guard_top + 8, guard_x, guard_top + 20)
+    cr.line_to(guard_x, waist_y - 14)
+    cr.curve_to(guard_x, waist_y - 2, bx - 6, waist_y + 8, bx + 4, waist_y + 10)
+    cr.close_path()
+    pat_g = cairo.LinearGradient(guard_x, 0, bx + 3, 0)
+    pat_g.add_color_stop_rgb(0.0, 0.06, 0.065, 0.075)
+    pat_g.add_color_stop_rgb(0.26, 0.18, 0.19, 0.21)
+    pat_g.add_color_stop_rgb(0.68, 0.11, 0.115, 0.13)
+    pat_g.add_color_stop_rgb(1.0, 0.04, 0.045, 0.05)
+    cr.set_source(pat_g)
+    cr.fill_preserve()
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.12)
+    cr.set_line_width(0.9)
+    cr.stroke()
+
+    # 4. Crisp waist step molding seam right below the side guard
+    cr.save()
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.45)
+    cr.set_line_width(1.4)
+    cr.new_path()
+    cr.move_to(rear_x + 1.0, waist_y + 10.0)
+    cr.line_to(bx + 1.0, waist_y + 10.0)
+    cr.stroke()
+    cr.restore()
+
+    # 5. Deep ambient-occlusion seam shadow where front titanium/polycarbonate shell overhangs side guard
+    seam = cairo.LinearGradient(bx - 8.5, 0, bx + 2.0, 0)
+    seam.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0)
+    seam.add_color_stop_rgba(0.76, 0.0, 0.0, 0.0, 0.68)
+    seam.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0)
+    cr.set_source(seam)
+    cr.rectangle(bx - 8.5, top_y, 10.5, bot_y - top_y)
+    cr.fill()
+
+    # 6. Deep beveled dark recessed button wells & molded protective surrounds for PTT, SK1 & SK2
+    for _kn, sx, sy, sw, sh, is_ptt, _dots in side_specs:
+        # Raised chamfered surround lip
+        _round_rect(cr, sx + 1.5, sy - 4.0, sw + 1.0, sh + 8.0, 8.5 if is_ptt else 6.5)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.08)
+        cr.fill()
+        # Deep dark pocket well
+        _round_rect(cr, sx + 3.0, sy - 2.6, sw - 0.5, sh + 5.2, 7.5 if is_ptt else 5.5)
+        cr.set_source_rgba(0.015, 0.015, 0.02, 0.92)
+        cr.fill()
+
+
 def _draw_top_flashlight(cr: Any, tx: float, by: float, torch_on: bool, *, compact: bool = False) -> None:
     """3D top flashlight lens housing with realistic directional LED beam & page-flash strobe."""
     import cairo
@@ -945,14 +1131,15 @@ class HandsetRenderer:
         self._body_bx: float = 30.0
         self._lcd_rect: tuple[int, int, int, int] = (0, 0, 100, 60)
         self._torch_anchor: tuple[float, float, bool] = (180.0, 60.0, False)
+        self._led_anchor: tuple[float, float, float, float, bool] = (76.0, 50.0, 30.0, 13.0, False)
         self._key_specs: list[tuple[str, float, float, float, float, str, str, str, float, bool, bool]] = []
         self._side_specs: list[tuple[str, float, float, float, float, bool, int]] = []
         self.hitboxes: dict[str, tuple[float, float, float, float]] = {}
         self.lcd_cache = LcdLayerCache()
 
-    def _ensure_chassis(self, model: str, led_state: str, lcd_st: LcdSettings) -> None:
+    def _ensure_chassis(self, model: str, lcd_st: LcdSettings) -> None:
         import cairo
-        key = (model, led_state, lcd_st.palette, lcd_st.backlight, lcd_st.backlight_glow)
+        key = (model, lcd_st.palette, lcd_st.backlight, lcd_st.backlight_glow)
         if key == self._chassis_key and self._chassis_surf is not None and self._back_surf is not None:
             return
         self._chassis_key = key
@@ -966,9 +1153,9 @@ class HandsetRenderer:
         self._side_specs.clear()
 
         if model == "k5":
-            self._build_k5_chassis(back_cr, cr, W, H, led_state, lcd_st)
+            self._build_k5_chassis(back_cr, cr, W, H, lcd_st)
         else:
-            self._build_k1_chassis(back_cr, cr, W, H, led_state, lcd_st)
+            self._build_k1_chassis(back_cr, cr, W, H, lcd_st)
         # Bake idle/unpressed front keycaps onto the cached chassis surface so steady LCD
         # streaming skips 16 PangoCairo text layouts per frame (>1,000 FPS render cap!).
         accent = (0.98, 0.48, 0.08) if model == "k5" else (0.18, 0.56, 1.0)
@@ -980,7 +1167,7 @@ class HandsetRenderer:
         self._back_surf = back_surf
         self._chassis_surf = surf
 
-    def _build_k1_chassis(self, back_cr: Any, cr: Any, W: int, H: int, led_state: str, lcd_st: LcdSettings) -> None:
+    def _build_k1_chassis(self, back_cr: Any, cr: Any, W: int, H: int, lcd_st: LcdSettings) -> None:
         """Photorealistic 3D Quansheng UV-K1(8) modeled directly from `ref_k1_body_crop.png` & `左视图.png`."""
         import cairo
         bx, by, bw, bh = 30.0, 60.0, W - 46.0, H - 74.0
@@ -1070,8 +1257,8 @@ class HandsetRenderer:
         cr.set_line_width(1.0)
         cr.stroke()
 
-        # Frosted Trapezoid Status LED Light-Pipe sitting right on top-left shoulder
-        _draw_frosted_led(cr, bx + 46.0, by - 10.0, 30.0, 13.0, led_state)
+        # Frosted Trapezoid Status LED Light-Pipe anchor (drawn live in paint() from BK4829 GPIO REG_0x33!)
+        self._led_anchor = (bx + 46.0, by - 10.0, 30.0, 13.0, False)
 
         # --- 3. 3D Brushed Champagne-Titanium Metallic Armor Faceplate (ref_k1_body_crop.png!) ---
         fx_l, fx_r = bx + 20.0, bx + bw - 20.0
@@ -1246,28 +1433,29 @@ class HandsetRenderer:
                     cr.line_to(sl_x + sl_w - 2, sl_y + 4.6)
                     cr.stroke()
 
-    def _build_k5_chassis(self, back_cr: Any, cr: Any, W: int, H: int, led_state: str, lcd_st: LcdSettings) -> None:
-        """Photorealistic 3D Quansheng UV-K5 v3 / UV-K6 modeled directly from `ref_k5_body_crop.png` & `UVK6.2.png`."""
+    def _build_k5_chassis(self, back_cr: Any, cr: Any, W: int, H: int, lcd_st: LcdSettings) -> None:
+        """Photorealistic 3D Quansheng UV-K5 v3 / UV-K6 modeled directly from `ref_k5_body_crop.png` & `UVK6.3.png`."""
         import cairo
         bx, by, bw, bh = 30.0, 62.0, W - 46.0, H - 76.0
         self._body_bx = bx
 
-        # 3D Side Buttons tucked behind textured left cheek bumper
+        # 3D Side Buttons positioned cleanly from `ref_k5_body_crop.png` & `UVK6.3.png`
+        # (PTT aligned with LCD + lower-left bolt; SK1 single-box & SK2 dual-box above waist!)
         self._side_specs = [
-            ("ptt",   11.0, by + 76.0, 23.0, 114.0, True, 0),
-            ("side1", 13.0, by + 204.0, 21.0, 34.0, False, 0),
-            ("side2", 13.0, by + 246.0, 21.0, 34.0, False, 0),
+            ("ptt",   10.0, by + 56.0, 24.0, 122.0, True, 0),
+            ("side1", 12.0, by + 190.0, 22.0, 38.0, False, 1),
+            ("side2", 12.0, by + 236.0, 22.0, 38.0, False, 2),
         ]
         for kn, sx, sy, sw, sh, _, _ in self._side_specs:
             self.hitboxes[kn] = (sx - 3.0, sy, sw, sh)
 
-        # Back layer: drop shadow + full-height left & right textured polymer side bumpers
+        # Back layer: drop shadow + sculpted UV-K5 v3 side-button housing + right port cheek bumper
         _round_rect(back_cr, bx + 4, by + 10, bw, bh, 20)
         back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.38)
         back_cr.fill()
-        _draw_side_profile_shroud(back_cr, bx, by, bh, self._side_specs)
+        _draw_k5_side_profile_shroud(back_cr, bx, by, bh, self._side_specs)
         # Right-side textured polymer bumper (houses 2-pin & USB-C port door from UVK6.2.png!)
-        _round_rect(back_cr, bx + bw - 8.0, by + 44.0, 14.0, bh - 170.0, 6.0)
+        _round_rect(back_cr, bx + bw - 8.0, by + 44.0, 14.0, bh - 180.0, 6.0)
         pat_rb = cairo.LinearGradient(bx + bw - 8.0, 0, bx + bw + 6.0, 0)
         pat_rb.add_color_stop_rgb(0.0, 0.06, 0.065, 0.075)
         pat_rb.add_color_stop_rgb(0.65, 0.16, 0.17, 0.19)
@@ -1337,8 +1525,8 @@ class HandsetRenderer:
         cr.set_source_rgb(0.11, 0.12, 0.14)
         cr.fill()
 
-        # Subtle top-left rectangular frosted white status LED sitting right under antenna collar
-        _draw_frosted_led(cr, bx + 54.0, by - 8.0, 22.0, 10.0, led_state)
+        # Crisp rectangular frosted white status LED anchor (drawn live in paint() from BK4829 GPIO REG_0x33!)
+        self._led_anchor = (bx + 84.0, by - 7.5, 20.0, 9.5, True)
 
         # --- 2. 3D Textured Matte-Black Polycarbonate Main Body ---
         _round_rect(cr, bx, by, bw, bh, 20)
@@ -1401,6 +1589,16 @@ class HandsetRenderer:
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.22)
         cr.set_line_width(0.9)
         cr.stroke()
+        if lcd_st.backlight_glow and lcd_st.backlight > 0:
+            bg_c, _, _, _ = _lcd_colors_norm(lcd_st)
+            cr.set_source_rgba(bg_c[0], bg_c[1], bg_c[2], 0.22)
+            _round_rect(cr, lz_x + 4, lz_y + 4, lz_w - 8, lz_h - 8, 6)
+            cr.set_line_width(2.6)
+            cr.stroke()
+            cr.set_source_rgba(bg_c[0], bg_c[1], bg_c[2], 0.08)
+            _round_rect(cr, lz_x - 2, lz_y - 2, lz_w + 4, lz_h + 4, 9)
+            cr.set_line_width(3.0)
+            cr.stroke()
         self._lcd_rect = (lz_x + 6, lz_y + 6, lz_w - 12, lz_h - 12)
 
         # [M A] button + Glossy QUANSHENG Badge right below LCD inside titanium armor
@@ -1486,7 +1684,7 @@ class HandsetRenderer:
             ("menu", m_x, m_y, m_w, m_h, "M", "[A]", "", 8.0, True, False),
             ("up",   col_x, mid_y, col_w, 38.0, "_CHEV_UP_", "[B]", "", 9.0, True, False),
             ("down", col_x, mid_y + 46.0, col_w, 38.0, "_CHEV_DN_", "[C]", "", 9.0, True, False),
-            ("exit", bx + 20.0, dish_top + 5.0, 56.0, 26.0, "EXIT", "[D]", "", 10.0, True, False),
+            ("exit", bx + 20.0, dish_top + 5.0, 62.0, 26.0, "EXIT", "[D]", "", 10.0, True, False),
         ]
         for sp in nav_specs:
             self.hitboxes[sp[0]] = (sp[1], sp[2], sp[3], sp[4])
@@ -1516,7 +1714,7 @@ class HandsetRenderer:
         torch_on: bool = False,
     ) -> None:
         import cairo
-        self._ensure_chassis(model, led_state, lcd_st)
+        self._ensure_chassis(model, lcd_st)
         accent = (0.98, 0.48, 0.08) if model == "k5" else (0.18, 0.56, 1.0)
         bx = self._body_bx
 
@@ -1576,28 +1774,68 @@ class HandsetRenderer:
                         )
                         cr.fill()
                 else:
-                    # UV-K5 v3 / UV-K6 authentic matte textured dark polymer PTT paddle (subtle rim, crimson on TX)
+                    # UV-K5 v3 / UV-K6 sculpted 3D matte polymer PTT paddle (`UVK6.3.png`):
+                    # beveled outer rim + signature vertical recessed pill-groove + subtle crimson TX seam!
                     if p > 0.05:
                         cr.set_source_rgba(0.98, 0.30, 0.28, 0.92 * p)
-                        cr.set_line_width(1.6)
+                        cr.set_line_width(1.7)
                     else:
-                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.14 + 0.08 * hv)
-                        cr.set_line_width(1.0)
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.18 + 0.10 * hv)
+                        cr.set_line_width(1.05)
                     cr.stroke()
-                    # Subtle horizontal knurled texture lines on K5 PTT
-                    cr.set_source_rgba(0.02, 0.02, 0.03, 0.55)
-                    cr.set_line_width(1.1)
-                    for i in range(9):
-                        ry = sy + 18.0 + i * 9.5
-                        cr.new_path()
-                        cr.move_to(sx + 4.0 + dx, ry)
-                        cr.line_to(sx + 13.0 + dx, ry)
-                        cr.stroke()
+                    # Sculpted inner stepped face plateau
+                    _round_rect(cr, sx + 2.5 + dx, sy + 5.0, sw - 9.0, sh - 10.0, 4.5)
+                    pat_in = cairo.LinearGradient(sx + 2.5 + dx, sy, sx + 2.5 + dx + (sw - 9.0), sy)
+                    pat_in.add_color_stop_rgb(0.0, 0.27 + 0.06 * hv - 0.05 * p, 0.28 + 0.06 * hv - 0.05 * p, 0.30 + 0.06 * hv - 0.05 * p)
+                    pat_in.add_color_stop_rgb(0.65, 0.16, 0.17, 0.19)
+                    pat_in.add_color_stop_rgb(1.0, 0.09, 0.10, 0.11)
+                    cr.set_source(pat_in)
+                    cr.fill_preserve()
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.10)
+                    cr.set_line_width(0.75)
+                    cr.stroke()
+                    # Signature UV-K5 v3 / UV-K6 recessed vertical center pill-groove (`UVK6.3.png`!)
+                    gv_x = sx + 5.5 + dx
+                    gv_y = sy + 20.0
+                    gv_h = sh - 40.0
+                    _round_rect(cr, gv_x, gv_y, 3.6, gv_h, 1.8)
+                    cr.set_source_rgba(0.03, 0.035, 0.04, 0.88)
+                    cr.fill()
+                    # Crisp right-edge rim catchlight inside vertical pill groove
+                    cr.new_path()
+                    cr.move_to(gv_x + 3.8, gv_y + 2.0)
+                    cr.line_to(gv_x + 3.8, gv_y + gv_h - 2.0)
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.18 + 0.08 * hv)
+                    cr.set_line_width(0.8)
+                    cr.stroke()
             else:
-                cr.set_source_rgba(accent[0], accent[1], accent[2], 0.88 * p) if p > 0.05 else cr.set_source_rgba(1, 1, 1, 0.14 + 0.08 * hv)
-                cr.set_line_width(1.0)
+                if p > 0.05:
+                    cr.set_source_rgba(accent[0], accent[1], accent[2], 0.90 * p)
+                    cr.set_line_width(1.3)
+                else:
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.16 + 0.10 * hv)
+                    cr.set_line_width(1.0)
                 cr.stroke()
-                if dots > 0:
+                if model == "k5":
+                    # Sculpted beveled crown + authentic recessed single (□) / dual (□□) SK1/SK2 marks (`UVK6.3.png`!)
+                    _round_rect(cr, sx + 2.6 + dx, sy + 4.0, sw - 9.5, sh - 8.0, 3.8)
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.07 + 0.06 * hv)
+                    cr.fill_preserve()
+                    cr.set_source_rgba(0.02, 0.02, 0.03, 0.55)
+                    cr.set_line_width(0.8)
+                    cr.stroke()
+                    mx_s = sx + 5.6 + dx
+                    cr.set_source_rgba(0.76, 0.79, 0.84, 0.56 if p < 0.05 else 0.92)
+                    cr.set_line_width(1.05)
+                    if dots == 1:
+                        _round_rect(cr, mx_s, sy + sh * 0.5 - 3.0, 4.4, 6.0, 1.1)
+                        cr.stroke()
+                    elif dots == 2:
+                        _round_rect(cr, mx_s, sy + sh * 0.5 - 6.8, 4.4, 5.4, 1.0)
+                        cr.stroke()
+                        _round_rect(cr, mx_s, sy + sh * 0.5 + 1.4, 4.4, 5.4, 1.0)
+                        cr.stroke()
+                elif dots > 0:
                     cr.set_source_rgba(0.84, 0.87, 0.90, 0.72)
                     if dots == 2:
                         cr.new_path()
@@ -1623,9 +1861,11 @@ class HandsetRenderer:
         cr.set_source_surface(self._chassis_surf, 0, 0)
         cr.paint()
 
-        # 3b. Dynamic top flashlight LED (zero-cost strobe during firmware page flashing!)
+        # 3b. Dynamic top flashlight LED & live BK4829 GPIO status LED (instantaneous, zero cache churn!)
         tx, ty_base, is_compact = self._torch_anchor
         _draw_top_flashlight(cr, tx, ty_base, torch_on, compact=is_compact)
+        lx_led, ly_led, lw_led, lh_led, rect_led = self._led_anchor
+        _draw_frosted_led(cr, lx_led, ly_led, lw_led, lh_led, led_state, rectangular=rect_led)
 
         # 4. Fast layered ST7565 LCD
         lx, ly, lw, lh = self._lcd_rect
@@ -2355,6 +2595,9 @@ class DockLink:
         self.demo_status: str = "VFO"
         self.torch_on: bool = False
         self.keypad_locked: bool = False
+        self.headless: bool = False
+        self.status_led: str = "off"   # Mirrors live BK4829 REG_GPIO (0x33) bits [1:0]: off|tx|rx|orange
+        self.bk4829_gpio: int = 0
         self.last_fb: bytes = bytes(1024)  # Clean blank unlit LCD when disconnected (no fake demo data!)
         self.fps: float = 0.0
         self.rtt_ms: float = 0.0
@@ -2473,6 +2716,10 @@ class DockLink:
             self.last_telemetry = telem
             self.torch_on = bool(telem.get("flashlight", False))
             self.keypad_locked = bool(telem.get("keypad_locked", False))
+            self.headless = bool(telem.get("headless", False))
+            _led_map = {0: "off", 1: "tx", 2: "rx", 3: "orange"}
+            self.status_led = _led_map.get(int(telem.get("status_led_raw", 0)) & 0x03, "off")
+            self.bk4829_gpio = int(telem.get("bk4829_gpio", 0))
             self.volume_name = kernfs_mount.resolve_volume_name(port, hello=hello, telemetry=telem)
             self.detected_model = model_override or detect_hardware_model(self.volume_name, hello=hello, port_info=port_info)
             self.demo_mode = False
@@ -2505,6 +2752,9 @@ class DockLink:
         self.demo_mode = False
         self.torch_on = False
         self.keypad_locked = False
+        self.headless = False
+        self.status_led = "off"
+        self.bk4829_gpio = 0
         self.last_fb = bytes(1024)
         self.volume_name = "Quansheng UV-K1"
         self.hello_info = {}
@@ -2556,6 +2806,23 @@ class DockLink:
             self._cmd_q.put(("lock", locked))
             self._wake_ev.set()
 
+    def set_headless(self, enabled: bool) -> None:
+        self.headless = enabled
+        if self.demo_mode:
+            self._emit_log(f"Headless mode {'ON (LCD & backlight off)' if enabled else 'OFF (LCD active)'}")
+            if self.on_frame:
+                self.on_frame()
+            if self.on_telemetry:
+                self.on_telemetry()
+            return
+        if self.connected and self.link_mode == "kern_os":
+            self._cmd_q.put(("headless", 1 if enabled else 0))
+            self._wake_ev.set()
+            if self.on_frame:
+                self.on_frame()
+            if self.on_telemetry:
+                self.on_telemetry()
+
     def toggle_vfo(self) -> None:
         if self.demo_mode:
             self._emit_log("Swapped active VFO")
@@ -2570,7 +2837,17 @@ class DockLink:
             return ""
         op = parts[0].lower()
         if op == "help":
-            return "Commands: ping, hello, ls [dir], stat <path>, key <name> [press|hold|release], vfo, freq <MHz>, torch <0|1>, lock <0|1>, clear"
+            return "Commands: ping, info, hello, ls [dir], stat <path>, key <name> [press|hold|release], vfo, freq <MHz>, torch <0|1>, lock <0|1>, headless <0|1>, clear"
+        if op == "info":
+            t = self.last_telemetry
+            mv = t.get("battery_mv", 0)
+            pct = t.get("battery_pct", 0)
+            return (
+                f"{self.volume_name} ({self.detected_model.upper()}) on {self.port}\n"
+                f"  Link: {self.link_mode}{' (headless)' if self.headless else ''} · {self.fps:.0f} FPS · {self.rtt_ms:.1f} ms RTT · {self.error_count} err\n"
+                f"  Battery: {mv / 1000.0:.2f} V ({pct}%) · Torch: {'ON' if self.torch_on else 'OFF'} · Lock: {'ON' if self.keypad_locked else 'OFF'}\n"
+                f"  BK4829 GPIO (0x33): 0x{self.bk4829_gpio:04X} · Status LED: {self.status_led.upper()}"
+            )
         if not self.connected or self.link_mode != "kern_os":
             return f"RigWire unavailable (mode={self.link_mode})."
         if op == "ping":
@@ -2628,6 +2905,10 @@ class DockLink:
             val = (parts[1] != "0") if len(parts) > 1 else (not self.keypad_locked)
             self.set_keypad_lock(val)
             return f"Keypad lock {'ON' if val else 'OFF'}"
+        if op == "headless":
+            val = (parts[1].lower() not in ("0", "off", "false")) if len(parts) > 1 else (not self.headless)
+            self.set_headless(val)
+            return f"Headless mode {'ON (LCD & backlight off)' if val else 'OFF (LCD active)'}"
         return f"Unknown command '{op}'. Type 'help'."
 
     def start_dav(self, http_port: int = 8765, read_only: bool = False) -> str:
@@ -2676,6 +2957,8 @@ class DockLink:
                         self.client.set_flashlight(payload)
                     elif kind == "lock":
                         self.client.set_keypad_lock(payload)
+                    elif kind == "headless":
+                        self.headless = self.client.set_headless(payload)
                     elif kind == "vfo":
                         self.client.toggle_vfo()
                     self.rtt_ms = self.client.last_rtt_ms
@@ -2755,9 +3038,11 @@ class DockLink:
                 if self.on_telemetry is not None:
                     self.on_telemetry()
 
-            if now - last_telem >= 3.0:
+            if now - last_telem >= 0.20:
                 last_telem = now
                 try:
+                    prev_led = self.status_led
+                    prev_torch = self.torch_on
                     with self.lock:
                         if self.client:
                             met = self.client.handle_get(rigwire.DOMAIN_SYSTEM, 0, rigwire.FACET_SYS_METRICS)
@@ -2769,6 +3054,25 @@ class DockLink:
                                 self.last_telemetry["active_app"] = met[11]
                                 self.keypad_locked = bool(met[12])
                                 self.torch_on = bool(met[13])
+                                if len(met) >= 15:
+                                    led_bits = met[14] & 0x03
+                                    self.status_led = ("off", "tx", "rx", "orange")[led_bits]
+                                    self.last_telemetry["status_led_raw"] = led_bits
+                                    if len(met) >= 17:
+                                        self.bk4829_gpio = struct.unpack("<H", met[15:17])[0]
+                                        self.last_telemetry["bk4829_gpio"] = self.bk4829_gpio
+                                    if len(met) >= 18:
+                                        self.headless = bool(met[17])
+                                        self.last_telemetry["headless"] = self.headless
+                                else:
+                                    # Fallback for older firmware without REG_GPIO byte in SYS_METRICS
+                                    tx_b = self.client.handle_get(rigwire.DOMAIN_RADIO, rigwire.RADIO_INSTANCE_ACTIVE, rigwire.FACET_RADIO_TRANSMIT)
+                                    sq_b = self.client.handle_get(rigwire.DOMAIN_RADIO, rigwire.RADIO_INSTANCE_ACTIVE, rigwire.FACET_RADIO_SQUELCH)
+                                    is_tx = bool(tx_b[0]) if len(tx_b) >= 1 else False
+                                    sq_open = bool(sq_b[3]) if len(sq_b) >= 4 else False
+                                    self.status_led = "tx" if is_tx else ("rx" if sq_open else "off")
+                    if (self.status_led != prev_led or self.torch_on != prev_torch) and self.on_frame is not None:
+                        self.on_frame()
                     if self.on_telemetry is not None:
                         self.on_telemetry()
                 except Exception:
@@ -2804,12 +3108,115 @@ button.rec-live:hover {
     border-radius: 99px;
     background: #f59e0b;
 }
+.headless-dot {
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 99px;
+    background: #38bdf8;
+}
+.pane-switcher {
+    padding: 6px 10px;
+}
+.pane-switcher button {
+    padding: 5px 10px;
+    font-weight: 600;
+}
+.crumb-btn {
+    padding: 2px 6px;
+    min-height: 24px;
+    font-weight: 600;
+}
+.protected-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 99px;
+    background: alpha(#f59e0b, 0.18);
+    color: #fbbf24;
+}
+.status-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 99px;
+    background: alpha(currentColor, 0.10);
+}
+.status-pill.live {
+    background: alpha(#22c55e, 0.18);
+    color: #4ade80;
+}
+.status-pill.headless {
+    background: alpha(#38bdf8, 0.18);
+    color: #7dd3fc;
+}
+.quick-chip {
+    font-family: monospace;
+    font-size: 11px;
+    padding: 2px 8px;
+    min-height: 24px;
+    border-radius: 99px;
+}
+.console-frame {
+    background: #121418;
+    border: 1px solid alpha(#ffffff, 0.08);
+    border-radius: 12px;
+}
 textview.wire-console {
+    background: transparent;
+    color: #d8dee9;
     font-family: monospace;
     font-size: 11.5px;
-    padding: 8px;
+    padding: 10px 12px;
+}
+textview.wire-console text {
+    background: transparent;
+    color: #d8dee9;
+}
+.console-prompt {
+    font-family: monospace;
+    font-weight: 700;
+    color: #38bdf8;
+    padding-left: 8px;
+}
+.console-entry {
+    font-family: monospace;
+    font-size: 12px;
+}
+.timeline-card {
+    padding: 10px 12px;
+}
+.kbd-badge {
+    font-family: monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: alpha(#ffffff, 0.10);
+    border: 1px solid alpha(#ffffff, 0.12);
 }
 """
+
+
+def _fmt_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024.0:.1f} KB"
+    return f"{n / (1024.0 * 1024.0):.2f} MB"
+
+
+def _file_icon_name(name: str, full: str, is_dir: bool) -> str:
+    if is_dir:
+        return "folder-symbolic"
+    if full.startswith("/sys/"):
+        return "security-high-symbolic"
+    if name.endswith(kernfs_mount.PKG_EXTS):
+        return "application-x-executable-symbolic"
+    if name.endswith(".cfg"):
+        return "preferences-system-symbolic"
+    if name.endswith((".vfo", ".ch", ".ct", ".zn", ".bnd", ".fm", ".hit")):
+        return "document-properties-symbolic"
+    return "text-x-generic-symbolic"
 
 
 def _battery_icon_name(pct: int | None) -> str:
@@ -2844,6 +3251,7 @@ def launch_gtk4(
     baud: int = 115200,
     model_override: str | None = None,
     palette_override: str | None = None,
+    start_headless: bool = False,
 ) -> int:
     import gi
     gi.require_version("Gtk", "4.0")
@@ -2871,6 +3279,7 @@ def launch_gtk4(
             self.forced_model = model_override if model_override in ("k1", "k5") else None
             self.active_model = self.forced_model or "k1"
             self.user_picked_palette = palette_override is not None
+            self.start_headless = start_headless
             self.lcd_st = LcdSettings(
                 palette=(
                     palette_override if (palette_override and palette_override in LCD_PALETTES)
@@ -2892,6 +3301,9 @@ def launch_gtk4(
             self.current_dir = "/"
             self._cached_dir_entries: list[dict[str, Any]] = []
             self._selected_fw: dict[str, Any] | None = None
+            self._cmd_history: list[str] = []
+            self._cmd_hist_pos: int = 0
+            self._part_btns: dict[str, Any] = {}
 
             # Capture / GIF editor state
             self._pb_playing = False
@@ -2919,12 +3331,20 @@ def launch_gtk4(
                 ("screenshot", lambda _a, _p: self._on_save_screenshot(None), "<Control>s"),
                 ("toggle-dock", lambda _a, _p: self.pane_toggle.set_active(not self.pane_toggle.get_active()), "<Control>b"),
                 ("toggle-record", lambda _a, _p: self.rec_btn.set_active(not self.rec_btn.get_active()), "<Control>r"),
+                ("preferences", lambda _a, _p: self._show_preferences_dialog(), "<Control>comma"),
+                ("shortcuts", lambda _a, _p: self._show_shortcuts_dialog(), "<Control>question"),
+                ("flash-fw", lambda _a, _p: self._on_flash_firmware_dialog(None), None),
+                ("sideload", lambda _a, _p: self._on_sideload(None), None),
+                ("backup-calib", lambda _a, _p: self._on_run_backup(calib_only=True), None),
+                ("backup-full", lambda _a, _p: self._on_run_backup(calib_only=False), None),
+                ("restore-backup", lambda _a, _p: self._on_restore_backup(None), None),
                 ("quit", lambda _a, _p: self.win.close(), "<Control>q"),
             ):
                 act = Gio.SimpleAction.new(name, None)
                 act.connect("activate", cb)
                 self.add_action(act)
-                self.set_accels_for_action(f"app.{name}", [accel])
+                if accel:
+                    self.set_accels_for_action(f"app.{name}", [accel])
 
             self.link.on_frame = self._schedule_frame_update
             self.link.on_telemetry = lambda: GLib.idle_add(self._refresh_telemetry_ui)
@@ -2932,8 +3352,10 @@ def launch_gtk4(
             self.link.on_log = lambda line: GLib.idle_add(self._append_console_line, line)
             self.port_monitor = PortMonitor(on_change=lambda _p: GLib.idle_add(self._on_ports_changed))
 
-            # --- Ultra-Clean GNOME HIG HeaderBar (NO tab spam!) ---
+            # --- Minimalist GNOME HIG HeaderBar (clean empty center — no redundant title/subtitle!) ---
             header = Adw.HeaderBar() if has_adw else Gtk.HeaderBar()
+            header.set_title_widget(Gtk.Box())
+            self.win_title = None
 
             # Start: Compact Radio & Connection Popover Pill
             self.conn_menu_btn = Gtk.MenuButton()
@@ -2946,29 +3368,25 @@ def launch_gtk4(
             self.hdr_rec_dot.add_css_class("rec-dot")
             self.hdr_dfu_dot = Gtk.Box(valign=Gtk.Align.CENTER, visible=False)
             self.hdr_dfu_dot.add_css_class("dfu-dot")
-            for w in (self.hdr_link_icon, self.hdr_dev_lbl, self.hdr_batt_icon, self.hdr_dfu_dot, self.hdr_rec_dot):
+            self.hdr_headless_dot = Gtk.Box(valign=Gtk.Align.CENTER, visible=False)
+            self.hdr_headless_dot.add_css_class("headless-dot")
+            self.hdr_headless_dot.set_tooltip_text("Headless mode active (LCD & backlight powered off)")
+            for w in (self.hdr_link_icon, self.hdr_dev_lbl, self.hdr_batt_icon, self.hdr_headless_dot, self.hdr_dfu_dot, self.hdr_rec_dot):
                 st_box.append(w)
             self.conn_menu_btn.set_child(st_box)
             self.conn_popover = self._build_connection_popover()
             self.conn_menu_btn.set_popover(self.conn_popover)
             header.pack_start(self.conn_menu_btn)
 
-            # Center: Clean Adw.WindowTitle (NO random tabs in top window bar!)
-            if has_adw:
-                self.win_title = Adw.WindowTitle(title="Kern Dock", subtitle="Not connected")
-                header.set_title_widget(self.win_title)
-            else:
-                self.win_title = None
-
-            # End: Dock Panel Toggle + Primary Menu (Display Optics & Shortcuts)
+            # End: Sidebar Toggle + Clean Native GNOME Primary Menu (Flash · Backups · Preferences · Shortcuts)
             end_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             self.pane_toggle = Gtk.ToggleButton(icon_name="sidebar-show-right-symbolic", active=True)
             self.pane_toggle.set_tooltip_text("Show/hide workspace sidebar (Ctrl+B)")
             end_box.append(self.pane_toggle)
 
             menu_btn = Gtk.MenuButton(icon_name="open-menu-symbolic")
-            menu_btn.set_tooltip_text("Display optics & keyboard shortcuts")
-            menu_btn.set_popover(self._build_primary_menu_popover())
+            menu_btn.set_tooltip_text("Firmware, backups & preferences")
+            menu_btn.set_menu_model(self._build_primary_menu_model())
             end_box.append(menu_btn)
             header.pack_end(end_box)
 
@@ -3020,9 +3438,9 @@ def launch_gtk4(
             self.dock_stack.set_vexpand(True)
 
             pane_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, vexpand=True)
-            # Compact segmented switcher cleanly nested inside the workspace pane
-            sw_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, halign=Gtk.Align.CENTER, margin_top=10, margin_bottom=4)
-            sw_bar.add_css_class("linked")
+            # Clean full-width flat GNOME tab switcher bar with subtle divider
+            sw_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, homogeneous=True, spacing=4)
+            sw_bar.add_css_class("pane-switcher")
             self._pane_btns: dict[str, Any] = {}
             first_pb = None
             for nm, lbl, icon in (
@@ -3031,11 +3449,12 @@ def launch_gtk4(
                 ("wire", "Console", "utilities-terminal-symbolic"),
             ):
                 tb_btn = Gtk.ToggleButton(active=(nm == "files"))
+                tb_btn.add_css_class("flat")
                 if first_pb is None:
                     first_pb = tb_btn
                 else:
                     tb_btn.set_group(first_pb)
-                bi = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                bi = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.CENTER)
                 bi.append(Gtk.Image.new_from_icon_name(icon))
                 bi.append(Gtk.Label(label=lbl))
                 tb_btn.set_child(bi)
@@ -3043,14 +3462,15 @@ def launch_gtk4(
                 sw_bar.append(tb_btn)
                 self._pane_btns[nm] = tb_btn
             pane_col.append(sw_bar)
+            pane_col.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
             # Shared inline progress bar for flashing / backup / restore (hidden when idle)
-            self.op_prog = Gtk.ProgressBar(show_text=True, visible=False, margin_start=12, margin_end=12, margin_top=4)
+            self.op_prog = Gtk.ProgressBar(show_text=True, visible=False, margin_start=12, margin_end=12, margin_top=6)
             pane_col.append(self.op_prog)
             pane_col.append(self.dock_stack)
 
             self.right_pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, hexpand=True)
-            self.right_pane.set_size_request(448, -1)
+            self.right_pane.set_size_request(460, -1)
             self.right_pane.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
             self.right_pane.append(pane_col)
             self.pane_toggle.connect("toggled", self._on_dock_pane_toggled)
@@ -3085,6 +3505,7 @@ def launch_gtk4(
 
             self.win.connect("close-request", self._on_close_request)
             self._rebuild_connection_list()
+            self._render_filtered_files()
             self.lcd_state.step(self.link.last_fb, self.lcd_st)
             self._sync_window_size()
 
@@ -3176,6 +3597,26 @@ def launch_gtk4(
             for w in (self.btn_torch, self.btn_lock, btn_vfo, self.sw_allow_tx):
                 ctl_row.append(w)
             self.conn_card.append(ctl_row)
+
+            # Battery-saving Headless Mode row (physically sleeps ST7565 LCD & backlight while keeping live Dock streaming!)
+            hl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=2)
+            hl_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0, hexpand=True)
+            hl_t = Gtk.Label(label="Headless Mode", xalign=0)
+            hl_t.add_css_class("caption-heading")
+            hl_s = Gtk.Label(label="Power off radio LCD & backlight", xalign=0)
+            hl_s.add_css_class("caption")
+            hl_s.add_css_class("dim-label")
+            hl_col.append(hl_t)
+            hl_col.append(hl_s)
+            self.sw_headless = Gtk.Switch(active=False, valign=Gtk.Align.CENTER)
+            self.sw_headless.set_tooltip_text("Turn off physical LCD & backlight on radio to save battery while keeping live RigWire streaming")
+            self.sw_headless.connect(
+                "notify::active",
+                lambda w, _p: None if self._updating_switches else (self.link.set_headless(w.get_active()), self._refresh_telemetry_ui()),
+            )
+            hl_row.append(hl_col)
+            hl_row.append(self.sw_headless)
+            self.conn_card.append(hl_row)
 
             self.conn_card.append(Gtk.Separator())
             box.append(self.conn_card)
@@ -3276,48 +3717,149 @@ def launch_gtk4(
                         break
             return False
 
-        # --- Primary Menu Popover (Display Optics & Shortcuts) ---
-        def _build_primary_menu_popover(self) -> Any:
-            pop = Gtk.Popover()
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=12, margin_bottom=12, margin_start=14, margin_end=14)
-            box.set_size_request(255, -1)
+        # --- Native GNOME HIG Primary Menu, Preferences Dialog & Shortcuts Sheet ---
+        def _build_primary_menu_model(self) -> Any:
+            menu = Gio.Menu()
 
-            lbl = Gtk.Label(label="Display Optics", xalign=0)
-            lbl.add_css_class("heading")
-            box.append(lbl)
+            sec_fw = Gio.Menu()
+            sec_fw.append("Flash Firmware…", "app.flash-fw")
+            sec_fw.append("Install App / Module…", "app.sideload")
+            menu.append_section("Firmware & Packages", sec_fw)
 
+            sec_bk = Gio.Menu()
+            sec_bk.append("Backup Calibration…", "app.backup-calib")
+            sec_bk.append("Full KernFS Snapshot…", "app.backup-full")
+            sec_bk.append("Restore Backup…", "app.restore-backup")
+            menu.append_section("Verified .kfw Backups", sec_bk)
+
+            sec_app = Gio.Menu()
+            sec_app.append("Preferences", "app.preferences")
+            sec_app.append("Keyboard Shortcuts", "app.shortcuts")
+            menu.append_section(None, sec_app)
+            return menu
+
+        def _show_preferences_dialog(self) -> None:
+            if not has_adw:
+                return
+            use_dlg = hasattr(Adw, "PreferencesDialog")
+            dlg = Adw.PreferencesDialog(title="Preferences") if use_dlg else Adw.PreferencesWindow(transient_for=self.win, modal=True, title="Preferences")
+            page = Adw.PreferencesPage(title="Display & Radio", icon_name="preferences-system-symbolic")
+
+            # Group 1: Display Optics
+            grp_opt = Adw.PreferencesGroup(title="Display Optics", description="ST7565 LCD panel appearance and optical simulation")
             names = list(LCD_PALETTES.keys())
-            self.pal_dd = Gtk.DropDown.new_from_strings(names)
-            self.pal_dd.set_selected(names.index(self.lcd_st.palette))
-            self.pal_dd.connect("notify::selected", self._on_palette_changed)
-            box.append(self.pal_dd)
+            pal_row = Adw.ComboRow(title="LCD Palette", subtitle="Color profile matching hardware backlight")
+            pal_row.set_model(Gtk.StringList.new(names))
+            pal_row.set_selected(names.index(self.lcd_st.palette) if self.lcd_st.palette in names else 0)
+            pal_row.connect("notify::selected", self._on_palette_changed)
+            grp_opt.add(pal_row)
 
-            for title, lo, hi, attr in (("Backlight", 0, 10, "backlight"), ("Contrast", 0, 15, "contrast")):
-                r = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-                r.append(Gtk.Label(label=title, xalign=0))
+            for title, sub, lo, hi, attr in (
+                ("Backlight", "Simulated LED illumination level (0–10)", 0, 10, "backlight"),
+                ("Contrast", "STN liquid-crystal contrast ratio (0–15)", 0, 15, "contrast"),
+            ):
+                row = Adw.ActionRow(title=title, subtitle=sub)
                 sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, 1)
                 sc.set_draw_value(True)
+                sc.set_value_pos(Gtk.PositionType.LEFT)
                 sc.set_digits(0)
+                sc.set_size_request(156, -1)
+                sc.set_valign(Gtk.Align.CENTER)
                 sc.set_value(getattr(self.lcd_st, attr))
                 sc.connect("value-changed", lambda s, a=attr: (setattr(self.lcd_st, a, int(s.get_value())), self.handset_area.queue_draw()))
-                r.append(sc)
-                box.append(r)
+                row.add_suffix(sc)
+                grp_opt.add(row)
 
-            for title, attr in (("STN Ghosting", "ghosting"), ("Pixel Grid", "pixel_grid"), ("Invert LCD", "invert_lcd")):
-                r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                r.append(Gtk.Label(label=title, xalign=0, hexpand=True))
-                sw = Gtk.Switch(active=getattr(self.lcd_st, attr))
-                sw.connect("notify::active", lambda w, _p, a=attr: self._toggle_lcd_flag(a, w.get_active()))
-                r.append(sw)
-                box.append(r)
+            for title, sub, attr in (
+                ("STN Ghosting", "Simulate passive liquid-crystal rise and decay", "ghosting"),
+                ("Pixel Matrix Grid", "Render hairline cell dividers between 128×64 dots", "pixel_grid"),
+                ("Bezel Backlight Glow", "Subtle illumination spill on the recessed LCD surround", "backlight_glow"),
+                ("Invert LCD", "Swap active and inactive liquid-crystal polarity", "invert_lcd"),
+            ):
+                sw_r = Adw.SwitchRow(title=title, subtitle=sub, active=getattr(self.lcd_st, attr))
+                sw_r.connect("notify::active", lambda w, _p, a=attr: self._toggle_lcd_flag(a, w.get_active()))
+                grp_opt.add(sw_r)
+            page.add(grp_opt)
 
-            box.append(Gtk.Separator())
-            kb = Gtk.Label(label="Enter=MENU · Esc=EXIT · Arrows=Nav · Space=PTT\nCtrl+S PNG · Ctrl+R Record · Ctrl+B Dock", xalign=0)
-            kb.add_css_class("caption")
-            kb.add_css_class("dim-label")
-            box.append(kb)
-            pop.set_child(box)
-            return pop
+            # Group 2: Radio & Connection Safety
+            grp_rad = Adw.PreferencesGroup(title="Connection & Safety")
+            sw_ac = Adw.SwitchRow(
+                title="Auto-Connect USB Radio",
+                subtitle="Automatically attach when a Kern OS radio is plugged in",
+                active=self.auto_connect_usb,
+            )
+            sw_ac.connect("notify::active", lambda w, _p: setattr(self, "auto_connect_usb", w.get_active()))
+            grp_rad.add(sw_ac)
+
+            sw_tx = Adw.SwitchRow(
+                title="Allow TX Over USB",
+                subtitle="Off by default to prevent 5W RF interference from crashing the host PC",
+                active=self.allow_usb_tx,
+            )
+            sw_tx.connect("notify::active", lambda w, _p: (setattr(self, "allow_usb_tx", w.get_active()), self.sw_allow_tx.set_active(w.get_active())))
+            grp_rad.add(sw_tx)
+
+            if self.link.connected and self.link.link_mode == "kern_os":
+                sw_hl = Adw.SwitchRow(
+                    title="Headless Mode",
+                    subtitle="Physically turn off radio LCD & backlight while keeping live Dock streaming",
+                    active=self.link.headless,
+                )
+                sw_hl.connect("notify::active", lambda w, _p: (self.link.set_headless(w.get_active()), self._refresh_telemetry_ui()))
+                grp_rad.add(sw_hl)
+            page.add(grp_rad)
+
+            dlg.add(page)
+            if use_dlg:
+                dlg.present(self.win)
+            else:
+                dlg.present()
+
+        def _show_shortcuts_dialog(self) -> None:
+            if not has_adw:
+                return
+            use_dlg = hasattr(Adw, "Dialog")
+            dlg = Adw.Dialog(title="Keyboard Shortcuts", content_width=400, content_height=460) if use_dlg else Adw.Window(transient_for=self.win, modal=True, title="Keyboard Shortcuts", default_width=400, default_height=460)
+            tb = Adw.ToolbarView()
+            tb.add_top_bar(Adw.HeaderBar())
+            sc = Gtk.ScrolledWindow(vexpand=True)
+            page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_top=14, margin_bottom=16, margin_start=16, margin_end=16)
+
+            for title, items in (
+                ("Radio Keypad", [
+                    ("Enter", "MENU / Confirm"),
+                    ("Esc / Backspace", "EXIT / Back"),
+                    ("Arrow Keys", "Up / Down Navigation"),
+                    ("0 – 9, *, F / #", "Numeric Keypad & Function"),
+                    ("F1 / F2", "Side Keys SK1 / SK2"),
+                    ("Space", "Push-To-Talk (when TX armed)"),
+                    ("Right-Click Key", "Long-Press / Hold Key"),
+                ]),
+                ("Application", [
+                    ("Ctrl + S", "Save Snapshot PNG"),
+                    ("Ctrl + R", "Start / Stop GIF Recording"),
+                    ("Ctrl + B", "Toggle Workspace Sidebar"),
+                    ("Ctrl + ,", "Open Preferences"),
+                    ("Ctrl + Q", "Quit Kern Dock"),
+                ]),
+            ):
+                grp = Adw.PreferencesGroup(title=title)
+                for k, desc in items:
+                    row = Adw.ActionRow(title=desc)
+                    badge = Gtk.Label(label=k, valign=Gtk.Align.CENTER)
+                    badge.add_css_class("kbd-badge")
+                    row.add_suffix(badge)
+                    grp.add(row)
+                page.append(grp)
+
+            sc.set_child(page)
+            tb.set_content(sc)
+            if use_dlg:
+                dlg.set_child(tb)
+                dlg.present(self.win)
+            else:
+                dlg.set_content(tb)
+                dlg.present()
 
         def _toggle_lcd_flag(self, attr: str, val: bool) -> None:
             setattr(self.lcd_st, attr, val)
@@ -3376,17 +3918,21 @@ def launch_gtk4(
                 rf = self.recorder.frames[idx]
                 return rf.fb, rf.pressed, rf.led, rf.torch
             if not self.link.connected:
-                # Disconnected: authentic unlit blank LCD (never show fake demo data!)
+                # Disconnected: authentic unlit blank LCD & LED off (never fake demo data!)
                 return bytes(1024), frozenset(self._pressed_keys), "off", False
             if self._flashing_active or self.link.link_mode == "stock_bl":
                 # Authentic Stock Bootloader hardware state: LCD is OFF (blank), top flashlight LED shows activity!
-                return bytes(1024), frozenset(self._pressed_keys), ("tx" if self._flashing_active else "off"), self.link.torch_on
-            if "ptt" in self._pressed_keys and self.link.connected and (self.allow_usb_tx or self.link.demo_mode):
-                led = "tx"
-            elif self.link.connected:
-                led = "rx"
+                return bytes(1024), frozenset(self._pressed_keys), "off", self.link.torch_on
+            if self.link.demo_mode:
+                if "ptt" in self._pressed_keys:
+                    led = "tx"
+                elif "side2" in self._pressed_keys:
+                    led = "rx"
+                else:
+                    led = "off"
             else:
-                led = "off"
+                # Live radio: ALWAYS mirror exact BK4829 GPIO REG_0x33 status LED (never hardcode green!)
+                led = self.link.status_led
             return self.link.last_fb, frozenset(self._pressed_keys), led, self.link.torch_on
 
         def _current_display_fb(self) -> bytes:
@@ -3570,137 +4116,255 @@ def launch_gtk4(
 
         # --- Dock Pages (Files · Capture · Console) ---
         def _build_files_page(self) -> Any:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=8, margin_bottom=10, margin_start=12, margin_end=12)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=10, margin_bottom=12, margin_start=14, margin_end=14)
 
+            # Row 1: Quick-partition switcher pill bar + clean flat file actions (NO buried dots button!)
             bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
             grp.add_css_class("linked")
-            for d in ("/", "/user", "/pref", "/apps", "/sys"):
-                b = Gtk.Button(label="root" if d == "/" else d)
-                b.connect("clicked", lambda _b, p=d: self._browse_dir(p))
+            first_pt = None
+            for d, lbl in (("/", "/"), ("/user", "user"), ("/pref", "pref"), ("/apps", "apps"), ("/sys", "sys")):
+                b = Gtk.ToggleButton(label=lbl, active=(d == "/"))
+                if first_pt is None:
+                    first_pt = b
+                else:
+                    b.set_group(first_pt)
+                b.connect("toggled", lambda btn, p=d: self._browse_dir(p) if (btn.get_active() and not self._updating_switches) else None)
                 grp.append(b)
+                self._part_btns[d] = b
             bar.append(grp)
             bar.append(Gtk.Box(hexpand=True))
 
-            ref = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
-            ref.set_tooltip_text("Refresh directory")
-            ref.connect("clicked", lambda _b: self._browse_dir(self.current_dir))
-            bar.append(ref)
+            up_dir = Gtk.Button.new_from_icon_name("go-up-symbolic")
+            up_dir.add_css_class("flat")
+            up_dir.set_tooltip_text("Parent folder")
+            up_dir.connect("clicked", lambda _b: self._browse_parent())
+            bar.append(up_dir)
 
             up = Gtk.Button.new_from_icon_name("document-send-symbolic")
+            up.add_css_class("flat")
             up.set_tooltip_text("Upload file to current folder")
             up.connect("clicked", self._on_upload_file)
             bar.append(up)
 
-            # Maintenance & Firmware Popover (replaces the cluttered Flash tab & manual Probe button!)
-            maint_btn = Gtk.MenuButton(icon_name="view-more-symbolic")
-            maint_btn.set_tooltip_text("Firmware flasher, KRX sideload & .kfw backups")
-            maint_btn.set_popover(self._build_maintenance_popover())
-            bar.append(maint_btn)
+            ref = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
+            ref.add_css_class("flat")
+            ref.set_tooltip_text("Refresh folder")
+            ref.connect("clicked", lambda _b: self._browse_dir(self.current_dir))
+            bar.append(ref)
             box.append(bar)
 
+            # Row 2: Search filter + Mount Drive toggle pill
             mbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             self.file_search = Gtk.SearchEntry(placeholder_text="Filter files…", hexpand=True)
             self.file_search.connect("search-changed", lambda _e: self._render_filtered_files())
             mbar.append(self.file_search)
-            self.mount_btn = Gtk.ToggleButton(label="Mount Drive")
+
+            self.mount_btn = Gtk.ToggleButton()
+            mb_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            mb_in.append(Gtk.Image.new_from_icon_name("drive-harddisk-symbolic"))
+            mb_in.append(Gtk.Label(label="Mount"))
+            self.mount_btn.set_child(mb_in)
+            self.mount_btn.set_tooltip_text("Mount KernFS over local WebDAV in your OS file manager")
             self.mount_btn.connect("toggled", self._on_mount_toggled)
             mbar.append(self.mount_btn)
+
             self.open_fs_btn = Gtk.Button(icon_name="folder-open-symbolic", visible=False)
+            self.open_fs_btn.set_tooltip_text("Open mounted radio drive")
             self.open_fs_btn.connect("clicked", self._on_open_fs)
             mbar.append(self.open_fs_btn)
             box.append(mbar)
 
-            self.path_lbl = Gtk.Label(label="/", xalign=0)
-            self.path_lbl.add_css_class("caption-heading")
-            self.path_lbl.add_css_class("dim-label")
-            box.append(self.path_lbl)
+            # Row 3: Interactive clickable breadcrumb path + right-aligned live item/size summary
+            crumb_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            self.crumb_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2, hexpand=True)
+            crumb_row.append(self.crumb_box)
+            self.dir_meta_lbl = Gtk.Label(label="", xalign=1)
+            self.dir_meta_lbl.add_css_class("caption")
+            self.dir_meta_lbl.add_css_class("dim-label")
+            self.dir_meta_lbl.add_css_class("numeric")
+            crumb_row.append(self.dir_meta_lbl)
+            box.append(crumb_row)
+            self._rebuild_breadcrumbs()
 
+            # Row 4: Clean Gtk.Stack switching between tight boxed-list and centered Adw.StatusPage
+            self.files_stack = Gtk.Stack(vexpand=True)
             scroll = Gtk.ScrolledWindow(vexpand=True)
-            self.file_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+            scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            self.file_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, valign=Gtk.Align.START)
             self.file_list.add_css_class("boxed-list")
+            self.file_list.set_margin_bottom(8)
             scroll.set_child(self.file_list)
-            box.append(scroll)
+            self.files_stack.add_named(scroll, "list")
+
+            if has_adw:
+                self.files_empty = Adw.StatusPage(
+                    icon_name="folder-symbolic",
+                    title="No Radio Connected",
+                    description="Connect a Kern OS radio to browse /user, /pref, /apps, and /sys.",
+                )
+                self.files_empty.add_css_class("compact")
+            else:
+                self.files_empty = Gtk.Label(label="No radio connected")
+            self.files_stack.add_named(self.files_empty, "empty")
+            self.files_stack.set_visible_child_name("empty")
+            box.append(self.files_stack)
             return box
 
-        def _build_maintenance_popover(self) -> Any:
-            pop = Gtk.Popover()
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=10, margin_bottom=10, margin_start=10, margin_end=10)
-            box.set_size_request(290, -1)
+        def _browse_parent(self) -> None:
+            if self.current_dir == "/":
+                return
+            parent = str(Path(self.current_dir).parent)
+            self._browse_dir(parent if parent.startswith("/") else "/")
 
-            def _add_list_section(title: str, items: list[tuple[str, str, str, Callable[[], None]]]) -> None:
-                lbl = Gtk.Label(label=title, xalign=0)
-                lbl.add_css_class("caption-heading")
-                lbl.add_css_class("dim-label")
-                box.append(lbl)
-                lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-                lb.add_css_class("boxed-list")
-                for icon, t, sub, fn in items:
-                    if has_adw:
-                        row = Adw.ActionRow(title=t, subtitle=sub, activatable=True)
-                        row.add_prefix(Gtk.Image.new_from_icon_name(icon))
-                        row.connect("activated", lambda _r, f=fn: (pop.popdown(), f()))
-                        lb.append(row)
-                box.append(lb)
-
-            _add_list_section("Firmware &amp; Packages", [
-                ("software-update-available-symbolic", "Flash Firmware…", "Write verified .kfw or .bin to radio", lambda: self._on_flash_firmware_dialog(None)),
-                ("application-x-executable-symbolic", "Install App / Module…", "Sideload .krx / .mod to /apps", lambda: self._on_sideload(None)),
-            ])
-            _add_list_section("Ascon-Verified .kfw Backups", [
-                ("security-high-symbolic", "Backup Calibration…", "Save /sys/calib.dat &amp; /sys/calib.sig", lambda: self._on_run_backup(calib_only=True)),
-                ("drive-harddisk-symbolic", "Full KernFS Snapshot…", "Archive /sys, /pref, /user &amp; /apps", lambda: self._on_run_backup(calib_only=False)),
-                ("document-revert-symbolic", "Restore User Backup…", "Restore /user, /pref &amp; /apps (/sys shielded)", lambda: self._on_restore_backup(None)),
-            ])
-            pop.set_child(box)
-            return pop
+        def _rebuild_breadcrumbs(self) -> None:
+            c = self.crumb_box.get_first_child()
+            while c is not None:
+                n = c.get_next_sibling()
+                self.crumb_box.remove(c)
+                c = n
+            segs = [s for s in self.current_dir.strip("/").split("/") if s]
+            root_b = Gtk.Button(label="KernFS")
+            root_b.add_css_class("flat")
+            root_b.add_css_class("crumb-btn")
+            root_b.connect("clicked", lambda _b: self._browse_dir("/"))
+            self.crumb_box.append(root_b)
+            acc = ""
+            for seg in segs:
+                acc += f"/{seg}"
+                sep = Gtk.Label(label="›")
+                sep.add_css_class("dim-label")
+                self.crumb_box.append(sep)
+                sb = Gtk.Button(label=seg)
+                sb.add_css_class("flat")
+                sb.add_css_class("crumb-btn")
+                sb.connect("clicked", lambda _b, p=acc: self._browse_dir(p))
+                self.crumb_box.append(sb)
 
         def _build_wire_page(self) -> Any:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=10, margin_bottom=12, margin_start=14, margin_end=14)
+
+            # Top utility bar: live link status pill + quick commands + Copy / Clear
+            top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            self.con_status_pill = Gtk.Label(label="Offline")
+            self.con_status_pill.add_css_class("status-pill")
+            top.append(self.con_status_pill)
+            top.append(Gtk.Box(hexpand=True))
+
+            copy_b = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+            copy_b.add_css_class("flat")
+            copy_b.set_tooltip_text("Copy console log")
+            copy_b.connect("clicked", self._on_copy_console)
+            top.append(copy_b)
+
+            clr_b = Gtk.Button.new_from_icon_name("edit-clear-all-symbolic")
+            clr_b.add_css_class("flat")
+            clr_b.set_tooltip_text("Clear console")
+            clr_b.connect("clicked", lambda _b: self.console_buf.set_text(""))
+            top.append(clr_b)
+            box.append(top)
+
+            # Quick-command flat chips
+            chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            for cmd in ("ping", "info", "ls /", "vfo", "headless", "help"):
+                cb = Gtk.Button(label=cmd)
+                cb.add_css_class("quick-chip")
+                cb.connect("clicked", lambda _b, c=cmd: self._run_console_command(c))
+                chips.append(cb)
+            box.append(chips)
+
+            # Dark framed monospace terminal viewport with syntax-colored text tags
+            frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
+            frame.add_css_class("console-frame")
             scroll = Gtk.ScrolledWindow(vexpand=True)
             self.console_buf = Gtk.TextBuffer()
+            self.console_buf.create_tag("cmd", foreground="#38bdf8", weight=700)
+            self.console_buf.create_tag("ok", foreground="#4ade80")
+            self.console_buf.create_tag("err", foreground="#f87171")
+            self.console_buf.create_tag("meta", foreground="#94a3b8")
             self.console_view = Gtk.TextView(buffer=self.console_buf, editable=False, monospace=True)
             self.console_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
             self.console_view.add_css_class("wire-console")
             scroll.set_child(self.console_view)
-            box.append(scroll)
+            frame.append(scroll)
+            box.append(frame)
 
+            # Framed monospace command input with Up/Down history
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            self.cmd_entry = Gtk.Entry(hexpand=True, placeholder_text="RigWire command (ping, ls /apps, freq 433.500, help)…")
+            p_lbl = Gtk.Label(label="❯")
+            p_lbl.add_css_class("console-prompt")
+            row.append(p_lbl)
+            self.cmd_entry = Gtk.Entry(hexpand=True, placeholder_text="RigWire command (ping, info, freq 433.500, headless 1)…")
+            self.cmd_entry.add_css_class("console-entry")
             self.cmd_entry.connect("activate", self._on_console_submit)
+            ec = Gtk.EventControllerKey()
+            ec.connect("key-pressed", self._on_console_key_pressed)
+            self.cmd_entry.add_controller(ec)
             row.append(self.cmd_entry)
-            btn = Gtk.Button(label="Run")
+
+            btn = Gtk.Button.new_from_icon_name("go-next-symbolic")
+            btn.add_css_class("suggested-action")
+            btn.set_tooltip_text("Run command (Enter)")
             btn.connect("clicked", self._on_console_submit)
             row.append(btn)
             box.append(row)
             return box
 
         def _build_capture_page(self) -> Any:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=12, margin_bottom=12, margin_start=14, margin_end=14)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=10, margin_bottom=12, margin_start=14, margin_end=14)
+
+            # Hero Capture Action Row: Record GIF · Save PNG · Copy PNG
             top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            self.rec_btn = Gtk.ToggleButton()
-            rec_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            self.rec_btn = Gtk.ToggleButton(hexpand=True)
+            rec_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.CENTER)
             rec_in.append(Gtk.Image.new_from_icon_name("media-record-symbolic"))
             self.rec_lbl = Gtk.Label(label="Record GIF")
             rec_in.append(self.rec_lbl)
             self.rec_btn.set_child(rec_in)
+            self.rec_btn.set_tooltip_text("Start / stop live interaction recording (Ctrl+R)")
             self.rec_btn.connect("toggled", self._on_record_toggled)
             top_row.append(self.rec_btn)
 
+            shot_grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            shot_grp.add_css_class("linked")
             shot_btn = Gtk.Button()
             sh_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             sh_in.append(Gtk.Image.new_from_icon_name("camera-photo-symbolic"))
-            sh_in.append(Gtk.Label(label="Snapshot PNG"))
+            sh_in.append(Gtk.Label(label="Save PNG"))
             shot_btn.set_child(sh_in)
+            shot_btn.set_tooltip_text("Save crisp PNG snapshot (Ctrl+S)")
             shot_btn.connect("clicked", self._on_save_screenshot)
-            top_row.append(shot_btn)
+            shot_grp.append(shot_btn)
+
+            copy_png = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+            copy_png.set_tooltip_text("Copy PNG snapshot to clipboard")
+            copy_png.connect("clicked", self._on_copy_screenshot)
+            shot_grp.append(copy_png)
+            top_row.append(shot_grp)
             box.append(top_row)
 
-            self.gif_summary_lbl = Gtk.Label(label="Press Record GIF to capture radio interactions.", xalign=0, wrap=True)
-            self.gif_summary_lbl.add_css_class("dim-label")
-            box.append(self.gif_summary_lbl)
+            # Timeline Card
+            tl_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            tl_card.add_css_class("card")
+            tl_card.add_css_class("timeline-card")
 
-            self.timeline_area = Gtk.DrawingArea(content_height=48, hexpand=True)
+            tl_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            tl_title = Gtk.Label(label="Timeline", xalign=0)
+            tl_title.add_css_class("heading")
+            tl_hdr.append(tl_title)
+            self.gif_summary_lbl = Gtk.Label(label="No frames recorded", xalign=1, hexpand=True, ellipsize=3)
+            self.gif_summary_lbl.add_css_class("caption")
+            self.gif_summary_lbl.add_css_class("dim-label")
+            self.gif_summary_lbl.add_css_class("numeric")
+            tl_hdr.append(self.gif_summary_lbl)
+            clr = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+            clr.add_css_class("flat")
+            clr.set_tooltip_text("Discard recorded clip")
+            clr.connect("clicked", self._on_discard_recording)
+            tl_hdr.append(clr)
+            tl_card.append(tl_hdr)
+
+            self.timeline_area = Gtk.DrawingArea(content_height=46, hexpand=True)
             self.timeline_area.set_draw_func(self._draw_timeline)
             tl_c = Gtk.GestureClick()
             tl_c.connect("pressed", self._on_timeline_click)
@@ -3708,37 +4372,51 @@ def launch_gtk4(
             tl_d = Gtk.GestureDrag()
             tl_d.connect("drag-update", self._on_timeline_drag)
             self.timeline_area.add_controller(tl_d)
-            box.append(self.timeline_area)
+            tl_card.append(self.timeline_area)
 
-            tr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            tr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            nav_g = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            nav_g.add_css_class("linked")
+            prev_b = Gtk.Button.new_from_icon_name("go-previous-symbolic")
+            prev_b.set_tooltip_text("Previous frame")
+            prev_b.connect("clicked", lambda _b: self._step_pb(-1))
             self.pb_btn = Gtk.Button.new_from_icon_name("media-playback-start-symbolic")
+            self.pb_btn.set_tooltip_text("Preview playback")
             self.pb_btn.connect("clicked", self._on_pb_toggle)
-            tr.append(self.pb_btn)
-            for icon, d in (("go-previous-symbolic", -1), ("go-next-symbolic", 1)):
-                b = Gtk.Button.new_from_icon_name(icon)
-                b.connect("clicked", lambda _b, delta=d: self._step_pb(delta))
-                tr.append(b)
-            tr.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-            b_in = Gtk.Button(label="[ In")
+            next_b = Gtk.Button.new_from_icon_name("go-next-symbolic")
+            next_b.set_tooltip_text("Next frame")
+            next_b.connect("clicked", lambda _b: self._step_pb(1))
+            for w in (prev_b, self.pb_btn, next_b):
+                nav_g.append(w)
+            tr.append(nav_g)
+            tr.append(Gtk.Box(hexpand=True))
+
+            edit_g = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            edit_g.add_css_class("linked")
+            b_in = Gtk.Button(label="In")
+            b_in.set_tooltip_text("Set trim start at playhead")
             b_in.connect("clicked", lambda _b: self._set_trim_in())
-            tr.append(b_in)
-            b_out = Gtk.Button(label="Out ]")
+            b_out = Gtk.Button(label="Out")
+            b_out.set_tooltip_text("Set trim end at playhead")
             b_out.connect("clicked", lambda _b: self._set_trim_out())
-            tr.append(b_out)
-            self.cut_btn = Gtk.Button(label="Mark Cut")
+            self.cut_btn = Gtk.Button(label="Cut")
+            self.cut_btn.set_tooltip_text("Mark start / end of splice cut")
             self.cut_btn.connect("clicked", self._on_cut_splice)
-            tr.append(self.cut_btn)
             undo_b = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
+            undo_b.set_tooltip_text("Undo last cut")
             undo_b.connect("clicked", lambda _b: (self.recorder.undo_cut(), self._refresh_gif_ui()))
-            tr.append(undo_b)
-            box.append(tr)
+            for w in (b_in, b_out, self.cut_btn, undo_b):
+                edit_g.append(w)
+            tr.append(edit_g)
+            tl_card.append(tr)
+            box.append(tl_card)
 
             if has_adw:
-                opt = Adw.PreferencesGroup(title="Export")
-                r_mode = Adw.ActionRow(title="Capture Scope", subtitle="LCD glass only or full 3D radio with key presses")
+                opt = Adw.PreferencesGroup(title="Export Options")
+                r_mode = Adw.ActionRow(title="Scope", subtitle="LCD glass only or full 3D radio")
                 mg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
                 mg.add_css_class("linked")
-                b_lcd = Gtk.ToggleButton(label="LCD Only", active=True)
+                b_lcd = Gtk.ToggleButton(label="LCD", active=True)
                 b_body = Gtk.ToggleButton(label="Full Radio", group=b_lcd)
                 b_lcd.connect("toggled", lambda b: setattr(self, "_export_mode", "lcd") if b.get_active() else None)
                 b_body.connect("toggled", lambda b: setattr(self, "_export_mode", "body") if b.get_active() else None)
@@ -3747,7 +4425,7 @@ def launch_gtk4(
                 r_mode.add_suffix(mg)
                 opt.add(r_mode)
 
-                r_spd = Adw.ActionRow(title="Speed", subtitle="GIF playback timing")
+                r_spd = Adw.ActionRow(title="Speed", subtitle="Playback rate multiplier")
                 sg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
                 sg.add_css_class("linked")
                 first_s = None
@@ -3762,7 +4440,7 @@ def launch_gtk4(
                 r_spd.add_suffix(sg)
                 opt.add(r_spd)
 
-                r_cap = Adw.SwitchRow(title="Clamp Idle Pauses", subtitle="Cap gaps > 0.6 s", active=True)
+                r_cap = Adw.SwitchRow(title="Clamp Idle Pauses", subtitle="Cap gaps longer than 0.6 s", active=True)
                 r_cap.connect("notify::active", lambda sw, _p: (setattr(self, "_cap_idle", sw.get_active()), self._refresh_gif_ui()))
                 opt.add(r_cap)
                 box.append(opt)
@@ -3770,16 +4448,12 @@ def launch_gtk4(
             self.gif_progress = Gtk.ProgressBar(show_text=True, visible=False)
             box.append(self.gif_progress)
 
-            act = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            clr = Gtk.Button(label="Discard")
-            clr.connect("clicked", self._on_discard_recording)
-            act.append(clr)
-            act.append(Gtk.Box(hexpand=True))
-            self.export_gif_btn = Gtk.Button(label="Export GIF…", sensitive=False)
+            box.append(Gtk.Box(vexpand=True))
+            self.export_gif_btn = Gtk.Button(label="Export Animated GIF…", sensitive=False)
             self.export_gif_btn.add_css_class("suggested-action")
+            self.export_gif_btn.add_css_class("pill")
             self.export_gif_btn.connect("clicked", self._on_export_gif)
-            act.append(self.export_gif_btn)
-            box.append(act)
+            box.append(self.export_gif_btn)
             return box
 
         # --- Automatic Flasher (Real Bootloader + Authentic Flashlight Page Strobe) & Backup Handlers ---
@@ -3970,20 +4644,30 @@ def launch_gtk4(
 
         def _draw_timeline(self, _area: Any, cr: Any, w: int, h: int) -> None:
             n = len(self.recorder.frames)
-            _round_rect(cr, 0, 6, w, h - 12, 6)
-            cr.set_source_rgb(0.11, 0.12, 0.15)
-            cr.fill()
+            _round_rect(cr, 0, 6, w, h - 12, 8)
+            cr.set_source_rgb(0.09, 0.10, 0.12)
+            cr.fill_preserve()
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.08)
+            cr.set_line_width(1.0)
+            cr.stroke()
             if n <= 0:
+                _draw_pango_text(
+                    cr, "Press Record GIF to capture frames", w * 0.5, h * 0.5,
+                    font_desc="Adwaita Sans 9", rgba=(0.65, 0.68, 0.74, 0.55), halign="center", valign="center",
+                )
                 return
             span = max(1, n - 1)
-            fx = lambda i: 8.0 + (i / float(span)) * max(1.0, w - 16.0)
+            fx = lambda i: 10.0 + (i / float(span)) * max(1.0, w - 20.0)
             x_in, x_out = fx(self.recorder.trim_in), fx(self.recorder.trim_out)
-            _round_rect(cr, x_in, 8, max(4.0, x_out - x_in), h - 16, 4)
-            cr.set_source_rgba(0.22, 0.55, 0.96, 0.34)
-            cr.fill()
+            _round_rect(cr, x_in, 9, max(4.0, x_out - x_in), h - 18, 5)
+            cr.set_source_rgba(0.22, 0.58, 0.98, 0.32)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.36, 0.68, 1.0, 0.55)
+            cr.set_line_width(1.0)
+            cr.stroke()
             for a, b in self.recorder.cuts:
-                cr.set_source_rgba(0.92, 0.24, 0.24, 0.65)
-                cr.rectangle(fx(a), 8, max(3.0, fx(b) - fx(a)), h - 16)
+                _round_rect(cr, fx(a), 9, max(3.0, fx(b) - fx(a)), h - 18, 3)
+                cr.set_source_rgba(0.94, 0.26, 0.26, 0.62)
                 cr.fill()
             if self._cut_mark_start is not None:
                 xm = fx(self._cut_mark_start)
@@ -3992,17 +4676,19 @@ def launch_gtk4(
                 cr.move_to(xm, 6)
                 cr.line_to(xm, h - 6)
                 cr.stroke()
-            cr.set_source_rgba(0.85, 0.90, 0.96, 0.45)
+            cr.set_source_rgba(0.88, 0.92, 0.98, 0.50)
             for i, rf in enumerate(self.recorder.frames):
                 if rf.pressed:
-                    cr.rectangle(fx(i) - 1.0, h - 14, 2.0, 6)
+                    cr.rectangle(fx(i) - 1.0, h - 15, 2.0, 6)
             cr.fill()
             xp = fx(self._pb_idx)
             cr.set_source_rgb(1.0, 1.0, 1.0)
             cr.set_line_width(2.2)
-            cr.move_to(xp, 3)
-            cr.line_to(xp, h - 3)
+            cr.move_to(xp, 5)
+            cr.line_to(xp, h - 5)
             cr.stroke()
+            _round_rect(cr, xp - 4.0, 2.5, 8.0, 6.0, 3.0)
+            cr.fill()
 
         def _seek_timeline_x(self, x: float) -> None:
             n = len(self.recorder.frames)
@@ -4033,11 +4719,11 @@ def launch_gtk4(
                 return
             if self._cut_mark_start is None:
                 self._cut_mark_start = self._pb_idx
-                self.cut_btn.set_label("Splice Out")
+                self.cut_btn.set_label("Splice")
             else:
                 self.recorder.add_cut(self._cut_mark_start, self._pb_idx)
                 self._cut_mark_start = None
-                self.cut_btn.set_label("Mark Cut")
+                self.cut_btn.set_label("Cut")
             self._refresh_gif_ui()
 
         def _step_pb(self, delta: int) -> None:
@@ -4079,11 +4765,11 @@ def launch_gtk4(
             seq = self.recorder.frame_durations_ms(speed=self._export_speed, max_idle_ms=600 if self._cap_idle else None)
             tot_ms = sum(d for _, d in seq)
             if n == 0:
-                self.gif_summary_lbl.set_text("Press Record GIF to capture radio interactions.")
+                self.gif_summary_lbl.set_text("No frames recorded")
                 self.export_gif_btn.set_sensitive(False)
             else:
-                cuts_s = f" · {len(self.recorder.cuts)} cut(s)" if self.recorder.cuts else ""
-                self.gif_summary_lbl.set_text(f"Frame {self._pb_idx + 1}/{n} · Kept {len(seq)}f ({tot_ms / 1000.0:.2f} s){cuts_s}")
+                cuts_s = f" · {len(self.recorder.cuts)} cut" if self.recorder.cuts else ""
+                self.gif_summary_lbl.set_text(f"{self._pb_idx + 1}/{n}f · {tot_ms / 1000.0:.2f}s{cuts_s}")
                 self.export_gif_btn.set_sensitive(len(seq) > 0)
             self.timeline_area.queue_draw()
             self._ensure_anim_loop()
@@ -4093,7 +4779,7 @@ def launch_gtk4(
             self.recorder.frames.clear()
             self.recorder.cuts.clear()
             self._cut_mark_start = None
-            self.cut_btn.set_label("Mark Cut")
+            self.cut_btn.set_label("Cut")
             self._pb_idx = 0
             self._refresh_gif_ui()
 
@@ -4137,8 +4823,6 @@ def launch_gtk4(
                 return
             self._connecting = True
             self.hdr_dev_lbl.set_text("Connecting…")
-            if self.win_title is not None:
-                self.win_title.set_subtitle(f"Connecting to {port}…")
 
             def _worker() -> None:
                 try:
@@ -4152,8 +4836,6 @@ def launch_gtk4(
         def _on_connect_failed(self, port: str, port_info: DetectedPort | None, err: str, silent_retry: bool) -> bool:
             self._connecting = False
             self.hdr_dev_lbl.set_text("Connect")
-            if self.win_title is not None:
-                self.win_title.set_subtitle("Not connected")
             if silent_retry and self.auto_connect_usb and not self.link.connected:
                 # One quiet retry in case radio is still finishing boot after USB hotplug
                 if any(p.device == port for p in self.port_monitor.ports):
@@ -4184,9 +4866,6 @@ def launch_gtk4(
             self.conn_card_title.set_text(self.link.volume_name)
             self.conn_card_sub.set_text(f"Port: {self.link.port}")
             self.win.set_title(f"Kern Dock — {self.link.volume_name}")
-            if self.win_title is not None:
-                self.win_title.set_title("Kern Dock")
-                self.win_title.set_subtitle("Bootloader ready" if is_bl else "Connected")
 
             if self.dfu_banner is not None:
                 if is_bl:
@@ -4200,8 +4879,10 @@ def launch_gtk4(
                 self.active_model = self.link.detected_model
                 if not self.user_picked_palette:
                     self.lcd_st.palette = "UV-K5" if self.active_model == "k5" else "UV-K1"
-                    self.pal_dd.set_selected(list(LCD_PALETTES.keys()).index(self.lcd_st.palette))
                 self._sync_window_size()
+
+            if self.start_headless and self.link.link_mode == "kern_os" and not self.link.headless:
+                self.link.set_headless(True)
 
             self._rebuild_connection_list()
             if is_bl:
@@ -4229,6 +4910,7 @@ def launch_gtk4(
                 self.sw_allow_tx.set_active(False)
             self.hdr_batt_icon.set_visible(False)
             self.hdr_dfu_dot.set_visible(False)
+            self.hdr_headless_dot.set_visible(False)
             self.hdr_dev_lbl.set_text("Connect")
             self.conn_card.set_visible(False)
             if self.dfu_banner is not None:
@@ -4236,9 +4918,6 @@ def launch_gtk4(
             self.mount_btn.set_active(False)
             self.open_fs_btn.set_visible(False)
             self.win.set_title("Kern Dock")
-            if self.win_title is not None:
-                self.win_title.set_title("Kern Dock")
-                self.win_title.set_subtitle("Not connected")
             self._rebuild_connection_list()
             self._cached_dir_entries = []
             self._render_filtered_files()
@@ -4250,14 +4929,22 @@ def launch_gtk4(
             if not self.link.connected:
                 self.batt_lbl.set_text("Battery —")
                 self.batt_bar.set_value(0.0)
+                self.hdr_headless_dot.set_visible(False)
+                if hasattr(self, "con_status_pill"):
+                    self.con_status_pill.set_text("Offline")
+                    self.con_status_pill.remove_css_class("live")
+                    self.con_status_pill.remove_css_class("headless")
                 return False
 
             if self.link.link_mode != "kern_os":
                 ver = self.link.bootloader_info.get("version", "Stock BL")
                 self.conn_card_sub.set_text(f"{self.link.port} · Bootloader {ver}")
                 self.conn_card_id.set_text("LCD off · Flashlight indicates bootloader activity")
-                if self.win_title is not None:
-                    self.win_title.set_subtitle(f"Bootloader {ver} · {self.link.port}")
+                self.hdr_headless_dot.set_visible(False)
+                if hasattr(self, "con_status_pill"):
+                    self.con_status_pill.set_text(f"Bootloader {ver}")
+                    self.con_status_pill.remove_css_class("live")
+                    self.con_status_pill.remove_css_class("headless")
                 return False
 
             t = self.link.last_telemetry
@@ -4269,15 +4956,27 @@ def launch_gtk4(
                 self.hdr_batt_icon.set_tooltip_text(f"Battery: {pct}% ({mv / 1000.0:.2f} V)")
 
             fps_s = "Demo" if self.link.demo_mode else f"{self.link.fps:.0f} FPS"
+            hl_s = " · Headless" if self.link.headless else ""
             err_s = f" · {self.link.error_count} err" if self.link.error_count else ""
-            self.conn_card_sub.set_text(f"{self.link.port} · {fps_s} · {self.link.rtt_ms:.1f} ms{err_s}")
+            self.conn_card_sub.set_text(f"{self.link.port} · {fps_s} · {self.link.rtt_ms:.1f} ms{hl_s}{err_s}")
             self.conn_card_id.set_text(f"{t.get('serial_str', '—')}  ·  {t.get('mac_addr', '—')}")
-            if self.win_title is not None:
-                self.win_title.set_subtitle(f"{fps_s} · {self.link.rtt_ms:.1f} ms")
+            self.hdr_headless_dot.set_visible(self.link.headless)
+
+            if hasattr(self, "con_status_pill"):
+                if self.link.headless:
+                    self.con_status_pill.set_text(f"Headless · {fps_s}")
+                    self.con_status_pill.remove_css_class("live")
+                    self.con_status_pill.add_css_class("headless")
+                else:
+                    self.con_status_pill.set_text(f"Connected · {fps_s} · {self.link.rtt_ms:.1f} ms")
+                    self.con_status_pill.remove_css_class("headless")
+                    self.con_status_pill.add_css_class("live")
 
             self._updating_switches = True
             self.btn_torch.set_active(self.link.torch_on)
             self.btn_lock.set_active(self.link.keypad_locked)
+            if hasattr(self, "sw_headless"):
+                self.sw_headless.set_active(self.link.headless)
             self._updating_switches = False
             return False
 
@@ -4285,7 +4984,12 @@ def launch_gtk4(
             if not self.link.connected or self.link.fs_backend is None:
                 return
             self.current_dir = path
-            self.path_lbl.set_text(path)
+            self._rebuild_breadcrumbs()
+            self._updating_switches = True
+            top_part = "/" if path == "/" else "/" + path.strip("/").split("/")[0]
+            if top_part in self._part_btns:
+                self._part_btns[top_part].set_active(True)
+            self._updating_switches = False
             be = self.link.fs_backend
 
             def _w() -> None:
@@ -4311,13 +5015,30 @@ def launch_gtk4(
                 c = n
             q = self.file_search.get_text().strip().lower() if hasattr(self, "file_search") else ""
             shown = [e for e in self._cached_dir_entries if (not q or q in e["name"].lower())]
+            shown.sort(key=lambda e: (not bool(e["is_dir"]), e["name"].lower()))
+            total_bytes = sum(int(e["size"]) for e in shown if not e["is_dir"])
+            if hasattr(self, "dir_meta_lbl"):
+                if not self.link.connected:
+                    self.dir_meta_lbl.set_text("")
+                else:
+                    n_it = len(shown)
+                    self.dir_meta_lbl.set_text(f"{n_it} {'item' if n_it == 1 else 'items'} · {_fmt_size(total_bytes)}")
+
             if not shown:
-                if has_adw:
-                    msg = "Connect a Kern OS radio to browse files" if not self.link.connected else ("No matching files" if q else "Empty directory")
-                    st = Adw.StatusPage(icon_name="folder-symbolic", title=msg)
-                    st.add_css_class("compact")
-                    self.file_list.append(st)
+                if has_adw and hasattr(self, "files_empty"):
+                    if not self.link.connected:
+                        self.files_empty.set_title("No Radio Connected")
+                        self.files_empty.set_description("Connect a Kern OS radio to browse /user, /pref, /apps, and /sys.")
+                    elif q:
+                        self.files_empty.set_title("No Matching Files")
+                        self.files_empty.set_description(f"Nothing in {self.current_dir} matches \"{q}\".")
+                    else:
+                        self.files_empty.set_title("Empty Folder")
+                        self.files_empty.set_description(f"No files stored in {self.current_dir}.")
+                self.files_stack.set_visible_child_name("empty")
                 return
+
+            self.files_stack.set_visible_child_name("list")
             dir_path = self.current_dir
             for e in shown:
                 name, is_dir, size = e["name"], bool(e["is_dir"]), int(e["size"])
@@ -4326,10 +5047,13 @@ def launch_gtk4(
                 if has_adw:
                     row = Adw.ActionRow(
                         title=GLib.markup_escape_text(name),
-                        subtitle="Directory" if is_dir else f"{size:,} bytes" + (" · Protected" if protected else ""),
+                        subtitle="Folder" if is_dir else _fmt_size(size),
                     )
-                    icon = "folder-symbolic" if is_dir else ("application-x-executable-symbolic" if name.endswith(kernfs_mount.PKG_EXTS) else "text-x-generic-symbolic")
-                    row.add_prefix(Gtk.Image.new_from_icon_name(icon))
+                    row.add_prefix(Gtk.Image.new_from_icon_name(_file_icon_name(name, full, is_dir)))
+                    if protected and not is_dir:
+                        pb = Gtk.Label(label="Protected", valign=Gtk.Align.CENTER)
+                        pb.add_css_class("protected-badge")
+                        row.add_suffix(pb)
                     if is_dir:
                         row.set_activatable(True)
                         row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
@@ -4337,11 +5061,13 @@ def launch_gtk4(
                     else:
                         dl = Gtk.Button.new_from_icon_name("document-save-symbolic")
                         dl.set_valign(Gtk.Align.CENTER)
+                        dl.set_tooltip_text(f"Download {name}")
                         dl.add_css_class("flat")
                         dl.connect("clicked", lambda _b, p=full, n=name: self._on_download_file(p, n))
                         row.add_suffix(dl)
                         rm = Gtk.Button.new_from_icon_name("user-trash-symbolic")
                         rm.set_valign(Gtk.Align.CENTER)
+                        rm.set_tooltip_text("Protected system file" if protected else f"Delete {name}")
                         rm.add_css_class("flat")
                         rm.set_sensitive(not protected)
                         rm.connect("clicked", lambda _b, p=full: self._on_delete_file(p))
@@ -4441,6 +5167,20 @@ def launch_gtk4(
             if self.link.dav_server is not None:
                 kernfs_mount.open_in_file_manager(self.link.dav_open_target or f"http://127.0.0.1:{self.link.dav_port}/")
 
+        def _on_copy_screenshot(self, _btn: Any) -> None:
+            try:
+                fb, pr, led, torch = self._current_display_state()
+                if self._export_mode == "body":
+                    w, h, rgba = render_handset_to_rgba(self.active_model, fb, self.lcd_st, pressed_keys=pr, led_state=led, torch_on=torch, scale=2.0)
+                else:
+                    w, h, rgba = render_lcd_to_rgba(fb, self.lcd_st, width=540, height=374)
+                png = encode_png_rgba(w, h, rgba)
+                provider = Gdk.ContentProvider.new_for_bytes("image/png", GLib.Bytes.new(png))
+                Gdk.Display.get_default().get_clipboard().set_content(provider)
+                self._notify("Copied PNG snapshot to clipboard")
+            except Exception as e:
+                self._notify(f"Clipboard copy failed: {e}")
+
         def _on_save_screenshot(self, _btn: Any) -> None:
             dlg = Gtk.FileDialog(title="Save Snapshot (PNG)")
             dlg.set_initial_name(f"kern_{self.active_model}_{self._export_mode}_{time.strftime('%Y%m%d_%H%M%S')}.png")
@@ -4489,23 +5229,68 @@ def launch_gtk4(
             dlg.open(self.win, None, _done)
 
         def _append_console_line(self, line: str) -> bool:
-            self.console_buf.insert(self.console_buf.get_end_iter(), line + "\n")
+            end = self.console_buf.get_end_iter()
+            s = line.strip()
+            tag = None
+            if s.startswith("❯ ") or s.startswith("> "):
+                tag = "cmd"
+            elif s.startswith("["):
+                tag = "meta"
+            elif any(tok in s for tok in ("PONG", "Connected", "Mounted", "ON (", "Tuned", "Swapped")):
+                tag = "ok"
+            elif any(tok in s.lower() for tok in ("error", "failed", "unknown", "invalid", "unavailable")):
+                tag = "err"
+            if tag:
+                self.console_buf.insert_with_tags_by_name(end, line + "\n", tag)
+            else:
+                self.console_buf.insert(end, line + "\n")
             self.console_view.scroll_to_iter(self.console_buf.get_end_iter(), 0.0, False, 0.0, 1.0)
             return False
+
+        def _on_copy_console(self, _btn: Any) -> None:
+            start, end = self.console_buf.get_bounds()
+            txt = self.console_buf.get_text(start, end, False)
+            if txt:
+                Gdk.Display.get_default().get_clipboard().set(txt)
+                self._notify("Copied console log")
+
+        def _on_console_key_pressed(self, _c: Any, keyval: int, _kc: int, _state: Any) -> bool:
+            if not self._cmd_history:
+                return False
+            if keyval == Gdk.KEY_Up:
+                self._cmd_hist_pos = max(0, self._cmd_hist_pos - 1)
+                self.cmd_entry.set_text(self._cmd_history[self._cmd_hist_pos])
+                self.cmd_entry.set_position(-1)
+                return True
+            if keyval == Gdk.KEY_Down:
+                self._cmd_hist_pos = min(len(self._cmd_history), self._cmd_hist_pos + 1)
+                self.cmd_entry.set_text(self._cmd_history[self._cmd_hist_pos] if self._cmd_hist_pos < len(self._cmd_history) else "")
+                self.cmd_entry.set_position(-1)
+                return True
+            return False
+
+        def _run_console_command(self, cmd: str) -> None:
+            cmd = cmd.strip()
+            if not cmd:
+                return
+            if cmd.lower() == "clear":
+                self.console_buf.set_text("")
+                return
+            if not self._cmd_history or self._cmd_history[-1] != cmd:
+                self._cmd_history.append(cmd)
+            self._cmd_hist_pos = len(self._cmd_history)
+            self._append_console_line(f"❯ {cmd}")
+            threading.Thread(
+                target=lambda: GLib.idle_add(self._append_console_line, self.link.run_wire_command(cmd)),
+                daemon=True,
+            ).start()
 
         def _on_console_submit(self, _w: Any) -> None:
             cmd = self.cmd_entry.get_text().strip()
             if not cmd:
                 return
             self.cmd_entry.set_text("")
-            if cmd.lower() == "clear":
-                self.console_buf.set_text("")
-                return
-            self._append_console_line(f"> {cmd}")
-            threading.Thread(
-                target=lambda: GLib.idle_add(self._append_console_line, self.link.run_wire_command(cmd)),
-                daemon=True,
-            ).start()
+            self._run_console_command(cmd)
 
         def _on_close_request(self, _win: Any) -> bool:
             self._stop_playback()
@@ -4632,6 +5417,7 @@ def main() -> int:
     ap.add_argument("--model", choices=["k1", "k5"], help="Override auto-detected radio chassis (k1 or k5)")
     ap.add_argument("--palette", choices=list(LCD_PALETTES.keys()), help="Override LCD color palette")
     ap.add_argument("--demo", action="store_true", help="Launch immediately in offline demo mode")
+    ap.add_argument("--headless", action="store_true", help="Enable battery-saving headless mode on radio upon connect (LCD & backlight off, full live Dock streaming)")
     ap.add_argument("--selftest", action="store_true", help="Run headless selftest & frame-time benchmark")
     args = ap.parse_args()
 
@@ -4647,6 +5433,7 @@ def main() -> int:
             baud=args.baud,
             model_override=args.model,
             palette_override=args.palette,
+            start_headless=args.headless,
         )
     except ImportError as e:
         kernfs_mount.log_err(f"GTK4 / PyGObject unavailable ({e}). Install python3-gobject + gtk4 + libadwaita.")

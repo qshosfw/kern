@@ -93,6 +93,7 @@ FACET_SYS_CALIBRATION = 0x0003
 
 ACTION_SYS_REBOOT = 0x0001
 ACTION_SYS_FLASHLIGHT = 0x0002
+ACTION_SYS_HEADLESS = 0x0004
 
 # DOMAIN_RADIO (0x01) Instances, Facets & Actions
 RADIO_INSTANCE_ACTIVE = 0x00
@@ -900,7 +901,7 @@ class RigWireClient:
             telemetry["mac_addr"] = "unknown"
             telemetry["mcu_uid"] = "Protected (Auth Required)"
 
-        # 2. Metrics Facet (14 bytes)
+        # 2. Metrics Facet (14 bytes base; 17 bytes with live BK4829 GPIO status LED)
         try:
             met = self.handle_get(DOMAIN_SYSTEM, 0, FACET_SYS_METRICS)
             if len(met) >= 14:
@@ -911,6 +912,14 @@ class RigWireClient:
                 telemetry["active_app"] = met[11]
                 telemetry["keypad_locked"] = bool(met[12])
                 telemetry["flashlight"] = bool(met[13])
+                if len(met) >= 15:
+                    led_bits = met[14] & 0x03
+                    telemetry["status_led_raw"] = led_bits
+                    telemetry["status_led"] = ("off", "red", "green", "orange")[led_bits]
+                if len(met) >= 17:
+                    telemetry["bk4829_gpio"] = struct.unpack("<H", met[15:17])[0]
+                if len(met) >= 18:
+                    telemetry["headless"] = bool(met[17])
             else:
                 telemetry["uptime_ms"] = 0
                 telemetry["sysclk_hz"] = 0
@@ -1055,6 +1064,11 @@ class RigWireClient:
     def set_flashlight(self, state: int):
         """0=off, 1=on, 2=toggle."""
         self.handle_invoke(DOMAIN_SYSTEM, 0, FACET_SYS_METRICS, ACTION_SYS_FLASHLIGHT, bytes([state]))
+
+    def set_headless(self, state: int) -> bool:
+        """0=off (wake LCD/backlight), 1=on (LCD sleep + backlight off, zero overhead), 2=toggle."""
+        res = self.handle_invoke(DOMAIN_SYSTEM, 0, FACET_SYS_METRICS, ACTION_SYS_HEADLESS, bytes([state]))
+        return bool(res[0]) if res else (state == 1)
 
     def set_keypad_lock(self, locked: bool):
         self.handle_set(DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, FACET_INPUT_LOCK, bytes([1 if locked else 0]))
@@ -1723,6 +1737,9 @@ def main():
     fl_p = subparsers.add_parser("flashlight", help="Control top LED flashlight")
     fl_p.add_argument("state", nargs="?", default="toggle", choices=["on", "off", "toggle"], help="State")
 
+    hl_p = subparsers.add_parser("headless", help="Zero-overhead headless mode (physically powers off LCD & backlight)")
+    hl_p.add_argument("state", nargs="?", default="toggle", choices=["on", "off", "toggle"], help="State")
+
     lk_p = subparsers.add_parser("lock", help="Control keypad lock state")
     lk_p.add_argument("state", nargs="?", default="toggle", choices=["on", "off", "toggle"], help="State")
 
@@ -1953,6 +1970,11 @@ def main():
             else:
                 client.set_flashlight(2)
                 print("  Flashlight toggled.")
+
+        elif args.command == "headless":
+            st_val = 1 if args.state == "on" else (0 if args.state == "off" else 2)
+            active = client.set_headless(st_val)
+            print(f"  Headless Mode: {'ON (LCD & backlight off)' if active else 'OFF (LCD active)'}")
 
         elif args.command == "lock":
             if args.state == "on":
