@@ -349,6 +349,15 @@ def main():
         print(f"\n {RED}{INVERT} CRITICAL {RESET} Flash budget exceeded by {total_flash - flash_budget:,} bytes!")
         sys.exit(1)
 
+    flash_ceiling = cfg.get("project", {}).get("flash_ceiling") if cfg else None
+    if flash_ceiling is not None and not args.target:
+        delta = total_flash - flash_ceiling
+        if delta > 0:
+            print(f"\n {RED}{INVERT} CRITICAL {RESET} Flash grew {delta:,} bytes past the recorded ceiling ({flash_ceiling:,} B).")
+            sys.exit(1)
+        if delta < 0:
+            print(f"\n  Flash is {-delta:,} bytes under the ceiling; lower flash_ceiling in kern.toml to {total_flash}.")
+
     if total_ram > ram_budget:
         print(f"\n {RED}{INVERT} CRITICAL {RESET} SRAM budget exceeded by {total_ram - ram_budget:,} bytes!")
         sys.exit(1)
