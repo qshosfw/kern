@@ -467,7 +467,8 @@ impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {
             .with(::abi::Cap::HardwareCrc)
             .with(::abi::Cap::RealTimeClock)
             .with(::abi::Cap::PowerManage)
-            .with(::abi::Cap::FactoryCalib);
+            .with(::abi::Cap::FactoryCalib)
+            .with(::abi::Cap::Preferences);
 
         #[allow(unused_mut)]
         let mut c = BASE_CAPS;
