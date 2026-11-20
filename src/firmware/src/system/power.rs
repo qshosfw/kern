@@ -69,9 +69,6 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         .play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
     py32_hal::delay::delay_ms(100);
 
-    // Clear any active hold UI before shutting down display
-    hw.orchestrator.reset_hold_tracking();
-
     // 2. Shut down power-hungry subsystems and enter chip standby states
     hw.backlight.turn_off();
     hw.lcd.enter_sleep();

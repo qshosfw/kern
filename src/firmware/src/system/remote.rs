@@ -71,16 +71,20 @@ pub(super) fn is_remote_control_active(hw: &SystemHardware, now: u32) -> bool {
 /// Failsafe: unkey a wire-keyed transmitter whose controlling link went silent.
 #[inline(never)]
 pub(super) fn enforce_tx_failsafe(hw: &mut SystemHardware, now: u32) {
+    if !WIRE_TX_ACTIVE.load(Ordering::Relaxed) {
+        return;
+    }
     let coord = &mut crate::radio_state().coord;
-    if tx_link_lost(
-        WIRE_TX_ACTIVE.load(Ordering::Relaxed),
+    let lost = tx_link_lost(
+        true,
         coord.is_transmitting,
         LAST_WIRE_ACTIVITY_MS.load(Ordering::Relaxed),
         now,
-    ) {
+    );
+    if lost {
         coord.stop_tx(&mut hw.radio);
-        set_wire_tx(false);
-    } else if !coord.is_transmitting {
+    }
+    if lost || !coord.is_transmitting {
         set_wire_tx(false);
     }
 }

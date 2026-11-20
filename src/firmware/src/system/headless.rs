@@ -38,12 +38,15 @@ fn latch(enable: bool) {
     backup::update(if enable { bit } else { 0 }, bit);
 }
 
+/// Single transition point: latch the mode and drive the panel to match it. Leaving
+/// headless repaints and lights the panel only when `wake_panel` (a live transition).
 #[inline(never)]
-fn apply_panel(hw: &mut SystemHardware, enable: bool) {
+fn engage(hw: &mut SystemHardware, enable: bool, wake_panel: bool) {
+    latch(enable);
     hw.backlight.hold_dark(enable);
     if enable {
         hw.lcd.enter_sleep();
-    } else {
+    } else if wake_panel {
         hw.lcd.exit_sleep();
         hw.render_frame();
         hw.backlight.wake();
@@ -54,16 +57,13 @@ fn apply_panel(hw: &mut SystemHardware, enable: bool) {
 #[inline(never)]
 pub fn set_headless(hw: &mut SystemHardware, enable: bool) {
     let was = is_headless();
-    latch(enable);
     let cfg = crate::master_config();
     if cfg.keys.headless != enable as u8 {
         cfg.keys.headless = enable as u8;
         cfg.mark_keys_dirty();
         let _ = cfg.flush_dirty(hw.filesystem);
     }
-    if enable || was {
-        apply_panel(hw, enable);
-    }
+    engage(hw, enable, was);
     hw.key_scanner.clear();
 }
 
@@ -80,12 +80,7 @@ pub fn restore_from_backup(hw: &mut SystemHardware) {
 /// After `/pref` is loaded: `keys.cfg` is the durable source of truth.
 #[inline(never)]
 pub fn restore_from_config(hw: &mut SystemHardware) {
-    let enable = crate::master_config_ref().keys.headless != 0;
-    latch(enable);
-    hw.backlight.hold_dark(enable);
-    if enable {
-        hw.lcd.enter_sleep();
-    }
+    engage(hw, crate::master_config_ref().keys.headless != 0, false);
 }
 
 #[cfg(test)]
