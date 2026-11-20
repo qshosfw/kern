@@ -49,7 +49,6 @@ TARGET_PROFILES = {
         "display": "UV-K10Pro",
         "flash_budget": 120 * 1024,
         "features": ["target_k10pro"],
-        "strip_features": {"flashlight"},
     },
 }
 
@@ -219,13 +218,6 @@ def main():
     if args.features:
         extra_feats.extend(args.features.split(","))
     categories, active_features = resolve_features(cfg, preset=args.preset, extra_features=extra_feats or None)
-    strip_feats = profile.get("strip_features", set())
-    if strip_feats:
-        active_features = [f for f in active_features if f not in strip_feats]
-        for cat in categories.values():
-            for sf in strip_feats:
-                if sf in cat:
-                    cat[sf] = False
 
     display_config_summary(cfg, categories, active_features)
 

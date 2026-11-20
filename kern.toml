@@ -28,7 +28,6 @@ nav_layout = "k1"       # Options: "k1", "k5"
 [features.hardware]
 radio = true            # 📡 BK4819 RF transceiver driver and radio services
 fm_radio = false        # 📻 BK1080 broadcast FM receiver (64-108 MHz)
-audio = true            # 🔊 Hardware audio amplifier and melody engine
 uart = true             # 🔌 USART serial debug console and telemetry
 usb = true              # 💻 Native USB 2.0 Full-Speed core controller
 usb_cdc = true          # 🔌 USB CDC ACM Virtual COM Port (Serial console)
@@ -37,12 +36,6 @@ wire = true             # ⚡ RigWire binary serial protocol engine
 # ── USB Mass Storage (MSC) & Virtual FAT: DISABLED BY DEFAULT ────────────────
 usb_msc = false         # 💾 USB Mass Storage Class (Disabled - prefer CDC protocol)
 usb_msc_fat = false     # 📁 Virtual FAT16 filesystem (Disabled - prefer CDC protocol)
-dma = true              # ⚡ Direct Memory Access controller support
-hw_crc = true           # 🛡️ Hardware CRC32 calculation unit (zero-CPU)
-rtc = true              # ⏰ Hardware Real-Time Clock, calendar & backup registers
-internal_flash = true   # 💾 Internal MCU flash page erase & programming
-dynamic_spi = true      # 🚀 Dynamic SPI speed switching (Turbo 12 MHz / Quiet 3 MHz on squelch)
-flashlight = true       # 🔦 Hardware flashlight LED control
 
 [features.storage_security]
 filesystem = true       # 📂 KernFS flash filesystem

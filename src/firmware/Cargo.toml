@@ -22,21 +22,14 @@ calib = { path = "../lib/calib" }
 [features]
 default = [
     "radio",
-    "audio",
     "filesystem",
     "uart",
     "usb",
     "usb_cdc",
     "wire",
-    "dma",
-    "hw_crc",
-    "rtc",
-    "internal_flash",
     "krx_native",
     "krx_paged",
-    "flashlight",
     "animations",
-    "dynamic_spi",
     "overclock_72mhz",
     "text_input",
 ]
@@ -63,9 +56,8 @@ krx_paged = ["krx_native"]
 radio = ["drivers/radio"]
 rf_fsk = []
 fm_radio = ["drivers/fm_radio"]
-audio = ["drivers/audio", "kernel/audio"]
-uart = ["drivers/uart", "kernel/uart"]
-usb = ["drivers/usb"]
+uart = ["drivers/uart"]
+usb = ["drivers/usb", "kernel/usb"]
 usb_cdc = ["usb", "drivers/usb_cdc"]
 wire = []
 # USB MSC & Virtual FAT are preserved in framework for modularity but left disabled:
@@ -73,27 +65,20 @@ wire = []
 # and causes OS metadata pollution. Filesystem is accessed directly via CDC serial protocol instead.
 usb_msc = ["usb", "drivers/usb_msc"]
 usb_msc_fat = ["usb_msc", "drivers/usb_msc_fat"]
-dma = []
-hw_crc = []
-rtc = []
-internal_flash = []
 
 # 💾 Storage & Cryptographic Security
-filesystem = ["drivers/filesystem", "kernel/filesystem"]
+filesystem = ["drivers/filesystem"]
 secure_fs = ["drivers/secure_fs", "kernel/secure_fs"]
 passcode = ["secure_fs", "text_input", "gfx/passcode"]
 text_input = ["gfx/inverted_status"]
-settings_edit = ["text_input"]
 app_hibernation = ["filesystem"]
 
 # 🎨 Display, Sound & Asset Bundles
 boot_assets = []
 boot_jingle = []
 extra_rogers = []
-flashlight = []
 animations = []
 grayscale = ["drivers/grayscale", "gfx/grayscale"]
-dynamic_spi = []
 
 # 📻 Hardware Target Board Profiles (base default supports UV-K1 and UV-K5v3 identically)
 target_k10pro = [
@@ -108,4 +93,4 @@ swd_debug = ["bsp/swd_debug", "drivers/swd_debug"]
 # 📦 Feature Bundles & Group Configurations
 full = ["default", "passcode"]
 security = ["filesystem", "secure_fs", "passcode"]
-lean = ["radio", "audio"]
+lean = ["radio"]

@@ -1,6 +1,5 @@
 #![no_std]
 
-#[cfg(feature = "audio")]
 pub mod audio;
 pub mod backlight;
 pub mod battery;
