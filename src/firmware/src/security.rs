@@ -1,8 +1,6 @@
 //! KERN Firmware Security Subsystem
 
 pub mod attributes;
-#[cfg(feature = "passcode")]
-pub mod auth;
 #[cfg(feature = "secure_fs")]
 pub mod constants;
 pub mod kdf;
@@ -13,8 +11,6 @@ pub mod passcode;
 pub mod port_lock;
 
 pub use attributes::FileSecurityLevel;
-#[cfg(feature = "passcode")]
-pub use auth::{AuthToken, TrustScope, authenticate, check_authorization};
 pub use kdf::ProgressHook;
 #[cfg(feature = "secure_fs")]
 pub use keychain::{
@@ -245,57 +241,6 @@ pub mod passcode {
 
 #[cfg(not(feature = "passcode"))]
 pub use passcode::PasscodeState;
-
-#[cfg(not(feature = "passcode"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrustScope {
-    SystemConfig,
-    SecuritySettings,
-    FactoryReset,
-    KeyManagement,
-    Calibration,
-    FirmwareUpdate,
-}
-
-#[cfg(not(feature = "passcode"))]
-#[derive(Debug)]
-pub struct AuthToken {
-    scope: TrustScope,
-}
-
-#[cfg(not(feature = "passcode"))]
-impl AuthToken {
-    #[inline(always)]
-    pub(crate) fn new(scope: TrustScope) -> Self {
-        Self { scope }
-    }
-
-    #[inline(always)]
-    pub fn scope(&self) -> TrustScope {
-        self.scope
-    }
-}
-
-#[cfg(not(feature = "passcode"))]
-#[inline(always)]
-pub fn check_authorization(
-    _state: &PasscodeState,
-    _filesystem: &mut crate::services::SystemStorage,
-    scope: TrustScope,
-) -> Result<AuthToken, passcode::PasscodeError> {
-    Ok(AuthToken::new(scope))
-}
-
-#[cfg(not(feature = "passcode"))]
-#[inline(always)]
-pub fn authenticate(
-    _state: &mut PasscodeState,
-    _filesystem: &mut crate::services::SystemStorage,
-    _passcode: &[u8],
-    scope: TrustScope,
-) -> Result<AuthToken, passcode::PasscodeError> {
-    Ok(AuthToken::new(scope))
-}
 
 #[cfg(not(feature = "secure_fs"))]
 #[inline(always)]

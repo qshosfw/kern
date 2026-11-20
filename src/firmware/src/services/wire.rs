@@ -617,7 +617,8 @@ fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireSta
                         && u16::from_le_bytes([prev[p_off], prev[p_off + 1]]) == crc;
                     if !same {
                         dirty_mask |= 1 << s;
-                        let rle_len = crate::data::RleCompressor::encode(strip, &mut rle_buf);
+                        let rle_len =
+                            kernel::runtime::packbits_compress(strip, &mut rle_buf).unwrap_or(0);
                         let (src, slen) = if rle_len > 0 && rle_len < 64 {
                             (&rle_buf[..rle_len], rle_len)
                         } else {
@@ -1038,23 +1039,4 @@ fn handle_events_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStat
         _ => return None,
     };
     Some(res.err().unwrap_or(WireStatus::Ok))
-}
-
-/// Asynchronously emit an event frame over RigWire if the host holds a valid subscription with credits.
-pub fn emit_event(hw: &mut SystemHardware, event_id: u16, data: &[u8]) {
-    unsafe {
-        let sub = &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION);
-        let bit = 1u32 << (event_id & 0x1F);
-        if (sub.active_mask & bit) != 0 && sub.credits > 0 {
-            sub.credits -= 1;
-            let mut payload_uninit = core::mem::MaybeUninit::<[u8; 32]>::uninit();
-            let payload = &mut *payload_uninit.as_mut_ptr();
-            payload[..2].copy_from_slice(&event_id.to_le_bytes());
-            let d_len = data.len().min(30);
-            payload[2..2 + d_len].copy_from_slice(&data[..d_len]);
-            let _ = hw
-                .wire
-                .send_event(SERVICE_EVENTS, OP_EVENTS_EMIT, 0, &payload[..2 + d_len]);
-        }
-    }
 }

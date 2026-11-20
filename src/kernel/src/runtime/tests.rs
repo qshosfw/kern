@@ -95,6 +95,25 @@ fn test_packbits_repeated_runs() {
 }
 
 #[test]
+fn test_packbits_pairs_and_long_literals_roundtrip() {
+    let mut original = [0u8; 300];
+    for (i, b) in original.iter_mut().enumerate() {
+        *b = (i * 7) as u8;
+    }
+    original[10] = 0x55;
+    original[11] = 0x55;
+    original[298] = 0x42;
+    original[299] = 0x42;
+    let mut compressed = [0u8; 320];
+    let comp_len = packbits_compress(&original, &mut compressed).expect("Compression failed");
+    let mut restored = [0u8; 300];
+    let decomp_len =
+        packbits_decompress(&compressed[..comp_len], &mut restored).expect("Decompression failed");
+    assert_eq!(&restored[..decomp_len], &original[..]);
+    assert!(packbits_compress(&original, &mut compressed[..8]).is_err());
+}
+
+#[test]
 fn test_krx_launch_error_diagnostics() {
     use ::abi::Cap;
 

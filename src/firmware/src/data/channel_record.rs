@@ -87,38 +87,6 @@ impl ChannelExtension {
     }
 }
 
-/// Declarative extension payload for Channel Scanner Tuning (`b"SCAN"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct ScanChannelExt {
-    pub dwell_ms: u16,
-    pub resume_delay_ms: u16,
-    pub scan_group_mask: u16,
-    pub priority_weight: u8,
-    pub reserved: [u8; 5],
-}
-
-const _: () = {
-    assert!(core::mem::size_of::<ScanChannelExt>() == 12);
-    assert!(core::mem::align_of::<ScanChannelExt>() == 2);
-};
-
-/// Declarative extension payload for Calibrated PA Power Profiling (`b"POWR"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct PowerChannelExt {
-    pub pa_bias_dac: u16,
-    pub target_power_mw: u16,
-    pub swr_limit_x10: u16,
-    pub max_temp_c: u8,
-    pub reserved: [u8; 5],
-}
-
-const _: () = {
-    assert!(core::mem::size_of::<PowerChannelExt>() == 12);
-    assert!(core::mem::align_of::<PowerChannelExt>() == 2);
-};
-
 /// 64-byte naturally-aligned, power-of-two channel record (zero unaligned accesses on Cortex-M0+).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]

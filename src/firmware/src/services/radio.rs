@@ -2,15 +2,11 @@
 
 pub mod coordinator;
 pub mod dwell;
-pub mod fastscan;
 pub mod fsk_stream;
-pub mod tone_service;
 
 pub use coordinator::*;
 pub use dwell::DwellController;
-pub use fastscan::*;
 pub use fsk_stream::*;
-pub use tone_service::*;
 
 use crate::services::melody::{BeepType, DialogSoundType, MelodyEngine, RogerType};
 

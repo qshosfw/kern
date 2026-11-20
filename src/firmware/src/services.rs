@@ -81,37 +81,6 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) }
     }
 
-    /// Check if current session is authorized for given trust scope
-    #[cfg(feature = "passcode")]
-    pub fn is_authorized(&mut self, scope: crate::security::TrustScope) -> bool {
-        crate::security::check_authorization(self.passcode, self.storage, scope).is_ok()
-    }
-
-    /// Obtain an AuthToken capability if session is authorized
-    #[cfg(feature = "passcode")]
-    pub fn require_auth(
-        &mut self,
-        scope: crate::security::TrustScope,
-    ) -> Result<crate::security::AuthToken, crate::security::passcode::PasscodeError> {
-        crate::security::check_authorization(self.passcode, self.storage, scope)
-    }
-
-    /// Execute a closure requiring privileged authorization by verifying passcode or using existing session authorization
-    #[cfg(feature = "passcode")]
-    pub fn with_auth<R, F: FnOnce(&crate::security::AuthToken) -> R>(
-        &mut self,
-        scope: crate::security::TrustScope,
-        passcode: &[u8],
-        f: F,
-    ) -> Result<R, crate::security::passcode::PasscodeError> {
-        let token = if self.is_authorized(scope) {
-            crate::security::AuthToken::new(scope)
-        } else {
-            crate::security::authenticate(self.passcode, self.storage, passcode, scope)?
-        };
-        Ok(f(&token))
-    }
-
     /// Send high-level SysEvent IPC request to the microkernel/OS dispatcher
     pub fn post_event(&mut self, event: kernel::ipc::SysEvent) -> bool {
         self.ipc.try_push(event).is_ok()

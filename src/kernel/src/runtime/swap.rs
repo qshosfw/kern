@@ -91,59 +91,46 @@ impl KrxSwapHeader {
 
 /// PackBits Run-Length Encoding (RLE) byte compression.
 ///
-/// Encodes runs of 3..128 identical bytes as `[-count + 1, byte]`.
-/// Encodes non-repetitive literal sequences as `[count - 1, bytes...]`.
+/// Encodes runs of 2..128 identical bytes as `[1 - count, byte]` and literal
+/// sequences (broken at the next run of 3) as `[count - 1, bytes...]`.
 pub fn packbits_compress(src: &[u8], dst: &mut [u8]) -> Result<usize, ()> {
-    let mut in_idx = 0;
-    let mut out_idx = 0;
+    let mut r = 0;
+    let mut w = 0;
 
-    while in_idx < src.len() {
-        // 1. Detect run of identical consecutive bytes
-        let mut run_len = 1;
-        while in_idx + run_len < src.len() && run_len < 128 && src[in_idx + run_len] == src[in_idx]
-        {
-            run_len += 1;
+    while r < src.len() {
+        let b = src[r];
+        let mut run = 1;
+        while r + run < src.len() && run < 128 && src[r + run] == b {
+            run += 1;
         }
 
-        if run_len >= 3 || (run_len == 2 && in_idx + run_len == src.len()) {
-            if out_idx + 2 > dst.len() {
+        if run >= 2 {
+            if w + 2 > dst.len() {
                 return Err(());
             }
-            dst[out_idx] = (257 - run_len) as u8;
-            dst[out_idx + 1] = src[in_idx];
-            out_idx += 2;
-            in_idx += run_len;
+            dst[w] = (257 - run) as u8;
+            dst[w + 1] = b;
+            w += 2;
+            r += run;
         } else {
-            // 2. Collect literal bytes until a 3+ identical byte run starts
-            let mut lit_len = 0;
-            while in_idx + lit_len < src.len() && lit_len < 128 {
-                let mut next_run = 1;
-                while in_idx + lit_len + next_run < src.len()
-                    && next_run < 3
-                    && src[in_idx + lit_len + next_run] == src[in_idx + lit_len]
-                {
-                    next_run += 1;
-                }
-                if next_run >= 3 {
-                    break;
-                }
-                lit_len += 1;
+            let start = r;
+            while r < src.len()
+                && r - start < 128
+                && !(r + 2 < src.len() && src[r] == src[r + 1] && src[r] == src[r + 2])
+            {
+                r += 1;
             }
-
-            if lit_len > 0 {
-                if out_idx + 1 + lit_len > dst.len() {
-                    return Err(());
-                }
-                dst[out_idx] = (lit_len - 1) as u8;
-                out_idx += 1;
-                dst[out_idx..out_idx + lit_len].copy_from_slice(&src[in_idx..in_idx + lit_len]);
-                out_idx += lit_len;
-                in_idx += lit_len;
+            let len = r - start;
+            if w + 1 + len > dst.len() {
+                return Err(());
             }
+            dst[w] = (len - 1) as u8;
+            dst[w + 1..w + 1 + len].copy_from_slice(&src[start..r]);
+            w += 1 + len;
         }
     }
 
-    Ok(out_idx)
+    Ok(w)
 }
 
 /// PackBits Run-Length Encoding (RLE) byte decompression.
