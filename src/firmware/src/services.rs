@@ -1,30 +1,22 @@
-pub mod audio;
 pub mod calibration;
 pub mod display;
-#[cfg(feature = "uart")]
-pub mod io;
 pub mod melody;
 pub mod power;
 pub mod primitives;
 pub mod radio;
 pub mod storage;
 pub mod telemetry;
-pub mod usb;
 #[cfg(feature = "wire")]
 pub mod wire;
 
 pub use crate::data::arena::staging_buf;
-pub use audio::*;
 pub use calibration::*;
 pub use display::*;
-#[cfg(feature = "uart")]
-pub use io::*;
 pub use melody::*;
 pub use power::*;
 pub use radio::*;
 pub use storage::*;
 pub use telemetry::*;
-pub use usb::*;
 #[cfg(feature = "wire")]
 pub use wire::*;
 

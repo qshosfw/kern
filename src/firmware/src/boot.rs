@@ -32,15 +32,13 @@ pub mod storage;
 
 pub use reset::clear_crash_strikes;
 
-use crate::hardware::SystemHardware;
-
-/// Independent watchdog window once recovery is behind us (ms).
-const WATCHDOG_TIMEOUT_MS: u32 = 6000;
-
 /// Stages 2–6. Returns the ADC handle owned by the steady-state system loop.
 #[cfg(not(test))]
 #[inline(never)]
-pub fn run(hw: &mut SystemHardware) -> py32_hal::adc::Adc {
+pub fn run(hw: &mut crate::hardware::SystemHardware) -> py32_hal::adc::Adc {
+    /// Independent watchdog window once recovery is behind us (ms).
+    const WATCHDOG_TIMEOUT_MS: u32 = 6000;
+
     // ── Stage 2: panel & control plane ──────────────────────────────────────────────────
     #[cfg(any(feature = "dfu", feature = "krx_native"))]
     let warm_tools = recovery::is_warm_tools_boot();

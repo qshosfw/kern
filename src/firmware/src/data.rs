@@ -1,19 +1,15 @@
 //! Structured Data, Documents, and Filesystem Formats for KERN OS Firmware.
 //!
-//! Provides zero-heap record storage formats for Channels (`/channels.ch`),
-//! Contacts (`/contacts.ct`), Codeplugs (`/codeplug.bin`), and Application Bundles (`.app`).
+//! Zero-heap fixed-stride record formats (ORDS-01): channels, contacts, bandplans,
+//! zones, scan hits, FM stations and VFO snapshots, plus the shared transient arena.
+//! KRX package structures live in `kernel::runtime`.
 
-pub mod app_bundle;
 pub mod arena;
 pub mod channel_record;
 pub mod contact_record;
 pub mod file_header;
 pub mod records;
 
-pub use app_bundle::{
-    KRX_IDENT, KrxClass, KrxExecType, KrxPreamble, KrxProfile, SectionExecution, SectionIdentity,
-    SectionType,
-};
 pub use arena::*;
 pub use channel_record::{ChannelExtension, ChannelRecord, ExtensionTag};
 pub use contact_record::{AddressScheme, ContactKind, ContactRecord, TransportClass, fnv1a_hash64};
