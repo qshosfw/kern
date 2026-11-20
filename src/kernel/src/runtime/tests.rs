@@ -117,33 +117,47 @@ fn test_packbits_pairs_and_long_literals_roundtrip() {
 fn test_krx_launch_error_diagnostics() {
     use ::abi::Cap;
 
+    // Capability denials carry the missing capability's display name.
     let err_cap = KrxLaunchError::CapabilityDenied(crate::caps::name(Cap::BroadBandRx));
-    assert_eq!(err_cap.title(), "Missing Hardware");
-    assert_eq!(err_cap.message(), "Broadband HF RX");
+    assert_eq!(err_cap, KrxLaunchError::CapabilityDenied("Broadband HF RX"));
+    assert_eq!(err_cap.describe(), "Radio lacks needed\nhardware.");
 
-    let err_ram = KrxLaunchError::InsufficientRam;
-    assert_eq!(err_ram.title(), "Out of RAM");
-    assert_eq!(err_ram.message(), "Not enough RAM");
+    assert_eq!(KrxLaunchError::FileNotFound.describe(), "App not found.");
+    assert_eq!(
+        KrxLaunchError::InsufficientRam.describe(),
+        "Not enough memory."
+    );
+    assert_eq!(
+        KrxLaunchError::UnsupportedProfile.describe(),
+        "Unsupported format."
+    );
 
-    let err_stack = KrxLaunchError::InsufficientStack;
-    assert_eq!(err_stack.title(), "Stack Overflow");
-    assert_eq!(err_stack.message(), "Stack headroom low");
-
-    let err_fnf = KrxLaunchError::FileNotFound;
-    assert_eq!(err_fnf.title(), "File Not Found");
-    assert_eq!(err_fnf.message(), "File not found");
-
-    let err_reloc = KrxLaunchError::RelocationFailed;
-    assert_eq!(err_reloc.title(), "Reloc Error");
-    assert_eq!(err_reloc.message(), "Relocation failed");
-
-    let err_api = KrxLaunchError::ImportBindingFailed;
-    assert_eq!(err_api.title(), "API Unresolved");
-    assert_eq!(err_api.message(), "API not available");
-
-    let err_corrupt = KrxLaunchError::MissingExecution;
-    assert_eq!(err_corrupt.title(), "Corrupted Binary");
-    assert_eq!(err_corrupt.message(), "Missing manifest");
+    // Every variant resolves to a non-empty, distinct sentence.
+    let all = [
+        KrxLaunchError::FileNotFound,
+        KrxLaunchError::ReadFailed,
+        KrxLaunchError::InvalidPreamble,
+        KrxLaunchError::CrcMismatch,
+        KrxLaunchError::MissingIdentity,
+        KrxLaunchError::MissingExecution,
+        KrxLaunchError::CapabilityDenied(""),
+        KrxLaunchError::InsufficientRam,
+        KrxLaunchError::InsufficientStack,
+        KrxLaunchError::RelocationFailed,
+        KrxLaunchError::ImportBindingFailed,
+        KrxLaunchError::PayloadTooLarge,
+        KrxLaunchError::ExecutionFailed,
+        KrxLaunchError::InvalidEntryPoint,
+        KrxLaunchError::TruncatedPackage,
+        KrxLaunchError::UnsupportedProfile,
+    ];
+    for (i, a) in all.iter().enumerate() {
+        assert_eq!(a.index() as usize, i);
+        assert!(!a.describe().is_empty());
+        for b in &all[i + 1..] {
+            assert_ne!(a.describe(), b.describe());
+        }
+    }
 }
 
 #[test]
@@ -627,7 +641,7 @@ fn test_native_execution_fault_matrix_test_bench() {
     let missing = app_required_caps.without(platform_caps);
     assert_eq!(missing.first_cap(), Some(Cap::BroadBandRx));
     let err = KrxLaunchError::CapabilityDenied(crate::caps::name(missing.first_cap().unwrap()));
-    assert_eq!(err.message(), "Broadband HF RX");
+    assert_eq!(err, KrxLaunchError::CapabilityDenied("Broadband HF RX"));
 
     // 6. Fault: Insufficient Stack Headroom
     let mut exec_raw = [0u8; 28];

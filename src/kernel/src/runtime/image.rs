@@ -181,23 +181,28 @@ pub enum KrxLaunchError {
     UnsupportedProfile,
 }
 
-const LAUNCH_ERR_TEXTS: &[u8] = b"\
-File Not Found\0File not found\0\
-Storage Error\0Storage read error\0\
-Bad Package\0Bad package header\0\
-CRC Error\0CRC check failed\0\
-Bad Identity\0Missing identity\0\
-Corrupted Binary\0Missing manifest\0\
-Missing Hardware\0\0\
-Out of RAM\0Not enough RAM\0\
-Stack Overflow\0Stack headroom low\0\
-Reloc Error\0Relocation failed\0\
-API Unresolved\0API not available\0\
-Package Too Large\0Package too large\0\
-Launch Failed\0Execution failed\0\
-Bad Entry Point\0Invalid entry point\0\
-Truncated File\0Truncated payload\0\
-Unsupported Profile\0Unsupported profile\0";
+// Human-language explanation for each `KrxLaunchError`, indexed by
+// `KrxLaunchError::index`. One table serves the on-device dialog and host
+// diagnostics so wording never drifts between surfaces.
+utils::static_bytes!(
+    static LAUNCH_ERR_HELP = b"\
+App not found.\0\
+Can't read app.\0\
+Not a Kern app.\0\
+App damaged.\nReinstall it.\0\
+App info missing.\nReinstall it.\0\
+App has no code.\0\
+Radio lacks needed\nhardware.\0\
+Not enough memory.\0\
+Not enough stack.\0\
+App load failed.\0\
+Needs newer firmware.\0\
+App too large.\0\
+App failed to start.\0\
+Bad app entry.\0\
+App incomplete.\nReinstall it.\0\
+Unsupported format.\0";
+);
 
 impl KrxLaunchError {
     #[inline(never)]
@@ -222,16 +227,9 @@ impl KrxLaunchError {
         }
     }
 
-    pub const fn title(&self) -> &'static str {
-        utils::format::nth_cstr(LAUNCH_ERR_TEXTS, self.index() * 2)
-    }
-
-    pub const fn message(&self) -> &'static str {
-        if let Self::CapabilityDenied(cap) = self {
-            cap
-        } else {
-            utils::format::nth_cstr(LAUNCH_ERR_TEXTS, self.index() * 2 + 1)
-        }
+    /// Plain-language explanation suitable for a dialog body.
+    pub const fn describe(&self) -> &'static str {
+        utils::format::nth_cstr(&LAUNCH_ERR_HELP, self.index())
     }
 }
 

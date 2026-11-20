@@ -212,26 +212,6 @@ pub fn try_launch_boot_module(
 pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
     let fname = crate::apps::launcher::catalog::extract_filename(path);
 
-    utils::static_bytes!(
-        static HUMAN_MSGS = b"\
-    App not found.\0\
-    Failed to read app.\0\
-    Invalid app file.\0\
-    Checksum failed.\nReinstall app.\0\
-    Missing app info.\nReinstall app.\0\
-    No runnable code.\0\
-    Permission denied.\0\
-    Not enough RAM.\0\
-    Not enough stack.\0\
-    App load failed.\0\
-    Update firmware.\0\
-    App too large.\0\
-    Start failed.\0\
-    Invalid entry point.\0\
-    Incomplete file.\nReinstall app.\0\
-    Unsupported format.\0";
-    );
-
     let msg = match err {
         #[cfg(any(test, feature = "settings_debug"))]
         KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
@@ -245,7 +225,7 @@ pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunch
             // SAFETY: all parts are valid UTF-8 (`cap` is `&str`, literals are ASCII).
             unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
         }
-        _ => utils::format::nth_cstr(&HUMAN_MSGS, err.index()),
+        _ => err.describe(),
     };
 
     ctx.show_confirm(
