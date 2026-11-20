@@ -824,15 +824,32 @@ class RigWireClient:
         return best
 
     def reboot(self):
-        """Invoke system reboot."""
+        """Reboot the radio.
+
+        Firmware only honours REBOOT inside an established session (a stray byte stream on a
+        shared line must never reset a remote node), so open one first if needed. The radio
+        may reset before its acknowledgement drains, so a missing reply is expected; an
+        explicit BAD_SESSION refusal is not and is surfaced to the caller.
+        """
         try:
             self.send_record(SERVICE_CORE, OP_CORE_REBOOT)
-        except Exception:
+        except RigWireError as e:
+            if e.status_name != "BAD_SESSION":
+                raise
+            self.resync()
+            try:
+                self.send_record(SERVICE_CORE, OP_CORE_REBOOT)
+            except TimeoutError:
+                pass
+        except TimeoutError:
             pass
         print("  Reboot command dispatched.")
 
     def panic_test(self, hardfault: bool = False):
-        """Trigger an intentional panic (3) or ARM HardFault (4) via ACTION_SYS_REBOOT."""
+        """Trigger an intentional panic (3) or ARM HardFault (4) via ACTION_SYS_REBOOT.
+
+        Only firmware built with `settings_debug` accepts these modes; release builds refuse.
+        """
         mode = 4 if hardfault else 3
         try:
             self.handle_invoke(DOMAIN_SYSTEM, 0, FACET_SYS_IDENTITY, ACTION_SYS_REBOOT, bytes([mode]))
