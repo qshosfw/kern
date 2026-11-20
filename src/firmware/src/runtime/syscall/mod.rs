@@ -105,6 +105,12 @@ pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> 
     use ::abi::domain;
     let op_byte = op as u8;
     let idx = op_byte & 0x0F;
+    // Every operation declares its capability in `abi::OP_TABLE`; an image that did
+    // not import it is refused here, before any domain dispatcher runs.
+    let granted = super::native_runner::active_native_caps().raw();
+    if ::abi::missing_caps(op_byte, granted) != Some(0) {
+        return 0;
+    }
     unsafe {
         match op_byte >> 4 {
             domain::SYS => service::dispatch_sys(idx, a0, a1, a2),
@@ -134,6 +140,22 @@ mod tests {
     use super::*;
     use ::abi::Op;
     use kernel::proc::abi::{KrxIpcSendReq, KrxSysInfo};
+
+    #[test]
+    fn operation_without_its_imported_capability_is_refused_at_dispatch() {
+        use ::abi::{Cap, CapabilitySet};
+        let slot = crate::runtime::native_runner::slot_mut();
+        slot.is_loaded = true;
+        slot.caps = CapabilitySet::empty().with(Cap::DisplayDirect);
+        let api = &NATIVE_API_TABLE;
+        let granted = unsafe { api.invoke(Op::IoTime, 0, 0, 0) };
+        // Keypad was not imported: the key state read is refused, uptime is not.
+        assert_eq!(unsafe { api.invoke(Op::IoKey, 0, 0, 0) }, 0);
+        slot.caps = CapabilitySet::ALL;
+        let _ = granted;
+        assert_eq!(unsafe { kern_call(0xFF, 0, 0, 0) }, 0);
+        crate::runtime::native_runner::init_native_slot();
+    }
 
     #[test]
     fn test_abi_cross_process_ipc_and_discovery() {

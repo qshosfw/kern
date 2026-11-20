@@ -1,4 +1,5 @@
 name = "Paged Demo"
 output = "paged.krx"
+caps = ["DISPLAY_DIRECT", "KEYPAD", "SERIAL_COMM"]
 profile = "p1"
 blocks = ["paged_app.c", "block1.c"]

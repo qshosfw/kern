@@ -219,10 +219,6 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             q as usize
         }
         op::SysReboot => {
-            if !super::super::native_runner::active_native_caps().contains(::abi::Cap::PowerManage)
-            {
-                return 1;
-            }
             let reboot_mode = match a0 as u8 {
                 1 => kernel::power::RebootMode::Bootloader,
                 2 => kernel::power::RebootMode::SafeRecovery,

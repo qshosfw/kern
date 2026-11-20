@@ -31,42 +31,42 @@
 #define OP_IPC_SEND_STR    0x24u
 
 /* Domain 0x3: FS */
-#define OP_FS_READ         0x30u
-#define OP_FS_WRITE        0x31u
-#define OP_FS_META         0x32u
-#define OP_FS_RENAME       0x33u
+#define OP_FS_READ         0x30u /* [StorageRead] */
+#define OP_FS_WRITE        0x31u /* [StorageWrite] */
+#define OP_FS_META         0x32u /* [StorageRead] */
+#define OP_FS_RENAME       0x33u /* [StorageWrite] */
 
 /* Domain 0x4: RF */
-#define OP_RF_TUNE         0x40u
-#define OP_RF_GET          0x41u
-#define OP_RF_SET          0x42u
-#define OP_RF_TONES        0x43u
-#define OP_RF_VFO          0x44u
-#define OP_RF_BULK         0x45u
+#define OP_RF_TUNE         0x40u /* [RadioRx] */
+#define OP_RF_GET          0x41u /* [RadioRx] */
+#define OP_RF_SET          0x42u /* [RadioRx] */
+#define OP_RF_TONES        0x43u /* [RadioRx] */
+#define OP_RF_VFO          0x44u /* [RadioRx] */
+#define OP_RF_BULK         0x45u /* [RadioRx] */
 
 /* Domain 0x5: AUD */
-#define OP_AUD_TONE        0x50u
-#define OP_AUD_CTL         0x51u
+#define OP_AUD_TONE        0x50u /* [AudioOutput] */
+#define OP_AUD_CTL         0x51u /* [AudioOutput] */
 
 /* Domain 0x6: GFX */
-#define OP_GFX_CLEAR       0x60u
-#define OP_GFX_DRAW        0x61u
-#define OP_GFX_TEXT        0x62u
-#define OP_GFX_COMMIT      0x63u
-#define OP_GFX_FB          0x64u
-#define OP_GFX_CTL         0x65u
+#define OP_GFX_CLEAR       0x60u /* [DisplayDirect] */
+#define OP_GFX_DRAW        0x61u /* [DisplayDirect] */
+#define OP_GFX_TEXT        0x62u /* [DisplayDirect] */
+#define OP_GFX_COMMIT      0x63u /* [DisplayDirect] */
+#define OP_GFX_FB          0x64u /* [DisplayDirect] */
+#define OP_GFX_CTL         0x65u /* [DisplayDirect] */
 
 /* Domain 0x7: UI */
-#define OP_UI_MODAL        0x70u
-#define OP_UI_STATUS       0x71u
-#define OP_UI_WIDGET       0x72u
+#define OP_UI_MODAL        0x70u /* [DisplayDirect] */
+#define OP_UI_STATUS       0x71u /* [DisplayDirect] */
+#define OP_UI_WIDGET       0x72u /* [DisplayDirect] */
 
 /* Domain 0x8: IO */
-#define OP_IO_KEY          0x80u
+#define OP_IO_KEY          0x80u /* [Keypad] */
 #define OP_IO_POWER        0x81u
-#define OP_IO_SERIAL       0x82u
+#define OP_IO_SERIAL       0x82u /* [SerialComm] */
 #define OP_IO_TIME         0x83u
-#define OP_IO_BUS          0x84u
+#define OP_IO_BUS          0x84u /* [RawPeripheral] */
 
 #define KRX_OP_COUNT       48u
 

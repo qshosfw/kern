@@ -11,7 +11,7 @@ mod ops;
 mod pkg;
 
 pub use cap::{Cap, CapIter, CapabilitySet};
-pub use ops::{ArgKind, OP_TABLE, Op, OpDesc, Sig, domain, idx, sub};
+pub use ops::{ArgKind, OP_TABLE, Op, OpDesc, Sig, domain, idx, missing_caps, sub};
 pub use pkg::{icon, scope};
 
 #[cfg(feature = "describe")]

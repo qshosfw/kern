@@ -180,17 +180,68 @@ macro_rules! abi {
                 (self as u8) & 0x0F
             }
 
-            /// Lookup `OpDesc` by numeric operation ID via linear scan over sorted compact table.
-            #[inline(never)]
+            /// `OpDesc` of a numeric operation ID: one table load, no scan.
+            #[inline(always)]
             pub fn find_desc(id: u8) -> Option<&'static OpDesc> {
-                for desc in OP_TABLE {
-                    if desc.id == id {
-                        return Some(desc);
-                    }
+                let dom = (id >> 4) as usize;
+                if dom >= DOMAIN_COUNT {
+                    return None;
                 }
-                None
+                let at = DOMAIN_BASE[dom] + (id & 0x0F);
+                if at < DOMAIN_BASE[dom + 1] {
+                    Some(&OP_TABLE[at as usize])
+                } else {
+                    None
+                }
             }
         }
+
+        /// Capability bit each operation requires (`Cap::COUNT` = none), in `OP_TABLE` order.
+        const OP_CAP_BIT: [u8; OP_TABLE.len()] = {
+            let mut bits = [Cap::COUNT; OP_TABLE.len()];
+            let mut i = 0;
+            while i < bits.len() {
+                if let Some(cap) = OP_TABLE[i].cap {
+                    bits[i] = cap.bit();
+                }
+                i += 1;
+            }
+            bits
+        };
+
+        /// Capabilities operation `id` needs beyond `granted`: `Some(0)` when it may run,
+        /// `None` when no such operation exists. Two byte loads, no scan.
+        #[inline(always)]
+        pub fn missing_caps(id: u8, granted: u32) -> Option<u32> {
+            let base = DOMAIN_BASE.get((id >> 4) as usize + 1)?;
+            let at = DOMAIN_BASE[(id >> 4) as usize] + (id & 0x0F);
+            if at >= *base {
+                return None;
+            }
+            let bit = *OP_CAP_BIT.get(at as usize)?;
+            Some(((1u32 << (bit & 31)) & !granted) & ((bit < Cap::COUNT) as u32).wrapping_neg())
+        }
+
+        const DOMAIN_COUNT: usize = [$($dom_id),*].len();
+
+        /// Index of each domain's first operation in `OP_TABLE`, plus the table length.
+        /// Domains are contiguous from 0 and indices dense from 0, so
+        /// `OP_TABLE[DOMAIN_BASE[domain] + index]` is the operation.
+        const DOMAIN_BASE: [u8; DOMAIN_COUNT + 1] = {
+            let mut base = [OP_TABLE.len() as u8; DOMAIN_COUNT + 1];
+            let mut i = OP_TABLE.len();
+            while i > 0 {
+                i -= 1;
+                base[(OP_TABLE[i].id >> 4) as usize] = i as u8;
+            }
+            i = 0;
+            while i < OP_TABLE.len() {
+                let id = OP_TABLE[i].id;
+                assert!(base[(id >> 4) as usize] + (id & 0x0F) == i as u8, "operation indices must be dense");
+                i += 1;
+            }
+            base
+        };
     };
     (@cap) => { None };
     (@cap $cap:ident) => { Some(Cap::$cap) };
@@ -257,42 +308,42 @@ abi! {
         IpcSendStr = 4 (In,  Val, Val),
     }
     FS 0x3 {
-        FsRead     = 0 (Val, In,  Val),
-        FsWrite    = 1 (Val, In,  Val),
-        FsMeta     = 2 (Val, Val, Val),
-        FsRename   = 3 (In,  Val, Val),
+        FsRead     = 0 (Val, In,  Val) [StorageRead],
+        FsWrite    = 1 (Val, In,  Val) [StorageWrite],
+        FsMeta     = 2 (Val, Val, Val) [StorageRead],
+        FsRename   = 3 (In,  Val, Val) [StorageWrite],
     }
     RF 0x4 {
-        RfTune     = 0 (Val, Val, Val),
-        RfGet      = 1 (Val, Val, Val),
-        RfSet      = 2 (Val, Val, Val),
-        RfTones    = 3 (Val, Val, Val),
-        RfVfo      = 4 (Val, Val, Val),
-        RfBulk     = 5 (Val, Val, Val),
+        RfTune     = 0 (Val, Val, Val) [RadioRx],
+        RfGet      = 1 (Val, Val, Val) [RadioRx],
+        RfSet      = 2 (Val, Val, Val) [RadioRx],
+        RfTones    = 3 (Val, Val, Val) [RadioRx],
+        RfVfo      = 4 (Val, Val, Val) [RadioRx],
+        RfBulk     = 5 (Val, Val, Val) [RadioRx],
     }
     AUD 0x5 {
-        AudTone    = 0 (Val, Val, Val),
-        AudCtl     = 1 (Val, Val, Val),
+        AudTone    = 0 (Val, Val, Val) [AudioOutput],
+        AudCtl     = 1 (Val, Val, Val) [AudioOutput],
     }
     GFX 0x6 {
-        GfxClear   = 0 (Val, Val, Val),
-        GfxDraw    = 1 (Val, Val, Val),
-        GfxText    = 2 (In,  Val, Val),
-        GfxCommit  = 3 (Val, Val, Val),
-        GfxFb      = 4 (Val, Val, Val),
-        GfxCtl     = 5 (Val, Val, Val),
+        GfxClear   = 0 (Val, Val, Val) [DisplayDirect],
+        GfxDraw    = 1 (Val, Val, Val) [DisplayDirect],
+        GfxText    = 2 (In,  Val, Val) [DisplayDirect],
+        GfxCommit  = 3 (Val, Val, Val) [DisplayDirect],
+        GfxFb      = 4 (Val, Val, Val) [DisplayDirect],
+        GfxCtl     = 5 (Val, Val, Val) [DisplayDirect],
     }
     UI 0x7 {
-        UiModal    = 0 (Val, Val, Val),
-        UiStatus   = 1 (Val, Val, Val),
-        UiWidget   = 2 (Val, In,  Val),
+        UiModal    = 0 (Val, Val, Val) [DisplayDirect],
+        UiStatus   = 1 (Val, Val, Val) [DisplayDirect],
+        UiWidget   = 2 (Val, In,  Val) [DisplayDirect],
     }
     IO 0x8 {
-        IoKey      = 0 (Val, Val, Val),
+        IoKey      = 0 (Val, Val, Val) [Keypad],
         IoPower    = 1 (Val, Val, Val),
-        IoSerial   = 2 (Val, Val, Val),
+        IoSerial   = 2 (Val, Val, Val) [SerialComm],
         IoTime     = 3 (Val, Val, Val),
-        IoBus      = 4 (Val, Val, Val),
+        IoBus      = 4 (Val, Val, Val) [RawPeripheral],
     }
 }
 

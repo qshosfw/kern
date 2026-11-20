@@ -1,5 +1,6 @@
 name = "Leaf Demo"
 output = "leaf.krx"
+caps = ["DISPLAY_DIRECT", "KEYPAD", "SERIAL_COMM"]
 profile = "p0"
 root = "leaf_app.c"
 leaves = ["leaf1.c", "leaf2.c"]
