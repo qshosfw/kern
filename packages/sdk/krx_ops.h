@@ -144,8 +144,8 @@
 #define SUB_RF_SET_FM_MUTE         14u
 
 /* rf_vfo */
-#define SUB_RF_VFO_GET_CFG         0u
-#define SUB_RF_VFO_SET_CFG         1u
+#define SUB_RF_VFO_GET_CHANNEL     0u
+#define SUB_RF_VFO_SET_CHANNEL     1u
 #define SUB_RF_VFO_STATE           2u
 #define SUB_RF_VFO_WATCH_MODE      3u
 #define SUB_RF_VFO_LOCK            4u

@@ -421,8 +421,8 @@ abi_sub! {
         FM_MUTE    = 14,
     }
     rf_vfo {
-        GET_CFG    = 0,
-        SET_CFG    = 1,
+        GET_CHANNEL = 0,
+        SET_CHANNEL = 1,
         STATE      = 2,
         WATCH_MODE = 3,
         LOCK       = 4,

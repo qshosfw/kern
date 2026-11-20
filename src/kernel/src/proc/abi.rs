@@ -452,35 +452,6 @@ pub const PROC_CTL_SVC_ENTRY: u8 = 0x82;
 pub const PROC_CTL_IPC_ENTRY: u8 = 0x83;
 pub const PROC_CTL_PROC_EXT: u8 = 0x84;
 
-/// C-ABI subaudible CTCSS/DCS tone specification.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct KrxSubaudible {
-    /// 0 = None, 1 = CTCSS (value in deci-Hz), 2 = DCS Normal, 3 = DCS Inverted.
-    pub kind: u8,
-    pub _pad: u8,
-    pub value: u16,
-}
-
-/// C-ABI full channel/VFO configuration record.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct KrxVfoConfig {
-    pub rx_freq_hz: u32,
-    pub tx_offset_hz: u32,
-    pub step_hz: u32,
-    pub rx_subaudible: KrxSubaudible,
-    pub tx_subaudible: KrxSubaudible,
-    pub modulation: u8,
-    pub bandwidth: u8,
-    pub power: u8,
-    pub tx_shift: u8,
-    pub squelch_level: u8,
-    pub reverse: u8,
-    pub busy_lock: u8,
-    pub _reserved: u8,
-}
-
 /// C-ABI live coordinator telemetry snapshot.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

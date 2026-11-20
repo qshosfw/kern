@@ -3,13 +3,14 @@
 #[cfg(test)]
 use super::active_ctx_opt;
 use super::{ptr_slice, ptr_slice_mut};
+use crate::data::ChannelRecord;
 use crate::services::primitives;
 use crate::services::radio::RadioCoordinator;
 use drivers::bk4829::{Bk4829, Disabled};
-use kernel::proc::abi::{KrxRadioState, KrxSubaudible, KrxSweepReq, KrxSymbol, KrxVfoConfig};
+use kernel::proc::abi::{KrxRadioState, KrxSweepReq, KrxSymbol};
 use kernel::service::radio::{
-    Bandwidth, BcloPolicy, CssTailMode, ModulationMode, RepeaterShift, RfChannel, RfPowerLevel,
-    RfResourceMask, RfSquelch, RfSubaudible, RfToneGenerator, StepSetting, SubaudibleTone, VfoSlot,
+    BcloPolicy, CssTailMode, RfResourceMask, RfSquelch, RfSubaudible, RfToneGenerator,
+    SubaudibleTone, VfoSlot,
 };
 
 #[inline(always)]
@@ -89,21 +90,6 @@ fn decode_vfo_slot(slot: u8) -> Option<VfoSlot> {
 }
 
 #[inline(never)]
-fn encode_subaudible(tone: SubaudibleTone) -> KrxSubaudible {
-    let (kind, value) = match tone {
-        SubaudibleTone::None => (0, 0),
-        SubaudibleTone::Ctcss(v) => (1, v),
-        SubaudibleTone::DcsNormal(v) => (2, v),
-        SubaudibleTone::DcsInverted(v) => (3, v),
-    };
-    KrxSubaudible {
-        kind,
-        _pad: 0,
-        value,
-    }
-}
-
-#[inline(never)]
 fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
     if value == 0 {
         return SubaudibleTone::None;
@@ -126,65 +112,28 @@ unsafe fn dispatch_rf_vfo(
 ) -> usize {
     use ::abi::sub::rf_vfo;
     match sub {
-        rf_vfo::GET_CFG => {
-            let Some(vfo) = decode_vfo_slot(a1 as u8) else {
+        // A VFO is exchanged as the ORDS-01 channel record: the same 64 bytes an app
+        // reads from `/user/channels.ch`, so no attribute is lost between memory,
+        // storage and the live radio.
+        rf_vfo::GET_CHANNEL | rf_vfo::SET_CHANNEL => {
+            let (Some(vfo), Some(bytes)) = (decode_vfo_slot(a1 as u8), unsafe {
+                ptr_slice_mut(a2 as *mut u8, ChannelRecord::SIZE)
+            }) else {
                 return 1;
             };
-            let out = a2 as *mut KrxVfoConfig;
-            if out.is_null() {
+            if (a2 & 3) != 0 {
                 return 1;
             }
-            let ch = coord.vfo_channel(vfo);
-            let (tx_shift, tx_offset_hz) = match ch.tx_shift {
-                RepeaterShift::Simplex => (0, 0),
-                RepeaterShift::Positive(f) => (1, f.raw()),
-                RepeaterShift::Negative(f) => (2, f.raw()),
-            };
-            let dst = unsafe { &mut *out };
-            dst.rx_freq_hz = ch.rx_freq.raw();
-            dst.tx_offset_hz = tx_offset_hz;
-            dst.step_hz = ch.step.in_hz();
-            dst.rx_subaudible = encode_subaudible(ch.rx_subaudible);
-            dst.tx_subaudible = encode_subaudible(ch.tx_subaudible);
-            dst.modulation = ch.modulation as u8;
-            dst.bandwidth = ch.bandwidth as u8;
-            dst.power = ch.power as u8;
-            dst.tx_shift = tx_shift;
-            dst.squelch_level = ch.squelch_level;
-            dst.reverse = ch.reverse as u8;
-            dst.busy_lock = ch.busy_lock as u8;
-            dst._reserved = ((ch.flags >> 5) & 0x7F) as u8;
-            0
-        }
-        rf_vfo::SET_CFG => {
-            let cfg_ptr = a2 as *const KrxVfoConfig;
-            let (Some(vfo), false) = (decode_vfo_slot(a1 as u8), cfg_ptr.is_null()) else {
-                return 1;
-            };
-            let cfg = unsafe { &*cfg_ptr };
-            let step = StepSetting::from_hz_x10(utils::math::div10_u32(cfg.step_hz).0 as u16);
-            let needs_cfg = coord.is_slot_hardware_active(vfo);
-            let ch = coord.vfo_channel_mut(vfo);
-            ch.rx_freq = utils::units::Frequency::new(cfg.rx_freq_hz);
-            let offset = utils::units::Frequency::new(cfg.tx_offset_hz);
-            ch.tx_shift = match cfg.tx_shift {
-                1 => RepeaterShift::Positive(offset),
-                2 => RepeaterShift::Negative(offset),
-                _ => RepeaterShift::Simplex,
-            };
-            ch.step = step;
-            ch.rx_subaudible = decode_subaudible(cfg.rx_subaudible.kind, cfg.rx_subaudible.value);
-            ch.tx_subaudible = decode_subaudible(cfg.tx_subaudible.kind, cfg.tx_subaudible.value);
-            ch.modulation = ModulationMode::from_u8(cfg.modulation);
-            ch.bandwidth = Bandwidth::from_u8(cfg.bandwidth);
-            ch.power = RfPowerLevel::from_u8(cfg.power);
-            ch.squelch_level = cfg.squelch_level.min(9);
-            ch.reverse = cfg.reverse != 0;
-            ch.busy_lock = cfg.busy_lock != 0;
-            ch.flags = (ch.flags & !0x0FE0) | (((cfg._reserved & 0x7F) as u16) << 5);
-            if needs_cfg {
-                radio.configure_channel(ch);
+            let rec = unsafe { &mut *(bytes.as_mut_ptr() as *mut ChannelRecord) };
+            if sub == rf_vfo::GET_CHANNEL {
+                *rec = ChannelRecord::empty();
+                coord.save_vfo_to_channel(vfo, rec);
+                let memory = coord.vfo_memory_index[vfo.index().min(2)];
+                return memory.map_or(0, |i| i as usize + 1) << 8;
             }
+            // Bits 8..24 of `a1`: memory channel number + 1 the record came from (0 = free VFO).
+            let memory = ((a1 >> 8) as u16).checked_sub(1);
+            coord.load_channel_into_vfo(radio, vfo, memory, rec);
             0
         }
         rf_vfo::STATE => {
@@ -511,17 +460,23 @@ mod tests {
         assert_eq!(decode_vfo_slot(2), Some(VfoSlot::VfoC));
         assert_eq!(decode_vfo_slot(3), None);
 
-        for tone in [
-            SubaudibleTone::None,
-            SubaudibleTone::Ctcss(885),
-            SubaudibleTone::DcsNormal(0o023),
-            SubaudibleTone::DcsInverted(0o754),
-        ] {
-            let enc = encode_subaudible(tone);
-            assert_eq!(decode_subaudible(enc.kind, enc.value), tone);
-        }
+        assert_eq!(decode_subaudible(1, 885), SubaudibleTone::Ctcss(885));
+        assert_eq!(
+            decode_subaudible(3, 0o754),
+            SubaudibleTone::DcsInverted(0o754)
+        );
+        assert_eq!(decode_subaudible(1, 0), SubaudibleTone::None);
+    }
 
-        assert_eq!(core::mem::size_of::<KrxVfoConfig>(), 28);
+    /// The record round trip itself is covered by the coordinator's
+    /// `test_external_vfo_app_channel_roundtrip_talkaround_and_multi_app_arbitration`.
+    #[test]
+    fn vfo_exchange_uses_the_stored_channel_record_layout() {
+        use ::abi::sub::rf_vfo;
+        assert_eq!((rf_vfo::GET_CHANNEL, rf_vfo::SET_CHANNEL), (0, 1));
+        assert_eq!(core::mem::size_of::<ChannelRecord>(), ChannelRecord::SIZE);
+        assert_eq!(core::mem::offset_of!(ChannelRecord, flags), 20);
+        assert_eq!(core::mem::offset_of!(ChannelRecord, name), 38);
     }
 
     #[test]

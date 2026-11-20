@@ -175,27 +175,59 @@ typedef struct {
 
 // ── Domain Data Structures ───────────────────────────────────────────────────
 
-typedef struct {
-    u8  kind;
-    u8  _pad;
-    u16 value;
-} KrxSubaudible;
+/* ORDS-01 channel record (64 B): one layout for `/user/channels.ch`, `.vfo` snapshots
+ * and the live VFO exchanged through OP_RF_VFO. */
+#define KRX_TONE_DCS             0x8000u  /* subaudible word: DCS code, else CTCSS deci-Hz */
+#define KRX_TONE_DCS_INVERTED    0x4000u
+#define KRX_TONE_VALUE_MASK      0x3FFFu
+
+#define KRX_CH_BUSY_LOCKOUT      (1u << 0)
+#define KRX_CH_SCAN_SKIP         (1u << 1)
+#define KRX_CH_REVERSE           (1u << 2)
+#define KRX_CH_PRIORITY_1        (1u << 3)
+#define KRX_CH_PRIORITY_2        (1u << 4)
+#define KRX_CH_TX_INHIBIT        (1u << 5)
+#define KRX_CH_TONE_BCLO         (1u << 6)
+#define KRX_CH_PTT_ID_START      (1u << 7)
+#define KRX_CH_PTT_ID_END        (1u << 8)
+#define KRX_CH_TALKAROUND        (1u << 9)
+#define KRX_CH_FAVORITE          (1u << 10)
+#define KRX_CH_CALL_MATCH_MUTE   (1u << 11)
+#define KRX_CH_FREQ_LOCK         (1u << 12)
+#define KRX_CH_WIDE_FILTER       (1u << 13)
+#define KRX_CH_LNA_BOOST         (1u << 14)
+#define KRX_CH_VOX_ENABLE        (1u << 15)
 
 typedef struct {
-    u32 rx_freq_hz;
-    u32 tx_offset_hz;
-    u32 step_hz;
-    KrxSubaudible rx_subaudible;
-    KrxSubaudible tx_subaudible;
+    u32 rx_frequency_hz;
+    u32 tx_frequency_hz;   /* 0 = simplex */
+    u16 step_hz_x10;
+    u16 bandwidth_50hz;
     u8  modulation;
-    u8  bandwidth;
-    u8  power;
-    u8  tx_shift;
     u8  squelch_level;
-    u8  reverse;
-    u8  busy_lock;
-    u8  _reserved;
-} KrxVfoConfig;
+    u16 rx_subaudible;
+    u16 tx_subaudible;
+    u16 zone_mask;
+    u16 flags;             /* KRX_CH_* */
+    u16 power_mw;
+    u16 proto_ref;
+    u16 uid;
+    u8  proto;
+    u8  scram_mode;
+    u8  scram_param;
+    u8  scram_hop;
+    u8  compand;
+    u8  mic_gain;
+    u8  ste;
+    u8  roger;
+    u8  tx_limit;          /* time-out in 15 s units, 0 = global */
+    u8  audio_flags;
+    u8  name[16];
+    u8  user_tag[8];
+    u16 record_crc;
+} KrxChannel;
+
+_Static_assert(sizeof(KrxChannel) == 64, "KrxChannel is the 64 B ORDS-01 record");
 
 typedef struct {
     u8  active_vfo;
@@ -475,6 +507,19 @@ static inline u8 krx_fs_mkdir(const KrxApiTable* api, const u8* path, u8 path_le
 }
 
 // ── Inline Helpers: RF & AUD ─────────────────────────────────────────────────
+
+/* Read VFO `slot` (0 = A, 1 = B, 2 = C) as a full channel record. Returns the memory
+ * channel number + 1 the VFO is showing, 0 for a free VFO, or -1 on a bad argument. */
+static inline i32 krx_vfo_get(const KrxApiTable* api, u8 slot, KrxChannel* out) {
+    u32 r = krx_call(api, OP_RF_VFO, SUB_RF_VFO_GET_CHANNEL, (u32)slot, (u32)out);
+    return (r & 0xFFu) ? -1 : (i32)(r >> 8);
+}
+
+/* Apply a full channel record to VFO `slot`; `memory` is the channel number + 1 it was
+ * loaded from, or 0 for a free VFO. Retunes the hardware when the slot is live. */
+static inline u8 krx_vfo_set(const KrxApiTable* api, u8 slot, u16 memory, const KrxChannel* ch) {
+    return (u8)krx_call(api, OP_RF_VFO, SUB_RF_VFO_SET_CHANNEL, (u32)slot | ((u32)memory << 8), (u32)ch);
+}
 
 static inline u8 krx_rf_tune(const KrxApiTable* api, u32 freq_hz, u8 bw, u32 step_hz) {
     return (u8)krx_call(api, OP_RF_TUNE, freq_hz, (u32)bw, step_hz);
