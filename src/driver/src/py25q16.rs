@@ -78,8 +78,10 @@ impl<B: SpiFlashBus> Py25q16FlashDriver<B> {
     }
 
     pub fn wait_while_busy(&mut self) {
-        while (self.read_status_reg() & 1) == 1 {
+        let mut polls = 0u32;
+        while (self.read_status_reg() & 1) == 1 && polls < 2_000_000 {
             self.bus.feed();
+            polls += 1;
         }
     }
 

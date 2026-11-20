@@ -90,14 +90,20 @@ impl Adc {
             }
 
             if timeout == 0 {
+                if channel >= 16 {
+                    adc::ADC_CR2.write_volatile(cr2 & !adc::CR2_TSVREFE);
+                }
                 return 0;
             }
 
             // 7. Read 12-bit conversion result from DR (reading DR clears EOC)
             let data = (adc::ADC_DR.read_volatile() & 0x0FFF) as u16;
 
-            // 8. Explicitly clear EOC flag in SR (rc_w0: write 0 to EOC)
+            // 8. Explicitly clear EOC flag in SR (rc_w0: write 0 to EOC) and release TSVREFE
             adc::ADC_SR.write_volatile(!adc::SR_EOC);
+            if channel >= 16 {
+                adc::ADC_CR2.write_volatile(cr2 & !adc::CR2_TSVREFE);
+            }
 
             data
         }

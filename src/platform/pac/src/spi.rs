@@ -70,6 +70,10 @@ pub const CR1_BIDIMODE: u32 = 1 << 15;
 
 // ── CR2 Bit Definitions ────────────────────────────────────────────────────
 
+/// RX buffer DMA enable
+pub const CR2_RXDMAEN: u32 = 1 << 0;
+/// TX buffer DMA enable
+pub const CR2_TXDMAEN: u32 = 1 << 1;
 /// SS output enable
 pub const CR2_SSOE: u32 = 1 << 2;
 /// Clear TX FIFO

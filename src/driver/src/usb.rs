@@ -822,6 +822,23 @@ impl UsbDriver {
                 }
                 sent += chunk.len();
             }
+            // USB Full-Speed Bulk IN requires a Zero-Length Packet when transfer length
+            // is an exact multiple of 64 B so host CDC ACM flushes the frame immediately.
+            if sent > 0 && (sent & 63) == 0 {
+                set_active_ep(in_ep);
+                let mut timeout = 50_000;
+                while (unsafe { USBD_IN_CSR1_U8.read_volatile() } & INCSR1_INPKTRDY) != 0 {
+                    timeout -= 1;
+                    if timeout == 0 {
+                        break;
+                    }
+                }
+                if timeout > 0 {
+                    unsafe {
+                        USBD_IN_CSR1_U8.write_volatile(INCSR1_INPKTRDY);
+                    }
+                }
+            }
             set_active_ep(0);
             sent
         }

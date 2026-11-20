@@ -75,9 +75,9 @@ impl Watchdog {
 
     /// Clear the hardware reset flags in `RCC_CSR` (Bit 23 `RMVF`: Remove Reset Flag).
     pub fn clear_reset_flags() {
-        unsafe {
+        cortex_m::interrupt::free(|_| unsafe {
             let csr = pac::rcc::RCC_CSR.read_volatile();
             pac::rcc::RCC_CSR.write_volatile(csr | pac::rcc::CSR_RMVF);
-        }
+        });
     }
 }

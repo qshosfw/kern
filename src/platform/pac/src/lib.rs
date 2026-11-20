@@ -83,26 +83,32 @@ pub const NVIC_ICER: *mut u32 = 0xE000_E180 as *mut u32;
 /// NVIC Interrupt Clear-Pending Register
 pub const NVIC_ICPR: *mut u32 = 0xE000_E280 as *mut u32;
 
-/// Enable an NVIC interrupt line cleanly without relying on unmasked globals.
+/// Enable an NVIC interrupt line (`0..32` on ARMv6-M Cortex-M0+).
 #[inline(always)]
 pub unsafe fn nvic_enable(irq_num: u8) {
-    unsafe {
-        NVIC_ISER.write_volatile(1u32 << (irq_num & 31));
+    if irq_num < 32 {
+        unsafe {
+            NVIC_ISER.write_volatile(1u32 << irq_num);
+        }
     }
 }
 
-/// Disable an NVIC interrupt line.
+/// Disable an NVIC interrupt line (`0..32` on ARMv6-M Cortex-M0+).
 #[inline(always)]
 pub unsafe fn nvic_disable(irq_num: u8) {
-    unsafe {
-        NVIC_ICER.write_volatile(1u32 << (irq_num & 31));
+    if irq_num < 32 {
+        unsafe {
+            NVIC_ICER.write_volatile(1u32 << irq_num);
+        }
     }
 }
 
-/// Clear a pending NVIC interrupt flag.
+/// Clear a pending NVIC interrupt flag (`0..32` on ARMv6-M Cortex-M0+).
 #[inline(always)]
 pub unsafe fn nvic_clear_pending(irq_num: u8) {
-    unsafe {
-        NVIC_ICPR.write_volatile(1u32 << (irq_num & 31));
+    if irq_num < 32 {
+        unsafe {
+            NVIC_ICPR.write_volatile(1u32 << irq_num);
+        }
     }
 }

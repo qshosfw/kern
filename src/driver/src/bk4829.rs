@@ -733,6 +733,11 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
         self.update_gpio_reg(0x0003, led as u16);
     }
 
+    /// Reads the live BK4829 GPIO output register (`REG_GPIO`), refreshing the shadow cache.
+    pub fn read_gpio_reg(&mut self) -> u16 {
+        self.read_reg(REG_GPIO)
+    }
+
     pub fn set_gpio_pin(&mut self, pin: u8, high: bool) {
         let bit = 0x0040 >> pin;
         let (clear_mask, set_mask) = if high { (0, bit) } else { (bit, 0) };

@@ -228,6 +228,11 @@ pub fn resync_clock(pclk_hz: u32) {
         if (cr1 & usart::CR1_UE) == 0 {
             return;
         }
+        // Drain any in-flight TX shift byte before gating UE so clock shifts never corrupt framing.
+        let mut spin = 50_000u32;
+        while (usart::USART_SR.read_volatile() & usart::SR_TC) == 0 && spin > 0 {
+            spin -= 1;
+        }
         usart::USART_CR1.write_volatile(cr1 & !usart::CR1_UE);
         let brr = (pclk_hz + (baud >> 1)) / baud;
         usart::USART_BRR.write_volatile(brr);

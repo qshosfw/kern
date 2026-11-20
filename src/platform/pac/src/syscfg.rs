@@ -12,3 +12,16 @@ pub const SYSCFG_PAENS: *mut u32 = (SYSCFG_BASE + 0x10) as *mut u32;
 pub const SYSCFG_PBENS: *mut u32 = (SYSCFG_BASE + 0x14) as *mut u32;
 pub const SYSCFG_PCENS: *mut u32 = (SYSCFG_BASE + 0x18) as *mut u32;
 pub const SYSCFG_PFENS: *mut u32 = (SYSCFG_BASE + 0x1C) as *mut u32;
+
+/// 6-bit DMA peripheral request selector mask per channel inside `SYSCFG_CFGR3`/`CFGR4`.
+pub const DMA_MAP_MASK: u32 = 0x3F;
+
+/// Returns `(cfgr_reg_ptr, bit_shift)` for DMA1 channel `ch` (`1..=7`).
+#[inline(always)]
+pub const fn dma_map_reg_and_shift(ch: u8) -> (*mut u32, u32) {
+    if ch <= 4 {
+        (SYSCFG_CFGR3, ((ch - 1) as u32) << 3)
+    } else {
+        (SYSCFG_CFGR4, ((ch - 5) as u32) << 3)
+    }
+}

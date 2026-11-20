@@ -186,9 +186,7 @@ impl<B: CommandDisplayBus> St7565<B> {
                     }
                 }
                 #[cfg(not(feature = "grayscale"))]
-                for &byte in canvas.page_bytes(page) {
-                    self.bus.write_byte(byte);
-                }
+                self.bus.write_bytes(canvas.page_bytes(page));
             }
         }
 
