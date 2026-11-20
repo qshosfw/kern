@@ -393,31 +393,14 @@ impl SettingField {
         }
     }
 
-    /// Store `val`; the owning domain is sealed and queued for hardware apply
-    /// and persistence, so no page-level bookkeeping is needed.
+    /// Store `val` through the property registry: bounds, CRC seal, hardware
+    /// apply and persistence are queued there, so pages keep no bookkeeping.
     pub fn set_val(self, val: i32, config: &mut crate::config::MasterConfig) -> bool {
-        if self.0 == Self::None.0 {
-            return false;
+        if self.0 != Self::CalibTweak.0 {
+            return config.prop_set(self.0, val as u8);
         }
-        let (dom, off) = if self.0 == Self::CalibTweak.0 {
-            let clamped = (val as i16).clamp(-500, 500);
-            if config.battery.calib_tweak_mv == clamped {
-                return false;
-            }
-            config.battery.calib_tweak_mv = clamped;
-            (4, usize::MAX)
-        } else {
-            ((self.0 >> 5) as usize, (self.0 & 0x1F) as usize)
-        };
-        if let Some(target) = config.config_bytes_mut(dom).get_mut(off) {
-            if *target == val as u8 {
-                return false;
-            }
-            *target = val as u8;
-        } else if off != usize::MAX {
-            return false;
-        }
-        config.mark_domain_dirty(dom);
+        config.battery.calib_tweak_mv = (val as i16).clamp(-500, 500);
+        config.mark_domain_dirty(4);
         true
     }
 }

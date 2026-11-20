@@ -12,7 +12,7 @@ authors = ["kern-team"]
 edition_string = "Kern OS"
 chip = "PY32F071xB"
 flash_budget = 120832   # 118 KB (safe margin below 128KB)
-flash_ceiling = 120220  # Ratchet: release flash may only go down; lower after each saving
+flash_ceiling = 120212  # Ratchet: release flash may only go down; lower after each saving
 ram_budget = 16384      # 16 KB SRAM
 
 [target]

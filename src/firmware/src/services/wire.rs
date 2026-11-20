@@ -443,18 +443,27 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
                     ch.rx_freq = freq;
                     let _ = c.hw().radio.set_frequency(freq);
                 }
-                FACET_RADIO_MODULATION => {
+                FACET_RADIO_MODULATION | FACET_RADIO_SQUELCH => {
                     let v = c.rd_u8()?;
-                    primitives::rf_set_param(coord, &mut c.hw().radio, 0, v);
-                }
-                FACET_RADIO_SQUELCH => {
-                    let v = c.rd_u8()?;
-                    primitives::rf_set_param(coord, &mut c.hw().radio, 1, v);
+                    let param = (handle.facet - FACET_RADIO_MODULATION) as u8;
+                    primitives::rf_set_param(coord, &mut c.hw().radio, param, v);
                 }
                 FACET_RADIO_TRANSMIT => {
                     let tx = c.rd_u8()? != 0;
                     let radio = &mut c.hw().radio;
                     if tx {
+                        // Remote keying obeys the same BCLO, time-out, inhibit and
+                        // battery rules as PTT.
+                        let token = kernel::service::radio::ClientToken::new(
+                            kernel::service::radio::ClientId::SYSTEM,
+                            kernel::service::radio::LockTier::FOREGROUND,
+                        );
+                        if !coord
+                            .check_tx_permission(coord.effective_tx_slot(), token)
+                            .is_granted()
+                        {
+                            return Err(WireStatus::SafetyDenied);
+                        }
                         coord.start_tx(radio);
                     } else {
                         coord.stop_tx(radio);
