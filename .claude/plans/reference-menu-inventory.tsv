@@ -1,0 +1,152 @@
+Proposed owner	Workflow	Reference identifier	F4	Falcon	UVKX	Gogu	Delta	CEC	CEC_HF
+VFO	dial grid and absolute tune	MENU_STEP	Step @56	Step @48	STEP  @49	Step @55	Step @587	Step @45	Step @43
+VFO	relative or split TX and independent RX/TX tones	MENU_OFFSET	TxOffs @63	TxOffs @55	TXOFFSET @56	TxOffs @62	Offset Freq @596	TxOffs @83	TxOffs @76
+VFO	relative or split TX and independent RX/TX tones	MENU_SFT_D	TxODir @62	TxODir @54	TX ODIR @55	TxODir @61	Offset Dir @595	TxODir @82	TxODir @75
+VFO	relative or split TX and independent RX/TX tones	MENU_R_CTCS	RxCTCS @59	RxCTCS @51	RX CTCS @52	RxCTCS @58	Rx CTCS @591	RxCTCS @79	RxCTCS @72
+VFO	relative or split TX and independent RX/TX tones	MENU_R_DCS	RxDCS @58	RxDCS @50	RX DCS @51	RxDCS @57	Rx DCS @590	RxDCS @78	RxDCS @71
+VFO	relative or split TX and independent RX/TX tones	MENU_T_CTCS	TxCTCS @61	TxCTCS @53	TX CTCS @54	TxCTCS @60	Tx CTCS @593	TxCTCS @81	TxCTCS @74
+VFO	relative or split TX and independent RX/TX tones	MENU_T_DCS	TxDCS @60	TxDCS @52	TX DCS @53	TxDCS @59	Tx DCS @592	TxDCS @80	TxDCS @73
+VFO	mode and receiver profile	MENU_AM	Mode @70	Mode @59	MODE @60	Mode @69	Modulation @599	Demodu @97	Demodu @89
+VFO	mode and receiver profile	MENU_AM_FIX	-	-	AM FIX @132	AM Fix @138	-	AM Fix @179	AM Fix @162
+VFO	mode and receiver profile	MENU_W_N	W/N @64	BANDW @56	W/N @57	W/N @63	Bandwidth @588	W/N @84	W/N @77
+VFO	mode and receiver profile	MENU_SET_NFM	SetNFM @158	SetNFM @119	SET NFM @152	SetNFM @166	NFM Filter @619	-	-
+VFO	mode and receiver profile	MENU_SET_AUD	SetRxA @151	SetRxA @112	-	SetRxA @158	Audio Profile @551	-	-
+VFO	mode and receiver profile	MENU_SET_RXG	-	SetRxG @113	-	SetRxG @159	-	-	-
+VFO	mode and receiver profile	MENU_SQL	Sql @139	Sql @97	SQL @48	Sql @146	Squelch @531	Sql @189	Sql @169
+VFO	mode and receiver profile	MENU_SQLHYS	-	SQLHYS @99	-	-	-	-	-
+VFO	mode and receiver profile	MENU_COMPAND	Compnd @69	Compnd @58	COMPANDR @59	Compnd @68	Compander @601	Compnd @96	Compnd @88
+VFO	mode and receiver profile	MENU_SCR	Scramb @66	Scramb @57	-	Scramb @65	Scrambler @603	Scramb @90	Scramb @83
+VFO	mode and receiver profile	MENU_SCREN	ScraEn @189	-	-	ScraEn @209	-	ScraEn @206	ScraEn @187
+Coordinator	TX limits, power and keying policy	MENU_200TX	Tx 200 @183	-	-	Tx 200 @203	-	Tx 200 @194	Tx 200 @174
+Coordinator	TX limits, power and keying policy	MENU_350TX	Tx 350 @184	-	-	Tx 350 @204	-	Tx1270 @197 / Tx 350 @201	Tx1270 @177 / Tx 350 @181
+Coordinator	TX limits, power and keying policy	MENU_500TX	Tx 500 @185	-	-	Tx 500 @205	-	Tx 900 @198 / Tx 500 @202	Tx 900 @178 / Tx 500 @182
+Coordinator	TX limits, power and keying policy	MENU_BCL	BusyCL @68	-	BUSYLOCK @58	BusyCL @67	Busy Channel Lock @598	BusyCL @94	BusyCL @86
+Coordinator	TX limits, power and keying policy	MENU_F_LOCK	F Lock @181	F Lock @123	F LOCK @171	F Lock @201	-	F Lock @193	F Lock @173
+Coordinator	TX limits, power and keying policy	MENU_TX_LOCK	TXLock @72	-	TX LOCK @62	TXLock @71	Tx Lock @609	-	-
+Coordinator	TX limits, power and keying policy	MENU_TOT	TxTOut @96	TxTOut @74	TXT OUT @91	TxTOut @95	Tx Timeout @650	TxTOut @118	TxTOut @113
+Coordinator	TX limits, power and keying policy	MENU_TXP	Power @57	POWER @49	POWER @50	Power @56	Power @589	TxPwr @77	TxPwr @70
+Coordinator	TX limits, power and keying policy	MENU_SET_PWR	SetPwr @141	-	SET PWR @138	SetPwr @148	Power Logic @611	-	-
+Coordinator	TX limits, power and keying policy	MENU_SET_PTT	SetPTT @142	-	SET PTT @139	SetPTT @149	Push to Talk @683	-	-
+Coordinator	TX limits, power and keying policy	MENU_VOX	VOX @132	VOX @91	VOX @135	VOX @141	VOX @534	VOX @185	VOX @165
+BSP	band and calibrated RF/PA options	MENU_350EN	350 En @187	-	-	350 En @207	350 En @610	Tx1260 @199 / 350 En @203	Tx1260 @179 / 350 En @183
+BSP	band and calibrated RF/PA options	MENU_F_CALI	FrCali @192	FrCali @125	FR CALI @179	FrCali @212	-	FrCali @208	FrCali @190
+BSP	band and calibrated RF/PA options	MENU_TX_SOFT_START	-	-	-	-	Tx Soft Start @613	-	-
+Coordinator	tone, lead-in and tail sequencing	MENU_CTCSS_LEAD	-	-	-	-	CTCSS Lead In @616	-	-
+Coordinator	tone, lead-in and tail sequencing	MENU_TONE	-	Tone @93	-	-	-	-	-
+Coordinator	tone, lead-in and tail sequencing	MENU_STE	STE @112	STE @94	STE @107	STE @111	Tail Tone @547	STE @140	STE @131
+Coordinator	tone, lead-in and tail sequencing	MENU_RP_STE	RP STE @113	RP STE @95	RP STE @108	RP STE @112	Repeater Tone @548	RP STE @141	RP STE @132
+VFO	watch and active receiver assignment	MENU_TDR	RxMode @138	RxMode @96	RX MODE @136	RxMode @145	Dual Watch @658	RxMode @188	RxMode @168
+Memory manager	recall, save, rename and delete by stable identity	MENU_1_CALL	1 Call @114	-	1 CALL @109	1 Call @113	1 Call @549	1 Call @142	1 Call @133
+Memory manager	recall, save, rename and delete by stable identity	MENU_LIST_CH	ChList @74	ChList @60	-	ChList @73	-	-	-
+Memory manager	recall, save, rename and delete by stable identity	MENU_MEM_CH	ChSave @75	ChSave @61	CH SAVE @69	ChSave @74	-	ChSave @100	ChSave @92
+Memory manager	recall, save, rename and delete by stable identity	MENU_DEL_CH	ChDele @76	ChDele @62	-	ChDele @75	-	ChDele @101	ChDele @93
+Memory manager	recall, save, rename and delete by stable identity	MENU_MEM_NAME	ChName @77	ChName @63	-	ChName @76	-	ChName @102	ChName @94
+Memory manager	channel membership and scan lists	MENU_S_ADD1	-	-	SC ADD1 @65	-	-	ScAdd1 @98	ScAdd1 @90
+Memory manager	channel membership and scan lists	MENU_S_ADD2	-	-	SC ADD2 @66	-	-	ScAdd2 @99	ScAdd2 @91
+Memory manager	channel membership and scan lists	MENU_S_ADD3	-	-	SC ADD3 @67	-	-	-	-
+Memory manager	channel membership and scan lists	MENU_SLIST1	-	-	S LIST1 @75	-	-	SList1 @105	SList1 @97
+Memory manager	channel membership and scan lists	MENU_SLIST2	-	-	S LIST2 @76	-	-	SList2 @106	SList2 @98
+Memory manager	channel membership and scan lists	MENU_SLIST3	-	-	S LIST3 @77	-	-	-	-
+Memory manager	select a consistent configuration bank	MENU_SET_CFG	SetCfg @176	-	-	SetCfg @184	-	-	-
+Scanner	priority and list selection	MENU_PRICH1	-	PRICH1 @64	-	-	-	-	-
+Scanner	priority and list selection	MENU_PRICH2	-	PRICH2 @65	-	-	-	-	-
+Scanner	priority and list selection	MENU_PRICH3	-	PRICH3 @66	-	-	-	-	-
+Scanner	priority and list selection	MENU_PRICH4	-	PRICH4 @67	-	-	-	-	-
+Scanner	priority and list selection	MENU_S_LIST	ScList @79	-	S LIST @74	ScList @78	-	SList @104	SList @96
+Scanner	priority and list selection	MENU_S_PRI	ScPri @80	-	-	ScPri @79	-	-	-
+Scanner	priority and list selection	MENU_S_PRI_CH_1	PriCh1 @81	-	-	PriCh1 @80	-	-	-
+Scanner	priority and list selection	MENU_S_PRI_CH_2	PriCh2 @82	-	-	PriCh2 @81	-	-	-
+Scanner	visit timing, hold/resume and scan threshold	MENU_SC_REV	ScnRev @83	-	SCN REV @79	ScnRev @82	Scan Resume @600	ScnRev @107	ScnRev @99
+Scanner	visit timing, hold/resume and scan threshold	MENU_SET_SCN	SetScn @170	-	-	SetScn @178	-	-	-
+Scanner	visit timing, hold/resume and scan threshold	MENU_SQLSCN	-	SQLSCN @98	-	-	-	-	-
+Scanner	visit timing, hold/resume and scan threshold	MENU_LIVESEEK	-	-	-	-	LiveSeek @606	Live.S @86	Live.S @79
+Scanner	weather channel watch	MENU_NOAA_S	NOAA-S @86 / SetNWR @167	-	NOAA-S @82 / SET NWR @161	NOAA-S @85 / SetNWR @175	-	NOAA-S @109	NOAA-S @101
+Signalling app	DTMF contacts, decoding and timed calls	MENU_ANI_ID	ANI ID @116	-	ANI ID @114	ANI ID @118	ANI ID @634	ANI ID @147	ANI ID @138
+Signalling app	DTMF contacts, decoding and timed calls	MENU_D_DCD	D Decd @128	-	D DECD @126	D Decd @130	Decode @638	D Decd @168	D Decd @158
+Signalling app	DTMF contacts, decoding and timed calls	MENU_D_HOLD	D Hold @124	-	D HOLD @122	D Hold @126	Reset Time @636	D Hold @160	D Hold @148
+Signalling app	DTMF contacts, decoding and timed calls	MENU_D_LIST	D List @129	-	D LIST @127	D List @131	-	D List @169	D List @159
+Signalling app	DTMF contacts, decoding and timed calls	MENU_D_LIVE_DEC	D Live @131	-	D LIVE @129	D Live @134	Live Dec @632	D Live @173	D Live @154
+Signalling app	DTMF contacts, decoding and timed calls	MENU_D_PRE	D Prel @126	-	D PREL @124	D Prel @128	Preload @637	D Prel @164	D Prel @153
+Signalling app	DTMF contacts, decoding and timed calls	MENU_D_RSP	D Resp @123	-	D RESP @121	D Resp @125	Response @635	D Resp @159	D Resp @147
+Signalling app	DTMF contacts, decoding and timed calls	MENU_D_ST	D ST @121	-	D ST @119	D ST @123	Side Tone @631	D ST @156	D ST @152
+Signalling app	DTMF contacts, decoding and timed calls	MENU_DWCODE	DWCode @119	-	-	DWCode @121	Dw Code @641	DWCode @151	DWCode @143
+Signalling app	DTMF contacts, decoding and timed calls	MENU_PTT_ID	PTT ID @120	-	PTT ID @118	PTT ID @122	PTT ID @630	PTT ID @153	PTT ID @145
+Signalling app	DTMF contacts, decoding and timed calls	MENU_UPCODE	UPCode @118	-	-	UPCode @120	Up Code @640	UPCode @150	UPCode @142
+Messaging app	addressed packets, range reply and alerts	MENU_MSG_ACK	-	-	-	MsgAck @193	-	-	-
+Messaging app	addressed packets, range reply and alerts	MENU_MSG_BEEP	-	-	-	MsgBep @194	-	-	-
+Messaging app	addressed packets, range reply and alerts	MENU_MSG_CSG	-	-	-	CllSgn @196	-	-	-
+Messaging app	addressed packets, range reply and alerts	MENU_MSG_LED	-	-	-	MsgLed @195	-	-	-
+Messaging app	addressed packets, range reply and alerts	MENU_MSG_RX	-	-	-	MsgRx @192	-	-	-
+Messaging app	addressed packets, range reply and alerts	MENU_RNG_RSP	-	-	-	RngRsp @197	-	-	-
+Messaging app	addressed packets, range reply and alerts	MENU_CALL_TONE	-	-	-	CllTon @188	-	-	-
+Messaging app	addressed packets, range reply and alerts	MENU_CALL_VOL	-	-	-	CllVol @189	-	-	-
+Audio service	microphone, volume and gain	MENU_MIC	Mic @99	Mic @79	MIC @94	Mic @98	Mic Sens @535	Mic @120	Mic @115
+Audio service	microphone, volume and gain	MENU_MIC_AGC	-	-	-	-	Mic AGC @539	-	-
+Audio service	microphone, volume and gain	MENU_TX_COMPRESSOR	-	-	-	-	Mic Compress @541	-	-
+Audio service	microphone, volume and gain	MENU_VOL_GAIN	-	-	-	-	Vol Gain @543	-	-
+Audio service	microphone, volume and gain	MENU_SET_VOL	SetVol @161	-	SET VOL @155	SetVol @169	-	-	-
+Audio service	microphone, volume and gain	MENU_SET_VOLUME	-	SetVol @121	-	-	-	-	-
+Audio package	voice prompts, alarms, key and TX feedback	MENU_VOICE	Voice @109	-	VOICE @104	Voice @108	Voice @545	Voice @137	Voice @128
+Audio package	voice prompts, alarms, key and TX feedback	MENU_AL_MOD	-	-	ALARM T @111	AlarmT @115	Alarm @554	AlarmT @144	AlarmT @135
+Audio package	voice prompts, alarms, key and TX feedback	MENU_AUTO_ROGER	-	AUROG @89	-	-	-	-	-
+Audio package	voice prompts, alarms, key and TX feedback	MENU_BEEP	Beep @107	-	BEEP @102	Beep @106	Key Beep @532	Beep @135	Beep @126
+Audio package	voice prompts, alarms, key and TX feedback	MENU_ROGER	Roger @111	Roger @88	ROGER @106	Roger @110	Roger @533	Roger @139	Roger @130
+Audio package	voice prompts, alarms, key and TX feedback	MENU_SET_EOT	SetEOT @144	-	SET EOT @141	SetEOT @151	Tail Alert @557	-	-
+Audio package	voice prompts, alarms, key and TX feedback	MENU_SET_TOT	SetTOT @143	-	SET TOT @140	SetTOT @150	Tx TO Alert @652	-	-
+External UI	meters, names, timers and layout	MENU_BAT_TXT	BatTxt @98	BatTxt @77	-	BatTxt @97	Battery Text @573	BatTxt @128	BatTxt @121
+External UI	meters, names, timers and layout	MENU_MDF	ChDisp @101	-	-	ChDisp @100	Channel Label @572	ChDisp @124	ChDisp @119
+External UI	meters, names, timers and layout	MENU_METER_STYLE	-	SetMet @110	-	-	-	-	-
+External UI	meters, names, timers and layout	MENU_MIC_BAR	MicBar @100	-	MIC BAR @95	MicBar @99	Mic Bar @537	MicBar @122	MicBar @117
+External UI	meters, names, timers and layout	MENU_SET_GUI	SetGUI @149	-	-	SetGUI @156	-	-	-
+External UI	meters, names, timers and layout	MENU_SET_MET	SetMet @148	MicBar @80	-	SetMet @155	-	-	-
+External UI	meters, names, timers and layout	MENU_SET_TMR	SetTmr @153	SetTmr @116	SET TMR @147	SetTmr @161	Beep Timer @558	-	-
+External UI	system and battery information	MENU_VOL	SysInf @134 / BatVol @136	-	ABOUT @165 / BATVOL @167	BatVol @143	-	BatVol @187	BatVol @167
+External UI	indexed startup and idle presentation	MENU_PONMSG	POnMsg @102	POnMsg @81	-	POnMsg @101	Power On Text @574	POnMsg @125	POnMsg @120
+External UI	indexed startup and idle presentation	MENU_PONSCR	-	PONSCR @82	-	-	-	-	-
+External UI	indexed startup and idle presentation	MENU_SET_SAV	SetSav @173	-	-	SetSav @181	-	-	-
+Display service	brightness, timeout, inversion and contrast	MENU_ABR	BLTime @103	BLTime @84	BL TIME @98	BLTime @102	Backlight Time @568	BackLt @131	BackLt @122
+Display service	brightness, timeout, inversion and contrast	MENU_ABR_MAX	BLMax @105	BLMax @86	BL MAX @100	BLMax @104	Backlight Max @569	BLMax @133	BLMax @124
+Display service	brightness, timeout, inversion and contrast	MENU_ABR_MIN	BLMin @104	BLMin @85	BL MIN @99	BLMin @103	Backlight Min @570	BLMin @132	BLMin @123
+Display service	brightness, timeout, inversion and contrast	MENU_ABR_ON_TX_RX	BLTxRx @106	BLTxRx @87	BL TXRX @101	BLTxRx @105	Backlight Tx/Rx @571	BltTRX @134	BltTRX @125
+Display service	brightness, timeout, inversion and contrast	MENU_SET_CTR	SetCtr @145	SetCtr @101	-	SetCtr @152	Contrast @576	-	-
+Display service	brightness, timeout, inversion and contrast	MENU_SET_INV	SetInv @146	SetInv @102	-	SetInv @153	Invert @577	-	-
+Input service	shortcuts and navigation mapping	MENU_BTN_INV	-	BtnInv @105	-	-	-	-	-
+Input service	shortcuts and navigation mapping	MENU_F1LONG	F1Long @90	F1Long @69	F1 LONG @86	F1Long @89	F1 Long @687	F1Long @112	F1Long @104
+Input service	shortcuts and navigation mapping	MENU_F1SHRT	F1Shrt @89	F1Shrt @68	F1 SHORT @85	F1Shrt @88	F1 Short @686	F1Shrt @111	F1Shrt @103
+Input service	shortcuts and navigation mapping	MENU_F2LONG	F2Long @92	F2Long @71	F2 LONG @88	F2Long @91	F2 Long @689	F2Long @114	F2Long @106
+Input service	shortcuts and navigation mapping	MENU_F2SHRT	F2Shrt @91	F2Shrt @70	F2 SHORT @87	F2Shrt @90	F2 Short @688	F2Shrt @113	F2Shrt @105
+Input service	shortcuts and navigation mapping	MENU_MLONG	M Long @93	M Long @72	M LONG @89	M Long @92	M Long @690	-	M Long @107
+Input service	shortcuts and navigation mapping	MENU_SET_KEY	SetKey @164	-	SET KEY @158	SetKey @172	-	-	-
+Input service	shortcuts and navigation mapping	MENU_SET_NAV	SetNav @196	-	-	SetNav @216	Nav Layout @684	-	-
+System service	keypad lock, passcode and reset	MENU_AUTOLK	KeyLck @95	KeyLck @73	KEY LCK @90	KeyLck @94	Auto Lock @654	KeyLck @117	KeyLck @110
+System service	keypad lock, passcode and reset	MENU_SET_LCK	SetLck @147	SetLck @108	SET LCK @144	SetLck @154	Lock Mode @656	-	-
+System service	keypad lock, passcode and reset	MENU_PASSCODE	-	-	-	-	Passcode @665	-	-
+System service	keypad lock, passcode and reset	MENU_PASSCODE_EXPOSE	-	-	-	-	Show Length @667	-	-
+System service	keypad lock, passcode and reset	MENU_PASSCODE_MAX_TRIES	-	-	-	-	Max Tries @666	-	-
+System service	keypad lock, passcode and reset	MENU_PASSCODE_STEALTH	-	-	-	-	Stealth Unlock @668	-	-
+System service	keypad lock, passcode and reset	MENU_RESET	Reset @197	Reset @129	RESET @183	Reset @217	Factory Reset @673	Reset @212	Reset @194
+Power service	sleep, power saving and battery model	MENU_SAVE	BatSav @97	BatSav @75	BAT SAVE @92	BatSav @96	Bat Save @659	BatSav @119	BatSav @114
+Power service	sleep, power saving and battery model	MENU_SET_OFF	SetOff @155	-	SET OFF @149	SetOff @163	Deep Sleep @662	-	-
+Power service	sleep, power saving and battery model	MENU_BATTYP	BatTyp @195	BatTyp @128	BAT TYP @182	BatTyp @215	Bat Type @660	BatTyp @211	BatTyp @193
+BSP	battery calibration and lamp	MENU_BATCAL	BatCal @194	BatCal @127	BAT CAL @181	BatCal @214	-	BatCal @210	BatCal @192
+BSP	battery calibration and lamp	MENU_LED	-	LIGHT @83	-	-	-	-	-
+Diagnostics package	maintenance inspection	MENU_MEMVIEW	-	-	-	-	Mem Hex Dump @671	-	-
+VFO	receiver filter selection	MENU_SSB_FLT	-	-	-	-	-	SSBFlt @50	-
+External UI	device information	MENU_RIGINFO	-	-	-	-	-	U.Info @53	U.Info @51
+Digital modes package	choose mode, schedule frames and encode payloads	MENU_DIGITAL_MODE	-	-	-	-	-	DIG.M @54	-
+Digital modes package	choose mode, schedule frames and encode payloads	MENU_WSPR_SEND	-	-	-	-	-	T.WSPR @55	-
+Digital modes package	choose mode, schedule frames and encode payloads	MENU_SSTV	-	-	-	-	-	T.SSTV @57	T.SSTV @55
+Digital modes package	choose mode, schedule frames and encode payloads	MENU_SSTV_PROTOCOL	-	-	-	-	-	STVEnc @58	-
+Digital modes package	choose mode, schedule frames and encode payloads	MENU_SSTV_SENDCW	-	-	-	-	-	STV CW @59	-
+Digital modes package	choose mode, schedule frames and encode payloads	MENU_APRS_SEND	-	-	-	-	-	T.APRS @62	-
+Digital modes package	choose mode, schedule frames and encode payloads	MENU_APRS_MYSSID	-	-	-	-	-	MySSID @63	-
+CW package	paddle mode, sidetone, keying rate and delay	MENU_CWKEY	-	-	-	-	-	CW KEY @67	CW KEY @60
+CW package	paddle mode, sidetone, keying rate and delay	MENU_CWTONE	-	-	-	-	-	CWTone @68	CWTone @58
+CW package	paddle mode, sidetone, keying rate and delay	MENU_CWTXDELAY	-	-	-	-	-	CW Dly @69	CW Dly @61
+CW package	paddle mode, sidetone, keying rate and delay	MENU_CWSPEED	-	-	-	-	-	CW WPM @70	CW WPM @62
+BSP	calibrated paddle input thresholds	MENU_CWADC_BOTH_END	-	-	-	-	-	CW AD4 @74	CW AD4 @66
+BSP	calibrated paddle input thresholds	MENU_CWADC_BOTH_START	-	-	-	-	-	CW AD3 @73	CW AD3 @65
+BSP	calibrated paddle input thresholds	MENU_CWADC_PAD1_START	-	-	-	-	-	CW AD1 @71	CW AD1 @63
+BSP	calibrated paddle input thresholds	MENU_CWADC_PAD2_START	-	-	-	-	-	CW AD2 @72	CW AD2 @64
+Coordinator	independent HF watch and audio level	MENU_HFDUALVOL	-	-	-	-	-	-	HFDVol @48
+Coordinator	independent HF watch and audio level	MENU_HFDUALWATCH	-	-	-	-	-	-	HFDual @47
