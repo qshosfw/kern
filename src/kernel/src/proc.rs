@@ -19,7 +19,7 @@ pub use memory::{MemoryMapLayout, MemoryRegionDescriptor, RegionKind, region_fla
 pub use service_registry::{MAX_REGISTERED_SERVICES, ServiceEntry, ServiceRegistry};
 pub use status_tray::StatusTray;
 
-use crate::caps::CapabilitySet;
+use ::abi::CapabilitySet;
 
 /// Process Identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

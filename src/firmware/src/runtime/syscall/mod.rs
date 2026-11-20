@@ -5,8 +5,8 @@
 
 #[cfg(test)]
 use crate::services::SysContext;
+use ::abi::Cap;
 use gfx::Canvas;
-use kernel::caps::Cap;
 use kernel::proc::abi::{KRX_ABI_VERSION_3_0, KrxApiTable};
 
 pub mod audio;
@@ -102,7 +102,7 @@ pub unsafe fn str_or_default<'a>(ptr: *const u8, len: usize, default: &'a str) -
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::domain;
+    use ::abi::domain;
     let op_byte = op as u8;
     let idx = op_byte & 0x0F;
     unsafe {
@@ -132,7 +132,7 @@ pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::abi::Op;
+    use ::abi::Op;
     use kernel::proc::abi::{KrxIpcSendReq, KrxSysInfo};
 
     #[test]
@@ -144,21 +144,21 @@ mod tests {
             0xF0,
             kernel::sched::Priority::Safety,
             kernel::proc::ExecType::StaticFirmware,
-            kernel::caps::CapabilitySet::empty(),
+            ::abi::CapabilitySet::empty(),
         );
         let _ = table.spawn(
             "Radio",
             0xF1,
             kernel::sched::Priority::Radio,
             kernel::proc::ExecType::StaticFirmware,
-            kernel::caps::CapabilitySet::empty(),
+            ::abi::CapabilitySet::empty(),
         );
         let _ = table.spawn(
             "Power",
             0xF2,
             kernel::sched::Priority::Safety,
             kernel::proc::ExecType::StaticFirmware,
-            kernel::caps::CapabilitySet::empty(),
+            ::abi::CapabilitySet::empty(),
         );
 
         let api = &NATIVE_API_TABLE;
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn fuzz_kern_call_invalid_and_null_boundary() {
-        use kernel::abi::domain;
+        use ::abi::domain;
         super::super::native_runner::init_native_slot();
         // Exercise invalid domains, invalid op indices, and null-pointer boundary args
         // across safe non-rebooting ops to prove zero panics or UB.

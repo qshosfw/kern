@@ -83,11 +83,11 @@ impl SettingsApp {
 
     #[cfg(feature = "krx_native")]
     #[inline(never)]
-    fn append_system_flag_items(
+    fn append_system_scope_items(
         &mut self,
         cat: &'static crate::apps::launcher::catalog::PackageCatalog,
-        sys_caps: kernel::caps::CapabilitySet,
-        flag: u8,
+        sys_caps: ::abi::CapabilitySet,
+        scope: u8,
         tag_base: u8,
         item_type: MenuItemType,
     ) {
@@ -97,7 +97,7 @@ impl SettingsApp {
             if self.items_len >= arena.items.len() {
                 break;
             }
-            if entry.is_system_entry(sys_caps, flag) {
+            if entry.is_system_entry(sys_caps, scope) {
                 arena.items[self.items_len].title = entry.title.as_str();
                 arena.items[self.items_len].item_type = item_type;
                 arena.item_tags[self.items_len] = tag_base | (cat_idx as u8);
@@ -119,18 +119,18 @@ impl SettingsApp {
 
         self.items_len = 0;
         self.populate_def_tags(spec, 0, menu_ins, ctx);
-        self.append_system_flag_items(
+        self.append_system_scope_items(
             cat,
             sys_caps,
-            kernel::runtime::SectionType::FLAG_SYSTEM_MENU,
+            ::abi::scope::SYSTEM_PAGE,
             0x80,
             MenuItemType::Submenu,
         );
         self.populate_def_tags(spec, menu_ins, act_ins, ctx);
-        self.append_system_flag_items(
+        self.append_system_scope_items(
             cat,
             sys_caps,
-            kernel::runtime::SectionType::FLAG_SYSTEM_ACTION,
+            ::abi::scope::SYSTEM_ACTION,
             0xC0,
             MenuItemType::Action,
         );

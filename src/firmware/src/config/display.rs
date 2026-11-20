@@ -12,9 +12,24 @@ pub struct DisplayConfig {
     pub boot_splash_duration: u8, // 0=Skip, 1=0.5s, 2=1.0s, 3=2.0s, 4=3.0s
     pub shading_mode: u8, // 0=Grayscale (2-bit FRC), 1=Dither (1-bit Bayer), 2=Monochrome (1-bit Binary)
     pub ui_animations: u8, // 0=Off, 1=On
-    pub refresh_rate: u8, // 0=20Hz (Quiet), 1=60Hz (Std), 2=75Hz (Turbo), 3=90Hz (Ultra)
+    pub refresh_rate: u8, // Animation tick: 0=50ms (Quiet), 1=18ms (Std), 2=15ms (Turbo), 3=12ms (Ultra)
     pub splash_path: [u8; 32], // e.g. "/user/splash/01_quansheng.rle"
     pub crc32: u32,
+}
+
+/// UI tick period in milliseconds while an animation is running, indexed by `refresh_rate`.
+///
+/// Animation controllers advance a fixed step per tick, so this table is the single place
+/// that sets animation pace for the panel and for headless RigWire viewers alike.
+#[cfg(feature = "animations")]
+#[inline(always)]
+pub fn anim_step_ms(refresh_rate: u8) -> u32 {
+    const STEP_MS: [u8; 4] = [50, 18, 15, 12];
+    STEP_MS[if refresh_rate < 4 {
+        refresh_rate as usize
+    } else {
+        1
+    }] as u32
 }
 
 impl DisplayConfig {
@@ -33,7 +48,7 @@ impl DisplayConfig {
             boot_splash_duration: 2, // 1.0s by default
             shading_mode: 1,         // Dither (1-bit Bayer) by default: 100% flicker-free on ST7565
             ui_animations: 1,        // Kinetic animations On by default
-            refresh_rate: 1,         // 60 Hz by default (matches 16ms LC response time & flashmap)
+            refresh_rate: 1,         // 18 ms animation tick by default
             splash_path: *b"/user/splash/01_quansheng.rle\0\0\0",
             crc32: 0,
         }

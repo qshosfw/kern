@@ -395,9 +395,17 @@ impl LauncherApp {
         // Clean any row bleed into status bar area (0..8)
         canvas.fill_rect(0, 0, 128, 8, Color::Clear);
 
-        // Minimalist vertical scrollbar with smooth kinetic tracking
+        // Minimalist vertical scrollbar following the kinetic scroller in pixel units
         if total > visible_count {
-            gfx::widgets::draw_scrollbar(canvas, 125, 9, 52, self.scroll_top, total, visible_count);
+            gfx::widgets::draw_scrollbar(
+                canvas,
+                125,
+                9,
+                52,
+                scroll_y.max(0) as usize,
+                total * 13,
+                visible_count * 13,
+            );
         }
     }
 }

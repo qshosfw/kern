@@ -1,0 +1,13 @@
+[package]
+name = "abi"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+# Host-only: emit operation, sub-opcode and capability names for the SDK generator.
+describe = []
+
+[[bin]]
+name = "abigen"
+required-features = ["describe"]

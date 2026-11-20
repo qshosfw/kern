@@ -2,8 +2,8 @@
 
 use crate::services::SysContext;
 
+use ::abi::CapabilitySet;
 use kernel::app::{App, AppMetadata, EventResult, ModalResult, StatusBarConfig};
-use kernel::caps::CapabilitySet;
 use kernel::event::Event;
 
 /// Application record stored in ROM describing an OS built-in application.
@@ -33,7 +33,7 @@ kernel::define_os_apps! {
     ],
     APP_ID_VFO => crate::apps::VfoApp [
         meta: AppMetadata { name: "Radio" },
-        caps: CapabilitySet::NONE.with(kernel::caps::Cap::RadioRx).with(kernel::caps::Cap::RadioTx)
+        caps: CapabilitySet::NONE.with(::abi::Cap::RadioRx).with(::abi::Cap::RadioTx)
     ],
     APP_ID_SETTINGS => crate::apps::SettingsApp [
         meta: AppMetadata { name: "Settings" },

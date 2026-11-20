@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "abi"
+version = "0.1.0"
+
+[[package]]
 name = "bare-metal"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -135,6 +139,7 @@ checksum = "361a90feb7004eca4019fb28352a9465666b24f840f5c3cddf0ff13920590b89"
 name = "firmware"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "bsp",
  "calib",
  "cortex-m",
@@ -155,6 +160,7 @@ name = "gfx"
 version = "0.1.0"
 dependencies = [
  "heapless",
+ "kern-platform-traits",
  "kernel",
  "utils",
 ]
@@ -186,6 +192,7 @@ version = "0.1.0"
 name = "kernel"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "cortex-m",
  "crypto",
  "heapless",

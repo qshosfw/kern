@@ -257,27 +257,47 @@ pub fn draw_sheet_frame(canvas: &mut Canvas, title: &str, sheet_y: i16, sheet_h:
     draw_sheet_slide_up(canvas, title, sheet_h, y_offset)
 }
 
-/// Shared ultra-compact scrollbar renderer
+/// Shared ultra-compact scrollbar renderer.
+///
+/// `offset`, `content` and `viewport` share one unit (rows or pixels): `offset` is the
+/// position of the viewport top inside `content`, never the selected index. The thumb
+/// length is `viewport / content` of the track and reaches the track end only when the
+/// last content unit is in view. Passing pixel units makes the thumb follow kinetic scrolling.
 #[inline(never)]
 pub fn draw_scrollbar(
     canvas: &mut Canvas,
     track_x: u8,
     track_y: u8,
     track_h: u8,
-    current: usize,
-    total: usize,
-    visible: usize,
+    offset: usize,
+    content: usize,
+    viewport: usize,
 ) {
-    if total <= visible || total == 0 {
+    if content <= viewport || viewport == 0 {
         return;
     }
     canvas.draw_vertical_line(track_x + 1, track_y, track_h, Color::DarkGray);
-    let thumb_h = ((visible as u32 * track_h as u32) / total as u32).max(4) as u8;
-    let max_scroll = (total - visible) as u32;
-    let rem_h = (track_h - thumb_h) as u32;
-    let cur = current.min(total - visible) as u32;
-    let thumb_y = (track_y + ((cur * rem_h) / max_scroll) as u8).min(track_y + track_h - thumb_h);
+    let (thumb_y, thumb_h) = scrollbar_thumb(track_y, track_h, offset, content, viewport);
     canvas.fill_rect(track_x, thumb_y, 3, thumb_h, Color::Fill);
+}
+
+/// Thumb `(top, length)` for a scrollbar track, rounded to the nearest pixel.
+#[inline(never)]
+pub fn scrollbar_thumb(
+    track_y: u8,
+    track_h: u8,
+    offset: usize,
+    content: usize,
+    viewport: usize,
+) -> (u8, u8) {
+    let track = track_h as u32;
+    let content = content as u32;
+    let max_offset = content - viewport as u32;
+    let thumb_h = ((viewport as u32 * track + (content >> 1)) / content).clamp(4, track);
+    let travel = track - thumb_h;
+    let pos = (offset as u32).min(max_offset);
+    let thumb_y = (pos * travel + (max_offset >> 1)) / max_offset;
+    (track_y + thumb_y as u8, thumb_h as u8)
 }
 
 /// Shared bottom-sheet modal frame rendered with a vertical slide-up offset.
@@ -389,6 +409,45 @@ pub fn draw_modal_popup_materialize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrollbar_thumb_tracks_viewport_and_ends_only_at_last_row() {
+        // 9 rows, 4 visible, 56 px track: thumb is 4/9 of the track.
+        let (top, len) = scrollbar_thumb(8, 56, 0, 9, 4);
+        assert_eq!((top, len), (8, 25));
+
+        // Every scroll position short of the last keeps the thumb off the track end.
+        for offset in 0..5 {
+            let (y, h) = scrollbar_thumb(8, 56, offset, 9, 4);
+            assert!(y + h < 8 + 56, "offset {offset} reached the end early");
+        }
+        let (y, h) = scrollbar_thumb(8, 56, 5, 9, 4);
+        assert_eq!(y + h, 8 + 56);
+
+        // Offsets past the end clamp instead of overflowing the track.
+        assert_eq!(scrollbar_thumb(8, 56, 99, 9, 4), (y, h));
+    }
+
+    #[test]
+    fn scrollbar_thumb_is_monotonic_in_pixel_units_and_keeps_minimum_length() {
+        let mut last = 0u8;
+        for px in 0..=(5 * 13) {
+            let (y, _) = scrollbar_thumb(8, 56, px, 9 * 13, 4 * 13);
+            assert!(y >= last);
+            last = y;
+        }
+        let (y, h) = scrollbar_thumb(0, 40, 196, 200, 4);
+        assert_eq!(h, 4);
+        assert_eq!(y + h, 40);
+    }
+
+    #[test]
+    fn draw_scrollbar_skips_content_that_fits() {
+        let mut canvas = Canvas::new();
+        draw_scrollbar(&mut canvas, 124, 8, 56, 0, 4, 4);
+        draw_scrollbar(&mut canvas, 124, 8, 56, 0, 3, 0);
+        assert!(canvas.buffer.iter().all(|page| page[125] == 0));
+    }
 
     #[test]
     fn draw_dialog_hold_prompt_renders_header_progress_and_badges() {

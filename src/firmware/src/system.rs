@@ -33,9 +33,37 @@ pub fn dequeue_event() -> Option<Event> {
     }
 }
 
+/// Headless mode flag: physically powers down ST7565 panel & backlight and suppresses all
+/// display rendering / SPI blits for minimal battery draw while keeping full RigWire control.
+static mut HEADLESS_MODE: bool = false;
+
+#[inline(always)]
+pub fn is_headless() -> bool {
+    unsafe { *core::ptr::addr_of!(HEADLESS_MODE) }
+}
+
+/// Enable or disable zero-overhead headless remote-control mode.
+#[inline(never)]
+pub fn set_headless(hw: &mut SystemHardware, enable: bool) {
+    let was = is_headless();
+    unsafe {
+        *core::ptr::addr_of_mut!(HEADLESS_MODE) = enable;
+    }
+    if enable {
+        hw.backlight.turn_off();
+        hw.lcd.enter_sleep();
+    } else if was {
+        hw.lcd.exit_sleep();
+        hw.backlight.wake();
+        hw.render_frame();
+    }
+}
+
 #[inline(never)]
 fn wake_and_notify_activity(hw: &mut SystemHardware) {
-    hw.backlight.wake();
+    if !is_headless() {
+        hw.backlight.wake();
+    }
     unsafe {
         (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
     }
@@ -43,6 +71,43 @@ fn wake_and_notify_activity(hw: &mut SystemHardware) {
 }
 
 use crate::orchestrator::record_proc_activation;
+
+/// Hold-off window (ms) after the last valid RigWire frame during which Deep Sleep and APO
+/// are inhibited so a remote operator over USB-C or 2-pin UART cannot lock themselves out.
+const REMOTE_SLEEP_INHIBIT_MS: u32 = 30_000;
+static mut LAST_WIRE_ACTIVITY_MS: u32 = 0;
+
+#[inline(always)]
+fn should_inhibit_deep_sleep(
+    usb_connected: bool,
+    wire_session_id: u32,
+    last_wire_ms: u32,
+    now: u32,
+) -> bool {
+    if usb_connected {
+        return true;
+    }
+    wire_session_id != 0
+        && last_wire_ms != 0
+        && now.wrapping_sub(last_wire_ms) < REMOTE_SLEEP_INHIBIT_MS
+}
+
+#[allow(unused_variables)]
+fn is_remote_control_active(hw: &SystemHardware, now: u32) -> bool {
+    #[cfg(feature = "usb")]
+    let usb_connected = hw.usb.is_connected();
+    #[cfg(not(feature = "usb"))]
+    let usb_connected = false;
+
+    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
+    let (session_id, last_ms) = (hw.wire.session.active_session_id, unsafe {
+        *core::ptr::addr_of!(LAST_WIRE_ACTIVITY_MS)
+    });
+    #[cfg(not(any(feature = "uart", feature = "usb_cdc")))]
+    let (session_id, last_ms) = (0u32, 0u32);
+
+    should_inhibit_deep_sleep(usb_connected, session_id, last_ms, now)
+}
 
 #[allow(unused_variables)]
 fn is_plugged_in(hw: &SystemHardware) -> bool {
@@ -89,6 +154,17 @@ pub static WAKE_EXTI_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::
 
 #[inline(never)]
 fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
+    // Hardened remote-control guard: never sever an active USB-C or RigWire remote link
+    // by entering STOP mode (which disconnects USB and requires a physical button to wake).
+    if is_remote_control_active(hw, py32_hal::delay::millis()) {
+        hw.orchestrator.reset_hold_tracking();
+        unsafe {
+            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                .show_toast("Remote active: sleep locked", 1800);
+        }
+        return;
+    }
+
     // 1. Play gentle descending power-down cue
     hw.radio
         .play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
@@ -314,13 +390,18 @@ fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut 
     }
 
     let is_plugged = is_plugged_in(hw);
-    if is_plugged || hw.backlight.is_active() || hw.audio.is_active() {
+    let is_remote = is_remote_control_active(hw, py32_hal::delay::millis());
+    if is_plugged || is_remote || hw.backlight.is_active() || hw.audio.is_active() {
         pwr.notify_activity();
     }
 
     let apo_fired = pwr.apo_triggered;
     pwr.apo_triggered = false;
-    if apo_fired && !is_plugged && crate::master_config_ref().battery.auto_power_off_min > 0 {
+    if apo_fired
+        && !is_plugged
+        && !is_remote
+        && crate::master_config_ref().battery.auto_power_off_min > 0
+    {
         handle_deep_sleep_mode(hw);
     }
 }
@@ -349,10 +430,21 @@ fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool)
         enqueue_event(Event::Usb(usb_ev));
     }
 
-    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-    if let Some((header, _raw_len)) = hw.wire.poll(now) {
-        wake_and_notify_activity(hw);
-        *dirty_render = true;
+    #[cfg(all(feature = "wire", any(feature = "uart", feature = "usb_cdc")))]
+    for _ in 0..4 {
+        let Some((header, _raw_len)) = hw.wire.poll(now) else {
+            break;
+        };
+        unsafe {
+            *core::ptr::addr_of_mut!(LAST_WIRE_ACTIVITY_MS) = now.max(1);
+        }
+        let is_passive_read = header.service == kernel::wire::SERVICE_CONTROL
+            && (header.opcode == kernel::wire::OP_HANDLE_GET
+                || header.opcode == kernel::wire::OP_HANDLE_STREAM);
+        if !is_passive_read {
+            wake_and_notify_activity(hw);
+            *dirty_render = true;
+        }
         if !crate::services::wire::dispatch_wire_record(&header, hw, now) {
             enqueue_event(Event::Sys(kernel::ipc::SysEvent {
                 target: header.service,
@@ -399,13 +491,74 @@ fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
     hw.key_scanner.scan_with_dt(dt);
     while let Some((code, state)) = hw.key_scanner.pop_event() {
         if !hw.orchestrator.is_keypad_locked() {
-            hw.backlight.wake();
+            if !is_headless() {
+                hw.backlight.wake();
+            }
             unsafe {
                 (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
             }
         }
         enqueue_event(Event::Key { code, state });
     }
+}
+
+#[inline(never)]
+fn timer_due(last: &mut u32, now: u32, period: u32) -> Option<u32> {
+    let dt = now.wrapping_sub(*last);
+    if dt >= period {
+        *last = now;
+        Some(dt)
+    } else {
+        None
+    }
+}
+
+#[inline(never)]
+fn drain_events_and_render(
+    hw: &mut SystemHardware,
+    is_anim: bool,
+    is_ui_live: bool,
+    dirty_render: &mut bool,
+    dimmed_dirty: &mut bool,
+) -> bool {
+    while let Some(ev) = dequeue_event() {
+        let had_lock = hw.orchestrator.is_lock_overlay_active();
+        let consumed = hw.dispatch_event_and_actions(&ev);
+        if had_lock || hw.orchestrator.is_lock_overlay_active() {
+            *dimmed_dirty = true;
+        }
+        if !matches!(ev, Event::Tick) || consumed || is_anim {
+            *dirty_render = true;
+        }
+    }
+
+    if hw.orchestrator.take_sleep_requested() {
+        handle_deep_sleep_mode(hw);
+        *dirty_render = true;
+    }
+
+    if *dirty_render && (is_ui_live || *dimmed_dirty) {
+        hw.render_frame();
+        *dirty_render = false;
+        *dimmed_dirty = false;
+        return true;
+    }
+    false
+}
+
+/// Returns `(is_ui_live, is_anim)` for the UI tick scheduler.
+///
+/// The UI is observed either on the panel or remotely over RigWire (headless), so tick
+/// cadence follows `is_ui_live`, never the panel power state alone.
+#[inline(always)]
+fn ui_cadence(
+    headless: bool,
+    display_awake: bool,
+    ui_animating: bool,
+    lock_animating: bool,
+) -> (bool, bool) {
+    let is_ui_live = display_awake || headless;
+    (is_ui_live, (ui_animating && is_ui_live) || lock_animating)
 }
 
 pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -> ! {
@@ -433,19 +586,17 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
     }
 
     loop {
-        // Feed Independent Watchdog
         py32_hal::wdt::Watchdog::feed();
 
         let now = py32_hal::delay::millis();
         poll_usb_and_wire(hw, now, &mut dirty_render);
 
-        // 0c. High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms
+        // High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms
         #[cfg(feature = "radio")]
-        if now.wrapping_sub(last_radio_tick) >= 10 {
-            last_radio_tick = now;
-            if !crate::orchestrator::is_proc_paused(0xF1) {
-                hw.tick_radio_services();
-            }
+        if timer_due(&mut last_radio_tick, now, 10).is_some()
+            && !crate::orchestrator::is_proc_paused(0xF1)
+        {
+            hw.tick_radio_services();
         }
 
         // Clear crash-loop strike counter only after >= 10 s of healthy main loop execution (§38.4)
@@ -454,16 +605,18 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             crash_loop_cleared = true;
         }
 
-        // 1. Poll hardware keyboard matrix every 5ms (DeltaFW / fagci-k1-fw standard)
-        if now.wrapping_sub(last_key_tick) >= 5 {
-            let dt = now.wrapping_sub(last_key_tick).min(50) as u16;
-            last_key_tick = now;
-            poll_keypad_tick(hw, dt);
+        // 1. Poll hardware keyboard matrix every 5ms
+        if let Some(dt) = timer_due(&mut last_key_tick, now, 5) {
+            poll_keypad_tick(hw, dt.min(50) as u16);
         }
 
-        let is_display_awake = hw.backlight.is_active();
-        let lock_animating = hw.orchestrator.is_lock_overlay_animating();
-        let is_anim = (hw.orchestrator.is_animating() && is_display_awake) || lock_animating;
+        let is_display_awake = !is_headless() && hw.backlight.is_active();
+        let (is_ui_live, is_anim) = ui_cadence(
+            is_headless(),
+            is_display_awake,
+            hw.orchestrator.is_animating(),
+            hw.orchestrator.is_lock_overlay_animating(),
+        );
 
         // Keep microkernel PowerService state in sync with display activity
         unsafe {
@@ -475,104 +628,68 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             }
         }
 
-        // 2. Fully Adaptive Refresh Rate & Physical LCD Timing:
-        // - Active UI animations: tick interval derived from active display refresh_rate:
-        //   0 (20 Hz): 50ms tick (Battery saving)
-        //   1 (60 Hz): 16ms tick (Std, matches f4hwn flashmap 15-16ms LC response time)
-        //   2 (75 Hz): 13ms tick (Turbo, matches ST7565 internal panel scan ~76 Hz)
-        //   3 (90 Hz): 11ms tick (Ultra)
-        // - Screen awake & idle: 50ms tick (20 Hz)
-        // - Screen asleep (Standby): 100ms tick (10 Hz) to maximize Cortex-M0+ low-power sleep.
+        // 2. Adaptive Refresh Rate & UI Tick
         #[cfg(feature = "animations")]
         let ui_tick_interval = if is_anim {
-            const RATE_MS: [u8; 4] = [50, 16, 13, 11];
-            let r = crate::master_config_ref().display.refresh_rate;
-            RATE_MS[if r < 4 { r as usize } else { 1 }] as u32
-        } else if is_display_awake {
+            crate::config::display::anim_step_ms(crate::master_config_ref().display.refresh_rate)
+        } else if is_ui_live {
             50u32
         } else {
             100u32
         };
         #[cfg(not(feature = "animations"))]
-        let ui_tick_interval = if is_display_awake { 50u32 } else { 100u32 };
+        let ui_tick_interval = if is_ui_live { 50u32 } else { 100u32 };
 
-        if now.wrapping_sub(last_ui_tick) >= ui_tick_interval {
-            let delta = now.wrapping_sub(last_ui_tick);
-            last_ui_tick = now;
+        if let Some(delta) = timer_due(&mut last_ui_tick, now, ui_tick_interval) {
             record_proc_activation(0xF0);
             hw.backlight.tick(delta as u16);
             hw.audio.tick(delta as u16);
             enqueue_event(Event::Tick);
         }
 
-        // High-speed temporal FRC subframe refresh:
-        // When in Grayscale mode (shading_mode == 0), display is awake, not actively animating,
-        // and no canvas re-render is pending:
-        // Pushes temporal subframes at rock-solid 2ms intervals (500 Hz subframe / 166.7 Hz optical cycle).
+        // High-speed temporal FRC subframe refresh (Grayscale mode)
         #[cfg(feature = "grayscale")]
         if is_display_awake
             && !is_anim
             && !dirty_render
             && crate::master_config_ref().display.shading_mode == 0
-            && now.wrapping_sub(last_subframe_tick) >= 2
+            && timer_due(&mut last_subframe_tick, now, 2).is_some()
         {
-            last_subframe_tick = now;
             hw.refresh_subframe();
         }
 
-        // 3. Periodic ADC battery/temp sampling:
-        // - 200ms (5 Hz) when display is awake or audio active for rapid meter updates & charge detection
-        // - 1000ms (1 Hz) when screen is asleep to cut ADC activations by 80%
+        // 3. Periodic ADC battery/temp sampling (200ms awake/audio, 1000ms asleep)
         let batt_interval = if is_display_awake || hw.audio.is_active() {
             200u32
         } else {
             1000u32
         };
-        if now.wrapping_sub(last_battery_tick) >= batt_interval {
-            last_battery_tick = now;
-            if !crate::orchestrator::is_proc_paused(0xF2) {
-                poll_battery_tick(hw, &adc, &mut dirty_render);
-            }
+        if timer_due(&mut last_battery_tick, now, batt_interval).is_some()
+            && !crate::orchestrator::is_proc_paused(0xF2)
+        {
+            poll_battery_tick(hw, &adc, &mut dirty_render);
         }
 
         // 4. 1-second system tick for uptime, telemetry, activity & Auto-Power-Off (APO)
-        if now.wrapping_sub(last_tick) >= 1000 {
-            last_tick = now;
+        if timer_due(&mut last_tick, now, 1000).is_some() {
             handle_one_second_tick(hw, &mut low_batt_warning_timer);
             dirty_render = true;
         }
 
-        while let Some(ev) = dequeue_event() {
-            let had_lock_overlay = hw.orchestrator.is_lock_overlay_active();
-            let consumed = hw.dispatch_event_and_actions(&ev);
-            let has_lock_overlay = hw.orchestrator.is_lock_overlay_active();
-            if had_lock_overlay || has_lock_overlay {
-                dimmed_dirty = true;
-            }
-            if !matches!(ev, Event::Tick) || consumed || is_anim {
-                dirty_render = true;
-            }
+        let rendered = drain_events_and_render(
+            hw,
+            is_anim,
+            is_ui_live,
+            &mut dirty_render,
+            &mut dimmed_dirty,
+        );
+        #[cfg(feature = "grayscale")]
+        if rendered {
+            last_subframe_tick = py32_hal::delay::millis();
         }
+        #[cfg(not(feature = "grayscale"))]
+        let _ = rendered;
 
-        // Check if deep sleep mode was requested (e.g. via long-press Exit).
-        if hw.orchestrator.take_sleep_requested() {
-            handle_deep_sleep_mode(hw);
-            dirty_render = true;
-        }
-
-        // Render when awake or when keypad-lock notifications/unlock holds need a dimmed update.
-        if dirty_render && (is_display_awake || dimmed_dirty) {
-            hw.render_frame();
-            dirty_render = false;
-            dimmed_dirty = false;
-            #[cfg(feature = "grayscale")]
-            {
-                last_subframe_tick = py32_hal::delay::millis();
-            }
-        }
-
-        // Sleep until next event/interrupt, unless USB is actively connected or has pending transfer,
-        // high-speed animation is active, or Grayscale FRC is actively cycling subframes while display is awake
         #[cfg(feature = "usb")]
         if hw.usb.is_connected() || hw.usb.has_pending_transfer() {
             continue;
@@ -588,7 +705,6 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             continue;
         }
 
-        // Sleep until next event/interrupt
         cortex_m::asm::wfi();
     }
 }
@@ -596,6 +712,19 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_ui_runs_at_the_same_cadence_as_the_panel() {
+        // Panel on and animating.
+        assert_eq!(ui_cadence(false, true, true, false), (true, true));
+        // Headless: panel is off but the UI is watched remotely, so cadence is identical.
+        assert_eq!(ui_cadence(true, false, true, false), (true, true));
+        assert_eq!(ui_cadence(true, false, false, false), (true, false));
+        // Panel asleep and not headless: idle cadence, no animation ticks.
+        assert_eq!(ui_cadence(false, false, true, false), (false, false));
+        // The lock overlay animates regardless of panel state.
+        assert_eq!(ui_cadence(false, false, false, true), (false, true));
+    }
 
     #[test]
     fn test_stop_hold_to_wake_transitions() {
@@ -633,5 +762,40 @@ mod tests {
             );
         }
         assert_eq!(next_stop_sleep_ticks(true, &mut steps), None);
+    }
+
+    #[test]
+    fn test_remote_sleep_inhibit_window() {
+        // Active USB connection always inhibits deep sleep
+        assert!(should_inhibit_deep_sleep(true, 0, 0, 1000));
+        // Disconnected USB with no RigWire session allows deep sleep
+        assert!(!should_inhibit_deep_sleep(false, 0, 0, 1000));
+        // Active RigWire session over UART inhibits sleep inside 30 s window
+        assert!(should_inhibit_deep_sleep(
+            false,
+            0x4B45_524E,
+            10_000,
+            39_999
+        ));
+        // Once idle >= 30 s with USB disconnected, deep sleep is permitted again
+        assert!(!should_inhibit_deep_sleep(
+            false,
+            0x4B45_524E,
+            10_000,
+            40_000
+        ));
+        // Handles u32 uptime wraparound cleanly
+        assert!(should_inhibit_deep_sleep(
+            false,
+            0x4B45_524E,
+            u32::MAX - 5_000,
+            10_000
+        ));
+        assert!(!should_inhibit_deep_sleep(
+            false,
+            0x4B45_524E,
+            u32::MAX - 5_000,
+            30_000
+        ));
     }
 }

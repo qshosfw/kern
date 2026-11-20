@@ -24,6 +24,7 @@ pub const FACET_SYS_CALIBRATION: u16 = 0x0003;
 
 pub const ACTION_SYS_REBOOT: u16 = 0x0001;
 pub const ACTION_SYS_FLASHLIGHT: u16 = 0x0002;
+pub const ACTION_SYS_HEADLESS: u16 = 0x0004;
 
 // ── DOMAIN_RADIO (0x01) ───────────────────────────────────────────────────────
 pub const RADIO_INSTANCE_ACTIVE: u8 = 0x00;

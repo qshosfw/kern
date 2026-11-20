@@ -4,6 +4,7 @@ cargo-features = ["panic-immediate-abort"]
 members = [
     "src/platform/pac",
     "src/platform/hal",
+    "src/abi",
     "src/kernel",
     "src/driver",
     "src/lib/gfx",
@@ -59,3 +60,7 @@ opt-level = 2
 [profile.test.package.kernfs]
 opt-level = 2
 
+# Host-side tools (`./kern abi`): prebuilt std, so the default panic strategy.
+[profile.host]
+inherits = "dev"
+panic = "unwind"

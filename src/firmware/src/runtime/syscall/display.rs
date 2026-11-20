@@ -5,7 +5,7 @@ use crate::services::primitives::{color_from_u8, font_from_u8};
 use kernel::proc::abi::{KrxTextReq, KrxWidget};
 
 pub fn system_icon_8(icon_id: u8) -> Option<&'static [u8; 8]> {
-    gfx::icons::SYSTEM_ICONS_8.get(icon_id.wrapping_sub(22) as usize)
+    gfx::icons::SYSTEM_ICONS_8.get(icon_id.wrapping_sub(::abi::icon::SYSTEM_BASE) as usize)
 }
 
 #[inline(never)]
@@ -49,7 +49,7 @@ pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
 
 #[inline(never)]
 pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{
+    use ::abi::{
         idx as op,
         sub::{gfx_ctl, gfx_draw},
     };
@@ -173,7 +173,7 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::abi::Op;
+    use ::abi::Op;
 
     #[test]
     fn get_framebuffer_marks_all_pages_dirty() {

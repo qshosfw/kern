@@ -38,7 +38,6 @@ pub enum StorageSecurityStatus {
 const SCAN_DIRS: [&str; 4] = ["/user", "/pref", "/pref/app", "/user/vault"];
 
 /// Counts files marked `ATTR_ENCRYPTED` across user and preference storage directories.
-#[inline(never)]
 pub fn count_encrypted_files(filesystem: &mut crate::services::SystemStorage) -> usize {
     #[cfg(not(feature = "filesystem"))]
     {

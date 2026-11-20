@@ -9,9 +9,9 @@
 use super::syscall::ACTIVE_CTX;
 use super::syscall::NATIVE_API_TABLE;
 use crate::services::SysContext;
+use ::abi::CapabilitySet;
 use gfx::Canvas;
 use kernel::app::{EventResult, ModalResult, StatusBarConfig};
-use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};

@@ -278,6 +278,9 @@ impl<'a> SystemHardware<'a> {
 
     pub fn render_frame(&mut self) {
         self.exec_with_ctx(CtxOp::Render);
+        if crate::system::is_headless() {
+            return;
+        }
         let canvas = crate::system_canvas();
         canvas.mark_all_dirty();
         self.lcd.blit(canvas);
@@ -287,7 +290,7 @@ impl<'a> SystemHardware<'a> {
     pub fn refresh_subframe(&mut self) {
         #[cfg(feature = "grayscale")]
         {
-            if self.lcd.shading_mode != 0 {
+            if crate::system::is_headless() || self.lcd.shading_mode != 0 {
                 return;
             }
 

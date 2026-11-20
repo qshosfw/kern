@@ -3,7 +3,7 @@
 //! Normative implementation of KRX-ABI 2.5.0 container format and section headers.
 //! Provides zero-allocation, explicit little-endian parsing safe for ARM Cortex-M0+.
 
-use crate::caps::CapabilitySet;
+use ::abi::CapabilitySet;
 
 pub const KRX_IDENT: [u8; 4] = [0xC0, 0xDE, 0x01, 0xFE];
 pub const BOOT_IDENT: [u8; 4] = [0xC0, 0xDE, 0x02, 0xFD];
@@ -600,10 +600,6 @@ impl SectionType {
     pub const FLAG_SINGLETON: u8 = 1 << 3;
     pub const FLAG_AUTO_UPDATE_OK: u8 = 1 << 4;
     pub const FLAG_RTC: u8 = 1 << 5;
-    /// Module exposes an entry in the OS Settings -> System menu.
-    pub const FLAG_SYSTEM_MENU: u8 = 1 << 6;
-    /// Module exposes an action/dialog button in the OS Settings -> System maintenance group.
-    pub const FLAG_SYSTEM_ACTION: u8 = 1 << 7;
 
     pub fn exec_type(&self) -> Option<KrxExecType> {
         KrxExecType::from_u8(self.exec_type)
@@ -628,12 +624,12 @@ impl SectionType {
     }
 
     #[inline(always)]
-    pub fn capabilities(&self) -> crate::caps::CapabilitySet {
-        crate::caps::CapabilitySet::from_raw(self.cap_mask)
+    pub fn capabilities(&self) -> ::abi::CapabilitySet {
+        ::abi::CapabilitySet::from_raw(self.cap_mask)
     }
 
     #[inline(always)]
-    pub fn set_capabilities(&mut self, caps: crate::caps::CapabilitySet) {
+    pub fn set_capabilities(&mut self, caps: ::abi::CapabilitySet) {
         self.cap_mask = caps.raw();
     }
 }
@@ -730,7 +726,7 @@ const _: () = assert!(core::mem::size_of::<KrxConfigItem>() == 16);
 pub struct KrxActionDecl {
     /// App-local action ID passed to `entry(event)` via launch args (0 = default launch)
     pub action_id: u16,
-    /// Scope mask: bit 0 = shortcut binder, bit 1 = `[F]` drawer, bit 2 = system action
+    /// Scope mask of `abi::scope` bits: where the OS surfaces this action
     pub scope_mask: u8,
     pub flags: u8,
     /// ASCII NUL-terminated label
@@ -739,9 +735,6 @@ pub struct KrxActionDecl {
 
 impl KrxActionDecl {
     pub const SIZE: usize = 16;
-    pub const SCOPE_SHORTCUT: u8 = 1 << 0;
-    pub const SCOPE_DRAWER: u8 = 1 << 1;
-    pub const SCOPE_SYSTEM: u8 = 1 << 2;
 
     #[inline(always)]
     pub const fn count(body: &[u8]) -> usize {
@@ -780,7 +773,7 @@ pub struct KrxSummary<'a> {
     pub type_flags: u8,
     pub has_exec: bool,
     pub icon_id: u16,
-    pub caps: crate::caps::CapabilitySet,
+    pub caps: ::abi::CapabilitySet,
     pub exec_raw: SectionExecution,
     pub preamble: KrxPreamble,
     pub title: Option<&'a str>,
@@ -812,16 +805,6 @@ impl<'a> KrxSummary<'a> {
     pub fn is_singleton(&self) -> bool {
         (self.type_flags & SectionType::FLAG_SINGLETON) != 0
     }
-
-    #[inline(always)]
-    pub fn is_system_menu(&self) -> bool {
-        (self.type_flags & SectionType::FLAG_SYSTEM_MENU) != 0
-    }
-
-    #[inline(always)]
-    pub fn is_system_action(&self) -> bool {
-        (self.type_flags & SectionType::FLAG_SYSTEM_ACTION) != 0
-    }
 }
 
 impl<'a> Default for KrxSummary<'a> {
@@ -843,7 +826,7 @@ impl<'a> Default for KrxSummary<'a> {
             exec_type: KrxExecType::App,
             type_flags: 0,
             has_exec: false,
-            caps: crate::caps::CapabilitySet::NONE,
+            caps: ::abi::CapabilitySet::NONE,
             exec_raw: SectionExecution {
                 min_stack_bytes: 0,
                 min_heap_bytes: 0,
@@ -962,7 +945,7 @@ impl KrxPreamble {
                         out.exec_type = et;
                     }
                     out.type_flags = body[1];
-                    out.caps = crate::caps::CapabilitySet::from_raw(u32::from_le_bytes([
+                    out.caps = ::abi::CapabilitySet::from_raw(u32::from_le_bytes([
                         body[8], body[9], body[10], body[11],
                     ]));
                 }

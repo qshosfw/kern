@@ -12,7 +12,7 @@ fn power_ref() -> &'static drivers::battery::SystemPower {
 
 #[inline(never)]
 fn dispatch_io_key(sub: u8, a1: usize) -> usize {
-    use kernel::abi::sub::io_key;
+    use ::abi::sub::io_key;
     match sub {
         io_key::POLL => {
             bsp::Board::wdt_feed();
@@ -62,7 +62,7 @@ fn dispatch_io_key(sub: u8, a1: usize) -> usize {
 
 #[inline(never)]
 fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
-    use kernel::abi::sub::io_power;
+    use ::abi::sub::io_power;
     use kernel::service::PowerService;
     let p = power_ref();
     match sub {
@@ -138,7 +138,7 @@ fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
 
 #[inline(never)]
 unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
-    use kernel::abi::sub::io_serial;
+    use ::abi::sub::io_serial;
     match sub {
         io_serial::WRITE => {
             let len = a2 as u16;
@@ -242,7 +242,7 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
 
 #[inline(never)]
 unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
-    use kernel::abi::sub::io_bus;
+    use ::abi::sub::io_bus;
     match sub {
         io_bus::I2C => {
             let req = a1 as *const KrxBusReq;
@@ -324,7 +324,7 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
 
 #[inline(never)]
 pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{idx as op, sub::io_time};
+    use ::abi::{idx as op, sub::io_time};
     match idx {
         op::IoKey => dispatch_io_key(a0 as u8, a1),
         op::IoPower => dispatch_io_power(a0 as u8, a1, a2),

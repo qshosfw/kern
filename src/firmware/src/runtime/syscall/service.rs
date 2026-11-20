@@ -157,7 +157,7 @@ fn post_event_id(event_id: u32) -> usize {
 
 #[inline(never)]
 pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{idx as op, sub::sys_query};
+    use ::abi::{idx as op, sub::sys_query};
     match idx {
         op::SysInfo => unsafe { fill_sys_info(a0 as *mut KrxSysInfo) },
         op::SysQuery => match a0 as u8 {
@@ -219,8 +219,7 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             q as usize
         }
         op::SysReboot => {
-            if !super::super::native_runner::active_native_caps()
-                .contains(kernel::caps::Cap::PowerManage)
+            if !super::super::native_runner::active_native_caps().contains(::abi::Cap::PowerManage)
             {
                 return 1;
             }
@@ -290,9 +289,7 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
     let target = (op_and_id >> 8) as u8;
 
     if op < 0x80 {
-        if !super::super::native_runner::active_native_caps()
-            .contains(kernel::caps::Cap::TaskControl)
-        {
+        if !super::super::native_runner::active_native_caps().contains(::abi::Cap::TaskControl) {
             return 2;
         }
         let table = crate::orchestrator::proc_table_mut();
@@ -404,8 +401,8 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
 #[inline(never)]
 pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
     #[cfg(feature = "krx_paged")]
-    use kernel::abi::sub::proc_paged;
-    use kernel::abi::{idx as op, sub::proc_svc};
+    use ::abi::sub::proc_paged;
+    use ::abi::{idx as op, sub::proc_svc};
     match idx {
         op::ProcSelf => active_caller_pid() as usize,
         op::ProcFind => find_proc_by_ptr(a0 as *const u8, a1 as u8) as usize,
@@ -570,7 +567,7 @@ unsafe fn ipc_send_raw(pids_type: u32, flags_and_seq: u32, ptr: *const u8, len: 
 
 #[inline(never)]
 pub unsafe fn dispatch_ipc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::idx as op;
+    use ::abi::idx as op;
     match idx {
         op::IpcSend => unsafe { ipc_send_msg(a0 as *const KrxIpcMessage) as usize },
         op::IpcRecv => unsafe { ipc_recv_msg(a0 as *mut KrxIpcMessage) as usize },

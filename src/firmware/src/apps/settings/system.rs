@@ -24,7 +24,7 @@ pub const CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\0";
 #[cfg(feature = "uart")]
 pub const UART_BAUD_OPTIONS: &str = "115200\038400\0";
 
-/// Index in `PageId::System` where declarative `FLAG_SYSTEM_MENU` modules are inserted.
+/// Index in `PageId::System` where modules declaring a `scope::SYSTEM_PAGE` action are inserted.
 #[cfg(feature = "krx_native")]
 #[inline(always)]
 pub(crate) const fn system_modules_insert_idx() -> usize {
@@ -36,7 +36,7 @@ pub(crate) const fn system_modules_insert_idx() -> usize {
         }
 }
 
-/// Index in `PageId::System` where declarative `FLAG_SYSTEM_ACTION` buttons are inserted (before Restart).
+/// Index in `PageId::System` where `scope::SYSTEM_ACTION` buttons are inserted (before Restart).
 #[cfg(feature = "krx_native")]
 #[inline(always)]
 pub(crate) fn system_actions_insert_idx() -> usize {

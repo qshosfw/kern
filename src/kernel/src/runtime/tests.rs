@@ -1,5 +1,5 @@
 use super::*;
-use crate::caps::CapabilitySet;
+use ::abi::CapabilitySet;
 
 #[test]
 fn test_krx_swap_header_serde() {
@@ -96,9 +96,9 @@ fn test_packbits_repeated_runs() {
 
 #[test]
 fn test_krx_launch_error_diagnostics() {
-    use crate::caps::Cap;
+    use ::abi::Cap;
 
-    let err_cap = KrxLaunchError::CapabilityDenied(Cap::BroadBandRx.required_message());
+    let err_cap = KrxLaunchError::CapabilityDenied(crate::caps::name(Cap::BroadBandRx));
     assert_eq!(err_cap.title(), "Missing Hardware");
     assert_eq!(err_cap.message(), "Broadband HF RX");
 
@@ -309,10 +309,10 @@ fn test_synthetic_krx_package_end_to_end_parsing() {
 
 #[test]
 fn test_native_provisioned_package_full_test_bench() {
-    use crate::caps::Cap;
     use crate::proc::ProcessTable;
     use crate::proc::abi::*;
     use crate::proc::memory::MemoryMapLayout;
+    use ::abi::Cap;
 
     // ── 1. Synthesize Native Provisioned Package Binary (/apps/beacon.krx) ──
     let mut pkg = [0u8; 148]; // 132B header + 16B code payload
@@ -421,12 +421,12 @@ fn test_native_provisioned_package_full_test_bench() {
     // ── 3. Validate Unified Single-Entry ABI Dispatch ──
     let stub_api = KrxApiTable::safe_stub(required_caps);
     unsafe {
-        assert_eq!(stub_api.invoke(crate::abi::Op::RfGet, 0, 0, 0), 0);
+        assert_eq!(stub_api.invoke(::abi::Op::RfGet, 0, 0, 0), 0);
         assert_eq!(
-            stub_api.invoke(crate::abi::Op::RfTune, 145_000_000, 1, 12_500),
+            stub_api.invoke(::abi::Op::RfTune, 145_000_000, 1, 12_500),
             1
         );
-        assert_eq!(stub_api.invoke(crate::abi::Op::GfxFb, 0, 0, 0), 0);
+        assert_eq!(stub_api.invoke(::abi::Op::GfxFb, 0, 0, 0), 0);
     }
 
     // ── 4. Validate Process Lifecycle & PCB Ledger Integration ──
@@ -494,7 +494,7 @@ fn test_native_provisioned_package_full_test_bench() {
                 if ev.is_key() {
                     1 // Consumed
                 } else if ev.is_radio_bus() {
-                    let _freq = unsafe { table.invoke(crate::abi::Op::RfGet, 0, 0, 0) };
+                    let _freq = unsafe { table.invoke(::abi::Op::RfGet, 0, 0, 0) };
                     1 // Consumed
                 } else {
                     0 // Ignored
@@ -502,8 +502,8 @@ fn test_native_provisioned_package_full_test_bench() {
             }
             KRX_OP_RENDER => {
                 unsafe {
-                    table.invoke(crate::abi::Op::GfxDraw, 2 | (1 << 8), 0, (128) | (64 << 16));
-                    table.invoke(crate::abi::Op::GfxCommit, 0, 0, 0);
+                    table.invoke(::abi::Op::GfxDraw, 2 | (1 << 8), 0, (128) | (64 << 16));
+                    table.invoke(::abi::Op::GfxCommit, 0, 0, 0);
                 }
                 0
             }
@@ -561,7 +561,7 @@ fn test_native_provisioned_package_full_test_bench() {
 
 #[test]
 fn test_native_execution_fault_matrix_test_bench() {
-    use crate::caps::{Cap, CapabilitySet};
+    use ::abi::{Cap, CapabilitySet};
 
     // 1. Fault: Corrupted Preamble FourCC
     let mut bad_ident = [0u8; 32];
@@ -607,7 +607,7 @@ fn test_native_execution_fault_matrix_test_bench() {
     assert!(!platform_caps.contains_all(app_required_caps));
     let missing = app_required_caps.without(platform_caps);
     assert_eq!(missing.first_cap(), Some(Cap::BroadBandRx));
-    let err = KrxLaunchError::CapabilityDenied(missing.first_cap().unwrap().required_message());
+    let err = KrxLaunchError::CapabilityDenied(crate::caps::name(missing.first_cap().unwrap()));
     assert_eq!(err.message(), "Broadband HF RX");
 
     // 6. Fault: Insufficient Stack Headroom
@@ -640,8 +640,8 @@ fn test_native_execution_fault_matrix_test_bench() {
 
 #[test]
 fn test_native_app_execution_and_abi_integration_bench() {
-    use crate::caps::Cap;
     use crate::proc::abi::*;
+    use ::abi::Cap;
 
     // Construct a complete Native Package in memory:
     let mut pkg = [0u8; 320];
@@ -732,7 +732,7 @@ fn test_native_app_execution_and_abi_integration_bench() {
         match op {
             KRX_OP_START => {
                 state.freq = 145_500_000;
-                unsafe { table.invoke(crate::abi::Op::RfTune, state.freq as usize, 1, 12_500) };
+                unsafe { table.invoke(::abi::Op::RfTune, state.freq as usize, 1, 12_500) };
                 0
             }
             KRX_OP_EVENT => {
@@ -765,9 +765,9 @@ fn test_native_app_execution_and_abi_integration_bench() {
                     _pad: 0,
                 };
                 unsafe {
-                    table.invoke(crate::abi::Op::GfxDraw, 2 | (1 << 8), 0, 128 | (64 << 16));
-                    table.invoke(crate::abi::Op::GfxText, &raw const req as usize, 0, 0);
-                    table.invoke(crate::abi::Op::GfxCommit, 0, 0, 0);
+                    table.invoke(::abi::Op::GfxDraw, 2 | (1 << 8), 0, 128 | (64 << 16));
+                    table.invoke(::abi::Op::GfxText, &raw const req as usize, 0, 0);
+                    table.invoke(::abi::Op::GfxCommit, 0, 0, 0);
                 }
                 0
             }
@@ -846,8 +846,8 @@ fn test_native_app_execution_and_abi_integration_bench() {
 
 #[test]
 fn test_exhaustive_abi_vtable_verification_bench() {
-    use crate::abi::Op;
     use crate::proc::abi::*;
+    use ::abi::Op;
 
     let api = KrxApiTable::safe_stub(0xFFFF_FFFF);
 
@@ -1077,10 +1077,10 @@ fn test_streamed_pages_and_lru_cache_bench() {
 #[test]
 fn test_deep_edge_case_ram_orchestration_and_process_stress_bench() {
     use super::paged::*;
-    use crate::caps::CapabilitySet;
     use crate::proc::*;
     use crate::sched::Priority;
     use crate::sys::MemoryPressure;
+    use ::abi::CapabilitySet;
 
     // ══════════════════════════════════════════════════════════════════
     // 1. RAM ORCHESTRATION & MEMORY PRESSURE EDGE CASES
@@ -1413,7 +1413,7 @@ fn test_deep_edge_case_ram_orchestration_and_process_stress_bench() {
 
 #[test]
 fn test_krx_multi_type_lifecycle_and_flags() {
-    use crate::caps::Cap;
+    use ::abi::Cap;
 
     // Construct synthetic Daemon KRX binary package in memory
     let mut pkg = [0u8; 128];
@@ -1514,11 +1514,11 @@ fn test_krx_multi_type_lifecycle_and_flags() {
 fn test_section_actions_parse() {
     let mut body = [0u8; 32];
     body[0..2].copy_from_slice(&1u16.to_le_bytes());
-    body[2] = KrxActionDecl::SCOPE_SHORTCUT | KrxActionDecl::SCOPE_DRAWER;
+    body[2] = ::abi::scope::SHORTCUT | ::abi::scope::DRAWER;
     body[4..9].copy_from_slice(b"Sched");
 
     body[16..18].copy_from_slice(&2u16.to_le_bytes());
-    body[18] = KrxActionDecl::SCOPE_SHORTCUT;
+    body[18] = ::abi::scope::SHORTCUT;
     body[20..25].copy_from_slice(b"IpcLv");
 
     assert_eq!(KrxActionDecl::count(&body), 2);

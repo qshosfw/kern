@@ -26,7 +26,7 @@ fn is_proc_boot_path(path: &str) -> bool {
 
 #[inline(always)]
 fn has_proc_read_cap() -> bool {
-    super::super::native_runner::active_native_caps().contains(kernel::caps::Cap::ServiceRegistry)
+    super::super::native_runner::active_native_caps().contains(::abi::Cap::ServiceRegistry)
 }
 
 #[inline(never)]
@@ -66,11 +66,11 @@ fn proc_remove(path: &str) -> Option<u8> {
         return None;
     }
     let caps = super::super::native_runner::active_native_caps();
-    if !caps.contains(kernel::caps::Cap::PowerManage) {
+    if !caps.contains(::abi::Cap::PowerManage) {
         return Some(1);
     }
     crate::boot::clear_crash_strikes();
-    if caps.contains(kernel::caps::Cap::StorageAdmin) {
+    if caps.contains(::abi::Cap::StorageAdmin) {
         crate::panic::BOOT_RECORD.get_mut().reset_all();
     }
     Some(0)
@@ -97,7 +97,7 @@ fn file_stat_size(
 
 #[inline(never)]
 pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{
+    use ::abi::{
         idx as op,
         sub::{fs_meta, fs_read, fs_write},
     };
@@ -158,7 +158,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     {
                         if dst.len() >= 20
                             && super::super::native_runner::active_native_caps()
-                                .contains(kernel::caps::Cap::StorageAdmin)
+                                .contains(::abi::Cap::StorageAdmin)
                         {
                             if let Some(path_str) =
                                 unsafe { parse_str(r.path, r.path_len as usize) }
@@ -202,17 +202,21 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         let src = unsafe { core::slice::from_raw_parts(r.buf, r.len as usize) };
                         // Authenticated calibration write + hardware-UID Ascon-128 re-signing
                         if (a0 as u8) == fs_write::FILE && src.len() == 512 {
-                            if let Some(raw_path) = unsafe { parse_str(r.path, r.path_len as usize) } {
+                            if let Some(raw_path) =
+                                unsafe { parse_str(r.path, r.path_len as usize) }
+                            {
                                 if raw_path == crate::services::calibration::CALIB_FILE_PATH
                                     && super::super::native_runner::active_native_caps()
-                                        .contains(kernel::caps::Cap::FactoryCalib)
+                                        .contains(::abi::Cap::FactoryCalib)
                                     && crate::services::calibration::is_valid_calibration(src)
                                 {
-                                    let arr: &[u8; 512] = unsafe { &*(src.as_ptr() as *const [u8; 512]) };
+                                    let arr: &[u8; 512] =
+                                        unsafe { &*(src.as_ptr() as *const [u8; 512]) };
                                     let mcu_uid = bsp::uid::read_mcu_uid();
-                                    let sig = crate::services::calibration::compute_device_signature(
-                                        arr, &mcu_uid,
-                                    );
+                                    let sig =
+                                        crate::services::calibration::compute_device_signature(
+                                            arr, &mcu_uid,
+                                        );
                                     let ok = st.write_file(raw_path, src).is_ok()
                                         && st
                                             .write_file(
@@ -276,8 +280,8 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 fs_meta::FORMAT => {
                     let mode = a1 as u8;
                     let caps = super::super::native_runner::active_native_caps();
-                    if !caps.contains(kernel::caps::Cap::StorageAdmin)
-                        || (mode > 0 && !caps.contains(kernel::caps::Cap::FactoryCalib))
+                    if !caps.contains(::abi::Cap::StorageAdmin)
+                        || (mode > 0 && !caps.contains(::abi::Cap::FactoryCalib))
                     {
                         return 1;
                     }
@@ -323,7 +327,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kernel::caps::{Cap, CapabilitySet};
+    use ::abi::{Cap, CapabilitySet};
 
     #[test]
     fn proc_boot_snapshot_cap_and_reset_semantics() {

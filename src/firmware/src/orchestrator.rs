@@ -25,10 +25,10 @@ pub(super) fn tick_dt_ms(last_ms: &mut u32, max_dt: u16) -> u16 {
 }
 
 use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
+use ::abi::CapabilitySet;
 use compositor::OsCompositor;
 use gfx::Canvas;
 use kernel::app::EventResult;
-use kernel::caps::CapabilitySet;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::ipc::ipc_target;
 #[cfg(feature = "krx_runtime")]
@@ -267,8 +267,8 @@ impl Orchestrator {
             kernel::sched::Priority::Ui,
         ];
         let radio_caps = CapabilitySet::empty()
-            .with(kernel::caps::Cap::RadioRx)
-            .with(kernel::caps::Cap::RadioTx)
+            .with(::abi::Cap::RadioRx)
+            .with(::abi::Cap::RadioTx)
             .raw();
         for i in 0..4u8 {
             let caps_raw = match i {

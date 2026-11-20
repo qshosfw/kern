@@ -3,9 +3,9 @@
 //! Single source of truth for KRX `kern_call(op, a0, a1, a2)` and RigWire operation IDs,
 //! sub-opcode constants (`sub::*`), argument signatures (`Sig`), and required capability tokens (`Cap`).
 //! Operation IDs are packed as `(domain << 4) | index` (16 domains x 16 operations).
-//! Run `python3 tools/gen_abi.py` after edits to regenerate `packages/sdk/krx_ops.h`.
+//! Run `./kern abi` after edits to regenerate `packages/sdk/krx_ops.h` from these tables.
 
-use crate::caps::Cap;
+use crate::Cap;
 
 /// Argument kind encoded in 2 bits per parameter slot inside `Sig`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,8 +69,30 @@ pub struct OpDesc {
     pub _pad: u8,
 }
 
+/// One operation domain with its operations, for host-side generators.
+#[cfg(feature = "describe")]
+pub struct DomainInfo {
+    pub name: &'static str,
+    pub id: u8,
+    pub ops: &'static [OpInfo],
+}
+
+/// One operation: Rust identifier, packed ID and required capability identifier.
+#[cfg(feature = "describe")]
+pub struct OpInfo {
+    pub name: &'static str,
+    pub id: u8,
+    pub cap: Option<&'static str>,
+}
+
+/// One sub-opcode namespace with its `(name, value)` entries.
+#[cfg(feature = "describe")]
+pub struct SubGroupInfo {
+    pub name: &'static str,
+    pub items: &'static [(&'static str, u8)],
+}
+
 /// Declares the sorted kernel operation table (`Op` enum, `DOMAIN_*` IDs, and `OP_TABLE`).
-#[macro_export]
 macro_rules! abi {
     (
         $(
@@ -111,10 +133,29 @@ macro_rules! abi {
                     OpDesc {
                         id: ($dom_id << 4) | $idx,
                         sig: Sig::pack(ArgKind::$a0, ArgKind::$a1, ArgKind::$a2),
-                        cap: $crate::abi!(@cap $($cap)?),
+                        cap: abi!(@cap $($cap)?),
                         _pad: 0,
                     },
                 )*
+            )*
+        ];
+
+        #[cfg(feature = "describe")]
+        pub const DOMAINS: &[DomainInfo] = &[
+            $(
+                DomainInfo {
+                    name: stringify!($domain),
+                    id: $dom_id,
+                    ops: &[
+                        $(
+                            OpInfo {
+                                name: stringify!($name),
+                                id: ($dom_id << 4) | $idx,
+                                cap: abi!(@cap_ident $($cap)?),
+                            },
+                        )*
+                    ],
+                },
             )*
         ];
 
@@ -153,6 +194,8 @@ macro_rules! abi {
     };
     (@cap) => { None };
     (@cap $cap:ident) => { Some(Cap::$cap) };
+    (@cap_ident) => { None };
+    (@cap_ident $cap:ident) => { Some(stringify!($cap)) };
 }
 
 /// Declares typed sub-opcode namespaces mirrored into `packages/sdk/krx_ops.h`.
@@ -171,6 +214,16 @@ macro_rules! abi_sub {
                 }
             )*
         }
+
+        #[cfg(feature = "describe")]
+        pub const SUB_GROUPS: &[SubGroupInfo] = &[
+            $(
+                SubGroupInfo {
+                    name: stringify!($group),
+                    items: &[ $( (stringify!($name), $val) ),* ],
+                },
+            )*
+        ];
     };
 }
 

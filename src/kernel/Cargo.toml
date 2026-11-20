@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 cortex-m = { workspace = true }
 heapless = { workspace = true }
+abi = { path = "../abi" }
 utils = { path = "../lib/utils" }
 crypto = { path = "../lib/crypto" }
 

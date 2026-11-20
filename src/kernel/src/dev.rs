@@ -21,7 +21,7 @@ pub enum DeviceType {
     SystemInfo,
 }
 
-use crate::caps::{Cap, CapabilitySet};
+use ::abi::{Cap, CapabilitySet};
 
 /// Device Status descriptor reported by hardware drivers to the kernel harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

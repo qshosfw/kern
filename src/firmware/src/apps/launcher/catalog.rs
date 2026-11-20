@@ -64,7 +64,9 @@ pub struct PackageCatalogEntry {
     pub has_config: bool,
     pub title: SmallStr<16>,
     pub path: SmallStr<24>,
-    pub _pad: [u8; 3],
+    /// Union of `abi::scope` bits over every declared action.
+    pub scopes: u8,
+    pub _pad: [u8; 2],
     pub icon_id: u16,
     pub caps: u32,
     pub size_bytes: u32,
@@ -80,16 +82,16 @@ impl PackageCatalogEntry {
     }
 
     #[inline(always)]
-    pub fn is_system_entry(&self, sys_caps: kernel::caps::CapabilitySet, flag: u8) -> bool {
+    pub fn is_system_entry(&self, sys_caps: ::abi::CapabilitySet, scope: u8) -> bool {
         self.is_valid
             && self.exec_type == KrxExecType::Module
-            && (self.lifecycle_flags & flag) != 0
-            && sys_caps.contains_all(kernel::caps::CapabilitySet(self.caps))
+            && (self.scopes & scope) != 0
+            && sys_caps.contains_all(::abi::CapabilitySet(self.caps))
     }
 
     #[inline(always)]
-    pub fn is_system_module(&self, sys_caps: kernel::caps::CapabilitySet) -> bool {
-        self.is_system_entry(sys_caps, kernel::runtime::SectionType::FLAG_SYSTEM_MENU)
+    pub fn is_system_module(&self, sys_caps: ::abi::CapabilitySet) -> bool {
+        self.is_system_entry(sys_caps, ::abi::scope::SYSTEM_PAGE)
     }
 }
 
@@ -331,14 +333,15 @@ impl PackageCatalog {
                 entry.icon_id = summary.icon_id;
                 entry.caps = summary.caps.raw();
                 title = summary.title;
-                if entry.is_valid && entry.exec_type == KrxExecType::App {
-                    entry.has_config = summary.aux.config.is_some();
-                    if let Some(act_body) = summary.aux.actions {
-                        let mut off = 0usize;
-                        while off + kernel::runtime::KrxActionDecl::SIZE <= act_body.len()
-                            && self.actions.len() < MAX_CATALOG_ACTIONS
-                        {
-                            let alen = self.actions.len();
+                let is_app = entry.exec_type == KrxExecType::App;
+                if entry.is_valid {
+                    entry.has_config = is_app && summary.aux.config.is_some();
+                    let act_body = summary.aux.actions.unwrap_or(&[]);
+                    let mut off = 0usize;
+                    while off + kernel::runtime::KrxActionDecl::SIZE <= act_body.len() {
+                        entry.scopes |= act_body[off + 2];
+                        let alen = self.actions.len();
+                        if is_app && alen < MAX_CATALOG_ACTIONS {
                             unsafe {
                                 let dst = self.actions.as_mut_ptr().add(alen);
                                 core::ptr::copy_nonoverlapping(
@@ -349,8 +352,8 @@ impl PackageCatalog {
                                 (*dst).pkg_idx = len as u8;
                                 self.actions.set_len(alen + 1);
                             }
-                            off += kernel::runtime::KrxActionDecl::SIZE;
                         }
+                        off += kernel::runtime::KrxActionDecl::SIZE;
                     }
                 }
             }
@@ -393,10 +396,9 @@ mod tests {
             Some(kernel::runtime::KrxClass::Paged)
         );
         assert_eq!(summary.exec_type, KrxExecType::Module);
-        assert_ne!(
-            summary.type_flags & kernel::runtime::SectionType::FLAG_SYSTEM_MENU,
-            0
-        );
+        let action = kernel::runtime::KrxActionDecl::parse(summary.aux.actions.unwrap(), 0)
+            .expect("panic.mod must declare its Settings placement as an action");
+        assert_eq!(action.scope_mask, ::abi::scope::SYSTEM_PAGE);
         assert_eq!(summary.title(), "Crash Logs");
         assert!(summary.exec().is_some());
         assert_eq!(summary.aux.leaf_map.map(|m| m.len()), Some(17 * 16));

@@ -106,7 +106,7 @@ unsafe fn dispatch_rf_vfo(
     a1: usize,
     a2: usize,
 ) -> usize {
-    use kernel::abi::sub::rf_vfo;
+    use ::abi::sub::rf_vfo;
     match sub {
         rf_vfo::GET_CFG => {
             let Some(vfo) = decode_vfo_slot(a1 as u8) else {
@@ -279,7 +279,7 @@ unsafe fn dispatch_rf_bulk(
     a1: usize,
     a2: usize,
 ) -> usize {
-    use kernel::abi::sub::rf_bulk;
+    use ::abi::sub::rf_bulk;
     match sub {
         rf_bulk::SWEEP => {
             let req = a1 as *const KrxSweepReq;
@@ -335,7 +335,7 @@ unsafe fn dispatch_rf_bulk(
 
 #[inline(never)]
 pub unsafe fn dispatch_rf(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{
+    use ::abi::{
         idx as op,
         sub::{rf_get, rf_set},
     };

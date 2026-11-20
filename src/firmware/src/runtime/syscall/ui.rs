@@ -223,7 +223,7 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
 
 #[inline(never)]
 pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{
+    use ::abi::{
         idx as op,
         sub::{ui_modal, ui_status},
     };

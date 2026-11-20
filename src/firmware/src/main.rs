@@ -221,7 +221,8 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
     // Keep ST7565 & backlight live during warm DFU -> Recovery transition (zero 42 ms LCD reset or PWM drop)
     const WARM_DFU_TOOLS_MASK: u8 = kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
         | kernel::boot::BackupCrashTag::FLAG_DFU_TOOLS_REQ;
-    let warm_dfu_tools = (boot::read_backup_tag().flags & WARM_DFU_TOOLS_MASK) == WARM_DFU_TOOLS_MASK;
+    let warm_dfu_tools =
+        (boot::read_backup_tag().flags & WARM_DFU_TOOLS_MASK) == WARM_DFU_TOOLS_MASK;
     if warm_dfu_tools {
         hw.backlight.wake();
     } else {
@@ -282,7 +283,10 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
                             next = Some("/apps/recovery.mod");
                         }
                         Ok(5) => next = Some("/apps/recovery.mod"),
-                        Err(_) if mod_path == "/apps/recovery.mod" => next = Some("/apps/dfu.mod"),
+                        Err(_) if mod_path == "/apps/recovery.mod" => {
+                            next = Some("/apps/multiboot.mod")
+                        }
+                        Err(_) if mod_path == "/apps/multiboot.mod" => next = Some("/apps/dfu.mod"),
                         _ => {}
                     }
                 }

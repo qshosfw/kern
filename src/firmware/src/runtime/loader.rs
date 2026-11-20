@@ -62,9 +62,9 @@ pub fn read_krx_summary<'a, 'b>(
 fn load_krx_into_slot(
     storage: &mut crate::services::SystemStorage<'_>,
     path: &str,
-    sys_caps: Option<kernel::caps::CapabilitySet>,
+    sys_caps: Option<::abi::CapabilitySet>,
     pid: kernel::proc::Pid,
-) -> Result<(kernel::caps::CapabilitySet, &'static str), KrxLaunchError> {
+) -> Result<(::abi::CapabilitySet, &'static str), KrxLaunchError> {
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
         (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
@@ -99,7 +99,7 @@ fn load_krx_into_slot(
             let cap_msg = required_caps
                 .without(granted)
                 .first_cap()
-                .map_or("", |c| c.required_message());
+                .map_or("", kernel::caps::name);
             #[cfg(not(feature = "settings_debug"))]
             let cap_msg = "";
             return Err(KrxLaunchError::CapabilityDenied(cap_msg));
@@ -194,7 +194,7 @@ pub fn launch_krx_package_with_arg(
     res
 }
 
-/// Load and invoke an in-place system action module (`FLAG_SYSTEM_ACTION`) without switching apps.
+/// Load and invoke an in-place system action module (`scope::SYSTEM_ACTION`) without switching apps.
 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 pub fn invoke_action_krx_package<'a, 'hw>(

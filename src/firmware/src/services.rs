@@ -119,13 +119,13 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
 
     /// Check if system supports a specific hardware or subsystem capability token
     #[inline(always)]
-    pub fn has_cap(&self, cap: kernel::caps::Cap) -> bool {
+    pub fn has_cap(&self, cap: ::abi::Cap) -> bool {
         kernel::caps::CapsCheck::has(self, cap)
     }
 
     /// Get composite hardware capability token set
     #[inline(always)]
-    pub fn caps(&self) -> kernel::caps::CapabilitySet {
+    pub fn caps(&self) -> ::abi::CapabilitySet {
         kernel::caps::CapsCheck::caps(self)
     }
 
@@ -450,38 +450,38 @@ pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_u
 
 impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {
     #[inline(always)]
-    fn caps(&self) -> kernel::caps::CapabilitySet {
-        const BASE_CAPS: kernel::caps::CapabilitySet = kernel::caps::CapabilitySet::NONE
-            .with(kernel::caps::Cap::RadioRx)
-            .with(kernel::caps::Cap::RadioTx)
-            .with(kernel::caps::Cap::StorageRead)
-            .with(kernel::caps::Cap::StorageWrite)
-            .with(kernel::caps::Cap::AudioOutput)
-            .with(kernel::caps::Cap::DisplayDirect)
-            .with(kernel::caps::Cap::Keypad)
-            .with(kernel::caps::Cap::AudioCapture)
-            .with(kernel::caps::Cap::TaskControl)
-            .with(kernel::caps::Cap::ServiceRegistry)
-            .with(kernel::caps::Cap::SerialComm)
-            .with(kernel::caps::Cap::UsbComm)
-            .with(kernel::caps::Cap::HardwareCrc)
-            .with(kernel::caps::Cap::RealTimeClock)
-            .with(kernel::caps::Cap::PowerManage)
-            .with(kernel::caps::Cap::FactoryCalib);
+    fn caps(&self) -> ::abi::CapabilitySet {
+        const BASE_CAPS: ::abi::CapabilitySet = ::abi::CapabilitySet::NONE
+            .with(::abi::Cap::RadioRx)
+            .with(::abi::Cap::RadioTx)
+            .with(::abi::Cap::StorageRead)
+            .with(::abi::Cap::StorageWrite)
+            .with(::abi::Cap::AudioOutput)
+            .with(::abi::Cap::DisplayDirect)
+            .with(::abi::Cap::Keypad)
+            .with(::abi::Cap::AudioCapture)
+            .with(::abi::Cap::TaskControl)
+            .with(::abi::Cap::ServiceRegistry)
+            .with(::abi::Cap::SerialComm)
+            .with(::abi::Cap::UsbComm)
+            .with(::abi::Cap::HardwareCrc)
+            .with(::abi::Cap::RealTimeClock)
+            .with(::abi::Cap::PowerManage)
+            .with(::abi::Cap::FactoryCalib);
 
         #[allow(unused_mut)]
         let mut c = BASE_CAPS;
         #[cfg(feature = "filesystem")]
         {
-            c = c.with(kernel::caps::Cap::StorageAdmin);
+            c = c.with(::abi::Cap::StorageAdmin);
         }
         #[cfg(feature = "fm_radio")]
         {
-            c = c.with(kernel::caps::Cap::BroadcastFm);
+            c = c.with(::abi::Cap::BroadcastFm);
         }
         #[cfg(feature = "secure_fs")]
         {
-            c = c.with(kernel::caps::Cap::CryptoAead);
+            c = c.with(::abi::Cap::CryptoAead);
         }
         c
     }

@@ -39,7 +39,7 @@ pub(crate) fn settings_arena_mut() -> &'static mut SettingsArena {
     unsafe { &mut *(crate::data::arena::arena_base_ptr() as *mut SettingsArena) }
 }
 
-/// Returns true while an in-place `FLAG_SYSTEM_ACTION` KRX module owns `TRANSIENT_ARENA`.
+/// Returns true while an in-place `scope::SYSTEM_ACTION` KRX module owns `TRANSIENT_ARENA`.
 #[inline(always)]
 pub fn is_action_module_active() -> bool {
     crate::apps::registry::AppRegistry::app_instance(crate::apps::registry::APP_ID_SETTINGS)
@@ -701,8 +701,8 @@ mod tests {
     #[test]
     fn system_module_gate_requires_valid_module_flag_and_supported_caps() {
         use crate::apps::launcher::catalog::{PackageCatalogEntry, SmallStr};
-        use kernel::caps::{Cap, CapabilitySet};
-        use kernel::runtime::{KrxClass, KrxExecType, SectionType};
+        use ::abi::{Cap, CapabilitySet};
+        use kernel::runtime::{KrxClass, KrxExecType};
 
         let e = PackageCatalogEntry {
             title: SmallStr::new(),
@@ -710,12 +710,13 @@ mod tests {
             size_bytes: 4238,
             app_class: KrxClass::Native,
             exec_type: KrxExecType::Module,
-            lifecycle_flags: SectionType::FLAG_SYSTEM_MENU,
+            lifecycle_flags: 0,
+            scopes: ::abi::scope::SYSTEM_PAGE,
             icon_id: 1,
             caps: (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::FactoryCalib as u32),
             is_valid: true,
             has_config: false,
-            _pad: [0; 3],
+            _pad: [0; 2],
             _pad2: [0; 4],
         };
 
@@ -725,9 +726,9 @@ mod tests {
             .with(Cap::FactoryCalib);
         assert!(e.is_system_module(full_caps));
 
-        // Missing FLAG_SYSTEM_MENU must hide the menu button.
+        // A module without a system-page action must hide the menu button.
         let mut no_flag = e.clone();
-        no_flag.lifecycle_flags = 0;
+        no_flag.scopes = 0;
         assert!(!no_flag.is_system_module(full_caps));
 
         // Corrupt / failed CRC header must hide the menu button.

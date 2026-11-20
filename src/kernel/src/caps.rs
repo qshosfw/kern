@@ -177,38 +177,9 @@ impl CapHardware {
     }
 }
 
-// ── Dynamic & Declarative Capability Set ────────────────────────────────────
+// ── Capability Presentation & Checking ──────────────────────────────────────
 
-/// Standard OS Capability identifiers for hardware, subsystems, and APIs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum Cap {
-    RadioRx = 1 << 0,
-    RadioTx = 1 << 1,
-    StorageRead = 1 << 2,
-    StorageWrite = 1 << 3,
-    AudioOutput = 1 << 4,
-    DisplayDirect = 1 << 5,
-    SerialComm = 1 << 6,
-    UsbComm = 1 << 7,
-    HardwareCrc = 1 << 8,
-    RealTimeClock = 1 << 9,
-    PowerManage = 1 << 10,
-    CryptoAead = 1 << 11,
-    RawPeripheral = 1 << 12,
-    BroadBandRx = 1 << 13,     // e.g. Si4732 HF / SW / SSB reception
-    GnssLocation = 1 << 14,    // GPS / Galileo / BeiDou position fix
-    WirelessLink = 1 << 15,    // BLE NUS / SPP serial wireless programming
-    AudioCapture = 1 << 16,    // Microphone sampling, ADC audio input, SSTV/APRS demodulation
-    BroadcastFm = 1 << 17,     // BK1080 broadcast FM tuner (64-108 MHz)
-    Keypad = 1 << 18,          // Keypad matrix, multi-key chording & input events
-    TaskControl = 1 << 19,     // Process management, background tasks, hibernation
-    ServiceRegistry = 1 << 20, // Microkernel IPC, event bus pub/sub, service RPC
-    BusAccess = 1 << 21,       // Low-level I2C / SPI direct bus access
-    GpioAccess = 1 << 22,      // Direct hardware GPIO pin manipulation
-    StorageAdmin = 1 << 23, // Full filesystem management (mkdir, rename, unlink, partition operations)
-    FactoryCalib = 1 << 24, // Protected factory calibration read/write access (/sys/calib.*)
-}
+use abi::{Cap, CapabilitySet};
 
 const CAP_NAMES: &[u8] = b"\
 Radio RX\0\
@@ -237,170 +208,9 @@ GPIO Access\0\
 Storage Admin\0\
 Factory Calibration\0";
 
-impl Cap {
-    pub const fn name(&self) -> &'static str {
-        utils::format::nth_cstr(CAP_NAMES, (*self as u32).trailing_zeros() as u8)
-    }
-
-    pub const fn required_message(&self) -> &'static str {
-        self.name()
-    }
-}
-
-/// Compact 32-bit capability token set with zero-alloc O(1) bitwise operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CapabilitySet(pub u32);
-
-impl CapabilitySet {
-    pub const NONE: Self = Self(0);
-    pub const ALL: Self = Self(0xFFFF_FFFF);
-
-    pub const fn empty() -> Self {
-        Self(0)
-    }
-
-    pub const fn from_raw(mask: u32) -> Self {
-        Self(mask)
-    }
-
-    pub const fn raw(&self) -> u32 {
-        self.0
-    }
-
-    pub const fn with(self, kind: Cap) -> Self {
-        Self(self.0 | (kind as u32))
-    }
-
-    pub const fn contains(&self, kind: Cap) -> bool {
-        (self.0 & (kind as u32)) == (kind as u32)
-    }
-
-    pub const fn contains_mask(&self, mask: u32) -> bool {
-        (self.0 & mask) == mask
-    }
-
-    pub const fn contains_all(&self, other: CapabilitySet) -> bool {
-        (self.0 & other.0) == other.0
-    }
-
-    pub const fn intersects(&self, other: CapabilitySet) -> bool {
-        (self.0 & other.0) != 0
-    }
-
-    pub const fn union(self, other: CapabilitySet) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    pub const fn intersection(self, other: CapabilitySet) -> Self {
-        Self(self.0 & other.0)
-    }
-
-    pub const fn without(self, other: CapabilitySet) -> Self {
-        Self(self.0 & !other.0)
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.0 == 0
-    }
-
-    /// Returns the first required capability token in this set, if any.
-    pub const fn first_cap(&self) -> Option<Cap> {
-        if self.0 == 0 {
-            return None;
-        }
-        let tz = self.0.trailing_zeros();
-        match 1u32 << tz {
-            1 => Some(Cap::RadioRx),
-            2 => Some(Cap::RadioTx),
-            4 => Some(Cap::StorageRead),
-            8 => Some(Cap::StorageWrite),
-            16 => Some(Cap::AudioOutput),
-            32 => Some(Cap::DisplayDirect),
-            64 => Some(Cap::SerialComm),
-            128 => Some(Cap::UsbComm),
-            256 => Some(Cap::HardwareCrc),
-            512 => Some(Cap::RealTimeClock),
-            1024 => Some(Cap::PowerManage),
-            2048 => Some(Cap::CryptoAead),
-            4096 => Some(Cap::RawPeripheral),
-            8192 => Some(Cap::BroadBandRx),
-            16384 => Some(Cap::GnssLocation),
-            32768 => Some(Cap::WirelessLink),
-            65536 => Some(Cap::AudioCapture),
-            131072 => Some(Cap::BroadcastFm),
-            262144 => Some(Cap::Keypad),
-            524288 => Some(Cap::TaskControl),
-            1048576 => Some(Cap::ServiceRegistry),
-            2097152 => Some(Cap::BusAccess),
-            4194304 => Some(Cap::GpioAccess),
-            8388608 => Some(Cap::StorageAdmin),
-            16777216 => Some(Cap::FactoryCalib),
-            _ => None,
-        }
-    }
-
-    pub fn insert(&mut self, kind: Cap) {
-        self.0 |= kind as u32;
-    }
-
-    pub fn remove(&mut self, kind: Cap) {
-        self.0 &= !(kind as u32);
-    }
-
-    pub fn iter(&self) -> CapIter {
-        CapIter {
-            mask: self.0,
-            bit: 0,
-        }
-    }
-}
-
-pub struct CapIter {
-    mask: u32,
-    bit: u8,
-}
-
-impl Iterator for CapIter {
-    type Item = Cap;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.bit < 25 {
-            let current_bit = self.bit;
-            self.bit += 1;
-            let flag = 1u32 << current_bit;
-            if (self.mask & flag) != 0 {
-                return match flag {
-                    1 => Some(Cap::RadioRx),
-                    2 => Some(Cap::RadioTx),
-                    4 => Some(Cap::StorageRead),
-                    8 => Some(Cap::StorageWrite),
-                    16 => Some(Cap::AudioOutput),
-                    32 => Some(Cap::DisplayDirect),
-                    64 => Some(Cap::SerialComm),
-                    128 => Some(Cap::UsbComm),
-                    256 => Some(Cap::HardwareCrc),
-                    512 => Some(Cap::RealTimeClock),
-                    1024 => Some(Cap::PowerManage),
-                    2048 => Some(Cap::CryptoAead),
-                    4096 => Some(Cap::RawPeripheral),
-                    8192 => Some(Cap::BroadBandRx),
-                    16384 => Some(Cap::GnssLocation),
-                    32768 => Some(Cap::WirelessLink),
-                    65536 => Some(Cap::AudioCapture),
-                    131072 => Some(Cap::BroadcastFm),
-                    262144 => Some(Cap::Keypad),
-                    524288 => Some(Cap::TaskControl),
-                    1048576 => Some(Cap::ServiceRegistry),
-                    2097152 => Some(Cap::BusAccess),
-                    4194304 => Some(Cap::GpioAccess),
-                    8388608 => Some(Cap::StorageAdmin),
-                    16777216 => Some(Cap::FactoryCalib),
-                    _ => None,
-                };
-            }
-        }
-        None
-    }
+/// Human-readable capability name for dialogs and settings pages.
+pub const fn name(cap: Cap) -> &'static str {
+    utils::format::nth_cstr(CAP_NAMES, cap.bit())
 }
 
 /// Minimalist capability check contract.
@@ -432,11 +242,11 @@ mod tests {
         let _s = unsafe { CapStorage::new() };
         let _a = unsafe { CapAudio::new() };
         let _d = unsafe { CapDisplay::new() };
-        assert_eq!(Cap::RadioRx.name(), "Radio RX");
-        assert_eq!(Cap::BroadBandRx.name(), "Broadband HF RX");
-        assert_eq!(Cap::CryptoAead.name(), "Crypto AEAD");
-        assert_eq!(Cap::StorageAdmin.name(), "Storage Admin");
-        assert_eq!(Cap::FactoryCalib.name(), "Factory Calibration");
+        assert_eq!(name(Cap::RadioRx), "Radio RX");
+        assert_eq!(name(Cap::BroadBandRx), "Broadband HF RX");
+        assert_eq!(name(Cap::CryptoAead), "Crypto AEAD");
+        assert_eq!(name(Cap::StorageAdmin), "Storage Admin");
+        assert_eq!(name(Cap::FactoryCalib), "Factory Calibration");
         let admin_set = CapabilitySet::empty().with(Cap::StorageAdmin);
         assert_eq!(admin_set.first_cap(), Some(Cap::StorageAdmin));
         let calib_set = CapabilitySet::empty().with(Cap::FactoryCalib);
@@ -503,11 +313,11 @@ mod tests {
             .with(Cap::BroadBandRx)
             .with(Cap::GnssLocation);
         assert_eq!(set.first_cap(), Some(Cap::BroadBandRx));
-        assert_eq!(Cap::BroadBandRx.required_message(), "Broadband HF RX");
+        assert_eq!(name(Cap::BroadBandRx), "Broadband HF RX");
 
         let single = CapabilitySet::empty().with(Cap::BroadcastFm);
         assert_eq!(single.first_cap(), Some(Cap::BroadcastFm));
-        assert_eq!(Cap::BroadcastFm.required_message(), "Broadcast FM");
+        assert_eq!(name(Cap::BroadcastFm), "Broadcast FM");
     }
 
     struct MockSecurityContext {

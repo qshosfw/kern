@@ -9,7 +9,7 @@ use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO};
 use crate::config::keys::KeyConfig;
 use gfx::gui::modules::menu::{OptionSheet, ShortString};
 use kernel::ipc::SysEvent;
-use kernel::runtime::{KrxActionDecl, KrxExecType};
+use kernel::runtime::KrxExecType;
 
 pub const KEY_SHORTCUT_COUNT: usize = 19;
 pub const F_DRAWER_START_SLOT: usize = 5;
@@ -402,9 +402,7 @@ pub fn build_picker_sheet(
         let p = e.path.as_str();
         push_entry(hash_app(p), icon, t);
         for act in catalog.actions.iter() {
-            if act.pkg_idx as usize == pkg_idx
-                && (act.scope_mask & KrxActionDecl::SCOPE_SHORTCUT) != 0
-            {
+            if act.pkg_idx as usize == pkg_idx && (act.scope_mask & ::abi::scope::SHORTCUT) != 0 {
                 push_entry(hash_app_action(p, act.action_id), icon, t);
                 append_last_suffix(act.label_str());
             }
@@ -469,14 +467,15 @@ mod tests {
             caps: 0,
             is_valid: true,
             has_config: false,
-            _pad: [0; 3],
+            scopes: 0,
+            _pad: [0; 2],
             _pad2: [0; 4],
         });
         let mut label = [0u8; 12];
         label[..5].copy_from_slice(b"Sched");
         let _ = cat.actions.push(CatalogAction {
             pkg_idx: 0,
-            scope_mask: KrxActionDecl::SCOPE_SHORTCUT,
+            scope_mask: ::abi::scope::SHORTCUT,
             action_id: 1,
             label,
         });

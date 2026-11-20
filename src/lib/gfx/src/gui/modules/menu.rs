@@ -772,9 +772,9 @@ impl<'a> View<MenuModel<'a>> for MenuView {
                 126,
                 8,
                 56,
-                model.selected_idx,
-                total_items,
-                visible_count,
+                scroll_y.max(0) as usize,
+                total_items * 13,
+                visible_count * 13,
             );
         }
     }
@@ -876,7 +876,7 @@ impl MenuView {
                 124,
                 track_y,
                 track_h,
-                sheet.hover,
+                start_idx,
                 total,
                 visible_count,
             );

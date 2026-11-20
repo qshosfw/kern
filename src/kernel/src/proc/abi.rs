@@ -2,13 +2,13 @@
 //!
 //! Exposes one 16-byte (ARM32) `KrxApiTable` descriptor carrying a single AAPCS-Thumb
 //! function pointer `call(op, a0, a1, a2) -> usize` routed through the declarative
-//! `crate::abi::Op` table. Multi-argument operations pass compact `#[repr(C)]`
+//! `::abi::Op` table. Multi-argument operations pass compact `#[repr(C)]`
 //! stack descriptors (`KrxTextReq`, `KrxFsReq`, `KrxModalReq`, `KrxBusReq`,
 //! `KrxIpcSendReq`, `KrxSweepReq`, `KrxWidget`) so every call stays strictly
 //! within the 4 AAPCS argument registers (`r0..r3`).
 
-use crate::abi::Op;
 pub use crate::ipc::{KrxIpcMessage, ipc_flags, ipc_msg_type, ipc_target};
+use ::abi::Op;
 
 pub const KRX_ABI_VERSION_3_0: u32 = 0x0003_0000;
 

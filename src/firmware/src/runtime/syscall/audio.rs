@@ -7,7 +7,7 @@ use crate::services::radio::RadioMelodyExt;
 
 #[inline(never)]
 pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use kernel::abi::{idx as op, sub::aud_ctl};
+    use ::abi::{idx as op, sub::aud_ctl};
     if idx == op::AudTone {
         let dur = a1 as u16;
         if dur == 0xFFFF {
