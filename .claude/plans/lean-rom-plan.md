@@ -1,0 +1,144 @@
+# Lean ROM plan (revision of explore-codebase-and-what-binary-nova.md)
+
+Supersedes the ordering of the earlier plan, not its content. Rule added: **flash goes down**.
+
+## Rule
+
+- Every commit states its `./kern size` delta. A commit may grow flash only if the same stage has already banked more than it spends.
+- Stage order is by bytes freed, not by feature appeal.
+- Baseline: 120,264 / 120,832 B (2026-11-20, commit 9be91337b). AGENTS.md target: under 80 KB.
+
+## Where the ROM is (measured, `./kern bloat crates|modules`)
+
+| Area | Bytes |
+|---|---|
+| `firmware::runtime::syscall` | 11,482 |
+| `firmware::apps::settings` (text + rodata) | 9,995 |
+| `kernfs::fs` | 7,054 |
+| `gfx::gui` | 6,602 |
+| `firmware::services::wire` | 6,304 |
+| `firmware::services::radio` + `drivers::bk4829` | 8,131 |
+| `firmware::orchestrator` (+ compositor, keypad lock) | 7,655 |
+| `firmware::apps::launcher` + registry + shortcut | 5,949 |
+
+Three of the top five (syscall, settings, wire) are the same job written three times: read or write a named value with a range and a permission.
+
+## Stages
+
+Savings are estimates until measured; the bloat tool's own figure for syscall thinning (8.4 KB) is optimistic.
+
+### S0. Size gate (0 B)
+`./kern size` fails when flash exceeds the recorded baseline; `./kern bloat baseline|diff` per stage.
+
+### S1. Property registry: one table, three consumers (est. -5 to -8 KB)
+One `abi` table: `Prop { id, kind, min, max, step, cap_read, cap_write, label }` plus one firmware accessor `prop_get(id) / prop_set(id, value)`.
+- Syscalls: `RfGet`, `RfSet` scalars, `RfVfo STATE/WATCH_MODE/MONITOR`, `IoPower`, `AudCtl`, `GfxCtl`, `UiStatus` scalars collapse into `PropGet` / `PropSet`.
+- Settings: a page is a list of property ids; `populate_item` (624 B), `finalize_entries` (428 B) and the per-page tables go.
+- RigWire: `read_sys_facet`, `handle_resource_set` (524 B), `handle_control_service` (776 B) become transport over the same accessor.
+- New for apps: subscribe to a property change instead of polling `STATE`.
+
+### S2. ABI v4 in the same break (est. -1 to -2 KB)
+Packages must be rebuilt for S1 anyway, so do it once.
+- Uniform `KErr` return; removes the ambiguous "0 = refused or success".
+- Dispatch by `abi::OP_TABLE` function pointer; per-domain `match` trees go.
+- Pointer and length validation driven by the existing `Sig` (In/Out/Str), done once in `kern_call`.
+
+### S3. Settings out of ROM (est. -6 to -8 KB)
+After S1 Settings is a generic list renderer over property ids, so it fits a KRX package. ROM keeps: launcher, VFO, and the system-action hook.
+Failsafe: Recovery already runs from KernFS; if `/apps/settings.krx` is missing the launcher shows the reinstall dialog (Phase 6 of the old plan).
+
+### S4. Table service (est. -1 KB, enables external memory management)
+One accessor for every `16 + (index << N)` table (channels, contacts, zones, bands, hits, FM): `TableRead/Write/Find/Count` by `TABLE_ID_*`. Channel CRC, zone masks and `user_tag` handled once. An external memory manager needs only this plus `krx_vfo_get/set`.
+
+### S5. Radio service into the kernel (size neutral, structural)
+Coordinator is already monomorphised once, so no bytes here; do it after S1 to S4, when the property table defines its public surface. Adds the sequencer (watch, scan, sweep) as one state machine instead of flags.
+
+### S6. Reference-firmware feature matrix
+Compare `inspo/` (f4hwn, fagci, deltafw, UV-KX) against the property and table ids; every missing feature becomes a property id or a table, not new code paths.
+
+### Deferred
+Actor multitasking and the XIP install region (old Phase 2): they need the bytes S1 to S3 free, and the PY32F071 page-size question is still open.
+
+## Already done (commits c8f1e15c2..9be91337b)
+Single ABI crate with icons/caps/scopes; manifest package builder; capability check at dispatch; `RadioTx` gate and TX permission on FSK; VFO as 64 B channel record; scrollbar; headless cadence.
+Cost so far: +804 B against the 119,460 B session start. S1 has to repay that first.
+
+## Progress log
+
+### S0 done (0dc940d6d)
+`project.flash_ceiling` in `kern.toml`; `./kern size` fails above it and asks for it to be lowered after a saving.
+
+### S1 step 1 done: property registry (120,264 -> 120,220 B, -44 B)
+- `src/abi/src/prop.rs`: `Prop { id, min, max, step }`, id = `(domain << 5) | offset`, 44 properties, `DOMAIN_CAP` per domain, `KRX_PROP_*` generated into `krx_ops.h`.
+- `MasterConfig::prop_get / prop_set` is the single accessor: bounds, CRC seal, dirty and hardware-apply queue in one place.
+- Removed: `ALL_BOUND_RULES`, `check_bounds`, `ConfigMeta.rules_*`, Settings `RANGES` / `RangeId` / `RangeDef`, `PAGE_DIRTY_MASK`, `apply_page_changes`, `mark_dirty_mask`.
+- Syscalls: `PropGet` / `PropSet` added; `AudCtl SET_VOL / GET_VOL / MIC_GAIN`, `GfxCtl INVERTED / CONTRAST`, `IoPower BL_MODE / BL_LEVELS` removed.
+- Behaviour change: `sanitize()` repairs one out-of-bounds byte instead of resetting its whole block. An app writing a property now persists it (the old calls only poked hardware).
+- Small saving only: the table costs 176 B and the removed syscall arms were short. The large S1 wins are still open: Settings page tables as property-id lists, RigWire facets over the accessor, radio scalars (`RfGet` / `RfSet` / `RfVfo STATE`) as properties.
+
+### Open from S1
+- Done: RigWire `FACET_RADIO_TRANSMIT` now passes `check_tx_permission` (`SafetyDenied` otherwise). Settings `set_val` goes through `prop_set`. 120,220 -> 120,212 B.
+- Not a hole after all: RigWire `DOMAIN_CONFIG` set is followed by `flush_dirty`, which runs `sanitize()` over the property table.
+
+## Revised execution order — 2026-11-20
+
+This section supersedes the S1–S6 ordering. Sources are the original `~/.claude/plans/explore-codebase-and-what-binary-nova.md`, its Claude session `ef4e17b8-fdeb-4f56-871e-ba1a58b58122`, the measured flash audit (§§2, 19, 32, 36, 40, 44), the archived optimization master plan (§2), and the KRX execution proposal (§4). Earlier measurements and design rationale remain above.
+
+**Flash budget.** Last committed UV-K1 ceiling is 120,212 B. The existing working-tree ELF uses 120,252 B flash and 14,440 B static SRAM. Its named symbols attribute 9,822 B to Settings, 1,432 B to VFO, 11,347 B to syscalls, 6,320 B to RigWire and 6,602 B to GUI. Moving all named Settings and VFO bytes would explain only 11,254 B of the >40 KB reduction needed for a conservative **<80,000 B** release. Some shared code will remain. Treat module sizes as places to investigate and compare whole linked images after each extraction.
+
+1. **Establish the feature and size baseline.** Use the committed profile, toolchain and packages as the comparison point. Inventory public operations, sub-ops, manifest actions, stock workflows and recovery with storage unavailable. Review the interrupted diff independently. It renumbers calls while reporting ABI 3.0, and swaps app overrides into the preference buffers during flush. Neither design should become the reference contract. Preserve callable behavior in a service or an equivalent tested SDK operation before retiring any entry. Record resident flash, external package bytes, SRAM/stack high-water and navigation latency separately. Fix the ceiling comparison for explicit selection of the same target/profile.
+
+2. **Make Settings the first extraction and Rust KRX the first proof.** A tiny Rust display/preferences package and a C fixture run through the same loader, entry convention, manifest, linker-map checks and packer. Use `no_std`, no heap, static calls through the ABI. Exercise read-only data, mutable state, callbacks, relaunch, code-window limits and panic cleanup. For movable images test at two load addresses. If LLVM cannot satisfy the current flat PIC profile, validate the fixed-map native profile in the execution proposal. Measure equivalent packages before selecting the default. Version the ABI once, reject incompatible images at admission, generate C/Rust/host bindings from shared declarations. Keep target-side metadata limited to fields the firmware consumes.
+   - **Preferences** are the user's durable choices. Only an explicit authorized preference edit updates the canonical CRC-protected domain and queues a save. **Controls** belong to a service and a caller. Apply them to live device state. Owner exit, preemption or fault recomputes the effective setting from surviving owners and the current preference. Telemetry is read-only. Test a preference change and flush under an override, including equal values, two callers and a power cycle. Enforce the same ownership policy for RigWire and file writes, replace, remove and rename.
+   - Move Settings pages, labels, choices and app-specific editors to the package. The catalog resolves a declared Settings role and enumerates actions by scope. Presentations choose their menu placement and named icons. Apply readable boot/recovery defaults even with missing media, corrupt prefs or a missing Settings provider. Preserve intentional dim/off choices in normal operation and provide a readable recovery path.
+   - Index assets on mount/install/change and page through a bounded cache. A splash preference identifies a catalog asset with stable identity across reorder. Transition and duration are independent options. The existing 0–3 field selects the transition, while the image already comes from a path. Today the picker calls `list_dir` on open and defaults to a numbered filename. Define deterministic deletion/rename behavior, a text fallback, and the same lookup for jingles and rogers. Test with a library larger than the RAM cache.
+
+3. **Give radio state one writer.** Move policy and state transitions into a host-testable coordinator in `kernel::service::radio`. Firmware supplies clocks, power/calibration inputs and statically bound RF/audio facets. Resident PTT, KRX and authenticated RigWire submit the same slot-addressed commands with distinct owner identities and receive the same result. Hide mutable channels. Today RigWire tuning writes hardware for the requested slot even when it is inactive, and its modulation/squelch path edits the active channel. Apply a validated command atomically and retune only the resource currently assigned to that slot.
+   - Publish a coherent snapshot with revision, active/listening/TX slots, memory identity, measured signal, watch/monitor state, lease owner, TX permission/reason, timer and audio route. Deliver events for transitions, tone/digit/frame/scan hits and preemption. Coalesce meters, preserve ordering for control events, signal overflow and resync from the snapshot. Reuse the existing arbitrator and event bus. On client failure release only its resources. Verify local PTT preemption, remote disconnect during TX and an unrelated process exiting while another owns TX.
+   - Route all keying through one decision on effective TX frequency, current bandplan, capability, channel inhibit, BCLO, timeout, battery and thermal policy. Share the gate across PTT, tones and packet modes. Describe RX ranges, tuning steps, bandwidths, modulation and available paths per physical receiver. Supply bounded timed visits for watch, scan, sweep and tone search with priority, dwell, settle, skip, hold/resume and cancellation. Keep protocol decoding, scan strategy, waterfall drawing and history in packages wherever timing permits.
+
+4. **Make memories an actual storage service.** Put typed table descriptors and record codecs behind one bounded KernFS reader/writer for channels, zones/lists, contacts, bandplans, hits and FM presets. Provide enumeration, paged reads, insert/update/delete, stable record identity, conflict detection and change events. External packages handle filtering, editing, reorder, bank selection, import/export and batch programming. Define interrupted-batch recovery and dangling-reference behavior for a channel in a zone, priority list or active VFO. RigWire and the on-device manager use identical validation.
+   - Separate the full stored record from its live RF projection. `GET_CHANNEL` currently starts with an empty record and reconstructs operating fields, losing name, UID, zones and opaque metadata. Merge edits against the original record. Resolve the actual 8-byte extension versus the specified 16 bytes with a versioned layout, byte fixtures and an explicit conversion preserving legacy fields. Keep logical shift-based indexing. A 16-byte header plus 64-byte records crosses a 256-byte page at record 3. Test cross-page writes and power loss on the implemented KernFS geometry.
+   - Persist the last user VFO session on idle or orderly shutdown. Include A/B/C, memory/free mode, active slot and watch policy in a versioned consistent checkpoint. Temporary scan visits and app previews never become the boot frequency. Verify edit → recall → tune → power cycle with all three slots.
+
+5. **Ship and exercise a completely external VFO.** Select it via a manifest role. It must support frequency entry/step, RX/TX split and reverse, A/B/C and priority watch, memory recall/store, monitor, signal meters, modulation/bandwidth, tones, calibrated power, VOX/PTT, scanning and status through the public SDK. Combine it with the external memory manager and a background scanner or packet listener. Test switching, focus, resumption, physical PTT and foreground loss. Use bounded foreground/background state and measure the worst case before expanding process count. Use one elapsed-time animation clock for panel and headless modes, and derive scrollbar extent/position from the visible window and content offset. Verify first/last page, dynamic lists and sub-30 ms input response.
+
+**Reference acceptance.** Maintain one row per user-visible behavior with reference checkout and source/menu entry, hardware dependency, Kern service/package, test and result. Seed with the following independently inspectable cases. Inventory the remaining firmware forks, plugins and CHIRP options in `inspo/`; distinguish unique functions, duplicates, hardware-limited functions and non-firmware tools. A declared capability alone never closes a row.
+
+- F4HWN — A/B plus two priority channels and complete switchable configuration banks (`inspo/f4hwn/README.md`). Falcon adds four priorities, multilist watch, range scan, blacklist/history, waterfall zoom and 1K/4K CHIRP profiles (`inspo/Falcon-firmware-UV-K1-K5v3/README.md`). Test scan scheduling while editing inactive memories and restoring a bank.
+- Fagci — multichannel scan, analyser, frequency counter and squelch viewer (`inspo/fagci-k1-fw/src/helper/scan.c`, `src/apps/` within that checkout). DeltaFW — scan groups, spectrum/waterfall and AirCopy (`inspo/deltafw/src/apps/`). Test bounded sample streams, cancellation, return to the voice VFO and transfer integrity.
+- UV-KX and GoguFW — DTMF, FSK messenger, heard log, range check and named broadcast FM memories (`inspo/UV-KX-firmware/src/app/`, `inspo/gogufw/README.md`). Include tone/code search, PTT-ID, repeater access, FM audio routing and packet reception during watch. Exercise optional SSB/raw RX, CW, digital messaging and sensor decoding against the rQuansheng, CW/SECMSG and temp433 references on supported hardware.
+
+**Flash exit criteria.** After Settings, compare linked images again. After external VFO and memory management, remove the superseded resident UI and adapters. If the gap remains, measure shared RigWire/ABI codecs, duplicate list/modal renderers and app-only graphics moved with their consumers, then loader/boot/recovery duplication in that order. Keep the resident readable recovery screen, core RF safeguards and update path functional with storage unmounted. No projected saving counts toward the target. Accept a slice on a net release-flash reduction (host/package-only work may be neutral), zero warnings, ABI/package rebuilds and passing behavior tests. Final acceptance requires <80,000 B resident, a measured stack margin under concurrent load, hardware RF/timing checks and a tested disposition for every reference feature. Defer internal-flash XIP until measured latency warrants it.
+
+### Extraction measurements and Rust KRX feasibility
+
+- In a temporary export of `6e4428991`, stock `./kern size` measured 120,208 B. With only the five Settings lifecycle branches disconnected in `apps/registry.rs`, it measured 106,172 B (−14,036). Disconnecting VFO callbacks as well gave 104,512 B (another −1,660). All three used the same release features and 14,432 B static SRAM. The app slots, launcher and native loader were retained. This measures transitively linked code and data. Replacement UI/services and real package admission must be included in the shipping comparison. Even the stripped experiment needs another 24,513 B for <80,000 B.
+- An N1 fixture built with Rust nightly `fd7ed57df`, `thumbv6m-none-eabi`, size optimization and PIC produced 88 B of payload (216 B packaged). The equivalent C fixture produced 84 B (212 B packaged). Both used the existing linker script and KRX packer. A UV-K5 V3 QEMU harness placed each payload at `0x20001000` and `0x20002034` and exercised start, render, exit, a preference read, an API callback carrying a constant label and independent writable state in the two copies. The harness supplied the API table. Launcher admission, the firmware trampoline and crash recovery remain integration gates.
+- The Rust label-table representation affects correctness. A static array of three slice references produced three absolute data relocations at object level. The final ELF showed zero outstanding relocations and packed successfully, but the callback received an address outside the loaded image. A label blob with relative offsets passed the same two-address test with all three labels and reduced the payload from 148 to 132 B. Adopt offsets for movable package descriptors. Validate retained address-bearing relocations against each profile before stripping the ELF. Apply that gate to both compilers. Test packaged images through the normal launcher before enabling a Rust manifest backend by default.
+- First extraction deliverable: a Rust KRX Display page with real preference read/write, transient preview and catalog discovery. Its preview must survive unrelated writes, revert on owner exit, and keep the user's newest saved choice. Derive icon lookup from the manifest; `settings/apps.rs::resolve_icon_id` currently guesses some icons from title letters. Qualify that page and its lifecycle first, then port the remaining pages before removing the ROM entry.
+
+### Decisions after the launcher test and reference audit
+
+**Rust is viable on the existing launcher.** A 292 B Rust N1 package (164 B payload) ran on the UV-K5 V3 QEMU model with the UV-K1 working-tree release ELF (SHA-256 prefix `c0d203ca781ca24c`). A host fixture formatted a private 2 MiB NOR image with this checkout's KernFS, wrote `/apps/probe.krx`, remounted it and compared the bytes. Keypad 3, EXIT, 3 produced UART markers `[start][contrast=50][exit][start][contrast=50]`. Each START read the real Display preference and each RENDER checked the package's writable static. This exercises discovery, admission, the trampoline, syscalls and relaunch. Use this sequence as the SDK integration test for both compiler backends. Preview arbitration, fault cleanup and physical-device timing still need their own tests.
+
+**Budget the larger cut now.** Starting with the 104,512 B callback-disconnection build above, disconnecting only `runtime::syscall::ui::draw_widget` gave 101,492 B (−3,020). Also disconnecting only `wire::handle_control_service` gave 98,320 B (−3,172 more). Wire framing, file transfer and event handlers remained linked. Both experiments used the same release flags. Removed call sites produced unused-code warnings. Even this incomplete image needs **18,321 B** more to reach 79,999 B. The full 6,316 B Wire module therefore cannot be budgeted as duplicate controls. Put equivalent widgets in the SDK and make Wire adapt the same typed commands used by KRX. Measure again with every operation callable.
+
+Before investing in a resident widget library or adding loader profiles, price the **external system shell** as a whole. Move launcher presentation, ordinary dialogs, keyboard editors, shortcut picker, app artwork and list rendering to packages. Retain resident focus and input routing, lock enforcement, RF deadlines, framebuffer presentation, a small readable recovery view and the update path. A shell handoff carries the launcher's selected item and viewport by stable identity. The process manager owns the active package window. Compare the same start → launch → exit → return workflow with the shell installed and with storage unavailable. Count the loader, fonts, SDK calls, recovery view and switch latency in that result. The <80,000 B target remains open until a feature-complete release reaches it.
+
+**Contracts that change the order of implementation**
+
+1. **Bound the executable window before porting a whole app.** `data/arena.rs` partitions 4,096 B of code and 2,048 B of scratch. Admission, memory-region queries and overlay placement use the full 6,144 B in several paths. Launcher entries also borrow the arena base. Derive admission, layout, region queries and the packer limits from one layout per profile. Publish separate code, writable data, overlay and stack requirements. Keep launcher focus outside reusable bytes. Exercise a full-window package while uploading a file and refreshing the catalog, including suspend and relaunch. Prove the declared stack margin under IRQ load.
+2. **Use one catalog for install, launch and settings actions.** The current directory pass sees eight entries and the action cache holds sixteen. Shortcuts persist a 15-bit path hash and select the first match. Use a versioned index with bounded page reads, durable package/action identities and an explicit choice of default provider per role. A package declares what its action does and a named icon. The shell chooses placement. Catalog publication follows successful install, replace or removal. Test a ninth package, unrelated files preceding packages, duplicate titles, renamed files and provider removal. Remote launch must invoke the same operation as keypad launch. Today's `ACTION_APP_LAUNCH` only validates the index.
+3. **Make RF time and identity part of the service contract.** The main loop computes elapsed time but discards it for radio. The coordinator advances timeout, lead-in and dwell by one nominal 10 ms tick per call. Use wrap-safe monotonic deadlines for TX cutoff, lease expiry and watch visits. Reconcile against the current hardware observation after a late wake. Validate with jitter, a stalled foreground, sleep/wake and clock wrap. Enumerate the actual VFO slots once. The kernel enum includes D, the coordinator stores three channels, several accessors clamp D onto C, and pair-watch maps C to D. Validate a complete slot-addressed command before applying any field. Cover switching from triple watch on C to pair/priority mode and editing during TX. Carry a revision through snapshot and event delivery. The current bus codec omits RF masks, truncates owner IDs and cannot decode the lock events it emits. Clients must be able to recover the full current owner, resource and slot after overflow or reconnect.
+4. **Prove full-size banks and atomic publication before building the editor.** Falcon 4K stores 4,096 channels. A single ORDS file needs `16 + 4096 × 64 = 262,160 B`. KernFS and both Wire peers cap files at 262,144 B, sufficient for 4,095 complete records. Keep one ordinary channel file and extend generic file addressing. Prototype the existing inode's unused `root_page` for an index root on large files. Include GC, mount, free-space accounting and boot/update readers in the comparison. Derive the negotiated transfer limit from the supported geometry. The current extents reply writes an 8 B prefix and eight 2 B roots while checking and reporting 20 B. Generate the versioned descriptor size from its encoding.
+   - Give KernFS a staged writer that publishes the replacement through one destination inode commit after length and integrity checks. Today Wire truncates an existing destination at open and deletes it on a failed close checksum. KernFS rename also removes an existing destination before committing the new name. Preserve the previous generation until publication and reclaim staged pages on interruption. Exercise last-record edits, remount, nearly full media, concurrent readers and interrupted CHIRP import. Keep checksums and cleanup outside the input dispatch loop in bounded increments.
+5. **Share frame time and viewport geometry.** External `GfxCommit` calls the panel driver directly while the resident renderer observes headless mode. Route both through one presenter with dirty regions and panel/remote consumers. The UI tick already has elapsed time, but enqueues a unit `Event::Tick`. Animate from elapsed time so delayed frames and refresh rate changes preserve duration. For large lists nearest-pixel rounding can place the thumb at the endpoint before the last item. Reserve the endpoint for the true maximum offset where the track has travel, handle a sub-four-pixel track, and derive content, visible extent and offset from the same clipped layout. Verify 4,096 rows, partial rows, list shrink during animation, and identical panel/remote frames at equal timestamps.
+
+**Additional reference workflows for acceptance**
+
+- `inspo/uvk5cec` at `f17c0a5` documents EXIT restoring the pre-scan channel and MENU retaining the hit. Model scan as a reversible visit with explicit accept. Cover memory-name retention, channel-to-VFO copy, temporary backlight override, 1750 Hz access tone and aviation channel-number entry in `frequencies.c`. An 8.33 kHz step label alone does not establish correct aviation tuning.
+- `inspo/fusion-community/apps.json` at `8f8c277` lists twelve overlays, including 4,096 B of Horus 4FSK code, 4,052 B of RTTY and 3,932 B of selective calling code. Exercise a receive-only decoder, an FSK messenger and a noise finder with a foreground VFO. Describe timing, sample source/rate, buffering and overflow per receiver. Decoder state, text, history and handoff belong to the apps. Verify the actual signal path on each supported board before advertising it.
+- `inspo/hawk5/src/apps` at `3e909e8` separates channel list/configuration, channel scan, band scan, hit list and frequency counter. Test selecting a hit, storing it in a named bank and returning to the exact prior list position. `inspo/talkkonnect-quansheng` at `97b31cf` derives RX/TX from display markers. Exercise its gateway workflow against typed remote status with the display asleep. Track Ichi/Moto under backup and recovery, GEM under UI, and K10 Pro under board-specific hardware evidence.
+
+**First implementation commit sequence.** (1) Correct the package memory layout and add the normal-launch lifecycle fixture. (2) Add Rust to the existing manifest builder, validate relocations and rebuild C and Rust fixtures. (3) Land owner-scoped display controls and explicit preference commits with lifecycle tests. (4) Deliver the external Display page, then extract the other Settings pages and ratchet the measured ceiling. In parallel planning, price the shell boundary above. Radio ownership and the large-table storage changes precede the external VFO and memory editor. Group resident changes that add bytes with a measured offsetting extraction. Each production commit must meet the existing flash ceiling and pass `./kern check` without warnings.
