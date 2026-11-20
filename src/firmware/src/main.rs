@@ -181,9 +181,11 @@ pub(crate) fn apply_active_calibration<'a>(radio: &mut Bk4829<'a, bsp::RadioBus>
         .load_calibration_curve(calib.battery_curve());
 }
 
+/// Boot stage 0 — early hardware: SRAM state in place, VTOR, interrupts, board GPIO and
+/// reset-cause classification (stage 1) before any peripheral is driven.
 #[cfg(not(test))]
 #[inline(never)]
-fn init_core_services_and_board() -> Board {
+fn early_init() -> Board {
     kernel::sys::SystemDiagnostics::paint_stack();
 
     unsafe {
@@ -195,16 +197,16 @@ fn init_core_services_and_board() -> Board {
         cortex_m::interrupt::enable();
     }
 
-    const WARM_DFU_TOOLS_MASK: u8 = kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
-        | kernel::boot::BackupCrashTag::FLAG_DFU_TOOLS_REQ;
-    let warm_dfu_tools =
-        (boot::read_backup_tag().flags & WARM_DFU_TOOLS_MASK) == WARM_DFU_TOOLS_MASK;
+    #[cfg(any(feature = "dfu", feature = "krx_native"))]
+    let warm_dfu_tools = boot::recovery::is_warm_tools_boot();
+    #[cfg(not(any(feature = "dfu", feature = "krx_native")))]
+    let warm_dfu_tools = false;
     if warm_dfu_tools {
         drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
     }
 
     let board = Board::init();
-    boot::check_reset_cause();
+    boot::reset::check_reset_cause();
     if warm_dfu_tools {
         bsp::pins::BACKLIGHT.set_high();
     } else {
@@ -215,117 +217,13 @@ fn init_core_services_and_board() -> Board {
     board
 }
 
+/// Final boot stage — handoff: bind calibration, apply the durable headless choice, select
+/// the startup app and cache the package catalogue before the system loop takes over.
 #[cfg(not(test))]
 #[inline(never)]
-fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
-    // Keep ST7565 & backlight live during warm DFU -> Recovery transition (zero 42 ms LCD reset or PWM drop)
-    const WARM_DFU_TOOLS_MASK: u8 = kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
-        | kernel::boot::BackupCrashTag::FLAG_DFU_TOOLS_REQ;
-    let warm_dfu_tools =
-        (boot::read_backup_tag().flags & WARM_DFU_TOOLS_MASK) == WARM_DFU_TOOLS_MASK;
-    if warm_dfu_tools {
-        hw.backlight.wake();
-    } else {
-        // Screen stays blanked until passcode prompt or splash reveals
-        hw.lcd.init();
-        bsp::pins::BACKLIGHT.set_low();
-        let canvas = system_canvas();
-        canvas.clear();
-        hw.lcd.blit(canvas);
-        hw.backlight.init();
-    }
-    kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
-    #[cfg(any(feature = "dfu", feature = "krx_native"))]
-    {
-        let bl_hold = boot::is_bootloader_hold_requested();
-        if bl_hold || boot::is_ptt_side2_requested() {
-            if bl_hold {
-                let mut tag = boot::read_backup_tag();
-                tag.flags = (tag.flags & !WARM_DFU_TOOLS_MASK)
-                    | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
-                boot::write_backup_tag(tag);
-            }
-            #[cfg(feature = "krx_native")]
-            if hw.filesystem.fs.mount().is_ok() {
-                hw.lcd.turn_on();
-                drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
-                bsp::pins::BACKLIGHT.set_high();
-                // Cooperative boot-module chain (0=boot OS, 2=dfu, 3=multiboot, 4=calib, 5=recovery)
-                let mut next: Option<&str> = Some(if warm_dfu_tools {
-                    "/apps/recovery.mod"
-                } else {
-                    "/apps/dfu.mod"
-                });
-                while let Some(mod_path) = next.take() {
-                    match crate::runtime::try_launch_boot_module(
-                        &mut hw.lcd,
-                        hw.filesystem,
-                        mod_path,
-                        1,
-                    ) {
-                        Ok(2) => next = Some("/apps/dfu.mod"),
-                        Ok(3) => {
-                            let _ = crate::runtime::try_launch_boot_module(
-                                &mut hw.lcd,
-                                hw.filesystem,
-                                "/apps/multiboot.mod",
-                                1,
-                            );
-                            next = Some("/apps/recovery.mod");
-                        }
-                        Ok(4) => {
-                            let _ = crate::runtime::try_launch_boot_module(
-                                &mut hw.lcd,
-                                hw.filesystem,
-                                "/apps/calib.mod",
-                                1,
-                            );
-                            next = Some("/apps/recovery.mod");
-                        }
-                        Ok(5) => next = Some("/apps/recovery.mod"),
-                        Err(_) if mod_path == "/apps/recovery.mod" => {
-                            next = Some("/apps/multiboot.mod")
-                        }
-                        Err(_) if mod_path == "/apps/multiboot.mod" => next = Some("/apps/dfu.mod"),
-                        _ => {}
-                    }
-                }
-                #[cfg(not(feature = "dfu"))]
-                {
-                    drivers::backlight::BACKLIGHT_DUTY
-                        .store(0, core::sync::atomic::Ordering::Relaxed);
-                    bsp::pins::BACKLIGHT.set_low();
-                    hw.lcd.turn_off();
-                }
-            }
-            #[cfg(feature = "dfu")]
-            boot::enter_dfu_bootloader(&mut hw.lcd);
-        }
-    }
-    if warm_dfu_tools {
-        hw.lcd.init();
-    }
-
-    // Start Independent Watchdog with generous 6000ms timeout after DFU bootloader check
-    hal::wdt::Watchdog::start(6000);
-
-    #[cfg(feature = "filesystem")]
-    boot::mount_or_format(
-        &mut hw.lcd,
-        &mut hw.key_scanner,
-        hw.filesystem,
-        &mut hw.radio,
-    );
-
-    bsp::Board::wdt_feed();
-
-    boot::boot_orchestration(hw)
-}
-
-#[cfg(not(test))]
-#[inline(never)]
-fn finalize_boot_startup(hw: &mut SystemHardware) {
+fn handoff(hw: &mut SystemHardware) {
     apply_active_calibration(&mut hw.radio);
+    system::restore_from_config(hw);
 
     let startup_app = if master_config_ref().apps.startup_app == 1 {
         crate::apps::APP_ID_VFO
@@ -370,7 +268,7 @@ static mut KERN_HW: core::mem::MaybeUninit<SystemHardware<'static>> =
 fn main() -> ! {
     let _board = unsafe {
         let p = core::ptr::addr_of_mut!(KERN_BOARD) as *mut Board;
-        core::ptr::write(p, init_core_services_and_board());
+        core::ptr::write(p, early_init());
         &mut *p
     };
     let boot_start_ms = hal::delay::millis();
@@ -443,8 +341,8 @@ fn main() -> ! {
     #[cfg(feature = "usb")]
     drivers::usb::register_active_usb_driver(&mut hw.usb as *mut _);
 
-    let adc = run_display_and_boot_pipeline(hw);
-    finalize_boot_startup(hw);
+    let adc = boot::run(hw);
+    handoff(hw);
 
     system::run_system_loop(hw, adc, boot_start_ms);
 }

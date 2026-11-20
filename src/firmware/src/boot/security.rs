@@ -202,7 +202,9 @@ pub fn run_boot_unlock_prompt(
     use gfx::gui::view::View;
 
     let cfg = crate::security::passcode::get_passcode_config(hw.filesystem);
-    if !cfg.is_set {
+    // Headless nodes have no operator at the panel: stay locked (secure default) and leave
+    // unlocking to the authenticated wire session instead of spinning on a dead keypad.
+    if !cfg.is_set || !crate::system::admits_physical_input() {
         return;
     }
 

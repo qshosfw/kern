@@ -1,4 +1,5 @@
-//! Hardware Initialization, Reset Cause Introspection & Boot Orchestration.
+//! Late boot stages: configuration, security gate, services bring-up, splash and the
+//! post-boot crash report.
 
 use crate::config::MasterConfig;
 use crate::hardware::SystemHardware;
@@ -6,98 +7,7 @@ use crate::services::power::PowerServiceConfigExt;
 use crate::{CALIBRATION, PASSCODE_STATE, POWER_SERVICE};
 use py32_hal::adc::Adc;
 
-#[cfg(not(all(target_arch = "arm", not(test))))]
-static TEST_BACKUP_TAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
-#[inline(never)]
-pub fn read_backup_tag() -> kernel::boot::BackupCrashTag {
-    #[cfg(all(target_arch = "arm", not(test)))]
-    let raw = py32_hal::rtc::RealTimeClock::read_alarm_raw();
-    #[cfg(not(all(target_arch = "arm", not(test))))]
-    let raw = TEST_BACKUP_TAG.load(core::sync::atomic::Ordering::Relaxed);
-    kernel::boot::BackupCrashTag::decode(raw).unwrap_or(kernel::boot::BackupCrashTag::empty())
-}
-
-#[inline(never)]
-pub fn write_backup_tag(tag: kernel::boot::BackupCrashTag) {
-    #[cfg(all(target_arch = "arm", not(test)))]
-    py32_hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
-    #[cfg(not(all(target_arch = "arm", not(test))))]
-    TEST_BACKUP_TAG.store(tag.encode(), core::sync::atomic::Ordering::Relaxed);
-}
-
-pub fn check_reset_cause() {
-    let raw_csr = py32_hal::wdt::Watchdog::raw_reset_flags();
-    let reset_cause = py32_hal::wdt::Watchdog::reset_cause();
-    py32_hal::wdt::Watchdog::clear_reset_flags();
-
-    let mut tag = read_backup_tag();
-    let clean_reboot = (tag.flags & kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT) != 0;
-
-    if clean_reboot {
-        // Intentional reboot: preserve strike counter unless cleared after >=10s healthy uptime,
-        // clear CLEAN_REBOOT bit so unexpected resets next boot are caught.
-        tag.flags &= !kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
-        write_backup_tag(tag);
-        return;
-    }
-
-    // Never overwrite a valid HardFault / Appf BOOT_RECORD slot with a PC=0 placeholder.
-    let existing = crate::panic::BOOT_RECORD.get().latest_valid_slot();
-    let is_watchdog_reset = matches!(
-        reset_cause,
-        py32_hal::wdt::ResetCause::IndependentWatchdog | py32_hal::wdt::ResetCause::WindowWatchdog
-    );
-    let is_brownout = matches!(reset_cause, py32_hal::wdt::ResetCause::PowerOn)
-        && ((raw_csr & py32_pac::rcc::CSR_PWRRSTF) != 0 || tag.reason_code != 0);
-
-    if is_watchdog_reset && existing.is_none_or(|s| s.crash_count == 0) {
-        let slot = crate::panic::BOOT_RECORD.get_mut().begin_write();
-        slot.reset_reason = kernel::boot::ResetReason::Wdog as u32;
-        slot.set_actor(b"WATCHDOG");
-        slot.panic_file_hash = raw_csr;
-        slot.crash_count = slot.crash_count.max(tag.strikes.saturating_add(1));
-        tag.strikes = slot.crash_count;
-        tag.reason_code = 3;
-        tag.flags |= kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
-        crate::panic::BOOT_RECORD.get_mut().commit_write();
-        write_backup_tag(tag);
-    } else if is_brownout && existing.is_none_or(|s| s.crash_count == 0) && tag.strikes > 0 {
-        let slot = crate::panic::BOOT_RECORD.get_mut().begin_write();
-        slot.reset_reason = kernel::boot::ResetReason::Brow as u32;
-        slot.set_actor(b"BROWNOUT");
-        slot.panic_file_hash = raw_csr;
-        slot.crash_count = tag.strikes;
-        crate::panic::BOOT_RECORD.get_mut().commit_write();
-    } else if let Some(s) = existing {
-        if s.crash_count > tag.strikes {
-            tag.strikes = s.crash_count;
-            tag.flags |= kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
-            write_backup_tag(tag);
-        }
-    }
-}
-
-/// Mark the backup-domain reboot tag before an intentional software reset.
-#[inline(never)]
-pub fn prepare_clean_reboot() {
-    let mut tag = read_backup_tag();
-    tag.flags |= kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
-    write_backup_tag(tag);
-    crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
-}
-
-/// Reset both `.uninit` crash-loop strike counter and backup-domain strikes after healthy uptime.
-#[inline(never)]
-pub fn clear_crash_strikes() {
-    crate::panic::BOOT_RECORD.get_mut().clear_crash_loop();
-    let mut tag = read_backup_tag();
-    tag.strikes = 0;
-    tag.flags &= !(kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH
-        | kernel::boot::BackupCrashTag::FLAG_SAFE_MODE_REQ);
-    tag.reason_code = 0;
-    write_backup_tag(tag);
-}
+use super::backup;
 
 fn init_system_services(
     hw: &mut SystemHardware,
@@ -105,9 +15,9 @@ fn init_system_services(
     passcode_state: &crate::security::PasscodeState,
     adc: &Adc,
 ) {
-    super::ensure_default_files(hw.filesystem);
+    super::storage::ensure_default_files(hw.filesystem);
     #[cfg(feature = "filesystem")]
-    super::flush_crash_log_if_pending(hw.filesystem);
+    super::storage::flush_crash_log_if_pending(hw.filesystem);
     #[cfg(feature = "passcode")]
     let already_authenticated =
         !passcode_state.is_locked && passcode_state.master_key.as_slice().iter().any(|&b| b != 0);
@@ -290,6 +200,11 @@ pub fn run_boot_splash(
 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 fn launch_crash_module(hw: &mut SystemHardware, mode: usize) -> bool {
+    // The crash report UI is interactive; an unattended node skips it and keeps booting
+    // (the crash log stays in `/log/crash.bin` for the wire client).
+    if !crate::system::admits_physical_input() {
+        return false;
+    }
     hw.lcd.turn_on();
     hw.backlight.wake();
     bsp::set_status_led(bsp::StatusLed::Orange);
@@ -309,9 +224,9 @@ fn boot_stage_security_check(
 ) {
     let _ = (&hw, &master_cfg, &passcode_state, adc);
     #[cfg(feature = "filesystem")]
-    super::flush_crash_log_if_pending(hw.filesystem);
+    super::storage::flush_crash_log_if_pending(hw.filesystem);
 
-    let backup_strikes = read_backup_tag().strikes;
+    let backup_strikes = backup::read().strikes;
     let crash_count = crate::panic::BOOT_RECORD
         .get()
         .latest_valid_slot()
@@ -326,7 +241,7 @@ fn boot_stage_security_check(
                 master_cfg.load_into(hw.filesystem);
             }
         }
-        super::clear_crash_strikes();
+        super::reset::clear_crash_strikes();
         return;
     }
 

@@ -303,6 +303,12 @@ impl MasterConfig {
         self.mark_domain_dirty(1);
     }
 
+    /// On-disk format version of domain `idx` (`0` for an unknown domain).
+    #[inline(always)]
+    pub fn domain_version(idx: usize) -> u8 {
+        CONFIG_METAS.get(idx).map_or(0, |m| m.version)
+    }
+
     pub fn mark_keys_dirty(&mut self) {
         self.mark_domain_dirty(2);
     }
@@ -366,6 +372,11 @@ impl MasterConfig {
         {
             self.system.init_default_tag();
             repaired |= DIRTY_SYSTEM;
+        }
+
+        if self.keys.headless > 1 {
+            self.keys.headless = 0;
+            repaired |= DIRTY_KEYS;
         }
 
         let expected_nav = self.system.nav_layout();
@@ -571,6 +582,29 @@ mod tests {
             assert_eq!(a.config_bytes(i), b.config_bytes(i));
             assert!(is_raw_valid(a.config_bytes(i), CONFIG_METAS[i].version));
         }
+    }
+
+    #[test]
+    fn headless_flag_persists_in_keys_block_and_is_clamped() {
+        let mut cfg = MasterConfig::DEFAULT;
+        cfg.system.tag = *b"TESTTAG ";
+        cfg.battery.battery_type = 3;
+        cfg.keys.headless = 1;
+        assert_eq!(
+            cfg.sanitize(),
+            0,
+            "a headless node is a valid configuration"
+        );
+        cfg.seal(2);
+        assert!(is_raw_valid(cfg.config_bytes(2), KeyConfig::VERSION));
+        cfg.keys.headless = 7;
+        assert_ne!(cfg.sanitize() & DIRTY_KEYS, 0);
+        assert_eq!(
+            cfg.keys.headless, 0,
+            "a corrupt flag falls back to the attended panel"
+        );
+        assert_eq!(MasterConfig::domain_version(2), KeyConfig::VERSION);
+        assert_eq!(MasterConfig::domain_version(99), 0);
     }
 
     #[test]

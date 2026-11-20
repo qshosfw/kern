@@ -1,481 +1,89 @@
-use crate::services::SystemStorage;
+//! Boot pipeline.
+//!
+//! Boot is a strict, linear sequence of stages. Each stage owns exactly one concern, runs
+//! once, and hands a well-defined machine state to the next:
+//!
+//! | # | Stage            | Module            | Establishes                                        |
+//! |---|------------------|-------------------|----------------------------------------------------|
+//! | 0 | Early hardware   | `main::early_init`| clocks, SRAM state, VTOR, interrupts, board GPIO   |
+//! | 1 | Reset cause      | [`reset`]         | crash ledger, strike counters, clean-reboot intent |
+//! | 2 | Panel & control  | [`run`]           | LCD/backlight, reboot handler, headless lock-out   |
+//! | 3 | Recovery         | [`recovery`]      | bootloader-hold / chord → boot-module chain / DFU  |
+//! | 4 | Watchdog         | [`run`]           | IWDG armed — every later stage must make progress  |
+//! | 5 | Storage          | [`storage`]       | mounted KernFS, calibration present                |
+//! | 6 | System           | [`orchestration`] | config, security gate, services, splash, handoff   |
+//!
+//! Only the backup-domain tag ([`backup`]) carries state across resets before storage
+//! exists; every stage that reads or edits it goes through that module.
+
+pub mod backup;
 #[cfg(feature = "dfu")]
 pub mod dfu;
 pub mod orchestration;
 #[cfg(feature = "filesystem")]
 pub mod provision;
+#[cfg(any(feature = "dfu", feature = "krx_native"))]
+pub mod recovery;
+pub mod reset;
 #[cfg(feature = "passcode")]
 pub mod security;
 pub mod splash;
+pub mod storage;
 
-#[cfg(feature = "dfu")]
-pub use dfu::enter_dfu_bootloader;
-pub use orchestration::*;
+pub use reset::clear_crash_strikes;
 
-#[cfg(feature = "filesystem")]
-use drivers::filesystem::FileSystemDriver;
-use drivers::keyboard::KeypadScanner;
-#[cfg(feature = "filesystem")]
-use drivers::py25q16::Py25q16FlashDriver;
-use drivers::st7565::St7565;
-use kernel::event::{KeyCode, KeyState};
-#[cfg(feature = "filesystem")]
-use kernfs::KernFS;
+use crate::hardware::SystemHardware;
 
+/// Independent watchdog window once recovery is behind us (ms).
+const WATCHDOG_TIMEOUT_MS: u32 = 6000;
+
+/// Stages 2–6. Returns the ADC handle owned by the steady-state system loop.
+#[cfg(not(test))]
 #[inline(never)]
-pub fn boot_wait_key(key_scanner: &mut KeypadScanner, timeout_ms: u32) -> Option<KeyCode> {
-    let start = py32_hal::delay::millis();
-    loop {
-        bsp::Board::wdt_feed();
-        if let Some((code, KeyState::Pressed)) = key_scanner.scan() {
-            return Some(code);
-        }
-        if timeout_ms > 0 && py32_hal::delay::millis().wrapping_sub(start) >= timeout_ms {
-            return None;
-        }
-        py32_hal::delay::delay_ms(10);
-    }
-}
-
-#[cfg(feature = "usb")]
-#[inline(never)]
-pub fn boot_wait_key_with_usb(
-    key_scanner: &mut KeypadScanner,
-    usb: &mut drivers::usb::UsbDriver,
-    timeout_ms: u32,
-) -> Option<KeyCode> {
-    let start = py32_hal::delay::millis();
-    loop {
-        bsp::Board::wdt_feed();
-        let _ = usb.poll();
-        if let Some((code, KeyState::Pressed)) = key_scanner.scan() {
-            return Some(code);
-        }
-        if timeout_ms > 0 && py32_hal::delay::millis().wrapping_sub(start) >= timeout_ms {
-            return None;
-        }
-        py32_hal::delay::delay_ms(1);
-    }
-}
-
-/// Append a valid crash `BootSlot` (128 B) into the `/log/crash.bin` 1 KB ring (`8 x 128 B`).
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
-    let mut tag = crate::boot::read_backup_tag();
-    if (tag.flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) == 0 {
-        return;
-    }
-    let Some(slot) = crate::panic::BOOT_RECORD.get().latest_valid_slot() else {
-        return;
-    };
-    if !slot.is_crash() {
-        return;
-    }
-
-    let _ = fs.create_dir("/log");
-    let ring = &mut crate::data::scratch_tail_bytes_mut()[..1024];
-    let existing_len = fs.read_file("/log/crash.bin", ring).unwrap_or(0);
-    let slot_bytes = unsafe {
-        core::slice::from_raw_parts(
-            slot as *const kernel::boot::BootSlot as *const u8,
-            core::mem::size_of::<kernel::boot::BootSlot>(),
-        )
-    };
-    let write_len = if existing_len + 128 <= ring.len() {
-        ring[existing_len..existing_len + 128].copy_from_slice(slot_bytes);
-        existing_len + 128
+pub fn run(hw: &mut SystemHardware) -> py32_hal::adc::Adc {
+    // ── Stage 2: panel & control plane ──────────────────────────────────────────────────
+    #[cfg(any(feature = "dfu", feature = "krx_native"))]
+    let warm_tools = recovery::is_warm_tools_boot();
+    #[cfg(not(any(feature = "dfu", feature = "krx_native")))]
+    let warm_tools = false;
+    if warm_tools {
+        // Warm DFU → Recovery: panel and backlight stay live, no 42 ms LCD reset flash.
+        hw.backlight.wake();
     } else {
-        for i in 0..(1024 - 128) {
-            ring[i] = ring[i + 128];
-        }
-        ring[1024 - 128..1024].copy_from_slice(slot_bytes);
-        1024
-    };
-    let _ = fs.write_file("/log/crash.bin", &ring[..write_len]);
+        // Panel stays blank until the passcode prompt or splash reveals it.
+        hw.lcd.init();
+        bsp::pins::BACKLIGHT.set_low();
+        let canvas = crate::system_canvas();
+        canvas.clear();
+        hw.lcd.blit(canvas);
+        hw.backlight.init();
+    }
+    kernel::power::PowerControl::set_reboot_handler(reset::firmware_reboot_handler);
+    // Lock out boot chords, prompts and the backlight before anything reads the keypad.
+    crate::system::restore_from_backup(hw);
 
-    tag.flags &= !kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH;
-    crate::boot::write_backup_tag(tag);
-}
+    // ── Stage 3: recovery ───────────────────────────────────────────────────────────────
+    #[cfg(any(feature = "dfu", feature = "krx_native"))]
+    recovery::run(hw, warm_tools);
+    if warm_tools {
+        hw.lcd.init();
+    }
 
-pub fn render_dialog(
-    lcd: &mut St7565<bsp::LcdBus>,
-    big_title: &str,
-    sub_title: &str,
-    hint: &str,
-    has_btns: bool,
-) {
-    let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog(canvas, big_title, sub_title, hint, has_btns);
-    lcd.blit(canvas);
-}
+    // ── Stage 4: watchdog ───────────────────────────────────────────────────────────────
+    py32_hal::wdt::Watchdog::start(WATCHDOG_TIMEOUT_MS);
 
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-pub fn render_progress(
-    lcd: &mut St7565<bsp::LcdBus>,
-    big_title: &str,
-    sub_title: &str,
-    progress_percent: u8,
-) {
-    let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
-    lcd.blit(canvas);
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-pub fn render_hold_prompt(
-    lcd: &mut St7565<bsp::LcdBus>,
-    big_title: &str,
-    sub_title: &str,
-    progress_percent: u8,
-) {
-    let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog_hold_prompt(
-        canvas,
-        big_title,
-        sub_title,
-        "Hold",
-        "Cancel",
-        progress_percent,
+    // ── Stage 5: storage ────────────────────────────────────────────────────────────────
+    #[cfg(feature = "filesystem")]
+    storage::mount_or_format(
+        &mut hw.lcd,
+        &mut hw.key_scanner,
+        hw.filesystem,
+        &mut hw.radio,
     );
-    lcd.blit(canvas);
-}
+    bsp::Board::wdt_feed();
 
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn rescue_raw_calibration(
-    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
-    raw_calib: &mut [u8; 512],
-) -> bool {
-    let valid_at_10k = fs.dev.read_data(0x010000, raw_calib).is_ok()
-        && crate::services::calibration::is_valid_calibration(raw_calib);
-    if !valid_at_10k {
-        crate::services::calibration::fill_default_calibration(raw_calib);
-    }
-    valid_at_10k
-}
-
-#[cfg(feature = "filesystem")]
-fn has_valid_calib_file(fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>) -> bool {
-    let buf = crate::services::staging_buf();
-    (fs.read_file("/sys/calib.dat", buf) == Ok(512)
-        && crate::services::calibration::is_valid_calibration(buf))
-        || (fs.read_file("/sys/calib.bak", buf) == Ok(512)
-            && crate::services::calibration::is_valid_calibration(buf))
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn save_rescued_calibration(
-    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
-    raw_calib: &mut [u8; 512],
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-) {
-    if !crate::services::calibration::is_valid_calibration(raw_calib) {
-        crate::services::calibration::fill_default_calibration(raw_calib);
-    }
-    let _ = fs.create_dir("/sys");
-    let _ = fs.write_file("/sys/calib.dat", raw_calib);
-    let _ = fs.write_file("/sys/calib.bak", raw_calib);
-
-    let mcu_uid = bsp::uid::read_mcu_uid();
-    let sig = crate::services::calibration::compute_device_signature(raw_calib, &mcu_uid);
-    let _ = fs.write_file("/sys/calib.sig", &sig.to_bytes());
-    radio.set_status_led(bsp::StatusLed::Off);
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn wait_keys_released(key_scanner: &mut KeypadScanner) {
-    while KeypadScanner::poll_matrix().is_some() {
-        bsp::Board::wdt_feed();
-        py32_hal::delay::delay_ms(10);
-    }
-    KeypadScanner::reset_gpio_pins();
-    key_scanner.clear();
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn prepare_boot_dialog(
-    lcd: &mut St7565<bsp::LcdBus>,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-) {
-    // Set non-zero PWM duty alongside GPIO high so 20 kHz SysTick PWM does not zero BACKLIGHT.
-    drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
-    bsp::pins::BACKLIGHT.set_high();
-    lcd.turn_on();
-    radio.set_status_led(bsp::StatusLed::Orange);
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn halt_with_boot_dialog(lcd: &mut St7565<bsp::LcdBus>, title: &str, sub: &str, hint: &str) -> ! {
-    render_dialog(lcd, title, sub, hint, false);
-    loop {
-        bsp::Board::wdt_feed();
-        py32_hal::delay::delay_ms(50);
-    }
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn prompt_and_format_storage(
-    lcd: &mut St7565<bsp::LcdBus>,
-    key_scanner: &mut KeypadScanner,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
-) {
-    let raw_calib = crate::services::staging_buf();
-    let has_hw_calib = rescue_raw_calibration(fs, raw_calib);
-    let calib_sub = if has_hw_calib {
-        "Calib OK (0x10000)"
-    } else {
-        "No calib! Uses default"
-    };
-
-    // Blit initial frame before enabling LCD/backlight to prevent GRAM glitch.
-    render_hold_prompt(lcd, "Invalid Storage", calib_sub, 0);
-    prepare_boot_dialog(lcd, radio);
-
-    // Wait for any already-held keys (e.g. Exit held during reset/wake) to be released first.
-    wait_keys_released(key_scanner);
-
-    let mut hold = gfx::gui::animation::HoldProgress::new();
-    hold.required_ms = 1500;
-    let mut last_ms = py32_hal::delay::millis();
-    let mut last_pct = 0u8;
-
-    loop {
-        bsp::Board::wdt_feed();
-        while let Some((code, state)) = key_scanner.scan() {
-            match (code, state) {
-                (KeyCode::Menu | KeyCode::Key5, KeyState::Pressed | KeyState::Held) => {
-                    hold.active = true;
-                }
-                (KeyCode::Menu | KeyCode::Key5, KeyState::Released) => {
-                    hold.active = false;
-                }
-                (KeyCode::Exit, KeyState::Pressed) => {
-                    halt_with_boot_dialog(
-                        lcd,
-                        "Boot Cancelled",
-                        "System Halted",
-                        "Power cycle to retry",
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        let now = py32_hal::delay::millis();
-        let dt = now.wrapping_sub(last_ms).min(100) as u16;
-        last_ms = now;
-        if dt > 0 {
-            if hold.advance(dt) {
-                break;
-            }
-            let pct = hold.percent();
-            if pct != last_pct {
-                last_pct = pct;
-                render_hold_prompt(lcd, "Invalid Storage", calib_sub, pct);
-            }
-        }
-        py32_hal::delay::delay_ms(10);
-    }
-
-    let mut last_rendered_progress = 0u8;
-    let fmt_res = fs.format(Some(&mut |progress| {
-        bsp::Board::wdt_feed();
-        if progress >= last_rendered_progress + 5 || progress == 100 {
-            last_rendered_progress = progress;
-            render_progress(lcd, "Formatting Flash", "Erasing & initializing", progress);
-        }
-    }));
-
-    if fmt_res.is_err() {
-        halt_with_boot_dialog(
-            lcd,
-            "Format Failed",
-            "Check SPI flash",
-            "Power cycle to retry",
-        );
-    }
-
-    render_progress(lcd, "Restoring Calib", "/sys/calib.dat", 95);
-    save_rescued_calibration(fs, raw_calib, radio);
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn recover_calibration_to_fs(
-    lcd: &mut St7565<bsp::LcdBus>,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
-) {
-    render_progress(lcd, "Calib Recovery", "Restoring /sys/calib.dat", 50);
-    prepare_boot_dialog(lcd, radio);
-
-    let raw_calib = crate::services::staging_buf();
-    let from_prov = fs.exists("/prov/calib.dat")
-        && fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
-        && crate::services::calibration::is_valid_calibration(raw_calib);
-    if !from_prov {
-        rescue_raw_calibration(fs, raw_calib);
-    }
-
-    save_rescued_calibration(fs, raw_calib, radio);
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-pub fn mount_or_format<'a>(
-    lcd: &mut St7565<bsp::LcdBus>,
-    key_scanner: &mut KeypadScanner,
-    filesystem: &mut FileSystemDriver<'a, Py25q16FlashDriver<bsp::FlashBus>>,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-) {
-    let fs = &mut filesystem.fs;
-
-    if fs.mount().is_err() {
-        prompt_and_format_storage(lcd, key_scanner, radio, fs);
-    } else if !has_valid_calib_file(fs) {
-        recover_calibration_to_fs(lcd, radio, fs);
-    }
-}
-
-#[cfg(feature = "filesystem")]
-const INIT_MARK_BASE: u8 = 1 << 0;
-#[cfg(feature = "filesystem")]
-const INIT_MARK_SPLASHES: u8 = if cfg!(feature = "boot_assets") {
-    1 << 1
-} else {
-    0
-};
-#[cfg(feature = "filesystem")]
-const INIT_MARK_ROGERS: u8 = if cfg!(feature = "provision_rogers") {
-    1 << 2
-} else {
-    0
-};
-#[cfg(feature = "filesystem")]
-const INIT_MARK_JINGLES: u8 = if cfg!(feature = "boot_jingle") {
-    1 << 3
-} else {
-    0
-};
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-pub fn ensure_default_files(filesystem: &mut SystemStorage) {
-    let desired: u8 = INIT_MARK_BASE | INIT_MARK_SPLASHES | INIT_MARK_ROGERS | INIT_MARK_JINGLES;
-
-    let mut init_buf = [0u8; 8];
-    let done_mask = match filesystem.read_file("/sys/init.done", &mut init_buf) {
-        Ok(n) if n >= 5 && &init_buf[..4] == b"INIT" => init_buf[4],
-        Ok(n) if n >= 4 && &init_buf[..4] == b"INIT" => INIT_MARK_BASE,
-        _ => 0,
-    };
-
-    if (done_mask & desired) != desired {
-        if (done_mask & INIT_MARK_BASE) == 0 {
-            crate::security::ensure_keychain(filesystem);
-        }
-        #[cfg(feature = "boot_assets")]
-        if (done_mask & INIT_MARK_SPLASHES) == 0 {
-            splash::provision_splashes(filesystem);
-        }
-        #[cfg(feature = "provision_rogers")]
-        if (done_mask & INIT_MARK_ROGERS) == 0 {
-            crate::services::melody::provision_rogers(filesystem);
-        }
-        #[cfg(feature = "boot_jingle")]
-        if (done_mask & INIT_MARK_JINGLES) == 0 {
-            crate::services::melody::provision_jingles(filesystem);
-        }
-
-        let updated = [b'I', b'N', b'I', b'T', done_mask | desired];
-        let _ = filesystem.write_file("/sys/init.done", &updated);
-    }
-
-    // Verify core /apps/*.krx packages, install any staged /prov/* items, and refresh launcher catalog
-    provision::provision_packages(filesystem);
-}
-
-#[cfg(not(feature = "filesystem"))]
-pub fn mount_or_format(
-    _lcd: &mut St7565<bsp::LcdBus>,
-    _key_scanner: &mut KeypadScanner,
-    _radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-) -> crate::services::storage::NoStorage {
-    crate::services::storage::NoStorage
-}
-
-#[cfg(not(feature = "filesystem"))]
-#[allow(dead_code)]
-pub fn ensure_default_files(_filesystem: &mut SystemStorage) {}
-
-/// Read the factory bootloader version string (e.g. `"7.02.02"`) directly from internal MCU Flash
-/// (`0x0800_1F00..0x0800_2700`), falling back to `"7.02.02"` on host unit-test targets.
-#[inline(always)]
-pub fn bootloader_version_str() -> &'static str {
-    bsp::uid::bootloader_version_str()
-}
-
-#[cfg(any(feature = "dfu", feature = "krx_native"))]
-#[inline(always)]
-pub fn is_bootloader_hold_requested() -> bool {
-    (read_backup_tag().flags & kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD) != 0
-}
-
-#[cfg(any(feature = "dfu", feature = "krx_native"))]
-#[inline(always)]
-pub fn clear_bootloader_hold_flag() {
-    let mut tag = read_backup_tag();
-    tag.flags = (tag.flags & !kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD)
-        | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
-    write_backup_tag(tag);
-}
-
-#[cfg(any(feature = "dfu", feature = "krx_native"))]
-#[inline(always)]
-pub fn is_ptt_side2_requested() -> bool {
-    #[cfg(all(not(test), target_arch = "arm"))]
-    {
-        const PTT_BIT: u32 = 1 << 18;
-        const SIDE2_BIT: u32 = 1 << 1;
-        let mask = KeypadScanner::poll_raw_mask();
-        (mask & (PTT_BIT | SIDE2_BIT)) == (PTT_BIT | SIDE2_BIT)
-    }
-    #[cfg(not(all(not(test), target_arch = "arm")))]
-    {
-        false
-    }
-}
-
-/// Board-aware reboot handler registered with `kernel::power::PowerControl`.
-pub fn firmware_reboot_handler(mode: kernel::power::RebootMode) -> ! {
-    match mode {
-        kernel::power::RebootMode::Firmware => prepare_clean_reboot(),
-        #[cfg(not(any(feature = "dfu", feature = "krx_native")))]
-        kernel::power::RebootMode::Bootloader => prepare_clean_reboot(),
-        #[cfg(any(feature = "dfu", feature = "krx_native"))]
-        kernel::power::RebootMode::Bootloader => {
-            let mut tag = read_backup_tag();
-            tag.flags |= kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD
-                | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
-            write_backup_tag(tag);
-        }
-        kernel::power::RebootMode::SafeRecovery => {
-            let mut tag = read_backup_tag();
-            tag.flags |= kernel::boot::BackupCrashTag::FLAG_SAFE_MODE_REQ
-                | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
-            write_backup_tag(tag);
-        }
-    }
-    kernel::power::PowerControl::reboot_raw()
+    // ── Stage 6: system ─────────────────────────────────────────────────────────────────
+    orchestration::boot_orchestration(hw)
 }
 
 #[cfg(test)]

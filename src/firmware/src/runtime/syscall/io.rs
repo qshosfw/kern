@@ -13,6 +13,12 @@ fn power_ref() -> &'static drivers::battery::SystemPower {
 #[inline(never)]
 fn dispatch_io_key(sub: u8, a1: usize) -> usize {
     use ::abi::sub::io_key;
+    // Headless: apps see an idle matrix; raw keypad probes cannot bypass the wire-only lock.
+    if matches!(sub, io_key::POLL | io_key::MATRIX | io_key::IS_PRESSED)
+        && !crate::system::admits_physical_input()
+    {
+        return 0;
+    }
     match sub {
         io_key::POLL => {
             bsp::Board::wdt_feed();

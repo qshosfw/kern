@@ -156,9 +156,12 @@ pub unsafe extern "C" fn HardFault() -> ! {
 
 #[cfg(not(test))]
 fn record_backup_crash(strikes: u8, reason_code: u8) {
+    // A crashed headless node must come back headless (no panel prompts, no keypad).
+    let kept = crate::boot::backup::read().flags & BackupCrashTag::FLAG_HEADLESS;
     let tag = BackupCrashTag {
         strikes,
-        flags: BackupCrashTag::FLAG_DIRTY_CRASH
+        flags: kept
+            | BackupCrashTag::FLAG_DIRTY_CRASH
             | if strikes >= 2 {
                 BackupCrashTag::FLAG_SAFE_MODE_REQ
             } else {
@@ -166,7 +169,7 @@ fn record_backup_crash(strikes: u8, reason_code: u8) {
             },
         reason_code,
     };
-    hal::rtc::RealTimeClock::write_alarm_raw(tag.encode());
+    crate::boot::backup::write(tag);
 }
 
 #[cfg(not(test))]

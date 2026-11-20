@@ -23,10 +23,10 @@ pub struct KeyConfig {
     pub repeat_rate: u8,                    // 0=30ms, 1=50ms, 2=80ms, 3=120ms
     pub ptt_mode: u8,                       // 0=Momentary, 1=Toggle/Latch, 2=Double-press Latch
     pub f_drawer: u8,                       // 0=Off, 1=Slide-up F-shortcut badge drawer
-    pub _pad: u8,                           // 2-byte alignment for actions: [u16; 19]
+    pub headless: u8, // 0=Panel UI, 1=Headless node (physical I/O locked; wire-only control)
     pub actions: [u16; KEY_SHORTCUT_COUNT], // 38 B: 0..4 side/menu, 5..18 F+keys
-    pub ctx_rules: [CtxRule; 3],            // 12 B: 3 contextual overrides
-    pub crc32: u32,                         // offset 60 -> 64 B total (2^6)
+    pub ctx_rules: [CtxRule; 3], // 12 B: 3 contextual overrides
+    pub crc32: u32,   // offset 60 -> 64 B total (2^6)
 }
 
 impl KeyConfig {
@@ -55,7 +55,7 @@ impl KeyConfig {
             repeat_rate: 1,
             ptt_mode: 0,
             f_drawer: 1,
-            _pad: 0,
+            headless: 0,
             actions,
             ctx_rules: [CtxRule {
                 slot: 0,

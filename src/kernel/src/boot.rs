@@ -406,6 +406,8 @@ impl BackupCrashTag {
     pub const FLAG_DIRTY_CRASH: u8 = 1 << 1;
     pub const FLAG_SAFE_MODE_REQ: u8 = 1 << 2;
     pub const FLAG_BOOTLOADER_HOLD: u8 = 1 << 3;
+    /// Node runs headless: physical I/O locked, RigWire is the sole control plane.
+    pub const FLAG_HEADLESS: u8 = 1 << 4;
     pub const FLAG_DFU_TOOLS_REQ: u8 = 1 << 6;
 
     pub const fn empty() -> Self {

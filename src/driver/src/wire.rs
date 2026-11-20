@@ -137,13 +137,9 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
     }
 
     #[inline(never)]
+    /// Plain-text probe: answers with the protocol banner only. Nothing typed on a raw
+    /// terminal (or line noise on a long UART run) can change device state.
     fn handle_ascii_line(&mut self) {
-        let cmd = &self.rx_buf[..self.rx_len];
-        if utils::format::ascii_str(cmd)
-            .is_some_and(|s| utils::format::ascii_eq_ignore_case(s, "reboot"))
-        {
-            kernel::power::PowerControl::reboot();
-        }
         self.port.write(b"RigWire\r\n");
     }
 

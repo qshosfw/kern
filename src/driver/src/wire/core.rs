@@ -113,6 +113,14 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
                 (WireStatus::Ok, 5)
             }
 
+            // State-changing core ops require the established session: a stray byte stream
+            // or an unauthenticated peer on a shared line must never reset a remote node.
+            OP_CORE_REBOOT
+                if self.session.active_session_id == 0
+                    || header.session_id != self.session.active_session_id =>
+            {
+                (WireStatus::BadSession, 0)
+            }
             OP_CORE_REBOOT => {
                 post_op = 2;
                 (WireStatus::Ok, 0)

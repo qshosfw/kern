@@ -71,6 +71,8 @@ pub struct BacklightController<O> {
     target_level: u8,  // target PWM level 0..10
     fade_accumulator_ms: u16,
     is_active: bool,
+    /// Headless latch: while set, no wake source (keys, syscalls, config, dialogs) can light the panel.
+    held_dark: bool,
 }
 
 impl<O: BacklightOutput> BacklightController<O> {
@@ -88,6 +90,7 @@ impl<O: BacklightOutput> BacklightController<O> {
             target_level: 0,
             fade_accumulator_ms: 0,
             is_active: false,
+            held_dark: false,
         }
     }
 
@@ -152,6 +155,19 @@ impl<O: BacklightOutput> BacklightController<O> {
         self.apply_hardware();
     }
 
+    /// Latch the backlight dark (headless). Releasing does not wake; the caller decides.
+    pub fn hold_dark(&mut self, dark: bool) {
+        self.held_dark = dark;
+        if dark {
+            self.turn_off();
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_held_dark(&self) -> bool {
+        self.held_dark
+    }
+
     #[inline(always)]
     pub fn is_active(&self) -> bool {
         self.is_active
@@ -159,7 +175,7 @@ impl<O: BacklightOutput> BacklightController<O> {
 
     /// Trigger backlight wake-up on key press or system event.
     pub fn wake(&mut self) {
-        if self.mode == BacklightMode::Off {
+        if self.held_dark || self.mode == BacklightMode::Off {
             self.turn_off();
             return;
         }
@@ -175,6 +191,9 @@ impl<O: BacklightOutput> BacklightController<O> {
 
     /// System tick handler called periodically with elapsed time. Ramps brightness smoothly toward target_level.
     pub fn tick(&mut self, delta_ms: u16) -> bool {
+        if self.held_dark {
+            return false;
+        }
         match self.mode {
             BacklightMode::Off => {
                 self.is_active = false;
@@ -218,7 +237,7 @@ impl<O: BacklightOutput> BacklightController<O> {
     }
 
     fn apply_hardware(&mut self) {
-        if self.mode == BacklightMode::Off || self.current_level == 0 {
+        if self.held_dark || self.mode == BacklightMode::Off || self.current_level == 0 {
             BACKLIGHT_DUTY.store(0, Ordering::Relaxed);
             self.output.set_output(false, 0);
         } else {
@@ -230,5 +249,34 @@ impl<O: BacklightOutput> BacklightController<O> {
 impl<O: BacklightOutput + Default> Default for BacklightController<O> {
     fn default() -> Self {
         Self::new(O::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct NullOutput;
+    impl BacklightOutput for NullOutput {
+        fn set_output(&mut self, _on: bool, _rgb_mask: u8) {}
+    }
+
+    #[test]
+    fn held_dark_backlight_ignores_every_wake_source() {
+        let mut bl = BacklightController::new(NullOutput);
+        bl.hold_dark(true);
+        bl.wake();
+        bl.set_keypad_mode(5);
+        bl.set_mode(BacklightMode::On);
+        assert!(!bl.tick(50));
+        assert!(!bl.is_active());
+        assert_eq!(BACKLIGHT_DUTY.load(Ordering::Relaxed), 0);
+
+        // Releasing the latch does not light the panel by itself; the next wake does.
+        bl.hold_dark(false);
+        assert!(!bl.is_active());
+        bl.wake();
+        assert!(bl.is_active());
     }
 }

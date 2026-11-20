@@ -465,8 +465,11 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
                             return Err(WireStatus::SafetyDenied);
                         }
                         coord.start_tx(radio);
+                        // Armed for the link-loss failsafe: a silent link unkeys the PA.
+                        crate::system::set_wire_tx(coord.is_transmitting);
                     } else {
                         coord.stop_tx(radio);
+                        crate::system::set_wire_tx(false);
                     }
                 }
                 FACET_RADIO_DIGITAL => {
@@ -488,9 +491,17 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             let domain_idx = config_domain_idx(handle.instance)?;
             let mcfg = crate::master_config();
             let dest = mcfg.config_bytes_mut(domain_idx);
-            let copy_len = c.inp.len().min(dest.len());
-            dest[..copy_len].copy_from_slice(&c.inp[..copy_len]);
+            // Whole-block writes only, stamped with the block's own format version; the
+            // CRC is resealed locally and every property is re-clamped before it persists.
+            if c.inp.len() != dest.len() {
+                return Err(WireStatus::BadLength);
+            }
+            if c.inp[0] != crate::config::MasterConfig::domain_version(domain_idx) {
+                return Err(WireStatus::BadVersion);
+            }
+            dest.copy_from_slice(c.inp);
             mcfg.mark_domain_dirty(domain_idx);
+            mcfg.sanitize();
             let _ = mcfg.flush_dirty(c.fs());
             Ok(())
         }
@@ -509,9 +520,13 @@ fn handle_resource_invoke(
     let arg = c.inp.first().copied().unwrap_or(0);
     match (handle.domain, action_id) {
         (DOMAIN_SYSTEM, ACTION_SYS_REBOOT) => {
+            // Fault-injection hooks exist only in debug builds; release nodes cannot be
+            // crashed remotely.
+            #[cfg(feature = "settings_debug")]
             if arg == 3 {
                 panic!("Wire test panic");
             }
+            #[cfg(feature = "settings_debug")]
             if arg == 4 {
                 #[cfg(target_arch = "arm")]
                 unsafe {

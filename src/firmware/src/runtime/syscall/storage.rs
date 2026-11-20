@@ -34,7 +34,7 @@ fn proc_read(path: &str, offset: usize, dst: &mut [u8]) -> Option<usize> {
     if !is_proc_boot_path(path) || !has_proc_read_cap() {
         return None;
     }
-    let tag_bytes = crate::boot::read_backup_tag().encode().to_le_bytes();
+    let tag_bytes = crate::boot::backup::read().encode().to_le_bytes();
     let mut written = 0usize;
     let mut seg_start = 0usize;
     for (ptr, len) in [
@@ -347,7 +347,7 @@ mod tests {
                 | kernel::boot::BackupCrashTag::FLAG_SAFE_MODE_REQ,
             reason_code: 1,
         };
-        crate::boot::write_backup_tag(initial_tag);
+        crate::boot::backup::write(initial_tag);
         unsafe {
             crate::FAULT_EXTRA.valid = kernel::boot::FaultExtraRegs::FAULT_EXTRA_IDENT;
             crate::FAULT_EXTRA.msp = 0x2000_3A00;
@@ -385,13 +385,13 @@ mod tests {
             .with(Cap::PowerManage)
             .with(Cap::StorageAdmin);
         assert_eq!(proc_remove("/proc/boot"), Some(0));
-        assert_eq!(crate::boot::read_backup_tag().strikes, 0);
+        assert_eq!(crate::boot::backup::read().strikes, 0);
         unsafe {
             assert_eq!(crate::panic::BOOT_RECORD.get().slot_a.crash_count, 0);
             assert_eq!(crate::panic::BOOT_RECORD.get().slot_a.fault_pc, 0);
             crate::FAULT_EXTRA.valid = 0;
         }
-        crate::boot::write_backup_tag(kernel::boot::BackupCrashTag::empty());
+        crate::boot::backup::write(kernel::boot::BackupCrashTag::empty());
         super::super::super::native_runner::init_native_slot();
     }
 }
