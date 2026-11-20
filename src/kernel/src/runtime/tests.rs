@@ -474,7 +474,7 @@ fn test_native_provisioned_package_full_test_bench() {
 
     // ── 6. Full C-ABI Safe-Stub Execution Dispatch Test ──
     let api_table = KrxApiTable::safe_stub(required_caps);
-    assert_eq!(api_table.abi_version, KRX_ABI_VERSION_3_0);
+    assert_eq!(api_table.abi_version, KRX_ABI_VERSION);
     assert_eq!(api_table.granted_caps, required_caps);
 
     // Test Simulated Guest Entry Point Handler:
@@ -502,7 +502,7 @@ fn test_native_provisioned_package_full_test_bench() {
             }
             KRX_OP_RENDER => {
                 unsafe {
-                    table.invoke(::abi::Op::GfxDraw, 2 | (1 << 8), 0, (128) | (64 << 16));
+                    table.invoke(::abi::Op::GfxDraw, 1 | (1 << 8), 0, (128) | (64 << 16));
                     table.invoke(::abi::Op::GfxCommit, 0, 0, 0);
                 }
                 0
@@ -765,7 +765,7 @@ fn test_native_app_execution_and_abi_integration_bench() {
                     _pad: 0,
                 };
                 unsafe {
-                    table.invoke(::abi::Op::GfxDraw, 2 | (1 << 8), 0, 128 | (64 << 16));
+                    table.invoke(::abi::Op::GfxDraw, 1 | (1 << 8), 0, 128 | (64 << 16));
                     table.invoke(::abi::Op::GfxText, &raw const req as usize, 0, 0);
                     table.invoke(::abi::Op::GfxCommit, 0, 0, 0);
                 }
@@ -853,14 +853,9 @@ fn test_exhaustive_abi_vtable_verification_bench() {
 
     unsafe {
         // SYS & MATH
-        assert_eq!(
-            api.invoke(Op::SysQuery, 0, 0, 0),
-            KRX_ABI_VERSION_3_0 as usize
-        );
+        assert_eq!(api.invoke(Op::SysQuery, 0, 0, 0), KRX_ABI_VERSION as usize);
         assert_eq!(api.invoke(Op::SysQuery, 1, 0, 0), 1024);
         assert_eq!(api.invoke(Op::SysQuery, 2, 0, 0), 48_000_000);
-        assert_eq!(api.invoke(Op::SysQuery, 5, 144, 0), 12);
-        assert_eq!(api.invoke(Op::SysQuery, 5, 256, 0), 16);
         assert_eq!(api.invoke(Op::SysInfo, 0, 0, 0), 1);
 
         // PROC & IPC
@@ -887,14 +882,14 @@ fn test_exhaustive_abi_vtable_verification_bench() {
 
         // GFX & UI
         assert_eq!(api.invoke(Op::GfxClear, 0, 0, 0), 0);
-        assert_eq!(api.invoke(Op::GfxDraw, 9 | (1 << 8), 0, b'A' as usize), 6);
+        assert_eq!(api.invoke(Op::GfxDraw, 5 | (1 << 8), 0, b'A' as usize), 6);
         assert_eq!(api.invoke(Op::GfxCommit, 0, 0, 0), 0);
         assert_eq!(api.invoke(Op::UiWidget, 1, 0, 0), 1);
 
         // IO
         assert_eq!(api.invoke(Op::IoPower, 0, 0, 0), 4000);
         assert_eq!(api.invoke(Op::IoPower, 5, 0, 0), 250);
-        assert_eq!(api.invoke(Op::IoTime, 4, 0, 0), 1);
+        assert_eq!(api.invoke(Op::IoTime, 3, 0, 0), 1);
         assert_eq!(api.invoke(Op::IoBus, 0, 0, 0), 1);
         assert_eq!(api.invoke(Op::IoBus, 6, 0, 0), 1);
     }
@@ -1433,6 +1428,7 @@ fn test_krx_multi_type_lifecycle_and_flags() {
     pkg[26..28].copy_from_slice(&44u16.to_le_bytes());
     pkg[28..30].copy_from_slice(&108u16.to_le_bytes()); // name_str offset = 108
     pkg[30] = 1; // version major
+    pkg[33..35].copy_from_slice(&::abi::VERSION.to_le_bytes()); // built-against ABI
     pkg[51] = 7; // icon_id = 7
 
     // Offset 68: SectionTypeLifecycle (4B header + 12B body = 16B, ends at 84)
@@ -1467,6 +1463,7 @@ fn test_krx_multi_type_lifecycle_and_flags() {
     let summary = KrxPreamble::summarize(&pkg[..128]).expect("Valid summary");
     assert_eq!(summary.preamble.app_type, KrxClass::Native as u8);
     assert_eq!(summary.title(), "AprsDaemon");
+    assert_eq!(summary.abi, ::abi::VERSION);
     let exec = summary.exec().copied().expect("Has exec section");
     let min_stack = exec.min_stack_bytes;
     assert_eq!(min_stack, 256);

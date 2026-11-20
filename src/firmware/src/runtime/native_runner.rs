@@ -25,6 +25,7 @@ pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
 pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
 pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
+pub(crate) const MAX_STRUCTURED_LEAVES: usize = 18;
 
 #[cfg(feature = "krx_paged")]
 #[repr(C)]
@@ -39,7 +40,7 @@ pub(crate) struct PagedWindowState {
 pub(crate) union PagedOverlay {
     #[cfg(feature = "krx_paged")]
     pub(crate) window: core::mem::ManuallyDrop<PagedWindowState>,
-    pub(crate) leaf: core::mem::ManuallyDrop<StructuredLeafManager<16>>,
+    pub(crate) leaf: core::mem::ManuallyDrop<StructuredLeafManager<MAX_STRUCTURED_LEAVES>>,
 }
 
 #[repr(C, align(4))]
@@ -132,7 +133,7 @@ impl NativeExecSlot {
     }
 
     #[inline(always)]
-    fn leaf_mut(&mut self) -> Option<&mut StructuredLeafManager<16>> {
+    fn leaf_mut(&mut self) -> Option<&mut StructuredLeafManager<MAX_STRUCTURED_LEAVES>> {
         if self.is_loaded && self.profile.is_structured_paged() {
             Some(unsafe { &mut *self.overlay.leaf })
         } else {
@@ -448,6 +449,13 @@ pub fn load_native_from_storage(
         profile,
         KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
     );
+    if profile.is_structured_paged()
+        && aux
+            .leaf_map
+            .is_some_and(|map| map.len() > MAX_STRUCTURED_LEAVES * kernel::runtime::LeafEntry::SIZE)
+    {
+        return Err(KrxLaunchError::UnsupportedProfile);
+    }
 
     if payload_len == 0 || (!is_paged && payload_len < (exec.payload_size as usize)) {
         return Err(KrxLaunchError::TruncatedPackage);
@@ -953,6 +961,7 @@ pub(crate) fn teardown_slot_and_hw(
 ) {
     let slot = slot_mut();
     crate::audio_capture_mut().stop_capture();
+    ctx.config.release_controls();
     if pid.0 != 0 {
         super::syscall::ipc_channel_mut().purge_pid(pid.0);
         if !persist_tray {

@@ -4,7 +4,7 @@
 use super::{parse_str, ptr_slice, slice_or_empty};
 use kernel::ipc::{IpcChannel, KrxIpcMessage, ipc_msg_type, ipc_target};
 use kernel::proc::abi::{
-    KRX_ABI_VERSION_3_0, KRX_QS1_INVALID, KRX_QS1_UNVERIFIED, KRX_SYS_INFO_FLAG_CALIB_VALID,
+    KRX_ABI_VERSION, KRX_QS1_INVALID, KRX_QS1_UNVERIFIED, KRX_SYS_INFO_FLAG_CALIB_VALID,
     KRX_SYS_INFO_FLAG_HAS_CERT, KRX_SYS_INFO_FLAG_RDP_PROTECTED, KrxIpcSendReq, KrxProcInfo,
     KrxSysInfo,
 };
@@ -161,7 +161,7 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
     match idx {
         op::SysInfo => unsafe { fill_sys_info(a0 as *mut KrxSysInfo) },
         op::SysQuery => match a0 as u8 {
-            sys_query::OS_VERSION => KRX_ABI_VERSION_3_0 as usize,
+            sys_query::OS_VERSION => KRX_ABI_VERSION as usize,
             sys_query::STACK_FREE => {
                 kernel::sys::SystemDiagnostics::stack_margin_bytes() as u16 as usize
             }
@@ -191,7 +191,6 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 let seed = py32_hal::delay::millis() ^ (noise << 16);
                 crypto::crc::CrcEngine::crc32(&seed.to_le_bytes()) as usize
             }
-            sys_query::ISQRT => kernel::proc::abi::isqrt(a1 as u32) as usize,
             sys_query::CRC32 => unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }
                 .map_or(0, crypto::crc::CrcEngine::crc32) as usize,
             sys_query::CRC16 => unsafe { ptr_slice(a1 as *const u8, (a2 as u16) as usize) }
@@ -199,19 +198,12 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 as usize,
             _ => 0,
         },
-        // SysDiv (unsigned) / SysIdiv (signed): optional remainder written to `a2`
-        op::SysDiv | op::SysIdiv => {
-            let signed = idx == op::SysIdiv;
+        // Unsigned divide; optional remainder written to `a2`. A zero divisor
+        // yields quotient 0 and remainder `n` instead of trapping.
+        op::SysDiv => {
             let n = a0 as u32;
             let d = a1 as u32;
-            let m_n = if signed { ((n as i32) >> 31) as u32 } else { 0 };
-            let m_d = if signed { ((d as i32) >> 31) as u32 } else { 0 };
-            let un = (n ^ m_n).wrapping_sub(m_n);
-            let ud = (d ^ m_d).wrapping_sub(m_d);
-            let (uq, ur) = if ud == 0 { (0, un) } else { (un / ud, un % ud) };
-            let m_q = m_n ^ m_d;
-            let q = (uq ^ m_q).wrapping_sub(m_q);
-            let r = (ur ^ m_n).wrapping_sub(m_n);
+            let (q, r) = if d == 0 { (0, n) } else { (n / d, n % d) };
             let rem_out = a2 as *mut u32;
             if !rem_out.is_null() {
                 unsafe { *rem_out = r };
@@ -243,7 +235,7 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 post_event_id(ev)
             }
         }
-        op::PropGet | op::PropSet => {
+        op::PropGet | op::PropSet | op::PrefSet => {
             #[cfg(not(test))]
             let config = Some(crate::master_config());
             #[cfg(test)]
@@ -255,9 +247,14 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             if idx == op::PropGet {
                 return config.prop_get(id) as usize;
             }
-            let cap = ::abi::prop::DOMAIN_CAP[((id >> 5) as usize).min(5)];
+            if idx == op::PrefSet {
+                return usize::from(!config.prop_set(id, a1 as u8));
+            }
             let granted = crate::runtime::native_runner::active_native_caps();
-            usize::from(!(granted.contains(cap) && config.prop_set(id, a1 as u8)))
+            let allowed = ::abi::prop::CONTROL_CAP
+                .get((id >> 5) as usize)
+                .is_some_and(|&cap| granted.contains(cap));
+            usize::from(!(allowed && config.control_set(id, a1 as u8)))
         }
         op::SysFlush => {
             #[cfg(not(test))]

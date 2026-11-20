@@ -29,6 +29,7 @@ leaves = [
     "leaf15_qr_encode.c",
     "leaf16_qr_matrix.c",
     "leaf17_qr_draw.c",
+    "leaf18_tab_chrome.c",
 ]
 
 # Placement in Settings -> System.

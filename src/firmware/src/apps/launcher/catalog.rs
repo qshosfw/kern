@@ -400,7 +400,20 @@ mod tests {
             .expect("panic.mod must declare its Settings placement as an action");
         assert_eq!(action.scope_mask, ::abi::scope::SYSTEM_PAGE);
         assert_eq!(summary.title(), "Crash Logs");
+        assert_eq!(
+            summary.abi,
+            ::abi::VERSION,
+            "rebuild packages: ./kern pkg all"
+        );
         assert!(summary.exec().is_some());
-        assert_eq!(summary.aux.leaf_map.map(|m| m.len()), Some(17 * 16));
+        #[cfg(feature = "krx_native")]
+        {
+            let mut leaves = kernel::runtime::paged::StructuredLeafManager::<
+                { crate::runtime::native_runner::MAX_STRUCTURED_LEAVES },
+            >::new(0, 1024);
+            leaves.configure(0, 1024, summary.aux.leaf_map);
+            assert_eq!(leaves.leaf_count(), 18);
+            assert_eq!(leaves.leaf_at(17).map(|entry| entry.leaf_id), Some(18));
+        }
     }
 }

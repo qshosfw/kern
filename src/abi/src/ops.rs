@@ -283,12 +283,12 @@ abi! {
         SysInfo    = 0 (Out, Val, Val),
         SysQuery   = 1 (Val, Val, Val),
         SysDiv     = 2 (Val, Val, Val),
-        SysIdiv    = 3 (Val, Val, Val),
-        SysReboot  = 4 (Val, Val, Val) [PowerManage],
-        SysEvent   = 5 (Val, Val, Val),
-        SysFlush   = 6 (Val, Val, Val),
-        PropGet    = 7 (Val, Val, Val),
-        PropSet    = 8 (Val, Val, Val),
+        SysReboot  = 3 (Val, Val, Val) [PowerManage],
+        SysEvent   = 4 (Val, Val, Val),
+        SysFlush   = 5 (Val, Val, Val),
+        PropGet    = 6 (Val, Val, Val),
+        PropSet    = 7 (Val, Val, Val),
+        PrefSet    = 8 (Val, Val, Val) [Preferences],
     }
     PROC 0x1 {
         ProcSelf   = 0 (Val, Val, Val),
@@ -356,9 +356,8 @@ abi_sub! {
         CPU_HZ     = 2,
         DEVICE_UID = 3,
         RAND32     = 4,
-        ISQRT      = 5,
-        CRC32      = 6,
-        CRC16      = 7,
+        CRC32      = 5,
+        CRC16      = 6,
     }
     proc_paged {
         CALL       = 0,
@@ -447,19 +446,15 @@ abi_sub! {
         IS_CAP     = 6,
     }
     gfx_draw {
-        PIXEL      = 0,
-        LINE       = 1,
-        RECT       = 2,
-        FILL_RECT  = 3,
-        HLINE      = 4,
-        VLINE      = 5,
-        CLR_CORNER = 6,
-        DITHER     = 7,
-        INVERT     = 8,
-        CHAR       = 9,
-        ICON       = 10,
-        SCROLL     = 11,
-        DOTTED_H   = 12,
+        LINE       = 0,
+        RECT       = 1,
+        FILL_RECT  = 2,
+        CLR_CORNER = 3,
+        DITHER     = 4,
+        CHAR       = 5,
+        ICON       = 6,
+        SCROLL     = 7,
+        DOTTED_H   = 8,
     }
     gfx_ctl {
         BITMAP     = 0,
@@ -480,12 +475,10 @@ abi_sub! {
     }
     io_key {
         POLL       = 0,
-        NAV_DIR    = 1,
-        MATRIX     = 2,
-        IS_PRESSED = 3,
-        IS_F       = 4,
-        CLEAR      = 5,
-        IS_LOCKED  = 6,
+        MATRIX     = 1,
+        IS_PRESSED = 2,
+        IS_F       = 3,
+        IS_LOCKED  = 4,
     }
     io_power {
         BATT_MV    = 0,
@@ -508,10 +501,9 @@ abi_sub! {
     }
     io_time {
         TICKS_MS   = 0,
-        UPTIME_S   = 1,
-        DELAY_MS   = 2,
-        DELAY_US   = 3,
-        RTC_GET    = 4,
+        DELAY_MS   = 1,
+        DELAY_US   = 2,
+        RTC_GET    = 3,
     }
     io_bus {
         I2C        = 0,

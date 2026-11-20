@@ -773,6 +773,8 @@ pub struct KrxSummary<'a> {
     pub type_flags: u8,
     pub has_exec: bool,
     pub icon_id: u16,
+    /// ABI version the package was built against (identity `min_kernel_abi`).
+    pub abi: u16,
     pub caps: ::abi::CapabilitySet,
     pub exec_raw: SectionExecution,
     pub preamble: KrxPreamble,
@@ -823,6 +825,7 @@ impl<'a> Default for KrxSummary<'a> {
             },
             title: None,
             icon_id: 0,
+            abi: 0,
             exec_type: KrxExecType::App,
             type_flags: 0,
             has_exec: false,
@@ -938,6 +941,7 @@ impl KrxPreamble {
             match sec_id {
                 SECTION_IDENTITY if body.len() >= 25 => {
                     out.title = Self::read_hdr_str(hdr, u16::from_le_bytes([body[0], body[1]]));
+                    out.abi = u16::from_le_bytes([body[5], body[6]]);
                     out.icon_id = u16::from_le_bytes([body[23], body[24]]);
                 }
                 SECTION_TYPE_LIFECYCLE if body.len() >= 12 => {

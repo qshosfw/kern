@@ -69,6 +69,8 @@ caps! {
     StorageAdmin = 23,
     /// Protected factory calibration read/write access (/sys/calib.*).
     FactoryCalib = 24,
+    /// Persist user preferences (`/pref/*.cfg`) through `Op::PrefSet`.
+    Preferences = 25,
 }
 
 impl Cap {

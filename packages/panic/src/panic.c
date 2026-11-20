@@ -17,7 +17,6 @@ void _start(void) {
     __asm__ volatile("push {lr}\n bl krx_main\n pop {pc}\n");
 }
 
-static const char TAB_TITLES[] = "Sum\0Reg\0Stk\0Asm\0QR\0Log";
 static const char LOG_ITEMS[] =
     "Next Record\0"
     "Serial Dump\0"
@@ -159,12 +158,7 @@ static void render_tabs(const KrxApiTable* api) {
     }
 
     if (!(g_st.tab == TAB_QR && g_st.qr_full)) {
-        krx_draw_tabbed_sheet(
-            api, 0u, 0u, 128u, 64u,
-            g_st.tab, TAB_COUNT,
-            KRX_TAB_FLAG_INTEGRATED_86 | KRX_TAB_FLAG_BOTTOM_BORDER,
-            TAB_TITLES, (u16)(sizeof(TAB_TITLES) - 1u)
-        );
+        krx_leaf_call(api, LEAF_TAB_CHROME, (u32)&g_st);
     }
 
     if (g_st.toast_ticks > 0u) {

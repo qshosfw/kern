@@ -206,7 +206,8 @@ Service Registry\0\
 Bus Access\0\
 GPIO Access\0\
 Storage Admin\0\
-Factory Calibration\0";
+Factory Calibration\0\
+Preferences\0";
 
 /// Human-readable capability name for dialogs and settings pages.
 pub const fn name(cap: Cap) -> &'static str {

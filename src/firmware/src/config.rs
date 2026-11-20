@@ -153,6 +153,8 @@ pub struct MasterConfig {
     pub dirty: u8,
     pub hw_dirty: u8,
     pub _pad: [u8; 2],
+    /// Live application overrides as `[property id, preference value]`; id 0 = free.
+    pub controls: [[u8; 2]; ::abi::prop::CONTROL_SLOTS],
     pub display: DisplayConfig,
     pub battery: BatteryConfig,
     pub system: SystemConfig,
@@ -261,6 +263,7 @@ impl MasterConfig {
         dirty: 0,
         hw_dirty: 0,
         _pad: [0; 2],
+        controls: [[0; 2]; ::abi::prop::CONTROL_SLOTS],
     };
 
     pub fn new() -> Self {
@@ -405,22 +408,66 @@ impl MasterConfig {
             .unwrap_or(0)
     }
 
-    /// Store property `id` if it is declared and `val` is inside its bounds.
-    /// The owning domain is sealed and queued for hardware apply and persistence.
-    #[inline(never)]
+    /// Store preference `id` if it is declared and `val` is inside its bounds.
+    /// The owning domain is sealed and queued for hardware apply and persistence;
+    /// a live control on the same property is dropped, the user's choice wins.
     pub fn prop_set(&mut self, id: u8, val: u8) -> bool {
-        let Some(p) = ::abi::prop::find(id) else {
-            return false;
-        };
-        if !p.admits(val) {
+        self.write_prop(id, val, true)
+    }
+
+    /// Override property `id` for the running application only: the hardware
+    /// follows, `/pref` does not, and `release_controls` hands it back.
+    pub fn control_set(&mut self, id: u8, val: u8) -> bool {
+        self.write_prop(id, val, false)
+    }
+
+    #[inline(never)]
+    fn write_prop(&mut self, id: u8, val: u8, persist: bool) -> bool {
+        let dom = (id >> 5) as usize;
+        if !::abi::prop::find(id).is_some_and(|p| p.admits(val)) {
             return false;
         }
-        let byte = &mut self.config_bytes_mut(p.domain())[p.offset()];
-        if *byte != val {
-            *byte = val;
-            self.mark_domain_dirty(p.domain());
+        let held = self.controls.iter().position(|s| s[0] == id);
+        let old = self.prop_get(id);
+        if persist {
+            // Compare with the stored preference, not a live preview of the same value.
+            let pref = held.map_or(old, |at| self.controls[at][1]);
+            if let Some(at) = held {
+                self.controls[at][0] = 0;
+            }
+            if pref != val {
+                self.dirty |= 1u8 << dom;
+            }
+        } else if held.is_none() {
+            let free = self.controls.iter().position(|s| s[0] == 0);
+            let (Some(at), true) = (free, dom < ::abi::prop::CONTROL_CAP.len()) else {
+                return false;
+            };
+            self.controls[at] = [id, old];
         }
+        self.config_bytes_mut(dom)[(id & 0x1F) as usize] = val;
+        self.hw_dirty |= (1u8 << dom) & 0x1F;
+        self.seal(dom);
         true
+    }
+
+    /// Exchange every held control with its preference value. Applied twice it
+    /// is the identity, so persistence brackets itself with it.
+    #[inline(never)]
+    fn swap_controls(&mut self) {
+        for i in 0..self.controls.len() {
+            let [id, other] = self.controls[i];
+            if id != 0 {
+                self.controls[i][1] = self.prop_get(id);
+                self.write_prop(id, other, false);
+            }
+        }
+    }
+
+    /// Hand every live control back to the user's preferences (application exit).
+    pub fn release_controls(&mut self) {
+        self.swap_controls();
+        self.controls = [[0; 2]; ::abi::prop::CONTROL_SLOTS];
     }
 
     #[inline(never)]
@@ -467,6 +514,8 @@ impl MasterConfig {
         if self.dirty == 0 {
             return Ok(());
         }
+        // Only preferences reach `/pref`: live controls step aside for the write.
+        self.swap_controls();
         let repaired = self.sanitize();
         self.dirty |= repaired;
         let mut first_err = None;
@@ -489,6 +538,7 @@ impl MasterConfig {
                 self.dirty &= !flag;
             }
         }
+        self.swap_controls();
         if let Some(err) = first_err {
             Err(err)
         } else {
@@ -601,6 +651,35 @@ mod tests {
             DisplayConfig::DEFAULT.backlight_max
         );
         assert_eq!(cfg.display.contrast, 60);
+
+        // A control changes the live value only and is handed back on release.
+        cfg.dirty = 0;
+        assert!(cfg.control_set(prop::CONTRAST, 80));
+        assert!(cfg.control_set(prop::VOLUME, 2));
+        assert_eq!(cfg.prop_get(prop::CONTRAST), 80);
+        assert_eq!(cfg.dirty, 0);
+        assert!(is_raw_valid(cfg.config_bytes(0), CONFIG_METAS[0].version));
+        assert!(!cfg.control_set(prop::CONTRAST, 101));
+        assert!(!cfg.control_set(prop::CPU_CLOCK, 0));
+        cfg.swap_controls();
+        assert_eq!(cfg.prop_get(prop::CONTRAST), 60);
+        cfg.swap_controls();
+        assert_eq!(cfg.prop_get(prop::CONTRAST), 80);
+        // The user's own choice replaces a control on the same property.
+        assert!(cfg.prop_set(prop::VOLUME, 7));
+        cfg.release_controls();
+        assert_eq!(cfg.prop_get(prop::CONTRAST), 60);
+        assert_eq!(cfg.prop_get(prop::VOLUME), 7);
+        assert_eq!(cfg.controls, [[0; 2]; prop::CONTROL_SLOTS]);
+        assert_eq!(cfg.dirty, DIRTY_AUDIO);
+
+        // Saving the value being previewed is still a preference change.
+        cfg.dirty = 0;
+        assert!(cfg.control_set(prop::CONTRAST, 70));
+        assert!(cfg.prop_set(prop::CONTRAST, 70));
+        assert_eq!(cfg.dirty, DIRTY_DISPLAY);
+        cfg.release_controls();
+        assert_eq!(cfg.prop_get(prop::CONTRAST), 70);
 
         // With no Settings app installed the defaults must stay readable.
         let d = MasterConfig::DEFAULT;

@@ -147,7 +147,7 @@ class KrxPackageBuilder:
         self.version = (1, 0, 0)
         self.author = b"KERN-TEAM"
         self.icon_asset = 1
-        self.min_abi = 1
+        self.min_abi = sdk_names("KRX_ABI")["VERSION"]
         self.link_base = 0
         self.entry_point = 0
         self.min_stack = 128

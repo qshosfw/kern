@@ -2,16 +2,18 @@
 #ifndef KRX_OPS_H
 #define KRX_OPS_H
 
+#define KRX_ABI_VERSION    4u
+
 /* Domain 0x0: SYS */
 #define OP_SYS_INFO        0x00u
 #define OP_SYS_QUERY       0x01u
 #define OP_SYS_DIV         0x02u
-#define OP_SYS_IDIV        0x03u
-#define OP_SYS_REBOOT      0x04u /* [PowerManage] */
-#define OP_SYS_EVENT       0x05u
-#define OP_SYS_FLUSH       0x06u
-#define OP_PROP_GET        0x07u
-#define OP_PROP_SET        0x08u
+#define OP_SYS_REBOOT      0x03u /* [PowerManage] */
+#define OP_SYS_EVENT       0x04u
+#define OP_SYS_FLUSH       0x05u
+#define OP_PROP_GET        0x06u
+#define OP_PROP_SET        0x07u
+#define OP_PREF_SET        0x08u /* [Preferences] */
 
 /* Domain 0x1: PROC */
 #define OP_PROC_SELF       0x10u
@@ -79,9 +81,8 @@
 #define SUB_SYS_QUERY_CPU_HZ       2u
 #define SUB_SYS_QUERY_DEVICE_UID   3u
 #define SUB_SYS_QUERY_RAND32       4u
-#define SUB_SYS_QUERY_ISQRT        5u
-#define SUB_SYS_QUERY_CRC32        6u
-#define SUB_SYS_QUERY_CRC16        7u
+#define SUB_SYS_QUERY_CRC32        5u
+#define SUB_SYS_QUERY_CRC16        6u
 
 /* proc_paged */
 #define SUB_PROC_PAGED_CALL        0u
@@ -170,19 +171,15 @@
 #define SUB_AUD_CTL_IS_CAP         6u
 
 /* gfx_draw */
-#define SUB_GFX_DRAW_PIXEL         0u
-#define SUB_GFX_DRAW_LINE          1u
-#define SUB_GFX_DRAW_RECT          2u
-#define SUB_GFX_DRAW_FILL_RECT     3u
-#define SUB_GFX_DRAW_HLINE         4u
-#define SUB_GFX_DRAW_VLINE         5u
-#define SUB_GFX_DRAW_CLR_CORNER    6u
-#define SUB_GFX_DRAW_DITHER        7u
-#define SUB_GFX_DRAW_INVERT        8u
-#define SUB_GFX_DRAW_CHAR          9u
-#define SUB_GFX_DRAW_ICON          10u
-#define SUB_GFX_DRAW_SCROLL        11u
-#define SUB_GFX_DRAW_DOTTED_H      12u
+#define SUB_GFX_DRAW_LINE          0u
+#define SUB_GFX_DRAW_RECT          1u
+#define SUB_GFX_DRAW_FILL_RECT     2u
+#define SUB_GFX_DRAW_CLR_CORNER    3u
+#define SUB_GFX_DRAW_DITHER        4u
+#define SUB_GFX_DRAW_CHAR          5u
+#define SUB_GFX_DRAW_ICON          6u
+#define SUB_GFX_DRAW_SCROLL        7u
+#define SUB_GFX_DRAW_DOTTED_H      8u
 
 /* gfx_ctl */
 #define SUB_GFX_CTL_BITMAP         0u
@@ -203,12 +200,10 @@
 
 /* io_key */
 #define SUB_IO_KEY_POLL            0u
-#define SUB_IO_KEY_NAV_DIR         1u
-#define SUB_IO_KEY_MATRIX          2u
-#define SUB_IO_KEY_IS_PRESSED      3u
-#define SUB_IO_KEY_IS_F            4u
-#define SUB_IO_KEY_CLEAR           5u
-#define SUB_IO_KEY_IS_LOCKED       6u
+#define SUB_IO_KEY_MATRIX          1u
+#define SUB_IO_KEY_IS_PRESSED      2u
+#define SUB_IO_KEY_IS_F            3u
+#define SUB_IO_KEY_IS_LOCKED       4u
 
 /* io_power */
 #define SUB_IO_POWER_BATT_MV       0u
@@ -231,10 +226,9 @@
 
 /* io_time */
 #define SUB_IO_TIME_TICKS_MS       0u
-#define SUB_IO_TIME_UPTIME_S       1u
-#define SUB_IO_TIME_DELAY_MS       2u
-#define SUB_IO_TIME_DELAY_US       3u
-#define SUB_IO_TIME_RTC_GET        4u
+#define SUB_IO_TIME_DELAY_MS       1u
+#define SUB_IO_TIME_DELAY_US       2u
+#define SUB_IO_TIME_RTC_GET        3u
 
 /* io_bus */
 #define SUB_IO_BUS_I2C             0u
@@ -271,6 +265,7 @@
 #define KRX_CAP_GPIO_ACCESS        (1u << 22)
 #define KRX_CAP_STORAGE_ADMIN      (1u << 23)
 #define KRX_CAP_FACTORY_CALIB      (1u << 24)
+#define KRX_CAP_PREFERENCES        (1u << 25)
 
 /* Built-in icon glyphs (abi::icon) */
 #define KRX_ICON_ANTENNA           0u

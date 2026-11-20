@@ -2,7 +2,13 @@
 //!
 //! A property id is `(domain << 5) | offset`: the configuration domain and the
 //! byte offset inside its CRC-sealed block. Bounds checking, the Settings UI,
-//! `Op::PropGet` / `Op::PropSet` and RigWire all read this one table.
+//! the property syscalls and RigWire all read this one table.
+//!
+//! A property has two writers with different lifetimes:
+//! - a **preference** (`Op::PrefSet`, Settings, RigWire) is the user's choice and
+//!   is persisted to `/pref/*.cfg`;
+//! - a **control** (`Op::PropSet`) is an application's live override: it changes
+//!   the running system only and is handed back when the application exits.
 
 use crate::Cap;
 
@@ -35,15 +41,12 @@ impl Prop {
     }
 }
 
-/// Capability an image needs to write a property of each domain.
-pub const DOMAIN_CAP: [Cap; 6] = [
-    Cap::DisplayDirect,
-    Cap::AudioOutput,
-    Cap::Keypad,
-    Cap::PowerManage,
-    Cap::PowerManage,
-    Cap::TaskControl,
-];
+/// Domains an application may control live, and the capability each needs.
+/// Every other domain is preference-only.
+pub const CONTROL_CAP: [Cap; 2] = [Cap::DisplayDirect, Cap::AudioOutput];
+
+/// Live overrides one application may hold at a time.
+pub const CONTROL_SLOTS: usize = 4;
 
 macro_rules! props {
     ( $( $name:ident = ($dom:literal, $off:literal) $min:literal ..= $max:literal / $step:literal ),* $(,)? ) => {

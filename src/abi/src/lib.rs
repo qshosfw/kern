@@ -6,6 +6,10 @@
 //! from the same tables the firmware dispatches on.
 #![no_std]
 
+/// ABI major version. Bump on any renumbered or retired operation; the loader
+/// admits only packages built against this exact version.
+pub const VERSION: u16 = 4;
+
 mod cap;
 mod ops;
 mod pkg;

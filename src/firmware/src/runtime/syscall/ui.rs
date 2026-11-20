@@ -89,20 +89,6 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
         }
     };
     match kind {
-        KRX_WIDGET_TABBED_SHEET => {
-            let mut cfg = gfx::gui::modules::TabbedSheetConfig::new(ux, uy, d.w, d.h)
-                .with_bottom_border((d.b & KRX_TAB_FLAG_BOTTOM_BORDER) != 0);
-            if (d.b & KRX_TAB_FLAG_INTEGRATED_86) != 0 {
-                cfg = cfg.with_status_bar_integrated(86);
-            }
-            gfx::gui::modules::TabbedSheet::render_chrome_packed(
-                canvas,
-                &cfg,
-                d.a as usize,
-                d.extra.max(1) as usize,
-                raw0,
-            );
-        }
         KRX_WIDGET_ROUNDED_BOX => gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h),
         KRX_WIDGET_NEGATED_HEADER => gfx::widgets::draw_negated_header(canvas, d.y, s0),
         KRX_WIDGET_SHEET_FRAME => {

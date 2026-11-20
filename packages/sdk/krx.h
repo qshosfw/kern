@@ -138,7 +138,6 @@ typedef struct __attribute__((packed)) {
     u8 custom_flags;
 } KrxStatusBar;
 
-#define KRX_WIDGET_TABBED_SHEET    1u
 #define KRX_WIDGET_ROUNDED_BOX     2u
 #define KRX_WIDGET_NEGATED_HEADER  3u
 #define KRX_WIDGET_SHEET_FRAME     4u
@@ -538,9 +537,15 @@ static inline u8 krx_prop_get(const KrxApiTable* api, u8 prop) {
     return (u8)krx_call(api, OP_PROP_GET, (u32)prop, 0u, 0u);
 }
 
-/* Returns 0 when stored; non-zero when the id, bounds or capability refuse it. */
+/* Live control: changes the running system only and is handed back when the
+ * app exits. Display and audio properties; 0 = applied. */
 static inline u8 krx_prop_set(const KrxApiTable* api, u8 prop, u8 val) {
     return (u8)krx_call(api, OP_PROP_SET, (u32)prop, (u32)val, 0u);
+}
+
+/* User preference: persisted to /pref. Needs KRX_CAP_PREFERENCES; 0 = stored. */
+static inline u8 krx_pref_set(const KrxApiTable* api, u8 prop, u8 val) {
+    return (u8)krx_call(api, OP_PREF_SET, (u32)prop, (u32)val, 0u);
 }
 
 // ── Inline Helpers: GFX ──────────────────────────────────────────────────────
@@ -550,7 +555,7 @@ static inline void krx_clear(const KrxApiTable* api) {
 }
 
 static inline void krx_draw_pixel(const KrxApiTable* api, i16 x, i16 y, u8 color) {
-    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_PIXEL | ((u32)color << 8), krx_pack_xy(x, y), 0u);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_FILL_RECT | ((u32)color << 8), krx_pack_xy(x, y), krx_pack_xy(1, 1));
 }
 
 static inline void krx_draw_line(const KrxApiTable* api, i16 x0, i16 y0, i16 x1, i16 y1, u8 color) {
@@ -566,11 +571,11 @@ static inline void krx_fill_rect(const KrxApiTable* api, i16 x, i16 y, i16 w, i1
 }
 
 static inline void krx_draw_line_h(const KrxApiTable* api, i16 x, i16 y, i16 len, u8 color) {
-    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_HLINE | ((u32)color << 8), krx_pack_xy(x, y), (u32)(u16)len);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_FILL_RECT | ((u32)color << 8), krx_pack_xy(x, y), krx_pack_xy(len, 1));
 }
 
 static inline void krx_draw_line_v(const KrxApiTable* api, i16 x, i16 y, i16 len, u8 color) {
-    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_VLINE | ((u32)color << 8), krx_pack_xy(x, y), (u32)(u16)len);
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_FILL_RECT | ((u32)color << 8), krx_pack_xy(x, y), krx_pack_xy(1, len));
 }
 
 static inline void krx_clear_corners(const KrxApiTable* api, i16 x, i16 y, i16 w, i16 h) {
@@ -582,7 +587,7 @@ static inline void krx_fill_rect_dither(const KrxApiTable* api, i16 x, i16 y, i1
 }
 
 static inline void krx_invert_rect(const KrxApiTable* api, i16 x, i16 y, i16 w, i16 h) {
-    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_INVERT, krx_pack_xy(x, y), krx_pack_xy(w, h));
+    krx_call(api, OP_GFX_DRAW, SUB_GFX_DRAW_FILL_RECT | (COLOR_INVERT << 8), krx_pack_xy(x, y), krx_pack_xy(w, h));
 }
 
 static inline i16 krx_draw_char(const KrxApiTable* api, i16 x, i16 y, u8 ch, u8 font, u8 color) {
@@ -690,14 +695,75 @@ static inline u8 krx_ui_set_tray_icon(const KrxApiTable* api, u8 icon_id) {
     return (u8)krx_call(api, OP_UI_STATUS, SUB_UI_STATUS_TRAY_ICON, (u32)icon_id, 0u);
 }
 
-static inline u8 krx_draw_tabbed_sheet(
+/* Package-side chrome. Titles are a bounded, NUL-separated byte string. */
+static __attribute__((noinline, unused)) u8 krx_draw_tabbed_sheet(
     const KrxApiTable* api, u8 x, u8 y, u8 w, u8 h,
     u8 selected, u8 tab_count, u8 flags, const char* packed_titles, u16 packed_len
 ) {
-    KrxWidget d;
-    d.p0 = (const u8*)packed_titles; d.x = (i16)x; d.y = (i16)y;
-    d.len0 = packed_len; d.extra = (u16)tab_count; d.w = w; d.h = h; d.a = selected; d.b = flags;
-    return (u8)krx_call(api, OP_UI_WIDGET, KRX_WIDGET_TABBED_SHEET, (u32)&d, 0u);
+    if (!w || h < 9 || !packed_titles) return 1;
+    if (!tab_count) tab_count = 1;
+    if (tab_count > 8) tab_count = 8;
+    if (selected >= tab_count) selected = tab_count - 1;
+
+    struct Tab { u16 offset, len; u8 width; } tabs[8];
+    unsigned pos = 0;
+    for (unsigned i = 0; i < tab_count; i++) {
+        struct Tab* tab = &tabs[i];
+        tab->offset = pos;
+        while (pos < packed_len && packed_titles[pos]) pos++;
+        tab->len = pos - tab->offset;
+        // Measure only the prefix that could fit on screen.
+        if (tab->len > 128) tab->len = 128;
+        int width = 8 + krx_str_width(api, (const u8*)packed_titles + tab->offset, tab->len, 0);
+        tab->width = width > 248 ? 248 : width < 12 ? 12 : (u8)width;
+        if (pos < packed_len) pos++;
+    }
+
+    int limit = x + w;
+    if ((flags & KRX_TAB_FLAG_INTEGRATED_86) && limit > 86) limit = 86;
+
+    // Keep the selected tab visible. Reserve space for each overflow arrow.
+    unsigned start = 0, end;
+    for (;;) {
+        int cursor = x + (start ? 7 : 0);
+        for (end = start; end < tab_count; end++) {
+            int needed = tabs[end].width + (end + 1 < tab_count ? 7 : 0);
+            if (cursor + needed > limit) break;
+            cursor += tabs[end].width + 2;
+        }
+        if (end == start) end++;
+        if (selected < end) break;
+        start++;
+    }
+
+    int baseline = y + 9;
+    int tab_x = x + (start ? 7 : 0);
+    krx_draw_line_v(api, x, baseline, h - 9, COLOR_FILL);
+    krx_draw_line_v(api, x + w - 1, baseline, h - 9, COLOR_FILL);
+    if (flags & KRX_TAB_FLAG_BOTTOM_BORDER) {
+        krx_draw_line_h(api, x + 1, y + h - 1, w > 2 ? w - 2 : 0, COLOR_FILL);
+        krx_draw_pixel(api, x, y + h - 1, COLOR_CLEAR);
+        krx_draw_pixel(api, x + w - 1, y + h - 1, COLOR_CLEAR);
+    }
+    krx_draw_line_h(api, x, baseline, w, COLOR_FILL);
+    for (unsigned i = start; i < end; i++) {
+        const struct Tab* tab = &tabs[i];
+        int tab_y = y + (i != selected);
+        int stem = i == selected ? 9 : 7;
+        int right = tab_x + tab->width - 1;
+        if (i == selected) krx_draw_line_h(api, tab_x, baseline, tab->width, COLOR_CLEAR);
+        krx_draw_line_h(api, tab_x + 1, tab_y, tab->width - 2, COLOR_FILL);
+        krx_draw_pixel(api, tab_x, tab_y, COLOR_CLEAR);
+        krx_draw_pixel(api, right, tab_y, COLOR_CLEAR);
+        krx_draw_line_v(api, tab_x, tab_y + 1, stem, COLOR_FILL);
+        krx_draw_line_v(api, right, tab_y + 1, stem, COLOR_FILL);
+        krx_draw_str_max(api, tab_x + 4, tab_y + 6, (const u8*)packed_titles + tab->offset,
+                         tab->len, 0, COLOR_FILL, tab->width - 7);
+        tab_x += tab->width + 2;
+    }
+    if (start) krx_draw_icon(api, x, y + 1, KRX_ICON_ARROW_LEFT, COLOR_FILL);
+    if (end < tab_count) krx_draw_icon(api, tab_x - 1, y + 1, KRX_ICON_ARROW_RIGHT, COLOR_FILL);
+    return 0;
 }
 
 static inline u8 krx_draw_rounded_box(const KrxApiTable* api, u8 x, u8 y, u8 w, u8 h) {
@@ -839,7 +905,7 @@ static inline u32 krx_ticks_ms(const KrxApiTable* api) {
 }
 
 static inline u32 krx_uptime_secs(const KrxApiTable* api) {
-    return krx_call(api, OP_IO_TIME, SUB_IO_TIME_UPTIME_S, 0u, 0u);
+    return krx_udivmod(api, krx_ticks_ms(api), 1000u, (u32*)0);
 }
 
 static inline void krx_delay_ms(const KrxApiTable* api, u32 ms) {

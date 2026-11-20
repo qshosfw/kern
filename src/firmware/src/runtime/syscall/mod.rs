@@ -7,7 +7,7 @@
 use crate::services::SysContext;
 use ::abi::Cap;
 use gfx::Canvas;
-use kernel::proc::abi::{KRX_ABI_VERSION_3_0, KrxApiTable};
+use kernel::proc::abi::{KRX_ABI_VERSION, KrxApiTable};
 
 pub mod audio;
 pub mod display;
@@ -128,7 +128,7 @@ pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> 
 }
 
 pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
-    abi_version: KRX_ABI_VERSION_3_0,
+    abi_version: KRX_ABI_VERSION,
     table_size: core::mem::size_of::<KrxApiTable>() as u16,
     _pad0: 0,
     granted_caps: 0xFFFF_FFFF,
@@ -321,17 +321,5 @@ mod tests {
             0
         );
         assert_eq!(rem, 42);
-        assert_eq!(
-            unsafe {
-                kern_call(
-                    Op::SysIdiv.u32_id(),
-                    (-42i32) as u32 as usize,
-                    0,
-                    &raw mut rem as usize,
-                )
-            },
-            0
-        );
-        assert_eq!(rem as i32, -42);
     }
 }

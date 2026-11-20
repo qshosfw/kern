@@ -58,6 +58,7 @@
 #define LEAF_QR_ENCODE   15u
 #define LEAF_QR_MATRIX   16u
 #define LEAF_QR_DRAW     17u
+#define LEAF_TAB_CHROME  18u
 
 // Action codes passed via g_state.leaf_arg when invoking LEAF_REPORT
 #define REPORT_UART 0u

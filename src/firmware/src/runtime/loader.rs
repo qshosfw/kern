@@ -90,6 +90,11 @@ fn load_krx_into_slot(
         return Err(KrxLaunchError::UnsupportedProfile);
     }
 
+    // Operation numbers are only meaningful for the ABI the package was built against.
+    if summary.abi != ::abi::VERSION {
+        return Err(KrxLaunchError::ImportBindingFailed);
+    }
+
     let raw_name = summary.title.unwrap_or("App");
 
     let required_caps = summary.caps;

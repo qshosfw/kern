@@ -20,11 +20,6 @@ fn dispatch_io_key(sub: u8, a1: usize) -> usize {
                 .map(|k| k as usize)
                 .unwrap_or(0)
         }
-        io_key::NAV_DIR => match a1 as u8 {
-            1 => (-1i8 as u8) as usize,
-            2 => 1,
-            _ => 0,
-        },
         io_key::MATRIX => drivers::keyboard::KeypadScanner::poll_raw_mask() as usize,
         io_key::IS_PRESSED => {
             let mask = drivers::keyboard::KeypadScanner::poll_raw_mask();
@@ -41,10 +36,6 @@ fn dispatch_io_key(sub: u8, a1: usize) -> usize {
             {
                 active_ctx_opt().map_or(0, |ctx| ctx.is_f_active as usize)
             }
-        }
-        io_key::CLEAR => {
-            drivers::keyboard::KeypadScanner::reset_gpio_pins();
-            0
         }
         io_key::IS_LOCKED => {
             #[cfg(not(test))]
@@ -293,7 +284,6 @@ pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         op::IoSerial => unsafe { dispatch_io_serial(a0 as u8, a1, a2) },
         op::IoTime => match a0 as u8 {
             io_time::TICKS_MS => py32_hal::delay::millis() as usize,
-            io_time::UPTIME_S => utils::math::div1000_u32(py32_hal::delay::millis()) as usize,
             io_time::DELAY_MS => {
                 let mut rem = a1 as u32;
                 while rem > 50 {

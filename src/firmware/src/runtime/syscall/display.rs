@@ -69,15 +69,11 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let h = (a2 >> 16) as i16;
             let col = color_from_u8(col_u8);
             match sub {
-                gfx_draw::PIXEL => canvas.draw_pixel_i(x, y, col),
                 gfx_draw::LINE => gfx::draw::draw_line(canvas, x, y, w, h, col),
                 gfx_draw::RECT => canvas.draw_rect_i(x, y, w, h, col),
                 gfx_draw::FILL_RECT => canvas.fill_rect_i(x, y, w, h, col),
-                gfx_draw::HLINE => canvas.draw_horizontal_line_i(x, y, w, col),
-                gfx_draw::VLINE => canvas.draw_vertical_line_i(x, y, w, col),
                 gfx_draw::CLR_CORNER => canvas.clear_corners_i(x, y, w, h),
                 gfx_draw::DITHER => canvas.fill_rect_dither_i(x, y, w, h, extra),
-                gfx_draw::INVERT => canvas.fill_rect_i(x, y, w, h, gfx::Color::Invert),
                 gfx_draw::CHAR => {
                     return gfx::text::draw_char(
                         canvas,

@@ -10,7 +10,8 @@
 pub use crate::ipc::{KrxIpcMessage, ipc_flags, ipc_msg_type, ipc_target};
 use ::abi::Op;
 
-pub const KRX_ABI_VERSION_3_0: u32 = 0x0003_0000;
+/// `KrxApiTable::abi_version`: `abi::VERSION` in the major half-word.
+pub const KRX_ABI_VERSION: u32 = (::abi::VERSION as u32) << 16;
 
 // Standard Service Package Interface IDs (0x0100+ for package services).
 pub const INTERFACE_SVC_AX25: u16 = 0x0100;
@@ -127,7 +128,7 @@ impl KrxApiTable {
     /// Constructs a safe no-op stub table for host unit tests and dry runs.
     pub const fn safe_stub(granted_caps: u32) -> Self {
         Self {
-            abi_version: KRX_ABI_VERSION_3_0,
+            abi_version: KRX_ABI_VERSION,
             table_size: core::mem::size_of::<Self>() as u16,
             _pad0: 0,
             granted_caps,
@@ -142,13 +143,12 @@ impl KrxApiTable {
     }
 }
 
-unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, a1: usize, _a2: usize) -> usize {
+unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, _a1: usize, _a2: usize) -> usize {
     match op as u8 {
         x if x == Op::SysQuery.id() => match a0 {
-            0 => KRX_ABI_VERSION_3_0 as usize,
+            0 => KRX_ABI_VERSION as usize,
             1 => 1024,
             2 => 48_000_000,
-            5 => isqrt(a1 as u32) as usize,
             _ => 0,
         },
         x if x == Op::ProcLeaf.id() => 0xFFFF_FFFF,
@@ -165,7 +165,7 @@ unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, a1: usize, _a2: usize) -
         x if x == Op::RfSet.id() => usize::from(matches!(a0, 6 | 8 | 10 | 11)),
         x if x == Op::AudCtl.id() => usize::from(a0 == 3),
         x if x == Op::GfxDraw.id() => {
-            if (a0 & 0xFF) == 9 {
+            if (a0 & 0xFF) == 5 {
                 6
             } else {
                 0
@@ -176,7 +176,7 @@ unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, a1: usize, _a2: usize) -
             5 => 250,
             _ => 0,
         },
-        x if x == Op::IoTime.id() => usize::from(a0 == 4),
+        x if x == Op::IoTime.id() => usize::from(a0 == 3),
         x if x == Op::IoBus.id() => usize::from(matches!(a0, 0 | 1 | 6)),
         x if x == Op::SysInfo.id()
             || x == Op::ProcInfo.id()
@@ -345,7 +345,6 @@ impl KrxStatusBar {
     }
 }
 
-pub const KRX_WIDGET_TABBED_SHEET: u8 = 1;
 pub const KRX_WIDGET_ROUNDED_BOX: u8 = 2;
 pub const KRX_WIDGET_NEGATED_HEADER: u8 = 3;
 pub const KRX_WIDGET_SHEET_FRAME: u8 = 4;
@@ -361,9 +360,6 @@ pub const KRX_WIDGET_SMALL_DIGIT: u8 = 13;
 pub const KRX_WIDGET_BATTERY: u8 = 14;
 pub const KRX_WIDGET_SIGNAL: u8 = 15;
 pub const KRX_WIDGET_MODAL_BOX: u8 = 16;
-
-pub const KRX_TAB_FLAG_INTEGRATED_86: u8 = 1 << 0;
-pub const KRX_TAB_FLAG_BOTTOM_BORDER: u8 = 1 << 1;
 
 /// Unified widget / bitmap draw descriptor (`Op::UiWidget`, `Op::GfxCtl` bitmap).
 #[repr(C)]
@@ -511,26 +507,6 @@ const _: () = assert!(core::mem::size_of::<KrxSysInfo>() == 128);
 unsafe impl Sync for KrxSysInfo {}
 unsafe impl Send for KrxSysInfo {}
 
-/// $O(1)$ Bitwise Integer Square Root for Cortex-M0+.
-#[inline(never)]
-pub const fn isqrt(mut n: u32) -> u32 {
-    let mut res = 0;
-    let mut one = 1 << 30;
-    while one > n {
-        one >>= 2;
-    }
-    while one != 0 {
-        if n >= res + one {
-            n -= res + one;
-            res = (res >> 1) + one;
-        } else {
-            res >>= 1;
-        }
-        one >>= 2;
-    }
-    res
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,16 +522,6 @@ mod tests {
         };
         assert!(ev.is_modal());
         assert!(!ev.is_key());
-
-        assert_eq!(isqrt(0), 0);
-        assert_eq!(isqrt(1), 1);
-        assert_eq!(isqrt(4), 2);
-        assert_eq!(isqrt(9), 3);
-        assert_eq!(isqrt(16), 4);
-        assert_eq!(isqrt(25), 5);
-        assert_eq!(isqrt(100), 10);
-        assert_eq!(isqrt(10000), 100);
-        assert_eq!(isqrt(1000000), 1000);
     }
 
     #[test]
@@ -584,17 +550,16 @@ mod tests {
     #[test]
     fn test_abi_safe_stub_dispatch() {
         let table = KrxApiTable::safe_stub(0x1234);
-        assert_eq!(table.abi_version, KRX_ABI_VERSION_3_0);
+        assert_eq!(table.abi_version, KRX_ABI_VERSION);
         assert_eq!(table.granted_caps, 0x1234);
 
         unsafe {
             assert_eq!(
                 table.invoke(Op::SysQuery, 0, 0, 0),
-                KRX_ABI_VERSION_3_0 as usize
+                KRX_ABI_VERSION as usize
             );
             assert_eq!(table.invoke(Op::SysQuery, 1, 0, 0), 1024);
             assert_eq!(table.invoke(Op::SysQuery, 2, 0, 0), 48_000_000);
-            assert_eq!(table.invoke(Op::SysQuery, 5, 144, 0), 12);
             assert_eq!(table.invoke(Op::RfTune, 145_000_000, 1, 12_500), 1);
             assert_eq!(table.invoke(Op::RfGet, 1, 0, 0) as u32 as i32, -140);
             assert_eq!(table.invoke(Op::IoPower, 0, 0, 0), 4000);
