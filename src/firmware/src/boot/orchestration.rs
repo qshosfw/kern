@@ -293,13 +293,9 @@ fn launch_crash_module(hw: &mut SystemHardware, mode: usize) -> bool {
     hw.lcd.turn_on();
     hw.backlight.wake();
     bsp::set_status_led(bsp::StatusLed::Orange);
-    let launched = crate::runtime::loader::try_launch_boot_module(
-        &mut hw.lcd,
-        hw.filesystem,
-        "/apps/panic.mod",
-        mode,
-    )
-    .is_ok();
+    let launched =
+        crate::runtime::try_launch_boot_module(&mut hw.lcd, hw.filesystem, "/apps/panic.mod", mode)
+            .is_ok();
     bsp::set_status_led(bsp::StatusLed::Off);
     launched
 }

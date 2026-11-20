@@ -263,8 +263,7 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
         }
 
         // Record page fault in active process ledger (Section 13.11)
-        let active_id = crate::AppRegistry::count();
-        if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut_by_app(active_id) {
+        if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot.pid) {
             pcb.ledger.record_page_fault();
         }
     }

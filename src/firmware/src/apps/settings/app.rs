@@ -127,16 +127,17 @@ impl SettingsApp {
         }
     }
 
+    #[cfg(feature = "krx_native")]
     #[inline(never)]
     pub(super) fn launch_pkg(&mut self, ctx: &mut SysContext, path: &str, is_action: bool) {
         if is_action {
             #[cfg(feature = "filesystem")]
             {
                 self.active_action_module = true;
-                if let Err(err) = crate::runtime::loader::invoke_action_krx_package(ctx, path) {
+                if let Err(err) = crate::runtime::invoke_action_krx_package(ctx, path) {
                     self.active_action_module = false;
                     self.populate_current_menu(ctx);
-                    crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
+                    crate::runtime::show_launch_error_dialog(ctx, path, err);
                 } else if unsafe {
                     !(*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL))
                         .is_active()
@@ -148,9 +149,9 @@ impl SettingsApp {
             return;
         }
         self.resume_nav = true;
-        if let Err(err) = crate::apps::runtime::launch_krx_package(ctx, path) {
+        if let Err(err) = crate::runtime::launch_krx_package(ctx, path, 0) {
             self.resume_nav = false;
-            crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
+            crate::runtime::show_launch_error_dialog(ctx, path, err);
             crate::apps::launcher::catalog::get_catalog().mark_dirty();
             self.populate_current_menu(ctx);
             if self.selected_idx >= self.items_len {
@@ -524,10 +525,10 @@ impl App<SysContext<'_, '_>, Canvas> for SettingsApp {
     }
 
     fn on_modal_result(&mut self, ctx: &mut SysContext, result: &ModalResult<'_>) -> EventResult {
-        #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+        #[cfg(feature = "krx_native")]
         if self.active_action_module {
             self.active_action_module = false;
-            let res = crate::runtime::loader::finish_action_krx_package(ctx, result);
+            let res = crate::runtime::finish_action_krx_package(ctx, result);
             self.populate_current_menu(ctx);
             return res;
         }

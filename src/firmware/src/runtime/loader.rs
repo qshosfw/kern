@@ -7,7 +7,7 @@
 use crate::SysContext;
 use crate::apps::registry::{AppRegistry, DynamicAppRecord};
 use kernel::app::AppMetadata;
-use kernel::runtime::{KrxClass, KrxPreamble, KrxSummary};
+use kernel::runtime::KrxClass;
 
 pub use kernel::runtime::KrxLaunchError;
 
@@ -40,30 +40,17 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
     }
 }
 
-/// Read and parse a KRX package header from storage into `out` (single shared read + summary path).
-#[inline(never)]
-pub fn read_krx_summary<'a, 'b>(
-    storage: &mut crate::services::SystemStorage,
-    path: &str,
-    hdr_buf: &'a mut [u8],
-    out: &'b mut core::mem::MaybeUninit<KrxSummary<'a>>,
-) -> Result<&'b mut KrxSummary<'a>, KrxLaunchError> {
-    let read_len = storage
-        .read_file_at(path, 0, hdr_buf)
-        .map_err(|e| match e {
-            kernel::service::StorageError::NotFound => KrxLaunchError::FileNotFound,
-            _ => KrxLaunchError::ReadFailed,
-        })?;
-    KrxPreamble::summarize_into(&hdr_buf[..read_len], out)
-}
-
 /// Shared header validation, capability/RAM check, and native/paged payload loader.
+///
+/// With `spawn`, the PCB is allocated before the slot is bound, so the slot, its leases,
+/// service exports and radio client all carry the PCB's own `Pid` (never an app index).
+/// Transient modules (`spawn == false`) run as `Pid(0)`.
 #[inline(never)]
 fn load_krx_into_slot(
     storage: &mut crate::services::SystemStorage<'_>,
     path: &str,
     sys_caps: Option<::abi::CapabilitySet>,
-    pid: kernel::proc::Pid,
+    spawn: bool,
 ) -> Result<(::abi::CapabilitySet, &'static str), KrxLaunchError> {
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
@@ -76,17 +63,13 @@ fn load_krx_into_slot(
         &mut *(pre_hdr.as_mut_ptr().add(summary_offset)
             as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
     };
-    let summary = read_krx_summary(storage, path, hdr_buf, summary_slot)?;
+    let summary = super::read_krx_summary(storage, path, hdr_buf, summary_slot)?;
     let header_len = summary.preamble.header_len as usize;
 
     let Some(exec_class) = summary.preamble.execution_class() else {
         return Err(KrxLaunchError::UnsupportedProfile);
     };
-    #[cfg(feature = "krx_native")]
-    let is_native_or_paged = matches!(exec_class, KrxClass::Native | KrxClass::Paged);
-    #[cfg(not(feature = "krx_native"))]
-    let is_native_or_paged = false;
-    if !is_native_or_paged {
+    if !matches!(exec_class, KrxClass::Native | KrxClass::Paged) {
         return Err(KrxLaunchError::UnsupportedProfile);
     }
 
@@ -127,86 +110,62 @@ fn load_krx_into_slot(
     }
 
     let app_name = store_dynamic_app_name(raw_name);
-    #[cfg(feature = "krx_native")]
-    {
-        let arena_buf = super::native_runner::transient_arena_bytes_mut();
-        let max_payload = arena_buf.len() - HDR_RESERVE - SUMMARY_RESERVE;
-        let to_read = if exec.payload_size > 0 {
-            (exec.payload_size as usize).min(max_payload)
-        } else {
-            max_payload
-        };
-        let payload_read = storage
-            .read_file_at(path, header_len, &mut arena_buf[..to_read])
-            .map_err(|_| KrxLaunchError::ReadFailed)?;
+    let arena_buf = super::native_runner::transient_arena_bytes_mut();
+    let max_payload = arena_buf.len() - HDR_RESERVE - SUMMARY_RESERVE;
+    let to_read = if exec.payload_size > 0 {
+        (exec.payload_size as usize).min(max_payload)
+    } else {
+        max_payload
+    };
+    let payload_read = storage
+        .read_file_at(path, header_len, &mut arena_buf[..to_read])
+        .map_err(|_| KrxLaunchError::ReadFailed)?;
 
-        super::native_runner::load_native_from_storage(path, payload_read, summary, pid)?;
-    }
-    #[cfg(not(feature = "krx_native"))]
-    {
-        let _ = (app_name, pid, header_len);
-        return Err(KrxLaunchError::ExecutionFailed);
-    }
+    let pid = if spawn {
+        crate::orchestrator::proc_table_mut()
+            .spawn_or_recycle(
+                app_name,
+                AppRegistry::count(),
+                kernel::sched::Priority::Ui,
+                kernel::proc::ExecType::RelocatableNative,
+                required_caps,
+            )
+            .map_err(|_| KrxLaunchError::InsufficientRam)?
+    } else {
+        kernel::proc::Pid(0)
+    };
+    super::native_runner::load_native_from_storage(path, payload_read, summary, pid)
+        .inspect_err(|_| crate::orchestrator::reap_pid_only(pid))?;
 
     Ok((required_caps, app_name))
 }
 
-/// Load and launch a verified KRX binary application package.
+/// Load a verified KRX package into its own process and queue it for foreground launch.
+///
+/// `start_arg` reaches the package's `on_start` (shortcut action ID; `0` for a plain launch).
 #[inline(never)]
-pub fn launch_krx_package(ctx: &mut SysContext, path: &str) -> Result<usize, KrxLaunchError> {
-    let dyn_id = AppRegistry::count();
-    let dyn_pid = kernel::proc::Pid(dyn_id as u8);
-    let (required_caps, app_name) =
-        load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), dyn_pid)?;
-
-    let _ = crate::orchestrator::proc_table_mut().spawn_or_recycle(
-        app_name,
-        dyn_id,
-        kernel::sched::Priority::Ui,
-        kernel::proc::ExecType::RelocatableNative,
-        required_caps,
-    );
-
-    #[cfg(not(feature = "krx_native"))]
-    return Err(KrxLaunchError::ExecutionFailed);
-
-    #[cfg(feature = "krx_native")]
-    {
-        let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
-            metadata: AppMetadata { name: app_name },
-            required_capabilities: required_caps,
-        });
-        ctx.post_event(crate::apps::Shortcut::LaunchApp(dyn_id as u8).into());
-        Ok(dyn_id)
-    }
-}
-
-/// Load and launch a verified KRX binary application package with a specific action ID argument.
-#[inline(never)]
-pub fn launch_krx_package_with_arg(
+pub fn launch_krx_package(
     ctx: &mut SysContext,
     path: &str,
-    arg: u32,
+    start_arg: u32,
 ) -> Result<usize, KrxLaunchError> {
-    #[cfg(feature = "krx_native")]
-    super::native_runner::set_pending_start_arg(arg);
-    let _ = arg;
-    let res = launch_krx_package(ctx, path);
-    if res.is_err() {
-        #[cfg(feature = "krx_native")]
-        super::native_runner::set_pending_start_arg(0);
-    }
-    res
+    let (required_caps, app_name) = load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), true)?;
+    super::native_runner::set_pending_start_arg(start_arg);
+    let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
+        metadata: AppMetadata { name: app_name },
+        required_capabilities: required_caps,
+    });
+    ctx.post_event(crate::apps::Shortcut::LaunchApp(dyn_id as u8).into());
+    Ok(dyn_id)
 }
 
 /// Load and invoke an in-place system action module (`scope::SYSTEM_ACTION`) without switching apps.
-#[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 pub fn invoke_action_krx_package<'a, 'hw>(
     ctx: &mut SysContext<'a, 'hw>,
     path: &str,
 ) -> Result<(), KrxLaunchError> {
-    load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), kernel::proc::Pid(0))?;
+    load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), false)?;
     unsafe {
         let static_ctx =
             &mut *(ctx as *mut SysContext<'a, 'hw> as *mut SysContext<'static, 'static>);
@@ -216,7 +175,6 @@ pub fn invoke_action_krx_package<'a, 'hw>(
 }
 
 /// Forward a modal result to an in-place action module and unload its transient slot.
-#[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 pub fn finish_action_krx_package<'a, 'hw>(
     ctx: &mut SysContext<'a, 'hw>,
@@ -232,7 +190,6 @@ pub fn finish_action_krx_package<'a, 'hw>(
 }
 
 /// Load and execute a standalone KRX module directly during early boot (before `SysContext` exists).
-#[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 pub fn try_launch_boot_module(
     _lcd: &mut drivers::st7565::St7565<bsp::LcdBus>,
@@ -240,7 +197,7 @@ pub fn try_launch_boot_module(
     path: &str,
     param: usize,
 ) -> Result<u32, KrxLaunchError> {
-    load_krx_into_slot(storage, path, None, kernel::proc::Pid(0))?;
+    load_krx_into_slot(storage, path, None, false)?;
 
     let res = unsafe {
         let rc = super::native_runner::invoke_boot_start(param);

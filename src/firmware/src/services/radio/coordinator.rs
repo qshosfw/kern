@@ -530,34 +530,6 @@ impl RadioCoordinator {
         self.arbitrator.is_resource_locked(res, None)
     }
 
-    /// Verify whether a client is permitted to initiate RF transmission.
-    pub fn can_app_transmit(&self, client: ClientToken) -> bool {
-        if self.is_transmitting {
-            return false;
-        }
-        if let Some(holder) =
-            crate::orchestrator::lease_manager().holder(kernel::proc::LeaseKind::RadioTx)
-        {
-            let caller_pid = crate::orchestrator::proc_table()
-                .find_by_app(client.id.0 as usize)
-                .map(|p| p.pid);
-            if caller_pid != Some(holder) && client.priority() < LockTier::EXCLUSIVE.0 {
-                return false;
-            }
-        }
-        if self.arbitrator.is_locked()
-            && self
-                .arbitrator
-                .active_lock
-                .resources
-                .intersects(RfResourceMask::TRANSMITTER)
-        {
-            return self.arbitrator.active_client() == client
-                || client.priority() >= LockTier::EXCLUSIVE.0;
-        }
-        true
-    }
-
     // ── FSK Sidecar Event Handlers ──
 
     pub const FSK_CLIENT: ClientToken = ClientToken::new(ClientId::FSK_SIDECAR, LockTier::SERVICE);

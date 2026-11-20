@@ -1,7 +1,6 @@
 //! Modular OS Application Registry & Domain Exports
 
 pub mod launcher;
-pub mod runtime;
 pub mod settings;
 pub mod shortcut;
 pub mod vfo;

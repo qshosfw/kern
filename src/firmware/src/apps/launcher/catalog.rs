@@ -318,7 +318,7 @@ impl PackageCatalog {
                 &mut *(tail.as_mut_ptr().add(DIR_RESERVE)
                     as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
             };
-            if let Ok(summary) = crate::runtime::loader::read_krx_summary(
+            if let Ok(summary) = crate::runtime::read_krx_summary(
                 filesystem,
                 entry.path.as_str(),
                 hdr_buf,

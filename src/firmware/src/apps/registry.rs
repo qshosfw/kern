@@ -114,16 +114,10 @@ impl AppRegistry {
         }
     }
 
+    /// Forget the dynamic app record; its process is reaped by `orchestrator::reap_pid_resources`.
     pub fn unregister_dynamic() {
-        let dyn_id = APP_TABLE.len();
-        let dyn_pid = crate::orchestrator::proc_table()
-            .find_by_app(dyn_id)
-            .map(|p| p.pid);
         unsafe {
             *core::ptr::addr_of_mut!(DYNAMIC_APP) = None;
-        }
-        if let Some(pid) = dyn_pid {
-            crate::orchestrator::reap_pid_only(pid);
         }
     }
 

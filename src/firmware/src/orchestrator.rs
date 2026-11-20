@@ -31,7 +31,7 @@ use gfx::Canvas;
 use kernel::app::EventResult;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::ipc::ipc_target;
-#[cfg(feature = "krx_runtime")]
+#[cfg(feature = "krx_native")]
 use kernel::ipc::{ipc_flags, ipc_msg_type};
 use kernel::nav::NavStack;
 use kernel::proc::{ExecType, ProcState, ProcessTable};
@@ -179,10 +179,11 @@ pub fn is_proc_paused(app_id: usize) -> bool {
     })
 }
 
+/// Release every kernel resource owned by `pid`; `Pid(0)` (no process) owns nothing.
 pub(crate) fn reap_pid_only(pid: kernel::proc::Pid) {
     lease_manager_mut().revoke_all_for_owner(pid);
     status_tray_mut().clear_icon(pid);
-    #[cfg(feature = "krx_runtime")]
+    #[cfg(feature = "krx_native")]
     crate::runtime::syscall::service::service_registry_mut().unbind_provider(pid);
     let _ = proc_table_mut().terminate(pid);
 }
@@ -220,8 +221,8 @@ pub(crate) fn launch_krx_shortcut_arg(
     path: &str,
     action_id: u32,
 ) -> bool {
-    if let Err(err) = crate::apps::runtime::launch_krx_package_with_arg(ctx, path, action_id) {
-        crate::runtime::loader::show_launch_error_dialog(ctx, path, err);
+    if let Err(err) = crate::runtime::launch_krx_package(ctx, path, action_id) {
+        crate::runtime::show_launch_error_dialog(ctx, path, err);
         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
         return false;
     }
@@ -432,10 +433,9 @@ impl Orchestrator {
         self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
         if closing_app >= crate::AppRegistry::count() {
             if let Some(pcb) = proc_table().find_by_app(closing_app) {
-                reap_pid_resources(pcb.pid.0);
-            } else {
-                crate::AppRegistry::unregister_dynamic();
+                reap_pid_only(pcb.pid);
             }
+            crate::AppRegistry::unregister_dynamic();
         } else if let Some(pcb) = proc_table_mut().find_mut_by_app(closing_app) {
             pcb.set_state(ProcState::Stopped);
         }
@@ -986,7 +986,7 @@ impl Orchestrator {
         sys_evt: kernel::ipc::SysEvent,
     ) -> bool {
         if sys_evt.target == ipc_target::KERNEL {
-            #[cfg(feature = "krx_runtime")]
+            #[cfg(feature = "krx_native")]
             {
                 let mut msg = kernel::ipc::KrxIpcMessage::empty();
                 if crate::runtime::syscall::service::ipc_channel_mut()
@@ -1277,6 +1277,7 @@ mod tests {
 
     #[test]
     fn reap_pid_resources_protects_core_daemons_and_cleans_user_process() {
+        // Shares the global process table: keep PID lifecycle assertions in this one test.
         let mut orch = Orchestrator::new(crate::apps::APP_ID_LAUNCHER);
         // Core daemons PID 1..=4 must never be killable.
         assert!(!reap_pid_resources(1));
@@ -1307,5 +1308,31 @@ mod tests {
                 .is_none()
         );
         assert_eq!(orch.proc_table().find(pid).unwrap().state, ProcState::Dead);
+
+        // Dynamic (KRX) apps get their Pid from the process table, never from the app index.
+        let dyn_app = crate::AppRegistry::count();
+        let dyn_pid = orch
+            .proc_table_mut()
+            .spawn_or_recycle(
+                "Krx",
+                dyn_app,
+                kernel::sched::Priority::Ui,
+                ExecType::RelocatableNative,
+                CapabilitySet::empty(),
+            )
+            .expect("dynamic slot");
+        assert!(dyn_pid.0 > 4);
+        assert_eq!(orch.proc_table().find_by_app(dyn_app).unwrap().pid, dyn_pid);
+
+        // Transient modules run as Pid(0), which owns nothing: reaping it leaves processes intact.
+        let active_before = orch.proc_table().active_count();
+        reap_pid_only(kernel::proc::Pid(0));
+        assert_eq!(orch.proc_table().active_count(), active_before);
+
+        reap_pid_only(dyn_pid);
+        assert_eq!(
+            orch.proc_table().find(dyn_pid).unwrap().state,
+            ProcState::Dead
+        );
     }
 }

@@ -424,13 +424,13 @@ pub fn bootloader_version_str() -> &'static str {
     bsp::uid::bootloader_version_str()
 }
 
-#[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
+#[cfg(any(feature = "dfu", feature = "krx_native"))]
 #[inline(always)]
 pub fn is_bootloader_hold_requested() -> bool {
     (read_backup_tag().flags & kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD) != 0
 }
 
-#[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
+#[cfg(any(feature = "dfu", feature = "krx_native"))]
 #[inline(always)]
 pub fn clear_bootloader_hold_flag() {
     let mut tag = read_backup_tag();
@@ -439,7 +439,7 @@ pub fn clear_bootloader_hold_flag() {
     write_backup_tag(tag);
 }
 
-#[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
+#[cfg(any(feature = "dfu", feature = "krx_native"))]
 #[inline(always)]
 pub fn is_ptt_side2_requested() -> bool {
     #[cfg(all(not(test), target_arch = "arm"))]
@@ -459,9 +459,9 @@ pub fn is_ptt_side2_requested() -> bool {
 pub fn firmware_reboot_handler(mode: kernel::power::RebootMode) -> ! {
     match mode {
         kernel::power::RebootMode::Firmware => prepare_clean_reboot(),
-        #[cfg(not(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native"))))]
+        #[cfg(not(any(feature = "dfu", feature = "krx_native")))]
         kernel::power::RebootMode::Bootloader => prepare_clean_reboot(),
-        #[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
+        #[cfg(any(feature = "dfu", feature = "krx_native"))]
         kernel::power::RebootMode::Bootloader => {
             let mut tag = read_backup_tag();
             tag.flags |= kernel::boot::BackupCrashTag::FLAG_BOOTLOADER_HOLD

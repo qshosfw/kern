@@ -235,7 +235,7 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
         hw.backlight.init();
     }
     kernel::power::PowerControl::set_reboot_handler(boot::firmware_reboot_handler);
-    #[cfg(any(feature = "dfu", all(feature = "filesystem", feature = "krx_native")))]
+    #[cfg(any(feature = "dfu", feature = "krx_native"))]
     {
         let bl_hold = boot::is_bootloader_hold_requested();
         if bl_hold || boot::is_ptt_side2_requested() {
@@ -245,7 +245,7 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
                     | kernel::boot::BackupCrashTag::FLAG_CLEAN_REBOOT;
                 boot::write_backup_tag(tag);
             }
-            #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+            #[cfg(feature = "krx_native")]
             if hw.filesystem.fs.mount().is_ok() {
                 hw.lcd.turn_on();
                 drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
@@ -257,7 +257,7 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
                     "/apps/dfu.mod"
                 });
                 while let Some(mod_path) = next.take() {
-                    match crate::runtime::loader::try_launch_boot_module(
+                    match crate::runtime::try_launch_boot_module(
                         &mut hw.lcd,
                         hw.filesystem,
                         mod_path,
@@ -265,7 +265,7 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
                     ) {
                         Ok(2) => next = Some("/apps/dfu.mod"),
                         Ok(3) => {
-                            let _ = crate::runtime::loader::try_launch_boot_module(
+                            let _ = crate::runtime::try_launch_boot_module(
                                 &mut hw.lcd,
                                 hw.filesystem,
                                 "/apps/multiboot.mod",
@@ -274,7 +274,7 @@ fn run_display_and_boot_pipeline(hw: &mut SystemHardware) -> hal::adc::Adc {
                             next = Some("/apps/recovery.mod");
                         }
                         Ok(4) => {
-                            let _ = crate::runtime::loader::try_launch_boot_module(
+                            let _ = crate::runtime::try_launch_boot_module(
                                 &mut hw.lcd,
                                 hw.filesystem,
                                 "/apps/calib.mod",

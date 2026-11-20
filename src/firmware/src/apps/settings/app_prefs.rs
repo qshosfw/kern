@@ -147,12 +147,9 @@ pub fn populate_app_prefs(items: &mut [MenuItem], pkg_idx: usize, ctx: &mut SysC
             .add(SUMMARY_OFFSET)
             as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
     };
-    let Ok(summary) = crate::runtime::loader::read_krx_summary(
-        ctx.storage,
-        pkg.path.as_str(),
-        &mut sc.hdr,
-        summary_slot,
-    ) else {
+    let Ok(summary) =
+        crate::runtime::read_krx_summary(ctx.storage, pkg.path.as_str(), &mut sc.hdr, summary_slot)
+    else {
         return 0;
     };
     let Some(sec) = summary.aux.config else {

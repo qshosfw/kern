@@ -12,7 +12,7 @@ authors = ["kern-team"]
 edition_string = "Kern OS"
 chip = "PY32F071xB"
 flash_budget = 120832   # 118 KB (safe margin below 128KB)
-flash_ceiling = 119180  # Ratchet: release flash may only go down; lower after each saving
+flash_ceiling = 119164  # Ratchet: release flash may only go down; lower after each saving
 ram_budget = 16384      # 16 KB SRAM
 
 [target]
@@ -51,7 +51,6 @@ passcode = false        # 🔑 Security enclave boot PIN lock & KDF stretching
 app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
 [features.runtime]
-krx_runtime = true      # ⚙️ KRX runtime subsystem
 krx_native = true       # 🚀 Class N0/N1/P0 Thumb-1 Native & Structured-Leaf Execution
 krx_paged = true        # 📄 Class P1 Transparent Demand-Paged Window Cache (~1.1 KB Flash)
 

@@ -32,7 +32,6 @@ default = [
     "hw_crc",
     "rtc",
     "internal_flash",
-    "krx_runtime",
     "krx_native",
     "krx_paged",
     "flashlight",
@@ -57,8 +56,7 @@ settings_debug = []
 overclock_72mhz = []
 
 # ⚙️ Execution Runtime Engines
-krx_runtime = ["text_input"]
-krx_native = ["krx_runtime"]
+krx_native = ["text_input", "filesystem"]
 krx_paged = ["krx_native"]
 
 # 📡 Hardware Peripheral & RF Subsystems
