@@ -125,26 +125,6 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         }
         op::GfxCtl => {
             match a0 as u8 {
-                gfx_ctl::INVERTED => {
-                    #[cfg(not(test))]
-                    crate::kern_hw().lcd.set_inverted(a1 != 0);
-                    #[cfg(test)]
-                    if let Some(ctx) = super::active_ctx_opt() {
-                        if let Some(ref mut d) = ctx.display {
-                            kernel::service::DisplayService::set_inverted(*d, a1 != 0);
-                        }
-                    }
-                }
-                gfx_ctl::CONTRAST => {
-                    #[cfg(not(test))]
-                    crate::kern_hw().lcd.set_contrast(a1 as u8);
-                    #[cfg(test)]
-                    if let Some(ctx) = super::active_ctx_opt() {
-                        if let Some(ref mut d) = ctx.display {
-                            kernel::service::DisplayService::set_contrast(*d, a1 as u8);
-                        }
-                    }
-                }
                 gfx_ctl::BITMAP => {
                     let desc = a1 as *const KrxWidget;
                     if !desc.is_null() {

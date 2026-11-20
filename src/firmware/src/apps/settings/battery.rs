@@ -1,6 +1,6 @@
 //! Battery Domain Settings & Submenu Declarations
 
-use super::page::{ChoiceId, MetricId, PageId, RangeId, SettingDef, SettingField, setting_page};
+use super::page::{ChoiceId, MetricId, PageId, SettingDef, SettingField, UNIT_MV, setting_page};
 
 pub const BATTERY_K5_OPTIONS: &str = "1600 mAh\02200 mAh\03500 mAh\0External\0";
 pub static BATTERY_K5_TYPES: [u8; 4] = [0, 1, 2, 5];
@@ -40,7 +40,7 @@ setting_page!(pub BATTERY_INFO_PAGE = [
 ]);
 
 setting_page!(pub BATTERY_TWEAKS_PAGE = [
-    ("Calib Tweak", SettingDef::range(RangeId::CalibTweak, SettingField::CALIB_TWEAK_MV)),
+    ("Calib Tweak", SettingDef::range(UNIT_MV, SettingField::CALIB_TWEAK_MV)),
     ("Charge Detect", SettingDef::toggle(SettingField::CHARGE_DETECT)),
     ("Power Profile", SettingDef::choice(ChoiceId::PowerProfile, SettingField::POWER_PROFILE)),
 ]);

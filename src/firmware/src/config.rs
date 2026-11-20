@@ -198,8 +198,6 @@ struct ConfigMeta {
     offset: u16,
     size: u8,
     version: u8,
-    rules_start: u8,
-    rules_len: u8,
 }
 
 utils::static_bytes!(
@@ -217,113 +215,38 @@ fn config_path(idx: usize) -> &'static str {
     utils::format::nth_cstr(&CONFIG_PATHS, idx as u8)
 }
 
-static ALL_BOUND_RULES: [[u8; 2]; 40] = [
-    // 0: Display (0..11)
-    [1, 5],
-    [2, 10],
-    [3, 10],
-    [4, 100],
-    [5, 1],
-    [6, 3],
-    [7, 1],
-    [8, 4],
-    [9, 2],
-    [10, 1],
-    [11, 3],
-    // 1: Audio (11..18)
-    [1, 10],
-    [2, 6],
-    [3, 31],
-    [4, 12],
-    [6, 10],
-    [7, 4],
-    [8, 4],
-    // 2: Keys (18..26)
-    [1, 1],
-    [2, 4],
-    [3, 4],
-    [4, 1],
-    [5, 3],
-    [6, 3],
-    [7, 2],
-    [8, 1],
-    // 4: Battery (26..30)
-    [2, 8],
-    [3, 3],
-    [4, 5],
-    [5, 1],
-    // 5: Apps (30..40)
-    [1, 1],   // launcher_style: 0..=1
-    [2, 1],   // show_numbers: 0..=1
-    [3, 1],   // show_labels: 0..=1
-    [4, 2],   // startup_app: 0..=2 (Launcher, Radio, Custom KRX)
-    [6, 2],   // pager_policy: 0..=2
-    [7, 2],   // swap_policy: 0..=2
-    [12, 16], // daemon_budget_ms <= 16
-    [13, 32], // hook_budget_ms <= 32
-    [14, 3],  // max_strikes <= 3
-    [15, 4],  // zone_b_cache_kb <= 4
-];
-
 static CONFIG_METAS: [ConfigMeta; 6] = [
     ConfigMeta {
         offset: core::mem::offset_of!(MasterConfig, display) as u16,
         size: core::mem::size_of::<DisplayConfig>() as u8,
         version: DisplayConfig::VERSION,
-        rules_start: 0,
-        rules_len: 11,
     },
     ConfigMeta {
         offset: core::mem::offset_of!(MasterConfig, audio) as u16,
         size: core::mem::size_of::<AudioConfig>() as u8,
         version: AudioConfig::VERSION,
-        rules_start: 11,
-        rules_len: 7,
     },
     ConfigMeta {
         offset: core::mem::offset_of!(MasterConfig, keys) as u16,
         size: core::mem::size_of::<KeyConfig>() as u8,
         version: KeyConfig::VERSION,
-        rules_start: 18,
-        rules_len: 8,
     },
     ConfigMeta {
         offset: core::mem::offset_of!(MasterConfig, system) as u16,
         size: core::mem::size_of::<SystemConfig>() as u8,
         version: SystemConfig::VERSION,
-        rules_start: 0,
-        rules_len: 0,
     },
     ConfigMeta {
         offset: core::mem::offset_of!(MasterConfig, battery) as u16,
         size: core::mem::size_of::<BatteryConfig>() as u8,
         version: BatteryConfig::VERSION,
-        rules_start: 26,
-        rules_len: 4,
     },
     ConfigMeta {
         offset: core::mem::offset_of!(MasterConfig, apps) as u16,
         size: core::mem::size_of::<AppsConfig>() as u8,
         version: AppsConfig::VERSION,
-        rules_start: 30,
-        rules_len: 10,
     },
 ];
-
-#[inline(never)]
-fn check_bounds(bytes: &[u8], expected_ver: u8, start: u8, len: u8) -> bool {
-    if bytes[0] != expected_ver {
-        return false;
-    }
-    let s = start as usize;
-    let e = s + (len as usize);
-    for &[offset, max] in &ALL_BOUND_RULES[s..e] {
-        if bytes[offset as usize] > max {
-            return false;
-        }
-    }
-    true
-}
 
 static DEFAULT_MASTER_CONFIG: MasterConfig = MasterConfig::DEFAULT;
 
@@ -369,18 +292,6 @@ impl MasterConfig {
         self.seal(idx);
     }
 
-    #[inline(never)]
-    pub fn mark_dirty_mask(&mut self, mut mask: u8) {
-        let mut idx = 0usize;
-        while mask != 0 {
-            if (mask & 1) != 0 {
-                self.mark_domain_dirty(idx);
-            }
-            mask >>= 1;
-            idx += 1;
-        }
-    }
-
     pub fn mark_display_dirty(&mut self) {
         self.mark_domain_dirty(0);
     }
@@ -423,39 +334,25 @@ impl MasterConfig {
         let mut repaired = 0u8;
 
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
-            let extra_bad = match i {
-                0 => self.display.backlight_max == 0,
-                4 => self.battery.calib_tweak_mv < -500 || self.battery.calib_tweak_mv > 500,
-                5 => {
-                    self.apps.daemon_budget_ms < 2
-                        || self.apps.hook_budget_ms < 2
-                        || self.apps.zone_b_cache_kb == 0
-                }
-                _ => false,
-            };
-            if extra_bad
-                || !check_bounds(
-                    self.config_bytes(i),
-                    meta.version,
-                    meta.rules_start,
-                    meta.rules_len,
-                )
+            let tweak = self.battery.calib_tweak_mv;
+            if self.config_bytes(i)[0] != meta.version || (i == 4 && !(-500..=500).contains(&tweak))
             {
                 let def = DEFAULT_MASTER_CONFIG.config_bytes(i);
                 self.config_bytes_mut(i).copy_from_slice(def);
                 repaired |= 1u8 << i;
             }
         }
-
-        let max_clk = if cfg!(feature = "overclock_72mhz") {
-            4
-        } else {
-            3
-        };
-        if self.system.model > 2 || self.system.uart_baud > 1 || self.system.cpu_clock > max_clk {
-            self.system.model = self.system.model.min(2);
-            self.system.uart_baud = self.system.uart_baud.min(1);
-            self.system.cpu_clock = self.system.cpu_clock.min(max_clk);
+        // Every declared property is held inside its bounds; a stray byte falls
+        // back to its own default without discarding the rest of the block.
+        for p in &::abi::prop::TABLE {
+            if !p.admits(self.prop_get(p.id)) {
+                self.config_bytes_mut(p.domain())[p.offset()] =
+                    DEFAULT_MASTER_CONFIG.prop_get(p.id);
+                repaired |= 1u8 << p.domain();
+            }
+        }
+        if !cfg!(feature = "overclock_72mhz") && self.system.cpu_clock > 3 {
+            self.system.cpu_clock = 3;
             repaired |= DIRTY_SYSTEM;
         }
         if self
@@ -493,6 +390,37 @@ impl MasterConfig {
         }
 
         repaired
+    }
+
+    /// Current value of property `id` (`abi::prop`); 0 for an undeclared one.
+    #[inline(never)]
+    pub fn prop_get(&self, id: u8) -> u8 {
+        let dom = (id >> 5) as usize;
+        if dom >= CONFIG_METAS.len() {
+            return 0;
+        }
+        self.config_bytes(dom)
+            .get((id & 0x1F) as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Store property `id` if it is declared and `val` is inside its bounds.
+    /// The owning domain is sealed and queued for hardware apply and persistence.
+    #[inline(never)]
+    pub fn prop_set(&mut self, id: u8, val: u8) -> bool {
+        let Some(p) = ::abi::prop::find(id) else {
+            return false;
+        };
+        if !p.admits(val) {
+            return false;
+        }
+        let byte = &mut self.config_bytes_mut(p.domain())[p.offset()];
+        if *byte != val {
+            *byte = val;
+            self.mark_domain_dirty(p.domain());
+        }
+        true
     }
 
     #[inline(never)]
@@ -636,6 +564,54 @@ mod tests {
         assert_ne!(repaired & (DIRTY_KEYS | DIRTY_BATTERY), 0);
         assert!(is_raw_valid(cfg.config_bytes(2), CONFIG_METAS[2].version));
         assert!(is_raw_valid(cfg.config_bytes(4), CONFIG_METAS[4].version));
+    }
+
+    #[test]
+    fn test_property_registry_bounds_seal_and_readable_display() {
+        use ::abi::prop;
+        let mut cfg = MasterConfig::DEFAULT;
+        cfg.system.tag = *b"TESTTAG ";
+        cfg.battery.battery_type = 3;
+        cfg.seal_all();
+        cfg.dirty = 0;
+        cfg.hw_dirty = 0;
+
+        assert!(cfg.prop_set(prop::CONTRAST, 60));
+        assert_eq!(cfg.prop_get(prop::CONTRAST), 60);
+        assert_eq!(cfg.dirty, DIRTY_DISPLAY);
+        assert_eq!(cfg.hw_dirty, HW_DIRTY_DISPLAY);
+        assert!(is_raw_valid(cfg.config_bytes(0), CONFIG_METAS[0].version));
+
+        // Out of bounds, undeclared offsets and the version byte are all refused.
+        assert!(!cfg.prop_set(prop::BACKLIGHT_MAX, 0));
+        assert!(!cfg.prop_set(prop::VOLUME, 11));
+        assert!(!cfg.prop_set(0, 9));
+        assert!(!cfg.prop_set(0xFF, 1));
+        assert_eq!(cfg.prop_get(0xFF), 0);
+        assert_eq!(
+            cfg.display.backlight_max,
+            DisplayConfig::DEFAULT.backlight_max
+        );
+
+        // A corrupt byte is repaired alone; the rest of the block survives.
+        cfg.display.backlight_max = 0;
+        assert_ne!(cfg.sanitize() & DIRTY_DISPLAY, 0);
+        assert_eq!(
+            cfg.display.backlight_max,
+            DisplayConfig::DEFAULT.backlight_max
+        );
+        assert_eq!(cfg.display.contrast, 60);
+
+        // With no Settings app installed the defaults must stay readable.
+        let d = MasterConfig::DEFAULT;
+        assert!(d.display.backlight_max >= 5 && d.display.contrast >= 40);
+        for p in &prop::TABLE {
+            assert!(
+                p.admits(d.prop_get(p.id)),
+                "default out of bounds: {:#x}",
+                p.id
+            );
+        }
     }
 
     #[test]

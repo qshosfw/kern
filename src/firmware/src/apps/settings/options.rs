@@ -1,4 +1,3 @@
-use crate::services::power::PowerServiceConfigExt;
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, ShortString};
 
 pub use super::page::*;
@@ -71,16 +70,14 @@ fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut cra
             };
         }
         TAG_RANGE => {
-            if let Some(&range) = RANGES.get(def.aux as usize) {
-                let raw_val = def.field.get_i16(&ctx.config);
-                item.item_type = MenuItemType::Range {
-                    val: raw_val.clamp(range.min, range.max),
-                    min: range.min,
-                    max: range.max,
-                    step: range.step as i16,
-                    unit: range.unit(),
-                };
-            }
+            let (min, max, step) = range_of(def.field);
+            item.item_type = MenuItemType::Range {
+                val: def.field.get_i16(&ctx.config).clamp(min, max),
+                min,
+                max,
+                step,
+                unit: range_unit(def.aux),
+            };
         }
         TAG_SUBMENU => {
             item.item_type = MenuItemType::Submenu;
@@ -124,49 +121,6 @@ pub fn populate_spec_range(
         populate_item(&mut items[i], spec, start + i, ctx);
     }
     n
-}
-
-static PAGE_DIRTY_MASK: [u8; PageId::COUNT] = [
-    0,                   // Root
-    1 << 0,              // Display
-    1 << 1,              // Audio
-    1 << 2,              // Buttons
-    1 << 4,              // Battery
-    (1 << 3) | (1 << 0), // Device
-    #[cfg(feature = "passcode")]
-    0, // Security
-    1 << 3,              // System
-    1 << 2,              // ButtonsTweaks
-    1 << 2,              // ButtonsShortcuts
-    0,                   // BatteryInfo
-    1 << 4,              // BatteryTweaks
-    #[cfg(feature = "settings_info")]
-    0, // SystemInfo
-    #[cfg(feature = "filesystem")]
-    0, // SystemStorage
-    1 << 5,              // Apps
-    (1 << 3) | (1 << 0), // BootSplash
-    #[cfg(feature = "settings_calib")]
-    0, // SystemCalibration
-    #[cfg(feature = "settings_debug")]
-    0, // SystemDebug
-    0,                   // AppPrefs
-];
-
-#[inline(never)]
-pub fn apply_page_changes(page: PageId, ctx: &mut crate::SysContext) {
-    let mask = PAGE_DIRTY_MASK[page as usize];
-    if mask == 0 {
-        return;
-    }
-    ctx.config.mark_dirty_mask(mask);
-    if page == PageId::Display {
-        ctx.apply_display_config();
-    } else if page == PageId::Audio {
-        ctx.apply_audio_config();
-    } else if (mask & (1 << 4)) != 0 {
-        ctx.power.load_battery_config(&ctx.config.battery);
-    }
 }
 
 const PAGE_TITLE_LIST: &[&str] = &[

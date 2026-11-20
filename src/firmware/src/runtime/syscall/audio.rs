@@ -55,22 +55,6 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
             0
         }
-        aud_ctl::SET_VOL => {
-            let vol = a1 as u8;
-            #[cfg(not(test))]
-            {
-                let hw = crate::kern_hw();
-                hw.audio.set_volume(vol);
-                hw.radio.set_volume_level(vol);
-                crate::master_config().audio.volume = vol;
-            }
-            #[cfg(test)]
-            if let Some(ctx) = active_ctx_opt() {
-                ctx.set_volume(vol);
-            }
-            0
-        }
-        aud_ctl::GET_VOL => crate::master_config_ref().audio.volume as usize,
         aud_ctl::IS_PLAYING => {
             #[cfg(not(test))]
             {
@@ -80,15 +64,6 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             {
                 active_ctx_opt().map_or(0, |ctx| ctx.audio.is_active() as usize)
             }
-        }
-        aud_ctl::MIC_GAIN => {
-            #[cfg(not(test))]
-            crate::kern_hw().radio.set_mic_gain(a1 as u8);
-            #[cfg(test)]
-            if let Some(ctx) = active_ctx_opt() {
-                ctx.radio.set_mic_gain(a1 as u8);
-            }
-            0
         }
         aud_ctl::MIC_SAMPLE => {
             #[cfg(not(test))]

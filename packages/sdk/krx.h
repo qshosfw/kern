@@ -529,8 +529,13 @@ static inline u32 krx_rf_get_freq(const KrxApiTable* api) {
     return krx_call(api, OP_RF_GET, SUB_RF_GET_FREQ, 0u, 0u);
 }
 
-static inline u8 krx_aud_get_volume(const KrxApiTable* api) {
-    return (u8)krx_call(api, OP_AUD_CTL, SUB_AUD_CTL_GET_VOL, 0u, 0u);
+static inline u8 krx_prop_get(const KrxApiTable* api, u8 prop) {
+    return (u8)krx_call(api, OP_PROP_GET, (u32)prop, 0u, 0u);
+}
+
+/* Returns 0 when stored; non-zero when the id, bounds or capability refuse it. */
+static inline u8 krx_prop_set(const KrxApiTable* api, u8 prop, u8 val) {
+    return (u8)krx_call(api, OP_PROP_SET, (u32)prop, (u32)val, 0u);
 }
 
 // ── Inline Helpers: GFX ──────────────────────────────────────────────────────
@@ -636,14 +641,6 @@ static inline void krx_commit_frame(const KrxApiTable* api) {
 
 static inline u8* krx_get_framebuffer(const KrxApiTable* api) {
     return (u8*)krx_call(api, OP_GFX_FB, 0u, 0u, 0u);
-}
-
-static inline void krx_set_inverted(const KrxApiTable* api, u8 inv) {
-    krx_call(api, OP_GFX_CTL, SUB_GFX_CTL_INVERTED, (u32)inv, 0u);
-}
-
-static inline void krx_set_contrast(const KrxApiTable* api, u8 c) {
-    krx_call(api, OP_GFX_CTL, SUB_GFX_CTL_CONTRAST, (u32)c, 0u);
 }
 
 static inline void krx_draw_bitmap(

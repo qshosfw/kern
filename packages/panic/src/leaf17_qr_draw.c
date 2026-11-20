@@ -12,7 +12,7 @@ u32 leaf17_entry(u32 op, const KrxApiTable* api, void* param) {
     const BootSlot* s = &st->cur_slot;
 
     krx_wake_backlight(api);
-    krx_set_inverted(api, 0u);
+    (void)krx_prop_set(api, KRX_PROP_INVERT_PIXELS, 0u);
 
     if (!st->has_slot) {
         krx_draw_str_ex(api, 8, 28, (const u8*)"No crash records", 16u, FONT_TOMTHUMB, COLOR_FILL);

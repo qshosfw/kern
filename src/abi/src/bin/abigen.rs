@@ -56,6 +56,11 @@ fn render() -> String {
             abi::icon::NAMES,
         ),
         (
+            "Properties (abi::prop): krx_prop_get / krx_prop_set",
+            "KRX_PROP",
+            abi::prop::NAMES,
+        ),
+        (
             "Declared-action scopes (abi::scope)",
             "KRX_SCOPE",
             abi::scope::NAMES,

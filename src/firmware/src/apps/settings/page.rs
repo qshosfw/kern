@@ -107,68 +107,29 @@ impl ActionId {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-pub struct RangeDef {
-    pub min: i16,
-    pub max: i16,
-    pub step: u8,
-    pub unit_idx: u8,
-}
-
 utils::static_bytes!(
     static RANGE_UNITS = b"\0dB\0%\0mV\0";
 );
 
-impl RangeDef {
-    #[inline(always)]
-    pub fn unit(self) -> &'static str {
-        utils::format::nth_cstr(&RANGE_UNITS, self.unit_idx)
+/// Unit suffix of a range row, an index into `RANGE_UNITS`.
+pub const UNIT_NONE: u8 = 0;
+pub const UNIT_DB: u8 = 1;
+pub const UNIT_PERCENT: u8 = 2;
+pub const UNIT_MV: u8 = 3;
+
+/// Bounds of the range row editing `field`: `(min, max, step)` from `abi::prop`.
+#[inline(never)]
+pub fn range_of(field: SettingField) -> (i16, i16, i16) {
+    match ::abi::prop::find(field.0) {
+        Some(p) => (p.min as i16, p.max as i16, p.step as i16),
+        None => (-500, 500, 10),
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum RangeId {
-    Range0_10 = 0,
-    Range1_10 = 1,
-    MicGain = 2,
-    Contrast = 3,
-    CalibTweak = 4,
+#[inline(always)]
+pub fn range_unit(unit: u8) -> &'static str {
+    utils::format::nth_cstr(&RANGE_UNITS, unit)
 }
-
-pub static RANGES: [RangeDef; 5] = [
-    RangeDef {
-        min: 0,
-        max: 10,
-        step: 1,
-        unit_idx: 0,
-    },
-    RangeDef {
-        min: 1,
-        max: 10,
-        step: 1,
-        unit_idx: 0,
-    },
-    RangeDef {
-        min: 0,
-        max: 31,
-        step: 1,
-        unit_idx: 1,
-    },
-    RangeDef {
-        min: 0,
-        max: 100,
-        step: 5,
-        unit_idx: 2,
-    },
-    RangeDef {
-        min: -500,
-        max: 500,
-        step: 10,
-        unit_idx: 3,
-    },
-];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -370,70 +331,57 @@ impl SettingField {
     #[allow(non_upper_case_globals)]
     pub const CalibTweak: Self = Self(0xFE);
 
-    #[inline(always)]
-    pub const fn byte(dom: u8, off: u8) -> Self {
-        Self((dom << 5) | (off & 0x1F))
-    }
-
     // Display (domain 0)
-    pub const BACKLIGHT_TIME: Self = Self::byte(0, 1);
-    pub const BACKLIGHT_MAX: Self = Self::byte(0, 2);
-    pub const BACKLIGHT_MIN: Self = Self::byte(0, 3);
-    pub const CONTRAST: Self = Self::byte(0, 4);
-    pub const INVERT_PIXELS: Self = Self::byte(0, 5);
-    pub const BOOT_SPLASH_ANIM: Self = Self::byte(0, 6);
-    pub const BOOT_SPLASH_DURATION: Self = Self::byte(0, 8);
-    pub const SHADING_MODE: Self = Self::byte(0, 9);
-    pub const UI_ANIMATIONS: Self = Self::byte(0, 10);
-    pub const REFRESH_RATE: Self = Self::byte(0, 11);
+    pub const BACKLIGHT_TIME: Self = Self(::abi::prop::BACKLIGHT_TIME);
+    pub const BACKLIGHT_MAX: Self = Self(::abi::prop::BACKLIGHT_MAX);
+    pub const BACKLIGHT_MIN: Self = Self(::abi::prop::BACKLIGHT_MIN);
+    pub const CONTRAST: Self = Self(::abi::prop::CONTRAST);
+    pub const INVERT_PIXELS: Self = Self(::abi::prop::INVERT_PIXELS);
+    pub const BOOT_SPLASH_ANIM: Self = Self(::abi::prop::BOOT_SPLASH_ANIM);
+    pub const BOOT_SPLASH_DURATION: Self = Self(::abi::prop::BOOT_SPLASH_DURATION);
+    pub const SHADING_MODE: Self = Self(::abi::prop::SHADING_MODE);
+    pub const UI_ANIMATIONS: Self = Self(::abi::prop::UI_ANIMATIONS);
+    pub const REFRESH_RATE: Self = Self(::abi::prop::REFRESH_RATE);
 
     // Audio (domain 1)
-    pub const VOLUME: Self = Self::byte(1, 1);
-    pub const KEY_BEEP: Self = Self::byte(1, 2);
-    pub const MIC_GAIN: Self = Self::byte(1, 3);
-    pub const ROGER_BEEP: Self = Self::byte(1, 4);
-    pub const BEEP_GAIN: Self = Self::byte(1, 6);
-    pub const BOOT_JINGLE: Self = Self::byte(1, 7);
-    pub const AUDIO_PROFILE: Self = Self::byte(1, 8);
+    pub const VOLUME: Self = Self(::abi::prop::VOLUME);
+    pub const KEY_BEEP: Self = Self(::abi::prop::KEY_BEEP);
+    pub const MIC_GAIN: Self = Self(::abi::prop::MIC_GAIN);
+    pub const ROGER_BEEP: Self = Self(::abi::prop::ROGER_BEEP);
+    pub const BEEP_GAIN: Self = Self(::abi::prop::BEEP_GAIN);
+    pub const BOOT_JINGLE: Self = Self(::abi::prop::BOOT_JINGLE);
+    pub const AUDIO_PROFILE: Self = Self(::abi::prop::AUDIO_PROFILE);
 
     // Keys (domain 2, KeyConfig v3)
-    pub const AUTO_LOCK: Self = Self::byte(2, 2);
-    pub const F_KEY_TIMEOUT: Self = Self::byte(2, 3);
-    pub const FAST_SCROLL: Self = Self::byte(2, 4);
-    pub const HOLD_DELAY: Self = Self::byte(2, 5);
-    pub const REPEAT_RATE: Self = Self::byte(2, 6);
-    pub const PTT_MODE: Self = Self::byte(2, 7);
-    pub const F_DRAWER: Self = Self::byte(2, 8);
+    pub const AUTO_LOCK: Self = Self(::abi::prop::AUTO_LOCK);
+    pub const F_KEY_TIMEOUT: Self = Self(::abi::prop::F_KEY_TIMEOUT);
+    pub const FAST_SCROLL: Self = Self(::abi::prop::FAST_SCROLL);
+    pub const HOLD_DELAY: Self = Self(::abi::prop::HOLD_DELAY);
+    pub const REPEAT_RATE: Self = Self(::abi::prop::REPEAT_RATE);
+    pub const PTT_MODE: Self = Self(::abi::prop::PTT_MODE);
+    pub const F_DRAWER: Self = Self(::abi::prop::F_DRAWER);
 
     // System (domain 3)
-    pub const UART_BAUD: Self = Self::byte(3, 2);
-    pub const CPU_CLOCK: Self = Self::byte(3, 3);
+    pub const UART_BAUD: Self = Self(::abi::prop::UART_BAUD);
+    pub const CPU_CLOCK: Self = Self(::abi::prop::CPU_CLOCK);
 
     // Battery (domain 4)
-    pub const BATTERY_TYPE: Self = Self::byte(4, 1);
-    pub const BATTERY_FORMAT: Self = Self::byte(4, 2);
-    pub const POWER_PROFILE: Self = Self::byte(4, 3);
-    pub const AUTO_POWER_OFF: Self = Self::byte(4, 4);
-    pub const CHARGE_DETECT: Self = Self::byte(4, 5);
+    pub const BATTERY_TYPE: Self = Self(::abi::prop::BATTERY_TYPE);
+    pub const BATTERY_FORMAT: Self = Self(::abi::prop::BATTERY_FORMAT);
+    pub const POWER_PROFILE: Self = Self(::abi::prop::POWER_PROFILE);
+    pub const AUTO_POWER_OFF: Self = Self(::abi::prop::AUTO_POWER_OFF);
+    pub const CHARGE_DETECT: Self = Self(::abi::prop::CHARGE_DETECT);
     pub const CALIB_TWEAK_MV: Self = Self::CalibTweak;
 
     // Apps (domain 5)
-    pub const LAUNCHER_STYLE: Self = Self::byte(5, 1);
-    pub const SHOW_NUMBERS: Self = Self::byte(5, 2);
-    pub const SHOW_LABELS: Self = Self::byte(5, 3);
-    pub const STARTUP_APP: Self = Self::byte(5, 4);
-    pub const VFO_DUAL_WATCH: Self = Self::byte(5, 5);
-    pub const SCANNER_DWELL: Self = Self::byte(5, 6);
+    pub const LAUNCHER_STYLE: Self = Self(::abi::prop::LAUNCHER_STYLE);
+    pub const SHOW_NUMBERS: Self = Self(::abi::prop::SHOW_NUMBERS);
+    pub const SHOW_LABELS: Self = Self(::abi::prop::SHOW_LABELS);
+    pub const STARTUP_APP: Self = Self(::abi::prop::STARTUP_APP);
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn get_u8(self, config: &crate::config::MasterConfig) -> u8 {
-        if self.0 >= 0xFE {
-            0
-        } else {
-            let dom = (self.0 >> 5) as usize;
-            let off = (self.0 & 0x1F) as usize;
-            config.config_bytes(dom).get(off).copied().unwrap_or(0)
-        }
+        config.prop_get(self.0)
     }
 
     #[inline(always)]
@@ -445,33 +393,32 @@ impl SettingField {
         }
     }
 
+    /// Store `val`; the owning domain is sealed and queued for hardware apply
+    /// and persistence, so no page-level bookkeeping is needed.
     pub fn set_val(self, val: i32, config: &mut crate::config::MasterConfig) -> bool {
         if self.0 == Self::None.0 {
-            false
-        } else if self.0 == Self::CalibTweak.0 {
+            return false;
+        }
+        let (dom, off) = if self.0 == Self::CalibTweak.0 {
             let clamped = (val as i16).clamp(-500, 500);
-            if config.battery.calib_tweak_mv != clamped {
-                config.battery.calib_tweak_mv = clamped;
-                true
-            } else {
-                false
+            if config.battery.calib_tweak_mv == clamped {
+                return false;
             }
+            config.battery.calib_tweak_mv = clamped;
+            (4, usize::MAX)
         } else {
-            let dom = (self.0 >> 5) as usize;
-            let off = (self.0 & 0x1F) as usize;
-            Self::set_byte(config.config_bytes_mut(dom), off, val as u8)
-        }
-    }
-
-    #[inline(always)]
-    fn set_byte(slice: &mut [u8], off: usize, val: u8) -> bool {
-        if let Some(target) = slice.get_mut(off) {
-            if *target != val {
-                *target = val;
-                return true;
+            ((self.0 >> 5) as usize, (self.0 & 0x1F) as usize)
+        };
+        if let Some(target) = config.config_bytes_mut(dom).get_mut(off) {
+            if *target == val as u8 {
+                return false;
             }
+            *target = val as u8;
+        } else if off != usize::MAX {
+            return false;
         }
-        false
+        config.mark_domain_dirty(dom);
+        true
     }
 }
 
@@ -543,11 +490,11 @@ impl SettingDef {
         }
     }
 
-    pub const fn range(range: RangeId, field: SettingField) -> Self {
+    pub const fn range(unit: u8, field: SettingField) -> Self {
         Self {
             field,
             tag: TAG_RANGE,
-            aux: range as u8,
+            aux: unit,
         }
     }
 

@@ -110,6 +110,7 @@ impl AssetId {
                 unsafe { core::slice::from_raw_parts_mut(bytes.as_mut_ptr().add(off), 32) };
             crate::config::write_cstr(path_buf, p);
         }
+        cfg.mark_domain_dirty(m.dom as usize);
     }
 
     #[inline(never)]

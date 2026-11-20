@@ -104,7 +104,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         (void)krx_pwr_u16(api, 0u);
         (void)krx_key_matrix(api);
         (void)krx_rf_get_freq(api);
-        (void)krx_aud_get_volume(api);
+        (void)krx_prop_get(api, KRX_PROP_VOLUME);
         (void)krx_fs_exists(api, (const u8*)"/apps", 5u);
         (void)krx_ticks_ms(api);
         (void)krx_sys_rand32(api);

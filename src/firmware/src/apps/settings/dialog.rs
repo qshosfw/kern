@@ -3,7 +3,6 @@
 use super::app::SettingsApp;
 use super::page::ActionId;
 use crate::SysContext;
-use crate::services::power::PowerServiceConfigExt;
 use gfx::gui::modules::menu::OptionSheet;
 use gfx::gui::modules::menu::ShortString;
 use kernel::app::EventResult;
@@ -232,9 +231,7 @@ pub fn handle_sheet_selected(
         #[cfg(feature = "filesystem")]
         TAG_ASSET_CHOOSER => {
             if let Some(asset) = app.active_asset.take() {
-                if asset.apply_choice(idx, &mut ctx.config) {
-                    super::options::apply_page_changes(app.current_page, ctx);
-                }
+                asset.apply_choice(idx, &mut ctx.config);
             }
         }
         TAG_MODEL_CHOOSER => {
@@ -382,9 +379,6 @@ pub fn handle_confirm_result(
         }
         TAG_RESET_SETTINGS => {
             reset_config_to_defaults(ctx);
-            ctx.apply_display_config();
-            ctx.apply_audio_config();
-            ctx.power.load_battery_config(&ctx.config.battery);
             ctx.config.hw_dirty = 0x3F;
             app.populate_current_menu(ctx);
             ("Settings", "Defaults restored.")

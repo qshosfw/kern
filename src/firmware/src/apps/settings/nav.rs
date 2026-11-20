@@ -1,7 +1,7 @@
 //! Navigation Stack & Menu State Synchronization for OS Settings
 
 use super::app::{SettingsApp, settings_arena_mut, settings_arena_ref};
-use super::options::{apply_page_changes, page_defs, page_spec, page_title, populate_spec_range};
+use super::options::{page_defs, page_spec, page_title, populate_spec_range};
 use super::page::{MenuFrame, PageId, PageSpec, SettingField, TAG_BATTERY_TYPE};
 use crate::SysContext;
 use gfx::gui::modules::menu::MenuItemType;
@@ -165,7 +165,6 @@ impl SettingsApp {
 
     fn commit_field(&mut self, field: SettingField, val: i32, ctx: &mut SysContext) {
         if field.set_val(val, &mut ctx.config) {
-            apply_page_changes(self.current_page, ctx);
             self.dirty_timer_ms = 250;
         }
     }

@@ -287,6 +287,8 @@ abi! {
         SysReboot  = 4 (Val, Val, Val) [PowerManage],
         SysEvent   = 5 (Val, Val, Val),
         SysFlush   = 6 (Val, Val, Val),
+        PropGet    = 7 (Val, Val, Val),
+        PropSet    = 8 (Val, Val, Val),
     }
     PROC 0x1 {
         ProcSelf   = 0 (Val, Val, Val),
@@ -437,15 +439,12 @@ abi_sub! {
     }
     aud_ctl {
         PATH       = 0,
-        SET_VOL    = 1,
-        GET_VOL    = 2,
-        IS_PLAYING = 3,
-        MIC_GAIN   = 4,
-        MIC_SAMPLE = 5,
-        CAP_START  = 6,
-        CAP_READ   = 7,
-        CAP_STOP   = 8,
-        IS_CAP     = 9,
+        IS_PLAYING = 1,
+        MIC_SAMPLE = 2,
+        CAP_START  = 3,
+        CAP_READ   = 4,
+        CAP_STOP   = 5,
+        IS_CAP     = 6,
     }
     gfx_draw {
         PIXEL      = 0,
@@ -463,9 +462,7 @@ abi_sub! {
         DOTTED_H   = 12,
     }
     gfx_ctl {
-        INVERTED   = 0,
-        CONTRAST   = 1,
-        BITMAP     = 2,
+        BITMAP     = 0,
     }
     ui_modal {
         CLOSE      = 0,
@@ -500,10 +497,8 @@ abi_sub! {
         CHARGING   = 6,
         LOW        = 7,
         CRITICAL   = 8,
-        BL_MODE    = 9,
-        BL_LEVELS  = 10,
-        BL_WAKE    = 11,
-        FLASHLIGHT = 12,
+        BL_WAKE    = 9,
+        FLASHLIGHT = 10,
     }
     io_serial {
         WRITE      = 0,

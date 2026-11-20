@@ -10,6 +10,8 @@
 #define OP_SYS_REBOOT      0x04u /* [PowerManage] */
 #define OP_SYS_EVENT       0x05u
 #define OP_SYS_FLUSH       0x06u
+#define OP_PROP_GET        0x07u
+#define OP_PROP_SET        0x08u
 
 /* Domain 0x1: PROC */
 #define OP_PROC_SELF       0x10u
@@ -68,7 +70,7 @@
 #define OP_IO_TIME         0x83u
 #define OP_IO_BUS          0x84u /* [RawPeripheral] */
 
-#define KRX_OP_COUNT       48u
+#define KRX_OP_COUNT       50u
 
 /* Sub-opcodes (mirrored from abi::sub) */
 /* sys_query */
@@ -160,15 +162,12 @@
 
 /* aud_ctl */
 #define SUB_AUD_CTL_PATH           0u
-#define SUB_AUD_CTL_SET_VOL        1u
-#define SUB_AUD_CTL_GET_VOL        2u
-#define SUB_AUD_CTL_IS_PLAYING     3u
-#define SUB_AUD_CTL_MIC_GAIN       4u
-#define SUB_AUD_CTL_MIC_SAMPLE     5u
-#define SUB_AUD_CTL_CAP_START      6u
-#define SUB_AUD_CTL_CAP_READ       7u
-#define SUB_AUD_CTL_CAP_STOP       8u
-#define SUB_AUD_CTL_IS_CAP         9u
+#define SUB_AUD_CTL_IS_PLAYING     1u
+#define SUB_AUD_CTL_MIC_SAMPLE     2u
+#define SUB_AUD_CTL_CAP_START      3u
+#define SUB_AUD_CTL_CAP_READ       4u
+#define SUB_AUD_CTL_CAP_STOP       5u
+#define SUB_AUD_CTL_IS_CAP         6u
 
 /* gfx_draw */
 #define SUB_GFX_DRAW_PIXEL         0u
@@ -186,9 +185,7 @@
 #define SUB_GFX_DRAW_DOTTED_H      12u
 
 /* gfx_ctl */
-#define SUB_GFX_CTL_INVERTED       0u
-#define SUB_GFX_CTL_CONTRAST       1u
-#define SUB_GFX_CTL_BITMAP         2u
+#define SUB_GFX_CTL_BITMAP         0u
 
 /* ui_modal */
 #define SUB_UI_MODAL_CLOSE         0u
@@ -223,10 +220,8 @@
 #define SUB_IO_POWER_CHARGING      6u
 #define SUB_IO_POWER_LOW           7u
 #define SUB_IO_POWER_CRITICAL      8u
-#define SUB_IO_POWER_BL_MODE       9u
-#define SUB_IO_POWER_BL_LEVELS     10u
-#define SUB_IO_POWER_BL_WAKE       11u
-#define SUB_IO_POWER_FLASHLIGHT    12u
+#define SUB_IO_POWER_BL_WAKE       9u
+#define SUB_IO_POWER_FLASHLIGHT    10u
 
 /* io_serial */
 #define SUB_IO_SERIAL_WRITE        0u
@@ -329,6 +324,52 @@
 #define KRX_ICON_SYSTEM            48u
 #define KRX_ICON_UPLOAD            49u
 #define KRX_ICON_HOME              50u
+
+/* Properties (abi::prop): krx_prop_get / krx_prop_set */
+#define KRX_PROP_BACKLIGHT_TIME    1u
+#define KRX_PROP_BACKLIGHT_MAX     2u
+#define KRX_PROP_BACKLIGHT_MIN     3u
+#define KRX_PROP_CONTRAST          4u
+#define KRX_PROP_INVERT_PIXELS     5u
+#define KRX_PROP_BOOT_SPLASH_ANIM  6u
+#define KRX_PROP_BOOT_SPLASH_MODE  7u
+#define KRX_PROP_BOOT_SPLASH_DURATION 8u
+#define KRX_PROP_SHADING_MODE      9u
+#define KRX_PROP_UI_ANIMATIONS     10u
+#define KRX_PROP_REFRESH_RATE      11u
+#define KRX_PROP_VOLUME            33u
+#define KRX_PROP_KEY_BEEP          34u
+#define KRX_PROP_MIC_GAIN          35u
+#define KRX_PROP_ROGER_BEEP        36u
+#define KRX_PROP_BEEP_GAIN         38u
+#define KRX_PROP_BOOT_JINGLE       39u
+#define KRX_PROP_AUDIO_PROFILE     40u
+#define KRX_PROP_NAV_LAYOUT        65u
+#define KRX_PROP_AUTO_LOCK         66u
+#define KRX_PROP_F_KEY_TIMEOUT     67u
+#define KRX_PROP_FAST_SCROLL       68u
+#define KRX_PROP_HOLD_DELAY        69u
+#define KRX_PROP_REPEAT_RATE       70u
+#define KRX_PROP_PTT_MODE          71u
+#define KRX_PROP_F_DRAWER          72u
+#define KRX_PROP_MODEL             97u
+#define KRX_PROP_UART_BAUD         98u
+#define KRX_PROP_CPU_CLOCK         99u
+#define KRX_PROP_BATTERY_TYPE      129u
+#define KRX_PROP_BATTERY_FORMAT    130u
+#define KRX_PROP_POWER_PROFILE     131u
+#define KRX_PROP_AUTO_POWER_OFF    132u
+#define KRX_PROP_CHARGE_DETECT     133u
+#define KRX_PROP_LAUNCHER_STYLE    161u
+#define KRX_PROP_SHOW_NUMBERS      162u
+#define KRX_PROP_SHOW_LABELS       163u
+#define KRX_PROP_STARTUP_APP       164u
+#define KRX_PROP_PAGER_POLICY      166u
+#define KRX_PROP_SWAP_POLICY       167u
+#define KRX_PROP_DAEMON_BUDGET_MS  172u
+#define KRX_PROP_HOOK_BUDGET_MS    173u
+#define KRX_PROP_MAX_STRIKES       174u
+#define KRX_PROP_ZONE_B_CACHE_KB   175u
 
 /* Declared-action scopes (abi::scope) */
 #define KRX_SCOPE_SHORTCUT         1u

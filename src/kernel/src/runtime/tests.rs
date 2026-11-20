@@ -883,7 +883,7 @@ fn test_exhaustive_abi_vtable_verification_bench() {
         assert_eq!(api.invoke(Op::RfGet, 0, 0, 0), 0);
         assert_eq!(api.invoke(Op::RfGet, 1, 0, 0) as u32 as i32, -140);
         assert_eq!(api.invoke(Op::RfSet, 6, 0, 0), 1);
-        assert_eq!(api.invoke(Op::AudCtl, 6, 8000, 0), 1);
+        assert_eq!(api.invoke(Op::AudCtl, 3, 8000, 0), 1);
 
         // GFX & UI
         assert_eq!(api.invoke(Op::GfxClear, 0, 0, 0), 0);

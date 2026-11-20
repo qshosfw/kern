@@ -814,7 +814,7 @@ mod tests {
     #[test]
     fn settings_all_pages_specs_titles_and_fuzz_formatters() {
         use super::super::options::{page_spec, page_title};
-        use super::super::page::{PageId, RANGES, TAG_CHOICE, TAG_RANGE, choice_options};
+        use super::super::page::{PageId, TAG_CHOICE, TAG_RANGE, choice_options, range_of};
 
         // 1. Exhaustively validate every PageId discriminant has a non-empty title & coherent spec.
         for raw in 0..(PageId::COUNT as u8) {
@@ -833,8 +833,8 @@ mod tests {
                     let opts = choice_options(def.aux).expect("valid choice_options");
                     assert!(!opts.is_empty());
                 } else if def.tag == TAG_RANGE {
-                    let r = &RANGES[def.aux as usize];
-                    assert!(r.min <= r.max && r.step > 0);
+                    let (min, max, step) = range_of(def.field);
+                    assert!(min <= max && step > 0);
                 }
             }
         }

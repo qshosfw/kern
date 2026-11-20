@@ -243,6 +243,22 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 post_event_id(ev)
             }
         }
+        op::PropGet | op::PropSet => {
+            #[cfg(not(test))]
+            let config = Some(crate::master_config());
+            #[cfg(test)]
+            let config = super::active_ctx_opt().map(|ctx| &mut *ctx.config);
+            let Some(config) = config else {
+                return 0;
+            };
+            let id = a0 as u8;
+            if idx == op::PropGet {
+                return config.prop_get(id) as usize;
+            }
+            let cap = ::abi::prop::DOMAIN_CAP[((id >> 5) as usize).min(5)];
+            let granted = crate::runtime::native_runner::active_native_caps();
+            usize::from(!(granted.contains(cap) && config.prop_set(id, a1 as u8)))
+        }
         op::SysFlush => {
             #[cfg(not(test))]
             {

@@ -61,7 +61,7 @@ fn dispatch_io_key(sub: u8, a1: usize) -> usize {
 }
 
 #[inline(never)]
-fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
+fn dispatch_io_power(sub: u8, a1: usize) -> usize {
     use ::abi::sub::io_power;
     use kernel::service::PowerService;
     let p = power_ref();
@@ -75,44 +75,6 @@ fn dispatch_io_power(sub: u8, a1: usize, a2: usize) -> usize {
         io_power::CHARGING => usize::from(p.is_charging),
         io_power::LOW => usize::from(p.is_low()),
         io_power::CRITICAL => usize::from(p.is_critical()),
-        io_power::BL_MODE => {
-            let mode = a1 as u8;
-            let timeout_ms = ((a2 as u16) * 1000).min(60000);
-            #[cfg(not(test))]
-            {
-                let bmode = match mode {
-                    0 => drivers::backlight::BacklightMode::Off,
-                    1 => drivers::backlight::BacklightMode::Auto(timeout_ms),
-                    _ => drivers::backlight::BacklightMode::On,
-                };
-                crate::kern_hw().backlight.set_mode(bmode);
-            }
-            #[cfg(test)]
-            if let Some(ctx) = active_ctx_opt() {
-                if let Some(ref mut d) = ctx.display {
-                    let bmode = match mode {
-                        0 => kernel::service::BacklightMode::Off,
-                        1 => kernel::service::BacklightMode::Auto(timeout_ms),
-                        _ => kernel::service::BacklightMode::On,
-                    };
-                    kernel::service::DisplayService::set_backlight_mode(*d, bmode);
-                }
-            }
-            0
-        }
-        io_power::BL_LEVELS => {
-            #[cfg(not(test))]
-            crate::kern_hw().backlight.set_levels(a1 as u8, a2 as u8);
-            #[cfg(test)]
-            if let Some(ctx) = active_ctx_opt() {
-                if let Some(ref mut d) = ctx.display {
-                    kernel::service::DisplayService::set_backlight_brightness(
-                        *d, a1 as u8, a2 as u8,
-                    );
-                }
-            }
-            0
-        }
         io_power::BL_WAKE => {
             #[cfg(not(test))]
             crate::kern_hw().backlight.wake();
@@ -327,7 +289,7 @@ pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
     use ::abi::{idx as op, sub::io_time};
     match idx {
         op::IoKey => dispatch_io_key(a0 as u8, a1),
-        op::IoPower => dispatch_io_power(a0 as u8, a1, a2),
+        op::IoPower => dispatch_io_power(a0 as u8, a1),
         op::IoSerial => unsafe { dispatch_io_serial(a0 as u8, a1, a2) },
         op::IoTime => match a0 as u8 {
             io_time::TICKS_MS => py32_hal::delay::millis() as usize,

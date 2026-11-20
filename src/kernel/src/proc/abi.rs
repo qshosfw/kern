@@ -163,7 +163,7 @@ unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, a1: usize, _a2: usize) -
             }
         }
         x if x == Op::RfSet.id() => usize::from(matches!(a0, 6 | 8 | 10 | 11)),
-        x if x == Op::AudCtl.id() => usize::from(a0 == 6),
+        x if x == Op::AudCtl.id() => usize::from(a0 == 3),
         x if x == Op::GfxDraw.id() => {
             if (a0 & 0xFF) == 9 {
                 6
