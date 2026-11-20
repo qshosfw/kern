@@ -6,6 +6,7 @@ __pycache__/
 /packages/*/build/
 
 # Local reference & working directories (not tracked in public repository)
+/.claude/
 /inspo/
 /docs/
 /backups/
