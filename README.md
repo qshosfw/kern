@@ -1,127 +1,134 @@
-# kern
+# Kern OS — OpenTaiko Amateur Radio Microkernel
 
-Kern is an experimental `no_std` Rust microkernel for the Quansheng UV-K1, UV-K5 v3, and UV-K10Pro handheld transceivers, built for the Puya PY32F071xB ARM Cortex-M0+ microcontroller.
+[![Organization: OpenTaiko](https://img.shields.io/badge/OpenTaiko-qshosfw-1f6feb?style=flat-square&logo=github)](https://github.com/qshosfw)
+[![Support on Ko-fi](https://img.shields.io/badge/Support%20on-Ko--fi-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/qshosfw)
+[![Rust: no_std](https://img.shields.io/badge/Rust-no__std%20%7C%20zero%20heap-DEA584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Target: Cortex-M0+](https://img.shields.io/badge/Target-PY32F071xB%20Cortex--M0%2B-0091BD?style=flat-square)](https://github.com/qshosfw)
+[![License](https://img.shields.io/badge/License-GPLv3-green?style=flat-square)](LICENSE)
 
-The project explores running a memory-safe, modular microkernel with capability-checked relocatable userland executables inside tight MCU constraints (128 KB internal Flash, 16 KB SRAM).
+**Kern** is an open-source, zero-heap `#![no_std]` microkernel, RF coordinator, and relocatable application platform developed by **[OpenTaiko (`qshosfw`)](https://github.com/qshosfw)** for modern handheld amateur radio transceivers (Quansheng **UV-K1**, **UV-K5 v3**, and **K10 Pro**).
 
-> **Status**: Under active development. Core kernel abstractions, peripheral drivers, KernFS storage, RigWire protocol, KRX runtime, and system modules (`dfu.mod`, `panic.mod`, `sysinfo.krx`) are functional. Radio applications (Dual VFO, scanner, channel workflows) are prototypes undergoing active bring-up.
-
----
-
-## Hardware Targets
-
-- **Radios**: Quansheng UV-K1, UV-K5 v3 (shared base image), UV-K10Pro (`--target UV-K10Pro`)
-- **MCU**: Puya PY32F071xB (ARM Cortex-M0+, 48 MHz, optional 72 MHz overclock)
-- **Internal Memory**: 128 KB Flash (`0x08002800` application base after 10 KB stock bootloader), 16 KB SRAM
-- **External Storage**: 2 MB SPI Flash (PY25Q16)
-- **RF Transceiver**: Beken BK4829 (BK4819 register compatible)
-- **Display**: ST7565 monochrome LCD (128×64)
+Built from the ground up in Rust for constrained ARM Cortex-M0+ silicon (`128 KB` Flash / `16 KB` SRAM + `2 MB` SPI Flash), Kern decouples hardware drivers, RF arbitration, power-loss-safe storage, and graphics from installable userland applications (`.krx` / `.mod`) provisioned cleanly over USB-C / UART via **RigWire**.
 
 ---
 
-## Design Principles
+## Highlights
 
-1. **Zero Heap Allocation**: `#![no_std]` across the entire workspace with `alloc` disabled. All buffers are statically arena-backed or compile-time bounded with `heapless`.
-2. **Layered Decoupling**: Application and userland code never touch hardware registers directly. Radio, display, audio, and storage operations pass through microkernel traits (`RfChannel`, `RfTuning`, `DisplayBackend`, `StorageBackend`).
-3. **Power-of-Two Record Layout**: Cortex-M0+ lacks a hardware divider. Table records (16 B headers, 32 B contacts/zones/bands, 64 B channels) use power-of-two strides so record offsets resolve via single bit-shifts (`16 + (index << N)`).
-4. **Relocatable Userland Packages (KRX)**: System modules and userland applications compile as independent position-independent `.krx` / `.mod` binaries (supporting N1 native PIC, P0 structured leaf paging, and P1 transparent paging) talking to the kernel over a single-entry `kern_call` syscall ABI.
-5. **Framed Binary Serial Protocol (RigWire)**: COBS-framed packets with CRC-32 verification handle KernFS file transfers, package sideloading, telemetry, and device control over USB-C CDC or UART.
+- **Strict Zero-Heap Microkernel (`#![no_std]`):** Zero `alloc`, zero `Box`, zero heap `Vec`; deterministic stack/SRAM budgets (`8 KB` relocatable app execution arena + generous call/IRQ stack headroom).
+- **Dynamic RF Arbitration:** Microkernel-mediated `RadioCoordinator`, `RfResourceMask(u16)`, `ScanPlan` scanner state machine, multi-VFO & broad-band receiver contracts, and hardware-safe TX/PA guards.
+- **External Userland Packages (`.krx` / `.mod`):** Core apps (`vfo.krx`, `settings.krx`) and system modules (`calib.mod`, `dfu.mod`, `recovery.mod`, `multiboot.mod`, `panic.mod`, `sysinfo.krx`) run outside MCU ROM from SPI Flash with self-contained `SECTION_ASSETS` icons, capability checks, and fault containment.
+- **Unified Single-Entry Syscall ABI (`kern_call`):** Shared Rust (`sdk/rust` — `kern-sdk`) and C (`sdk/c/krx.h` + `sdk/c/krx_ops.h`) SDKs generated from a single source of truth (`src/abi`).
+- **Power-Loss-Safe Storage (`KernFS`):** Copy-on-write 256-byte page-granular SPI Flash filesystem with CRC32-protected modular config files (`/pref/*.cfg`), power-of-two record geometries, and Ascon-128 hardware-bound calibration (`/sys/calib.dat`).
+- **RigWire Serial & USB-C Protocol:** Fast COBS-framed telemetry, live framebuffer streaming, remote keypad/encoder control, WebDAV mounting, and CRC-verified package provisioning (`tools/provision.py` / `./kern wire`).
 
 ---
 
-## Repository Layout
+## Hardware Support Matrix
 
-- `src/` — Rust workspace crates:
-  - `src/abi/` — Single-source KRX syscall ABI (`Op`, `Cap`, `prop`, C/Rust descriptor structs) and `./kern abi` C header generator.
-  - `src/hal-traits/` — Zero-cost hardware trait contracts.
-  - `src/kernel/` — Microkernel core, scheduler, process control, RF coordinator, IPC/events, boot records.
-  - `src/drivers/` — Peripheral drivers (BK4829, BK1080, ST7565, PY25Q16, USB CDC, UART, keypad, audio, battery, GNSS).
-  - `src/fs/`, `src/gfx/`, `src/crypto/`, `src/calib/`, `src/util/` — Core `#![no_std]` libraries (`KernFS`, `gfx`, Ascon/CRC/TRNG, calibration, utilities).
-  - `src/mcu/` & `src/board/` — Silicon PAC/HAL and board support packages (`uv-k1`).
-  - `src/firmware/` — Runtime entrypoint, syscall dispatcher, UI compositor, RigWire service, built-in shell.
-- [`sdk/`](sdk/) — Public dual-language KRX SDK (`sdk/rust/`, `sdk/c/`, `sdk/krx.ld`).
-- [`packages/`](packages/README.md) — Installable `.krx`/`.mod` packages under `packages/{core,sys,apps,examples}/`.
-- [`tools/`](tools/README.md) — Build driver, ABI header generator, ELF bloat analyzer, static arch linter, KRX packer, RigWire client, flasher, and QEMU helper.
-- [`media/`](media/README.md) — Project media and presentation assets.
+| Radio | MCU | Flash / SRAM | SPI Flash | Status |
+|---|---|---|---|---|
+| **Quansheng UV-K1** | PY32F071xB (Cortex-M0+ @ 48/72 MHz) | 128 KB / 16 KB | PY25Q16 (2 MB) | Primary Target |
+| **Quansheng UV-K5 v3** | PY32F071xB (Cortex-M0+ @ 48/72 MHz) | 128 KB / 16 KB | PY25Q16 (2 MB) | Supported (QEMU + HW) |
+| **K10 Pro** | PY32F071xB + GNSS / RGB | 128 KB / 16 KB | PY25Q16 (2 MB) | Experimental (`target_k10pro`) |
+
+---
+
+## Repository Structure
+
+```text
+kern/
+├── kern                   # Unified CLI toolchain (build, check, test, size, pkg, abi, wire, flash)
+├── kern.toml              # Declarative hardware target & feature configuration
+├── src/                   # Layered Rust microkernel & firmware workspace
+│   ├── abi/               # Single-source-of-truth syscall opcodes, properties, capabilities, C-ABI types
+│   ├── kernel/            # Microkernel contracts (proc, ipc/intents, caps, radio, store, power, runtime)
+│   ├── fs/                # KernFS copy-on-write SPI Flash filesystem
+│   ├── drivers/           # Peripheral drivers (BK4829, BK1080, ST7565, PY25Q16, USB CDC, Wire, Audio)
+│   ├── gfx/               # Monochrome/grayscale 2D canvas, fonts, icons, and native UI widgets
+│   ├── crypto/            # CRC32, Ascon-128 AEAD/MAC, COBS framing, TRNG
+│   ├── calib/             # Factory calibration block parsing & curves
+│   ├── util/              # Divisionless Cortex-M0+ math, DSP, formatting, path helpers
+│   ├── hal-traits/        # Hardware-agnostic trait contracts
+│   ├── board/uv-k1/       # Board support package (pinmux, clocks, UID)
+│   ├── mcu/py32f071/      # PY32F071 PAC & HAL
+│   └── firmware/          # Resident OS orchestrator, compositor, KRX loader/runtime, RigWire host
+├── sdk/                   # Package author SDKs
+│   ├── rust/              # kern-sdk (Rust #![no_std] PIC package SDK)
+│   ├── c/                 # krx.h & generated krx_ops.h (C N1/P0/P1 package SDK)
+│   └── krx.ld             # Position-independent ARM Thumb-1 linker script
+├── packages/              # External installable userland packages
+│   ├── core/              # vfo.krx (Radio Transceiver), settings.krx (System Settings)
+│   ├── sys/               # calib.mod, dfu.mod, recovery.mod, multiboot.mod, panic.mod, sysinfo.krx
+│   ├── apps/              # beacon.krx, bench.krx
+│   └── examples/          # hello_rust, hello_c, leaf (P0), paged (P1) starter templates
+└── tools/                 # RigWire CLI, package builder, provisioner, and bloat/lint analyzers
+```
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-- Rust nightly toolchain (configured automatically via `rust-toolchain.toml`, with `thumbv6m-none-eabi` target and `rust-src`)
-- Python 3.11+
-- `arm-none-eabi-gcc` & `binutils-arm-none-eabi` (for building C KRX packages and extracting binaries)
+- Rust nightly (`rust-toolchain.toml` selects the pinned toolchain with `thumbv6m-none-eabi` + `rust-src`)
+- `arm-none-eabi-gcc` / `binutils` (for linking `.krx` packages and firmware ELF/bin)
+- Python 3.11+ (`pyserial` for flashing and RigWire)
 
-### Common Commands
-
-The `./kern` script wraps the workspace build, test, package, and provisioning tools:
-
+### Build, Test & Flash
 ```bash
-# Type and syntax check (0 warnings policy)
-./kern check
-
-# Verify Rust ABI and C SDK header (packages/sdk/krx_ops.h) match
+# Verify ABI headers, type-check with zero warnings, and run all workspace unit tests
 ./kern abi --check
-
-# Run host unit tests across the workspace
+./kern check --deny-warnings
 ./kern test
 
-# Build and verify all KRX C packages under packages/
-./kern pkg
-
-# Compile release firmware and check Flash/SRAM budgets
+# Build release firmware (.bin, packed bootloader image, .kfw, and QEMU .elf)
 ./kern build
-./kern build --target UV-K10Pro
-
-# Print detailed Flash/SRAM section breakdown or symbol bloat report
 ./kern size
-./kern bloat report
 
-# Pack, inspect, or verify a .kfw release container
-./kern kfw pack target/kern.kfw --version 0.1.0 --fw uv-k1:target/firmware.bin --mod packages/dfu/dfu.mod
-./kern kfw verify target/kern.kfw
+# Build all external userland packages (.krx / .mod)
+./kern pkg all
 
-# Flash firmware (.kfw or .bin), mount KernFS, launch graphical radio dock, or sideload via RigWire
-./kern flash --port /dev/ttyACM0
-./kern mount --port /dev/ttyACM0 --auto-mount
-./kern dock --port /dev/ttyACM0
-./kern wire sideload packages/dfu/dfu.mod --force
+# Flash firmware over serial bootloader
+./kern flash
+```
 
-# Launch external QEMU hardware emulator Web UI (requires KERN_EMU_DIR / KERN_QEMU_BIN)
-./kern emu
+### Provisioning Packages Over RigWire
+Kern does not bloat MCU Flash by embedding apps into ROM. Provision core apps and system modules directly onto the radio's SPI Flash over USB-C / UART:
+
+```bash
+# Provision core apps (vfo.krx + settings.krx)
+python3 tools/provision.py --port /dev/ttyACM0 --bundle core
+
+# Provision core apps + system modules (calib, dfu, recovery, panic, sysinfo)
+python3 tools/provision.py --port /dev/ttyACM0 --bundle sys
+
+# Or sideload a single package directly via RigWire
+./kern wire sideload packages/core/settings/settings.krx --force
+./kern wire sideload packages/sys/calib/calib.mod --force
+```
+
+### Authoring Your Own Package
+Start from any template in [`packages/examples/`](packages/examples/README.md) (`hello_rust`, `hello_c`, `leaf`, or `paged`):
+
+```bash
+./kern pkg examples/hello_rust
+./kern wire sideload packages/examples/hello_rust/hello_rust.krx --force
 ```
 
 ---
 
-## Memory Budgets
+## Contributing & Community
 
-| Region | UV-K1 / UV-K5 v3 | UV-K10Pro | Notes |
-|:---|:---|:---|:---|
-| **Flash** | 120,832 B (118 KB) | 122,880 B (120 KB) | Application budget above 10 KB stock bootloader |
-| **SRAM** | 16,384 B (16 KB) | 16,384 B (16 KB) | Static arena allocation; `.ramfunc` hot paths |
-| **Heap** | 0 B | 0 B | Enforced at compile time (`no_std`, no `alloc`) |
+Kern is part of the **[OpenTaiko](https://github.com/qshosfw)** open-source radio firmware ecosystem.
+- Read [CONTRIBUTING.md](CONTRIBUTING.md), [SAFETY.md](SAFETY.md), and [SECURITY.md](SECURITY.md) before opening a PR.
+- Follow the zero-heap, zero-warning (`./kern check --deny-warnings`), and clean architectural guidelines in [AGENTS.md](AGENTS.md).
 
----
+### Support OpenTaiko
+If Kern or OpenTaiko tools are useful to you and you want to support ongoing hardware research, reverse-engineering, and open-source amateur radio firmware development:
 
-## Safety & Legal Notices
-
-- **Calibration Backup**: Back up your radio's factory calibration data before flashing any custom firmware. See [`SAFETY.md`](SAFETY.md) for memory, RF, and recovery details.
-- **Amateur Radio Licensing**: Transmitting on amateur frequencies requires an appropriate amateur radio license and compliance with local spectrum regulations (FCC, CE, IARU).
-
----
-
-## Prior Art
-
-Kern draws hardware knowledge and inspiration from the Quansheng open-source firmware community:
-- [DualTachyon](https://github.com/DualTachyon) — Original open-source UV-K5 firmware.
-- [Egzumer](https://github.com/egzumer) — Spectrum analyzer and custom feature integration.
-- [Armel (F4HWN)](https://github.com/armel) & [@muzkr](https://github.com/muzkr) — Puya PY32F071 port and bootloader tooling.
-- [DeltaFW](https://github.com/qshosfw/deltafw-k1-k5v3) — UI layout and ergonomics reference.
-- [GoguFW](https://github.com/Gogu-Qs/GOGUFW-UV-K1-Messenger) — Radio messaging and range-check concepts.
+**[Support OpenTaiko on Ko-fi — https://ko-fi.com/qshosfw](https://ko-fi.com/qshosfw)**
 
 ---
 
 ## License
 
-Licensed under the **GNU General Public License v3.0 or later** ([`LICENSE`](LICENSE)), with the **KRX Syscall Exception** ([`COPYING`](COPYING)) permitting standalone third-party `.krx` applications that interact solely through the published KRX-ABI.
+Licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE) and [COPYING](COPYING) for details.

@@ -11,6 +11,7 @@ Installable applications and system modules built against the [`sdk/`](../sdk/) 
 - [`core/settings/`](core/settings/krx.toml) (`settings.krx`, Rust `N1` PIC) — Modular, schema-driven System Settings, Installed Apps manager, and Live Device Info replacing resident ROM settings.
 
 ### `packages/sys/` — System & Maintenance Modules
+- [`sys/calib/`](sys/calib/krx.toml) (`calib.mod`, Rust `N1` PIC) — Factory RF & battery calibration inspector (`/sys/calib.dat`), automatically listed in `Settings → System → Modules`.
 - [`sys/dfu/`](sys/dfu/README.md) (`dfu.mod`, `P0` Structured Paged) — Visual USB-C / UART DFU updater, hardware quiescing, and SRAM hook.
 - [`sys/recovery/`](sys/recovery/README.md) (`recovery.mod`, `P0` Structured Paged) — On-device recovery shell and SRAM flasher.
 - [`sys/multiboot/`](sys/multiboot/README.md) (`multiboot.mod`, `P0` Structured Paged) — Multi-slot bootloader manager.
