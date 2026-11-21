@@ -5,7 +5,7 @@ use crate::services::primitives::{color_from_u8, font_from_u8};
 use kernel::proc::abi::{KrxTextReq, KrxWidget};
 
 pub fn system_icon_8(icon_id: u8) -> Option<&'static [u8; 8]> {
-    gfx::icons::SYSTEM_ICONS_8.get(icon_id.wrapping_sub(::abi::icon::SYSTEM_BASE) as usize)
+    gfx::icons::system_icon(icon_id)
 }
 
 #[inline(never)]

@@ -50,6 +50,29 @@ impl FileType {
         }
     }
 
+    /// Return the `abi::icon` glyph identifier that represents this file type
+    /// in file browsers and pickers (`SYSTEM_ICONS_8[id - SYSTEM_BASE]`).
+    pub const fn icon_id(&self) -> u8 {
+        use ::abi::icon;
+        match self {
+            FileType::GenericFile | FileType::RawData => icon::FILE_BIN,
+            FileType::Directory => icon::FILE_FOLDER,
+            FileType::Channels => icon::CH,
+            FileType::Contacts => icon::FILE_CONTACTS,
+            FileType::VfoSnapshot => icon::VFO,
+            FileType::BandPlan => icon::FILE_BANDPLAN,
+            FileType::FmBroadcast => icon::FILE_FM,
+            FileType::Settings => icon::GEAR,
+            FileType::AppExecutable => icon::APPS,
+            FileType::Bitmap | FileType::RleBitmap => icon::FILE_IMAGE,
+            FileType::Log => icon::FILE_LOG,
+            FileType::Zones => icon::FILE_ZONES,
+            FileType::ScannerHits => icon::FILE_HITS,
+            FileType::ToneSequence => icon::FILE_TONES,
+            FileType::Calibration => icon::FILE_CALIB,
+        }
+    }
+
     /// Classify a file type based on its filename or path.
     pub fn from_filename(name: &str) -> Self {
         if name.ends_with(".ch") {
@@ -263,6 +286,37 @@ impl TableFileHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_file_type_maps_to_a_distinct_system_glyph() {
+        let all = [
+            FileType::GenericFile,
+            FileType::Directory,
+            FileType::Channels,
+            FileType::Contacts,
+            FileType::VfoSnapshot,
+            FileType::BandPlan,
+            FileType::FmBroadcast,
+            FileType::Settings,
+            FileType::AppExecutable,
+            FileType::Bitmap,
+            FileType::RleBitmap,
+            FileType::Log,
+            FileType::RawData,
+            FileType::Zones,
+            FileType::ScannerHits,
+            FileType::ToneSequence,
+            FileType::Calibration,
+        ];
+        for ft in all {
+            let id = ft.icon_id();
+            assert!(id >= ::abi::icon::SYSTEM_BASE);
+            assert!(((id - ::abi::icon::SYSTEM_BASE) as usize) < ::abi::icon::SYSTEM_COUNT);
+        }
+        assert_eq!(FileType::AppExecutable.icon_id(), ::abi::icon::APPS);
+        assert_ne!(FileType::Contacts.icon_id(), FileType::Zones.icon_id());
+        assert_eq!(FileType::Bitmap.icon_id(), FileType::RleBitmap.icon_id());
+    }
 
     #[test]
     fn table_header_roundtrip_and_strict_stride() {

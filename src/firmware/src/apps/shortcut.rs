@@ -109,7 +109,8 @@ pub const TARGET_SLEEP: u16 = 5;
 
 pub struct BuiltinTarget {
     pub cmd: Shortcut,
-    pub icon_idx: u8,
+    /// `abi::icon` system glyph shown beside the target.
+    pub icon_id: u8,
 }
 
 utils::static_bytes!(
@@ -120,23 +121,23 @@ utils::static_bytes!(
 pub static BUILTIN_TARGETS: [BuiltinTarget; 5] = [
     BuiltinTarget {
         cmd: Shortcut::Flashlight,
-        icon_idx: 6,
+        icon_id: ::abi::icon::APP_TORCH,
     },
     BuiltinTarget {
         cmd: Shortcut::LaunchApp(APP_ID_SETTINGS as u8),
-        icon_idx: 4,
+        icon_id: ::abi::icon::APP_SETTINGS,
     },
     BuiltinTarget {
         cmd: Shortcut::LockKeypad,
-        icon_idx: 25,
+        icon_id: ::abi::icon::SECURITY,
     },
     BuiltinTarget {
         cmd: Shortcut::LaunchApp(APP_ID_LAUNCHER as u8),
-        icon_idx: 28,
+        icon_id: ::abi::icon::HOME,
     },
     BuiltinTarget {
         cmd: Shortcut::Sleep,
-        icon_idx: 22,
+        icon_id: ::abi::icon::SLEEP,
     },
 ];
 
@@ -192,10 +193,8 @@ pub enum ResolvedShortcut<'a> {
 }
 
 #[inline(always)]
-fn builtin_icon(icon_idx: u8) -> &'static [u8; 8] {
-    gfx::icons::SYSTEM_ICONS_8
-        .get(icon_idx as usize)
-        .unwrap_or(gfx::icons::ICON_FOLDER)
+fn builtin_icon(icon_id: u8) -> &'static [u8; 8] {
+    gfx::icons::system_icon(icon_id).unwrap_or(gfx::icons::ICON_FOLDER)
 }
 
 #[inline(never)]
@@ -260,7 +259,7 @@ pub fn describe_into(
             let i = (id as usize).wrapping_sub(1);
             if let Some(b) = BUILTIN_TARGETS.get(i) {
                 out.push_str(utils::format::nth_cstr(&BUILTIN_LABELS, i as u8));
-                return builtin_icon(b.icon_idx);
+                return builtin_icon(b.icon_id);
             }
         } else if let Some((e, _, suffix)) = find_dynamic(id, cat) {
             out.push_str(e.title.as_str());
@@ -389,7 +388,7 @@ pub fn build_picker_sheet(
     for (i, b) in BUILTIN_TARGETS.iter().enumerate() {
         push_entry(
             (i + 1) as u16,
-            builtin_icon(b.icon_idx),
+            builtin_icon(b.icon_id),
             utils::format::nth_cstr(&BUILTIN_LABELS, i as u8),
         );
     }
@@ -436,6 +435,16 @@ mod tests {
     use super::*;
     use crate::apps::launcher::catalog::{CatalogAction, PackageCatalogEntry};
     use kernel::runtime::KrxClass;
+
+    #[test]
+    fn sleep_shortcut_uses_moon_glyph() {
+        let sleep = &BUILTIN_TARGETS[(TARGET_SLEEP - 1) as usize];
+        assert!(matches!(sleep.cmd, Shortcut::Sleep));
+        assert_eq!(
+            builtin_icon(sleep.icon_id).as_ptr(),
+            gfx::icons::ICON_MOON.as_ptr()
+        );
+    }
 
     #[test]
     fn shortcut_ipc_roundtrip() {
@@ -500,7 +509,7 @@ mod tests {
 
         let (desc, icon) = describe(id_act, &cat);
         assert_eq!(desc.as_str(), "Tasks:Sched");
-        assert_eq!(icon.as_ptr(), gfx::icons::SYSTEM_ICONS_8[29 - 22].as_ptr());
+        assert_eq!(icon.as_ptr(), gfx::icons::ICON_APP_DIAG.as_ptr());
 
         let sheet = build_picker_sheet("S1", id_act, &cat);
         assert_eq!(sheet.selected, sheet.options.len() - 1);

@@ -787,6 +787,18 @@ mod tests {
             super::super::apps::package_icons("DFU Update", 49).0,
             gfx::icons::ICON_UPLOAD
         );
+        assert_eq!(
+            super::super::apps::package_icons("Beacon", 1).1,
+            gfx::icons::ICON_16_BEACON
+        );
+        assert_eq!(
+            super::super::apps::package_icons("Recovery", 48).1,
+            gfx::icons::ICON_16_SYSTEM
+        );
+        assert_eq!(
+            super::super::apps::package_icons("Notes", 1).0,
+            gfx::icons::ICON_APPS
+        );
     }
 
     #[test]
