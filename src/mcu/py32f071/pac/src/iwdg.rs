@@ -10,3 +10,8 @@ pub const IWDG_SR: *mut u32 = (IWDG_BASE + 0x0C) as *mut u32;
 pub const KR_KEY_RELOAD: u32 = 0xAAAA;
 pub const KR_KEY_ENABLE: u32 = 0xCCCC;
 pub const KR_KEY_UNLOCK: u32 = 0x5555;
+
+/// Prescaler value update busy flag (`IWDG_SR` bit 0)
+pub const SR_PVU: u32 = 1 << 0;
+/// Counter reload value update busy flag (`IWDG_SR` bit 1)
+pub const SR_RVU: u32 = 1 << 1;

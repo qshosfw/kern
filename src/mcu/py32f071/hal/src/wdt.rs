@@ -10,7 +10,7 @@ pub enum ResetCause {
     SoftwareReset,
     IndependentWatchdog,
     WindowWatchdog,
-    LowPower,
+    OptionByteLoader,
     Unknown,
 }
 
@@ -18,20 +18,34 @@ pub enum ResetCause {
 pub struct Watchdog;
 
 impl Watchdog {
-    /// Start the Independent Watchdog timer with specified timeout in milliseconds (e.g. 2000ms)
+    #[inline(always)]
+    fn wait_sr_ready() {
+        unsafe {
+            let mut timeout = 50_000u32;
+            while (IWDG_SR.read_volatile() & (SR_PVU | SR_RVU)) != 0 && timeout > 0 {
+                timeout -= 1;
+            }
+        }
+    }
+
+    /// Start the Independent Watchdog timer with specified timeout in milliseconds (e.g. 2000ms).
+    /// Ensures LSI is stabilized and synchronizes `IWDG_SR` (`PVU`/`RVU`) around `PR`/`RLR` writes.
     pub fn start(timeout_ms: u32) {
+        crate::rcc::enable_lsi();
         unsafe {
             // Enable IWDG
             IWDG_KR.write_volatile(KR_KEY_ENABLE);
-            // Unlock registers
+            // Unlock prescaler/reload registers
             IWDG_KR.write_volatile(KR_KEY_UNLOCK);
+            Self::wait_sr_ready();
 
-            // Prescaler 64 (~500Hz clock from LSI 32kHz)
+            // Prescaler 64 (~512 Hz clock from LSI 32.768 kHz)
             IWDG_PR.write_volatile(0x04);
 
             // Calculate reload count (timeout_ms * 32 / 64 == timeout_ms >> 1)
-            let reload = (timeout_ms >> 1).min(0xFFF);
+            let reload = (timeout_ms >> 1).clamp(1, 0xFFF);
             IWDG_RLR.write_volatile(reload);
+            Self::wait_sr_ready();
 
             // Refresh counter
             IWDG_KR.write_volatile(KR_KEY_RELOAD);
@@ -67,7 +81,7 @@ impl Watchdog {
         } else if (csr & pac::rcc::CSR_PINRSTF) != 0 {
             ResetCause::PinReset
         } else if (csr & pac::rcc::CSR_OBLRSTF) != 0 {
-            ResetCause::LowPower
+            ResetCause::OptionByteLoader
         } else {
             ResetCause::Unknown
         }
