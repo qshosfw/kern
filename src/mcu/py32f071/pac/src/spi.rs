@@ -85,5 +85,7 @@ pub const CR2_CLRTXFIFO: u32 = 1 << 4;
 pub const SR_RXNE: u32 = 1 << 0;
 /// Transmit buffer empty
 pub const SR_TXE: u32 = 1 << 1;
+/// Overrun flag
+pub const SR_OVR: u32 = 1 << 6;
 /// Busy flag
 pub const SR_BSY: u32 = 1 << 7;

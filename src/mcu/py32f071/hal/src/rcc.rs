@@ -54,17 +54,22 @@ pub fn enable_usart3() {
     }
 }
 
-/// Enable the ADC1 peripheral clock (APB2) and set PCLK/4 prescaler.
+/// Enable the ADC1 peripheral clock (APB2) and set a clock-safe prescaler (`ADCCLK <= 12 MHz`).
 pub fn enable_adc1() {
+    resync_adc_prescaler(sysclk_hz());
     unsafe {
-        // Set ADC clock source to PCLK/4 in RCC_CR (bits 22:21 = 0b01)
-        let cr = rcc::RCC_CR.read_volatile();
-        let new_cr = (cr & !(0b11 << 21)) | (1 << 21);
-        rcc::RCC_CR.write_volatile(new_cr);
-
         // Enable ADC1 peripheral clock on APB2
         let val = rcc::RCC_APB2ENR.read_volatile();
         rcc::RCC_APB2ENR.write_volatile(val | rcc::APB2ENR_ADC1);
+    }
+}
+
+/// Keep `ADCCLK <= 12 MHz` across all system clock speeds (`PCLK/4` for <=48 MHz, `PCLK/6` at 72 MHz).
+pub fn resync_adc_prescaler(sysclk_hz: u32) {
+    unsafe {
+        let div_bits = if sysclk_hz > 48_000_000 { 0b10 } else { 0b01 };
+        let cr = rcc::RCC_CR.read_volatile();
+        rcc::RCC_CR.write_volatile((cr & !(0b11 << 21)) | (div_bits << 21));
     }
 }
 
@@ -332,6 +337,7 @@ unsafe fn set_hsi_fs(is_24mhz: bool) {
         while (rcc::RCC_CR.read_volatile() & rcc::CR_HSIRDY) == 0 {
             core::hint::spin_loop();
         }
+        crate::flash::InternalFlash::sync_timing_for_hsi(is_24mhz);
     }
 }
 
@@ -352,27 +358,30 @@ pub fn set_sysclk_index(idx: u8) {
     } else {
         pac::flash::ACR_LATENCY_1WS
     };
-    set_ctc_usb_sof(false);
-    unsafe {
-        switch_to_hsi_disable_pll();
-        set_hsi_fs(hsi_24);
-        if idx >= 2 {
-            let mul = if idx >= 3 {
-                rcc::PLLCFGR_PLLMUL_3X
+    cortex_m::interrupt::free(|_| {
+        set_ctc_usb_sof(false);
+        unsafe {
+            switch_to_hsi_disable_pll();
+            set_hsi_fs(hsi_24);
+            if idx >= 2 {
+                let mul = if idx >= 3 {
+                    rcc::PLLCFGR_PLLMUL_3X
+                } else {
+                    rcc::PLLCFGR_PLLMUL_2X
+                };
+                enable_pll_and_switch(mul, wait_states);
             } else {
-                rcc::PLLCFGR_PLLMUL_2X
-            };
-            enable_pll_and_switch(mul, wait_states);
-        } else {
-            let acr = pac::flash::FLASH_ACR.read_volatile();
-            pac::flash::FLASH_ACR
-                .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | wait_states);
+                let acr = pac::flash::FLASH_ACR.read_volatile();
+                pac::flash::FLASH_ACR
+                    .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | wait_states);
+            }
+            if idx == 3 && (rcc::RCC_APB1ENR.read_volatile() & rcc::APB1ENR_USBD) != 0 {
+                set_ctc_usb_sof(true);
+            }
         }
-        if idx == 3 && (rcc::RCC_APB1ENR.read_volatile() & rcc::APB1ENR_USBD) != 0 {
-            set_ctc_usb_sof(true);
-        }
-    }
+    });
     let hz = sysclk_hz();
+    resync_adc_prescaler(hz);
     crate::delay::update_systick_freq(hz);
     crate::time::update_tim2_freq(hz);
     crate::spi::resync_clock(hz);

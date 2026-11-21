@@ -82,7 +82,12 @@ pub fn derive_master_key(
     let mut current_pct: u8 = 0;
 
     let initial_clk = py32_hal::rcc::sysclk_hz();
-    if initial_clk < 72_000_000 {
+    #[cfg(feature = "usb")]
+    let usb_pinned = drivers::usb::is_active_usb_connected();
+    #[cfg(not(feature = "usb"))]
+    let usb_pinned = false;
+    let boosted = !usb_pinned && initial_clk < 72_000_000;
+    if boosted {
         py32_hal::rcc::set_sysclk_72mhz();
     }
 
@@ -107,7 +112,7 @@ pub fn derive_master_key(
     }
 
     let keep_72 = crate::master_config_ref().system.cpu_clock == 4;
-    if initial_clk < 72_000_000 && !keep_72 {
+    if boosted && !keep_72 {
         py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
     }
 

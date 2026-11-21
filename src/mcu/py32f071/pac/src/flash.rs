@@ -23,6 +23,21 @@ pub const FLASH_BORCR: *const u32 = (FLASH_BASE + 0x24) as *const u32;
 /// Flash Option Write Protection register (0x2C)
 pub const FLASH_WRPR: *const u32 = (FLASH_BASE + 0x2C) as *const u32;
 
+/// Flash erase/program timing registers (0x100..=0x120, writable when `FLASH_CR.LOCK == 0`).
+pub const FLASH_TS0: *mut u32 = (FLASH_BASE + 0x100) as *mut u32;
+pub const FLASH_TS1: *mut u32 = (FLASH_BASE + 0x104) as *mut u32;
+pub const FLASH_TS2P: *mut u32 = (FLASH_BASE + 0x108) as *mut u32;
+pub const FLASH_TPS3: *mut u32 = (FLASH_BASE + 0x10C) as *mut u32;
+pub const FLASH_TS3: *mut u32 = (FLASH_BASE + 0x110) as *mut u32;
+pub const FLASH_PERTPE: *mut u32 = (FLASH_BASE + 0x114) as *mut u32;
+pub const FLASH_SMERTPE: *mut u32 = (FLASH_BASE + 0x118) as *mut u32;
+pub const FLASH_PRGTPE: *mut u32 = (FLASH_BASE + 0x11C) as *mut u32;
+pub const FLASH_PRETPE: *mut u32 = (FLASH_BASE + 0x120) as *mut u32;
+
+/// Factory OTP Flash timing tables indexed by HSI frequency (`16 MHz` and `24 MHz`).
+pub const OTP_FLASH_TIMING_16M: u32 = 0x1FFF_3288;
+pub const OTP_FLASH_TIMING_24M: u32 = 0x1FFF_32D8;
+
 /// Option Bytes base address in System Memory
 pub const OB_BASE: u32 = 0x1FFF_3100;
 

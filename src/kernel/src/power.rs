@@ -133,12 +133,14 @@ impl ClockGovernor {
         self.reasons &= !reason;
     }
 
-    /// Resolve effective MCU clock in MHz respecting USB 48 MHz PLL floor and boost hints.
+    /// Resolve effective MCU clock in MHz respecting USB exact-48 MHz PLL lock and boost hints.
     pub const fn target_mhz(&self) -> u8 {
+        // PY32F071 USBD Full-Speed requires exact 48 MHz (HSI 16 MHz * PLL 3X, CTC SOF-locked).
+        if (self.reasons & clock_reason::USB_ACTIVE) != 0 {
+            return 48;
+        }
         let mut target = self.preferred_mhz;
-        // USB FS peripheral requires >= 48 MHz system clock for valid SOF framing.
-        if (self.reasons & (clock_reason::USB_ACTIVE | clock_reason::WIRE_LINK)) != 0 && target < 48
-        {
+        if (self.reasons & clock_reason::WIRE_LINK) != 0 && target < 48 {
             target = 48;
         }
         if (self.reasons & (clock_reason::SPECTRUM | clock_reason::USER_BOOST)) != 0
@@ -158,7 +160,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clock_governor_enforces_usb_floor_and_overclock_gate() {
+    fn clock_governor_enforces_usb_exact_48mhz_and_overclock_gate() {
         let mut gov = ClockGovernor::new(16, false);
         assert_eq!(gov.target_mhz(), 16);
         gov.acquire(clock_reason::USB_ACTIVE);
@@ -166,10 +168,11 @@ mod tests {
         gov.acquire(clock_reason::SPECTRUM);
         assert_eq!(gov.target_mhz(), 48); // overclock disabled
         gov.allow_overclock = true;
-        assert_eq!(gov.target_mhz(), 72);
-        gov.release(clock_reason::SPECTRUM);
+        // USB_ACTIVE must clamp ceiling to exact 48 MHz even when overclock is enabled
         assert_eq!(gov.target_mhz(), 48);
         gov.release(clock_reason::USB_ACTIVE);
+        assert_eq!(gov.target_mhz(), 72);
+        gov.release(clock_reason::SPECTRUM);
         assert_eq!(gov.target_mhz(), 16);
     }
 

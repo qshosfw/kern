@@ -210,8 +210,14 @@ pub fn run_boot_unlock_prompt(
 
     let stealth = cfg.stealth;
 
-    // Ensure high performance 72 MHz clock is active for unlock prompt, stealth mode and KDF
-    py32_hal::rcc::set_sysclk_72mhz();
+    // Boost to 72 MHz for unlock prompt and KDF unless USB FS requires exact 48 MHz lock.
+    #[cfg(feature = "usb")]
+    let usb_pinned = hw.usb.is_connected();
+    #[cfg(not(feature = "usb"))]
+    let usb_pinned = false;
+    if !usb_pinned {
+        py32_hal::rcc::set_sysclk_72mhz();
+    }
 
     // 1. Initial Lockout check if device rebooted while locked out
     handle_lockout_penalty(

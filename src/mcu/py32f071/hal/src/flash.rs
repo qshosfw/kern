@@ -158,6 +158,48 @@ impl InternalFlash {
         }
     }
 
+    /// Synchronize PY32F071 Flash charge-pump timing registers (`TS0..PRETPE`) from factory OTP
+    /// to match the active HSI base clock (`16 MHz` vs `24 MHz`).
+    #[inline(never)]
+    pub fn sync_timing_for_hsi(is_24mhz: bool) {
+        #[cfg(all(not(test), target_arch = "arm"))]
+        unsafe {
+            let base = if is_24mhz {
+                OTP_FLASH_TIMING_24M
+            } else {
+                OTP_FLASH_TIMING_16M
+            };
+            let w0 = (base as *const u32).read_volatile();
+            if w0 == 0xFFFF_FFFF || w0 == 0 {
+                return;
+            }
+            let w1 = ((base + 0x08) as *const u32).read_volatile();
+            let w2 = ((base + 0x10) as *const u32).read_volatile();
+            let w3 = ((base + 0x18) as *const u32).read_volatile();
+            let w4 = ((base + 0x20) as *const u32).read_volatile();
+
+            let was_locked = (FLASH_CR.read_volatile() & CR_LOCK) != 0;
+            if was_locked {
+                FLASH_KEYR.write_volatile(KEY1);
+                FLASH_KEYR.write_volatile(KEY2);
+            }
+            FLASH_TS0.write_volatile(w0 & 0xFF);
+            FLASH_TS1.write_volatile((w0 >> 16) & 0x1FF);
+            FLASH_TS3.write_volatile((w0 >> 8) & 0xFF);
+            FLASH_TS2P.write_volatile(w1 & 0xFF);
+            FLASH_TPS3.write_volatile((w1 >> 16) & 0x7FF);
+            FLASH_PERTPE.write_volatile(w2 & 0x1_FFFF);
+            FLASH_SMERTPE.write_volatile(w3 & 0x1_FFFF);
+            FLASH_PRGTPE.write_volatile(w4 & 0xFFFF);
+            FLASH_PRETPE.write_volatile((w4 >> 16) & 0x3FFF);
+            if was_locked {
+                FLASH_CR.write_volatile(FLASH_CR.read_volatile() | CR_LOCK);
+            }
+        }
+        #[cfg(not(all(not(test), target_arch = "arm")))]
+        let _ = is_24mhz;
+    }
+
     /// Checks if a 256-byte page at `addr` contains any non-0xFF bytes requiring an erase.
     pub fn page_needs_erase(addr: u32) -> bool {
         let ptr = (addr & !0xFF) as *const u32;

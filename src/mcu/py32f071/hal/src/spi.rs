@@ -50,19 +50,22 @@ pub fn init_spi2() {
 
     let sck = Pin::new(gpio::GPIOA_BASE, 0);
     sck.set_pull(pac::gpio::PULL_UP);
-    sck.configure_af(8, pac::gpio::SPEED_HIGH);
+    sck.configure_af(8, pac::gpio::SPEED_MEDIUM);
 
     let mosi = Pin::new(gpio::GPIOA_BASE, 1);
     mosi.set_pull(pac::gpio::PULL_NONE);
-    mosi.configure_af(9, pac::gpio::SPEED_HIGH);
+    mosi.configure_af(9, pac::gpio::SPEED_MEDIUM);
 
     let miso = Pin::new(gpio::GPIOA_BASE, 2);
     miso.set_pull(pac::gpio::PULL_NONE);
-    miso.configure_af(9, pac::gpio::SPEED_HIGH);
+    miso.configure_af(9, pac::gpio::SPEED_MEDIUM);
 
-    // BR=/2 = 24MHz
-    set_spi_br(SPI2, 0b000);
+    // BR=/2 = 24MHz (or /4 = 18MHz when PCLK > 48MHz)
+    let br = if rcc::sysclk_hz() > 48_000_000 { 0b001 } else { 0b000 };
+    set_spi_br(SPI2, br);
 }
+
+static SPI1_BASE_BR: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0b001);
 
 /// Dynamic baud rate prescalers for SPI1 (LCD interface).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,11 +102,29 @@ fn set_spi_br(spi_inst: pac::spi::SpiInstance, br: u32) {
 
 /// Dynamically adjust SPI1 baudrate prescaler without resetting peripheral state.
 pub fn set_spi1_speed(speed: Spi1Speed) {
-    set_spi_br(SPI1, speed as u32);
+    let base = speed as u8;
+    SPI1_BASE_BR.store(base, core::sync::atomic::Ordering::Relaxed);
+    let br = if rcc::sysclk_hz() > 48_000_000 {
+        (base + 1).min(0b111)
+    } else {
+        base
+    };
+    set_spi_br(SPI1, br as u32);
 }
 
-/// Resynchronize SPI2 (Flash) prescaler after APB clock changes so SCK stays <= 24 MHz.
+/// Resynchronize SPI1 (LCD) and SPI2 (Flash) prescalers after APB clock changes
+/// so LCD SCK stays <= 12 MHz and Flash SCK stays <= 24 MHz.
 pub fn resync_clock(pclk_hz: u32) {
+    let apb2 = unsafe { pac::rcc::RCC_APB2ENR.read_volatile() };
+    if (apb2 & pac::rcc::APB2ENR_SPI1) != 0 {
+        let base = SPI1_BASE_BR.load(core::sync::atomic::Ordering::Relaxed);
+        let br = if pclk_hz > 48_000_000 {
+            (base + 1).min(0b111)
+        } else {
+            base
+        };
+        set_spi_br(SPI1, br as u32);
+    }
     let apb1 = unsafe { pac::rcc::RCC_APB1ENR.read_volatile() };
     if (apb1 & pac::rcc::APB1ENR_SPI2) != 0 {
         let br = if pclk_hz > 48_000_000 { 0b001 } else { 0b000 };
@@ -120,6 +141,13 @@ pub enum SpiError {
 #[inline(never)]
 pub fn transfer_byte_instance(spi: pac::spi::SpiInstance, data: u8) -> Result<u8, SpiError> {
     unsafe {
+        // Drain any stale RX byte / clear OVR so a prior timeout cannot shift subsequent reads.
+        let sr = spi.sr().read_volatile();
+        if (sr & (spi::SR_RXNE | spi::SR_OVR)) != 0 {
+            let _ = spi.dr_8().read_volatile();
+            let _ = spi.sr().read_volatile();
+        }
+
         let mut timeout = 100_000;
         while spi.sr().read_volatile() & spi::SR_TXE == 0 {
             timeout -= 1;
