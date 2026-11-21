@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Kern Dock
+GenericName=Amateur Radio Hardware Companion
+Comment=Live LCD mirror, keyboard bridge, KernFS drive, firmware flasher, terminal and plugin dock for Kern OS radios
+Exec={exec_cmd}
+Icon=org.kernos.Dock
+Terminal=false
+Categories=Utility;HamRadio;Development;HardwareSettings;
+Keywords=radio;quansheng;kern;uv-k1;uv-k5;uv-k6;rigwire;ham;transceiver;
+StartupWMClass=org.kernos.Dock
+StartupNotify=true
+Actions=demo;mini;
+
+[Desktop Action demo]
+Name=Launch in Demo Mode
+Exec={exec_cmd} --demo
+
+[Desktop Action mini]
+Name=Launch in Compact Mini-Dock
+Exec={exec_cmd} --mini

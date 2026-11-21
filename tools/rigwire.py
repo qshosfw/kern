@@ -90,6 +90,7 @@ DOMAIN_STORAGE = 0x06
 FACET_SYS_IDENTITY = 0x0001
 FACET_SYS_METRICS = 0x0002
 FACET_SYS_CALIBRATION = 0x0003
+FACET_SYS_AUDIO = 0x0004
 
 ACTION_SYS_REBOOT = 0x0001
 ACTION_SYS_FLASHLIGHT = 0x0002
@@ -125,6 +126,8 @@ INPUT_INSTANCE_KEYPAD = 0x00
 
 FACET_INPUT_KEY = 0x0001
 FACET_INPUT_LOCK = 0x0002
+FACET_INPUT_TEXT = 0x0003
+FACET_INPUT_ENCODER = 0x0004
 
 ACTION_INPUT_LOCK_TOGGLE = 0x0001
 
@@ -517,8 +520,8 @@ def validate_krx_package(data: bytes) -> dict:
             info["exec_payload_size"] = p_sz
             if profile_raw in KRX_PROFILES:
                 info["profile_name"] = KRX_PROFILES[profile_raw]
-            if app_class == 0 and p_sz > 4096:
-                raise ValueError(f"Native resident payload ({p_sz}B) exceeds 4096B arena")
+            if app_class == 0 and p_sz > 8192:
+                raise ValueError(f"Native resident payload ({p_sz}B) exceeds 8192B arena")
             if len(payload) > 0 and app_class in (0, 1) and entry_pt >= len(payload):
                 raise ValueError(f"Entry point 0x{entry_pt:x} outside payload ({len(payload)}B)")
         elif sec_id == 0x0005:  # BlockMap
@@ -1087,6 +1090,15 @@ class RigWireClient:
         res = self.handle_invoke(DOMAIN_SYSTEM, 0, FACET_SYS_METRICS, ACTION_SYS_HEADLESS, bytes([state]))
         return bool(res[0]) if res else (state == 1)
 
+    def drain_audio_notes(self) -> list[tuple[int, int]]:
+        """Drain queued headless system audio/beep notes as [(freq_hz, duration_ms), ...]."""
+        raw = self.handle_get(DOMAIN_SYSTEM, 0, FACET_SYS_AUDIO)
+        notes: list[tuple[int, int]] = []
+        for off in range(0, len(raw) - 3, 4):
+            freq_hz, dur_ms = struct.unpack_from("<HH", raw, off)
+            notes.append((freq_hz, dur_ms))
+        return notes
+
     def set_keypad_lock(self, locked: bool):
         self.handle_set(DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, FACET_INPUT_LOCK, bytes([1 if locked else 0]))
 
@@ -1097,6 +1109,18 @@ class RigWireClient:
         """Inject keypad event (key_code 0-19, state 0=pressed, 1=held, 2=released)."""
         payload = bytes([key_code, key_state])
         self.handle_set(DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, FACET_INPUT_KEY, payload)
+
+    def inject_text(self, text: str):
+        """Inject direct UTF-8 characters / control keys (BS, Enter, Esc) via FACET_INPUT_TEXT."""
+        raw = text.encode("utf-8")
+        for i in range(0, len(raw), 32):
+            self.handle_set(DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, FACET_INPUT_TEXT, raw[i : i + 32])
+
+    def inject_encoder(self, delta: int):
+        """Inject rotary encoder step delta (-127..127) via FACET_INPUT_ENCODER."""
+        d = max(-127, min(127, int(delta)))
+        if d != 0:
+            self.handle_set(DOMAIN_INPUT, INPUT_INSTANCE_KEYPAD, FACET_INPUT_ENCODER, struct.pack("<b", d))
 
     def _decode_packbits(self, src: bytes, expected_len: int = 64) -> bytes:
         out = bytearray()

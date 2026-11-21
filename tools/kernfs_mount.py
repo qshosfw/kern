@@ -260,6 +260,8 @@ class FsBackend:
     def stat(self, path: str) -> dict[str, Any]: raise NotImplementedError
     def ls(self, path: str) -> list[dict[str, Any]]: raise NotImplementedError
     def read_bytes(self, path: str) -> bytes: raise NotImplementedError
+    def read_head(self, path: str, max_bytes: int = 512) -> bytes:
+        return self.read_bytes(path)[:max_bytes]
     def write_bytes(self, path: str, data: bytes) -> dict[str, Any]: raise NotImplementedError
     def remove(self, path: str) -> None: raise NotImplementedError
     def mkdir(self, path: str) -> None: raise NotImplementedError
@@ -276,7 +278,9 @@ class RigWireFsBackend(FsBackend):
         self._cache_ttl = cache_ttl
         self._stat_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._ls_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._ls_entry_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._data_cache: dict[tuple[str, int, int], bytes] = {}
+        self._head_cache: dict[tuple[str, int], bytes] = {}
         self._virtual_dirs: set[str] = set()
 
     def _invalidate(self, path: str) -> None:
@@ -285,8 +289,25 @@ class RigWireFsBackend(FsBackend):
         self._stat_cache.pop(parent, None)
         self._ls_cache.pop(path, None)
         self._ls_cache.pop(parent, None)
+        self._ls_entry_cache.pop(path, None)
         for k in [k for k in self._data_cache if k[0] == path]:
             self._data_cache.pop(k, None)
+        for k in [k for k in self._head_cache if k[0] == path]:
+            self._head_cache.pop(k, None)
+
+    def fast_stat(self, path: str) -> dict[str, Any]:
+        """Lightweight metadata lookup for WebDAV PROPFIND: avoids full-file CRC32 scans on cached directory entries."""
+        with self._lock:
+            if path == "/":
+                return {"path": "/", "exists": True, "is_dir": True, "size": 0, "crc32": 0}
+            now = time.monotonic()
+            cached = self._stat_cache.get(path)
+            if cached and (now - cached[0]) < self._cache_ttl:
+                return dict(cached[1])
+            ls_cached = self._ls_entry_cache.get(path)
+            if ls_cached and (now - ls_cached[0]) < self._cache_ttl:
+                return dict(ls_cached[1])
+            return self.stat(path)
 
     def stat(self, path: str) -> dict[str, Any]:
         with self._lock:
@@ -325,6 +346,18 @@ class RigWireFsBackend(FsBackend):
                         entries.append({"name": rest, "is_dir": True, "size": 0})
                         seen.add(rest)
             self._ls_cache[path] = (now, entries)
+            for e in entries:
+                cpath = "/" + e["name"] if path == "/" else f"{path}/{e['name']}"
+                self._ls_entry_cache[cpath] = (
+                    now,
+                    {
+                        "path": cpath,
+                        "exists": True,
+                        "is_dir": bool(e.get("is_dir", False)),
+                        "size": int(e.get("size", 0)),
+                        "crc32": 0,
+                    },
+                )
             return list(entries)
 
     def quota_bytes(self) -> tuple[int, int]:
@@ -376,6 +409,63 @@ class RigWireFsBackend(FsBackend):
             if len(self._data_cache) > 64:
                 self._data_cache.clear()
             self._data_cache[(path, len(data), rigwire.crc32_ieee(data))] = data
+            return data
+
+    def read_head(self, path: str, max_bytes: int = 512) -> bytes:
+        """Read only the first `max_bytes` of a file without triggering a full-file CRC scan or full download."""
+        with self._lock:
+            cap = max(16, int(max_bytes))
+            for (p, sz, _crc), full_data in self._data_cache.items():
+                if p == path:
+                    return full_data[:cap]
+
+            path_b = path.encode("utf-8")
+            req_open = struct.pack("<BIHB", rigwire.TRANSFER_MODE_READ, 0, 120, len(path_b)) + path_b
+            resp_open = self._client.send_record(rigwire.SERVICE_DATA, rigwire.OP_TRANSFER_OPEN, req_open)
+            if len(resp_open) < 8:
+                raise RuntimeError("Short TRANSFER_OPEN response")
+            tid, negotiated_chunk, total_size = struct.unpack("<HHI", resp_open[:8])
+
+            cached = self._head_cache.get((path, total_size))
+            if cached is not None and (len(cached) >= cap or len(cached) >= total_size):
+                try:
+                    self._client.send_record(rigwire.SERVICE_DATA, rigwire.OP_TRANSFER_CLOSE, struct.pack("<HI", tid, 0))
+                except Exception:
+                    self._client._abort_transfer(tid)
+                return cached[:cap]
+
+            chunk_size = max(16, min(negotiated_chunk, 120))
+            target = min(total_size, cap)
+            buf = bytearray()
+            offset = 0
+            try:
+                while offset < target:
+                    req_len = min(chunk_size, target - offset)
+                    resp_chunk = self._client.send_record(
+                        rigwire.SERVICE_DATA, rigwire.OP_TRANSFER_CHUNK, struct.pack("<HIH", tid, offset, req_len)
+                    )
+                    if len(resp_chunk) < 8:
+                        raise RuntimeError("Short TRANSFER_CHUNK response")
+                    _, _, rx_len = struct.unpack("<HIH", resp_chunk[:8])
+                    chunk = resp_chunk[8 : 8 + rx_len]
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    offset += len(chunk)
+                    # Smart early-stop for KRX binaries: once hdr_len is known, stop right after the header.
+                    if offset == len(chunk) and len(buf) >= 10 and buf[:4] == b"\xC0\xDE\x01\xFE":
+                        hdr_len = struct.unpack_from("<H", buf, 8)[0]
+                        if 24 <= hdr_len < target:
+                            target = hdr_len
+                self._client.send_record(rigwire.SERVICE_DATA, rigwire.OP_TRANSFER_CLOSE, struct.pack("<HI", tid, 0))
+            except Exception:
+                self._client._abort_transfer(tid)
+                raise
+
+            data = bytes(buf)
+            if len(self._head_cache) > 128:
+                self._head_cache.clear()
+            self._head_cache[(path, total_size)] = data
             return data
 
     def write_bytes(self, path: str, data: bytes) -> dict[str, Any]:
@@ -497,6 +587,12 @@ class MemoryFsBackend(FsBackend):
             if path not in self.files:
                 raise FileNotFoundError(path)
             return self.files[path]
+
+    def read_head(self, path: str, max_bytes: int = 512) -> bytes:
+        with self._lock:
+            if path not in self.files:
+                raise FileNotFoundError(path)
+            return self.files[path][: max(0, int(max_bytes))]
 
     def write_bytes(self, path: str, data: bytes) -> dict[str, Any]:
         with self._lock:
@@ -678,7 +774,8 @@ class KernWebDAVHandler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            st = self.server.backend.stat(path)
+            fast = getattr(self.server.backend, "fast_stat", self.server.backend.stat)
+            st = fast(path)
         except Exception as e:
             self._send_text_err(502, f"RigWire stat failed: {e}")
             return
@@ -1059,26 +1156,52 @@ def print_mount_instructions(url: str, volume_name: str, mountpoint: str | None)
     print(f"  {GRAY}Press Ctrl+C to cleanly unmount and disconnect.{RESET}\n")
 
 
+def _resolve_gvfs_mount_path(port: int) -> str | None:
+    """Locate the local POSIX GVFS path created by `gio mount dav://127.0.0.1:<port>/`."""
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        return None
+    gvfs_root = Path(f"/run/user/{uid}/gvfs")
+    if not gvfs_root.is_dir():
+        return None
+    for cand in (
+        gvfs_root / f"dav:host=127.0.0.1,port={port},ssl=false",
+        gvfs_root / f"dav:host=127.0.0.1,port={port}",
+    ):
+        if cand.exists():
+            return str(cand)
+    for entry in gvfs_root.iterdir():
+        if entry.name.startswith("dav:") and f"port={port}" in entry.name and "127.0.0.1" in entry.name:
+            return str(entry)
+    return None
+
+
 def try_auto_mount(url: str, volume_name: str, mountpoint: str | None = None) -> tuple[str | None, list[str] | None]:
     """Mounts natively and returns (local_open_target, unmount_cmd)."""
     sys_name = platform.system()
     if sys_name == "Linux" and shutil.which("gio"):
-        res = subprocess.run(["gio", "mount", url], capture_output=True, text=True)
-        if res.returncode == 0:
-            log_ok(f"Mounted '{volume_name}' via GIO ({url})")
-            return f"dav://{url.removeprefix('http://')}", ["gio", "mount", "-u", url]
+        dav_url = "dav://" + url.removeprefix("http://").removeprefix("dav://")
+        parsed = urllib.parse.urlparse(dav_url)
+        port = parsed.port or 8765
+        res = subprocess.run(["gio", "mount", dav_url], capture_output=True, text=True, timeout=8)
+        if res.returncode == 0 or "already mounted" in (res.stderr or "").lower():
+            posix_mp = _resolve_gvfs_mount_path(port)
+            target = posix_mp or dav_url
+            log_ok(f"Mounted '{volume_name}' via GIO ({target})")
+            return target, ["gio", "mount", "-u", dav_url]
         log_warn(f"gio mount failed: {res.stderr.strip()}")
     elif sys_name == "Darwin":
         mp = mountpoint or f"/Volumes/{volume_name}"
         Path(mp).mkdir(parents=True, exist_ok=True)
-        res = subprocess.run(["mount_webdav", "-v", volume_name, url, mp], capture_output=True, text=True)
+        res = subprocess.run(["mount_webdav", "-v", volume_name, url, mp], capture_output=True, text=True, timeout=8)
         if res.returncode == 0:
             log_ok(f"Mounted '{volume_name}' at {mp}")
             return mp, ["umount", mp]
         log_warn(f"mount_webdav failed: {res.stderr.strip()}")
     elif sys_name == "Windows":
         drive = mountpoint or "K:"
-        res = subprocess.run(["net", "use", drive, url], capture_output=True, text=True)
+        res = subprocess.run(["net", "use", drive, url], capture_output=True, text=True, timeout=8)
         if res.returncode == 0:
             log_ok(f"Mounted '{volume_name}' as drive {drive}")
             return drive + "\\", ["net", "use", drive, "/delete", "/y"]

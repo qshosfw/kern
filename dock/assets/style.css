@@ -1,0 +1,291 @@
+/* Kern Dock — Compact, Native GTK4 + Libadwaita Styling */
+
+.handset-pane {
+    background: alpha(currentColor, 0.016);
+    border-right: 1px solid alpha(currentColor, 0.07);
+}
+
+.top-tab-header {
+    min-height: 46px;
+}
+
+.handset-stage {
+    background: radial-gradient(circle at 50% 42%, alpha(@accent_bg_color, 0.06), transparent 68%);
+}
+
+.stage-toolbar {
+    padding: 3px 6px;
+    border-radius: 99px;
+    background: alpha(currentColor, 0.05);
+    border: 1px solid alpha(currentColor, 0.05);
+}
+
+.stage-toolbar button.active-toggle {
+    background: alpha(@accent_bg_color, 0.22);
+    color: @accent_color;
+}
+
+.stage-toolbar button.audio-muted {
+    background: alpha(@error_bg_color, 0.16);
+    color: @error_color;
+}
+
+.drop-active {
+    outline: 2px dashed @accent_color;
+    outline-offset: -6px;
+    border-radius: 12px;
+}
+
+button.rec-live {
+    background: @error_bg_color;
+    color: @error_fg_color;
+}
+
+.status-dot {
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 99px;
+    background: alpha(currentColor, 0.28);
+}
+
+.status-dot.online { background: @success_color; }
+.status-dot.headless { background: @accent_color; }
+.status-dot.dfu { background: @warning_color; }
+.status-dot.hardened { background: @accent_color; }
+.status-dot.rec { background: @error_color; }
+
+.device-hero {
+    padding: 12px 14px;
+}
+
+.timeline-card {
+    padding: 12px 14px;
+}
+
+.top-tab-header tabbar {
+    background: transparent;
+}
+
+.tool-card {
+    padding: 9px 12px;
+    border-radius: 10px;
+    background: alpha(currentColor, 0.035);
+    border: 1px solid alpha(currentColor, 0.05);
+    transition: background 120ms ease, border-color 120ms ease;
+}
+
+.tool-card:hover {
+    background: alpha(@accent_bg_color, 0.12);
+    border-color: alpha(@accent_color, 0.24);
+}
+
+.device-popover list.boxed-list row {
+    min-height: 44px;
+}
+
+.stat-tile {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: alpha(currentColor, 0.038);
+    border: 1px solid alpha(currentColor, 0.045);
+}
+
+.stat-value {
+    font-size: 16px;
+    font-weight: 700;
+    font-feature-settings: "tnum";
+}
+
+levelbar.stat-bar trough,
+levelbar.stat-bar block {
+    min-height: 5px;
+    border-radius: 99px;
+}
+
+.small-pill {
+    padding: 3px 12px;
+    min-height: 26px;
+}
+
+row.warning-row .subtitle {
+    color: @warning_color;
+}
+
+.freq-card {
+    padding: 14px 16px;
+}
+
+.freq-display {
+    font-family: monospace;
+    font-size: 36px;
+    font-weight: 700;
+    font-feature-settings: "tnum";
+}
+
+.freq-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: alpha(currentColor, 0.10);
+}
+
+.freq-badge.accent {
+    background: alpha(@accent_bg_color, 0.24);
+    color: @accent_color;
+}
+
+.kbd-chip {
+    padding: 3px 10px;
+    border-radius: 99px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.kbd-chip.on {
+    background: alpha(@success_bg_color, 0.16);
+    color: @success_color;
+}
+
+.kbd-chip.off {
+    background: alpha(currentColor, 0.07);
+    color: alpha(currentColor, 0.72);
+}
+
+.kbd-chip.typing {
+    background: alpha(@accent_bg_color, 0.20);
+    color: @accent_color;
+}
+
+/* Native GNOME Files-style compact pathbar & rows */
+.pathbar-btn {
+    padding: 2px 8px;
+    min-height: 28px;
+    font-weight: 500;
+}
+
+.place-btn {
+    padding: 2px 10px;
+    min-height: 26px;
+    font-size: 12px;
+    border-radius: 6px;
+}
+
+.file-list row {
+    padding: 5px 10px;
+    min-height: 36px;
+}
+
+.file-size {
+    font-family: monospace;
+    font-size: 11.5px;
+    opacity: 0.65;
+}
+
+.protected-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 99px;
+    background: alpha(@warning_bg_color, 0.18);
+    color: @warning_color;
+}
+
+.cap-chip {
+    font-family: monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 99px;
+    background: alpha(currentColor, 0.08);
+}
+
+.status-pill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: alpha(currentColor, 0.10);
+}
+
+.status-pill.live {
+    background: alpha(@success_bg_color, 0.18);
+    color: @success_color;
+}
+
+.status-pill.headless {
+    background: alpha(@accent_bg_color, 0.18);
+    color: @accent_color;
+}
+
+.status-pill.dfu {
+    background: alpha(@warning_bg_color, 0.20);
+    color: @warning_color;
+}
+
+.status-pill.warn {
+    background: alpha(@error_bg_color, 0.18);
+    color: @error_color;
+}
+
+.status-pill.hardened {
+    background: alpha(@accent_bg_color, 0.20);
+    color: @accent_color;
+}
+
+.quick-chip {
+    font-family: monospace;
+    font-size: 11px;
+    padding: 2px 8px;
+    min-height: 24px;
+    border-radius: 99px;
+}
+
+.console-frame {
+    background: #101318;
+    border: 1px solid alpha(#ffffff, 0.08);
+    border-radius: 10px;
+}
+
+textview.wire-console,
+textview.wire-console text {
+    background: transparent;
+    color: #d8dee9;
+    font-family: monospace;
+    font-size: 11.5px;
+    padding: 8px 10px;
+}
+
+.console-prompt {
+    font-family: monospace;
+    font-weight: 700;
+    color: #38bdf8;
+    padding-left: 8px;
+}
+
+.console-entry {
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.hex-leg-hdr   { color: #fbbf24; font-weight: 700; }
+.hex-leg-ascii { color: #34d399; }
+.hex-leg-ctrl  { color: #38bdf8; }
+.hex-leg-high  { color: #c084fc; }
+.hex-leg-ff    { color: #f59e0b; }
+.hex-leg-zero  { color: #64748b; }
+
+.hex-ruler {
+    font-family: monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: #94a3b8;
+}
+
+.timeline-card {
+    padding: 8px 10px;
+}
+
+.palette-search {
+    font-size: 15px;
+    padding: 8px 12px;
+}

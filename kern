@@ -77,7 +77,7 @@ case "$1" in
         ;;
     dock)
         shift
-        python3 "$DIR/tools/kern_dock.py" "$@"
+        PYTHONPATH="$DIR/dock/src:$DIR/tools${PYTHONPATH:+:$PYTHONPATH}" python3 -m kern_dock "$@"
         ;;
     emu)
         shift

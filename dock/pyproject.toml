@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kern-dock"
+version = "2.0.0"
+description = "Native GTK4 + Libadwaita Hardware Dock, OS Tray, Terminal & Plugin Host for Kern OS Radios"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Kern Project" }]
+keywords = ["amateur-radio", "quansheng", "gtk4", "libadwaita", "kern-os", "rigwire"]
+dependencies = [
+    "PyGObject>=3.46",
+    "pycairo>=1.24",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+fast-lcd = ["numpy>=1.24"]
+gif = ["Pillow>=10.0"]
+all = ["numpy>=1.24", "Pillow>=10.0"]
+
+[project.scripts]
+kern-dock = "kern_dock.cli:main"
+
+[project.entry-points."kern_dock.plugins"]
+band-presets = "kern_dock.plugins.builtin.band_presets:BandPresetsPlugin"
+telemetry-monitor = "kern_dock.plugins.builtin.telemetry_monitor:TelemetryMonitorPlugin"
+table-inspector = "kern_dock.plugins.builtin.table_inspector:TableInspectorPlugin"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+kern_dock = ["py.typed"]
