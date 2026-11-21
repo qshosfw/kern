@@ -82,19 +82,11 @@ impl ZoneRecord {
     }
 
     pub fn name_as_str(&self) -> &str {
-        let len = self
-            .name
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.name.len());
-        utils::format::ascii_str(&self.name[..len]).unwrap_or("")
+        super::read_fixed_str(&self.name)
     }
 
     pub fn set_name(&mut self, s: &str) {
-        self.name = [0; 12];
-        let bytes = s.as_bytes();
-        let copy_len = bytes.len().min(self.name.len());
-        self.name[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_fixed_str(&mut self.name, s, 12);
     }
 
     #[inline(always)]
@@ -224,19 +216,11 @@ impl BandPlanRecord {
     }
 
     pub fn name_as_str(&self) -> &str {
-        let len = self
-            .name
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.name.len());
-        utils::format::ascii_str(&self.name[..len]).unwrap_or("")
+        super::read_fixed_str(&self.name)
     }
 
     pub fn set_name(&mut self, s: &str) {
-        self.name = [0; 8];
-        let bytes = s.as_bytes();
-        let copy_len = bytes.len().min(self.name.len());
-        self.name[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_fixed_str(&mut self.name, s, 8);
     }
 
     #[inline(always)]
@@ -348,19 +332,11 @@ impl ScanHitRecord {
     }
 
     pub fn label_as_str(&self) -> &str {
-        let len = self
-            .label
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.label.len());
-        utils::format::ascii_str(&self.label[..len]).unwrap_or("")
+        super::read_fixed_str(&self.label)
     }
 
     pub fn set_label(&mut self, s: &str) {
-        self.label = [0; 10];
-        let bytes = s.as_bytes();
-        let copy_len = bytes.len().min(self.label.len());
-        self.label[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_fixed_str(&mut self.label, s, 10);
     }
 
     #[inline(always)]
@@ -427,19 +403,11 @@ impl FmStationRecord {
     }
 
     pub fn name_as_str(&self) -> &str {
-        let len = self
-            .name
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.name.len());
-        utils::format::ascii_str(&self.name[..len]).unwrap_or("")
+        super::read_fixed_str(&self.name)
     }
 
     pub fn set_name(&mut self, s: &str) {
-        self.name = [0; 8];
-        let bytes = s.as_bytes();
-        let copy_len = bytes.len().min(self.name.len());
-        self.name[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_fixed_str(&mut self.name, s, 8);
     }
 
     #[inline(always)]

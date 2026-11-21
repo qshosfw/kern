@@ -22,3 +22,19 @@ pub use records::{
     BandPlanRecord, FmStationRecord, ScanHitRecord, VfoFileHeader, VfoOperatingMode,
     VfoSnapshotFile, ZoneRecord,
 };
+
+/// Read a NUL-terminated ASCII string from a fixed-size record field.
+#[inline(never)]
+pub(crate) fn read_fixed_str(buf: &[u8]) -> &str {
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    utils::format::ascii_str(&buf[..len]).unwrap_or("")
+}
+
+/// Zero-fill `dst` and copy up to `max_len` bytes of `s` into it.
+#[inline(never)]
+pub(crate) fn write_fixed_str(dst: &mut [u8], s: &str, max_len: usize) {
+    dst.fill(0);
+    let bytes = s.as_bytes();
+    let copy_len = bytes.len().min(max_len).min(dst.len());
+    dst[..copy_len].copy_from_slice(&bytes[..copy_len]);
+}

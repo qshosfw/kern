@@ -293,35 +293,19 @@ impl ChannelRecord {
     }
 
     pub fn name_as_str(&self) -> &str {
-        let len = self
-            .name
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.name.len());
-        utils::format::ascii_str(&self.name[..len]).unwrap_or("")
+        super::read_fixed_str(&self.name)
     }
 
     pub fn set_name(&mut self, s: &str) {
-        self.name = [0; 16];
-        let bytes = s.as_bytes();
-        let copy_len = bytes.len().min(15);
-        self.name[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_fixed_str(&mut self.name, s, 15);
     }
 
     pub fn user_tag_as_str(&self) -> &str {
-        let len = self
-            .user_tag
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(self.user_tag.len());
-        utils::format::ascii_str(&self.user_tag[..len]).unwrap_or("")
+        super::read_fixed_str(&self.user_tag)
     }
 
     pub fn set_user_tag(&mut self, s: &str) {
-        self.user_tag = [0; 8];
-        let bytes = s.as_bytes();
-        let copy_len = bytes.len().min(7);
-        self.user_tag[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        super::write_fixed_str(&mut self.user_tag, s, 7);
     }
 
     /// Read the declarative tagged extension block embedded in `user_tag`.
