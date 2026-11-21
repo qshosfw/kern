@@ -109,6 +109,18 @@ impl Adc {
         }
     }
 
+    /// Power down ADC1 analog bias (`ADON = 0`, `TSVREFE = 0`) to eliminate ~150-300 uA
+    /// standby leakage during STOP or idle periods. `read_channel()` powers it back on lazily.
+    #[inline(never)]
+    pub fn power_down() {
+        unsafe {
+            if (pac::rcc::RCC_APB2ENR.read_volatile() & pac::rcc::APB2ENR_ADC1) != 0 {
+                let cr2 = adc::ADC_CR2.read_volatile();
+                adc::ADC_CR2.write_volatile(cr2 & !(adc::CR2_ADON | adc::CR2_TSVREFE));
+            }
+        }
+    }
+
     /// Read a software-averaged 12-bit ADC value across `samples` iterations.
     #[inline(never)]
     pub fn read_channel_averaged(&self, channel: u8, samples: u8) -> u16 {
@@ -117,12 +129,11 @@ impl Adc {
         for _ in 0..count {
             sum += self.read_channel(channel) as u32;
         }
-        let mut s = count;
-        while s > 1 {
-            sum >>= 1;
-            s >>= 1;
+        if count.is_power_of_two() {
+            (sum >> count.trailing_zeros()) as u16
+        } else {
+            (sum / count as u32) as u16
         }
-        sum as u16
     }
 
     /// Configure single-channel analog watchdog thresholds (12-bit counts).

@@ -67,6 +67,9 @@ pub fn enable_line(line: u8, trigger: TriggerEdge) {
     });
 }
 
+/// Internal EXTI line routed to PVD (Programmable Voltage Detector) on PY32F071 (`EXTI_IMR_IM16`).
+pub const LINE_PVD: u8 = 16;
+
 /// Internal EXTI line routed to LPTIM1 wakeup on PY32F071 (`EXTI_IMR_IM29`).
 pub const LINE_LPTIM1: u8 = 29;
 

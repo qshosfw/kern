@@ -132,6 +132,33 @@ pub fn init() {
         pac::gpio::GPIOB_BASE,
         pac::gpio::PIN_0 | pac::gpio::PIN_1 | pac::gpio::PIN_7,
     );
+    // Park unused GPIOC (all except PC13 PTT) and GPIOF pins to analog to minimize leakage/EMI.
+    py32_hal::gpio::set_pins_analog(
+        pac::gpio::GPIOC_BASE,
+        pac::gpio::PIN_0
+            | pac::gpio::PIN_1
+            | pac::gpio::PIN_2
+            | pac::gpio::PIN_3
+            | pac::gpio::PIN_4
+            | pac::gpio::PIN_5
+            | pac::gpio::PIN_6
+            | pac::gpio::PIN_7
+            | pac::gpio::PIN_8
+            | pac::gpio::PIN_9
+            | pac::gpio::PIN_10
+            | pac::gpio::PIN_11
+            | pac::gpio::PIN_12
+            | pac::gpio::PIN_14
+            | pac::gpio::PIN_15,
+    );
+    py32_hal::gpio::set_pins_analog(
+        pac::gpio::GPIOF_BASE,
+        pac::gpio::PIN_0
+            | pac::gpio::PIN_1
+            | pac::gpio::PIN_3
+            | pac::gpio::PIN_4
+            | pac::gpio::PIN_7,
+    );
 
     // Enable hardware GPIO glitch filters on slow mechanical inputs (PTT PC13, keypad rows
     // PB12..PB15 + PA8) to reject RF pickup during TX; never enable on PA11/PA12 (12 Mbps USB).
@@ -193,7 +220,7 @@ pub fn park_for_stop(uart_rx_wake: bool) -> [u32; 6] {
     BK_CSN.set_high();
 
     let mut gpioa_analog =
-        g::PIN_0 | g::PIN_1 | g::PIN_2 | g::PIN_5 | g::PIN_6 | g::PIN_7 | g::PIN_9;
+        g::PIN_0 | g::PIN_1 | g::PIN_2 | g::PIN_5 | g::PIN_6 | g::PIN_7 | g::PIN_8 | g::PIN_9;
     if !uart_rx_wake {
         gpioa_analog |= g::PIN_10;
     } else {
@@ -202,7 +229,15 @@ pub fn park_for_stop(uart_rx_wake: bool) -> [u32; 6] {
     py32_hal::gpio::set_pins_analog(g::GPIOA_BASE, gpioa_analog);
     py32_hal::gpio::set_pins_analog(
         g::GPIOB_BASE,
-        g::PIN_3 | g::PIN_4 | g::PIN_8 | g::PIN_9 | g::PIN_12 | g::PIN_13 | g::PIN_14,
+        g::PIN_3
+            | g::PIN_4
+            | g::PIN_8
+            | g::PIN_9
+            | g::PIN_10
+            | g::PIN_11
+            | g::PIN_12
+            | g::PIN_13
+            | g::PIN_14,
     );
     py32_hal::gpio::set_pins_analog(g::GPIOF_BASE, g::PIN_5 | g::PIN_6 | g::PIN_8);
 
