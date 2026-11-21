@@ -1,16 +1,24 @@
-//! Lean, Native-Matching Animated UI Primitives for External Settings.
+//! Lean ABI-Native UI Wrappers for External Settings.
 //!
-//! Supports smooth kinetic pixel-scrolling (`KineticScroll`), oscillating selection
-//! arrows, native toggle checkboxes, and clean status-bar clipping without `__aeabi_memclr`.
+//! Delegates capsule drawing, icons, checkboxes, oscillating chevrons, and scrollbars
+//! directly to OS `KRX_WIDGET_MENU_ITEM` / `KRX_WIDGET_SCROLLBAR` syscalls — zero
+//! double-implemented UI rendering.
 
 use kern_sdk::{
-    COLOR_CLEAR, COLOR_FILL, KRX_STATUS_CUSTOM_TITLE, KRX_STATUS_DIVIDER, KRX_STATUS_VISIBLE,
-    KrxApiTable, KrxStatusBar, format_u16_into, icon,
+    COLOR_CLEAR, KRX_STATUS_CUSTOM_TITLE, KRX_STATUS_DIVIDER, KRX_STATUS_VISIBLE,
+    KRX_WIDGET_MENU_ITEM, KrxApiTable, KrxStatusBar, KrxWidget, Op, format_u16_into,
 };
 
 pub const VISIBLE_ROWS: u8 = 4;
 pub const ROW_START_Y: i16 = 9;
 pub const ROW_STEP_Y: i16 = 13;
+
+/// `KRX_WIDGET_MENU_ITEM` flag bits matching `syscall/ui.rs`.
+pub const FLAG_SEL: u8 = 1 << 0;
+pub const FLAG_CHEVRON: u8 = 1 << 1;
+pub const FLAG_OUTLINE: u8 = 1 << 2;
+pub const FLAG_TOGGLE: u8 = 1 << 3;
+pub const FLAG_TOGGLE_ON: u8 = 1 << 4;
 
 /// Smooth pixel-level kinetic scroller matching resident `gfx::gui::animation::KineticScroller`.
 #[derive(Clone, Copy)]
@@ -40,15 +48,13 @@ impl KineticScroll {
         }
     }
 
-    /// Advance one animation frame; returns `true` while still moving.
     #[inline(always)]
     pub fn tick(&mut self) -> bool {
         let diff = self.target_y - self.cur_y;
         if diff == 0 {
             return false;
         }
-        let step = if diff > 0 { (diff + 1) >> 1 } else { (diff - 1) >> 1 };
-        self.cur_y += step;
+        self.cur_y += if diff > 0 { (diff + 1) >> 1 } else { (diff - 1) >> 1 };
         true
     }
 }
@@ -79,33 +85,40 @@ pub fn set_title(api: &KrxApiTable, title: &[u8]) {
     }
 }
 
-/// Draw a single scrolled row at pixel `y` with optional icon, value, oscillating arrow, or checkbox.
+/// Draw a single scrolled row directly via `KRX_WIDGET_MENU_ITEM` ABI widget.
 #[inline(never)]
-pub fn draw_scrolled_row(
+pub fn draw_row(
     api: &KrxApiTable,
     y: i16,
     label: &[u8],
     value: &[u8],
     icon_id: u8,
-    selected: bool,
-    editing: bool,
-    right_icon: u8,
-    tick: u8,
+    flags: u8,
+    anim_tick: u16,
 ) {
     if y <= -ROW_STEP_Y || y >= 64 {
         return;
     }
-    let flags = u8::from(selected) | (u8::from(editing) << 1) | 4;
-    api.draw_menu_item(y, label, value, icon_id, flags);
-    if right_icon != 0 {
-        let fg = if selected && !editing { COLOR_CLEAR } else { COLOR_FILL };
-        let mut rx: i16 = 112;
-        if selected && right_icon == icon::ARROW_RIGHT {
-            let phase = ((tick >> 1) & 3) as i16;
-            rx += if phase == 3 { 1 } else { phase };
-        }
-        api.draw_icon(rx, y + 2, right_icon, fg);
-    }
+    let desc = KrxWidget {
+        p0: label.as_ptr(),
+        p1: value.as_ptr(),
+        x: 2,
+        y,
+        len0: label.len() as u16,
+        len1: value.len() as u16,
+        extra: anim_tick,
+        w: 120,
+        h: 13,
+        a: flags,
+        b: icon_id,
+        _pad: [0; 2],
+    };
+    let _ = api.call_op(
+        Op::UiWidget,
+        KRX_WIDGET_MENU_ITEM as usize,
+        &raw const desc as usize,
+        0,
+    );
 }
 
 /// Clean any scrolled row bleed into the top status bar band and draw smooth scrollbar.

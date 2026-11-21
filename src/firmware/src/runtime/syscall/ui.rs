@@ -135,6 +135,8 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             let is_sel = (d.a & 1) != 0;
             let has_chevron = (d.a & 2) != 0;
             let is_outline = (d.a & 4) != 0;
+            let is_toggle = (d.a & 8) != 0;
+            let toggle_on = (d.a & 16) != 0;
             let comfortable = d.h >= 12;
             let row_h: u8 = if comfortable { 13 } else { 10 };
             let icon_dy: i16 = if comfortable { 2 } else { 1 };
@@ -165,7 +167,14 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 &gfx::fonts::mumatrix_regular::FONT,
                 col,
             );
-            if !s1.is_empty() {
+            if is_toggle {
+                let ic = if toggle_on {
+                    ::abi::icon::CHECKBOX_ON
+                } else {
+                    ::abi::icon::CHECKBOX_OFF
+                };
+                super::display::draw_icon(112, d.y + icon_dy, ic, tc_u8);
+            } else if !s1.is_empty() {
                 gfx::text::draw_str_align(
                     canvas,
                     119,
@@ -176,7 +185,13 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                     gfx::text::Align::Right,
                 );
             } else if has_chevron {
-                super::display::draw_icon(113, d.y + icon_dy + i16::from(comfortable), 35, tc_u8);
+                let phase = ((d.extra >> 1) & 3) as i16;
+                let dx = if is_sel && d.extra != 0 {
+                    if phase == 3 { 1 } else { phase }
+                } else {
+                    0
+                };
+                super::display::draw_icon(112 + dx, d.y + icon_dy + i16::from(comfortable), 35, tc_u8);
             }
         }
         KRX_WIDGET_BIG_DIGIT | KRX_WIDGET_SMALL_DIGIT => {

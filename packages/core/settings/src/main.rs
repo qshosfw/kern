@@ -13,8 +13,8 @@ mod ui;
 
 use kern_sdk::{
     KRX_EV_ENCODER, KRX_EV_KEY, KRX_EV_MODAL, KRX_EV_TICK, KRX_OP_EVENT, KRX_OP_EXIT,
-    KRX_OP_RENDER, KRX_OP_START, KrxApiTable, KrxEvent, MODAL_RESULT_CONFIRMED, icon, key,
-    krx_entry, prop,
+    KRX_OP_RENDER, KRX_OP_START, KrxApiTable, KrxEvent, MODAL_RESULT_CONFIRMED, key, krx_entry,
+    prop,
 };
 
 use apps::{AppsView, MODAL_DELETE_APP};
@@ -340,25 +340,23 @@ impl SettingsState {
     fn render(&self, api: &KrxApiTable) {
         api.clear();
         let sy = self.scroller.cur_y;
-        let tick = self.tick_ctr;
+        let anim_tick = if api.prop_get(prop::UI_ANIMATIONS) != 0 {
+            (self.tick_ctr as u16) | 1
+        } else {
+            0
+        };
         match self.view {
             View::Home => {
                 let mut idx = 0u8;
                 while idx < CAT_COUNT as u8 {
                     let y = ui::ROW_START_Y + (idx as i16) * ui::ROW_STEP_Y - sy;
                     let c = category(idx);
-                    let is_sel = idx == self.cat_sel;
-                    ui::draw_scrolled_row(
-                        api,
-                        y,
-                        cat_name(idx),
-                        b"",
-                        c.icon_id,
-                        is_sel,
-                        false,
-                        if is_sel { icon::ARROW_RIGHT } else { 0 },
-                        tick,
-                    );
+                    let flags = if idx == self.cat_sel {
+                        ui::FLAG_SEL | ui::FLAG_CHEVRON
+                    } else {
+                        0
+                    };
+                    ui::draw_row(api, y, cat_name(idx), b"", c.icon_id, flags, anim_tick);
                     idx += 1;
                 }
                 ui::finish_list_frame(api, sy, CAT_COUNT as u8);
@@ -377,42 +375,41 @@ impl SettingsState {
                         api.prop_get(item.prop_id)
                     };
                     let vstr = format_value(item, val, &mut val_buf);
-                    let right_ic = match item.kind {
+                    let mut flags = if is_sel { ui::FLAG_SEL } else { 0 };
+                    if self.editing && is_sel {
+                        flags |= ui::FLAG_OUTLINE;
+                    }
+                    match item.kind {
                         Kind::Toggle => {
+                            flags |= ui::FLAG_TOGGLE;
                             if val != 0 {
-                                icon::CHECKBOX_ON
-                            } else {
-                                icon::CHECKBOX_OFF
+                                flags |= ui::FLAG_TOGGLE_ON;
                             }
                         }
                         Kind::Action
-                            if item.meta == ACT_INSTALLED_APPS || item.meta == ACT_DEVICE_INFO =>
+                            if is_sel
+                                && (item.meta == ACT_INSTALLED_APPS
+                                    || item.meta == ACT_DEVICE_INFO) =>
                         {
-                            if is_sel {
-                                icon::ARROW_RIGHT
-                            } else {
-                                0
-                            }
+                            flags |= ui::FLAG_CHEVRON;
                         }
-                        _ => 0,
-                    };
-                    ui::draw_scrolled_row(
+                        _ => {}
+                    }
+                    ui::draw_row(
                         api,
                         y,
                         item_label(item.label_idx),
                         vstr,
                         0,
-                        is_sel,
-                        self.editing && is_sel,
-                        right_ic,
-                        tick,
+                        flags,
+                        anim_tick,
                     );
                     idx += 1;
                 }
                 ui::finish_list_frame(api, sy, c.count);
             }
-            View::InstalledApps => self.apps.render(api, sy, tick),
-            View::DeviceInfo => system::render_device_info(api, self.info_sel, sy, tick),
+            View::InstalledApps => self.apps.render(api, sy),
+            View::DeviceInfo => system::render_device_info(api, self.info_sel, sy),
         }
         let _ = self.active_sel();
         api.commit();

@@ -84,9 +84,9 @@ impl AppsView {
     }
 
     #[inline(never)]
-    pub fn render(&self, api: &KrxApiTable, scroll_y: i16, tick: u8) {
+    pub fn render(&self, api: &KrxApiTable, scroll_y: i16) {
         if self.count == 0 {
-            ui::draw_scrolled_row(api, ui::ROW_START_Y, b"No packages", b"/apps", 0, false, false, 0, tick);
+            ui::draw_row(api, ui::ROW_START_Y, b"No packages", b"/apps", 0, 0, 0);
             return;
         }
         let mut sz_buf = [0u8; 16];
@@ -96,7 +96,8 @@ impl AppsView {
             let short = strip_apps_prefix(self.entry_name(idx));
             let e = unsafe { self.entries.get_unchecked(idx as usize) };
             let sz = ui::format_bytes(e.size, &mut sz_buf);
-            ui::draw_scrolled_row(api, y, short, sz, 0, idx == self.sel, false, 0, tick);
+            let flags = if idx == self.sel { ui::FLAG_SEL } else { 0 };
+            ui::draw_row(api, y, short, sz, 0, flags, 0);
             idx += 1;
         }
         ui::finish_list_frame(api, scroll_y, self.count);

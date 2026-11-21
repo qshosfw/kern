@@ -11,7 +11,7 @@ pub const INFO_ROWS: u8 = 5;
 const INFO_LABELS: &[u8] = b"Battery\0Charge\0MCU Temp\0CPU Clock\0Free Stack\0";
 
 #[inline(never)]
-pub fn render_device_info(api: &KrxApiTable, sel: u8, scroll_y: i16, tick: u8) {
+pub fn render_device_info(api: &KrxApiTable, sel: u8, scroll_y: i16) {
     let mut val_buf = [0u8; 16];
     let mut idx = 0u8;
     while idx < INFO_ROWS {
@@ -27,17 +27,8 @@ pub fn render_device_info(api: &KrxApiTable, sel: u8, scroll_y: i16, tick: u8) {
             _ => (api.stack_free() as u16, 0, b"B"),
         };
         let val = format_u16_into(num, dec, suf, &mut val_buf);
-        ui::draw_scrolled_row(
-            api,
-            y,
-            nth_packed_slice(INFO_LABELS, idx),
-            val,
-            0,
-            idx == sel,
-            false,
-            0,
-            tick,
-        );
+        let flags = if idx == sel { ui::FLAG_SEL } else { 0 };
+        ui::draw_row(api, y, nth_packed_slice(INFO_LABELS, idx), val, 0, flags, 0);
         idx += 1;
     }
     ui::finish_list_frame(api, scroll_y, INFO_ROWS);
