@@ -83,13 +83,10 @@ fn load_krx_into_slot(
     let required_caps = summary.caps;
     if let Some(granted) = sys_caps {
         if !granted.contains_all(required_caps) {
-            #[cfg(feature = "settings_debug")]
             let cap_msg = required_caps
                 .without(granted)
                 .first_cap()
                 .map_or("", kernel::caps::name);
-            #[cfg(not(feature = "settings_debug"))]
-            let cap_msg = "";
             return Err(KrxLaunchError::CapabilityDenied(cap_msg));
         }
     }
@@ -204,22 +201,59 @@ pub fn try_launch_boot_module(
     Ok(res)
 }
 
-/// Display a concise error popup for KRX package launch failures.
+/// Display a detailed, actionable error popup for KRX package launch failures.
 #[inline(never)]
 pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
     let fname = crate::apps::launcher::catalog::extract_filename(path);
 
     let msg = match err {
-        #[cfg(any(test, feature = "settings_debug"))]
         KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
-            let buf = &mut crate::data::arena::staging_buf()[..64];
+            let buf = &mut crate::data::arena::staging_buf()[..84];
             let mut pos = 0usize;
-            for part in [b"Needs ".as_slice(), cap.as_bytes(), b"\nto run this app."] {
+            for part in [
+                b"Needs capability:\n".as_slice(),
+                cap.as_bytes(),
+                b"\nNot available on HW.",
+            ] {
                 let n = part.len().min(buf.len() - pos);
                 buf[pos..pos + n].copy_from_slice(&part[..n]);
                 pos += n;
             }
-            // SAFETY: all parts are valid UTF-8 (`cap` is `&str`, literals are ASCII).
+            unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
+        }
+        KrxLaunchError::ImportBindingFailed => {
+            let buf = &mut crate::data::arena::staging_buf()[..84];
+            let mut num_buf = [0u8; 6];
+            let abi_s = gfx::text::format_u32(::abi::VERSION as u32, &mut num_buf);
+            let mut pos = 0usize;
+            for part in [
+                b"ABI/import mismatch.\nOS v".as_slice(),
+                env!("CARGO_PKG_VERSION").as_bytes(),
+                b" (ABI v",
+                abi_s.as_bytes(),
+                b").\nUpdate app or OS.",
+            ] {
+                let n = part.len().min(buf.len() - pos);
+                buf[pos..pos + n].copy_from_slice(&part[..n]);
+                pos += n;
+            }
+            unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
+        }
+        KrxLaunchError::InsufficientStack => {
+            let buf = &mut crate::data::arena::staging_buf()[..84];
+            let mut num_buf = [0u8; 8];
+            let free = kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32;
+            let free_s = gfx::text::format_u32(free, &mut num_buf);
+            let mut pos = 0usize;
+            for part in [
+                b"Low stack RAM\n(".as_slice(),
+                free_s.as_bytes(),
+                b"B free).\nRetry from Home.",
+            ] {
+                let n = part.len().min(buf.len() - pos);
+                buf[pos..pos + n].copy_from_slice(&part[..n]);
+                pos += n;
+            }
             unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
         }
         _ => err.describe(),

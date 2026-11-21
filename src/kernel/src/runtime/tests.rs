@@ -120,16 +120,19 @@ fn test_krx_launch_error_diagnostics() {
     // Capability denials carry the missing capability's display name.
     let err_cap = KrxLaunchError::CapabilityDenied(crate::caps::name(Cap::BroadBandRx));
     assert_eq!(err_cap, KrxLaunchError::CapabilityDenied("Broadband HF RX"));
-    assert_eq!(err_cap.describe(), "Radio lacks needed\nhardware.");
+    assert_eq!(err_cap.describe(), "Hardware capability\nnot supported.");
 
-    assert_eq!(KrxLaunchError::FileNotFound.describe(), "App not found.");
+    assert_eq!(
+        KrxLaunchError::FileNotFound.describe(),
+        "Package not found.\nInstall via RigWire."
+    );
     assert_eq!(
         KrxLaunchError::InsufficientRam.describe(),
-        "Not enough memory."
+        "Exceeds 8KB RAM\nexecution arena."
     );
     assert_eq!(
         KrxLaunchError::UnsupportedProfile.describe(),
-        "Unsupported format."
+        "Unsupported KRX\nexecution profile."
     );
 
     // Every variant resolves to a non-empty, distinct sentence.

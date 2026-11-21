@@ -186,22 +186,22 @@ pub enum KrxLaunchError {
 // diagnostics so wording never drifts between surfaces.
 utils::static_bytes!(
     static LAUNCH_ERR_HELP = b"\
-App not found.\0\
-Can't read app.\0\
-Not a Kern app.\0\
-App damaged.\nReinstall it.\0\
-App info missing.\nReinstall it.\0\
-App has no code.\0\
-Radio lacks needed\nhardware.\0\
-Not enough memory.\0\
-Not enough stack.\0\
-App load failed.\0\
-Needs newer firmware.\0\
-App too large.\0\
+Package not found.\nInstall via RigWire.\0\
+Cannot read package\nfrom /apps/.\0\
+Not a valid Kern\npackage header.\0\
+CRC check failed.\nReinstall package.\0\
+Missing app metadata.\nRebuild package.\0\
+Missing code section.\nRebuild package.\0\
+Hardware capability\nnot supported.\0\
+Exceeds 8KB RAM\nexecution arena.\0\
+Low stack RAM.\nClose apps & retry.\0\
+Relocation failed.\nRebuild as PIC.\0\
+ABI/import mismatch.\nUpdate app or OS.\0\
+App exceeds 8KB\narena size limit.\0\
 App failed to start.\0\
-Bad app entry.\0\
-App incomplete.\nReinstall it.\0\
-Unsupported format.\0";
+Invalid entry point.\nRebuild package.\0\
+Package truncated.\nReinstall package.\0\
+Unsupported KRX\nexecution profile.\0";
 );
 
 impl KrxLaunchError {
