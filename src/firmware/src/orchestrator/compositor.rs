@@ -294,8 +294,8 @@ const MAX_ALERT_LINE_PX: i16 = 116;
 
 #[derive(Clone)]
 pub struct SystemAlert {
-    pub title: heapless::String<24>,
-    pub message: heapless::String<88>,
+    pub title: heapless::String<18>,
+    pub message: heapless::String<56>,
 }
 
 impl SystemAlert {
@@ -511,8 +511,20 @@ impl OsCompositor {
             canvas.clear();
         }
 
+        let mut native_left_icons =
+            [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
+        let mut native_center_icons =
+            [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
         let mut sb_cfg = kernel::app::StatusBarConfig::default();
         crate::AppRegistry::render(active_app_id, canvas, ctx, &mut sb_cfg);
+        #[cfg(feature = "krx_native")]
+        if active_app_id >= crate::apps::AppRegistry::count() {
+            crate::runtime::native_runner::apply_slot_status_icons(
+                &mut sb_cfg,
+                &mut native_left_icons,
+                &mut native_center_icons,
+            );
+        }
 
         if sb_cfg.visible && !is_text_input {
             if preserve_bg {

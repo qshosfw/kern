@@ -37,12 +37,18 @@ impl GridItem for LauncherEntry {
 }
 
 pub const MAX_LAUNCHER_ENTRIES: usize = 12;
+const LAUNCHER_ICON_ARENA_OFFSET: usize = 512;
+const MAX_LAUNCHER_CUSTOM_ICONS: usize = 8;
 
 #[inline(always)]
 fn launcher_entries_mut() -> &'static mut [LauncherEntry; MAX_LAUNCHER_ENTRIES] {
     const _: () = {
         assert!(
             core::mem::size_of::<[LauncherEntry; MAX_LAUNCHER_ENTRIES]>()
+                <= LAUNCHER_ICON_ARENA_OFFSET
+        );
+        assert!(
+            LAUNCHER_ICON_ARENA_OFFSET + (MAX_LAUNCHER_CUSTOM_ICONS * 32)
                 <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET
         );
         assert!(
@@ -52,6 +58,15 @@ fn launcher_entries_mut() -> &'static mut [LauncherEntry; MAX_LAUNCHER_ENTRIES] 
     };
     unsafe {
         &mut *(crate::data::arena::arena_base_ptr() as *mut [LauncherEntry; MAX_LAUNCHER_ENTRIES])
+    }
+}
+
+#[cfg(feature = "filesystem")]
+#[inline(always)]
+fn launcher_icons_16_mut() -> &'static mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS] {
+    unsafe {
+        &mut *(crate::data::arena::arena_base_ptr().add(LAUNCHER_ICON_ARENA_OFFSET)
+            as *mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS])
     }
 }
 
@@ -86,13 +101,13 @@ static BUILTIN_TAIL: [LauncherEntry; 2] = [
 ];
 
 pub fn load_entries(
-    _storage: Option<&mut crate::services::SystemStorage>,
+    mut _storage: Option<&mut crate::services::SystemStorage>,
 ) -> &'static [LauncherEntry] {
     #[cfg(feature = "filesystem")]
     {
         let cat = catalog::get_catalog();
-        if let Some(s) = _storage {
-            cat.scan(s);
+        if let Some(s) = &mut _storage {
+            cat.scan(*s);
         }
     }
 
@@ -100,6 +115,9 @@ pub fn load_entries(
         let entries = launcher_entries_mut();
         entries[..2].copy_from_slice(&BUILTIN_HEAD);
         let mut count = 2usize;
+
+        #[cfg(feature = "filesystem")]
+        let (icons_16_buf, mut icon_slot) = (launcher_icons_16_mut(), 0usize);
 
         // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
         let cat_ref: &'static catalog::PackageCatalog =
@@ -112,7 +130,21 @@ pub fn load_entries(
                 continue;
             }
 
-            let (icon_8, icon_16) = cat_ref.resolved_icons(app);
+            let mut loaded_16: Option<&'static [u8; 32]> = None;
+            #[cfg(feature = "filesystem")]
+            if app.icon_16_off != 0 && icon_slot < MAX_LAUNCHER_CUSTOM_ICONS {
+                if let Some(s) = &mut _storage {
+                    let dst = &mut *(icons_16_buf.as_mut_ptr().add(icon_slot));
+                    if s.read_file_at(app.path.as_str(), app.icon_16_off as usize, dst)
+                        .is_ok()
+                    {
+                        loaded_16 = Some(&*dst);
+                        icon_slot += 1;
+                    }
+                }
+            }
+
+            let (icon_8, icon_16) = cat_ref.resolved_icons(app, loaded_16);
             entries[count] = LauncherEntry {
                 title: app.title.as_str(),
                 icon_8,

@@ -722,7 +722,7 @@ mod tests {
             exec_type: KrxExecType::Module,
             lifecycle_flags: 0,
             scopes: ::abi::scope::SYSTEM_PAGE,
-            icon_16_slot: 0xFF,
+            icon_16_off: 0,
             icon_id: 1,
             caps: (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::FactoryCalib as u32),
             is_valid: true,

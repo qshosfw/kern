@@ -479,7 +479,7 @@ mod tests {
             app_class: KrxClass::Paged,
             exec_type: KrxExecType::App,
             lifecycle_flags: 0,
-            icon_16_slot: 0xFF,
+            icon_16_off: 0,
             icon_id: 29,
             caps: 0,
             is_valid: true,

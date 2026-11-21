@@ -52,8 +52,8 @@ fn write_trunc_utf8(dst: &mut [u8], start: usize, s: &str) -> u8 {
     (start + n) as u8
 }
 
-/// Cached catalog entry for an installed package (exact 64 B = 2^6 for 1-insn `lsls #6` indexing;
-/// all `u8`/`bool`/`SmallStr::len` fields sit in offsets `0..31` for 1-insn Cortex-M0+ `ldrb`).
+/// Cached catalog entry for an installed package (`56 B` fixed stride, `4 B` aligned;
+/// all `u8`/`bool` fields sit in offsets `0..31` for 1-insn Cortex-M0+ `ldrb`).
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct PackageCatalogEntry {
@@ -62,19 +62,19 @@ pub struct PackageCatalogEntry {
     pub lifecycle_flags: u8,
     pub is_valid: bool,
     pub has_config: bool,
-    pub title: SmallStr<16>,
-    pub path: SmallStr<24>,
     /// Union of `abi::scope` bits over every declared action.
     pub scopes: u8,
-    /// `0xFF` when no custom 16x16 asset bitmap was embedded in `SECTION_ASSETS`.
-    pub icon_16_slot: u8,
     pub icon_id: u16,
     pub caps: u32,
+    /// File offset of embedded 16x16 bitmap inside `SECTION_ASSETS` (`0` when absent).
+    pub icon_16_off: u16,
     /// Self-contained 8x8 monochrome icon bitmap from `SECTION_ASSETS` (`[0; 8]` when absent).
     pub icon_8: [u8; 8],
+    pub title: SmallStr<12>,
+    pub path: SmallStr<20>,
 }
 
-const _: () = assert!(core::mem::size_of::<PackageCatalogEntry>() == 64);
+const _: () = assert!(core::mem::size_of::<PackageCatalogEntry>() == 56);
 
 impl PackageCatalogEntry {
     #[inline(always)]
@@ -96,6 +96,19 @@ impl PackageCatalogEntry {
         } else {
             crate::apps::settings::apps::package_icon_8(self.title.as_str(), self.icon_id)
         }
+    }
+
+    /// Resolve both 8x8 and 16x16 icons for this entry, preferring embedded `SECTION_ASSETS`
+    /// bitmaps (`ASSET_ICON_8`, and `custom_icon_16` read on demand for `Launcher`) over ROM glyphs.
+    #[inline(always)]
+    pub fn resolved_icons(
+        &self,
+        custom_icon_16: Option<&'static [u8; 32]>,
+    ) -> (&'static [u8; 8], &'static [u8; 32]) {
+        let icon_16 = custom_icon_16.unwrap_or_else(|| {
+            gfx::icons::icon_16(u8::try_from(self.icon_id).unwrap_or(::abi::icon::APPS))
+        });
+        (self.resolved_icon_8(), icon_16)
     }
 
     #[inline(always)]
@@ -137,8 +150,7 @@ pub fn extract_filename(path: &str) -> &str {
 }
 
 pub const MAX_CATALOG_PACKAGES: usize = 8;
-pub const MAX_CATALOG_ACTIONS: usize = 8;
-pub const MAX_CATALOG_APP_ICONS_16: usize = 4;
+pub const MAX_CATALOG_ACTIONS: usize = 4;
 
 /// Cached declared action from a KRX app's `SECTION_ACTIONS` (16 B, wire-identical to `KrxActionDecl`
 /// with `flags` byte repurposed as `pkg_idx` for zero-unpacking copy).
@@ -164,8 +176,6 @@ impl CatalogAction {
 pub struct PackageCatalog {
     pub entries: heapless::Vec<PackageCatalogEntry, MAX_CATALOG_PACKAGES>,
     pub actions: heapless::Vec<CatalogAction, MAX_CATALOG_ACTIONS>,
-    pub icons_16: [[u8; 32]; MAX_CATALOG_APP_ICONS_16],
-    pub icons_16_len: u8,
     pub scanned: bool,
 }
 
@@ -174,25 +184,17 @@ impl PackageCatalog {
         Self {
             entries: heapless::Vec::new(),
             actions: heapless::Vec::new(),
-            icons_16: [[0u8; 32]; MAX_CATALOG_APP_ICONS_16],
-            icons_16_len: 0,
             scanned: false,
         }
     }
 
-    /// Resolve both 8x8 and 16x16 icons for a catalog entry, preferring embedded
-    /// `SECTION_ASSETS` bitmaps (`ASSET_ICON_8`, `ASSET_ICON_16`) over fallback ROM glyphs.
+    #[inline(always)]
     pub fn resolved_icons(
         &self,
         entry: &PackageCatalogEntry,
+        custom_icon_16: Option<&'static [u8; 32]>,
     ) -> (&'static [u8; 8], &'static [u8; 32]) {
-        let slot = entry.icon_16_slot as usize;
-        let icon_16 = if slot < (self.icons_16_len as usize) {
-            unsafe { &*(&self.icons_16[slot] as *const [u8; 32]) }
-        } else {
-            gfx::icons::icon_16(u8::try_from(entry.icon_id).unwrap_or(::abi::icon::APPS))
-        };
-        (entry.resolved_icon_8(), icon_16)
+        entry.resolved_icons(custom_icon_16)
     }
 
     /// Mark catalog dirty to trigger a re-scan on next access.
@@ -253,7 +255,6 @@ impl PackageCatalog {
     fn scan_internal(&mut self, filesystem: &mut SystemStorage) {
         self.entries.clear();
         self.actions.clear();
-        self.icons_16_len = 0;
 
         // Keep scan scratch strictly inside TRANSIENT_ARENA[4096..6144) so [0..4096) KRX code is never clobbered.
         const HDR_SCRATCH_BYTES: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
@@ -327,7 +328,7 @@ impl PackageCatalog {
             &mut *ptr
         };
         entry.exec_type = KrxExecType::App;
-        entry.icon_16_slot = 0xFF;
+        entry.icon_16_off = 0;
 
         let bytes = base_name.as_bytes();
         let n = bytes.len();
@@ -407,17 +408,15 @@ impl PackageCatalog {
                         entry.icon_8.copy_from_slice(&ic8[..8]);
                     }
                 }
-                if entry.exec_type == KrxExecType::App
-                    && (self.icons_16_len as usize) < MAX_CATALOG_APP_ICONS_16
-                {
+                if entry.exec_type == KrxExecType::App {
                     if let Some((_, _, ic16)) =
                         KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_16)
                     {
                         if ic16.len() >= 32 {
-                            let slot = self.icons_16_len;
-                            self.icons_16[slot as usize].copy_from_slice(&ic16[..32]);
-                            entry.icon_16_slot = slot;
-                            self.icons_16_len = slot + 1;
+                            let off = (ic16.as_ptr() as usize) - (hdr_buf.as_ptr() as usize);
+                            if off <= (u16::MAX as usize) {
+                                entry.icon_16_off = off as u16;
+                            }
                         }
                     }
                 }
@@ -505,7 +504,7 @@ mod tests {
                 .expect("hello_rust.krx must carry its 16x16 icon in SECTION_ASSETS");
         assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
 
-        let mut cat = PackageCatalog::new();
+        let cat = PackageCatalog::new();
         let mut entry = PackageCatalogEntry {
             app_class: kernel::runtime::KrxClass::Native,
             exec_type: KrxExecType::App,
@@ -515,16 +514,18 @@ mod tests {
             title: SmallStr::from_str("Hello Rust"),
             path: SmallStr::from_str("/apps/hello_rust.krx"),
             scopes: 0,
-            icon_16_slot: 0,
+            icon_16_off: 128,
             icon_id: summary.icon_id,
             caps: summary.caps.raw(),
             icon_8: [0; 8],
         };
         entry.icon_8.copy_from_slice(bits8);
-        cat.icons_16[0].copy_from_slice(bits16);
-        cat.icons_16_len = 1;
+        let mut icon16_buf = [0u8; 32];
+        icon16_buf.copy_from_slice(bits16);
+        let icon16_static: &'static [u8; 32] =
+            unsafe { &*(&icon16_buf as *const [u8; 32]) };
 
-        let (res8, res16) = cat.resolved_icons(&entry);
+        let (res8, res16) = cat.resolved_icons(&entry, Some(icon16_static));
         assert_eq!(res8, bits8);
         assert_eq!(res16, bits16);
     }

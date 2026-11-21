@@ -94,8 +94,58 @@ pub struct Pcb {
     pub caps: CapabilitySet,
     /// Resource telemetry ledger
     pub ledger: ResourceLedger,
-    /// Human-readable process name
-    pub name: heapless::String<16>,
+    /// Human-readable process name (compact 12B POD to minimize PCB static RAM footprint).
+    pub name: PcbName,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct PcbName {
+    pub len: u8,
+    pub buf: [u8; 11],
+}
+
+impl PcbName {
+    pub const fn new() -> Self {
+        Self {
+            len: 0,
+            buf: [0u8; 11],
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.buf[..self.len as usize]) }
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len as usize]
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn push_str(&mut self, s: &str) {
+        let bytes = s.as_bytes();
+        let avail = self.buf.len().saturating_sub(self.len as usize);
+        let mut n = bytes.len().min(avail);
+        while n > 0 && n < bytes.len() && (bytes[n] & 0xC0) == 0x80 {
+            n -= 1;
+        }
+        let start = self.len as usize;
+        self.buf[start..start + n].copy_from_slice(&bytes[..n]);
+        self.len = (start + n) as u8;
+    }
+}
+
+impl PartialEq<&str> for PcbName {
+    #[inline(always)]
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
 }
 
 pub const PCB_IDENT: u16 = 0x06F9;
@@ -105,7 +155,7 @@ impl Pcb {
         Self {
             ident: PCB_IDENT,
             pid: Pid(0),
-            name: heapless::String::new(),
+            name: PcbName::new(),
             app_id: 0,
             state: ProcState::Dormant,
             priority: crate::sched::Priority::Ui,
@@ -127,8 +177,8 @@ impl Pcb {
         exec_type: ExecType,
         caps: CapabilitySet,
     ) -> Self {
-        let mut s = heapless::String::new();
-        let _ = s.push_str(name);
+        let mut s = PcbName::new();
+        s.push_str(name);
         Self {
             ident: PCB_IDENT,
             pid,

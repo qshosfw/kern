@@ -30,7 +30,7 @@ pub(crate) const MAX_STRUCTURED_LEAVES: usize = 18;
 #[cfg(feature = "krx_paged")]
 #[repr(C)]
 pub(crate) struct PagedWindowState {
-    pub(crate) cache: FixedWindowCache<16, 4>,
+    pub(crate) cache: FixedWindowCache<10, 4>,
     pub(crate) shadow_stack: ShadowReturnStack<8>,
 }
 
@@ -53,16 +53,12 @@ pub(crate) struct NativeExecSlot {
     pub(crate) current_slot: u8,
     pub(crate) code_size: u16,
     pub(crate) status_bar_has_custom: bool,
-    pub(crate) status_bar_left_count: u8,
-    pub(crate) status_bar_center_count: u8,
     pub(crate) pkg_path_len: u8,
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
     pub(crate) caps: CapabilitySet,
     pub(crate) pkg_path: [u8; 31],
     pub(crate) overlay: PagedOverlay,
-    pub(crate) status_bar_left_icons: [kernel::ui::StatusGlyph; 4],
-    pub(crate) status_bar_center_icons: [kernel::ui::StatusGlyph; 4],
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
 }
 
@@ -854,9 +850,22 @@ fn apply_slot_status_bar<'a>(slot: &'a NativeExecSlot, status_bar: &mut StatusBa
         status_bar.signal_level = signal_level;
         status_bar.left_badge = c_str_to_str(&sb.badge);
         status_bar.center_text = c_str_to_str(&sb.center);
-        status_bar.left_icons = &slot.status_bar_left_icons[..slot.status_bar_left_count as usize];
-        status_bar.center_icons =
-            &slot.status_bar_center_icons[..slot.status_bar_center_count as usize];
+    }
+}
+
+/// Decode active KRX custom status-bar icon IDs into stack-local glyph buffers (saving ~80 B static BSS).
+pub(crate) fn apply_slot_status_icons<'a>(
+    status_bar: &mut StatusBarConfig<'a>,
+    left_out: &'a mut [kernel::ui::StatusGlyph; 4],
+    center_out: &'a mut [kernel::ui::StatusGlyph; 4],
+) {
+    let slot = slot_ref();
+    if slot.status_bar_has_custom {
+        let sb = &slot.status_bar;
+        let ln = decode_icon_list(sb, &sb.left_icons, sb.left_icon_count, left_out) as usize;
+        let cn = decode_icon_list(sb, &sb.center_icons, sb.center_icon_count, center_out) as usize;
+        status_bar.left_icons = &left_out[..ln];
+        status_bar.center_icons = &center_out[..cn];
     }
 }
 
@@ -895,8 +904,6 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     let slot = slot_mut();
     if sb.is_null() {
         slot.status_bar_has_custom = false;
-        slot.status_bar_left_count = 0;
-        slot.status_bar_center_count = 0;
     } else {
         unsafe {
             core::ptr::copy_nonoverlapping(
@@ -906,25 +913,9 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
             );
         }
         slot.status_bar_has_custom = true;
-        let s = &slot.status_bar;
-
-        slot.status_bar_left_count = decode_icon_list(
-            s,
-            &s.left_icons,
-            s.left_icon_count,
-            &mut slot.status_bar_left_icons,
-        );
-
-        slot.status_bar_center_count = decode_icon_list(
-            s,
-            &s.center_icons,
-            s.center_icon_count,
-            &mut slot.status_bar_center_icons,
-        );
-
         // Auto-register or clear status tray icon requested by app
-        if s.tray_icon_id != 0 {
-            super::syscall::ui::set_tray_icon(s.tray_icon_id);
+        if slot.status_bar.tray_icon_id != 0 {
+            super::syscall::ui::set_tray_icon(slot.status_bar.tray_icon_id);
         }
     }
 }
@@ -980,8 +971,6 @@ pub(crate) fn teardown_slot_and_hw(
     slot.is_loaded = false;
     slot.entry_point = 0;
     slot.status_bar_has_custom = false;
-    slot.status_bar_left_count = 0;
-    slot.status_bar_center_count = 0;
     slot.pkg_path_len = 0;
 }
 
