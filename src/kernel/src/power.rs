@@ -97,9 +97,81 @@ impl PowerProfile {
     }
 }
 
+/// Bitmask of subsystems pinning the MCU clock floor.
+pub mod clock_reason {
+    pub const USB_ACTIVE: u8 = 1 << 0;
+    pub const WIRE_LINK: u8 = 1 << 1;
+    pub const AUDIO_DSP: u8 = 1 << 2;
+    pub const SPECTRUM: u8 = 1 << 3;
+    pub const USER_BOOST: u8 = 1 << 4;
+}
+
+/// Dynamic MCU clock governor (16 / 24 / 32 / 48 / 72 MHz) with hardware-safe floor enforcement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClockGovernor {
+    pub preferred_mhz: u8,
+    pub reasons: u8,
+    pub allow_overclock: bool,
+}
+
+impl ClockGovernor {
+    pub const fn new(preferred_mhz: u8, allow_overclock: bool) -> Self {
+        Self {
+            preferred_mhz,
+            reasons: 0,
+            allow_overclock,
+        }
+    }
+
+    #[inline(always)]
+    pub fn acquire(&mut self, reason: u8) {
+        self.reasons |= reason;
+    }
+
+    #[inline(always)]
+    pub fn release(&mut self, reason: u8) {
+        self.reasons &= !reason;
+    }
+
+    /// Resolve effective MCU clock in MHz respecting USB 48 MHz PLL floor and boost hints.
+    pub const fn target_mhz(&self) -> u8 {
+        let mut target = self.preferred_mhz;
+        // USB FS peripheral requires >= 48 MHz system clock for valid SOF framing.
+        if (self.reasons & (clock_reason::USB_ACTIVE | clock_reason::WIRE_LINK)) != 0 && target < 48
+        {
+            target = 48;
+        }
+        if (self.reasons & (clock_reason::SPECTRUM | clock_reason::USER_BOOST)) != 0
+            && self.allow_overclock
+        {
+            target = 72;
+        }
+        if !self.allow_overclock && target > 48 {
+            target = 48;
+        }
+        target
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clock_governor_enforces_usb_floor_and_overclock_gate() {
+        let mut gov = ClockGovernor::new(16, false);
+        assert_eq!(gov.target_mhz(), 16);
+        gov.acquire(clock_reason::USB_ACTIVE);
+        assert_eq!(gov.target_mhz(), 48);
+        gov.acquire(clock_reason::SPECTRUM);
+        assert_eq!(gov.target_mhz(), 48); // overclock disabled
+        gov.allow_overclock = true;
+        assert_eq!(gov.target_mhz(), 72);
+        gov.release(clock_reason::SPECTRUM);
+        assert_eq!(gov.target_mhz(), 48);
+        gov.release(clock_reason::USB_ACTIVE);
+        assert_eq!(gov.target_mhz(), 16);
+    }
 
     #[test]
     fn test_power_profile_conversion() {

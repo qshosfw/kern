@@ -7,7 +7,8 @@ Installable applications and system modules built against the [`sdk/`](../sdk/) 
 ## Layout
 
 ### `packages/core/` — Core Userland OS Apps
-- [`core/settings/`](core/settings/krx.toml) (`settings.krx`, Rust `N1` PIC) — External System Settings UI replacing resident ROM settings tables.
+- [`core/vfo/`](core/vfo/krx.toml) (`vfo.krx`, Rust `N1` PIC) — External Dual-VFO Radio Transceiver HUD replacing resident ROM VFO.
+- [`core/settings/`](core/settings/krx.toml) (`settings.krx`, Rust `N1` PIC) — Modular, schema-driven System Settings, Installed Apps manager, and Live Device Info replacing resident ROM settings.
 
 ### `packages/sys/` — System & Maintenance Modules
 - [`sys/dfu/`](sys/dfu/README.md) (`dfu.mod`, `P0` Structured Paged) — Visual USB-C / UART DFU updater, hardware quiescing, and SRAM hook.
@@ -38,6 +39,9 @@ Installable applications and system modules built against the [`sdk/`](../sdk/) 
 # Verify C SDK opcodes match src/abi
 ./kern abi --check
 
-# Sideload a built package onto a connected radio over RigWire
+# Provision core packages (vfo.krx + settings.krx) over RigWire
+python3 tools/provision.py --port /dev/ttyACM0 --bundle core
+
+# Or sideload a single package directly over RigWire
 ./kern wire sideload packages/core/settings/settings.krx --force
 ```
