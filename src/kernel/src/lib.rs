@@ -31,6 +31,7 @@ pub mod runtime;
 pub mod sched;
 pub mod security;
 pub mod service;
+pub mod store;
 pub mod sys;
 pub mod tag;
 pub mod ui;

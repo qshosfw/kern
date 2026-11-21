@@ -448,6 +448,65 @@ impl<const N: usize> IpcChannel<N> {
     }
 }
 
+/// Typed cross-application intent kind for decoupled userland routing (Phase 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IntentKind {
+    None = 0,
+    LaunchPackage = 1,
+    OpenFile = 2,
+    TuneFreq = 3,
+    ShowSettingsPage = 4,
+}
+
+/// Fixed-size zero-allocation cross-app intent descriptor (`32 B` POD).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct Intent {
+    pub kind: IntentKind,
+    pub sender_pid: u8,
+    pub payload_len: u8,
+    pub flags: u8,
+    pub arg_u32: u32,
+    pub payload: [u8; 24],
+}
+
+const _: () = assert!(core::mem::size_of::<Intent>() == 32);
+
+impl Intent {
+    pub const fn tune_freq(sender_pid: u8, freq_hz: u32) -> Self {
+        Self {
+            kind: IntentKind::TuneFreq,
+            sender_pid,
+            payload_len: 0,
+            flags: 0,
+            arg_u32: freq_hz,
+            payload: [0; 24],
+        }
+    }
+
+    pub fn for_path(kind: IntentKind, sender_pid: u8, path: &str) -> Self {
+        let mut payload = [0u8; 24];
+        let b = path.as_bytes();
+        let n = b.len().min(24);
+        payload[..n].copy_from_slice(&b[..n]);
+        Self {
+            kind,
+            sender_pid,
+            payload_len: n as u8,
+            flags: 0,
+            arg_u32: 0,
+            payload,
+        }
+    }
+
+    #[inline(always)]
+    pub fn payload_str(&self) -> &str {
+        let n = (self.payload_len as usize).min(24);
+        core::str::from_utf8(&self.payload[..n]).unwrap_or("")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,5 +613,17 @@ mod tests {
         assert_eq!(mb.poll(2).unwrap().payload[0], b'D');
         assert_eq!(mb.poll(2).unwrap().payload[0], b'E');
         assert_eq!(mb.poll(2), None);
+    }
+
+    #[test]
+    fn test_intent_roundtrip_and_size() {
+        let tune = Intent::tune_freq(3, 145_500_000);
+        assert_eq!(tune.kind, IntentKind::TuneFreq);
+        assert_eq!(tune.arg_u32, 145_500_000);
+        assert_eq!(tune.payload_str(), "");
+
+        let launch = Intent::for_path(IntentKind::LaunchPackage, 2, "/apps/calib.mod");
+        assert_eq!(launch.kind, IntentKind::LaunchPackage);
+        assert_eq!(launch.payload_str(), "/apps/calib.mod");
     }
 }
