@@ -32,24 +32,31 @@ from pathlib import Path
 from typing import Any
 
 # =============================================================================
-# 0. KERN TUI STYLE HELPERS (Matches tools/builder.py & tools/flasher.py)
+# 0. KERN TUI STYLE HELPERS (Shared cross-platform cli_ui)
 # =============================================================================
 
-_USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
-_RESET  = "\033[0m"  if _USE_COLOR else ""
-_BOLD   = "\033[1m"  if _USE_COLOR else ""
-_INVERT = "\033[7m"  if _USE_COLOR else ""
-_RED    = "\033[31m" if _USE_COLOR else ""
-_GREEN  = "\033[32m" if _USE_COLOR else ""
-_YELLOW = "\033[33m" if _USE_COLOR else ""
-_BLUE   = "\033[34m" if _USE_COLOR else ""
-_CYAN   = "\033[36m" if _USE_COLOR else ""
-_GRAY   = "\033[90m" if _USE_COLOR else ""
+_TOOLS_DIR = Path(__file__).resolve().parent
+if str(_TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_DIR))
+
+import cli_ui as _cli_ui  # noqa: E402
+
+_cli_ui.init_console()
+_C = _cli_ui.ansi_map()
+_RESET  = _C["RESET"]
+_BOLD   = _C["BOLD"]
+_INVERT = _C["INVERT"]
+_RED    = _C["RED"]
+_GREEN  = _C["GREEN"]
+_YELLOW = _C["YELLOW"]
+_BLUE   = _C["BLUE"]
+_CYAN   = _C["CYAN"]
+_GRAY   = _C["GRAY"]
 
 
-def _log_info(msg: str) -> None: print(f" {_BLUE}{_INVERT} INFO  {_RESET} {msg}")
-def _log_ok(msg: str) -> None:   print(f" {_GREEN}{_INVERT}  OK   {_RESET} {msg}")
-def _log_err(msg: str) -> None:  print(f" {_RED}{_INVERT} FAIL  {_RESET} {msg}", file=sys.stderr)
+def _log_info(msg: str) -> None: _cli_ui.info(msg)
+def _log_ok(msg: str) -> None:   _cli_ui.ok(msg)
+def _log_err(msg: str) -> None:  _cli_ui.err(msg)
 
 # =============================================================================
 # 1. FORMAT CONSTANTS & REGISTRY

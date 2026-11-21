@@ -12,17 +12,24 @@ import subprocess
 import argparse
 from pathlib import Path
 
-# ANSI colors
-RESET   = "\033[0m"
-BOLD    = "\033[1m"
-GREEN   = "\033[32m"
-YELLOW  = "\033[33m"
-BLUE    = "\033[34m"
-CYAN    = "\033[36m"
-RED     = "\033[31m"
-GRAY    = "\033[90m"
-INVERT  = "\033[7m"
-WHITE = "\033[97m"  
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import cli_ui  # noqa: E402
+
+cli_ui.init_console()
+_C = cli_ui.ansi_map()
+RESET   = _C["RESET"]
+BOLD    = _C["BOLD"]
+GREEN   = _C["GREEN"]
+YELLOW  = _C["YELLOW"]
+BLUE    = _C["BLUE"]
+CYAN    = _C["CYAN"]
+RED     = _C["RED"]
+GRAY    = _C["GRAY"]
+INVERT  = _C["INVERT"]
+WHITE   = _C["WHITE"]
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 EMU_DIR = Path(os.environ.get("KERN_EMU_DIR", str(ROOT_DIR / "inspo" / "uv-k5-v3-emulator")))
@@ -32,8 +39,7 @@ KERN_ELF = ROOT_DIR / "target" / "kern_firmware.elf"
 SITE_PACKAGES = EMU_DIR / "tools" / "site-packages"
 
 def print_header(title="Kern Radio Emulator"):
-    print(f"\n  ⚡ {BOLD}{CYAN}{title}{RESET}")
-    print(f"  ══════════════════════════════════════════════════════════════════")
+    cli_ui.header(title)
 
 def ensure_env():
     """Sets loopback no_proxy and Python path for local dependencies."""
@@ -41,7 +47,7 @@ def ensure_env():
     os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1" + ("," + os.environ["NO_PROXY"] if "NO_PROXY" in os.environ else "")
     if SITE_PACKAGES.exists():
         cur_pypath = os.environ.get("PYTHONPATH", "")
-        os.environ["PYTHONPATH"] = str(SITE_PACKAGES) + (":" + cur_pypath if cur_pypath else "")
+        os.environ["PYTHONPATH"] = str(SITE_PACKAGES) + (os.pathsep + cur_pypath if cur_pypath else "")
         if str(SITE_PACKAGES) not in sys.path:
             sys.path.insert(0, str(SITE_PACKAGES))
 

@@ -8,6 +8,10 @@ Most workflows are exposed through the root `./kern` CLI (`./kern help`).
 
 ## Tool Catalog
 
+### Core CLI & Cross-Platform Foundation
+- `cli_ui.py` — Zero-dependency cross-platform CLI foundation shared across all Kern tools (Linux, macOS, Windows). Enforces `NO_COLOR`/`FORCE_COLOR`/TTY detection, Windows VT100 ANSI & UTF-8 console setup, aligned tables, progress bars, `stderr` diagnostics, `os.pathsep` `cargo_env()`, and clean POSIX exit codes (`0`, `1`, `2`, `130`).
+- `kern_cli.py` — Unified cross-platform `./kern` (Linux/macOS) and `kern.cmd` (Windows) command dispatcher with grouped help output and `--version`.
+
 ### Build, ABI & Static Analysis
 - `builder.py` — Core backend for `./kern build`, `./kern check`, `./kern size`, `./kern info`, and `./kern flash`. Resolves `kern.toml` feature gates and hardware target profiles (`UV-K1`, `UV-K5v3`, `UV-K10Pro`), enforces Flash/SRAM budgets, extracts raw/packed binaries, and optionally exports JSON memory telemetry (`--json`).
 - `./kern abi [--check]` — KRX ABI header generator. Not a script: it runs the `abigen` host binary of the `src/abi` crate, which prints `packages/sdk/krx_ops.h` from the compiled `abi!` and `abi_sub!` tables.

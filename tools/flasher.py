@@ -9,19 +9,27 @@ import os
 import glob
 import hashlib
 import zlib
+from pathlib import Path
 from serial.tools import list_ports
 
-# ========== TUI COLORS ==========
-RESET = "\033[0m"
-BOLD = "\033[1m"
-INVERT = "\033[7m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-BLUE = "\033[34m"
-CYAN = "\033[36m"
-WHITE = "\033[37m"
-GRAY = "\033[90m"
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import cli_ui  # noqa: E402
+
+cli_ui.init_console()
+_C = cli_ui.ansi_map()
+RESET = _C["RESET"]
+BOLD = _C["BOLD"]
+INVERT = _C["INVERT"]
+RED = _C["RED"]
+GREEN = _C["GREEN"]
+YELLOW = _C["YELLOW"]
+BLUE = _C["BLUE"]
+CYAN = _C["CYAN"]
+WHITE = _C["WHITE"]
+GRAY = _C["GRAY"]
 
 # ========== CONFIG ==========
 BAUDRATE = 38400
@@ -42,32 +50,20 @@ OBFUS_TBL = [
 # ========== TUI HELPERS ==========
 
 def print_header():
-    print(f"\n  ⚡ {BOLD}Kern Firmware Flasher{RESET}")
-    print(f"  ══════════════════════════════════════════════════════════\n")
+    cli_ui.header("Kern Firmware Flasher", "Cross-platform serial bootloader utility")
 
-def log_info(msg):    print(f"{BLUE}{INVERT} INFO {RESET} {msg}")
-def log_ok(msg):      print(f"{GREEN}{INVERT}  OK  {RESET} {msg}")
-def log_warn(msg):    print(f"{YELLOW}{INVERT} WARN {RESET} {msg}")
-def log_err(msg):     print(f"{RED}{INVERT} FAIL {RESET} {msg}"); sys.exit(1)
-def log_debug(msg):   print(f"{GRAY}[DEBUG] {msg}{RESET}")
+def log_info(msg):    cli_ui.info(msg)
+def log_ok(msg):      cli_ui.ok(msg)
+def log_warn(msg):    cli_ui.warn(msg)
+def log_err(msg):     cli_ui.err(msg); sys.exit(cli_ui.EXIT_ERR)
+def log_debug(msg):   print(f"{GRAY}[DEBUG] {msg}{RESET}", file=sys.stderr)
 
 def draw_progress(current, total, width=25, status_override=None, color_override=None, stats=None):
+    uni = cli_ui.supports_unicode()
     if status_override:
-        # Full bar
-        bar = "█" * width
-        return f"{color_override}[{bar}]{RESET} {BOLD}{status_override}{RESET}"
-    
-    percent = (current / total) * 100
-    val = max(0, min(100, percent))
-    filled = int(width * val / 100)
-    empty = width - filled
-    
-    color = BLUE
-    if val > 60: color = GREEN
-    
-    bar = "█" * filled + "·" * empty
-    stats_str = f" ({stats})" if stats else ""
-    return f"{color}[{bar}]{RESET} {BOLD}{val:>5.1f}%{RESET}{GRAY}{stats_str}{RESET} {GRAY}({current}/{total}){RESET}"
+        bar = ("█" if uni else "#") * width
+        return f"{color_override or ''}[{bar}]{RESET} {BOLD}{status_override}{RESET}"
+    return cli_ui.progress_bar(current, total, width=width, stats=stats)
 
 
 
@@ -79,19 +75,19 @@ def find_port(custom_port=None):
         return custom_port, "Custom"
 
     ports = list(list_ports.comports())
-    
+
     # Priority 1: Match VID:PID
     for p in ports:
         if p.vid is not None and p.pid is not None:
             vid_pid = f"{p.vid:04x}:{p.pid:04x}".lower()
             if vid_pid == VID_PID_TARGET:
                 return p.device, f"Auto-Detected ({vid_pid})"
-    
-    # Priority 2: Candidates (ACM/USB)
-    candidates = [p for p in ports if "USB" in p.device or "ACM" in p.device]
+
+    # Priority 2: Cross-platform USB serial candidates (Linux ttyACM/ttyUSB, macOS cu.usb*, Windows COM*)
+    candidates = [p for p in ports if cli_ui.is_usb_serial_device(p.device)]
     if len(candidates) == 1:
         return candidates[0].device, "Auto-Detected (Candidate)"
-        
+
     return None, None
 
 # ========== PROTOCOL CLASS ==========

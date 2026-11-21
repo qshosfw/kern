@@ -47,33 +47,34 @@ TOOLS_DIR = Path(__file__).resolve().parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
+import cli_ui  # noqa: E402
 import rigwire  # noqa: E402
 
 # =============================================================================
-# 1. KERN TUI STYLE HELPERS (Matches tools/builder.py & tools/flasher.py)
+# 1. KERN TUI STYLE HELPERS (Shared cross-platform cli_ui)
 # =============================================================================
 
-_USE_COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
-RESET  = "\033[0m"  if _USE_COLOR else ""
-BOLD   = "\033[1m"  if _USE_COLOR else ""
-INVERT = "\033[7m"  if _USE_COLOR else ""
-RED    = "\033[31m" if _USE_COLOR else ""
-GREEN  = "\033[32m" if _USE_COLOR else ""
-YELLOW = "\033[33m" if _USE_COLOR else ""
-BLUE   = "\033[34m" if _USE_COLOR else ""
-CYAN   = "\033[36m" if _USE_COLOR else ""
-GRAY   = "\033[90m" if _USE_COLOR else ""
+cli_ui.init_console()
+_C = cli_ui.ansi_map()
+RESET  = _C["RESET"]
+BOLD   = _C["BOLD"]
+INVERT = _C["INVERT"]
+RED    = _C["RED"]
+GREEN  = _C["GREEN"]
+YELLOW = _C["YELLOW"]
+BLUE   = _C["BLUE"]
+CYAN   = _C["CYAN"]
+GRAY   = _C["GRAY"]
 
 
 def print_header(title: str = "KernFS Universal Mounter") -> None:
-    print(f"\n  ⚡ {BOLD}{CYAN}{title}{RESET}")
-    print("  ══════════════════════════════════════════════════════════════════")
+    cli_ui.header(title)
 
 
-def log_info(msg: str) -> None: print(f" {BLUE}{INVERT} INFO  {RESET} {msg}")
-def log_ok(msg: str) -> None:   print(f" {GREEN}{INVERT}  OK   {RESET} {msg}")
-def log_warn(msg: str) -> None: print(f" {YELLOW}{INVERT} WARN  {RESET} {msg}")
-def log_err(msg: str) -> None:  print(f" {RED}{INVERT} FAIL  {RESET} {msg}", file=sys.stderr)
+def log_info(msg: str) -> None: cli_ui.info(msg)
+def log_ok(msg: str) -> None:   cli_ui.ok(msg)
+def log_warn(msg: str) -> None: cli_ui.warn(msg)
+def log_err(msg: str) -> None:  cli_ui.err(msg)
 
 
 # =============================================================================

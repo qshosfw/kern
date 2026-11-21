@@ -20,7 +20,7 @@ import sys
 import unittest
 from pathlib import Path
 
-import kernfs_mount
+import cli_ui
 
 from . import DOCK_ROOT, __version__
 from .core.options import DockOptions
@@ -79,11 +79,11 @@ def _run_ctl(args: list[str]) -> int:
     try:
         resp = IpcClient().call(method, params)
     except Exception as exc:
-        kernfs_mount.log_err(str(exc))
-        return 1
+        cli_ui.err(str(exc))
+        return cli_ui.EXIT_ERR
 
     print(json.dumps(resp, indent=2))
-    return 0 if resp.get("ok") else 1
+    return cli_ui.EXIT_OK if resp.get("ok") else cli_ui.EXIT_ERR
 
 
 def _run_tests() -> int:
@@ -91,56 +91,97 @@ def _run_tests() -> int:
     suite = unittest.defaultTestLoader.discover(str(tests_dir), pattern="test_*.py")
     runner = unittest.TextTestRunner(verbosity=2)
     res = runner.run(suite)
-    return 0 if res.wasSuccessful() else 1
+    return cli_ui.EXIT_OK if res.wasSuccessful() else cli_ui.EXIT_ERR
 
 
 def _run_build_check() -> int:
-    kernfs_mount.print_header(f"Kern Dock v{__version__} Build & Integrity Check")
+    cli_ui.header(f"Kern Dock v{__version__} Build & Integrity Check")
     ok = compileall.compile_dir(str(DOCK_ROOT / "src"), quiet=1)
     if not ok:
-        kernfs_mount.log_err("Bytecode compilation failed")
-        return 1
+        cli_ui.err("Bytecode compilation failed")
+        return cli_ui.EXIT_ERR
     pyproject = DOCK_ROOT / "pyproject.toml"
     if not pyproject.is_file():
-        kernfs_mount.log_err("Missing dock/pyproject.toml")
-        return 1
-    kernfs_mount.log_ok(f"All modules compiled cleanly ({DOCK_ROOT / 'src'})")
+        cli_ui.err("Missing dock/pyproject.toml")
+        return cli_ui.EXIT_ERR
+    cli_ui.ok(f"All modules compiled cleanly ({DOCK_ROOT / 'src'})")
     return _run_tests()
 
 
 def main(argv: list[str] | None = None) -> int:
+    cli_ui.init_console()
     raw = list(sys.argv[1:] if argv is None else argv)
 
     # Dispatch clean subcommands before argparse GUI flags
     if raw and not raw[0].startswith("-"):
         sub = raw[0]
         sub_args = raw[1:]
+        as_json = "--json" in sub_args
         if sub == "ctl":
             return _run_ctl(sub_args)
         if sub == "install-desktop":
             installed = install_desktop_integration()
-            kernfs_mount.log_ok("Installed Kern Dock desktop launcher & GTK4 SVG radio icons:")
-            for k, v in installed.items():
-                print(f"  {k:14s}: {v}")
-            return 0
+            if as_json:
+                print(json.dumps(installed, indent=2))
+            else:
+                cli_ui.ok("Installed Kern Dock desktop launcher & GTK4 SVG radio icons:")
+                for k, v in installed.items():
+                    cli_ui.kv(k, str(v), width=16)
+            return cli_ui.EXIT_OK
         if sub == "uninstall-desktop":
             removed = uninstall_desktop_integration()
-            kernfs_mount.log_ok(f"Removed {len(removed)} desktop integration file(s)")
-            return 0
+            cli_ui.ok(f"Removed {len(removed)} desktop integration file(s)")
+            return cli_ui.EXIT_OK
         if sub == "desktop-status":
             print(json.dumps(desktop_integration_status(), indent=2))
-            return 0
+            return cli_ui.EXIT_OK
         if sub == "models":
-            for k, m in MODELS.items():
-                print(f"  {k:10s}  {m.label:22s}  chassis={m.chassis:9s}  lcd={m.palette:13s}  {m.description}")
-            return 0
+            if as_json:
+                print(
+                    json.dumps(
+                        {
+                            k: {
+                                "label": m.label,
+                                "chassis": m.chassis,
+                                "palette": m.palette,
+                                "description": m.description,
+                            }
+                            for k, m in MODELS.items()
+                        },
+                        indent=2,
+                    )
+                )
+            else:
+                cli_ui.header(f"Kern Dock Handset & Bench Models ({len(MODELS)})")
+                cli_ui.table(
+                    ("ID", "Model", "Chassis", "LCD", "Notes"),
+                    ((k, m.label, m.chassis, m.palette, m.description) for k, m in MODELS.items()),
+                )
+            return cli_ui.EXIT_OK
         if sub == "plugins":
             from .ui.runtime import DockRuntime
 
             rt = DockRuntime(DockOptions(no_tray=True, no_ipc=True), persist_config=False)
             rt.plugins.discover_all()
-            print(json.dumps(rt.plugins.summary(), indent=2))
-            return 0
+            summary = rt.plugins.summary()
+            if as_json:
+                print(json.dumps(summary, indent=2))
+            else:
+                cli_ui.header(f"Kern Dock Plugins ({len(summary)})")
+                cli_ui.table(
+                    ("ID", "Name", "Version", "Enabled", "Capabilities"),
+                    (
+                        (
+                            p.get("id", ""),
+                            p.get("name", ""),
+                            p.get("version", ""),
+                            "yes" if p.get("enabled") else "no",
+                            ", ".join(p.get("capabilities", ())),
+                        )
+                        for p in summary
+                    ),
+                )
+            return cli_ui.EXIT_OK
         if sub in ("test", "selftest"):
             return _run_tests()
         if sub == "build":
@@ -150,10 +191,11 @@ def main(argv: list[str] | None = None) -> int:
         prog="kern dock",
         description=(
             f"Kern Dock v{__version__} — Modular GTK4 + Libadwaita Hardware Companion.\n"
-            "Subcommands: ctl | install-desktop | uninstall-desktop | models | plugins | test | build"
+            "Subcommands: ctl | install-desktop | uninstall-desktop | models [--json] | plugins [--json] | test | build"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    ap.add_argument("-V", "--version", action="version", version=f"kern-dock {__version__}")
     ap.add_argument("-p", "--port", help="Serial port (/dev/ttyACM0, COM3, tcp://127.0.0.1:4446, or 'demo')")
     ap.add_argument("-b", "--baud", type=int, default=115200, help="Serial baud rate (default: 115200)")
     ap.add_argument("--model", choices=sorted(MODELS), help="Override auto-detected radio chassis mockup")
@@ -185,11 +227,11 @@ def main(argv: list[str] | None = None) -> int:
         no_plugins=args.no_plugins,
         start_hidden=args.start_hidden,
     )
-    kernfs_mount.print_header(f"Kern Dock v{__version__}")
-    kernfs_mount.log_info(f"Launching GTK4 dock (port={opts.port or 'auto-detect'}, mini={opts.mini})")
+    cli_ui.header(f"Kern Dock v{__version__}")
+    cli_ui.info(f"Launching GTK4 dock (port={opts.port or 'auto-detect'}, mini={opts.mini})")
     try:
         from .ui.app import launch
     except (ImportError, ValueError) as exc:
-        kernfs_mount.log_err(f"GTK4 / PyGObject unavailable ({exc}). Install python3-gobject + gtk4 + libadwaita.")
-        return 1
+        cli_ui.err(f"GTK4 / PyGObject unavailable ({exc}). Install python3-gobject + gtk4 + libadwaita.")
+        return cli_ui.EXIT_ERR
     return launch(opts)

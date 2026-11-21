@@ -15,19 +15,26 @@ import argparse
 import tomllib
 from pathlib import Path
 
-# ========== TUI STYLES ==========
-RESET   = "\033[0m"
-BOLD    = "\033[1m"
-DIM     = "\033[2m"
-INVERT  = "\033[7m"
-RED     = "\033[31m"
-GREEN   = "\033[32m"
-YELLOW  = "\033[33m"
-BLUE    = "\033[34m"
-MAGENTA = "\033[35m"
-CYAN    = "\033[36m"
-WHITE   = "\033[37m"
-GRAY    = "\033[90m"
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import cli_ui  # noqa: E402
+
+cli_ui.init_console()
+_C = cli_ui.ansi_map()
+RESET   = _C["RESET"]
+BOLD    = _C["BOLD"]
+DIM     = _C["DIM"]
+INVERT  = _C["INVERT"]
+RED     = _C["RED"]
+GREEN   = _C["GREEN"]
+YELLOW  = _C["YELLOW"]
+BLUE    = _C["BLUE"]
+MAGENTA = _C["MAGENTA"]
+CYAN    = _C["CYAN"]
+WHITE   = _C["WHITE"]
+GRAY    = _C["GRAY"]
 
 # ========== DEFAULT BUDGETS (PY32F071xB) ==========
 DEFAULT_FLASH_BUDGET = 118 * 1024  # 120,832 bytes (safe margin below 128KB)
@@ -53,8 +60,7 @@ TARGET_PROFILES = {
 }
 
 def print_header(title="Kern Firmware Builder & Analyzer"):
-    print(f"\n  ⚡ {BOLD}{CYAN}{title}{RESET}")
-    print(f"  ══════════════════════════════════════════════════════════════════")
+    cli_ui.header(title)
 
 def draw_bar(used, total, width=32, label=""):
     pct = (used / total) * 100.0 if total > 0 else 0.0
@@ -66,14 +72,12 @@ def draw_bar(used, total, width=32, label=""):
     if pct > 75.0: color = YELLOW
     if pct > 90.0: color = RED
 
-    bar = "█" * filled + "░" * empty
+    bar = ("█" * filled + "░" * empty) if cli_ui.supports_unicode() else ("#" * filled + "." * empty)
     remaining = total - used
     print(f"  {BOLD}{label:<8}{RESET} {color}[{bar}]{RESET} {BOLD}{pct:5.1f}%{RESET} ({used:,} / {total:,} bytes | {remaining:,} B free)")
 
 def run_cmd(cmd, cwd=None):
-    env = os.environ.copy()
-    home = str(Path.home())
-    env["PATH"] = f"{home}/.cargo/bin:{env.get('PATH', '')}"
+    env = cli_ui.cargo_env()
     res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, env=env)
     return res.returncode, res.stdout, res.stderr
 
