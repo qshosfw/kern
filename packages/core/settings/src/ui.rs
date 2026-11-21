@@ -1,16 +1,57 @@
-//! Lean, Native-Matching UI Primitives for External Settings.
+//! Lean, Native-Matching Animated UI Primitives for External Settings.
 //!
-//! Uses OS-native `draw_menu_item`, `draw_scrollbar`, and `set_status_bar` syscalls
-//! without pulling in `__aeabi_memclr`.
+//! Supports smooth kinetic pixel-scrolling (`KineticScroll`), oscillating selection
+//! arrows, native toggle checkboxes, and clean status-bar clipping without `__aeabi_memclr`.
 
 use kern_sdk::{
-    KRX_STATUS_CUSTOM_TITLE, KRX_STATUS_DIVIDER, KRX_STATUS_VISIBLE, KrxApiTable, KrxStatusBar,
-    format_u16_into,
+    COLOR_CLEAR, COLOR_FILL, KRX_STATUS_CUSTOM_TITLE, KRX_STATUS_DIVIDER, KRX_STATUS_VISIBLE,
+    KrxApiTable, KrxStatusBar, format_u16_into, icon,
 };
 
 pub const VISIBLE_ROWS: u8 = 4;
 pub const ROW_START_Y: i16 = 9;
 pub const ROW_STEP_Y: i16 = 13;
+
+/// Smooth pixel-level kinetic scroller matching resident `gfx::gui::animation::KineticScroller`.
+#[derive(Clone, Copy)]
+pub struct KineticScroll {
+    pub cur_y: i16,
+    pub target_y: i16,
+}
+
+impl KineticScroll {
+    pub const fn new() -> Self {
+        Self { cur_y: 0, target_y: 0 }
+    }
+
+    #[inline(always)]
+    pub fn jump_to_row(&mut self, top_row: u8) {
+        let y = (top_row as i16) * ROW_STEP_Y;
+        self.cur_y = y;
+        self.target_y = y;
+    }
+
+    #[inline(always)]
+    pub fn set_target_row(&mut self, top_row: u8, animate: bool) {
+        let y = (top_row as i16) * ROW_STEP_Y;
+        self.target_y = y;
+        if !animate {
+            self.cur_y = y;
+        }
+    }
+
+    /// Advance one animation frame; returns `true` while still moving.
+    #[inline(always)]
+    pub fn tick(&mut self) -> bool {
+        let diff = self.target_y - self.cur_y;
+        if diff == 0 {
+            return false;
+        }
+        let step = if diff > 0 { (diff + 1) >> 1 } else { (diff - 1) >> 1 };
+        self.cur_y += step;
+        true
+    }
+}
 
 #[inline(always)]
 pub const fn scroll_top(sel: u8) -> u8 {
@@ -28,7 +69,6 @@ pub fn set_title(api: &KrxApiTable, title: &[u8]) {
     let ptr = words.as_mut_ptr() as *mut u8;
     unsafe {
         *ptr = KRX_STATUS_VISIBLE | KRX_STATUS_DIVIDER | KRX_STATUS_CUSTOM_TITLE;
-        // `title` field starts at byte offset 12 inside `KrxStatusBar`.
         let n = title.len().min(16);
         let mut i = 0usize;
         while i < n {
@@ -39,26 +79,44 @@ pub fn set_title(api: &KrxApiTable, title: &[u8]) {
     }
 }
 
-/// Draw a single Settings menu row with optional icon, right-aligned value, and capsule.
+/// Draw a single scrolled row at pixel `y` with optional icon, value, oscillating arrow, or checkbox.
 #[inline(never)]
-pub fn draw_row(
+pub fn draw_scrolled_row(
     api: &KrxApiTable,
-    vis_idx: u8,
+    y: i16,
     label: &[u8],
     value: &[u8],
     icon_id: u8,
     selected: bool,
     editing: bool,
+    right_icon: u8,
+    tick: u8,
 ) {
-    let y = ROW_START_Y + (vis_idx as i16) * ROW_STEP_Y;
+    if y <= -ROW_STEP_Y || y >= 64 {
+        return;
+    }
     let flags = u8::from(selected) | (u8::from(editing) << 1) | 4;
     api.draw_menu_item(y, label, value, icon_id, flags);
+    if right_icon != 0 {
+        let fg = if selected && !editing { COLOR_CLEAR } else { COLOR_FILL };
+        let mut rx: i16 = 112;
+        if selected && right_icon == icon::ARROW_RIGHT {
+            let phase = ((tick >> 1) & 3) as i16;
+            rx += if phase == 3 { 1 } else { phase };
+        }
+        api.draw_icon(rx, y + 2, right_icon, fg);
+    }
 }
 
+/// Clean any scrolled row bleed into the top status bar band and draw smooth scrollbar.
 #[inline(never)]
-pub fn draw_list_scrollbar(api: &KrxApiTable, scroll: u8, total: u8) {
+pub fn finish_list_frame(api: &KrxApiTable, scroll_px: i16, total: u8) {
+    api.fill_rect(0, 0, 128, 8, COLOR_CLEAR);
     if total > VISIBLE_ROWS {
-        api.draw_scrollbar(125, 9, 52, scroll as u16, total as u16, VISIBLE_ROWS as u16);
+        let pos = scroll_px.max(0) as u16;
+        let tot = (total as u16) * (ROW_STEP_Y as u16);
+        let vis = (VISIBLE_ROWS as u16) * (ROW_STEP_Y as u16);
+        api.draw_scrollbar(125, 9, 52, pos, tot, vis);
     }
 }
 

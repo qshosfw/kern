@@ -1,11 +1,11 @@
-//! Declarative Settings Schema: Categories, Properties, Choices, and Value Formatters.
+//! Declarative Settings Schema: 7 Native Categories, Properties, Choices, and Value Formatters.
 //!
 //! Compact 4-byte `align(4)` descriptors + packed NUL-separated string pools:
 //! zero heap, zero `core::fmt`, zero GOT relocations, zero jump-table bloat.
 
 use kern_sdk::{format_u16_into, icon, nth_packed_slice, prop};
 
-pub const CAT_COUNT: usize = 6;
+pub const CAT_COUNT: usize = 7;
 
 pub const ACT_INSTALLED_APPS: u8 = 1;
 pub const ACT_DEVICE_INFO: u8 = 2;
@@ -45,6 +45,7 @@ pub const CH_STARTUP: u8 = 16;
 pub const CH_PAGER: u8 = 17;
 pub const CH_CPU_CLK: u8 = 18;
 pub const CH_UART_BAUD: u8 = 19;
+pub const CH_MODEL: u8 = 20;
 
 /// Compact 4-byte setting descriptor (`align(4)` avoids Cortex-M0+ `__aeabi_uread4`).
 #[derive(Clone, Copy)]
@@ -71,7 +72,7 @@ impl Item {
     }
 }
 
-/// Top-level category descriptor (4 bytes, `align(4)` avoids `__aeabi_uread4`).
+/// Top-level category descriptor matching canonical resident Settings icons (`align(4)`).
 #[derive(Clone, Copy)]
 #[repr(C, align(4))]
 pub struct Category {
@@ -84,13 +85,14 @@ pub struct Category {
 pub const CATEGORIES: [Category; CAT_COUNT] = [
     Category { icon_id: icon::DISPLAY, start: 0, count: 7, _pad: 0 },
     Category { icon_id: icon::AUDIO, start: 7, count: 7, _pad: 0 },
-    Category { icon_id: icon::KEYPAD, start: 14, count: 8, _pad: 0 },
+    Category { icon_id: icon::BUTTONS, start: 14, count: 8, _pad: 0 },
     Category { icon_id: icon::BATTERY, start: 22, count: 5, _pad: 0 },
-    Category { icon_id: icon::APPS, start: 27, count: 6, _pad: 0 },
-    Category { icon_id: icon::SYSTEM, start: 33, count: 5, _pad: 0 },
+    Category { icon_id: icon::DEVICE, start: 27, count: 2, _pad: 0 },
+    Category { icon_id: icon::APPS, start: 29, count: 6, _pad: 0 },
+    Category { icon_id: icon::SYSTEM, start: 35, count: 4, _pad: 0 },
 ];
 
-pub const ITEMS: [Item; 38] = [
+pub const ITEMS: [Item; 39] = [
     // Display (0..7)
     Item::choice(prop::BACKLIGHT_TIME, 0, CH_BL_TIME),
     Item::num(prop::BACKLIGHT_MAX, 1, UNIT_RAW),
@@ -107,7 +109,7 @@ pub const ITEMS: [Item; 38] = [
     Item::num(prop::ROGER_BEEP, 11, UNIT_RAW),
     Item::choice(prop::AUDIO_PROFILE, 12, CH_AUDIO_PROF),
     Item::choice(prop::BOOT_JINGLE, 13, CH_BOOT_JINGLE),
-    // Keys (14..22)
+    // Buttons (14..22)
     Item::choice(prop::NAV_LAYOUT, 14, CH_NAV_LAYOUT),
     Item::choice(prop::AUTO_LOCK, 15, CH_AUTO_LOCK),
     Item::choice(prop::F_KEY_TIMEOUT, 16, CH_F_TIMEOUT),
@@ -122,35 +124,38 @@ pub const ITEMS: [Item; 38] = [
     Item::choice(prop::POWER_PROFILE, 24, CH_PWR_PROF),
     Item::choice(prop::AUTO_POWER_OFF, 25, CH_AUTO_OFF),
     Item::toggle(prop::CHARGE_DETECT, 26),
-    // Apps (27..33)
-    Item::action(ACT_INSTALLED_APPS, 27),
-    Item::choice(prop::LAUNCHER_STYLE, 28, CH_LAUNCHER),
-    Item::toggle(prop::SHOW_NUMBERS, 29),
-    Item::toggle(prop::SHOW_LABELS, 30),
-    Item::choice(prop::STARTUP_APP, 31, CH_STARTUP),
-    Item::choice(prop::PAGER_POLICY, 32, CH_PAGER),
-    // System (33..38)
-    Item::action(ACT_DEVICE_INFO, 33),
-    Item::choice(prop::CPU_CLOCK, 34, CH_CPU_CLK),
-    Item::choice(prop::UART_BAUD, 35, CH_UART_BAUD),
-    Item::action(ACT_RESET_SETTINGS, 36),
-    Item::action(ACT_REBOOT_RADIO, 37),
+    // Device (27..29)
+    Item::action(ACT_DEVICE_INFO, 27),
+    Item::choice(prop::MODEL, 28, CH_MODEL),
+    // Apps (29..35)
+    Item::action(ACT_INSTALLED_APPS, 29),
+    Item::choice(prop::LAUNCHER_STYLE, 30, CH_LAUNCHER),
+    Item::toggle(prop::SHOW_NUMBERS, 31),
+    Item::toggle(prop::SHOW_LABELS, 32),
+    Item::choice(prop::STARTUP_APP, 33, CH_STARTUP),
+    Item::choice(prop::PAGER_POLICY, 34, CH_PAGER),
+    // System (35..39)
+    Item::choice(prop::CPU_CLOCK, 35, CH_CPU_CLK),
+    Item::choice(prop::UART_BAUD, 36, CH_UART_BAUD),
+    Item::action(ACT_RESET_SETTINGS, 37),
+    Item::action(ACT_REBOOT_RADIO, 38),
 ];
 
-const CAT_NAMES: &[u8] = b"Display\0Audio\0Keys\0Battery\0Apps\0System\0";
+const CAT_NAMES: &[u8] = b"Display\0Audio\0Buttons\0Battery\0Device\0Apps\0System\0";
 
 const ITEM_LABELS: &[u8] = concat!(
     "Backlight\0Max Bright\0Min Bright\0Contrast\0Invert LCD\0Animations\0Shading\0",
     "AF Volume\0Key Beep\0Beep Gain\0Mic Gain\0Roger Beep\0Audio EQ\0Boot Chime\0",
     "Nav Layout\0Auto Lock\0F Timeout\0Fast Scroll\0Hold Delay\0Repeat Rate\0PTT Mode\0F Drawer\0",
     "Cell Type\0Bar Format\0Power Mode\0Auto Off\0Chg Detect\0",
+    "Hardware Info\0Model\0",
     "Installed\0Home Style\0Numbers\0Labels\0Startup\0Pager\0",
-    "Device Info\0CPU Clock\0UART Baud\0Reset All\0Restart\0",
+    "CPU Clock\0UART Baud\0Reset All\0Restart\0",
 )
 .as_bytes();
 
 /// Single packed choice pool indexed by `CHOICE_BASES[table] + val` (0 jump-table code).
-const CHOICE_BASES: [u8; 20] = [
+const CHOICE_BASES: [u8; 21] = [
     0,  // CH_BL_TIME (6)
     6,  // CH_SHADING (3)
     9,  // CH_KEY_BEEP (7)
@@ -171,6 +176,7 @@ const CHOICE_BASES: [u8; 20] = [
     72, // CH_PAGER (3)
     75, // CH_CPU_CLK (5)
     80, // CH_UART_BAUD (2)
+    82, // CH_MODEL (3)
 ];
 
 const CHOICE_POOL: &[u8] = concat!(
@@ -194,6 +200,7 @@ const CHOICE_POOL: &[u8] = concat!(
     "Bal\0Fast\0Max\0",
     "16M\024M\032M\048M\072M\0",
     "115k\038k\0",
+    "UV-K1\0UV-K5\0K10Pro\0",
 )
 .as_bytes();
 
@@ -224,15 +231,9 @@ pub fn item_at(cat_idx: u8, row: u8) -> Item {
 #[inline(never)]
 pub fn format_value<'a>(item: Item, val: u8, buf: &'a mut [u8; 16]) -> &'a [u8] {
     match item.kind {
-        Kind::Toggle => {
-            if val != 0 {
-                b"On"
-            } else {
-                b"Off"
-            }
-        }
+        Kind::Toggle => b"", // Rendered as crisp native checkbox icon
         Kind::Choice => {
-            let base = unsafe { *CHOICE_BASES.get_unchecked((item.meta as usize).min(19)) };
+            let base = unsafe { *CHOICE_BASES.get_unchecked((item.meta as usize).min(20)) };
             let s = nth_packed_slice(CHOICE_POOL, base.saturating_add(val));
             if s.is_empty() {
                 format_u16_into(val as u16, 0, b"", buf)
@@ -248,9 +249,6 @@ pub fn format_value<'a>(item: Item, val: u8, buf: &'a mut [u8; 16]) -> &'a [u8] 
             };
             format_u16_into(val as u16, 0, suffix, buf)
         }
-        Kind::Action => match item.meta {
-            ACT_INSTALLED_APPS | ACT_DEVICE_INFO => b">",
-            _ => b"",
-        },
+        Kind::Action => b"",
     }
 }

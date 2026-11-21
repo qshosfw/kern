@@ -11,15 +11,11 @@ pub const INFO_ROWS: u8 = 5;
 const INFO_LABELS: &[u8] = b"Battery\0Charge\0MCU Temp\0CPU Clock\0Free Stack\0";
 
 #[inline(never)]
-pub fn render_device_info(api: &KrxApiTable, sel: u8) {
-    let top = ui::scroll_top(sel);
+pub fn render_device_info(api: &KrxApiTable, sel: u8, scroll_y: i16, tick: u8) {
     let mut val_buf = [0u8; 16];
-    let mut vis = 0u8;
-    while vis < ui::VISIBLE_ROWS {
-        let idx = top + vis;
-        if idx >= INFO_ROWS {
-            break;
-        }
+    let mut idx = 0u8;
+    while idx < INFO_ROWS {
+        let y = ui::ROW_START_Y + (idx as i16) * ui::ROW_STEP_Y - scroll_y;
         let (num, dec, suf): (u16, u8, &[u8]) = match idx {
             0 => ((((api.battery_mv() as u32) * 52_429) >> 19) as u16, 2, b"V"),
             1 => (api.battery_pct() as u16, 0, b"%"),
@@ -31,18 +27,20 @@ pub fn render_device_info(api: &KrxApiTable, sel: u8) {
             _ => (api.stack_free() as u16, 0, b"B"),
         };
         let val = format_u16_into(num, dec, suf, &mut val_buf);
-        ui::draw_row(
+        ui::draw_scrolled_row(
             api,
-            vis,
+            y,
             nth_packed_slice(INFO_LABELS, idx),
             val,
             0,
             idx == sel,
             false,
+            0,
+            tick,
         );
-        vis += 1;
+        idx += 1;
     }
-    ui::draw_list_scrollbar(api, top, INFO_ROWS);
+    ui::finish_list_frame(api, scroll_y, INFO_ROWS);
 }
 
 #[inline(never)]
