@@ -190,6 +190,13 @@ name = "kern-platform-traits"
 version = "0.1.0"
 
 [[package]]
+name = "kern-sdk"
+version = "0.1.0"
+dependencies = [
+ "abi",
+]
+
+[[package]]
 name = "kernel"
 version = "0.1.0"
 dependencies = [

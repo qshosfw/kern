@@ -1,0 +1,8 @@
+[package]
+name = "kern-sdk"
+version = "0.1.0"
+edition = "2024"
+description = "Public no_std Rust SDK for authoring Kern OS (.krx) packages"
+
+[dependencies]
+abi = { path = "../../crates/abi" }

@@ -170,6 +170,7 @@ class KrxPackageBuilder:
         self.actions = []
         self.cfg_bytes = 16
         self.settings = []
+        self.assets = bytearray()
 
     def set_identity(self, name: str, author: str = "KERN-TEAM", version=(1, 0, 0), icon_asset: int = 1):
         self.name = name
@@ -228,6 +229,25 @@ class KrxPackageBuilder:
 
     def add_setting(self, offset: int, kind: int, default_v: int, min_v: int, max_v: int, step: int, label: str, aux: str = "", flags: int = 0):
         self.settings.append((offset & 0xFF, kind & 0xFF, flags & 0xFF, step & 0xFF, default_v, min_v, max_v, label, aux))
+
+    def add_icon_ascii(self, kind: int, width: int, height: int, art: str):
+        """Pack an ASCII-art (`#` / `.`) icon bitmap into `SEC_ASSETS (0x0004)`."""
+        rows = [ln.strip() for ln in art.strip().splitlines() if ln.strip() and not ln.strip().startswith("//")]
+        if len(rows) != height or any(len(r) != width for r in rows):
+            raise SystemExit(f"ERROR: icon art for {width}x{height} has dimensions {len(rows)}x{[len(r) for r in rows]}")
+        bits = bytearray()
+        for r in rows:
+            val = 0
+            for x, ch in enumerate(r):
+                if ch == "#":
+                    val |= 1 << (width - 1 - x)
+            if width <= 8:
+                bits.append(val & 0xFF)
+            else:
+                bits.extend(struct.pack("<H", val & 0xFFFF))
+        self.assets.extend(struct.pack("<BBBB", kind & 0xFF, width & 0xFF, height & 0xFF, len(bits) & 0xFF))
+        self.assets.extend(bits)
+        align4(self.assets)
 
     def set_payload(self, payload_data: bytes):
         self.payload = bytearray(payload_data)
@@ -306,6 +326,8 @@ class KrxPackageBuilder:
             sec_sizes.append(4 + len(self.actions) * 16)
         if self.settings:
             sec_sizes.append(4 + 16 + len(self.settings) * 16)
+        if self.assets:
+            sec_sizes.append(4 + len(self.assets))
 
         sec_hdr_len = 0
         for sz in sec_sizes:
@@ -473,6 +495,10 @@ class KrxPackageBuilder:
                 act_body.extend(label_bytes.ljust(12, b"\x00")[:12])
             assert len(act_body) % 16 == 0
             sections.append((SEC_ACTIONS, act_body))
+
+        # 10. Assets Section (if present, self-contained package icons & bitmaps)
+        if self.assets:
+            sections.append((SEC_ASSETS, bytes(self.assets)))
 
         # Calculate section headers offset
         # Preamble is 24 bytes (KRX_MAGIC..link_base)

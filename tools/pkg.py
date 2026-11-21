@@ -62,11 +62,52 @@ def objcopy(elf: str) -> bytes:
         return f.read()
 
 
+def ensure_rust_sdk_rlibs() -> tuple[str, str, str]:
+    """Compile cached `libabi.rlib` and `libkern_sdk.rlib` for thumbv6m-none-eabi PIC packages."""
+    sdk_out = os.path.join(BUILD_ROOT, "_rust_sdk")
+    os.makedirs(sdk_out, exist_ok=True)
+    abi_rlib = os.path.join(sdk_out, "libabi.rlib")
+    sdk_rlib = os.path.join(sdk_out, "libkern_sdk.rlib")
+    common = [
+        "rustc", "--edition", "2024", "--target", "thumbv6m-none-eabi",
+        "-C", "opt-level=z", "-C", "panic=abort", "-C", "relocation-model=pic",
+        "-C", "codegen-units=1", "-C", "debuginfo=0", "--crate-type", "rlib",
+    ]
+    run(*common, "--crate-name", "abi", os.path.join(REPO_ROOT, "crates", "abi", "src", "lib.rs"), "-o", abi_rlib)
+    run(*common, "--crate-name", "kern_sdk", "-L", f"dependency={sdk_out}", "--extern", f"abi={abi_rlib}",
+        os.path.join(SDK, "rust", "src", "lib.rs"), "-o", sdk_rlib)
+    return sdk_out, abi_rlib, sdk_rlib
+
+
 def build_unit(src_dir: str, out_dir: str, source: str, limit: int | None) -> str:
-    """Compile one flat PIC unit and enforce the loader's invariants on it."""
+    """Compile one flat PIC unit (C or Rust) and enforce the loader's invariants on it."""
     stem = os.path.splitext(os.path.basename(source))[0]
     elf = os.path.join(out_dir, stem + ".elf")
-    run("arm-none-eabi-gcc", *CFLAGS, "-I", src_dir, f"-Wa,-I{out_dir}", "-o", elf, os.path.join(src_dir, source))
+    src_path = os.path.join(src_dir, source)
+    if source.endswith(".rs"):
+        sdk_out, abi_rlib, sdk_rlib = ensure_rust_sdk_rlibs()
+        ld_script = os.path.join(SDK, "krx.ld")
+        run(
+            "rustc", "--edition", "2024", "--crate-type", "bin",
+            "--target", "thumbv6m-none-eabi",
+            "-C", "opt-level=z", "-C", "panic=abort", "-C", "relocation-model=pic",
+            "-C", "codegen-units=1", "-C", "debuginfo=0",
+            "-C", "linker=arm-none-eabi-gcc",
+            "-C", "link-arg=-nostdlib",
+            "-C", "link-arg=-mthumb",
+            "-C", "link-arg=-mcpu=cortex-m0plus",
+            "-C", f"link-arg=-T{ld_script}",
+            "-C", "link-arg=-Wl,--gc-sections",
+            "-C", "link-arg=-Wl,--no-dynamic-linker",
+            "-C", "link-arg=-Wl,--build-id=none",
+            "-C", "link-arg=-Wl,-e,0",
+            "-L", f"dependency={sdk_out}",
+            "--extern", f"abi={abi_rlib}",
+            "--extern", f"kern_sdk={sdk_rlib}",
+            "-o", elf, src_path,
+        )
+    else:
+        run("arm-none-eabi-gcc", *CFLAGS, "-I", src_dir, f"-Wa,-I{out_dir}", "-o", elf, src_path)
     size = len(objcopy(elf))
     undefs = run("arm-none-eabi-nm", "-u", elf).split()
     relocs = run("arm-none-eabi-readelf", "-r", elf).count("R_ARM_")
@@ -152,6 +193,12 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
     for action in m.get("action", []):
         scope = pack_krx.resolve_mask("KRX_SCOPE", action["scope"])
         builder.add_action(action.get("id", 0), scope, action["label"], action.get("flags", 0))
+    if "icon_8" in m:
+        builder.add_icon_ascii(1, 8, 8, m["icon_8"])
+    if "icon_16" in m:
+        builder.add_icon_ascii(2, 16, 16, m["icon_16"])
+    if "icon_tray" in m:
+        builder.add_icon_ascii(3, 5, 5, m["icon_tray"])
 
     image = builder.build()
     pack_krx.verify_package(image)

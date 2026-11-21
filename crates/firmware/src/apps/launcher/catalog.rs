@@ -417,4 +417,28 @@ mod tests {
             assert_eq!(leaves.leaf_at(17).map(|entry| entry.leaf_id), Some(18));
         }
     }
+
+    #[test]
+    fn rust_krx_package_and_self_contained_icon_assets_validate() {
+        const HELLO_RUST: &[u8] =
+            include_bytes!("../../../../../packages/examples/hello_rust/hello_rust.krx");
+        let hdr_len = KrxPreamble::MAX_HEADER_SIZE.min(HELLO_RUST.len());
+        let summary = KrxPreamble::summarize(&HELLO_RUST[..hdr_len])
+            .expect("hello_rust.krx header must parse");
+        assert_eq!(summary.title(), "Hello Rust");
+        assert_eq!(summary.abi, ::abi::VERSION);
+        assert_eq!(
+            summary.preamble.execution_class(),
+            Some(kernel::runtime::KrxClass::Native)
+        );
+        let (w8, h8, bits8) =
+            KrxPreamble::find_icon_asset(HELLO_RUST, kernel::runtime::ASSET_ICON_8)
+                .expect("hello_rust.krx must carry its 8x8 icon in SECTION_ASSETS");
+        assert_eq!((w8, h8, bits8.len()), (8, 8, 8));
+        assert_eq!(bits8[0], 0b0011_1100);
+        let (w16, h16, bits16) =
+            KrxPreamble::find_icon_asset(HELLO_RUST, kernel::runtime::ASSET_ICON_16)
+                .expect("hello_rust.krx must carry its 16x16 icon in SECTION_ASSETS");
+        assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
+    }
 }

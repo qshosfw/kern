@@ -309,6 +309,11 @@ pub const SECTION_IDENTITY: u16 = 0x0001;
 pub const SECTION_EXECUTION: u16 = 0x0002;
 pub const SECTION_CAP_IMPORTS: u16 = 0x0003;
 pub const SECTION_ASSETS: u16 = 0x0004;
+
+/// Self-contained package icon asset kinds inside `SECTION_ASSETS` (`0x0004`).
+pub const ASSET_ICON_8: u8 = 1;
+pub const ASSET_ICON_16: u8 = 2;
+pub const ASSET_ICON_TRAY: u8 = 3;
 pub const SECTION_BLOCK_MAP: u16 = 0x0005;
 pub const SECTION_SERVICE_EXPORTS: u16 = 0x0006;
 pub const SECTION_CONFIG: u16 = 0x0007;
@@ -983,6 +988,50 @@ impl KrxPreamble {
         let mut summary = core::mem::MaybeUninit::uninit();
         let _ = Self::summarize_into(buf, &mut summary)?;
         Ok(unsafe { summary.assume_init() })
+    }
+
+    /// Look up a self-contained icon bitmap (`ASSET_ICON_8`, `ASSET_ICON_16`, `ASSET_ICON_TRAY`)
+    /// inside a package header's `SECTION_ASSETS (0x0004)` without allocating or expanding `KrxSummary`.
+    pub fn find_icon_asset<'a>(buf: &'a [u8], want_kind: u8) -> Option<(u8, u8, &'a [u8])> {
+        if buf.len() < Self::SIZE {
+            return None;
+        }
+        let h_len = u16::from_le_bytes([buf[8], buf[9]]) as usize;
+        let hdr = buf.get(..h_len)?;
+        let mut rest = hdr.get(Self::SIZE..)?;
+        while rest.len() >= SectionHeader::SIZE {
+            let sec_id = u16::from_le_bytes([rest[0], rest[1]]);
+            let sec_len = u16::from_le_bytes([rest[2], rest[3]]) as usize;
+            if sec_len < SectionHeader::SIZE || sec_len > rest.len() {
+                break;
+            }
+            if sec_id == SECTION_ASSETS {
+                let mut assets = &rest[SectionHeader::SIZE..sec_len];
+                while assets.len() >= 4 {
+                    let kind = assets[0];
+                    let w = assets[1];
+                    let h = assets[2];
+                    let blen = assets[3] as usize;
+                    if 4 + blen > assets.len() {
+                        break;
+                    }
+                    if kind == want_kind {
+                        return Some((w, h, &assets[4..4 + blen]));
+                    }
+                    let step = (4 + blen + 3) & !3;
+                    if step >= assets.len() {
+                        break;
+                    }
+                    assets = &assets[step..];
+                }
+            }
+            let step = (sec_len + 3) & !3;
+            if step >= rest.len() {
+                break;
+            }
+            rest = &rest[step..];
+        }
+        None
     }
 }
 

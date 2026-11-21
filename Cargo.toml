@@ -15,6 +15,7 @@ members = [
     "crates/mcu/py32f071/hal",
     "crates/board/uv-k1",
     "crates/firmware",
+    "sdk/rust",
 ]
 resolver = "2"
 

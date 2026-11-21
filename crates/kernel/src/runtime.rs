@@ -15,8 +15,8 @@ mod tests;
 
 pub use fault::{AppFault, Exception, KRX_FAULT_SENTINEL};
 pub use image::{
-    AssetDescriptor, BOOT_IDENT, BlockEntry, CALIB_IDENT, CFG_KIND_CHOICE, CFG_KIND_RANGE,
-    CFG_KIND_TOGGLE, CapBinding, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, HwClaim,
+    ASSET_ICON_8, ASSET_ICON_16, ASSET_ICON_TRAY, AssetDescriptor, BOOT_IDENT, BlockEntry,
+    CALIB_IDENT, CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, CapBinding, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, HwClaim,
     KERNFS_IDENT, KRX_IDENT, KRX_PCB_IDENT, KrxActionDecl, KrxAuxSections, KrxClass,
     KrxConfigHeader, KrxConfigItem, KrxExecType, KrxIndexEntry, KrxLaunchError, KrxPreamble,
     KrxProfile, KrxSectionIterator, KrxSummary, LeafContext, LeafContinuation, LeafEntry,
