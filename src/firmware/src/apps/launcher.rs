@@ -151,7 +151,9 @@ pub fn load_entries(
                 icon_16,
                 target: LauncherTarget::Package(pkg_idx as u8),
             };
-            if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/settings.krx") {
+            if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/vfo.krx") {
+                entries[0] = entry;
+            } else if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/settings.krx") {
                 entries[1] = entry;
             } else {
                 entries[count] = entry;
@@ -596,6 +598,28 @@ mod tests {
         assert_eq!(entries[1].target, LauncherTarget::Package(0));
         assert_eq!(entries[2].title(), "Torch");
         assert_eq!(entries[3].title(), "About");
+
+        // Adding /apps/vfo.krx replaces slot 0 (Radio) in-place too
+        let _ = cat.entries.push(catalog::PackageCatalogEntry {
+            app_class: kernel::runtime::KrxClass::Native,
+            exec_type: kernel::runtime::KrxExecType::App,
+            lifecycle_flags: 0,
+            is_valid: true,
+            has_config: false,
+            scopes: 0,
+            icon_id: ::abi::icon::APP_RADIO as u16,
+            caps: 0,
+            icon_16_off: 0,
+            icon_8: *gfx::icons::ICON_APP_RADIO,
+            title: catalog::SmallStr::from_str("Radio"),
+            path: catalog::SmallStr::from_str("/apps/vfo.krx"),
+        });
+
+        let entries = load_entries(None);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].title(), "Radio");
+        assert_eq!(entries[0].target, LauncherTarget::Package(1));
+        assert_eq!(entries[1].target, LauncherTarget::Package(0));
 
         cat.entries.clear();
     }

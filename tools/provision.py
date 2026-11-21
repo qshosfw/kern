@@ -24,9 +24,11 @@ RIGWIRE_TOOL = os.path.join(ROOT, "tools", "rigwire.py")
 
 BUNDLES = {
     "core": [
+        "core/vfo",
         "core/settings",
     ],
     "sys": [
+        "core/vfo",
         "core/settings",
         "sys/sysinfo",
         "sys/recovery",
@@ -34,6 +36,7 @@ BUNDLES = {
         "sys/dfu",
     ],
     "all": [
+        "core/vfo",
         "core/settings",
         "sys/sysinfo",
         "sys/recovery",
@@ -52,6 +55,7 @@ BUNDLES = {
 }
 
 ALIASES = {
+    "vfo": "core/vfo",
     "settings": "core/settings",
     "sysinfo": "sys/sysinfo",
     "recovery": "sys/recovery",

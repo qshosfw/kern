@@ -1027,6 +1027,21 @@ impl Orchestrator {
             Shortcut::None => {}
             Shortcut::LaunchApp(id) => {
                 #[cfg(all(
+                    not(any(test, feature = "resident_vfo")),
+                    feature = "filesystem",
+                    feature = "krx_native"
+                ))]
+                if id as usize == APP_ID_VFO {
+                    match crate::runtime::launch_krx_package(ctx, "/apps/vfo.krx", 0) {
+                        Ok(_) => return,
+                        Err(kernel::runtime::KrxLaunchError::ReadFailed) => {}
+                        Err(e) => {
+                            crate::runtime::show_launch_error_dialog(ctx, "/apps/vfo.krx", e);
+                            return;
+                        }
+                    }
+                }
+                #[cfg(all(
                     not(any(test, feature = "resident_settings")),
                     feature = "filesystem",
                     feature = "krx_native"

@@ -33,6 +33,7 @@ default = [
     "overclock_72mhz",
     "text_input",
     "resident_settings",
+    "resident_vfo",
 ]
 
 # 🔌 Bootloader DFU Raw Fallback (optional; primary UI/hooks offloaded to /apps/dfu.mod)
@@ -40,6 +41,7 @@ dfu = []
 
 # ⚙️ Granular Settings & Diagnostics
 resident_settings = []
+resident_vfo = []
 settings_info = ["resident_settings"]
 settings_calib = ["resident_settings"]
 settings_debug = ["resident_settings"]

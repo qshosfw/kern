@@ -554,4 +554,26 @@ mod tests {
         assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
         assert_eq!(bits16, gfx::icons::ICON_16_SETTINGS);
     }
+
+    #[test]
+    fn core_vfo_krx_package_validates_header_and_icons() {
+        const VFO_KRX: &[u8] = include_bytes!("../../../../../packages/core/vfo/vfo.krx");
+        let hdr_len = KrxPreamble::MAX_HEADER_SIZE.min(VFO_KRX.len());
+        let summary = KrxPreamble::summarize(&VFO_KRX[..hdr_len]).expect("vfo.krx header parses");
+        assert_eq!(summary.title(), "Radio");
+        assert_eq!(summary.abi, ::abi::VERSION);
+        assert_eq!(
+            summary.preamble.execution_class(),
+            Some(kernel::runtime::KrxClass::Native)
+        );
+        let (w8, h8, bits8) = KrxPreamble::find_icon_asset(VFO_KRX, kernel::runtime::ASSET_ICON_8)
+            .expect("vfo.krx must carry its 8x8 icon in SECTION_ASSETS");
+        assert_eq!((w8, h8, bits8.len()), (8, 8, 8));
+        assert_eq!(bits8, gfx::icons::ICON_APP_RADIO);
+        let (w16, h16, bits16) =
+            KrxPreamble::find_icon_asset(VFO_KRX, kernel::runtime::ASSET_ICON_16)
+                .expect("vfo.krx must carry its 16x16 icon in SECTION_ASSETS");
+        assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
+        assert_eq!(bits16, gfx::icons::ICON_16_RADIO);
+    }
 }
