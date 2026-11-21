@@ -54,6 +54,30 @@ pub const MODAL_RESULT_TEXT_DONE: u8 = 2;
 pub const MODAL_RESULT_SHEET_SELECTED: u8 = 3;
 pub const MODAL_RESULT_CANCELED: u8 = 4;
 
+pub const KRX_LEAF_KIND_DONE: u8 = 0;
+pub const KRX_LEAF_KIND_CALL_LEAF: u8 = 1;
+pub const KRX_LEAF_KIND_YIELD: u8 = 2;
+pub const KRX_LEAF_KIND_ERROR: u8 = 3;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KrxLeafContinuation {
+    pub kind: u8,
+    pub target_or_code: u8,
+    pub reserved: u16,
+    pub payload: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KrxLeafContext {
+    pub leaf_id: u8,
+    pub flags: u8,
+    pub reserved: u16,
+    pub arg: u32,
+    pub continuation: KrxLeafContinuation,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct KrxEvent {
@@ -350,6 +374,150 @@ impl KrxApiTable {
     }
 
     #[inline(always)]
+    pub fn show_sheet(
+        &self,
+        tag: u8,
+        title: &[u8],
+        packed_opts: &[u8],
+        selected: u8,
+        show_radio: bool,
+    ) {
+        let len = packed_opts.len();
+        let req = KrxModalReq {
+            title: title.as_ptr(),
+            msg: packed_opts.as_ptr(),
+            ok: core::ptr::null(),
+            cancel: core::ptr::null(),
+            tag,
+            kind: 3,
+            t_len: title.len().min(255) as u8,
+            m_len: (len & 0xFF) as u8,
+            o_len: ((len >> 8) & 0xFF) as u8,
+            c_len: u8::from(show_radio),
+            max_len: selected,
+            _pad: 0,
+        };
+        let _ = self.call_op(
+            Op::UiModal,
+            crate::sub::ui_modal::SHOW as usize,
+            &raw const req as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn prompt_text(&self, tag: u8, title: &[u8], initial: &[u8], max_len: u8) {
+        let req = KrxModalReq {
+            title: title.as_ptr(),
+            msg: initial.as_ptr(),
+            ok: core::ptr::null(),
+            cancel: core::ptr::null(),
+            tag,
+            kind: 2,
+            t_len: title.len().min(255) as u8,
+            m_len: initial.len().min(255) as u8,
+            o_len: 0,
+            c_len: 0,
+            max_len,
+            _pad: 0,
+        };
+        let _ = self.call_op(
+            Op::UiModal,
+            crate::sub::ui_modal::SHOW as usize,
+            &raw const req as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn get_modal_text(&self, out: &mut [u8]) -> usize {
+        self.call_op(
+            Op::UiModal,
+            crate::sub::ui_modal::GET_TEXT as usize,
+            out.as_mut_ptr() as usize,
+            out.len().min(255),
+        )
+    }
+
+    #[inline(always)]
+    pub fn draw_bitmap(&self, x: i16, y: i16, w: u8, h: u8, bits: &[u8]) {
+        let desc = KrxWidget {
+            p0: bits.as_ptr(),
+            p1: core::ptr::null(),
+            x,
+            y,
+            len0: bits.len() as u16,
+            len1: 0,
+            extra: 0,
+            w,
+            h,
+            a: 0,
+            b: 0,
+            _pad: [0; 2],
+        };
+        let _ = self.call_op(
+            Op::GfxCtl,
+            crate::sub::gfx_ctl::BITMAP as usize,
+            &raw const desc as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn draw_tag_badge(&self, x: i16, y: i16, text: &[u8], filled: bool) {
+        let desc = KrxWidget {
+            p0: text.as_ptr(),
+            p1: core::ptr::null(),
+            x,
+            y,
+            len0: text.len() as u16,
+            len1: 0,
+            extra: 0,
+            w: 0,
+            h: 0,
+            a: u8::from(filled),
+            b: 0,
+            _pad: [0; 2],
+        };
+        let _ = self.call_op(
+            Op::UiWidget,
+            KRX_WIDGET_TAG_BADGE as usize,
+            &raw const desc as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn draw_capsule_button(&self, x: i16, y: i16, w: u8, h: u8, text: &[u8], filled: bool) {
+        let desc = KrxWidget {
+            p0: text.as_ptr(),
+            p1: core::ptr::null(),
+            x,
+            y,
+            len0: text.len() as u16,
+            len1: 0,
+            extra: 0,
+            w,
+            h,
+            a: u8::from(filled),
+            b: 0,
+            _pad: [0; 2],
+        };
+        let _ = self.call_op(
+            Op::UiWidget,
+            KRX_WIDGET_CAPSULE_BUTTON as usize,
+            &raw const desc as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn draw_line(&self, x0: i16, y0: i16, x1: i16, y1: i16, color: u8) {
+        let sub_color = (crate::sub::gfx_draw::LINE as usize) | ((color as usize) << 8);
+        let _ = self.call_op(Op::GfxDraw, sub_color, pack_xy(x0, y0), pack_xy(x1, y1));
+    }
+
+    #[inline(always)]
     pub fn play_beep(&self, beep_type: u8) {
         let _ = self.call_op(Op::AudTone, beep_type as usize, 0xFFFF, 0);
     }
@@ -459,6 +627,72 @@ impl KrxApiTable {
     }
 
     #[inline(always)]
+    pub fn battery_ma(&self) -> u16 {
+        self.call_op(Op::IoPower, crate::sub::io_power::BATT_MA as usize, 0, 0) as u16
+    }
+
+    #[inline(always)]
+    pub fn is_charging(&self) -> bool {
+        self.call_op(Op::IoPower, crate::sub::io_power::CHARGING as usize, 0, 0) != 0
+    }
+
+    #[inline(always)]
+    pub fn crc32(&self, data: &[u8]) -> u32 {
+        self.call_op(
+            Op::SysQuery,
+            crate::sub::sys_query::CRC32 as usize,
+            data.as_ptr() as usize,
+            data.len(),
+        ) as u32
+    }
+
+    #[inline(always)]
+    pub fn reload_config(&self) -> bool {
+        self.call_op(Op::SysFlush, 1, 0, 0) == 0
+    }
+
+    #[inline(always)]
+    pub fn write_file(&self, path: &[u8], data: &[u8]) -> bool {
+        let req = KrxFsReq {
+            path: path.as_ptr(),
+            buf: data.as_ptr() as *mut u8,
+            offset: 0,
+            len: data.len() as u16,
+            path_len: path.len() as u8,
+            extra: 0,
+        };
+        self.call_op(
+            Op::FsWrite,
+            crate::sub::fs_write::FILE as usize,
+            &req as *const KrxFsReq as usize,
+            0,
+        ) == 0
+    }
+
+    #[inline(always)]
+    pub fn read_file_at(&self, path: &[u8], offset: u32, out: &mut [u8]) -> usize {
+        let req = KrxFsReq {
+            path: path.as_ptr(),
+            buf: out.as_mut_ptr(),
+            offset,
+            len: out.len() as u16,
+            path_len: path.len() as u8,
+            extra: 0,
+        };
+        self.call_op(
+            Op::FsRead,
+            crate::sub::fs_read::FILE_AT as usize,
+            &req as *const KrxFsReq as usize,
+            0,
+        )
+    }
+
+    #[inline(always)]
+    pub fn call_leaf(&self, leaf_id: u8, arg: u32) -> u32 {
+        self.call_op(Op::ProcLeaf, leaf_id as usize, arg as usize, 0) as u32
+    }
+
+    #[inline(always)]
     pub fn launch_pkg(&self, path: &[u8]) -> bool {
         let a0 = (PROC_CTL_LAUNCH_PKG as usize) | ((path.len().min(31)) << 8);
         self.call_op(Op::ProcCtl, a0, path.as_ptr() as usize, 0) == 0
@@ -528,8 +762,16 @@ unsafe extern "C" fn stub_kern_call(op: u32, a0: usize, _a1: usize, _a2: usize) 
 
 // ── Compact Request Descriptors (Pointers-First, Zero Hidden Padding) ────────
 
+/// `KrxTextReq::flags` bitmask constants.
+pub const KRX_TEXT_MEASURE: u8 = 1 << 0;
+pub const KRX_TEXT_CLIP: u8 = 1 << 1;
+/// Translate `text` through the active app/OS `.lng` pack (falling back to the literal).
+pub const KRX_TEXT_LOCALIZE: u8 = 1 << 2;
+/// When combined with [`KRX_TEXT_LOCALIZE`], prefer the natural compact/short translation variant.
+pub const KRX_TEXT_SHORT: u8 = 1 << 3;
+
 /// Text draw / measure request (`Op::GfxText`).
-/// `flags`: bit 0 = measure only, bit 1 = clip to `arg` (`max_w`), otherwise `arg` = align.
+/// `flags`: bit 0 = measure only, bit 1 = clip to `arg` (`max_w`), bit 2 = localize, bit 3 = short.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KrxTextReq {

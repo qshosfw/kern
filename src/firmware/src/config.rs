@@ -515,6 +515,24 @@ impl MasterConfig {
         }
     }
 
+    /// Arena-safe reload of all valid `/pref/*.cfg` blocks into live RAM (callable from KRX apps).
+    #[inline(never)]
+    pub fn reload_from_storage(&mut self, storage: &mut SystemStorage) {
+        let mut tmp = [0u8; 80];
+        for (i, meta) in CONFIG_METAS.iter().enumerate() {
+            let n = (meta.size as usize).min(tmp.len());
+            if storage
+                .read_file(config_path(i), &mut tmp[..n])
+                .is_ok_and(|len| len >= n && is_raw_valid(&tmp[..n], meta.version))
+            {
+                self.config_bytes_mut(i)[..n].copy_from_slice(&tmp[..n]);
+            }
+        }
+        let _ = self.sanitize();
+        self.seal_all();
+        self.hw_dirty |= 0x1F;
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty != 0
     }

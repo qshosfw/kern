@@ -272,6 +272,17 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             usize::from(!(allowed && config.control_set(id, a1 as u8)))
         }
         op::SysFlush => {
+            if a0 == 1 {
+                #[cfg(not(test))]
+                {
+                    crate::master_config().reload_from_storage(crate::kern_fs());
+                }
+                #[cfg(test)]
+                if let Some(ctx) = super::active_ctx_opt() {
+                    ctx.config.reload_from_storage(ctx.storage);
+                }
+                return 0;
+            }
             #[cfg(not(test))]
             {
                 usize::from(

@@ -56,6 +56,23 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
         let _ = (t_str, init_str);
         return;
     }
+    if r.kind == 3 {
+        let t_str = unsafe { str_or_default(r.title, r.t_len as usize, "Select") };
+        let opts_len = (r.m_len as usize) | ((r.o_len as usize) << 8);
+        if let Some(raw) = unsafe { super::ptr_slice(r.msg, opts_len) } {
+            if raw.iter().all(|&b| b == 0 || (0x20..=0x7E).contains(&b)) {
+                let opts = unsafe { core::str::from_utf8_unchecked(raw) };
+                let sheet = gfx::gui::modules::menu::OptionSheet::new(
+                    t_str,
+                    gfx::gui::modules::menu::SheetOptions::Packed(opts),
+                    r.max_len as usize,
+                )
+                .with_radio(r.c_len != 0);
+                modal_mut().show_sheet(r.tag, sheet);
+            }
+        }
+        return;
+    }
     utils::static_bytes!(
         static DEFS = b"Notice\0\0\0\0Confirm\0\0OK\0CANCEL\0";
     );
@@ -72,6 +89,21 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
     );
 }
 
+#[inline(always)]
+fn tr_ui<'a>(s: &'a str, prefer_short: bool, buf: &'a mut [u8; 48]) -> &'a str {
+    #[cfg(feature = "filesystem")]
+    if !s.is_empty() && crate::services::lang::is_active() {
+        #[cfg(not(test))]
+        return crate::services::lang::translate(crate::kern_fs(), s, prefer_short, buf);
+        #[cfg(test)]
+        if let Some(ctx) = super::active_ctx_opt() {
+            return crate::services::lang::translate(ctx.storage, s, prefer_short, buf);
+        }
+    }
+    let _ = (prefer_short, buf);
+    s
+}
+
 unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     if desc.is_null() {
         return 1;
@@ -81,7 +113,19 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     let ux = d.x.max(0) as u8;
     let uy = d.y.max(0) as u8;
     let raw0 = unsafe { slice_or_empty(d.p0, d.len0 as usize) };
-    let s0 = utils::format::ascii_str(raw0).unwrap_or("");
+    let s0_raw = utils::format::ascii_str(raw0).unwrap_or("");
+    let mut tr_buf = [0u8; 48];
+    let s0 = if matches!(
+        kind,
+        KRX_WIDGET_NEGATED_HEADER
+            | KRX_WIDGET_SHEET_FRAME
+            | KRX_WIDGET_CAPSULE_BUTTON
+            | KRX_WIDGET_MENU_ITEM
+    ) {
+        tr_ui(s0_raw, kind == KRX_WIDGET_CAPSULE_BUTTON, &mut tr_buf)
+    } else {
+        s0_raw
+    };
     let badge = |filled: bool| {
         if filled {
             gfx::widgets::BadgeStyle::Filled
@@ -159,13 +203,21 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 5
             };
             let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
-            gfx::text::draw_str(
+            let title_max = if is_toggle || has_chevron {
+                108i16
+            } else if !s1.is_empty() {
+                (116 - gfx::text::str_width(s1, &gfx::fonts::tomthumb::FONT)).max(36)
+            } else {
+                119i16
+            };
+            gfx::text::draw_str_ellipsis(
                 canvas,
                 text_x,
                 d.y + text_dy,
                 s0,
                 &gfx::fonts::mumatrix_regular::FONT,
                 col,
+                title_max,
             );
             if is_toggle {
                 let ic = if toggle_on {
