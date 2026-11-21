@@ -8,7 +8,7 @@ Installable applications and system modules built against the [`sdk/`](../sdk/) 
 
 ### `packages/core/` — Core Userland OS Apps
 - [`core/vfo/`](core/vfo/krx.toml) (`vfo.krx`, Rust `N1` PIC) — External Dual-VFO Radio Transceiver HUD replacing resident ROM VFO.
-- [`core/settings/`](core/settings/krx.toml) (`settings.krx`, Rust `N1` PIC) — Modular, schema-driven System Settings, Installed Apps manager, and Live Device Info replacing resident ROM settings.
+- [`core/settings/`](core/settings/krx.toml) (`settings.krx`, Rust `P0` Structured Paged, 17 leaves) — Full System Settings with native `OptionSheet` pickers, `Device` identity (`Model`, `Owner`, `Tag`, `Radio ID`, `Language`, `Bandplans`, `Boot Splash`), `Audio` (`Roger Beep` & `Boot Jingle` choosers), `Buttons` (`Shortcuts` binder), `System Modules` launcher, and scrollable 16×16 `App Detail` manager.
 
 ### `packages/sys/` — System & Maintenance Modules
 - [`sys/calib/`](sys/calib/krx.toml) (`calib.mod`, Rust `N1` PIC) — Factory RF & battery calibration inspector (`/sys/calib.dat`), automatically listed in `Settings → System → Modules`.

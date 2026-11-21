@@ -1,6 +1,8 @@
-# Contributing to Kern
+# Contributing to Kern (OpenTaiko)
 
-Welcome to Kern. We are building a memory-safe, zero-heap `no_std` Rust microkernel for handheld amateur radio transceivers.
+Welcome to **Kern**, part of the [OpenTaiko (`qshosfw`)](https://github.com/qshosfw) project building a memory-safe, zero-heap `#![no_std]` Rust microkernel and package ecosystem for handheld amateur radio transceivers.
+
+Support ongoing hardware and firmware development at [ko-fi.com/qshosfw](https://ko-fi.com/qshosfw).
 
 To maintain code quality, memory safety invariants, and architectural decoupling, all contributions must adhere to the engineering guidelines below.
 
@@ -38,20 +40,23 @@ Always use the `./kern` CLI for common developer operations:
 # 2. Fast syntax and type verification (must pass with 0 warnings)
 ./kern check --deny-warnings
 
-# 3. Verify Rust ABI and C SDK header (packages/sdk/krx_ops.h) match
+# 3. Verify Rust ABI and C SDK header (sdk/c/krx_ops.h) match
 ./kern abi --check
 
 # 4. Execute host unit tests
 ./kern test
 
-# 5. Build and verify KRX C packages under packages/
-./kern pkg
+# 5. Build and verify KRX Rust & C packages under packages/
+./kern pkg all
 
 # 6. Compile release firmware and check Flash/SRAM budgets
 ./kern build --deny-warnings
 
 # 7. Inspect Flash and SRAM memory section allocation
 ./kern size
+
+# 8. Provision core + system packages to a radio over RigWire
+python3 tools/provision.py --port /dev/ttyACM0 --bundle sys
 ```
 
 ---
