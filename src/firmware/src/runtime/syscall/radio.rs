@@ -222,7 +222,7 @@ unsafe fn dispatch_rf_vfo(
             let Some(vfo) = decode_vfo_slot(slot) else {
                 return 1;
             };
-            let res = RfResourceMask(a1 as u8);
+            let res = RfResourceMask(a1 as u16);
             let token = active_krx_token(exclusive);
             usize::from(!coord.request_resource_lock(token, res, vfo, a2 as u16, false))
         }

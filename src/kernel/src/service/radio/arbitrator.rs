@@ -99,9 +99,9 @@ impl ClientToken {
     }
 }
 
-/// Bitmask of fine-grained RF and baseband hardware resources.
+/// Bitmask of fine-grained RF, audio, and auxiliary hardware resources (16-bit extensible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RfResourceMask(pub u8);
+pub struct RfResourceMask(pub u16);
 
 impl RfResourceMask {
     pub const NONE: Self = Self(0);
@@ -113,11 +113,17 @@ impl RfResourceMask {
     pub const BASEBAND_MODEM: Self = Self(1 << 5);
     /// Secondary broad-band HF receiver (e.g. Si4732).
     pub const SECONDARY_RECEIVER: Self = Self(1 << 6);
-    /// Broadcast FM receiver alias (BK1080).
-    pub const BROADCAST_FM: Self = Self(1 << 6);
     /// Auxiliary data bus / GPS / BLE telemetry.
     pub const AUX_TELEMETRY: Self = Self(1 << 7);
-    pub const ALL: Self = Self(0xFF);
+    /// Dedicated broadcast FM tuner (BK1080) — independent of secondary HF receiver.
+    pub const BROADCAST_FM: Self = Self(1 << 8);
+    /// Microphone / TX audio capture path.
+    pub const AUDIO_MIC: Self = Self(1 << 9);
+    /// Background channel / frequency scanner engine.
+    pub const SCANNER: Self = Self(1 << 10);
+    /// Fast RSSI / spectrum sweep engine.
+    pub const SPECTRUM: Self = Self(1 << 11);
+    pub const ALL: Self = Self(0xFFFF);
 
     #[inline(always)]
     pub const fn contains(&self, other: Self) -> bool {
