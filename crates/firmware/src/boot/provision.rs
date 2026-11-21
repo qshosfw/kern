@@ -21,18 +21,18 @@ pub const PROV_BUF_CAP: usize = 4096;
 
 // Native ARM Thumb-1 binary payload for `/apps/beacon.krx`
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
-const BEACON_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/beacon/beacon.krx");
+const BEACON_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/apps/beacon/beacon.krx");
 
 // Standalone Native Thumb-1 binary payload for `/apps/bench.krx`.
 // 100% self-contained PIC executable. Completely resides inside the KRX file on KernFS.
 #[cfg(all(feature = "provision_bench", feature = "krx_native"))]
-const BENCH_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/bench/bench.krx");
+const BENCH_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/apps/bench/bench.krx");
 
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
-const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/leaf_app/leaf.krx");
+const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/examples/leaf_app/leaf.krx");
 
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
-const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/paged_app/paged.krx");
+const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/examples/paged_app/paged.krx");
 
 #[cfg(feature = "provision_apps")]
 #[inline(never)]

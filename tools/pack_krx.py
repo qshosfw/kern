@@ -96,7 +96,7 @@ SEC_NAMES = {
     SEC_ACTIONS: "Actions",
 }
 
-SDK_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "packages", "sdk", "krx_ops.h")
+SDK_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sdk", "c", "krx_ops.h")
 
 
 def sdk_names(prefix: str) -> dict[str, int]:
@@ -125,7 +125,7 @@ def resolve_mask(prefix: str, value) -> int:
     for item in items:
         key = item.strip().upper()
         if key not in table:
-            raise SystemExit(f"ERROR: unknown {prefix}_{key}; see packages/sdk/krx_ops.h")
+            raise SystemExit(f"ERROR: unknown {prefix}_{key}; see sdk/c/krx_ops.h")
         mask |= table[key]
     return mask
 

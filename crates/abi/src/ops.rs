@@ -3,7 +3,7 @@
 //! Single source of truth for KRX `kern_call(op, a0, a1, a2)` and RigWire operation IDs,
 //! sub-opcode constants (`sub::*`), argument signatures (`Sig`), and required capability tokens (`Cap`).
 //! Operation IDs are packed as `(domain << 4) | index` (16 domains x 16 operations).
-//! Run `./kern abi` after edits to regenerate `packages/sdk/krx_ops.h` from these tables.
+//! Run `./kern abi` after edits to regenerate `sdk/c/krx_ops.h` from these tables.
 
 use crate::Cap;
 
@@ -249,7 +249,7 @@ macro_rules! abi {
     (@cap_ident $cap:ident) => { Some(stringify!($cap)) };
 }
 
-/// Declares typed sub-opcode namespaces mirrored into `packages/sdk/krx_ops.h`.
+/// Declares typed sub-opcode namespaces mirrored into `sdk/c/krx_ops.h`.
 macro_rules! abi_sub {
     (
         $(

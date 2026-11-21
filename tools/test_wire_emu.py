@@ -136,7 +136,7 @@ def main():
 
         print("Testing sideload of sysinfo.krx...")
         try:
-            res = client.sideload(str(ROOT_DIR / "packages" / "sysinfo" / "sysinfo.krx"), force=True)
+            res = client.sideload(str(ROOT_DIR / "packages" / "sys" / "sysinfo" / "sysinfo.krx"), force=True)
             print("Sideload result:", res)
         except Exception as e:
             import traceback

@@ -53,7 +53,7 @@ case "$1" in
         shift
         HOST_TARGET="$(rustc -vV | sed -n 's|host: ||p')"
         cargo run --quiet --profile host --target "$HOST_TARGET" -p abi --features describe --bin abigen -- \
-            "$DIR/packages/sdk/krx_ops.h" "$@"
+            "$DIR/sdk/c/krx_ops.h" "$@"
         ;;
     bloat)
         shift
@@ -92,8 +92,8 @@ case "$1" in
         echo "  build           Build firmware using kern.toml configuration (default)"
         echo "  check           Run fast type and syntax check without emitting binary"
         echo "  test            Run native host unit tests across workspace"
-        echo "  pkg [name|all]  Build one or all KRX C packages under packages/"
-        echo "  abi [--check]   Regenerate or verify packages/sdk/krx_ops.h from abi.rs"
+        echo "  pkg [name|all]  Build one or all KRX packages under packages/"
+        echo "  abi [--check]   Regenerate or verify sdk/c/krx_ops.h from crates/abi"
         echo "  size            Display Flash and SRAM section memory breakdown"
         echo "  bloat [cmd]     Run binary ELF symbol/section bloat analyzer"
         echo "  lint [cmd]      Run static architectural linter (tools/archlint.py)"

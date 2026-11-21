@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Build KRX packages from their `packages/<name>/krx.toml` manifest.
+"""Build KRX packages from their `packages/<group>/<name>/krx.toml` manifest.
 
-One compiler invocation, one linker script (`packages/sdk/krx.ld`) and one set of
+One compiler invocation, one linker script (`sdk/krx.ld`) and one set of
 position-independence guards for every unit of every package.
 """
 
@@ -12,14 +12,17 @@ import tomllib
 
 import pack_krx
 
-ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "packages")
-SDK = os.path.join(ROOT, "sdk")
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+ROOT = os.path.join(REPO_ROOT, "packages")
+SDK = os.path.join(REPO_ROOT, "sdk")
+BUILD_ROOT = os.path.join(REPO_ROOT, "target", "packages")
+PKG_GROUPS = ("core", "sys", "apps", "examples")
 CPU = ["-mthumb", "-mcpu=cortex-m0plus", "-nostdlib"]
 CFLAGS = CPU + [
     "-Os", "-fPIC", "-fPIE", "-fvisibility=hidden", "-fno-builtin", "-fno-jump-tables",
     "-fno-tree-loop-distribute-patterns", "-ffunction-sections", "-fdata-sections",
     "-Wl,--gc-sections", "-Wl,--no-dynamic-linker", "-Wl,--build-id=none", "-Wl,-e,0",
-    "-T", os.path.join(SDK, "krx.ld"), "-I", SDK,
+    "-T", os.path.join(SDK, "krx.ld"), "-I", os.path.join(SDK, "c"),
 ]
 LEAF_MAX = 1024
 
@@ -80,16 +83,39 @@ def build_unit(src_dir: str, out_dir: str, source: str, limit: int | None) -> st
     return elf[:-4] + ".bin"
 
 
-def build_package(name: str):
-    pkg_dir = os.path.join(ROOT, name)
+def discover_packages() -> dict[str, str]:
+    """Return {short_or_rel_name: pkg_dir} for all packages under `packages/`."""
+    found: dict[str, str] = {}
+    for group in PKG_GROUPS:
+        gdir = os.path.join(ROOT, group)
+        if not os.path.isdir(gdir):
+            continue
+        for entry in sorted(os.listdir(gdir)):
+            pdir = os.path.join(gdir, entry)
+            if os.path.isfile(os.path.join(pdir, "krx.toml")):
+                found[entry] = pdir
+                found[f"{group}/{entry}"] = pdir
+    for entry in sorted(os.listdir(ROOT)):
+        pdir = os.path.join(ROOT, entry)
+        if os.path.isfile(os.path.join(pdir, "krx.toml")):
+            found[entry] = pdir
+    return found
+
+
+def build_package(name: str, pkg_map: dict[str, str] | None = None):
+    if pkg_map is None:
+        pkg_map = discover_packages()
+    pkg_dir = pkg_map.get(name) or os.path.join(ROOT, name)
     manifest_path = os.path.join(pkg_dir, "krx.toml")
     if not os.path.isfile(manifest_path):
         fail(f"unknown package '{name}' (no {manifest_path})")
     with open(manifest_path, "rb") as f:
         m = tomllib.load(f)
-    print(f"==> {name}")
-    src_dir = os.path.join(pkg_dir, m.get("src", "."))
-    out_dir = os.path.join(pkg_dir, "build")
+    rel_name = os.path.relpath(pkg_dir, ROOT)
+    print(f"==> {rel_name}")
+    default_src = "src" if os.path.isdir(os.path.join(pkg_dir, "src")) else "."
+    src_dir = os.path.join(pkg_dir, m.get("src", default_src))
+    out_dir = os.path.join(BUILD_ROOT, rel_name)
     os.makedirs(out_dir, exist_ok=True)
 
     for blob in m.get("blob", []):
@@ -136,12 +162,18 @@ def build_package(name: str):
 
 
 def main():
+    pkg_map = discover_packages()
     names = [n for n in sys.argv[1:] if n != "all"]
     if not names:
-        names = sorted(n for n in os.listdir(ROOT) if os.path.isfile(os.path.join(ROOT, n, "krx.toml")))
+        seen = set()
+        names = []
+        for k, pdir in pkg_map.items():
+            if "/" in k and pdir not in seen:
+                seen.add(pdir)
+                names.append(k)
     try:
         for name in names:
-            build_package(name)
+            build_package(name, pkg_map)
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr or "")
         fail(f"`{' '.join(e.cmd[:1])}` failed")

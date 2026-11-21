@@ -3,7 +3,7 @@
 **/*.bin
 **/*.bkp
 __pycache__/
-/packages/*/build/
+/packages/**/build/
 
 # Local reference & working directories (not tracked in public repository)
 /.claude/

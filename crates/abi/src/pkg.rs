@@ -1,7 +1,7 @@
 //! Package manifest identifiers: built-in icon glyphs and declared-action scopes.
 //!
 //! A package names these in its `krx.toml`; `./kern abi` mirrors them into
-//! `packages/sdk/krx_ops.h` as `KRX_ICON_*` and `KRX_SCOPE_*`.
+//! `sdk/c/krx_ops.h` as `KRX_ICON_*` and `KRX_SCOPE_*`.
 
 /// Declares `u8` identifiers plus their names for host-side generators.
 macro_rules! ids {

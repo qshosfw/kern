@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn panic_mod_header_validates_within_max_header_size() {
-        const PANIC_MOD: &[u8] = include_bytes!("../../../../../packages/panic/panic.mod");
+        const PANIC_MOD: &[u8] = include_bytes!("../../../../../packages/sys/panic/panic.mod");
         let hdr_len = KrxPreamble::MAX_HEADER_SIZE.min(PANIC_MOD.len());
         let summary = KrxPreamble::summarize(&PANIC_MOD[..hdr_len])
             .expect("panic.mod header must parse within KrxPreamble::MAX_HEADER_SIZE");

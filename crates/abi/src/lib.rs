@@ -2,7 +2,7 @@
 //! firmware, RigWire and the C SDK.
 //!
 //! This crate has no dependencies. Every identifier here is declared exactly once;
-//! `./kern abi` links this crate on the host and prints `packages/sdk/krx_ops.h`
+//! `./kern abi` links this crate on the host and prints `sdk/c/krx_ops.h`
 //! from the same tables the firmware dispatches on.
 #![no_std]
 
