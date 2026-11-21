@@ -1026,6 +1026,13 @@ pub fn draw_font_str(
 pub const LANG_KEY_NATIVE_NAME: &str = "__LANG_NAME__";
 /// Special metadata key storing an ASCII-safe picker label (e.g. `"Japanese (JA)"`, `"Russian (RU)"`).
 pub const LANG_KEY_ASCII_NAME: &str = "__LANG_ASCII__";
+/// Special metadata key storing an optional localized keypad badge label (e.g. `"ES"`, `"АБВ"`, `"あ"`).
+pub const LANG_KEY_KM_LABEL: &str = "__KM_LABEL__";
+/// Special metadata keys storing optional localized 0..=9 keypad character sequences.
+pub const LANG_KEY_KM_KEYS: [&str; 10] = [
+    "__KM_0__", "__KM_1__", "__KM_2__", "__KM_3__", "__KM_4__", "__KM_5__", "__KM_6__", "__KM_7__",
+    "__KM_8__", "__KM_9__",
+];
 
 /// Companion font hint bitflags in [`LangPackHeader::font_hint`].
 pub const LANG_FONT_TINY5: u8 = 1 << 0;
@@ -1722,5 +1729,349 @@ mod tests {
             ),
             "Untranslated Key"
         );
+
+        // Verify all 6 additional ham-radio community packs decode cleanly
+        let it = include_bytes!("../../../assets/media/lang/it.lng");
+        let pt = include_bytes!("../../../assets/media/lang/pt.lng");
+        let pl = include_bytes!("../../../assets/media/lang/pl.lng");
+        let de = include_bytes!("../../../assets/media/lang/de.lng");
+        let fr = include_bytes!("../../../assets/media/lang/fr.lng");
+        let uk = include_bytes!("../../../assets/media/lang/uk.lng");
+        assert_eq!(lookup_lang_str(it, "Owner", &mut buf), Some("Nominativo"));
+        assert_eq!(lookup_lang_str(pt, "Language", &mut buf), Some("Idioma"));
+        assert_eq!(lookup_lang_str(pl, "Audio", &mut buf), Some("Dźwięk"));
+        assert_eq!(lookup_lang_str(de, "Owner", &mut buf), Some("Rufzeichen"));
+        assert_eq!(lookup_lang_str(fr, "Display", &mut buf), Some("Écran"));
+        assert_eq!(
+            lookup_lang_str(uk, "Backlight", &mut buf),
+            Some("Підсвітка")
+        );
+        assert_eq!(lookup_lang_str(pl, LANG_KEY_KM_LABEL, &mut buf), Some("PL"));
+        assert_eq!(
+            lookup_lang_str(uk, LANG_KEY_KM_LABEL, &mut buf),
+            Some("УКР")
+        );
+    }
+
+    #[test]
+    fn render_multilingual_ui_screenshots_verify_fit() {
+        extern crate std;
+        use crate::gui::modules::menu::{
+            MenuItem, MenuItemType, MenuModel, MenuView, OptionSheet, SheetOptions, ShortString,
+        };
+        use crate::gui::modules::text_input::{Charset, TextInputModel, TextInputView};
+        use crate::gui::view::View;
+        use crate::icons;
+
+        const TINY5: &[u8] = include_bytes!("../../../assets/media/tiny5.fnt");
+        fn test_draw(
+            canvas: &mut Canvas,
+            x: i16,
+            y: i16,
+            cp: u16,
+            min_x: i16,
+            max_x: i16,
+            color: Color,
+        ) -> Option<i16> {
+            let hdr = FontPackHeader::from_bytes(TINY5[..16].try_into().unwrap());
+            try_draw_font_cp_with_header(
+                canvas,
+                x,
+                y + 1,
+                cp,
+                &hdr,
+                slice_reader(TINY5),
+                min_x,
+                max_x,
+                color,
+            )
+        }
+        fn test_width(cp: u16) -> Option<i16> {
+            let hdr = FontPackHeader::from_bytes(TINY5[..16].try_into().unwrap());
+            lookup_font_glyph_streaming(&hdr, slice_reader(TINY5), cp).map(|g| g.x_advance as i16)
+        }
+
+        crate::text::set_ext_font_hooks(Some(test_draw), Some(test_width));
+
+        let dump = |name: &str, canvas: &Canvas| {
+            if std::env::var_os("KERN_DUMP_SCREENSHOTS").is_some() {
+                let dir = std::path::Path::new("../../target/screenshots");
+                let _ = std::fs::create_dir_all(dir);
+                let mut raw = [0u8; 1024];
+                for p in 0..8 {
+                    raw[p * 128..(p + 1) * 128].copy_from_slice(&canvas.buffer[p]);
+                }
+                let _ = std::fs::write(dir.join(name), &raw);
+            }
+        };
+
+        // 1. Settings Root in Russian (with Globe Language row focused)
+        let mut c = Canvas::new();
+        let ru_items = [
+            MenuItem::new("Экран", MenuItemType::Submenu),
+            MenuItem::new("Звук", MenuItemType::Submenu),
+            MenuItem::new(
+                "Язык",
+                MenuItemType::Value(ShortString::from_str("Russian")),
+            ),
+            MenuItem::new("Система", MenuItemType::Submenu),
+        ];
+        let ru_icons = [
+            icons::ICON_DISPLAY,
+            icons::ICON_AUDIO,
+            icons::ICON_GLOBE,
+            icons::ICON_SYSTEM,
+        ];
+        let view = MenuView::new();
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "Настройки",
+                items: &ru_items,
+                selected_idx: 2,
+                icons: Some(&ru_icons),
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "Настройки");
+        dump("settings_root_ru.raw", &c);
+
+        // 2. Settings Display in Polish (diacritics + values + toggle)
+        c.clear();
+        let pl_items = [
+            MenuItem::new(
+                "Podświetl.",
+                MenuItemType::Value(ShortString::from_str("30s")),
+            ),
+            MenuItem::new(
+                "Jasność +",
+                MenuItemType::Range {
+                    val: 8,
+                    min: 1,
+                    max: 10,
+                    step: 1,
+                    unit: "",
+                },
+            ),
+            MenuItem::new(
+                "Kontrast",
+                MenuItemType::Range {
+                    val: 50,
+                    min: 0,
+                    max: 100,
+                    step: 5,
+                    unit: "%",
+                },
+            ),
+            MenuItem::new("Negatyw LCD", MenuItemType::Toggle(true)),
+        ];
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "Ekran",
+                items: &pl_items,
+                selected_idx: 0,
+                icons: None,
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "Ekran · Dźwięk");
+        dump("settings_display_pl.raw", &c);
+
+        // 3. Settings Audio/System in Portuguese & Italian
+        c.clear();
+        let pt_items = [
+            MenuItem::new("Áudio", MenuItemType::Submenu),
+            MenuItem::new("Segurança", MenuItemType::Submenu),
+            MenuItem::new("Calibração", MenuItemType::Submenu),
+            MenuItem::new(
+                "Idioma",
+                MenuItemType::Value(ShortString::from_str("Português")),
+            ),
+        ];
+        let pt_icons = [
+            icons::ICON_AUDIO,
+            icons::ICON_SECURITY,
+            icons::ICON_SYSTEM,
+            icons::ICON_GLOBE,
+        ];
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "Ajustes",
+                items: &pt_items,
+                selected_idx: 3,
+                icons: Some(&pt_icons),
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "Ajustes (PT)");
+        dump("settings_pt.raw", &c);
+
+        // 4. Settings in Italian + Ukrainian
+        c.clear();
+        let it_items = [
+            MenuItem::new("Impostaz.", MenuItemType::Submenu),
+            MenuItem::new(
+                "Lumin. max",
+                MenuItemType::Range {
+                    val: 10,
+                    min: 1,
+                    max: 10,
+                    step: 1,
+                    unit: "",
+                },
+            ),
+            MenuItem::new(
+                "Підсвітка",
+                MenuItemType::Value(ShortString::from_str("10s")),
+            ),
+            MenuItem::new("Інверсія", MenuItemType::Toggle(false)),
+        ];
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "IT / UK",
+                items: &it_items,
+                selected_idx: 2,
+                icons: None,
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "IT · Українська");
+        dump("settings_it_uk.raw", &c);
+
+        // 5. Dynamic Language Picker OptionSheet
+        c.clear();
+        let sheet = OptionSheet::new(
+            "Language",
+            SheetOptions::Packed(
+                "English\0Italian (IT)\0Polish (PL)\0Portuguese (PT)\0Russian (RU)\0",
+            ),
+            2,
+        )
+        .with_radio(true);
+        let mut sheet = sheet;
+        sheet.hover = 2;
+        MenuView::render_sheet_slide_up_marquee(&mut c, &sheet, 0, 0, true);
+        dump("lang_picker_sheet.raw", &c);
+
+        // 6. Russian Cyrillic TextInput with active 3x3 keypad guide & live cycle strip
+        c.clear();
+        let mut tm = TextInputModel::new(16);
+        tm.show_header = true;
+        let _ = tm.custom_title.push_str("Позывной");
+        let _ = tm.buffer.push_str("РАДИО Б");
+        tm.locale_keymap.active = true;
+        let _ = tm.locale_keymap.label.push_str("АБВ");
+        for (i, s) in [
+            " ",
+            ".,?!'-",
+            "АБВГ",
+            "ДЕЁЖ",
+            "ЗИЙК",
+            "ЛМНО",
+            "ПРСТ",
+            "УФХЦ",
+            "ЧШЩЪ",
+            "ЫЬЭЮЯ",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let _ = tm.locale_keymap.keys[i].push_str(s);
+        }
+        tm.charset = Charset::Locale;
+        tm.last_key = Some(2);
+        tm.press_count = 1; // Highlight 'Б' in А [Б] В Г
+        tm.ticks = 5;
+        tm.last_activity_tick = 2;
+        TextInputView::new().render(&mut c, &tm);
+        dump("text_input_ru_guide.raw", &c);
+
+        // 7. Polish TextInput with automatic 3x3 diacritics guide
+        c.clear();
+        let mut pm = TextInputModel::new(16);
+        pm.show_header = true;
+        let _ = pm.custom_title.push_str("Znak / Nazwa");
+        let _ = pm.buffer.push_str("Łódź");
+        pm.locale_keymap.active = true;
+        let _ = pm.locale_keymap.label.push_str("PL");
+        for (i, s) in [
+            " ",
+            ".,?!'-",
+            "ąćĄĆ",
+            "ęĘ",
+            "łŁ",
+            "ńŃ",
+            "óÓ",
+            "śŚ",
+            "źżŹŻ",
+            "°€/:+-",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let _ = pm.locale_keymap.keys[i].push_str(s);
+        }
+        pm.charset = Charset::Locale;
+        pm.last_key = Some(8);
+        pm.press_count = 1; // Highlight 'ż' in ź [ż] Ź Ż
+        pm.ticks = 5;
+        pm.last_activity_tick = 2;
+        TextInputView::new().render(&mut c, &pm);
+        dump("text_input_pl_guide.raw", &c);
+
+        // 8. Live-localized Launcher 3x2 Grid in Russian (pure English keys translated via set_localize_hook!)
+        fn test_loc_ru<'a>(key: &str, short: bool, out: &'a mut [u8]) -> Option<&'a str> {
+            let s = match (key, short) {
+                ("Radio", _) => "Радио",
+                ("Settings", true) => "Настр.",
+                ("Settings", false) => "Настройки",
+                ("Torch", _) => "Фонарь",
+                ("About", true) => "Инфо",
+                ("About", false) => "О KERN",
+                ("Home", _) => "Меню",
+                _ => return None,
+            };
+            let b = s.as_bytes();
+            if b.len() > out.len() {
+                return None;
+            }
+            out[..b.len()].copy_from_slice(b);
+            core::str::from_utf8(&out[..b.len()]).ok()
+        }
+        crate::text::set_localize_hook(Some(test_loc_ru));
+        c.clear();
+        static LAUNCHER_ITEMS: [crate::gui::modules::grid_menu::GridMenuItem; 4] = [
+            crate::gui::modules::grid_menu::GridMenuItem {
+                title: "Radio",
+                icon_bmp: icons::ICON_16_RADIO,
+            },
+            crate::gui::modules::grid_menu::GridMenuItem {
+                title: "Settings",
+                icon_bmp: icons::ICON_16_SETTINGS,
+            },
+            crate::gui::modules::grid_menu::GridMenuItem {
+                title: "Torch",
+                icon_bmp: icons::ICON_16_FLASHLIGHT,
+            },
+            crate::gui::modules::grid_menu::GridMenuItem {
+                title: "About",
+                icon_bmp: icons::ICON_16_INFO,
+            },
+        ];
+        let mut gm = crate::gui::modules::grid_menu::GridMenuModel::new(&LAUNCHER_ITEMS, "Home");
+        gm.selected_idx = 1;
+        crate::gui::modules::grid_menu::GridMenuView::new().render(&mut c, &gm);
+        crate::widgets::draw_negated_header(&mut c, 0, "Home");
+        dump("launcher_grid_ru.raw", &c);
+
+        crate::text::set_localize_hook(None);
+        crate::text::set_ext_font_hooks(None, None);
     }
 }

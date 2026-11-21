@@ -24,21 +24,46 @@ pub fn draw_icon(x: i16, y: i16, icon_id: u8, color: u8) {
     }
 }
 
+#[inline(always)]
+fn tr_syscall<'a>(s: &'a str, prefer_short: bool, buf: &'a mut [u8; 64]) -> &'a str {
+    #[cfg(feature = "filesystem")]
+    if crate::services::lang::is_active() {
+        #[cfg(not(test))]
+        return crate::services::lang::translate(crate::kern_fs(), s, prefer_short, buf);
+        #[cfg(test)]
+        if let Some(ctx) = super::active_ctx_opt() {
+            return crate::services::lang::translate(ctx.storage, s, prefer_short, buf);
+        }
+    }
+    let _ = (prefer_short, buf);
+    s
+}
+
 pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
     if req.is_null() {
         return 0;
     }
     let r = unsafe { &*req };
-    let Some(s) = (unsafe { parse_str(r.text, r.len as usize) }) else {
+    let Some(raw) = (unsafe { parse_str(r.text, r.len as usize) }) else {
         return 0;
     };
+    let mut tr_buf = [0u8; 64];
+    let s = if (r.flags & kernel::proc::abi::KRX_TEXT_LOCALIZE) != 0 {
+        tr_syscall(
+            raw,
+            (r.flags & kernel::proc::abi::KRX_TEXT_SHORT) != 0,
+            &mut tr_buf,
+        )
+    } else {
+        raw
+    };
     let font = font_from_u8(r.font);
-    if (r.flags & 1) != 0 {
+    if (r.flags & kernel::proc::abi::KRX_TEXT_MEASURE) != 0 {
         return gfx::text::str_width(s, font);
     }
     let col = color_from_u8(r.color);
     let canvas = active_canvas_mut();
-    if (r.flags & 2) != 0 {
+    if (r.flags & kernel::proc::abi::KRX_TEXT_CLIP) != 0 {
         gfx::text::draw_str_max_x(canvas, r.x, r.y, s, font, col, (r.x + r.arg).max(0));
     } else {
         let al = match r.arg & 3 {

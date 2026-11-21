@@ -1,0 +1,123 @@
+# Kern OS Localization Catalog — German (DE)
+# Natural, concise handheld-radio German (DL/DO community) matching English widths.
+
+[meta]
+code = "de"
+name = "Deutsch"
+ascii = "German (DE)"
+font_hint = 1 # tiny5 (äöüß)
+
+[strings]
+"Settings" = "Einstell."
+"Display" = "Anzeige"
+"Audio" = "Audio"
+"Buttons" = "Tasten"
+"Battery" = "Akku"
+"Device" = "Gerät"
+"Apps" = "Apps"
+"Security" = "Schutz"
+"Language" = "Sprache"
+"System" = "System"
+"English" = "Englisch"
+
+"Backlight" = { full = "Lichtzeit", short = "Licht" }
+"Backlight Time" = { full = "Lichtzeit", short = "Licht" }
+"Max Bright" = { full = "Max. Hell.", short = "Hell +" }
+"Max Brightness" = { full = "Max. Hell.", short = "Hell +" }
+"Min Bright" = { full = "Min. Hell.", short = "Hell -" }
+"Min Brightness" = { full = "Min. Hell.", short = "Hell -" }
+"Contrast" = "Kontrast"
+"Invert LCD" = { full = "Invertieren", short = "Invert." }
+"Invert Pixels" = { full = "Invertieren", short = "Invert." }
+"Animations" = "Animation"
+"Shading" = "Graustufe"
+
+"AF Gain" = "Lautstärke"
+"AF Volume" = "Lautstärke"
+"Beep Vol" = "Piepton"
+"Beep Gain" = "Piepton"
+"Key Beep" = "Tastenton"
+"Mic Gain" = "Mikrofon"
+"Roger Beep" = "Roger-Piep"
+"Audio EQ" = "RX-Profil"
+"Boot Chime" = "Startton"
+"Boot Jingle" = "Startton"
+"RX Profile" = "RX-Profil"
+
+"Shortcuts" = "Kurzwahl"
+"Tweaks" = "Feintuning"
+"Nav Layout" = "Tastenfeld"
+"Auto Lock" = { full = "Autosperre", short = "Sperre" }
+"F Timeout" = "F-Zeit"
+"Fast Scroll" = "Schnelllauf"
+"Hold Delay" = "Haltezeit"
+"Repeat Rate" = "Wiederhol."
+"PTT Mode" = "PTT-Modus"
+"F Drawer" = "F-Menü"
+
+"Cell Type" = "Akkutyp"
+"Bar Format" = "Anzeige"
+"Power Mode" = "Leistung"
+"Auto Off" = "Auto-Aus"
+"Chg Detect" = "Ladeerkenn."
+
+"Clock" = "CPU-Takt"
+"CPU Clock" = "CPU-Takt"
+"UART Baud" = "UART-Rate"
+"Info" = "Info"
+"Hardware Info" = "HW-Info"
+"Storage" = "Speicher"
+"Calibration" = { full = "Kalibrier.", short = "Kalib." }
+"Debug" = "Debug"
+"Modules" = "Module"
+"Installed" = "Installiert"
+"Home Style" = "Menüstil"
+"Numbers" = "Nummern"
+"Labels" = "Namen"
+"Startup" = "Start-App"
+"Pager" = "Pager"
+"Reset Settings" = { full = "Zurücksetz.", short = "Reset" }
+"Reset All" = { full = "Zurücksetz.", short = "Reset" }
+"Restart" = "Neustart"
+
+"Used" = "Belegt"
+"Free" = "Frei"
+"Files" = "Dateien"
+"Format Storage" = { full = "Formatieren", short = "Format" }
+"Erase All Data" = { full = "Alles lösch", short = "Löschen" }
+
+"Model" = "Modell"
+"Owner" = "Rufzeichen"
+"Tag" = "Kennung"
+"Radio ID" = "Funk-ID"
+"Boot Splash" = "Startbild"
+
+"OK" = "OK"
+"Cancel" = { full = "Abbrechen", short = "Abbr." }
+"Save" = "Sichern"
+"Back" = "Zurück"
+"Hold" = "Halten"
+"Off" = "Aus"
+"On" = "Ein"
+"None" = "Keine"
+
+"Home" = "Start"
+"Radio" = "Funk"
+"Torch" = "Lampe"
+"About" = "Über"
+"Enter" = "OK"
+"Del" = "Lösch"
+"Case" = "Typ"
+
+[keymap]
+label = "DE"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "äÄ"
+"3" = "öÖ"
+"4" = "üÜ"
+"5" = "ß"
+"6" = "€°§"
+"7" = "()[]"
+"8" = "/:+="
+"9" = "_@#"

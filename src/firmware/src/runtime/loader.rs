@@ -147,6 +147,8 @@ pub fn launch_krx_package(
     start_arg: u32,
 ) -> Result<usize, KrxLaunchError> {
     let (required_caps, app_name) = load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), true)?;
+    #[cfg(feature = "filesystem")]
+    crate::services::lang::bind_app(ctx.storage, path);
     super::native_runner::set_pending_start_arg(start_arg);
     let dyn_id = AppRegistry::register_dynamic(DynamicAppRecord {
         metadata: AppMetadata { name: app_name },
@@ -162,6 +164,8 @@ pub fn invoke_action_krx_package<'a, 'hw>(
     path: &str,
 ) -> Result<(), KrxLaunchError> {
     load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), false)?;
+    #[cfg(feature = "filesystem")]
+    crate::services::lang::bind_app(ctx.storage, path);
     unsafe {
         let static_ctx =
             &mut *(ctx as *mut SysContext<'a, 'hw> as *mut SysContext<'static, 'static>);
@@ -180,6 +184,8 @@ pub fn finish_action_krx_package<'a, 'hw>(
             &mut *(ctx as *mut SysContext<'a, 'hw> as *mut SysContext<'static, 'static>);
         let res = super::native_runner::native_on_modal_result(static_ctx, result);
         super::native_runner::native_on_exit(static_ctx);
+        #[cfg(feature = "filesystem")]
+        crate::services::lang::unbind_app();
         res
     }
 }

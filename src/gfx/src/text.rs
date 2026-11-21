@@ -1,5 +1,79 @@
+use crate::icons::FALLBACK_BOX_5;
 use crate::{Canvas, Color, GfxFont};
 pub use utils::format::*;
+
+/// External Unicode BMP glyph draw callback `(canvas, x, y, cp, min_x, max_x, color) -> Option<adv>`.
+pub type ExtGlyphDrawFn = fn(&mut Canvas, i16, i16, u16, i16, i16, Color) -> Option<i16>;
+/// External Unicode BMP glyph width callback `(cp) -> Option<adv>`.
+pub type ExtGlyphWidthFn = fn(u16) -> Option<i16>;
+/// Optional runtime localization callback `(english_key, prefer_short, out_buf) -> Option<&str>`.
+pub type LocalizeHookFn = for<'a> fn(&str, bool, &'a mut [u8]) -> Option<&'a str>;
+
+static mut EXT_GLYPH_DRAW: Option<ExtGlyphDrawFn> = None;
+static mut EXT_GLYPH_WIDTH: Option<ExtGlyphWidthFn> = None;
+static mut LOCALIZE_HOOK: Option<LocalizeHookFn> = None;
+
+/// Register optional external `.fnt` hooks for non-ASCII UTF-8 codepoints (Polish, Portuguese,
+/// Italian, Cyrillic, Japanese, Chinese, etc.). ASCII characters always stay zero-cost in ROM.
+#[inline(always)]
+pub fn set_ext_font_hooks(draw: Option<ExtGlyphDrawFn>, width: Option<ExtGlyphWidthFn>) {
+    unsafe {
+        EXT_GLYPH_DRAW = draw;
+        EXT_GLYPH_WIDTH = width;
+    }
+}
+
+/// Register or clear the OS runtime localization hook. When `None` (English default),
+/// [`localize`] returns the English literal immediately with zero I/O or copying.
+#[inline(always)]
+pub fn set_localize_hook(hook: Option<LocalizeHookFn>) {
+    unsafe {
+        LOCALIZE_HOOK = hook;
+    }
+}
+
+/// Translate an English UI key via the active language pack hook (if registered),
+/// falling back to `key` untouched on miss, empty input, or numeric strings.
+#[inline(never)]
+pub fn localize<'a>(key: &'a str, prefer_short: bool, out: &'a mut [u8]) -> &'a str {
+    let bytes = key.as_bytes();
+    if bytes.is_empty() || bytes[0].is_ascii_digit() {
+        return key;
+    }
+    if let Some(hook) = unsafe { LOCALIZE_HOOK }
+        && let Some(s) = hook(key, prefer_short, out)
+    {
+        return s;
+    }
+    key
+}
+
+/// Decode one UTF-8 character starting at `bytes[i]`, returning `(codepoint_u32, byte_len)`.
+#[inline(never)]
+fn decode_utf8_at(bytes: &[u8], i: usize) -> (u32, usize) {
+    let b0 = bytes[i];
+    if b0 < 0x80 {
+        return (b0 as u32, 1);
+    }
+    if (b0 & 0xE0) == 0xC0 && i + 1 < bytes.len() {
+        let cp = (((b0 & 0x1F) as u32) << 6) | ((bytes[i + 1] & 0x3F) as u32);
+        return (cp, 2);
+    }
+    if (b0 & 0xF0) == 0xE0 && i + 2 < bytes.len() {
+        let cp = (((b0 & 0x0F) as u32) << 12)
+            | (((bytes[i + 1] & 0x3F) as u32) << 6)
+            | ((bytes[i + 2] & 0x3F) as u32);
+        return (cp, 3);
+    }
+    if (b0 & 0xF8) == 0xF0 && i + 3 < bytes.len() {
+        let cp = (((b0 & 0x07) as u32) << 18)
+            | (((bytes[i + 1] & 0x3F) as u32) << 12)
+            | (((bytes[i + 2] & 0x3F) as u32) << 6)
+            | ((bytes[i + 3] & 0x3F) as u32);
+        return (cp, 4);
+    }
+    (0xFFFD, 1)
+}
 
 /// Draw a single ASCII character clipped horizontally to `[min_x, max_x)`.
 #[inline(never)]
@@ -102,12 +176,36 @@ pub fn draw_str_clipped(
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        let (c, step) = if b == 0xC2 && i + 1 < bytes.len() && bytes[i + 1] == 0xB0 {
-            ('°', 2)
+        let (adv, step) = if b < 0x80 {
+            (
+                draw_char_clipped(canvas, x, y, b as char, font, color, min_x, max_x),
+                1,
+            )
         } else {
-            (b as char, 1)
+            let (cp, step) = decode_utf8_at(bytes, i);
+            let adv = if cp == 0xB0 {
+                draw_char_clipped(canvas, x, y, '°', font, color, min_x, max_x)
+            } else if cp <= u16::MAX as u32
+                && let Some(hook) = unsafe { EXT_GLYPH_DRAW }
+                && let Some(ext_adv) = hook(canvas, x, y, cp as u16, min_x, max_x, color)
+            {
+                ext_adv
+            } else {
+                crate::media::draw_bitmap_clipped(
+                    canvas,
+                    x,
+                    y - 5,
+                    5,
+                    5,
+                    &FALLBACK_BOX_5,
+                    min_x,
+                    max_x,
+                    color,
+                );
+                6
+            };
+            (adv, step)
         };
-        let adv = draw_char_clipped(canvas, x, y, c, font, color, min_x, max_x);
         x += adv;
         if x >= max_x {
             break;
@@ -169,19 +267,29 @@ pub fn str_width(text: &str, font: &GfxFont) -> i16 {
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if b == 0xC2 && i + 1 < bytes.len() && bytes[i + 1] == 0xB0 {
-            width += 3;
-            i += 2;
-            continue;
-        }
-        let code = b as u32;
-        if code >= font.first as u32 && code <= font.last as u32 {
-            let idx = (code - font.first as u32) as usize;
-            if idx < font.glyphs.len() {
-                width += font.glyphs[idx].x_advance() as i16;
+        if b < 0x80 {
+            let code = b as u32;
+            if code >= font.first as u32 && code <= font.last as u32 {
+                let idx = (code - font.first as u32) as usize;
+                if idx < font.glyphs.len() {
+                    width += font.glyphs[idx].x_advance() as i16;
+                }
             }
+            i += 1;
+        } else {
+            let (cp, step) = decode_utf8_at(bytes, i);
+            width += if cp == 0xB0 {
+                3
+            } else if cp <= u16::MAX as u32
+                && let Some(hook) = unsafe { EXT_GLYPH_WIDTH }
+                && let Some(ext_w) = hook(cp as u16)
+            {
+                ext_w
+            } else {
+                6
+            };
+            i += step;
         }
-        i += 1;
     }
     width
 }

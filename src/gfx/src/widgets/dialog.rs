@@ -128,6 +128,13 @@ pub fn draw_key_badge_box(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, on
 
 #[inline(never)]
 pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label: &str) {
+    let mut lbuf = [0u8; 24];
+    let label = text::localize(label, true, &mut lbuf);
+    draw_key_badge_raw(canvas, x, y, key_str, label);
+}
+
+#[inline(never)]
+fn draw_key_badge_raw(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label: &str) {
     let box_w = draw_key_badge_box(canvas, x, y, key_str, false);
     if !label.is_empty() {
         text::draw_str(
@@ -145,6 +152,8 @@ pub fn draw_key_badge(canvas: &mut Canvas, x: i16, y: i16, key_str: &str, label:
 #[inline(never)]
 pub fn draw_key_badge_right(canvas: &mut Canvas, right_x: i16, y: i16, key_str: &str, label: &str) {
     let font = &crate::fonts::tomthumb::FONT;
+    let mut lbuf = [0u8; 24];
+    let label = text::localize(label, true, &mut lbuf);
     let key_w = key_badge_key_width(key_str) as i16;
     let label_w = if label.is_empty() {
         0
@@ -152,13 +161,15 @@ pub fn draw_key_badge_right(canvas: &mut Canvas, right_x: i16, y: i16, key_str: 
         text::str_width(label, font) + 2
     };
     let total_w = key_w + 4 + label_w;
-    draw_key_badge(canvas, right_x - total_w, y, key_str, label);
+    draw_key_badge_raw(canvas, right_x - total_w, y, key_str, label);
 }
 
 /// Draw standard inverted (negated) header bar across the screen width.
 #[inline(never)]
 pub fn draw_negated_header(canvas: &mut Canvas, y: i16, title: &str) {
     let yu = y as u8;
+    let mut lbuf = [0u8; 48];
+    let title = text::localize(title, true, &mut lbuf);
     canvas.fill_rect(0, yu, 128, 9, Color::Fill);
     canvas.draw_pixel(0, yu, Color::Clear);
     canvas.draw_pixel(127, yu, Color::Clear);
@@ -365,11 +376,13 @@ pub fn draw_modal_popup_materialize(
         let has_title = title.is_some_and(|t| !t.is_empty());
 
         let (mut line_y, step_y) = if has_title {
+            let mut lbuf = [0u8; 32];
+            let t = text::localize(title.unwrap_or(""), false, &mut lbuf);
             text::draw_str_align(
                 canvas,
                 center_x,
                 (by + 11) as i16,
-                title.unwrap_or(""),
+                t,
                 &crate::fonts::tomthumb::FONT,
                 tc,
                 text::Align::Center,

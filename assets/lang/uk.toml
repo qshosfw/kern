@@ -1,0 +1,123 @@
+# Kern OS Localization Catalog — Ukrainian (UK)
+# Natural, concise handheld-radio Ukrainian (UR/US/UT community) matching English widths.
+
+[meta]
+code = "uk"
+name = "Українська"
+ascii = "Ukrainian (UK)"
+font_hint = 1 # tiny5 (full Ukrainian Cyrillic: ІЇЄҐ)
+
+[strings]
+"Settings" = "Налашт."
+"Display" = "Екран"
+"Audio" = "Звук"
+"Buttons" = "Кнопки"
+"Battery" = "Батарея"
+"Device" = "Рація"
+"Apps" = "Програми"
+"Security" = "Захист"
+"Language" = "Мова"
+"System" = "Система"
+"English" = "Англ."
+
+"Backlight" = { full = "Підсвітка", short = "Світло" }
+"Backlight Time" = { full = "Підсвітка", short = "Світло" }
+"Max Bright" = { full = "Макс. яскр.", short = "Яскр. +" }
+"Max Brightness" = { full = "Макс. яскр.", short = "Яскр. +" }
+"Min Bright" = { full = "Мін. яскр.", short = "Яскр. -" }
+"Min Brightness" = { full = "Мін. яскр.", short = "Яскр. -" }
+"Contrast" = "Контраст"
+"Invert LCD" = { full = "Інверсія", short = "Інверс." }
+"Invert Pixels" = { full = "Інверсія", short = "Інверс." }
+"Animations" = "Анімація"
+"Shading" = "Відтінки"
+
+"AF Gain" = "Гучність"
+"AF Volume" = "Гучність"
+"Beep Vol" = "Гучн. біп"
+"Beep Gain" = "Гучн. біп"
+"Key Beep" = "Звук кнопок"
+"Mic Gain" = "Мікрофон"
+"Roger Beep" = "Роджер-біп"
+"Audio EQ" = "Профіль RX"
+"Boot Chime" = { full = "Звук пуску", short = "Пуск" }
+"Boot Jingle" = { full = "Звук пуску", short = "Пуск" }
+"RX Profile" = "Профіль RX"
+
+"Shortcuts" = "Ярлики"
+"Tweaks" = "Тонко"
+"Nav Layout" = "Навігація"
+"Auto Lock" = { full = "Автоблок", short = "Блок." }
+"F Timeout" = "Час F"
+"Fast Scroll" = "Швид. прокр"
+"Hold Delay" = "Утримання"
+"Repeat Rate" = "Повтор"
+"PTT Mode" = "Режим PTT"
+"F Drawer" = "Меню F"
+
+"Cell Type" = "Тип бат."
+"Bar Format" = "Індикатор"
+"Power Mode" = "Живлення"
+"Auto Off" = "Автовимк."
+"Chg Detect" = "Зарядка"
+
+"Clock" = "Частота"
+"CPU Clock" = "Частота"
+"UART Baud" = "UART бод"
+"Info" = "Інфо"
+"Hardware Info" = "Інфо HW"
+"Storage" = "Пам'ять"
+"Calibration" = { full = "Калібрув.", short = "Калібр." }
+"Debug" = "Відладка"
+"Modules" = "Модулі"
+"Installed" = "Встановл."
+"Home Style" = "Стиль"
+"Numbers" = "Номери"
+"Labels" = "Підписи"
+"Startup" = "Запуск"
+"Pager" = "Пейджер"
+"Reset Settings" = { full = "Скидання", short = "Скид" }
+"Reset All" = { full = "Скидання", short = "Скид" }
+"Restart" = { full = "Перезапуск", short = "Рестарт" }
+
+"Used" = "Зайнято"
+"Free" = "Вільно"
+"Files" = "Файли"
+"Format Storage" = "Формат"
+"Erase All Data" = { full = "Стерти все", short = "Стерти" }
+
+"Model" = "Модель"
+"Owner" = "Позивний"
+"Tag" = "Мітка"
+"Radio ID" = "ID рації"
+"Boot Splash" = "Заставка"
+
+"OK" = "ОК"
+"Cancel" = "Відміна"
+"Save" = "Збер."
+"Back" = "Назад"
+"Hold" = "Тримати"
+"Off" = "Вимк"
+"On" = "Увімк"
+"None" = "Немає"
+
+"Home" = "Меню"
+"Radio" = "Радіо"
+"Torch" = "Ліхтар"
+"About" = { full = "Про KERN", short = "Інфо" }
+"Enter" = "Ввід"
+"Del" = "Стер."
+"Case" = "Рег."
+
+[keymap]
+label = "УКР"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "АБВГҐ"
+"3" = "ДЕЄЖ"
+"4" = "ЗИІЇЙ"
+"5" = "КЛМН"
+"6" = "ОПРСТ"
+"7" = "УФХЦ"
+"8" = "ЧШЩЬ"
+"9" = "ЮЯ"

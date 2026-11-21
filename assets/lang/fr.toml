@@ -1,0 +1,123 @@
+# Kern OS Localization Catalog — French (FR)
+# Natural, concise handheld-radio French (F4/F5 REF community) matching English widths.
+
+[meta]
+code = "fr"
+name = "Français"
+ascii = "French (FR)"
+font_hint = 1 # tiny5 (àâçéèêëîïôùûüœ)
+
+[strings]
+"Settings" = "Réglages"
+"Display" = "Écran"
+"Audio" = "Audio"
+"Buttons" = "Touches"
+"Battery" = "Batterie"
+"Device" = "Radio"
+"Apps" = "Applis"
+"Security" = "Sécurité"
+"Language" = "Langue"
+"System" = "Système"
+"English" = "Anglais"
+
+"Backlight" = { full = "Éclairage", short = "Lumière" }
+"Backlight Time" = { full = "Durée éclr.", short = "Lumière" }
+"Max Bright" = { full = "Lumin. max", short = "Lum. +" }
+"Max Brightness" = { full = "Lumin. max", short = "Lum. +" }
+"Min Bright" = { full = "Lumin. min", short = "Lum. -" }
+"Min Brightness" = { full = "Lumin. min", short = "Lum. -" }
+"Contrast" = "Contraste"
+"Invert LCD" = { full = "Inverser", short = "Invert." }
+"Invert Pixels" = { full = "Inverser", short = "Invert." }
+"Animations" = "Animations"
+"Shading" = "Nuances"
+
+"AF Gain" = "Volume AF"
+"AF Volume" = "Volume AF"
+"Beep Vol" = "Vol. bip"
+"Beep Gain" = "Vol. bip"
+"Key Beep" = "Bip touche"
+"Mic Gain" = "Gain micro"
+"Roger Beep" = "Roger Beep"
+"Audio EQ" = "Profil RX"
+"Boot Chime" = "Son démarr."
+"Boot Jingle" = "Son démarr."
+"RX Profile" = "Profil RX"
+
+"Shortcuts" = "Raccourcis"
+"Tweaks" = "Avancé"
+"Nav Layout" = "Navigation"
+"Auto Lock" = { full = "Verr. auto", short = "Verr." }
+"F Timeout" = "Délai F"
+"Fast Scroll" = "Défil. rap."
+"Hold Delay" = "Appui long"
+"Repeat Rate" = "Répétition"
+"PTT Mode" = "Mode PTT"
+"F Drawer" = "Menu F"
+
+"Cell Type" = "Type accu"
+"Bar Format" = "Affichage"
+"Power Mode" = "Énergie"
+"Auto Off" = "Arrêt auto"
+"Chg Detect" = "Dét. charge"
+
+"Clock" = "Horloge"
+"CPU Clock" = "Horloge"
+"UART Baud" = "Débit UART"
+"Info" = "Infos"
+"Hardware Info" = "Infos HW"
+"Storage" = "Mémoire"
+"Calibration" = { full = "Calibrage", short = "Calib." }
+"Debug" = "Débogage"
+"Modules" = "Modules"
+"Installed" = "Installées"
+"Home Style" = "Style"
+"Numbers" = "Numéros"
+"Labels" = "Noms"
+"Startup" = "Démarrage"
+"Pager" = "Pager"
+"Reset Settings" = { full = "Réinit.", short = "Reset" }
+"Reset All" = { full = "Réinit.", short = "Reset" }
+"Restart" = "Redémarrer"
+
+"Used" = "Utilisé"
+"Free" = "Libre"
+"Files" = "Fichiers"
+"Format Storage" = { full = "Formater", short = "Format" }
+"Erase All Data" = { full = "Tout effac.", short = "Effacer" }
+
+"Model" = "Modèle"
+"Owner" = "Indicatif"
+"Tag" = "Étiquette"
+"Radio ID" = "ID Radio"
+"Boot Splash" = "Écran boot"
+
+"OK" = "OK"
+"Cancel" = { full = "Annuler", short = "Non" }
+"Save" = "Sauver"
+"Back" = "Retour"
+"Hold" = "Maintenir"
+"Off" = "Off"
+"On" = "On"
+"None" = "Aucun"
+
+"Home" = "Accueil"
+"Radio" = "Radio"
+"Torch" = "Lampe"
+"About" = { full = "À propos", short = "Infos" }
+"Enter" = "OK"
+"Del" = "Eff."
+"Case" = "Type"
+
+[keymap]
+label = "FR"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "àâÀÂ"
+"3" = "éèêëÉÈ"
+"4" = "îïÎÏ"
+"5" = "çÇ"
+"6" = "ôœÔŒ"
+"7" = "ùûüÙÛ"
+"8" = "€°§"
+"9" = "()/:+-"

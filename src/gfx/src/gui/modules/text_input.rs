@@ -9,6 +9,85 @@ use crate::{Canvas, Color};
 use heapless::String;
 use kernel::event::{Event, KeyCode, KeyState};
 
+/// Standard filesystem dictionary pack format identifier (`DICT`, 16 B header + 32 B records).
+/// Dictionaries live in KernFS (e.g. `/user/dict_en.dct`) so predictive T9 suggestions cost
+/// zero Flash overhead when no pack is installed.
+pub const DICT_FILE_ID: [u8; 4] = *b"DICT";
+pub const DICT_HEADER_SIZE: usize = 16;
+pub const DICT_RECORD_SIZE: usize = 32;
+
+/// Declarative keypad charset descriptor supporting custom encodings and symbol sets.
+#[derive(Debug, Clone, Copy)]
+pub struct CharsetSpec {
+    pub label: &'static str,
+    pub star_hint: &'static str,
+    pub case_hint: &'static str,
+    pub show_grid_on_k1: bool,
+    pub keys: [&'static str; 10],
+}
+
+/// Optional predictive suggestion source (implemented by filesystem dictionary packs).
+pub trait TextSuggestionProvider {
+    fn suggest(&self, prefix: &str, out: &mut [String<12>; 3]) -> usize;
+}
+
+pub static BUILTIN_CHARSETS: [CharsetSpec; 4] = [
+    CharsetSpec {
+        label: "ABC",
+        star_hint: "123",
+        case_hint: "abc",
+        show_grid_on_k1: false,
+        keys: [
+            " ", ".,?!'-", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ",
+        ],
+    },
+    CharsetSpec {
+        label: "abc",
+        star_hint: "123",
+        case_hint: "ABC",
+        show_grid_on_k1: false,
+        keys: [
+            " ", ".,?!'-", "abc", "def", "ghi", "jkl", "mno", "pqrs", "tuv", "wxyz",
+        ],
+    },
+    CharsetSpec {
+        label: "123",
+        star_hint: "SYM",
+        case_hint: "Case",
+        show_grid_on_k1: false,
+        keys: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+    },
+    CharsetSpec {
+        label: "#@$",
+        star_hint: "ABC",
+        case_hint: "Case",
+        show_grid_on_k1: true,
+        keys: [
+            " ", ".,?!'-", "@#$", "%&*", "()[]", "<>{}/", "\\|+", "-=\"", "'` :", ";_",
+        ],
+    },
+];
+
+/// Optional localized 0..=9 keypad layout loaded dynamically from the active `.lng` pack
+/// (e.g. Russian Cyrillic, Japanese Keitai Kana, or Spanish accented characters).
+/// Automatically activates the on-screen 3x3 keypad guide since it differs from the factory Latin silkscreen.
+#[derive(Debug, Clone)]
+pub struct LocaleKeymap {
+    pub active: bool,
+    pub label: String<8>,
+    pub keys: [String<16>; 10],
+}
+
+impl LocaleKeymap {
+    pub const fn empty() -> Self {
+        Self {
+            active: false,
+            label: String::new(),
+            keys: [const { String::new() }; 10],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Charset {
@@ -16,6 +95,15 @@ pub enum Charset {
     Lower = 1,
     Numbers = 2,
     Symbols = 3,
+    Locale = 4,
+}
+
+impl Charset {
+    #[inline(always)]
+    pub fn spec(self) -> &'static CharsetSpec {
+        let idx = (self as usize).min(BUILTIN_CHARSETS.len() - 1);
+        &BUILTIN_CHARSETS[idx]
+    }
 }
 
 #[repr(C)]
@@ -40,6 +128,7 @@ pub struct TextInputModel {
     pub hold_ticks: u32,
     pub custom_title: String<16>,
     pub buffer: String<32>,
+    pub locale_keymap: LocaleKeymap,
 }
 
 impl TextInputModel {
@@ -65,12 +154,44 @@ impl TextInputModel {
             hold_ticks: 6,
             custom_title: String::new(),
             buffer: String::new(),
+            locale_keymap: LocaleKeymap::empty(),
         }
     }
 
     #[inline(always)]
     pub fn title_str(&self) -> &str {
         self.custom_title.as_str()
+    }
+
+    #[inline(always)]
+    pub fn charset_label(&self) -> &str {
+        if self.charset == Charset::Locale && !self.locale_keymap.label.is_empty() {
+            self.locale_keymap.label.as_str()
+        } else {
+            self.charset.spec().label
+        }
+    }
+
+    /// True whenever the active input layout differs from the factory Latin keypad silkscreen.
+    #[inline(always)]
+    pub fn needs_keypad_guide(&self) -> bool {
+        !self.digits_only
+            && (self.show_grid
+                || self.charset == Charset::Locale
+                || self.charset.spec().show_grid_on_k1
+                || (!self.is_k1 && self.charset != Charset::Numbers))
+    }
+
+    #[inline(always)]
+    pub fn key_chars(&self, key: u8) -> &str {
+        if key > 9 {
+            return "";
+        }
+        if self.charset == Charset::Locale && self.locale_keymap.active {
+            self.locale_keymap.keys[key as usize].as_str()
+        } else {
+            self.charset.spec().keys[key as usize]
+        }
     }
 }
 
@@ -79,33 +200,6 @@ pub struct TextInputView;
 impl TextInputView {
     pub const fn new() -> Self {
         Self
-    }
-
-    #[inline(never)]
-    fn get_charset_chars(charset: Charset, key: u8) -> &'static str {
-        static ALPHA_OFF: [u8; 9] = [0, 3, 6, 9, 12, 15, 19, 22, 26];
-        static SYM_OFF: [u8; 9] = [0, 3, 6, 10, 14, 17, 20, 23, 26];
-        if key > 9 {
-            return "";
-        }
-        let k = key as usize;
-        let bytes: &[u8] = if charset == Charset::Numbers {
-            &b"0123456789"[k..k + 1]
-        } else if key == 0 {
-            b" "
-        } else if key == 1 {
-            b".,?!'-"
-        } else {
-            let (s, off): (&[u8], &[u8; 9]) = match charset {
-                Charset::Symbols => (b"@#$%&*()[]<>{}/\\|+-=\"'` :;_", &SYM_OFF),
-                Charset::Upper => (b"ABCDEFGHIJKLMNOPQRSTUVWXYZ", &ALPHA_OFF),
-                _ => (b"abcdefghijklmnopqrstuvwxyz", &ALPHA_OFF),
-            };
-            let tk = k - 2;
-            &s[off[tk] as usize..off[tk + 1] as usize]
-        };
-        // All slices above are pure ASCII literals indexed at valid byte offsets.
-        unsafe { core::str::from_utf8_unchecked(bytes) }
     }
 
     #[inline(never)]
@@ -126,30 +220,73 @@ impl TextInputView {
         }
     }
 
-    fn draw_t9_grid(canvas: &mut Canvas, charset: Charset) {
+    fn draw_t9_grid(canvas: &mut Canvas, model: &TextInputModel, is_cycling: bool) {
         let mut x = 2i16;
-        let mut y = 34i16;
+        let mut y = 31i16;
 
         for key in 1..10u8 {
-            canvas.fill_rect(x as u8, y as u8, 7, 6, Color::Fill);
-            text::draw_char(
-                canvas,
-                x + 2,
-                y + 5,
-                (b'0' + key) as char,
-                &TOMTHUMB,
-                Color::Clear,
-            );
-
-            let chars = Self::get_charset_chars(charset, key);
-            text::draw_str(canvas, x + 9, y + 5, chars, &TOMTHUMB, Color::Fill);
+            let active_key = is_cycling && model.last_key == Some(key);
+            if active_key {
+                // Highlight the pressed key cell with an 8px-tall inverted band so tall diacritics fit
+                canvas.fill_rect(x as u8, (y - 1) as u8, 40, 8, Color::Fill);
+                text::draw_char(
+                    canvas,
+                    x + 2,
+                    y + 5,
+                    (b'0' + key) as char,
+                    &TOMTHUMB,
+                    Color::Clear,
+                );
+                let chars = model.key_chars(key);
+                text::draw_str_max_x(canvas, x + 9, y + 5, chars, &TOMTHUMB, Color::Clear, x + 39);
+            } else {
+                canvas.fill_rect(x as u8, y as u8, 7, 6, Color::Fill);
+                text::draw_char(
+                    canvas,
+                    x + 2,
+                    y + 5,
+                    (b'0' + key) as char,
+                    &TOMTHUMB,
+                    Color::Clear,
+                );
+                let chars = model.key_chars(key);
+                text::draw_str_max_x(canvas, x + 9, y + 5, chars, &TOMTHUMB, Color::Fill, x + 40);
+            }
 
             if key == 3 || key == 6 {
                 x = 2;
-                y += 7;
+                y += 8;
             } else {
                 x += 42;
             }
+        }
+    }
+
+    /// Render a live tap-cycle preview strip in the mode bar (e.g. `2: A [B] C`) while multi-tapping.
+    fn draw_cycle_strip(canvas: &mut Canvas, model: &TextInputModel, y: i16) {
+        let Some(key) = model.last_key else {
+            return;
+        };
+        let chars = model.key_chars(key);
+        if chars.is_empty() {
+            return;
+        }
+        let mut cx = 28i16;
+        let max_x = 104i16;
+        let mut ch_buf = [0u8; 4];
+        for (idx, ch) in chars.chars().enumerate() {
+            let s = ch.encode_utf8(&mut ch_buf);
+            let w = text::str_width(s, &TOMTHUMB).max(4);
+            if cx + w + 2 > max_x {
+                break;
+            }
+            if idx == model.press_count {
+                canvas.fill_rect((cx - 1) as u8, (y - 6) as u8, (w + 2) as u8, 8, Color::Fill);
+                text::draw_str(canvas, cx, y, s, &TOMTHUMB, Color::Clear);
+            } else {
+                text::draw_str(canvas, cx, y, s, &TOMTHUMB, Color::Fill);
+            }
+            cx += w + 2;
         }
     }
 
@@ -165,24 +302,17 @@ impl TextInputView {
         if model.digits_only {
             widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
         } else {
-            utils::static_bytes!(
-                static STAR_LABELS = b"123\0123\0SYM\0ABC\0";
-            );
-            utils::static_bytes!(
-                static CASE_LABELS = b"abc\0ABC\0Case\0Case\0";
-            );
-            let star_label = utils::format::nth_cstr(&STAR_LABELS, model.charset as u8);
+            let spec = model.charset.spec();
             let hash_key = if model.is_k1 { "F" } else { "#" };
-            let case_label = utils::format::nth_cstr(&CASE_LABELS, model.charset as u8);
             let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
             let enter_label = if show_grid || model.is_k1 {
                 "Enter"
             } else {
                 "OK"
             };
-            widgets::draw_key_badge(canvas, x0, by, "*", star_label);
+            widgets::draw_key_badge(canvas, x0, by, "*", spec.star_hint);
             widgets::draw_key_badge(canvas, x1, by, menu_key, enter_label);
-            widgets::draw_key_badge(canvas, x2, by, hash_key, case_label);
+            widgets::draw_key_badge(canvas, x2, by, hash_key, spec.case_hint);
             draw_exit = !show_grid;
         }
         if draw_exit {
@@ -253,13 +383,21 @@ impl View<TextInputModel> for TextInputView {
         canvas.fill_rect(0, clear_y, 128, 64 - clear_y, Color::Clear);
 
         // 2. Mode & Length Indicator Bar (DeltaFW layout below header)
-        let header_y = 15i16;
+        let header_y = 16i16;
+        let is_cycling =
+            model.last_key.is_some() && (model.ticks.wrapping_sub(model.last_activity_tick) < 15);
         if !model.digits_only {
-            utils::static_bytes!(
-                static CHARSET_NAMES = b"ABC\0abc\0123\0#@$\0";
+            text::draw_str(
+                canvas,
+                3,
+                header_y,
+                model.charset_label(),
+                &TOMTHUMB,
+                Color::Fill,
             );
-            let charset_name = utils::format::nth_cstr(&CHARSET_NAMES, model.charset as u8);
-            text::draw_str(canvas, 3, header_y, charset_name, &TOMTHUMB, Color::Fill);
+            if is_cycling {
+                Self::draw_cycle_strip(canvas, model, header_y);
+            }
         }
 
         #[cfg(feature = "passcode")]
@@ -270,7 +408,7 @@ impl View<TextInputModel> for TextInputView {
         if !is_passcode {
             let mut num_buf = core::mem::MaybeUninit::<[u8; 12]>::uninit();
             let count_s = text::format_fraction_u32(
-                model.buffer.len() as u32,
+                model.buffer.chars().count() as u32,
                 model.max_len as u32,
                 unsafe { &mut *num_buf.as_mut_ptr() },
             );
@@ -285,17 +423,8 @@ impl View<TextInputModel> for TextInputView {
             );
         }
 
-        let show_grid = !model.digits_only
-            && (model.show_grid
-                || match model.charset {
-                    Charset::Numbers => false,
-                    Charset::Symbols => true,
-                    Charset::Upper | Charset::Lower => !model.is_k1,
-                });
-
-        let is_cycling =
-            model.last_key.is_some() && (model.ticks.wrapping_sub(model.last_activity_tick) < 15);
-        let text_y = if show_grid { 27i16 } else { 33i16 };
+        let show_grid = model.needs_keypad_guide();
+        let text_y = if show_grid { 26i16 } else { 33i16 };
 
         #[cfg(feature = "passcode")]
         if is_passcode {
@@ -308,9 +437,11 @@ impl View<TextInputModel> for TextInputView {
             let max_w = 118i16;
             let scroll_x = if str_w > max_w { str_w - max_w } else { 0 };
 
-            text::draw_str(
+            text::draw_str_clipped(
                 canvas,
-                text_x - scroll_x,
+                text_x,
+                text_x + max_w,
+                scroll_x,
                 text_y,
                 &model.buffer,
                 &MUMATRIX,
@@ -318,22 +449,20 @@ impl View<TextInputModel> for TextInputView {
             );
 
             let cursor_x = (text_x - scroll_x) + str_w;
-            if is_cycling && !model.buffer.is_empty() {
-                let b = model.buffer.as_bytes();
-                // Input buffer only receives ASCII bytes from numeric/T9 charsets.
-                let last_char_str = unsafe { core::str::from_utf8_unchecked(&b[b.len() - 1..]) };
-                let last_w = text::str_width(last_char_str, &MUMATRIX);
-                let char_x = cursor_x - last_w;
+            if is_cycling && let Some((last_idx, _)) = model.buffer.char_indices().next_back() {
+                let last_char_str = &model.buffer[last_idx..];
+                let last_w = text::str_width(last_char_str, &MUMATRIX).max(4);
+                let char_x = (cursor_x - last_w).max(text_x);
                 canvas.fill_rect(
-                    (char_x - 1) as u8,
+                    char_x as u8,
                     (text_y - 7) as u8,
-                    (last_w + 3) as u8,
-                    10,
+                    (last_w + 1) as u8,
+                    9,
                     Color::Fill,
                 );
                 text::draw_str(
                     canvas,
-                    char_x,
+                    char_x + 1,
                     text_y,
                     last_char_str,
                     &MUMATRIX,
@@ -345,8 +474,8 @@ impl View<TextInputModel> for TextInputView {
         }
 
         let by = if show_grid {
-            Self::draw_t9_grid(canvas, model.charset);
-            55
+            Self::draw_t9_grid(canvas, model, is_cycling);
+            56
         } else {
             if !is_passcode {
                 canvas.draw_horizontal_line(0, 52, 128, Color::Fill);
@@ -371,6 +500,40 @@ impl View<TextInputModel> for TextInputView {
                     cancel_input(model);
                 }
             }
+            return true;
+        }
+
+        if let Event::Char(ch) = *event {
+            match ch {
+                '\x08' | '\x7f' => {
+                    Self::confirm_current_char(model);
+                    let _ = model.buffer.pop();
+                }
+                '\r' | '\n' => {
+                    Self::confirm_current_char(model);
+                    model.is_done = true;
+                }
+                '\x1b' => {
+                    cancel_input(model);
+                }
+                c if !c.is_control() => {
+                    if !model.digits_only || c.is_ascii_digit() {
+                        Self::confirm_current_char(model);
+                        if model.buffer.len() + c.len_utf8() <= model.max_len {
+                            let _ = model.buffer.push(c);
+                        }
+                        #[cfg(feature = "passcode")]
+                        if model.is_passcode
+                            && model.expose_len
+                            && model.buffer.len() >= model.max_len
+                        {
+                            model.is_done = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            model.last_activity_tick = model.ticks;
             return true;
         }
 
@@ -408,8 +571,7 @@ impl View<TextInputModel> for TextInputView {
                         if model.last_key.is_some() {
                             Self::confirm_current_char(model);
                         } else if !model.buffer.is_empty() {
-                            // SAFETY: `model.buffer` only ever contains 7-bit ASCII bytes.
-                            let _ = unsafe { model.buffer.as_mut_vec().pop() };
+                            let _ = model.buffer.pop();
                         } else {
                             // Buffer is empty: short tap on Exit cancels immediately ("Back")!
                             cancel_input(model);
@@ -425,13 +587,13 @@ impl View<TextInputModel> for TextInputView {
             if is_pressed {
                 if let Some(key_num) = code.to_digit() {
                     if model.digits_only || model.charset == Charset::Numbers {
-                        confirm_and_push(model, b'0' + key_num);
+                        confirm_and_push_char(model, (b'0' + key_num) as char);
                         model.last_activity_tick = model.ticks;
                         return true;
                     }
 
-                    let chars = Self::get_charset_chars(model.charset, key_num).as_bytes();
-                    if chars.is_empty() {
+                    let chars_count = model.key_chars(key_num).chars().count();
+                    if chars_count == 0 {
                         return true;
                     }
 
@@ -439,18 +601,18 @@ impl View<TextInputModel> for TextInputView {
                     let is_recent = (model.ticks.wrapping_sub(model.last_activity_tick)) < 15;
 
                     if is_same_key && is_recent && !model.buffer.is_empty() {
-                        // Multi-tap cycle through characters
+                        // Multi-tap cycle through UTF-8 characters safely
                         model.press_count += 1;
-                        if model.press_count >= chars.len() {
+                        if model.press_count >= chars_count {
                             model.press_count = 0;
                         }
-                        let char_idx = model.press_count;
-                        // SAFETY: `model.buffer` only ever contains 7-bit ASCII bytes.
-                        let _ = unsafe { model.buffer.as_mut_vec().pop() };
-                        push_ascii(&mut model.buffer, chars[char_idx]);
-                    } else {
+                        if let Some(ch) = model.key_chars(key_num).chars().nth(model.press_count) {
+                            let _ = model.buffer.pop();
+                            let _ = model.buffer.push(ch);
+                        }
+                    } else if let Some(ch) = model.key_chars(key_num).chars().next() {
                         // First tap on a new key
-                        confirm_and_push(model, chars[0]);
+                        confirm_and_push_char(model, ch);
                         model.last_key = Some(key_num);
                         model.press_count = 0;
                     }
@@ -465,14 +627,23 @@ impl View<TextInputModel> for TextInputView {
                         model.exit_held = false;
                     }
 
+                    KeyCode::Side2 if !model.digits_only => {
+                        model.show_grid = !model.show_grid;
+                    }
+
                     KeyCode::Star | KeyCode::KeyF | KeyCode::Hash | KeyCode::Side1
                         if !model.digits_only =>
                     {
                         Self::confirm_current_char(model);
+                        let has_loc = model.locale_keymap.active;
                         model.charset = match (*code == KeyCode::Star, model.charset) {
-                            (true, Charset::Upper | Charset::Lower) => Charset::Numbers,
+                            (true, Charset::Upper | Charset::Lower) if has_loc => Charset::Locale,
+                            (true, Charset::Upper | Charset::Lower | Charset::Locale) => {
+                                Charset::Numbers
+                            }
                             (true, Charset::Numbers) => Charset::Symbols,
                             (false, Charset::Upper) => Charset::Lower,
+                            (false, Charset::Lower) if has_loc => Charset::Locale,
                             _ => Charset::Upper,
                         };
                     }
@@ -496,21 +667,20 @@ impl View<TextInputModel> for TextInputView {
 }
 
 #[inline(never)]
-fn push_ascii(buf: &mut String<32>, ch: u8) {
-    if ch.is_ascii() {
-        // SAFETY: 7-bit ASCII is always a valid single-byte UTF-8 sequence.
-        let _ = unsafe { buf.as_mut_vec().push(ch) };
-    }
+fn confirm_and_push(model: &mut TextInputModel, ch: u8) {
+    confirm_and_push_char(model, ch as char);
 }
 
 #[inline(never)]
-fn confirm_and_push(model: &mut TextInputModel, ch: u8) {
+fn confirm_and_push_char(model: &mut TextInputModel, ch: char) {
     TextInputView::confirm_current_char(model);
-    if model.buffer.len() < model.max_len {
-        push_ascii(&mut model.buffer, ch);
+    if model.buffer.chars().count() < model.max_len
+        && model.buffer.len() + ch.len_utf8() <= model.buffer.capacity()
+    {
+        let _ = model.buffer.push(ch);
     }
     #[cfg(feature = "passcode")]
-    if model.is_passcode && model.expose_len && model.buffer.len() >= model.max_len {
+    if model.is_passcode && model.expose_len && model.buffer.chars().count() >= model.max_len {
         model.is_done = true;
     }
 }
@@ -574,5 +744,74 @@ mod tests {
         assert!(view.on_event(&mut model, &ev_release));
         assert!(!model.is_canceled);
         assert!(model.buffer.is_empty());
+    }
+
+    #[test]
+    fn test_direct_char_input_and_controls() {
+        let mut model = TextInputModel::new(16);
+        let mut view = TextInputView;
+
+        for ch in "Hello".chars() {
+            assert!(view.on_event(&mut model, &Event::Char(ch)));
+        }
+        assert_eq!(model.buffer.as_str(), "Hello");
+
+        // Backspace pops cleanly
+        assert!(view.on_event(&mut model, &Event::Char('\x08')));
+        assert_eq!(model.buffer.as_str(), "Hell");
+
+        // Enter submits
+        assert!(view.on_event(&mut model, &Event::Char('\n')));
+        assert!(model.is_done);
+
+        // digits_only filters non-digits
+        let mut num_model = TextInputModel::new(8);
+        num_model.digits_only = true;
+        for ch in "1a2b3".chars() {
+            assert!(view.on_event(&mut num_model, &Event::Char(ch)));
+        }
+        assert_eq!(num_model.buffer.as_str(), "123");
+    }
+
+    #[test]
+    fn test_locale_utf8_multitap_and_automatic_keypad_guide() {
+        let mut model = TextInputModel::new(16);
+        let mut view = TextInputView;
+        assert!(!model.needs_keypad_guide());
+
+        // Load a Russian Cyrillic keymap on key 2 ("АБВГ")
+        model.locale_keymap.active = true;
+        let _ = model.locale_keymap.label.push_str("АБВ");
+        let _ = model.locale_keymap.keys[2].push_str("АБВГ");
+        model.charset = Charset::Locale;
+
+        // Non-factory layout automatically activates the on-screen 3x3 keypad guide
+        assert!(model.needs_keypad_guide());
+        assert_eq!(model.charset_label(), "АБВ");
+
+        // Multi-tap key 2 twice -> 'А' then cleanly replaces UTF-8 multi-byte char with 'Б'
+        let press2 = Event::Key {
+            code: KeyCode::Key2,
+            state: KeyState::Pressed,
+        };
+        assert!(view.on_event(&mut model, &press2));
+        assert_eq!(model.buffer.as_str(), "А");
+        assert!(view.on_event(&mut model, &press2));
+        assert_eq!(model.buffer.as_str(), "Б");
+
+        // Render with active key highlight + live cycle strip without panicking
+        let mut canvas = Canvas::new();
+        view.render(&mut canvas, &model);
+        assert!(canvas.buffer.iter().flatten().any(|&b| b != 0));
+
+        // Side2 toggles the guide manually even in factory Latin mode
+        model.charset = Charset::Upper;
+        assert!(!model.needs_keypad_guide());
+        let side2 = Event::Key {
+            code: KeyCode::Side2,
+            state: KeyState::Pressed,
+        };
+        assert!(view.on_event(&mut model, &side2));
+        assert!(model.needs_keypad_guide());
     }
 }

@@ -1,0 +1,123 @@
+# Kern OS Localization Catalog — Italian (IT)
+# Natural, concise handheld-radio Italian roughly matching English label lengths.
+
+[meta]
+code = "it"
+name = "Italiano"
+ascii = "Italian (IT)"
+font_hint = 1 # tiny5
+
+[strings]
+"Settings" = "Impostaz."
+"Display" = "Schermo"
+"Audio" = "Audio"
+"Buttons" = "Tasti"
+"Battery" = "Batteria"
+"Device" = "Radio"
+"Apps" = "App"
+"Security" = "Sicurezza"
+"Language" = "Lingua"
+"System" = "Sistema"
+"English" = "Inglese"
+
+"Backlight" = { full = "Retroillum.", short = "Luce LCD" }
+"Backlight Time" = { full = "Tempo luce", short = "Luce LCD" }
+"Max Bright" = { full = "Lumin. max", short = "Luce +" }
+"Max Brightness" = { full = "Lumin. max", short = "Luce +" }
+"Min Bright" = { full = "Lumin. min", short = "Luce -" }
+"Min Brightness" = { full = "Lumin. min", short = "Luce -" }
+"Contrast" = "Contrasto"
+"Invert LCD" = { full = "Inverti LCD", short = "Inverti" }
+"Invert Pixels" = { full = "Inverti LCD", short = "Inverti" }
+"Animations" = { full = "Animazioni", short = "Anim." }
+"Shading" = "Sfumatura"
+
+"AF Gain" = "Volume AF"
+"AF Volume" = "Volume AF"
+"Beep Vol" = "Vol. tono"
+"Beep Gain" = "Vol. tono"
+"Key Beep" = { full = "Tono tasti", short = "Bip tasti" }
+"Mic Gain" = "Guad. mic"
+"Roger Beep" = "Roger Beep"
+"Audio EQ" = "Profilo RX"
+"Boot Chime" = { full = "Tono avvio", short = "Avvio" }
+"Boot Jingle" = { full = "Tono avvio", short = "Avvio" }
+"RX Profile" = "Profilo RX"
+
+"Shortcuts" = "Scorciat."
+"Tweaks" = "Avanzate"
+"Nav Layout" = "Tasti nav."
+"Auto Lock" = { full = "Blocco auto", short = "Blocco" }
+"F Timeout" = "Tempo F"
+"Fast Scroll" = { full = "Scorr. rap.", short = "Rapido" }
+"Hold Delay" = "Pressione"
+"Repeat Rate" = "Ripetiz."
+"PTT Mode" = "Modo PTT"
+"F Drawer" = "Menu F"
+
+"Cell Type" = "Tipo cella"
+"Bar Format" = "Icona bat."
+"Power Mode" = "Risparmio"
+"Auto Off" = "Spegn. auto"
+"Chg Detect" = "Rilev. car."
+
+"Clock" = "Clock CPU"
+"CPU Clock" = "Clock CPU"
+"UART Baud" = "Baud UART"
+"Info" = "Info"
+"Hardware Info" = "Info HW"
+"Storage" = "Memoria"
+"Calibration" = { full = "Calibraz.", short = "Calib." }
+"Debug" = "Debug"
+"Modules" = "Moduli"
+"Installed" = "Installate"
+"Home Style" = "Stile Home"
+"Numbers" = "Numeri"
+"Labels" = "Etichette"
+"Startup" = "Avvio"
+"Pager" = "Pager"
+"Reset Settings" = { full = "Ripristina", short = "Reset" }
+"Reset All" = { full = "Ripristina", short = "Reset" }
+"Restart" = "Riavvia"
+
+"Used" = "Usato"
+"Free" = "Libero"
+"Files" = "File"
+"Format Storage" = { full = "Formatta", short = "Format." }
+"Erase All Data" = { full = "Canc. tutto", short = "Cancella" }
+
+"Model" = "Modello"
+"Owner" = "Nominativo"
+"Tag" = "Etichetta"
+"Radio ID" = "ID Radio"
+"Boot Splash" = { full = "Logo avvio", short = "Logo" }
+
+"OK" = "OK"
+"Cancel" = { full = "Annulla", short = "No" }
+"Save" = "Salva"
+"Back" = "Indietro"
+"Hold" = "Tieni"
+"Off" = "Off"
+"On" = "On"
+"None" = "Nessuno"
+
+"Home" = "Home"
+"Radio" = "Radio"
+"Torch" = "Torcia"
+"About" = "Info"
+"Enter" = "OK"
+"Del" = "Canc"
+"Case" = "Tipo"
+
+[keymap]
+label = "IT"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "àÀáÁ"
+"3" = "èéÈÉ"
+"4" = "ìÌíÍ"
+"5" = "òÒóÓ"
+"6" = "ùÙúÚ"
+"7" = "€°§"
+"8" = "()[]"
+"9" = "/:+="

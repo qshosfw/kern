@@ -9,7 +9,7 @@ ascii = "Russian (RU)"
 font_hint = 1 # tiny5 (includes full Cyrillic)
 
 [strings]
-"Settings" = "Настройки"
+"Settings" = { full = "Настройки", short = "Настр." }
 "Display" = "Экран"
 "Audio" = "Звук"
 "Buttons" = "Кнопки"
@@ -70,3 +70,25 @@ font_hint = 1 # tiny5 (includes full Cyrillic)
 "Off" = "Выкл"
 "On" = "Вкл"
 "None" = "Нет"
+
+"Home" = "Меню"
+"Radio" = "Радио"
+"Torch" = "Фонарь"
+"About" = { full = "О KERN", short = "Инфо" }
+"Enter" = "Ввод"
+"Del" = "Стер."
+"Case" = "Рег."
+
+[keymap]
+label = "АБВ"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "АБВГ"
+"3" = "ДЕЁЖ"
+"4" = "ЗИЙК"
+"5" = "ЛМНО"
+"6" = "ПРСТ"
+"7" = "УФХЦ"
+"8" = "ЧШЩЪ"
+"9" = "ЫЬЭЮЯ"
+

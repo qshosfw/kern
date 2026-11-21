@@ -70,3 +70,25 @@ font_hint = 1 # tiny5
 "Off" = "No"
 "On" = "Sí"
 "None" = "Ninguno"
+
+"Home" = "Inicio"
+"Radio" = "Radio"
+"Torch" = "Linterna"
+"About" = "Acerca"
+"Enter" = "OK"
+"Del" = "Borr."
+"Case" = "Tipo"
+
+[keymap]
+label = "ES"
+"0" = " "
+"1" = "¿¡.,?!"
+"2" = "ÁáÀà"
+"3" = "ÉéÈè"
+"4" = "ÍíÌì"
+"5" = "Ññ"
+"6" = "ÓóÒò"
+"7" = "Çç"
+"8" = "ÚúÜü"
+"9" = "ºª€-"
+

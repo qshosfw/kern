@@ -268,14 +268,7 @@ impl KrxApiTable {
     }
 
     #[inline(always)]
-    pub fn draw_menu_item(
-        &self,
-        y: i16,
-        title: &[u8],
-        value: &[u8],
-        icon_id: u8,
-        flags: u8,
-    ) {
+    pub fn draw_menu_item(&self, y: i16, title: &[u8], value: &[u8], icon_id: u8, flags: u8) {
         let desc = KrxWidget {
             p0: title.as_ptr(),
             p1: value.as_ptr(),
@@ -544,7 +537,12 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn stack_free(&self) -> u32 {
-        self.call_op(Op::SysQuery, crate::sub::sys_query::STACK_FREE as usize, 0, 0) as u32
+        self.call_op(
+            Op::SysQuery,
+            crate::sub::sys_query::STACK_FREE as usize,
+            0,
+            0,
+        ) as u32
     }
 
     #[inline(always)]

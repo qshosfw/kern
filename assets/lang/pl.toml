@@ -1,0 +1,123 @@
+# Kern OS Localization Catalog — Polish (PL)
+# Natural, concise handheld-radio Polish (SP/SQ community) matching English widths.
+
+[meta]
+code = "pl"
+name = "Polski"
+ascii = "Polish (PL)"
+font_hint = 1 # tiny5 (full Polish diacritics: ąćęłńóśźż)
+
+[strings]
+"Settings" = { full = "Ustawienia", short = "Ustaw." }
+"Display" = "Ekran"
+"Audio" = "Dźwięk"
+"Buttons" = "Klawisze"
+"Battery" = "Bateria"
+"Device" = "Radio"
+"Apps" = "Aplikacje"
+"Security" = "Blokada"
+"Language" = "Język"
+"System" = "System"
+"English" = "Angielski"
+
+"Backlight" = { full = "Podświetl.", short = "Światło" }
+"Backlight Time" = { full = "Czas podśw.", short = "Światło" }
+"Max Bright" = { full = "Jasność +", short = "Jasn. +" }
+"Max Brightness" = { full = "Jasność +", short = "Jasn. +" }
+"Min Bright" = { full = "Jasność -", short = "Jasn. -" }
+"Min Brightness" = { full = "Jasność -", short = "Jasn. -" }
+"Contrast" = "Kontrast"
+"Invert LCD" = { full = "Negatyw LCD", short = "Negatyw" }
+"Invert Pixels" = { full = "Negatyw LCD", short = "Negatyw" }
+"Animations" = "Animacje"
+"Shading" = "Cieniow."
+
+"AF Gain" = "Głośność"
+"AF Volume" = "Głośność"
+"Beep Vol" = "Gł. tonu"
+"Beep Gain" = "Gł. tonu"
+"Key Beep" = { full = "Dźw. klaw.", short = "Pik klaw." }
+"Mic Gain" = "Mikrofon"
+"Roger Beep" = "Roger Beep"
+"Audio EQ" = "Profil RX"
+"Boot Chime" = { full = "Ton startu", short = "Start" }
+"Boot Jingle" = { full = "Ton startu", short = "Start" }
+"RX Profile" = "Profil RX"
+
+"Shortcuts" = "Skróty"
+"Tweaks" = "Zaawans."
+"Nav Layout" = "Układ naw."
+"Auto Lock" = { full = "Autoblok.", short = "Blok." }
+"F Timeout" = "Czas F"
+"Fast Scroll" = "Szyb. przew"
+"Hold Delay" = "Przytrz."
+"Repeat Rate" = "Powtarz."
+"PTT Mode" = "Tryb PTT"
+"F Drawer" = "Menu F"
+
+"Cell Type" = "Typ ogniw"
+"Bar Format" = "Wskaźnik"
+"Power Mode" = "Zasilanie"
+"Auto Off" = "Autowył."
+"Chg Detect" = "Ładowanie"
+
+"Clock" = "Zegar CPU"
+"CPU Clock" = "Zegar CPU"
+"UART Baud" = "Pręd. UART"
+"Info" = "Info"
+"Hardware Info" = "Info HW"
+"Storage" = "Pamięć"
+"Calibration" = { full = "Kalibracja", short = "Kalib." }
+"Debug" = "Debug"
+"Modules" = "Moduły"
+"Installed" = "Zainstal."
+"Home Style" = "Styl menu"
+"Numbers" = "Numery"
+"Labels" = "Etykiety"
+"Startup" = "Start"
+"Pager" = "Pager"
+"Reset Settings" = { full = "Reset ustaw", short = "Reset" }
+"Reset All" = { full = "Reset ustaw", short = "Reset" }
+"Restart" = "Restart"
+
+"Used" = "Zajęte"
+"Free" = "Wolne"
+"Files" = "Pliki"
+"Format Storage" = { full = "Formatuj", short = "Format" }
+"Erase All Data" = { full = "Wyczyść", short = "Wyczyść" }
+
+"Model" = "Model"
+"Owner" = "Znak"
+"Tag" = "Etykieta"
+"Radio ID" = "ID Radia"
+"Boot Splash" = "Ekran start"
+
+"OK" = "OK"
+"Cancel" = { full = "Anuluj", short = "Nie" }
+"Save" = "Zapisz"
+"Back" = "Wróć"
+"Hold" = "Przytrz."
+"Off" = "Wył"
+"On" = "Wł"
+"None" = "Brak"
+
+"Home" = "Start"
+"Radio" = "Radio"
+"Torch" = "Latarka"
+"About" = { full = "O KERN", short = "Info" }
+"Enter" = "OK"
+"Del" = "Usuń"
+"Case" = "Tryb"
+
+[keymap]
+label = "PL"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "ąćĄĆ"
+"3" = "ęĘ"
+"4" = "łŁ"
+"5" = "ńŃ"
+"6" = "óÓ"
+"7" = "śŚ"
+"8" = "źżŹŻ"
+"9" = "°€/:+-"

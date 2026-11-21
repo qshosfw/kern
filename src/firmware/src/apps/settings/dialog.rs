@@ -232,7 +232,11 @@ pub fn handle_sheet_selected(
         #[cfg(feature = "filesystem")]
         TAG_ASSET_CHOOSER => {
             if let Some(asset) = app.active_asset.take() {
-                asset.apply_choice(idx, &mut ctx.config);
+                if asset.apply_choice(idx, &mut ctx.config)
+                    && asset == super::asset_chooser::AssetId::Language
+                {
+                    crate::services::lang::reload_os(ctx.storage, &ctx.config.system);
+                }
             }
         }
         TAG_MODEL_CHOOSER => {

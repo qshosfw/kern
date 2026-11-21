@@ -243,7 +243,12 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 } else {
                     0
                 };
-                super::display::draw_icon(112 + dx, d.y + icon_dy + i16::from(comfortable), 35, tc_u8);
+                super::display::draw_icon(
+                    112 + dx,
+                    d.y + icon_dy + i16::from(comfortable),
+                    35,
+                    tc_u8,
+                );
             }
         }
         KRX_WIDGET_BIG_DIGIT | KRX_WIDGET_SMALL_DIGIT => {

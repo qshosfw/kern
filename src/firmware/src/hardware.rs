@@ -175,6 +175,8 @@ impl<'a> SystemHardware<'a> {
             py32_hal::rcc::set_sysclk_index(clk_idx);
 
             bsp::Board::uart_set_baud(config.system.baud_rate());
+            #[cfg(all(not(test), feature = "filesystem"))]
+            crate::services::lang::reload_os(crate::kern_fs(), &config.system);
             #[cfg(feature = "usb")]
             self.usb
                 .update_device_identity(config.system.model_str(), config.system.tag_str());

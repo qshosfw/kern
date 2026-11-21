@@ -301,17 +301,31 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
 
             crate::icons::draw_icon_16(canvas, (tx + 12) as i16, icon_y, item.icon(), fg_color);
 
-            // Centered title below icon (if enabled)
+            // Centered title below icon (if enabled), localized & clipped safely inside 40px tile
             if model.show_labels {
-                text::draw_str_align(
-                    canvas,
-                    (tx + 20) as i16,
-                    (ty + 24) as i16,
-                    item.title(),
-                    &FONT,
-                    fg_color,
-                    text::Align::Center,
-                );
+                let mut lbuf = [0u8; 24];
+                let lbl = text::localize(item.title(), true, &mut lbuf);
+                if text::str_width(lbl, &FONT) > 38 {
+                    text::draw_str_ellipsis(
+                        canvas,
+                        (tx + 1) as i16,
+                        (ty + 24) as i16,
+                        lbl,
+                        &FONT,
+                        fg_color,
+                        (tx + 39) as i16,
+                    );
+                } else {
+                    text::draw_str_align(
+                        canvas,
+                        (tx + 20) as i16,
+                        (ty + 24) as i16,
+                        lbl,
+                        &FONT,
+                        fg_color,
+                        text::Align::Center,
+                    );
+                }
             }
         }
 

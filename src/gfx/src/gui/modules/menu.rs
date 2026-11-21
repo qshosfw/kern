@@ -700,6 +700,18 @@ fn render_menu_row(
         _ => {}
     }
 
+    let mut val_lbuf = [0u8; 32];
+    let val_str = if matches!(
+        item.item_type,
+        MenuItemType::Choice { .. } | MenuItemType::Value(_)
+    ) {
+        text::localize(val_str, true, &mut val_lbuf)
+    } else {
+        val_str
+    };
+    let mut title_lbuf = [0u8; 48];
+    let title_str = text::localize(title_str, !val_str.is_empty(), &mut title_lbuf);
+
     let sw = if val_str.is_empty() {
         0
     } else {
@@ -848,7 +860,14 @@ impl MenuView {
     }
 
     #[inline(never)]
-    fn render_sheet_row(canvas: &mut Canvas, sheet: &OptionSheet, idx: usize, row_y_scroll: i16) {
+    fn render_sheet_row(
+        canvas: &mut Canvas,
+        sheet: &OptionSheet,
+        idx: usize,
+        row_y_scroll: i16,
+        marquee_x: i16,
+        marquee_enabled: bool,
+    ) -> u8 {
         let has_scroll = row_y_scroll < 0;
         let row_y = if has_scroll {
             !row_y_scroll
@@ -858,6 +877,7 @@ impl MenuView {
         let is_hovered = idx == sheet.hover;
         let is_selected = idx == sheet.selected;
         let (fill_x, fill_w) = if has_scroll { (2, 118) } else { (3, 122) };
+        let max_x = (fill_x as i16) + (fill_w as i16) - 3;
 
         let tc = if is_hovered {
             crate::widgets::draw_selection_capsule(
@@ -890,20 +910,54 @@ impl MenuView {
             icons::draw_icon_8(canvas, ix, row_y + 2, bmp, tc);
             tx = ix + 11;
         }
-        text::draw_str(canvas, tx, row_y + 8, sheet.options.get(idx), &MUMATRIX, tc);
+        let mut lbuf = [0u8; 48];
+        let label = text::localize(sheet.options.get(idx), false, &mut lbuf);
+        let avail = (max_x - tx).max(0);
+        let label_w = text::str_width(label, &MUMATRIX);
+        let overflow = (label_w - avail).clamp(0, 255) as u8;
+        if is_hovered && marquee_enabled && overflow > 0 {
+            text::draw_str_clipped(
+                canvas,
+                tx,
+                max_x,
+                marquee_x.min(overflow as i16),
+                row_y + 8,
+                label,
+                &MUMATRIX,
+                tc,
+            );
+        } else if overflow > 0 {
+            text::draw_str_ellipsis(canvas, tx, row_y + 8, label, &MUMATRIX, tc, max_x);
+        } else {
+            text::draw_str_max_x(canvas, tx, row_y + 8, label, &MUMATRIX, tc, max_x);
+        }
+        overflow
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn render_sheet_slide_up(canvas: &mut Canvas, sheet: &OptionSheet, y_offset: i8) {
+        let _ = Self::render_sheet_slide_up_marquee(canvas, sheet, y_offset, 0, false);
+    }
+
+    /// Render a slide-up option sheet with reading-speed marquee on the hovered row.
+    /// Returns the hovered row's horizontal overflow in pixels (`0` when it fits).
+    #[inline(never)]
+    pub fn render_sheet_slide_up_marquee(
+        canvas: &mut Canvas,
+        sheet: &OptionSheet,
+        y_offset: i8,
+        marquee_x: i16,
+        marquee_enabled: bool,
+    ) -> u8 {
         let total = sheet.options.len();
         if total == 0 {
-            return;
+            return 0;
         }
 
         let sheet_h = 48u8;
         let sheet_y = crate::widgets::draw_sheet_slide_up(canvas, sheet.title, sheet_h, y_offset);
         if sheet_y >= 64 {
-            return;
+            return 0;
         }
 
         let visible_count = 3usize;
@@ -911,12 +965,23 @@ impl MenuView {
         let start_idx = page_u16 as usize * visible_count;
         let end_idx = (start_idx + visible_count).min(total);
         let has_scroll = total > visible_count;
+        let mut hover_overflow = 0u8;
 
         let mut row_y = sheet_y + 11;
         for idx in start_idx..end_idx {
             if row_y < 64 && row_y + 11 > sheet_y + 10 {
                 let packed = if has_scroll { !row_y } else { row_y };
-                Self::render_sheet_row(canvas, sheet, idx, packed);
+                let ov = Self::render_sheet_row(
+                    canvas,
+                    sheet,
+                    idx,
+                    packed,
+                    if idx == sheet.hover { marquee_x } else { 0 },
+                    marquee_enabled,
+                );
+                if idx == sheet.hover {
+                    hover_overflow = ov;
+                }
             }
             row_y += 12;
         }
@@ -934,6 +999,7 @@ impl MenuView {
                 visible_count,
             );
         }
+        hover_overflow
     }
 }
 

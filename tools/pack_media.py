@@ -549,6 +549,16 @@ def compile_lang_pack(
             raw_full["__LANG_NAME__"] = unicodedata.normalize("NFC", str(meta["name"]).strip())
         if "ascii" in meta:
             raw_full["__LANG_ASCII__"] = unicodedata.normalize("NFC", str(meta["ascii"]).strip())
+        km = doc.get("keymap", {})
+        if isinstance(km, dict) and km:
+            if "label" in km:
+                raw_full["__KM_LABEL__"] = unicodedata.normalize("NFC", str(km["label"]).strip())
+            for digit in range(10):
+                dk = str(digit)
+                if dk in km:
+                    seq = unicodedata.normalize("NFC", str(km[dk]))
+                    if seq:
+                        raw_full[f"__KM_{digit}__"] = seq
         for k, v in doc.get("strings", {}).items():
             kn = unicodedata.normalize("NFC", str(k).strip())
             if not kn:
@@ -691,6 +701,11 @@ def main() -> int:
     p_lng.add_argument("--font-hint", type=int, default=None, help="Override companion font bitmask (1=tiny5, 2=cjk_ja, 4=cjk_zh)")
     p_lng.add_argument("--font", type=Path, action="append", default=[], help="Optional .fnt pack(s) for pixel-width linting")
     p_lng.add_argument("--max-px", type=int, default=96, help="Lint threshold in pixels for menu row labels")
+    p_chk = sub.add_parser("check-lang", help="Build and validate all TOML catalogs in a directory against a .fnt pack")
+    p_chk.add_argument("lang_dir", type=Path)
+    p_chk.add_argument("out_dir", type=Path)
+    p_chk.add_argument("--font", type=Path, required=True, help="Base .fnt pack (e.g. assets/media/tiny5.fnt) for glyph & width checks")
+    p_chk.add_argument("--max-px", type=int, default=96)
     p_in = sub.add_parser("inspect", help="Inspect and verify CRC of .icn, .fnt, or .lng pack")
     p_in.add_argument("file", type=Path)
     args = ap.parse_args()
@@ -702,6 +717,29 @@ def main() -> int:
         compile_bdf_font(args.src, args.dst, args.range)
     elif args.cmd == "pack-lang":
         compile_lang_pack(args.src, args.dst, args.code, args.font_hint, args.font, args.max_px)
+    elif args.cmd == "check-lang":
+        advs = load_font_advances(args.font)
+        tomls = sorted(args.lang_dir.glob("*.toml"))
+        missing_total = 0
+        for src in tomls:
+            dst = args.out_dir / f"{src.stem}.lng"
+            compile_lang_pack(src, dst, None, None, [args.font], args.max_px)
+            doc = tomllib.loads(src.read_text(encoding="utf-8"))
+            hint = int(doc.get("meta", {}).get("font_hint", 1))
+            if hint == 1:  # Latin / Cyrillic / Greek / Polish / Ukrainian -> must be 100% in base tiny5.fnt
+                missing = set()
+                for v in list(doc.get("strings", {}).values()) + list(doc.get("keymap", {}).values()):
+                    texts = [v.get("full", ""), v.get("short", "")] if isinstance(v, dict) else [str(v)]
+                    for t in texts:
+                        for ch in unicodedata.normalize("NFC", t):
+                            if ord(ch) >= 0x20 and ord(ch) not in advs:
+                                missing.add(ch)
+                if missing:
+                    missing_total += len(missing)
+                    print(f"  [MISSING GLYPHS] {src.name}: {''.join(sorted(missing))}")
+        if missing_total:
+            return 1
+        print(f"Verified {len(tomls)} language packs cleanly (0 collisions, 0 missing glyphs in {args.font.name}).")
     elif args.cmd == "inspect":
         inspect_pack(args.file)
     return 0

@@ -1,5 +1,7 @@
 pub mod calibration;
 pub mod display;
+#[cfg(feature = "filesystem")]
+pub mod lang;
 pub mod melody;
 pub mod power;
 pub mod primitives;

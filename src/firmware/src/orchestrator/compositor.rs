@@ -23,7 +23,13 @@ pub enum ActiveModal {
     Popup(PopupModel) = 1,
     #[cfg(feature = "text_input")]
     TextInput(TextInputModel) = 2,
-    Sheet(OptionSheet, KeyRepeater, gfx::gui::animation::SlideUpAnim) = 3,
+    Sheet(
+        OptionSheet,
+        KeyRepeater,
+        gfx::gui::animation::SlideUpAnim,
+        gfx::gui::animation::MarqueeScroller,
+        core::cell::Cell<u8>,
+    ) = 3,
 }
 
 #[repr(C)]
@@ -62,7 +68,11 @@ impl ModalCompositor {
             return true;
         }
         match &self.modal {
-            ActiveModal::Sheet(_, _, anim) => anim.is_animating(),
+            ActiveModal::Sheet(_, _, anim, marquee, _) => {
+                anim.is_animating()
+                    || (crate::master_config_ref().display.animations_enabled()
+                        && marquee.is_active())
+            }
             ActiveModal::Popup(model) => !model.anim.is_complete() || model.is_hold_animating(),
             _ => false,
         }
@@ -170,6 +180,10 @@ impl ModalCompositor {
     ) {
         let m = self.init_text_prompt(tag, title, max_len, digits_only, false);
         let _ = m.buffer.push_str(initial);
+        #[cfg(all(feature = "filesystem", not(test)))]
+        if !digits_only {
+            crate::services::lang::load_locale_keymap(crate::kern_fs(), &mut m.locale_keymap);
+        }
     }
 
     #[cfg(feature = "text_input")]
@@ -195,7 +209,13 @@ impl ModalCompositor {
         } else {
             anim.jump_open();
         }
-        self.modal = ActiveModal::Sheet(sheet, KeyRepeater::new(8, 2), anim);
+        self.modal = ActiveModal::Sheet(
+            sheet,
+            KeyRepeater::new(8, 2),
+            anim,
+            gfx::gui::animation::MarqueeScroller::idle(),
+            core::cell::Cell::new(0),
+        );
     }
 
     #[inline(never)]
@@ -243,11 +263,23 @@ impl ModalCompositor {
                     None
                 }
             }
-            ActiveModal::Sheet(sheet, repeater, anim) => {
+            ActiveModal::Sheet(sheet, repeater, anim, marquee, hover_ov) => {
+                let prev_hover = sheet.hover;
                 if let Event::Tick = event {
                     anim.tick();
+                    if crate::master_config_ref().display.animations_enabled() {
+                        marquee.set_overflow(hover_ov.get());
+                        marquee.tick();
+                    } else if marquee.is_active() {
+                        marquee.set_overflow(0);
+                    }
                 }
-                match handle_sheet_event_with_repeater(repeater, sheet, event) {
+                let res = handle_sheet_event_with_repeater(repeater, sheet, event);
+                if sheet.hover != prev_hover {
+                    marquee.set_overflow(0);
+                    hover_ov.set(0);
+                }
+                match res {
                     SheetResult::Confirmed(idx) => {
                         Some(ModalResult::SheetSelected { tag, index: idx })
                     }
@@ -274,8 +306,16 @@ impl ModalCompositor {
             ActiveModal::TextInput(model) => {
                 self.text_view.render(canvas, model);
             }
-            ActiveModal::Sheet(sheet, _, anim) => {
-                MenuView::render_sheet_slide_up(canvas, sheet, anim.offset() as i8);
+            ActiveModal::Sheet(sheet, _, anim, marquee, hover_ov) => {
+                let animated = crate::master_config_ref().display.animations_enabled();
+                let ov = MenuView::render_sheet_slide_up_marquee(
+                    canvas,
+                    sheet,
+                    anim.offset() as i8,
+                    marquee.offset(),
+                    animated,
+                );
+                hover_ov.set(ov);
             }
         }
         if self.toast.is_active {
