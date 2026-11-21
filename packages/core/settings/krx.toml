@@ -2,7 +2,15 @@ name = "Settings"
 output = "settings.krx"
 profile = "n1"
 icon = "APP_SETTINGS"
-caps = ["DISPLAY_DIRECT", "KEYPAD", "AUDIO_OUTPUT", "POWER_MANAGE"]
+caps = [
+    "DISPLAY_DIRECT",
+    "KEYPAD",
+    "AUDIO_OUTPUT",
+    "POWER_MANAGE",
+    "PREFERENCES",
+    "STORAGE_READ",
+    "STORAGE_WRITE",
+]
 root = "main.rs"
 
 icon_8 = """

@@ -85,12 +85,29 @@ def build_packages(pkg_names: list[str]) -> None:
 
 
 def sideload_artifact(port: str, baud: int, artifact: str, dry_run: bool) -> None:
-    cmd = [sys.executable, RIGWIRE_TOOL, "--port", port, "--baud", str(baud), "sideload", artifact]
+    remote_path = f"/apps/{os.path.basename(artifact)}"
+    cmd = [
+        sys.executable,
+        RIGWIRE_TOOL,
+        "--port",
+        port,
+        "--baud",
+        str(baud),
+        "push",
+        artifact,
+        remote_path,
+    ]
     rel = os.path.relpath(artifact, ROOT)
     if dry_run:
         print(f"  [dry-run] {' '.join(cmd)}")
         return
-    print(f"  -> sideload {rel} ({os.path.getsize(artifact)} B)")
+    # Validate package header & CRC locally before streaming over RigWire
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import pack_krx  # noqa: E402
+
+    with open(artifact, "rb") as f:
+        pack_krx.verify_package(f.read())
+    print(f"  -> push {rel} -> {remote_path} ({os.path.getsize(artifact)} B)")
     subprocess.run(cmd, check=True, cwd=ROOT)
 
 

@@ -373,6 +373,72 @@ impl KrxApiTable {
     pub fn reboot(&self, mode: u8) {
         let _ = self.call_op(Op::SysReboot, mode as usize, 0, 0);
     }
+
+    #[inline(always)]
+    pub fn stack_free(&self) -> u32 {
+        self.call_op(Op::SysQuery, crate::sub::sys_query::STACK_FREE as usize, 0, 0) as u32
+    }
+
+    #[inline(always)]
+    pub fn cpu_hz(&self) -> u32 {
+        self.call_op(Op::SysQuery, crate::sub::sys_query::CPU_HZ as usize, 0, 0) as u32
+    }
+
+    #[inline(always)]
+    pub fn sys_info(&self, out: &mut KrxSysInfo) -> bool {
+        self.call_op(Op::SysInfo, out as *mut KrxSysInfo as usize, 0, 0) != 0
+    }
+
+    #[inline(always)]
+    pub fn set_status_bar(&self, sb: &KrxStatusBar) {
+        let _ = self.call_op(
+            Op::UiStatus,
+            crate::sub::ui_status::SET_BAR as usize,
+            sb as *const KrxStatusBar as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn set_status_title(&self, title: &[u8]) {
+        let mut sb = KrxStatusBar::empty();
+        sb.flags = KRX_STATUS_VISIBLE | KRX_STATUS_DIVIDER | KRX_STATUS_CUSTOM_TITLE;
+        let n = title.len().min(sb.title.len());
+        let mut i = 0usize;
+        while i < n {
+            unsafe { *sb.title.get_unchecked_mut(i) = *title.get_unchecked(i) };
+            i += 1;
+        }
+        self.set_status_bar(&sb);
+    }
+
+    #[inline(always)]
+    pub fn list_dir(&self, path: &[u8], out: &mut [KrxDirEntry]) -> usize {
+        let req = KrxFsReq {
+            path: path.as_ptr(),
+            buf: out.as_mut_ptr() as *mut u8,
+            offset: 0,
+            len: out.len() as u16,
+            path_len: path.len() as u8,
+            extra: 0,
+        };
+        self.call_op(
+            Op::FsRead,
+            crate::sub::fs_read::LIST_DIR as usize,
+            &req as *const KrxFsReq as usize,
+            0,
+        )
+    }
+
+    #[inline(always)]
+    pub fn remove_file(&self, path: &[u8]) -> bool {
+        self.call_op(
+            Op::FsMeta,
+            crate::sub::fs_meta::REMOVE as usize,
+            path.as_ptr() as usize,
+            path.len(),
+        ) == 0
+    }
 }
 
 #[inline(always)]
