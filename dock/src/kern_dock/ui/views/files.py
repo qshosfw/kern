@@ -39,8 +39,14 @@ class FilesView:
         self._cached_entries: list[dict[str, Any]] = []
         self._place_btns: dict[str, Gtk.ToggleButton] = {}
         self._updating = False
+        self._dirty = True
 
         self.widget = self._build()
+        self.widget.connect("map", lambda _w: self._on_mapped())
+
+        kc = Gtk.EventControllerKey()
+        kc.connect("key-pressed", self._on_key)
+        self.widget.add_controller(kc)
 
         runtime.events.subscribe("link.connected", lambda _e: self._on_link_change(), main_thread=True)
         runtime.events.subscribe("link.disconnected", lambda _e: self._on_link_change(), main_thread=True)
@@ -196,11 +202,34 @@ class FilesView:
         root.add_controller(drop)
         return root
 
+    def _on_key(self, _c: Any, keyval: int, _kc: int, state: Any) -> bool:
+        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        alt = bool(state & Gdk.ModifierType.ALT_MASK)
+        if ctrl and keyval in (Gdk.KEY_f, Gdk.KEY_F):
+            self.search_toggle.set_active(not self.search_toggle.get_active())
+            if self.search_toggle.get_active():
+                self.search.grab_focus()
+            return True
+        if keyval == Gdk.KEY_F5 or (ctrl and keyval in (Gdk.KEY_r, Gdk.KEY_R)):
+            self.browse(self.current_dir)
+            return True
+        if alt and keyval == Gdk.KEY_Up:
+            self._browse_parent()
+            return True
+        return False
+
+    def _on_mapped(self) -> None:
+        if self._dirty and self.runtime.link.connected and self.runtime.link.link_mode == "kern_os":
+            self.browse(self.current_dir or "/")
+
     def _on_link_change(self) -> None:
+        self._dirty = True
         self._sync_dav_ui()
         if self.runtime.link.connected and self.runtime.link.link_mode == "kern_os":
-            self.browse("/")
+            if self.widget.get_mapped():
+                self.browse("/")
         else:
+            self._dirty = False
             self._cached_entries = []
             self._render_filtered()
 
@@ -246,6 +275,7 @@ class FilesView:
         lk = self.runtime.link
         if not lk.connected or lk.fs_backend is None:
             return
+        self._dirty = False
         self.current_dir = path
         self._rebuild_breadcrumbs()
         self._updating = True

@@ -43,17 +43,17 @@ class KeyboardBridge:
         self._type_timer: int | None = None
         self._type_total = 0
         self._type_progress: Any = None
+        self._scroll_accum: float = 0.0
 
         kc = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
         kc.connect("key-pressed", self._on_key_pressed)
         kc.connect("key-released", self._on_key_released)
         win.add_controller(kc)
 
-        sc = Gtk.EventControllerScroll(
-            flags=Gtk.EventControllerScrollFlags.VERTICAL | Gtk.EventControllerScrollFlags.DISCRETE
-        )
+        sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
         sc.connect("scroll", self._on_scroll)
-        stage.area.add_controller(sc)
+        sc.connect("scroll-end", lambda _c: setattr(self, "_scroll_accum", 0.0))
+        stage.add_controller(sc)
 
         win.connect("notify::is-active", lambda w, _p: None if w.is_active() else self.on_focus_lost())
         self.stage.update_keyboard_chip(enabled=self.enabled, live_typing=self.live_typing)
@@ -64,8 +64,11 @@ class KeyboardBridge:
         lk = self.runtime.link
         if not lk.connected or lk.link_mode != "kern_os":
             return False
-        step = 1 if dy > 0 else -1
-        lk.send_encoder(step)
+        self._scroll_accum += float(dy)
+        steps = int(self._scroll_accum)
+        if steps != 0:
+            self._scroll_accum -= float(steps)
+            lk.send_encoder(max(-8, min(8, steps)))
         return True
 
     def _text_focused(self) -> bool:

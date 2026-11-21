@@ -78,11 +78,24 @@ class RadioView:
         frow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.freq_lbl = Gtk.Label(label="———.———", xalign=0)
         self.freq_lbl.add_css_class("freq-display")
-        unit = Gtk.Label(label="MHz", valign=Gtk.Align.END, margin_bottom=8)
+        unit = Gtk.Label(label="MHz", valign=Gtk.Align.END, margin_bottom=8, hexpand=True, xalign=0)
         unit.add_css_class("dim-label")
+        step_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
+        step_box.add_css_class("linked")
+        step_dn = Gtk.Button(icon_name="list-remove-symbolic", tooltip_text="Step Down (or scroll down)")
+        step_dn.connect("clicked", lambda _b: self.runtime.link.send_encoder(1))
+        step_up = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="Step Up (or scroll up)")
+        step_up.connect("clicked", lambda _b: self.runtime.link.send_encoder(-1))
+        step_box.append(step_dn)
+        step_box.append(step_up)
         frow.append(self.freq_lbl)
         frow.append(unit)
+        frow.append(step_box)
         card.append(frow)
+
+        card_sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL | Gtk.EventControllerScrollFlags.DISCRETE)
+        card_sc.connect("scroll", lambda _c, _dx, dy: (self.runtime.link.send_encoder(1 if dy > 0 else -1), True)[1] if dy else False)
+        card.add_controller(card_sc)
 
         srow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         s_lbl = Gtk.Label(label="S")
@@ -122,7 +135,7 @@ class RadioView:
 
         # PC Keyboard Bridge
         kb = Adw.PreferencesGroup(title="Keyboard")
-        self.kbd_row = Adw.SwitchRow(title="Keyboard Control", subtitle="Use PC keys for radio buttons (Ctrl+K)", active=self.keyboard.enabled)
+        self.kbd_row = Adw.SwitchRow(title="Keyboard Control", subtitle="Use PC keys &amp; scroll wheel for radio (Ctrl+K)", active=self.keyboard.enabled)
         self.kbd_row.connect("notify::active", lambda w, _p: None if self._updating else self.keyboard.set_enabled(w.get_active()))
         kb.add(self.kbd_row)
 

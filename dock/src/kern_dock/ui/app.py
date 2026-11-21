@@ -416,6 +416,7 @@ class KernDockApp(Adw.Application):
             ("connect-demo", "Connect Demo Radio", "Radio", "org.kernos.Dock-symbolic", lambda: self.runtime.connect_async("demo"), True),
             ("connect-qemu", "Connect QEMU Emulator", "Radio", "computer-symbolic", lambda: self.runtime.connect_async("tcp://127.0.0.1:4446"), True),
             ("disconnect", "Disconnect Radio", "Radio", "media-eject-symbolic", lambda: self.runtime.link.disconnect(), True),
+            ("mount-drive", "Mount / Unmount Radio Drive", "Files", "drive-harddisk-symbolic", self._toggle_mount_from_palette, True),
             ("reboot", "Restart Radio (Kern OS)", "Hardware", "system-reboot-symbolic", lambda: self._confirm_reboot(REBOOT_FIRMWARE), True),
             ("reboot-recovery", "Restart into Safe Recovery", "Hardware", "applications-engineering-symbolic", lambda: self._confirm_reboot(REBOOT_RECOVERY), True),
             ("reboot-bootloader", "Restart into Bootloader", "Hardware", "application-x-firmware-symbolic", lambda: self._confirm_reboot(REBOOT_BOOTLOADER), True),
@@ -733,6 +734,10 @@ class KernDockApp(Adw.Application):
 
     def _leave_demo_bootloader(self) -> None:
         self.runtime.link.demo_power_cycle()
+
+    def _toggle_mount_from_palette(self) -> None:
+        self._open_tab("files")
+        self.files_view.mount_btn.set_active(not self.files_view.mount_btn.get_active())
 
     def _open_external_terminal(self) -> None:
         try:
