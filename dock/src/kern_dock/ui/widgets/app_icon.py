@@ -1,4 +1,4 @@
-"""Authentic Kern OS pixel-art app icon loader & KRX SECTION_ASSETS (0x0004) bitmap decoder."""
+"""Authentic Kern pixel-art app icon loader & KRX SECTION_ASSETS (0x0004) bitmap decoder."""
 
 from __future__ import annotations
 
@@ -131,12 +131,12 @@ def resolve_pixel_bitmap(
     icon_asset: int = 0,
     bitmap: tuple[int, int, bytes] | None = None,
 ) -> tuple[int, int, bytes]:
-    """Return the exact embedded KRX pixel bitmap, or resolve the authentic Kern OS 16×16 pixel bitmap."""
+    """Return the exact embedded KRX pixel bitmap, or resolve the authentic Kern 16×16 pixel bitmap."""
     if bitmap is not None:
         return bitmap
     by_id, by_name = load_kern_pixel_icons()
     low = name.lower()
-    # Direct name-keyword match against authentic Kern OS 16×16 icon pack
+    # Direct name-keyword match against authentic Kern 16×16 icon pack
     for key, aliases in (
         ("spectrum", ("spec", "waterfall")),
         ("fm_radio", ("fm", "broadcast")),

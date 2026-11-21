@@ -11,7 +11,7 @@ class DockOptions:
     baud: int = 115200
     model: str | None = None         # Pinned handset mockup key
     palette: str | None = None       # Pinned LCD palette key
-    headless: bool = False           # Switch Kern OS radios to headless on connect
+    headless: bool = False           # Switch RigWire radios to headless on connect
     mini: bool = False               # Launch directly in compact mini-dock mode
     hardened: bool | None = None     # Override persisted hardened mode on startup
     no_tray: bool = False            # Disable system tray integration

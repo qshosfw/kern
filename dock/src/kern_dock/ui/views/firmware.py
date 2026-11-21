@@ -114,14 +114,14 @@ class FirmwareView:
         lk = self.runtime.link
         hard = self.runtime.security.hardened
         in_bl = lk.connected and lk.link_mode == "stock_bl"
-        can_enter = lk.connected and lk.link_mode == "kern_os" and not hard
+        can_enter = lk.connected and lk.link_mode == "rigwire" and not hard
 
         if in_bl:
             ver = lk.bootloader_info.get("version", "")
             self.bl_row.set_title("Bootloader Ready")
             self.bl_row.set_subtitle(f"Version {ver}".strip() if ver else "Ready to flash")
         elif lk.connected:
-            self.bl_row.set_title("Kern OS Running")
+            self.bl_row.set_title(f"{lk.firmware_name} Running")
             self.bl_row.set_subtitle("Restart into bootloader to flash firmware")
         else:
             self.bl_row.set_title("No Radio Connected")

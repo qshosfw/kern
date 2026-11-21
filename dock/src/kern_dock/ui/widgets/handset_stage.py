@@ -224,8 +224,8 @@ class HandsetStage(Gtk.Box):
 
     def _run_quick(self, action: str) -> None:
         lk = self.runtime.link
-        if not lk.connected or lk.link_mode != "kern_os":
-            self._on_toast("Connect a Kern OS radio first")
+        if not lk.connected or lk.link_mode != "rigwire":
+            self._on_toast("Connect a RigWire radio first")
             return
         if action == "torch":
             lk.set_flashlight(not lk.torch_on)
@@ -263,7 +263,7 @@ class HandsetStage(Gtk.Box):
 
     def refresh_state(self) -> None:
         lk = self.runtime.link
-        online = lk.connected and lk.link_mode == "kern_os"
+        online = lk.connected and lk.link_mode == "rigwire"
         for key, active in (
             ("torch", lk.torch_on),
             ("lock", lk.keypad_locked),
@@ -501,7 +501,7 @@ class HandsetStage(Gtk.Box):
         if self.on_rec_event:
             self.on_rec_event()
         self.ensure_anim_loop()
-        if not lk.connected or lk.link_mode != "kern_os":
+        if not lk.connected or lk.link_mode != "rigwire":
             return
         try:
             lk.send_key(kname, "press")
@@ -532,12 +532,12 @@ class HandsetStage(Gtk.Box):
             self.on_rec_event()
         self.ensure_anim_loop()
         lk = self.runtime.link
-        if was and lk.connected and lk.link_mode == "kern_os":
+        if was and lk.connected and lk.link_mode == "rigwire":
             lk.send_key(kname, "release")
 
     def long_click_key(self, kname: str) -> None:
         lk = self.runtime.link
-        if not lk.connected or lk.link_mode != "kern_os":
+        if not lk.connected or lk.link_mode != "rigwire":
             return
         if kname == "ptt":
             try:

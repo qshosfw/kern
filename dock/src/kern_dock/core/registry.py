@@ -17,7 +17,7 @@ class ActionSpec:
     subtitle: str = ""
     accel: str | None = None
     icon: str | None = None
-    requires_kern_os: bool = False
+    requires_rigwire: bool = False
     mutates: bool = False
     source: str = "core"
 

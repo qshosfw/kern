@@ -284,7 +284,7 @@ class TerminalView:
         lk = self.runtime.link
         if not lk.connected:
             set_pill(self.status_pill, "Offline", None)
-        elif lk.link_mode != "kern_os":
+        elif lk.link_mode != "rigwire":
             set_pill(self.status_pill, f"Bootloader {lk.bootloader_info.get('version', '')}".strip(), "dfu")
         elif lk.headless:
             set_pill(self.status_pill, f"Headless · {lk.fps:.0f} FPS", "headless")

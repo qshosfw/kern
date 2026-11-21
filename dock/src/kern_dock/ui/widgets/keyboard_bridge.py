@@ -62,7 +62,7 @@ class KeyboardBridge:
         if not self.enabled or dy == 0.0 or self.win.get_visible_dialog() is not None:
             return False
         lk = self.runtime.link
-        if not lk.connected or lk.link_mode != "kern_os":
+        if not lk.connected or lk.link_mode != "rigwire":
             return False
         self._scroll_accum += float(dy)
         steps = int(self._scroll_accum)
@@ -129,7 +129,7 @@ class KeyboardBridge:
         # Unified direct character input: letters, space, punctuation & BackSpace work
         # directly inside TextInput via FACET_INPUT_TEXT without switching modes!
         lk = self.runtime.link
-        if lk.connected and lk.link_mode == "kern_os":
+        if lk.connected and lk.link_mode == "rigwire":
             if keyval == Gdk.KEY_BackSpace:
                 lk.send_text("\x08")
                 return True
@@ -156,8 +156,8 @@ class KeyboardBridge:
         if keyval == Gdk.KEY_Escape:
             self.set_live_typing(False)
             return True
-        if not lk.connected or lk.link_mode != "kern_os":
-            self._on_toast("Connect a Kern OS radio first")
+        if not lk.connected or lk.link_mode != "rigwire":
+            self._on_toast("Connect a RigWire radio first")
             return True
         if keyval == Gdk.KEY_BackSpace:
             lk.send_text("\x08")
@@ -187,8 +187,8 @@ class KeyboardBridge:
         if not seq:
             return
         lk = self.runtime.link
-        if not lk.connected or lk.link_mode != "kern_os":
-            self._on_toast("Connect a Kern OS radio first")
+        if not lk.connected or lk.link_mode != "rigwire":
+            self._on_toast("Connect a RigWire radio first")
             return
         self._type_queue.extend(seq)
         self._type_total += len(seq)
@@ -234,7 +234,7 @@ class KeyboardBridge:
         lk = self.runtime.link
         for k in list(self.stage.pressed_keys):
             self.stage.pressed_keys.discard(k)
-            if lk.connected and lk.link_mode == "kern_os":
+            if lk.connected and lk.link_mode == "rigwire":
                 lk.send_key(k, "release")
         self.stage.ensure_anim_loop()
 
@@ -257,8 +257,8 @@ class KeyboardBridge:
         if on == self.live_typing:
             return
         lk = self.runtime.link
-        if on and not (lk.connected and lk.link_mode == "kern_os"):
-            self._on_toast("Connect a Kern OS radio to type on it")
+        if on and not (lk.connected and lk.link_mode == "rigwire"):
+            self._on_toast("Connect a RigWire radio to type on it")
             self._emit_state()
             return
         self.live_typing = on
@@ -289,8 +289,8 @@ class KeyboardBridge:
 
     def show_type_dialog(self) -> None:
         lk = self.runtime.link
-        if not (lk.connected and lk.link_mode == "kern_os"):
-            self._on_toast("Connect a Kern OS radio to type on it")
+        if not (lk.connected and lk.link_mode == "rigwire"):
+            self._on_toast("Connect a RigWire radio to type on it")
             return
         dlg = Adw.Dialog(title="Type on Radio", content_width=420)
         tb = Adw.ToolbarView()

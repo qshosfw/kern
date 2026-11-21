@@ -36,7 +36,7 @@ CONFIG_SCHEMA: tuple[ConfigSpec, ...] = (
     ConfigSpec("lcd.backlight_glow", "bool", True, "Backlight Glow", "Edge-lit glow on LCD surround"),
     ConfigSpec("lcd.invert", "bool", False, "Invert LCD", "Swap active/inactive pixel polarity"),
     # Connection & Layout
-    ConfigSpec("connection.auto_connect", "bool", True, "Auto-Connect USB", "Attach automatically when a Kern OS radio is plugged in"),
+    ConfigSpec("connection.auto_connect", "bool", True, "Auto-Connect USB", "Attach automatically when a compatible USB radio is plugged in"),
     ConfigSpec("connection.baud", "int", 115200, "Baud Rate", "Serial link baud rate", 9600, 921600),
     ConfigSpec("ui.show_handset", "bool", True, "Show Handset Stage", "Display interactive 3D radio dock pane"),
     ConfigSpec("ui.mini_mode", "bool", False, "Compact Mini-Dock", "Minimal floating handset mode"),

@@ -417,7 +417,7 @@ class KernDockApp(Adw.Application):
             ("connect-qemu", "Connect QEMU Emulator", "Radio", "computer-symbolic", lambda: self.runtime.connect_async("tcp://127.0.0.1:4446"), True),
             ("disconnect", "Disconnect Radio", "Radio", "media-eject-symbolic", lambda: self.runtime.link.disconnect(), True),
             ("mount-drive", "Mount / Unmount Radio Drive", "Files", "drive-harddisk-symbolic", self._toggle_mount_from_palette, True),
-            ("reboot", "Restart Radio (Kern OS)", "Hardware", "system-reboot-symbolic", lambda: self._confirm_reboot(REBOOT_FIRMWARE), True),
+            ("reboot", "Restart Radio", "Hardware", "system-reboot-symbolic", lambda: self._confirm_reboot(REBOOT_FIRMWARE), True),
             ("reboot-recovery", "Restart into Safe Recovery", "Hardware", "applications-engineering-symbolic", lambda: self._confirm_reboot(REBOOT_RECOVERY), True),
             ("reboot-bootloader", "Restart into Bootloader", "Hardware", "application-x-firmware-symbolic", lambda: self._confirm_reboot(REBOOT_BOOTLOADER), True),
             ("about", "About Kern Dock", "Application", "help-about-symbolic", lambda: show_about_dialog(self.win), False),
@@ -645,7 +645,7 @@ class KernDockApp(Adw.Application):
             if self.win:
                 self.win.set_title(f"{APP_NAME} — {lk.volume_name}")
             hz = int(lk.radio_state.get("rx_freq_hz") or 0)
-            freq_s = f"{hz / 1e6:.3f} MHz" if hz else (lk.port or "Kern OS")
+            freq_s = f"{hz / 1e6:.3f} MHz" if hz else (lk.port or lk.firmware_name)
             self.mini_title.set_subtitle(f"{short} · {freq_s}")
 
         self._rebuild_device_popover()
@@ -697,16 +697,16 @@ class KernDockApp(Adw.Application):
 
     def _confirm_reboot(self, mode: int) -> None:
         lk = self.runtime.link
-        if not (lk.connected and lk.link_mode == "kern_os"):
-            self._toast("Connect a Kern OS radio first")
+        if not (lk.connected and lk.link_mode == "rigwire"):
+            self._toast("Connect a RigWire radio first")
             return
         if mode == REBOOT_BOOTLOADER and self.runtime.security.hardened:
             self._toast("Hardened Mode blocks bootloader entry")
             return
         heading, body, verb = {
-            REBOOT_FIRMWARE: ("Restart Radio?", "Kern OS restarts and Dock reconnects once USB re-enumerates.", "Restart"),
+            REBOOT_FIRMWARE: ("Restart Radio?", "The radio restarts and Dock reconnects once USB re-enumerates.", "Restart"),
             REBOOT_RECOVERY: ("Restart into Safe Recovery?", "Boots the minimal recovery shell; normal apps stay off until reboot.", "Restart"),
-            REBOOT_BOOTLOADER: ("Restart into Bootloader?", "Leaves Kern OS for firmware flashing. LCD stays dark until flashed or power cycled.", "Enter Bootloader"),
+            REBOOT_BOOTLOADER: ("Restart into Bootloader?", "Leaves firmware runtime for flashing. LCD stays dark until flashed or power cycled.", "Enter Bootloader"),
         }[mode]
         self._confirm(heading, body, verb, lambda: self._do_reboot(mode), destructive=(mode == REBOOT_BOOTLOADER))
 

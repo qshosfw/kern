@@ -127,7 +127,7 @@ class TableInspectorPlugin:
         page.add(grp_sel)
 
         grp_res = Adw.PreferencesGroup(title="Decoded Records")
-        self._status_lbl = Gtk.Label(label="Choose a table above while connected to Kern OS", xalign=0, wrap=True)
+        self._status_lbl = Gtk.Label(label="Choose a table above while connected to a RigWire radio", xalign=0, wrap=True)
         self._status_lbl.add_css_class("dim-label")
         self._status_lbl.add_css_class("caption")
         grp_res.add(self._status_lbl)

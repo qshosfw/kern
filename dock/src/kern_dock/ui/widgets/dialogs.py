@@ -398,6 +398,6 @@ def show_about_dialog(win: Any) -> None:
         application_icon="org.kernos.Dock",
         developer_name="Kern Project",
         version=__version__,
-        comments="Modular, declarative, hardened GTK4 + Libadwaita hardware dock for Kern OS radios.",
+        comments="Modular, declarative, hardened GTK4 + Libadwaita hardware dock for RigWire & Kern-standard radios.",
         license_type=Gtk.License.GPL_3_0,
     ).present(win)

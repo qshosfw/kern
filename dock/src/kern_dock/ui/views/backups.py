@@ -118,7 +118,7 @@ class BackupsView:
 
     def _sync_sensitivity(self) -> None:
         lk = self.runtime.link
-        online = lk.connected and lk.link_mode == "kern_os" and lk.fs_backend is not None and not self._busy
+        online = lk.connected and lk.link_mode == "rigwire" and lk.fs_backend is not None and not self._busy
         for r in self._online_rows:
             r.set_sensitive(online)
         can_restore = bool(
@@ -136,7 +136,7 @@ class BackupsView:
             return
         lk = self.runtime.link
         if not lk.connected or lk.fs_backend is None:
-            self._on_toast("Connect a Kern OS radio first")
+            self._on_toast("Connect a RigWire radio first")
             return
         tag = "calib" if calib_only else "kernfs"
         ext = "dat" if fmt == "raw" else fmt
@@ -290,7 +290,7 @@ class BackupsView:
             return
         lk = self.runtime.link
         if not lk.connected or lk.fs_backend is None:
-            self._on_toast("Connect a Kern OS radio first")
+            self._on_toast("Connect a RigWire radio first")
             return
         src = str(self._loaded_backup["path"])
         be = lk.fs_backend

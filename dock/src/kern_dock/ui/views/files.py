@@ -174,7 +174,7 @@ class FilesView:
         self.empty = Adw.StatusPage(
             icon_name="folder-symbolic",
             title="No Radio Connected",
-            description="Connect a Kern OS radio to browse /user, /pref, /apps and /sys.",
+            description="Connect a RigWire radio to browse /user, /pref, /apps and /sys.",
         )
         self.empty.add_css_class("compact")
         self.stack.add_named(self.empty, "empty")
@@ -219,13 +219,13 @@ class FilesView:
         return False
 
     def _on_mapped(self) -> None:
-        if self._dirty and self.runtime.link.connected and self.runtime.link.link_mode == "kern_os":
+        if self._dirty and self.runtime.link.connected and self.runtime.link.link_mode == "rigwire":
             self.browse(self.current_dir or "/")
 
     def _on_link_change(self) -> None:
         self._dirty = True
         self._sync_dav_ui()
-        if self.runtime.link.connected and self.runtime.link.link_mode == "kern_os":
+        if self.runtime.link.connected and self.runtime.link.link_mode == "rigwire":
             if self.widget.get_mapped():
                 self.browse("/")
         else:
@@ -316,7 +316,7 @@ class FilesView:
         shown.sort(key=lambda e: (not bool(e["is_dir"]), e["name"].lower()))
         total_b = sum(int(e["size"]) for e in shown if not e["is_dir"])
 
-        online = self.runtime.link.connected and self.runtime.link.link_mode == "kern_os"
+        online = self.runtime.link.connected and self.runtime.link.link_mode == "rigwire"
         ro = self.runtime.security.policy.read_only
         self.upload_btn.set_sensitive(online and not ro)
         self.ref_btn.set_sensitive(online)
@@ -333,7 +333,7 @@ class FilesView:
         if not shown:
             if not self.runtime.link.connected:
                 self.empty.set_title("No Radio Connected")
-                self.empty.set_description("Connect a Kern OS radio to browse /user, /pref, /apps and /sys.")
+                self.empty.set_description("Connect a RigWire radio to browse /user, /pref, /apps and /sys.")
             elif q:
                 self.empty.set_title("No Matching Files")
                 self.empty.set_description(f'Nothing in {self.current_dir} matches "{q}".')
@@ -407,7 +407,7 @@ class FilesView:
     def upload_local_file(self, src_path: Path) -> None:
         lk = self.runtime.link
         if not lk.connected or lk.fs_backend is None:
-            self._on_toast("Connect a Kern OS radio first")
+            self._on_toast("Connect a RigWire radio first")
             return
         tdir = self.current_dir if self.current_dir != "/" else "/user"
         remote = f"{tdir.rstrip('/')}/{src_path.name}"
@@ -433,7 +433,7 @@ class FilesView:
 
     def _on_upload_dialog(self) -> None:
         if not self.runtime.link.connected or self.runtime.link.fs_backend is None:
-            self._on_toast("Connect a Kern OS radio first")
+            self._on_toast("Connect a RigWire radio first")
             return
         dlg = Gtk.FileDialog(title=f"Upload to {self.current_dir}")
 
@@ -513,7 +513,7 @@ class FilesView:
             return
         if not lk.connected or lk.fs_backend is None:
             btn.set_active(False)
-            self._on_toast("Connect a Kern OS radio first")
+            self._on_toast("Connect a RigWire radio first")
             return
         self.mount_btn.set_sensitive(False)
         self._on_toast(f"Mounting {lk.volume_name}…")

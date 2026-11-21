@@ -48,7 +48,7 @@ class RadioView:
             Adw.StatusPage(
                 icon_name="network-wireless-symbolic",
                 title="Radio Offline",
-                description="Connect a Kern OS radio to tune frequencies, switch modulation and type from your PC keyboard.",
+                description="Connect a RigWire radio to tune frequencies, switch modulation and type from your PC keyboard.",
             ),
             "offline",
         )
@@ -182,7 +182,7 @@ class RadioView:
 
     def refresh(self) -> None:
         lk = self.runtime.link
-        online = lk.connected and lk.link_mode == "kern_os"
+        online = lk.connected and lk.link_mode == "rigwire"
         self.stack.set_visible_child_name("online" if online else "offline")
         if not online:
             return

@@ -81,7 +81,7 @@ class AppsView:
         self.apps_empty = Adw.StatusPage(
             icon_name="application-x-executable-symbolic",
             title="No Radio Connected",
-            description="Connect a Kern OS radio to view, inspect, or install applications.",
+            description="Connect a RigWire radio to view, inspect, or install applications.",
         )
         self.apps_empty.add_css_class("compact")
         self.apps_stack.add_named(self.apps_empty, "empty")
@@ -102,7 +102,7 @@ class AppsView:
     def _on_link_changed(self) -> None:
         self._dirty = True
         lk = self.runtime.link
-        if not lk.connected or lk.link_mode != "kern_os":
+        if not lk.connected or lk.link_mode != "rigwire":
             self._installed_apps = []
             self._render_apps()
             return
@@ -121,7 +121,7 @@ class AppsView:
         lk = self.runtime.link
         self._refresh_gen += 1
         gen = self._refresh_gen
-        if not lk.connected or lk.link_mode != "kern_os" or lk.fs_backend is None:
+        if not lk.connected or lk.link_mode != "rigwire" or lk.fs_backend is None:
             self._dirty = False
             self._installed_apps = []
             self._render_apps()
@@ -196,9 +196,9 @@ class AppsView:
             c = n
         lk = self.runtime.link
         self.install_btn.set_sensitive(not self.runtime.security.hardened)
-        if not lk.connected or lk.link_mode != "kern_os":
+        if not lk.connected or lk.link_mode != "rigwire":
             self.apps_empty.set_title("No Radio Connected")
-            self.apps_empty.set_description("Connect a Kern OS radio to manage installed applications.")
+            self.apps_empty.set_description("Connect a RigWire radio to manage installed applications.")
             self.apps_stack.set_visible_child_name("empty")
             return
         if not self._installed_apps:

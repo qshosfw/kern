@@ -24,28 +24,28 @@ class DetectedPort:
     serial: str = ""
     vid: str = ""
     pid: str = ""
-    mode_hint: str = "kern_os"  # "kern_os" | "stock_bl"
+    mode_hint: str = "rigwire"  # "rigwire" | "stock_bl"
     is_quansheng: bool = False
 
 
 def classify_usb_mode(vid: str, pid: str, pretty_name: str) -> tuple[str, bool]:
     """
     Classifies USB serial devices:
-      • 36b7:ffff -> Kern OS native USB-C CDC
+      • 36b7:ffff -> Native USB-C CDC (RigWire / firmware runtime)
       • 36b7:0001 -> Quansheng K1/K5v3 CPS or Stock Bootloader (live-probed on connect)
     """
     vp = f"{vid}:{pid}".lower() if (vid and pid) else ""
     low = pretty_name.lower()
     if vp == VID_PID_KERN_CDC:
-        return "kern_os", True
+        return "rigwire", True
     if vp == VID_PID_STOCK_BL:
         return "stock_bl", True
-    is_qs = any(k in low for k in ("quansheng", "uv-k", "kern"))
-    return "kern_os", is_qs
+    is_qs = any(k in low for k in ("quansheng", "uv-k", "kern", "rigwire"))
+    return "rigwire", is_qs
 
 
 class PortMonitor:
-    """Real-time USB hotplug monitor recognizing Kern OS CDC and Quansheng CPS/Bootloader ports."""
+    """Real-time USB hotplug monitor recognizing RigWire USB-C CDC and Quansheng Bootloader ports."""
 
     def __init__(self, on_change: Callable[[list[DetectedPort]], None] | None = None) -> None:
         self.on_change = on_change

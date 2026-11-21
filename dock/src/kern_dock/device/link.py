@@ -22,10 +22,20 @@ from .usb import DetectedPort, detect_hardware_model, probe_bootloader_beacon
 REBOOT_FIRMWARE, REBOOT_BOOTLOADER, REBOOT_RECOVERY = 0, 1, 2
 
 REBOOT_MODES: dict[int, tuple[str, tuple[str, ...]]] = {
-    REBOOT_FIRMWARE: ("Restarting Kern OS", ("firmware", "fw", "normal", "0")),
+    REBOOT_FIRMWARE: ("Restarting firmware", ("firmware", "fw", "normal", "0")),
     REBOOT_BOOTLOADER: ("Restarting into the bootloader", ("bootloader", "bl", "dfu", "1")),
     REBOOT_RECOVERY: ("Restarting into safe recovery", ("recovery", "safe", "2")),
 }
+
+
+def resolve_firmware_name(hello: dict[str, Any] | None = None, telemetry: dict[str, Any] | None = None) -> str:
+    """Resolve the connected radio's advertised firmware/OS name, defaulting to 'RigWire'."""
+    for src in (telemetry or {}, hello or {}):
+        for key in ("firmware_name", "os_name", "edition", "firmware"):
+            val = str(src.get(key) or "").strip()
+            if val:
+                return val
+    return "RigWire"
 
 
 class DockLink:
@@ -39,7 +49,8 @@ class DockLink:
         self.fs_backend: kernfs_mount.FsBackend | None = None
         self.port: str | None = None
         self.baud: int = 115200
-        self.link_mode: str = "disconnected"  # "disconnected" | "kern_os" | "stock_bl"
+        self.link_mode: str = "disconnected"  # "disconnected" | "rigwire" | "stock_bl"
+        self.firmware_name: str = "RigWire"
         self.bootloader_info: dict[str, str] = {}
         self.volume_name: str = "Quansheng UV-K1"
         self.detected_model: str = "k1"
@@ -76,6 +87,10 @@ class DockLink:
     def policy(self) -> kernfs_mount.SafetyPolicy:
         return self.security.policy
 
+    @property
+    def is_rigwire(self) -> bool:
+        return self.connected and self.link_mode == "rigwire"
+
     def _emit_log(self, line: str) -> None:
         self.events.emit("log.line", {"line": f"[{time.strftime('%H:%M:%S')}] {line}"}, source="link")
 
@@ -83,6 +98,7 @@ class DockLink:
         return {
             "connected": self.connected,
             "link_mode": self.link_mode,
+            "firmware_name": self.firmware_name,
             "demo_mode": self.demo_mode,
             "port": self.port,
             "volume_name": self.volume_name,
@@ -115,7 +131,8 @@ class DockLink:
 
         if port.lower() == "demo":
             self.demo_mode = True
-            self.link_mode = "kern_os"
+            self.link_mode = "rigwire"
+            self.firmware_name = "RigWire"
             self.port = "demo"
             self.detected_model = model_override if model_override in MODELS else "k1"
             self.volume_name = f"Quansheng {radio_model(self.detected_model).label} DEMO"
@@ -207,7 +224,8 @@ class DockLink:
             self.client.timeout = 0.45
             self.fs_backend = kernfs_mount.RigWireFsBackend(cli, cache_ttl=2.0, shared_lock=self.lock)
             self.port = port
-            self.link_mode = "kern_os"
+            self.link_mode = "rigwire"
+            self.firmware_name = resolve_firmware_name(hello, telem)
             self.hello_info = hello
             self.last_telemetry = telem
             self.torch_on = bool(telem.get("flashlight", False))
@@ -250,6 +268,7 @@ class DockLink:
         was = self.connected
         self.connected = False
         self.link_mode = "disconnected"
+        self.firmware_name = "RigWire"
         self.bootloader_info = {}
         self.demo_mode = False
         self.torch_on = False
@@ -312,8 +331,8 @@ class DockLink:
             raise ValueError(f"Unknown reboot mode {mode}")
         if mode == REBOOT_BOOTLOADER:
             self.security.check_bootloader_entry()
-        if not (self.connected and self.link_mode == "kern_os"):
-            raise RuntimeError("Restart needs a radio running Kern OS")
+        if not (self.connected and self.link_mode == "rigwire"):
+            raise RuntimeError("Restart needs a connected RigWire radio")
         label = REBOOT_MODES[mode][0]
         self.security.record("system", "reboot", "allow", f"mode={mode}")
         if self.demo_mode:
@@ -360,20 +379,21 @@ class DockLink:
         if not (self.demo_mode and self.link_mode == "stock_bl"):
             return
         self.fs_backend, self._demo_fs = self._demo_fs, None
-        self.link_mode = "kern_os"
+        self.link_mode = "rigwire"
+        self.firmware_name = "RigWire"
         self.bootloader_info = {}
         self.volume_name = f"Quansheng {radio_model(self.detected_model).label} DEMO"
         self.torch_on = False
         self.connected_at = time.monotonic()
         self.demo_status = "BOOT"
         self._demo_render()
-        self._emit_log("Power cycled into Kern OS (demo)")
+        self._emit_log("Power cycled into firmware (demo)")
         self.events.emit("link.connected", self.status_snapshot(), source="link")
         self.events.emit("link.telemetry", self.status_snapshot(), source="link")
 
     # --- Key & RF Control ---
     def send_key(self, key_name: str, state_name: str) -> None:
-        if self.link_mode != "kern_os":
+        if self.link_mode != "rigwire":
             return
         if key_name == "ptt" and state_name in ("press", "hold"):
             self.security.check_tx(demo_mode=self.demo_mode)
@@ -408,7 +428,7 @@ class DockLink:
 
     def send_encoder(self, delta: int) -> None:
         """Send rotary encoder detent delta (-127..127; -1 = up/prev, +1 = down/next)."""
-        if self.link_mode != "kern_os":
+        if self.link_mode != "rigwire":
             return
         d = max(-127, min(127, int(delta)))
         if d == 0:
@@ -426,7 +446,7 @@ class DockLink:
 
     def send_text(self, text: str) -> None:
         """Send direct UTF-8 characters / control keys (BS, Enter, Esc) via FACET_INPUT_TEXT."""
-        if self.link_mode != "kern_os" or not text:
+        if self.link_mode != "rigwire" or not text:
             return
         if self.demo_mode:
             if self.demo_text is None:
@@ -462,7 +482,7 @@ class DockLink:
             self._demo_render()
             self._demo_publish_radio()
             return
-        if self.connected and self.link_mode == "kern_os":
+        if self.connected and self.link_mode == "rigwire":
             self._cmd_q.put(("freq", hz))
             self._wake_ev.set()
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
@@ -476,7 +496,7 @@ class DockLink:
             self._demo_render()
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
             return
-        if self.connected and self.link_mode == "kern_os":
+        if self.connected and self.link_mode == "rigwire":
             self._cmd_q.put(("mod", code))
             self._wake_ev.set()
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
@@ -487,7 +507,7 @@ class DockLink:
         if self.demo_mode:
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
             return
-        if self.connected and self.link_mode == "kern_os":
+        if self.connected and self.link_mode == "rigwire":
             self._cmd_q.put(("sql", level))
             self._wake_ev.set()
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
@@ -499,7 +519,7 @@ class DockLink:
             self.events.emit("link.frame", {}, source="link")
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
             return
-        if self.connected and self.link_mode == "kern_os":
+        if self.connected and self.link_mode == "rigwire":
             self._cmd_q.put(("torch", 1 if self.torch_on else 0))
             self._wake_ev.set()
             self.events.emit("link.frame", {}, source="link")
@@ -511,7 +531,7 @@ class DockLink:
             self._emit_log(f"Keypad lock {'ON' if self.keypad_locked else 'OFF'}")
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
             return
-        if self.connected and self.link_mode == "kern_os":
+        if self.connected and self.link_mode == "rigwire":
             self._cmd_q.put(("lock", self.keypad_locked))
             self._wake_ev.set()
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
@@ -523,7 +543,7 @@ class DockLink:
             self.events.emit("link.frame", {}, source="link")
             self.events.emit("link.telemetry", self.status_snapshot(), source="link")
             return
-        if self.connected and self.link_mode == "kern_os":
+        if self.connected and self.link_mode == "rigwire":
             self._cmd_q.put(("headless", 1 if self.headless else 0))
             self._wake_ev.set()
             self.events.emit("link.frame", {}, source="link")
@@ -538,7 +558,7 @@ class DockLink:
             self._demo_publish_radio()
             self._emit_log("Swapped active VFO")
             return
-        if self.connected and self.link_mode == "kern_os":
+        if self.connected and self.link_mode == "rigwire":
             self._cmd_q.put(("vfo", None))
             self._wake_ev.set()
 
@@ -566,7 +586,7 @@ class DockLink:
                 f"  Battery: {mv / 1000.0:.2f} V ({pct}%) · Torch: {'ON' if self.torch_on else 'OFF'} · Lock: {'ON' if self.keypad_locked else 'OFF'}\n"
                 f"  Security: {self.security.profile.value.upper()} · Status LED: {self.status_led.upper()}"
             )
-        if not self.connected or self.link_mode != "kern_os":
+        if not self.connected or self.link_mode != "rigwire":
             return f"RigWire unavailable (mode={self.link_mode})."
         if op == "ping":
             if self.demo_mode:
@@ -651,7 +671,7 @@ class DockLink:
         if self.dav_server is not None:
             return f"http://127.0.0.1:{self.dav_port}/"
         if not self.fs_backend:
-            raise RuntimeError("Connect to a radio running Kern OS first")
+            raise RuntimeError("Connect a RigWire radio first")
         if read_only is not None and not self.security.hardened:
             self.security.policy.read_only = read_only
         try:

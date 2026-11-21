@@ -86,13 +86,13 @@ class BandPresetsPlugin:
         if self._ctx is None:
             return False
         lk = self._ctx.link
-        return bool(lk.connected and lk.link_mode == "kern_os")
+        return bool(lk.connected and lk.link_mode == "rigwire")
 
     def _tune(self, preset: FrequencyPreset) -> None:
         if self._ctx is None:
             return
         if not self._is_online():
-            self._ctx.toast("Connect a Kern OS radio to tune presets")
+            self._ctx.toast("Connect a RigWire radio to tune presets")
             return
         try:
             self._ctx.tune(preset.freq_hz, preset.modulation)

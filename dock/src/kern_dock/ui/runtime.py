@@ -223,11 +223,11 @@ class DockRuntime:
             if not self.user_picked_palette:
                 self.lcd_st.palette = radio_model(self.active_model).palette
             self.events.emit("handset.changed", {"model": self.active_model}, source="runtime")
-        if self.start_headless and self.link.link_mode == "kern_os" and not self.link.headless:
+        if self.start_headless and self.link.link_mode == "rigwire" and not self.link.headless:
             self.link.set_headless(True)
         self.refresh_tray()
         if not self.link.demo_mode:
-            mode = "Bootloader" if self.link.link_mode == "stock_bl" else "Kern OS"
+            mode = "Bootloader" if self.link.link_mode == "stock_bl" else self.link.firmware_name
             self.notifier.send(
                 f"{self.link.volume_name} Connected",
                 f"{mode} ready on {self.link.port}",
@@ -291,7 +291,7 @@ class DockRuntime:
             self.on_present_window()
 
     def build_tray_menu(self) -> list[dict[str, Any]]:
-        online = self.link.connected and self.link.link_mode == "kern_os"
+        online = self.link.connected and self.link.link_mode == "rigwire"
         state, _title, body = self._tray_state()
         items: list[dict[str, Any]] = [
             {"label": f"{self.link.volume_name if self.link.connected else 'Kern Dock'} ({state.upper()})", "enabled": False},

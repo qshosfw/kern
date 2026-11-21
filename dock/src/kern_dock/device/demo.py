@@ -103,7 +103,7 @@ def make_demo_framebuffer(
     for x in range(128):
         for y in range(9):
             fb[(y >> 3) * 128 + x] |= 1 << (y & 7)
-    _fb_draw_text(fb, 3, 1, "KERN OS", 1, invert=True)
+    _fb_draw_text(fb, 3, 1, "RIGWIRE", 1, invert=True)
     _fb_draw_text(fb, 60, 1, status[:5], 1, invert=True)
     _fb_draw_text(fb, 104, 1, "92%", 1, invert=True)
 

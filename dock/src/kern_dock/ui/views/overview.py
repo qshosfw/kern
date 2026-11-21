@@ -101,7 +101,7 @@ class OverviewView:
         names.append(self.dev_sub)
         head.append(names)
 
-        self.state_pill = Gtk.Label(label="Kern OS", valign=Gtk.Align.CENTER)
+        self.state_pill = Gtk.Label(label="RigWire", valign=Gtk.Align.CENTER)
         self.state_pill.add_css_class("status-pill")
         head.append(self.state_pill)
 
@@ -163,10 +163,10 @@ class OverviewView:
         bl_flash.add_css_class("suggested-action")
         bl_flash.connect("activated", lambda _r: self._on_open_tab("firmware"))
         self.bl_group.add(bl_flash)
-        self.bl_leave_row = Adw.ButtonRow(title="Power Cycle into Kern OS (Demo)", start_icon_name="system-reboot-symbolic")
+        self.bl_leave_row = Adw.ButtonRow(title="Power Cycle into Firmware (Demo)", start_icon_name="system-reboot-symbolic")
         self.bl_leave_row.connect("activated", lambda _r: self._on_leave_demo_bl())
         self.bl_group.add(self.bl_leave_row)
-        self.bl_hint_row = Adw.ActionRow(title="Exit Bootloader", subtitle="Power the radio off and on to boot back into Kern OS.")
+        self.bl_hint_row = Adw.ActionRow(title="Exit Bootloader", subtitle="Power the radio off and on to boot back into firmware.")
         self.bl_group.add(self.bl_hint_row)
         page.add(self.bl_group)
 
@@ -321,7 +321,7 @@ class OverviewView:
             self.dev_sub.set_text(f"{where} · Bootloader {lk.bootloader_info.get('version', '')}".rstrip())
         else:
             self.dev_title.set_text(lk.volume_name)
-            self.dev_sub.set_text(f"{where} · Kern OS")
+            self.dev_sub.set_text(f"{where} · {lk.firmware_name}")
         self.bl_group.set_visible(is_bl)
         self.bl_leave_row.set_visible(is_bl and lk.demo_mode)
         self.bl_hint_row.set_visible(is_bl and not lk.demo_mode)
@@ -353,7 +353,7 @@ class OverviewView:
         if not lk.connected:
             self.batt_bar.set_value(0.0)
             return
-        if lk.link_mode != "kern_os":
+        if lk.link_mode != "rigwire":
             set_pill(self.state_pill, "Bootloader", "dfu")
             return
 
@@ -391,7 +391,7 @@ class OverviewView:
         elif lk.demo_status == "SAFE":
             set_pill(self.state_pill, "Recovery", "warn")
         else:
-            set_pill(self.state_pill, "Kern OS", "live")
+            set_pill(self.state_pill, lk.firmware_name, "live")
 
         rows = self._info_rows
         rows["serial"].set_subtitle(str(t.get("serial_str", "—")))

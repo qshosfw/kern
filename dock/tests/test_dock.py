@@ -133,7 +133,7 @@ class TestDeviceAndKeys(unittest.TestCase):
         self.assertEqual(detect_hardware_model("Quansheng UV-K5 v3 ABCD"), "k5v3")
         self.assertEqual(detect_hardware_model("Quansheng UV-K6 ABCD"), "k5v3")
         self.assertEqual(classify_usb_mode("36b7", "0001", "QUANSHENG K1 CPS"), ("stock_bl", True))
-        self.assertEqual(classify_usb_mode("36b7", "ffff", "Quansheng UV-K1 1D9E"), ("kern_os", True))
+        self.assertEqual(classify_usb_mode("36b7", "ffff", "Quansheng UV-K1 1D9E"), ("rigwire", True))
 
     def test_t9_round_trips(self) -> None:
         for txt in ("HELLO", "HI", "Kern OS 1.0", "aaa", "CQ DX de IZ1ABC", "x@y.it", "73!"):
@@ -192,7 +192,7 @@ class TestDeviceAndKeys(unittest.TestCase):
         self.assertEqual(link.link_mode, "stock_bl")
         self.assertTrue(link.torch_on)
         link.demo_power_cycle()
-        self.assertEqual(link.link_mode, "kern_os")
+        self.assertEqual(link.link_mode, "rigwire")
         link.reboot(REBOOT_FIRMWARE)
         link.disconnect()
 

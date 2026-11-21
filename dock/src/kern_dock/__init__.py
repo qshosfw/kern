@@ -1,4 +1,4 @@
-"""Kern Dock — Modular, Declarative, Hardened GTK4 + Libadwaita Hardware Companion for Kern OS."""
+"""Kern Dock — Modular, Declarative, Hardened GTK4 + Libadwaita Companion for RigWire & Kern-Standard Radios."""
 
 from __future__ import annotations
 
