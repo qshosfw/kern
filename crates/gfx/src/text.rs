@@ -142,13 +142,13 @@ pub fn draw_str_ellipsis(
 }
 
 /// Draw a string onto the canvas using the provided GfxFont.
-#[inline(always)]
+#[inline(never)]
 pub fn draw_str(canvas: &mut Canvas, x: i16, y: i16, text: &str, font: &GfxFont, color: Color) {
     draw_str_clipped(canvas, x, 128, 0, y, text, font, color);
 }
 
 /// Draw a string onto the canvas up to a maximum X coordinate. Returns the advanced X.
-#[inline(always)]
+#[inline(never)]
 pub fn draw_str_max_x(
     canvas: &mut Canvas,
     x: i16,

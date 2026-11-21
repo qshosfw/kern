@@ -65,7 +65,6 @@ impl SettingsApp {
         }
     }
 
-    #[inline(never)]
     fn populate_def_tags(
         &mut self,
         spec: &PageSpec,
@@ -242,7 +241,6 @@ impl SettingsApp {
         self.populate_current_menu(ctx);
     }
 
-    #[inline(never)]
     pub fn handle_radio_confirmed(&mut self, ctx: &mut SysContext, sel: usize) {
         let sel_idx = self.selected_idx;
         if sel_idx < self.items_len {

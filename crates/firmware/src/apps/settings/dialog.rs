@@ -4,6 +4,7 @@ use super::app::SettingsApp;
 use super::page::ActionId;
 use crate::SysContext;
 use gfx::gui::modules::menu::OptionSheet;
+#[cfg(feature = "text_input")]
 use gfx::gui::modules::menu::ShortString;
 use kernel::app::EventResult;
 
@@ -30,6 +31,7 @@ pub const TAG_RESET_SETTINGS: u8 = 20;
 pub const TAG_REBOOT_FW: u8 = 21;
 pub const TAG_SHORTCUT_SHEET: u8 = 23;
 
+#[cfg(any(test, feature = "text_input"))]
 pub fn parse_u32_digits(s: &str) -> Option<u32> {
     if s.is_empty() {
         return None;
@@ -44,12 +46,14 @@ pub fn parse_u32_digits(s: &str) -> Option<u32> {
     Some(val)
 }
 
+#[cfg(feature = "text_input")]
 pub fn copy_padded(dst: &mut [u8], src: &[u8]) {
     dst.fill(b' ');
     let len = src.len().min(dst.len());
     dst[..len].copy_from_slice(&src[..len]);
 }
 
+#[cfg(feature = "text_input")]
 #[inline(never)]
 pub fn prompt_config_str(ctx: &mut SysContext, tag: u8) {
     let mut buf = ShortString::empty();
@@ -160,7 +164,6 @@ pub fn show_radio_sheet(
     );
 }
 
-#[inline(never)]
 pub fn show_destructive_hold_confirm(
     ctx: &mut SysContext,
     tag: u8,
@@ -178,7 +181,6 @@ pub fn show_destructive_hold_confirm(
     );
 }
 
-#[inline(never)]
 pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
     for (i, spec) in DESTRUCTIVE_CONFIRMS.iter().enumerate() {
         if spec.action == action_id {
@@ -220,7 +222,6 @@ pub fn handle_action_press(ctx: &mut SysContext, action_id: ActionId) {
     }
 }
 
-#[inline(never)]
 pub fn handle_sheet_selected(
     app: &mut SettingsApp,
     ctx: &mut SysContext,
@@ -242,8 +243,11 @@ pub fn handle_sheet_selected(
                 ctx.config.sanitize();
                 ctx.config.mark_system_dirty();
             } else {
-                prompt_config_str(ctx, TAG_MODEL_INPUT);
-                return EventResult::Consumed;
+                #[cfg(feature = "text_input")]
+                {
+                    prompt_config_str(ctx, TAG_MODEL_INPUT);
+                    return EventResult::Consumed;
+                }
             }
         }
         TAG_CHOICE_SHEET => {
@@ -270,6 +274,7 @@ pub fn handle_sheet_selected(
     EventResult::Consumed
 }
 
+#[cfg(feature = "text_input")]
 #[inline(never)]
 pub fn handle_text_input_done(
     app: &mut SettingsApp,
@@ -346,7 +351,6 @@ fn reset_config_to_defaults(ctx: &mut SysContext) {
     let _ = ctx.config.save_all(ctx.storage);
 }
 
-#[inline(never)]
 pub fn handle_confirm_result(
     #[allow(unused_variables)] app: &mut SettingsApp,
     ctx: &mut SysContext,

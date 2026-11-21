@@ -49,7 +49,7 @@ settings_debug = []
 overclock_72mhz = []
 
 # ⚙️ Execution Runtime Engines
-krx_native = ["text_input", "filesystem"]
+krx_native = ["filesystem"]
 krx_paged = ["krx_native"]
 
 # 📡 Hardware Peripheral & RF Subsystems

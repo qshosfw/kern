@@ -186,20 +186,13 @@ impl PackageCatalog {
         &self,
         entry: &PackageCatalogEntry,
     ) -> (&'static [u8; 8], &'static [u8; 32]) {
-        let (fb8, fb16) =
-            crate::apps::settings::apps::package_icons(entry.title.as_str(), entry.icon_id);
-        let icon_8 = if entry.has_custom_icon_8() {
-            unsafe { &*(&entry.icon_8 as *const [u8; 8]) }
-        } else {
-            fb8
-        };
         let slot = entry.icon_16_slot as usize;
         let icon_16 = if slot < (self.icons_16_len as usize) {
             unsafe { &*(&self.icons_16[slot] as *const [u8; 32]) }
         } else {
-            fb16
+            gfx::icons::icon_16(u8::try_from(entry.icon_id).unwrap_or(::abi::icon::APPS))
         };
-        (icon_8, icon_16)
+        (entry.resolved_icon_8(), icon_16)
     }
 
     /// Mark catalog dirty to trigger a re-scan on next access.

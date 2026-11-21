@@ -102,7 +102,6 @@ fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
     }
 }
 
-#[inline(never)]
 unsafe fn dispatch_rf_vfo(
     coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
@@ -126,7 +125,8 @@ unsafe fn dispatch_rf_vfo(
             }
             let rec = unsafe { &mut *(bytes.as_mut_ptr() as *mut ChannelRecord) };
             if sub == rf_vfo::GET_CHANNEL {
-                *rec = ChannelRecord::empty();
+                unsafe { core::ptr::write_bytes(rec, 0, 1) };
+                rec.zone_mask = 1;
                 coord.save_vfo_to_channel(vfo, rec);
                 let memory = coord.vfo_memory_index[vfo.index().min(2)];
                 return memory.map_or(0, |i| i as usize + 1) << 8;
@@ -239,7 +239,6 @@ unsafe fn dispatch_rf_vfo(
     }
 }
 
-#[inline(never)]
 unsafe fn dispatch_rf_bulk(
     #[cfg_attr(not(feature = "rf_fsk"), allow(unused_variables))] coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,

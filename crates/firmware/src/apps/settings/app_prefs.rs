@@ -91,7 +91,6 @@ pub fn seed_defaults(cfg: &mut [u8], sec: &[u8], ver: u8) {
     }
 }
 
-#[inline(never)]
 fn build_app_pref_item(dst: Option<&mut MenuItem>, off: usize, loaded: bool) -> bool {
     let sc = scratch();
     let sec_off = sc.sec_off as usize;

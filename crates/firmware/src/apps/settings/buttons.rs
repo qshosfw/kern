@@ -27,7 +27,6 @@ setting_page!(pub BUTTONS_TWEAKS_PAGE = [
     ("Repeat Rate", SettingDef::choice(ChoiceId::RepeatRate, SettingField::REPEAT_RATE)),
 ]);
 
-#[inline(never)]
 pub fn populate_shortcuts(
     items: &mut [MenuItem],
     icons: &mut [&'static [u8; 8]],

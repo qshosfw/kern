@@ -350,28 +350,18 @@ fn picker_scratch() -> &'static mut PickerScratch {
 }
 
 #[inline(never)]
-fn push_entry(id: u16, icon: &'static [u8; 8], title: &str) {
+fn push_entry(id: u16, icon: &'static [u8; 8], title: &str, suffix: &str) {
     let ps = picker_scratch();
     let n = ps.count;
     if n < MAX_PICKER_ITEMS {
         ps.ids[n] = id;
         ps.icons[n] = icon;
-        ps.labels[n].set_str(title);
+        format_label_into(&mut ps.labels[n], title, suffix);
         ps.count = n + 1;
     }
 }
 
-#[inline(never)]
-fn append_last_suffix(suffix: &str) {
-    let ps = picker_scratch();
-    if let Some(last) = ps.labels.get_mut(ps.count.wrapping_sub(1)) {
-        last.push_byte(b':');
-        last.push_str(suffix);
-    }
-}
-
 /// Populate icon-equipped `OptionSheet` inside transient tail scratch (`0 B` static `.bss`).
-#[inline(never)]
 pub fn build_picker_sheet(
     title: &'static str,
     current_id: u16,
@@ -384,12 +374,14 @@ pub fn build_picker_sheet(
         TARGET_NONE,
         gfx::icons::RADIO_OFF,
         utils::format::nth_cstr(&BUILTIN_LABELS, 5),
+        "",
     );
     for (i, b) in BUILTIN_TARGETS.iter().enumerate() {
         push_entry(
             (i + 1) as u16,
             builtin_icon(b.icon_id),
             utils::format::nth_cstr(&BUILTIN_LABELS, i as u8),
+            "",
         );
     }
     for (pkg_idx, e) in catalog.entries.iter().enumerate() {
@@ -399,11 +391,15 @@ pub fn build_picker_sheet(
         let icon = e.resolved_icon_8();
         let t = e.title.as_str();
         let p = e.path.as_str();
-        push_entry(hash_app(p), icon, t);
+        push_entry(hash_app(p), icon, t, "");
         for act in catalog.actions.iter() {
             if act.pkg_idx as usize == pkg_idx && (act.scope_mask & ::abi::scope::SHORTCUT) != 0 {
-                push_entry(hash_app_action(p, act.action_id), icon, t);
-                append_last_suffix(act.label_str());
+                push_entry(
+                    hash_app_action(p, act.action_id),
+                    icon,
+                    t,
+                    act.label_str(),
+                );
             }
         }
     }

@@ -128,7 +128,6 @@ fn draw_vfo(
     draw_tom_fill(canvas, 56, attr_y, slot.default_name());
 }
 
-#[inline(never)]
 fn handle_vfo_repeat_tick(
     repeater: &mut gfx::gui::KeyRepeater,
     ctx: &mut SysContext,
@@ -145,7 +144,6 @@ fn handle_vfo_repeat_tick(
     EventResult::Ignored
 }
 
-#[inline(never)]
 fn handle_vfo_key_press(ctx: &mut SysContext, code: KeyCode) -> EventResult {
     match code {
         KeyCode::Up => step_freq(ctx, true),

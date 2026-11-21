@@ -10,7 +10,6 @@ fn power_ref() -> &'static drivers::battery::SystemPower {
     unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) }
 }
 
-#[inline(never)]
 fn dispatch_io_key(sub: u8, a1: usize) -> usize {
     use ::abi::sub::io_key;
     // Headless: apps see an idle matrix; raw keypad probes cannot bypass the wire-only lock.
@@ -57,7 +56,6 @@ fn dispatch_io_key(sub: u8, a1: usize) -> usize {
     }
 }
 
-#[inline(never)]
 fn dispatch_io_power(sub: u8, a1: usize) -> usize {
     use ::abi::sub::io_power;
     use kernel::service::PowerService;
@@ -95,7 +93,6 @@ fn dispatch_io_power(sub: u8, a1: usize) -> usize {
     }
 }
 
-#[inline(never)]
 unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
     use ::abi::sub::io_serial;
     match sub {
@@ -199,7 +196,6 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
     }
 }
 
-#[inline(never)]
 unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
     use ::abi::sub::io_bus;
     match sub {

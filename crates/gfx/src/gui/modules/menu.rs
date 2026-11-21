@@ -725,18 +725,8 @@ fn render_menu_row(
             &MUMATRIX,
             tc,
         );
-    } else if overflow > 0 {
-        text::draw_str_ellipsis(
-            canvas,
-            text_x,
-            row_y + 9,
-            title_str,
-            &MUMATRIX,
-            tc,
-            title_max,
-        );
     } else {
-        text::draw_str_max_x(
+        text::draw_str_ellipsis(
             canvas,
             text_x,
             row_y + 9,

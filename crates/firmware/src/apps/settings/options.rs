@@ -36,7 +36,6 @@ fn get_action_value(action: ActionId, ctx: &mut crate::SysContext, out: &mut Sho
     }
 }
 
-#[inline(never)]
 fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut crate::SysContext) {
     let def = spec.defs[idx];
     item.title = spec.title(idx);
@@ -109,7 +108,6 @@ fn populate_item(item: &mut MenuItem, spec: &PageSpec, idx: usize, ctx: &mut cra
     }
 }
 
-#[inline(never)]
 pub fn populate_spec_range(
     items: &mut [MenuItem],
     spec: &PageSpec,

@@ -92,12 +92,10 @@ impl AssetId {
         }
     }
 
-    #[inline(never)]
     fn str_field(self, field: u8) -> &'static str {
         utils::format::nth_cstr(&ASSET_STRS, (self as u8) * 4 + field)
     }
 
-    #[inline(never)]
     fn get_path(self, cfg: &crate::config::MasterConfig) -> (bool, &str) {
         let m = &ASSET_META[self as usize];
         let bytes = cfg.config_bytes(m.dom as usize);
@@ -110,7 +108,6 @@ impl AssetId {
         )
     }
 
-    #[inline(never)]
     fn set_path(self, cfg: &mut crate::config::MasterConfig, opt: Option<&str>) {
         let m = &ASSET_META[self as usize];
         let bytes = cfg.config_bytes_mut(m.dom as usize);
@@ -126,7 +123,6 @@ impl AssetId {
         cfg.mark_domain_dirty(m.dom as usize);
     }
 
-    #[inline(never)]
     fn finalize_entries(
         self,
         cfg: &crate::config::MasterConfig,
@@ -139,8 +135,8 @@ impl AssetId {
         for i in 1..count {
             let mut j = i;
             while j > 0
-                && storage.paths[storage.order[j] as usize].as_str()
-                    < storage.paths[storage.order[j - 1] as usize].as_str()
+                && storage.paths[storage.order[j] as usize].as_bytes()
+                    < storage.paths[storage.order[j - 1] as usize].as_bytes()
             {
                 storage.order.swap(j, j - 1);
                 j -= 1;
@@ -156,9 +152,8 @@ impl AssetId {
             let fb = full_path.as_bytes();
             if active
                 && current_sel == 0
-                && fb.len() >= cb.len()
                 && (cb.first() != Some(&b'/') || fb.len() == cb.len())
-                && &fb[fb.len() - cb.len()..] == cb
+                && fb.ends_with(cb)
             {
                 current_sel = idx + 1;
             }
@@ -194,20 +189,6 @@ impl AssetId {
 
         let current_sel = self.finalize_entries(&ctx.config, storage);
         let count = storage.count as usize;
-        #[cfg(feature = "filesystem")]
-        if self == Self::Language {
-            let mut name_buf = [0u8; 18];
-            for idx in 0..count {
-                let path = storage.paths[storage.order[idx] as usize].as_str();
-                if let Some(label) = gfx::media::read_lang_label_streaming(
-                    |off, dst| ctx.storage.fs.read_file_at(path, off, dst).unwrap_or(0),
-                    false,
-                    &mut name_buf,
-                ) {
-                    storage.labels[idx + 1].set_str(label);
-                }
-            }
-        }
         let labels_slice: &'static [ShortString] =
             unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), count + 1) };
         super::dialog::show_radio_sheet(

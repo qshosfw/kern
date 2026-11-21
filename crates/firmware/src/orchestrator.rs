@@ -871,7 +871,6 @@ impl Orchestrator {
         false
     }
 
-    #[inline(never)]
     fn drain_ipc_commands<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
         while let Some(ev) = ctx.ipc.pop() {
             self.process_ipc_command(ctx, Shortcut::from(ev));

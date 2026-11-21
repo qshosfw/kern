@@ -19,7 +19,7 @@ fn active_storage_mut() -> Option<&'static mut crate::services::SystemStorage<'s
     }
 }
 
-#[inline(never)]
+#[inline(always)]
 fn is_proc_boot_path(path: &str) -> bool {
     path == "/proc/boot"
 }
@@ -29,7 +29,6 @@ fn has_proc_read_cap() -> bool {
     super::super::native_runner::active_native_caps().contains(::abi::Cap::ServiceRegistry)
 }
 
-#[inline(never)]
 fn proc_read(path: &str, offset: usize, dst: &mut [u8]) -> Option<usize> {
     if !is_proc_boot_path(path) || !has_proc_read_cap() {
         return None;
@@ -60,7 +59,6 @@ fn proc_read(path: &str, offset: usize, dst: &mut [u8]) -> Option<usize> {
     Some(written)
 }
 
-#[inline(never)]
 fn proc_remove(path: &str) -> Option<u8> {
     if !is_proc_boot_path(path) {
         return None;

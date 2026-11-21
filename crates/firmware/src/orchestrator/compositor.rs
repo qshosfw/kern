@@ -57,7 +57,6 @@ impl ModalCompositor {
         !matches!(self.modal, ActiveModal::None) || self.toast.is_active
     }
 
-    #[inline(never)]
     pub fn is_animating(&self) -> bool {
         if self.toast.is_active {
             return true;

@@ -80,7 +80,6 @@ fn copy_cstr(dst: &mut [u8], src: &[u8]) {
     dst[..n].copy_from_slice(&src[..n]);
 }
 
-#[inline(never)]
 unsafe fn fill_sys_info(out_info: *mut KrxSysInfo) -> usize {
     if out_info.is_null() || !out_info.is_aligned() {
         return 1;
@@ -289,7 +288,6 @@ fn proc_kill(pid: u8) -> u8 {
     0
 }
 
-#[inline(never)]
 unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
     use kernel::proc::abi::*;
     use kernel::proc::{LeaseKind, Pid, ProcState};

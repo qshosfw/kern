@@ -24,7 +24,6 @@ pub fn draw_icon(x: i16, y: i16, icon_id: u8, color: u8) {
     }
 }
 
-#[inline(never)]
 pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
     if req.is_null() {
         return 0;

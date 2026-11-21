@@ -313,7 +313,6 @@ pub fn krx_return_thunk() -> Result<usize, PagedError> {
 }
 
 /// Invokes a P0 Structured Leaf Overlay from the resident root actor (§5.1 / KRX 3.2).
-#[inline(never)]
 pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     let slot = slot_mut();
     let got_base = slot.got_base;
@@ -382,7 +381,6 @@ fn read_file_region(
     storage.read_file_at(path, offset, dst).is_ok()
 }
 
-#[inline(never)]
 fn apply_package_relocs(
     buffer_bytes: &[u8],
     payload_len: usize,
@@ -714,7 +712,6 @@ pub fn active_pkg_matches(path: &str) -> bool {
     slot.is_loaded && slot.pkg_path_str() == path
 }
 
-#[inline(never)]
 pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventResult {
     dispatch_krx_event(
         ctx as *mut _ as *mut _,

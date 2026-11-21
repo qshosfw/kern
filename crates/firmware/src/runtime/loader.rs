@@ -160,7 +160,6 @@ pub fn launch_krx_package(
 }
 
 /// Load and invoke an in-place system action module (`scope::SYSTEM_ACTION`) without switching apps.
-#[inline(never)]
 pub fn invoke_action_krx_package<'a, 'hw>(
     ctx: &mut SysContext<'a, 'hw>,
     path: &str,
@@ -175,7 +174,6 @@ pub fn invoke_action_krx_package<'a, 'hw>(
 }
 
 /// Forward a modal result to an in-place action module and unload its transient slot.
-#[inline(never)]
 pub fn finish_action_krx_package<'a, 'hw>(
     ctx: &mut SysContext<'a, 'hw>,
     result: &kernel::app::ModalResult<'_>,
@@ -190,7 +188,6 @@ pub fn finish_action_krx_package<'a, 'hw>(
 }
 
 /// Load and execute a standalone KRX module directly during early boot (before `SysContext` exists).
-#[inline(never)]
 pub fn try_launch_boot_module(
     _lcd: &mut drivers::st7565::St7565<bsp::LcdBus>,
     storage: &mut crate::services::SystemStorage<'_>,

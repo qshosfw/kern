@@ -425,7 +425,6 @@ impl<'a> StatusRightConfig<'a> {
 }
 
 /// Renders the complete status bar frame with automatic layout for left, center, and right elements.
-#[inline(never)]
 pub fn draw_status_bar_layout(
     canvas: &mut Canvas,
     config: &kernel::app::StatusBarConfig<'_>,

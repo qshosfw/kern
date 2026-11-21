@@ -9,14 +9,17 @@ fn modal_mut() -> &'static mut crate::orchestrator::compositor::ModalCompositor 
     unsafe { &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL) }
 }
 
+#[cfg(feature = "text_input")]
 static mut MODAL_TEXT_BUF: [u8; 32] = [0u8; 32];
+#[cfg(feature = "text_input")]
 static mut MODAL_TEXT_LEN: u8 = 0;
 
-pub fn store_modal_text(text: &str) {
+pub fn store_modal_text(_text: &str) {
+    #[cfg(feature = "text_input")]
     unsafe {
-        let copy_len = text.len().min(32);
+        let copy_len = _text.len().min(32);
         core::ptr::copy_nonoverlapping(
-            text.as_bytes().as_ptr(),
+            _text.as_bytes().as_ptr(),
             core::ptr::addr_of_mut!(MODAL_TEXT_BUF) as *mut u8,
             copy_len,
         );
@@ -39,7 +42,6 @@ pub fn set_tray_icon(icon_id: u8) -> u8 {
     }
 }
 
-#[inline(never)]
 unsafe fn show_modal_req(req: *const KrxModalReq) {
     if req.is_null() {
         return;
@@ -70,7 +72,6 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
     );
 }
 
-#[inline(never)]
 unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     if desc.is_null() {
         return 1;
@@ -227,20 +228,25 @@ pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 0
             }
             ui_modal::GET_TEXT => {
-                let buf = a1 as *mut u8;
-                let max_len = a2 as u8;
-                if buf.is_null() || max_len == 0 {
-                    return 0;
+                #[cfg(feature = "text_input")]
+                {
+                    let buf = a1 as *mut u8;
+                    let max_len = a2 as u8;
+                    if buf.is_null() || max_len == 0 {
+                        return 0;
+                    }
+                    unsafe {
+                        let copy_len = (MODAL_TEXT_LEN as usize).min(max_len as usize);
+                        core::ptr::copy_nonoverlapping(
+                            core::ptr::addr_of!(MODAL_TEXT_BUF) as *const u8,
+                            buf,
+                            copy_len,
+                        );
+                        copy_len
+                    }
                 }
-                unsafe {
-                    let copy_len = (MODAL_TEXT_LEN as usize).min(max_len as usize);
-                    core::ptr::copy_nonoverlapping(
-                        core::ptr::addr_of!(MODAL_TEXT_BUF) as *const u8,
-                        buf,
-                        copy_len,
-                    );
-                    copy_len
-                }
+                #[cfg(not(feature = "text_input"))]
+                0
             }
             ui_modal::SHOW => {
                 unsafe { show_modal_req(a1 as *const KrxModalReq) };
