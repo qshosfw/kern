@@ -9,6 +9,7 @@ kern-platform-traits = { path = "../../platform/traits" }
 kernel = { path = "../../kernel" }
 utils = { path = "../utils" }
 heapless = { workspace = true }
+abi = { path = "../../abi" }
 
 [features]
 default = []

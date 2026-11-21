@@ -32,6 +32,9 @@ pub enum Icon {
 }
 
 impl Icon {
+    /// Number of status glyphs (`Antenna..=Moon`).
+    pub const COUNT: usize = Icon::Moon as usize + 1;
+
     #[inline(always)]
     pub const fn width(self) -> u8 {
         match self {
@@ -43,7 +46,7 @@ impl Icon {
 
     #[inline(always)]
     pub const fn from_u8(val: u8) -> Option<Self> {
-        if val <= 21 {
+        if (val as usize) < Icon::COUNT {
             Some(unsafe { core::mem::transmute::<u8, Self>(val) })
         } else {
             None
