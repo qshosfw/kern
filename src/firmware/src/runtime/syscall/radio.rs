@@ -112,7 +112,7 @@ unsafe fn dispatch_rf_vfo(
 ) -> usize {
     use ::abi::sub::rf_vfo;
     match sub {
-        // A VFO is exchanged as the ORDS-01 channel record: the same 64 bytes an app
+        // A VFO is exchanged as the 64-byte channel record: the same 64 bytes an app
         // reads from `/user/channels.ch`, so no attribute is lost between memory,
         // storage and the live radio.
         rf_vfo::GET_CHANNEL | rf_vfo::SET_CHANNEL => {

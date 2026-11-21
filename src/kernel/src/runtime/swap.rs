@@ -5,7 +5,7 @@ use super::image::SWAP_IDENT;
 /// Swap image flag: payload compressed using PackBits RLE byte-run algorithm
 pub const SWAP_FLAG_COMPRESSED_RLE: u16 = 0x0001;
 
-/// Fixed 16-byte power-of-two Swap Header for state hibernation (KRX-ABI 2.5.0 / ORDS-01)
+/// Fixed 16-byte power-of-two swap header for state hibernation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct KrxSwapHeader {

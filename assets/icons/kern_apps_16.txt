@@ -1,4 +1,4 @@
-// Kern Dynamic 16x16 Filled App Icon Pack (ORDS-01 `ICN1`, 32 B stride, 0 B MCU Flash)
+// Kern Dynamic 16x16 Filled App Icon Pack (`ICN1`, 32 B stride, 0 B MCU Flash)
 // Deployed to KernFS `/sys/icons/kern_apps_16.icn` (528 B on SPI Flash).
 // Compiled via: `python3 tools/pack_media.py pack-icons assets/icons/kern_apps_16.txt assets/media/kern_apps_16.icn`
 

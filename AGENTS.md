@@ -54,7 +54,7 @@ Every component, interface, driver, and application in Kern must strictly embody
 
 ---
 
-## 2. Storage & Filesystem Architecture (ORDS-01)
+## 2. Storage & Filesystem Architecture
 
 - **Direct LittleFS Storage**: Flat, uncompressed files directly on SPI Flash. No archive containers.
 - **Filesystem Hierarchy**:

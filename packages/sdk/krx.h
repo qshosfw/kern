@@ -174,7 +174,7 @@ typedef struct {
 
 // ── Domain Data Structures ───────────────────────────────────────────────────
 
-/* ORDS-01 channel record (64 B): one layout for `/user/channels.ch`, `.vfo` snapshots
+/* Fixed 64 B channel record: one layout for `/user/channels.ch`, `.vfo` snapshots
  * and the live VFO exchanged through OP_RF_VFO. */
 #define KRX_TONE_DCS             0x8000u  /* subaudible word: DCS code, else CTCSS deci-Hz */
 #define KRX_TONE_DCS_INVERTED    0x4000u
@@ -226,7 +226,7 @@ typedef struct {
     u16 record_crc;
 } KrxChannel;
 
-_Static_assert(sizeof(KrxChannel) == 64, "KrxChannel is the 64 B ORDS-01 record");
+_Static_assert(sizeof(KrxChannel) == 64, "KrxChannel must be 64 bytes");
 
 typedef struct {
     u8  active_vfo;

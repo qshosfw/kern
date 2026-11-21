@@ -160,7 +160,7 @@ impl ChannelRecord {
     pub const SUBAUDIBLE_DCS_INV_FLAG: u16 = 0x4000;
     pub const SUBAUDIBLE_VALUE_MASK: u16 = 0x3FFF;
 
-    /// Encode a `SubaudibleTone` into the compact 16-bit ORDS-01 `rx_subaudible` / `tx_subaudible` word.
+    /// Encode a `SubaudibleTone` into the compact 16-bit `rx_subaudible` / `tx_subaudible` word.
     #[inline(always)]
     pub const fn encode_subaudible(tone: kernel::service::radio::SubaudibleTone) -> u16 {
         match tone {
@@ -177,7 +177,7 @@ impl ChannelRecord {
         }
     }
 
-    /// Decode a 16-bit ORDS-01 subaudible word back into a `SubaudibleTone`.
+    /// Decode a 16-bit subaudible word back into a `SubaudibleTone`.
     #[inline(always)]
     pub const fn decode_subaudible(raw: u16) -> kernel::service::radio::SubaudibleTone {
         if raw == 0 {

@@ -23,7 +23,7 @@ The project explores running a memory-safe, modular microkernel with capability-
 
 1. **Zero Heap Allocation**: `#![no_std]` across the entire workspace with `alloc` disabled. All buffers are statically arena-backed or compile-time bounded with `heapless`.
 2. **Layered Decoupling**: Application and userland code never touch hardware registers directly. Radio, display, audio, and storage operations pass through microkernel traits (`RfChannel`, `RfTuning`, `DisplayBackend`, `StorageBackend`).
-3. **Power-of-Two Geometries (ORDS-01)**: Cortex-M0+ lacks a hardware divider. Table records (16 B headers, 32 B contacts/zones/bands, 64 B channels) use power-of-two strides so record offsets resolve via single bit-shifts (`16 + (index << N)`).
+3. **Power-of-Two Record Layout**: Cortex-M0+ lacks a hardware divider. Table records (16 B headers, 32 B contacts/zones/bands, 64 B channels) use power-of-two strides so record offsets resolve via single bit-shifts (`16 + (index << N)`).
 4. **Relocatable Userland Packages (KRX)**: System modules and userland applications compile as independent position-independent `.krx` / `.mod` binaries (supporting N1 native PIC, P0 structured leaf paging, and P1 transparent paging) talking to the kernel over a single-entry `kern_call` syscall ABI.
 5. **Framed Binary Serial Protocol (RigWire)**: COBS-framed packets with CRC-32 verification handle KernFS file transfers, package sideloading, telemetry, and device control over USB-C CDC or UART.
 

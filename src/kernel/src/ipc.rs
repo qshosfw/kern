@@ -168,7 +168,7 @@ pub mod radio_events {
     pub const TOT_EXPIRED: u8 = 14;
 }
 
-// ── Structured Zero-Heap Microkernel IPC (§8.4 / KRX 3.2 / ORDS-01) ─────────
+// ── Structured Zero-Heap Microkernel IPC ─────────────────────────────────────
 
 pub mod ipc_flags {
     pub const NONE: u8 = 0;
@@ -198,8 +198,7 @@ pub mod ipc_msg_type {
     pub const TELEMETRY_FRAME: u16 = 0x0040;
 }
 
-/// Normative 32-byte Zero-Heap Inter-Process Communication Message (§8.4 / KRX 3.2).
-/// Follows ORDS-01 $O(1)$ power-of-two geometry ($2^5 = 32$ bytes).
+/// 32-byte zero-heap inter-process communication message (power-of-two $2^5$ layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct KrxIpcMessage {

@@ -1,4 +1,4 @@
-//! Application Swap & State Hibernation Manager (KRX-ABI / ORDS-01)
+//! Application Swap & State Hibernation Manager
 //!
 //! Provides zero-allocation, bounded state hibernation with PackBits RLE compression
 //! and 16-byte `KrxSwapHeader` integrity validation.
@@ -11,7 +11,7 @@ pub const MAX_SWAP_SLOTS: usize = 3;
 /// Payload size per slot (128 bytes total slot geometry: 16B header + 112B payload)
 pub const SWAP_PAYLOAD_SIZE: usize = 112;
 
-/// Exact power-of-two 128-byte swap container (§2 / ORDS-01)
+/// Fixed 128-byte power-of-two swap container.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SwapSlot {

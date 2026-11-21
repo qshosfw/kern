@@ -1,6 +1,6 @@
 //! Structured Data, Documents, and Filesystem Formats for KERN OS Firmware.
 //!
-//! Zero-heap fixed-stride record formats (ORDS-01): channels, contacts, bandplans,
+//! Zero-heap fixed-stride record tables: channels, contacts, bandplans,
 //! zones, scan hits, FM stations and VFO snapshots, plus the shared transient arena.
 //! KRX package structures live in `kernel::runtime`.
 

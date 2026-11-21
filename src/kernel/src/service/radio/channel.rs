@@ -159,7 +159,7 @@ pub struct ChannelConfig {
     pub tot_limit_15s: u8,
     /// Signaling protocol selector (`0 = Analog`, `1 = MDC1200`, `2 = DTMF`, `3 = 5-Tone`, `4 = FSK`, etc.).
     pub proto: u8,
-    /// Packed ORDS-01 channel option bitflags (`FLAG_*` in `ChannelRecord`).
+    /// Packed channel option bitflags (`FLAG_*` in `ChannelRecord`).
     pub flags: u16,
     /// Relational index into `/user/contacts.ct` (`ContactRecord` endpoint, group, or topic).
     pub proto_ref: u16,

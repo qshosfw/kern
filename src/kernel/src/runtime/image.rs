@@ -996,7 +996,7 @@ pub struct BlockEntry {
     pub flash_offset: u32,
 }
 
-/// Service Export Descriptor (0x0006 / ORDS-01 16-byte power-of-two geometry).
+/// Service Export Descriptor (0x0006, 16-byte power-of-two layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct ServiceExport {
@@ -1048,7 +1048,7 @@ pub const FLAG_LEAF_PINNED: u8 = 1 << 0;
 pub const FLAG_LEAF_RT: u8 = 1 << 1;
 pub const FLAG_LEAF_PREFETCH: u8 = 1 << 2;
 
-/// P0 Structured Paged Leaf Overlay Descriptor (0x000A / ORDS-01 16-byte power-of-two geometry).
+/// Paged Leaf Overlay Descriptor (0x000A, 16-byte power-of-two layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct LeafEntry {

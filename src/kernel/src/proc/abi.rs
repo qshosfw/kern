@@ -382,7 +382,7 @@ pub struct KrxWidget {
 unsafe impl Sync for KrxWidget {}
 unsafe impl Send for KrxWidget {}
 
-// ── Domain Data Structures (ORDS-01 Power-of-Two Geometries) ─────────────────
+// ── Domain Data Structures (Power-of-Two Record Layouts) ─────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]

@@ -1,4 +1,4 @@
-//! ORDS-01 Power-of-Two Record & Snapshot Formats (`ZoneRecord`, `BandPlanRecord`,
+//! Fixed-Size Power-of-Two Record & Snapshot Formats (`ZoneRecord`, `BandPlanRecord`,
 //! `ScanHitRecord`, `FmStationRecord`, `VfoFileHeader`, and `VfoSnapshotFile`).
 //!
 //! All structures strictly adhere to `AGENTS.md §1.3 & §2`:
@@ -469,7 +469,7 @@ pub enum VfoOperatingMode {
     RangeScan = 3,
 }
 
-/// 32-byte naturally-aligned header for `/user/vfo_a.vfo` and `/user/vfo_b.vfo` (ORDS-01).
+/// 32-byte naturally-aligned header for `/user/vfo_a.vfo` and `/user/vfo_b.vfo`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct VfoFileHeader {
@@ -599,7 +599,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ords01_all_records_geometry_and_roundtrip() {
+    fn all_records_geometry_and_roundtrip() {
         // 1. ZoneRecord (32B)
         let mut zn = ZoneRecord::new(2, "AIR & RPT", 10);
         zn.priority_channel = 15;

@@ -3,7 +3,7 @@
 //! Provides zero-heap, constant-stride ($O(1)$ random seek via `16 + (index << 5)`) storage
 //! for addressable endpoints, multicast groups, pub/sub topics, relays, and services.
 //! Aligned to 32 bytes ($2^5$) so exactly 128 records fit in a 4096-byte flash sector
-//! without ever straddling sector boundaries (ORDS-01).
+//! without ever straddling flash erase sector boundaries.
 //!
 //! Design Philosophy:
 //! - **Protocol-Agnostic**: Decouples *what* is being addressed (`ContactKind`: Endpoint, Group,

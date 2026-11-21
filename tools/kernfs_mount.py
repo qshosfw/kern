@@ -15,7 +15,7 @@ Hardening & Anti-Brick Safeguards:
   • Single serialized RigWire transaction lock (no interleaved COBS frames).
   • OS junk-file blackhole (.DS_Store, ._*, Thumbs.db, .Spotlight-V100, etc.).
   • Protected /sys/* (read-only) and /apps/{dfu.mod,panic.mod} delete shield.
-  • Pre-write KRX package & ORDS-01 table validation before touching SPI flash.
+  • Pre-write KRX package & record table validation before touching SPI flash.
   • Zero-wear idempotent skip on identical CRC-32 + post-write stat verification.
 """
 
@@ -142,7 +142,7 @@ MAX_KERNFS_PATH = 32
 PKG_EXTS = (".krx", ".app", ".svc", ".dmn", ".drv", ".mod")
 PROTECTED_RECOVERY_MODS = frozenset({"/apps/dfu.mod", "/apps/panic.mod"})
 
-ORDS01_TABLES: dict[str, tuple[bytes, int]] = {
+RECORD_TABLES: dict[str, tuple[bytes, int]] = {
     ".ch": (b"CHAN", 64),
     ".ct": (b"CONT", 32),
     ".bnd": (b"BNDP", 32),
@@ -230,14 +230,14 @@ class SafetyPolicy:
             except Exception as e:
                 raise ValueError(f"Rejected invalid KRX package '{path}': {e}") from e
 
-        for ext, (fourcc, stride) in ORDS01_TABLES.items():
+        for ext, (fourcc, stride) in RECORD_TABLES.items():
             if low.endswith(ext):
                 if len(data) < 16:
-                    raise ValueError(f"ORDS-01 table '{path}' too short ({len(data)} B < 16 B)")
+                    raise ValueError(f"Record table '{path}' too short ({len(data)} B < 16 B)")
                 if data[:4] != fourcc:
-                    raise ValueError(f"ORDS-01 table '{path}' FourCC {data[:4]!r} != {fourcc!r}")
+                    raise ValueError(f"Record table '{path}' FourCC {data[:4]!r} != {fourcc!r}")
                 if (len(data) - 16) % stride != 0:
-                    raise ValueError(f"ORDS-01 table '{path}' payload not aligned to {stride} B stride")
+                    raise ValueError(f"Record table '{path}' payload not aligned to {stride} B stride")
                 break
 
     def check_delete(self, path: str) -> None:
@@ -1197,7 +1197,7 @@ def main() -> int:
     ap.add_argument("--open", dest="open_fm", action="store_true", help="Open mounted volume in native file manager")
     ap.add_argument("--read-only", action="store_true", help="Mount strictly read-only (0 writes/deletes possible)")
     ap.add_argument("--cache-ttl", type=float, default=3.0, help="Metadata cache TTL in seconds (default: 3.0)")
-    ap.add_argument("--no-format-checks", action="store_true", help="Disable pre-write KRX & ORDS-01 validation")
+    ap.add_argument("--no-format-checks", action="store_true", help="Disable pre-write KRX & record table validation")
     ap.add_argument("--allow-system-mod-delete", action="store_true", help="Allow deleting /apps/{dfu.mod,panic.mod}")
     ap.add_argument("--unsafe-allow-sys-write", action="store_true", help="UNSAFE: allow writes/deletes under /sys/*")
     ap.add_argument("-v", "--verbose", action="store_true", help="Log every WebDAV request")
