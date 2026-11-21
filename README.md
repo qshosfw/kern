@@ -32,12 +32,15 @@ The project explores running a memory-safe, modular microkernel with capability-
 ## Repository Layout
 
 - `src/` — Rust workspace crates:
-  - `src/kernel/` — Microkernel core, scheduler, KRX ABI (`abi.rs`), capability checks, boot records.
-  - `src/platform/` — Hardware traits, PAC, HAL, and board support packages (BSP).
-  - `src/driver/` — Peripheral drivers (BK4829, ST7565, PY25Q16, USB CDC, UART, keypad, audio, battery).
-  - `src/lib/` — Shared libraries (`kernfs`, `gfx`, `crypto`, `calib`, `utils`).
+  - `src/abi/` — Single-source KRX syscall ABI (`Op`, `Cap`, `prop`, C/Rust descriptor structs) and `./kern abi` C header generator.
+  - `src/hal-traits/` — Zero-cost hardware trait contracts.
+  - `src/kernel/` — Microkernel core, scheduler, process control, RF coordinator, IPC/events, boot records.
+  - `src/drivers/` — Peripheral drivers (BK4829, BK1080, ST7565, PY25Q16, USB CDC, UART, keypad, audio, battery, GNSS).
+  - `src/fs/`, `src/gfx/`, `src/crypto/`, `src/calib/`, `src/util/` — Core `#![no_std]` libraries (`KernFS`, `gfx`, Ascon/CRC/TRNG, calibration, utilities).
+  - `src/mcu/` & `src/board/` — Silicon PAC/HAL and board support packages (`uv-k1`).
   - `src/firmware/` — Runtime entrypoint, syscall dispatcher, UI compositor, RigWire service, built-in shell.
-- [`packages/`](packages/README.md) — Canonical KRX C SDK (`packages/sdk/`) and relocatable packages (`dfu`, `panic`, `sysinfo`, `beacon`, `bench`, `leaf_app`, `paged_app`).
+- [`sdk/`](sdk/) — Public dual-language KRX SDK (`sdk/rust/`, `sdk/c/`, `sdk/krx.ld`).
+- [`packages/`](packages/README.md) — Installable `.krx`/`.mod` packages under `packages/{core,sys,apps,examples}/`.
 - [`tools/`](tools/README.md) — Build driver, ABI header generator, ELF bloat analyzer, static arch linter, KRX packer, RigWire client, flasher, and QEMU helper.
 - [`media/`](media/README.md) — Project media and presentation assets.
 

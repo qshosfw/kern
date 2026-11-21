@@ -73,7 +73,7 @@ def ensure_rust_sdk_rlibs() -> tuple[str, str, str]:
         "-C", "opt-level=z", "-C", "panic=abort", "-C", "relocation-model=pic",
         "-C", "codegen-units=1", "-C", "debuginfo=0", "--crate-type", "rlib",
     ]
-    run(*common, "--crate-name", "abi", os.path.join(REPO_ROOT, "crates", "abi", "src", "lib.rs"), "-o", abi_rlib)
+    run(*common, "--crate-name", "abi", os.path.join(REPO_ROOT, "src", "abi", "src", "lib.rs"), "-o", abi_rlib)
     run(*common, "--crate-name", "kern_sdk", "-L", f"dependency={sdk_out}", "--extern", f"abi={abi_rlib}",
         os.path.join(SDK, "rust", "src", "lib.rs"), "-o", sdk_rlib)
     return sdk_out, abi_rlib, sdk_rlib

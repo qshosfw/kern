@@ -34,10 +34,10 @@ const BEACON_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/apps/beac
 const BENCH_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/apps/bench/bench.krx");
 
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
-const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/examples/leaf_app/leaf.krx");
+const LEAF_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/examples/leaf/leaf.krx");
 
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
-const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/examples/paged_app/paged.krx");
+const PAGED_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/examples/paged/paged.krx");
 
 #[cfg(feature = "provision_apps")]
 #[inline(never)]

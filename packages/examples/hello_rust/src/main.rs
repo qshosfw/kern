@@ -3,10 +3,13 @@
 
 use kern_sdk::{
     ALIGN_CENTER, COLOR_FILL, FONT_TOMTHUMB, KRX_OP_EVENT, KRX_OP_RENDER, KRX_OP_START,
-    KrxApiTable, KrxEvent, div_rem_10, krx_entry, prop, rel_strings,
+    KrxApiTable, KrxEvent, div_rem_10, key, krx_entry, prop, rel_strings,
 };
 
-rel_strings!(static LABELS: [2; 34] = [b"HELLO FROM RUST", b"MENU: Read Contrast"];);
+rel_strings!(static LABELS = [
+    b"HELLO FROM RUST",
+    b"EXIT: Close App",
+];);
 
 static mut CONTRAST: u8 = 0;
 
@@ -21,7 +24,10 @@ fn handle(op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         KRX_OP_EVENT => {
             if !arg.is_null() {
                 let ev = unsafe { &*(arg as *const KrxEvent) };
-                if ev.kind == kern_sdk::KRX_EV_KEY && ev.flags == 0 {
+                if ev.kind == kern_sdk::KRX_EV_KEY && ev.payload == key::STATE_PRESSED {
+                    if ev.key == key::EXIT {
+                        return 0;
+                    }
                     unsafe {
                         CONTRAST = api.prop_get(prop::CONTRAST);
                     }

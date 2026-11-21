@@ -5,4 +5,4 @@ edition = "2024"
 description = "Public no_std Rust SDK for authoring Kern OS (.krx) packages"
 
 [dependencies]
-abi = { path = "../../crates/abi" }
+abi = { path = "../../src/abi" }

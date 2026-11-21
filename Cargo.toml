@@ -2,19 +2,19 @@ cargo-features = ["panic-immediate-abort"]
 
 [workspace]
 members = [
-    "crates/abi",
-    "crates/hal-traits",
-    "crates/kernel",
-    "crates/drivers",
-    "crates/fs",
-    "crates/gfx",
-    "crates/crypto",
-    "crates/calib",
-    "crates/util",
-    "crates/mcu/py32f071/pac",
-    "crates/mcu/py32f071/hal",
-    "crates/board/uv-k1",
-    "crates/firmware",
+    "src/abi",
+    "src/hal-traits",
+    "src/kernel",
+    "src/drivers",
+    "src/fs",
+    "src/gfx",
+    "src/crypto",
+    "src/calib",
+    "src/util",
+    "src/mcu/py32f071/pac",
+    "src/mcu/py32f071/hal",
+    "src/board/uv-k1",
+    "src/firmware",
     "sdk/rust",
 ]
 resolver = "2"

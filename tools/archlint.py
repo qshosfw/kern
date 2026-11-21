@@ -13,7 +13,7 @@ docs/flash_audit_measured_plan.md §11 (Refactor Pattern Catalogue).
 """
 import argparse, collections, hashlib, itertools, json, os, re, sys
 
-ROOT = "crates"
+ROOT = "src"
 # Allowed dependency direction (crate -> crates it may `use`). Anything else is a layering violation.
 LAYERS = {
     "pac": {"cortex_m"}, "traits": set(), "utils": {"cortex_m"}, "crypto": {"utils"},
@@ -381,8 +381,8 @@ def report(a, F):
         with contextlib.redirect_stdout(buf):
             totals[name] = fn(argparse.Namespace(**{**vars(a), "top": 10_000, "verbose": False}), F)
         for line in buf.getvalue().splitlines():
-            for path in re.findall(r"(crates/[\w/-]+)\.rs", line):
-                parts = [x for x in path.split("/") if x not in ("crates", "src")]
+            for path in re.findall(r"(src/[\w/-]+)\.rs", line):
+                parts = [x for x in path.split("/") if x != "src"]
                 score["/".join(parts[:3])] += 1
     print("══════════════════════════════════════════════════════════════════")
     print(" 🔎 KERN SOURCE ARCHITECTURE & DESIGN SMELL REPORT")

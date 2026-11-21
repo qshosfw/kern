@@ -35,18 +35,18 @@ FN_RE = re.compile(r"^([0-9a-f]+) <(.+)>:$")
 INS_RE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{4}\s?)+)\s+(\S+)\s*(.*)$")
 
 CRATE_ROOTS = {
-    "firmware": "crates/firmware/src",
-    "kernel": "crates/kernel/src",
-    "drivers": "crates/drivers/src",
-    "py32_hal": "crates/mcu/py32f071/hal/src",
-    "py32_pac": "crates/mcu/py32f071/pac/src",
-    "bsp": "crates/board/uv-k1/src",
-    "kern_platform_traits": "crates/hal-traits/src",
-    "gfx": "crates/gfx/src",
-    "kernfs": "crates/fs/src",
-    "calib": "crates/calib/src",
-    "crypto": "crates/crypto/src",
-    "utils": "crates/util/src",
+    "firmware": "src/firmware/src",
+    "kernel": "src/kernel/src",
+    "drivers": "src/drivers/src",
+    "py32_hal": "src/mcu/py32f071/hal/src",
+    "py32_pac": "src/mcu/py32f071/pac/src",
+    "bsp": "src/board/uv-k1/src",
+    "kern_platform_traits": "src/hal-traits/src",
+    "gfx": "src/gfx/src",
+    "kernfs": "src/fs/src",
+    "calib": "src/calib/src",
+    "crypto": "src/crypto/src",
+    "utils": "src/util/src",
 }
 
 UNACTIONABLE_PREFIXES = (
@@ -101,13 +101,13 @@ def disasm(elf):
 
 
 class SourceIndex:
-    """Fast regex index over crates/**/*.rs to map demangled Rust symbols -> file:line without DWARF."""
+    """Fast regex index over src/**/*.rs to map demangled Rust symbols -> file:line without DWARF."""
 
     FN_DEF_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?(?:const\s+)?(?:extern\s+\"[^\"]*\"\s+)?fn\s+([A-Za-z_]\w*)")
     IMPL_RE = re.compile(r"^\s*impl(?:<[^>]*>)?\s+(?:[A-Za-z0-9_:<>]+\s+for\s+)?([A-Za-z_]\w*)")
     TYPE_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|static|trait)\s+([A-Za-z_]\w*)")
 
-    def __init__(self, root="crates"):
+    def __init__(self, root="src"):
         self.by_fn = collections.defaultdict(list)       # fn_name -> [(rel_path, line, impl_type)]
         self.by_type = collections.defaultdict(list)     # type_name -> [(rel_path, line)]
         if not os.path.isdir(root):
@@ -224,7 +224,7 @@ _SRC_IDX = None
 def src_index():
     global _SRC_IDX
     if _SRC_IDX is None:
-        _SRC_IDX = SourceIndex("crates")
+        _SRC_IDX = SourceIndex("src")
     return _SRC_IDX
 
 

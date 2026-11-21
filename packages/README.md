@@ -1,48 +1,43 @@
-# Kern Userland Packages & KRX SDK
+# Kern Userland Packages
 
-Userland applications and loadable system modules built against the Kern Relocatable Executable (KRX) single-entry syscall ABI (`kern_call`).
-
-Keeping non-essential system UI (DFU graphics, crash forensics, system info) in external Flash-paged `.mod` / `.krx` modules keeps the core microkernel firmware compact inside internal MCU Flash.
+Installable applications and system modules built against the [`sdk/`](../sdk/) Rust (`kern-sdk`) and C (`sdk/c/krx.h` + `sdk/c/krx_ops.h`) package toolchain over the single-entry syscall ABI (`kern_call`).
 
 ---
 
 ## Layout
 
-### C SDK
-- `sdk/` — Canonical KRX C SDK:
-  - `krx.h`: Core ABI types, `kern_call` trampoline, and helper inline wrappers.
-  - `krx_ops.h`: Auto-generated opcodes and sub-opcodes synced from `src/abi` via `./kern abi`.
-  - `krx.ld`: Shared Cortex-M0+ Thumb-1 PIC linker script.
+### `packages/core/` — Core Userland OS Apps
+- [`core/settings/`](core/settings/krx.toml) (`settings.krx`, Rust `N1` PIC) — External System Settings UI replacing resident ROM settings tables.
 
-### System Modules
-- [`dfu/`](dfu/README.md) (`dfu.mod`, P0 Structured Paged) — Visual USB-C / UART DFU bootloader UI, hardware quiescing, and 30 Hz SRAM SysTick telemetry hook.
-- `panic/` (`panic.mod`, P0 Structured Paged) — On-device crash inspector, register/stack viewer, Thumb-1 disassembler, QR report encoder, and safe-boot recovery menu.
-- [`sysinfo/`](sysinfo/README.md) (`sysinfo.krx`, P0 Structured Paged) — Firmware/hardware identity, live power/thermal telemetry, flash-paged `QS-1` AES-128-CBC verification, and regulatory marks.
+### `packages/sys/` — System & Maintenance Modules
+- [`sys/dfu/`](sys/dfu/README.md) (`dfu.mod`, `P0` Structured Paged) — Visual USB-C / UART DFU updater, hardware quiescing, and SRAM hook.
+- [`sys/recovery/`](sys/recovery/README.md) (`recovery.mod`, `P0` Structured Paged) — On-device recovery shell and SRAM flasher.
+- [`sys/multiboot/`](sys/multiboot/README.md) (`multiboot.mod`, `P0` Structured Paged) — Multi-slot bootloader manager.
+- `sys/panic/` (`panic.mod`, `P0` Structured Paged) — Crash inspector, stack/register viewer, Thumb-1 disassembler, and QR report generator.
+- [`sys/sysinfo/`](sys/sysinfo/README.md) (`sysinfo.krx`, `P0` Structured Paged) — Device hardware, OTP certificate, power/thermal telemetry, and regulatory info.
 
-### Reference & Test Applications
-- `beacon/` (`beacon.krx`, N1 Native PIC) — Minimal radio/display beacon reference app.
-- `bench/` (`bench.krx`, N1 Native PIC) — KRX syscall and capability benchmark harness.
-- `leaf_app/` (`leaf.krx`, P0 Structured Paged) — Reference multi-leaf paged application.
-- `paged_app/` (`paged.krx`, P1 Transparent Paged) — Reference fixed-window transparent-paged application.
+### `packages/apps/` — Optional Radio Apps
+- `apps/beacon/` (`beacon.krx`, `N1` Native PIC) — Radio/display beacon app.
+- `apps/bench/` (`bench.krx`, `N1` Native PIC) — Comprehensive C-ABI and capability validation bench.
+
+### `packages/examples/` — Contributor Starter Templates
+- [`examples/README.md`](examples/README.md) — `hello_rust` (Rust `N1`), `hello_c` (C `N1`), `leaf` (`P0` leaf chaining), and `paged` (`P1` demand paging).
 
 ---
 
 ## Building & Sideloading
 
-Requires `arm-none-eabi-gcc` and Python 3.
-
 ```bash
-# Build all packages and verify ABI/relocation/size invariants
+# Build and verify all packages (intermediate artifacts -> target/packages/)
 ./kern pkg
 
-# Build a specific package
-./kern pkg dfu
-./kern pkg sysinfo
+# Build a single package by short or grouped name
+./kern pkg settings
+./kern pkg examples/hello_rust
 
 # Verify C SDK opcodes match src/abi
 ./kern abi --check
 
 # Sideload a built package onto a connected radio over RigWire
-./kern wire sideload packages/dfu/dfu.mod --force
-./kern wire sideload packages/sysinfo/sysinfo.krx --force
+./kern wire sideload packages/core/settings/settings.krx --force
 ```
