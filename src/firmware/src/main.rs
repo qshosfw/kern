@@ -143,6 +143,26 @@ pub unsafe extern "C" fn TIM6_LPTIM1_DAC() {
     hal::exti::clear_pending(hal::exti::LINE_LPTIM1);
 }
 
+/// PVD (Programmable Voltage Detector) interrupt handler (IRQ 1, EXTI line 16).
+/// Immediately quenches BK4829 PA bias if VDD droops below ~2.8V during high-power TX,
+/// preventing MCU brownout resets and SPI Flash corruption.
+#[cfg(all(not(test), target_arch = "arm"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn PVD() {
+    hal::exti::clear_pending(hal::exti::LINE_PVD);
+    if hal::pwr::pvd_below_threshold() {
+        #[cfg(feature = "radio")]
+        {
+            let coord = &mut radio_state().coord;
+            if coord.is_transmitting {
+                bsp::bk4829_fault_quench();
+                coord.is_transmitting = false;
+                coord.tx_state = kernel::service::radio::TxState::Idle;
+            }
+        }
+    }
+}
+
 /// USBD (USB 2.0 Full-Speed Device) interrupt handler (IRQ 31).
 /// Services bus resets, EP0 control transfers (`SET_ADDRESS` within 2 ms), and CDC endpoints
 /// immediately so LCD blits, flash I/O, and BK4829 PA ramps never starve USB enumeration or I/O.
@@ -215,6 +235,15 @@ fn early_init() -> Board {
     }
 
     let board = Board::init();
+    #[cfg(target_arch = "arm")]
+    {
+        // Arm hardware PVD at ~2.8V with digital glitch filter for instant TX brownout quench.
+        hal::pwr::enable_pvd(4, true);
+        unsafe {
+            pac::nvic_clear_pending(pac::Interrupt::PVD as u8);
+            pac::nvic_enable(pac::Interrupt::PVD as u8);
+        }
+    }
     boot::reset::check_reset_cause();
     if warm_dfu_tools {
         bsp::pins::BACKLIGHT.set_high();

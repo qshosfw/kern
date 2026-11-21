@@ -186,6 +186,8 @@ fn enter_hardware_safety_gate() {
     }
 
     bsp::bk4829_fault_quench();
+    #[cfg(feature = "usb")]
+    hal::rcc::disable_usbd();
     bsp::set_status_led(bsp::StatusLed::Red);
 
     // Re-entrant fault or secondary panic inside diagnostics must reset immediately

@@ -1298,14 +1298,28 @@ impl RadioCoordinator {
         {
             self.tot_elapsed_10ms = self.tot_elapsed_10ms.saturating_add(1);
 
-            // Silicon Thermal & Supply Protection:
-            // Poll on-die MCU temperature and battery droop every 500ms (50 ticks) during active TX.
-            // If temperature exceeds 65.0°C (650 deci-C) or battery droops into low state while on High PA,
-            // fold back PA bias to Medium (level 1) to protect final-stage RF transistors.
-            // Check thermal/battery droop every 320 ms (bitmask avoids software division on M0+).
-            if (self.tot_elapsed_10ms & 31) == 0 && !self.pa_thermal_foldback_active {
+            // Silicon Thermal & Supply Protection (checked every 320 ms, bitmask avoids M0+ div):
+            // - Emergency cutoff: die >= 85.0°C or VDDA < 2.85V -> abort TX immediately.
+            // - Stage 2 foldback: die >= 78.0°C or VDDA < 2.95V -> drop PA to Low (level 0).
+            // - Stage 1 foldback: die >= 65.0°C, low battery, or VDDA < 3.05V -> drop High to Med (1).
+            if (self.tot_elapsed_10ms & 31) == 0 {
                 let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-                if (pwr.mcu_temp_deci_c >= 650 || pwr.is_low)
+                let vdda_valid = pwr.vdda_mv >= 1800;
+                if pwr.mcu_temp_deci_c >= 850 || (vdda_valid && pwr.vdda_mv < 2850) {
+                    self.pa_thermal_foldback_active = true;
+                    self.stop_tx(radio);
+                    return Some(RadioEvent::TotExpired);
+                } else if pwr.mcu_temp_deci_c >= 780 || (vdda_valid && pwr.vdda_mv < 2950) {
+                    if !self.pa_thermal_foldback_active
+                        || self.effective_tx_channel().power != RfPowerLevel::Low
+                    {
+                        self.pa_thermal_foldback_active = true;
+                        radio.tx_ramp_up(0);
+                    }
+                } else if !self.pa_thermal_foldback_active
+                    && (pwr.mcu_temp_deci_c >= 650
+                        || pwr.is_low
+                        || (vdda_valid && pwr.vdda_mv < 3050))
                     && self.effective_tx_channel().power == RfPowerLevel::High
                 {
                     self.pa_thermal_foldback_active = true;
