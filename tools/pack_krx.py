@@ -244,7 +244,7 @@ class KrxPackageBuilder:
             if width <= 8:
                 bits.append(val & 0xFF)
             else:
-                bits.extend(struct.pack("<H", val & 0xFFFF))
+                bits.extend(struct.pack(">H", val & 0xFFFF))
         self.assets.extend(struct.pack("<BBBB", kind & 0xFF, width & 0xFF, height & 0xFF, len(bits) & 0xFF))
         self.assets.extend(bits)
         align4(self.assets)

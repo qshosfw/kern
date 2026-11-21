@@ -547,9 +547,11 @@ mod tests {
             KrxPreamble::find_icon_asset(SETTINGS_KRX, kernel::runtime::ASSET_ICON_8)
                 .expect("settings.krx must carry its 8x8 icon in SECTION_ASSETS");
         assert_eq!((w8, h8, bits8.len()), (8, 8, 8));
+        assert_eq!(bits8, gfx::icons::ICON_APP_SETTINGS);
         let (w16, h16, bits16) =
             KrxPreamble::find_icon_asset(SETTINGS_KRX, kernel::runtime::ASSET_ICON_16)
                 .expect("settings.krx must carry its 16x16 icon in SECTION_ASSETS");
         assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
+        assert_eq!(bits16, gfx::icons::ICON_16_SETTINGS);
     }
 }

@@ -1025,7 +1025,24 @@ impl Orchestrator {
     ) {
         match cmd {
             Shortcut::None => {}
-            Shortcut::LaunchApp(id) => self.switch_app(ctx, id as usize),
+            Shortcut::LaunchApp(id) => {
+                #[cfg(all(
+                    not(any(test, feature = "resident_settings")),
+                    feature = "filesystem",
+                    feature = "krx_native"
+                ))]
+                if id as usize == APP_ID_SETTINGS {
+                    match crate::runtime::launch_krx_package(ctx, "/apps/settings.krx", 0) {
+                        Ok(_) => return,
+                        Err(kernel::runtime::KrxLaunchError::ReadFailed) => {}
+                        Err(e) => {
+                            crate::runtime::show_launch_error_dialog(ctx, "/apps/settings.krx", e);
+                            return;
+                        }
+                    }
+                }
+                self.switch_app(ctx, id as usize);
+            }
             Shortcut::CloseApp => self.pop_active_app(ctx),
             Shortcut::Flashlight => {
                 if bsp::pins::FLASHLIGHT.is_high() {
@@ -1036,7 +1053,9 @@ impl Orchestrator {
             }
             Shortcut::LockKeypad => self.toggle_keypad_lock(),
             Shortcut::Sleep => {
-                self.lock_mgr.sleep_requested = true;
+                if !crate::system::is_headless() {
+                    self.lock_mgr.sleep_requested = true;
+                }
             }
         }
     }

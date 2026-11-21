@@ -145,13 +145,18 @@ pub fn load_entries(
             }
 
             let (icon_8, icon_16) = cat_ref.resolved_icons(app, loaded_16);
-            entries[count] = LauncherEntry {
+            let entry = LauncherEntry {
                 title: app.title.as_str(),
                 icon_8,
                 icon_16,
                 target: LauncherTarget::Package(pkg_idx as u8),
             };
-            count += 1;
+            if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/settings.krx") {
+                entries[1] = entry;
+            } else {
+                entries[count] = entry;
+                count += 1;
+            }
         }
 
         // 3. Built-In Utilities & Information
@@ -558,9 +563,40 @@ mod tests {
     #[test]
     fn launcher_entries_and_targets_are_compact() {
         assert!(core::mem::size_of::<LauncherTarget>() <= 8);
+        catalog::get_catalog().entries.clear();
         let entries = load_entries(None);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].title(), "Radio");
         assert_eq!(entries[1].title(), "Settings");
+        assert_eq!(entries[1].target, LauncherTarget::App(APP_ID_SETTINGS as u8));
+    }
+
+    #[test]
+    fn settings_krx_replaces_builtin_settings_slot_without_duplication() {
+        let cat = catalog::get_catalog();
+        cat.entries.clear();
+        let _ = cat.entries.push(catalog::PackageCatalogEntry {
+            app_class: kernel::runtime::KrxClass::Native,
+            exec_type: kernel::runtime::KrxExecType::App,
+            lifecycle_flags: 0,
+            is_valid: true,
+            has_config: false,
+            scopes: 0,
+            icon_id: ::abi::icon::APP_SETTINGS as u16,
+            caps: 0,
+            icon_16_off: 0,
+            icon_8: *gfx::icons::ICON_APP_SETTINGS,
+            title: catalog::SmallStr::from_str("Settings"),
+            path: catalog::SmallStr::from_str("/apps/settings.krx"),
+        });
+
+        let entries = load_entries(None);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[1].title(), "Settings");
+        assert_eq!(entries[1].target, LauncherTarget::Package(0));
+        assert_eq!(entries[2].title(), "Torch");
+        assert_eq!(entries[3].title(), "About");
+
+        cat.entries.clear();
     }
 }

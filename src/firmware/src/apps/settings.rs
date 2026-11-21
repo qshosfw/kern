@@ -68,28 +68,25 @@ pub mod app {
     use kernel::app::{App, EventResult, ModalResult};
     use kernel::event::{Event, KeyCode, KeyState};
 
+    const TAG_MISSING_SETTINGS: u8 = 19;
     const TAG_RESET_SETTINGS: u8 = 20;
     const TAG_REBOOT_FW: u8 = 21;
 
-    /// Compact ROM Settings Launcher & Safe-Mode Recovery Fallback (`16 B` in `OS_APP_STORAGE`).
-    /// Launches `/apps/settings.krx` when available, or provides essential display/audio/reset
-    /// controls when storage is unmounted or `/apps/settings.krx` is not installed.
+    /// Compact ROM Missing-Settings Dialog & Safe-Mode Recovery Fallback.
+    ///
+    /// When `/apps/settings.krx` is installed, `Orchestrator` and `Launcher` launch it directly.
+    /// This lightweight ROM fallback is entered only when `/apps/settings.krx` is missing:
+    /// it immediately prompts the user to install `settings.krx` via Dock or RigWire, and offers
+    /// an optional Safe Recovery screen (`Reset Settings`, `Restart Radio`).
     #[repr(C)]
     pub struct SettingsApp {
         pub(crate) title: &'static str,
         pub(crate) sel: u8,
-        pub(crate) editing: bool,
+        pub(crate) recovery_mode: bool,
     }
 
-    const FALLBACK_PROPS: [u8; 4] = [
-        ::abi::prop::CONTRAST,
-        ::abi::prop::BACKLIGHT_MAX,
-        ::abi::prop::VOLUME,
-        ::abi::prop::KEY_BEEP,
-    ];
-
     utils::static_bytes!(
-        static FALLBACK_LABELS = b"Contrast\0Brightness\0AF Volume\0Key Beep\0Reset Settings\0Restart Radio\0";
+        static RECOVERY_LABELS = b"Reset Settings\0Restart Radio\0";
     );
 
     #[inline(always)]
@@ -102,7 +99,7 @@ pub mod app {
             unsafe {
                 (*ptr).title = "Settings";
                 (*ptr).sel = 0;
-                (*ptr).editing = false;
+                (*ptr).recovery_mode = false;
             }
         }
 
@@ -117,13 +114,21 @@ pub mod app {
         fn on_start(&mut self, ctx: &mut SysContext) {
             self.title = "Settings";
             self.sel = 0;
-            self.editing = false;
-            #[cfg(all(feature = "filesystem", feature = "krx_native"))]
-            let _ = crate::runtime::launch_krx_package(ctx, "/apps/settings.krx", 0);
+            self.recovery_mode = false;
+            ctx.show_confirm(
+                TAG_MISSING_SETTINGS,
+                "Settings Missing",
+                "Install settings.krx via Dock or RigWire.\nOpen Safe Recovery?",
+                "Recovery",
+                "Close",
+            );
         }
 
         #[inline(never)]
         fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
+            if !self.recovery_mode {
+                return EventResult::Ignored;
+            }
             let code = match *event {
                 Event::Key {
                     code,
@@ -139,65 +144,34 @@ pub mod app {
                 _ => return EventResult::Ignored,
             };
 
-            if self.editing {
-                let prop_id = FALLBACK_PROPS[(self.sel as usize).min(3)];
-                match code {
-                    KeyCode::Up | KeyCode::Key2 | KeyCode::Down | KeyCode::Key8 => {
-                        let up = matches!(code, KeyCode::Up | KeyCode::Key2);
-                        if let Some((min, max, step)) = ::abi::prop::lookup_bounds(prop_id) {
-                            let cur = ctx.config.prop_get(prop_id);
-                            let next = if up {
-                                cur.saturating_add(step).min(max)
-                            } else {
-                                cur.saturating_sub(step).max(min)
-                            };
-                            let _ = ctx.config.prop_set(prop_id, next);
-                        }
-                        EventResult::Consumed
-                    }
-                    KeyCode::Menu | KeyCode::Key5 | KeyCode::Exit => {
-                        self.editing = false;
-                        let _ = ctx.flush_config();
-                        EventResult::Consumed
-                    }
-                    _ => EventResult::Consumed,
+            match code {
+                KeyCode::Up | KeyCode::Key2 | KeyCode::Down | KeyCode::Key8 => {
+                    self.sel ^= 1;
+                    EventResult::Consumed
                 }
-            } else {
-                match code {
-                    KeyCode::Up | KeyCode::Key2 => {
-                        self.sel = if self.sel > 0 { self.sel - 1 } else { 5 };
-                        EventResult::Consumed
+                KeyCode::Menu | KeyCode::Key5 => {
+                    if self.sel == 0 {
+                        ctx.show_hold_confirm(
+                            TAG_RESET_SETTINGS,
+                            "Reset Settings?",
+                            "Restore factory defaults?",
+                            "Hold",
+                            "Cancel",
+                            1200,
+                        );
+                    } else {
+                        ctx.show_hold_confirm(
+                            TAG_REBOOT_FW,
+                            "Restart Radio?",
+                            "Save & restart now?",
+                            "Hold",
+                            "Cancel",
+                            800,
+                        );
                     }
-                    KeyCode::Down | KeyCode::Key8 => {
-                        self.sel = if self.sel < 5 { self.sel + 1 } else { 0 };
-                        EventResult::Consumed
-                    }
-                    KeyCode::Menu | KeyCode::Key5 => {
-                        if self.sel < 4 {
-                            self.editing = true;
-                        } else if self.sel == 4 {
-                            ctx.show_hold_confirm(
-                                TAG_RESET_SETTINGS,
-                                "Reset Settings?",
-                                "Restore defaults?",
-                                "Hold",
-                                "Cancel",
-                                1200,
-                            );
-                        } else {
-                            ctx.show_hold_confirm(
-                                TAG_REBOOT_FW,
-                                "Restart Radio?",
-                                "Save & restart now?",
-                                "Hold",
-                                "Cancel",
-                                800,
-                            );
-                        }
-                        EventResult::Consumed
-                    }
-                    _ => EventResult::Ignored,
+                    EventResult::Consumed
                 }
+                _ => EventResult::Ignored,
             }
         }
 
@@ -206,8 +180,18 @@ pub mod app {
             ctx: &mut SysContext,
             result: &ModalResult<'_>,
         ) -> EventResult {
-            if let ModalResult::Confirmed(tag) = *result {
-                if tag == TAG_RESET_SETTINGS {
+            match *result {
+                ModalResult::Confirmed(TAG_MISSING_SETTINGS) => {
+                    self.recovery_mode = true;
+                    self.title = "Safe Recovery";
+                    self.sel = 0;
+                    EventResult::Consumed
+                }
+                ModalResult::Canceled(TAG_MISSING_SETTINGS) => {
+                    ctx.post_event(crate::apps::Shortcut::CloseApp.into());
+                    EventResult::Consumed
+                }
+                ModalResult::Confirmed(TAG_RESET_SETTINGS) => {
                     unsafe {
                         crate::config::MasterConfig::init_in_place(ctx.config);
                     }
@@ -215,44 +199,34 @@ pub mod app {
                     ctx.config.hw_dirty = 0x3F;
                     #[cfg(feature = "filesystem")]
                     let _ = ctx.config.save_all(ctx.storage);
-                    return EventResult::Consumed;
-                } else if tag == TAG_REBOOT_FW {
+                    ctx.show_popup(0, "Safe Recovery", "Defaults restored.");
+                    EventResult::Consumed
+                }
+                ModalResult::Confirmed(TAG_REBOOT_FW) => {
                     let _ = ctx.flush_config();
                     kernel::power::PowerControl::reboot();
                 }
+                _ => EventResult::Ignored,
             }
-            EventResult::Ignored
         }
 
         #[inline(never)]
-        fn render(&self, canvas: &mut Canvas, ctx: &SysContext) {
-            let start = if self.sel >= 4 {
-                (self.sel - 3) as usize
-            } else {
-                0
-            };
-            let mut num_buf = [0u8; 5];
-            for vis in 0..4usize {
-                let idx = start + vis;
-                if idx >= 6 {
-                    break;
-                }
-                let y = (9 + vis * 13) as u8;
-                let is_sel = idx == self.sel as usize;
-                let fg = if is_sel {
+        fn render(&self, canvas: &mut Canvas, _ctx: &SysContext) {
+            if !self.recovery_mode {
+                return;
+            }
+            for idx in 0..2usize {
+                let y = (11 + idx * 14) as u8;
+                let fg = if idx == self.sel as usize {
                     gfx::widgets::draw_selection_capsule(
                         canvas,
-                        [2, y, 120, 13],
-                        if self.editing {
-                            gfx::widgets::CAPSULE_ROUND
-                        } else {
-                            gfx::widgets::CAPSULE_FILL_ROUND
-                        },
+                        [2, y, 124, 13],
+                        gfx::widgets::CAPSULE_FILL_ROUND,
                     )
                 } else {
                     Color::Fill
                 };
-                let label = utils::format::nth_cstr(&FALLBACK_LABELS, idx as u8);
+                let label = utils::format::nth_cstr(&RECOVERY_LABELS, idx as u8);
                 gfx::text::draw_str(
                     canvas,
                     6,
@@ -261,21 +235,16 @@ pub mod app {
                     &gfx::fonts::mumatrix_regular::FONT,
                     fg,
                 );
-                if idx < 4 {
-                    let val = ctx.config.prop_get(FALLBACK_PROPS[idx]) as u32;
-                    let val_str = gfx::text::format_u32(val, &mut num_buf);
-                    gfx::text::draw_str_align(
-                        canvas,
-                        119,
-                        y as i16 + 9,
-                        val_str,
-                        &gfx::fonts::tomthumb::FONT,
-                        fg,
-                        gfx::text::Align::Right,
-                    );
-                }
             }
-            gfx::widgets::draw_scrollbar(canvas, 125, 9, 52, start, 6, 4);
+            gfx::text::draw_str_align(
+                canvas,
+                64,
+                56,
+                "Install /apps/settings.krx",
+                &gfx::fonts::tomthumb::FONT,
+                Color::Fill,
+                gfx::text::Align::Center,
+            );
         }
 
         fn on_exit(&mut self, ctx: &mut SysContext) {
