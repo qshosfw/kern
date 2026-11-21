@@ -46,8 +46,16 @@ impl AppsView {
                 let short = strip_apps_prefix(name);
                 if is_system_module_file(short) {
                     if dst != i {
-                        let e = unsafe { *self.entries.get_unchecked(i) };
-                        unsafe { *self.entries.get_unchecked_mut(dst) = e };
+                        // Copy 8 u32 words manually to avoid pulling in 1.3 KB compiler_builtins::memmove
+                        unsafe {
+                            let sp = self.entries.as_ptr().add(i) as *const u32;
+                            let dp = self.entries.as_mut_ptr().add(dst) as *mut u32;
+                            let mut w = 0usize;
+                            while w < 8 {
+                                *dp.add(w) = *sp.add(w);
+                                w += 1;
+                            }
+                        }
                     }
                     dst += 1;
                 }
