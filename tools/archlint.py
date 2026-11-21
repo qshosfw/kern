@@ -13,7 +13,7 @@ docs/flash_audit_measured_plan.md §11 (Refactor Pattern Catalogue).
 """
 import argparse, collections, hashlib, itertools, json, os, re, sys
 
-ROOT = "src"
+ROOT = "crates"
 # Allowed dependency direction (crate -> crates it may `use`). Anything else is a layering violation.
 LAYERS = {
     "pac": {"cortex_m"}, "traits": set(), "utils": {"cortex_m"}, "crypto": {"utils"},
@@ -24,7 +24,10 @@ LAYERS = {
     "drivers": {"hal", "bsp", "pac", "traits", "utils", "kernel", "kernfs", "crypto", "calib", "cortex_m"},
     "firmware": None,  # integration crate: anything, but see APP_RULES
 }
-CRATE_NAMES = {"driver": "drivers", "py32_hal": "hal", "py32f071_pac": "pac"}
+CRATE_NAMES = {
+    "driver": "drivers", "py32_hal": "hal", "py32f071_pac": "pac",
+    "hal-traits": "traits", "fs": "kernfs", "util": "utils", "uv-k1": "bsp",
+}
 EXTERN = {"py32_hal": "hal", "py32f071_pac": "pac", "drivers": "drivers", "kernel": "kernel", "gfx": "gfx",
           "kernfs": "kernfs", "utils": "utils", "crypto": "crypto", "bsp": "bsp", "traits": "traits", "calib": "calib",
           "cortex_m": "cortex_m"}
@@ -32,7 +35,7 @@ EXTERN = {"py32_hal": "hal", "py32f071_pac": "pac", "drivers": "drivers", "kerne
 APP_RULES = [
     (r"firmware/src/apps/", {"drivers", "hal", "pac", "bsp", "cortex_m"}, "APPS-TOUCH-HW"),
     (
-        r"driver/src/(st7565|py25q16|bk4829|bk1080|backlight|uart|wire|audio|battery|filesystem|gnss)",
+        r"drivers/src/(st7565|py25q16|bk4829|bk1080|backlight|uart|wire|audio|battery|filesystem|gnss)",
         {"hal", "pac", "bsp"},
         "DRIVER-TOUCH-MCU",
     ),
@@ -378,8 +381,8 @@ def report(a, F):
         with contextlib.redirect_stdout(buf):
             totals[name] = fn(argparse.Namespace(**{**vars(a), "top": 10_000, "verbose": False}), F)
         for line in buf.getvalue().splitlines():
-            for path in re.findall(r"(src/[\w/]+)\.rs", line):
-                parts = [x for x in path.split("/") if x != "src"]
+            for path in re.findall(r"(crates/[\w/-]+)\.rs", line):
+                parts = [x for x in path.split("/") if x not in ("crates", "src")]
                 score["/".join(parts[:3])] += 1
     print("══════════════════════════════════════════════════════════════════")
     print(" 🔎 KERN SOURCE ARCHITECTURE & DESIGN SMELL REPORT")

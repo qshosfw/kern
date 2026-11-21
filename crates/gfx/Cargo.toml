@@ -5,11 +5,11 @@ edition = "2024"
 description = "Graphics library and font rendering for kern firmware"
 
 [dependencies]
-kern-platform-traits = { path = "../../platform/traits" }
-kernel = { path = "../../kernel" }
-utils = { path = "../utils" }
+kern-platform-traits = { path = "../hal-traits" }
+kernel = { path = "../kernel" }
+utils = { path = "../util" }
 heapless = { workspace = true }
-abi = { path = "../../abi" }
+abi = { path = "../abi" }
 
 [features]
 default = []

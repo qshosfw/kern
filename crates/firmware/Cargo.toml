@@ -4,20 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-py32-pac = { path = "../platform/pac", package = "py32f071-pac" }
-py32-hal = { path = "../platform/hal" }
-bsp = { path = "../platform/bsp" }
-drivers = { path = "../driver", default-features = false, features = ["display"] }
+py32-pac = { path = "../mcu/py32f071/pac", package = "py32f071-pac" }
+py32-hal = { path = "../mcu/py32f071/hal" }
+bsp = { path = "../board/uv-k1" }
+drivers = { path = "../drivers", default-features = false, features = ["display"] }
 abi = { path = "../abi" }
 kernel = { path = "../kernel", default-features = false }
-gfx = { path = "../lib/gfx", default-features = false }
+gfx = { path = "../gfx", default-features = false }
 cortex-m = { workspace = true }
 cortex-m-rt = { workspace = true }
 heapless = { workspace = true }
-kernfs = { path = "../lib/kernfs" }
-crypto = { path = "../lib/crypto" }
-utils = { path = "../lib/utils" }
-calib = { path = "../lib/calib" }
+kernfs = { path = "../fs" }
+crypto = { path = "../crypto" }
+utils = { path = "../util" }
+calib = { path = "../calib" }
 
 [features]
 default = [

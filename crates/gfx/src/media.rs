@@ -1462,7 +1462,7 @@ mod tests {
         cjk[32..40].copy_from_slice(&[0x10, 0x7E, 0x10, 0x3C, 0x52, 0x52, 0x2C, 0x00]);
         cjk[40..48].copy_from_slice(&[0x10, 0x10, 0xFE, 0x92, 0x92, 0xFE, 0x10, 0x10]);
 
-        let tiny5 = include_bytes!("../../../../assets/media/tiny5.fnt");
+        let tiny5 = include_bytes!("../../../assets/media/tiny5.fnt");
         let mut canvas = Canvas::new();
 
         // Mixed Latin + Cyrillic (from tiny5.fnt) + Japanese 'あ' + Chinese '中' (from cjk pack) + missing '漢' (tofu □)
@@ -1508,7 +1508,7 @@ mod tests {
 
     #[test]
     fn bundled_kern_kit_and_tiny5_packs_decode_cleanly() {
-        let kit = include_bytes!("../../../../assets/media/kern_kit.icn");
+        let kit = include_bytes!("../../../assets/media/kern_kit.icn");
         let hdr = IconPackHeader::from_bytes(kit[..16].try_into().unwrap());
         assert!(hdr.is_valid());
         assert_eq!(hdr.count, 128);
@@ -1529,7 +1529,7 @@ mod tests {
         ));
         assert!(px(&canvas, 3, 1)); // Heart body lit
 
-        let apps16 = include_bytes!("../../../../assets/media/kern_apps_16.icn");
+        let apps16 = include_bytes!("../../../assets/media/kern_apps_16.icn");
         let ahdr = IconPackHeader::from_bytes(apps16[..16].try_into().unwrap());
         assert!(ahdr.is_valid());
         assert_eq!(ahdr.count, 16);
@@ -1551,7 +1551,7 @@ mod tests {
         ));
         assert!(px(&canvas, 7, 1)); // Spectrum center peak
 
-        let font = include_bytes!("../../../../assets/media/tiny5.fnt");
+        let font = include_bytes!("../../../assets/media/tiny5.fnt");
         let fhdr = FontPackHeader::from_bytes(font[..16].try_into().unwrap());
         assert!(fhdr.is_valid());
         assert!(fhdr.glyph_count >= 3600);
@@ -1585,7 +1585,7 @@ mod tests {
 
     #[test]
     fn glyph_cache_eliminates_flash_reads_and_cjk_wraps_cleanly() {
-        let font = include_bytes!("../../../../assets/media/tiny5.fnt");
+        let font = include_bytes!("../../../assets/media/tiny5.fnt");
         let hdr = FontPackHeader::from_bytes(font[..16].try_into().unwrap());
         let mut cache = FontGlyphCache::<16>::new();
         let reads = core::cell::Cell::new(0usize);
@@ -1672,10 +1672,10 @@ mod tests {
 
     #[test]
     fn bundled_language_packs_lookup_labels_and_fallback() {
-        let ru = include_bytes!("../../../../assets/media/lang/ru.lng");
-        let ja = include_bytes!("../../../../assets/media/lang/ja.lng");
-        let zh = include_bytes!("../../../../assets/media/lang/zh.lng");
-        let es = include_bytes!("../../../../assets/media/lang/es.lng");
+        let ru = include_bytes!("../../../assets/media/lang/ru.lng");
+        let ja = include_bytes!("../../../assets/media/lang/ja.lng");
+        let zh = include_bytes!("../../../assets/media/lang/zh.lng");
+        let es = include_bytes!("../../../assets/media/lang/es.lng");
 
         let mut buf = [0u8; 48];
         assert_eq!(lookup_lang_str(ru, "Settings", &mut buf), Some("Настройки"));
