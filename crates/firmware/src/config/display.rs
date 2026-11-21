@@ -74,15 +74,11 @@ impl DisplayConfig {
         super::write_cstr(&mut self.splash_path, path);
     }
 
-    #[inline(never)]
     fn backlight_timeout_code(&self) -> u16 {
-        match self.backlight_mode {
-            0 => 0,
-            1 => 5000,
-            2 => 10000,
-            3 => 30000,
-            4 => 60000,
-            _ => u16::MAX,
+        if self.backlight_mode >= 5 {
+            u16::MAX
+        } else {
+            (::abi::prop::options::BACKLIGHT_TIMEOUT_S[self.backlight_mode as usize] as u16) * 1000
         }
     }
 

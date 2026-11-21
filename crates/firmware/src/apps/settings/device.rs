@@ -11,8 +11,7 @@ pub const MODEL_OPTIONS: &str = "UV-K1\0UV-K5 V3\0Custom...\0";
 #[cfg(not(feature = "text_input"))]
 pub const MODEL_OPTIONS: &str = "UV-K1\0UV-K5 V3\0";
 
-pub const SPLASH_TIME_OPTIONS: &str = "Skip\00.5s\01.0s\02.0s\03.0s\0";
-pub const BOOT_ANIM_OPTIONS: &str = "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0";
+pub use ::abi::prop::options::{BOOT_ANIM as BOOT_ANIM_OPTIONS, SPLASH_TIME as SPLASH_TIME_OPTIONS};
 
 setting_page!(pub SPLASH_PAGE = [
     #[cfg(feature = "filesystem")]

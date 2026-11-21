@@ -100,8 +100,8 @@ props! {
     // Battery
     BATTERY_TYPE         = (4, 1)  0..=5   / 1,
     BATTERY_FORMAT       = (4, 2)  0..=8   / 1,
-    POWER_PROFILE        = (4, 3)  0..=3   / 1,
-    AUTO_POWER_OFF       = (4, 4)  0..=5   / 1,
+    POWER_PROFILE        = (4, 3)  0..=2   / 1,
+    AUTO_POWER_OFF       = (4, 4)  0..=3   / 1,
     CHARGE_DETECT        = (4, 5)  0..=1   / 1,
     // Apps
     LAUNCHER_STYLE       = (5, 1)  0..=1   / 1,
@@ -132,4 +132,102 @@ const _: () = {
 #[inline(never)]
 pub fn find(id: u8) -> Option<&'static Prop> {
     TABLE.iter().find(|p| p.id == id)
+}
+
+/// Canonical NUL-separated choice option lists and timing lookup tables for OS properties.
+/// Shared across firmware configuration, `kern-sdk`, and the external Settings package.
+pub mod options {
+    pub const BACKLIGHT_TIME: &str = "Off\05s\010s\030s\01m\0Always On\0";
+    pub const SHADING: &str = "Grayscale\0Dither\0Monochrome\0";
+    pub const ANIMATION: &str = "Off\0On\0";
+
+    pub const KEY_BEEP: &str = "Off\0Tone\0Click\0Double\0Warning\0Scroll\0Custom\0";
+    pub const BOOT_JINGLE: &str = "Off\0Chime\0Nokia\0Chirp\0GameBoy\0";
+    pub const AUDIO_PROFILE: &str = "Flat\0Clean\0Mid\0Boost\0Max\0";
+
+    pub const PTT_MODE: &str = "Momentary\0Toggle / Latch\02x Press Latch\0";
+    pub const HOLD_DELAY: &str = "250ms\0350ms\0500ms\0750ms\0";
+    pub const REPEAT_RATE: &str = "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0";
+    pub const F_KEY_TIMEOUT: &str = "Toggle\01s\02s\03s\05s\0";
+    pub const AUTO_LOCK: &str = "Off\015s\030s\01 min\02 min\0";
+
+    pub const BATTERY_K5: &str = "1600 mAh\02200 mAh\03500 mAh\0External\0";
+    pub const BATTERY_K1: &str = "1500 mAh\02500 mAh\0External\0";
+    pub const BATTERY_FORMAT: &str =
+        "NONE\0VOLTAGE\0PERCENT\0ICON\0I+VOLT\0I+PERC\0VOLT\0PERC\0TEMP\0";
+    pub const AUTO_POWER_OFF: &str = "Off\015 Mins\030 Mins\01 Hour\0";
+    pub const POWER_PROFILE: &str = "Power Save\0Balanced\0Performance\0";
+
+    pub const SPLASH_TIME: &str = "Skip\00.5s\01.0s\02.0s\03.0s\0";
+    pub const BOOT_ANIM: &str = "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0";
+
+    pub const LAUNCHER_STYLE: &str = "Grid\0List\0";
+    pub const STARTUP_APP: &str = "Home\0Radio\0";
+
+    pub const CPU_CLOCK_48: &str = "16 MHz\024 MHz\032 MHz\048 MHz\0";
+    pub const CPU_CLOCK_72: &str = "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0";
+    pub const UART_BAUD: &str = "115200\038400\0";
+
+    pub const HOLD_DELAY_CS: [u8; 4] = [25, 35, 50, 75];
+    pub const REPEAT_RATE_MS: [u8; 4] = [30, 50, 80, 120];
+    pub const F_KEY_TIMEOUT_S: [u8; 5] = [0, 1, 2, 3, 5];
+    pub const AUTO_LOCK_S: [u8; 5] = [0, 15, 30, 60, 120];
+    pub const BACKLIGHT_TIMEOUT_S: [u8; 5] = [0, 5, 10, 30, 60];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn count_packed(s: &str) -> u8 {
+        s.as_bytes().iter().filter(|&&b| b == 0).count() as u8
+    }
+
+    #[test]
+    fn choice_option_lists_match_property_bounds() {
+        for (prop_id, packed) in [
+            (BACKLIGHT_TIME, options::BACKLIGHT_TIME),
+            (SHADING_MODE, options::SHADING),
+            (UI_ANIMATIONS, options::ANIMATION),
+            (KEY_BEEP, options::KEY_BEEP),
+            (BOOT_JINGLE, options::BOOT_JINGLE),
+            (AUDIO_PROFILE, options::AUDIO_PROFILE),
+            (PTT_MODE, options::PTT_MODE),
+            (HOLD_DELAY, options::HOLD_DELAY),
+            (REPEAT_RATE, options::REPEAT_RATE),
+            (F_KEY_TIMEOUT, options::F_KEY_TIMEOUT),
+            (AUTO_LOCK, options::AUTO_LOCK),
+            (BATTERY_FORMAT, options::BATTERY_FORMAT),
+            (AUTO_POWER_OFF, options::AUTO_POWER_OFF),
+            (POWER_PROFILE, options::POWER_PROFILE),
+            (BOOT_SPLASH_DURATION, options::SPLASH_TIME),
+            (BOOT_SPLASH_ANIM, options::BOOT_ANIM),
+            (LAUNCHER_STYLE, options::LAUNCHER_STYLE),
+            (CPU_CLOCK, options::CPU_CLOCK_72),
+            (UART_BAUD, options::UART_BAUD),
+        ] {
+            let prop = find(prop_id).expect("declared property");
+            assert_eq!(
+                count_packed(packed),
+                prop.max + 1,
+                "option count mismatch for prop {prop_id:#04x}"
+            );
+        }
+        assert_eq!(
+            options::HOLD_DELAY_CS.len() as u8,
+            find(HOLD_DELAY).unwrap().max + 1
+        );
+        assert_eq!(
+            options::REPEAT_RATE_MS.len() as u8,
+            find(REPEAT_RATE).unwrap().max + 1
+        );
+        assert_eq!(
+            options::F_KEY_TIMEOUT_S.len() as u8,
+            find(F_KEY_TIMEOUT).unwrap().max + 1
+        );
+        assert_eq!(
+            options::AUTO_LOCK_S.len() as u8,
+            find(AUTO_LOCK).unwrap().max + 1
+        );
+    }
 }

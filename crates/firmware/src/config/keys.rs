@@ -67,61 +67,19 @@ impl KeyConfig {
     }
 
     pub fn hold_delay_ms(&self) -> u16 {
-        match self.hold_delay {
-            0 => 300,
-            1 => 400,
-            2 => 500,
-            3 => 750,
-            _ => 400,
-        }
+        (::abi::prop::options::HOLD_DELAY_CS[self.hold_delay.min(3) as usize] as u16) * 10
     }
 
     pub fn repeat_rate_ms(&self) -> u16 {
-        match self.repeat_rate {
-            0 => 60,
-            1 => 80,
-            2 => 100,
-            3 => 150,
-            _ => 80,
-        }
-    }
-
-    pub fn hold_ticks(&self) -> u32 {
-        (self.hold_delay_ms() as u32) / 50
-    }
-
-    pub fn repeat_ticks(&self) -> u32 {
-        (self.repeat_rate_ms() as u32).max(50) / 50
+        ::abi::prop::options::REPEAT_RATE_MS[self.repeat_rate.min(3) as usize] as u16
     }
 
     pub fn f_key_timeout_ms(&self) -> u32 {
-        match self.f_key_timeout {
-            0 => 0,
-            1 => 1000,
-            2 => 2000,
-            3 => 3000,
-            4 => 5000,
-            _ => 3000,
-        }
+        (::abi::prop::options::F_KEY_TIMEOUT_S[self.f_key_timeout.min(4) as usize] as u32) * 1000
     }
 
     pub fn auto_lock_ms(&self) -> u32 {
-        match self.auto_lock {
-            0 => 0,
-            1 => 15_000,
-            2 => 30_000,
-            3 => 60_000,
-            4 => 120_000,
-            _ => 0,
-        }
-    }
-
-    pub fn f_key_timeout_ticks(&self) -> u32 {
-        self.f_key_timeout_ms() / 50
-    }
-
-    pub fn auto_lock_ticks(&self) -> u32 {
-        self.auto_lock_ms() / 50
+        (::abi::prop::options::AUTO_LOCK_S[self.auto_lock.min(4) as usize] as u32) * 1000
     }
 }
 

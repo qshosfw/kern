@@ -2,9 +2,10 @@
 
 use super::page::{ChoiceId, SettingDef, SettingField, UNIT_NONE, UNIT_PERCENT, setting_page};
 
-pub const BACKLIGHT_TIME_OPTIONS: &str = "Off\05s\010s\030s\01m\0Always On\0";
-pub const SHADING_OPTIONS: &str = "Grayscale\0Dither\0Monochrome\0";
-pub const ANIMATION_OPTIONS: &str = "Off\0On\0";
+pub use ::abi::prop::options::{
+    ANIMATION as ANIMATION_OPTIONS, BACKLIGHT_TIME as BACKLIGHT_TIME_OPTIONS,
+    SHADING as SHADING_OPTIONS,
+};
 
 setting_page!(pub DISPLAY_PAGE = [
     ("Backlight Time", SettingDef::choice(ChoiceId::BacklightTime, SettingField::BACKLIGHT_TIME)),

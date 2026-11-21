@@ -2,16 +2,13 @@
 
 use super::page::{ChoiceId, MetricId, PageId, SettingDef, SettingField, UNIT_MV, setting_page};
 
-pub const BATTERY_K5_OPTIONS: &str = "1600 mAh\02200 mAh\03500 mAh\0External\0";
+pub use ::abi::prop::options::{
+    AUTO_POWER_OFF as AUTO_POWER_OFF_OPTIONS, BATTERY_FORMAT as BATTERY_FORMAT_OPTIONS,
+    BATTERY_K1 as BATTERY_K1_OPTIONS, BATTERY_K5 as BATTERY_K5_OPTIONS,
+    POWER_PROFILE as POWER_PROFILE_OPTIONS,
+};
 pub static BATTERY_K5_TYPES: [u8; 4] = [0, 1, 2, 5];
-
-pub const BATTERY_K1_OPTIONS: &str = "1500 mAh\02500 mAh\0External\0";
 pub static BATTERY_K1_TYPES: [u8; 3] = [3, 4, 5];
-
-pub const BATTERY_FORMAT_OPTIONS: &str =
-    "NONE\0VOLTAGE\0PERCENT\0ICON\0I+VOLT\0I+PERC\0VOLT\0PERC\0TEMP\0";
-pub const AUTO_POWER_OFF_OPTIONS: &str = "Off\015 Mins\030 Mins\01 Hour\0";
-pub const POWER_PROFILE_OPTIONS: &str = "Power Save\0Balanced\0Performance\0";
 
 #[inline(always)]
 pub fn battery_options_and_types(nav_layout: u8) -> (&'static str, &'static [u8]) {

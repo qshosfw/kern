@@ -2,8 +2,9 @@
 
 use super::page::{ChoiceId, SettingDef, SettingField, setting_page};
 
-pub const LAUNCHER_STYLE_OPTIONS: &str = "Grid\0List\0";
-pub const STARTUP_APP_OPTIONS: &str = "Home\0Radio\0";
+pub use ::abi::prop::options::{
+    LAUNCHER_STYLE as LAUNCHER_STYLE_OPTIONS, STARTUP_APP as STARTUP_APP_OPTIONS,
+};
 
 setting_page!(pub APPS_PAGE = [
     ("Style", SettingDef::choice(ChoiceId::LauncherStyle, SettingField::LAUNCHER_STYLE)),

@@ -7,11 +7,11 @@ use crate::apps::shortcut::{
 };
 use gfx::gui::modules::menu::{MenuItem, MenuItemType, SheetOptions, ShortString};
 
-pub const PTT_MODE_OPTIONS: &str = "Momentary\0Toggle / Latch\02x Press Latch\0";
-pub const HOLD_DELAY_OPTIONS: &str = "250ms\0350ms\0500ms\0750ms\0";
-pub const REPEAT_RATE_OPTIONS: &str = "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0";
-pub const F_KEY_TIMEOUT_OPTIONS: &str = "Toggle\01s\02s\03s\05s\0";
-pub const AUTO_LOCK_OPTIONS: &str = "Off\015s\030s\01 min\02 min\0";
+pub use ::abi::prop::options::{
+    AUTO_LOCK as AUTO_LOCK_OPTIONS, F_KEY_TIMEOUT as F_KEY_TIMEOUT_OPTIONS,
+    HOLD_DELAY as HOLD_DELAY_OPTIONS, PTT_MODE as PTT_MODE_OPTIONS,
+    REPEAT_RATE as REPEAT_RATE_OPTIONS,
+};
 
 setting_page!(pub BUTTONS_ROOT_PAGE = [
     ("Shortcuts", SettingDef::submenu(PageId::ButtonsShortcuts)),

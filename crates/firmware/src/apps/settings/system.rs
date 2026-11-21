@@ -17,12 +17,12 @@ use gfx::text::{Align, draw_str_align};
 use gfx::{Canvas, Color};
 
 #[cfg(feature = "overclock_72mhz")]
-pub const CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0";
+pub use ::abi::prop::options::CPU_CLOCK_72 as CPU_CLOCK_OPTIONS;
 #[cfg(not(feature = "overclock_72mhz"))]
-pub const CPU_CLOCK_OPTIONS: &str = "16 MHz\024 MHz\032 MHz\048 MHz\0";
+pub use ::abi::prop::options::CPU_CLOCK_48 as CPU_CLOCK_OPTIONS;
 
 #[cfg(feature = "uart")]
-pub const UART_BAUD_OPTIONS: &str = "115200\038400\0";
+pub use ::abi::prop::options::UART_BAUD as UART_BAUD_OPTIONS;
 
 /// Index in `PageId::System` where modules declaring a `scope::SYSTEM_PAGE` action are inserted.
 #[cfg(feature = "krx_native")]

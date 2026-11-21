@@ -4,9 +4,10 @@
 use super::asset_chooser::AssetId;
 use super::page::{ChoiceId, SettingDef, SettingField, UNIT_DB, UNIT_NONE, setting_page};
 
-pub const KEY_BEEP_OPTIONS: &str = "Off\0Tone\0Click\0Double\0Warning\0Scroll\0";
-pub const BOOT_JINGLE_OPTIONS: &str = "Off\0Chime\0Nokia\0Chirp\0GameBoy\0";
-pub const AUDIO_PROFILE_OPTIONS: &str = "Flat\0Clean\0Mid\0Boost\0Max\0";
+pub use ::abi::prop::options::{
+    AUDIO_PROFILE as AUDIO_PROFILE_OPTIONS, BOOT_JINGLE as BOOT_JINGLE_OPTIONS,
+    KEY_BEEP as KEY_BEEP_OPTIONS,
+};
 
 setting_page!(pub AUDIO_PAGE = [
     ("AF Gain", SettingDef::range(UNIT_NONE, SettingField::VOLUME)),
