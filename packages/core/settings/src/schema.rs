@@ -1,17 +1,31 @@
-//! Declarative Settings Schema: 7 Native Categories, Properties, Choices, and Value Formatters.
+//! Declarative Settings Schema: 7 Full Categories, Submenus, Full Labels & Native OptionSheets.
 //!
-//! Compact 4-byte `align(4)` descriptors + packed NUL-separated string pools:
-//! zero heap, zero `core::fmt`, zero GOT relocations, zero jump-table bloat.
+//! Uses full, unshortened option labels matching (and improving on) resident Settings,
+//! backed by canonical `abi::prop::options` NUL-separated pools for native `OptionSheet` modals.
 
 use kern_sdk::{format_u16_into, icon, nth_packed_slice, prop};
 
 pub const CAT_COUNT: usize = 7;
 
+// Submenu / Drilldown Action IDs (1..=8 show animated chevron when selected)
 pub const ACT_INSTALLED_APPS: u8 = 1;
-pub const ACT_DEVICE_INFO: u8 = 2;
-pub const ACT_RESET_SETTINGS: u8 = 3;
-pub const ACT_REBOOT_RADIO: u8 = 4;
-pub const ACT_SYS_MODULES: u8 = 5;
+pub const ACT_SYS_INFO: u8 = 2;
+pub const ACT_SYS_MODULES: u8 = 3;
+pub const ACT_SUB_SPLASH: u8 = 4;
+pub const ACT_SUB_BTN_TWEAKS: u8 = 5;
+pub const ACT_SUB_BATT_INFO: u8 = 6;
+pub const ACT_SUB_BATT_TWEAKS: u8 = 7;
+pub const ACT_SHORTCUTS: u8 = 8;
+// Leaf-picker / modal Action IDs (9..=17)
+pub const ACT_RESET_SETTINGS: u8 = 9;
+pub const ACT_REBOOT_RADIO: u8 = 10;
+pub const ACT_ASSET_SPLASH: u8 = 11;
+pub const ACT_ASSET_ROGER: u8 = 12;
+pub const ACT_ASSET_JINGLE: u8 = 13;
+pub const ACT_DEV_MODEL: u8 = 14;
+pub const ACT_DEV_OWNER: u8 = 15;
+pub const ACT_DEV_TAG: u8 = 16;
+pub const ACT_DEV_RADIO_ID: u8 = 17;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -29,24 +43,23 @@ pub const UNIT_DB: u8 = 2;
 pub const CH_BL_TIME: u8 = 0;
 pub const CH_SHADING: u8 = 1;
 pub const CH_KEY_BEEP: u8 = 2;
-pub const CH_BOOT_JINGLE: u8 = 3;
-pub const CH_AUDIO_PROF: u8 = 4;
-pub const CH_NAV_LAYOUT: u8 = 5;
-pub const CH_AUTO_LOCK: u8 = 6;
-pub const CH_F_TIMEOUT: u8 = 7;
-pub const CH_HOLD_DELAY: u8 = 8;
-pub const CH_REPEAT: u8 = 9;
-pub const CH_PTT_MODE: u8 = 10;
-pub const CH_BATT_TYPE: u8 = 11;
-pub const CH_BATT_FMT: u8 = 12;
-pub const CH_PWR_PROF: u8 = 13;
-pub const CH_AUTO_OFF: u8 = 14;
-pub const CH_LAUNCHER: u8 = 15;
-pub const CH_STARTUP: u8 = 16;
-pub const CH_PAGER: u8 = 17;
-pub const CH_CPU_CLK: u8 = 18;
-pub const CH_UART_BAUD: u8 = 19;
-pub const CH_MODEL: u8 = 20;
+pub const CH_AUDIO_PROF: u8 = 3;
+pub const CH_AUTO_LOCK: u8 = 4;
+pub const CH_F_TIMEOUT: u8 = 5;
+pub const CH_HOLD_DELAY: u8 = 6;
+pub const CH_REPEAT: u8 = 7;
+pub const CH_PTT_MODE: u8 = 8;
+pub const CH_BATT_K1: u8 = 9;
+pub const CH_BATT_FMT: u8 = 10;
+pub const CH_PWR_PROF: u8 = 11;
+pub const CH_AUTO_OFF: u8 = 12;
+pub const CH_LAUNCHER: u8 = 13;
+pub const CH_STARTUP: u8 = 14;
+pub const CH_PAGER: u8 = 15;
+pub const CH_CPU_CLK: u8 = 16;
+pub const CH_UART_BAUD: u8 = 17;
+pub const CH_SPLASH_ANIM: u8 = 18;
+pub const CH_SPLASH_DUR: u8 = 19;
 
 /// Compact 4-byte setting descriptor (`align(4)` avoids Cortex-M0+ `__aeabi_uread4`).
 #[derive(Clone, Copy)]
@@ -73,7 +86,7 @@ impl Item {
     }
 }
 
-/// Top-level category descriptor matching canonical resident Settings icons (`align(4)`).
+/// Top-level category descriptor (`align(4)`).
 #[derive(Clone, Copy)]
 #[repr(C, align(4))]
 pub struct Category {
@@ -86,125 +99,165 @@ pub struct Category {
 pub const CATEGORIES: [Category; CAT_COUNT] = [
     Category { icon_id: icon::DISPLAY, start: 0, count: 7, _pad: 0 },
     Category { icon_id: icon::AUDIO, start: 7, count: 7, _pad: 0 },
-    Category { icon_id: icon::BUTTONS, start: 14, count: 8, _pad: 0 },
-    Category { icon_id: icon::BATTERY, start: 22, count: 5, _pad: 0 },
-    Category { icon_id: icon::DEVICE, start: 27, count: 2, _pad: 0 },
-    Category { icon_id: icon::APPS, start: 29, count: 6, _pad: 0 },
-    Category { icon_id: icon::SYSTEM, start: 35, count: 5, _pad: 0 },
+    Category { icon_id: icon::BUTTONS, start: 14, count: 6, _pad: 0 },
+    Category { icon_id: icon::BATTERY, start: 20, count: 5, _pad: 0 },
+    Category { icon_id: icon::DEVICE, start: 25, count: 5, _pad: 0 },
+    Category { icon_id: icon::APPS, start: 30, count: 6, _pad: 0 },
+    Category { icon_id: icon::SYSTEM, start: 36, count: 6, _pad: 0 },
 ];
 
-pub const ITEMS: [Item; 40] = [
+// Submenu slice ranges inside `ITEMS`:
+pub const SUB_SPLASH_START: u8 = 42;
+pub const SUB_SPLASH_COUNT: u8 = 3;
+pub const SUB_BTN_TWEAKS_START: u8 = 45;
+pub const SUB_BTN_TWEAKS_COUNT: u8 = 2;
+pub const SUB_BATT_TWEAKS_START: u8 = 47;
+pub const SUB_BATT_TWEAKS_COUNT: u8 = 2;
+
+pub const ITEMS: [Item; 49] = [
     // Display (0..7)
     Item::choice(prop::BACKLIGHT_TIME, 0, CH_BL_TIME),
     Item::num(prop::BACKLIGHT_MAX, 1, UNIT_RAW),
     Item::num(prop::BACKLIGHT_MIN, 2, UNIT_RAW),
     Item::num(prop::CONTRAST, 3, UNIT_PCT),
     Item::toggle(prop::INVERT_PIXELS, 4),
-    Item::toggle(prop::UI_ANIMATIONS, 5),
-    Item::choice(prop::SHADING_MODE, 6, CH_SHADING),
+    Item::choice(prop::SHADING_MODE, 5, CH_SHADING),
+    Item::toggle(prop::UI_ANIMATIONS, 6),
     // Audio (7..14)
     Item::num(prop::VOLUME, 7, UNIT_RAW),
-    Item::choice(prop::KEY_BEEP, 8, CH_KEY_BEEP),
-    Item::num(prop::BEEP_GAIN, 9, UNIT_RAW),
+    Item::num(prop::BEEP_GAIN, 8, UNIT_RAW),
+    Item::choice(prop::KEY_BEEP, 9, CH_KEY_BEEP),
     Item::num(prop::MIC_GAIN, 10, UNIT_DB),
-    Item::num(prop::ROGER_BEEP, 11, UNIT_RAW),
-    Item::choice(prop::AUDIO_PROFILE, 12, CH_AUDIO_PROF),
-    Item::choice(prop::BOOT_JINGLE, 13, CH_BOOT_JINGLE),
-    // Buttons (14..22)
-    Item::choice(prop::NAV_LAYOUT, 14, CH_NAV_LAYOUT),
-    Item::choice(prop::AUTO_LOCK, 15, CH_AUTO_LOCK),
-    Item::choice(prop::F_KEY_TIMEOUT, 16, CH_F_TIMEOUT),
-    Item::toggle(prop::FAST_SCROLL, 17),
-    Item::choice(prop::HOLD_DELAY, 18, CH_HOLD_DELAY),
-    Item::choice(prop::REPEAT_RATE, 19, CH_REPEAT),
-    Item::choice(prop::PTT_MODE, 20, CH_PTT_MODE),
-    Item::toggle(prop::F_DRAWER, 21),
-    // Battery (22..27)
-    Item::choice(prop::BATTERY_TYPE, 22, CH_BATT_TYPE),
-    Item::choice(prop::BATTERY_FORMAT, 23, CH_BATT_FMT),
-    Item::choice(prop::POWER_PROFILE, 24, CH_PWR_PROF),
-    Item::choice(prop::AUTO_POWER_OFF, 25, CH_AUTO_OFF),
-    Item::toggle(prop::CHARGE_DETECT, 26),
-    // Device (27..29)
-    Item::action(ACT_DEVICE_INFO, 27),
-    Item::choice(prop::MODEL, 28, CH_MODEL),
-    // Apps (29..35)
-    Item::action(ACT_INSTALLED_APPS, 29),
-    Item::choice(prop::LAUNCHER_STYLE, 30, CH_LAUNCHER),
-    Item::toggle(prop::SHOW_NUMBERS, 31),
-    Item::toggle(prop::SHOW_LABELS, 32),
-    Item::choice(prop::STARTUP_APP, 33, CH_STARTUP),
-    Item::choice(prop::PAGER_POLICY, 34, CH_PAGER),
-    // System (35..40)
-    Item::action(ACT_SYS_MODULES, 35),
-    Item::choice(prop::CPU_CLOCK, 36, CH_CPU_CLK),
-    Item::choice(prop::UART_BAUD, 37, CH_UART_BAUD),
-    Item::action(ACT_RESET_SETTINGS, 38),
-    Item::action(ACT_REBOOT_RADIO, 39),
+    Item::action(ACT_ASSET_ROGER, 11),
+    Item::action(ACT_ASSET_JINGLE, 12),
+    Item::choice(prop::AUDIO_PROFILE, 13, CH_AUDIO_PROF),
+    // Buttons (14..20)
+    Item::action(ACT_SHORTCUTS, 14),
+    Item::choice(prop::PTT_MODE, 15, CH_PTT_MODE),
+    Item::choice(prop::AUTO_LOCK, 16, CH_AUTO_LOCK),
+    Item::choice(prop::F_KEY_TIMEOUT, 17, CH_F_TIMEOUT),
+    Item::toggle(prop::FAST_SCROLL, 18),
+    Item::action(ACT_SUB_BTN_TWEAKS, 19),
+    // Battery (20..25)
+    Item::choice(prop::BATTERY_TYPE, 20, CH_BATT_K1),
+    Item::choice(prop::BATTERY_FORMAT, 21, CH_BATT_FMT),
+    Item::choice(prop::AUTO_POWER_OFF, 22, CH_AUTO_OFF),
+    Item::action(ACT_SUB_BATT_INFO, 23),
+    Item::action(ACT_SUB_BATT_TWEAKS, 24),
+    // Device (25..30)
+    Item::action(ACT_DEV_MODEL, 25),
+    Item::action(ACT_DEV_OWNER, 26),
+    Item::action(ACT_DEV_TAG, 27),
+    Item::action(ACT_DEV_RADIO_ID, 28),
+    Item::action(ACT_SUB_SPLASH, 29),
+    // Apps (30..36)
+    Item::action(ACT_INSTALLED_APPS, 30),
+    Item::choice(prop::LAUNCHER_STYLE, 31, CH_LAUNCHER),
+    Item::toggle(prop::SHOW_NUMBERS, 32),
+    Item::toggle(prop::SHOW_LABELS, 33),
+    Item::choice(prop::STARTUP_APP, 34, CH_STARTUP),
+    Item::choice(prop::PAGER_POLICY, 35, CH_PAGER),
+    // System (36..42)
+    Item::action(ACT_SYS_INFO, 36),
+    Item::action(ACT_SYS_MODULES, 37),
+    Item::choice(prop::CPU_CLOCK, 38, CH_CPU_CLK),
+    Item::choice(prop::UART_BAUD, 39, CH_UART_BAUD),
+    Item::action(ACT_RESET_SETTINGS, 40),
+    Item::action(ACT_REBOOT_RADIO, 41),
+    // Submenu: Boot Splash (42..45)
+    Item::action(ACT_ASSET_SPLASH, 42),
+    Item::choice(prop::BOOT_SPLASH_ANIM, 43, CH_SPLASH_ANIM),
+    Item::choice(prop::BOOT_SPLASH_DURATION, 44, CH_SPLASH_DUR),
+    // Submenu: Buttons Tweaks (45..47)
+    Item::choice(prop::HOLD_DELAY, 45, CH_HOLD_DELAY),
+    Item::choice(prop::REPEAT_RATE, 46, CH_REPEAT),
+    // Submenu: Battery Tweaks (47..49)
+    Item::toggle(prop::CHARGE_DETECT, 47),
+    Item::choice(prop::POWER_PROFILE, 48, CH_PWR_PROF),
 ];
 
 const CAT_NAMES: &[u8] = b"Display\0Audio\0Buttons\0Battery\0Device\0Apps\0System\0";
 
 const ITEM_LABELS: &[u8] = concat!(
-    "Backlight\0Max Bright\0Min Bright\0Contrast\0Invert LCD\0Animations\0Shading\0",
-    "AF Volume\0Key Beep\0Beep Gain\0Mic Gain\0Roger Beep\0Audio EQ\0Boot Chime\0",
-    "Nav Layout\0Auto Lock\0F Timeout\0Fast Scroll\0Hold Delay\0Repeat Rate\0PTT Mode\0F Drawer\0",
-    "Cell Type\0Bar Format\0Power Mode\0Auto Off\0Chg Detect\0",
-    "Hardware Info\0Model\0",
-    "Installed\0Home Style\0Numbers\0Labels\0Startup\0Pager\0",
-    "Modules\0CPU Clock\0UART Baud\0Reset All\0Restart\0",
+    // Display (0..7)
+    "Backlight Time\0Max Brightness\0Min Brightness\0Contrast\0Invert Pixels\0Shading Mode\0Animations\0",
+    // Audio (7..14)
+    "AF Gain\0Beep Volume\0Key Beep\0Mic Gain\0Roger Beep\0Boot Jingle\0RX Profile\0",
+    // Buttons (14..20)
+    "Shortcuts\0PTT Mode\0Auto Lock\0Sticky F-Key\0Fast Scroll\0Tweaks\0",
+    // Battery (20..25)
+    "Capacity\0Status Bar\0Deep Sleep\0Battery Info\0Tweaks\0",
+    // Device (25..30)
+    "Model\0Owner\0Tag\0Radio ID\0Boot Splash\0",
+    // Apps (30..36)
+    "Installed Apps\0Launcher Style\0Key Badges\0App Titles\0Startup App\0Pager Policy\0",
+    // System (36..42)
+    "System Info\0Modules\0CPU Clock\0UART Baud\0Reset Settings\0Restart Radio\0",
+    // Submenus (42..49)
+    "Image\0Animation\0Duration\0",
+    "Hold Delay\0Repeat Rate\0",
+    "Charge Detect\0Power Profile\0",
 )
 .as_bytes();
 
-/// Single packed choice pool indexed by `CHOICE_BASES[table] + val` (0 jump-table code).
-const CHOICE_BASES: [u8; 21] = [
-    0,  // CH_BL_TIME (6)
-    6,  // CH_SHADING (3)
-    9,  // CH_KEY_BEEP (7)
-    16, // CH_BOOT_JINGLE (5)
-    21, // CH_AUDIO_PROF (5)
-    26, // CH_NAV_LAYOUT (2)
-    28, // CH_AUTO_LOCK (5)
-    33, // CH_F_TIMEOUT (5)
-    38, // CH_HOLD_DELAY (4)
-    42, // CH_REPEAT (4)
-    46, // CH_PTT_MODE (3)
-    49, // CH_BATT_TYPE (3)
-    52, // CH_BATT_FMT (9)
-    61, // CH_PWR_PROF (3)
-    64, // CH_AUTO_OFF (4)
-    68, // CH_LAUNCHER (2)
-    70, // CH_STARTUP (2)
-    72, // CH_PAGER (3)
-    75, // CH_CPU_CLK (5)
-    80, // CH_UART_BAUD (2)
-    82, // CH_MODEL (3)
-];
-
+/// Single packed choice option pool indexed by `CHOICE_RANGES[table]` (0 jump-table bloat).
 const CHOICE_POOL: &[u8] = concat!(
-    "Off\05s\010s\030s\01m\0Always\0",
-    "Gray\0Dither\0Mono\0",
-    "Off\0Tone\0Click\0Double\0Warn\0Scroll\0Custom\0",
-    "Off\0Chime\0Nokia\0Chirp\0GameBoy\0",
+    "Off\05s\010s\030s\01m\0Always On\0",
+    "Grayscale\0Dither\0Monochrome\0",
+    "Off\0Tone\0Click\0Double\0Warning\0Scroll\0Custom\0",
     "Flat\0Clean\0Mid\0Boost\0Max\0",
-    "Std\0Alt\0",
-    "Off\015s\030s\01m\02m\0",
+    "Off\015s\030s\01 min\02 min\0",
     "Toggle\01s\02s\03s\05s\0",
     "250ms\0350ms\0500ms\0750ms\0",
-    "30ms\050ms\080ms\0120ms\0",
-    "Moment\0Latch\02xLatch\0",
-    "1500mAh\02500mAh\0Ext\0",
-    "None\0Volt\0Pct\0Icon\0I+V\0I+%\0V2\0%2\0Temp\0",
-    "Save\0Bal\0Perf\0",
-    "Off\015m\030m\01h\0",
+    "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0",
+    "Momentary\0Toggle / Latch\02x Press Latch\0",
+    "1500 mAh\02500 mAh\0External\0",
+    "None\0Voltage\0Percent\0Icon\0I+Volt\0I+Perc\0Volt\0Perc\0Temp\0",
+    "Power Save\0Balanced\0Performance\0",
+    "Off\015 Mins\030 Mins\01 Hour\0",
     "Grid\0List\0",
     "Home\0Radio\0",
-    "Bal\0Fast\0Max\0",
-    "16M\024M\032M\048M\072M\0",
-    "115k\038k\0",
-    "UV-K1\0UV-K5\0K10Pro\0",
+    "Balanced\0Fast\0Max Cache\0",
+    "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0",
+    "115200\038400\0",
+    "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0",
+    "Skip\00.5s\01.0s\02.0s\03.0s\0",
 )
 .as_bytes();
+
+const CHOICE_OFFSETS: [u16; 21] = [
+    0, 27, 55, 98, 124, 150, 169, 193, 243, 283, 310, 368, 400, 426, 436, 447, 471, 506, 519, 565,
+    590,
+];
+
+#[inline(never)]
+pub fn choice_options(table: u8) -> &'static [u8] {
+    let i = (table as usize).min(19);
+    let s = unsafe { *CHOICE_OFFSETS.get_unchecked(i) } as usize;
+    let e = unsafe { *CHOICE_OFFSETS.get_unchecked(i + 1) } as usize;
+    unsafe { core::slice::from_raw_parts(CHOICE_POOL.as_ptr().add(s), e - s) }
+}
+
+/// Map `prop::BATTERY_TYPE` raw enum (3, 4, 5 on K1) to OptionSheet index (0, 1, 2).
+#[inline(always)]
+pub fn batt_type_to_idx(raw: u8) -> u8 {
+    match raw {
+        3 => 0,
+        4 => 1,
+        5 => 2,
+        _ => raw.min(2),
+    }
+}
+
+/// Map K1 OptionSheet index (0, 1, 2) back to `prop::BATTERY_TYPE` (3, 4, 5).
+#[inline(always)]
+pub fn batt_idx_to_type(idx: u8) -> u8 {
+    match idx {
+        0 => 3,
+        1 => 4,
+        _ => 5,
+    }
+}
 
 #[inline(always)]
 pub fn category(idx: u8) -> Category {
@@ -223,9 +276,8 @@ pub fn item_label(idx: u8) -> &'static [u8] {
 }
 
 #[inline(always)]
-pub fn item_at(cat_idx: u8, row: u8) -> Item {
-    let c = category(cat_idx);
-    let idx = (c.start as usize + row as usize).min(ITEMS.len() - 1);
+pub fn item_at_slice(start: u8, row: u8) -> Item {
+    let idx = (start as usize + row as usize).min(ITEMS.len() - 1);
     unsafe { *ITEMS.get_unchecked(idx) }
 }
 
@@ -233,10 +285,14 @@ pub fn item_at(cat_idx: u8, row: u8) -> Item {
 #[inline(never)]
 pub fn format_value<'a>(item: Item, val: u8, buf: &'a mut [u8; 16]) -> &'a [u8] {
     match item.kind {
-        Kind::Toggle => b"", // Rendered as crisp native checkbox icon
+        Kind::Toggle => b"",
         Kind::Choice => {
-            let base = unsafe { *CHOICE_BASES.get_unchecked((item.meta as usize).min(20)) };
-            let s = nth_packed_slice(CHOICE_POOL, base.saturating_add(val));
+            let eff = if item.meta == CH_BATT_K1 {
+                batt_type_to_idx(val)
+            } else {
+                val
+            };
+            let s = nth_packed_slice(choice_options(item.meta), eff);
             if s.is_empty() {
                 format_u16_into(val as u16, 0, b"", buf)
             } else {

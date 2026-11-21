@@ -1,6 +1,6 @@
 name = "Settings"
 output = "settings.krx"
-profile = "n1"
+profile = "p0"
 icon = "APP_SETTINGS"
 caps = [
     "DISPLAY_DIRECT",
@@ -13,6 +13,25 @@ caps = [
     "TASK_CONTROL",
 ]
 root = "main.rs"
+root_max = 7040
+leaves = [
+    "leaf_app_load.rs",
+    "leaf_app_hdr.rs",
+    "leaf_app_body.rs",
+    "leaf_sc_render.rs",
+    "leaf_sc_open.rs",
+    "leaf_sc_apply.rs",
+    "leaf_asset_open.rs",
+    "leaf_asset_apply.rs",
+    "leaf_dev_load.rs",
+    "leaf_dev_prompt.rs",
+    "leaf_dev_apply.rs",
+    "leaf_apps_render.rs",
+    "leaf_apps_ops.rs",
+    "leaf_info_render.rs",
+    "leaf_sys_ops.rs",
+    "leaf_app_icon.rs",
+]
 
 icon_8 = """
 #..##..#

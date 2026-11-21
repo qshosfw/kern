@@ -1,8 +1,7 @@
 //! Lean ABI-Native UI Wrappers for External Settings.
 //!
-//! Delegates capsule drawing, icons, checkboxes, oscillating chevrons, and scrollbars
-//! directly to OS `KRX_WIDGET_MENU_ITEM` / `KRX_WIDGET_SCROLLBAR` syscalls — zero
-//! double-implemented UI rendering.
+//! Delegates capsule drawing, icons, checkboxes, oscillating chevrons, OptionSheets,
+//! and scrollbars directly to OS syscalls — zero double-implemented UI rendering.
 
 use kern_sdk::{
     COLOR_CLEAR, KRX_STATUS_CUSTOM_TITLE, KRX_STATUS_DIVIDER, KRX_STATUS_VISIBLE,
@@ -71,17 +70,23 @@ pub const fn scroll_top(sel: u8) -> u8 {
 /// Set the OS status bar title without calling `memset`/`__aeabi_memclr`.
 #[inline(never)]
 pub fn set_title(api: &KrxApiTable, title: &[u8]) {
-    let mut words = [0u32; 16];
-    let ptr = words.as_mut_ptr() as *mut u8;
+    let mut raw = core::mem::MaybeUninit::<[u32; 16]>::uninit();
+    let ptr = raw.as_mut_ptr() as *mut u32;
     unsafe {
-        *ptr = KRX_STATUS_VISIBLE | KRX_STATUS_DIVIDER | KRX_STATUS_CUSTOM_TITLE;
+        let mut w = 0usize;
+        while w < 16 {
+            *ptr.add(w) = 0;
+            w += 1;
+        }
+        let bptr = ptr as *mut u8;
+        *bptr = KRX_STATUS_VISIBLE | KRX_STATUS_DIVIDER | KRX_STATUS_CUSTOM_TITLE;
         let n = title.len().min(16);
         let mut i = 0usize;
         while i < n {
-            *ptr.add(12 + i) = *title.get_unchecked(i);
+            *bptr.add(12 + i) = *title.get_unchecked(i);
             i += 1;
         }
-        api.set_status_bar(&*(ptr as *const KrxStatusBar));
+        api.set_status_bar(&*(bptr as *const KrxStatusBar));
     }
 }
 
