@@ -126,6 +126,19 @@ pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibS
     }
 }
 
+/// Constant-time byte-slice equality to prevent timing side-channels on MAC tags.
+#[inline(never)]
+fn ct_eq_bytes(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
 /// Verify whether a signature matches both the MCU UID and the calibration contents.
 pub fn verify_device_signature(
     calib: &[u8; 512],
@@ -136,7 +149,7 @@ pub fn verify_device_signature(
         return false;
     }
     let computed = compute_device_signature(calib, mcu_uid);
-    sig.hardware_serial == computed.hardware_serial && sig.auth_tag == computed.auth_tag
+    sig.hardware_serial == computed.hardware_serial && ct_eq_bytes(&sig.auth_tag, &computed.auth_tag)
 }
 
 /// Strict semantic validation of calibration memory block.
@@ -402,7 +415,7 @@ impl SystemCalibration {
             sig_present = true;
             if n >= 32 && &sig_buf[..4] == CALIB_SIG_IDENT {
                 let computed = compute_device_signature(&self.raw, mcu_uid);
-                bound = sig_buf[8..32] == computed.as_bytes()[8..32];
+                bound = ct_eq_bytes(&sig_buf[8..32], &computed.as_bytes()[8..32]);
             }
         }
 

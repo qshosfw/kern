@@ -81,7 +81,10 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.session_unlocked = false;
         #[cfg(feature = "secure_fs")]
         {
-            self.enc_key.fill(0);
+            for b in self.enc_key.iter_mut() {
+                unsafe { core::ptr::write_volatile(b, 0) };
+            }
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
             self.key_installed = false;
         }
     }
@@ -115,11 +118,14 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
 
     #[inline(never)]
     fn map_error(err: FsError) -> StorageError {
-        if err as u8 == FsError::LowPower as u8 {
-            return StorageError::IoError;
+        match err {
+            FsError::NotFound => StorageError::NotFound,
+            FsError::IoError | FsError::LowPower => StorageError::IoError,
+            FsError::CorruptedData => StorageError::CorruptedData,
+            FsError::CapacityFull => StorageError::CapacityFull,
+            FsError::AccessDenied => StorageError::AccessDenied,
+            FsError::InvalidPath => StorageError::InvalidPath,
         }
-        // FsError discriminants (0,1,2,4,5,7) match StorageError identically.
-        unsafe { core::mem::transmute::<FsError, StorageError>(err) }
     }
 
     #[inline(never)]

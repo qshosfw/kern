@@ -148,7 +148,8 @@ impl NmeaParser {
             fix.valid = true;
             if let Some(knots_x100) = parse_scaled_u32(spd_s, 2) {
                 // 1 knot = 51.4444 cm/s
-                fix.speed_cms = ((knots_x100 * 5144) / 10_000).min(u16::MAX as u32) as u16;
+                fix.speed_cms =
+                    (knots_x100.saturating_mul(5144) / 10_000).min(u16::MAX as u32) as u16;
             }
             if let Some(cog) = parse_scaled_u32(cog_s, 2) {
                 fix.course_cdeg = cog.min(35_999) as u16;
@@ -285,10 +286,10 @@ fn parse_scaled_u32(s: &[u8], scale: usize) -> Option<u32> {
 fn parse_scaled_i32(s: &[u8], scale: usize) -> Option<i32> {
     if let Some(rest) = s.strip_prefix(b"-") {
         let u = parse_scaled_u32(rest, scale)?;
-        Some(-(u as i32))
+        i32::try_from(u).ok()?.checked_neg()
     } else {
         let u = parse_scaled_u32(s, scale)?;
-        Some(u as i32)
+        i32::try_from(u).ok()
     }
 }
 
@@ -298,9 +299,19 @@ fn parse_nmea_coord(coord: &[u8], hemi: &[u8]) -> Option<i32> {
     if dot < 4 {
         return None;
     }
+    let (sign, max_deg) = match hemi {
+        b"N" => (1i64, 90i64),
+        b"S" => (-1i64, 90i64),
+        b"E" => (1i64, 180i64),
+        b"W" => (-1i64, 180i64),
+        _ => return None,
+    };
     let deg_len = dot - 2;
     let deg = parse_uint(&coord[..deg_len])? as i64;
     let min_int = parse_uint(&coord[deg_len..dot])? as i64;
+    if min_int >= 60 || deg > max_deg {
+        return None;
+    }
     let frac_bytes = &coord[dot + 1..];
     let mut frac_e5 = 0i64;
     let mut count = 0usize;
@@ -319,11 +330,9 @@ fn parse_nmea_coord(coord: &[u8], hemi: &[u8]) -> Option<i32> {
     }
     let min_e5 = min_int * 100_000 + frac_e5;
     let deg_e7 = deg * 10_000_000 + (min_e5 * 100) / 60;
-    let sign = match hemi {
-        b"S" | b"W" => -1i64,
-        b"N" | b"E" => 1i64,
-        _ => return None,
-    };
+    if deg_e7 > max_deg * 10_000_000 {
+        return None;
+    }
     Some((deg_e7 * sign) as i32)
 }
 
