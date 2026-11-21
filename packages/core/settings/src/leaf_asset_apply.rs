@@ -7,8 +7,8 @@ mod shared;
 use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry};
 use shared::{
-    ASSET_ROGER, ASSET_SPLASH, MAX_ASSETS, SharedState, byte_at, copy_bytes, cstr_slice,
-    fill_bytes, set_byte, subslice, subslice_mut,
+    ASSET_LANG, ASSET_ROGER, ASSET_SPLASH, MAX_ASSETS, SharedState, byte_at, copy_bytes,
+    cstr_slice, set_byte, subslice, subslice_mut,
 };
 
 fn format_pretty(raw: &[u8], out: &mut [u8]) {
@@ -67,6 +67,8 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         (b"/pref/display.cfg", 48, 7, 12)
     } else if dom == ASSET_ROGER {
         (b"/pref/audio.cfg", 80, 4, 9)
+    } else if dom == ASSET_LANG {
+        (b"/pref/system.cfg", 80, 40, 44)
     } else {
         (b"/pref/audio.cfg", 80, 7, 41)
     };
@@ -75,7 +77,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         let mut pretty = [0u8; 16];
         if pick == 0 {
             set_byte(cfg, flag_off, 0);
-            copy_bytes(&mut pretty, 0, b"Off");
+            copy_bytes(&mut pretty, 0, if dom == ASSET_LANG { b"English" } else { b"Off" });
         } else if pick - 1 < (st.asset_count as usize).min(MAX_ASSETS) {
             set_byte(cfg, flag_off, 1);
             let src = unsafe { st.assets().get_unchecked(pick - 1) };
@@ -86,10 +88,12 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
             &mut st.splash_name
         } else if dom == ASSET_ROGER {
             &mut st.roger_name
+        } else if dom == ASSET_LANG {
+            &mut st.lang_name
         } else {
             &mut st.jingle_name
         };
-        copy_bytes(name_dst, 0, &pretty);
+        copy_bytes(name_dst, 0, subslice(&pretty, 0, 12));
         let crc = api.crc32(subslice(cfg, 0, clen - 4)).to_le_bytes();
         copy_bytes(subslice_mut(cfg, clen - 4, clen), 0, &crc);
         if api.write_file(file, subslice(cfg, 0, clen)) {

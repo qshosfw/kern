@@ -7,8 +7,8 @@ mod shared;
 use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
 use shared::{
-    ASSET_ROGER, ASSET_SPLASH, MAX_ASSETS, MODAL_ASSET_PICK, SharedState, byte_at, copy_bytes,
-    cstr_slice, fill_bytes, set_byte, subslice,
+    ASSET_LANG, ASSET_ROGER, ASSET_SPLASH, MAX_ASSETS, MODAL_ASSET_PICK, SharedState, byte_at,
+    copy_bytes, cstr_slice, fill_bytes, set_byte, subslice,
 };
 
 fn format_pretty(raw: &[u8], out: &mut [u8]) -> usize {
@@ -61,16 +61,17 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
     let dom = st.arg0;
     st.asset_domain = dom;
-    let (dir, title): (&[u8], &[u8]) = match dom {
-        ASSET_SPLASH => (b"/user/splash", b"Splash Image"),
-        ASSET_ROGER => (b"/user/rogers", b"Roger Beep"),
-        _ => (b"/user/jingles", b"Boot Jingle"),
+    let (dir, title, def0): (&[u8], &[u8], &[u8]) = match dom {
+        ASSET_SPLASH => (b"/user/splash", b"Splash Image", b"Off\0"),
+        ASSET_ROGER => (b"/user/rogers", b"Roger Beep", b"Off\0"),
+        ASSET_LANG => (b"/user/lang", b"Language", b"English\0"),
+        _ => (b"/user/jingles", b"Boot Jingle", b"Off\0"),
     };
     let mut raw_e = MaybeUninit::<[KrxDirEntry; MAX_ASSETS]>::uninit();
     let entries = unsafe { &mut *raw_e.as_mut_ptr() };
     let total = api.list_dir(dir, entries).min(MAX_ASSETS);
 
-    let mut pos = copy_bytes(&mut st.sheet_buf, 0, b"Off\0");
+    let mut pos = copy_bytes(&mut st.sheet_buf, 0, def0);
     let mut cnt = 0usize;
     let mut i = 0usize;
     let mut raw_p = MaybeUninit::<[u8; 16]>::uninit();
@@ -89,7 +90,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 copy_bytes(dst_fp, p + 1, raw)
             };
             let nlen = format_pretty(subslice(dst_fp, 0, plen), pretty);
-            if nlen > 0 && pos + nlen + 1 < 128 {
+            if nlen > 0 && pos + nlen + 1 < 112 {
                 pos = copy_bytes(&mut st.sheet_buf, pos, subslice(pretty, 0, nlen));
                 set_byte(&mut st.sheet_buf, pos, 0);
                 pos += 1;

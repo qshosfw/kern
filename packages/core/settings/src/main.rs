@@ -16,23 +16,23 @@ use kern_sdk::{
 };
 
 use schema::{
-    ACT_ASSET_JINGLE, ACT_ASSET_ROGER, ACT_ASSET_SPLASH, ACT_DEV_MODEL, ACT_DEV_OWNER,
-    ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_INSTALLED_APPS, ACT_REBOOT_RADIO, ACT_RESET_SETTINGS,
-    ACT_SHORTCUTS, ACT_SUB_BATT_INFO, ACT_SUB_BATT_TWEAKS, ACT_SUB_BTN_TWEAKS, ACT_SUB_SPLASH,
-    ACT_SYS_INFO, ACT_SYS_MODULES, CAT_COUNT, CH_BATT_K1, Kind, SUB_BATT_TWEAKS_COUNT,
-    SUB_BATT_TWEAKS_START, SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START, SUB_SPLASH_COUNT,
-    SUB_SPLASH_START, batt_idx_to_type, batt_type_to_idx, cat_name, category, choice_options,
-    format_value, item_at_slice, item_label,
+    ACT_ASSET_JINGLE, ACT_ASSET_LANG, ACT_ASSET_ROGER, ACT_ASSET_SPLASH, ACT_BANDPLANS,
+    ACT_DEV_MODEL, ACT_DEV_OWNER, ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_INSTALLED_APPS,
+    ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SHORTCUTS, ACT_SUB_BATT_INFO, ACT_SUB_BATT_TWEAKS,
+    ACT_SUB_BTN_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO, ACT_SYS_MODULES, CAT_COUNT, CH_BATT_K1, Kind,
+    SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START, SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START,
+    SUB_SPLASH_COUNT, SUB_SPLASH_START, batt_idx_to_type, batt_type_to_idx, cat_name, category,
+    choice_options, format_value, item_at_slice, item_label,
 };
 use shared::{
-    CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH,
-    CMD_APPS_REQ_DEL, CMD_DEV_MODEL_PICK, CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY,
+    CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH, CMD_APPS_REQ_DEL, CMD_BP_LOAD,
+    CMD_BP_RENDER, CMD_BP_TOGGLE_TX, CMD_DEV_MODEL_PICK, CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY,
     CMD_DEV_TEXT_PROMPT, CMD_INFO_BATT, CMD_INFO_SYS, CMD_SC_APPLY_PICK, CMD_SC_LOAD,
     CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER, CMD_SYS_DO_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET,
     LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER, LEAF_ASSET_APPLY,
-    LEAF_ASSET_OPEN, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT, LEAF_INFO_RENDER,
-    LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SYS_OPS, MODAL_ASSET_PICK, MODAL_CHOICE,
-    MODAL_DELETE_APP, MODAL_MODEL_PICK, MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS,
+    LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
+    LEAF_INFO_RENDER, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SYS_OPS, MODAL_ASSET_PICK,
+    MODAL_CHOICE, MODAL_DELETE_APP, MODAL_MODEL_PICK, MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS,
     MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL, MODAL_TEXT_OWNER,
     MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice, subslice, trimmed_slice,
 };
@@ -52,6 +52,7 @@ enum View {
     Shortcuts = 5,
     BattInfo = 6,
     SysInfo = 7,
+    Bandplans = 8,
 }
 
 struct SettingsState {
@@ -111,7 +112,7 @@ impl SettingsState {
     }
 
     fn sync_status_bar(&self, api: &KrxApiTable) {
-        const VT: &[u8] = b"Settings\0Tweaks\0Installed Apps\0Modules\0Shortcuts\0Battery Info\0System Info\0Boot Splash\0";
+        const VT: &[u8] = b"Settings\0Tweaks\0Installed Apps\0Modules\0Shortcuts\0Battery Info\0System Info\0Boot Splash\0Bandplans\0";
         let title: &[u8] = match self.view {
             View::Home => kern_sdk::nth_packed_slice(VT, 0),
             View::Category => cat_name(self.cat_sel),
@@ -121,6 +122,7 @@ impl SettingsState {
             View::Shortcuts => kern_sdk::nth_packed_slice(VT, 4),
             View::BattInfo => kern_sdk::nth_packed_slice(VT, 5),
             View::SysInfo => kern_sdk::nth_packed_slice(VT, 6),
+            View::Bandplans => kern_sdk::nth_packed_slice(VT, 8),
         };
         ui::set_title(api, title);
     }
@@ -195,6 +197,7 @@ impl SettingsState {
             View::InstalledApps => (&mut self.sh.app_sel, self.sh.app_count),
             View::Shortcuts => (&mut self.sh.sc_sel, 21),
             View::BattInfo | View::SysInfo => (&mut self.sh.info_sel, 5),
+            View::Bandplans => (&mut self.sh.bp_sel, self.sh.bp_count),
             View::AppDetail => return,
         };
         if count == 0 {
@@ -299,7 +302,13 @@ impl SettingsState {
                             self.scroller.jump_to_row(0);
                             self.sync_status_bar(api);
                         }
-                        ACT_ASSET_SPLASH..=ACT_ASSET_JINGLE => {
+                        ACT_BANDPLANS => {
+                            self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_LOAD, 0);
+                            self.view = View::Bandplans;
+                            self.scroller.jump_to_row(ui::scroll_top(self.sh.bp_sel));
+                            self.sync_status_bar(api);
+                        }
+                        ACT_ASSET_SPLASH..=ACT_ASSET_LANG => {
                             self.call_leaf(api, LEAF_ASSET_OPEN, 0, item.meta - ACT_ASSET_SPLASH);
                         }
                         ACT_DEV_MODEL => self.call_leaf(api, LEAF_DEV_PROMPT, CMD_DEV_MODEL_SHEET, 0),
@@ -337,6 +346,7 @@ impl SettingsState {
                     self.call_leaf(api, LEAF_SC_OPEN, 0, 0);
                 }
             }
+            View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_TOGGLE_TX, 0),
             View::BattInfo | View::SysInfo => {}
         }
     }
@@ -503,17 +513,14 @@ impl SettingsState {
             let val = if item.kind == Kind::Action { 0 } else { api.prop_get(item.prop_id) };
             let vstr: &[u8] = if item.kind == Kind::Action {
                 match item.meta {
-                    ACT_DEV_MODEL => match self.sh.dev_model_idx {
-                        0 => b"UV-K1",
-                        1 => b"UV-K5 V3",
-                        _ => trimmed_slice(&self.sh.dev_model),
-                    },
+                    ACT_DEV_MODEL => trimmed_slice(&self.sh.dev_model),
                     ACT_DEV_OWNER => trimmed_slice(&self.sh.dev_owner),
                     ACT_DEV_TAG => trimmed_slice(&self.sh.dev_tag),
                     ACT_DEV_RADIO_ID => format_u16_into(self.sh.dev_radio_id as u16, 0, b"", val_buf),
                     ACT_ASSET_SPLASH => cstr_slice(&self.sh.splash_name),
                     ACT_ASSET_ROGER => cstr_slice(&self.sh.roger_name),
                     ACT_ASSET_JINGLE => cstr_slice(&self.sh.jingle_name),
+                    ACT_ASSET_LANG => cstr_slice(&self.sh.lang_name),
                     _ => b"",
                 }
             } else {
@@ -530,7 +537,7 @@ impl SettingsState {
                         flags |= ui::FLAG_TOGGLE_ON;
                     }
                 }
-                Kind::Action if is_sel && item.meta <= ACT_SHORTCUTS => {
+                Kind::Action if is_sel && item.meta <= ACT_BANDPLANS => {
                     flags |= ui::FLAG_CHEVRON;
                 }
                 _ => {}
@@ -575,6 +582,7 @@ impl SettingsState {
             View::Shortcuts => self.call_leaf(api, LEAF_SC_RENDER, CMD_SC_RENDER, 0),
             View::BattInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_BATT, 0),
             View::SysInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_SYS, 0),
+            View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_RENDER, 0),
         }
         api.commit();
     }

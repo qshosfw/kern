@@ -47,7 +47,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 copy_bytes(p, pl, short)
             };
             let slen = pl.saturating_sub(6);
-            if pos + slen + 1 < 128 {
+            if pos + slen + 1 < 112 {
                 let h = hash_app_path(subslice(p, 0, pl));
                 unsafe { *st.sc_mut().target_ids.get_unchecked_mut(tcnt) = h };
                 pos = copy_bytes(&mut st.sheet_buf, pos, subslice(p, 6, pl));

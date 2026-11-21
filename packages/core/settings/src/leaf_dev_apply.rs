@@ -30,6 +30,8 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         if st.cmd == CMD_DEV_MODEL_PICK {
             set_byte(cfg, 1, st.arg0);
             st.dev_model_idx = st.arg0;
+            fill_bytes(&mut st.dev_model, 0);
+            copy_bytes(&mut st.dev_model, 0, if st.arg0 == 0 { b"UV-K1" } else { b"UV-K5 V3" });
         } else {
             let mut raw_t = MaybeUninit::<[u8; 16]>::uninit();
             let txt = unsafe { &mut *raw_t.as_mut_ptr() };

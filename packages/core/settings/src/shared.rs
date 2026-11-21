@@ -21,6 +21,7 @@ pub const LEAF_APPS_OPS: u8 = 13;
 pub const LEAF_INFO_RENDER: u8 = 14;
 pub const LEAF_SYS_OPS: u8 = 15;
 pub const LEAF_APP_ICON: u8 = 16;
+pub const LEAF_BANDPLANS: u8 = 17;
 
 // Modal tags shared across root and leaves
 pub const MODAL_CHOICE: u8 = 30;
@@ -40,6 +41,11 @@ pub const MODAL_REBOOT_RADIO: u8 = 42;
 pub const ASSET_SPLASH: u8 = 0;
 pub const ASSET_ROGER: u8 = 1;
 pub const ASSET_JINGLE: u8 = 2;
+pub const ASSET_LANG: u8 = 3;
+
+pub const CMD_BP_LOAD: u8 = 1;
+pub const CMD_BP_RENDER: u8 = 2;
+pub const CMD_BP_TOGGLE_TX: u8 = 3;
 
 // Leaf command opcodes
 pub const CMD_SC_LOAD: u8 = 1;
@@ -122,13 +128,14 @@ pub struct SharedState {
     pub dev_model: [u8; 12],
     pub dev_radio_id: u32,
 
-    pub splash_name: [u8; 16],
-    pub roger_name: [u8; 16],
-    pub jingle_name: [u8; 16],
+    pub splash_name: [u8; 12],
+    pub roger_name: [u8; 12],
+    pub jingle_name: [u8; 12],
+    pub lang_name: [u8; 12],
 
-    pub sheet_buf: [u8; 128],
+    pub sheet_buf: [u8; 112],
     pub sheet_len: u16,
-    pub sheet_title: [u8; 20],
+    pub sheet_title: [u8; 16],
     pub sheet_title_len: u8,
     pub asset_domain: u8,
     pub asset_count: u8,
@@ -140,6 +147,8 @@ pub struct SharedState {
     pub app_sel: u8,
     pub modules_only: u8,
     pub detail_btn: u8,
+    pub bp_count: u8,
+    pub bp_sel: u8,
     pub detail_scroll: i16,
     pub pool: SharedPool,
     pub detail_sc: DetailOrSc,
@@ -159,12 +168,13 @@ impl SharedState {
             dev_tag: [0; 8],
             dev_model: [0; 12],
             dev_radio_id: 1,
-            splash_name: [0; 16],
-            roger_name: [0; 16],
-            jingle_name: [0; 16],
-            sheet_buf: [0; 128],
+            splash_name: [0; 12],
+            roger_name: [0; 12],
+            jingle_name: [0; 12],
+            lang_name: [0; 12],
+            sheet_buf: [0; 112],
             sheet_len: 0,
-            sheet_title: [0; 20],
+            sheet_title: [0; 16],
             sheet_title_len: 0,
             asset_domain: 0,
             asset_count: 0,
@@ -176,6 +186,8 @@ impl SharedState {
             app_sel: 0,
             modules_only: 0,
             detail_btn: 0,
+            bp_count: 0,
+            bp_sel: 0,
             detail_scroll: 0,
             pool: SharedPool {
                 app_entries: [KrxDirEntry {

@@ -7,7 +7,7 @@ use kern_sdk::{format_u16_into, icon, nth_packed_slice, prop};
 
 pub const CAT_COUNT: usize = 7;
 
-// Submenu / Drilldown Action IDs (1..=8 show animated chevron when selected)
+// Submenu / Drilldown Action IDs (1..=9 show animated chevron when selected)
 pub const ACT_INSTALLED_APPS: u8 = 1;
 pub const ACT_SYS_INFO: u8 = 2;
 pub const ACT_SYS_MODULES: u8 = 3;
@@ -16,16 +16,18 @@ pub const ACT_SUB_BTN_TWEAKS: u8 = 5;
 pub const ACT_SUB_BATT_INFO: u8 = 6;
 pub const ACT_SUB_BATT_TWEAKS: u8 = 7;
 pub const ACT_SHORTCUTS: u8 = 8;
-// Leaf-picker / modal Action IDs (9..=17)
-pub const ACT_RESET_SETTINGS: u8 = 9;
-pub const ACT_REBOOT_RADIO: u8 = 10;
-pub const ACT_ASSET_SPLASH: u8 = 11;
-pub const ACT_ASSET_ROGER: u8 = 12;
-pub const ACT_ASSET_JINGLE: u8 = 13;
-pub const ACT_DEV_MODEL: u8 = 14;
-pub const ACT_DEV_OWNER: u8 = 15;
-pub const ACT_DEV_TAG: u8 = 16;
-pub const ACT_DEV_RADIO_ID: u8 = 17;
+pub const ACT_BANDPLANS: u8 = 9;
+// Leaf-picker / modal Action IDs (10..=19)
+pub const ACT_RESET_SETTINGS: u8 = 10;
+pub const ACT_REBOOT_RADIO: u8 = 11;
+pub const ACT_ASSET_SPLASH: u8 = 12;
+pub const ACT_ASSET_ROGER: u8 = 13;
+pub const ACT_ASSET_JINGLE: u8 = 14;
+pub const ACT_ASSET_LANG: u8 = 15;
+pub const ACT_DEV_MODEL: u8 = 16;
+pub const ACT_DEV_OWNER: u8 = 17;
+pub const ACT_DEV_TAG: u8 = 18;
+pub const ACT_DEV_RADIO_ID: u8 = 19;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -101,20 +103,20 @@ pub const CATEGORIES: [Category; CAT_COUNT] = [
     Category { icon_id: icon::AUDIO, start: 7, count: 7, _pad: 0 },
     Category { icon_id: icon::BUTTONS, start: 14, count: 6, _pad: 0 },
     Category { icon_id: icon::BATTERY, start: 20, count: 5, _pad: 0 },
-    Category { icon_id: icon::DEVICE, start: 25, count: 5, _pad: 0 },
-    Category { icon_id: icon::APPS, start: 30, count: 6, _pad: 0 },
-    Category { icon_id: icon::SYSTEM, start: 36, count: 6, _pad: 0 },
+    Category { icon_id: icon::DEVICE, start: 25, count: 7, _pad: 0 },
+    Category { icon_id: icon::APPS, start: 32, count: 6, _pad: 0 },
+    Category { icon_id: icon::SYSTEM, start: 38, count: 6, _pad: 0 },
 ];
 
 // Submenu slice ranges inside `ITEMS`:
-pub const SUB_SPLASH_START: u8 = 42;
+pub const SUB_SPLASH_START: u8 = 44;
 pub const SUB_SPLASH_COUNT: u8 = 3;
-pub const SUB_BTN_TWEAKS_START: u8 = 45;
+pub const SUB_BTN_TWEAKS_START: u8 = 47;
 pub const SUB_BTN_TWEAKS_COUNT: u8 = 2;
-pub const SUB_BATT_TWEAKS_START: u8 = 47;
+pub const SUB_BATT_TWEAKS_START: u8 = 49;
 pub const SUB_BATT_TWEAKS_COUNT: u8 = 2;
 
-pub const ITEMS: [Item; 49] = [
+pub const ITEMS: [Item; 51] = [
     // Display (0..7)
     Item::choice(prop::BACKLIGHT_TIME, 0, CH_BL_TIME),
     Item::num(prop::BACKLIGHT_MAX, 1, UNIT_RAW),
@@ -144,36 +146,38 @@ pub const ITEMS: [Item; 49] = [
     Item::choice(prop::AUTO_POWER_OFF, 22, CH_AUTO_OFF),
     Item::action(ACT_SUB_BATT_INFO, 23),
     Item::action(ACT_SUB_BATT_TWEAKS, 24),
-    // Device (25..30)
+    // Device (25..32)
     Item::action(ACT_DEV_MODEL, 25),
     Item::action(ACT_DEV_OWNER, 26),
     Item::action(ACT_DEV_TAG, 27),
     Item::action(ACT_DEV_RADIO_ID, 28),
-    Item::action(ACT_SUB_SPLASH, 29),
-    // Apps (30..36)
-    Item::action(ACT_INSTALLED_APPS, 30),
-    Item::choice(prop::LAUNCHER_STYLE, 31, CH_LAUNCHER),
-    Item::toggle(prop::SHOW_NUMBERS, 32),
-    Item::toggle(prop::SHOW_LABELS, 33),
-    Item::choice(prop::STARTUP_APP, 34, CH_STARTUP),
-    Item::choice(prop::PAGER_POLICY, 35, CH_PAGER),
-    // System (36..42)
-    Item::action(ACT_SYS_INFO, 36),
-    Item::action(ACT_SYS_MODULES, 37),
-    Item::choice(prop::CPU_CLOCK, 38, CH_CPU_CLK),
-    Item::choice(prop::UART_BAUD, 39, CH_UART_BAUD),
-    Item::action(ACT_RESET_SETTINGS, 40),
-    Item::action(ACT_REBOOT_RADIO, 41),
-    // Submenu: Boot Splash (42..45)
-    Item::action(ACT_ASSET_SPLASH, 42),
-    Item::choice(prop::BOOT_SPLASH_ANIM, 43, CH_SPLASH_ANIM),
-    Item::choice(prop::BOOT_SPLASH_DURATION, 44, CH_SPLASH_DUR),
-    // Submenu: Buttons Tweaks (45..47)
-    Item::choice(prop::HOLD_DELAY, 45, CH_HOLD_DELAY),
-    Item::choice(prop::REPEAT_RATE, 46, CH_REPEAT),
-    // Submenu: Battery Tweaks (47..49)
-    Item::toggle(prop::CHARGE_DETECT, 47),
-    Item::choice(prop::POWER_PROFILE, 48, CH_PWR_PROF),
+    Item::action(ACT_ASSET_LANG, 29),
+    Item::action(ACT_BANDPLANS, 30),
+    Item::action(ACT_SUB_SPLASH, 31),
+    // Apps (32..38)
+    Item::action(ACT_INSTALLED_APPS, 32),
+    Item::choice(prop::LAUNCHER_STYLE, 33, CH_LAUNCHER),
+    Item::toggle(prop::SHOW_NUMBERS, 34),
+    Item::toggle(prop::SHOW_LABELS, 35),
+    Item::choice(prop::STARTUP_APP, 36, CH_STARTUP),
+    Item::choice(prop::PAGER_POLICY, 37, CH_PAGER),
+    // System (38..44)
+    Item::action(ACT_SYS_INFO, 38),
+    Item::action(ACT_SYS_MODULES, 39),
+    Item::choice(prop::CPU_CLOCK, 40, CH_CPU_CLK),
+    Item::choice(prop::UART_BAUD, 41, CH_UART_BAUD),
+    Item::action(ACT_RESET_SETTINGS, 42),
+    Item::action(ACT_REBOOT_RADIO, 43),
+    // Submenu: Boot Splash (44..47)
+    Item::action(ACT_ASSET_SPLASH, 44),
+    Item::choice(prop::BOOT_SPLASH_ANIM, 45, CH_SPLASH_ANIM),
+    Item::choice(prop::BOOT_SPLASH_DURATION, 46, CH_SPLASH_DUR),
+    // Submenu: Buttons Tweaks (47..49)
+    Item::choice(prop::HOLD_DELAY, 47, CH_HOLD_DELAY),
+    Item::choice(prop::REPEAT_RATE, 48, CH_REPEAT),
+    // Submenu: Battery Tweaks (49..51)
+    Item::toggle(prop::CHARGE_DETECT, 49),
+    Item::choice(prop::POWER_PROFILE, 50, CH_PWR_PROF),
 ];
 
 const CAT_NAMES: &[u8] = b"Display\0Audio\0Buttons\0Battery\0Device\0Apps\0System\0";
@@ -187,13 +191,13 @@ const ITEM_LABELS: &[u8] = concat!(
     "Shortcuts\0PTT Mode\0Auto Lock\0Sticky F-Key\0Fast Scroll\0Tweaks\0",
     // Battery (20..25)
     "Capacity\0Status Bar\0Deep Sleep\0Battery Info\0Tweaks\0",
-    // Device (25..30)
-    "Model\0Owner\0Tag\0Radio ID\0Boot Splash\0",
-    // Apps (30..36)
+    // Device (25..32)
+    "Model\0Owner\0Tag\0Radio ID\0Language\0Bandplans\0Boot Splash\0",
+    // Apps (32..38)
     "Installed Apps\0Launcher Style\0Key Badges\0App Titles\0Startup App\0Pager Policy\0",
-    // System (36..42)
+    // System (38..44)
     "System Info\0Modules\0CPU Clock\0UART Baud\0Reset Settings\0Restart Radio\0",
-    // Submenus (42..49)
+    // Submenus (44..51)
     "Image\0Animation\0Duration\0",
     "Hold Delay\0Repeat Rate\0",
     "Charge Detect\0Power Profile\0",

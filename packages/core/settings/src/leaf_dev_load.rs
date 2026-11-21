@@ -10,7 +10,7 @@ use shared::{
     SharedState, byte_at, copy_bytes, cstr_slice, fill_bytes, set_byte, subslice, subslice_mut,
 };
 
-fn short_name(path: &[u8], active: bool, out: &mut [u8; 16]) {
+fn short_name(path: &[u8], active: bool, out: &mut [u8; 12]) {
     fill_bytes(out, 0);
     if !active || path.is_empty() {
         copy_bytes(out, 0, b"Off");
@@ -38,7 +38,7 @@ fn short_name(path: &[u8], active: bool, out: &mut [u8; 16]) {
     let mut o = 0usize;
     let mut cap = true;
     let mut i = 0usize;
-    while i < clean.len() && o < 15 {
+    while i < clean.len() && o < 11 {
         let b = byte_at(clean, i);
         let ch = if b == b'_' || b == b'-' {
             cap = true;
@@ -75,7 +75,19 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         ]);
         copy_bytes(&mut st.dev_owner, 0, subslice(buf, 8, 20));
         copy_bytes(&mut st.dev_tag, 0, subslice(buf, 20, 28));
-        copy_bytes(&mut st.dev_model, 0, subslice(buf, 28, 40));
+        fill_bytes(&mut st.dev_model, 0);
+        let msrc: &[u8] = match st.dev_model_idx {
+            0 => b"UV-K1",
+            1 => b"UV-K5 V3",
+            _ => subslice(buf, 28, 40),
+        };
+        copy_bytes(&mut st.dev_model, 0, msrc);
+        if byte_at(buf, 40) != 0 {
+            short_name(cstr_slice(subslice(buf, 44, 76)), true, &mut st.lang_name);
+        } else {
+            fill_bytes(&mut st.lang_name, 0);
+            copy_bytes(&mut st.lang_name, 0, b"English");
+        }
     }
     if api.read_file(b"/pref/display.cfg", subslice_mut(buf, 0, 48)) >= 48 {
         short_name(cstr_slice(subslice(buf, 12, 44)), byte_at(buf, 7) != 0, &mut st.splash_name);
