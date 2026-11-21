@@ -92,6 +92,7 @@ class DockRuntime:
         self.start_headless: bool = self.opts.headless
         self._connecting = False
         self.flashing_active = False
+        self._known_devs: set[str] = set()
 
         self.notifier = DesktopNotifier(enabled=bool(self.config.get("os.notifications", True)))
         self.plugins = PluginManager(self)
@@ -193,6 +194,8 @@ class DockRuntime:
     def _on_ports_changed(self, ports: list[DetectedPort]) -> None:
         self.events.emit("ports.changed", {"count": len(ports)}, source="usb")
         active_devs = {p.device for p in ports}
+        newly_plugged = [p for p in ports if p.is_quansheng and p.device not in self._known_devs]
+        self._known_devs = active_devs
         if (
             self.link.connected
             and not self.link.demo_mode
@@ -201,6 +204,15 @@ class DockRuntime:
             and self.link.port not in active_devs
         ):
             self.link.disconnect(reason="USB radio unplugged")
+            return
+        if (
+            newly_plugged
+            and self.auto_connect_usb
+            and not self.link.connected
+            and not self._connecting
+            and not self.flashing_active
+        ):
+            self.connect_async(newly_plugged[0].device, newly_plugged[0])
             return
         self.refresh_tray()
 
@@ -236,6 +248,8 @@ class DockRuntime:
             env["KERN_VOLUME"] = self.link.volume_name
         if self.link.dav_server is not None:
             env["KERN_DAV_URL"] = f"http://127.0.0.1:{self.link.dav_port}/"
+            if self.link.dav_open_target:
+                env["KERN_MOUNT_PATH"] = self.link.dav_open_target
         return env
 
     def open_external_terminal(self) -> str:

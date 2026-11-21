@@ -218,6 +218,7 @@ class FirmwareView:
             GLib.idle_add(self._on_progress, True, f, msg)
 
         def _w() -> None:
+            flashed_ok = False
             try:
                 if is_demo:
                     t0 = time.monotonic()
@@ -226,10 +227,12 @@ class FirmwareView:
                         _page(pg, sim_pages)
                         _prog(pg / float(sim_pages), f"Demo flash · Page {pg}/{sim_pages}")
                         time.sleep(0.03)
+                    flashed_ok = True
                     GLib.idle_add(self._on_toast, f"Simulated {sim_pages} pages in {time.monotonic() - t0:.1f}s")
                 else:
                     res = flash_via_stock_bootloader(port, fw_bytes, progress_cb=_prog, page_cb=_page)
-                    msg = f"Flashed {res['pages']} pages in {res['elapsed_s']:.1f}s"
+                    flashed_ok = True
+                    msg = f"Flashed {res['pages']} pages in {res['elapsed_s']:.1f}s · reconnecting…"
                     GLib.idle_add(self._on_toast, msg)
                     self.runtime.notifier.send("Firmware Flash Complete", msg, notif_id="kern-dock-flash")
             except Exception as exc:
@@ -241,6 +244,17 @@ class FirmwareView:
                     self._on_progress(False, 0.0, "")
                     if is_demo and lk.demo_mode:
                         self._on_leave_demo_bl()
+                    elif flashed_ok and port and not is_demo:
+                        lk.disconnect(reason="Firmware flashed · reconnecting")
+                        GLib.timeout_add(
+                            1800,
+                            lambda p=port: (
+                                self.runtime.connect_async(p)
+                                if (not self.runtime.link.connected and not self.runtime._connecting)
+                                else None,
+                                False,
+                            )[1],
+                        )
                     self._on_stage_redraw()
                     self.refresh()
                     return False

@@ -180,7 +180,7 @@ class TerminalView:
             term.set_colors(fg, bg, palette)
 
             # Ctrl+Shift+C / Ctrl+Shift+V / Ctrl+Plus / Ctrl+Minus / Ctrl+0
-            kc = Gtk.EventControllerKey()
+            kc = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
             kc.connect("key-pressed", self._on_vte_key)
             term.add_controller(kc)
             self._vte_term = term
@@ -192,7 +192,8 @@ class TerminalView:
             frame.append(scroll)
             box.append(frame)
 
-            GLib.idle_add(lambda: (self._spawn_vte(force=False), False)[1])
+            # Lazy-spawn shell when the Terminal tab is actually opened (picks up live KERN_PORT/KERN_MOUNT_PATH)
+            box.connect("map", lambda _w: self._spawn_vte(force=False))
         except Exception as exc:
             box.append(
                 Adw.StatusPage(
@@ -307,6 +308,10 @@ class TerminalView:
             self.console_buf.insert_with_tags_by_name(end, line + "\n", tag)
         else:
             self.console_buf.insert(end, line + "\n")
+        if self.console_buf.get_line_count() > 2000:
+            ok, cut = self.console_buf.get_iter_at_line(self.console_buf.get_line_count() - 1800)
+            if ok:
+                self.console_buf.delete(self.console_buf.get_start_iter(), cut)
         self.console_view.scroll_to_iter(self.console_buf.get_end_iter(), 0.0, False, 0.0, 1.0)
 
     def _copy_console(self) -> None:

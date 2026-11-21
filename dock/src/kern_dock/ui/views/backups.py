@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -44,6 +45,7 @@ class BackupsView:
         self._on_confirm = on_confirm
         self._on_progress = on_progress
         self._loaded_backup: dict[str, Any] | None = None
+        self._busy: bool = False
 
         self.widget = self._build()
 
@@ -116,7 +118,7 @@ class BackupsView:
 
     def _sync_sensitivity(self) -> None:
         lk = self.runtime.link
-        online = lk.connected and lk.link_mode == "kern_os" and lk.fs_backend is not None
+        online = lk.connected and lk.link_mode == "kern_os" and lk.fs_backend is not None and not self._busy
         for r in self._online_rows:
             r.set_sensitive(online)
         can_restore = bool(
@@ -129,13 +131,16 @@ class BackupsView:
         self.restore_btn.set_sensitive(can_restore)
 
     def run_backup(self, *, fmt: str, calib_only: bool) -> None:
+        if self._busy:
+            self._on_toast("A backup or restore is already in progress")
+            return
         lk = self.runtime.link
         if not lk.connected or lk.fs_backend is None:
             self._on_toast("Connect a Kern OS radio first")
             return
         tag = "calib" if calib_only else "kernfs"
         ext = "dat" if fmt == "raw" else fmt
-        slug = lk.volume_name.lower().replace(" ", "_")
+        slug = re.sub(r"[^a-z0-9._-]+", "_", lk.volume_name.lower()).strip("_") or "radio"
         dlg = Gtk.FileDialog(title=f"Save .{ext} Backup")
         dlg.set_initial_name(f"{slug}_{tag}_{time.strftime('%Y%m%d_%H%M%S')}.{ext}")
         be, vname = lk.fs_backend, lk.volume_name
@@ -147,6 +152,8 @@ class BackupsView:
                 return
             if not dest:
                 return
+            self._busy = True
+            self._sync_sensitivity()
             self._on_progress(True, 0.0, "Reading radio files…")
 
             def _w() -> None:
@@ -174,7 +181,13 @@ class BackupsView:
                 except Exception as exc:
                     GLib.idle_add(self._on_toast, f"Backup failed: {exc}")
                 finally:
-                    GLib.idle_add(self._on_progress, False, 0.0, "")
+                    def _done() -> bool:
+                        self._busy = False
+                        self._on_progress(False, 0.0, "")
+                        self._sync_sensitivity()
+                        return False
+
+                    GLib.idle_add(_done)
 
             threading.Thread(target=_w, daemon=True).start()
 
@@ -264,13 +277,16 @@ class BackupsView:
             except GLib.Error:
                 return
             if dest:
-                Path(dest).write_bytes(data)
-                self._on_toast(f"Extracted {Path(dest).name}")
+                try:
+                    Path(dest).write_bytes(data)
+                    self._on_toast(f"Extracted {Path(dest).name}")
+                except Exception as exc:
+                    self._on_toast(f"Extract failed: {exc}")
 
         dlg.save(self.win, None, _picked)
 
     def _confirm_restore_loaded(self) -> None:
-        if not self._loaded_backup:
+        if self._busy or not self._loaded_backup:
             return
         lk = self.runtime.link
         if not lk.connected or lk.fs_backend is None:
@@ -286,6 +302,8 @@ class BackupsView:
         )
 
     def _run_restore(self, src: str, be: Any) -> None:
+        self._busy = True
+        self._sync_sensitivity()
         self._on_progress(True, 0.0, "Verifying & restoring backup…")
 
         def _w() -> None:
@@ -300,6 +318,12 @@ class BackupsView:
             except Exception as exc:
                 GLib.idle_add(self._on_toast, f"Restore failed: {exc}")
             finally:
-                GLib.idle_add(self._on_progress, False, 0.0, "")
+                def _done() -> bool:
+                    self._busy = False
+                    self._on_progress(False, 0.0, "")
+                    self._sync_sensitivity()
+                    return False
+
+                GLib.idle_add(_done)
 
         threading.Thread(target=_w, daemon=True).start()
