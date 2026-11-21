@@ -7,7 +7,9 @@
 use crate::apps::launcher::catalog::{PackageCatalog, PackageCatalogEntry};
 use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO};
 use crate::config::keys::KeyConfig;
-use gfx::gui::modules::menu::{OptionSheet, ShortString};
+#[cfg(any(test, feature = "resident_settings"))]
+use gfx::gui::modules::menu::OptionSheet;
+use gfx::gui::modules::menu::ShortString;
 use kernel::ipc::SysEvent;
 use kernel::runtime::KrxExecType;
 
@@ -18,6 +20,7 @@ pub const F_DRAWER_START_SLOT: usize = 5;
 pub const SLOT_OPTIONS: &str = "S1\0S1+\0S2\0S2+\0M+\0F+1\0F+2\0F+3\0F+4\0F+5\0F+6\0F+7\0F+8\0F+9\0F+0\0F+*\0F+M\0F+S1\0F+S2\0";
 
 /// Packed context scope labels shared by settings selector and shortcut engine.
+#[cfg(any(test, feature = "resident_settings"))]
 pub const CTX_OPTIONS: &str = "Global\0VFO\0Home\0Prefs\0App\0";
 
 #[inline(never)]
@@ -197,6 +200,7 @@ fn builtin_icon(icon_id: u8) -> &'static [u8; 8] {
     gfx::icons::system_icon(icon_id).unwrap_or(gfx::icons::ICON_FOLDER)
 }
 
+#[cfg(any(test, feature = "resident_settings"))]
 #[inline(never)]
 pub fn format_label_into(out: &mut ShortString, title: &str, suffix: &str) {
     out.set_str(title);
@@ -280,6 +284,7 @@ pub fn describe_into(
     }
 }
 
+#[cfg(any(test, feature = "resident_settings"))]
 #[inline(never)]
 pub fn assign_rule(keys: &mut KeyConfig, cur_ctx: u8, slot: usize, target_id: u16) -> u8 {
     if slot >= KEY_SHORTCUT_COUNT {
@@ -327,8 +332,10 @@ pub fn describe(id: u16, cat: &PackageCatalog) -> (ShortString, &'static [u8; 8]
     (s, icon)
 }
 
+#[cfg(any(test, feature = "resident_settings"))]
 pub const MAX_PICKER_ITEMS: usize = 28;
 
+#[cfg(any(test, feature = "resident_settings"))]
 #[repr(C)]
 struct PickerScratch {
     icons: [&'static [u8; 8]; MAX_PICKER_ITEMS],
@@ -337,11 +344,13 @@ struct PickerScratch {
     count: usize,
 }
 
+#[cfg(any(test, feature = "resident_settings"))]
 const _: () = assert!(
     core::mem::size_of::<PickerScratch>()
         <= crate::data::arena::TRANSIENT_ARENA_BYTES - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
 );
 
+#[cfg(any(test, feature = "resident_settings"))]
 #[inline(always)]
 fn picker_scratch() -> &'static mut PickerScratch {
     unsafe {
@@ -349,6 +358,7 @@ fn picker_scratch() -> &'static mut PickerScratch {
     }
 }
 
+#[cfg(any(test, feature = "resident_settings"))]
 #[inline(never)]
 fn push_entry(id: u16, icon: &'static [u8; 8], title: &str, suffix: &str) {
     let ps = picker_scratch();
@@ -362,6 +372,7 @@ fn push_entry(id: u16, icon: &'static [u8; 8], title: &str, suffix: &str) {
 }
 
 /// Populate icon-equipped `OptionSheet` inside transient tail scratch (`0 B` static `.bss`).
+#[cfg(any(test, feature = "resident_settings"))]
 pub fn build_picker_sheet(
     title: &'static str,
     current_id: u16,
@@ -417,6 +428,7 @@ pub fn build_picker_sheet(
         .with_icons(&ps.icons[..n])
 }
 
+#[cfg(any(test, feature = "resident_settings"))]
 pub fn picker_target_at(idx: usize) -> Option<u16> {
     let ps = picker_scratch();
     if idx < ps.count {

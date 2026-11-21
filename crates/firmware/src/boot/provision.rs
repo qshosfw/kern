@@ -19,6 +19,11 @@ use crate::services::storage::DirEntryInfo;
 #[cfg(feature = "provision_apps")]
 pub const PROV_BUF_CAP: usize = 4096;
 
+// Native ARM Thumb-1 binary payload for `/apps/settings.krx`
+#[cfg(all(feature = "provision_apps", feature = "krx_native"))]
+const SETTINGS_APP_PACKAGE: &[u8] =
+    include_bytes!("../../../../packages/core/settings/settings.krx");
+
 // Native ARM Thumb-1 binary payload for `/apps/beacon.krx`
 #[cfg(all(feature = "provision_apps", feature = "krx_native"))]
 const BEACON_APP_PACKAGE: &[u8] = include_bytes!("../../../../packages/apps/beacon/beacon.krx");
@@ -79,6 +84,7 @@ pub fn ensure_core_packages(_filesystem: &mut SystemStorage) {}
 pub fn ensure_core_packages(filesystem: &mut SystemStorage) {
     #[cfg(feature = "krx_native")]
     {
+        write_raw_krx_package(filesystem, "/apps/settings.krx", SETTINGS_APP_PACKAGE);
         write_raw_krx_package(filesystem, "/apps/beacon.krx", BEACON_APP_PACKAGE);
         #[cfg(feature = "provision_bench")]
         write_raw_krx_package(filesystem, "/apps/bench.krx", BENCH_APP_PACKAGE);
