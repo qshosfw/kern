@@ -163,6 +163,23 @@ pub fn init() {
             mask as u32,
         );
     }
+
+    // Enable hardware GPIO glitch filters on slow mechanical inputs (PTT PB10 + keypad rows
+    // PB12..PB15) to reject RF pickup during TX; never enable on PA11/PA12 (12 Mbps USB).
+    #[cfg(all(not(test), target_arch = "arm"))]
+    {
+        py32_hal::rcc::enable_syscfg();
+        unsafe {
+            let pb = pac::syscfg::SYSCFG_PBENS.read_volatile();
+            pac::syscfg::SYSCFG_PBENS.write_volatile(
+                pb | pac::gpio::PIN_10
+                    | pac::gpio::PIN_12
+                    | pac::gpio::PIN_13
+                    | pac::gpio::PIN_14
+                    | pac::gpio::PIN_15,
+            );
+        }
+    }
 }
 
 /// Disables SWD debugging interface on PA13 (SWDIO) and PA14 (SWCLK).

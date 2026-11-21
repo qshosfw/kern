@@ -97,6 +97,7 @@ pub const EP0_SVSETUPEND: u8 = 0x80;
 // ── IN CSR1 / CSR2 (0x15 / 0x14) Bit Definitions ───────────────────────────
 pub const INCSR1_INPKTRDY: u8 = 0x01;
 pub const INCSR1_FIFONOTEMPTY: u8 = 0x02;
+pub const INCSR1_UNDERRUN: u8 = 0x04;
 pub const INCSR1_FLUSHFIFO: u8 = 0x08;
 pub const INCSR1_SENDSTALL: u8 = 0x10;
 pub const INCSR1_SENTSTALL: u8 = 0x20;

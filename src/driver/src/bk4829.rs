@@ -459,12 +459,13 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
         self.write_reg(0x36, ((bias as u16) << 8) | (1 << 7) | gain);
     }
 
-    /// Soft-start S-curve PA ramp-up with precise calibrated PA bias.
+    /// Soft-start 8-step S-curve PA ramp-up with calibrated PA bias to minimize key-up
+    /// `di/dt` supply droop and USB ground-bounce transients.
     pub fn tx_ramp_up_bias(&mut self, bias: u8) {
         self.update_gpio_reg(0x0060, 0x0020); // PA enable (Pin 1), RX disable (Pin 0)
-        for b in [bias >> 2, bias >> 1, ((bias as u16 * 3) >> 2) as u8, bias] {
+        for step in 1..=8u16 {
             self.bus.delay_ms(1);
-            self.set_rf_power_bias(b);
+            self.set_rf_power_bias(((bias as u16 * step) >> 3) as u8);
         }
         self.bus.delay_ms(1);
     }

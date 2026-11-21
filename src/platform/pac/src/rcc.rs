@@ -3,9 +3,19 @@
 //! The bootloader configures HSI to 48 MHz before jumping to firmware.
 //! We primarily use RCC to enable peripheral clocks.
 
-use crate::AHB1_BASE;
+use crate::{AHB1_BASE, APB1_BASE};
 
 pub const RCC_BASE: u32 = AHB1_BASE + 0x1000; // 0x4002_1000
+pub const CTC_BASE: u32 = APB1_BASE + 0x6C00; // 0x4000_6C00
+
+/// CTC Control Register 0 (hardware HSI auto-trim against USBD_SOF)
+pub const CTC_CTL0: *mut u32 = CTC_BASE as *mut u32;
+/// CTC Control Register 1 (reference select, prescaler, limit, reload)
+pub const CTC_CTL1: *mut u32 = (CTC_BASE + 0x04) as *mut u32;
+pub const CTC_CTL0_CNTEN: u32 = 1 << 5;
+pub const CTC_CTL0_AUTOTRIM: u32 = 1 << 6;
+/// USBD_SOF (rising, /1), CKLIM = 0x22, RLVALUE = 0xBB7F (48 MHz / 1 kHz - 1)
+pub const CTC_CTL1_USB_SOF_48M: u32 = (0x2 << 28) | (0x22 << 16) | 0xBB7F;
 
 // ── Register Addresses ──────────────────────────────────────────────────────
 
@@ -49,6 +59,8 @@ pub const RCC_IOPENR: *mut u32 = (RCC_BASE + 0x34) as *mut u32;
 
 /// USBD peripheral reset enable
 pub const APBRSTR1_USBDRST: u32 = 1 << 23;
+/// CTC (Clock Trim Controller) peripheral reset enable
+pub const APBRSTR1_CTCRST: u32 = 1 << 27;
 
 // ── AHBENR Bit Definitions ─────────────────────────────────────────────────
 
@@ -87,6 +99,8 @@ pub const APB1ENR_USART4: u32 = 1 << 19;
 pub const APB1ENR_I2C1: u32 = 1 << 21;
 /// USBD (USB 2.0 Full-Speed) clock enable
 pub const APB1ENR_USBD: u32 = 1 << 23;
+/// CTC (Clock Trim Controller) clock enable
+pub const APB1ENR_CTC: u32 = 1 << 27;
 /// PWR interface clock enable
 pub const APB1ENR_PWR: u32 = 1 << 28;
 /// DAC1 clock enable

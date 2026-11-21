@@ -74,6 +74,23 @@ impl CdcEngine {
         }
     }
 
+    /// Zero-copy drain directly from hardware USBD endpoint FIFO into the RX ring buffer.
+    #[inline(never)]
+    pub fn push_rx_from_fifo(&mut self, ep: u8, count: usize) {
+        let fifo = fifo_ep_u8(ep);
+        let mut head = self.rx_head;
+        let tail = self.rx_tail;
+        for _ in 0..count {
+            let b = unsafe { fifo.read_volatile() };
+            let next_head = head.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
+            if next_head != tail {
+                self.rx_buf[head as usize] = b;
+                head = next_head;
+            }
+        }
+        self.rx_head = head;
+    }
+
     pub fn pop_rx(&mut self, buf: &mut [u8]) -> usize {
         let mut count = 0;
         while self.rx_head != self.rx_tail && count < buf.len() {
@@ -86,6 +103,11 @@ impl CdcEngine {
 
     pub fn rx_available(&self) -> usize {
         self.rx_head.wrapping_sub(self.rx_tail) as usize & (CDC_RX_BUF_SIZE - 1)
+    }
+
+    #[inline(always)]
+    pub fn rx_free(&self) -> usize {
+        (CDC_RX_BUF_SIZE - 1) - self.rx_available()
     }
 
     #[inline(always)]

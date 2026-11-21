@@ -143,6 +143,15 @@ pub unsafe extern "C" fn TIM6_LPTIM1_DAC() {
     hal::exti::clear_pending(hal::exti::LINE_LPTIM1);
 }
 
+/// USBD (USB 2.0 Full-Speed Device) interrupt handler (IRQ 31).
+/// Services bus resets, EP0 control transfers (`SET_ADDRESS` within 2 ms), and CDC endpoints
+/// immediately so LCD blits, flash I/O, and BK4829 PA ramps never starve USB enumeration or I/O.
+#[cfg(all(not(test), target_arch = "arm", feature = "usb"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn USB() {
+    drivers::usb::on_usb_irq();
+}
+
 #[cfg(not(test))]
 #[unsafe(export_name = "__pre_init")]
 unsafe extern "C" fn pre_init() {

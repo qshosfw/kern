@@ -160,26 +160,73 @@ pub fn enable_rtc_lsi() {
     }
 }
 
-/// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1) and reset PHY.
-pub fn enable_usbd() {
-    enable_syscfg();
+/// Enable or disable hardware CTC auto-trim of 16 MHz HSI (PLL x3 = 48 MHz) locked to `USBD_SOF`.
+#[inline(never)]
+pub fn set_ctc_usb_sof(enable: bool) {
     unsafe {
-        let val_iop = rcc::RCC_IOPENR.read_volatile();
-        rcc::RCC_IOPENR.write_volatile(val_iop | rcc::IOPENR_GPIOA);
-
-        // 3. Enable USBD peripheral clock (APB1)
-        let val = rcc::RCC_APB1ENR.read_volatile();
-        rcc::RCC_APB1ENR.write_volatile(val | rcc::APB1ENR_USBD);
-
-        // 4. Force reset and release USBD peripheral to guarantee clean hardware PHY state
-        let rst = rcc::RCC_APBRSTR1.read_volatile();
-        for next in [rst | rcc::APBRSTR1_USBDRST, rst & !rcc::APBRSTR1_USBDRST] {
-            rcc::RCC_APBRSTR1.write_volatile(next);
-            for _ in 0..500 {
-                core::hint::spin_loop();
-            }
+        let rcc_b = rcc::RCC_BASE as *mut u32;
+        let apb1 = rcc_b.byte_add(0x3C);
+        let ctc = rcc::CTC_BASE as *mut u32;
+        if enable {
+            apb1.write_volatile(apb1.read_volatile() | rcc::APB1ENR_CTC);
+            let rstr1 = rcc_b.byte_add(0x2C);
+            let r = rstr1.read_volatile();
+            rstr1.write_volatile(r | rcc::APBRSTR1_CTCRST);
+            rstr1.write_volatile(r & !rcc::APBRSTR1_CTCRST);
+            ctc.byte_add(0x04).write_volatile(rcc::CTC_CTL1_USB_SOF_48M);
+            ctc.write_volatile(ctc.read_volatile() | rcc::CTC_CTL0_AUTOTRIM | rcc::CTC_CTL0_CNTEN);
+        } else if (apb1.read_volatile() & rcc::APB1ENR_CTC) != 0 {
+            ctc.write_volatile(
+                ctc.read_volatile() & !(rcc::CTC_CTL0_AUTOTRIM | rcc::CTC_CTL0_CNTEN),
+            );
         }
     }
+}
+
+/// Enable or truly detach the PY32F071 USBD Full-Speed PHY + CTC SOF clock lock.
+#[inline(never)]
+pub fn set_usbd_enabled(enable: bool) {
+    unsafe {
+        let rcc_b = rcc::RCC_BASE as *mut u32;
+        let rstr1 = rcc_b.byte_add(0x2C);
+        let apb1 = rcc_b.byte_add(0x3C);
+        if enable {
+            enable_syscfg();
+            let iop = rcc_b.byte_add(0x34);
+            iop.write_volatile(iop.read_volatile() | rcc::IOPENR_GPIOA);
+            apb1.write_volatile(apb1.read_volatile() | rcc::APB1ENR_USBD);
+            let rst = rstr1.read_volatile();
+            rstr1.write_volatile(rst | rcc::APBRSTR1_USBDRST);
+            cortex_m::asm::delay(500);
+            rstr1.write_volatile(rst & !rcc::APBRSTR1_USBDRST);
+            cortex_m::asm::delay(500);
+            if sysclk_hz() == 48_000_000 {
+                set_ctc_usb_sof(true);
+            }
+        } else {
+            set_ctc_usb_sof(false);
+            let rst = rstr1.read_volatile();
+            rstr1.write_volatile(rst | rcc::APBRSTR1_USBDRST);
+            apb1.write_volatile(apb1.read_volatile() & !rcc::APB1ENR_USBD);
+            rstr1.write_volatile(rst & !rcc::APBRSTR1_USBDRST);
+            crate::gpio::set_pins_analog(
+                pac::gpio::GPIOA_BASE,
+                pac::gpio::PIN_11 | pac::gpio::PIN_12,
+            );
+        }
+    }
+}
+
+/// Enable the USBD (USB 2.0 Full-Speed Device) peripheral clock (APB1), reset PHY, and arm CTC.
+#[inline(always)]
+pub fn enable_usbd() {
+    set_usbd_enabled(true);
+}
+
+/// True PY32F071 hardware USB detach: stops CTC, resets/gates USBD, and parks `PA11`/`PA12` Hi-Z.
+#[inline(always)]
+pub fn disable_usbd() {
+    set_usbd_enabled(false);
 }
 
 /// Query active system core clock frequency in Hz dynamically from RCC registers.
@@ -292,12 +339,12 @@ unsafe fn set_hsi_fs(is_24mhz: bool) {
 /// 0: 16 MHz (Direct HSI, PLL OFF, 0WS)
 /// 1: 24 MHz (Direct HSI, PLL OFF, 0WS)
 /// 2: 32 MHz (HSI 16 MHz * PLL 2X, 1WS) - RF Sweet Spot
-/// 3: 48 MHz (HSI * PLL, 1WS) - Default / USB Full-Speed
+/// 3: 48 MHz (HSI 16 MHz * PLL 3X, 1WS) - Default / USB Full-Speed (CTC SOF-lockable)
 /// 4: 72 MHz (HSI 24 MHz * PLL 3X, 2WS) - High Performance
 #[inline(never)]
 pub fn set_sysclk_index(idx: u8) {
     let idx = if idx > 4 { 3 } else { idx };
-    let hsi_24 = idx != 0 && idx != 2;
+    let hsi_24 = idx == 1 || idx == 4;
     let wait_states = if idx < 2 {
         pac::flash::ACR_LATENCY_0WS
     } else if idx == 4 {
@@ -305,11 +352,12 @@ pub fn set_sysclk_index(idx: u8) {
     } else {
         pac::flash::ACR_LATENCY_1WS
     };
+    set_ctc_usb_sof(false);
     unsafe {
         switch_to_hsi_disable_pll();
         set_hsi_fs(hsi_24);
         if idx >= 2 {
-            let mul = if idx == 4 {
+            let mul = if idx >= 3 {
                 rcc::PLLCFGR_PLLMUL_3X
             } else {
                 rcc::PLLCFGR_PLLMUL_2X
@@ -319,6 +367,9 @@ pub fn set_sysclk_index(idx: u8) {
             let acr = pac::flash::FLASH_ACR.read_volatile();
             pac::flash::FLASH_ACR
                 .write_volatile((acr & !pac::flash::ACR_LATENCY_MASK) | wait_states);
+        }
+        if idx == 3 && (rcc::RCC_APB1ENR.read_volatile() & rcc::APB1ENR_USBD) != 0 {
+            set_ctc_usb_sof(true);
         }
     }
     let hz = sysclk_hz();

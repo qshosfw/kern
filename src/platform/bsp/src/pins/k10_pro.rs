@@ -132,6 +132,23 @@ pub fn init() {
         pac::gpio::GPIOB_BASE,
         pac::gpio::PIN_0 | pac::gpio::PIN_1 | pac::gpio::PIN_7,
     );
+
+    // Enable hardware GPIO glitch filters on slow mechanical inputs (PTT PC13, keypad rows
+    // PB12..PB15 + PA8) to reject RF pickup during TX; never enable on PA11/PA12 (12 Mbps USB).
+    #[cfg(all(not(test), target_arch = "arm"))]
+    {
+        py32_hal::rcc::enable_syscfg();
+        unsafe {
+            let pa = pac::syscfg::SYSCFG_PAENS.read_volatile();
+            pac::syscfg::SYSCFG_PAENS.write_volatile(pa | pac::gpio::PIN_8);
+            let pb = pac::syscfg::SYSCFG_PBENS.read_volatile();
+            pac::syscfg::SYSCFG_PBENS.write_volatile(
+                pb | pac::gpio::PIN_12 | pac::gpio::PIN_13 | pac::gpio::PIN_14 | pac::gpio::PIN_15,
+            );
+            let pc = pac::syscfg::SYSCFG_PCENS.read_volatile();
+            pac::syscfg::SYSCFG_PCENS.write_volatile(pc | pac::gpio::PIN_13);
+        }
+    }
 }
 
 /// On UV-K10 Pro, `PA14` drives `KEY_OUT4` and `PA13` drives `KEY_LED`, so disabling SWD configures

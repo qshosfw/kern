@@ -38,24 +38,33 @@ fn wake_and_notify_activity(hw: &mut SystemHardware) {
 #[inline(never)]
 fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool) {
     #[cfg(feature = "usb")]
-    if let Some(usb_ev) = hw.usb.poll() {
-        *dirty_render = true;
-        let new_clk = match usb_ev {
-            kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
-                wake_and_notify_activity(hw);
-                (py32_hal::rcc::sysclk_hz() != 48_000_000).then_some(1)
+    {
+        #[cfg(feature = "radio")]
+        let tx_active = crate::radio_state_ref().coord.is_transmitting;
+        #[cfg(not(feature = "radio"))]
+        let tx_active = false;
+        hw.usb.set_rf_tx_active(tx_active);
+
+        if let Some(usb_ev) = hw.usb.poll() {
+            *dirty_render = true;
+            let new_clk = match usb_ev {
+                kernel::event::UsbEvent::Connected | kernel::event::UsbEvent::Resumed => {
+                    wake_and_notify_activity(hw);
+                    // Index 3 = 48 MHz (HSI 16 MHz * PLL 3X, CTC SOF-locked).
+                    (py32_hal::rcc::sysclk_hz() != 48_000_000).then_some(3)
+                }
+                kernel::event::UsbEvent::Disconnected if !tx_active => {
+                    Some(crate::master_config_ref().system.cpu_clock)
+                }
+                _ => None,
+            };
+            if let Some(clk_idx) = new_clk {
+                py32_hal::rcc::set_sysclk_index(clk_idx);
+                #[cfg(feature = "uart")]
+                bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
             }
-            kernel::event::UsbEvent::Disconnected => {
-                Some(crate::master_config_ref().system.cpu_clock)
-            }
-            _ => None,
-        };
-        if let Some(clk_idx) = new_clk {
-            py32_hal::rcc::set_sysclk_index(clk_idx);
-            #[cfg(feature = "uart")]
-            bsp::Board::uart_set_baud(crate::master_config_ref().system.baud_rate());
+            enqueue_event(Event::Usb(usb_ev));
         }
-        enqueue_event(Event::Usb(usb_ev));
     }
 
     #[cfg(all(feature = "wire", any(feature = "uart", feature = "usb_cdc")))]
