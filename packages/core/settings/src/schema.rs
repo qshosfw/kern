@@ -11,6 +11,7 @@ pub const ACT_INSTALLED_APPS: u8 = 1;
 pub const ACT_DEVICE_INFO: u8 = 2;
 pub const ACT_RESET_SETTINGS: u8 = 3;
 pub const ACT_REBOOT_RADIO: u8 = 4;
+pub const ACT_SYS_MODULES: u8 = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -89,10 +90,10 @@ pub const CATEGORIES: [Category; CAT_COUNT] = [
     Category { icon_id: icon::BATTERY, start: 22, count: 5, _pad: 0 },
     Category { icon_id: icon::DEVICE, start: 27, count: 2, _pad: 0 },
     Category { icon_id: icon::APPS, start: 29, count: 6, _pad: 0 },
-    Category { icon_id: icon::SYSTEM, start: 35, count: 4, _pad: 0 },
+    Category { icon_id: icon::SYSTEM, start: 35, count: 5, _pad: 0 },
 ];
 
-pub const ITEMS: [Item; 39] = [
+pub const ITEMS: [Item; 40] = [
     // Display (0..7)
     Item::choice(prop::BACKLIGHT_TIME, 0, CH_BL_TIME),
     Item::num(prop::BACKLIGHT_MAX, 1, UNIT_RAW),
@@ -134,11 +135,12 @@ pub const ITEMS: [Item; 39] = [
     Item::toggle(prop::SHOW_LABELS, 32),
     Item::choice(prop::STARTUP_APP, 33, CH_STARTUP),
     Item::choice(prop::PAGER_POLICY, 34, CH_PAGER),
-    // System (35..39)
-    Item::choice(prop::CPU_CLOCK, 35, CH_CPU_CLK),
-    Item::choice(prop::UART_BAUD, 36, CH_UART_BAUD),
-    Item::action(ACT_RESET_SETTINGS, 37),
-    Item::action(ACT_REBOOT_RADIO, 38),
+    // System (35..40)
+    Item::action(ACT_SYS_MODULES, 35),
+    Item::choice(prop::CPU_CLOCK, 36, CH_CPU_CLK),
+    Item::choice(prop::UART_BAUD, 37, CH_UART_BAUD),
+    Item::action(ACT_RESET_SETTINGS, 38),
+    Item::action(ACT_REBOOT_RADIO, 39),
 ];
 
 const CAT_NAMES: &[u8] = b"Display\0Audio\0Buttons\0Battery\0Device\0Apps\0System\0";
@@ -150,7 +152,7 @@ const ITEM_LABELS: &[u8] = concat!(
     "Cell Type\0Bar Format\0Power Mode\0Auto Off\0Chg Detect\0",
     "Hardware Info\0Model\0",
     "Installed\0Home Style\0Numbers\0Labels\0Startup\0Pager\0",
-    "CPU Clock\0UART Baud\0Reset All\0Restart\0",
+    "Modules\0CPU Clock\0UART Baud\0Reset All\0Restart\0",
 )
 .as_bytes();
 

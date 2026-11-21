@@ -10,6 +10,7 @@ caps = [
     "PREFERENCES",
     "STORAGE_READ",
     "STORAGE_WRITE",
+    "TASK_CONTROL",
 ]
 root = "main.rs"
 

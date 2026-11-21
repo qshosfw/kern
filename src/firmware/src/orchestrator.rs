@@ -1059,6 +1059,16 @@ impl Orchestrator {
                 self.switch_app(ctx, id as usize);
             }
             Shortcut::CloseApp => self.pop_active_app(ctx),
+            Shortcut::LaunchPendingPkg => {
+                #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+                if let Some(path) = crate::runtime::syscall::service::take_pending_launch_path() {
+                    if self.active_app_id >= crate::apps::AppRegistry::count() {
+                        crate::AppRegistry::on_exit(self.active_app_id, ctx);
+                        self.active_app_id = APP_ID_LAUNCHER;
+                    }
+                    let _ = launch_krx_shortcut(ctx, path);
+                }
+            }
             Shortcut::Flashlight => {
                 if bsp::pins::FLASHLIGHT.is_high() {
                     bsp::pins::FLASHLIGHT.set_low();

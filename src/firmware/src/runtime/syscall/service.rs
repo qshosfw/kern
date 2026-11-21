@@ -12,6 +12,22 @@ pub use kernel::proc::service_registry::ServiceRegistry;
 
 pub static mut SERVICE_REGISTRY: ServiceRegistry<4> = ServiceRegistry::new();
 pub static mut KERNEL_IPC_CHANNEL: IpcChannel<2> = IpcChannel::new();
+static mut PENDING_LAUNCH_PATH: [u8; 32] = [0u8; 32];
+static mut PENDING_LAUNCH_LEN: u8 = 0;
+
+/// Consume a deferred `.krx`/`.mod` package path queued by `PROC_CTL_LAUNCH_PKG`.
+pub fn take_pending_launch_path() -> Option<&'static str> {
+    unsafe {
+        let len = PENDING_LAUNCH_LEN as usize;
+        if len == 0 || len > 31 {
+            return None;
+        }
+        PENDING_LAUNCH_LEN = 0;
+        let slice =
+            core::slice::from_raw_parts(core::ptr::addr_of!(PENDING_LAUNCH_PATH) as *const u8, len);
+        core::str::from_utf8(slice).ok()
+    }
+}
 
 #[inline(always)]
 pub fn ipc_channel_mut() -> &'static mut IpcChannel<2> {
@@ -312,6 +328,23 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
                     slot.ledger.slice_overruns = 0;
                     slot.ledger.fault_count = 0;
                 }
+                return 0;
+            }
+            ::abi::PROC_CTL_LAUNCH_PKG => {
+                let plen = (target as usize).min(31);
+                let Some(path) = (unsafe { parse_str(buf, plen) }) else {
+                    return 1;
+                };
+                if !path.starts_with("/apps/") {
+                    return 1;
+                }
+                unsafe {
+                    let dst = &mut *core::ptr::addr_of_mut!(PENDING_LAUNCH_PATH);
+                    dst[..plen].copy_from_slice(path.as_bytes());
+                    PENDING_LAUNCH_LEN = plen as u8;
+                }
+                let ev: kernel::ipc::SysEvent = crate::apps::Shortcut::LaunchPendingPkg.into();
+                post_sys_event(ev.target, ev.command, ev.arg);
                 return 0;
             }
             _ => {}

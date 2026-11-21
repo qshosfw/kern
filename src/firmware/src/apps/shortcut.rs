@@ -68,6 +68,7 @@ pub enum Shortcut {
     Sleep = 3,
     CloseApp = 4,
     LaunchApp(u8) = 5,
+    LaunchPendingPkg = 6,
 }
 
 impl From<Shortcut> for SysEvent {
@@ -80,6 +81,7 @@ impl From<Shortcut> for SysEvent {
             Shortcut::Sleep => (3, 0),
             Shortcut::CloseApp => (4, 0),
             Shortcut::LaunchApp(app_id) => (5, app_id as u16),
+            Shortcut::LaunchPendingPkg => (6, 0),
         };
         SysEvent {
             target: 0,
@@ -98,6 +100,7 @@ impl From<SysEvent> for Shortcut {
             3 => Shortcut::Sleep,
             4 => Shortcut::CloseApp,
             5 => Shortcut::LaunchApp(evt.arg as u8),
+            6 => Shortcut::LaunchPendingPkg,
             _ => Shortcut::None,
         }
     }

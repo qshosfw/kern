@@ -1,0 +1,23 @@
+name = "Calibration"
+output = "calib.mod"
+author = "OpenTaiko"
+type = "module"
+profile = "n1"
+icon = "APP_DIAG"
+caps = ["DISPLAY_DIRECT", "KEYPAD", "FACTORY_CALIB", "STORAGE_READ"]
+root = "main.rs"
+
+[[action]]
+scope = ["SYSTEM_PAGE"]
+label = "Calibration"
+
+icon_8 = """
+..####..
+.#....#.
+#.#..#.#
+#..##..#
+#..##..#
+#.#..#.#
+.#....#.
+..####..
+"""

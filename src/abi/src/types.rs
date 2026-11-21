@@ -431,6 +431,24 @@ impl KrxApiTable {
     }
 
     #[inline(always)]
+    pub fn read_file(&self, path: &[u8], out: &mut [u8]) -> usize {
+        let req = KrxFsReq {
+            path: path.as_ptr(),
+            buf: out.as_mut_ptr(),
+            offset: 0,
+            len: out.len() as u16,
+            path_len: path.len() as u8,
+            extra: 0,
+        };
+        self.call_op(
+            Op::FsRead,
+            crate::sub::fs_read::FILE_AT as usize,
+            &req as *const KrxFsReq as usize,
+            0,
+        )
+    }
+
+    #[inline(always)]
     pub fn remove_file(&self, path: &[u8]) -> bool {
         self.call_op(
             Op::FsMeta,
@@ -438,6 +456,12 @@ impl KrxApiTable {
             path.as_ptr() as usize,
             path.len(),
         ) == 0
+    }
+
+    #[inline(always)]
+    pub fn launch_pkg(&self, path: &[u8]) -> bool {
+        let a0 = (PROC_CTL_LAUNCH_PKG as usize) | ((path.len().min(31)) << 8);
+        self.call_op(Op::ProcCtl, a0, path.as_ptr() as usize, 0) == 0
     }
 }
 
@@ -743,6 +767,7 @@ pub const PROC_CTL_SET_PRIORITY: u8 = 2;
 pub const PROC_CTL_FOCUS_APP: u8 = 3;
 pub const PROC_CTL_REVOKE_LEASE: u8 = 4;
 pub const PROC_CTL_RESET_STATS: u8 = 5;
+pub const PROC_CTL_LAUNCH_PKG: u8 = 6;
 
 /// 16-byte power-of-two record readers (`buf != NULL && len >= 16`).
 pub const PROC_CTL_SYS_OVERVIEW: u8 = 0x80;

@@ -19,8 +19,8 @@ use kern_sdk::{
 
 use apps::{AppsView, MODAL_DELETE_APP};
 use schema::{
-    ACT_DEVICE_INFO, ACT_INSTALLED_APPS, ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, CAT_COUNT, Kind,
-    cat_name, category, format_value, item_at, item_label,
+    ACT_DEVICE_INFO, ACT_INSTALLED_APPS, ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SYS_MODULES,
+    CAT_COUNT, Kind, cat_name, category, format_value, item_at, item_label,
 };
 use system::{INFO_ROWS, MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS};
 use ui::KineticScroll;
@@ -83,7 +83,13 @@ impl SettingsState {
         let title: &[u8] = match self.view {
             View::Home => b"Settings",
             View::Category => cat_name(self.cat_sel),
-            View::InstalledApps => b"Installed",
+            View::InstalledApps => {
+                if self.apps.modules_only {
+                    b"Modules"
+                } else {
+                    b"Installed"
+                }
+            }
             View::DeviceInfo => b"Hardware Info",
         };
         ui::set_title(api, title);
@@ -205,7 +211,13 @@ impl SettingsState {
                     }
                     Kind::Action => match item.meta {
                         ACT_INSTALLED_APPS => {
-                            self.apps.refresh(api);
+                            self.apps.refresh(api, false);
+                            self.view = View::InstalledApps;
+                            self.scroller.jump_to_row(ui::scroll_top(self.apps.sel));
+                            self.sync_status_bar(api);
+                        }
+                        ACT_SYS_MODULES => {
+                            self.apps.refresh(api, true);
                             self.view = View::InstalledApps;
                             self.scroller.jump_to_row(ui::scroll_top(self.apps.sel));
                             self.sync_status_bar(api);
@@ -222,7 +234,7 @@ impl SettingsState {
                     },
                 }
             }
-            View::InstalledApps => self.apps.request_delete(api),
+            View::InstalledApps => self.apps.on_confirm(api),
             View::DeviceInfo => {}
         }
     }
@@ -389,6 +401,7 @@ impl SettingsState {
                         Kind::Action
                             if is_sel
                                 && (item.meta == ACT_INSTALLED_APPS
+                                    || item.meta == ACT_SYS_MODULES
                                     || item.meta == ACT_DEVICE_INFO) =>
                         {
                             flags |= ui::FLAG_CHEVRON;
@@ -408,7 +421,7 @@ impl SettingsState {
                 }
                 ui::finish_list_frame(api, sy, c.count);
             }
-            View::InstalledApps => self.apps.render(api, sy),
+            View::InstalledApps => self.apps.render(api, sy, anim_tick),
             View::DeviceInfo => system::render_device_info(api, self.info_sel, sy),
         }
         let _ = self.active_sel();

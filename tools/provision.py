@@ -30,6 +30,7 @@ BUNDLES = {
     "sys": [
         "core/vfo",
         "core/settings",
+        "sys/calib",
         "sys/sysinfo",
         "sys/recovery",
         "sys/panic",
@@ -38,6 +39,7 @@ BUNDLES = {
     "all": [
         "core/vfo",
         "core/settings",
+        "sys/calib",
         "sys/sysinfo",
         "sys/recovery",
         "sys/panic",
@@ -57,6 +59,7 @@ BUNDLES = {
 ALIASES = {
     "vfo": "core/vfo",
     "settings": "core/settings",
+    "calib": "sys/calib",
     "sysinfo": "sys/sysinfo",
     "recovery": "sys/recovery",
     "panic": "sys/panic",
