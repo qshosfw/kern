@@ -83,9 +83,9 @@ pub(crate) fn compute_hw_mac(
 ) -> [u8; 16] {
     let mut hardware_kek = SecretBuf::<32>::new();
     derive_passcode_kek(uid, b"HW_KEK", nonce, 100, &mut hardware_kek, None);
-    let mut key16 = [0u8; 16];
-    key16.copy_from_slice(&hardware_kek.as_slice()[0..16]);
-    let cipher = Ascon128::new(key16);
+    let mut key16 = SecretBuf::<16>::new();
+    key16.as_mut_slice().copy_from_slice(&hardware_kek.as_slice()[0..16]);
+    let cipher = Ascon128::new(*key16.as_slice());
     cipher.compute_mac(nonce, ident, data)
 }
 

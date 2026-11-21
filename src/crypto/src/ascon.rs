@@ -107,6 +107,12 @@ pub struct Ascon128 {
     key: [u8; KEY_SIZE],
 }
 
+impl Drop for Ascon128 {
+    fn drop(&mut self) {
+        crate::buffer::zeroize_bytes(&mut self.key);
+    }
+}
+
 impl Ascon128 {
     /// Ascon-128 Initial Value (k=128, r=64, a=12, b=6)
     pub const ASCON128_IV: u64 = 0x8040_0c06_0000_0000;

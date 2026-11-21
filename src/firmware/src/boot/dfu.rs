@@ -70,6 +70,8 @@ unsafe fn gpio_apply_and_lock(
 #[cfg(all(not(test), target_arch = "arm"))]
 #[inline(never)]
 unsafe fn quiesce_hw_for_dfu() {
+    bsp::bk4829_fault_quench();
+    py32_hal::pwr::disable_pvd();
     unsafe {
         let gpiob = py32_pac::gpio::GPIOB_BASE as *mut u32;
         let ptt_pin = 1u32 << 10;

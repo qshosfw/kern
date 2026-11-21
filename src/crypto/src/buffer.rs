@@ -4,12 +4,13 @@
 //! when dropped, using `core::ptr::write_volatile` to prevent compiler optimization.
 
 #[inline(never)]
-fn zeroize_bytes(bytes: &mut [u8]) {
+pub fn zeroize_bytes(bytes: &mut [u8]) {
     for byte in bytes.iter_mut() {
         unsafe {
             core::ptr::write_volatile(byte, 0);
         }
     }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 /// Fixed-size secret buffer that zeroizes its contents on drop.
