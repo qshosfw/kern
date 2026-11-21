@@ -14,10 +14,12 @@ mod cap;
 mod ops;
 mod pkg;
 pub mod prop;
+pub mod types;
 
 pub use cap::{Cap, CapIter, CapabilitySet};
 pub use ops::{ArgKind, OP_TABLE, Op, OpDesc, Sig, domain, idx, missing_caps, sub};
 pub use pkg::{icon, scope};
+pub use types::*;
 
 #[cfg(feature = "describe")]
 pub mod describe {

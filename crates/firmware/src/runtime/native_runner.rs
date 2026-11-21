@@ -611,11 +611,19 @@ pub unsafe fn invoke_krx_native(
         return kernel::runtime::fault::KRX_FAULT_SENTINEL;
     }
 
+    let live_api;
+    let effective_api = if core::ptr::eq(api_table, &raw const NATIVE_API_TABLE) {
+        live_api = KrxApiTable::with_call(active_native_caps().raw(), super::syscall::kern_call);
+        &raw const live_api
+    } else {
+        api_table
+    };
+
     #[cfg(all(target_arch = "arm", not(test)))]
     {
         unsafe {
             super::fault::GUEST_GOT_BASE = got_base;
-            super::fault::invoke_krx_trampoline(op, api_table as *const (), param, entry_point)
+            super::fault::invoke_krx_trampoline(op, effective_api as *const (), param, entry_point)
         }
     }
     #[cfg(not(all(target_arch = "arm", not(test))))]
@@ -630,7 +638,7 @@ pub unsafe fn invoke_krx_native(
                 core::mem::transmute(entry_point)
             }
         };
-        unsafe { entry(op, api_table, param) }
+        unsafe { entry(op, effective_api, param) }
     }
 }
 
