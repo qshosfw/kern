@@ -23,6 +23,7 @@ pub mod uart;
 pub mod wire;
 
 pub mod keyboard;
+pub mod registry;
 
 pub mod usb;
 

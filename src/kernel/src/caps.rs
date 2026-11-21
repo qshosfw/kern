@@ -179,7 +179,7 @@ impl CapHardware {
 
 // ── Capability Presentation & Checking ──────────────────────────────────────
 
-use abi::{Cap, CapabilitySet};
+pub use abi::{Cap, CapabilitySet};
 
 const CAP_NAMES: &[u8] = b"\
 Radio RX\0\
