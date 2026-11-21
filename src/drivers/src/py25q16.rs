@@ -77,16 +77,23 @@ impl<B: SpiFlashBus> Py25q16FlashDriver<B> {
         status
     }
 
-    pub fn wait_while_busy(&mut self) {
+    /// Wait until WIP (bit 0) clears; returns `false` if the flash stays busy past the poll budget.
+    pub fn wait_while_busy(&mut self) -> bool {
         let mut polls = 0u32;
-        while (self.read_status_reg() & 1) == 1 && polls < 2_000_000 {
+        while (self.read_status_reg() & 1) == 1 {
+            if polls >= 2_000_000 {
+                return false;
+            }
             self.bus.feed();
             polls += 1;
         }
+        true
     }
 
-    pub fn write_enable(&mut self) {
+    /// Issue Write Enable (`0x06`) and verify the `WEL` latch (SR1 bit 1) before mutating flash.
+    pub fn write_enable(&mut self) -> bool {
         self.send_cmd(0x06);
+        (self.read_status_reg() & 0x02) != 0
     }
 
     #[inline(never)]
@@ -103,36 +110,43 @@ impl<B: SpiFlashBus> Py25q16FlashDriver<B> {
             return Err(());
         }
         let addr = sector_addr & !(FLASH_SECTOR_SIZE as u32 - 1);
-        self.wait_while_busy();
-        self.write_enable();
+        if !self.wait_while_busy() || !self.write_enable() {
+            return Err(());
+        }
 
         self.begin_addr_cmd(0x20, addr);
         self.cs_release();
 
-        self.wait_while_busy();
-        Ok(())
+        if self.wait_while_busy() {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 
     pub fn program_page(&mut self, address: u32, data: &[u8]) -> Result<(), ()> {
         if !range_within_flash(address, data.len()) || data.len() > FLASH_PAGE_SIZE {
             return Err(());
         }
-        self.wait_while_busy();
-        self.write_enable();
+        if !self.wait_while_busy() || !self.write_enable() {
+            return Err(());
+        }
 
         self.begin_addr_cmd(0x02, address);
         self.bus.write_bytes(data);
         self.cs_release();
 
-        self.wait_while_busy();
-        Ok(())
+        if self.wait_while_busy() {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 
     pub fn read_data(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ()> {
-        if !range_within_flash(address, buffer.len()) {
+        if !range_within_flash(address, buffer.len()) || !self.wait_while_busy() {
             return Err(());
         }
-        self.wait_while_busy();
 
         self.begin_addr_cmd(0x03, address);
         self.bus.read_bytes(buffer);

@@ -71,13 +71,16 @@ impl UsartInstance {
         self.apply_baud(rcc::sysclk_hz(), baud);
     }
 
-    /// Recompute `USART_BRR` for `pclk_hz` and `baud`.
+    /// Recompute `USART_BRR` for `pclk_hz` and `baud` after draining any in-flight TX byte.
     pub fn apply_baud(self, pclk_hz: u32, baud: u32) {
         let baud = if baud == 0 { 115_200 } else { baud };
         unsafe {
             let cr1 = self.cr1().read_volatile();
             if (cr1 & usart::CR1_UE) == 0 {
                 return;
+            }
+            if (cr1 & usart::CR1_TE) != 0 {
+                self.wait_tx_complete();
             }
             self.cr1().write_volatile(cr1 & !usart::CR1_UE);
             self.brr().write_volatile((pclk_hz + (baud >> 1)) / baud);
@@ -121,15 +124,19 @@ impl UsartInstance {
         }
     }
 
-    /// Clear overrun/noise/framing errors and check whether a byte is ready in RX.
+    /// Discard RF-corrupted (noise/framing/parity) bytes, clear stale overrun, and report RX readiness.
     #[inline]
     pub fn is_readable(self) -> bool {
         unsafe {
             let sr = self.sr().read_volatile();
+            if (sr & (usart::SR_NE | usart::SR_FE | usart::SR_PE)) != 0 {
+                let _ = self.dr().read_volatile();
+                return false;
+            }
             if (sr & usart::SR_RXNE) != 0 {
                 return true;
             }
-            if sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE) != 0 {
+            if (sr & usart::SR_ORE) != 0 {
                 let _ = self.dr().read_volatile();
             }
             false
@@ -322,15 +329,19 @@ pub fn clear_errors() {
     }
 }
 
-/// Check if a byte is available to read without losing valid data in DR.
+/// Discard RF-corrupted (noise/framing/parity) bytes and check if a valid byte is ready in DR.
 #[inline]
 pub fn is_readable() -> bool {
     unsafe {
         let sr = usart::USART_SR.read_volatile();
+        if (sr & (usart::SR_NE | usart::SR_FE | usart::SR_PE)) != 0 {
+            let _ = usart::USART_DR.read_volatile();
+            return false;
+        }
         if (sr & usart::SR_RXNE) != 0 {
             return true;
         }
-        if sr & (usart::SR_ORE | usart::SR_NE | usart::SR_FE | usart::SR_PE) != 0 {
+        if (sr & usart::SR_ORE) != 0 {
             let _ = usart::USART_DR.read_volatile();
         }
         false

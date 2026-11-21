@@ -153,25 +153,29 @@ impl RadioBus {
             board_pins::BK_SCL.set_low();
             Self::delay_bus();
         }
-        board_pins::BK_SDA.configure_output(py32_pac::gpio::SPEED_HIGH);
+        board_pins::BK_SDA.configure_output(py32_pac::gpio::SPEED_LOW);
         val
     }
 }
 
 impl kern_platform_traits::radio::RadioBus for RadioBus {
     fn read_reg(&mut self, addr: u8) -> u16 {
-        Self::begin_cmd(addr | 0x80);
-        let val = self.bitbang_read_u16();
-        Self::end_cmd();
-        val
+        cortex_m::interrupt::free(|_| {
+            Self::begin_cmd(addr | 0x80);
+            let val = self.bitbang_read_u16();
+            Self::end_cmd();
+            val
+        })
     }
 
     fn write_reg(&mut self, addr: u8, val: u16) {
-        Self::begin_cmd(addr);
-        Self::delay_bus();
-        Self::bitbang_write_bits(val, 16);
-        Self::delay_bus();
-        Self::end_cmd();
+        cortex_m::interrupt::free(|_| {
+            Self::begin_cmd(addr);
+            Self::delay_bus();
+            Self::bitbang_write_bits(val, 16);
+            Self::delay_bus();
+            Self::end_cmd();
+        });
     }
 }
 
