@@ -26,7 +26,19 @@ pub fn sample_hardware_noise() -> u32 {
     let tim2_val = hal::time::now_us();
     entropy ^= tim2_val.rotate_left(13);
 
-    // 3. Dynamic bit-rotation across sequential calls to prevent cancellation
+    // 3. Mix live ADC thermal/quantization noise and RTC low counter when clocked
+    unsafe {
+        if (pac::rcc::RCC_APB2ENR.read_volatile() & pac::rcc::APB2ENR_ADC1) != 0 {
+            let adc_dr = pac::adc::ADC_DR.read_volatile();
+            entropy ^= adc_dr.rotate_left(7);
+        }
+        if (pac::rcc::RCC_APB1ENR.read_volatile() & pac::rcc::APB1ENR_RTCAPB) != 0 {
+            let rtc_lo = pac::rtc::RTC_CNTL.read_volatile();
+            entropy ^= rtc_lo.rotate_left(19);
+        }
+    }
+
+    // 4. Dynamic bit-rotation across sequential calls to prevent cancellation
     let rot = (ENTROPY_ROT.load(Ordering::Relaxed).wrapping_add(7)) & 31;
     ENTROPY_ROT.store(rot, Ordering::Relaxed);
     entropy.rotate_left(rot)

@@ -132,26 +132,49 @@ impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> 
         Ok(byte)
     }
 
+    /// Clock out up to 9 SCL pulses + STOP to release a slave wedged holding SDA low after a glitch.
+    pub fn recover_bus(&mut self) {
+        let _ = self.sda.set_high();
+        for _ in 0..9 {
+            let _ = self.scl.set_low();
+            self.delay();
+            let _ = self.scl.set_high();
+            self.delay();
+            if self.sda.is_high().unwrap_or(false) {
+                break;
+            }
+        }
+        let _ = self.stop();
+    }
+
     /// Raw START / WRITE / STOP sequence for 2-wire chips with non-standard framing (e.g. BK1080).
     pub fn write_raw(&mut self, bytes: &[u8]) -> Result<(), BitbangI2cError> {
-        self.start()?;
-        for &b in bytes {
-            self.write_byte(b)?;
-        }
-        self.stop()
+        let res = (|| {
+            self.start()?;
+            for &b in bytes {
+                self.write_byte(b)?;
+            }
+            Ok(())
+        })();
+        let stop_res = self.stop();
+        res.and(stop_res)
     }
 
     /// Raw START / WRITE prefix + RESTART / READ / STOP sequence.
     pub fn write_read_raw(&mut self, write: &[u8], read: &mut [u8]) -> Result<(), BitbangI2cError> {
-        self.start()?;
-        for &b in write {
-            self.write_byte(b)?;
-        }
-        let n = read.len();
-        for (i, dst) in read.iter_mut().enumerate() {
-            *dst = self.read_byte(i + 1 < n)?;
-        }
-        self.stop()
+        let res = (|| {
+            self.start()?;
+            for &b in write {
+                self.write_byte(b)?;
+            }
+            let n = read.len();
+            for (i, dst) in read.iter_mut().enumerate() {
+                *dst = self.read_byte(i + 1 < n)?;
+            }
+            Ok(())
+        })();
+        let stop_res = self.stop();
+        res.and(stop_res)
     }
 
     /// Direct register write/read avoiding generic `embedded_hal::i2c::Operation` trait machinery.
@@ -163,24 +186,26 @@ impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> BitbangI2c<SCL, SDA> 
         tx: Option<&[u8]>,
         rx: Option<&mut [u8]>,
     ) -> Result<(), BitbangI2cError> {
-        self.start()?;
-        self.write_byte(addr << 1)?;
-        self.write_byte(reg)?;
-        if let Some(data) = tx {
-            for &b in data {
-                self.write_byte(b)?;
-            }
-            self.stop()?;
-        } else if let Some(buf) = rx {
+        let res = (|| {
             self.start()?;
-            self.write_byte((addr << 1) | 1)?;
-            let len = buf.len();
-            for (i, dst) in buf.iter_mut().enumerate() {
-                *dst = self.read_byte(i + 1 < len)?;
+            self.write_byte(addr << 1)?;
+            self.write_byte(reg)?;
+            if let Some(data) = tx {
+                for &b in data {
+                    self.write_byte(b)?;
+                }
+            } else if let Some(buf) = rx {
+                self.start()?;
+                self.write_byte((addr << 1) | 1)?;
+                let len = buf.len();
+                for (i, dst) in buf.iter_mut().enumerate() {
+                    *dst = self.read_byte(i + 1 < len)?;
+                }
             }
-            self.stop()?;
-        }
-        Ok(())
+            Ok(())
+        })();
+        let stop_res = self.stop();
+        res.and(stop_res)
     }
 }
 
@@ -191,25 +216,27 @@ impl<SCL: OutputPin + InputPin, SDA: OutputPin + InputPin> I2c for BitbangI2c<SC
         operations: &mut [Operation<'_>],
     ) -> Result<(), Self::Error> {
         for op in operations {
-            match op {
-                Operation::Read(buf) => {
+            let res = match op {
+                Operation::Read(buf) => (|| {
                     self.start()?;
                     self.write_byte((address << 1) | 1)?;
                     let len = buf.len();
                     for (i, byte) in buf.iter_mut().enumerate() {
-                        *byte = self.read_byte(i < len - 1)?;
+                        *byte = self.read_byte(i + 1 < len)?;
                     }
-                    self.stop()?;
-                }
-                Operation::Write(buf) => {
+                    Ok(())
+                })(),
+                Operation::Write(buf) => (|| {
                     self.start()?;
                     self.write_byte(address << 1)?;
                     for &byte in buf.iter() {
                         self.write_byte(byte)?;
                     }
-                    self.stop()?;
-                }
-            }
+                    Ok(())
+                })(),
+            };
+            let stop_res = self.stop();
+            res.and(stop_res)?;
         }
         Ok(())
     }
@@ -251,6 +278,10 @@ impl HwI2c1 {
                 return Ok(());
             }
             timeout -= 1;
+        }
+        // Issue STOP on timeout so I2C1 does not remain wedged with BUSY=1.
+        unsafe {
+            pac::i2c::I2C1_CR1.write_volatile(pac::i2c::CR1_PE | pac::i2c::CR1_STOP);
         }
         Err(BitbangI2cError::Timeout)
     }

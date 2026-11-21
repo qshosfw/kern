@@ -160,7 +160,8 @@ impl Pin {
         if self.is_none() {
             return;
         }
-        self.set_mode(gpio::MODE_OUTPUT);
+        // Configure output type and slew rate BEFORE enabling MODE_OUTPUT to prevent
+        // a brief push-pull contention glitch on open-drain buses (e.g. I2C SDA/SCL).
         self.set_speed(speed);
         let otyper = (self.port_base() + gpio::OTYPER_OFFSET) as *mut u32;
         let bit = 1u32 << self.pin();
@@ -168,6 +169,7 @@ impl Pin {
             let val = otyper.read_volatile();
             otyper.write_volatile(if open_drain { val | bit } else { val & !bit });
         });
+        self.set_mode(gpio::MODE_OUTPUT);
     }
 
     /// Configure this pin as push-pull output with the given speed.
@@ -193,8 +195,8 @@ impl Pin {
     #[inline(never)]
     pub fn configure_af(self, af: u32, speed: u32) {
         self.set_af(af);
-        self.set_mode(gpio::MODE_AF);
         self.set_speed(speed);
+        self.set_mode(gpio::MODE_AF);
     }
 
     /// Configure this pin as analog (lowest power, used for unused pins).
