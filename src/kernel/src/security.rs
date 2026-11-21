@@ -62,12 +62,8 @@ impl HardwareSecurityState {
     }
 
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            HardwareSecurityState::FullyLocked => "Fully Locked",
-            HardwareSecurityState::PinsIsolated => "Pins Isolated",
-            HardwareSecurityState::RdpProtectedOnly => "RDP Protected",
-            HardwareSecurityState::Unprotected => "Unprotected",
-        }
+        const NAMES: &[u8] = b"Fully Locked\0Pins Isolated\0RDP Protected\0Unprotected\0";
+        utils::format::nth_cstr(NAMES, *self as u8)
     }
 }
 

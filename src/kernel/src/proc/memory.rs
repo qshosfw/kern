@@ -33,13 +33,8 @@ impl RegionKind {
     }
 
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::ImmutableCode => "Code",
-            Self::VirtualRam => "RAM",
-            Self::PersistentState => "Persistent",
-            Self::IoBuffer => "I/O",
-            Self::OverlayWindow => "Overlay",
-        }
+        const NAMES: &[u8] = b"Code\0RAM\0Persistent\0I/O\0Overlay\0";
+        utils::format::nth_cstr(NAMES, *self as u8)
     }
 }
 

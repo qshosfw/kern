@@ -9,24 +9,20 @@ use heapless::Deque;
 #[cfg(feature = "logger")]
 use heapless::String;
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
+    Trace = 0,
+    Debug = 1,
+    Info = 2,
+    Warn = 3,
+    Error = 4,
 }
 
 impl LogLevel {
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            LogLevel::Trace => "TRC",
-            LogLevel::Debug => "DBG",
-            LogLevel::Info => "INF",
-            LogLevel::Warn => "WRN",
-            LogLevel::Error => "ERR",
-        }
+        const NAMES: &[u8] = b"TRC\0DBG\0INF\0WRN\0ERR\0";
+        utils::format::nth_cstr(NAMES, *self as u8)
     }
 }
 
@@ -90,12 +86,8 @@ pub enum MemoryPressure {
 
 impl MemoryPressure {
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Normal => "NORM",
-            Self::Moderate => "MOD",
-            Self::Constrained => "WARN",
-            Self::Critical => "CRIT",
-        }
+        const NAMES: &[u8] = b"NORM\0MOD\0WARN\0CRIT\0";
+        utils::format::nth_cstr(NAMES, *self as u8)
     }
 }
 
@@ -158,24 +150,26 @@ impl SystemDiagnostics {
         }
     }
 
+    #[cfg(target_arch = "arm")]
+    #[inline(always)]
+    fn read_msp() -> usize {
+        let msp: usize;
+        // SAFETY: Reading the Cortex-M0+ Main Stack Pointer is a side-effect-free privileged/unprivileged register read.
+        unsafe {
+            core::arch::asm!("mrs {}, MSP", out(reg) msp);
+        }
+        msp
+    }
+
     /// Calculate current stack bytes in active use (_stack_start - current MSP)
     #[inline(always)]
     pub fn stack_used_now() -> usize {
         #[cfg(target_arch = "arm")]
         {
-            let msp: usize;
-            unsafe {
-                core::arch::asm!("mrs {}, MSP", out(reg) msp);
-            }
             unsafe extern "C" {
                 static _stack_start: u8;
             }
-            let stack_start = core::ptr::addr_of!(_stack_start) as usize;
-            if stack_start > msp {
-                stack_start - msp
-            } else {
-                0
-            }
+            (core::ptr::addr_of!(_stack_start) as usize).saturating_sub(Self::read_msp())
         }
         #[cfg(not(target_arch = "arm"))]
         {
@@ -194,15 +188,10 @@ impl SystemDiagnostics {
     pub fn stack_margin_bytes() -> usize {
         #[cfg(target_arch = "arm")]
         {
-            let msp: usize;
-            unsafe {
-                core::arch::asm!("mrs {}, MSP", out(reg) msp);
-            }
             unsafe extern "C" {
                 static _stack_end: u8;
             }
-            let stack_end = core::ptr::addr_of!(_stack_end) as usize;
-            if msp > stack_end { msp - stack_end } else { 0 }
+            Self::read_msp().saturating_sub(core::ptr::addr_of!(_stack_end) as usize)
         }
         #[cfg(not(target_arch = "arm"))]
         {

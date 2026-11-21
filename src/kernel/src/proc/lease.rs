@@ -32,17 +32,9 @@ impl LeaseKind {
     }
 
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::RadioRx => "RadioRx",
-            Self::RadioTx => "RadioTx",
-            Self::AudioCapture => "AudioCapture",
-            Self::AudioOutput => "AudioOutput",
-            Self::DisplayCanvas => "DisplayCanvas",
-            Self::SpiBus => "SpiBus",
-            Self::DmaChannel => "DmaChannel",
-            Self::OverlayWindow => "OverlayWindow",
-            Self::StorageTransaction => "StorageTxn",
-        }
+        const NAMES: &[u8] =
+            b"RadioRx\0RadioTx\0AudioCapture\0AudioOutput\0DisplayCanvas\0SpiBus\0DmaChannel\0OverlayWindow\0StorageTxn\0";
+        utils::format::nth_cstr(NAMES, (*self as u8) - 1)
     }
 }
 

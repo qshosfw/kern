@@ -142,13 +142,15 @@ impl ResetReason {
     }
 
     pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Hard => "HARD",
-            Self::Appf => "APPF",
-            Self::Wdog => "WDOG",
-            Self::Tags => "TAGS",
-            Self::Brow => "BROW",
-        }
+        const NAMES: &[u8] = b"HARD\0APPF\0WDOG\0TAGS\0BROW\0";
+        let idx = match self {
+            Self::Hard => 0,
+            Self::Appf => 1,
+            Self::Wdog => 2,
+            Self::Tags => 3,
+            Self::Brow => 4,
+        };
+        utils::format::nth_cstr(NAMES, idx)
     }
 }
 

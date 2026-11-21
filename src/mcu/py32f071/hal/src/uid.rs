@@ -47,10 +47,10 @@ pub struct BootloaderUsbInfo {
 }
 
 impl BootloaderUsbInfo {
-    pub const fn default_k1() -> Self {
+    const fn default_model(digit: u8) -> Self {
         let mut product = [0u8; 16];
         product[0] = b'K';
-        product[1] = b'1';
+        product[1] = digit;
         product[2] = b' ';
         product[3] = b'C';
         product[4] = b'P';
@@ -63,20 +63,12 @@ impl BootloaderUsbInfo {
         }
     }
 
+    pub const fn default_k1() -> Self {
+        Self::default_model(b'1')
+    }
+
     pub const fn default_k8() -> Self {
-        let mut product = [0u8; 16];
-        product[0] = b'K';
-        product[1] = b'8';
-        product[2] = b' ';
-        product[3] = b'C';
-        product[4] = b'P';
-        product[5] = b'S';
-        Self {
-            vid: 0x36B7,
-            pid: 0x0001,
-            product,
-            product_len: 6,
-        }
+        Self::default_model(b'8')
     }
 
     pub const fn default_for_target() -> Self {
