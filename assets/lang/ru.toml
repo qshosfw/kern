@@ -1,0 +1,72 @@
+# Kern OS Localization Catalog — Russian (RU)
+# Natural, concise handheld-radio Russian roughly matching English label lengths.
+# Entries may be plain strings or `{ full = "...", short = "..." }` for compact UI slots.
+
+[meta]
+code = "ru"
+name = "Русский"
+ascii = "Russian (RU)"
+font_hint = 1 # tiny5 (includes full Cyrillic)
+
+[strings]
+"Settings" = "Настройки"
+"Display" = "Экран"
+"Audio" = "Звук"
+"Buttons" = "Кнопки"
+"Battery" = "Батарея"
+"Device" = { full = "Рация", short = "Рация" }
+"Apps" = { full = "Программы", short = "Прилож." }
+"Security" = "Защита"
+"Language" = "Язык"
+"System" = "Система"
+"English" = "Англ."
+
+"Backlight Time" = { full = "Подсветка", short = "Свет" }
+"Max Brightness" = { full = "Макс. яркость", short = "Ярк. +" }
+"Min Brightness" = { full = "Мин. яркость", short = "Ярк. -" }
+"Contrast" = "Контраст"
+"Invert Pixels" = { full = "Инверсия LCD", short = "Инверсия" }
+"Animations" = "Анимация"
+
+"AF Gain" = "Громкость"
+"Beep Vol" = "Громк. бип"
+"Key Beep" = "Звук кнопок"
+"Mic Gain" = "Микрофон"
+"Roger Beep" = "Роджер-бип"
+"Boot Jingle" = { full = "Звук пуска", short = "Пуск" }
+"RX Profile" = "Профиль RX"
+
+"Shortcuts" = "Ярлыки"
+"Tweaks" = "Тонко"
+"Auto Lock" = { full = "Автоблок", short = "Блок." }
+"PTT Mode" = "Режим PTT"
+
+"Clock" = "Частота"
+"UART Baud" = "UART бод"
+"Info" = "Инфо"
+"Storage" = "Память"
+"Calibration" = { full = "Калибровка", short = "Калибр." }
+"Debug" = "Отладка"
+"Reset Settings" = { full = "Сброс настр.", short = "Сброс" }
+"Restart" = { full = "Перезагрузка", short = "Рестарт" }
+
+"Used" = "Занято"
+"Free" = "Свободно"
+"Files" = "Файлы"
+"Format Storage" = { full = "Формат", short = "Формат" }
+"Erase All Data" = { full = "Стереть всё", short = "Стереть" }
+
+"Model" = "Модель"
+"Owner" = "Позывной"
+"Tag" = "Метка"
+"Radio ID" = "ID рации"
+"Boot Splash" = "Заставка"
+
+"OK" = "ОК"
+"Cancel" = "Отмена"
+"Save" = "Сохр."
+"Back" = "Назад"
+"Hold" = "Держать"
+"Off" = "Выкл"
+"On" = "Вкл"
+"None" = "Нет"

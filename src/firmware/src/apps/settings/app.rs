@@ -85,7 +85,9 @@ impl SettingsApp {
 
     #[inline(always)]
     pub fn is_animating(&self) -> bool {
-        self.slide_offset_x != 0 || self.view.scroller.is_animating()
+        self.slide_offset_x != 0
+            || self.view.scroller.is_animating()
+            || (self.view.animated && self.view.marquee.is_active())
     }
 
     pub(crate) fn reset_input_state(&mut self) {
@@ -106,6 +108,8 @@ impl SettingsApp {
         gfx::icons::ICON_APPS,
         #[cfg(feature = "passcode")]
         gfx::icons::ICON_SECURITY,
+        #[cfg(feature = "filesystem")]
+        gfx::icons::ICON_GLOBE,
         gfx::icons::ICON_SYSTEM,
     ];
 
@@ -799,6 +803,31 @@ mod tests {
             super::super::apps::package_icons("Notes", 1).0,
             gfx::icons::ICON_APPS
         );
+    }
+
+    #[test]
+    fn root_settings_icons_match_page_defs_and_language_picker_persists() {
+        let root_spec = super::super::options::page_spec(PageId::Root);
+        assert_eq!(SettingsApp::ROOT_ICONS.len(), root_spec.defs.len());
+        #[cfg(feature = "filesystem")]
+        {
+            let lang_idx = (0..root_spec.defs.len())
+                .find(|&i| root_spec.title(i) == "Language")
+                .expect("Language entry should appear in Settings Root");
+            assert!(core::ptr::eq(
+                SettingsApp::ROOT_ICONS[lang_idx],
+                gfx::icons::ICON_GLOBE
+            ));
+            let mut cfg = crate::config::MasterConfig::DEFAULT;
+            let mut status = gfx::gui::modules::menu::ShortString::empty();
+            super::super::asset_chooser::AssetId::Language.format_status(&cfg, &mut status);
+            assert_eq!(status.as_str(), "English");
+
+            cfg.system.lang_active = 1;
+            crate::config::write_cstr(&mut cfg.system.lang_path, "/sys/lang/01_japanese.lng");
+            super::super::asset_chooser::AssetId::Language.format_status(&cfg, &mut status);
+            assert_eq!(status.as_str(), "Japanese");
+        }
     }
 
     #[test]

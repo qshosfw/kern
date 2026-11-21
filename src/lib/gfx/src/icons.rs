@@ -81,8 +81,34 @@ pub fn draw_status_glyph(canvas: &mut Canvas, x: i16, y: i16, glyph: &StatusGlyp
     }
 }
 
+/// Built-in 5x5 empty tofu box `□` fallback for missing external status glyphs.
+pub const FALLBACK_BOX_5: [u8; 5] = [0xF8, 0x88, 0x88, 0x88, 0xF8];
+/// Built-in 5x5 `?` fallback for missing external status glyphs.
+pub const FALLBACK_QMARK_5: [u8; 5] = [0x70, 0x90, 0x20, 0x00, 0x20];
+/// Built-in 8x8 empty tofu box `□` fallback for missing external 8x8 glyphs.
+pub const FALLBACK_BOX_8: [u8; 8] = [0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF, 0x00];
+/// Built-in 8x8 boxed `[?]` fallback for missing external or unknown icons.
+pub const FALLBACK_QMARK_8: &[u8; 8] = sys(icon::MISSING);
+
+/// 8x8 system glyph for an `abi::icon` identifier, falling back to `[?]` when absent.
+#[inline(always)]
+pub const fn system_icon_or_missing(id: u8) -> &'static [u8; 8] {
+    match system_icon(id) {
+        Some(bits) => bits,
+        None => FALLBACK_QMARK_8,
+    }
+}
+
 pub fn draw_icon(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) {
-    draw::draw_bitmap(canvas, x, y, 8, 8, &status::ICONS_8[icon as usize], color);
+    let idx = icon as usize;
+    if idx < Icon::PRIMARY_COUNT {
+        draw::draw_bitmap(canvas, x, y, 8, 8, &status::ICONS_8[idx], color);
+    } else {
+        // Extended status icons have crisp 5px art; center inside the 8x8 cell.
+        let w = icon.width();
+        let dx = ((8 - w) >> 1) as i16;
+        draw::draw_bitmap(canvas, x + dx, y + 1, w, 5, &status::ICONS_5[idx], color);
+    }
 }
 
 pub fn draw_icon_5x5(canvas: &mut Canvas, x: i16, y: i16, icon: Icon, color: Color) {
@@ -155,6 +181,8 @@ pub const ICON_SYSTEM: &[u8; 8] = sys(icon::SYSTEM);
 pub const ICON_UPLOAD: &[u8; 8] = sys(icon::UPLOAD);
 pub const ICON_HOME: &[u8; 8] = sys(icon::HOME);
 pub const ICON_MOON: &[u8; 8] = sys(icon::SLEEP);
+/// 8x8 aspect-compensated Globe icon for Language / Region settings.
+pub const ICON_GLOBE: &[u8; 8] = &[0x3C, 0x5A, 0xA5, 0xFF, 0xA5, 0x5A, 0x3C, 0x00];
 pub static ICON_NONE: [u8; 8] = [0u8; 8];
 
 #[cfg(test)]
@@ -177,7 +205,8 @@ mod tests {
     #[test]
     fn status_glyphs_stay_inside_their_width() {
         for n in 0..Icon::COUNT {
-            let icon = Icon::from_u8(n as u8).unwrap();
+            let icon = Icon::from_index(n as u8).unwrap();
+            assert_eq!(Icon::from_u8(icon.abi_id()), Some(icon));
             let mask = !(0xFFu8 >> icon.width());
             for row in status::ICONS_5[n] {
                 assert_eq!(row & !mask, 0, "{icon:?} spills past its width");
@@ -189,6 +218,7 @@ mod tests {
     fn file_type_glyphs_are_distinct() {
         let ids = [
             icon::FILE_DOC,
+            icon::FILE_FOLDER,
             icon::FILE_BIN,
             icon::FILE_CONTACTS,
             icon::FILE_BANDPLAN,
@@ -204,6 +234,14 @@ mod tests {
             icon::FILE_SCRIPT,
             icon::FILE_UNKNOWN,
             icon::FILE_MSG,
+            icon::FILE_CFG,
+            icon::FILE_FW,
+            icon::FILE_AUDIO,
+            icon::FILE_TABLE,
+            icon::FILE_CERT,
+            icon::FILE_ARCHIVE,
+            icon::FILE_MAP,
+            icon::FILE_TEXT,
         ];
         for (i, &a) in ids.iter().enumerate() {
             for &b in &ids[i + 1..] {
@@ -215,8 +253,9 @@ mod tests {
     #[test]
     fn system_icon_rejects_status_and_unknown_ids() {
         assert!(system_icon(icon::MOON).is_none());
-        assert!(system_icon(icon::FILE_MSG + 1).is_none());
+        assert!(system_icon(icon::MISSING + 1).is_none());
         assert_eq!(system_icon(icon::FOLDER), Some(ICON_FOLDER));
+        assert_eq!(system_icon_or_missing(0xFE), FALLBACK_QMARK_8);
     }
 
     #[test]

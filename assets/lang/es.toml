@@ -1,0 +1,72 @@
+# Kern OS Localization Catalog — Spanish (ES)
+# Natural, concise handheld-radio Spanish roughly matching English label lengths.
+# Entries may be plain strings or `{ full = "...", short = "..." }` for compact UI slots.
+
+[meta]
+code = "es"
+name = "Español"
+ascii = "Spanish (ES)"
+font_hint = 1 # tiny5
+
+[strings]
+"Settings" = "Ajustes"
+"Display" = "Pantalla"
+"Audio" = "Audio"
+"Buttons" = "Teclas"
+"Battery" = "Batería"
+"Device" = "Equipo"
+"Apps" = "Apps"
+"Security" = "Seguridad"
+"Language" = "Idioma"
+"System" = "Sistema"
+"English" = "Inglés"
+
+"Backlight Time" = { full = "Luz de fondo", short = "Luz fondo" }
+"Max Brightness" = { full = "Brillo máx.", short = "Brillo +" }
+"Min Brightness" = { full = "Brillo mín.", short = "Brillo -" }
+"Contrast" = "Contraste"
+"Invert Pixels" = { full = "Invertir LCD", short = "Invertir" }
+"Animations" = { full = "Animaciones", short = "Anim." }
+
+"AF Gain" = { full = "Ganancia AF", short = "Vol. AF" }
+"Beep Vol" = "Vol. tono"
+"Key Beep" = { full = "Tono tecla", short = "Pitido" }
+"Mic Gain" = { full = "Ganancia mic", short = "Mic." }
+"Roger Beep" = { full = "Pitido fin", short = "Roger" }
+"Boot Jingle" = { full = "Tono inicio", short = "Inicio" }
+"RX Profile" = "Perfil RX"
+
+"Shortcuts" = "Atajos"
+"Tweaks" = "Ajustes+"
+"Auto Lock" = { full = "Autobloqueo", short = "Bloq." }
+"PTT Mode" = "Modo PTT"
+
+"Clock" = "Reloj CPU"
+"UART Baud" = "Baud UART"
+"Info" = "Info"
+"Storage" = { full = "Memoria", short = "Mem." }
+"Calibration" = { full = "Calibración", short = "Calib." }
+"Debug" = "Depurar"
+"Reset Settings" = { full = "Restablecer", short = "Reset" }
+"Restart" = "Reiniciar"
+
+"Used" = "Usado"
+"Free" = "Libre"
+"Files" = "Archivos"
+"Format Storage" = { full = "Formatear", short = "Format." }
+"Erase All Data" = { full = "Borrar todo", short = "Borrar" }
+
+"Model" = "Modelo"
+"Owner" = "Indicativo"
+"Tag" = "Etiqueta"
+"Radio ID" = "ID Radio"
+"Boot Splash" = { full = "Logo inicio", short = "Logo" }
+
+"OK" = "OK"
+"Cancel" = { full = "Cancelar", short = "No" }
+"Save" = "Guardar"
+"Back" = "Volver"
+"Hold" = "Mantener"
+"Off" = "No"
+"On" = "Sí"
+"None" = "Ninguno"

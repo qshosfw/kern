@@ -120,12 +120,69 @@ pub mod icon {
         FILE_SCRIPT = 100,
         FILE_UNKNOWN = 101,
         FILE_MSG = 102,
+        FILE_CFG = 103,
+        FILE_FW = 104,
+        FILE_AUDIO = 105,
+        FILE_TABLE = 106,
+        FILE_CERT = 107,
+        FILE_ARCHIVE = 108,
+        FILE_MAP = 109,
+        FILE_TEXT = 110,
+        USB = 111,
+        SERIAL = 112,
+        SPECTRUM = 113,
+        MORSE = 114,
+        REPEATER = 115,
+        THERMOMETER = 116,
+        COMPASS = 117,
+        MEMORY = 118,
+        WIFI = 119,
+        BATTERY_LOW = 120,
+        BATTERY_CHG = 121,
+        LOCK_OPEN = 122,
+        EYE = 123,
+        TERMINAL = 124,
+        BOOKMARK = 125,
+        FOLDER_UP = 126,
+        MISSING = 127,
+        // 0x80 (128) = KRX_ICON_CUSTOM_0, 0x81 (129) = KRX_ICON_CUSTOM_1
+        STATUS_TX = 130,
+        STATUS_RX = 131,
+        STATUS_DUAL_WATCH = 132,
+        STATUS_CROSS_BAND = 133,
+        STATUS_VOX = 134,
+        STATUS_BLUETOOTH = 135,
+        STATUS_GPS = 136,
+        STATUS_WIFI = 137,
+        STATUS_ALARM = 138,
+        STATUS_RECORD = 139,
+        STATUS_HEADPHONES = 140,
+        STATUS_WARNING = 141,
+        STATUS_MAIL = 142,
+        STATUS_CLOCK = 143,
+        STATUS_TONE = 144,
+        STATUS_REVERSE = 145,
+        STATUS_ENCRYPT = 146,
+        STATUS_PACKET = 147,
     }
 
-    /// First 8x8 system glyph; identifiers below it are 5x5 status glyphs.
+    /// First 8x8 system glyph; identifiers below it are primary 5px status glyphs.
     pub const SYSTEM_BASE: u8 = FOLDER;
-    /// Number of 8x8 system glyphs (`SYSTEM_BASE..=FILE_MSG`).
-    pub const SYSTEM_COUNT: usize = (FILE_MSG - SYSTEM_BASE) as usize + 1;
+    /// Number of 8x8 system glyphs (`SYSTEM_BASE..=MISSING`).
+    pub const SYSTEM_COUNT: usize = (MISSING - SYSTEM_BASE) as usize + 1;
+    /// First extended 5px status glyph (placed above `KRX_ICON_CUSTOM_1 = 0x81`).
+    pub const STATUS_EXT_BASE: u8 = STATUS_TX;
+    /// Number of extended 5px status glyphs (`STATUS_TX..=STATUS_PACKET`).
+    pub const STATUS_EXT_COUNT: usize = (STATUS_PACKET - STATUS_TX) as usize + 1;
+
+    const _: () = assert!(
+        (SYSTEM_BASE as usize + SYSTEM_COUNT) <= 0x80,
+        "built-in system icon identifiers must stay below KRX_ICON_CUSTOM_0 (0x80)"
+    );
+    const _: () = assert!(
+        STATUS_EXT_BASE == 0x82 && (STATUS_EXT_BASE as usize + STATUS_EXT_COUNT) < 0xFF,
+        "extended status icon identifiers must sit in 0x82..0xFF"
+    );
 }
 
 /// Where a declared action (`SECTION_ACTIONS`) is surfaced by the OS.

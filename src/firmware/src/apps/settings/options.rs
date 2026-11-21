@@ -11,6 +11,8 @@ setting_page!(pub ROOT_PAGE = [
     ("Apps", SettingDef::submenu(PageId::Apps)),
     #[cfg(feature = "passcode")]
     ("Security", SettingDef::submenu(PageId::Security)),
+    #[cfg(feature = "filesystem")]
+    ("Language", SettingDef::asset(AssetId::Language)),
     ("System", SettingDef::submenu(PageId::System)),
 ]);
 

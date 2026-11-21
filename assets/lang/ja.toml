@@ -1,0 +1,72 @@
+# Kern OS Localization Catalog — Japanese (JA)
+# Natural, concise handheld-radio Japanese (Yaesu/Icom/Kenwood UI style) matching English width.
+# Entries may be plain strings or `{ full = "...", short = "..." }` for compact UI slots.
+
+[meta]
+code = "ja"
+name = "日本語"
+ascii = "Japanese (JA)"
+font_hint = 3 # tiny5 + cjk_ja
+
+[strings]
+"Settings" = "設定"
+"Display" = "画面"
+"Audio" = "音声"
+"Buttons" = "キー"
+"Battery" = "電池"
+"Device" = "本体"
+"Apps" = "アプリ"
+"Security" = "ロック"
+"Language" = "言語"
+"System" = "システム"
+"English" = "英語"
+
+"Backlight Time" = { full = "ライト時間", short = "ライト" }
+"Max Brightness" = { full = "最大輝度", short = "輝度+" }
+"Min Brightness" = { full = "最小輝度", short = "輝度-" }
+"Contrast" = { full = "コントラスト", short = "濃淡" }
+"Invert Pixels" = "画面反転"
+"Animations" = { full = "アニメ表示", short = "アニメ" }
+
+"AF Gain" = "音量"
+"Beep Vol" = "ビープ音"
+"Key Beep" = "キー音"
+"Mic Gain" = "マイク"
+"Roger Beep" = "ロジャー"
+"Boot Jingle" = "起動音"
+"RX Profile" = "受信音質"
+
+"Shortcuts" = { full = "キー割当", short = "割当" }
+"Tweaks" = "詳細"
+"Auto Lock" = "自動ロック"
+"PTT Mode" = "PTT設定"
+
+"Clock" = "クロック"
+"UART Baud" = "UART速度"
+"Info" = "本体情報"
+"Storage" = { full = "ストレージ", short = "記憶" }
+"Calibration" = "校正"
+"Debug" = "デバッグ"
+"Reset Settings" = { full = "設定初期化", short = "初期化" }
+"Restart" = "再起動"
+
+"Used" = "使用済"
+"Free" = "空き"
+"Files" = "ファイル"
+"Format Storage" = "初期化"
+"Erase All Data" = "全消去"
+
+"Model" = "機種"
+"Owner" = "コール"
+"Tag" = "タグ"
+"Radio ID" = "無線ID"
+"Boot Splash" = "起動画面"
+
+"OK" = "決定"
+"Cancel" = { full = "キャンセル", short = "中止" }
+"Save" = "保存"
+"Back" = "戻る"
+"Hold" = "長押し"
+"Off" = "オフ"
+"On" = "オン"
+"None" = "なし"

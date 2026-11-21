@@ -170,8 +170,8 @@ const _: () = {
     assert!(core::mem::offset_of!(AudioConfig, crc32) == 76);
     assert!(core::mem::size_of::<KeyConfig>() == 64);
     assert!(core::mem::offset_of!(KeyConfig, crc32) == 60);
-    assert!(core::mem::size_of::<SystemConfig>() == 44);
-    assert!(core::mem::offset_of!(SystemConfig, crc32) == 40);
+    assert!(core::mem::size_of::<SystemConfig>() == 80);
+    assert!(core::mem::offset_of!(SystemConfig, crc32) == 76);
     assert!(core::mem::size_of::<BatteryConfig>() == 20);
     assert!(core::mem::offset_of!(BatteryConfig, crc32) == 16);
     assert!(core::mem::size_of::<AppsConfig>() == 64);

@@ -15,6 +15,7 @@ pub enum AssetId {
     Splash = 0,
     Roger = 1,
     Jingle = 2,
+    Language = 3,
 }
 
 #[repr(C)]
@@ -25,7 +26,7 @@ struct AssetMeta {
     _pad: u8,
 }
 
-static ASSET_META: [AssetMeta; 3] = [
+static ASSET_META: [AssetMeta; 4] = [
     AssetMeta {
         dom: 0,
         flag_off: core::mem::offset_of!(crate::config::DisplayConfig, boot_splash_mode) as u8,
@@ -44,6 +45,12 @@ static ASSET_META: [AssetMeta; 3] = [
         path_off: core::mem::offset_of!(crate::config::AudioConfig, jingle_path) as u8,
         _pad: 0,
     },
+    AssetMeta {
+        dom: 3,
+        flag_off: core::mem::offset_of!(crate::config::SystemConfig, lang_active) as u8,
+        path_off: core::mem::offset_of!(crate::config::SystemConfig, lang_path) as u8,
+        _pad: 0,
+    },
 ];
 
 const _: () = {
@@ -59,13 +66,18 @@ const _: () = {
         core::mem::offset_of!(crate::config::AudioConfig, jingle_path) + 32
             <= core::mem::size_of::<crate::config::AudioConfig>()
     );
+    assert!(
+        core::mem::offset_of!(crate::config::SystemConfig, lang_path) + 32
+            <= core::mem::size_of::<crate::config::SystemConfig>()
+    );
 };
 
 utils::static_bytes!(
     static ASSET_STRS = b"\
 Boot Splash\0/user/splash\0.rle|.img|.bin\0None\0\
 Roger Beep\0/user/rogers\0.ton|.rgr\0Off\0\
-Boot Jingle\0/user/jingles\0.ton\0Off\0";
+Boot Jingle\0/user/jingles\0.ton\0Off\0\
+Language\0/sys/lang\0.lng\0English\0";
 );
 
 impl AssetId {
@@ -75,6 +87,7 @@ impl AssetId {
             0 => Some(Self::Splash),
             1 => Some(Self::Roger),
             2 => Some(Self::Jingle),
+            3 => Some(Self::Language),
             _ => None,
         }
     }
@@ -181,6 +194,20 @@ impl AssetId {
 
         let current_sel = self.finalize_entries(&ctx.config, storage);
         let count = storage.count as usize;
+        #[cfg(feature = "filesystem")]
+        if self == Self::Language {
+            let mut name_buf = [0u8; 18];
+            for idx in 0..count {
+                let path = storage.paths[storage.order[idx] as usize].as_str();
+                if let Some(label) = gfx::media::read_lang_label_streaming(
+                    |off, dst| ctx.storage.fs.read_file_at(path, off, dst).unwrap_or(0),
+                    false,
+                    &mut name_buf,
+                ) {
+                    storage.labels[idx + 1].set_str(label);
+                }
+            }
+        }
         let labels_slice: &'static [ShortString] =
             unsafe { core::slice::from_raw_parts(storage.labels.as_ptr(), count + 1) };
         super::dialog::show_radio_sheet(

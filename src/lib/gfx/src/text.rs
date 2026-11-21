@@ -1,22 +1,30 @@
 use crate::{Canvas, Color, GfxFont};
 pub use utils::format::*;
 
-/// Draw a single ASCII character using the provided GfxFont.
+/// Draw a single ASCII character clipped horizontally to `[min_x, max_x)`.
 #[inline(never)]
-pub fn draw_char(
+pub fn draw_char_clipped(
     canvas: &mut Canvas,
     x: i16,
     y: i16,
     c: char,
     font: &GfxFont,
     color: Color,
+    min_x: i16,
+    max_x: i16,
 ) -> i16 {
     let code = c as u32;
 
     // Render degree symbol '°' (U+00B0)
     if c == '°' || code == 0xB0 {
-        if x >= 0 && y >= 4 {
-            canvas.fill_rect(x as u8, (y - 4) as u8, 2, 2, color);
+        if y >= 4 {
+            for dx in 0..2i16 {
+                let px = x + dx;
+                if px >= min_x && px < max_x && (px as u16) < 128 {
+                    canvas.draw_pixel(px as u8, (y - 4) as u8, color);
+                    canvas.draw_pixel(px as u8, (y - 3) as u8, color);
+                }
+            }
         }
         return 3;
     }
@@ -31,13 +39,16 @@ pub fn draw_char(
     }
 
     let glyph = &font.glyphs[glyph_idx];
-    let bitmap = font.bitmap;
-
+    let adv = glyph.x_advance() as i16;
     let width = glyph.width() as usize;
-    let height = glyph.height() as usize;
     let x_base = x + glyph.x_offset() as i16;
-    let y_base = y + glyph.y_offset() as i16;
+    if x_base + (width as i16) <= min_x || x_base >= max_x {
+        return adv;
+    }
 
+    let bitmap = font.bitmap;
+    let height = glyph.height() as usize;
+    let y_base = y + glyph.y_offset() as i16;
     let mut bit_idx = (glyph.bitmap_offset as usize) * 8;
 
     for gy in 0..height {
@@ -48,7 +59,7 @@ pub fn draw_char(
 
             if byte_idx < bitmap.len() && ((bitmap[byte_idx] >> bit_shift) & 1) != 0 {
                 let px = x_base + gx as i16;
-                if (px as u16) < 128 && (py as u16) < 64 {
+                if px >= min_x && px < max_x && (px as u16) < 128 && (py as u16) < 64 {
                     canvas.draw_pixel(px as u8, py as u8, color);
                 }
             }
@@ -57,26 +68,36 @@ pub fn draw_char(
         }
     }
 
-    glyph.x_advance() as i16
+    adv
 }
 
-/// Draw a string onto the canvas using the provided GfxFont.
-#[inline(never)]
-pub fn draw_str(canvas: &mut Canvas, x: i16, y: i16, text: &str, font: &GfxFont, color: Color) {
-    draw_str_max_x(canvas, x, y, text, font, color, 128);
-}
-
-/// Draw a string onto the canvas up to a maximum X coordinate. Returns the advanced X.
-#[inline(never)]
-pub fn draw_str_max_x(
+/// Draw a single ASCII character using the provided GfxFont.
+#[inline(always)]
+pub fn draw_char(
     canvas: &mut Canvas,
-    mut x: i16,
+    x: i16,
+    y: i16,
+    c: char,
+    font: &GfxFont,
+    color: Color,
+) -> i16 {
+    draw_char_clipped(canvas, x, y, c, font, color, 0, 128)
+}
+
+/// Draw a string horizontally scrolled by `scroll_x` pixels and clipped strictly to `[min_x, max_x)`.
+/// Enables smooth live marquee scrolling without bleeding over adjacent icons or values.
+#[inline(never)]
+pub fn draw_str_clipped(
+    canvas: &mut Canvas,
+    min_x: i16,
+    max_x: i16,
+    scroll_x: i16,
     y: i16,
     text: &str,
     font: &GfxFont,
     color: Color,
-    max_x: i16,
 ) -> i16 {
+    let mut x = min_x - scroll_x;
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -86,14 +107,58 @@ pub fn draw_str_max_x(
         } else {
             (b as char, 1)
         };
-        let adv = draw_char(canvas, x, y, c, font, color);
-        if x + adv > max_x {
+        let adv = draw_char_clipped(canvas, x, y, c, font, color, min_x, max_x);
+        x += adv;
+        if x >= max_x {
             break;
         }
-        x += adv;
         i += step;
     }
     x
+}
+
+/// Draw a string clipped to `max_x`, appending `".."` when truncated so overflow is legible.
+#[inline(never)]
+pub fn draw_str_ellipsis(
+    canvas: &mut Canvas,
+    x: i16,
+    y: i16,
+    text: &str,
+    font: &GfxFont,
+    color: Color,
+    max_x: i16,
+) -> i16 {
+    let avail = max_x - x;
+    if avail <= 0 {
+        return x;
+    }
+    if str_width(text, font) <= avail {
+        return draw_str_clipped(canvas, x, max_x, 0, y, text, font, color);
+    }
+    let dots_w = str_width("..", font);
+    let body_max = (max_x - dots_w).max(x);
+    draw_str_clipped(canvas, x, body_max, 0, y, text, font, color);
+    draw_str_clipped(canvas, body_max, max_x, 0, y, "..", font, color)
+}
+
+/// Draw a string onto the canvas using the provided GfxFont.
+#[inline(always)]
+pub fn draw_str(canvas: &mut Canvas, x: i16, y: i16, text: &str, font: &GfxFont, color: Color) {
+    draw_str_clipped(canvas, x, 128, 0, y, text, font, color);
+}
+
+/// Draw a string onto the canvas up to a maximum X coordinate. Returns the advanced X.
+#[inline(always)]
+pub fn draw_str_max_x(
+    canvas: &mut Canvas,
+    x: i16,
+    y: i16,
+    text: &str,
+    font: &GfxFont,
+    color: Color,
+    max_x: i16,
+) -> i16 {
+    draw_str_clipped(canvas, x, max_x, 0, y, text, font, color)
 }
 
 /// Calculate the total pixel width of a string formatted with the specified GfxFont.

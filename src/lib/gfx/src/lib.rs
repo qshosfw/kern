@@ -6,6 +6,7 @@ pub mod draw;
 pub mod fonts;
 pub mod gui;
 pub mod icons;
+pub mod media;
 pub mod text;
 pub mod widgets;
 

@@ -1,7 +1,7 @@
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SystemConfig {
-    pub version: u8,            // 4
+    pub version: u8,            // 5
     pub model: u8,              // 0=UV-K1, 1=UV-K5 V3, 2=Custom
     pub uart_baud: u8,          // 0=115200, 1=38400
     pub cpu_clock: u8,          // 0=16 MHz, 1=24 MHz, 2=32 MHz, 3=48 MHz, 4=72 MHz
@@ -9,6 +9,9 @@ pub struct SystemConfig {
     pub owner: [u8; 12],        // Owner Call Sign / Name
     pub tag: [u8; 8],           // Tag / Device Identifier (formerly asset_tag)
     pub custom_model: [u8; 12], // Custom model string e.g. "UV-K1(8)", "UV-K1s"
+    pub lang_active: u8,        // 0=Built-in English, 1=External .lng pack at lang_path
+    pub _lang_pad: [u8; 3],
+    pub lang_path: [u8; 32], // e.g. "/sys/lang/ja.lng"
     pub crc32: u32,
 }
 
@@ -33,7 +36,7 @@ impl SystemConfig {
 
     pub const fn new() -> Self {
         Self {
-            version: 4,
+            version: 5,
             model: 0,
             uart_baud: 0, // 115200 default
             cpu_clock: 3, // 48 MHz default
@@ -41,8 +44,15 @@ impl SystemConfig {
             owner: *b"N0CALL      ",
             tag: *b"00000000",
             custom_model: *b"UV-K1       ",
+            lang_active: 0,
+            _lang_pad: [0; 3],
+            lang_path: [0; 32],
             crc32: 0,
         }
+    }
+
+    pub fn lang_path_str(&self) -> &str {
+        super::read_cstr(&self.lang_path)
     }
 
     pub const fn baud_rate(&self) -> u32 {
@@ -130,4 +140,4 @@ impl SystemConfig {
     }
 }
 
-crate::config_block!(SystemConfig, "/pref/system.cfg", 4);
+crate::config_block!(SystemConfig, "/pref/system.cfg", 5);

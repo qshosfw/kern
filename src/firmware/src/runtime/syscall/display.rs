@@ -10,12 +10,17 @@ pub fn system_icon_8(icon_id: u8) -> Option<&'static [u8; 8]> {
 
 #[inline(never)]
 pub fn draw_icon(x: i16, y: i16, icon_id: u8, color: u8) {
+    if icon_id == kernel::proc::abi::KRX_ICON_NONE {
+        return;
+    }
     let col = color_from_u8(color);
     let canvas = active_canvas_mut();
     if let Some(bits) = system_icon_8(icon_id) {
         gfx::icons::draw_icon_8(canvas, x, y, bits, col);
     } else if let Some(icon) = kernel::ui::Icon::from_u8(icon_id) {
         gfx::icons::draw_icon(canvas, x, y, icon, col);
+    } else {
+        gfx::icons::draw_icon_8(canvas, x, y, gfx::icons::FALLBACK_QMARK_8, col);
     }
 }
 
@@ -49,7 +54,7 @@ pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
 
 #[inline(never)]
 pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
-    use ::abi::{
+    use abi::{
         idx as op,
         sub::{gfx_ctl, gfx_draw},
     };
@@ -149,7 +154,7 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::abi::Op;
+    use abi::Op;
 
     #[test]
     fn get_framebuffer_marks_all_pages_dirty() {

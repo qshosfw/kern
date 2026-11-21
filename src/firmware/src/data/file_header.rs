@@ -24,10 +24,22 @@ pub enum FileType {
     ScannerHits = 14,
     ToneSequence = 15,
     Calibration = 16,
+    Font = 17,
+    Firmware = 18,
+    Signature = 19,
+    Message = 20,
+    Text = 21,
+    Script = 22,
+    Audio = 23,
+    Key = 24,
+    Table = 25,
+    Archive = 26,
+    Map = 27,
+    Language = 28,
 }
 
 impl FileType {
-    /// Return the canonical natural file extension for this file type (ORDS-01).
+    /// Return the canonical file extension for this table/file type.
     pub const fn extension(&self) -> &'static str {
         match self {
             FileType::GenericFile => "bin",
@@ -47,6 +59,18 @@ impl FileType {
             FileType::ScannerHits => "hit",
             FileType::ToneSequence => "ton",
             FileType::Calibration => "dat",
+            FileType::Font => "fnt",
+            FileType::Firmware => "kfw",
+            FileType::Signature => "sig",
+            FileType::Message => "msg",
+            FileType::Text => "txt",
+            FileType::Script => "scr",
+            FileType::Audio => "aud",
+            FileType::Key => "key",
+            FileType::Table => "csv",
+            FileType::Archive => "bak",
+            FileType::Map => "map",
+            FileType::Language => "lng",
         }
     }
 
@@ -55,14 +79,15 @@ impl FileType {
     pub const fn icon_id(&self) -> u8 {
         use ::abi::icon;
         match self {
-            FileType::GenericFile | FileType::RawData => icon::FILE_BIN,
+            FileType::GenericFile => icon::FILE_UNKNOWN,
+            FileType::RawData => icon::FILE_BIN,
             FileType::Directory => icon::FILE_FOLDER,
             FileType::Channels => icon::CH,
             FileType::Contacts => icon::FILE_CONTACTS,
             FileType::VfoSnapshot => icon::VFO,
             FileType::BandPlan => icon::FILE_BANDPLAN,
             FileType::FmBroadcast => icon::FILE_FM,
-            FileType::Settings => icon::GEAR,
+            FileType::Settings => icon::FILE_CFG,
             FileType::AppExecutable => icon::APPS,
             FileType::Bitmap | FileType::RleBitmap => icon::FILE_IMAGE,
             FileType::Log => icon::FILE_LOG,
@@ -70,6 +95,18 @@ impl FileType {
             FileType::ScannerHits => icon::FILE_HITS,
             FileType::ToneSequence => icon::FILE_TONES,
             FileType::Calibration => icon::FILE_CALIB,
+            FileType::Font => icon::FILE_FONT,
+            FileType::Firmware => icon::FILE_FW,
+            FileType::Signature => icon::FILE_CERT,
+            FileType::Message => icon::FILE_MSG,
+            FileType::Text => icon::FILE_TEXT,
+            FileType::Script => icon::FILE_SCRIPT,
+            FileType::Audio => icon::FILE_AUDIO,
+            FileType::Key => icon::FILE_KEY,
+            FileType::Table => icon::FILE_TABLE,
+            FileType::Archive => icon::FILE_ARCHIVE,
+            FileType::Map => icon::FILE_MAP,
+            FileType::Language => icon::FONT,
         }
     }
 
@@ -91,19 +128,43 @@ impl FileType {
             FileType::FmBroadcast
         } else if name.ends_with(".cfg") || name.ends_with(".set") || name.ends_with(".sys") {
             FileType::Settings
-        } else if name.ends_with(".krx") || name.ends_with(".app") {
+        } else if name.ends_with(".krx") || name.ends_with(".app") || name.ends_with(".mod") {
             FileType::AppExecutable
         } else if name.ends_with(".ton") {
             FileType::ToneSequence
-        } else if name.ends_with(".dat") || name.ends_with(".sig") {
+        } else if name.ends_with(".dat") {
             FileType::Calibration
+        } else if name.ends_with(".sig") {
+            FileType::Signature
+        } else if name.ends_with(".fnt") {
+            FileType::Font
+        } else if name.ends_with(".lng") {
+            FileType::Language
+        } else if name.ends_with(".kfw") {
+            FileType::Firmware
+        } else if name.ends_with(".msg") {
+            FileType::Message
+        } else if name.ends_with(".txt") || name.ends_with(".md") {
+            FileType::Text
+        } else if name.ends_with(".scr") || name.ends_with(".sh") {
+            FileType::Script
+        } else if name.ends_with(".aud") || name.ends_with(".wav") {
+            FileType::Audio
+        } else if name.ends_with(".key") {
+            FileType::Key
+        } else if name.ends_with(".csv") || name.ends_with(".tbl") {
+            FileType::Table
+        } else if name.ends_with(".bak") {
+            FileType::Archive
+        } else if name.ends_with(".map") || name.ends_with(".gpx") {
+            FileType::Map
         } else if name.ends_with(".bmp") {
             FileType::Bitmap
         } else if name.ends_with(".rle") {
             FileType::RleBitmap
         } else if name.ends_with(".log") {
             FileType::Log
-        } else if name.ends_with(".raw") {
+        } else if name.ends_with(".raw") || name.ends_with(".bin") {
             FileType::RawData
         } else {
             FileType::GenericFile
@@ -129,6 +190,18 @@ impl FileType {
             FileType::ScannerHits => 'H',
             FileType::ToneSequence => 'M',
             FileType::Calibration => 'K',
+            FileType::Font => 'N',
+            FileType::Firmware => 'U',
+            FileType::Signature => 'G',
+            FileType::Message => 'E',
+            FileType::Text => 'X',
+            FileType::Script => 'P',
+            FileType::Audio => 'O',
+            FileType::Key => 'Y',
+            FileType::Table => 'Q',
+            FileType::Archive => 'J',
+            FileType::Map => 'G',
+            FileType::Language => 'L',
         }
     }
 }
@@ -208,7 +281,7 @@ impl TableFileHeader {
     }
 
     /// Return the power-of-two shift $N$ such that `record_stride == (1 << N)`.
-    /// Returns `None` if `record_stride` is not a valid ORDS-01 power-of-two stride (`16`, `32`, `64`).
+    /// Returns `None` if `record_stride` is not a supported power-of-two stride (`16`, `32`, `64`).
     #[inline(always)]
     pub const fn stride_shift(&self) -> Option<u32> {
         match self.record_stride {
@@ -307,6 +380,17 @@ mod tests {
             FileType::ScannerHits,
             FileType::ToneSequence,
             FileType::Calibration,
+            FileType::Font,
+            FileType::Firmware,
+            FileType::Signature,
+            FileType::Message,
+            FileType::Text,
+            FileType::Script,
+            FileType::Audio,
+            FileType::Key,
+            FileType::Table,
+            FileType::Archive,
+            FileType::Map,
         ];
         for ft in all {
             let id = ft.icon_id();
@@ -314,6 +398,12 @@ mod tests {
             assert!(((id - ::abi::icon::SYSTEM_BASE) as usize) < ::abi::icon::SYSTEM_COUNT);
         }
         assert_eq!(FileType::AppExecutable.icon_id(), ::abi::icon::APPS);
+        assert_eq!(FileType::from_filename("tiny5.fnt"), FileType::Font);
+        assert_eq!(FileType::from_filename("kern.kfw"), FileType::Firmware);
+        assert_eq!(FileType::from_filename("calib.sig"), FileType::Signature);
+        assert_eq!(FileType::from_filename("inbox.msg"), FileType::Message);
+        assert_eq!(FileType::from_filename("readme.txt"), FileType::Text);
+        assert_eq!(FileType::from_filename("notes.csv"), FileType::Table);
         assert_ne!(FileType::Contacts.icon_id(), FileType::Zones.icon_id());
         assert_eq!(FileType::Bitmap.icon_id(), FileType::RleBitmap.icon_id());
     }

@@ -4,11 +4,12 @@
 
 use crate::fonts::mumatrix_regular::FONT as MUMATRIX;
 use crate::fonts::tomthumb::FONT as TOMTHUMB;
-use crate::gui::animation::{KineticScroller, ListScrollMode};
+use crate::gui::animation::{KineticScroller, ListScrollMode, MarqueeScroller};
 use crate::gui::view::View;
 use crate::icons;
 use crate::text;
 use crate::{Canvas, Color};
+use core::cell::Cell;
 use kernel::event::{Event, KeyCode, KeyState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +326,8 @@ pub fn get_edit_change_dir(nav_layout: u8, code: KeyCode) -> Option<ChangeDir> {
 pub struct MenuView {
     pub repeater: crate::gui::repeater::KeyRepeater,
     pub scroller: KineticScroller,
+    pub marquee: MarqueeScroller,
+    marquee_overflow: Cell<u8>,
     pub mode: ListScrollMode,
     pub scroll_top: usize,
     pub animated: bool,
@@ -335,6 +338,8 @@ impl MenuView {
         Self {
             repeater: crate::gui::repeater::KeyRepeater::new(8, 2), // 400ms initial hold delay, 100ms repeat rate @ 50ms tick
             scroller: KineticScroller::new(2),
+            marquee: MarqueeScroller::idle(),
+            marquee_overflow: Cell::new(0),
             mode: ListScrollMode::Windowed,
             scroll_top: 0,
             animated: true,
@@ -344,6 +349,8 @@ impl MenuView {
     pub fn reset_scroll(&mut self) {
         self.scroll_top = 0;
         self.scroller.jump(0);
+        self.marquee.set_overflow(0);
+        self.marquee_overflow.set(0);
     }
 
     pub fn adjust_scroll(&mut self, selected_idx: usize, total_items: usize) {
@@ -394,6 +401,8 @@ impl MenuView {
         let prev_idx = model.selected_idx;
         let wrapped = apply_list_nav_dir(model, dir, wrap);
         if model.selected_idx != prev_idx {
+            self.marquee.set_overflow(0);
+            self.marquee_overflow.set(0);
             self.adjust_scroll(model.selected_idx, model.items.len());
             if wrapped {
                 self.scroller.jump((self.scroll_top as i16) * 13);
@@ -433,6 +442,15 @@ impl MenuView {
 
         if let Event::Tick = event {
             let mut changed = self.scroller.tick();
+
+            if self.animated {
+                self.marquee.set_overflow(self.marquee_overflow.get());
+                if self.marquee.tick() {
+                    changed = true;
+                }
+            } else if self.marquee.is_active() {
+                self.marquee.set_overflow(0);
+            }
 
             // Drive navigation / edit auto-repeat from tick
             if let Some(repeat_code) = self.repeater.tick() {
@@ -596,7 +614,9 @@ fn render_menu_row(
     flags: u8,
     row_y: i16,
     icon: Option<&[u8; 8]>,
-) {
+    marquee_x: i16,
+    marquee_enabled: bool,
+) -> u8 {
     let is_selected = (flags & 1) != 0;
     let mut tc = Color::Fill;
     if is_selected {
@@ -690,15 +710,42 @@ fn render_menu_row(
     } else {
         max_title_x
     };
-    text::draw_str_max_x(
-        canvas,
-        text_x,
-        row_y + 9,
-        title_str,
-        &MUMATRIX,
-        tc,
-        title_max,
-    );
+    let avail = (title_max - text_x).max(0);
+    let title_w = text::str_width(title_str, &MUMATRIX);
+    let overflow = (title_w - avail).clamp(0, 255) as u8;
+
+    if is_selected && marquee_enabled && overflow > 0 {
+        text::draw_str_clipped(
+            canvas,
+            text_x,
+            title_max,
+            marquee_x.min(overflow as i16),
+            row_y + 9,
+            title_str,
+            &MUMATRIX,
+            tc,
+        );
+    } else if overflow > 0 {
+        text::draw_str_ellipsis(
+            canvas,
+            text_x,
+            row_y + 9,
+            title_str,
+            &MUMATRIX,
+            tc,
+            title_max,
+        );
+    } else {
+        text::draw_str_max_x(
+            canvas,
+            text_x,
+            row_y + 9,
+            title_str,
+            &MUMATRIX,
+            tc,
+            title_max,
+        );
+    }
 
     if sw > 0 {
         let text_x = if (flags & 3) == 3 {
@@ -714,6 +761,7 @@ fn render_menu_row(
         };
         text::draw_str(canvas, text_x - sw, row_y + 8, val_str, &TOMTHUMB, tc);
     }
+    overflow
 }
 
 impl<'a> View<MenuModel<'a>> for MenuView {
@@ -759,7 +807,22 @@ impl<'a> View<MenuModel<'a>> for MenuView {
                 }
             }
             let icon = model.icons.and_then(|list| list.get(idx).copied());
-            render_menu_row(canvas, &model.items[idx], flags, row_y, icon);
+            let ov = render_menu_row(
+                canvas,
+                &model.items[idx],
+                flags,
+                row_y,
+                icon,
+                if idx == model.selected_idx {
+                    self.marquee.offset()
+                } else {
+                    0
+                },
+                self.animated,
+            );
+            if idx == model.selected_idx {
+                self.marquee_overflow.set(ov);
+            }
         }
 
         // Clean any row bleed into status bar area (0..8)
@@ -1318,7 +1381,15 @@ mod tests {
         let mut canvas = Canvas::new();
         let label = ShortString::from_str("Tasks");
         let item = MenuItem::new("M", MenuItemType::Shortcut(label));
-        render_menu_row(&mut canvas, &item, 0b11, 14, Some(icons::ICON_FOLDER));
+        render_menu_row(
+            &mut canvas,
+            &item,
+            0b11,
+            14,
+            Some(icons::ICON_FOLDER),
+            0,
+            false,
+        );
         assert!(canvas.buffer.iter().flatten().any(|&b| b != 0));
 
         static TEST_ICONS: [&[u8; 8]; 2] = [icons::ICON_FOLDER, icons::ICON_VFO];
@@ -1328,5 +1399,52 @@ mod tests {
         canvas.clear();
         MenuView::render_sheet(&mut canvas, &sheet);
         assert!(canvas.buffer.iter().flatten().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn focused_long_menu_label_scrolls_and_resets_on_nav() {
+        let mut view = MenuView::new();
+        let mut items = [
+            MenuItem::new("Very Long Localized Menu Entry Name", MenuItemType::Submenu),
+            MenuItem::new("Short", MenuItemType::Label),
+        ];
+        let mut canvas = Canvas::new();
+        let ro_model = MenuModel {
+            title: "Test",
+            items: &items,
+            selected_idx: 0,
+            icons: None,
+            is_editing: false,
+            is_pressed: false,
+        };
+        view.render(&mut canvas, &ro_model);
+        assert!(view.marquee_overflow.get() > 0);
+
+        let mut rw_model = MenuModelMut {
+            items: &mut items,
+            selected_idx: 0,
+            nav_layout: 1,
+            is_editing: false,
+            is_pressed: false,
+        };
+        let mut moved = false;
+        for _ in 0..40 {
+            if view.on_event(&mut rw_model, &Event::Tick) {
+                moved = true;
+            }
+        }
+        assert!(moved);
+        assert!(view.marquee.offset() > 0);
+
+        view.on_event(
+            &mut rw_model,
+            &Event::Key {
+                code: KeyCode::Down,
+                state: KeyState::Pressed,
+            },
+        );
+        assert_eq!(rw_model.selected_idx, 1);
+        assert_eq!(view.marquee.offset(), 0);
+        assert!(!view.marquee.is_active());
     }
 }

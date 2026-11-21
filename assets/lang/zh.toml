@@ -1,0 +1,72 @@
+# Kern OS Localization Catalog — Simplified Chinese (ZH)
+# Natural, concise handheld-radio Simplified Chinese matching English width.
+# Entries may be plain strings or `{ full = "...", short = "..." }` for compact UI slots.
+
+[meta]
+code = "zhCN"
+name = "简体中文"
+ascii = "Chinese (ZH)"
+font_hint = 5 # tiny5 + cjk_zh
+
+[strings]
+"Settings" = "设置"
+"Display" = "显示"
+"Audio" = "音频"
+"Buttons" = "按键"
+"Battery" = "电池"
+"Device" = "本机"
+"Apps" = "应用"
+"Security" = "安全"
+"Language" = "语言"
+"System" = "系统"
+"English" = "英语"
+
+"Backlight Time" = { full = "背光时间", short = "背光" }
+"Max Brightness" = { full = "最大亮度", short = "亮度+" }
+"Min Brightness" = { full = "最小亮度", short = "亮度-" }
+"Contrast" = "对比度"
+"Invert Pixels" = "反显"
+"Animations" = "动画"
+
+"AF Gain" = "音量"
+"Beep Vol" = "提示音"
+"Key Beep" = "按键音"
+"Mic Gain" = "话筒增益"
+"Roger Beep" = "尾音"
+"Boot Jingle" = "开机音"
+"RX Profile" = "接收音效"
+
+"Shortcuts" = "快捷键"
+"Tweaks" = "微调"
+"Auto Lock" = "自动锁键"
+"PTT Mode" = "发射模式"
+
+"Clock" = "主频"
+"UART Baud" = "波特率"
+"Info" = "本机信息"
+"Storage" = "存储"
+"Calibration" = "校准"
+"Debug" = "调试"
+"Reset Settings" = { full = "恢复默认", short = "重置" }
+"Restart" = "重启"
+
+"Used" = "已用"
+"Free" = "可用"
+"Files" = "文件数"
+"Format Storage" = "格式化"
+"Erase All Data" = "清除全部"
+
+"Model" = "型号"
+"Owner" = "呼号"
+"Tag" = "标签"
+"Radio ID" = "电台ID"
+"Boot Splash" = "开机画面"
+
+"OK" = "确定"
+"Cancel" = "取消"
+"Save" = "保存"
+"Back" = "返回"
+"Hold" = "长按"
+"Off" = "关"
+"On" = "开"
+"None" = "无"

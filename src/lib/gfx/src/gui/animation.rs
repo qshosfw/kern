@@ -208,17 +208,43 @@ impl TransitionProgress {
     }
 }
 
-/// Zero-allocation text marquee ticker with boundary pause
+/// Zero-allocation text marquee ticker with reading-speed pacing, start/end pauses,
+/// and smooth return back to the start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarqueeScroller {
     offset: i16,
     max_offset: i16,
-    direction: i8, // 1 = right, -1 = left
+    direction: i8, // 1 = scroll forward, -1 = return back to 0
     pause_ticks: u8,
-    pause_duration: u8,
+    start_pause: u8,
+    end_pause: u8,
+    fwd_div: u8,
+    rev_div: u8,
+    tick_acc: u8,
 }
 
 impl MarqueeScroller {
+    /// Idle reading-speed marquee controller (zero overflow until synced).
+    pub const fn idle() -> Self {
+        Self::reading(0)
+    }
+
+    /// Reading-speed marquee tuned for handheld LCDs: pauses to read the start,
+    /// glides forward smoothly (1px per 2 ticks), pauses at the end, then glides back.
+    pub const fn reading(overflow_px: u8) -> Self {
+        Self {
+            offset: 0,
+            max_offset: overflow_px as i16,
+            direction: 1,
+            pause_ticks: 24,
+            start_pause: 24,
+            end_pause: 18,
+            fwd_div: 2,
+            rev_div: 1,
+            tick_acc: 0,
+        }
+    }
+
     pub const fn new(text_width: u8, viewport_width: u8) -> Self {
         let max_offset = if text_width > viewport_width {
             (text_width - viewport_width) as i16
@@ -230,33 +256,71 @@ impl MarqueeScroller {
             max_offset,
             direction: 1,
             pause_ticks: 10,
-            pause_duration: 10,
+            start_pause: 10,
+            end_pause: 10,
+            fwd_div: 1,
+            rev_div: 1,
+            tick_acc: 0,
         }
     }
 
     #[inline(always)]
-    pub fn offset(&self) -> i16 {
+    pub const fn offset(&self) -> i16 {
         self.offset
     }
 
+    #[inline(always)]
+    pub const fn is_active(&self) -> bool {
+        self.max_offset > 0
+    }
+
+    /// Reset scroll position to 0 and restart the initial reading pause.
+    #[inline(always)]
+    pub fn reset(&mut self) {
+        self.offset = 0;
+        self.direction = 1;
+        self.pause_ticks = self.start_pause;
+        self.tick_acc = 0;
+    }
+
+    /// Update the overflow span; resets smoothly when the span changes or shrinks to 0.
+    #[inline(always)]
+    pub fn set_overflow(&mut self, overflow_px: u8) {
+        let max_off = overflow_px as i16;
+        if max_off != self.max_offset {
+            self.max_offset = max_off;
+            self.reset();
+        }
+    }
+
     pub fn tick(&mut self) -> bool {
-        if self.max_offset == 0 {
+        if self.max_offset <= 0 {
             return false;
         }
         if self.pause_ticks > 0 {
             self.pause_ticks -= 1;
             return false;
         }
+        let div = if self.direction > 0 {
+            self.fwd_div
+        } else {
+            self.rev_div
+        };
+        self.tick_acc = self.tick_acc.saturating_add(1);
+        if self.tick_acc < div {
+            return false;
+        }
+        self.tick_acc = 0;
 
         self.offset += self.direction as i16;
         if self.offset >= self.max_offset {
             self.offset = self.max_offset;
             self.direction = -1;
-            self.pause_ticks = self.pause_duration;
+            self.pause_ticks = self.end_pause;
         } else if self.offset <= 0 {
             self.offset = 0;
             self.direction = 1;
-            self.pause_ticks = self.pause_duration;
+            self.pause_ticks = self.start_pause;
         }
         true
     }
@@ -462,6 +526,42 @@ mod tests {
         // Advance 1 pixel
         assert!(marquee.tick());
         assert_eq!(marquee.offset(), 1);
+    }
+
+    #[test]
+    fn test_reading_marquee_pauses_scrolls_and_returns() {
+        let mut m = MarqueeScroller::reading(4);
+        assert!(m.is_active());
+        assert_eq!(m.offset(), 0);
+
+        // Start pause (24 ticks)
+        for _ in 0..24 {
+            assert!(!m.tick());
+        }
+        // Forward reading speed: 2 ticks per pixel (4 pixels = 8 ticks)
+        for step in 1..=4 {
+            assert!(!m.tick());
+            assert!(m.tick());
+            assert_eq!(m.offset(), step);
+        }
+        // End pause (18 ticks)
+        for _ in 0..18 {
+            assert!(!m.tick());
+        }
+        // Smooth return back to 0 (1 tick per pixel)
+        for step in (0..4).rev() {
+            assert!(m.tick());
+            assert_eq!(m.offset(), step);
+        }
+        // Enters start pause again
+        assert!(!m.tick());
+        assert_eq!(m.offset(), 0);
+
+        // Reset clears offset immediately
+        m.set_overflow(10);
+        assert_eq!(m.offset(), 0);
+        m.set_overflow(0);
+        assert!(!m.is_active());
     }
 
     #[test]
