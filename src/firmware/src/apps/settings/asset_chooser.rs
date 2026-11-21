@@ -77,7 +77,7 @@ utils::static_bytes!(
 Boot Splash\0/user/splash\0.rle|.img|.bin\0None\0\
 Roger Beep\0/user/rogers\0.ton|.rgr\0Off\0\
 Boot Jingle\0/user/jingles\0.ton\0Off\0\
-Language\0/sys/lang\0.lng\0English\0";
+Language\0/user/lang\0.lng\0English\0";
 );
 
 impl AssetId {

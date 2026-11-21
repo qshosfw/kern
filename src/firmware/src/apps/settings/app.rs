@@ -824,7 +824,7 @@ mod tests {
             assert_eq!(status.as_str(), "English");
 
             cfg.system.lang_active = 1;
-            crate::config::write_cstr(&mut cfg.system.lang_path, "/sys/lang/01_japanese.lng");
+            crate::config::write_cstr(&mut cfg.system.lang_path, "/user/lang/01_japanese.lng");
             super::super::asset_chooser::AssetId::Language.format_status(&cfg, &mut status);
             assert_eq!(status.as_str(), "Japanese");
         }

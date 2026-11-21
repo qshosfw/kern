@@ -2,8 +2,8 @@
 //! and Localization Packs (`.lng`).
 //!
 //! Keeps non-essential icon kits, language fonts (Latin, Cyrillic, Greek, GSM-7, Japanese,
-//! Chinese), and translation tables on external SPI Flash (`/sys/icons/*.icn`, `/sys/fonts/*.fnt`,
-//! `/sys/lang/*.lng`) instead of internal MCU Flash, while guaranteeing zero-heap $O(1)$ /
+//! Chinese), and translation tables on external SPI Flash (`/user/icons/*.icn`, `/user/fonts/*.fnt`,
+//! `/user/lang/*.lng`) instead of internal MCU Flash, while guaranteeing zero-heap $O(1)$ /
 //! $O(\log N)$ streaming lookups and crisp built-in fallback glyphs (`□` or `?`).
 
 use crate::draw;
@@ -31,7 +31,7 @@ pub enum FallbackStyle {
     QuestionMark = 1,
 }
 
-/// Declarative reference to a dynamically loaded filesystem icon (e.g. from `/sys/icons/kern_kit.icn`).
+/// Declarative reference to a dynamically loaded filesystem icon (e.g. from `/user/icons/kern_kit.icn`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExternalIconRef<'a> {
     pub pack_path: &'a str,
@@ -39,7 +39,7 @@ pub struct ExternalIconRef<'a> {
     pub fallback: FallbackStyle,
 }
 
-/// Declarative reference to a dynamically loaded filesystem font (e.g. `/sys/fonts/tiny5_ext.fnt`).
+/// Declarative reference to a dynamically loaded filesystem font (e.g. `/user/fonts/tiny5.fnt`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExternalFontRef<'a> {
     pub font_path: &'a str,
@@ -1032,7 +1032,7 @@ pub const LANG_FONT_TINY5: u8 = 1 << 0;
 pub const LANG_FONT_CJK_JA: u8 = 1 << 1;
 pub const LANG_FONT_CJK_ZH: u8 = 1 << 2;
 
-/// 16-byte naturally-aligned header for external binary language packs (`/sys/lang/*.lng`).
+/// 16-byte naturally-aligned header for external binary language packs (`/user/lang/*.lng`).
 ///
 /// Layout: `16 B` header + `entry_count * 8 B` sorted FNV-1a index (`offset = 16 + (mid << 3)`)
 /// + packed NFC-normalized UTF-8 string pool. Zero MCU Flash overhead when languages are on SPI Flash.

@@ -2,7 +2,7 @@
 """Kern Media & Localization Pack Compiler & Inspector (`.icn`, `.fnt`, `.lng`).
 
 Zero external dependencies (Python stdlib only). Produces fixed-stride power-of-two
-binary packs ready to deploy onto KernFS (`/sys/icons/*.icn`, `/sys/fonts/*.fnt`, `/sys/lang/*.lng`).
+binary packs ready to deploy onto KernFS (`/user/icons/*.icn`, `/user/fonts/*.fnt`, `/user/lang/*.lng`).
 
 Usage:
     python3 tools/pack_media.py pack-icons assets/icons/kern_kit.txt assets/media/kern_kit.icn

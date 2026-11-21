@@ -11,7 +11,7 @@ pub struct SystemConfig {
     pub custom_model: [u8; 12], // Custom model string e.g. "UV-K1(8)", "UV-K1s"
     pub lang_active: u8,        // 0=Built-in English, 1=External .lng pack at lang_path
     pub _lang_pad: [u8; 3],
-    pub lang_path: [u8; 32], // e.g. "/sys/lang/ja.lng"
+    pub lang_path: [u8; 32], // e.g. "/user/lang/ja.lng"
     pub crc32: u32,
 }
 
