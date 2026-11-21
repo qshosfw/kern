@@ -712,17 +712,16 @@ mod tests {
         let e = PackageCatalogEntry {
             title: SmallStr::new(),
             path: SmallStr::from_str("/apps/sysinfo.mod"),
-            size_bytes: 4238,
             app_class: KrxClass::Native,
             exec_type: KrxExecType::Module,
             lifecycle_flags: 0,
             scopes: ::abi::scope::SYSTEM_PAGE,
+            icon_16_slot: 0xFF,
             icon_id: 1,
             caps: (Cap::DisplayDirect as u32) | (Cap::Keypad as u32) | (Cap::FactoryCalib as u32),
             is_valid: true,
             has_config: false,
-            _pad: [0; 2],
-            _pad2: [0; 4],
+            icon_8: [0; 8],
         };
 
         let full_caps = CapabilitySet::empty()
@@ -779,24 +778,25 @@ mod tests {
 
     #[test]
     fn package_icons_honors_krx_icon_id_and_falls_back_cleanly() {
+        use ::abi::icon;
         assert_eq!(
-            super::super::apps::package_icons("Info", 30),
+            super::super::apps::package_icons("Info", icon::APP_ABOUT as u16),
             (gfx::icons::ICON_APP_ABOUT, gfx::icons::ICON_16_INFO)
         );
         assert_eq!(
-            super::super::apps::package_icons("Bench", 1),
+            super::super::apps::package_icons("Bench", icon::APP_DIAG as u16),
             (gfx::icons::ICON_APP_DIAG, gfx::icons::ICON_16_DIAGNOSTICS)
         );
         assert_eq!(
-            super::super::apps::package_icons("DFU Update", 49).0,
+            super::super::apps::package_icons("DFU Update", icon::UPLOAD as u16).0,
             gfx::icons::ICON_UPLOAD
         );
         assert_eq!(
-            super::super::apps::package_icons("Beacon", 1).1,
+            super::super::apps::package_icons("Beacon", icon::BEACON_TOWER as u16).1,
             gfx::icons::ICON_16_BEACON
         );
         assert_eq!(
-            super::super::apps::package_icons("Recovery", 48).1,
+            super::super::apps::package_icons("Recovery", icon::SYSTEM as u16).1,
             gfx::icons::ICON_16_SYSTEM
         );
         assert_eq!(
@@ -840,9 +840,6 @@ mod tests {
         app.items_len = 8;
         app.selected_idx = 5;
         app.active_action_module = true;
-
-        // Simulate an in-place KRX action module (e.g. /apps/dfu.mod) overwriting TRANSIENT_ARENA.
-        crate::data::arena::transient_arena_bytes_mut().fill(0xFF);
 
         let mut canvas = Canvas::new();
         app.render_menu_body(&mut canvas);

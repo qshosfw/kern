@@ -267,7 +267,7 @@ pub fn describe_into(
                 out.push_byte(b':');
                 out.push_str(suffix);
             }
-            return crate::apps::settings::apps::package_icon_8(e.title.as_str(), e.icon_id);
+            return e.resolved_icon_8();
         } else {
             lbl_idx = 6;
         }
@@ -396,7 +396,7 @@ pub fn build_picker_sheet(
         if !e.is_valid || e.exec_type != KrxExecType::App {
             continue;
         }
-        let icon = crate::apps::settings::apps::package_icon_8(e.title.as_str(), e.icon_id);
+        let icon = e.resolved_icon_8();
         let t = e.title.as_str();
         let p = e.path.as_str();
         push_entry(hash_app(p), icon, t);
@@ -468,17 +468,16 @@ mod tests {
         let _ = cat.entries.push(PackageCatalogEntry {
             title: SmallStr::from_str("Tasks"),
             path: SmallStr::from_str("/apps/tasks.krx"),
-            size_bytes: 2048,
             app_class: KrxClass::Paged,
             exec_type: KrxExecType::App,
             lifecycle_flags: 0,
+            icon_16_slot: 0xFF,
             icon_id: 29,
             caps: 0,
             is_valid: true,
             has_config: false,
             scopes: 0,
-            _pad: [0; 2],
-            _pad2: [0; 4],
+            icon_8: [0; 8],
         });
         let mut label = [0u8; 12];
         label[..5].copy_from_slice(b"Sched");

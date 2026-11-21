@@ -112,8 +112,7 @@ pub fn load_entries(
                 continue;
             }
 
-            let (icon_8, icon_16) =
-                crate::apps::settings::apps::package_icons(app.title.as_str(), app.icon_id);
+            let (icon_8, icon_16) = cat_ref.resolved_icons(app);
             entries[count] = LauncherEntry {
                 title: app.title.as_str(),
                 icon_8,

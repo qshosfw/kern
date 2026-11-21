@@ -66,11 +66,12 @@ pub struct PackageCatalogEntry {
     pub path: SmallStr<24>,
     /// Union of `abi::scope` bits over every declared action.
     pub scopes: u8,
-    pub _pad: [u8; 2],
+    /// `0xFF` when no custom 16x16 asset bitmap was embedded in `SECTION_ASSETS`.
+    pub icon_16_slot: u8,
     pub icon_id: u16,
     pub caps: u32,
-    pub size_bytes: u32,
-    pub _pad2: [u8; 4],
+    /// Self-contained 8x8 monochrome icon bitmap from `SECTION_ASSETS` (`[0; 8]` when absent).
+    pub icon_8: [u8; 8],
 }
 
 const _: () = assert!(core::mem::size_of::<PackageCatalogEntry>() == 64);
@@ -79,6 +80,22 @@ impl PackageCatalogEntry {
     #[inline(always)]
     pub fn filename(&self) -> &str {
         extract_filename(self.path.as_str())
+    }
+
+    #[inline(always)]
+    pub fn has_custom_icon_8(&self) -> bool {
+        self.icon_8 != [0u8; 8]
+    }
+
+    /// Resolve the package's 8x8 icon: prefers embedded `SECTION_ASSETS` `ASSET_ICON_8`,
+    /// falling back to the legacy `icon_id` lookup.
+    #[inline(always)]
+    pub fn resolved_icon_8(&self) -> &'static [u8; 8] {
+        if self.has_custom_icon_8() {
+            unsafe { &*(&self.icon_8 as *const [u8; 8]) }
+        } else {
+            crate::apps::settings::apps::package_icon_8(self.title.as_str(), self.icon_id)
+        }
     }
 
     #[inline(always)]
@@ -121,6 +138,7 @@ pub fn extract_filename(path: &str) -> &str {
 
 pub const MAX_CATALOG_PACKAGES: usize = 8;
 pub const MAX_CATALOG_ACTIONS: usize = 16;
+pub const MAX_CATALOG_APP_ICONS_16: usize = 4;
 
 /// Cached declared action from a KRX app's `SECTION_ACTIONS` (16 B, wire-identical to `KrxActionDecl`
 /// with `flags` byte repurposed as `pkg_idx` for zero-unpacking copy).
@@ -146,6 +164,8 @@ impl CatalogAction {
 pub struct PackageCatalog {
     pub entries: heapless::Vec<PackageCatalogEntry, MAX_CATALOG_PACKAGES>,
     pub actions: heapless::Vec<CatalogAction, MAX_CATALOG_ACTIONS>,
+    pub icons_16: [[u8; 32]; MAX_CATALOG_APP_ICONS_16],
+    pub icons_16_len: u8,
     pub scanned: bool,
 }
 
@@ -154,8 +174,32 @@ impl PackageCatalog {
         Self {
             entries: heapless::Vec::new(),
             actions: heapless::Vec::new(),
+            icons_16: [[0u8; 32]; MAX_CATALOG_APP_ICONS_16],
+            icons_16_len: 0,
             scanned: false,
         }
+    }
+
+    /// Resolve both 8x8 and 16x16 icons for a catalog entry, preferring embedded
+    /// `SECTION_ASSETS` bitmaps (`ASSET_ICON_8`, `ASSET_ICON_16`) over fallback ROM glyphs.
+    pub fn resolved_icons(
+        &self,
+        entry: &PackageCatalogEntry,
+    ) -> (&'static [u8; 8], &'static [u8; 32]) {
+        let (fb8, fb16) =
+            crate::apps::settings::apps::package_icons(entry.title.as_str(), entry.icon_id);
+        let icon_8 = if entry.has_custom_icon_8() {
+            unsafe { &*(&entry.icon_8 as *const [u8; 8]) }
+        } else {
+            fb8
+        };
+        let slot = entry.icon_16_slot as usize;
+        let icon_16 = if slot < (self.icons_16_len as usize) {
+            unsafe { &*(&self.icons_16[slot] as *const [u8; 32]) }
+        } else {
+            fb16
+        };
+        (icon_8, icon_16)
     }
 
     /// Mark catalog dirty to trigger a re-scan on next access.
@@ -216,6 +260,7 @@ impl PackageCatalog {
     fn scan_internal(&mut self, filesystem: &mut SystemStorage) {
         self.entries.clear();
         self.actions.clear();
+        self.icons_16_len = 0;
 
         // Keep scan scratch strictly inside TRANSIENT_ARENA[4096..6144) so [0..4096) KRX code is never clobbered.
         const HDR_SCRATCH_BYTES: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
@@ -288,8 +333,8 @@ impl PackageCatalog {
             self.entries.set_len(len + 1);
             &mut *ptr
         };
-        entry.size_bytes = size;
         entry.exec_type = KrxExecType::App;
+        entry.icon_16_slot = 0xFF;
 
         let bytes = base_name.as_bytes();
         let n = bytes.len();
@@ -358,13 +403,39 @@ impl PackageCatalog {
                     }
                 }
             }
+            if let Some(t) = title {
+                entry.title.len = write_trunc_utf8(&mut entry.title.buf, 0, t);
+            }
+            if entry.is_valid {
+                if let Some((_, _, ic8)) =
+                    KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_8)
+                {
+                    if ic8.len() >= 8 {
+                        entry.icon_8.copy_from_slice(&ic8[..8]);
+                    }
+                }
+                if entry.exec_type == KrxExecType::App
+                    && (self.icons_16_len as usize) < MAX_CATALOG_APP_ICONS_16
+                {
+                    if let Some((_, _, ic16)) =
+                        KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_16)
+                    {
+                        if ic16.len() >= 32 {
+                            let slot = self.icons_16_len;
+                            self.icons_16[slot as usize].copy_from_slice(&ic16[..32]);
+                            entry.icon_16_slot = slot;
+                            self.icons_16_len = slot + 1;
+                        }
+                    }
+                }
+            }
         }
 
-        let title_str = title.unwrap_or_else(|| {
+        if entry.title.len == 0 {
             let stem_len = if is_pkg { n - 4 } else { n };
-            unsafe { core::str::from_utf8_unchecked(&bytes[..stem_len]) }
-        });
-        entry.title.len = write_trunc_utf8(&mut entry.title.buf, 0, title_str);
+            let stem = unsafe { core::str::from_utf8_unchecked(&bytes[..stem_len]) };
+            entry.title.len = write_trunc_utf8(&mut entry.title.buf, 0, stem);
+        }
     }
 
     #[cfg(not(feature = "filesystem"))]
@@ -440,5 +511,28 @@ mod tests {
             KrxPreamble::find_icon_asset(HELLO_RUST, kernel::runtime::ASSET_ICON_16)
                 .expect("hello_rust.krx must carry its 16x16 icon in SECTION_ASSETS");
         assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
+
+        let mut cat = PackageCatalog::new();
+        let mut entry = PackageCatalogEntry {
+            app_class: kernel::runtime::KrxClass::Native,
+            exec_type: KrxExecType::App,
+            lifecycle_flags: 0,
+            is_valid: true,
+            has_config: false,
+            title: SmallStr::from_str("Hello Rust"),
+            path: SmallStr::from_str("/apps/hello_rust.krx"),
+            scopes: 0,
+            icon_16_slot: 0,
+            icon_id: summary.icon_id,
+            caps: summary.caps.raw(),
+            icon_8: [0; 8],
+        };
+        entry.icon_8.copy_from_slice(bits8);
+        cat.icons_16[0].copy_from_slice(bits16);
+        cat.icons_16_len = 1;
+
+        let (res8, res16) = cat.resolved_icons(&entry);
+        assert_eq!(res8, bits8);
+        assert_eq!(res16, bits16);
     }
 }
