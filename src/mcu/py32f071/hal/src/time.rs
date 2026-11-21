@@ -28,15 +28,26 @@ pub fn init() {
     }
 }
 
-/// Dynamically update TIM2 prescaler to ensure 1 µs tick precision at any system clock frequency.
+/// Dynamically update TIM2 prescaler to ensure 1 µs tick precision at any system clock frequency
+/// while preserving the monotonic microsecond counter across `EGR_UG`.
 pub fn update_tim2_freq(sysclk_hz: u32) {
-    // Fast 32-bit reciprocal division: sysclk_hz / 1_000_000: (((x >> 12) * 17_180) >> 22)
-    let div1m = ((sysclk_hz >> 12) * 17_180) >> 22;
+    // Rounded 32-bit reciprocal division: exact for 16, 24, 32, 48, and 72 MHz.
+    let div1m = ((sysclk_hz >> 12) * 17_180 + (1 << 21)) >> 22;
     let psc = div1m.saturating_sub(1);
-    unsafe {
+    cortex_m::interrupt::free(|_| unsafe {
+        let cr1 = tim::TIM2_CR1.read_volatile();
+        let was_enabled = (cr1 & tim::CR1_CEN) != 0;
+        if was_enabled {
+            tim::TIM2_CR1.write_volatile(cr1 & !tim::CR1_CEN);
+        }
+        let saved_cnt = tim::TIM2_CNT.read_volatile();
         tim::TIM2_PSC.write_volatile(psc);
         tim::TIM2_EGR.write_volatile(tim::EGR_UG);
-    }
+        (tim::TIM2_CNT as *mut u32).write_volatile(saved_cnt);
+        if was_enabled {
+            tim::TIM2_CR1.write_volatile(cr1);
+        }
+    });
 }
 
 /// Read the current TIM2 counter value in microseconds.
