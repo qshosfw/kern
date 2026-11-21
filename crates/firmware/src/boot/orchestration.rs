@@ -70,7 +70,7 @@ pub fn run_boot_splash(
     let show_splash = target_splash_ms > 0 && disp_cfg.boot_splash_mode != 0;
     let jingle_buf: &mut [crate::services::melody::ToneNote;
              crate::services::melody::MAX_MELODY_NOTES] = unsafe {
-        &mut *(crate::data::arena::scratch_tail_bytes_mut()[1760..].as_mut_ptr()
+        &mut *(crate::data::arena::staging_buf().as_mut_ptr()
             as *mut [crate::services::melody::ToneNote; crate::services::melody::MAX_MELODY_NOTES])
     };
     let jingle_len = crate::services::melody::load_jingle_notes(

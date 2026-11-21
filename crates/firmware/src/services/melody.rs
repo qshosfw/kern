@@ -23,7 +23,7 @@ fn read_kt_file(
     if path.is_empty() {
         return 0;
     }
-    let raw_buf = &mut crate::data::arena::scratch_tail_bytes_mut()[1900..2040];
+    let raw_buf = &mut crate::data::arena::staging_buf()[128..268];
     let Ok(n) = storage.read_file(path, raw_buf) else {
         return 0;
     };

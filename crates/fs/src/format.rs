@@ -17,7 +17,10 @@ pub const FIRST_DATA_BLOCK: usize = 2;
 pub const MAX_BLOCKS: usize = 512;
 pub const INODES_PER_PAGE: usize = 4;
 pub const INDEX_PTRS_PER_PAGE: usize = 128;
-pub const MAX_META_GROUPS: usize = 256; // 256 * 4 = 1,024 inodes max
+#[cfg(target_arch = "arm")]
+pub const MAX_META_GROUPS: usize = 64; // 64 * 4 = 256 inodes max on 2 MB SPI Flash
+#[cfg(not(target_arch = "arm"))]
+pub const MAX_META_GROUPS: usize = 256; // 256 * 4 = 1,024 inodes max for host stress tests
 pub const MAX_NAME_LEN: usize = 24;
 pub const MAX_INLINE_LEN: usize = 16;
 pub const RESERVE_BLOCKS: usize = 2;

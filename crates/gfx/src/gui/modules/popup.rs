@@ -19,7 +19,7 @@ pub struct PopupModel {
     pub confirm_label: Option<&'static str>,
     pub cancel_label: Option<&'static str>,
     pub custom_title: String<24>,
-    pub custom_msg: String<168>,
+    pub custom_msg: String<120>,
 }
 
 impl PopupModel {

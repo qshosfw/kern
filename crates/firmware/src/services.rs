@@ -51,7 +51,7 @@ fn play_tone_file(
     path: &str,
 ) {
     let notes: &mut [melody::ToneNote; melody::MAX_MELODY_NOTES] = unsafe {
-        &mut *(crate::data::arena::scratch_tail_bytes_mut()[1760..].as_mut_ptr()
+        &mut *(crate::data::arena::staging_buf().as_mut_ptr()
             as *mut [melody::ToneNote; melody::MAX_MELODY_NOTES])
     };
     let n = crate::services::melody::load_roger_notes(storage, path, notes);
@@ -92,13 +92,17 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
 
     /// Read-only access to global process table
     #[inline(always)]
-    pub fn proc_table(&self) -> &'static kernel::proc::ProcessTable<8> {
+    pub fn proc_table(
+        &self,
+    ) -> &'static kernel::proc::ProcessTable<{ crate::orchestrator::MAX_PROCESSES }> {
         crate::orchestrator::proc_table()
     }
 
     /// Mutable access to global process table
     #[inline(always)]
-    pub fn proc_table_mut(&mut self) -> &'static mut kernel::proc::ProcessTable<8> {
+    pub fn proc_table_mut(
+        &mut self,
+    ) -> &'static mut kernel::proc::ProcessTable<{ crate::orchestrator::MAX_PROCESSES }> {
         crate::orchestrator::proc_table_mut()
     }
 

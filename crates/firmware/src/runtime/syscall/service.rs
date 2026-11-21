@@ -10,16 +10,16 @@ use kernel::proc::abi::{
 };
 pub use kernel::proc::service_registry::ServiceRegistry;
 
-pub static mut SERVICE_REGISTRY: ServiceRegistry = ServiceRegistry::new();
-pub static mut KERNEL_IPC_CHANNEL: IpcChannel<8> = IpcChannel::new();
+pub static mut SERVICE_REGISTRY: ServiceRegistry<4> = ServiceRegistry::new();
+pub static mut KERNEL_IPC_CHANNEL: IpcChannel<4> = IpcChannel::new();
 
 #[inline(always)]
-pub fn ipc_channel_mut() -> &'static mut IpcChannel<8> {
+pub fn ipc_channel_mut() -> &'static mut IpcChannel<4> {
     unsafe { &mut *core::ptr::addr_of_mut!(KERNEL_IPC_CHANNEL) }
 }
 
 #[inline(always)]
-pub fn service_registry_mut() -> &'static mut ServiceRegistry {
+pub fn service_registry_mut() -> &'static mut ServiceRegistry<4> {
     unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_REGISTRY) }
 }
 

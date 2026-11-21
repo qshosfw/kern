@@ -3,7 +3,7 @@
 
 use kernel::proc::{ProcState, ProcessTable};
 
-pub const MAX_PROCESSES: usize = 8;
+pub const MAX_PROCESSES: usize = 6;
 
 #[unsafe(link_section = ".uninit")]
 pub static mut PROC_TABLE: core::mem::MaybeUninit<ProcessTable<MAX_PROCESSES>> =
@@ -26,16 +26,16 @@ pub fn init_proc_table() {
     crate::runtime::init_native_slot();
 }
 
-static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<8> =
+static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<4> =
     kernel::proc::ResourceLeaseManager::new();
 
 #[inline(always)]
-pub fn lease_manager() -> &'static kernel::proc::ResourceLeaseManager<8> {
+pub fn lease_manager() -> &'static kernel::proc::ResourceLeaseManager<4> {
     unsafe { &*core::ptr::addr_of!(LEASE_MGR) }
 }
 
 #[inline(always)]
-pub fn lease_manager_mut() -> &'static mut kernel::proc::ResourceLeaseManager<8> {
+pub fn lease_manager_mut() -> &'static mut kernel::proc::ResourceLeaseManager<4> {
     unsafe { &mut *core::ptr::addr_of_mut!(LEASE_MGR) }
 }
 

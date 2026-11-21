@@ -1,12 +1,13 @@
-//! Shared Transient Scratch Memory Arena.
+//! Shared Transient Scratch & Application Execution Arena.
 //!
-//! Provides a zero-alloc 6.0 KiB aligned scratch buffer in `.uninit` RAM
-//! partitioned between active KRX execution (`[0..4096)`) and scratch/staging
-//! buffers (`[4096..6144)`).
+//! Provides a zero-alloc 8.0 KiB (`8,192 B`) aligned arena in `.uninit` RAM
+//! supporting full 8 KiB KRX application images (or 7 KiB P0 root + 1 KiB leaf
+//! overlay window at `[7168..8192)`), with transient OS scratch/staging buffers
+//! placed in `[6144..8192)`.
 
-pub const TRANSIENT_ARENA_WORDS: usize = 1536; // 6.0 KiB aligned scratch buffer
+pub const TRANSIENT_ARENA_WORDS: usize = 2048; // 8.0 KiB aligned arena
 pub const TRANSIENT_ARENA_BYTES: usize = TRANSIENT_ARENA_WORDS * 4;
-pub const TRANSIENT_SCRATCH_OFFSET: usize = 4096;
+pub const TRANSIENT_SCRATCH_OFFSET: usize = 6144;
 
 #[repr(align(8))]
 pub struct AlignedArena(pub [u32; TRANSIENT_ARENA_WORDS]);

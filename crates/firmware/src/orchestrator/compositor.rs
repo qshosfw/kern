@@ -296,7 +296,7 @@ const MAX_ALERT_LINE_PX: i16 = 116;
 #[derive(Clone)]
 pub struct SystemAlert {
     pub title: heapless::String<24>,
-    pub message: heapless::String<120>,
+    pub message: heapless::String<88>,
 }
 
 impl SystemAlert {
@@ -384,7 +384,7 @@ static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 
 /// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
 #[inline(never)]
-pub fn wrap_alert_text(raw: &str, out: &mut heapless::String<120>) {
+pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>) {
     const SPACE_PX: i16 = 4; // TomThumb ' ' glyph x_advance
     let vec = unsafe { out.as_mut_vec() };
     vec.clear();
