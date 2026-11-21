@@ -52,10 +52,13 @@ macro_rules! props {
     ( $( $name:ident = ($dom:literal, $off:literal) $min:literal ..= $max:literal / $step:literal ),* $(,)? ) => {
         $( pub const $name: u8 = ($dom << 5) | $off; )*
 
-        /// Every property, ordered by id.
-        pub static TABLE: [Prop; [$($off),*].len()] = [
+        /// Every property, ordered by id (compile-time constant for PIC packages).
+        pub const DEFS: [Prop; [$($off),*].len()] = [
             $( Prop { id: ($dom << 5) | $off, min: $min, max: $max, step: $step }, )*
         ];
+
+        /// Every property, ordered by id.
+        pub static TABLE: [Prop; [$($off),*].len()] = DEFS;
 
         /// `(name, id)` of every property, for host-side generators.
         #[cfg(feature = "describe")]
@@ -132,6 +135,19 @@ const _: () = {
 #[inline(never)]
 pub fn find(id: u8) -> Option<&'static Prop> {
     TABLE.iter().find(|p| p.id == id)
+}
+
+/// Position-independent property bounds `(min, max, step)` lookup for `.krx` packages.
+#[inline(always)]
+pub const fn lookup_bounds(id: u8) -> Option<(u8, u8, u8)> {
+    let mut i = 0;
+    while i < DEFS.len() {
+        if DEFS[i].id == id {
+            return Some((DEFS[i].min, DEFS[i].max, DEFS[i].step));
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Canonical NUL-separated choice option lists and timing lookup tables for OS properties.

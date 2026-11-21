@@ -465,6 +465,12 @@ impl SettingsApp {
 impl App<SysContext<'_, '_>, Canvas> for SettingsApp {
     #[inline(never)]
     fn on_start(&mut self, ctx: &mut SysContext) {
+        #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+        if !self.resume_nav
+            && crate::runtime::launch_krx_package(ctx, "/apps/settings.krx", 0).is_ok()
+        {
+            return;
+        }
         self.begin_start();
         self.populate_current_menu(ctx);
     }

@@ -528,4 +528,27 @@ mod tests {
         assert_eq!(res8, bits8);
         assert_eq!(res16, bits16);
     }
+
+    #[test]
+    fn core_settings_krx_package_validates_header_and_icons() {
+        const SETTINGS_KRX: &[u8] =
+            include_bytes!("../../../../../packages/core/settings/settings.krx");
+        let hdr_len = KrxPreamble::MAX_HEADER_SIZE.min(SETTINGS_KRX.len());
+        let summary = KrxPreamble::summarize(&SETTINGS_KRX[..hdr_len])
+            .expect("settings.krx header must parse");
+        assert_eq!(summary.title(), "Settings");
+        assert_eq!(summary.abi, ::abi::VERSION);
+        assert_eq!(
+            summary.preamble.execution_class(),
+            Some(kernel::runtime::KrxClass::Native)
+        );
+        let (w8, h8, bits8) =
+            KrxPreamble::find_icon_asset(SETTINGS_KRX, kernel::runtime::ASSET_ICON_8)
+                .expect("settings.krx must carry its 8x8 icon in SECTION_ASSETS");
+        assert_eq!((w8, h8, bits8.len()), (8, 8, 8));
+        let (w16, h16, bits16) =
+            KrxPreamble::find_icon_asset(SETTINGS_KRX, kernel::runtime::ASSET_ICON_16)
+                .expect("settings.krx must carry its 16x16 icon in SECTION_ASSETS");
+        assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
+    }
 }

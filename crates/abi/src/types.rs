@@ -242,6 +242,137 @@ impl KrxApiTable {
             bytes.len(),
         )
     }
+
+    #[inline(always)]
+    pub fn draw_menu_item(
+        &self,
+        y: i16,
+        title: &[u8],
+        value: &[u8],
+        icon_id: u8,
+        flags: u8,
+    ) {
+        let desc = KrxWidget {
+            p0: title.as_ptr(),
+            p1: value.as_ptr(),
+            x: 2,
+            y,
+            len0: title.len() as u16,
+            len1: value.len() as u16,
+            extra: 0,
+            w: 120,
+            h: 13,
+            a: flags,
+            b: icon_id,
+            _pad: [0; 2],
+        };
+        let _ = self.call_op(
+            Op::UiWidget,
+            KRX_WIDGET_MENU_ITEM as usize,
+            &raw const desc as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn draw_scrollbar(&self, x: i16, y: i16, h: u8, scroll: u16, total: u16, visible: u16) {
+        let desc = KrxWidget {
+            p0: core::ptr::null(),
+            p1: core::ptr::null(),
+            x,
+            y,
+            len0: scroll,
+            len1: visible,
+            extra: total,
+            w: 2,
+            h,
+            a: 0,
+            b: 0,
+            _pad: [0; 2],
+        };
+        let _ = self.call_op(
+            Op::UiWidget,
+            KRX_WIDGET_SCROLLBAR as usize,
+            &raw const desc as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn show_toast(&self, msg: &[u8], duration_ms: u16) {
+        let len_dur = (msg.len() & 0xFF) | ((duration_ms as usize) << 16);
+        let _ = self.call_op(
+            Op::UiModal,
+            crate::sub::ui_modal::TOAST as usize,
+            msg.as_ptr() as usize,
+            len_dur,
+        );
+    }
+
+    #[inline(always)]
+    pub fn show_confirm(
+        &self,
+        tag: u8,
+        title: &[u8],
+        msg: &[u8],
+        ok: &[u8],
+        cancel: &[u8],
+        hold_ms: u16,
+    ) {
+        let req = KrxModalReq {
+            title: title.as_ptr(),
+            msg: msg.as_ptr(),
+            ok: ok.as_ptr(),
+            cancel: cancel.as_ptr(),
+            kind: 1,
+            tag,
+            max_len: 0,
+            t_len: title.len() as u8,
+            m_len: msg.len() as u8,
+            o_len: ok.len() as u8,
+            c_len: cancel.len() as u8,
+            _pad: 0,
+        };
+        let _ = self.call_op(
+            Op::UiModal,
+            crate::sub::ui_modal::SHOW as usize,
+            &raw const req as usize,
+            0,
+        );
+        if hold_ms > 0 {
+            let _ = self.call_op(
+                Op::UiModal,
+                crate::sub::ui_modal::SET_HOLD as usize,
+                hold_ms as usize,
+                0,
+            );
+        }
+    }
+
+    #[inline(always)]
+    pub fn play_beep(&self, beep_type: u8) {
+        let _ = self.call_op(Op::AudTone, beep_type as usize, 0xFFFF, 0);
+    }
+
+    #[inline(always)]
+    pub fn battery_mv(&self) -> u16 {
+        self.call_op(Op::IoPower, crate::sub::io_power::BATT_MV as usize, 0, 0) as u16
+    }
+
+    #[inline(always)]
+    pub fn battery_pct(&self) -> u8 {
+        self.call_op(Op::IoPower, crate::sub::io_power::BATT_PCT as usize, 0, 0) as u8
+    }
+
+    #[inline(always)]
+    pub fn mcu_temp_deci_c(&self) -> i16 {
+        self.call_op(Op::IoPower, crate::sub::io_power::MCU_TEMP as usize, 0, 0) as u16 as i16
+    }
+
+    #[inline(always)]
+    pub fn reboot(&self, mode: u8) {
+        let _ = self.call_op(Op::SysReboot, mode as usize, 0, 0);
+    }
 }
 
 #[inline(always)]

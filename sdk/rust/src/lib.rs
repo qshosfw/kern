@@ -40,6 +40,101 @@ pub const fn div_rem_10(val: u8) -> (u8, u8) {
     (q, r)
 }
 
+/// Divisionless `/ 10` and `% 10` for `0..=65535` on ARM Cortex-M0+ (`__aeabi_uidiv`-free).
+#[inline(always)]
+pub const fn div_rem_10_u16(val: u16) -> (u16, u8) {
+    let q = (((val as u32) * 52_429) >> 19) as u16;
+    let r = (val - q * 10) as u8;
+    (q, r)
+}
+
+/// Format an unsigned 16-bit integer with optional fixed decimal point and unit suffix
+/// into a stack buffer without pulling in `core::fmt` or hardware division.
+pub fn format_u16_into<'a>(
+    mut val: u16,
+    decimals: u8,
+    suffix: &[u8],
+    buf: &'a mut [u8; 16],
+) -> &'a [u8] {
+    let mut tmp = [0u8; 6];
+    let mut n = 0usize;
+    let dec = (decimals as usize).min(4);
+    while n < 6 {
+        let (q, r) = div_rem_10_u16(val);
+        unsafe { *tmp.get_unchecked_mut(n) = b'0' + r };
+        n += 1;
+        val = q;
+        if val == 0 && n > dec {
+            break;
+        }
+    }
+    let mut pos = 0usize;
+    while n > 0 && pos < 14 {
+        if dec > 0 && n == dec {
+            unsafe { *buf.get_unchecked_mut(pos) = b'.' };
+            pos += 1;
+        }
+        n -= 1;
+        unsafe { *buf.get_unchecked_mut(pos) = *tmp.get_unchecked(n) };
+        pos += 1;
+    }
+    let copy_len = suffix.len().min(16usize.saturating_sub(pos));
+    let mut i = 0;
+    while i < copy_len {
+        unsafe { *buf.get_unchecked_mut(pos + i) = *suffix.get_unchecked(i) };
+        i += 1;
+    }
+    unsafe { core::slice::from_raw_parts(buf.as_ptr(), pos + copy_len) }
+}
+
+/// Extract the `idx`-th NUL-terminated entry from a packed NUL-separated byte slice.
+pub fn nth_packed_slice(packed: &[u8], idx: u8) -> &[u8] {
+    let mut cur = 0u8;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    let len = packed.len();
+    let ptr = packed.as_ptr();
+    while i < len {
+        if unsafe { *ptr.add(i) } == 0 {
+            if cur == idx {
+                return unsafe { core::slice::from_raw_parts(ptr.add(start), i - start) };
+            }
+            cur = cur.saturating_add(1);
+            start = i + 1;
+        }
+        i += 1;
+    }
+    &[]
+}
+
+/// Key code and state constants matching `kernel::event::KeyCode` and `KeyState`.
+pub mod key {
+    pub const PTT: u8 = 0;
+    pub const SIDE1: u8 = 1;
+    pub const SIDE2: u8 = 2;
+    pub const UP: u8 = 3;
+    pub const DOWN: u8 = 4;
+    pub const MENU: u8 = 5;
+    pub const EXIT: u8 = 6;
+    pub const F: u8 = 7;
+    pub const KEY0: u8 = 8;
+    pub const KEY1: u8 = 9;
+    pub const KEY2: u8 = 10;
+    pub const KEY3: u8 = 11;
+    pub const KEY4: u8 = 12;
+    pub const KEY5: u8 = 13;
+    pub const KEY6: u8 = 14;
+    pub const KEY7: u8 = 15;
+    pub const KEY8: u8 = 16;
+    pub const KEY9: u8 = 17;
+    pub const STAR: u8 = 18;
+    pub const HASH: u8 = 19;
+
+    pub const STATE_PRESSED: u32 = 0;
+    pub const STATE_RELEASED: u32 = 1;
+    pub const STATE_HELD: u32 = 2;
+}
+
 // ── Position-Independent Relative-Offset String Table ────────────────────────
 
 /// Zero-relocation static string table for PIC `.krx` packages.
@@ -58,11 +153,10 @@ impl<const N: usize, const BYTES: usize> RelStrTable<N, BYTES> {
         if idx >= N {
             return &[];
         }
-        let off = self.offsets[idx] as usize;
-        let len = self.lens[idx] as usize;
-        let end = off + len;
-        if end <= BYTES {
-            &self.blob[off..end]
+        let off = unsafe { *self.offsets.get_unchecked(idx) } as usize;
+        let len = unsafe { *self.lens.get_unchecked(idx) } as usize;
+        if off + len <= BYTES {
+            unsafe { core::slice::from_raw_parts(self.blob.as_ptr().add(off), len) }
         } else {
             &[]
         }
