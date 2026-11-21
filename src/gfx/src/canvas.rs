@@ -522,36 +522,33 @@ impl Canvas {
         self.dirty = 0xFF;
     }
 
+    #[inline(never)]
+    fn scroll_planes(&mut self, delta: i8, fill_byte: u8, op: fn(&mut [[u8; 128]; 8], i8, u8)) {
+        if delta == 0 {
+            return;
+        }
+        op(&mut self.buffer, delta, fill_byte);
+        #[cfg(feature = "grayscale")]
+        {
+            op(&mut self.buffer_lo, delta, fill_byte);
+        }
+        self.dirty = 0xFF;
+    }
+
     /// Hardware-efficient in-place vertical bit-shift scroll.
     /// Positive `dy` shifts content down (towards page 7).
     /// Negative `dy` shifts content up (towards page 0).
-    #[inline(never)]
+    #[inline(always)]
     pub fn scroll_vertical(&mut self, dy: i8, fill_byte: u8) {
-        if dy == 0 {
-            return;
-        }
-        scroll_plane_vertical(&mut self.buffer, dy, fill_byte);
-        #[cfg(feature = "grayscale")]
-        {
-            scroll_plane_vertical(&mut self.buffer_lo, dy, fill_byte);
-        }
-        self.dirty = 0xFF;
+        self.scroll_planes(dy, fill_byte, scroll_plane_vertical);
     }
 
     /// Hardware-efficient horizontal column shift across all display pages.
     /// Positive `dx` shifts content right.
     /// Negative `dx` shifts content left.
-    #[inline(never)]
+    #[inline(always)]
     pub fn scroll_horizontal(&mut self, dx: i8, fill_byte: u8) {
-        if dx == 0 {
-            return;
-        }
-        scroll_plane_horizontal(&mut self.buffer, dx, fill_byte);
-        #[cfg(feature = "grayscale")]
-        {
-            scroll_plane_horizontal(&mut self.buffer_lo, dx, fill_byte);
-        }
-        self.dirty = 0xFF;
+        self.scroll_planes(dx, fill_byte, scroll_plane_horizontal);
     }
 
     /// Calculate 1-bit composite byte for a given subframe (0..2) using
