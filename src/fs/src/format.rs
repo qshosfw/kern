@@ -18,9 +18,14 @@ pub const MAX_BLOCKS: usize = 512;
 pub const INODES_PER_PAGE: usize = 4;
 pub const INDEX_PTRS_PER_PAGE: usize = 128;
 #[cfg(target_arch = "arm")]
-pub const MAX_META_GROUPS: usize = 36; // 36 * 4 = 144 inodes max on 2 MB SPI Flash
+pub const MAX_META_GROUPS: usize = 32; // 32 * 4 = 128 inodes max on 2 MB SPI Flash (must be power of two)
 #[cfg(not(target_arch = "arm"))]
 pub const MAX_META_GROUPS: usize = 256; // 256 * 4 = 1,024 inodes max for host stress tests
+
+const _: () = assert!(
+    MAX_META_GROUPS.is_power_of_two(),
+    "MAX_META_GROUPS must be a power of two for bitmask indexing"
+);
 pub const MAX_NAME_LEN: usize = 24;
 pub const MAX_INLINE_LEN: usize = 16;
 pub const RESERVE_BLOCKS: usize = 2;
