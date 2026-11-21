@@ -311,12 +311,6 @@ const INIT_MARK_SPLASHES: u8 = if cfg!(feature = "boot_assets") {
     0
 };
 #[cfg(feature = "filesystem")]
-const INIT_MARK_ROGERS: u8 = if cfg!(feature = "provision_rogers") {
-    1 << 2
-} else {
-    0
-};
-#[cfg(feature = "filesystem")]
 const INIT_MARK_JINGLES: u8 = if cfg!(feature = "boot_jingle") {
     1 << 3
 } else {
@@ -326,7 +320,7 @@ const INIT_MARK_JINGLES: u8 = if cfg!(feature = "boot_jingle") {
 #[cfg(feature = "filesystem")]
 #[inline(never)]
 pub fn ensure_default_files(filesystem: &mut SystemStorage) {
-    let desired: u8 = INIT_MARK_BASE | INIT_MARK_SPLASHES | INIT_MARK_ROGERS | INIT_MARK_JINGLES;
+    let desired: u8 = INIT_MARK_BASE | INIT_MARK_SPLASHES | INIT_MARK_JINGLES;
 
     let mut init_buf = [0u8; 8];
     let done_mask = match filesystem.read_file("/sys/init.done", &mut init_buf) {
@@ -338,14 +332,11 @@ pub fn ensure_default_files(filesystem: &mut SystemStorage) {
     if (done_mask & desired) != desired {
         if (done_mask & INIT_MARK_BASE) == 0 {
             crate::security::ensure_keychain(filesystem);
+            let _ = filesystem.create_dir("/apps");
         }
         #[cfg(feature = "boot_assets")]
         if (done_mask & INIT_MARK_SPLASHES) == 0 {
             super::splash::provision_splashes(filesystem);
-        }
-        #[cfg(feature = "provision_rogers")]
-        if (done_mask & INIT_MARK_ROGERS) == 0 {
-            crate::services::melody::provision_rogers(filesystem);
         }
         #[cfg(feature = "boot_jingle")]
         if (done_mask & INIT_MARK_JINGLES) == 0 {
@@ -355,9 +346,6 @@ pub fn ensure_default_files(filesystem: &mut SystemStorage) {
         let updated = [b'I', b'N', b'I', b'T', done_mask | desired];
         let _ = filesystem.write_file("/sys/init.done", &updated);
     }
-
-    // Verify core /apps/*.krx packages, install any staged /prov/* items, and refresh launcher catalog
-    super::provision::provision_packages(filesystem);
 }
 
 #[cfg(not(feature = "filesystem"))]

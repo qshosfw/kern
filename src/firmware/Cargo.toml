@@ -38,11 +38,6 @@ default = [
 # 🔌 Bootloader DFU Raw Fallback (optional; primary UI/hooks offloaded to /apps/dfu.mod)
 dfu = []
 
-# 📦 Media & Asset Provisioning
-provision_rogers = []
-provision_apps = []
-provision_bench = []
-
 # ⚙️ Granular Settings & Diagnostics
 resident_settings = []
 settings_info = ["resident_settings"]

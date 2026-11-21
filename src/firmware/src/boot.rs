@@ -20,8 +20,6 @@ pub mod backup;
 #[cfg(feature = "dfu")]
 pub mod dfu;
 pub mod orchestration;
-#[cfg(feature = "filesystem")]
-pub mod provision;
 #[cfg(any(feature = "dfu", feature = "krx_native"))]
 pub mod recovery;
 pub mod reset;

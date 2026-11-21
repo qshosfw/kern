@@ -101,10 +101,7 @@ pub fn load_jingle_notes(
     )
 }
 
-#[cfg(all(
-    feature = "filesystem",
-    any(feature = "provision_rogers", feature = "boot_jingle")
-))]
+#[cfg(all(feature = "filesystem", feature = "boot_jingle"))]
 fn write_provision_ton(storage: &mut SystemStorage, path: &str, name: &str, notes: &[ToneNote]) {
     if !storage.exists(path) {
         let mut buf = [0u8; 160];
@@ -133,10 +130,7 @@ fn write_provision_ton(storage: &mut SystemStorage, path: &str, name: &str, note
     }
 }
 
-#[cfg(all(
-    feature = "filesystem",
-    any(feature = "provision_rogers", feature = "boot_jingle")
-))]
+#[cfg(all(feature = "filesystem", feature = "boot_jingle"))]
 fn build_tone_path<'a>(
     buf: &'a mut [u8; 32],
     dir_prefix: &[u8],
@@ -150,22 +144,6 @@ fn build_tone_path<'a>(
     buf[..dir_prefix.len()].copy_from_slice(dir_prefix);
     buf[dir_prefix.len()..total].copy_from_slice(fname);
     utils::format::ascii_str(&buf[..total])
-}
-
-#[cfg(not(all(feature = "filesystem", feature = "provision_rogers")))]
-pub fn provision_rogers(_storage: &mut SystemStorage) {}
-
-/// Provision default roger tone files into LittleFS (/user/rogers)
-#[cfg(all(feature = "filesystem", feature = "provision_rogers"))]
-pub fn provision_rogers(storage: &mut SystemStorage) {
-    let _ = storage.create_dir("/user/rogers");
-    let mut path_buf = [0u8; 32];
-
-    for def in ROGER_DEFS {
-        if let Some(path) = build_tone_path(&mut path_buf, b"/user/rogers/", def.file_name) {
-            write_provision_ton(storage, path, def.name, def.notes);
-        }
-    }
 }
 
 #[cfg(not(all(feature = "filesystem", feature = "boot_jingle")))]
