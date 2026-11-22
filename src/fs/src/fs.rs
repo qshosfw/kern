@@ -22,6 +22,20 @@ pub struct FsStats {
     pub total_sectors: u16,
 }
 
+impl FsStats {
+    /// Total sectors available for new writes: currently erased plus GC-reclaimable obsolete sectors.
+    #[inline(always)]
+    pub const fn avail_sectors(&self) -> u16 {
+        self.free_sectors.saturating_add(self.deleted_sectors)
+    }
+
+    /// Approximate usable payload bytes available for new writes (`15 * 256 = 3,840 B` per sector).
+    #[inline(always)]
+    pub const fn avail_bytes(&self) -> usize {
+        (self.avail_sectors() as usize) * (DATA_PAGES_PER_BLOCK * PAGE_SIZE)
+    }
+}
+
 #[repr(C)]
 pub struct KernFS<'a, D: BlockDevice> {
     // Keep hot 1-byte/2-byte flags and counters within Thumb-1 imm5 offsets (<= 31 / <= 62).

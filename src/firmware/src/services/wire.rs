@@ -789,7 +789,7 @@ fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
         if is_calib && req_sz != 512 {
             return Err(WireStatus::SafetyDenied);
         }
-        let free_bytes = (c.fs().stats().free_sectors as usize) * 3840;
+        let free_bytes = c.fs().stats().avail_bytes();
         if req_sz > free_bytes + existing_size as usize {
             return Err(WireStatus::Failed);
         }
