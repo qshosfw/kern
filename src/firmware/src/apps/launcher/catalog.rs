@@ -451,19 +451,16 @@ mod tests {
         let summary = KrxPreamble::summarize(&PANIC_MOD[..hdr_len])
             .expect("panic.mod header must parse within KrxPreamble::MAX_HEADER_SIZE");
 
-        assert!(
-            summary.preamble.header_len as usize > 256,
-            "panic.mod header exceeds legacy 256B limit"
-        );
         assert_eq!(
             summary.preamble.execution_class(),
             Some(kernel::runtime::KrxClass::Paged)
         );
         assert_eq!(summary.exec_type, KrxExecType::Module);
-        let action = kernel::runtime::KrxActionDecl::parse(summary.aux.actions.unwrap(), 0)
-            .expect("panic.mod must declare its Settings placement as an action");
-        assert_eq!(action.scope_mask, ::abi::scope::SYSTEM_PAGE);
-        assert_eq!(summary.title(), "Crash Logs");
+        assert!(
+            summary.aux.actions.is_none(),
+            "panic.mod is a boot-time panic screen and should not register a Settings page"
+        );
+        assert_eq!(summary.title(), "Panic");
         assert_eq!(
             summary.abi,
             ::abi::VERSION,
@@ -476,8 +473,8 @@ mod tests {
                 { crate::runtime::native_runner::MAX_STRUCTURED_LEAVES },
             >::new(0, 1024);
             leaves.configure(0, 1024, summary.aux.leaf_map);
-            assert_eq!(leaves.leaf_count(), 18);
-            assert_eq!(leaves.leaf_at(17).map(|entry| entry.leaf_id), Some(18));
+            assert_eq!(leaves.leaf_count(), 10);
+            assert_eq!(leaves.leaf_at(9).map(|entry| entry.leaf_id), Some(10));
         }
     }
 

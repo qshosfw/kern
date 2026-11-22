@@ -207,7 +207,7 @@ fn launch_crash_module(hw: &mut SystemHardware, mode: usize) -> bool {
     }
     hw.lcd.turn_on();
     hw.backlight.wake();
-    bsp::set_status_led(bsp::StatusLed::Orange);
+    bsp::set_status_led(bsp::StatusLed::Red);
     let launched =
         crate::runtime::try_launch_boot_module(&mut hw.lcd, hw.filesystem, "/apps/panic.mod", mode)
             .is_ok();
@@ -221,17 +221,14 @@ fn boot_stage_security_check(
     master_cfg: &mut MasterConfig,
     passcode_state: &mut crate::security::PasscodeState,
     adc: &Adc,
-) {
+) -> bool {
     let _ = (&hw, &master_cfg, &passcode_state, adc);
     #[cfg(feature = "filesystem")]
     super::storage::flush_crash_log_if_pending(hw.filesystem);
 
     let backup_strikes = backup::read().strikes;
-    let crash_count = crate::panic::BOOT_RECORD
-        .get()
-        .latest_valid_slot()
-        .map_or(0, |s| s.crash_count)
-        .max(backup_strikes);
+    let crash_slot = crate::panic::BOOT_RECORD.get().latest_valid_slot();
+    let crash_count = crash_slot.map_or(0, |s| s.crash_count).max(backup_strikes);
 
     if crash_count >= 2 {
         #[cfg(all(feature = "filesystem", feature = "krx_native"))]
@@ -242,7 +239,18 @@ fn boot_stage_security_check(
             }
         }
         super::reset::clear_crash_strikes();
-        return;
+        return true;
+    }
+
+    if crash_slot.is_some_and(|s| s.crash_count > 0 && s.is_crash()) {
+        #[cfg(all(feature = "filesystem", feature = "krx_native"))]
+        {
+            hw.key_scanner.clear();
+            let _ = launch_crash_module(hw, 1);
+            hw.key_scanner.clear();
+        }
+        super::reset::clear_crash_strikes();
+        return true;
     }
 
     #[cfg(feature = "passcode")]
@@ -284,6 +292,7 @@ fn boot_stage_security_check(
             crate::orchestrator::compositor::queue_system_alert(title, msg.as_str());
         }
     }
+    false
 }
 
 /// Pre-splash check for required core `.krx` packages (IJV-style missing-module guard).
@@ -366,7 +375,7 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     }
 
     // ── STAGE 2: Instant Security & Recovery Introspection (<30ms) ──
-    boot_stage_security_check(hw, master_cfg, passcode_state, &adc);
+    let showed_panic = boot_stage_security_check(hw, master_cfg, passcode_state, &adc);
 
     let _ = hw.radio.init();
     hw.audio.init();
@@ -387,20 +396,9 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     }
 
     // ── STAGE 3: Instant Boot Splash & Concurrent System Bring-up ───
-    run_boot_splash(hw, master_cfg, passcode_state, &adc);
-
-    // ── STAGE 4: Post-Boot Recovery Prompt (Offloaded to /apps/panic.mod) ───
-    #[cfg(all(feature = "filesystem", feature = "krx_native"))]
-    {
-        let crash_slot = crate::panic::BOOT_RECORD.get().latest_valid_slot();
-        if crash_slot.is_some_and(|s| s.crash_count > 0 && s.is_crash()) {
-            use crate::services::radio::RadioMelodyExt;
-            hw.radio
-                .play_beep(crate::services::melody::BeepType::Warning);
-            hw.key_scanner.clear();
-            let _ = launch_crash_module(hw, 1);
-            hw.key_scanner.clear();
-        }
+    // Skip slow boot splash & jingle when continuing directly from the panic screen.
+    if !showed_panic {
+        run_boot_splash(hw, master_cfg, passcode_state, &adc);
     }
 
     #[cfg(feature = "usb")]

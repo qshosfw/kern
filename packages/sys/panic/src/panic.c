@@ -1,12 +1,13 @@
 /*
- * KERN Panic & Post-Mortem Forensics Module (/apps/panic.mod)
+ * KERN Panic Screen & Safe Mode Recovery Module (/apps/panic.mod)
  *
- * P0 Structured Paged KRX Module (`KrxExecType::Module`, `FLAG_SYSTEM_MENU`).
- * Handles all heavy panic/HardFault UI, Safe Mode recovery menu,
- * crash history browsing, Thumb-16 disassembly, and Serial/KernFS reports:
- * - param == 0: In-OS 5-tab Crash Inspector (Settings -> System -> Crash Logs)
- * - param == 1: Boot Crash Alert Dialog (auto-dismiss or inspect/UART dump)
- * - param == 2: Boot Safe Mode Recovery Menu (Continue / Inspect / Reset / Reboot)
+ * Hardened P0 Structured Paged Module focused on instant post-fault recovery:
+ * - Page-based navigation (5 full pages: Overview, Core Regs, Extended Regs,
+ *   Stack & Trace, Disassembly [PC-4..PC+4]) — UP/DOWN, * / #, or 1..5 flip pages.
+ * - 10-second auto-continue on single fault (MENU/EXIT continues immediately,
+ *   any page navigation pauses countdown, SIDE1 dumps serial, SIDE2 saves /log/panic.txt,
+ *   0 reboots radio).
+ * - Crash-loop Safe Mode recovery menu (param == 2).
  */
 #include "panic_shared.h"
 
@@ -17,226 +18,123 @@ void _start(void) {
     __asm__ volatile("push {lr}\n bl krx_main\n pop {pc}\n");
 }
 
-static const char LOG_ITEMS[] =
-    "Next Record\0"
-    "Serial Dump\0"
-    "Save /log/crash.txt\0"
-    "Clear All Logs";
-
 static PanicState g_st;
 
-static void update_status_bar(const KrxApiTable* api) {
-    if (g_st.mode != MODE_IN_OS) return;
-    KrxStatusBar sb;
-    for (u16 i = 0; i < (u16)sizeof(sb); i++) ((u8*)&sb)[i] = 0;
-    sb.flags = KRX_STATUS_VISIBLE | KRX_STATUS_CUSTOM_TITLE | KRX_STATUS_DIVIDER;
-    p_copy_cstr((char*)sb.title, "Crash Logs", 15);
-    if (g_st.has_slot) {
-        u8 total = g_st.total_logs > 0u ? g_st.total_logs : 1u;
-        u8 p = p_put_uint(api, (char*)sb.badge, (u32)g_st.cur_idx + 1u);
-        sb.badge[p++] = '/';
-        p += p_put_uint(api, (char*)sb.badge + p, total);
-        sb.badge[p] = 0;
-    } else {
-        p_copy_cstr((char*)sb.badge, "CLEAN", 7);
-    }
-    krx_ui_set_status_bar(api, &sb);
-}
-
 static void show_toast(const char* msg) {
-    p_copy_cstr(g_st.toast_msg, msg, 23);
-    g_st.toast_ticks = 40u;
-}
-
-static u8 slots_equal(const BootSlot* a, const BootSlot* b) {
-    return (a->fault_pc == b->fault_pc &&
-            a->reset_reason == b->reset_reason &&
-            a->crash_count == b->crash_count &&
-            a->panic_line == b->panic_line) ? 1u : 0u;
-}
-
-static void select_record(const KrxApiTable* api, u8 idx) {
-    for (u16 i = 0; i < (u16)sizeof(g_st.cur_slot); i++) ((u8*)&g_st.cur_slot)[i] = 0;
-    g_st.has_slot = 0u;
-    g_st.extra_applies = 0u;
-    g_st.scroll = 0u;
-
-    if (g_st.total_logs > 0u) {
-        if (idx >= g_st.total_logs) idx = 0u;
-        g_st.cur_idx = idx;
-        u32 file_idx = (u32)(g_st.total_logs - 1u - idx);
-        u16 n = krx_fs_read_at(
-            api, (const u8*)"/log/crash.bin", 14u, file_idx * 128u, (u8*)&g_st.cur_slot, 128u
-        );
-        if (n == 128u && p_slot_valid(api, &g_st.cur_slot)) {
-            g_st.has_slot = 1u;
-        }
-    }
-
-    const BootSlot* live = p_latest_slot(api, &g_st.snap.rec);
-    if (!g_st.has_slot && live) {
-        for (u16 i = 0; i < 128u; i++) ((u8*)&g_st.cur_slot)[i] = ((const u8*)live)[i];
-        g_st.has_slot = 1u;
-        g_st.cur_idx = 0u;
-    }
-
-    if (g_st.has_slot && live && g_st.snap.extra.valid == FAULT_EXTRA_IDENT && slots_equal(&g_st.cur_slot, live)) {
-        g_st.extra_applies = 1u;
-    }
-
-    if (g_st.has_slot) {
-        krx_leaf_call(api, LEAF_PREP, (u32)&g_st);
-        if (g_st.cur_slot.reset_reason == REASON_HARD) {
-            krx_leaf_call(api, LEAF_CAUSE, (u32)&g_st);
-        }
-    }
-    update_status_bar(api);
+    p_copy_cstr(g_st.toast_msg, msg, 23u);
+    g_st.toast_ticks = 35u;
+    g_st.dirty = 1u;
 }
 
 static void init_panic_data(const KrxApiTable* api, u8 mode) {
-    for (u16 i = 0; i < (u16)sizeof(g_st); i++) ((u8*)&g_st)[i] = 0;
+    for (u16 i = 0; i < (u16)sizeof(g_st); i++) ((u8*)&g_st)[i] = 0u;
     g_st.mode = mode;
     g_st.dirty = 1u;
+    g_st.boot_rem = (mode == MODE_BOOT_DIALOG) ? PANIC_TIMEOUT_SECS : PANIC_HOLD_SENTINEL;
 
-    krx_fs_read(api, (const u8*)"/proc/boot", 10u, (u8*)&g_st.snap, (u16)sizeof(g_st.snap));
-    u32 sz = krx_fs_size(api, (const u8*)"/log/crash.bin", 14u);
-    u32 cnt = sz >> 7;
-    g_st.total_logs = (u8)(cnt > 16u ? 16u : cnt);
-    select_record(api, 0u);
-}
+    u16 n = krx_fs_read(api, (const u8*)"/proc/boot", 10u, (u8*)&g_st.snap, (u16)sizeof(g_st.snap));
+    if (n < 260u) return;
 
-static void do_report(const KrxApiTable* api, u8 kind) {
-    if (!g_st.has_slot) return;
-    g_st.leaf_arg = kind;
-    krx_leaf_call(api, LEAF_RPT_HEAD, (u32)&g_st);
-    krx_leaf_call(api, LEAF_RPT_TAIL, (u32)&g_st);
-    show_toast(kind == REPORT_UART ? "Serial Dump Sent" : "Saved crash.txt");
-    g_st.dirty = 1u;
-}
-
-static void do_clear_all(const KrxApiTable* api, u8 also_prefs) {
-    if (also_prefs) {
-        static const char PREFS[] =
-            "/pref/system.cfg\0/pref/display.cfg\0"
-            "/pref/audio.cfg\0/pref/keys.cfg\0/pref/battery.cfg";
-        for (u8 i = 0; i < 5u; i++) {
-            const char* pf = p_nth(PREFS, i);
-            krx_fs_remove(api, (const u8*)pf, p_len(pf));
+    const BootSlot* live = p_latest_slot(api, &g_st.snap.rec);
+    if (live) {
+        for (u16 i = 0; i < 128u; i++) ((u8*)&g_st.slot)[i] = ((const u8*)live)[i];
+        g_st.has_slot = 1u;
+        if (g_st.snap.extra.valid == FAULT_EXTRA_IDENT) {
+            g_st.extra_applies = 1u;
         }
-    } else {
-        krx_fs_remove(api, (const u8*)"/log/crash.bin", 14u);
+        krx_leaf_call(api, LEAF_PREP, (u32)&g_st);
+        if (g_st.slot.reset_reason == REASON_HARD) {
+            krx_leaf_call(api, LEAF_CAUSE, (u32)&g_st);
+            krx_leaf_call(api, LEAF_DISASM, (u32)&g_st);
+        }
+    }
+}
+
+static void do_report(const KrxApiTable* api, u8 dst) {
+    if (!g_st.has_slot) return;
+    g_st.report_dst = dst;
+    krx_leaf_call(api, LEAF_REPORT, (u32)&g_st);
+    show_toast(dst == REPORT_SERIAL ? "Serial Dump Sent" : "Saved /log/panic.txt");
+}
+
+static void do_reset_prefs(const KrxApiTable* api) {
+    static const char PREFS[] =
+        "/pref/system.cfg\0/pref/display.cfg\0"
+        "/pref/audio.cfg\0/pref/keys.cfg\0/pref/battery.cfg";
+    for (u8 i = 0; i < 5u; i++) {
+        const char* pf = p_nth(PREFS, i);
+        krx_fs_remove(api, (const u8*)pf, p_len(pf));
     }
     krx_fs_remove(api, (const u8*)"/proc/boot", 10u);
 }
 
-static void render_tabs(const KrxApiTable* api) {
-    krx_clear(api);
+static void draw_toast_overlay(const KrxApiTable* api) {
+    if (g_st.toast_ticks == 0u) return;
+    krx_draw_rounded_box(api, 10u, 24u, 108u, 15u);
+    krx_draw_str_align(
+        api, 64, 34, (const u8*)g_st.toast_msg, p_len(g_st.toast_msg),
+        FONT_TOMTHUMB, COLOR_FILL, ALIGN_CENTER
+    );
+}
 
-    if (g_st.tab == TAB_ASM) {
-        krx_leaf_call(api, LEAF_DIS_LO, (u32)&g_st);
-        krx_leaf_call(api, LEAF_DIS_MID, (u32)&g_st);
-        krx_leaf_call(api, LEAF_DIS_HI, (u32)&g_st);
-        krx_leaf_call(api, LEAF_ASM_DRAW, (u32)&g_st);
-    } else if (g_st.tab == TAB_QR) {
-        krx_leaf_call(api, LEAF_QR_ENCODE, (u32)&g_st);
-        krx_leaf_call(api, LEAF_QR_MATRIX, (u32)&g_st);
-        krx_leaf_call(api, LEAF_QR_DRAW,   (u32)&g_st);
-    } else if (g_st.tab == TAB_LOG) {
-        char val[16];
-        for (u8 i = 0; i < 4u; i++) {
-            const char* k = p_nth(LOG_ITEMS, i);
-            u8 vlen = 0;
-            if (i == 0u && g_st.total_logs > 0u) {
-                vlen = p_put_uint(api, val, (u32)g_st.cur_idx + 1u);
-                val[vlen++] = '/';
-                vlen += p_put_uint(api, val + vlen, g_st.total_logs);
-            }
-            krx_ui_draw_menu_item(api, (i16)(13 + i * 12), (const u8*)k, p_len(k), (const u8*)val, vlen, i == g_st.menu_sel, 0u);
-        }
-    } else {
-        krx_leaf_call(api, (u8)(LEAF_TAB_SUM + g_st.tab), (u32)&g_st);
-    }
-
-    if (!(g_st.tab == TAB_QR && g_st.qr_full)) {
-        krx_leaf_call(api, LEAF_TAB_CHROME, (u32)&g_st);
-    }
-
-    if (g_st.toast_ticks > 0u) {
-        krx_fill_rect(api, 12, 24, 104, 15, COLOR_FILL);
-        krx_fill_rect(api, 13, 25, 102, 13, COLOR_CLEAR);
-        krx_draw_str_align(api, 64, 29, (const u8*)g_st.toast_msg, p_len(g_st.toast_msg), FONT_TOMTHUMB, COLOR_FILL, ALIGN_CENTER);
+static void draw_footer(const KrxApiTable* api, u8 has_pages) {
+    krx_ui_draw_key_badge(api, 3, 55, (const u8*)"M", 1u, (const u8*)"Boot", 4u);
+    if (has_pages) {
+        krx_ui_draw_key_badge(api, 45, 55, (const u8*)"v", 1u, (const u8*)"Next", 4u);
+        krx_ui_draw_key_badge(api, 87, 55, (const u8*)"S1", 2u, (const u8*)"Dump", 4u);
     }
 }
 
-static void render_boot_screen(const KrxApiTable* api) {
-    if (g_st.mode == MODE_BOOT_DIALOG) {
-        krx_leaf_call(api, LEAF_SPLASH, (u32)&g_st);
-        krx_leaf_call(api, LEAF_SPLASH_INFO, (u32)&g_st);
-    } else {
+static void render_current(const KrxApiTable* api) {
+    if (g_st.mode == MODE_SAFE_MENU) {
         krx_leaf_call(api, LEAF_SAFE_MENU, (u32)&g_st);
-    }
-    krx_commit_frame(api);
-}
-
-static void next_record(const KrxApiTable* api) {
-    if (g_st.total_logs == 0u) return;
-    u8 nxt = (u8)(g_st.cur_idx + 1u);
-    if (nxt >= g_st.total_logs) nxt = 0u;
-    select_record(api, nxt);
-}
-
-// Returns 1 if state/UI needs redraw, 2 if caller should exit module cleanly
-static u8 handle_tabs_key(const KrxApiTable* api, u8 key) {
-    if (key == KEY_EXIT) {
-        if (g_st.tab == TAB_QR && g_st.qr_full) {
-            g_st.qr_full = 0u;
-            return 1u;
+    } else if (!g_st.has_slot) {
+        krx_clear(api);
+        krx_ui_draw_tag_badge(api, 2, 1, (const u8*)"NO FAULT", 8u, 1u);
+        krx_draw_str_align(api, 64, 33, (const u8*)"System clean", 12u, FONT_TOMTHUMB, COLOR_FILL, ALIGN_CENTER);
+        draw_footer(api, 0u);
+    } else {
+        if (g_st.page == PAGE_MAIN) {
+            krx_leaf_call(api, LEAF_PAGE_MAIN, (u32)&g_st);
+            krx_leaf_call(api, LEAF_PAGE_INFO, (u32)&g_st);
+        } else if (g_st.page == PAGE_REGS || g_st.page == PAGE_EXT) {
+            krx_leaf_call(api, LEAF_PAGE_REGS, (u32)&g_st);
+        } else if (g_st.page == PAGE_STACK) {
+            krx_leaf_call(api, LEAF_PAGE_STACK, (u32)&g_st);
+        } else {
+            krx_leaf_call(api, LEAF_PAGE_ASM, (u32)&g_st);
         }
+        draw_footer(api, 1u);
+    }
+    draw_toast_overlay(api);
+}
+
+// Returns 0 = ignored, 1 = redraw, 2 = continue boot / exit
+static u8 handle_page_key(const KrxApiTable* api, u8 key) {
+    if (key == KEY_MENU || key == KEY_EXIT) return 2u;
+    if (!g_st.has_slot) return 0u;
+
+    g_st.boot_rem = PANIC_HOLD_SENTINEL;
+    if (key == KEY_DOWN || key == KEY_HASH) {
+        g_st.page = (g_st.page + 1u >= PAGE_COUNT) ? 0u : (u8)(g_st.page + 1u);
+        return 1u;
+    }
+    if (key == KEY_UP || key == KEY_STAR) {
+        g_st.page = (g_st.page == 0u) ? (u8)(PAGE_COUNT - 1u) : (u8)(g_st.page - 1u);
+        return 1u;
+    }
+    if (key >= KEY_1 && key <= KEY_5) {
+        g_st.page = (u8)(key - KEY_1);
+        return 1u;
+    }
+    if (key == KEY_SIDE1) { do_report(api, REPORT_SERIAL); return 1u; }
+    if (key == KEY_SIDE2) { do_report(api, REPORT_FILE); return 1u; }
+    if (key == KEY_0) {
+        krx_fs_remove(api, (const u8*)"/proc/boot", 10u);
+        krx_sys_reboot(api, 0u);
         return 2u;
     }
-    if (key >= KEY_1 && key <= KEY_6) {
-        g_st.tab = (u8)(key - KEY_1);
-        g_st.scroll = 0u;
-        g_st.qr_full = 0u;
-        return 1u;
-    }
-    if (key == KEY_HASH) { g_st.tab = (g_st.tab + 1u >= TAB_COUNT) ? 0u : (u8)(g_st.tab + 1u); g_st.scroll = 0u; g_st.qr_full = 0u; return 1u; }
-    if (key == KEY_STAR) { g_st.tab = (g_st.tab == 0u) ? (u8)(TAB_COUNT - 1u) : (u8)(g_st.tab - 1u); g_st.scroll = 0u; g_st.qr_full = 0u; return 1u; }
-    if (key == KEY_SIDE1) { do_report(api, REPORT_UART); return 1u; }
-    if (key == KEY_SIDE2 && g_st.total_logs > 1u) {
-        next_record(api);
-        return 1u;
-    }
-
-    if (g_st.tab == TAB_QR) {
-        if (key == KEY_MENU) { g_st.qr_full ^= 1u; return 1u; }
-        return 0u;
-    }
-
-    if (g_st.tab == TAB_LOG) {
-        if (key == KEY_UP) { g_st.menu_sel = (g_st.menu_sel == 0u) ? 3u : (u8)(g_st.menu_sel - 1u); return 1u; }
-        if (key == KEY_DOWN) { g_st.menu_sel = (u8)((g_st.menu_sel + 1u) & 3u); return 1u; }
-        if (key == KEY_MENU) {
-            if (g_st.menu_sel == 0u) {
-                next_record(api);
-            } else if (g_st.menu_sel == 1u) {
-                do_report(api, REPORT_UART);
-            } else if (g_st.menu_sel == 2u) {
-                do_report(api, REPORT_FILE);
-            } else if (g_st.menu_sel == 3u) {
-                do_clear_all(api, 0u);
-                g_st.total_logs = 0u;
-                select_record(api, 0u);
-                show_toast("Logs Cleared");
-            }
-            return 1u;
-        }
-    } else {
-        if (key == KEY_UP && g_st.scroll > 0u) { g_st.scroll--; return 1u; }
-        if (key == KEY_DOWN && g_st.scroll < 6u) { g_st.scroll++; return 1u; }
-        if (key == KEY_MENU) { g_st.tab = (g_st.tab + 1u >= TAB_COUNT) ? 0u : (u8)(g_st.tab + 1u); g_st.scroll = 0u; return 1u; }
-    }
-    return 0u;
+    return 1u;
 }
 
 static void run_boot_loop(const KrxApiTable* api) {
@@ -244,8 +142,6 @@ static void run_boot_loop(const KrxApiTable* api) {
     const u8 orig_mode = g_st.mode;
     u32 start_ms = krx_ticks_ms(api);
     u8 prev_k = krx_poll_key(api);
-    g_st.boot_rem = 30u;
-    g_st.boot_anim = 0u;
     g_st.dirty = 1u;
 
     while (1) {
@@ -253,73 +149,71 @@ static void run_boot_loop(const KrxApiTable* api) {
         u8 edge = (k != 0u && prev_k == 0u) ? k : 0u;
         prev_k = k;
 
-        if (g_st.mode == MODE_BOOT_DIALOG) {
-            u32 el = krx_ticks_ms(api) - start_ms;
-            if (el < 300u) edge = 0u;
+        u32 el = krx_ticks_ms(api) - start_ms;
 
-            if (g_st.boot_rem != 255u) {
-                if (el >= 30000u) return;
-                u8 rem = 30u;
-                u32 t = el;
-                while (t >= 1000u && rem > 0u) { t -= 1000u; rem--; }
-                if (rem != g_st.boot_rem) { g_st.boot_rem = rem; g_st.dirty = 1u; }
-            }
-            u8 anim = (u8)((el >> 9) & 1u);
-            if (anim != g_st.boot_anim) { g_st.boot_anim = anim; g_st.dirty = 1u; }
+        if (g_st.toast_ticks > 0u) {
+            g_st.toast_ticks--;
+            if (g_st.toast_ticks == 0u) g_st.dirty = 1u;
+        }
 
-            if (edge != 0u) {
-                g_st.boot_rem = 255u;
-                if (edge == KEY_MENU || edge == KEY_EXIT) return;
-                if (edge == KEY_SIDE1) { do_report(api, REPORT_UART); }
-                else if (edge == KEY_STAR) {
-                    g_st.mode = MODE_SAFE_INSPECT;
-                    g_st.tab = TAB_QR;
-                    g_st.dirty = 1u;
-                } else if (edge == KEY_UP || edge == KEY_DOWN || edge == KEY_HASH || (edge >= KEY_1 && edge <= KEY_6)) {
-                    g_st.mode = MODE_SAFE_INSPECT;
-                    g_st.tab = (edge >= KEY_1 && edge <= KEY_6) ? (u8)(edge - KEY_1) : 0u;
-                    g_st.dirty = 1u;
-                }
-            }
-            if (g_st.dirty) { g_st.dirty = 0u; render_boot_screen(api); }
-        } else if (g_st.mode == MODE_SAFE_MENU) {
-            if (edge == KEY_UP) { g_st.menu_sel = (g_st.menu_sel == 0u) ? 4u : (u8)(g_st.menu_sel - 1u); g_st.dirty = 1u; }
-            else if (edge == KEY_DOWN) { g_st.menu_sel = (g_st.menu_sel >= 4u) ? 0u : (u8)(g_st.menu_sel + 1u); g_st.dirty = 1u; }
-            else if (edge == KEY_MENU) {
+        if (g_st.mode == MODE_SAFE_MENU) {
+            if (el < 200u) edge = 0u;
+            if (edge == KEY_UP) {
+                g_st.menu_sel = (g_st.menu_sel == 0u) ? 3u : (u8)(g_st.menu_sel - 1u);
+                g_st.dirty = 1u;
+            } else if (edge == KEY_DOWN) {
+                g_st.menu_sel = (u8)((g_st.menu_sel + 1u) & 3u);
+                g_st.dirty = 1u;
+            } else if (edge == KEY_SIDE1) {
+                do_report(api, REPORT_SERIAL);
+            } else if (edge == KEY_SIDE2) {
+                do_report(api, REPORT_FILE);
+            } else if (edge == KEY_EXIT) {
+                return;
+            } else if (edge == KEY_MENU) {
                 if (g_st.menu_sel == 0u) {
                     krx_fs_remove(api, (const u8*)"/proc/boot", 10u);
                     return;
-                }
-                else if (g_st.menu_sel == 1u) { g_st.mode = MODE_SAFE_INSPECT; g_st.menu_sel = 0u; g_st.dirty = 1u; }
-                else if (g_st.menu_sel == 2u) { do_report(api, REPORT_UART); }
-                else if (g_st.menu_sel == 3u) { do_clear_all(api, 1u); return; }
-                else if (g_st.menu_sel == 4u) {
+                } else if (g_st.menu_sel == 1u) {
+                    g_st.mode = MODE_INSPECT;
+                    g_st.page = PAGE_MAIN;
+                    g_st.dirty = 1u;
+                } else if (g_st.menu_sel == 2u) {
+                    do_reset_prefs(api);
+                    return;
+                } else {
                     krx_fs_remove(api, (const u8*)"/proc/boot", 10u);
                     krx_sys_reboot(api, 0u);
                     return;
                 }
-            } else if (edge == KEY_EXIT) {
-                return;
             }
-            if (g_st.dirty) { g_st.dirty = 0u; render_boot_screen(api); }
         } else {
-            if (edge != 0u) {
-                u8 r = handle_tabs_key(api, edge);
-                if (r == 2u) {
-                    if (orig_mode == MODE_SAFE_MENU) {
-                        g_st.mode = MODE_SAFE_MENU;
-                        g_st.dirty = 1u;
-                    } else {
-                        return;
-                    }
+            if (g_st.mode == MODE_BOOT_DIALOG) {
+                if (el < 250u) edge = 0u;
+                if (g_st.boot_rem != PANIC_HOLD_SENTINEL) {
+                    if (el >= (u32)PANIC_TIMEOUT_SECS * 1000u) return;
+                    u8 rem = PANIC_TIMEOUT_SECS;
+                    u32 t = el;
+                    while (t >= 1000u && rem > 0u) { t -= 1000u; rem--; }
+                    if (rem != g_st.boot_rem) { g_st.boot_rem = rem; g_st.dirty = 1u; }
                 }
-                if (r == 1u) g_st.dirty = 1u;
             }
-            if (g_st.toast_ticks > 0u) {
-                g_st.toast_ticks--;
-                if (g_st.toast_ticks == 0u) g_st.dirty = 1u;
+            if (edge != 0u) {
+                if (edge == KEY_EXIT && orig_mode == MODE_SAFE_MENU) {
+                    g_st.mode = MODE_SAFE_MENU;
+                    g_st.dirty = 1u;
+                } else {
+                    u8 r = handle_page_key(api, edge);
+                    if (r == 2u) return;
+                    if (r == 1u) g_st.dirty = 1u;
+                }
             }
-            if (g_st.dirty) { g_st.dirty = 0u; render_tabs(api); krx_commit_frame(api); }
+        }
+
+        if (g_st.dirty) {
+            g_st.dirty = 0u;
+            render_current(api);
+            krx_commit_frame(api);
         }
         krx_delay_ms(api, 15u);
     }
@@ -333,6 +227,11 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         init_panic_data(api, mode);
         if (mode == MODE_BOOT_DIALOG || mode == MODE_SAFE_MENU) {
             run_boot_loop(api);
+        } else {
+            __attribute__((aligned(4))) KrxStatusBar sb;
+            for (u16 i = 0; i < (u16)sizeof(sb); i++) ((u8*)&sb)[i] = 0u;
+            sb.tray_icon_id = KRX_ICON_NONE;
+            krx_ui_set_status_bar(api, &sb);
         }
         return 0;
     }
@@ -344,21 +243,26 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             g_st.toast_ticks--;
             return (g_st.toast_ticks == 0u) ? 1 : 0;
         }
+        if (ev[0] == KRX_EV_ENCODER && g_st.has_slot) {
+            i32 ed = *(const i32*)(ev + 4);
+            if (ed > 0) g_st.page = (g_st.page + 1u >= PAGE_COUNT) ? 0u : (u8)(g_st.page + 1u);
+            else if (ed < 0) g_st.page = (g_st.page == 0u) ? (u8)(PAGE_COUNT - 1u) : (u8)(g_st.page - 1u);
+            return 1;
+        }
         if (ev[0] == KRX_EV_KEY) {
             u8 key = ev[1];
             u32 state = *(const u32*)(ev + 4);
-            if (state == 0u || (state == 2u && (key == KEY_UP || key == KEY_DOWN))) {
-                u8 r = handle_tabs_key(api, key);
+            if (state == 0u) {
+                u8 r = handle_page_key(api, key);
                 if (r == 2u) return 0;
-                return (r == 1u) ? 1 : 0;
             }
-            return (key == KEY_EXIT) ? 0 : 1;
+            return 1;
         }
         return 0;
     }
 
     if (op == KRX_OP_RENDER) {
-        render_tabs(api);
+        render_current(api);
         return 0;
     }
 

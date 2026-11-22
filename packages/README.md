@@ -15,7 +15,7 @@ Installable applications and system modules built against the [`sdk/`](../sdk/) 
 - [`sys/dfu/`](sys/dfu/README.md) (`dfu.mod`, `P0` Structured Paged) — Visual USB-C / UART DFU updater, hardware quiescing, and SRAM hook.
 - [`sys/recovery/`](sys/recovery/README.md) (`recovery.mod`, `P0` Structured Paged) — On-device recovery shell and SRAM flasher.
 - [`sys/multiboot/`](sys/multiboot/README.md) (`multiboot.mod`, `P0` Structured Paged) — Multi-slot bootloader manager.
-- `sys/panic/` (`panic.mod`, `P0` Structured Paged) — Crash inspector, stack/register viewer, Thumb-1 disassembler, and QR report generator.
+- `sys/panic/` (`panic.mod`, `P0` Structured Paged) — Fast post-fault panic screen, Safe Mode recovery menu, fault register/stack details, and serial dump.
 - [`sys/sysinfo/`](sys/sysinfo/README.md) (`sysinfo.krx`, `P0` Structured Paged) — Device hardware, OTP certificate, power/thermal telemetry, and regulatory info.
 
 ### `packages/apps/` — Optional Radio Apps

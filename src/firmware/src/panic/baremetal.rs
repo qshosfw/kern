@@ -11,9 +11,6 @@ use py32_hal as hal;
 #[cfg(not(test))]
 pub fn recovery_loop() -> ! {
     bsp::set_status_led(bsp::StatusLed::Red);
-    for _ in 0..150 {
-        hal::wdt::Watchdog::feed();
-        hal::delay::delay_ms(20);
-    }
+    hal::wdt::Watchdog::feed();
     cortex_m::peripheral::SCB::sys_reset();
 }

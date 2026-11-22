@@ -189,13 +189,15 @@ unsafe extern "C" fn pre_init() {
         (0xE000_ED04 as *mut u32).write_volatile(1 << 25);
         pac::SCB_VTOR.write_volatile(hal::flash::FIRMWARE_MIN_ADDR);
 
-        // Keep PF8 backlight solidly lit across warm DFU -> Recovery SYSRESETREQ before crt0 runs.
+        // Keep PF8 backlight solidly lit across warm DFU/Recovery or Crash SYSRESETREQ before crt0 runs.
         let apb1 = 0x4002_103C as *mut u32;
         apb1.write_volatile(apb1.read_volatile() | (1 << 28) | (1 << 10));
         let hi = (0x4000_2820 as *const u32).read_volatile() & 0xFFFF;
         let lo = (0x4000_2824 as *const u32).read_volatile() & 0xFFFF;
+        let bkp_flags = (lo >> 8) as u8;
         if ((hi >> 8) as u8) == kernel::boot::BackupCrashTag::IDENT_BYTE
-            && (((lo >> 8) as u8) & 0x48) == 0x48
+            && ((bkp_flags & 0x48) == 0x48
+                || (bkp_flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) != 0)
         {
             let iopenr = 0x4002_1034 as *mut u32;
             iopenr.write_volatile(iopenr.read_volatile() | (1 << 5));
@@ -237,7 +239,9 @@ fn early_init() -> Board {
     let warm_dfu_tools = boot::recovery::is_warm_tools_boot();
     #[cfg(not(feature = "krx_native"))]
     let warm_dfu_tools = false;
-    if warm_dfu_tools {
+    let warm_crash =
+        (boot::backup::read().flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) != 0;
+    if warm_dfu_tools || warm_crash {
         drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
     }
 
@@ -252,8 +256,11 @@ fn early_init() -> Board {
         }
     }
     boot::reset::check_reset_cause();
-    if warm_dfu_tools {
+    if warm_dfu_tools || warm_crash {
         bsp::pins::BACKLIGHT.set_high();
+        if warm_crash {
+            bsp::set_status_led(bsp::StatusLed::Red);
+        }
     } else {
         bsp::pins::BACKLIGHT.set_low();
         let _ = hal::uart::write_line("KERN v0.1.0");

@@ -22,47 +22,39 @@
 #define REASON_TAGS 0x53474154u
 #define REASON_BROW 0x574F5242u
 
-// BackupCrashTag flags (bits [15:8] of encoded LE u32, byte 3 == 0xA5)
-#define BKP_IDENT_BYTE    0xA5u
-#define BKP_FLAG_DIRTY    (1u << 0)
-#define BKP_FLAG_SAFEMODE (1u << 1)
-#define BKP_FLAG_CLEAN    (1u << 2)
+// Module execution modes
+#define MODE_IN_OS       0u
+#define MODE_BOOT_DIALOG 1u
+#define MODE_SAFE_MENU   2u
+#define MODE_INSPECT     3u
 
-#define MODE_IN_OS        0u
-#define MODE_BOOT_DIALOG  1u
-#define MODE_SAFE_MENU    2u
-#define MODE_SAFE_INSPECT 3u
+// Panic pages (page-based navigation, no line scrolling)
+#define PAGE_MAIN  0u
+#define PAGE_REGS  1u
+#define PAGE_EXT   2u
+#define PAGE_STACK 3u
+#define PAGE_ASM   4u
+#define PAGE_COUNT 5u
 
-#define TAB_SUM   0u
-#define TAB_REG   1u
-#define TAB_STK   2u
-#define TAB_ASM   3u
-#define TAB_QR    4u
-#define TAB_LOG   5u
-#define TAB_COUNT 6u
+// Auto-continue timeout (seconds) on post-fault panic screen
+#define PANIC_TIMEOUT_SECS  10u
+#define PANIC_HOLD_SENTINEL 255u
 
-#define LEAF_PREP     1u
-#define LEAF_CAUSE    2u
-#define LEAF_TAB_SUM  3u
-#define LEAF_TAB_REG  4u
-#define LEAF_TAB_STK  5u
-#define LEAF_DIS_LO   6u
-#define LEAF_DIS_MID  7u
-#define LEAF_DIS_HI   8u
-#define LEAF_ASM_DRAW 9u
-#define LEAF_RPT_HEAD 10u
-#define LEAF_RPT_TAIL 11u
-#define LEAF_SPLASH      12u
-#define LEAF_SPLASH_INFO 13u
-#define LEAF_SAFE_MENU   14u
-#define LEAF_QR_ENCODE   15u
-#define LEAF_QR_MATRIX   16u
-#define LEAF_QR_DRAW     17u
-#define LEAF_TAB_CHROME  18u
+// Report target flags
+#define REPORT_SERIAL 0u
+#define REPORT_FILE   1u
 
-// Action codes passed via g_state.leaf_arg when invoking LEAF_REPORT
-#define REPORT_UART 0u
-#define REPORT_FILE 1u
+// P0 Leaf IDs (1-based, matches krx.toml `leaves` order)
+#define LEAF_PREP       1u
+#define LEAF_CAUSE      2u
+#define LEAF_DISASM     3u
+#define LEAF_PAGE_MAIN  4u
+#define LEAF_PAGE_INFO  5u
+#define LEAF_PAGE_REGS  6u
+#define LEAF_PAGE_STACK 7u
+#define LEAF_PAGE_ASM   8u
+#define LEAF_SAFE_MENU  9u
+#define LEAF_REPORT     10u
 
 typedef struct __attribute__((packed)) {
     u32 crash_signature;
@@ -115,40 +107,30 @@ typedef struct __attribute__((packed)) {
 } ProcBootSnapshot; // 316 B
 
 typedef struct {
-    u16 opcodes[5];   // [PC-4, PC-2, PC, PC+2, PC+4]
-    u8  op_valid[5];  // 1 if opcode loaded from Flash/slot
-    u8  cause_id;
+    u16 opcodes[5];    // [PC-4, PC-2, PC, PC+2, PC+4]
+    u8  op_valid[5];   // 1 if safely loaded from Flash/slot
     u8  fault_reg;
-    u8  access_flags; // bit0=W, bits1..2=sz(0=B,1=H,2=W), bit3=unaligned
     u32 fault_addr;
     u32 crash_sig;
-    char line1[28];   // human cause headline
-    char line2[28];   // address/detail line
-    char asm_txt[5][20]; // decoded Thumb-16 mnemonics for [PC-4..PC+4]
+    char actor[16];    // sanitized printable ASCII actor tag
+    char line1[28];    // human-readable cause headline
+    char line2[28];    // effective address / detail
+    char asm_txt[5][20]; // disassembled Thumb-16 window [PC-4..PC+4]
 } FaultAnalysis;
 
 typedef struct {
     ProcBootSnapshot snap;
-    BootSlot         cur_slot;
+    BootSlot         slot;
     FaultAnalysis    ana;
     u8  mode;
-    u8  tab;
-    u8  scroll;
-    u8  total_logs;
-    u8  live_extra_slot; // 1 if snap.rec.latest_valid_slot exists separately or matches 0
-    u8  cur_idx;
-    u8  menu_sel;
+    u8  page;        // 0..PAGE_COUNT-1
+    u8  has_slot;
     u8  extra_applies;
-    u8  leaf_arg;
+    u8  menu_sel;
+    u8  boot_rem;    // 0..PANIC_TIMEOUT_SECS, or PANIC_HOLD_SENTINEL when paused
+    u8  report_dst;  // REPORT_SERIAL or REPORT_FILE
     u8  dirty;
     u8  toast_ticks;
-    u8  has_slot;
-    u8  boot_rem;   // 1..30s countdown or 255 if paused (HOLD)
-    u8  boot_anim;  // sad-radio animation tick
-    u8  qr_full;    // 1 = fullscreen high-contrast QR view
-    u8  qr_mask;    // selected QR mask id
-    u8  qr_cw[44];  // QR V2-L 34 data + 10 ECC codewords
-    u32 qr_rows[25];// QR 25x25 module bitmap rows
     char toast_msg[24];
 } PanicState;
 
@@ -187,16 +169,12 @@ static inline u8 p_put_hex0x(char* out, u32 v, u8 digits) {
     return (u8)(digits + 2u);
 }
 
-static inline u32 p_udivmod(const KrxApiTable* api, u32 n, u32 d, u32* rem_out) {
-    return krx_udivmod(api, n, d, rem_out);
-}
-
 static inline u8 p_put_uint(const KrxApiTable* api, char* out, u32 v) {
     char tmp[10];
     u8 n = 0;
     do {
         u32 r = 0;
-        v = p_udivmod(api, v, 10u, &r);
+        v = krx_udivmod(api, v, 10u, &r);
         tmp[n++] = (char)('0' + r);
     } while (v > 0u && n < 10u);
     for (u8 i = 0; i < n; i++) out[i] = tmp[n - 1u - i];
@@ -252,12 +230,12 @@ static inline u8 p_is_safe_flash_hw(u32 addr) {
 }
 
 static inline const char* p_reason_name(u32 rr) {
-    if (rr == REASON_HARD) return "HARDFLT";
-    if (rr == REASON_APPF) return "PANIC!";
-    if (rr == REASON_WDOG) return "WATCHDG";
-    if (rr == REASON_TAGS) return "MEM_TAG";
+    if (rr == REASON_HARD) return "HARDFAULT";
+    if (rr == REASON_APPF) return "PANIC";
+    if (rr == REASON_WDOG) return "WATCHDOG";
+    if (rr == REASON_TAGS) return "MEM FAULT";
     if (rr == REASON_BROW) return "BROWNOUT";
-    return "NONE";
+    return "FAULT";
 }
 
 #endif // PANIC_SHARED_H
