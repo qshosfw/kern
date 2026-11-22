@@ -17,7 +17,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
         if allow_gc
             && !self.in_gc
-            && (self.page_counts().0 as usize) <= RESERVE_BLOCKS * DATA_PAGES_PER_BLOCK
+            && (self.page_counts().0 as usize) <= (RESERVE_BLOCKS + 1) * DATA_PAGES_PER_BLOCK
         {
             self.in_gc = true;
             let _ = self.gc_reclaim_one(self.cur_alloc_block as usize);
@@ -118,6 +118,9 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     #[inline(never)]
     fn erase_and_init_block(&mut self, block: usize, prev_ec: u32) -> Result<(), FsError> {
+        if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || block >= MAX_BLOCKS {
+            return Err(FsError::InvalidPath);
+        }
         let addr = block * D::BLOCK_SIZE;
         if self.dev.erase_sector(addr).is_err() {
             self.retire_block(block);
@@ -133,7 +136,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             self.retire_block(block);
             return Err(FsError::IoError);
         }
-        self.block_table[block & (MAX_BLOCKS - 1)] = BLOCK_TBL_ERASED;
+        self.block_table[block] = BLOCK_TBL_ERASED;
         self.total_erases = self.total_erases.saturating_add(1);
         Ok(())
     }

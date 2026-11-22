@@ -228,6 +228,12 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         if block < FIRST_DATA_BLOCK || block >= D::TOTAL_BLOCKS || slot == 0 {
             return Ok(());
         }
+        if new_state == TAG_STATE_OBSOLETE
+            && self.read_tag(phys_page).is_ok()
+            && self.cur_tag.state == TAG_STATE_OBSOLETE
+        {
+            return Ok(());
+        }
         self.dev
             .program(tag_flash_offset(block, slot) + 8, &[new_state])?;
         if new_state == TAG_STATE_OBSOLETE {
@@ -700,21 +706,31 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     /// Append fixed or variable records in a bounded cyclic ring buffer (`max_bytes`).
+    /// Persists the cyclic write cursor in `inode.root_page` (for `max_bytes <= 65535`).
     pub fn write_ring(&mut self, path: &str, max_bytes: usize, data: &[u8]) -> Result<(), FsError> {
         if max_bytes == 0 || data.len() > max_bytes {
             return Err(FsError::CapacityFull);
         }
         let cur_sz = self.file_size(path).unwrap_or(0);
         if cur_sz + data.len() <= max_bytes {
-            self.append_file(path, data)
+            self.append_file(path, data)?;
+            if self.lookup_inode(path).is_ok() {
+                self.cur_inode.flags |= INODE_FLAG_RING;
+                self.cur_inode.root_page = ((cur_sz + data.len()) % max_bytes) as u16;
+                let _ = self.commit_cur_inode(&[]);
+            }
+            Ok(())
         } else {
             match self.lookup_inode(path) {
                 Ok(()) => {}
                 Err(FsError::NotFound) if self.mounted => return self.write_file(path, data),
                 Err(e) => return Err(e),
             }
+            let cursor = (self.cur_inode.root_page as usize) % max_bytes;
+            let next_cursor = (cursor + data.len()) % max_bytes;
             self.cur_inode.flags |= INODE_FLAG_RING;
-            self.write_pages_at(0, data, Some(max_bytes))
+            self.cur_inode.root_page = next_cursor as u16;
+            self.write_pages_at(cursor, data, Some(max_bytes))
         }
     }
 
