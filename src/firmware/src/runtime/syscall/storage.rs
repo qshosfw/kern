@@ -112,12 +112,20 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let sub = a0 as u8;
             if sub == fs_read::LIST_DIR {
                 let out = r.buf as *mut KrxDirEntry;
-                let max = r.len as u8;
-                if !out.is_null() && max > 0 {
-                    let dir_str = unsafe { str_or_default(r.path, r.path_len as usize, "/") };
-                    let dst = unsafe { core::slice::from_raw_parts_mut(out, max as usize) };
-                    return crate::services::primitives::list_krx_dir(st, dir_str, dst)
-                        .unwrap_or(0);
+                let max = r.len as usize;
+                let dir_str = unsafe { str_or_default(r.path, r.path_len as usize, "/") };
+                let dst = if !out.is_null() && max > 0 {
+                    unsafe { core::slice::from_raw_parts_mut(out, max) }
+                } else {
+                    &mut []
+                };
+                if let Ok((total, written)) = crate::services::primitives::list_krx_dir_at(
+                    st,
+                    dir_str,
+                    r.offset as usize,
+                    dst,
+                ) {
+                    return if r.extra != 0 { total } else { written };
                 }
                 return 0;
             }

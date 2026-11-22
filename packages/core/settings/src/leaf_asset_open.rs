@@ -80,7 +80,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 copy_bytes(dst_fp, p + 1, raw)
             };
             let nlen = format_pretty(subslice(dst_fp, 0, plen), pretty);
-            if nlen > 0 && pos + nlen + 1 < 88 {
+            if nlen > 0 && pos + nlen + 1 < 112 {
                 pos = copy_bytes(&mut st.sheet_buf, pos, subslice(pretty, 0, nlen));
                 set_byte(&mut st.sheet_buf, pos, 0);
                 pos += 1;

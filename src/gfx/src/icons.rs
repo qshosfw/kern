@@ -32,6 +32,9 @@ pub const ICON_KEYPAD: &[u8; 8] = &status::ICONS_8[Icon::Keypad as usize];
 /// 8x8 system glyph for an `abi::icon` identifier in `SYSTEM_BASE..`.
 #[inline(always)]
 pub const fn system_icon(id: u8) -> Option<&'static [u8; 8]> {
+    if id == icon::GLOBE {
+        return Some(ICON_GLOBE);
+    }
     let slot = id.wrapping_sub(icon::SYSTEM_BASE) as usize;
     if slot < icon::SYSTEM_COUNT {
         Some(&SYSTEM_ICONS_8[slot])

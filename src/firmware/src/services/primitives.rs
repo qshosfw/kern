@@ -87,26 +87,40 @@ pub fn save_app_config(
 }
 
 #[inline(never)]
+pub fn list_krx_dir_at(
+    storage: &mut crate::services::SystemStorage,
+    dir_path: &str,
+    skip: usize,
+    out_entries: &mut [kernel::proc::abi::KrxDirEntry],
+) -> Result<(usize, usize), ()> {
+    let mut total = 0usize;
+    let mut written = 0usize;
+    storage
+        .for_each_entry(dir_path, |path, size, _perm, is_dir| {
+            if total >= skip {
+                if let Some(dst) = out_entries.get_mut(written) {
+                    unsafe { core::ptr::write_bytes(dst, 0, 1) };
+                    let b = path.as_bytes();
+                    let n = b.len().min(24);
+                    dst.name[..n].copy_from_slice(&b[..n]);
+                    dst.size = size as u32;
+                    dst.is_dir = u8::from(is_dir);
+                    written += 1;
+                }
+            }
+            total += 1;
+        })
+        .map_err(|_| ())?;
+    Ok((total, written))
+}
+
+#[inline(always)]
 pub fn list_krx_dir(
     storage: &mut crate::services::SystemStorage,
     dir_path: &str,
     out_entries: &mut [kernel::proc::abi::KrxDirEntry],
 ) -> Result<usize, ()> {
-    let mut count = 0usize;
-    storage
-        .for_each_entry(dir_path, |path, size, _perm, is_dir| {
-            if let Some(dst) = out_entries.get_mut(count) {
-                unsafe { core::ptr::write_bytes(dst, 0, 1) };
-                let b = path.as_bytes();
-                let n = b.len().min(24);
-                dst.name[..n].copy_from_slice(&b[..n]);
-                dst.size = size as u32;
-                dst.is_dir = u8::from(is_dir);
-                count += 1;
-            }
-        })
-        .map_err(|_| ())?;
-    Ok(count)
+    list_krx_dir_at(storage, dir_path, 0, out_entries).map(|(_, w)| w)
 }
 
 #[inline(never)]

@@ -546,7 +546,12 @@ impl SettingsState {
                 }
                 _ => {}
             }
-            ui::draw_row(api, y, item_label(item.label_idx), vstr, 0, flags, anim_tick);
+            let row_icon = if item.kind == Kind::Action && item.meta == ACT_ASSET_LANG {
+                abi::icon::GLOBE
+            } else {
+                0
+            };
+            ui::draw_row(api, y, item_label(item.label_idx), vstr, row_icon, flags, anim_tick);
             idx += 1;
         }
         ui::finish_list_frame(api, sy, count);

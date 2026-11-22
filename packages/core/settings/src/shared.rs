@@ -2,8 +2,8 @@
 
 use kern_sdk::KrxDirEntry;
 
-pub const MAX_APPS: usize = 6;
-pub const MAX_ASSETS: usize = 6;
+pub const MAX_APPS: usize = 8;
+pub const MAX_ASSETS: usize = 10;
 
 pub const LEAF_APP_LOAD: u8 = 1;
 pub const LEAF_APP_HDR: u8 = 2;
@@ -97,7 +97,7 @@ pub struct AppMeta {
 #[repr(C)]
 pub union SharedPool {
     pub app_entries: [KrxDirEntry; MAX_APPS],
-    pub asset_paths: [[u8; 32]; MAX_ASSETS],
+    pub asset_paths: [[u8; 24]; MAX_ASSETS],
 }
 
 #[repr(C)]
@@ -133,7 +133,7 @@ pub struct SharedState {
     pub jingle_name: [u8; 12],
     pub lang_name: [u8; 12],
 
-    pub sheet_buf: [u8; 88],
+    pub sheet_buf: [u8; 112],
     pub sheet_len: u16,
     pub sheet_title: [u8; 16],
     pub sheet_title_len: u8,
@@ -172,7 +172,7 @@ impl SharedState {
             roger_name: [0; 12],
             jingle_name: [0; 12],
             lang_name: [0; 12],
-            sheet_buf: [0; 88],
+            sheet_buf: [0; 112],
             sheet_len: 0,
             sheet_title: [0; 16],
             sheet_title_len: 0,
@@ -217,12 +217,12 @@ impl SharedState {
     }
 
     #[inline(always)]
-    pub fn assets(&self) -> &[[u8; 32]; MAX_ASSETS] {
+    pub fn assets(&self) -> &[[u8; 24]; MAX_ASSETS] {
         unsafe { &self.pool.asset_paths }
     }
 
     #[inline(always)]
-    pub fn assets_mut(&mut self) -> &mut [[u8; 32]; MAX_ASSETS] {
+    pub fn assets_mut(&mut self) -> &mut [[u8; 24]; MAX_ASSETS] {
         unsafe { &mut self.pool.asset_paths }
     }
 

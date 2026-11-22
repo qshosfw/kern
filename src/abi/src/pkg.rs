@@ -164,6 +164,7 @@ pub mod icon {
         STATUS_REVERSE = 145,
         STATUS_ENCRYPT = 146,
         STATUS_PACKET = 147,
+        GLOBE = 148,
     }
 
     /// First 8x8 system glyph; identifiers below it are primary 5px status glyphs.
