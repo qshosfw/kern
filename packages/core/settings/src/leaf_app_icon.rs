@@ -1,10 +1,9 @@
-//! P0 Leaf 16: Stream-Extract Actions (`0x000B`) & 16x16 Icon (`0x0004`) using a 96B stack buffer.
+//! P0 Leaf 16: Stream-Extract Actions (`0x000B`) & 16x16 Icon (`0x0004`) via `SharedState::sheet_buf`.
 #![no_std]
 #![no_main]
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry};
 use shared::{SharedState, byte_at, copy_bytes, cstr_slice, subslice};
 
@@ -19,12 +18,11 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
+    let buf = unsafe { core::slice::from_raw_parts_mut(st.sheet_buf.as_mut_ptr(), 96) };
     let m = st.meta_mut();
     let path = subslice(&m.path, 0, m.path_len as usize);
-    let mut raw = MaybeUninit::<[u8; 96]>::uninit();
-    let buf = unsafe { &mut *raw.as_mut_ptr() };
 
-    if api.read_file_at(path, 0, subslice_24(buf)) >= 10 && byte_at(buf, 0) == 0xC0 && byte_at(buf, 1) == 0xDE {
+    if api.read_file_at(path, 0, shared::subslice_mut(buf, 0, 24)) >= 10 && byte_at(buf, 0) == 0xC0 && byte_at(buf, 1) == 0xDE {
         let mut s = rd16(buf, 6);
         let mut off = 24u32;
         while s > 0 && off < 512 {
@@ -65,11 +63,6 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     ctx.continuation.kind = KRX_LEAF_KIND_DONE;
     0
-}
-
-#[inline(always)]
-fn subslice_24(b: &mut [u8; 96]) -> &mut [u8] {
-    shared::subslice_mut(b, 0, 24)
 }
 
 krx_entry!(leaf_entry);

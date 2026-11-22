@@ -29,6 +29,7 @@ fn has_proc_read_cap() -> bool {
     super::super::native_runner::active_native_caps().contains(::abi::Cap::ServiceRegistry)
 }
 
+#[inline(never)]
 fn proc_read(path: &str, offset: usize, dst: &mut [u8]) -> Option<usize> {
     if !is_proc_boot_path(path) || !has_proc_read_cap() {
         return None;
@@ -59,6 +60,7 @@ fn proc_read(path: &str, offset: usize, dst: &mut [u8]) -> Option<usize> {
     Some(written)
 }
 
+#[inline(never)]
 fn proc_remove(path: &str) -> Option<u8> {
     if !is_proc_boot_path(path) {
         return None;
@@ -91,6 +93,61 @@ fn file_stat_size(
         return Some(316);
     }
     st.file_size(path_str).ok().map(|s| s as u32)
+}
+
+#[cfg(feature = "filesystem")]
+#[inline(never)]
+unsafe fn fs_read_extents(
+    st: &mut crate::services::SystemStorage<'static>,
+    path: *const u8,
+    path_len: u8,
+    dst: &mut [u8],
+) -> usize {
+    if dst.len() >= 20
+        && super::super::native_runner::active_native_caps().contains(::abi::Cap::StorageAdmin)
+    {
+        if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
+            let mut l1 = [0u16; 8];
+            if let Ok((depth, sz)) = st.fs.file_extents(path_str, &mut l1) {
+                dst[..4].fill(0);
+                dst[0] = depth;
+                dst[4..8].copy_from_slice(&sz.to_le_bytes());
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        l1.as_ptr() as *const u8,
+                        dst.as_mut_ptr().add(8),
+                        16,
+                    );
+                }
+                return 20;
+            }
+        }
+    }
+    0
+}
+
+#[cfg(feature = "filesystem")]
+#[inline(never)]
+fn fs_read_stats(st: &crate::services::SystemStorage<'static>, dst: &mut [u8]) -> usize {
+    if dst.len() >= 16 {
+        let s = st.fs.stats();
+        #[repr(C)]
+        struct WireStats(u16, u16, u16, u16, u16, u16, u32);
+        let w = WireStats(
+            s.total_sectors,
+            s.used_sectors,
+            s.free_sectors,
+            s.deleted_sectors,
+            s.active_files,
+            0,
+            s.wear_cycles,
+        );
+        unsafe {
+            core::ptr::copy_nonoverlapping(&raw const w as *const u8, dst.as_mut_ptr(), 16);
+        }
+        return 16;
+    }
+    0
 }
 
 #[inline(never)]
@@ -162,30 +219,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 fs_read::EXTENTS => {
                     #[cfg(feature = "filesystem")]
                     {
-                        if dst.len() >= 20
-                            && super::super::native_runner::active_native_caps()
-                                .contains(::abi::Cap::StorageAdmin)
-                        {
-                            if let Some(path_str) =
-                                unsafe { parse_str(r.path, r.path_len as usize) }
-                            {
-                                let mut l1 = [0u16; 8];
-                                if let Ok((depth, sz)) = st.fs.file_extents(path_str, &mut l1) {
-                                    dst[0] = depth;
-                                    dst[1] = 0;
-                                    dst[2] = 0;
-                                    dst[3] = 0;
-                                    dst[4..8].copy_from_slice(&sz.to_le_bytes());
-                                    for i in 0..8 {
-                                        let b = l1[i].to_le_bytes();
-                                        dst[8 + i * 2] = b[0];
-                                        dst[9 + i * 2] = b[1];
-                                    }
-                                    return 20;
-                                }
-                            }
-                        }
-                        0
+                        unsafe { fs_read_extents(st, r.path, r.path_len, dst) }
                     }
                     #[cfg(not(feature = "filesystem"))]
                     {
@@ -196,29 +230,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 fs_read::STATS => {
                     #[cfg(feature = "filesystem")]
                     {
-                        if dst.len() >= 16 {
-                            let s = st.fs.stats();
-                            #[repr(C)]
-                            struct WireStats(u16, u16, u16, u16, u16, u16, u32);
-                            let w = WireStats(
-                                s.total_sectors,
-                                s.used_sectors,
-                                s.free_sectors,
-                                s.deleted_sectors,
-                                s.active_files,
-                                0,
-                                s.wear_cycles,
-                            );
-                            unsafe {
-                                core::ptr::copy_nonoverlapping(
-                                    &raw const w as *const u8,
-                                    dst.as_mut_ptr(),
-                                    16,
-                                );
-                            }
-                            return 16;
-                        }
-                        0
+                        fs_read_stats(st, dst)
                     }
                     #[cfg(not(feature = "filesystem"))]
                     {
@@ -247,23 +259,10 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                                 if raw_path == crate::services::calibration::CALIB_FILE_PATH
                                     && super::super::native_runner::active_native_caps()
                                         .contains(::abi::Cap::FactoryCalib)
-                                    && crate::services::calibration::is_valid_calibration(src)
                                 {
-                                    let arr: &[u8; 512] =
-                                        unsafe { &*(src.as_ptr() as *const [u8; 512]) };
-                                    let mcu_uid = bsp::uid::read_mcu_uid();
-                                    let sig =
-                                        crate::services::calibration::compute_device_signature(
-                                            arr, &mcu_uid,
-                                        );
-                                    let ok = st.write_file(raw_path, src).is_ok()
-                                        && st
-                                            .write_file(
-                                                crate::services::calibration::CALIB_SIG_PATH,
-                                                &sig.to_bytes(),
-                                            )
-                                            .is_ok();
-                                    return usize::from(!ok);
+                                    let calib =
+                                        unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
+                                    return usize::from(calib.commit_slice(st, src).is_err());
                                 }
                             }
                         }

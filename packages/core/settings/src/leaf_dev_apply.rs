@@ -4,7 +4,6 @@
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry};
 use shared::{
     CMD_DEV_MODEL_PICK, MODAL_TEXT_MODEL, MODAL_TEXT_OWNER, MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG,
@@ -24,8 +23,8 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         return 0;
     }
 
-    let mut raw_c = MaybeUninit::<[u8; 80]>::uninit();
-    let cfg = unsafe { &mut *raw_c.as_mut_ptr() };
+    let base = st.sheet_buf.as_mut_ptr();
+    let cfg = unsafe { core::slice::from_raw_parts_mut(base, 80) };
     if api.read_file(b"/pref/system.cfg", cfg) >= 80 {
         if st.cmd == CMD_DEV_MODEL_PICK {
             set_byte(cfg, 1, st.arg0);
@@ -33,8 +32,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
             fill_bytes(&mut st.dev_model, 0);
             copy_bytes(&mut st.dev_model, 0, if st.arg0 == 0 { b"UV-K1" } else { b"UV-K5 V3" });
         } else {
-            let mut raw_t = MaybeUninit::<[u8; 16]>::uninit();
-            let txt = unsafe { &mut *raw_t.as_mut_ptr() };
+            let txt = unsafe { core::slice::from_raw_parts_mut(base.add(80), 16) };
             let n = api.get_modal_text(txt).min(12);
             match st.arg0 {
                 MODAL_TEXT_OWNER => {

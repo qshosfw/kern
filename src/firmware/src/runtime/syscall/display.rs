@@ -24,24 +24,8 @@ pub fn draw_icon(x: i16, y: i16, icon_id: u8, color: u8) {
     }
 }
 
-pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
-    if req.is_null() {
-        return 0;
-    }
-    let r = unsafe { &*req };
-    let Some(raw) = (unsafe { parse_str(r.text, r.len as usize) }) else {
-        return 0;
-    };
-    let mut tr_buf = [0u8; 64];
-    let s = if (r.flags & kernel::proc::abi::KRX_TEXT_LOCALIZE) != 0 {
-        gfx::text::localize(
-            raw,
-            (r.flags & kernel::proc::abi::KRX_TEXT_SHORT) != 0,
-            &mut tr_buf,
-        )
-    } else {
-        raw
-    };
+#[inline(never)]
+fn render_text_str(r: &KrxTextReq, s: &str) -> i16 {
     let font = font_from_u8(r.font);
     if (r.flags & kernel::proc::abi::KRX_TEXT_MEASURE) != 0 {
         return gfx::text::str_width(s, font);
@@ -59,6 +43,33 @@ pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
         gfx::text::draw_str_align(canvas, r.x, r.y, s, font, col, al);
     }
     0
+}
+
+#[inline(never)]
+fn render_text_localized(r: &KrxTextReq, raw: &str) -> i16 {
+    let mut tr_buf = [0u8; 64];
+    let s = gfx::text::localize(
+        raw,
+        (r.flags & kernel::proc::abi::KRX_TEXT_SHORT) != 0,
+        &mut tr_buf,
+    );
+    render_text_str(r, s)
+}
+
+#[inline(never)]
+pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
+    if req.is_null() {
+        return 0;
+    }
+    let r = unsafe { &*req };
+    let Some(raw) = (unsafe { parse_str(r.text, r.len as usize) }) else {
+        return 0;
+    };
+    if (r.flags & kernel::proc::abi::KRX_TEXT_LOCALIZE) != 0 && gfx::text::has_localize_hook() {
+        render_text_localized(r, raw)
+    } else {
+        render_text_str(r, raw)
+    }
 }
 
 #[inline(never)]

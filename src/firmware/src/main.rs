@@ -43,9 +43,6 @@ pub use crate::services::SysContext;
 /// Global event queue for zero-alloc event-driven kernel dispatch
 pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 8>>> = Mutex::new(RefCell::new(Deque::new()));
 
-/// Global memory buffer allocator for zero-copy IPC
-pub static MBUF_POOL: utils::mbuf::MBufPool = utils::mbuf::MBufPool::new();
-
 #[used]
 #[unsafe(link_section = ".uninit")]
 pub static BOOT_RECORD: panic::BootRecordCell = panic::BootRecordCell::new();

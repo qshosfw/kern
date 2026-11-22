@@ -4,7 +4,6 @@
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
 use shared::{
     CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH, CMD_APPS_REQ_DEL, MODAL_DELETE_APP,
@@ -21,22 +20,23 @@ fn eq_b(a: &[u8], b: &[u8]) -> bool {
     true
 }
 
-/// Stream `/apps` once: counts all matching entries, and when `target < 255` writes that
-/// entry's full `/apps/<name>` path into `pbuf` and returns its byte length in `out_len`.
+/// Stream `/apps` once using `scratch` (`128 B`: `[0..32]`=KrxDirEntry, `[32..96]`=hdr, `[96..128]`=pbuf).
 #[inline(never)]
 fn scan_apps(
     api: &KrxApiTable,
     mod_only: bool,
     target: u8,
-    pbuf: &mut [u8; 32],
+    scratch: &mut [u8; 128],
     out_len: &mut usize,
 ) -> u8 {
     *out_len = 0;
     if !mod_only && target == 255 {
         return api.count_dir(b"/apps").min(255) as u8;
     }
-    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
-    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+    let base = scratch.as_mut_ptr();
+    let ent = unsafe { &mut *(base as *mut KrxDirEntry) };
+    let hbuf = unsafe { core::slice::from_raw_parts_mut(base.add(32), 64) };
+    let pbuf = unsafe { core::slice::from_raw_parts_mut(base.add(96), 32) };
     let mut off = 0u32;
     let mut matched = 0usize;
     while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
@@ -44,7 +44,7 @@ fn scan_apps(
         let short = strip_apps_prefix(cstr_slice(&ent.name));
         let pos = copy_bytes(pbuf, 0, b"/apps/");
         let pos = copy_bytes(pbuf, pos, short);
-        if mod_only && !is_krx_module(api, subslice(pbuf, 0, pos)) {
+        if mod_only && !is_krx_module(api, subslice(pbuf, 0, pos), hbuf) {
             continue;
         }
         if matched == target as usize {
@@ -56,10 +56,10 @@ fn scan_apps(
     matched.min(255) as u8
 }
 
-fn refresh(api: &KrxApiTable, st: &mut SharedState, mod_only: bool, pbuf: &mut [u8; 32]) {
+fn refresh(api: &KrxApiTable, st: &mut SharedState, mod_only: bool) {
     st.modules_only = u8::from(mod_only);
     let mut dummy = 0usize;
-    st.app_count = scan_apps(api, mod_only, 255, pbuf, &mut dummy);
+    st.app_count = scan_apps(api, mod_only, 255, &mut st.sheet_buf, &mut dummy);
     if st.app_count == 0 { st.app_sel = 0; }
     else if st.app_sel >= st.app_count { st.app_sel = st.app_count - 1; }
 }
@@ -68,16 +68,15 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     if arg.is_null() { return 1; }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    let mut raw_p = MaybeUninit::<[u8; 32]>::uninit();
-    let pbuf = unsafe { &mut *raw_p.as_mut_ptr() };
     st.result = 0;
 
     if st.cmd == CMD_APPS_REFRESH {
-        refresh(api, st, st.arg0 != 0, pbuf);
+        refresh(api, st, st.arg0 != 0);
     } else if st.app_count > 0 {
         let mut plen = 0usize;
-        let _ = scan_apps(api, st.modules_only != 0, st.app_sel, pbuf, &mut plen);
+        let _ = scan_apps(api, st.modules_only != 0, st.app_sel, &mut st.sheet_buf, &mut plen);
         if plen > 6 {
+            let pbuf = unsafe { core::slice::from_raw_parts(st.sheet_buf.as_ptr().add(96), 32) };
             let full = subslice(pbuf, 0, plen);
             let short = subslice(pbuf, 6, plen);
             match st.cmd {
@@ -93,7 +92,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 }
                 CMD_APPS_DO_DEL => {
                     if api.remove_file(full) {
-                        refresh(api, st, st.modules_only != 0, pbuf);
+                        refresh(api, st, st.modules_only != 0);
                         st.result = 1;
                         api.show_toast(b"Removed", 1200);
                     } else {

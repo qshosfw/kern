@@ -161,7 +161,7 @@ impl BatteryDriver {
 
     /// Converts raw 12-bit ADC reading (Channel 8 / PB0) to battery millivolts using precomputed
     /// Q16 calibration, ratiometric `vdda_mv` compensation (against 3300 mV nominal), and user tweak.
-    #[inline(always)]
+    #[inline(never)]
     pub fn adc_to_mv(&self, raw_adc: u16, vdda_mv: u16) -> u16 {
         if raw_adc == 0 {
             return 0;
@@ -172,8 +172,8 @@ impl BatteryDriver {
             DEFAULT_CAL_SCALE_Q16
         };
         let mut base_mv = (((raw_adc as u32 * scale_q16) + 0x8000) >> 16) as i32;
-        if vdda_mv != 3300 && (1800..=3800).contains(&vdda_mv) {
-            base_mv = ((base_mv as u32 * vdda_mv as u32 + 1650) / 3300) as i32;
+        if vdda_mv != 3300 && (2700..=3600).contains(&vdda_mv) {
+            base_mv = ((base_mv as u32 * ((vdda_mv as u32 * 0x4F70) >> 12) + 0x2000) >> 14) as i32;
         }
         (base_mv + self.calib_tweak_mv as i32).clamp(0, 15000) as u16
     }

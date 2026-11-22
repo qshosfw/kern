@@ -49,6 +49,11 @@ pub use crate::{BOOT_RECORD, FAULT_EXTRA};
 #[cfg(not(test))]
 static FAULT_REENTRY_LOCK: AtomicBool = AtomicBool::new(false);
 
+#[cfg(all(target_arch = "arm", not(test), feature = "krx_native"))]
+unsafe extern "C" {
+    static _stack_end: u8;
+}
+
 /// Bare-metal naked HardFault exception entry.
 #[cfg(all(target_arch = "arm", not(test), feature = "krx_native"))]
 #[unsafe(naked)]
@@ -60,13 +65,21 @@ pub unsafe extern "C" fn HardFault() -> ! {
         "ldrb r0, [r0]",
         "cmp r0, #0",
         "beq 3f",
-        "mov r4, lr",
         "mrs r0, msp",
+        "ldr r1, ={stack_end}",
+        "cmp r0, r1",
+        "blo 3f",
+        "push {{r4, lr}}",
         "ldr r1, ={try_contain}",
         "blx r1",
         "cmp r0, #0",
-        "beq 3f",
-        "bx r4",
+        "bne 4f",
+        "pop {{r4}}",
+        "pop {{r1}}",
+        "mov lr, r1",
+        "b 3f",
+        "4:",
+        "pop {{r4, pc}}",
         "3:",
         "ldr r3, ={extra}",
         "stm r3!, {{r4-r7}}",
@@ -99,6 +112,7 @@ pub unsafe extern "C" fn HardFault() -> ! {
         "ldr r2, ={inner}",
         "bx r2",
         in_flight = sym crate::runtime::fault::GUEST_IN_FLIGHT,
+        stack_end = sym _stack_end,
         try_contain = sym crate::runtime::fault::try_contain_app_fault,
         extra = sym crate::FAULT_EXTRA,
         extra_magic = const FaultExtraRegs::FAULT_EXTRA_IDENT,

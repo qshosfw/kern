@@ -1,11 +1,10 @@
 //! P0 Leaf 1: Stream-Parse `.krx`/`.mod` Header (Identity, Version, Author, Type, Profile, Caps)
-//! using only a 128-byte stack buffer, then chain to `leaf_app_icon` for Actions & 16x16 Icon.
+//! using `SharedState::sheet_buf` (zero large stack buffers), then chain to `leaf_app_icon`.
 #![no_std]
 #![no_main]
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_CALL_LEAF, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
 use shared::{
     LEAF_APP_ICON, SharedState, byte_at, copy_bytes, cstr_slice, strip_apps_prefix, subslice,
@@ -27,24 +26,22 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    let mut raw_n = MaybeUninit::<[u8; 24]>::uninit();
-    let nbuf = unsafe { &mut *raw_n.as_mut_ptr() };
-    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
-    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+    let base = st.sheet_buf.as_mut_ptr();
+    let ent = unsafe { &mut *(base as *mut KrxDirEntry) };
     if api.list_dir_page(b"/apps", st.app_sel as u32, core::slice::from_mut(ent)) == 0 {
         return 1;
     }
-    let (ent_sz, slen_n) = {
+    let ent_sz = ent.size;
+    let m_ptr = &mut st.detail_sc as *mut _ as *mut shared::AppMeta;
+    let m = unsafe { &mut *m_ptr };
+    let p = {
         let short = strip_apps_prefix(cstr_slice(&ent.name));
-        (ent.size, copy_bytes(nbuf, 0, short))
+        m.name_len = cp(&mut m.name, short);
+        let p = copy_bytes(&mut m.path, 0, b"/apps/");
+        copy_bytes(&mut m.path, p, short)
     };
-    let short = subslice(nbuf, 0, slen_n);
-    let m = st.meta_mut();
-    let p = copy_bytes(&mut m.path, 0, b"/apps/");
-    let p = copy_bytes(&mut m.path, p, short);
     m.path_len = p as u8;
     m.size = ent_sz;
-    m.name_len = cp(&mut m.name, short);
     m.author_len = 0;
     m.action_len = 0;
     m.ver_major = 1;
@@ -55,14 +52,14 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     m.caps = 0;
     m.has_icon16 = 0;
 
-    // Preamble (24B) + Identity (44B) + TypeLifecycle (16B) + Execution (32B) = 116B <= 128B.
-    let mut raw = MaybeUninit::<[u8; 128]>::uninit();
-    let hdr = unsafe { &mut *raw.as_mut_ptr() };
+    // Reuse `st.sheet_buf` (128 B) for header streaming — zero stack allocation!
+    let hdr = unsafe { core::slice::from_raw_parts_mut(base, 128) };
     let path = subslice(&m.path, 0, p);
     let n = api.read_file_at(path, 0, hdr);
     if n >= 28 && byte_at(hdr, 0) == 0xC0 && byte_at(hdr, 1) == 0xDE {
         let mut off = 24usize;
         let mut s = rd16(hdr, 6);
+        let mut name_off = 0u32;
         while s > 0 && off + 4 <= n {
             s -= 1;
             let sid = rd16(hdr, off);
@@ -73,16 +70,11 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
             let b = off + 4;
             let end = off + slen;
             if sid == 1 && end >= b + 26 {
-                let noff = rd16(hdr, b) as u32;
+                name_off = rd16(hdr, b) as u32;
                 m.ver_major = byte_at(hdr, b + 2);
                 m.ver_minor = byte_at(hdr, b + 3);
                 m.ver_patch = byte_at(hdr, b + 4);
                 m.author_len = cp(&mut m.author, cstr_slice(subslice(hdr, b + 7, b + 19)));
-                let nn = api.read_file_at(path, noff, nbuf);
-                let nm = cstr_slice(subslice(nbuf, 0, nn));
-                if !nm.is_empty() {
-                    m.name_len = cp(&mut m.name, nm);
-                }
             } else if sid == 9 && end >= b + 12 {
                 m.exec_type = byte_at(hdr, b);
                 m.caps = (rd16(hdr, b + 8) as u32) | ((rd16(hdr, b + 10) as u32) << 16);
@@ -90,6 +82,14 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 m.profile = byte_at(hdr, b + 26);
             }
             off += (slen + 3) & !3;
+        }
+        if name_off > 0 {
+            let nbuf = unsafe { core::slice::from_raw_parts_mut(base, 24) };
+            let nn = api.read_file_at(path, name_off, nbuf);
+            let nm = cstr_slice(subslice(nbuf, 0, nn));
+            if !nm.is_empty() {
+                m.name_len = cp(&mut m.name, nm);
+            }
         }
     }
     ctx.continuation.kind = KRX_LEAF_KIND_CALL_LEAF;

@@ -29,7 +29,7 @@ pub struct KeypadScanner {
     /// Multi-sample raw contact bitmask history (for robust flutter-free debounce confirmation)
     raw_history: [u32; 3],
     /// FIFO event queue for dispatched key transitions
-    event_queue: Deque<(KeyCode, KeyState), 16>,
+    event_queue: Deque<(KeyCode, KeyState), 8>,
 }
 
 impl KeypadScanner {

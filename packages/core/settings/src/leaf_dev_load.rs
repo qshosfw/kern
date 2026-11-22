@@ -4,7 +4,6 @@
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry};
 use shared::{
     SharedState, byte_at, copy_bytes, cstr_slice, fill_bytes, set_byte, subslice, subslice_mut,
@@ -62,8 +61,8 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    let mut raw = MaybeUninit::<[u8; 80]>::uninit();
-    let buf = unsafe { &mut *raw.as_mut_ptr() };
+    // Reuse `st.sheet_buf[..80]` in SharedState SRAM instead of allocating 80 B on the M0+ stack.
+    let buf = unsafe { core::slice::from_raw_parts_mut(st.sheet_buf.as_mut_ptr(), 80) };
 
     if api.read_file(b"/pref/system.cfg", buf) >= 80 {
         st.dev_model_idx = byte_at(buf, 1);

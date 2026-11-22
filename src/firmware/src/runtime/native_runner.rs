@@ -16,8 +16,8 @@ use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
 #[cfg(feature = "krx_paged")]
-use kernel::runtime::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
-use kernel::runtime::paged::{PagedError, StructuredLeafManager};
+use kernel::runtime::paged::{FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack};
+use kernel::runtime::paged::StructuredLeafManager;
 use kernel::runtime::reloc::apply_relocs;
 use kernel::runtime::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 
@@ -318,6 +318,8 @@ pub fn krx_return_thunk() -> Result<usize, PagedError> {
 }
 
 /// Invokes a P0 Structured Leaf Overlay from the resident root actor (§5.1 / KRX 3.2).
+/// Direct non-closure hop loop keeps the M0+ stack frame minimal across leaf -> syscall -> KernFS chains.
+#[inline(never)]
 pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     let slot = slot_mut();
     let got_base = slot.got_base;
@@ -326,24 +328,30 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     };
 
     let overlay_vma = leaf_mgr.overlay_vma;
-    let window_size = leaf_mgr.window_size;
+    let window_size = leaf_mgr.window_size as usize;
+    let mut cur_id = leaf_id;
+    let mut cur_arg = arg;
 
-    let res = leaf_mgr.dispatch_leaf_trampoline(leaf_id, arg, 8, |leaf_entry, is_hit, ctx| {
-        if !is_hit {
-            let read_len = (leaf_entry.size as usize).min(window_size as usize);
-            if !read_active_pkg_region(
+    for _ in 0..8u8 {
+        let Ok((leaf_entry, is_hit)) = leaf_mgr.begin_leaf_call(cur_id) else {
+            return 0xFFFF_FFFF;
+        };
+        if !is_hit
+            && !read_active_pkg_region(
                 leaf_entry.flash_offset as usize,
                 overlay_vma as usize,
-                read_len,
-            ) {
-                return Err(PagedError::StorageReadFailed);
-            }
+                (leaf_entry.size as usize).min(window_size),
+            )
+        {
+            leaf_mgr.is_dispatching = false;
+            return 0xFFFF_FFFF;
         }
-
         if leaf_entry.entry_offset >= leaf_entry.size {
-            return Err(PagedError::InvalidLeafId);
+            leaf_mgr.is_dispatching = false;
+            return 0xFFFF_FFFF;
         }
 
+        let mut ctx = kernel::runtime::LeafContext::new(cur_id, cur_arg);
         let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;
         let raw_res = unsafe {
             invoke_krx_native(
@@ -351,13 +359,25 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
                 got_base,
                 KRX_OP_START,
                 &raw const NATIVE_API_TABLE,
-                ctx as *mut _ as *const (),
+                &raw mut ctx as *const (),
             )
         };
-        Ok(raw_res)
-    });
+        leaf_mgr.is_dispatching = false;
 
-    res.unwrap_or(0xFFFF_FFFF)
+        let cont = ctx.continuation;
+        if cont.is_call_leaf() {
+            cur_id = cont.target_or_code;
+            cur_arg = cont.payload;
+        } else if cont.is_error() {
+            return 0xFFFF_FFFF;
+        } else if cont.payload != 0 {
+            return cont.payload;
+        } else {
+            return raw_res;
+        }
+    }
+
+    0xFFFF_FFFF
 }
 
 /// Read an asset slice from the currently loaded KRX package on KernFS.
@@ -436,12 +456,7 @@ pub fn load_native_from_storage(
     let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS * 4;
     let h_len = preamble.header_len as usize;
     let load_base = arena_base_ptr() as u32;
-    let profile = KrxProfile::detect(
-        preamble,
-        exec,
-        aux.block_map.is_some(),
-        aux.leaf_map.is_some(),
-    );
+    let profile = summary.profile(exec);
     let _ = h_len;
     let is_paged = matches!(
         profile,
@@ -601,8 +616,8 @@ pub unsafe fn invoke_krx_native(
         return 0xFFFF_FFFF;
     }
 
-    // 2. Fast stack margin guard (prevent Cortex-M0+ stack exhaustion)
-    if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 96 {
+    // 2. Fast stack margin guard (prevent Cortex-M0+ stack exhaustion before touching guard canary)
+    if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 192 {
         super::fault::raise_contract_fault(kernel::runtime::fault::Exception::Stack, op as u8, 0);
         return kernel::runtime::fault::KRX_FAULT_SENTINEL;
     }
@@ -900,6 +915,7 @@ fn decode_icon_list(
     n as u8
 }
 
+#[inline(never)]
 pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     let slot = slot_mut();
     if sb.is_null() {
@@ -907,9 +923,9 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     } else {
         unsafe {
             core::ptr::copy_nonoverlapping(
-                sb as *const u32,
-                &mut slot.status_bar as *mut kernel::proc::abi::KrxStatusBar as *mut u32,
-                16,
+                sb as *const u8,
+                &mut slot.status_bar as *mut kernel::proc::abi::KrxStatusBar as *mut u8,
+                64,
             );
         }
         slot.status_bar_has_custom = true;
@@ -920,6 +936,7 @@ pub fn set_slot_status_bar(sb: *const kernel::proc::abi::KrxStatusBar) {
     }
 }
 
+#[inline(never)]
 pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
     if !out_sb.is_null() {
         let slot = slot_ref();
@@ -930,9 +947,9 @@ pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
         };
         unsafe {
             core::ptr::copy_nonoverlapping(
-                src as *const kernel::proc::abi::KrxStatusBar as *const u32,
-                out_sb as *mut u32,
-                16,
+                src as *const kernel::proc::abi::KrxStatusBar as *const u8,
+                out_sb as *mut u8,
+                64,
             );
         }
     }

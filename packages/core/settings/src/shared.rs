@@ -208,24 +208,24 @@ impl SharedState {
 }
 
 /// Inspect a KRX header's `SECTION_TYPE_LIFECYCLE` (`0x0009`) to check if `exec_type == Module (5)`.
+/// Uses caller-supplied `buf` (`>= 96 B`, e.g. `SharedState::sheet_buf`) for zero stack bloat.
 #[inline(never)]
-pub fn is_krx_module(api: &KrxApiTable, full: &[u8]) -> bool {
-    let mut raw = core::mem::MaybeUninit::<[u8; 96]>::uninit();
-    let buf = unsafe { &mut *raw.as_mut_ptr() };
+pub fn is_krx_module(api: &KrxApiTable, full: &[u8], buf: &mut [u8]) -> bool {
     let n = api.read_file_at(full, 0, buf);
     if n < 28 {
         return false;
     }
-    let hlen = ((byte_at(buf, 8) as usize) | ((byte_at(buf, 9) as usize) << 8)).min(n);
+    let p = buf.as_ptr();
+    let hlen = unsafe { (*p.add(8) as usize) | ((*p.add(9) as usize) << 8) }.min(n);
     let mut off = 24usize;
     while off + 4 <= hlen {
-        let sid = (byte_at(buf, off) as u16) | ((byte_at(buf, off + 1) as u16) << 8);
-        let slen = (byte_at(buf, off + 2) as usize) | ((byte_at(buf, off + 3) as usize) << 8);
+        let sid = unsafe { (*p.add(off) as u16) | ((*p.add(off + 1) as u16) << 8) };
+        let slen = unsafe { (*p.add(off + 2) as usize) | ((*p.add(off + 3) as usize) << 8) };
         if slen < 4 || off + slen > hlen {
             break;
         }
         if sid == 0x0009 && slen >= 5 {
-            return byte_at(buf, off + 4) == 5;
+            return unsafe { *p.add(off + 4) == 5 };
         }
         off += (slen + 3) & !3;
     }

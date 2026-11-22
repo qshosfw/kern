@@ -32,6 +32,12 @@ pub fn set_localize_hook(hook: Option<LocalizeHookFn>) {
     }
 }
 
+/// Returns `true` when an external language pack localization hook is active.
+#[inline(always)]
+pub fn has_localize_hook() -> bool {
+    unsafe { (*core::ptr::addr_of!(LOCALIZE_HOOK)).is_some() }
+}
+
 /// Translate an English UI key via the active language pack hook (if registered),
 /// falling back to `key` untouched on miss, empty input, or numeric strings.
 #[inline(never)]

@@ -34,6 +34,33 @@ fn get_slot_action(cfg: &[u8; 64], slot: u8, scope: u8) -> u16 {
     (byte_at(cfg, o) as u16) | ((byte_at(cfg, o + 1) as u16) << 8)
 }
 
+#[inline(never)]
+fn find_app_name(api: &KrxApiTable, act: u16, out: &mut [u8; 32]) -> usize {
+    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+    let mut off = 0u32;
+    while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
+        off += 1;
+        let short = strip_apps_prefix(cstr_slice(&ent.name));
+        let pl = copy_bytes(out, 0, b"/apps/");
+        let pl = copy_bytes(out, pl, short);
+        if hash_app_path(subslice(out, 0, pl)) == act {
+            return pl;
+        }
+    }
+    0
+}
+
+#[inline(always)]
+fn draw_row(api: &KrxApiTable, y: i16, l: &[u8], v: &[u8], fl: u8, ic: u8) {
+    let desc = KrxWidget {
+        p0: l.as_ptr(), p1: v.as_ptr(), x: 2, y,
+        len0: l.len() as u16, len1: v.len() as u16, extra: 0,
+        w: 120, h: 13, a: fl, b: ic, _pad: [0; 2],
+    };
+    let _ = api.call_op(Op::UiWidget, KRX_WIDGET_MENU_ITEM as usize, &raw const desc as usize, 0);
+}
+
 fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     if arg.is_null() {
         return 1;
@@ -63,30 +90,12 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                     nth_packed_slice(BUILTIN_NAMES, act as u8)
                 } else {
                     ic = icon::APPS;
-                    let mut found: &[u8] = b"App";
-                    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
-                    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
-                    let mut off = 0u32;
-                    while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
-                        off += 1;
-                        let short = strip_apps_prefix(cstr_slice(&ent.name));
-                        let pl = copy_bytes(p, 0, b"/apps/");
-                        let pl = copy_bytes(p, pl, short);
-                        if hash_app_path(subslice(p, 0, pl)) == act {
-                            found = subslice(p, 6, pl);
-                            break;
-                        }
-                    }
-                    found
+                    let pl = find_app_name(api, act, p);
+                    if pl > 6 { subslice(p, 6, pl) } else { b"App" }
                 };
                 (nth_packed_slice(SLOT_LABELS, slot), lbl)
             };
-            let desc = KrxWidget {
-                p0: l.as_ptr(), p1: v.as_ptr(), x: 2, y,
-                len0: l.len() as u16, len1: v.len() as u16, extra: 0,
-                w: 120, h: 13, a: fl, b: ic, _pad: [0; 2],
-            };
-            let _ = api.call_op(Op::UiWidget, KRX_WIDGET_MENU_ITEM as usize, &raw const desc as usize, 0);
+            draw_row(api, y, l, v, fl, ic);
         }
         row += 1;
     }

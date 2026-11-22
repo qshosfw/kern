@@ -29,13 +29,14 @@ impl LineCoding {
     }
 }
 
-pub const CDC_RX_BUF_SIZE: usize = 128;
+pub const CDC_RX_BUF_SIZE: usize = 64;
 
 #[repr(C)]
 pub struct CdcEngine {
     // Keep hot 1-byte fields first so UsbDriver places them within Thumb-1 imm5 (< 32 B).
     rx_head: u8,
     rx_tail: u8,
+    rx_count: u8,
     tx_ready: bool,
     dtr: bool,
     rts: bool,
@@ -53,6 +54,7 @@ impl CdcEngine {
             rx_buf: [0u8; CDC_RX_BUF_SIZE],
             rx_head: 0,
             rx_tail: 0,
+            rx_count: 0,
         }
     }
 
@@ -62,14 +64,15 @@ impl CdcEngine {
         self.tx_ready = true;
         self.rx_head = 0;
         self.rx_tail = 0;
+        self.rx_count = 0;
     }
 
     pub fn push_rx(&mut self, data: &[u8]) {
         for &b in data {
-            let next_head = self.rx_head.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
-            if next_head != self.rx_tail {
+            if (self.rx_count as usize) < CDC_RX_BUF_SIZE {
                 self.rx_buf[self.rx_head as usize] = b;
-                self.rx_head = next_head;
+                self.rx_head = self.rx_head.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
+                self.rx_count += 1;
             }
         }
     }
@@ -79,35 +82,37 @@ impl CdcEngine {
     pub fn push_rx_from_fifo(&mut self, ep: u8, count: usize) {
         let fifo = fifo_ep_u8(ep);
         let mut head = self.rx_head;
-        let tail = self.rx_tail;
+        let mut len = self.rx_count;
         for _ in 0..count {
             let b = unsafe { fifo.read_volatile() };
-            let next_head = head.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
-            if next_head != tail {
+            if (len as usize) < CDC_RX_BUF_SIZE {
                 self.rx_buf[head as usize] = b;
-                head = next_head;
+                head = head.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
+                len += 1;
             }
         }
         self.rx_head = head;
+        self.rx_count = len;
     }
 
     pub fn pop_rx(&mut self, buf: &mut [u8]) -> usize {
         let mut count = 0;
-        while self.rx_head != self.rx_tail && count < buf.len() {
+        while self.rx_count > 0 && count < buf.len() {
             buf[count] = self.rx_buf[self.rx_tail as usize];
             self.rx_tail = self.rx_tail.wrapping_add(1) & ((CDC_RX_BUF_SIZE - 1) as u8);
+            self.rx_count -= 1;
             count += 1;
         }
         count
     }
 
     pub fn rx_available(&self) -> usize {
-        self.rx_head.wrapping_sub(self.rx_tail) as usize & (CDC_RX_BUF_SIZE - 1)
+        self.rx_count as usize
     }
 
     #[inline(always)]
     pub fn rx_free(&self) -> usize {
-        (CDC_RX_BUF_SIZE - 1) - self.rx_available()
+        CDC_RX_BUF_SIZE - (self.rx_count as usize)
     }
 
     #[inline(always)]
@@ -199,6 +204,7 @@ mod tests {
         let mut model = [0u8; CDC_RX_BUF_SIZE];
         let mut m_head = 0usize;
         let mut m_tail = 0usize;
+        let mut m_count = 0usize;
         let mut rng = 0xC0DE_1234u32;
         let mut next = || {
             rng ^= rng << 13;
@@ -211,8 +217,8 @@ mod tests {
         let mut tmp_out = [0u8; 32];
 
         for _ in 0..2000 {
-            let avail = m_head.wrapping_sub(m_tail) & (CDC_RX_BUF_SIZE - 1);
-            assert_eq!(cdc.rx_available(), avail);
+            assert_eq!(cdc.rx_available(), m_count);
+            assert_eq!(cdc.rx_free(), CDC_RX_BUF_SIZE - m_count);
 
             if (next() & 1) == 0 {
                 let n = (next() as usize) % 29;
@@ -221,19 +227,20 @@ mod tests {
                 }
                 cdc.push_rx(&tmp_in[..n]);
                 for &b in &tmp_in[..n] {
-                    let nh = (m_head + 1) & (CDC_RX_BUF_SIZE - 1);
-                    if nh != m_tail {
+                    if m_count < CDC_RX_BUF_SIZE {
                         model[m_head] = b;
-                        m_head = nh;
+                        m_head = (m_head + 1) & (CDC_RX_BUF_SIZE - 1);
+                        m_count += 1;
                     }
                 }
             } else {
                 let n = (next() as usize) % 29;
                 let got = cdc.pop_rx(&mut tmp_out[..n]);
                 let mut exp = 0usize;
-                while m_head != m_tail && exp < n {
+                while m_count > 0 && exp < n {
                     assert_eq!(tmp_out[exp], model[m_tail]);
                     m_tail = (m_tail + 1) & (CDC_RX_BUF_SIZE - 1);
+                    m_count -= 1;
                     exp += 1;
                 }
                 assert_eq!(got, exp);

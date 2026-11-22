@@ -79,51 +79,6 @@ pub struct Receiving;
 /// State representing an active transmitter.
 pub struct Transmitting;
 
-// ── Register Cache Structure ────────────────────────────────────────────────
-
-pub struct RegisterCache {
-    /// Shadow array of all 128 BK4829 16-bit registers (0x00 to 0x7F)
-    regs: [u16; 128],
-}
-
-impl RegisterCache {
-    pub const fn new() -> Self {
-        Self {
-            regs: [0xFFFF; 128],
-        }
-    }
-
-    /// Read a cached register value without hitting the physical SPI bus.
-    #[inline(always)]
-    pub fn read(&self, addr: u8) -> u16 {
-        self.regs[(addr & 0x7F) as usize]
-    }
-
-    /// Updates cache and returns true if a physical SPI write is required.
-    #[inline(always)]
-    pub fn write_check(&mut self, addr: u8, val: u16) -> bool {
-        let idx = (addr & 0x7F) as usize;
-        if self.regs[idx] != val {
-            self.regs[idx] = val;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Invalidate a cache entry so next write is guaranteed to hit the bus
-    #[inline(always)]
-    pub fn invalidate(&mut self, addr: u8) {
-        self.regs[(addr & 0x7F) as usize] = 0xFFFF;
-    }
-}
-
-impl Default for RegisterCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ── BK4829 Driver ───────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -138,29 +93,27 @@ pub struct Bk4829<'a, B, State = Disabled> {
     pub(crate) tail_burst_latched: bool,
     pub(crate) loopback_active: bool,
     pub(crate) baseline_xtal_trim: i16,
+    pub(crate) cur_xtal_trim: i16,
     pub(crate) current_freq_hz: u32,
     pub(crate) bus: B,
     pub(crate) calib: Option<&'a [u8; 512]>,
     pub(crate) rx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) tx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) am_tracker: kernel::service::radio::AmLinearityTracker,
-    pub(crate) cache: RegisterCache,
     pub(crate) _state: PhantomData<State>,
 }
 
 impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
-    /// Forces a physical SPI read, updates the cache, and returns the value.
+    /// Performs a live physical 16-bit BK4829 register read.
+    #[inline(always)]
     pub fn read_reg(&mut self, addr: u8) -> u16 {
-        let val = self.bus.read_reg(addr);
-        self.cache.write_check(addr, val);
-        val
+        self.bus.read_reg(addr)
     }
 
-    /// Validates against the shadow cache and conditionally performs physical SPI write.
+    /// Performs a live physical 16-bit BK4829 register write.
+    #[inline(always)]
     pub fn write_reg(&mut self, addr: u8, val: u16) {
-        if self.cache.write_check(addr, val) {
-            self.bus.write_reg(addr, val);
-        }
+        self.bus.write_reg(addr, val);
     }
 
     #[inline(never)]
@@ -196,10 +149,10 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
         }
     }
 
-    /// Clear `clear_mask` bits and set `set_mask` bits on a cached register.
+    /// Clear `clear_mask` bits and set `set_mask` bits on a register via live RMW.
     #[inline(never)]
     pub(crate) fn update_reg_bits(&mut self, addr: u8, clear_mask: u16, set_mask: u16) {
-        let val = (self.cache.read(addr) & !clear_mask) | set_mask;
+        let val = (self.read_reg(addr) & !clear_mask) | set_mask;
         self.write_reg(addr, val);
     }
 
@@ -228,6 +181,7 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
     }
 
     pub fn set_crystal_trim(&mut self, trim: i16) {
+        self.cur_xtal_trim = trim;
         let val = tuning::calculate_xtal_freq_low(trim);
         self.write_reg(REG_XTAL_FREQ_LOW, val);
     }
@@ -336,7 +290,7 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
         }
 
         // Capture RX power state before begin_tone_sequence isolates REG_SYS_POWER for beep playback.
-        let cur_pwr = self.cache.read(REG_SYS_POWER);
+        let cur_pwr = self.read_reg(REG_SYS_POWER);
         let rx_pwr = if cur_pwr != 0xFFFF && (cur_pwr & 0x0001) != 0 {
             cur_pwr & !0x8000
         } else {
@@ -370,7 +324,7 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
         self.write_reg(REG_TONE1_FREQ, 0x0000);
         // Preserve Tone2 / FSK subcarrier gain (bits [7:0]) if hardware FSK modem is active
         let fsk_active = {
-            let fsk_ctrl = self.cache.read(REG_FSK_CTRL);
+            let fsk_ctrl = self.read_reg(REG_FSK_CTRL);
             fsk_ctrl != 0xFFFF && (fsk_ctrl & 0x0001) != 0
         };
         let restored_tone_gain = if fsk_active { 0x00E0 } else { 0x0000 };
@@ -722,7 +676,7 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
 
     #[inline(never)]
     fn update_gpio_reg(&mut self, clear_mask: u16, set_mask: u16) {
-        let mut reg33 = self.cache.read(REG_GPIO);
+        let mut reg33 = self.read_reg(REG_GPIO);
         if reg33 == 0xFFFF {
             reg33 = 0x9000;
         }
@@ -771,7 +725,6 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
     #[inline(never)]
     pub(crate) fn transition_state<NextState>(self) -> Bk4829<'a, B, NextState> {
         Bk4829 {
-            cache: self.cache,
             bus: self.bus,
             tone_gain: self.tone_gain,
             saved_tx_volume: self.saved_tx_volume,
@@ -785,6 +738,7 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
             tail_burst_latched: self.tail_burst_latched,
             loopback_active: self.loopback_active,
             baseline_xtal_trim: self.baseline_xtal_trim,
+            cur_xtal_trim: self.cur_xtal_trim,
             rx_subaudible: self.rx_subaudible,
             tx_subaudible: self.tx_subaudible,
             am_tracker: self.am_tracker,
@@ -798,7 +752,6 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
 impl<'a, B: Bk4829Bus> Bk4829<'a, B, Disabled> {
     pub fn new(bus: B) -> Self {
         Self {
-            cache: RegisterCache::new(),
             bus,
             tone_gain: 96,
             saved_tx_volume: 5,
@@ -812,6 +765,7 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B, Disabled> {
             tail_burst_latched: false,
             loopback_active: false,
             baseline_xtal_trim: 0,
+            cur_xtal_trim: 0,
             rx_subaudible: kernel::service::radio::SubaudibleTone::None,
             tx_subaudible: kernel::service::radio::SubaudibleTone::None,
             am_tracker: kernel::service::radio::AmLinearityTracker::new(),
@@ -1250,7 +1204,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfFskPhy for Bk4829<'a, B,
 
     fn fsk_enable_rx(&mut self, enable: bool) {
         if enable {
-            let cur_irq = self.cache.read(REG_INT_ENABLE);
+            let cur_irq = self.read_reg(REG_INT_ENABLE);
             self.write_reg(
                 REG_INT_ENABLE,
                 cur_irq | INT_FSK_RX_SYNC | INT_FSK_RX_FINISHED | INT_FSK_FIFO_ALMOST_FULL,
@@ -1410,7 +1364,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfAudioPath for Bk4829<'a,
             if !crate::audio::AudioAmplifier::<B>::is_hangover_active() {
                 self.bus.disable();
             }
-        } else if self.cache.read(REG_AF_LEVEL) & 0x000F != 0 {
+        } else if self.read_reg(REG_AF_LEVEL) & 0x000F != 0 {
             self.bus.enable();
         }
     }
@@ -1485,18 +1439,13 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfFineTuning for Bk4829<'a
     }
 
     fn set_pll_offset_10hz(&mut self, offset_10hz: i16) {
-        let cur_low = self.cache.read(REG_PLL_LOW);
+        let cur_low = self.read_reg(REG_PLL_LOW);
         let adjusted = (cur_low as i32 + offset_10hz as i32).clamp(0, 0xFFFF) as u16;
         self.write_reg(REG_PLL_LOW, adjusted);
     }
 
     fn get_crystal_trim(&mut self) -> i16 {
-        let reg3b = self.cache.read(REG_XTAL_FREQ_LOW);
-        if reg3b == 0xFFFF {
-            self.baseline_xtal_trim
-        } else {
-            (reg3b as i32 - tuning::XTAL_BASELINE_26MHZ) as i16
-        }
+        self.cur_xtal_trim
     }
 
     #[inline(never)]
@@ -1599,7 +1548,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfToneGenerator for Bk4829
 
 impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, B, State> {
     fn tx_prepare(&mut self) {
-        let cur_vol = (self.cache.read(REG_AF_LEVEL) & 0x000F) as u8;
+        let cur_vol = (self.read_reg(REG_AF_LEVEL) & 0x000F) as u8;
         if cur_vol != 0 {
             self.saved_tx_volume = cur_vol;
         }

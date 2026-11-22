@@ -30,7 +30,7 @@ pub static mut GUEST_GOT_BASE: u32 = 0;
 static mut ACTIVE_FAULT: AppFault = AppFault::NONE;
 
 /// Package path of the most recently faulted KRX app (used by the dialog `[Retry]` action).
-static mut FAULT_PKG_PATH: [u8; 24] = [0u8; 24];
+static mut FAULT_PKG_PATH: [u8; 32] = [0u8; 32];
 static mut FAULT_PKG_LEN: u8 = 0;
 
 /// Record a synchronous runtime contract violation (e.g. capability denied, bad pointer).
@@ -218,7 +218,7 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
     let msg = fault.format_message(super::native_runner::active_native_app_name(), msg_buf);
 
     let pkg = slot.pkg_path_str().as_bytes();
-    let pkg_len = pkg.len().min(24);
+    let pkg_len = pkg.len().min(32);
     unsafe {
         (&mut *core::ptr::addr_of_mut!(FAULT_PKG_PATH))[..pkg_len].copy_from_slice(&pkg[..pkg_len]);
         FAULT_PKG_LEN = pkg_len as u8;

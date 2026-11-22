@@ -12,20 +12,20 @@ pub use kernel::proc::service_registry::ServiceRegistry;
 
 pub static mut SERVICE_REGISTRY: ServiceRegistry<4> = ServiceRegistry::new();
 pub static mut KERNEL_IPC_CHANNEL: IpcChannel<2> = IpcChannel::new();
-static mut PENDING_LAUNCH_PATH: [u8; 24] = [0u8; 24];
+static mut PENDING_LAUNCH_PATH: [u8; 32] = [0u8; 32];
 static mut PENDING_LAUNCH_LEN: u8 = 0;
 
 /// Consume a deferred `.krx`/`.mod` package path queued by `PROC_CTL_LAUNCH_PKG`.
 pub fn take_pending_launch_path() -> Option<&'static str> {
     unsafe {
         let len = PENDING_LAUNCH_LEN as usize;
-        if len == 0 || len > 23 {
+        if len == 0 || len > 31 {
             return None;
         }
         PENDING_LAUNCH_LEN = 0;
         let slice =
             core::slice::from_raw_parts(core::ptr::addr_of!(PENDING_LAUNCH_PATH) as *const u8, len);
-        core::str::from_utf8(slice).ok()
+        Some(core::str::from_utf8_unchecked(slice))
     }
 }
 
@@ -96,6 +96,7 @@ fn copy_cstr(dst: &mut [u8], src: &[u8]) {
     dst[..n].copy_from_slice(&src[..n]);
 }
 
+#[inline(never)]
 unsafe fn fill_sys_info(out_info: *mut KrxSysInfo) -> usize {
     if out_info.is_null() || !out_info.is_aligned() {
         return 1;
@@ -315,6 +316,7 @@ fn proc_kill(pid: u8) -> u8 {
     0
 }
 
+#[inline(never)]
 unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
     use kernel::proc::abi::*;
     use kernel::proc::{LeaseKind, Pid, ProcState};
@@ -342,7 +344,10 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
                 return 0;
             }
             ::abi::PROC_CTL_LAUNCH_PKG => {
-                let plen = (target as usize).min(31);
+                let plen = target as usize;
+                if plen == 0 || plen > 31 {
+                    return 1;
+                }
                 let Some(path) = (unsafe { parse_str(buf, plen) }) else {
                     return 1;
                 };
@@ -450,6 +455,53 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
 }
 
 #[inline(never)]
+unsafe fn fill_proc_info(index: u8, out_info: *mut KrxProcInfo) -> usize {
+    if out_info.is_null() || !out_info.is_aligned() {
+        return 1;
+    }
+    let (_, Some(slot)) = active_slot_scan(index) else {
+        return 1;
+    };
+    unsafe {
+        core::ptr::write_bytes(out_info, 0, 1);
+        let info = &mut *out_info;
+        info.pid = slot.pid.0;
+        info.app_id = slot.app_id as u8;
+        info.state = slot.state as u8;
+        info.priority = slot.priority as u8;
+        info.memory_bytes = slot.mem_bytes;
+        let src = slot.name.as_bytes();
+        let len = src.len().min(info.name.len());
+        info.name[..len].copy_from_slice(&src[..len]);
+        info.runtime_ticks = slot.ledger.cpu_ticks;
+        info.exec_type = slot.exec_type as u8;
+
+        let is_core = slot.pid.0 <= 4 || slot.app_id >= 0xF0;
+        let mut pflags = if is_core {
+            kernel::proc::abi::KRX_PROC_FLAG_PERSISTENT
+        } else {
+            kernel::proc::abi::KRX_PROC_FLAG_KILLABLE
+        };
+        if slot.state == kernel::proc::ProcState::Suspended {
+            pflags |= kernel::proc::abi::KRX_PROC_FLAG_SUSPENDED;
+        } else if slot.state == kernel::proc::ProcState::Running {
+            pflags |= kernel::proc::abi::KRX_PROC_FLAG_FOREGROUND;
+        }
+        if crate::orchestrator::lease_manager().has_owner(slot.pid) {
+            pflags |= kernel::proc::abi::KRX_PROC_FLAG_HAS_LEASE;
+        }
+        info.flags = pflags;
+        info.stack_watermark = slot.ledger.stack_watermark;
+        info.ipc_events = slot.ledger.ipc_events.min(u16::MAX as u32) as u16;
+        info.page_faults = slot.ledger.page_faults.min(255) as u8;
+        info.slice_overruns = slot.ledger.slice_overruns;
+        info.hibernations = slot.ledger.hibernations;
+        info.fault_count = slot.ledger.fault_count;
+    }
+    0
+}
+
+#[inline(never)]
 pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
     #[cfg(feature = "krx_paged")]
     use ::abi::sub::proc_paged;
@@ -458,52 +510,7 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         op::ProcSelf => active_caller_pid() as usize,
         op::ProcFind => find_proc_by_ptr(a0 as *const u8, a1 as u8) as usize,
         op::ProcCount => active_slot_scan(u8::MAX).0 as usize,
-        op::ProcInfo => {
-            let out_info = a1 as *mut KrxProcInfo;
-            if out_info.is_null() || !out_info.is_aligned() {
-                return 1;
-            }
-            let (_, Some(slot)) = active_slot_scan(a0 as u8) else {
-                return 1;
-            };
-            unsafe {
-                core::ptr::write_bytes(out_info, 0, 1);
-                let info = &mut *out_info;
-                info.pid = slot.pid.0;
-                info.app_id = slot.app_id as u8;
-                info.state = slot.state as u8;
-                info.priority = slot.priority as u8;
-                info.memory_bytes = slot.mem_bytes;
-                let src = slot.name.as_bytes();
-                let len = src.len().min(info.name.len());
-                info.name[..len].copy_from_slice(&src[..len]);
-                info.runtime_ticks = slot.ledger.cpu_ticks;
-                info.exec_type = slot.exec_type as u8;
-
-                let is_core = slot.pid.0 <= 4 || slot.app_id >= 0xF0;
-                let mut pflags = if is_core {
-                    kernel::proc::abi::KRX_PROC_FLAG_PERSISTENT
-                } else {
-                    kernel::proc::abi::KRX_PROC_FLAG_KILLABLE
-                };
-                if slot.state == kernel::proc::ProcState::Suspended {
-                    pflags |= kernel::proc::abi::KRX_PROC_FLAG_SUSPENDED;
-                } else if slot.state == kernel::proc::ProcState::Running {
-                    pflags |= kernel::proc::abi::KRX_PROC_FLAG_FOREGROUND;
-                }
-                if crate::orchestrator::lease_manager().has_owner(slot.pid) {
-                    pflags |= kernel::proc::abi::KRX_PROC_FLAG_HAS_LEASE;
-                }
-                info.flags = pflags;
-                info.stack_watermark = slot.ledger.stack_watermark;
-                info.ipc_events = slot.ledger.ipc_events.min(u16::MAX as u32) as u16;
-                info.page_faults = slot.ledger.page_faults.min(255) as u8;
-                info.slice_overruns = slot.ledger.slice_overruns;
-                info.hibernations = slot.ledger.hibernations;
-                info.fault_count = slot.ledger.fault_count;
-            }
-            0
-        }
+        op::ProcInfo => unsafe { fill_proc_info(a0 as u8, a1 as *mut KrxProcInfo) },
         op::ProcCtl => unsafe {
             proc_ctl(a0 as u16, a1 as u32, a2 as *mut u8, (a0 >> 16) as u16) as usize
         },
@@ -678,5 +685,63 @@ pub unsafe fn dispatch_ipc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             unsafe { ipc_send_raw(pids_type, 0, r.msg, r.msg_len) as usize }
         }
         _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proc_ctl_launch_pkg_bounds_and_prefix() {
+        // Clear any leftover pending path
+        let _ = take_pending_launch_path();
+
+        // Grant TaskControl capability to the active native runner slot
+        crate::runtime::native_runner::init_native_slot();
+        let slot = crate::runtime::native_runner::slot_mut();
+        slot.is_loaded = true;
+        slot.caps = ::abi::CapabilitySet::empty().with(::abi::Cap::TaskControl);
+
+        // 0-byte path rejected
+        let empty = b"";
+        let rc = unsafe {
+            proc_ctl(
+                ::abi::PROC_CTL_LAUNCH_PKG as u16,
+                0,
+                empty.as_ptr() as *mut u8,
+                0,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(take_pending_launch_path().is_none());
+
+        // 32-byte path (> 31 max) rejected without panicking
+        let too_long = b"/apps/abcdefghijklmnopqrstuvwxyz";
+        assert_eq!(too_long.len(), 32);
+        let op_and_id = (::abi::PROC_CTL_LAUNCH_PKG as u16) | ((too_long.len() as u16) << 8);
+        let rc = unsafe { proc_ctl(op_and_id, 0, too_long.as_ptr() as *mut u8, 32) };
+        assert_eq!(rc, 1);
+        assert!(take_pending_launch_path().is_none());
+
+        // Non-/apps/ prefix rejected
+        let bad_prefix = b"/user/settings.krx";
+        let op_and_id = (::abi::PROC_CTL_LAUNCH_PKG as u16) | ((bad_prefix.len() as u16) << 8);
+        let rc = unsafe { proc_ctl(op_and_id, 0, bad_prefix.as_ptr() as *mut u8, 18) };
+        assert_eq!(rc, 1);
+        assert!(take_pending_launch_path().is_none());
+
+        // 31-byte valid /apps/ path accepted and consumed once
+        let max_valid = b"/apps/abcdefghijklmnopqrstu.krx";
+        assert_eq!(max_valid.len(), 31);
+        let op_and_id = (::abi::PROC_CTL_LAUNCH_PKG as u16) | ((max_valid.len() as u16) << 8);
+        let rc = unsafe { proc_ctl(op_and_id, 0, max_valid.as_ptr() as *mut u8, 31) };
+        assert_eq!(rc, 0);
+        assert_eq!(
+            take_pending_launch_path(),
+            Some("/apps/abcdefghijklmnopqrstu.krx")
+        );
+        assert!(take_pending_launch_path().is_none());
+        crate::runtime::native_runner::init_native_slot();
     }
 }
