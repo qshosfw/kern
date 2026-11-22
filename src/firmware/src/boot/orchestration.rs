@@ -250,30 +250,7 @@ fn boot_stage_security_check(
     }
 
     #[cfg(feature = "passcode")]
-    if crate::security::passcode::is_passcode_set(hw.filesystem) {
-        passcode_state.lock();
-        hw.filesystem.lock_session();
-        let pcfg = crate::security::passcode::get_passcode_config(hw.filesystem);
-        let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
-        power_service.load_battery_config(&master_cfg.battery);
-        crate::services::telemetry::sample_battery_and_system(adc, false);
-
-        // Configure LCD parameters (contrast, inversion, shading) without waking the backlight
-        crate::hardware::apply_lcd_hardware(&master_cfg.display, &mut hw.lcd);
-
-        if pcfg.stealth {
-            // Stealth / Dimmed mode: ensure backlight remains strictly OFF during boot and passcode entry
-            hw.backlight
-                .set_mode(drivers::backlight::BacklightMode::Off);
-            hw.backlight.turn_off();
-        } else {
-            master_cfg.display.apply_to_backlight(&mut hw.backlight);
-            hw.backlight.wake();
-        }
-
-        super::security::run_boot_unlock_prompt(hw, passcode_state, master_cfg, adc);
-        let _ = crate::security::sync_filesystem_security(hw.filesystem, passcode_state);
-    }
+    super::security::run_boot_unlock_prompt(hw, passcode_state, master_cfg, adc);
 
     #[cfg(not(feature = "passcode"))]
     {
@@ -323,7 +300,14 @@ fn boot_stage_core_modules_check(hw: &mut SystemHardware) {
     let canvas = crate::system_canvas();
     canvas.clear();
     gfx::widgets::draw_negated_header(canvas, 0, "Core Modules");
-    gfx::text::draw_str(canvas, 4, 19, status, &gfx::fonts::tomthumb::FONT, gfx::Color::Fill);
+    gfx::text::draw_str(
+        canvas,
+        4,
+        19,
+        status,
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
     gfx::text::draw_str(
         canvas,
         4,

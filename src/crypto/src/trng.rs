@@ -70,50 +70,49 @@ impl HardwareTrng {
     }
 
     /// Initialize the TRNG entropy sponge with 96-bit MCU UID and microsecond hardware timing.
+    #[inline(never)]
     pub fn init_with_uid(&mut self, mcu_uid: &[u8; 12], initial_noise: u32) {
-        let mut seed = [0u8; 16];
-        seed[..12].copy_from_slice(mcu_uid);
-        seed[12..16].copy_from_slice(&initial_noise.to_le_bytes());
-        self.init_with_seed(&seed, initial_noise);
-    }
-
-    /// Initialize the TRNG entropy sponge with arbitrary seed data and initial noise.
-    pub fn init_with_seed(&mut self, seed: &[u8], initial_noise: u32) {
         self.state.x = [Self::TRNG_IV, 0, 0, 0, 0];
-        self.state.permute(12);
-
-        // Absorb seed data
-        let mut offset = 0;
-        while offset < seed.len() {
-            let chunk_len = (seed.len() - offset).min(8);
-            let mut block = [0u8; 8];
-            block[..chunk_len].copy_from_slice(&seed[offset..offset + chunk_len]);
-            if chunk_len < 8 {
-                block[chunk_len] = 0x80;
-            }
-            self.state.x[0] ^= u64::from_le_bytes(block);
-            self.state.permute(12);
-            offset += chunk_len;
+        #[cfg(target_endian = "little")]
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                mcu_uid.as_ptr(),
+                (&raw mut self.state.x[1]).cast::<u8>(),
+                12,
+            );
+            core::ptr::copy_nonoverlapping(
+                initial_noise.to_le_bytes().as_ptr(),
+                (&raw mut self.state.x[1]).cast::<u8>().add(12),
+                4,
+            );
         }
-
+        #[cfg(not(target_endian = "little"))]
+        {
+            let mut b0 = [0u8; 8];
+            b0.copy_from_slice(&mcu_uid[..8]);
+            self.state.x[1] = u64::from_le_bytes(b0);
+            let hi = u32::from_le_bytes([mcu_uid[8], mcu_uid[9], mcu_uid[10], mcu_uid[11]]);
+            self.state.x[2] = (hi as u64) | ((initial_noise as u64) << 32);
+        }
+        self.state.permute(12);
         self.mix_hardware_entropy(initial_noise);
         self.initialized = true;
         self.reseed_counter = 0;
     }
 
     /// Mix physical hardware noise into entropy pool.
+    #[inline(never)]
     pub fn mix_hardware_entropy(&mut self, hw_noise: u32) {
         self.health.test_sample(hw_noise);
-        let noise_word = (hw_noise as u64) | ((hw_noise as u64) << 32);
-        self.state.x[1] ^= noise_word;
+        self.state.x[1] ^= (hw_noise as u64) | ((hw_noise as u64) << 32);
         self.state.permute(6);
     }
 
     /// Fill buffer with random bytes with forward secrecy.
+    #[inline(never)]
     pub fn fill_bytes(&mut self, buf: &mut [u8], hw_noise: u32) {
         if !self.initialized {
-            let default_uid = [0x5au8; 12];
-            self.init_with_uid(&default_uid, hw_noise);
+            self.init_with_uid(&[0x5au8; 12], hw_noise);
         }
 
         self.mix_hardware_entropy(hw_noise);

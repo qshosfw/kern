@@ -168,6 +168,7 @@ impl SystemInfo {
 
     /// Reads the factory bootloader version string (e.g. `"7.02.02"`) directly from internal MCU
     /// Flash (`BOOTLOADER_ROM_SCAN_BASE..+BOOTLOADER_ROM_SCAN_LEN`), falling back to `"7.02.02"` on host targets.
+    #[inline(never)]
     pub fn bootloader_version_str() -> &'static str {
         #[cfg(all(not(test), target_arch = "arm"))]
         unsafe {

@@ -78,7 +78,7 @@ impl PackageCatalogEntry {
 
     #[inline(always)]
     pub fn has_custom_icon_8(&self) -> bool {
-        self.icon_8 != [0u8; 8]
+        self.icon_8.iter().any(|&b| b != 0)
     }
 
     /// Resolve the package's 8x8 icon: prefers embedded `SECTION_ASSETS` `ASSET_ICON_8`,
@@ -463,8 +463,7 @@ mod tests {
         entry.icon_8.copy_from_slice(bits8);
         let mut icon16_buf = [0u8; 32];
         icon16_buf.copy_from_slice(bits16);
-        let icon16_static: &'static [u8; 32] =
-            unsafe { &*(&icon16_buf as *const [u8; 32]) };
+        let icon16_static: &'static [u8; 32] = unsafe { &*(&icon16_buf as *const [u8; 32]) };
 
         let (res8, res16) = cat.resolved_icons(&entry, Some(icon16_static));
         assert_eq!(res8, bits8);

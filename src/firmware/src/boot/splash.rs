@@ -187,11 +187,8 @@ pub fn load_and_render_splash(
     }
     let buf = &mut crate::data::arena::transient_arena_bytes_mut()[6144..7176];
     if let Ok(n) = storage.read_file(path, buf) {
-        if n == 1024 {
-            canvas.load_raw_vram(&buf[..1024]);
-            return true;
-        } else if n == 1032 {
-            canvas.load_raw_vram(&buf[8..1032]);
+        if n == 1024 || n == 1032 {
+            canvas.load_raw_vram(&buf[n - 1024..n]);
             return true;
         } else if n > 0 && render_rle(canvas, &buf[..n]) {
             return true;

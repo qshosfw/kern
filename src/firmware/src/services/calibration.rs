@@ -149,7 +149,8 @@ pub fn verify_device_signature(
         return false;
     }
     let computed = compute_device_signature(calib, mcu_uid);
-    sig.hardware_serial == computed.hardware_serial && ct_eq_bytes(&sig.auth_tag, &computed.auth_tag)
+    sig.hardware_serial == computed.hardware_serial
+        && ct_eq_bytes(&sig.auth_tag, &computed.auth_tag)
 }
 
 /// Strict semantic validation of calibration memory block.
@@ -429,6 +430,7 @@ impl SystemCalibration {
     }
 
     /// Atomically commit validated calibration with automatic backup, readback verification, and rollback.
+    #[inline(never)]
     pub fn commit_with_backup(
         &mut self,
         vfs: &mut SystemStorage,
@@ -459,6 +461,22 @@ impl SystemCalibration {
         sign_and_save_sig(vfs, new_calib, mcu_uid);
         self.bound = true;
 
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub fn commit_slice(&mut self, vfs: &mut SystemStorage, data: &[u8]) -> Result<(), ()> {
+        if data.len() != 512 || !is_valid_calibration(data) {
+            return Err(());
+        }
+        let arr: &[u8; 512] = unsafe { &*(data.as_ptr() as *const [u8; 512]) };
+        let mcu_uid = bsp::uid::read_mcu_uid();
+        self.commit_with_backup(vfs, arr, &mcu_uid)?;
+        unsafe {
+            (*core::ptr::addr_of_mut!(crate::POWER_SERVICE))
+                .battery_driver
+                .set_calib_const(self.battery_calib_const());
+        }
         Ok(())
     }
 

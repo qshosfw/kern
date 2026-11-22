@@ -1,10 +1,8 @@
 //! System Hardware Abstraction, Dirty Config Synchronization & Context Building.
 
-#[cfg(feature = "passcode")]
-use crate::PASSCODE_STATE;
-use crate::POWER_SERVICE;
-#[cfg(any(test, feature = "passcode"))]
+#[cfg(test)]
 use crate::services::DisplayHardware;
+use crate::POWER_SERVICE;
 use crate::services::{PowerServiceConfigExt, SysContext, SystemStorage};
 use drivers::audio::AudioAmplifier;
 use drivers::backlight::BacklightController;
@@ -198,9 +196,9 @@ impl<'a> SystemHardware<'a> {
     fn exec_with_ctx(&mut self, op: CtxOp<'_>) -> bool {
         let is_locked = self.orchestrator.is_keypad_locked();
         let is_f = self.orchestrator.is_f_active();
-        #[cfg(any(test, feature = "passcode"))]
+        #[cfg(test)]
         let with_display = !matches!(op, CtxOp::Render);
-        #[cfg(any(test, feature = "passcode"))]
+        #[cfg(test)]
         let mut display_hw = DisplayHardware {
             lcd: &mut self.lcd,
             canvas: crate::system_canvas(),
@@ -216,10 +214,8 @@ impl<'a> SystemHardware<'a> {
             storage: self.filesystem,
             audio: &mut self.audio,
             ipc: &mut self.ipc_queue,
-            #[cfg(any(test, feature = "passcode"))]
+            #[cfg(test)]
             display: with_display.then_some(&mut display_hw),
-            #[cfg(feature = "passcode")]
-            passcode: unsafe { &mut *core::ptr::addr_of_mut!(PASSCODE_STATE) },
             #[cfg(all(test, feature = "uart"))]
             uart: &mut self.uart,
             #[cfg(all(test, feature = "usb"))]

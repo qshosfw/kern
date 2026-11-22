@@ -1,8 +1,7 @@
 //! Passcode Low-Level Keychain File Operations, Hashes & Metadata Readers.
 
 use super::super::constants::*;
-use super::super::kdf::ProgressHook;
-use super::super::keychain::{PackedPasscodeKey, PackedStorageKey};
+use super::super::keychain::PackedPasscodeKey;
 use super::state::*;
 use crate::services::SystemStorage;
 
@@ -197,36 +196,4 @@ pub fn reset_lockout_penalty(filesystem: &mut SystemStorage) {
         key.failed_attempts = max_t.saturating_sub(1);
         let _ = filesystem.write_struct(PATH_PASSCODE_KEY, &key);
     }
-}
-
-#[inline(never)]
-pub fn write_wrapped_storage_key(
-    filesystem: &mut SystemStorage,
-    state: &PasscodeState,
-    uid: &[u8; 12],
-    seed: &[u8],
-    salt: &[u8; 16],
-    storage_nonce: &[u8; 16],
-    iterations: u32,
-    progress: Option<ProgressHook>,
-) -> Result<(), PasscodeError> {
-    let mut sto_key = PackedStorageKey {
-        ident: *FILE_ID_STORAGE_KEY,
-        storage_nonce: *storage_nonce,
-        salt: *salt,
-        encrypted_mk: *state.master_key.as_slice(),
-    };
-    super::super::keychain::xor_derived_key(
-        uid,
-        seed,
-        salt,
-        iterations,
-        &mut sto_key.encrypted_mk,
-        progress,
-    );
-
-    filesystem
-        .write_struct(PATH_STORAGE_KEY, &sto_key)
-        .map_err(|_| PasscodeError::StorageError)?;
-    Ok(())
 }

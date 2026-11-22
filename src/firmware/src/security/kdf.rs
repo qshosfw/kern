@@ -32,7 +32,6 @@ pub fn derive_master_key(
     salt: &[u8; 16],
     iterations: u32,
     out_key: &mut SecretBuf<32>,
-    wdt_feed_fn: Option<fn()>,
     progress: Option<ProgressHook>,
 ) {
     let mut state = AsconPermutation::new();
@@ -40,32 +39,40 @@ pub fn derive_master_key(
     // Domain separation IV for KERN Ascon-KDF: 'KERN' | 'KDF1'
     state.x[0] = 0x4B45_524E_4B44_4631;
 
-    // Word 1 & 2: 16-byte salt
-    for i in 0..2 {
-        let mut b = [0u8; 8];
-        b.copy_from_slice(&salt[i * 8..(i + 1) * 8]);
-        state.x[1 + i] = u64::from_le_bytes(b);
+    #[cfg(target_endian = "little")]
+    unsafe {
+        let p = (&raw mut state.x[1]).cast::<u8>();
+        core::ptr::copy_nonoverlapping(salt.as_ptr(), p, 16);
+        core::ptr::copy_nonoverlapping(mcu_uid.as_ptr(), p.add(16), 12);
+        core::ptr::copy_nonoverlapping(iterations.to_le_bytes().as_ptr(), p.add(28), 4);
     }
-
-    // Word 3 & 4: 12-byte MCU UID + 4-byte iterations count
-    let mut uid_b = [0u8; 8];
-    uid_b.copy_from_slice(&mcu_uid[0..8]);
-    state.x[3] = u64::from_le_bytes(uid_b);
-    let uid_high = u32::from_le_bytes([mcu_uid[8], mcu_uid[9], mcu_uid[10], mcu_uid[11]]);
-    state.x[4] = (uid_high as u64) | ((iterations as u64) << 32);
+    #[cfg(not(target_endian = "little"))]
+    {
+        for i in 0..2 {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&salt[i * 8..(i + 1) * 8]);
+            state.x[1 + i] = u64::from_le_bytes(b);
+        }
+        let mut uid_b = [0u8; 8];
+        uid_b.copy_from_slice(&mcu_uid[0..8]);
+        state.x[3] = u64::from_le_bytes(uid_b);
+        let uid_high = u32::from_le_bytes([mcu_uid[8], mcu_uid[9], mcu_uid[10], mcu_uid[11]]);
+        state.x[4] = (uid_high as u64) | ((iterations as u64) << 32);
+    }
 
     // Initial permutation p^12
     state.permute(12);
 
     // Absorb user passcode in 8-byte blocks
-    let full_blocks = user_passcode.len() >> 3;
-    for i in 0..full_blocks {
+    let mut off = 0;
+    while off + 8 <= user_passcode.len() {
         let mut b = [0u8; 8];
-        b.copy_from_slice(&user_passcode[i * 8..(i + 1) * 8]);
+        b.copy_from_slice(&user_passcode[off..off + 8]);
         state.x[0] ^= u64::from_le_bytes(b);
         state.permute(6);
+        off += 8;
     }
-    let rem = &user_passcode[full_blocks * 8..];
+    let rem = &user_passcode[off..];
     let mut pad_block = [0u8; 8];
     pad_block[..rem.len()].copy_from_slice(rem);
     pad_block[rem.len()] = 0x80;
@@ -90,9 +97,7 @@ pub fn derive_master_key(
     // Layer 2: Fast Ascon permutation PRF key stretching loop
     for step in 0..iterations_count {
         if (step & 63) == 0 {
-            if let Some(feed) = wdt_feed_fn {
-                feed();
-            }
+            bsp::Board::wdt_feed();
         }
         if step >= next_update_step {
             next_update_step = next_update_step.saturating_add(update_interval);
@@ -103,7 +108,7 @@ pub fn derive_master_key(
         }
 
         // Mix step counter into state word 2 and permute
-        state.x[2] ^= (step as u64).rotate_left((step & 31) as u32);
+        state.x[2] ^= (step.rotate_left(step & 31)) as u64;
         state.permute(6);
     }
 
@@ -118,8 +123,19 @@ pub fn derive_master_key(
 
     // Final squeeze (p^12) into 256-bit output key
     state.permute(12);
-    let out_slice = out_key.as_mut_slice();
-    for i in 0..4 {
-        out_slice[i * 8..(i + 1) * 8].copy_from_slice(&state.x[i].to_le_bytes());
+    #[cfg(target_endian = "little")]
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            state.x.as_ptr().cast::<u8>(),
+            out_key.as_mut_slice().as_mut_ptr(),
+            32,
+        );
+    }
+    #[cfg(not(target_endian = "little"))]
+    {
+        let out_slice = out_key.as_mut_slice();
+        for i in 0..4 {
+            out_slice[i * 8..(i + 1) * 8].copy_from_slice(&state.x[i].to_le_bytes());
+        }
     }
 }

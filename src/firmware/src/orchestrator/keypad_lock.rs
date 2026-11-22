@@ -299,8 +299,7 @@ impl KeypadLockManager {
             if self.held_code.is_some() && !self.is_long_press_triggered {
                 self.delay_elapsed_ms = self.delay_elapsed_ms.saturating_add(dt);
 
-                if self.hold_kind == HoldKind::Sleep
-                    && (!can_sleep || crate::system::is_headless())
+                if self.hold_kind == HoldKind::Sleep && (!can_sleep || crate::system::is_headless())
                 {
                     self.release_active_hold();
                 } else if !self.hold_ui_open {

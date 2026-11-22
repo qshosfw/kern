@@ -312,6 +312,7 @@ impl LauncherApp {
         }
     }
 
+    #[inline(never)]
     fn handle_list_nav(&mut self, event: &Event, animations_enabled: bool) -> bool {
         let total = self.model.items.len();
         if total == 0 {
@@ -369,6 +370,7 @@ impl LauncherApp {
 }
 
 impl LauncherApp {
+    #[inline(never)]
     fn render_list(&self, canvas: &mut Canvas) {
         let total = self.model.items.len();
         if total == 0 {

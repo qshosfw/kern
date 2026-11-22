@@ -8,30 +8,12 @@ use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
 use drivers::st7565::St7565;
 
-#[inline(never)]
+#[inline(always)]
 pub fn draw_locked_screen(canvas: &mut gfx::Canvas, sub_msg: &str) {
-    canvas.clear();
-    gfx::widgets::draw_negated_header(canvas, 0, "Locked");
-    gfx::text::draw_str_align(
-        canvas,
-        64,
-        26,
-        "Too Many Attempts",
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-        gfx::text::Align::Center,
-    );
-    gfx::text::draw_str_align(
-        canvas,
-        64,
-        40,
-        sub_msg,
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-        gfx::text::Align::Center,
-    );
+    gfx::widgets::draw_dialog(canvas, "Locked", "Too Many Attempts", sub_msg, false);
 }
 
+#[inline(never)]
 pub fn handle_lockout_penalty(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
@@ -60,6 +42,7 @@ pub fn handle_lockout_penalty(
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
+#[inline(never)]
 pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>) {
     radio.play_beep(crate::services::melody::BeepType::Warning);
     for _ in 0..3 {
@@ -71,9 +54,10 @@ pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk48
     py32_hal::delay::delay_ms(600);
 }
 
+#[inline(never)]
 pub fn render_verify_modal(lcd: &mut St7565<bsp::LcdBus>, pct: u8) {
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_modal_progress(canvas, "", "Verifying...", pct);
+    gfx::widgets::draw_dialog_progress(canvas, "Passcode", "Verifying...", pct);
     lcd.blit(canvas);
 }
 
@@ -97,6 +81,7 @@ pub fn handle_unlock_success(
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
+#[inline(never)]
 pub fn handle_unlock_failure(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
@@ -199,15 +184,28 @@ pub fn run_boot_unlock_prompt(
     master_cfg: &MasterConfig,
     adc: &py32_hal::adc::Adc,
 ) {
-    use gfx::gui::modules::text_input::{TextInputModel, TextInputView};
+    use gfx::gui::modules::text_input::TextInputView;
     use gfx::gui::view::View;
 
     let cfg = crate::security::passcode::get_passcode_config(hw.filesystem);
-    // Headless nodes have no operator at the panel: stay locked (secure default) and leave
-    // unlocking to the authenticated wire session instead of spinning on a dead keypad.
-    if !cfg.is_set || !crate::system::admits_physical_input() {
+    if !cfg.is_set {
         return;
     }
+    passcode_state.lock();
+    hw.filesystem.lock_session();
+    // Headless nodes have no operator at the panel: stay locked (secure default) and leave
+    // unlocking to the authenticated wire session instead of spinning on a dead keypad.
+    if !crate::system::admits_physical_input() {
+        return;
+    }
+
+    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(crate::POWER_SERVICE) };
+    crate::services::power::PowerServiceConfigExt::load_battery_config(
+        power_service,
+        &master_cfg.battery,
+    );
+    crate::services::telemetry::sample_battery_and_system(adc, false);
+    crate::hardware::apply_lcd_hardware(&master_cfg.display, &mut hw.lcd);
 
     let stealth = cfg.stealth;
 
@@ -245,18 +243,16 @@ pub fn run_boot_unlock_prompt(
     } else {
         16
     };
-    let mut text_model = TextInputModel::new(input_len);
-    let _ = text_model.custom_title.push_str("Enter Passcode");
-    text_model.is_passcode = true;
-    text_model.expose_len = cfg.expose_len;
-    text_model.digits_only = cfg.digits_only;
-    text_model.charset = if cfg.digits_only {
-        gfx::gui::modules::text_input::Charset::Numbers
-    } else {
-        gfx::gui::modules::text_input::Charset::Upper
-    };
+    let modal =
+        unsafe { &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL) };
+    let text_model = modal.prompt_passcode(
+        0,
+        "Enter Passcode",
+        input_len,
+        cfg.digits_only,
+        cfg.expose_len,
+    );
     text_model.is_k1 = master_cfg.is_k1();
-    text_model.show_header = true;
     let mut text_view = TextInputView::new();
 
     loop {
@@ -268,7 +264,7 @@ pub fn run_boot_unlock_prompt(
         // 1. Scan keyboard (10ms polling)
         if let Some((code, state)) = hw.key_scanner.scan() {
             let ev = kernel::event::Event::Key { code, state };
-            let _ = text_view.on_event(&mut text_model, &ev);
+            let _ = text_view.on_event(text_model, &ev);
             if !stealth && state == kernel::event::KeyState::Pressed {
                 hw.backlight.wake();
                 if master_cfg.audio.key_beep != 0 {
@@ -279,7 +275,7 @@ pub fn run_boot_unlock_prompt(
                 }
             }
         }
-        let _ = text_view.on_event(&mut text_model, &kernel::event::Event::Tick);
+        let _ = text_view.on_event(text_model, &kernel::event::Event::Tick);
         if !stealth {
             hw.backlight.tick(10);
         }
@@ -290,7 +286,7 @@ pub fn run_boot_unlock_prompt(
 
         // 2. Render input screen with inverted right status bar items on header
         let canvas = crate::system_canvas();
-        text_view.render(canvas, &text_model);
+        text_view.render(canvas, text_model);
         #[cfg(feature = "usb")]
         let is_usb = hw.usb.is_connected();
         #[cfg(not(feature = "usb"))]
@@ -302,7 +298,7 @@ pub fn run_boot_unlock_prompt(
         if text_model.is_done && !text_model.buffer.is_empty() {
             if process_unlock_submission(
                 hw,
-                &mut text_model,
+                text_model,
                 passcode_state,
                 master_cfg,
                 &text_view,
@@ -314,4 +310,5 @@ pub fn run_boot_unlock_prompt(
 
         py32_hal::delay::delay_ms(10);
     }
+    modal.close();
 }

@@ -42,7 +42,10 @@ pub fn push_headless_notes(notes: &[drivers::audio::ToneNote]) {
         let tail = HEADLESS_TONE_TAIL.load(Ordering::Acquire);
         if next == tail {
             // Drop oldest note if host is not draining so ring never stalls.
-            HEADLESS_TONE_TAIL.store((tail + 1) & ((HEADLESS_TONE_CAP as u8) - 1), Ordering::Release);
+            HEADLESS_TONE_TAIL.store(
+                (tail + 1) & ((HEADLESS_TONE_CAP as u8) - 1),
+                Ordering::Release,
+            );
         }
         unsafe {
             HEADLESS_TONE_RING[head as usize] = (n.freq_hz, n.duration_ms);
@@ -62,7 +65,10 @@ pub fn drain_headless_notes(out: &mut [u8]) -> usize {
             break;
         }
         let (freq, dur) = unsafe { HEADLESS_TONE_RING[tail as usize] };
-        HEADLESS_TONE_TAIL.store((tail + 1) & ((HEADLESS_TONE_CAP as u8) - 1), Ordering::Release);
+        HEADLESS_TONE_TAIL.store(
+            (tail + 1) & ((HEADLESS_TONE_CAP as u8) - 1),
+            Ordering::Release,
+        );
         out[pos..pos + 2].copy_from_slice(&freq.to_le_bytes());
         out[pos + 2..pos + 4].copy_from_slice(&dur.to_le_bytes());
         pos += 4;
@@ -144,7 +150,10 @@ fn engage(hw: &mut SystemHardware, enable: bool, wake_panel: bool) {
         bsp::pins::FLASHLIGHT.set_low();
     } else {
         // Clear any unconsumed headless tone ring notes when returning to local speaker mode.
-        HEADLESS_TONE_TAIL.store(HEADLESS_TONE_HEAD.load(Ordering::Acquire), Ordering::Release);
+        HEADLESS_TONE_TAIL.store(
+            HEADLESS_TONE_HEAD.load(Ordering::Acquire),
+            Ordering::Release,
+        );
         if wake_panel {
             hw.lcd.exit_sleep();
             hw.render_frame();

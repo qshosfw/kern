@@ -16,14 +16,15 @@ mod tests;
 pub use fault::{AppFault, Exception, KRX_FAULT_SENTINEL};
 pub use image::{
     ASSET_ICON_8, ASSET_ICON_16, ASSET_ICON_TRAY, AssetDescriptor, BOOT_IDENT, BlockEntry,
-    CALIB_IDENT, CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, CapBinding, FLAG_LEAF_PINNED, FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, HwClaim,
-    KERNFS_IDENT, KRX_IDENT, KRX_PCB_IDENT, KrxActionDecl, KrxAuxSections, KrxClass,
-    KrxConfigHeader, KrxConfigItem, KrxExecType, KrxIndexEntry, KrxLaunchError, KrxPreamble,
-    KrxProfile, KrxSectionIterator, KrxSummary, LeafContext, LeafContinuation, LeafEntry,
-    SECTION_ACTIONS, SECTION_ASSETS, SECTION_BLOCK_MAP, SECTION_CAP_IMPORTS, SECTION_CONFIG,
-    SECTION_EXECUTION, SECTION_IDENTITY, SECTION_LEAF_MAP, SECTION_SEAL, SECTION_SERVICE_EXPORTS,
-    SECTION_TYPE_LIFECYCLE, SIG_IDENT, SLAB_IDENT, SWAP_IDENT, SectionExecution, SectionHeader,
-    SectionIdentity, SectionType, ServiceExport, find_section,
+    CALIB_IDENT, CFG_KIND_CHOICE, CFG_KIND_RANGE, CFG_KIND_TOGGLE, CapBinding, FLAG_LEAF_PINNED,
+    FLAG_LEAF_PREFETCH, FLAG_LEAF_RT, HwClaim, KERNFS_IDENT, KRX_IDENT, KRX_PCB_IDENT,
+    KrxActionDecl, KrxAuxSections, KrxClass, KrxConfigHeader, KrxConfigItem, KrxExecType,
+    KrxIndexEntry, KrxLaunchError, KrxPreamble, KrxProfile, KrxSectionIterator, KrxSummary,
+    LeafContext, LeafContinuation, LeafEntry, SECTION_ACTIONS, SECTION_ASSETS, SECTION_BLOCK_MAP,
+    SECTION_CAP_IMPORTS, SECTION_CONFIG, SECTION_EXECUTION, SECTION_IDENTITY, SECTION_LEAF_MAP,
+    SECTION_SEAL, SECTION_SERVICE_EXPORTS, SECTION_TYPE_LIFECYCLE, SIG_IDENT, SLAB_IDENT,
+    SWAP_IDENT, SectionExecution, SectionHeader, SectionIdentity, SectionType, ServiceExport,
+    find_section,
 };
 pub use paged::{
     BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_PINNED, BLOCK_FLAG_RT, CacheSlotMeta, FixedWindowCache,

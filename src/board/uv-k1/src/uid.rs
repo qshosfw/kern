@@ -239,6 +239,7 @@ fn find_qs1_tag_end(bytes: &[u8]) -> Option<usize> {
 
 /// Scans `bytes` for a `1-sq` / `qs-1` tag (case-insensitive) and returns a slice of up to 16
 /// printable serial bytes, or falls back to an un-tagged `>= 8`-char ASCII run in `[80..]` if present.
+#[inline(never)]
 pub fn extract_qs1_slice(bytes: &[u8]) -> Option<&[u8]> {
     let tag_end = find_qs1_tag_end(bytes);
     let mut start = tag_end.unwrap_or(80);

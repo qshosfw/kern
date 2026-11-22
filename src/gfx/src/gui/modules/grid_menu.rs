@@ -199,6 +199,7 @@ impl Default for GridMenuView {
 }
 
 impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
+    #[inline(never)]
     fn on_event(&mut self, model: &mut GridMenuModel<T>, event: &Event) -> bool {
         if model.items.is_empty() {
             return false;
@@ -238,6 +239,7 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
         false
     }
 
+    #[inline(never)]
     fn render(&self, canvas: &mut Canvas, model: &GridMenuModel<T>) {
         let total_items = model.items.len();
         if total_items == 0 {
@@ -280,15 +282,15 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
             let item = &model.items[idx];
 
             let fg_color = if is_selected {
-                let c = if model.is_pressed {
-                    canvas.draw_rect(tx, ty, 40, 26, Color::Fill);
-                    Color::Fill
-                } else {
-                    canvas.fill_rect(tx, ty, 40, 26, Color::Fill);
-                    Color::Clear
-                };
-                canvas.clear_corners(tx, ty, 40, 26);
-                c
+                crate::widgets::draw_selection_capsule(
+                    canvas,
+                    [tx, ty, 40, 26],
+                    if model.is_pressed {
+                        crate::widgets::CAPSULE_ROUND
+                    } else {
+                        crate::widgets::CAPSULE_FILL_ROUND
+                    },
+                )
             } else {
                 Color::Fill
             };

@@ -194,9 +194,10 @@ impl ModalCompositor {
         max_len: usize,
         digits_only: bool,
         expose_len: bool,
-    ) {
+    ) -> &mut TextInputModel {
         let m = self.init_text_prompt(tag, title, max_len, digits_only, true);
         m.expose_len = expose_len;
+        m
     }
 
     pub fn show_sheet(&mut self, tag: u8, sheet: OptionSheet) {
@@ -335,7 +336,6 @@ pub static mut ACTIVE_MODAL: ModalCompositor = ModalCompositor::new();
 pub const TAG_LOW_BATTERY_POPUP: u8 = 0xFE;
 pub const TAG_SYSTEM_ALERT: u8 = 0xFD;
 
-const MAX_SYSTEM_ALERTS: usize = 1;
 const MAX_ALERT_LINE_PX: i16 = 116;
 
 #[derive(Clone)]
@@ -354,61 +354,31 @@ impl SystemAlert {
 }
 
 struct AlertQueue {
-    head: u8,
-    len: u8,
-    slots: [SystemAlert; MAX_SYSTEM_ALERTS],
+    has_alert: bool,
+    slot: SystemAlert,
 }
 
 impl AlertQueue {
     const fn new() -> Self {
         Self {
-            head: 0,
-            len: 0,
-            slots: [const { SystemAlert::empty() }; MAX_SYSTEM_ALERTS],
+            has_alert: false,
+            slot: SystemAlert::empty(),
         }
     }
 
     fn push_alert(&mut self, title: &str, message: &str) {
-        let mut target = None;
-        for i in 0..self.len as usize {
-            let idx = (self.head as usize + i) & (MAX_SYSTEM_ALERTS - 1);
-            if self.slots[idx].title.as_str() == title {
-                target = Some(idx);
-                break;
-            }
-        }
-        let idx = match target {
-            Some(i) => i,
-            None if self.len as usize == MAX_SYSTEM_ALERTS => {
-                let i = self.head as usize;
-                self.head = ((self.head as usize + 1) & (MAX_SYSTEM_ALERTS - 1)) as u8;
-                i
-            }
-            None => {
-                let i = (self.head as usize + self.len as usize) & (MAX_SYSTEM_ALERTS - 1);
-                self.len += 1;
-                i
-            }
-        };
-        let slot = &mut self.slots[idx];
-        slot.title.clear();
-        let _ = slot.title.push_str(title);
-        wrap_alert_text(message, &mut slot.message);
+        self.has_alert = true;
+        self.slot.title.clear();
+        let _ = self.slot.title.push_str(title);
+        wrap_alert_text(message, &mut self.slot.message);
     }
 
     fn peek(&self) -> Option<&SystemAlert> {
-        if self.len == 0 {
-            None
-        } else {
-            Some(&self.slots[self.head as usize])
-        }
+        self.has_alert.then_some(&self.slot)
     }
 
     fn discard_head(&mut self) {
-        if self.len > 0 {
-            self.head = ((self.head as usize + 1) & (MAX_SYSTEM_ALERTS - 1)) as u8;
-            self.len -= 1;
-        }
+        self.has_alert = false;
     }
 
     #[cfg(test)]
@@ -420,30 +390,29 @@ impl AlertQueue {
 
     #[cfg(test)]
     fn clear(&mut self) {
-        self.head = 0;
-        self.len = 0;
+        self.has_alert = false;
     }
 }
 
 static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 
-/// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
 #[inline(never)]
-pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>) {
+fn wrap_alert_bytes(raw: &str, dst: &mut [u8]) -> usize {
     const SPACE_PX: i16 = 4; // TomThumb ' ' glyph x_advance
-    let vec = unsafe { out.as_mut_vec() };
-    vec.clear();
     let b = raw.as_bytes();
     let mut i = 0usize;
+    let mut pos = 0usize;
     let mut line_px: i16 = 0;
 
     while i < b.len() {
         let ch = b[i];
         if ch == b'\n' || ch == b' ' {
             if ch == b'\n' {
-                if vec.push(b'\n').is_err() {
-                    return;
+                if pos >= dst.len() {
+                    return pos;
                 }
+                dst[pos] = b'\n';
+                pos += 1;
                 line_px = 0;
             }
             i += 1;
@@ -458,6 +427,9 @@ pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>)
         let word = unsafe { core::str::from_utf8_unchecked(word_bytes) };
         let word_px = gfx::text::str_width(word, &gfx::fonts::tomthumb::FONT);
         if line_px > 0 {
+            if pos >= dst.len() {
+                return pos;
+            }
             let sep = if line_px + SPACE_PX + word_px > MAX_ALERT_LINE_PX {
                 line_px = 0;
                 b'\n'
@@ -465,15 +437,26 @@ pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>)
                 line_px += SPACE_PX;
                 b' '
             };
-            if vec.push(sep).is_err() {
-                return;
-            }
+            dst[pos] = sep;
+            pos += 1;
         }
-        if vec.extend_from_slice(word_bytes).is_err() {
-            return;
+        if pos + word_bytes.len() > dst.len() {
+            return pos;
         }
+        dst[pos..pos + word_bytes.len()].copy_from_slice(word_bytes);
+        pos += word_bytes.len();
         line_px += word_px;
     }
+    pos
+}
+
+/// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
+pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>) {
+    let vec = unsafe { out.as_mut_vec() };
+    vec.clear();
+    let _ = vec.resize_default(N);
+    let len = wrap_alert_bytes(raw, vec.as_mut_slice());
+    vec.truncate(len);
 }
 
 /// Queues a persistent notification for presentation once the Launcher is active.

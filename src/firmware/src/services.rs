@@ -36,10 +36,8 @@ pub struct SysContext<'a, 'hw> {
     pub storage: &'a mut SystemStorage<'hw>,
     pub audio: &'a mut drivers::audio::AudioAmplifier<bsp::BspAudioPa>,
     pub ipc: &'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
-    #[cfg(any(test, feature = "passcode"))]
+    #[cfg(test)]
     pub display: Option<&'a mut display::DisplayHardware<'a>>,
-    #[cfg(feature = "passcode")]
-    pub passcode: &'a mut crate::security::PasscodeState,
     #[cfg(all(test, feature = "uart"))]
     pub uart: &'a mut drivers::uart::HardwareUart<bsp::Uart1Serial>,
     #[cfg(test)]
@@ -263,7 +261,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     pub fn apply_display_config(&mut self) {
-        #[cfg(not(any(test, feature = "passcode")))]
+        #[cfg(not(test))]
         {
             let hw = crate::kern_hw();
             crate::hardware::apply_display_hardware(
@@ -272,16 +270,16 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
                 &mut hw.backlight,
             );
         }
-        #[cfg(any(test, feature = "passcode"))]
+        #[cfg(test)]
         if let Some(ref mut display) = self.display {
             display.apply_config(&self.config.display);
         }
     }
 
     pub fn wake_display(&mut self) {
-        #[cfg(not(any(test, feature = "passcode")))]
+        #[cfg(not(test))]
         crate::kern_hw().backlight.wake();
-        #[cfg(any(test, feature = "passcode"))]
+        #[cfg(test)]
         if let Some(ref mut display) = self.display {
             display.wake();
         }
@@ -389,22 +387,15 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
 }
 
 #[cfg(feature = "passcode")]
+#[inline(always)]
 pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_usb: bool) -> i16 {
     let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
     let pct = pwr.battery_percentage();
-    let is_charging = pwr.is_charging();
-    let is_low = pwr.is_low() || pct == 0;
-    let mut flags = gfx::widgets::status_bar::STATUS_FLAG_INVERTED;
-    if is_charging {
-        flags |= gfx::widgets::status_bar::STATUS_FLAG_CHARGING;
-    }
-    if is_low {
-        flags |= gfx::widgets::status_bar::STATUS_FLAG_LOW;
-    }
-    if is_usb && !crate::system::is_headless() {
-        flags |= gfx::widgets::status_bar::STATUS_FLAG_USB;
-    }
-    let cfg = gfx::widgets::status_bar::StatusRightConfig {
+    let flags = gfx::widgets::status_bar::STATUS_FLAG_INVERTED
+        | (pwr.is_charging() as u8)
+        | (((pwr.is_low() || pct == 0) as u8) << 1)
+        | (((is_usb && !crate::system::is_headless()) as u8) << 2);
+    gfx::widgets::status_bar::StatusRightConfig {
         percentage: pct,
         battery_format,
         shading_mode: crate::master_config_ref().display.shading_mode,
@@ -413,8 +404,8 @@ pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_u
         voltage_mv: pwr.battery_voltage_mv(),
         temp_deci_c: pwr.mcu_temperature_deci_c(),
         dynamic_glyphs: &[],
-    };
-    cfg.render(canvas)
+    }
+    .render(canvas)
 }
 
 impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {

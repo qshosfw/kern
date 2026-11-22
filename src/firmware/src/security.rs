@@ -56,18 +56,13 @@ pub fn sync_filesystem_security(
     {
         if state.is_locked {
             filesystem.lock_session();
-            let encrypted_files = count_encrypted_files(filesystem);
-            StorageSecurityStatus::LockedByPasscode { encrypted_files }
+            StorageSecurityStatus::LockedByPasscode { encrypted_files: 0 }
         } else {
             let uid = bsp::uid::read_mcu_uid();
             let mut fs_key = keychain::derive_fs_key(state.master_key.as_slice(), &uid);
             filesystem.set_encryption_key(fs_key);
             fs_key.fill(0);
-            if passcode::is_passcode_set(filesystem) {
-                StorageSecurityStatus::UnlockedByPasscode
-            } else {
-                StorageSecurityStatus::DeviceBoundActive
-            }
+            StorageSecurityStatus::UnlockedByPasscode
         }
     }
 

@@ -118,31 +118,6 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
 unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget, s0: &str) {
     use gfx::widgets::*;
     let row_h = if d.h >= 12 { 13 } else { 10 };
-    let mut flags = 0u8;
-    if (d.a & 1) != 0 {
-        flags |= ROW_SELECTED;
-    }
-    if (d.a & 2) != 0 {
-        flags |= ROW_CHEVRON;
-    }
-    if (d.a & 4) != 0 {
-        flags |= ROW_OUTLINE;
-    }
-    if (d.a & 8) != 0 {
-        flags |= ROW_TOGGLE;
-    }
-    if (d.a & 16) != 0 {
-        flags |= ROW_TOGGLE_ON;
-    }
-    if (d.a & 32) != 0 {
-        flags |= ROW_ARROW_LEFT;
-    }
-    if (d.a & 64) != 0 {
-        flags |= ROW_ARROW_RIGHT;
-    }
-    if (d.a & 128) != 0 {
-        flags |= ROW_SHORTCUT;
-    }
     let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
     let phase = ((d.extra >> 1) & 3) as i8;
     let chevron_dx = if (d.a & 1) != 0 && d.extra != 0 {
@@ -151,7 +126,7 @@ unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget, s0: &st
         0
     };
     let mut spec = ListRowSpec::new(2, d.y, 120, row_h, s0);
-    spec.flags = flags;
+    spec.flags = d.a;
     spec.value = s1;
     spec.icon = if d.b != 0 {
         super::display::system_icon_8(d.b)

@@ -169,7 +169,7 @@ pub enum KrxLaunchError {
     CrcMismatch,
     MissingIdentity,
     MissingExecution,
-    CapabilityDenied(&'static str),
+    CapabilityDenied(Option<::abi::Cap>),
     InsufficientRam,
     InsufficientStack,
     RelocationFailed,
@@ -811,6 +811,16 @@ impl<'a> KrxSummary<'a> {
     #[inline(always)]
     pub fn is_singleton(&self) -> bool {
         (self.type_flags & SectionType::FLAG_SINGLETON) != 0
+    }
+
+    #[inline(always)]
+    pub fn profile(&self, exec: &SectionExecution) -> KrxProfile {
+        KrxProfile::detect(
+            &self.preamble,
+            exec,
+            self.aux.block_map.is_some(),
+            self.aux.leaf_map.is_some(),
+        )
     }
 }
 

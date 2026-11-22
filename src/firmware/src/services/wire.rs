@@ -5,7 +5,7 @@
 //! zero-copy cursor (`WireCtx`) and table-driven opcode dispatch.
 
 use crate::hardware::SystemHardware;
-use crate::services::calibration::{CALIB_FILE_PATH, is_valid_calibration};
+use crate::services::calibration::CALIB_FILE_PATH;
 use crate::services::primitives;
 use kernel::event::{Event, KeyCode, KeyState};
 use kernel::service::{PowerService, RfFineTuning};
@@ -494,7 +494,7 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             Ok(())
         }
         DOMAIN_INPUT if handle.facet == FACET_INPUT_TEXT => {
-            let s = core::str::from_utf8(c.inp).map_err(|_| WireStatus::BadRange)?;
+            let s = gfx::media::utf8_str(c.inp).ok_or(WireStatus::BadRange)?;
             for ch in s.chars().take(32) {
                 crate::system::enqueue_event(Event::Char(ch));
             }
@@ -894,19 +894,13 @@ fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
         let total_len = transfer.current_len as usize;
         if transfer.path_str() == CALIB_FILE_PATH {
             let staging = crate::data::arena::staging_buf();
-            if total_len != 512 || !is_valid_calibration(staging) {
+            if total_len != 512 {
                 return Err(WireStatus::SafetyDenied);
             }
-            let mcu_uid = bsp::uid::read_mcu_uid();
             let calib = unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
             calib
-                .commit_with_backup(c.fs(), staging, &mcu_uid)
-                .map_err(|_| WireStatus::IoError)?;
-            unsafe {
-                (*core::ptr::addr_of_mut!(crate::POWER_SERVICE))
-                    .battery_driver
-                    .set_calib_const(calib.battery_calib_const());
-            }
+                .commit_slice(c.fs(), staging)
+                .map_err(|_| WireStatus::SafetyDenied)?;
             let radio = &mut c.hw().radio;
             crate::apply_active_calibration(radio);
             radio.set_xtal_freq_trim(calib.xtal_freq_low());

@@ -141,9 +141,7 @@ impl Driver for crate::usb::UsbDriver {
         DeviceDescriptor::new(
             DeviceType::Usb,
             "USB-FS",
-            CapabilitySet::NONE
-                .with(Cap::UsbComm)
-                .with(Cap::SerialComm),
+            CapabilitySet::NONE.with(Cap::UsbComm).with(Cap::SerialComm),
         )
     }
 

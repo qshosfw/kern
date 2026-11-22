@@ -804,7 +804,11 @@ impl MenuView {
     ) -> u8 {
         use crate::widgets::{ListRowSpec, ROW_SELECTED, draw_list_row};
         let has_scroll = row_y_scroll < 0;
-        let row_y = if has_scroll { !row_y_scroll } else { row_y_scroll };
+        let row_y = if has_scroll {
+            !row_y_scroll
+        } else {
+            row_y_scroll
+        };
         let is_hovered = idx == sheet.hover;
         let is_selected = idx == sheet.selected;
         let (fill_x, fill_w) = if has_scroll { (2, 118) } else { (3, 122) };

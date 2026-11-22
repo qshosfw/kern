@@ -1110,6 +1110,104 @@ impl RadioCoordinator {
         }
     }
 
+    fn load_record_into_channel(ch: &mut ChannelConfig, rec: &crate::data::ChannelRecord) {
+    use crate::data::ChannelRecord;
+    ch.rx_freq = Frequency::<Hertz>::new(rec.rx_frequency_hz);
+    ch.tx_shift = if rec.tx_frequency_hz != 0 && rec.tx_frequency_hz != rec.rx_frequency_hz {
+        let rx = rec.rx_frequency_hz;
+        let tx = rec.tx_frequency_hz;
+        if tx >= rx {
+            RepeaterShift::Positive(Frequency::<Hertz>::new(tx - rx))
+        } else {
+            RepeaterShift::Negative(Frequency::<Hertz>::new(rx - tx))
+        }
+    } else {
+        RepeaterShift::Simplex
+    };
+    ch.step = StepSetting::from_hz_x10(rec.step_hz_x10);
+    ch.bandwidth =
+        if rec.bandwidth_50hz >= 400 || (rec.flags & ChannelRecord::FLAG_WIDE_FILTER) != 0 {
+            Bandwidth::Wide25k
+        } else if rec.bandwidth_50hz > 0 && rec.bandwidth_50hz <= 150 {
+            Bandwidth::Narrow6k25
+        } else {
+            Bandwidth::Narrow12k5
+        };
+    ch.modulation = ModulationMode::from_u8(rec.modulation);
+    ch.power = if rec.power_mw == 0 || rec.power_mw >= 4000 {
+        RfPowerLevel::High
+    } else if rec.power_mw >= 1500 {
+        RfPowerLevel::Medium
+    } else {
+        RfPowerLevel::Low
+    };
+    ch.rx_subaudible = rec.rx_subaudible_tone();
+    ch.tx_subaudible = rec.tx_subaudible_tone();
+    ch.squelch_level = rec.squelch_level;
+    ch.flags = rec.flags;
+    ch.reverse = (rec.flags & ChannelRecord::FLAG_REVERSE) != 0;
+    ch.busy_lock = (rec.flags & ChannelRecord::FLAG_BUSY_LOCKOUT) != 0;
+    ch.compander = CompanderMode::from_u8(rec.compand);
+    ch.scrambler = if rec.scram_mode == 0 {
+        ScramblerMode::Off
+    } else {
+        ScramblerMode::InvertFrequency(rec.scram_param.max(rec.scram_mode))
+    };
+    ch.ste_mode = CssTailMode::from_u8(rec.ste);
+    ch.mic_gain_db = rec.mic_gain;
+    ch.roger_id = rec.roger;
+    ch.tot_limit_15s = rec.tx_limit;
+    ch.proto = rec.proto;
+    ch.proto_ref = rec.proto_ref;
+}
+
+    fn save_channel_to_record(ch: &ChannelConfig, rec: &mut crate::data::ChannelRecord) {
+    use crate::data::ChannelRecord;
+    const BW_50HZ: [u16; 3] = [500, 250, 125];
+    const PWR_MW: [u16; 3] = [500, 2000, 5000];
+
+    rec.rx_frequency_hz = ch.rx_freq.raw();
+    rec.tx_frequency_hz = match ch.tx_shift {
+        RepeaterShift::Simplex => 0,
+        RepeaterShift::Positive(off) => ch.rx_freq.raw().saturating_add(off.raw()),
+        RepeaterShift::Negative(off) => ch.rx_freq.raw().saturating_sub(off.raw()),
+    };
+    rec.step_hz_x10 = ch.step.in_hz_x10();
+    rec.bandwidth_50hz = BW_50HZ[ch.bandwidth as usize];
+    rec.modulation = ch.modulation.to_u8();
+    rec.power_mw = PWR_MW[ch.power as usize];
+    rec.set_rx_subaudible_tone(ch.rx_subaudible);
+    rec.set_tx_subaudible_tone(ch.tx_subaudible);
+    rec.squelch_level = ch.squelch_level;
+
+    let mut flags = ch.flags & !(ChannelRecord::FLAG_REVERSE | ChannelRecord::FLAG_BUSY_LOCKOUT);
+    if ch.reverse {
+        flags |= ChannelRecord::FLAG_REVERSE;
+    }
+    if ch.busy_lock {
+        flags |= ChannelRecord::FLAG_BUSY_LOCKOUT;
+    }
+    rec.flags = flags;
+    rec.compand = ch.compander as u8;
+    match ch.scrambler {
+        ScramblerMode::Off => {
+            rec.scram_mode = 0;
+            rec.scram_param = 0;
+        }
+        ScramblerMode::InvertFrequency(code) => {
+            rec.scram_mode = 1;
+            rec.scram_param = code;
+        }
+    }
+    rec.ste = ch.ste_mode as u8;
+    rec.mic_gain = ch.mic_gain_db;
+    rec.roger = ch.roger_id;
+    rec.tx_limit = ch.tot_limit_15s;
+    rec.proto = ch.proto;
+    rec.proto_ref = ch.proto_ref;
+    rec.record_crc = rec.compute_crc();
+}
+
     // ── Memory Channel Loading & Serialization ──
 
     /// Load a ChannelRecord from codeplug/KernFS storage into a target VFO slot.
@@ -1134,110 +1232,15 @@ impl RadioCoordinator {
         memory_idx: Option<u16>,
         rec: &crate::data::ChannelRecord,
     ) {
-        use crate::data::ChannelRecord;
         let idx = slot.index().min(self.channels.len() - 1);
-        let ch = &mut self.channels[idx];
-
-        ch.rx_freq = Frequency::<Hertz>::new(rec.rx_frequency_hz);
-        ch.tx_shift = if rec.tx_frequency_hz != 0 && rec.tx_frequency_hz != rec.rx_frequency_hz {
-            let rx = rec.rx_frequency_hz;
-            let tx = rec.tx_frequency_hz;
-            if tx >= rx {
-                RepeaterShift::Positive(Frequency::<Hertz>::new(tx - rx))
-            } else {
-                RepeaterShift::Negative(Frequency::<Hertz>::new(rx - tx))
-            }
-        } else {
-            RepeaterShift::Simplex
-        };
-        ch.step = StepSetting::from_hz_x10(rec.step_hz_x10);
-        ch.bandwidth =
-            if rec.bandwidth_50hz >= 400 || (rec.flags & ChannelRecord::FLAG_WIDE_FILTER) != 0 {
-                Bandwidth::Wide25k
-            } else if rec.bandwidth_50hz > 0 && rec.bandwidth_50hz <= 150 {
-                Bandwidth::Narrow6k25
-            } else {
-                Bandwidth::Narrow12k5
-            };
-        ch.modulation = ModulationMode::from_u8(rec.modulation);
-        ch.power = if rec.power_mw == 0 || rec.power_mw >= 4000 {
-            RfPowerLevel::High
-        } else if rec.power_mw >= 1500 {
-            RfPowerLevel::Medium
-        } else {
-            RfPowerLevel::Low
-        };
-        ch.rx_subaudible = rec.rx_subaudible_tone();
-        ch.tx_subaudible = rec.tx_subaudible_tone();
-        ch.squelch_level = rec.squelch_level;
-        ch.flags = rec.flags;
-        ch.reverse = (rec.flags & ChannelRecord::FLAG_REVERSE) != 0;
-        ch.busy_lock = (rec.flags & ChannelRecord::FLAG_BUSY_LOCKOUT) != 0;
-        ch.compander = CompanderMode::from_u8(rec.compand);
-        ch.scrambler = if rec.scram_mode == 0 {
-            ScramblerMode::Off
-        } else {
-            ScramblerMode::InvertFrequency(rec.scram_param.max(rec.scram_mode))
-        };
-        ch.ste_mode = CssTailMode::from_u8(rec.ste);
-        ch.mic_gain_db = rec.mic_gain;
-        ch.roger_id = rec.roger;
-        ch.tot_limit_15s = rec.tx_limit;
-        ch.proto = rec.proto;
-        ch.proto_ref = rec.proto_ref;
-
+        Self::load_record_into_channel(&mut self.channels[idx], rec);
         self.vfo_memory_index[idx] = memory_idx;
     }
 
     /// Serialize current VFO tuning parameters into a ChannelRecord with zero attribute loss.
     pub fn save_vfo_to_channel(&self, slot: VfoSlot, rec: &mut crate::data::ChannelRecord) {
-        use crate::data::ChannelRecord;
-        const BW_50HZ: [u16; 3] = [500, 250, 125];
-        const PWR_MW: [u16; 3] = [500, 2000, 5000];
         let idx = slot.index().min(self.channels.len() - 1);
-        let ch = &self.channels[idx];
-
-        rec.rx_frequency_hz = ch.rx_freq.raw();
-        rec.tx_frequency_hz = match ch.tx_shift {
-            RepeaterShift::Simplex => 0,
-            RepeaterShift::Positive(off) => ch.rx_freq.raw().saturating_add(off.raw()),
-            RepeaterShift::Negative(off) => ch.rx_freq.raw().saturating_sub(off.raw()),
-        };
-        rec.step_hz_x10 = ch.step.in_hz_x10();
-        rec.bandwidth_50hz = BW_50HZ[ch.bandwidth as usize];
-        rec.modulation = ch.modulation.to_u8();
-        rec.power_mw = PWR_MW[ch.power as usize];
-        rec.set_rx_subaudible_tone(ch.rx_subaudible);
-        rec.set_tx_subaudible_tone(ch.tx_subaudible);
-        rec.squelch_level = ch.squelch_level;
-
-        let mut flags =
-            ch.flags & !(ChannelRecord::FLAG_REVERSE | ChannelRecord::FLAG_BUSY_LOCKOUT);
-        if ch.reverse {
-            flags |= ChannelRecord::FLAG_REVERSE;
-        }
-        if ch.busy_lock {
-            flags |= ChannelRecord::FLAG_BUSY_LOCKOUT;
-        }
-        rec.flags = flags;
-        rec.compand = ch.compander as u8;
-        match ch.scrambler {
-            ScramblerMode::Off => {
-                rec.scram_mode = 0;
-                rec.scram_param = 0;
-            }
-            ScramblerMode::InvertFrequency(code) => {
-                rec.scram_mode = 1;
-                rec.scram_param = code;
-            }
-        }
-        rec.ste = ch.ste_mode as u8;
-        rec.mic_gain = ch.mic_gain_db;
-        rec.roger = ch.roger_id;
-        rec.tx_limit = ch.tot_limit_15s;
-        rec.proto = ch.proto;
-        rec.proto_ref = ch.proto_ref;
-        rec.record_crc = rec.compute_crc();
+        Self::save_channel_to_record(&self.channels[idx], rec);
     }
 
     /// Apply a comprehensive, generic ModulationProfile (modulation, bandwidth, AF response,

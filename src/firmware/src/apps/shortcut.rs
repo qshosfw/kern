@@ -408,12 +408,7 @@ pub fn build_picker_sheet(
         push_entry(hash_app(p), icon, t, "");
         for act in catalog.actions.iter() {
             if act.pkg_idx as usize == pkg_idx && (act.scope_mask & ::abi::scope::SHORTCUT) != 0 {
-                push_entry(
-                    hash_app_action(p, act.action_id),
-                    icon,
-                    t,
-                    act.label_str(),
-                );
+                push_entry(hash_app_action(p, act.action_id), icon, t, act.label_str());
             }
         }
     }

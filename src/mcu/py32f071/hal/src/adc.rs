@@ -121,19 +121,16 @@ impl Adc {
         }
     }
 
-    /// Read a software-averaged 12-bit ADC value across `samples` iterations.
+    /// Read a software-averaged 12-bit ADC value across `samples` iterations (rounded down to power of 2).
     #[inline(never)]
     pub fn read_channel_averaged(&self, channel: u8, samples: u8) -> u16 {
-        let count = samples.max(1);
+        let shift = 7u32.saturating_sub(samples.max(1).leading_zeros());
+        let count = 1u8 << shift;
         let mut sum = 0u32;
         for _ in 0..count {
             sum += self.read_channel(channel) as u32;
         }
-        if count.is_power_of_two() {
-            (sum >> count.trailing_zeros()) as u16
-        } else {
-            (sum / count as u32) as u16
-        }
+        (sum >> shift) as u16
     }
 
     /// Configure single-channel analog watchdog thresholds (12-bit counts).

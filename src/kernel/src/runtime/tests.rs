@@ -117,9 +117,12 @@ fn test_packbits_pairs_and_long_literals_roundtrip() {
 fn test_krx_launch_error_diagnostics() {
     use ::abi::Cap;
 
-    // Capability denials carry the missing capability's display name.
-    let err_cap = KrxLaunchError::CapabilityDenied(crate::caps::name(Cap::BroadBandRx));
-    assert_eq!(err_cap, KrxLaunchError::CapabilityDenied("Broadband HF RX"));
+    // Capability denials carry the missing capability token.
+    let err_cap = KrxLaunchError::CapabilityDenied(Some(Cap::BroadBandRx));
+    assert_eq!(
+        err_cap,
+        KrxLaunchError::CapabilityDenied(Some(Cap::BroadBandRx))
+    );
     assert_eq!(err_cap.describe(), "Hardware capability\nnot supported.");
 
     assert_eq!(
@@ -143,7 +146,7 @@ fn test_krx_launch_error_diagnostics() {
         KrxLaunchError::CrcMismatch,
         KrxLaunchError::MissingIdentity,
         KrxLaunchError::MissingExecution,
-        KrxLaunchError::CapabilityDenied(""),
+        KrxLaunchError::CapabilityDenied(None),
         KrxLaunchError::InsufficientRam,
         KrxLaunchError::InsufficientStack,
         KrxLaunchError::RelocationFailed,
@@ -643,8 +646,11 @@ fn test_native_execution_fault_matrix_test_bench() {
     assert!(!platform_caps.contains_all(app_required_caps));
     let missing = app_required_caps.without(platform_caps);
     assert_eq!(missing.first_cap(), Some(Cap::BroadBandRx));
-    let err = KrxLaunchError::CapabilityDenied(crate::caps::name(missing.first_cap().unwrap()));
-    assert_eq!(err, KrxLaunchError::CapabilityDenied("Broadband HF RX"));
+    let err = KrxLaunchError::CapabilityDenied(missing.first_cap());
+    assert_eq!(
+        err,
+        KrxLaunchError::CapabilityDenied(Some(::abi::Cap::BroadBandRx))
+    );
 
     // 6. Fault: Insufficient Stack Headroom
     let mut exec_raw = [0u8; 28];

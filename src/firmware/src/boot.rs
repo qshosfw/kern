@@ -40,8 +40,7 @@ pub fn run(hw: &mut crate::hardware::SystemHardware) -> py32_hal::adc::Adc {
     let warm_tools = recovery::is_warm_tools_boot();
     #[cfg(not(feature = "krx_native"))]
     let warm_tools = false;
-    let warm_crash =
-        (backup::read().flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) != 0;
+    let warm_crash = (backup::read().flags & kernel::boot::BackupCrashTag::FLAG_DIRTY_CRASH) != 0;
     if warm_tools || warm_crash {
         // Warm DFU → Recovery or Crash → Panic: panel and backlight stay live, no LCD off flash.
         hw.backlight.wake();

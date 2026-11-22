@@ -13,10 +13,10 @@ use crate::widgets::{CAPSULE_FILL, CAPSULE_ROUND, draw_key_badge_box, draw_selec
 use crate::{Canvas, Color};
 
 pub const ROW_SELECTED: u8 = 1 << 0;
-pub const ROW_OUTLINE: u8 = 1 << 1;
-pub const ROW_TOGGLE: u8 = 1 << 2;
-pub const ROW_TOGGLE_ON: u8 = 1 << 3;
-pub const ROW_CHEVRON: u8 = 1 << 4;
+pub const ROW_CHEVRON: u8 = 1 << 1;
+pub const ROW_OUTLINE: u8 = 1 << 2;
+pub const ROW_TOGGLE: u8 = 1 << 3;
+pub const ROW_TOGGLE_ON: u8 = 1 << 4;
 pub const ROW_ARROW_LEFT: u8 = 1 << 5;
 pub const ROW_ARROW_RIGHT: u8 = 1 << 6;
 pub const ROW_SHORTCUT: u8 = 1 << 7;
@@ -64,20 +64,15 @@ impl<'a> ListRowSpec<'a> {
 }
 
 #[inline(never)]
-fn draw_row_right_value(
+fn draw_row_right_value_str(
     canvas: &mut Canvas,
     s: &ListRowSpec<'_>,
+    val_str: &str,
     right_edge: i16,
     text_dy: i16,
     sw: i16,
     tc: Color,
 ) {
-    let mut lbuf = [0u8; 32];
-    let val_str = if s.localize_value {
-        text::localize(s.value, true, &mut lbuf)
-    } else {
-        s.value
-    };
     let is_outline = (s.flags & ROW_OUTLINE) != 0;
     let arrow_left = (s.flags & ROW_ARROW_LEFT) != 0;
     let arrow_right = (s.flags & ROW_ARROW_RIGHT) != 0;
@@ -98,7 +93,32 @@ fn draw_row_right_value(
     } else {
         right_edge - 3
     };
-    text::draw_str(canvas, val_right - sw, s.y + text_dy - 1, val_str, &TOMTHUMB, tc);
+    text::draw_str(
+        canvas,
+        val_right - sw,
+        s.y + text_dy - 1,
+        val_str,
+        &TOMTHUMB,
+        tc,
+    );
+}
+
+#[inline(never)]
+fn draw_row_right_value(
+    canvas: &mut Canvas,
+    s: &ListRowSpec<'_>,
+    right_edge: i16,
+    text_dy: i16,
+    sw: i16,
+    tc: Color,
+) {
+    if s.localize_value && text::has_localize_hook() {
+        let mut lbuf = [0u8; 32];
+        let val_str = text::localize(s.value, true, &mut lbuf);
+        draw_row_right_value_str(canvas, s, val_str, right_edge, text_dy, sw, tc);
+    } else {
+        draw_row_right_value_str(canvas, s, s.value, right_edge, text_dy, sw, tc);
+    }
 }
 #[inline(never)]
 fn draw_shortcut_row(
@@ -128,6 +148,79 @@ fn draw_shortcut_row(
     icons::draw_icon_8(canvas, right_edge - 8, s.y + 3, icons::ARROW_RIGHT, tc);
 }
 
+#[inline(never)]
+fn measure_row_value_localized(s: &ListRowSpec<'_>) -> i16 {
+    let mut lbuf = [0u8; 32];
+    let v = text::localize(s.value, true, &mut lbuf);
+    text::str_width(v, &TOMTHUMB)
+}
+
+#[inline(never)]
+fn draw_row_title_str(
+    canvas: &mut Canvas,
+    s: &ListRowSpec<'_>,
+    title_str: &str,
+    tx: i16,
+    title_max: i16,
+    text_dy: i16,
+    is_sel: bool,
+    tc: Color,
+) -> u8 {
+    let avail = (title_max - tx).max(0);
+    let title_w = text::str_width(title_str, &MUMATRIX);
+    let overflow = (title_w - avail).clamp(0, 255) as u8;
+
+    if is_sel && s.marquee_enabled && overflow > 0 {
+        text::draw_str_clipped(
+            canvas,
+            tx,
+            title_max,
+            s.marquee_x.min(overflow as i16),
+            s.y + text_dy,
+            title_str,
+            &MUMATRIX,
+            tc,
+        );
+    } else if overflow > 0 {
+        text::draw_str_ellipsis(
+            canvas,
+            tx,
+            s.y + text_dy,
+            title_str,
+            &MUMATRIX,
+            tc,
+            title_max,
+        );
+    } else {
+        text::draw_str_max_x(
+            canvas,
+            tx,
+            s.y + text_dy,
+            title_str,
+            &MUMATRIX,
+            tc,
+            title_max,
+        );
+    }
+    overflow
+}
+
+#[inline(never)]
+fn draw_row_title_localized(
+    canvas: &mut Canvas,
+    s: &ListRowSpec<'_>,
+    prefer_short: bool,
+    tx: i16,
+    title_max: i16,
+    text_dy: i16,
+    is_sel: bool,
+    tc: Color,
+) -> u8 {
+    let mut lbuf = [0u8; 32];
+    let title_str = text::localize(s.title, prefer_short, &mut lbuf);
+    draw_row_title_str(canvas, s, title_str, tx, title_max, text_dy, is_sel, tc)
+}
+
 /// Render a canonical list row and return the title's horizontal overflow in pixels (`0` when it fits).
 #[inline(never)]
 pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
@@ -153,7 +246,8 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
             if s.y >= s.clip_top && s.y + h_i16 <= 64 {
                 cap_flags |= CAPSULE_ROUND;
             }
-            tc = draw_selection_capsule(canvas, [s.x, top as u8, s.w, (bot - top) as u8], cap_flags);
+            tc =
+                draw_selection_capsule(canvas, [s.x, top as u8, s.w, (bot - top) as u8], cap_flags);
         }
     }
 
@@ -185,21 +279,12 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
         }
     }
 
-    let mut lbuf = [0u8; 32];
     let sw = if s.value.is_empty() {
         0
+    } else if s.localize_value && text::has_localize_hook() {
+        measure_row_value_localized(s)
     } else {
-        let v = if s.localize_value {
-            text::localize(s.value, true, &mut lbuf)
-        } else {
-            s.value
-        };
-        text::str_width(v, &TOMTHUMB)
-    };
-    let title_str = if s.localize_title {
-        text::localize(s.title, sw > 0, &mut lbuf)
-    } else {
-        s.title
+        text::str_width(s.value, &TOMTHUMB)
     };
     let title_max = if is_toggle || has_chevron {
         right_edge - 14
@@ -214,26 +299,11 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
         right_edge - 3
     };
 
-    let avail = (title_max - tx).max(0);
-    let title_w = text::str_width(title_str, &MUMATRIX);
-    let overflow = (title_w - avail).clamp(0, 255) as u8;
-
-    if is_sel && s.marquee_enabled && overflow > 0 {
-        text::draw_str_clipped(
-            canvas,
-            tx,
-            title_max,
-            s.marquee_x.min(overflow as i16),
-            s.y + text_dy,
-            title_str,
-            &MUMATRIX,
-            tc,
-        );
-    } else if overflow > 0 {
-        text::draw_str_ellipsis(canvas, tx, s.y + text_dy, title_str, &MUMATRIX, tc, title_max);
+    let overflow = if s.localize_title && text::has_localize_hook() {
+        draw_row_title_localized(canvas, s, sw > 0, tx, title_max, text_dy, is_sel, tc)
     } else {
-        text::draw_str_max_x(canvas, tx, s.y + text_dy, title_str, &MUMATRIX, tc, title_max);
-    }
+        draw_row_title_str(canvas, s, s.title, tx, title_max, text_dy, is_sel, tc)
+    };
 
     if is_toggle {
         let bmp = if toggle_on {

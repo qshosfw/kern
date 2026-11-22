@@ -102,6 +102,7 @@ fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
     }
 }
 
+#[inline(never)]
 unsafe fn dispatch_rf_vfo(
     coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
@@ -239,6 +240,7 @@ unsafe fn dispatch_rf_vfo(
     }
 }
 
+#[inline(never)]
 unsafe fn dispatch_rf_bulk(
     #[cfg_attr(not(feature = "rf_fsk"), allow(unused_variables))] coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,

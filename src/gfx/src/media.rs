@@ -429,16 +429,12 @@ impl FontGlyphEntry {
     }
 }
 
-/// Binary-search a `.fnt` pack for `codepoint` using a streaming `read_at` reader.
 #[inline(never)]
-pub fn lookup_font_glyph_streaming<F>(
+fn lookup_font_glyph_dyn(
     hdr: &FontPackHeader,
-    mut read_at: F,
+    read_at: &mut dyn FnMut(usize, &mut [u8]) -> usize,
     codepoint: u16,
-) -> Option<FontGlyphEntry>
-where
-    F: FnMut(usize, &mut [u8]) -> usize,
-{
+) -> Option<FontGlyphEntry> {
     if !hdr.is_valid() || hdr.glyph_count == 0 {
         return None;
     }
@@ -461,6 +457,19 @@ where
         }
     }
     None
+}
+
+/// Binary-search a `.fnt` pack for `codepoint` using a streaming `read_at` reader.
+#[inline(always)]
+pub fn lookup_font_glyph_streaming<F>(
+    hdr: &FontPackHeader,
+    mut read_at: F,
+    codepoint: u16,
+) -> Option<FontGlyphEntry>
+where
+    F: FnMut(usize, &mut [u8]) -> usize,
+{
+    lookup_font_glyph_dyn(hdr, &mut read_at, codepoint)
 }
 
 /// Draw a 1-bit MSB-first row bitmap clipped horizontally to `[min_x, max_x)`.
@@ -551,24 +560,20 @@ impl<const N: usize> FontGlyphCache<N> {
         ((cp as usize).wrapping_add((pack_id as usize) * 31)) & (N - 1)
     }
 
-    /// Look up or fetch a glyph from a streaming `.fnt` pack using a pre-parsed header.
     #[inline(never)]
-    pub fn fetch<F>(
+    fn fetch_dyn(
         &mut self,
         pack_id: u8,
         hdr: &FontPackHeader,
-        mut read_at: F,
+        read_at: &mut dyn FnMut(usize, &mut [u8]) -> usize,
         codepoint: u16,
-    ) -> Option<&CachedGlyphSlot>
-    where
-        F: FnMut(usize, &mut [u8]) -> usize,
-    {
+    ) -> Option<&CachedGlyphSlot> {
         let tag = ((pack_id as u32) << 16) | (codepoint as u32);
         let idx = Self::slot_idx(pack_id, codepoint);
         if self.slots[idx].valid != 0 && self.slots[idx].tag == tag {
             return Some(&self.slots[idx]);
         }
-        let g = lookup_font_glyph_streaming(hdr, &mut read_at, codepoint)?;
+        let g = lookup_font_glyph_dyn(hdr, read_at, codepoint)?;
         let nbytes = g.bitmap_bytes();
         if nbytes > 32 {
             return None;
@@ -586,6 +591,60 @@ impl<const N: usize> FontGlyphCache<N> {
         slot.valid = 1;
         Some(slot)
     }
+
+    /// Look up or fetch a glyph from a streaming `.fnt` pack using a pre-parsed header.
+    #[inline(always)]
+    pub fn fetch<F>(
+        &mut self,
+        pack_id: u8,
+        hdr: &FontPackHeader,
+        mut read_at: F,
+        codepoint: u16,
+    ) -> Option<&CachedGlyphSlot>
+    where
+        F: FnMut(usize, &mut [u8]) -> usize,
+    {
+        self.fetch_dyn(pack_id, hdr, &mut read_at, codepoint)
+    }
+}
+
+#[inline(always)]
+fn glyph_y_top(y: i16, h: u8, yo: i8) -> i16 {
+    let top = y - h as i16 - yo as i16;
+    if top < 0 && (0..=10).contains(&y) {
+        0
+    } else {
+        top
+    }
+}
+
+/// Draw a pre-fetched [`CachedGlyphSlot`] at `(x, y)` with horizontal clipping `[min_x, max_x)`.
+#[inline(never)]
+pub fn draw_cached_glyph(
+    canvas: &mut Canvas,
+    x: i16,
+    y: i16,
+    slot: &CachedGlyphSlot,
+    min_x: i16,
+    max_x: i16,
+    color: Color,
+) -> i16 {
+    let g = slot.entry;
+    if !g.is_blank() {
+        let nbytes = g.bitmap_bytes();
+        draw_bitmap_clipped(
+            canvas,
+            x + g.x_offset() as i16,
+            glyph_y_top(y, g.height(), g.y_offset()),
+            g.width(),
+            g.height(),
+            &slot.bmp[..nbytes],
+            min_x,
+            max_x,
+            color,
+        );
+    }
+    g.x_advance as i16
 }
 
 /// Try rendering a BMP codepoint using a pre-parsed [`FontPackHeader`], clipped to `[min_x, max_x)`.
@@ -620,7 +679,7 @@ where
     draw_bitmap_clipped(
         canvas,
         x + g.x_offset() as i16,
-        y - g.height() as i16 - g.y_offset() as i16,
+        glyph_y_top(y, g.height(), g.y_offset()),
         g.width(),
         g.height(),
         &bmp[..nbytes],
@@ -650,22 +709,7 @@ where
     F: FnMut(usize, &mut [u8]) -> usize,
 {
     let slot = cache.fetch(pack_id, hdr, read_at, codepoint)?;
-    let g = slot.entry;
-    if !g.is_blank() {
-        let nbytes = g.bitmap_bytes();
-        draw_bitmap_clipped(
-            canvas,
-            x + g.x_offset() as i16,
-            y - g.height() as i16 - g.y_offset() as i16,
-            g.width(),
-            g.height(),
-            &slot.bmp[..nbytes],
-            min_x,
-            max_x,
-            color,
-        );
-    }
-    Some(g.x_advance as i16)
+    Some(draw_cached_glyph(canvas, x, y, slot, min_x, max_x, color))
 }
 
 /// Try rendering a BMP codepoint from a single streaming `.fnt` pack; returns `Some(x_advance)` on
@@ -1028,11 +1072,11 @@ pub const LANG_KEY_NATIVE_NAME: &str = "__LANG_NAME__";
 pub const LANG_KEY_ASCII_NAME: &str = "__LANG_ASCII__";
 /// Special metadata key storing an optional localized keypad badge label (e.g. `"ES"`, `"АБВ"`, `"あ"`).
 pub const LANG_KEY_KM_LABEL: &str = "__KM_LABEL__";
-/// Special metadata keys storing optional localized 0..=9 keypad character sequences.
-pub const LANG_KEY_KM_KEYS: [&str; 10] = [
-    "__KM_0__", "__KM_1__", "__KM_2__", "__KM_3__", "__KM_4__", "__KM_5__", "__KM_6__", "__KM_7__",
-    "__KM_8__", "__KM_9__",
-];
+/// Format a localized keypad key `"__KM_0__"`..`"__KM_9__"` into an 8-byte buffer on the stack.
+#[inline(always)]
+pub const fn lang_km_key_bytes(digit: u8) -> [u8; 8] {
+    [b'_', b'_', b'K', b'M', b'_', b'0' + (digit % 10), b'_', b'_']
+}
 
 /// Companion font hint bitflags in [`LangPackHeader::font_hint`].
 pub const LANG_FONT_TINY5: u8 = 1 << 0;
@@ -1138,16 +1182,12 @@ impl LangEntry {
     }
 }
 
-/// Binary-search a `.lng` pack for `key_hash` using a streaming `read_at` reader.
 #[inline(never)]
-pub fn lookup_lang_entry_streaming<F>(
+fn lookup_lang_entry_dyn(
     hdr: &LangPackHeader,
-    mut read_at: F,
+    read_at: &mut dyn FnMut(usize, &mut [u8]) -> usize,
     key_hash: u32,
-) -> Option<LangEntry>
-where
-    F: FnMut(usize, &mut [u8]) -> usize,
-{
+) -> Option<LangEntry> {
     if !hdr.is_valid() || hdr.entry_count == 0 {
         return None;
     }
@@ -1172,9 +1212,22 @@ where
     None
 }
 
+/// Binary-search a `.lng` pack for `key_hash` using a streaming `read_at` reader.
+#[inline(always)]
+pub fn lookup_lang_entry_streaming<F>(
+    hdr: &LangPackHeader,
+    mut read_at: F,
+    key_hash: u32,
+) -> Option<LangEntry>
+where
+    F: FnMut(usize, &mut [u8]) -> usize,
+{
+    lookup_lang_entry_dyn(hdr, &mut read_at, key_hash)
+}
+
 /// Minimal `#![no_std]` UTF-8 validator avoiding `core::str::from_utf8` table bloat on Cortex-M0+.
 #[inline(never)]
-fn utf8_str(bytes: &[u8]) -> Option<&str> {
+pub fn utf8_str(bytes: &[u8]) -> Option<&str> {
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
@@ -1204,18 +1257,14 @@ fn utf8_str(bytes: &[u8]) -> Option<&str> {
     Some(unsafe { core::str::from_utf8_unchecked(bytes) })
 }
 
-/// Look up a translated UTF-8 string from a streaming `.lng` pack by precomputed `key_hash`.
 #[inline(never)]
-pub fn lookup_lang_hash_streaming<'a, F>(
+fn lookup_lang_hash_dyn<'a>(
     hdr: &LangPackHeader,
-    mut read_at: F,
+    read_at: &mut dyn FnMut(usize, &mut [u8]) -> usize,
     key_hash: u32,
     out: &'a mut [u8],
-) -> Option<&'a str>
-where
-    F: FnMut(usize, &mut [u8]) -> usize,
-{
-    let entry = lookup_lang_entry_streaming(hdr, &mut read_at, key_hash)?;
+) -> Option<&'a str> {
+    let entry = lookup_lang_entry_dyn(hdr, read_at, key_hash)?;
     let len = entry.str_len as usize;
     if len == 0 || len > out.len() {
         return None;
@@ -1225,6 +1274,20 @@ where
         return None;
     }
     utf8_str(&out[..len])
+}
+
+/// Look up a translated UTF-8 string from a streaming `.lng` pack by precomputed `key_hash`.
+#[inline(always)]
+pub fn lookup_lang_hash_streaming<'a, F>(
+    hdr: &LangPackHeader,
+    mut read_at: F,
+    key_hash: u32,
+    out: &'a mut [u8],
+) -> Option<&'a str>
+where
+    F: FnMut(usize, &mut [u8]) -> usize,
+{
+    lookup_lang_hash_dyn(hdr, &mut read_at, key_hash, out)
 }
 
 /// Look up a translated UTF-8 string from a streaming `.lng` pack into caller-owned `out`.
@@ -1241,9 +1304,23 @@ where
     lookup_lang_hash_streaming(hdr, read_at, fnv1a_32(english_key.as_bytes()), out)
 }
 
+#[inline(never)]
+fn lookup_lang_short_dyn<'a>(
+    hdr: &LangPackHeader,
+    read_at: &mut dyn FnMut(usize, &mut [u8]) -> usize,
+    english_key: &str,
+    out: &'a mut [u8],
+) -> Option<&'a str> {
+    let bytes = english_key.as_bytes();
+    if let Some(s) = lookup_lang_hash_dyn(hdr, read_at, fnv1a_32_short(bytes), out) {
+        return Some(s);
+    }
+    lookup_lang_hash_dyn(hdr, read_at, fnv1a_32(bytes), out)
+}
+
 /// Look up the natural compact/short variant of a label (e.g. `"初期化"` or `"Сброс"` for tight
 /// UI slots), falling back automatically to the standard translation when no separate short form exists.
-#[inline(never)]
+#[inline(always)]
 pub fn lookup_lang_short_streaming<'a, F>(
     hdr: &LangPackHeader,
     mut read_at: F,
@@ -1253,19 +1330,7 @@ pub fn lookup_lang_short_streaming<'a, F>(
 where
     F: FnMut(usize, &mut [u8]) -> usize,
 {
-    let short_h = fnv1a_32_short(english_key.as_bytes());
-    let full_h = fnv1a_32(english_key.as_bytes());
-    let entry = lookup_lang_entry_streaming(hdr, &mut read_at, short_h)
-        .or_else(|| lookup_lang_entry_streaming(hdr, &mut read_at, full_h))?;
-    let len = entry.str_len as usize;
-    if len == 0 || len > out.len() {
-        return None;
-    }
-    let off = hdr.string_pool_offset() + entry.str_offset();
-    if read_at(off, &mut out[..len]) != len {
-        return None;
-    }
-    utf8_str(&out[..len])
+    lookup_lang_short_dyn(hdr, &mut read_at, english_key, out)
 }
 
 /// Look up a natural compact/short translation from an in-memory `.lng` pack slice.
@@ -1764,6 +1829,8 @@ mod tests {
         use crate::icons;
 
         const TINY5: &[u8] = include_bytes!("../../../assets/media/tiny5.fnt");
+        const CJK_JA: &[u8] = include_bytes!("../../../assets/media/cjk_ja.fnt");
+        const CJK_ZH: &[u8] = include_bytes!("../../../assets/media/cjk_zh.fnt");
         fn test_draw(
             canvas: &mut Canvas,
             x: i16,
@@ -1773,22 +1840,32 @@ mod tests {
             max_x: i16,
             color: Color,
         ) -> Option<i16> {
-            let hdr = FontPackHeader::from_bytes(TINY5[..16].try_into().unwrap());
-            try_draw_font_cp_with_header(
-                canvas,
-                x,
-                y + 1,
-                cp,
-                &hdr,
-                slice_reader(TINY5),
-                min_x,
-                max_x,
-                color,
-            )
+            for pack in [TINY5, CJK_JA, CJK_ZH] {
+                let hdr = FontPackHeader::from_bytes(pack[..16].try_into().unwrap());
+                if let Some(adv) = try_draw_font_cp_with_header(
+                    canvas,
+                    x,
+                    y + 1,
+                    cp,
+                    &hdr,
+                    slice_reader(pack),
+                    min_x,
+                    max_x,
+                    color,
+                ) {
+                    return Some(adv);
+                }
+            }
+            None
         }
         fn test_width(cp: u16) -> Option<i16> {
-            let hdr = FontPackHeader::from_bytes(TINY5[..16].try_into().unwrap());
-            lookup_font_glyph_streaming(&hdr, slice_reader(TINY5), cp).map(|g| g.x_advance as i16)
+            for pack in [TINY5, CJK_JA, CJK_ZH] {
+                let hdr = FontPackHeader::from_bytes(pack[..16].try_into().unwrap());
+                if let Some(g) = lookup_font_glyph_streaming(&hdr, slice_reader(pack), cp) {
+                    return Some(g.x_advance as i16);
+                }
+            }
+            None
         }
 
         crate::text::set_ext_font_hooks(Some(test_draw), Some(test_width));
@@ -1911,12 +1988,29 @@ mod tests {
         crate::widgets::draw_negated_header(&mut c, 0, "Ajustes (PT)");
         dump("settings_pt.raw", &c);
 
-        // 4. Settings in Italian + Ukrainian
-        c.clear();
-        let it_items = [
-            MenuItem::new("Impostaz.", MenuItemType::Submenu),
+        // 4a & 4b. Separate Italian (IT) and Ukrainian (UK) screens driven live from real .lng packs
+        static mut ACTIVE_TEST_PACK: &'static [u8] = &[];
+        fn test_lng_hook<'a>(key: &str, short: bool, out: &'a mut [u8]) -> Option<&'a str> {
+            let pack = unsafe { ACTIVE_TEST_PACK };
+            if pack.len() < LangPackHeader::SIZE {
+                return None;
+            }
+            let hdr = LangPackHeader::from_bytes(pack[..16].try_into().unwrap());
+            if short {
+                lookup_lang_short_streaming(&hdr, slice_reader(pack), key, out)
+            } else {
+                lookup_lang_str_streaming(&hdr, slice_reader(pack), key, out)
+            }
+        }
+        const LNG_IT: &[u8] = include_bytes!("../../../assets/media/lang/it.lng");
+        const LNG_UK: &[u8] = include_bytes!("../../../assets/media/lang/uk.lng");
+        let en_display_items = [
             MenuItem::new(
-                "Lumin. max",
+                "Backlight",
+                MenuItemType::Value(ShortString::from_str("30s")),
+            ),
+            MenuItem::new(
+                "Max Bright",
                 MenuItemType::Range {
                     val: 10,
                     min: 1,
@@ -1926,24 +2020,55 @@ mod tests {
                 },
             ),
             MenuItem::new(
-                "Підсвітка",
-                MenuItemType::Value(ShortString::from_str("10s")),
+                "Contrast",
+                MenuItemType::Range {
+                    val: 50,
+                    min: 0,
+                    max: 100,
+                    step: 5,
+                    unit: "%",
+                },
             ),
-            MenuItem::new("Інверсія", MenuItemType::Toggle(false)),
+            MenuItem::new("Invert LCD", MenuItemType::Toggle(false)),
         ];
+
+        unsafe {
+            ACTIVE_TEST_PACK = LNG_IT;
+        }
+        crate::text::set_localize_hook(Some(test_lng_hook));
+        c.clear();
         view.render(
             &mut c,
             &MenuModel {
-                title: "IT / UK",
-                items: &it_items,
-                selected_idx: 2,
+                title: "Display",
+                items: &en_display_items,
+                selected_idx: 1,
                 icons: None,
                 is_editing: false,
                 is_pressed: false,
             },
         );
-        crate::widgets::draw_negated_header(&mut c, 0, "IT · Українська");
-        dump("settings_it_uk.raw", &c);
+        crate::widgets::draw_negated_header(&mut c, 0, "Display");
+        dump("settings_it.raw", &c);
+
+        unsafe {
+            ACTIVE_TEST_PACK = LNG_UK;
+        }
+        c.clear();
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "Display",
+                items: &en_display_items,
+                selected_idx: 0,
+                icons: None,
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "Display");
+        dump("settings_uk.raw", &c);
+        crate::text::set_localize_hook(None);
 
         // 5. Dynamic Language Picker OptionSheet
         c.clear();
@@ -1967,7 +2092,7 @@ mod tests {
         let _ = tm.custom_title.push_str("Позывной");
         let _ = tm.buffer.push_str("РАДИО Б");
         tm.locale_keymap.active = true;
-        let _ = tm.locale_keymap.label.push_str("АБВ");
+        tm.locale_keymap.set_label("АБВ");
         for (i, s) in [
             " ",
             ".,?!'-",
@@ -1983,7 +2108,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let _ = tm.locale_keymap.keys[i].push_str(s);
+            tm.locale_keymap.set_key(i, s);
         }
         tm.charset = Charset::Locale;
         tm.last_key = Some(2);
@@ -2000,7 +2125,7 @@ mod tests {
         let _ = pm.custom_title.push_str("Znak / Nazwa");
         let _ = pm.buffer.push_str("Łódź");
         pm.locale_keymap.active = true;
-        let _ = pm.locale_keymap.label.push_str("PL");
+        pm.locale_keymap.set_label("PL");
         for (i, s) in [
             " ",
             ".,?!'-",
@@ -2016,7 +2141,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let _ = pm.locale_keymap.keys[i].push_str(s);
+            pm.locale_keymap.set_key(i, s);
         }
         pm.charset = Charset::Locale;
         pm.last_key = Some(8);
@@ -2070,8 +2195,138 @@ mod tests {
         crate::gui::modules::grid_menu::GridMenuView::new().render(&mut c, &gm);
         crate::widgets::draw_negated_header(&mut c, 0, "Home");
         dump("launcher_grid_ru.raw", &c);
-
         crate::text::set_localize_hook(None);
+
+        // 9. Greek Settings Root (Ελληνικά)
+        c.clear();
+        let el_items = [
+            MenuItem::new("Οθόνη", MenuItemType::Submenu),
+            MenuItem::new("Ήχος", MenuItemType::Submenu),
+            MenuItem::new(
+                "Γλώσσα",
+                MenuItemType::Value(ShortString::from_str("Ελληνικά")),
+            ),
+            MenuItem::new("Σύστημα", MenuItemType::Submenu),
+        ];
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "Ρυθμίσεις",
+                items: &el_items,
+                selected_idx: 2,
+                icons: Some(&ru_icons),
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "Ρυθμίσεις");
+        dump("settings_el.raw", &c);
+
+        // 10. Greek TextInput with automatic 3x3 Greek keypad guide
+        c.clear();
+        let mut gm_el = TextInputModel::new(16);
+        gm_el.show_header = true;
+        let _ = gm_el.custom_title.push_str("Διακριτ.");
+        let _ = gm_el.buffer.push_str("ΑΘΗΝ");
+        gm_el.locale_keymap.active = true;
+        gm_el.locale_keymap.set_label("ΑΒΓ");
+        for (i, s) in [
+            " ", ".,?!'-", "ΑΒΓ", "ΔΕΖ", "ΗΘΙ", "ΚΛΜ", "ΝΞΟ", "ΠΡΣ", "ΤΥΦ", "ΧΨΩ",
+        ]
+        .iter()
+        .enumerate()
+        {
+            gm_el.locale_keymap.set_key(i, s);
+        }
+        gm_el.charset = Charset::Locale;
+        gm_el.last_key = Some(6);
+        gm_el.press_count = 0; // Highlight 'Ν' in [Ν] Ξ Ο
+        gm_el.ticks = 5;
+        gm_el.last_activity_tick = 2;
+        TextInputView::new().render(&mut c, &gm_el);
+        dump("text_input_el_guide.raw", &c);
+
+        // 11. Dutch Settings (Nederlands)
+        c.clear();
+        let nl_items = [
+            MenuItem::new(
+                "Lichtduur",
+                MenuItemType::Value(ShortString::from_str("30s")),
+            ),
+            MenuItem::new(
+                "Helder +",
+                MenuItemType::Range {
+                    val: 8,
+                    min: 1,
+                    max: 10,
+                    step: 1,
+                    unit: "",
+                },
+            ),
+            MenuItem::new(
+                "Taal",
+                MenuItemType::Value(ShortString::from_str("Nederlands")),
+            ),
+            MenuItem::new("Negatief", MenuItemType::Toggle(true)),
+        ];
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "Instell.",
+                items: &nl_items,
+                selected_idx: 2,
+                icons: None,
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "Instell. (NL)");
+        dump("settings_nl.raw", &c);
+
+        // 12. Japanese Settings (日本語 via cjk_ja.fnt)
+        c.clear();
+        let ja_items = [
+            MenuItem::new("画面", MenuItemType::Submenu),
+            MenuItem::new("音声", MenuItemType::Submenu),
+            MenuItem::new("言語", MenuItemType::Value(ShortString::from_str("日本語"))),
+            MenuItem::new("システム", MenuItemType::Submenu),
+        ];
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "設定",
+                items: &ja_items,
+                selected_idx: 2,
+                icons: Some(&ru_icons),
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "設定 (JA)");
+        dump("settings_ja.raw", &c);
+
+        // 13. Chinese Settings (中文 via cjk_zh.fnt)
+        c.clear();
+        let zh_items = [
+            MenuItem::new("显示", MenuItemType::Submenu),
+            MenuItem::new("音频", MenuItemType::Submenu),
+            MenuItem::new("语言", MenuItemType::Value(ShortString::from_str("中文"))),
+            MenuItem::new("系统", MenuItemType::Submenu),
+        ];
+        view.render(
+            &mut c,
+            &MenuModel {
+                title: "设置",
+                items: &zh_items,
+                selected_idx: 2,
+                icons: Some(&ru_icons),
+                is_editing: false,
+                is_pressed: false,
+            },
+        );
+        crate::widgets::draw_negated_header(&mut c, 0, "设置 (ZH)");
+        dump("settings_zh.raw", &c);
+
         crate::text::set_ext_font_hooks(None, None);
     }
 }

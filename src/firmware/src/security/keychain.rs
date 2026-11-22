@@ -82,14 +82,10 @@ pub(crate) fn compute_hw_mac(
     ident: &[u8; 4],
     data: &[u8],
 ) -> [u8; 16] {
-    let mut hardware_kek = SecretBuf::<32>::new();
-    derive_passcode_kek(uid, b"HW_KEK", nonce, 100, &mut hardware_kek, None);
-    let mut key16 = SecretBuf::<16>::new();
-    key16
-        .as_mut_slice()
-        .copy_from_slice(&hardware_kek.as_slice()[0..16]);
-    let cipher = Ascon128::new(*key16.as_slice());
-    cipher.compute_mac(nonce, ident, data)
+    let mut key16 = [0u8; 16];
+    key16[..4].copy_from_slice(ident);
+    key16[4..16].copy_from_slice(uid);
+    Ascon128::new(key16).compute_mac(nonce, ident, data)
 }
 
 #[inline(never)]
@@ -117,11 +113,37 @@ fn init_device_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid:
     let _ = filesystem.write_struct(KEY_PATHS[0], &dev_key);
 }
 
-fn init_passcode_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid: &[u8; 12]) {
-    let mut passcode_key = PackedPasscodeKey::empty();
-    passcode_key.ident = *FILE_ID_PASSCODE_KEY;
-    passcode_key.max_tries = DEFAULT_MAX_TRIES;
-    passcode_key.iterations = DEFAULT_PBKDF_ITERATIONS;
+#[inline(never)]
+pub fn write_passcode_key(
+    filesystem: &mut SystemStorage,
+    trng: &mut HardwareTrng,
+    uid: &[u8; 12],
+    new_passcode: &[u8],
+    flags: u8,
+    max_tries: u8,
+    progress: Option<super::kdf::ProgressHook>,
+) -> Result<(), ()> {
+    let is_enable = !new_passcode.is_empty();
+    let seed = if is_enable {
+        new_passcode
+    } else {
+        DEFAULT_PASSCODE_SEED
+    };
+    let mut passcode_key = PackedPasscodeKey {
+        ident: *FILE_ID_PASSCODE_KEY,
+        flags: if is_enable { flags } else { 0 },
+        failed_attempts: 0,
+        passcode_len: new_passcode.len() as u8,
+        max_tries: if is_enable {
+            max_tries.clamp(3, 50)
+        } else {
+            DEFAULT_MAX_TRIES
+        },
+        iterations: DEFAULT_PBKDF_ITERATIONS,
+        salt: [0; 16],
+        passcode_verifier: [0; 32],
+        mac: [0; 16],
+    };
     trng.fill_bytes(
         &mut passcode_key.salt,
         bsp::entropy::sample_hardware_noise(),
@@ -130,11 +152,11 @@ fn init_passcode_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, ui
     let mut passcode_verifier = SecretBuf::<32>::new();
     derive_passcode_kek(
         uid,
-        DEFAULT_PASSCODE_SEED,
+        seed,
         &passcode_key.salt,
         DEFAULT_PBKDF_ITERATIONS,
         &mut passcode_verifier,
-        None,
+        progress,
     );
     passcode_key.passcode_verifier = *passcode_verifier.as_slice();
     passcode_key.mac = compute_hw_mac(
@@ -144,26 +166,45 @@ fn init_passcode_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, ui
         &passcode_key.passcode_verifier,
     );
 
-    let _ = filesystem.write_struct(KEY_PATHS[1], &passcode_key);
+    filesystem
+        .write_struct(KEY_PATHS[1], &passcode_key)
+        .map_err(|_| ())
 }
 
-fn init_storage_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid: &[u8; 12]) {
-    let mut storage_key = PackedStorageKey::empty();
-    storage_key.ident = *FILE_ID_STORAGE_KEY;
-    let s_bytes = unsafe {
-        core::slice::from_raw_parts_mut(&mut storage_key.storage_nonce as *mut _ as *mut u8, 64)
+#[inline(never)]
+pub fn write_storage_key(
+    filesystem: &mut SystemStorage,
+    trng: &mut HardwareTrng,
+    uid: &[u8; 12],
+    seed: &[u8],
+    master_key: &mut [u8; 32],
+    progress: Option<super::kdf::ProgressHook>,
+) -> Result<(), ()> {
+    if master_key.iter().all(|&b| b == 0) {
+        trng.fill_bytes(master_key, bsp::entropy::sample_hardware_noise());
+    }
+    let mut storage_key = PackedStorageKey {
+        ident: *FILE_ID_STORAGE_KEY,
+        storage_nonce: [0; 16],
+        salt: [0; 16],
+        encrypted_mk: *master_key,
     };
-    trng.fill_bytes(s_bytes, bsp::entropy::sample_hardware_noise());
+    let nonce_and_salt = unsafe {
+        core::slice::from_raw_parts_mut(&mut storage_key.storage_nonce as *mut _ as *mut u8, 32)
+    };
+    trng.fill_bytes(nonce_and_salt, bsp::entropy::sample_hardware_noise());
     xor_derived_key(
         uid,
-        DEFAULT_PASSCODE_SEED,
+        seed,
         &storage_key.salt,
         DEFAULT_PBKDF_ITERATIONS,
         &mut storage_key.encrypted_mk,
-        None,
+        progress,
     );
 
-    let _ = filesystem.write_struct(KEY_PATHS[2], &storage_key);
+    filesystem
+        .write_struct(KEY_PATHS[2], &storage_key)
+        .map_err(|_| ())
 }
 
 #[inline(never)]
@@ -192,7 +233,7 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
         core::mem::size_of::<PackedPasscodeKey>(),
     );
     if !pass_valid {
-        init_passcode_key(filesystem, &mut trng, &uid);
+        let _ = write_passcode_key(filesystem, &mut trng, &uid, &[], 0, DEFAULT_MAX_TRIES, None);
     }
 
     // 3. `/sys/storage.key`
@@ -203,7 +244,16 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
         core::mem::size_of::<PackedStorageKey>(),
     );
     if !sto_valid {
-        init_storage_key(filesystem, &mut trng, &uid);
+        let mut mk = [0u8; 32];
+        let _ = write_storage_key(
+            filesystem,
+            &mut trng,
+            &uid,
+            DEFAULT_PASSCODE_SEED,
+            &mut mk,
+            None,
+        );
+        mk.fill(0);
     }
 
     // Apply strict permissions to keys if newly created
@@ -234,7 +284,7 @@ pub fn xor_derived_key(
     }
 }
 
-#[inline(never)]
+#[inline(always)]
 pub fn derive_passcode_kek(
     mcu_uid: &[u8; 12],
     user_passcode: &[u8],
@@ -243,15 +293,7 @@ pub fn derive_passcode_kek(
     out_kek: &mut SecretBuf<32>,
     progress: Option<super::kdf::ProgressHook>,
 ) {
-    super::kdf::derive_master_key(
-        mcu_uid,
-        user_passcode,
-        salt,
-        iterations,
-        out_kek,
-        Some(bsp::Board::wdt_feed),
-        progress,
-    );
+    super::kdf::derive_master_key(mcu_uid, user_passcode, salt, iterations, out_kek, progress);
 }
 
 /// Derives a domain-separated, UID-bound 128-bit `FileSystemDriver` key from the 256-bit master key.
@@ -260,18 +302,36 @@ pub fn derive_fs_key(master_key: &[u8; 32], mcu_uid: &[u8; 12]) -> [u8; 16] {
     let mut perm = crypto::ascon::AsconPermutation::new();
     // Domain tag: "KRN_FS01"
     perm.x[0] = 0x4B52_4E5F_4653_3031;
-    for i in 0..4 {
-        let mut b = [0u8; 8];
-        b.copy_from_slice(&master_key[i * 8..(i + 1) * 8]);
-        perm.x[i + 1] = u64::from_le_bytes(b);
+    #[cfg(target_endian = "little")]
+    unsafe {
+        let p = (&raw mut perm.x[1]).cast::<u8>();
+        core::ptr::copy_nonoverlapping(master_key.as_ptr(), p, 32);
+        for (i, &b) in mcu_uid.iter().enumerate() {
+            *p.add(16 + i) ^= b;
+        }
     }
-    for (i, &b) in mcu_uid.iter().enumerate() {
-        perm.x[3 + (i >> 3)] ^= (b as u64) << ((i & 7) * 8);
+    #[cfg(not(target_endian = "little"))]
+    {
+        for i in 0..4 {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&master_key[i * 8..(i + 1) * 8]);
+            perm.x[i + 1] = u64::from_le_bytes(b);
+        }
+        for (i, &b) in mcu_uid.iter().enumerate() {
+            perm.x[3 + (i >> 3)] ^= (b as u64) << ((i & 7) * 8);
+        }
     }
     perm.permute(12);
     let mut fs_key = [0u8; 16];
-    fs_key[0..8].copy_from_slice(&perm.x[0].to_le_bytes());
-    fs_key[8..16].copy_from_slice(&perm.x[1].to_le_bytes());
+    #[cfg(target_endian = "little")]
+    unsafe {
+        core::ptr::copy_nonoverlapping(perm.x.as_ptr().cast::<u8>(), fs_key.as_mut_ptr(), 16);
+    }
+    #[cfg(not(target_endian = "little"))]
+    {
+        fs_key[0..8].copy_from_slice(&perm.x[0].to_le_bytes());
+        fs_key[8..16].copy_from_slice(&perm.x[1].to_le_bytes());
+    }
     perm.x.fill(0);
     fs_key
 }

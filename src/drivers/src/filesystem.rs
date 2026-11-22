@@ -11,7 +11,7 @@ pub use kernel::service::{
 use kernfs::{BlockDevice, FsError, KernFS};
 
 #[cfg(feature = "secure_fs")]
-use crypto::ascon::{Ascon128, AsconPermutation};
+use crypto::ascon::Ascon128;
 
 #[cfg(feature = "secure_fs")]
 const SECURE_NONCE_LEN: usize = 16;
@@ -139,41 +139,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
 
     #[cfg(feature = "secure_fs")]
     #[inline(never)]
-    fn next_write_nonce(&mut self, path: &str, data: &[u8]) -> [u8; SECURE_NONCE_LEN] {
-        self.nonce_ctr = self.nonce_ctr.wrapping_add(1);
-        let stats = self.fs.stats();
-        let mut perm = AsconPermutation::new();
-        perm.x[0] = u64::from_le_bytes([
-            self.nonce_ctr as u8,
-            (self.nonce_ctr >> 8) as u8,
-            (self.nonce_ctr >> 16) as u8,
-            (self.nonce_ctr >> 24) as u8,
-            stats.wear_cycles as u8,
-            (stats.wear_cycles >> 8) as u8,
-            stats.used_sectors as u8,
-            stats.active_files as u8,
-        ]) ^ 0x4E4F_4E43_4531_5F56;
-        let mut k0 = [0u8; 8];
-        let mut k1 = [0u8; 8];
-        k0.copy_from_slice(&self.enc_key[..8]);
-        k1.copy_from_slice(&self.enc_key[8..16]);
-        perm.x[1] = u64::from_le_bytes(k0) ^ (data.len() as u64).rotate_left(17);
-        perm.x[4] = u64::from_le_bytes(k1);
-        for (i, &b) in path.as_bytes().iter().take(16).enumerate() {
-            perm.x[2] ^= (b as u64) << ((i & 7) * 8);
-        }
-        for &b in data.iter().take(16) {
-            perm.x[3] = perm.x[3].rotate_left(7) ^ (b as u64);
-        }
-        perm.permute(12);
-        let mut nonce = [0u8; SECURE_NONCE_LEN];
-        nonce[..8].copy_from_slice(&perm.x[0].to_le_bytes());
-        nonce[8..16].copy_from_slice(&perm.x[1].to_le_bytes());
-        nonce
-    }
-
-    #[cfg(feature = "secure_fs")]
-    #[inline(never)]
     fn write_encrypted(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         if !self.session_unlocked {
             return Err(StorageError::EncryptedNoKey);
@@ -181,12 +146,18 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         if data.len() > 256 {
             return Err(StorageError::CapacityFull);
         }
+        self.nonce_ctr = self.nonce_ctr.wrapping_add(1);
+        let wear = self.fs.stats().wear_cycles;
+        let mut seed = [0u8; SECURE_NONCE_LEN];
+        seed[..4].copy_from_slice(&self.nonce_ctr.to_le_bytes());
+        seed[4..8].copy_from_slice(&wear.to_le_bytes());
+        let cipher = Ascon128::new(self.enc_key);
+        let nonce = cipher.compute_mac(&seed, path.as_bytes(), data);
         let mut tmp_buf = [0u8; 256 + SECURE_NONCE_LEN];
-        let nonce = self.next_write_nonce(path, data);
         tmp_buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
         let end = SECURE_NONCE_LEN + data.len();
         tmp_buf[SECURE_NONCE_LEN..end].copy_from_slice(data);
-        Ascon128::new(self.enc_key).apply_keystream(&nonce, &mut tmp_buf[SECURE_NONCE_LEN..end]);
+        cipher.apply_keystream(&nonce, &mut tmp_buf[SECURE_NONCE_LEN..end]);
         self.fs
             .write_file(path, &tmp_buf[..end])
             .map_err(Self::map_error)

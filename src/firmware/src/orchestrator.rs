@@ -954,8 +954,8 @@ impl Orchestrator {
     ) {
         if app_id < crate::AppRegistry::app_count() {
             if self.active_app_id < crate::AppRegistry::app_count() {
-                let is_dyn_reload = self.active_app_id == app_id
-                    && app_id >= crate::apps::AppRegistry::count();
+                let is_dyn_reload =
+                    self.active_app_id == app_id && app_id >= crate::apps::AppRegistry::count();
                 if !is_dyn_reload {
                     if self.active_app_id != app_id {
                         Self::cleanup_app_radio(self.active_app_id, false, ctx);

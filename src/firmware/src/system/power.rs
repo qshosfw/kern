@@ -52,6 +52,54 @@ fn next_stop_sleep_ticks(exit_held: bool, hold_steps: &mut u8) -> Option<u16> {
 pub static WAKE_EXTI_FLAGS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 #[inline(never)]
+fn suspend_peripherals(hw: &mut SystemHardware, turn_off_lcd: bool) {
+    hw.backlight.turn_off();
+    if turn_off_lcd {
+        hw.lcd.turn_off();
+    } else {
+        hw.lcd.enter_sleep();
+    }
+    hw.audio.disable();
+    #[cfg(feature = "target_k10pro")]
+    {
+        let mut bus = bsp::RadioBus;
+        bsp::Board::set_bk_gpio(&mut bus, bsp::pins::BK_GPIO_BT_EN, false);
+        bsp::Board::set_bk_gpio(&mut bus, bsp::pins::BK_GPIO_GPS_EN, false);
+    }
+    hw.radio.sleep();
+    hw.radio.set_status_led(bsp::StatusLed::Off);
+    bsp::pins::FLASHLIGHT.set_low();
+    #[cfg(feature = "filesystem")]
+    hw.filesystem.fs.dev.deep_power_down();
+    #[cfg(feature = "usb")]
+    hw.usb.disconnect_for_sleep();
+}
+
+#[inline(never)]
+fn resume_peripherals(hw: &mut SystemHardware) {
+    hw.radio.set_status_led(bsp::StatusLed::Off);
+    #[cfg(feature = "filesystem")]
+    hw.filesystem.fs.dev.release_power_down();
+    crate::master_config().hw_dirty = 0x1F;
+    hw.apply_dirty_configs();
+    #[cfg(feature = "uart")]
+    py32_hal::uart::clear_errors();
+    #[cfg(feature = "usb")]
+    hw.usb.init();
+}
+
+#[inline(never)]
+fn finish_wake_radio(hw: &mut SystemHardware) {
+    hw.radio.wake();
+    #[cfg(feature = "radio")]
+    {
+        use kernel::service::radio::RfChannel;
+        hw.radio
+            .configure_channel(crate::radio_state().coord.listening_channel());
+    }
+}
+
+#[inline(never)]
 pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // Hardened remote-control guard: never sever an active USB-C or RigWire remote link
     // by entering STOP mode (which disconnects USB and requires a physical button to wake).
@@ -72,22 +120,7 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     py32_hal::delay::delay_ms(100);
 
     // 2. Shut down power-hungry subsystems and enter chip standby states
-    hw.backlight.turn_off();
-    hw.lcd.enter_sleep();
-    hw.audio.disable();
-    #[cfg(feature = "target_k10pro")]
-    {
-        let mut bus = bsp::RadioBus;
-        bsp::Board::set_bk_gpio(&mut bus, bsp::pins::BK_GPIO_BT_EN, false);
-        bsp::Board::set_bk_gpio(&mut bus, bsp::pins::BK_GPIO_GPS_EN, false);
-    }
-    hw.radio.sleep();
-    hw.radio.set_status_led(bsp::StatusLed::Off);
-    bsp::pins::FLASHLIGHT.set_low();
-    #[cfg(feature = "filesystem")]
-    hw.filesystem.fs.dev.deep_power_down();
-    #[cfg(feature = "usb")]
-    hw.usb.disconnect_for_sleep();
+    suspend_peripherals(hw, false);
 
     // 3. Mark power service profile as deep sleep
     unsafe {
@@ -104,18 +137,7 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // 6. Park peripheral/matrix pins and arm LPTIM1 + EXTI15 (Exit) [+ EXTI10 UART] for true STOP mode
     run_stop_sleep_cycle();
 
-    #[cfg(feature = "filesystem")]
-    hw.filesystem.fs.dev.release_power_down();
-
-    // Restore clocks, UART baud, audio, and display hardware BEFORE bringing up USB PHY
-    // so `enable_usbd()` sees the restored 48 MHz clock and arms hardware CTC SOF-lock.
-    crate::master_config().hw_dirty = 0x1F;
-    hw.apply_dirty_configs();
-
-    #[cfg(feature = "uart")]
-    py32_hal::uart::clear_errors();
-    #[cfg(feature = "usb")]
-    hw.usb.init();
+    resume_peripherals(hw);
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     hw.wire.reset_collector();
 
@@ -134,12 +156,7 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     hw.backlight.wake();
 
     // Wake RF modem and re-apply listening VFO channel to RF hardware
-    hw.radio.wake();
-    {
-        use kernel::service::radio::RfChannel;
-        hw.radio
-            .configure_channel(crate::radio_state().coord.listening_channel());
-    }
+    finish_wake_radio(hw);
 
     // Sound unlock confirmation chime with display already active and responsive
     hw.radio
@@ -242,15 +259,7 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
     if crate::radio_state_ref().coord.is_transmitting {
         crate::radio_state().coord.stop_tx(&mut hw.radio);
     }
-    hw.backlight.turn_off();
-    hw.lcd.turn_off();
-    hw.audio.disable();
-    bsp::pins::FLASHLIGHT.set_low();
-    hw.radio.sleep();
-    #[cfg(feature = "filesystem")]
-    hw.filesystem.fs.dev.deep_power_down();
-    #[cfg(feature = "usb")]
-    hw.usb.disconnect_for_sleep();
+    suspend_peripherals(hw, true);
     py32_hal::rcc::set_sysclk_16mhz();
     hw.radio.set_status_led(bsp::StatusLed::Red);
 
@@ -278,26 +287,14 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
         cortex_m::asm::wfi();
     }
 
-    hw.radio.set_status_led(bsp::StatusLed::Off);
-    #[cfg(feature = "filesystem")]
-    hw.filesystem.fs.dev.release_power_down();
-    crate::master_config().hw_dirty = 0x1F;
-    hw.apply_dirty_configs();
-    #[cfg(feature = "usb")]
-    hw.usb.init();
+    resume_peripherals(hw);
     hw.lcd.init();
     if is_headless() {
         hw.lcd.enter_sleep();
     } else {
         hw.backlight.wake();
     }
-    hw.radio.wake();
-    #[cfg(feature = "radio")]
-    {
-        use kernel::service::radio::RfChannel;
-        hw.radio
-            .configure_channel(crate::radio_state().coord.listening_channel());
-    }
+    finish_wake_radio(hw);
 }
 
 #[inline(never)]

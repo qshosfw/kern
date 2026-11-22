@@ -320,18 +320,6 @@ impl TextInputView {
         model.press_count = 0;
     }
 
-    #[cfg(feature = "passcode")]
-    fn draw_dot(canvas: &mut Canvas, xu: u8, yu: u8, filled: bool) {
-        canvas.draw_horizontal_line(xu + 1, yu, 4, Color::Fill);
-        canvas.draw_horizontal_line(xu + 1, yu + 5, 4, Color::Fill);
-        if filled {
-            canvas.fill_rect(xu, yu + 1, 6, 4, Color::Fill);
-        } else {
-            canvas.draw_vertical_line(xu, yu + 1, 4, Color::Fill);
-            canvas.draw_vertical_line(xu + 5, yu + 1, 4, Color::Fill);
-        }
-    }
-
     #[inline(never)]
     fn draw_t9_grid(canvas: &mut Canvas, model: &TextInputModel, is_cycling: bool) {
         let mut x = 2i16;
@@ -432,6 +420,7 @@ impl TextInputView {
     }
 
     #[cfg(feature = "passcode")]
+    #[inline(never)]
     fn draw_passcode_dots(canvas: &mut Canvas, model: &TextInputModel, cy: i16, is_cycling: bool) {
         let entered_len = model.buffer.len();
         let total_slots = if model.expose_len {
@@ -444,31 +433,21 @@ impl TextInputView {
             if (model.ticks & 8) != 0 {
                 canvas.draw_vertical_line(64, cy as u8, 8, Color::Fill);
             }
-        } else {
-            let spacing = if total_slots > 8 { 9i16 } else { 12i16 };
-            let total_w = if total_slots > 1 {
-                (total_slots as i16 - 1) * spacing + 6
-            } else {
-                6
-            };
-            let start_x = (128i16 - total_w) / 2;
-            let yu = cy as u8;
+            return;
+        }
+        let spacing = if total_slots > 8 { 9i16 } else { 12i16 };
+        let start_x = 61 - ((total_slots as i16 - 1) * spacing) / 2;
+        let yu = cy as u8;
 
-            for i in 0..total_slots {
-                let cx = start_x + (i as i16) * spacing;
-                if i + 1 == entered_len && is_cycling {
-                    let last_char = &model.buffer[entered_len - 1..];
-                    let w = text::str_width(last_char, &MUMATRIX);
-                    text::draw_str(
-                        canvas,
-                        cx + 3 - w / 2,
-                        cy + 6,
-                        last_char,
-                        &MUMATRIX,
-                        Color::Fill,
-                    );
-                } else {
-                    Self::draw_dot(canvas, cx as u8, yu, i < entered_len);
+        for i in 0..total_slots {
+            let cx = start_x + (i as i16) * spacing;
+            if i + 1 == entered_len && is_cycling {
+                let last_char = &model.buffer[entered_len - 1..];
+                text::draw_str(canvas, cx + 1, cy + 6, last_char, &MUMATRIX, Color::Fill);
+            } else {
+                widgets::draw_rounded_box(canvas, cx as u8, yu, 6, 6);
+                if i < entered_len {
+                    canvas.fill_rect((cx + 1) as u8, yu + 1, 4, 4, Color::Fill);
                 }
             }
         }
@@ -718,13 +697,14 @@ impl View<TextInputModel> for TextInputView {
                         if model.press_count >= chars_count {
                             model.press_count = 0;
                         }
-                        if let Some(s) = utf8_nth_slice(model.key_chars(key_num), model.press_count) {
+                        if let Some(s) = utf8_nth_slice(model.key_chars(key_num), model.press_count)
+                        {
                             let n = s.len().min(4);
                             glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
                             pop_utf8_char(&mut model.buffer);
-                            let _ = model.buffer.push_str(unsafe {
-                                core::str::from_utf8_unchecked(&glyph[..n])
-                            });
+                            let _ = model
+                                .buffer
+                                .push_str(unsafe { core::str::from_utf8_unchecked(&glyph[..n]) });
                         }
                     } else if let Some(s) = utf8_nth_slice(model.key_chars(key_num), 0) {
                         // First tap on a new key
@@ -732,9 +712,9 @@ impl View<TextInputModel> for TextInputView {
                         glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
                         TextInputView::confirm_current_char(model);
                         if model.buffer.len() + n <= model.max_len {
-                            let _ = model.buffer.push_str(unsafe {
-                                core::str::from_utf8_unchecked(&glyph[..n])
-                            });
+                            let _ = model
+                                .buffer
+                                .push_str(unsafe { core::str::from_utf8_unchecked(&glyph[..n]) });
                         }
                         model.last_key = Some(key_num);
                         model.press_count = 0;
@@ -792,7 +772,8 @@ impl View<TextInputModel> for TextInputView {
 #[inline(never)]
 fn confirm_and_push(model: &mut TextInputModel, ch: u8) {
     TextInputView::confirm_current_char(model);
-    if utf8_char_count(&model.buffer) < model.max_len && model.buffer.len() < model.buffer.capacity()
+    if utf8_char_count(&model.buffer) < model.max_len
+        && model.buffer.len() < model.buffer.capacity()
     {
         let buf = [ch];
         let _ = model

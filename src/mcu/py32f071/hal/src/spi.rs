@@ -61,7 +61,11 @@ pub fn init_spi2() {
     miso.configure_af(9, pac::gpio::SPEED_MEDIUM);
 
     // BR=/2 = 24MHz (or /4 = 18MHz when PCLK > 48MHz)
-    let br = if rcc::sysclk_hz() > 48_000_000 { 0b001 } else { 0b000 };
+    let br = if rcc::sysclk_hz() > 48_000_000 {
+        0b001
+    } else {
+        0b000
+    };
     set_spi_br(SPI2, br);
 }
 

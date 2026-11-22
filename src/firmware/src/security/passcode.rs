@@ -10,7 +10,7 @@ pub use state::*;
 
 use super::constants::*;
 pub use super::kdf::ProgressHook;
-use super::keychain::{PackedPasscodeKey, PackedStorageKey, derive_passcode_kek};
+use super::keychain::{PackedPasscodeKey, PackedStorageKey};
 use crate::services::SystemStorage;
 use crypto::buffer::SecretBuf;
 use crypto::trng::HardwareTrng;
@@ -52,26 +52,11 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
         state.lock();
     } else {
         let uid = bsp::uid::read_mcu_uid();
-        let mut key = PackedPasscodeKey::empty();
-        let stored_it = if read_passcode_key(
-            filesystem,
-            &mut key,
-            core::mem::size_of::<PackedPasscodeKey>(),
-        )
-        .is_ok()
-            && key.iterations != 0
-            && key.iterations != 0xFFFF_FFFF
-        {
-            key.iterations
-        } else {
-            DEFAULT_PBKDF_ITERATIONS
-        };
-
         if unwrap_master_key(
             filesystem,
             &uid,
             DEFAULT_PASSCODE_SEED,
-            stored_it,
+            DEFAULT_PBKDF_ITERATIONS,
             state,
             None,
         ) {
@@ -79,16 +64,6 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
         }
     }
     let _ = super::sync_filesystem_security(filesystem, state);
-}
-
-fn progress_phase1(ctx: *mut (), pct: u8) {
-    let hook = unsafe { *(ctx as *const ProgressHook) };
-    hook.report(pct >> 1);
-}
-
-fn progress_phase2(ctx: *mut (), pct: u8) {
-    let hook = unsafe { *(ctx as *const ProgressHook) };
-    hook.report(50 + (pct >> 1));
 }
 
 /// Verifies user passcode against `/sys/passcode.key` with optional progress reporting.
@@ -123,24 +98,13 @@ pub fn verify_passcode(
     let uid_current = bsp::uid::read_mcu_uid();
     let mut computed = SecretBuf::<32>::new();
 
-    let hook_copy = progress;
-    let (p_cb1, p_cb2) = if let Some(ref h) = hook_copy {
-        let ptr = h as *const ProgressHook as *mut ();
-        (
-            Some(ProgressHook::new(ptr, progress_phase1)),
-            Some(ProgressHook::new(ptr, progress_phase2)),
-        )
-    } else {
-        (None, None)
-    };
-
     super::keychain::derive_passcode_kek(
         &uid_current,
         passcode,
         &key.salt,
         it,
         &mut computed,
-        p_cb1,
+        progress,
     );
 
     // Constant-time verifier comparison
@@ -151,7 +115,7 @@ pub fn verify_passcode(
 
     let success = diff == 0;
     if success {
-        unwrap_master_key(filesystem, &uid_current, passcode, it, state, p_cb2);
+        unwrap_master_key(filesystem, &uid_current, passcode, it, state, progress);
         key.failed_attempts = 0;
         state.unlock();
     } else {
@@ -196,104 +160,43 @@ pub fn set_passcode(
     }
 
     let uid = bsp::uid::read_mcu_uid();
-    let hw_noise = bsp::entropy::sample_hardware_noise();
     let mut trng = HardwareTrng::new();
-    trng.init_with_uid(&uid, hw_noise);
+    trng.init_with_uid(&uid, bsp::entropy::sample_hardware_noise());
 
-    if state.master_key.as_slice().iter().all(|&b| b == 0) {
-        trng.fill_bytes(
-            state.master_key.as_mut_slice(),
-            bsp::entropy::sample_hardware_noise(),
-        );
-    }
-
-    let mut passcode_salt = [0u8; 16];
-    let mut storage_salt = [0u8; 16];
-    let mut storage_nonce = [0u8; 16];
-    trng.fill_bytes(&mut passcode_salt, bsp::entropy::sample_hardware_noise());
-    trng.fill_bytes(&mut storage_salt, bsp::entropy::sample_hardware_noise());
-    trng.fill_bytes(&mut storage_nonce, bsp::entropy::sample_hardware_noise());
-
-    if let Some(ref hook) = progress {
-        hook.report(15);
-    }
-
-    let mut passcode_verifier = SecretBuf::<32>::new();
-    derive_passcode_kek(
-        &uid,
-        seed,
-        &passcode_salt,
-        DEFAULT_PBKDF_ITERATIONS,
-        &mut passcode_verifier,
-        progress,
-    );
-
-    let mac = if is_enable {
-        super::keychain::compute_hw_mac(
-            &uid,
-            &passcode_salt,
-            FILE_ID_PASSCODE_KEY,
-            passcode_verifier.as_slice(),
-        )
-    } else {
-        [0; 16]
-    };
-
-    let flags = if is_enable {
-        PASSCODE_FLAG_ENABLED
-            | PASSCODE_FLAG_LOCK_BOOT
-            | (if expose_len {
-                PASSCODE_FLAG_EXPOSE_LEN
-            } else {
-                0
-            })
-            | (if stealth { PASSCODE_FLAG_STEALTH } else { 0 })
-            | (if digits_only {
-                PASSCODE_FLAG_DIGITS_ONLY
-            } else {
-                0
-            })
-    } else {
-        0
-    };
-
-    let passcode_key = PackedPasscodeKey {
-        ident: *FILE_ID_PASSCODE_KEY,
-        flags,
-        failed_attempts: 0,
-        passcode_len: if is_enable {
-            new_passcode.len() as u8
+    let flags = PASSCODE_FLAG_ENABLED
+        | PASSCODE_FLAG_LOCK_BOOT
+        | (if expose_len {
+            PASSCODE_FLAG_EXPOSE_LEN
         } else {
             0
-        },
-        max_tries: if is_enable {
-            max_tries.clamp(3, 50)
+        })
+        | (if stealth { PASSCODE_FLAG_STEALTH } else { 0 })
+        | (if digits_only {
+            PASSCODE_FLAG_DIGITS_ONLY
         } else {
-            DEFAULT_MAX_TRIES
-        },
-        iterations: DEFAULT_PBKDF_ITERATIONS,
-        salt: passcode_salt,
-        passcode_verifier: *passcode_verifier.as_slice(),
-        mac,
-    };
-    filesystem
-        .write_struct(PATH_PASSCODE_KEY, &passcode_key)
-        .map_err(|_| PasscodeError::StorageError)?;
+            0
+        });
 
-    if let Some(ref hook) = progress {
-        hook.report(60);
-    }
-
-    write_wrapped_storage_key(
+    super::keychain::write_passcode_key(
         filesystem,
-        state,
+        &mut trng,
+        &uid,
+        new_passcode,
+        flags,
+        max_tries,
+        progress,
+    )
+    .map_err(|_| PasscodeError::StorageError)?;
+
+    super::keychain::write_storage_key(
+        filesystem,
+        &mut trng,
         &uid,
         seed,
-        &storage_salt,
-        &storage_nonce,
-        DEFAULT_PBKDF_ITERATIONS,
+        state.master_key.as_mut_slice(),
         progress,
-    )?;
+    )
+    .map_err(|_| PasscodeError::StorageError)?;
 
     if let Some(ref hook) = progress {
         hook.report(100);
