@@ -1,0 +1,123 @@
+# Kern OS Localization Catalog — Dutch (NL)
+# Natural, concise handheld-radio Dutch (PA/PB/PD/PE community) matching English widths.
+
+[meta]
+code = "nl"
+name = "Nederlands"
+ascii = "Dutch (NL)"
+font_hint = 1 # tiny5 (full Dutch diacritics: ëïéèêóöüáàç)
+
+[strings]
+"Settings" = { full = "Instell.", short = "Instell." }
+"Display" = "Scherm"
+"Audio" = "Geluid"
+"Buttons" = "Knoppen"
+"Battery" = "Accu"
+"Device" = "Toestel"
+"Apps" = "Apps"
+"Security" = "Slot"
+"Language" = "Taal"
+"System" = "Systeem"
+"English" = "Engels"
+
+"Backlight" = { full = "Lichtduur", short = "Licht" }
+"Backlight Time" = { full = "Lichtduur", short = "Licht" }
+"Max Bright" = { full = "Helder +", short = "Held. +" }
+"Max Brightness" = { full = "Helder +", short = "Held. +" }
+"Min Bright" = { full = "Helder -", short = "Held. -" }
+"Min Brightness" = { full = "Helder -", short = "Held. -" }
+"Contrast" = "Contrast"
+"Invert LCD" = { full = "Negatief", short = "Negat." }
+"Invert Pixels" = { full = "Negatief", short = "Negat." }
+"Animations" = "Animatie"
+"Shading" = "Grijstint"
+
+"AF Gain" = "Volume"
+"AF Volume" = "Volume"
+"Beep Vol" = "Piepvol."
+"Beep Gain" = "Piepvol."
+"Key Beep" = "Toetspiep"
+"Mic Gain" = "Microfoon"
+"Roger Beep" = "Roger-piep"
+"Audio EQ" = "RX-profiel"
+"Boot Chime" = "Starttoon"
+"Boot Jingle" = "Starttoon"
+"RX Profile" = "RX-profiel"
+
+"Shortcuts" = "Sneltoets"
+"Tweaks" = "Fijnreg."
+"Nav Layout" = "Navigatie"
+"Auto Lock" = { full = "Autoslot", short = "Slot" }
+"F Timeout" = "F-tijd"
+"Fast Scroll" = "Snelscroll"
+"Hold Delay" = "Houdtijd"
+"Repeat Rate" = "Herhaal"
+"PTT Mode" = "PTT-modus"
+"F Drawer" = "F-menu"
+
+"Cell Type" = "Accutype"
+"Bar Format" = "Weergave"
+"Power Mode" = "Vermogen"
+"Auto Off" = "Auto-uit"
+"Chg Detect" = "Laaddet."
+
+"Clock" = "CPU-klok"
+"CPU Clock" = "CPU-klok"
+"UART Baud" = "UART-snel."
+"Info" = "Info"
+"Hardware Info" = "HW-info"
+"Storage" = "Opslag"
+"Calibration" = { full = "Kalibratie", short = "Kalib." }
+"Debug" = "Debug"
+"Modules" = "Modules"
+"Installed" = "Geïnstall."
+"Home Style" = "Menustijl"
+"Numbers" = "Nummers"
+"Labels" = "Labels"
+"Startup" = "Start-app"
+"Pager" = "Pager"
+"Reset Settings" = { full = "Reset inst.", short = "Reset" }
+"Reset All" = { full = "Reset inst.", short = "Reset" }
+"Restart" = "Herstart"
+
+"Used" = "Gebruikt"
+"Free" = "Vrij"
+"Files" = "Bestanden"
+"Format Storage" = { full = "Formatt.", short = "Format" }
+"Erase All Data" = { full = "Wis alles", short = "Wissen" }
+
+"Model" = "Model"
+"Owner" = "Roepnaam"
+"Tag" = "Label"
+"Radio ID" = "Radio-ID"
+"Boot Splash" = "Startscherm"
+
+"OK" = "OK"
+"Cancel" = { full = "Annuleer", short = "Annul." }
+"Save" = "Bewaar"
+"Back" = "Terug"
+"Hold" = "Houd vast"
+"Off" = "Uit"
+"On" = "Aan"
+"None" = "Geen"
+
+"Home" = "Start"
+"Radio" = "Radio"
+"Torch" = "Lamp"
+"About" = "Over"
+"Enter" = "OK"
+"Del" = "Wis"
+"Case" = "Type"
+
+[keymap]
+label = "NL"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "éèêëÉ"
+"3" = "ïîíÏ"
+"4" = "óöôòÓ"
+"5" = "üúûùÜ"
+"6" = "áàäâÁ"
+"7" = "çñÇ"
+"8" = "€°/:"
+"9" = "+-_@#"

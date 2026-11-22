@@ -1,0 +1,123 @@
+# Kern OS Localization Catalog — Greek (EL)
+# Natural, concise handheld-radio Greek (SV/SW/SX/SY community) matching English widths.
+
+[meta]
+code = "el"
+name = "Ελληνικά"
+ascii = "Greek (EL)"
+font_hint = 1 # tiny5 (full Greek alphabet + tonos: Α-Ω α-ω άέήίόύώ)
+
+[strings]
+"Settings" = { full = "Ρυθμίσεις", short = "Ρυθμ." }
+"Display" = "Οθόνη"
+"Audio" = "Ήχος"
+"Buttons" = "Πλήκτρα"
+"Battery" = "Μπαταρία"
+"Device" = "Συσκευή"
+"Apps" = "Εφαρμ."
+"Security" = "Κλείδωμα"
+"Language" = "Γλώσσα"
+"System" = "Σύστημα"
+"English" = "Αγγλικά"
+
+"Backlight" = { full = "Φωτισμός", short = "Φως" }
+"Backlight Time" = { full = "Χρ. φωτός", short = "Φως" }
+"Max Bright" = { full = "Φωτειν. +", short = "Φωτ. +" }
+"Max Brightness" = { full = "Φωτειν. +", short = "Φωτ. +" }
+"Min Bright" = { full = "Φωτειν. -", short = "Φωτ. -" }
+"Min Brightness" = { full = "Φωτειν. -", short = "Φωτ. -" }
+"Contrast" = "Αντίθεση"
+"Invert LCD" = { full = "Αρνητικό", short = "Αρνητ." }
+"Invert Pixels" = { full = "Αρνητικό", short = "Αρνητ." }
+"Animations" = "Κίνηση"
+"Shading" = "Σκίαση"
+
+"AF Gain" = "Ένταση"
+"AF Volume" = "Ένταση"
+"Beep Vol" = "Έντ. ήχου"
+"Beep Gain" = "Έντ. ήχου"
+"Key Beep" = "Ήχος πλήκ."
+"Mic Gain" = "Μικρόφωνο"
+"Roger Beep" = "Roger Beep"
+"Audio EQ" = "Προφίλ RX"
+"Boot Chime" = "Ήχος εκκ."
+"Boot Jingle" = "Ήχος εκκ."
+"RX Profile" = "Προφίλ RX"
+
+"Shortcuts" = "Συντομ."
+"Tweaks" = "Ρυθμίσ."
+"Nav Layout" = "Πλοήγηση"
+"Auto Lock" = { full = "Αυτ. κλείδ.", short = "Κλείδ." }
+"F Timeout" = "Χρόνος F"
+"Fast Scroll" = "Γρήγ. κύλ."
+"Hold Delay" = "Παρατετ."
+"Repeat Rate" = "Επανάληψη"
+"PTT Mode" = "Λειτ. PTT"
+"F Drawer" = "Μενού F"
+
+"Cell Type" = "Τύπος μπ."
+"Bar Format" = "Ένδειξη"
+"Power Mode" = "Ισχύς"
+"Auto Off" = "Αυτ. απεν."
+"Chg Detect" = "Φόρτιση"
+
+"Clock" = "Ρολόι CPU"
+"CPU Clock" = "Ρολόι CPU"
+"UART Baud" = "Ταχ. UART"
+"Info" = "Πληροφ."
+"Hardware Info" = "Πληρ. HW"
+"Storage" = "Μνήμη"
+"Calibration" = { full = "Βαθμονόμ.", short = "Βαθμ." }
+"Debug" = "Debug"
+"Modules" = "Μονάδες"
+"Installed" = "Εγκατ."
+"Home Style" = "Στυλ μεν."
+"Numbers" = "Αριθμοί"
+"Labels" = "Ετικέτες"
+"Startup" = "Εκκίνηση"
+"Pager" = "Pager"
+"Reset Settings" = { full = "Επαναφορά", short = "Reset" }
+"Reset All" = { full = "Επαναφορά", short = "Reset" }
+"Restart" = "Επανεκκ."
+
+"Used" = "Χρήση"
+"Free" = "Ελεύθ."
+"Files" = "Αρχεία"
+"Format Storage" = { full = "Διαμόρφ.", short = "Format" }
+"Erase All Data" = { full = "Διαγρ. όλ.", short = "Διαγρ." }
+
+"Model" = "Μοντέλο"
+"Owner" = "Διακριτ."
+"Tag" = "Ετικέτα"
+"Radio ID" = "ID ασυρμ."
+"Boot Splash" = "Εικόνα"
+
+"OK" = "OK"
+"Cancel" = { full = "Ακύρωση", short = "Ακύρ." }
+"Save" = "Αποθ."
+"Back" = "Πίσω"
+"Hold" = "Κράτα"
+"Off" = "Όχι"
+"On" = "Ναι"
+"None" = "Κανένα"
+
+"Home" = "Αρχική"
+"Radio" = "Ασύρμ."
+"Torch" = "Φακός"
+"About" = "Πληρ."
+"Enter" = "OK"
+"Del" = "Διαγρ"
+"Case" = "Α/α"
+
+[keymap]
+label = "ΑΒΓ"
+"0" = " "
+"1" = ".,?!'-"
+"2" = "ΑΒΓ"
+"3" = "ΔΕΖ"
+"4" = "ΗΘΙ"
+"5" = "ΚΛΜ"
+"6" = "ΝΞΟ"
+"7" = "ΠΡΣ"
+"8" = "ΤΥΦ"
+"9" = "ΧΨΩ"
