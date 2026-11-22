@@ -80,8 +80,8 @@ static void draw_toast_overlay(const KrxApiTable* api) {
 static void draw_footer(const KrxApiTable* api, u8 has_pages) {
     krx_ui_draw_key_badge(api, 3, 55, (const u8*)"M", 1u, (const u8*)"Boot", 4u);
     if (has_pages) {
-        krx_ui_draw_key_badge(api, 45, 55, (const u8*)"v", 1u, (const u8*)"Next", 4u);
-        krx_ui_draw_key_badge(api, 87, 55, (const u8*)"S1", 2u, (const u8*)"Dump", 4u);
+        krx_ui_draw_key_badge(api, 46, 55, (const u8*)"v", 1u, (const u8*)"Next", 4u);
+        krx_ui_draw_key_badge(api, 88, 55, (const u8*)"S1", 2u, (const u8*)"Dump", 4u);
     }
 }
 
@@ -90,7 +90,7 @@ static void render_current(const KrxApiTable* api) {
         krx_leaf_call(api, LEAF_SAFE_MENU, (u32)&g_st);
     } else if (!g_st.has_slot) {
         krx_clear(api);
-        krx_ui_draw_tag_badge(api, 2, 1, (const u8*)"NO FAULT", 8u, 1u);
+        p_draw_sq_tab(api, "NO FAULT");
         krx_draw_str_align(api, 64, 33, (const u8*)"System clean", 12u, FONT_TOMTHUMB, COLOR_FILL, ALIGN_CENTER);
         draw_footer(api, 0u);
     } else {
@@ -98,6 +98,10 @@ static void render_current(const KrxApiTable* api) {
             krx_leaf_call(api, LEAF_PAGE_MAIN, (u32)&g_st);
             krx_leaf_call(api, LEAF_PAGE_INFO, (u32)&g_st);
         } else if (g_st.page == PAGE_REGS || g_st.page == PAGE_EXT) {
+            krx_clear(api);
+            p_draw_sq_tab(api, g_st.page == PAGE_EXT ? "EXT REGS" : "REGS");
+            char pg[4] = { (char)('1' + g_st.page), '/', (char)('0' + PAGE_COUNT), 0 };
+            krx_draw_str_align(api, 125, 7, (const u8*)pg, 3u, FONT_TOMTHUMB, COLOR_FILL, ALIGN_RIGHT);
             krx_leaf_call(api, LEAF_PAGE_REGS, (u32)&g_st);
         } else if (g_st.page == PAGE_STACK) {
             krx_leaf_call(api, LEAF_PAGE_STACK, (u32)&g_st);

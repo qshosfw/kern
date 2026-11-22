@@ -1,8 +1,5 @@
 /*
- * P0 Leaf 4: Page 1 Inverted Fault Tab, Actor, Countdown & Normal Sad Radio (<= 1 KB).
- *
- * - y=1..9:   Inverted rounded tag tab (e.g. [HARDFAULT]) + actor + 10s / 1/5 at y=7
- * - y=12..38: Static 24x27 normal sad radio at x=2 (no animation, no sparks)
+ * P0 Leaf 4: Page 1 Square Inverted Fault Tab, Deduplicated Actor, Countdown & Sad Radio (<= 1 KB).
  */
 #include "panic_shared.h"
 
@@ -23,6 +20,16 @@ static const u8 FACE_PTS[17][2] = {
     {10,27}, {16,27}, {9,28}, {17,28},
 };
 
+static u8 eq_ci(const char* a, const char* b) {
+    while (*a && *b) {
+        u8 ca = (u8)*a++, cb = (u8)*b++;
+        if (ca >= 'a' && ca <= 'z') ca = (u8)(ca - 32u);
+        if (cb >= 'a' && cb <= 'z') cb = (u8)(cb - 32u);
+        if (ca != cb) return 0u;
+    }
+    return (*a == 0 && *b == 0) ? 1u : 0u;
+}
+
 __attribute__((visibility("default"), section(".text.entry")))
 u32 leaf4_entry(u32 op, const KrxApiTable* api, void* param) {
     (void)op;
@@ -34,13 +41,12 @@ u32 leaf4_entry(u32 op, const KrxApiTable* api, void* param) {
     krx_clear(api);
 
     const char* title = p_reason_name(s->reset_reason);
-    u8 tlen = p_len(title);
-    krx_ui_draw_tag_badge(api, 2, 1, (const u8*)title, tlen, 1u);
+    i16 tab_r = p_draw_sq_tab(api, title);
 
-    if (st->ana.actor[0] != 0) {
-        i16 ax = (i16)(11 + krx_str_width(api, (const u8*)title, tlen, FONT_TOMTHUMB));
-        if (ax < 104) {
-            krx_draw_str_max(api, ax, 7, (const u8*)st->ana.actor, p_len(st->ana.actor), FONT_TOMTHUMB, COLOR_FILL, (i16)(106 - ax));
+    if (st->ana.actor[0] != 0 && !eq_ci(st->ana.actor, title)) {
+        i16 ax = (i16)(tab_r + 4);
+        if (ax < 100) {
+            krx_draw_str_max(api, ax, 7, (const u8*)st->ana.actor, p_len(st->ana.actor), FONT_TOMTHUMB, COLOR_FILL, (i16)(104 - ax));
         }
     }
 

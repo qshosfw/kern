@@ -229,6 +229,15 @@ static inline u8 p_is_safe_flash_hw(u32 addr) {
     return ((addr & 1u) == 0u && addr >= 0x08000000u && addr <= 0x0801FFF8u) ? 1u : 0u;
 }
 
+static inline i16 p_draw_sq_tab(const KrxApiTable* api, const char* title) {
+    u8 len = p_len(title);
+    i16 tw = krx_str_width(api, (const u8*)title, len, FONT_TOMTHUMB);
+    i16 w = (i16)(tw + 8);
+    krx_fill_rect(api, 2, 1, w, 9, COLOR_FILL);
+    krx_draw_str_ex(api, 6, 7, (const u8*)title, len, FONT_TOMTHUMB, COLOR_CLEAR);
+    return (i16)(2 + w);
+}
+
 static inline const char* p_reason_name(u32 rr) {
     if (rr == REASON_HARD) return "HARDFAULT";
     if (rr == REASON_APPF) return "PANIC";

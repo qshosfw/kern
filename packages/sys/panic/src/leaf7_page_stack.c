@@ -21,7 +21,7 @@ u32 leaf7_entry(u32 op, const KrxApiTable* api, void* param) {
     const BootSlot* s = &st->slot;
 
     krx_clear(api);
-    krx_ui_draw_tag_badge(api, 2, 1, (const u8*)"STACK", 5u, 1u);
+    i16 tab_r = p_draw_sq_tab(api, "STACK");
 
     char hdr[16];
     u8 hp = 0u;
@@ -33,7 +33,7 @@ u32 leaf7_entry(u32 op, const KrxApiTable* api, void* param) {
     } else {
         hp = p_app_s(hdr, 0u, "SP:OOB!");
     }
-    krx_draw_str_ex(api, 33, 7, (const u8*)hdr, hp, FONT_TOMTHUMB, COLOR_FILL);
+    krx_draw_str_ex(api, (i16)(tab_r + 5), 7, (const u8*)hdr, hp, FONT_TOMTHUMB, COLOR_FILL);
 
     char pg[4] = { (char)('1' + PAGE_STACK), '/', (char)('0' + PAGE_COUNT), 0 };
     krx_draw_str_align(api, 125, 7, (const u8*)pg, 3u, FONT_TOMTHUMB, COLOR_FILL, ALIGN_RIGHT);

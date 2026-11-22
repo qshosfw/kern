@@ -24,7 +24,7 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
         ln[p++] = ' ';
         p += p_copy_cstr(ln + p, st->ana.line2, 16u);
     }
-    krx_draw_str_max(api, 29, 16, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 96);
+    krx_draw_str_max(api, 30, 17, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 95);
 
     if (st->ana.asm_txt[2][0] != 0) {
         p = p_app_s(ln, 0u, "> ");
@@ -33,7 +33,7 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
         p = p_app_s(ln, 0u, "Sig 0x");
         p += p_put_hex(ln + p, st->ana.crash_sig, 8u);
     }
-    krx_draw_str_max(api, 29, 24, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 96);
+    krx_draw_str_max(api, 30, 25, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 95);
 
     static const char LBLS[] = "PC\0LR\0SP\0R0\0XP\0OP";
     u32 vals[6] = {
@@ -41,7 +41,7 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
         s->xpsr, st->ana.op_valid[2] ? st->ana.opcodes[2] : 0u
     };
     for (u8 r = 0u; r < 3u; r++) {
-        i16 y = (i16)(33 + r * 8);
+        i16 y = (i16)(34 + r * 8);
         for (u8 c = 0u; c < 2u; c++) {
             u8 idx = (u8)(r * 2u + c);
             const char* lb = p_nth(LBLS, idx);
@@ -53,7 +53,7 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
             } else {
                 q += p_put_hex(ln + 3, vals[idx], 8u);
             }
-            krx_draw_str_ex(api, (i16)(29 + c * 49), y, (const u8*)ln, q, FONT_TOMTHUMB, COLOR_FILL);
+            krx_draw_str_ex(api, (i16)(30 + c * 50), y, (const u8*)ln, q, FONT_TOMTHUMB, COLOR_FILL);
         }
     }
 
@@ -65,11 +65,11 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
     }
     ln[p++] = ' ';
     ln[p++] = (s->forensics.exec_mode & 1u) ? 'P' : 'M';
-    krx_draw_str_ex(api, 2, 44, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
+    krx_draw_str_ex(api, 2, 45, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
 
     p = p_app_s(ln, 0u, "S:");
     p += p_put_hex(ln + p, st->ana.crash_sig >> 16, 4u);
-    krx_draw_str_ex(api, 2, 51, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
+    krx_draw_str_ex(api, 2, 52, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
 
     ctx->continuation.kind = KRX_LEAF_KIND_DONE;
     return 0u;

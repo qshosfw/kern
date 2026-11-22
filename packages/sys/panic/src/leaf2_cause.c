@@ -22,7 +22,7 @@ u32 leaf2_entry(u32 op, const KrxApiTable* api, void* param) {
     FaultAnalysis* a = &st->ana;
 
     u16 inst = a->opcodes[2];
-    const char* l1 = "HardFault";
+    const char* l1 = "CPU fault";
     const char* l2k = "@";
     u32 l2v = s->fault_pc;
 

@@ -21,7 +21,8 @@ u32 leaf9_entry(u32 op, const KrxApiTable* api, void* param) {
     if (strikes == 0u) strikes = (u8)((st->snap.backup_tag >> 16) & 0xFFu);
     u8 p = p_app_s(ln, 0u, "SAFE MODE #");
     p += p_put_uint(api, ln + p, strikes);
-    krx_ui_draw_tag_badge(api, 2, 1, (const u8*)ln, p, 1u);
+    ln[p] = 0;
+    p_draw_sq_tab(api, ln);
 
     p = p_app_s(ln, 0u, "PC:");
     p += p_put_hex(ln + p, s->fault_pc, 8u);
