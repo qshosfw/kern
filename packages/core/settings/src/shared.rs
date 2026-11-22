@@ -1,6 +1,6 @@
 //! Shared `#[repr(C)]` State & Leaf Dispatch Contract for `settings.krx` (`P0` Paged).
 
-use kern_sdk::{KrxApiTable, KrxDirEntry};
+use kern_sdk::KrxApiTable;
 
 pub const LEAF_APP_LOAD: u8 = 1;
 pub const LEAF_APP_HDR: u8 = 2;
@@ -123,7 +123,7 @@ pub struct SharedState {
     pub jingle_name: [u8; 12],
     pub lang_name: [u8; 12],
 
-    pub sheet_buf: [u8; 224],
+    pub sheet_buf: [u8; 128],
     pub sheet_len: u16,
     pub sheet_title: [u8; 16],
     pub sheet_title_len: u8,
@@ -161,7 +161,7 @@ impl SharedState {
             roger_name: [0; 12],
             jingle_name: [0; 12],
             lang_name: [0; 12],
-            sheet_buf: [0; 224],
+            sheet_buf: [0; 128],
             sheet_len: 0,
             sheet_title: [0; 16],
             sheet_title_len: 0,

@@ -40,9 +40,6 @@ use shared::{
 };
 use ui::KineticScroll;
 
-const REPEAT_DELAY_TICKS: u8 = 7;
-const REPEAT_RATE_TICKS: u8 = 2;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum View {
@@ -68,7 +65,8 @@ struct SettingsState {
     editing: bool,
     dirty: bool,
     held_key: u8,
-    repeat_cd: u8,
+    repeat_steps: u8,
+    repeat_ms: u16,
     tick_ctr: u8,
     scroller: KineticScroll,
     sh: SharedState,
@@ -87,10 +85,28 @@ impl SettingsState {
             editing: false,
             dirty: false,
             held_key: 0xFF,
-            repeat_cd: 0,
+            repeat_steps: 0,
+            repeat_ms: 0,
             tick_ctr: 0,
             scroller: KineticScroll::new(),
             sh: SharedState::new(),
+        }
+    }
+
+    #[inline(never)]
+    fn hold_delay_ms(api: &KrxApiTable) -> u16 {
+        let shift = (api.prop_get(prop::HOLD_DELAY) & 3) * 8;
+        (((0x4B32_2319u32 >> shift) & 0xFF) as u16) * 10
+    }
+
+    #[inline(never)]
+    fn next_repeat_ms(&self, api: &KrxApiTable) -> u16 {
+        let shift = (api.prop_get(prop::REPEAT_RATE) & 3) * 8;
+        let rate = ((0x7850_321Eu32 >> shift) & 0xFF) as u16;
+        if api.prop_get(prop::FAST_SCROLL) != 0 && self.repeat_steps > 6 {
+            rate.min(45)
+        } else {
+            rate
         }
     }
 
@@ -141,7 +157,8 @@ impl SettingsState {
         self.editing = false;
         self.dirty = false;
         self.held_key = 0xFF;
-        self.repeat_cd = 0;
+        self.repeat_steps = 0;
+        self.repeat_ms = 0;
         self.tick_ctr = 0;
         self.scroller.jump_to_row(0);
         self.call_leaf(api, LEAF_DEV_LOAD, 0, 0);
@@ -213,7 +230,7 @@ impl SettingsState {
             let anim = !wrapped && api.prop_get(prop::UI_ANIMATIONS) != 0;
             self.scroller.set_target_row(ui::scroll_top(*sel), anim);
             if wrapped && is_repeat {
-                self.repeat_cd = REPEAT_DELAY_TICKS;
+                self.repeat_ms = Self::hold_delay_ms(api);
             }
             if is_repeat && api.prop_get(prop::KEY_BEEP) != 0 {
                 api.play_beep(5);
@@ -412,9 +429,7 @@ impl SettingsState {
                 MODAL_DELETE_APP => {
                     self.call_leaf(api, LEAF_APPS_OPS, CMD_APPS_DO_DEL, 0);
                     if self.sh.result != 0 && self.view == View::AppDetail {
-                        self.view = View::InstalledApps;
-                        self.scroller.jump_to_row(ui::scroll_top(self.sh.app_sel));
-                        self.sync_status_bar(api);
+                        self.enter_view(api, View::InstalledApps, ui::scroll_top(self.sh.app_sel));
                     }
                 }
                 MODAL_RESET_SETTINGS => self.call_leaf(api, LEAF_SYS_OPS, CMD_SYS_DO_RESET, 0),
@@ -447,12 +462,17 @@ impl SettingsState {
                 self.tick_ctr = self.tick_ctr.wrapping_add(1);
                 let mut dirty_ui = self.scroller.tick();
                 if self.held_key != 0xFF {
-                    if self.repeat_cd > 0 {
-                        self.repeat_cd -= 1;
-                    }
-                    if self.repeat_cd == 0 {
+                    let dt = if ev.payload > 0 {
+                        (ev.payload as u16).min(200)
+                    } else {
+                        50
+                    };
+                    if self.repeat_ms > dt {
+                        self.repeat_ms -= dt;
+                    } else {
                         let up = self.held_key == key::UP || self.held_key == key::KEY2;
-                        self.repeat_cd = REPEAT_RATE_TICKS;
+                        self.repeat_steps = self.repeat_steps.saturating_add(1);
+                        self.repeat_ms = self.next_repeat_ms(api);
                         self.step_cursor(api, up, true);
                         dirty_ui = true;
                     }
@@ -472,16 +492,11 @@ impl SettingsState {
                     return 0;
                 }
                 match ev.key {
-                    key::UP | key::KEY2 => {
+                    key::UP | key::KEY2 | key::DOWN | key::KEY8 => {
                         self.held_key = ev.key;
-                        self.repeat_cd = REPEAT_DELAY_TICKS;
-                        self.step_cursor(api, true, false);
-                        1
-                    }
-                    key::DOWN | key::KEY8 => {
-                        self.held_key = ev.key;
-                        self.repeat_cd = REPEAT_DELAY_TICKS;
-                        self.step_cursor(api, false, false);
+                        self.repeat_steps = 0;
+                        self.repeat_ms = Self::hold_delay_ms(api);
+                        self.step_cursor(api, ev.key == key::UP || ev.key == key::KEY2, false);
                         1
                     }
                     key::MENU | key::KEY5 => {

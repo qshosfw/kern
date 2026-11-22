@@ -231,6 +231,11 @@ impl LauncherApp {
         self.model.nav_layout = ctx.config.keys.nav_layout;
         self.model.show_numbers = ctx.config.apps.show_numbers != 0;
         self.model.show_labels = ctx.config.apps.show_labels != 0;
+        self.view.repeater.configure(
+            ctx.config.keys.hold_delay_ms(),
+            ctx.config.keys.repeat_rate_ms(),
+            ctx.config.keys.fast_scroll != 0,
+        );
     }
 
     fn adjust_scroll_for_selection(&mut self, animations_enabled: bool) {
@@ -490,7 +495,9 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
 
         let mut animating = false;
         if let Event::Tick = event {
-            self.model.tick_counter = self.model.tick_counter.wrapping_add(1);
+            if is_list_mode {
+                self.model.tick_counter = self.model.tick_counter.wrapping_add(1);
+            }
             animating = self.scroller.tick();
         }
 

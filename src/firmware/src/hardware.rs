@@ -139,11 +139,7 @@ impl<'a> SystemHardware<'a> {
             return;
         }
         if (config.hw_dirty & crate::config::HW_DIRTY_KEYS) != 0 {
-            self.key_scanner.configure(
-                config.keys.hold_delay_ms(),
-                config.keys.repeat_rate_ms(),
-                config.keys.fast_scroll != 0,
-            );
+            self.key_scanner.configure(config.keys.hold_delay_ms());
             config.hw_dirty &= !crate::config::HW_DIRTY_KEYS;
         }
         if (config.hw_dirty & crate::config::HW_DIRTY_AUDIO) != 0 {

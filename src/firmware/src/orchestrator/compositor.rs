@@ -202,15 +202,22 @@ impl ModalCompositor {
     pub fn show_sheet(&mut self, tag: u8, sheet: OptionSheet) {
         crate::orchestrator::sink_enter_keys();
         self.tag = tag;
-        let is_animated = crate::master_config_ref().display.animations_enabled();
+        let cfg = crate::master_config_ref();
+        let is_animated = cfg.display.animations_enabled();
         let anim = if is_animated {
             gfx::gui::animation::TransitionProgress::new(4)
         } else {
             gfx::gui::animation::TransitionProgress::completed(4)
         };
+        let mut rep = KeyRepeater::new(8, 2);
+        rep.configure(
+            cfg.keys.hold_delay_ms(),
+            cfg.keys.repeat_rate_ms(),
+            cfg.keys.fast_scroll != 0,
+        );
         self.modal = ActiveModal::Sheet(
             sheet,
-            KeyRepeater::new(8, 2),
+            rep,
             anim,
             gfx::gui::animation::MarqueeScroller::idle(),
             core::cell::Cell::new(0),

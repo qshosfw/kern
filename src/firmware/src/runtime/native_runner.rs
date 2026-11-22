@@ -737,7 +737,7 @@ pub unsafe fn native_on_event(ctx: &mut SysContext<'static, 'static>, ev: &Event
             (KRX_EV_KEY, *code as u8, 0, s_val)
         }
         Event::Encoder(dir) => (KRX_EV_ENCODER, 0, 0, *dir as u32),
-        Event::Tick => (KRX_EV_TICK, 0, 0, 0),
+        Event::Tick => (KRX_EV_TICK, 0, 0, gfx::gui::repeater::tick_dt_ms() as u32),
         Event::Bus(bus_ev) => (
             KRX_EV_BUS,
             bus_ev.event_id,

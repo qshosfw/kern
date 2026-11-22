@@ -16,14 +16,12 @@ pub struct KeypadScanner {
     held_idx: Option<u8>,
     /// Flag indicating whether the active key has crossed the initial hold threshold
     key_being_held: bool,
-    pub fast_scroll_enabled: bool,
     /// Accumulated duration of currently held key in milliseconds
     held_ms: u16,
     /// Exact duration in milliseconds of the last released key (for Morse/CW)
     last_held_duration_ms: u16,
     /// Timing configuration
     pub hold_delay_ms: u16,
-    pub repeat_rate_ms: u16,
     /// Currently debounced active key bitmask
     debounced: u32,
     /// Monotonic timestamp of last scan call
@@ -46,8 +44,6 @@ impl KeypadScanner {
             last_held_duration_ms: 0,
             last_scan_ms: 0,
             hold_delay_ms: 400, // DeltaFW standard: 400ms hold delay
-            repeat_rate_ms: 80, // Standard UI repeat rate reference (80ms / 12.5 Hz)
-            fast_scroll_enabled: true,
             event_queue: Deque::new(),
         }
     }
@@ -107,11 +103,9 @@ impl KeypadScanner {
         self.debounced
     }
 
-    /// Configure user timings from MasterConfig
-    pub fn configure(&mut self, hold_delay_ms: u16, repeat_rate_ms: u16, fast_scroll: bool) {
+    /// Configure user hold delay from MasterConfig
+    pub fn configure(&mut self, hold_delay_ms: u16) {
         self.hold_delay_ms = hold_delay_ms;
-        self.repeat_rate_ms = repeat_rate_ms;
-        self.fast_scroll_enabled = fast_scroll;
     }
 
     /// Advance scanner state machine with elapsed time delta `dt_ms`.
@@ -216,8 +210,8 @@ mod tests {
     #[test]
     fn full_queue_defers_debounced_transition_without_loss() {
         let mut scanner = KeypadScanner::new();
-        // Saturate the 16-slot queue first
-        for i in 0..16 {
+        // Saturate the queue first
+        for i in 0..scanner.event_queue.capacity() {
             assert!(
                 scanner
                     .event_queue

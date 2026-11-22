@@ -16,6 +16,12 @@ pub fn set_tick_dt_ms(dt_ms: u16) {
     TICK_DT_MS.store(dt_ms.clamp(1, 200), Ordering::Relaxed);
 }
 
+/// Read the active `Event::Tick` interval in milliseconds.
+#[inline(always)]
+pub fn tick_dt_ms() -> u16 {
+    TICK_DT_MS.load(Ordering::Relaxed)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyRepeater {
     active_key: u8,
@@ -181,6 +187,13 @@ impl KeyRepeater {
     /// Enable or disable turbo rate acceleration on long hold.
     pub fn set_turbo_enabled(&mut self, enabled: bool) {
         self.turbo_threshold_ticks = if enabled { 8 } else { 0 };
+    }
+
+    /// Synchronize repeater thresholds with user millisecond configuration (`hold_delay_ms`, `repeat_rate_ms`, `fast_scroll`).
+    pub fn configure(&mut self, hold_delay_ms: u16, repeat_rate_ms: u16, fast_scroll: bool) {
+        self.initial_delay_ticks = ((hold_delay_ms.saturating_add(25)) / 50).max(2);
+        self.repeat_rate_ticks = ((repeat_rate_ms.saturating_add(25)) / 50).max(1);
+        self.set_turbo_enabled(fast_scroll);
     }
 }
 

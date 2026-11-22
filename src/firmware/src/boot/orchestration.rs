@@ -38,11 +38,7 @@ fn init_system_services(
         .set_calib_const(calibration.battery_calib_const());
     hw.radio.set_xtal_freq_trim(calibration.xtal_freq_low());
 
-    hw.key_scanner.configure(
-        master_cfg.keys.hold_delay_ms(),
-        master_cfg.keys.repeat_rate_ms(),
-        master_cfg.keys.fast_scroll != 0,
-    );
+    hw.key_scanner.configure(master_cfg.keys.hold_delay_ms());
     crate::services::telemetry::sample_battery_and_system(adc, false);
     bsp::pins::FLASHLIGHT.set_low();
     crate::apps::init_all_apps();
