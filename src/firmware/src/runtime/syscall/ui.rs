@@ -42,6 +42,25 @@ pub fn set_tray_icon(icon_id: u8) -> u8 {
     }
 }
 
+/// Ensure a guest pointer kept alive across frames (e.g. `OptionSheet`) never points
+/// into a volatile P0 paged leaf overlay window (`>= overlay_vma`).
+#[inline(never)]
+fn is_persistent_guest_ptr(ptr: *const u8, len: usize) -> bool {
+    if ptr.is_null() {
+        return true;
+    }
+    let slot = crate::runtime::native_runner::slot_ref();
+    if !slot.is_loaded || !slot.profile.is_structured_paged() {
+        return true;
+    }
+    let base = crate::runtime::native_runner::arena_base_ptr() as usize;
+    let overlay_start = base + (crate::data::arena::TRANSIENT_ARENA_BYTES - 1024);
+    let overlay_end = base + crate::data::arena::TRANSIENT_ARENA_BYTES;
+    let addr = ptr as usize;
+    let end = addr.saturating_add(len);
+    !(addr < overlay_end && end > overlay_start)
+}
+
 unsafe fn show_modal_req(req: *const KrxModalReq) {
     if req.is_null() {
         return;
@@ -57,8 +76,13 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
         return;
     }
     if r.kind == 3 {
-        let t_str = unsafe { str_or_default(r.title, r.t_len as usize, "Select") };
         let opts_len = (r.m_len as usize) | ((r.o_len as usize) << 8);
+        if !is_persistent_guest_ptr(r.title, r.t_len as usize)
+            || !is_persistent_guest_ptr(r.msg, opts_len)
+        {
+            return;
+        }
+        let t_str = unsafe { str_or_default(r.title, r.t_len as usize, "Select") };
         if let Some(raw) = unsafe { super::ptr_slice(r.msg, opts_len) } {
             if raw.iter().all(|&b| b == 0 || (0x20..=0x7E).contains(&b)) {
                 let opts = unsafe { core::str::from_utf8_unchecked(raw) };
@@ -89,21 +113,6 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
     );
 }
 
-#[inline(always)]
-fn tr_ui<'a>(s: &'a str, prefer_short: bool, buf: &'a mut [u8; 48]) -> &'a str {
-    #[cfg(feature = "filesystem")]
-    if !s.is_empty() && crate::services::lang::is_active() {
-        #[cfg(not(test))]
-        return crate::services::lang::translate(crate::kern_fs(), s, prefer_short, buf);
-        #[cfg(test)]
-        if let Some(ctx) = super::active_ctx_opt() {
-            return crate::services::lang::translate(ctx.storage, s, prefer_short, buf);
-        }
-    }
-    let _ = (prefer_short, buf);
-    s
-}
-
 unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     if desc.is_null() {
         return 1;
@@ -113,19 +122,7 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     let ux = d.x.max(0) as u8;
     let uy = d.y.max(0) as u8;
     let raw0 = unsafe { slice_or_empty(d.p0, d.len0 as usize) };
-    let s0_raw = utils::format::ascii_str(raw0).unwrap_or("");
-    let mut tr_buf = [0u8; 48];
-    let s0 = if matches!(
-        kind,
-        KRX_WIDGET_NEGATED_HEADER
-            | KRX_WIDGET_SHEET_FRAME
-            | KRX_WIDGET_CAPSULE_BUTTON
-            | KRX_WIDGET_MENU_ITEM
-    ) {
-        tr_ui(s0_raw, kind == KRX_WIDGET_CAPSULE_BUTTON, &mut tr_buf)
-    } else {
-        s0_raw
-    };
+    let s0 = utils::format::ascii_str(raw0).unwrap_or("");
     let badge = |filled: bool| {
         if filled {
             gfx::widgets::BadgeStyle::Filled
@@ -141,16 +138,6 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
         }
         KRX_WIDGET_PROGRESS_BAR => {
             gfx::widgets::draw_progress_bar(canvas, d.x, d.y, d.w, d.h, d.a, d.b != 0);
-        }
-        KRX_WIDGET_S_METER => {
-            gfx::widgets::draw_s_meter(
-                canvas,
-                d.x,
-                d.y,
-                d.extra as i16,
-                d.a,
-                &gfx::fonts::tomthumb::FONT,
-            );
         }
         KRX_WIDGET_TAG_BADGE => {
             if !s0.is_empty() {
@@ -176,143 +163,50 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             );
         }
         KRX_WIDGET_MENU_ITEM => {
-            let is_sel = (d.a & 1) != 0;
-            let has_chevron = (d.a & 2) != 0;
-            let is_outline = (d.a & 4) != 0;
-            let is_toggle = (d.a & 8) != 0;
-            let toggle_on = (d.a & 16) != 0;
-            let arrow_left = (d.a & 32) != 0;
-            let arrow_right = (d.a & 64) != 0;
-            let is_shortcut = (d.a & 128) != 0;
-            let comfortable = d.h >= 12;
-            let row_h: u8 = if comfortable { 13 } else { 10 };
-            let icon_dy: i16 = if comfortable { 2 } else { 1 };
-            let text_dy: i16 = if comfortable { 9 } else { 7 };
-            let filled_sel = is_sel && !is_outline;
-            let tc_u8 = if filled_sel { 0 } else { 1 };
-            let col = color_from_u8(tc_u8);
-            if is_sel {
-                let cap_flags = if is_outline {
-                    gfx::widgets::CAPSULE_ROUND
-                } else {
-                    gfx::widgets::CAPSULE_FILL_ROUND
-                };
-                gfx::widgets::draw_selection_capsule(canvas, [2, uy, 120, row_h], cap_flags);
+            use gfx::widgets::*;
+            let row_h = if d.h >= 12 { 13 } else { 10 };
+            let mut flags = 0u8;
+            if (d.a & 1) != 0 {
+                flags |= ROW_SELECTED;
+            }
+            if (d.a & 2) != 0 {
+                flags |= ROW_CHEVRON;
+            }
+            if (d.a & 4) != 0 {
+                flags |= ROW_OUTLINE;
+            }
+            if (d.a & 8) != 0 {
+                flags |= ROW_TOGGLE;
+            }
+            if (d.a & 16) != 0 {
+                flags |= ROW_TOGGLE_ON;
+            }
+            if (d.a & 32) != 0 {
+                flags |= ROW_ARROW_LEFT;
+            }
+            if (d.a & 64) != 0 {
+                flags |= ROW_ARROW_RIGHT;
+            }
+            if (d.a & 128) != 0 {
+                flags |= ROW_SHORTCUT;
             }
             let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
-            if is_shortcut {
-                let mut tx = 4i16
-                    + gfx::widgets::draw_key_badge_box(canvas, 4, d.y + 3, s0, filled_sel) as i16
-                    + 3;
-                if d.b != 0 {
-                    super::display::draw_icon(tx, d.y + icon_dy, d.b, tc_u8);
-                    tx += 11;
-                }
-                let act_lbl = tr_ui(s1, false, &mut tr_buf);
-                gfx::text::draw_str_ellipsis(
-                    canvas,
-                    tx,
-                    d.y + text_dy,
-                    act_lbl,
-                    &gfx::fonts::mumatrix_regular::FONT,
-                    col,
-                    112,
-                );
-                gfx::icons::draw_icon_8(canvas, 114, d.y + 3, gfx::icons::ARROW_RIGHT, col);
+            let phase = ((d.extra >> 1) & 3) as i8;
+            let chevron_dx = if (d.a & 1) != 0 && d.extra != 0 {
+                if phase == 3 { 1 } else { phase }
             } else {
-                let text_x = if d.b != 0 {
-                    super::display::draw_icon(4, d.y + icon_dy, d.b, tc_u8);
-                    15
-                } else {
-                    5
-                };
-                let sw = if s1.is_empty() {
-                    0
-                } else {
-                    gfx::text::str_width(s1, &gfx::fonts::tomthumb::FONT)
-                };
-                let title_max = if is_toggle || has_chevron {
-                    108i16
-                } else if sw > 0 {
-                    let pad = if arrow_left || arrow_right { 22 } else { 6 };
-                    (120 - pad - sw).max(36)
-                } else {
-                    119i16
-                };
-                gfx::text::draw_str_ellipsis(
-                    canvas,
-                    text_x,
-                    d.y + text_dy,
-                    s0,
-                    &gfx::fonts::mumatrix_regular::FONT,
-                    col,
-                    title_max,
-                );
-                if is_toggle {
-                    let ic = if toggle_on {
-                        ::abi::icon::CHECKBOX_ON
-                    } else {
-                        ::abi::icon::CHECKBOX_OFF
-                    };
-                    super::display::draw_icon(112, d.y + icon_dy, ic, tc_u8);
-                } else if sw > 0 {
-                    let val_right = if is_outline && (arrow_left || arrow_right) {
-                        if arrow_right {
-                            gfx::icons::draw_icon_8(
-                                canvas,
-                                114,
-                                d.y + 3,
-                                gfx::icons::ARROW_RIGHT,
-                                col,
-                            );
-                        }
-                        if arrow_left {
-                            gfx::icons::draw_icon_8(
-                                canvas,
-                                (104 - sw).max(40),
-                                d.y + 3,
-                                gfx::icons::ARROW_LEFT,
-                                col,
-                            );
-                        }
-                        112
-                    } else {
-                        119
-                    };
-                    gfx::text::draw_str_align(
-                        canvas,
-                        val_right,
-                        d.y + text_dy,
-                        s1,
-                        &gfx::fonts::tomthumb::FONT,
-                        col,
-                        gfx::text::Align::Right,
-                    );
-                } else if has_chevron {
-                    let phase = ((d.extra >> 1) & 3) as i16;
-                    let dx = if is_sel && d.extra != 0 {
-                        if phase == 3 { 1 } else { phase }
-                    } else {
-                        0
-                    };
-                    super::display::draw_icon(
-                        112 + dx,
-                        d.y + icon_dy + i16::from(comfortable),
-                        35,
-                        tc_u8,
-                    );
-                }
-            }
-        }
-        KRX_WIDGET_BIG_DIGIT | KRX_WIDGET_SMALL_DIGIT => {
-            gfx::widgets::spectrum::draw_digit(
-                canvas,
-                d.x,
-                d.y,
-                d.a,
-                color_from_u8(d.b),
-                kind == KRX_WIDGET_BIG_DIGIT,
-            );
+                0
+            };
+            let mut spec = ListRowSpec::new(2, d.y, 120, row_h, s0);
+            spec.flags = flags;
+            spec.value = s1;
+            spec.icon = if d.b != 0 {
+                super::display::system_icon_8(d.b)
+            } else {
+                None
+            };
+            spec.chevron_dx = chevron_dx;
+            draw_list_row(canvas, &spec);
         }
         KRX_WIDGET_BATTERY => gfx::widgets::draw_battery(canvas, d.x, d.y, d.a, d.b != 0),
         KRX_WIDGET_SIGNAL => {

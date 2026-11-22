@@ -30,11 +30,6 @@ pub mod app {
         pub(crate) title: &'static str,
     }
 
-    #[inline(always)]
-    pub fn is_action_module_active() -> bool {
-        false
-    }
-
     impl SettingsApp {
         pub unsafe fn init_at(ptr: *mut Self) {
             unsafe {

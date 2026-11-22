@@ -26,7 +26,7 @@ pub enum ActiveModal {
     Sheet(
         OptionSheet,
         KeyRepeater,
-        gfx::gui::animation::SlideUpAnim,
+        gfx::gui::animation::TransitionProgress,
         gfx::gui::animation::MarqueeScroller,
         core::cell::Cell<u8>,
     ) = 3,
@@ -69,7 +69,7 @@ impl ModalCompositor {
         }
         match &self.modal {
             ActiveModal::Sheet(_, _, anim, marquee, _) => {
-                anim.is_animating()
+                !anim.is_complete()
                     || (crate::master_config_ref().display.animations_enabled()
                         && marquee.is_active())
             }
@@ -203,12 +203,11 @@ impl ModalCompositor {
         crate::orchestrator::sink_enter_keys();
         self.tag = tag;
         let is_animated = crate::master_config_ref().display.animations_enabled();
-        let mut anim = gfx::gui::animation::SlideUpAnim::new(48, 8);
-        if is_animated {
-            anim.open();
+        let anim = if is_animated {
+            gfx::gui::animation::TransitionProgress::new(4)
         } else {
-            anim.jump_open();
-        }
+            gfx::gui::animation::TransitionProgress::completed(4)
+        };
         self.modal = ActiveModal::Sheet(
             sheet,
             KeyRepeater::new(8, 2),
@@ -311,7 +310,7 @@ impl ModalCompositor {
                 let ov = MenuView::render_sheet_slide_up_marquee(
                     canvas,
                     sheet,
-                    anim.offset() as i8,
+                    anim.slide_offset(48),
                     marquee.offset(),
                     animated,
                 );
@@ -530,6 +529,52 @@ pub struct OsCompositor;
 
 impl OsCompositor {
     #[inline(never)]
+    fn render_status_bar(
+        active_app_id: usize,
+        canvas: &mut Canvas,
+        ctx: &SysContext<'_, '_>,
+        sb_cfg_in: &kernel::app::StatusBarConfig<'_>,
+    ) {
+        let mut sb_cfg = *sb_cfg_in;
+        let mut native_left_icons =
+            [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
+        let mut native_center_icons =
+            [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
+        #[cfg(feature = "krx_native")]
+        if active_app_id >= crate::apps::AppRegistry::count() {
+            crate::runtime::native_runner::apply_slot_status_icons(
+                &mut sb_cfg,
+                &mut native_left_icons,
+                &mut native_center_icons,
+            );
+        }
+        if !sb_cfg.partial {
+            if sb_cfg.title.is_none() {
+                if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
+                    sb_cfg.title = Some(meta.name);
+                }
+            }
+            if active_app_id != crate::apps::registry::APP_ID_VFO {
+                let coord = &ctx.state.coord;
+                if sb_cfg.left_badge.is_none() {
+                    if coord.is_transmitting {
+                        sb_cfg.left_badge = Some("TX");
+                    } else if coord.carrier_active {
+                        sb_cfg.left_badge = Some("RX");
+                    } else if coord.monitor_active {
+                        sb_cfg.left_badge = Some("MON");
+                    }
+                }
+                if sb_cfg.signal_level.is_none() && (coord.carrier_active || coord.monitor_active) {
+                    let bars = ((ctx.state.rssi_dbm + 125).max(0) as u8 >> 4).clamp(1, 4);
+                    sb_cfg.signal_level = Some(bars);
+                }
+            }
+        }
+        ctx.draw_status_bar_cfg(canvas, &sb_cfg);
+    }
+
+    #[inline(never)]
     pub fn render<'a>(
         active_app_id: usize,
         canvas: &mut Canvas,
@@ -544,58 +589,13 @@ impl OsCompositor {
         #[cfg(not(feature = "text_input"))]
         let is_text_input = false;
 
-        let preserve_bg = has_blocking_modal
-            && active_app_id == crate::apps::registry::APP_ID_SETTINGS
-            && crate::apps::settings::app::is_action_module_active();
-        if !preserve_bg {
-            canvas.clear();
-        }
+        canvas.clear();
 
-        let mut native_left_icons =
-            [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
-        let mut native_center_icons =
-            [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
         let mut sb_cfg = kernel::app::StatusBarConfig::default();
         crate::AppRegistry::render(active_app_id, canvas, ctx, &mut sb_cfg);
-        #[cfg(feature = "krx_native")]
-        if active_app_id >= crate::apps::AppRegistry::count() {
-            crate::runtime::native_runner::apply_slot_status_icons(
-                &mut sb_cfg,
-                &mut native_left_icons,
-                &mut native_center_icons,
-            );
-        }
 
         if sb_cfg.visible && !is_text_input {
-            if preserve_bg {
-                canvas.fill_rect(0, 0, 128, 9, gfx::Color::Clear);
-            }
-            if !sb_cfg.partial {
-                if sb_cfg.title.is_none() {
-                    if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
-                        sb_cfg.title = Some(meta.name);
-                    }
-                }
-                if active_app_id != crate::apps::registry::APP_ID_VFO {
-                    let coord = &ctx.state.coord;
-                    if sb_cfg.left_badge.is_none() {
-                        if coord.is_transmitting {
-                            sb_cfg.left_badge = Some("TX");
-                        } else if coord.carrier_active {
-                            sb_cfg.left_badge = Some("RX");
-                        } else if coord.monitor_active {
-                            sb_cfg.left_badge = Some("MON");
-                        }
-                    }
-                    if sb_cfg.signal_level.is_none()
-                        && (coord.carrier_active || coord.monitor_active)
-                    {
-                        let bars = ((ctx.state.rssi_dbm + 125).max(0) as u8 >> 4).clamp(1, 4);
-                        sb_cfg.signal_level = Some(bars);
-                    }
-                }
-            }
-            ctx.draw_status_bar_cfg(canvas, &sb_cfg);
+            Self::render_status_bar(active_app_id, canvas, ctx, &sb_cfg);
         }
 
         // Render OS modal overlay on top of screen if active

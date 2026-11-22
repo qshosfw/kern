@@ -2,7 +2,6 @@
 //! High-contrast hover/edit interactions, checkboxes, and navigation arrows.
 //! 100% Safe Rust with clean separation between mutable event handling and immutable rendering.
 
-use crate::fonts::mumatrix_regular::FONT as MUMATRIX;
 use crate::fonts::tomthumb::FONT as TOMTHUMB;
 use crate::gui::animation::{KineticScroller, ListScrollMode, MarqueeScroller};
 use crate::gui::view::View;
@@ -610,11 +609,6 @@ fn apply_list_nav_dir(model: &mut MenuModelMut<'_>, dir: ListNavDir, wrap: bool)
     false
 }
 
-#[inline(always)]
-const fn arrow_bits(has_prev: bool, has_next: bool) -> u8 {
-    (has_prev as u8) | ((has_next as u8) << 1)
-}
-
 #[inline(never)]
 fn render_menu_row(
     canvas: &mut Canvas,
@@ -625,61 +619,42 @@ fn render_menu_row(
     marquee_x: i16,
     marquee_enabled: bool,
 ) -> u8 {
+    use crate::widgets::*;
     let is_selected = (flags & 1) != 0;
-    let mut tc = Color::Fill;
+    let is_editing = (flags & 2) != 0;
+    let is_pressed = (flags & 4) != 0;
+    let mut row_flags = 0u8;
     if is_selected {
-        let sel_top = row_y.max(8);
-        let sel_bottom = (row_y + 13).min(64);
-        if sel_bottom > sel_top {
-            let ry = sel_top as u8;
-            let rh = (sel_bottom - sel_top) as u8;
-            let mut cap_flags = 0u8;
-            if (flags & 6) != 0 {
-                cap_flags |= crate::widgets::CAPSULE_FILL;
-            }
-            if row_y >= 8 && row_y + 13 <= 64 {
-                cap_flags |= crate::widgets::CAPSULE_ROUND;
-            }
-            tc = crate::widgets::draw_selection_capsule(canvas, [0, ry, 124, rh], cap_flags);
-        }
-    }
-
-    let mut text_x = 3i16;
-    let is_shortcut = matches!(item.item_type, MenuItemType::Shortcut(_));
-    if is_shortcut {
-        text_x += crate::widgets::draw_key_badge_box(
-            canvas,
-            3,
-            row_y + 3,
-            item.title,
-            tc == Color::Clear,
-        ) as i16
-            + 3;
-    }
-    if let Some(bmp) = icon {
-        if !core::ptr::eq(bmp, &icons::ICON_NONE) {
-            icons::draw_icon_8(canvas, text_x, row_y + 2, bmp, tc);
-            text_x += if is_shortcut { 11 } else { 13 };
+        row_flags |= ROW_SELECTED;
+        if !(is_editing || is_pressed) {
+            row_flags |= ROW_OUTLINE;
         }
     }
 
     let mut buf_uninit = core::mem::MaybeUninit::<[u8; 16]>::uninit();
-    let mut title_str = item.title;
-    let mut val_str = "";
-    let mut arrows = 0u8;
-    let mut max_title_x = 110i16;
+    let mut title = item.title;
+    let mut value = "";
+    let mut localize_value = false;
 
     match &item.item_type {
         MenuItemType::Shortcut(action_label) => {
-            title_str = action_label.as_str();
-            icons::draw_icon_8(canvas, 114, row_y + 3, icons::ARROW_RIGHT, tc);
-            max_title_x = 112;
+            row_flags |= ROW_SHORTCUT;
+            value = action_label.as_str();
         }
-        MenuItemType::Value(v) => val_str = v.as_str(),
+        MenuItemType::Value(v) => {
+            value = v.as_str();
+            localize_value = true;
+        }
         MenuItemType::Choice { selected, options } => {
             let sel = *selected as usize;
-            val_str = options.get(sel);
-            arrows = arrow_bits(sel > 0, sel + 1 < options.len());
+            value = options.get(sel);
+            localize_value = true;
+            if sel > 0 {
+                row_flags |= ROW_ARROW_LEFT;
+            }
+            if sel + 1 < options.len() {
+                row_flags |= ROW_ARROW_RIGHT;
+            }
         }
         MenuItemType::Range {
             val,
@@ -688,90 +663,41 @@ fn render_menu_row(
             unit,
             ..
         } => {
-            arrows = arrow_bits(*val > *min, *val < *max);
+            if *val > *min {
+                row_flags |= ROW_ARROW_LEFT;
+            }
+            if *val < *max {
+                row_flags |= ROW_ARROW_RIGHT;
+            }
             let buf = unsafe { &mut *buf_uninit.as_mut_ptr() };
-            val_str = text::format_range_val(*val as i32, *min as i32, unit, buf);
+            value = text::format_range_val(*val as i32, *min as i32, unit, buf);
         }
         MenuItemType::Toggle(on) => {
-            let bmp = if *on {
-                icons::CHECKBOX_ON
-            } else {
-                icons::CHECKBOX_OFF
-            };
-            icons::draw_icon_8(canvas, 111, row_y + 2, bmp, tc);
-            max_title_x = 105;
+            row_flags |= ROW_TOGGLE;
+            if *on {
+                row_flags |= ROW_TOGGLE_ON;
+            }
         }
         MenuItemType::Submenu => {
-            icons::draw_icon_8(canvas, 114, row_y + 3, icons::ARROW_RIGHT, tc);
-            max_title_x = 105;
+            row_flags |= ROW_CHEVRON;
         }
         _ => {}
     }
 
-    let mut val_lbuf = [0u8; 32];
-    let val_str = if matches!(
-        item.item_type,
-        MenuItemType::Choice { .. } | MenuItemType::Value(_)
-    ) {
-        text::localize(val_str, true, &mut val_lbuf)
-    } else {
-        val_str
-    };
-    let mut title_lbuf = [0u8; 48];
-    let title_str = text::localize(title_str, !val_str.is_empty(), &mut title_lbuf);
-
-    let sw = if val_str.is_empty() {
-        0
-    } else {
-        text::str_width(val_str, &TOMTHUMB)
-    };
-    let title_max = if sw > 0 {
-        (114 - sw).max(30)
-    } else {
-        max_title_x
-    };
-    let avail = (title_max - text_x).max(0);
-    let title_w = text::str_width(title_str, &MUMATRIX);
-    let overflow = (title_w - avail).clamp(0, 255) as u8;
-
-    if is_selected && marquee_enabled && overflow > 0 {
-        text::draw_str_clipped(
-            canvas,
-            text_x,
-            title_max,
-            marquee_x.min(overflow as i16),
-            row_y + 9,
-            title_str,
-            &MUMATRIX,
-            tc,
-        );
-    } else {
-        text::draw_str_ellipsis(
-            canvas,
-            text_x,
-            row_y + 9,
-            title_str,
-            &MUMATRIX,
-            tc,
-            title_max,
-        );
+    let mut spec = ListRowSpec::new(0, row_y, 124, 13, title);
+    spec.flags = row_flags;
+    spec.value = value;
+    spec.icon = icon;
+    spec.marquee_x = marquee_x;
+    spec.marquee_enabled = marquee_enabled;
+    spec.localize_value = localize_value;
+    spec.clip_top = 8;
+    if is_selected && is_editing {
+        // Edit mode draws outline capsule + directional arrows around value.
+        spec.flags |= ROW_OUTLINE;
     }
-
-    if sw > 0 {
-        let text_x = if (flags & 3) == 3 {
-            if (arrows & 2) != 0 {
-                icons::draw_icon_8(canvas, 116, row_y + 3, icons::ARROW_RIGHT, tc);
-            }
-            if (arrows & 1) != 0 {
-                icons::draw_icon_8(canvas, (106 - sw).max(40), row_y + 3, icons::ARROW_LEFT, tc);
-            }
-            114
-        } else {
-            118
-        };
-        text::draw_str(canvas, text_x - sw, row_y + 8, val_str, &TOMTHUMB, tc);
-    }
-    overflow
+    let _ = &mut title;
+    draw_list_row(canvas, &spec)
 }
 
 impl<'a> View<MenuModel<'a>> for MenuView {
@@ -876,30 +802,14 @@ impl MenuView {
         marquee_x: i16,
         marquee_enabled: bool,
     ) -> u8 {
+        use crate::widgets::{ListRowSpec, ROW_SELECTED, draw_list_row};
         let has_scroll = row_y_scroll < 0;
-        let row_y = if has_scroll {
-            !row_y_scroll
-        } else {
-            row_y_scroll
-        };
+        let row_y = if has_scroll { !row_y_scroll } else { row_y_scroll };
         let is_hovered = idx == sheet.hover;
         let is_selected = idx == sheet.selected;
         let (fill_x, fill_w) = if has_scroll { (2, 118) } else { (3, 122) };
-        let max_x = (fill_x as i16) + (fill_w as i16) - 3;
-
-        let tc = if is_hovered {
-            crate::widgets::draw_selection_capsule(
-                canvas,
-                [fill_x, row_y as u8, fill_w, 11],
-                crate::widgets::CAPSULE_FILL | crate::widgets::CAPSULE_ROUND,
-            )
-        } else {
-            Color::Fill
-        };
-
         let row_icon = sheet.icons.and_then(|arr| arr.get(idx).copied());
-        let mut tx = if sheet.show_radio { 16 } else { 15 };
-        let sprite = if sheet.show_radio {
+        let prefix_icon = if sheet.show_radio {
             Some(if is_selected {
                 icons::RADIO_ON
             } else {
@@ -910,36 +820,15 @@ impl MenuView {
         } else {
             None
         };
-        if let Some(s) = sprite {
-            icons::draw_icon_8(canvas, 5, row_y + 2, s, tc);
+        let mut spec = ListRowSpec::new(fill_x, row_y, fill_w, 11, sheet.options.get(idx));
+        if is_hovered {
+            spec.flags = ROW_SELECTED;
         }
-        if let Some(bmp) = row_icon {
-            let ix = if sheet.show_radio { 16 } else { 5 };
-            icons::draw_icon_8(canvas, ix, row_y + 2, bmp, tc);
-            tx = ix + 11;
-        }
-        let mut lbuf = [0u8; 48];
-        let label = text::localize(sheet.options.get(idx), false, &mut lbuf);
-        let avail = (max_x - tx).max(0);
-        let label_w = text::str_width(label, &MUMATRIX);
-        let overflow = (label_w - avail).clamp(0, 255) as u8;
-        if is_hovered && marquee_enabled && overflow > 0 {
-            text::draw_str_clipped(
-                canvas,
-                tx,
-                max_x,
-                marquee_x.min(overflow as i16),
-                row_y + 8,
-                label,
-                &MUMATRIX,
-                tc,
-            );
-        } else if overflow > 0 {
-            text::draw_str_ellipsis(canvas, tx, row_y + 8, label, &MUMATRIX, tc, max_x);
-        } else {
-            text::draw_str_max_x(canvas, tx, row_y + 8, label, &MUMATRIX, tc, max_x);
-        }
-        overflow
+        spec.prefix_icon = prefix_icon;
+        spec.icon = row_icon;
+        spec.marquee_x = marquee_x;
+        spec.marquee_enabled = marquee_enabled;
+        draw_list_row(canvas, &spec)
     }
 
     #[inline(always)]

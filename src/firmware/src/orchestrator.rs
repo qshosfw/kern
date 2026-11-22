@@ -29,7 +29,9 @@ pub(super) fn tick_dt_ms(last_ms: &mut u32, max_dt: u16) -> u16 {
     dt
 }
 
-use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
+#[cfg(not(test))]
+use crate::apps::APP_ID_SETTINGS;
+use crate::apps::{APP_ID_LAUNCHER, APP_ID_VFO, Shortcut};
 use ::abi::CapabilitySet;
 use compositor::OsCompositor;
 use gfx::Canvas;
@@ -1027,24 +1029,20 @@ impl Orchestrator {
             Shortcut::None => {}
             Shortcut::LaunchApp(id) => {
                 #[cfg(all(not(test), feature = "filesystem", feature = "krx_native"))]
-                if id as usize == APP_ID_VFO {
-                    match crate::runtime::launch_krx_package(ctx, "/apps/vfo.krx", 0) {
-                        Ok(_) => return,
-                        Err(kernel::runtime::KrxLaunchError::ReadFailed) => {}
-                        Err(e) => {
-                            crate::runtime::show_launch_error_dialog(ctx, "/apps/vfo.krx", e);
-                            return;
-                        }
-                    }
-                }
-                #[cfg(all(not(test), feature = "filesystem", feature = "krx_native"))]
-                if id as usize == APP_ID_SETTINGS {
-                    match crate::runtime::launch_krx_package(ctx, "/apps/settings.krx", 0) {
-                        Ok(_) => return,
-                        Err(kernel::runtime::KrxLaunchError::ReadFailed) => {}
-                        Err(e) => {
-                            crate::runtime::show_launch_error_dialog(ctx, "/apps/settings.krx", e);
-                            return;
+                {
+                    let pkg_path = match id as usize {
+                        APP_ID_VFO => Some("/apps/vfo.krx"),
+                        APP_ID_SETTINGS => Some("/apps/settings.krx"),
+                        _ => None,
+                    };
+                    if let Some(path) = pkg_path {
+                        match crate::runtime::launch_krx_package(ctx, path, 0) {
+                            Ok(_) => return,
+                            Err(kernel::runtime::KrxLaunchError::ReadFailed) => {}
+                            Err(e) => {
+                                crate::runtime::show_launch_error_dialog(ctx, path, e);
+                                return;
+                            }
                         }
                     }
                 }
@@ -1109,10 +1107,6 @@ impl Orchestrator {
         if self.active_app_id == APP_ID_LAUNCHER {
             if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_LAUNCHER) {
                 return unsafe { (*(ptr as *const crate::apps::LauncherApp)).is_animating() };
-            }
-        } else if self.active_app_id == APP_ID_SETTINGS {
-            if let Some(ptr) = crate::apps::AppRegistry::app_instance(APP_ID_SETTINGS) {
-                return unsafe { (*(ptr as *const crate::apps::SettingsApp)).is_animating() };
             }
         }
         false

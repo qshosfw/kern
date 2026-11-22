@@ -24,21 +24,6 @@ pub fn draw_icon(x: i16, y: i16, icon_id: u8, color: u8) {
     }
 }
 
-#[inline(always)]
-fn tr_syscall<'a>(s: &'a str, prefer_short: bool, buf: &'a mut [u8; 64]) -> &'a str {
-    #[cfg(feature = "filesystem")]
-    if crate::services::lang::is_active() {
-        #[cfg(not(test))]
-        return crate::services::lang::translate(crate::kern_fs(), s, prefer_short, buf);
-        #[cfg(test)]
-        if let Some(ctx) = super::active_ctx_opt() {
-            return crate::services::lang::translate(ctx.storage, s, prefer_short, buf);
-        }
-    }
-    let _ = (prefer_short, buf);
-    s
-}
-
 pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
     if req.is_null() {
         return 0;
@@ -49,7 +34,7 @@ pub unsafe fn draw_text_req(req: *const KrxTextReq) -> i16 {
     };
     let mut tr_buf = [0u8; 64];
     let s = if (r.flags & kernel::proc::abi::KRX_TEXT_LOCALIZE) != 0 {
-        tr_syscall(
+        gfx::text::localize(
             raw,
             (r.flags & kernel::proc::abi::KRX_TEXT_SHORT) != 0,
             &mut tr_buf,

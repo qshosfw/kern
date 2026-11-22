@@ -318,18 +318,9 @@ impl<'a> MsgWriter<'a> {
     #[inline(never)]
     fn push_hex(&mut self, val: u32) {
         let mut tmp = [0u8; 8];
-        let mut v = val;
-        let mut idx = tmp.len();
-        loop {
-            idx -= 1;
-            let nib = (v & 0xF) as u8;
-            tmp[idx] = if nib < 10 { b'0' + nib } else { b'A' + nib - 10 };
-            v >>= 4;
-            if v == 0 || idx == 0 {
-                break;
-            }
-        }
-        self.push(unsafe { core::str::from_utf8_unchecked(&tmp[idx..]) });
+        let s = gfx::text::format_hex32(val, &mut tmp);
+        let trimmed = s.trim_start_matches('0');
+        self.push(if trimmed.is_empty() { "0" } else { trimmed });
     }
 
     #[inline(never)]

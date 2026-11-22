@@ -85,65 +85,35 @@ impl<const N: usize> LangStrCache<N> {
     }
 }
 
-struct PackSlot {
-    hdr: Option<LangPackHeader>,
-    path: [u8; 28],
+#[inline(never)]
+fn read_media_hdr(
+    storage: &mut crate::services::SystemStorage,
+    path: &str,
+    path_dst: &mut [u8],
+    hdr_buf: &mut [u8; 16],
+) -> Option<u8> {
+    let pb = path.as_bytes();
+    if pb.is_empty() || pb.len() > path_dst.len() {
+        return None;
+    }
+    if storage.read_file_at(path, 0, hdr_buf).unwrap_or(0) != 16 {
+        return None;
+    }
+    path_dst[..pb.len()].copy_from_slice(pb);
+    Some(pb.len() as u8)
+}
+
+struct MediaSlot<H, const N: usize> {
+    hdr: Option<H>,
+    path: [u8; N],
     path_len: u8,
 }
 
-impl PackSlot {
+impl<H: Copy, const N: usize> MediaSlot<H, N> {
     const fn empty() -> Self {
         Self {
             hdr: None,
-            path: [0; 28],
-            path_len: 0,
-        }
-    }
-
-    #[inline(always)]
-    fn path_str(&self) -> &str {
-        utils::format::ascii_str(&self.path[..self.path_len as usize]).unwrap_or("")
-    }
-
-    #[inline(never)]
-    fn clear(&mut self) {
-        self.hdr = None;
-        self.path_len = 0;
-    }
-
-    #[inline(never)]
-    fn load(&mut self, storage: &mut crate::services::SystemStorage, path: &str) -> bool {
-        self.clear();
-        let pb = path.as_bytes();
-        if pb.is_empty() || pb.len() > self.path.len() {
-            return false;
-        }
-        let mut hdr_buf = [0u8; LangPackHeader::SIZE];
-        if storage.read_file_at(path, 0, &mut hdr_buf).unwrap_or(0) != LangPackHeader::SIZE {
-            return false;
-        }
-        let hdr = LangPackHeader::from_bytes(&hdr_buf);
-        if !hdr.is_valid() {
-            return false;
-        }
-        self.path[..pb.len()].copy_from_slice(pb);
-        self.path_len = pb.len() as u8;
-        self.hdr = Some(hdr);
-        true
-    }
-}
-
-struct FontSlot {
-    hdr: Option<FontPackHeader>,
-    path: [u8; 24],
-    path_len: u8,
-}
-
-impl FontSlot {
-    const fn empty() -> Self {
-        Self {
-            hdr: None,
-            path: [0; 24],
+            path: [0; N],
             path_len: 0,
         }
     }
@@ -159,26 +129,35 @@ impl FontSlot {
         self.path_len = 0;
     }
 
-    #[inline(never)]
-    fn load(&mut self, storage: &mut crate::services::SystemStorage, path: &str) -> bool {
+    #[inline(always)]
+    fn load_with(
+        &mut self,
+        storage: &mut crate::services::SystemStorage,
+        path: &str,
+        parse: fn(&[u8; 16]) -> Option<H>,
+    ) -> bool {
         self.clear();
-        let pb = path.as_bytes();
-        if pb.is_empty() || pb.len() > self.path.len() {
+        let mut hdr_buf = [0u8; 16];
+        let Some(plen) = read_media_hdr(storage, path, &mut self.path, &mut hdr_buf) else {
             return false;
-        }
-        let mut hdr_buf = [0u8; FontPackHeader::SIZE];
-        if storage.read_file_at(path, 0, &mut hdr_buf).unwrap_or(0) != FontPackHeader::SIZE {
+        };
+        let Some(hdr) = parse(&hdr_buf) else {
             return false;
-        }
-        let hdr = FontPackHeader::from_bytes(&hdr_buf);
-        if !hdr.is_valid() {
-            return false;
-        }
-        self.path[..pb.len()].copy_from_slice(pb);
-        self.path_len = pb.len() as u8;
+        };
+        self.path_len = plen;
         self.hdr = Some(hdr);
         true
     }
+}
+
+fn parse_lang_hdr(b: &[u8; 16]) -> Option<LangPackHeader> {
+    let h = LangPackHeader::from_bytes(b);
+    h.is_valid().then_some(h)
+}
+
+fn parse_font_hdr(b: &[u8; 16]) -> Option<FontPackHeader> {
+    let h = FontPackHeader::from_bytes(b);
+    h.is_valid().then_some(h)
 }
 
 /// Build `/user/fonts/<cc>.fnt` for data-driven companion script packs (e.g. `ko.fnt`, `he.fnt`).
@@ -203,26 +182,26 @@ fn build_lang_font_path(lang_code: &[u8; 4], out: &mut [u8; 24]) -> usize {
 }
 
 struct ActiveLang {
-    os: PackSlot,
-    app: PackSlot,
-    base_font: FontSlot,
-    extra_font: FontSlot,
+    os: MediaSlot<LangPackHeader, 24>,
+    app: MediaSlot<LangPackHeader, 28>,
+    base_font: MediaSlot<FontPackHeader, 24>,
+    extra_font: MediaSlot<FontPackHeader, 24>,
     glyph_cache: FontGlyphCache<1>,
     str_cache: LangStrCache<1>,
-    app_stem: [u8; 16],
+    app_stem: [u8; 12],
     app_stem_len: u8,
 }
 
 impl ActiveLang {
     const fn new() -> Self {
         Self {
-            os: PackSlot::empty(),
-            app: PackSlot::empty(),
-            base_font: FontSlot::empty(),
-            extra_font: FontSlot::empty(),
+            os: MediaSlot::empty(),
+            app: MediaSlot::empty(),
+            base_font: MediaSlot::empty(),
+            extra_font: MediaSlot::empty(),
             glyph_cache: FontGlyphCache::new(),
             str_cache: LangStrCache::new(),
-            app_stem: [0; 16],
+            app_stem: [0; 12],
             app_stem_len: 0,
         }
     }
@@ -302,13 +281,13 @@ pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::conf
         return;
     }
     let path = sys.lang_path_str();
-    if !st.os.load(storage, path) {
+    if !st.os.load_with(storage, path, parse_lang_hdr) {
         st.app.clear();
         gfx::text::set_ext_font_hooks(None, None);
         gfx::text::set_localize_hook(None);
         return;
     }
-    let _ = st.base_font.load(storage, "/user/fonts/tiny5.fnt");
+    let _ = st.base_font.load_with(storage, "/user/fonts/tiny5.fnt", parse_font_hdr);
     if let Some(os_hdr) = st.os.hdr {
         let mut fbuf = [0u8; 24];
         let fn_len = build_lang_font_path(&os_hdr.lang_code, &mut fbuf);
@@ -316,13 +295,13 @@ pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::conf
         if fn_len > 0
             && let Some(fp) = utils::format::ascii_str(&fbuf[..fn_len])
         {
-            loaded = st.extra_font.load(storage, fp);
+            loaded = st.extra_font.load_with(storage, fp, parse_font_hdr);
         }
         if !loaded {
             if (os_hdr.font_hint & LANG_FONT_CJK_JA) != 0 {
-                let _ = st.extra_font.load(storage, "/user/fonts/cjk_ja.fnt");
+                let _ = st.extra_font.load_with(storage, "/user/fonts/cjk_ja.fnt", parse_font_hdr);
             } else if (os_hdr.font_hint & LANG_FONT_CJK_ZH) != 0 {
-                let _ = st.extra_font.load(storage, "/user/fonts/cjk_zh.fnt");
+                let _ = st.extra_font.load_with(storage, "/user/fonts/cjk_zh.fnt", parse_font_hdr);
             }
         }
     }
@@ -352,26 +331,17 @@ fn os_localize_hook<'a>(key: &str, prefer_short: bool, out: &'a mut [u8]) -> Opt
 fn fetch_ext_glyph(cp: u16) -> Option<&'static gfx::media::CachedGlyphSlot> {
     let st = state_mut();
     let fs = crate::kern_fs();
-    if let Some(hdr) = st.base_font.hdr {
-        let p = st.base_font.path_str();
-        if let Some(slot) = st.glyph_cache.fetch(
-            0,
-            &hdr,
-            |off, dst| fs.read_file_at(p, off, dst).unwrap_or(0),
-            cp,
-        ) {
-            return Some(slot);
-        }
-    }
-    if let Some(hdr) = st.extra_font.hdr {
-        let p = st.extra_font.path_str();
-        if let Some(slot) = st.glyph_cache.fetch(
-            1,
-            &hdr,
-            |off, dst| fs.read_file_at(p, off, dst).unwrap_or(0),
-            cp,
-        ) {
-            return Some(slot);
+    for (pack_id, font) in [(0u8, &st.base_font), (1u8, &st.extra_font)] {
+        if let Some(hdr) = font.hdr {
+            let p = font.path_str();
+            if let Some(slot) = st.glyph_cache.fetch(
+                pack_id,
+                &hdr,
+                |off, dst| fs.read_file_at(p, off, dst).unwrap_or(0),
+                cp,
+            ) {
+                return Some(slot);
+            }
         }
     }
     None
@@ -434,7 +404,7 @@ fn reload_bound_app(storage: &mut crate::services::SystemStorage) {
     let n = build_app_lang_path(stem, &os_hdr.lang_code, &mut pbuf);
     if n > 0 {
         if let Some(p) = utils::format::ascii_str(&pbuf[..n]) {
-            st.app.load(storage, p);
+            st.app.load_with(storage, p, parse_lang_hdr);
         }
     }
 }
@@ -480,9 +450,8 @@ pub fn translate_opt<'a>(
         return hit;
     }
     let mut found = None;
-    for slot in [&st.app, &st.os] {
-        if let Some(hdr) = slot.hdr {
-            let path = slot.path_str();
+    for (hdr_opt, path) in [(st.app.hdr, st.app.path_str()), (st.os.hdr, st.os.path_str())] {
+        if let Some(hdr) = hdr_opt {
             let res = if prefer_short {
                 lookup_lang_short_streaming(
                     &hdr,

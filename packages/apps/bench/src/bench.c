@@ -112,14 +112,11 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         u8 ch_b = 'B';
         u8 origin[2] = { 0, 0 };
         krx_ui_draw_progress_bar(api, 10, 10, 50u, 6u, 75u, 1u);
-        krx_ui_draw_s_meter(api, 0, 40, -85, 9u);
         krx_ui_draw_tag_badge(api, 0, 0, &ch_b, 1u, 1u);
         krx_ui_draw_key_badge(api, 0, 20, &ch_b, 1u, &ch_b, 1u);
         krx_ui_draw_capsule_button(api, 10, 30, 40u, 9u, &ch_b, 1u, 1u);
         krx_ui_draw_scrollbar(api, 125u, 0u, 64u, 5u, 20u, 5u);
         krx_ui_draw_menu_item(api, 10, &ch_b, 1u, &ch_b, 1u, 1u, 0u);
-        krx_ui_draw_big_digit(api, 0, 0, 7u, 1u);
-        krx_ui_draw_small_digit(api, 20, 0, 3u, 1u);
         krx_ui_draw_battery(api, 100, 0, 85u, 0u);
         krx_ui_draw_signal(api, 0, 0, 4u, 1u);
         krx_ui_draw_modal_box(api, 60u, 30u, origin);
@@ -226,9 +223,8 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         i16 bx = (i16)(2 + anim_off);
 
         if (g_tab == 0u) {
-            i16 rssi = (i16)(-115 + (i16)(g_progress >> 1));
-            krx_ui_draw_s_meter(api, (i16)(bx + 2), 12, rssi, 10u);
             krx_ui_draw_signal(api, (i16)(bx + 106), 13, 4u, COLOR_FILL);
+            krx_draw_str_ex(api, (i16)(bx + 2), 18, (const u8*)"UI KIT", 6u, 1u, COLOR_FILL);
 
             krx_ui_draw_tag_badge(api, (i16)(bx + 2), 22, (const u8*)"VFO-A", 5u, 1u);
             krx_ui_draw_tag_badge(api, (i16)(bx + 33), 22, (const u8*)"FM", 2u, 0u);
@@ -236,7 +232,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             krx_ui_draw_capsule_button(api, (i16)(bx + 88), 22, 34u, 9u, (const u8*)"STBY", 4u, 0u);
 
             krx_ui_draw_progress_bar(api, (i16)(bx + 2), 34, 120u, 6u, g_progress, 1u);
-            krx_draw_str_ex(api, (i16)(bx + 3), 48, (const u8*)"UP/DN: Adjust Meter", 19u, 0u, COLOR_FILL);
+            krx_draw_str_ex(api, (i16)(bx + 3), 48, (const u8*)"UP/DN: Adjust Bar", 17u, 0u, COLOR_FILL);
         } else if (g_tab == 1u) {
             u8 start_row = (g_menu_selected >= 3u) ? (u8)(g_menu_selected - 2u) : 0u;
             for (u8 r = 0; r < 3u; r++) {
@@ -251,13 +247,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             }
             krx_ui_draw_scrollbar(api, 124u, 12u, 38u, start_row, 6u, 3u);
         } else {
-            krx_ui_draw_big_digit(api, (i16)(bx + 4), 15, 1u, COLOR_FILL);
-            krx_ui_draw_big_digit(api, (i16)(bx + 18), 15, 4u, COLOR_FILL);
-            krx_ui_draw_big_digit(api, (i16)(bx + 32), 15, 5u, COLOR_FILL);
-            krx_fill_rect(api, (i16)(bx + 47), 28, 2, 2, COLOR_FILL);
-            krx_ui_draw_big_digit(api, (i16)(bx + 51), 15, 5u, COLOR_FILL);
-            krx_ui_draw_small_digit(api, (i16)(bx + 66), 23, 2u, COLOR_FILL);
-            krx_ui_draw_small_digit(api, (i16)(bx + 74), 23, 5u, COLOR_FILL);
+            krx_draw_str_ex(api, (i16)(bx + 4), 24, (const u8*)"145.525 MHz", 11u, 1u, COLOR_FILL);
 
             krx_ui_draw_battery(api, (i16)(bx + 96), 16, g_progress, 0u);
             krx_ui_draw_tag_badge(api, (i16)(bx + 90), 25, (const u8*)"MODAL", 5u, 1u);
