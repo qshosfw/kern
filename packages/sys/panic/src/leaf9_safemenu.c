@@ -22,7 +22,7 @@ u32 leaf9_entry(u32 op, const KrxApiTable* api, void* param) {
     u8 p = p_app_s(ln, 0u, "SAFE MODE #");
     p += p_put_uint(api, ln + p, strikes);
     ln[p] = 0;
-    p_draw_sq_tab(api, ln);
+    p_draw_tab(api, ln);
 
     p = p_app_s(ln, 0u, "PC:");
     p += p_put_hex(ln + p, s->fault_pc, 8u);

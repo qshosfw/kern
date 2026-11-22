@@ -21,7 +21,7 @@ u32 leaf7_entry(u32 op, const KrxApiTable* api, void* param) {
     const BootSlot* s = &st->slot;
 
     krx_clear(api);
-    i16 tab_r = p_draw_sq_tab(api, "STACK");
+    i16 tab_r = p_draw_tab(api, "STACK");
 
     char hdr[16];
     u8 hp = 0u;

@@ -61,15 +61,13 @@ u32 leaf5_entry(u32 op, const KrxApiTable* api, void* param) {
         p = p_app_s(ln, 0u, "IQ:");
         p += p_put_uint(api, ln + p, s->forensics.ipsr_num);
     } else {
-        p = p_app_s(ln, 0u, "THR");
+        p = p_app_s(ln, 0u, (s->forensics.exec_mode & 1u) ? "PSP" : "MSP");
     }
-    ln[p++] = ' ';
-    ln[p++] = (s->forensics.exec_mode & 1u) ? 'P' : 'M';
-    krx_draw_str_ex(api, 2, 45, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
+    krx_draw_str_max(api, 2, 45, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 25);
 
     p = p_app_s(ln, 0u, "S:");
     p += p_put_hex(ln + p, st->ana.crash_sig >> 16, 4u);
-    krx_draw_str_ex(api, 2, 52, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL);
+    krx_draw_str_max(api, 2, 52, (const u8*)ln, p, FONT_TOMTHUMB, COLOR_FILL, 25);
 
     ctx->continuation.kind = KRX_LEAF_KIND_DONE;
     return 0u;

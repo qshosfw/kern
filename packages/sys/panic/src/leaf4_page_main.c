@@ -41,7 +41,7 @@ u32 leaf4_entry(u32 op, const KrxApiTable* api, void* param) {
     krx_clear(api);
 
     const char* title = p_reason_name(s->reset_reason);
-    i16 tab_r = p_draw_sq_tab(api, title);
+    i16 tab_r = p_draw_tab(api, title);
 
     if (st->ana.actor[0] != 0 && !eq_ci(st->ana.actor, title)) {
         i16 ax = (i16)(tab_r + 4);

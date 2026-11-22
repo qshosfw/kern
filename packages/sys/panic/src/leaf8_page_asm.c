@@ -12,7 +12,7 @@ u32 leaf8_entry(u32 op, const KrxApiTable* api, void* param) {
     const BootSlot* s = &st->slot;
 
     krx_clear(api);
-    i16 tab_r = p_draw_sq_tab(api, "ASM");
+    i16 tab_r = p_draw_tab(api, "ASM");
 
     char pc_hdr[14];
     u8 pp = p_app_s(pc_hdr, 0u, "@0x");
@@ -33,7 +33,10 @@ u32 leaf8_entry(u32 op, const KrxApiTable* api, void* param) {
         for (u8 i = 0u; i < 5u; i++) {
             i16 y = (i16)(17 + i * 8);
             u8 is_pc = (i == 2u) ? 1u : 0u;
-            if (is_pc) krx_fill_rect(api, 2, (i16)(y - 6), 124, 8, COLOR_FILL);
+            if (is_pc) {
+                krx_fill_rect(api, 2, (i16)(y - 6), 124, 8, COLOR_FILL);
+                krx_clear_corners(api, 2, (i16)(y - 6), 124, 8);
+            }
             u32 addr = (u32)((i32)pc_even + ((i32)i - 2) * 2);
             u8 lp = 0u;
             ln[lp++] = is_pc ? '>' : ' ';
