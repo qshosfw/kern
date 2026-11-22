@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import struct
 import time
+import urllib.parse
+import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +23,111 @@ except Exception:
     _flasher = None  # type: ignore[assignment]
 
 FLASH_TOTAL_BYTES = 128 * 1024
+_GH_REPO_RE = re.compile(r"^(?:https?://github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git|/releases.*|/)?$")
+
+
+def parse_github_repo_slug(repo_or_url: str) -> str | None:
+    """Extract `owner/repo` from a GitHub slug or URL; returns None for direct file URLs."""
+    s = repo_or_url.strip()
+    if not s:
+        return None
+    if s.startswith(("http://", "https://")):
+        parsed = urllib.parse.urlparse(s)
+        if parsed.netloc.lower() != "github.com":
+            return None
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 2 and ("/releases/download/" not in parsed.path) and not parts[-1].lower().endswith((".kfw", ".bin")):
+            return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+        return None
+    m = _GH_REPO_RE.match(s)
+    return m.group(1) if m else None
+
+
+def fetch_github_releases(repo_or_url: str, *, limit: int = 8) -> list[dict[str, Any]]:
+    """Fetch GitHub releases & `.kfw`/`.bin` assets for an `owner/repo` slug or URL."""
+    slug = parse_github_repo_slug(repo_or_url)
+    if not slug:
+        raise ValueError("Enter a valid GitHub 'owner/repo' or repository URL")
+    api_url = f"https://api.github.com/repos/{slug}/releases?per_page={max(1, min(20, limit))}"
+    req = urllib.request.Request(
+        api_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "KernDock/2.0",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = json.loads(resp.read().decode("utf-8"))
+    releases: list[dict[str, Any]] = []
+    for rel in raw:
+        assets: list[dict[str, Any]] = []
+        for a in rel.get("assets", []):
+            name = str(a.get("name", ""))
+            if name.lower().endswith((".kfw", ".bin")):
+                assets.append({
+                    "name": name,
+                    "size": int(a.get("size", 0)),
+                    "url": str(a.get("browser_download_url", "")),
+                    "digest": str(a.get("digest", "")),
+                })
+        if assets:
+            releases.append({
+                "tag": str(rel.get("tag_name", "")),
+                "name": str(rel.get("name") or rel.get("tag_name") or ""),
+                "published_at": str(rel.get("published_at", ""))[:10],
+                "prerelease": bool(rel.get("prerelease", False)),
+                "assets": assets,
+            })
+    return releases
+
+
+def download_firmware_url(
+    url: str,
+    dest_dir: Path | None = None,
+    *,
+    expected_sha256: str = "",
+    progress_cb: Callable[[float, str], None] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """Download a `.kfw` or `.bin` firmware image, verify optional SHA-256, and run pre-flight validation."""
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http:// and https:// URLs are supported")
+    fname = Path(urllib.parse.unquote(parsed.path)).name or "firmware.bin"
+    fname = re.sub(r"[^A-Za-z0-9._-]", "_", fname)
+    if not fname.lower().endswith((".kfw", ".bin")):
+        fname += ".bin"
+
+    cache_dir = dest_dir or (Path.home() / ".cache" / "kern-dock" / "firmware")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    dest = cache_dir / fname
+
+    req = urllib.request.Request(url.strip(), headers={"User-Agent": "KernDock/2.0"})
+    h = hashlib.sha256()
+    total_read = 0
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        total_len = int(resp.headers.get("Content-Length") or 0)
+        with dest.open("wb") as out_f:
+            while True:
+                chunk = resp.read(16384)
+                if not chunk:
+                    break
+                out_f.write(chunk)
+                h.update(chunk)
+                total_read += len(chunk)
+                if progress_cb and total_len > 0:
+                    progress_cb(min(1.0, total_read / float(total_len)), f"Downloading {fname}…")
+
+    actual_sha = h.hexdigest().lower()
+    exp = expected_sha256.strip().lower().removeprefix("sha256:")
+    if exp and actual_sha != exp:
+        dest.unlink(missing_ok=True)
+        raise ValueError(f"SHA-256 mismatch: expected {exp[:12]}…, got {actual_sha[:12]}…")
+
+    info = inspect_firmware_file(dest)
+    info["path"] = str(dest)
+    info["source_url"] = url.strip()
+    info["sha256"] = actual_sha
+    return dest, info
 
 
 def _check_armv6m_vectors(raw_fw: bytes) -> tuple[bool, int, int]:

@@ -26,6 +26,7 @@ from ...device.hardware import (
     set_usb_power_control,
     uhubctl_power,
 )
+from ...device.usb import probe_bootloader_beacon
 from ..runtime import DockRuntime
 from ..widgets.hex_view import show_hex_viewer_dialog
 
@@ -144,14 +145,23 @@ class HardwareView:
         self.grp_raw_ports: list[str] = []
 
         self.uart_baud_row = Adw.ComboRow(title="Baudrate")
-        self._bauds = [38400, 115200, 9600, 921600]
+        self._bauds = [38400, 115200, 57600, 19200, 9600, 921600]
         self.uart_baud_row.set_model(Gtk.StringList.new([str(b) for b in self._bauds]))
+
+        self.uart_eol_row = Adw.ComboRow(title="Line Ending")
+        self._eols = ["", "\r\n", "\n"]
+        self.uart_eol_row.set_model(Gtk.StringList.new(["None", "CRLF (\\r\\n)", "LF (\\n)"]))
+
+        self.uart_probe_bl_btn = Gtk.Button(label="Probe BL", valign=Gtk.Align.CENTER, tooltip_text="Listen for 0x0518 bootloader beacon")
+        self.uart_probe_bl_btn.connect("clicked", lambda _b: self._probe_raw_bl())
+        self.uart_port_row.add_suffix(self.uart_probe_bl_btn)
 
         self.uart_open_btn = Gtk.Button(label="Open Raw", valign=Gtk.Align.CENTER)
         self.uart_open_btn.connect("clicked", lambda _b: self._toggle_raw_uart())
         self.uart_port_row.add_suffix(self.uart_open_btn)
         grp_raw.add(self.uart_port_row)
         grp_raw.add(self.uart_baud_row)
+        grp_raw.add(self.uart_eol_row)
 
         self.sw_dtr = Adw.SwitchRow(title="DTR Line", subtitle="Physical Data Terminal Ready pin (often Reset / Power)")
         self.sw_dtr.connect("notify::active", lambda w, _p: None if self._updating_uart else self._set_line("dtr", w.get_active()))
@@ -183,6 +193,12 @@ class HardwareView:
         grp_raw.add(self.raw_tx_row)
 
         self.uart_rx_exp = Adw.ExpanderRow(title="Raw RX Monitor", subtitle="Closed")
+        self.uart_hex_chk = Gtk.ToggleButton(label="Hex", active=True, valign=Gtk.Align.CENTER, tooltip_text="Show hex bytes alongside ASCII")
+        clr_rx = Gtk.Button(icon_name="edit-clear-all-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Clear RX log")
+        clr_rx.add_css_class("flat")
+        clr_rx.connect("clicked", lambda _b: self.uart_rx_buf.set_text(""))
+        self.uart_rx_exp.add_suffix(self.uart_hex_chk)
+        self.uart_rx_exp.add_suffix(clr_rx)
         self.uart_rx_buf = Gtk.TextBuffer()
         rtv = Gtk.TextView(buffer=self.uart_rx_buf, editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
         rtv.set_size_request(-1, 110)
@@ -241,6 +257,8 @@ class HardwareView:
         else:
             for d in self._usb_devs:
                 parts = [f"{d.vid}:{d.pid}", d.bus_port]
+                if d.chip_name and d.chip_name.lower() not in d.name.lower():
+                    parts.append(d.chip_name)
                 if d.max_power_ma:
                     parts.append(f"{d.max_power_ma} mA")
                 parts.append(f"power:{d.power_control}/{d.runtime_status}")
@@ -263,11 +281,14 @@ class HardwareView:
                 self.grp_power.add(row)
                 self._usb_rows.append(row)
 
-        # Refresh raw serial port list
+        # Refresh raw serial port list with chip labels (CH340, CP2102, FT232, etc.)
+        chip_by_tty = {d.tty_dev: (d.chip_name or d.name) for d in self._usb_devs if d.tty_dev}
         ports = [p.device for p in self.runtime.port_monitor.ports]
+        port_labels = [f"{p} · {chip_by_tty[p]}" if p in chip_by_tty else p for p in ports]
         self.grp_raw_ports = ports
-        self.uart_port_row.set_model(Gtk.StringList.new(ports or ["No serial port"]))
+        self.uart_port_row.set_model(Gtk.StringList.new(port_labels or ["No serial port"]))
         self.uart_open_btn.set_sensitive(bool(ports) or self._raw_uart.is_open)
+        self.uart_probe_bl_btn.set_sensitive(bool(ports) and not self._raw_uart.is_open)
 
     def _selected_target(self) -> str:
         idx = int(self.swd_target_row.get_selected())
@@ -406,21 +427,44 @@ class HardwareView:
         except Exception as exc:
             self._on_toast(str(exc))
 
+    def _probe_raw_bl(self) -> None:
+        idx = int(self.uart_port_row.get_selected())
+        if not (0 <= idx < len(self.grp_raw_ports)):
+            return
+        port = self.grp_raw_ports[idx]
+        self._on_toast(f"Probing {port} for bootloader beacon (38400 baud)…")
+
+        def _w() -> None:
+            res = probe_bootloader_beacon(port, duration_s=1.2)
+            if res:
+                msg = f"Bootloader {res['version']} · UID {res['uid'][:8]}"
+            else:
+                msg = f"No bootloader beacon on {port}"
+            GLib.idle_add(self._on_toast, msg)
+
+        threading.Thread(target=_w, daemon=True).start()
+
     def _on_raw_tx(self, _w: Any) -> None:
         txt = self.raw_tx_row.get_text()
         if not txt.strip():
             return
         try:
             payload = parse_raw_tx_input(txt)
+            if not txt.strip().lower().startswith("hex:"):
+                e_idx = int(self.uart_eol_row.get_selected())
+                if 0 <= e_idx < len(self._eols):
+                    payload += self._eols[e_idx].encode("ascii")
             self._raw_uart.write(payload)
             self.raw_tx_row.set_text("")
         except Exception as exc:
             self._on_toast(f"TX error: {exc}")
 
     def _append_uart_rx(self, data: bytes) -> bool:
-        hex_s = data.hex(" ")
-        asc_s = "".join(chr(b) if 32 <= b < 127 else "." for b in data)
-        line = f"{hex_s}  | {asc_s}\n"
+        asc_s = "".join(chr(b) if 32 <= b < 127 or b in (10, 13) else "." for b in data)
+        if self.uart_hex_chk.get_active():
+            line = f"{data.hex(' ')}  | {asc_s.rstrip()}\n"
+        else:
+            line = asc_s
         end_it = self.uart_rx_buf.get_end_iter()
         self.uart_rx_buf.insert(end_it, line)
         return False

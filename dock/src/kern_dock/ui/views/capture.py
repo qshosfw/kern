@@ -1,4 +1,4 @@
-"""Capture Studio View: PNG/clipboard snapshots and GIF recorder with trim/cut/splice timeline."""
+"""Capture View: snapshot, raw 1 KB framebuffer dump & non-destructive GIF timeline editor."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from ..widgets.handset_stage import HandsetStage
 
 
 class CaptureView:
-    """Snapshot and non-destructive GIF studio view."""
+    """Serious Libadwaita Capture & Timeline Studio (PNG, raw framebuffer, animated GIF)."""
 
     def __init__(
         self,
@@ -55,61 +55,58 @@ class CaptureView:
     def _build(self) -> Adw.PreferencesPage:
         page = Adw.PreferencesPage()
 
-        # --- Quick Actions Group ---
-        act_grp = Adw.PreferencesGroup()
-        top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.rec_btn = Gtk.ToggleButton(hexpand=True, tooltip_text="Start / stop live recording (Ctrl+R)")
-        rec_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, halign=Gtk.Align.CENTER)
+        # === 1. CAPTURE TOOLS ===
+        grp_cap = Adw.PreferencesGroup(title="Capture")
+
+        rec_row = Adw.ActionRow(title="Screen Recording", subtitle="Record live LCD &amp; keypad frames to timeline (Ctrl+R)")
+        self.rec_btn = Gtk.ToggleButton(valign=Gtk.Align.CENTER, tooltip_text="Start / stop live recording (Ctrl+R)")
+        rec_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         rec_in.append(Gtk.Image.new_from_icon_name("media-record-symbolic"))
-        self.rec_lbl = Gtk.Label(label="Record GIF")
+        self.rec_lbl = Gtk.Label(label="Record")
         rec_in.append(self.rec_lbl)
         self.rec_btn.set_child(rec_in)
         self.rec_btn.connect("toggled", self._on_record_toggled)
-        top_row.append(self.rec_btn)
+        rec_row.add_suffix(self.rec_btn)
+        grp_cap.add(rec_row)
 
-        shot_grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        snap_row = Adw.ActionRow(title="Snapshot", subtitle="Save PNG, copy to clipboard, or dump raw 1 KB ST7565 framebuffer")
+        shot_grp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
         shot_grp.add_css_class("linked")
-        shot_btn = Gtk.Button(tooltip_text="Save PNG snapshot (Ctrl+S)")
-        sh_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        sh_in.append(Gtk.Image.new_from_icon_name("camera-photo-symbolic"))
-        sh_in.append(Gtk.Label(label="Snapshot"))
-        shot_btn.set_child(sh_in)
+        shot_btn = Gtk.Button(label="Save PNG", tooltip_text="Save PNG snapshot (Ctrl+S)")
         shot_btn.connect("clicked", lambda _b: self.save_screenshot())
-        shot_grp.append(shot_btn)
-
-        copy_png = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
-        copy_png.set_tooltip_text("Copy PNG to clipboard")
+        copy_png = Gtk.Button(icon_name="edit-copy-symbolic", tooltip_text="Copy PNG to clipboard")
         copy_png.connect("clicked", lambda _b: self.copy_screenshot())
+        raw_fb = Gtk.Button(label="Raw FB", tooltip_text="Save raw 1024-byte ST7565 framebuffer (.bin)")
+        raw_fb.connect("clicked", lambda _b: self.save_raw_framebuffer())
+        shot_grp.append(shot_btn)
         shot_grp.append(copy_png)
-        top_row.append(shot_grp)
-        act_grp.add(top_row)
-        page.add(act_grp)
+        shot_grp.append(raw_fb)
+        snap_row.add_suffix(shot_grp)
+        grp_cap.add(snap_row)
+        page.add(grp_cap)
 
-        # --- Timeline Group ---
-        tl_grp = Adw.PreferencesGroup()
-        tl_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        tl_card.add_css_class("card")
-        tl_card.add_css_class("timeline-card")
+        # === 2. TIMELINE EDITOR & FRAME PREVIEW ===
+        grp_tl = Adw.PreferencesGroup(title="Timeline Editor")
 
-        tl_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        tl_title = Gtk.Label(label="Timeline", xalign=0)
-        tl_title.add_css_class("heading")
-        tl_hdr.append(tl_title)
-        self.summary_lbl = Gtk.Label(label="No frames recorded", xalign=1, hexpand=True, ellipsize=3)
-        self.summary_lbl.add_css_class("caption")
-        self.summary_lbl.add_css_class("dim-label")
-        self.summary_lbl.add_css_class("numeric")
-        tl_hdr.append(self.summary_lbl)
-        self.clr_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+        self.frame_info_row = Adw.ActionRow(title="No Clip Recorded", subtitle="Press Record to capture frames")
+        self.clr_btn = Gtk.Button(
+            icon_name="user-trash-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text="Discard clip",
+            sensitive=False,
+        )
         self.clr_btn.add_css_class("flat")
-        self.clr_btn.set_tooltip_text("Discard clip")
-        self.clr_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Discard clip"])
-        self.clr_btn.set_sensitive(False)
         self.clr_btn.connect("clicked", lambda _b: self._discard())
-        tl_hdr.append(self.clr_btn)
-        tl_card.append(tl_hdr)
+        self.frame_info_row.add_suffix(self.clr_btn)
+        grp_tl.add(self.frame_info_row)
 
-        self.timeline_area = Gtk.DrawingArea(content_height=48, hexpand=True)
+        # Live / scrubbed frame preview + scrubber canvas
+        tl_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=6, margin_bottom=6)
+        self.preview_area = Gtk.DrawingArea(content_height=116, hexpand=True)
+        self.preview_area.set_draw_func(self._draw_frame_preview)
+        tl_box.append(self.preview_area)
+
+        self.timeline_area = Gtk.DrawingArea(content_height=44, hexpand=True)
         self.timeline_area.set_draw_func(self._draw_timeline)
         tl_c = Gtk.GestureClick()
         tl_c.connect("pressed", self._on_tl_click)
@@ -117,64 +114,58 @@ class CaptureView:
         tl_d = Gtk.GestureDrag()
         tl_d.connect("drag-update", self._on_tl_drag)
         self.timeline_area.add_controller(tl_d)
-        tl_card.append(self.timeline_area)
+        tl_box.append(self.timeline_area)
 
+        # Transport & Trim/Splice toolbar
         tr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         nav_g = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         nav_g.add_css_class("linked")
-        self.prev_btn = Gtk.Button.new_from_icon_name("go-previous-symbolic")
-        self.prev_btn.set_tooltip_text("Previous frame")
-        self.prev_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Previous frame"])
+        self.prev_btn = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text="Previous frame", sensitive=False)
         self.prev_btn.connect("clicked", lambda _b: self._step_pb(-1))
-        self.pb_btn = Gtk.Button.new_from_icon_name("media-playback-start-symbolic")
-        self.pb_btn.set_tooltip_text("Play / Pause")
-        self.pb_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Play or pause preview"])
+        self.pb_btn = Gtk.Button(icon_name="media-playback-start-symbolic", tooltip_text="Play / Pause", sensitive=False)
         self.pb_btn.connect("clicked", lambda _b: self._toggle_pb())
-        self.next_btn = Gtk.Button.new_from_icon_name("go-next-symbolic")
-        self.next_btn.set_tooltip_text("Next frame")
-        self.next_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Next frame"])
+        self.next_btn = Gtk.Button(icon_name="go-next-symbolic", tooltip_text="Next frame", sensitive=False)
         self.next_btn.connect("clicked", lambda _b: self._step_pb(1))
         for w in (self.prev_btn, self.pb_btn, self.next_btn):
-            w.set_sensitive(False)
             nav_g.append(w)
         tr.append(nav_g)
         tr.append(Gtk.Box(hexpand=True))
 
         edit_g = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         edit_g.add_css_class("linked")
-        self.b_in = Gtk.Button(label="In", tooltip_text="Trim start", sensitive=False)
+        self.b_in = Gtk.Button(label="In", tooltip_text="Set trim start", sensitive=False)
         self.b_in.connect("clicked", lambda _b: self._set_trim_in())
-        self.b_out = Gtk.Button(label="Out", tooltip_text="Trim end", sensitive=False)
+        self.b_out = Gtk.Button(label="Out", tooltip_text="Set trim end", sensitive=False)
         self.b_out.connect("clicked", lambda _b: self._set_trim_out())
+        self.b_reset_trim = Gtk.Button(label="Reset", tooltip_text="Reset trim to full clip", sensitive=False)
+        self.b_reset_trim.connect("clicked", lambda _b: self._reset_trim())
         self.cut_btn = Gtk.Button(label="Cut", tooltip_text="Mark splice cut", sensitive=False)
         self.cut_btn.connect("clicked", lambda _b: self._cut_splice())
-        self.undo_btn = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
-        self.undo_btn.set_tooltip_text("Undo cut")
-        self.undo_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Undo cut"])
-        self.undo_btn.set_sensitive(False)
+        self.undo_btn = Gtk.Button(icon_name="edit-undo-symbolic", tooltip_text="Undo last cut", sensitive=False)
         self.undo_btn.connect("clicked", lambda _b: (self.runtime.recorder.undo_cut(), self._refresh_ui()))
-        for w in (self.b_in, self.b_out, self.cut_btn, self.undo_btn):
+        for w in (self.b_in, self.b_out, self.b_reset_trim, self.cut_btn, self.undo_btn):
             edit_g.append(w)
         tr.append(edit_g)
-        tl_card.append(tr)
-        tl_grp.add(tl_card)
-        page.add(tl_grp)
+        tl_box.append(tr)
 
-        # --- Export Options Group ---
+        grp_tl.add(tl_box)
+        page.add(grp_tl)
+
+        # === 3. EXPORT ===
         opt = Adw.PreferencesGroup(title="Export")
-        r_mode = Adw.ActionRow(title="Frame", subtitle="LCD only or full handset")
+        r_mode = Adw.ActionRow(title="Frame Target", subtitle="LCD only (540×374) or full radio handset")
         mg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
         mg.add_css_class("linked")
         b_lcd = Gtk.ToggleButton(label="LCD", active=True)
         b_body = Gtk.ToggleButton(label="Full Radio", group=b_lcd)
-        b_lcd.connect("toggled", lambda b: setattr(self, "_export_mode", "lcd") if b.get_active() else None)
-        b_body.connect("toggled", lambda b: setattr(self, "_export_mode", "body") if b.get_active() else None)
+        b_lcd.connect("toggled", lambda b: (setattr(self, "_export_mode", "lcd"), self.preview_area.queue_draw()) if b.get_active() else None)
+        b_body.connect("toggled", lambda b: (setattr(self, "_export_mode", "body"), self.preview_area.queue_draw()) if b.get_active() else None)
         mg.append(b_lcd)
         mg.append(b_body)
         r_mode.add_suffix(mg)
         opt.add(r_mode)
 
-        r_spd = Adw.ActionRow(title="Speed")
+        r_spd = Adw.ActionRow(title="Playback Speed")
         sg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
         sg.add_css_class("linked")
         first_s = None
@@ -189,12 +180,16 @@ class CaptureView:
         r_spd.add_suffix(sg)
         opt.add(r_spd)
 
-        r_cap = Adw.SwitchRow(title="Clamp Idle Pauses", subtitle="Cap pauses at 0.6 s", active=True)
+        r_cap = Adw.SwitchRow(title="Clamp Idle Pauses", subtitle="Cap static pauses at 0.6 s", active=True)
         r_cap.connect("notify::active", lambda sw, _p: (setattr(self, "_cap_idle", sw.get_active()), self._refresh_ui()))
         opt.add(r_cap)
 
         self.gif_progress = Gtk.ProgressBar(show_text=True, visible=False, margin_top=6)
         opt.add(self.gif_progress)
+
+        self.export_frame_btn = Adw.ButtonRow(title="Export Selected Frame PNG…", start_icon_name="camera-photo-symbolic", sensitive=False)
+        self.export_frame_btn.connect("activated", lambda _r: self._export_selected_frame_png())
+        opt.add(self.export_frame_btn)
 
         self.export_btn = Adw.ButtonRow(title="Export Animated GIF…", start_icon_name="document-save-symbolic", sensitive=False)
         self.export_btn.add_css_class("suggested-action")
@@ -217,6 +212,7 @@ class CaptureView:
             _fb, pr, led, torch = self.stage.current_display_state()
             rec.push(self.runtime.link.last_fb, pr, led, torch)
             self._update_rec_label()
+            self.preview_area.queue_draw()
 
     def toggle_record(self) -> None:
         self.rec_btn.set_active(not self.rec_btn.get_active())
@@ -234,7 +230,7 @@ class CaptureView:
             dt = int(time.monotonic() - rec.t0_mono)
             self.rec_lbl.set_text(f"Stop ({dt // 60:02d}:{dt % 60:02d} · {len(rec.frames)}f)")
         else:
-            self.rec_lbl.set_text("Record GIF")
+            self.rec_lbl.set_text("Record")
 
     def _on_record_toggled(self, btn: Any) -> None:
         rec = self.runtime.recorder
@@ -260,6 +256,50 @@ class CaptureView:
         self._update_rec_label()
         return True
 
+    def _draw_frame_preview(self, _area: Any, cr: Any, w: int, h: int) -> None:
+        import cairo
+
+        round_rect(cr, 0, 0, w, h, 10)
+        cr.set_source_rgb(0.08, 0.09, 0.11)
+        cr.fill()
+
+        rec = self.runtime.recorder
+        if rec.frames:
+            idx = max(0, min(self._pb_idx, len(rec.frames) - 1))
+            fb = rec.frames[idx].fb
+        else:
+            fb, _, _, _ = self.stage.current_display_state()
+
+        if len(fb) < 1024:
+            return
+
+        # Crisp 128x64 ST7565 preview with 1.30:1 pixel aspect ratio
+        aspect = 1.30
+        px_h = min((h - 16) / 64.0, ((w - 24) / 128.0) * aspect)
+        px_w = px_h / aspect
+        lcd_w = 128.0 * px_w
+        lcd_h = 64.0 * px_h
+        x0 = (w - lcd_w) * 0.5
+        y0 = (h - lcd_h) * 0.5
+
+        round_rect(cr, x0 - 4, y0 - 4, lcd_w + 8, lcd_h + 8, 6)
+        cr.set_source_rgb(0.79, 0.97, 0.92)
+        cr.fill()
+
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        cr.set_source_rgb(0.14, 0.12, 0.49)
+        for page in range(8):
+            base = page * 128
+            for x in range(128):
+                b = fb[base + x]
+                if not b:
+                    continue
+                for bit in range(8):
+                    if b & (1 << bit):
+                        yy = page * 8 + bit
+                        cr.rectangle(x0 + x * px_w, y0 + yy * px_h, max(1.0, px_w), max(1.0, px_h))
+        cr.fill()
+
     def _draw_timeline(self, _area: Any, cr: Any, w: int, h: int) -> None:
         rec = self.runtime.recorder
         n = len(rec.frames)
@@ -270,7 +310,7 @@ class CaptureView:
         cr.set_line_width(1.0)
         cr.stroke()
         if n <= 0:
-            draw_pango_text(cr, "Press Record GIF to capture frames", w * 0.5, h * 0.5, font_desc="Adwaita Sans 9", rgba=(0.65, 0.68, 0.74, 0.55), halign="center", valign="center")
+            draw_pango_text(cr, "Press Record to capture frames", w * 0.5, h * 0.5, font_desc="Adwaita Sans 9", rgba=(0.65, 0.68, 0.74, 0.55), halign="center", valign="center")
             return
         span = max(1, n - 1)
         fx = lambda i: 10.0 + (i / float(span)) * max(1.0, w - 20.0)
@@ -332,6 +372,13 @@ class CaptureView:
             rec.trim_out = max(self._pb_idx, rec.trim_in)
             self._refresh_ui()
 
+    def _reset_trim(self) -> None:
+        rec = self.runtime.recorder
+        if rec.frames:
+            rec.trim_in = 0
+            rec.trim_out = len(rec.frames) - 1
+            self._refresh_ui()
+
     def _cut_splice(self) -> None:
         rec = self.runtime.recorder
         if not rec.frames:
@@ -378,16 +425,21 @@ class CaptureView:
         seq = rec.frame_durations_ms(speed=self._export_speed, max_idle_ms=600 if self._cap_idle else None)
         tot_ms = sum(d for _, d in seq)
         has_frames = n > 0
-        for w in (self.clr_btn, self.prev_btn, self.pb_btn, self.next_btn, self.b_in, self.b_out, self.cut_btn):
+        for w in (self.clr_btn, self.prev_btn, self.pb_btn, self.next_btn, self.b_in, self.b_out, self.b_reset_trim, self.cut_btn, self.export_frame_btn):
             w.set_sensitive(has_frames)
         self.undo_btn.set_sensitive(bool(rec.cuts))
         if n == 0:
-            self.summary_lbl.set_text("No frames recorded")
+            self.frame_info_row.set_title("No Clip Recorded")
+            self.frame_info_row.set_subtitle("Press Record to capture frames")
             self.export_btn.set_sensitive(False)
         else:
-            cuts_s = f" · {len(rec.cuts)} cut" if rec.cuts else ""
-            self.summary_lbl.set_text(f"{self._pb_idx + 1}/{n}f · {tot_ms / 1000.0:.2f}s{cuts_s}")
+            rf = rec.frames[max(0, min(self._pb_idx, n - 1))]
+            keys_s = f" · Keys: {', '.join(sorted(rf.pressed))}" if rf.pressed else ""
+            cuts_s = f" · {len(rec.cuts)} cut(s)" if rec.cuts else ""
+            self.frame_info_row.set_title(f"Frame {self._pb_idx + 1} / {n}")
+            self.frame_info_row.set_subtitle(GLib.markup_escape_text(f"{tot_ms / 1000.0:.2f}s{cuts_s}{keys_s}"))
             self.export_btn.set_sensitive(len(seq) > 0)
+        self.preview_area.queue_draw()
         self.timeline_area.queue_draw()
         self.stage.ensure_anim_loop()
 
@@ -399,6 +451,29 @@ class CaptureView:
         self.cut_btn.set_label("Cut")
         self._pb_idx = 0
         self._refresh_ui()
+
+    def _export_selected_frame_png(self) -> None:
+        rec = self.runtime.recorder
+        if not rec.frames:
+            return
+        rf = rec.frames[max(0, min(self._pb_idx, len(rec.frames) - 1))]
+        dlg = Gtk.FileDialog(title="Export Selected Frame (PNG)")
+        dlg.set_initial_name(f"kern_frame_{self._pb_idx + 1}_{self._export_mode}.png")
+
+        def _done(d: Any, res: Any) -> None:
+            try:
+                fpath = d.save_finish(res).get_path()
+                if fpath:
+                    if self._export_mode == "body":
+                        w, h, rgba = render_handset_to_rgba(self.runtime.active_model, rf.fb, self.runtime.lcd_st, pressed_keys=rf.pressed, led_state=rf.led, torch_on=rf.torch, scale=2.0)
+                    else:
+                        w, h, rgba = render_lcd_to_rgba(rf.fb, self.runtime.lcd_st, width=540, height=374)
+                    Path(fpath).write_bytes(encode_png_rgba(w, h, rgba))
+                    self._on_toast(f"Saved {Path(fpath).name}")
+            except GLib.Error:
+                pass
+
+        dlg.save(self.win, None, _done)
 
     def _export_gif(self) -> None:
         dlg = Gtk.FileDialog(title="Export Animated GIF")
@@ -436,6 +511,22 @@ class CaptureView:
             threading.Thread(target=_w, daemon=True).start()
 
         dlg.save(self.win, None, _picked)
+
+    def save_raw_framebuffer(self) -> None:
+        fb, _, _, _ = self.stage.current_display_state()
+        dlg = Gtk.FileDialog(title="Save Raw 1 KB Framebuffer (.bin)")
+        dlg.set_initial_name(f"kern_fb_{time.strftime('%Y%m%d_%H%M%S')}.bin")
+
+        def _done(d: Any, res: Any) -> None:
+            try:
+                fpath = d.save_finish(res).get_path()
+                if fpath:
+                    Path(fpath).write_bytes(bytes(fb[:1024]))
+                    self._on_toast(f"Saved {Path(fpath).name} (1024 B)")
+            except GLib.Error:
+                pass
+
+        dlg.save(self.win, None, _done)
 
     def copy_screenshot(self) -> None:
         try:

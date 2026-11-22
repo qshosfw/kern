@@ -20,8 +20,11 @@ from ... import REPO_ROOT
 from ...device.firmware import (
     FLASH_TOTAL_BYTES,
     discover_local_firmware,
+    download_firmware_url,
+    fetch_github_releases,
     flash_via_stock_bootloader,
     inspect_firmware_file,
+    parse_github_repo_slug,
 )
 from ...device.link import REBOOT_BOOTLOADER
 from ..runtime import DockRuntime
@@ -58,6 +61,8 @@ class FirmwareView:
         self._flash_t0: float = 0.0
         self._last_flash_summary: str = ""
         self._local_rows: list[Gtk.Widget] = []
+        self._remote_rows: list[Gtk.Widget] = []
+        self._remote_busy: bool = False
 
         self.widget = self._build()
         self.widget.connect("map", lambda _w: self._refresh_local_builds())
@@ -173,6 +178,26 @@ class FirmwareView:
         self.grp_local.set_header_suffix(ref_builds)
         page.add(self.grp_local)
 
+        # === REMOTE SOURCES & GITHUB RELEASES ===
+        self.grp_remote = Adw.PreferencesGroup(
+            title="Remote Sources &amp; GitHub Releases",
+            description="Fetch .kfw / .bin releases from GitHub or download &amp; validate a direct image URL",
+        )
+        self.remote_src_row = Adw.EntryRow(title="GitHub Repo (owner/repo) or Firmware URL", show_apply_button=True)
+        self.remote_src_row.connect("apply", lambda _w: self._fetch_remote())
+        self.remote_src_row.connect("entry-activated", lambda _w: self._fetch_remote())
+        self.grp_remote.add(self.remote_src_row)
+
+        self.remote_sha_row = Adw.EntryRow(title="Expected SHA-256 (optional)")
+        self.grp_remote.add(self.remote_sha_row)
+
+        self.remote_prog_row = Adw.ActionRow(title="Downloading…", visible=False)
+        self.remote_prog = Gtk.ProgressBar(valign=Gtk.Align.CENTER)
+        self.remote_prog.set_size_request(140, -1)
+        self.remote_prog_row.add_suffix(self.remote_prog)
+        self.grp_remote.add(self.remote_prog_row)
+        page.add(self.grp_remote)
+
         root.append(page)
 
         drop = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
@@ -218,6 +243,107 @@ class FirmwareView:
             row.connect("activated", lambda _r, fp=p: self.load_firmware_path(fp, auto_prompt=False))
             self.grp_local.add(row)
             self._local_rows.append(row)
+
+    def _clear_remote_rows(self) -> None:
+        for r in self._remote_rows:
+            self.grp_remote.remove(r)
+        self._remote_rows.clear()
+
+    def _fetch_remote(self) -> None:
+        src = self.remote_src_row.get_text().strip()
+        if not src or self._remote_busy:
+            return
+        slug = parse_github_repo_slug(src)
+        if slug:
+            self._remote_busy = True
+            self._clear_remote_rows()
+            self.remote_prog_row.set_visible(True)
+            self.remote_prog_row.set_title(GLib.markup_escape_text(f"Fetching releases for {slug}…"))
+            self.remote_prog.pulse()
+
+            def _w() -> None:
+                try:
+                    rels = fetch_github_releases(slug)
+                except Exception as exc:
+                    GLib.idle_add(self._on_toast, f"GitHub fetch failed: {exc}")
+                    rels = []
+                finally:
+                    def _done() -> bool:
+                        self._remote_busy = False
+                        self.remote_prog_row.set_visible(False)
+                        self._populate_releases(rels)
+                        return False
+
+                    GLib.idle_add(_done)
+
+            threading.Thread(target=_w, daemon=True).start()
+        elif src.startswith(("http://", "https://")):
+            self._download_remote_asset(src, self.remote_sha_row.get_text().strip())
+        else:
+            self._on_toast("Enter 'owner/repo' or an http(s):// firmware URL")
+
+    def _populate_releases(self, releases: list[dict[str, Any]]) -> None:
+        self._clear_remote_rows()
+        if not releases:
+            row = Adw.ActionRow(title="No .kfw / .bin release assets found", subtitle="Check repository name or upload a .kfw/.bin asset")
+            row.set_sensitive(False)
+            self.grp_remote.add(row)
+            self._remote_rows.append(row)
+            return
+        for rel in releases:
+            for asset in rel["assets"]:
+                tag = rel["tag"] or rel["name"]
+                sub_parts = [tag]
+                if rel.get("published_at"):
+                    sub_parts.append(rel["published_at"])
+                sub_parts.append(fmt_size(asset["size"]))
+                if rel.get("prerelease"):
+                    sub_parts.append("Pre-release")
+                row = Adw.ActionRow(
+                    title=GLib.markup_escape_text(asset["name"]),
+                    subtitle=GLib.markup_escape_text(" · ".join(sub_parts)),
+                )
+                dl_b = Gtk.Button(label="Download", valign=Gtk.Align.CENTER)
+                dl_b.connect("clicked", lambda _b, u=asset["url"], d=asset.get("digest", ""): self._download_remote_asset(u, d))
+                row.add_suffix(dl_b)
+                self.grp_remote.add(row)
+                self._remote_rows.append(row)
+
+    def _download_remote_asset(self, url: str, expected_sha: str = "") -> None:
+        if self._remote_busy:
+            return
+        self._remote_busy = True
+        self.remote_prog_row.set_visible(True)
+        self.remote_prog_row.set_title("Downloading &amp; validating…")
+        self.remote_prog.set_fraction(0.0)
+
+        def _prog(f: float, msg: str) -> None:
+            GLib.idle_add(lambda: (self.remote_prog.set_fraction(f), self.remote_prog_row.set_title(GLib.markup_escape_text(msg)), False)[2])
+
+        def _w() -> None:
+            try:
+                dest, info = download_firmware_url(url, expected_sha256=expected_sha, progress_cb=_prog)
+                def _ok() -> bool:
+                    self._remote_busy = False
+                    self.remote_prog_row.set_visible(False)
+                    self.selected_fw = info
+                    self._last_flash_summary = ""
+                    self.prog_row.set_visible(False)
+                    self.refresh()
+                    self._on_toast(f"Validated {dest.name} ({fmt_size(info['size'])})")
+                    return False
+
+                GLib.idle_add(_ok)
+            except Exception as exc:
+                def _err() -> bool:
+                    self._remote_busy = False
+                    self.remote_prog_row.set_visible(False)
+                    self._on_toast(f"Download/validation failed: {exc}")
+                    return False
+
+                GLib.idle_add(_err)
+
+        threading.Thread(target=_w, daemon=True).start()
 
     def refresh(self) -> None:
         lk = self.runtime.link

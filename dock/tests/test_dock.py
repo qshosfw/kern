@@ -580,10 +580,12 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
         self.assertTrue(_pixel_is_set(bits5, 5, 2, 2))
 
     def test_hardware_swd_power_and_raw_serial(self) -> None:
+        from kern_dock.device.firmware import parse_github_repo_slug
         from kern_dock.device.hardware import (
             RawSerialSession,
             _classify_swd_probe,
             available_hw_tools,
+            classify_uart_chip,
             discover_swd_probes,
             discover_usb_power_devices,
             parse_raw_tx_input,
@@ -593,6 +595,15 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
         self.assertEqual(_classify_swd_probe("0d28", "0204", "DAPLink CMSIS-DAP", "ARM")[1], "cmsis-dap")
         self.assertEqual(_classify_swd_probe("1366", "0101", "J-Link", "SEGGER")[1], "jlink")
         self.assertIsNone(_classify_swd_probe("36b7", "ffff", "Quansheng UV-K1", "Kern"))
+
+        self.assertEqual(classify_uart_chip("1a86", "7523", "USB Serial"), "WCH CH340")
+        self.assertEqual(classify_uart_chip("10c4", "ea60", "CP2102"), "Silicon Labs CP2102/CP210x")
+        self.assertEqual(classify_uart_chip("0403", "6001", "FT232R"), "FTDI FT232R")
+        self.assertEqual(classify_usb_mode("1a86", "7523", "USB-SERIAL CH340"), ("stock_bl", True))
+
+        self.assertEqual(parse_github_repo_slug("kern-os/kern"), "kern-os/kern")
+        self.assertEqual(parse_github_repo_slug("https://github.com/kern-os/kern/releases"), "kern-os/kern")
+        self.assertIsNone(parse_github_repo_slug("https://example.com/firmware.kfw"))
 
         tools = available_hw_tools()
         self.assertIn("openocd", tools)

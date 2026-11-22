@@ -33,6 +33,7 @@ def classify_usb_mode(vid: str, pid: str, pretty_name: str) -> tuple[str, bool]:
     Classifies USB serial devices:
       • 36b7:ffff -> Native USB-C CDC (RigWire / firmware runtime)
       • 36b7:0001 -> Quansheng K1/K5v3 CPS or Stock Bootloader (live-probed on connect)
+      • 1a86:7523 / 10c4:ea60 / 0403:6001 / 067b:2303 -> CH340/CP2102/FT232/PL2303 UART / programming cable
     """
     vp = f"{vid}:{pid}".lower() if (vid and pid) else ""
     low = pretty_name.lower()
@@ -40,7 +41,9 @@ def classify_usb_mode(vid: str, pid: str, pretty_name: str) -> tuple[str, bool]:
         return "rigwire", True
     if vp == VID_PID_STOCK_BL:
         return "stock_bl", True
-    is_qs = any(k in low for k in ("quansheng", "uv-k", "kern", "rigwire"))
+    if vp in ("1a86:7523", "1a86:5523", "1a86:55d4", "10c4:ea60", "0403:6001", "067b:2303"):
+        return "stock_bl", True
+    is_qs = any(k in low for k in ("quansheng", "uv-k", "kern", "rigwire", "ch340", "ch341"))
     return "rigwire", is_qs
 
 

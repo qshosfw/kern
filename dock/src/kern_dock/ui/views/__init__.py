@@ -10,7 +10,6 @@ from .files import FilesView
 from .firmware import FirmwareView
 from .hardware import HardwareView
 from .overview import OverviewView
-from .sideload import SideloadView
 from .terminal import TerminalView
 
 __all__ = [
@@ -22,6 +21,5 @@ __all__ = [
     "FirmwareView",
     "HardwareView",
     "OverviewView",
-    "SideloadView",
     "TerminalView",
 ]

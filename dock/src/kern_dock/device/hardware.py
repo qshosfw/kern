@@ -27,6 +27,23 @@ SWD_PROBE_IDS: dict[tuple[str, str], tuple[str, str, str]] = {
     ("1fc9", "0143"): ("NXP MCU-Link", "cmsis-dap", "interface/cmsis-dap.cfg"),
 }
 
+UART_BRIDGE_IDS: dict[tuple[str, str], str] = {
+    ("1a86", "7523"): "WCH CH340",
+    ("1a86", "5523"): "WCH CH341",
+    ("1a86", "55d4"): "WCH CH9102",
+    ("1a86", "55d3"): "WCH CH343",
+    ("10c4", "ea60"): "Silicon Labs CP2102/CP210x",
+    ("10c4", "ea70"): "Silicon Labs CP2105",
+    ("0403", "6001"): "FTDI FT232R",
+    ("0403", "6010"): "FTDI FT2232",
+    ("0403", "6014"): "FTDI FT232H",
+    ("0403", "6015"): "FTDI FT-X",
+    ("067b", "2303"): "Prolific PL2303",
+    ("067b", "23a3"): "Prolific PL2303GC",
+    ("36b7", "0001"): "Quansheng CPS / Bootloader",
+    ("36b7", "ffff"): "Quansheng RigWire CDC",
+}
+
 SWD_TARGETS: dict[str, dict[str, Any]] = {
     "py32f071": {
         "label": "PY32F071xB (Cortex-M0+ · 128 KB)",
@@ -77,6 +94,7 @@ class UsbPowerDevice:
     tty_dev: str
     is_probe: bool
     sysfs_path: str
+    chip_name: str = ""
 
 
 def available_hw_tools() -> dict[str, str | None]:
@@ -96,6 +114,24 @@ def _read_sysfs_text(path: Path, default: str = "") -> str:
         return path.read_text(encoding="utf-8", errors="ignore").strip()
     except OSError:
         return default
+
+
+def classify_uart_chip(vid: str, pid: str, product: str = "") -> str:
+    """Identify common USB-UART bridge chips (CH340, CP2102, FT232R, PL2303, etc.)."""
+    key = (vid.lower(), pid.lower())
+    if key in UART_BRIDGE_IDS:
+        return UART_BRIDGE_IDS[key]
+    low = product.lower()
+    for token, label in (
+        ("ch340", "WCH CH340"),
+        ("ch341", "WCH CH341"),
+        ("cp210", "Silicon Labs CP210x"),
+        ("ft232", "FTDI FT232"),
+        ("pl2303", "Prolific PL2303"),
+    ):
+        if token in low:
+            return label
+    return ""
 
 
 def _classify_swd_probe(vid: str, pid: str, product: str, vendor: str) -> tuple[str, str, str] | None:
@@ -186,7 +222,8 @@ def discover_usb_power_devices() -> list[UsbPowerDevice]:
         pctrl = _read_sysfs_text(dev / "power" / "control", "on")
         rstat = _read_sysfs_text(dev / "power" / "runtime_status", "active")
         auth = _read_sysfs_text(dev / "authorized", "1") != "0"
-        name = product or f"{vendor} {vid}:{pid}".strip()
+        chip = classify_uart_chip(vid, pid, product)
+        name = product or chip or f"{vendor} {vid}:{pid}".strip()
         out.append(
             UsbPowerDevice(
                 bus_port=dev.name,
@@ -201,6 +238,7 @@ def discover_usb_power_devices() -> list[UsbPowerDevice]:
                 tty_dev=tty_dev,
                 is_probe=is_probe,
                 sysfs_path=str(dev),
+                chip_name=chip,
             )
         )
     return out
