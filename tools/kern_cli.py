@@ -113,8 +113,9 @@ def _print_help() -> int:
 
 def _run_ports(args: list[str]) -> int:
     as_json = "--json" in args
+    show_all = "--all" in args or "-a" in args
     if "-h" in args or "--help" in args:
-        print("Usage: ./kern ports [--json]\n\nList connected USB and serial radio ports across Linux, macOS, and Windows.")
+        print("Usage: ./kern ports [--all] [--json]\n\nList connected USB and serial radio ports across Linux, macOS, and Windows.")
         return cli_ui.EXIT_OK
     try:
         from serial.tools import list_ports  # type: ignore[import-not-found]
@@ -124,6 +125,9 @@ def _run_ports(args: list[str]) -> int:
 
     rows = []
     for p in sorted(list_ports.comports(), key=lambda x: x.device):
+        is_usb = p.vid is not None or cli_ui.is_usb_serial_device(p.device)
+        if not show_all and not is_usb:
+            continue
         vid_pid = f"{p.vid:04x}:{p.pid:04x}" if (p.vid is not None and p.pid is not None) else "—"
         if vid_pid == "36b7:ffff":
             mode = "RigWire CDC"
