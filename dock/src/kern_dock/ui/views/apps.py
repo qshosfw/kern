@@ -175,7 +175,7 @@ class AppsView:
                 if gen != self._refresh_gen:
                     return
                 try:
-                    head = be.read_head(full, 512)
+                    head = be.read_head(full, 1024)
                     meta = inspect_krx_metadata(head, name)
                 except Exception:
                     meta = inspect_krx_metadata(b"", name)
@@ -238,13 +238,14 @@ class AppsView:
                     exec_type=exec_type,
                     icon_asset=int(meta.get("icon_asset", 0) or 0),
                     bitmap=meta.get("bitmap"),
-                    size=36,
+                    size=28,
                 )
             )
 
-            tag = Gtk.Label(label="System" if protected else exec_type, valign=Gtk.Align.CENTER)
-            tag.add_css_class("protected-badge" if protected else "cap-chip")
-            row.add_suffix(tag)
+            if protected:
+                tag = Gtk.Label(label="System", valign=Gtk.Align.CENTER)
+                tag.add_css_class("protected-badge")
+                row.add_suffix(tag)
 
             hex_b = Gtk.Button(icon_name="accessories-text-editor-symbolic", valign=Gtk.Align.CENTER, tooltip_text=f"Inspect {name} Hex")
             hex_b.add_css_class("flat")

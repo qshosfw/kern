@@ -1,4 +1,4 @@
-"""Sideload View: cute, manifest-aware app installer & workspace package browser."""
+"""Sideload View: clean, native GTK4/Libadwaita app installer & manifest inspector."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from ..widgets.util import fmt_size
 
 
 class SideloadView:
-    """Dedicated GNOME Software-style Sideload tool with manifest/KRX inspection & bundles."""
+    """Native GNOME Software-style Sideload installer with manifest parsing & workspace packages."""
 
     def __init__(
         self,
@@ -70,153 +70,87 @@ class SideloadView:
 
         body = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
-            spacing=14,
-            margin_top=12,
+            spacing=18,
+            margin_top=14,
             margin_bottom=18,
             margin_start=14,
             margin_end=14,
         )
 
-        # === 1. HERO DROPZONE / STAGED APP PREVIEW CARD ===
-        self.hero_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE, transition_duration=140)
+        # === 1. PACKAGE INSPECTOR / INSTALLER ===
+        self.grp_stage = Adw.PreferencesGroup(title="Sideload")
 
-        # Empty Dropzone Card
-        empty_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, halign=Gtk.Align.FILL)
-        empty_card.add_css_class("card")
-        empty_card.add_css_class("sideload-dropzone")
-
-        drop_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14, valign=Gtk.Align.CENTER)
-        drop_top.append(make_app_icon_widget("apps", size=48))
-        drop_txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3, hexpand=True, valign=Gtk.Align.CENTER)
-        dt_title = Gtk.Label(label="Sideload an Application", xalign=0)
-        dt_title.add_css_class("title-3")
-        dt_sub = Gtk.Label(
-            label="Drop a compiled .krx / .mod package or a krx.toml manifest here to inspect permissions and install.",
-            xalign=0,
-            wrap=True,
+        # Empty state row (shown when no package is staged)
+        self.empty_row = Adw.ActionRow(
+            title="Select a Package or Manifest",
+            subtitle="Drop a .krx, .mod, or krx.toml file to inspect permissions and install",
         )
-        dt_sub.add_css_class("caption")
-        dt_sub.add_css_class("dim-label")
-        drop_txt.append(dt_title)
-        drop_txt.append(dt_sub)
-        drop_top.append(drop_txt)
-
+        self.empty_row.add_prefix(Gtk.Image(icon_name="application-x-executable-symbolic", pixel_size=32))
         pick_btn = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
         pick_btn.add_css_class("suggested-action")
-        pick_btn.add_css_class("pill")
         pick_btn.connect("clicked", lambda _b: self.open_package_picker())
-        drop_top.append(pick_btn)
-        empty_card.append(drop_top)
-        self.hero_stack.add_named(empty_card, "empty")
+        self.empty_row.add_suffix(pick_btn)
+        self.grp_stage.add(self.empty_row)
 
-        # Staged App Preview Card
-        self.preview_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        self.preview_card.add_css_class("card")
-        self.preview_card.add_css_class("sideload-preview")
-
-        # Preview header
-        phdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12, valign=Gtk.Align.CENTER)
+        # Staged package header row
+        self.prev_hdr_row = Adw.ActionRow(title="", subtitle="", visible=False)
         self.prev_icon_slot = Gtk.Box(valign=Gtk.Align.CENTER)
-        phdr.append(self.prev_icon_slot)
+        self.prev_hdr_row.add_prefix(self.prev_icon_slot)
 
-        ptxt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
-        title_line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, valign=Gtk.Align.CENTER)
-        self.prev_name = Gtk.Label(label="App", xalign=0)
-        self.prev_name.add_css_class("title-3")
-        self.prev_ver = Gtk.Label(label="v1.0.0", valign=Gtk.Align.CENTER)
-        self.prev_ver.add_css_class("cap-chip")
-        title_line.append(self.prev_name)
-        title_line.append(self.prev_ver)
-        ptxt.append(title_line)
-
-        self.prev_sub = Gtk.Label(label="", xalign=0, ellipsize=3)
-        self.prev_sub.add_css_class("caption")
-        self.prev_sub.add_css_class("dim-label")
-        ptxt.append(self.prev_sub)
-        phdr.append(ptxt)
-
-        self.prev_status_pill = Gtk.Label(label="New Install", valign=Gtk.Align.CENTER)
-        self.prev_status_pill.add_css_class("status-pill")
-        phdr.append(self.prev_status_pill)
-        self.preview_card.append(phdr)
-
-        # Metadata chips row
-        self.prev_meta_chips = Gtk.FlowBox(
-            selection_mode=Gtk.SelectionMode.NONE,
-            row_spacing=6,
-            column_spacing=6,
-            max_children_per_line=8,
-            homogeneous=False,
+        self.prev_hex_btn = Gtk.Button(
+            icon_name="accessories-text-editor-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text="Inspect Package Hex",
         )
-        self.preview_card.append(self.prev_meta_chips)
-
-        # Permissions / Capabilities section
-        self.prev_caps_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        caps_hdr = Gtk.Label(label="Requested Capabilities", xalign=0)
-        caps_hdr.add_css_class("caption-heading")
-        caps_hdr.add_css_class("dim-label")
-        self.prev_caps_box.append(caps_hdr)
-        self.prev_caps_flow = Gtk.FlowBox(
-            selection_mode=Gtk.SelectionMode.NONE,
-            row_spacing=6,
-            column_spacing=6,
-            max_children_per_line=8,
-            homogeneous=False,
-        )
-        self.prev_caps_box.append(self.prev_caps_flow)
-        self.preview_card.append(self.prev_caps_box)
-
-        # Inline progress bar (hidden when idle)
-        self.prev_prog = Gtk.ProgressBar(show_text=True, visible=False)
-        self.preview_card.append(self.prev_prog)
-
-        # Action footer
-        pfoot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.prev_install_btn = Gtk.Button(label="Install to Radio")
-        self.prev_install_btn.add_css_class("suggested-action")
-        self.prev_install_btn.add_css_class("pill")
-        self.prev_install_btn.connect("clicked", lambda _b: self._install_staged())
-        pfoot.append(self.prev_install_btn)
-
-        self.prev_build_btn = Gtk.Button(label="Rebuild", visible=False)
-        self.prev_build_btn.add_css_class("pill")
-        self.prev_build_btn.connect("clicked", lambda _b: self._build_staged(then_install=False))
-        pfoot.append(self.prev_build_btn)
-
-        spacer = Gtk.Box(hexpand=True)
-        pfoot.append(spacer)
-
-        self.prev_hex_btn = Gtk.Button(icon_name="accessories-text-editor-symbolic", tooltip_text="Inspect Package Hex")
         self.prev_hex_btn.add_css_class("flat")
         self.prev_hex_btn.connect("clicked", lambda _b: self._inspect_staged_hex())
-        pfoot.append(self.prev_hex_btn)
+        self.prev_hdr_row.add_suffix(self.prev_hex_btn)
 
-        pick_other = Gtk.Button(icon_name="document-open-symbolic", tooltip_text="Choose Another Package…")
-        pick_other.add_css_class("flat")
-        pick_other.connect("clicked", lambda _b: self.open_package_picker())
-        pfoot.append(pick_other)
+        self.prev_build_btn = Gtk.Button(label="Rebuild", valign=Gtk.Align.CENTER, visible=False)
+        self.prev_build_btn.connect("clicked", lambda _b: self._build_staged(then_install=False))
+        self.prev_hdr_row.add_suffix(self.prev_build_btn)
 
-        clear_b = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Close Preview")
-        clear_b.add_css_class("flat")
-        clear_b.connect("clicked", lambda _b: self._clear_staged())
-        pfoot.append(clear_b)
+        self.prev_install_btn = Gtk.Button(label="Install", valign=Gtk.Align.CENTER)
+        self.prev_install_btn.add_css_class("suggested-action")
+        self.prev_install_btn.connect("clicked", lambda _b: self._install_staged())
+        self.prev_hdr_row.add_suffix(self.prev_install_btn)
 
-        self.preview_card.append(pfoot)
-        self.hero_stack.add_named(self.preview_card, "preview")
-        self.hero_stack.set_visible_child_name("empty")
-        body.append(self.hero_stack)
+        close_b = Gtk.Button(icon_name="window-close-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Close Preview")
+        close_b.add_css_class("flat")
+        close_b.connect("clicked", lambda _b: self._clear_staged())
+        self.prev_hdr_row.add_suffix(close_b)
+        self.grp_stage.add(self.prev_hdr_row)
 
-        # === 2. QUICK PROVISION BUNDLES ===
-        self.bundles_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
-        blbl = Gtk.Label(label="Quick Bundles", xalign=0)
-        blbl.add_css_class("heading")
-        self.bundles_section.append(blbl)
-        self.bundles_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.bundles_list.add_css_class("boxed-list")
-        self.bundles_section.append(self.bundles_list)
-        body.append(self.bundles_section)
+        # Native property rows for staged package details
+        self.prop_pkg = Adw.ActionRow(title="Package", subtitle="", visible=False)
+        self.prop_pkg.add_css_class("property")
+        self.grp_stage.add(self.prop_pkg)
 
-        # === 3. WORKSPACE PACKAGES BROWSER ===
+        self.prop_caps = Adw.ActionRow(title="Permissions", subtitle="", visible=False)
+        self.prop_caps.add_css_class("property")
+        self.caps_warn_icon = Gtk.Image(
+            icon_name="dialog-warning-symbolic",
+            valign=Gtk.Align.CENTER,
+            tooltip_text="Requests sensitive hardware or storage permissions",
+            visible=False,
+        )
+        self.caps_warn_icon.add_css_class("warning")
+        self.prop_caps.add_suffix(self.caps_warn_icon)
+        self.grp_stage.add(self.prop_caps)
+
+        self.prop_extra = Adw.ActionRow(title="Actions &amp; Lifecycle", subtitle="", visible=False)
+        self.prop_extra.add_css_class("property")
+        self.grp_stage.add(self.prop_extra)
+
+        self.prev_prog_row = Adw.ActionRow(title="Working…", subtitle="", visible=False)
+        self.prev_prog = Gtk.ProgressBar(valign=Gtk.Align.CENTER)
+        self.prev_prog.set_size_request(140, -1)
+        self.prev_prog_row.add_suffix(self.prev_prog)
+        self.grp_stage.add(self.prev_prog_row)
+
+        body.append(self.grp_stage)
+
+        # === 2. WORKSPACE PACKAGES BROWSER ===
         self.ws_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, visible=False)
 
         ws_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -230,7 +164,6 @@ class SideloadView:
         ws_hdr.append(ref_ws)
         self.ws_section.append(ws_hdr)
 
-        # Filter bar: search + group pills
         fbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.search_entry = Gtk.SearchEntry(placeholder_text="Filter packages…", hexpand=True)
         self.search_entry.connect("search-changed", self._on_search_changed)
@@ -242,7 +175,6 @@ class SideloadView:
         first_btn: Gtk.ToggleButton | None = None
         for gid, glabel in (("all", "All"), ("core", "Core"), ("sys", "System"), ("apps", "Apps"), ("examples", "Examples")):
             tb = Gtk.ToggleButton(label=glabel)
-            tb.add_css_class("place-btn")
             if first_btn is None:
                 first_btn = tb
                 tb.set_active(True)
@@ -259,7 +191,17 @@ class SideloadView:
         self.ws_section.append(self.ws_list)
         body.append(self.ws_section)
 
-        self.scroll.set_child(Adw.Clamp(maximum_size=680, child=body))
+        # === 3. QUICK BUNDLES ===
+        self.bundles_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
+        blbl = Gtk.Label(label="Bundles", xalign=0)
+        blbl.add_css_class("heading")
+        self.bundles_section.append(blbl)
+        self.bundles_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.bundles_list.add_css_class("boxed-list")
+        self.bundles_section.append(self.bundles_list)
+        body.append(self.bundles_section)
+
+        self.scroll.set_child(Adw.Clamp(maximum_size=640, child=body))
         root.append(self.scroll)
 
         drop = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
@@ -323,7 +265,7 @@ class SideloadView:
 
     def _clear_staged(self) -> None:
         self.staged = None
-        self.hero_stack.set_visible_child_name("empty")
+        self._render_preview()
 
     def open_package_picker(self) -> None:
         dlg = Gtk.FileDialog(title="Select Package (.krx, .mod, or krx.toml)")
@@ -346,14 +288,11 @@ class SideloadView:
             return
         self.staged = info
         self._render_preview()
-        self.hero_stack.set_visible_child_name("preview")
-        # Scroll to top so the cute preview card is immediately visible
         adj = self.scroll.get_vadjustment()
         if adj is not None:
             adj.set_value(0)
 
     def _stage_workspace_pkg(self, pkg: dict[str, Any]) -> None:
-        # Re-inspect fresh from disk in case it was just built
         mpath = pkg.get("manifest_path") or pkg.get("path")
         if mpath and Path(mpath).is_file():
             try:
@@ -366,18 +305,22 @@ class SideloadView:
         else:
             self.staged = dict(pkg)
         self._render_preview()
-        self.hero_stack.set_visible_child_name("preview")
         adj = self.scroll.get_vadjustment()
         if adj is not None:
             adj.set_value(0)
 
     def _render_preview(self) -> None:
         pkg = self.staged
+        has_pkg = pkg is not None
+        self.empty_row.set_visible(not has_pkg)
+        self.prev_hdr_row.set_visible(has_pkg)
+        self.prop_pkg.set_visible(has_pkg)
+        self.prop_caps.set_visible(has_pkg)
         if pkg is None:
-            self.hero_stack.set_visible_child_name("empty")
+            self.prop_extra.set_visible(False)
+            self.prev_prog_row.set_visible(False)
             return
 
-        # Icon tile (48px)
         c = self.prev_icon_slot.get_first_child()
         while c is not None:
             n = c.get_next_sibling()
@@ -389,102 +332,58 @@ class SideloadView:
                 exec_type=str(pkg.get("exec_type", "App")),
                 icon_asset=int(pkg.get("icon_asset", 0) or 0),
                 bitmap=pkg.get("bitmap"),
-                size=48,
+                size=32,
             )
         )
 
-        self.prev_name.set_text(str(pkg.get("name", "App")))
         ver = str(pkg.get("version", ""))
-        self.prev_ver.set_text(ver or "v1.0.0")
-        self.prev_ver.set_visible(bool(ver))
-
+        title_s = f"{pkg.get('name', 'App')} {ver}".strip()
         author = str(pkg.get("author", ""))
         remote_path = str(pkg.get("remote_path", ""))
-        sub_parts = [p for p in (f"by {author}" if author else "", remote_path) if p]
-        self.prev_sub.set_text(" · ".join(sub_parts))
-
-        # Status pill (New Install / Update / Protected / Source Only)
-        for cls in ("live", "headless", "dfu", "warn"):
-            self.prev_status_pill.remove_css_class(cls)
         fname = str(pkg.get("filename", ""))
         built_ok = bool(pkg.get("built_exists"))
-        if not built_ok:
-            self.prev_status_pill.set_text("Not Built")
-            self.prev_status_pill.add_css_class("dfu")
-        elif pkg.get("protected"):
-            self.prev_status_pill.set_text("Protected System")
-            self.prev_status_pill.add_css_class("dfu")
-        elif fname in self._installed_names:
-            self.prev_status_pill.set_text("Update")
-            self.prev_status_pill.add_css_class("headless")
-        else:
-            self.prev_status_pill.set_text("New Install")
-            self.prev_status_pill.add_css_class("live")
+        state = "Not built" if not built_ok else ("Protected system" if pkg.get("protected") else ("Update" if fname in self._installed_names else "New install"))
+        sub_parts = [p for p in (author, remote_path, state) if p]
+        self.prev_hdr_row.set_title(GLib.markup_escape_text(title_s))
+        self.prev_hdr_row.set_subtitle(GLib.markup_escape_text(" · ".join(sub_parts)))
 
-        # Metadata chips
-        c = self.prev_meta_chips.get_first_child()
-        while c is not None:
-            n = c.get_next_sibling()
-            self.prev_meta_chips.remove(c)
-            c = n
-
-        def _chip(parent: Gtk.FlowBox, text: str, *classes: str, tip: str = "") -> None:
-            lbl = Gtk.Label(label=text, tooltip_text=tip)
-            for cls in classes:
-                lbl.add_css_class(cls)
-            parent.append(lbl)
-
-        _chip(self.prev_meta_chips, str(pkg.get("exec_type", "App")), "cap-chip", tip="KRX execution type")
+        # Package property row
+        pkg_parts = [str(pkg.get("exec_type", "App"))]
         if pkg.get("profile_label"):
-            _chip(self.prev_meta_chips, str(pkg["profile_label"]), "cap-chip", tip="KRX execution profile")
+            pkg_parts.append(str(pkg["profile_label"]))
         if built_ok:
-            if pkg.get("crc_ok"):
-                _chip(self.prev_meta_chips, "CRC-32 OK", "status-pill", "live", tip="Header and payload CRC-32 verified")
-            else:
-                _chip(self.prev_meta_chips, "CRC Mismatch", "status-pill", "warn", tip="Binary CRC-32 check failed")
-            _chip(self.prev_meta_chips, fmt_size(int(pkg.get("size", 0))), "cap-chip", tip="Compiled binary size")
+            pkg_parts.append(fmt_size(int(pkg.get("size", 0))))
+            pkg_parts.append("CRC-32 verified" if pkg.get("crc_ok") else "CRC mismatch")
         else:
-            _chip(self.prev_meta_chips, "Manifest (krx.toml)", "cap-chip", tip="Source manifest — build before installing")
+            pkg_parts.append("Source manifest (krx.toml)")
+        self.prop_pkg.set_subtitle(GLib.markup_escape_text(" · ".join(pkg_parts)))
 
-        for flag in pkg.get("lifecycle", []):
-            _chip(self.prev_meta_chips, str(flag), "cap-chip", tip="Lifecycle policy")
-        for act in pkg.get("actions", []):
-            _chip(self.prev_meta_chips, f"Action: {act}", "cap-chip", tip="Registered system menu action")
-
-        # Capabilities / Permissions chips
-        c = self.prev_caps_flow.get_first_child()
-        while c is not None:
-            n = c.get_next_sibling()
-            self.prev_caps_flow.remove(c)
-            c = n
+        # Permissions property row
         cap_list = list(pkg.get("cap_list", []))
         if not cap_list:
-            _chip(self.prev_caps_flow, "No special permissions", "cap-chip")
+            self.prop_caps.set_subtitle("None")
+            self.caps_warn_icon.set_visible(False)
         else:
-            for cap in cap_list:
-                if cap["sensitive"]:
-                    _chip(
-                        self.prev_caps_flow,
-                        cap["label"],
-                        "cap-chip",
-                        "sensitive",
-                        tip=f"Sensitive capability ({cap['ident']})",
-                    )
-                else:
-                    _chip(self.prev_caps_flow, cap["label"], "cap-chip", tip=cap["ident"])
+            self.prop_caps.set_subtitle(GLib.markup_escape_text(", ".join(c["label"] for c in cap_list)))
+            self.caps_warn_icon.set_visible(any(c["sensitive"] for c in cap_list))
 
-        # Action buttons state
+        # Actions & lifecycle row (shown only when present)
+        extra_parts = list(pkg.get("lifecycle", [])) + [f"Action: {a}" for a in pkg.get("actions", [])]
+        self.prop_extra.set_visible(bool(extra_parts))
+        if extra_parts:
+            self.prop_extra.set_subtitle(GLib.markup_escape_text(" · ".join(extra_parts)))
+
+        # Buttons
         lk = self.runtime.link
         hard = self.runtime.security.hardened
         can_radio = lk.connected and lk.link_mode == "rigwire" and not hard
         has_manifest = pkg.get("source_kind") == "manifest" and bool(pkg.get("pkg_id"))
 
         if not built_ok and has_manifest:
-            self.prev_install_btn.set_label("Build & Install" if can_radio else "Build Package")
+            self.prev_install_btn.set_label("Build & Install" if can_radio else "Build")
             self.prev_install_btn.set_sensitive(not self._busy)
         else:
-            verb = "Update on Radio" if (fname in self._installed_names) else "Install to Radio"
-            self.prev_install_btn.set_label(verb)
+            self.prev_install_btn.set_label("Update" if fname in self._installed_names else "Install")
             self.prev_install_btn.set_sensitive(bool(can_radio and built_ok and not self._busy))
 
         self.prev_build_btn.set_visible(bool(has_manifest and built_ok))
@@ -502,27 +401,25 @@ class SideloadView:
         for p in self._workspace_pkgs:
             by_group.setdefault(str(p.get("group", "")), []).append(p)
 
-        bundles: list[tuple[str, str, str, list[dict[str, Any]]]] = []
+        bundles: list[tuple[str, str, list[dict[str, Any]]]] = []
         if by_group.get("core"):
-            bundles.append(("core", "Core Bundle", "Essential radio applications", by_group["core"]))
+            bundles.append(("Core Bundle", "Essential radio applications", by_group["core"]))
         if by_group.get("sys"):
-            bundles.append(("sys", "System Modules", "DFU, recovery, calibration & diagnostics", by_group["sys"]))
+            bundles.append(("System Modules", "DFU, recovery, calibration & diagnostics", by_group["sys"]))
 
         self.bundles_section.set_visible(bool(bundles))
         lk = self.runtime.link
         can_radio = lk.connected and lk.link_mode == "rigwire" and not self.runtime.security.hardened
 
-        for _gid, title, desc, pkgs in bundles:
+        for title, desc, pkgs in bundles:
             built = [p for p in pkgs if p.get("built_exists")]
             names = ", ".join(p["name"] for p in pkgs[:4]) + ("…" if len(pkgs) > 4 else "")
             row = Adw.ActionRow(
                 title=GLib.markup_escape_text(title),
                 subtitle=GLib.markup_escape_text(f"{len(built)}/{len(pkgs)} built · {names or desc}"),
             )
-            row.add_prefix(make_app_icon_widget(title, size=32))
+            row.add_prefix(Gtk.Image(icon_name="package-x-generic-symbolic", pixel_size=24))
             btn = Gtk.Button(label=f"Install ({len(built)})", valign=Gtk.Align.CENTER)
-            btn.add_css_class("pill")
-            btn.add_css_class("small-pill")
             btn.set_sensitive(bool(can_radio and built and not self._busy))
             btn.connect("clicked", lambda _b, t=title, ps=built: self._confirm_install_bundle(t, ps))
             row.add_suffix(btn)
@@ -564,11 +461,11 @@ class SideloadView:
             installed = fname in self._installed_names
             grp_lbl = GROUP_LABELS.get(str(p.get("group", "")), "")
             sz_txt = fmt_size(int(p.get("size", 0))) if built else "Not built"
-            sub = " · ".join(x for x in (grp_lbl, fname, sz_txt) if x)
+            sub_parts = [x for x in (grp_lbl, fname, sz_txt, "Installed" if installed else "") if x]
 
             row = Adw.ActionRow(
                 title=GLib.markup_escape_text(f"{p['name']} {p.get('version', '')}".strip()),
-                subtitle=GLib.markup_escape_text(sub),
+                subtitle=GLib.markup_escape_text(" · ".join(sub_parts)),
                 activatable=True,
             )
             row.connect("activated", lambda _r, pkg=p: self._stage_workspace_pkg(pkg))
@@ -576,40 +473,18 @@ class SideloadView:
                 make_app_icon_widget(
                     str(p["name"]),
                     exec_type=str(p.get("exec_type", "App")),
+                    icon_asset=int(p.get("icon_asset", 0) or 0),
                     bitmap=p.get("bitmap"),
-                    size=36,
+                    size=28,
                 )
             )
 
-            if installed:
-                badge = Gtk.Label(label="Installed", valign=Gtk.Align.CENTER)
-                badge.add_css_class("status-pill")
-                badge.add_css_class("live")
-                row.add_suffix(badge)
-            elif not built:
-                badge = Gtk.Label(label="Source", valign=Gtk.Align.CENTER)
-                badge.add_css_class("cap-chip")
-                row.add_suffix(badge)
-
-            inspect_b = Gtk.Button(
-                icon_name="document-properties-symbolic",
-                valign=Gtk.Align.CENTER,
-                tooltip_text=f"Inspect {p['name']} manifest & permissions",
-            )
-            inspect_b.add_css_class("flat")
-            inspect_b.connect("clicked", lambda _b, pkg=p: self._stage_workspace_pkg(pkg))
-            row.add_suffix(inspect_b)
-
             if built:
                 act_b = Gtk.Button(label="Update" if installed else "Install", valign=Gtk.Align.CENTER)
-                act_b.add_css_class("pill")
-                act_b.add_css_class("small-pill")
                 act_b.set_sensitive(bool(can_radio and not self._busy))
                 act_b.connect("clicked", lambda _b, pkg=p: self._install_package(pkg))
             else:
                 act_b = Gtk.Button(label="Build", valign=Gtk.Align.CENTER)
-                act_b.add_css_class("pill")
-                act_b.add_css_class("small-pill")
                 act_b.set_sensitive(not self._busy)
                 act_b.connect("clicked", lambda _b, pkg=p: self._build_and_maybe_install(pkg, then_install=False))
             row.add_suffix(act_b)
@@ -632,10 +507,10 @@ class SideloadView:
 
     def _set_busy(self, busy: bool, text: str = "", frac: float = 0.0) -> None:
         self._busy = busy
-        self.prev_prog.set_visible(busy and self.staged is not None)
+        self.prev_prog_row.set_visible(busy and self.staged is not None)
         if busy:
+            self.prev_prog_row.set_title(GLib.markup_escape_text(text or "Working…"))
             self.prev_prog.set_fraction(max(0.0, min(1.0, frac)))
-            self.prev_prog.set_text(text)
         self._on_progress(busy, frac, text)
         self._refresh_ui()
 

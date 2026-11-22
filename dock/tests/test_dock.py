@@ -561,6 +561,21 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
             self.assertGreaterEqual(len(sm["cap_list"]), 5)
             sm2 = inspect_package_path(settings_toml.parent)
             self.assertEqual(sm2["name"], "Settings")
+        dfu_toml = _REPO_ROOT / "packages" / "sys" / "dfu" / "krx.toml"
+        if dfu_toml.is_file():
+            dm = inspect_krx_manifest(dfu_toml, group="sys", pkg_id="sys/dfu")
+            self.assertIsNotNone(dm["bitmap"])
+            self.assertEqual(dm["bitmap"][:2], (16, 16))
+
+        # 5. Unknown icon returns None (falls back to native GTK4 executable icon) & narrow bitmaps decode accurately
+        from kern_dock.ui.widgets.app_icon import _pack_ascii_grid, _pixel_is_set, resolve_pixel_bitmap
+
+        self.assertIsNone(resolve_pixel_bitmap("totally_unknown_custom_app.krx"))
+        bits5 = _pack_ascii_grid(["#...#", ".#.#.", "..#..", ".#.#.", "#...#"], 5, 5)
+        self.assertTrue(_pixel_is_set(bits5, 5, 0, 0))
+        self.assertFalse(_pixel_is_set(bits5, 5, 1, 0))
+        self.assertTrue(_pixel_is_set(bits5, 5, 4, 0))
+        self.assertTrue(_pixel_is_set(bits5, 5, 2, 2))
 
 
 if __name__ == "__main__":

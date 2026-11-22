@@ -269,10 +269,21 @@ def inspect_krx_manifest(toml_path: Path, *, group: str = "", pkg_id: str = "") 
     actions = [str(a.get("label", "")).strip() for a in m.get("action", []) if str(a.get("label", "")).strip()]
 
     bitmap: tuple[int, int, bytes] | None = None
-    if isinstance(m.get("icon_16"), str):
-        bitmap = _parse_ascii_icon(m["icon_16"], 16, 16)
-    elif isinstance(m.get("icon_8"), str):
-        bitmap = _parse_ascii_icon(m["icon_8"], 8, 8)
+    icon_16 = m.get("icon_16")
+    icon_8 = m.get("icon_8")
+    # Some manifests place icon_16/icon_8 after [[action]] in TOML, nesting them under action[-1].
+    if not isinstance(icon_16, str) and not isinstance(icon_8, str):
+        for act in m.get("action", []):
+            if isinstance(act, dict):
+                if isinstance(act.get("icon_16"), str):
+                    icon_16 = act["icon_16"]
+                    break
+                if isinstance(act.get("icon_8"), str) and icon_8 is None:
+                    icon_8 = act["icon_8"]
+    if isinstance(icon_16, str):
+        bitmap = _parse_ascii_icon(icon_16, 16, 16)
+    elif isinstance(icon_8, str):
+        bitmap = _parse_ascii_icon(icon_8, 8, 8)
 
     ver_raw = str(m.get("version", "1.0.0")).strip()
     ver = ver_raw if ver_raw.startswith("v") else f"v{ver_raw}"

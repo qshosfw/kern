@@ -13,25 +13,32 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
 from ... import REPO_ROOT
-from ...render.paint import round_rect
 
 KRX_IDENT = b"\xC0\xDE\x01\xFE"
 _KRX_EXEC_TYPES = {1: "App", 2: "Service", 3: "Daemon", 4: "Driver", 5: "Module"}
 _KRX_CLASSES = {0: "Native", 1: "Paged", 2: "VM", 3: "Declare"}
 
-# Built-in fallback 8×8 puzzle-piece pixel glyph (used only if repo icon packs aren't on disk)
-_FALLBACK_APPS_8X8 = (8, 8, bytes([0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x99, 0x42, 0x3C]))
-
 
 def _pack_ascii_grid(lines: list[str], w: int, h: int) -> bytes:
-    """Pack `#`/`.` ASCII art rows into MSB-first 1-bit monochrome bytes."""
-    stride = (w + 7) // 8
-    out = bytearray(stride * h)
+    """Pack `#`/`.` ASCII art rows into MSB-first 1-bit monochrome bytes matching pack_krx.py."""
+    out = bytearray()
     for y in range(min(h, len(lines))):
         row = lines[y]
+        val = 0
         for x in range(min(w, len(row))):
             if row[x] == "#":
-                out[y * stride + (x >> 3)] |= 0x80 >> (x & 7)
+                val |= 1 << (w - 1 - x)
+        if w <= 8:
+            out.append(val & 0xFF)
+        elif w <= 16:
+            out.extend(struct.pack(">H", val & 0xFFFF))
+        else:
+            stride = (w + 7) // 8
+            row_bytes = bytearray(stride)
+            for x in range(min(w, len(row))):
+                if row[x] == "#":
+                    row_bytes[x >> 3] |= 0x80 >> (x & 7)
+            out.extend(row_bytes)
     return bytes(out)
 
 
@@ -78,15 +85,16 @@ def load_kern_pixel_icons() -> tuple[dict[int, tuple[int, int, bytes]], dict[str
         rows: list[str] = []
         for raw_line in lines:
             s = raw_line.strip()
-            if "Launcher::" in s and "=>" in s:
+            if "Launcher::" in s and ("as u8" in s or "=>" in s):
                 cur_slot = s.split("Launcher::", 1)[1].split()[0].strip(",:").lower()
                 rows = []
-            elif s.startswith('"') and '",' in s:
-                inner = s.split('"', 2)[1]
-                if len(inner) == 16 and set(inner) <= {".", "#"}:
-                    rows.append(inner)
-                    if len(rows) == 16 and cur_slot:
+            elif cur_slot:
+                candidate = s.strip('", ')
+                if len(candidate) == 16 and set(candidate) <= {".", "#"}:
+                    rows.append(candidate)
+                    if len(rows) == 16:
                         by_name.setdefault(cur_slot, (16, 16, _pack_ascii_grid(rows, 16, 16)))
+                        cur_slot = ""
                         rows = []
 
     return by_id, by_name
@@ -96,7 +104,7 @@ def _find_krx_icon_asset(data: bytes, hdr_len: int) -> tuple[int, int, bytes] | 
     """Exact mirror of `KrxPreamble::find_icon_asset`: reads 4-byte aligned `(kind, w, h, blen, bits)` in SEC_ASSETS."""
     off = 24
     limit = min(len(data), hdr_len)
-    best_8: tuple[int, int, bytes] | None = None
+    best_small: tuple[int, int, bytes] | None = None
     while off + 4 <= limit:
         sec_id, sec_len = struct.unpack_from("<HH", data, off)
         if sec_len < 4 or off + sec_len > limit:
@@ -112,8 +120,8 @@ def _find_krx_icon_asset(data: bytes, hdr_len: int) -> tuple[int, int, bytes] | 
                     bmp = (w, h, data[a_off + 4 : a_off + 4 + blen])
                     if w >= 16:
                         return bmp  # Prefer 16×16 full app icon
-                    if best_8 is None:
-                        best_8 = bmp
+                    if best_small is None or w > best_small[0]:
+                        best_small = bmp
                 step = (4 + blen + 3) & ~3
                 if step <= 0 or a_off + step > a_end:
                     break
@@ -122,7 +130,7 @@ def _find_krx_icon_asset(data: bytes, hdr_len: int) -> tuple[int, int, bytes] | 
         if step <= 0 or off + step > limit:
             break
         off += step
-    return best_8
+    return best_small
 
 
 def resolve_pixel_bitmap(
@@ -130,42 +138,58 @@ def resolve_pixel_bitmap(
     *,
     icon_asset: int = 0,
     bitmap: tuple[int, int, bytes] | None = None,
-) -> tuple[int, int, bytes]:
-    """Return the exact embedded KRX pixel bitmap, or resolve the authentic Kern 16×16 pixel bitmap."""
+) -> tuple[int, int, bytes] | None:
+    """Return the exact embedded KRX pixel bitmap, or an explicit Kern 16×16 icon pack match; None if unknown."""
     if bitmap is not None:
         return bitmap
     by_id, by_name = load_kern_pixel_icons()
+    if icon_asset and icon_asset in by_id:
+        return by_id[icon_asset]
     low = name.lower()
-    # Direct name-keyword match against authentic Kern 16×16 icon pack
     for key, aliases in (
-        ("spectrum", ("spec", "waterfall")),
-        ("fm_radio", ("fm", "broadcast")),
-        ("scanner", ("scan", "search")),
-        ("contacts", ("contact", "callsign", "dir")),
-        ("packet_aprs", ("aprs", "packet", "kiss", "ax25", "mesh")),
-        ("morse_cw", ("morse", "cw", "beacon")),
-        ("gps_nav", ("gps", "gnss", "nav", "map")),
-        ("terminal", ("term", "shell", "wire", "console")),
-        ("audio_rec", ("audio", "rec", "voice", "mic")),
-        ("weather", ("noaa", "wx", "weather")),
-        ("calculator", ("calc", "math")),
-        ("games", ("game", "snake", "tetris", "pong")),
-        ("clock", ("clock", "time", "timer")),
-        ("satellite", ("sat", "amsat", "iss")),
-        ("power", ("power", "batt", "sleep")),
-        ("upload", ("dfu", "flash", "boot", "update")),
-        ("settings", ("set", "pref", "cfg")),
-        ("folder", ("file", "expl", "fs")),
-        ("flashlight", ("torch", "light")),
-        ("diagnostics", ("diag", "debug", "test")),
+        ("spectrum", ("spectrum", "waterfall")),
+        ("fm_radio", ("fm_radio", "fm radio", "broadcast")),
+        ("scanner", ("scanner",)),
+        ("contacts", ("contacts", "callsign")),
+        ("packet_aprs", ("aprs", "packet", "kiss", "ax25")),
+        ("morse_cw", ("morse", "cw")),
+        ("gps_nav", ("gps", "gnss")),
+        ("terminal", ("terminal", "console")),
+        ("audio_rec", ("audio_rec", "recorder")),
+        ("weather", ("noaa", "weather")),
+        ("calculator", ("calc", "calculator")),
+        ("games", ("snake", "tetris", "pong", "game")),
+        ("clock", ("clock", "timer")),
+        ("satellite", ("satellite", "amsat")),
+        ("upload", ("dfu", "flash", "update")),
+        ("settings", ("settings",)),
+        ("folder", ("files", "explorer")),
+        ("flashlight", ("flashlight", "torch")),
+        ("diagnostics", ("sysinfo", "diag", "bench", "calib")),
         ("radio", ("radio", "vfo")),
-        ("system", ("sys", "mod", "kern")),
     ):
         if key in by_name and any(a in low for a in aliases):
             return by_name[key]
-    if icon_asset in by_id:
-        return by_id[icon_asset]
-    return by_name.get("apps") or by_name.get("system") or _FALLBACK_APPS_8X8
+    return None
+
+
+def _pixel_is_set(bits: bytes, bw: int, xx: int, yy: int) -> bool:
+    """Read pixel (xx, yy) matching pack_krx.py's bit packing for both narrow (<=8px) and wide (>8px) bitmaps."""
+    if bw <= 8:
+        if yy >= len(bits):
+            return False
+        return bool(bits[yy] & (1 << (bw - 1 - xx)))
+    if bw <= 16:
+        idx = yy * 2
+        if idx + 1 >= len(bits):
+            return False
+        val = (bits[idx] << 8) | bits[idx + 1]
+        return bool(val & (1 << (bw - 1 - xx)))
+    stride = (bw + 7) // 8
+    idx = yy * stride + (xx >> 3)
+    if idx >= len(bits):
+        return False
+    return bool(bits[idx] & (0x80 >> (xx & 7)))
 
 
 def inspect_krx_metadata(data: bytes, filename: str = "") -> dict[str, Any]:
@@ -230,44 +254,35 @@ def make_app_icon_widget(
     exec_type: str = "App",
     icon_asset: int = 0,
     bitmap: tuple[int, int, bytes] | None = None,
-    size: int = 36,
-) -> Gtk.DrawingArea:
-    """Render the authentic 1-bit pixel-art bitmap from the app (or Kern icon pack) on a crisp LCD-styled tile."""
+    size: int = 32,
+) -> Gtk.Widget:
+    """Render an unframed, aspect-correct 1-bit pixel icon in native GTK4 theme ink, or standard executable icon."""
+    resolved = resolve_pixel_bitmap(name, icon_asset=icon_asset, bitmap=bitmap)
+    if resolved is None:
+        img = Gtk.Image(icon_name="application-x-executable-symbolic", pixel_size=size, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
+        img.set_size_request(size, size)
+        return img
+
+    bw, bh, bits = resolved
     area = Gtk.DrawingArea(valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
     area.set_content_width(size)
     area.set_content_height(size)
-    bw, bh, bits = resolve_pixel_bitmap(name, icon_asset=icon_asset, bitmap=bitmap)
 
-    def _draw(_a: Any, cr: Any, w: int, h: int) -> None:
+    def _draw(widget: Gtk.DrawingArea, cr: Any, w: int, h: int) -> None:
         import cairo
 
-        s = float(min(w, h))
-        ox, oy = (w - s) * 0.5, (h - s) * 0.5
-        pad = 1.5
-        r = s * 0.22
-
-        # Subtle calm dark-slate LCD tile background
-        round_rect(cr, ox + pad, oy + pad, s - pad * 2, s - pad * 2, r)
-        cr.set_source_rgba(0.11, 0.13, 0.16, 0.92)
-        cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.12)
-        cr.set_line_width(0.9)
-        cr.stroke()
-
-        # Crisp integer-snapped pixel blocks (authentic 1-bit radio icon pixels!)
         cr.set_antialias(cairo.ANTIALIAS_NONE)
-        cell = max(1, int((s - 8.0) // max(bw, bh)))
+        cell = max(1, min(w // max(1, bw), h // max(1, bh)))
         grid_w = bw * cell
         grid_h = bh * cell
-        x0 = int(ox + (s - grid_w) * 0.5)
-        y0 = int(oy + (s - grid_h) * 0.5)
-        stride = (bw + 7) // 8
+        x0 = (w - grid_w) // 2
+        y0 = (h - grid_h) // 2
 
-        # Clean high-contrast crisp pixel ink
-        cr.set_source_rgba(0.84, 0.95, 0.92, 0.96)
+        rgba = widget.get_color()
+        cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, rgba.alpha * 0.88)
         for yy in range(bh):
             for xx in range(bw):
-                if bits[yy * stride + (xx >> 3)] & (0x80 >> (xx & 7)):
+                if _pixel_is_set(bits, bw, xx, yy):
                     cr.rectangle(x0 + xx * cell, y0 + yy * cell, cell, cell)
         cr.fill()
 
