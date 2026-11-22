@@ -6,12 +6,11 @@ mod shared;
 
 use core::mem::MaybeUninit;
 use kern_sdk::{
-    COLOR_CLEAR, KRX_LEAF_KIND_DONE, KRX_WIDGET_MENU_ITEM, KrxApiTable, KrxLeafContext, KrxWidget,
-    Op, icon, krx_entry, nth_packed_slice,
+    COLOR_CLEAR, KRX_LEAF_KIND_DONE, KRX_WIDGET_MENU_ITEM, KrxApiTable, KrxDirEntry,
+    KrxLeafContext, KrxWidget, Op, icon, krx_entry, nth_packed_slice,
 };
 use shared::{
-    CMD_SC_LOAD, MAX_APPS, SharedState, byte_at, copy_bytes, cstr_slice, hash_app_path,
-    strip_apps_prefix, subslice,
+    SharedState, byte_at, copy_bytes, cstr_slice, hash_app_path, strip_apps_prefix, subslice,
 };
 
 const SLOT_LABELS: &[u8] =
@@ -65,17 +64,18 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 } else {
                     ic = icon::APPS;
                     let mut found: &[u8] = b"App";
-                    let mut i = 0usize;
-                    let n = (st.app_count as usize).min(MAX_APPS);
-                    while i < n {
-                        let short = strip_apps_prefix(cstr_slice(unsafe { &st.apps().get_unchecked(i).name }));
+                    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+                    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+                    let mut off = 0u32;
+                    while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
+                        off += 1;
+                        let short = strip_apps_prefix(cstr_slice(&ent.name));
                         let pl = copy_bytes(p, 0, b"/apps/");
                         let pl = copy_bytes(p, pl, short);
                         if hash_app_path(subslice(p, 0, pl)) == act {
-                            found = short;
+                            found = subslice(p, 6, pl);
                             break;
                         }
-                        i += 1;
                     }
                     found
                 };

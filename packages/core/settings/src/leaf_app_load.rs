@@ -6,10 +6,9 @@
 mod shared;
 
 use core::mem::MaybeUninit;
-use kern_sdk::{KRX_LEAF_KIND_CALL_LEAF, KrxApiTable, KrxLeafContext, krx_entry};
+use kern_sdk::{KRX_LEAF_KIND_CALL_LEAF, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
 use shared::{
-    LEAF_APP_ICON, MAX_APPS, SharedState, byte_at, copy_bytes, cstr_slice, strip_apps_prefix,
-    subslice,
+    LEAF_APP_ICON, SharedState, byte_at, copy_bytes, cstr_slice, strip_apps_prefix, subslice,
 };
 
 #[inline(never)]
@@ -28,11 +27,14 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    let idx = (st.app_sel as usize).min(MAX_APPS - 1);
     let mut raw_n = MaybeUninit::<[u8; 24]>::uninit();
     let nbuf = unsafe { &mut *raw_n.as_mut_ptr() };
+    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+    if api.list_dir_page(b"/apps", st.app_sel as u32, core::slice::from_mut(ent)) == 0 {
+        return 1;
+    }
     let (ent_sz, slen_n) = {
-        let ent = unsafe { st.apps().get_unchecked(idx) };
         let short = strip_apps_prefix(cstr_slice(&ent.name));
         (ent.size, copy_bytes(nbuf, 0, short))
     };

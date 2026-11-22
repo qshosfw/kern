@@ -7,8 +7,8 @@ mod shared;
 use core::mem::MaybeUninit;
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
 use shared::{
-    ASSET_LANG, ASSET_ROGER, ASSET_SPLASH, MAX_ASSETS, MODAL_ASSET_PICK, SharedState, byte_at,
-    copy_bytes, cstr_slice, fill_bytes, set_byte, subslice,
+    ASSET_LANG, ASSET_ROGER, ASSET_SPLASH, MODAL_ASSET_PICK, SharedState, byte_at, copy_bytes,
+    cstr_slice, set_byte, subslice,
 };
 
 #[inline(never)]
@@ -57,39 +57,28 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         ASSET_LANG => (b"/user/lang", b"Language", b"English\0"),
         _ => (b"/user/jingles", b"Boot Jingle", b"Off\0"),
     };
-    let mut raw_e = MaybeUninit::<[KrxDirEntry; MAX_ASSETS]>::uninit();
-    let entries = unsafe { &mut *raw_e.as_mut_ptr() };
-    let total = api.list_dir(dir, entries).min(MAX_ASSETS);
+    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
 
     let mut pos = copy_bytes(&mut st.sheet_buf, 0, def0);
     let mut cnt = 0usize;
-    let mut i = 0usize;
+    let mut off = 0u32;
     let mut raw_p = MaybeUninit::<[u8; 16]>::uninit();
     let pretty = unsafe { &mut *raw_p.as_mut_ptr() };
-    while i < total && cnt < MAX_ASSETS {
-        let ent = unsafe { entries.get_unchecked(i) };
+    while api.list_dir_page(dir, off, core::slice::from_mut(ent)) > 0 {
+        off += 1;
         if ent.is_dir == 0 {
             let raw = cstr_slice(&ent.name);
-            let dst_fp = unsafe { st.assets_mut().get_unchecked_mut(cnt) };
-            fill_bytes(dst_fp, 0);
-            let plen = if !raw.is_empty() && byte_at(raw, 0) == b'/' {
-                copy_bytes(dst_fp, 0, raw)
-            } else {
-                let p = copy_bytes(dst_fp, 0, dir);
-                set_byte(dst_fp, p, b'/');
-                copy_bytes(dst_fp, p + 1, raw)
-            };
-            let nlen = format_pretty(subslice(dst_fp, 0, plen), pretty);
-            if nlen > 0 && pos + nlen + 1 < 112 {
+            let nlen = format_pretty(raw, pretty);
+            if nlen > 0 && pos + nlen + 1 < st.sheet_buf.len() {
                 pos = copy_bytes(&mut st.sheet_buf, pos, subslice(pretty, 0, nlen));
                 set_byte(&mut st.sheet_buf, pos, 0);
                 pos += 1;
                 cnt += 1;
             }
         }
-        i += 1;
     }
-    st.asset_count = cnt as u8;
+    st.asset_count = cnt.min(255) as u8;
     st.sheet_len = pos as u16;
     let tlen = copy_bytes(&mut st.sheet_title, 0, title);
     api.show_sheet(MODAL_ASSET_PICK, subslice(&st.sheet_title, 0, tlen), subslice(&st.sheet_buf, 0, pos), 0, true);

@@ -63,6 +63,71 @@ impl<'a> ListRowSpec<'a> {
     }
 }
 
+#[inline(never)]
+fn draw_row_right_value(
+    canvas: &mut Canvas,
+    s: &ListRowSpec<'_>,
+    right_edge: i16,
+    text_dy: i16,
+    sw: i16,
+    tc: Color,
+) {
+    let mut lbuf = [0u8; 32];
+    let val_str = if s.localize_value {
+        text::localize(s.value, true, &mut lbuf)
+    } else {
+        s.value
+    };
+    let is_outline = (s.flags & ROW_OUTLINE) != 0;
+    let arrow_left = (s.flags & ROW_ARROW_LEFT) != 0;
+    let arrow_right = (s.flags & ROW_ARROW_RIGHT) != 0;
+    let val_right = if is_outline && (arrow_left || arrow_right) {
+        if arrow_right {
+            icons::draw_icon_8(canvas, right_edge - 8, s.y + 3, icons::ARROW_RIGHT, tc);
+        }
+        if arrow_left {
+            icons::draw_icon_8(
+                canvas,
+                (right_edge - 18 - sw).max(40),
+                s.y + 3,
+                icons::ARROW_LEFT,
+                tc,
+            );
+        }
+        right_edge - 10
+    } else {
+        right_edge - 3
+    };
+    text::draw_str(canvas, val_right - sw, s.y + text_dy - 1, val_str, &TOMTHUMB, tc);
+}
+#[inline(never)]
+fn draw_shortcut_row(
+    canvas: &mut Canvas,
+    s: &ListRowSpec<'_>,
+    mut tx: i16,
+    text_dy: i16,
+    icon_dy: i16,
+    right_edge: i16,
+    tc: Color,
+) {
+    tx += draw_key_badge_box(canvas, tx, s.y + 3, s.title, tc == Color::Clear) as i16 + 3;
+    if let Some(bmp) = s.icon {
+        if !core::ptr::eq(bmp, &icons::ICON_NONE) {
+            icons::draw_icon_8(canvas, tx, s.y + icon_dy, bmp, tc);
+            tx += 11;
+        }
+    }
+    let mut lbuf = [0u8; 36];
+    let act_lbl = if s.localize_title {
+        text::localize(s.value, false, &mut lbuf)
+    } else {
+        s.value
+    };
+    let max_x = right_edge - 10;
+    text::draw_str_ellipsis(canvas, tx, s.y + text_dy, act_lbl, &MUMATRIX, tc, max_x);
+    icons::draw_icon_8(canvas, right_edge - 8, s.y + 3, icons::ARROW_RIGHT, tc);
+}
+
 /// Render a canonical list row and return the title's horizontal overflow in pixels (`0` when it fits).
 #[inline(never)]
 pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
@@ -105,22 +170,7 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
     let mut tx = (s.x as i16) + 3;
 
     if is_shortcut {
-        tx += draw_key_badge_box(canvas, tx, s.y + 3, s.title, tc == Color::Clear) as i16 + 3;
-        if let Some(bmp) = s.icon {
-            if !core::ptr::eq(bmp, &icons::ICON_NONE) {
-                icons::draw_icon_8(canvas, tx, s.y + icon_dy, bmp, tc);
-                tx += 11;
-            }
-        }
-        let mut lbuf = [0u8; 48];
-        let act_lbl = if s.localize_title {
-            text::localize(s.value, false, &mut lbuf)
-        } else {
-            s.value
-        };
-        let max_x = right_edge - 10;
-        text::draw_str_ellipsis(canvas, tx, s.y + text_dy, act_lbl, &MUMATRIX, tc, max_x);
-        icons::draw_icon_8(canvas, right_edge - 8, s.y + 3, icons::ARROW_RIGHT, tc);
+        draw_shortcut_row(canvas, s, tx, text_dy, icon_dy, right_edge, tc);
         return 0;
     }
 
@@ -135,7 +185,7 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
         }
     }
 
-    let mut lbuf = [0u8; 48];
+    let mut lbuf = [0u8; 32];
     let sw = if s.value.is_empty() {
         0
     } else {
@@ -193,29 +243,7 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
         };
         icons::draw_icon_8(canvas, right_edge - 10, s.y + icon_dy, bmp, tc);
     } else if sw > 0 {
-        let val_str = if s.localize_value {
-            text::localize(s.value, true, &mut lbuf)
-        } else {
-            s.value
-        };
-        let val_right = if is_outline && (arrow_left || arrow_right) {
-            if arrow_right {
-                icons::draw_icon_8(canvas, right_edge - 8, s.y + 3, icons::ARROW_RIGHT, tc);
-            }
-            if arrow_left {
-                icons::draw_icon_8(
-                    canvas,
-                    (right_edge - 18 - sw).max(40),
-                    s.y + 3,
-                    icons::ARROW_LEFT,
-                    tc,
-                );
-            }
-            right_edge - 10
-        } else {
-            right_edge - 3
-        };
-        text::draw_str(canvas, val_right - sw, s.y + text_dy - 1, val_str, &TOMTHUMB, tc);
+        draw_row_right_value(canvas, s, right_edge, text_dy, sw, tc);
     } else if has_chevron {
         icons::draw_icon_8(
             canvas,

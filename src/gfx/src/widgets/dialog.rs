@@ -168,7 +168,7 @@ pub fn draw_key_badge_right(canvas: &mut Canvas, right_x: i16, y: i16, key_str: 
 #[inline(never)]
 pub fn draw_negated_header(canvas: &mut Canvas, y: i16, title: &str) {
     let yu = y as u8;
-    let mut lbuf = [0u8; 48];
+    let mut lbuf = [0u8; 32];
     let title = text::localize(title, true, &mut lbuf);
     canvas.fill_rect(0, yu, 128, 9, Color::Fill);
     canvas.draw_pixel(0, yu, Color::Clear);

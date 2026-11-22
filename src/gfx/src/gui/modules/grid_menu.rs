@@ -72,7 +72,7 @@ pub struct GridMenuView {
 impl GridMenuView {
     pub const fn new() -> Self {
         Self {
-            repeater: crate::gui::repeater::KeyRepeater::new(6, 2),
+            repeater: crate::gui::repeater::KeyRepeater::new(8, 2),
         }
     }
 

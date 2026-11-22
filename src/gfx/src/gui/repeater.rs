@@ -3,11 +3,23 @@
 //! Provides tick-driven auto-repeat for list navigation, menu scrolling, and
 //! value adjustment without requiring the low-level keyboard driver to emit synthetic repeats.
 
+use core::sync::atomic::{AtomicU16, Ordering};
 use kernel::event::{KeyCode, KeyState};
+
+/// Wall-clock milliseconds per `Event::Tick` (default 50 ms = 20 Hz; updated by firmware loop
+/// so adaptive 60/120 Hz animation ticks never accelerate key auto-repeat).
+static TICK_DT_MS: AtomicU16 = AtomicU16::new(50);
+
+/// Update the active `Event::Tick` interval in milliseconds before dispatching `Event::Tick`.
+#[inline(always)]
+pub fn set_tick_dt_ms(dt_ms: u16) {
+    TICK_DT_MS.store(dt_ms.clamp(1, 200), Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyRepeater {
     active_key: u8,
+    ms_accum: u8,
     ticks: u16,
     initial_delay_ticks: u16,
     repeat_rate_ticks: u16,
@@ -31,6 +43,7 @@ impl KeyRepeater {
     ) -> Self {
         Self {
             active_key: 0,
+            ms_accum: 0,
             ticks: 0,
             initial_delay_ticks,
             repeat_rate_ticks,
@@ -59,30 +72,39 @@ impl KeyRepeater {
             KeyState::Pressed => {
                 if Self::is_repeatable_key(code) {
                     self.active_key = (code as u8) + 1;
+                    self.ms_accum = 0;
                     self.ticks = 0;
                 } else {
                     self.active_key = 0;
+                    self.ms_accum = 0;
                     self.ticks = 0;
                 }
             }
             KeyState::Released if self.active_key == (code as u8) + 1 => {
                 self.active_key = 0;
+                self.ms_accum = 0;
                 self.ticks = 0;
             }
             _ => {}
         }
     }
 
-    /// Advance repeater state by 1 tick (typically 50ms in firmware main loop).
+    /// Advance repeater state by the active tick interval (normalized to 50ms steps).
     /// Returns `Some(KeyCode)` if the held key should repeat on this tick.
     ///
     /// Implements adaptive repeat acceleration:
     /// 1. Precision rate (`repeat_rate_ticks`) for the first few items so the user
     ///    can stop accurately on item +1, +2, etc.
-    /// 2. Turbo rate (every tick) once held past `turbo_threshold_ticks` for fast
+    /// 2. Turbo rate (every 50ms step) once held past `turbo_threshold_ticks` for fast
     ///    scrolling through long menus and tables.
     pub fn tick(&mut self) -> Option<KeyCode> {
         if let Some(key) = self.active_key() {
+            let total_ms = (self.ms_accum as u16) + TICK_DT_MS.load(Ordering::Relaxed);
+            if total_ms < 50 {
+                self.ms_accum = total_ms as u8;
+                return None;
+            }
+            self.ms_accum = (total_ms - 50).min(49) as u8;
             self.ticks = self.ticks.saturating_add(1);
             if self.ticks > self.initial_delay_ticks {
                 let repeat_ticks = self.ticks - self.initial_delay_ticks;
@@ -141,6 +163,7 @@ impl KeyRepeater {
     /// Manually reset repeater state
     pub fn reset(&mut self) {
         self.active_key = 0;
+        self.ms_accum = 0;
         self.ticks = 0;
     }
 
@@ -218,5 +241,26 @@ mod tests {
         rep.handle_key(KeyCode::Exit, KeyState::Pressed);
         assert_eq!(rep.active_key(), None);
         assert_eq!(rep.tick(), None);
+    }
+
+    #[test]
+    fn high_refresh_animation_ticks_preserve_real_time_repeat_delay() {
+        set_tick_dt_ms(16);
+        let mut rep = KeyRepeater::new(8, 2); // 400 ms initial delay, 100 ms repeat
+        rep.handle_key(KeyCode::Down, KeyState::Pressed);
+
+        // 18 ticks * 16 ms = 288 ms: must NOT fire yet even during 60 Hz animation.
+        for _ in 0..18 {
+            assert_eq!(rep.tick(), None);
+        }
+        // Advance to ~550 ms total: should fire at most 1-2 repeats, never burst.
+        let mut fires = 0usize;
+        for _ in 0..16 {
+            if rep.tick().is_some() {
+                fires += 1;
+            }
+        }
+        assert!(fires >= 1 && fires <= 2, "expected 1..=2 repeats, got {fires}");
+        set_tick_dt_ms(50);
     }
 }

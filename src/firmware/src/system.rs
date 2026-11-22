@@ -319,6 +319,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
             record_proc_activation(0xF0);
             hw.backlight.tick(delta as u16);
             hw.audio.tick(delta as u16);
+            gfx::gui::repeater::set_tick_dt_ms(delta as u16);
             enqueue_event(Event::Tick);
         }
 

@@ -1,9 +1,6 @@
 //! Shared `#[repr(C)]` State & Leaf Dispatch Contract for `settings.krx` (`P0` Paged).
 
-use kern_sdk::KrxDirEntry;
-
-pub const MAX_APPS: usize = 8;
-pub const MAX_ASSETS: usize = 10;
+use kern_sdk::{KrxApiTable, KrxDirEntry};
 
 pub const LEAF_APP_LOAD: u8 = 1;
 pub const LEAF_APP_HDR: u8 = 2;
@@ -95,16 +92,9 @@ pub struct AppMeta {
 }
 
 #[repr(C)]
-pub union SharedPool {
-    pub app_entries: [KrxDirEntry; MAX_APPS],
-    pub asset_paths: [[u8; 24]; MAX_ASSETS],
-}
-
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScBuf {
     pub keys_cfg: [u8; 64],
-    pub target_ids: [u16; 12],
 }
 
 #[repr(C)]
@@ -133,7 +123,7 @@ pub struct SharedState {
     pub jingle_name: [u8; 12],
     pub lang_name: [u8; 12],
 
-    pub sheet_buf: [u8; 112],
+    pub sheet_buf: [u8; 224],
     pub sheet_len: u16,
     pub sheet_title: [u8; 16],
     pub sheet_title_len: u8,
@@ -150,7 +140,6 @@ pub struct SharedState {
     pub bp_count: u8,
     pub bp_sel: u8,
     pub detail_scroll: i16,
-    pub pool: SharedPool,
     pub detail_sc: DetailOrSc,
 }
 
@@ -172,7 +161,7 @@ impl SharedState {
             roger_name: [0; 12],
             jingle_name: [0; 12],
             lang_name: [0; 12],
-            sheet_buf: [0; 112],
+            sheet_buf: [0; 224],
             sheet_len: 0,
             sheet_title: [0; 16],
             sheet_title_len: 0,
@@ -189,41 +178,12 @@ impl SharedState {
             bp_count: 0,
             bp_sel: 0,
             detail_scroll: 0,
-            pool: SharedPool {
-                app_entries: [KrxDirEntry {
-                    name: [0; 24],
-                    size: 0,
-                    is_dir: 0,
-                    reserved: [0; 3],
-                }; MAX_APPS],
-            },
             detail_sc: DetailOrSc {
                 sc: ScBuf {
                     keys_cfg: [0; 64],
-                    target_ids: [0; 12],
                 },
             },
         }
-    }
-
-    #[inline(always)]
-    pub fn apps(&self) -> &[KrxDirEntry; MAX_APPS] {
-        unsafe { &self.pool.app_entries }
-    }
-
-    #[inline(always)]
-    pub fn apps_mut(&mut self) -> &mut [KrxDirEntry; MAX_APPS] {
-        unsafe { &mut self.pool.app_entries }
-    }
-
-    #[inline(always)]
-    pub fn assets(&self) -> &[[u8; 24]; MAX_ASSETS] {
-        unsafe { &self.pool.asset_paths }
-    }
-
-    #[inline(always)]
-    pub fn assets_mut(&mut self) -> &mut [[u8; 24]; MAX_ASSETS] {
-        unsafe { &mut self.pool.asset_paths }
     }
 
     #[inline(always)]
@@ -245,6 +205,31 @@ impl SharedState {
     pub fn sc_mut(&mut self) -> &mut ScBuf {
         unsafe { &mut self.detail_sc.sc }
     }
+}
+
+/// Inspect a KRX header's `SECTION_TYPE_LIFECYCLE` (`0x0009`) to check if `exec_type == Module (5)`.
+#[inline(never)]
+pub fn is_krx_module(api: &KrxApiTable, full: &[u8]) -> bool {
+    let mut raw = core::mem::MaybeUninit::<[u8; 96]>::uninit();
+    let buf = unsafe { &mut *raw.as_mut_ptr() };
+    let n = api.read_file_at(full, 0, buf);
+    if n < 28 {
+        return false;
+    }
+    let hlen = ((byte_at(buf, 8) as usize) | ((byte_at(buf, 9) as usize) << 8)).min(n);
+    let mut off = 24usize;
+    while off + 4 <= hlen {
+        let sid = (byte_at(buf, off) as u16) | ((byte_at(buf, off + 1) as u16) << 8);
+        let slen = (byte_at(buf, off + 2) as usize) | ((byte_at(buf, off + 3) as usize) << 8);
+        if slen < 4 || off + slen > hlen {
+            break;
+        }
+        if sid == 0x0009 && slen >= 5 {
+            return byte_at(buf, off + 4) == 5;
+        }
+        off += (slen + 3) & !3;
+    }
+    false
 }
 
 #[inline(always)]

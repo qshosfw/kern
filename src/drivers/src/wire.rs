@@ -291,7 +291,7 @@ mod tests {
         let mut drv = WireDriver::new(port, MockTime);
         drv.session.begin_session(0x1122_3344, 128);
 
-        let mut next_frame = |drv: &mut WireDriver<MockPort, MockTime>| {
+        let next_frame = |drv: &mut WireDriver<MockPort, MockTime>| {
             for _ in 0..8 {
                 if let Some(f) = drv.poll(100) {
                     return Some(f);

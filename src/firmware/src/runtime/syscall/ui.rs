@@ -61,6 +61,7 @@ fn is_persistent_guest_ptr(ptr: *const u8, len: usize) -> bool {
     !(addr < overlay_end && end > overlay_start)
 }
 
+#[inline(never)]
 unsafe fn show_modal_req(req: *const KrxModalReq) {
     if req.is_null() {
         return;
@@ -113,6 +114,55 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
     );
 }
 
+#[inline(never)]
+unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget, s0: &str) {
+    use gfx::widgets::*;
+    let row_h = if d.h >= 12 { 13 } else { 10 };
+    let mut flags = 0u8;
+    if (d.a & 1) != 0 {
+        flags |= ROW_SELECTED;
+    }
+    if (d.a & 2) != 0 {
+        flags |= ROW_CHEVRON;
+    }
+    if (d.a & 4) != 0 {
+        flags |= ROW_OUTLINE;
+    }
+    if (d.a & 8) != 0 {
+        flags |= ROW_TOGGLE;
+    }
+    if (d.a & 16) != 0 {
+        flags |= ROW_TOGGLE_ON;
+    }
+    if (d.a & 32) != 0 {
+        flags |= ROW_ARROW_LEFT;
+    }
+    if (d.a & 64) != 0 {
+        flags |= ROW_ARROW_RIGHT;
+    }
+    if (d.a & 128) != 0 {
+        flags |= ROW_SHORTCUT;
+    }
+    let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
+    let phase = ((d.extra >> 1) & 3) as i8;
+    let chevron_dx = if (d.a & 1) != 0 && d.extra != 0 {
+        if phase == 3 { 1 } else { phase }
+    } else {
+        0
+    };
+    let mut spec = ListRowSpec::new(2, d.y, 120, row_h, s0);
+    spec.flags = flags;
+    spec.value = s1;
+    spec.icon = if d.b != 0 {
+        super::display::system_icon_8(d.b)
+    } else {
+        None
+    };
+    spec.chevron_dx = chevron_dx;
+    draw_list_row(canvas, &spec);
+}
+
+#[inline(never)]
 unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     if desc.is_null() {
         return 1;
@@ -162,52 +212,7 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 d.len1 as usize,
             );
         }
-        KRX_WIDGET_MENU_ITEM => {
-            use gfx::widgets::*;
-            let row_h = if d.h >= 12 { 13 } else { 10 };
-            let mut flags = 0u8;
-            if (d.a & 1) != 0 {
-                flags |= ROW_SELECTED;
-            }
-            if (d.a & 2) != 0 {
-                flags |= ROW_CHEVRON;
-            }
-            if (d.a & 4) != 0 {
-                flags |= ROW_OUTLINE;
-            }
-            if (d.a & 8) != 0 {
-                flags |= ROW_TOGGLE;
-            }
-            if (d.a & 16) != 0 {
-                flags |= ROW_TOGGLE_ON;
-            }
-            if (d.a & 32) != 0 {
-                flags |= ROW_ARROW_LEFT;
-            }
-            if (d.a & 64) != 0 {
-                flags |= ROW_ARROW_RIGHT;
-            }
-            if (d.a & 128) != 0 {
-                flags |= ROW_SHORTCUT;
-            }
-            let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
-            let phase = ((d.extra >> 1) & 3) as i8;
-            let chevron_dx = if (d.a & 1) != 0 && d.extra != 0 {
-                if phase == 3 { 1 } else { phase }
-            } else {
-                0
-            };
-            let mut spec = ListRowSpec::new(2, d.y, 120, row_h, s0);
-            spec.flags = flags;
-            spec.value = s1;
-            spec.icon = if d.b != 0 {
-                super::display::system_icon_8(d.b)
-            } else {
-                None
-            };
-            spec.chevron_dx = chevron_dx;
-            draw_list_row(canvas, &spec);
-        }
+        KRX_WIDGET_MENU_ITEM => unsafe { draw_menu_item_widget(canvas, d, s0) },
         KRX_WIDGET_BATTERY => gfx::widgets::draw_battery(canvas, d.x, d.y, d.a, d.b != 0),
         KRX_WIDGET_SIGNAL => {
             gfx::widgets::draw_signal(canvas, d.x, d.y, d.a, color_from_u8(d.b));

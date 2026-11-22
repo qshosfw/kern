@@ -580,13 +580,38 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn list_dir(&self, path: &[u8], out: &mut [KrxDirEntry]) -> usize {
+        self.list_dir_page(path, 0, out)
+    }
+
+    /// Paginated directory listing starting at `offset` (returns number of entries written).
+    #[inline(always)]
+    pub fn list_dir_page(&self, path: &[u8], offset: u32, out: &mut [KrxDirEntry]) -> usize {
         let req = KrxFsReq {
             path: path.as_ptr(),
             buf: out.as_mut_ptr() as *mut u8,
-            offset: 0,
+            offset,
             len: out.len() as u16,
             path_len: path.len() as u8,
             extra: 0,
+        };
+        self.call_op(
+            Op::FsRead,
+            crate::sub::fs_read::LIST_DIR as usize,
+            &req as *const KrxFsReq as usize,
+            0,
+        )
+    }
+
+    /// Return total entry count in `path` without allocating a full directory array.
+    #[inline(always)]
+    pub fn count_dir(&self, path: &[u8]) -> usize {
+        let req = KrxFsReq {
+            path: path.as_ptr(),
+            buf: core::ptr::null_mut(),
+            offset: 0,
+            len: 0,
+            path_len: path.len() as u8,
+            extra: 1,
         };
         self.call_op(
             Op::FsRead,

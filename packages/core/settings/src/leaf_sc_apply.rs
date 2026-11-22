@@ -4,10 +4,11 @@
 
 mod shared;
 
-use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry};
+use core::mem::MaybeUninit;
+use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
 use shared::{
-    CMD_SC_APPLY_PICK, CMD_SC_LOAD, CMD_SC_TOGGLE_DRAWER, MAX_APPS, SharedState, byte_at, set_byte,
-    subslice,
+    CMD_SC_APPLY_PICK, CMD_SC_LOAD, CMD_SC_TOGGLE_DRAWER, SharedState, byte_at, copy_bytes,
+    cstr_slice, hash_app_path, set_byte, strip_apps_prefix, subslice,
 };
 
 fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
@@ -18,7 +19,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
     if st.cmd == CMD_SC_LOAD {
         let _ = api.read_file(b"/pref/keys.cfg", &mut st.sc_mut().keys_cfg);
-        st.app_count = api.list_dir(b"/apps", st.apps_mut()).min(MAX_APPS) as u8;
+        st.app_count = api.count_dir(b"/apps").min(255) as u8;
         ctx.continuation.kind = KRX_LEAF_KIND_DONE;
         return 0;
     }
@@ -29,8 +30,25 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         changed = true;
     } else if st.cmd == CMD_SC_APPLY_PICK {
         let pick = st.arg0 as usize;
-        if pick < (st.sc_target_count as usize).min(12) {
-            let target = unsafe { *st.sc().target_ids.get_unchecked(pick) };
+        let target_opt: Option<u16> = if pick < 6 {
+            Some(pick as u16)
+        } else if pick < st.sc_target_count as usize {
+            let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+            let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+            if api.list_dir_page(b"/apps", (pick - 6) as u32, core::slice::from_mut(ent)) > 0 {
+                let mut raw_p = MaybeUninit::<[u8; 32]>::uninit();
+                let p = unsafe { &mut *raw_p.as_mut_ptr() };
+                let short = strip_apps_prefix(cstr_slice(&ent.name));
+                let pl = copy_bytes(p, 0, b"/apps/");
+                let pl = copy_bytes(p, pl, short);
+                Some(hash_app_path(subslice(p, 0, pl)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(target) = target_opt {
             let slot = st.sc_slot;
             let scope = st.sc_scope;
             let b = target.to_le_bytes();

@@ -5,10 +5,10 @@
 mod shared;
 
 use core::mem::MaybeUninit;
-use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry};
+use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
 use shared::{
-    ASSET_LANG, ASSET_ROGER, ASSET_SPLASH, MAX_ASSETS, SharedState, byte_at, copy_bytes,
-    cstr_slice, set_byte, subslice, subslice_mut,
+    ASSET_LANG, ASSET_ROGER, ASSET_SPLASH, SharedState, byte_at, copy_bytes, cstr_slice,
+    fill_bytes, set_byte, subslice, subslice_mut,
 };
 
 fn format_pretty(raw: &[u8], out: &mut [u8]) {
@@ -78,11 +78,39 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         if pick == 0 {
             set_byte(cfg, flag_off, 0);
             copy_bytes(&mut pretty, 0, if dom == ASSET_LANG { b"English" } else { b"Off" });
-        } else if pick - 1 < (st.asset_count as usize).min(MAX_ASSETS) {
-            set_byte(cfg, flag_off, 1);
-            let src = unsafe { st.assets().get_unchecked(pick - 1) };
-            copy_bytes(subslice_mut(cfg, path_off, path_off + 32), 0, src);
-            format_pretty(cstr_slice(src), &mut pretty);
+        } else if pick - 1 < st.asset_count as usize {
+            let dir: &[u8] = match dom {
+                ASSET_SPLASH => b"/user/splash",
+                ASSET_ROGER => b"/user/rogers",
+                ASSET_LANG => b"/user/lang",
+                _ => b"/user/jingles",
+            };
+            let target = pick - 1;
+            let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+            let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+            let mut off = 0u32;
+            let mut seen = 0usize;
+            while api.list_dir_page(dir, off, core::slice::from_mut(ent)) > 0 {
+                off += 1;
+                if ent.is_dir == 0 {
+                    if seen == target {
+                        set_byte(cfg, flag_off, 1);
+                        let dst = subslice_mut(cfg, path_off, path_off + 32);
+                        fill_bytes(dst, 0);
+                        let raw = cstr_slice(&ent.name);
+                        if !raw.is_empty() && byte_at(raw, 0) == b'/' {
+                            copy_bytes(dst, 0, raw);
+                        } else {
+                            let p = copy_bytes(dst, 0, dir);
+                            set_byte(dst, p, b'/');
+                            copy_bytes(dst, p + 1, raw);
+                        }
+                        format_pretty(raw, &mut pretty);
+                        break;
+                    }
+                    seen += 1;
+                }
+            }
         }
         let name_dst = if dom == ASSET_SPLASH {
             &mut st.splash_name

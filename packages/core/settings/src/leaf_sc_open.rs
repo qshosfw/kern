@@ -5,10 +5,12 @@
 mod shared;
 
 use core::mem::MaybeUninit;
-use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry, nth_packed_slice};
+use kern_sdk::{
+    KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry, nth_packed_slice,
+};
 use shared::{
-    MAX_APPS, MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, SharedState, copy_bytes, cstr_slice,
-    hash_app_path, set_byte, strip_apps_prefix, subslice,
+    MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, SharedState, copy_bytes, cstr_slice, set_byte,
+    strip_apps_prefix, subslice,
 };
 
 const SLOT_LABELS: &[u8] =
@@ -31,33 +33,20 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         st.sc_slot = slot;
         let mut pos = copy_bytes(&mut st.sheet_buf, 0, BUILTIN_NAMES);
         let mut tcnt = 6usize;
-        let mut b = 0usize;
-        while b < 6 {
-            unsafe { *st.sc_mut().target_ids.get_unchecked_mut(b) = b as u16 };
-            b += 1;
-        }
-        let mut raw_p = MaybeUninit::<[u8; 32]>::uninit();
-        let p = unsafe { &mut *raw_p.as_mut_ptr() };
-        let n = (st.app_count as usize).min(MAX_APPS);
-        let mut i = 0usize;
-        while i < n && tcnt < 12 {
-            let pl = {
-                let short = strip_apps_prefix(cstr_slice(unsafe { &st.apps().get_unchecked(i).name }));
-                let pl = copy_bytes(p, 0, b"/apps/");
-                copy_bytes(p, pl, short)
-            };
-            let slen = pl.saturating_sub(6);
-            if pos + slen + 1 < 88 {
-                let h = hash_app_path(subslice(p, 0, pl));
-                unsafe { *st.sc_mut().target_ids.get_unchecked_mut(tcnt) = h };
-                pos = copy_bytes(&mut st.sheet_buf, pos, subslice(p, 6, pl));
+        let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+        let ent = unsafe { &mut *raw_e.as_mut_ptr() };
+        let mut off = 0u32;
+        while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
+            off += 1;
+            let short = strip_apps_prefix(cstr_slice(&ent.name));
+            if pos + short.len() + 1 < st.sheet_buf.len() {
+                pos = copy_bytes(&mut st.sheet_buf, pos, short);
                 set_byte(&mut st.sheet_buf, pos, 0);
                 pos += 1;
                 tcnt += 1;
             }
-            i += 1;
         }
-        st.sc_target_count = tcnt as u8;
+        st.sc_target_count = tcnt.min(255) as u8;
         let tlen = copy_bytes(&mut st.sheet_title, 0, nth_packed_slice(SLOT_LABELS, slot));
         api.show_sheet(MODAL_SHORTCUT_PICK, subslice(&st.sheet_title, 0, tlen), subslice(&st.sheet_buf, 0, pos), 0, true);
     }

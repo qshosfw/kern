@@ -533,13 +533,13 @@ impl OsCompositor {
         active_app_id: usize,
         canvas: &mut Canvas,
         ctx: &SysContext<'_, '_>,
-        sb_cfg_in: &kernel::app::StatusBarConfig<'_>,
+        sb_cfg_in: kernel::app::StatusBarConfig<'_>,
     ) {
-        let mut sb_cfg = *sb_cfg_in;
         let mut native_left_icons =
             [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
         let mut native_center_icons =
             [kernel::ui::StatusGlyph::Builtin(kernel::ui::Icon::Antenna); 4];
+        let mut sb_cfg = sb_cfg_in;
         #[cfg(feature = "krx_native")]
         if active_app_id >= crate::apps::AppRegistry::count() {
             crate::runtime::native_runner::apply_slot_status_icons(
@@ -593,15 +593,16 @@ impl OsCompositor {
 
         let mut sb_cfg = kernel::app::StatusBarConfig::default();
         crate::AppRegistry::render(active_app_id, canvas, ctx, &mut sb_cfg);
+        let sb_visible = sb_cfg.visible;
 
-        if sb_cfg.visible && !is_text_input {
-            Self::render_status_bar(active_app_id, canvas, ctx, &sb_cfg);
+        if sb_visible && !is_text_input {
+            Self::render_status_bar(active_app_id, canvas, ctx, sb_cfg);
         }
 
         // Render OS modal overlay on top of screen if active
         if has_modal {
             if has_blocking_modal && !is_text_input {
-                canvas.dim_backdrop(if sb_cfg.visible { 9 } else { 0 });
+                canvas.dim_backdrop(if sb_visible { 9 } else { 0 });
             }
             modal_ref.render_overlay(canvas);
             #[cfg(feature = "text_input")]

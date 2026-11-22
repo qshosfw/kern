@@ -6,10 +6,12 @@ mod shared;
 
 use core::mem::MaybeUninit;
 use kern_sdk::{
-    COLOR_CLEAR, KRX_LEAF_KIND_DONE, KRX_WIDGET_MENU_ITEM, KrxApiTable, KrxLeafContext, KrxWidget,
-    Op, format_u16_into, krx_entry,
+    COLOR_CLEAR, KRX_LEAF_KIND_DONE, KRX_WIDGET_MENU_ITEM, KrxApiTable, KrxDirEntry,
+    KrxLeafContext, KrxWidget, Op, format_u16_into, krx_entry,
 };
-use shared::{SharedState, byte_at, cstr_slice, strip_apps_prefix, subslice};
+use shared::{
+    SharedState, byte_at, copy_bytes, cstr_slice, is_krx_module, strip_apps_prefix, subslice,
+};
 
 fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     if arg.is_null() {
@@ -29,12 +31,24 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         };
         let _ = api.call_op(Op::UiWidget, KRX_WIDGET_MENU_ITEM as usize, &raw const desc as usize, 0);
     } else {
+        let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
+        let e = unsafe { &mut *raw_e.as_mut_ptr() };
+        let mut raw_p = MaybeUninit::<[u8; 32]>::uninit();
+        let pbuf = unsafe { &mut *raw_p.as_mut_ptr() };
+        let mut off = 0u32;
         let mut idx = 0u8;
-        while idx < st.app_count {
+        while idx < st.app_count && api.list_dir_page(b"/apps", off, core::slice::from_mut(e)) > 0 {
+            off += 1;
+            let short = strip_apps_prefix(cstr_slice(&e.name));
+            if st.modules_only != 0 {
+                let pos = copy_bytes(pbuf, 0, b"/apps/");
+                let pos = copy_bytes(pbuf, pos, short);
+                if !is_krx_module(api, subslice(pbuf, 0, pos)) {
+                    continue;
+                }
+            }
             let y = 9 + (idx as i16) * 13 - sy;
             if y > -13 && y < 64 {
-                let e = unsafe { st.apps().get_unchecked(idx as usize) };
-                let short = strip_apps_prefix(cstr_slice(&e.name));
                 let flags = if idx == st.app_sel { 3u8 } else { 0u8 };
                 let (lbl, val): (&[u8], &[u8]) = if st.modules_only != 0 {
                     let n = short.len();

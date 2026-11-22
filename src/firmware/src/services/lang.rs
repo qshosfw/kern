@@ -184,7 +184,7 @@ fn build_lang_font_path(lang_code: &[u8; 4], out: &mut [u8; 24]) -> usize {
 struct ActiveLang {
     os: MediaSlot<LangPackHeader, 24>,
     app: MediaSlot<LangPackHeader, 28>,
-    base_font: MediaSlot<FontPackHeader, 24>,
+    base_font: Option<FontPackHeader>,
     extra_font: MediaSlot<FontPackHeader, 24>,
     glyph_cache: FontGlyphCache<1>,
     str_cache: LangStrCache<1>,
@@ -197,7 +197,7 @@ impl ActiveLang {
         Self {
             os: MediaSlot::empty(),
             app: MediaSlot::empty(),
-            base_font: MediaSlot::empty(),
+            base_font: None,
             extra_font: MediaSlot::empty(),
             glyph_cache: FontGlyphCache::new(),
             str_cache: LangStrCache::new(),
@@ -271,7 +271,7 @@ pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::conf
     let st = state_mut();
     st.glyph_cache.clear();
     st.str_cache.clear();
-    st.base_font.clear();
+    st.base_font = None;
     st.extra_font.clear();
     if sys.lang_active == 0 {
         st.os.clear();
@@ -287,7 +287,14 @@ pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::conf
         gfx::text::set_localize_hook(None);
         return;
     }
-    let _ = st.base_font.load_with(storage, "/user/fonts/tiny5.fnt", parse_font_hdr);
+    let mut fhdr = [0u8; 16];
+    if storage
+        .read_file_at("/user/fonts/tiny5.fnt", 0, &mut fhdr)
+        .unwrap_or(0)
+        == 16
+    {
+        st.base_font = parse_font_hdr(&fhdr);
+    }
     if let Some(os_hdr) = st.os.hdr {
         let mut fbuf = [0u8; 24];
         let fn_len = build_lang_font_path(&os_hdr.lang_code, &mut fbuf);
@@ -305,7 +312,7 @@ pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::conf
             }
         }
     }
-    if st.base_font.hdr.is_some() || st.extra_font.hdr.is_some() {
+    if st.base_font.is_some() || st.extra_font.hdr.is_some() {
         gfx::text::set_ext_font_hooks(Some(ext_glyph_draw_hook), Some(ext_glyph_width_hook));
     } else {
         gfx::text::set_ext_font_hooks(None, None);
@@ -331,9 +338,11 @@ fn os_localize_hook<'a>(key: &str, prefer_short: bool, out: &'a mut [u8]) -> Opt
 fn fetch_ext_glyph(cp: u16) -> Option<&'static gfx::media::CachedGlyphSlot> {
     let st = state_mut();
     let fs = crate::kern_fs();
-    for (pack_id, font) in [(0u8, &st.base_font), (1u8, &st.extra_font)] {
-        if let Some(hdr) = font.hdr {
-            let p = font.path_str();
+    for (pack_id, hdr_opt, p) in [
+        (0u8, st.base_font, "/user/fonts/tiny5.fnt"),
+        (1u8, st.extra_font.hdr, st.extra_font.path_str()),
+    ] {
+        if let Some(hdr) = hdr_opt {
             if let Some(slot) = st.glyph_cache.fetch(
                 pack_id,
                 &hdr,
@@ -429,6 +438,23 @@ pub fn unbind_app() {
     st.str_cache.clear();
 }
 
+#[inline(never)]
+fn lookup_lang_slot<'a>(
+    storage: &mut crate::services::SystemStorage,
+    hdr: &LangPackHeader,
+    path: &str,
+    prefer_short: bool,
+    key: &str,
+    out: &'a mut [u8],
+) -> Option<&'a str> {
+    let mut read_fn = |off: usize, dst: &mut [u8]| storage.read_file_at(path, off, dst).unwrap_or(0);
+    if prefer_short {
+        lookup_lang_short_streaming(hdr, &mut read_fn, key, out)
+    } else {
+        lookup_lang_str_streaming(hdr, &mut read_fn, key, out)
+    }
+}
+
 /// Look up `key` via `RAM cache -> app pack -> OS pack`, returning `None` on miss or when inactive.
 #[inline(never)]
 pub fn translate_opt<'a>(
@@ -452,21 +478,7 @@ pub fn translate_opt<'a>(
     let mut found = None;
     for (hdr_opt, path) in [(st.app.hdr, st.app.path_str()), (st.os.hdr, st.os.path_str())] {
         if let Some(hdr) = hdr_opt {
-            let res = if prefer_short {
-                lookup_lang_short_streaming(
-                    &hdr,
-                    |off, dst| storage.read_file_at(path, off, dst).unwrap_or(0),
-                    key,
-                    out,
-                )
-            } else {
-                lookup_lang_str_streaming(
-                    &hdr,
-                    |off, dst| storage.read_file_at(path, off, dst).unwrap_or(0),
-                    key,
-                    out,
-                )
-            };
+            let res = lookup_lang_slot(storage, &hdr, path, prefer_short, key, out);
             if res.is_some() {
                 found = res;
                 break;
