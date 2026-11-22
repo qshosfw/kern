@@ -541,21 +541,6 @@ fn handle_resource_invoke(
     let arg = c.inp.first().copied().unwrap_or(0);
     match (handle.domain, action_id) {
         (DOMAIN_SYSTEM, ACTION_SYS_REBOOT) => {
-            // Fault-injection hooks exist only in debug builds; release nodes cannot be
-            // crashed remotely.
-            #[cfg(feature = "settings_debug")]
-            if arg == 3 {
-                panic!("Wire test panic");
-            }
-            #[cfg(feature = "settings_debug")]
-            if arg == 4 {
-                #[cfg(target_arch = "arm")]
-                unsafe {
-                    core::arch::asm!("udf #0x7F", options(noreturn));
-                }
-                #[cfg(not(target_arch = "arm"))]
-                panic!("Wire test fault");
-            }
             let mode = match arg {
                 1 => kernel::power::RebootMode::Bootloader,
                 2 => kernel::power::RebootMode::SafeRecovery,

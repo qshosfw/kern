@@ -289,7 +289,7 @@ fn boot_stage_security_check(
 /// Pre-splash check for required core `.krx` packages (IJV-style missing-module guard).
 /// Runs in <1 ms when `/apps/settings.krx` is valid; otherwise pauses on a recovery screen
 /// with USB/keypad active until the user presses MENU to continue anyway.
-#[cfg(all(feature = "filesystem", feature = "krx_native", not(feature = "resident_settings")))]
+#[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 fn boot_stage_core_modules_check(hw: &mut SystemHardware) {
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
@@ -381,7 +381,7 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     }
 
     // ── STAGE 2.5: Core Modules Verification (IJV-style missing-package guard) ──
-    #[cfg(all(feature = "filesystem", feature = "krx_native", not(feature = "resident_settings")))]
+    #[cfg(all(feature = "filesystem", feature = "krx_native"))]
     if !passcode_state.is_locked {
         boot_stage_core_modules_check(hw);
     }

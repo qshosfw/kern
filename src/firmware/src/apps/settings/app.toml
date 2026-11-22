@@ -1,9 +1,0 @@
-[app]
-id = "settings"
-name = "Settings"
-version = "1.0.0"
-execution = "static"
-entry = "SettingsApp"
-icon = "ICON_16_SETTINGS"
-
-[capabilities]

@@ -17,10 +17,8 @@
 //! exists; every stage that reads or edits it goes through that module.
 
 pub mod backup;
-#[cfg(feature = "dfu")]
-pub mod dfu;
 pub mod orchestration;
-#[cfg(any(feature = "dfu", feature = "krx_native"))]
+#[cfg(feature = "krx_native")]
 pub mod recovery;
 pub mod reset;
 #[cfg(feature = "passcode")]
@@ -38,9 +36,9 @@ pub fn run(hw: &mut crate::hardware::SystemHardware) -> py32_hal::adc::Adc {
     const WATCHDOG_TIMEOUT_MS: u32 = 6000;
 
     // ── Stage 2: panel & control plane ──────────────────────────────────────────────────
-    #[cfg(any(feature = "dfu", feature = "krx_native"))]
+    #[cfg(feature = "krx_native")]
     let warm_tools = recovery::is_warm_tools_boot();
-    #[cfg(not(any(feature = "dfu", feature = "krx_native")))]
+    #[cfg(not(feature = "krx_native"))]
     let warm_tools = false;
     if warm_tools {
         // Warm DFU → Recovery: panel and backlight stay live, no 42 ms LCD reset flash.
@@ -59,7 +57,7 @@ pub fn run(hw: &mut crate::hardware::SystemHardware) -> py32_hal::adc::Adc {
     crate::system::restore_from_backup(hw);
 
     // ── Stage 3: recovery ───────────────────────────────────────────────────────────────
-    #[cfg(any(feature = "dfu", feature = "krx_native"))]
+    #[cfg(feature = "krx_native")]
     recovery::run(hw, warm_tools);
     if warm_tools {
         hw.lcd.init();

@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(summary.abi, ::abi::VERSION);
         assert_eq!(
             summary.preamble.execution_class(),
-            Some(kernel::runtime::KrxClass::Native)
+            Some(kernel::runtime::KrxClass::Paged)
         );
         let (w8, h8, bits8) =
             KrxPreamble::find_icon_asset(SETTINGS_KRX, kernel::runtime::ASSET_ICON_8)

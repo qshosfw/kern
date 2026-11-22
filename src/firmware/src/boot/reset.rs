@@ -82,9 +82,9 @@ pub fn firmware_reboot_handler(mode: kernel::power::RebootMode) -> ! {
     use kernel::power::RebootMode;
     match mode {
         RebootMode::Firmware => prepare_clean_reboot(),
-        #[cfg(not(any(feature = "dfu", feature = "krx_native")))]
+        #[cfg(not(feature = "krx_native"))]
         RebootMode::Bootloader => prepare_clean_reboot(),
-        #[cfg(any(feature = "dfu", feature = "krx_native"))]
+        #[cfg(feature = "krx_native")]
         RebootMode::Bootloader => backup::update(
             BackupCrashTag::FLAG_BOOTLOADER_HOLD | BackupCrashTag::FLAG_CLEAN_REBOOT,
             0,

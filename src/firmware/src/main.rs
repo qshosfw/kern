@@ -233,9 +233,9 @@ fn early_init() -> Board {
         cortex_m::interrupt::enable();
     }
 
-    #[cfg(any(feature = "dfu", feature = "krx_native"))]
+    #[cfg(feature = "krx_native")]
     let warm_dfu_tools = boot::recovery::is_warm_tools_boot();
-    #[cfg(not(any(feature = "dfu", feature = "krx_native")))]
+    #[cfg(not(feature = "krx_native"))]
     let warm_dfu_tools = false;
     if warm_dfu_tools {
         drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);

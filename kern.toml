@@ -60,10 +60,4 @@ text_input = true       # ⌨️ Native OS multi-tap T9 TextInput modal shared b
 grayscale = false       # 🌓 True 2-bit 4-level grayscale with 500 Hz temporal FRC (1-bit spatial dither when false)
 
 [features.diagnostics]
-settings_info = false      # ℹ️ Compiled-in System Info fallback (off when using /apps/sysinfo.krx module)
-settings_calib = false     # 🎛️ Radio frequency and battery calibration submenu
-settings_debug = false     # 🛠️ Deep hardware register and memory debug submenu
 overclock_72mhz = true     # ⚡ Dynamic 72 MHz CPU overclocking menu option
-
-[features.bootloader]
-dfu = false                # 🔌 Compiled-in 398B raw DFU fallback (off when using /apps/dfu.mod)

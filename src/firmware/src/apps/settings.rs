@@ -1,49 +1,5 @@
-//! System Configuration & Settings Application
-//!
-//! When `resident_settings` is enabled (or in host unit tests), includes the full
-//! multi-page resident settings tree. In target release builds without `resident_settings`,
-//! delegates to `/apps/settings.krx` (`packages/core/settings`) and provides a compact
-//! ROM Safe-Mode Settings & Storage Recovery fallback if `/apps/settings.krx` is absent.
+//! System Settings ROM Fallback (delegates to `/apps/settings.krx`).
 
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod app;
-#[cfg(all(any(test, feature = "resident_settings"), feature = "filesystem"))]
-pub mod app_prefs;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod apps;
-#[cfg(all(any(test, feature = "resident_settings"), feature = "filesystem"))]
-pub mod asset_chooser;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod audio;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod battery;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod buttons;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod device;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod dialog;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod display;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod metric;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod nav;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod options;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod page;
-#[cfg(all(any(test, feature = "resident_settings"), feature = "passcode"))]
-pub mod security;
-#[cfg(any(test, feature = "resident_settings"))]
-pub mod system;
-
-#[cfg(any(test, feature = "resident_settings"))]
-pub use app::SettingsApp;
-#[cfg(any(test, feature = "resident_settings"))]
-pub use page::*;
-
-#[cfg(not(any(test, feature = "resident_settings")))]
 pub mod apps {
     #[inline(always)]
     fn resolve_icon_id(icon_id: u16) -> u8 {
@@ -56,12 +12,10 @@ pub mod apps {
     }
 }
 
-#[cfg(not(any(test, feature = "resident_settings")))]
 pub mod dialog {
     pub const TAG_POPUP_INFO: u8 = 7;
 }
 
-#[cfg(not(any(test, feature = "resident_settings")))]
 pub mod app {
     use crate::SysContext;
     use gfx::Canvas;
@@ -133,5 +87,4 @@ pub mod app {
     }
 }
 
-#[cfg(not(any(test, feature = "resident_settings")))]
 pub use app::SettingsApp;

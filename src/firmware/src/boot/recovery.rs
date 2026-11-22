@@ -138,18 +138,12 @@ pub fn run(hw: &mut SystemHardware, warm_tools: bool) {
             step = cur.next(outcome.map_err(|_| ()));
         }
 
-        #[cfg(not(feature = "dfu"))]
-        {
-            drivers::backlight::BACKLIGHT_DUTY.store(0, core::sync::atomic::Ordering::Relaxed);
-            bsp::pins::BACKLIGHT.set_low();
-            hw.lcd.turn_off();
-        }
+        drivers::backlight::BACKLIGHT_DUTY.store(0, core::sync::atomic::Ordering::Relaxed);
+        bsp::pins::BACKLIGHT.set_low();
+        hw.lcd.turn_off();
     }
     #[cfg(not(feature = "krx_native"))]
     let _ = (&hw, warm_tools);
-
-    #[cfg(feature = "dfu")]
-    super::dfu::enter_dfu_bootloader(&mut hw.lcd);
 }
 
 #[cfg(test)]

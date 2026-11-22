@@ -1026,11 +1026,7 @@ impl Orchestrator {
         match cmd {
             Shortcut::None => {}
             Shortcut::LaunchApp(id) => {
-                #[cfg(all(
-                    not(any(test, feature = "resident_vfo")),
-                    feature = "filesystem",
-                    feature = "krx_native"
-                ))]
+                #[cfg(all(not(test), feature = "filesystem", feature = "krx_native"))]
                 if id as usize == APP_ID_VFO {
                     match crate::runtime::launch_krx_package(ctx, "/apps/vfo.krx", 0) {
                         Ok(_) => return,
@@ -1041,11 +1037,7 @@ impl Orchestrator {
                         }
                     }
                 }
-                #[cfg(all(
-                    not(any(test, feature = "resident_settings")),
-                    feature = "filesystem",
-                    feature = "krx_native"
-                ))]
+                #[cfg(all(not(test), feature = "filesystem", feature = "krx_native"))]
                 if id as usize == APP_ID_SETTINGS {
                     match crate::runtime::launch_krx_package(ctx, "/apps/settings.krx", 0) {
                         Ok(_) => return,

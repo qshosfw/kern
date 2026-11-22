@@ -32,19 +32,9 @@ default = [
     "animations",
     "overclock_72mhz",
     "text_input",
-    "resident_settings",
-    "resident_vfo",
 ]
 
-# 🔌 Bootloader DFU Raw Fallback (optional; primary UI/hooks offloaded to /apps/dfu.mod)
-dfu = []
-
-# ⚙️ Granular Settings & Diagnostics
-resident_settings = []
-resident_vfo = []
-settings_info = ["resident_settings"]
-settings_calib = ["resident_settings"]
-settings_debug = ["resident_settings"]
+# ⚙️ Optional Tuning
 overclock_72mhz = []
 
 # ⚙️ Execution Runtime Engines
@@ -68,7 +58,7 @@ usb_msc_fat = ["usb_msc", "drivers/usb_msc_fat"]
 # 💾 Storage & Cryptographic Security
 filesystem = ["drivers/filesystem"]
 secure_fs = ["drivers/secure_fs", "kernel/secure_fs"]
-passcode = ["secure_fs", "text_input", "gfx/passcode", "resident_settings"]
+passcode = ["secure_fs", "text_input", "gfx/passcode"]
 text_input = []
 app_hibernation = ["filesystem"]
 
