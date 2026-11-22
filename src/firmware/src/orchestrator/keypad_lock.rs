@@ -283,7 +283,11 @@ impl KeypadLockManager {
                 }
             }
 
-            if auto_lock_ms > 0 && !self.is_locked && self.held_code.is_none() {
+            if auto_lock_ms > 0
+                && !self.is_locked
+                && self.held_code.is_none()
+                && !crate::system::is_headless()
+            {
                 self.inactivity_ms = self.inactivity_ms.saturating_add(dt as u32);
                 if self.inactivity_ms >= auto_lock_ms {
                     self.toggle_lock();
@@ -360,6 +364,11 @@ impl KeypadLockManager {
             }
 
             return consumed;
+        }
+
+        if matches!(event, Event::Encoder(_)) {
+            self.inactivity_ms = 0;
+            return false;
         }
 
         if let Event::Key { code, state } = event {

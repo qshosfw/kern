@@ -470,6 +470,23 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
             animating = self.scroller.tick();
         }
 
+        if let Event::Encoder(delta) = *event {
+            if delta != 0 && !self.model.items.is_empty() {
+                let len = self.model.items.len();
+                let prev_sel = self.model.selected_idx;
+                self.model.selected_idx = (self.model.selected_idx as isize + delta as isize)
+                    .rem_euclid(len as isize) as usize;
+                self.model.is_pressed = false;
+                if is_list_mode {
+                    self.adjust_scroll_for_selection(animations_enabled);
+                }
+                if self.model.selected_idx != prev_sel && ctx.config.audio.key_beep != 0 {
+                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
+                }
+                return EventResult::Consumed;
+            }
+        }
+
         if let Event::Key { code, state } = *event {
             let digit_opt = code.to_digit();
             let is_direct_key = code == KeyCode::Menu || matches!(digit_opt, Some(1..=6));

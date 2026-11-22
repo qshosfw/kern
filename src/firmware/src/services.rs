@@ -58,7 +58,11 @@ fn play_tone_file(
     };
     let n = crate::services::melody::load_roger_notes(storage, path, notes);
     if n > 0 {
-        radio.play_tone_sequence(&notes[..n]);
+        if crate::system::is_headless() {
+            crate::system::push_headless_notes(&notes[..n]);
+        } else {
+            radio.play_tone_sequence(&notes[..n]);
+        }
     }
 }
 
