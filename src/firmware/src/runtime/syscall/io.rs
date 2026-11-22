@@ -288,14 +288,11 @@ pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             io_time::TICKS_MS => py32_hal::delay::millis() as usize,
             io_time::DELAY_MS => {
                 let mut rem = a1 as u32;
-                while rem > 50 {
+                while rem > 0 {
+                    let step = rem.min(50);
                     bsp::Board::wdt_feed();
-                    py32_hal::delay::delay_ms(50);
-                    rem -= 50;
-                }
-                if rem > 0 {
-                    bsp::Board::wdt_feed();
-                    py32_hal::delay::delay_ms(rem);
+                    py32_hal::delay::delay_ms(step);
+                    rem -= step;
                 }
                 0
             }

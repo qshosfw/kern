@@ -454,22 +454,14 @@ pub fn load_native_from_storage(
     let caps = summary.caps;
 
     let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS * 4;
-    let h_len = preamble.header_len as usize;
     let load_base = arena_base_ptr() as u32;
     let profile = summary.profile(exec);
-    let _ = h_len;
     let is_paged = matches!(
         profile,
         KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
     );
 
     if payload_len == 0 || (!is_paged && payload_len < (exec.payload_size as usize)) {
-        super::loader::record_launch_diag(
-            payload_len as u32,
-            exec.payload_size,
-            summary.version,
-            super::loader::DIAG_NONE,
-        );
         return Err(KrxLaunchError::TruncatedPackage);
     }
 
@@ -504,7 +496,7 @@ pub fn load_native_from_storage(
             win.cache.configure(
                 exec.page_size,
                 exec.cache_blocks,
-                h_len as u32,
+                preamble.header_len as u32,
                 pay_size,
                 aux.block_map,
             );
@@ -552,16 +544,6 @@ pub fn load_native_from_storage(
         (payload_len as u32).min(code_limit)
     };
     slot.code_size = code_size as u16;
-
-    if (exec.entry_point & !1) >= code_size {
-        super::loader::record_launch_diag(
-            exec.entry_point,
-            code_size,
-            summary.version,
-            super::loader::DIAG_NONE,
-        );
-        return Err(KrxLaunchError::InvalidEntryPoint);
-    }
     let entry_thumb = (load_base.wrapping_add(exec.entry_point) | 1) as usize;
 
     // 6. Flush instruction pipeline before branching into SRAM arena

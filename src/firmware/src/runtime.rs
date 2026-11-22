@@ -29,14 +29,24 @@ pub use swap::*;
 #[cfg(feature = "krx_native")]
 pub use syscall::*;
 
-/// Read and parse a KRX package header from storage into `out` (single shared read + summary path).
+/// Read and parse a KRX package header from storage into the top of `TRANSIENT_ARENA`'s scratch
+/// tail, returning `(hdr_buf, summary)` without touching P0 root code or allocating stack frames.
 #[inline(never)]
-pub fn read_krx_summary<'a, 'b>(
+pub fn read_krx_summary_in_scratch(
     storage: &mut crate::services::SystemStorage,
     path: &str,
-    hdr_buf: &'a mut [u8],
-    out: &'b mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'a>>,
-) -> Result<&'b mut kernel::runtime::KrxSummary<'a>, kernel::runtime::KrxLaunchError> {
+) -> Result<(&'static [u8], &'static kernel::runtime::KrxSummary<'static>), kernel::runtime::KrxLaunchError>
+{
+    const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
+    const SUMMARY_RESERVE: usize =
+        (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
+    let tail = crate::data::arena::scratch_tail_bytes_mut();
+    let tail_len = tail.len();
+    let (pre_hdr, hdr_buf) = tail.split_at_mut(tail_len - HDR_RESERVE);
+    let summary_slot = unsafe {
+        &mut *(pre_hdr.as_mut_ptr().add(pre_hdr.len() - SUMMARY_RESERVE)
+            as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'static>>)
+    };
     let read_len = storage
         .read_file_at(path, 0, hdr_buf)
         .map_err(|e| match e {
@@ -45,7 +55,9 @@ pub fn read_krx_summary<'a, 'b>(
             }
             _ => kernel::runtime::KrxLaunchError::ReadFailed,
         })?;
-    kernel::runtime::KrxPreamble::summarize_into(&hdr_buf[..read_len], out)
+    let hdr: &'static [u8] = unsafe { core::slice::from_raw_parts(hdr_buf.as_ptr(), read_len) };
+    let summary = kernel::runtime::KrxPreamble::summarize_into(hdr, summary_slot)?;
+    Ok((hdr, summary))
 }
 
 #[cfg(not(feature = "krx_native"))]

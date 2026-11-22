@@ -225,37 +225,6 @@ impl PackageCatalog {
             }
         }
 
-        // Sort invalid/corrupted packages to the top, keeping action `pkg_idx` synced
-        const _: () = {
-            assert!(core::mem::align_of::<PackageCatalogEntry>() >= 4);
-            assert!(core::mem::size_of::<PackageCatalogEntry>() % 4 == 0);
-        };
-        let base = self.entries.as_mut_ptr();
-        for i in 1..self.entries.len() {
-            let mut j = i;
-            unsafe {
-                while j > 0 && !(*base.add(j)).is_valid && (*base.add(j - 1)).is_valid {
-                    let pa = base.add(j - 1) as *mut u32;
-                    let pb = base.add(j) as *mut u32;
-                    for w in 0..(core::mem::size_of::<PackageCatalogEntry>() / 4) {
-                        let tmp = *pa.add(w);
-                        *pa.add(w) = *pb.add(w);
-                        *pb.add(w) = tmp;
-                    }
-                    let a = (j - 1) as u8;
-                    let b = j as u8;
-                    for act in self.actions.iter_mut() {
-                        if act.pkg_idx == a {
-                            act.pkg_idx = b;
-                        } else if act.pkg_idx == b {
-                            act.pkg_idx = a;
-                        }
-                    }
-                    j -= 1;
-                }
-            }
-        }
-
         self.scanned = true;
     }
 
@@ -297,24 +266,9 @@ impl PackageCatalog {
 
         let mut title: Option<&str> = None;
         if is_pkg && (size as usize) >= KrxPreamble::SIZE {
-            const HDR_BYTES: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
-            const _: () = assert!(
-                HDR_BYTES + core::mem::size_of::<kernel::runtime::KrxSummary<'static>>()
-                    <= crate::data::arena::TRANSIENT_ARENA_BYTES
-                        - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
-            );
-            let (hdr_buf, tail) =
-                crate::data::arena::scratch_tail_bytes_mut().split_at_mut(HDR_BYTES);
-            let summary_slot = unsafe {
-                &mut *(tail.as_mut_ptr()
-                    as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
-            };
-            if let Ok(summary) = crate::runtime::read_krx_summary(
-                filesystem,
-                entry.path.as_str(),
-                hdr_buf,
-                summary_slot,
-            ) {
+            if let Ok((hdr_buf, summary)) =
+                crate::runtime::read_krx_summary_in_scratch(filesystem, entry.path.as_str())
+            {
                 if summary.preamble.execution_class().is_some() {
                     entry.is_valid = true;
                 }
@@ -346,29 +300,25 @@ impl PackageCatalog {
                         }
                         off += kernel::runtime::KrxActionDecl::SIZE;
                     }
-                }
-            }
-            if let Some(t) = title {
-                entry.title.len = write_trunc_utf8(&mut entry.title.buf, 0, t);
-            }
-            if entry.is_valid {
-                if let Some((_, _, ic8)) =
-                    KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_8)
-                {
-                    if ic8.len() >= 8 {
+                    if let Some((_, _, ic8)) =
+                        KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_8)
+                        && ic8.len() >= 8
+                    {
                         entry.icon_8.copy_from_slice(&ic8[..8]);
                     }
-                }
-                if let Some((_, _, ic16)) =
-                    KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_16)
-                {
-                    if ic16.len() >= 32 {
+                    if let Some((_, _, ic16)) =
+                        KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_16)
+                        && ic16.len() >= 32
+                    {
                         let off = (ic16.as_ptr() as usize) - (hdr_buf.as_ptr() as usize);
                         if off <= (u16::MAX as usize) {
                             entry.icon_16_off = off as u16;
                         }
                     }
                 }
+            }
+            if let Some(t) = title {
+                entry.title.len = write_trunc_utf8(&mut entry.title.buf, 0, t);
             }
         }
 

@@ -58,12 +58,14 @@ pub fn dtmf_tone_words(digit: u8) -> (u16, u16) {
 }
 
 #[inline(never)]
-fn app_config_path(app_name: &str) -> heapless::String<32> {
-    let mut path = heapless::String::<32>::new();
-    let _ = path.push_str("/pref/app/");
-    let _ = path.push_str(app_name);
-    let _ = path.push_str(".cfg");
-    path
+fn app_config_path_into<'a>(app_name: &str, buf: &'a mut [u8; 32]) -> &'a str {
+    const PFX: &[u8] = b"/pref/app/";
+    const SFX: &[u8] = b".cfg";
+    let n = app_name.len().min(buf.len() - PFX.len() - SFX.len());
+    buf[..PFX.len()].copy_from_slice(PFX);
+    buf[PFX.len()..PFX.len() + n].copy_from_slice(&app_name.as_bytes()[..n]);
+    buf[PFX.len() + n..PFX.len() + n + SFX.len()].copy_from_slice(SFX);
+    unsafe { core::str::from_utf8_unchecked(&buf[..PFX.len() + n + SFX.len()]) }
 }
 
 #[inline(never)]
@@ -72,8 +74,10 @@ pub fn load_app_config(
     app_name: &str,
     buf: &mut [u8],
 ) -> Result<usize, ()> {
-    let path = app_config_path(app_name);
-    storage.read_file(path.as_str(), buf).map_err(|_| ())
+    let mut pbuf = [0u8; 32];
+    storage
+        .read_file(app_config_path_into(app_name, &mut pbuf), buf)
+        .map_err(|_| ())
 }
 
 #[inline(never)]
@@ -82,8 +86,13 @@ pub fn save_app_config(
     app_name: &str,
     data: &[u8],
 ) -> Result<(), ()> {
-    let path = app_config_path(app_name);
-    crate::security::write_classified_file(storage, path.as_str(), data).map_err(|_| ())
+    let mut pbuf = [0u8; 32];
+    crate::security::write_classified_file(
+        storage,
+        app_config_path_into(app_name, &mut pbuf),
+        data,
+    )
+    .map_err(|_| ())
 }
 
 #[inline(never)]

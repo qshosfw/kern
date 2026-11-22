@@ -281,13 +281,18 @@ impl Ascon128 {
         }
     }
 
-    /// Apply keystream in-place to buffer (stream encryption/decryption).
+    /// Initialize an Ascon-128 keystream permutation state for chunked streaming (multiples of 8 B).
     #[inline(never)]
-    pub fn apply_keystream(&self, nonce: &[u8; NONCE_SIZE], buffer: &mut [u8]) {
+    pub fn keystream_state(&self, nonce: &[u8; NONCE_SIZE]) -> AsconPermutation {
         let mut s = AsconPermutation::new();
         let _ = self.init_state_into(nonce, &mut s);
         s.x[4] ^= 1; // Domain separation
+        s
+    }
 
+    /// XOR the next keystream bytes into `buffer`. All non-final chunks must be multiples of 8 bytes.
+    #[inline(never)]
+    pub fn apply_keystream_chunk(s: &mut AsconPermutation, buffer: &mut [u8]) {
         let mut offset = 0;
         while offset < buffer.len() {
             let chunk_len = (buffer.len() - offset).min(8);
@@ -296,10 +301,15 @@ impl Ascon128 {
                 buffer[offset + j] ^= state_bytes[j];
             }
             offset += chunk_len;
-            if offset < buffer.len() {
-                s.permute(6);
-            }
+            s.permute(6);
         }
+    }
+
+    /// Apply keystream in-place to buffer (stream encryption/decryption).
+    #[inline(never)]
+    pub fn apply_keystream(&self, nonce: &[u8; NONCE_SIZE], buffer: &mut [u8]) {
+        let mut s = self.keystream_state(nonce);
+        Self::apply_keystream_chunk(&mut s, buffer);
     }
 
     /// Compute Ascon-128 MAC tag over associated data and payload.
@@ -519,6 +529,32 @@ mod tests {
                 .decrypt_in_place_detached(&nonce, b"BAD_AAD", &mut copy3, &tag)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_ascon_keystream_chunked_matches_oneshot() {
+        let key = [0x33u8; KEY_SIZE];
+        let nonce = [0x44u8; NONCE_SIZE];
+        let cipher = Ascon128::new(key);
+
+        let mut oneshot = [0u8; 195];
+        for (i, b) in oneshot.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37).wrapping_add(11);
+        }
+        let mut chunked = oneshot;
+
+        cipher.apply_keystream(&nonce, &mut oneshot);
+        let mut ks = cipher.keystream_state(&nonce);
+        for chunk in chunked.chunks_mut(64) {
+            Ascon128::apply_keystream_chunk(&mut ks, chunk);
+        }
+        assert_eq!(oneshot, chunked);
+
+        // Decryption via oneshot restores plaintext
+        cipher.apply_keystream(&nonce, &mut chunked);
+        for (i, &b) in chunked.iter().enumerate() {
+            assert_eq!(b, (i as u8).wrapping_mul(37).wrapping_add(11));
+        }
     }
 
     #[test]

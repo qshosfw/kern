@@ -16,8 +16,6 @@ fn init_system_services(
     adc: &Adc,
 ) {
     super::storage::ensure_default_files(hw.filesystem);
-    #[cfg(feature = "filesystem")]
-    super::storage::flush_crash_log_if_pending(hw.filesystem);
     #[cfg(feature = "passcode")]
     let already_authenticated =
         !passcode_state.is_locked && passcode_state.master_key.as_slice().iter().any(|&b| b != 0);
@@ -45,8 +43,6 @@ fn init_system_services(
 
     #[cfg(feature = "usb")]
     crate::hardware::SystemHardware::sync_usb_telemetry(&mut hw.usb, master_cfg);
-    #[cfg(feature = "filesystem")]
-    crate::apps::launcher::catalog::get_catalog().scan(hw.filesystem);
 }
 
 #[inline(never)]
@@ -274,56 +270,27 @@ fn boot_stage_security_check(
 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
 #[inline(never)]
 fn boot_stage_core_modules_check(hw: &mut SystemHardware) {
-    const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
-    const SUM_RESERVE: usize =
-        (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
-    let tail = crate::data::arena::scratch_tail_bytes_mut();
-    let tail_len = tail.len();
-    let (pre_hdr, hdr_buf) = tail.split_at_mut(tail_len - HDR_RESERVE);
-    let slot = unsafe {
-        &mut *(pre_hdr.as_mut_ptr().add(pre_hdr.len() - SUM_RESERVE)
-            as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
-    };
-    let status: &str = match crate::runtime::read_krx_summary(
+    let status: &str = match crate::runtime::read_krx_summary_in_scratch(
         hw.filesystem,
         "/apps/settings.krx",
-        hdr_buf,
-        slot,
     ) {
-        Ok(s) if s.abi == ::abi::VERSION => return,
-        Ok(_) => "settings.krx: ABI mismatch",
-        Err(kernel::runtime::KrxLaunchError::FileNotFound) => "settings.krx: Missing",
-        Err(_) => "settings.krx: Corrupt",
+        Ok((_, s)) if s.abi == ::abi::VERSION => return,
+        Ok(_) => "settings.krx ABI",
+        Err(kernel::runtime::KrxLaunchError::FileNotFound) => "settings.krx missing",
+        Err(_) => "settings.krx corrupt",
     };
 
     hw.backlight.wake();
     let canvas = crate::system_canvas();
-    canvas.clear();
-    gfx::widgets::draw_negated_header(canvas, 0, "Core Modules");
-    gfx::text::draw_str(
-        canvas,
-        4,
-        19,
-        status,
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
-    gfx::text::draw_str(
-        canvas,
-        4,
-        32,
-        "Connect USB & run:\nkern wire provision",
-        &gfx::fonts::tomthumb::FONT,
-        gfx::Color::Fill,
-    );
-    gfx::widgets::draw_key_badge(canvas, 4, 54, "M", "Continue");
+    gfx::widgets::draw_dialog(canvas, "Core Modules", status, "M: Continue", false);
     hw.lcd.turn_on();
     hw.lcd.blit(canvas);
 
     hw.key_scanner.clear();
+    let mut dummy = false;
     loop {
-        #[cfg(feature = "usb")]
-        let _ = hw.usb.poll();
+        bsp::Board::wdt_feed();
+        crate::system::poll_usb_and_wire(hw, py32_hal::delay::millis(), &mut dummy);
         if let Some((
             kernel::event::KeyCode::Menu | kernel::event::KeyCode::Exit,
             kernel::event::KeyState::Pressed,

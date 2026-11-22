@@ -101,13 +101,15 @@ fn key_valid(
         && &header == ident
 }
 
+#[inline(never)]
+fn fill_rand(trng: &mut HardwareTrng, buf: &mut [u8]) {
+    trng.fill_bytes(buf, bsp::entropy::sample_hardware_noise());
+}
+
 fn init_device_key(filesystem: &mut SystemStorage, trng: &mut HardwareTrng, uid: &[u8; 12]) {
     let mut dev_key = PackedDeviceKey::empty();
     dev_key.ident = *FILE_ID_DEVICE_KEY;
-    trng.fill_bytes(
-        &mut dev_key.hardware_nonce,
-        bsp::entropy::sample_hardware_noise(),
-    );
+    fill_rand(trng, &mut dev_key.hardware_nonce);
     dev_key.device_signature =
         compute_hw_mac(uid, &dev_key.hardware_nonce, FILE_ID_DEVICE_KEY, uid);
     let _ = filesystem.write_struct(KEY_PATHS[0], &dev_key);
@@ -144,10 +146,7 @@ pub fn write_passcode_key(
         passcode_verifier: [0; 32],
         mac: [0; 16],
     };
-    trng.fill_bytes(
-        &mut passcode_key.salt,
-        bsp::entropy::sample_hardware_noise(),
-    );
+    fill_rand(trng, &mut passcode_key.salt);
 
     let mut passcode_verifier = SecretBuf::<32>::new();
     derive_passcode_kek(
@@ -181,7 +180,7 @@ pub fn write_storage_key(
     progress: Option<super::kdf::ProgressHook>,
 ) -> Result<(), ()> {
     if master_key.iter().all(|&b| b == 0) {
-        trng.fill_bytes(master_key, bsp::entropy::sample_hardware_noise());
+        fill_rand(trng, master_key);
     }
     let mut storage_key = PackedStorageKey {
         ident: *FILE_ID_STORAGE_KEY,
@@ -192,7 +191,7 @@ pub fn write_storage_key(
     let nonce_and_salt = unsafe {
         core::slice::from_raw_parts_mut(&mut storage_key.storage_nonce as *mut _ as *mut u8, 32)
     };
-    trng.fill_bytes(nonce_and_salt, bsp::entropy::sample_hardware_noise());
+    fill_rand(trng, nonce_and_salt);
     xor_derived_key(
         uid,
         seed,
@@ -210,40 +209,19 @@ pub fn write_storage_key(
 #[inline(never)]
 pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     let uid = bsp::uid::read_mcu_uid();
-    let hw_noise = bsp::entropy::sample_hardware_noise();
     let mut trng = HardwareTrng::new();
-    trng.init_with_uid(&uid, hw_noise);
+    trng.init_with_uid(&uid, bsp::entropy::sample_hardware_noise());
 
-    // 1. `/sys/device.key`
-    let dev_valid = key_valid(
-        filesystem,
-        KEY_PATHS[0],
-        FILE_ID_DEVICE_KEY,
-        core::mem::size_of::<PackedDeviceKey>(),
-    );
-    if !dev_valid {
+    let mut created = false;
+    if !key_valid(filesystem, KEY_PATHS[0], FILE_ID_DEVICE_KEY, 36) {
         init_device_key(filesystem, &mut trng, &uid);
+        created = true;
     }
-
-    // 2. `/sys/passcode.key`
-    let pass_valid = key_valid(
-        filesystem,
-        KEY_PATHS[1],
-        FILE_ID_PASSCODE_KEY,
-        core::mem::size_of::<PackedPasscodeKey>(),
-    );
-    if !pass_valid {
+    if !key_valid(filesystem, KEY_PATHS[1], FILE_ID_PASSCODE_KEY, 76) {
         let _ = write_passcode_key(filesystem, &mut trng, &uid, &[], 0, DEFAULT_MAX_TRIES, None);
+        created = true;
     }
-
-    // 3. `/sys/storage.key`
-    let sto_valid = key_valid(
-        filesystem,
-        KEY_PATHS[2],
-        FILE_ID_STORAGE_KEY,
-        core::mem::size_of::<PackedStorageKey>(),
-    );
-    if !sto_valid {
+    if !key_valid(filesystem, KEY_PATHS[2], FILE_ID_STORAGE_KEY, 68) {
         let mut mk = [0u8; 32];
         let _ = write_storage_key(
             filesystem,
@@ -254,10 +232,10 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
             None,
         );
         mk.fill(0);
+        created = true;
     }
 
-    // Apply strict permissions to keys if newly created
-    if !dev_valid || !pass_valid || !sto_valid {
+    if created {
         let sys_attr = crate::services::storage::FileAttributes {
             permission: crate::services::storage::ATTR_SYSTEM
                 | crate::services::storage::ATTR_HIDDEN,
@@ -338,6 +316,7 @@ pub fn derive_fs_key(master_key: &[u8; 32], mcu_uid: &[u8; 12]) -> [u8; 16] {
 
 /// Unwraps the UID-bound device storage master key using `DEFAULT_PASSCODE_SEED`.
 /// Used when `secure_fs` is active without a user passcode.
+#[cfg(not(feature = "passcode"))]
 pub fn unwrap_device_master_key(
     filesystem: &mut SystemStorage,
     uid: &[u8; 12],
@@ -377,6 +356,7 @@ pub fn unwrap_device_master_key(
 }
 
 /// Ensures keychain exists and installs the UID-bound device FS key into `FileSystemDriver`.
+#[cfg(not(feature = "passcode"))]
 pub fn unlock_device_storage(filesystem: &mut SystemStorage) -> bool {
     ensure_keychain(filesystem);
     let uid = bsp::uid::read_mcu_uid();

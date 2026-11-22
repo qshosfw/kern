@@ -37,7 +37,7 @@ fn wake_and_notify_activity(hw: &mut SystemHardware) {
 
 #[allow(unused_variables)]
 #[inline(never)]
-fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool) {
+pub(crate) fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render: &mut bool) {
     #[cfg(feature = "usb")]
     {
         #[cfg(feature = "radio")]

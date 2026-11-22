@@ -250,7 +250,84 @@ static CONFIG_METAS: [ConfigMeta; 6] = [
     },
 ];
 
-static DEFAULT_MASTER_CONFIG: MasterConfig = MasterConfig::DEFAULT;
+const MASTER_CONFIG_SIZE: usize = core::mem::size_of::<MasterConfig>();
+
+const fn rle_len_default_config() -> usize {
+    let bytes: [u8; MASTER_CONFIG_SIZE] = unsafe { core::mem::transmute(MasterConfig::DEFAULT) };
+    let mut i = 0;
+    let mut n = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0 {
+            let mut run = 1usize;
+            while i + run < bytes.len() && bytes[i + run] == 0 && run < 255 {
+                run += 1;
+            }
+            n += 2;
+            i += run;
+        } else {
+            n += 1;
+            i += 1;
+        }
+    }
+    n
+}
+
+const DEFAULT_CFG_RLE_LEN: usize = rle_len_default_config();
+
+const fn encode_default_config_rle() -> [u8; DEFAULT_CFG_RLE_LEN] {
+    let bytes: [u8; MASTER_CONFIG_SIZE] = unsafe { core::mem::transmute(MasterConfig::DEFAULT) };
+    let mut out = [0u8; DEFAULT_CFG_RLE_LEN];
+    let mut i = 0;
+    let mut o = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0 {
+            let mut run = 1usize;
+            while i + run < bytes.len() && bytes[i + run] == 0 && run < 255 {
+                run += 1;
+            }
+            out[o] = 0;
+            out[o + 1] = run as u8;
+            o += 2;
+            i += run;
+        } else {
+            out[o] = bytes[i];
+            o += 1;
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Zero-skip RLE `MasterConfig::DEFAULT` (`0x00 <count>` skips `count` zero bytes; else literal).
+static DEFAULT_MASTER_CONFIG_RLE: [u8; DEFAULT_CFG_RLE_LEN] = encode_default_config_rle();
+
+#[inline(never)]
+fn decode_default_range(start: usize, dst: &mut [u8]) {
+    dst.fill(0);
+    let end = start + dst.len();
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    while i < DEFAULT_MASTER_CONFIG_RLE.len() && pos < end {
+        let b = DEFAULT_MASTER_CONFIG_RLE[i];
+        i += 1;
+        if b == 0 {
+            pos += DEFAULT_MASTER_CONFIG_RLE[i] as usize;
+            i += 1;
+        } else {
+            if pos >= start {
+                dst[pos - start] = b;
+            }
+            pos += 1;
+        }
+    }
+}
+
+#[inline(never)]
+fn default_config_byte(offset: usize) -> u8 {
+    let mut b = [0u8; 1];
+    decode_default_range(offset, &mut b);
+    b[0]
+}
 
 impl MasterConfig {
     pub const DEFAULT: Self = Self {
@@ -273,7 +350,8 @@ impl MasterConfig {
     #[inline(never)]
     pub unsafe fn init_in_place(ptr: *mut Self) {
         unsafe {
-            core::ptr::copy_nonoverlapping(&DEFAULT_MASTER_CONFIG, ptr, 1);
+            let dst = core::slice::from_raw_parts_mut(ptr.cast::<u8>(), MASTER_CONFIG_SIZE);
+            decode_default_range(0, dst);
             let nav = (*ptr).system.nav_layout();
             (*ptr).keys.nav_layout = nav;
         }
@@ -346,8 +424,7 @@ impl MasterConfig {
             let tweak = self.battery.calib_tweak_mv;
             if self.config_bytes(i)[0] != meta.version || (i == 4 && !(-500..=500).contains(&tweak))
             {
-                let def = DEFAULT_MASTER_CONFIG.config_bytes(i);
-                self.config_bytes_mut(i).copy_from_slice(def);
+                decode_default_range(meta.offset as usize, self.config_bytes_mut(i));
                 repaired |= 1u8 << i;
             }
         }
@@ -355,9 +432,11 @@ impl MasterConfig {
         // back to its own default without discarding the rest of the block.
         for p in &::abi::prop::TABLE {
             if !p.admits(self.prop_get(p.id)) {
-                self.config_bytes_mut(p.domain())[p.offset()] =
-                    DEFAULT_MASTER_CONFIG.prop_get(p.id);
-                repaired |= 1u8 << p.domain();
+                let dom = p.domain();
+                let off = p.offset();
+                let def_val = default_config_byte(CONFIG_METAS[dom].offset as usize + off);
+                self.config_bytes_mut(dom)[off] = def_val;
+                repaired |= 1u8 << dom;
             }
         }
         if !cfg!(feature = "overclock_72mhz") && self.system.cpu_clock > 3 {
@@ -766,5 +845,15 @@ mod tests {
             crate::apps::shortcut::resolve_slot(&cfg, 2, crate::apps::shortcut::CTX_HOME),
             cfg.actions[2]
         );
+    }
+
+    #[test]
+    fn test_default_config_rle_exact_roundtrip() {
+        let mut decoded = [0u8; MASTER_CONFIG_SIZE];
+        decode_default_range(0, &mut decoded);
+        let expected: [u8; MASTER_CONFIG_SIZE] =
+            unsafe { core::mem::transmute(MasterConfig::DEFAULT) };
+        assert_eq!(decoded, expected);
+        assert!(DEFAULT_CFG_RLE_LEN < 240);
     }
 }

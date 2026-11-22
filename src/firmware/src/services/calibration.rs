@@ -6,7 +6,6 @@ use crate::services::SystemStorage;
 // and hardware binding signatures against the 96-bit MCU UID.
 
 use crate::services::storage::{ATTR_READ_ONLY, ATTR_SYSTEM, FileAttributes};
-use crypto::ascon::Ascon128;
 
 /// RLE-compressed factory radio calibration fallback (expands to 512 B; `0xFF <n>` skips `n` `0xFF` bytes).
 const DEFAULT_CALIB_RLE: [u8; 310] = [
@@ -111,11 +110,15 @@ impl CalibSignature {
 pub fn compute_device_signature(calib: &[u8; 512], mcu_uid: &[u8; 12]) -> CalibSignature {
     static NONCE: [u8; 16] = [0x5Au8; 16];
     let hw_serial = bsp::uid::get_hardware_serial64();
-    let mut key16 = [0u8; 16];
-    key16[..4].copy_from_slice(CALIB_SIG_IDENT);
-    key16[4..16].copy_from_slice(mcu_uid);
-    let cipher = Ascon128::new(key16);
-    let auth_tag = cipher.compute_mac(&NONCE, CALIB_SIG_IDENT, calib);
+    #[cfg(feature = "secure_fs")]
+    let auth_tag = crate::security::keychain::compute_hw_mac(mcu_uid, &NONCE, CALIB_SIG_IDENT, calib);
+    #[cfg(not(feature = "secure_fs"))]
+    let auth_tag = {
+        let mut key16 = [0u8; 16];
+        key16[..4].copy_from_slice(CALIB_SIG_IDENT);
+        key16[4..16].copy_from_slice(mcu_uid);
+        crypto::ascon::Ascon128::new(key16).compute_mac(&NONCE, CALIB_SIG_IDENT, calib)
+    };
 
     CalibSignature {
         ident: *CALIB_SIG_IDENT,

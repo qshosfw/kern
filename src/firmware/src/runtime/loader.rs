@@ -15,18 +15,6 @@ const DYNAMIC_APP_NAME_CAP: usize = 20;
 static mut DYNAMIC_APP_NAME_BUF: [u8; DYNAMIC_APP_NAME_CAP] = [0u8; DYNAMIC_APP_NAME_CAP];
 static mut DYNAMIC_APP_NAME_LEN: u8 = 0;
 
-#[inline(always)]
-pub(crate) fn clear_launch_diag() {}
-
-#[inline(always)]
-pub(crate) fn record_launch_diag(_a: u32, _b: u32, _app_ver: [u8; 3], _code: u8) {}
-
-pub(crate) const DIAG_NONE: u8 = 0;
-pub(crate) const DIAG_ABI_MISMATCH: u8 = 1;
-pub(crate) const DIAG_GOT_INVALID: u8 = 2;
-pub(crate) const DIAG_TOO_MANY_LEAVES: u8 = 3;
-pub(crate) const DIAG_PROFILE_UNSUPPORTED: u8 = 4;
-
 pub(crate) fn dynamic_app_name() -> &'static str {
     unsafe {
         let len = (DYNAMIC_APP_NAME_LEN as usize).min(DYNAMIC_APP_NAME_CAP - 1);
@@ -69,46 +57,15 @@ fn load_krx_into_slot(
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
         (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
-    let tail = crate::data::arena::scratch_tail_bytes_mut();
-    let tail_len = tail.len();
-    let (pre_hdr, hdr_buf) = tail.split_at_mut(tail_len - HDR_RESERVE);
-    let summary_offset = pre_hdr.len() - SUMMARY_RESERVE;
-    let summary_slot = unsafe {
-        &mut *(pre_hdr.as_mut_ptr().add(summary_offset)
-            as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
-    };
-    clear_launch_diag();
-    let summary = super::read_krx_summary(storage, path, hdr_buf, summary_slot)?;
+    let (_, summary) = super::read_krx_summary_in_scratch(storage, path)?;
     let header_len = summary.preamble.header_len as usize;
-    let app_ver = summary.version;
 
     let Some(exec_class) = summary.preamble.execution_class() else {
-        record_launch_diag(
-            summary.preamble.app_type as u32,
-            0,
-            app_ver,
-            DIAG_PROFILE_UNSUPPORTED,
-        );
         return Err(KrxLaunchError::UnsupportedProfile);
     };
-    if !matches!(exec_class, KrxClass::Native | KrxClass::Paged) {
-        record_launch_diag(
-            exec_class as u32,
-            summary.preamble.app_type as u32,
-            app_ver,
-            DIAG_PROFILE_UNSUPPORTED,
-        );
-        return Err(KrxLaunchError::UnsupportedProfile);
-    }
 
     // Operation numbers are only meaningful for the ABI the package was built against.
     if summary.abi != ::abi::VERSION {
-        record_launch_diag(
-            summary.abi as u32,
-            ::abi::VERSION as u32,
-            app_ver,
-            DIAG_ABI_MISMATCH,
-        );
         return Err(KrxLaunchError::ImportBindingFailed);
     }
 
@@ -127,12 +84,6 @@ fn load_krx_into_slot(
     let profile = summary.profile(exec);
     #[cfg(not(feature = "krx_paged"))]
     if profile == kernel::runtime::KrxProfile::P1TransparentPaged {
-        record_launch_diag(
-            exec_class as u32,
-            profile as u32,
-            app_ver,
-            DIAG_PROFILE_UNSUPPORTED,
-        );
         return Err(KrxLaunchError::UnsupportedProfile);
     }
     if profile.is_structured_paged()
@@ -140,12 +91,6 @@ fn load_krx_into_slot(
         && map.len()
             > super::native_runner::MAX_STRUCTURED_LEAVES * kernel::runtime::LeafEntry::SIZE
     {
-        record_launch_diag(
-            (map.len() / kernel::runtime::LeafEntry::SIZE) as u32,
-            super::native_runner::MAX_STRUCTURED_LEAVES as u32,
-            app_ver,
-            DIAG_TOO_MANY_LEAVES,
-        );
         return Err(KrxLaunchError::UnsupportedProfile);
     }
     let load_base = super::native_runner::arena_base_ptr() as u32;
@@ -159,18 +104,12 @@ fn load_krx_into_slot(
         let avail = crate::data::arena::TRANSIENT_ARENA_BYTES;
         if sys_caps.is_some() {
             let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
-            let min_stack = (exec.min_stack_bytes as usize).min(96);
-            let needed = min_stack.saturating_add(32);
+            let needed = (exec.min_stack_bytes as usize).min(96).saturating_add(32);
             if margin < needed {
-                record_launch_diag(needed as u32, margin as u32, app_ver, DIAG_NONE);
                 return Err(KrxLaunchError::InsufficientStack);
             }
         }
-        let needed_ram = (exec.min_stack_bytes as usize)
-            .saturating_add(exec.min_heap_bytes as usize)
-            .saturating_add(64);
         if !exec.can_execute(avail, 64) {
-            record_launch_diag(needed_ram as u32, avail as u32, app_ver, DIAG_NONE);
             return Err(KrxLaunchError::InsufficientRam);
         }
         let code_limit = if profile.is_structured_paged() {
@@ -179,16 +118,9 @@ fn load_krx_into_slot(
             avail
         };
         if !matches!(exec_class, KrxClass::Paged) && (exec.payload_size as usize) > avail {
-            record_launch_diag(exec.payload_size, avail as u32, app_ver, DIAG_NONE);
             return Err(KrxLaunchError::PayloadTooLarge);
         }
         if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= avail {
-            record_launch_diag(
-                exec.got_offset as u32,
-                avail as u32,
-                app_ver,
-                DIAG_GOT_INVALID,
-            );
             return Err(KrxLaunchError::ImportBindingFailed);
         }
         if exec.payload_size > 0 {
@@ -198,7 +130,6 @@ fn load_krx_into_slot(
                 exec.payload_size.min(code_limit as u32)
             };
             if (exec.entry_point & !1) >= code_size {
-                record_launch_diag(exec.entry_point, code_size, app_ver, DIAG_NONE);
                 return Err(KrxLaunchError::InvalidEntryPoint);
             }
         }
@@ -230,15 +161,9 @@ fn load_krx_into_slot(
     } else {
         max_payload
     };
-    let payload_read = if let Some(ctx) = active_ctx.as_deref_mut() {
-        ctx.storage
-            .read_file_at(path, header_len, &mut arena_buf[..to_read])
-            .map_err(|_| KrxLaunchError::ReadFailed)?
-    } else {
-        storage
-            .read_file_at(path, header_len, &mut arena_buf[..to_read])
-            .map_err(|_| KrxLaunchError::ReadFailed)?
-    };
+    let payload_read = storage
+        .read_file_at(path, header_len, &mut arena_buf[..to_read])
+        .map_err(|_| KrxLaunchError::ReadFailed)?;
 
     let pid = if spawn {
         crate::orchestrator::proc_table_mut()

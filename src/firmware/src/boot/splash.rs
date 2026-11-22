@@ -89,9 +89,7 @@ pub fn render_rle(canvas: &mut Canvas, rle: &[u8]) -> bool {
         if b >= 0 {
             let count = (b as usize) + 1;
             let n = count.min(rle.len() - i).min(1024 - idx);
-            for j in 0..n {
-                buf[idx + j] = rle[i + j];
-            }
+            buf[idx..idx + n].copy_from_slice(&rle[i..i + n]);
             idx += n;
             i += count;
         } else if b != -128 {
@@ -100,9 +98,7 @@ pub fn render_rle(canvas: &mut Canvas, rle: &[u8]) -> bool {
                 let val = rle[i];
                 i += 1;
                 let n = count.min(1024 - idx);
-                for j in 0..n {
-                    buf[idx + j] = val;
-                }
+                buf[idx..idx + n].fill(val);
                 idx += n;
             }
         }

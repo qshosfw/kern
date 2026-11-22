@@ -143,9 +143,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         if !self.session_unlocked {
             return Err(StorageError::EncryptedNoKey);
         }
-        if data.len() > 256 {
-            return Err(StorageError::CapacityFull);
-        }
         self.nonce_ctr = self.nonce_ctr.wrapping_add(1);
         let wear = self.fs.stats().wear_cycles;
         let mut seed = [0u8; SECURE_NONCE_LEN];
@@ -153,14 +150,27 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         seed[4..8].copy_from_slice(&wear.to_le_bytes());
         let cipher = Ascon128::new(self.enc_key);
         let nonce = cipher.compute_mac(&seed, path.as_bytes(), data);
-        let mut tmp_buf = [0u8; 256 + SECURE_NONCE_LEN];
-        tmp_buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
-        let end = SECURE_NONCE_LEN + data.len();
-        tmp_buf[SECURE_NONCE_LEN..end].copy_from_slice(data);
-        cipher.apply_keystream(&nonce, &mut tmp_buf[SECURE_NONCE_LEN..end]);
+        let mut ks = cipher.keystream_state(&nonce);
+        // Bounded 80 B stack frame (16 B nonce + 64 B chunk) — zero stack-overflow risk, arbitrary file size.
+        let mut buf = [0u8; SECURE_NONCE_LEN + 64];
+        buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
+        let first = data.len().min(64);
+        buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + first].copy_from_slice(&data[..first]);
+        Ascon128::apply_keystream_chunk(&mut ks, &mut buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + first]);
         self.fs
-            .write_file(path, &tmp_buf[..end])
-            .map_err(Self::map_error)
+            .write_file(path, &buf[..SECURE_NONCE_LEN + first])
+            .map_err(Self::map_error)?;
+        let mut off = first;
+        while off < data.len() {
+            let n = (data.len() - off).min(64);
+            buf[..n].copy_from_slice(&data[off..off + n]);
+            Ascon128::apply_keystream_chunk(&mut ks, &mut buf[..n]);
+            self.fs
+                .write_at(path, SECURE_NONCE_LEN + off, &buf[..n])
+                .map_err(Self::map_error)?;
+            off += n;
+        }
+        Ok(())
     }
 }
 

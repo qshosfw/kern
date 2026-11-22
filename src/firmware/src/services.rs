@@ -340,36 +340,24 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         #[cfg(all(not(test), not(feature = "usb")))]
         let is_usb = false;
 
-        let pct = self.power.battery_percentage();
-        let is_charging = self.power.is_charging();
-        let is_low = self.power.is_low() || pct == 0;
         let serial_active = !headless && py32_hal::uart::is_active(800);
-        let now_ms = py32_hal::delay::millis();
-        let anim_step = ((now_ms >> 8) & 0xFF) as u8;
-        let shading_mode = self.config.display.shading_mode;
-        let tray_glyphs = crate::orchestrator::status_tray().active_glyphs();
-
-        let flags = (is_charging as u8)
-            | ((is_low as u8) << 1)
-            | ((is_usb as u8) << 2)
-            | ((serial_active as u8) << 3)
+        let anim_step = ((py32_hal::delay::millis() >> 8) & 0xFF) as u8;
+        let extra_flags = ((serial_active as u8) << 3)
             | ((self.is_f_active as u8) << 4)
             | ((self.is_keypad_locked as u8) << 5)
             | ((inverted as u8) << 6)
             | ((partial as u8) << 7);
 
-        let cfg = gfx::widgets::status_bar::StatusRightConfig {
-            percentage: pct,
-            battery_format: self.config.battery.battery_format,
-            shading_mode,
+        draw_status_bar_right_raw(
+            canvas,
+            self.power,
+            self.config.battery.battery_format,
+            self.config.display.shading_mode,
             anim_step,
-            flags,
-            voltage_mv: self.power.battery_voltage_mv(),
-            temp_deci_c: self.power.mcu_temperature_deci_c(),
-            dynamic_glyphs: tray_glyphs,
-        };
-
-        cfg.render(canvas)
+            is_usb,
+            extra_flags,
+            crate::orchestrator::status_tray().active_glyphs(),
+        )
     }
 
     /// Renders a fully declarative, modular, auto-justified status bar
@@ -386,26 +374,50 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 }
 
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub fn draw_status_bar_right_raw(
+    canvas: &mut gfx::Canvas,
+    pwr: &drivers::battery::SystemPower,
+    battery_format: u8,
+    shading_mode: u8,
+    anim_step: u8,
+    is_usb: bool,
+    extra_flags: u8,
+    dynamic_glyphs: &[gfx::icons::StatusGlyph],
+) -> i16 {
+    let pct = pwr.battery_percentage();
+    let flags = extra_flags
+        | (pwr.is_charging() as u8)
+        | (((pwr.is_low() || pct == 0) as u8) << 1)
+        | ((is_usb as u8) << 2);
+    gfx::widgets::status_bar::StatusRightConfig {
+        percentage: pct,
+        battery_format,
+        shading_mode,
+        anim_step,
+        flags,
+        voltage_mv: pwr.battery_voltage_mv(),
+        temp_deci_c: pwr.mcu_temperature_deci_c(),
+        dynamic_glyphs,
+    }
+    .render(canvas)
+}
+
 #[cfg(feature = "passcode")]
 #[inline(always)]
 pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_usb: bool) -> i16 {
     let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-    let pct = pwr.battery_percentage();
-    let flags = gfx::widgets::status_bar::STATUS_FLAG_INVERTED
-        | (pwr.is_charging() as u8)
-        | (((pwr.is_low() || pct == 0) as u8) << 1)
-        | (((is_usb && !crate::system::is_headless()) as u8) << 2);
-    gfx::widgets::status_bar::StatusRightConfig {
-        percentage: pct,
+    draw_status_bar_right_raw(
+        canvas,
+        pwr,
         battery_format,
-        shading_mode: crate::master_config_ref().display.shading_mode,
-        anim_step: 0,
-        flags,
-        voltage_mv: pwr.battery_voltage_mv(),
-        temp_deci_c: pwr.mcu_temperature_deci_c(),
-        dynamic_glyphs: &[],
-    }
-    .render(canvas)
+        crate::master_config_ref().display.shading_mode,
+        0,
+        is_usb && !crate::system::is_headless(),
+        gfx::widgets::status_bar::STATUS_FLAG_INVERTED,
+        &[],
+    )
 }
 
 impl<'a, 'hw> kernel::caps::CapsCheck for SysContext<'a, 'hw> {

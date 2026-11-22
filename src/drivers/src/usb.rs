@@ -668,7 +668,8 @@ impl UsbDriver {
     }
 
     fn ep0_start_mac_transfer(&mut self, max_len: u16) {
-        let mac = bsp::uid::read_mac_address();
+        let mut mac = [0u8; 6];
+        bsp::uid::mac_from_serial64_into(bsp::uid::get_hardware_serial64(), &mut mac);
         let mut uninit = core::mem::MaybeUninit::<[u8; 22]>::uninit();
         let buf = unsafe { &mut *uninit.as_mut_ptr() };
         buf[..5].copy_from_slice(b"MAC: ");
@@ -695,7 +696,8 @@ impl UsbDriver {
                     return;
                 }
                 3 => {
-                    let crock = bsp::uid::get_crockford_serial();
+                    let mut crock = [0u8; 15];
+                    bsp::uid::encode_crockford64_into(bsp::uid::get_hardware_serial64(), &mut crock);
                     self.ep0_start_string_transfer(&crock[..14], w_length);
                     return;
                 }

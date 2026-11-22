@@ -336,14 +336,17 @@ pub static mut ACTIVE_MODAL: ModalCompositor = ModalCompositor::new();
 pub const TAG_LOW_BATTERY_POPUP: u8 = 0xFE;
 pub const TAG_SYSTEM_ALERT: u8 = 0xFD;
 
+#[cfg(any(test, not(feature = "passcode")))]
 const MAX_ALERT_LINE_PX: i16 = 116;
 
+#[cfg(any(test, not(feature = "passcode")))]
 #[derive(Clone)]
 pub struct SystemAlert {
     pub title: heapless::String<18>,
     pub message: heapless::String<56>,
 }
 
+#[cfg(any(test, not(feature = "passcode")))]
 impl SystemAlert {
     pub const fn empty() -> Self {
         Self {
@@ -353,11 +356,13 @@ impl SystemAlert {
     }
 }
 
+#[cfg(any(test, not(feature = "passcode")))]
 struct AlertQueue {
     has_alert: bool,
     slot: SystemAlert,
 }
 
+#[cfg(any(test, not(feature = "passcode")))]
 impl AlertQueue {
     const fn new() -> Self {
         Self {
@@ -394,8 +399,10 @@ impl AlertQueue {
     }
 }
 
+#[cfg(any(test, not(feature = "passcode")))]
 static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 
+#[cfg(any(test, not(feature = "passcode")))]
 #[inline(never)]
 fn wrap_alert_bytes(raw: &str, dst: &mut [u8]) -> usize {
     const SPACE_PX: i16 = 4; // TomThumb ' ' glyph x_advance
@@ -451,6 +458,7 @@ fn wrap_alert_bytes(raw: &str, dst: &mut [u8]) -> usize {
 }
 
 /// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
+#[cfg(any(test, not(feature = "passcode")))]
 pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>) {
     let vec = unsafe { out.as_mut_vec() };
     vec.clear();
@@ -460,6 +468,7 @@ pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>)
 }
 
 /// Queues a persistent notification for presentation once the Launcher is active.
+#[cfg(any(test, not(feature = "passcode")))]
 #[inline(never)]
 pub fn queue_system_alert(title: &str, message: &str) {
     unsafe {
@@ -480,6 +489,7 @@ pub fn clear_system_alerts() {
 }
 
 /// Presents the next queued system notification as a persistent modal bottom sheet.
+#[cfg(any(test, not(feature = "passcode")))]
 pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
     let modal_active = unsafe { (*core::ptr::addr_of!(ACTIVE_MODAL)).is_active() };
     if modal_active {
@@ -502,6 +512,12 @@ pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
     }
     q.discard_head();
     true
+}
+
+#[cfg(all(not(test), feature = "passcode"))]
+#[inline(always)]
+pub fn present_next_system_alert(_ctx: &mut SysContext) -> bool {
+    false
 }
 
 /// Displays an immediate non-blocking Low Battery alert modal on top of active screen.

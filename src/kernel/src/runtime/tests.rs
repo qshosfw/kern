@@ -123,19 +123,19 @@ fn test_krx_launch_error_diagnostics() {
         err_cap,
         KrxLaunchError::CapabilityDenied(Some(Cap::BroadBandRx))
     );
-    assert_eq!(err_cap.describe(), "Hardware capability\nnot supported.");
+    assert_eq!(err_cap.describe(), "Unsupported cap.");
 
     assert_eq!(
         KrxLaunchError::FileNotFound.describe(),
-        "Package not found.\nInstall via RigWire."
+        "Not found.\nInstall via RigWire."
     );
     assert_eq!(
         KrxLaunchError::InsufficientRam.describe(),
-        "Exceeds 8KB RAM\nexecution arena."
+        "Exceeds 8KB RAM."
     );
     assert_eq!(
         KrxLaunchError::UnsupportedProfile.describe(),
-        "Unsupported KRX\nexecution profile."
+        "Unsupported profile."
     );
 
     // Every variant resolves to a non-empty, distinct sentence.

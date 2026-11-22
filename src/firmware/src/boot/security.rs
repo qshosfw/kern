@@ -8,9 +8,21 @@ use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
 use drivers::st7565::St7565;
 
-#[inline(always)]
-pub fn draw_locked_screen(canvas: &mut gfx::Canvas, sub_msg: &str) {
-    gfx::widgets::draw_dialog(canvas, "Locked", "Too Many Attempts", sub_msg, false);
+#[inline(never)]
+fn wait_ms_wdt(mut ms: u16) {
+    while ms > 0 {
+        let step = ms.min(20);
+        py32_hal::wdt::Watchdog::feed();
+        py32_hal::delay::delay_ms(step as u32);
+        ms -= step;
+    }
+}
+
+#[inline(never)]
+pub fn draw_locked_screen(lcd: &mut St7565<bsp::LcdBus>, sub_msg: &str) {
+    let canvas = crate::system_canvas();
+    gfx::widgets::draw_dialog(canvas, "Locked", "Too many tries", sub_msg, false);
+    lcd.blit(canvas);
 }
 
 #[inline(never)]
@@ -18,25 +30,19 @@ pub fn handle_lockout_penalty(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     storage: &mut SystemStorage,
-    failed: u8,
-    max_tries: u8,
 ) {
-    if failed < max_tries {
+    let pcfg = crate::security::passcode::get_passcode_config(storage);
+    if pcfg.failed_attempts < pcfg.max_tries {
         return;
     }
     lcd.turn_on();
-    let wait_secs = ((failed - max_tries + 1) as u32) * 30;
+    let wait_secs = ((pcfg.failed_attempts - pcfg.max_tries + 1) as u32) * 30;
     radio.set_status_led(bsp::StatusLed::Red);
-    let canvas = crate::system_canvas();
     for remaining in (1..=wait_secs).rev() {
         let mut sec_buf = [0u8; 32];
-        let s = gfx::text::format_num_msg(&mut sec_buf, "Try again in ", remaining, "s");
-        draw_locked_screen(canvas, s);
-        lcd.blit(canvas);
-        for _ in 0..100 {
-            py32_hal::wdt::Watchdog::feed();
-            py32_hal::delay::delay_ms(10);
-        }
+        let s = gfx::text::format_num_msg(&mut sec_buf, "Wait ", remaining, "s");
+        draw_locked_screen(lcd, s);
+        wait_ms_wdt(1000);
     }
     crate::security::passcode::reset_lockout_penalty(storage);
     radio.set_status_led(bsp::StatusLed::Off);
@@ -45,19 +51,21 @@ pub fn handle_lockout_penalty(
 #[inline(never)]
 pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>) {
     radio.play_beep(crate::services::melody::BeepType::Warning);
-    for _ in 0..3 {
-        radio.set_status_led(bsp::StatusLed::Red);
-        py32_hal::delay::delay_ms(100);
-        radio.set_status_led(bsp::StatusLed::Off);
-        py32_hal::delay::delay_ms(100);
+    for i in 0..6u8 {
+        radio.set_status_led(if (i & 1) == 0 {
+            bsp::StatusLed::Red
+        } else {
+            bsp::StatusLed::Off
+        });
+        wait_ms_wdt(100);
     }
-    py32_hal::delay::delay_ms(600);
+    wait_ms_wdt(600);
 }
 
 #[inline(never)]
 pub fn render_verify_modal(lcd: &mut St7565<bsp::LcdBus>, pct: u8) {
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog_progress(canvas, "Passcode", "Verifying...", pct);
+    gfx::widgets::draw_dialog_progress(canvas, "", "Verifying...", pct);
     lcd.blit(canvas);
 }
 
@@ -93,17 +101,16 @@ pub fn handle_unlock_failure(
     let pcfg = crate::security::passcode::get_passcode_config(storage);
     let canvas = crate::system_canvas();
     if pcfg.failed_attempts >= pcfg.max_tries {
-        draw_locked_screen(canvas, "Restarting...");
-        lcd.blit(canvas);
+        draw_locked_screen(lcd, "Restarting...");
         radio.set_status_led(bsp::StatusLed::Red);
         radio.play_beep(crate::services::melody::BeepType::Warning);
-        py32_hal::delay::delay_ms(1500);
+        wait_ms_wdt(1500);
         kernel::power::PowerControl::reboot();
     }
 
     let mut msg_buf = [0u8; 32];
     let msg = if stealth {
-        "Wrong Passcode"
+        "Wrong PIN"
     } else {
         crate::security::passcode::format_wrong_passcode_msg(
             pcfg.failed_attempts,
@@ -161,14 +168,7 @@ fn process_unlock_submission(
         Err(crate::security::passcode::PasscodeError::LockedOut) => {
             hw.radio
                 .play_beep(crate::services::melody::BeepType::Warning);
-            let pcfg = crate::security::passcode::get_passcode_config(hw.filesystem);
-            handle_lockout_penalty(
-                &mut hw.lcd,
-                &mut hw.radio,
-                hw.filesystem,
-                pcfg.failed_attempts,
-                pcfg.max_tries,
-            );
+            handle_lockout_penalty(&mut hw.lcd, &mut hw.radio, hw.filesystem);
         }
         _ => {}
     }
@@ -209,23 +209,8 @@ pub fn run_boot_unlock_prompt(
 
     let stealth = cfg.stealth;
 
-    // Boost to 72 MHz for unlock prompt and KDF unless USB FS requires exact 48 MHz lock.
-    #[cfg(feature = "usb")]
-    let usb_pinned = hw.usb.is_connected();
-    #[cfg(not(feature = "usb"))]
-    let usb_pinned = false;
-    if !usb_pinned {
-        py32_hal::rcc::set_sysclk_72mhz();
-    }
-
     // 1. Initial Lockout check if device rebooted while locked out
-    handle_lockout_penalty(
-        &mut hw.lcd,
-        &mut hw.radio,
-        hw.filesystem,
-        cfg.failed_attempts,
-        cfg.max_tries,
-    );
+    handle_lockout_penalty(&mut hw.lcd, &mut hw.radio, hw.filesystem);
 
     hw.lcd.turn_on();
 

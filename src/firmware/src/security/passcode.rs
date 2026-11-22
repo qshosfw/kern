@@ -127,9 +127,6 @@ pub fn verify_passcode(
     if success {
         let _ = super::sync_filesystem_security(filesystem, state);
     }
-    if let Some(ref hook) = progress {
-        hook.report(100);
-    }
     Ok(success)
 }
 

@@ -287,9 +287,14 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus>
     match facet {
         FACET_SYS_IDENTITY => {
             let serial = bsp::uid::get_hardware_serial64();
-            c.put(&serial.to_le_bytes());
-            c.put(&bsp::uid::mac_from_serial64(serial));
-            c.put(&bsp::uid::encode_crockford64(serial)[..14]);
+            c.wr_u32(serial as u32);
+            c.wr_u32((serial >> 32) as u32);
+            let mut mac = [0u8; 6];
+            bsp::uid::mac_from_serial64_into(serial, &mut mac);
+            c.put(&mac);
+            let mut cf = [0u8; 15];
+            bsp::uid::encode_crockford64_into(serial, &mut cf);
+            c.put(&cf[..14]);
             let is_auth = c.hw().wire.session.is_authenticated;
             c.wr_u8(is_auth as u8);
             if is_auth {
@@ -329,9 +334,9 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus>
             c.wr_u16(calib.battery_calib_const());
         }
         FACET_SYS_AUDIO => {
-            let mut buf = [0u8; 64];
-            let n = crate::system::drain_headless_notes(&mut buf);
-            c.put(&buf[..n]);
+            let rem = c.out.len().saturating_sub(c.pos).min(64);
+            let n = crate::system::drain_headless_notes(&mut c.out[c.pos..c.pos + rem]);
+            c.pos += n;
         }
         _ => return Err(WireStatus::UnsupportedField),
     }
@@ -547,26 +552,28 @@ fn handle_resource_invoke(
             };
             kernel::power::PowerControl::reboot_with(mode);
         }
-        (DOMAIN_SYSTEM, ACTION_SYS_FLASHLIGHT) => {
-            let high = match c.inp.first().copied().unwrap_or(2) {
-                0 => false,
-                1 => true,
-                _ => !bsp::pins::FLASHLIGHT.is_high(),
-            };
-            if high {
-                bsp::pins::FLASHLIGHT.set_high();
+        (DOMAIN_SYSTEM, ACTION_SYS_FLASHLIGHT | ACTION_SYS_HEADLESS) => {
+            let is_fl = action_id == ACTION_SYS_FLASHLIGHT;
+            let cur = if is_fl {
+                bsp::pins::FLASHLIGHT.is_high()
             } else {
-                bsp::pins::FLASHLIGHT.set_low();
-            }
-        }
-        (DOMAIN_SYSTEM, ACTION_SYS_HEADLESS) => {
+                crate::system::is_headless()
+            };
             let enable = match c.inp.first().copied().unwrap_or(2) {
                 0 => false,
                 1 => true,
-                _ => !crate::system::is_headless(),
+                _ => !cur,
             };
-            crate::system::set_headless(c.hw(), enable);
-            c.wr_u8(enable as u8);
+            if is_fl {
+                if enable {
+                    bsp::pins::FLASHLIGHT.set_high();
+                } else {
+                    bsp::pins::FLASHLIGHT.set_low();
+                }
+            } else {
+                crate::system::set_headless(c.hw(), enable);
+                c.wr_u8(enable as u8);
+            }
         }
         (DOMAIN_RADIO, ACTION_RADIO_VFO_TOGGLE) => {
             crate::radio_state().coord.toggle_vfo(&mut c.hw().radio);
@@ -628,6 +635,7 @@ fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireSta
                 c.wr_u16(0);
                 let mut dirty_mask = 0u16;
                 let mut sent_mask = 0u16;
+                #[cfg(feature = "app_hibernation")]
                 let mut rle_buf = [0u8; 64];
                 for s in 0..16usize {
                     let strip = &flat[s * 64..(s + 1) * 64];
@@ -637,13 +645,18 @@ fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireSta
                         && u16::from_le_bytes([prev[p_off], prev[p_off + 1]]) == crc;
                     if !same {
                         dirty_mask |= 1 << s;
-                        let rle_len =
-                            kernel::runtime::packbits_compress(strip, &mut rle_buf).unwrap_or(0);
-                        let (src, slen) = if rle_len > 0 && rle_len < 64 {
-                            (&rle_buf[..rle_len], rle_len)
-                        } else {
-                            (strip, 64)
+                        #[cfg(feature = "app_hibernation")]
+                        let (src, slen) = {
+                            let rle_len =
+                                kernel::runtime::packbits_compress(strip, &mut rle_buf).unwrap_or(0);
+                            if rle_len > 0 && rle_len < 64 {
+                                (&rle_buf[..rle_len], rle_len)
+                            } else {
+                                (strip, 64)
+                            }
                         };
+                        #[cfg(not(feature = "app_hibernation"))]
+                        let (src, slen) = (strip, 64usize);
                         if c.pos + 1 + slen <= 110 {
                             c.wr_u8(slen as u8);
                             c.put(src);
@@ -733,7 +746,6 @@ fn flush_transfer_buf(
     flush_all: bool,
 ) -> Result<(), WireStatus> {
     let staging = crate::data::arena::staging_buf();
-    let path = utils::format::ascii_str(&transfer.path[..transfer.path_len as usize]).unwrap_or("");
     loop {
         let len = transfer.buf_len as usize;
         let write_len = if len >= 256 {
@@ -743,8 +755,12 @@ fn flush_transfer_buf(
         } else {
             return Ok(());
         };
-        fs.write_at(path, transfer.buf_offset as usize, &staging[..write_len])
-            .map_err(|_| WireStatus::IoError)?;
+        fs.write_at(
+            transfer.path_str(),
+            transfer.buf_offset as usize,
+            &staging[..write_len],
+        )
+        .map_err(|_| WireStatus::IoError)?;
         let rem = len - write_len;
         if rem > 0 {
             let (dst, src) = staging.split_at_mut(write_len);

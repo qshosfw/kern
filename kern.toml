@@ -12,7 +12,7 @@ authors = ["kern-team"]
 edition_string = "Kern OS"
 chip = "PY32F071xB"
 flash_budget = 120832   # 118 KB (safe margin below 128KB)
-flash_ceiling = 120508  # Ratchet: release flash may only go down; lower after each saving
+flash_ceiling = 120776  # Ratchet: release flash may only go down; lower after each saving
 ram_budget = 16384      # 16 KB SRAM
 
 [target]
@@ -39,8 +39,8 @@ usb_msc_fat = false     # 📁 Virtual FAT16 filesystem (Disabled - prefer CDC p
 
 [features.storage_security]
 filesystem = true       # 📂 KernFS flash filesystem
-secure_fs = false       # 🔒 Ascon-128 encrypted storage
-passcode = false        # 🔑 Security enclave boot PIN lock & KDF stretching
+secure_fs = true        # 🔒 Ascon-128 encrypted storage
+passcode = true         # 🔑 Security enclave boot PIN lock & KDF stretching
 app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
 [features.runtime]

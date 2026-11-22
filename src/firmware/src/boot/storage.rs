@@ -110,10 +110,9 @@ fn rescue_raw_calibration(
 #[cfg(feature = "filesystem")]
 fn has_valid_calib_file(fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>) -> bool {
     let buf = crate::services::staging_buf();
-    (fs.read_file("/sys/calib.dat", buf) == Ok(512)
-        && crate::services::calibration::is_valid_calibration(buf))
-        || (fs.read_file("/sys/calib.bak", buf) == Ok(512)
-            && crate::services::calibration::is_valid_calibration(buf))
+    ["/sys/calib.dat", "/sys/calib.bak"].iter().any(|p| {
+        fs.read_file(p, buf) == Ok(512) && crate::services::calibration::is_valid_calibration(buf)
+    })
 }
 
 #[cfg(feature = "filesystem")]
@@ -183,13 +182,13 @@ fn prompt_and_format_storage(
     let raw_calib = crate::services::staging_buf();
     let has_hw_calib = rescue_raw_calibration(fs, raw_calib);
     let calib_sub = if has_hw_calib {
-        "Calibration is safe"
+        "Calib safe"
     } else {
-        "No calibration found"
+        "No calib found"
     };
 
     // Blit initial frame before enabling LCD/backlight to prevent GRAM glitch.
-    render_hold_prompt(lcd, "Storage unreadable", calib_sub, 0);
+    render_hold_prompt(lcd, "Format Storage?", calib_sub, 0);
     prepare_boot_dialog(lcd, radio);
 
     // Wait for any already-held keys (e.g. Exit held during reset/wake) to be released first.
@@ -211,12 +210,7 @@ fn prompt_and_format_storage(
                     hold.active = false;
                 }
                 (KeyCode::Exit, KeyState::Pressed) => {
-                    halt_with_boot_dialog(
-                        lcd,
-                        "Startup stopped",
-                        "Storage left as-is",
-                        "Turn off & on to retry",
-                    );
+                    halt_with_boot_dialog(lcd, "Halted", "Storage kept", "Power cycle");
                 }
                 _ => {}
             }
@@ -232,7 +226,7 @@ fn prompt_and_format_storage(
             let pct = hold.percent();
             if pct != last_pct {
                 last_pct = pct;
-                render_hold_prompt(lcd, "Storage unreadable", calib_sub, pct);
+                render_hold_prompt(lcd, "Format Storage?", calib_sub, pct);
             }
         }
         py32_hal::delay::delay_ms(10);
@@ -243,20 +237,15 @@ fn prompt_and_format_storage(
         bsp::Board::wdt_feed();
         if progress >= last_rendered_progress + 5 || progress == 100 {
             last_rendered_progress = progress;
-            render_progress(lcd, "Preparing storage", "Erasing, keep power on", progress);
+            render_progress(lcd, "Formatting", "Keep power on", progress);
         }
     }));
 
     if fmt_res.is_err() {
-        halt_with_boot_dialog(
-            lcd,
-            "Storage not responding",
-            "Flash chip may be faulty",
-            "Turn off & on to retry",
-        );
+        halt_with_boot_dialog(lcd, "Flash Error", "Chip unresponsive", "Power cycle");
     }
 
-    render_progress(lcd, "Restoring calibration", "Almost done", 95);
+    render_progress(lcd, "Restoring Calib", "Saving...", 95);
     save_rescued_calibration(fs, raw_calib, radio);
 }
 
@@ -267,12 +256,11 @@ fn recover_calibration_to_fs(
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
 ) {
-    render_progress(lcd, "Restoring calibration", "Rebuilding from backup", 50);
+    render_progress(lcd, "Restoring Calib", "From backup", 50);
     prepare_boot_dialog(lcd, radio);
 
     let raw_calib = crate::services::staging_buf();
-    let from_prov = fs.exists("/prov/calib.dat")
-        && fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
+    let from_prov = fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
         && crate::services::calibration::is_valid_calibration(raw_calib);
     if !from_prov {
         rescue_raw_calibration(fs, raw_calib);

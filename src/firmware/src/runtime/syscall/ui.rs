@@ -101,17 +101,20 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
     utils::static_bytes!(
         static DEFS = b"Notice\0\0\0\0Confirm\0\0OK\0CANCEL\0";
     );
+    #[inline(never)]
+    unsafe fn pick_str(p: *const u8, len: u8, idx: u8) -> &'static str {
+        unsafe { str_or_default(p, len as usize, utils::format::nth_cstr(&DEFS, idx)) }
+    }
     let base = u8::from(r.kind != 0) * 4;
-    let pick = |p: *const u8, len: u8, off: u8| unsafe {
-        str_or_default(p, len as usize, utils::format::nth_cstr(&DEFS, base + off))
-    };
-    modal_mut().show_confirm(
-        r.tag,
-        pick(r.title, r.t_len, 0),
-        pick(r.msg, r.m_len, 1),
-        pick(r.ok, r.o_len, 2),
-        pick(r.cancel, r.c_len, 3),
-    );
+    unsafe {
+        modal_mut().show_confirm(
+            r.tag,
+            pick_str(r.title, r.t_len, base),
+            pick_str(r.msg, r.m_len, base + 1),
+            pick_str(r.ok, r.o_len, base + 2),
+            pick_str(r.cancel, r.c_len, base + 3),
+        );
+    }
 }
 
 #[inline(never)]

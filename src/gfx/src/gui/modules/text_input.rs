@@ -16,57 +16,20 @@ pub const DICT_FILE_ID: [u8; 4] = *b"DICT";
 pub const DICT_HEADER_SIZE: usize = 16;
 pub const DICT_RECORD_SIZE: usize = 32;
 
-/// Declarative keypad charset descriptor supporting custom encodings and symbol sets.
-#[derive(Debug, Clone, Copy)]
-pub struct CharsetSpec {
-    pub label: &'static str,
-    pub star_hint: &'static str,
-    pub case_hint: &'static str,
-    pub show_grid_on_k1: bool,
-    pub keys: [&'static str; 10],
-}
-
 /// Optional predictive suggestion source (implemented by filesystem dictionary packs).
 pub trait TextSuggestionProvider {
     fn suggest(&self, prefix: &str, out: &mut [String<12>; 3]) -> usize;
 }
 
-pub static BUILTIN_CHARSETS: [CharsetSpec; 4] = [
-    CharsetSpec {
-        label: "ABC",
-        star_hint: "123",
-        case_hint: "abc",
-        show_grid_on_k1: false,
-        keys: [
-            " ", ".,?!'-", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ",
-        ],
-    },
-    CharsetSpec {
-        label: "abc",
-        star_hint: "123",
-        case_hint: "ABC",
-        show_grid_on_k1: false,
-        keys: [
-            " ", ".,?!'-", "abc", "def", "ghi", "jkl", "mno", "pqrs", "tuv", "wxyz",
-        ],
-    },
-    CharsetSpec {
-        label: "123",
-        star_hint: "SYM",
-        case_hint: "Case",
-        show_grid_on_k1: false,
-        keys: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
-    },
-    CharsetSpec {
-        label: "#@$",
-        star_hint: "ABC",
-        case_hint: "Case",
-        show_grid_on_k1: true,
-        keys: [
-            " ", ".,?!'-", "@#$", "%&*", "()[]", "<>{}/", "\\|+", "-=\"", "'` :", ";_",
-        ],
-    },
-];
+// Packed NUL-delimited built-in charset table: 4 charsets × 13 fields
+// (`label`, `star_hint`, `case_hint`, `key0..key9`), zero fat-pointer overhead.
+utils::static_bytes!(
+    static BUILTIN_CHARSET_PACK = b"\
+ABC\0123\0abc\0 \0.,?!'-\0ABC\0DEF\0GHI\0JKL\0MNO\0PQRS\0TUV\0WXYZ\0\
+abc\0123\0ABC\0 \0.,?!'-\0abc\0def\0ghi\0jkl\0mno\0pqrs\0tuv\0wxyz\0\
+123\0SYM\0Case\00\01\02\03\04\05\06\07\08\09\0\
+#@$\0ABC\0Case\0 \0.,?!'-\0@#$\0%&*\0()[]\0<>{}/\0\\|+\0-=\"\0'` :\0;_\0";
+);
 
 /// Optional localized 0..=9 keypad layout loaded dynamically from the active `.lng` pack
 /// (e.g. Russian Cyrillic, Japanese Keitai Kana, or Spanish accented characters).
@@ -150,10 +113,35 @@ pub enum Charset {
 }
 
 impl Charset {
+    #[inline(never)]
+    fn field(self, slot: u8) -> &'static str {
+        let idx = (self as u8).min(3);
+        utils::format::nth_cstr(&BUILTIN_CHARSET_PACK, idx * 13 + slot)
+    }
+
     #[inline(always)]
-    pub fn spec(self) -> &'static CharsetSpec {
-        let idx = (self as usize).min(BUILTIN_CHARSETS.len() - 1);
-        &BUILTIN_CHARSETS[idx]
+    pub fn label(self) -> &'static str {
+        self.field(0)
+    }
+
+    #[inline(always)]
+    pub fn star_hint(self) -> &'static str {
+        self.field(1)
+    }
+
+    #[inline(always)]
+    pub fn case_hint(self) -> &'static str {
+        self.field(2)
+    }
+
+    #[inline(always)]
+    pub fn key_str(self, key: u8) -> &'static str {
+        self.field(3 + key)
+    }
+
+    #[inline(always)]
+    pub fn show_grid_on_k1(self) -> bool {
+        self == Charset::Symbols
     }
 }
 
@@ -220,7 +208,7 @@ impl TextInputModel {
         if self.charset == Charset::Locale && !lbl.is_empty() {
             lbl
         } else {
-            self.charset.spec().label
+            self.charset.label()
         }
     }
 
@@ -230,7 +218,7 @@ impl TextInputModel {
         !self.digits_only
             && (self.show_grid
                 || self.charset == Charset::Locale
-                || self.charset.spec().show_grid_on_k1
+                || self.charset.show_grid_on_k1()
                 || (!self.is_k1 && self.charset != Charset::Numbers))
     }
 
@@ -242,7 +230,7 @@ impl TextInputModel {
         if self.charset == Charset::Locale && self.locale_keymap.active {
             self.locale_keymap.key_str(key as usize)
         } else {
-            self.charset.spec().keys[key as usize]
+            self.charset.key_str(key)
         }
     }
 }
@@ -401,7 +389,6 @@ impl TextInputView {
         if model.digits_only {
             widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
         } else {
-            let spec = model.charset.spec();
             let hash_key = if model.is_k1 { "F" } else { "#" };
             let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
             let enter_label = if show_grid || model.is_k1 {
@@ -409,9 +396,9 @@ impl TextInputView {
             } else {
                 "OK"
             };
-            widgets::draw_key_badge(canvas, x0, by, "*", spec.star_hint);
+            widgets::draw_key_badge(canvas, x0, by, "*", model.charset.star_hint());
             widgets::draw_key_badge(canvas, x1, by, menu_key, enter_label);
-            widgets::draw_key_badge(canvas, x2, by, hash_key, spec.case_hint);
+            widgets::draw_key_badge(canvas, x2, by, hash_key, model.charset.case_hint());
             draw_exit = !show_grid;
         }
         if draw_exit {

@@ -43,9 +43,6 @@ pub fn draw_modal_progress(canvas: &mut Canvas, title: &str, subtitle: &str, pro
     let (bx, by) = draw_modal_box(canvas, w, h);
     let center_x = (bx as i16) + ((w as i16) >> 1);
 
-    #[cfg(feature = "passcode")]
-    let has_title = !title.is_empty() && !text::ascii_eq_ignore_case(title, "passcode");
-    #[cfg(not(feature = "passcode"))]
     let has_title = !title.is_empty();
 
     if has_title {
@@ -369,10 +366,6 @@ pub fn draw_modal_popup_materialize(
     if p >= 8 {
         let center_x = 64i16;
         let tc = Color::Fill;
-        #[cfg(feature = "passcode")]
-        let has_title =
-            title.is_some_and(|t| !t.is_empty() && !text::ascii_eq_ignore_case(t, "passcode"));
-        #[cfg(not(feature = "passcode"))]
         let has_title = title.is_some_and(|t| !t.is_empty());
 
         let (mut line_y, step_y) = if has_title {

@@ -223,7 +223,7 @@ impl LauncherApp {
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     fn sync_config(&mut self, ctx: &SysContext) {
         self.model.nav_layout = ctx.config.keys.nav_layout;
         self.model.show_numbers = ctx.config.apps.show_numbers != 0;

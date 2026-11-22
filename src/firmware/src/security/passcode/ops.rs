@@ -25,23 +25,7 @@ pub fn read_passcode_key(
 /// Retrieves full passcode configuration metadata from `/sys/passcode.key`
 #[inline(never)]
 pub fn get_passcode_config(filesystem: &mut SystemStorage) -> PasscodeConfigInfo {
-    let mut key = PackedPasscodeKey::empty();
-    if read_passcode_key(filesystem, &mut key, 8).is_ok() {
-        return PasscodeConfigInfo {
-            is_set: (key.flags & PASSCODE_FLAG_ENABLED) != 0,
-            passcode_len: key.passcode_len,
-            expose_len: (key.flags & PASSCODE_FLAG_EXPOSE_LEN) != 0,
-            stealth: (key.flags & PASSCODE_FLAG_STEALTH) != 0,
-            digits_only: (key.flags & PASSCODE_FLAG_DIGITS_ONLY) != 0,
-            max_tries: if key.max_tries == 0 {
-                DEFAULT_MAX_TRIES
-            } else {
-                key.max_tries
-            },
-            failed_attempts: key.failed_attempts,
-        };
-    }
-    PasscodeConfigInfo {
+    let mut info = PasscodeConfigInfo {
         is_set: false,
         passcode_len: 0,
         expose_len: false,
@@ -49,7 +33,20 @@ pub fn get_passcode_config(filesystem: &mut SystemStorage) -> PasscodeConfigInfo
         digits_only: true,
         max_tries: DEFAULT_MAX_TRIES,
         failed_attempts: 0,
+    };
+    let mut key = PackedPasscodeKey::empty();
+    if read_passcode_key(filesystem, &mut key, 8).is_ok() {
+        info.is_set = (key.flags & PASSCODE_FLAG_ENABLED) != 0;
+        info.passcode_len = key.passcode_len;
+        info.expose_len = (key.flags & PASSCODE_FLAG_EXPOSE_LEN) != 0;
+        info.stealth = (key.flags & PASSCODE_FLAG_STEALTH) != 0;
+        info.digits_only = (key.flags & PASSCODE_FLAG_DIGITS_ONLY) != 0;
+        if key.max_tries != 0 {
+            info.max_tries = key.max_tries;
+        }
+        info.failed_attempts = key.failed_attempts;
     }
+    info
 }
 
 pub fn format_wrong_passcode_msg<'a>(
@@ -58,12 +55,7 @@ pub fn format_wrong_passcode_msg<'a>(
     buf: &'a mut [u8; 32],
 ) -> &'a str {
     let tries_left = max_tries.saturating_sub(failed_attempts);
-    let suffix = if tries_left == 1 {
-        " try left"
-    } else {
-        " tries left"
-    };
-    gfx::text::format_num_msg(buf, "Wrong Passcode\n", tries_left as u32, suffix)
+    gfx::text::format_num_msg(buf, "Wrong PIN\n", tries_left as u32, " left")
 }
 
 /// Updates passcode security preferences (length exposure, stealth mode, digits only, and max tries threshold)
@@ -100,11 +92,9 @@ pub fn set_passcode_options(
 }
 
 /// Checks if a user passcode is currently active in the keychain.
-#[inline(never)]
+#[inline(always)]
 pub fn is_passcode_set(filesystem: &mut SystemStorage) -> bool {
-    let mut key = PackedPasscodeKey::empty();
-    read_passcode_key(filesystem, &mut key, 5)
-        .map_or(false, |()| (key.flags & PASSCODE_FLAG_ENABLED) != 0)
+    get_passcode_config(filesystem).is_set
 }
 
 fn hash_file_slice(
