@@ -122,7 +122,7 @@ impl Ascon128 {
         Self { key }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     fn init_state(&self, nonce: &[u8; NONCE_SIZE]) -> (AsconPermutation, u64, u64) {
         let k0 = u64::from_be_bytes([
             self.key[0],
@@ -302,6 +302,7 @@ impl Ascon128 {
     }
 
     /// Apply keystream in-place to buffer (stream encryption/decryption).
+    #[inline(never)]
     pub fn apply_keystream(&self, nonce: &[u8; NONCE_SIZE], buffer: &mut [u8]) {
         let (mut s, _, _) = self.init_state(nonce);
         s.x[4] ^= 1; // Domain separation
@@ -321,6 +322,7 @@ impl Ascon128 {
     }
 
     /// Compute Ascon-128 MAC tag over associated data and payload.
+    #[inline(never)]
     pub fn compute_mac(
         &self,
         nonce: &[u8; NONCE_SIZE],

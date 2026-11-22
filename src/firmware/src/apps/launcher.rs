@@ -35,13 +35,10 @@ static mut LAUNCHER_ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEn
 #[inline(always)]
 fn launcher_icons_16_mut() -> &'static mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS] {
     const _: () = {
-        assert!(
-            (MAX_LAUNCHER_CUSTOM_ICONS * 32) <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET
-        );
+        assert!((MAX_LAUNCHER_CUSTOM_ICONS * 32) <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET);
     };
     unsafe {
-        &mut *(crate::data::arena::arena_base_ptr()
-            as *mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS])
+        &mut *(crate::data::arena::arena_base_ptr() as *mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS])
     }
 }
 
@@ -392,66 +389,54 @@ impl LauncherApp {
                 continue;
             }
 
-            let y = row_top as u8;
             let is_sel = idx == self.model.selected_idx;
             let item = &self.model.items[idx];
+            let has_num = self.model.show_numbers && idx < 9;
 
-            let fg_color = if is_sel {
-                gfx::widgets::draw_selection_capsule(
-                    canvas,
-                    [2, y, 120, 13],
-                    if is_active_selection {
-                        gfx::widgets::CAPSULE_ROUND
-                    } else {
-                        gfx::widgets::CAPSULE_FILL_ROUND
-                    },
-                )
+            let mut spec = gfx::widgets::ListRowSpec::new(
+                2,
+                row_top,
+                120,
+                13,
+                if self.model.show_labels {
+                    item.title()
+                } else {
+                    ""
+                },
+            );
+            spec.clip_top = 8;
+            spec.prefix_icon = if has_num {
+                Some(&gfx::icons::ICON_NONE)
             } else {
-                Color::Fill
+                None
             };
+            spec.icon = Some(item.icon_8());
+            if is_sel {
+                let phase = ((self.model.tick_counter >> 1) & 3) as i8;
+                let offset = if phase == 3 { 1 } else { phase };
+                spec.flags = gfx::widgets::ROW_SELECTED
+                    | gfx::widgets::ROW_CHEVRON
+                    | if is_active_selection {
+                        gfx::widgets::ROW_OUTLINE
+                    } else {
+                        0
+                    };
+                spec.chevron_dx = offset - 2;
+            }
+            gfx::widgets::draw_list_row(canvas, &spec);
 
-            let mut cur_x: i16 = if self.model.show_numbers { 6 } else { 7 };
-
-            // Numeric 1-touch index badge
-            if self.model.show_numbers && idx < 9 {
-                let badge_char = (b'1' + idx as u8) as char;
+            if has_num {
+                let fg_color = if is_sel && !is_active_selection {
+                    Color::Clear
+                } else {
+                    Color::Fill
+                };
                 gfx::text::draw_char(
                     canvas,
-                    cur_x,
+                    6,
                     row_top + 9,
-                    badge_char,
+                    (b'1' + idx as u8) as char,
                     &gfx::fonts::mumatrix_regular::FONT,
-                    fg_color,
-                );
-                cur_x = 16;
-            }
-
-            // 8x8 icon
-            gfx::icons::draw_icon_8(canvas, cur_x, row_top + 2, item.icon_8(), fg_color);
-            cur_x += 14;
-
-            // Title in MuMatrix
-            if self.model.show_labels {
-                gfx::text::draw_str(
-                    canvas,
-                    cur_x,
-                    row_top + 9,
-                    item.title(),
-                    &gfx::fonts::mumatrix_regular::FONT,
-                    fg_color,
-                );
-            }
-
-            // Right arrow on selected row (vertically centered at y+3, oscillating horizontal animation)
-            if is_sel {
-                let phase = ((self.model.tick_counter >> 1) & 3) as i16;
-                let offset = if phase == 3 { 1 } else { phase };
-                let arrow_x = 110 + offset;
-                gfx::icons::draw_icon_8(
-                    canvas,
-                    arrow_x,
-                    row_top + 3,
-                    gfx::icons::ARROW_RIGHT,
                     fg_color,
                 );
             }
@@ -505,8 +490,13 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
             if delta != 0 && !self.model.items.is_empty() {
                 let len = self.model.items.len();
                 let prev_sel = self.model.selected_idx;
-                self.model.selected_idx = (self.model.selected_idx as isize + delta as isize)
-                    .rem_euclid(len as isize) as usize;
+                self.model.selected_idx = if delta > 0 {
+                    if prev_sel + 1 < len { prev_sel + 1 } else { 0 }
+                } else if prev_sel > 0 {
+                    prev_sel - 1
+                } else {
+                    len - 1
+                };
                 self.model.is_pressed = false;
                 if is_list_mode {
                     self.adjust_scroll_for_selection(animations_enabled);
@@ -619,7 +609,10 @@ mod tests {
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].title(), "Radio");
         assert_eq!(entries[1].title(), "Settings");
-        assert_eq!(entries[1].target, LauncherTarget::App(APP_ID_SETTINGS as u8));
+        assert_eq!(
+            entries[1].target,
+            LauncherTarget::App(APP_ID_SETTINGS as u8)
+        );
 
         // Overwriting TRANSIENT_ARENA[0..7168) (e.g. during an app launch or error dialog)
         // must never corrupt LauncherEntry items or cause invalid pointer dereferences.

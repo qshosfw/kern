@@ -8,6 +8,7 @@ use drivers::backlight::BacklightController;
 use drivers::bk4829::Bk4829;
 use drivers::st7565::St7565;
 
+#[inline(never)]
 pub fn draw_locked_screen(canvas: &mut gfx::Canvas, sub_msg: &str) {
     canvas.clear();
     gfx::widgets::draw_negated_header(canvas, 0, "Locked");

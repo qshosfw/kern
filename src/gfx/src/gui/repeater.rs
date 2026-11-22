@@ -191,8 +191,11 @@ impl KeyRepeater {
 
     /// Synchronize repeater thresholds with user millisecond configuration (`hold_delay_ms`, `repeat_rate_ms`, `fast_scroll`).
     pub fn configure(&mut self, hold_delay_ms: u16, repeat_rate_ms: u16, fast_scroll: bool) {
-        self.initial_delay_ticks = ((hold_delay_ms.saturating_add(25)) / 50).max(2);
-        self.repeat_rate_ticks = ((repeat_rate_ms.saturating_add(25)) / 50).max(1);
+        // Reciprocal multiply by 1311 >> 16 approximates division by 50 without __aeabi_uidiv.
+        self.initial_delay_ticks =
+            (((hold_delay_ms.saturating_add(25) as u32) * 1311) >> 16).max(2) as u16;
+        self.repeat_rate_ticks =
+            (((repeat_rate_ms.saturating_add(25) as u32) * 1311) >> 16).max(1) as u16;
         self.set_turbo_enabled(fast_scroll);
     }
 }
@@ -273,7 +276,10 @@ mod tests {
                 fires += 1;
             }
         }
-        assert!(fires >= 1 && fires <= 2, "expected 1..=2 repeats, got {fires}");
+        assert!(
+            fires >= 1 && fires <= 2,
+            "expected 1..=2 repeats, got {fires}"
+        );
         set_tick_dt_ms(50);
     }
 }

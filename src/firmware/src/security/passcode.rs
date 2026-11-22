@@ -16,6 +16,7 @@ use crypto::buffer::SecretBuf;
 use crypto::trng::HardwareTrng;
 
 /// Initializes Passcode state on boot:
+#[inline(never)]
 pub fn unwrap_master_key(
     filesystem: &mut SystemStorage,
     uid: &[u8; 12],
@@ -45,6 +46,7 @@ pub fn unwrap_master_key(
 
 /// - If passcode is active: locks session and zeroizes master key.
 /// - If passcode is inactive: derives default storage key and unlocks session.
+#[inline(never)]
 pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeState) {
     if is_passcode_set(filesystem) {
         state.lock();
@@ -74,54 +76,6 @@ pub fn init_passcode_state(filesystem: &mut SystemStorage, state: &mut PasscodeS
             None,
         ) {
             state.unlock();
-            if stored_it != DEFAULT_PBKDF_ITERATIONS {
-                let mut sto_key = PackedStorageKey::empty();
-                if let Ok(sn) = filesystem.read_struct(PATH_STORAGE_KEY, &mut sto_key) {
-                    if sn >= core::mem::size_of::<PackedStorageKey>()
-                        && sto_key.ident == *FILE_ID_STORAGE_KEY
-                    {
-                        let _ = write_wrapped_storage_key(
-                            filesystem,
-                            state,
-                            &uid,
-                            DEFAULT_PASSCODE_SEED,
-                            &sto_key.salt,
-                            &sto_key.storage_nonce,
-                            DEFAULT_PBKDF_ITERATIONS,
-                            None,
-                        );
-                    }
-                }
-                key.iterations = DEFAULT_PBKDF_ITERATIONS;
-                let mut default_verifier = SecretBuf::<32>::new();
-                derive_passcode_kek(
-                    &uid,
-                    DEFAULT_PASSCODE_SEED,
-                    &key.salt,
-                    DEFAULT_PBKDF_ITERATIONS,
-                    &mut default_verifier,
-                    None,
-                );
-                key.passcode_verifier = *default_verifier.as_slice();
-                key.mac = super::keychain::compute_hw_mac(
-                    &uid,
-                    &key.salt,
-                    FILE_ID_PASSCODE_KEY,
-                    &key.passcode_verifier,
-                );
-                let _ = filesystem.write_struct(PATH_PASSCODE_KEY, &key);
-            }
-        } else if stored_it != DEFAULT_PBKDF_ITERATIONS {
-            if unwrap_master_key(
-                filesystem,
-                &uid,
-                DEFAULT_PASSCODE_SEED,
-                DEFAULT_PBKDF_ITERATIONS,
-                state,
-                None,
-            ) {
-                state.unlock();
-            }
         }
     }
     let _ = super::sync_filesystem_security(filesystem, state);
@@ -138,6 +92,7 @@ fn progress_phase2(ctx: *mut (), pct: u8) {
 }
 
 /// Verifies user passcode against `/sys/passcode.key` with optional progress reporting.
+#[inline(never)]
 pub fn verify_passcode(
     filesystem: &mut SystemStorage,
     passcode: &[u8],
@@ -199,44 +154,6 @@ pub fn verify_passcode(
         unwrap_master_key(filesystem, &uid_current, passcode, it, state, p_cb2);
         key.failed_attempts = 0;
         state.unlock();
-
-        if key.iterations != DEFAULT_PBKDF_ITERATIONS {
-            let mut new_verifier = SecretBuf::<32>::new();
-            super::keychain::derive_passcode_kek(
-                &uid_current,
-                passcode,
-                &key.salt,
-                DEFAULT_PBKDF_ITERATIONS,
-                &mut new_verifier,
-                None,
-            );
-            key.passcode_verifier = *new_verifier.as_slice();
-            key.iterations = DEFAULT_PBKDF_ITERATIONS;
-            key.mac = super::keychain::compute_hw_mac(
-                &uid_current,
-                &key.salt,
-                FILE_ID_PASSCODE_KEY,
-                &key.passcode_verifier,
-            );
-
-            let mut sto_key = PackedStorageKey::empty();
-            if let Ok(sn) = filesystem.read_struct(PATH_STORAGE_KEY, &mut sto_key) {
-                if sn >= core::mem::size_of::<PackedStorageKey>()
-                    && sto_key.ident == *FILE_ID_STORAGE_KEY
-                {
-                    let _ = write_wrapped_storage_key(
-                        filesystem,
-                        state,
-                        &uid_current,
-                        passcode,
-                        &sto_key.salt,
-                        &sto_key.storage_nonce,
-                        DEFAULT_PBKDF_ITERATIONS,
-                        None,
-                    );
-                }
-            }
-        }
     } else {
         let new_fails = key.failed_attempts.saturating_add(1);
         state.tries_failed = new_fails;
@@ -253,6 +170,7 @@ pub fn verify_passcode(
 }
 
 /// Sets or updates passcode preferences and re-wraps storage master key with optional progress reporting.
+#[inline(never)]
 pub fn set_passcode(
     filesystem: &mut SystemStorage,
     state: &mut PasscodeState,
@@ -263,12 +181,15 @@ pub fn set_passcode(
     max_tries: u8,
     progress: Option<ProgressHook>,
 ) -> Result<(), PasscodeError> {
-    if new_passcode.is_empty() {
-        return disable_passcode(filesystem, state);
-    }
-    if new_passcode.len() < 3 || new_passcode.len() > 16 {
+    let is_enable = !new_passcode.is_empty();
+    if is_enable && (new_passcode.len() < 3 || new_passcode.len() > 16) {
         return Err(PasscodeError::InvalidLength);
     }
+    let seed = if is_enable {
+        new_passcode
+    } else {
+        DEFAULT_PASSCODE_SEED
+    };
 
     if let Some(ref hook) = progress {
         hook.report(5);
@@ -286,57 +207,72 @@ pub fn set_passcode(
         );
     }
 
-    let mut rand_buf = [0u8; 48];
-    trng.fill_bytes(&mut rand_buf, bsp::entropy::sample_hardware_noise());
-    let (passcode_salt, rest) = rand_buf.split_at(16);
-    let (storage_salt, storage_nonce) = rest.split_at(16);
-    let passcode_salt: &[u8; 16] = passcode_salt.try_into().unwrap();
-    let storage_salt: &[u8; 16] = storage_salt.try_into().unwrap();
-    let storage_nonce: &[u8; 16] = storage_nonce.try_into().unwrap();
+    let mut passcode_salt = [0u8; 16];
+    let mut storage_salt = [0u8; 16];
+    let mut storage_nonce = [0u8; 16];
+    trng.fill_bytes(&mut passcode_salt, bsp::entropy::sample_hardware_noise());
+    trng.fill_bytes(&mut storage_salt, bsp::entropy::sample_hardware_noise());
+    trng.fill_bytes(&mut storage_nonce, bsp::entropy::sample_hardware_noise());
 
     if let Some(ref hook) = progress {
         hook.report(15);
     }
 
     let mut passcode_verifier = SecretBuf::<32>::new();
-    super::keychain::derive_passcode_kek(
+    derive_passcode_kek(
         &uid,
-        new_passcode,
-        passcode_salt,
+        seed,
+        &passcode_salt,
         DEFAULT_PBKDF_ITERATIONS,
         &mut passcode_verifier,
         progress,
     );
 
-    let mac = super::keychain::compute_hw_mac(
-        &uid,
-        passcode_salt,
-        FILE_ID_PASSCODE_KEY,
-        passcode_verifier.as_slice(),
-    );
+    let mac = if is_enable {
+        super::keychain::compute_hw_mac(
+            &uid,
+            &passcode_salt,
+            FILE_ID_PASSCODE_KEY,
+            passcode_verifier.as_slice(),
+        )
+    } else {
+        [0; 16]
+    };
 
-    let flags = PASSCODE_FLAG_ENABLED
-        | PASSCODE_FLAG_LOCK_BOOT
-        | (if expose_len {
-            PASSCODE_FLAG_EXPOSE_LEN
-        } else {
-            0
-        })
-        | (if stealth { PASSCODE_FLAG_STEALTH } else { 0 })
-        | (if digits_only {
-            PASSCODE_FLAG_DIGITS_ONLY
-        } else {
-            0
-        });
+    let flags = if is_enable {
+        PASSCODE_FLAG_ENABLED
+            | PASSCODE_FLAG_LOCK_BOOT
+            | (if expose_len {
+                PASSCODE_FLAG_EXPOSE_LEN
+            } else {
+                0
+            })
+            | (if stealth { PASSCODE_FLAG_STEALTH } else { 0 })
+            | (if digits_only {
+                PASSCODE_FLAG_DIGITS_ONLY
+            } else {
+                0
+            })
+    } else {
+        0
+    };
 
     let passcode_key = PackedPasscodeKey {
         ident: *FILE_ID_PASSCODE_KEY,
         flags,
         failed_attempts: 0,
-        passcode_len: new_passcode.len() as u8,
-        max_tries: max_tries.clamp(3, 50),
+        passcode_len: if is_enable {
+            new_passcode.len() as u8
+        } else {
+            0
+        },
+        max_tries: if is_enable {
+            max_tries.clamp(3, 50)
+        } else {
+            DEFAULT_MAX_TRIES
+        },
         iterations: DEFAULT_PBKDF_ITERATIONS,
-        salt: *passcode_salt,
+        salt: passcode_salt,
         passcode_verifier: *passcode_verifier.as_slice(),
         mac,
     };
@@ -352,9 +288,9 @@ pub fn set_passcode(
         filesystem,
         state,
         &uid,
-        new_passcode,
-        storage_salt,
-        storage_nonce,
+        seed,
+        &storage_salt,
+        &storage_nonce,
         DEFAULT_PBKDF_ITERATIONS,
         progress,
     )?;
@@ -369,60 +305,19 @@ pub fn set_passcode(
 }
 
 /// Disables passcode protection and reverts master key wrapping to default seed.
+#[inline(always)]
 pub fn disable_passcode(
     filesystem: &mut SystemStorage,
     state: &mut PasscodeState,
 ) -> Result<(), PasscodeError> {
-    let uid = bsp::uid::read_mcu_uid();
-    let hw_noise = bsp::entropy::sample_hardware_noise();
-    let mut trng = HardwareTrng::new();
-    trng.init_with_uid(&uid, hw_noise);
-
-    let mut rand_buf = [0u8; 48];
-    trng.fill_bytes(&mut rand_buf, bsp::entropy::sample_hardware_noise());
-    let (storage_salt, rest) = rand_buf.split_at(16);
-    let (storage_nonce, passcode_salt) = rest.split_at(16);
-    let storage_salt: &[u8; 16] = storage_salt.try_into().unwrap();
-    let storage_nonce: &[u8; 16] = storage_nonce.try_into().unwrap();
-    let passcode_salt: &[u8; 16] = passcode_salt.try_into().unwrap();
-
-    write_wrapped_storage_key(
+    set_passcode(
         filesystem,
         state,
-        &uid,
-        DEFAULT_PASSCODE_SEED,
-        storage_salt,
-        storage_nonce,
-        DEFAULT_PBKDF_ITERATIONS,
+        &[],
+        false,
+        false,
+        true,
+        DEFAULT_MAX_TRIES,
         None,
-    )?;
-
-    let mut default_verifier = SecretBuf::<32>::new();
-    derive_passcode_kek(
-        &uid,
-        DEFAULT_PASSCODE_SEED,
-        passcode_salt,
-        DEFAULT_PBKDF_ITERATIONS,
-        &mut default_verifier,
-        None,
-    );
-
-    let passcode_key = PackedPasscodeKey {
-        ident: *FILE_ID_PASSCODE_KEY,
-        flags: 0,
-        failed_attempts: 0,
-        passcode_len: 0,
-        max_tries: DEFAULT_MAX_TRIES,
-        iterations: DEFAULT_PBKDF_ITERATIONS,
-        salt: *passcode_salt,
-        passcode_verifier: *default_verifier.as_slice(),
-        mac: [0; 16],
-    };
-    filesystem
-        .write_struct(PATH_PASSCODE_KEY, &passcode_key)
-        .map_err(|_| PasscodeError::StorageError)?;
-
-    state.unlock();
-    let _ = super::sync_filesystem_security(filesystem, state);
-    Ok(())
+    )
 }

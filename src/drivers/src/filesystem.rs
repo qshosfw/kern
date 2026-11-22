@@ -138,6 +138,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
     }
 
     #[cfg(feature = "secure_fs")]
+    #[inline(never)]
     fn next_write_nonce(&mut self, path: &str, data: &[u8]) -> [u8; SECURE_NONCE_LEN] {
         self.nonce_ctr = self.nonce_ctr.wrapping_add(1);
         let stats = self.fs.stats();
@@ -152,9 +153,12 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             stats.used_sectors as u8,
             stats.active_files as u8,
         ]) ^ 0x4E4F_4E43_4531_5F56;
-        perm.x[1] = u64::from_le_bytes(self.enc_key[..8].try_into().unwrap())
-            ^ (data.len() as u64).rotate_left(17);
-        perm.x[4] = u64::from_le_bytes(self.enc_key[8..16].try_into().unwrap());
+        let mut k0 = [0u8; 8];
+        let mut k1 = [0u8; 8];
+        k0.copy_from_slice(&self.enc_key[..8]);
+        k1.copy_from_slice(&self.enc_key[8..16]);
+        perm.x[1] = u64::from_le_bytes(k0) ^ (data.len() as u64).rotate_left(17);
+        perm.x[4] = u64::from_le_bytes(k1);
         for (i, &b) in path.as_bytes().iter().take(16).enumerate() {
             perm.x[2] ^= (b as u64) << ((i & 7) * 8);
         }
@@ -166,6 +170,26 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         nonce[..8].copy_from_slice(&perm.x[0].to_le_bytes());
         nonce[8..16].copy_from_slice(&perm.x[1].to_le_bytes());
         nonce
+    }
+
+    #[cfg(feature = "secure_fs")]
+    #[inline(never)]
+    fn write_encrypted(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
+        if !self.session_unlocked {
+            return Err(StorageError::EncryptedNoKey);
+        }
+        if data.len() > 256 {
+            return Err(StorageError::CapacityFull);
+        }
+        let mut tmp_buf = [0u8; 256 + SECURE_NONCE_LEN];
+        let nonce = self.next_write_nonce(path, data);
+        tmp_buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
+        let end = SECURE_NONCE_LEN + data.len();
+        tmp_buf[SECURE_NONCE_LEN..end].copy_from_slice(data);
+        Ascon128::new(self.enc_key).apply_keystream(&nonce, &mut tmp_buf[SECURE_NONCE_LEN..end]);
+        self.fs
+            .write_file(path, &tmp_buf[..end])
+            .map_err(Self::map_error)
     }
 }
 
@@ -191,18 +215,21 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         self.fs.create_dir(path).map_err(Self::map_error)
     }
 
+    #[inline(always)]
     pub fn read_struct<T: Copy>(&mut self, path: &str, out: &mut T) -> Result<usize, StorageError> {
         let size = core::mem::size_of::<T>();
         let slice = unsafe { core::slice::from_raw_parts_mut(out as *mut T as *mut u8, size) };
         self.read_file(path, slice)
     }
 
+    #[inline(always)]
     pub fn write_struct<T: Copy>(&mut self, path: &str, data: &T) -> Result<(), StorageError> {
         let size = core::mem::size_of::<T>();
         let slice = unsafe { core::slice::from_raw_parts(data as *const T as *const u8, size) };
         self.write_file(path, slice)
     }
 
+    #[inline(never)]
     pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
         #[cfg(feature = "secure_fs")]
         {
@@ -235,6 +262,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         }
     }
 
+    #[inline(never)]
     pub fn read_file_at(
         &mut self,
         path: &str,
@@ -250,29 +278,13 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             .map_err(Self::map_error)
     }
 
+    #[inline(never)]
     pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<(), StorageError> {
         let perm = self.check_writable(path)?;
         if (perm & ATTR_ENCRYPTED) != 0 {
             #[cfg(feature = "secure_fs")]
             {
-                if !self.session_unlocked {
-                    return Err(StorageError::EncryptedNoKey);
-                }
-                if data.len() > 512 {
-                    return Err(StorageError::CapacityFull);
-                }
-                let mut tmp_buf = [0u8; 512 + SECURE_NONCE_LEN];
-                let nonce = self.next_write_nonce(path, data);
-                tmp_buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
-                tmp_buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + data.len()].copy_from_slice(data);
-                Ascon128::new(self.enc_key).apply_keystream(
-                    &nonce,
-                    &mut tmp_buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + data.len()],
-                );
-                return self
-                    .fs
-                    .write_file(path, &tmp_buf[..SECURE_NONCE_LEN + data.len()])
-                    .map_err(Self::map_error);
+                return self.write_encrypted(path, data);
             }
             #[cfg(not(feature = "secure_fs"))]
             {
@@ -361,17 +373,6 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             return Err(StorageError::AccessDenied);
         }
         self.check_writable(new_path)?;
-
-        #[cfg(feature = "secure_fs")]
-        if (perm & ATTR_ENCRYPTED) != 0 {
-            let mut buf = [0u8; 512];
-            let len = self.read_file(old_path, &mut buf)?;
-            self.write_file(new_path, &buf[..len])?;
-            let _ = self.set_attributes(new_path, FileAttributes { permission: perm });
-            self.remove(old_path)?;
-            return Ok(());
-        }
-
         self.fs.rename(old_path, new_path).map_err(Self::map_error)
     }
 }

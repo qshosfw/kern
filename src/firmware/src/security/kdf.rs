@@ -25,6 +25,7 @@ impl ProgressHook {
 
 /// Key Derivation Function (PBKDF) using Ascon sponge permutation with in-word PRF stretching,
 /// watchdog feeding, and optional progress callback.
+#[inline(never)]
 pub fn derive_master_key(
     mcu_uid: &[u8; 12],
     user_passcode: &[u8],
@@ -40,33 +41,28 @@ pub fn derive_master_key(
     state.x[0] = 0x4B45_524E_4B44_4631;
 
     // Word 1 & 2: 16-byte salt
-    state.x[1] = u64::from_le_bytes([
-        salt[0], salt[1], salt[2], salt[3], salt[4], salt[5], salt[6], salt[7],
-    ]);
-    state.x[2] = u64::from_le_bytes([
-        salt[8], salt[9], salt[10], salt[11], salt[12], salt[13], salt[14], salt[15],
-    ]);
+    for i in 0..2 {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&salt[i * 8..(i + 1) * 8]);
+        state.x[1 + i] = u64::from_le_bytes(b);
+    }
 
     // Word 3 & 4: 12-byte MCU UID + 4-byte iterations count
-    let uid_low = u64::from_le_bytes([
-        mcu_uid[0], mcu_uid[1], mcu_uid[2], mcu_uid[3], mcu_uid[4], mcu_uid[5], mcu_uid[6],
-        mcu_uid[7],
-    ]);
+    let mut uid_b = [0u8; 8];
+    uid_b.copy_from_slice(&mcu_uid[0..8]);
+    state.x[3] = u64::from_le_bytes(uid_b);
     let uid_high = u32::from_le_bytes([mcu_uid[8], mcu_uid[9], mcu_uid[10], mcu_uid[11]]);
-    state.x[3] = uid_low;
     state.x[4] = (uid_high as u64) | ((iterations as u64) << 32);
 
     // Initial permutation p^12
     state.permute(12);
 
     // Absorb user passcode in 8-byte blocks
-    let full_blocks = user_passcode.len() / 8;
+    let full_blocks = user_passcode.len() >> 3;
     for i in 0..full_blocks {
-        let chunk = &user_passcode[i * 8..(i + 1) * 8];
-        let p_word = u64::from_le_bytes([
-            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
-        ]);
-        state.x[0] ^= p_word;
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&user_passcode[i * 8..(i + 1) * 8]);
+        state.x[0] ^= u64::from_le_bytes(b);
         state.permute(6);
     }
     let rem = &user_passcode[full_blocks * 8..];
@@ -123,8 +119,7 @@ pub fn derive_master_key(
     // Final squeeze (p^12) into 256-bit output key
     state.permute(12);
     let out_slice = out_key.as_mut_slice();
-    out_slice[0..8].copy_from_slice(&state.x[0].to_le_bytes());
-    out_slice[8..16].copy_from_slice(&state.x[1].to_le_bytes());
-    out_slice[16..24].copy_from_slice(&state.x[2].to_le_bytes());
-    out_slice[24..32].copy_from_slice(&state.x[3].to_le_bytes());
+    for i in 0..4 {
+        out_slice[i * 8..(i + 1) * 8].copy_from_slice(&state.x[i].to_le_bytes());
+    }
 }

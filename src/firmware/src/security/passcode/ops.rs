@@ -6,6 +6,7 @@ use super::super::keychain::{PackedPasscodeKey, PackedStorageKey};
 use super::state::*;
 use crate::services::SystemStorage;
 
+#[inline(never)]
 pub fn read_passcode_key(
     filesystem: &mut SystemStorage,
     key: &mut PackedPasscodeKey,
@@ -23,6 +24,7 @@ pub fn read_passcode_key(
 }
 
 /// Retrieves full passcode configuration metadata from `/sys/passcode.key`
+#[inline(never)]
 pub fn get_passcode_config(filesystem: &mut SystemStorage) -> PasscodeConfigInfo {
     let mut key = PackedPasscodeKey::empty();
     if read_passcode_key(filesystem, &mut key, 8).is_ok() {
@@ -66,6 +68,7 @@ pub fn format_wrong_passcode_msg<'a>(
 }
 
 /// Updates passcode security preferences (length exposure, stealth mode, digits only, and max tries threshold)
+#[inline(never)]
 pub fn set_passcode_options(
     filesystem: &mut SystemStorage,
     expose_len: bool,
@@ -98,6 +101,7 @@ pub fn set_passcode_options(
 }
 
 /// Checks if a user passcode is currently active in the keychain.
+#[inline(never)]
 pub fn is_passcode_set(filesystem: &mut SystemStorage) -> bool {
     let mut key = PackedPasscodeKey::empty();
     read_passcode_key(filesystem, &mut key, 5)
@@ -195,6 +199,7 @@ pub fn reset_lockout_penalty(filesystem: &mut SystemStorage) {
     }
 }
 
+#[inline(never)]
 pub fn write_wrapped_storage_key(
     filesystem: &mut SystemStorage,
     state: &PasscodeState,

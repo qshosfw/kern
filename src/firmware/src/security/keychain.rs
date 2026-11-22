@@ -75,6 +75,7 @@ impl PackedStorageKey {
     }
 }
 
+#[inline(never)]
 pub(crate) fn compute_hw_mac(
     uid: &[u8; 12],
     nonce: &[u8; 16],
@@ -84,11 +85,14 @@ pub(crate) fn compute_hw_mac(
     let mut hardware_kek = SecretBuf::<32>::new();
     derive_passcode_kek(uid, b"HW_KEK", nonce, 100, &mut hardware_kek, None);
     let mut key16 = SecretBuf::<16>::new();
-    key16.as_mut_slice().copy_from_slice(&hardware_kek.as_slice()[0..16]);
+    key16
+        .as_mut_slice()
+        .copy_from_slice(&hardware_kek.as_slice()[0..16]);
     let cipher = Ascon128::new(*key16.as_slice());
     cipher.compute_mac(nonce, ident, data)
 }
 
+#[inline(never)]
 fn key_valid(
     filesystem: &mut SystemStorage,
     path: &str,
@@ -214,6 +218,7 @@ pub fn ensure_keychain(filesystem: &mut SystemStorage) {
     }
 }
 
+#[inline(never)]
 pub fn xor_derived_key(
     uid: &[u8; 12],
     seed: &[u8],
@@ -229,6 +234,7 @@ pub fn xor_derived_key(
     }
 }
 
+#[inline(never)]
 pub fn derive_passcode_kek(
     mcu_uid: &[u8; 12],
     user_passcode: &[u8],
@@ -249,16 +255,19 @@ pub fn derive_passcode_kek(
 }
 
 /// Derives a domain-separated, UID-bound 128-bit `FileSystemDriver` key from the 256-bit master key.
+#[inline(never)]
 pub fn derive_fs_key(master_key: &[u8; 32], mcu_uid: &[u8; 12]) -> [u8; 16] {
     let mut perm = crypto::ascon::AsconPermutation::new();
     // Domain tag: "KRN_FS01"
     perm.x[0] = 0x4B52_4E5F_4653_3031;
-    perm.x[1] = u64::from_le_bytes(master_key[0..8].try_into().unwrap());
-    perm.x[2] = u64::from_le_bytes(master_key[8..16].try_into().unwrap());
-    perm.x[3] = u64::from_le_bytes(master_key[16..24].try_into().unwrap())
-        ^ u64::from_le_bytes(mcu_uid[0..8].try_into().unwrap());
-    let uid_hi = u32::from_le_bytes(mcu_uid[8..12].try_into().unwrap()) as u64;
-    perm.x[4] = u64::from_le_bytes(master_key[24..32].try_into().unwrap()) ^ uid_hi;
+    for i in 0..4 {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&master_key[i * 8..(i + 1) * 8]);
+        perm.x[i + 1] = u64::from_le_bytes(b);
+    }
+    for (i, &b) in mcu_uid.iter().enumerate() {
+        perm.x[3 + (i >> 3)] ^= (b as u64) << ((i & 7) * 8);
+    }
     perm.permute(12);
     let mut fs_key = [0u8; 16];
     fs_key[0..8].copy_from_slice(&perm.x[0].to_le_bytes());
