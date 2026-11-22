@@ -6,11 +6,26 @@
 
 **Zero-heap `#![no_std]` microkernel, relocatable app runtime, and desktop companion for handheld amateur radio transceivers.**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/qshosfw/kern/ci.yml?label=CI)](https://github.com/qshosfw/kern/actions/workflows/ci.yml)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Rust: no_std](https://img.shields.io/badge/rust-no__std-orange.svg)](https://www.rust-lang.org/)
-[![OpenTaiko](https://img.shields.io/badge/OpenTaiko-qshosfw-black.svg)](https://github.com/qshosfw)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-ff5e5b.svg)](https://ko-fi.com/qshosfw)
+[![CI](https://img.shields.io/github/actions/workflow/status/qshosfw/kern/ci.yml?style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/qshosfw/kern/actions/workflows/ci.yml)
+[![Organization: OpenTaiko](https://img.shields.io/badge/OpenTaiko-qshosfw-1f6feb?style=flat-square&logo=github)](https://github.com/qshosfw)
+[![Support on Ko-fi](https://img.shields.io/badge/Support%20on-Ko--fi-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/qshosfw)
+[![Rust: no_std](https://img.shields.io/badge/Rust-no__std%20%7C%20zero%20heap-DEA584?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![Target: Cortex-M0+](https://img.shields.io/badge/Target-PY32F071xB%20Cortex--M0%2B-0091BD?style=flat-square)](#supported-hardware)
+[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-green?style=flat-square)](LICENSE)
+
+<sub>
+  <a href="#overview">Overview</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#supported-hardware">Hardware</a> ·
+  <a href="#getting-started">Getting Started</a> ·
+  <a href="#kern-dock">Kern Dock</a> ·
+  <a href="#packages">Packages</a> ·
+  <a href="#localization">Localization</a> ·
+  <a href="#cli-reference">CLI</a> ·
+  <a href="#standards--protocols">Protocols</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#writing-apps">Writing Apps</a>
+</sub>
 
 <br />
 
@@ -178,6 +193,52 @@ Kern Dock streams the radio display over USB-C or UART, mirrors physical control
   </tr>
 </table>
 
+<details>
+<summary>More screenshots (additional locales, Greek text input, DFU settings &amp; SAR info)</summary>
+
+<br />
+
+<table>
+  <tr>
+    <td align="center" width="25%">
+      <img src="assets/media/screenshots/settings_it.png" alt="Italian Settings" width="200" /><br />
+      <sub>Italian (Italiano)</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="assets/media/screenshots/settings_uk.png" alt="Ukrainian Settings" width="200" /><br />
+      <sub>Ukrainian (Українська)</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="assets/media/screenshots/settings_nl.png" alt="Dutch Settings" width="200" /><br />
+      <sub>Dutch (Nederlands)</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="assets/media/screenshots/settings_pt.png" alt="Portuguese Settings" width="200" /><br />
+      <sub>Portuguese (Português)</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="25%">
+      <img src="assets/media/screenshots/settings_root_ru.png" alt="Russian Settings Root" width="200" /><br />
+      <sub>Russian Settings</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="assets/media/screenshots/text_input_el_guide.png" alt="Greek Text Input Guide" width="200" /><br />
+      <sub>Greek Text Input</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="packages/sys/dfu/screenshots/settings_services.png" alt="System Modules List" width="200" /><br />
+      <sub>System Modules Menu</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="packages/sys/sysinfo/screenshots/sysinfo_legal_sar.png" alt="SAR and Regulatory Info" width="200" /><br />
+      <sub>SAR &amp; Compliance</sub>
+    </td>
+  </tr>
+</table>
+
+</details>
+
 ---
 
 ## Supported Hardware
@@ -242,6 +303,29 @@ Core apps and system modules live on SPI Flash rather than MCU ROM. Provision th
 ./kern dock
 ./kern dock --demo
 ```
+
+### Running Without Hardware (Demo &amp; QEMU)
+
+You can work on the UI, packages, and RigWire tooling without a physical radio:
+
+```bash
+# Built-in offline demo radio inside Kern Dock
+./kern dock --demo
+
+# Full ARMv6-M QEMU hardware emulator + attach Kern Dock over TCP
+./kern emu
+./kern dock -p tcp://127.0.0.1:4446
+```
+
+### On-Device Shortcuts &amp; Recovery Controls
+
+| Gesture / Key Combo | Where | Action |
+|---|---|---|
+| Hold `PTT` on power-on | Boot | Enter Stock Serial Bootloader for firmware flashing |
+| Hold `MENU + EXIT` (3 s) | Headless Mode | Exit headless mode, wake LCD/backlight, and restore local controls |
+| Hold `F` / `#` | Anywhere | Lock or unlock the keypad |
+| Hold `EXIT` | Launcher | Enter Deep Sleep (STOP mode); disabled while USB/RigWire or headless is active |
+| Hold `EXIT` | Inside an App | Force-close active application and return to Launcher |
 
 ---
 
@@ -428,6 +512,16 @@ flowchart TB
 
     Userland --> ABI --> Kernel --> Drivers --> Hardware
 ```
+
+### Memory Budget &amp; Why Packages Live on SPI Flash
+
+| Region | Size | Role |
+|---|---|---|
+| **MCU Internal Flash** | 128 KB (budget: 118 KB) | Resident microkernel, drivers, KernFS, GFX, RigWire host, KRX loader |
+| **MCU Internal SRAM** | 16 KB | Static kernel state, 8 KB relocatable KRX execution arena, call/IRQ stacks |
+| **External SPI Flash (`PY25Q16`)** | 2 MB | KernFS storage: `/apps/*.krx`, `/apps/*.mod`, `/user/*`, `/pref/*.cfg`, `/sys/*`, fonts &amp; locales |
+
+Moving applications (`vfo.krx`, `settings.krx`), maintenance tools (`dfu.mod`, `recovery.mod`, `panic.mod`, `sysinfo.krx`, `calib.mod`), fonts, and localization catalogs onto SPI Flash keeps MCU ROM well under the 128 KB ceiling while allowing new apps to be installed or updated over USB-C without reflashing firmware.
 
 ### Repository Layout
 
