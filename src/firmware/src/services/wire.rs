@@ -226,9 +226,8 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     // Handlers only read `hw.wire.session` and never touch `rx_buf` until `send_response`.
     let inp = unsafe { core::slice::from_raw_parts(raw.as_ptr(), plen) };
 
-    let out: &mut [u8; 128] = unsafe {
-        &mut *(crate::data::arena::scratch_tail_bytes_mut()[1900..].as_mut_ptr() as *mut [u8; 128])
-    };
+    let mut out_buf = [0u8; 128];
+    let out = &mut out_buf;
     let mut c = WireCtx {
         inp,
         out,

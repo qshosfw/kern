@@ -954,13 +954,23 @@ impl Orchestrator {
     ) {
         if app_id < crate::AppRegistry::app_count() {
             if self.active_app_id < crate::AppRegistry::app_count() {
-                if self.active_app_id != app_id {
-                    Self::cleanup_app_radio(self.active_app_id, false, ctx);
+                let is_dyn_reload = self.active_app_id == app_id
+                    && app_id >= crate::apps::AppRegistry::count();
+                if !is_dyn_reload {
+                    if self.active_app_id != app_id {
+                        Self::cleanup_app_radio(self.active_app_id, false, ctx);
+                    }
+                    if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
+                        pcb.set_state(ProcState::Suspended);
+                    }
+                    crate::AppRegistry::on_exit(self.active_app_id, ctx);
+                    if self.active_app_id >= crate::apps::AppRegistry::count() {
+                        if let Some(pcb) = proc_table().find_by_app(self.active_app_id) {
+                            reap_pid_only(pcb.pid);
+                        }
+                        crate::AppRegistry::unregister_dynamic();
+                    }
                 }
-                if let Some(pcb) = proc_table_mut().find_mut_by_app(self.active_app_id) {
-                    pcb.set_state(ProcState::Suspended);
-                }
-                crate::AppRegistry::on_exit(self.active_app_id, ctx);
             }
             if self.active_app_id != app_id {
                 if push_history && self.active_app_id != APP_ID_LAUNCHER {
@@ -1036,9 +1046,7 @@ impl Orchestrator {
                         _ => None,
                     };
                     if let Some(path) = pkg_path {
-                        if let Err(e) = crate::runtime::launch_krx_package(ctx, path, 0) {
-                            crate::runtime::show_launch_error_dialog(ctx, path, e);
-                        }
+                        let _ = launch_krx_shortcut(ctx, path);
                         return;
                     }
                 }
@@ -1048,10 +1056,6 @@ impl Orchestrator {
             Shortcut::LaunchPendingPkg => {
                 #[cfg(all(feature = "filesystem", feature = "krx_native"))]
                 if let Some(path) = crate::runtime::syscall::service::take_pending_launch_path() {
-                    if self.active_app_id >= crate::apps::AppRegistry::count() {
-                        crate::AppRegistry::on_exit(self.active_app_id, ctx);
-                        self.active_app_id = APP_ID_LAUNCHER;
-                    }
                     let _ = launch_krx_shortcut(ctx, path);
                 }
             }

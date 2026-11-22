@@ -27,7 +27,6 @@ pub(crate) const DIAG_PROFILE_UNSUPPORTED: u8 = 4;
 pub(crate) struct LaunchDiag {
     pub(crate) a: u32,
     pub(crate) b: u32,
-    pub(crate) app_ver: [u8; 3],
     pub(crate) code: u8,
 }
 
@@ -35,7 +34,6 @@ impl LaunchDiag {
     const EMPTY: Self = Self {
         a: 0,
         b: 0,
-        app_ver: [0; 3],
         code: DIAG_NONE,
     };
 }
@@ -50,12 +48,11 @@ pub(crate) fn clear_launch_diag() {
 }
 
 #[inline(always)]
-pub(crate) fn record_launch_diag(a: u32, b: u32, app_ver: [u8; 3], code: u8) {
+pub(crate) fn record_launch_diag(a: u32, b: u32, _app_ver: [u8; 3], code: u8) {
     unsafe {
         LAST_LAUNCH_DIAG = LaunchDiag {
             a,
             b,
-            app_ver,
             code,
         };
     }
@@ -103,6 +100,7 @@ fn load_krx_into_slot(
     path: &str,
     sys_caps: Option<::abi::CapabilitySet>,
     spawn: bool,
+    mut active_ctx: Option<&mut SysContext<'_, '_>>,
 ) -> Result<(::abi::CapabilitySet, &'static str), KrxLaunchError> {
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
@@ -164,6 +162,42 @@ fn load_krx_into_slot(
     }
 
     let exec = summary.exec().ok_or(KrxLaunchError::MissingExecution)?;
+    let profile = kernel::runtime::KrxProfile::detect(
+        &summary.preamble,
+        exec,
+        summary.aux.block_map.is_some(),
+        summary.aux.leaf_map.is_some(),
+    );
+    #[cfg(not(feature = "krx_paged"))]
+    if profile == kernel::runtime::KrxProfile::P1TransparentPaged {
+        record_launch_diag(
+            exec_class as u32,
+            profile as u32,
+            app_ver,
+            DIAG_PROFILE_UNSUPPORTED,
+        );
+        return Err(KrxLaunchError::UnsupportedProfile);
+    }
+    if profile.is_structured_paged()
+        && let Some(map) = summary.aux.leaf_map
+        && map.len()
+            > super::native_runner::MAX_STRUCTURED_LEAVES * kernel::runtime::LeafEntry::SIZE
+    {
+        record_launch_diag(
+            (map.len() / kernel::runtime::LeafEntry::SIZE) as u32,
+            super::native_runner::MAX_STRUCTURED_LEAVES as u32,
+            app_ver,
+            DIAG_TOO_MANY_LEAVES,
+        );
+        return Err(KrxLaunchError::UnsupportedProfile);
+    }
+    let load_base = super::native_runner::arena_base_ptr() as u32;
+    if profile == kernel::runtime::KrxProfile::N0NativeFixed
+        && summary.preamble.link_base != load_base
+    {
+        return Err(KrxLaunchError::RelocationFailed);
+    }
+
     {
         let avail = crate::data::arena::TRANSIENT_ARENA_BYTES;
         if sys_caps.is_some() {
@@ -182,9 +216,52 @@ fn load_krx_into_slot(
             record_launch_diag(needed_ram as u32, avail as u32, app_ver, DIAG_NONE);
             return Err(KrxLaunchError::InsufficientRam);
         }
+        let code_limit = if profile.is_structured_paged() {
+            avail - 1024
+        } else {
+            avail
+        };
         if !matches!(exec_class, KrxClass::Paged) && (exec.payload_size as usize) > avail {
             record_launch_diag(exec.payload_size, avail as u32, app_ver, DIAG_NONE);
             return Err(KrxLaunchError::PayloadTooLarge);
+        }
+        if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= avail {
+            record_launch_diag(
+                exec.got_offset as u32,
+                avail as u32,
+                app_ver,
+                DIAG_GOT_INVALID,
+            );
+            return Err(KrxLaunchError::ImportBindingFailed);
+        }
+        if exec.payload_size > 0 {
+            let code_size = if exec.got_offset > 0 {
+                (exec.got_offset as u32).min(code_limit as u32)
+            } else {
+                exec.payload_size.min(code_limit as u32)
+            };
+            if (exec.entry_point & !1) >= code_size {
+                record_launch_diag(exec.entry_point, code_size, app_ver, DIAG_NONE);
+                return Err(KrxLaunchError::InvalidEntryPoint);
+            }
+        }
+    }
+
+    // All pre-flight checks succeeded: cleanly exit any currently loaded dynamic app
+    // before reading the new payload into TRANSIENT_ARENA or mutating NATIVE_SLOT.
+    if spawn && super::native_runner::slot_ref().is_loaded {
+        let old_pid = super::native_runner::slot_ref().pid;
+        if let Some(ctx) = active_ctx.as_deref_mut() {
+            unsafe {
+                let static_ctx =
+                    &mut *(ctx as *mut SysContext<'_, '_> as *mut SysContext<'static, 'static>);
+                super::native_runner::native_on_exit(static_ctx);
+            }
+        } else {
+            super::native_runner::init_native_slot();
+        }
+        if old_pid.0 != 0 {
+            crate::orchestrator::reap_pid_only(old_pid);
         }
     }
 
@@ -196,9 +273,15 @@ fn load_krx_into_slot(
     } else {
         max_payload
     };
-    let payload_read = storage
-        .read_file_at(path, header_len, &mut arena_buf[..to_read])
-        .map_err(|_| KrxLaunchError::ReadFailed)?;
+    let payload_read = if let Some(ctx) = active_ctx.as_deref_mut() {
+        ctx.storage
+            .read_file_at(path, header_len, &mut arena_buf[..to_read])
+            .map_err(|_| KrxLaunchError::ReadFailed)?
+    } else {
+        storage
+            .read_file_at(path, header_len, &mut arena_buf[..to_read])
+            .map_err(|_| KrxLaunchError::ReadFailed)?
+    };
 
     let pid = if spawn {
         crate::orchestrator::proc_table_mut()
@@ -228,7 +311,10 @@ pub fn launch_krx_package(
     path: &str,
     start_arg: u32,
 ) -> Result<usize, KrxLaunchError> {
-    let (required_caps, app_name) = load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), true)?;
+    let caps = ctx.caps();
+    let storage_ptr = ctx.storage as *mut crate::services::SystemStorage<'_>;
+    let (required_caps, app_name) =
+        load_krx_into_slot(unsafe { &mut *storage_ptr }, path, Some(caps), true, Some(ctx))?;
     #[cfg(feature = "filesystem")]
     crate::services::lang::bind_app(ctx.storage, path);
     super::native_runner::set_pending_start_arg(start_arg);
@@ -245,7 +331,7 @@ pub fn invoke_action_krx_package<'a, 'hw>(
     ctx: &mut SysContext<'a, 'hw>,
     path: &str,
 ) -> Result<(), KrxLaunchError> {
-    load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), false)?;
+    load_krx_into_slot(ctx.storage, path, Some(ctx.caps()), false, None)?;
     #[cfg(feature = "filesystem")]
     crate::services::lang::bind_app(ctx.storage, path);
     unsafe {
@@ -279,7 +365,7 @@ pub fn try_launch_boot_module(
     path: &str,
     param: usize,
 ) -> Result<u32, KrxLaunchError> {
-    load_krx_into_slot(storage, path, None, false)?;
+    load_krx_into_slot(storage, path, None, false, None)?;
 
     let res = unsafe {
         let rc = super::native_runner::invoke_boot_start(param);
@@ -316,40 +402,12 @@ impl<'a> MsgWriter<'a> {
     }
 
     #[inline(never)]
-    fn push_hex(&mut self, val: u32) {
-        let mut tmp = [0u8; 8];
-        let s = gfx::text::format_hex32(val, &mut tmp);
-        let trimmed = s.trim_start_matches('0');
-        self.push(if trimmed.is_empty() { "0" } else { trimmed });
-    }
-
-    #[inline(never)]
     fn push_pair(&mut self, pfx: &str, a: u32, sep: &str, b: u32, sfx: &str) {
         self.push(pfx);
         self.push_u32(a);
         self.push(sep);
         self.push_u32(b);
         self.push(sfx);
-    }
-
-    #[inline(never)]
-    fn push_fw_footer(&mut self, tail: &str) {
-        self.push("\nFW ");
-        self.push(env!("CARGO_PKG_VERSION"));
-        self.push(tail);
-    }
-
-    #[inline(never)]
-    fn push_ver(&mut self, v: [u8; 3]) {
-        if v != [0, 0, 0] {
-            self.push(" (v");
-            self.push_u32(v[0] as u32);
-            self.push(".");
-            self.push_u32(v[1] as u32);
-            self.push(".");
-            self.push_u32(v[2] as u32);
-            self.push(")");
-        }
     }
 
     #[inline(always)]
@@ -368,34 +426,16 @@ fn format_launch_error<'a>(
     let mut w = MsgWriter::new(buf);
     match err {
         KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
-            w.push("Missing capability:\n");
+            w.push("Missing cap:\n");
             w.push(cap);
-            w.push("\nNot available on HW.");
             w.finish()
         }
         KrxLaunchError::ImportBindingFailed => {
             let os_abi = if diag.b != 0 { diag.b } else { ::abi::VERSION as u32 };
             if diag.code == DIAG_GOT_INVALID {
-                w.push("Bad GOT/import\nOff 0x");
-                w.push_hex(diag.a);
-                w.push_pair(" / ", diag.b, "B\nABI v", os_abi, ". Rebuild.");
-            } else if diag.code == DIAG_ABI_MISMATCH && diag.a != os_abi {
-                let app_old = diag.a < os_abi;
-                w.push(if app_old { "App too old" } else { "OS too old" });
-                w.push_ver(diag.app_ver);
-                w.push_pair(
-                    "\nApp ABI v",
-                    diag.a,
-                    if app_old { " < OS v" } else { " > OS v" },
-                    os_abi,
-                    "",
-                );
-                w.push_fw_footer(if app_old { ". Update app." } else { ". Update OS." });
+                w.push_pair("Bad GOT ", diag.a, "/", diag.b, "B.\nRebuild.");
             } else {
-                w.push("Import bind failed");
-                w.push_fw_footer(" (ABI v");
-                w.push_u32(os_abi);
-                w.push(").");
+                w.push_pair("ABI mismatch\nApp v", diag.a, " != OS v", os_abi, ".\nUpdate.");
             }
             w.finish()
         }
@@ -405,43 +445,27 @@ fn format_launch_error<'a>(
             } else {
                 kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32
             };
-            w.push_pair("Low stack RAM\nNeed ", diag.a, "B, free ", free, "B\n(short ");
-            w.push_u32(diag.a.saturating_sub(free));
-            w.push("B). Retry.");
+            w.push_pair("Low stack RAM\nNeed ", diag.a, "B, free ", free, "B.");
             w.finish()
         }
         KrxLaunchError::InsufficientRam | KrxLaunchError::PayloadTooLarge => {
-            let is_pay = matches!(err, KrxLaunchError::PayloadTooLarge);
-            w.push_pair(
-                if is_pay { "App too large\nSize " } else { "Low arena RAM\nNeed " },
-                diag.a,
-                "B, max ",
-                diag.b,
-                "B\n(+",
-            );
-            w.push_u32(diag.a.saturating_sub(diag.b));
-            w.push(if is_pay { "B). Use P0 paged." } else { "B). Shrink app." });
+            w.push_pair("Too large\nNeed ", diag.a, "B, max ", diag.b, "B.\nUse P0.");
             w.finish()
         }
         KrxLaunchError::UnsupportedProfile => {
             if diag.code == DIAG_TOO_MANY_LEAVES {
-                w.push_pair("Too many P0 leaves\nHas ", diag.a, ", max ", diag.b, ".\nRebuild.");
+                w.push_pair("Leaves ", diag.a, " > max ", diag.b, ".\nRebuild.");
             } else {
-                w.push_pair("Unsupported profile\nClass ", diag.a, ", prof ", diag.b, ".");
-                w.push_fw_footer(". Update OS.");
+                w.push_pair("Unsupported prof\nClass ", diag.a, " prof ", diag.b, ".");
             }
             w.finish()
         }
         KrxLaunchError::TruncatedPackage if diag.b > 0 => {
-            w.push_pair("Truncated package\nRead ", diag.a, "B < ", diag.b, "B.\nReinstall.");
+            w.push_pair("Truncated\nRead ", diag.a, "B < ", diag.b, "B.");
             w.finish()
         }
         KrxLaunchError::InvalidEntryPoint if diag.b > 0 => {
-            w.push("Invalid entry\nOff 0x");
-            w.push_hex(diag.a);
-            w.push(" >= ");
-            w.push_u32(diag.b);
-            w.push("B.\nRebuild.");
+            w.push_pair("Bad entry ", diag.a, " >= ", diag.b, "B.");
             w.finish()
         }
         _ => err.describe(),
@@ -452,11 +476,11 @@ fn format_launch_error<'a>(
 #[inline(never)]
 pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
     let fname = crate::apps::launcher::catalog::extract_filename(path);
-    let buf = &mut crate::data::arena::staging_buf()[..88];
-    let msg = format_launch_error(err, last_launch_diag(), buf);
+    let mut buf = [0u8; 88];
+    let msg = format_launch_error(err, last_launch_diag(), &mut buf);
 
     ctx.show_confirm(
-        crate::apps::settings::dialog::TAG_POPUP_INFO,
+        crate::orchestrator::compositor::TAG_SYSTEM_ALERT,
         fname,
         msg,
         "OK",

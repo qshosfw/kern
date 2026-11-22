@@ -182,7 +182,7 @@ const _: () = {
 
 #[inline(never)]
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
-    let temp_buf = &mut crate::data::arena::staging_buf()[..80];
+    let mut temp_buf = [0u8; 80];
     let n = buf.len().min(80);
     let loaded = storage
         .read_file(path, &mut temp_buf[..n])

@@ -148,6 +148,15 @@ pub fn init_native_slot() {
     }
 }
 
+#[inline(never)]
+pub fn invalidate_leaf_cache() {
+    if let Some(leaf) = slot_mut().leaf_mut() {
+        if !leaf.is_dispatching {
+            leaf.active_leaf = None;
+        }
+    }
+}
+
 #[unsafe(link_section = ".uninit")]
 static mut NATIVE_SLOT: core::mem::MaybeUninit<NativeExecSlot> = core::mem::MaybeUninit::uninit();
 
@@ -410,7 +419,7 @@ fn apply_package_relocs(
 
 pub use kernel::runtime::KrxAuxSections;
 
-/// Loads a Native (`KrxClass::Native`) or Demand-Paged (`KrxClass::Paged`) binary from flash
+/// Loads a pre-validated Native (`KrxClass::Native`) or Paged (`KrxClass::Paged`) binary from flash
 /// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
 #[inline(never)]
 pub fn load_native_from_storage(
@@ -433,27 +442,11 @@ pub fn load_native_from_storage(
         aux.block_map.is_some(),
         aux.leaf_map.is_some(),
     );
-    #[cfg(not(feature = "krx_paged"))]
-    if profile == KrxProfile::P1TransparentPaged {
-        let _ = h_len;
-        return Err(KrxLaunchError::UnsupportedProfile);
-    }
+    let _ = h_len;
     let is_paged = matches!(
         profile,
         KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
     );
-    if profile.is_structured_paged()
-        && let Some(map) = aux.leaf_map
-        && map.len() > MAX_STRUCTURED_LEAVES * kernel::runtime::LeafEntry::SIZE
-    {
-        super::loader::record_launch_diag(
-            (map.len() / kernel::runtime::LeafEntry::SIZE) as u32,
-            MAX_STRUCTURED_LEAVES as u32,
-            summary.version,
-            super::loader::DIAG_TOO_MANY_LEAVES,
-        );
-        return Err(KrxLaunchError::UnsupportedProfile);
-    }
 
     if payload_len == 0 || (!is_paged && payload_len < (exec.payload_size as usize)) {
         super::loader::record_launch_diag(
@@ -463,20 +456,6 @@ pub fn load_native_from_storage(
             super::loader::DIAG_NONE,
         );
         return Err(KrxLaunchError::TruncatedPackage);
-    }
-    if !is_paged && (exec.payload_size as usize) > max_arena_bytes {
-        super::loader::record_launch_diag(
-            exec.payload_size,
-            max_arena_bytes as u32,
-            summary.version,
-            super::loader::DIAG_NONE,
-        );
-        return Err(KrxLaunchError::PayloadTooLarge);
-    }
-
-    // Hardened check for N0 (NativeFixed): link_base must strictly match load_base!
-    if profile == KrxProfile::N0NativeFixed && preamble.link_base != load_base {
-        return Err(KrxLaunchError::RelocationFailed);
     }
 
     init_native_slot();
@@ -514,7 +493,6 @@ pub fn load_native_from_storage(
                 pay_size,
                 aux.block_map,
             );
-            // Mark block 0 as already resident in slot 0 from initial load
             if win.cache.block_count > 0 {
                 win.cache.access_clock = 1;
                 win.cache.slots[0] = kernel::runtime::paged::CacheSlotMeta {
@@ -538,19 +516,8 @@ pub fn load_native_from_storage(
     // 3. Apply escape-capable delta relocations v2 (Section 6.2)
     apply_package_relocs(buffer_bytes, payload_len, exec, load_delta)?;
 
-    // 4. Configure package GOT base (all kernel ops route via single-entry `api->call`)
+    // 4. Configure package GOT base & code window size
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
-    if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= max_arena_bytes {
-        super::loader::record_launch_diag(
-            exec.got_offset as u32,
-            max_arena_bytes as u32,
-            summary.version,
-            super::loader::DIAG_GOT_INVALID,
-        );
-        return Err(KrxLaunchError::ImportBindingFailed);
-    }
-
-    // 4b. Record profile & code window size for `ProcMem` region queries
     slot.profile = profile;
     let code_limit = max_arena_bytes as u32 - if is_p0 { overlay_size } else { 0 };
     #[cfg(feature = "krx_paged")]

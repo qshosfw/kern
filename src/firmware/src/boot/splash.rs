@@ -185,7 +185,7 @@ pub fn load_and_render_splash(
     if path.is_empty() || !storage.exists(path) {
         return false;
     }
-    let buf = &mut crate::data::arena::scratch_tail_bytes_mut()[..1032];
+    let buf = &mut crate::data::arena::transient_arena_bytes_mut()[6144..7176];
     if let Ok(n) = storage.read_file(path, buf) {
         if n == 1024 {
             canvas.load_raw_vram(&buf[..1024]);

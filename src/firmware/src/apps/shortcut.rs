@@ -445,7 +445,6 @@ pub fn picker_target_at(idx: usize) -> Option<u16> {
 mod tests {
     use super::*;
     use crate::apps::launcher::catalog::{CatalogAction, PackageCatalogEntry};
-    use kernel::runtime::KrxClass;
 
     #[test]
     fn sleep_shortcut_uses_moon_glyph() {
@@ -479,15 +478,10 @@ mod tests {
         let _ = cat.entries.push(PackageCatalogEntry {
             title: SmallStr::from_str("Tasks"),
             path: SmallStr::from_str("/apps/tasks.krx"),
-            app_class: KrxClass::Paged,
             exec_type: KrxExecType::App,
-            lifecycle_flags: 0,
             icon_16_off: 0,
             icon_id: 29,
-            caps: 0,
             is_valid: true,
-            has_config: false,
-            scopes: 0,
             icon_8: [0; 8],
         });
         let mut label = [0u8; 12];

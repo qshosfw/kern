@@ -7,7 +7,7 @@
 
 pub const TRANSIENT_ARENA_WORDS: usize = 2048; // 8.0 KiB aligned arena
 pub const TRANSIENT_ARENA_BYTES: usize = TRANSIENT_ARENA_WORDS * 4;
-pub const TRANSIENT_SCRATCH_OFFSET: usize = 6144;
+pub const TRANSIENT_SCRATCH_OFFSET: usize = 7168;
 
 #[repr(align(8))]
 pub struct AlignedArena(pub [u32; TRANSIENT_ARENA_WORDS]);
@@ -28,6 +28,8 @@ pub fn transient_arena_bytes_mut() -> &'static mut [u8; TRANSIENT_ARENA_BYTES] {
 #[inline(always)]
 pub fn scratch_tail_bytes_mut()
 -> &'static mut [u8; TRANSIENT_ARENA_BYTES - TRANSIENT_SCRATCH_OFFSET] {
+    #[cfg(feature = "krx_native")]
+    crate::runtime::native_runner::invalidate_leaf_cache();
     unsafe {
         &mut *(arena_base_ptr().add(TRANSIENT_SCRATCH_OFFSET)
             as *mut [u8; TRANSIENT_ARENA_BYTES - TRANSIENT_SCRATCH_OFFSET])
@@ -36,5 +38,7 @@ pub fn scratch_tail_bytes_mut()
 
 #[inline(always)]
 pub fn staging_buf() -> &'static mut [u8; 512] {
+    #[cfg(feature = "krx_native")]
+    crate::runtime::native_runner::invalidate_leaf_cache();
     unsafe { &mut *(arena_base_ptr().add(TRANSIENT_SCRATCH_OFFSET) as *mut [u8; 512]) }
 }

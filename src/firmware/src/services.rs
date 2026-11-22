@@ -52,11 +52,8 @@ fn play_tone_file(
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     path: &str,
 ) {
-    let notes: &mut [melody::ToneNote; melody::MAX_MELODY_NOTES] = unsafe {
-        &mut *(crate::data::arena::staging_buf().as_mut_ptr()
-            as *mut [melody::ToneNote; melody::MAX_MELODY_NOTES])
-    };
-    let n = crate::services::melody::load_roger_notes(storage, path, notes);
+    let mut notes = [melody::ToneNote::new(0, 0); melody::MAX_MELODY_NOTES];
+    let n = crate::services::melody::load_roger_notes(storage, path, &mut notes);
     if n > 0 {
         if crate::system::is_headless() {
             crate::system::push_headless_notes(&notes[..n]);

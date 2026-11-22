@@ -17,87 +17,106 @@ pub enum LauncherTarget {
     Package(u8),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct LauncherEntry {
-    pub title: &'static str,
-    pub icon_8: &'static [u8; 8],
-    pub icon_16: &'static [u8; 32],
     pub target: LauncherTarget,
+    pub icon_slot: u8,
+}
+
+pub const MAX_LAUNCHER_ENTRIES: usize = 12;
+const MAX_LAUNCHER_CUSTOM_ICONS: usize = 8;
+
+static mut LAUNCHER_ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
+    target: LauncherTarget::About,
+    icon_slot: 0xFF,
+}; MAX_LAUNCHER_ENTRIES];
+
+#[inline(always)]
+fn launcher_icons_16_mut() -> &'static mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS] {
+    const _: () = {
+        assert!(
+            (MAX_LAUNCHER_CUSTOM_ICONS * 32) <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET
+        );
+    };
+    unsafe {
+        &mut *(crate::data::arena::arena_base_ptr()
+            as *mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS])
+    }
+}
+
+#[inline(always)]
+fn catalog_entry(idx: u8) -> Option<&'static catalog::PackageCatalogEntry> {
+    let cat: &'static catalog::PackageCatalog =
+        unsafe { &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG) };
+    cat.entries.get(idx as usize)
+}
+
+impl LauncherEntry {
+    pub const fn builtin(target: LauncherTarget) -> Self {
+        Self {
+            target,
+            icon_slot: 0xFF,
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self.target {
+            LauncherTarget::App(id) if id == APP_ID_VFO as u8 => "Radio",
+            LauncherTarget::App(_) => "Settings",
+            LauncherTarget::Shortcut(_) => "Torch",
+            LauncherTarget::About => "About",
+            LauncherTarget::Package(idx) => catalog_entry(idx).map_or("App", |e| e.title.as_str()),
+        }
+    }
+
+    pub fn icon_8(&self) -> &'static [u8; 8] {
+        match self.target {
+            LauncherTarget::App(id) if id == APP_ID_VFO as u8 => gfx::icons::ICON_APP_RADIO,
+            LauncherTarget::App(_) => gfx::icons::ICON_APP_SETTINGS,
+            LauncherTarget::Shortcut(_) => gfx::icons::ICON_APP_TORCH,
+            LauncherTarget::About => gfx::icons::ICON_APP_ABOUT,
+            LauncherTarget::Package(idx) => {
+                catalog_entry(idx).map_or(gfx::icons::ICON_FOLDER, |e| e.resolved_icon_8())
+            }
+        }
+    }
+
+    pub fn icon_16(&self) -> &'static [u8; 32] {
+        if (self.icon_slot as usize) < MAX_LAUNCHER_CUSTOM_ICONS {
+            return &launcher_icons_16_mut()[self.icon_slot as usize];
+        }
+        match self.target {
+            LauncherTarget::App(id) if id == APP_ID_VFO as u8 => gfx::icons::ICON_16_RADIO,
+            LauncherTarget::App(_) => gfx::icons::ICON_16_SETTINGS,
+            LauncherTarget::Shortcut(_) => gfx::icons::ICON_16_FLASHLIGHT,
+            LauncherTarget::About => gfx::icons::ICON_16_INFO,
+            LauncherTarget::Package(idx) => {
+                catalog_entry(idx).map_or(gfx::icons::ICON_16_APPS, |e| e.resolved_icon_16())
+            }
+        }
+    }
 }
 
 impl GridItem for LauncherEntry {
     #[inline(always)]
     fn title(&self) -> &'static str {
-        self.title
+        LauncherEntry::title(self)
     }
     #[inline(always)]
     fn icon(&self) -> &'static [u8; 32] {
-        self.icon_16
-    }
-}
-
-pub const MAX_LAUNCHER_ENTRIES: usize = 12;
-const LAUNCHER_ICON_ARENA_OFFSET: usize = 512;
-const MAX_LAUNCHER_CUSTOM_ICONS: usize = 8;
-
-#[inline(always)]
-fn launcher_entries_mut() -> &'static mut [LauncherEntry; MAX_LAUNCHER_ENTRIES] {
-    const _: () = {
-        assert!(
-            core::mem::size_of::<[LauncherEntry; MAX_LAUNCHER_ENTRIES]>()
-                <= LAUNCHER_ICON_ARENA_OFFSET
-        );
-        assert!(
-            LAUNCHER_ICON_ARENA_OFFSET + (MAX_LAUNCHER_CUSTOM_ICONS * 32)
-                <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET
-        );
-        assert!(
-            core::mem::align_of::<LauncherEntry>()
-                <= core::mem::align_of::<crate::data::arena::AlignedArena>()
-        );
-    };
-    unsafe {
-        &mut *(crate::data::arena::arena_base_ptr() as *mut [LauncherEntry; MAX_LAUNCHER_ENTRIES])
-    }
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(always)]
-fn launcher_icons_16_mut() -> &'static mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS] {
-    unsafe {
-        &mut *(crate::data::arena::arena_base_ptr().add(LAUNCHER_ICON_ARENA_OFFSET)
-            as *mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS])
+        self.icon_16()
     }
 }
 
 static BUILTIN_HEAD: [LauncherEntry; 2] = [
-    LauncherEntry {
-        title: "Radio",
-        icon_8: gfx::icons::ICON_APP_RADIO,
-        icon_16: gfx::icons::ICON_16_RADIO,
-        target: LauncherTarget::App(APP_ID_VFO as u8),
-    },
-    LauncherEntry {
-        title: "Settings",
-        icon_8: gfx::icons::ICON_APP_SETTINGS,
-        icon_16: gfx::icons::ICON_16_SETTINGS,
-        target: LauncherTarget::App(APP_ID_SETTINGS as u8),
-    },
+    LauncherEntry::builtin(LauncherTarget::App(APP_ID_VFO as u8)),
+    LauncherEntry::builtin(LauncherTarget::App(APP_ID_SETTINGS as u8)),
 ];
 
 static BUILTIN_TAIL: [LauncherEntry; 2] = [
-    LauncherEntry {
-        title: "Torch",
-        icon_8: gfx::icons::ICON_APP_TORCH,
-        icon_16: gfx::icons::ICON_16_FLASHLIGHT,
-        target: LauncherTarget::Shortcut(Shortcut::Flashlight),
-    },
-    LauncherEntry {
-        title: "About",
-        icon_8: gfx::icons::ICON_APP_ABOUT,
-        icon_16: gfx::icons::ICON_16_INFO,
-        target: LauncherTarget::About,
-    },
+    LauncherEntry::builtin(LauncherTarget::Shortcut(Shortcut::Flashlight)),
+    LauncherEntry::builtin(LauncherTarget::About),
 ];
 
 pub fn load_entries(
@@ -112,14 +131,13 @@ pub fn load_entries(
     }
 
     unsafe {
-        let entries = launcher_entries_mut();
+        let entries = &mut *core::ptr::addr_of_mut!(LAUNCHER_ENTRIES);
         entries[..2].copy_from_slice(&BUILTIN_HEAD);
         let mut count = 2usize;
 
         #[cfg(feature = "filesystem")]
         let (icons_16_buf, mut icon_slot) = (launcher_icons_16_mut(), 0usize);
 
-        // 2. Discovered Dynamic Packages from LittleFS /apps/ (no hardcoded stubs!)
         let cat_ref: &'static catalog::PackageCatalog =
             &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
         for (pkg_idx, app) in cat_ref.entries.iter().enumerate() {
@@ -130,7 +148,7 @@ pub fn load_entries(
                 continue;
             }
 
-            let mut loaded_16: Option<&'static [u8; 32]> = None;
+            let mut loaded_slot = 0xFFu8;
             #[cfg(feature = "filesystem")]
             if app.icon_16_off != 0 && icon_slot < MAX_LAUNCHER_CUSTOM_ICONS {
                 if let Some(s) = &mut _storage {
@@ -138,18 +156,15 @@ pub fn load_entries(
                     if s.read_file_at(app.path.as_str(), app.icon_16_off as usize, dst)
                         .is_ok()
                     {
-                        loaded_16 = Some(&*dst);
+                        loaded_slot = icon_slot as u8;
                         icon_slot += 1;
                     }
                 }
             }
 
-            let (icon_8, icon_16) = cat_ref.resolved_icons(app, loaded_16);
             let entry = LauncherEntry {
-                title: app.title.as_str(),
-                icon_8,
-                icon_16,
                 target: LauncherTarget::Package(pkg_idx as u8),
+                icon_slot: loaded_slot,
             };
             if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/vfo.krx") {
                 entries[0] = entry;
@@ -161,7 +176,6 @@ pub fn load_entries(
             }
         }
 
-        // 3. Built-In Utilities & Information
         entries[count..count + 2].copy_from_slice(&BUILTIN_TAIL);
         count += 2;
 
@@ -244,19 +258,22 @@ impl LauncherApp {
 
     #[inline(never)]
     fn execute_target(&mut self, ctx: &mut SysContext, target: LauncherTarget) -> bool {
-        self.is_launching = true;
-        self.model.is_pressed = true;
-
-        let success = match target {
+        match target {
             LauncherTarget::App(app_id) => {
+                self.is_launching = true;
+                self.model.is_pressed = true;
                 ctx.post_event(Shortcut::LaunchApp(app_id).into());
                 true
             }
             LauncherTarget::Shortcut(sc) => {
+                self.is_launching = false;
+                self.model.is_pressed = false;
                 ctx.post_event(sc.into());
                 true
             }
             LauncherTarget::About => {
+                self.is_launching = false;
+                self.model.is_pressed = false;
                 ctx.show_popup(0, "About KERN", crate::build_info::ABOUT_TEXT);
                 true
             }
@@ -264,26 +281,33 @@ impl LauncherApp {
                 #[cfg(feature = "filesystem")]
                 {
                     if let Some(pkg) = catalog::get_catalog().entries.get(_pkg_idx as usize) {
-                        let path = pkg.path.as_str();
+                        let mut path_copy = [0u8; 24];
+                        let pb = pkg.path.as_str().as_bytes();
+                        let plen = pb.len().min(24);
+                        path_copy[..plen].copy_from_slice(&pb[..plen]);
+                        let path = unsafe { core::str::from_utf8_unchecked(&path_copy[..plen]) };
                         let ok = crate::orchestrator::launch_krx_shortcut(ctx, path);
+                        self.is_launching = ok;
+                        self.model.is_pressed = ok;
                         if !ok {
-                            reload_launcher(ctx.storage);
+                            let entries = load_entries(Some(ctx.storage));
+                            self.set_entries(entries);
                         }
                         ok
                     } else {
+                        self.is_launching = false;
+                        self.model.is_pressed = false;
                         false
                     }
                 }
                 #[cfg(not(feature = "filesystem"))]
-                false
+                {
+                    self.is_launching = false;
+                    self.model.is_pressed = false;
+                    false
+                }
             }
-        };
-
-        if !success {
-            self.is_launching = false;
-            self.model.is_pressed = false;
         }
-        success
     }
 
     fn handle_list_nav(&mut self, event: &Event, animations_enabled: bool) -> bool {
@@ -398,7 +422,7 @@ impl LauncherApp {
             }
 
             // 8x8 icon
-            gfx::icons::draw_icon_8(canvas, cur_x, row_top + 2, item.icon_8, fg_color);
+            gfx::icons::draw_icon_8(canvas, cur_x, row_top + 2, item.icon_8(), fg_color);
             cur_x += 14;
 
             // Title in MuMatrix
@@ -407,7 +431,7 @@ impl LauncherApp {
                     canvas,
                     cur_x,
                     row_top + 9,
-                    item.title,
+                    item.title(),
                     &gfx::fonts::mumatrix_regular::FONT,
                     fg_color,
                 );
@@ -581,13 +605,22 @@ mod tests {
 
     #[test]
     fn launcher_entries_and_targets_are_compact() {
-        assert!(core::mem::size_of::<LauncherTarget>() <= 8);
+        assert!(core::mem::size_of::<LauncherTarget>() <= 4);
+        assert!(core::mem::size_of::<LauncherEntry>() <= 4);
         catalog::get_catalog().entries.clear();
         let entries = load_entries(None);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].title(), "Radio");
         assert_eq!(entries[1].title(), "Settings");
         assert_eq!(entries[1].target, LauncherTarget::App(APP_ID_SETTINGS as u8));
+
+        // Overwriting TRANSIENT_ARENA[0..7168) (e.g. during an app launch or error dialog)
+        // must never corrupt LauncherEntry items or cause invalid pointer dereferences.
+        crate::data::arena::transient_arena_bytes_mut()[..1024].fill(0xAA);
+        assert_eq!(entries[0].title(), "Radio");
+        assert_eq!(entries[1].title(), "Settings");
+        assert_eq!(entries[2].title(), "Torch");
+        assert_eq!(entries[3].title(), "About");
     }
 
     #[test]
@@ -595,14 +628,9 @@ mod tests {
         let cat = catalog::get_catalog();
         cat.entries.clear();
         let _ = cat.entries.push(catalog::PackageCatalogEntry {
-            app_class: kernel::runtime::KrxClass::Native,
             exec_type: kernel::runtime::KrxExecType::App,
-            lifecycle_flags: 0,
             is_valid: true,
-            has_config: false,
-            scopes: 0,
             icon_id: ::abi::icon::APP_SETTINGS as u16,
-            caps: 0,
             icon_16_off: 0,
             icon_8: *gfx::icons::ICON_APP_SETTINGS,
             title: catalog::SmallStr::from_str("Settings"),
@@ -618,14 +646,9 @@ mod tests {
 
         // Adding /apps/vfo.krx replaces slot 0 (Radio) in-place too
         let _ = cat.entries.push(catalog::PackageCatalogEntry {
-            app_class: kernel::runtime::KrxClass::Native,
             exec_type: kernel::runtime::KrxExecType::App,
-            lifecycle_flags: 0,
             is_valid: true,
-            has_config: false,
-            scopes: 0,
             icon_id: ::abi::icon::APP_RADIO as u16,
-            caps: 0,
             icon_16_off: 0,
             icon_8: *gfx::icons::ICON_APP_RADIO,
             title: catalog::SmallStr::from_str("Radio"),

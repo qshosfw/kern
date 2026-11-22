@@ -273,10 +273,20 @@ impl<const N: usize> ProcessTable<N> {
         caps: CapabilitySet,
         allow_recycle: bool,
     ) -> Result<Pid, ()> {
-        let mut target_idx = self
-            .slots
-            .iter()
-            .position(|s| s.state == ProcState::Dormant || s.state == ProcState::Dead);
+        let mut target_idx = if allow_recycle && app_id < 0xF0 {
+            self.slots.iter().position(|s| {
+                s.state != ProcState::Dormant && s.state != ProcState::Dead && s.app_id == app_id
+            })
+        } else {
+            None
+        };
+
+        if target_idx.is_none() {
+            target_idx = self
+                .slots
+                .iter()
+                .position(|s| s.state == ProcState::Dormant || s.state == ProcState::Dead);
+        }
 
         if target_idx.is_none() && allow_recycle {
             let mut min_ticks = u32::MAX;

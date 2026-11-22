@@ -23,8 +23,8 @@ fn read_kt_file(
     if path.is_empty() {
         return 0;
     }
-    let raw_buf = &mut crate::data::arena::staging_buf()[128..268];
-    let Ok(n) = storage.read_file(path, raw_buf) else {
+    let mut raw_buf = [0u8; 140];
+    let Ok(n) = storage.read_file(path, &mut raw_buf) else {
         return 0;
     };
     parse_kt_bytes(&raw_buf[..n], allow_krgr, out)
