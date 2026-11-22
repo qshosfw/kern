@@ -29,6 +29,7 @@ pub struct ActiveTransfer {
     pub total_size: u32,
     pub current_len: u32,
     pub buf_offset: u32,
+    pub last_activity_ms: u32,
     pub path: [u8; 32],
 }
 
@@ -44,6 +45,7 @@ impl ActiveTransfer {
             total_size: 0,
             current_len: 0,
             buf_offset: 0,
+            last_activity_ms: 0,
             path: [0u8; 32],
         }
     }
@@ -813,6 +815,7 @@ fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     t.transfer_id = tid;
     t.chunk_size = chunk_size;
     t.total_size = total_size;
+    t.last_activity_ms = c.now;
     t.path[..path_bytes.len()].copy_from_slice(path_bytes);
     t.path_len = path_bytes.len() as u8;
 
@@ -829,6 +832,7 @@ fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let length = c.rd_u16()?;
     let data = c.inp;
     let transfer = active_transfer_mut(tid)?;
+    transfer.last_activity_ms = c.now;
 
     c.wr_u16(tid);
     if transfer.mode == TRANSFER_MODE_WRITE {
@@ -879,6 +883,7 @@ fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let tid = c.rd_u16()?;
     let expected_crc = c.rd_u32()?;
     let transfer = active_transfer_mut(tid)?;
+    transfer.last_activity_ms = c.now;
 
     transfer.active = false;
     let mut actual_crc = 0u32;
@@ -964,6 +969,9 @@ fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     let path = trim_trailing_slash(c.rd_path()?);
 
     let t = transfer_mut();
+    if t.active && c.now.wrapping_sub(t.last_activity_ms) >= 5_000 {
+        t.active = false;
+    }
     if t.active && t.mode == TRANSFER_MODE_WRITE {
         return Err(WireStatus::Busy);
     }
