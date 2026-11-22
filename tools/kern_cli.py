@@ -5,6 +5,7 @@ Cross-platform unified developer CLI for Kern (`./kern` on Linux/macOS, `kern.cm
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import platform
@@ -32,13 +33,14 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ("info", "Display target MCU, device, and active feature gates"),
             ("flash", "Build and flash firmware to radio via bootloader"),
             ("clean", "Clean target build directory and firmware outputs"),
+            ("distclean", "Deep clean target/, package build caches & dock/build"),
         ],
     ),
     (
         "Quality & Analysis",
         [
             ("test", "Run native host unit tests across the workspace"),
-            ("fmt", "Format all Rust code in the workspace"),
+            ("fmt", "Format all Rust code in the workspace (alias: format)"),
             ("lint", "Run static architectural linter (tools/archlint.py)"),
             ("bloat", "Run ELF symbol, section, and rodata bloat analyzer"),
             ("disasm", "Disassemble compiled Cortex-M0+ release firmware"),
@@ -48,18 +50,20 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         "Device & Radio Tools",
         [
             ("dock", "Launch graphical hardware companion (live LCD, keypad, mount)"),
-            ("wire", "RigWire serial host tool and file provisioning client"),
+            ("wire", "RigWire serial host tool & console (alias: monitor)"),
+            ("provision", "Provision .krx/.mod package bundles over RigWire"),
             ("mount", "Mount radio KernFS over RigWire via cross-platform WebDAV"),
-            ("ports", "List connected USB & serial radio ports (--json supported)"),
+            ("ports", "List connected USB & serial radio ports (alias: devices)"),
             ("emu", "Launch QEMU hardware emulator with interactive Web UI"),
         ],
     ),
     (
-        "Packages, Formats & Diagnostics",
+        "Packages, Assets & Diagnostics",
         [
             ("pkg", "Build or list KRX packages under packages/ (--list, --help)"),
             ("abi", "Regenerate or verify sdk/c/krx_ops.h from src/abi"),
             ("kfw", "Pack, inspect, verify, sign, or extract .kfw containers"),
+            ("media", "Compile & inspect .icn / .fnt / .lng binary asset packs"),
             ("doctor", "Check cross-platform toolchain, Python, Dock & USB health"),
         ],
     ),
@@ -101,6 +105,7 @@ def _print_help() -> int:
     for flag, desc in (
         ("-h, --help", "Show this help message (or `<cmd> --help` for subcommand help)"),
         ("-V, --version", "Show CLI version"),
+        ("--no-color", "Disable ANSI colors (also respects NO_COLOR=1)"),
         ("--target, -t", "Override device target (UV-K1, UV-K5v3, UV-K10Pro)"),
         ("--preset", "Build preset ('full', 'lean', 'security')"),
         ("--port, -p", "Serial device port (e.g. /dev/ttyACM0, COM3, /dev/cu.usbmodem*)"),
@@ -249,6 +254,9 @@ def _run_doctor(args: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if "--no-color" in args:
+        os.environ["NO_COLOR"] = "1"
+        args = [a for a in args if a != "--no-color"]
     if not args:
         return _run_py("builder.py", [])
 
@@ -276,13 +284,17 @@ def main(argv: list[str] | None = None) -> int:
         return _run_py("bloat.py", rest)
     if cmd == "lint":
         return _run_py("archlint.py", rest)
-    if cmd == "wire":
+    if cmd in ("wire", "monitor"):
         return _run_py("rigwire.py", rest)
+    if cmd == "provision":
+        return _run_py("provision.py", rest)
+    if cmd == "media":
+        return _run_py("pack_media.py", rest)
     if cmd == "kfw":
         return _run_py("kfw.py", rest)
     if cmd == "mount":
         return _run_py("kernfs_mount.py", rest)
-    if cmd == "ports":
+    if cmd in ("ports", "devices"):
         return _run_ports(rest)
     if cmd == "doctor":
         return _run_doctor(rest)
@@ -304,25 +316,35 @@ def main(argv: list[str] | None = None) -> int:
             "-p", "abi", "--features", "describe", "--bin", "abigen", "--",
             str(REPO_ROOT / "sdk" / "c" / "krx_ops.h"), *rest,
         ])
-    if cmd == "fmt":
+    if cmd in ("fmt", "format"):
         return _run_exec(["cargo", "fmt", "--all", *rest])
     if cmd == "disasm":
         return _run_exec(["cargo", "objdump", "--release", "-p", "firmware", "--", "-d", "--no-show-raw-insn", *rest])
-    if cmd == "clean":
+    if cmd in ("clean", "distclean"):
         rc = _run_exec(["cargo", "clean"])
         for fname in ("firmware.bin", "firmware_packed.bin", "kern_firmware.elf"):
             p = REPO_ROOT / "target" / fname
             if p.exists():
                 p.unlink(missing_ok=True)
+        if cmd == "distclean":
+            for d in (REPO_ROOT / "dock" / "build", REPO_ROOT / "dock" / "dist"):
+                if d.is_dir():
+                    shutil.rmtree(d, ignore_errors=True)
+            for bdir in (REPO_ROOT / "packages").rglob("build"):
+                if bdir.is_dir():
+                    shutil.rmtree(bdir, ignore_errors=True)
         if rc == 0:
-            cli_ui.ok("Clean complete.")
+            cli_ui.ok("Deep clean complete." if cmd == "distclean" else "Clean complete.")
         return rc
 
     # Backward-compatible default: forward flags directly to builder.py
     if cmd.startswith("-"):
         return _run_py("builder.py", args)
 
-    cli_ui.err(f"Unknown command '{cmd}'. Run './kern help' to list available commands.")
+    known = [c for _, grp in COMMAND_GROUPS for c, _ in grp] + ["format", "devices", "monitor", "packages", "help", "version"]
+    matches = difflib.get_close_matches(cmd, known, n=2, cutoff=0.6)
+    hint = f" Did you mean: {', '.join(matches)}?" if matches else " Run './kern help' to list commands."
+    cli_ui.err(f"Unknown command '{cmd}'.{hint}")
     return cli_ui.EXIT_USAGE
 
 

@@ -19,7 +19,7 @@ Built from the ground up in Rust for constrained ARM Cortex-M0+ silicon (`128 KB
 - **External Userland Packages (`.krx` / `.mod`):** Core apps (`vfo.krx`, `settings.krx`) and system modules (`calib.mod`, `dfu.mod`, `recovery.mod`, `multiboot.mod`, `panic.mod`, `sysinfo.krx`) run outside MCU ROM from SPI Flash with self-contained `SECTION_ASSETS` icons, capability checks, and fault containment.
 - **Unified Single-Entry Syscall ABI (`kern_call`):** Shared Rust (`sdk/rust` — `kern-sdk`) and C (`sdk/c/krx.h` + `sdk/c/krx_ops.h`) SDKs generated from a single source of truth (`src/abi`).
 - **Power-Loss-Safe Storage (`KernFS`):** Copy-on-write 256-byte page-granular SPI Flash filesystem with CRC32-protected modular config files (`/pref/*.cfg`), power-of-two record geometries, and Ascon-128 hardware-bound calibration (`/sys/calib.dat`).
-- **RigWire Serial & USB-C Protocol:** Fast COBS-framed telemetry, live framebuffer streaming, remote keypad/encoder control, WebDAV mounting, and CRC-verified package provisioning (`tools/provision.py` / `./kern wire`).
+- **RigWire Serial & USB-C Protocol:** Fast COBS-framed telemetry, live framebuffer streaming, remote keypad/encoder control, WebDAV mounting, and CRC-verified package provisioning (`./kern provision` / `./kern wire` / `./kern dock`).
 
 ---
 
@@ -37,7 +37,7 @@ Built from the ground up in Rust for constrained ARM Cortex-M0+ silicon (`128 KB
 
 ```text
 kern/
-├── kern                   # Unified CLI toolchain (build, check, test, size, pkg, abi, wire, flash)
+├── kern / kern.cmd        # Cross-platform CLI (build, check, test, pkg, abi, flash, provision, dock, doctor)
 ├── kern.toml              # Declarative hardware target & feature configuration
 ├── src/                   # Layered Rust microkernel & firmware workspace
 │   ├── abi/               # Single-source-of-truth syscall opcodes, properties, capabilities, C-ABI types
@@ -61,7 +61,9 @@ kern/
 │   ├── sys/               # calib.mod, dfu.mod, recovery.mod, multiboot.mod, panic.mod, sysinfo.krx
 │   ├── apps/              # beacon.krx, bench.krx
 │   └── examples/          # hello_rust, hello_c, leaf (P0), paged (P1) starter templates
-└── tools/                 # RigWire CLI, package builder, provisioner, and bloat/lint analyzers
+├── assets/                # Fonts, 16×16 pixel icon packs, localization catalogs & compiled media
+├── dock/                  # Standalone GTK4 + Libadwaita hardware companion (`./kern dock`)
+└── tools/                 # Cross-platform CLI, RigWire, KernFS mounter, KFW, provisioner & analyzers
 ```
 
 ---
@@ -96,10 +98,10 @@ Kern does not bloat MCU Flash by embedding apps into ROM. Provision core apps an
 
 ```bash
 # Provision core apps (vfo.krx + settings.krx)
-python3 tools/provision.py --port /dev/ttyACM0 --bundle core
+./kern provision --port /dev/ttyACM0 --bundle core
 
 # Provision core apps + system modules (calib, dfu, recovery, panic, sysinfo)
-python3 tools/provision.py --port /dev/ttyACM0 --bundle sys
+./kern provision --port /dev/ttyACM0 --bundle sys
 
 # Or sideload a single package directly via RigWire
 ./kern wire sideload packages/core/settings/settings.krx --force
@@ -107,7 +109,7 @@ python3 tools/provision.py --port /dev/ttyACM0 --bundle sys
 ```
 
 ### Authoring Your Own Package
-Start from any template in [`packages/examples/`](packages/examples/README.md) (`hello_rust`, `hello_c`, `leaf`, or `paged`):
+Start from any template in [`packages/examples/`](packages/README.md) (`hello_rust`, `hello_c`, `leaf`, or `paged`):
 
 ```bash
 ./kern pkg examples/hello_rust

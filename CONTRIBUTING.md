@@ -56,7 +56,7 @@ Always use the `./kern` CLI for common developer operations:
 ./kern size
 
 # 8. Provision core + system packages to a radio over RigWire
-python3 tools/provision.py --port /dev/ttyACM0 --bundle sys
+./kern provision --port /dev/ttyACM0 --bundle sys
 ```
 
 ---
