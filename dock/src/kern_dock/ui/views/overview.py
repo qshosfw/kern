@@ -11,6 +11,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+from ...device.hardware import discover_swd_probes
 from ...device.link import REBOOT_BOOTLOADER, REBOOT_FIRMWARE, REBOOT_RECOVERY
 from ...render.handset.catalog import radio_model
 from ...system.icons import make_radio_image
@@ -75,8 +76,13 @@ class OverviewView:
         qemu_b.add_css_class("pill")
         qemu_b.set_tooltip_text("tcp://127.0.0.1:4446")
         qemu_b.connect("clicked", lambda _b: self.runtime.connect_async("tcp://127.0.0.1:4446"))
+        hw_b = Gtk.Button(label="Hardware &amp; SWD")
+        hw_b.add_css_class("pill")
+        hw_b.set_tooltip_text("SWD probe, USB power &amp; raw serial control (works offline)")
+        hw_b.connect("clicked", lambda _b: self._on_open_tab("hardware"))
         btns.append(demo_b)
         btns.append(qemu_b)
+        btns.append(hw_b)
         off_box.append(btns)
         offline.set_child(Adw.Clamp(maximum_size=420, child=off_box))
         self.stack.add_named(offline, "offline")
@@ -291,8 +297,9 @@ class OverviewView:
             self.usb_list.remove(c)
             c = n
         ports = self.runtime.port_monitor.ports
-        if not ports:
-            empty = Adw.ActionRow(title="No USB radio detected", subtitle="Plug in via USB-C or programming cable")
+        probes = discover_swd_probes()
+        if not ports and not probes:
+            empty = Adw.ActionRow(title="No USB radio or SWD probe detected", subtitle="Plug in via USB-C, programming cable, or SWD probe")
             empty.add_prefix(Gtk.Image(icon_name="network-wired-symbolic"))
             empty.set_sensitive(False)
             self.usb_list.append(empty)
@@ -306,6 +313,16 @@ class OverviewView:
             row.add_prefix(make_radio_image(18) if p.is_quansheng else Gtk.Image(icon_name="network-wired-symbolic"))
             row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             row.connect("activated", lambda _r, po=p: self.runtime.connect_async(po.device, po))
+            self.usb_list.append(row)
+        for pr in probes:
+            row = Adw.ActionRow(
+                title=GLib.markup_escape_text(pr.name),
+                subtitle=GLib.markup_escape_text(f"SWD Probe ({pr.driver}) · {pr.vid}:{pr.pid}"),
+                activatable=True,
+            )
+            row.add_prefix(Gtk.Image(icon_name="preferences-other-symbolic"))
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated", lambda _r: self._on_open_tab("hardware"))
             self.usb_list.append(row)
 
     def refresh(self) -> None:

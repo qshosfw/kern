@@ -26,8 +26,6 @@ all = ["numpy>=1.24", "Pillow>=10.0"]
 kern-dock = "kern_dock.cli:main"
 
 [project.entry-points."kern_dock.plugins"]
-band-presets = "kern_dock.plugins.builtin.band_presets:BandPresetsPlugin"
-telemetry-monitor = "kern_dock.plugins.builtin.telemetry_monitor:TelemetryMonitorPlugin"
 table-inspector = "kern_dock.plugins.builtin.table_inspector:TableInspectorPlugin"
 
 [tool.setuptools]

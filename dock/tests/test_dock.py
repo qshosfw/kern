@@ -399,7 +399,9 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
             try:
                 # Builtin + workspace example plugin discovered and active
                 pids = {p["id"] for p in rt.plugins.summary()}
-                self.assertTrue({"band-presets", "telemetry-monitor", "table-inspector", "connection-notifier"}.issubset(pids))
+                self.assertTrue({"radio-bridges", "table-inspector", "connection-notifier"}.issubset(pids))
+                self.assertNotIn("telemetry-monitor", pids)
+                self.assertNotIn("band-presets", pids)
 
                 # IPC client round trip
                 cli = IpcClient(socket_path=sock)
@@ -576,6 +578,32 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
         self.assertFalse(_pixel_is_set(bits5, 5, 1, 0))
         self.assertTrue(_pixel_is_set(bits5, 5, 4, 0))
         self.assertTrue(_pixel_is_set(bits5, 5, 2, 2))
+
+    def test_hardware_swd_power_and_raw_serial(self) -> None:
+        from kern_dock.device.hardware import (
+            RawSerialSession,
+            _classify_swd_probe,
+            available_hw_tools,
+            discover_swd_probes,
+            discover_usb_power_devices,
+            parse_raw_tx_input,
+        )
+
+        self.assertEqual(_classify_swd_probe("0483", "374b", "STM32 STLink", "STMicroelectronics")[1], "stlink")
+        self.assertEqual(_classify_swd_probe("0d28", "0204", "DAPLink CMSIS-DAP", "ARM")[1], "cmsis-dap")
+        self.assertEqual(_classify_swd_probe("1366", "0101", "J-Link", "SEGGER")[1], "jlink")
+        self.assertIsNone(_classify_swd_probe("36b7", "ffff", "Quansheng UV-K1", "Kern"))
+
+        tools = available_hw_tools()
+        self.assertIn("openocd", tools)
+        self.assertIsInstance(discover_swd_probes(), list)
+        self.assertIsInstance(discover_usb_power_devices(), list)
+
+        self.assertEqual(parse_raw_tx_input("hex: 01 aa ff"), b"\x01\xaa\xff")
+        self.assertEqual(parse_raw_tx_input("AT\\r\\n"), b"AT\r\n")
+
+        sess = RawSerialSession()
+        self.assertFalse(sess.is_open)
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ from ..device.keys import APP_SHORTCUTS
 from ..device.link import REBOOT_BOOTLOADER, REBOOT_FIRMWARE, REBOOT_MODES, REBOOT_RECOVERY
 from ..system.icons import make_radio_image, register_icon_theme_paths
 from .runtime import DockRuntime
-from .views import AppsView, BackupsView, CaptureView, FilesView, FirmwareView, OverviewView, RadioView, SideloadView, TerminalView
+from .views import AppsView, BackupsView, CaptureView, FilesView, FirmwareView, HardwareView, OverviewView, SideloadView, TerminalView
 from .widgets.command_palette import CommandPaletteDialog
 from .widgets.dialogs import show_about_dialog, show_preferences_dialog, show_shortcuts_dialog
 from .widgets.handset_stage import HandsetStage
@@ -103,11 +103,11 @@ class KernDockApp(Adw.Application):
             on_confirm_reboot=self._confirm_reboot,
             on_leave_demo_bl=self._leave_demo_bootloader,
         )
-        self.radio_view = RadioView(
+        self.hardware_view = HardwareView(
+            self.win,
             self.runtime,
-            self.keyboard,
             on_toast=self._toast,
-            on_show_shortcuts=lambda: show_shortcuts_dialog(self.win),
+            on_confirm=self._confirm,
         )
         self.files_view = FilesView(
             self.win,
@@ -161,7 +161,7 @@ class KernDockApp(Adw.Application):
         # --- Register Core Declarative Pages ---
         for spec in (
             PageSpec("overview", "Home", "go-home-symbolic", "Workspace", lambda: self.overview_view.widget, order=10, subtitle="Device status, identity, security & tools"),
-            PageSpec("radio", "Radio", "network-wireless-symbolic", "Workspace", lambda: self.radio_view.widget, order=20, subtitle="VFO A/B, S-meter, modulation & keyboard"),
+            PageSpec("hardware", "Hardware", "preferences-other-symbolic", "Workspace", lambda: self.hardware_view.widget, order=20, subtitle="SWD probe, USB power & raw serial control (works offline)"),
             PageSpec("files", "Files", "folder-symbolic", "Workspace", lambda: self.files_view.widget, order=30, subtitle="KernFS browser, colored hex viewer & WebDAV"),
             PageSpec("firmware", "Flasher", "application-x-firmware-symbolic", "Workspace", lambda: self.firmware_view.widget, order=40, subtitle="Bootloader & .kfw/.bin firmware updater"),
             PageSpec("sideload", "Sideload", "document-send-symbolic", "Workspace", lambda: self.sideload_view.widget, order=43, subtitle="Install apps, inspect manifests & bundles"),

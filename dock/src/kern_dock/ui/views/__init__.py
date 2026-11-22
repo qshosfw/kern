@@ -8,8 +8,8 @@ from .capture import CaptureView
 from .extensions import ExtensionsView
 from .files import FilesView
 from .firmware import FirmwareView
+from .hardware import HardwareView
 from .overview import OverviewView
-from .radio import RadioView
 from .sideload import SideloadView
 from .terminal import TerminalView
 
@@ -20,8 +20,8 @@ __all__ = [
     "ExtensionsView",
     "FilesView",
     "FirmwareView",
+    "HardwareView",
     "OverviewView",
-    "RadioView",
     "SideloadView",
     "TerminalView",
 ]
