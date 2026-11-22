@@ -416,8 +416,6 @@ External packages live under [`packages/`](packages/README.md) and are built fro
 | `apps/bench` | `bench.krx` | `N1` PIC | C-ABI and capability validation benchmark suite |
 | `examples/hello_rust` | `hello_rust.krx` | `N1` PIC (Rust) | Minimal `#![no_std]` Rust `kern-sdk` starter app |
 | `examples/hello_c` | `hello_c.krx` | `N1` PIC (C) | Minimal C `sdk/c/krx.h` starter app |
-| `examples/leaf` | `leaf.krx` | `P0` Paged (C) | Structured 1 KB leaf-chaining starter template |
-| `examples/paged` | `paged.krx` | `P1` Demand-Paged (C) | Transparent demand-paged window cache template |
 
 ### KRX Binary Format &amp; Execution Profiles
 

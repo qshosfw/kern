@@ -51,8 +51,6 @@ BUNDLES = {
     "examples": [
         "examples/hello_rust",
         "examples/hello_c",
-        "examples/leaf",
-        "examples/paged",
     ],
 }
 
@@ -69,8 +67,6 @@ ALIASES = {
     "bench": "apps/bench",
     "hello_rust": "examples/hello_rust",
     "hello_c": "examples/hello_c",
-    "leaf": "examples/leaf",
-    "paged": "examples/paged",
 }
 
 

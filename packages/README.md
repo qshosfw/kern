@@ -23,7 +23,7 @@ Installable applications and system modules built against the [`sdk/`](../sdk/) 
 - `apps/bench/` (`bench.krx`, `N1` Native PIC) — Comprehensive C-ABI and capability validation bench.
 
 ### `packages/examples/` — Contributor Starter Templates
-- [`examples/README.md`](examples/README.md) — `hello_rust` (Rust `N1`), `hello_c` (C `N1`), `leaf` (`P0` leaf chaining), and `paged` (`P1` demand paging).
+- [`examples/README.md`](examples/README.md) — `hello_rust` (Rust `N1`) and `hello_c` (C `N1`).
 
 ---
 
