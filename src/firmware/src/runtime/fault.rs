@@ -140,7 +140,8 @@ pub unsafe extern "C" fn krx_fault_landing() -> ! {
 }
 
 /// ARMv6-M fault-guarded trampoline for invoking a KRX native entry point.
-/// Saves host `r4..r11`, `lr`, and `sp` so any `HardFault` inside guest code unwinds cleanly.
+/// Saves host `r4..r11`, `lr`, and outer `sp` so any `HardFault` inside guest code
+/// (including nested P0 leaf overlays) unwinds cleanly to the outermost host frame.
 #[cfg(all(target_arch = "arm", not(test)))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn invoke_krx_trampoline(
@@ -156,19 +157,27 @@ pub unsafe extern "C" fn invoke_krx_trampoline(
         "mov r6, r10",
         "mov r7, r11",
         "push {{r4-r7}}",
-        "mov r4, sp",
-        "ldr r5, ={host_sp}",
-        "str r4, [r5]",
         "ldr r5, ={in_flight}",
-        "movs r4, #1",
+        "ldrb r4, [r5]",
+        "cmp r4, #0",
+        "bne 2f",
+        "mov r6, sp",
+        "ldr r7, ={host_sp}",
+        "str r6, [r7]",
+        "2:",
+        "adds r4, #1",
         "strb r4, [r5]",
         "ldr r5, ={guest_got}",
         "ldr r4, [r5]",
         "mov r9, r4",
         "blx r3",
         "ldr r5, ={in_flight}",
-        "movs r4, #0",
+        "ldrb r4, [r5]",
+        "cmp r4, #0",
+        "beq 3f",
+        "subs r4, #1",
         "strb r4, [r5]",
+        "3:",
         "pop {{r4-r7}}",
         "mov r8, r4",
         "mov r9, r5",

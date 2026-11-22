@@ -24,34 +24,31 @@ pub struct DynamicAppRecord {
 
 static mut DYNAMIC_APP: Option<DynamicAppRecord> = None;
 
-// Declarative OS Applications Registry (Core Triad)
+// Declarative OS Shell Registry (`Launcher` is the sole resident ROM app;
+// `Radio` (`APP_ID_VFO`) and `Settings` (`APP_ID_SETTINGS`) are external `.krx` packages).
 kernel::define_os_apps! {
     context: crate::services::SysContext<'static, 'static>;
     APP_ID_LAUNCHER => crate::apps::LauncherApp [
         meta: AppMetadata { name: "Home" },
         caps: CapabilitySet::NONE
     ],
-    APP_ID_VFO => crate::apps::VfoApp [
-        meta: AppMetadata { name: "Radio" },
-        caps: CapabilitySet::NONE.with(::abi::Cap::RadioRx).with(::abi::Cap::RadioTx)
-    ],
-    APP_ID_SETTINGS => crate::apps::SettingsApp [
-        meta: AppMetadata { name: "Settings" },
-        caps: CapabilitySet::NONE
-    ],
 }
+
+pub const APP_ID_VFO: usize = 1;
+pub const APP_ID_SETTINGS: usize = 2;
+const RESERVED_APP_SLOTS: usize = 3;
 
 pub struct AppRegistry;
 
 impl AppRegistry {
     #[inline(always)]
     pub const fn count() -> usize {
-        APP_TABLE.len()
+        RESERVED_APP_SLOTS
     }
 
     #[inline(always)]
     pub fn app_count() -> usize {
-        APP_TABLE.len()
+        RESERVED_APP_SLOTS
             + unsafe {
                 if (*core::ptr::addr_of!(DYNAMIC_APP)).is_some() {
                     1
@@ -88,29 +85,32 @@ impl AppRegistry {
     }
 
     pub fn descriptor(app_id: usize) -> Option<AppMetadata> {
-        if let Some(entry) = APP_TABLE.get(app_id) {
-            Some(entry.metadata)
-        } else {
-            unsafe { (*core::ptr::addr_of!(DYNAMIC_APP)).map(|d| d.metadata) }
+        match app_id {
+            APP_ID_LAUNCHER => Some(AppMetadata { name: "Home" }),
+            APP_ID_VFO => Some(AppMetadata { name: "Radio" }),
+            APP_ID_SETTINGS => Some(AppMetadata { name: "Settings" }),
+            _ => unsafe { (*core::ptr::addr_of!(DYNAMIC_APP)).map(|d| d.metadata) },
         }
     }
 
     pub fn required_caps(app_id: usize) -> CapabilitySet {
-        if let Some(entry) = APP_TABLE.get(app_id) {
-            entry.required_capabilities
-        } else {
-            unsafe {
+        match app_id {
+            APP_ID_LAUNCHER | APP_ID_SETTINGS => CapabilitySet::NONE,
+            APP_ID_VFO => CapabilitySet::NONE
+                .with(::abi::Cap::RadioRx)
+                .with(::abi::Cap::RadioTx),
+            _ => unsafe {
                 (*core::ptr::addr_of!(DYNAMIC_APP))
                     .map(|d| d.required_capabilities)
                     .unwrap_or(CapabilitySet::NONE)
-            }
+            },
         }
     }
 
     pub fn register_dynamic(record: DynamicAppRecord) -> usize {
         unsafe {
             *core::ptr::addr_of_mut!(DYNAMIC_APP) = Some(record);
-            APP_TABLE.len()
+            RESERVED_APP_SLOTS
         }
     }
 
@@ -125,15 +125,11 @@ impl AppRegistry {
     pub fn on_start<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
         unsafe {
             let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
-            match app_id {
-                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_start(ctx),
-                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_start(ctx),
-                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_start(ctx),
-                _ if Self::is_dynamic_loaded() => {
-                    #[cfg(feature = "krx_native")]
-                    crate::runtime::native_runner::native_on_start(core::mem::transmute(ctx));
-                }
-                _ => {}
+            if app_id == APP_ID_LAUNCHER {
+                (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_start(ctx);
+            } else if Self::is_dynamic_loaded() {
+                #[cfg(feature = "krx_native")]
+                crate::runtime::native_runner::native_on_start(core::mem::transmute(ctx));
             }
         }
     }
@@ -142,20 +138,18 @@ impl AppRegistry {
     pub fn on_event<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>, event: &Event) -> EventResult {
         unsafe {
             let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
-            match app_id {
-                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_event(ctx, event),
-                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_event(ctx, event),
-                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_event(ctx, event),
-                _ if Self::is_dynamic_loaded() => {
-                    #[cfg(feature = "krx_native")]
-                    return crate::runtime::native_runner::native_on_event(
-                        core::mem::transmute(ctx),
-                        event,
-                    );
-                    #[cfg(not(feature = "krx_native"))]
-                    EventResult::Ignored
-                }
-                _ => EventResult::Ignored,
+            if app_id == APP_ID_LAUNCHER {
+                (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_event(ctx, event)
+            } else if Self::is_dynamic_loaded() {
+                #[cfg(feature = "krx_native")]
+                return crate::runtime::native_runner::native_on_event(
+                    core::mem::transmute(ctx),
+                    event,
+                );
+                #[cfg(not(feature = "krx_native"))]
+                EventResult::Ignored
+            } else {
+                EventResult::Ignored
             }
         }
     }
@@ -168,20 +162,18 @@ impl AppRegistry {
     ) -> EventResult {
         unsafe {
             let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
-            match app_id {
-                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_modal_result(ctx, result),
-                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_modal_result(ctx, result),
-                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_modal_result(ctx, result),
-                _ if Self::is_dynamic_loaded() => {
-                    #[cfg(feature = "krx_native")]
-                    return crate::runtime::native_runner::native_on_modal_result(
-                        core::mem::transmute(ctx),
-                        result,
-                    );
-                    #[cfg(not(feature = "krx_native"))]
-                    EventResult::Ignored
-                }
-                _ => EventResult::Ignored,
+            if app_id == APP_ID_LAUNCHER {
+                (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_modal_result(ctx, result)
+            } else if Self::is_dynamic_loaded() {
+                #[cfg(feature = "krx_native")]
+                return crate::runtime::native_runner::native_on_modal_result(
+                    core::mem::transmute(ctx),
+                    result,
+                );
+                #[cfg(not(feature = "krx_native"))]
+                EventResult::Ignored
+            } else {
+                EventResult::Ignored
             }
         }
     }
@@ -194,35 +186,21 @@ impl AppRegistry {
         sb_cfg: &mut StatusBarConfig<'_>,
     ) {
         unsafe {
-            let st = &*core::ptr::addr_of!(OS_APP_STORAGE);
-            let title = match app_id {
-                APP_ID_LAUNCHER => {
-                    (*st.APP_ID_LAUNCHER.as_ptr()).render(canvas, ctx);
-                    "Home"
+            if app_id == APP_ID_LAUNCHER {
+                let st = &*core::ptr::addr_of!(OS_APP_STORAGE);
+                (*st.APP_ID_LAUNCHER.as_ptr()).render(canvas, ctx);
+                sb_cfg.visible = true;
+                sb_cfg.title = Some("Home");
+            } else {
+                #[cfg(feature = "krx_native")]
+                if Self::is_dynamic_loaded() {
+                    crate::runtime::native_runner::native_on_render(
+                        canvas,
+                        core::mem::transmute(ctx),
+                        sb_cfg,
+                    );
                 }
-                APP_ID_VFO => {
-                    (*st.APP_ID_VFO.as_ptr()).render(canvas, ctx);
-                    "Radio"
-                }
-                APP_ID_SETTINGS => {
-                    let app = &*st.APP_ID_SETTINGS.as_ptr();
-                    app.render(canvas, ctx);
-                    app.title
-                }
-                _ => {
-                    #[cfg(feature = "krx_native")]
-                    if Self::is_dynamic_loaded() {
-                        crate::runtime::native_runner::native_on_render(
-                            canvas,
-                            core::mem::transmute(ctx),
-                            sb_cfg,
-                        );
-                    }
-                    return;
-                }
-            };
-            sb_cfg.visible = true;
-            sb_cfg.title = Some(title);
+            }
         }
     }
 
@@ -230,15 +208,11 @@ impl AppRegistry {
     pub fn on_exit<'a>(app_id: usize, ctx: &mut SysContext<'a, '_>) {
         unsafe {
             let st = &mut *core::ptr::addr_of_mut!(OS_APP_STORAGE);
-            match app_id {
-                APP_ID_LAUNCHER => (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_exit(ctx),
-                APP_ID_VFO => (*st.APP_ID_VFO.as_mut_ptr()).on_exit(ctx),
-                APP_ID_SETTINGS => (*st.APP_ID_SETTINGS.as_mut_ptr()).on_exit(ctx),
-                _ if Self::is_dynamic_loaded() => {
-                    #[cfg(feature = "krx_native")]
-                    crate::runtime::native_runner::native_on_exit(core::mem::transmute(ctx));
-                }
-                _ => {}
+            if app_id == APP_ID_LAUNCHER {
+                (*st.APP_ID_LAUNCHER.as_mut_ptr()).on_exit(ctx);
+            } else if Self::is_dynamic_loaded() {
+                #[cfg(feature = "krx_native")]
+                crate::runtime::native_runner::native_on_exit(core::mem::transmute(ctx));
             }
         }
     }

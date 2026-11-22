@@ -1036,14 +1036,10 @@ impl Orchestrator {
                         _ => None,
                     };
                     if let Some(path) = pkg_path {
-                        match crate::runtime::launch_krx_package(ctx, path, 0) {
-                            Ok(_) => return,
-                            Err(kernel::runtime::KrxLaunchError::ReadFailed) => {}
-                            Err(e) => {
-                                crate::runtime::show_launch_error_dialog(ctx, path, e);
-                                return;
-                            }
+                        if let Err(e) = crate::runtime::launch_krx_package(ctx, path, 0) {
+                            crate::runtime::show_launch_error_dialog(ctx, path, e);
                         }
+                        return;
                     }
                 }
                 self.switch_app(ctx, id as usize);

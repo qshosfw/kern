@@ -135,23 +135,21 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
         }
     }
 
-    let mut val_lbuf = [0u8; 32];
-    let val_str = if s.localize_value && !s.value.is_empty() {
-        text::localize(s.value, true, &mut val_lbuf)
-    } else {
-        s.value
-    };
-    let mut title_lbuf = [0u8; 48];
-    let title_str = if s.localize_title {
-        text::localize(s.title, !val_str.is_empty(), &mut title_lbuf)
-    } else {
-        s.title
-    };
-
-    let sw = if val_str.is_empty() {
+    let mut lbuf = [0u8; 48];
+    let sw = if s.value.is_empty() {
         0
     } else {
-        text::str_width(val_str, &TOMTHUMB)
+        let v = if s.localize_value {
+            text::localize(s.value, true, &mut lbuf)
+        } else {
+            s.value
+        };
+        text::str_width(v, &TOMTHUMB)
+    };
+    let title_str = if s.localize_title {
+        text::localize(s.title, sw > 0, &mut lbuf)
+    } else {
+        s.title
     };
     let title_max = if is_toggle || has_chevron {
         right_edge - 14
@@ -195,6 +193,11 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
         };
         icons::draw_icon_8(canvas, right_edge - 10, s.y + icon_dy, bmp, tc);
     } else if sw > 0 {
+        let val_str = if s.localize_value {
+            text::localize(s.value, true, &mut lbuf)
+        } else {
+            s.value
+        };
         let val_right = if is_outline && (arrow_left || arrow_right) {
             if arrow_right {
                 icons::draw_icon_8(canvas, right_edge - 8, s.y + 3, icons::ARROW_RIGHT, tc);
