@@ -329,7 +329,7 @@ pub static mut ACTIVE_MODAL: ModalCompositor = ModalCompositor::new();
 pub const TAG_LOW_BATTERY_POPUP: u8 = 0xFE;
 pub const TAG_SYSTEM_ALERT: u8 = 0xFD;
 
-const MAX_SYSTEM_ALERTS: usize = 2;
+const MAX_SYSTEM_ALERTS: usize = 1;
 const MAX_ALERT_LINE_PX: i16 = 116;
 
 #[derive(Clone)]
@@ -720,23 +720,17 @@ mod tests {
     fn system_alert_queue_dedups_and_preserves_order() {
         clear_system_alerts();
         queue_system_alert("Storage Protected", "First copy");
-        queue_system_alert("Encrypted Storage", "Second alert");
         queue_system_alert("Storage Protected", "Updated first copy");
 
         let a1 = pop_system_alert().unwrap();
         assert_eq!(a1.title.as_str(), "Storage Protected");
         assert_eq!(a1.message.as_str(), "Updated first copy");
-
-        let a2 = pop_system_alert().unwrap();
-        assert_eq!(a2.title.as_str(), "Encrypted Storage");
         assert!(pop_system_alert().is_none());
 
         // Pushing beyond capacity evicts oldest slot cleanly
         queue_system_alert("First", "1");
         queue_system_alert("Second", "2");
-        queue_system_alert("Third", "3");
         assert_eq!(pop_system_alert().unwrap().title.as_str(), "Second");
-        assert_eq!(pop_system_alert().unwrap().title.as_str(), "Third");
         assert!(pop_system_alert().is_none());
     }
 

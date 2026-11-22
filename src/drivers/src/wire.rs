@@ -24,7 +24,7 @@ pub struct WireDriver<S: SerialPort, T: TimeSource> {
     pub session: WireSession,
     pub port: S,
     time: T,
-    rx_stage: [u8; 64],
+    rx_stage: [u8; 16],
     rx_buf: [u8; MAX_WIRE_BUF_LEN],
 }
 
@@ -55,7 +55,7 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
             transport_profile,
             rx_buf: [0; MAX_WIRE_BUF_LEN],
             rx_len: 0,
-            rx_stage: [0; 64],
+            rx_stage: [0; 16],
             rx_stage_pos: 0,
             rx_stage_len: 0,
             in_frame: false,

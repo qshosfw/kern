@@ -1002,25 +1002,28 @@ fn test_paged_execution_with_shadow_stack_and_leafs_bench() {
     assert_eq!(leaf_mgr.total_swaps, 0);
 
     // Configure Leaf 0 (Math/DSP) and Leaf 1 (Protocol Packet Demod)
-    leaf_mgr.leaves[0] = LeafEntry {
-        leaf_id: 0,
-        flags: 0,
-        size: 256,
-        flash_offset: 0x1000,
-        entry_offset: 0x00,
-        ram_scratch_bytes: 0,
-        reserved: [0u8; 4],
-    };
-    leaf_mgr.leaves[1] = LeafEntry {
-        leaf_id: 1,
-        flags: 0,
-        size: 512,
-        flash_offset: 0x1800,
-        entry_offset: 0x04,
-        ram_scratch_bytes: 0,
-        reserved: [0u8; 4],
-    };
-    leaf_mgr.leaf_count = 2;
+    leaf_mgr
+        .register_leaf(LeafEntry {
+            leaf_id: 0,
+            flags: 0,
+            size: 256,
+            flash_offset: 0x1000,
+            entry_offset: 0x00,
+            ram_scratch_bytes: 0,
+            reserved: [0u8; 4],
+        })
+        .unwrap();
+    leaf_mgr
+        .register_leaf(LeafEntry {
+            leaf_id: 1,
+            flags: 0,
+            size: 512,
+            flash_offset: 0x1800,
+            entry_offset: 0x04,
+            ram_scratch_bytes: 0,
+            reserved: [0u8; 4],
+        })
+        .unwrap();
 
     let mut storage_reads = 0u32;
     // Dispatch Leaf 0 -> Cache Miss (loads from storage)

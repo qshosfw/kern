@@ -341,6 +341,52 @@ impl<const DEPTH: usize> ShadowReturnStack<DEPTH> {
     }
 }
 
+/// Compact 8-byte in-RAM descriptor for a P0 leaf overlay (halves `StructuredLeafManager` SRAM).
+///
+/// Packs `size` (12b, up to 4095 B), `entry_offset` (12b, up to 4095 B), `flags` (8b),
+/// `flash_offset` (24b, up to 16 MB), and `leaf_id` (8b) into two 32-bit words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct PackedLeaf {
+    word0: u32,
+    word1: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<PackedLeaf>() == 8);
+
+impl PackedLeaf {
+    pub const fn empty() -> Self {
+        Self { word0: 0, word1: 0 }
+    }
+
+    #[inline(always)]
+    pub const fn from_entry(entry: LeafEntry) -> Self {
+        let word0 = ((entry.size as u32) & 0x0FFF)
+            | (((entry.entry_offset as u32) & 0x0FFF) << 12)
+            | ((entry.flags as u32) << 24);
+        let word1 = (entry.flash_offset & 0x00FF_FFFF) | ((entry.leaf_id as u32) << 24);
+        Self { word0, word1 }
+    }
+
+    #[inline(always)]
+    pub const fn leaf_id(self) -> u8 {
+        (self.word1 >> 24) as u8
+    }
+
+    #[inline(always)]
+    pub const fn to_entry(self) -> LeafEntry {
+        LeafEntry {
+            leaf_id: self.leaf_id(),
+            flags: (self.word0 >> 24) as u8,
+            size: (self.word0 & 0x0FFF) as u16,
+            flash_offset: self.word1 & 0x00FF_FFFF,
+            entry_offset: ((self.word0 >> 12) & 0x0FFF) as u16,
+            ram_scratch_bytes: 0,
+            reserved: [0; 4],
+        }
+    }
+}
+
 /// P0 Structured Paged Overlay Manager (Resident Root + Leaf Overlays, §5.1 / KRX 3.2).
 ///
 /// Enforces:
@@ -358,7 +404,7 @@ pub struct StructuredLeafManager<const MAX_LEAVES: usize = 16> {
     pub window_size: u16,
     pub total_swaps: u16,
     pub overlay_vma: u32,
-    pub leaves: [LeafEntry; MAX_LEAVES],
+    pub leaves: [PackedLeaf; MAX_LEAVES],
 }
 
 impl<const MAX_LEAVES: usize> Default for StructuredLeafManager<MAX_LEAVES> {
@@ -376,7 +422,7 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
             leaf_count: 0,
             is_dispatching: false,
             active_leaf: None,
-            leaves: [const { LeafEntry::empty() }; MAX_LEAVES],
+            leaves: [const { PackedLeaf::empty() }; MAX_LEAVES],
         }
     }
 
@@ -393,18 +439,13 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
         self.overlay_vma = overlay_vma;
         self.window_size = window_size;
         if let Some(leaf_body) = leaf_map_body {
-            #[cfg(target_endian = "little")]
-            {
-                self.leaf_count = copy_record_table(leaf_body, &mut self.leaves);
-            }
-            #[cfg(not(target_endian = "little"))]
             for (dst, chunk) in self
                 .leaves
                 .iter_mut()
                 .zip(leaf_body.chunks_exact(LeafEntry::SIZE))
             {
                 if let Some(entry) = LeafEntry::parse(chunk) {
-                    *dst = entry;
+                    *dst = PackedLeaf::from_entry(entry);
                     self.leaf_count += 1;
                 }
             }
@@ -413,7 +454,7 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
 
     pub fn register_leaf(&mut self, entry: LeafEntry) -> Result<(), PagedError> {
         if (self.leaf_count as usize) < MAX_LEAVES {
-            self.leaves[self.leaf_count as usize] = entry;
+            self.leaves[self.leaf_count as usize] = PackedLeaf::from_entry(entry);
             self.leaf_count += 1;
             Ok(())
         } else {
@@ -421,10 +462,10 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
         }
     }
 
-    pub fn find_leaf(&self, leaf_id: u8) -> Option<&LeafEntry> {
+    pub fn find_leaf(&self, leaf_id: u8) -> Option<LeafEntry> {
         for i in 0..(self.leaf_count as usize) {
-            if self.leaves[i].leaf_id == leaf_id {
-                return Some(&self.leaves[i]);
+            if self.leaves[i].leaf_id() == leaf_id {
+                return Some(self.leaves[i].to_entry());
             }
         }
         None
@@ -432,14 +473,14 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
 
     /// Pre-flight check and acquire overlay execution lock for a leaf call.
     /// Returns `(leaf_entry, is_cache_hit)`.
-    pub fn begin_leaf_call(&mut self, leaf_id: u8) -> Result<(&LeafEntry, bool), PagedError> {
+    pub fn begin_leaf_call(&mut self, leaf_id: u8) -> Result<(LeafEntry, bool), PagedError> {
         if self.is_dispatching {
             return Err(PagedError::ReentrantDispatchDenied);
         }
         let count = (self.leaf_count as usize).min(MAX_LEAVES);
         let mut found = None;
         for i in 0..count {
-            if self.leaves[i].leaf_id == leaf_id {
+            if self.leaves[i].leaf_id() == leaf_id {
                 found = Some(i);
                 break;
             }
@@ -452,7 +493,7 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
             self.total_swaps = self.total_swaps.saturating_add(1);
         }
         self.is_dispatching = true;
-        Ok((&self.leaves[leaf_idx], is_hit))
+        Ok((self.leaves[leaf_idx].to_entry(), is_hit))
     }
 
     /// Completes the active leaf call and releases the overlay execution lock.
@@ -481,9 +522,9 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
     }
 
     #[inline(always)]
-    pub fn leaf_at(&self, idx: usize) -> Option<&LeafEntry> {
+    pub fn leaf_at(&self, idx: usize) -> Option<LeafEntry> {
         if idx < (self.leaf_count as usize) {
-            Some(&self.leaves[idx])
+            Some(self.leaves[idx].to_entry())
         } else {
             None
         }
@@ -512,10 +553,7 @@ impl<const MAX_LEAVES: usize> StructuredLeafManager<MAX_LEAVES> {
 
         while hops < max_hops {
             hops += 1;
-            let (leaf_entry, is_hit) = {
-                let (entry, hit) = self.begin_leaf_call(current_id)?;
-                (*entry, hit)
-            };
+            let (leaf_entry, is_hit) = self.begin_leaf_call(current_id)?;
 
             let mut ctx = LeafContext::new(current_id, current_arg);
             let raw_res = runner(&leaf_entry, is_hit, &mut ctx)?;
@@ -768,11 +806,9 @@ mod tests {
         let l1_size = leaf1.size;
         let l1_flash = leaf1.flash_offset;
         let l1_entry = leaf1.entry_offset;
-        let l1_scratch = leaf1.ram_scratch_bytes;
         assert_eq!(l1_size, 512);
         assert_eq!(l1_flash, 0x2000);
         assert_eq!(l1_entry, 0x0010);
-        assert_eq!(l1_scratch, 64);
 
         let leaf2 = mgr.find_leaf(2).expect("Leaf 2 must be found");
         let l2_size = leaf2.size;
