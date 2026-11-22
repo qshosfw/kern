@@ -249,8 +249,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let r = unsafe { &*req };
             match a0 as u8 {
                 fs_write::FILE | fs_write::APPEND => {
-                    if !r.buf.is_null() {
-                        let src = unsafe { core::slice::from_raw_parts(r.buf, r.len as usize) };
+                    if let Some(src) = unsafe { ptr_slice(r.buf, r.len as usize) } {
                         // Authenticated calibration write + hardware-UID Ascon-128 re-signing
                         if (a0 as u8) == fs_write::FILE && src.len() == 512 {
                             if let Some(raw_path) =

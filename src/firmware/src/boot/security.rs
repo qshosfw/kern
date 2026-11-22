@@ -21,7 +21,7 @@ fn wait_ms_wdt(mut ms: u16) {
 #[inline(never)]
 pub fn draw_locked_screen(lcd: &mut St7565<bsp::LcdBus>, sub_msg: &str) {
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog(canvas, "Locked", "Locked out", sub_msg, false);
+    gfx::widgets::draw_dialog(canvas, "Locked", "Too many tries", sub_msg, false);
     lcd.blit(canvas);
 }
 
@@ -103,7 +103,7 @@ pub fn handle_unlock_failure(
     let pcfg = crate::security::passcode::get_passcode_config(storage);
     let canvas = crate::system_canvas();
     if pcfg.failed_attempts >= pcfg.max_tries {
-        draw_locked_screen(lcd, "Restarting");
+        draw_locked_screen(lcd, "Restarting...");
         flash_error_and_pause(radio);
         kernel::power::PowerControl::reboot();
     }

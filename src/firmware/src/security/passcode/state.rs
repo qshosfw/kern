@@ -58,16 +58,6 @@ impl PasscodeState {
     }
 }
 
-/// FNV-1a 32-bit non-cryptographic hash (matching DeltaFW `Passcode_GetMasterKeyHash`)
-pub fn fnv1a_32(data: &[u8]) -> u32 {
-    let mut hash = 0x811C9DC5u32;
-    for &b in data {
-        hash ^= b as u32;
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    hash
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct PasscodeConfigInfo {
     pub is_set: bool,
@@ -77,13 +67,4 @@ pub struct PasscodeConfigInfo {
     pub digits_only: bool,
     pub max_tries: u8,
     pub failed_attempts: u8,
-}
-
-pub struct SecuritySummary {
-    pub pcfg: PasscodeConfigInfo,
-    pub passcode_hash: Option<u32>,
-    pub dev_key_hash: Option<u32>,
-    pub master_key_hash: Option<u32>,
-    pub swd_open: bool,
-    pub rdp: py32_hal::flash::RdpLevel,
 }

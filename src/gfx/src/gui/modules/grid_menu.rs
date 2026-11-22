@@ -76,111 +76,54 @@ impl GridMenuView {
         }
     }
 
-    fn navigate_left<T: GridItem>(model: &mut GridMenuModel<T>) {
-        let len = model.items.len();
-        if len == 0 {
-            return;
-        }
-        if model.selected_idx > 0 {
-            model.selected_idx -= 1;
-        } else {
-            model.selected_idx = len - 1;
+    fn nav_delta(code: KeyCode, nav_layout: u8) -> Option<i8> {
+        let dir = if nav_layout == 0 { -1 } else { 1 };
+        match code {
+            KeyCode::Up => Some(dir),
+            KeyCode::Down => Some(-dir),
+            KeyCode::Key2 => Some(-3),
+            KeyCode::Key8 => Some(3),
+            KeyCode::Key4 | KeyCode::Key1 => Some(-1),
+            KeyCode::Key6 | KeyCode::Key3 => Some(1),
+            _ => None,
         }
     }
 
-    fn navigate_right<T: GridItem>(model: &mut GridMenuModel<T>) {
-        let len = model.items.len();
+    #[inline(never)]
+    pub fn step_sel(idx: &mut usize, len: usize, delta: i8) {
         if len == 0 {
             return;
         }
-        let next = model.selected_idx + 1;
-        model.selected_idx = if next >= len { 0 } else { next };
-    }
-
-    fn navigate_up<T: GridItem>(model: &mut GridMenuModel<T>) {
-        let len = model.items.len();
-        if len == 0 {
-            return;
-        }
-        if model.selected_idx >= 3 {
-            model.selected_idx -= 3;
-        } else {
-            // Wrap to bottom row
-            let target = model.selected_idx + 3;
-            if target < len {
-                model.selected_idx = target;
-            } else {
-                model.selected_idx = len - 1;
+        *idx = match delta {
+            -1 => if *idx > 0 { *idx - 1 } else { len - 1 },
+            1 => if *idx + 1 < len { *idx + 1 } else { 0 },
+            -3 => if *idx >= 3 { *idx - 3 } else { (*idx + 3).min(len - 1) },
+            _ => {
+                if *idx + 3 < len {
+                    *idx + 3
+                } else {
+                    let mut v = *idx;
+                    while v >= 3 {
+                        v -= 3;
+                    }
+                    v
+                }
             }
-        }
-    }
-
-    fn navigate_down<T: GridItem>(model: &mut GridMenuModel<T>) {
-        let len = model.items.len();
-        if len == 0 {
-            return;
-        }
-        if model.selected_idx + 3 < len {
-            model.selected_idx += 3;
-        } else {
-            // Wrap to top row
-            while model.selected_idx >= 3 {
-                model.selected_idx -= 3;
-            }
-        }
+        };
     }
 
     fn handle_nav_key<T: GridItem>(model: &mut GridMenuModel<T>, code: KeyCode) -> bool {
-        match code {
-            KeyCode::Up => {
-                if model.nav_layout == 0 {
-                    Self::navigate_left(model);
-                } else {
-                    Self::navigate_right(model);
-                }
-                true
-            }
-            KeyCode::Down => {
-                if model.nav_layout == 0 {
-                    Self::navigate_right(model);
-                } else {
-                    Self::navigate_left(model);
-                }
-                true
-            }
-            KeyCode::Key2 => {
-                Self::navigate_up(model);
-                true
-            }
-            KeyCode::Key8 => {
-                Self::navigate_down(model);
-                true
-            }
-            KeyCode::Key4 | KeyCode::Key1 => {
-                Self::navigate_left(model);
-                true
-            }
-            KeyCode::Key6 | KeyCode::Key3 => {
-                Self::navigate_right(model);
-                true
-            }
-            _ => false,
+        if let Some(d) = Self::nav_delta(code, model.nav_layout) {
+            Self::step_sel(&mut model.selected_idx, model.items.len(), d);
+            true
+        } else {
+            false
         }
     }
 
     #[inline(always)]
     pub fn is_nav_key(code: KeyCode) -> bool {
-        matches!(
-            code,
-            KeyCode::Up
-                | KeyCode::Down
-                | KeyCode::Key2
-                | KeyCode::Key8
-                | KeyCode::Key4
-                | KeyCode::Key1
-                | KeyCode::Key6
-                | KeyCode::Key3
-        )
+        Self::nav_delta(code, 0).is_some()
     }
 
     pub fn on_event<T: GridItem + 'static>(
@@ -217,13 +160,9 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
             if *delta == 0 {
                 return false;
             }
-            let forward = *delta > 0;
+            let step = if *delta > 0 { 1i8 } else { -1i8 };
             for _ in 0..delta.unsigned_abs().min(8) {
-                if forward {
-                    Self::navigate_right(model);
-                } else {
-                    Self::navigate_left(model);
-                }
+                Self::step_sel(&mut model.selected_idx, model.items.len(), step);
             }
             return true;
         }

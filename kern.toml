@@ -39,8 +39,8 @@ usb_msc_fat = false     # 📁 Virtual FAT16 filesystem (Disabled - prefer CDC p
 
 [features.storage_security]
 filesystem = true       # 📂 KernFS flash filesystem
-secure_fs = true        # 🔒 Ascon-128 encrypted storage
-passcode = true         # 🔑 Security enclave boot PIN lock & KDF stretching
+secure_fs = false       # 🔒 Ascon-128 encrypted storage
+passcode = false        # 🔑 Security enclave boot PIN lock & KDF stretching
 app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
 [features.runtime]

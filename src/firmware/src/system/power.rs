@@ -108,7 +108,7 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         if !is_headless() {
             unsafe {
                 (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                    .show_toast("Remote active", 1800);
+                    .show_toast("Remote active: sleep locked", 1800);
             }
         }
         return;

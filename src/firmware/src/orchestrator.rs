@@ -690,42 +690,46 @@ impl Orchestrator {
                     }
 
                     if tag == TAG_FAULT_CONFIRM {
+                        let is_confirmed = matches!(res, kernel::app::ModalResult::Confirmed(_));
+                        let is_canceled_or_dismissed = matches!(
+                            res,
+                            kernel::app::ModalResult::Canceled(_)
+                                | kernel::app::ModalResult::Dismissed(_)
+                        );
+                        // Always close the fault dialog BEFORE retrying or switching apps so
+                        // Retry never leaves the old dialog open or stacks on a repeat fault.
+                        modal_mut.dismiss();
                         #[cfg(feature = "krx_native")]
-                        if let Some(pkg) = crate::runtime::fault::fault_pkg_path() {
-                            let mut path_buf = core::mem::MaybeUninit::<[u8; 32]>::uninit();
+                        let handled_krx = if let Some(pkg) = crate::runtime::fault::fault_pkg_path()
+                        {
+                            let mut path_buf = [0u8; 32];
                             let n = pkg.len().min(32);
-                            let dst = path_buf.as_mut_ptr().cast::<u8>();
-                            core::ptr::copy_nonoverlapping(pkg.as_ptr(), dst, n);
+                            path_buf[..n].copy_from_slice(&pkg.as_bytes()[..n]);
                             crate::runtime::fault::clear_fault_pkg();
-                            match res {
-                                kernel::app::ModalResult::Confirmed(_) => {
-                                    // SAFETY: copied from valid UTF-8 `fault_pkg_path()`.
-                                    let path = core::str::from_utf8_unchecked(
-                                        core::slice::from_raw_parts(dst, n),
-                                    );
-                                    if !launch_krx_shortcut_arg(ctx, path, 0) {
-                                        self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
-                                    }
-                                }
-                                _ => {
-                                    self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
-                                }
+                            let retried = is_confirmed
+                                && launch_krx_shortcut_arg(
+                                    ctx,
+                                    core::str::from_utf8_unchecked(&path_buf[..n]),
+                                    0,
+                                );
+                            if !retried {
+                                self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
                             }
-                            return FilterFlow::Stop(true);
-                        }
-                        match res {
-                            kernel::app::ModalResult::Confirmed(_) => {
-                                // User selected Stop -> Safely stop app and return to VFO
+                            true
+                        } else {
+                            false
+                        };
+                        #[cfg(not(feature = "krx_native"))]
+                        let handled_krx = false;
+                        if !handled_krx {
+                            if is_confirmed {
                                 if let Some(pcb) =
                                     proc_table_mut().find_mut_by_app(self.active_app_id)
                                 {
                                     pcb.set_state(ProcState::Stopped);
                                 }
                                 self.switch_app_internal(ctx, APP_ID_VFO, false);
-                            }
-                            kernel::app::ModalResult::Canceled(_)
-                            | kernel::app::ModalResult::Dismissed(_) => {
-                                // User selected Retry -> Reset budget to 1 and restart the app cleanly
+                            } else if is_canceled_or_dismissed {
                                 if let Some(pcb) =
                                     proc_table_mut().find_mut_by_app(self.active_app_id)
                                 {
@@ -739,7 +743,6 @@ impl Orchestrator {
                                 }
                                 crate::AppRegistry::on_start(self.active_app_id, ctx);
                             }
-                            _ => {}
                         }
                     } else if tag == crate::orchestrator::compositor::TAG_SYSTEM_ALERT {
                         // System notifications self-dismiss without dispatching app modal callbacks.

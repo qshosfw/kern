@@ -526,7 +526,7 @@ pub fn show_low_battery_popup() {
         (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_popup(
             TAG_LOW_BATTERY_POPUP,
             "Low Battery",
-            "Charge battery",
+            "Please charge your radio.",
         );
     }
 }

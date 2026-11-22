@@ -93,11 +93,16 @@ impl AsconPermutation {
         self.x[4] = t4;
 
         // 3. Linear Diffusion Layer (p_L: 64-bit right rotations and XORs)
-        self.x[0] ^= self.x[0].rotate_right(19) ^ self.x[0].rotate_right(28);
-        self.x[1] ^= self.x[1].rotate_right(61) ^ self.x[1].rotate_right(39);
-        self.x[2] ^= self.x[2].rotate_right(1) ^ self.x[2].rotate_right(6);
-        self.x[3] ^= self.x[3].rotate_right(10) ^ self.x[3].rotate_right(17);
-        self.x[4] ^= self.x[4].rotate_right(7) ^ self.x[4].rotate_right(41);
+        const ROT: [(u8, u8); 5] = [(19, 28), (61, 39), (1, 6), (10, 17), (7, 41)];
+        #[inline(never)]
+        fn diffuse(v: u64, r0: u8, r1: u8) -> u64 {
+            v ^ v.rotate_right(r0 as u32) ^ v.rotate_right(r1 as u32)
+        }
+        let mut i = 0;
+        while i < 5 {
+            self.x[i] = diffuse(self.x[i], ROT[i].0, ROT[i].1);
+            i += 1;
+        }
     }
 }
 

@@ -190,7 +190,7 @@ impl TextInputModel {
             last_activity_tick: 0,
             ticks: 0,
             exit_press_ticks: 0,
-            hold_ticks: 6,
+            hold_ticks: 24,
             custom_title: String::new(),
             buffer: String::new(),
             locale_keymap: LocaleKeymap::empty(),
@@ -381,28 +381,20 @@ impl TextInputView {
     }
 
     #[inline(never)]
-    fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16, show_grid: bool) {
-        let menu_key = if model.is_k1 { "M" } else { "Menu" };
+    fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16) {
         let exit_label = if model.buffer.is_empty() { "Back" } else { "Del" };
 
-        let mut draw_exit = true;
-        if model.digits_only {
-            widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
-        } else {
-            let xs: [i16; 3] = if show_grid { [2, 44, 86] } else { [1, 28, 60] };
-            let items: [(&str, &str); 3] = [
-                ("*", model.charset.star_hint()),
-                (menu_key, if show_grid || model.is_k1 { "Enter" } else { "OK" }),
-                (if model.is_k1 { "F" } else { "#" }, model.charset.case_hint()),
-            ];
-            for i in 0..3 {
-                widgets::draw_key_badge(canvas, xs[i], by, items[i].0, items[i].1);
-            }
-            draw_exit = !show_grid;
+        if !model.digits_only {
+            widgets::draw_key_badge(canvas, 2, by, "*", model.charset.star_hint());
+            widgets::draw_key_badge(
+                canvas,
+                46,
+                by,
+                if model.is_k1 { "F" } else { "#" },
+                model.charset.case_hint(),
+            );
         }
-        if draw_exit {
-            widgets::draw_key_badge_right(canvas, 126, by, "EXIT", exit_label);
-        }
+        widgets::draw_key_badge_right(canvas, 126, by, "EXIT", exit_label);
     }
 
     #[cfg(feature = "passcode")]
@@ -461,7 +453,7 @@ impl View<TextInputModel> for TextInputView {
         // 2. Mode & Length Indicator Bar (DeltaFW layout below header)
         let header_y = 16i16;
         let is_cycling =
-            model.last_key.is_some() && (model.ticks.wrapping_sub(model.last_activity_tick) < 15);
+            model.last_key.is_some() && (model.ticks.wrapping_sub(model.last_activity_tick) < 24);
         if !model.digits_only {
             text::draw_str(
                 canvas,
@@ -552,12 +544,9 @@ impl View<TextInputModel> for TextInputView {
             Self::draw_t9_grid(canvas, model, is_cycling);
             56
         } else {
-            if !is_passcode {
-                canvas.draw_horizontal_line(0, 52, 128, Color::Fill);
-            }
-            54 + is_passcode as i16
+            55
         };
-        Self::draw_bottom_badges(canvas, model, by, show_grid);
+        Self::draw_bottom_badges(canvas, model, by);
     }
 
     #[inline(never)]
@@ -569,7 +558,7 @@ impl View<TextInputModel> for TextInputView {
                 let threshold = if model.hold_ticks > 0 {
                     model.hold_ticks
                 } else {
-                    6
+                    24
                 };
                 if model.exit_press_ticks >= threshold {
                     cancel_input(model);
@@ -618,11 +607,18 @@ impl View<TextInputModel> for TextInputView {
             let is_held = *state == KeyState::Held;
             let is_released = *state == KeyState::Released;
 
-            // 1. Explicit KeyState::Held fallback (for drivers/simulators sending Held)
+            // 1. Explicit KeyState::Held handling
             if is_held {
                 match code {
                     KeyCode::Exit => {
-                        cancel_input(model);
+                        let threshold = if model.hold_ticks > 0 {
+                            model.hold_ticks
+                        } else {
+                            24
+                        };
+                        if !model.exit_pressed || model.exit_press_ticks >= threshold {
+                            cancel_input(model);
+                        }
                         return true;
                     }
                     KeyCode::Menu => {
@@ -632,7 +628,14 @@ impl View<TextInputModel> for TextInputView {
                     }
                     _ => {
                         if let Some(digit) = code.to_digit() {
-                            confirm_and_push(model, b'0' + digit);
+                            // Never double-type digits in numeric mode; in T9 mode replace
+                            // the pending multi-tap character with the literal digit.
+                            if !model.digits_only && model.charset != Charset::Numbers {
+                                if model.last_key == Some(digit) && !model.buffer.is_empty() {
+                                    pop_utf8_char(&mut model.buffer);
+                                }
+                                confirm_and_push(model, b'0' + digit);
+                            }
                             return true;
                         }
                     }
@@ -674,7 +677,7 @@ impl View<TextInputModel> for TextInputView {
                     }
 
                     let is_same_key = model.last_key == Some(key_num);
-                    let is_recent = (model.ticks.wrapping_sub(model.last_activity_tick)) < 15;
+                    let is_recent = (model.ticks.wrapping_sub(model.last_activity_tick)) < 24;
 
                     let mut glyph = [0u8; 4];
                     if is_same_key && is_recent && !model.buffer.is_empty() {
@@ -900,5 +903,58 @@ mod tests {
         };
         assert!(view.on_event(&mut model, &side2));
         assert!(model.needs_keypad_guide());
+    }
+
+    #[test]
+    fn test_digit_held_does_not_double_type_and_exit_hold_requires_longer_period() {
+        let mut model = TextInputModel::new(8);
+        model.digits_only = true;
+        let mut view = TextInputView;
+
+        // Pressing then holding '5' in numeric mode must insert only a single '5'.
+        assert!(view.on_event(
+            &mut model,
+            &Event::Key {
+                code: KeyCode::Key5,
+                state: KeyState::Pressed,
+            }
+        ));
+        assert!(view.on_event(
+            &mut model,
+            &Event::Key {
+                code: KeyCode::Key5,
+                state: KeyState::Held,
+            }
+        ));
+        assert_eq!(model.buffer.as_str(), "5");
+
+        // Short hold on Exit (10 ticks < 24) must delete '5' on release rather than cancel.
+        assert!(view.on_event(
+            &mut model,
+            &Event::Key {
+                code: KeyCode::Exit,
+                state: KeyState::Pressed,
+            }
+        ));
+        for _ in 0..10 {
+            assert!(view.on_event(&mut model, &Event::Tick));
+        }
+        assert!(view.on_event(
+            &mut model,
+            &Event::Key {
+                code: KeyCode::Exit,
+                state: KeyState::Held,
+            }
+        ));
+        assert!(!model.is_canceled);
+        assert!(view.on_event(
+            &mut model,
+            &Event::Key {
+                code: KeyCode::Exit,
+                state: KeyState::Released,
+            }
+        ));
+        assert!(!model.is_canceled);
+        assert!(model.buffer.is_empty());
     }
 }

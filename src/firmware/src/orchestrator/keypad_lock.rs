@@ -40,11 +40,11 @@ struct HoldSpec {
 
 utils::static_bytes!(
     static HOLD_STRINGS = b"\
-Deep Sleep\0Hold EXIT\0\
-Close App\0Hold EXIT\0\
-Locked\0Hold to unlock\0\
-Lock\0Hold to lock\0\
-Keypad\0Unlocked\0";
+Deep Sleep\0Hold EXIT for sleep\0\
+Close App\0Hold EXIT to close\0\
+Keypad Locked\0Hold to unlock\0\
+Keypad Lock\0Hold to lock\0\
+Keypad\0Keypad Unlocked\0";
 );
 
 static HOLD_SPECS: [HoldSpec; 4] = [
