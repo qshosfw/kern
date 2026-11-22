@@ -29,7 +29,7 @@ impl LineCoding {
     }
 }
 
-pub const CDC_RX_BUF_SIZE: usize = 64;
+pub const CDC_RX_BUF_SIZE: usize = 128;
 
 #[repr(C)]
 pub struct CdcEngine {

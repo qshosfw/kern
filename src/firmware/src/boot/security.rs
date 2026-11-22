@@ -21,7 +21,7 @@ fn wait_ms_wdt(mut ms: u16) {
 #[inline(never)]
 pub fn draw_locked_screen(lcd: &mut St7565<bsp::LcdBus>, sub_msg: &str) {
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog(canvas, "Locked", "Too many tries", sub_msg, false);
+    gfx::widgets::draw_dialog(canvas, "Locked", "Locked out", sub_msg, false);
     lcd.blit(canvas);
 }
 
@@ -51,15 +51,9 @@ pub fn handle_lockout_penalty(
 #[inline(never)]
 pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>) {
     radio.play_beep(crate::services::melody::BeepType::Warning);
-    for i in 0..6u8 {
-        radio.set_status_led(if (i & 1) == 0 {
-            bsp::StatusLed::Red
-        } else {
-            bsp::StatusLed::Off
-        });
-        wait_ms_wdt(100);
-    }
-    wait_ms_wdt(600);
+    radio.set_status_led(bsp::StatusLed::Red);
+    wait_ms_wdt(900);
+    radio.set_status_led(bsp::StatusLed::Off);
 }
 
 #[inline(never)]

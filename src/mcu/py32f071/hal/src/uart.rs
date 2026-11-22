@@ -223,7 +223,7 @@ pub fn init() {
     }
 }
 
-const RX_RING_CAP: usize = 64;
+const RX_RING_CAP: usize = 128;
 const RX_RING_MASK: u8 = (RX_RING_CAP as u8) - 1;
 static mut RX_RING_BUF: [u8; RX_RING_CAP] = [0u8; RX_RING_CAP];
 static RX_RING_HEAD: portable_atomic::AtomicU8 = portable_atomic::AtomicU8::new(0);
