@@ -11,31 +11,64 @@ use kernel::runtime::KrxClass;
 
 pub use kernel::runtime::KrxLaunchError;
 
-static mut DYNAMIC_APP_NAME_BUF: [u8; 32] = [0u8; 32];
+const DYNAMIC_APP_NAME_CAP: usize = 20;
+static mut DYNAMIC_APP_NAME_BUF: [u8; DYNAMIC_APP_NAME_CAP] = [0u8; DYNAMIC_APP_NAME_CAP];
 static mut DYNAMIC_APP_NAME_LEN: u8 = 0;
-/// Packed launch diagnostic detail for the last failure:
-/// - `InsufficientStack` / `InsufficientRam` / `PayloadTooLarge`: `(needed_u16 << 16) | free_u16`
-/// - `ImportBindingFailed`: `(app_abi_u16 << 16) | os_abi_u16`
-static mut LAST_LAUNCH_DETAIL: u32 = 0;
+
+/// Diagnostic detail sub-codes for `LaunchDiag`.
+pub(crate) const DIAG_NONE: u8 = 0;
+pub(crate) const DIAG_ABI_MISMATCH: u8 = 1;
+pub(crate) const DIAG_GOT_INVALID: u8 = 2;
+pub(crate) const DIAG_TOO_MANY_LEAVES: u8 = 3;
+pub(crate) const DIAG_PROFILE_UNSUPPORTED: u8 = 4;
+
+/// Structured diagnostics captured at the exact point a KRX launch check fails.
+#[derive(Clone, Copy)]
+pub(crate) struct LaunchDiag {
+    pub(crate) a: u32,
+    pub(crate) b: u32,
+    pub(crate) app_ver: [u8; 3],
+    pub(crate) code: u8,
+}
+
+impl LaunchDiag {
+    const EMPTY: Self = Self {
+        a: 0,
+        b: 0,
+        app_ver: [0; 3],
+        code: DIAG_NONE,
+    };
+}
+
+static mut LAST_LAUNCH_DIAG: LaunchDiag = LaunchDiag::EMPTY;
 
 #[inline(always)]
-fn record_launch_detail(hi: usize, lo: usize) {
-    let h = hi.min(u16::MAX as usize) as u32;
-    let l = lo.min(u16::MAX as usize) as u32;
+pub(crate) fn clear_launch_diag() {
     unsafe {
-        LAST_LAUNCH_DETAIL = (h << 16) | l;
+        LAST_LAUNCH_DIAG = LaunchDiag::EMPTY;
     }
 }
 
 #[inline(always)]
-fn last_launch_detail() -> (u32, u32) {
-    let raw = unsafe { LAST_LAUNCH_DETAIL };
-    (raw >> 16, raw & 0xFFFF)
+pub(crate) fn record_launch_diag(a: u32, b: u32, app_ver: [u8; 3], code: u8) {
+    unsafe {
+        LAST_LAUNCH_DIAG = LaunchDiag {
+            a,
+            b,
+            app_ver,
+            code,
+        };
+    }
+}
+
+#[inline(always)]
+fn last_launch_diag() -> LaunchDiag {
+    unsafe { LAST_LAUNCH_DIAG }
 }
 
 pub(crate) fn dynamic_app_name() -> &'static str {
     unsafe {
-        let len = (DYNAMIC_APP_NAME_LEN as usize).min(31);
+        let len = (DYNAMIC_APP_NAME_LEN as usize).min(DYNAMIC_APP_NAME_CAP - 1);
         let bytes = core::slice::from_raw_parts(
             core::ptr::addr_of!(DYNAMIC_APP_NAME_BUF).cast::<u8>(),
             len,
@@ -46,7 +79,7 @@ pub(crate) fn dynamic_app_name() -> &'static str {
 
 fn store_dynamic_app_name(name: &str) -> &'static str {
     let bytes = name.as_bytes();
-    let mut len = bytes.len().min(31);
+    let mut len = bytes.len().min(DYNAMIC_APP_NAME_CAP - 1);
     while len > 0 && len < bytes.len() && (bytes[len] & 0xC0) == 0x80 {
         len -= 1;
     }
@@ -82,19 +115,38 @@ fn load_krx_into_slot(
         &mut *(pre_hdr.as_mut_ptr().add(summary_offset)
             as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
     };
+    clear_launch_diag();
     let summary = super::read_krx_summary(storage, path, hdr_buf, summary_slot)?;
     let header_len = summary.preamble.header_len as usize;
+    let app_ver = summary.version;
 
     let Some(exec_class) = summary.preamble.execution_class() else {
+        record_launch_diag(
+            summary.preamble.app_type as u32,
+            0,
+            app_ver,
+            DIAG_PROFILE_UNSUPPORTED,
+        );
         return Err(KrxLaunchError::UnsupportedProfile);
     };
     if !matches!(exec_class, KrxClass::Native | KrxClass::Paged) {
+        record_launch_diag(
+            exec_class as u32,
+            summary.preamble.app_type as u32,
+            app_ver,
+            DIAG_PROFILE_UNSUPPORTED,
+        );
         return Err(KrxLaunchError::UnsupportedProfile);
     }
 
     // Operation numbers are only meaningful for the ABI the package was built against.
     if summary.abi != ::abi::VERSION {
-        record_launch_detail(summary.abi as usize, ::abi::VERSION as usize);
+        record_launch_diag(
+            summary.abi as u32,
+            ::abi::VERSION as u32,
+            app_ver,
+            DIAG_ABI_MISMATCH,
+        );
         return Err(KrxLaunchError::ImportBindingFailed);
     }
 
@@ -119,7 +171,7 @@ fn load_krx_into_slot(
             let min_stack = (exec.min_stack_bytes as usize).min(96);
             let needed = min_stack.saturating_add(32);
             if margin < needed {
-                record_launch_detail(needed, margin);
+                record_launch_diag(needed as u32, margin as u32, app_ver, DIAG_NONE);
                 return Err(KrxLaunchError::InsufficientStack);
             }
         }
@@ -127,11 +179,11 @@ fn load_krx_into_slot(
             .saturating_add(exec.min_heap_bytes as usize)
             .saturating_add(64);
         if !exec.can_execute(avail, 64) {
-            record_launch_detail(needed_ram, avail);
+            record_launch_diag(needed_ram as u32, avail as u32, app_ver, DIAG_NONE);
             return Err(KrxLaunchError::InsufficientRam);
         }
         if !matches!(exec_class, KrxClass::Paged) && (exec.payload_size as usize) > avail {
-            record_launch_detail(exec.payload_size as usize, avail);
+            record_launch_diag(exec.payload_size, avail as u32, app_ver, DIAG_NONE);
             return Err(KrxLaunchError::PayloadTooLarge);
         }
     }
@@ -237,109 +289,215 @@ pub fn try_launch_boot_module(
     Ok(res)
 }
 
+/// Zero-stack, bounded ASCII/UTF-8 message builder into a caller-supplied staging slice.
+struct MsgWriter<'a> {
+    buf: &'a mut [u8],
+    pos: usize,
+}
+
+impl<'a> MsgWriter<'a> {
+    #[inline(always)]
+    fn new(buf: &'a mut [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    #[inline(never)]
+    fn push(&mut self, s: &str) {
+        let src = s.as_bytes();
+        let n = src.len().min(self.buf.len() - self.pos);
+        self.buf[self.pos..self.pos + n].copy_from_slice(&src[..n]);
+        self.pos += n;
+    }
+
+    #[inline(never)]
+    fn push_u32(&mut self, val: u32) {
+        let mut tmp = [0u8; 10];
+        let s = gfx::text::format_u32(val, &mut tmp);
+        self.push(s);
+    }
+
+    #[inline(never)]
+    fn push_hex(&mut self, val: u32) {
+        let mut tmp = [0u8; 8];
+        let mut v = val;
+        let mut idx = tmp.len();
+        loop {
+            idx -= 1;
+            let nib = (v & 0xF) as u8;
+            tmp[idx] = if nib < 10 { b'0' + nib } else { b'A' + nib - 10 };
+            v >>= 4;
+            if v == 0 || idx == 0 {
+                break;
+            }
+        }
+        let s = unsafe { core::str::from_utf8_unchecked(&tmp[idx..]) };
+        self.push(s);
+    }
+
+    #[inline(never)]
+    fn push_ver(&mut self, v: [u8; 3]) {
+        self.push("v");
+        self.push_u32(v[0] as u32);
+        self.push(".");
+        self.push_u32(v[1] as u32);
+        self.push(".");
+        self.push_u32(v[2] as u32);
+    }
+
+    #[inline(always)]
+    fn finish(self) -> &'a str {
+        unsafe { core::str::from_utf8_unchecked(&self.buf[..self.pos]) }
+    }
+}
+
+/// Format a detailed, version- and RAM-aware diagnostic body for a KRX launch error.
+#[inline(never)]
+fn format_launch_error<'a>(
+    err: KrxLaunchError,
+    diag: LaunchDiag,
+    buf: &'a mut [u8],
+) -> &'a str {
+    let mut w = MsgWriter::new(buf);
+    let has_ver = diag.app_ver != [0, 0, 0];
+    match err {
+        KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
+            w.push("Missing capability:\n");
+            w.push(cap);
+            w.push("\nNot available on HW.");
+            w.finish()
+        }
+        KrxLaunchError::ImportBindingFailed => {
+            let os_abi = if diag.b != 0 {
+                diag.b
+            } else {
+                ::abi::VERSION as u32
+            };
+            if diag.code == DIAG_GOT_INVALID {
+                w.push("Bad GOT/import table\nOff 0x");
+                w.push_hex(diag.a);
+                w.push(" / max ");
+                w.push_u32(diag.b);
+                w.push("B\nABI v");
+                w.push_u32(::abi::VERSION as u32);
+                w.push(". Rebuild app.");
+            } else if diag.code == DIAG_ABI_MISMATCH && diag.a < os_abi {
+                w.push("App too old");
+                if has_ver {
+                    w.push(" (");
+                    w.push_ver(diag.app_ver);
+                    w.push(")");
+                }
+                w.push("\nApp ABI v");
+                w.push_u32(diag.a);
+                w.push(" < OS v");
+                w.push_u32(os_abi);
+                w.push("\nFW ");
+                w.push(env!("CARGO_PKG_VERSION"));
+                w.push(". Update app.");
+            } else if diag.code == DIAG_ABI_MISMATCH && diag.a > os_abi {
+                w.push("OS too old");
+                if has_ver {
+                    w.push(" (");
+                    w.push_ver(diag.app_ver);
+                    w.push(")");
+                }
+                w.push("\nApp ABI v");
+                w.push_u32(diag.a);
+                w.push(" > OS v");
+                w.push_u32(os_abi);
+                w.push("\nFW ");
+                w.push(env!("CARGO_PKG_VERSION"));
+                w.push(". Update OS.");
+            } else {
+                w.push("Import bind failed\nOS ");
+                w.push(env!("CARGO_PKG_VERSION"));
+                w.push(" (ABI v");
+                w.push_u32(os_abi);
+                w.push(").\nUpdate app or OS.");
+            }
+            w.finish()
+        }
+        KrxLaunchError::InsufficientStack => {
+            let free = if diag.b != 0 {
+                diag.b
+            } else {
+                kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32
+            };
+            let short = diag.a.saturating_sub(free);
+            w.push("Low stack RAM\nNeed ");
+            w.push_u32(diag.a);
+            w.push("B, free ");
+            w.push_u32(free);
+            w.push("B\n(short ");
+            w.push_u32(short);
+            w.push("B). Retry.");
+            w.finish()
+        }
+        KrxLaunchError::InsufficientRam | KrxLaunchError::PayloadTooLarge => {
+            let over = diag.a.saturating_sub(diag.b);
+            if matches!(err, KrxLaunchError::PayloadTooLarge) {
+                w.push("App too large\nSize ");
+            } else {
+                w.push("Low arena RAM\nNeed ");
+            }
+            w.push_u32(diag.a);
+            w.push("B, max ");
+            w.push_u32(diag.b);
+            w.push("B\n(+");
+            w.push_u32(over);
+            if matches!(err, KrxLaunchError::PayloadTooLarge) {
+                w.push("B). Use P0 paged.");
+            } else {
+                w.push("B). Shrink app.");
+            }
+            w.finish()
+        }
+        KrxLaunchError::UnsupportedProfile => {
+            if diag.code == DIAG_TOO_MANY_LEAVES {
+                w.push("Too many P0 leaves\nApp has ");
+                w.push_u32(diag.a);
+                w.push(", max ");
+                w.push_u32(diag.b);
+                w.push(".\nRebuild <= ");
+                w.push_u32(diag.b);
+                w.push(".");
+            } else {
+                w.push("Unsupported profile\nClass ");
+                w.push_u32(diag.a);
+                w.push(", prof ");
+                w.push_u32(diag.b);
+                w.push(".\nFW ");
+                w.push(env!("CARGO_PKG_VERSION"));
+                w.push(". Update OS.");
+            }
+            w.finish()
+        }
+        KrxLaunchError::TruncatedPackage if diag.b > 0 => {
+            w.push("Truncated package\nRead ");
+            w.push_u32(diag.a);
+            w.push("B < ");
+            w.push_u32(diag.b);
+            w.push("B.\nReinstall via Wire.");
+            w.finish()
+        }
+        KrxLaunchError::InvalidEntryPoint if diag.b > 0 => {
+            w.push("Invalid entry point\nOff 0x");
+            w.push_hex(diag.a);
+            w.push(" >= ");
+            w.push_u32(diag.b);
+            w.push("B.\nRebuild package.");
+            w.finish()
+        }
+        _ => err.describe(),
+    }
+}
+
 /// Display a detailed, actionable error popup for KRX package launch failures.
 #[inline(never)]
 pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
     let fname = crate::apps::launcher::catalog::extract_filename(path);
-
-    let msg = match err {
-        KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
-            let buf = &mut crate::data::arena::staging_buf()[..84];
-            let mut pos = 0usize;
-            for part in [
-                b"Needs capability:\n".as_slice(),
-                cap.as_bytes(),
-                b"\nNot available on HW.",
-            ] {
-                let n = part.len().min(buf.len() - pos);
-                buf[pos..pos + n].copy_from_slice(&part[..n]);
-                pos += n;
-            }
-            unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
-        }
-        KrxLaunchError::ImportBindingFailed => {
-            let buf = &mut crate::data::arena::staging_buf()[..84];
-            let (app_abi, os_abi) = last_launch_detail();
-            let mut app_num = [0u8; 6];
-            let mut os_num = [0u8; 6];
-            let os_s = gfx::text::format_u32(
-                if os_abi != 0 {
-                    os_abi
-                } else {
-                    ::abi::VERSION as u32
-                },
-                &mut os_num,
-            );
-            let mut pos = 0usize;
-            if app_abi != 0 && app_abi != ::abi::VERSION as u32 {
-                let app_s = gfx::text::format_u32(app_abi, &mut app_num);
-                for part in [
-                    b"ABI mismatch\nApp v".as_slice(),
-                    app_s.as_bytes(),
-                    b", OS v",
-                    os_s.as_bytes(),
-                    b"\n(FW ",
-                    env!("CARGO_PKG_VERSION").as_bytes(),
-                    b"). Update app.",
-                ] {
-                    let n = part.len().min(buf.len() - pos);
-                    buf[pos..pos + n].copy_from_slice(&part[..n]);
-                    pos += n;
-                }
-            } else {
-                for part in [
-                    b"Import bind failed.\nOS v".as_slice(),
-                    env!("CARGO_PKG_VERSION").as_bytes(),
-                    b" (ABI v",
-                    os_s.as_bytes(),
-                    b").\nUpdate app or OS.",
-                ] {
-                    let n = part.len().min(buf.len() - pos);
-                    buf[pos..pos + n].copy_from_slice(&part[..n]);
-                    pos += n;
-                }
-            }
-            unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
-        }
-        KrxLaunchError::InsufficientStack
-        | KrxLaunchError::InsufficientRam
-        | KrxLaunchError::PayloadTooLarge => {
-            let buf = &mut crate::data::arena::staging_buf()[..84];
-            let (needed, free) = last_launch_detail();
-            let free = if matches!(err, KrxLaunchError::InsufficientStack) && free == 0 {
-                kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32
-            } else {
-                free
-            };
-            let mut need_buf = [0u8; 8];
-            let mut free_buf = [0u8; 8];
-            let need_s = gfx::text::format_u32(needed, &mut need_buf);
-            let free_s = gfx::text::format_u32(free, &mut free_buf);
-            let (hdr, footer): (&[u8], &[u8]) = match err {
-                KrxLaunchError::InsufficientStack => {
-                    (b"Low stack RAM\nNeed ", b"B.\nClose apps & retry.")
-                }
-                KrxLaunchError::PayloadTooLarge => {
-                    (b"App too large\nNeed ", b"B.\nExceeds 8KB arena.")
-                }
-                _ => (b"Low arena RAM\nNeed ", b"B.\nExceeds 8KB arena."),
-            };
-            let mut pos = 0usize;
-            for part in [
-                hdr,
-                need_s.as_bytes(),
-                b"B, free ",
-                free_s.as_bytes(),
-                footer,
-            ] {
-                let n = part.len().min(buf.len() - pos);
-                buf[pos..pos + n].copy_from_slice(&part[..n]);
-                pos += n;
-            }
-            unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
-        }
-        _ => err.describe(),
-    };
+    let buf = &mut crate::data::arena::staging_buf()[..88];
+    let msg = format_launch_error(err, last_launch_diag(), buf);
 
     ctx.show_confirm(
         crate::apps::settings::dialog::TAG_POPUP_INFO,

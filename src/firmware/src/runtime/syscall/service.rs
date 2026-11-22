@@ -12,14 +12,14 @@ pub use kernel::proc::service_registry::ServiceRegistry;
 
 pub static mut SERVICE_REGISTRY: ServiceRegistry<4> = ServiceRegistry::new();
 pub static mut KERNEL_IPC_CHANNEL: IpcChannel<2> = IpcChannel::new();
-static mut PENDING_LAUNCH_PATH: [u8; 32] = [0u8; 32];
+static mut PENDING_LAUNCH_PATH: [u8; 24] = [0u8; 24];
 static mut PENDING_LAUNCH_LEN: u8 = 0;
 
 /// Consume a deferred `.krx`/`.mod` package path queued by `PROC_CTL_LAUNCH_PKG`.
 pub fn take_pending_launch_path() -> Option<&'static str> {
     unsafe {
         let len = PENDING_LAUNCH_LEN as usize;
-        if len == 0 || len > 31 {
+        if len == 0 || len > 23 {
             return None;
         }
         PENDING_LAUNCH_LEN = 0;

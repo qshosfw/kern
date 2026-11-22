@@ -443,17 +443,34 @@ pub fn load_native_from_storage(
         KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
     );
     if profile.is_structured_paged()
-        && aux
-            .leaf_map
-            .is_some_and(|map| map.len() > MAX_STRUCTURED_LEAVES * kernel::runtime::LeafEntry::SIZE)
+        && let Some(map) = aux.leaf_map
+        && map.len() > MAX_STRUCTURED_LEAVES * kernel::runtime::LeafEntry::SIZE
     {
+        super::loader::record_launch_diag(
+            (map.len() / kernel::runtime::LeafEntry::SIZE) as u32,
+            MAX_STRUCTURED_LEAVES as u32,
+            summary.version,
+            super::loader::DIAG_TOO_MANY_LEAVES,
+        );
         return Err(KrxLaunchError::UnsupportedProfile);
     }
 
     if payload_len == 0 || (!is_paged && payload_len < (exec.payload_size as usize)) {
+        super::loader::record_launch_diag(
+            payload_len as u32,
+            exec.payload_size,
+            summary.version,
+            super::loader::DIAG_NONE,
+        );
         return Err(KrxLaunchError::TruncatedPackage);
     }
     if !is_paged && (exec.payload_size as usize) > max_arena_bytes {
+        super::loader::record_launch_diag(
+            exec.payload_size,
+            max_arena_bytes as u32,
+            summary.version,
+            super::loader::DIAG_NONE,
+        );
         return Err(KrxLaunchError::PayloadTooLarge);
     }
 
@@ -524,6 +541,12 @@ pub fn load_native_from_storage(
     // 4. Configure package GOT base (all kernel ops route via single-entry `api->call`)
     slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
     if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= max_arena_bytes {
+        super::loader::record_launch_diag(
+            exec.got_offset as u32,
+            max_arena_bytes as u32,
+            summary.version,
+            super::loader::DIAG_GOT_INVALID,
+        );
         return Err(KrxLaunchError::ImportBindingFailed);
     }
 
@@ -549,6 +572,12 @@ pub fn load_native_from_storage(
     slot.code_size = code_size as u16;
 
     if (exec.entry_point & !1) >= code_size {
+        super::loader::record_launch_diag(
+            exec.entry_point,
+            code_size,
+            summary.version,
+            super::loader::DIAG_NONE,
+        );
         return Err(KrxLaunchError::InvalidEntryPoint);
     }
     let entry_thumb = (load_base.wrapping_add(exec.entry_point) | 1) as usize;
@@ -558,6 +587,9 @@ pub fn load_native_from_storage(
 
     slot.entry_point = entry_thumb;
     slot.caps = caps;
+    unsafe {
+        LIVE_API_TABLE = KrxApiTable::with_call(caps.raw(), super::syscall::kern_call);
+    }
     slot.is_loaded = true;
 
     // 7. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
@@ -578,6 +610,9 @@ pub fn load_native_from_storage(
 
     Ok(())
 }
+
+/// Active guest API table populated once at package load (avoids per-call stack temporaries).
+static mut LIVE_API_TABLE: KrxApiTable = KrxApiTable::with_call(0, super::syscall::kern_call);
 
 /// Invokes a Native or Paged Thumb-1 entry point with the guest GOT base register (r9) bound.
 /// Validates Thumb alignment, arena memory bounds, and stack margin before branching.
@@ -605,10 +640,8 @@ pub unsafe fn invoke_krx_native(
         return kernel::runtime::fault::KRX_FAULT_SENTINEL;
     }
 
-    let live_api;
     let effective_api = if core::ptr::eq(api_table, &raw const NATIVE_API_TABLE) {
-        live_api = KrxApiTable::with_call(active_native_caps().raw(), super::syscall::kern_call);
-        &raw const live_api
+        &raw const LIVE_API_TABLE
     } else {
         api_table
     };
