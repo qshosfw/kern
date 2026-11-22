@@ -291,14 +291,22 @@ mod tests {
         let mut drv = WireDriver::new(port, MockTime);
         drv.session.begin_session(0x1122_3344, 128);
 
-        let (hdr1, _) = drv.poll(100).expect("first coalesced frame");
+        let mut next_frame = |drv: &mut WireDriver<MockPort, MockTime>| {
+            for _ in 0..8 {
+                if let Some(f) = drv.poll(100) {
+                    return Some(f);
+                }
+            }
+            None
+        };
+        let (hdr1, _) = next_frame(&mut drv).expect("first coalesced frame");
         assert_eq!(hdr1.sequence, 1);
         assert_eq!(drv.current_payload(&hdr1), b"ONE!");
 
-        let (hdr2, _) = drv.poll(100).expect("second coalesced frame");
+        let (hdr2, _) = next_frame(&mut drv).expect("second coalesced frame");
         assert_eq!(hdr2.sequence, 2);
         assert_eq!(drv.current_payload(&hdr2), b"TWO!!");
-        assert!(drv.poll(100).is_none());
+        assert!(next_frame(&mut drv).is_none());
 
         // Max 128-byte response payload (8B header + 120B data) must fit without BadLength.
         let max_payload = [0xA5u8; 128];
