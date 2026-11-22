@@ -13,6 +13,25 @@ pub use kernel::runtime::KrxLaunchError;
 
 static mut DYNAMIC_APP_NAME_BUF: [u8; 32] = [0u8; 32];
 static mut DYNAMIC_APP_NAME_LEN: u8 = 0;
+/// Packed launch diagnostic detail for the last failure:
+/// - `InsufficientStack` / `InsufficientRam` / `PayloadTooLarge`: `(needed_u16 << 16) | free_u16`
+/// - `ImportBindingFailed`: `(app_abi_u16 << 16) | os_abi_u16`
+static mut LAST_LAUNCH_DETAIL: u32 = 0;
+
+#[inline(always)]
+fn record_launch_detail(hi: usize, lo: usize) {
+    let h = hi.min(u16::MAX as usize) as u32;
+    let l = lo.min(u16::MAX as usize) as u32;
+    unsafe {
+        LAST_LAUNCH_DETAIL = (h << 16) | l;
+    }
+}
+
+#[inline(always)]
+fn last_launch_detail() -> (u32, u32) {
+    let raw = unsafe { LAST_LAUNCH_DETAIL };
+    (raw >> 16, raw & 0xFFFF)
+}
 
 pub(crate) fn dynamic_app_name() -> &'static str {
     unsafe {
@@ -75,6 +94,7 @@ fn load_krx_into_slot(
 
     // Operation numbers are only meaningful for the ABI the package was built against.
     if summary.abi != ::abi::VERSION {
+        record_launch_detail(summary.abi as usize, ::abi::VERSION as usize);
         return Err(KrxLaunchError::ImportBindingFailed);
     }
 
@@ -97,12 +117,22 @@ fn load_krx_into_slot(
         if sys_caps.is_some() {
             let margin = kernel::sys::SystemDiagnostics::stack_margin_bytes();
             let min_stack = (exec.min_stack_bytes as usize).min(96);
-            if margin < min_stack.saturating_add(32) {
+            let needed = min_stack.saturating_add(32);
+            if margin < needed {
+                record_launch_detail(needed, margin);
                 return Err(KrxLaunchError::InsufficientStack);
             }
         }
+        let needed_ram = (exec.min_stack_bytes as usize)
+            .saturating_add(exec.min_heap_bytes as usize)
+            .saturating_add(64);
         if !exec.can_execute(avail, 64) {
+            record_launch_detail(needed_ram, avail);
             return Err(KrxLaunchError::InsufficientRam);
+        }
+        if !matches!(exec_class, KrxClass::Paged) && (exec.payload_size as usize) > avail {
+            record_launch_detail(exec.payload_size as usize, avail);
+            return Err(KrxLaunchError::PayloadTooLarge);
         }
     }
 
@@ -229,32 +259,78 @@ pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunch
         }
         KrxLaunchError::ImportBindingFailed => {
             let buf = &mut crate::data::arena::staging_buf()[..84];
-            let mut num_buf = [0u8; 6];
-            let abi_s = gfx::text::format_u32(::abi::VERSION as u32, &mut num_buf);
+            let (app_abi, os_abi) = last_launch_detail();
+            let mut app_num = [0u8; 6];
+            let mut os_num = [0u8; 6];
+            let os_s = gfx::text::format_u32(
+                if os_abi != 0 {
+                    os_abi
+                } else {
+                    ::abi::VERSION as u32
+                },
+                &mut os_num,
+            );
             let mut pos = 0usize;
-            for part in [
-                b"ABI/import mismatch.\nOS v".as_slice(),
-                env!("CARGO_PKG_VERSION").as_bytes(),
-                b" (ABI v",
-                abi_s.as_bytes(),
-                b").\nUpdate app or OS.",
-            ] {
-                let n = part.len().min(buf.len() - pos);
-                buf[pos..pos + n].copy_from_slice(&part[..n]);
-                pos += n;
+            if app_abi != 0 && app_abi != ::abi::VERSION as u32 {
+                let app_s = gfx::text::format_u32(app_abi, &mut app_num);
+                for part in [
+                    b"ABI mismatch\nApp v".as_slice(),
+                    app_s.as_bytes(),
+                    b", OS v",
+                    os_s.as_bytes(),
+                    b"\n(FW ",
+                    env!("CARGO_PKG_VERSION").as_bytes(),
+                    b"). Update app.",
+                ] {
+                    let n = part.len().min(buf.len() - pos);
+                    buf[pos..pos + n].copy_from_slice(&part[..n]);
+                    pos += n;
+                }
+            } else {
+                for part in [
+                    b"Import bind failed.\nOS v".as_slice(),
+                    env!("CARGO_PKG_VERSION").as_bytes(),
+                    b" (ABI v",
+                    os_s.as_bytes(),
+                    b").\nUpdate app or OS.",
+                ] {
+                    let n = part.len().min(buf.len() - pos);
+                    buf[pos..pos + n].copy_from_slice(&part[..n]);
+                    pos += n;
+                }
             }
             unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
         }
-        KrxLaunchError::InsufficientStack => {
+        KrxLaunchError::InsufficientStack
+        | KrxLaunchError::InsufficientRam
+        | KrxLaunchError::PayloadTooLarge => {
             let buf = &mut crate::data::arena::staging_buf()[..84];
-            let mut num_buf = [0u8; 8];
-            let free = kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32;
-            let free_s = gfx::text::format_u32(free, &mut num_buf);
+            let (needed, free) = last_launch_detail();
+            let free = if matches!(err, KrxLaunchError::InsufficientStack) && free == 0 {
+                kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32
+            } else {
+                free
+            };
+            let mut need_buf = [0u8; 8];
+            let mut free_buf = [0u8; 8];
+            let need_s = gfx::text::format_u32(needed, &mut need_buf);
+            let free_s = gfx::text::format_u32(free, &mut free_buf);
+            let (hdr, footer): (&[u8], &[u8]) = match err {
+                KrxLaunchError::InsufficientStack => {
+                    (b"Low stack RAM\nNeed ", b"B.\nClose apps & retry.")
+                }
+                KrxLaunchError::PayloadTooLarge => {
+                    (b"App too large\nNeed ", b"B.\nExceeds 8KB arena.")
+                }
+                _ => (b"Low arena RAM\nNeed ", b"B.\nExceeds 8KB arena."),
+            };
             let mut pos = 0usize;
             for part in [
-                b"Low stack RAM\n(".as_slice(),
+                hdr,
+                need_s.as_bytes(),
+                b"B, free ",
                 free_s.as_bytes(),
-                b"B free).\nRetry from Home.",
+                footer,
             ] {
                 let n = part.len().min(buf.len() - pos);
                 buf[pos..pos + n].copy_from_slice(&part[..n]);
