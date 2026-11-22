@@ -17,7 +17,7 @@ use kern_sdk::{
 
 use schema::{
     ACT_ASSET_JINGLE, ACT_ASSET_LANG, ACT_ASSET_ROGER, ACT_ASSET_SPLASH, ACT_BANDPLANS,
-    ACT_DEV_MODEL, ACT_DEV_OWNER, ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_DFU_MODE, ACT_INSTALLED_APPS,
+    ACT_DEV_MODEL, ACT_DEV_OWNER, ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_INSTALLED_APPS,
     ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SHORTCUTS, ACT_STORAGE, ACT_SUB_BATT_INFO,
     ACT_SUB_BATT_TWEAKS, ACT_SUB_BTN_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO, ACT_SYS_MODULES,
     CAT_COUNT, CH_BATT_K1, Kind, SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START,
@@ -30,8 +30,8 @@ use shared::{
     CMD_BP_RENDER, CMD_BP_TOGGLE_TX, CMD_DEV_MODEL_PICK, CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY,
     CMD_DEV_TEXT_PROMPT, CMD_INFO_BATT, CMD_INFO_SYS, CMD_SC_APPLY_PICK, CMD_SC_LOAD,
     CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER, CMD_SYS_DO_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET,
-    CMD_SYS_TRY_DFU, CMD_SYS_TRY_INFO, LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS,
-    LEAF_APPS_RENDER, LEAF_ASSET_APPLY, LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
+    LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER, LEAF_ASSET_APPLY,
+    LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
     LEAF_INFO_RENDER, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_STORAGE, LEAF_SYS_OPS,
     MODAL_ASSET_PICK, MODAL_CHOICE, MODAL_DELETE_APP, MODAL_MODEL_PICK, MODAL_REBOOT_RADIO,
     MODAL_RESET_SETTINGS, MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL,
@@ -271,21 +271,18 @@ impl SettingsState {
                             self.call_leaf(api, LEAF_APPS_OPS, CMD_APPS_REFRESH, mod_only);
                             self.enter_view(api, View::InstalledApps, ui::scroll_top(self.sh.app_sel));
                         }
-                        ACT_SYS_INFO => {
-                            self.call_leaf(api, LEAF_SYS_OPS, CMD_SYS_TRY_INFO, 0);
-                            if self.sh.result == 0 {
-                                self.sh.info_sel = 0;
-                                self.enter_view(api, View::SysInfo, 0);
-                            }
-                        }
-                        ACT_SUB_BATT_INFO => {
+                        ACT_SYS_INFO | ACT_SUB_BATT_INFO => {
                             self.sh.info_sel = 0;
-                            self.enter_view(api, View::BattInfo, 0);
+                            self.enter_view(
+                                api,
+                                if item.meta == ACT_SYS_INFO { View::SysInfo } else { View::BattInfo },
+                                0,
+                            );
                         }
                         ACT_STORAGE => self.enter_view(api, View::Storage, 0),
-                        ACT_RESET_SETTINGS..=ACT_DFU_MODE => {
-                            const CMDS: [u8; 3] = [CMD_SYS_REQ_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_TRY_DFU];
-                            self.call_leaf(api, LEAF_SYS_OPS, unsafe { *CMDS.get_unchecked((item.meta - ACT_RESET_SETTINGS) as usize) }, 0);
+                        ACT_RESET_SETTINGS | ACT_REBOOT_RADIO => {
+                            let cmd = if item.meta == ACT_RESET_SETTINGS { CMD_SYS_REQ_RESET } else { CMD_SYS_REQ_REBOOT };
+                            self.call_leaf(api, LEAF_SYS_OPS, cmd, 0);
                         }
                         ACT_SUB_SPLASH | ACT_SUB_BTN_TWEAKS | ACT_SUB_BATT_TWEAKS => {
                             const SUBS: [(u8, u8); 3] = [

@@ -70,8 +70,6 @@ pub const CMD_INFO_SYS: u8 = 2;
 pub const CMD_SYS_REQ_RESET: u8 = 1;
 pub const CMD_SYS_REQ_REBOOT: u8 = 2;
 pub const CMD_SYS_DO_RESET: u8 = 3;
-pub const CMD_SYS_TRY_INFO: u8 = 4;
-pub const CMD_SYS_TRY_DFU: u8 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

@@ -21,19 +21,43 @@ fn eq_b(a: &[u8], b: &[u8]) -> bool {
     true
 }
 
+/// Declaratively inspect a KRX header's `SECTION_TYPE_LIFECYCLE` (`0x0009`) to check if `exec_type == Module (5)`.
+fn is_krx_module(api: &KrxApiTable, full: &[u8]) -> bool {
+    let mut raw = MaybeUninit::<[u8; 96]>::uninit();
+    let buf = unsafe { &mut *raw.as_mut_ptr() };
+    let n = api.read_file_at(full, 0, buf);
+    if n < 28 {
+        return false;
+    }
+    let hlen = ((byte_at(buf, 8) as usize) | ((byte_at(buf, 9) as usize) << 8)).min(n);
+    let mut off = 24usize;
+    while off + 4 <= hlen {
+        let sid = (byte_at(buf, off) as u16) | ((byte_at(buf, off + 1) as u16) << 8);
+        let slen = (byte_at(buf, off + 2) as usize) | ((byte_at(buf, off + 3) as usize) << 8);
+        if slen < 4 || off + slen > hlen {
+            break;
+        }
+        if sid == 0x0009 && slen >= 5 {
+            return byte_at(buf, off + 4) == 5; // KrxExecType::Module
+        }
+        off += (slen + 3) & !3;
+    }
+    false
+}
+
 fn refresh(api: &KrxApiTable, st: &mut SharedState, mod_only: bool) {
     st.modules_only = u8::from(mod_only);
     let total = api.list_dir(b"/apps", st.apps_mut()).min(MAX_APPS);
     if mod_only {
+        let mut p_u = MaybeUninit::<[u8; 32]>::uninit();
+        let pbuf = unsafe { &mut *p_u.as_mut_ptr() };
         let mut dst = 0usize;
         let mut i = 0usize;
         while i < total {
             let short = strip_apps_prefix(cstr_slice(unsafe { &st.apps().get_unchecked(i).name }));
-            let n = short.len();
-            let is_mod = (n > 4 && byte_at(short, n - 4) == b'.' && byte_at(short, n - 3) == b'm'
-                && byte_at(short, n - 2) == b'o' && byte_at(short, n - 1) == b'd')
-                || eq_b(short, b"sysinfo.krx");
-            if is_mod {
+            let mut pos = copy_bytes(pbuf, 0, b"/apps/");
+            pos = copy_bytes(pbuf, pos, short);
+            if is_krx_module(api, subslice(pbuf, 0, pos)) {
                 if dst != i {
                     unsafe {
                         let sp = st.apps().as_ptr().add(i) as *const u32;

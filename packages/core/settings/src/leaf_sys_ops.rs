@@ -6,8 +6,8 @@ mod shared;
 
 use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry, prop};
 use shared::{
-    CMD_SYS_DO_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET, CMD_SYS_TRY_DFU, CMD_SYS_TRY_INFO,
-    MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS, SharedState,
+    CMD_SYS_DO_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET, MODAL_REBOOT_RADIO,
+    MODAL_RESET_SETTINGS, SharedState,
 };
 
 fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
@@ -15,28 +15,13 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         return 1;
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
-    let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    st.result = 0;
+    let st = unsafe { &*(ctx.arg as *const SharedState) };
     match st.cmd {
         CMD_SYS_REQ_RESET => {
             api.show_confirm(MODAL_RESET_SETTINGS, b"Reset Settings?", b"Restore defaults?", b"Hold", b"Cancel", 1200);
         }
         CMD_SYS_REQ_REBOOT => {
             api.show_confirm(MODAL_REBOOT_RADIO, b"Restart Radio?", b"Save and restart?", b"Hold", b"Cancel", 800);
-        }
-        CMD_SYS_TRY_INFO => {
-            let mut probe = [0u8; 4];
-            if api.read_file_at(b"/apps/sysinfo.krx", 0, &mut probe) == 4 && api.launch_pkg(b"/apps/sysinfo.krx") {
-                st.result = 1;
-            }
-        }
-        CMD_SYS_TRY_DFU => {
-            let mut probe = [0u8; 4];
-            if api.read_file_at(b"/apps/dfu.mod", 0, &mut probe) == 4 {
-                let _ = api.launch_pkg(b"/apps/dfu.mod");
-            } else {
-                api.show_toast(b"Install dfu.mod", 1200);
-            }
         }
         CMD_SYS_DO_RESET => {
             const DEFS: [(u8, u8); 12] = [
