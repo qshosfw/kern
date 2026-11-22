@@ -122,6 +122,27 @@ impl SystemDiagnostics {
         }
     }
 
+    /// O(1) stack guard-zone canary check: verifies the lowest two words of the stack
+    /// (`_stack_end.._stack_end+8`) still hold `STACK_PAINT_SENTINEL` (`0xDEAD_BEEF`).
+    #[inline]
+    pub fn is_stack_guard_intact() -> bool {
+        #[cfg(target_arch = "arm")]
+        {
+            unsafe extern "C" {
+                static _stack_end: u8;
+            }
+            let base = ((core::ptr::addr_of!(_stack_end) as usize + 3) & !3) as *const u32;
+            unsafe {
+                base.read_volatile() == Self::STACK_PAINT_SENTINEL
+                    && base.add(1).read_volatile() == Self::STACK_PAINT_SENTINEL
+            }
+        }
+        #[cfg(not(target_arch = "arm"))]
+        {
+            true
+        }
+    }
+
     /// Calculate the peak stack bytes used since boot based on painted stack watermarks.
     /// Scans bottom-up from `_stack_end` to the first non-sentinel word.
     pub fn stack_peak_used_bytes() -> usize {

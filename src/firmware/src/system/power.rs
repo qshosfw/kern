@@ -302,6 +302,12 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
 
 #[inline(never)]
 pub(super) fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
+    // Catch silent Cortex-M0+ stack exhaustion before it corrupts `.bss` / `RADIO_STATE`.
+    assert!(
+        kernel::sys::SystemDiagnostics::is_stack_guard_intact(),
+        "stack guard breached"
+    );
+
     unsafe {
         (*core::ptr::addr_of_mut!(POWER_SERVICE)).tick_second();
     }

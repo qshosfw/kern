@@ -163,6 +163,13 @@ pub unsafe extern "C" fn PVD() {
     }
 }
 
+/// USART1 interrupt handler (IRQ 27) — drains RX bytes into the HAL 128 B SPSC ring buffer.
+#[cfg(all(not(test), target_arch = "arm", feature = "uart"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn USART1() {
+    hal::uart::on_usart1_irq();
+}
+
 /// USBD (USB 2.0 Full-Speed Device) interrupt handler (IRQ 31).
 /// Services bus resets, EP0 control transfers (`SET_ADDRESS` within 2 ms), and CDC endpoints
 /// immediately so LCD blits, flash I/O, and BK4829 PA ramps never starve USB enumeration or I/O.

@@ -211,10 +211,47 @@ pub fn init() {
         // CR3: no flow control (default 0)
         usart::USART_CR3.write_volatile(0);
 
-        // CR1: Enable USART, TX, RX (8-bit word, no parity), then sync BRR
-        usart::USART_CR1.write_volatile(usart::CR1_UE | usart::CR1_TE | usart::CR1_RE);
+        // CR1: Enable USART, TX, RX, and RXNE interrupt (8-bit word, no parity), then sync BRR
+        usart::USART_CR1
+            .write_volatile(usart::CR1_UE | usart::CR1_TE | usart::CR1_RE | usart::CR1_RXNEIE);
     }
     resync_clock(rcc::sysclk_hz());
+    #[cfg(target_arch = "arm")]
+    unsafe {
+        pac::nvic_clear_pending(pac::Interrupt::USART1 as u8);
+        pac::nvic_enable(pac::Interrupt::USART1 as u8);
+    }
+}
+
+const RX_RING_CAP: usize = 128;
+const RX_RING_MASK: u8 = (RX_RING_CAP as u8) - 1;
+static mut RX_RING_BUF: [u8; RX_RING_CAP] = [0u8; RX_RING_CAP];
+static RX_RING_HEAD: portable_atomic::AtomicU8 = portable_atomic::AtomicU8::new(0);
+static RX_RING_TAIL: portable_atomic::AtomicU8 = portable_atomic::AtomicU8::new(0);
+
+/// `USART1` (`IRQ 27`) RXNE interrupt handler.
+/// Buffers incoming RigWire/serial bytes in a 128-byte SPSC ring so LCD blits, Flash erases,
+/// and BK4829 ramps never trigger `SR_ORE` byte drops at 115200 baud, while discarding RF-corrupted bytes.
+#[inline(never)]
+pub fn on_usart1_irq() {
+    unsafe {
+        let sr = usart::USART_SR.read_volatile();
+        if (sr & (usart::SR_NE | usart::SR_FE | usart::SR_PE)) != 0 {
+            let _ = usart::USART_DR.read_volatile();
+            return;
+        }
+        if (sr & usart::SR_RXNE) != 0 {
+            let b = usart::USART_DR.read_volatile() as u8;
+            let head = RX_RING_HEAD.load(Ordering::Relaxed);
+            let next = head.wrapping_add(1) & RX_RING_MASK;
+            if next != RX_RING_TAIL.load(Ordering::Acquire) {
+                (*core::ptr::addr_of_mut!(RX_RING_BUF))[head as usize] = b;
+                RX_RING_HEAD.store(next, Ordering::Release);
+            }
+        } else if (sr & usart::SR_ORE) != 0 {
+            let _ = usart::USART_DR.read_volatile();
+        }
+    }
 }
 
 /// Dynamically update USART1 baud rate (e.g. 115200 or 38400)
@@ -320,18 +357,20 @@ pub fn write_line(s: &str) -> Result<(), UartError> {
     Ok(())
 }
 
-/// Clear pending UART error flags (overrun, noise, framing) and flush DR.
+/// Clear pending UART error flags (overrun, noise, framing) and flush DR + RX ring.
 #[inline]
 pub fn clear_errors() {
-    unsafe {
+    cortex_m::interrupt::free(|_| unsafe {
         let _ = usart::USART_SR.read_volatile();
         let _ = usart::USART_DR.read_volatile();
-    }
+        RX_RING_HEAD.store(0, Ordering::Release);
+        RX_RING_TAIL.store(0, Ordering::Release);
+    });
 }
 
-/// Discard RF-corrupted (noise/framing/parity) bytes and check if a valid byte is ready in DR.
+/// Check hardware `USART_SR` directly (discarding RF-corrupted bytes and clearing stale `ORE`).
 #[inline]
-pub fn is_readable() -> bool {
+fn hw_is_readable() -> bool {
     unsafe {
         let sr = usart::USART_SR.read_volatile();
         if (sr & (usart::SR_NE | usart::SR_FE | usart::SR_PE)) != 0 {
@@ -348,26 +387,41 @@ pub fn is_readable() -> bool {
     }
 }
 
+/// Discard RF-corrupted (noise/framing/parity) bytes and check if a valid byte is ready in ring or DR.
+#[inline]
+pub fn is_readable() -> bool {
+    if RX_RING_HEAD.load(Ordering::Acquire) != RX_RING_TAIL.load(Ordering::Relaxed) {
+        return true;
+    }
+    hw_is_readable()
+}
+
 /// Read a single byte (blocking).
 #[inline]
 pub fn read_byte() -> Result<u8, UartError> {
-    unsafe {
-        let mut timeout = 100_000;
-        while usart::USART_SR.read_volatile() & usart::SR_RXNE == 0 {
-            timeout -= 1;
-            if timeout == 0 {
-                return Err(UartError::Timeout);
-            }
+    let mut timeout = 100_000u32;
+    loop {
+        if let Some(b) = try_read_byte() {
+            return Ok(b);
         }
-        mark_activity();
-        Ok(usart::USART_DR.read_volatile() as u8)
+        timeout -= 1;
+        if timeout == 0 {
+            return Err(UartError::Timeout);
+        }
     }
 }
 
 /// Try to read a byte without blocking. Returns `None` if no data available.
 #[inline]
 pub fn try_read_byte() -> Option<u8> {
-    if is_readable() {
+    let tail = RX_RING_TAIL.load(Ordering::Relaxed);
+    if tail != RX_RING_HEAD.load(Ordering::Acquire) {
+        let b = unsafe { (*core::ptr::addr_of!(RX_RING_BUF))[tail as usize] };
+        RX_RING_TAIL.store(tail.wrapping_add(1) & RX_RING_MASK, Ordering::Release);
+        mark_activity();
+        return Some(b);
+    }
+    if hw_is_readable() {
         mark_activity();
         Some(unsafe { usart::USART_DR.read_volatile() as u8 })
     } else {
