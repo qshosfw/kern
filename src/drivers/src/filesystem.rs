@@ -211,18 +211,21 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
                 if !self.session_unlocked {
                     return Err(StorageError::EncryptedNoKey);
                 }
-                let mut raw = [0u8; 512 + SECURE_NONCE_LEN];
-                let raw_len = self.fs.read_file(path, &mut raw).map_err(Self::map_error)?;
-                if raw_len < SECURE_NONCE_LEN {
+                let mut nonce = [0u8; SECURE_NONCE_LEN];
+                if self
+                    .fs
+                    .read_file_at(path, 0, &mut nonce)
+                    .map_err(Self::map_error)?
+                    < SECURE_NONCE_LEN
+                {
                     return Err(StorageError::CorruptedData);
                 }
-                let (nonce_slice, ct) = raw[..raw_len].split_at_mut(SECURE_NONCE_LEN);
-                let mut nonce = [0u8; SECURE_NONCE_LEN];
-                nonce.copy_from_slice(nonce_slice);
-                Ascon128::new(self.enc_key).apply_keystream(&nonce, ct);
-                let copy_len = ct.len().min(buf.len());
-                buf[..copy_len].copy_from_slice(&ct[..copy_len]);
-                return Ok(copy_len);
+                let n = self
+                    .fs
+                    .read_file_at(path, SECURE_NONCE_LEN, buf)
+                    .map_err(Self::map_error)?;
+                Ascon128::new(self.enc_key).apply_keystream(&nonce, &mut buf[..n]);
+                return Ok(n);
             }
             self.fs.read_file(path, buf).map_err(Self::map_error)
         }
