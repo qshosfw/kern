@@ -74,17 +74,68 @@ pub static BUILTIN_CHARSETS: [CharsetSpec; 4] = [
 #[derive(Debug, Clone)]
 pub struct LocaleKeymap {
     pub active: bool,
-    pub label: String<8>,
-    pub keys: [String<16>; 10],
+    label_len: u8,
+    label_buf: [u8; 8],
+    offsets: [u8; 11],
+    buf: [u8; 72],
 }
 
 impl LocaleKeymap {
     pub const fn empty() -> Self {
         Self {
             active: false,
-            label: String::new(),
-            keys: [const { String::new() }; 10],
+            label_len: 0,
+            label_buf: [0; 8],
+            offsets: [0; 11],
+            buf: [0; 72],
         }
+    }
+
+    pub fn set_label(&mut self, s: &str) {
+        let b = s.as_bytes();
+        let mut n = b.len().min(self.label_buf.len());
+        while n > 0 && n < b.len() && (b[n] & 0xC0) == 0x80 {
+            n -= 1;
+        }
+        self.label_buf[..n].copy_from_slice(&b[..n]);
+        self.label_len = n as u8;
+    }
+
+    #[inline(always)]
+    pub fn label_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(&self.label_buf[..self.label_len as usize]) }
+    }
+
+    /// Populate key `key` (`0..10`) in ascending order inside the packed UTF-8 buffer.
+    pub fn set_key(&mut self, key: usize, s: &str) {
+        if key >= 10 {
+            return;
+        }
+        let used = self.offsets[key] as usize;
+        let b = s.as_bytes();
+        let avail = self.buf.len().saturating_sub(used);
+        let mut n = b.len().min(avail);
+        while n > 0 && n < b.len() && (b[n] & 0xC0) == 0x80 {
+            n -= 1;
+        }
+        self.buf[used..used + n].copy_from_slice(&b[..n]);
+        let end = (used + n) as u8;
+        for o in &mut self.offsets[key + 1..] {
+            *o = end;
+        }
+    }
+
+    #[inline(always)]
+    pub fn key_str(&self, key: usize) -> &str {
+        if key >= 10 {
+            return "";
+        }
+        let s = self.offsets[key] as usize;
+        let e = self.offsets[key + 1] as usize;
+        if e <= s || e > self.buf.len() {
+            return "";
+        }
+        unsafe { core::str::from_utf8_unchecked(&self.buf[s..e]) }
     }
 }
 
@@ -165,8 +216,9 @@ impl TextInputModel {
 
     #[inline(always)]
     pub fn charset_label(&self) -> &str {
-        if self.charset == Charset::Locale && !self.locale_keymap.label.is_empty() {
-            self.locale_keymap.label.as_str()
+        let lbl = self.locale_keymap.label_str();
+        if self.charset == Charset::Locale && !lbl.is_empty() {
+            lbl
         } else {
             self.charset.spec().label
         }
@@ -188,7 +240,7 @@ impl TextInputModel {
             return "";
         }
         if self.charset == Charset::Locale && self.locale_keymap.active {
-            self.locale_keymap.keys[key as usize].as_str()
+            self.locale_keymap.key_str(key as usize)
         } else {
             self.charset.spec().keys[key as usize]
         }
@@ -196,6 +248,66 @@ impl TextInputModel {
 }
 
 pub struct TextInputView;
+
+/// Count UTF-8 codepoints in `s` without pulling in `core::str::Chars`.
+#[inline(never)]
+fn utf8_char_count(s: &str) -> usize {
+    let mut n = 0usize;
+    for &b in s.as_bytes() {
+        if (b & 0xC0) != 0x80 {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Return byte range `(start, end)` of the `nth` UTF-8 codepoint in `s`.
+#[inline(never)]
+fn utf8_nth_slice(s: &str, nth: usize) -> Option<&str> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    let mut c = 0usize;
+    while i < b.len() {
+        let mut next = i + 1;
+        while next < b.len() && (b[next] & 0xC0) == 0x80 {
+            next += 1;
+        }
+        if c == nth {
+            return Some(unsafe { core::str::from_utf8_unchecked(&b[i..next]) });
+        }
+        c += 1;
+        i = next;
+    }
+    None
+}
+
+/// Return the last UTF-8 codepoint slice in `s`, if non-empty.
+#[inline(never)]
+fn utf8_last_slice(s: &str) -> Option<&str> {
+    let b = s.as_bytes();
+    if b.is_empty() {
+        return None;
+    }
+    let mut i = b.len() - 1;
+    while i > 0 && (b[i] & 0xC0) == 0x80 {
+        i -= 1;
+    }
+    Some(unsafe { core::str::from_utf8_unchecked(&b[i..]) })
+}
+
+/// Pop the last UTF-8 codepoint from a `heapless::String` without `char` decoding overhead.
+#[inline(never)]
+fn pop_utf8_char<const N: usize>(s: &mut String<N>) {
+    let b = s.as_bytes();
+    if b.is_empty() {
+        return;
+    }
+    let mut i = b.len() - 1;
+    while i > 0 && (b[i] & 0xC0) == 0x80 {
+        i -= 1;
+    }
+    unsafe { s.as_mut_vec().truncate(i) };
+}
 
 impl TextInputView {
     pub const fn new() -> Self {
@@ -220,38 +332,29 @@ impl TextInputView {
         }
     }
 
+    #[inline(never)]
     fn draw_t9_grid(canvas: &mut Canvas, model: &TextInputModel, is_cycling: bool) {
         let mut x = 2i16;
         let mut y = 31i16;
 
         for key in 1..10u8 {
             let active_key = is_cycling && model.last_key == Some(key);
-            if active_key {
-                // Highlight the pressed key cell with an 8px-tall inverted band so tall diacritics fit
-                canvas.fill_rect(x as u8, (y - 1) as u8, 40, 8, Color::Fill);
-                text::draw_char(
-                    canvas,
-                    x + 2,
-                    y + 5,
-                    (b'0' + key) as char,
-                    &TOMTHUMB,
-                    Color::Clear,
-                );
-                let chars = model.key_chars(key);
-                text::draw_str_max_x(canvas, x + 9, y + 5, chars, &TOMTHUMB, Color::Clear, x + 39);
+            let (bg_y, bg_w, bg_h, txt_col, max_x) = if active_key {
+                ((y - 1) as u8, 40u8, 8u8, Color::Clear, x + 39)
             } else {
-                canvas.fill_rect(x as u8, y as u8, 7, 6, Color::Fill);
-                text::draw_char(
-                    canvas,
-                    x + 2,
-                    y + 5,
-                    (b'0' + key) as char,
-                    &TOMTHUMB,
-                    Color::Clear,
-                );
-                let chars = model.key_chars(key);
-                text::draw_str_max_x(canvas, x + 9, y + 5, chars, &TOMTHUMB, Color::Fill, x + 40);
-            }
+                (y as u8, 7u8, 6u8, Color::Fill, x + 40)
+            };
+            canvas.fill_rect(x as u8, bg_y, bg_w, bg_h, Color::Fill);
+            text::draw_char(
+                canvas,
+                x + 2,
+                y + 5,
+                (b'0' + key) as char,
+                &TOMTHUMB,
+                Color::Clear,
+            );
+            let chars = model.key_chars(key);
+            text::draw_str_max_x(canvas, x + 9, y + 5, chars, &TOMTHUMB, txt_col, max_x);
 
             if key == 3 || key == 6 {
                 x = 2;
@@ -263,33 +366,41 @@ impl TextInputView {
     }
 
     /// Render a live tap-cycle preview strip in the mode bar (e.g. `2: A [B] C`) while multi-tapping.
+    #[inline(never)]
     fn draw_cycle_strip(canvas: &mut Canvas, model: &TextInputModel, y: i16) {
         let Some(key) = model.last_key else {
             return;
         };
         let chars = model.key_chars(key);
-        if chars.is_empty() {
-            return;
-        }
+        let b = chars.as_bytes();
         let mut cx = 28i16;
         let max_x = 104i16;
-        let mut ch_buf = [0u8; 4];
-        for (idx, ch) in chars.chars().enumerate() {
-            let s = ch.encode_utf8(&mut ch_buf);
+        let mut i = 0usize;
+        let mut idx = 0usize;
+        while i < b.len() {
+            let mut next = i + 1;
+            while next < b.len() && (b[next] & 0xC0) == 0x80 {
+                next += 1;
+            }
+            let s = unsafe { core::str::from_utf8_unchecked(&b[i..next]) };
             let w = text::str_width(s, &TOMTHUMB).max(4);
             if cx + w + 2 > max_x {
                 break;
             }
-            if idx == model.press_count {
+            let col = if idx == model.press_count {
                 canvas.fill_rect((cx - 1) as u8, (y - 6) as u8, (w + 2) as u8, 8, Color::Fill);
-                text::draw_str(canvas, cx, y, s, &TOMTHUMB, Color::Clear);
+                Color::Clear
             } else {
-                text::draw_str(canvas, cx, y, s, &TOMTHUMB, Color::Fill);
-            }
+                Color::Fill
+            };
+            text::draw_str(canvas, cx, y, s, &TOMTHUMB, col);
             cx += w + 2;
+            idx += 1;
+            i = next;
         }
     }
 
+    #[inline(never)]
     fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16, show_grid: bool) {
         let menu_key = if model.is_k1 { "M" } else { "Menu" };
         let exit_label = if model.buffer.is_empty() {
@@ -408,7 +519,7 @@ impl View<TextInputModel> for TextInputView {
         if !is_passcode {
             let mut num_buf = core::mem::MaybeUninit::<[u8; 12]>::uninit();
             let count_s = text::format_fraction_u32(
-                model.buffer.chars().count() as u32,
+                utf8_char_count(&model.buffer) as u32,
                 model.max_len as u32,
                 unsafe { &mut *num_buf.as_mut_ptr() },
             );
@@ -449,8 +560,7 @@ impl View<TextInputModel> for TextInputView {
             );
 
             let cursor_x = (text_x - scroll_x) + str_w;
-            if is_cycling && let Some((last_idx, _)) = model.buffer.char_indices().next_back() {
-                let last_char_str = &model.buffer[last_idx..];
+            if is_cycling && let Some(last_char_str) = utf8_last_slice(&model.buffer) {
                 let last_w = text::str_width(last_char_str, &MUMATRIX).max(4);
                 let char_x = (cursor_x - last_w).max(text_x);
                 canvas.fill_rect(
@@ -503,11 +613,12 @@ impl View<TextInputModel> for TextInputView {
             return true;
         }
 
+        #[cfg(not(target_arch = "arm"))]
         if let Event::Char(ch) = *event {
             match ch {
                 '\x08' | '\x7f' => {
                     Self::confirm_current_char(model);
-                    let _ = model.buffer.pop();
+                    pop_utf8_char(&mut model.buffer);
                 }
                 '\r' | '\n' => {
                     Self::confirm_current_char(model);
@@ -516,7 +627,7 @@ impl View<TextInputModel> for TextInputView {
                 '\x1b' => {
                     cancel_input(model);
                 }
-                c if !c.is_control() => {
+                c if (c as u32) >= 0x20 => {
                     if !model.digits_only || c.is_ascii_digit() {
                         Self::confirm_current_char(model);
                         if model.buffer.len() + c.len_utf8() <= model.max_len {
@@ -571,7 +682,7 @@ impl View<TextInputModel> for TextInputView {
                         if model.last_key.is_some() {
                             Self::confirm_current_char(model);
                         } else if !model.buffer.is_empty() {
-                            let _ = model.buffer.pop();
+                            pop_utf8_char(&mut model.buffer);
                         } else {
                             // Buffer is empty: short tap on Exit cancels immediately ("Back")!
                             cancel_input(model);
@@ -587,12 +698,12 @@ impl View<TextInputModel> for TextInputView {
             if is_pressed {
                 if let Some(key_num) = code.to_digit() {
                     if model.digits_only || model.charset == Charset::Numbers {
-                        confirm_and_push_char(model, (b'0' + key_num) as char);
+                        confirm_and_push(model, b'0' + key_num);
                         model.last_activity_tick = model.ticks;
                         return true;
                     }
 
-                    let chars_count = model.key_chars(key_num).chars().count();
+                    let chars_count = utf8_char_count(model.key_chars(key_num));
                     if chars_count == 0 {
                         return true;
                     }
@@ -600,19 +711,31 @@ impl View<TextInputModel> for TextInputView {
                     let is_same_key = model.last_key == Some(key_num);
                     let is_recent = (model.ticks.wrapping_sub(model.last_activity_tick)) < 15;
 
+                    let mut glyph = [0u8; 4];
                     if is_same_key && is_recent && !model.buffer.is_empty() {
                         // Multi-tap cycle through UTF-8 characters safely
                         model.press_count += 1;
                         if model.press_count >= chars_count {
                             model.press_count = 0;
                         }
-                        if let Some(ch) = model.key_chars(key_num).chars().nth(model.press_count) {
-                            let _ = model.buffer.pop();
-                            let _ = model.buffer.push(ch);
+                        if let Some(s) = utf8_nth_slice(model.key_chars(key_num), model.press_count) {
+                            let n = s.len().min(4);
+                            glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
+                            pop_utf8_char(&mut model.buffer);
+                            let _ = model.buffer.push_str(unsafe {
+                                core::str::from_utf8_unchecked(&glyph[..n])
+                            });
                         }
-                    } else if let Some(ch) = model.key_chars(key_num).chars().next() {
+                    } else if let Some(s) = utf8_nth_slice(model.key_chars(key_num), 0) {
                         // First tap on a new key
-                        confirm_and_push_char(model, ch);
+                        let n = s.len().min(4);
+                        glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
+                        TextInputView::confirm_current_char(model);
+                        if model.buffer.len() + n <= model.max_len {
+                            let _ = model.buffer.push_str(unsafe {
+                                core::str::from_utf8_unchecked(&glyph[..n])
+                            });
+                        }
                         model.last_key = Some(key_num);
                         model.press_count = 0;
                     }
@@ -668,19 +791,16 @@ impl View<TextInputModel> for TextInputView {
 
 #[inline(never)]
 fn confirm_and_push(model: &mut TextInputModel, ch: u8) {
-    confirm_and_push_char(model, ch as char);
-}
-
-#[inline(never)]
-fn confirm_and_push_char(model: &mut TextInputModel, ch: char) {
     TextInputView::confirm_current_char(model);
-    if model.buffer.chars().count() < model.max_len
-        && model.buffer.len() + ch.len_utf8() <= model.buffer.capacity()
+    if utf8_char_count(&model.buffer) < model.max_len && model.buffer.len() < model.buffer.capacity()
     {
-        let _ = model.buffer.push(ch);
+        let buf = [ch];
+        let _ = model
+            .buffer
+            .push_str(unsafe { core::str::from_utf8_unchecked(&buf) });
     }
     #[cfg(feature = "passcode")]
-    if model.is_passcode && model.expose_len && model.buffer.chars().count() >= model.max_len {
+    if model.is_passcode && model.expose_len && utf8_char_count(&model.buffer) >= model.max_len {
         model.is_done = true;
     }
 }
@@ -781,8 +901,8 @@ mod tests {
 
         // Load a Russian Cyrillic keymap on key 2 ("АБВГ")
         model.locale_keymap.active = true;
-        let _ = model.locale_keymap.label.push_str("АБВ");
-        let _ = model.locale_keymap.keys[2].push_str("АБВГ");
+        model.locale_keymap.set_label("АБВ");
+        model.locale_keymap.set_key(2, "АБВГ");
         model.charset = Charset::Locale;
 
         // Non-factory layout automatically activates the on-screen 3x3 keypad guide

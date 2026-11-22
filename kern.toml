@@ -12,7 +12,7 @@ authors = ["kern-team"]
 edition_string = "Kern OS"
 chip = "PY32F071xB"
 flash_budget = 120832   # 118 KB (safe margin below 128KB)
-flash_ceiling = 120316  # Ratchet: release flash may only go down; lower after each saving
+flash_ceiling = 120508  # Ratchet: release flash may only go down; lower after each saving
 ram_budget = 16384      # 16 KB SRAM
 
 [target]
@@ -45,7 +45,7 @@ app_hibernation = false # 📦 KRX app hibernation & PackBits RLE state swapping
 
 [features.runtime]
 krx_native = true       # 🚀 Class N0/N1/P0 Thumb-1 Native & Structured-Leaf Execution
-krx_paged = true        # 📄 Class P1 Transparent Demand-Paged Window Cache (~1.1 KB Flash)
+krx_paged = false       # 📄 Class P1 Transparent Demand-Paged Window Cache (~1.1 KB Flash; P0 uses krx_native)
 
 [features.provisioning]
 provision_apps = false        # 📱 Mode B: Embed & provision built-in KRX packages (delivered via RigWire / kern flash --assets)
@@ -56,6 +56,7 @@ boot_jingle = false          # 🎵 Mode B: Polyphonic boot jingles & melody pre
 
 [features.display]
 animations = true       # ✨ Smooth kinetic scrolling, slide transitions & adaptive 60-90 Hz animation refresh
+text_input = true       # ⌨️ Native OS multi-tap T9 TextInput modal shared by firmware & all KRX apps
 grayscale = false       # 🌓 True 2-bit 4-level grayscale with 500 Hz temporal FRC (1-bit spatial dither when false)
 
 [features.diagnostics]

@@ -69,7 +69,7 @@ usb_msc_fat = ["usb_msc", "drivers/usb_msc_fat"]
 filesystem = ["drivers/filesystem"]
 secure_fs = ["drivers/secure_fs", "kernel/secure_fs"]
 passcode = ["secure_fs", "text_input", "gfx/passcode", "resident_settings"]
-text_input = ["gfx/inverted_status"]
+text_input = []
 app_hibernation = ["filesystem"]
 
 # 🎨 Display, Sound & Asset Bundles

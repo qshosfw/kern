@@ -541,7 +541,7 @@ pub fn load_locale_keymap(
     ) else {
         return;
     };
-    let _ = km.label.push_str(lbl);
+    km.set_label(lbl);
     let mut any_key = false;
     for (i, &k) in LANG_KEY_KM_KEYS.iter().enumerate() {
         if let Some(seq) = lookup_lang_str_streaming(
@@ -550,7 +550,7 @@ pub fn load_locale_keymap(
             k,
             &mut buf,
         ) {
-            let _ = km.keys[i].push_str(seq);
+            km.set_key(i, seq);
             any_key = true;
         }
     }

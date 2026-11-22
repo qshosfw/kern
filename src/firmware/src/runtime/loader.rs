@@ -312,8 +312,7 @@ impl<'a> MsgWriter<'a> {
     #[inline(never)]
     fn push_u32(&mut self, val: u32) {
         let mut tmp = [0u8; 10];
-        let s = gfx::text::format_u32(val, &mut tmp);
-        self.push(s);
+        self.push(gfx::text::format_u32(val, &mut tmp));
     }
 
     #[inline(never)]
@@ -330,18 +329,36 @@ impl<'a> MsgWriter<'a> {
                 break;
             }
         }
-        let s = unsafe { core::str::from_utf8_unchecked(&tmp[idx..]) };
-        self.push(s);
+        self.push(unsafe { core::str::from_utf8_unchecked(&tmp[idx..]) });
+    }
+
+    #[inline(never)]
+    fn push_pair(&mut self, pfx: &str, a: u32, sep: &str, b: u32, sfx: &str) {
+        self.push(pfx);
+        self.push_u32(a);
+        self.push(sep);
+        self.push_u32(b);
+        self.push(sfx);
+    }
+
+    #[inline(never)]
+    fn push_fw_footer(&mut self, tail: &str) {
+        self.push("\nFW ");
+        self.push(env!("CARGO_PKG_VERSION"));
+        self.push(tail);
     }
 
     #[inline(never)]
     fn push_ver(&mut self, v: [u8; 3]) {
-        self.push("v");
-        self.push_u32(v[0] as u32);
-        self.push(".");
-        self.push_u32(v[1] as u32);
-        self.push(".");
-        self.push_u32(v[2] as u32);
+        if v != [0, 0, 0] {
+            self.push(" (v");
+            self.push_u32(v[0] as u32);
+            self.push(".");
+            self.push_u32(v[1] as u32);
+            self.push(".");
+            self.push_u32(v[2] as u32);
+            self.push(")");
+        }
     }
 
     #[inline(always)]
@@ -358,7 +375,6 @@ fn format_launch_error<'a>(
     buf: &'a mut [u8],
 ) -> &'a str {
     let mut w = MsgWriter::new(buf);
-    let has_ver = diag.app_ver != [0, 0, 0];
     match err {
         KrxLaunchError::CapabilityDenied(cap) if !cap.is_empty() => {
             w.push("Missing capability:\n");
@@ -367,53 +383,28 @@ fn format_launch_error<'a>(
             w.finish()
         }
         KrxLaunchError::ImportBindingFailed => {
-            let os_abi = if diag.b != 0 {
-                diag.b
-            } else {
-                ::abi::VERSION as u32
-            };
+            let os_abi = if diag.b != 0 { diag.b } else { ::abi::VERSION as u32 };
             if diag.code == DIAG_GOT_INVALID {
-                w.push("Bad GOT/import table\nOff 0x");
+                w.push("Bad GOT/import\nOff 0x");
                 w.push_hex(diag.a);
-                w.push(" / max ");
-                w.push_u32(diag.b);
-                w.push("B\nABI v");
-                w.push_u32(::abi::VERSION as u32);
-                w.push(". Rebuild app.");
-            } else if diag.code == DIAG_ABI_MISMATCH && diag.a < os_abi {
-                w.push("App too old");
-                if has_ver {
-                    w.push(" (");
-                    w.push_ver(diag.app_ver);
-                    w.push(")");
-                }
-                w.push("\nApp ABI v");
-                w.push_u32(diag.a);
-                w.push(" < OS v");
-                w.push_u32(os_abi);
-                w.push("\nFW ");
-                w.push(env!("CARGO_PKG_VERSION"));
-                w.push(". Update app.");
-            } else if diag.code == DIAG_ABI_MISMATCH && diag.a > os_abi {
-                w.push("OS too old");
-                if has_ver {
-                    w.push(" (");
-                    w.push_ver(diag.app_ver);
-                    w.push(")");
-                }
-                w.push("\nApp ABI v");
-                w.push_u32(diag.a);
-                w.push(" > OS v");
-                w.push_u32(os_abi);
-                w.push("\nFW ");
-                w.push(env!("CARGO_PKG_VERSION"));
-                w.push(". Update OS.");
+                w.push_pair(" / ", diag.b, "B\nABI v", os_abi, ". Rebuild.");
+            } else if diag.code == DIAG_ABI_MISMATCH && diag.a != os_abi {
+                let app_old = diag.a < os_abi;
+                w.push(if app_old { "App too old" } else { "OS too old" });
+                w.push_ver(diag.app_ver);
+                w.push_pair(
+                    "\nApp ABI v",
+                    diag.a,
+                    if app_old { " < OS v" } else { " > OS v" },
+                    os_abi,
+                    "",
+                );
+                w.push_fw_footer(if app_old { ". Update app." } else { ". Update OS." });
             } else {
-                w.push("Import bind failed\nOS ");
-                w.push(env!("CARGO_PKG_VERSION"));
-                w.push(" (ABI v");
+                w.push("Import bind failed");
+                w.push_fw_footer(" (ABI v");
                 w.push_u32(os_abi);
-                w.push(").\nUpdate app or OS.");
+                w.push(").");
             }
             w.finish()
         }
@@ -423,69 +414,43 @@ fn format_launch_error<'a>(
             } else {
                 kernel::sys::SystemDiagnostics::stack_margin_bytes() as u32
             };
-            let short = diag.a.saturating_sub(free);
-            w.push("Low stack RAM\nNeed ");
-            w.push_u32(diag.a);
-            w.push("B, free ");
-            w.push_u32(free);
-            w.push("B\n(short ");
-            w.push_u32(short);
+            w.push_pair("Low stack RAM\nNeed ", diag.a, "B, free ", free, "B\n(short ");
+            w.push_u32(diag.a.saturating_sub(free));
             w.push("B). Retry.");
             w.finish()
         }
         KrxLaunchError::InsufficientRam | KrxLaunchError::PayloadTooLarge => {
-            let over = diag.a.saturating_sub(diag.b);
-            if matches!(err, KrxLaunchError::PayloadTooLarge) {
-                w.push("App too large\nSize ");
-            } else {
-                w.push("Low arena RAM\nNeed ");
-            }
-            w.push_u32(diag.a);
-            w.push("B, max ");
-            w.push_u32(diag.b);
-            w.push("B\n(+");
-            w.push_u32(over);
-            if matches!(err, KrxLaunchError::PayloadTooLarge) {
-                w.push("B). Use P0 paged.");
-            } else {
-                w.push("B). Shrink app.");
-            }
+            let is_pay = matches!(err, KrxLaunchError::PayloadTooLarge);
+            w.push_pair(
+                if is_pay { "App too large\nSize " } else { "Low arena RAM\nNeed " },
+                diag.a,
+                "B, max ",
+                diag.b,
+                "B\n(+",
+            );
+            w.push_u32(diag.a.saturating_sub(diag.b));
+            w.push(if is_pay { "B). Use P0 paged." } else { "B). Shrink app." });
             w.finish()
         }
         KrxLaunchError::UnsupportedProfile => {
             if diag.code == DIAG_TOO_MANY_LEAVES {
-                w.push("Too many P0 leaves\nApp has ");
-                w.push_u32(diag.a);
-                w.push(", max ");
-                w.push_u32(diag.b);
-                w.push(".\nRebuild <= ");
-                w.push_u32(diag.b);
-                w.push(".");
+                w.push_pair("Too many P0 leaves\nHas ", diag.a, ", max ", diag.b, ".\nRebuild.");
             } else {
-                w.push("Unsupported profile\nClass ");
-                w.push_u32(diag.a);
-                w.push(", prof ");
-                w.push_u32(diag.b);
-                w.push(".\nFW ");
-                w.push(env!("CARGO_PKG_VERSION"));
-                w.push(". Update OS.");
+                w.push_pair("Unsupported profile\nClass ", diag.a, ", prof ", diag.b, ".");
+                w.push_fw_footer(". Update OS.");
             }
             w.finish()
         }
         KrxLaunchError::TruncatedPackage if diag.b > 0 => {
-            w.push("Truncated package\nRead ");
-            w.push_u32(diag.a);
-            w.push("B < ");
-            w.push_u32(diag.b);
-            w.push("B.\nReinstall via Wire.");
+            w.push_pair("Truncated package\nRead ", diag.a, "B < ", diag.b, "B.\nReinstall.");
             w.finish()
         }
         KrxLaunchError::InvalidEntryPoint if diag.b > 0 => {
-            w.push("Invalid entry point\nOff 0x");
+            w.push("Invalid entry\nOff 0x");
             w.push_hex(diag.a);
             w.push(" >= ");
             w.push_u32(diag.b);
-            w.push("B.\nRebuild package.");
+            w.push("B.\nRebuild.");
             w.finish()
         }
         _ => err.describe(),
