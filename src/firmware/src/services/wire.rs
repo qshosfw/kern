@@ -329,6 +329,11 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus>
             c.wr_u16(calib.xtal_freq_low() as u16);
             c.wr_u16(calib.battery_calib_const());
         }
+        FACET_SYS_AUDIO => {
+            let mut buf = [0u8; 64];
+            let n = crate::system::drain_headless_notes(&mut buf);
+            c.put(&buf[..n]);
+        }
         _ => return Err(WireStatus::UnsupportedField),
     }
     Ok(())
@@ -487,6 +492,20 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             let state = [KeyState::Pressed, KeyState::Held, KeyState::Released]
                 [c.inp.first().copied().unwrap_or(0).min(2) as usize];
             crate::system::enqueue_event(Event::Key { code, state });
+            Ok(())
+        }
+        DOMAIN_INPUT if handle.facet == FACET_INPUT_TEXT => {
+            let s = core::str::from_utf8(c.inp).map_err(|_| WireStatus::BadRange)?;
+            for ch in s.chars().take(32) {
+                crate::system::enqueue_event(Event::Char(ch));
+            }
+            Ok(())
+        }
+        DOMAIN_INPUT if handle.facet == FACET_INPUT_ENCODER => {
+            let delta = c.rd_u8()? as i8;
+            if delta != 0 {
+                crate::system::enqueue_event(Event::Encoder(delta));
+            }
             Ok(())
         }
         DOMAIN_CONFIG => {

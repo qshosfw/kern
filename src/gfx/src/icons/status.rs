@@ -124,14 +124,14 @@ pub(super) static ICONS_8: [[u8; 8]; Icon::PRIMARY_COUNT] = bake8(
         .######.
     ",
         ),
-        // Minimalist connected cable: plug tip + sleek boot + hanging curved cord
+        // Connected cable: square-ended plug + hanging curved cord
         (
             Icon::Plug as u8,
             "
         ........
-        ..##....
+        ####....
         #######.
-        ..##...#
+        ####...#
         .......#
         ......#.
         .....#..
@@ -143,9 +143,9 @@ pub(super) static ICONS_8: [[u8; 8]; Icon::PRIMARY_COUNT] = bake8(
             Icon::SerialActive as u8,
             "
         ........
-        ..##....
+        ####....
         #######.
-        ..##...#
+        ####...#
         ..#....#
         .###..#.
         .....#..
@@ -391,13 +391,13 @@ pub(super) static ICONS_5: [[u8; 5]; Icon::COUNT] = bake5(&[
         #....
     ",
     ),
-    // Minimalist connected cable: plug tip + sleek 2x3 boot + hanging cord (7x5)
+    // Connected cable: square-ended 3x3 plug head + hanging cord (7x5)
     (
         Icon::Plug,
         "
-        .##....
+        ###....
         ######.
-        .##...#
+        ###...#
         ......#
         .....#.
     ",
@@ -406,9 +406,9 @@ pub(super) static ICONS_5: [[u8; 5]; Icon::COUNT] = bake5(&[
     (
         Icon::SerialActive,
         "
-        .##....
+        ###....
         ######.
-        .##...#
+        ###...#
         .#....#
         ###..#.
     ",

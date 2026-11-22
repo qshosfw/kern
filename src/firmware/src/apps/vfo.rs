@@ -196,6 +196,17 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for VfoApp {
                     EventResult::Ignored
                 }
             }
+            Event::Encoder(delta) if delta != 0 => {
+                let up = delta < 0;
+                let steps = delta.unsigned_abs().min(8);
+                for _ in 0..steps {
+                    let _ = step_freq(ctx, up);
+                }
+                if ctx.config.audio.key_beep != 0 {
+                    ctx.play_beep(crate::services::melody::BeepType::Scroll);
+                }
+                EventResult::Consumed
+            }
             Event::Bus(bus_ev) if bus_ev.is_radio() => EventResult::Consumed,
             _ => EventResult::Ignored,
         }

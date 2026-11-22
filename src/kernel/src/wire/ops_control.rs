@@ -21,6 +21,7 @@ pub const DOMAIN_STORAGE: u8 = 0x06;
 pub const FACET_SYS_IDENTITY: u16 = 0x0001;
 pub const FACET_SYS_METRICS: u16 = 0x0002;
 pub const FACET_SYS_CALIBRATION: u16 = 0x0003;
+pub const FACET_SYS_AUDIO: u16 = 0x0004; // Drain queued headless audio/tone notes (u16 freq_hz, u16 dur_ms)
 
 pub const ACTION_SYS_REBOOT: u16 = 0x0001;
 pub const ACTION_SYS_FLASHLIGHT: u16 = 0x0002;
@@ -57,6 +58,8 @@ pub const INPUT_INSTANCE_KEYPAD: u8 = 0x00;
 
 pub const FACET_INPUT_KEY: u16 = 0x0001; // Inject KeyDown / KeyUp / KeyHold
 pub const FACET_INPUT_LOCK: u16 = 0x0002; // Keypad lock state
+pub const FACET_INPUT_TEXT: u16 = 0x0003; // Direct UTF-8 character/text injection
+pub const FACET_INPUT_ENCODER: u16 = 0x0004; // Inject rotary encoder delta (i8)
 
 pub const ACTION_INPUT_LOCK_TOGGLE: u16 = 0x0001;
 

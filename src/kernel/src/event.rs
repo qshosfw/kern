@@ -94,6 +94,8 @@ pub enum Event {
         code: KeyCode,
         state: KeyState,
     },
+    /// Direct character / control-key input (e.g. from RigWire keyboard bridge or external HID).
+    Char(char),
     Encoder(i8),
 
     // ── Inter-Process Communication ──

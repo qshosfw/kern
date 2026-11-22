@@ -48,6 +48,10 @@ fn play_preset_notes<B: drivers::bk4829::Bk4829Bus, State>(
     notes: &[drivers::audio::ToneNote],
 ) {
     if !notes.is_empty() {
+        if crate::system::is_headless() {
+            crate::system::push_headless_notes(notes);
+            return;
+        }
         drivers::bk4829::Bk4829::play_tone_sequence(radio, notes);
     }
 }

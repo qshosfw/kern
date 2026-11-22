@@ -12,7 +12,8 @@ mod remote;
 
 pub use events::{dequeue_event, enqueue_event};
 pub use headless::{
-    admits_physical_input, is_headless, restore_from_backup, restore_from_config, set_headless,
+    admits_physical_input, drain_headless_notes, is_headless, push_headless_notes,
+    restore_from_backup, restore_from_config, set_headless,
 };
 pub use power::WAKE_EXTI_FLAGS;
 pub use remote::{note_wire_activity, set_wire_tx};
@@ -98,7 +99,7 @@ fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool
     let pwr = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
 
     if let Some(is_charging) = pwr.poll_charging_transition() {
-        if is_charging {
+        if is_charging && !is_headless() {
             wake_and_notify_activity(hw);
         }
         *dirty_render = true;
@@ -107,10 +108,12 @@ fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool
 
     if pwr.poll_low_battery_transition() && pwr.uptime_secs() >= 3 && pwr.battery_percentage() <= 15
     {
-        wake_and_notify_activity(hw);
+        if !is_headless() {
+            wake_and_notify_activity(hw);
+            crate::orchestrator::compositor::show_low_battery_popup();
+        }
         hw.radio
             .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
-        crate::orchestrator::compositor::show_low_battery_popup();
         *dirty_render = true;
     }
 
@@ -120,24 +123,59 @@ fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool
     }
 }
 
+#[inline(always)]
+fn should_keep_awake_on_keypad(
+    admit: bool,
+    keypad_locked: bool,
+    had_event: bool,
+    any_key_down: bool,
+) -> bool {
+    admit && !keypad_locked && (had_event || any_key_down)
+}
+
 #[inline(never)]
 fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
     record_proc_activation(0xF3);
     hw.key_scanner.scan_with_dt(dt);
     let admit = admits_physical_input();
+    let release_guard = admit && headless::waiting_escape_release(hw.key_scanner.is_any_key_down());
+    let mut had_event = false;
     while let Some((code, state)) = hw.key_scanner.pop_event() {
         // Headless: the matrix keeps being scanned (debounce state stays coherent) but no
         // physical key ever reaches the system; RigWire is the sole source of input.
-        if !admit {
+        if !admit || release_guard {
             continue;
         }
-        if !hw.orchestrator.is_keypad_locked() {
-            hw.backlight.wake();
-            unsafe {
-                (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
-            }
-        }
+        had_event = true;
         enqueue_event(Event::Key { code, state });
+    }
+    if !admit {
+        let escape_held = hw.key_scanner.is_key_down(kernel::event::KeyCode::Menu)
+            && hw.key_scanner.is_key_down(kernel::event::KeyCode::Exit);
+        if headless::poll_physical_escape(dt, escape_held) {
+            set_headless(hw, false);
+            hw.radio
+                .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+            unsafe {
+                (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                    .show_toast("Headless mode off", 1800);
+            }
+            wake_and_notify_activity(hw);
+        }
+        return;
+    }
+    if release_guard {
+        return;
+    }
+    // Keep backlight and idle/auto-lock timers awake on every key transition AND
+    // continuously while any key remains held (long press or key-repeat scrolling).
+    if should_keep_awake_on_keypad(
+        admit,
+        hw.orchestrator.is_keypad_locked(),
+        had_event,
+        hw.key_scanner.is_any_key_down(),
+    ) {
+        wake_and_notify_activity(hw);
     }
 }
 
@@ -363,5 +401,18 @@ mod tests {
         assert_eq!(ui_cadence(false, false, true, false), (false, false));
         // The lock overlay animates regardless of panel state.
         assert_eq!(ui_cadence(false, false, false, true), (false, true));
+    }
+
+    #[test]
+    fn keypad_hold_and_repeat_keep_backlight_and_idle_awake() {
+        // Active press or release wakes backlight and resets idle timers.
+        assert!(should_keep_awake_on_keypad(true, false, true, false));
+        // Continuous hold (no new edge event, key still down) keeps backlight/idle awake.
+        assert!(should_keep_awake_on_keypad(true, false, false, true));
+        // Idle with no key down does not wake.
+        assert!(!should_keep_awake_on_keypad(true, false, false, false));
+        // Locked keypad and headless mode never wake the panel on physical keys.
+        assert!(!should_keep_awake_on_keypad(true, true, true, true));
+        assert!(!should_keep_awake_on_keypad(false, false, true, true));
     }
 }

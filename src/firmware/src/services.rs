@@ -333,17 +333,18 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         inverted: bool,
         partial: bool,
     ) -> i16 {
+        let headless = crate::system::is_headless();
         #[cfg(test)]
-        let is_usb = self.usb.as_ref().is_some_and(|u| u.is_connected());
+        let is_usb = !headless && self.usb.as_ref().is_some_and(|u| u.is_connected());
         #[cfg(all(not(test), feature = "usb"))]
-        let is_usb = drivers::usb::is_active_usb_connected();
+        let is_usb = !headless && drivers::usb::is_active_usb_connected();
         #[cfg(all(not(test), not(feature = "usb")))]
         let is_usb = false;
 
         let pct = self.power.battery_percentage();
         let is_charging = self.power.is_charging();
         let is_low = self.power.is_low() || pct == 0;
-        let serial_active = py32_hal::uart::is_active(800);
+        let serial_active = !headless && py32_hal::uart::is_active(800);
         let now_ms = py32_hal::delay::millis();
         let anim_step = ((now_ms >> 8) & 0xFF) as u8;
         let shading_mode = self.config.display.shading_mode;
@@ -399,7 +400,7 @@ pub fn draw_boot_status_right(canvas: &mut gfx::Canvas, battery_format: u8, is_u
     if is_low {
         flags |= gfx::widgets::status_bar::STATUS_FLAG_LOW;
     }
-    if is_usb {
+    if is_usb && !crate::system::is_headless() {
         flags |= gfx::widgets::status_bar::STATUS_FLAG_USB;
     }
     let cfg = gfx::widgets::status_bar::StatusRightConfig {

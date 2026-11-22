@@ -283,7 +283,7 @@ impl KeypadLockManager {
                 }
             }
 
-            if auto_lock_ms > 0 && !self.is_locked {
+            if auto_lock_ms > 0 && !self.is_locked && self.held_code.is_none() {
                 self.inactivity_ms = self.inactivity_ms.saturating_add(dt as u32);
                 if self.inactivity_ms >= auto_lock_ms {
                     self.toggle_lock();
@@ -295,7 +295,9 @@ impl KeypadLockManager {
             if self.held_code.is_some() && !self.is_long_press_triggered {
                 self.delay_elapsed_ms = self.delay_elapsed_ms.saturating_add(dt);
 
-                if self.hold_kind == HoldKind::Sleep && !can_sleep {
+                if self.hold_kind == HoldKind::Sleep
+                    && (!can_sleep || crate::system::is_headless())
+                {
                     self.release_active_hold();
                 } else if !self.hold_ui_open {
                     if !self.held_confirmed
@@ -383,6 +385,9 @@ impl KeypadLockManager {
                                 },
                             )
                         } else {
+                            if can_sleep && crate::system::is_headless() {
+                                return false;
+                            }
                             (
                                 base_hold_delay_ms.saturating_add(80).max(450),
                                 if can_sleep {
@@ -865,5 +870,26 @@ mod tests {
         tick_n(&mut mgr, 3, false);
         assert!(!mgr.should_show_f_drawer());
         assert!(!mgr.is_f_drawer_animating());
+    }
+
+    #[test]
+    fn auto_lock_paused_while_key_is_held() {
+        let mut mgr = KeypadLockManager::new();
+        mgr.handle_event(
+            &Event::Key {
+                code: KeyCode::Exit,
+                state: KeyState::Pressed,
+            },
+            400,
+            3000,
+            1000,
+            false,
+        );
+        // Advance past auto_lock_ms (1000 ms) while Exit is held: must NOT auto-lock.
+        for _ in 0..30 {
+            mgr.last_tick_ms = 0;
+            mgr.handle_event(&Event::Tick, 400, 3000, 1000, false);
+        }
+        assert!(!mgr.is_locked);
     }
 }
