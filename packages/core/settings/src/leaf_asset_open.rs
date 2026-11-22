@@ -11,6 +11,7 @@ use shared::{
     copy_bytes, cstr_slice, fill_bytes, set_byte, subslice,
 };
 
+#[inline(never)]
 fn format_pretty(raw: &[u8], out: &mut [u8]) -> usize {
     let mut s = raw.len();
     while s > 0 && byte_at(raw, s - 1) != b'/' {
@@ -21,16 +22,7 @@ fn format_pretty(raw: &[u8], out: &mut [u8]) -> usize {
     while dot > 0 && byte_at(tail, dot - 1) != b'.' {
         dot -= 1;
     }
-    let base = if dot > 0 { subslice(tail, 0, dot - 1) } else { tail };
-    let mut d = 0usize;
-    while d < base.len() && byte_at(base, d) >= b'0' && byte_at(base, d) <= b'9' {
-        d += 1;
-    }
-    let clean = if d > 0 && d < base.len() && (byte_at(base, d) == b'_' || byte_at(base, d) == b'-') {
-        subslice(base, d + 1, base.len())
-    } else {
-        base
-    };
+    let clean = if dot > 0 { subslice(tail, 0, dot - 1) } else { tail };
     let mut o = 0usize;
     let mut cap = true;
     let mut i = 0usize;
@@ -39,12 +31,10 @@ fn format_pretty(raw: &[u8], out: &mut [u8]) -> usize {
         let ch = if b == b'_' || b == b'-' {
             cap = true;
             b' '
-        } else if cap && b >= b'a' && b <= b'z' {
-            cap = false;
-            b - 32
         } else {
+            let c = if cap && b >= b'a' && b <= b'z' { b - 32 } else { b };
             cap = false;
-            b
+            c
         };
         set_byte(out, o, ch);
         o += 1;
@@ -90,7 +80,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 copy_bytes(dst_fp, p + 1, raw)
             };
             let nlen = format_pretty(subslice(dst_fp, 0, plen), pretty);
-            if nlen > 0 && pos + nlen + 1 < 112 {
+            if nlen > 0 && pos + nlen + 1 < 88 {
                 pos = copy_bytes(&mut st.sheet_buf, pos, subslice(pretty, 0, nlen));
                 set_byte(&mut st.sheet_buf, pos, 0);
                 pos += 1;

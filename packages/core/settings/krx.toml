@@ -13,7 +13,7 @@ caps = [
     "TASK_CONTROL",
 ]
 root = "main.rs"
-root_max = 7104
+root_max = 7168
 leaves = [
     "leaf_app_load.rs",
     "leaf_app_hdr.rs",
@@ -32,6 +32,7 @@ leaves = [
     "leaf_sys_ops.rs",
     "leaf_app_icon.rs",
     "leaf_bandplans.rs",
+    "leaf_storage.rs",
 ]
 
 icon_8 = """

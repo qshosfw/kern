@@ -18,6 +18,9 @@ pub const FLAG_CHEVRON: u8 = 1 << 1;
 pub const FLAG_OUTLINE: u8 = 1 << 2;
 pub const FLAG_TOGGLE: u8 = 1 << 3;
 pub const FLAG_TOGGLE_ON: u8 = 1 << 4;
+pub const FLAG_ARROW_LEFT: u8 = 1 << 5;
+pub const FLAG_ARROW_RIGHT: u8 = 1 << 6;
+pub const FLAG_SHORTCUT: u8 = 1 << 7;
 
 /// Smooth pixel-level kinetic scroller matching resident `gfx::gui::animation::KineticScroller`.
 #[derive(Clone, Copy)]

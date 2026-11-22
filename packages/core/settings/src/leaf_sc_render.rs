@@ -57,6 +57,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                 (b"Show Drawer", b"")
             } else {
                 let slot = row - 2;
+                fl |= 128; // FLAG_SHORTCUT: key badge box + 8x8 icon + action label + right arrow
                 let act = get_slot_action(&st.sc().keys_cfg, slot, st.sc_scope);
                 let lbl: &[u8] = if act <= 5 {
                     ic = unsafe { *BUILTIN_ICONS.get_unchecked(act as usize) };

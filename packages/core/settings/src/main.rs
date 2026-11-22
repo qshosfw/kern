@@ -17,24 +17,26 @@ use kern_sdk::{
 
 use schema::{
     ACT_ASSET_JINGLE, ACT_ASSET_LANG, ACT_ASSET_ROGER, ACT_ASSET_SPLASH, ACT_BANDPLANS,
-    ACT_DEV_MODEL, ACT_DEV_OWNER, ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_INSTALLED_APPS,
-    ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SHORTCUTS, ACT_SUB_BATT_INFO, ACT_SUB_BATT_TWEAKS,
-    ACT_SUB_BTN_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO, ACT_SYS_MODULES, CAT_COUNT, CH_BATT_K1, Kind,
-    SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START, SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START,
-    SUB_SPLASH_COUNT, SUB_SPLASH_START, batt_idx_to_type, batt_type_to_idx, cat_name, category,
-    choice_options, format_value, item_at_slice, item_label,
+    ACT_DEV_MODEL, ACT_DEV_OWNER, ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_DFU_MODE, ACT_INSTALLED_APPS,
+    ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SHORTCUTS, ACT_STORAGE, ACT_SUB_BATT_INFO,
+    ACT_SUB_BATT_TWEAKS, ACT_SUB_BTN_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO, ACT_SYS_MODULES,
+    CAT_COUNT, CH_BATT_K1, Kind, SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START,
+    SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START, SUB_SPLASH_COUNT, SUB_SPLASH_START,
+    batt_idx_to_type, batt_type_to_idx, cat_name, category, choice_options, format_value,
+    item_at_slice, item_label,
 };
 use shared::{
     CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH, CMD_APPS_REQ_DEL, CMD_BP_LOAD,
     CMD_BP_RENDER, CMD_BP_TOGGLE_TX, CMD_DEV_MODEL_PICK, CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY,
     CMD_DEV_TEXT_PROMPT, CMD_INFO_BATT, CMD_INFO_SYS, CMD_SC_APPLY_PICK, CMD_SC_LOAD,
     CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER, CMD_SYS_DO_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET,
-    LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER, LEAF_ASSET_APPLY,
-    LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
-    LEAF_INFO_RENDER, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SYS_OPS, MODAL_ASSET_PICK,
-    MODAL_CHOICE, MODAL_DELETE_APP, MODAL_MODEL_PICK, MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS,
-    MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL, MODAL_TEXT_OWNER,
-    MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice, subslice, trimmed_slice,
+    CMD_SYS_TRY_DFU, CMD_SYS_TRY_INFO, LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS,
+    LEAF_APPS_RENDER, LEAF_ASSET_APPLY, LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
+    LEAF_INFO_RENDER, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_STORAGE, LEAF_SYS_OPS,
+    MODAL_ASSET_PICK, MODAL_CHOICE, MODAL_DELETE_APP, MODAL_MODEL_PICK, MODAL_REBOOT_RADIO,
+    MODAL_RESET_SETTINGS, MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL,
+    MODAL_TEXT_OWNER, MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice, subslice,
+    trimmed_slice,
 };
 use ui::KineticScroll;
 
@@ -53,6 +55,7 @@ enum View {
     BattInfo = 6,
     SysInfo = 7,
     Bandplans = 8,
+    Storage = 9,
 }
 
 struct SettingsState {
@@ -112,17 +115,13 @@ impl SettingsState {
     }
 
     fn sync_status_bar(&self, api: &KrxApiTable) {
-        const VT: &[u8] = b"Settings\0Tweaks\0Installed Apps\0Modules\0Shortcuts\0Battery Info\0System Info\0Boot Splash\0Bandplans\0";
+        const VT: &[u8] = b"Settings\0\0Tweaks\0Installed Apps\0\0Shortcuts\0Battery Info\0System Info\0Bandplans\0Storage\0Modules\0Boot Splash\0";
         let title: &[u8] = match self.view {
-            View::Home => kern_sdk::nth_packed_slice(VT, 0),
             View::Category => cat_name(self.cat_sel),
-            View::Submenu => kern_sdk::nth_packed_slice(VT, if self.sub_kind == ACT_SUB_SPLASH { 7 } else { 1 }),
-            View::InstalledApps => kern_sdk::nth_packed_slice(VT, if self.sh.modules_only != 0 { 3 } else { 2 }),
             View::AppDetail => subslice(&self.sh.meta().name, 0, self.sh.meta().name_len as usize),
-            View::Shortcuts => kern_sdk::nth_packed_slice(VT, 4),
-            View::BattInfo => kern_sdk::nth_packed_slice(VT, 5),
-            View::SysInfo => kern_sdk::nth_packed_slice(VT, 6),
-            View::Bandplans => kern_sdk::nth_packed_slice(VT, 8),
+            View::Submenu if self.sub_kind == ACT_SUB_SPLASH => kern_sdk::nth_packed_slice(VT, 11),
+            View::InstalledApps if self.sh.modules_only != 0 => kern_sdk::nth_packed_slice(VT, 10),
+            v => kern_sdk::nth_packed_slice(VT, v as u8),
         };
         ui::set_title(api, title);
     }
@@ -198,7 +197,7 @@ impl SettingsState {
             View::Shortcuts => (&mut self.sh.sc_sel, 21),
             View::BattInfo | View::SysInfo => (&mut self.sh.info_sel, 5),
             View::Bandplans => (&mut self.sh.bp_sel, self.sh.bp_count),
-            View::AppDetail => return,
+            View::AppDetail | View::Storage => return,
         };
         if count == 0 {
             return;
@@ -224,15 +223,20 @@ impl SettingsState {
     }
 
     #[inline(never)]
+    fn enter_view(&mut self, api: &KrxApiTable, v: View, top: u8) {
+        self.view = v;
+        self.scroller.jump_to_row(top);
+        self.sync_status_bar(api);
+    }
+
+    #[inline(never)]
     fn on_confirm(&mut self, api: &KrxApiTable) {
         self.held_key = 0xFF;
         match self.view {
             View::Home => {
-                self.view = View::Category;
                 self.item_sel = 0;
                 self.editing = false;
-                self.scroller.jump_to_row(0);
-                self.sync_status_bar(api);
+                self.enter_view(api, View::Category, 0);
             }
             View::Category | View::Submenu => {
                 let (st, _, row) = self.current_slice();
@@ -265,15 +269,23 @@ impl SettingsState {
                         ACT_INSTALLED_APPS | ACT_SYS_MODULES => {
                             let mod_only = u8::from(item.meta == ACT_SYS_MODULES);
                             self.call_leaf(api, LEAF_APPS_OPS, CMD_APPS_REFRESH, mod_only);
-                            self.view = View::InstalledApps;
-                            self.scroller.jump_to_row(ui::scroll_top(self.sh.app_sel));
-                            self.sync_status_bar(api);
+                            self.enter_view(api, View::InstalledApps, ui::scroll_top(self.sh.app_sel));
                         }
-                        ACT_SYS_INFO | ACT_SUB_BATT_INFO => {
+                        ACT_SYS_INFO => {
+                            self.call_leaf(api, LEAF_SYS_OPS, CMD_SYS_TRY_INFO, 0);
+                            if self.sh.result == 0 {
+                                self.sh.info_sel = 0;
+                                self.enter_view(api, View::SysInfo, 0);
+                            }
+                        }
+                        ACT_SUB_BATT_INFO => {
                             self.sh.info_sel = 0;
-                            self.view = if item.meta == ACT_SYS_INFO { View::SysInfo } else { View::BattInfo };
-                            self.scroller.jump_to_row(0);
-                            self.sync_status_bar(api);
+                            self.enter_view(api, View::BattInfo, 0);
+                        }
+                        ACT_STORAGE => self.enter_view(api, View::Storage, 0),
+                        ACT_RESET_SETTINGS..=ACT_DFU_MODE => {
+                            const CMDS: [u8; 3] = [CMD_SYS_REQ_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_TRY_DFU];
+                            self.call_leaf(api, LEAF_SYS_OPS, unsafe { *CMDS.get_unchecked((item.meta - ACT_RESET_SETTINGS) as usize) }, 0);
                         }
                         ACT_SUB_SPLASH | ACT_SUB_BTN_TWEAKS | ACT_SUB_BATT_TWEAKS => {
                             const SUBS: [(u8, u8); 3] = [
@@ -281,32 +293,28 @@ impl SettingsState {
                                 (SUB_BTN_TWEAKS_START, SUB_BTN_TWEAKS_COUNT),
                                 (SUB_BATT_TWEAKS_START, SUB_BATT_TWEAKS_COUNT),
                             ];
-                            let idx = match item.meta {
-                                ACT_SUB_SPLASH => 0,
-                                ACT_SUB_BTN_TWEAKS => 1,
-                                _ => 2,
+                            let idx = if item.meta == ACT_SUB_SPLASH {
+                                0
+                            } else if item.meta == ACT_SUB_BTN_TWEAKS {
+                                1
+                            } else {
+                                2
                             };
                             let (s, c) = unsafe { *SUBS.get_unchecked(idx) };
                             self.sub_kind = item.meta;
                             self.sub_start = s;
                             self.sub_count = c;
                             self.sub_sel = 0;
-                            self.view = View::Submenu;
-                            self.scroller.jump_to_row(0);
-                            self.sync_status_bar(api);
+                            self.enter_view(api, View::Submenu, 0);
                         }
                         ACT_SHORTCUTS => {
                             self.sh.sc_sel = 0;
                             self.call_leaf(api, LEAF_SC_APPLY, CMD_SC_LOAD, 0);
-                            self.view = View::Shortcuts;
-                            self.scroller.jump_to_row(0);
-                            self.sync_status_bar(api);
+                            self.enter_view(api, View::Shortcuts, 0);
                         }
                         ACT_BANDPLANS => {
                             self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_LOAD, 0);
-                            self.view = View::Bandplans;
-                            self.scroller.jump_to_row(ui::scroll_top(self.sh.bp_sel));
-                            self.sync_status_bar(api);
+                            self.enter_view(api, View::Bandplans, ui::scroll_top(self.sh.bp_sel));
                         }
                         ACT_ASSET_SPLASH..=ACT_ASSET_LANG => {
                             self.call_leaf(api, LEAF_ASSET_OPEN, 0, item.meta - ACT_ASSET_SPLASH);
@@ -315,8 +323,6 @@ impl SettingsState {
                         ACT_DEV_OWNER..=ACT_DEV_RADIO_ID => {
                             self.call_leaf(api, LEAF_DEV_PROMPT, CMD_DEV_TEXT_PROMPT, MODAL_TEXT_OWNER + (item.meta - ACT_DEV_OWNER));
                         }
-                        ACT_RESET_SETTINGS => self.call_leaf(api, LEAF_SYS_OPS, CMD_SYS_REQ_RESET, 0),
-                        ACT_REBOOT_RADIO => self.call_leaf(api, LEAF_SYS_OPS, CMD_SYS_REQ_REBOOT, 0),
                         _ => {}
                     },
                 }
@@ -331,8 +337,7 @@ impl SettingsState {
                     self.sh.detail_scroll = 0;
                     self.sh.detail_btn = 0;
                     self.call_leaf(api, LEAF_APP_LOAD, 0, 0);
-                    self.view = View::AppDetail;
-                    self.sync_status_bar(api);
+                    self.enter_view(api, View::AppDetail, 0);
                 }
             }
             View::AppDetail => {
@@ -347,7 +352,7 @@ impl SettingsState {
                 }
             }
             View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_TOGGLE_TX, 0),
-            View::BattInfo | View::SysInfo => {}
+            View::BattInfo | View::SysInfo | View::Storage => {}
         }
     }
 
@@ -366,22 +371,16 @@ impl SettingsState {
             }
             View::Category => {
                 self.flush_if_dirty(api);
-                self.view = View::Home;
-                self.scroller.jump_to_row(ui::scroll_top(self.cat_sel));
-                self.sync_status_bar(api);
+                self.enter_view(api, View::Home, ui::scroll_top(self.cat_sel));
                 true
             }
             View::AppDetail => {
-                self.view = View::InstalledApps;
-                self.scroller.jump_to_row(ui::scroll_top(self.sh.app_sel));
-                self.sync_status_bar(api);
+                self.enter_view(api, View::InstalledApps, ui::scroll_top(self.sh.app_sel));
                 true
             }
             _ => {
                 self.flush_if_dirty(api);
-                self.view = View::Category;
-                self.scroller.jump_to_row(ui::scroll_top(self.item_sel));
-                self.sync_status_bar(api);
+                self.enter_view(api, View::Category, ui::scroll_top(self.item_sel));
                 true
             }
         }
@@ -529,6 +528,16 @@ impl SettingsState {
             let mut flags = u8::from(is_sel);
             if self.editing && is_sel {
                 flags |= ui::FLAG_OUTLINE;
+                if item.kind == Kind::Num {
+                    if let Some((min, max, _)) = prop::lookup_bounds(item.prop_id) {
+                        if val > min {
+                            flags |= ui::FLAG_ARROW_LEFT;
+                        }
+                        if val < max {
+                            flags |= ui::FLAG_ARROW_RIGHT;
+                        }
+                    }
+                }
             }
             match item.kind {
                 Kind::Toggle => {
@@ -537,7 +546,7 @@ impl SettingsState {
                         flags |= ui::FLAG_TOGGLE_ON;
                     }
                 }
-                Kind::Action if is_sel && item.meta <= ACT_BANDPLANS => {
+                Kind::Action if is_sel && item.meta <= ACT_STORAGE => {
                     flags |= ui::FLAG_CHEVRON;
                 }
                 _ => {}
@@ -583,8 +592,8 @@ impl SettingsState {
             View::BattInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_BATT, 0),
             View::SysInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_SYS, 0),
             View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_RENDER, 0),
+            View::Storage => self.call_leaf(api, LEAF_STORAGE, 0, 0),
         }
-        api.commit();
     }
 }
 

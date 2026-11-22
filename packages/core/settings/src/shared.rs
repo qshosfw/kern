@@ -22,6 +22,7 @@ pub const LEAF_INFO_RENDER: u8 = 14;
 pub const LEAF_SYS_OPS: u8 = 15;
 pub const LEAF_APP_ICON: u8 = 16;
 pub const LEAF_BANDPLANS: u8 = 17;
+pub const LEAF_STORAGE: u8 = 18;
 
 // Modal tags shared across root and leaves
 pub const MODAL_CHOICE: u8 = 30;
@@ -69,6 +70,8 @@ pub const CMD_INFO_SYS: u8 = 2;
 pub const CMD_SYS_REQ_RESET: u8 = 1;
 pub const CMD_SYS_REQ_REBOOT: u8 = 2;
 pub const CMD_SYS_DO_RESET: u8 = 3;
+pub const CMD_SYS_TRY_INFO: u8 = 4;
+pub const CMD_SYS_TRY_DFU: u8 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -133,7 +136,7 @@ pub struct SharedState {
     pub jingle_name: [u8; 12],
     pub lang_name: [u8; 12],
 
-    pub sheet_buf: [u8; 112],
+    pub sheet_buf: [u8; 88],
     pub sheet_len: u16,
     pub sheet_title: [u8; 16],
     pub sheet_title_len: u8,
@@ -172,7 +175,7 @@ impl SharedState {
             roger_name: [0; 12],
             jingle_name: [0; 12],
             lang_name: [0; 12],
-            sheet_buf: [0; 112],
+            sheet_buf: [0; 88],
             sheet_len: 0,
             sheet_title: [0; 16],
             sheet_title_len: 0,

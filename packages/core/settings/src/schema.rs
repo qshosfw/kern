@@ -17,17 +17,19 @@ pub const ACT_SUB_BATT_INFO: u8 = 6;
 pub const ACT_SUB_BATT_TWEAKS: u8 = 7;
 pub const ACT_SHORTCUTS: u8 = 8;
 pub const ACT_BANDPLANS: u8 = 9;
-// Leaf-picker / modal Action IDs (10..=19)
-pub const ACT_RESET_SETTINGS: u8 = 10;
-pub const ACT_REBOOT_RADIO: u8 = 11;
-pub const ACT_ASSET_SPLASH: u8 = 12;
-pub const ACT_ASSET_ROGER: u8 = 13;
-pub const ACT_ASSET_JINGLE: u8 = 14;
-pub const ACT_ASSET_LANG: u8 = 15;
-pub const ACT_DEV_MODEL: u8 = 16;
-pub const ACT_DEV_OWNER: u8 = 17;
-pub const ACT_DEV_TAG: u8 = 18;
-pub const ACT_DEV_RADIO_ID: u8 = 19;
+pub const ACT_STORAGE: u8 = 10;
+// Leaf-picker / modal Action IDs (11..=21)
+pub const ACT_RESET_SETTINGS: u8 = 11;
+pub const ACT_REBOOT_RADIO: u8 = 12;
+pub const ACT_DFU_MODE: u8 = 13;
+pub const ACT_ASSET_SPLASH: u8 = 14;
+pub const ACT_ASSET_ROGER: u8 = 15;
+pub const ACT_ASSET_JINGLE: u8 = 16;
+pub const ACT_ASSET_LANG: u8 = 17;
+pub const ACT_DEV_MODEL: u8 = 18;
+pub const ACT_DEV_OWNER: u8 = 19;
+pub const ACT_DEV_TAG: u8 = 20;
+pub const ACT_DEV_RADIO_ID: u8 = 21;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -105,18 +107,18 @@ pub const CATEGORIES: [Category; CAT_COUNT] = [
     Category { icon_id: icon::BATTERY, start: 20, count: 5, _pad: 0 },
     Category { icon_id: icon::DEVICE, start: 25, count: 7, _pad: 0 },
     Category { icon_id: icon::APPS, start: 32, count: 6, _pad: 0 },
-    Category { icon_id: icon::SYSTEM, start: 38, count: 6, _pad: 0 },
+    Category { icon_id: icon::SYSTEM, start: 38, count: 8, _pad: 0 },
 ];
 
 // Submenu slice ranges inside `ITEMS`:
-pub const SUB_SPLASH_START: u8 = 44;
+pub const SUB_SPLASH_START: u8 = 46;
 pub const SUB_SPLASH_COUNT: u8 = 3;
-pub const SUB_BTN_TWEAKS_START: u8 = 47;
+pub const SUB_BTN_TWEAKS_START: u8 = 49;
 pub const SUB_BTN_TWEAKS_COUNT: u8 = 2;
-pub const SUB_BATT_TWEAKS_START: u8 = 49;
+pub const SUB_BATT_TWEAKS_START: u8 = 51;
 pub const SUB_BATT_TWEAKS_COUNT: u8 = 2;
 
-pub const ITEMS: [Item; 51] = [
+pub const ITEMS: [Item; 53] = [
     // Display (0..7)
     Item::choice(prop::BACKLIGHT_TIME, 0, CH_BL_TIME),
     Item::num(prop::BACKLIGHT_MAX, 1, UNIT_RAW),
@@ -161,23 +163,25 @@ pub const ITEMS: [Item; 51] = [
     Item::toggle(prop::SHOW_LABELS, 35),
     Item::choice(prop::STARTUP_APP, 36, CH_STARTUP),
     Item::choice(prop::PAGER_POLICY, 37, CH_PAGER),
-    // System (38..44)
+    // System (38..46)
     Item::action(ACT_SYS_INFO, 38),
-    Item::action(ACT_SYS_MODULES, 39),
-    Item::choice(prop::CPU_CLOCK, 40, CH_CPU_CLK),
-    Item::choice(prop::UART_BAUD, 41, CH_UART_BAUD),
-    Item::action(ACT_RESET_SETTINGS, 42),
-    Item::action(ACT_REBOOT_RADIO, 43),
-    // Submenu: Boot Splash (44..47)
-    Item::action(ACT_ASSET_SPLASH, 44),
-    Item::choice(prop::BOOT_SPLASH_ANIM, 45, CH_SPLASH_ANIM),
-    Item::choice(prop::BOOT_SPLASH_DURATION, 46, CH_SPLASH_DUR),
-    // Submenu: Buttons Tweaks (47..49)
-    Item::choice(prop::HOLD_DELAY, 47, CH_HOLD_DELAY),
-    Item::choice(prop::REPEAT_RATE, 48, CH_REPEAT),
-    // Submenu: Battery Tweaks (49..51)
-    Item::toggle(prop::CHARGE_DETECT, 49),
-    Item::choice(prop::POWER_PROFILE, 50, CH_PWR_PROF),
+    Item::action(ACT_STORAGE, 39),
+    Item::action(ACT_SYS_MODULES, 40),
+    Item::choice(prop::CPU_CLOCK, 41, CH_CPU_CLK),
+    Item::choice(prop::UART_BAUD, 42, CH_UART_BAUD),
+    Item::action(ACT_DFU_MODE, 43),
+    Item::action(ACT_RESET_SETTINGS, 44),
+    Item::action(ACT_REBOOT_RADIO, 45),
+    // Submenu: Boot Splash (46..49)
+    Item::action(ACT_ASSET_SPLASH, 46),
+    Item::choice(prop::BOOT_SPLASH_ANIM, 47, CH_SPLASH_ANIM),
+    Item::choice(prop::BOOT_SPLASH_DURATION, 48, CH_SPLASH_DUR),
+    // Submenu: Buttons Tweaks (49..51)
+    Item::choice(prop::HOLD_DELAY, 49, CH_HOLD_DELAY),
+    Item::choice(prop::REPEAT_RATE, 50, CH_REPEAT),
+    // Submenu: Battery Tweaks (51..53)
+    Item::toggle(prop::CHARGE_DETECT, 51),
+    Item::choice(prop::POWER_PROFILE, 52, CH_PWR_PROF),
 ];
 
 const CAT_NAMES: &[u8] = b"Display\0Audio\0Buttons\0Battery\0Device\0Apps\0System\0";
@@ -195,8 +199,8 @@ const ITEM_LABELS: &[u8] = concat!(
     "Model\0Owner\0Tag\0Radio ID\0Language\0Bandplans\0Boot Splash\0",
     // Apps (32..38)
     "Installed Apps\0Launcher Style\0Key Badges\0App Titles\0Startup App\0Pager Policy\0",
-    // System (38..44)
-    "System Info\0Modules\0CPU Clock\0UART Baud\0Reset Settings\0Restart Radio\0",
+    // System (38..46)
+    "System Info\0Storage\0Modules\0CPU Clock\0UART Baud\0DFU Bootloader\0Reset Settings\0Restart Radio\0",
     // Submenus (44..51)
     "Image\0Animation\0Duration\0",
     "Hold Delay\0Repeat Rate\0",
@@ -204,41 +208,51 @@ const ITEM_LABELS: &[u8] = concat!(
 )
 .as_bytes();
 
-/// Single packed choice option pool indexed by `CHOICE_RANGES[table]` (0 jump-table bloat).
+/// Single packed choice option pool; tables are separated by `0x1F` (Unit Separator)
+/// so offsets are computed at compile time with zero manual byte-counting drift.
 const CHOICE_POOL: &[u8] = concat!(
-    "Off\05s\010s\030s\01m\0Always On\0",
-    "Grayscale\0Dither\0Monochrome\0",
-    "Off\0Tone\0Click\0Double\0Warning\0Scroll\0Custom\0",
-    "Flat\0Clean\0Mid\0Boost\0Max\0",
-    "Off\015s\030s\01 min\02 min\0",
-    "Toggle\01s\02s\03s\05s\0",
-    "250ms\0350ms\0500ms\0750ms\0",
-    "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0",
-    "Momentary\0Toggle / Latch\02x Press Latch\0",
-    "1500 mAh\02500 mAh\0External\0",
-    "None\0Voltage\0Percent\0Icon\0I+Volt\0I+Perc\0Volt\0Perc\0Temp\0",
-    "Power Save\0Balanced\0Performance\0",
-    "Off\015 Mins\030 Mins\01 Hour\0",
-    "Grid\0List\0",
-    "Home\0Radio\0",
-    "Balanced\0Fast\0Max Cache\0",
-    "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0",
-    "115200\038400\0",
-    "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0",
-    "Skip\00.5s\01.0s\02.0s\03.0s\0",
+    "Off\05s\010s\030s\01m\0Always On\0\x1f",
+    "Grayscale\0Dither\0Monochrome\0\x1f",
+    "Off\0Tone\0Click\0Double\0Warning\0Scroll\0Custom\0\x1f",
+    "Flat\0Clean\0Mid\0Boost\0Max\0\x1f",
+    "Off\015s\030s\01 min\02 min\0\x1f",
+    "Toggle\01s\02s\03s\05s\0\x1f",
+    "250ms\0350ms\0500ms\0750ms\0\x1f",
+    "30ms (Turbo)\050ms (Fast)\080ms (Norm)\0120ms (Slow)\0\x1f",
+    "Momentary\0Toggle / Latch\02x Press Latch\0\x1f",
+    "1500 mAh\02500 mAh\0External\0\x1f",
+    "None\0Voltage\0Percent\0Icon\0I+Volt\0I+Perc\0Volt\0Perc\0Temp\0\x1f",
+    "Power Save\0Balanced\0Performance\0\x1f",
+    "Off\015 Mins\030 Mins\01 Hour\0\x1f",
+    "Grid\0List\0\x1f",
+    "Home\0Radio\0\x1f",
+    "Balanced\0Fast\0Max Cache\0\x1f",
+    "16 MHz\024 MHz\032 MHz\048 MHz\072 MHz\0\x1f",
+    "115200\038400\0\x1f",
+    "None\0Dither Fill\0Invert Dissolve\0Curtain Wipe\0\x1f",
+    "Skip\00.5s\01.0s\02.0s\03.0s\0\x1f",
 )
 .as_bytes();
 
-const CHOICE_OFFSETS: [u16; 21] = [
-    0, 27, 55, 98, 124, 150, 169, 193, 243, 283, 310, 368, 400, 426, 436, 447, 471, 506, 519, 565,
-    590,
-];
+const CHOICE_OFFSETS: [u16; 21] = {
+    let mut out = [0u16; 21];
+    let mut t = 1usize;
+    let mut i = 0usize;
+    while i < CHOICE_POOL.len() && t <= 20 {
+        if CHOICE_POOL[i] == 0x1F {
+            out[t] = (i + 1) as u16;
+            t += 1;
+        }
+        i += 1;
+    }
+    out
+};
 
 #[inline(never)]
 pub fn choice_options(table: u8) -> &'static [u8] {
     let i = (table as usize).min(19);
     let s = unsafe { *CHOICE_OFFSETS.get_unchecked(i) } as usize;
-    let e = unsafe { *CHOICE_OFFSETS.get_unchecked(i + 1) } as usize;
+    let e = (unsafe { *CHOICE_OFFSETS.get_unchecked(i + 1) } as usize).saturating_sub(1);
     unsafe { core::slice::from_raw_parts(CHOICE_POOL.as_ptr().add(s), e - s) }
 }
 
