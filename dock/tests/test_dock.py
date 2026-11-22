@@ -490,6 +490,78 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
         self.assertTrue(aud.mic_enabled)
         aud.shutdown()
 
+    def test_flasher_preflight_and_sideload_manifest_parser(self) -> None:
+        import struct
+        import pack_krx
+        from kern_dock.device.firmware import inspect_firmware_file
+        from kern_dock.device.packages import (
+            decode_caps_mask,
+            discover_workspace_packages,
+            encode_cap_names,
+            inspect_krx_binary,
+            inspect_krx_manifest,
+            inspect_package_path,
+        )
+
+        # 1. Firmware pre-flight ARMv6-M vector validation & SHA-256
+        with tempfile.TemporaryDirectory() as td:
+            good_fw = Path(td) / "good.bin"
+            # Initial SP = 0x20004000, Thumb Reset_Handler = 0x08002001
+            good_fw.write_bytes(struct.pack("<II", 0x20004000, 0x08002001) + b"\x00" * 512)
+            info = inspect_firmware_file(good_fw)
+            self.assertTrue(info["vector_ok"])
+            self.assertEqual(info["initial_sp"], 0x20004000)
+            self.assertEqual(info["pages"], 3)
+            self.assertEqual(len(info["sha256_short"]), 12)
+
+            bad_fw = Path(td) / "bad.bin"
+            bad_fw.write_bytes(b"\xFF" * 512)
+            info_bad = inspect_firmware_file(bad_fw)
+            self.assertFalse(info_bad["vector_ok"])
+
+        # 2. Capability mask round-trip & sensitive classification
+        mask = encode_cap_names(["DISPLAY_DIRECT", "KEYPAD", "RADIO_TX", "STORAGE_WRITE"])
+        caps = decode_caps_mask(mask)
+        by_ident = {c["ident"]: c for c in caps}
+        self.assertIn("DISPLAY_DIRECT", by_ident)
+        self.assertFalse(by_ident["DISPLAY_DIRECT"]["sensitive"])
+        self.assertTrue(by_ident["RADIO_TX"]["sensitive"])
+        self.assertTrue(by_ident["STORAGE_WRITE"]["sensitive"])
+
+        # 3. Compiled KRX binary deep inspection (CRC-32, caps, actions, icon)
+        b = pack_krx.KrxPackageBuilder("Cute App", pack_krx.CLASS_NATIVE, pack_krx.PROFILE_N1_PIC)
+        b.set_identity("Cute App", "KERN-LAB", (2, 1, 0), 1)
+        b.set_lifecycle(pack_krx.EXEC_APP, pack_krx.FLAG_SINGLETON)
+        b.caps = mask
+        b.add_action(1, 1, "Launch Cute", 0)
+        b.add_icon_ascii(1, 8, 8, "\n".join(["########"] * 8))
+        b.set_payload(b"\x70\x47\x00\x00")
+        raw_krx = b.build()
+
+        parsed = inspect_krx_binary(raw_krx, "cute_app.krx")
+        self.assertTrue(parsed["valid_krx"])
+        self.assertTrue(parsed["crc_ok"])
+        self.assertEqual(parsed["name"], "Cute App")
+        self.assertEqual(parsed["version"], "v2.1.0")
+        self.assertEqual(parsed["author"], "KERN-LAB")
+        self.assertEqual(parsed["lifecycle"], ["Singleton"])
+        self.assertEqual(parsed["actions"], ["Launch Cute"])
+        self.assertIsNotNone(parsed["bitmap"])
+        self.assertEqual(len(parsed["cap_list"]), 4)
+
+        # 4. Real workspace krx.toml manifest parsing & package discovery
+        pkgs = discover_workspace_packages(_REPO_ROOT)
+        self.assertGreaterEqual(len(pkgs), 2)
+        settings_toml = _REPO_ROOT / "packages" / "core" / "settings" / "krx.toml"
+        if settings_toml.is_file():
+            sm = inspect_krx_manifest(settings_toml, group="core", pkg_id="core/settings")
+            self.assertEqual(sm["name"], "Settings")
+            self.assertEqual(sm["filename"], "settings.krx")
+            self.assertIsNotNone(sm["bitmap"])
+            self.assertGreaterEqual(len(sm["cap_list"]), 5)
+            sm2 = inspect_package_path(settings_toml.parent)
+            self.assertEqual(sm2["name"], "Settings")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -47,6 +47,7 @@ class AppsView:
         runtime.events.subscribe("link.connected", lambda _e: self._on_link_changed(), main_thread=True)
         runtime.events.subscribe("link.disconnected", lambda _e: self._on_link_changed(), main_thread=True)
         runtime.events.subscribe("security.changed", lambda _e: self._render_apps(), main_thread=True)
+        runtime.events.subscribe("apps.changed", lambda _e: self._on_apps_changed(), main_thread=True)
         self._render_apps()
 
     def _build(self) -> Gtk.Box:
@@ -108,6 +109,11 @@ class AppsView:
             return
         if self.widget.get_mapped():
             self.refresh_apps()
+
+    def _on_apps_changed(self) -> None:
+        self._dirty = True
+        if self.widget.get_mapped():
+            self.refresh_apps(force_headers=True)
 
     def _on_mapped(self) -> None:
         if self._dirty:

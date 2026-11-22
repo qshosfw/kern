@@ -29,7 +29,7 @@ from ..device.keys import APP_SHORTCUTS
 from ..device.link import REBOOT_BOOTLOADER, REBOOT_FIRMWARE, REBOOT_MODES, REBOOT_RECOVERY
 from ..system.icons import make_radio_image, register_icon_theme_paths
 from .runtime import DockRuntime
-from .views import AppsView, BackupsView, CaptureView, FilesView, FirmwareView, OverviewView, RadioView, TerminalView
+from .views import AppsView, BackupsView, CaptureView, FilesView, FirmwareView, OverviewView, RadioView, SideloadView, TerminalView
 from .widgets.command_palette import CommandPaletteDialog
 from .widgets.dialogs import show_about_dialog, show_preferences_dialog, show_shortcuts_dialog
 from .widgets.handset_stage import HandsetStage
@@ -124,6 +124,14 @@ class KernDockApp(Adw.Application):
             on_progress=self._set_progress,
             on_leave_demo_bl=self._leave_demo_bootloader,
             on_stage_redraw=lambda: self.stage.area.queue_draw(),
+            on_open_tab=self._open_tab,
+        )
+        self.sideload_view = SideloadView(
+            self.win,
+            self.runtime,
+            on_toast=self._toast,
+            on_confirm=self._confirm,
+            on_progress=self._set_progress,
         )
         self.apps_view = AppsView(
             self.win,
@@ -156,7 +164,8 @@ class KernDockApp(Adw.Application):
             PageSpec("radio", "Radio", "network-wireless-symbolic", "Workspace", lambda: self.radio_view.widget, order=20, subtitle="VFO A/B, S-meter, modulation & keyboard"),
             PageSpec("files", "Files", "folder-symbolic", "Workspace", lambda: self.files_view.widget, order=30, subtitle="KernFS browser, colored hex viewer & WebDAV"),
             PageSpec("firmware", "Flasher", "application-x-firmware-symbolic", "Workspace", lambda: self.firmware_view.widget, order=40, subtitle="Bootloader & .kfw/.bin firmware updater"),
-            PageSpec("apps", "Apps", "application-x-executable-symbolic", "Workspace", lambda: self.apps_view.widget, order=45, subtitle="Install, inspect & remove radio applications"),
+            PageSpec("sideload", "Sideload", "document-send-symbolic", "Workspace", lambda: self.sideload_view.widget, order=43, subtitle="Install apps, inspect manifests & bundles"),
+            PageSpec("apps", "Apps", "application-x-executable-symbolic", "Workspace", lambda: self.apps_view.widget, order=45, subtitle="Manage & remove installed radio applications"),
             PageSpec("backups", "Backups", "drive-harddisk-symbolic", "Workspace", lambda: self.backups_view.widget, order=48, subtitle=".kfw / .zip / calibration snapshots & hex viewer"),
             PageSpec("terminal", "Terminal", "utilities-terminal-symbolic", "Tools", lambda: self.terminal_view.widget, order=50, subtitle="Embedded VTE shell & RigWire console"),
             PageSpec("capture", "Capture", "camera-photo-symbolic", "Tools", lambda: self.capture_view.widget, order=60, subtitle="PNG snapshots & GIF timeline editor"),
@@ -688,9 +697,9 @@ class KernDockApp(Adw.Application):
         elif ext == ".zip":
             self._open_tab("backups")
             self.backups_view.load_backup_file(path)
-        elif ext in (".krx", ".mod"):
-            self._open_tab("apps")
-            self.apps_view.sideload_path(path)
+        elif ext in (".krx", ".mod") or path.name.lower() == "krx.toml" or (path.is_dir() and (path / "krx.toml").is_file()):
+            self._open_tab("sideload")
+            self.sideload_view.load_package_path(path)
         else:
             self._open_tab("files")
             self.files_view.upload_local_file(path)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import struct
@@ -18,6 +19,34 @@ try:
 except Exception:
     _flasher = None  # type: ignore[assignment]
 
+FLASH_TOTAL_BYTES = 128 * 1024
+
+
+def _check_armv6m_vectors(raw_fw: bytes) -> tuple[bool, int, int]:
+    """Sanity-check Cortex-M0+ initial SP & Thumb Reset_Handler vector."""
+    if len(raw_fw) < 8:
+        return False, 0, 0
+    sp, reset = struct.unpack_from("<II", raw_fw, 0)
+    sp_ok = (0x2000_0000 <= sp <= 0x2001_0000) and (sp % 4 == 0)
+    reset_ok = (reset & 1 == 1) and ((0x0800_0000 <= reset < 0x0804_0000) or (0x0000_0000 < reset < 0x0004_0000))
+    return (sp_ok and reset_ok), sp, reset
+
+
+def discover_local_firmware(repo_root: Path) -> list[Path]:
+    """Return recently built `.kfw` or packed `.bin` firmware images under `target/`."""
+    target = repo_root / "target"
+    if not target.is_dir():
+        return []
+    candidates: list[Path] = []
+    for name in ("firmware_packed.bin", "firmware.kfw"):
+        p = target / name
+        if p.is_file() and 256 <= p.stat().st_size <= FLASH_TOTAL_BYTES * 2:
+            candidates.append(p)
+    for p in sorted(target.glob("*.kfw"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p not in candidates and p.is_file():
+            candidates.append(p)
+    return candidates[:4]
+
 
 def inspect_firmware_file(fpath: str | Path) -> dict[str, Any]:
     """Inspects and pre-flight validates a `.kfw` container or raw `.bin` firmware image."""
@@ -31,22 +60,44 @@ def inspect_firmware_file(fpath: str | Path) -> dict[str, Any]:
         if not fw_parts:
             raise ValueError("Container has no firmware image part (may be a backup/module pack)")
         raw_fw = pts[fw_parts[0]["index"]]
+        vec_ok, sp, reset = _check_armv6m_vectors(raw_fw)
+        pages = max(1, math.ceil(len(raw_fw) / 256.0))
+        sha_short = hashlib.sha256(raw_fw).hexdigest()[:12]
         return {
             "format": "KFW v1.0",
             "version": kfw.format_semver(parsed.fw_version),
             "targets": targets,
             "fw_bytes": raw_fw,
             "size": len(raw_fw),
+            "pages": pages,
+            "flash_pct": min(1.0, len(raw_fw) / float(FLASH_TOTAL_BYTES)),
+            "ascon_ok": True,
+            "vector_ok": vec_ok,
+            "initial_sp": sp,
+            "reset_pc": reset,
+            "sha256_short": sha_short,
+            "parts_count": len(parsed.parts),
             "summary": f"KFW v{kfw.format_semver(parsed.fw_version)} · {', '.join(targets) or 'generic'} · {len(raw_fw):,} B · Ascon OK",
         }
-    if len(data) < 256 or len(data) > 128 * 1024:
+    if len(data) < 256 or len(data) > FLASH_TOTAL_BYTES:
         raise ValueError(f"Unexpected firmware size: {len(data):,} B")
+    vec_ok, sp, reset = _check_armv6m_vectors(data)
+    pages = max(1, math.ceil(len(data) / 256.0))
+    sha_short = hashlib.sha256(data).hexdigest()[:12]
     return {
         "format": "Raw BIN",
         "version": p.stem,
         "targets": ["raw"],
         "fw_bytes": data,
         "size": len(data),
+        "pages": pages,
+        "flash_pct": min(1.0, len(data) / float(FLASH_TOTAL_BYTES)),
+        "ascon_ok": False,
+        "vector_ok": vec_ok,
+        "initial_sp": sp,
+        "reset_pc": reset,
+        "sha256_short": sha_short,
+        "parts_count": 1,
         "summary": f"Raw binary · {p.name} · {len(data):,} B",
     }
 
