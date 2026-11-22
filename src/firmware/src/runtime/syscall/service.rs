@@ -172,6 +172,95 @@ fn post_event_id(event_id: u32) -> usize {
 }
 
 #[inline(never)]
+unsafe fn dispatch_sys_sec(sub: u8, a1: usize, a2: usize) -> usize {
+    #[cfg(not(feature = "passcode"))]
+    {
+        let _ = (sub, a1, a2);
+        return if sub == ::abi::sub::sys_sec::STATUS { 0 } else { 1 };
+    }
+    #[cfg(feature = "passcode")]
+    {
+        use ::abi::{SEC_FLAG_AVAILABLE, sub::sys_sec};
+        #[cfg(not(test))]
+        let (fs, ps) = (crate::kern_fs(), unsafe {
+            &mut *core::ptr::addr_of_mut!(crate::PASSCODE_STATE)
+        });
+        #[cfg(test)]
+        let Some(ctx) = super::active_ctx_opt() else {
+            return if sub == sys_sec::STATUS { 0 } else { 1 };
+        };
+        #[cfg(test)]
+        let (fs, ps) = (&mut *ctx.storage, unsafe {
+            &mut *core::ptr::addr_of_mut!(crate::PASSCODE_STATE)
+        });
+
+        #[cfg(not(test))]
+        let progress = Some(crate::boot::security::lcd_verify_progress_hook(
+            &mut crate::kern_hw().lcd,
+        ));
+        #[cfg(test)]
+        let progress: Option<crate::security::ProgressHook> = None;
+
+        match sub {
+            sys_sec::STATUS => {
+                let c = crate::security::passcode::get_passcode_config(fs);
+                (SEC_FLAG_AVAILABLE
+                    | (c.is_set as u32)
+                    | ((c.expose_len as u32) << 1)
+                    | ((c.stealth as u32) << 2)
+                    | ((c.digits_only as u32) << 3)
+                    | ((c.passcode_len as u32) << 8)
+                    | ((c.max_tries as u32) << 16)
+                    | ((c.failed_attempts as u32) << 24)) as usize
+            }
+            sys_sec::SET_OPTS => {
+                let opt_flags = ((a1 as u8) & 0x0E) << 1;
+                let max_tries = (a1 >> 8) as u8;
+                usize::from(
+                    crate::security::passcode::set_passcode_options(fs, opt_flags, max_tries)
+                        .is_err(),
+                )
+            }
+            sys_sec::VERIFY => {
+                let pin = unsafe { slice_or_empty(a1 as *const u8, (a2 as u8) as usize) };
+                match crate::security::passcode::verify_passcode(fs, pin, ps, progress) {
+                    Ok(true) => 0,
+                    Ok(false) => {
+                        let c = crate::security::passcode::get_passcode_config(fs);
+                        if c.failed_attempts >= c.max_tries {
+                            #[cfg(not(test))]
+                            kernel::power::PowerControl::reboot();
+                            #[cfg(test)]
+                            return 2;
+                        }
+                        1
+                    }
+                    Err(_) => 2,
+                }
+            }
+            sys_sec::SET => {
+                let len = (a2 & 0xFF).min(16);
+                let pin = unsafe { slice_or_empty(a1 as *const u8, len) };
+                let opt_flags = (((a2 >> 16) as u8) & 0x0E) << 1;
+                let max_tries = (a2 >> 24) as u8;
+                usize::from(
+                    crate::security::passcode::set_passcode(
+                        fs,
+                        ps,
+                        pin,
+                        opt_flags,
+                        max_tries,
+                        progress,
+                    )
+                    .is_err(),
+                )
+            }
+            _ => 1,
+        }
+    }
+}
+
+#[inline(never)]
 pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
     use ::abi::{idx as op, sub::sys_query};
     match idx {
@@ -273,30 +362,32 @@ pub unsafe fn dispatch_sys(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             usize::from(!(allowed && config.control_set(id, a1 as u8)))
         }
         op::SysFlush => {
-            if a0 == 1 {
-                #[cfg(not(test))]
-                {
-                    crate::master_config().reload_from_storage(crate::kern_fs());
-                }
-                #[cfg(test)]
-                if let Some(ctx) = super::active_ctx_opt() {
-                    ctx.config.reload_from_storage(ctx.storage);
-                }
-                return 0;
-            }
+            use ::abi::sub::sys_flush;
             #[cfg(not(test))]
-            {
-                usize::from(
-                    crate::master_config()
-                        .flush_dirty(crate::kern_fs())
-                        .is_err(),
-                )
-            }
+            let (cfg, fs) = (crate::master_config(), crate::kern_fs());
             #[cfg(test)]
-            {
-                super::active_ctx_opt().map_or(0, |ctx| usize::from(ctx.flush_config().is_err()))
+            let Some(ctx) = super::active_ctx_opt() else {
+                return usize::from(a0 == sys_flush::RESET as usize);
+            };
+            #[cfg(test)]
+            let (cfg, fs) = (&mut *ctx.config, &mut *ctx.storage);
+            match a0 as u8 {
+                sys_flush::RELOAD => {
+                    cfg.reload_from_storage(fs);
+                    0
+                }
+                sys_flush::RESET => {
+                    if !crate::runtime::native_runner::active_native_caps()
+                        .contains(::abi::Cap::Preferences)
+                    {
+                        return 1;
+                    }
+                    usize::from(cfg.reset_all_to_defaults(fs).is_err())
+                }
+                _ => usize::from(cfg.flush_dirty(fs).is_err()),
             }
         }
+        op::SysSec => unsafe { dispatch_sys_sec(a0 as u8, a1, a2) },
         _ => 0,
     }
 }
@@ -742,6 +833,37 @@ mod tests {
             Some("/apps/abcdefghijklmnopqrstu.krx")
         );
         assert!(take_pending_launch_path().is_none());
+        crate::runtime::native_runner::init_native_slot();
+    }
+
+    #[test]
+    fn sys_flush_reset_and_sys_sec_enforce_preferences_cap() {
+        use ::abi::{Cap, CapabilitySet, Op, sub};
+        crate::runtime::native_runner::init_native_slot();
+        let slot = crate::runtime::native_runner::slot_mut();
+        slot.is_loaded = true;
+        slot.caps = CapabilitySet::empty();
+
+        // Op::SysSec requires Cap::Preferences at dispatch boundary (returns 0 when denied)
+        assert_eq!(
+            ::abi::missing_caps(Op::SysSec.id(), slot.caps.raw()),
+            Some(1u32 << Cap::Preferences.bit())
+        );
+        // Op::SysFlush(RESET) requires Cap::Preferences inside dispatcher (returns 1 when denied)
+        assert_eq!(
+            unsafe {
+                crate::runtime::syscall::kern_call(
+                    Op::SysFlush.u32_id(),
+                    sub::sys_flush::RESET as usize,
+                    0,
+                    0,
+                )
+            },
+            1
+        );
+        // With Cap::Preferences, missing_caps passes for Op::SysSec
+        slot.caps = CapabilitySet::empty().with(Cap::Preferences);
+        assert_eq!(::abi::missing_caps(Op::SysSec.id(), slot.caps.raw()), Some(0));
         crate::runtime::native_runner::init_native_slot();
     }
 }

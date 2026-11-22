@@ -131,14 +131,13 @@ pub fn verify_passcode(
 }
 
 /// Sets or updates passcode preferences and re-wraps storage master key with optional progress reporting.
+/// `opt_flags` holds `PASSCODE_FLAG_{EXPOSE_LEN|STEALTH|DIGITS_ONLY}` bits.
 #[inline(never)]
 pub fn set_passcode(
     filesystem: &mut SystemStorage,
     state: &mut PasscodeState,
     new_passcode: &[u8],
-    expose_len: bool,
-    stealth: bool,
-    digits_only: bool,
+    opt_flags: u8,
     max_tries: u8,
     progress: Option<ProgressHook>,
 ) -> Result<(), PasscodeError> {
@@ -152,27 +151,13 @@ pub fn set_passcode(
         DEFAULT_PASSCODE_SEED
     };
 
-    if let Some(ref hook) = progress {
-        hook.report(5);
-    }
-
     let uid = bsp::uid::read_mcu_uid();
     let mut trng = HardwareTrng::new();
     trng.init_with_uid(&uid, bsp::entropy::sample_hardware_noise());
 
     let flags = PASSCODE_FLAG_ENABLED
         | PASSCODE_FLAG_LOCK_BOOT
-        | (if expose_len {
-            PASSCODE_FLAG_EXPOSE_LEN
-        } else {
-            0
-        })
-        | (if stealth { PASSCODE_FLAG_STEALTH } else { 0 })
-        | (if digits_only {
-            PASSCODE_FLAG_DIGITS_ONLY
-        } else {
-            0
-        });
+        | (opt_flags & (PASSCODE_FLAG_EXPOSE_LEN | PASSCODE_FLAG_STEALTH | PASSCODE_FLAG_DIGITS_ONLY));
 
     super::keychain::write_passcode_key(
         filesystem,
@@ -195,10 +180,6 @@ pub fn set_passcode(
     )
     .map_err(|_| PasscodeError::StorageError)?;
 
-    if let Some(ref hook) = progress {
-        hook.report(100);
-    }
-
     state.unlock();
     let _ = super::sync_filesystem_security(filesystem, state);
     Ok(())
@@ -214,9 +195,7 @@ pub fn disable_passcode(
         filesystem,
         state,
         &[],
-        false,
-        false,
-        true,
+        PASSCODE_FLAG_DIGITS_ONLY,
         DEFAULT_MAX_TRIES,
         None,
     )

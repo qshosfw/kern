@@ -71,7 +71,22 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
         let t_str = unsafe { str_or_default(r.title, r.t_len as usize, "Input") };
         let init_str = unsafe { str_or_default(r.msg, r.m_len as usize, "") };
         #[cfg(feature = "text_input")]
-        modal_mut().prompt_text(r.tag, t_str, init_str, r.max_len as usize, false);
+        {
+            let flags = r.o_len;
+            let digits_only = (flags & ::abi::TEXT_FLAG_DIGITS_ONLY) != 0;
+            if (flags & ::abi::TEXT_FLAG_PASSCODE) != 0 {
+                let m = modal_mut().prompt_passcode(
+                    r.tag,
+                    t_str,
+                    r.max_len as usize,
+                    digits_only,
+                    (flags & ::abi::TEXT_FLAG_EXPOSE_LEN) != 0,
+                );
+                m.is_k1 = crate::master_config_ref().is_k1();
+            } else {
+                modal_mut().prompt_text(r.tag, t_str, init_str, r.max_len as usize, digits_only);
+            }
+        }
         #[cfg(not(feature = "text_input"))]
         let _ = (t_str, init_str);
         return;

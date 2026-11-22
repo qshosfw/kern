@@ -269,32 +269,36 @@ fn utf8_nth_slice(s: &str, nth: usize) -> Option<&str> {
     None
 }
 
-/// Return the last UTF-8 codepoint slice in `s`, if non-empty.
+/// Start index of the last UTF-8 codepoint in `b` (or 0 if empty).
 #[inline(never)]
+fn last_utf8_start(b: &[u8]) -> usize {
+    if b.is_empty() {
+        return 0;
+    }
+    let mut i = b.len() - 1;
+    while i > 0 && (b[i] & 0xC0) == 0x80 {
+        i -= 1;
+    }
+    i
+}
+
+/// Return the last UTF-8 codepoint slice in `s`, if non-empty.
+#[inline(always)]
 fn utf8_last_slice(s: &str) -> Option<&str> {
     let b = s.as_bytes();
     if b.is_empty() {
         return None;
     }
-    let mut i = b.len() - 1;
-    while i > 0 && (b[i] & 0xC0) == 0x80 {
-        i -= 1;
-    }
-    Some(unsafe { core::str::from_utf8_unchecked(&b[i..]) })
+    Some(unsafe { core::str::from_utf8_unchecked(&b[last_utf8_start(b)..]) })
 }
 
 /// Pop the last UTF-8 codepoint from a `heapless::String` without `char` decoding overhead.
 #[inline(never)]
 fn pop_utf8_char<const N: usize>(s: &mut String<N>) {
-    let b = s.as_bytes();
-    if b.is_empty() {
-        return;
+    if !s.is_empty() {
+        let i = last_utf8_start(s.as_bytes());
+        unsafe { s.as_mut_vec().truncate(i) };
     }
-    let mut i = b.len() - 1;
-    while i > 0 && (b[i] & 0xC0) == 0x80 {
-        i -= 1;
-    }
-    unsafe { s.as_mut_vec().truncate(i) };
 }
 
 impl TextInputView {
@@ -379,26 +383,21 @@ impl TextInputView {
     #[inline(never)]
     fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16, show_grid: bool) {
         let menu_key = if model.is_k1 { "M" } else { "Menu" };
-        let exit_label = if model.buffer.is_empty() {
-            "Back"
-        } else {
-            "Del"
-        };
+        let exit_label = if model.buffer.is_empty() { "Back" } else { "Del" };
 
         let mut draw_exit = true;
         if model.digits_only {
             widgets::draw_key_badge(canvas, 1, by, menu_key, "Enter");
         } else {
-            let hash_key = if model.is_k1 { "F" } else { "#" };
-            let (x0, x1, x2) = if show_grid { (2, 44, 86) } else { (1, 28, 60) };
-            let enter_label = if show_grid || model.is_k1 {
-                "Enter"
-            } else {
-                "OK"
-            };
-            widgets::draw_key_badge(canvas, x0, by, "*", model.charset.star_hint());
-            widgets::draw_key_badge(canvas, x1, by, menu_key, enter_label);
-            widgets::draw_key_badge(canvas, x2, by, hash_key, model.charset.case_hint());
+            let xs: [i16; 3] = if show_grid { [2, 44, 86] } else { [1, 28, 60] };
+            let items: [(&str, &str); 3] = [
+                ("*", model.charset.star_hint()),
+                (menu_key, if show_grid || model.is_k1 { "Enter" } else { "OK" }),
+                (if model.is_k1 { "F" } else { "#" }, model.charset.case_hint()),
+            ];
+            for i in 0..3 {
+                widgets::draw_key_badge(canvas, xs[i], by, items[i].0, items[i].1);
+            }
             draw_exit = !show_grid;
         }
         if draw_exit {

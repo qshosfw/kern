@@ -61,8 +61,13 @@ pub(crate) fn launch_krx_shortcut_arg(
     path: &str,
     action_id: u32,
 ) -> bool {
-    if let Err(err) = crate::runtime::launch_krx_package(ctx, path, action_id) {
-        crate::runtime::show_launch_error_dialog(ctx, path, err);
+    let mut path_copy = [0u8; 24];
+    let pb = path.as_bytes();
+    let plen = pb.len().min(path_copy.len());
+    path_copy[..plen].copy_from_slice(&pb[..plen]);
+    let safe_path = unsafe { core::str::from_utf8_unchecked(&path_copy[..plen]) };
+    if let Err(err) = crate::runtime::launch_krx_package(ctx, safe_path, action_id) {
+        crate::runtime::show_launch_error_dialog(ctx, safe_path, err);
         ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
         return false;
     }
@@ -70,7 +75,7 @@ pub(crate) fn launch_krx_shortcut_arg(
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
+#[inline(always)]
 pub(crate) fn launch_krx_shortcut(ctx: &mut crate::services::SysContext, path: &str) -> bool {
     launch_krx_shortcut_arg(ctx, path, 0)
 }
@@ -351,9 +356,7 @@ impl Orchestrator {
                     }
                     return true;
                 }
-                let mut path_copy = heapless::String::<24>::new();
-                let _ = path_copy.push_str(path);
-                launch_krx_shortcut_arg(ctx, path_copy.as_str(), action_id as u32)
+                launch_krx_shortcut_arg(ctx, path, action_id as u32)
             }
             crate::apps::shortcut::ResolvedShortcut::None => {
                 if warn_if_empty {

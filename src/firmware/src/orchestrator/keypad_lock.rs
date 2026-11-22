@@ -472,42 +472,19 @@ impl KeypadLockManager {
             return;
         }
 
-        let (title, msg, icon, show_bar, show_hint) = if self.hold_ui_open {
+        let (t_idx, m_idx, icon, show_bar, show_hint) = if self.hold_ui_open {
             let k = self.hold_kind as u8;
-            (
-                utils::format::nth_cstr(&HOLD_STRINGS, k * 2),
-                utils::format::nth_cstr(&HOLD_STRINGS, k * 2 + 1),
-                HOLD_SPECS[k as usize].icon,
-                true,
-                false,
-            )
+            (k * 2, k * 2 + 1, HOLD_SPECS[k as usize].icon, true, false)
         } else {
-            let kt = utils::format::nth_cstr(&HOLD_STRINGS, 8);
             match self.toast {
-                LockToast::Unlocked => (
-                    kt,
-                    utils::format::nth_cstr(&HOLD_STRINGS, 9),
-                    Icon::Unlock,
-                    false,
-                    false,
-                ),
-                LockToast::Locked => (
-                    kt,
-                    utils::format::nth_cstr(&HOLD_STRINGS, 4),
-                    Icon::Lock,
-                    false,
-                    false,
-                ),
-                LockToast::PromptUnlock => (
-                    utils::format::nth_cstr(&HOLD_STRINGS, 4),
-                    "",
-                    Icon::Lock,
-                    false,
-                    true,
-                ),
+                LockToast::Unlocked => (8u8, 9u8, Icon::Unlock, false, false),
+                LockToast::Locked => (8, 4, Icon::Lock, false, false),
+                LockToast::PromptUnlock => (4, 10, Icon::Lock, false, true),
                 LockToast::None => return,
             }
         };
+        let title = utils::format::nth_cstr(&HOLD_STRINGS, t_idx);
+        let msg = utils::format::nth_cstr(&HOLD_STRINGS, m_idx);
 
         let sheet_y = 64i16 - SHEET_H as i16 + y_offset as i16;
         gfx::widgets::draw_sheet_slide_up(canvas, title, SHEET_H, y_offset);

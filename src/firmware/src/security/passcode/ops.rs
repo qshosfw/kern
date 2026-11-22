@@ -58,32 +58,19 @@ pub fn format_wrong_passcode_msg<'a>(
     gfx::text::format_num_msg(buf, "Wrong PIN\n", tries_left as u32, " left")
 }
 
-/// Updates passcode security preferences (length exposure, stealth mode, digits only, and max tries threshold)
+/// Updates passcode security preferences (`opt_flags` holds `PASSCODE_FLAG_{EXPOSE_LEN|STEALTH|DIGITS_ONLY}`).
 #[inline(never)]
 pub fn set_passcode_options(
     filesystem: &mut SystemStorage,
-    expose_len: bool,
-    stealth: bool,
-    digits_only: bool,
+    opt_flags: u8,
     max_tries: u8,
 ) -> Result<(), PasscodeError> {
     let mut key = PackedPasscodeKey::empty();
     read_passcode_key(filesystem, &mut key, 8)?;
 
-    key.flags = (key.flags
-        & !(PASSCODE_FLAG_EXPOSE_LEN | PASSCODE_FLAG_STEALTH | PASSCODE_FLAG_DIGITS_ONLY))
-        | (if expose_len {
-            PASSCODE_FLAG_EXPOSE_LEN
-        } else {
-            0
-        })
-        | (if stealth { PASSCODE_FLAG_STEALTH } else { 0 })
-        | (if digits_only {
-            PASSCODE_FLAG_DIGITS_ONLY
-        } else {
-            0
-        });
-
+    const OPT_MASK: u8 =
+        PASSCODE_FLAG_EXPOSE_LEN | PASSCODE_FLAG_STEALTH | PASSCODE_FLAG_DIGITS_ONLY;
+    key.flags = (key.flags & !OPT_MASK) | (opt_flags & OPT_MASK);
     key.max_tries = max_tries.clamp(3, 50);
     filesystem
         .write_struct(PATH_PASSCODE_KEY, &key)
@@ -175,15 +162,10 @@ pub fn get_security_summary(
 }
 
 /// Decrements failed attempts to (max_tries - 1) after lockout timeout expires.
-pub fn reset_lockout_penalty(filesystem: &mut SystemStorage) {
+pub fn reset_lockout_penalty(filesystem: &mut SystemStorage, max_tries: u8) {
     let mut key = PackedPasscodeKey::empty();
     if read_passcode_key(filesystem, &mut key, 8).is_ok() {
-        let max_t = if key.max_tries == 0 {
-            DEFAULT_MAX_TRIES
-        } else {
-            key.max_tries
-        };
-        key.failed_attempts = max_t.saturating_sub(1);
+        key.failed_attempts = max_tries.saturating_sub(1);
         let _ = filesystem.write_struct(PATH_PASSCODE_KEY, &key);
     }
 }

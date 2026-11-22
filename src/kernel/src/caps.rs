@@ -182,32 +182,32 @@ impl CapHardware {
 pub use abi::{Cap, CapabilitySet};
 
 const CAP_NAMES: &[u8] = b"\
-Radio RX\0\
-Radio TX\0\
-Storage Read\0\
-Storage Write\0\
-Audio Output\0\
+RF RX\0\
+RF TX\0\
+FS Rd\0\
+FS Wr\0\
+Audio\0\
 Display\0\
-Serial UART\0\
-USB CDC\0\
-Hardware CRC\0\
-Real-Time Clock\0\
-Power Management\0\
-Crypto AEAD\0\
-Raw MMIO\0\
-Broadband HF RX\0\
-GNSS Location\0\
-Wireless Link\0\
-Audio Capture\0\
-Broadcast FM\0\
-Keypad\0\
-Task Control\0\
-Service Registry\0\
-Bus Access\0\
-GPIO Access\0\
-Storage Admin\0\
-Factory Calibration\0\
-Preferences\0";
+UART\0\
+USB\0\
+CRC\0\
+RTC\0\
+Power\0\
+Crypto\0\
+MMIO\0\
+HF RX\0\
+GNSS\0\
+Link\0\
+Mic\0\
+FM\0\
+Keys\0\
+Tasks\0\
+Svc\0\
+Bus\0\
+GPIO\0\
+FS Adm\0\
+Calib\0\
+Prefs\0";
 
 /// Human-readable capability name for dialogs and settings pages.
 pub const fn name(cap: Cap) -> &'static str {
@@ -243,11 +243,11 @@ mod tests {
         let _s = unsafe { CapStorage::new() };
         let _a = unsafe { CapAudio::new() };
         let _d = unsafe { CapDisplay::new() };
-        assert_eq!(name(Cap::RadioRx), "Radio RX");
-        assert_eq!(name(Cap::BroadBandRx), "Broadband HF RX");
-        assert_eq!(name(Cap::CryptoAead), "Crypto AEAD");
-        assert_eq!(name(Cap::StorageAdmin), "Storage Admin");
-        assert_eq!(name(Cap::FactoryCalib), "Factory Calibration");
+        assert_eq!(name(Cap::RadioRx), "RF RX");
+        assert_eq!(name(Cap::BroadBandRx), "HF RX");
+        assert_eq!(name(Cap::CryptoAead), "Crypto");
+        assert_eq!(name(Cap::StorageAdmin), "FS Adm");
+        assert_eq!(name(Cap::FactoryCalib), "Calib");
         let admin_set = CapabilitySet::empty().with(Cap::StorageAdmin);
         assert_eq!(admin_set.first_cap(), Some(Cap::StorageAdmin));
         let calib_set = CapabilitySet::empty().with(Cap::FactoryCalib);
@@ -314,11 +314,11 @@ mod tests {
             .with(Cap::BroadBandRx)
             .with(Cap::GnssLocation);
         assert_eq!(set.first_cap(), Some(Cap::BroadBandRx));
-        assert_eq!(name(Cap::BroadBandRx), "Broadband HF RX");
+        assert_eq!(name(Cap::BroadBandRx), "HF RX");
 
         let single = CapabilitySet::empty().with(Cap::BroadcastFm);
         assert_eq!(single.first_cap(), Some(Cap::BroadcastFm));
-        assert_eq!(name(Cap::BroadcastFm), "Broadcast FM");
+        assert_eq!(name(Cap::BroadcastFm), "FM");
     }
 
     struct MockSecurityContext {

@@ -149,19 +149,7 @@ pub static BUILTIN_TARGETS: [BuiltinTarget; 5] = [
 
 #[inline(never)]
 pub const fn hash_app_action(path: &str, action_id: u16) -> u16 {
-    let bytes = path.as_bytes();
-    let mut h = 2_166_136_261u32;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        h ^= bytes[i] as u32;
-        h = h.wrapping_mul(16_777_619);
-        i += 1;
-    }
-    if action_id != 0 {
-        h ^= action_id as u32;
-        h = h.wrapping_mul(16_777_619);
-    }
-    ((h ^ (h >> 15)) as u16) | 0x8000
+    ::abi::hash_app_action(path.as_bytes(), action_id)
 }
 
 #[inline(always)]

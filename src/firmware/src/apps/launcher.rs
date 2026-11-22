@@ -283,12 +283,7 @@ impl LauncherApp {
                 #[cfg(feature = "filesystem")]
                 {
                     if let Some(pkg) = catalog::get_catalog().entries.get(_pkg_idx as usize) {
-                        let mut path_copy = [0u8; 24];
-                        let pb = pkg.path.as_str().as_bytes();
-                        let plen = pb.len().min(24);
-                        path_copy[..plen].copy_from_slice(&pb[..plen]);
-                        let path = unsafe { core::str::from_utf8_unchecked(&path_copy[..plen]) };
-                        let ok = crate::orchestrator::launch_krx_shortcut(ctx, path);
+                        let ok = crate::orchestrator::launch_krx_shortcut(ctx, pkg.path.as_str());
                         self.is_launching = ok;
                         self.model.is_pressed = ok;
                         if !ok {

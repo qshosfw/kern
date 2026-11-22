@@ -475,11 +475,7 @@ impl MasterConfig {
         }
 
         if repaired != 0 {
-            for i in 0..CONFIG_METAS.len() {
-                if (repaired & (1u8 << i)) != 0 {
-                    self.seal(i);
-                }
-            }
+            self.seal_all();
         }
 
         repaired
@@ -658,6 +654,19 @@ impl MasterConfig {
         self.sanitize();
         self.seal_all();
         self.dirty = 0x3F;
+        self.flush_dirty(storage)
+    }
+
+    /// Reset all preference domains to factory defaults, reseal CRCs, and persist to `/pref/*.cfg`.
+    #[inline(never)]
+    pub fn reset_all_to_defaults(&mut self, storage: &mut SystemStorage) -> Result<(), ConfigError> {
+        let dst = unsafe {
+            core::slice::from_raw_parts_mut(self as *mut Self as *mut u8, MASTER_CONFIG_SIZE)
+        };
+        decode_default_range(0, dst);
+        self.seal_all();
+        self.dirty = 0x3F;
+        self.hw_dirty = 0x1F;
         self.flush_dirty(storage)
     }
 }

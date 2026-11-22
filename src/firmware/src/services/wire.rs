@@ -498,6 +498,7 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             crate::system::enqueue_event(Event::Key { code, state });
             Ok(())
         }
+        #[cfg(not(target_arch = "arm"))]
         DOMAIN_INPUT if handle.facet == FACET_INPUT_TEXT => {
             let s = gfx::media::utf8_str(c.inp).ok_or(WireStatus::BadRange)?;
             for ch in s.chars().take(32) {
@@ -1056,20 +1057,19 @@ fn handle_data_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus
 #[inline(never)]
 fn handle_events_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus> {
     let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
-    let res = match opcode {
-        OP_EVENTS_SUBSCRIBE => c.rd_u32().and_then(|mask| {
-            let credits = c.rd_u16()?;
-            sub.active_mask = mask;
-            sub.credits = credits;
+    let res: Result<(), WireStatus> = match opcode {
+        OP_EVENTS_SUBSCRIBE => (|| {
+            sub.active_mask = c.rd_u32()?;
+            sub.credits = c.rd_u16()?;
             Ok(())
-        }),
+        })(),
         OP_EVENTS_UNSUBSCRIBE => {
             sub.active_mask = 0;
             sub.credits = 0;
             Ok(())
         }
-        OP_EVENTS_CREDIT => c.rd_u16().map(|grant| {
-            sub.credits = sub.credits.saturating_add(grant);
+        OP_EVENTS_CREDIT => c.rd_u16().map(|g| {
+            sub.credits = sub.credits.saturating_add(g);
         }),
         _ => return None,
     };

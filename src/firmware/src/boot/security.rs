@@ -44,7 +44,7 @@ pub fn handle_lockout_penalty(
         draw_locked_screen(lcd, s);
         wait_ms_wdt(1000);
     }
-    crate::security::passcode::reset_lockout_penalty(storage);
+    crate::security::passcode::reset_lockout_penalty(storage, pcfg.max_tries);
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
@@ -67,6 +67,16 @@ pub fn render_verify_modal(lcd: &mut St7565<bsp::LcdBus>, pct: u8) {
     let canvas = crate::system_canvas();
     gfx::widgets::draw_dialog_progress(canvas, "", "Verifying...", pct);
     lcd.blit(canvas);
+}
+
+#[inline(never)]
+pub fn lcd_verify_progress_hook(lcd: &mut St7565<bsp::LcdBus>) -> crate::security::ProgressHook {
+    fn on_verify_progress(ctx: *mut (), pct: u8) {
+        let lcd = unsafe { &mut *(ctx as *mut St7565<bsp::LcdBus>) };
+        py32_hal::wdt::Watchdog::feed();
+        render_verify_modal(lcd, pct);
+    }
+    crate::security::ProgressHook::new(lcd as *mut _ as *mut (), on_verify_progress)
 }
 
 #[inline(always)]
@@ -135,13 +145,7 @@ fn process_unlock_submission(
     text_view: &gfx::gui::modules::text_input::TextInputView,
     stealth: bool,
 ) -> bool {
-    fn on_verify_progress(ctx: *mut (), pct: u8) {
-        let lcd = unsafe { &mut *(ctx as *mut drivers::st7565::St7565<bsp::LcdBus>) };
-        py32_hal::wdt::Watchdog::feed();
-        render_verify_modal(lcd, pct);
-    }
-    let hook =
-        crate::security::ProgressHook::new(&mut hw.lcd as *mut _ as *mut (), on_verify_progress);
+    let hook = lcd_verify_progress_hook(&mut hw.lcd);
     let res = crate::security::passcode::verify_passcode(
         hw.filesystem,
         text_model.buffer.as_bytes(),

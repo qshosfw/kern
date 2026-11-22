@@ -260,8 +260,7 @@ fn early_init() -> Board {
         }
     } else {
         bsp::pins::BACKLIGHT.set_low();
-        let _ = hal::uart::write_line("KERN v0.1.0");
-        let _ = hal::uart::write_line(build_info::BUILD_STAMP);
+        let _ = hal::uart::write_line(build_info::ABOUT_TEXT);
     }
     board
 }

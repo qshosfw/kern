@@ -118,20 +118,14 @@ fn has_valid_calib_file(fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>) -> b
 #[cfg(feature = "filesystem")]
 #[inline(never)]
 fn save_rescued_calibration(
-    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
+    vfs: &mut SystemStorage,
     raw_calib: &mut [u8; 512],
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) {
     if !crate::services::calibration::is_valid_calibration(raw_calib) {
         crate::services::calibration::fill_default_calibration(raw_calib);
     }
-    let _ = fs.create_dir("/sys");
-    let _ = fs.write_file("/sys/calib.dat", raw_calib);
-    let _ = fs.write_file("/sys/calib.bak", raw_calib);
-
-    let mcu_uid = bsp::uid::read_mcu_uid();
-    let sig = crate::services::calibration::compute_device_signature(raw_calib, &mcu_uid);
-    let _ = fs.write_file("/sys/calib.sig", &sig.to_bytes());
+    crate::services::calibration::persist_calib_bundle(vfs, raw_calib);
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
@@ -177,10 +171,10 @@ fn prompt_and_format_storage(
     lcd: &mut St7565<bsp::LcdBus>,
     key_scanner: &mut KeypadScanner,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
+    vfs: &mut SystemStorage,
 ) {
     let raw_calib = crate::services::staging_buf();
-    let has_hw_calib = rescue_raw_calibration(fs, raw_calib);
+    let has_hw_calib = rescue_raw_calibration(&mut vfs.fs, raw_calib);
     let calib_sub = if has_hw_calib {
         "Calib safe"
     } else {
@@ -233,7 +227,7 @@ fn prompt_and_format_storage(
     }
 
     let mut last_rendered_progress = 0u8;
-    let fmt_res = fs.format(Some(&mut |progress| {
+    let fmt_res = vfs.fs.format(Some(&mut |progress| {
         bsp::Board::wdt_feed();
         if progress >= last_rendered_progress + 5 || progress == 100 {
             last_rendered_progress = progress;
@@ -246,7 +240,7 @@ fn prompt_and_format_storage(
     }
 
     render_progress(lcd, "Restoring Calib", "Saving...", 95);
-    save_rescued_calibration(fs, raw_calib, radio);
+    save_rescued_calibration(vfs, raw_calib, radio);
 }
 
 #[cfg(feature = "filesystem")]
@@ -254,19 +248,19 @@ fn prompt_and_format_storage(
 fn recover_calibration_to_fs(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-    fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
+    vfs: &mut SystemStorage,
 ) {
     render_progress(lcd, "Restoring Calib", "From backup", 50);
     prepare_boot_dialog(lcd, radio);
 
     let raw_calib = crate::services::staging_buf();
-    let from_prov = fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
+    let from_prov = vfs.fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
         && crate::services::calibration::is_valid_calibration(raw_calib);
     if !from_prov {
-        rescue_raw_calibration(fs, raw_calib);
+        rescue_raw_calibration(&mut vfs.fs, raw_calib);
     }
 
-    save_rescued_calibration(fs, raw_calib, radio);
+    save_rescued_calibration(vfs, raw_calib, radio);
 }
 
 #[cfg(feature = "filesystem")]
@@ -277,16 +271,14 @@ pub fn mount_or_format<'a>(
     filesystem: &mut FileSystemDriver<'a, Py25q16FlashDriver<bsp::FlashBus>>,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) {
-    let fs = &mut filesystem.fs;
-
-    if fs.mount().is_err() {
+    if filesystem.fs.mount().is_err() {
         // An unattended node never blocks on a panel prompt nor erases flash on its own:
         // it boots unmounted and reports the fault over RigWire for a remote decision.
         if crate::system::admits_physical_input() {
-            prompt_and_format_storage(lcd, key_scanner, radio, fs);
+            prompt_and_format_storage(lcd, key_scanner, radio, filesystem);
         }
-    } else if !has_valid_calib_file(fs) {
-        recover_calibration_to_fs(lcd, radio, fs);
+    } else if !has_valid_calib_file(&mut filesystem.fs) {
+        recover_calibration_to_fs(lcd, radio, filesystem);
     }
 }
 

@@ -186,6 +186,26 @@ pub mod icon {
     );
 }
 
+/// Canonical 15-bit FNV-1a shortcut target ID for a KRX app path and optional declared action.
+///
+/// Always sets bit 15 (`>= 0x8000`) to distinguish dynamic package targets from built-in OS
+/// shortcuts (`1..=5`). Shared by firmware shortcut resolution, `kern-sdk`, and Settings.
+#[inline(always)]
+pub const fn hash_app_action(path: &[u8], action_id: u16) -> u16 {
+    let mut h = 2_166_136_261u32;
+    let mut i = 0usize;
+    while i < path.len() {
+        h ^= path[i] as u32;
+        h = h.wrapping_mul(16_777_619);
+        i += 1;
+    }
+    if action_id != 0 {
+        h ^= action_id as u32;
+        h = h.wrapping_mul(16_777_619);
+    }
+    ((h ^ (h >> 15)) as u16) | 0x8000
+}
+
 /// Where a declared action (`SECTION_ACTIONS`) is surfaced by the OS.
 pub mod scope {
     ids! {
@@ -197,5 +217,21 @@ pub mod scope {
         SYSTEM_PAGE = 4,
         /// Runs in place as a Settings -> System maintenance button.
         SYSTEM_ACTION = 8,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_app_action_sets_msb_and_distinguishes_actions() {
+        let base = hash_app_action(b"/apps/vfo.krx", 0);
+        let act1 = hash_app_action(b"/apps/vfo.krx", 1);
+        let other = hash_app_action(b"/apps/beacon.krx", 0);
+        assert_ne!(base & 0x8000, 0);
+        assert_ne!(act1 & 0x8000, 0);
+        assert_ne!(base, act1);
+        assert_ne!(base, other);
     }
 }

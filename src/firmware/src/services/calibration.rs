@@ -273,6 +273,16 @@ fn sign_and_save_sig(vfs: &mut SystemStorage, data: &[u8; 512], mcu_uid: &[u8; 1
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
+pub fn persist_calib_bundle(vfs: &mut SystemStorage, data: &[u8; 512]) {
+    let _ = vfs.create_dir("/sys");
+    let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, data);
+    let _ = write_protected_sys_file(vfs, CALIB_BAK_PATH, data);
+    let mcu_uid = bsp::uid::read_mcu_uid();
+    sign_and_save_sig(vfs, data, &mcu_uid);
+}
+
+#[cfg(feature = "filesystem")]
+#[inline(never)]
 pub fn reformat_storage(
     vfs: &mut SystemStorage,
     fallback_calib: &[u8; 512],
@@ -290,11 +300,7 @@ pub fn reformat_storage(
         return Err(());
     }
     if keep_calib {
-        let _ = vfs.create_dir("/sys");
-        let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, staging);
-        let _ = write_protected_sys_file(vfs, CALIB_BAK_PATH, staging);
-        let mcu_uid = bsp::uid::read_mcu_uid();
-        sign_and_save_sig(vfs, staging, &mcu_uid);
+        persist_calib_bundle(vfs, staging);
     }
     Ok(())
 }

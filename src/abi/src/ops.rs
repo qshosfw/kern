@@ -289,6 +289,7 @@ abi! {
         PropGet    = 6 (Val, Val, Val),
         PropSet    = 7 (Val, Val, Val),
         PrefSet    = 8 (Val, Val, Val) [Preferences],
+        SysSec     = 9 (Val, Val, Val) [Preferences],
     }
     PROC 0x1 {
         ProcSelf   = 0 (Val, Val, Val),
@@ -358,6 +359,17 @@ abi_sub! {
         RAND32     = 4,
         CRC32      = 5,
         CRC16      = 6,
+    }
+    sys_flush {
+        FLUSH      = 0,
+        RELOAD     = 1,
+        RESET      = 2,
+    }
+    sys_sec {
+        STATUS     = 0,
+        SET_OPTS   = 1,
+        VERIFY     = 2,
+        SET        = 3,
     }
     proc_paged {
         CALL       = 0,

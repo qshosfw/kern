@@ -157,6 +157,18 @@ pub struct KrxApiTable {
 unsafe impl Sync for KrxApiTable {}
 unsafe impl Send for KrxApiTable {}
 
+/// Bitflags in `KrxModalReq::o_len` for `kind == 2` (text / passcode prompt).
+pub const TEXT_FLAG_DIGITS_ONLY: u8 = 1 << 0;
+pub const TEXT_FLAG_PASSCODE: u8 = 1 << 1;
+pub const TEXT_FLAG_EXPOSE_LEN: u8 = 1 << 2;
+
+/// Bitflags packed into `Op::SysSec` (`STATUS` return value and `SET_OPTS` / `SET` options byte).
+pub const SEC_FLAG_IS_SET: u32 = 1 << 0;
+pub const SEC_FLAG_EXPOSE_LEN: u32 = 1 << 1;
+pub const SEC_FLAG_STEALTH: u32 = 1 << 2;
+pub const SEC_FLAG_DIGITS_ONLY: u32 = 1 << 3;
+pub const SEC_FLAG_AVAILABLE: u32 = 1 << 4;
+
 impl KrxApiTable {
     /// Constructs a live `KrxApiTable` bound to `call` with the specified `granted_caps`.
     #[inline(always)]
@@ -203,7 +215,45 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn flush(&self) -> bool {
-        self.call_op(Op::SysFlush, 0, 0, 0) == 0
+        self.call_op(Op::SysFlush, crate::sub::sys_flush::FLUSH as usize, 0, 0) == 0
+    }
+
+    #[inline(always)]
+    pub fn reset_all_prefs(&self) -> bool {
+        self.call_op(Op::SysFlush, crate::sub::sys_flush::RESET as usize, 0, 0) == 0
+    }
+
+    #[inline(always)]
+    pub fn sec_status(&self) -> u32 {
+        self.call_op(Op::SysSec, crate::sub::sys_sec::STATUS as usize, 0, 0) as u32
+    }
+
+    #[inline(always)]
+    pub fn sec_set_opts(&self, flags: u8, max_tries: u8) -> bool {
+        let arg = (flags as usize) | ((max_tries as usize) << 8);
+        self.call_op(Op::SysSec, crate::sub::sys_sec::SET_OPTS as usize, arg, 0) == 0
+    }
+
+    #[inline(always)]
+    pub fn sec_verify(&self, pin: &[u8]) -> u8 {
+        self.call_op(
+            Op::SysSec,
+            crate::sub::sys_sec::VERIFY as usize,
+            pin.as_ptr() as usize,
+            pin.len(),
+        ) as u8
+    }
+
+    #[inline(always)]
+    pub fn sec_set_passcode(&self, pin: &[u8], flags: u8, max_tries: u8) -> bool {
+        let meta =
+            (pin.len() & 0xFF) | ((flags as usize) << 16) | ((max_tries as usize) << 24);
+        self.call_op(
+            Op::SysSec,
+            crate::sub::sys_sec::SET as usize,
+            pin.as_ptr() as usize,
+            meta,
+        ) == 0
     }
 
     #[inline(always)]
@@ -400,6 +450,18 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn prompt_text(&self, tag: u8, title: &[u8], initial: &[u8], max_len: u8) {
+        self.prompt_text_flags(tag, title, initial, max_len, 0);
+    }
+
+    #[inline(always)]
+    pub fn prompt_text_flags(
+        &self,
+        tag: u8,
+        title: &[u8],
+        initial: &[u8],
+        max_len: u8,
+        flags: u8,
+    ) {
         let req = KrxModalReq {
             title: title.as_ptr(),
             msg: initial.as_ptr(),
@@ -409,7 +471,7 @@ impl KrxApiTable {
             kind: 2,
             t_len: title.len().min(255) as u8,
             m_len: initial.len().min(255) as u8,
-            o_len: 0,
+            o_len: flags,
             c_len: 0,
             max_len,
             _pad: 0,

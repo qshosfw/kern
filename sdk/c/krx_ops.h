@@ -14,6 +14,7 @@
 #define OP_PROP_GET        0x06u
 #define OP_PROP_SET        0x07u
 #define OP_PREF_SET        0x08u /* [Preferences] */
+#define OP_SYS_SEC         0x09u /* [Preferences] */
 
 /* Domain 0x1: PROC */
 #define OP_PROC_SELF       0x10u
@@ -72,7 +73,7 @@
 #define OP_IO_TIME         0x83u
 #define OP_IO_BUS          0x84u /* [RawPeripheral] */
 
-#define KRX_OP_COUNT       50u
+#define KRX_OP_COUNT       51u
 
 /* Sub-opcodes (mirrored from abi::sub) */
 /* sys_query */
@@ -83,6 +84,17 @@
 #define SUB_SYS_QUERY_RAND32       4u
 #define SUB_SYS_QUERY_CRC32        5u
 #define SUB_SYS_QUERY_CRC16        6u
+
+/* sys_flush */
+#define SUB_SYS_FLUSH_FLUSH        0u
+#define SUB_SYS_FLUSH_RELOAD       1u
+#define SUB_SYS_FLUSH_RESET        2u
+
+/* sys_sec */
+#define SUB_SYS_SEC_STATUS         0u
+#define SUB_SYS_SEC_SET_OPTS       1u
+#define SUB_SYS_SEC_VERIFY         2u
+#define SUB_SYS_SEC_SET            3u
 
 /* proc_paged */
 #define SUB_PROC_PAGED_CALL        0u
@@ -100,6 +112,7 @@
 #define SUB_FS_READ_ASSET          2u
 #define SUB_FS_READ_LIST_DIR       3u
 #define SUB_FS_READ_EXTENTS        4u
+#define SUB_FS_READ_STATS          5u
 
 /* fs_write */
 #define SUB_FS_WRITE_FILE          0u
@@ -414,6 +427,7 @@
 #define KRX_ICON_STATUS_REVERSE    145u
 #define KRX_ICON_STATUS_ENCRYPT    146u
 #define KRX_ICON_STATUS_PACKET     147u
+#define KRX_ICON_GLOBE             148u
 
 /* Properties (abi::prop): krx_prop_get / krx_prop_set */
 #define KRX_PROP_BACKLIGHT_TIME    1u

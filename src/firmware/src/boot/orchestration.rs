@@ -275,14 +275,14 @@ fn boot_stage_core_modules_check(hw: &mut SystemHardware) {
         "/apps/settings.krx",
     ) {
         Ok((_, s)) if s.abi == ::abi::VERSION => return,
-        Ok(_) => "settings.krx ABI",
-        Err(kernel::runtime::KrxLaunchError::FileNotFound) => "settings.krx missing",
-        Err(_) => "settings.krx corrupt",
+        Ok(_) => "ABI mismatch",
+        Err(kernel::runtime::KrxLaunchError::FileNotFound) => "Missing",
+        Err(_) => "Corrupt",
     };
 
     hw.backlight.wake();
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog(canvas, "Core Modules", status, "M: Continue", false);
+    gfx::widgets::draw_dialog(canvas, "settings.krx", status, "M: Continue", false);
     hw.lcd.turn_on();
     hw.lcd.blit(canvas);
 
@@ -349,9 +349,7 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     }
 
     #[cfg(feature = "usb")]
-    if hw.usb.is_connected() || hw.usb.consecutive_sof() > 0 {
-        py32_hal::rcc::set_sysclk_48mhz();
-    } else {
+    if !(hw.usb.is_connected() || hw.usb.consecutive_sof() > 0) {
         py32_hal::rcc::set_sysclk_index(master_cfg.system.cpu_clock);
     }
     #[cfg(not(feature = "usb"))]
