@@ -186,22 +186,22 @@ pub enum KrxLaunchError {
 // diagnostics so wording never drifts between surfaces.
 utils::static_bytes!(
     static LAUNCH_ERR_HELP = b"\
-Not found.\nInstall via RigWire.\0\
-Read failed.\0\
-Invalid KRX header.\0\
-CRC mismatch.\nReinstall.\0\
-Missing metadata.\0\
-Missing code.\0\
-Unsupported cap.\0\
-Exceeds 8KB RAM.\0\
-Low stack RAM.\0\
-Relocation failed.\0\
-ABI mismatch.\nUpdate app or OS.\0\
-Exceeds 8KB limit.\0\
-Start failed.\0\
-Invalid entry.\0\
-Truncated package.\0\
-Unsupported profile.\0";
+Not found\0\
+Read fail\0\
+Bad header\0\
+CRC mismatch\0\
+No metadata\0\
+No code\0\
+Cap denied\0\
+RAM >8KB\0\
+Low stack\0\
+Reloc fail\0\
+ABI mismatch\0\
+Size >8KB\0\
+Start fail\0\
+Bad entry\0\
+Truncated\0\
+Bad profile\0";
 );
 
 impl KrxLaunchError {

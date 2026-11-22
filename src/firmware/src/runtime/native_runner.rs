@@ -599,7 +599,7 @@ pub unsafe fn invoke_krx_native(
     }
 
     // 2. Fast stack margin guard (prevent Cortex-M0+ stack exhaustion before touching guard canary)
-    if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 192 {
+    if kernel::sys::SystemDiagnostics::stack_margin_bytes() < 256 {
         super::fault::raise_contract_fault(kernel::runtime::fault::Exception::Stack, op as u8, 0);
         return kernel::runtime::fault::KRX_FAULT_SENTINEL;
     }
@@ -654,6 +654,14 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *
         #[cfg(test)]
         {
             ACTIVE_CTX = core::ptr::null_mut();
+        }
+        if !kernel::sys::SystemDiagnostics::is_stack_guard_intact() {
+            kernel::sys::SystemDiagnostics::paint_stack();
+            super::fault::raise_contract_fault(
+                kernel::runtime::fault::Exception::Stack,
+                op as u8,
+                0,
+            );
         }
         if res == kernel::runtime::fault::KRX_FAULT_SENTINEL || super::fault::has_pending_fault() {
             if !ctx.is_null() {

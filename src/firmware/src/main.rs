@@ -41,7 +41,7 @@ pub use crate::apps::AppRegistry;
 pub use crate::services::SysContext;
 
 /// Global event queue for zero-alloc event-driven kernel dispatch
-pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 8>>> = Mutex::new(RefCell::new(Deque::new()));
+pub static EVENT_QUEUE: Mutex<RefCell<Deque<Event, 6>>> = Mutex::new(RefCell::new(Deque::new()));
 
 #[used]
 #[unsafe(link_section = ".uninit")]

@@ -112,8 +112,7 @@ pub fn derive_master_key(
         state.permute(6);
     }
 
-    let keep_72 = crate::master_config_ref().system.cpu_clock == 4;
-    if boosted && !keep_72 {
+    if boosted {
         py32_hal::rcc::set_sysclk_index(crate::master_config_ref().system.cpu_clock);
     }
 

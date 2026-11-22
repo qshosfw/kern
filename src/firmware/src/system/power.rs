@@ -108,7 +108,7 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         if !is_headless() {
             unsafe {
                 (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                    .show_toast("Remote active: sleep locked", 1800);
+                    .show_toast("Remote active", 1800);
             }
         }
         return;
@@ -191,12 +191,22 @@ fn run_stop_sleep_cycle() {
     py32_hal::exti::clear_pending_mask(wakeup_mask);
 
     use py32_hal::pac::Interrupt;
-    unsafe {
-        py32_hal::pac::nvic_clear_pending(Interrupt::EXTI4_15 as u8);
-        py32_hal::pac::nvic_clear_pending(Interrupt::TIM6_LPTIM1_DAC as u8);
-        py32_hal::pac::nvic_enable(Interrupt::EXTI4_15 as u8);
-        py32_hal::pac::nvic_enable(Interrupt::TIM6_LPTIM1_DAC as u8);
+    #[inline(never)]
+    fn wake_irqs(op: u8) {
+        for irq in [Interrupt::EXTI4_15 as u8, Interrupt::TIM6_LPTIM1_DAC as u8] {
+            unsafe {
+                match op {
+                    0 => {
+                        py32_hal::pac::nvic_clear_pending(irq);
+                        py32_hal::pac::nvic_enable(irq);
+                    }
+                    1 => py32_hal::pac::nvic_clear_pending(irq),
+                    _ => py32_hal::pac::nvic_disable(irq),
+                }
+            }
+        }
     }
+    wake_irqs(0);
 
     let mut exit_hold_steps: u8 = 0;
 
@@ -221,10 +231,7 @@ fn run_stop_sleep_cycle() {
             WAKE_EXTI_FLAGS.store(0, core::sync::atomic::Ordering::Release);
             py32_hal::lptim::LowPowerTimer::clear_expired();
             py32_hal::exti::clear_pending_mask(wakeup_mask);
-            unsafe {
-                py32_hal::pac::nvic_clear_pending(Interrupt::EXTI4_15 as u8);
-                py32_hal::pac::nvic_clear_pending(Interrupt::TIM6_LPTIM1_DAC as u8);
-            }
+            wake_irqs(1);
             py32_hal::lptim::LowPowerTimer::start_single_shot_irq(sleep_ticks, true);
             py32_hal::pwr::enter_stop();
         });
@@ -241,10 +248,7 @@ fn run_stop_sleep_cycle() {
     }
 
     // 7. Disarm sleep wake IRQs and restore GPIOs
-    unsafe {
-        py32_hal::pac::nvic_disable(Interrupt::EXTI4_15 as u8);
-        py32_hal::pac::nvic_disable(Interrupt::TIM6_LPTIM1_DAC as u8);
-    }
+    wake_irqs(2);
     py32_hal::exti::disable_lines(wakeup_mask);
     py32_hal::lptim::LowPowerTimer::stop();
 
@@ -300,10 +304,21 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
 #[inline(never)]
 pub(super) fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
     // Catch silent Cortex-M0+ stack exhaustion before it corrupts `.bss` / `RADIO_STATE`.
-    assert!(
-        kernel::sys::SystemDiagnostics::is_stack_guard_intact(),
-        "stack guard breached"
-    );
+    // If a KRX guest is loaded, contain it as an AppFault instead of hard-faulting the device.
+    if !kernel::sys::SystemDiagnostics::is_stack_guard_intact() {
+        #[cfg(feature = "krx_native")]
+        if crate::runtime::native_runner::slot_ref().is_loaded {
+            kernel::sys::SystemDiagnostics::paint_stack();
+            crate::runtime::fault::raise_contract_fault(
+                kernel::runtime::fault::Exception::Stack,
+                0,
+                0,
+            );
+            hw.contain_app_fault();
+            return;
+        }
+        panic!("stack guard breached");
+    }
 
     unsafe {
         (*core::ptr::addr_of_mut!(POWER_SERVICE)).tick_second();

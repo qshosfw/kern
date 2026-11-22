@@ -614,7 +614,7 @@ impl KrxApiTable {
 
     #[inline(always)]
     pub fn sys_info(&self, out: &mut KrxSysInfo) -> bool {
-        self.call_op(Op::SysInfo, out as *mut KrxSysInfo as usize, 0, 0) != 0
+        self.call_op(Op::SysInfo, out as *mut KrxSysInfo as usize, 0, 0) == 0
     }
 
     #[inline(always)]

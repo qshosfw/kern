@@ -194,8 +194,9 @@ pub mod icon {
 pub const fn hash_app_action(path: &[u8], action_id: u16) -> u16 {
     let mut h = 2_166_136_261u32;
     let mut i = 0usize;
+    let ptr = path.as_ptr();
     while i < path.len() {
-        h ^= path[i] as u32;
+        h ^= unsafe { *ptr.add(i) } as u32;
         h = h.wrapping_mul(16_777_619);
         i += 1;
     }

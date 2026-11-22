@@ -40,7 +40,6 @@ CRC_LEN = 2
 MIN_RECORD_LEN = 17
 MAX_WIRE_FILE_SIZE = 262144
 MAX_APP_PATH_LEN = 24
-MAX_CATALOG_PACKAGES = 8
 
 KRX_MAGIC = b"\xC0\xDE\x01\xFE"
 KRX_CLASSES = {0: "Native", 1: "Paged", 2: "VMachine", 3: "Declare"}
@@ -1399,15 +1398,6 @@ class RigWireClient:
             if not force:
                 raise FileExistsError(
                     f"'{remote_path}' already exists ({existing['size']}B); pass --force to overwrite"
-                )
-        else:
-            apps_entries = self.ls("/apps")
-            pkg_count = sum(
-                1 for e in apps_entries if not e["is_dir"] and e["name"].lower().endswith(PKG_EXTS)
-            )
-            if pkg_count >= MAX_CATALOG_PACKAGES and not force:
-                raise RuntimeError(
-                    f"/apps already has {pkg_count}/{MAX_CATALOG_PACKAGES} catalog packages; remove one or pass --force"
                 )
 
         ver = info["semver"]

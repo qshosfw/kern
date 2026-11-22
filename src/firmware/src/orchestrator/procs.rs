@@ -26,28 +26,28 @@ pub fn init_proc_table() {
     crate::runtime::init_native_slot();
 }
 
-static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<4> =
+static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<2> =
     kernel::proc::ResourceLeaseManager::new();
 
 #[inline(always)]
-pub fn lease_manager() -> &'static kernel::proc::ResourceLeaseManager<4> {
+pub fn lease_manager() -> &'static kernel::proc::ResourceLeaseManager<2> {
     unsafe { &*core::ptr::addr_of!(LEASE_MGR) }
 }
 
 #[inline(always)]
-pub fn lease_manager_mut() -> &'static mut kernel::proc::ResourceLeaseManager<4> {
+pub fn lease_manager_mut() -> &'static mut kernel::proc::ResourceLeaseManager<2> {
     unsafe { &mut *core::ptr::addr_of_mut!(LEASE_MGR) }
 }
 
-static mut STATUS_TRAY: kernel::proc::StatusTray<4> = kernel::proc::StatusTray::new();
+static mut STATUS_TRAY: kernel::proc::StatusTray<2> = kernel::proc::StatusTray::new();
 
 #[inline(always)]
-pub fn status_tray() -> &'static kernel::proc::StatusTray<4> {
+pub fn status_tray() -> &'static kernel::proc::StatusTray<2> {
     unsafe { &*core::ptr::addr_of!(STATUS_TRAY) }
 }
 
 #[inline(always)]
-pub fn status_tray_mut() -> &'static mut kernel::proc::StatusTray<4> {
+pub fn status_tray_mut() -> &'static mut kernel::proc::StatusTray<2> {
     unsafe { &mut *core::ptr::addr_of_mut!(STATUS_TRAY) }
 }
 

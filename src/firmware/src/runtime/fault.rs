@@ -84,7 +84,7 @@ pub fn clear_fault_pkg() {
 /// Thread mode recovery. Returns `0` if the exception frame pointer is outside SRAM.
 #[cfg(all(target_arch = "arm", not(test)))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn try_contain_app_fault(frame: *mut u32) -> u32 {
+pub unsafe extern "C" fn try_contain_app_fault(frame: *mut u32, is_stack_ovf: u32) -> u32 {
     unsafe {
         GUEST_IN_FLIGHT = 0;
     }
@@ -95,16 +95,25 @@ pub unsafe extern "C" fn try_contain_app_fault(frame: *mut u32) -> u32 {
         return 0;
     }
 
-    let fault_pc = unsafe { *frame.add(6) };
+    let (kind, fault_pc) = if is_stack_ovf != 0 {
+        kernel::sys::SystemDiagnostics::paint_stack();
+        (Exception::Stack, 0u32)
+    } else {
+        (Exception::Fault, unsafe { *frame.add(6) })
+    };
     let arena_base = crate::data::arena::arena_base_ptr() as u32;
     let slot = super::native_runner::slot_ref();
     unsafe {
         ACTIVE_FAULT = AppFault {
             pid: slot.pid,
-            kind: Exception::Fault,
+            kind,
             op: 0,
             _pad: 0,
-            pc_off: fault_pc.wrapping_sub(arena_base) as u16,
+            pc_off: if fault_pc != 0 {
+                fault_pc.wrapping_sub(arena_base) as u16
+            } else {
+                0
+            },
             _pad2: 0,
             addr: fault_pc,
         };

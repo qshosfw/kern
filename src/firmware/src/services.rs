@@ -35,7 +35,7 @@ pub struct SysContext<'a, 'hw> {
     pub config: &'a mut crate::config::MasterConfig,
     pub storage: &'a mut SystemStorage<'hw>,
     pub audio: &'a mut drivers::audio::AudioAmplifier<bsp::BspAudioPa>,
-    pub ipc: &'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
+    pub ipc: &'a mut kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 4>,
     #[cfg(test)]
     pub display: Option<&'a mut display::DisplayHardware<'a>>,
     #[cfg(all(test, feature = "uart"))]

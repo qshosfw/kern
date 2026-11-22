@@ -83,7 +83,7 @@ pub struct SystemHardware<'a> {
     #[cfg(feature = "uart")]
     pub uart: drivers::uart::HardwareUart<bsp::Uart1Serial>,
     pub key_scanner: KeypadScanner,
-    pub ipc_queue: kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 8>,
+    pub ipc_queue: kernel::ipc::MessageQueue<kernel::ipc::SysEvent, 4>,
     #[cfg(feature = "usb")]
     pub usb: drivers::usb::UsbDriver,
     pub orchestrator: crate::orchestrator::Orchestrator,
@@ -127,6 +127,8 @@ enum CtxOp<'e> {
     Start,
     Render,
     Dispatch(&'e Event),
+    #[cfg(feature = "krx_native")]
+    ContainFault,
 }
 
 impl<'a> SystemHardware<'a> {
@@ -233,7 +235,17 @@ impl<'a> SystemHardware<'a> {
                 false
             }
             CtxOp::Dispatch(ev) => self.orchestrator.dispatch_event(&mut ctx, *ev),
+            #[cfg(feature = "krx_native")]
+            CtxOp::ContainFault => {
+                crate::runtime::fault::finish_fault_cleanup(&mut ctx);
+                false
+            }
         }
+    }
+
+    #[cfg(feature = "krx_native")]
+    pub fn contain_app_fault(&mut self) {
+        self.exec_with_ctx(CtxOp::ContainFault);
     }
 
     pub fn dispatch_event_and_actions(&mut self, ev: &Event) -> bool {

@@ -135,7 +135,7 @@ pub fn extract_filename(path: &str) -> &str {
 }
 
 pub const MAX_CATALOG_PACKAGES: usize = 8;
-pub const MAX_CATALOG_ACTIONS: usize = 4;
+pub const MAX_CATALOG_ACTIONS: usize = 2;
 
 /// Cached declared action from a KRX app's `SECTION_ACTIONS` (16 B, wire-identical to `KrxActionDecl`
 /// with `flags` byte repurposed as `pkg_idx` for zero-unpacking copy).

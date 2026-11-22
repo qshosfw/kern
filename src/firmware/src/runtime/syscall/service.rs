@@ -10,7 +10,7 @@ use kernel::proc::abi::{
 };
 pub use kernel::proc::service_registry::ServiceRegistry;
 
-pub static mut SERVICE_REGISTRY: ServiceRegistry<4> = ServiceRegistry::new();
+pub static mut SERVICE_REGISTRY: ServiceRegistry<2> = ServiceRegistry::new();
 pub static mut KERNEL_IPC_CHANNEL: IpcChannel<2> = IpcChannel::new();
 static mut PENDING_LAUNCH_PATH: [u8; 32] = [0u8; 32];
 static mut PENDING_LAUNCH_LEN: u8 = 0;
@@ -35,7 +35,7 @@ pub fn ipc_channel_mut() -> &'static mut IpcChannel<2> {
 }
 
 #[inline(always)]
-pub fn service_registry_mut() -> &'static mut ServiceRegistry<4> {
+pub fn service_registry_mut() -> &'static mut ServiceRegistry<2> {
     unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_REGISTRY) }
 }
 

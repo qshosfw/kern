@@ -32,15 +32,15 @@ utils::static_bytes!(
 
 utils::static_bytes!(
     static EXCEPTION_DESCS = b"\
-ok.\0\
-crashed.\nInvalid memory/code.\0\
-stack overflow.\0\
-hung & closed.\0\
-permission denied.\0\
-bad pointer.\0\
-invalid call arg.\0\
-unleased hardware.\0\
-unknown API call.\0";
+ok\0\
+crashed\0\
+stack overflow\0\
+hung\0\
+cap denied\0\
+bad pointer\0\
+bad arg\0\
+unleased hw\0\
+unknown op\0";
 );
 
 impl Exception {
@@ -147,7 +147,7 @@ mod tests {
         assert!(f.is_active());
         assert_eq!(
             f.format_message("scanner", &mut buf),
-            "scanner crashed.\nInvalid memory/code.\nAt +0x01A4"
+            "scanner crashed\nAt +0x01A4"
         );
 
         let c = AppFault {
@@ -161,7 +161,7 @@ mod tests {
         };
         assert_eq!(
             c.format_message("demo", &mut buf),
-            "demo permission denied.\nCall 0x0042"
+            "demo cap denied\nCall 0x0042"
         );
         assert!(!AppFault::NONE.is_active());
     }

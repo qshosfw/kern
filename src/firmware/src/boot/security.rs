@@ -104,17 +104,13 @@ pub fn handle_unlock_failure(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     storage: &mut SystemStorage,
-    text_view: &gfx::gui::modules::text_input::TextInputView,
-    text_model: &gfx::gui::modules::text_input::TextInputModel,
     stealth: bool,
 ) {
     let pcfg = crate::security::passcode::get_passcode_config(storage);
     let canvas = crate::system_canvas();
     if pcfg.failed_attempts >= pcfg.max_tries {
-        draw_locked_screen(lcd, "Restarting...");
-        radio.set_status_led(bsp::StatusLed::Red);
-        radio.play_beep(crate::services::melody::BeepType::Warning);
-        wait_ms_wdt(1500);
+        draw_locked_screen(lcd, "Restarting");
+        flash_error_and_pause(radio);
         kernel::power::PowerControl::reboot();
     }
 
@@ -128,8 +124,6 @@ pub fn handle_unlock_failure(
             &mut msg_buf,
         )
     };
-    use gfx::gui::view::View;
-    text_view.render(canvas, text_model);
     gfx::widgets::draw_modal_popup(canvas, None, msg);
     lcd.blit(canvas);
 
@@ -142,7 +136,6 @@ fn process_unlock_submission(
     text_model: &mut gfx::gui::modules::text_input::TextInputModel,
     passcode_state: &mut PasscodeState,
     master_cfg: &MasterConfig,
-    text_view: &gfx::gui::modules::text_input::TextInputView,
     stealth: bool,
 ) -> bool {
     let hook = lcd_verify_progress_hook(&mut hw.lcd);
@@ -160,19 +153,7 @@ fn process_unlock_submission(
             unlocked = true;
         }
         Ok(false) => {
-            handle_unlock_failure(
-                &mut hw.lcd,
-                &mut hw.radio,
-                hw.filesystem,
-                text_view,
-                text_model,
-                stealth,
-            );
-        }
-        Err(crate::security::passcode::PasscodeError::LockedOut) => {
-            hw.radio
-                .play_beep(crate::services::melody::BeepType::Warning);
-            handle_lockout_penalty(&mut hw.lcd, &mut hw.radio, hw.filesystem);
+            handle_unlock_failure(&mut hw.lcd, &mut hw.radio, hw.filesystem, stealth);
         }
         _ => {}
     }
@@ -203,12 +184,6 @@ pub fn run_boot_unlock_prompt(
         return;
     }
 
-    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(crate::POWER_SERVICE) };
-    crate::services::power::PowerServiceConfigExt::load_battery_config(
-        power_service,
-        &master_cfg.battery,
-    );
-    crate::services::telemetry::sample_battery_and_system(adc, false);
     crate::hardware::apply_lcd_hardware(&master_cfg.display, &mut hw.lcd);
 
     let stealth = cfg.stealth;
@@ -219,8 +194,6 @@ pub fn run_boot_unlock_prompt(
     hw.lcd.turn_on();
 
     if stealth {
-        hw.backlight
-            .set_mode(drivers::backlight::BacklightMode::Off);
         hw.backlight.turn_off();
     } else {
         master_cfg.display.apply_to_backlight(&mut hw.backlight);
@@ -290,7 +263,6 @@ pub fn run_boot_unlock_prompt(
                 text_model,
                 passcode_state,
                 master_cfg,
-                &text_view,
                 stealth,
             ) {
                 break;

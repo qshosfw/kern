@@ -27,8 +27,8 @@ pub const ESCAPE_HOLD_MS: u16 = 3_000;
 static ESCAPE_HOLD_ACCUM_MS: AtomicU16 = AtomicU16::new(0);
 static ESCAPE_WAIT_RELEASE: AtomicBool = AtomicBool::new(false);
 
-/// Fixed 16-slot (64 B) zero-alloc ring buffer for headless audio/beep routing over RigWire.
-const HEADLESS_TONE_CAP: usize = 16;
+/// Fixed 8-slot (32 B) zero-alloc ring buffer for headless audio/beep routing over RigWire.
+const HEADLESS_TONE_CAP: usize = 8;
 static mut HEADLESS_TONE_RING: [(u16, u16); HEADLESS_TONE_CAP] = [(0, 0); HEADLESS_TONE_CAP];
 static HEADLESS_TONE_HEAD: AtomicU8 = AtomicU8::new(0);
 static HEADLESS_TONE_TAIL: AtomicU8 = AtomicU8::new(0);

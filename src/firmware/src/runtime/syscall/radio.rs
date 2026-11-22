@@ -103,6 +103,35 @@ fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
 }
 
 #[inline(never)]
+unsafe fn dispatch_rf_vfo_channel(
+    coord: &mut RadioCoordinator,
+    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    is_get: bool,
+    a1: usize,
+    a2: usize,
+) -> usize {
+    let (Some(vfo), Some(bytes)) = (decode_vfo_slot(a1 as u8), unsafe {
+        ptr_slice_mut(a2 as *mut u8, ChannelRecord::SIZE)
+    }) else {
+        return 1;
+    };
+    if (a2 & 3) != 0 {
+        return 1;
+    }
+    let rec = unsafe { &mut *(bytes.as_mut_ptr() as *mut ChannelRecord) };
+    if is_get {
+        unsafe { core::ptr::write_bytes(rec, 0, 1) };
+        rec.zone_mask = 1;
+        coord.save_vfo_to_channel(vfo, rec);
+        let memory = coord.vfo_memory_index[vfo.index().min(2)];
+        return memory.map_or(0, |i| i as usize + 1) << 8;
+    }
+    let memory = ((a1 >> 8) as u16).checked_sub(1);
+    coord.load_channel_into_vfo(radio, vfo, memory, rec);
+    0
+}
+
+#[inline(never)]
 unsafe fn dispatch_rf_vfo(
     coord: &mut RadioCoordinator,
     radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
@@ -112,31 +141,9 @@ unsafe fn dispatch_rf_vfo(
 ) -> usize {
     use ::abi::sub::rf_vfo;
     match sub {
-        // A VFO is exchanged as the 64-byte channel record: the same 64 bytes an app
-        // reads from `/user/channels.ch`, so no attribute is lost between memory,
-        // storage and the live radio.
-        rf_vfo::GET_CHANNEL | rf_vfo::SET_CHANNEL => {
-            let (Some(vfo), Some(bytes)) = (decode_vfo_slot(a1 as u8), unsafe {
-                ptr_slice_mut(a2 as *mut u8, ChannelRecord::SIZE)
-            }) else {
-                return 1;
-            };
-            if (a2 & 3) != 0 {
-                return 1;
-            }
-            let rec = unsafe { &mut *(bytes.as_mut_ptr() as *mut ChannelRecord) };
-            if sub == rf_vfo::GET_CHANNEL {
-                unsafe { core::ptr::write_bytes(rec, 0, 1) };
-                rec.zone_mask = 1;
-                coord.save_vfo_to_channel(vfo, rec);
-                let memory = coord.vfo_memory_index[vfo.index().min(2)];
-                return memory.map_or(0, |i| i as usize + 1) << 8;
-            }
-            // Bits 8..24 of `a1`: memory channel number + 1 the record came from (0 = free VFO).
-            let memory = ((a1 >> 8) as u16).checked_sub(1);
-            coord.load_channel_into_vfo(radio, vfo, memory, rec);
-            0
-        }
+        rf_vfo::GET_CHANNEL | rf_vfo::SET_CHANNEL => unsafe {
+            dispatch_rf_vfo_channel(coord, radio, sub == rf_vfo::GET_CHANNEL, a1, a2)
+        },
         rf_vfo::STATE => {
             let out = a1 as *mut KrxRadioState;
             if out.is_null() {
