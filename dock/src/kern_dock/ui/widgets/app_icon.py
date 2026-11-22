@@ -37,7 +37,7 @@ def _pack_ascii_grid(lines: list[str], w: int, h: int) -> bytes:
 
 @lru_cache(maxsize=1)
 def load_kern_pixel_icons() -> tuple[dict[int, tuple[int, int, bytes]], dict[str, tuple[int, int, bytes]]]:
-    """Load real 16×16 pixel bitmaps from `assets/icons/kern_apps_16.txt` and `crates/gfx/src/icons/app.rs`."""
+    """Load real 16×16 pixel bitmaps from `assets/icons/kern_apps_16.txt` and `src/gfx/src/icons/app.rs`."""
     by_id: dict[int, tuple[int, int, bytes]] = {}
     by_name: dict[str, tuple[int, int, bytes]] = {}
 

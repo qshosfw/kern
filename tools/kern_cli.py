@@ -5,7 +5,9 @@ Cross-platform unified developer CLI for Kern (`./kern` on Linux/macOS, `kern.cm
 
 from __future__ import annotations
 
+import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -48,15 +50,17 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ("dock", "Launch graphical hardware companion (live LCD, keypad, mount)"),
             ("wire", "RigWire serial host tool and file provisioning client"),
             ("mount", "Mount radio KernFS over RigWire via cross-platform WebDAV"),
+            ("ports", "List connected USB & serial radio ports (--json supported)"),
             ("emu", "Launch QEMU hardware emulator with interactive Web UI"),
         ],
     ),
     (
-        "Packages & Formats",
+        "Packages, Formats & Diagnostics",
         [
-            ("pkg", "Build one or all KRX packages under packages/"),
+            ("pkg", "Build or list KRX packages under packages/ (--list, --help)"),
             ("abi", "Regenerate or verify sdk/c/krx_ops.h from src/abi"),
             ("kfw", "Pack, inspect, verify, sign, or extract .kfw containers"),
+            ("doctor", "Check cross-platform toolchain, Python, Dock & USB health"),
         ],
     ),
 ]
@@ -107,6 +111,138 @@ def _print_help() -> int:
     return cli_ui.EXIT_OK
 
 
+def _run_ports(args: list[str]) -> int:
+    as_json = "--json" in args
+    if "-h" in args or "--help" in args:
+        print("Usage: ./kern ports [--json]\n\nList connected USB and serial radio ports across Linux, macOS, and Windows.")
+        return cli_ui.EXIT_OK
+    try:
+        from serial.tools import list_ports  # type: ignore[import-not-found]
+    except ImportError:
+        cli_ui.err("pyserial is not installed (run: pip install pyserial)")
+        return cli_ui.EXIT_ERR
+
+    rows = []
+    for p in sorted(list_ports.comports(), key=lambda x: x.device):
+        vid_pid = f"{p.vid:04x}:{p.pid:04x}" if (p.vid is not None and p.pid is not None) else "—"
+        if vid_pid == "36b7:ffff":
+            mode = "RigWire CDC"
+        elif vid_pid == "36b7:0001":
+            mode = "Bootloader"
+        elif cli_ui.is_usb_serial_device(p.device):
+            mode = "USB Serial"
+        else:
+            mode = "Serial"
+        desc = p.product or p.description or "—"
+        rows.append({"device": p.device, "vid_pid": vid_pid, "mode": mode, "description": desc})
+
+    if as_json:
+        print(json.dumps(rows, indent=2))
+        return cli_ui.EXIT_OK
+
+    cli_ui.header("Connected Radio & Serial Ports", f"Host: {platform.system()} ({platform.machine()})")
+    if not rows:
+        cli_ui.info("No serial or USB radio ports detected.")
+        return cli_ui.EXIT_OK
+    cli_ui.table(
+        ("Device", "VID:PID", "Mode", "Description"),
+        ((r["device"], r["vid_pid"], r["mode"], r["description"]) for r in rows),
+    )
+    return cli_ui.EXIT_OK
+
+
+def _check_cmd_ver(cmd: list[str]) -> tuple[bool, str]:
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, env=cli_ui.cargo_env(), timeout=5)
+        if res.returncode == 0:
+            first = (res.stdout or res.stderr).strip().splitlines()[0] if (res.stdout or res.stderr).strip() else "ok"
+            return True, first
+        return False, f"exit {res.returncode}"
+    except FileNotFoundError:
+        return False, "not found"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _run_doctor(args: list[str]) -> int:
+    as_json = "--json" in args
+    if "-h" in args or "--help" in args:
+        print("Usage: ./kern doctor [--json]\n\nVerify Rust, ARM GCC, Python, GTK4/Dock, and OS mount prerequisites.")
+        return cli_ui.EXIT_OK
+
+    checks: list[dict[str, object]] = []
+
+    def add(name: str, ok: bool, detail: str, required: bool = True) -> None:
+        checks.append({"check": name, "ok": ok, "required": required, "detail": detail})
+
+    py_ok = sys.version_info >= (3, 11)
+    add("Python >= 3.11", py_ok, f"{platform.python_version()} ({sys.executable})")
+
+    ok_rc, rc_ver = _check_cmd_ver(["rustc", "--version"])
+    add("Rust compiler", ok_rc, rc_ver)
+
+    ok_cg, cg_ver = _check_cmd_ver(["cargo", "--version"])
+    add("Cargo", ok_cg, cg_ver)
+
+    ok_t, targets_out = _check_cmd_ver(["rustup", "target", "list", "--installed"])
+    has_m0 = ok_t and ("thumbv6m-none-eabi" in subprocess.run(
+        ["rustup", "target", "list", "--installed"], capture_output=True, text=True, env=cli_ui.cargo_env()
+    ).stdout) if ok_t else False
+    add("Cortex-M0+ target", has_m0, "thumbv6m-none-eabi installed" if has_m0 else "run: rustup target add thumbv6m-none-eabi")
+
+    ok_gcc, gcc_ver = _check_cmd_ver(["arm-none-eabi-gcc", "--version"])
+    add("ARM GCC (KRX pkgs)", ok_gcc, gcc_ver, required=False)
+
+    try:
+        import serial  # type: ignore[import-not-found]
+        add("pyserial", True, getattr(serial, "__version__", "installed"), required=False)
+    except ImportError:
+        add("pyserial", False, "not installed (pip install pyserial)", required=False)
+
+    try:
+        import gi  # type: ignore[import-not-found]
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Adw", "1")
+        from gi.repository import Adw, Gtk  # noqa: F401
+        add("GTK4 + Libadwaita", True, f"GTK {Gtk.get_major_version()}.{Gtk.get_minor_version()} / Adw {Adw.get_major_version()}.{Adw.get_minor_version()}", required=False)
+    except Exception:
+        add("GTK4 + Libadwaita", False, "unavailable (optional, needed for ./kern dock GUI)", required=False)
+
+    sys_name = platform.system()
+    if sys_name == "Linux":
+        mtool = shutil.which("gio")
+        add("OS Mount (GIO)", bool(mtool), mtool or "install gvfs / glib2", required=False)
+    elif sys_name == "Darwin":
+        mtool = shutil.which("mount_webdav")
+        add("OS Mount (WebDAV)", bool(mtool), mtool or "mount_webdav missing", required=False)
+    elif sys_name == "Windows":
+        mtool = shutil.which("net")
+        add("OS Mount (net use)", bool(mtool), mtool or "net.exe missing", required=False)
+
+    if as_json:
+        print(json.dumps({"host": platform.platform(), "checks": checks}, indent=2))
+        return cli_ui.EXIT_OK if all(c["ok"] or not c["required"] for c in checks) else cli_ui.EXIT_ERR
+
+    cli_ui.header("Kern Toolchain Doctor", f"{platform.system()} {platform.release()} ({platform.machine()})")
+    cli_ui.table(
+        ("Component", "Status", "Details"),
+        (
+            (
+                c["check"],
+                "OK" if c["ok"] else ("FAIL" if c["required"] else "OPT"),
+                c["detail"],
+            )
+            for c in checks
+        ),
+    )
+    missing_req = [c for c in checks if c["required"] and not c["ok"]]
+    if missing_req:
+        cli_ui.err(f"{len(missing_req)} required prerequisite(s) missing.")
+        return cli_ui.EXIT_ERR
+    cli_ui.ok("All required toolchain prerequisites are ready.")
+    return cli_ui.EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args:
@@ -142,6 +278,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_py("kfw.py", rest)
     if cmd == "mount":
         return _run_py("kernfs_mount.py", rest)
+    if cmd == "ports":
+        return _run_ports(rest)
+    if cmd == "doctor":
+        return _run_doctor(rest)
     if cmd == "emu":
         return _run_py("emulator_helper.py", rest)
     if cmd == "dock":

@@ -1,4 +1,4 @@
-.PHONY: all build check test pkg abi size bloat lint fmt flash info clean help
+.PHONY: all build check test pkg abi size bloat lint fmt flash info clean doctor ports dock mount help
 
 all: build
 
@@ -21,7 +21,7 @@ size:
 	@./kern size
 
 bloat:
-	@./kern bloat report
+	@./kern bloat audit
 
 lint:
 	@./kern lint report
@@ -34,6 +34,18 @@ flash:
 
 info:
 	@./kern info
+
+doctor:
+	@./kern doctor
+
+ports:
+	@./kern ports
+
+dock:
+	@./kern dock
+
+mount:
+	@./kern mount
 
 clean:
 	@./kern clean

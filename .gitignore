@@ -3,7 +3,11 @@
 **/*.bin
 **/*.bkp
 __pycache__/
+*.pyc
 /packages/**/build/
+/dock/build/
+/dock/dist/
+*.egg-info/
 
 # Local reference & working directories (not tracked in public repository)
 /.claude/

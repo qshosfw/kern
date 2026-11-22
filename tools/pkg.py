@@ -5,12 +5,20 @@ One compiler invocation, one linker script (`sdk/krx.ld`) and one set of
 position-independence guards for every unit of every package.
 """
 
+import argparse
+import json
 import os
 import subprocess
 import sys
 import tomllib
+from pathlib import Path
 
-import pack_krx
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+import cli_ui  # noqa: E402
+import pack_krx  # noqa: E402
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 ROOT = os.path.join(REPO_ROOT, "packages")
@@ -52,7 +60,8 @@ def run(*cmd: str) -> str:
 
 
 def fail(msg: str):
-    raise SystemExit(f"ERROR: {msg}")
+    cli_ui.err(msg)
+    raise SystemExit(cli_ui.EXIT_ERR)
 
 
 def objcopy(elf: str) -> bytes:
@@ -208,9 +217,43 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
     print(f"  -> {m['output']} ({len(image)} B)")
 
 
-def main():
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="kern pkg",
+        description="Build or list KRX packages from packages/<group>/<name>/krx.toml manifests.",
+    )
+    ap.add_argument("packages", nargs="*", help="Package name(s) (e.g. core/settings, dfu, or 'all')")
+    ap.add_argument("-l", "--list", action="store_true", help="List all discovered KRX packages")
+    ap.add_argument("--json", action="store_true", help="Output package list as JSON (with --list)")
+    args = ap.parse_args(argv)
+
     pkg_map = discover_packages()
-    names = [n for n in sys.argv[1:] if n != "all"]
+    if args.list:
+        seen: set[str] = set()
+        rows: list[dict[str, str]] = []
+        for k, pdir in sorted(pkg_map.items()):
+            if "/" in k and pdir not in seen:
+                seen.add(pdir)
+                with open(os.path.join(pdir, "krx.toml"), "rb") as f:
+                    m = tomllib.load(f)
+                rows.append({
+                    "id": k,
+                    "name": str(m.get("name", k)),
+                    "type": str(m.get("type", "app")),
+                    "profile": str(m.get("profile", "n1")),
+                    "output": str(m.get("output", "")),
+                })
+        if args.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            cli_ui.header(f"KRX Packages ({len(rows)})")
+            cli_ui.table(
+                ("Package", "Name", "Type", "Profile", "Output"),
+                ((r["id"], r["name"], r["type"], r["profile"], r["output"]) for r in rows),
+            )
+        return cli_ui.EXIT_OK
+
+    names = [n for n in args.packages if n != "all"]
     if not names:
         seen = set()
         names = []
@@ -224,7 +267,8 @@ def main():
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr or "")
         fail(f"`{' '.join(e.cmd[:1])}` failed")
+    return cli_ui.EXIT_OK
 
 
 if __name__ == "__main__":
-    main()
+    cli_ui.run_main(main)
