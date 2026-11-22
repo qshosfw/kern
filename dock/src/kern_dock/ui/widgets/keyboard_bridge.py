@@ -50,7 +50,10 @@ class KeyboardBridge:
         kc.connect("key-released", self._on_key_released)
         win.add_controller(kc)
 
-        sc = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
+        sc = Gtk.EventControllerScroll(
+            flags=Gtk.EventControllerScrollFlags.VERTICAL,
+            propagation_phase=Gtk.PropagationPhase.CAPTURE,
+        )
         sc.connect("scroll", self._on_scroll)
         sc.connect("scroll-end", lambda _c: setattr(self, "_scroll_accum", 0.0))
         stage.add_controller(sc)
@@ -58,17 +61,23 @@ class KeyboardBridge:
         win.connect("notify::is-active", lambda w, _p: None if w.is_active() else self.on_focus_lost())
         self.stage.update_keyboard_chip(enabled=self.enabled, live_typing=self.live_typing)
 
-    def _on_scroll(self, _c: Any, _dx: float, dy: float) -> bool:
-        if not self.enabled or dy == 0.0 or self.win.get_visible_dialog() is not None:
+    def _on_scroll(self, c: Any, _dx: float, dy: float) -> bool:
+        if dy == 0.0 or self.win.get_visible_dialog() is not None:
             return False
         lk = self.runtime.link
         if not lk.connected or lk.link_mode != "rigwire":
             return False
-        self._scroll_accum += float(dy)
-        steps = int(self._scroll_accum)
-        if steps != 0:
-            self._scroll_accum -= float(steps)
+        unit = c.get_unit()
+        if unit == Gdk.ScrollUnit.WHEEL or abs(dy) >= 0.99:
+            steps = int(round(dy)) if abs(dy) >= 0.99 else (1 if dy > 0 else -1)
+            self._scroll_accum = 0.0
             lk.send_encoder(max(-8, min(8, steps)))
+            return True
+        self._scroll_accum += float(dy)
+        if abs(self._scroll_accum) >= 0.6:
+            step = 1 if self._scroll_accum > 0 else -1
+            self._scroll_accum = 0.0
+            lk.send_encoder(step)
         return True
 
     def _text_focused(self) -> bool:
@@ -109,10 +118,6 @@ class KeyboardBridge:
             return self._on_live_typing_key(keyval)
         name, base = self._key_names(keyval, keycode)
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
-
-        # Model-aware navigation: K1 uses < / > (Left / Right) and Up / Down; K5v3 uses Up / Down
-        if name in ("Left", "Right") and self.runtime.active_model != "k1":
-            return False
 
         action, long_press = resolve_binding(self._key_index, name, base, shift)
         if action is not None:

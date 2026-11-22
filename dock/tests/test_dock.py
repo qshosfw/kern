@@ -120,7 +120,10 @@ class TestDeviceAndKeys(unittest.TestCase):
         for action, _desc, names in KEY_BINDINGS:
             self.assertTrue(names)
             self.assertTrue(action in DOCK_ACTIONS or action in rigwire.KEY_CODES)
+        self.assertEqual(resolve_binding(idx, "Return", "Return", False), ("menu", False))
         self.assertEqual(resolve_binding(idx, "Return", "Return", True), ("menu", True))
+        self.assertEqual(resolve_binding(idx, "BackSpace", "BackSpace", False), ("exit", False))
+        self.assertEqual(resolve_binding(idx, "Escape", "Escape", False), ("exit", False))
         self.assertEqual(resolve_binding(idx, "asterisk", "8", True), ("star", False))
         self.assertEqual(resolve_binding(idx, "exclam", "1", True), ("1", True))
         self.assertEqual(resolve_binding(idx, "KP_7", "KP_7", False), ("7", False))

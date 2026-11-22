@@ -4,7 +4,7 @@ from __future__ import annotations
 
 KEY_BINDINGS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("menu", "Menu / OK", ("Return", "KP_Enter", "Menu")),
-    ("exit", "Exit / Back", ("Escape", "Delete", "KP_Decimal", "KP_Delete")),
+    ("exit", "Exit / Back", ("BackSpace", "Escape", "Delete", "KP_Decimal", "KP_Delete")),
     ("up", "Up / Previous (<)", ("Up", "Left", "Page_Up", "KP_Add", "KP_Up", "KP_Left", "KP_Page_Up")),
     ("down", "Down / Next (>)", ("Down", "Right", "Page_Down", "KP_Subtract", "KP_Down", "KP_Right", "KP_Page_Down")),
     *((str(d), f"Digit {d}", (str(d), f"KP_{d}")) for d in range(10)),
