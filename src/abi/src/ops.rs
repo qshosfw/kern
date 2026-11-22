@@ -375,6 +375,7 @@ abi_sub! {
         ASSET      = 2,
         LIST_DIR   = 3,
         EXTENTS    = 4,
+        STATS      = 5,
     }
     fs_write {
         FILE       = 0,

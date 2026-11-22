@@ -185,6 +185,39 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         0
                     }
                 }
+                fs_read::STATS => {
+                    #[cfg(feature = "filesystem")]
+                    {
+                        if dst.len() >= 16 {
+                            let s = st.fs.stats();
+                            #[repr(C)]
+                            struct WireStats(u16, u16, u16, u16, u16, u16, u32);
+                            let w = WireStats(
+                                s.total_sectors,
+                                s.used_sectors,
+                                s.free_sectors,
+                                s.deleted_sectors,
+                                s.active_files,
+                                0,
+                                s.wear_cycles,
+                            );
+                            unsafe {
+                                core::ptr::copy_nonoverlapping(
+                                    &raw const w as *const u8,
+                                    dst.as_mut_ptr(),
+                                    16,
+                                );
+                            }
+                            return 16;
+                        }
+                        0
+                    }
+                    #[cfg(not(feature = "filesystem"))]
+                    {
+                        let _ = dst;
+                        0
+                    }
+                }
                 _ => 0,
             }
         }

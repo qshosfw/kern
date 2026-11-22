@@ -181,6 +181,9 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             let is_outline = (d.a & 4) != 0;
             let is_toggle = (d.a & 8) != 0;
             let toggle_on = (d.a & 16) != 0;
+            let arrow_left = (d.a & 32) != 0;
+            let arrow_right = (d.a & 64) != 0;
+            let is_shortcut = (d.a & 128) != 0;
             let comfortable = d.h >= 12;
             let row_h: u8 = if comfortable { 13 } else { 10 };
             let icon_dy: i16 = if comfortable { 2 } else { 1 };
@@ -196,59 +199,109 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 };
                 gfx::widgets::draw_selection_capsule(canvas, [2, uy, 120, row_h], cap_flags);
             }
-            let text_x = if d.b != 0 {
-                super::display::draw_icon(4, d.y + icon_dy, d.b, tc_u8);
-                15
-            } else {
-                5
-            };
             let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
-            let title_max = if is_toggle || has_chevron {
-                108i16
-            } else if !s1.is_empty() {
-                (116 - gfx::text::str_width(s1, &gfx::fonts::tomthumb::FONT)).max(36)
-            } else {
-                119i16
-            };
-            gfx::text::draw_str_ellipsis(
-                canvas,
-                text_x,
-                d.y + text_dy,
-                s0,
-                &gfx::fonts::mumatrix_regular::FONT,
-                col,
-                title_max,
-            );
-            if is_toggle {
-                let ic = if toggle_on {
-                    ::abi::icon::CHECKBOX_ON
-                } else {
-                    ::abi::icon::CHECKBOX_OFF
-                };
-                super::display::draw_icon(112, d.y + icon_dy, ic, tc_u8);
-            } else if !s1.is_empty() {
-                gfx::text::draw_str_align(
+            if is_shortcut {
+                let mut tx = 4i16
+                    + gfx::widgets::draw_key_badge_box(canvas, 4, d.y + 3, s0, filled_sel) as i16
+                    + 3;
+                if d.b != 0 {
+                    super::display::draw_icon(tx, d.y + icon_dy, d.b, tc_u8);
+                    tx += 11;
+                }
+                let act_lbl = tr_ui(s1, false, &mut tr_buf);
+                gfx::text::draw_str_ellipsis(
                     canvas,
-                    119,
+                    tx,
                     d.y + text_dy,
-                    s1,
-                    &gfx::fonts::tomthumb::FONT,
+                    act_lbl,
+                    &gfx::fonts::mumatrix_regular::FONT,
                     col,
-                    gfx::text::Align::Right,
+                    112,
                 );
-            } else if has_chevron {
-                let phase = ((d.extra >> 1) & 3) as i16;
-                let dx = if is_sel && d.extra != 0 {
-                    if phase == 3 { 1 } else { phase }
+                gfx::icons::draw_icon_8(canvas, 114, d.y + 3, gfx::icons::ARROW_RIGHT, col);
+            } else {
+                let text_x = if d.b != 0 {
+                    super::display::draw_icon(4, d.y + icon_dy, d.b, tc_u8);
+                    15
                 } else {
-                    0
+                    5
                 };
-                super::display::draw_icon(
-                    112 + dx,
-                    d.y + icon_dy + i16::from(comfortable),
-                    35,
-                    tc_u8,
+                let sw = if s1.is_empty() {
+                    0
+                } else {
+                    gfx::text::str_width(s1, &gfx::fonts::tomthumb::FONT)
+                };
+                let title_max = if is_toggle || has_chevron {
+                    108i16
+                } else if sw > 0 {
+                    let pad = if arrow_left || arrow_right { 22 } else { 6 };
+                    (120 - pad - sw).max(36)
+                } else {
+                    119i16
+                };
+                gfx::text::draw_str_ellipsis(
+                    canvas,
+                    text_x,
+                    d.y + text_dy,
+                    s0,
+                    &gfx::fonts::mumatrix_regular::FONT,
+                    col,
+                    title_max,
                 );
+                if is_toggle {
+                    let ic = if toggle_on {
+                        ::abi::icon::CHECKBOX_ON
+                    } else {
+                        ::abi::icon::CHECKBOX_OFF
+                    };
+                    super::display::draw_icon(112, d.y + icon_dy, ic, tc_u8);
+                } else if sw > 0 {
+                    let val_right = if is_outline && (arrow_left || arrow_right) {
+                        if arrow_right {
+                            gfx::icons::draw_icon_8(
+                                canvas,
+                                114,
+                                d.y + 3,
+                                gfx::icons::ARROW_RIGHT,
+                                col,
+                            );
+                        }
+                        if arrow_left {
+                            gfx::icons::draw_icon_8(
+                                canvas,
+                                (104 - sw).max(40),
+                                d.y + 3,
+                                gfx::icons::ARROW_LEFT,
+                                col,
+                            );
+                        }
+                        112
+                    } else {
+                        119
+                    };
+                    gfx::text::draw_str_align(
+                        canvas,
+                        val_right,
+                        d.y + text_dy,
+                        s1,
+                        &gfx::fonts::tomthumb::FONT,
+                        col,
+                        gfx::text::Align::Right,
+                    );
+                } else if has_chevron {
+                    let phase = ((d.extra >> 1) & 3) as i16;
+                    let dx = if is_sel && d.extra != 0 {
+                        if phase == 3 { 1 } else { phase }
+                    } else {
+                        0
+                    };
+                    super::display::draw_icon(
+                        112 + dx,
+                        d.y + icon_dy + i16::from(comfortable),
+                        35,
+                        tc_u8,
+                    );
+                }
             }
         }
         KRX_WIDGET_BIG_DIGIT | KRX_WIDGET_SMALL_DIGIT => {

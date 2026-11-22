@@ -286,6 +286,67 @@ fn boot_stage_security_check(
     }
 }
 
+/// Pre-splash check for required core `.krx` packages (IJV-style missing-module guard).
+/// Runs in <1 ms when `/apps/settings.krx` is valid; otherwise pauses on a recovery screen
+/// with USB/keypad active until the user presses MENU to continue anyway.
+#[cfg(all(feature = "filesystem", feature = "krx_native", not(feature = "resident_settings")))]
+#[inline(never)]
+fn boot_stage_core_modules_check(hw: &mut SystemHardware) {
+    const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
+    const SUM_RESERVE: usize =
+        (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
+    let tail = crate::data::arena::scratch_tail_bytes_mut();
+    let tail_len = tail.len();
+    let (pre_hdr, hdr_buf) = tail.split_at_mut(tail_len - HDR_RESERVE);
+    let slot = unsafe {
+        &mut *(pre_hdr.as_mut_ptr().add(pre_hdr.len() - SUM_RESERVE)
+            as *mut core::mem::MaybeUninit<kernel::runtime::KrxSummary<'_>>)
+    };
+    let status: &str = match crate::runtime::read_krx_summary(
+        hw.filesystem,
+        "/apps/settings.krx",
+        hdr_buf,
+        slot,
+    ) {
+        Ok(s) if s.abi == ::abi::VERSION => return,
+        Ok(_) => "settings.krx: ABI mismatch",
+        Err(kernel::runtime::KrxLaunchError::FileNotFound) => "settings.krx: Missing",
+        Err(_) => "settings.krx: Corrupt",
+    };
+
+    hw.backlight.wake();
+    let canvas = crate::system_canvas();
+    canvas.clear();
+    gfx::widgets::draw_negated_header(canvas, 0, "Core Modules");
+    gfx::text::draw_str(canvas, 4, 19, status, &gfx::fonts::tomthumb::FONT, gfx::Color::Fill);
+    gfx::text::draw_str(
+        canvas,
+        4,
+        32,
+        "Connect USB & run:\nkern wire provision",
+        &gfx::fonts::tomthumb::FONT,
+        gfx::Color::Fill,
+    );
+    gfx::widgets::draw_key_badge(canvas, 4, 54, "M", "Continue");
+    hw.lcd.turn_on();
+    hw.lcd.blit(canvas);
+
+    hw.key_scanner.clear();
+    loop {
+        #[cfg(feature = "usb")]
+        let _ = hw.usb.poll();
+        if let Some((
+            kernel::event::KeyCode::Menu | kernel::event::KeyCode::Exit,
+            kernel::event::KeyState::Pressed,
+        )) = hw.key_scanner.scan()
+        {
+            hw.key_scanner.clear();
+            return;
+        }
+        py32_hal::delay::delay_ms(10);
+    }
+}
+
 #[inline(never)]
 pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     let master_cfg = crate::master_config();
@@ -317,6 +378,12 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
             &mut hw.lcd,
             &mut hw.backlight,
         );
+    }
+
+    // ── STAGE 2.5: Core Modules Verification (IJV-style missing-package guard) ──
+    #[cfg(all(feature = "filesystem", feature = "krx_native", not(feature = "resident_settings")))]
+    if !passcode_state.is_locked {
+        boot_stage_core_modules_check(hw);
     }
 
     // ── STAGE 3: Instant Boot Splash & Concurrent System Bring-up ───
