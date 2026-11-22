@@ -1,4 +1,4 @@
-//! P0 Leaf 16: Extract Embedded 16x16 Icon Bitmap (`SEC_ASSETS = 0x0004`) from `.krx`/`.mod`.
+//! P0 Leaf 16: Stream-Extract Actions (`0x000B`) & 16x16 Icon (`0x0004`) using a 96B stack buffer.
 #![no_std]
 #![no_main]
 
@@ -20,40 +20,56 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
     let m = st.meta_mut();
-    let mut raw = MaybeUninit::<[u8; 512]>::uninit();
-    let hdr = unsafe { &mut *raw.as_mut_ptr() };
-    let n = api.read_file(subslice(&m.path, 0, m.path_len as usize), hdr);
-    if n >= 28 && byte_at(hdr, 0) == 0xC0 && byte_at(hdr, 1) == 0xDE {
-        let mut off = 24usize;
-        let mut s = rd16(hdr, 6);
-        while s > 0 && off + 4 <= n {
+    let path = subslice(&m.path, 0, m.path_len as usize);
+    let mut raw = MaybeUninit::<[u8; 96]>::uninit();
+    let buf = unsafe { &mut *raw.as_mut_ptr() };
+
+    if api.read_file_at(path, 0, subslice_24(buf)) >= 10 && byte_at(buf, 0) == 0xC0 && byte_at(buf, 1) == 0xDE {
+        let mut s = rd16(buf, 6);
+        let mut off = 24u32;
+        while s > 0 && off < 512 {
             s -= 1;
-            let sid = rd16(hdr, off);
-            let slen = rd16(hdr, off + 2) as usize;
-            if slen < 4 || off + slen > n { break; }
-            if sid == 11 && slen >= 20 {
-                m.action_len = copy_bytes(&mut m.action_label, 0, cstr_slice(subslice(hdr, off + 8, off + 20))) as u8;
-            } else if sid == 4 && slen >= 40 {
-                let mut ao = off + 4;
-                let end = off + slen;
-                while ao + 4 <= end {
-                    let aw = byte_at(hdr, ao + 1) as usize;
-                    let ah = byte_at(hdr, ao + 2) as usize;
+            if api.read_file_at(path, off, shared::subslice_mut(buf, 0, 4)) < 4 {
+                break;
+            }
+            let sid = rd16(buf, 0);
+            let slen = rd16(buf, 2) as usize;
+            if slen < 4 {
+                break;
+            }
+            let blen = (slen - 4).min(96);
+            if sid == 11 && blen >= 16 {
+                if api.read_file_at(path, off + 4, shared::subslice_mut(buf, 0, 16)) >= 16 {
+                    m.action_len = copy_bytes(&mut m.action_label, 0, cstr_slice(subslice(buf, 4, 16))) as u8;
+                }
+            } else if sid == 4 && blen >= 36 {
+                let n = api.read_file_at(path, off + 4, shared::subslice_mut(buf, 0, blen));
+                let mut ao = 0usize;
+                while ao + 4 <= n {
+                    let aw = byte_at(buf, ao + 1) as usize;
+                    let ah = byte_at(buf, ao + 2) as usize;
                     let sz = ((aw + 7) >> 3) * ah;
-                    if ao + 4 + sz > end { break; }
+                    if ao + 4 + sz > n {
+                        break;
+                    }
                     if aw == 16 && ah == 16 && sz == 32 {
-                        copy_bytes(&mut m.icon_16, 0, subslice(hdr, ao + 4, ao + 36));
+                        copy_bytes(&mut m.icon_16, 0, subslice(buf, ao + 4, ao + 36));
                         m.has_icon16 = 1;
                         break;
                     }
                     ao += 4 + sz;
                 }
             }
-            off += (slen + 3) & !3;
+            off += ((slen + 3) & !3) as u32;
         }
     }
     ctx.continuation.kind = KRX_LEAF_KIND_DONE;
     0
+}
+
+#[inline(always)]
+fn subslice_24(b: &mut [u8; 96]) -> &mut [u8] {
+    shared::subslice_mut(b, 0, 24)
 }
 
 krx_entry!(leaf_entry);

@@ -1,5 +1,5 @@
-//! P0 Leaf 1: Parse `.krx`/`.mod` Header (Identity, Version, Author, Type, Profile, Caps,
-//! Actions/Services) then chain via P0 continuation to `leaf_app_icon` for the 16x16 bitmap.
+//! P0 Leaf 1: Stream-Parse `.krx`/`.mod` Header (Identity, Version, Author, Type, Profile, Caps)
+//! using only a 128-byte stack buffer, then chain to `leaf_app_icon` for Actions & 16x16 Icon.
 #![no_std]
 #![no_main]
 
@@ -53,9 +53,11 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     m.caps = 0;
     m.has_icon16 = 0;
 
-    let mut raw = MaybeUninit::<[u8; 512]>::uninit();
+    // Preamble (24B) + Identity (44B) + TypeLifecycle (16B) + Execution (32B) = 116B <= 128B.
+    let mut raw = MaybeUninit::<[u8; 128]>::uninit();
     let hdr = unsafe { &mut *raw.as_mut_ptr() };
-    let n = api.read_file(subslice(&m.path, 0, p), hdr);
+    let path = subslice(&m.path, 0, p);
+    let n = api.read_file_at(path, 0, hdr);
     if n >= 28 && byte_at(hdr, 0) == 0xC0 && byte_at(hdr, 1) == 0xDE {
         let mut off = 24usize;
         let mut s = rd16(hdr, 6);
@@ -63,18 +65,21 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
             s -= 1;
             let sid = rd16(hdr, off);
             let slen = rd16(hdr, off + 2) as usize;
-            if slen < 4 || off + slen > n { break; }
+            if slen < 4 || off + slen > n {
+                break;
+            }
             let b = off + 4;
             let end = off + slen;
             if sid == 1 && end >= b + 26 {
-                let noff = rd16(hdr, b) as usize;
+                let noff = rd16(hdr, b) as u32;
                 m.ver_major = byte_at(hdr, b + 2);
                 m.ver_minor = byte_at(hdr, b + 3);
                 m.ver_patch = byte_at(hdr, b + 4);
                 m.author_len = cp(&mut m.author, cstr_slice(subslice(hdr, b + 7, b + 19)));
-                if noff < n {
-                    let nm = cstr_slice(subslice(hdr, noff, n));
-                    if !nm.is_empty() { m.name_len = cp(&mut m.name, nm); }
+                let nn = api.read_file_at(path, noff, nbuf);
+                let nm = cstr_slice(subslice(nbuf, 0, nn));
+                if !nm.is_empty() {
+                    m.name_len = cp(&mut m.name, nm);
                 }
             } else if sid == 9 && end >= b + 12 {
                 m.exec_type = byte_at(hdr, b);
