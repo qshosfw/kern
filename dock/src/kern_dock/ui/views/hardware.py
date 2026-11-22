@@ -70,7 +70,7 @@ class HardwareView:
         # === 1. SWD DEBUG PROBE ===
         self.grp_swd = Adw.PreferencesGroup(
             title="SWD Debug Probe",
-            description="Direct Cortex-M0+ control & flashing via CMSIS-DAP, ST-Link, or J-Link (works when radio is off)",
+            description="Direct Cortex-M0+ control &amp; flashing via CMSIS-DAP, ST-Link, or J-Link (works when radio is off)",
         )
         rescan_swd = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Rescan SWD Probes")
         rescan_swd.add_css_class("flat")
