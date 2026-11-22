@@ -15,6 +15,7 @@ from gi.repository import Gtk  # noqa: E402
 from ... import REPO_ROOT
 
 KRX_IDENT = b"\xC0\xDE\x01\xFE"
+ST7565_PIXEL_ASPECT = 1.30  # Quansheng ST7565 LCD pixels are 1.30x taller than wide
 _KRX_EXEC_TYPES = {1: "App", 2: "Service", 3: "Daemon", 4: "Driver", 5: "Module"}
 _KRX_CLASSES = {0: "Native", 1: "Paged", 2: "VM", 3: "Declare"}
 
@@ -272,18 +273,29 @@ def make_app_icon_widget(
         import cairo
 
         cr.set_antialias(cairo.ANTIALIAS_NONE)
-        cell = max(1, min(w // max(1, bw), h // max(1, bh)))
-        grid_w = bw * cell
-        grid_h = bh * cell
-        x0 = (w - grid_w) // 2
-        y0 = (h - grid_h) // 2
+        cell_h = min(h / max(1, bh), (w / max(1, bw)) * ST7565_PIXEL_ASPECT)
+        cell_w = cell_h / ST7565_PIXEL_ASPECT
+        grid_w = bw * cell_w
+        grid_h = bh * cell_h
+        x0 = (w - grid_w) * 0.5
+        y0 = (h - grid_h) * 0.5
+
+        x_edges = [round(x0 + xx * cell_w) for xx in range(bw + 1)]
+        y_edges = [round(y0 + yy * cell_h) for yy in range(bh + 1)]
 
         rgba = widget.get_color()
         cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, rgba.alpha * 0.88)
         for yy in range(bh):
+            py = y_edges[yy]
+            ph = y_edges[yy + 1] - py
+            if ph <= 0:
+                continue
             for xx in range(bw):
                 if _pixel_is_set(bits, bw, xx, yy):
-                    cr.rectangle(x0 + xx * cell, y0 + yy * cell, cell, cell)
+                    px = x_edges[xx]
+                    pw = x_edges[xx + 1] - px
+                    if pw > 0:
+                        cr.rectangle(px, py, pw, ph)
         cr.fill()
 
     area.set_draw_func(_draw)
