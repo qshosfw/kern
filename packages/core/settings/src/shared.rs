@@ -22,7 +22,6 @@ pub const LEAF_INFO_RENDER: u8 = 14;
 pub const LEAF_SYS_OPS: u8 = 15;
 pub const LEAF_APP_ICON: u8 = 16;
 pub const LEAF_BANDPLANS: u8 = 17;
-pub const LEAF_STORAGE: u8 = 18;
 
 // Modal tags shared across root and leaves
 pub const MODAL_CHOICE: u8 = 30;

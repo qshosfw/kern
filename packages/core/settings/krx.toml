@@ -32,7 +32,6 @@ leaves = [
     "leaf_sys_ops.rs",
     "leaf_app_icon.rs",
     "leaf_bandplans.rs",
-    "leaf_storage.rs",
 ]
 
 icon_8 = """

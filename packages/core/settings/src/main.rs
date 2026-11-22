@@ -18,7 +18,7 @@ use kern_sdk::{
 use schema::{
     ACT_ASSET_JINGLE, ACT_ASSET_LANG, ACT_ASSET_ROGER, ACT_ASSET_SPLASH, ACT_BANDPLANS,
     ACT_DEV_MODEL, ACT_DEV_OWNER, ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_INSTALLED_APPS,
-    ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SHORTCUTS, ACT_STORAGE, ACT_SUB_BATT_INFO,
+    ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SHORTCUTS, ACT_SUB_BATT_INFO,
     ACT_SUB_BATT_TWEAKS, ACT_SUB_BTN_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO, ACT_SYS_MODULES,
     CAT_COUNT, CH_BATT_K1, Kind, SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START,
     SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START, SUB_SPLASH_COUNT, SUB_SPLASH_START,
@@ -32,7 +32,7 @@ use shared::{
     CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER, CMD_SYS_DO_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET,
     LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER, LEAF_ASSET_APPLY,
     LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
-    LEAF_INFO_RENDER, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_STORAGE, LEAF_SYS_OPS,
+    LEAF_INFO_RENDER, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SYS_OPS,
     MODAL_ASSET_PICK, MODAL_CHOICE, MODAL_DELETE_APP, MODAL_MODEL_PICK, MODAL_REBOOT_RADIO,
     MODAL_RESET_SETTINGS, MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL,
     MODAL_TEXT_OWNER, MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice, subslice,
@@ -55,7 +55,6 @@ enum View {
     BattInfo = 6,
     SysInfo = 7,
     Bandplans = 8,
-    Storage = 9,
 }
 
 struct SettingsState {
@@ -115,12 +114,12 @@ impl SettingsState {
     }
 
     fn sync_status_bar(&self, api: &KrxApiTable) {
-        const VT: &[u8] = b"Settings\0\0Tweaks\0Installed Apps\0\0Shortcuts\0Battery Info\0System Info\0Bandplans\0Storage\0Modules\0Boot Splash\0";
+        const VT: &[u8] = b"Settings\0\0Tweaks\0Installed Apps\0\0Shortcuts\0Battery Info\0System Info\0Bandplans\0Modules\0Boot Splash\0";
         let title: &[u8] = match self.view {
             View::Category => cat_name(self.cat_sel),
             View::AppDetail => subslice(&self.sh.meta().name, 0, self.sh.meta().name_len as usize),
-            View::Submenu if self.sub_kind == ACT_SUB_SPLASH => kern_sdk::nth_packed_slice(VT, 11),
-            View::InstalledApps if self.sh.modules_only != 0 => kern_sdk::nth_packed_slice(VT, 10),
+            View::Submenu if self.sub_kind == ACT_SUB_SPLASH => kern_sdk::nth_packed_slice(VT, 10),
+            View::InstalledApps if self.sh.modules_only != 0 => kern_sdk::nth_packed_slice(VT, 9),
             v => kern_sdk::nth_packed_slice(VT, v as u8),
         };
         ui::set_title(api, title);
@@ -197,7 +196,7 @@ impl SettingsState {
             View::Shortcuts => (&mut self.sh.sc_sel, 21),
             View::BattInfo | View::SysInfo => (&mut self.sh.info_sel, 5),
             View::Bandplans => (&mut self.sh.bp_sel, self.sh.bp_count),
-            View::AppDetail | View::Storage => return,
+            View::AppDetail => return,
         };
         if count == 0 {
             return;
@@ -279,7 +278,6 @@ impl SettingsState {
                                 0,
                             );
                         }
-                        ACT_STORAGE => self.enter_view(api, View::Storage, 0),
                         ACT_RESET_SETTINGS | ACT_REBOOT_RADIO => {
                             let cmd = if item.meta == ACT_RESET_SETTINGS { CMD_SYS_REQ_RESET } else { CMD_SYS_REQ_REBOOT };
                             self.call_leaf(api, LEAF_SYS_OPS, cmd, 0);
@@ -349,7 +347,7 @@ impl SettingsState {
                 }
             }
             View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_TOGGLE_TX, 0),
-            View::BattInfo | View::SysInfo | View::Storage => {}
+            View::BattInfo | View::SysInfo => {}
         }
     }
 
@@ -543,7 +541,7 @@ impl SettingsState {
                         flags |= ui::FLAG_TOGGLE_ON;
                     }
                 }
-                Kind::Action if is_sel && item.meta <= ACT_STORAGE => {
+                Kind::Action if is_sel && item.meta <= ACT_BANDPLANS => {
                     flags |= ui::FLAG_CHEVRON;
                 }
                 _ => {}
@@ -589,7 +587,6 @@ impl SettingsState {
             View::BattInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_BATT, 0),
             View::SysInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_SYS, 0),
             View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_RENDER, 0),
-            View::Storage => self.call_leaf(api, LEAF_STORAGE, 0, 0),
         }
     }
 }
