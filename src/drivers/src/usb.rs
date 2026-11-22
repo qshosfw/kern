@@ -892,7 +892,11 @@ impl UsbDriver {
 
     #[inline(always)]
     pub fn has_pending_transfer(&self) -> bool {
-        self.ep0_rem > 0 || self.ep0_need_zlp || self.pending_addr > 0
+        #[cfg(feature = "usb_cdc")]
+        let cdc_rx = self.cdc.rx_available() > 0;
+        #[cfg(not(feature = "usb_cdc"))]
+        let cdc_rx = false;
+        self.ep0_rem > 0 || self.ep0_need_zlp || self.pending_addr > 0 || cdc_rx
     }
 
     #[inline(always)]

@@ -57,9 +57,11 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // by entering STOP mode (which disconnects USB and requires a physical button to wake).
     if is_remote_control_active(hw, py32_hal::delay::millis()) {
         hw.orchestrator.reset_hold_tracking();
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_toast("Remote active: sleep locked", 1800);
+        if !is_headless() {
+            unsafe {
+                (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
+                    .show_toast("Remote active: sleep locked", 1800);
+            }
         }
         return;
     }
@@ -73,6 +75,12 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     hw.backlight.turn_off();
     hw.lcd.enter_sleep();
     hw.audio.disable();
+    #[cfg(feature = "target_k10pro")]
+    {
+        let mut bus = bsp::RadioBus;
+        bsp::Board::set_bk_gpio(&mut bus, bsp::pins::BK_GPIO_BT_EN, false);
+        bsp::Board::set_bk_gpio(&mut bus, bsp::pins::BK_GPIO_GPS_EN, false);
+    }
     hw.radio.sleep();
     hw.radio.set_status_led(bsp::StatusLed::Off);
     bsp::pins::FLASHLIGHT.set_low();
@@ -99,16 +107,17 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     #[cfg(feature = "filesystem")]
     hw.filesystem.fs.dev.release_power_down();
 
+    // Restore clocks, UART baud, audio, and display hardware BEFORE bringing up USB PHY
+    // so `enable_usbd()` sees the restored 48 MHz clock and arms hardware CTC SOF-lock.
+    crate::master_config().hw_dirty = 0x1F;
+    hw.apply_dirty_configs();
+
     #[cfg(feature = "uart")]
     py32_hal::uart::clear_errors();
     #[cfg(feature = "usb")]
     hw.usb.init();
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     hw.wire.reset_collector();
-
-    // Restore clocks, UART baud, audio, and display hardware
-    crate::master_config().hw_dirty = 0x1F;
-    hw.apply_dirty_configs();
 
     // Reset hold tracking so no leftover hold sheet or toast lingers
     hw.orchestrator.reset_hold_tracking();
@@ -227,9 +236,22 @@ fn run_stop_sleep_cycle() {
 
 #[inline(never)]
 pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc) {
+    // Immediately quench RF TX, sleep transceiver/flash/USB, and drop to 16 MHz HSI
+    // so a critically depleted 2S Li-ion pack is not over-discharged while waiting for charge.
+    #[cfg(feature = "radio")]
+    if crate::radio_state_ref().coord.is_transmitting {
+        crate::radio_state().coord.stop_tx(&mut hw.radio);
+    }
     hw.backlight.turn_off();
     hw.lcd.turn_off();
     hw.audio.disable();
+    bsp::pins::FLASHLIGHT.set_low();
+    hw.radio.sleep();
+    #[cfg(feature = "filesystem")]
+    hw.filesystem.fs.dev.deep_power_down();
+    #[cfg(feature = "usb")]
+    hw.usb.disconnect_for_sleep();
+    py32_hal::rcc::set_sysclk_16mhz();
     hw.radio.set_status_led(bsp::StatusLed::Red);
 
     let mut check_ms = py32_hal::delay::millis();
@@ -250,17 +272,31 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
         if cur.wrapping_sub(check_ms) >= 500 {
             check_ms = cur;
             crate::services::telemetry::sample_battery_and_system(adc, false);
+            Adc::power_down();
         }
 
         cortex_m::asm::wfi();
     }
 
     hw.radio.set_status_led(bsp::StatusLed::Off);
+    #[cfg(feature = "filesystem")]
+    hw.filesystem.fs.dev.release_power_down();
+    crate::master_config().hw_dirty = 0x1F;
+    hw.apply_dirty_configs();
+    #[cfg(feature = "usb")]
+    hw.usb.init();
     hw.lcd.init();
     if is_headless() {
         hw.lcd.enter_sleep();
     } else {
         hw.backlight.wake();
+    }
+    hw.radio.wake();
+    #[cfg(feature = "radio")]
+    {
+        use kernel::service::radio::RfChannel;
+        hw.radio
+            .configure_channel(crate::radio_state().coord.listening_channel());
     }
 }
 

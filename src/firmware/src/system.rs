@@ -327,8 +327,10 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         #[cfg(not(feature = "grayscale"))]
         let _ = rendered;
 
+        // USB IRQ (IRQ 31) wakes `wfi()` immediately on SOF/EP traffic; only skip `wfi()`
+        // when EP0/CDC work is actively pending so idle-connected docks don't busy-spin at 48 MHz.
         #[cfg(feature = "usb")]
-        if hw.usb.is_connected() || hw.usb.has_pending_transfer() {
+        if hw.usb.has_pending_transfer() {
             continue;
         }
 
