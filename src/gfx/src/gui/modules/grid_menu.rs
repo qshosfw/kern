@@ -212,6 +212,21 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
                 .is_some_and(|code| Self::handle_nav_key(model, code));
         }
 
+        if let Event::Encoder(delta) = event {
+            if *delta == 0 {
+                return false;
+            }
+            let forward = *delta > 0;
+            for _ in 0..delta.unsigned_abs().min(8) {
+                if forward {
+                    Self::navigate_right(model);
+                } else {
+                    Self::navigate_left(model);
+                }
+            }
+            return true;
+        }
+
         if let Event::Key { code, state } = event {
             self.repeater.handle_key(*code, *state);
             if *state == KeyState::Pressed {

@@ -133,6 +133,17 @@ impl TabbedSheetState {
     }
 
     pub fn handle_key_event(&mut self, event: &Event) -> bool {
+        if let Event::Encoder(delta) = *event
+            && delta != 0
+            && self.tab_count > 1
+        {
+            if delta > 0 {
+                self.next_tab();
+            } else {
+                self.prev_tab();
+            }
+            return true;
+        }
         if let Event::Key { code, state } = *event
             && state == KeyState::Pressed
         {

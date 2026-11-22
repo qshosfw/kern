@@ -199,6 +199,21 @@ impl View<PopupModel> for PopupView {
             return anim_tick || rep_tick || model.is_hold_animating();
         }
 
+        if let Event::Encoder(delta) = event {
+            if *delta == 0 {
+                return false;
+            }
+            let code = if *delta > 0 {
+                KeyCode::Down
+            } else {
+                KeyCode::Up
+            };
+            for _ in 0..delta.unsigned_abs().min(8) {
+                let _ = scroll_popup(model, code);
+            }
+            return true;
+        }
+
         if let Event::Key { code, state } = event {
             model.repeater.handle_key(*code, *state);
             if matches!(code, KeyCode::Menu | KeyCode::Key5) && model.hold.required_ms > 0 {

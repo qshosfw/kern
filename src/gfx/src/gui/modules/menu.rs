@@ -421,13 +421,19 @@ impl MenuView {
         }
 
         if let Event::Encoder(delta) = event {
+            if *delta == 0 {
+                return false;
+            }
+            let steps = delta.unsigned_abs().min(8);
             if model.is_editing {
                 let dir = if *delta > 0 {
                     ChangeDir::RightInc
                 } else {
                     ChangeDir::LeftDec
                 };
-                apply_change_dir(&mut model.items[model.selected_idx], dir);
+                for _ in 0..steps {
+                    apply_change_dir(&mut model.items[model.selected_idx], dir);
+                }
                 return true;
             } else {
                 let dir = if *delta > 0 {
@@ -435,7 +441,9 @@ impl MenuView {
                 } else {
                     ListNavDir::Up
                 };
-                self.move_selection(model, dir, true, 5);
+                for _ in 0..steps {
+                    self.move_selection(model, dir, true, 5);
+                }
                 return true;
             }
         }
@@ -1092,8 +1100,11 @@ pub fn handle_sheet_event_with_repeater(
                 _ => {}
             }
         }
-        Event::Encoder(delta) => {
-            sheet.hover = step_hover(sheet.hover, total, *delta > 0);
+        Event::Encoder(delta) if *delta != 0 => {
+            let forward = *delta > 0;
+            for _ in 0..delta.unsigned_abs().min(8) {
+                sheet.hover = step_hover(sheet.hover, total, forward);
+            }
             return SheetResult::Changed;
         }
         _ => {}
