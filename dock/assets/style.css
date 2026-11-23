@@ -102,37 +102,8 @@ levelbar.stat-bar block {
     border-radius: 99px;
 }
 
-.small-pill {
-    padding: 3px 12px;
-    min-height: 26px;
-}
-
 row.warning-row .subtitle {
     color: @warning_color;
-}
-
-.freq-card {
-    padding: 14px 16px;
-}
-
-.freq-display {
-    font-family: monospace;
-    font-size: 36px;
-    font-weight: 700;
-    font-feature-settings: "tnum";
-}
-
-.freq-badge {
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 99px;
-    background: alpha(currentColor, 0.10);
-}
-
-.freq-badge.accent {
-    background: alpha(@accent_bg_color, 0.24);
-    color: @accent_color;
 }
 
 .kbd-chip {

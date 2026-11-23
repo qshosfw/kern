@@ -81,15 +81,11 @@ class BackupsView:
         hdr_row.add_prefix(Gtk.Image(icon_name="folder-open-symbolic"))
 
         open_b = Gtk.Button(label="Open…", valign=Gtk.Align.CENTER)
-        open_b.add_css_class("pill")
-        open_b.add_css_class("small-pill")
         open_b.connect("clicked", lambda _b: self.open_inspect_picker())
         hdr_row.add_suffix(open_b)
 
         self.restore_btn = Gtk.Button(label="Restore…", valign=Gtk.Align.CENTER, visible=False)
         self.restore_btn.add_css_class("suggested-action")
-        self.restore_btn.add_css_class("pill")
-        self.restore_btn.add_css_class("small-pill")
         self.restore_btn.connect("clicked", lambda _b: self._confirm_restore_loaded())
         hdr_row.add_suffix(self.restore_btn)
 

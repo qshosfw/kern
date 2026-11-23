@@ -71,17 +71,7 @@ class AppsView:
 
     def _build(self) -> Gtk.Box:
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.scroll = Gtk.ScrolledWindow(vexpand=True)
-        self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-
-        body = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=18,
-            margin_top=14,
-            margin_bottom=18,
-            margin_start=14,
-            margin_end=14,
-        )
+        self.page = Adw.PreferencesPage()
 
         # === 1. SIDELOAD / PACKAGE INSPECTOR ===
         self.grp_stage = Adw.PreferencesGroup(title="Sideload")
@@ -129,7 +119,7 @@ class AppsView:
         self.prop_pkg.add_css_class("property")
         self.grp_stage.add(self.prop_pkg)
 
-        self.prop_caps = Adw.ActionRow(title="Permissions", subtitle="", visible=False)
+        self.prop_caps = Adw.ActionRow(title="Permissions", subtitle="", subtitle_selectable=True, visible=False)
         self.prop_caps.add_css_class("property")
         self.caps_warn_icon = Gtk.Image(
             icon_name="dialog-warning-symbolic",
@@ -150,38 +140,28 @@ class AppsView:
         self.prev_prog.set_size_request(140, -1)
         self.prev_prog_row.add_suffix(self.prev_prog)
         self.grp_stage.add(self.prev_prog_row)
-        body.append(self.grp_stage)
+        self.page.add(self.grp_stage)
 
         # === 2. INSTALLED ON RADIO (/apps) ===
-        inst_sec = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        inst_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        inst_lbl = Gtk.Label(label="Installed on Radio (/apps)", xalign=0, hexpand=True)
-        inst_lbl.add_css_class("heading")
-        inst_hdr.append(inst_lbl)
+        grp_inst = Adw.PreferencesGroup(title="Installed on Radio (/apps)")
         ref_a = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh Installed Apps")
         ref_a.add_css_class("flat")
         ref_a.connect("clicked", lambda _b: self.refresh_apps(force_headers=True))
-        inst_hdr.append(ref_a)
-        inst_sec.append(inst_hdr)
+        grp_inst.set_header_suffix(ref_a)
 
         self.apps_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.apps_list.add_css_class("boxed-list")
-        inst_sec.append(self.apps_list)
-        body.append(inst_sec)
+        grp_inst.add(self.apps_list)
+        self.page.add(grp_inst)
 
         # === 3. WORKSPACE PACKAGES ===
-        self.ws_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, visible=False)
-        ws_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        ws_lbl = Gtk.Label(label="Workspace Packages", xalign=0, hexpand=True)
-        ws_lbl.add_css_class("heading")
-        ws_hdr.append(ws_lbl)
+        self.ws_section = Adw.PreferencesGroup(title="Workspace Packages", visible=False)
         ref_ws = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Rescan Workspace Packages")
         ref_ws.add_css_class("flat")
         ref_ws.connect("clicked", lambda _b: (self._scan_workspace(), self._refresh_all_ui()))
-        ws_hdr.append(ref_ws)
-        self.ws_section.append(ws_hdr)
+        self.ws_section.set_header_suffix(ref_ws)
 
-        fbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        fbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, margin_bottom=8)
         self.search_entry = Gtk.SearchEntry(placeholder_text="Filter packages…", hexpand=True)
         self.search_entry.connect("search-changed", self._on_search_changed)
         fbar.append(self.search_entry)
@@ -199,25 +179,21 @@ class AppsView:
             tb.connect("toggled", lambda b, g=gid: self._set_group_filter(g) if b.get_active() else None)
             grp_box.append(tb)
         fbar.append(grp_box)
-        self.ws_section.append(fbar)
+        self.ws_section.add(fbar)
 
         self.ws_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.ws_list.add_css_class("boxed-list")
-        self.ws_section.append(self.ws_list)
-        body.append(self.ws_section)
+        self.ws_section.add(self.ws_list)
+        self.page.add(self.ws_section)
 
         # === 4. BUNDLES ===
-        self.bundles_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, visible=False)
-        blbl = Gtk.Label(label="Bundles", xalign=0)
-        blbl.add_css_class("heading")
-        self.bundles_section.append(blbl)
+        self.bundles_section = Adw.PreferencesGroup(title="Bundles", visible=False)
         self.bundles_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.bundles_list.add_css_class("boxed-list")
-        self.bundles_section.append(self.bundles_list)
-        body.append(self.bundles_section)
+        self.bundles_section.add(self.bundles_list)
+        self.page.add(self.bundles_section)
 
-        self.scroll.set_child(Adw.Clamp(maximum_size=640, child=body))
-        root.append(self.scroll)
+        root.append(self.page)
 
         drop = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
         drop.connect("enter", lambda *_a: (root.add_css_class("drop-active"), Gdk.DragAction.COPY)[1])
@@ -360,9 +336,7 @@ class AppsView:
             return
         self.staged = info
         self._render_preview()
-        adj = self.scroll.get_vadjustment()
-        if adj is not None:
-            adj.set_value(0)
+        self.page.scroll_to_top()
 
     def _stage_workspace_pkg(self, pkg: dict[str, Any]) -> None:
         mpath = pkg.get("manifest_path") or pkg.get("path")
@@ -377,9 +351,7 @@ class AppsView:
         else:
             self.staged = dict(pkg)
         self._render_preview()
-        adj = self.scroll.get_vadjustment()
-        if adj is not None:
-            adj.set_value(0)
+        self.page.scroll_to_top()
 
     def _render_preview(self) -> None:
         pkg = self.staged
@@ -505,9 +477,9 @@ class AppsView:
             )
 
             if protected:
-                tag = Gtk.Label(label="System", valign=Gtk.Align.CENTER)
-                tag.add_css_class("protected-badge")
-                row.add_suffix(tag)
+                lock = Gtk.Image(icon_name="security-high-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Protected system module")
+                lock.add_css_class("dim-label")
+                row.add_suffix(lock)
 
             hex_b = Gtk.Button(icon_name="accessories-text-editor-symbolic", valign=Gtk.Align.CENTER, tooltip_text=f"Inspect {name} Hex")
             hex_b.add_css_class("flat")

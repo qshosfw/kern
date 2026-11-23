@@ -17,6 +17,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
 from ...render.capture import encode_png_rgba, render_handset_to_rgba, render_lcd_to_rgba
 from ...render.handset.parts import draw_pango_text
+from ...render.lcd import _lcd_colors_norm
 from ...render.paint import round_rect
 from ..runtime import DockRuntime
 from ..widgets.handset_stage import HandsetStage
@@ -100,8 +101,15 @@ class CaptureView:
         self.frame_info_row.add_suffix(self.clr_btn)
         grp_tl.add(self.frame_info_row)
 
-        # Live / scrubbed frame preview + scrubber canvas
-        tl_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=6, margin_bottom=6)
+        # Live / scrubbed frame preview + scrubber canvas in a clean native card
+        tl_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10,
+            margin_top=8,
+            margin_bottom=4,
+        )
+        tl_box.add_css_class("card")
+        tl_box.add_css_class("timeline-card")
         self.preview_area = Gtk.DrawingArea(content_height=116, hexpand=True)
         self.preview_area.set_draw_func(self._draw_frame_preview)
         tl_box.append(self.preview_area)
@@ -282,12 +290,13 @@ class CaptureView:
         x0 = (w - lcd_w) * 0.5
         y0 = (h - lcd_h) * 0.5
 
+        bg, fg, _grid, _dark = _lcd_colors_norm(self.runtime.lcd_st)
         round_rect(cr, x0 - 4, y0 - 4, lcd_w + 8, lcd_h + 8, 6)
-        cr.set_source_rgb(0.79, 0.97, 0.92)
+        cr.set_source_rgb(*bg)
         cr.fill()
 
         cr.set_antialias(cairo.ANTIALIAS_NONE)
-        cr.set_source_rgb(0.14, 0.12, 0.49)
+        cr.set_source_rgb(*fg)
         for page in range(8):
             base = page * 128
             for x in range(128):

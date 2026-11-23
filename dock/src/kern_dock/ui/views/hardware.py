@@ -111,8 +111,21 @@ class HardwareView:
         self.grp_swd.add(self.swd_mem_row)
 
         self.swd_log_exp = Adw.ExpanderRow(title="SWD Output", subtitle="Ready")
+        clr_swd = Gtk.Button(icon_name="edit-clear-all-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Clear SWD output")
+        clr_swd.add_css_class("flat")
+        clr_swd.connect("clicked", lambda _b: (self.swd_log_buf.set_text(""), self.swd_log_exp.set_subtitle("Ready")))
+        self.swd_log_exp.add_suffix(clr_swd)
         self.swd_log_buf = Gtk.TextBuffer()
-        tv = Gtk.TextView(buffer=self.swd_log_buf, editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        tv = Gtk.TextView(
+            buffer=self.swd_log_buf,
+            editable=False,
+            monospace=True,
+            wrap_mode=Gtk.WrapMode.WORD_CHAR,
+            top_margin=8,
+            bottom_margin=8,
+            left_margin=10,
+            right_margin=10,
+        )
         tv.set_size_request(-1, 120)
         sw = Gtk.ScrolledWindow(child=tv, min_content_height=110)
         self.swd_log_exp.add_row(sw)
@@ -200,7 +213,16 @@ class HardwareView:
         self.uart_rx_exp.add_suffix(self.uart_hex_chk)
         self.uart_rx_exp.add_suffix(clr_rx)
         self.uart_rx_buf = Gtk.TextBuffer()
-        rtv = Gtk.TextView(buffer=self.uart_rx_buf, editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        rtv = Gtk.TextView(
+            buffer=self.uart_rx_buf,
+            editable=False,
+            monospace=True,
+            wrap_mode=Gtk.WrapMode.WORD_CHAR,
+            top_margin=8,
+            bottom_margin=8,
+            left_margin=10,
+            right_margin=10,
+        )
         rtv.set_size_request(-1, 110)
         rsw = Gtk.ScrolledWindow(child=rtv, min_content_height=100)
         self.uart_rx_exp.add_row(rsw)
@@ -468,6 +490,9 @@ class HardwareView:
         end_it = self.uart_rx_buf.get_end_iter()
         self.uart_rx_buf.insert(end_it, line)
         return False
+
+    def shutdown(self) -> None:
+        self._raw_uart.close()
 
     def _on_uart_error(self, err: str) -> bool:
         self._raw_uart.close()

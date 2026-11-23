@@ -798,6 +798,7 @@ class KernDockApp(Adw.Application):
     def _force_quit(self) -> bool:
         self._quitting = True
         self.capture_view.stop_playback()
+        self.hardware_view.shutdown()
         self.runtime.shutdown()
         if self.win is not None:
             self.win.close()
@@ -810,6 +811,7 @@ class KernDockApp(Adw.Application):
             self.runtime.notifier.send(APP_NAME, "Minimized to system tray — click the radio icon to restore", notif_id="kern-dock-tray")
             return True
         self.capture_view.stop_playback()
+        self.hardware_view.shutdown()
         self.runtime.shutdown()
         return False
 

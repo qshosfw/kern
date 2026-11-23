@@ -151,7 +151,7 @@ class FirmwareView:
         self.prop_size.add_suffix(self.flash_bar)
         grp_img.add(self.prop_size)
 
-        self.prop_check = Adw.ActionRow(title="Integrity", subtitle="", visible=False)
+        self.prop_check = Adw.ActionRow(title="Integrity", subtitle="", subtitle_selectable=True, visible=False)
         self.prop_check.add_css_class("property")
         self.check_icon = Gtk.Image(icon_name="object-select-symbolic", valign=Gtk.Align.CENTER)
         self.prop_check.add_suffix(self.check_icon)
@@ -183,9 +183,11 @@ class FirmwareView:
             title="Remote Sources &amp; GitHub Releases",
             description="Fetch .kfw / .bin releases from GitHub or download &amp; validate a direct image URL",
         )
-        self.remote_src_row = Adw.EntryRow(title="GitHub Repo (owner/repo) or Firmware URL", show_apply_button=True)
-        self.remote_src_row.connect("apply", lambda _w: self._fetch_remote())
+        self.remote_src_row = Adw.EntryRow(title="GitHub Repo (owner/repo) or Firmware URL")
         self.remote_src_row.connect("entry-activated", lambda _w: self._fetch_remote())
+        fetch_btn = Gtk.Button(label="Fetch", valign=Gtk.Align.CENTER)
+        fetch_btn.connect("clicked", lambda _b: self._fetch_remote())
+        self.remote_src_row.add_suffix(fetch_btn)
         self.grp_remote.add(self.remote_src_row)
 
         self.remote_sha_row = Adw.EntryRow(title="Expected SHA-256 (optional)")

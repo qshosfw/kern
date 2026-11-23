@@ -76,9 +76,9 @@ class OverviewView:
         qemu_b.add_css_class("pill")
         qemu_b.set_tooltip_text("tcp://127.0.0.1:4446")
         qemu_b.connect("clicked", lambda _b: self.runtime.connect_async("tcp://127.0.0.1:4446"))
-        hw_b = Gtk.Button(label="Hardware &amp; SWD")
+        hw_b = Gtk.Button(label="Hardware & SWD")
         hw_b.add_css_class("pill")
-        hw_b.set_tooltip_text("SWD probe, USB power &amp; raw serial control (works offline)")
+        hw_b.set_tooltip_text("SWD probe, USB power & raw serial control (works offline)")
         hw_b.connect("clicked", lambda _b: self._on_open_tab("hardware"))
         btns.append(demo_b)
         btns.append(qemu_b)
@@ -123,7 +123,6 @@ class OverviewView:
         for key, title, icon_name in (
             ("battery", "Battery", "battery-good-symbolic"),
             ("link", "Link", "network-transmit-receive-symbolic"),
-            ("vfo", "VFO", "network-wireless-symbolic"),
             ("uptime", "Uptime", "preferences-system-time-symbolic"),
         ):
             tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -203,9 +202,8 @@ class OverviewView:
             r.add_css_class("property")
             self.info_exp.add_row(r)
             self._info_rows[key] = r
-        self.calib_badge = Gtk.Label(label="", valign=Gtk.Align.CENTER)
-        self.calib_badge.add_css_class("status-pill")
-        self._info_rows["calib"].add_suffix(self.calib_badge)
+        self.calib_icon = Gtk.Image(icon_name="object-select-symbolic", valign=Gtk.Align.CENTER, visible=False)
+        self._info_rows["calib"].add_suffix(self.calib_icon)
         self.info_group.add(self.info_exp)
         page.add(self.info_group)
 
@@ -391,11 +389,6 @@ class OverviewView:
         lval.set_text("Demo" if lk.demo_mode else f"{lk.fps:.0f} fps")
         lsub.set_text(f"{lk.rtt_ms:.1f} ms")
 
-        vval, vsub = self._tiles["vfo"]
-        hz = int(lk.radio_state.get("rx_freq_hz") or 0)
-        vval.set_text(f"{hz / 1e6:.3f}" if hz else "—")
-        vsub.set_text(f"MHz · {lk.radio_state.get('mod_name', 'FM')}")
-
         uval, usub = self._tiles["uptime"]
         up_ms = t.get("uptime_ms")
         uval.set_text(fmt_duration(up_ms / 1000.0) if up_ms is not None else fmt_duration(time.monotonic() - lk.connected_at))
@@ -416,11 +409,12 @@ class OverviewView:
         calib = t.get("calib_valid")
         if calib is None:
             rows["calib"].set_subtitle("Unknown")
-            self.calib_badge.set_visible(False)
+            self.calib_icon.set_visible(False)
         else:
-            rows["calib"].set_subtitle("Signed /sys/calib.dat" if calib else "Unsigned / missing")
-            self.calib_badge.set_visible(True)
-            set_pill(self.calib_badge, "Valid" if calib else "Invalid", "live" if calib else "warn")
+            rows["calib"].set_subtitle("Signed /sys/calib.dat (valid)" if calib else "Unsigned or missing")
+            self.calib_icon.set_visible(True)
+            self.calib_icon.set_from_icon_name("object-select-symbolic" if calib else "dialog-warning-symbolic")
+            self.calib_icon.set_css_classes(["success"] if calib else ["warning"])
         clk = t.get("sysclk_hz")
         hi = lk.hello_info or {}
         clk_s = f" · {clk / 1e6:.0f} MHz" if clk else ""
