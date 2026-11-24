@@ -238,6 +238,18 @@ impl<B: VoiceAdcBackend + Delay> AudioCaptureDriver<B> {
         Ok(())
     }
 
+    /// Non-blocking single-sample capture with adaptive 64-sample IIR DC-removal filter.
+    #[inline(always)]
+    pub fn read_sample_nonblocking(&mut self) -> Option<i16> {
+        if !self.active {
+            return None;
+        }
+        let raw = self.backend.read_voice_sample();
+        self.dc_bias_est += (raw - self.dc_bias_est) >> 6;
+        let centered = raw - self.dc_bias_est;
+        Some((centered << 4).clamp(-32768, 32767) as i16)
+    }
+
     #[inline(never)]
     pub fn read_samples(&mut self, out_samples: &mut [i16]) -> usize {
         if !self.active || out_samples.is_empty() {
@@ -248,18 +260,13 @@ impl<B: VoiceAdcBackend + Delay> AudioCaptureDriver<B> {
         let period_us = self.period_us as u32;
 
         for (i, sample) in out_samples.iter_mut().enumerate() {
-            if (i & 0x3F) == 0 && i > 0 && self.backend.should_abort() {
+            if (i & 0x0F) == 0 && i > 0 && self.backend.should_abort() {
                 return i;
             }
 
-            let raw = self.backend.read_voice_sample();
-
-            // Adaptive 64-sample IIR DC-removal filter
-            self.dc_bias_est += (raw - self.dc_bias_est) >> 6;
-            let centered = raw - self.dc_bias_est;
-
-            // Scale 12-bit centered audio (-2048..+2047) to 16-bit PCM (-32768..+32767)
-            *sample = (centered << 4).clamp(-32768, 32767) as i16;
+            if let Some(s) = self.read_sample_nonblocking() {
+                *sample = s;
+            }
 
             self.backend.delay_us(period_us);
         }

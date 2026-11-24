@@ -28,7 +28,7 @@ pub fn draw_locked_screen(lcd: &mut St7565<bsp::LcdBus>, sub_msg: &str) {
 #[inline(never)]
 pub fn handle_lockout_penalty(
     lcd: &mut St7565<bsp::LcdBus>,
-    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     storage: &mut SystemStorage,
 ) {
     let pcfg = crate::security::passcode::get_passcode_config(storage);
@@ -49,7 +49,7 @@ pub fn handle_lockout_penalty(
 }
 
 #[inline(never)]
-pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>) {
+pub fn flash_error_and_pause(radio: &mut Bk4829<'_, bsp::RadioBus>) {
     radio.play_beep(crate::services::melody::BeepType::Warning);
     radio.set_status_led(bsp::StatusLed::Red);
     wait_ms_wdt(900);
@@ -76,7 +76,7 @@ pub fn lcd_verify_progress_hook(lcd: &mut St7565<bsp::LcdBus>) -> crate::securit
 #[inline(always)]
 pub fn handle_unlock_success(
     backlight: &mut BacklightController<bsp::BspBacklight>,
-    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     master_cfg: &MasterConfig,
     stealth: bool,
 ) {
@@ -96,7 +96,7 @@ pub fn handle_unlock_success(
 #[inline(never)]
 pub fn handle_unlock_failure(
     lcd: &mut St7565<bsp::LcdBus>,
-    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     storage: &mut SystemStorage,
     stealth: bool,
 ) {

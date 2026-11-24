@@ -38,8 +38,8 @@ pub trait ToneHardware {
     fn finish_tone_teardown(&mut self, rx_pwr: u16);
 }
 
-impl<'a, B: drivers::bk4829::Bk4829Bus, State> ToneHardware
-    for drivers::bk4829::Bk4829<'a, B, State>
+impl<'a, B: drivers::bk4829::Bk4829Bus> ToneHardware
+    for drivers::bk4829::Bk4829<'a, B>
 {
     #[inline(always)]
     fn tone_gain(&self) -> u8 {

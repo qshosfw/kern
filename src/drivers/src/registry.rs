@@ -98,7 +98,7 @@ impl<B: 'static> Driver for crate::py25q16::Py25q16FlashDriver<B> {
 }
 
 #[cfg(feature = "radio")]
-impl<B: 'static, State: 'static> Driver for crate::bk4829::Bk4829<'static, B, State> {
+impl<B: 'static> Driver for crate::bk4829::Bk4829<'static, B> {
     fn descriptor(&self) -> DeviceDescriptor {
         DeviceDescriptor::new(
             DeviceType::Radio,

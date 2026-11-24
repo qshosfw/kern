@@ -5,7 +5,7 @@
 
 use crate::services::SysContext;
 use crate::services::radio::RadioCoordinator;
-use drivers::bk4829::{AfType, Bk4829, Disabled};
+use drivers::bk4829::{AfType, Bk4829};
 use kernel::service::PowerService;
 use kernel::service::radio::{
     Bandwidth, ChannelConfig, ClientId, ClientToken, LockTier, ModulationMode, RfChannel,
@@ -204,7 +204,7 @@ pub fn hw_gpio_write(pin: u8, high: bool) {
 #[inline(never)]
 pub fn rf_apply_subaudible_split(
     coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     set_rx: bool,
     set_tx: bool,
     tone: SubaudibleTone,
@@ -229,7 +229,7 @@ pub fn rf_apply_subaudible_split(
 #[inline(never)]
 pub fn rf_tune(
     coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     freq_hz: u32,
     bandwidth: Bandwidth,
     step: StepSetting,
@@ -249,7 +249,7 @@ pub fn rf_tune(
 #[inline(never)]
 pub fn rf_set_param(
     coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     op: u8,
     val: u8,
 ) {
@@ -293,7 +293,7 @@ pub fn rf_set_param(
 
 #[inline(never)]
 pub fn rf_sweep(
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     start_hz: u32,
     step_hz: u32,
     out_rssi: &mut [i16],
@@ -310,7 +310,7 @@ pub fn rf_sweep(
 
 #[inline(never)]
 pub fn rf_emit_symbols(
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     symbols: &[kernel::proc::abi::KrxSymbol],
 ) -> Result<(), ()> {
     for sym in symbols {
@@ -322,7 +322,7 @@ pub fn rf_emit_symbols(
 
 #[inline(never)]
 pub fn rf_set_dual_tones_hz(
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     tone1_hz: u16,
     tone1_gain: u8,
     tone2_hz: u16,
@@ -338,13 +338,13 @@ pub fn rf_set_dual_tones_hz(
 }
 
 #[inline(never)]
-pub fn rf_set_dtmf(radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>, digit: u8, gain: u8) {
+pub fn rf_set_dtmf(radio: &mut Bk4829<'_, bsp::RadioBus>, digit: u8, gain: u8) {
     let (w1, w2) = dtmf_tone_words(digit);
     radio.set_dual_tones_raw(w1, gain, w2, gain);
 }
 
 #[cfg(feature = "rf_fsk")]
-pub fn rf_fsk_init(radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>, baud: u16) {
+pub fn rf_fsk_init(radio: &mut Bk4829<'_, bsp::RadioBus>, baud: u16) {
     let baud_rate = match baud {
         1200 => FskBaudRate::Baud1200,
         2400 => FskBaudRate::Baud2400,
@@ -359,7 +359,7 @@ pub fn rf_fsk_init(radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>, baud: u16) {
 }
 
 #[cfg(feature = "rf_fsk")]
-pub fn rf_fsk_send(radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>, data: &[u8]) -> Result<(), ()> {
+pub fn rf_fsk_send(radio: &mut Bk4829<'_, bsp::RadioBus>, data: &[u8]) -> Result<(), ()> {
     let mut words = [0u16; 64];
     let limit = data.len().div_ceil(2).min(words.len());
     for i in 0..limit {
@@ -376,7 +376,7 @@ pub fn rf_fsk_send(radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>, data: &[u8])
 }
 
 #[cfg(feature = "rf_fsk")]
-pub fn rf_fsk_receive(radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>, buf: &mut [u8]) -> usize {
+pub fn rf_fsk_receive(radio: &mut Bk4829<'_, bsp::RadioBus>, buf: &mut [u8]) -> usize {
     let mut words = [0u16; 32];
     let count =
         crate::services::radio::fsk_stream::FskStreamService::poll_and_read(radio, &mut words);

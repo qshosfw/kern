@@ -123,6 +123,10 @@ impl RfResourceMask {
     pub const SCANNER: Self = Self(1 << 10);
     /// Fast RSSI / spectrum sweep engine.
     pub const SPECTRUM: Self = Self(1 << 11);
+    /// Shared crystal varactor (`REG_3B`) fractional vernier trim.
+    pub const VERNIER_XTAL: Self = Self(1 << 12);
+    /// Internal TX-to-RX analog loopback path.
+    pub const INTERNAL_LOOPBACK: Self = Self(1 << 13);
     pub const ALL: Self = Self(0xFFFF);
 
     #[inline(always)]

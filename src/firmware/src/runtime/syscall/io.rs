@@ -326,8 +326,27 @@ pub unsafe fn dispatch_io(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             io_time::RTC_GET => {
                 let out = a1 as *mut u8;
                 if !out.is_null() {
-                    let dst = unsafe { core::slice::from_raw_parts_mut(out, 7) };
-                    dst.copy_from_slice(&[0xEA, 0x07, 1, 1, 0, 0, 0]);
+                    let mut rem = power_ref().uptime_secs;
+                    let mut d = 1u8;
+                    let mut h = 0u8;
+                    while rem >= 3600 {
+                        rem -= 3600;
+                        h += 1;
+                        if h == 24 {
+                            h = 0;
+                            d = if d == 28 { 1 } else { d + 1 };
+                        }
+                    }
+                    let (m, s) = utils::math::div60_u16(rem as u16);
+                    unsafe {
+                        *out = 0xEA;
+                        *out.add(1) = 0x07;
+                        *out.add(2) = 1;
+                        *out.add(3) = d;
+                        *out.add(4) = h;
+                        *out.add(5) = m as u8;
+                        *out.add(6) = s;
+                    }
                     0
                 } else {
                     1

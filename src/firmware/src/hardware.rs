@@ -103,7 +103,7 @@ pub struct SystemHardware<'a> {
     pub orchestrator: crate::orchestrator::Orchestrator,
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     pub wire: drivers::wire::WireDriver<SystemSerialPort, bsp::BspTime>,
-    pub radio: Bk4829<'a, bsp::RadioBus, drivers::bk4829::Disabled>,
+    pub radio: Bk4829<'a, bsp::RadioBus>,
     pub lcd: St7565<bsp::LcdBus>,
 }
 
@@ -111,7 +111,7 @@ pub struct SystemHardware<'a> {
 pub fn apply_audio_hardware(
     audio_cfg: &crate::config::AudioConfig,
     audio: &mut AudioAmplifier<bsp::BspAudioPa>,
-    radio: &mut Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
 ) {
     audio.set_volume(audio_cfg.volume);
     radio.set_volume_level(audio_cfg.volume);

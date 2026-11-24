@@ -11,7 +11,6 @@ pub mod squelch;
 pub mod subaudible;
 pub mod tuning;
 
-use core::marker::PhantomData;
 use kern_platform_traits::audio::AudioPa;
 use kern_platform_traits::display::StatusLed;
 use kern_platform_traits::radio::RadioBus;
@@ -70,19 +69,10 @@ pub enum SquelchType {
     Cdcss = 2,
 }
 
-// ── ZST Typestates ──────────────────────────────────────────────────────────
-
-/// State representing a fully disabled radio (deep sleep).
-pub struct Disabled;
-/// State representing an active receiver.
-pub struct Receiving;
-/// State representing an active transmitter.
-pub struct Transmitting;
-
 // ── BK4829 Driver ───────────────────────────────────────────────────────────
 
 #[repr(C)]
-pub struct Bk4829<'a, B, State = Disabled> {
+pub struct Bk4829<'a, B> {
     pub(crate) tone_gain: u8,
     pub(crate) saved_tx_volume: u8,
     pub(crate) active_demod_af: AfType,
@@ -94,16 +84,16 @@ pub struct Bk4829<'a, B, State = Disabled> {
     pub(crate) loopback_active: bool,
     pub(crate) baseline_xtal_trim: i16,
     pub(crate) cur_xtal_trim: i16,
+    pub(crate) gpio_shadow: u16,
     pub(crate) current_freq_hz: u32,
     pub(crate) bus: B,
     pub(crate) calib: Option<&'a [u8; 512]>,
     pub(crate) rx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) tx_subaudible: kernel::service::radio::SubaudibleTone,
     pub(crate) am_tracker: kernel::service::radio::AmLinearityTracker,
-    pub(crate) _state: PhantomData<State>,
 }
 
-impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     /// Performs a live physical 16-bit BK4829 register read.
     #[inline(always)]
     pub fn read_reg(&mut self, addr: u8) -> u16 {
@@ -158,9 +148,7 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
 
     #[inline(never)]
     fn rmw_reg_bit(&mut self, addr: u8, mask: u16, set: bool) {
-        let cur = self.read_reg(addr);
-        let next = if set { cur | mask } else { cur & !mask };
-        self.write_reg(addr, next);
+        self.update_reg_bits(addr, mask, if set { mask } else { 0 });
     }
 
     #[inline(never)]
@@ -698,21 +686,18 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
 
     #[inline(never)]
     fn update_gpio_reg(&mut self, clear_mask: u16, set_mask: u16) {
-        let mut reg33 = self.read_reg(REG_GPIO);
-        if reg33 == 0xFFFF {
-            reg33 = 0x9000;
-        }
-        reg33 = (reg33 & !clear_mask) | set_mask;
-        self.write_reg(REG_GPIO, reg33);
+        self.gpio_shadow = (self.gpio_shadow & !clear_mask) | set_mask;
+        self.write_reg(REG_GPIO, self.gpio_shadow);
     }
 
     pub fn set_status_led(&mut self, led: StatusLed) {
         self.update_gpio_reg(0x0003, led as u16);
     }
 
-    /// Reads the live BK4829 GPIO output register (`REG_GPIO`), refreshing the shadow cache.
+    /// Returns the shadowed BK4829 GPIO output register (`REG_GPIO`).
+    #[inline(always)]
     pub fn read_gpio_reg(&mut self) -> u16 {
-        self.read_reg(REG_GPIO)
+        self.gpio_shadow
     }
 
     pub fn set_gpio_pin(&mut self, pin: u8, high: bool) {
@@ -722,11 +707,9 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
     }
 
     pub fn set_agc(&mut self, enable: bool) {
-        self.update_reg_bits(REG_AGC_CONFIG, 1 << 15, if enable { 0 } else { 1 << 15 });
+        self.rmw_reg_bit(REG_AGC_CONFIG, 1 << 15, !enable);
     }
-}
 
-impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
     /// Bind calibration memory reference and apply crystal trim to REG_3B.
     pub fn attach_calibration(&mut self, calib_bytes: &'a [u8; 512]) {
         self.calib = Some(calib_bytes);
@@ -734,44 +717,6 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
         self.set_crystal_trim(block.xtal_freq_low());
     }
 
-    #[inline(never)]
-    pub(crate) fn disable_rf(&mut self) {
-        self.update_gpio_reg(0x0063, 0);
-        self.write_reg(REG_SYS_POWER, 0x0000);
-        self.squelch_open = false;
-        self.subaudible_matched = false;
-        self.tail_burst_latched = false;
-        self.clear_interrupts();
-    }
-
-    #[inline(never)]
-    pub(crate) fn transition_state<NextState>(self) -> Bk4829<'a, B, NextState> {
-        Bk4829 {
-            bus: self.bus,
-            tone_gain: self.tone_gain,
-            saved_tx_volume: self.saved_tx_volume,
-            active_demod_af: self.active_demod_af,
-            rx_demod_active: self.rx_demod_active,
-            calib: self.calib,
-            current_freq_hz: self.current_freq_hz,
-            squelch_level: self.squelch_level,
-            squelch_open: self.squelch_open,
-            subaudible_matched: self.subaudible_matched,
-            tail_burst_latched: self.tail_burst_latched,
-            loopback_active: self.loopback_active,
-            baseline_xtal_trim: self.baseline_xtal_trim,
-            cur_xtal_trim: self.cur_xtal_trim,
-            rx_subaudible: self.rx_subaudible,
-            tx_subaudible: self.tx_subaudible,
-            am_tracker: self.am_tracker,
-            _state: PhantomData,
-        }
-    }
-}
-
-// ── Boot & Power Transitions ────────────────────────────────────────────────
-
-impl<'a, B: Bk4829Bus> Bk4829<'a, B, Disabled> {
     pub fn new(bus: B) -> Self {
         Self {
             bus,
@@ -786,12 +731,12 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B, Disabled> {
             subaudible_matched: false,
             tail_burst_latched: false,
             loopback_active: false,
+            gpio_shadow: 0x9000,
             baseline_xtal_trim: 0,
             cur_xtal_trim: 0,
             rx_subaudible: kernel::service::radio::SubaudibleTone::None,
             tx_subaudible: kernel::service::radio::SubaudibleTone::None,
             am_tracker: kernel::service::radio::AmLinearityTracker::new(),
-            _state: PhantomData,
         }
     }
 
@@ -841,6 +786,7 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B, Disabled> {
                     | INT_FSK_TX_FINISHED,
             ),
         ];
+        self.gpio_shadow = 0x9000;
         self.apply_reg_vals(&INIT_REG_PATCHES);
 
         // 3. Default volume level 5 (Reg 0x48)
@@ -855,49 +801,11 @@ impl<'a, B: Bk4829Bus> Bk4829<'a, B, Disabled> {
 
         Ok(())
     }
-
-    pub fn into_rx(mut self) -> Bk4829<'a, B, Receiving> {
-        self.update_gpio_reg(0x0023, 0x0040); // LEDs off, RX enable, PA disable
-        self.write_reg(REG_POWER_CTRL, POWER_CTRL_RX);
-        self.write_reg(REG_SYS_POWER, SYS_POWER_RX);
-        self.squelch_open = false;
-        self.subaudible_matched = false;
-        self.tail_burst_latched = false;
-        self.clear_interrupts();
-        self.transition_state()
-    }
-
-    pub fn into_tx(mut self) -> Bk4829<'a, B, Transmitting> {
-        self.update_gpio_reg(0x0043, 0x0021); // Red LED, RX disable, PA enable
-        self.write_reg(REG_POWER_CTRL, POWER_CTRL_TX);
-        self.write_reg(REG_SYS_POWER, SYS_POWER_TX);
-        self.squelch_open = false;
-        self.subaudible_matched = false;
-        self.tail_burst_latched = false;
-        self.clear_interrupts();
-        self.transition_state()
-    }
-}
-
-impl<'a, B: Bk4829Bus> Bk4829<'a, B, Receiving> {
-    #[inline(always)]
-    pub fn disable(mut self) -> Bk4829<'a, B, Disabled> {
-        self.disable_rf();
-        self.transition_state()
-    }
-}
-
-impl<'a, B: Bk4829Bus> Bk4829<'a, B, Transmitting> {
-    #[inline(always)]
-    pub fn disable(mut self) -> Bk4829<'a, B, Disabled> {
-        self.disable_rf();
-        self.transition_state()
-    }
 }
 
 // ── Kernel Facet Trait Implementations ──────────────────────────────────────
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfChannel for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfChannel for Bk4829<'a, B> {
     fn configure_channel(&mut self, config: &kernel::service::radio::ChannelConfig) {
         let was_rx_active = self.rx_demod_active;
         if was_rx_active {
@@ -948,9 +856,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfChannel for Bk4829<'a, B
     }
 
     fn wait_pll_lock(&mut self, max_wait_us: u16) -> bool {
-        // Trigger fast VCO calibration pulse on bit 15 of REG_30 if not already locked,
-        // and poll RSSI/status stability in 25us increments instead of blind ms delays.
-        // Reciprocal multiply by 1/25 ≈ 41944 / 2^20 avoids Cortex-M0+ software division.
+        // Poll RSSI/synth stability in 25us increments; return `false` on timeout.
         let steps = (((max_wait_us as u32) * 41_944) >> 20).max(1);
         let mut prev_rssi = self.read_reg(REG_RSSI_VAL);
         for _ in 0..steps {
@@ -961,7 +867,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfChannel for Bk4829<'a, B
             }
             prev_rssi = cur_rssi;
         }
-        true
+        false
     }
 
     fn get_adjacent_channel_power(&mut self) -> (u8, u8) {
@@ -1011,7 +917,7 @@ static MOD_AF_MAP: [AfType; 5] = [
     AfType::Byp,
 ];
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfModulation for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfModulation for Bk4829<'a, B> {
     #[inline(never)]
     fn set_modulation(&mut self, mode: kernel::service::radio::ModulationMode) {
         use kernel::service::radio::ModulationMode::*;
@@ -1085,7 +991,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfModulation for Bk4829<'a
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfSquelch for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfSquelch for Bk4829<'a, B> {
     fn set_squelch_level(&mut self, level: u8) {
         self.squelch_level = level;
         let th = if let Some(calib) = self.calib {
@@ -1140,7 +1046,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfSquelch for Bk4829<'a, B
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfSubaudible for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfSubaudible for Bk4829<'a, B> {
     fn set_rx_subaudible(&mut self, tone: kernel::service::radio::SubaudibleTone) {
         self.rx_subaudible = tone;
         self.subaudible_matched = false;
@@ -1181,7 +1087,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfSubaudible for Bk4829<'a
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfFskPhy for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfFskPhy for Bk4829<'a, B> {
     fn fsk_configure_phy(
         &mut self,
         config: &kernel::service::radio::FskPhyConfig,
@@ -1324,7 +1230,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfFskPhy for Bk4829<'a, B,
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfAudioPath for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfAudioPath for Bk4829<'a, B> {
     fn set_af_response(&mut self, response: &kernel::service::radio::af::AfResponse) {
         static TBL_3K: [u16; 9] = [
             0xDA00, 0xE800, 0xF200, 0xFA02, 0xF50B, 0xE61C, 0xDF22, 0xD42D, 0xCC35,
@@ -1404,7 +1310,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfAudioPath for Bk4829<'a,
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfAgc for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfAgc for Bk4829<'a, B> {
     fn set_agc_table(&mut self, table: &[u16; 5]) {
         self.set_agc_table(table);
     }
@@ -1455,7 +1361,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfAgc for Bk4829<'a, B, St
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfFineTuning for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfFineTuning for Bk4829<'a, B> {
     fn set_crystal_trim(&mut self, trim: i16) {
         self.set_crystal_trim(trim);
     }
@@ -1500,7 +1406,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfFineTuning for Bk4829<'a
     }
 }
 
-impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> Bk4829<'a, B> {
     #[inline(never)]
     fn set_tone_raw(&mut self, tone2_and_enabled: u8, freq_word: u16, gain: u8) {
         let is_tone2 = (tone2_and_enabled & 2) != 0;
@@ -1528,7 +1434,7 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfToneGenerator for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfToneGenerator for Bk4829<'a, B> {
     fn set_tone1_raw(&mut self, freq_word: u16, gain: u8, enabled: bool) {
         self.set_tone_raw(enabled as u8, freq_word, gain);
     }
@@ -1568,7 +1474,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfToneGenerator for Bk4829
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfPowerSequencer for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RfPowerSequencer for Bk4829<'a, B> {
     fn tx_prepare(&mut self) {
         let cur_vol = (self.read_reg(REG_AF_LEVEL) & 0x000F) as u8;
         if cur_vol != 0 {
@@ -1622,7 +1528,7 @@ impl<'a, B: Bk4829Bus, State> kernel::service::radio::RfPowerSequencer for Bk482
     }
 }
 
-impl<'a, B: Bk4829Bus, State> kernel::service::radio::RadioService for Bk4829<'a, B, State> {
+impl<'a, B: Bk4829Bus> kernel::service::radio::RadioService for Bk4829<'a, B> {
     fn sleep(&mut self) {
         self.sleep();
     }

@@ -6,7 +6,7 @@ use super::{ptr_slice, ptr_slice_mut};
 use crate::data::ChannelRecord;
 use crate::services::primitives;
 use crate::services::radio::RadioCoordinator;
-use drivers::bk4829::{Bk4829, Disabled};
+use drivers::bk4829::Bk4829;
 use kernel::proc::abi::{KrxRadioState, KrxSweepReq, KrxSymbol};
 use kernel::service::radio::{
     BcloPolicy, CssTailMode, RfResourceMask, RfSquelch, RfSubaudible, RfToneGenerator,
@@ -16,7 +16,7 @@ use kernel::service::radio::{
 #[inline(always)]
 fn with_radio<R>(
     _default: R,
-    f: impl FnOnce(&mut RadioCoordinator, &mut Bk4829<'_, bsp::RadioBus, Disabled>) -> R,
+    f: impl FnOnce(&mut RadioCoordinator, &mut Bk4829<'_, bsp::RadioBus>) -> R,
 ) -> R {
     #[cfg(not(test))]
     {
@@ -105,7 +105,7 @@ fn decode_subaudible(kind: u8, value: u16) -> SubaudibleTone {
 #[inline(never)]
 unsafe fn dispatch_rf_vfo_channel(
     coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     is_get: bool,
     a1: usize,
     a2: usize,
@@ -134,7 +134,7 @@ unsafe fn dispatch_rf_vfo_channel(
 #[inline(never)]
 unsafe fn dispatch_rf_vfo(
     coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     sub: u8,
     a1: usize,
     a2: usize,
@@ -250,7 +250,7 @@ unsafe fn dispatch_rf_vfo(
 #[inline(never)]
 unsafe fn dispatch_rf_bulk(
     #[cfg_attr(not(feature = "rf_fsk"), allow(unused_variables))] coord: &mut RadioCoordinator,
-    radio: &mut Bk4829<'_, bsp::RadioBus, Disabled>,
+    radio: &mut Bk4829<'_, bsp::RadioBus>,
     sub: u8,
     a1: usize,
     a2: usize,
