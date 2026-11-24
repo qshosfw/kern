@@ -43,6 +43,9 @@ class OverviewView:
         self.widget = self._build()
 
         runtime.events.subscribe("ports.changed", lambda _e: self.rebuild_port_list(), main_thread=True)
+        runtime.events.subscribe("emulators.changed", lambda _e: self.rebuild_port_list(), main_thread=True)
+        runtime.events.subscribe("link.connecting", self._on_connecting, main_thread=True)
+        runtime.events.subscribe("link.error", lambda _e: self._reset_emu_button(), main_thread=True)
         runtime.events.subscribe("link.connected", lambda _e: self.refresh(), main_thread=True)
         runtime.events.subscribe("link.disconnected", lambda _e: self.refresh(), main_thread=True)
         runtime.events.subscribe("link.telemetry", lambda _e: self.refresh_telemetry(), main_thread=True)
@@ -72,10 +75,10 @@ class OverviewView:
         demo_b.add_css_class("pill")
         demo_b.add_css_class("suggested-action")
         demo_b.connect("clicked", lambda _b: self.runtime.connect_async("demo"))
-        qemu_b = Gtk.Button(label="Hardware Emulator")
-        qemu_b.add_css_class("pill")
-        qemu_b.set_tooltip_text("Attach to or auto-start the in-house hardware emulator (tcp://127.0.0.1:4446)")
-        qemu_b.connect(
+        self.emu_btn = Gtk.Button(label="Hardware Emulator")
+        self.emu_btn.add_css_class("pill")
+        self.emu_btn.set_tooltip_text("Attach to or auto-start the in-house hardware emulator (tcp://127.0.0.1:4446)")
+        self.emu_btn.connect(
             "clicked",
             lambda _b: self.runtime.connect_or_start_emulator_async(
                 on_status=lambda m: GLib.idle_add(self._on_toast, m),
@@ -86,7 +89,7 @@ class OverviewView:
         hw_b.set_tooltip_text("SWD probe, USB power & raw serial control (works offline)")
         hw_b.connect("clicked", lambda _b: self._on_open_tab("hardware"))
         btns.append(demo_b)
-        btns.append(qemu_b)
+        btns.append(self.emu_btn)
         btns.append(hw_b)
         off_box.append(btns)
         offline.set_child(Adw.Clamp(maximum_size=420, child=off_box))
@@ -337,7 +340,17 @@ class OverviewView:
             row.connect("activated", lambda _r: self._on_open_tab("hardware"))
             self.usb_list.append(row)
 
+    def _on_connecting(self, ev: Any) -> None:
+        if ev.payload.get("emulated"):
+            self.emu_btn.set_sensitive(False)
+            self.emu_btn.set_label("Starting Emulator…")
+
+    def _reset_emu_button(self) -> None:
+        self.emu_btn.set_sensitive(True)
+        self.emu_btn.set_label("Hardware Emulator")
+
     def refresh(self) -> None:
+        self._reset_emu_button()
         lk = self.runtime.link
         if not lk.connected:
             self.rebuild_port_list()

@@ -62,6 +62,21 @@ class DetectedEmulator:
 
 
 def _tcp_port_open(host: str, port: int, timeout: float = 0.04) -> bool:
+    """Passively check if a local TCP port is in LISTEN state without poking the RigWire socket."""
+    if host in ("127.0.0.1", "localhost"):
+        proc_tcp = Path("/proc/net/tcp")
+        if proc_tcp.is_file():
+            target_port = f"{port:04X}"
+            try:
+                for line in proc_tcp.read_text(encoding="utf-8").splitlines()[1:]:
+                    cols = line.split()
+                    if len(cols) >= 4 and cols[3] == "0A":  # TCP_LISTEN
+                        addr_hex, port_hex = cols[1].split(":")
+                        if port_hex == target_port and addr_hex in ("0100007F", "00000000"):
+                            return True
+                return False
+            except OSError:
+                pass
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True

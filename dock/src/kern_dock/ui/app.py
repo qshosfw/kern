@@ -177,19 +177,20 @@ class KernDockApp(Adw.Application):
         self._open_tab("overview", pinned=True)
 
         # Event subscriptions
-        self.runtime.events.subscribe("link.connected", lambda _e: self._refresh_chrome(), main_thread=True)
-        self.runtime.events.subscribe("link.disconnected", lambda _e: self._refresh_chrome(), main_thread=True)
-        self.runtime.events.subscribe("link.connecting", lambda _e: self.conn_lbl.set_text("Connecting…"), main_thread=True)
+        self.runtime.events.subscribe("link.connected", lambda _e: (self._stop_connect_pulse(), self._refresh_chrome()), main_thread=True)
+        self.runtime.events.subscribe("link.disconnected", lambda _e: (self._stop_connect_pulse(), self._refresh_chrome()), main_thread=True)
+        self.runtime.events.subscribe("link.connecting", self._on_link_connecting, main_thread=True)
         self.runtime.events.subscribe("link.error", self._on_link_error, main_thread=True)
         self.runtime.events.subscribe("link.telemetry", lambda _e: self._refresh_chrome(), main_thread=True)
         self.runtime.events.subscribe("security.changed", lambda _e: self._refresh_chrome(), main_thread=True)
         self.runtime.events.subscribe("ports.changed", self._on_ports_changed_ui, main_thread=True)
+        self.runtime.events.subscribe("emulators.changed", lambda _e: (self.overview_view.rebuild_port_list() if not self.runtime.link.connected else None), main_thread=True)
         self.runtime.events.subscribe("ui.toast", lambda e: self._toast(str(e.payload.get("message", ""))), main_thread=True)
         self.runtime.events.subscribe("handset.changed", lambda _e: self._sync_window_size(), main_thread=True)
 
+        self._connect_pulse_id: int = 0
         self.win.connect("close-request", self._on_close_request)
         self._refresh_chrome()
-        self._rebuild_device_popover()
         self._set_mini_mode(self._mini_mode, initial=True)
         self._sync_window_size()
         self._last_emu_sig: tuple[tuple[str, int | None, str], ...] = ()
@@ -591,9 +592,12 @@ class KernDockApp(Adw.Application):
                         "clicked",
                         lambda _b, sf=emu.state_file, url=emu.wire_url, nm=emu.name: (
                             self.switcher_popover.popdown(),
-                            self.runtime.stop_emulator_daemon(state_file=sf, wire_url=url),
-                            self._rebuild_device_popover(),
-                            self._toast(f"{nm} stopped"),
+                            self._toast(f"Stopping {nm}…"),
+                            self.runtime.stop_emulator_daemon_async(
+                                state_file=sf,
+                                wire_url=url,
+                                on_done=lambda _ok, name=nm: GLib.idle_add(self._toast, f"{name} stopped"),
+                            ),
                         ),
                     )
                     emu_row.add_suffix(stop_e)
@@ -783,7 +787,33 @@ class KernDockApp(Adw.Application):
             prefix = "EMU · " if lk.is_emulated else ("DEMO · " if lk.demo_mode else "")
             self.mini_title.set_subtitle(f"{prefix}{short} · {freq_s}")
 
-        self._rebuild_device_popover()
+    def _on_link_connecting(self, ev: Event) -> None:
+        msg = str(ev.payload.get("message") or "Connecting…")
+        self.conn_lbl.set_text(msg)
+        self.conn_kind_pill.set_visible(False)
+        if ev.payload.get("emulated"):
+            self._start_connect_pulse(msg)
+
+    def _start_connect_pulse(self, text: str) -> None:
+        self._stop_connect_pulse()
+        self.op_prog.set_text(text)
+        self.op_prog.set_visible(True)
+        self.op_prog.pulse()
+
+        def _tick() -> bool:
+            if not self.runtime._connecting:
+                self._stop_connect_pulse()
+                return False
+            self.op_prog.pulse()
+            return True
+
+        self._connect_pulse_id = GLib.timeout_add(90, _tick)
+
+    def _stop_connect_pulse(self) -> None:
+        if self._connect_pulse_id:
+            GLib.source_remove(self._connect_pulse_id)
+            self._connect_pulse_id = 0
+            self.op_prog.set_visible(False)
 
     def _poll_emulators(self) -> bool:
         if self._quitting:
@@ -792,13 +822,11 @@ class KernDockApp(Adw.Application):
         sig = tuple((e.wire_url, e.pid, e.firmware) for e in emus)
         if sig != self._last_emu_sig:
             self._last_emu_sig = sig
-            self._rebuild_device_popover()
             if not self.runtime.link.connected:
                 self.overview_view.rebuild_port_list()
         return True
 
     def _on_ports_changed_ui(self, _ev: Event) -> None:
-        self._rebuild_device_popover()
         if self.runtime.auto_connect_usb and not self.runtime.link.connected and not self.runtime._connecting:
             for p in self.runtime.port_monitor.ports:
                 if p.is_quansheng:
@@ -812,6 +840,7 @@ class KernDockApp(Adw.Application):
                     break
 
     def _on_link_error(self, ev: Event) -> None:
+        self._stop_connect_pulse()
         self._refresh_chrome()
         self._toast(f"Connection failed: {ev.payload.get('error', 'unknown error')}")
 

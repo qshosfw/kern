@@ -824,17 +824,26 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
             self.assertIn("kern-firmware.elf", by_url["tcp://127.0.0.1:4446"].subtitle)
             self.assertIn("turbo", by_url["tcp://127.0.0.1:4446"].subtitle)
 
-        # 3. Direct TCP fallback probe detection on an ephemeral local listener
+        # 3. Passive TCP listener detection on an ephemeral local listener (no client socket poked)
+        from kern_dock.device.usb import _tcp_port_open
+
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind(("127.0.0.1", 0))
         srv.listen(1)
         try:
             _host, port = srv.getsockname()
+            self.assertTrue(_tcp_port_open("127.0.0.1", port))
             emu = DetectedEmulator(wire_url=f"tcp://127.0.0.1:{port}", name=f"Kern Emulator (:{port})")
             self.assertEqual(emu.host_port, f"127.0.0.1:{port}")
         finally:
             srv.close()
+        self.assertFalse(_tcp_port_open("127.0.0.1", port))
+
+        # Regression guard: telemetry-driven _refresh_chrome must never rebuild the open device popover
+        app_src = (src_root / "ui" / "app.py").read_text(encoding="utf-8")
+        refresh_body = app_src.split("def _refresh_chrome(self)", 1)[1].split("\n    def ", 1)[0]
+        self.assertNotIn("_rebuild_device_popover", refresh_body)
 
         # 4. DockLink.is_emulated and transport_kind clearly distinguish emulator vs demo vs usb
         sec = SecurityController(bus)

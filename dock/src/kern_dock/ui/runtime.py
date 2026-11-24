@@ -246,7 +246,26 @@ class DockRuntime:
         if state_file:
             cmd.extend(["--state-file", state_file])
         res = _sub.run(cmd, capture_output=True)
+        self.events.emit("emulators.changed", {"wire_url": target_url, "stopped": True}, source="runtime")
         return res.returncode == 0
+
+    def stop_emulator_daemon_async(
+        self,
+        *,
+        state_file: str | None = None,
+        wire_url: str | None = None,
+        on_done: Callable[[bool], None] | None = None,
+    ) -> None:
+        """Stop a running `kern-emu` daemon off the UI thread."""
+        def _worker() -> None:
+            ok = False
+            try:
+                ok = self.stop_emulator_daemon(state_file=state_file, wire_url=wire_url)
+            finally:
+                if on_done:
+                    on_done(ok)
+
+        threading.Thread(target=_worker, daemon=True, name="kern-dock-emu-stop").start()
 
     def connect_or_start_emulator_async(
         self,
@@ -259,15 +278,23 @@ class DockRuntime:
         if self._connecting:
             return
         if wire_url:
+            if self.link.connected and not self.link.demo_mode and self.link.port == wire_url:
+                return
             self.connect_async(wire_url, on_error=on_error)
             return
         st = self.emulator_status()
         if st["running"] or not st["can_launch"]:
+            if self.link.connected and not self.link.demo_mode and self.link.port == st["wire_url"]:
+                return
             self.connect_async(st["wire_url"], on_error=on_error)
             return
 
         self._connecting = True
-        self.events.emit("link.connecting", {"port": st["wire_url"]}, source="runtime")
+        self.events.emit(
+            "link.connecting",
+            {"port": st["wire_url"], "emulated": True, "message": "Starting emulator…"},
+            source="runtime",
+        )
         if on_status:
             on_status("Starting hardware emulator…")
 
@@ -275,25 +302,43 @@ class DockRuntime:
             import json as _json
             import subprocess as _sub
             import sys as _sys
+            import time as _time
 
             try:
                 proc = _sub.run(
                     [_sys.executable, st["emu_script"], "start", "--daemon", "--turbo", "--provision", "--json"],
                     capture_output=True,
                     text=True,
-                    timeout=35,
+                    timeout=60,
                 )
                 if proc.returncode != 0:
-                    msg = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+                    lines = [ln.strip() for ln in (proc.stderr or proc.stdout or "").splitlines() if ln.strip()]
+                    msg = lines[-1] if lines else f"exit {proc.returncode}"
                     raise RuntimeError(f"Emulator failed to start: {msg[:180]}")
-                wire_url = st["wire_url"]
-                try:
-                    meta = _json.loads(proc.stdout)
-                    wire_url = str(meta.get("wire_url") or wire_url)
-                except Exception:
-                    pass
+                wire_url_out = st["wire_url"]
+                for ln in reversed(proc.stdout.splitlines()):
+                    ln = ln.strip()
+                    if ln.startswith("{") and ln.endswith("}"):
+                        try:
+                            meta = _json.loads(ln)
+                            wire_url_out = str(meta.get("wire_url") or wire_url_out)
+                            break
+                        except Exception:
+                            pass
+                self.events.emit("emulators.changed", {"wire_url": wire_url_out, "started": True}, source="runtime")
                 baud = int(self.opts.baud or self.config.get("connection.baud", 115200))
-                self.link.connect(wire_url, baud=baud, model_override=self.forced_model)
+                last_exc: Exception | None = None
+                for attempt in range(4):
+                    try:
+                        self.link.connect(wire_url_out, baud=baud, model_override=self.forced_model)
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        if attempt < 3:
+                            _time.sleep(0.25)
+                if last_exc is not None:
+                    raise last_exc
             except Exception as exc:
                 self.events.emit("link.error", {"port": st["wire_url"], "error": str(exc)}, source="runtime")
                 if on_error:
