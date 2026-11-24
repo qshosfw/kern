@@ -308,15 +308,6 @@ impl PackageCatalog {
                     {
                         entry.icon_8.copy_from_slice(&ic8[..8]);
                     }
-                    if let Some((_, _, ic16)) =
-                        KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_16)
-                        && ic16.len() >= 32
-                    {
-                        let off = (ic16.as_ptr() as usize) - (hdr_buf.as_ptr() as usize);
-                        if off <= (u16::MAX as usize) {
-                            entry.icon_16_off = off as u16;
-                        }
-                    }
                 }
             }
             if let Some(t) = title {

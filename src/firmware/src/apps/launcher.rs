@@ -2,8 +2,6 @@ use crate::SysContext;
 use crate::apps::{APP_ID_LAUNCHER, APP_ID_SETTINGS, APP_ID_VFO, Shortcut};
 use gfx::Canvas;
 use gfx::Color;
-use gfx::gui::modules::grid_menu::{GridItem, GridMenuModel, GridMenuView};
-use gfx::gui::view::View;
 use kernel::app::{App, EventResult};
 use kernel::event::{Event, KeyCode, KeyState};
 
@@ -21,26 +19,13 @@ pub enum LauncherTarget {
 #[repr(C)]
 pub struct LauncherEntry {
     pub target: LauncherTarget,
-    pub icon_slot: u8,
 }
 
 pub const MAX_LAUNCHER_ENTRIES: usize = 12;
-const MAX_LAUNCHER_CUSTOM_ICONS: usize = 8;
 
 static mut LAUNCHER_ENTRIES: [LauncherEntry; MAX_LAUNCHER_ENTRIES] = [LauncherEntry {
     target: LauncherTarget::About,
-    icon_slot: 0xFF,
 }; MAX_LAUNCHER_ENTRIES];
-
-#[inline(always)]
-fn launcher_icons_16_mut() -> &'static mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS] {
-    const _: () = {
-        assert!((MAX_LAUNCHER_CUSTOM_ICONS * 32) <= crate::data::arena::TRANSIENT_SCRATCH_OFFSET);
-    };
-    unsafe {
-        &mut *(crate::data::arena::arena_base_ptr() as *mut [[u8; 32]; MAX_LAUNCHER_CUSTOM_ICONS])
-    }
-}
 
 #[inline(always)]
 fn catalog_entry(idx: u8) -> Option<&'static catalog::PackageCatalogEntry> {
@@ -51,10 +36,7 @@ fn catalog_entry(idx: u8) -> Option<&'static catalog::PackageCatalogEntry> {
 
 impl LauncherEntry {
     pub const fn builtin(target: LauncherTarget) -> Self {
-        Self {
-            target,
-            icon_slot: 0xFF,
-        }
+        Self { target }
     }
 
     pub fn title(&self) -> &'static str {
@@ -77,32 +59,6 @@ impl LauncherEntry {
                 catalog_entry(idx).map_or(gfx::icons::ICON_FOLDER, |e| e.resolved_icon_8())
             }
         }
-    }
-
-    pub fn icon_16(&self) -> &'static [u8; 32] {
-        if (self.icon_slot as usize) < MAX_LAUNCHER_CUSTOM_ICONS {
-            return &launcher_icons_16_mut()[self.icon_slot as usize];
-        }
-        match self.target {
-            LauncherTarget::App(id) if id == APP_ID_VFO as u8 => gfx::icons::ICON_16_RADIO,
-            LauncherTarget::App(_) => gfx::icons::ICON_16_SETTINGS,
-            LauncherTarget::Shortcut(_) => gfx::icons::ICON_16_FLASHLIGHT,
-            LauncherTarget::About => gfx::icons::ICON_16_INFO,
-            LauncherTarget::Package(idx) => {
-                catalog_entry(idx).map_or(gfx::icons::ICON_16_APPS, |e| e.resolved_icon_16())
-            }
-        }
-    }
-}
-
-impl GridItem for LauncherEntry {
-    #[inline(always)]
-    fn title(&self) -> &'static str {
-        LauncherEntry::title(self)
-    }
-    #[inline(always)]
-    fn icon(&self) -> &'static [u8; 32] {
-        self.icon_16()
     }
 }
 
@@ -132,36 +88,19 @@ pub fn load_entries(
         entries[..2].copy_from_slice(&BUILTIN_HEAD);
         let mut count = 2usize;
 
-        #[cfg(feature = "filesystem")]
-        let (icons_16_buf, mut icon_slot) = (launcher_icons_16_mut(), 0usize);
-
         let cat_ref: &'static catalog::PackageCatalog =
             &*core::ptr::addr_of!(catalog::PACKAGE_CATALOG);
         for (pkg_idx, app) in cat_ref.entries.iter().enumerate() {
             if !app.is_valid
                 || app.exec_type != kernel::runtime::KrxExecType::App
                 || count >= (MAX_LAUNCHER_ENTRIES - 2)
+                || utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/home.krx")
             {
                 continue;
             }
 
-            let mut loaded_slot = 0xFFu8;
-            #[cfg(feature = "filesystem")]
-            if app.icon_16_off != 0 && icon_slot < MAX_LAUNCHER_CUSTOM_ICONS {
-                if let Some(s) = &mut _storage {
-                    let dst = &mut *(icons_16_buf.as_mut_ptr().add(icon_slot));
-                    if s.read_file_at(app.path.as_str(), app.icon_16_off as usize, dst)
-                        .is_ok()
-                    {
-                        loaded_slot = icon_slot as u8;
-                        icon_slot += 1;
-                    }
-                }
-            }
-
             let entry = LauncherEntry {
                 target: LauncherTarget::Package(pkg_idx as u8),
-                icon_slot: loaded_slot,
             };
             if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/vfo.krx") {
                 entries[0] = entry;
@@ -192,22 +131,33 @@ pub fn reload_launcher(storage: &mut crate::services::SystemStorage) {
     }
 }
 
+/// Lean resident failsafe list launcher (`APP_ID_LAUNCHER`).
+///
+/// Always available in ROM without external assets; optional custom Home front-ends
+/// may be installed as `/apps/home.krx` without bloating core Flash with 16x16 grids.
 #[repr(C)]
 pub struct LauncherApp {
     is_launching: bool,
-    scroll_top: usize,
+    is_pressed: bool,
+    show_numbers: bool,
+    show_labels: bool,
+    nav_layout: u8,
+    tick_counter: u8,
+    selected_idx: u8,
+    scroll_top: u8,
+    items: &'static [LauncherEntry],
     scroller: gfx::gui::animation::KineticScroller,
-    model: GridMenuModel<LauncherEntry>,
-    view: GridMenuView,
+    repeater: gfx::gui::KeyRepeater,
 }
 
 impl LauncherApp {
     pub unsafe fn init_at(ptr: *mut Self) {
         unsafe {
-            let entries = load_entries(None);
-            (*ptr).model = GridMenuModel::new(entries, "Home");
-            (*ptr).view = GridMenuView::new();
+            (*ptr).items = load_entries(None);
+            (*ptr).show_numbers = true;
+            (*ptr).show_labels = true;
             (*ptr).scroller = gfx::gui::animation::KineticScroller::new(2);
+            (*ptr).repeater = gfx::gui::KeyRepeater::new(10, 2);
         }
     }
 
@@ -217,18 +167,19 @@ impl LauncherApp {
     }
 
     fn set_entries(&mut self, entries: &'static [LauncherEntry]) {
-        self.model.items = entries;
-        if self.model.selected_idx >= entries.len() {
-            self.model.selected_idx = entries.len().saturating_sub(1);
+        self.items = entries;
+        let len = entries.len();
+        if (self.selected_idx as usize) >= len {
+            self.selected_idx = len.saturating_sub(1) as u8;
         }
     }
 
     #[inline(never)]
     fn sync_config(&mut self, ctx: &SysContext) {
-        self.model.nav_layout = ctx.config.keys.nav_layout;
-        self.model.show_numbers = ctx.config.apps.show_numbers != 0;
-        self.model.show_labels = ctx.config.apps.show_labels != 0;
-        self.view.repeater.configure(
+        self.nav_layout = ctx.config.keys.nav_layout;
+        self.show_numbers = ctx.config.apps.show_numbers != 0;
+        self.show_labels = ctx.config.apps.show_labels != 0;
+        self.repeater.configure(
             ctx.config.keys.hold_delay_ms(),
             ctx.config.keys.repeat_rate_ms(),
             ctx.config.keys.fast_scroll != 0,
@@ -237,10 +188,10 @@ impl LauncherApp {
 
     fn adjust_scroll_for_selection(&mut self, animations_enabled: bool) {
         let prev_scroll = self.scroll_top;
-        if self.model.selected_idx < self.scroll_top {
-            self.scroll_top = self.model.selected_idx;
-        } else if self.model.selected_idx >= self.scroll_top + 4 {
-            self.scroll_top = self.model.selected_idx - 3;
+        if self.selected_idx < self.scroll_top {
+            self.scroll_top = self.selected_idx;
+        } else if self.selected_idx >= self.scroll_top + 4 {
+            self.scroll_top = self.selected_idx - 3;
         }
         let target_y = (self.scroll_top as i16) * 13;
         if !animations_enabled {
@@ -250,32 +201,20 @@ impl LauncherApp {
         }
     }
 
-    fn render_to_canvas(&self, canvas: &mut Canvas, is_list_mode: bool) {
-        if is_list_mode {
-            self.render_list(canvas);
-        } else {
-            self.view.render(canvas, &self.model);
-        }
-    }
-
     #[inline(never)]
     fn execute_target(&mut self, ctx: &mut SysContext, target: LauncherTarget) -> bool {
+        self.is_launching = false;
+        self.is_pressed = false;
         match target {
             LauncherTarget::App(app_id) => {
-                self.is_launching = true;
-                self.model.is_pressed = true;
                 ctx.post_event(Shortcut::LaunchApp(app_id).into());
                 true
             }
             LauncherTarget::Shortcut(sc) => {
-                self.is_launching = false;
-                self.model.is_pressed = false;
                 ctx.post_event(sc.into());
                 true
             }
             LauncherTarget::About => {
-                self.is_launching = false;
-                self.model.is_pressed = false;
                 ctx.show_popup(0, "About KERN", crate::build_info::ABOUT_TEXT);
                 true
             }
@@ -285,22 +224,18 @@ impl LauncherApp {
                     if let Some(pkg) = catalog::get_catalog().entries.get(_pkg_idx as usize) {
                         let ok = crate::orchestrator::launch_krx_shortcut(ctx, pkg.path.as_str());
                         self.is_launching = ok;
-                        self.model.is_pressed = ok;
+                        self.is_pressed = ok;
                         if !ok {
                             let entries = load_entries(Some(ctx.storage));
                             self.set_entries(entries);
                         }
                         ok
                     } else {
-                        self.is_launching = false;
-                        self.model.is_pressed = false;
                         false
                     }
                 }
                 #[cfg(not(feature = "filesystem"))]
                 {
-                    self.is_launching = false;
-                    self.model.is_pressed = false;
                     false
                 }
             }
@@ -309,52 +244,54 @@ impl LauncherApp {
 
     #[inline(never)]
     fn handle_list_nav(&mut self, event: &Event, animations_enabled: bool) -> bool {
-        let total = self.model.items.len();
+        let total = self.items.len();
         if total == 0 {
             return false;
         }
         let nav_dir = match event {
-            Event::Tick => self.view.repeater.tick().and_then(|code| {
-                gfx::gui::modules::menu::get_list_nav_dir(self.model.nav_layout, code)
+            Event::Tick => self.repeater.tick().and_then(|code| {
+                gfx::gui::modules::menu::get_list_nav_dir(self.nav_layout, code)
             }),
             Event::Key { code, state } => {
-                self.view.repeater.handle_key(*code, *state);
+                self.repeater.handle_key(*code, *state);
                 if *state == KeyState::Pressed {
-                    gfx::gui::modules::menu::get_list_nav_dir(self.model.nav_layout, *code)
+                    gfx::gui::modules::menu::get_list_nav_dir(self.nav_layout, *code)
                 } else {
                     return *state == KeyState::Released
-                        && gfx::gui::modules::grid_menu::GridMenuView::is_nav_key(*code);
+                        && gfx::gui::modules::menu::get_list_nav_dir(self.nav_layout, *code)
+                            .is_some();
                 }
             }
             _ => None,
         };
 
         if let Some(dir) = nav_dir {
-            let prev_sel = self.model.selected_idx;
+            let prev_sel = self.selected_idx;
             let is_tick = matches!(event, Event::Tick);
             let mut animate = animations_enabled;
+            let sel = self.selected_idx as usize;
             match dir {
                 gfx::gui::modules::menu::ListNavDir::Down => {
-                    if self.model.selected_idx + 1 < total {
-                        self.model.selected_idx += 1;
+                    if sel + 1 < total {
+                        self.selected_idx = (sel + 1) as u8;
                     } else if !is_tick || total > 4 {
-                        self.model.selected_idx = 0;
+                        self.selected_idx = 0;
                         animate = false;
                     }
                 }
                 gfx::gui::modules::menu::ListNavDir::Up => {
-                    if self.model.selected_idx > 0 {
-                        self.model.selected_idx -= 1;
+                    if sel > 0 {
+                        self.selected_idx = (sel - 1) as u8;
                     } else if !is_tick || total > 4 {
-                        self.model.selected_idx = total - 1;
+                        self.selected_idx = (total - 1) as u8;
                         animate = false;
                     }
                 }
             }
 
-            if self.model.selected_idx != prev_sel {
+            if self.selected_idx != prev_sel {
                 if !animate && is_tick {
-                    self.view.repeater.pause(6);
+                    self.repeater.pause(6);
                 }
                 self.adjust_scroll_for_selection(animate);
                 return true;
@@ -362,23 +299,20 @@ impl LauncherApp {
         }
         false
     }
-}
 
-impl LauncherApp {
     #[inline(never)]
     fn render_list(&self, canvas: &mut Canvas) {
-        let total = self.model.items.len();
+        let total = self.items.len();
         if total == 0 {
             return;
         }
 
-        let visible_count = 4;
+        let visible_count = 4usize;
         let row_height = 13i16;
         let scroll_y = self.scroller.current();
-        let start_row = self.scroll_top;
-        let end_row = (self.scroll_top + 5).min(total);
-
-        let is_active_selection = self.model.is_pressed || self.is_launching;
+        let start_row = self.scroll_top as usize;
+        let end_row = (start_row + 5).min(total);
+        let is_active_selection = self.is_pressed || self.is_launching;
 
         for idx in start_row..end_row {
             let row_top = 9 + (idx as i16 * row_height) - scroll_y;
@@ -386,20 +320,16 @@ impl LauncherApp {
                 continue;
             }
 
-            let is_sel = idx == self.model.selected_idx;
-            let item = &self.model.items[idx];
-            let has_num = self.model.show_numbers && idx < 9;
+            let is_sel = idx == self.selected_idx as usize;
+            let item = &self.items[idx];
+            let has_num = self.show_numbers && idx < 9;
 
             let mut spec = gfx::widgets::ListRowSpec::new(
                 2,
                 row_top,
                 120,
                 13,
-                if self.model.show_labels {
-                    item.title()
-                } else {
-                    ""
-                },
+                if self.show_labels { item.title() } else { "" },
             );
             spec.clip_top = 8;
             spec.prefix_icon = if has_num {
@@ -409,7 +339,7 @@ impl LauncherApp {
             };
             spec.icon = Some(item.icon_8());
             if is_sel {
-                let phase = ((self.model.tick_counter >> 1) & 3) as i8;
+                let phase = ((self.tick_counter >> 1) & 3) as i8;
                 let offset = if phase == 3 { 1 } else { phase };
                 spec.flags = gfx::widgets::ROW_SELECTED
                     | gfx::widgets::ROW_CHEVRON
@@ -442,7 +372,6 @@ impl LauncherApp {
         // Clean any row bleed into status bar area (0..8)
         canvas.fill_rect(0, 0, 128, 8, Color::Clear);
 
-        // Minimalist vertical scrollbar following the kinetic scroller in pixel units
         if total > visible_count {
             gfx::widgets::draw_scrollbar(
                 canvas,
@@ -463,7 +392,7 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
         let entries = load_entries(Some(ctx.storage));
         self.set_entries(entries);
         self.sync_config(ctx);
-        self.model.is_pressed = false;
+        self.is_pressed = false;
         self.adjust_scroll_for_selection(false);
         crate::orchestrator::compositor::present_next_system_alert(ctx);
     }
@@ -471,34 +400,29 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
     #[inline(never)]
     fn on_event(&mut self, ctx: &mut SysContext, event: &Event) -> EventResult {
         self.sync_config(ctx);
-
-        let is_list_mode = ctx.config.apps.launcher_style == 1;
         let animations_enabled = ctx.config.display.animations_enabled();
 
         let mut animating = false;
         if let Event::Tick = event {
-            if is_list_mode {
-                self.model.tick_counter = self.model.tick_counter.wrapping_add(1);
-            }
+            self.tick_counter = self.tick_counter.wrapping_add(1);
             animating = self.scroller.tick();
         }
 
         if let Event::Encoder(delta) = *event {
-            if delta != 0 && !self.model.items.is_empty() {
-                let len = self.model.items.len();
-                let prev_sel = self.model.selected_idx;
-                self.model.selected_idx = if delta > 0 {
+            if delta != 0 && !self.items.is_empty() {
+                let len = self.items.len();
+                let prev_sel = self.selected_idx as usize;
+                let next_sel = if delta > 0 {
                     if prev_sel + 1 < len { prev_sel + 1 } else { 0 }
                 } else if prev_sel > 0 {
                     prev_sel - 1
                 } else {
                     len - 1
                 };
-                self.model.is_pressed = false;
-                if is_list_mode {
-                    self.adjust_scroll_for_selection(animations_enabled);
-                }
-                if self.model.selected_idx != prev_sel && ctx.config.audio.key_beep != 0 {
+                self.selected_idx = next_sel as u8;
+                self.is_pressed = false;
+                self.adjust_scroll_for_selection(animations_enabled);
+                if next_sel != prev_sel && ctx.config.audio.key_beep != 0 {
                     ctx.play_beep(crate::services::melody::BeepType::Scroll);
                 }
                 return EventResult::Consumed;
@@ -511,18 +435,17 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
             match state {
                 KeyState::Pressed => {
                     if code == KeyCode::Exit {
-                        if self.model.is_pressed {
-                            self.model.is_pressed = false;
+                        if self.is_pressed {
+                            self.is_pressed = false;
                             return EventResult::Consumed;
                         }
                         return EventResult::Ignored;
                     }
                     if code == KeyCode::Menu {
-                        self.model.is_pressed = true;
+                        self.is_pressed = true;
                         return EventResult::Consumed;
                     }
 
-                    // Direct numeric keypad 1-touch app / tool launch matching 3x2 grid or list
                     if let Some(digit) = digit_opt {
                         if digit == 0 {
                             self.execute_target(
@@ -532,26 +455,24 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
                             return EventResult::Consumed;
                         }
                         let idx = (digit - 1) as usize;
-                        if idx < self.model.items.len() {
-                            self.model.selected_idx = idx;
-                            if is_list_mode {
-                                self.adjust_scroll_for_selection(animations_enabled);
-                            }
-                            self.model.is_pressed = true;
+                        if idx < self.items.len() {
+                            self.selected_idx = idx as u8;
+                            self.adjust_scroll_for_selection(animations_enabled);
+                            self.is_pressed = true;
                             return EventResult::Consumed;
                         }
                     }
                 }
                 KeyState::Held => {
                     if is_direct_key {
-                        self.model.is_pressed = true;
+                        self.is_pressed = true;
                         return EventResult::Consumed;
                     }
                 }
                 KeyState::Released => {
-                    if self.model.is_pressed && is_direct_key {
-                        self.model.is_pressed = false;
-                        if let Some(entry) = self.model.selected_item() {
+                    if self.is_pressed && is_direct_key {
+                        self.is_pressed = false;
+                        if let Some(entry) = self.items.get(self.selected_idx as usize) {
                             let target = entry.target;
                             self.execute_target(ctx, target);
                             return EventResult::Consumed;
@@ -561,15 +482,10 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
             }
         }
 
-        let prev_sel = self.model.selected_idx;
-        let nav_handled = if is_list_mode {
-            self.handle_list_nav(event, animations_enabled)
-        } else {
-            self.view.on_event(&mut self.model, event)
-        };
-        if nav_handled {
-            self.model.is_pressed = false;
-            if self.model.selected_idx != prev_sel
+        let prev_sel = self.selected_idx;
+        if self.handle_list_nav(event, animations_enabled) {
+            self.is_pressed = false;
+            if self.selected_idx != prev_sel
                 && ctx.config.audio.key_beep != 0
                 && matches!(event, Event::Tick)
             {
@@ -586,8 +502,8 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
     }
 
     #[inline(never)]
-    fn render(&self, canvas: &mut Canvas, ctx: &SysContext) {
-        self.render_to_canvas(canvas, ctx.config.apps.launcher_style == 1);
+    fn render(&self, canvas: &mut Canvas, _ctx: &SysContext) {
+        self.render_list(canvas);
     }
 
     fn on_exit(&mut self, _ctx: &mut SysContext) {}
@@ -611,8 +527,6 @@ mod tests {
             LauncherTarget::App(APP_ID_SETTINGS as u8)
         );
 
-        // Overwriting TRANSIENT_ARENA[0..7168) (e.g. during an app launch or error dialog)
-        // must never corrupt LauncherEntry items or cause invalid pointer dereferences.
         crate::data::arena::transient_arena_bytes_mut()[..1024].fill(0xAA);
         assert_eq!(entries[0].title(), "Radio");
         assert_eq!(entries[1].title(), "Settings");
@@ -641,7 +555,6 @@ mod tests {
         assert_eq!(entries[2].title(), "Torch");
         assert_eq!(entries[3].title(), "About");
 
-        // Adding /apps/vfo.krx replaces slot 0 (Radio) in-place too
         let _ = cat.entries.push(catalog::PackageCatalogEntry {
             exec_type: kernel::runtime::KrxExecType::App,
             is_valid: true,
@@ -659,5 +572,23 @@ mod tests {
         assert_eq!(entries[1].target, LauncherTarget::Package(0));
 
         cat.entries.clear();
+    }
+
+    #[test]
+    fn launcher_preserves_selection_and_scroll_across_exit() {
+        let mut app = core::mem::MaybeUninit::<LauncherApp>::zeroed();
+        unsafe { LauncherApp::init_at(app.as_mut_ptr()) };
+        let app = unsafe { app.assume_init_mut() };
+        app.selected_idx = 3;
+        app.adjust_scroll_for_selection(false);
+        assert_eq!(app.selected_idx, 3);
+        let saved_scroll = app.scroll_top;
+
+        // Reloading the same catalog entries must preserve cursor focus and scroll window
+        let entries = load_entries(None);
+        app.set_entries(entries);
+        app.adjust_scroll_for_selection(false);
+        assert_eq!(app.selected_idx, 3);
+        assert_eq!(app.scroll_top, saved_scroll);
     }
 }

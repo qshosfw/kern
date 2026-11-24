@@ -28,18 +28,17 @@ const _: () = assert!(core::mem::size_of::<StrCacheSlot>() == 32);
 
 struct LangStrCache<const N: usize> {
     slots: [StrCacheSlot; N],
-    next_evict: u8,
 }
 
 impl<const N: usize> LangStrCache<N> {
     const fn new() -> Self {
+        assert!(N.is_power_of_two());
         Self {
             slots: [StrCacheSlot {
                 key_hash: 0,
                 len: 0,
                 bytes: [0; 27],
             }; N],
-            next_evict: 0,
         }
     }
 
@@ -48,21 +47,19 @@ impl<const N: usize> LangStrCache<N> {
         for s in &mut self.slots {
             s.len = 0;
         }
-        self.next_evict = 0;
     }
 
     #[inline(never)]
     fn lookup<'a>(&self, h: u32, out: &'a mut [u8]) -> Option<Option<&'a str>> {
-        for s in &self.slots {
-            if s.len != 0 && s.key_hash == h {
-                if s.len == 0xFF {
-                    return Some(None);
-                }
-                let n = s.len as usize;
-                if n <= out.len() {
-                    out[..n].copy_from_slice(&s.bytes[..n]);
-                    return Some(Some(unsafe { core::str::from_utf8_unchecked(&out[..n]) }));
-                }
+        let s = &self.slots[(h as usize) & (N - 1)];
+        if s.len != 0 && s.key_hash == h {
+            if s.len == 0xFF {
+                return Some(None);
+            }
+            let n = s.len as usize;
+            if n <= out.len() {
+                out[..n].copy_from_slice(&s.bytes[..n]);
+                return Some(Some(unsafe { core::str::from_utf8_unchecked(&out[..n]) }));
             }
         }
         None
@@ -70,9 +67,7 @@ impl<const N: usize> LangStrCache<N> {
 
     #[inline(never)]
     fn insert(&mut self, h: u32, val: Option<&str>) {
-        let idx = (self.next_evict as usize) % N;
-        self.next_evict = self.next_evict.wrapping_add(1);
-        let slot = &mut self.slots[idx];
+        let slot = &mut self.slots[(h as usize) & (N - 1)];
         slot.key_hash = h;
         match val {
             Some(s) if !s.is_empty() && s.len() <= slot.bytes.len() => {
@@ -135,7 +130,7 @@ struct ActiveLang {
     base_font: Option<FontPackHeader>,
     extra_font_hdr: Option<FontPackHeader>,
     glyph_cache: FontGlyphCache<1>,
-    str_cache: LangStrCache<1>,
+    str_cache: LangStrCache<4>,
     app_stem: [u8; 12],
     app_stem_len: u8,
     extra_font_kind: u8,
@@ -525,5 +520,25 @@ mod tests {
 
         assert_eq!(extract_stem("/apps/settings.krx"), "settings");
         assert_eq!(extract_stem("/apps/calib.mod"), "calib");
+    }
+
+    #[test]
+    fn direct_mapped_lang_str_cache_hits_misses_and_evicts() {
+        let mut cache = LangStrCache::<8>::new();
+        let mut out = [0u8; 32];
+        assert!(cache.lookup(0x1001, &mut out).is_none());
+
+        cache.insert(0x1001, Some("Settings"));
+        cache.insert(0x1002, None);
+        assert_eq!(cache.lookup(0x1001, &mut out), Some(Some("Settings")));
+        assert_eq!(cache.lookup(0x1002, &mut out), Some(None));
+
+        // Same low 3 bits (`1`) replaces slot 1 cleanly in O(1)
+        cache.insert(0x2009, Some("Radio"));
+        assert!(cache.lookup(0x1001, &mut out).is_none());
+        assert_eq!(cache.lookup(0x2009, &mut out), Some(Some("Radio")));
+
+        cache.clear();
+        assert!(cache.lookup(0x2009, &mut out).is_none());
     }
 }

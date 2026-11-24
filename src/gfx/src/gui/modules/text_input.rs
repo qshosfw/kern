@@ -611,12 +611,7 @@ impl View<TextInputModel> for TextInputView {
             model.ticks = model.ticks.wrapping_add(1);
             if model.exit_pressed && !model.exit_held {
                 model.exit_press_ticks = model.exit_press_ticks.saturating_add(1);
-                let threshold = if model.hold_ticks > 0 {
-                    model.hold_ticks
-                } else {
-                    24
-                };
-                if model.exit_press_ticks >= threshold {
+                if model.exit_press_ticks >= hold_threshold(model) {
                     cancel_input(model);
                 }
             }
@@ -628,24 +623,19 @@ impl View<TextInputModel> for TextInputView {
             match ch {
                 '\x08' | '\x7f' => {
                     Self::confirm_current_char(model);
-                    let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-                    delete_utf8_before(&mut model.buffer, pos);
+                    delete_at_cursor(model);
                 }
                 '\r' | '\n' => {
                     Self::confirm_current_char(model);
                     model.is_done = true;
                 }
-                '\x1b' => {
-                    cancel_input(model);
-                }
+                '\x1b' => cancel_input(model),
                 c if (c as u32) >= 0x20 => {
                     if !model.digits_only || c.is_ascii_digit() {
                         Self::confirm_current_char(model);
                         if model.buffer.len() + c.len_utf8() <= model.max_len {
                             let mut b = [0u8; 4];
-                            let s = c.encode_utf8(&mut b);
-                            let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-                            insert_utf8_at(&mut model.buffer, pos, s);
+                            insert_at_cursor(model, c.encode_utf8(&mut b));
                         }
                         #[cfg(feature = "passcode")]
                         if model.is_passcode
@@ -663,14 +653,8 @@ impl View<TextInputModel> for TextInputView {
         }
 
         if let Event::Encoder(delta) = *event {
-            if delta != 0 && !model.is_passcode {
-                Self::confirm_current_char(model);
-                let max_c = utf8_char_count(&model.buffer).min(255) as u8;
-                if delta < 0 {
-                    model.cursor_from_end = model.cursor_from_end.saturating_add(1).min(max_c);
-                } else {
-                    model.cursor_from_end = model.cursor_from_end.saturating_sub(1);
-                }
+            if delta != 0 {
+                move_cursor(model, if delta < 0 { 1 } else { -1 });
             }
             return true;
         }
@@ -684,12 +668,7 @@ impl View<TextInputModel> for TextInputView {
             if is_held {
                 match code {
                     KeyCode::Exit => {
-                        let threshold = if model.hold_ticks > 0 {
-                            model.hold_ticks
-                        } else {
-                            24
-                        };
-                        if !model.exit_pressed || model.exit_press_ticks >= threshold {
+                        if !model.exit_pressed || model.exit_press_ticks >= hold_threshold(model) {
                             cancel_input(model);
                         }
                         return true;
@@ -701,12 +680,9 @@ impl View<TextInputModel> for TextInputView {
                     }
                     _ => {
                         if let Some(digit) = code.to_digit() {
-                            // Never double-type digits in numeric mode; in T9 mode replace
-                            // the pending multi-tap character with the literal digit.
                             if !model.digits_only && model.charset != Charset::Numbers {
                                 if model.last_key == Some(digit) && !model.buffer.is_empty() {
-                                    let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-                                    delete_utf8_before(&mut model.buffer, pos);
+                                    delete_at_cursor(model);
                                 }
                                 confirm_and_push(model, b'0' + digit);
                             }
@@ -724,10 +700,8 @@ impl View<TextInputModel> for TextInputView {
                         if model.last_key.is_some() {
                             Self::confirm_current_char(model);
                         } else if !model.buffer.is_empty() {
-                            let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-                            delete_utf8_before(&mut model.buffer, pos);
+                            delete_at_cursor(model);
                         } else {
-                            // Buffer is empty: short tap on Exit cancels immediately ("Back")!
                             cancel_input(model);
                         }
                     }
@@ -740,70 +714,13 @@ impl View<TextInputModel> for TextInputView {
             // 3. Short Press Down (KeyState::Pressed)
             if is_pressed {
                 if let Some(key_num) = code.to_digit() {
-                    if model.digits_only || model.charset == Charset::Numbers {
-                        confirm_and_push(model, b'0' + key_num);
-                        model.last_activity_tick = model.ticks;
-                        return true;
-                    }
-
-                    let chars_count = utf8_char_count(model.key_chars(key_num));
-                    if chars_count == 0 {
-                        return true;
-                    }
-
-                    let is_same_key = model.last_key == Some(key_num);
-                    let is_recent = (model.ticks.wrapping_sub(model.last_activity_tick)) < 24;
-
-                    let mut glyph = [0u8; 4];
-                    if is_same_key && is_recent && !model.buffer.is_empty() {
-                        // Multi-tap cycle through UTF-8 characters safely
-                        model.press_count += 1;
-                        if model.press_count >= chars_count {
-                            model.press_count = 0;
-                        }
-                        if let Some(s) = utf8_nth_slice(model.key_chars(key_num), model.press_count)
-                        {
-                            let n = s.len().min(4);
-                            glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
-                            let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-                            delete_utf8_before(&mut model.buffer, pos);
-                            let new_pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-                            insert_utf8_at(
-                                &mut model.buffer,
-                                new_pos,
-                                unsafe { core::str::from_utf8_unchecked(&glyph[..n]) },
-                            );
-                        }
-                    } else if let Some(s) = utf8_nth_slice(model.key_chars(key_num), 0) {
-                        // First tap on a new key
-                        let n = s.len().min(4);
-                        glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
-                        TextInputView::confirm_current_char(model);
-                        if model.buffer.len() + n <= model.max_len {
-                            let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-                            insert_utf8_at(
-                                &mut model.buffer,
-                                pos,
-                                unsafe { core::str::from_utf8_unchecked(&glyph[..n]) },
-                            );
-                        }
-                        model.last_key = Some(key_num);
-                        model.press_count = 0;
-                    }
-                    model.last_activity_tick = model.ticks;
+                    handle_digit_press(model, key_num);
                     return true;
                 }
 
                 match code {
-                    KeyCode::Up if !model.is_passcode => {
-                        Self::confirm_current_char(model);
-                        let max_c = utf8_char_count(&model.buffer).min(255) as u8;
-                        model.cursor_from_end = model.cursor_from_end.saturating_add(1).min(max_c);
-                    }
-                    KeyCode::Down if !model.is_passcode => {
-                        Self::confirm_current_char(model);
-                        model.cursor_from_end = model.cursor_from_end.saturating_sub(1);
-                    }
+                    KeyCode::Up => move_cursor(model, 1),
+                    KeyCode::Down => move_cursor(model, -1),
                     KeyCode::Exit => {
                         model.exit_pressed = true;
                         model.exit_press_ticks = 0;
@@ -832,7 +749,6 @@ impl View<TextInputModel> for TextInputView {
                     }
 
                     KeyCode::Menu => {
-                        // Single tap MENU submits/finishes
                         Self::confirm_current_char(model);
                         model.is_done = true;
                     }
@@ -841,12 +757,90 @@ impl View<TextInputModel> for TextInputView {
                 }
             }
 
-            // Always sink key events in TextInput mode
             return true;
         }
 
         false
     }
+}
+
+#[inline(always)]
+fn hold_threshold(model: &TextInputModel) -> u32 {
+    if model.hold_ticks > 0 {
+        model.hold_ticks
+    } else {
+        24
+    }
+}
+
+#[inline(never)]
+fn delete_at_cursor(model: &mut TextInputModel) {
+    let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
+    delete_utf8_before(&mut model.buffer, pos);
+}
+
+#[inline(never)]
+fn insert_at_cursor(model: &mut TextInputModel, s: &str) {
+    let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
+    insert_utf8_at(&mut model.buffer, pos, s);
+}
+
+#[inline(never)]
+fn move_cursor(model: &mut TextInputModel, step: i8) {
+    if model.is_passcode {
+        return;
+    }
+    TextInputView::confirm_current_char(model);
+    if step > 0 {
+        let max_c = utf8_char_count(&model.buffer).min(255) as u8;
+        model.cursor_from_end = model.cursor_from_end.saturating_add(1).min(max_c);
+    } else {
+        model.cursor_from_end = model.cursor_from_end.saturating_sub(1);
+    }
+}
+
+#[inline(never)]
+fn handle_digit_press(model: &mut TextInputModel, key_num: u8) {
+    if model.digits_only || model.charset == Charset::Numbers {
+        confirm_and_push(model, b'0' + key_num);
+        model.last_activity_tick = model.ticks;
+        return;
+    }
+
+    let chars_count = utf8_char_count(model.key_chars(key_num));
+    if chars_count == 0 {
+        return;
+    }
+
+    let is_cycle = model.last_key == Some(key_num)
+        && (model.ticks.wrapping_sub(model.last_activity_tick)) < 24
+        && !model.buffer.is_empty();
+    let next_idx = if is_cycle {
+        let p = model.press_count + 1;
+        if p >= chars_count { 0 } else { p }
+    } else {
+        0
+    };
+
+    if let Some(s) = utf8_nth_slice(model.key_chars(key_num), next_idx) {
+        let mut glyph = [0u8; 4];
+        let n = s.len().min(4);
+        glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
+        let g = unsafe { core::str::from_utf8_unchecked(&glyph[..n]) };
+        if is_cycle {
+            model.press_count = next_idx;
+            delete_at_cursor(model);
+            insert_at_cursor(model, g);
+        } else {
+            TextInputView::confirm_current_char(model);
+            if model.buffer.len() + n <= model.max_len {
+                insert_at_cursor(model, g);
+            }
+            model.last_key = Some(key_num);
+            model.press_count = 0;
+        }
+    }
+    model.last_activity_tick = model.ticks;
 }
 
 #[inline(never)]
@@ -856,12 +850,7 @@ fn confirm_and_push(model: &mut TextInputModel, ch: u8) {
         && model.buffer.len() < model.buffer.capacity()
     {
         let buf = [ch];
-        let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-        insert_utf8_at(
-            &mut model.buffer,
-            pos,
-            unsafe { core::str::from_utf8_unchecked(&buf) },
-        );
+        insert_at_cursor(model, unsafe { core::str::from_utf8_unchecked(&buf) });
     }
     #[cfg(feature = "passcode")]
     if model.is_passcode && model.expose_len && utf8_char_count(&model.buffer) >= model.max_len {

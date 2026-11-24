@@ -22,7 +22,7 @@ Every component, interface, driver, and application in Kern must strictly embody
 
 3. **Efficient**:
    - **$O(1)$ Power-of-Two Geometries ($2^N$ Bytes)**: All database records and table structures must use lengths that are exact powers of two (16B headers/FM, 32B contacts/zones/bands, 64B channels/caps). Record seeking must use a single bit-shift (`offset = 16 + (index << N)`) without division or modulo instructions (Cortex-M0+ has no hardware divider).
-   - **Sector Boundary Alignment**: Record sizes must divide cleanly into LittleFS 4 KB flash erase sectors (64 channel records per sector, 128 contact records per sector) to prevent sector-straddling I/O operations.
+   - **Sector Boundary Alignment**: Record sizes must divide cleanly into KernFS v2.1 4 KB flash erase sectors (64 channel records per sector, 128 contact records per sector) to prevent sector-straddling I/O operations.
    - **Two-Tier VFO Resilience**: Frequency and tuning changes update volatile SRAM state instantaneously. Cold-boot persistence to `/user/vfo_a.vfo` and `/user/vfo_b.vfo` occurs on idle or power-down, achieving sub-1.8 ms boot times while preventing flash wear.
    - **Zero-Copy Deserialization**: All fixed-stride headers and records use packed layouts (`#[repr(C, packed)]`) for direct byte-slice mapping and zero-copy flash reads.
 
@@ -54,9 +54,12 @@ Every component, interface, driver, and application in Kern must strictly embody
 
 ---
 
-## 2. Storage & Filesystem Architecture
+## 2. Storage, ABI & Wire Architecture
 
-- **Direct LittleFS Storage**: Flat, uncompressed files directly on SPI Flash. No archive containers.
+- **Direct KernFS v2.1 Storage**: Flat, uncompressed log-structured files directly on SPI Flash (`64 B` aligned 12-root `Inode` supporting up to `384 KiB` / `393,216 B` per file, `24 B` inline payload, atomic batched page commits, wear-leveled GC, optional Ascon-128 AEAD when `secure_fs` is enabled). No archive containers.
+- **Canonical ABI v5 (`abi::VERSION = 5`)**: Centralized `kern_call` gate enforcing op-table lookup, pre-flight Cortex-M0+ stack guard, `Cap` permission checks, pointer-signature validation, and typed `abi::Status` returns across all 9 syscall domains.
+- **Universal RigWire v2**: Firmware-agnostic binary serial protocol (`8 B` naturally-aligned `WireHeader`, terminator-only in-place COBS, `abi::Status` error replies, `CORE::CAPS` `SemanticCap` & `CORE::TABLES` FourCC table discovery, 256 B page CRC-32 delta sync, multi-port `SerialCore` write-fencing).
+- **Lean Resident Failsafe Launcher**: Resident `APP_ID_LAUNCHER` uses a minimal ROM list launcher (`ListRowSpec` + `icon_8`) with optional `/apps/home.krx` override and automatic failsafe fallback.
 - **Filesystem Hierarchy**:
   - `/user/`: User-modifiable operational data:
     - `/user/channels.ch` (64-byte records, 16-byte header `CHAN`)
