@@ -472,6 +472,46 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
             p = kiss.start()
             self.assertGreater(p, 0)
             kiss.stop()
+
+            # TCP Command Bridge round-trip
+            import socket
+            from kern_dock.bridges import HttpApiBridge, TcpCommandBridge
+
+            tcp = TcpCommandBridge(link, port=0)
+            tp = tcp.start()
+            try:
+                with socket.create_connection(("127.0.0.1", tp), timeout=3) as s:
+                    s.sendall(b"ping\n")
+                    reply = s.recv(256).decode("utf-8")
+                    self.assertIn("PONG", reply)
+            finally:
+                tcp.stop()
+
+            # HTTP JSON & Live LCD PNG API Bridge round-trip
+            with tempfile.TemporaryDirectory() as td:
+                rt = DockRuntime(
+                    DockOptions(no_tray=True, no_ipc=True, no_plugins=True),
+                    config_path=Path(td) / "c.toml",
+                    persist_config=False,
+                    enable_dbus=False,
+                )
+                rt.link.connect("demo")
+                api = HttpApiBridge(rt, port=0)
+                hp = api.start()
+                try:
+                    c = http.client.HTTPConnection("127.0.0.1", hp, timeout=4)
+                    c.request("GET", "/api/status")
+                    r1 = c.getresponse()
+                    self.assertEqual(r1.status, 200)
+                    self.assertIn(b'"connected": true', r1.read())
+                    c.request("GET", "/api/screen.png")
+                    r2 = c.getresponse()
+                    self.assertEqual(r2.status, 200)
+                    self.assertTrue(r2.read().startswith(b"\x89PNG"))
+                    c.close()
+                finally:
+                    api.stop()
+                    rt.shutdown()
         finally:
             link.disconnect()
 

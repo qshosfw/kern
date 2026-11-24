@@ -1,4 +1,4 @@
-"""Files View: native GNOME Files-style KernFS browser with pathbar, collapsible search & WebDAV mount."""
+"""Files View: native GNOME Files (Nautilus)-style KernFS browser with sidebar, pathbar & WebDAV."""
 
 from __future__ import annotations
 
@@ -19,9 +19,17 @@ from ..runtime import DockRuntime
 from ..widgets.hex_view import show_hex_viewer_dialog
 from ..widgets.util import file_icon_name, fmt_size
 
+_PLACES: tuple[tuple[str, str, str], ...] = (
+    ("/", "Root", "drive-harddisk-symbolic"),
+    ("/user", "User Data", "folder-documents-symbolic"),
+    ("/pref", "Preferences", "preferences-system-symbolic"),
+    ("/apps", "Applications", "application-x-executable-symbolic"),
+    ("/sys", "System", "security-high-symbolic"),
+)
+
 
 class FilesView:
-    """Compact GNOME Files-style KernFS file browser with DnD and local WebDAV mounting."""
+    """Native GNOME Files-style KernFS browser with navigation sidebar, search, Hex View & WebDAV."""
 
     def __init__(
         self,
@@ -37,7 +45,7 @@ class FilesView:
         self._on_confirm = on_confirm
         self.current_dir = "/"
         self._cached_entries: list[dict[str, Any]] = []
-        self._place_btns: dict[str, Gtk.ToggleButton] = {}
+        self._place_rows: dict[str, Gtk.ListBoxRow] = {}
         self._updating = False
         self._dirty = True
 
@@ -54,15 +62,17 @@ class FilesView:
         runtime.events.subscribe("dav.changed", lambda _e: self._sync_dav_ui(), main_thread=True)
         self._render_filtered()
 
-    def _build(self) -> Gtk.Box:
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    def _build(self) -> Adw.ToolbarView:
+        view = Adw.ToolbarView()
 
-        # --- Compact Pathbar & Action Toolbar ---
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6, margin_top=8, margin_bottom=6, margin_start=12, margin_end=12)
+        # === TOP TOOLBAR ===
+        top_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
-        self.up_btn = Gtk.Button(icon_name="go-up-symbolic", tooltip_text="Parent Folder")
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        bar.add_css_class("toolbar")
+
+        self.up_btn = Gtk.Button(icon_name="go-up-symbolic", tooltip_text="Parent Folder (Alt+Up)")
         self.up_btn.add_css_class("flat")
-        self.up_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Parent Folder"])
         self.up_btn.connect("clicked", lambda _b: self._browse_parent())
         bar.append(self.up_btn)
 
@@ -72,98 +82,63 @@ class FilesView:
 
         bar.append(Gtk.Box(hexpand=True))
 
-        self.search_toggle = Gtk.ToggleButton(icon_name="system-search-symbolic", tooltip_text="Filter Files")
+        self.search_toggle = Gtk.ToggleButton(icon_name="system-search-symbolic", tooltip_text="Filter Files (Ctrl+F)")
         self.search_toggle.add_css_class("flat")
-        self.search_toggle.update_property([Gtk.AccessibleProperty.LABEL], ["Filter Files"])
         bar.append(self.search_toggle)
 
         self.upload_btn = Gtk.Button(icon_name="document-send-symbolic", tooltip_text="Upload File…")
         self.upload_btn.add_css_class("flat")
-        self.upload_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Upload File"])
         self.upload_btn.connect("clicked", lambda _b: self._on_upload_dialog())
         bar.append(self.upload_btn)
 
-        self.ref_btn = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh Folder")
+        self.ref_btn = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Refresh (F5)")
         self.ref_btn.add_css_class("flat")
-        self.ref_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Refresh Folder"])
         self.ref_btn.connect("clicked", lambda _b: self.browse(self.current_dir))
         bar.append(self.ref_btn)
 
         self.mount_btn = Gtk.ToggleButton(icon_name="drive-harddisk-symbolic", tooltip_text="Mount KernFS in OS File Manager")
         self.mount_btn.add_css_class("flat")
-        self.mount_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Mount Radio Storage"])
         self.mount_btn.connect("toggled", self._on_mount_toggled)
         bar.append(self.mount_btn)
+        top_wrap.append(bar)
 
-        self.open_fs_btn = Gtk.Button(icon_name="folder-open-symbolic", visible=False, tooltip_text="Open in OS File Manager")
-        self.open_fs_btn.add_css_class("flat")
-        self.open_fs_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Open in OS File Manager"])
-        self.open_fs_btn.connect("clicked", self._on_open_fs)
-        bar.append(self.open_fs_btn)
-        root.append(bar)
-
-        # --- Collapsible Search Bar ---
         self.search = Gtk.SearchEntry(placeholder_text="Filter current folder…", hexpand=True)
         self.search.connect("search-changed", lambda _e: self._render_filtered())
         self.search_bar = Gtk.SearchBar(child=self.search, show_close_button=True)
         self.search_bar.connect_entry(self.search)
         self.search_toggle.bind_property("active", self.search_bar, "search-mode-enabled", 2)
-        root.append(self.search_bar)
+        top_wrap.append(self.search_bar)
 
-        # --- Compact Quick-Places Bar ---
-        places = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4, margin_bottom=6, margin_start=12, margin_end=12)
-        first = None
-        for d, lbl in (("/", "Root"), ("/user", "user"), ("/pref", "pref"), ("/apps", "apps"), ("/sys", "sys")):
-            b = Gtk.ToggleButton(label=lbl, active=(d == "/"))
-            b.add_css_class("flat")
-            b.add_css_class("place-btn")
-            if first is None:
-                first = b
-            else:
-                b.set_group(first)
-            b.connect("toggled", lambda btn, p=d: self.browse(p) if (btn.get_active() and not self._updating) else None)
-            places.append(b)
-            self._place_btns[d] = b
-        root.append(places)
+        # Native Adw.Banner when KernFS WebDAV drive is mounted
+        self.mount_banner = Adw.Banner(revealed=False, button_label="Open Folder")
+        self.mount_banner.connect("button-clicked", self._on_open_fs)
+        top_wrap.append(self.mount_banner)
 
-        # --- Inline Mounted Drive Status Strip (shown while KernFS is mounted) ---
-        self.mount_strip = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=8,
-            visible=False,
-            margin_bottom=6,
-            margin_start=12,
-            margin_end=12,
-        )
-        self.mount_strip.add_css_class("card")
-        self.mount_strip.add_css_class("stat-tile")
-        self.mount_strip.append(Gtk.Image(icon_name="drive-harddisk-symbolic"))
-        self.mount_strip_lbl = Gtk.Label(label="", xalign=0, hexpand=True, ellipsize=3)
-        self.mount_strip_lbl.add_css_class("caption")
-        self.mount_strip_lbl.add_css_class("monospace")
-        self.mount_strip.append(self.mount_strip_lbl)
+        top_wrap.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        view.add_top_bar(top_wrap)
 
-        open_b = Gtk.Button(label="Open")
-        open_b.add_css_class("flat")
-        open_b.connect("clicked", self._on_open_fs)
-        self.mount_strip.append(open_b)
+        # === SPLIT CONTENT: PLACES NAVIGATION SIDEBAR + FILE LIST ===
+        split = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, hexpand=True, vexpand=True)
 
-        copy_b = Gtk.Button(icon_name="edit-copy-symbolic", tooltip_text="Copy Mount Path / URL")
-        copy_b.add_css_class("flat")
-        copy_b.connect("clicked", self._on_copy_mount_url)
-        self.mount_strip.append(copy_b)
+        self.places_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
+        self.places_list.add_css_class("navigation-sidebar")
+        self.places_list.set_size_request(144, -1)
+        for path, label, icon in _PLACES:
+            row = Gtk.ListBoxRow()
+            row._place_path = path  # type: ignore[attr-defined]
+            rbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            rbox.append(Gtk.Image.new_from_icon_name(icon))
+            rbox.append(Gtk.Label(label=label, xalign=0, ellipsize=3))
+            row.set_child(rbox)
+            self.places_list.append(row)
+            self._place_rows[path] = row
+        self.places_list.select_row(self._place_rows["/"])
+        self.places_list.connect("row-selected", self._on_place_selected)
+        split.append(self.places_list)
+        split.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
 
-        unm_b = Gtk.Button(icon_name="media-eject-symbolic", tooltip_text="Unmount Radio Drive")
-        unm_b.add_css_class("flat")
-        unm_b.connect("clicked", lambda _b: self.mount_btn.set_active(False))
-        self.mount_strip.append(unm_b)
-        root.append(self.mount_strip)
-
-        root.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-
-        # --- Compact File List / Status Stack ---
-        self.stack = Gtk.Stack(vexpand=True)
-        scroll = Gtk.ScrolledWindow(vexpand=True)
+        self.stack = Gtk.Stack(vexpand=True, hexpand=True)
+        scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.file_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, valign=Gtk.Align.START)
         self.file_list.add_css_class("file-list")
@@ -179,28 +154,41 @@ class FilesView:
         self.empty.add_css_class("compact")
         self.stack.add_named(self.empty, "empty")
         self.stack.set_visible_child_name("empty")
-        root.append(self.stack)
+        split.append(self.stack)
 
-        # --- Subtle 1-Line Footer Status Bar ---
-        root.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-        foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=4, margin_bottom=4, margin_start=12, margin_end=12)
-        self.meta_lbl = Gtk.Label(label="", xalign=0, hexpand=True)
+        view.set_content(split)
+
+        # === BOTTOM STATUS BAR ===
+        bot_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        bot_wrap.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=5, margin_bottom=5, margin_start=12, margin_end=12)
+        self.meta_lbl = Gtk.Label(label="Offline", xalign=0, hexpand=True)
         self.meta_lbl.add_css_class("caption")
         self.meta_lbl.add_css_class("dim-label")
         self.meta_lbl.add_css_class("numeric")
-        hint = Gtk.Label(label="Drop files to upload", xalign=1)
-        hint.add_css_class("caption")
-        hint.add_css_class("dim-label")
+        self.mode_lbl = Gtk.Label(label="Drop files to upload", xalign=1)
+        self.mode_lbl.add_css_class("caption")
+        self.mode_lbl.add_css_class("dim-label")
         foot.append(self.meta_lbl)
-        foot.append(hint)
-        root.append(foot)
+        foot.append(self.mode_lbl)
+        bot_wrap.append(foot)
+        view.add_bottom_bar(bot_wrap)
 
         self._rebuild_breadcrumbs()
 
         drop = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
+        drop.connect("enter", lambda *_a: (view.add_css_class("drop-active"), Gdk.DragAction.COPY)[1])
+        drop.connect("leave", lambda *_a: view.remove_css_class("drop-active"))
         drop.connect("drop", self._on_drop_upload)
-        root.add_controller(drop)
-        return root
+        view.add_controller(drop)
+        return view
+
+    def _on_place_selected(self, _lb: Any, row: Any) -> None:
+        if row is None or self._updating:
+            return
+        path = getattr(row, "_place_path", None)
+        if path:
+            self.browse(path)
 
     def _on_key(self, _c: Any, keyval: int, _kc: int, state: Any) -> bool:
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
@@ -238,11 +226,10 @@ class FilesView:
         mounted = lk.dav_server is not None
         self._updating = True
         self.mount_btn.set_active(mounted)
-        self.open_fs_btn.set_visible(mounted)
-        self.mount_strip.set_visible(mounted)
+        self.mount_banner.set_revealed(mounted)
         if mounted:
             target = lk.dav_open_target or f"dav://127.0.0.1:{lk.dav_port}/"
-            self.mount_strip_lbl.set_text(f"Mounted · {target}")
+            self.mount_banner.set_title(f"Mounted at {target}")
         self._updating = False
 
     def _browse_parent(self) -> None:
@@ -280,8 +267,8 @@ class FilesView:
         self._rebuild_breadcrumbs()
         self._updating = True
         top = "/" if path == "/" else "/" + path.strip("/").split("/")[0]
-        if top in self._place_btns:
-            self._place_btns[top].set_active(True)
+        if top in self._place_rows:
+            self.places_list.select_row(self._place_rows[top])
         self._updating = False
         be = lk.fs_backend
 
@@ -304,6 +291,11 @@ class FilesView:
         target = getattr(row, "_dir_path", None)
         if target:
             self.browse(target)
+            return
+        fpath = getattr(row, "_file_path", None)
+        fname = getattr(row, "_file_name", None)
+        if fpath and fname:
+            self._on_hex_view(fpath, fname)
 
     def _render_filtered(self) -> None:
         c = self.file_list.get_first_child()
@@ -322,13 +314,14 @@ class FilesView:
         self.ref_btn.set_sensitive(online)
         self.mount_btn.set_sensitive(online)
         self.up_btn.set_sensitive(online and self.current_dir != "/")
-        for pb in self._place_btns.values():
-            pb.set_sensitive(online)
+        self.places_list.set_sensitive(online)
 
         if not online:
             self.meta_lbl.set_text("Offline")
+            self.mode_lbl.set_text("")
         else:
             self.meta_lbl.set_text(f"{len(shown)} {'item' if len(shown) == 1 else 'items'} · {fmt_size(total_b)}")
+            self.mode_lbl.set_text("Read-only" if ro else "Drop files to upload")
 
         if not shown:
             if not self.runtime.link.connected:
@@ -344,25 +337,26 @@ class FilesView:
             return
 
         self.stack.set_visible_child_name("list")
-        ro = self.runtime.security.policy.read_only
         for e in shown:
             name, is_dir, size = e["name"], bool(e["is_dir"]), int(e["size"])
             full = f"/{name}" if self.current_dir == "/" else f"{self.current_dir.rstrip('/')}/{name}"
             protected = full.startswith("/sys/") or full in kernfs_mount.PROTECTED_RECOVERY_MODS
 
-            row = Gtk.ListBoxRow(activatable=is_dir)
+            row = Gtk.ListBoxRow(activatable=True)
             if is_dir:
                 row._dir_path = full  # type: ignore[attr-defined]
+            else:
+                row._file_path = full  # type: ignore[attr-defined]
+                row._file_name = name  # type: ignore[attr-defined]
+
             line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             line.append(Gtk.Image.new_from_icon_name(file_icon_name(name, full, is_dir)))
-
-            nlbl = Gtk.Label(label=name, xalign=0, hexpand=True, ellipsize=3)
-            line.append(nlbl)
+            line.append(Gtk.Label(label=name, xalign=0, hexpand=True, ellipsize=3))
 
             if protected and not is_dir:
-                pb = Gtk.Label(label="Protected", valign=Gtk.Align.CENTER)
-                pb.add_css_class("protected-badge")
-                line.append(pb)
+                lock = Gtk.Image(icon_name="security-high-symbolic", tooltip_text="Protected system file")
+                lock.add_css_class("dim-label")
+                line.append(lock)
 
             sz = Gtk.Label(label="" if is_dir else fmt_size(size), xalign=1)
             sz.add_css_class("file-size")
@@ -373,7 +367,7 @@ class FilesView:
                 chev.add_css_class("dim-label")
                 line.append(chev)
             else:
-                hv = Gtk.Button(icon_name="accessories-text-editor-symbolic", tooltip_text=f"Colored Hex View ({name})", valign=Gtk.Align.CENTER)
+                hv = Gtk.Button(icon_name="accessories-text-editor-symbolic", tooltip_text=f"Inspect Hex ({name})", valign=Gtk.Align.CENTER)
                 hv.add_css_class("flat")
                 hv.connect("clicked", lambda _b, p=full, n=name: self._on_hex_view(p, n))
                 line.append(hv)
@@ -426,6 +420,7 @@ class FilesView:
         threading.Thread(target=_w, daemon=True).start()
 
     def _on_drop_upload(self, _target: Any, value: Any, _x: float, _y: float) -> bool:
+        self.widget.remove_css_class("drop-active")
         if isinstance(value, Gio.File) and value.get_path():
             self.upload_local_file(Path(value.get_path()))
             return True
@@ -457,7 +452,7 @@ class FilesView:
                 data = be.read_bytes(remote_path)
                 GLib.idle_add(show_hex_viewer_dialog, self.win, data, filename)
             except Exception as exc:
-                GLib.idle_add(self._on_toast, f"Read {filename} failed: {exc}")
+                GLib.idle_add(self._on_toast, f"Read failed: {exc}")
 
         threading.Thread(target=_w, daemon=True).start()
 
@@ -473,11 +468,18 @@ class FilesView:
                 dest = d.save_finish(res).get_path()
             except GLib.Error:
                 return
-            if dest:
-                threading.Thread(
-                    target=lambda: (Path(dest).write_bytes(be.read_bytes(remote_path)), GLib.idle_add(self._on_toast, f"Saved {Path(dest).name}")),
-                    daemon=True,
-                ).start()
+            if not dest:
+                return
+
+            def _w() -> None:
+                try:
+                    data = be.read_bytes(remote_path)
+                    Path(dest).write_bytes(data)
+                    GLib.idle_add(self._on_toast, f"Saved {Path(dest).name} ({fmt_size(len(data))})")
+                except Exception as exc:
+                    GLib.idle_add(self._on_toast, f"Download failed: {exc}")
+
+            threading.Thread(target=_w, daemon=True).start()
 
         dlg.save(self.win, None, _picked)
 
@@ -493,7 +495,7 @@ class FilesView:
                 GLib.idle_add(self._on_toast, f"Deleted {clean}")
                 GLib.idle_add(self.browse, self.current_dir)
             except Exception as exc:
-                GLib.idle_add(self._on_toast, f"Delete blocked: {exc}")
+                GLib.idle_add(self._on_toast, f"Delete failed: {exc}")
 
         threading.Thread(target=_w, daemon=True).start()
 
@@ -501,70 +503,40 @@ class FilesView:
         if self._updating:
             return
         lk = self.runtime.link
-        if not btn.get_active():
-            if lk.dav_server is not None:
-                self.mount_btn.set_sensitive(False)
+        want = bool(btn.get_active())
+        if want:
+            if not lk.connected or lk.link_mode != "rigwire":
+                self._updating = True
+                btn.set_active(False)
+                self._updating = False
+                self._on_toast("Connect a RigWire radio first")
+                return
+            ro = self.runtime.security.policy.read_only
 
-                def _unmount() -> None:
-                    lk.stop_dav()
-                    GLib.idle_add(self._finish_unmount)
+            def _w() -> None:
+                try:
+                    port = lk.start_dav(http_port=0, read_only=ro)
+                    GLib.idle_add(self._on_toast, f"Mounted KernFS on dav://127.0.0.1:{port}/")
+                except Exception as exc:
+                    GLib.idle_add(self._on_toast, f"Mount failed: {exc}")
+                finally:
+                    GLib.idle_add(self._sync_dav_ui)
 
-                threading.Thread(target=_unmount, daemon=True, name="kern-dock-unmount").start()
-            return
-        if not lk.connected or lk.fs_backend is None:
-            btn.set_active(False)
-            self._on_toast("Connect a RigWire radio first")
-            return
-        self.mount_btn.set_sensitive(False)
-        self._on_toast(f"Mounting {lk.volume_name}…")
-
-        def _mount() -> None:
-            try:
-                url = lk.start_dav(http_port=8765)
-                open_t, unmount_c = kernfs_mount.try_auto_mount(url, lk.volume_name)
-                lk.dav_open_target = open_t or f"dav://127.0.0.1:{lk.dav_port}/"
-                lk.dav_unmount_cmd = unmount_c
-                GLib.idle_add(self._finish_mount, True, lk.dav_open_target, open_t is not None)
-            except Exception as exc:
-                lk.stop_dav()
-                GLib.idle_add(self._finish_mount, False, str(exc), False)
-
-        threading.Thread(target=_mount, daemon=True, name="kern-dock-mount").start()
-
-    def _finish_mount(self, ok: bool, detail: str, auto_mounted: bool) -> bool:
-        self.mount_btn.set_sensitive(True)
-        self._sync_dav_ui()
-        if ok:
-            lk = self.runtime.link
-            if auto_mounted:
-                self._on_toast(f"Mounted {lk.volume_name}")
-                kernfs_mount.open_in_file_manager(detail)
-            else:
-                self._on_toast(f"WebDAV ready at {detail} (open in file manager)")
+            threading.Thread(target=_w, daemon=True).start()
         else:
-            self._updating = True
-            self.mount_btn.set_active(False)
-            self._updating = False
-            self._on_toast(f"Mount failed: {detail}")
-        return False
+            lk.stop_dav()
+            self._sync_dav_ui()
+            self._on_toast("Unmounted radio drive")
 
-    def _finish_unmount(self) -> bool:
-        self.mount_btn.set_sensitive(True)
-        self._sync_dav_ui()
-        self._on_toast("Unmounted radio drive")
-        return False
-
-    def _on_copy_mount_url(self, _btn: Any) -> None:
+    def _on_open_fs(self, _w: Any) -> None:
         lk = self.runtime.link
-        if lk.dav_server is None:
+        target = lk.dav_open_target or (f"dav://127.0.0.1:{lk.dav_port}/" if lk.dav_server else "")
+        if not target:
             return
-        target = lk.dav_open_target or f"dav://127.0.0.1:{lk.dav_port}/"
-        disp = Gdk.Display.get_default()
-        if disp is not None:
-            disp.get_clipboard().set(target)
-        self._on_toast(f"Copied {target}")
-
-    def _on_open_fs(self, _btn: Any) -> None:
-        lk = self.runtime.link
-        if lk.dav_server is not None:
-            kernfs_mount.open_in_file_manager(lk.dav_open_target or f"dav://127.0.0.1:{lk.dav_port}/")
+        try:
+            Gio.AppInfo.launch_default_for_uri(
+                target if "://" in target else Path(target).as_uri(),
+                None,
+            )
+        except Exception as exc:
+            self._on_toast(f"Open failed: {exc}")

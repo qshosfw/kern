@@ -1,4 +1,4 @@
-"""Terminal & Wire View: Embedded GTK4 VTE-3.91 OS Terminal + RigWire Command Console."""
+"""Terminal View: GNOME Console-style embedded VTE shell & RigWire command console."""
 
 from __future__ import annotations
 
@@ -17,11 +17,10 @@ from ... import REPO_ROOT
 from ...core.events import Event
 from ...system.desktop import build_radio_shell_env
 from ..runtime import DockRuntime
-from ..widgets.util import set_pill
 
 
 class TerminalView:
-    """Dual-mode workbench combining a real GTK4 VTE shell with the interactive RigWire console."""
+    """Clean Adw.ToolbarView workbench: full-bleed GTK4 VTE shell + RigWire command console."""
 
     def __init__(self, runtime: DockRuntime, *, on_toast: Callable[[str], None]) -> None:
         self.runtime = runtime
@@ -32,84 +31,136 @@ class TerminalView:
         self._vte_spawned = False
 
         self.widget = self._build()
-
         runtime.events.subscribe("log.line", self._on_log_event, main_thread=True)
-        runtime.events.subscribe("link.connected", lambda _e: self._refresh_pill(), main_thread=True)
-        runtime.events.subscribe("link.disconnected", lambda _e: self._refresh_pill(), main_thread=True)
-        runtime.events.subscribe("link.telemetry", lambda _e: self._refresh_pill(), main_thread=True)
-        self._refresh_pill()
 
-    def _build(self) -> Gtk.Box:
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10, margin_bottom=12, margin_start=14, margin_end=14)
-
-        # Header utility strip: Mode switcher (RigWire Console | OS Terminal) + Status Pill + External Terminal
-        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    def _build(self) -> Adw.ToolbarView:
+        view = Adw.ToolbarView()
         self.sub_stack = Adw.ViewStack(vexpand=True, hexpand=True)
+
+        # === TOP TOOLBAR (GNOME Console style) ===
+        top_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        bar.add_css_class("toolbar")
+
         switcher = Adw.ViewSwitcher(stack=self.sub_stack, policy=Adw.ViewSwitcherPolicy.WIDE)
-        top.append(switcher)
-        top.append(Gtk.Box(hexpand=True))
+        bar.append(switcher)
+        bar.append(Gtk.Box(hexpand=True))
 
-        self.status_pill = Gtk.Label(label="Offline", valign=Gtk.Align.CENTER)
-        self.status_pill.add_css_class("status-pill")
-        top.append(self.status_pill)
+        # Clean Snippets popover (replaces quick-chip pill clutter)
+        snip_btn = Gtk.MenuButton(icon_name="view-list-symbolic", tooltip_text="Quick Commands")
+        snip_btn.add_css_class("flat")
+        snip_btn.set_popover(self._build_snippets_popover())
+        bar.append(snip_btn)
 
-        ext_btn = Gtk.Button(tooltip_text="Open in External OS Terminal (Ctrl+Shift+Enter)")
-        eb_in = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        eb_in.append(Gtk.Image.new_from_icon_name("utilities-terminal-symbolic"))
-        eb_in.append(Gtk.Label(label="Pop Out"))
-        ext_btn.set_child(eb_in)
+        # Shell actions (visible in Shell mode)
+        self.shell_tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        for icon, tip, cb in (
+            ("edit-copy-symbolic", "Copy (Ctrl+Shift+C)", self._copy_active),
+            ("edit-paste-symbolic", "Paste (Ctrl+Shift+V)", self._paste_vte),
+            ("zoom-out-symbolic", "Zoom Out", lambda: self._vte_zoom(-0.1)),
+            ("zoom-in-symbolic", "Zoom In", lambda: self._vte_zoom(0.1)),
+            ("view-refresh-symbolic", "Restart shell with latest radio env", lambda: self._spawn_vte(force=True)),
+        ):
+            tb = Gtk.Button(icon_name=icon, tooltip_text=tip)
+            tb.add_css_class("flat")
+            tb.connect("clicked", lambda _b, f=cb: f())
+            self.shell_tools.append(tb)
+        bar.append(self.shell_tools)
+
+        # RigWire actions (visible in RigWire mode)
+        self.wire_tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2, visible=False)
+        for icon, tip, cb in (
+            ("edit-copy-symbolic", "Copy console log", self._copy_console),
+            ("edit-clear-all-symbolic", "Clear console", lambda: self.console_buf.set_text("")),
+        ):
+            tb = Gtk.Button(icon_name=icon, tooltip_text=tip)
+            tb.add_css_class("flat")
+            tb.connect("clicked", lambda _b, f=cb: f())
+            self.wire_tools.append(tb)
+        bar.append(self.wire_tools)
+
+        ext_btn = Gtk.Button(icon_name="window-new-symbolic", tooltip_text="Open in External Terminal (Ctrl+Shift+Enter)")
+        ext_btn.add_css_class("flat")
         ext_btn.connect("clicked", lambda _b: self._launch_external())
-        top.append(ext_btn)
-        root.append(top)
+        bar.append(ext_btn)
 
-        self.sub_stack.add_titled_with_icon(self._build_vte_terminal(), "shell", "Terminal", "utilities-terminal-symbolic")
+        top_wrap.append(bar)
+        top_wrap.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        view.add_top_bar(top_wrap)
+
+        self.sub_stack.add_titled_with_icon(self._build_vte_terminal(), "shell", "Shell", "utilities-terminal-symbolic")
         self.sub_stack.add_titled_with_icon(self._build_wire_console(), "wire", "RigWire", "network-transmit-receive-symbolic")
         self.sub_stack.set_visible_child_name("shell")
-        root.append(self.sub_stack)
-        return root
+        self.sub_stack.connect("notify::visible-child-name", self._on_mode_changed)
+
+        view.set_content(self.sub_stack)
+        return view
+
+    def _on_mode_changed(self, stack: Adw.ViewStack, _p: Any) -> None:
+        is_shell = stack.get_visible_child_name() == "shell"
+        self.shell_tools.set_visible(is_shell)
+        self.wire_tools.set_visible(not is_shell)
+
+    def _build_snippets_popover(self) -> Gtk.Popover:
+        pop = Gtk.Popover()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+
+        def _hdr(text: str) -> None:
+            l = Gtk.Label(label=text, xalign=0, margin_start=6, margin_top=4, margin_bottom=2)
+            l.add_css_class("caption-heading")
+            l.add_css_class("dim-label")
+            box.append(l)
+
+        _hdr("Shell Commands")
+        for cmd in ("./kern info", "./kern check", "./kern doctor", "./kern ports", "./kern dock ctl status"):
+            b = Gtk.Button(label=cmd)
+            b.add_css_class("flat")
+            b.set_halign(Gtk.Align.FILL)
+            b.connect("clicked", lambda _b, c=cmd: (pop.popdown(), self.sub_stack.set_visible_child_name("shell"), self._feed_vte(c + "\n")))
+            box.append(b)
+
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL, margin_top=4, margin_bottom=4))
+        _hdr("RigWire Console")
+        for cmd in ("ping", "info", "ls /", "ls /apps", "headless", "audit", "help"):
+            b = Gtk.Button(label=cmd)
+            b.add_css_class("flat")
+            b.set_halign(Gtk.Align.FILL)
+            b.connect("clicked", lambda _b, c=cmd: (pop.popdown(), self.sub_stack.set_visible_child_name("wire"), self.run_command(c)))
+            box.append(b)
+
+        pop.set_child(box)
+        return pop
 
     def _build_wire_console(self) -> Gtk.Box:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=6)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
-        chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        for cmd in ("ping", "info", "ls /", "vfo", "headless", "audit", "help"):
-            cb = Gtk.Button(label=cmd)
-            cb.add_css_class("quick-chip")
-            cb.connect("clicked", lambda _b, c=cmd: self.run_command(c))
-            chips.append(cb)
-        chips.append(Gtk.Box(hexpand=True))
-        copy_b = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
-        copy_b.add_css_class("flat")
-        copy_b.set_tooltip_text("Copy console log")
-        copy_b.connect("clicked", lambda _b: self._copy_console())
-        chips.append(copy_b)
-        clr_b = Gtk.Button.new_from_icon_name("edit-clear-all-symbolic")
-        clr_b.add_css_class("flat")
-        clr_b.set_tooltip_text("Clear console")
-        clr_b.connect("clicked", lambda _b: self.console_buf.set_text(""))
-        chips.append(clr_b)
-        box.append(chips)
-
-        frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
-        frame.add_css_class("console-frame")
         scroll = Gtk.ScrolledWindow(vexpand=True)
         self.console_buf = Gtk.TextBuffer()
         self.console_buf.create_tag("cmd", foreground="#38bdf8", weight=700)
         self.console_buf.create_tag("ok", foreground="#4ade80")
         self.console_buf.create_tag("err", foreground="#f87171")
         self.console_buf.create_tag("meta", foreground="#94a3b8")
-        self.console_view = Gtk.TextView(buffer=self.console_buf, editable=False, monospace=True)
+        self.console_view = Gtk.TextView(
+            buffer=self.console_buf,
+            editable=False,
+            monospace=True,
+            top_margin=10,
+            bottom_margin=10,
+            left_margin=12,
+            right_margin=12,
+        )
         self.console_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self.console_view.add_css_class("wire-console")
         scroll.set_child(self.console_view)
-        frame.append(scroll)
-        box.append(frame)
+        box.append(scroll)
 
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        row.add_css_class("toolbar")
         p_lbl = Gtk.Label(label="❯")
         p_lbl.add_css_class("console-prompt")
         row.append(p_lbl)
-        self.cmd_entry = Gtk.Entry(hexpand=True, placeholder_text="RigWire command (ping, info, freq 433.500, audit, help)…")
+        self.cmd_entry = Gtk.Entry(hexpand=True, placeholder_text="RigWire command (ping, info, ls /, audit, help)…")
         self.cmd_entry.add_css_class("console-entry")
         self.cmd_entry.connect("activate", lambda _w: self._submit())
         ec = Gtk.EventControllerKey()
@@ -117,7 +168,7 @@ class TerminalView:
         self.cmd_entry.add_controller(ec)
         row.append(self.cmd_entry)
 
-        btn = Gtk.Button.new_from_icon_name("go-next-symbolic")
+        btn = Gtk.Button(icon_name="go-next-symbolic", tooltip_text="Run command")
         btn.add_css_class("suggested-action")
         btn.connect("clicked", lambda _b: self._submit())
         row.append(btn)
@@ -125,35 +176,10 @@ class TerminalView:
         return box
 
     def _build_vte_terminal(self) -> Gtk.Box:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=6)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         try:
             gi.require_version("Vte", "3.91")
             from gi.repository import Pango, Vte
-
-            bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            for lbl, snippet in (
-                ("./kern info", "./kern info\n"),
-                ("./kern dock ctl status", "./kern dock ctl status\n"),
-                ("./kern check", "./kern check\n"),
-            ):
-                b = Gtk.Button(label=lbl)
-                b.add_css_class("quick-chip")
-                b.connect("clicked", lambda _b, s=snippet: self._feed_vte(s))
-                bar.append(b)
-            bar.append(Gtk.Box(hexpand=True))
-
-            for icon, tip, cb in (
-                ("edit-copy-symbolic", "Copy (Ctrl+Shift+C)", lambda: self._vte_term.copy_clipboard_format(Vte.Format.TEXT)),
-                ("edit-paste-symbolic", "Paste (Ctrl+Shift+V)", lambda: self._vte_term.paste_clipboard()),
-                ("zoom-out-symbolic", "Zoom Out", lambda: self._vte_zoom(-0.1)),
-                ("zoom-in-symbolic", "Zoom In", lambda: self._vte_zoom(0.1)),
-                ("view-refresh-symbolic", "Respawn shell with latest radio env", lambda: self._spawn_vte(force=True)),
-            ):
-                tb = Gtk.Button(icon_name=icon, tooltip_text=tip)
-                tb.add_css_class("flat")
-                tb.connect("clicked", lambda _b, f=cb: f())
-                bar.append(tb)
-            box.append(bar)
 
             term = Vte.Terminal(hexpand=True, vexpand=True)
             term.set_scrollback_lines(10000)
@@ -163,7 +189,6 @@ class TerminalView:
             term.set_cursor_blink_mode(Vte.CursorBlinkMode.SYSTEM)
             term.set_font(Pango.FontDescription.from_string("Monospace 10"))
 
-            # Crisp 16-color modern GNOME/Adwaita dark ANSI terminal palette
             palette_hex = (
                 "#1e222a", "#f87171", "#4ade80", "#fbbf24", "#60a5fa", "#c084fc", "#22d3ee", "#cbd5e1",
                 "#475569", "#fca5a5", "#86efac", "#fde047", "#93c5fd", "#d8b4fe", "#67e8f9", "#f8fafc",
@@ -179,30 +204,35 @@ class TerminalView:
             fg.parse("#e5e7eb")
             term.set_colors(fg, bg, palette)
 
-            # Ctrl+Shift+C / Ctrl+Shift+V / Ctrl+Plus / Ctrl+Minus / Ctrl+0
             kc = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
             kc.connect("key-pressed", self._on_vte_key)
             term.add_controller(kc)
             self._vte_term = term
 
-            frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
-            frame.add_css_class("console-frame")
             scroll = Gtk.ScrolledWindow(vexpand=True)
             scroll.set_child(term)
-            frame.append(scroll)
-            box.append(frame)
-
-            # Lazy-spawn shell when the Terminal tab is actually opened (picks up live KERN_PORT/KERN_MOUNT_PATH)
+            box.append(scroll)
             box.connect("map", lambda _w: self._spawn_vte(force=False))
         except Exception as exc:
             box.append(
                 Adw.StatusPage(
                     icon_name="utilities-terminal-symbolic",
                     title="Embedded VTE Unavailable",
-                    description=f"Install vte4 (Vte-3.91) for an embedded GTK4 terminal, or click Pop Out above ({exc}).",
+                    description=f"Install vte4 (Vte-3.91) for an embedded GTK4 terminal, or open an external terminal ({exc}).",
                 )
             )
         return box
+
+    def _copy_active(self) -> None:
+        if self._vte_term is not None:
+            gi.require_version("Vte", "3.91")
+            from gi.repository import Vte
+
+            self._vte_term.copy_clipboard_format(Vte.Format.TEXT)
+
+    def _paste_vte(self) -> None:
+        if self._vte_term is not None:
+            self._vte_term.paste_clipboard()
 
     def _spawn_vte(self, *, force: bool) -> None:
         if self._vte_term is None or (self._vte_spawned and not force):
@@ -244,13 +274,10 @@ class TerminalView:
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         if ctrl and shift and keyval in (Gdk.KEY_C, Gdk.KEY_c):
-            gi.require_version("Vte", "3.91")
-            from gi.repository import Vte
-
-            self._vte_term.copy_clipboard_format(Vte.Format.TEXT)
+            self._copy_active()
             return True
         if ctrl and shift and keyval in (Gdk.KEY_V, Gdk.KEY_v):
-            self._vte_term.paste_clipboard()
+            self._paste_vte()
             return True
         if ctrl and keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
             self._vte_zoom(0.1)
@@ -279,18 +306,6 @@ class TerminalView:
         line = str(ev.payload.get("line", ""))
         if line:
             self.append_line(line)
-
-    def _refresh_pill(self) -> None:
-        lk = self.runtime.link
-        if not lk.connected:
-            set_pill(self.status_pill, "Offline", None)
-        elif lk.link_mode != "rigwire":
-            set_pill(self.status_pill, f"Bootloader {lk.bootloader_info.get('version', '')}".strip(), "dfu")
-        elif lk.headless:
-            set_pill(self.status_pill, f"Headless · {lk.fps:.0f} FPS", "headless")
-        else:
-            fps_s = "Demo" if lk.demo_mode else f"{lk.fps:.0f} FPS"
-            set_pill(self.status_pill, f"Connected · {fps_s} · {lk.rtt_ms:.1f} ms", "live")
 
     def append_line(self, line: str) -> None:
         end = self.console_buf.get_end_iter()
