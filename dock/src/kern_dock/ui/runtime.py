@@ -208,60 +208,58 @@ class DockRuntime:
         self.events.emit("lcd.changed", {attr: value}, source="runtime")
 
     # --- Connection helpers ---
+    def discover_emulators(self) -> list[Any]:
+        """Return all live running `kern-emu` instances (state files + localhost probe)."""
+        from ..device.usb import discover_emulators as _discover_emus
+
+        return _discover_emus()
+
     def emulator_status(self) -> dict[str, Any]:
-        """Inspect whether the in-house `kern-emu` hardware emulator is running or ready to launch."""
-        import json as _json
-        import os as _os
+        """Inspect whether any in-house `kern-emu` hardware emulator is running or ready to launch."""
         import shutil as _shutil
 
-        state_path = Path(_os.environ.get("KERN_EMU_STATE", "/tmp/kern-emu.json"))
-        running = False
-        wire_url = "tcp://127.0.0.1:4446"
-        pid: int | None = None
-        if state_path.is_file():
-            try:
-                data = _json.loads(state_path.read_text(encoding="utf-8"))
-                cand_pid = int(data.get("pid", 0))
-                if cand_pid > 0:
-                    _os.kill(cand_pid, 0)
-                    running = True
-                    pid = cand_pid
-                    wire_url = str(data.get("wire_url") or wire_url)
-            except Exception:
-                pass
+        instances = self.discover_emulators()
+        primary = instances[0] if instances else None
         repo_root = Path(__file__).resolve().parents[4]
         emu_script = repo_root / "tools" / "emu.py"
         emu_crate = repo_root / "emu" / "Cargo.toml"
         can_launch = emu_script.is_file() and emu_crate.is_file() and bool(_shutil.which("cargo"))
         return {
-            "running": running,
-            "pid": pid,
-            "wire_url": wire_url,
+            "running": primary is not None,
+            "pid": primary.pid if primary else None,
+            "wire_url": primary.wire_url if primary else "tcp://127.0.0.1:4446",
+            "instances": instances,
             "can_launch": can_launch,
             "emu_script": str(emu_script),
         }
 
-    def stop_emulator_daemon(self) -> bool:
-        """Stop the background `kern-emu` daemon if one is running."""
+    def stop_emulator_daemon(self, *, state_file: str | None = None, wire_url: str | None = None) -> bool:
+        """Stop a running `kern-emu` daemon (specific `state_file`/`wire_url`, or primary instance)."""
         import subprocess as _sub
         import sys as _sys
 
         st = self.emulator_status()
-        if not st["running"]:
-            return False
-        if self.link.connected and self.link.port == st["wire_url"]:
+        target_url = wire_url or st["wire_url"]
+        if self.link.connected and self.link.port == target_url:
             self.link.disconnect(reason="Stopped hardware emulator")
-        res = _sub.run([_sys.executable, st["emu_script"], "stop"], capture_output=True)
+        cmd = [_sys.executable, st["emu_script"], "stop"]
+        if state_file:
+            cmd.extend(["--state-file", state_file])
+        res = _sub.run(cmd, capture_output=True)
         return res.returncode == 0
 
     def connect_or_start_emulator_async(
         self,
         *,
+        wire_url: str | None = None,
         on_status: Callable[[str], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ) -> None:
         """Connect to a running `kern-emu` instance, or auto-build & launch it first."""
         if self._connecting:
+            return
+        if wire_url:
+            self.connect_async(wire_url, on_error=on_error)
             return
         st = self.emulator_status()
         if st["running"] or not st["can_launch"]:
@@ -421,7 +419,8 @@ class DockRuntime:
         pct = self.link.last_telemetry.get("battery_pct")
         batt = f" · {pct}%" if pct is not None else ""
         detail = f"{freq} {self.link.radio_state.get('mod_name', '')}{batt}".strip() or f"{self.link.port}"
-        return state, f"{APP_NAME} — {self.link.volume_name}", detail
+        suffix = " (Emulated)" if self.link.is_emulated else (" (Demo)" if self.link.demo_mode else "")
+        return state, f"{APP_NAME} — {self.link.volume_name}{suffix}", detail
 
     def refresh_tray(self) -> None:
         if not self.tray.active:
@@ -478,6 +477,13 @@ class DockRuntime:
                         "handler": lambda po=p: self.connect_async(po.device, po),
                     }
                 )
+            for e in self.discover_emulators()[:4]:
+                items.append(
+                    {
+                        "label": f"Connect {e.name} [Emulated] ({e.host_port})",
+                        "handler": lambda url=e.wire_url: self.connect_async(url),
+                    }
+                )
             items.append({"label": "Launch Offline Demo Radio", "handler": lambda: self.connect_async("demo")})
 
         plugin_items = self.tray_menu.items()
@@ -526,7 +532,21 @@ class DockRuntime:
             return self.link.status_snapshot()
         if method == "ports":
             ports = self.port_monitor.scan()
-            return {"ports": [{"device": p.device, "name": p.pretty_name, "mode_hint": p.mode_hint, "is_quansheng": p.is_quansheng} for p in ports]}
+            emus = self.discover_emulators()
+            return {
+                "ports": [{"device": p.device, "name": p.pretty_name, "mode_hint": p.mode_hint, "is_quansheng": p.is_quansheng} for p in ports],
+                "emulators": [
+                    {
+                        "wire_url": e.wire_url,
+                        "name": e.name,
+                        "engine": e.engine,
+                        "pid": e.pid,
+                        "firmware": e.firmware,
+                        "emulated": True,
+                    }
+                    for e in emus
+                ],
+            }
         if method == "models":
             return {"active": self.active_model, "models": {k: v.label for k, v in MODELS.items()}}
         if method == "plugins":

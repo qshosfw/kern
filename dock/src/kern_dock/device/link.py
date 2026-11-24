@@ -91,6 +91,27 @@ class DockLink:
     def is_rigwire(self) -> bool:
         return self.connected and self.link_mode == "rigwire"
 
+    @property
+    def is_emulated(self) -> bool:
+        return bool(
+            self.connected
+            and not self.demo_mode
+            and self.port
+            and self.port.startswith(("tcp://", "socket://"))
+        )
+
+    @property
+    def transport_kind(self) -> str:
+        if not self.connected:
+            return "disconnected"
+        if self.demo_mode:
+            return "demo"
+        if self.link_mode == "stock_bl":
+            return "bootloader"
+        if self.is_emulated:
+            return "emulator"
+        return "usb"
+
     def _emit_log(self, line: str) -> None:
         self.events.emit("log.line", {"line": f"[{time.strftime('%H:%M:%S')}] {line}"}, source="link")
 
@@ -98,6 +119,8 @@ class DockLink:
         return {
             "connected": self.connected,
             "link_mode": self.link_mode,
+            "transport_kind": self.transport_kind,
+            "is_emulated": self.is_emulated,
             "firmware_name": self.firmware_name,
             "demo_mode": self.demo_mode,
             "port": self.port,

@@ -192,6 +192,8 @@ class KernDockApp(Adw.Application):
         self._rebuild_device_popover()
         self._set_mini_mode(self._mini_mode, initial=True)
         self._sync_window_size()
+        self._last_emu_sig: tuple[tuple[str, int | None, str], ...] = ()
+        GLib.timeout_add_seconds(3, self._poll_emulators)
 
         if self.opts.port:
             GLib.timeout_add(70, lambda: (self.runtime.connect_async(self.opts.port or "demo"), False)[1])
@@ -218,14 +220,18 @@ class KernDockApp(Adw.Application):
         self.conn_dot.add_css_class("status-dot")
         self.conn_lbl = Gtk.Label(label="No Radio", ellipsize=3, max_width_chars=18)
         self.conn_lbl.add_css_class("heading")
+        self.conn_kind_pill = Gtk.Label(label="", valign=Gtk.Align.CENTER, visible=False)
+        self.conn_kind_pill.add_css_class("device-badge")
         self.hdr_batt_icon = Gtk.Image(icon_name="battery-missing-symbolic", visible=False)
         conn_in.append(self.conn_dot)
         conn_in.append(self.conn_lbl)
+        conn_in.append(self.conn_kind_pill)
         conn_in.append(self.hdr_batt_icon)
         conn_in.append(Gtk.Image.new_from_icon_name("pan-down-symbolic"))
         self.switcher_btn.set_child(conn_in)
         self.switcher_popover = Gtk.Popover()
         self.switcher_popover.add_css_class("device-popover")
+        self.switcher_popover.connect("show", lambda _p: self._rebuild_device_popover())
         self.switcher_btn.set_popover(self.switcher_popover)
         left_hdr.set_title_widget(self.switcher_btn)
 
@@ -471,7 +477,13 @@ class KernDockApp(Adw.Application):
     # =========================================================================
     def _rebuild_device_popover(self) -> None:
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=12, margin_bottom=12, margin_start=12, margin_end=12)
-        root.set_size_request(290, -1)
+        root.set_size_request(310, -1)
+
+        def _badge(text: str, kind: str) -> Gtk.Label:
+            lbl = Gtk.Label(label=text, valign=Gtk.Align.CENTER)
+            lbl.add_css_class("device-badge")
+            lbl.add_css_class(kind)
+            return lbl
 
         lk = self.runtime.link
 
@@ -479,14 +491,27 @@ class KernDockApp(Adw.Application):
         if lk.connected:
             active_lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
             active_lb.add_css_class("boxed-list")
-            sub = "Demo Radio" if lk.demo_mode else (lk.port or "Connected")
+            if lk.is_emulated:
+                host_port = (lk.port or "").removeprefix("tcp://")
+                sub = f"Emulated · {host_port}" if host_port else "Emulated"
+            elif lk.demo_mode:
+                sub = "Offline UI simulator"
+            else:
+                sub = lk.port or "Connected"
             if lk.link_mode == "stock_bl":
                 sub = f"{sub} · Bootloader"
             arow = Adw.ActionRow(
                 title=GLib.markup_escape_text(lk.volume_name),
                 subtitle=GLib.markup_escape_text(sub),
             )
-            arow.add_prefix(make_radio_image(20, color=True))
+            if lk.is_emulated:
+                arow.add_prefix(Gtk.Image(icon_name="computer-symbolic", pixel_size=20))
+                arow.add_suffix(_badge("Emulated", "emu"))
+            elif lk.demo_mode:
+                arow.add_prefix(Gtk.Image(icon_name="org.kernos.Dock-symbolic", pixel_size=20))
+                arow.add_suffix(_badge("Demo", "demo"))
+            else:
+                arow.add_prefix(make_radio_image(20, color=True))
             disc = Gtk.Button(icon_name="media-eject-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Disconnect")
             disc.add_css_class("flat")
             disc.add_css_class("destructive-action")
@@ -500,7 +525,7 @@ class KernDockApp(Adw.Application):
         usb_lbl = Gtk.Label(label="USB Radios", xalign=0, hexpand=True)
         usb_lbl.add_css_class("caption-heading")
         usb_lbl.add_css_class("dim-label")
-        rescan = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Rescan USB Ports")
+        rescan = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Rescan USB Radios & Emulators")
         rescan.add_css_class("flat")
         rescan.connect("clicked", lambda _b: (self.runtime.port_monitor.scan(), self._rebuild_device_popover()))
         usb_hdr.append(usb_lbl)
@@ -534,8 +559,8 @@ class KernDockApp(Adw.Application):
                 usb_lb.append(row)
         root.append(usb_lb)
 
-        # Virtual & Emulators section
-        virt_lbl = Gtk.Label(label="Virtual", xalign=0)
+        # Emulated & Virtual section (clearly separated from physical USB hardware)
+        virt_lbl = Gtk.Label(label="Emulated & Virtual", xalign=0)
         virt_lbl.add_css_class("caption-heading")
         virt_lbl.add_css_class("dim-label")
         root.append(virt_lbl)
@@ -543,44 +568,62 @@ class KernDockApp(Adw.Application):
         virt_lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         virt_lb.add_css_class("boxed-list")
 
-        is_demo = lk.connected and lk.demo_mode
-        demo_row = Adw.ActionRow(title="Demo Radio", subtitle="Built-in offline simulator", activatable=not is_demo)
-        demo_row.add_prefix(Gtk.Image(icon_name="org.kernos.Dock-symbolic"))
-        if is_demo:
-            chk = Gtk.Image(icon_name="object-select-symbolic")
-            chk.add_css_class("accent")
-            demo_row.add_suffix(chk)
-        else:
-            demo_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            demo_row.connect("activated", lambda _r: (self.switcher_popover.popdown(), self.runtime.connect_async("demo")))
-        virt_lb.append(demo_row)
-
         est = self.runtime.emulator_status()
-        eurl = est["wire_url"]
-        is_emu = lk.connected and lk.port == eurl
-        esub = (
-            f"Running · {eurl}" if est["running"]
-            else (f"Auto-start · {eurl}" if est["can_launch"] else eurl)
-        )
-        emu_row = Adw.ActionRow(title="Hardware Emulator", subtitle=GLib.markup_escape_text(esub), activatable=not is_emu)
-        emu_row.add_prefix(Gtk.Image(icon_name="computer-symbolic"))
-        if est["running"]:
-            stop_e = Gtk.Button(icon_name="media-playback-stop-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Stop Hardware Emulator")
-            stop_e.add_css_class("flat")
-            stop_e.connect(
-                "clicked",
-                lambda _b: (
-                    self.switcher_popover.popdown(),
-                    self.runtime.stop_emulator_daemon(),
-                    self._toast("Hardware emulator stopped"),
-                ),
-            )
-            emu_row.add_suffix(stop_e)
-        if is_emu:
-            chk = Gtk.Image(icon_name="object-select-symbolic")
-            chk.add_css_class("accent")
-            emu_row.add_suffix(chk)
+        instances = est.get("instances") or []
+        if instances:
+            for emu in instances:
+                is_cur = lk.connected and not lk.demo_mode and lk.port == emu.wire_url
+                emu_row = Adw.ActionRow(
+                    title=GLib.markup_escape_text(emu.name),
+                    subtitle=GLib.markup_escape_text(emu.subtitle),
+                    activatable=not is_cur,
+                )
+                emu_row.add_prefix(Gtk.Image(icon_name="computer-symbolic"))
+                emu_row.add_suffix(_badge("Emulated", "emu"))
+                if emu.pid is not None or emu.state_file is not None:
+                    stop_e = Gtk.Button(
+                        icon_name="media-playback-stop-symbolic",
+                        valign=Gtk.Align.CENTER,
+                        tooltip_text=f"Stop {emu.name}",
+                    )
+                    stop_e.add_css_class("flat")
+                    stop_e.connect(
+                        "clicked",
+                        lambda _b, sf=emu.state_file, url=emu.wire_url, nm=emu.name: (
+                            self.switcher_popover.popdown(),
+                            self.runtime.stop_emulator_daemon(state_file=sf, wire_url=url),
+                            self._rebuild_device_popover(),
+                            self._toast(f"{nm} stopped"),
+                        ),
+                    )
+                    emu_row.add_suffix(stop_e)
+                if is_cur:
+                    chk = Gtk.Image(icon_name="object-select-symbolic")
+                    chk.add_css_class("accent")
+                    emu_row.add_suffix(chk)
+                else:
+                    emu_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+                    emu_row.connect(
+                        "activated",
+                        lambda _r, url=emu.wire_url: (
+                            self.switcher_popover.popdown(),
+                            self.runtime.connect_or_start_emulator_async(
+                                wire_url=url,
+                                on_status=lambda m: GLib.idle_add(self._toast, m),
+                            ),
+                        ),
+                    )
+                virt_lb.append(emu_row)
         else:
+            eurl = est["wire_url"]
+            esub = f"Auto-start · {eurl.removeprefix('tcp://')}" if est["can_launch"] else eurl
+            emu_row = Adw.ActionRow(
+                title="Hardware Emulator",
+                subtitle=GLib.markup_escape_text(esub),
+                activatable=True,
+            )
+            emu_row.add_prefix(Gtk.Image(icon_name="computer-symbolic"))
+            emu_row.add_suffix(_badge("Emulated", "emu"))
             emu_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             emu_row.connect(
                 "activated",
@@ -591,7 +634,20 @@ class KernDockApp(Adw.Application):
                     ),
                 ),
             )
-        virt_lb.append(emu_row)
+            virt_lb.append(emu_row)
+
+        is_demo = lk.connected and lk.demo_mode
+        demo_row = Adw.ActionRow(title="Demo Radio", subtitle="Offline UI simulator", activatable=not is_demo)
+        demo_row.add_prefix(Gtk.Image(icon_name="org.kernos.Dock-symbolic"))
+        demo_row.add_suffix(_badge("Demo", "demo"))
+        if is_demo:
+            chk = Gtk.Image(icon_name="object-select-symbolic")
+            chk.add_css_class("accent")
+            demo_row.add_suffix(chk)
+        else:
+            demo_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            demo_row.connect("activated", lambda _r: (self.switcher_popover.popdown(), self.runtime.connect_async("demo")))
+        virt_lb.append(demo_row)
         root.append(virt_lb)
 
         self.switcher_popover.set_child(root)
@@ -660,11 +716,15 @@ class KernDockApp(Adw.Application):
         lk = self.runtime.link
         sec = self.runtime.security
 
-        for cls in ("online", "headless", "dfu", "hardened"):
+        for cls in ("online", "emu", "demo", "headless", "dfu", "hardened"):
             self.conn_dot.remove_css_class(cls)
+        for cls in ("emu", "demo"):
+            self.conn_kind_pill.remove_css_class(cls)
 
         if not lk.connected:
             self.conn_lbl.set_text("No Radio")
+            self.conn_kind_pill.set_visible(False)
+            self.switcher_btn.set_tooltip_text("Select radio connection")
             self.hdr_batt_icon.set_visible(False)
             self.dfu_banner.set_revealed(False)
             if self.win:
@@ -674,6 +734,8 @@ class KernDockApp(Adw.Application):
             ver = lk.bootloader_info.get("version", "BL")
             self.conn_dot.add_css_class("dfu")
             self.conn_lbl.set_text(f"Bootloader {ver}")
+            self.conn_kind_pill.set_visible(False)
+            self.switcher_btn.set_tooltip_text(f"Bootloader on {lk.port}")
             self.hdr_batt_icon.set_visible(False)
             self.dfu_banner.set_title(f"Bootloader {ver} ready on {lk.port}")
             self.dfu_banner.set_revealed(True)
@@ -683,10 +745,28 @@ class KernDockApp(Adw.Application):
         else:
             short = lk.volume_name.removeprefix("Quansheng ")
             self.conn_lbl.set_text(short)
+            if lk.is_emulated:
+                self.conn_kind_pill.set_text("EMU")
+                self.conn_kind_pill.add_css_class("emu")
+                self.conn_kind_pill.set_visible(True)
+                self.switcher_btn.set_tooltip_text(f"Emulated radio ({lk.port}) — click to switch")
+            elif lk.demo_mode:
+                self.conn_kind_pill.set_text("DEMO")
+                self.conn_kind_pill.add_css_class("demo")
+                self.conn_kind_pill.set_visible(True)
+                self.switcher_btn.set_tooltip_text("Offline demo radio — click to switch")
+            else:
+                self.conn_kind_pill.set_visible(False)
+                self.switcher_btn.set_tooltip_text(f"USB radio ({lk.port}) — click to switch")
+
             if sec.hardened:
                 self.conn_dot.add_css_class("hardened")
+            elif lk.is_emulated:
+                self.conn_dot.add_css_class("emu")
             elif lk.headless:
                 self.conn_dot.add_css_class("headless")
+            elif lk.demo_mode:
+                self.conn_dot.add_css_class("demo")
             else:
                 self.conn_dot.add_css_class("online")
             pct = lk.last_telemetry.get("battery_pct")
@@ -696,12 +776,26 @@ class KernDockApp(Adw.Application):
                 self.hdr_batt_icon.set_tooltip_text(f"Battery {pct}%")
             self.dfu_banner.set_revealed(False)
             if self.win:
-                self.win.set_title(f"{APP_NAME} — {lk.volume_name}")
+                suffix = " (Emulated)" if lk.is_emulated else (" (Demo)" if lk.demo_mode else "")
+                self.win.set_title(f"{APP_NAME} — {lk.volume_name}{suffix}")
             hz = int(lk.radio_state.get("rx_freq_hz") or 0)
             freq_s = f"{hz / 1e6:.3f} MHz" if hz else (lk.port or lk.firmware_name)
-            self.mini_title.set_subtitle(f"{short} · {freq_s}")
+            prefix = "EMU · " if lk.is_emulated else ("DEMO · " if lk.demo_mode else "")
+            self.mini_title.set_subtitle(f"{prefix}{short} · {freq_s}")
 
         self._rebuild_device_popover()
+
+    def _poll_emulators(self) -> bool:
+        if self._quitting:
+            return False
+        emus = self.runtime.discover_emulators()
+        sig = tuple((e.wire_url, e.pid, e.firmware) for e in emus)
+        if sig != self._last_emu_sig:
+            self._last_emu_sig = sig
+            self._rebuild_device_popover()
+            if not self.runtime.link.connected:
+                self.overview_view.rebuild_port_list()
+        return True
 
     def _on_ports_changed_ui(self, _ev: Event) -> None:
         self._rebuild_device_popover()

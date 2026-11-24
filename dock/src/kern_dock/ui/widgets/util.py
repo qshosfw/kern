@@ -48,7 +48,7 @@ def battery_icon_name(pct: int | None) -> str:
 
 def set_pill(pill: Any, text: str, kind: str | None) -> None:
     pill.set_text(text)
-    for c in ("live", "headless", "dfu", "hardened", "warn"):
+    for c in ("live", "emu", "demo", "headless", "dfu", "hardened", "warn"):
         if c != kind:
             pill.remove_css_class(c)
     if kind:

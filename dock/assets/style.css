@@ -49,6 +49,8 @@ button.rec-live {
 }
 
 .status-dot.online { background: @success_color; }
+.status-dot.emu { background: #a855f7; }
+.status-dot.demo { background: alpha(currentColor, 0.55); }
 .status-dot.headless { background: @accent_color; }
 .status-dot.dfu { background: @warning_color; }
 .status-dot.hardened { background: @accent_color; }
@@ -188,6 +190,46 @@ row.warning-row .subtitle {
 .status-pill.hardened {
     background: alpha(@accent_bg_color, 0.20);
     color: @accent_color;
+}
+
+.status-pill.emu {
+    background: alpha(#a855f7, 0.16);
+    color: #a855f7;
+    border: 1px solid alpha(#a855f7, 0.28);
+}
+
+.status-pill.demo {
+    background: alpha(currentColor, 0.10);
+    color: alpha(currentColor, 0.78);
+}
+
+.device-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 1px 7px;
+    border-radius: 99px;
+    background: alpha(currentColor, 0.08);
+    color: alpha(currentColor, 0.72);
+}
+
+.device-badge.emu {
+    background: alpha(#a855f7, 0.16);
+    color: #a855f7;
+    border: 1px solid alpha(#a855f7, 0.28);
+}
+
+.device-badge.demo {
+    background: alpha(currentColor, 0.09);
+    color: alpha(currentColor, 0.72);
+}
+
+.hero-emu-emblem {
+    min-width: 32px;
+    min-height: 32px;
+    border-radius: 10px;
+    background: alpha(#a855f7, 0.14);
+    color: #a855f7;
 }
 
 .quick-chip {

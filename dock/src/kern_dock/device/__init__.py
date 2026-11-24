@@ -12,11 +12,23 @@ from .firmware import (
 from .keys import APP_SHORTCUTS, DOCK_ACTIONS, KEY_BINDINGS, binding_index, keyval_label, resolve_binding
 from .link import DockLink, REBOOT_BOOTLOADER, REBOOT_FIRMWARE, REBOOT_MODES, REBOOT_RECOVERY
 from .t9 import T9Model, T9Planner, T9_GAP_MS, T9_MAX_LEN, simulate_text_input, text_to_keypad_sequence
-from .usb import DetectedPort, PortMonitor, VID_PID_KERN_CDC, VID_PID_STOCK_BL, classify_usb_mode, detect_hardware_model
+from .usb import (
+    DEFAULT_EMU_WIRE_URL,
+    DetectedEmulator,
+    DetectedPort,
+    PortMonitor,
+    VID_PID_KERN_CDC,
+    VID_PID_STOCK_BL,
+    classify_usb_mode,
+    detect_hardware_model,
+    discover_emulators,
+)
 
 __all__ = [
     "APP_SHORTCUTS",
+    "DEFAULT_EMU_WIRE_URL",
     "DOCK_ACTIONS",
+    "DetectedEmulator",
     "DetectedPort",
     "DockLink",
     "KEY_BINDINGS",
@@ -35,6 +47,7 @@ __all__ = [
     "build_kfw_backup_from_backend",
     "classify_usb_mode",
     "detect_hardware_model",
+    "discover_emulators",
     "flash_via_stock_bootloader",
     "inspect_firmware_file",
     "keyval_label",

@@ -754,6 +754,117 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
             finally:
                 rt.shutdown()
 
+    def test_eventbus_apps_no_publish_and_emulator_discovery(self) -> None:
+        import json
+        import os
+        import socket
+        from kern_dock.device.usb import DetectedEmulator, discover_emulators
+
+        # 1. Regression guard: EventBus uses emit(), never publish()
+        src_root = Path(__file__).resolve().parents[1] / "src" / "kern_dock"
+        for py in src_root.rglob("*.py"):
+            self.assertNotIn(".publish(", py.read_text(encoding="utf-8"), f"Invalid EventBus.publish() in {py}")
+
+        seen: list[dict[str, object]] = []
+        bus = EventBus()
+        bus.subscribe("apps.changed", lambda e: seen.append(dict(e.payload)))
+        bus.emit("apps.changed", {"path": "/tmp/settings.krx"}, source="apps")
+        self.assertEqual(seen, [{"path": "/tmp/settings.krx"}])
+
+        # 2. Emulator state-file discovery: live PIDs kept, stale PIDs ignored, non-default ports labeled, deduped
+        with tempfile.TemporaryDirectory() as td:
+            live_a = Path(td) / "kern-emu-a.json"
+            live_b = Path(td) / "kern-emu-b.json"
+            stale = Path(td) / "kern-emu-stale.json"
+            live_a.write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "wire_url": "tcp://127.0.0.1:4446",
+                        "ctl_port": 4445,
+                        "engine": "py32-emu",
+                        "elf": "/tmp/kern-firmware.elf",
+                        "turbo": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            live_b.write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "wire_url": "tcp://127.0.0.1:4456",
+                        "ctl_port": 4455,
+                        "engine": "py32-emu",
+                        "elf": "/tmp/test-fw.elf",
+                        "turbo": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stale.write_text(
+                json.dumps(
+                    {
+                        "pid": 99999999,
+                        "wire_url": "tcp://127.0.0.1:4466",
+                        "engine": "py32-emu",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            emus = discover_emulators(extra_state_paths=[live_a, live_b, stale], probe_default_tcp=False)
+            by_url = {e.wire_url: e for e in emus}
+            self.assertIn("tcp://127.0.0.1:4446", by_url)
+            self.assertIn("tcp://127.0.0.1:4456", by_url)
+            self.assertNotIn("tcp://127.0.0.1:4466", by_url)
+            self.assertEqual(by_url["tcp://127.0.0.1:4446"].name, "Kern Emulator")
+            self.assertEqual(by_url["tcp://127.0.0.1:4456"].name, "Kern Emulator (:4456)")
+            self.assertEqual(by_url["tcp://127.0.0.1:4446"].engine, "py32-emu")
+            self.assertIn("kern-firmware.elf", by_url["tcp://127.0.0.1:4446"].subtitle)
+            self.assertIn("turbo", by_url["tcp://127.0.0.1:4446"].subtitle)
+
+        # 3. Direct TCP fallback probe detection on an ephemeral local listener
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        try:
+            _host, port = srv.getsockname()
+            emu = DetectedEmulator(wire_url=f"tcp://127.0.0.1:{port}", name=f"Kern Emulator (:{port})")
+            self.assertEqual(emu.host_port, f"127.0.0.1:{port}")
+        finally:
+            srv.close()
+
+        # 4. DockLink.is_emulated and transport_kind clearly distinguish emulator vs demo vs usb
+        sec = SecurityController(bus)
+        lk = DockLink(bus, sec)
+        self.assertEqual(lk.transport_kind, "disconnected")
+        self.assertFalse(lk.is_emulated)
+
+        lk.connect("demo")
+        self.assertEqual(lk.transport_kind, "demo")
+        self.assertFalse(lk.is_emulated)
+        snap = lk.status_snapshot()
+        self.assertEqual(snap["transport_kind"], "demo")
+        self.assertFalse(snap["is_emulated"])
+        lk.disconnect()
+
+        # Simulate connected emulator vs physical USB link states
+        lk.connected = True
+        lk.demo_mode = False
+        lk.link_mode = "rigwire"
+        lk.port = "tcp://127.0.0.1:4446"
+        self.assertTrue(lk.is_emulated)
+        self.assertEqual(lk.transport_kind, "emulator")
+        self.assertTrue(lk.status_snapshot()["is_emulated"])
+
+        lk.port = "/dev/ttyACM0"
+        self.assertFalse(lk.is_emulated)
+        self.assertEqual(lk.transport_kind, "usb")
+        self.assertFalse(lk.status_snapshot()["is_emulated"])
+        lk.connected = False
+
 
 if __name__ == "__main__":
     unittest.main()

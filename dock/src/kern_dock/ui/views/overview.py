@@ -101,7 +101,12 @@ class OverviewView:
         hero.add_css_class("device-hero")
 
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        head.append(make_radio_image(32, color=True))
+        self.hero_radio_img = make_radio_image(32, color=True)
+        self.hero_emu_emblem = Gtk.Box(valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER, visible=False)
+        self.hero_emu_emblem.add_css_class("hero-emu-emblem")
+        self.hero_emu_emblem.append(Gtk.Image(icon_name="computer-symbolic", pixel_size=20))
+        head.append(self.hero_radio_img)
+        head.append(self.hero_emu_emblem)
         names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1, hexpand=True, valign=Gtk.Align.CENTER)
         self.dev_title = Gtk.Label(label="Radio", xalign=0, ellipsize=3)
         self.dev_title.add_css_class("heading")
@@ -289,9 +294,10 @@ class OverviewView:
             self.usb_list.remove(c)
             c = n
         ports = self.runtime.port_monitor.ports
+        emus = self.runtime.discover_emulators()
         probes = discover_swd_probes()
-        if not ports and not probes:
-            empty = Adw.ActionRow(title="No USB radio or SWD probe detected", subtitle="Plug in via USB-C, programming cable, or SWD probe")
+        if not ports and not emus and not probes:
+            empty = Adw.ActionRow(title="No USB radio, emulator, or SWD probe detected", subtitle="Plug in via USB-C, start the hardware emulator, or attach an SWD probe")
             empty.add_prefix(Gtk.Image(icon_name="network-wired-symbolic"))
             empty.set_sensitive(False)
             self.usb_list.append(empty)
@@ -305,6 +311,20 @@ class OverviewView:
             row.add_prefix(make_radio_image(18) if p.is_quansheng else Gtk.Image(icon_name="network-wired-symbolic"))
             row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
             row.connect("activated", lambda _r, po=p: self.runtime.connect_async(po.device, po))
+            self.usb_list.append(row)
+        for emu in emus:
+            row = Adw.ActionRow(
+                title=GLib.markup_escape_text(emu.name),
+                subtitle=GLib.markup_escape_text(emu.subtitle),
+                activatable=True,
+            )
+            row.add_prefix(Gtk.Image(icon_name="computer-symbolic"))
+            badge = Gtk.Label(label="Emulated", valign=Gtk.Align.CENTER)
+            badge.add_css_class("device-badge")
+            badge.add_css_class("emu")
+            row.add_suffix(badge)
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated", lambda _r, url=emu.wire_url: self.runtime.connect_async(url))
             self.usb_list.append(row)
         for pr in probes:
             row = Adw.ActionRow(
@@ -320,11 +340,20 @@ class OverviewView:
     def refresh(self) -> None:
         lk = self.runtime.link
         if not lk.connected:
+            self.rebuild_port_list()
             self.stack.set_visible_child_name("offline")
             self.refresh_security()
             return
         is_bl = lk.link_mode == "stock_bl"
-        where = "Demo" if lk.demo_mode else (lk.port or "")
+        self.hero_radio_img.set_visible(not lk.is_emulated)
+        self.hero_emu_emblem.set_visible(lk.is_emulated)
+        if lk.is_emulated:
+            host_port = (lk.port or "").removeprefix("tcp://")
+            where = f"Emulated · {host_port}" if host_port else "Emulated"
+        elif lk.demo_mode:
+            where = "Demo"
+        else:
+            where = lk.port or ""
         if is_bl:
             self.dev_title.set_text(f"Quansheng {radio_model(self.runtime.active_model).label}")
             self.dev_sub.set_text(f"{where} · Bootloader {lk.bootloader_info.get('version', '')}".rstrip())
@@ -381,7 +410,7 @@ class OverviewView:
 
         lval, lsub = self._tiles["link"]
         lval.set_text("Demo" if lk.demo_mode else f"{lk.fps:.0f} fps")
-        lsub.set_text(f"{lk.rtt_ms:.1f} ms")
+        lsub.set_text(f"TCP · {lk.rtt_ms:.1f} ms" if lk.is_emulated else f"{lk.rtt_ms:.1f} ms")
 
         uval, usub = self._tiles["uptime"]
         up_ms = t.get("uptime_ms")
@@ -390,6 +419,15 @@ class OverviewView:
 
         if self.runtime.security.hardened:
             set_pill(self.state_pill, "Hardened", "hardened")
+        elif lk.is_emulated:
+            set_pill(self.state_pill, "Emulated · Headless" if lk.headless else "Emulated", "emu")
+        elif lk.demo_mode:
+            if lk.demo_status == "SAFE":
+                set_pill(self.state_pill, "Demo · Recovery", "warn")
+            elif lk.headless:
+                set_pill(self.state_pill, "Demo · Headless", "demo")
+            else:
+                set_pill(self.state_pill, "Demo", "demo")
         elif lk.headless:
             set_pill(self.state_pill, "Headless", "headless")
         elif lk.demo_status == "SAFE":
@@ -412,4 +450,4 @@ class OverviewView:
         clk = t.get("sysclk_hz")
         hi = lk.hello_info or {}
         clk_s = f" · {clk / 1e6:.0f} MHz" if clk else ""
-        rows["proto"].set_subtitle(f"RigWire v1.{hi.get('minor_version', 0)}{clk_s}")
+        rows["proto"].set_subtitle(f"RigWire v{hi.get('protocol_version', 1)}.{hi.get('minor_version', 0)}{clk_s}")

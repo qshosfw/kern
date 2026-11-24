@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
+import json
+import os
+import socket
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 try:
@@ -13,6 +17,7 @@ except Exception:
 
 VID_PID_STOCK_BL = "36b7:0001"
 VID_PID_KERN_CDC = "36b7:ffff"
+DEFAULT_EMU_WIRE_URL = "tcp://127.0.0.1:4446"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -26,6 +31,112 @@ class DetectedPort:
     pid: str = ""
     mode_hint: str = "rigwire"  # "rigwire" | "stock_bl"
     is_quansheng: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class DetectedEmulator:
+    wire_url: str
+    name: str
+    engine: str = "kern-emu"
+    pid: int | None = None
+    ctl_port: int | None = None
+    state_file: str | None = None
+    firmware: str = ""
+    turbo: bool = False
+    running: bool = True
+
+    @property
+    def host_port(self) -> str:
+        return self.wire_url.removeprefix("tcp://").removeprefix("socket://")
+
+    @property
+    def subtitle(self) -> str:
+        parts = [self.host_port]
+        if self.pid:
+            parts.append(f"PID {self.pid}")
+        if self.firmware:
+            parts.append(self.firmware)
+        if self.turbo:
+            parts.append("turbo")
+        return " · ".join(parts)
+
+
+def _tcp_port_open(host: str, port: int, timeout: float = 0.04) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def discover_emulators(extra_state_paths: list[Path] | None = None, *, probe_default_tcp: bool = True) -> list[DetectedEmulator]:
+    """Discover all running `kern-emu` instances via `/tmp/kern-emu*.json` state files + localhost probe."""
+    candidates: list[Path] = []
+    env_state = os.environ.get("KERN_EMU_STATE")
+    if env_state:
+        candidates.append(Path(env_state))
+    default_state = Path("/tmp/kern-emu.json")
+    if default_state not in candidates:
+        candidates.append(default_state)
+    tmp_dir = Path("/tmp")
+    if tmp_dir.is_dir():
+        for p in sorted(tmp_dir.glob("kern-emu*.json")):
+            if p not in candidates:
+                candidates.append(p)
+    for p in extra_state_paths or []:
+        if p not in candidates:
+            candidates.append(p)
+
+    found: list[DetectedEmulator] = []
+    seen_urls: set[str] = set()
+    for sp in candidates:
+        if not sp.is_file():
+            continue
+        try:
+            data = json.loads(sp.read_text(encoding="utf-8"))
+            pid = int(data.get("pid", 0))
+            if pid <= 0:
+                continue
+            os.kill(pid, 0)
+        except Exception:
+            continue
+        wire_url = str(data.get("wire_url") or DEFAULT_EMU_WIRE_URL).strip()
+        if wire_url in seen_urls:
+            continue
+        seen_urls.add(wire_url)
+        engine = str(data.get("engine") or "kern-emu")
+        ctl_port = int(data["ctl_port"]) if data.get("ctl_port") else None
+        fw_raw = str(data.get("elf") or data.get("firmware") or "")
+        fw_name = Path(fw_raw).name if fw_raw else ""
+        hp = wire_url.removeprefix("tcp://").removeprefix("socket://")
+        port_sfx = hp.rsplit(":", 1)[-1] if ":" in hp else ""
+        label = "Kern Emulator" if port_sfx in ("", "4446") else f"Kern Emulator (:{port_sfx})"
+        found.append(
+            DetectedEmulator(
+                wire_url=wire_url,
+                name=label,
+                engine=engine,
+                pid=pid,
+                ctl_port=ctl_port,
+                state_file=str(sp),
+                firmware=fw_name,
+                turbo=bool(data.get("turbo", False)),
+                running=True,
+            )
+        )
+
+    if probe_default_tcp and DEFAULT_EMU_WIRE_URL not in seen_urls and _tcp_port_open("127.0.0.1", 4446):
+        found.append(
+            DetectedEmulator(
+                wire_url=DEFAULT_EMU_WIRE_URL,
+                name="Kern Emulator",
+                engine="kern-emu",
+                running=True,
+            )
+        )
+
+    found.sort(key=lambda e: (0 if e.wire_url == DEFAULT_EMU_WIRE_URL else 1, e.wire_url))
+    return found
 
 
 def classify_usb_mode(vid: str, pid: str, pretty_name: str) -> tuple[str, bool]:

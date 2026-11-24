@@ -740,7 +740,7 @@ class AppsView:
                         info = lk.client.sideload(str(bpath), verify=True, force=True)  # type: ignore[union-attr]
                     msg = f"Installed {pkg['name']} -> {info['remote_path']}"
                 GLib.idle_add(self._on_toast, msg)
-                GLib.idle_add(lambda: (self.runtime.events.publish("apps.changed", {"path": str(bpath)}), False)[1])
+                GLib.idle_add(lambda: (self.runtime.events.emit("apps.changed", {"path": str(bpath)}, source="apps"), False)[1])
             except Exception as exc:
                 GLib.idle_add(self._on_toast, f"Install failed: {exc}")
             finally:
@@ -790,7 +790,7 @@ class AppsView:
                             lk.client.sideload(str(bpath), verify=True, force=True)  # type: ignore[union-attr]
                     installed += 1
                 GLib.idle_add(self._on_toast, f"Installed {installed}/{len(pkgs)} packages from {title}")
-                GLib.idle_add(lambda: (self.runtime.events.publish("apps.changed", {"bundle": title}), False)[1])
+                GLib.idle_add(lambda: (self.runtime.events.emit("apps.changed", {"bundle": title}, source="apps"), False)[1])
             except Exception as exc:
                 GLib.idle_add(self._on_toast, f"Bundle install failed after {installed}: {exc}")
             finally:
