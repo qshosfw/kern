@@ -66,19 +66,6 @@ button.rec-live {
     background: transparent;
 }
 
-.tool-card {
-    padding: 9px 12px;
-    border-radius: 10px;
-    background: alpha(currentColor, 0.035);
-    border: 1px solid alpha(currentColor, 0.05);
-    transition: background 120ms ease, border-color 120ms ease;
-}
-
-.tool-card:hover {
-    background: alpha(@accent_bg_color, 0.12);
-    border-color: alpha(@accent_color, 0.24);
-}
-
 .device-popover list.boxed-list row {
     min-height: 44px;
 }

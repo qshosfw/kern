@@ -16,6 +16,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from ...render.capture import encode_png_rgba, render_handset_to_rgba, render_lcd_to_rgba
+from ...render.handset.catalog import compute_handset_geometry
+from ...render.handset.renderer import HandsetRenderer
 from ...render.lcd import FastLcdState, LcdLayerCache, paint_fast_lcd
 from ...render.paint import round_rect
 from ..runtime import DockRuntime
@@ -52,6 +54,7 @@ class CaptureView:
 
         self._lcd_cache = LcdLayerCache()
         self._scrub_lcd = FastLcdState()
+        self._handset_renderer = HandsetRenderer()
 
         self.widget = self._build()
         runtime.events.subscribe("link.frame", lambda _e: self._on_live_frame(), main_thread=True)
@@ -335,13 +338,37 @@ class CaptureView:
         rec = self.runtime.recorder
         if rec.frames and not rec.recording:
             rf = rec.frames[max(0, min(self._pb_idx, len(rec.frames) - 1))]
-            self._scrub_lcd.step(rf.fb, dataclasses.replace(st, ghosting=False))
-            lcd_state = self._scrub_lcd
+            fb, pr, led, torch = rf.fb, rf.pressed, rf.led, rf.torch
         else:
-            lcd_state = self.runtime.lcd_state
+            fb, pr, led, torch = self.stage.current_display_state()
 
-        # Fit authentic 128×64 ST7565 aspect (with bezel padding) cleanly on native window bg
-        aspect = 128.0 / (64.0 * (st.pixel_aspect or 1.30))
+        # Crisp, lag-free ST7565 frame for Capture preview
+        st_clean = dataclasses.replace(st, ghosting=False)
+        self._scrub_lcd.step(fb, st_clean)
+
+        if self._export_mode == "body":
+            model = self.runtime.active_model
+            lw, lh = compute_handset_geometry(model)
+            scale = min((w - 16.0) / max(1.0, lw), (h - 16.0) / max(1.0, lh))
+            dw, dh = lw * scale, lh * scale
+            cr.save()
+            cr.translate((w - dw) * 0.5, (h - dh) * 0.5)
+            cr.scale(scale, scale)
+            self._handset_renderer.paint(
+                cr,
+                model,
+                self._scrub_lcd,
+                st_clean,
+                press_anim={k: 1.0 for k in pr},
+                hover_anim={},
+                led_state=led,
+                torch_on=torch,
+            )
+            cr.restore()
+            return
+
+        # Exact export LCD geometry (540×374 aspect = 1.4438) with authentic ST7565 optics
+        aspect = 540.0 / 374.0
         max_w = max(64.0, w - 16.0)
         max_h = max(48.0, h - 16.0)
         lcd_w = min(max_w, max_h * aspect)
@@ -350,8 +377,7 @@ class CaptureView:
         x0 = (w - iw) * 0.5
         y0 = (h - ih) * 0.5
 
-        # Subtle native frame around LCD glass only (no fake outer dark card)
-        paint_fast_lcd(cr, x0, y0, iw, ih, lcd_state, st, self._lcd_cache)
+        paint_fast_lcd(cr, x0, y0, iw, ih, self._scrub_lcd, st_clean, self._lcd_cache)
         rgba = widget.get_color()
         round_rect(cr, x0 - 0.5, y0 - 0.5, iw + 1.0, ih + 1.0, 4.5)
         cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, 0.16)

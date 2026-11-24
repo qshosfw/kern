@@ -175,18 +175,10 @@ class OverviewView:
         self.bl_group.add(self.bl_hint_row)
         page.add(self.bl_group)
 
-        # Open Workspace Tabs (compact grid of native launcher buttons)
-        tools_grp = Adw.PreferencesGroup(title="Tools")
-        self.tools_flow = Gtk.FlowBox(
-            selection_mode=Gtk.SelectionMode.NONE,
-            homogeneous=True,
-            max_children_per_line=3,
-            min_children_per_line=2,
-            column_spacing=8,
-            row_spacing=8,
-        )
-        tools_grp.add(self.tools_flow)
-        page.add(tools_grp)
+        # Native Libadwaita Tools list (clean ActionRows with icon, title, subtitle & chevron)
+        self.tools_grp = Adw.PreferencesGroup(title="Tools")
+        self._tool_rows: list[Gtk.Widget] = []
+        page.add(self.tools_grp)
 
         # Collapsible Device Identity (reduces visual clutter on Home)
         self.info_group = Adw.PreferencesGroup()
@@ -250,25 +242,22 @@ class OverviewView:
         return self.stack
 
     def rebuild_tools(self) -> None:
-        c = self.tools_flow.get_first_child()
-        while c is not None:
-            n = c.get_next_sibling()
-            self.tools_flow.remove(c)
-            c = n
+        for row in self._tool_rows:
+            self.tools_grp.remove(row)
+        self._tool_rows.clear()
         for spec in self.runtime.pages.ordered():
             if spec.id == "overview":
                 continue
-            btn = Gtk.Button()
-            btn.add_css_class("tool-card")
-            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            inner.append(Gtk.Image.new_from_icon_name(spec.icon))
-            lbl = Gtk.Label(label=spec.title, xalign=0, ellipsize=3, hexpand=True)
-            inner.append(lbl)
-            btn.set_child(inner)
-            if spec.subtitle:
-                btn.set_tooltip_text(spec.subtitle)
-            btn.connect("clicked", lambda _b, pid=spec.id: self._on_open_tab(pid))
-            self.tools_flow.append(btn)
+            row = Adw.ActionRow(
+                title=GLib.markup_escape_text(spec.title),
+                subtitle=GLib.markup_escape_text(spec.subtitle or ""),
+                activatable=True,
+            )
+            row.add_prefix(Gtk.Image.new_from_icon_name(spec.icon))
+            row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+            row.connect("activated", lambda _r, pid=spec.id: self._on_open_tab(pid))
+            self.tools_grp.add(row)
+            self._tool_rows.append(row)
 
     def _toggle_hardened(self, on: bool) -> None:
         self.runtime.set_hardened(on)

@@ -26,8 +26,8 @@ LCD_PALETTES: dict[str, dict[str, Any]] = {
     "OLED White":    {"bg": (0x10, 0x11, 0x14), "fg": (0xF2, 0xF5, 0xFA), "dark": True},
 }
 
-STN_ATTACK = 0.72
-STN_DECAY = 0.24
+STN_ATTACK = 0.88
+STN_DECAY = 0.52
 
 
 @dataclasses.dataclass
@@ -111,13 +111,13 @@ class FastLcdState:
                 self._ghost_np[:] = target
                 return False
             diff = target - self._ghost_np
-            mask = _np.abs(diff) > 0.015
+            mask = _np.abs(diff) > 0.04
             if not _np.any(mask):
                 self._ghost_np[:] = target
                 return False
             rate = _np.where(diff > 0.0, STN_ATTACK, STN_DECAY).astype(_np.float32)
             self._ghost_np += diff * rate
-            settled = _np.abs(target - self._ghost_np) <= 0.015
+            settled = _np.abs(target - self._ghost_np) <= 0.04
             self._ghost_np = _np.where(settled, target, self._ghost_np)
             return bool(_np.any(~settled))
 
@@ -353,7 +353,7 @@ def paint_fast_lcd(
     cr.translate(mx, my)
     cr.scale(mat_w / float(LCD_W * 2), mat_h / float(LCD_H * 2))
     cr.set_source_surface(cache._px3_surf, 0, 0)
-    cr.get_source().set_filter(cairo.FILTER_GOOD)
+    cr.get_source().set_filter(cairo.FILTER_NEAREST)
     cr.paint()
     cr.restore()
 
