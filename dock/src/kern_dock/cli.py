@@ -95,7 +95,7 @@ def _run_tests() -> int:
 
 
 def _run_build_check() -> int:
-    cli_ui.header(f"Kern Dock v{__version__} Build & Integrity Check")
+    cli_ui.header("Kern Dock Build & Integrity Check")
     ok = compileall.compile_dir(str(DOCK_ROOT / "src"), quiet=1)
     if not ok:
         cli_ui.err("Bytecode compilation failed")
@@ -190,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="kern dock",
         description=(
-            f"Kern Dock v{__version__} — Modular GTK4 + Libadwaita Hardware Companion.\n"
+            "Kern Dock — Modular GTK4 + Libadwaita Hardware Companion.\n"
             "Subcommands: ctl | install-desktop | uninstall-desktop | models [--json] | plugins [--json] | test | build"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         no_plugins=args.no_plugins,
         start_hidden=args.start_hidden,
     )
-    cli_ui.header(f"Kern Dock v{__version__}")
+    cli_ui.header("Kern Dock")
     cli_ui.info(f"Launching GTK4 dock (port={opts.port or 'auto-detect'}, mini={opts.mini})")
     try:
         from .ui.app import launch

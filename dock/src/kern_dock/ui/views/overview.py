@@ -463,4 +463,4 @@ class OverviewView:
         clk = t.get("sysclk_hz")
         hi = lk.hello_info or {}
         clk_s = f" · {clk / 1e6:.0f} MHz" if clk else ""
-        rows["proto"].set_subtitle(f"RigWire v{hi.get('protocol_version', 2)}.{hi.get('minor_version', 0)}{clk_s}")
+        rows["proto"].set_subtitle(f"RigWire{clk_s}")

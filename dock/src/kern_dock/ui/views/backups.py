@@ -162,7 +162,7 @@ class BackupsView:
             and self._loaded_backup is not None
             and not self.runtime.security.policy.read_only
             and not self.runtime.security.hardened
-            and self._loaded_backup["format"] in ("KFW v1.0 (Ascon-Hash256)", "ZIP Archive")
+            and self._loaded_backup["format"] in ("KFW (Ascon-Hash256)", "ZIP Archive")
         )
         self.restore_btn.set_sensitive(can_restore)
 
@@ -263,7 +263,7 @@ class BackupsView:
         self.prop_fmt.set_visible(True)
         self.prop_summary.set_visible(True)
         self.close_btn.set_visible(True)
-        self.restore_btn.set_visible(info["format"] in ("KFW v1.0 (Ascon-Hash256)", "ZIP Archive"))
+        self.restore_btn.set_visible(info["format"] in ("KFW (Ascon-Hash256)", "ZIP Archive"))
         self.filter_entry.set_visible(len(entries) > 6)
         self.entries_group.set_visible(bool(entries))
         self._render_entries()

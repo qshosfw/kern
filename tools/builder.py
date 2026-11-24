@@ -394,7 +394,7 @@ def main():
     else:
         print(f" {YELLOW}{INVERT} SKIP  {RESET} tools/pack.py not found, skipping bootloader packaging.")
 
-    # Step 4.05: Pack MCU-OTA .kfw v1.0 Container (verifiable & flashable on-device from Recovery)
+    # Step 4.05: Pack MCU-OTA .kfw Container (verifiable & flashable on-device from Recovery)
     target_kfw = "target/kern.kfw"
     kfw_tool = root_dir / "tools" / "kfw.py"
     if kfw_tool.exists():
@@ -406,7 +406,7 @@ def main():
             print(f" {RED}{INVERT} ERROR {RESET} --require-signed set, but no --lms-key / --mac-key / KERN_LMS_KEY / KERN_MAC_KEY provided.")
             sys.exit(1)
         signed_note = " + signing" if (lms_key or mac_key) else ""
-        print(f" {BLUE}{INVERT} KFW   {RESET} Packing & verifying MCU-OTA .kfw v1.0 container ({kfw_slug}{signed_note})...")
+        print(f" {BLUE}{INVERT} KFW   {RESET} Packing & verifying MCU-OTA .kfw container ({kfw_slug}{signed_note})...")
         kfw_argv = [
             sys.executable, str(kfw_tool), "pack", target_kfw,
             "--kind", "firmware", "--mcu-ota",

@@ -142,8 +142,7 @@ fn main() {
     println!("cargo:rustc-env=KERN_BUILD_TIME={}", time_str);
     println!("cargo:rustc-env=KERN_BUILD_STAMP={}", stamp_display);
     println!(
-        "cargo:rustc-env=KERN_ABOUT_TEXT=KERN OS v{}\nBuild: {}\nGit: {}\nTarget: {}",
-        env!("CARGO_PKG_VERSION"),
+        "cargo:rustc-env=KERN_ABOUT_TEXT=KERN OS\nBuild: {}\nGit: {}\nTarget: {}",
         date_str,
         full_hash,
         target_label

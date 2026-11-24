@@ -196,7 +196,7 @@ def inspect_firmware_file(
         trust_label = "Signed & Trusted" if trusted else ("Signed (unpinned)" if signed else "Unsigned")
         mod_note = f" · +{len(mod_parts)} mod(s)" if mod_parts else ""
         return {
-            "format": "KFW v1.0",
+            "format": "KFW",
             "version": kfw.format_semver(parsed.fw_version),
             "sec_cnt": parsed.sec_cnt,
             "krx_abi": kfw.format_abi(parsed.krx_abi_ver) if parsed.krx_abi_ver else "",
@@ -216,7 +216,7 @@ def inspect_firmware_file(
             "parts_count": len(parsed.parts),
             "modules_count": len(mod_parts),
             "summary": (
-                f"KFW v{kfw.format_semver(parsed.fw_version)} · {', '.join(targets) or 'generic'}"
+                f"KFW · {', '.join(targets) or 'generic'}"
                 f" · {len(raw_fw):,} B · {trust_label}{mod_note}"
             ),
         }
@@ -544,7 +544,7 @@ def inspect_backup_file(fpath: str | Path) -> dict[str, Any]:
         man = parsed.manifest if isinstance(parsed.manifest, dict) else {}
         return {
             "path": str(p),
-            "format": "KFW v1.0 (Ascon-Hash256)",
+            "format": "KFW (Ascon-Hash256)",
             "verified": True,
             "name": str(man.get("name", p.stem)),
             "scope": str(man.get("scope", "snapshot")),

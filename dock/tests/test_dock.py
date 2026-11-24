@@ -373,7 +373,7 @@ class TestRenderingAndCapture(unittest.TestCase):
             zip_p.write_bytes(build_zip_backup_from_backend(link.fs_backend, volume_name="Demo"))
             ki = inspect_backup_file(kfw_p)
             zi = inspect_backup_file(zip_p)
-            self.assertEqual(ki["format"], "KFW v1.0 (Ascon-Hash256)")
+            self.assertEqual(ki["format"], "KFW (Ascon-Hash256)")
             self.assertEqual(zi["format"], "ZIP Archive")
             self.assertGreaterEqual(len(ki["entries"]), 4)
             self.assertGreaterEqual(len(zi["entries"]), 4)

@@ -2612,15 +2612,15 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         return 0
 
     port = args.port
-    # Pre-flight RigWire check (works on BOTH RigWire v1 & v2 radios!)
+    # Pre-flight RigWire check
     wire_online = False
     try:
         cli_port = port or _wait_for_port("36b7:ffff", port, 2.0)
         cli = _rigwire.RigWireClient(cli_port, timeout=1.0)
         try:
-            hello = cli.hello()
+            cli.hello()
             wire_online = True
-            _log_ok(f"Connected over RigWire v{hello.get('protocol_version', 2)} on {cli_port}")
+            _log_ok(f"Connected over RigWire on {cli_port}")
             telem = cli.get_system_telemetry()
             batt_mv = int(telem.get("battery_mv", 0))
             min_mv = max((bp.min_battery_mv for bp in parsed.boot_policies), default=0)
@@ -2668,8 +2668,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         rw_port = _wait_for_port("36b7:ffff", port, 20.0)
         cli2 = _rigwire.RigWireClient(rw_port, timeout=1.5)
         try:
-            hello2 = cli2.hello()
-            _log_ok(f"Reconnected over RigWire v{hello2.get('protocol_version', 2)} on {rw_port}")
+            cli2.hello()
+            _log_ok(f"Reconnected over RigWire on {rw_port}")
             rep = provision_kfw_parts_over_rigwire(cli2, parsed, plaintexts, dry_run=False)
             _log_ok(
                 f"Phase B sync complete: {len(rep['installed'])} installed, "
@@ -2680,7 +2680,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         finally:
             cli2.close()
 
-    _log_ok(f"Upgrade to Kern OS v{ver_str} completed safely!")
+    _log_ok("Upgrade to Kern OS completed safely!")
     return 0
 
 
@@ -2692,7 +2692,7 @@ def _write_temp_kfw(raw: bytes) -> Path:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Kern Firmware Container (.kfw v1.0) Tool")
+    ap = argparse.ArgumentParser(description="Kern Firmware Container (.kfw) Tool")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_pack = sub.add_parser("pack", help="Pack a .kfw container")

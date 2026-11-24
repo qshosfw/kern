@@ -28,7 +28,7 @@ try:
 except ImportError:
     serial = None
 
-# ── WIRE CONSTANTS (RigWire v2) ──────────────────────────────────────────────
+# ── WIRE CONSTANTS (RigWire) ─────────────────────────────────────────────────
 WIRE_IDENT = 0x52  # High nibble 'R' (0x5), protocol rev 2
 
 FLAG_QOS_MASK = 0x03
@@ -64,7 +64,7 @@ SERVICE_CONTROL = 0x01
 SERVICE_EVENTS = 0x02
 SERVICE_DATA = 0x03
 
-# Core Opcodes (RigWire v2)
+# Core Opcodes (RigWire)
 OP_CORE_HELLO = 0x01
 OP_CORE_PING = 0x02
 OP_CORE_TIME_SYNC = 0x03
@@ -202,7 +202,7 @@ KEY_STATES = {
     "released": 2,
 }
 
-# Data Opcodes (RigWire v2)
+# Data Opcodes (RigWire)
 OP_TRANSFER_OPEN = 0x01
 OP_TRANSFER_CHUNK = 0x02
 OP_TRANSFER_CLOSE = 0x03
@@ -705,7 +705,7 @@ class RigWireClient:
     # ── CORE SERVICE (0x00) ───────────────────────────────────────────────────
 
     def hello(self) -> dict:
-        """Perform RigWire v2 HELLO handshake."""
+        """Perform RigWire HELLO handshake."""
         req = struct.pack("<BBIH", 1, 1, self.session_id, 128)
         self._ser_rx.clear()
         try:
@@ -728,7 +728,6 @@ class RigWireClient:
         self.sequence = 1
 
         return {
-            "protocol_version": 2,
             "minor_version": selected_minor,
             "accepted_max_payload": accepted_max_payload,
             "catalogue_generation": catalogue_gen,
@@ -753,7 +752,7 @@ class RigWireClient:
         return {"uptime_ms": uptime_ms, "rtt_ms": rtt_ms}
 
     def caps(self) -> list:
-        """Enumerate device capabilities via CORE::CAPS (RigWire v2 SemanticCap)."""
+        """Enumerate device capabilities via CORE::CAPS (SemanticCap)."""
         cursor = 0
         records = []
 
@@ -782,7 +781,7 @@ class RigWireClient:
         return records
 
     def tables(self) -> list:
-        """Enumerate structured binary table descriptors via CORE::TABLES (RigWire v2)."""
+        """Enumerate structured binary table descriptors via CORE::TABLES."""
         resp = self.send_record(SERVICE_CORE, OP_CORE_TABLES)
         if not resp:
             return []
@@ -1624,7 +1623,7 @@ def run_protocol_tests():
         assert dec == tv, f"COBS roundtrip mismatch for len {len(tv)}"
     print(f"PASSED ({len(test_vectors)} vectors verified)")
 
-    print("Test 3: RigWire v2 8-Byte Header Layout & Struct Packing...", end=" ")
+    print("Test 3: RigWire 8-Byte Header Layout & Struct Packing...", end=" ")
     header = struct.pack(
         "<BBBBHH",
         WIRE_IDENT,
