@@ -39,6 +39,11 @@ pub fn active_canvas_mut() -> &'static mut Canvas {
     crate::system_canvas()
 }
 
+#[inline(always)]
+pub fn has_cap(cap: Cap) -> bool {
+    super::native_runner::active_native_caps().contains(cap)
+}
+
 #[inline(never)]
 pub unsafe fn ptr_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     if !ptr.is_null() && len > 0 {

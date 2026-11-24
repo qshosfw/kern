@@ -2,7 +2,6 @@
 
 use super::remote::is_remote_control_active;
 use super::{is_headless, wake_and_notify_activity};
-use crate::POWER_SERVICE;
 use crate::hardware::SystemHardware;
 use crate::services::melody::{DialogSoundType, MelodyEngine};
 use crate::services::power::PowerService;
@@ -14,7 +13,7 @@ fn is_plugged_in(hw: &SystemHardware) -> bool {
     let is_usb_plugged = hw.usb.is_connected();
     #[cfg(not(feature = "usb"))]
     let is_usb_plugged = false;
-    is_usb_plugged || unsafe { (*core::ptr::addr_of!(POWER_SERVICE)).is_charging() }
+    is_usb_plugged || crate::power_service().is_charging()
 }
 
 #[inline(never)]
@@ -106,10 +105,8 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     if is_remote_control_active(hw, py32_hal::delay::millis()) {
         hw.orchestrator.reset_hold_tracking();
         if !is_headless() {
-            unsafe {
-                (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                    .show_toast("Remote active: sleep locked", 1800);
-            }
+            crate::orchestrator::compositor::active_modal_mut()
+                .show_toast("Remote active: sleep locked", 1800);
         }
         return;
     }
@@ -123,9 +120,7 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     suspend_peripherals(hw, false);
 
     // 3. Mark power service profile as deep sleep
-    unsafe {
-        (*core::ptr::addr_of_mut!(POWER_SERVICE)).enter_deep_sleep();
-    }
+    crate::power_service().enter_deep_sleep();
 
     // 4. Wait for key release before entering sleep loop to prevent immediate wake
     drain_keypad_matrix(hw);
@@ -269,9 +264,9 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
     hw.radio.set_status_led(bsp::StatusLed::Red);
 
     let mut check_ms = py32_hal::delay::millis();
-    while unsafe {
-        (*core::ptr::addr_of!(POWER_SERVICE)).is_critical()
-            && !(*core::ptr::addr_of!(POWER_SERVICE)).is_charging()
+    while {
+        let pwr = crate::power_service();
+        pwr.is_critical() && !pwr.is_charging()
     } {
         py32_hal::wdt::Watchdog::feed();
         let cur = py32_hal::delay::millis();
@@ -324,11 +319,8 @@ pub(super) fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_t
         panic!("stack guard breached");
     }
 
-    unsafe {
-        (*core::ptr::addr_of_mut!(POWER_SERVICE)).tick_second();
-    }
-
-    let pwr = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
+    let pwr = crate::power_service();
+    pwr.tick_second();
     if pwr.is_low() && !pwr.is_charging() && pwr.uptime_secs() > 5 && pwr.battery_percentage() <= 15
     {
         *low_batt_warning_timer = low_batt_warning_timer.saturating_add(1);

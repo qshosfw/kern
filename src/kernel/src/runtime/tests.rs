@@ -131,7 +131,7 @@ fn test_krx_launch_error_diagnostics() {
     );
     assert_eq!(
         KrxLaunchError::InsufficientRam.describe(),
-        "Exceeds 8KB RAM."
+        "Exceeds 6KB RAM."
     );
     assert_eq!(
         KrxLaunchError::UnsupportedProfile.describe(),

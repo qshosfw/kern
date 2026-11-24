@@ -72,9 +72,8 @@ fn draw_row_right_value(
     sw: i16,
     tc: Color,
 ) {
-    let mut lbuf = [0u8; 32];
     let val_str = if s.localize_value {
-        text::localize(s.value, true, &mut lbuf)
+        text::localize_scratch(s.value, true)
     } else {
         s.value
     };
@@ -117,9 +116,8 @@ fn draw_shortcut_row(
             tx += 11;
         }
     }
-    let mut lbuf = [0u8; 36];
     let act_lbl = if s.localize_title {
-        text::localize(s.value, false, &mut lbuf)
+        text::localize_scratch(s.value, false)
     } else {
         s.value
     };
@@ -128,11 +126,9 @@ fn draw_shortcut_row(
     icons::draw_icon_8(canvas, right_edge - 8, s.y + 3, icons::ARROW_RIGHT, tc);
 }
 
-#[inline(never)]
+#[inline(always)]
 fn measure_row_value_localized(s: &ListRowSpec<'_>) -> i16 {
-    let mut lbuf = [0u8; 32];
-    let v = text::localize(s.value, true, &mut lbuf);
-    text::str_width(v, &TOMTHUMB)
+    text::str_width(text::localize_scratch(s.value, true), &TOMTHUMB)
 }
 
 #[inline(never)]
@@ -146,9 +142,8 @@ fn draw_row_title(
     is_sel: bool,
     tc: Color,
 ) -> u8 {
-    let mut lbuf = [0u8; 32];
     let title_str = if s.localize_title {
-        text::localize(s.title, prefer_short, &mut lbuf)
+        text::localize_scratch(s.title, prefer_short)
     } else {
         s.title
     };

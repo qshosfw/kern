@@ -153,7 +153,10 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
         payload_size: u32,
         block_map_body: Option<&[u8]>,
     ) {
-        self.reset();
+        self.slots = [const { CacheSlotMeta::empty() }; MAX_SLOTS];
+        self.access_clock = 0;
+        self.fault_count = 0;
+        self.hit_count = 0;
         let eff_page = if page_size == 512 || page_size == 1024 {
             page_size
         } else {
@@ -161,6 +164,7 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
         };
         self.page_size = eff_page;
         self.active_slots = cache_blocks.clamp(1, MAX_SLOTS as u8);
+        self.block_count = 0;
 
         if let Some(body) = block_map_body {
             #[cfg(target_endian = "little")]
@@ -184,10 +188,12 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
             let step = eff_page as u32;
             let mut rem = payload_size;
             let mut cur_off = payload_flash_offset;
-            let mut idx = 0usize;
-            while rem > 0 && idx < MAX_BLOCKS {
+            for (idx, dst) in self.blocks.iter_mut().enumerate() {
+                if rem == 0 {
+                    break;
+                }
                 let chunk = rem.min(step) as u16;
-                self.blocks[idx] = BlockEntry {
+                *dst = BlockEntry {
                     block_id: idx as u8,
                     flags: 0,
                     size: chunk,
@@ -195,71 +201,91 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
                 };
                 cur_off += chunk as u32;
                 rem -= chunk as u32;
-                idx += 1;
                 self.block_count += 1;
             }
         }
     }
 
     /// Lookup a block descriptor by `block_id`.
+    #[inline(never)]
     pub fn get_block(&self, block_id: u8) -> Option<BlockEntry> {
         let count = (self.block_count as usize).min(MAX_BLOCKS);
-        for i in 0..count {
+        let mut i = 0;
+        while i < count {
             if self.blocks[i].block_id == block_id {
                 return Some(self.blocks[i]);
             }
+            i += 1;
         }
         None
     }
 
-    /// Resolve a block in the cache or select a victim slot for page-in.
-    /// Returns `(slot_index, is_cache_hit, block_entry)`.
+    /// Shared cache slot lookup/allocation core: returns `(slot_index, is_hit, block_entry)`.
+    /// When `allow_evict` is `false` (prefetch), only an empty slot is used and hits/full return `Err`.
     #[inline(never)]
-    pub fn resolve_or_select_slot(
+    fn lookup_or_alloc_slot(
         &mut self,
         block_id: u8,
+        allow_evict: bool,
     ) -> Result<(usize, bool, BlockEntry), PagedError> {
         let entry = self.get_block(block_id).ok_or(PagedError::InvalidBlockId)?;
-
-        self.access_clock = self.access_clock.wrapping_add(1);
+        if allow_evict {
+            self.access_clock = self.access_clock.wrapping_add(1);
+        }
         let slot_limit = (self.active_slots as usize).min(MAX_SLOTS);
 
-        // 1. Check for cache hit
-        for s in 0..slot_limit {
-            if self.slots[s].resident_block == Some(block_id) {
-                self.slots[s].last_access_tick = self.access_clock;
+        let mut victim = MAX_SLOTS;
+        let mut oldest_age: u16 = 0;
+        let mut has_empty = false;
+        let mut s = 0;
+
+        while s < slot_limit {
+            let slot = &mut self.slots[s];
+            if slot.resident_block == Some(block_id) {
+                if !allow_evict {
+                    return Err(PagedError::NoUnpinnedSlotAvailable);
+                }
+                slot.last_access_tick = self.access_clock;
                 self.hit_count = self.hit_count.saturating_add(1);
                 return Ok((s, true, entry));
             }
-        }
-
-        // 2. Cache miss (Page Fault): prefer an empty slot, else evict LRU unpinned slot
-        let mut victim: Option<usize> = None;
-        let mut oldest_age: u16 = 0;
-        for s in 0..slot_limit {
-            if self.slots[s].resident_block.is_none() {
-                victim = Some(s);
-                break;
-            }
-            if !self.slots[s].pinned {
-                let age = self
-                    .access_clock
-                    .wrapping_sub(self.slots[s].last_access_tick);
-                if victim.is_none() || age >= oldest_age {
-                    oldest_age = age;
-                    victim = Some(s);
+            if !has_empty {
+                if slot.resident_block.is_none() {
+                    victim = s;
+                    has_empty = true;
+                } else if allow_evict && !slot.pinned {
+                    let age = self.access_clock.wrapping_sub(slot.last_access_tick);
+                    if victim == MAX_SLOTS || age >= oldest_age {
+                        oldest_age = age;
+                        victim = s;
+                    }
                 }
             }
+            s += 1;
         }
 
-        let slot_idx = victim.ok_or(PagedError::NoUnpinnedSlotAvailable)?;
-        self.slots[slot_idx] = CacheSlotMeta {
+        if victim >= slot_limit {
+            return Err(PagedError::NoUnpinnedSlotAvailable);
+        }
+        self.slots[victim] = CacheSlotMeta {
             resident_block: Some(block_id),
             pinned: entry.is_pinned(),
             last_access_tick: self.access_clock,
         };
-        self.fault_count = self.fault_count.saturating_add(1);
-        Ok((slot_idx, false, entry))
+        if allow_evict {
+            self.fault_count = self.fault_count.saturating_add(1);
+        }
+        Ok((victim, false, entry))
+    }
+
+    /// Resolve a block in the cache or select a victim slot for page-in.
+    /// Returns `(slot_index, is_cache_hit, block_entry)`.
+    #[inline(always)]
+    pub fn resolve_or_select_slot(
+        &mut self,
+        block_id: u8,
+    ) -> Result<(usize, bool, BlockEntry), PagedError> {
+        self.lookup_or_alloc_slot(block_id, true)
     }
 
     /// Byte offset of `slot_idx` relative to the start of the fixed-window cache VMA.
@@ -270,6 +296,15 @@ impl<const MAX_BLOCKS: usize, const MAX_SLOTS: usize> FixedWindowCache<MAX_BLOCK
         } else {
             slot_idx << 10
         }
+    }
+
+    /// Opportunistically select an empty cache slot for sequential prefetch of `next_id`.
+    /// Never evicts a resident slot.
+    #[inline(always)]
+    pub fn prepare_prefetch_next(&mut self, block_id: u8) -> Option<(usize, BlockEntry)> {
+        let next_id = block_id.checked_add(1)?;
+        let (slot, _, entry) = self.lookup_or_alloc_slot(next_id, false).ok()?;
+        Some((slot, entry))
     }
 }
 
@@ -989,5 +1024,27 @@ mod tests {
                 .unwrap_err(),
             PagedError::InvalidLeafId
         );
+    }
+
+    #[test]
+    fn fixed_window_cache_prefetches_hint_next_into_free_slot_only() {
+        let mut cache: FixedWindowCache<8, 2> = FixedWindowCache::new();
+        cache.configure(1024, 2, 0x100, 3072, None);
+        cache.blocks[0].flags |= BLOCK_FLAG_HINT_NEXT;
+
+        // Fault block 0 into slot 0 -> slot 1 is free, so block 1 prefetches cleanly
+        let (s0, hit0, _) = cache.resolve_or_select_slot(0).unwrap();
+        assert_eq!((s0, hit0), (0, false));
+        let (pf_slot, pf_entry) = cache.prepare_prefetch_next(0).unwrap();
+        assert_eq!(pf_slot, 1);
+        assert_eq!(pf_entry.block_id, 1);
+
+        // Accessing block 1 is now a zero-fault cache hit!
+        let (s1, hit1, _) = cache.resolve_or_select_slot(1).unwrap();
+        assert_eq!((s1, hit1), (1, true));
+
+        // When no free slot exists, prefetch refuses to evict resident blocks
+        cache.blocks[1].flags |= BLOCK_FLAG_HINT_NEXT;
+        assert!(cache.prepare_prefetch_next(1).is_none());
     }
 }

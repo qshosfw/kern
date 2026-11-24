@@ -8,49 +8,7 @@ use crate::services::SystemStorage;
 use kernel::runtime::KrxExecType;
 #[cfg(feature = "filesystem")]
 use kernel::runtime::KrxPreamble;
-
-/// Fixed-capacity UTF-8 string with 1-byte length at offset 0 (single-instruction `ldrb`
-/// on Cortex-M0+ and zero monomorphized `heapless::String::push_str` codegen).
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct SmallStr<const N: usize> {
-    len: u8,
-    buf: [u8; N],
-}
-
-impl<const N: usize> SmallStr<N> {
-    pub const fn new() -> Self {
-        Self {
-            len: 0,
-            buf: [0; N],
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        let mut out = Self::new();
-        out.len = write_trunc_utf8(&mut out.buf, 0, s);
-        out
-    }
-
-    #[inline(always)]
-    pub fn as_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(&self.buf[..self.len as usize]) }
-    }
-}
-
-#[inline(never)]
-fn write_trunc_utf8(dst: &mut [u8], start: usize, s: &str) -> u8 {
-    let b = s.as_bytes();
-    let max = dst.len().saturating_sub(start);
-    let mut n = b.len().min(max);
-    while n > 0 && n < b.len() && (b[n] & 0xC0) == 0x80 {
-        n -= 1;
-    }
-    unsafe {
-        core::ptr::copy_nonoverlapping(b.as_ptr(), dst.as_mut_ptr().add(start), n);
-    }
-    (start + n) as u8
-}
+use utils::format::InlineStr;
 
 /// Cached catalog entry for an installed package (`48 B` fixed stride, `4 B` aligned;
 /// all `u8`/`bool` fields sit in offsets `0..31` for 1-insn Cortex-M0+ `ldrb`).
@@ -63,10 +21,10 @@ pub struct PackageCatalogEntry {
     /// Self-contained 8x8 monochrome icon bitmap from `SECTION_ASSETS` (`[0; 8]` when absent).
     /// Placed at offset 4 (4-byte aligned) to avoid Cortex-M0+ `__aeabi_uwrite4` traps.
     pub icon_8: [u8; 8],
-    /// File offset of embedded 16x16 bitmap inside `SECTION_ASSETS` (`0` when absent).
+    /// Reserved alignment padding (`48 B` stride).
     pub icon_16_off: u16,
-    pub title: SmallStr<12>,
-    pub path: SmallStr<20>,
+    pub title: InlineStr<12>,
+    pub path: InlineStr<20>,
 }
 
 const _: () = assert!(core::mem::size_of::<PackageCatalogEntry>() == 48);
@@ -79,12 +37,13 @@ impl PackageCatalogEntry {
 
     #[inline(always)]
     pub fn has_custom_icon_8(&self) -> bool {
-        self.icon_8.iter().any(|&b| b != 0)
+        let w = unsafe { &*(&self.icon_8 as *const [u8; 8] as *const [u32; 2]) };
+        (w[0] | w[1]) != 0
     }
 
     /// Resolve the package's 8x8 icon: prefers embedded `SECTION_ASSETS` `ASSET_ICON_8`,
     /// falling back to the legacy `icon_id` lookup.
-    #[inline(always)]
+    #[inline(never)]
     pub fn resolved_icon_8(&self) -> &'static [u8; 8] {
         if self.has_custom_icon_8() {
             unsafe { &*(&self.icon_8 as *const [u8; 8]) }
@@ -264,7 +223,7 @@ impl PackageCatalog {
             entry.path.buf[..6].copy_from_slice(b"/apps/");
             6
         };
-        entry.path.len = write_trunc_utf8(&mut entry.path.buf, start, raw_name);
+        entry.path.len = utils::format::copy_trunc_utf8(&mut entry.path.buf, start, raw_name);
 
         let mut title: Option<&str> = None;
         if is_pkg && (size as usize) >= KrxPreamble::SIZE {
@@ -311,14 +270,14 @@ impl PackageCatalog {
                 }
             }
             if let Some(t) = title {
-                entry.title.len = write_trunc_utf8(&mut entry.title.buf, 0, t);
+                entry.title.set(t);
             }
         }
 
-        if entry.title.len == 0 {
+        if entry.title.is_empty() {
             let stem_len = if is_pkg { n - 4 } else { n };
             let stem = unsafe { core::str::from_utf8_unchecked(&bytes[..stem_len]) };
-            entry.title.len = write_trunc_utf8(&mut entry.title.buf, 0, stem);
+            entry.title.set(stem);
         }
     }
 
@@ -328,6 +287,7 @@ impl PackageCatalog {
 
 pub static mut PACKAGE_CATALOG: PackageCatalog = PackageCatalog::new();
 
+#[inline(never)]
 pub fn get_catalog() -> &'static mut PackageCatalog {
     unsafe { &mut *core::ptr::addr_of_mut!(PACKAGE_CATALOG) }
 }
@@ -404,8 +364,8 @@ mod tests {
         let mut entry = PackageCatalogEntry {
             exec_type: KrxExecType::App,
             is_valid: true,
-            title: SmallStr::from_str("Hello Rust"),
-            path: SmallStr::from_str("/apps/hello_rust.krx"),
+            title: InlineStr::from_str("Hello Rust"),
+            path: InlineStr::from_str("/apps/hello_rust.krx"),
             icon_16_off: 128,
             icon_id: summary.icon_id,
             icon_8: [0; 8],

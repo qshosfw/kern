@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 use crate::services::DisplayHardware;
-use crate::POWER_SERVICE;
 use crate::services::{PowerServiceConfigExt, SysContext, SystemStorage};
 use drivers::audio::AudioAmplifier;
 use drivers::backlight::BacklightController;
@@ -165,8 +164,7 @@ impl<'a> SystemHardware<'a> {
             config.hw_dirty &= !crate::config::HW_DIRTY_DISPLAY;
         }
         if (config.hw_dirty & crate::config::HW_DIRTY_BATTERY) != 0 {
-            let power = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
-            power.load_battery_config(&config.battery);
+            crate::power_service().load_battery_config(&config.battery);
             config.hw_dirty &= !crate::config::HW_DIRTY_BATTERY;
         }
         if (config.hw_dirty & crate::config::HW_DIRTY_SYSTEM) != 0 {
@@ -200,7 +198,7 @@ impl<'a> SystemHardware<'a> {
         cfg: &crate::config::MasterConfig,
     ) {
         usb.update_device_identity(cfg.system.model_str(), cfg.system.tag_str());
-        let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+        let pwr = crate::power_service();
         usb.update_power_telemetry(
             pwr.battery_voltage_mv(),
             pwr.battery_percentage(),
@@ -225,7 +223,7 @@ impl<'a> SystemHardware<'a> {
             is_f_active: is_f,
             state: crate::radio_state(),
             radio: &mut self.radio,
-            power: unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) },
+            power: crate::power_service(),
             config: crate::master_config(),
             storage: self.filesystem,
             audio: &mut self.audio,

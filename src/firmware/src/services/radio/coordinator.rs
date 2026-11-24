@@ -193,18 +193,18 @@ pub struct RadioCoordinator {
     pub ptt_latched: bool,
     /// Real-time RX Squelch Tail Elimination (STE) controller (2 B, inside 32 B imm5 byte window).
     pub ste: RxSteController,
-    pub fsk_config: FskSidecarConfig,
 
-    // ── Hot 2-byte scalar fields (offset 30..62: 1-insn ldrh/strh) ─────────
-    pub dual_watch: DualWatchMode,
+    // ── Hot 2-byte scalar fields (offset 22..44: 1-insn ldrh/strh) ─────────
     /// Time-Out Timer limit in seconds (0 = disabled).
     pub tot_limit_seconds: u16,
     /// Current transmission elapsed time in 10ms ticks.
     pub tot_elapsed_10ms: u16,
-    pub dwell: DwellController,
-    pub audio_routing: AudioRoutingState,
     pub activity_count: [u16; 3],
     pub rssi_moving_avg: [i16; 3],
+    pub fsk_config: FskSidecarConfig,
+    pub dual_watch: DualWatchMode,
+    pub dwell: DwellController,
+    pub audio_routing: AudioRoutingState,
     /// Timestamp (ms) of the last PTT press for `PttMode::DoublePressLatch` detection.
     pub last_ptt_press_ms: u32,
 
@@ -692,7 +692,7 @@ impl RadioCoordinator {
         }
 
         // Hardware Safeguard: Lock out TX if battery pack is critically depleted
-        let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+        let pwr = crate::power_service();
         if pwr.is_critical && !pwr.is_charging {
             return TxPermission::BlockedBatteryCritical;
         }
@@ -872,8 +872,7 @@ impl RadioCoordinator {
         // When battery voltage is low, high-power TX (5W / ~2A) causes severe cell IR voltage sag
         // that can drop the pack below 5.5V and brownout the MCU. Throttle power level to Medium.
         let mut target_power = tx_power;
-        let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-        if pwr.is_low && target_power == RfPowerLevel::High {
+        if crate::power_service().is_low && target_power == RfPowerLevel::High {
             target_power = RfPowerLevel::Medium;
         }
 
@@ -1055,8 +1054,11 @@ impl RadioCoordinator {
         if self.channels[idx].freq_lock() {
             return;
         }
-        let cur = self.channels[idx].rx_freq.raw() as i64;
-        let next = (cur + step_hz as i64).clamp(18_000_000, 1_300_000_000) as u32;
+        let next = self.channels[idx]
+            .rx_freq
+            .raw()
+            .saturating_add_signed(step_hz)
+            .clamp(18_000_000, 1_300_000_000);
         self.channels[idx].rx_freq = utils::units::Frequency::new(next);
         let eff_rx = self.channels[idx].effective_rx_freq();
         if self.is_slot_hardware_active(slot) {
@@ -1213,7 +1215,93 @@ impl RadioCoordinator {
 
     // ── Memory Channel Loading & Serialization ──
 
+    /// Populate the canonical 18-byte `KrxRadioState` snapshot directly from coordinator fields.
+    #[inline(never)]
+    pub fn fill_krx_state(
+        &self,
+        token: ClientToken,
+        dst: &mut kernel::proc::abi::KrxRadioState,
+    ) {
+        let dw = match self.dual_watch {
+            DualWatchMode::Off => 0,
+            DualWatchMode::EqualDwell { .. } => 1,
+            DualWatchMode::Priority { .. } => 2,
+            DualWatchMode::Adaptive => 3,
+            DualWatchMode::TripleWatch { .. } => 4,
+        };
+        let tot_elapsed_s = utils::math::div100_u16(self.tot_elapsed_10ms).0;
+        let tx_slot = self.effective_tx_slot();
+        dst.active_vfo = self.active_vfo as u8;
+        dst.listening_vfo = self.listening_vfo as u8;
+        dst.dual_watch = dw;
+        dst.cross_band = self.cross_band as u8;
+        dst.bclo_policy = self.bclo_policy as u8;
+        dst.ptt_active = self.is_transmitting as u8;
+        dst.squelch_open = self.carrier_active as u8;
+        dst.subaudible_matched = self.subaudible_matched as u8;
+        dst.tot_locked_out = self.tot_locked_out as u8;
+        dst.lock_active = self.is_vfo_locked() as u8;
+        dst.tx_perm = self.check_tx_permission(tx_slot, token) as u8;
+        dst._reserved = (self.monitor_active as u8)
+            | ((self.fsk_sync_active as u8) << 1)
+            | ((self.pa_thermal_foldback_active as u8) << 2)
+            | ((self.dwell.is_rx_held() as u8) << 3)
+            | (((self.lock_depth() as u8) & 0x03) << 4);
+        dst.tot_remaining_s = self.tot_limit_seconds.saturating_sub(tot_elapsed_s);
+        dst.rssi_dbm = self.vfo_rssi(self.listening_vfo);
+    }
+
+    /// Apply packed `[active_vfo, dual_watch, cross_band, bclo]` watch-mode word (`0xFF` = keep).
+    #[inline(never)]
+    pub fn apply_watch_mode<R: RfChannel + RfSquelch>(&mut self, radio: &mut R, packed: u32) -> bool {
+        let active_vfo = packed as u8;
+        let dual_watch = (packed >> 8) as u8;
+        let cross_band = (packed >> 16) as u8;
+        let bclo = (packed >> 24) as u8;
+        if active_vfo != 0xFF {
+            let vfo = match active_vfo {
+                0 => VfoSlot::VfoA,
+                1 => VfoSlot::VfoB,
+                2 => VfoSlot::VfoC,
+                _ => return false,
+            };
+            if !self.is_transmitting {
+                self.select_vfo(radio, vfo);
+            } else {
+                self.active_vfo = vfo;
+            }
+        }
+        if dual_watch != 0xFF {
+            let priority_vfo = self.active_vfo;
+            self.dual_watch = match dual_watch {
+                0 => DualWatchMode::Off,
+                1 => DualWatchMode::EqualDwell { dwell_ms: 250 },
+                2 => DualWatchMode::Priority {
+                    priority_vfo,
+                    check_interval_ms: 250,
+                },
+                3 => DualWatchMode::Adaptive,
+                4 => DualWatchMode::TripleWatch { dwell_ms: 250 },
+                _ => return false,
+            };
+        }
+        if cross_band != 0xFF {
+            let Some(cb) = CrossBandMode::from_u8(cross_band) else {
+                return false;
+            };
+            self.cross_band = cb;
+        }
+        if bclo != 0xFF {
+            let Some(bp) = BcloPolicy::from_u8(bclo) else {
+                return false;
+            };
+            self.bclo_policy = bp;
+        }
+        true
+    }
+
     /// Load a ChannelRecord from codeplug/KernFS storage into a target VFO slot.
+    #[inline(never)]
     pub fn load_channel_into_vfo<R: RfChannel + RfSquelch>(
         &mut self,
         radio: &mut R,
@@ -1241,6 +1329,7 @@ impl RadioCoordinator {
     }
 
     /// Serialize current VFO tuning parameters into a ChannelRecord with zero attribute loss.
+    #[inline(never)]
     pub fn save_vfo_to_channel(&self, slot: VfoSlot, rec: &mut crate::data::ChannelRecord) {
         let idx = slot.index().min(self.channels.len() - 1);
         Self::save_channel_to_record(&self.channels[idx], rec);
@@ -1309,7 +1398,7 @@ impl RadioCoordinator {
             // - Stage 2 foldback: die >= 78.0°C or VDDA < 2.95V -> drop PA to Low (level 0).
             // - Stage 1 foldback: die >= 65.0°C, low battery, or VDDA < 3.05V -> drop High to Med (1).
             if (self.tot_elapsed_10ms & 31) == 0 {
-                let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
+                let pwr = crate::power_service();
                 let vdda_valid = pwr.vdda_mv >= 1800;
                 if pwr.mcu_temp_deci_c >= 850 || (vdda_valid && pwr.vdda_mv < 2850) {
                     self.pa_thermal_foldback_active = true;

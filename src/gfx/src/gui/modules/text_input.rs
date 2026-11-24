@@ -56,18 +56,13 @@ impl LocaleKeymap {
     }
 
     pub fn set_label(&mut self, s: &str) {
-        let b = s.as_bytes();
-        let mut n = b.len().min(self.label_buf.len());
-        while n > 0 && n < b.len() && (b[n] & 0xC0) == 0x80 {
-            n -= 1;
-        }
-        self.label_buf[..n].copy_from_slice(&b[..n]);
-        self.label_len = n as u8;
+        self.label_len = utils::format::copy_trunc_utf8(&mut self.label_buf, 0, s);
     }
 
     #[inline(always)]
     pub fn label_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(&self.label_buf[..self.label_len as usize]) }
+        let len = (self.label_len as usize).min(self.label_buf.len());
+        unsafe { core::str::from_utf8_unchecked(self.label_buf.get_unchecked(..len)) }
     }
 
     /// Populate key `key` (`0..10`) in ascending order inside the packed UTF-8 buffer.
@@ -75,21 +70,13 @@ impl LocaleKeymap {
         if key >= 10 {
             return;
         }
-        let used = self.offsets[key] as usize;
-        let b = s.as_bytes();
-        let avail = self.buf.len().saturating_sub(used);
-        let mut n = b.len().min(avail);
-        while n > 0 && n < b.len() && (b[n] & 0xC0) == 0x80 {
-            n -= 1;
-        }
-        self.buf[used..used + n].copy_from_slice(&b[..n]);
-        let end = (used + n) as u8;
+        let end = utils::format::copy_trunc_utf8(&mut self.buf, self.offsets[key] as usize, s);
         for o in &mut self.offsets[key + 1..] {
             *o = end;
         }
     }
 
-    #[inline(always)]
+    #[inline(never)]
     pub fn key_str(&self, key: usize) -> &str {
         if key >= 10 {
             return "";
@@ -99,7 +86,7 @@ impl LocaleKeymap {
         if e <= s || e > self.buf.len() {
             return "";
         }
-        unsafe { core::str::from_utf8_unchecked(&self.buf[s..e]) }
+        unsafe { core::str::from_utf8_unchecked(self.buf.get_unchecked(s..e)) }
     }
 }
 
@@ -167,9 +154,9 @@ pub struct TextInputModel {
     pub ticks: u32,
     pub exit_press_ticks: u32,
     pub hold_ticks: u32,
-    pub buffer: String<32>,
+    pub buffer: utils::format::InlineStr<32>,
     pub locale_keymap: LocaleKeymap,
-    pub custom_title: String<16>,
+    pub custom_title: utils::format::InlineStr<16>,
 }
 
 impl TextInputModel {
@@ -194,8 +181,8 @@ impl TextInputModel {
             ticks: 0,
             exit_press_ticks: 0,
             hold_ticks: 24,
-            custom_title: String::new(),
-            buffer: String::new(),
+            custom_title: utils::format::InlineStr::new(),
+            buffer: utils::format::InlineStr::new(),
             locale_keymap: LocaleKeymap::empty(),
         }
     }
@@ -252,6 +239,15 @@ fn utf8_char_count(s: &str) -> usize {
     n
 }
 
+#[inline(never)]
+fn next_utf8_end(b: &[u8], i: usize) -> usize {
+    let mut next = i + 1;
+    while next < b.len() && (unsafe { *b.get_unchecked(next) } & 0xC0) == 0x80 {
+        next += 1;
+    }
+    next
+}
+
 /// Return byte range `(start, end)` of the `nth` UTF-8 codepoint in `s`.
 #[inline(never)]
 fn utf8_nth_slice(s: &str, nth: usize) -> Option<&str> {
@@ -259,30 +255,14 @@ fn utf8_nth_slice(s: &str, nth: usize) -> Option<&str> {
     let mut i = 0usize;
     let mut c = 0usize;
     while i < b.len() {
-        let mut next = i + 1;
-        while next < b.len() && (b[next] & 0xC0) == 0x80 {
-            next += 1;
-        }
+        let next = next_utf8_end(b, i);
         if c == nth {
-            return Some(unsafe { core::str::from_utf8_unchecked(&b[i..next]) });
+            return Some(unsafe { core::str::from_utf8_unchecked(b.get_unchecked(i..next)) });
         }
         c += 1;
         i = next;
     }
     None
-}
-
-/// Start index of the last UTF-8 codepoint in `b` (or 0 if empty).
-#[inline(never)]
-fn last_utf8_start(b: &[u8]) -> usize {
-    if b.is_empty() {
-        return 0;
-    }
-    let mut i = b.len() - 1;
-    while i > 0 && (b[i] & 0xC0) == 0x80 {
-        i -= 1;
-    }
-    i
 }
 
 /// Return the UTF-8 byte index of the cursor (`cursor_from_end` codepoints before end).
@@ -292,67 +272,21 @@ fn cursor_byte_pos(s: &str, from_end: u8) -> usize {
     let mut pos = b.len();
     let mut rem = from_end;
     while rem > 0 && pos > 0 {
-        pos = last_utf8_start(&b[..pos]);
+        pos = utils::format::last_utf8_start(unsafe { b.get_unchecked(..pos) });
         rem -= 1;
     }
     pos
 }
 
-/// Insert UTF-8 slice `ins` at byte index `pos` inside `s` (no `copy_within` / memmove).
-#[inline(never)]
-fn insert_utf8_at<const N: usize>(s: &mut String<N>, pos: usize, ins: &str) {
-    let ib = ins.as_bytes();
-    let ilen = ib.len();
-    if ilen == 0 || s.len() + ilen > N {
-        return;
-    }
-    let old_len = s.len();
-    let p = pos.min(old_len);
-    unsafe {
-        let v = s.as_mut_vec();
-        let _ = v.resize(old_len + ilen, 0);
-        let mut i = old_len;
-        while i > p {
-            i -= 1;
-            v[i + ilen] = v[i];
-        }
-        let mut j = 0usize;
-        while j < ilen {
-            v[p + j] = ib[j];
-            j += 1;
-        }
-    }
-}
-
-/// Delete the UTF-8 codepoint immediately before byte index `pos` inside `s`.
-#[inline(never)]
-fn delete_utf8_before<const N: usize>(s: &mut String<N>, pos: usize) {
-    let old_len = s.len();
-    let p = pos.min(old_len);
-    if p == 0 {
-        return;
-    }
-    let start = last_utf8_start(&s.as_bytes()[..p]);
-    let rm = p - start;
-    unsafe {
-        let v = s.as_mut_vec();
-        let mut i = p;
-        while i < old_len {
-            v[i - rm] = v[i];
-            i += 1;
-        }
-        v.truncate(old_len - rm);
-    }
-}
-
 /// Return the last UTF-8 codepoint slice before `pos` in `s`, if `pos > 0`.
 #[inline(always)]
 fn utf8_slice_before(s: &str, pos: usize) -> Option<&str> {
-    let b = &s.as_bytes()[..pos.min(s.len())];
+    let b = unsafe { s.as_bytes().get_unchecked(..pos.min(s.len())) };
     if b.is_empty() {
         return None;
     }
-    Some(unsafe { core::str::from_utf8_unchecked(&b[last_utf8_start(b)..]) })
+    let start = utils::format::last_utf8_start(b);
+    Some(unsafe { core::str::from_utf8_unchecked(b.get_unchecked(start..)) })
 }
 
 impl TextInputView {
@@ -412,11 +346,8 @@ impl TextInputView {
         let mut i = 0usize;
         let mut idx = 0usize;
         while i < b.len() {
-            let mut next = i + 1;
-            while next < b.len() && (b[next] & 0xC0) == 0x80 {
-                next += 1;
-            }
-            let s = unsafe { core::str::from_utf8_unchecked(&b[i..next]) };
+            let next = next_utf8_end(b, i);
+            let s = unsafe { core::str::from_utf8_unchecked(b.get_unchecked(i..next)) };
             let w = text::str_width(s, &TOMTHUMB).max(4);
             if cx + w + 2 > max_x {
                 break;
@@ -556,7 +487,8 @@ impl View<TextInputModel> for TextInputView {
         if !is_passcode {
             let text_x = 5i16;
             let cur_pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-            let prefix = &model.buffer[..cur_pos];
+            let prefix =
+                unsafe { core::str::from_utf8_unchecked(model.buffer.as_bytes().get_unchecked(..cur_pos)) };
             let prefix_w = text::str_width(prefix, &MUMATRIX);
             let max_w = 118i16;
             let scroll_x = if prefix_w > max_w { prefix_w - max_w } else { 0 };
@@ -776,13 +708,13 @@ fn hold_threshold(model: &TextInputModel) -> u32 {
 #[inline(never)]
 fn delete_at_cursor(model: &mut TextInputModel) {
     let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-    delete_utf8_before(&mut model.buffer, pos);
+    utils::format::delete_utf8_before(&mut model.buffer.buf, &mut model.buffer.len, pos);
 }
 
 #[inline(never)]
 fn insert_at_cursor(model: &mut TextInputModel, s: &str) {
     let pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-    insert_utf8_at(&mut model.buffer, pos, s);
+    utils::format::insert_utf8_at(&mut model.buffer.buf, &mut model.buffer.len, pos, s);
 }
 
 #[inline(never)]
@@ -824,9 +756,14 @@ fn handle_digit_press(model: &mut TextInputModel, key_num: u8) {
 
     if let Some(s) = utf8_nth_slice(model.key_chars(key_num), next_idx) {
         let mut glyph = [0u8; 4];
-        let n = s.len().min(4);
-        glyph[..n].copy_from_slice(&s.as_bytes()[..n]);
-        let g = unsafe { core::str::from_utf8_unchecked(&glyph[..n]) };
+        let sb = s.as_bytes();
+        let n = sb.len().min(4);
+        let mut k = 0;
+        while k < n {
+            glyph[k] = unsafe { *sb.get_unchecked(k) };
+            k += 1;
+        }
+        let g = unsafe { core::str::from_utf8_unchecked(glyph.get_unchecked(..n)) };
         if is_cycle {
             model.press_count = next_idx;
             delete_at_cursor(model);
@@ -901,7 +838,7 @@ mod tests {
     fn test_text_input_nonempty_exit_pops_character() {
         let mut model = TextInputModel::new(16);
         let mut view = TextInputView;
-        let _ = model.buffer.push('A');
+        model.buffer.push_str("A");
 
         // Press Exit
         let ev_press = Event::Key {

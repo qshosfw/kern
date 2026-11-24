@@ -22,7 +22,6 @@ const MAX_WIRE_FILE_SIZE: usize = 12 * 128 * 256;
 pub struct ActiveTransfer {
     pub active: bool,
     pub mode: u8,
-    pub path_len: u8,
     pub transfer_id: u16,
     pub chunk_size: u16,
     pub buf_len: u16,
@@ -30,7 +29,7 @@ pub struct ActiveTransfer {
     pub current_len: u32,
     pub buf_offset: u32,
     pub last_activity_ms: u32,
-    pub path: [u8; 32],
+    pub path: utils::format::InlineStr<31>,
 }
 
 impl ActiveTransfer {
@@ -38,7 +37,6 @@ impl ActiveTransfer {
         Self {
             active: false,
             mode: TRANSFER_MODE_READ,
-            path_len: 0,
             transfer_id: 0,
             chunk_size: 0,
             buf_len: 0,
@@ -46,20 +44,20 @@ impl ActiveTransfer {
             current_len: 0,
             buf_offset: 0,
             last_activity_ms: 0,
-            path: [0u8; 32],
+            path: utils::format::InlineStr::new(),
         }
     }
 
     #[inline(always)]
     pub fn path_str(&self) -> &str {
-        utils::format::ascii_str(&self.path[..self.path_len as usize]).unwrap_or("")
+        self.path.as_str()
     }
 }
 
 pub static mut CURRENT_TRANSFER: ActiveTransfer = ActiveTransfer::empty();
 static mut NEXT_TRANSFER_ID: u16 = 1;
 
-#[inline(always)]
+#[inline(never)]
 fn transfer_mut() -> &'static mut ActiveTransfer {
     unsafe { &mut *core::ptr::addr_of_mut!(CURRENT_TRANSFER) }
 }
@@ -183,6 +181,13 @@ impl<'a, 'b> WireCtx<'a, 'b> {
             core::ptr::copy_nonoverlapping(data.as_ptr(), self.out.as_mut_ptr().add(self.pos), n);
         }
         self.pos += n;
+    }
+
+    #[inline(always)]
+    fn put_packed<T: Copy>(&mut self, val: &T) {
+        self.put(unsafe {
+            core::slice::from_raw_parts(val as *const T as *const u8, core::mem::size_of::<T>())
+        });
     }
 
     #[inline(never)]
@@ -321,14 +326,12 @@ fn config_domain_idx(instance: u8) -> Result<usize, Status> {
 fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     match facet {
         FACET_SYS_IDENTITY => {
-            let serial = bsp::uid::get_hardware_serial64();
+            let mut mac = [0u8; 6];
+            let mut cf = [0u8; 15];
+            let serial = bsp::uid::fill_device_identity(&mut mac, &mut cf);
             c.wr_u32(serial as u32);
             c.wr_u32((serial >> 32) as u32);
-            let mut mac = [0u8; 6];
-            bsp::uid::mac_from_serial64_into(serial, &mut mac);
             c.put(&mac);
-            let mut cf = [0u8; 15];
-            bsp::uid::encode_crockford64_into(serial, &mut cf);
             c.put(&cf[..14]);
             let is_auth = c.hw().wire.session.is_authenticated;
             c.wr_u8(is_auth as u8);
@@ -339,38 +342,51 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
             }
         }
         FACET_SYS_METRICS => {
-            let pwr = unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) };
-            let now = c.now;
-            c.wr_u32(now);
-            c.wr_u32(py32_hal::rcc::sysclk_hz());
-            c.wr_u16(pwr.battery_voltage_mv());
+            let pwr = crate::power_service();
             let app_id = c.hw().orchestrator.active_app_id() as u8;
             let locked = c.hw().orchestrator.is_keypad_locked() as u8;
             let bk_gpio = c.hw().radio.read_gpio_reg();
             let status_led = if bk_gpio == 0xFFFF { 0 } else { (bk_gpio & 3) as u8 };
-            c.put(&[
-                pwr.battery_percentage(),
-                app_id,
-                locked,
-                bsp::pins::FLASHLIGHT.is_high() as u8,
-                status_led,
-            ]);
-            c.wr_u16(bk_gpio);
             let disp = &crate::master_config_ref().display;
             let bl_duty = drivers::backlight::BACKLIGHT_DUTY
                 .load(core::sync::atomic::Ordering::Relaxed);
-            c.put(&[
-                crate::system::is_headless() as u8,
-                bl_duty,
-                disp.contrast,
-                disp.inverted,
-            ]);
+            #[repr(C, packed)]
+            #[derive(Clone, Copy)]
+            struct MetricsWire(u32, u32, u16, [u8; 5], u16, [u8; 4]);
+            let w = MetricsWire(
+                c.now,
+                py32_hal::rcc::sysclk_hz(),
+                pwr.battery_voltage_mv(),
+                [
+                    pwr.battery_percentage(),
+                    app_id,
+                    locked,
+                    bsp::pins::FLASHLIGHT.is_high() as u8,
+                    status_led,
+                ],
+                bk_gpio,
+                [
+                    crate::system::is_headless() as u8,
+                    bl_duty,
+                    disp.contrast,
+                    disp.inverted,
+                ],
+            );
+            c.put_packed(&w);
         }
         FACET_SYS_CALIBRATION => {
-            let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
-            c.wr_u8((calib.is_valid() && calib.is_bound()) as u8);
-            c.wr_u16(calib.xtal_freq_low() as u16);
-            c.wr_u16(calib.battery_calib_const());
+            let calib = crate::calibration_mut();
+            #[repr(C, packed)]
+            #[derive(Clone, Copy)]
+            struct CalibWire(u8, u16, u16);
+            let w = CalibWire(
+                (calib.is_valid()
+                    && crate::services::calibration::CalibrationService::is_device_bound(calib))
+                    as u8,
+                calib.xtal_freq_low() as u16,
+                calib.battery_calib_const(),
+            );
+            c.put_packed(&w);
         }
         FACET_SYS_AUDIO => {
             let rem = c.out.len().saturating_sub(c.pos).min(64);
@@ -388,20 +404,31 @@ fn read_radio_facet(facet: u16, instance: u8, c: &mut WireCtx<'_, '_>) -> Result
     let coord = &crate::radio_state_ref().coord;
     match facet {
         FACET_RADIO_TUNING => {
-            c.wr_u32(ch.effective_rx_freq().raw());
-            c.wr_u32(ch.step.in_hz());
-            c.wr_u8(coord.active_vfo as u8);
+            #[repr(C, packed)]
+            #[derive(Clone, Copy)]
+            struct TuningWire(u32, u32, u8);
+            let w = TuningWire(
+                ch.effective_rx_freq().raw(),
+                ch.step.in_hz(),
+                coord.active_vfo as u8,
+            );
+            c.put_packed(&w);
         }
         FACET_RADIO_MODULATION => {
-            c.wr_u8(ch.modulation.to_u8());
-            c.wr_u32(ch.bandwidth.in_hz());
+            #[repr(C, packed)]
+            #[derive(Clone, Copy)]
+            struct ModWire(u8, u32);
+            let w = ModWire(ch.modulation.to_u8(), ch.bandwidth.in_hz());
+            c.put_packed(&w);
         }
         FACET_RADIO_SQUELCH => {
             let rssi = c.hw().radio.get_rssi();
             let open = c.hw().radio.is_squelch_open() as u8;
-            c.wr_u8(ch.squelch_level);
-            c.wr_u16(rssi);
-            c.wr_u8(open);
+            #[repr(C, packed)]
+            #[derive(Clone, Copy)]
+            struct SqlWire(u8, u16, u8);
+            let w = SqlWire(ch.squelch_level, rssi, open);
+            c.put_packed(&w);
         }
         FACET_RADIO_TRANSMIT => {
             c.put(&[coord.is_slot_tx_active(slot) as u8, ch.power as u8]);
@@ -419,8 +446,7 @@ fn on_handle_get(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), 
         (DOMAIN_RADIO, facet) => return read_radio_facet(facet, handle.instance, c),
         (DOMAIN_UI, FACET_UI_SURFACE) => c.put(&[128, 0, 64, 0, 1, 0, 4]),
         (DOMAIN_UI, FACET_UI_MODAL) => {
-            let modal =
-                unsafe { &*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL) };
+            let modal = crate::orchestrator::compositor::active_modal_mut();
             c.put(&[modal.is_active() as u8, modal.tag]);
         }
         (DOMAIN_UI, FACET_UI_VIEW) | (DOMAIN_APP, FACET_APP_LIFECYCLE) => {
@@ -439,6 +465,7 @@ fn on_handle_get(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), 
         (DOMAIN_STORAGE, _) => {
             let s = c.fs().stats();
             #[repr(C, packed)]
+            #[derive(Clone, Copy)]
             struct StatsWire(u16, u16, u16, u16, u32, u16);
             let w = StatsWire(
                 s.active_files,
@@ -448,7 +475,7 @@ fn on_handle_get(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), 
                 s.wear_cycles,
                 s.total_sectors,
             );
-            c.put(unsafe { core::slice::from_raw_parts(&w as *const _ as *const u8, 14) });
+            c.put_packed(&w);
         }
         _ => return Err(Status::Unsupported),
     }
@@ -496,18 +523,13 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
                             kernel::service::radio::ClientId::SYSTEM,
                             kernel::service::radio::LockTier::FOREGROUND,
                         );
-                        if !coord
-                            .check_tx_permission(coord.effective_tx_slot(), token)
-                            .is_granted()
-                        {
+                        if !coord.request_ptt_start(radio, token).is_granted() {
                             return Err(Status::SafetyBlocked);
                         }
-                        coord.start_tx(radio);
-                        crate::system::set_wire_tx(coord.is_transmitting);
                     } else {
-                        coord.stop_tx(radio);
-                        crate::system::set_wire_tx(false);
+                        coord.request_ptt_stop(radio);
                     }
+                    crate::system::set_wire_tx(coord.is_transmitting);
                 }
                 FACET_RADIO_DIGITAL => {
                     let offset_dhz = c.rd_u16()? as i16;
@@ -517,28 +539,31 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             }
             Ok(())
         }
-        DOMAIN_INPUT if handle.facet == FACET_INPUT_KEY => {
-            let code = KeyCode::from_u8(c.rd_u8()?).ok_or(Status::InvalidArg)?;
-            let state = [KeyState::Pressed, KeyState::Held, KeyState::Released]
-                [c.inp.first().copied().unwrap_or(0).min(2) as usize];
-            crate::system::enqueue_event(Event::Key { code, state });
-            Ok(())
-        }
-        DOMAIN_INPUT if handle.facet == FACET_INPUT_TEXT => {
-            for &b in c.inp.iter().take(32) {
-                if (0x20..=0x7E).contains(&b) {
-                    crate::system::enqueue_event(Event::Char(b as char));
+        DOMAIN_INPUT => match handle.facet {
+            FACET_INPUT_KEY => {
+                let code = KeyCode::from_u8(c.rd_u8()?).ok_or(Status::InvalidArg)?;
+                let state = [KeyState::Pressed, KeyState::Held, KeyState::Released]
+                    [c.inp.first().copied().unwrap_or(0).min(2) as usize];
+                crate::system::enqueue_event(Event::Key { code, state });
+                Ok(())
+            }
+            FACET_INPUT_TEXT => {
+                for &b in c.inp.iter().take(32) {
+                    if (0x20..=0x7E).contains(&b) {
+                        crate::system::enqueue_event(Event::Char(b as char));
+                    }
                 }
+                Ok(())
             }
-            Ok(())
-        }
-        DOMAIN_INPUT if handle.facet == FACET_INPUT_ENCODER => {
-            let delta = c.rd_u8()? as i8;
-            if delta != 0 {
-                crate::system::enqueue_event(Event::Encoder(delta));
+            FACET_INPUT_ENCODER => {
+                let delta = c.rd_u8()? as i8;
+                if delta != 0 {
+                    crate::system::enqueue_event(Event::Encoder(delta));
+                }
+                Ok(())
             }
-            Ok(())
-        }
+            _ => Err(Status::Unsupported),
+        },
         DOMAIN_CONFIG => {
             let domain_idx = config_domain_idx(handle.instance)?;
             let mcfg = crate::master_config();
@@ -566,13 +591,8 @@ fn handle_resource_invoke(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Re
     let arg = c.inp.first().copied().unwrap_or(0);
     match (handle.domain, action_id) {
         (DOMAIN_SYSTEM, ACTION_SYS_REBOOT) => {
-            let mode = match arg {
-                1 => kernel::power::RebootMode::Bootloader,
-                2 => kernel::power::RebootMode::SafeRecovery,
-                _ => kernel::power::RebootMode::Firmware,
-            };
             c.hw().wire.port.flush();
-            kernel::power::PowerControl::reboot_with(mode);
+            kernel::power::PowerControl::reboot_with(kernel::power::RebootMode::from_u8(arg));
         }
         (DOMAIN_SYSTEM, ACTION_SYS_FLASHLIGHT | ACTION_SYS_HEADLESS) => {
             let is_fl = action_id == ACTION_SYS_FLASHLIGHT;
@@ -587,11 +607,7 @@ fn handle_resource_invoke(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Re
                 _ => !cur,
             };
             if is_fl {
-                if enable {
-                    bsp::pins::FLASHLIGHT.set_high();
-                } else {
-                    bsp::pins::FLASHLIGHT.set_low();
-                }
+                primitives::hw_gpio_write(0, enable);
             } else {
                 crate::system::set_headless(c.hw(), enable);
                 c.wr_u8(enable as u8);
@@ -600,9 +616,9 @@ fn handle_resource_invoke(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Re
         (DOMAIN_RADIO, ACTION_RADIO_VFO_TOGGLE) => {
             crate::radio_state().coord.toggle_vfo(&mut c.hw().radio);
         }
-        (DOMAIN_UI, ACTION_MODAL_DISMISS) => unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL)).dismiss();
-        },
+        (DOMAIN_UI, ACTION_MODAL_DISMISS) => {
+            crate::orchestrator::compositor::active_modal_mut().dismiss();
+        }
         (DOMAIN_UI, ACTION_MODAL_CONFIRM | ACTION_MODAL_CANCEL | ACTION_VIEW_LAUNCHER)
         | (DOMAIN_APP, ACTION_APP_KILL) => {
             let (code, state) = match (handle.domain, action_id) {
@@ -626,6 +642,63 @@ fn handle_resource_invoke(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Re
 }
 
 #[inline(never)]
+fn handle_ui_stream(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
+    let offset = c.rd_u32()?;
+    let length = c.rd_u16()?;
+    if handle.domain != DOMAIN_UI || handle.facet != FACET_UI_SURFACE {
+        return Err(Status::Unsupported);
+    }
+    let flat = crate::system_canvas().buffer_flat();
+    if (offset & 0x8000_0000) != 0 {
+        let prev = c.inp;
+        c.wr_u32(0x8000_0000);
+        c.zeroes(4);
+        let mut dirty_mask = 0u16;
+        let mut sent_mask = 0u16;
+        #[cfg(feature = "app_hibernation")]
+        let mut rle_buf = [0u8; 64];
+        for s in 0..16usize {
+            let strip = &flat[s * 64..(s + 1) * 64];
+            let crc = crypto::crc::CrcEngine::crc16_ccitt(strip);
+            let p_off = s * 2;
+            let same = prev.len() >= p_off + 2
+                && u16::from_le_bytes([prev[p_off], prev[p_off + 1]]) == crc;
+            if !same {
+                dirty_mask |= 1 << s;
+                #[cfg(feature = "app_hibernation")]
+                let (src, slen) = {
+                    let rle_len =
+                        kernel::runtime::packbits_compress(strip, &mut rle_buf).unwrap_or(0);
+                    if rle_len > 0 && rle_len < 64 {
+                        (&rle_buf[..rle_len], rle_len)
+                    } else {
+                        (strip, 64)
+                    }
+                };
+                #[cfg(not(feature = "app_hibernation"))]
+                let (src, slen) = (strip, 64usize);
+                if c.pos + 1 + slen <= 116 {
+                    c.wr_u8(slen as u8);
+                    c.put(src);
+                    sent_mask |= 1 << s;
+                }
+            }
+        }
+        c.out[8..10].copy_from_slice(&dirty_mask.to_le_bytes());
+        c.out[10..12].copy_from_slice(&sent_mask.to_le_bytes());
+        return Ok(());
+    }
+    let off = (offset as usize).min(flat.len());
+    let len = (length as usize).min(100).min(flat.len() - off);
+    #[repr(C, packed)]
+    #[derive(Clone, Copy)]
+    struct StreamHdr(u32, u16);
+    c.put_packed(&StreamHdr(off as u32, len as u16));
+    c.put(&flat[off..off + len]);
+    Ok(())
+}
+
+#[inline(never)]
 fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<Status> {
     if !(OP_HANDLE_GET..=OP_HANDLE_STREAM).contains(&opcode) {
         return None;
@@ -644,61 +717,7 @@ fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<Status>
         OP_HANDLE_GET => on_handle_get(handle, c),
         OP_HANDLE_SET => handle_resource_set(handle, c),
         OP_HANDLE_INVOKE => handle_resource_invoke(handle, c),
-        OP_HANDLE_STREAM => c.rd_u32().and_then(|offset| {
-            let length = c.rd_u16()?;
-            if handle.domain != DOMAIN_UI || handle.facet != FACET_UI_SURFACE {
-                return Err(Status::Unsupported);
-            }
-            let flat = crate::system_canvas().buffer_flat();
-            if (offset & 0x8000_0000) != 0 {
-                let prev = c.inp;
-                c.wr_u32(0x8000_0000);
-                c.wr_u16(0);
-                c.wr_u16(0);
-                let mut dirty_mask = 0u16;
-                let mut sent_mask = 0u16;
-                #[cfg(feature = "app_hibernation")]
-                let mut rle_buf = [0u8; 64];
-                for s in 0..16usize {
-                    let strip = &flat[s * 64..(s + 1) * 64];
-                    let crc = crypto::crc::CrcEngine::crc16_ccitt(strip);
-                    let p_off = s * 2;
-                    let same = prev.len() >= p_off + 2
-                        && u16::from_le_bytes([prev[p_off], prev[p_off + 1]]) == crc;
-                    if !same {
-                        dirty_mask |= 1 << s;
-                        #[cfg(feature = "app_hibernation")]
-                        let (src, slen) = {
-                            let rle_len =
-                                kernel::runtime::packbits_compress(strip, &mut rle_buf).unwrap_or(0);
-                            if rle_len > 0 && rle_len < 64 {
-                                (&rle_buf[..rle_len], rle_len)
-                            } else {
-                                (strip, 64)
-                            }
-                        };
-                        #[cfg(not(feature = "app_hibernation"))]
-                        let (src, slen) = (strip, 64usize);
-                        if c.pos + 1 + slen <= 116 {
-                            c.wr_u8(slen as u8);
-                            c.put(src);
-                            sent_mask |= 1 << s;
-                        }
-                    }
-                }
-                c.out[8] = dirty_mask as u8;
-                c.out[9] = (dirty_mask >> 8) as u8;
-                c.out[10] = sent_mask as u8;
-                c.out[11] = (sent_mask >> 8) as u8;
-                return Ok(());
-            }
-            let off = (offset as usize).min(flat.len());
-            let len = (length as usize).min(100).min(flat.len() - off);
-            c.wr_u32(off as u32);
-            c.wr_u16(len as u16);
-            c.put(&flat[off..off + len]);
-            Ok(())
-        }),
+        OP_HANDLE_STREAM => handle_ui_stream(handle, c),
         _ => return None,
     };
     Some(res.err().unwrap_or(Status::Ok))
@@ -815,6 +834,11 @@ fn stream_file_crc32(fs: &mut crate::services::SystemStorage, path: &str, size: 
 }
 
 #[inline(never)]
+fn is_calib_path(path: &str) -> bool {
+    path == CALIB_FILE_PATH
+}
+
+#[inline(never)]
 fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let mode = c.rd_u8()?;
     let total_size = c.rd_u32()?;
@@ -830,7 +854,7 @@ fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
         if req_sz > MAX_WIRE_FILE_SIZE {
             return Err(Status::BadLength);
         }
-        let is_calib = path == CALIB_FILE_PATH;
+        let is_calib = is_calib_path(path);
         if is_calib && req_sz != 512 {
             return Err(Status::SafetyBlocked);
         }
@@ -849,7 +873,6 @@ fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
         id
     };
     let chunk_size = req_chunk.clamp(16, 120);
-    let path_bytes = path.as_bytes();
     let t = transfer_mut();
     *t = ActiveTransfer::empty();
     t.active = true;
@@ -858,14 +881,12 @@ fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     t.chunk_size = chunk_size;
     t.total_size = total_size;
     t.last_activity_ms = c.now;
-    unsafe {
-        core::ptr::copy_nonoverlapping(path_bytes.as_ptr(), t.path.as_mut_ptr(), path_bytes.len());
-    }
-    t.path_len = path_bytes.len() as u8;
+    t.path.set(path);
 
-    c.wr_u16(tid);
-    c.wr_u16(chunk_size);
-    c.wr_u32(existing_size);
+    #[repr(C, packed)]
+    #[derive(Clone, Copy)]
+    struct OpenReply(u16, u16, u32);
+    c.put_packed(&OpenReply(tid, chunk_size, existing_size));
     Ok(())
 }
 
@@ -878,7 +899,6 @@ fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let transfer = active_transfer_mut(tid)?;
     transfer.last_activity_ms = c.now;
 
-    c.wr_u16(tid);
     if transfer.mode == TRANSFER_MODE_WRITE {
         let chunk_len = data.len();
         let end = off.checked_add(chunk_len).ok_or(Status::InvalidArg)?;
@@ -886,7 +906,7 @@ fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
             return Err(Status::BadLength);
         }
         let staging = crate::data::arena::staging_buf();
-        if transfer.path_str() == CALIB_FILE_PATH {
+        if is_calib_path(transfer.path_str()) {
             if end > staging.len() {
                 return Err(Status::BadLength);
             }
@@ -904,8 +924,10 @@ fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
         }
         let new_len = end as u32;
         transfer.current_len = transfer.current_len.max(new_len);
-        c.wr_u16(chunk_len as u16);
-        c.wr_u32(new_len);
+        #[repr(C, packed)]
+        #[derive(Clone, Copy)]
+        struct WriteAck(u16, u16, u32);
+        c.put_packed(&WriteAck(tid, chunk_len as u16, new_len));
     } else {
         let len = (length as usize).min(120);
         let read_sz = {
@@ -915,8 +937,10 @@ fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
                 .read_file_at(transfer.path_str(), off, dst)
                 .unwrap_or(0)
         };
-        c.wr_u32(off as u32);
-        c.wr_u16(read_sz as u16);
+        #[repr(C, packed)]
+        #[derive(Clone, Copy)]
+        struct ReadHdr(u16, u32, u16);
+        c.put_packed(&ReadHdr(tid, off as u32, read_sz as u16));
         c.pos = 8 + read_sz;
     }
     Ok(())
@@ -933,12 +957,12 @@ fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let mut actual_crc = 0u32;
     if transfer.mode == TRANSFER_MODE_WRITE {
         let total_len = transfer.current_len as usize;
-        if transfer.path_str() == CALIB_FILE_PATH {
+        if is_calib_path(transfer.path_str()) {
             let staging = crate::data::arena::staging_buf();
             if total_len != 512 {
                 return Err(Status::SafetyBlocked);
             }
-            let calib = unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
+            let calib = crate::calibration_mut();
             calib
                 .commit_slice(c.fs(), staging)
                 .map_err(|_| Status::SafetyBlocked)?;
@@ -961,8 +985,10 @@ fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
         invalidate_apps_if_needed(transfer.path_str());
     }
 
-    c.wr_u16(tid);
-    c.wr_u32(actual_crc);
+    #[repr(C, packed)]
+    #[derive(Clone, Copy)]
+    struct CloseReply(u16, u32);
+    c.put_packed(&CloseReply(tid, actual_crc));
     Ok(())
 }
 
@@ -973,7 +999,7 @@ fn on_transfer_abort(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     if let Ok(transfer) = active_transfer_mut(tid) {
         transfer.active = false;
         let path = transfer.path_str();
-        if transfer.mode == TRANSFER_MODE_WRITE && path != CALIB_FILE_PATH {
+        if transfer.mode == TRANSFER_MODE_WRITE && !is_calib_path(path) {
             let _ = c.fs().remove(path);
             invalidate_apps_if_needed(path);
         }
@@ -995,9 +1021,14 @@ fn on_transfer_stat(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     } else {
         0
     };
-    c.wr_u16(1 | (u16::from(is_dir) << 8));
-    c.wr_u32(sz as u32);
-    c.wr_u32(crc);
+    #[repr(C, packed)]
+    #[derive(Clone, Copy)]
+    struct StatReply(u16, u32, u32);
+    c.put_packed(&StatReply(
+        1 | (u16::from(is_dir) << 8),
+        sz as u32,
+        crc,
+    ));
     Ok(())
 }
 
@@ -1034,12 +1065,12 @@ fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
                     next_cursor = idx;
                     return;
                 }
+                #[repr(C, packed)]
+                struct DirEntHdr(u8, u32, u8);
+                let hdr = DirEntHdr(is_dir as u8, size as u32, name_len as u8);
                 unsafe {
                     let p = out_ptr.add(pos);
-                    *p = is_dir as u8;
-                    let sz = (size as u32).to_le_bytes();
-                    core::ptr::copy_nonoverlapping(sz.as_ptr(), p.add(1), 4);
-                    *p.add(5) = name_len as u8;
+                    core::ptr::copy_nonoverlapping(&hdr as *const _ as *const u8, p, 6);
                     core::ptr::copy_nonoverlapping(b.as_ptr(), p.add(6), name_len);
                 }
                 pos += 6 + name_len;

@@ -110,11 +110,10 @@ fn rescue_raw_calibration(
 }
 
 #[cfg(feature = "filesystem")]
-fn has_valid_calib_file(fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>) -> bool {
+fn has_valid_calib_file(vfs: &mut SystemStorage) -> bool {
     let buf = crate::services::staging_buf();
-    ["/sys/calib.dat", "/sys/calib.bak"].iter().any(|p| {
-        fs.read_file(p, buf) == Ok(512) && crate::services::calibration::is_valid_calibration(buf)
-    })
+    crate::services::calibration::read_valid_calib(vfs, "/sys/calib.dat", buf)
+        || crate::services::calibration::read_valid_calib(vfs, "/sys/calib.bak", buf)
 }
 
 #[cfg(feature = "filesystem")]
@@ -224,8 +223,7 @@ fn recover_calibration_to_fs(
     vfs: &mut SystemStorage,
 ) {
     let raw_calib = crate::services::staging_buf();
-    let from_prov = vfs.fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
-        && crate::services::calibration::is_valid_calibration(raw_calib);
+    let from_prov = crate::services::calibration::read_valid_calib(vfs, "/prov/calib.dat", raw_calib);
     let has_hw_calib = from_prov || rescue_raw_calibration(&mut vfs.fs, raw_calib);
     if has_hw_calib && crate::system::admits_physical_input() {
         render_boot_screen(lcd, "Restoring", "Calibration...", 80, false);
@@ -272,7 +270,7 @@ pub fn mount_or_format<'a>(
             "Safe Mode",
             "Storage unmounted.\nRepair in Kern Dock.",
         );
-    } else if !has_valid_calib_file(&mut filesystem.fs) {
+    } else if !has_valid_calib_file(filesystem) {
         recover_calibration_to_fs(lcd, radio, filesystem);
     }
 }

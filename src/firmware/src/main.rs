@@ -75,44 +75,54 @@ pub static mut CANVAS: gfx::Canvas = gfx::Canvas::new();
 pub static mut AUDIO_CAPTURE: drivers::audio::AudioCaptureDriver<bsp::BspVoiceAdc> =
     drivers::audio::AudioCaptureDriver::new(bsp::BspVoiceAdc);
 
-#[inline(always)]
+#[inline(never)]
 pub fn master_config() -> &'static mut MasterConfig {
     unsafe { (*core::ptr::addr_of_mut!(MASTER_CONFIG)).assume_init_mut() }
 }
 
 #[inline(always)]
 pub fn master_config_ref() -> &'static MasterConfig {
-    unsafe { (*core::ptr::addr_of!(MASTER_CONFIG)).assume_init_ref() }
+    master_config()
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn radio_state() -> &'static mut RadioState {
     unsafe { (*core::ptr::addr_of_mut!(RADIO_STATE)).assume_init_mut() }
 }
 
 #[inline(always)]
 pub fn radio_state_ref() -> &'static RadioState {
-    unsafe { (*core::ptr::addr_of!(RADIO_STATE)).assume_init_ref() }
+    radio_state()
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn system_canvas() -> &'static mut gfx::Canvas {
     unsafe { &mut *core::ptr::addr_of_mut!(CANVAS) }
 }
 
-#[inline(always)]
+#[inline(never)]
+pub fn power_service() -> &'static mut SystemPower {
+    unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) }
+}
+
+#[inline(never)]
+pub fn calibration_mut() -> &'static mut services::calibration::SystemCalibration {
+    unsafe { &mut *core::ptr::addr_of_mut!(CALIBRATION) }
+}
+
+#[inline(never)]
 pub fn audio_capture_mut() -> &'static mut drivers::audio::AudioCaptureDriver<bsp::BspVoiceAdc> {
     unsafe { &mut *core::ptr::addr_of_mut!(AUDIO_CAPTURE) }
 }
 
 #[cfg(not(test))]
-#[inline(always)]
+#[inline(never)]
 pub fn kern_hw() -> &'static mut SystemHardware<'static> {
     unsafe { (*core::ptr::addr_of_mut!(KERN_HW)).assume_init_mut() }
 }
 
 #[cfg(not(test))]
-#[inline(always)]
+#[inline(never)]
 pub fn kern_fs() -> &'static mut crate::services::SystemStorage<'static> {
     unsafe { (*core::ptr::addr_of_mut!(KERN_FS)).assume_init_mut() }
 }
@@ -214,10 +224,9 @@ unsafe extern "C" fn pre_init() {
 /// Bind active factory/user calibration bytes and battery discharge curve to runtime drivers.
 #[inline(never)]
 pub(crate) fn apply_active_calibration<'a>(radio: &mut Bk4829<'a, bsp::RadioBus>) {
-    let calib = unsafe { &*core::ptr::addr_of!(CALIBRATION) };
+    let calib = calibration_mut();
     radio.attach_calibration(calib.raw_bytes());
-    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
-    power_service
+    power_service()
         .battery_driver
         .load_calibration_curve(calib.battery_curve());
 }
@@ -233,7 +242,7 @@ fn early_init() -> Board {
         MasterConfig::init_in_place(core::ptr::addr_of_mut!(MASTER_CONFIG) as *mut MasterConfig);
         CONFIG_INITIALIZED.store(true, core::sync::atomic::Ordering::Release);
         RadioState::init_in_place(core::ptr::addr_of_mut!(RADIO_STATE) as *mut RadioState);
-        (*core::ptr::addr_of_mut!(CALIBRATION)).init_defaults();
+        calibration_mut().init_defaults();
         pac::SCB_VTOR.write_volatile(hal::flash::FIRMWARE_MIN_ADDR);
         cortex_m::interrupt::enable();
     }
@@ -390,10 +399,7 @@ fn main() -> ! {
         );
         core::ptr::write(core::ptr::addr_of_mut!((*p).filesystem), filesystem);
         #[cfg(feature = "usb")]
-        core::ptr::write(
-            core::ptr::addr_of_mut!((*p).usb),
-            drivers::usb::UsbDriver::new(),
-        );
+        (*p).usb.init_zeroed();
         #[cfg(feature = "uart")]
         core::ptr::write(
             core::ptr::addr_of_mut!((*p).uart),

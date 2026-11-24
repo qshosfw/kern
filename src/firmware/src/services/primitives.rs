@@ -181,7 +181,7 @@ pub fn hw_gpio_read(pin: u8) -> bool {
     if let Some(&p) = HW_GPIO_PINS.get(pin as usize) {
         p.is_high() ^ (pin == 1)
     } else if pin == 4 {
-        unsafe { (*core::ptr::addr_of!(crate::POWER_SERVICE)).is_charging() }
+        crate::power_service().is_charging()
     } else {
         false
     }

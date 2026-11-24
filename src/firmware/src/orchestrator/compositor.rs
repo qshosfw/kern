@@ -40,10 +40,6 @@ pub struct ModalCompositor {
     pub last_hold_ms: u32,
     pub modal: ActiveModal,
     pub toast: ToastModel,
-    pub toast_view: ToastView,
-    pub popup_view: PopupView,
-    #[cfg(feature = "text_input")]
-    pub text_view: TextInputView,
 }
 
 impl ModalCompositor {
@@ -53,10 +49,6 @@ impl ModalCompositor {
             last_hold_ms: 0,
             modal: ActiveModal::None,
             toast: ToastModel::new(),
-            toast_view: ToastView::new(),
-            popup_view: PopupView::new(),
-            #[cfg(feature = "text_input")]
-            text_view: TextInputView::new(),
         }
     }
 
@@ -95,6 +87,19 @@ impl ModalCompositor {
     }
 
     #[inline(never)]
+    unsafe fn reset_slot(&mut self, tag: u8, disc: u8) -> *mut u8 {
+        crate::orchestrator::sink_enter_keys();
+        self.tag = tag;
+        self.last_hold_ms = 0;
+        let ptr = (&mut self.modal as *mut ActiveModal).cast::<u8>();
+        unsafe {
+            core::ptr::write_bytes(ptr, 0, core::mem::size_of::<ActiveModal>());
+            *ptr = disc;
+        }
+        ptr
+    }
+
+    #[inline(never)]
     pub fn show_confirm(
         &mut self,
         tag: u8,
@@ -103,19 +108,18 @@ impl ModalCompositor {
         confirm: &'static str,
         cancel: &'static str,
     ) {
-        crate::orchestrator::sink_enter_keys();
-        self.tag = tag;
-        self.last_hold_ms = 0;
-        self.modal = ActiveModal::Popup(PopupModel::new());
+        unsafe { self.reset_slot(tag, 1) };
         if let ActiveModal::Popup(model) = &mut self.modal {
+            model.anim = gfx::gui::animation::TransitionProgress::new(4);
+            model.repeater = KeyRepeater::new(8, 2);
             if !confirm.is_empty() {
                 model.confirm_label = Some(confirm);
             }
             if !cancel.is_empty() {
                 model.cancel_label = Some(cancel);
             }
-            let _ = model.custom_title.push_str(title);
-            wrap_alert_str(message, &mut model.custom_msg);
+            model.custom_title.set(title);
+            wrap_alert_inline(message, &mut model.custom_msg);
         }
     }
 
@@ -156,13 +160,14 @@ impl ModalCompositor {
         digits_only: bool,
         is_passcode: bool,
     ) -> &mut TextInputModel {
-        crate::orchestrator::sink_enter_keys();
-        self.tag = tag;
-        self.modal = ActiveModal::TextInput(TextInputModel::new(max_len));
+        unsafe { self.reset_slot(tag, 2) };
         let ActiveModal::TextInput(model) = &mut self.modal else {
             unreachable!()
         };
-        let _ = model.custom_title.push_str(title);
+        model.is_k1 = true;
+        model.max_len = max_len;
+        model.hold_ticks = 24;
+        model.custom_title.set(title);
         model.is_passcode = is_passcode;
         model.digits_only = digits_only;
         model.show_header = true;
@@ -203,48 +208,42 @@ impl ModalCompositor {
         m
     }
 
+    #[inline(never)]
     pub fn show_sheet(&mut self, tag: u8, sheet: OptionSheet) {
-        crate::orchestrator::sink_enter_keys();
-        self.tag = tag;
-        let cfg = crate::master_config_ref();
-        let is_animated = cfg.display.animations_enabled();
-        let anim = if is_animated {
-            gfx::gui::animation::TransitionProgress::new(4)
-        } else {
-            gfx::gui::animation::TransitionProgress::completed(4)
-        };
-        let mut rep = KeyRepeater::new(8, 2);
-        rep.configure(
-            cfg.keys.hold_delay_ms(),
-            cfg.keys.repeat_rate_ms(),
-            cfg.keys.fast_scroll != 0,
-        );
-        self.modal = ActiveModal::Sheet(
-            core::cell::Cell::new(0),
-            anim,
-            gfx::gui::animation::MarqueeScroller::idle(),
-            rep,
-            sheet,
-        );
+        unsafe { self.reset_slot(tag, 3) };
+        if let ActiveModal::Sheet(_, anim, _, rep, slot_sheet) = &mut self.modal {
+            let cfg = crate::master_config_ref();
+            *anim = if cfg.display.animations_enabled() {
+                gfx::gui::animation::TransitionProgress::new(4)
+            } else {
+                gfx::gui::animation::TransitionProgress::completed(4)
+            };
+            *rep = KeyRepeater::new(8, 2);
+            rep.configure(
+                cfg.keys.hold_delay_ms(),
+                cfg.keys.repeat_rate_ms(),
+                cfg.keys.fast_scroll != 0,
+            );
+            *slot_sheet = sheet;
+        }
     }
 
     #[inline(never)]
     pub fn prompt_number(&mut self, tag: u8, title: &str, unit: &str, req: &::abi::KrxNumReq) {
-        crate::orchestrator::sink_enter_keys();
-        self.tag = tag;
-        self.modal = ActiveModal::NumberInput(NumberInputModel::new(
-            req.value,
-            req.min,
-            req.max,
-            req.step,
-            req.decimals,
-        ));
+        unsafe { self.reset_slot(tag, 4) };
         if let ActiveModal::NumberInput(m) = &mut self.modal {
+            m.value = req.value.clamp(req.min, req.max);
+            m.min = req.min;
+            m.max = req.max;
+            m.step = req.step.max(1);
+            m.decimals = req.decimals.min(4);
+            m.anim = if crate::master_config_ref().display.animations_enabled() {
+                gfx::gui::animation::TransitionProgress::new(4)
+            } else {
+                gfx::gui::animation::TransitionProgress::completed(4)
+            };
             m.set_title(title);
             m.set_unit(unit);
-            if !crate::master_config_ref().display.animations_enabled() {
-                m.anim.jump_complete();
-            }
         }
     }
 
@@ -254,7 +253,7 @@ impl ModalCompositor {
         match &mut self.modal {
             ActiveModal::None => None,
             ActiveModal::Popup(model) => {
-                if self.popup_view.on_event(model, event) {
+                if PopupView.on_event(model, event) {
                     if matches!(event, Event::Tick) && model.is_hold_animating() {
                         let dt = super::tick_dt_ms(&mut self.last_hold_ms, 250);
                         if model.advance_hold(dt) {
@@ -281,7 +280,7 @@ impl ModalCompositor {
             }
             #[cfg(feature = "text_input")]
             ActiveModal::TextInput(model) => {
-                self.text_view.on_event(model, event);
+                TextInputView::new().on_event(model, event);
                 if model.is_done {
                     Some(ModalResult::TextInputDone {
                         tag,
@@ -343,11 +342,11 @@ impl ModalCompositor {
         match &self.modal {
             ActiveModal::None => {}
             ActiveModal::Popup(model) => {
-                self.popup_view.render(canvas, model);
+                PopupView.render(canvas, model);
             }
             #[cfg(feature = "text_input")]
             ActiveModal::TextInput(model) => {
-                self.text_view.render(canvas, model);
+                TextInputView::new().render(canvas, model);
             }
             ActiveModal::Sheet(hover_ov, anim, marquee, _, sheet) => {
                 let animated = crate::master_config_ref().display.animations_enabled();
@@ -365,29 +364,34 @@ impl ModalCompositor {
             }
         }
         if self.toast.is_active {
-            self.toast_view.render(canvas, &self.toast);
+            ToastView.render(canvas, &self.toast);
         }
     }
 }
 
 pub static mut ACTIVE_MODAL: ModalCompositor = ModalCompositor::new();
 
+#[inline(never)]
+pub fn active_modal_mut() -> &'static mut ModalCompositor {
+    unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_MODAL) }
+}
+
 pub const TAG_LOW_BATTERY_POPUP: u8 = 0xFE;
 pub const TAG_SYSTEM_ALERT: u8 = 0xFD;
 
 const MAX_ALERT_LINE_PX: i16 = 112;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct SystemAlert {
-    pub title: heapless::String<18>,
-    pub message: heapless::String<88>,
+    pub title: utils::format::InlineStr<18>,
+    pub message: utils::format::InlineStr<88>,
 }
 
 impl SystemAlert {
     pub const fn empty() -> Self {
         Self {
-            title: heapless::String::new(),
-            message: heapless::String::new(),
+            title: utils::format::InlineStr::new(),
+            message: utils::format::InlineStr::new(),
         }
     }
 }
@@ -410,9 +414,8 @@ impl AlertQueue {
             return;
         }
         self.has_alert = true;
-        self.slot.title.clear();
-        let _ = self.slot.title.push_str(title);
-        wrap_alert_str(message, &mut self.slot.message);
+        self.slot.title.set(title);
+        wrap_alert_inline(message, &mut self.slot.message);
     }
 
     fn peek(&self) -> Option<&SystemAlert> {
@@ -425,7 +428,7 @@ impl AlertQueue {
 
     #[cfg(test)]
     fn pop(&mut self) -> Option<SystemAlert> {
-        let alert = self.peek().cloned()?;
+        let alert = self.peek().copied()?;
         self.discard_head();
         Some(alert)
     }
@@ -492,13 +495,10 @@ fn wrap_alert_bytes(raw: &str, dst: &mut [u8]) -> usize {
     pos
 }
 
-/// Non-generic word-wrapper into `String<88>` without `Vec::resize_default` codegen bloat.
+/// Non-generic word-wrapper directly into `InlineStr<88>`.
 #[inline(never)]
-fn wrap_alert_str(raw: &str, out: &mut heapless::String<88>) {
-    let mut buf = [0u8; 88];
-    let len = wrap_alert_bytes(raw, &mut buf);
-    out.clear();
-    let _ = out.push_str(unsafe { core::str::from_utf8_unchecked(&buf[..len]) });
+fn wrap_alert_inline(raw: &str, out: &mut utils::format::InlineStr<88>) {
+    out.len = wrap_alert_bytes(raw, &mut out.buf) as u8;
 }
 
 /// Word-wraps `raw` for TomThumb rendering inside the modal/sheet viewport.
@@ -541,8 +541,8 @@ pub fn clear_system_alerts() {
 
 /// Presents the next queued system notification as a modal dialog.
 pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
-    let modal_active = unsafe { (*core::ptr::addr_of!(ACTIVE_MODAL)).is_active() };
-    if modal_active {
+    let modal = active_modal_mut();
+    if modal.is_active() {
         return false;
     }
     let q = unsafe { &mut *core::ptr::addr_of_mut!(SYSTEM_ALERTS) };
@@ -551,30 +551,26 @@ pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
     };
     ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Prompt);
     crate::orchestrator::sink_exit_key();
-    unsafe {
-        (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_confirm(
-            TAG_SYSTEM_ALERT,
-            alert.title.as_str(),
-            alert.message.as_str(),
-            "OK",
-            "",
-        );
-    }
+    modal.show_confirm(
+        TAG_SYSTEM_ALERT,
+        alert.title.as_str(),
+        alert.message.as_str(),
+        "OK",
+        "",
+    );
     q.discard_head();
     true
 }
 
 /// Displays an immediate non-blocking Low Battery alert modal on top of active screen.
 pub fn show_low_battery_popup() {
-    unsafe {
-        (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_confirm(
-            TAG_LOW_BATTERY_POPUP,
-            "Low Battery",
-            "Charge radio soon.",
-            "OK",
-            "",
-        );
-    }
+    active_modal_mut().show_confirm(
+        TAG_LOW_BATTERY_POPUP,
+        "Low Battery",
+        "Charge radio soon.",
+        "OK",
+        "",
+    );
 }
 
 pub struct OsCompositor;
@@ -633,7 +629,7 @@ impl OsCompositor {
         ctx: &'a SysContext<'a, '_>,
         lock_mgr: &KeypadLockManager,
     ) {
-        let modal_ref = unsafe { &*core::ptr::addr_of!(ACTIVE_MODAL) };
+        let modal_ref = active_modal_mut();
         let has_modal = modal_ref.is_active();
         let has_blocking_modal = !matches!(modal_ref.modal, ActiveModal::None);
         #[cfg(feature = "text_input")]

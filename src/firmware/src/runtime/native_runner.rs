@@ -16,14 +16,14 @@ use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
 #[cfg(feature = "krx_paged")]
-use kernel::runtime::paged::{FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack};
+use kernel::runtime::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
 use kernel::runtime::paged::StreamingLeafState;
 use kernel::runtime::reloc::apply_relocs;
 use kernel::runtime::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 
 pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_WORDS;
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
-pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
+pub const MICRO_DAEMON_ARENA_BYTES: usize = crate::data::arena::ZONE_A_MAX_BYTES;
 pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
 
 /// Resolve per-package P0 overlay window size from `SectionExecution::page_size` (defaults to 1024 B).
@@ -63,12 +63,11 @@ pub(crate) struct NativeExecSlot {
     pub(crate) current_slot: u8,
     pub(crate) code_size: u16,
     pub(crate) status_bar_has_custom: bool,
-    pub(crate) pkg_path_len: u8,
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
     pub(crate) pending_start_arg: u32,
     pub(crate) caps: CapabilitySet,
-    pub(crate) pkg_path: [u8; 31],
+    pub(crate) pkg_path: utils::format::InlineStr<31>,
     pub(crate) overlay: PagedOverlay,
     pub(crate) status_bar: kernel::proc::abi::KrxStatusBar,
 }
@@ -76,21 +75,23 @@ pub(crate) struct NativeExecSlot {
 impl NativeExecSlot {
     #[inline(always)]
     pub(crate) fn pkg_path_str(&self) -> &str {
-        let len = (self.pkg_path_len as usize).min(self.pkg_path.len());
-        utils::format::ascii_str(&self.pkg_path[..len]).unwrap_or("")
+        let len = self.pkg_path.len as usize;
+        if len > self.pkg_path.buf.len() {
+            return "";
+        }
+        utils::format::ascii_str(&self.pkg_path.buf[..len]).unwrap_or("")
     }
 
+    #[inline(always)]
     pub(crate) fn set_pkg_path(&mut self, path: &str) {
-        let bytes = path.as_bytes();
-        let n = bytes.len().min(self.pkg_path.len());
-        self.pkg_path[..n].copy_from_slice(&bytes[..n]);
-        self.pkg_path_len = n as u8;
+        self.pkg_path.set(path);
     }
 
     #[inline(never)]
     pub(crate) fn query_region(&self, rk: RegionKind) -> Option<MemoryRegionDescriptor> {
-        let load_base = arena_base_ptr() as u32;
-        let max_arena = (NATIVE_EXEC_BUFFER_WORDS * 4) as u32;
+        let zone_a_off = crate::data::arena::zone_a_used_bytes();
+        let load_base = crate::data::arena::zone_b_base_ptr() as u32;
+        let max_arena = crate::data::arena::TRANSIENT_ARENA_BYTES.saturating_sub(zone_a_off) as u32;
         let is_p0 = self.profile.is_structured_paged();
         let overlay_size = if is_p0 {
             let ws = unsafe { (*self.overlay.leaf).window_size } as u32;
@@ -197,10 +198,10 @@ pub fn transient_arena_bytes_mut() -> &'static mut [u8; NATIVE_EXEC_BUFFER_WORDS
 
 #[inline(always)]
 pub(crate) fn slot_ref() -> &'static NativeExecSlot {
-    unsafe { (*core::ptr::addr_of!(NATIVE_SLOT)).assume_init_ref() }
+    slot_mut()
 }
 
-#[inline(always)]
+#[inline(never)]
 pub(crate) fn slot_mut() -> &'static mut NativeExecSlot {
     unsafe { (*core::ptr::addr_of_mut!(NATIVE_SLOT)).assume_init_mut() }
 }
@@ -214,8 +215,11 @@ pub fn active_native_app_name() -> &'static str {
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn active_native_caps() -> CapabilitySet {
+    if let Some(bg) = super::background::BgManager::active_bg_slot() {
+        return bg.caps;
+    }
     let slot = slot_ref();
     if slot.is_loaded {
         slot.caps
@@ -224,11 +228,14 @@ pub fn active_native_caps() -> CapabilitySet {
     }
 }
 
-/// Mandatory ARMv6-M instruction/data barrier after code modification or page-in (KRX-ABI 2.5.0 Section 7.2 Step 4, F7).
+/// Shared instruction-pipeline barrier for Cortex-M0+ SRAM code modification (`DSB; ISB`).
 #[inline(always)]
-fn flush_instruction_pipeline() {
-    cortex_m::asm::dsb();
-    cortex_m::asm::isb();
+pub(crate) fn flush_instruction_pipeline() {
+    #[cfg(target_arch = "arm")]
+    {
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+    }
 }
 
 #[inline(never)]
@@ -255,6 +262,21 @@ fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bo
     ok
 }
 
+#[cfg(feature = "krx_paged")]
+#[inline(never)]
+fn stream_paged_slot(
+    slot_off: usize,
+    page_size: usize,
+    entry: &kernel::runtime::BlockEntry,
+) -> bool {
+    let read_len = (entry.size as usize).min(page_size);
+    if slot_off + read_len > crate::data::arena::zone_b_cache_bytes() {
+        return false;
+    }
+    let vma = crate::data::arena::zone_b_base_ptr() as usize + slot_off;
+    read_active_pkg_region(entry.flash_offset as usize, vma, read_len)
+}
+
 /// Normative Demand-Paged Block Fault Handler (`krx_page_fault`, KRX-ABI 2.5.0 Section 7.2).
 ///
 /// Resolves `block_id` in the fixed-window cache (`slot.cache`). On a cache miss,
@@ -265,6 +287,7 @@ fn read_active_pkg_region(flash_offset: usize, dst_vma: usize, len: usize) -> bo
 #[inline(never)]
 pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
     let slot = slot_mut();
+    let slot_pid = slot.pid;
     let entry_fallback = slot.entry_point;
     let Some(win) = slot.window_mut() else {
         return entry_fallback;
@@ -280,113 +303,121 @@ pub fn krx_page_fault(block_id: u8, func_offset: u16) -> usize {
     }
 
     let slot_byte_off = win.cache.slot_byte_offset(slot_idx);
-    let slot_vma = (arena_base_ptr() as usize) + slot_byte_off;
+    let page_size = win.cache.page_size as usize;
 
     if !is_hit {
-        // Stream block from SPI Flash via active context storage
-        let read_len = (block_entry.size as usize).min(win.cache.page_size as usize);
-        if slot_byte_off + read_len > PAGED_CACHE_MAX_BYTES {
+        if !stream_paged_slot(slot_byte_off, page_size, &block_entry) {
             return 0;
         }
-        if !read_active_pkg_region(block_entry.flash_offset as usize, slot_vma, read_len) {
-            return 0;
-        }
-
-        // Record page fault in active process ledger (Section 13.11)
-        if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot.pid) {
+        if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(slot_pid) {
             pcb.ledger.record_page_fault();
+        }
+        if (block_entry.flags & kernel::runtime::paged::BLOCK_FLAG_HINT_NEXT) != 0
+            && let Some((pf_slot, pf_entry)) = win.cache.prepare_prefetch_next(block_id)
+        {
+            let _ = stream_paged_slot(win.cache.slot_byte_offset(pf_slot), page_size, &pf_entry);
         }
     }
 
     slot.current_block = block_id;
     slot.current_slot = slot_idx as u8;
+    let slot_vma = crate::data::arena::zone_b_base_ptr() as usize + slot_byte_off;
     (slot_vma + (func_offset as usize)) | 1
 }
 
 /// Cross-block PLT call helper with LR-thunking shadow stack push (KRX-ABI 2.5.0 Section 7.2).
 #[cfg(feature = "krx_paged")]
-pub fn krx_call_paged(
-    target_block_id: u8,
-    target_offset: u16,
-    return_offset: u16,
-) -> Result<usize, PagedError> {
+#[inline(never)]
+pub fn krx_call_paged(target_block_id: u8, target_offset: u16, return_offset: u16) -> usize {
     let slot = slot_mut();
     let caller_block_id = slot.current_block;
     let caller_slot = slot.current_slot;
-    let win = slot.window_mut().ok_or(PagedError::InvalidBlockId)?;
-    win.shadow_stack.push(ReturnFrame {
-        caller_block_id,
-        caller_slot,
-        return_offset,
-    })?;
+    let Some(win) = slot.window_mut() else {
+        return 0;
+    };
+    if win
+        .shadow_stack
+        .push(ReturnFrame {
+            caller_block_id,
+            caller_slot,
+            return_offset,
+        })
+        .is_err()
+    {
+        return 0;
+    }
     let target_addr = krx_page_fault(target_block_id, target_offset);
     if target_addr == 0 {
         if let Some(w) = slot_mut().window_mut() {
             let _ = w.shadow_stack.pop();
         }
-        return Err(PagedError::StorageReadFailed);
     }
-    Ok(target_addr)
+    target_addr
 }
 
 /// Normative OS Return-Thunk (`krx_return_thunk`, KRX-ABI 2.5.0 Section 7.2).
 /// Restores caller's block into the fixed-window cache if it was evicted while the callee ran.
 #[cfg(feature = "krx_paged")]
-pub fn krx_return_thunk() -> Result<usize, PagedError> {
-    let win = slot_mut().window_mut().ok_or(PagedError::InvalidBlockId)?;
-    let frame = win.shadow_stack.pop()?;
-    let resume_addr = krx_page_fault(frame.caller_block_id, frame.return_offset);
-    if resume_addr == 0 {
-        return Err(PagedError::StorageReadFailed);
+pub fn krx_return_thunk() -> usize {
+    let Some(win) = slot_mut().window_mut() else {
+        return 0;
+    };
+    let Ok(frame) = win.shadow_stack.pop() else {
+        return 0;
+    };
+    krx_page_fault(frame.caller_block_id, frame.return_offset)
+}
+
+/// Loads and validates a P0 leaf into `overlay_vma` in its own stack frame so `LeafEntry`,
+/// `raw` buffer, and `KernFS` I/O frames are completely popped before the leaf executes.
+#[inline(never)]
+fn prepare_p0_leaf(cur_id: u8) -> Option<usize> {
+    let leaf_mgr = slot_mut().leaf_mut()?;
+    let overlay_vma = leaf_mgr.overlay_vma;
+    let window_size = leaf_mgr.window_size as usize;
+    let Ok((leaf_entry, is_hit)) = leaf_mgr.begin_leaf_call(cur_id, |entry_off| {
+        let mut raw = [0u8; kernel::runtime::LeafEntry::SIZE];
+        if read_active_pkg_region(entry_off as usize, raw.as_mut_ptr() as usize, raw.len()) {
+            kernel::runtime::LeafEntry::parse(&raw)
+        } else {
+            None
+        }
+    }) else {
+        return None;
+    };
+    if !is_hit
+        && !read_active_pkg_region(
+            leaf_entry.flash_offset as usize,
+            overlay_vma as usize,
+            (leaf_entry.size as usize).min(window_size),
+        )
+    {
+        leaf_mgr.active_leaf = None;
+        leaf_mgr.is_dispatching = false;
+        return None;
     }
-    Ok(resume_addr)
+    if leaf_entry.entry_offset >= leaf_entry.size {
+        leaf_mgr.active_leaf = None;
+        leaf_mgr.is_dispatching = false;
+        return None;
+    }
+    Some(((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize)
 }
 
 /// Invokes a P0 Structured Leaf Overlay from the resident root actor (§5.1 / KRX 3.2).
 /// Direct non-closure hop loop keeps the M0+ stack frame minimal across leaf -> syscall -> KernFS chains.
 #[inline(never)]
 pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
-    let slot = slot_mut();
-    let got_base = slot.got_base;
-    let Some(leaf_mgr) = slot.leaf_mut() else {
-        return 0xFFFF_FFFF;
-    };
-
-    let overlay_vma = leaf_mgr.overlay_vma;
-    let window_size = leaf_mgr.window_size as usize;
+    let got_base = slot_ref().got_base;
     let mut cur_id = leaf_id;
     let mut cur_arg = arg;
 
     for _ in 0..8u8 {
-        let Ok((leaf_entry, is_hit)) = leaf_mgr.begin_leaf_call(cur_id, |entry_off| {
-            let mut raw = [0u8; kernel::runtime::LeafEntry::SIZE];
-            if read_active_pkg_region(entry_off as usize, raw.as_mut_ptr() as usize, raw.len()) {
-                kernel::runtime::LeafEntry::parse(&raw)
-            } else {
-                None
-            }
-        }) else {
+        let Some(entry_addr) = prepare_p0_leaf(cur_id) else {
             return 0xFFFF_FFFF;
         };
-        if !is_hit
-            && !read_active_pkg_region(
-                leaf_entry.flash_offset as usize,
-                overlay_vma as usize,
-                (leaf_entry.size as usize).min(window_size),
-            )
-        {
-            leaf_mgr.active_leaf = None;
-            leaf_mgr.is_dispatching = false;
-            return 0xFFFF_FFFF;
-        }
-        if leaf_entry.entry_offset >= leaf_entry.size {
-            leaf_mgr.active_leaf = None;
-            leaf_mgr.is_dispatching = false;
-            return 0xFFFF_FFFF;
-        }
 
         let mut ctx = kernel::runtime::LeafContext::new(cur_id, cur_arg);
-        let entry_addr = ((overlay_vma + leaf_entry.entry_offset as u32) | 1) as usize;
         let raw_res = unsafe {
             invoke_krx_native(
                 entry_addr,
@@ -396,7 +427,9 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
                 &raw mut ctx as *const (),
             )
         };
-        leaf_mgr.is_dispatching = false;
+        if let Some(leaf_mgr) = slot_mut().leaf_mut() {
+            leaf_mgr.is_dispatching = false;
+        }
 
         let cont = ctx.continuation;
         if cont.is_call_leaf() {
@@ -421,7 +454,7 @@ pub fn read_active_pkg_asset(
     dst: &mut [u8],
 ) -> Result<usize, ()> {
     let slot = slot_ref();
-    if !slot.is_loaded || slot.pkg_path_len == 0 || dst.is_empty() {
+    if !slot.is_loaded || slot.pkg_path.is_empty() || dst.is_empty() {
         return Err(());
     }
     if read_file_region(storage, slot.pkg_path_str(), offset as usize, dst) {
@@ -440,7 +473,8 @@ fn read_file_region(
     storage.read_file_at(path, offset, dst).is_ok()
 }
 
-fn apply_package_relocs(
+pub(crate) fn apply_package_relocs_at(
+    base_ptr: *mut u8,
     buffer_bytes: &[u8],
     payload_len: usize,
     exec: &SectionExecution,
@@ -452,13 +486,11 @@ fn apply_package_relocs(
     if exec.reloc_count > 0 && exec.reloc_offset > 0 {
         let r_off = exec.reloc_offset as usize;
         if r_off < payload_len {
-            let reloc_stream = &buffer_bytes[r_off..payload_len];
-            let code_len = r_off;
             let res = unsafe {
                 apply_relocs(
-                    arena_base_ptr(),
-                    code_len,
-                    reloc_stream,
+                    base_ptr,
+                    r_off,
+                    &buffer_bytes[r_off..payload_len],
                     load_delta,
                     exec.reloc_count,
                 )
@@ -471,10 +503,62 @@ fn apply_package_relocs(
     Ok(())
 }
 
+pub(crate) fn register_service_exports_at(
+    load_base: u32,
+    pid: kernel::proc::Pid,
+    exports_body: Option<&[u8]>,
+) {
+    if let Some(body) = exports_body {
+        for chunk in body.chunks_exact(kernel::runtime::ServiceExport::SIZE) {
+            if let Some(export) = kernel::runtime::ServiceExport::parse(chunk) {
+                super::syscall::service_registry_mut().register(
+                    export.interface_id,
+                    export.abi_version,
+                    pid,
+                    (load_base + export.vtable_offset) as usize,
+                    export.is_pinned(),
+                );
+            }
+        }
+    }
+}
+
 pub use kernel::runtime::KrxAuxSections;
 
+#[inline(never)]
+pub(crate) fn bind_krx_payload_at(
+    base_off: usize,
+    max_bytes: usize,
+    payload_len: usize,
+    summary: &KrxSummary<'_>,
+    exec: &SectionExecution,
+    pid: kernel::proc::Pid,
+    is_paged: bool,
+) -> Result<(usize, u32), KrxLaunchError> {
+    if payload_len == 0 || (!is_paged && payload_len < (exec.payload_size as usize)) {
+        return Err(KrxLaunchError::TruncatedPackage);
+    }
+    let base_ptr = unsafe { arena_base_ptr().add(base_off) };
+    let load_base = base_ptr as u32;
+    let buffer_bytes = unsafe { core::slice::from_raw_parts_mut(base_ptr, max_bytes) };
+    if !is_paged
+        && summary.preamble.payload_crc32 != 0
+        && crypto::crc::CrcEngine::crc32(&buffer_bytes[..payload_len.min(max_bytes)])
+            != summary.preamble.payload_crc32
+    {
+        return Err(KrxLaunchError::CrcMismatch);
+    }
+    let load_delta = load_base.wrapping_sub(summary.preamble.link_base);
+    apply_package_relocs_at(base_ptr, buffer_bytes, payload_len, exec, load_delta)?;
+    flush_instruction_pipeline();
+    register_service_exports_at(load_base, pid, summary.aux.service_exports);
+    let entry_thumb = (base_ptr as usize).wrapping_add(exec.entry_point as usize) | 1;
+    let got_base = load_base.wrapping_add(exec.got_offset as u32);
+    Ok((entry_thumb, got_base))
+}
+
 /// Loads a pre-validated Native (`KrxClass::Native`) or Paged (`KrxClass::Paged`) binary from flash
-/// into the shared execution arena, applies delta relocations, and binds `CapImports` into the GOT.
+/// into Zone B of the execution arena, applies delta relocations, and binds `CapImports` into the GOT.
 #[inline(never)]
 pub fn load_native_from_storage(
     path: &str,
@@ -488,27 +572,28 @@ pub fn load_native_from_storage(
     let aux = &summary.aux;
     let caps = summary.caps;
 
-    let max_arena_bytes = NATIVE_EXEC_BUFFER_WORDS * 4;
-    let load_base = arena_base_ptr() as u32;
+    let zone_a_off = crate::data::arena::zone_a_used_bytes();
+    let max_arena_bytes = crate::data::arena::TRANSIENT_ARENA_BYTES.saturating_sub(zone_a_off);
+    let load_base = (unsafe { arena_base_ptr().add(zone_a_off) }) as u32;
     let profile = summary.profile(exec);
     let is_paged = matches!(
         profile,
         KrxProfile::P0StructuredPaged | KrxProfile::P1TransparentPaged
     );
 
-    if payload_len == 0 || (!is_paged && payload_len < (exec.payload_size as usize)) {
-        return Err(KrxLaunchError::TruncatedPackage);
-    }
-
     init_native_slot();
+    let (entry_thumb, got_base) = bind_krx_payload_at(
+        zone_a_off,
+        max_arena_bytes,
+        payload_len,
+        summary,
+        exec,
+        pid,
+        is_paged,
+    )?;
+
     let slot = slot_mut();
     slot.pid = pid;
-
-    let buffer_bytes =
-        unsafe { core::slice::from_raw_parts_mut(arena_base_ptr(), max_arena_bytes) };
-    let load_delta = load_base.wrapping_sub(preamble.link_base);
-
-    // 1. Configure Paged Fixed-Window Cache (P1) or Structured Leaf Manager (P0)
     slot.is_paged = is_paged;
     slot.set_pkg_path(path);
     let is_p0 = profile.is_structured_paged();
@@ -553,27 +638,14 @@ pub fn load_native_from_storage(
         }
     }
 
-    // 2b. Verify unrelocated payload CRC32 before patching words in SRAM
-    if !is_paged
-        && preamble.payload_crc32 != 0
-        && crypto::crc::CrcEngine::crc32(&buffer_bytes[..payload_len.min(max_arena_bytes)])
-            != preamble.payload_crc32
-    {
-        return Err(KrxLaunchError::CrcMismatch);
-    }
-
-    // 3. Apply escape-capable delta relocations v2 (Section 6.2)
-    apply_package_relocs(buffer_bytes, payload_len, exec, load_delta)?;
-
-    // 4. Configure package GOT base & code window size
-    slot.got_base = load_base.wrapping_add(exec.got_offset as u32);
+    slot.got_base = got_base;
     slot.profile = profile;
     let code_limit = max_arena_bytes as u32 - if is_p0 { overlay_size } else { 0 };
     #[cfg(feature = "krx_paged")]
     let code_size = if is_paged && !is_p0 {
         let win = unsafe { &*slot.overlay.window };
         (win.cache.active_slots as u32 * win.cache.page_size as u32)
-            .min(PAGED_CACHE_MAX_BYTES as u32)
+            .min(crate::data::arena::zone_b_cache_bytes() as u32)
     } else if exec.got_offset > 0 {
         (exec.got_offset as u32).min(code_limit)
     } else {
@@ -586,11 +658,6 @@ pub fn load_native_from_storage(
         (payload_len as u32).min(code_limit)
     };
     slot.code_size = code_size as u16;
-    let entry_thumb = (load_base.wrapping_add(exec.entry_point) | 1) as usize;
-
-    // 6. Flush instruction pipeline before branching into SRAM arena
-    flush_instruction_pipeline();
-
     slot.entry_point = entry_thumb;
     slot.caps = caps;
     unsafe {
@@ -598,23 +665,6 @@ pub fn load_native_from_storage(
     }
     slot.is_loaded = true;
     super::fault::note_loaded_pkg(pid, path);
-
-    // 7. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
-    if let Some(exports_body) = aux.service_exports {
-        for chunk in exports_body.chunks_exact(kernel::runtime::ServiceExport::SIZE) {
-            if let Some(export) = kernel::runtime::ServiceExport::parse(chunk) {
-                let vtable_ptr = (load_base + export.vtable_offset) as usize;
-                super::syscall::service_registry_mut().register(
-                    export.interface_id,
-                    export.abi_version,
-                    slot.pid,
-                    vtable_ptr,
-                    export.is_pinned(),
-                );
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -666,7 +716,7 @@ pub unsafe fn invoke_krx_native(
         let entry: KrxNativeEntryFn = unsafe {
             let ptr = (entry_point & !1) as *const u8;
             if *ptr == 0x00 && *ptr.add(1) == 0x4b && *ptr.add(2) == 0x18 && *ptr.add(3) == 0x47 {
-                let target_fn_ptr = *(ptr.add(4) as *const usize);
+                let target_fn_ptr = core::ptr::read_unaligned(ptr.add(4) as *const usize);
                 core::mem::transmute(target_fn_ptr)
             } else {
                 core::mem::transmute(entry_point)
@@ -864,6 +914,7 @@ pub unsafe fn native_on_modal_result(
     )
 }
 
+#[inline(never)]
 fn c_str_to_str(buf: &[u8]) -> Option<&str> {
     let mut len = 0;
     while len < buf.len() && buf[len] != 0 {
@@ -1026,7 +1077,7 @@ pub(crate) fn teardown_slot_and_hw(
     slot.is_loaded = false;
     slot.entry_point = 0;
     slot.status_bar_has_custom = false;
-    slot.pkg_path_len = 0;
+    slot.pkg_path.clear();
     super::fault::clear_loaded_pkg();
 }
 
@@ -1051,6 +1102,7 @@ mod tests {
 
     #[test]
     fn query_region_matches_memory_map_layout_for_native_and_p0() {
+        super::super::background::BgManager::reset();
         let load_base = arena_base_ptr() as u32;
         let max_arena = (NATIVE_EXEC_BUFFER_WORDS * 4) as u32;
         let overlay_size = 1024u32;

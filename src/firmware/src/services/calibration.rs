@@ -32,22 +32,9 @@ const DEFAULT_CALIB_RLE: [u8; 310] = [
 ];
 
 /// Expand the RLE-compressed default calibration image into a 512-byte buffer.
-#[inline(never)]
+#[inline(always)]
 pub fn fill_default_calibration(dst: &mut [u8; 512]) {
-    dst.fill(0xFF);
-    let mut i = 0;
-    let mut o = 0;
-    while i < DEFAULT_CALIB_RLE.len() {
-        let b = DEFAULT_CALIB_RLE[i];
-        i += 1;
-        if b == 0xFF {
-            o += DEFAULT_CALIB_RLE[i] as usize;
-            i += 1;
-        } else {
-            dst[o] = b;
-            o += 1;
-        }
-    }
+    utils::format::decode_rle_escape(&DEFAULT_CALIB_RLE, 0xFF, 0, dst);
 }
 
 pub const CALIB_FILE_PATH: &str = "/sys/calib.dat";
@@ -244,7 +231,7 @@ const _: () = {
 };
 
 #[inline(never)]
-fn read_valid_calib(vfs: &mut SystemStorage, path: &str, buf: &mut [u8; 512]) -> bool {
+pub(crate) fn read_valid_calib(vfs: &mut SystemStorage, path: &str, buf: &mut [u8; 512]) -> bool {
     matches!(vfs.read_file(path, buf), Ok(512) if is_valid_calibration(buf))
 }
 
@@ -332,11 +319,6 @@ impl SystemCalibration {
     }
 
     #[inline(always)]
-    pub fn is_bound(&self) -> bool {
-        self.bound
-    }
-
-    #[inline(always)]
     pub fn lna_calib(&self) -> u16 {
         self.as_block().lna_calib
     }
@@ -408,18 +390,14 @@ impl SystemCalibration {
     pub fn load_into(&mut self, vfs: &mut SystemStorage, mcu_uid: &[u8; 12]) {
         let mut loaded = read_valid_calib(vfs, CALIB_FILE_PATH, &mut self.raw);
 
-        if !loaded && read_valid_calib(vfs, CALIB_BAK_PATH, &mut self.raw) {
-            let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, &self.raw);
-            loaded = true;
-        }
-
         if !loaded {
-            // Keep default fallback calibration strictly in SRAM (`bound = false`) so
-            // missing factory calibration is never mis-signed as hardware-authenticated.
-            fill_default_calibration(&mut self.raw);
-            self.valid = true;
-            self.bound = false;
-            return;
+            if read_valid_calib(vfs, CALIB_BAK_PATH, &mut self.raw) {
+                loaded = true;
+            } else {
+                fill_default_calibration(&mut self.raw);
+            }
+            let _ = write_protected_sys_file(vfs, CALIB_FILE_PATH, &self.raw);
+            sign_and_save_sig(vfs, &self.raw, mcu_uid);
         }
 
         // Verify device binding signature (re-sign only if signature file is absent)
@@ -429,7 +407,7 @@ impl SystemCalibration {
         };
         let sig_buf = &mut crate::services::staging_buf()[..32];
         let mut sig_present = false;
-        let mut bound = false;
+        let mut bound = !loaded;
         if let Ok(n) = vfs.read_file(CALIB_SIG_PATH, sig_buf) {
             sig_present = true;
             if n >= 32 && &sig_buf[..4] == CALIB_SIG_IDENT {
@@ -438,7 +416,7 @@ impl SystemCalibration {
             }
         }
 
-        if !sig_present {
+        if !sig_present && loaded {
             sign_and_save_sig(vfs, &self.raw, mcu_uid);
             bound = true;
         }

@@ -317,25 +317,9 @@ const fn encode_default_config_rle() -> [u8; DEFAULT_CFG_RLE_LEN] {
 /// Zero-skip RLE `MasterConfig::DEFAULT` (`0x00 <count>` skips `count` zero bytes; else literal).
 static DEFAULT_MASTER_CONFIG_RLE: [u8; DEFAULT_CFG_RLE_LEN] = encode_default_config_rle();
 
-#[inline(never)]
+#[inline(always)]
 fn decode_default_range(start: usize, dst: &mut [u8]) {
-    dst.fill(0);
-    let end = start + dst.len();
-    let mut pos = 0usize;
-    let mut i = 0usize;
-    while i < DEFAULT_MASTER_CONFIG_RLE.len() && pos < end {
-        let b = DEFAULT_MASTER_CONFIG_RLE[i];
-        i += 1;
-        if b == 0 {
-            pos += DEFAULT_MASTER_CONFIG_RLE[i] as usize;
-            i += 1;
-        } else {
-            if pos >= start {
-                dst[pos - start] = b;
-            }
-            pos += 1;
-        }
-    }
+    utils::format::decode_rle_escape(&DEFAULT_MASTER_CONFIG_RLE, 0, start, dst);
 }
 
 #[inline(never)]

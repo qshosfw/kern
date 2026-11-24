@@ -5,14 +5,14 @@ use crate::fonts::tomthumb::FONT as TOMTHUMB;
 use crate::gui::view::View;
 use crate::text;
 use crate::{Canvas, Color};
-use heapless::String;
 use kernel::event::Event;
+use utils::format::InlineStr;
 
 pub struct ToastModel {
     pub is_active: bool,
     pub duration_ms: u16,
     pub elapsed_ms: u16,
-    pub message: String<32>,
+    pub message: InlineStr<32>,
 }
 
 impl ToastModel {
@@ -21,13 +21,12 @@ impl ToastModel {
             is_active: false,
             duration_ms: 0,
             elapsed_ms: 0,
-            message: String::new(),
+            message: InlineStr::new(),
         }
     }
 
     pub fn show(&mut self, msg: &str, duration_ms: u16) {
-        self.message.clear();
-        let _ = self.message.push_str(msg);
+        self.message.set(msg);
         self.duration_ms = duration_ms;
         self.elapsed_ms = 0;
         self.is_active = true;

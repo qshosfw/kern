@@ -6,7 +6,7 @@ use crate::text;
 use crate::{Canvas, Color};
 use kernel::event::{Event, KeyCode, KeyState};
 
-use heapless::String;
+use utils::format::InlineStr;
 
 use crate::widgets;
 
@@ -18,8 +18,8 @@ pub struct PopupModel {
     pub repeater: crate::gui::repeater::KeyRepeater,
     pub confirm_label: Option<&'static str>,
     pub cancel_label: Option<&'static str>,
-    pub custom_title: String<24>,
-    pub custom_msg: String<88>,
+    pub custom_title: InlineStr<24>,
+    pub custom_msg: InlineStr<88>,
 }
 
 impl PopupModel {
@@ -31,8 +31,16 @@ impl PopupModel {
             confirm_label: None,
             cancel_label: None,
             repeater: crate::gui::repeater::KeyRepeater::new(8, 2),
-            custom_title: String::new(),
-            custom_msg: String::new(),
+            custom_title: InlineStr::new(),
+            custom_msg: InlineStr::new(),
+        }
+    }
+
+    pub unsafe fn init_in_place(dst: *mut Self) {
+        unsafe {
+            core::ptr::write_bytes(dst as *mut u8, 0, core::mem::size_of::<Self>());
+            (*dst).anim = crate::gui::animation::TransitionProgress::new(4);
+            (*dst).repeater = crate::gui::repeater::KeyRepeater::new(8, 2);
         }
     }
 
@@ -93,22 +101,23 @@ fn popup_max_scroll(model: &PopupModel) -> usize {
     text::count_lines(model.custom_msg.as_str()).saturating_sub(popup_visible_lines(model))
 }
 
-fn scroll_popup(model: &mut PopupModel, code: KeyCode) -> bool {
-    match code {
-        KeyCode::Up | KeyCode::Key2 => {
-            if model.scroll_offset > 0 {
-                model.scroll_offset -= 1;
-            }
-            true
-        }
-        KeyCode::Down | KeyCode::Key8 => {
-            if (model.scroll_offset as usize) < popup_max_scroll(model) {
-                model.scroll_offset += 1;
-            }
-            true
-        }
-        _ => false,
+#[inline(always)]
+fn scroll_popup_dir(model: &mut PopupModel, down: bool) {
+    if !down {
+        model.scroll_offset = model.scroll_offset.saturating_sub(1);
+    } else if (model.scroll_offset as usize) < popup_max_scroll(model) {
+        model.scroll_offset += 1;
     }
+}
+
+fn scroll_popup(model: &mut PopupModel, code: KeyCode) -> bool {
+    let down = match code {
+        KeyCode::Up | KeyCode::Key2 => false,
+        KeyCode::Down | KeyCode::Key8 => true,
+        _ => return false,
+    };
+    scroll_popup_dir(model, down);
+    true
 }
 
 impl View<PopupModel> for PopupView {
@@ -122,12 +131,8 @@ impl View<PopupModel> for PopupView {
         // Content-adaptive bottom sheet height: compact for 1-2 line notices, full 46px for 3+ lines or hold bars.
         let sheet_h: u8 = if model.hold.required_ms > 0 || total_lines >= 3 {
             46
-        } else if total_lines <= 1 {
-            if has_badges { 32 } else { 24 }
-        } else if has_badges {
-            39
         } else {
-            31
+            24 + u8::from(total_lines > 1) * 7 + u8::from(has_badges) * 8
         };
         let y_offset = model.anim.slide_offset(sheet_h);
         let sheet_y = widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, y_offset);
@@ -199,17 +204,12 @@ impl View<PopupModel> for PopupView {
             return anim_tick || rep_tick || model.is_hold_animating();
         }
 
-        if let Event::Encoder(delta) = event {
-            if *delta == 0 {
+        if let Event::Encoder(delta) = *event {
+            if delta == 0 {
                 return false;
             }
-            let code = if *delta > 0 {
-                KeyCode::Down
-            } else {
-                KeyCode::Up
-            };
             for _ in 0..delta.unsigned_abs().min(8) {
-                let _ = scroll_popup(model, code);
+                scroll_popup_dir(model, delta > 0);
             }
             return true;
         }

@@ -47,13 +47,13 @@ utils::static_bytes!(
     static EXCEPTION_DESCS = b"\
 ok.\0\
 crashed.\nInvalid memory/code.\0\
-stopped:\nout of stack space.\0\
-stopped:\nnot responding.\0\
-blocked:\nmissing permission.\0\
-stopped:\ninvalid pointer.\0\
-stopped:\ninvalid argument.\0\
-blocked:\nhardware not leased.\0\
-stopped:\nunknown syscall.\0";
+out of stack space.\0\
+not responding.\0\
+missing permission.\0\
+invalid pointer.\0\
+invalid argument.\0\
+hardware not leased.\0\
+unknown syscall.\0";
 );
 
 impl Exception {
@@ -70,6 +70,15 @@ impl Exception {
     #[inline(always)]
     pub fn description(self) -> &'static str {
         utils::format::nth_cstr(&EXCEPTION_DESCS, self as u8)
+    }
+
+    #[inline(always)]
+    fn verb_prefix(self) -> &'static [u8] {
+        match self {
+            Self::None | Self::Fault => b" ",
+            Self::Denied | Self::UnleasedBus => b" blocked:\n",
+            _ => b" stopped:\n",
+        }
     }
 }
 
@@ -111,7 +120,7 @@ impl AppFault {
         let name = if app_name.is_empty() { "App" } else { app_name };
         for s in [
             name.as_bytes(),
-            b" " as &[u8],
+            self.kind.verb_prefix(),
             self.kind.description().as_bytes(),
         ] {
             let n = s.len().min(out.len() - pos);

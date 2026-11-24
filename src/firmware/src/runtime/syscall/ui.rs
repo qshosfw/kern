@@ -6,29 +6,16 @@ use kernel::proc::abi::*;
 
 #[inline(always)]
 fn modal_mut() -> &'static mut crate::orchestrator::compositor::ModalCompositor {
-    unsafe { &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL) }
+    crate::orchestrator::compositor::active_modal_mut()
 }
 
 #[cfg(feature = "text_input")]
-#[repr(C)]
-struct ModalTextBuf {
-    len: u8,
-    buf: [u8; 31],
-}
-
-#[cfg(feature = "text_input")]
-static mut MODAL_TEXT: ModalTextBuf = ModalTextBuf {
-    len: 0,
-    buf: [0u8; 31],
-};
+static mut MODAL_TEXT: utils::format::InlineStr<31> = utils::format::InlineStr::new();
 
 pub fn store_modal_text(_text: &str) {
     #[cfg(feature = "text_input")]
     unsafe {
-        let m = &mut *core::ptr::addr_of_mut!(MODAL_TEXT);
-        let copy_len = _text.len().min(m.buf.len());
-        core::ptr::copy_nonoverlapping(_text.as_bytes().as_ptr(), m.buf.as_mut_ptr(), copy_len);
-        m.len = copy_len as u8;
+        (*core::ptr::addr_of_mut!(MODAL_TEXT)).set(_text);
     }
 }
 
@@ -59,8 +46,8 @@ fn is_persistent_guest_ptr(ptr: *const u8, len: usize) -> bool {
         return true;
     }
     let base = crate::runtime::native_runner::arena_base_ptr() as usize;
-    let overlay_start = base + (crate::data::arena::TRANSIENT_ARENA_BYTES - 1024);
     let overlay_end = base + crate::data::arena::TRANSIENT_ARENA_BYTES;
+    let overlay_start = overlay_end - 1024;
     let addr = ptr as usize;
     let end = addr.saturating_add(len);
     !(addr < overlay_end && end > overlay_start)
@@ -138,10 +125,16 @@ unsafe fn show_modal_req(req: *const KrxModalReq) {
 }
 
 #[inline(never)]
-unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget, s0: &str) {
+unsafe fn widget_str(p: *const u8, len: u16) -> &'static str {
+    unsafe { parse_str(p, len as usize) }.unwrap_or("")
+}
+
+#[inline(never)]
+unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget) {
     use gfx::widgets::*;
     let row_h = if d.h >= 12 { 13 } else { 10 };
-    let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
+    let s0 = unsafe { widget_str(d.p0, d.len0) };
+    let s1 = unsafe { widget_str(d.p1, d.len1) };
     let phase = ((d.extra >> 1) & 3) as i8;
     let chevron_dx = if (d.a & 1) != 0 && d.extra != 0 {
         if phase == 3 { 1 } else { phase }
@@ -166,8 +159,6 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     let canvas = active_canvas_mut();
     let ux = d.x.max(0) as u8;
     let uy = d.y.max(0) as u8;
-    let raw0 = unsafe { slice_or_empty(d.p0, d.len0 as usize) };
-    let s0 = utils::format::ascii_str(raw0).unwrap_or("");
     let badge = |filled: bool| {
         if filled {
             gfx::widgets::BadgeStyle::Filled
@@ -177,23 +168,28 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
     };
     match kind {
         KRX_WIDGET_ROUNDED_BOX => gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h),
-        KRX_WIDGET_NEGATED_HEADER => gfx::widgets::draw_negated_header(canvas, d.y, s0),
+        KRX_WIDGET_NEGATED_HEADER => {
+            gfx::widgets::draw_negated_header(canvas, d.y, unsafe { widget_str(d.p0, d.len0) })
+        }
         KRX_WIDGET_SHEET_FRAME => {
-            gfx::widgets::draw_sheet_frame(canvas, s0, d.y, d.h);
+            gfx::widgets::draw_sheet_frame(canvas, unsafe { widget_str(d.p0, d.len0) }, d.y, d.h);
         }
         KRX_WIDGET_PROGRESS_BAR => {
             gfx::widgets::draw_progress_bar(canvas, d.x, d.y, d.w, d.h, d.a, d.b != 0);
         }
         KRX_WIDGET_TAG_BADGE => {
+            let s0 = unsafe { widget_str(d.p0, d.len0) };
             if !s0.is_empty() {
                 gfx::widgets::draw_tag_badge(canvas, d.x, d.y, s0, badge(d.a == 1));
             }
         }
         KRX_WIDGET_KEY_BADGE => {
-            let s1 = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
+            let s0 = unsafe { widget_str(d.p0, d.len0) };
+            let s1 = unsafe { widget_str(d.p1, d.len1) };
             gfx::widgets::draw_key_badge(canvas, d.x, d.y, s0, s1);
         }
         KRX_WIDGET_CAPSULE_BUTTON => {
+            let s0 = unsafe { widget_str(d.p0, d.len0) };
             gfx::widgets::draw_capsule_button(canvas, d.x, d.y, d.w, d.h, s0, badge(d.a != 0));
         }
         KRX_WIDGET_SCROLLBAR => {
@@ -207,7 +203,7 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 d.len1 as usize,
             );
         }
-        KRX_WIDGET_MENU_ITEM => unsafe { draw_menu_item_widget(canvas, d, s0) },
+        KRX_WIDGET_MENU_ITEM => unsafe { draw_menu_item_widget(canvas, d) },
         KRX_WIDGET_BATTERY => gfx::widgets::draw_battery(canvas, d.x, d.y, d.a, d.b != 0),
         KRX_WIDGET_SIGNAL => {
             gfx::widgets::draw_signal(canvas, d.x, d.y, d.a, color_from_u8(d.b));
@@ -223,20 +219,11 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             }
         }
         KRX_WIDGET_DETAIL_ROW => {
-            let mut parts = raw0.split(|&b| b == 0);
-            let title = parts
-                .next()
-                .and_then(utils::format::ascii_str)
-                .unwrap_or("");
-            let badge_s = parts
-                .next()
-                .and_then(utils::format::ascii_str)
-                .unwrap_or("");
-            let right_s = parts
-                .next()
-                .and_then(utils::format::ascii_str)
-                .unwrap_or("");
-            let sub_s = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
+            let raw0 = unsafe { slice_or_empty(d.p0, d.len0 as usize) };
+            let title = utils::format::nth_cstr(raw0, 0);
+            let badge_s = utils::format::nth_cstr(raw0, 1);
+            let right_s = utils::format::nth_cstr(raw0, 2);
+            let sub_s = unsafe { widget_str(d.p1, d.len1) };
             gfx::widgets::draw_detail_row(canvas, d.y, (d.a & 1) != 0, badge_s, title, right_s, sub_s);
         }
         _ => return ::abi::Status::Unsupported.to_raw(),
@@ -273,7 +260,7 @@ pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                     }
                     unsafe {
                         let m = &*core::ptr::addr_of!(MODAL_TEXT);
-                        let copy_len = (m.len as usize).min(max_len as usize);
+                        let copy_len = m.len().min(max_len as usize);
                         core::ptr::copy_nonoverlapping(m.buf.as_ptr(), buf, copy_len);
                         copy_len
                     }
@@ -300,10 +287,7 @@ pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 let r = unsafe { &*req };
                 let title = unsafe { str_or_default(r.title, r.title_len as usize, "Value") };
                 let unit = unsafe { str_or_default(r.unit, r.unit_len as usize, "") };
-                let model = gfx::gui::modules::number_input::NumberInputModel::new(
-                    r.value, r.min, r.max, r.step, r.decimals,
-                );
-                modal_mut().prompt_number(r.tag, title, unit, model);
+                modal_mut().prompt_number(r.tag, title, unit, r);
                 0
             }
             _ => ::abi::Status::Unsupported.to_raw(),

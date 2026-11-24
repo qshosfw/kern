@@ -6,6 +6,8 @@
 //! - `syscall`: Modular per-capability VTables, `ServiceRegistry`, and GOT binder.
 
 #[cfg(feature = "krx_native")]
+pub mod background;
+#[cfg(feature = "krx_native")]
 pub mod fault;
 #[cfg(feature = "krx_native")]
 pub mod loader;

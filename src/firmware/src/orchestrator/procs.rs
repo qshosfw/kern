@@ -11,10 +11,10 @@ pub static mut PROC_TABLE: core::mem::MaybeUninit<ProcessTable<MAX_PROCESSES>> =
 
 #[inline(always)]
 pub fn proc_table() -> &'static ProcessTable<MAX_PROCESSES> {
-    unsafe { (*core::ptr::addr_of!(PROC_TABLE)).assume_init_ref() }
+    proc_table_mut()
 }
 
-#[inline(always)]
+#[inline(never)]
 pub fn proc_table_mut() -> &'static mut ProcessTable<MAX_PROCESSES> {
     unsafe { (*core::ptr::addr_of_mut!(PROC_TABLE)).assume_init_mut() }
 }
@@ -43,10 +43,10 @@ static mut PROC_BOOK: ProcBookkeeping = ProcBookkeeping {
 
 #[inline(always)]
 pub(crate) fn proc_book_ref() -> &'static ProcBookkeeping {
-    unsafe { &*core::ptr::addr_of!(PROC_BOOK) }
+    proc_book_mut()
 }
 
-#[inline(always)]
+#[inline(never)]
 pub(crate) fn proc_book_mut() -> &'static mut ProcBookkeeping {
     unsafe { &mut *core::ptr::addr_of_mut!(PROC_BOOK) }
 }
@@ -94,7 +94,10 @@ pub(crate) fn reap_pid_only(pid: kernel::proc::Pid) {
     lease_manager_mut().revoke_all_for_owner(pid);
     status_tray_mut().clear_icon(pid);
     #[cfg(feature = "krx_native")]
-    crate::runtime::syscall::service::service_registry_mut().unbind_provider(pid);
+    {
+        crate::runtime::background::BgManager::stop_pid(pid);
+        crate::runtime::syscall::service::service_registry_mut().unbind_provider(pid);
+    }
     let _ = proc_table_mut().terminate(pid);
 }
 

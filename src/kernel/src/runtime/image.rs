@@ -158,6 +158,14 @@ impl KrxExecType {
             Self::Service | Self::Daemon | Self::Driver | Self::Module
         )
     }
+
+    pub const fn default_priority(&self) -> crate::sched::Priority {
+        match self {
+            Self::App => crate::sched::Priority::Ui,
+            Self::Service | Self::Driver => crate::sched::Priority::Radio,
+            Self::Daemon | Self::Module => crate::sched::Priority::Idle,
+        }
+    }
 }
 
 /// Normative KRX Binary Launch and Verification Errors (§12, KRX-ABI 2.5.0 Appendix C).
@@ -193,11 +201,11 @@ CRC mismatch.\nReinstall in Dock.\0\
 Missing metadata.\0\
 Missing code.\0\
 Unsupported cap.\0\
-Exceeds 8KB RAM.\0\
+Exceeds 6KB RAM.\0\
 Low stack RAM.\0\
 Relocation failed.\0\
 ABI mismatch.\nUpdate app or OS.\0\
-Exceeds 8KB limit.\0\
+Exceeds 6KB limit.\0\
 Start failed.\0\
 Invalid entry.\0\
 Incomplete package.\nReinstall in Dock.\0\
@@ -1022,15 +1030,12 @@ impl KrxPreamble {
             if sec_id == SECTION_ASSETS {
                 let mut assets = &rest[SectionHeader::SIZE..sec_len];
                 while assets.len() >= 4 {
-                    let kind = assets[0];
-                    let w = assets[1];
-                    let h = assets[2];
                     let blen = assets[3] as usize;
                     if 4 + blen > assets.len() {
                         break;
                     }
-                    if kind == want_kind {
-                        return Some((w, h, &assets[4..4 + blen]));
+                    if assets[0] == want_kind {
+                        return Some((assets[1], assets[2], &assets[4..4 + blen]));
                     }
                     let step = (4 + blen + 3) & !3;
                     if step >= assets.len() {

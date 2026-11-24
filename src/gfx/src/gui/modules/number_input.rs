@@ -65,18 +65,20 @@ impl NumberInputModel {
         }
     }
 
-    pub fn set_title(&mut self, s: &str) {
+    #[inline(never)]
+    fn copy_field(dst: &mut [u8], len_out: &mut u8, s: &str) {
         let b = s.as_bytes();
-        let n = b.len().min(self.title.len());
-        self.title[..n].copy_from_slice(&b[..n]);
-        self.title_len = n as u8;
+        let n = b.len().min(dst.len());
+        unsafe { core::ptr::copy_nonoverlapping(b.as_ptr(), dst.as_mut_ptr(), n) };
+        *len_out = n as u8;
+    }
+
+    pub fn set_title(&mut self, s: &str) {
+        Self::copy_field(&mut self.title, &mut self.title_len, s);
     }
 
     pub fn set_unit(&mut self, s: &str) {
-        let b = s.as_bytes();
-        let n = b.len().min(self.unit.len());
-        self.unit[..n].copy_from_slice(&b[..n]);
-        self.unit_len = n as u8;
+        Self::copy_field(&mut self.unit, &mut self.unit_len, s);
     }
 
     #[inline(always)]
@@ -89,28 +91,31 @@ impl NumberInputModel {
         unsafe { core::str::from_utf8_unchecked(&self.unit[..self.unit_len as usize]) }
     }
 
+    #[inline(never)]
     fn step_by(&mut self, mult: i32) {
         self.entry_len = 0;
-        let delta = self.step.saturating_mul(mult);
+        let delta = self.step.wrapping_mul(mult);
         self.value = self.value.saturating_add(delta).clamp(self.min, self.max);
     }
 
+    #[inline(never)]
     fn commit_typed(&mut self) -> bool {
         if self.entry_len == 0 {
             return (self.min..=self.max).contains(&self.value);
         }
         let mut acc: i32 = 0;
         let mut overflow = false;
-        for i in 0..(self.entry_len as usize) {
-            if let Some(next) = acc
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(self.entry_digits[i] as i32))
-            {
-                acc = next;
-            } else {
+        for &d in self.entry_digits.iter().take(self.entry_len as usize) {
+            if acc > 214_748_364 {
                 overflow = true;
                 break;
             }
+            let next = acc * 10 + (d as i32);
+            if next < acc {
+                overflow = true;
+                break;
+            }
+            acc = next;
         }
         if self.entry_neg {
             acc = acc.saturating_neg();
@@ -126,43 +131,9 @@ impl NumberInputModel {
     }
 }
 
-#[inline(never)]
+#[inline(always)]
 fn fmt_num_dec<'a>(val: i32, decimals: u8, unit: &str, out: &'a mut [u8; 24]) -> &'a str {
-    let mut pos = 0usize;
-    let abs = if val < 0 {
-        out[0] = b'-';
-        pos = 1;
-        val.unsigned_abs()
-    } else {
-        val as u32
-    };
-    let mut tmp = [0u8; 10];
-    let digits = text::format_u32(abs, &mut tmp).as_bytes();
-    let dec = decimals as usize;
-    if dec > 0 {
-        let pad = (dec + 1).saturating_sub(digits.len());
-        let total = digits.len() + pad;
-        let int_len = total - dec;
-        for i in 0..total {
-            if i == int_len && pos < out.len() {
-                out[pos] = b'.';
-                pos += 1;
-            }
-            if pos < out.len() {
-                out[pos] = if i < pad { b'0' } else { digits[i - pad] };
-                pos += 1;
-            }
-        }
-    } else {
-        let n = digits.len().min(out.len() - pos);
-        out[pos..pos + n].copy_from_slice(&digits[..n]);
-        pos += n;
-    }
-    let ub = unit.as_bytes();
-    let un = ub.len().min(out.len() - pos);
-    out[pos..pos + un].copy_from_slice(&ub[..un]);
-    pos += un;
-    unsafe { core::str::from_utf8_unchecked(&out[..pos]) }
+    utils::format::format_int_fixed(val, decimals, "", unit, out)
 }
 
 pub struct NumberInputView;
@@ -198,18 +169,22 @@ impl View<NumberInputModel> for NumberInputView {
 
         let mut vbuf = [0u8; 24];
         let val_str = if m.entry_len > 0 {
+            let p = vbuf.as_mut_ptr();
             let mut pos = 0usize;
             if m.entry_neg {
-                vbuf[pos] = b'-';
-                pos += 1;
+                unsafe { *p = b'-' };
+                pos = 1;
             }
-            for i in 0..(m.entry_len as usize) {
-                vbuf[pos] = b'0' + m.entry_digits[i];
+            let elen = (m.entry_len as usize).min(m.entry_digits.len());
+            let mut i = 0;
+            while i < elen {
+                unsafe { *p.add(pos) = b'0' + *m.entry_digits.get_unchecked(i) };
                 pos += 1;
+                i += 1;
             }
-            vbuf[pos] = b'_';
+            unsafe { *p.add(pos) = b'_' };
             pos += 1;
-            unsafe { core::str::from_utf8_unchecked(&vbuf[..pos]) }
+            unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(p, pos)) }
         } else {
             fmt_num_dec(m.value, m.decimals, m.unit_str(), &mut vbuf)
         };
@@ -255,20 +230,14 @@ impl View<NumberInputModel> for NumberInputView {
                 code,
                 state: KeyState::Pressed,
             } => match code {
-                KeyCode::Up => {
-                    m.step_by(1);
-                    true
-                }
-                KeyCode::Down => {
-                    m.step_by(-1);
-                    true
-                }
-                KeyCode::Side1 => {
-                    m.step_by(-10);
-                    true
-                }
-                KeyCode::Side2 => {
-                    m.step_by(10);
+                KeyCode::Up | KeyCode::Down | KeyCode::Side1 | KeyCode::Side2 => {
+                    let mult = match code {
+                        KeyCode::Up => 1,
+                        KeyCode::Down => -1,
+                        KeyCode::Side1 => -10,
+                        _ => 10,
+                    };
+                    m.step_by(mult);
                     true
                 }
                 KeyCode::Star => {

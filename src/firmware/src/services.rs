@@ -64,7 +64,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     /// Global factory hardware calibration block.
     #[inline(always)]
     pub fn calibration(&self) -> &'static SystemCalibration {
-        unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) }
+        crate::calibration_mut()
     }
 
     /// Send high-level SysEvent IPC request to the microkernel/OS dispatcher
@@ -129,10 +129,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     /// Show an OS modal popup dialog on top of the active application.
     #[inline(always)]
     pub fn show_popup(&mut self, tag: u8, title: &str, message: &str) {
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_popup(tag, title, message);
-        }
+        crate::orchestrator::compositor::active_modal_mut().show_popup(tag, title, message);
     }
 
     /// Show an OS modal confirmation dialog with Confirm/Cancel badges.
@@ -145,10 +142,8 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         confirm: &'static str,
         cancel: &'static str,
     ) {
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_confirm(tag, title, message, confirm, cancel);
-        }
+        crate::orchestrator::compositor::active_modal_mut()
+            .show_confirm(tag, title, message, confirm, cancel);
     }
 
     /// Show a destructive confirmation dialog requiring `hold_ms` hold on `Menu`.
@@ -162,10 +157,8 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         cancel: &'static str,
         hold_ms: u16,
     ) {
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_hold_confirm(tag, title, message, confirm, cancel, hold_ms);
-        }
+        crate::orchestrator::compositor::active_modal_mut()
+            .show_hold_confirm(tag, title, message, confirm, cancel, hold_ms);
     }
 
     /// Open an OS modal text input prompt.
@@ -179,15 +172,8 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         max_len: usize,
         digits_only: bool,
     ) {
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL)).prompt_text(
-                tag,
-                title,
-                initial,
-                max_len,
-                digits_only,
-            );
-        }
+        crate::orchestrator::compositor::active_modal_mut()
+            .prompt_text(tag, title, initial, max_len, digits_only);
     }
 
     #[cfg(not(feature = "text_input"))]
@@ -213,34 +199,27 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         digits_only: bool,
         expose_len: bool,
     ) {
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .prompt_passcode(tag, title, max_len, digits_only, expose_len);
-        }
+        crate::orchestrator::compositor::active_modal_mut()
+            .prompt_passcode(tag, title, max_len, digits_only, expose_len);
     }
 
     /// Open an OS modal bottom option sheet.
     #[inline(always)]
     pub fn show_sheet(&mut self, tag: u8, sheet: gfx::gui::modules::menu::OptionSheet) {
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                .show_sheet(tag, sheet);
-        }
+        crate::orchestrator::compositor::active_modal_mut().show_sheet(tag, sheet);
     }
 
     /// Close any active OS modal dialog immediately.
     #[inline(always)]
     pub fn close_modal(&mut self) {
         crate::orchestrator::sink_enter_keys();
-        unsafe {
-            (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL)).close();
-        }
+        crate::orchestrator::compositor::active_modal_mut().close();
     }
 
     /// Returns true if an OS modal is currently covering the screen.
     #[inline(always)]
     pub fn has_active_modal(&self) -> bool {
-        unsafe { (*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL)).is_active() }
+        crate::orchestrator::compositor::active_modal_mut().is_active()
     }
 
     pub fn set_volume(&mut self, level: u8) {

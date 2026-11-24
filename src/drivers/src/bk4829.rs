@@ -992,6 +992,7 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfModulation for Bk4829<'a, B> {
 }
 
 impl<'a, B: Bk4829Bus> kernel::service::radio::RfSquelch for Bk4829<'a, B> {
+    #[inline(never)]
     fn set_squelch_level(&mut self, level: u8) {
         self.squelch_level = level;
         let th = if let Some(calib) = self.calib {
@@ -1231,6 +1232,7 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfFskPhy for Bk4829<'a, B> {
 }
 
 impl<'a, B: Bk4829Bus> kernel::service::radio::RfAudioPath for Bk4829<'a, B> {
+    #[inline(never)]
     fn set_af_response(&mut self, response: &kernel::service::radio::af::AfResponse) {
         static TBL_3K: [u16; 9] = [
             0xDA00, 0xE800, 0xF200, 0xFA02, 0xF50B, 0xE61C, 0xDF22, 0xD42D, 0xCC35,
@@ -1242,19 +1244,18 @@ impl<'a, B: Bk4829Bus> kernel::service::radio::RfAudioPath for Bk4829<'a, B> {
             0x2EEE, 0x2EFF, 0x3010, 0x3040, 0x31A9, 0x31F3, 0x31E7, 0x3232, 0x3359,
         ];
 
-        let rx_3k_idx = (response.rx_3k + 4).clamp(0, 8) as usize;
-        self.write_reg(0x75, TBL_3K[rx_3k_idx]);
-
-        let tx_3k_idx = (response.tx_3k + 4).clamp(0, 8) as usize;
-        self.write_reg(0x74, TBL_3K[tx_3k_idx]);
-
-        let rx_300_idx = (response.rx_300 + 4).clamp(0, 8) as usize;
-        self.write_reg(0x54, TBL_300_D1[rx_300_idx]);
-        self.write_reg(0x55, TBL_300_D2[rx_300_idx]);
-
-        let tx_300_idx = (response.tx_300 + 4).clamp(0, 8) as usize;
-        self.write_reg(0x44, TBL_300_D1[tx_300_idx]);
-        self.write_reg(0x45, TBL_300_D2[tx_300_idx]);
+        let rx_3k = (response.rx_3k + 4).clamp(0, 8) as usize;
+        let tx_3k = (response.tx_3k + 4).clamp(0, 8) as usize;
+        let rx_300 = (response.rx_300 + 4).clamp(0, 8) as usize;
+        let tx_300 = (response.tx_300 + 4).clamp(0, 8) as usize;
+        unsafe {
+            self.write_reg(0x75, *TBL_3K.get_unchecked(rx_3k));
+            self.write_reg(0x74, *TBL_3K.get_unchecked(tx_3k));
+            self.write_reg(0x54, *TBL_300_D1.get_unchecked(rx_300));
+            self.write_reg(0x55, *TBL_300_D2.get_unchecked(rx_300));
+            self.write_reg(0x44, *TBL_300_D1.get_unchecked(tx_300));
+            self.write_reg(0x45, *TBL_300_D2.get_unchecked(tx_300));
+        }
     }
 
     fn set_mic_gain(&mut self, gain_db: u8) {

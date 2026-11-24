@@ -12,6 +12,9 @@ pub type LocalizeHookFn = for<'a> fn(&str, bool, &'a mut [u8]) -> Option<&'a str
 static mut EXT_GLYPH_DRAW: Option<ExtGlyphDrawFn> = None;
 static mut EXT_GLYPH_WIDTH: Option<ExtGlyphWidthFn> = None;
 static mut LOCALIZE_HOOK: Option<LocalizeHookFn> = None;
+/// Single shared Thread-mode scratch buffer for localized UI labels, eliminating
+/// 32-64 B stack buffers across every widget, menu row, dialog, and GfxText syscall.
+static mut LOC_SCRATCH: [u8; 64] = [0u8; 64];
 
 /// Register optional external `.fnt` hooks for non-ASCII UTF-8 codepoints (Polish, Portuguese,
 /// Italian, Cyrillic, Japanese, Chinese, etc.). ASCII characters always stay zero-cost in ROM.
@@ -54,28 +57,40 @@ pub fn localize<'a>(key: &'a str, prefer_short: bool, out: &'a mut [u8]) -> &'a 
     key
 }
 
+/// Zero-stack-buffer localization into the shared Thread-mode `LOC_SCRATCH` buffer.
+/// Callers must finish using the returned `&str` before invoking `localize_scratch` again.
+#[inline(never)]
+pub fn localize_scratch<'a>(key: &'a str, prefer_short: bool) -> &'a str {
+    let out = unsafe { &mut *core::ptr::addr_of_mut!(LOC_SCRATCH) };
+    localize(key, prefer_short, out)
+}
+
 /// Decode one UTF-8 character starting at `bytes[i]`, returning `(codepoint_u32, byte_len)`.
 #[inline(never)]
 fn decode_utf8_at(bytes: &[u8], i: usize) -> (u32, usize) {
-    let b0 = bytes[i];
+    let b0 = unsafe { *bytes.get_unchecked(i) };
     if b0 < 0x80 {
         return (b0 as u32, 1);
     }
-    if (b0 & 0xE0) == 0xC0 && i + 1 < bytes.len() {
-        let cp = (((b0 & 0x1F) as u32) << 6) | ((bytes[i + 1] & 0x3F) as u32);
-        return (cp, 2);
+    let rem = bytes.len() - i;
+    if (b0 & 0xE0) == 0xC0 && rem >= 2 {
+        let b1 = unsafe { *bytes.get_unchecked(i + 1) };
+        return ((((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32), 2);
     }
-    if (b0 & 0xF0) == 0xE0 && i + 2 < bytes.len() {
-        let cp = (((b0 & 0x0F) as u32) << 12)
-            | (((bytes[i + 1] & 0x3F) as u32) << 6)
-            | ((bytes[i + 2] & 0x3F) as u32);
+    if (b0 & 0xF0) == 0xE0 && rem >= 3 {
+        let b1 = unsafe { *bytes.get_unchecked(i + 1) };
+        let b2 = unsafe { *bytes.get_unchecked(i + 2) };
+        let cp = (((b0 & 0x0F) as u32) << 12) | (((b1 & 0x3F) as u32) << 6) | ((b2 & 0x3F) as u32);
         return (cp, 3);
     }
-    if (b0 & 0xF8) == 0xF0 && i + 3 < bytes.len() {
+    if (b0 & 0xF8) == 0xF0 && rem >= 4 {
+        let b1 = unsafe { *bytes.get_unchecked(i + 1) };
+        let b2 = unsafe { *bytes.get_unchecked(i + 2) };
+        let b3 = unsafe { *bytes.get_unchecked(i + 3) };
         let cp = (((b0 & 0x07) as u32) << 18)
-            | (((bytes[i + 1] & 0x3F) as u32) << 12)
-            | (((bytes[i + 2] & 0x3F) as u32) << 6)
-            | ((bytes[i + 3] & 0x3F) as u32);
+            | (((b1 & 0x3F) as u32) << 12)
+            | (((b2 & 0x3F) as u32) << 6)
+            | ((b3 & 0x3F) as u32);
         return (cp, 4);
     }
     (0xFFFD, 1)
@@ -118,7 +133,7 @@ pub fn draw_char_clipped(
         return 0;
     }
 
-    let glyph = &font.glyphs[glyph_idx];
+    let glyph = unsafe { font.glyphs.get_unchecked(glyph_idx) };
     let adv = glyph.x_advance() as i16;
     let width = glyph.width() as usize;
     let x_base = x + glyph.x_offset() as i16;
@@ -137,7 +152,9 @@ pub fn draw_char_clipped(
             let byte_idx = bit_idx >> 3;
             let bit_shift = 7 - (bit_idx & 7);
 
-            if byte_idx < bitmap.len() && ((bitmap[byte_idx] >> bit_shift) & 1) != 0 {
+            if byte_idx < bitmap.len()
+                && ((unsafe { *bitmap.get_unchecked(byte_idx) } >> bit_shift) & 1) != 0
+            {
                 let px = x_base + gx as i16;
                 if px >= min_x && px < max_x && (px as u16) < 128 && (py as u16) < 64 {
                     canvas.draw_pixel(px as u8, py as u8, color);
@@ -152,7 +169,7 @@ pub fn draw_char_clipped(
 }
 
 /// Draw a single ASCII character using the provided GfxFont.
-#[inline(always)]
+#[inline(never)]
 pub fn draw_char(
     canvas: &mut Canvas,
     x: i16,
@@ -396,12 +413,12 @@ impl<'a> Iterator for Lines<'a> {
         if self.done {
             return None;
         }
-        let line = match self.rest.iter().position(|&b| b == b'\n') {
-            Some(i) => {
-                let head = &self.rest[..i];
-                self.rest = &self.rest[i + 1..];
+        let line = match find_byte(self.rest, b'\n') {
+            Some(i) => unsafe {
+                let head = self.rest.get_unchecked(..i);
+                self.rest = self.rest.get_unchecked(i + 1..);
                 head
-            }
+            },
             None => {
                 self.done = true;
                 self.rest

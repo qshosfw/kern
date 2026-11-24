@@ -241,7 +241,7 @@ impl Orchestrator {
         self.lock_mgr.reset_input_tracking();
     }
 
-    fn tick_background_services<'a>(&mut self, _ctx: &mut crate::services::SysContext<'a, '_>) {
+    fn tick_background_services<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>) {
         // 1. Radio Coordinator / Dual Watch Daemon (PID 2)
         record_proc_activation(0xF1);
 
@@ -250,6 +250,12 @@ impl Orchestrator {
 
         // 3. System Kernel & Watch Uptime Service (PID 1)
         record_proc_activation(0xF0);
+
+        // 4. Cooperative Zone A background daemons, services, drivers, and modules
+        #[cfg(feature = "krx_native")]
+        crate::runtime::background::BgManager::tick_system(ctx.millis());
+        #[cfg(not(feature = "krx_native"))]
+        let _ = ctx;
     }
 
     #[inline(never)]
@@ -379,9 +385,7 @@ impl Orchestrator {
         let was_f_active = self.lock_mgr.is_f_active;
         let was_f_drawer_animating = self.lock_mgr.is_f_drawer_animating();
 
-        let is_modal_active = unsafe {
-            (*core::ptr::addr_of!(crate::orchestrator::compositor::ACTIVE_MODAL)).is_active()
-        };
+        let is_modal_active = crate::orchestrator::compositor::active_modal_mut().is_active();
         let can_sleep =
             !self.lock_mgr.is_locked && self.active_app_id == APP_ID_LAUNCHER && !is_modal_active;
 
@@ -634,11 +638,13 @@ impl Orchestrator {
         let err = kernel::error::KernelError::from_code(code);
         let err_desc = err.as_str();
 
-        unsafe {
-            let modal_mut =
-                &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL);
-            modal_mut.show_confirm(TAG_FAULT_CONFIRM, "App Unresponsive", err_desc, "Retry", "Close");
-        }
+        crate::orchestrator::compositor::active_modal_mut().show_confirm(
+            TAG_FAULT_CONFIRM,
+            "App Unresponsive",
+            err_desc,
+            "Retry",
+            "Close",
+        );
         sink_modal_keys();
     }
 
@@ -671,8 +677,7 @@ impl Orchestrator {
         event: &Event,
     ) -> FilterFlow {
         unsafe {
-            let modal_mut =
-                &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL);
+            let modal_mut = crate::orchestrator::compositor::active_modal_mut();
             if modal_mut.is_active() {
                 if let Event::Key {
                     code: KeyCode::Ptt,
@@ -860,6 +865,7 @@ impl Orchestrator {
                         ipc_msg_type::PING => Some(b"PONG"),
                         ipc_msg_type::DAEMON_STOP if msg.payload_len > 0 => {
                             let pid = kernel::proc::Pid(msg.payload[0]);
+                            crate::runtime::background::BgManager::stop_pid(pid);
                             if let Some(pcb) = proc_table_mut().find_mut(pid) {
                                 pcb.set_state(ProcState::Dormant);
                             }
@@ -916,19 +922,37 @@ impl Orchestrator {
     }
 
     #[cfg(feature = "app_hibernation")]
-    pub fn hibernate_app_state(app_id: usize) -> bool {
-        if app_id >= crate::AppRegistry::app_count() {
-            return false;
-        }
+    #[inline(never)]
+    fn swap_app_state(
+        app_id: usize,
+        storage: Option<&mut crate::services::SystemStorage>,
+        is_out: bool,
+    ) -> bool {
         let size = crate::AppRegistry::app_size(app_id);
-        if size == 0 {
+        let Some(ptr) = (size > 0)
+            .then(|| crate::AppRegistry::app_instance(app_id))
+            .flatten()
+        else {
             return false;
-        }
-        if let Some(ptr) = crate::AppRegistry::app_instance(app_id) {
+        };
+        if is_out {
             let slice = unsafe { core::slice::from_raw_parts(ptr as *const u8, size) };
-            if let Ok(comp_len) = crate::runtime::AppSwapManager::swap_out(app_id, slice) {
+            if let Ok(comp_len) = crate::runtime::AppSwapManager::swap_out_tiered(
+                app_id,
+                slice,
+                storage,
+                crate::runtime::SwapPolicy::RamThenFlash,
+            ) {
                 if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
                     pcb.hibernate(comp_len);
+                }
+                return true;
+            }
+        } else {
+            let slice = unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, size) };
+            if crate::runtime::AppSwapManager::swap_in_tiered(app_id, slice, storage).is_ok() {
+                if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
+                    pcb.resume();
                 }
                 return true;
             }
@@ -937,24 +961,21 @@ impl Orchestrator {
     }
 
     #[cfg(feature = "app_hibernation")]
-    pub fn resume_app_state(app_id: usize) -> bool {
-        if !crate::runtime::AppSwapManager::has_swap(app_id) {
-            return false;
-        }
-        let size = crate::AppRegistry::app_size(app_id);
-        if size == 0 {
-            return false;
-        }
-        if let Some(ptr) = crate::AppRegistry::app_instance(app_id) {
-            let slice = unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, size) };
-            if crate::runtime::AppSwapManager::swap_in(app_id, slice).is_ok() {
-                if let Some(pcb) = proc_table_mut().find_mut_by_app(app_id) {
-                    pcb.resume();
-                }
-                return true;
-            }
-        }
-        false
+    #[inline(always)]
+    pub fn hibernate_app_state(
+        app_id: usize,
+        storage: Option<&mut crate::services::SystemStorage>,
+    ) -> bool {
+        Self::swap_app_state(app_id, storage, true)
+    }
+
+    #[cfg(feature = "app_hibernation")]
+    #[inline(always)]
+    pub fn resume_app_state(
+        app_id: usize,
+        storage: Option<&mut crate::services::SystemStorage>,
+    ) -> bool {
+        Self::swap_app_state(app_id, storage, false)
     }
 
     pub fn switch_app<'a>(&mut self, ctx: &mut crate::services::SysContext<'a, '_>, app_id: usize) {
@@ -998,7 +1019,7 @@ impl Orchestrator {
                         self.nav_stack.trim_oldest(max_apps.saturating_sub(1))
                     {
                         #[cfg(feature = "app_hibernation")]
-                        Self::hibernate_app_state(_evicted_app);
+                        Self::hibernate_app_state(_evicted_app, Some(ctx.storage));
                     }
                 }
                 self.previous_app = Some(self.active_app_id);
@@ -1012,9 +1033,9 @@ impl Orchestrator {
             self.lock_mgr.reset_hold_tracking();
             sink_modal_keys();
 
-            // Resume app if hibernated in swap slot
+            // Resume app if hibernated in Tier-1 RAM or Tier-2 KernFS swap
             #[cfg(feature = "app_hibernation")]
-            Self::resume_app_state(app_id);
+            Self::resume_app_state(app_id, Some(ctx.storage));
 
             // Track process activation in PCB table
             let table = proc_table_mut();

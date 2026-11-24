@@ -189,6 +189,16 @@ pub fn encode_crockford64(serial: u64) -> [u8; 15] {
     }
 }
 
+/// Populates `mac` (EUI-48) and `crockford` (14-char Base32 + NUL) from a single
+/// 64-bit hardware serial read, returning the raw 64-bit serial.
+#[inline(never)]
+pub fn fill_device_identity(mac: &mut [u8; 6], crockford: &mut [u8; 15]) -> u64 {
+    let serial = get_hardware_serial64();
+    mac_from_serial64_into(serial, mac);
+    encode_crockford64_into(serial, crockford);
+    serial
+}
+
 /// Generates a Crockford Base32 serial string with Mod-37 Checksum (e.g. "7K9MP3R2W8VFXC").
 /// 100% bitwise identical to DeltaFW's `GetCrockfordSerial()`.
 /// Returns a 15-byte null-terminated ASCII buffer (13 Crockford Base32 chars + 1 Mod-37 checksum + null).
@@ -223,47 +233,43 @@ impl FactoryCertStatus {
     }
 }
 
-fn find_qs1_tag_end(bytes: &[u8]) -> Option<usize> {
-    let mut i = 0;
-    while i + 4 <= bytes.len() {
-        let v = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-        if (v | 0x2020_0000) == u32::from_le_bytes(*b"1-sq")
-            || (v | 0x0000_2020) == u32::from_le_bytes(*b"qs-1")
-        {
-            return Some(i + 4);
-        }
-        i += 1;
-    }
-    None
-}
-
 /// Scans `bytes` for a `1-sq` / `qs-1` tag (case-insensitive) and returns a slice of up to 16
 /// printable serial bytes, or falls back to an un-tagged `>= 8`-char ASCII run in `[80..]` if present.
 #[inline(never)]
 pub fn extract_qs1_slice(bytes: &[u8]) -> Option<&[u8]> {
-    let tag_end = find_qs1_tag_end(bytes);
-    let mut start = tag_end.unwrap_or(80);
-    if start >= bytes.len() {
+    let n = bytes.len();
+    let mut i = 0;
+    let mut tag_found = false;
+    let mut start = 80usize;
+    while i + 4 <= n {
+        let (a, b, c, d) = (bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]);
+        if (a == b'1' && b == b'-' && (c | 0x20) == b's' && (d | 0x20) == b'q')
+            || ((a | 0x20) == b'q' && (b | 0x20) == b's' && c == b'-' && d == b'1')
+        {
+            start = i + 4;
+            tag_found = true;
+            break;
+        }
+        i += 1;
+    }
+    if start >= n {
         return None;
     }
-
-    while start < bytes.len() && matches!(bytes[start], 0x00 | 0xFF | b' ' | b':' | b'=') {
+    while start < n && matches!(bytes[start], 0x00 | 0xFF | b' ' | b':' | b'=') {
         start += 1;
     }
-
-    let max = (bytes.len() - start).min(16);
-    let mut len = 0usize;
-    while len < max {
-        let b = bytes[start + len];
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/') {
-            len += 1;
+    let end = (start + 16).min(n);
+    let mut cur = start;
+    while cur < end {
+        let ch = bytes[cur];
+        if ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b'_' | b'.' | b'/') {
+            cur += 1;
         } else {
             break;
         }
     }
-
-    let min_len = if tag_end.is_some() { 1 } else { 8 };
-    (len >= min_len).then(|| &bytes[start..start + len])
+    let min_len = if tag_found { 1 } else { 8 };
+    (cur - start >= min_len).then(|| &bytes[start..cur])
 }
 
 /// Parses a 104-byte factory provisioning certificate into its UI status and raw `1-sq` ASCII S/N.

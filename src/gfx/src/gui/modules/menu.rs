@@ -26,9 +26,7 @@ impl ShortString {
     }
 
     pub fn set_str(&mut self, s: &str) {
-        let copy_len = s.len().min(18);
-        self.bytes[..copy_len].copy_from_slice(&s.as_bytes()[..copy_len]);
-        self.len = copy_len as u8;
+        self.len = utils::format::copy_trunc_utf8(&mut self.bytes, 0, s);
     }
 
     pub fn from_str(s: &str) -> Self {
@@ -59,10 +57,7 @@ impl ShortString {
     }
 
     pub fn push_str(&mut self, s: &str) {
-        let rem = 18usize.saturating_sub(self.len as usize);
-        let n = s.len().min(rem);
-        self.bytes[self.len as usize..self.len as usize + n].copy_from_slice(&s.as_bytes()[..n]);
-        self.len += n as u8;
+        self.len = utils::format::copy_trunc_utf8(&mut self.bytes, self.len as usize, s);
     }
 
     pub fn push_byte(&mut self, b: u8) {
@@ -929,6 +924,7 @@ fn step_hover(hover: usize, total: usize, forward: bool) -> usize {
     }
 }
 
+#[inline(never)]
 pub fn handle_sheet_event_with_repeater(
     repeater: &mut crate::gui::repeater::KeyRepeater,
     sheet: &mut OptionSheet,
@@ -944,20 +940,12 @@ pub fn handle_sheet_event_with_repeater(
             && let Some(down) = sheet_nav_dir(code)
         {
             let prev = sheet.hover;
-            if down {
-                if prev + 1 < total {
-                    sheet.hover = prev + 1;
-                } else if total > 4 {
-                    sheet.hover = 0;
+            let at_edge = if down { prev + 1 >= total } else { prev == 0 };
+            if !at_edge || total > 4 {
+                sheet.hover = step_hover(prev, total, down);
+                if at_edge {
                     repeater.pause(6);
                 }
-            } else if prev > 0 {
-                sheet.hover = prev - 1;
-            } else if total > 4 {
-                sheet.hover = total - 1;
-                repeater.pause(6);
-            }
-            if sheet.hover != prev {
                 return SheetResult::Changed;
             }
         }

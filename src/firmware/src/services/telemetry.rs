@@ -1,6 +1,5 @@
 //! System Telemetry and Periodic ADC Battery / Temperature Sampling.
 
-use crate::POWER_SERVICE;
 use py32_hal::adc::Adc;
 
 pub fn sample_battery_and_system(adc: &Adc, audio_active: bool) {
@@ -9,7 +8,7 @@ pub fn sample_battery_and_system(adc: &Adc, audio_active: bool) {
     let mcu_temp = adc.read_mcu_temp_deci_c(vdda_mv);
 
     let coord = &crate::radio_state_ref().coord;
-    let power_service = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
+    let power_service = crate::power_service();
 
     let slot = coord.active_vfo;
     let ch = coord.active_channel();

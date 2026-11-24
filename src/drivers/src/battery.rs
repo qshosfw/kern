@@ -195,24 +195,26 @@ impl BatteryDriver {
         self.set_calib_const(curve[3]);
     }
 
+    #[inline(always)]
+    fn shift_mv(v: &mut u16, delta: i32) {
+        if *v != 0 {
+            *v = (*v as i32 + delta).clamp(0, 15000) as u16;
+        }
+    }
+
     /// Apply a user calibration offset.
+    #[inline(never)]
     pub fn set_calib_tweak(&mut self, mv: i16) {
         let delta = mv as i32 - self.calib_tweak_mv as i32;
         if delta == 0 {
             return;
         }
         self.calib_tweak_mv = mv;
-        for field in [
-            &mut self.smoothed_mv,
-            &mut self.ocv_mv,
-            &mut self.last_mv,
-            &mut self.base_mv,
-            &mut self.pre_tx_ocv,
-        ] {
-            if *field != 0 {
-                *field = (*field as i32 + delta).clamp(0, 15000) as u16;
-            }
-        }
+        Self::shift_mv(&mut self.smoothed_mv, delta);
+        Self::shift_mv(&mut self.ocv_mv, delta);
+        Self::shift_mv(&mut self.last_mv, delta);
+        Self::shift_mv(&mut self.base_mv, delta);
+        Self::shift_mv(&mut self.pre_tx_ocv, delta);
         self.charge_counter = 0;
         self.drift_counter = 0;
         if self.ocv_mv > 0 {
@@ -228,11 +230,13 @@ impl BatteryDriver {
     }
 
     #[inline(never)]
-    fn eval_hysteresis(active: bool, ocv_mv: u16, pct: u8, limit_mv: u16, enter_pct: u8) -> bool {
+    fn eval_hysteresis(&self, active: bool, pct: u8, limit_and_pct: u32) -> bool {
+        let limit_mv = limit_and_pct as u16;
+        let enter_pct = (limit_and_pct >> 16) as u8;
         if active {
-            !(ocv_mv >= limit_mv.saturating_add(150) && pct >= enter_pct - 2)
+            !(self.ocv_mv >= limit_mv.saturating_add(150) && pct >= enter_pct - 2)
         } else {
-            (ocv_mv < limit_mv && pct <= enter_pct) || pct <= enter_pct - 5
+            (self.ocv_mv < limit_mv && pct <= enter_pct) || pct <= enter_pct - 5
         }
     }
 
@@ -401,15 +405,17 @@ impl BatteryDriver {
                     }
 
                     // Steady-state normal discharge tracking:
-                    // If load sag is small (<= 25 mV), it is normal steady-state discharge.
-                    // Slowly track OCV downwards with a 32-sample EMA (~6.4s time constant at 5 Hz).
-                    if sm <= self.ocv_mv {
-                        if self.ocv_mv - sm <= 25 {
-                            self.ocv_mv = Self::ema_u16(self.ocv_mv, sm, 5);
-                        }
-                    } else if sm < self.base_mv.saturating_add(35) {
-                        // Slight upward thermal drift <= 35 mV
-                        self.ocv_mv = Self::ema_u16(self.ocv_mv, sm, 6);
+                    // If load sag is small (<= 25 mV), track OCV downwards (shift 5);
+                    // slight upward thermal drift (< +35 mV) tracks slowly (shift 6).
+                    let shift = if sm <= self.ocv_mv && self.ocv_mv - sm <= 25 {
+                        5
+                    } else if sm > self.ocv_mv && sm < self.base_mv.saturating_add(35) {
+                        6
+                    } else {
+                        0
+                    };
+                    if shift != 0 {
+                        self.ocv_mv = Self::ema_u16(self.ocv_mv, sm, shift);
                     }
                 }
             } else {
@@ -466,15 +472,16 @@ impl BatteryDriver {
             self.is_critical_state = self.ocv_mv < shut_limit && percentage == 0;
             self.is_low_state = self.ocv_mv < warn_limit && percentage < 5;
         } else {
-            self.is_critical_state = Self::eval_hysteresis(
+            self.is_critical_state = self.eval_hysteresis(
                 self.is_critical_state,
-                self.ocv_mv,
                 percentage,
-                shut_limit,
-                5,
+                (shut_limit as u32) | (5u32 << 16),
             );
-            self.is_low_state =
-                Self::eval_hysteresis(self.is_low_state, self.ocv_mv, percentage, warn_limit, 20);
+            self.is_low_state = self.eval_hysteresis(
+                self.is_low_state,
+                percentage,
+                (warn_limit as u32) | (20u32 << 16),
+            );
 
             if self.is_critical_state {
                 self.is_low_state = true;

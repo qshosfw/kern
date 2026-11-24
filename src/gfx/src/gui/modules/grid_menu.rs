@@ -259,8 +259,7 @@ impl<T: GridItem + 'static> View<GridMenuModel<T>> for GridMenuView {
 
             // Centered title below icon (if enabled), localized & clipped safely inside 40px tile
             if model.show_labels {
-                let mut lbuf = [0u8; 24];
-                let lbl = text::localize(item.title(), true, &mut lbuf);
+                let lbl = text::localize_scratch(item.title(), true);
                 if text::str_width(lbl, &FONT) > 38 {
                     text::draw_str_ellipsis(
                         canvas,

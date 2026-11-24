@@ -56,6 +56,14 @@ const fn as_raw_bytes<T>(val: &'static T) -> &'static [u8] {
     unsafe { ::core::slice::from_raw_parts(val as *const T as *const u8, ::core::mem::size_of::<T>()) }
 }
 
+#[inline(never)]
+fn read_le_u32(buf: &[u8], off: usize) -> u32 {
+    if off + 4 > buf.len() {
+        return 0;
+    }
+    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
+}
+
 impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
     #[inline(never)]
     pub(super) fn handle_core_operation(
@@ -78,8 +86,7 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
                 if payload.len() < 8 {
                     (Status::BadLength, 0)
                 } else {
-                    let epoch =
-                        u32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
+                    let epoch = read_le_u32(payload, 2);
                     let req_mtu = u16::from_le_bytes([payload[6], payload[7]]);
                     if epoch == 0 {
                         (Status::InvalidArg, 0)
@@ -100,20 +107,17 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
                 if payload.len() < 4 {
                     (Status::BadLength, 0)
                 } else {
-                    words[0] = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                    words[0] = read_le_u32(payload, 0);
                     words[1] = uptime_ms;
                     (Status::Ok, 8)
                 }
             }
 
             OP_CORE_TIME_SYNC => {
-                words[0] = if payload.len() >= 4 {
-                    u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]])
-                } else {
-                    0
-                };
-                words[1] = self.time.now_us();
-                words[2] = self.time.now_us();
+                let now = self.time.now_us();
+                words[0] = read_le_u32(payload, 0);
+                words[1] = now;
+                words[2] = now;
                 words[3] = uptime_ms;
                 (Status::Ok, 16)
             }
@@ -131,15 +135,13 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
             }
 
             OP_CORE_CAPS => {
-                let s = as_raw_bytes(&CAPS_REPLY_WIRE);
-                override_slice = Some(s);
-                (Status::Ok, s.len())
+                override_slice = Some(as_raw_bytes(&CAPS_REPLY_WIRE));
+                (Status::Ok, 0)
             }
 
             OP_CORE_TABLES => {
-                let s = as_raw_bytes(&TABLES_REPLY_WIRE);
-                override_slice = Some(s);
-                (Status::Ok, s.len())
+                override_slice = Some(as_raw_bytes(&TABLES_REPLY_WIRE));
+                (Status::Ok, 0)
             }
 
             _ => (Status::Unsupported, 0),
@@ -152,12 +154,9 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
         if reboot_mode != 0xFF {
             // Drain TX FIFO / USB endpoint before resetting so the host receives the ACK.
             self.port.flush();
-            let mode = match reboot_mode {
-                1 => kernel::power::RebootMode::Bootloader,
-                2 => kernel::power::RebootMode::SafeRecovery,
-                _ => kernel::power::RebootMode::Firmware,
-            };
-            kernel::power::PowerControl::reboot_with(mode);
+            kernel::power::PowerControl::reboot_with(kernel::power::RebootMode::from_u8(
+                reboot_mode,
+            ));
         }
     }
 }

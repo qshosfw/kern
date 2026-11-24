@@ -18,7 +18,6 @@ pub use headless::{
 pub use power::WAKE_EXTI_FLAGS;
 pub use remote::{note_wire_activity, set_wire_tx};
 
-use crate::POWER_SERVICE;
 use crate::hardware::SystemHardware;
 use crate::orchestrator::record_proc_activation;
 use crate::services::power::PowerService;
@@ -28,9 +27,7 @@ use py32_hal::adc::Adc;
 #[inline(never)]
 fn wake_and_notify_activity(hw: &mut SystemHardware) {
     hw.backlight.wake();
-    unsafe {
-        (*core::ptr::addr_of_mut!(POWER_SERVICE)).notify_activity();
-    }
+    crate::power_service().notify_activity();
     hw.orchestrator.notify_activity();
 }
 
@@ -95,7 +92,7 @@ fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool
     record_proc_activation(0xF2);
     crate::services::telemetry::sample_battery_and_system(adc, hw.audio.is_active());
 
-    let pwr = unsafe { &mut *core::ptr::addr_of_mut!(POWER_SERVICE) };
+    let pwr = crate::power_service();
 
     if let Some(is_charging) = pwr.poll_charging_transition() {
         if is_charging && !is_headless() {
@@ -163,10 +160,8 @@ fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
                     crate::services::melody::DialogSoundType::Unlock,
                 ),
             );
-            unsafe {
-                (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
-                    .show_toast("Headless mode off", 1800);
-            }
+            crate::orchestrator::compositor::active_modal_mut()
+                .show_toast("Headless mode off", 1800);
             wake_and_notify_activity(hw);
         }
         return;
@@ -304,8 +299,8 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         );
 
         // Keep microkernel PowerService state in sync with display activity
-        unsafe {
-            let pwr = &mut *core::ptr::addr_of_mut!(POWER_SERVICE);
+        {
+            let pwr = crate::power_service();
             if is_display_awake {
                 pwr.state = kernel::power::PowerState::Active;
             } else if pwr.state != kernel::power::PowerState::DeepSleep {

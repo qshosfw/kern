@@ -212,6 +212,176 @@ pub fn trim_ascii_bytes(mut b: &[u8]) -> &[u8] {
     b
 }
 
+/// Copy UTF-8 `s` into `dst[start..]`, truncating cleanly on a codepoint boundary.
+/// Returns the new total byte length (`<= dst.len()` and `<= 255`).
+#[inline(never)]
+pub fn copy_trunc_utf8(dst: &mut [u8], start: usize, s: &str) -> u8 {
+    let b = s.as_bytes();
+    let max = dst.len().saturating_sub(start);
+    let mut n = b.len().min(max);
+    while n > 0 && n < b.len() && (b[n] & 0xC0) == 0x80 {
+        n -= 1;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(b.as_ptr(), dst.as_mut_ptr().add(start), n);
+    }
+    (start + n) as u8
+}
+
+/// Fixed-capacity `Copy` UTF-8 string with 1-byte `len` at offset 0 (`ldrb` on Cortex-M0+)
+/// backed by a single non-generic truncation copy (`copy_trunc_utf8`) for zero monomorphized bloat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct InlineStr<const N: usize> {
+    pub len: u8,
+    pub buf: [u8; N],
+}
+
+impl<const N: usize> InlineStr<N> {
+    pub const fn new() -> Self {
+        Self {
+            len: 0,
+            buf: [0; N],
+        }
+    }
+
+    #[inline(always)]
+    pub fn from_str(s: &str) -> Self {
+        let mut out = Self::new();
+        out.set(s);
+        out
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    #[inline(always)]
+    pub fn set(&mut self, s: &str) {
+        self.len = copy_trunc_utf8(&mut self.buf, 0, s);
+    }
+
+    #[inline(always)]
+    pub fn push_str(&mut self, s: &str) {
+        let cur = (self.len as usize).min(N);
+        self.len = copy_trunc_utf8(&mut self.buf, cur, s);
+    }
+
+    #[inline(always)]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline(always)]
+    pub const fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    #[inline(always)]
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+
+    #[inline(always)]
+    pub fn as_bytes(&self) -> &[u8] {
+        let n = (self.len as usize).min(N);
+        &self.buf[..n]
+    }
+
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        unsafe { core::str::from_utf8_unchecked(self.as_bytes()) }
+    }
+}
+
+impl<const N: usize> core::ops::Deref for InlineStr<N> {
+    type Target = str;
+    #[inline(always)]
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+/// Start byte index of the last UTF-8 codepoint in `b` (or 0 if empty).
+#[inline(never)]
+pub fn last_utf8_start(b: &[u8]) -> usize {
+    if b.is_empty() {
+        return 0;
+    }
+    let mut i = b.len() - 1;
+    while i > 0 && (b[i] & 0xC0) == 0x80 {
+        i -= 1;
+    }
+    i
+}
+
+/// Insert UTF-8 slice `ins` at byte index `pos` inside `(buf, len)` without `memmove`.
+#[inline(never)]
+pub fn insert_utf8_at(buf: &mut [u8], len: &mut u8, pos: usize, ins: &str) {
+    let ib = ins.as_bytes();
+    let ilen = ib.len();
+    let old_len = (*len as usize).min(buf.len());
+    if ilen == 0 || old_len + ilen > buf.len() {
+        return;
+    }
+    let p = pos.min(old_len);
+    let mut i = old_len;
+    while i > p {
+        i -= 1;
+        buf[i + ilen] = buf[i];
+    }
+    buf[p..p + ilen].copy_from_slice(ib);
+    *len = (old_len + ilen) as u8;
+}
+
+/// Delete the UTF-8 codepoint immediately before byte index `pos` inside `(buf, len)`.
+#[inline(never)]
+pub fn delete_utf8_before(buf: &mut [u8], len: &mut u8, pos: usize) {
+    let old_len = (*len as usize).min(buf.len());
+    let p = pos.min(old_len);
+    if p == 0 {
+        return;
+    }
+    let start = last_utf8_start(&buf[..p]);
+    let rm = p - start;
+    let mut i = p;
+    while i < old_len {
+        buf[i - rm] = buf[i];
+        i += 1;
+    }
+    *len = (old_len - rm) as u8;
+}
+
+impl<const N: usize> Default for InlineStr<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Decode escape-run RLE (`esc <count>` skips `count` `esc` bytes; else literal) into `dst`
+/// starting at logical byte offset `start`.
+#[inline(never)]
+pub fn decode_rle_escape(src: &[u8], esc: u8, start: usize, dst: &mut [u8]) {
+    dst.fill(esc);
+    let end = start + dst.len();
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    while i < src.len() && pos < end {
+        let b = src[i];
+        i += 1;
+        if b == esc {
+            pos += src[i] as usize;
+            i += 1;
+        } else {
+            if pos >= start {
+                dst[pos - start] = b;
+            }
+            pos += 1;
+        }
+    }
+}
+
 /// Extract the `idx`-th NUL-delimited UTF-8 string from `packed`.
 ///
 /// Packing string enum tables into one NUL-delimited byte slice avoids per-variant
@@ -308,5 +478,34 @@ mod tests {
         const UNTERM: &[u8] = b"System\0Device\0Status\0Legal";
         assert_eq!(nth_cstr(UNTERM, 3), "Legal");
         assert_eq!(nth_cstr(UNTERM, 4), "");
+    }
+
+    #[test]
+    fn test_inline_str_and_utf8_edits() {
+        let mut s = InlineStr::<6>::new();
+        assert!(s.is_empty());
+        assert_eq!(s.capacity(), 6);
+        s.set("abé"); // 4 bytes: a(1), b(1), é(2)
+        assert_eq!(&*s, "abé");
+        assert_eq!(s.len(), 4);
+        // Pushing 3-byte € (total 7 > 6) must truncate cleanly on UTF-8 boundary
+        s.push_str("€");
+        assert_eq!(&*s, "abé");
+        s.push_str("xy");
+        assert_eq!(&*s, "abéxy");
+
+        let mut buf = [0u8; 8];
+        let mut len = copy_trunc_utf8(&mut buf, 0, "aé");
+        assert_eq!(last_utf8_start(&buf[..len as usize]), 1);
+        insert_utf8_at(&mut buf, &mut len, 1, "Z");
+        assert_eq!(&buf[..len as usize], "aZé".as_bytes());
+        let end = len as usize;
+        delete_utf8_before(&mut buf, &mut len, end);
+        assert_eq!(&buf[..len as usize], b"aZ");
+
+        let mut out = [0u8; 6];
+        let enc = [0xAA, 0xFF, 0x04, 0xBB];
+        decode_rle_escape(&enc, 0xFF, 0, &mut out);
+        assert_eq!(out, [0xAA, 0xFF, 0xFF, 0xFF, 0xFF, 0xBB]);
     }
 }

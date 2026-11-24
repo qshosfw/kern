@@ -202,6 +202,15 @@ impl UsbDriver {
         }
     }
 
+    /// Initialize non-zero fields on an already-zeroed `UsbDriver` instance (avoids stack temporary).
+    #[inline(never)]
+    pub fn init_zeroed(&mut self) {
+        let def = bsp::pins::BOARD_SPEC.usb_product_default.as_bytes();
+        self.product_len = def.len() as u8;
+        self.product_name.fill(b' ');
+        self.product_name[..def.len()].copy_from_slice(def);
+    }
+
     /// Update configured device identity (e.g. "Quansheng UV-K1 1D9E") for USB product descriptor.
     pub fn update_device_identity(&mut self, model: &str, tag: &str) {
         let m_bytes = utils::format::trim_ascii_bytes(model.as_bytes());
@@ -672,9 +681,14 @@ impl UsbDriver {
         self.ep0_start_string_transfer(&buf[..pos], max_len);
     }
 
-    fn ep0_start_mac_transfer(&mut self, max_len: u16) {
+    fn ep0_start_identity_transfer(&mut self, is_mac: bool, max_len: u16) {
         let mut mac = [0u8; 6];
-        bsp::uid::mac_from_serial64_into(bsp::uid::get_hardware_serial64(), &mut mac);
+        let mut crock = [0u8; 15];
+        bsp::uid::fill_device_identity(&mut mac, &mut crock);
+        if !is_mac {
+            self.ep0_start_string_transfer(&crock[..14], max_len);
+            return;
+        }
         let mut uninit = core::mem::MaybeUninit::<[u8; 22]>::uninit();
         let buf = unsafe { &mut *uninit.as_mut_ptr() };
         buf[..5].copy_from_slice(b"MAC: ");
@@ -700,10 +714,8 @@ impl UsbDriver {
                     self.ep0_start_product_transfer(w_length);
                     return;
                 }
-                3 => {
-                    let mut crock = [0u8; 15];
-                    bsp::uid::encode_crockford64_into(bsp::uid::get_hardware_serial64(), &mut crock);
-                    self.ep0_start_string_transfer(&crock[..14], w_length);
+                3 | 6 => {
+                    self.ep0_start_identity_transfer(desc_index == 6, w_length);
                     return;
                 }
                 #[cfg(feature = "usb_cdc")]
@@ -713,10 +725,6 @@ impl UsbDriver {
                 }
                 5 => {
                     self.ep0_start_telemetry_transfer(w_length);
-                    return;
-                }
-                6 => {
-                    self.ep0_start_mac_transfer(w_length);
                     return;
                 }
                 #[cfg(feature = "usb_msc")]

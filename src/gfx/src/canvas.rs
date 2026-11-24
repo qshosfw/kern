@@ -304,10 +304,10 @@ impl Canvas {
             }
             #[cfg(not(feature = "grayscale"))]
             {
-                let row = &mut self.buffer[page];
-                for (col, byte) in row[x as usize..end_x].iter_mut().enumerate() {
+                let row = unsafe { self.buffer.get_unchecked_mut(page) };
+                for abs_col in (x as usize)..end_x {
+                    let byte = unsafe { row.get_unchecked_mut(abs_col) };
                     let cur = *byte;
-                    let abs_col = (x as usize) + col;
                     *byte = match color {
                         Color::Fill => cur | mask,
                         Color::Clear => cur & not_mask,
@@ -419,10 +419,12 @@ impl Canvas {
             let top = (y as usize).saturating_sub(page_start_y);
             let bottom = (end_y - page_start_y).min(8);
             let y_mask = (0xFFu8 >> (8 - bottom)) & (0xFFu8 << top);
-            let row = &mut self.buffer[page];
+            let row = unsafe { self.buffer.get_unchecked_mut(page) };
 
             for col in (x as usize)..end_x {
-                row[col] |= masks[col & 3] & y_mask;
+                unsafe {
+                    *row.get_unchecked_mut(col) |= *masks.get_unchecked(col & 3) & y_mask;
+                }
             }
             self.dirty |= 1 << page;
         }

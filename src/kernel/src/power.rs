@@ -14,6 +14,17 @@ pub enum RebootMode {
     SafeRecovery = 2,
 }
 
+impl RebootMode {
+    #[inline(always)]
+    pub const fn from_u8(val: u8) -> Self {
+        match val {
+            1 => Self::Bootloader,
+            2 => Self::SafeRecovery,
+            _ => Self::Firmware,
+        }
+    }
+}
+
 static REBOOT_HANDLER: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Kernel power & reset lifecycle controller.

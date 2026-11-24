@@ -7,7 +7,7 @@ use kernel::proc::abi::KrxBusReq;
 
 #[inline(always)]
 fn power_ref() -> &'static drivers::battery::SystemPower {
-    unsafe { &*core::ptr::addr_of!(crate::POWER_SERVICE) }
+    crate::power_service()
 }
 
 fn dispatch_io_key(sub: u8, a1: usize) -> usize {
@@ -82,11 +82,7 @@ fn dispatch_io_power(sub: u8, a1: usize) -> usize {
             0
         }
         io_power::FLASHLIGHT => {
-            if a1 != 0 {
-                bsp::pins::FLASHLIGHT.set_high();
-            } else {
-                bsp::pins::FLASHLIGHT.set_low();
-            }
+            crate::services::primitives::hw_gpio_write(0, a1 != 0);
             0
         }
         _ => 0,
@@ -96,7 +92,7 @@ fn dispatch_io_power(sub: u8, a1: usize) -> usize {
 #[cfg(not(test))]
 #[inline(never)]
 fn can_raw_serial(port_idx: usize) -> bool {
-    let pid = super::super::native_runner::slot_ref().pid.0;
+    let pid = super::service::active_caller_pid();
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
     let wire_active = crate::kern_hw().wire.session.is_active();
     #[cfg(not(any(feature = "uart", feature = "usb_cdc")))]
@@ -104,96 +100,82 @@ fn can_raw_serial(port_idx: usize) -> bool {
     crate::hardware::serial_router_mut().can_raw_io(port_idx, pid, wire_active)
 }
 
+#[inline(never)]
+unsafe fn serial_xfer(is_write: bool, ptr: usize, len: usize) -> usize {
+    if ptr == 0 || len == 0 {
+        return 0;
+    }
+    let slice = unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, len) };
+    #[cfg(not(test))]
+    {
+        #[cfg(feature = "usb")]
+        if crate::kern_hw().usb.is_connected() {
+            if !can_raw_serial(kernel::service::PortId::UsbCdc as usize) {
+                return 0;
+            }
+            return if is_write {
+                let _ = crate::kern_hw().usb.cdc_write(slice);
+                len
+            } else {
+                crate::kern_hw().usb.cdc_read(slice)
+            };
+        }
+        #[cfg(feature = "uart")]
+        {
+            if !can_raw_serial(kernel::service::PortId::Uart0 as usize) {
+                return 0;
+            }
+            if is_write {
+                let _ = py32_hal::uart::write_bytes(slice);
+                len
+            } else {
+                crate::kern_hw().uart.read(slice)
+            }
+        }
+        #[cfg(not(feature = "uart"))]
+        {
+            let _ = (is_write, slice);
+            0
+        }
+    }
+    #[cfg(test)]
+    {
+        let Some(ctx) = active_ctx_opt() else {
+            return 0;
+        };
+        #[cfg(feature = "usb")]
+        if let Some(ref mut usb) = ctx.usb
+            && usb.is_connected()
+        {
+            return if is_write {
+                let _ = usb.cdc_write(slice);
+                len
+            } else {
+                usb.cdc_read(slice)
+            };
+        }
+        #[cfg(feature = "uart")]
+        {
+            return if is_write {
+                ctx.uart.write(slice);
+                len
+            } else {
+                ctx.uart.read(slice)
+            };
+        }
+        #[cfg(not(feature = "uart"))]
+        {
+            let _ = (is_write, slice);
+            0
+        }
+    }
+}
+
 unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
     use ::abi::sub::io_serial;
     match sub {
-        io_serial::WRITE => {
-            let len = a2 as u16;
-            let Some(slice) = (unsafe { ptr_slice(a1 as *const u8, len as usize) }) else {
-                return 0;
-            };
-            #[cfg(not(test))]
-            {
-                #[cfg(feature = "usb")]
-                if crate::kern_hw().usb.is_connected() {
-                    if !can_raw_serial(kernel::service::PortId::UsbCdc as usize) {
-                        return 0;
-                    }
-                    let _ = crate::kern_hw().usb.cdc_write(slice);
-                    return len as usize;
-                }
-                #[cfg(feature = "uart")]
-                {
-                    if !can_raw_serial(kernel::service::PortId::Uart0 as usize) {
-                        return 0;
-                    }
-                    let _ = py32_hal::uart::write_bytes(slice);
-                    len as usize
-                }
-                #[cfg(not(feature = "uart"))]
-                0
-            }
-            #[cfg(test)]
-            {
-                if let Some(ctx) = active_ctx_opt() {
-                    #[cfg(feature = "usb")]
-                    if let Some(ref mut usb) = ctx.usb {
-                        if usb.is_connected() {
-                            let _ = usb.cdc_write(slice);
-                            return len as usize;
-                        }
-                    }
-                    #[cfg(feature = "uart")]
-                    ctx.uart.write(slice);
-                    len as usize
-                } else {
-                    0
-                }
-            }
-        }
-        io_serial::READ => {
-            let Some(slice) = (unsafe { ptr_slice_mut(a1 as *mut u8, (a2 as u16) as usize) })
-            else {
-                return 0;
-            };
-            #[cfg(not(test))]
-            {
-                #[cfg(feature = "usb")]
-                if crate::kern_hw().usb.is_connected() {
-                    if !can_raw_serial(kernel::service::PortId::UsbCdc as usize) {
-                        return 0;
-                    }
-                    return crate::kern_hw().usb.cdc_read(slice);
-                }
-                #[cfg(feature = "uart")]
-                {
-                    if !can_raw_serial(kernel::service::PortId::Uart0 as usize) {
-                        return 0;
-                    }
-                    crate::kern_hw().uart.read(slice)
-                }
-                #[cfg(not(feature = "uart"))]
-                0
-            }
-            #[cfg(test)]
-            {
-                if let Some(ctx) = active_ctx_opt() {
-                    #[cfg(feature = "usb")]
-                    if let Some(ref mut usb) = ctx.usb {
-                        if usb.is_connected() {
-                            return usb.cdc_read(slice);
-                        }
-                    }
-                    #[cfg(feature = "uart")]
-                    {
-                        return ctx.uart.read(slice);
-                    }
-                    #[cfg(not(feature = "uart"))]
-                    0
-                } else {
-                    0
-                }
-            }
+        io_serial::WRITE | io_serial::READ => {
+            unsafe { serial_xfer(sub == io_serial::WRITE, a1, (a2 as u16) as usize) }
         }
         io_serial::CONNECTED => {
             #[cfg(all(not(test), feature = "usb"))]
@@ -222,12 +204,39 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
 unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
     use ::abi::sub::io_bus;
     match sub {
-        io_bus::I2C => {
-            let req = a1 as *const KrxBusReq;
-            if req.is_null() {
-                return 1;
+        io_bus::GPIO_SET => {
+            crate::services::primitives::hw_gpio_write(a1 as u8, a2 != 0);
+            return 0;
+        }
+        io_bus::GPIO_GET => return crate::services::primitives::hw_gpio_read(a1 as u8) as usize,
+        io_bus::RF_RD => {
+            #[cfg(not(test))]
+            {
+                return crate::kern_hw().radio.read_reg(a1 as u8) as usize;
             }
-            let r = unsafe { &*req };
+            #[cfg(test)]
+            {
+                return active_ctx_opt().map_or(0, |ctx| ctx.radio.read_reg(a1 as u8) as usize);
+            }
+        }
+        io_bus::RF_WR => {
+            #[cfg(not(test))]
+            crate::kern_hw().radio.write_reg(a1 as u8, a2 as u16);
+            #[cfg(test)]
+            if let Some(ctx) = active_ctx_opt() {
+                ctx.radio.write_reg(a1 as u8, a2 as u16);
+            }
+            return 0;
+        }
+        _ => {}
+    }
+    let req = a1 as *const KrxBusReq;
+    if req.is_null() {
+        return 1;
+    }
+    let r = unsafe { &*req };
+    match sub {
+        io_bus::I2C => {
             let mut i2c = py32_hal::i2c::BitbangI2c::new(bsp::pins::FM_SCL, bsp::pins::FM_SDA);
             let tx_opt = unsafe { ptr_slice(r.tx, r.tx_len as usize) };
             let rx_opt = unsafe { ptr_slice_mut(r.rx, r.rx_len as usize) };
@@ -237,11 +246,6 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
             )
         }
         io_bus::SPI => {
-            let req = a1 as *const KrxBusReq;
-            if req.is_null() {
-                return 1;
-            }
-            let r = unsafe { &*req };
             let len = r.rx_len.max(r.tx_len) as usize;
             if len == 0 {
                 return 1;
@@ -253,45 +257,15 @@ unsafe fn dispatch_io_bus(sub: u8, a1: usize, a2: usize) -> usize {
                     .is_err(),
             )
         }
-        io_bus::GPIO_SET => {
-            crate::services::primitives::hw_gpio_write(a1 as u8, a2 != 0);
-            0
-        }
-        io_bus::GPIO_GET => crate::services::primitives::hw_gpio_read(a1 as u8) as usize,
-        io_bus::RF_RD => {
-            #[cfg(not(test))]
-            {
-                crate::kern_hw().radio.read_reg(a1 as u8) as usize
-            }
-            #[cfg(test)]
-            {
-                active_ctx_opt().map_or(0, |ctx| ctx.radio.read_reg(a1 as u8) as usize)
-            }
-        }
-        io_bus::RF_WR => {
-            #[cfg(not(test))]
-            crate::kern_hw().radio.write_reg(a1 as u8, a2 as u16);
-            #[cfg(test)]
-            if let Some(ctx) = active_ctx_opt() {
-                ctx.radio.write_reg(a1 as u8, a2 as u16);
-            }
-            0
-        }
         io_bus::FLASH_RD => {
-            let req = a1 as *const KrxBusReq;
-            if !req.is_null() {
-                let r = unsafe { &*req };
-                if let Some(dst) = unsafe { ptr_slice_mut(r.rx, r.rx_len as usize) } {
-                    #[cfg(not(test))]
-                    {
-                        return usize::from(
-                            crate::kern_fs().fs.dev.read_data(r.addr, dst).is_err(),
-                        );
-                    }
-                    #[cfg(test)]
-                    if let Some(ctx) = active_ctx_opt() {
-                        return usize::from(ctx.storage.fs.dev.read_data(r.addr, dst).is_err());
-                    }
+            if let Some(dst) = unsafe { ptr_slice_mut(r.rx, r.rx_len as usize) } {
+                #[cfg(not(test))]
+                {
+                    return usize::from(crate::kern_fs().fs.dev.read_data(r.addr, dst).is_err());
+                }
+                #[cfg(test)]
+                if let Some(ctx) = active_ctx_opt() {
+                    return usize::from(ctx.storage.fs.dev.read_data(r.addr, dst).is_err());
                 }
             }
             1

@@ -369,8 +369,8 @@ mod tests {
         note_loaded_pkg(kernel::proc::Pid(7), "/apps/settings.krx");
 
         // Simulate a Cortex-M0+ stack overflow clobbering `NATIVE_SLOT` fields with stack garbage.
-        slot.pkg_path_len = 0xFF;
-        slot.pkg_path[0] = 0xFE;
+        slot.pkg_path.len = 0xFF;
+        slot.pkg_path.buf[0] = 0xFE;
         assert_eq!(slot.pkg_path_str(), "");
 
         // `.bss` load-time snapshot stays intact far below `_stack_end`.

@@ -456,11 +456,11 @@ mod tests {
 
     #[test]
     fn dynamic_shortcut_resolves_app_and_declared_action_with_icons() {
-        use crate::apps::launcher::catalog::SmallStr;
+        use utils::format::InlineStr;
         let mut cat = PackageCatalog::new();
         let _ = cat.entries.push(PackageCatalogEntry {
-            title: SmallStr::from_str("Tasks"),
-            path: SmallStr::from_str("/apps/tasks.krx"),
+            title: InlineStr::from_str("Tasks"),
+            path: InlineStr::from_str("/apps/tasks.krx"),
             exec_type: KrxExecType::App,
             icon_16_off: 0,
             icon_id: 29,

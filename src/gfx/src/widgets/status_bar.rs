@@ -263,16 +263,11 @@ impl<'a> StatusRightConfig<'a> {
         let is_charging = self.is_charging();
         let fill_bars = if is_charging && full_bars < 10 {
             let range = 11 - full_bars;
-            let step = if range > 0 {
-                let mut rem = self.anim_step;
-                while rem >= range {
-                    rem -= range;
-                }
-                rem
-            } else {
-                0
-            };
-            full_bars + step
+            let mut rem = self.anim_step;
+            while rem >= range {
+                rem -= range;
+            }
+            full_bars + rem
         } else {
             full_bars
         };
@@ -281,17 +276,20 @@ impl<'a> StatusRightConfig<'a> {
             canvas.fill_rect(work_end_x - fill_bars, y + 1, fill_bars, 3, fg);
         }
 
-        if is_charging {
-            if fill_bars < 10 && fill_bars > full_bars {
-                canvas.draw_vertical_line(work_end_x - fill_bars, y + 1, 3, Color::DarkGray);
-            }
-        } else if partial > 0 && full_bars < 10 {
-            let partial_color = if partial == 2 {
+        let tip = if is_charging && fill_bars < 10 && fill_bars > full_bars {
+            Some((work_end_x - fill_bars, Color::DarkGray))
+        } else if !is_charging && partial > 0 && full_bars < 10 {
+            let col = if partial == 2 {
                 Color::DarkGray
             } else {
                 Color::LightGray
             };
-            canvas.draw_vertical_line(work_end_x - full_bars - 1, y + 1, 3, partial_color);
+            Some((work_end_x - full_bars - 1, col))
+        } else {
+            None
+        };
+        if let Some((tx, col)) = tip {
+            canvas.draw_vertical_line(tx, y + 1, 3, col);
         }
     }
 }
