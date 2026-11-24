@@ -53,6 +53,7 @@ pub const MODAL_RESULT_CONFIRMED: u8 = 1;
 pub const MODAL_RESULT_TEXT_DONE: u8 = 2;
 pub const MODAL_RESULT_SHEET_SELECTED: u8 = 3;
 pub const MODAL_RESULT_CANCELED: u8 = 4;
+pub const MODAL_RESULT_NUMBER_DONE: u8 = 5;
 
 pub const KRX_LEAF_KIND_DONE: u8 = 0;
 pub const KRX_LEAF_KIND_CALL_LEAF: u8 = 1;

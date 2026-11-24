@@ -31,7 +31,9 @@ pub(super) fn tick_dt_ms(last_ms: &mut u32, max_dt: u16) -> u16 {
 
 #[cfg(not(test))]
 use crate::apps::APP_ID_SETTINGS;
-use crate::apps::{APP_ID_LAUNCHER, APP_ID_VFO, Shortcut};
+#[cfg(not(test))]
+use crate::apps::APP_ID_VFO;
+use crate::apps::{APP_ID_LAUNCHER, Shortcut};
 use ::abi::CapabilitySet;
 use compositor::OsCompositor;
 use gfx::Canvas;
@@ -635,7 +637,7 @@ impl Orchestrator {
         unsafe {
             let modal_mut =
                 &mut *core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL);
-            modal_mut.show_confirm(TAG_FAULT_CONFIRM, "App Stopped", err_desc, "Stop", "Retry");
+            modal_mut.show_confirm(TAG_FAULT_CONFIRM, "App Unresponsive", err_desc, "Retry", "Close");
         }
         sink_modal_keys();
     }
@@ -674,10 +676,16 @@ impl Orchestrator {
             if modal_mut.is_active() {
                 if let Event::Key {
                     code: KeyCode::Ptt,
-                    state: KeyState::Released,
+                    state,
                 } = *event
                 {
-                    ctx.handle_system_ptt(KeyState::Released);
+                    if state == KeyState::Released {
+                        ctx.handle_system_ptt(KeyState::Released);
+                    } else {
+                        // Latch PTT into key_sink while an overlay is open so dismissing a modal
+                        // with PTT held can never accidentally key the transmitter.
+                        sink_key(KeyCode::Ptt);
+                    }
                 }
                 let tag = modal_mut.tag;
                 if let Some(res) = modal_mut.handle_event(event) {
@@ -726,13 +734,6 @@ impl Orchestrator {
                                 if let Some(pcb) =
                                     proc_table_mut().find_mut_by_app(self.active_app_id)
                                 {
-                                    pcb.set_state(ProcState::Stopped);
-                                }
-                                self.switch_app_internal(ctx, APP_ID_VFO, false);
-                            } else if is_canceled_or_dismissed {
-                                if let Some(pcb) =
-                                    proc_table_mut().find_mut_by_app(self.active_app_id)
-                                {
                                     if pcb.restart_budget == 0 {
                                         pcb.restart_budget = 1;
                                     }
@@ -740,8 +741,17 @@ impl Orchestrator {
                                 }
                                 if self.active_app_id < crate::AppRegistry::count() {
                                     crate::AppRegistry::init_app(self.active_app_id);
+                                    crate::AppRegistry::on_start(self.active_app_id, ctx);
+                                } else {
+                                    self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
                                 }
-                                crate::AppRegistry::on_start(self.active_app_id, ctx);
+                            } else if is_canceled_or_dismissed {
+                                if let Some(pcb) =
+                                    proc_table_mut().find_mut_by_app(self.active_app_id)
+                                {
+                                    pcb.set_state(ProcState::Stopped);
+                                }
+                                self.switch_app_internal(ctx, APP_ID_LAUNCHER, false);
                             }
                         }
                     } else if tag == crate::orchestrator::compositor::TAG_SYSTEM_ALERT {

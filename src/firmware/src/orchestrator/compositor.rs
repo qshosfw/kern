@@ -5,6 +5,7 @@ use gfx::Canvas;
 use gfx::gui::modules::menu::{
     MenuView, OptionSheet, SheetResult, handle_sheet_event_with_repeater,
 };
+use gfx::gui::modules::number_input::{NumberInputModel, NumberInputView};
 use gfx::gui::modules::popup::{PopupModel, PopupView};
 #[cfg(feature = "text_input")]
 use gfx::gui::modules::text_input::{TextInputModel, TextInputView};
@@ -30,6 +31,7 @@ pub enum ActiveModal {
         KeyRepeater,
         OptionSheet,
     ) = 3,
+    NumberInput(NumberInputModel) = 4,
 }
 
 #[repr(C)]
@@ -74,6 +76,7 @@ impl ModalCompositor {
                         && marquee.is_active())
             }
             ActiveModal::Popup(model) => !model.anim.is_complete() || model.is_hold_animating(),
+            ActiveModal::NumberInput(model) => !model.anim.is_complete(),
             _ => false,
         }
     }
@@ -226,6 +229,24 @@ impl ModalCompositor {
     }
 
     #[inline(never)]
+    pub fn prompt_number(
+        &mut self,
+        tag: u8,
+        title: &str,
+        unit: &str,
+        mut model: NumberInputModel,
+    ) {
+        crate::orchestrator::sink_enter_keys();
+        self.tag = tag;
+        model.set_title(title);
+        model.set_unit(unit);
+        if !crate::master_config_ref().display.animations_enabled() {
+            model.anim.jump_complete();
+        }
+        self.modal = ActiveModal::NumberInput(model);
+    }
+
+    #[inline(never)]
     pub fn handle_event(&mut self, event: &Event) -> Option<ModalResult<'_>> {
         let tag = self.tag;
         match &mut self.modal {
@@ -294,6 +315,19 @@ impl ModalCompositor {
                     _ => None,
                 }
             }
+            ActiveModal::NumberInput(model) => {
+                NumberInputView.on_event(model, event);
+                if model.is_done {
+                    Some(ModalResult::NumberInputDone {
+                        tag,
+                        value: model.value,
+                    })
+                } else if model.is_canceled {
+                    Some(ModalResult::Canceled(tag))
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -323,6 +357,9 @@ impl ModalCompositor {
                     animated,
                 );
                 hover_ov.set(ov);
+            }
+            ActiveModal::NumberInput(model) => {
+                NumberInputView.render(canvas, model);
             }
         }
         if self.toast.is_active {

@@ -347,6 +347,37 @@ pub fn draw_sheet_badges(
     }
 }
 
+/// Render floating bottom softkey badges (`y = 55..63`) on a clean cleared strip without
+/// a horizontal separator rule unless `divider` is explicitly requested.
+#[inline(never)]
+pub fn draw_key_hints(
+    canvas: &mut Canvas,
+    left: Option<(&str, &str)>,
+    center: Option<(&str, &str)>,
+    right: Option<(&str, &str)>,
+    divider: bool,
+) {
+    canvas.fill_rect(0, 55, 128, 9, Color::Clear);
+    if divider {
+        canvas.draw_horizontal_line(0, 55, 128, Color::LightGray);
+    }
+    if let Some((k, lbl)) = left {
+        draw_key_badge(canvas, 3, 56, k, lbl);
+    }
+    if let Some((k, lbl)) = center {
+        let kw = key_badge_key_width(k) as i16 + 4;
+        let lw = if lbl.is_empty() {
+            0
+        } else {
+            text::str_width(lbl, &crate::fonts::tomthumb::FONT) + 2
+        };
+        draw_key_badge(canvas, ((128 - (kw + lw)) >> 1).max(0), 56, k, lbl);
+    }
+    if let Some((k, lbl)) = right {
+        draw_key_badge_right(canvas, 125, 56, k, lbl);
+    }
+}
+
 /// Clean centered modal popup with zoom materialization (progress: 0..=16)
 pub fn draw_modal_popup_materialize(
     canvas: &mut Canvas,

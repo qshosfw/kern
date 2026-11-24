@@ -140,6 +140,7 @@ pub enum ModalResult<'a> {
     Dismissed(u8),
     Confirmed(u8),
     TextInputDone { tag: u8, text: &'a str },
+    NumberInputDone { tag: u8, value: i32 },
     SheetSelected { tag: u8, index: usize },
     Canceled(u8),
 }

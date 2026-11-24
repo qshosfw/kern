@@ -1,5 +1,4 @@
-//! View abstraction inspired by Flipper Zero GUI framework (FlipCTL).
-//! Decouples rendering and input dispatch from application data models.
+//! View trait decoupling screen rendering and input dispatch from data models.
 
 use crate::Canvas;
 use kernel::event::Event;

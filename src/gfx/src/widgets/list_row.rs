@@ -326,3 +326,57 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
 
     overflow
 }
+
+/// Self-clearing bounding-box primitive: clears `[x..x+w, y..y+h)` to `bg` in a single pass
+/// so dynamic metrics update in place without full-screen clear flicker.
+#[inline(always)]
+pub fn draw_field(canvas: &mut Canvas, x: u8, y: u8, w: u8, h: u8, bg: Color) {
+    canvas.fill_rect(x, y, w, h, bg);
+}
+
+/// Render a 2-line (`21 px` tall) virtual list row (`[Badge] Title  RightMetric` / `Subtitle`).
+#[inline(never)]
+pub fn draw_detail_row(
+    canvas: &mut Canvas,
+    y: i16,
+    selected: bool,
+    badge: &str,
+    title: &str,
+    right_metric: &str,
+    subtitle: &str,
+) {
+    if y <= -22 || y >= 64 {
+        return;
+    }
+    let tc = if selected {
+        canvas.fill_rect_i(2, y, 121, 21, Color::Fill);
+        canvas.clear_corners_i(2, y, 121, 21);
+        Color::Clear
+    } else {
+        canvas.fill_rect_i(2, y, 121, 21, Color::Clear);
+        Color::Fill
+    };
+
+    let mut tx: i16 = 5;
+    if !badge.is_empty() {
+        tx += draw_key_badge_box(canvas, tx, y + 2, badge, selected) as i16 + 3;
+    }
+
+    let rw = text::str_width(right_metric, &TOMTHUMB);
+    let title_max_x = (120 - rw - 4).max(tx + 12);
+    text::draw_str_ellipsis(canvas, tx, y + 9, title, &MUMATRIX, tc, title_max_x);
+    if !right_metric.is_empty() {
+        text::draw_str_align(
+            canvas,
+            120,
+            y + 8,
+            right_metric,
+            &TOMTHUMB,
+            tc,
+            text::Align::Right,
+        );
+    }
+    if !subtitle.is_empty() {
+        text::draw_str_ellipsis(canvas, 5, y + 18, subtitle, &TOMTHUMB, tc, 120);
+    }
+}

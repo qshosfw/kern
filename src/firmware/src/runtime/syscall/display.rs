@@ -130,7 +130,9 @@ pub unsafe fn dispatch_gfx(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let row_mask = a0 as u8;
             canvas.dirty |= row_mask;
             #[cfg(not(test))]
-            crate::kern_hw().lcd.blit(canvas);
+            if !crate::system::is_headless() {
+                crate::kern_hw().lcd.blit(canvas);
+            }
             #[cfg(test)]
             if let Some(ctx) = super::active_ctx_opt() {
                 if let Some(ref mut d) = ctx.display {
