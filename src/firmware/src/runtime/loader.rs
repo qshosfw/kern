@@ -367,14 +367,7 @@ pub fn try_launch_boot_module(
 /// Display a detailed, actionable error popup for KRX package launch failures.
 #[inline(never)]
 pub fn show_launch_error_dialog(ctx: &mut SysContext, path: &str, err: KrxLaunchError) {
-    let fname = crate::apps::launcher::catalog::extract_filename(path);
-    let title = if utils::format::ascii_eq_ignore_case(fname, "vfo.krx") {
-        "Radio App"
-    } else if utils::format::ascii_eq_ignore_case(fname, "settings.krx") {
-        "Settings App"
-    } else {
-        fname
-    };
+    let title = crate::apps::launcher::catalog::extract_filename(path);
     let mut msg_s = utils::format::InlineStr::<40>::new();
     let msg = if let KrxLaunchError::CapabilityDenied(Some(cap)) = err {
         msg_s.set("Missing cap:\n");

@@ -596,27 +596,9 @@ impl OsCompositor {
                 &mut native_center_icons,
             );
         }
-        if !sb_cfg.partial {
-            if sb_cfg.title.is_none() {
-                if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
-                    sb_cfg.title = Some(meta.name);
-                }
-            }
-            if active_app_id != crate::apps::registry::APP_ID_VFO {
-                let coord = &ctx.state.coord;
-                if sb_cfg.left_badge.is_none() {
-                    if coord.is_transmitting {
-                        sb_cfg.left_badge = Some("TX");
-                    } else if coord.carrier_active {
-                        sb_cfg.left_badge = Some("RX");
-                    } else if coord.monitor_active {
-                        sb_cfg.left_badge = Some("MON");
-                    }
-                }
-                if sb_cfg.signal_level.is_none() && (coord.carrier_active || coord.monitor_active) {
-                    let bars = ((ctx.state.rssi_dbm + 125).max(0) as u8 >> 4).clamp(1, 4);
-                    sb_cfg.signal_level = Some(bars);
-                }
+        if !sb_cfg.partial && sb_cfg.title.is_none() {
+            if let Some(meta) = crate::AppRegistry::descriptor(active_app_id) {
+                sb_cfg.title = Some(meta.name);
             }
         }
         ctx.draw_status_bar_cfg(canvas, &sb_cfg);
