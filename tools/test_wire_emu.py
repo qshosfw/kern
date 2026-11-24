@@ -26,22 +26,9 @@ def main() -> int:
         ctl_port=4453,
         state_file=Path("/tmp/kern-emu-wire.json"),
     )
-    emu.start(wait_rigwire=False)
+    emu.start(wait_rigwire=True, timeout=6.0)
     try:
-        deadline = time.monotonic() + 8.0
-        while time.monotonic() < deadline:
-            emu.wait_virtual_ms(250, timeout=1.0)
-            try:
-                cli = rigwire.RigWireClient(emu.wire_url, timeout=0.35)
-                print("  • HELLO:", cli.hello())
-                cli.close()
-                break
-            except Exception:
-                emu.press("menu", hold_ms=1800, hardware=True)
-                emu.wait_virtual_ms(300, timeout=1.5)
-                emu.press("menu", hold_ms=150, hardware=True)
-                emu.wait_virtual_ms(250, timeout=1.0)
-
+        print("  • HELLO:", emu.wire().hello())
         print("  • PING:", emu.wire().ping())
         for directory in ("/", "/apps"):
             entries = emu.ls(directory)

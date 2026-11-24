@@ -28,10 +28,8 @@ try:
 except ImportError:
     serial = None
 
-# ── WIRE CONSTANTS (RigWire v2 + v1 Legacy Fallback) ─────────────────────────
+# ── WIRE CONSTANTS (RigWire v2) ──────────────────────────────────────────────
 WIRE_IDENT = 0x52  # High nibble 'R' (0x5), protocol rev 2
-WIRE_MAGIC = WIRE_IDENT  # Legacy constant name kept for external scripts
-WIRE_V1_MAJOR = 0x01
 
 FLAG_QOS_MASK = 0x03
 FLAG_ENC = 1 << 2
@@ -41,14 +39,9 @@ FLAG_ACK_REQ = 1 << 5
 FLAG_ERR = 1 << 6
 FLAG_RESP = 1 << 7
 
-V1_FLAG_RESPONSE = 0x01
-V1_FLAG_EVENT = 0x02
-
 HEADER_LEN = 8
-V1_HEADER_LEN = 15
 CRC_LEN = 2
 MIN_RECORD_LEN = 10
-V1_MIN_RECORD_LEN = 17
 MAX_WIRE_FILE_SIZE = 393216
 MAX_APP_PATH_LEN = 24
 
@@ -243,47 +236,6 @@ STATUS_NAMES = {
     16: "INCOMPATIBLE_ABI",
     17: "FAULTED",
 }
-
-# RigWire v1 legacy status codes (used when auto-negotiated to pre-v2 firmware)
-V1_STATUS_NAMES = {
-    0: "OK",
-    1: "ACCEPTED",
-    2: "BAD_LENGTH",
-    3: "BAD_RANGE",
-    4: "BAD_VERSION",
-    5: "BAD_FLAGS",
-    6: "BAD_SESSION",
-    7: "STALE_SEQUENCE",
-    8: "DUPLICATE_CONFLICT",
-    9: "UNSUPPORTED",
-    10: "BUSY",
-    11: "STALE_REVISION",
-    12: "STALE_COMPONENT",
-    13: "SAFETY_DENIED",
-    14: "AUTH_REQUIRED",
-    15: "AUTHZ_DENIED",
-    16: "NOT_PERSISTABLE",
-    17: "UNSUPPORTED_ATOMICITY",
-    18: "FAILED",
-    19: "IN_PROGRESS",
-    20: "STALE_CATALOGUE",
-    21: "UNSUPPORTED_FIELD",
-    22: "NOT_FOUND",
-    23: "IO_ERROR",
-    27: "TIMEOUT",
-    28: "INTERNAL",
-}
-
-# RigWire v2 -> v1 CORE opcode map
-_V2_TO_V1_CORE_OP = {
-    OP_CORE_HELLO: 0x01,
-    OP_CORE_PING: 0x03,
-    OP_CORE_TIME_SYNC: 0x07,
-    OP_CORE_RUNLEVEL: 0x06,
-    OP_CORE_GET_TIME: 0x08,
-    OP_CORE_CAPS: 0x02,
-}
-
 
 # ── PROTOCOL PRIMITIVES ───────────────────────────────────────────────────────
 def crc16_ccitt(data: bytes) -> int:
@@ -611,7 +563,6 @@ class RigWireClient:
             except Exception:
                 pass
         self.timeout = timeout
-        self.protocol_version = 2
         self.session_id = 0x4B45524E  # "KERN"
         self.sequence = 1
         self.max_payload = 128
@@ -624,11 +575,6 @@ class RigWireClient:
     def close(self):
         if self.ser and self.ser.is_open:
             self.ser.close()
-
-    def _wire_opcode(self, service: int, opcode: int) -> int:
-        if self.protocol_version == 1 and service == SERVICE_CORE:
-            return _V2_TO_V1_CORE_OP.get(opcode, opcode)
-        return opcode
 
     def _read_serial_frame_until_zero(self, deadline: float):
         """Buffered 0x00-delimited reader for pyserial (avoids 1-byte read() syscall overhead)."""
@@ -657,29 +603,6 @@ class RigWireClient:
                             rx.extend(c2)
 
     def _encode_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
-        wire_op = self._wire_opcode(service, opcode)
-        if self.protocol_version == 1:
-            is_hello = (service == SERVICE_CORE and wire_op == OP_CORE_HELLO)
-            session = 0 if is_hello else self.session_id
-            seq = 0 if service == SERVICE_CORE else self.sequence
-            if service != SERVICE_CORE:
-                self.sequence = (self.sequence + 1) & 0xFFFFFFFF
-            header = struct.pack(
-                "<BBBBBIIH",
-                WIRE_MAGIC,
-                WIRE_V1_MAJOR,
-                0,
-                service,
-                wire_op,
-                session,
-                seq,
-                len(payload),
-            )
-            raw = header + payload
-            crc = crc16_ccitt(raw)
-            raw += struct.pack("<H", crc)
-            return b"\x00" + cobs_encode(raw) + b"\x00"
-
         seq = 0 if service == SERVICE_CORE else self.sequence
         if service != SERVICE_CORE:
             self.sequence = (self.sequence + 1) & 0xFFFF
@@ -691,7 +614,7 @@ class RigWireClient:
             WIRE_IDENT,
             FLAG_ACK_REQ,
             service,
-            wire_op,
+            opcode,
             seq,
             len(payload),
         )
@@ -724,8 +647,6 @@ class RigWireClient:
         wait_s = max(0.15, float(self.timeout if timeout_override is None else timeout_override))
         wall_deadline = time.time() + wait_s
         mono_deadline = time.monotonic() + wait_s
-        wire_op = self._wire_opcode(expected_service, expected_opcode)
-        is_v1 = self.protocol_version == 1
         decoded = None
 
         while time.monotonic() < mono_deadline:
@@ -742,51 +663,17 @@ class RigWireClient:
                 cand = cobs_decode(raw_frame)
             except Exception:
                 continue
-            if is_v1:
-                if len(cand) < V1_MIN_RECORD_LEN or cand[0] != WIRE_MAGIC or cand[1] != WIRE_V1_MAJOR:
-                    continue
-                if (cand[2] & V1_FLAG_EVENT) != 0:
-                    continue
-                if cand[3] != expected_service or cand[4] != wire_op:
-                    continue
-            else:
-                if len(cand) < MIN_RECORD_LEN or cand[0] != WIRE_IDENT:
-                    continue
-                if (cand[1] & FLAG_RESP) == 0:
-                    continue
-                if cand[2] != expected_service or cand[3] != wire_op:
-                    continue
+            if len(cand) < MIN_RECORD_LEN or cand[0] != WIRE_IDENT:
+                continue
+            if (cand[1] & FLAG_RESP) == 0:
+                continue
+            if cand[2] != expected_service or cand[3] != expected_opcode:
+                continue
             decoded = cand
             break
 
         if decoded is None:
             raise TimeoutError("No valid response frame received from radio (delimiter timeout)")
-
-        if is_v1:
-            magic, major, _flags, _service, _opcode, _session, _seq, plen = struct.unpack(
-                "<BBBBBIIH", decoded[:V1_HEADER_LEN]
-            )
-            if magic != WIRE_MAGIC or major != WIRE_V1_MAJOR:
-                raise ValueError(f"Invalid wire identity: magic={magic:#04x}, major={major:#04x}")
-            payload_and_crc = decoded[V1_HEADER_LEN:]
-            payload = payload_and_crc[:-CRC_LEN]
-            recv_crc = struct.unpack("<H", payload_and_crc[-CRC_LEN:])[0]
-            calc_crc = crc16_ccitt(decoded[:-CRC_LEN])
-            if recv_crc != calc_crc:
-                raise ValueError(f"CRC mismatch: expected {calc_crc:#06x}, received {recv_crc:#06x}")
-            if len(payload) != plen:
-                raise ValueError(f"Payload length discrepancy: header says {plen}, got {len(payload)}")
-            if not payload:
-                raise ValueError("Response record missing required status byte")
-            status_code = payload[0]
-            if status_code != 0:
-                status_name = V1_STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
-                raise RigWireError(
-                    status_code,
-                    status_name,
-                    f"Radio responded with status {status_name} ({status_code})",
-                )
-            return payload[1:]
 
         ident, flags, service, opcode, seq, plen = struct.unpack("<BBBBHH", decoded[:HEADER_LEN])
 
@@ -818,37 +705,15 @@ class RigWireClient:
     # ── CORE SERVICE (0x00) ───────────────────────────────────────────────────
 
     def hello(self) -> dict:
-        """Perform HELLO handshake with automatic RigWire v2 -> v1 protocol negotiation."""
+        """Perform RigWire v2 HELLO handshake."""
         req = struct.pack("<BBIH", 1, 1, self.session_id, 128)
-        probe_order = (2, 1) if self.protocol_version == 2 else (1, 2)
-        resp = None
-        last_err: Exception | None = None
-        for idx, ver in enumerate(probe_order):
-            self.protocol_version = ver
-            self._ser_rx.clear()
-            try:
-                if hasattr(self.ser, "reset_input_buffer"):
-                    self.ser.reset_input_buffer()
-            except Exception:
-                pass
-            t0 = time.monotonic()
-            frame = self._encode_record(SERVICE_CORE, OP_CORE_HELLO, req)
-            self.ser.write(frame)
-            probe_timeout = min(float(self.timeout), 0.25) if idx == 0 else float(self.timeout)
-            try:
-                resp = self.read_response(
-                    expected_service=SERVICE_CORE,
-                    expected_opcode=OP_CORE_HELLO,
-                    timeout_override=probe_timeout,
-                )
-                self.last_rtt_ms = (time.monotonic() - t0) * 1000.0
-                break
-            except TimeoutError as exc:
-                last_err = exc
-                continue
-        if resp is None:
-            self.protocol_version = 2
-            raise last_err or TimeoutError("No valid response frame received from radio (delimiter timeout)")
+        self._ser_rx.clear()
+        try:
+            if hasattr(self.ser, "reset_input_buffer"):
+                self.ser.reset_input_buffer()
+        except Exception:
+            pass
+        resp = self.send_record(SERVICE_CORE, OP_CORE_HELLO, req)
         if len(resp) < 17:
             raise ValueError(f"Invalid HELLO response length: {len(resp)} bytes")
 
@@ -862,8 +727,8 @@ class RigWireClient:
         self.max_payload = accepted_max_payload
         self.sequence = 1
 
-        info = {
-            "protocol_version": self.protocol_version,
+        return {
+            "protocol_version": 2,
             "minor_version": selected_minor,
             "accepted_max_payload": accepted_max_payload,
             "catalogue_generation": catalogue_gen,
@@ -871,7 +736,6 @@ class RigWireClient:
             "hardware_profile": hw_prof,
             "firmware_profile": fw_prof,
         }
-        return info
 
     def ping(self) -> dict:
         """Send PING and measure RTT (§5.3)."""
@@ -889,30 +753,11 @@ class RigWireClient:
         return {"uptime_ms": uptime_ms, "rtt_ms": rtt_ms}
 
     def caps(self) -> list:
-        """Enumerate device capabilities via CORE::CAPS (v2 SemanticCap or v1 TLV records)."""
+        """Enumerate device capabilities via CORE::CAPS (RigWire v2 SemanticCap)."""
         cursor = 0
-        generation = 0
         records = []
 
         while cursor != 0xFFFF:
-            if self.protocol_version == 1:
-                req = struct.pack("<IH", generation, cursor)
-                resp = self.send_record(SERVICE_CORE, OP_CORE_CAPS, req)
-                if len(resp) < 7:
-                    break
-                generation, next_cursor, count = struct.unpack("<IHB", resp[:7])
-                off = 7
-                for _ in range(count):
-                    if off + 2 > len(resp):
-                        break
-                    rec_type = resp[off]
-                    rec_len = resp[off + 1]
-                    data = resp[off + 2:off + 2 + rec_len]
-                    off += 2 + rec_len
-                    records.append({"type": rec_type, "data": data})
-                cursor = next_cursor
-                continue
-
             req = struct.pack("<H", cursor)
             resp = self.send_record(SERVICE_CORE, OP_CORE_CAPS, req)
             if len(resp) < 7:
@@ -938,8 +783,6 @@ class RigWireClient:
 
     def tables(self) -> list:
         """Enumerate structured binary table descriptors via CORE::TABLES (RigWire v2)."""
-        if self.protocol_version < 2:
-            return []
         resp = self.send_record(SERVICE_CORE, OP_CORE_TABLES)
         if not resp:
             return []
@@ -1030,15 +873,7 @@ class RigWireClient:
         may reset before its acknowledgement drains, so a missing reply is expected; an
         explicit BAD_SESSION refusal is not and is surfaced to the caller.
         """
-        if mode != 0 and self.protocol_version == 1:
-            try:
-                self.handle_invoke(DOMAIN_SYSTEM, 0, FACET_SYS_IDENTITY, ACTION_SYS_REBOOT, bytes([mode]))
-            except TimeoutError:
-                pass
-            print("  Reboot command dispatched.")
-            return
-
-        payload = bytes([mode]) if (self.protocol_version >= 2 and mode != 0) else b""
+        payload = bytes([mode]) if mode != 0 else b""
         try:
             self.send_record(SERVICE_CORE, OP_CORE_REBOOT, payload)
         except RigWireError as e:
@@ -1460,8 +1295,7 @@ class RigWireClient:
 
     def _abort_transfer(self, tid: int, reason: int = 0):
         try:
-            payload = struct.pack("<H", tid) if self.protocol_version == 1 else struct.pack("<HB", tid, reason)
-            self.send_record(SERVICE_DATA, OP_TRANSFER_ABORT, payload)
+            self.send_record(SERVICE_DATA, OP_TRANSFER_ABORT, struct.pack("<HB", tid, reason))
         except Exception:
             pass
 

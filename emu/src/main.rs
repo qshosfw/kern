@@ -325,7 +325,10 @@ fn main() {
             let mut drop_sock = false;
             match sock.read(&mut rx_buf) {
                 Ok(0) => drop_sock = true,
-                Ok(n) => soc.uart_rx_fifo.extend(&rx_buf[..n]),
+                Ok(n) => {
+                    soc.uart_rx_fifo.extend(&rx_buf[..n]);
+                    cpu.halted_wfi = false;
+                }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(_) => drop_sock = true,
             }
@@ -349,9 +352,12 @@ fn main() {
                     let wall_s = started_wall.elapsed().as_secs_f64().max(0.001);
                     let mips = (cpu.total_insns as f64 / 1_000_000.0) / wall_s;
                     format!(
-                        "{{\"ok\":true,\"powered\":true,\"running\":true,\"turbo\":{},\"pc\":{},\"sysclk_hz\":{},\"virtual_ms\":{},\"mips\":{:.1},\"backlight\":{},\"flashlight\":{},\"audio_pa\":{},\"led\":\"{}\",\"tuned_hz\":{},\"panel\":{{\"display\":{},\"contrast\":{},\"invert\":{},\"frame_seq\":{}}}}}",
+                        "{{\"ok\":true,\"powered\":true,\"running\":true,\"turbo\":{},\"pc\":{},\"lr\":{},\"ipsr\":{},\"primask\":{},\"sysclk_hz\":{},\"virtual_ms\":{},\"mips\":{:.1},\"backlight\":{},\"flashlight\":{},\"audio_pa\":{},\"led\":\"{}\",\"tuned_hz\":{},\"panel\":{{\"display\":{},\"contrast\":{},\"invert\":{},\"frame_seq\":{}}}}}",
                         turbo,
                         cpu.pc,
+                        cpu.lr,
+                        cpu.xpsr & 0x3F,
+                        cpu.primask,
                         soc.sysclk_hz,
                         soc.virtual_us / 1000,
                         mips,

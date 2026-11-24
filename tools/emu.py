@@ -241,6 +241,7 @@ class KernEmulator:
 
         self._proc: subprocess.Popen[bytes] | None = None
         self._wire: rigwire.RigWireClient | None = None
+        self.last_hello: dict[str, Any] | None = None
         self.ctl = EmuControlClient(self.ctl_port)
 
     @property
@@ -274,6 +275,7 @@ class KernEmulator:
 
         self._proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=detach,
@@ -318,7 +320,7 @@ class KernEmulator:
         if self._wire is None:
             cli = rigwire.RigWireClient(self.wire_url, timeout=2.5)
             if handshake:
-                cli.hello()
+                self.last_hello = cli.hello()
             self._wire = cli
         return self._wire
 
@@ -331,6 +333,8 @@ class KernEmulator:
             self._wire = None
 
     def wait_ready(self, timeout: float = 10.0) -> dict[str, Any]:
+        # Allow first-time format + boot splash (up to ~3000 ms virtual) to finish at turbo speed before probing UART
+        self.wait_virtual_ms(3200, timeout=min(2.5, timeout * 0.4))
         deadline = time.monotonic() + timeout
         last_err: Exception | None = None
         while time.monotonic() < deadline:
@@ -338,9 +342,11 @@ class KernEmulator:
                 raise RuntimeError(f"kern-emu exited during boot (code {self._proc.returncode})")
             cli: rigwire.RigWireClient | None = None
             try:
-                cli = rigwire.RigWireClient(self.wire_url, timeout=0.8)
+                cli = rigwire.RigWireClient(self.wire_url, timeout=1.2)
                 hello = cli.hello()
-                cli.close()
+                cli.timeout = 2.5
+                self._wire = cli
+                self.last_hello = hello
                 return hello
             except Exception as exc:
                 last_err = exc
@@ -517,28 +523,11 @@ def _run_e2e_test(rebuild: bool = False) -> int:
         ctl_port=4455,
         state_file=Path("/tmp/kern-emu-test.json"),
     )
-    emu.start(wait_rigwire=False)
+    emu.start(wait_rigwire=True, timeout=6.0)
     try:
-        # Handle legacy pre-refactor boot prompts gracefully if present, else waits directly for RigWire
-        deadline = time.monotonic() + 8.0
-        while time.monotonic() < deadline:
-            emu.wait_virtual_ms(250, timeout=1.0)
-            try:
-                cli = rigwire.RigWireClient(emu.wire_url, timeout=0.35)
-                hello = cli.hello()
-                cli.close()
-                break
-            except Exception:
-                emu.press("menu", hold_ms=1800, hardware=True)
-                emu.wait_virtual_ms(300, timeout=1.5)
-                emu.press("menu", hold_ms=150, hardware=True)
-                emu.wait_virtual_ms(250, timeout=1.0)
-        else:
-            cli_ui.err("Firmware did not reach RigWire ready state")
-            return cli_ui.EXIT_ERR
-
+        hello = emu.last_hello
         st = emu.status()
-        cli_ui.ok(f"Engine booted @ {st.get('mips')} MIPS (virtual {st.get('virtual_ms')} ms)")
+        cli_ui.ok(f"Zero-touch First-Time Setup booted @ {st.get('mips')} MIPS (virtual {st.get('virtual_ms')} ms)")
         cli_ui.ok(f"UART banner: {emu.serial_lines()}")
         cli_ui.ok(f"RigWire HELLO: {hello}")
 
@@ -554,9 +543,12 @@ def _run_e2e_test(rebuild: bool = False) -> int:
             return cli_ui.EXIT_ERR
         cli_ui.ok(f"ST7565 LCD active ({sum(bin(b).count('1') for b in fb0)} lit pixels)")
 
+        # Dismiss first-boot Welcome modal ([M] OK), then test navigation
+        emu.press("menu", hold_ms=80)
+        fb_home = emu.wait_frame_change(fb0, timeout=2.0) or fb0
         emu.press("down", hold_ms=80)
-        fb1 = emu.wait_frame_change(fb0, timeout=2.0)
-        cli_ui.ok(f"Navigation key injected (screen updated={fb1 is not None})")
+        fb1 = emu.wait_frame_change(fb_home, timeout=2.0)
+        cli_ui.ok(f"Welcome modal dismissed & Launcher navigated (updated={fb1 is not None})")
 
         installed = _provision_core_packages_if_present(emu)
         if installed:
@@ -757,10 +749,7 @@ def main(argv: list[str] | None = None) -> int:
             turbo=args.turbo,
             rebuild=args.rebuild,
         )
-        wait_rw = (not args.no_wait) and (args.flash_mode == "normal")
-        # If first-time `target/emu/flash.img` doesn't exist yet, don't block before OS auto-formats or prompts
-        if wait_rw and not args.ephemeral and not Path(args.flash or DEFAULT_FLASH_IMG).is_file():
-            wait_rw = False
+        wait_rw = (not args.no_wait) and (args.flash_mode != "corrupt")
         info = emu.start(wait_rigwire=wait_rw, detach=args.daemon)
         if args.provision:
             try:
@@ -770,8 +759,7 @@ def main(argv: list[str] | None = None) -> int:
                     _provision_core_packages_if_present(emu)
             except Exception:
                 pass
-            finally:
-                emu.release_wire()
+        emu.release_wire()
         if args.json:
             print(json.dumps(info, indent=2))
         else:

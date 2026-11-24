@@ -229,21 +229,23 @@ impl ModalCompositor {
     }
 
     #[inline(never)]
-    pub fn prompt_number(
-        &mut self,
-        tag: u8,
-        title: &str,
-        unit: &str,
-        mut model: NumberInputModel,
-    ) {
+    pub fn prompt_number(&mut self, tag: u8, title: &str, unit: &str, req: &::abi::KrxNumReq) {
         crate::orchestrator::sink_enter_keys();
         self.tag = tag;
-        model.set_title(title);
-        model.set_unit(unit);
-        if !crate::master_config_ref().display.animations_enabled() {
-            model.anim.jump_complete();
+        self.modal = ActiveModal::NumberInput(NumberInputModel::new(
+            req.value,
+            req.min,
+            req.max,
+            req.step,
+            req.decimals,
+        ));
+        if let ActiveModal::NumberInput(m) = &mut self.modal {
+            m.set_title(title);
+            m.set_unit(unit);
+            if !crate::master_config_ref().display.animations_enabled() {
+                m.anim.jump_complete();
+            }
         }
-        self.modal = ActiveModal::NumberInput(model);
     }
 
     #[inline(never)]

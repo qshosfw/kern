@@ -60,6 +60,8 @@ pub fn run_boot_splash(
         .copied()
         .unwrap_or(1000) as u32;
     let show_splash = target_splash_ms > 0 && disp_cfg.boot_splash_mode != 0;
+    init_system_services(hw, master_cfg, passcode_state, adc);
+
     let jingle_buf: &mut [crate::services::melody::ToneNote;
              crate::services::melody::MAX_MELODY_NOTES] = unsafe {
         &mut *(crate::data::arena::staging_buf().as_mut_ptr()
@@ -73,8 +75,6 @@ pub fn run_boot_splash(
     );
     let jingle_notes = &jingle_buf[..jingle_len];
     let play_jingle = !jingle_notes.is_empty();
-
-    init_system_services(hw, master_cfg, passcode_state, adc);
 
     if !show_splash && !play_jingle {
         return;
