@@ -21,7 +21,6 @@ pub use remote::{note_wire_activity, set_wire_tx};
 use crate::POWER_SERVICE;
 use crate::hardware::SystemHardware;
 use crate::orchestrator::record_proc_activation;
-use crate::services::RadioMelodyExt;
 use crate::services::power::PowerService;
 use kernel::event::Event;
 use py32_hal::adc::Adc;
@@ -112,8 +111,12 @@ fn poll_battery_tick(hw: &mut SystemHardware, adc: &Adc, dirty_render: &mut bool
             wake_and_notify_activity(hw);
             crate::orchestrator::compositor::show_low_battery_popup();
         }
-        hw.radio
-            .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+        crate::radio_state().tone_seq.enqueue(
+            &mut hw.radio,
+            crate::services::melody::MelodyEngine::dialog_notes(
+                crate::services::melody::DialogSoundType::Warning,
+            ),
+        );
         *dirty_render = true;
     }
 
@@ -154,8 +157,12 @@ fn poll_keypad_tick(hw: &mut SystemHardware, dt: u16) {
             && hw.key_scanner.is_key_down(kernel::event::KeyCode::Exit);
         if headless::poll_physical_escape(dt, escape_held) {
             set_headless(hw, false);
-            hw.radio
-                .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+            crate::radio_state().tone_seq.enqueue(
+                &mut hw.radio,
+                crate::services::melody::MelodyEngine::dialog_notes(
+                    crate::services::melody::DialogSoundType::Unlock,
+                ),
+            );
             unsafe {
                 (*core::ptr::addr_of_mut!(crate::orchestrator::compositor::ACTIVE_MODAL))
                     .show_toast("Headless mode off", 1800);
@@ -264,6 +271,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         py32_hal::wdt::Watchdog::feed();
 
         let now = py32_hal::delay::millis();
+        crate::radio_state().tone_seq.tick(&mut hw.radio, now);
         poll_usb_and_wire(hw, now, &mut dirty_render);
 
         // High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms

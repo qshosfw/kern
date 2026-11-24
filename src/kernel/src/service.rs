@@ -215,26 +215,8 @@ pub trait StorageService {
     fn get_attributes(&mut self, path: &str) -> Result<FileAttributes, StorageError>;
     fn set_attributes(&mut self, path: &str, attrs: FileAttributes) -> Result<(), StorageError>;
 
-    fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), StorageError> {
-        if let Ok(attrs) = self.get_attributes(old_path) {
-            if (attrs.permission & (ATTR_SYSTEM | ATTR_READ_ONLY)) != 0
-                || old_path.starts_with("/sys/calib.")
-            {
-                return Err(StorageError::AccessDenied);
-            }
-        }
-
-        let mut buf = [0u8; 512];
-        let len = self.read_file(old_path, &mut buf)?;
-        self.write_file(new_path, &buf[..len])?;
-
-        // Copy attributes
-        if let Ok(attrs) = self.get_attributes(old_path) {
-            let _ = self.set_attributes(new_path, attrs);
-        }
-
-        self.remove(old_path)?;
-        Ok(())
+    fn rename(&mut self, _old_path: &str, _new_path: &str) -> Result<(), StorageError> {
+        Err(StorageError::IoError)
     }
 
     fn list_dir(

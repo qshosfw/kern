@@ -438,6 +438,7 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
     }
 
     pub fn request_ptt_start(&mut self) -> TxPermission {
+        self.state.tone_seq.abort(self.radio);
         self.state.coord.request_ptt_start(
             self.radio,
             ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND),
@@ -468,6 +469,9 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         };
         let mode = PttMode::from_u8(self.config.keys.ptt_mode);
         let now_ms = self.millis();
+        if pressed {
+            self.state.tone_seq.abort(self.radio);
+        }
         let client = ClientToken::new(ClientId::VFO_UI, LockTier::FOREGROUND);
         match self
             .state

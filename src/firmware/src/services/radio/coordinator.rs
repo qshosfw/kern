@@ -842,6 +842,7 @@ impl RadioCoordinator {
     pub fn start_tx<R: RadioService>(&mut self, radio: &mut R) {
         self.monitor_active = false;
         self.is_transmitting = true;
+        crate::TX_ACTIVE_IRQ.store(true, core::sync::atomic::Ordering::Release);
         let slot = self.effective_tx_slot();
         self.listening_vfo = slot;
         self.dwell.reset_dwell();
@@ -893,6 +894,7 @@ impl RadioCoordinator {
             self.audio_routing = AudioRoutingState::NormalVoice;
         }
         self.is_transmitting = false;
+        crate::TX_ACTIVE_IRQ.store(false, core::sync::atomic::Ordering::Release);
         self.ptt_latched = false;
         self.tx_state = TxState::Idle;
         self.pa_thermal_foldback_active = false;

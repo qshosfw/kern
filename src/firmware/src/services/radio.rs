@@ -16,11 +16,13 @@ pub trait RadioMelodyExt {
     fn play_dialog_sound(&mut self, sound: DialogSoundType);
 }
 
-/// System RF state holding live RSSI telemetry and the Multi-VFO `RadioCoordinator`.
+/// System RF state holding live RSSI telemetry, the Multi-VFO `RadioCoordinator`,
+/// and the non-blocking `ToneSequencer`.
 #[derive(Debug, Clone)]
 pub struct RadioState {
     pub rssi_dbm: i16,
     pub coord: RadioCoordinator,
+    pub tone_seq: crate::services::melody::ToneSequencer,
 }
 
 impl RadioState {
@@ -28,6 +30,7 @@ impl RadioState {
         Self {
             rssi_dbm: -120,
             coord: RadioCoordinator::new(),
+            tone_seq: crate::services::melody::ToneSequencer::new(),
         }
     }
 

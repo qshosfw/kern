@@ -54,6 +54,13 @@ pub static mut FAULT_EXTRA: kernel::boot::FaultExtraRegs = kernel::boot::FaultEx
 pub static CONFIG_INITIALIZED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
+/// Lock-free ISR-visible TX state mirror & PVD brownout quench latch.
+/// `PVD()` reads `TX_ACTIVE_IRQ` and sets `PVD_TX_QUENCHED` without ever touching `RADIO_STATE`.
+pub static TX_ACTIVE_IRQ: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+pub static PVD_TX_QUENCHED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 #[unsafe(link_section = ".uninit")]
 pub static mut MASTER_CONFIG: core::mem::MaybeUninit<MasterConfig> =
     core::mem::MaybeUninit::uninit();
@@ -143,19 +150,18 @@ pub unsafe extern "C" fn TIM6_LPTIM1_DAC() {
 /// PVD (Programmable Voltage Detector) interrupt handler (IRQ 1, EXTI line 16).
 /// Immediately quenches BK4829 PA bias if VDD droops below ~2.8V during high-power TX,
 /// preventing MCU brownout resets and SPI Flash corruption.
+/// Strictly lock-free: never touches `RADIO_STATE` from IRQ context; thread-mode
+/// `tick_radio_services` reconciles `PVD_TX_QUENCHED` cleanly on the next cycle.
 #[cfg(all(not(test), target_arch = "arm"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn PVD() {
     hal::exti::clear_pending(hal::exti::LINE_PVD);
     if hal::pwr::pvd_below_threshold() {
         #[cfg(feature = "radio")]
-        {
-            let coord = &mut radio_state().coord;
-            if coord.is_transmitting {
-                bsp::bk4829_fault_quench();
-                coord.is_transmitting = false;
-                coord.tx_state = kernel::service::radio::TxState::Idle;
-            }
+        if TX_ACTIVE_IRQ.load(core::sync::atomic::Ordering::Acquire) {
+            bsp::bk4829_fault_quench();
+            TX_ACTIVE_IRQ.store(false, core::sync::atomic::Ordering::Release);
+            PVD_TX_QUENCHED.store(true, core::sync::atomic::Ordering::Release);
         }
     }
 }

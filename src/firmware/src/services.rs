@@ -45,20 +45,13 @@ pub struct SysContext<'a, 'hw> {
 }
 
 #[inline(never)]
-fn play_tone_file(
+fn enqueue_roger_file(
+    state: &mut RadioState,
     storage: &mut SystemStorage,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     path: &str,
 ) {
-    let mut notes = [melody::ToneNote::new(0, 0); melody::MAX_MELODY_NOTES];
-    let n = crate::services::melody::load_roger_notes(storage, path, &mut notes);
-    if n > 0 {
-        if crate::system::is_headless() {
-            crate::system::push_headless_notes(&notes[..n]);
-        } else {
-            radio.play_tone_sequence(&notes[..n]);
-        }
-    }
+    state.tone_seq.enqueue_roger_file(radio, storage, path);
 }
 
 impl<'a, 'hw> SysContext<'a, 'hw> {
@@ -285,30 +278,36 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         }
     }
 
-    /// Play single keypress or system feedback beep
+    /// Play single keypress or system feedback beep (non-blocking via `ToneSequencer`).
+    #[inline(never)]
     pub fn play_beep(&mut self, beep: BeepType) {
-        self.radio.play_beep(beep);
+        self.state
+            .tone_seq
+            .enqueue(self.radio, melody::MelodyEngine::beep_notes(beep));
     }
 
-    /// Play a system dialog / notification sound.
+    /// Play a system dialog / notification sound (non-blocking via `ToneSequencer`).
     /// Respects volume setting — silent when volume is 0.
+    #[inline(never)]
     pub fn play_dialog_sound(&mut self, sound: melody::DialogSoundType) {
         if self.config.audio.volume > 0 {
-            self.radio.play_dialog_sound(sound);
+            self.state
+                .tone_seq
+                .enqueue(self.radio, melody::MelodyEngine::dialog_notes(sound));
         }
     }
 
-    /// Play roger beep melody from file path with automatic fallback
+    /// Play roger beep melody from file path with automatic fallback (non-blocking).
     pub fn play_roger_path(&mut self, path: &str) {
-        play_tone_file(self.storage, self.radio, path);
+        enqueue_roger_file(self.state, self.storage, self.radio, path);
     }
 
-    /// Play currently configured active roger beep
+    /// Play currently configured active roger beep (non-blocking).
     #[inline(never)]
     pub fn play_active_roger(&mut self) {
         if self.config.audio.roger_beep != 0 {
             let path = self.config.audio.roger_path_str();
-            play_tone_file(self.storage, self.radio, path);
+            enqueue_roger_file(self.state, self.storage, self.radio, path);
         }
     }
 
@@ -320,9 +319,11 @@ impl<'a, 'hw> SysContext<'a, 'hw> {
         self.play_active_roger();
     }
 
-    /// Play customized frequency tone note
+    /// Play customized frequency tone note (non-blocking via `ToneSequencer`).
+    #[inline(never)]
     pub fn play_tone(&mut self, freq_hz: u16, duration_ms: u16) {
-        self.radio.play_tone(freq_hz, duration_ms);
+        let note = [melody::ToneNote::new(freq_hz, duration_ms)];
+        self.state.tone_seq.enqueue(self.radio, &note);
     }
 
     #[inline(never)]

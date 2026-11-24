@@ -283,6 +283,17 @@ fn os_localize_hook<'a>(key: &str, prefer_short: bool, out: &'a mut [u8]) -> Opt
 fn fetch_ext_glyph(cp: u16) -> Option<&'static gfx::media::CachedGlyphSlot> {
     let st = state_mut();
     let fs = crate::kern_fs();
+    if let Some(ref hdr) = st.base_font
+        && let Some(slot) = st.glyph_cache.fetch(
+            0,
+            hdr,
+            |off, dst| fs.read_file_at("/user/fonts/tiny5.fnt", off, dst).unwrap_or(0),
+            cp,
+        )
+    {
+        return Some(slot);
+    }
+    let hdr = st.extra_font_hdr.as_ref()?;
     let mut fbuf = [0u8; 24];
     let extra_path = match st.extra_font_kind {
         EXTRA_FONT_LANG_CODE => st.os_hdr.and_then(|oh| {
@@ -294,24 +305,13 @@ fn fetch_ext_glyph(cp: u16) -> Option<&'static gfx::media::CachedGlyphSlot> {
         EXTRA_FONT_CJK_JA => Some("/user/fonts/cjk_ja.fnt"),
         EXTRA_FONT_CJK_ZH => Some("/user/fonts/cjk_zh.fnt"),
         _ => None,
-    };
-    let sources = [
-        (0u8, st.base_font, Some("/user/fonts/tiny5.fnt")),
-        (1u8, st.extra_font_hdr, extra_path),
-    ];
-    for (id, hdr_opt, path_opt) in sources {
-        if let (Some(hdr), Some(p)) = (hdr_opt, path_opt)
-            && let Some(slot) = st.glyph_cache.fetch(
-                id,
-                &hdr,
-                |off, dst| fs.read_file_at(p, off, dst).unwrap_or(0),
-                cp,
-            )
-        {
-            return Some(slot);
-        }
-    }
-    None
+    }?;
+    st.glyph_cache.fetch(
+        1,
+        hdr,
+        |off, dst| fs.read_file_at(extra_path, off, dst).unwrap_or(0),
+        cp,
+    )
 }
 
 fn ext_glyph_draw_hook(

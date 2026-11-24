@@ -182,14 +182,30 @@ const _: () = {
 
 #[inline(never)]
 pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut SystemStorage) {
-    let mut temp_buf = [0u8; 80];
     let n = buf.len().min(80);
-    let loaded = storage
-        .read_file(path, &mut temp_buf[..n])
-        .is_ok_and(|len| len >= n && is_raw_valid(&temp_buf[..n], version));
-    if loaded {
-        buf[..n].copy_from_slice(&temp_buf[..n]);
-    } else {
+    #[cfg(not(test))]
+    let loaded = crate::data::arena::try_staging_buf().is_some_and(|staging| {
+        let tmp = &mut staging[..n];
+        let ok = storage
+            .read_file(path, tmp)
+            .is_ok_and(|len| len >= n && is_raw_valid(tmp, version));
+        if ok {
+            buf[..n].copy_from_slice(tmp);
+        }
+        ok
+    });
+    #[cfg(test)]
+    let loaded = {
+        let mut temp_buf = [0u8; 80];
+        let ok = storage
+            .read_file(path, &mut temp_buf[..n])
+            .is_ok_and(|len| len >= n && is_raw_valid(&temp_buf[..n], version));
+        if ok {
+            buf[..n].copy_from_slice(&temp_buf[..n]);
+        }
+        ok
+    };
+    if !loaded {
         update_raw_crc(buf);
         let _ = save_config_raw(storage, path, buf);
     }

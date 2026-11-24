@@ -270,6 +270,12 @@ impl<'a> SystemHardware<'a> {
                 });
             }
             let state = crate::radio_state();
+            if crate::PVD_TX_QUENCHED.load(core::sync::atomic::Ordering::Acquire) {
+                crate::PVD_TX_QUENCHED.store(false, core::sync::atomic::Ordering::Release);
+                if state.coord.is_transmitting {
+                    state.coord.stop_tx(&mut self.radio);
+                }
+            }
             let radio_ev = state.coord.tick_10ms(&mut self.radio);
             state.rssi_dbm = state.coord.vfo_rssi(state.coord.listening_vfo);
             if let Some(bus_ev) = radio_ev.to_bus_event(2) {

@@ -2,8 +2,6 @@
 
 #[cfg(test)]
 use super::active_ctx_opt;
-#[cfg(not(test))]
-use crate::services::radio::RadioMelodyExt;
 
 #[inline(never)]
 pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
@@ -13,14 +11,22 @@ pub unsafe fn dispatch_aud(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         if dur == 0xFFFF {
             let beep = crate::services::melody::BeepType::from_u8(a0 as u8);
             #[cfg(not(test))]
-            crate::kern_hw().radio.play_beep(beep);
+            crate::radio_state().tone_seq.enqueue(
+                &mut crate::kern_hw().radio,
+                crate::services::melody::MelodyEngine::beep_notes(beep),
+            );
             #[cfg(test)]
             if let Some(ctx) = active_ctx_opt() {
                 ctx.play_beep(beep);
             }
         } else {
             #[cfg(not(test))]
-            crate::kern_hw().radio.play_tone(a0 as u16, dur);
+            {
+                let note = [crate::services::melody::ToneNote::new(a0 as u16, dur)];
+                crate::radio_state()
+                    .tone_seq
+                    .enqueue(&mut crate::kern_hw().radio, &note);
+            }
             #[cfg(test)]
             if let Some(ctx) = active_ctx_opt() {
                 ctx.play_tone(a0 as u16, dur);

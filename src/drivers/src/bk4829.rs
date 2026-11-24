@@ -284,18 +284,51 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
         )]);
     }
 
+    /// Current hardware tone generator gain (`0` = muted).
+    #[inline(always)]
+    pub fn tone_gain(&self) -> u8 {
+        self.tone_gain
+    }
+
+    /// Capture the active RX power register word before isolating `REG_SYS_POWER` for tone playback.
+    #[inline(never)]
+    pub fn capture_rx_pwr(&mut self) -> u16 {
+        let cur_pwr = self.read_reg(REG_SYS_POWER);
+        if cur_pwr != 0xFFFF && (cur_pwr & 0x0001) != 0 {
+            cur_pwr & !0x8000
+        } else {
+            0x3FF1
+        }
+    }
+
+    /// Begin tone teardown: mute tone frequency and restore FSK/tone gain prior to the 5 ms settle window.
+    #[inline(never)]
+    pub fn prepare_tone_teardown(&mut self) {
+        self.write_reg(REG_TONE1_FREQ, 0x0000);
+        // Preserve Tone2 / FSK subcarrier gain (bits [7:0]) if hardware FSK modem is active
+        let fsk_active = {
+            let fsk_ctrl = self.read_reg(REG_FSK_CTRL);
+            fsk_ctrl != 0xFFFF && (fsk_ctrl & 0x0001) != 0
+        };
+        let restored_tone_gain = if fsk_active { 0x00E0 } else { 0x0000 };
+        self.write_reg(REG_TONE_GAIN, restored_tone_gain);
+    }
+
+    /// Complete tone teardown after the 5 ms settle delay, restoring RX power and AF demod routing.
+    #[inline(never)]
+    pub fn finish_tone_teardown(&mut self, rx_pwr: u16) {
+        self.write_reg(REG_SYS_POWER, rx_pwr);
+        let unmuted = self.rx_demod_active && self.is_squelch_open();
+        self.apply_demod_af(unmuted);
+        crate::audio::AudioAmplifier::<B>::notify_tone_played();
+    }
+
     pub fn play_tone_sequence(&mut self, notes: &[kernel::service::radio::af::ToneNote]) {
         if notes.is_empty() || self.tone_gain == 0 {
             return;
         }
 
-        // Capture RX power state before begin_tone_sequence isolates REG_SYS_POWER for beep playback.
-        let cur_pwr = self.read_reg(REG_SYS_POWER);
-        let rx_pwr = if cur_pwr != 0xFFFF && (cur_pwr & 0x0001) != 0 {
-            cur_pwr & !0x8000
-        } else {
-            0x3FF1
-        };
+        let rx_pwr = self.capture_rx_pwr();
 
         // Wait ~50ms when waking LN4898 PA8 from cold shutdown for pop-free playback.
         if !self.begin_tone_sequence() {
@@ -320,21 +353,10 @@ impl<'a, B: Bk4829Bus, State> Bk4829<'a, B, State> {
     }
 
     #[inline(never)]
-    fn restore_post_tone_state(&mut self, rx_pwr: u16) {
-        self.write_reg(REG_TONE1_FREQ, 0x0000);
-        // Preserve Tone2 / FSK subcarrier gain (bits [7:0]) if hardware FSK modem is active
-        let fsk_active = {
-            let fsk_ctrl = self.read_reg(REG_FSK_CTRL);
-            fsk_ctrl != 0xFFFF && (fsk_ctrl & 0x0001) != 0
-        };
-        let restored_tone_gain = if fsk_active { 0x00E0 } else { 0x0000 };
-        self.write_reg(REG_TONE_GAIN, restored_tone_gain);
+    pub fn restore_post_tone_state(&mut self, rx_pwr: u16) {
+        self.prepare_tone_teardown();
         self.bus.delay_ms(5);
-        self.write_reg(REG_SYS_POWER, rx_pwr);
-
-        let unmuted = self.rx_demod_active && self.is_squelch_open();
-        self.apply_demod_af(unmuted);
-        crate::audio::AudioAmplifier::<B>::notify_tone_played();
+        self.finish_tone_teardown(rx_pwr);
     }
 
     pub fn begin_tone_sequence(&mut self) -> bool {

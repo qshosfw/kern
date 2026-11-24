@@ -65,7 +65,8 @@ pub(crate) struct NativeExecSlot {
 impl NativeExecSlot {
     #[inline(always)]
     pub(crate) fn pkg_path_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(&self.pkg_path[..self.pkg_path_len as usize]) }
+        let len = (self.pkg_path_len as usize).min(self.pkg_path.len());
+        utils::format::ascii_str(&self.pkg_path[..len]).unwrap_or("")
     }
 
     pub(crate) fn set_pkg_path(&mut self, path: &str) {
@@ -146,6 +147,14 @@ pub fn init_native_slot() {
             core::mem::size_of::<NativeExecSlot>(),
         );
     }
+}
+
+#[inline(always)]
+pub fn is_leaf_dispatching() -> bool {
+    let slot = slot_ref();
+    slot.is_loaded
+        && slot.profile.is_structured_paged()
+        && unsafe { (*slot.overlay.leaf).is_dispatching }
 }
 
 #[inline(never)]
@@ -555,6 +564,7 @@ pub fn load_native_from_storage(
         LIVE_API_TABLE = KrxApiTable::with_call(caps.raw(), super::syscall::kern_call);
     }
     slot.is_loaded = true;
+    super::fault::note_loaded_pkg(pid, path);
 
     // 7. Register dynamic service exports if SECTION_SERVICE_EXPORTS is present (§8.1 / KRX-ABI 2.5.0)
     if let Some(exports_body) = aux.service_exports {
@@ -979,6 +989,7 @@ pub(crate) fn teardown_slot_and_hw(
     slot.entry_point = 0;
     slot.status_bar_has_custom = false;
     slot.pkg_path_len = 0;
+    super::fault::clear_loaded_pkg();
 }
 
 pub unsafe fn native_on_exit(ctx: &mut SysContext<'static, 'static>) {

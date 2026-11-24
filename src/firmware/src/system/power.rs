@@ -4,7 +4,7 @@ use super::remote::is_remote_control_active;
 use super::{is_headless, wake_and_notify_activity};
 use crate::POWER_SERVICE;
 use crate::hardware::SystemHardware;
-use crate::services::RadioMelodyExt;
+use crate::services::melody::{DialogSoundType, MelodyEngine};
 use crate::services::power::PowerService;
 use py32_hal::adc::Adc;
 
@@ -114,10 +114,10 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
         return;
     }
 
-    // 1. Play gentle descending power-down cue
-    hw.radio
-        .play_dialog_sound(crate::services::melody::DialogSoundType::Lock);
-    py32_hal::delay::delay_ms(100);
+    // 1. Play gentle descending power-down cue and drain before clock shutdown
+    let tone_seq = &mut crate::radio_state().tone_seq;
+    tone_seq.enqueue(&mut hw.radio, MelodyEngine::dialog_notes(DialogSoundType::Lock));
+    tone_seq.drain_blocking(&mut hw.radio);
 
     // 2. Shut down power-hungry subsystems and enter chip standby states
     suspend_peripherals(hw, false);
@@ -158,9 +158,10 @@ pub(super) fn handle_deep_sleep_mode(hw: &mut SystemHardware) {
     // Wake RF modem and re-apply listening VFO channel to RF hardware
     finish_wake_radio(hw);
 
-    // Sound unlock confirmation chime with display already active and responsive
-    hw.radio
-        .play_dialog_sound(crate::services::melody::DialogSoundType::Unlock);
+    // Sound unlock confirmation chime non-blockingly with display already active and responsive
+    crate::radio_state()
+        .tone_seq
+        .enqueue(&mut hw.radio, MelodyEngine::dialog_notes(DialogSoundType::Unlock));
 
     // Ensure matrix is clean before returning to event dispatch
     drain_keypad_matrix(hw);
@@ -331,8 +332,10 @@ pub(super) fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_t
         if *low_batt_warning_timer >= 30 {
             *low_batt_warning_timer = 0;
             if crate::master_config_ref().audio.key_beep != 0 {
-                hw.radio
-                    .play_dialog_sound(crate::services::melody::DialogSoundType::Warning);
+                crate::radio_state().tone_seq.enqueue(
+                    &mut hw.radio,
+                    MelodyEngine::dialog_notes(DialogSoundType::Warning),
+                );
             }
         }
     } else {
