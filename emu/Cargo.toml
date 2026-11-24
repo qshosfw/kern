@@ -1,0 +1,17 @@
+[package]
+name = "kern-emu"
+version = "0.2.0"
+edition = "2024"
+description = "In-house high-speed ARMv6-M (Cortex-M0+) + PY32F071xB + UV-K1/UV-K5v3 hardware emulator for Kern"
+
+[workspace]
+
+[[bin]]
+name = "kern-emu"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "none"
