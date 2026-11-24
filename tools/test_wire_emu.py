@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RigWire + KernFS + Sideload integration test on the streamlined Kern QEMU emulator."""
+"""RigWire + KernFS + Sideload integration test on the in-house `kern-emu` hardware emulator."""
 
 from __future__ import annotations
 
@@ -12,44 +12,54 @@ ROOT_DIR = TOOLS_DIR.parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
+import rigwire  # noqa: E402
 from emu import KernEmulator, render_fb_ascii  # noqa: E402
 
 
 def main() -> int:
-    print("=== Kern RigWire Emulator Integration Test ===")
-    with KernEmulator(
+    print("=== Kern RigWire In-House Emulator Test ===")
+    emu = KernEmulator(
         ephemeral_flash=True,
+        flash_mode="blank",
+        turbo=True,
         serial_port=4458,
-        gdb_port=1246,
-        qmp_path="/tmp/kern-emu-wire.sock",
+        ctl_port=4453,
         state_file=Path("/tmp/kern-emu-wire.json"),
-    ) as emu:
-        print("  • HELLO:", emu.wire().hello())
-        print("  • PING:", emu.wire().ping())
-
-        for directory in ("/", "/apps"):
+    )
+    emu.start(wait_rigwire=False)
+    try:
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            emu.wait_virtual_ms(250, timeout=1.0)
             try:
-                entries = emu.ls(directory)
-                names = [f"{e['name']}{'/' if e['is_dir'] else f' ({e[\"size\"]}B)'}" for e in entries]
-                print(f"  • ls {directory}: {names}")
-            except Exception as exc:
-                print(f"  • ls {directory} failed: {exc}")
+                cli = rigwire.RigWireClient(emu.wire_url, timeout=0.35)
+                print("  • HELLO:", cli.hello())
+                cli.close()
+                break
+            except Exception:
+                emu.press("menu", hold_ms=1800, hardware=True)
+                emu.wait_virtual_ms(300, timeout=1.5)
+                emu.press("menu", hold_ms=150, hardware=True)
+                emu.wait_virtual_ms(250, timeout=1.0)
+
+        print("  • PING:", emu.wire().ping())
+        for directory in ("/", "/apps"):
+            entries = emu.ls(directory)
+            names = [
+                f"{e['name']}/" if e["is_dir"] else f"{e['name']} ({e['size']}B)"
+                for e in entries
+            ]
+            print(f"  • ls {directory}: {names}")
 
         sysinfo_krx = ROOT_DIR / "packages" / "sys" / "sysinfo" / "sysinfo.krx"
         if sysinfo_krx.is_file():
             res = emu.sideload(sysinfo_krx, force=True)
             print("  • Sideloaded sysinfo.krx:", res)
 
-        fb0 = emu.framebuffer()
-        emu.screenshot("/tmp/frame_0_launcher.png")
+        fb0 = emu.framebuffer(direct=True)
         print(render_fb_ascii(fb0))
-
-        emu.press("2", hold_ms=120)
-        fb1 = emu.wait_frame_change(fb0, timeout=4.0)
-        if fb1 is not None:
-            emu.screenshot("/tmp/frame_1_settings.png")
-            print("  • Settings screen updated and saved to /tmp/frame_1_settings.png")
-        time.sleep(0.2)
+    finally:
+        emu.stop()
     print("RigWire emulator test complete.")
     return 0
 

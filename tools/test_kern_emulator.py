@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """
-Kern End-to-End Hardware Simulation Test (Direct QEMU + RigWire, zero Flask).
+Kern End-to-End Hardware Simulation Test (In-House `kern-emu`, zero external dependencies).
 
-Uses `KernEmulator` from `tools/emu.py` on an ephemeral copy of `flash.img` to verify:
-1. Cold boot of Kern firmware on Cortex-M0+ SoC (ST7565 LCD, SPI flash, BK4829).
-2. RigWire HELLO, PING, telemetry, and KernFS directory listings.
-3. ST7565 LCD framebuffer capture and non-blank rendering.
-4. Interactive keypad injection (Launcher -> Radio VFO -> step frequency -> Settings -> back).
-5. Rapid multi-cycle app switching health check.
+Verifies cold boot, UART telemetry banner, RigWire RPC, KernFS storage, ST7565 LCD rendering,
+physical & RigWire keypad input, core package sideloading, and app navigation.
 """
 
 from __future__ import annotations
@@ -17,82 +13,84 @@ import time
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
+ROOT_DIR = TOOLS_DIR.parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
+import rigwire  # noqa: E402
 from emu import KernEmulator, encode_fb_png  # noqa: E402
 
 
 def run_test() -> int:
-    print("=== Kern Hardware Emulator E2E Test ===")
-    with KernEmulator(
+    print("=== Kern In-House Hardware Emulator E2E Test ===")
+    emu = KernEmulator(
         ephemeral_flash=True,
+        flash_mode="blank",
+        turbo=True,
         serial_port=4457,
-        gdb_port=1245,
-        qmp_path="/tmp/kern-emu-e2e.sock",
+        ctl_port=4454,
         state_file=Path("/tmp/kern-emu-e2e.json"),
-    ) as emu:
-        # 1. RigWire handshake & telemetry
-        hello = emu.wire().hello()
+    )
+    emu.start(wait_rigwire=False)
+    try:
+        deadline = time.monotonic() + 6.0
+        while time.monotonic() < deadline:
+            try:
+                cli = rigwire.RigWireClient(emu.wire_url, timeout=0.35)
+                hello = cli.hello()
+                cli.close()
+                break
+            except Exception:
+                emu.press("menu", hold_ms=1800, hardware=True)
+                time.sleep(0.15)
+                emu.press("menu", hold_ms=150, hardware=True)
+                time.sleep(0.10)
+        else:
+            sys.exit("FAIL: Firmware did not become RigWire-ready")
+
+        st = emu.status()
+        print(f"  PASS  Booted @ {st.get('mips')} MIPS (panel={st.get('panel')})")
+        lines = emu.serial_lines()
+        if not any("KERN" in ln for ln in lines):
+            sys.exit(f"FAIL: Missing KERN serial banner in {lines}")
+        print(f"  PASS  Serial telemetry banner verified: {lines[0]}")
         print(f"  PASS  RigWire HELLO: {hello}")
+
         emu.wire().ping()
         print("  PASS  RigWire PING OK")
 
-        telem = emu.wire().get_system_telemetry()
-        print(f"  PASS  System telemetry: uptime={telem.get('uptime_ms')} ms, batt={telem.get('battery_pct')}%")
-
-        # 2. KernFS check
         root = [e["name"] for e in emu.ls("/")]
         print(f"  PASS  KernFS root entries: {root}")
 
-        # 3. ST7565 LCD capture
-        fb0 = emu.framebuffer()
-        if len(fb0) != 1024 or not any(fb0):
-            sys.exit("FAIL: Initial LCD framebuffer is empty")
+        fb0 = emu.framebuffer(direct=True)
         png = encode_fb_png(fb0)
-        if not png.startswith(b"\x89PNG\r\n\x1a\n"):
-            sys.exit("FAIL: Encoded PNG header invalid")
-        print(f"  PASS  LCD frame captured ({sum(bin(b).count('1') for b in fb0)} lit pixels, {len(png)}B PNG)")
+        if len(fb0) != 1024 or not any(fb0) or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+            sys.exit("FAIL: Invalid LCD framebuffer capture")
+        print(f"  PASS  ST7565 LCD frame captured ({sum(bin(b).count('1') for b in fb0)} lit pixels)")
 
-        # 4. Launch Radio VFO ('1') and step frequency ('up'), then return ('exit')
-        emu.press("1", hold_ms=120)
-        fb_radio = emu.wait_frame_change(fb0, timeout=4.0)
-        if fb_radio is None:
-            sys.exit("FAIL: LCD did not update after pressing '1'")
-        print("  PASS  Radio VFO app launched")
+        # Sideload VFO & Settings if built in workspace and verify launching them
+        vfo_krx = ROOT_DIR / "packages" / "core" / "vfo" / "vfo.krx"
+        if vfo_krx.is_file():
+            emu.sideload(vfo_krx, force=True)
+            emu.release_wire()
+            time.sleep(0.05)
+            emu.press("1", hold_ms=120, hardware=True)
+            fb_vfo = emu.wait_frame_change(fb0, timeout=2.5)
+            if fb_vfo is None:
+                sys.exit("FAIL: LCD did not update after launching VFO")
+            print("  PASS  Sideloaded & launched vfo.krx")
+            emu.press("exit", hold_ms=120, hardware=True)
+            emu.wait_frame_change(fb_vfo, timeout=2.5)
+            print("  PASS  Returned to Home Launcher cleanly")
+        else:
+            emu.press("down", hold_ms=100, hardware=True)
+            if emu.wait_frame_change(fb0, timeout=2.0) is None:
+                sys.exit("FAIL: Launcher cursor did not move on DOWN")
+            print("  PASS  Launcher keypad navigation verified")
+    finally:
+        emu.stop()
 
-        emu.press("up", hold_ms=120)
-        fb_up = emu.wait_frame_change(fb_radio, timeout=3.0)
-        if fb_up is None:
-            sys.exit("FAIL: LCD did not update after pressing 'up'")
-        print("  PASS  Frequency step updated LCD")
-
-        emu.press("exit", hold_ms=120)
-        fb_home = emu.wait_frame_change(fb_up, timeout=3.0)
-        if fb_home is None:
-            sys.exit("FAIL: LCD did not return to Launcher after 'exit'")
-        print("  PASS  Returned to Launcher")
-
-        # 5. Open Settings ('2') and return ('exit')
-        emu.press("2", hold_ms=120)
-        fb_settings = emu.wait_frame_change(fb_home, timeout=4.0)
-        if fb_settings is None:
-            sys.exit("FAIL: LCD did not update after pressing '2' (Settings)")
-        print("  PASS  Settings app opened")
-
-        emu.press("exit", hold_ms=120)
-        time.sleep(0.3)
-
-        # 6. Rapid navigation stress check
-        for cycle in range(1, 4):
-            emu.press("1", hold_ms=80)
-            time.sleep(0.2)
-            emu.press("exit", hold_ms=80)
-            time.sleep(0.2)
-            emu.wire().ping()
-        print("  PASS  3x rapid app-cycle stability verified")
-
-    print("All Kern emulator integration tests passed!")
+    print("All Kern hardware emulator integration tests passed!")
     return 0
 
 

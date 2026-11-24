@@ -991,7 +991,7 @@ fn load_firmware_into_flash(flash: &mut [u8], img: &[u8]) -> std::io::Result<u32
         let phoff = u32::from_le_bytes(img[28..32].try_into().unwrap()) as usize;
         let phentsize = u16::from_le_bytes(img[42..44].try_into().unwrap()) as usize;
         let phnum = u16::from_le_bytes(img[44..46].try_into().unwrap()) as usize;
-        let mut min_vma: Option<u32> = None;
+        let mut vtor_cand: Option<u32> = None;
 
         for i in 0..phnum {
             let off = phoff + i * phentsize;
@@ -1008,14 +1008,27 @@ fn load_firmware_into_flash(flash: &mut [u8], img: &[u8]) -> std::io::Result<u32
             if p_filesz == 0 || p_offset + p_filesz > img.len() {
                 continue;
             }
+            // Skip rust-lld's synthetic PT_LOAD covering the ELF header itself at p_offset == 0
+            if p_offset == 0 && img.starts_with(b"\x7FELF") && p_paddr < FLASH_BASE + APP_FLASH_OFFSET as u32 {
+                continue;
+            }
             if (FLASH_BASE..FLASH_BASE + FLASH_LEN as u32).contains(&p_paddr) {
                 let dst = (p_paddr - FLASH_BASE) as usize;
                 let n = p_filesz.min(FLASH_LEN.saturating_sub(dst));
                 flash[dst..dst + n].copy_from_slice(&img[p_offset..p_offset + n]);
-                min_vma = Some(min_vma.map_or(p_paddr, |m| m.min(p_paddr)));
+                if vtor_cand.is_none() && n >= 8 {
+                    let sp = u32::from_le_bytes(flash[dst..dst + 4].try_into().unwrap());
+                    let rst = u32::from_le_bytes(flash[dst + 4..dst + 8].try_into().unwrap());
+                    if (SRAM_BASE..=SRAM_BASE + SRAM_LEN as u32).contains(&sp)
+                        && (FLASH_BASE..FLASH_BASE + FLASH_LEN as u32).contains(&(rst & !1))
+                        && (rst & 1) == 1
+                    {
+                        vtor_cand = Some(p_paddr);
+                    }
+                }
             }
         }
-        Ok(min_vma.unwrap_or(FLASH_BASE + APP_FLASH_OFFSET as u32))
+        Ok(vtor_cand.unwrap_or(FLASH_BASE + APP_FLASH_OFFSET as u32))
     } else {
         // Raw firmware.bin linked at 0x0800_2800 (unless full 128 KB dump starting with SP @ 0x2000xxxx and reset @ 0x08000xxx)
         let rst_vec = if img.len() >= 8 {

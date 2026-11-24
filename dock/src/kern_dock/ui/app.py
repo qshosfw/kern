@@ -424,7 +424,7 @@ class KernDockApp(Adw.Application):
 
         extra_actions: list[tuple[str, str, str, str, Callable[[], None], bool]] = [
             ("connect-demo", "Connect Demo Radio", "Radio", "org.kernos.Dock-symbolic", lambda: self.runtime.connect_async("demo"), True),
-            ("connect-qemu", "Connect QEMU Emulator", "Radio", "computer-symbolic", lambda: self.runtime.connect_async("tcp://127.0.0.1:4446"), True),
+            ("connect-emu", "Connect Hardware Emulator", "Radio", "computer-symbolic", lambda: self.runtime.connect_or_start_emulator_async(), True),
             ("disconnect", "Disconnect Radio", "Radio", "media-eject-symbolic", lambda: self.runtime.link.disconnect(), True),
             ("mount-drive", "Mount / Unmount Radio Drive", "Files", "drive-harddisk-symbolic", self._toggle_mount_from_palette, True),
             ("reboot", "Restart Radio", "Hardware", "system-reboot-symbolic", lambda: self._confirm_reboot(REBOOT_FIRMWARE), True),
@@ -555,43 +555,43 @@ class KernDockApp(Adw.Application):
             demo_row.connect("activated", lambda _r: (self.switcher_popover.popdown(), self.runtime.connect_async("demo")))
         virt_lb.append(demo_row)
 
-        qst = self.runtime.qemu_status()
-        qurl = qst["wire_url"]
-        is_qemu = lk.connected and lk.port == qurl
-        qsub = (
-            f"Running · {qurl}" if qst["running"]
-            else (f"Auto-start · {qurl}" if qst["can_launch"] else qurl)
+        est = self.runtime.emulator_status()
+        eurl = est["wire_url"]
+        is_emu = lk.connected and lk.port == eurl
+        esub = (
+            f"Running · {eurl}" if est["running"]
+            else (f"Auto-start · {eurl}" if est["can_launch"] else eurl)
         )
-        qemu_row = Adw.ActionRow(title="QEMU Emulator", subtitle=GLib.markup_escape_text(qsub), activatable=not is_qemu)
-        qemu_row.add_prefix(Gtk.Image(icon_name="computer-symbolic"))
-        if qst["running"]:
-            stop_q = Gtk.Button(icon_name="media-playback-stop-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Stop QEMU Emulator")
-            stop_q.add_css_class("flat")
-            stop_q.connect(
+        emu_row = Adw.ActionRow(title="Hardware Emulator", subtitle=GLib.markup_escape_text(esub), activatable=not is_emu)
+        emu_row.add_prefix(Gtk.Image(icon_name="computer-symbolic"))
+        if est["running"]:
+            stop_e = Gtk.Button(icon_name="media-playback-stop-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Stop Hardware Emulator")
+            stop_e.add_css_class("flat")
+            stop_e.connect(
                 "clicked",
                 lambda _b: (
                     self.switcher_popover.popdown(),
-                    self.runtime.stop_qemu_daemon(),
-                    self._toast("QEMU emulator stopped"),
+                    self.runtime.stop_emulator_daemon(),
+                    self._toast("Hardware emulator stopped"),
                 ),
             )
-            qemu_row.add_suffix(stop_q)
-        if is_qemu:
+            emu_row.add_suffix(stop_e)
+        if is_emu:
             chk = Gtk.Image(icon_name="object-select-symbolic")
             chk.add_css_class("accent")
-            qemu_row.add_suffix(chk)
+            emu_row.add_suffix(chk)
         else:
-            qemu_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            qemu_row.connect(
+            emu_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            emu_row.connect(
                 "activated",
                 lambda _r: (
                     self.switcher_popover.popdown(),
-                    self.runtime.connect_or_start_qemu_async(
+                    self.runtime.connect_or_start_emulator_async(
                         on_status=lambda m: GLib.idle_add(self._toast, m),
                     ),
                 ),
             )
-        virt_lb.append(qemu_row)
+        virt_lb.append(emu_row)
         root.append(virt_lb)
 
         self.switcher_popover.set_child(root)

@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Kern Hardware Emulator (`./kern emu` & `from emu import KernEmulator`).
+In-House Kern Hardware Emulator CLI & Python SDK (`./kern emu` & `from emu import KernEmulator`).
 
-Streamlined, zero-Flask QEMU Cortex-M0+ (UV-K5v3 / UV-K1) runner built for:
-  • Kern Dock       — exposes native RigWire TCP (`tcp://127.0.0.1:4446`) out of the box
-  • AI Agents & CI  — scriptable Python context manager + `--daemon` + `--json` + ASCII LCD dump
-  • Hardware Tests  — drop-in replacement for a physical radio (RigWire, KernFS, sideload, LCD, keys)
+Drives the native Rust `kern-emu` engine (`emu/` crate — ARMv6-M Cortex-M0+ + PY32F071xB +
+ST7565 LCD + PY25Q16 2 MiB SPI Flash + BK4829 RF + 19-key matrix) with zero external/untracked
+dependencies:
+  • Kern Dock       — native RigWire TCP (`tcp://127.0.0.1:4446`) + 1-click auto-start
+  • AI Agents & CI  — `--turbo` sub-second cold boot, JSON-RPC hardware control (`127.0.0.1:4445`),
+                      direct GRAM screenshots (even during early boot prompts!), physical GPIO keys,
+                      battery/RF telemetry injection, and `--flash-mode` fault testing
+  • Hardware Tests  — drop-in replacement for a physical UV-K1 / UV-K5v3 radio
 """
 
 from __future__ import annotations
@@ -13,13 +17,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import signal
 import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import time
 import zlib
 from pathlib import Path
@@ -33,128 +35,92 @@ if str(TOOLS_DIR) not in sys.path:
 import cli_ui  # noqa: E402
 import rigwire  # noqa: E402
 
-DEFAULT_EMU_DIR = Path(os.environ.get("KERN_EMU_DIR", str(REPO_ROOT / "inspo" / "uv-k5-v3-emulator")))
-DEFAULT_QEMU_BIN = Path(os.environ.get("KERN_QEMU_BIN", str(REPO_ROOT / "inspo" / "qemu-7.2" / "build" / "qemu-system-arm")))
-DEFAULT_FLASH_IMG = DEFAULT_EMU_DIR / "assets" / "flash.img"
-DEFAULT_ELF = REPO_ROOT / "target" / "kern_firmware.elf"
+EMU_CRATE_DIR = REPO_ROOT / "emu"
+EMU_TARGET_DIR = REPO_ROOT / "target" / "emu-host"
+DEFAULT_FLASH_IMG = REPO_ROOT / "target" / "emu" / "flash.img"
+DEFAULT_FIRMWARE_BIN = REPO_ROOT / "target" / "firmware.bin"
+DEFAULT_FIRMWARE_ELF = REPO_ROOT / "target" / "thumbv6m-none-eabi" / "release" / "firmware"
 DEFAULT_STATE_FILE = Path(os.environ.get("KERN_EMU_STATE", "/tmp/kern-emu.json"))
-DEFAULT_QMP_SOCK = "/tmp/kern-emu-qmp.sock"
 DEFAULT_SERIAL_PORT = 4446
-DEFAULT_GDB_PORT = 1234
-
-# Map friendly key names to QMP keypad property names (when using --qmp hardware injection)
-_QMP_KEY_MAP: dict[str, str] = {
-    "menu": "MENU", "up": "UP", "down": "DOWN", "exit": "EXIT",
-    "star": "STAR", "*": "STAR", "f": "F", "ptt": "PTT",
-    "side1": "SIDE1", "side2": "SIDE2",
-    **{str(d): str(d) for d in range(10)},
-}
+DEFAULT_CTL_PORT = 4445
 
 
-def find_qemu_binary() -> Path | None:
-    if DEFAULT_QEMU_BIN.is_file():
-        return DEFAULT_QEMU_BIN
-    found = shutil.which("qemu-system-arm")
-    return Path(found) if found else None
+def _host_rust_target() -> str:
+    res = subprocess.run(
+        ["rustc", "-vV"],
+        capture_output=True,
+        text=True,
+        env=cli_ui.cargo_env(),
+        check=True,
+    )
+    for line in res.stdout.splitlines():
+        if line.startswith("host:"):
+            return line.split(":", 1)[1].strip()
+    raise RuntimeError("Could not determine host target from `rustc -vV`")
 
 
-def ensure_flash_image(flash_path: Path = DEFAULT_FLASH_IMG) -> Path:
-    if flash_path.is_file():
-        return flash_path
-    make_flash = DEFAULT_EMU_DIR / "tools" / "make_flash.py"
-    if make_flash.is_file():
-        subprocess.run([sys.executable, str(make_flash)], cwd=str(DEFAULT_EMU_DIR), check=True)
-        if flash_path.is_file():
-            return flash_path
-    # Fallback: create blank 8 MiB SPI flash image (0xFF erased)
-    flash_path.parent.mkdir(parents=True, exist_ok=True)
-    with flash_path.open("wb") as f:
-        f.write(b"\xFF" * (8 * 1024 * 1024))
-    return flash_path
+def _emu_binary_path(host_target: str | None = None) -> Path:
+    ht = host_target or _host_rust_target()
+    exe = "kern-emu.exe" if os.name == "nt" else "kern-emu"
+    return EMU_TARGET_DIR / ht / "release" / exe
 
 
-def ensure_firmware_elf(elf_path: Path = DEFAULT_ELF, *, rebuild: bool = False) -> Path:
-    if rebuild or not elf_path.is_file():
-        res = subprocess.run([sys.executable, str(TOOLS_DIR / "builder.py")], cwd=str(REPO_ROOT))
+def ensure_emu_binary(*, force_rebuild: bool = False) -> Path:
+    """Build the in-house Rust `kern-emu` binary on demand if missing or sources changed."""
+    ht = _host_rust_target()
+    bin_path = _emu_binary_path(ht)
+    need_build = force_rebuild or not bin_path.is_file()
+    if not need_build:
+        bin_mtime = bin_path.stat().st_mtime
+        srcs = [EMU_CRATE_DIR / "Cargo.toml", *sorted((EMU_CRATE_DIR / "src").glob("*.rs"))]
+        if any(s.is_file() and s.stat().st_mtime > bin_mtime for s in srcs):
+            need_build = True
+    if need_build:
+        env = cli_ui.cargo_env({"CARGO_TARGET_DIR": str(EMU_TARGET_DIR)})
+        res = subprocess.run(
+            [
+                "cargo",
+                "build",
+                "--release",
+                "--manifest-path",
+                str(EMU_CRATE_DIR / "Cargo.toml"),
+                "--target",
+                ht,
+            ],
+            cwd=str(REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"Failed to compile kern-emu:\n{res.stderr}")
+    return bin_path
+
+
+def resolve_firmware_image(explicit: str | Path | None = None, *, rebuild: bool = False) -> Path:
+    if explicit:
+        p = Path(explicit)
+        if not p.is_file():
+            raise FileNotFoundError(f"Firmware image not found: {p}")
+        return p
+    if rebuild or (not DEFAULT_FIRMWARE_ELF.is_file() and not DEFAULT_FIRMWARE_BIN.is_file()):
+        res = subprocess.run([sys.executable, str(TOOLS_DIR / "builder.py")], cwd=str(REPO_ROOT), env=cli_ui.cargo_env())
         if res.returncode != 0:
             raise RuntimeError("Firmware build failed")
-    if not elf_path.is_file():
-        raw_bin = REPO_ROOT / "target" / "firmware.bin"
-        bin2elf = DEFAULT_EMU_DIR / "tools" / "bin2elf.py"
-        if raw_bin.is_file() and bin2elf.is_file():
-            subprocess.run([sys.executable, str(bin2elf), str(raw_bin), "-o", str(elf_path)], cwd=str(REPO_ROOT), check=True)
-    if not elf_path.is_file():
-        raise FileNotFoundError(f"Firmware ELF not found at {elf_path}")
-    return elf_path
+    if DEFAULT_FIRMWARE_ELF.is_file() and DEFAULT_FIRMWARE_BIN.is_file():
+        return (
+            DEFAULT_FIRMWARE_ELF
+            if DEFAULT_FIRMWARE_ELF.stat().st_mtime >= DEFAULT_FIRMWARE_BIN.stat().st_mtime
+            else DEFAULT_FIRMWARE_BIN
+        )
+    if DEFAULT_FIRMWARE_ELF.is_file():
+        return DEFAULT_FIRMWARE_ELF
+    if DEFAULT_FIRMWARE_BIN.is_file():
+        return DEFAULT_FIRMWARE_BIN
+    raise FileNotFoundError("No compiled firmware found in target/ (run `./kern build`)")
 
 
-class QmpClient:
-    """Zero-dependency QMP JSON client over Unix socket (or host:port TCP)."""
-
-    def __init__(self, endpoint: str, timeout: float = 4.0) -> None:
-        self.endpoint = endpoint
-        self.timeout = timeout
-
-    def _connect(self) -> socket.socket:
-        host, _, port = self.endpoint.rpartition(":")
-        if host and port.isdigit():
-            s = socket.create_connection((host, int(port)), timeout=self.timeout)
-        else:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(self.timeout)
-            s.connect(self.endpoint)
-        f = s.makefile("rwb", buffering=0)
-        f.readline()  # greeting
-        f.write(b'{"execute":"qmp_capabilities"}\n')
-        f.readline()  # capabilities ack
-        return s
-
-    def execute(self, command: str, arguments: dict[str, Any] | None = None) -> Any:
-        s = self._connect()
-        try:
-            payload: dict[str, Any] = {"execute": command}
-            if arguments:
-                payload["arguments"] = arguments
-            s.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-            buf = b""
-            while True:
-                chunk = s.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                for raw_line in buf.splitlines():
-                    try:
-                        obj = json.loads(raw_line.decode("utf-8"))
-                    except Exception:
-                        continue
-                    if "return" in obj:
-                        return obj["return"]
-                    if "error" in obj:
-                        raise RuntimeError(f"QMP {command}: {obj['error']}")
-            return None
-        finally:
-            try:
-                s.close()
-            except Exception:
-                pass
-
-    def press_hardware_key(self, key: str, hold_ms: int = 120) -> None:
-        qkey = _QMP_KEY_MAP.get(key.lower(), key.upper())
-        self.execute("qom-set", {"path": "/machine/keypad", "property": f"key-{qkey}", "value": True})
-        time.sleep(max(0.06, hold_ms / 1000.0))
-        self.execute("qom-set", {"path": "/machine/keypad", "property": f"key-{qkey}", "value": False})
-
-    def panel_state(self) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for prop in ("display", "contrast", "invert"):
-            try:
-                out[prop] = self.execute("qom-get", {"path": "/machine/panel", "property": prop})
-            except Exception:
-                pass
-        return out
-
-
-def encode_fb_png(fb: bytes, *, scale: int = 4) -> bytes:
+def encode_fb_png(fb: bytes, *, scale: int = 4, invert: bool = False) -> bytes:
     """Render 1024-byte ST7565 framebuffer into a clean PNG (zero third-party deps)."""
     w, h = 128 * scale, 64 * scale
     raw = bytearray()
@@ -163,9 +129,9 @@ def encode_fb_png(fb: bytes, *, scale: int = 4) -> bytes:
         mask = 1 << (y & 7)
         row_px = bytearray()
         for x in range(128):
-            on = bool(fb[page_off + x] & mask) if page_off + x < len(fb) else False
-            # Classic UV-K1 teal/indigo palette
-            rgb = b"\x24\x1f\x7e" if on else b"\xc9\xf7\xec"
+            bit = bool(fb[page_off + x] & mask) if page_off + x < len(fb) else False
+            on = (not bit) if invert else bit
+            rgb = b"\x1f\x23\x2b" if on else b"\xc8\xd8\xe4"
             row_px.extend(rgb * scale)
         for _ in range(scale):
             raw.append(0)
@@ -179,17 +145,19 @@ def encode_fb_png(fb: bytes, *, scale: int = 4) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + _chunk(b"IEND", b"")
 
 
-def render_fb_ascii(fb: bytes) -> str:
-    """Compact half-block Unicode preview of the 128×64 ST7565 LCD (great for terminal & AI agents)."""
+def render_fb_ascii(fb: bytes, *, invert: bool = False) -> str:
+    """Compact half-block Unicode preview of the 128×64 ST7565 LCD (ideal for terminal & AI agents)."""
     lines: list[str] = []
     for y in range(0, 64, 2):
         p0, m0 = (y >> 3) * 128, 1 << (y & 7)
         p1, m1 = ((y + 1) >> 3) * 128, 1 << ((y + 1) & 7)
         chars: list[str] = []
         for x in range(0, 128, 2):
-            top = bool(fb[p0 + x] & m0) if p0 + x < len(fb) else False
-            bot = bool(fb[p1 + x] & m1) if p1 + x < len(fb) else False
-            chars.append("█" if (top and bot) else ("▀" if top else ("▄" if bot else " ")))
+            t = bool(fb[p0 + x] & m0) if p0 + x < len(fb) else False
+            b = bool(fb[p1 + x] & m1) if p1 + x < len(fb) else False
+            if invert:
+                t, b = not t, not b
+            chars.append("█" if (t and b) else ("▀" if t else ("▄" if b else " ")))
         lines.append("│" + "".join(chars) + "│")
     border = "─" * 64
     return f"┌{border}┐\n" + "\n".join(lines) + f"\n└{border}┘"
@@ -220,112 +188,121 @@ def load_running_state(state_file: Path = DEFAULT_STATE_FILE) -> dict[str, Any] 
     return None
 
 
+class EmuControlClient:
+    """Zero-dependency JSON-RPC client for `kern-emu`'s hardware control port (`127.0.0.1:4445`)."""
+
+    def __init__(self, port: int = DEFAULT_CTL_PORT, host: str = "127.0.0.1", timeout: float = 3.0) -> None:
+        self.host = host
+        self.port = int(port)
+        self.timeout = timeout
+
+    def call(self, cmd: str, **kwargs: Any) -> dict[str, Any]:
+        payload = {"cmd": cmd, **kwargs}
+        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+            sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+            line = sock.makefile("r", encoding="utf-8").readline()
+            if not line:
+                raise RuntimeError(f"Empty response from kern-emu ctl ({cmd})")
+            resp = json.loads(line)
+            if not resp.get("ok", True):
+                raise RuntimeError(resp.get("error", f"kern-emu {cmd} failed"))
+            return resp
+
+
 class KernEmulator:
-    """Scriptable, Dock-compatible Kern QEMU radio emulator controller."""
+    """Scriptable, Dock-compatible in-house Kern hardware emulator controller."""
 
     def __init__(
         self,
         *,
-        elf: Path | str | None = None,
+        firmware: Path | str | None = None,
         flash: Path | str | None = None,
         serial_port: int = DEFAULT_SERIAL_PORT,
-        gdb_port: int = DEFAULT_GDB_PORT,
-        qmp_path: str = DEFAULT_QMP_SOCK,
+        ctl_port: int = DEFAULT_CTL_PORT,
         ephemeral_flash: bool = False,
+        flash_mode: str = "normal",
         boot_key: str | None = None,
         boot_key_ms: int = 1500,
+        turbo: bool = False,
         rebuild: bool = False,
         state_file: Path = DEFAULT_STATE_FILE,
     ) -> None:
-        self.elf = Path(elf) if elf else DEFAULT_ELF
+        self.firmware_arg = firmware
         self.flash = Path(flash) if flash else DEFAULT_FLASH_IMG
         self.serial_port = int(serial_port)
-        self.gdb_port = int(gdb_port)
-        self.qmp_path = qmp_path
+        self.ctl_port = int(ctl_port)
         self.ephemeral_flash = ephemeral_flash
+        self.flash_mode = flash_mode
         self.boot_key = boot_key
         self.boot_key_ms = boot_key_ms
+        self.turbo = turbo
         self.rebuild = rebuild
         self.state_file = state_file
 
         self._proc: subprocess.Popen[bytes] | None = None
-        self._tmp_flash: Path | None = None
         self._wire: rigwire.RigWireClient | None = None
-        self.qmp = QmpClient(self.qmp_path)
+        self.ctl = EmuControlClient(self.ctl_port)
 
     @property
     def wire_url(self) -> str:
         return f"tcp://127.0.0.1:{self.serial_port}"
 
-    def start(self, *, wait_rigwire: bool = True, timeout: float = 15.0, detach: bool = False) -> dict[str, Any]:
-        qemu = find_qemu_binary()
-        if qemu is None:
-            raise FileNotFoundError(
-                f"qemu-system-arm not found at {DEFAULT_QEMU_BIN} or PATH (set KERN_QEMU_BIN)"
-            )
-        elf = ensure_firmware_elf(self.elf, rebuild=self.rebuild)
-        base_flash = ensure_flash_image(self.flash)
-        run_flash = base_flash
-        if self.ephemeral_flash:
-            fd, tmp_name = tempfile.mkstemp(prefix="kern-emu-flash-", suffix=".img")
-            os.close(fd)
-            shutil.copy2(base_flash, tmp_name)
-            self._tmp_flash = Path(tmp_name)
-            run_flash = self._tmp_flash
-
-        if ":" not in self.qmp_path and os.path.exists(self.qmp_path):
-            try:
-                os.unlink(self.qmp_path)
-            except OSError:
-                pass
-
-        env = dict(os.environ)
-        env["UVK5_FLASH_IMAGE"] = str(run_flash)
-        if self.boot_key:
-            env["UVK5_BOOT_KEY"] = _QMP_KEY_MAP.get(self.boot_key.lower(), self.boot_key.upper())
-            env["UVK5_BOOT_KEY_MS"] = str(self.boot_key_ms)
+    def start(self, *, wait_rigwire: bool = True, timeout: float = 10.0, detach: bool = False) -> dict[str, Any]:
+        emu_bin = ensure_emu_binary()
+        fw_path = resolve_firmware_image(self.firmware_arg, rebuild=self.rebuild)
 
         cmd = [
-            str(qemu),
-            "-M", "uv-k5-v3",
-            "-nographic",
-            "-monitor", "none",
-            "-qmp", f"unix:{self.qmp_path},server=on,wait=off",
-            "-kernel", str(elf),
-            "-gdb", f"tcp::{self.gdb_port}",
-            "-serial", f"tcp:127.0.0.1:{self.serial_port},server=on,wait=off",
+            str(emu_bin),
+            "--firmware",
+            str(fw_path),
+            "--serial-port",
+            str(self.serial_port),
+            "--ctl-port",
+            str(self.ctl_port),
+            "--flash-mode",
+            self.flash_mode,
         ]
+        if self.ephemeral_flash:
+            cmd.append("--ephemeral")
+        else:
+            self.flash.parent.mkdir(parents=True, exist_ok=True)
+            cmd.extend(["--flash", str(self.flash)])
+        if self.boot_key:
+            cmd.extend(["--boot-key", self.boot_key, "--boot-key-ms", str(self.boot_key_ms)])
+        if self.turbo:
+            cmd.append("--turbo")
+
         self._proc = subprocess.Popen(
             cmd,
-            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=detach,
         )
 
-        # Wait for TCP RigWire socket to listen
-        deadline = time.monotonic() + min(8.0, timeout)
+        deadline = time.monotonic() + min(5.0, timeout)
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:
-                raise RuntimeError(f"QEMU exited early with code {self._proc.returncode}")
+                raise RuntimeError(f"kern-emu exited early with code {self._proc.returncode}")
             try:
-                socket.create_connection(("127.0.0.1", self.serial_port), timeout=0.25).close()
+                self.ctl.call("status")
                 break
             except OSError:
-                time.sleep(0.08)
+                time.sleep(0.02)
         else:
             self.stop()
-            raise TimeoutError(f"QEMU serial port {self.serial_port} did not open within timeout")
+            raise TimeoutError(f"kern-emu control port {self.ctl_port} did not open in time")
 
         info = {
+            "engine": "kern-emu",
             "pid": self._proc.pid,
             "wire_url": self.wire_url,
             "serial_port": self.serial_port,
-            "gdb_port": self.gdb_port,
-            "qmp_path": self.qmp_path,
-            "elf": str(elf),
-            "flash": str(run_flash),
+            "ctl_port": self.ctl_port,
+            "firmware": str(fw_path),
+            "flash": None if self.ephemeral_flash else str(self.flash),
+            "flash_mode": self.flash_mode,
             "ephemeral": self.ephemeral_flash,
+            "turbo": self.turbo,
             "started_at": time.time(),
         }
         try:
@@ -346,7 +323,6 @@ class KernEmulator:
         return self._wire
 
     def release_wire(self) -> None:
-        """Close the active RigWire TCP socket so Dock or another tool can attach."""
         if self._wire is not None:
             try:
                 self._wire.close()
@@ -354,16 +330,15 @@ class KernEmulator:
                 pass
             self._wire = None
 
-    def wait_ready(self, timeout: float = 15.0) -> dict[str, Any]:
-        """Wait until firmware boots and responds to RigWire HELLO."""
+    def wait_ready(self, timeout: float = 10.0) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         last_err: Exception | None = None
         while time.monotonic() < deadline:
             if self._proc is not None and self._proc.poll() is not None:
-                raise RuntimeError(f"QEMU exited during boot (code {self._proc.returncode})")
+                raise RuntimeError(f"kern-emu exited during boot (code {self._proc.returncode})")
             cli: rigwire.RigWireClient | None = None
             try:
-                cli = rigwire.RigWireClient(self.wire_url, timeout=1.2)
+                cli = rigwire.RigWireClient(self.wire_url, timeout=0.8)
                 hello = cli.hello()
                 cli.close()
                 return hello
@@ -374,12 +349,31 @@ class KernEmulator:
                         cli.close()
                     except Exception:
                         pass
-            time.sleep(0.25)
+            time.sleep(0.08)
         raise TimeoutError(f"RigWire did not become ready within {timeout:.1f}s ({last_err})")
 
-    def press(self, key: str, *, hold_ms: int = 120, via_qmp: bool = False) -> None:
-        if via_qmp:
-            self.qmp.press_hardware_key(key, hold_ms=hold_ms)
+    def status(self) -> dict[str, Any]:
+        return self.ctl.call("status")
+
+    def serial_lines(self) -> list[str]:
+        return list(self.ctl.call("serial_log").get("lines", []))
+
+    def wait_virtual_ms(self, delta_ms: int, *, timeout: float = 5.0) -> None:
+        """Wait until emulated MCU virtual clock advances by at least `delta_ms`."""
+        start_ms = int(self.status().get("virtual_ms", 0))
+        target_ms = start_ms + max(0, int(delta_ms))
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if int(self.status().get("virtual_ms", 0)) >= target_ms:
+                return
+            time.sleep(0.01)
+
+    def press(self, key: str, *, hold_ms: int = 120, hardware: bool = False, wait: bool = True) -> None:
+        """Send a keypad press (via direct GPIO matrix when `hardware=True`, else RigWire)."""
+        if hardware:
+            self.ctl.call("press_key", key=key, hold_ms=int(hold_ms))
+            if wait and hold_ms > 0:
+                self.wait_virtual_ms(int(hold_ms) + 40, timeout=max(3.0, hold_ms / 250.0))
             return
         cli = self.wire()
         code = rigwire.KEY_CODES.get(key.lower())
@@ -387,9 +381,9 @@ class KernEmulator:
             raise ValueError(f"Unknown key '{key}' (valid: {', '.join(sorted(rigwire.KEY_CODES))})")
         cli.inject_key(code, rigwire.KEY_STATES["press"])
         if hold_ms >= 500:
-            time.sleep(0.25)
+            time.sleep(0.22)
             cli.inject_key(code, rigwire.KEY_STATES["hold"])
-            time.sleep(max(0.05, (hold_ms - 250) / 1000.0))
+            time.sleep(max(0.05, (hold_ms - 220) / 1000.0))
         else:
             time.sleep(max(0.04, hold_ms / 1000.0))
         cli.inject_key(code, rigwire.KEY_STATES["release"])
@@ -397,21 +391,26 @@ class KernEmulator:
     def encoder(self, delta: int) -> None:
         self.wire().inject_encoder(int(delta))
 
-    def framebuffer(self) -> bytes:
+    def framebuffer(self, *, direct: bool = True) -> bytes:
+        """Read 1024-byte ST7565 GRAM directly (works even before RigWire starts!) or over RigWire."""
+        if direct:
+            resp = self.ctl.call("framebuffer")
+            return bytes.fromhex(resp["hex"])
         return self.wire().screencap()
 
-    def wait_frame_change(self, old_fb: bytes, *, timeout: float = 3.0, poll_s: float = 0.12) -> bytes | None:
+    def wait_frame_change(self, old_fb: bytes, *, timeout: float = 3.0, poll_s: float = 0.05) -> bytes | None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            cur = self.framebuffer()
+            cur = self.framebuffer(direct=True)
             if cur != old_fb:
                 return cur
             time.sleep(poll_s)
         return None
 
     def screenshot(self, dest: str | Path | None = None, *, scale: int = 4) -> bytes:
-        fb = self.framebuffer()
-        png = encode_fb_png(fb, scale=scale)
+        resp = self.ctl.call("framebuffer")
+        fb = bytes.fromhex(resp["hex"])
+        png = encode_fb_png(fb, scale=scale, invert=bool(resp.get("invert", False)))
         if dest is not None:
             Path(dest).write_bytes(png)
         return png
@@ -422,29 +421,38 @@ class KernEmulator:
     def sideload(self, pkg_path: str | Path, *, verify: bool = True, force: bool = True) -> dict[str, Any]:
         return self.wire().sideload(str(pkg_path), verify=verify, force=force)
 
-    def reset(self) -> None:
-        self.qmp.execute("system_reset")
+    def set_battery_mv(self, mv: int) -> None:
+        self.ctl.call("set_battery_mv", mv=int(mv))
+
+    def set_rf_signal(self, rssi_dbm: int, carrier: bool = True) -> None:
+        self.ctl.call("set_rf", rssi_dbm=int(rssi_dbm), carrier=bool(carrier))
+
+    def set_turbo(self, enabled: bool) -> None:
+        self.ctl.call("set_turbo", turbo=bool(enabled))
+
+    def reset(self, *, warm: bool = False) -> None:
+        self.release_wire()
+        self.ctl.call("reset", warm=warm)
 
     def stop(self) -> None:
-        if self._wire is not None:
-            try:
-                self._wire.close()
-            except Exception:
-                pass
-            self._wire = None
+        self.release_wire()
+        try:
+            self.ctl.call("quit")
+        except Exception:
+            pass
         if self._proc is not None and self._proc.poll() is None:
             try:
-                self._proc.terminate()
-                self._proc.wait(timeout=3.0)
+                self._proc.wait(timeout=1.5)
             except Exception:
                 try:
-                    self._proc.kill()
+                    self._proc.terminate()
+                    self._proc.wait(timeout=1.5)
                 except Exception:
-                    pass
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
         self._proc = None
-        if self._tmp_flash is not None:
-            self._tmp_flash.unlink(missing_ok=True)
-            self._tmp_flash = None
         try:
             self.state_file.unlink(missing_ok=True)
         except OSError:
@@ -462,87 +470,149 @@ def stop_daemon(state_file: Path = DEFAULT_STATE_FILE) -> bool:
     st = load_running_state(state_file)
     if not st:
         return False
-    pid = int(st["pid"])
+    ctl_port = int(st.get("ctl_port", DEFAULT_CTL_PORT))
     try:
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(30):
-            if not _pid_alive(pid):
-                break
-            time.sleep(0.1)
-        else:
-            os.kill(pid, signal.SIGKILL)
-    except OSError:
+        EmuControlClient(ctl_port, timeout=1.0).call("quit")
+    except Exception:
         pass
-    if st.get("ephemeral") and st.get("flash"):
+    pid = int(st["pid"])
+    for _ in range(25):
+        if not _pid_alive(pid):
+            break
+        time.sleep(0.05)
+    else:
         try:
-            Path(st["flash"]).unlink(missing_ok=True)
+            os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
     state_file.unlink(missing_ok=True)
     return True
 
 
+def _provision_core_packages_if_present(emu: KernEmulator) -> list[str]:
+    installed: list[str] = []
+    for rel in (
+        Path("packages/core/vfo/vfo.krx"),
+        Path("packages/core/settings/settings.krx"),
+    ):
+        full = REPO_ROOT / rel
+        if full.is_file():
+            try:
+                emu.sideload(full, verify=True, force=True)
+                installed.append(rel.name)
+            except Exception:
+                pass
+    return installed
+
+
 def _run_e2e_test(rebuild: bool = False) -> int:
-    cli_ui.header("Kern Emulator Verification Suite", "Direct QEMU + RigWire + ST7565 LCD + Keypad")
-    with KernEmulator(ephemeral_flash=True, rebuild=rebuild, serial_port=4456, gdb_port=1244, qmp_path="/tmp/kern-emu-test.sock", state_file=Path("/tmp/kern-emu-test.json")) as emu:
-        hello = emu.wire().hello()
+    cli_ui.header("Kern In-House Emulator Verification", "ARMv6-M + PY32F071 + ST7565 + PY25Q16 + BK4829 + RigWire")
+    t0 = time.monotonic()
+    emu = KernEmulator(
+        ephemeral_flash=True,
+        flash_mode="blank",
+        turbo=True,
+        rebuild=rebuild,
+        serial_port=4456,
+        ctl_port=4455,
+        state_file=Path("/tmp/kern-emu-test.json"),
+    )
+    emu.start(wait_rigwire=False)
+    try:
+        # Handle legacy pre-refactor boot prompts gracefully if present, else waits directly for RigWire
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            emu.wait_virtual_ms(250, timeout=1.0)
+            try:
+                cli = rigwire.RigWireClient(emu.wire_url, timeout=0.35)
+                hello = cli.hello()
+                cli.close()
+                break
+            except Exception:
+                emu.press("menu", hold_ms=1800, hardware=True)
+                emu.wait_virtual_ms(300, timeout=1.5)
+                emu.press("menu", hold_ms=150, hardware=True)
+                emu.wait_virtual_ms(250, timeout=1.0)
+        else:
+            cli_ui.err("Firmware did not reach RigWire ready state")
+            return cli_ui.EXIT_ERR
+
+        st = emu.status()
+        cli_ui.ok(f"Engine booted @ {st.get('mips')} MIPS (virtual {st.get('virtual_ms')} ms)")
+        cli_ui.ok(f"UART banner: {emu.serial_lines()}")
         cli_ui.ok(f"RigWire HELLO: {hello}")
+
         emu.wire().ping()
         cli_ui.ok("RigWire PING OK")
 
-        root_entries = emu.ls("/")
-        cli_ui.ok(f"KernFS ls / -> {[e['name'] for e in root_entries]}")
+        root_entries = [e["name"] for e in emu.ls("/")]
+        cli_ui.ok(f"KernFS ls / -> {root_entries}")
 
-        fb0 = emu.framebuffer()
+        fb0 = emu.framebuffer(direct=False)
         if len(fb0) != 1024 or not any(fb0):
-            cli_ui.err("LCD framebuffer empty or wrong size")
+            cli_ui.err("LCD framebuffer empty")
             return cli_ui.EXIT_ERR
         cli_ui.ok(f"ST7565 LCD active ({sum(bin(b).count('1') for b in fb0)} lit pixels)")
 
-        emu.press("menu", hold_ms=100)
-        time.sleep(0.35)
-        fb1 = emu.framebuffer()
-        cli_ui.ok(f"Key press injected (screen changed={fb1 != fb0})")
-    cli_ui.ok("All emulator checks passed.")
+        emu.press("down", hold_ms=80)
+        fb1 = emu.wait_frame_change(fb0, timeout=2.0)
+        cli_ui.ok(f"Navigation key injected (screen updated={fb1 is not None})")
+
+        installed = _provision_core_packages_if_present(emu)
+        if installed:
+            cli_ui.ok(f"Sideloaded core packages: {installed}")
+    finally:
+        emu.stop()
+
+    cli_ui.ok(f"All in-house emulator checks passed in {time.monotonic() - t0:.2f}s.")
     return cli_ui.EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="kern emu",
-        description="Unified Kern hardware emulator (Dock-ready RigWire TCP + agent CLI + test harness).",
+        description="In-house high-speed Kern hardware emulator (Dock-ready RigWire TCP + agent CLI + test harness).",
     )
     sub = ap.add_subparsers(dest="cmd")
 
-    p_start = sub.add_parser("start", help="Launch QEMU emulator with RigWire TCP on 127.0.0.1:4446")
-    p_start.add_argument("--daemon", "-d", action="store_true", help="Run in background and return once RigWire is ready")
+    p_start = sub.add_parser("start", help="Launch in-house kern-emu with RigWire TCP on 127.0.0.1:4446")
+    p_start.add_argument("--daemon", "-d", action="store_true", help="Run in background and return once ready")
     p_start.add_argument("--dock", action="store_true", help="Also launch Kern Dock attached to the emulator")
     p_start.add_argument("--port", "-p", type=int, default=DEFAULT_SERIAL_PORT, help="RigWire TCP port (default: 4446)")
-    p_start.add_argument("--gdb", type=int, default=DEFAULT_GDB_PORT, help="GDB stub TCP port (default: 1234)")
-    p_start.add_argument("--elf", help="Override firmware ELF path")
-    p_start.add_argument("--flash", help="Override SPI flash image path")
-    p_start.add_argument("--ephemeral", action="store_true", help="Boot from a temporary copy of flash.img")
-    p_start.add_argument("--boot-key", help="Hold a physical key from reset (e.g. PTT, EXIT)")
+    p_start.add_argument("--ctl-port", type=int, default=DEFAULT_CTL_PORT, help="Hardware control JSON-RPC port (default: 4445)")
+    p_start.add_argument("--firmware", "--elf", dest="firmware", help="Override firmware ELF or .bin path")
+    p_start.add_argument("--flash", help="Override 2 MiB SPI flash image path (default: target/emu/flash.img)")
+    p_start.add_argument("--ephemeral", action="store_true", help="Run in-memory without writing flash.img")
+    p_start.add_argument(
+        "--flash-mode",
+        default="normal",
+        choices=("normal", "blank", "blank-no-calib", "corrupt"),
+        help="Initial SPI flash state for testing first-boot/recovery flows",
+    )
+    p_start.add_argument("--boot-key", help="Hold a physical key from power-on (e.g. menu, exit, ptt)")
+    p_start.add_argument("--turbo", action="store_true", help="Unthrottled virtual clock when idle (instant boot/delays)")
+    p_start.add_argument("--provision", action="store_true", help="Auto-sideload core vfo.krx & settings.krx on start if missing")
     p_start.add_argument("--rebuild", "-r", action="store_true", help="Rebuild firmware before starting")
-    p_start.add_argument("--no-wait", action="store_true", help="Do not wait for RigWire HELLO")
+    p_start.add_argument("--no-wait", action="store_true", help="Return immediately as soon as hardware control port opens")
     p_start.add_argument("--json", action="store_true", help="Print startup metadata as JSON")
 
     sub.add_parser("stop", help="Stop background emulator daemon")
 
-    p_st = sub.add_parser("status", help="Show running emulator status & live RigWire info")
+    p_st = sub.add_parser("status", help="Show running emulator hardware & RigWire status")
     p_st.add_argument("--json", action="store_true")
 
-    sub.add_parser("reset", help="Warm-reset running emulator via QMP")
+    p_rst = sub.add_parser("reset", help="Reset running emulator (cold power-cycle or --warm SYSRESETREQ)")
+    p_rst.add_argument("--warm", action="store_true", help="Preserve SRAM .uninit & backup registers")
 
     p_key = sub.add_parser("key", help="Send a keypad press to the running emulator")
     p_key.add_argument("name", help="Key name (menu, exit, up, down, 0-9, star, f, ptt, side1, side2)")
     p_key.add_argument("--hold-ms", type=int, default=120)
-    p_key.add_argument("--qmp", action="store_true", help="Inject at QEMU hardware keypad level instead of RigWire")
+    p_key.add_argument("--hw", "--gpio", dest="hw", action="store_true", help="Inject via physical GPIO matrix (works on boot dialogs)")
 
     p_enc = sub.add_parser("encoder", help="Send rotary encoder steps (e.g. -1 or 1)")
     p_enc.add_argument("delta", type=int)
 
-    p_shot = sub.add_parser("screenshot", help="Capture LCD PNG or ASCII art from running emulator")
+    p_shot = sub.add_parser("screenshot", help="Capture ST7565 LCD PNG or ASCII art from running emulator")
     p_shot.add_argument("output", nargs="?", help="Output .png path (optional if --ascii)")
     p_shot.add_argument("--scale", type=int, default=4)
     p_shot.add_argument("--ascii", action="store_true", help="Print compact Unicode LCD art to stdout")
@@ -550,36 +620,48 @@ def main(argv: list[str] | None = None) -> int:
     p_sl = sub.add_parser("sideload", help="Sideload a .krx/.mod package into the running emulator")
     p_sl.add_argument("package", help="Path to .krx or .mod file")
 
+    p_bat = sub.add_parser("battery", help="Override simulated battery voltage in mV (5800..8500)")
+    p_bat.add_argument("mv", type=int)
+
+    p_rf = sub.add_parser("rf", help="Inject simulated RF RSSI (dBm) and carrier detect on BK4829")
+    p_rf.add_argument("rssi_dbm", type=int)
+    p_rf.add_argument("--no-carrier", action="store_true")
+
     p_wire = sub.add_parser("wire", help="Run any rigwire.py subcommand against the running emulator")
     p_wire.add_argument("wire_args", nargs=argparse.REMAINDER)
 
-    p_test = sub.add_parser("test", help="Run fast self-contained QEMU + RigWire E2E verification")
+    p_test = sub.add_parser("test", help="Run fast self-contained in-house emulator E2E verification")
     p_test.add_argument("--rebuild", "-r", action="store_true")
 
-    p_chk = sub.add_parser("check", help="Check QEMU binary, flash image & firmware ELF availability")
+    p_chk = sub.add_parser("check", help="Build/verify in-house kern-emu binary & firmware availability")
     p_chk.add_argument("--json", action="store_true")
 
     raw_args = list(sys.argv[1:] if argv is None else argv)
-    # Default to `start` if invoked with no subcommand or legacy flags like `--rebuild`
     if not raw_args or raw_args[0].startswith("-"):
         if "-h" not in raw_args and "--help" not in raw_args:
             raw_args = ["start", *raw_args]
     args = ap.parse_args(raw_args)
 
     if args.cmd == "check":
-        qemu = find_qemu_binary()
+        emu_bin = ensure_emu_binary()
+        fw = None
+        try:
+            fw = str(resolve_firmware_image())
+        except Exception:
+            pass
         res = {
-            "qemu": str(qemu) if qemu else None,
-            "flash": str(DEFAULT_FLASH_IMG) if DEFAULT_FLASH_IMG.is_file() else None,
-            "elf": str(DEFAULT_ELF) if DEFAULT_ELF.is_file() else None,
+            "engine": "kern-emu",
+            "binary": str(emu_bin),
+            "firmware": fw,
+            "flash": str(DEFAULT_FLASH_IMG) if DEFAULT_FLASH_IMG.is_file() else "auto-created on first start",
             "running": load_running_state() is not None,
         }
         if args.json:
             print(json.dumps(res, indent=2))
         else:
-            cli_ui.header("Kern Emulator Check")
-            cli_ui.table(("Component", "Path"), ((k, str(v or "missing")) for k, v in res.items()))
-        return cli_ui.EXIT_OK if res["qemu"] else cli_ui.EXIT_ERR
+            cli_ui.header("Kern In-House Emulator Check")
+            cli_ui.table(("Component", "Status"), ((k, str(v or "missing")) for k, v in res.items()))
+        return cli_ui.EXIT_OK if (emu_bin.is_file() and fw) else cli_ui.EXIT_ERR
 
     if args.cmd == "stop":
         if stop_daemon():
@@ -598,7 +680,11 @@ def main(argv: list[str] | None = None) -> int:
             return cli_ui.EXIT_OK
         out = dict(st, running=True)
         try:
-            cli = rigwire.RigWireClient(st["wire_url"], timeout=1.5)
+            out["hw"] = EmuControlClient(int(st.get("ctl_port", DEFAULT_CTL_PORT)), timeout=1.5).call("status")
+        except Exception as exc:
+            out["hw_error"] = str(exc)
+        try:
+            cli = rigwire.RigWireClient(st["wire_url"], timeout=1.0)
             out["rigwire"] = cli.hello()
             cli.close()
         except Exception as exc:
@@ -613,32 +699,43 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "test":
         return _run_e2e_test(rebuild=args.rebuild)
 
-    if args.cmd in ("reset", "key", "encoder", "screenshot", "sideload", "wire"):
+    if args.cmd in ("reset", "key", "encoder", "screenshot", "sideload", "battery", "rf", "wire"):
         st = load_running_state()
         if not st:
             cli_ui.err("No running emulator found. Start one first: ./kern emu start --daemon")
             return cli_ui.EXIT_ERR
-        emu = KernEmulator(serial_port=int(st["serial_port"]), qmp_path=str(st["qmp_path"]))
+        emu = KernEmulator(
+            serial_port=int(st["serial_port"]),
+            ctl_port=int(st.get("ctl_port", DEFAULT_CTL_PORT)),
+        )
         try:
             if args.cmd == "reset":
-                emu.reset()
-                cli_ui.ok("Emulator reset.")
+                emu.reset(warm=args.warm)
+                cli_ui.ok(f"Emulator {'warm' if args.warm else 'cold'} reset.")
             elif args.cmd == "key":
-                emu.press(args.name, hold_ms=args.hold_ms, via_qmp=args.qmp)
+                emu.press(args.name, hold_ms=args.hold_ms, hardware=args.hw)
                 cli_ui.ok(f"Key '{args.name}' sent ({args.hold_ms} ms).")
             elif args.cmd == "encoder":
                 emu.encoder(args.delta)
                 cli_ui.ok(f"Encoder delta {args.delta:+d} sent.")
             elif args.cmd == "screenshot":
-                fb = emu.framebuffer()
+                resp = emu.ctl.call("framebuffer")
+                fb = bytes.fromhex(resp["hex"])
+                inv = bool(resp.get("invert", False))
                 if args.ascii or not args.output:
-                    print(render_fb_ascii(fb))
+                    print(render_fb_ascii(fb, invert=inv))
                 if args.output:
-                    Path(args.output).write_bytes(encode_fb_png(fb, scale=args.scale))
+                    Path(args.output).write_bytes(encode_fb_png(fb, scale=args.scale, invert=inv))
                     cli_ui.ok(f"Saved {args.output}")
             elif args.cmd == "sideload":
                 info = emu.sideload(args.package)
                 cli_ui.ok(f"Sideloaded {info['remote_path']}")
+            elif args.cmd == "battery":
+                emu.set_battery_mv(args.mv)
+                cli_ui.ok(f"Battery voltage set to {args.mv} mV.")
+            elif args.cmd == "rf":
+                emu.set_rf_signal(args.rssi_dbm, carrier=not args.no_carrier)
+                cli_ui.ok(f"RF signal set to {args.rssi_dbm} dBm (carrier={not args.no_carrier}).")
             elif args.cmd == "wire":
                 wargs = [a for a in args.wire_args if a != "--"]
                 return subprocess.call([sys.executable, str(TOOLS_DIR / "rigwire.py"), "--port", st["wire_url"], *wargs], cwd=str(REPO_ROOT))
@@ -650,20 +747,36 @@ def main(argv: list[str] | None = None) -> int:
         if load_running_state():
             stop_daemon()
         emu = KernEmulator(
-            elf=args.elf,
+            firmware=args.firmware,
             flash=args.flash,
             serial_port=args.port,
-            gdb_port=args.gdb,
+            ctl_port=args.ctl_port,
             ephemeral_flash=args.ephemeral,
+            flash_mode=args.flash_mode,
             boot_key=args.boot_key,
+            turbo=args.turbo,
             rebuild=args.rebuild,
         )
-        info = emu.start(wait_rigwire=not args.no_wait, detach=args.daemon)
+        wait_rw = (not args.no_wait) and (args.flash_mode == "normal")
+        # If first-time `target/emu/flash.img` doesn't exist yet, don't block before OS auto-formats or prompts
+        if wait_rw and not args.ephemeral and not Path(args.flash or DEFAULT_FLASH_IMG).is_file():
+            wait_rw = False
+        info = emu.start(wait_rigwire=wait_rw, detach=args.daemon)
+        if args.provision:
+            try:
+                emu.wait_ready(timeout=5.0)
+                existing = {e["name"] for e in emu.ls("/apps")}
+                if "vfo.krx" not in existing or "settings.krx" not in existing:
+                    _provision_core_packages_if_present(emu)
+            except Exception:
+                pass
+            finally:
+                emu.release_wire()
         if args.json:
             print(json.dumps(info, indent=2))
         else:
-            cli_ui.header("Kern Hardware Emulator Ready", info["wire_url"])
-            cli_ui.ok(f"PID {info['pid']} · RigWire {info['wire_url']} · GDB :{info['gdb_port']}")
+            cli_ui.header("Kern In-House Emulator Ready", info["wire_url"])
+            cli_ui.ok(f"PID {info['pid']} · RigWire {info['wire_url']} · Control 127.0.0.1:{info['ctl_port']}")
             cli_ui.info("Attach Dock: ./kern dock --port " + info["wire_url"])
         if args.daemon:
             return cli_ui.EXIT_OK

@@ -208,8 +208,8 @@ class DockRuntime:
         self.events.emit("lcd.changed", {attr: value}, source="runtime")
 
     # --- Connection helpers ---
-    def qemu_status(self) -> dict[str, Any]:
-        """Inspect whether a local Kern QEMU emulator is running or available to auto-launch."""
+    def emulator_status(self) -> dict[str, Any]:
+        """Inspect whether the in-house `kern-emu` hardware emulator is running or ready to launch."""
         import json as _json
         import os as _os
         import shutil as _shutil
@@ -231,8 +231,8 @@ class DockRuntime:
                 pass
         repo_root = Path(__file__).resolve().parents[4]
         emu_script = repo_root / "tools" / "emu.py"
-        qemu_bin = Path(_os.environ.get("KERN_QEMU_BIN", str(repo_root / "inspo" / "qemu-7.2" / "build" / "qemu-system-arm")))
-        can_launch = emu_script.is_file() and (qemu_bin.is_file() or bool(_shutil.which("qemu-system-arm")))
+        emu_crate = repo_root / "emu" / "Cargo.toml"
+        can_launch = emu_script.is_file() and emu_crate.is_file() and bool(_shutil.which("cargo"))
         return {
             "running": running,
             "pid": pid,
@@ -241,29 +241,29 @@ class DockRuntime:
             "emu_script": str(emu_script),
         }
 
-    def stop_qemu_daemon(self) -> bool:
-        """Stop the background QEMU emulator daemon if one is running."""
+    def stop_emulator_daemon(self) -> bool:
+        """Stop the background `kern-emu` daemon if one is running."""
         import subprocess as _sub
         import sys as _sys
 
-        st = self.qemu_status()
+        st = self.emulator_status()
         if not st["running"]:
             return False
         if self.link.connected and self.link.port == st["wire_url"]:
-            self.link.disconnect(reason="Stopped QEMU emulator")
+            self.link.disconnect(reason="Stopped hardware emulator")
         res = _sub.run([_sys.executable, st["emu_script"], "stop"], capture_output=True)
         return res.returncode == 0
 
-    def connect_or_start_qemu_async(
+    def connect_or_start_emulator_async(
         self,
         *,
         on_status: Callable[[str], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ) -> None:
-        """Connect to a running QEMU emulator, or auto-launch `tools/emu.py start --daemon` first."""
+        """Connect to a running `kern-emu` instance, or auto-build & launch it first."""
         if self._connecting:
             return
-        st = self.qemu_status()
+        st = self.emulator_status()
         if st["running"] or not st["can_launch"]:
             self.connect_async(st["wire_url"], on_error=on_error)
             return
@@ -271,7 +271,7 @@ class DockRuntime:
         self._connecting = True
         self.events.emit("link.connecting", {"port": st["wire_url"]}, source="runtime")
         if on_status:
-            on_status("Starting QEMU emulator…")
+            on_status("Starting hardware emulator…")
 
         def _worker() -> None:
             import json as _json
@@ -280,14 +280,14 @@ class DockRuntime:
 
             try:
                 proc = _sub.run(
-                    [_sys.executable, st["emu_script"], "start", "--daemon", "--json"],
+                    [_sys.executable, st["emu_script"], "start", "--daemon", "--turbo", "--provision", "--json"],
                     capture_output=True,
                     text=True,
-                    timeout=25,
+                    timeout=35,
                 )
                 if proc.returncode != 0:
                     msg = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
-                    raise RuntimeError(f"QEMU failed to start: {msg[:180]}")
+                    raise RuntimeError(f"Emulator failed to start: {msg[:180]}")
                 wire_url = st["wire_url"]
                 try:
                     meta = _json.loads(proc.stdout)
@@ -303,7 +303,7 @@ class DockRuntime:
             finally:
                 self._connecting = False
 
-        threading.Thread(target=_worker, daemon=True, name="kern-dock-qemu-connect").start()
+        threading.Thread(target=_worker, daemon=True, name="kern-dock-emu-connect").start()
 
     def connect_async(
         self,

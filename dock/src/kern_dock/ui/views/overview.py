@@ -59,7 +59,7 @@ class OverviewView:
         offline = Adw.StatusPage(
             icon_name="org.kernos.Dock",
             title="Connect a Radio",
-            description="Plug in via USB-C, attach to QEMU, or start the offline demo.",
+            description="Plug in via USB-C, start the hardware emulator, or open the offline demo.",
         )
         offline.add_css_class("compact")
         off_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
@@ -72,12 +72,12 @@ class OverviewView:
         demo_b.add_css_class("pill")
         demo_b.add_css_class("suggested-action")
         demo_b.connect("clicked", lambda _b: self.runtime.connect_async("demo"))
-        qemu_b = Gtk.Button(label="QEMU Emulator")
+        qemu_b = Gtk.Button(label="Hardware Emulator")
         qemu_b.add_css_class("pill")
-        qemu_b.set_tooltip_text("Attach to running QEMU or start it automatically (tcp://127.0.0.1:4446)")
+        qemu_b.set_tooltip_text("Attach to or auto-start the in-house hardware emulator (tcp://127.0.0.1:4446)")
         qemu_b.connect(
             "clicked",
-            lambda _b: self.runtime.connect_or_start_qemu_async(
+            lambda _b: self.runtime.connect_or_start_emulator_async(
                 on_status=lambda m: GLib.idle_add(self._on_toast, m),
             ),
         )

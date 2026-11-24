@@ -408,14 +408,10 @@ def main():
             print(f" {RED}{INVERT} ERROR {RESET} KFW verification failed: {verr or vout}")
             sys.exit(1)
 
-    # Step 4.1: Wrap Raw Binary in ELF for QEMU Hardware Emulation
-    target_elf = "target/kern_firmware.elf"
-    emu_dir = Path(os.environ.get("KERN_EMU_DIR", str(root_dir / "inspo" / "uv-k5-v3-emulator")))
-    bin2elf_tool = emu_dir / "tools" / "bin2elf.py"
-    if bin2elf_tool.exists():
-        code, stdout, stderr = run_cmd(f"python3 {bin2elf_tool} {target_bin} -o {target_elf}")
-        if code != 0:
-            print(f" {YELLOW}{INVERT} WARN  {RESET} bin2elf failed: {stderr.strip()}")
+    # Step 4.1: Stage Native ARM ELF for `kern-emu` & GDB/SWD debugging
+    target_elf = root_dir / "target" / "kern_firmware.elf"
+    if elf_path.exists():
+        shutil.copy2(elf_path, target_elf)
 
     print(f"\n {GREEN}{BOLD}✨ Build Artifacts Ready:{RESET}")
     print(f"   • Raw Binary:    {WHITE}{target_bin}{RESET} ({total_flash:,} bytes)")
@@ -423,8 +419,8 @@ def main():
         print(f"   • Packed Binary: {WHITE}{target_packed}{RESET} ({os.path.getsize(target_packed):,} bytes)")
     if Path(target_kfw).exists():
         print(f"   • KFW Container: {WHITE}{target_kfw}{RESET} ({os.path.getsize(target_kfw):,} bytes, MCU-OTA verified)")
-    if Path(target_elf).exists():
-        print(f"   • Emulator ELF:  {WHITE}{target_elf}{RESET} ({os.path.getsize(target_elf):,} bytes)")
+    if target_elf.exists():
+        print(f"   • Firmware ELF:  {WHITE}target/kern_firmware.elf{RESET} ({target_elf.stat().st_size:,} bytes)")
 
     # Step 5: Optional Auto-Flash
     if args.flash:

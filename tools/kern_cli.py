@@ -54,7 +54,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ("provision", "Provision .krx/.mod package bundles over RigWire"),
             ("mount", "Mount radio KernFS over RigWire via cross-platform WebDAV"),
             ("ports", "List connected USB & serial radio ports (alias: devices)"),
-            ("emu", "Hardware QEMU emulator (Dock-ready RigWire TCP, agent CLI & tests)"),
+            ("emu", "In-house Rust hardware emulator (RigWire TCP, Dock, agent CLI & tests)"),
         ],
     ),
     (

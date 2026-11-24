@@ -73,7 +73,7 @@ def draw_pango_text(
 
 
 def draw_quansheng_logo(cr: Any, cx: float, cy: float, scale: float = 1.0, *, dark: bool = False) -> None:
-    """Exact Quansheng dual-RF-arc + heavy italic geometric wordmark (`inspo/Quansheng-Logo.png`)."""
+    """Exact Quansheng dual-RF-arc + heavy italic geometric wordmark."""
     import cairo
 
     cr.save()
