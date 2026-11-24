@@ -1,0 +1,5 @@
+{
+  "schema": 1,
+  "description": "Kern OS LMS-Ascon Post-Quantum Release Signing Trust Store. Add official release public keys via `./kern kfw trust add --key-file <key.json> --channels stable,beta,nightly`. Private keys MUST NEVER be committed to git.",
+  "keys": []
+}

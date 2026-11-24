@@ -17,3 +17,10 @@ __pycache__/
 /tmp/
 *.zip.html
 /.agents/
+
+# Release artifacts & private signing keys (only keys/trusted-keys.json public keys are tracked)
+/dist/
+keys/*.key.json
+keys/*.private.json
+keys/private/
+*.lms-key.json

@@ -141,22 +141,30 @@ def _check_armv6m_vectors(raw_fw: bytes) -> tuple[bool, int, int]:
 
 
 def discover_local_firmware(repo_root: Path) -> list[Path]:
-    """Return recently built `.kfw` or packed `.bin` firmware images under `target/`."""
-    target = repo_root / "target"
-    if not target.is_dir():
-        return []
+    """Return recently built `.kfw` or packed `.bin` firmware images under `target/` and `dist/`."""
     candidates: list[Path] = []
-    for name in ("firmware_packed.bin", "firmware.kfw"):
-        p = target / name
-        if p.is_file() and 256 <= p.stat().st_size <= FLASH_TOTAL_BYTES * 2:
-            candidates.append(p)
-    for p in sorted(target.glob("*.kfw"), key=lambda x: x.stat().st_mtime, reverse=True):
-        if p not in candidates and p.is_file():
-            candidates.append(p)
-    return candidates[:4]
+    target = repo_root / "target"
+    if target.is_dir():
+        for name in ("kern.kfw", "firmware.kfw", "firmware_packed.bin"):
+            p = target / name
+            if p.is_file() and 256 <= p.stat().st_size <= FLASH_TOTAL_BYTES * 4:
+                candidates.append(p)
+        for p in sorted(target.glob("*.kfw"), key=lambda x: x.stat().st_mtime, reverse=True):
+            if p not in candidates and p.is_file():
+                candidates.append(p)
+    dist = repo_root / "dist"
+    if dist.is_dir():
+        for p in sorted(dist.glob("*.kfw"), key=lambda x: x.stat().st_mtime, reverse=True):
+            if p not in candidates and p.is_file():
+                candidates.append(p)
+    return candidates[:6]
 
 
-def inspect_firmware_file(fpath: str | Path) -> dict[str, Any]:
+def inspect_firmware_file(
+    fpath: str | Path,
+    *,
+    trust_store_path: str | Path | None = None,
+) -> dict[str, Any]:
     """Inspects and pre-flight validates a `.kfw` container or raw `.bin` firmware image."""
     p = Path(fpath)
     data = p.read_bytes()
@@ -164,6 +172,10 @@ def inspect_firmware_file(fpath: str | Path) -> dict[str, Any]:
         parsed = kfw.parse_kfw(data, verify_root=True)
         pts = kfw.extract_all_parts(parsed)
         fw_parts = [pt for pt in parsed.parts if pt["kind"] == kfw.PART_FIRMWARE]
+        mod_parts = [
+            pt for pt in parsed.parts
+            if pt["kind"] in (kfw.PART_KRX_MODULE, kfw.PART_KERNFS_FILE, kfw.PART_OPT_KRX, kfw.PART_OPT_FILE)
+        ]
         targets = [t.slug for t in parsed.targets]
         if not fw_parts:
             raise ValueError("Container has no firmware image part (may be a backup/module pack)")
@@ -171,21 +183,42 @@ def inspect_firmware_file(fpath: str | Path) -> dict[str, Any]:
         vec_ok, sp, reset = _check_armv6m_vectors(raw_fw)
         pages = max(1, math.ceil(len(raw_fw) / 256.0))
         sha_short = hashlib.sha256(raw_fw).hexdigest()[:12]
+
+        ts_file = Path(trust_store_path) if trust_store_path else kfw.default_trust_store_path()
+        ts_obj = kfw.load_trust_store(ts_file) if ts_file.is_file() else None
+        signed = bool(parsed.auth_tlvs)
+        auth_notes: list[str] = []
+        trusted = False
+        if signed:
+            auth_notes = kfw.verify_auth(parsed, trust_store=ts_obj, require_auth=False)
+            trusted = bool(auth_notes) and all("UNTRUSTED" not in a and "UNPINNED" not in a for a in auth_notes)
+
+        trust_label = "Signed & Trusted" if trusted else ("Signed (unpinned)" if signed else "Unsigned")
+        mod_note = f" · +{len(mod_parts)} mod(s)" if mod_parts else ""
         return {
             "format": "KFW v1.0",
             "version": kfw.format_semver(parsed.fw_version),
+            "sec_cnt": parsed.sec_cnt,
+            "krx_abi": kfw.format_abi(parsed.krx_abi_ver) if parsed.krx_abi_ver else "",
             "targets": targets,
             "fw_bytes": raw_fw,
             "size": len(raw_fw),
             "pages": pages,
             "flash_pct": min(1.0, len(raw_fw) / float(FLASH_TOTAL_BYTES)),
             "ascon_ok": True,
+            "signed": signed,
+            "trusted": trusted,
+            "auth_notes": auth_notes,
             "vector_ok": vec_ok,
             "initial_sp": sp,
             "reset_pc": reset,
             "sha256_short": sha_short,
             "parts_count": len(parsed.parts),
-            "summary": f"KFW v{kfw.format_semver(parsed.fw_version)} · {', '.join(targets) or 'generic'} · {len(raw_fw):,} B · Ascon OK",
+            "modules_count": len(mod_parts),
+            "summary": (
+                f"KFW v{kfw.format_semver(parsed.fw_version)} · {', '.join(targets) or 'generic'}"
+                f" · {len(raw_fw):,} B · {trust_label}{mod_note}"
+            ),
         }
     if len(data) < 256 or len(data) > FLASH_TOTAL_BYTES:
         raise ValueError(f"Unexpected firmware size: {len(data):,} B")
@@ -195,19 +228,32 @@ def inspect_firmware_file(fpath: str | Path) -> dict[str, Any]:
     return {
         "format": "Raw BIN",
         "version": p.stem,
+        "sec_cnt": 0,
+        "krx_abi": "",
         "targets": ["raw"],
         "fw_bytes": data,
         "size": len(data),
         "pages": pages,
         "flash_pct": min(1.0, len(data) / float(FLASH_TOTAL_BYTES)),
         "ascon_ok": False,
+        "signed": False,
+        "trusted": False,
+        "auth_notes": [],
         "vector_ok": vec_ok,
         "initial_sp": sp,
         "reset_pc": reset,
         "sha256_short": sha_short,
         "parts_count": 1,
+        "modules_count": 0,
         "summary": f"Raw binary · {p.name} · {len(data):,} B",
     }
+
+
+def sync_kfw_modules_over_rigwire(client: Any, kfw_path: str | Path) -> dict[str, list[str]]:
+    """Sync Phase B `POST_FLASH` KRX modules/assets from a verified `.kfw` container over RigWire."""
+    parsed = kfw.parse_kfw(Path(kfw_path).read_bytes(), verify_root=True)
+    plaintexts = kfw.extract_all_parts(parsed)
+    return kfw.provision_kfw_parts_over_rigwire(client, parsed, plaintexts, dry_run=False)
 
 
 def flash_via_stock_bootloader(

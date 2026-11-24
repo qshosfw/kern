@@ -10,6 +10,10 @@ on:
         description: "Staging version label for dry-run artifact build (e.g. v0.1.0-rc1)"
         required: true
         default: "v0.1.0-rc1"
+      sec_cnt:
+        description: "Monotonic anti-rollback security counter (integer >= 1)"
+        required: false
+        default: "1"
 
 permissions:
   contents: read
@@ -19,7 +23,7 @@ env:
 
 jobs:
   verify:
-    name: Verify ABI & Host Tests
+    name: Verify ABI, Crypto & Host Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -42,11 +46,16 @@ jobs:
       - name: Verify KRX ABI header sync
         run: ./kern abi --check
 
+      - name: Run .kfw signing/anti-brick & RigWire protocol selftests
+        run: |
+          ./kern kfw selftest
+          ./kern wire test
+
       - name: Run workspace unit tests
         run: ./kern test
 
   build-artifacts:
-    name: Build Release Bundle
+    name: Build & Sign Release Bundle
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [verify]
@@ -73,52 +82,42 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
 
-      - name: Determine release label
+      - name: Determine release metadata
         id: meta
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "label=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            LABEL="${GITHUB_REF_NAME}"
+            SEC_CNT="${GITHUB_RUN_NUMBER:-1}"
           else
-            echo "label=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            LABEL="${{ inputs.tag }}"
+            SEC_CNT="${{ inputs.sec_cnt || '1' }}"
           fi
+          echo "label=${LABEL}" >> "$GITHUB_OUTPUT"
+          echo "sec_cnt=${SEC_CNT}" >> "$GITHUB_OUTPUT"
 
-      - name: Build firmware targets & system modules
+      - name: Run signed release pipeline
         env:
           REL_LABEL: ${{ steps.meta.outputs.label }}
+          REL_SEC_CNT: ${{ steps.meta.outputs.sec_cnt }}
+          KERN_LMS_KEY_JSON: ${{ secrets.KERN_LMS_KEY_JSON }}
+          KERN_MAC_KEY: ${{ secrets.KERN_MAC_KEY }}
         run: |
-          mkdir -p dist/modules dist/tools
+          EXTRA_FLAGS=""
+          if [[ -n "${KERN_LMS_KEY_JSON}" || -n "${KERN_MAC_KEY}" ]]; then
+            EXTRA_FLAGS="--require-signed"
+          else
+            echo "::warning::No signing secret (KERN_LMS_KEY_JSON / KERN_MAC_KEY) configured — producing unsigned staging bundle."
+          fi
 
-          ./kern build --target UV-K1 --deny-warnings --json "dist/kern-uv-k1-k5v3-${REL_LABEL}-size.json"
-          cp target/firmware.bin "dist/kern-uv-k1-k5v3-${REL_LABEL}.bin"
-          cp target/firmware_packed.bin "dist/kern-uv-k1-k5v3-${REL_LABEL}-packed.bin"
-
-          ./kern build --target UV-K10Pro --deny-warnings --json "dist/kern-uv-k10pro-${REL_LABEL}-size.json"
-          cp target/firmware.bin "dist/kern-uv-k10pro-${REL_LABEL}.bin"
-          cp target/firmware_packed.bin "dist/kern-uv-k10pro-${REL_LABEL}-packed.bin"
-
-          ./kern pkg
-          cp packages/sys/dfu/dfu.mod dist/modules/dfu.mod
-          cp packages/sys/panic/panic.mod dist/modules/panic.mod
-          cp packages/sys/sysinfo/sysinfo.krx dist/modules/sysinfo.krx
-          cp tools/kfw.py dist/tools/kfw.py
-          cp tools/rigwire.py dist/tools/rigwire.py
-          cp tools/flasher.py dist/tools/flasher.py
-
-          ./kern kfw pack "dist/kern-${REL_LABEL}.kfw" \
+          ./kern release \
             --version "${REL_LABEL}" \
-            --fw "uv-k1:dist/kern-uv-k1-k5v3-${REL_LABEL}.bin" \
-            --fw "uv-k10pro:dist/kern-uv-k10pro-${REL_LABEL}.bin" \
-            --mod "packages/sys/dfu/dfu.mod:/apps/dfu.mod:always" \
-            --mod "packages/sys/panic/panic.mod:/apps/panic.mod:always" \
-            --mod "packages/sys/sysinfo/sysinfo.krx:/apps/sysinfo.krx:always"
-          ./kern kfw verify "dist/kern-${REL_LABEL}.kfw"
-          ./kern kfw inspect "dist/kern-${REL_LABEL}.kfw"
+            --sec-cnt "${REL_SEC_CNT}" \
+            --out dist \
+            --skip-tests \
+            ${EXTRA_FLAGS}
 
-          (
-            cd dist
-            sha256sum *.kfw *.bin modules/* tools/* > SHA256SUMS.txt
-            cat SHA256SUMS.txt
-          )
+          ./kern kfw inspect "dist/kern-${REL_LABEL}.kfw"
+          cat dist/SHA256SUMS.txt
 
       - name: Upload release bundle artifact
         uses: actions/upload-artifact@v4
@@ -150,6 +149,7 @@ jobs:
             dist/*.kfw
             dist/*.bin
             dist/*.json
+            dist/*.sig
             dist/SHA256SUMS.txt
             dist/modules/*
             dist/tools/*

@@ -62,7 +62,9 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         [
             ("pkg", "Build or list KRX packages under packages/ (--list, --help)"),
             ("abi", "Regenerate or verify sdk/c/krx_ops.h from src/abi"),
-            ("kfw", "Pack, inspect, verify, sign, or extract .kfw containers"),
+            ("kfw", "Pack, inspect, verify, sign, trust, or extract .kfw containers"),
+            ("release", "Build, sign, verify, and publish multi-target release bundles"),
+            ("upgrade", "Safe 2-phase radio upgrade & signed update checker (.kfw)"),
             ("media", "Compile & inspect .icn / .fnt / .lng binary asset packs"),
             ("doctor", "Check cross-platform toolchain, Python, Dock & USB health"),
         ],
@@ -292,6 +294,12 @@ def main(argv: list[str] | None = None) -> int:
         return _run_py("pack_media.py", rest)
     if cmd == "kfw":
         return _run_py("kfw.py", rest)
+    if cmd == "release":
+        return _run_py("release.py", rest)
+    if cmd == "upgrade":
+        if rest and rest[0] in ("--check", "check"):
+            return _run_py("kfw.py", ["check-update", *rest[1:]])
+        return _run_py("kfw.py", ["upgrade", *rest])
     if cmd == "mount":
         return _run_py("kernfs_mount.py", rest)
     if cmd in ("ports", "devices"):

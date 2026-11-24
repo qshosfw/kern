@@ -837,10 +837,24 @@ def format_semver(v: int) -> str:
     return f"{base}-dev.{st}"
 
 
+def detect_workspace_abi(repo_root: Path | None = None) -> str:
+    """Read canonical `VERSION` from `src/abi/src/lib.rs`, returning `'MAJOR.0'` (e.g. `'5.0'`)."""
+    root = repo_root or _TOOLS_DIR.parent
+    abi_lib = root / "src" / "abi" / "src" / "lib.rs"
+    if abi_lib.is_file():
+        m = re.search(r"pub\s+const\s+VERSION\s*:\s*u16\s*=\s*(\d+)\s*;", abi_lib.read_text(errors="ignore"))
+        if m:
+            return f"{int(m.group(1))}.0"
+    return "5.0"
+
+
 def pack_abi(s: str) -> int:
-    m = re.match(r"^(\d+)\.(\d+)$", s.strip())
+    s_clean = s.strip()
+    if s_clean.isdigit():
+        return int(s_clean) << 8
+    m = re.match(r"^(\d+)\.(\d+)$", s_clean)
     if not m:
-        raise KfwError(f"Invalid ABI version '{s}' (expected MAJOR.MINOR, e.g. 3.2)")
+        raise KfwError(f"Invalid ABI version '{s}' (expected MAJOR or MAJOR.MINOR, e.g. 5.0)")
     return (int(m.group(1)) << 8) | int(m.group(2))
 
 
@@ -893,28 +907,31 @@ def validate_kernfs_path(path: str, allow_calib: bool = False) -> None:
 
 
 def inspect_krx_binary(data: bytes) -> dict[str, Any]:
-    """Extracts profile, capabilities, and version from a KRX binary if valid."""
+    """Extracts profile, capabilities, ABI major, and SemVer from a KRX v2..v5 binary."""
     info = {"profile": 0, "caps": 0, "pkg_ver": pack_semver("1.0.0"), "min_abi": 0}
-    if len(data) < 32 or data[0:4] != b"\xC0\xDE\x01\xFE":
+    if len(data) < 24 or data[0:4] != b"\xC0\xDE\x01\xFE":
         return info
-    # KRX header: ident[4], fmt_ver(u8), flags(u8), hdr_len(u16), ...
-    fmt_ver = data[4]
-    hdr_len = struct.unpack_from("<H", data, 6)[0]
-    info["min_abi"] = (2 << 8) | fmt_ver if fmt_ver <= 9 else 0x0302
-    # Scan KRX section table if present (offset 32..hdr_len)
-    if 32 <= hdr_len <= len(data):
-        sec_cnt = struct.unpack_from("<H", data, 10)[0]
-        off = 32
-        for _ in range(min(sec_cnt, 16)):
-            if off + 8 > hdr_len:
+    # KRX 24-byte preamble: ident[4], app_class(u8), abi_ver(u8), sec_cnt(u16), hdr_len(u16), ...
+    abi_ver = data[5]
+    sec_cnt, hdr_len = struct.unpack_from("<HH", data, 6)
+    info["min_abi"] = (abi_ver << 8) if abi_ver > 0 else 0
+    if 24 <= hdr_len <= len(data):
+        off = 24
+        for _ in range(min(sec_cnt, 32)):
+            if off + 4 > hdr_len:
                 break
-            sid, slen, soff = struct.unpack_from("<HHI", data, off)
-            off += 8
-            if soff + slen <= hdr_len:
-                if sid == 0x0002 and slen >= 4:  # SEC_EXECUTION
-                    info["profile"] = data[soff + 1]
-                elif sid == 0x0003 and slen >= 8:  # SEC_CAP_IMPORTS
-                    info["caps"] = struct.unpack_from("<Q", data, soff)[0]
+            sid, slen = struct.unpack_from("<HH", data, off)
+            if slen < 4 or off + slen > hdr_len:
+                break
+            body = data[off + 4 : off + slen]
+            if sid == 0x0001 and len(body) >= 5:  # SectionIdentity
+                maj, mn, pat = body[2], body[3], body[4]
+                info["pkg_ver"] = (maj << 24) | (mn << 16) | (pat << 8) | 0xFF
+            elif sid == 0x0002 and len(body) >= 27:  # SectionExecution
+                info["profile"] = body[26]
+            elif sid == 0x0009 and len(body) >= 12:  # SectionRuntime
+                info["caps"] = struct.unpack_from("<I", body, 8)[0]
+            off += (slen + 3) & ~3
     return info
 
 
@@ -1089,6 +1106,7 @@ def build_kfw(
     extra_tlvs: list[tuple[int, bytes]] | None = None,
     mac_key: bytes | None = None,
     mac_signer: str = "krel",
+    signer: str | None = None,
     lms_key_obj: dict[str, Any] | None = None,
 ) -> bytes:
     """Packs a conformant, deterministic `.kfw` v1.0 container."""
@@ -1255,11 +1273,12 @@ def build_kfw(
     body[32:64] = root_digest
 
     # Optional Unprotected Auth Trailer (strictly after body_size — never mutates root_digest!)
+    eff_signer = signer or mac_signer
     trailer = bytearray()
     if mac_key is not None:
-        trailer.extend(make_mac_auth_tlv(root_digest, mac_key, mac_signer))
+        trailer.extend(make_mac_auth_tlv(root_digest, mac_key, eff_signer))
     if lms_key_obj is not None:
-        trailer.extend(encode_tlv(TLV_AUTH_LMS_ASCON, lms_sign(lms_key_obj, root_digest)))
+        trailer.extend(encode_tlv(TLV_AUTH_LMS_ASCON, lms_sign(lms_key_obj, root_digest, eff_signer)))
 
     return bytes(body) + bytes(trailer)
 
@@ -1422,14 +1441,170 @@ def parse_kfw(data: bytes, verify_root: bool = True) -> ParsedKfw:
     )
 
 
+def save_lms_key_atomic(path: str | Path, key_obj: dict[str, Any]) -> None:
+    """Persist stateful LMS-Ascon key (`next_leaf`) atomically via temp file + fsync + replace."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + f".tmp.{os.getpid()}")
+    payload = json.dumps(key_obj, indent=2) + "\n"
+    with tmp.open("w", encoding="utf-8") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, p)
+    rem = int(key_obj.get("max_leaves", 1 << int(key_obj.get("height", LMS_DEFAULT_H)))) - int(key_obj.get("next_leaf", 0))
+    if rem <= 16:
+        _cli_ui.warn(f"LMS-Ascon key {p.name} has only {rem} leaf signature(s) remaining — rotate key soon!")
+
+
+def default_trust_store_path(repo_root: Path | None = None) -> Path:
+    return (repo_root or _TOOLS_DIR.parent) / "keys" / "trusted-keys.json"
+
+
+def load_trust_store(path: str | Path | None) -> dict[str, Any]:
+    if not path:
+        return {"schema": 1, "keys": []}
+    p = Path(path)
+    if not p.is_file():
+        raise KfwError(f"Trust store not found: {p}")
+    obj = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(obj, dict) or not isinstance(obj.get("keys"), list):
+        raise KfwError(f"Invalid trust store JSON format: {p}")
+    return obj
+
+
+def save_trust_store(path: str | Path, store: dict[str, Any]) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(store, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def lookup_trusted_lms_key(
+    pubkey: bytes,
+    trust_store: dict[str, Any],
+    *,
+    channel: str | None = None,
+) -> dict[str, Any] | None:
+    pk_hex = pubkey.hex().lower()
+    for entry in trust_store.get("keys", []):
+        if str(entry.get("pubkey_hex", "")).lower() != pk_hex:
+            continue
+        status = str(entry.get("status", "active")).lower()
+        if status == "revoked":
+            raise KfwError(
+                f"Signing key {entry.get('key_id_hex', pk_hex[:8])} ({entry.get('signer', '?')}) is REVOKED in trust store"
+            )
+        if status != "active":
+            raise KfwError(
+                f"Signing key {entry.get('key_id_hex', pk_hex[:8])} has non-active status '{status}'"
+            )
+        if channel:
+            allowed = entry.get("channels") or ([entry["channel"]] if entry.get("channel") else [])
+            if allowed and channel not in allowed and "*" not in allowed:
+                raise KfwError(
+                    f"Signing key {entry.get('key_id_hex', pk_hex[:8])} is not authorized for channel '{channel}'"
+                )
+        return entry
+    return None
+
+
+def sign_manifest_bytes(
+    canonical_json: bytes,
+    *,
+    lms_key_obj: dict[str, Any] | None = None,
+    mac_key: bytes | None = None,
+    signer: str = "krel",
+) -> dict[str, Any]:
+    """Produce a detached signature envelope over a canonical `release-manifest.json`."""
+    digest = ascon_hash256(b"KFW-MANIFEST-V1\x00" + canonical_json)
+    sigs: list[dict[str, Any]] = []
+    if lms_key_obj is not None:
+        raw_sig = lms_sign(lms_key_obj, digest, signer=signer)
+        sigs.append({
+            "alg": lms_key_obj.get("alg", "lms-ascon"),
+            "key_id": raw_sig[0:4].hex(),
+            "signer": raw_sig[4:8].rstrip(b"\x00").decode("ascii", errors="replace"),
+            "leaf_idx": struct.unpack_from("<I", raw_sig, 8)[0],
+            "pubkey_hex": lms_key_obj["pubkey_hex"],
+            "sig_hex": raw_sig.hex(),
+        })
+    if mac_key is not None:
+        key_id = ascon_hash256(mac_key)[:4]
+        signer_b = signer.encode("ascii")[:4].ljust(4, b"\x00")
+        nonce = b"KFW-MAC-V1\x00\x00" + key_id
+        tag = ascon128_mac(mac_key, nonce, signer_b + digest, b"")
+        sigs.append({
+            "alg": "ascon-128-mac",
+            "key_id": key_id.hex(),
+            "signer": signer_b.rstrip(b"\x00").decode("ascii", errors="replace"),
+            "tag_hex": tag.hex(),
+        })
+    if not sigs:
+        raise KfwError("Supply lms_key_obj and/or mac_key to sign manifest")
+    return {
+        "schema": 1,
+        "manifest_ascon256": digest.hex(),
+        "signatures": sigs,
+    }
+
+
+def verify_manifest_bytes(
+    canonical_json: bytes,
+    sig_envelope: dict[str, Any],
+    *,
+    lms_pubkey: bytes | None = None,
+    mac_key: bytes | None = None,
+    trust_store: dict[str, Any] | None = None,
+    channel: str | None = None,
+    require_auth: bool = True,
+) -> list[str]:
+    digest = ascon_hash256(b"KFW-MANIFEST-V1\x00" + canonical_json)
+    exp = str(sig_envelope.get("manifest_ascon256", "")).lower()
+    if exp and not hmac.compare_digest(bytes.fromhex(exp), digest):
+        raise KfwError("Release manifest Ascon-Hash256 mismatch against signature envelope")
+    verified: list[str] = []
+    for s in sig_envelope.get("signatures", []):
+        alg = str(s.get("alg", ""))
+        if alg.startswith("lms-ascon"):
+            raw_sig = bytes.fromhex(str(s["sig_hex"]))
+            pk, signer, leaf_idx = lms_verify(raw_sig, digest, pinned_pubkey=lms_pubkey)
+            if trust_store is not None:
+                entry = lookup_trusted_lms_key(pk, trust_store, channel=channel)
+                if entry is None:
+                    raise KfwError(f"Manifest LMS-Ascon key {pk[:4].hex()}.. is not in trust store")
+                verified.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, trusted={entry.get('key_id_hex', pk[:4].hex())})")
+            elif lms_pubkey is not None:
+                verified.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, pinned={pk[:4].hex()}..)")
+            elif not require_auth:
+                verified.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, UNPINNED)")
+        elif alg == "ascon-128-mac" and mac_key is not None:
+            key_id = bytes.fromhex(str(s["key_id"]))
+            signer_b = str(s.get("signer", "krel")).encode("ascii")[:4].ljust(4, b"\x00")
+            tag = bytes.fromhex(str(s["tag_hex"]))
+            if hmac.compare_digest(key_id, ascon_hash256(mac_key)[:4]):
+                nonce = b"KFW-MAC-V1\x00\x00" + key_id
+                exp_tag = ascon128_mac(mac_key, nonce, signer_b + digest, b"")
+                if not hmac.compare_digest(tag, exp_tag):
+                    raise KfwError("Manifest Ascon-128-MAC verification failed")
+                verified.append(f"Ascon-128-MAC ({s.get('signer', 'krel')}, key={key_id.hex()})")
+    if require_auth and not verified:
+        raise KfwError("Release manifest has no trusted signature (provide --trust-store, --lms-pubkey, or --mac-key)")
+    return verified
+
+
 def verify_auth(
     parsed: ParsedKfw,
     *,
     mac_key: bytes | None = None,
     lms_pubkey: bytes | None = None,
+    trust_store: dict[str, Any] | None = None,
+    channel: str | None = None,
     require_auth: bool = False,
 ) -> list[str]:
     verified: list[str] = []
+    unpinned: list[str] = []
     must_verify = require_auth or bool(parsed.flags & HCRIT_AUTH_REQUIRED)
 
     for tag, val in parsed.auth_tlvs:
@@ -1448,11 +1623,25 @@ def verify_auth(
                     verified.append(f"Ascon-128-MAC ({signer}, key={key_id.hex()})")
         elif tag == TLV_AUTH_LMS_ASCON:
             pk, signer, leaf_idx = lms_verify(val, parsed.root_digest, pinned_pubkey=lms_pubkey)
-            verified.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, pk={pk[:4].hex()}..)")
+            if lms_pubkey is not None:
+                verified.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, pinned={pk[:4].hex()}..)")
+            elif trust_store is not None:
+                entry = lookup_trusted_lms_key(pk, trust_store, channel=channel)
+                if entry is not None:
+                    verified.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, trusted={entry.get('key_id_hex', pk[:4].hex())})")
+                else:
+                    unpinned.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, UNTRUSTED pk={pk[:4].hex()}..)")
+            else:
+                unpinned.append(f"LMS-Ascon PQ ({signer}, leaf={leaf_idx}, UNPINNED pk={pk[:4].hex()}..)")
 
     if must_verify and not verified:
+        if unpinned:
+            raise KfwError(
+                f"Container authentication failed: signature not anchored to a trusted key ({'; '.join(unpinned)}). "
+                "Supply --trust-store or --lms-pubkey / --mac-key."
+            )
         raise KfwError("Container requires authentication but no trusted auth record verified")
-    return verified
+    return verified if verified else unpinned
 
 
 def extract_all_parts(parsed: ParsedKfw, decrypt_key: bytes | None = None) -> dict[int, bytes]:
@@ -1731,7 +1920,7 @@ def cmd_pack(args: argparse.Namespace) -> int:
         kind=c_kind,
         fw_version=pack_semver(args.version),
         sec_cnt=args.sec_cnt,
-        krx_abi_ver=pack_abi(args.krx_abi),
+        krx_abi_ver=pack_abi(args.krx_abi or detect_workspace_abi()),
         header_flags=hflags,
         targets=targets,
         boot_policies=boot_policies,
@@ -1742,10 +1931,11 @@ def cmd_pack(args: argparse.Namespace) -> int:
         solid_encrypt_key=enc_key if use_solid else None,
         mac_key=mac_key,
         lms_key_obj=lms_obj,
+        signer=args.signer,
     )
 
     if lms_obj is not None and args.lms_key:
-        Path(args.lms_key).write_text(json.dumps(lms_obj, indent=2) + "\n")
+        save_lms_key_atomic(args.lms_key, lms_obj)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1802,11 +1992,19 @@ def cmd_verify(args: argparse.Namespace) -> int:
     mac_key = _parse_hex_key(args.mac_key, 16)
     lms_pk = _parse_hex_key(args.lms_pubkey, 32)
     dec_key = _parse_hex_key(args.decrypt_key, 16)
-    auths = verify_auth(p, mac_key=mac_key, lms_pubkey=lms_pk, require_auth=args.require_auth)
+    trust_store = load_trust_store(args.trust_store) if args.trust_store else None
+    auths = verify_auth(
+        p,
+        mac_key=mac_key,
+        lms_pubkey=lms_pk,
+        trust_store=trust_store,
+        channel=args.channel,
+        require_auth=args.require_auth,
+    )
     pts = extract_all_parts(p, decrypt_key=dec_key)
     _log_ok(f"Verified {_BOLD}{args.file}{_RESET} — Ascon-Hash256 root + {len(pts)} part digest(s) + anti-brick checks passed.")
     for a in auths:
-        _log_info(f"Auth OK: {a}")
+        _log_info(f"Auth: {a}")
     return 0
 
 
@@ -1821,13 +2019,86 @@ def cmd_sign(args: argparse.Namespace) -> int:
         kp = Path(args.lms_key)
         kobj = json.loads(kp.read_text())
         trailer.extend(encode_tlv(TLV_AUTH_LMS_ASCON, lms_sign(kobj, p.root_digest, args.signer)))
-        kp.write_text(json.dumps(kobj, indent=2) + "\n")
+        save_lms_key_atomic(kp, kobj)
     if not trailer:
         raise KfwError("Supply --mac-key and/or --lms-key")
     out_path = Path(args.output) if args.output else path
     out_path.write_bytes(data + bytes(trailer))
     _log_ok(f"Appended {len(trailer)} B auth trailer to {_BOLD}{out_path}{_RESET} (body & root_digest unchanged).")
     return 0
+
+
+def cmd_trust(args: argparse.Namespace) -> int:
+    store_path = Path(args.store) if args.store else default_trust_store_path()
+    if args.trust_cmd == "list":
+        if not store_path.is_file():
+            _log_info(f"No trust store at {store_path} yet.")
+            return 0
+        store = load_trust_store(store_path)
+        keys = store.get("keys", [])
+        if not keys:
+            _log_info(f"Trust store {store_path} contains 0 keys.")
+            return 0
+        _cli_ui.table(
+            ("Key ID", "Signer", "Status", "Channels", "Algorithm", "Public Key"),
+            (
+                (
+                    k.get("key_id_hex", "?"),
+                    k.get("signer", "?"),
+                    k.get("status", "active"),
+                    ",".join(k.get("channels", ["*"])),
+                    k.get("alg", "lms-ascon"),
+                    str(k.get("pubkey_hex", ""))[:16] + "…",
+                )
+                for k in keys
+            ),
+        )
+        return 0
+    if args.trust_cmd == "add":
+        store = load_trust_store(store_path) if store_path.is_file() else {"schema": 1, "keys": []}
+        if args.key_file:
+            kobj = json.loads(Path(args.key_file).read_text(encoding="utf-8"))
+            pk_hex = str(kobj["pubkey_hex"]).lower()
+            signer = args.signer or str(kobj.get("signer", "krel"))
+            alg = str(kobj.get("alg", "lms-ascon"))
+        elif args.pubkey:
+            pk = _parse_hex_key(args.pubkey, 32)
+            assert pk is not None
+            pk_hex = pk.hex()
+            signer = args.signer or "krel"
+            alg = "lms-ascon"
+        else:
+            raise KfwError("Supply --key-file (JSON) or --pubkey (64-char hex)")
+        key_id_hex = ascon_hash256(bytes.fromhex(pk_hex))[:4].hex()
+        channels = [c.strip() for c in (args.channels or "stable,beta,nightly").split(",") if c.strip()]
+        keys = [k for k in store["keys"] if str(k.get("pubkey_hex", "")).lower() != pk_hex]
+        keys.append({
+            "key_id_hex": key_id_hex,
+            "signer": signer[:4],
+            "alg": alg,
+            "pubkey_hex": pk_hex,
+            "channels": channels,
+            "status": "active",
+            "description": args.description or "",
+        })
+        store["keys"] = keys
+        save_trust_store(store_path, store)
+        _log_ok(f"Added trusted key {key_id_hex} ({signer[:4]}, channels={','.join(channels)}) to {store_path}")
+        return 0
+    if args.trust_cmd == "revoke":
+        store = load_trust_store(store_path)
+        needle = args.key_id.strip().lower()
+        found = False
+        for k in store["keys"]:
+            if str(k.get("key_id_hex", "")).lower() == needle or str(k.get("pubkey_hex", "")).lower().startswith(needle):
+                k["status"] = "revoked"
+                found = True
+        if not found:
+            raise KfwError(f"Key '{args.key_id}' not found in {store_path}")
+        save_trust_store(store_path, store)
+        _log_ok(f"Revoked key {args.key_id} in {store_path}")
+        return 0
+    raise KfwError(f"Unknown trust subcommand: {args.trust_cmd}")
 
 
 def cmd_keygen(args: argparse.Namespace) -> int:
@@ -1967,8 +2238,457 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
     except KfwError:
         pass
 
-    _log_ok("All .kfw selftests passed (Ascon-Hash256, Ascon-AEAD128, Ascon-128-MAC, PQ LMS-Ascon, Solid ARMTHUMB+LZMA2, RLE, anti-brick guards).")
+    # 8. Real KRX ABI v5 inspection + Trust Store verification, unpinned rejection, revocation, & manifest signing
+    k_body_id = struct.pack("<HBBB", 0, 1, 2, 3) + bytes(35)
+    k_body_exec = bytes(26) + bytes([0x11]) + bytes(1)
+    k_body_rt = bytes([5, 0, 0, 0, 0, 0, 0, 0]) + struct.pack("<I", 0x0014_0620)
+    k_secs = (
+        struct.pack("<HH", 0x0001, 4 + len(k_body_id)) + k_body_id
+        + struct.pack("<HH", 0x0002, 4 + len(k_body_exec)) + k_body_exec
+        + struct.pack("<HH", 0x0009, 4 + len(k_body_rt)) + k_body_rt
+    )
+    k_hdr_len = 24 + len(k_secs)
+    k_pre = struct.pack("<4sBBHHHIII", b"\xC0\xDE\x01\xFE", 1, 5, 3, k_hdr_len, 0, 0, zlib.crc32(k_secs) & 0xFFFFFFFF, 0)
+    k_info = inspect_krx_binary(k_pre + k_secs)
+    assert k_info["min_abi"] == 0x0500, f"Expected ABI 5.0 (0x0500), got {k_info['min_abi']:#x}"
+    assert k_info["profile"] == 0x11 and k_info["caps"] == 0x0014_0620
+
+    # Unpinned self-signed LMS must be rejected when require_auth=True
+    try:
+        verify_auth(parsed, require_auth=True)
+        raise AssertionError("Unpinned self-signed LMS-Ascon was not rejected under require_auth=True!")
+    except KfwError:
+        pass
+
+    # Active trust-store entry must verify, and revoked entry must fail
+    t_store = {
+        "schema": 1,
+        "keys": [{
+            "key_id_hex": lms_k["key_id_hex"],
+            "signer": "test",
+            "alg": lms_k["alg"],
+            "pubkey_hex": lms_k["pubkey_hex"],
+            "channels": ["stable"],
+            "status": "active",
+        }],
+    }
+    ts_auths = verify_auth(parsed, trust_store=t_store, channel="stable", require_auth=True)
+    assert ts_auths and "trusted=" in ts_auths[0]
+
+    # Manifest signing & verification roundtrip
+    man_bytes = json.dumps({"version": "0.2.0-rc.1", "sec_cnt": 42}, sort_keys=True, separators=(",", ":")).encode()
+    man_sig = sign_manifest_bytes(man_bytes, lms_key_obj=lms_k, mac_key=mac_key, signer="test")
+    m_auths = verify_manifest_bytes(man_bytes, man_sig, trust_store=t_store, channel="stable", require_auth=True)
+    assert len(m_auths) == 1
+
+    # Revoked key must be rejected immediately
+    t_store["keys"][0]["status"] = "revoked"
+    try:
+        verify_auth(parsed, trust_store=t_store, require_auth=True)
+        raise AssertionError("Revoked LMS key was not rejected!")
+    except KfwError as exc:
+        assert "REVOKED" in str(exc)
+
+    _log_ok("All .kfw selftests passed (Ascon-Hash256, Ascon-AEAD128, Ascon-128-MAC, PQ LMS-Ascon, Trust Store, Manifest Sig, KRX ABI v5, Solid ARMTHUMB+LZMA2, RLE, anti-brick guards).")
     return 0
+
+
+# =============================================================================
+# 8. SAFE TWO-PHASE UPGRADE & UPDATE CHECKER
+# =============================================================================
+
+def _fetch_bytes_or_file(src: str, timeout: float = 20.0) -> tuple[bytes, str]:
+    """Read raw bytes from a local path or http(s):// URL."""
+    if src.startswith(("http://", "https://")):
+        import urllib.request
+        req = urllib.request.Request(src, headers={"User-Agent": "KernKfw/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read(), src
+    p = Path(src)
+    if not p.is_file():
+        raise KfwError(f"File not found: {p}")
+    return p.read_bytes(), str(p)
+
+
+def check_for_updates(
+    source: str,
+    *,
+    current_version: str | None = None,
+    current_sec_cnt: int = 0,
+    channel: str = "stable",
+    trust_store: dict[str, Any] | None = None,
+    lms_pubkey: bytes | None = None,
+    mac_key: bytes | None = None,
+    require_auth: bool = False,
+) -> dict[str, Any]:
+    """Inspect a signed `release-manifest.json` (URL/file) or GitHub `owner/repo` release feed."""
+    if not source.startswith(("http://", "https://")) and not Path(source).is_file() and "/" in source:
+        import urllib.request
+        api_url = f"https://api.github.com/repos/{source.strip().strip('/')}/releases?per_page=10"
+        req = urllib.request.Request(
+            api_url,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "KernKfw/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            releases = json.loads(resp.read().decode("utf-8"))
+        for rel in releases:
+            if channel == "stable" and rel.get("prerelease"):
+                continue
+            assets = {str(a.get("name", "")): a for a in rel.get("assets", [])}
+            if "release-manifest.json" in assets:
+                return check_for_updates(
+                    str(assets["release-manifest.json"]["browser_download_url"]),
+                    current_version=current_version,
+                    current_sec_cnt=current_sec_cnt,
+                    channel=channel,
+                    trust_store=trust_store,
+                    lms_pubkey=lms_pubkey,
+                    mac_key=mac_key,
+                    require_auth=require_auth,
+                )
+            kfw_assets = [a for n, a in assets.items() if n.lower().endswith(".kfw")]
+            if kfw_assets:
+                tag = str(rel.get("tag_name", "")).lstrip("v")
+                newer = True
+                if current_version:
+                    try:
+                        newer = pack_semver(tag) > pack_semver(current_version)
+                    except KfwError:
+                        newer = tag != current_version
+                return {
+                    "source": source,
+                    "channel": "prerelease" if rel.get("prerelease") else "stable",
+                    "version": tag,
+                    "sec_cnt": 0,
+                    "update_available": newer,
+                    "manifest_verified": False,
+                    "auth": [],
+                    "assets": [
+                        {"filename": a["name"], "url": a["browser_download_url"], "size": int(a.get("size", 0))}
+                        for a in kfw_assets
+                    ],
+                }
+        raise KfwError(f"No matching '{channel}' releases found on GitHub repo {source}")
+
+    raw, resolved = _fetch_bytes_or_file(source)
+    manifest = json.loads(raw.decode("utf-8"))
+    auth_notes: list[str] = []
+    manifest_verified = False
+    sig_src = source + ".sig"
+    sig_raw: bytes | None = None
+    try:
+        sig_raw, _ = _fetch_bytes_or_file(sig_src, timeout=10.0)
+    except Exception:
+        sig_raw = None
+
+    if sig_raw is not None:
+        sig_env = json.loads(sig_raw.decode("utf-8"))
+        auth_notes = verify_manifest_bytes(
+            raw,
+            sig_env,
+            lms_pubkey=lms_pubkey,
+            mac_key=mac_key,
+            trust_store=trust_store,
+            channel=manifest.get("channel") or channel,
+            require_auth=require_auth,
+        )
+        manifest_verified = bool(auth_notes) and all("UNPINNED" not in a for a in auth_notes)
+    elif require_auth:
+        raise KfwError(f"Release manifest signature missing: {sig_src}")
+
+    ver = str(manifest.get("version", "0.0.0"))
+    sec_cnt = int(manifest.get("sec_cnt", 0))
+    newer = True
+    if current_version:
+        try:
+            newer = (pack_semver(ver) > pack_semver(current_version)) or (sec_cnt > current_sec_cnt)
+        except KfwError:
+            newer = ver != current_version
+    return {
+        "source": resolved,
+        "channel": str(manifest.get("channel", channel)),
+        "version": ver,
+        "sec_cnt": sec_cnt,
+        "krx_abi": str(manifest.get("krx_abi", "")),
+        "update_available": newer,
+        "manifest_verified": manifest_verified,
+        "auth": auth_notes,
+        "assets": manifest.get("assets", []),
+    }
+
+
+def backup_radio_over_rigwire(client: Any, out_path: Path) -> Path:
+    """Pull calibration + /pref/*.cfg over RigWire (v1 or v2) into an Ascon-verified `.kfw` backup."""
+    paths = ["/sys/calib.dat", "/sys/calib.sig"]
+    try:
+        for ent in client.ls("/pref"):
+            if not ent.get("is_dir"):
+                paths.append(f"/pref/{ent['name']}")
+    except Exception:
+        pass
+
+    parts: list[PartInput] = []
+    for rpath in paths:
+        try:
+            st = client.stat(rpath)
+            if not st.get("exists") or st.get("is_dir") or int(st.get("size", 0)) <= 0:
+                continue
+            blob = client.pull_bytes(rpath, quiet=True)
+            pkind = PART_CALIBRATION if rpath == "/sys/calib.dat" else PART_KERNFS_FILE
+            parts.append(PartInput(kind=pkind, data=blob, dest_path=rpath, in_solid=True))
+        except Exception:
+            continue
+
+    if not parts:
+        raise KfwError("Could not read any calibration or preference files for backup")
+    t0, bp0, prs0 = _make_target_entries("uv-k1", 0)
+    kfw_blob = build_kfw(
+        kind=KIND_BACKUP,
+        fw_version=pack_semver("1.0.0"),
+        krx_abi_ver=pack_abi(detect_workspace_abi()),
+        header_flags=HFLAG_PRESERVE_BOOTLOADER | HFLAG_REPRODUCIBLE,
+        targets=[t0],
+        boot_policies=[bp0],
+        protect_ranges=prs0,
+        parts=parts,
+        manifest={"schema": 1, "name": "Pre-Upgrade Backup", "files": [p.dest_path for p in parts]},
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(kfw_blob)
+    return out_path
+
+
+def provision_kfw_parts_over_rigwire(
+    client: Any,
+    parsed: ParsedKfw,
+    plaintexts: dict[int, bytes],
+    *,
+    dry_run: bool = False,
+) -> dict[str, list[str]]:
+    """Apply Phase B `POST_FLASH` KRX modules & KernFS files over RigWire per part policy (CRC-32 delta)."""
+    report: dict[str, list[str]] = {"installed": [], "skipped": [], "deleted": [], "verified": []}
+    for part in parsed.parts:
+        pidx = part["index"]
+        if part["kind"] not in (PART_KRX_MODULE, PART_KERNFS_FILE, PART_OPT_KRX, PART_OPT_FILE):
+            continue
+        meta = parsed.part_paths.get(pidx)
+        if not meta:
+            continue
+        rpath = meta["path"]
+        policy = part["slot_or_policy"]
+        data = plaintexts[pidx]
+        want_crc = zlib.crc32(data) & 0xFFFFFFFF
+
+        st = client.stat(rpath)
+        exists = bool(st.get("exists")) and not bool(st.get("is_dir"))
+        same = exists and int(st.get("size", -1)) == len(data) and (int(st.get("crc32", 0)) & 0xFFFFFFFF) == want_crc
+
+        if policy == POLICY_DELETE:
+            if exists:
+                if not dry_run:
+                    client.rm(rpath)
+                report["deleted"].append(rpath)
+            else:
+                report["skipped"].append(rpath)
+            continue
+        if policy == POLICY_VERIFY_ONLY:
+            if not same:
+                raise KfwError(f"Verify-only part mismatch on radio: {rpath}")
+            report["verified"].append(rpath)
+            continue
+        if policy in (POLICY_IF_MISSING, POLICY_PRESERVE_USER) and exists:
+            report["skipped"].append(rpath)
+            continue
+        if policy == POLICY_UPGRADE_ONLY and not exists:
+            report["skipped"].append(rpath)
+            continue
+        if same:
+            report["skipped"].append(rpath)
+            continue
+
+        if not dry_run:
+            client.push_bytes(data, rpath)
+            post = client.stat(rpath)
+            if not post.get("exists") or int(post.get("size", -1)) != len(data) or (int(post.get("crc32", 0)) & 0xFFFFFFFF) != want_crc:
+                raise KfwError(f"Post-install CRC-32 verification failed for {rpath}")
+        report["installed"].append(rpath)
+    return report
+
+
+def _wait_for_port(vid_pid: str, preferred_port: str | None, timeout_s: float) -> str:
+    import time
+    from serial.tools import list_ports  # type: ignore[import-not-found]
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        ports = list(list_ports.comports())
+        for p in ports:
+            if p.vid is not None and p.pid is not None and f"{p.vid:04x}:{p.pid:04x}".lower() == vid_pid:
+                return p.device
+        if preferred_port and Path(preferred_port).exists():
+            return preferred_port
+        time.sleep(0.2)
+    raise KfwError(f"Timed out waiting for USB device ({vid_pid}) after {timeout_s:.0f}s")
+
+
+def cmd_check_update(args: argparse.Namespace) -> int:
+    trust_store = None
+    ts_path = Path(args.trust_store) if args.trust_store else default_trust_store_path()
+    if ts_path.is_file():
+        trust_store = load_trust_store(ts_path)
+    info = check_for_updates(
+        args.source,
+        current_version=args.current_version,
+        current_sec_cnt=args.current_sec_cnt,
+        channel=args.channel,
+        trust_store=trust_store,
+        lms_pubkey=_parse_hex_key(args.lms_pubkey, 32),
+        mac_key=_parse_hex_key(args.mac_key, 16),
+        require_auth=args.require_auth,
+    )
+    if args.json:
+        print(json.dumps(info, indent=2))
+        return 0
+    _cli_ui.header("Kern Update Check", f"Channel: {info['channel']} · Source: {info['source']}")
+    _log_info(f"Latest version: {_BOLD}{info['version']}{_RESET} (sec_cnt={info['sec_cnt']}, ABI={info.get('krx_abi') or 'n/a'})")
+    _log_info(f"Manifest trust: {'TRUSTED (' + '; '.join(info['auth']) + ')' if info['manifest_verified'] else 'unsigned / unpinned'}")
+    if info["update_available"]:
+        _log_ok("Update available!")
+    else:
+        _log_info("Already up to date.")
+    for a in info.get("assets", []):
+        print(f"    • {a.get('filename', '?')} ({int(a.get('size', 0)):,} B) {a.get('url', '')}")
+    return 0
+
+
+def cmd_upgrade(args: argparse.Namespace) -> int:
+    import time
+    import rigwire as _rigwire  # noqa: E402
+    import flasher as _flasher  # noqa: E402
+
+    raw, resolved = _fetch_bytes_or_file(args.file)
+    parsed = parse_kfw(raw, verify_root=True)
+    mac_key = _parse_hex_key(args.mac_key, 16)
+    lms_pk = _parse_hex_key(args.lms_pubkey, 32)
+    dec_key = _parse_hex_key(args.decrypt_key, 16)
+    trust_store = None
+    if args.trust_store:
+        trust_store = load_trust_store(args.trust_store)
+    elif default_trust_store_path().is_file() and not lms_pk:
+        trust_store = load_trust_store(default_trust_store_path())
+
+    auths = verify_auth(
+        parsed,
+        mac_key=mac_key,
+        lms_pubkey=lms_pk,
+        trust_store=trust_store,
+        channel=args.channel,
+        require_auth=args.require_auth,
+    )
+    plaintexts = extract_all_parts(parsed, decrypt_key=dec_key)
+
+    ver_str = format_semver(parsed.fw_version)
+    _cli_ui.header(f"Kern Safe Upgrade — v{ver_str}", f"Container: {resolved} (sec_cnt={parsed.sec_cnt}, ABI={format_abi(parsed.krx_abi_ver)})")
+    for a in auths:
+        _log_info(f"Auth: {a}")
+
+    fw_parts = [p for p in parsed.parts if p["kind"] == PART_FIRMWARE]
+    mod_parts = [p for p in parsed.parts if p["kind"] in (PART_KRX_MODULE, PART_KERNFS_FILE, PART_OPT_KRX, PART_OPT_FILE)]
+    chosen_fw: bytes | None = None
+    chosen_tgt: TargetSpec | None = None
+    if fw_parts and not args.skip_flash:
+        chosen_fw, chosen_tgt, _ = select_firmware_for_target(
+            args.file if not args.file.startswith(("http://", "https://")) else _write_temp_kfw(raw),
+            args.target,
+            mac_key=mac_key,
+            lms_pubkey=lms_pk,
+            decrypt_key=dec_key,
+        )
+        _log_info(f"Phase A image: {chosen_tgt.slug} ({len(chosen_fw):,} B, vectors & fences verified)")
+    if mod_parts and not args.skip_modules:
+        _log_info(f"Phase B payloads: {len(mod_parts)} module/asset file(s) queued for CRC-32 delta sync")
+
+    if args.dry_run:
+        _log_ok("Dry-run pre-flight passed — no changes written to radio.")
+        return 0
+
+    port = args.port
+    # Pre-flight RigWire check (works on BOTH RigWire v1 & v2 radios!)
+    wire_online = False
+    try:
+        cli_port = port or _wait_for_port("36b7:ffff", port, 2.0)
+        cli = _rigwire.RigWireClient(cli_port, timeout=1.0)
+        try:
+            hello = cli.hello()
+            wire_online = True
+            _log_ok(f"Connected over RigWire v{hello.get('protocol_version', 2)} on {cli_port}")
+            telem = cli.get_system_telemetry()
+            batt_mv = int(telem.get("battery_mv", 0))
+            min_mv = max((bp.min_battery_mv for bp in parsed.boot_policies), default=0)
+            if batt_mv > 0 and min_mv > 0 and batt_mv < min_mv and not args.ignore_battery:
+                raise KfwError(f"Battery voltage {batt_mv} mV is below safe flash threshold {min_mv} mV (charge radio or pass --ignore-battery)")
+            if batt_mv > 0:
+                _log_info(f"Battery check OK: {batt_mv} mV (min {min_mv} mV)")
+
+            if (parsed.flags & HFLAG_REQUIRE_CALIB_BACKUP) and not args.skip_backup and chosen_fw is not None:
+                bdir = Path(args.backup_dir) if args.backup_dir else (Path.home() / ".local" / "share" / "kern" / "backups")
+                ts = time.strftime("%Y%m%d-%H%M%S")
+                serial_tag = str(telem.get("serial_str") or "radio").replace(" ", "_")
+                bpath = backup_radio_over_rigwire(cli, bdir / f"kern-backup-{serial_tag}-{ts}.kfw")
+                _log_ok(f"Saved pre-upgrade calibration/config backup -> {bpath}")
+
+            if chosen_fw is not None:
+                _log_info("Phase A: Rebooting radio into bootloader via RigWire...")
+                cli.reboot(mode=1)
+        finally:
+            cli.close()
+    except KfwError:
+        raise
+    except Exception as exc:
+        if chosen_fw is None:
+            raise KfwError(f"RigWire connection required for module-only update: {exc}") from exc
+        _cli_ui.warn(f"RigWire not online ({exc}); expecting radio already in bootloader (PTT+Power-On)...")
+
+    if chosen_fw is not None:
+        if wire_online:
+            time.sleep(0.8)
+        bl_port = _wait_for_port("36b7:0001", port, 15.0)
+        _log_info(f"Bootloader detected on {bl_port}; flashing {len(chosen_fw):,} B (applying wire XOR-16 on wire)...")
+        proto = _flasher.Protocol(bl_port)
+        proto.connect()
+        try:
+            _flasher.flash_process(proto, chosen_fw)
+        finally:
+            proto.close()
+        _log_ok("Phase A firmware flash complete.")
+
+    if mod_parts and not args.skip_modules:
+        _log_info("Phase B: Waiting for upgraded radio to reconnect over RigWire...")
+        if chosen_fw is not None:
+            time.sleep(1.5)
+        rw_port = _wait_for_port("36b7:ffff", port, 20.0)
+        cli2 = _rigwire.RigWireClient(rw_port, timeout=1.5)
+        try:
+            hello2 = cli2.hello()
+            _log_ok(f"Reconnected over RigWire v{hello2.get('protocol_version', 2)} on {rw_port}")
+            rep = provision_kfw_parts_over_rigwire(cli2, parsed, plaintexts, dry_run=False)
+            _log_ok(
+                f"Phase B sync complete: {len(rep['installed'])} installed, "
+                f"{len(rep['skipped'])} unchanged, {len(rep['deleted'])} deleted."
+            )
+            for p_inst in rep["installed"]:
+                print(f"    • updated {p_inst}")
+        finally:
+            cli2.close()
+
+    _log_ok(f"Upgrade to Kern OS v{ver_str} completed safely!")
+    return 0
+
+
+def _write_temp_kfw(raw: bytes) -> Path:
+    import tempfile
+    p = Path(tempfile.gettempdir()) / f"kern-upgrade-{os.getpid()}.kfw"
+    p.write_bytes(raw)
+    return p
 
 
 def main() -> int:
@@ -1980,7 +2700,7 @@ def main() -> int:
     p_pack.add_argument("--name", default="Kern OS", help="Package display name")
     p_pack.add_argument("--version", default="0.1.0", help="SemVer (e.g. 0.1.0 or 0.2.0-rc.1)")
     p_pack.add_argument("--sec-cnt", type=int, default=0, help="Monotonic anti-rollback counter")
-    p_pack.add_argument("--krx-abi", default="3.2", help="Exported KRX-ABI MAJOR.MINOR")
+    p_pack.add_argument("--krx-abi", default=None, help="Exported KRX-ABI MAJOR.MINOR (default: auto from src/abi)")
     p_pack.add_argument("--kind", choices=[v.lower() for v in KIND_NAMES.values()], help="Explicit container kind")
     p_pack.add_argument("--fw", action="append", help="Firmware image as TARGET:PATH (repeatable, e.g. uv-k1:target/firmware.bin)")
     p_pack.add_argument("--mod", action="append", help="KRX module as PATH[:/apps/name.mod[:policy]] (repeatable)")
@@ -1991,7 +2711,8 @@ def main() -> int:
     p_pack.add_argument("--mcu-ota", action="store_true", help="MCU-streamable mode (PackBits RLE, <= 4 KB RAM)")
     p_pack.add_argument("--encrypt-key", help="16-byte hex key (or file) for Ascon-AEAD128 encryption")
     p_pack.add_argument("--mac-key", help="16-byte hex key (or file) for Ascon-128-MAC auth")
-    p_pack.add_argument("--lms-key", help="Path to LMS-Ascon private key JSON (updates next_leaf)")
+    p_pack.add_argument("--lms-key", help="Path to LMS-Ascon private key JSON (updates next_leaf atomically)")
+    p_pack.add_argument("--signer", default="krel", help="4-char ASCII signer tag")
     p_pack.set_defaults(func=cmd_pack)
 
     p_insp = sub.add_parser("inspect", help="Inspect a .kfw header, targets, policy, and parts in O(1)")
@@ -2003,8 +2724,10 @@ def main() -> int:
     p_ver.add_argument("file", help="Path to .kfw file")
     p_ver.add_argument("--mac-key", help="16-byte hex key (or file) for Ascon-128-MAC")
     p_ver.add_argument("--lms-pubkey", help="32-byte hex public key (or file) for LMS-Ascon")
+    p_ver.add_argument("--trust-store", help="Path to trusted-keys.json trust ring")
+    p_ver.add_argument("--channel", help="Require signer authorization for release channel (stable/beta/nightly)")
     p_ver.add_argument("--decrypt-key", help="16-byte hex key (or file) for encrypted parts")
-    p_ver.add_argument("--require-auth", action="store_true", help="Fail unless an auth record verifies")
+    p_ver.add_argument("--require-auth", action="store_true", help="Fail unless a trusted auth record verifies")
     p_ver.set_defaults(func=cmd_verify)
 
     p_sign = sub.add_parser("sign", help="Append Ascon-128-MAC or PQ LMS-Ascon auth block without mutating body")
@@ -2021,6 +2744,50 @@ def main() -> int:
     p_kg.add_argument("--signer", default="krel", help="4-char ASCII signer tag")
     p_kg.add_argument("-o", "--output", help="Output JSON key file")
     p_kg.set_defaults(func=cmd_keygen)
+
+    p_tr = sub.add_parser("trust", help="Manage trusted LMS-Ascon release signing keys (keys/trusted-keys.json)")
+    p_tr.add_argument("--store", help="Path to trust store JSON (default: keys/trusted-keys.json)")
+    tr_sub = p_tr.add_subparsers(dest="trust_cmd", required=True)
+    tr_sub.add_parser("list", help="List trusted & revoked signing keys")
+    p_tr_add = tr_sub.add_parser("add", help="Trust a new LMS-Ascon public key")
+    p_tr_add.add_argument("--key-file", help="LMS-Ascon key JSON file (only pubkey is exported)")
+    p_tr_add.add_argument("--pubkey", help="64-char hex 32-byte LMS-Ascon public key")
+    p_tr_add.add_argument("--signer", help="4-char ASCII signer tag")
+    p_tr_add.add_argument("--channels", default="stable,beta,nightly", help="Comma-separated authorized channels")
+    p_tr_add.add_argument("--description", default="", help="Human-readable key description")
+    p_tr_rev = tr_sub.add_parser("revoke", help="Revoke a compromised or retired key by key_id or pubkey prefix")
+    p_tr_rev.add_argument("key_id", help="8-char key_id hex or pubkey prefix")
+    p_tr.set_defaults(func=cmd_trust)
+
+    p_up = sub.add_parser("upgrade", help="Safe 2-phase radio upgrade (verify + auto-backup + Phase A flash + Phase B RigWire sync)")
+    p_up.add_argument("file", help="Path or http(s):// URL to .kfw container")
+    p_up.add_argument("-p", "--port", help="Serial port (auto-detected if omitted)")
+    p_up.add_argument("-t", "--target", help="Target slug for multi-target bundles (e.g. uv-k1, uv-k10pro)")
+    p_up.add_argument("--trust-store", help="Path to trusted-keys.json trust ring")
+    p_up.add_argument("--channel", help="Require signer authorization for channel")
+    p_up.add_argument("--lms-pubkey", help="32-byte hex LMS-Ascon public key")
+    p_up.add_argument("--mac-key", help="16-byte hex Ascon-128-MAC key")
+    p_up.add_argument("--decrypt-key", help="16-byte hex Ascon-AEAD128 decrypt key")
+    p_up.add_argument("--require-auth", action="store_true", help="Refuse unsigned or untrusted .kfw containers")
+    p_up.add_argument("--backup-dir", help="Directory for pre-upgrade calibration/config .kfw backups")
+    p_up.add_argument("--skip-backup", action="store_true", help="Skip automatic pre-upgrade calibration backup")
+    p_up.add_argument("--skip-flash", action="store_true", help="Skip Phase A MCU flash (sync modules/assets only)")
+    p_up.add_argument("--skip-modules", action="store_true", help="Skip Phase B RigWire module/asset sync")
+    p_up.add_argument("--ignore-battery", action="store_true", help="Bypass min_battery_mv safety check")
+    p_up.add_argument("--dry-run", action="store_true", help="Validate container and trust without touching radio")
+    p_up.set_defaults(func=cmd_upgrade)
+
+    p_cu = sub.add_parser("check-update", help="Check a signed release-manifest.json or GitHub repo for firmware updates")
+    p_cu.add_argument("source", help="URL/path to release-manifest.json or GitHub 'owner/repo'")
+    p_cu.add_argument("--current-version", help="Currently installed SemVer (e.g. 0.1.0)")
+    p_cu.add_argument("--current-sec-cnt", type=int, default=0, help="Currently installed sec_cnt")
+    p_cu.add_argument("--channel", default="stable", help="Release channel (stable/beta/nightly)")
+    p_cu.add_argument("--trust-store", help="Path to trusted-keys.json")
+    p_cu.add_argument("--lms-pubkey", help="Pinned 32-byte LMS-Ascon public key")
+    p_cu.add_argument("--mac-key", help="16-byte hex Ascon-128-MAC key")
+    p_cu.add_argument("--require-auth", action="store_true", help="Require trusted manifest signature")
+    p_cu.add_argument("--json", action="store_true", help="Emit JSON output")
+    p_cu.set_defaults(func=cmd_check_update)
 
     p_ext = sub.add_parser("extract", help="Extract verified firmware/modules from a .kfw container")
     p_ext.add_argument("file", help="Input .kfw file")

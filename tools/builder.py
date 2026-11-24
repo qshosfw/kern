@@ -188,6 +188,12 @@ def main():
     parser.add_argument("--size", action="store_true", help="Display memory section allocation breakdown")
     parser.add_argument("--deny-warnings", action="store_true", help="Fail the build if any compiler warnings are emitted")
     parser.add_argument("--json", dest="json_out", help="Write structured memory usage telemetry to a JSON file")
+    parser.add_argument("--version", dest="fw_version", help="Override firmware SemVer embedded in target/kern.kfw")
+    parser.add_argument("--sec-cnt", type=int, default=0, help="Monotonic anti-rollback security counter for target/kern.kfw")
+    parser.add_argument("--lms-key", help="LMS-Ascon private key JSON to sign target/kern.kfw (or env KERN_LMS_KEY)")
+    parser.add_argument("--mac-key", help="16-byte hex key/file for Ascon-128-MAC signing (or env KERN_MAC_KEY)")
+    parser.add_argument("--signer", default="krel", help="4-char ASCII signer tag for .kfw auth trailer")
+    parser.add_argument("--require-signed", action="store_true", help="Fail build if no signing key is configured")
 
     args = parser.parse_args()
 
@@ -392,20 +398,44 @@ def main():
     target_kfw = "target/kern.kfw"
     kfw_tool = root_dir / "tools" / "kfw.py"
     if kfw_tool.exists():
-        kfw_slug = "uv-k10pro" if profile_name == "k10pro" else "uv-k1"
-        fw_ver = (cfg.get("project", {}) if cfg else {}).get("version", "0.1.0")
-        print(f" {BLUE}{INVERT} KFW   {RESET} Packing & verifying MCU-OTA .kfw v1.0 container ({kfw_slug})...")
-        kfw_cmd = (
-            f"python3 {kfw_tool} pack {target_kfw} --kind firmware --mcu-ota "
-            f"--name 'Kern OS' --version {fw_ver} --fw {kfw_slug}:{target_bin}"
-        )
-        code, stdout, stderr = run_cmd(kfw_cmd)
-        if code != 0:
-            print(f" {RED}{INVERT} ERROR {RESET} KFW packing failed: {stderr or stdout}")
+        kfw_slug = "uv-k10pro" if device_raw.lower() == "uv-k10pro" else "uv-k1"
+        fw_ver = args.fw_version or (cfg.get("project", {}) if cfg else {}).get("version", "0.1.0")
+        lms_key = args.lms_key or os.environ.get("KERN_LMS_KEY")
+        mac_key = args.mac_key or os.environ.get("KERN_MAC_KEY")
+        if args.require_signed and not (lms_key or mac_key):
+            print(f" {RED}{INVERT} ERROR {RESET} --require-signed set, but no --lms-key / --mac-key / KERN_LMS_KEY / KERN_MAC_KEY provided.")
             sys.exit(1)
-        vcode, vout, verr = run_cmd(f"python3 {kfw_tool} verify {target_kfw}")
-        if vcode != 0:
-            print(f" {RED}{INVERT} ERROR {RESET} KFW verification failed: {verr or vout}")
+        signed_note = " + signing" if (lms_key or mac_key) else ""
+        print(f" {BLUE}{INVERT} KFW   {RESET} Packing & verifying MCU-OTA .kfw v1.0 container ({kfw_slug}{signed_note})...")
+        kfw_argv = [
+            sys.executable, str(kfw_tool), "pack", target_kfw,
+            "--kind", "firmware", "--mcu-ota",
+            "--name", "Kern OS",
+            "--version", str(fw_ver),
+            "--sec-cnt", str(args.sec_cnt),
+            "--fw", f"{kfw_slug}:{target_bin}",
+        ]
+        if lms_key:
+            kfw_argv.extend(["--lms-key", lms_key])
+        if mac_key:
+            kfw_argv.extend(["--mac-key", mac_key])
+        if lms_key or mac_key:
+            kfw_argv.extend(["--signer", args.signer])
+        res_kfw = subprocess.run(kfw_argv, capture_output=True, text=True, env=cli_ui.cargo_env())
+        if res_kfw.returncode != 0:
+            print(f" {RED}{INVERT} ERROR {RESET} KFW packing failed: {res_kfw.stderr or res_kfw.stdout}")
+            sys.exit(1)
+        verify_argv = [sys.executable, str(kfw_tool), "verify", target_kfw]
+        trust_store = root_dir / "keys" / "trusted-keys.json"
+        if trust_store.is_file() and (lms_key or mac_key):
+            verify_argv.extend(["--trust-store", str(trust_store)])
+        if mac_key:
+            verify_argv.extend(["--mac-key", mac_key])
+        if args.require_signed:
+            verify_argv.append("--require-auth")
+        res_ver = subprocess.run(verify_argv, capture_output=True, text=True, env=cli_ui.cargo_env())
+        if res_ver.returncode != 0:
+            print(f" {RED}{INVERT} ERROR {RESET} KFW verification failed: {res_ver.stderr or res_ver.stdout}")
             sys.exit(1)
 
     # Step 4.1: Stage Native ARM ELF for `kern-emu` & GDB/SWD debugging

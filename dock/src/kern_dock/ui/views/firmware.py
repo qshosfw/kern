@@ -388,6 +388,12 @@ class FirmwareView:
                 fmt_parts.append(str(fw["version"]))
             if targets:
                 fmt_parts.append(", ".join(targets))
+            if fw.get("krx_abi"):
+                fmt_parts.append(f"ABI {fw['krx_abi']}")
+            if fw.get("sec_cnt"):
+                fmt_parts.append(f"sec_cnt {fw['sec_cnt']}")
+            if fw.get("modules_count"):
+                fmt_parts.append(f"+{fw['modules_count']} module(s)")
             self.prop_format.set_subtitle(GLib.markup_escape_text(" · ".join(fmt_parts)))
 
             pct = float(fw.get("flash_pct", fw["size"] / float(FLASH_TOTAL_BYTES)))
@@ -396,8 +402,12 @@ class FirmwareView:
             self.flash_bar.set_value(max(0.0, min(1.0, pct)))
 
             chk_parts: list[str] = []
-            if fw.get("ascon_ok"):
-                chk_parts.append("Ascon-Hash256 verified")
+            if fw.get("trusted"):
+                chk_parts.append("Signed & Trusted")
+            elif fw.get("signed"):
+                chk_parts.append("Signed (unpinned key)")
+            elif fw.get("ascon_ok"):
+                chk_parts.append("Ascon-Hash256 verified (unsigned)")
             if fw.get("vector_ok"):
                 chk_parts.append(f"ARMv6-M vectors OK (SP 0x{int(fw.get('initial_sp', 0)):08X})")
             else:
