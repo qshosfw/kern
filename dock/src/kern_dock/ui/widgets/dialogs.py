@@ -132,12 +132,22 @@ def show_preferences_dialog(win: Any, runtime: DockRuntime, *, on_toast: Callabl
     pal_row.connect("notify::selected", lambda r, _p: runtime.set_palette(pnames[r.get_selected()]))
     grp_lcd.add(pal_row)
 
+    follow_sw = Adw.SwitchRow(
+        title="Follow Device Display",
+        subtitle="Mirror live backlight brightness, contrast &amp; inversion over RigWire",
+        active=runtime.follow_device_display,
+    )
+    grp_lcd.add(follow_sw)
+
+    manual_rows: list[Gtk.Widget] = []
     for title, lo, hi, attr in (("Backlight", 0, 10, "backlight"), ("Contrast", 0, 15, "contrast")):
         row = Adw.SpinRow.new_with_range(lo, hi, 1)
         row.set_title(title)
-        row.set_value(getattr(runtime.lcd_st, attr))
+        row.set_value(int(runtime._manual_lcd.get(attr, getattr(runtime.lcd_st, attr))))
+        row.set_sensitive(not runtime.follow_device_display)
         row.connect("notify::value", lambda s, _p, a=attr: runtime.set_lcd_setting(a, int(s.get_value())))
         grp_lcd.add(row)
+        manual_rows.append(row)
 
     for title, sub, attr in (
         ("STN Ghosting", "Liquid-crystal rise &amp; decay", "ghosting"),
@@ -145,9 +155,21 @@ def show_preferences_dialog(win: Any, runtime: DockRuntime, *, on_toast: Callabl
         ("Backlight Glow", "Soft bezel light spill", "backlight_glow"),
         ("Invert LCD", "Swap pixel polarity", "invert_lcd"),
     ):
-        sw = Adw.SwitchRow(title=title, subtitle=sub, active=getattr(runtime.lcd_st, attr))
+        val = runtime._manual_lcd.get(attr, getattr(runtime.lcd_st, attr)) if attr == "invert_lcd" else getattr(runtime.lcd_st, attr)
+        sw = Adw.SwitchRow(title=title, subtitle=sub, active=bool(val))
+        if attr == "invert_lcd":
+            sw.set_sensitive(not runtime.follow_device_display)
+            manual_rows.append(sw)
         sw.connect("notify::active", lambda w, _p, a=attr: runtime.set_lcd_setting(a, w.get_active()))
         grp_lcd.add(sw)
+
+    def _on_follow_toggled(w: Any, _p: Any) -> None:
+        on = bool(w.get_active())
+        runtime.set_follow_device_display(on)
+        for r in manual_rows:
+            r.set_sensitive(not on)
+
+    follow_sw.connect("notify::active", _on_follow_toggled)
     p_disp.add(grp_lcd)
     dlg.add(p_disp)
 

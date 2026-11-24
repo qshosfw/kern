@@ -78,13 +78,19 @@ class DockRuntime:
             init_pal = radio_model(self.active_model).palette
             self.user_picked_palette = False
 
+        self.follow_device_display: bool = bool(self.config.get("lcd.follow_device", True))
+        self._manual_lcd: dict[str, Any] = {
+            "backlight": int(self.config.get("lcd.backlight", 8)),
+            "contrast": int(self.config.get("lcd.contrast", 13)),
+            "invert_lcd": bool(self.config.get("lcd.invert", False)),
+        }
         self.lcd_st = LcdSettings(
             palette=init_pal,
             pixel_grid=bool(self.config.get("lcd.pixel_grid", True)),
-            invert_lcd=bool(self.config.get("lcd.invert", False)),
+            invert_lcd=bool(self._manual_lcd["invert_lcd"]),
             ghosting=bool(self.config.get("lcd.ghosting", True)),
-            contrast=int(self.config.get("lcd.contrast", 13)),
-            backlight=int(self.config.get("lcd.backlight", 8)),
+            contrast=int(self._manual_lcd["contrast"]),
+            backlight=int(self._manual_lcd["backlight"]),
             backlight_glow=bool(self.config.get("lcd.backlight_glow", True)),
         )
 
@@ -117,7 +123,7 @@ class DockRuntime:
 
         self.events.subscribe("link.connected", self._on_link_connected)
         self.events.subscribe("link.disconnected", self._on_link_disconnected)
-        self.events.subscribe("link.telemetry", lambda _e: self.refresh_tray())
+        self.events.subscribe("link.telemetry", self._on_link_telemetry)
         self.events.subscribe("link.audio_notes", lambda e: self.audio.play_headless_notes(e.payload.get("notes", [])))
         self.events.subscribe("security.changed", lambda _e: self.refresh_tray())
         self.tray_menu.on_change(self.refresh_tray)
@@ -159,8 +165,44 @@ class DockRuntime:
             self.config.set("lcd.palette", palette)
         self.events.emit("lcd.changed", {"palette": self.lcd_st.palette}, source="runtime")
 
+    def set_follow_device_display(self, follow: bool) -> None:
+        self.follow_device_display = bool(follow)
+        self.config.set("lcd.follow_device", self.follow_device_display)
+        if self.follow_device_display:
+            self._sync_device_display()
+        else:
+            changed = False
+            for k, v in self._manual_lcd.items():
+                if getattr(self.lcd_st, k) != v:
+                    setattr(self.lcd_st, k, v)
+                    changed = True
+            if changed:
+                self.events.emit("lcd.changed", {"follow_device": False}, source="runtime")
+
+    def _sync_device_display(self) -> None:
+        if not self.follow_device_display or not self.link.connected or self.link.link_mode != "rigwire":
+            return
+        t = self.link.last_telemetry
+        if "display_backlight" not in t:
+            return
+        bl = max(0, min(10, int(t["display_backlight"])))
+        c_pct = max(0, min(100, int(t.get("display_contrast_pct", 50))))
+        contrast = max(0, min(15, int(round(c_pct * 15.0 / 100.0))))
+        inv = bool(t.get("display_inverted", False))
+        if self.lcd_st.backlight != bl or self.lcd_st.contrast != contrast or self.lcd_st.invert_lcd != inv:
+            self.lcd_st.backlight = bl
+            self.lcd_st.contrast = contrast
+            self.lcd_st.invert_lcd = inv
+            self.events.emit("lcd.changed", {"device_sync": True}, source="runtime")
+
+    def _on_link_telemetry(self, _ev: Event) -> None:
+        self._sync_device_display()
+        self.refresh_tray()
+
     def set_lcd_setting(self, attr: str, value: Any) -> None:
         setattr(self.lcd_st, attr, value)
+        if attr in self._manual_lcd:
+            self._manual_lcd[attr] = value
         cfg_key = "lcd.invert" if attr == "invert_lcd" else f"lcd.{attr}"
         self.config.set(cfg_key, value)
         self.events.emit("lcd.changed", {attr: value}, source="runtime")
@@ -235,6 +277,10 @@ class DockRuntime:
             )
 
     def _on_link_disconnected(self, ev: Event) -> None:
+        if self.follow_device_display:
+            for k, v in self._manual_lcd.items():
+                setattr(self.lcd_st, k, v)
+            self.events.emit("lcd.changed", {"device_sync": False}, source="runtime")
         self.refresh_tray()
         reason = str(ev.payload.get("reason", "Disconnected"))
         if "unplugged" in reason.lower() or "lost" in reason.lower():

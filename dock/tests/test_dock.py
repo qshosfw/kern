@@ -616,6 +616,35 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
         sess = RawSerialSession()
         self.assertFalse(sess.is_open)
 
+    def test_rigwire_follow_device_display_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            rt = DockRuntime(
+                DockOptions(no_tray=True, no_ipc=True, no_plugins=True),
+                config_path=Path(td) / "cfg.toml",
+                persist_config=False,
+                enable_dbus=False,
+            )
+            rt.link.connect("demo")
+            try:
+                rt.set_follow_device_display(True)
+                rt.link.last_telemetry.update({
+                    "display_backlight": 3,
+                    "display_contrast_pct": 60,
+                    "display_inverted": True,
+                })
+                rt.events.emit("link.telemetry", rt.link.status_snapshot(), source="test")
+                self.assertEqual(rt.lcd_st.backlight, 3)
+                self.assertEqual(rt.lcd_st.contrast, 9)
+                self.assertTrue(rt.lcd_st.invert_lcd)
+
+                # Turning off Follow Device Display restores manual overrides
+                rt.set_follow_device_display(False)
+                self.assertEqual(rt.lcd_st.backlight, 8)
+                self.assertEqual(rt.lcd_st.contrast, 13)
+                self.assertFalse(rt.lcd_st.invert_lcd)
+            finally:
+                rt.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

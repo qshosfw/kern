@@ -326,6 +326,10 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus>
             ]);
             c.wr_u16(bk_gpio);
             c.wr_u8(crate::system::is_headless() as u8);
+            let disp = &crate::master_config_ref().display;
+            let bl_duty = drivers::backlight::BACKLIGHT_DUTY
+                .load(core::sync::atomic::Ordering::Relaxed);
+            c.put(&[bl_duty, disp.contrast, disp.inverted]);
         }
         FACET_SYS_CALIBRATION => {
             let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };

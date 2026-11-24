@@ -858,6 +858,10 @@ class DockLink:
                                     if len(met) >= 18:
                                         self.headless = bool(met[17])
                                         self.last_telemetry["headless"] = self.headless
+                                    if len(met) >= 21:
+                                        self.last_telemetry["display_backlight"] = min(10, int(met[18]))
+                                        self.last_telemetry["display_contrast_pct"] = min(100, int(met[19]))
+                                        self.last_telemetry["display_inverted"] = bool(met[20])
                                 else:
                                     tx_b = self.client.handle_get(rigwire.DOMAIN_RADIO, rigwire.RADIO_INSTANCE_ACTIVE, rigwire.FACET_RADIO_TRANSMIT)
                                     sq_b = self.client.handle_get(rigwire.DOMAIN_RADIO, rigwire.RADIO_INSTANCE_ACTIVE, rigwire.FACET_RADIO_SQUELCH)

@@ -29,6 +29,7 @@ CONFIG_SCHEMA: tuple[ConfigSpec, ...] = (
     # Handset & LCD
     ConfigSpec("handset.model", "str", "auto", "Radio Model", "Handset chassis mockup or 'auto'"),
     ConfigSpec("lcd.palette", "str", "auto", "LCD Palette", "Color profile or 'auto' (follow model)"),
+    ConfigSpec("lcd.follow_device", "bool", True, "Follow Device Display", "Mirror live backlight, contrast and inversion over RigWire"),
     ConfigSpec("lcd.backlight", "int", 8, "Backlight", "Backlight brightness level", 0, 10),
     ConfigSpec("lcd.contrast", "int", 13, "Contrast", "ST7565 contrast curve", 0, 15),
     ConfigSpec("lcd.ghosting", "bool", True, "STN Ghosting", "Liquid-crystal rise and decay"),
