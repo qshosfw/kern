@@ -5,7 +5,6 @@
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{
     ALIGN_LEFT, COLOR_CLEAR, COLOR_FILL, FONT_TOMTHUMB, KRX_LEAF_KIND_DONE, KrxApiTable,
     KrxLeafContext, icon, krx_entry, nth_packed_slice,
@@ -17,13 +16,12 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         return 1;
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
-    let st = unsafe { &*(ctx.arg as *const SharedState) };
-    let m = st.meta();
+    let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
     let sy = st.detail_scroll;
+    let detail_btn = st.detail_btn;
     let hy = 10 - sy;
-
-    let mut raw_b = MaybeUninit::<[u8; 24]>::uninit();
-    let buf = unsafe { &mut *raw_b.as_mut_ptr() };
+    let m = unsafe { &*(&st.detail_sc.app_meta as *const shared::AppMeta) };
+    let buf = shared::subslice_mut(&mut st.sheet_buf, 0, 24);
 
     // Profile & Declared Service/Action
     let y2 = hy + 38;
@@ -64,8 +62,8 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
 
     // Interactive Manage Buttons
     let yb = y3 + 13;
-    api.draw_capsule_button(4, yb, 56, 12, b"Launch", st.detail_btn == 0);
-    api.draw_capsule_button(64, yb, 56, 12, b"Remove", st.detail_btn == 1);
+    api.draw_capsule_button(4, yb, 56, 12, b"Launch", detail_btn == 0);
+    api.draw_capsule_button(64, yb, 56, 12, b"Remove", detail_btn == 1);
 
     api.fill_rect(0, 0, 128, 8, COLOR_CLEAR);
     api.draw_scrollbar(125, 9, 52, sy.max(0) as u16, 88, 54);

@@ -17,7 +17,7 @@ use kernel::proc::abi::*;
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
 #[cfg(feature = "krx_paged")]
 use kernel::runtime::paged::{FixedWindowCache, PagedError, ReturnFrame, ShadowReturnStack};
-use kernel::runtime::paged::StructuredLeafManager;
+use kernel::runtime::paged::StreamingLeafState;
 use kernel::runtime::reloc::apply_relocs;
 use kernel::runtime::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 
@@ -25,7 +25,17 @@ pub const NATIVE_EXEC_BUFFER_WORDS: usize = crate::data::arena::TRANSIENT_ARENA_
 pub const PAGED_CACHE_MAX_BYTES: usize = 4096; // Up to 4 x 1024B fixed-window cache slots at arena base
 pub const MICRO_DAEMON_ARENA_BYTES: usize = 2048; // 2.0 KB headroom reservation for background micro-daemons / applets
 pub const TRANSIENT_SCRATCH_OFFSET: usize = crate::data::arena::TRANSIENT_SCRATCH_OFFSET;
-pub(crate) const MAX_STRUCTURED_LEAVES: usize = 18;
+
+/// Resolve per-package P0 overlay window size from `SectionExecution::page_size` (defaults to 1024 B).
+#[inline(always)]
+pub(crate) fn p0_overlay_size(exec: &SectionExecution) -> usize {
+    let req = exec.page_size as usize;
+    if (1024..=4096).contains(&req) && (req & 3) == 0 {
+        req
+    } else {
+        1024
+    }
+}
 
 #[cfg(feature = "krx_paged")]
 #[repr(C)]
@@ -35,12 +45,12 @@ pub(crate) struct PagedWindowState {
 }
 
 /// Mutually exclusive overlay state: P1 uses `window` (fixed-window cache + shadow return stack),
-/// P0 uses `leaf` (structured leaf manager). Overlapping them saves ~192 B of SRAM for runtime stack.
+/// P0 uses `leaf` (24 B streaming flash-backed leaf state, supporting up to 255 leaves).
 #[repr(C)]
 pub(crate) union PagedOverlay {
     #[cfg(feature = "krx_paged")]
     pub(crate) window: core::mem::ManuallyDrop<PagedWindowState>,
-    pub(crate) leaf: core::mem::ManuallyDrop<StructuredLeafManager<MAX_STRUCTURED_LEAVES>>,
+    pub(crate) leaf: core::mem::ManuallyDrop<StreamingLeafState>,
 }
 
 #[repr(C, align(4))]
@@ -82,7 +92,12 @@ impl NativeExecSlot {
         let load_base = arena_base_ptr() as u32;
         let max_arena = (NATIVE_EXEC_BUFFER_WORDS * 4) as u32;
         let is_p0 = self.profile.is_structured_paged();
-        let overlay_size = 1024u32;
+        let overlay_size = if is_p0 {
+            let ws = unsafe { (*self.overlay.leaf).window_size } as u32;
+            if ws >= 1024 { ws } else { 1024 }
+        } else {
+            1024u32
+        };
         let code_size = self.code_size as u32;
         match rk {
             RegionKind::ImmutableCode => Some(MemoryRegionDescriptor::new(
@@ -131,7 +146,7 @@ impl NativeExecSlot {
     }
 
     #[inline(always)]
-    fn leaf_mut(&mut self) -> Option<&mut StructuredLeafManager<MAX_STRUCTURED_LEAVES>> {
+    fn leaf_mut(&mut self) -> Option<&mut StreamingLeafState> {
         if self.is_loaded && self.profile.is_structured_paged() {
             Some(unsafe { &mut *self.overlay.leaf })
         } else {
@@ -343,7 +358,14 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
     let mut cur_arg = arg;
 
     for _ in 0..8u8 {
-        let Ok((leaf_entry, is_hit)) = leaf_mgr.begin_leaf_call(cur_id) else {
+        let Ok((leaf_entry, is_hit)) = leaf_mgr.begin_leaf_call(cur_id, |entry_off| {
+            let mut raw = [0u8; kernel::runtime::LeafEntry::SIZE];
+            if read_active_pkg_region(entry_off as usize, raw.as_mut_ptr() as usize, raw.len()) {
+                kernel::runtime::LeafEntry::parse(&raw)
+            } else {
+                None
+            }
+        }) else {
             return 0xFFFF_FFFF;
         };
         if !is_hit
@@ -353,10 +375,12 @@ pub fn krx_leaf_call(leaf_id: u8, arg: u32) -> u32 {
                 (leaf_entry.size as usize).min(window_size),
             )
         {
+            leaf_mgr.active_leaf = None;
             leaf_mgr.is_dispatching = false;
             return 0xFFFF_FFFF;
         }
         if leaf_entry.entry_offset >= leaf_entry.size {
+            leaf_mgr.active_leaf = None;
             leaf_mgr.is_dispatching = false;
             return 0xFFFF_FFFF;
         }
@@ -455,6 +479,7 @@ pub use kernel::runtime::KrxAuxSections;
 pub fn load_native_from_storage(
     path: &str,
     payload_len: usize,
+    hdr_base_ptr: *const u8,
     summary: &KrxSummary<'_>,
     pid: kernel::proc::Pid,
 ) -> Result<(), KrxLaunchError> {
@@ -487,12 +512,19 @@ pub fn load_native_from_storage(
     slot.is_paged = is_paged;
     slot.set_pkg_path(path);
     let is_p0 = profile.is_structured_paged();
-    let overlay_size = 1024u32;
+    let overlay_size = p0_overlay_size(exec) as u32;
     let overlay_vma = load_base + (max_arena_bytes as u32 - overlay_size);
 
     if is_p0 {
         let leaf_mgr = unsafe { &mut *slot.overlay.leaf };
-        leaf_mgr.configure(overlay_vma, overlay_size as u16, aux.leaf_map);
+        let (tbl_off, cnt) = match aux.leaf_map {
+            Some(map) => (
+                (map.as_ptr() as usize).saturating_sub(hdr_base_ptr as usize) as u32,
+                (map.len() / kernel::runtime::LeafEntry::SIZE).min(255) as u8,
+            ),
+            None => (0, 0),
+        };
+        leaf_mgr.configure(overlay_vma, overlay_size as u16, tbl_off, cnt);
     } else if is_paged {
         #[cfg(feature = "krx_paged")]
         {
@@ -651,6 +683,11 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'_, '_>, param: *const ()) 
         return 0xFFFF_FFFF;
     }
     unsafe {
+        // Ensure any earlier host-side stack spike cannot leave a stale canary breach
+        // that would falsely accuse an innocent KRX guest upon return.
+        if !kernel::sys::SystemDiagnostics::is_stack_guard_intact() {
+            kernel::sys::SystemDiagnostics::paint_stack();
+        }
         #[cfg(test)]
         {
             ACTIVE_CTX = ctx as *mut SysContext<'static, 'static>;

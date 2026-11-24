@@ -370,12 +370,19 @@ mod tests {
         assert!(summary.exec().is_some());
         #[cfg(feature = "krx_native")]
         {
-            let mut leaves = kernel::runtime::paged::StructuredLeafManager::<
-                { crate::runtime::native_runner::MAX_STRUCTURED_LEAVES },
-            >::new(0, 1024);
-            leaves.configure(0, 1024, summary.aux.leaf_map);
-            assert_eq!(leaves.leaf_count(), 10);
-            assert_eq!(leaves.leaf_at(9).map(|entry| entry.leaf_id), Some(10));
+            let map = summary.aux.leaf_map.expect("panic.mod must carry leaf_map");
+            let mut leaves = kernel::runtime::paged::StreamingLeafState::new(0, 1024);
+            let tbl_off = (map.as_ptr() as usize - PANIC_MOD.as_ptr() as usize) as u32;
+            let count = (map.len() / kernel::runtime::LeafEntry::SIZE) as u8;
+            leaves.configure(0, 1024, tbl_off, count);
+            assert_eq!(leaves.leaf_count, 10);
+            let (entry, hit) = leaves
+                .begin_leaf_call(10, |off| {
+                    kernel::runtime::LeafEntry::parse(&PANIC_MOD[off as usize..])
+                })
+                .expect("leaf 10 must resolve via O(1) flash table seek");
+            assert!(!hit);
+            assert_eq!(entry.leaf_id, 10);
         }
     }
 
@@ -445,6 +452,25 @@ mod tests {
                 .expect("settings.krx must carry its 16x16 icon in SECTION_ASSETS");
         assert_eq!((w16, h16, bits16.len()), (16, 16, 32));
         assert_eq!(bits16, gfx::icons::ICON_16_SETTINGS);
+        #[cfg(feature = "krx_native")]
+        {
+            let map = summary
+                .aux
+                .leaf_map
+                .expect("settings.krx must carry SECTION_LEAF_MAP");
+            let count = map.len() / kernel::runtime::LeafEntry::SIZE;
+            assert!(count >= 20, "settings.krx should carry its modular leaf set");
+            let tbl_off = (map.as_ptr() as usize - SETTINGS_KRX.as_ptr() as usize) as u32;
+            let mut leaves = kernel::runtime::paged::StreamingLeafState::new(0, 1024);
+            leaves.configure(0, 1024, tbl_off, count as u8);
+            let (last, hit) = leaves
+                .begin_leaf_call(count as u8, |off| {
+                    kernel::runtime::LeafEntry::parse(&SETTINGS_KRX[off as usize..])
+                })
+                .expect("last leaf must resolve via O(1) flash table seek");
+            assert!(!hit);
+            assert_eq!(last.leaf_id, count as u8);
+        }
     }
 
     #[test]

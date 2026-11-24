@@ -65,8 +65,19 @@ pub unsafe extern "C" fn HardFault() -> ! {
         "ldrb r0, [r0]",
         "cmp r0, #0",
         "beq 3f",
+        // Only unwind directly into Thread mode when EXC_RETURN indicates Thread/MSP (0xFFFF_FFF9).
+        // Returning from a nested IRQ HardFault (0xFFFF_FFF1) into `krx_fault_landing` would trap
+        // the CPU in Handler mode permanently and starve USB/SysTick IRQs.
+        "mov r0, lr",
+        "movs r1, #0x0F",
+        "ands r0, r1",
+        "cmp r0, #0x09",
+        "bne 3f",
         "mrs r0, msp",
+        // Treat MSP within 128 B of `_stack_end` as stack overflow so `HardFault` itself never
+        // pushes its own call frame below `_stack_end` into `FAULT_EXTRA`/`BOOT_RECORD`/`NATIVE_SLOT`.
         "ldr r1, ={stack_end}",
+        "adds r1, #128",
         "cmp r0, r1",
         "bhs 5f",
         "ldr r2, ={host_sp}",
@@ -346,6 +357,17 @@ unsafe extern "C" fn hard_fault_inner(fault_sp: u32, exc_return: u32) -> ! {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    // If a KRX guest (or a syscall invoked by one) triggers a Rust panic, contain it
+    // without disabling USBD or rebooting so RigWire stays connected.
+    #[cfg(all(target_arch = "arm", feature = "krx_native"))]
+    if crate::runtime::fault::can_contain_guest_in_thread() {
+        let kind = if kernel::sys::SystemDiagnostics::is_stack_guard_intact() {
+            kernel::runtime::fault::Exception::Fault
+        } else {
+            kernel::runtime::fault::Exception::Stack
+        };
+        unsafe { crate::runtime::fault::unwind_guest_fault(kind, 0) };
+    }
     #[cfg(target_arch = "arm")]
     unsafe {
         core::arch::asm!(

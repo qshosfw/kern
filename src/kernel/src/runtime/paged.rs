@@ -387,6 +387,107 @@ impl PackedLeaf {
     }
 }
 
+/// Streaming flash-backed P0 leaf overlay state (24 bytes in RAM, up to 255 leaves).
+///
+/// Eliminates fixed `MAX_STRUCTURED_LEAVES` SRAM tables: cache hits dispatch directly from
+/// `active_entry` in 0 Flash reads, while misses perform an O(1) power-of-two 16-byte lookup
+/// at `table_flash_offset + ((leaf_id - 1) << 4)` (with linear fallback for non-sequential IDs).
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct StreamingLeafState {
+    pub leaf_count: u8,
+    pub is_dispatching: bool,
+    pub active_leaf: Option<u8>,
+    pub window_size: u16,
+    pub total_swaps: u16,
+    pub overlay_vma: u32,
+    pub table_flash_offset: u32,
+    pub active_entry: PackedLeaf,
+}
+
+impl StreamingLeafState {
+    pub const fn new(overlay_vma: u32, window_size: u16) -> Self {
+        Self {
+            leaf_count: 0,
+            is_dispatching: false,
+            active_leaf: None,
+            window_size,
+            total_swaps: 0,
+            overlay_vma,
+            table_flash_offset: 0,
+            active_entry: PackedLeaf::empty(),
+        }
+    }
+
+    pub fn configure(
+        &mut self,
+        overlay_vma: u32,
+        window_size: u16,
+        table_flash_offset: u32,
+        leaf_count: u8,
+    ) {
+        self.overlay_vma = overlay_vma;
+        self.window_size = window_size;
+        self.table_flash_offset = table_flash_offset;
+        self.leaf_count = leaf_count;
+        self.active_leaf = None;
+        self.is_dispatching = false;
+        self.total_swaps = 0;
+        self.active_entry = PackedLeaf::empty();
+    }
+
+    /// Resolve `leaf_id` using cached `active_entry` on hit, or `read_entry(flash_offset)` on miss.
+    /// Returns `(LeafEntry, is_cache_hit)`.
+    pub fn begin_leaf_call<F>(
+        &mut self,
+        leaf_id: u8,
+        mut read_entry: F,
+    ) -> Result<(LeafEntry, bool), PagedError>
+    where
+        F: FnMut(u32) -> Option<LeafEntry>,
+    {
+        if self.is_dispatching {
+            return Err(PagedError::ReentrantDispatchDenied);
+        }
+        if leaf_id == 0 || self.leaf_count == 0 {
+            return Err(PagedError::InvalidLeafId);
+        }
+        if self.active_leaf == Some(leaf_id) {
+            self.is_dispatching = true;
+            return Ok((self.active_entry.to_entry(), true));
+        }
+        // O(1) direct slot probe for sequential 1-based leaf IDs (`16 B == 1 << 4`),
+        // falling back to linear scan only if a package uses sparse IDs.
+        let mut found = None;
+        let idx = (leaf_id - 1) as u32;
+        if idx < self.leaf_count as u32
+            && let Some(e) = read_entry(self.table_flash_offset + (idx << 4))
+            && e.leaf_id == leaf_id
+        {
+            found = Some(e);
+        }
+        if found.is_none() {
+            for i in 0..(self.leaf_count as u32) {
+                if i == idx {
+                    continue;
+                }
+                if let Some(e) = read_entry(self.table_flash_offset + (i << 4))
+                    && e.leaf_id == leaf_id
+                {
+                    found = Some(e);
+                    break;
+                }
+            }
+        }
+        let entry = found.ok_or(PagedError::InvalidLeafId)?;
+        self.active_entry = PackedLeaf::from_entry(entry);
+        self.active_leaf = Some(leaf_id);
+        self.total_swaps = self.total_swaps.saturating_add(1);
+        self.is_dispatching = true;
+        Ok((entry, false))
+    }
+}
+
 /// P0 Structured Paged Overlay Manager (Resident Root + Leaf Overlays, §5.1 / KRX 3.2).
 ///
 /// Enforces:
@@ -818,5 +919,75 @@ mod tests {
         assert_eq!(l2_flash, 0x2400);
 
         assert!(mgr.find_leaf(3).is_none());
+    }
+
+    #[test]
+    fn streaming_leaf_state_handles_large_leaf_tables_and_dynamic_windows() {
+        // Verify StreamingLeafState stays 24 bytes in RAM and dispatches >16 leaves in O(1).
+        assert_eq!(core::mem::size_of::<StreamingLeafState>(), 24);
+
+        const NUM_LEAVES: usize = 32;
+        let mut raw_table = [0u8; NUM_LEAVES * LeafEntry::SIZE];
+        for i in 0..NUM_LEAVES {
+            let base = i * LeafEntry::SIZE;
+            let leaf_id = (i + 1) as u8;
+            let size = (512 + (i % 4) * 512) as u16; // up to 2048 B dynamic window
+            let flash_off = 0x1000u32 + (i as u32) * 0x800;
+            raw_table[base] = leaf_id;
+            raw_table[base + 1] = 0;
+            raw_table[base + 2..base + 4].copy_from_slice(&size.to_le_bytes());
+            raw_table[base + 4..base + 8].copy_from_slice(&flash_off.to_le_bytes());
+            raw_table[base + 8..base + 10].copy_from_slice(&0x0000u16.to_le_bytes());
+        }
+
+        let mut state = StreamingLeafState::new(0, 0);
+        state.configure(0x2000_2000, 2048, 0x0100, NUM_LEAVES as u8);
+
+        let mut probes = 0u32;
+        let read_entry = |flash_off: u32, probes: &mut u32| -> Option<LeafEntry> {
+            *probes += 1;
+            let rel = flash_off.checked_sub(0x0100)? as usize;
+            if rel + LeafEntry::SIZE <= raw_table.len() {
+                LeafEntry::parse(&raw_table[rel..rel + LeafEntry::SIZE])
+            } else {
+                None
+            }
+        };
+
+        // Call leaf 24 (beyond old 16-leaf table) -> 1 O(1) probe, miss.
+        let (e24, hit24) = state
+            .begin_leaf_call(24, |off| read_entry(off, &mut probes))
+            .unwrap();
+        assert!(!hit24);
+        assert_eq!(e24.leaf_id, 24);
+        assert_eq!(probes, 1);
+        assert_eq!(state.total_swaps, 1);
+
+        // Reentrant call while dispatching must be rejected.
+        assert_eq!(
+            state
+                .begin_leaf_call(25, |off| read_entry(off, &mut probes))
+                .unwrap_err(),
+            PagedError::ReentrantDispatchDenied
+        );
+        state.is_dispatching = false;
+
+        // Second call to leaf 24 -> cache hit with 0 Flash reads.
+        let (e24_hit, hit24_again) = state
+            .begin_leaf_call(24, |off| read_entry(off, &mut probes))
+            .unwrap();
+        assert!(hit24_again);
+        assert_eq!(e24_hit.leaf_id, 24);
+        assert_eq!(probes, 1);
+        assert_eq!(state.total_swaps, 1);
+        state.is_dispatching = false;
+
+        // Out-of-range leaf ID fails deterministically.
+        assert_eq!(
+            state
+                .begin_leaf_call(33, |off| read_entry(off, &mut probes))
+                .unwrap_err(),
+            PagedError::InvalidLeafId
+        );
     }
 }

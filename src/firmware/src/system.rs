@@ -273,6 +273,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         let now = py32_hal::delay::millis();
         crate::radio_state().tone_seq.tick(&mut hw.radio, now);
         poll_usb_and_wire(hw, now, &mut dirty_render);
+        headless::service_deferred(hw, &mut dirty_render);
 
         // High-priority Radio Coordinator & Squelch Tail Elimination (STE) tick every 10ms
         #[cfg(feature = "radio")]
@@ -291,6 +292,7 @@ pub fn run_system_loop(hw: &mut SystemHardware, adc: Adc, _boot_start_ms: u32) -
         // 1. Poll hardware keyboard matrix every 5ms
         if let Some(dt) = timer_due(&mut last_key_tick, now, 5) {
             poll_keypad_tick(hw, dt.min(50) as u16);
+            headless::service_deferred(hw, &mut dirty_render);
         }
 
         let is_display_awake = !is_headless() && hw.backlight.is_active();

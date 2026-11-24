@@ -190,13 +190,17 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
     if "caps" in m:
         builder.caps = pack_krx.resolve_mask("KRX_CAP", m["caps"])
 
+    leaf_max = m.get("leaf_max", LEAF_MAX)
+    if profile == pack_krx.PROFILE_P0_PAGED:
+        builder.page_size = leaf_max
     if "root" in m:
-        with open(build_unit(src_dir, out_dir, m["root"], m.get("root_max")), "rb") as f:
+        root_limit = m.get("root_max", 8192 - leaf_max if profile == pack_krx.PROFILE_P0_PAGED else None)
+        with open(build_unit(src_dir, out_dir, m["root"], root_limit), "rb") as f:
             builder.set_payload(f.read())
     else:
         builder.set_payload(b"\x70\x47")  # Thumb `bx lr`: paged images enter through block 0
     for leaf_id, source in enumerate(m.get("leaves", []), start=1):
-        builder.add_leaf_file(leaf_id, build_unit(src_dir, out_dir, source, LEAF_MAX))
+        builder.add_leaf_file(leaf_id, build_unit(src_dir, out_dir, source, leaf_max))
     for block_id, source in enumerate(m.get("blocks", [])):
         builder.add_block_file(block_id, build_unit(src_dir, out_dir, source, builder.page_size))
     for action in m.get("action", []):

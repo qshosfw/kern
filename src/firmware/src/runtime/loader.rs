@@ -64,7 +64,7 @@ fn load_krx_into_slot(
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
         (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
-    let (_, summary) = super::read_krx_summary_in_scratch(storage, path)?;
+    let (hdr_buf, summary) = super::read_krx_summary_in_scratch(storage, path)?;
     let header_len = summary.preamble.header_len as usize;
 
     let Some(exec_class) = summary.preamble.execution_class() else {
@@ -93,13 +93,6 @@ fn load_krx_into_slot(
     if profile == kernel::runtime::KrxProfile::P1TransparentPaged {
         return Err(KrxLaunchError::UnsupportedProfile);
     }
-    if profile.is_structured_paged()
-        && let Some(map) = summary.aux.leaf_map
-        && map.len()
-            > super::native_runner::MAX_STRUCTURED_LEAVES * kernel::runtime::LeafEntry::SIZE
-    {
-        return Err(KrxLaunchError::UnsupportedProfile);
-    }
     let load_base = super::native_runner::arena_base_ptr() as u32;
     if profile == kernel::runtime::KrxProfile::N0NativeFixed
         && summary.preamble.link_base != load_base
@@ -120,11 +113,13 @@ fn load_krx_into_slot(
             return Err(KrxLaunchError::InsufficientRam);
         }
         let code_limit = if profile.is_structured_paged() {
-            avail - 1024
+            avail.saturating_sub(super::native_runner::p0_overlay_size(exec))
         } else {
             avail
         };
-        if !matches!(exec_class, KrxClass::Paged) && (exec.payload_size as usize) > avail {
+        if (profile.is_structured_paged() && (exec.payload_size as usize) > code_limit)
+            || (!matches!(exec_class, KrxClass::Paged) && (exec.payload_size as usize) > avail)
+        {
             return Err(KrxLaunchError::PayloadTooLarge);
         }
         if (exec.got_offset & 3) != 0 || (exec.got_offset as usize) >= avail {
@@ -185,8 +180,14 @@ fn load_krx_into_slot(
     } else {
         kernel::proc::Pid(0)
     };
-    super::native_runner::load_native_from_storage(path, payload_read, summary, pid)
-        .inspect_err(|_| crate::orchestrator::reap_pid_only(pid))?;
+    super::native_runner::load_native_from_storage(
+        path,
+        payload_read,
+        hdr_buf.as_ptr(),
+        summary,
+        pid,
+    )
+    .inspect_err(|_| crate::orchestrator::reap_pid_only(pid))?;
 
     Ok((required_caps, app_name))
 }

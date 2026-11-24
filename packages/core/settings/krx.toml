@@ -32,6 +32,13 @@ leaves = [
     "leaf_sys_ops.rs",
     "leaf_app_icon.rs",
     "leaf_bandplans.rs",
+    "leaf_sec.rs",
+    "leaf_lang_open.rs",
+    "leaf_lang_apply.rs",
+    "leaf_boot_assets.rs",
+    "leaf_apps_scan.rs",
+    "leaf_sec_pin.rs",
+    "leaf_sys_info.rs",
 ]
 
 icon_8 = """

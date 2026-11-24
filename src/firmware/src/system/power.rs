@@ -305,10 +305,13 @@ pub(super) fn handle_critical_battery_cutoff(hw: &mut SystemHardware, adc: &Adc)
 #[inline(never)]
 pub(super) fn handle_one_second_tick(hw: &mut SystemHardware, low_batt_warning_timer: &mut u8) {
     // Catch silent Cortex-M0+ stack exhaustion before it corrupts `.bss` / `RADIO_STATE`.
-    // If a KRX guest is loaded, contain it as an AppFault instead of hard-faulting the device.
+    // If a KRX guest is active (even if an overflow clobbered `NATIVE_SLOT.is_loaded`),
+    // contain it as an AppFault instead of panicking and tearing down USB/RigWire.
     if !kernel::sys::SystemDiagnostics::is_stack_guard_intact() {
         #[cfg(feature = "krx_native")]
-        if crate::runtime::native_runner::slot_ref().is_loaded {
+        if crate::runtime::native_runner::slot_ref().is_loaded
+            || hw.orchestrator.active_app_id() >= crate::AppRegistry::count()
+        {
             kernel::sys::SystemDiagnostics::paint_stack();
             crate::runtime::fault::raise_contract_fault(
                 kernel::runtime::fault::Exception::Stack,

@@ -1,100 +1,91 @@
-//! P0 Leaf 13: `/apps/` Scan, Launch, Delete Prompt & Delete Execution.
+//! P0 Leaf 13: O(1) App Launch, Delete Confirm & Delete Execution (chains to `LEAF_APPS_SCAN`).
+//! Zero stack buffers: uses `st.sheet_buf` as scratch.
 #![no_std]
 #![no_main]
 
 mod shared;
 
-use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry};
+use kern_sdk::{
+    KRX_LEAF_KIND_CALL_LEAF, KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext,
+    krx_entry,
+};
 use shared::{
-    CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH, CMD_APPS_REQ_DEL, MODAL_DELETE_APP,
-    SharedState, byte_at, copy_bytes, cstr_slice, is_krx_module, strip_apps_prefix, subslice,
+    CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH, CMD_APPS_REQ_DEL, LEAF_APPS_SCAN,
+    MODAL_DELETE_APP, SharedState, byte_at, copy_bytes, cstr_slice, strip_apps_prefix, subslice,
 };
 
 fn eq_b(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     let mut i = 0usize;
     while i < b.len() {
-        if byte_at(a, i) != byte_at(b, i) { return false; }
+        if byte_at(a, i) != byte_at(b, i) {
+            return false;
+        }
         i += 1;
     }
     true
 }
 
-/// Stream `/apps` once using `scratch` (`128 B`: `[0..32]`=KrxDirEntry, `[32..96]`=hdr, `[96..128]`=pbuf).
-#[inline(never)]
-fn scan_apps(
-    api: &KrxApiTable,
-    mod_only: bool,
-    target: u8,
-    scratch: &mut [u8; 128],
-    out_len: &mut usize,
-) -> u8 {
-    *out_len = 0;
-    if !mod_only && target == 255 {
-        return api.count_dir(b"/apps").min(255) as u8;
-    }
-    let base = scratch.as_mut_ptr();
-    let ent = unsafe { &mut *(base as *mut KrxDirEntry) };
-    let hbuf = unsafe { core::slice::from_raw_parts_mut(base.add(32), 64) };
-    let pbuf = unsafe { core::slice::from_raw_parts_mut(base.add(96), 32) };
-    let mut off = 0u32;
-    let mut matched = 0usize;
-    while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
-        off += 1;
-        let short = strip_apps_prefix(cstr_slice(&ent.name));
-        let pos = copy_bytes(pbuf, 0, b"/apps/");
-        let pos = copy_bytes(pbuf, pos, short);
-        if mod_only && !is_krx_module(api, subslice(pbuf, 0, pos), hbuf) {
-            continue;
-        }
-        if matched == target as usize {
-            *out_len = pos;
-            return (matched + 1).min(255) as u8;
-        }
-        matched += 1;
-    }
-    matched.min(255) as u8
-}
-
-fn refresh(api: &KrxApiTable, st: &mut SharedState, mod_only: bool) {
-    st.modules_only = u8::from(mod_only);
-    let mut dummy = 0usize;
-    st.app_count = scan_apps(api, mod_only, 255, &mut st.sheet_buf, &mut dummy);
-    if st.app_count == 0 { st.app_sel = 0; }
-    else if st.app_sel >= st.app_count { st.app_sel = st.app_count - 1; }
-}
-
 fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
-    if arg.is_null() { return 1; }
+    if arg.is_null() {
+        return 1;
+    }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
     st.result = 0;
 
-    if st.cmd == CMD_APPS_REFRESH {
-        refresh(api, st, st.arg0 != 0);
-    } else if st.app_count > 0 {
-        let mut plen = 0usize;
-        let _ = scan_apps(api, st.modules_only != 0, st.app_sel, &mut st.sheet_buf, &mut plen);
+    if st.app_count > 0 {
+        let base = st.sheet_buf.as_mut_ptr();
+        let pbuf = unsafe { core::slice::from_raw_parts_mut(base.add(32), 32) };
+        let plen = if st.modules_only == 0 && st.meta().path_len > 6 {
+            let m = st.meta();
+            copy_bytes(pbuf, 0, subslice(&m.path, 0, (m.path_len as usize).min(32)))
+        } else {
+            let dir_i = unsafe { *st.apps().dir_idx.get_unchecked((st.app_sel as usize).min(8)) } as u32;
+            let ent = unsafe { &mut *(base as *mut KrxDirEntry) };
+            if api.list_dir_page(b"/apps", dir_i, core::slice::from_mut(ent)) > 0 {
+                let short = strip_apps_prefix(cstr_slice(&ent.name));
+                let p = copy_bytes(pbuf, 0, b"/apps/");
+                copy_bytes(pbuf, p, short)
+            } else {
+                0
+            }
+        };
         if plen > 6 {
-            let pbuf = unsafe { core::slice::from_raw_parts(st.sheet_buf.as_ptr().add(96), 32) };
             let full = subslice(pbuf, 0, plen);
             let short = subslice(pbuf, 6, plen);
             match st.cmd {
                 CMD_APPS_LAUNCH => {
-                    if !api.launch_pkg(full) { api.show_toast(b"Launch Failed", 1200); }
+                    if !api.launch_pkg(full) {
+                        api.show_toast(b"Launch Failed", 1200);
+                    }
                 }
                 CMD_APPS_REQ_DEL => {
                     if eq_b(short, b"settings.krx") {
                         api.show_toast(b"Core Settings App", 1200);
                     } else {
-                        api.show_confirm(MODAL_DELETE_APP, b"Remove App?", short, b"Hold", b"Cancel", 1000);
+                        api.show_confirm(
+                            MODAL_DELETE_APP,
+                            b"Remove App?",
+                            short,
+                            b"Hold",
+                            b"Cancel",
+                            1000,
+                        );
                     }
                 }
                 CMD_APPS_DO_DEL => {
                     if api.remove_file(full) {
-                        refresh(api, st, st.modules_only != 0);
                         st.result = 1;
                         api.show_toast(b"Removed", 1200);
+                        st.cmd = CMD_APPS_REFRESH;
+                        st.arg0 = st.modules_only;
+                        ctx.continuation.kind = KRX_LEAF_KIND_CALL_LEAF;
+                        ctx.continuation.target_or_code = LEAF_APPS_SCAN;
+                        ctx.continuation.payload = ctx.arg;
+                        return 0;
                     } else {
                         api.show_toast(b"Remove Failed", 1200);
                     }

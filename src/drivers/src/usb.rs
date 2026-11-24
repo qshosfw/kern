@@ -346,6 +346,7 @@ impl UsbDriver {
         }
 
         if (int_usb & USB_INTR_RESUME) != 0 {
+            self.last_sof_ms = py32_hal::delay::millis();
             self.irq_flags |= IRQ_FLAG_ACTIVITY;
         }
         if (int_usb & USB_INTR_SUSPEND) != 0 {
@@ -360,6 +361,8 @@ impl UsbDriver {
         if self.configured {
             let in_ep = descriptors::CDC_EP_IN & 0x07;
             if (int_in & (1 << in_ep)) != 0 {
+                self.last_sof_ms = py32_hal::delay::millis();
+                self.irq_flags |= IRQ_FLAG_ACTIVITY;
                 usb_wr(0x0E, in_ep);
                 let csr = usb_rd(0x15);
                 if (csr & (INCSR1_UNDERRUN | INCSR1_SENTSTALL)) != 0 {
@@ -372,6 +375,8 @@ impl UsbDriver {
 
             let out_ep = descriptors::CDC_EP_OUT & 0x07;
             if (int_out & (1 << out_ep)) != 0 {
+                self.last_sof_ms = py32_hal::delay::millis();
+                self.irq_flags |= IRQ_FLAG_ACTIVITY;
                 self.drain_cdc_out_ep(out_ep);
             }
         }

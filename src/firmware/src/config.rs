@@ -485,7 +485,7 @@ impl MasterConfig {
                 self.battery.battery_type = 3;
                 repaired |= DIRTY_BATTERY;
             }
-        } else if self.battery.battery_type >= 3 {
+        } else if self.battery.battery_type >= 3 && self.battery.battery_type != 5 {
             self.battery.battery_type = 0;
             repaired |= DIRTY_BATTERY;
         }
@@ -880,5 +880,20 @@ mod tests {
             unsafe { core::mem::transmute(MasterConfig::DEFAULT) };
         assert_eq!(decoded, expected);
         assert!(DEFAULT_CFG_RLE_LEN < 240);
+    }
+
+    #[test]
+    fn test_sanitize_preserves_k5_external_battery_and_clamps_k1_types() {
+        let mut cfg = MasterConfig::DEFAULT;
+        cfg.system.tag = *b"TESTTAG ";
+        cfg.system.model = 1; // UV-K5 V3
+        cfg.keys.nav_layout = 1;
+        cfg.battery.battery_type = 5; // External
+        assert_eq!(cfg.sanitize(), 0);
+        assert_eq!(cfg.battery.battery_type, 5);
+
+        cfg.battery.battery_type = 3; // K1-only 1600mAh
+        assert_ne!(cfg.sanitize() & DIRTY_BATTERY, 0);
+        assert_eq!(cfg.battery.battery_type, 0);
     }
 }

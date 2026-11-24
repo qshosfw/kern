@@ -226,7 +226,16 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     // Handlers only read `hw.wire.session` and never touch `rx_buf` until `send_response`.
     let inp = unsafe { core::slice::from_raw_parts(raw.as_ptr(), plen) };
 
+    // Keep the 128 B response buffer in `.bss` on target (single-threaded Thread mode)
+    // to preserve precious Cortex-M0+ stack headroom during KernFS / control operations.
+    #[cfg(not(test))]
+    let out: &mut [u8; 128] = unsafe {
+        static mut WIRE_OUT_BUF: [u8; 128] = [0u8; 128];
+        &mut *core::ptr::addr_of_mut!(WIRE_OUT_BUF)
+    };
+    #[cfg(test)]
     let mut out_buf = [0u8; 128];
+    #[cfg(test)]
     let out = &mut out_buf;
     let mut c = WireCtx {
         inp,
@@ -502,7 +511,6 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             crate::system::enqueue_event(Event::Key { code, state });
             Ok(())
         }
-        #[cfg(not(target_arch = "arm"))]
         DOMAIN_INPUT if handle.facet == FACET_INPUT_TEXT => {
             let s = gfx::media::utf8_str(c.inp).ok_or(WireStatus::BadRange)?;
             for ch in s.chars().take(32) {
@@ -1061,19 +1069,20 @@ fn handle_data_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus
 #[inline(never)]
 fn handle_events_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus> {
     let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
-    let res: Result<(), WireStatus> = match opcode {
-        OP_EVENTS_SUBSCRIBE => (|| {
-            sub.active_mask = c.rd_u32()?;
-            sub.credits = c.rd_u16()?;
+    let res = match opcode {
+        OP_EVENTS_SUBSCRIBE => c.rd_u32().and_then(|mask| {
+            let credits = c.rd_u16()?;
+            sub.active_mask = mask;
+            sub.credits = credits;
             Ok(())
-        })(),
+        }),
         OP_EVENTS_UNSUBSCRIBE => {
             sub.active_mask = 0;
             sub.credits = 0;
             Ok(())
         }
-        OP_EVENTS_CREDIT => c.rd_u16().map(|g| {
-            sub.credits = sub.credits.saturating_add(g);
+        OP_EVENTS_CREDIT => c.rd_u16().map(|grant| {
+            sub.credits = sub.credits.saturating_add(grant);
         }),
         _ => return None,
     };

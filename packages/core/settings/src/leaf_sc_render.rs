@@ -1,16 +1,15 @@
-//! P0 Leaf 4: Load `/pref/keys.cfg` & Render Buttons -> Shortcuts List (Scope, F-Drawer, 19 Slots).
+//! P0 Leaf 4: Pure-RAM Shortcuts List Renderer (Zero SPI Flash I/O & Override `*` Marker).
 #![no_std]
 #![no_main]
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{
-    COLOR_CLEAR, KRX_LEAF_KIND_DONE, KRX_WIDGET_MENU_ITEM, KrxApiTable, KrxDirEntry,
-    KrxLeafContext, KrxWidget, Op, icon, krx_entry, nth_packed_slice,
+    COLOR_CLEAR, KRX_LEAF_KIND_DONE, KRX_WIDGET_MENU_ITEM, KrxApiTable, KrxLeafContext, KrxWidget,
+    Op, icon, krx_entry, nth_packed_slice,
 };
 use shared::{
-    SharedState, byte_at, copy_bytes, cstr_slice, hash_app_path, strip_apps_prefix, subslice,
+    SharedState, byte_at, copy_bytes, cstr_slice, get_slot_action_override, set_byte, subslice,
 };
 
 const SLOT_LABELS: &[u8] =
@@ -18,38 +17,6 @@ const SLOT_LABELS: &[u8] =
 const CTX_NAMES: &[u8] = b"Global\0VFO\0Home\0Settings\0Apps\0";
 const BUILTIN_NAMES: &[u8] = b"None\0Flashlight\0Settings\0Lock Keypad\0Home\0Sleep\0";
 const BUILTIN_ICONS: [u8; 6] = [0, icon::DISPLAY, icon::APP_SETTINGS, icon::SYSTEM, icon::DEVICE, icon::BATTERY];
-
-fn get_slot_action(cfg: &[u8; 64], slot: u8, scope: u8) -> u16 {
-    if scope != 0 {
-        let mut i = 0usize;
-        while i < 3 {
-            let o = 48 + i * 4;
-            if byte_at(cfg, o) == slot && byte_at(cfg, o + 1) == scope {
-                return (byte_at(cfg, o + 2) as u16) | ((byte_at(cfg, o + 3) as u16) << 8);
-            }
-            i += 1;
-        }
-    }
-    let o = 10 + (slot as usize) * 2;
-    (byte_at(cfg, o) as u16) | ((byte_at(cfg, o + 1) as u16) << 8)
-}
-
-#[inline(never)]
-fn find_app_name(api: &KrxApiTable, act: u16, out: &mut [u8; 32]) -> usize {
-    let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
-    let ent = unsafe { &mut *raw_e.as_mut_ptr() };
-    let mut off = 0u32;
-    while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
-        off += 1;
-        let short = strip_apps_prefix(cstr_slice(&ent.name));
-        let pl = copy_bytes(out, 0, b"/apps/");
-        let pl = copy_bytes(out, pl, short);
-        if hash_app_path(subslice(out, 0, pl)) == act {
-            return pl;
-        }
-    }
-    0
-}
 
 #[inline(always)]
 fn draw_row(api: &KrxApiTable, y: i16, l: &[u8], v: &[u8], fl: u8, ic: u8) {
@@ -68,32 +35,49 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
     let sy = st.scroll_y;
-    let mut raw_p = MaybeUninit::<[u8; 32]>::uninit();
-    let p = unsafe { &mut *raw_p.as_mut_ptr() };
+    let sc_sel = st.sc_sel;
+    let sc_scope = st.sc_scope;
+    let sc = unsafe { &*core::ptr::addr_of!(st.detail_sc.sc) };
+    let app_n = (sc.app_n as usize).min(6);
     let mut row = 0u8;
     while row < 21 {
         let y = 9 + (row as i16) * 13 - sy;
         if y > -13 && y < 64 {
-            let mut fl = u8::from(row == st.sc_sel);
+            let mut fl = u8::from(row == sc_sel);
             let mut ic = 0u8;
             let (l, v): (&[u8], &[u8]) = if row == 0 {
-                (b"Scope", nth_packed_slice(CTX_NAMES, st.sc_scope))
+                (b"Scope", nth_packed_slice(CTX_NAMES, sc_scope))
             } else if row == 1 {
-                fl |= 8 | if byte_at(&st.sc().keys_cfg, 8) != 0 { 16 } else { 0 };
+                fl |= 8 | if byte_at(&sc.keys_cfg, 8) != 0 { 16 } else { 0 };
                 (b"Show Drawer", b"")
             } else {
                 let slot = row - 2;
-                fl |= 128; // FLAG_SHORTCUT: key badge box + 8x8 icon + action label + right arrow
-                let act = get_slot_action(&st.sc().keys_cfg, slot, st.sc_scope);
-                let lbl: &[u8] = if act <= 5 {
+                fl |= 128; // FLAG_SHORTCUT
+                let (act, overridden) = get_slot_action_override(&sc.keys_cfg, slot, sc_scope);
+                let base_lbl: &[u8] = if act <= 5 {
                     ic = unsafe { *BUILTIN_ICONS.get_unchecked(act as usize) };
                     nth_packed_slice(BUILTIN_NAMES, act as u8)
                 } else {
                     ic = icon::APPS;
-                    let pl = find_app_name(api, act, p);
-                    if pl > 6 { subslice(p, 6, pl) } else { b"App" }
+                    let mut found: &[u8] = b"App";
+                    let mut i = 0usize;
+                    while i < app_n {
+                        if sc.app_hashes[i] == act {
+                            found = cstr_slice(&sc.app_names[i]);
+                            break;
+                        }
+                        i += 1;
+                    }
+                    found
                 };
-                (nth_packed_slice(SLOT_LABELS, slot), lbl)
+                let disp = if overridden {
+                    set_byte(&mut st.fmt_buf, 0, b'*');
+                    let end = copy_bytes(&mut st.fmt_buf, 1, base_lbl);
+                    subslice(&st.fmt_buf, 0, end)
+                } else {
+                    base_lbl
+                };
+                (nth_packed_slice(SLOT_LABELS, slot), disp)
             };
             draw_row(api, y, l, v, fl, ic);
         }

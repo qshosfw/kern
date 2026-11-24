@@ -28,7 +28,7 @@ pub use image::{
 };
 pub use paged::{
     BLOCK_FLAG_HINT_NEXT, BLOCK_FLAG_PINNED, BLOCK_FLAG_RT, CacheSlotMeta, FixedWindowCache,
-    PagedError, ReturnFrame, ShadowReturnStack, StructuredLeafManager,
+    PagedError, ReturnFrame, ShadowReturnStack, StreamingLeafState, StructuredLeafManager,
 };
 pub use reloc::{RelocError, apply_relocs};
 pub use swap::{KrxSwapHeader, SWAP_FLAG_COMPRESSED_RLE, packbits_compress, packbits_decompress};

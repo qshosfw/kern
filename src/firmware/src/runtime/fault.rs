@@ -29,9 +29,91 @@ pub static mut GUEST_GOT_BASE: u32 = 0;
 /// Last captured application exception (all-zero in `.bss` when idle).
 static mut ACTIVE_FAULT: AppFault = AppFault::NONE;
 
-/// Package path of the most recently faulted KRX app (used by the dialog `[Retry]` action).
+/// Package path & PID of the currently loaded / most recently faulted KRX app.
+/// Stored in `.bss` (far below `_stack_end`) so a stack overflow that clobbers `NATIVE_SLOT`
+/// cannot lose recovery identity or trigger an out-of-bounds panic in `finish_fault_cleanup`.
 static mut FAULT_PKG_PATH: [u8; 32] = [0u8; 32];
 static mut FAULT_PKG_LEN: u8 = 0;
+static mut LOADED_PKG_PATH: [u8; 32] = [0u8; 32];
+static mut LOADED_PKG_LEN: u8 = 0;
+static mut LOADED_PKG_PID: u8 = 0;
+
+/// Snapshot package path and PID when a KRX package loads into `NATIVE_SLOT`.
+#[inline(never)]
+pub fn note_loaded_pkg(pid: kernel::proc::Pid, path: &str) {
+    let bytes = path.as_bytes();
+    let n = bytes.len().min(32);
+    unsafe {
+        (&mut *core::ptr::addr_of_mut!(LOADED_PKG_PATH))[..n].copy_from_slice(&bytes[..n]);
+        LOADED_PKG_LEN = n as u8;
+        LOADED_PKG_PID = pid.0;
+    }
+}
+
+/// Clear loaded package metadata on clean guest unload.
+#[inline(always)]
+pub fn clear_loaded_pkg() {
+    unsafe {
+        LOADED_PKG_LEN = 0;
+        LOADED_PKG_PID = 0;
+    }
+}
+
+/// Returns true when executing in Thread mode inside a fault-guarded KRX guest trampoline.
+#[cfg(all(target_arch = "arm", not(test)))]
+#[inline(always)]
+pub fn can_contain_guest_in_thread() -> bool {
+    let ipsr: u32;
+    unsafe {
+        core::arch::asm!("mrs {}, IPSR", out(reg) ipsr, options(nomem, nostack));
+        (ipsr & 0x3F) == 0 && GUEST_IN_FLIGHT != 0 && FAULT_HOST_SP != 0
+    }
+}
+
+/// Immediately contain a synchronous guest fault or stack exhaustion in Thread mode
+/// by unwinding straight back to `krx_fault_landing` without disabling USBD or rebooting.
+#[cfg(all(target_arch = "arm", not(test)))]
+#[inline(never)]
+pub unsafe fn unwind_guest_fault(kind: Exception, op: u8) -> ! {
+    unsafe {
+        cortex_m::interrupt::disable();
+        GUEST_IN_FLIGHT = 0;
+    }
+    bsp::bk4829_fault_quench();
+    let pid = unsafe {
+        let p = LOADED_PKG_PID;
+        if p != 0 {
+            kernel::proc::Pid(p)
+        } else {
+            super::native_runner::slot_ref().pid
+        }
+    };
+    unsafe {
+        ACTIVE_FAULT = AppFault {
+            pid,
+            kind,
+            op,
+            _pad: 0,
+            pc_off: 0,
+            _pad2: 0,
+            addr: 0,
+        };
+    }
+    // Rewind MSP to `FAULT_HOST_SP` first so `paint_stack` paints safely below the host frame.
+    unsafe {
+        core::arch::asm!(
+            "ldr r0, ={host_sp}",
+            "ldr r0, [r0]",
+            "mov sp, r0",
+            "bl {paint}",
+            "bl {landing}",
+            host_sp = sym FAULT_HOST_SP,
+            paint = sym kernel::sys::SystemDiagnostics::paint_stack,
+            landing = sym krx_fault_landing,
+            options(noreturn)
+        );
+    }
+}
 
 /// Record a synchronous runtime contract violation (e.g. capability denied, bad pointer).
 #[inline(never)]
@@ -102,10 +184,17 @@ pub unsafe extern "C" fn try_contain_app_fault(frame: *mut u32, is_stack_ovf: u3
         (Exception::Fault, unsafe { *frame.add(6) })
     };
     let arena_base = crate::data::arena::arena_base_ptr() as u32;
-    let slot = super::native_runner::slot_ref();
+    let pid = unsafe {
+        let p = LOADED_PKG_PID;
+        if p != 0 {
+            kernel::proc::Pid(p)
+        } else {
+            super::native_runner::slot_ref().pid
+        }
+    };
     unsafe {
         ACTIVE_FAULT = AppFault {
-            pid: slot.pid,
+            pid,
             kind,
             op: 0,
             _pad: 0,
@@ -215,23 +304,37 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
     let slot = super::native_runner::slot_mut();
     let pid = if fault.pid.0 != 0 {
         fault.pid
+    } else if unsafe { LOADED_PKG_PID } != 0 {
+        kernel::proc::Pid(unsafe { LOADED_PKG_PID })
     } else {
         slot.pid
     };
 
-    // Snapshot package path & format dialog text into the transient staging buffer BEFORE
-    // clearing the slot (`slot.app_name` lives in `NATIVE_SLOT`, disjoint from `TRANSIENT_ARENA`,
-    // and `show_confirm` copies the text into `ACTIVE_MODAL` before returning).
-    let msg_buf =
-        unsafe { &mut *(crate::data::arena::staging_buf().as_mut_ptr() as *mut [u8; 96]) };
-    let msg = fault.format_message(super::native_runner::active_native_app_name(), msg_buf);
+    // Format dialog text into a small stack buffer (MSP is already unwound to the host frame)
+    // so an active RigWire file transfer in `staging_buf()` is never clobbered.
+    let mut msg_buf = [0u8; 96];
+    let msg = fault.format_message(super::native_runner::active_native_app_name(), &mut msg_buf);
 
-    let pkg = slot.pkg_path_str().as_bytes();
-    let pkg_len = pkg.len().min(32);
+    // Prefer the `.bss` load-time path snapshot (immune to stack overflow into `NATIVE_SLOT`),
+    // falling back to `slot.pkg_path_str()` only when not snapshotted (e.g. unit tests).
+    let (pkg_ptr, pkg_len) = unsafe {
+        let snap_len = (LOADED_PKG_LEN as usize).min(32);
+        if snap_len > 0 {
+            (core::ptr::addr_of!(LOADED_PKG_PATH) as *const u8, snap_len)
+        } else {
+            let pkg = slot.pkg_path_str().as_bytes();
+            (pkg.as_ptr(), pkg.len().min(32))
+        }
+    };
     unsafe {
-        (&mut *core::ptr::addr_of_mut!(FAULT_PKG_PATH))[..pkg_len].copy_from_slice(&pkg[..pkg_len]);
+        core::ptr::copy_nonoverlapping(
+            pkg_ptr,
+            core::ptr::addr_of_mut!(FAULT_PKG_PATH) as *mut u8,
+            pkg_len,
+        );
         FAULT_PKG_LEN = pkg_len as u8;
     }
+    clear_loaded_pkg();
 
     // 1. Hardware safety & slot teardown (shared with normal exit) + PCB/lease reap.
     if let Some(pcb) = crate::orchestrator::proc_table_mut().find_mut(pid) {
@@ -239,15 +342,46 @@ pub fn finish_fault_cleanup(ctx: &mut SysContext<'_, '_>) {
     }
     let _ = crate::orchestrator::reap_pid_resources(pid.0);
     super::native_runner::teardown_slot_and_hw(ctx, pid, false);
+    #[cfg(not(test))]
+    crate::system_canvas().clear();
 
-    // 2. Present firmware Exception Dialog ([Retry] / [Close]) without rebooting.
+    // 2. Present firmware Exception Dialog ([Retry] / [Close]) with clear category title.
     ctx.play_dialog_sound(crate::services::melody::DialogSoundType::Error);
     ctx.show_confirm(
         crate::orchestrator::TAG_FAULT_CONFIRM,
-        "App Stopped",
+        fault.kind.dialog_title(),
         msg,
         "Retry",
         "Close",
     );
     crate::orchestrator::sink_modal_keys();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corrupted_native_slot_pkg_path_never_panics_and_preserves_loaded_snapshot() {
+        super::super::native_runner::init_native_slot();
+        let slot = super::super::native_runner::slot_mut();
+        slot.set_pkg_path("/apps/settings.krx");
+        note_loaded_pkg(kernel::proc::Pid(7), "/apps/settings.krx");
+
+        // Simulate a Cortex-M0+ stack overflow clobbering `NATIVE_SLOT` fields with stack garbage.
+        slot.pkg_path_len = 0xFF;
+        slot.pkg_path[0] = 0xFE;
+        assert_eq!(slot.pkg_path_str(), "");
+
+        // `.bss` load-time snapshot stays intact far below `_stack_end`.
+        unsafe {
+            let pid = *core::ptr::addr_of!(LOADED_PKG_PID);
+            let len = *core::ptr::addr_of!(LOADED_PKG_LEN) as usize;
+            let path = &*core::ptr::addr_of!(LOADED_PKG_PATH);
+            assert_eq!(pid, 7);
+            assert_eq!(&path[..len], b"/apps/settings.krx");
+        }
+        clear_loaded_pkg();
+        super::super::native_runner::init_native_slot();
+    }
 }

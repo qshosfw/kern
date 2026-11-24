@@ -252,7 +252,7 @@ const _: () = assert!(core::mem::size_of::<KrxPreamble>() == 24);
 
 impl KrxPreamble {
     pub const SIZE: usize = 24;
-    pub const MAX_HEADER_SIZE: usize = 512;
+    pub const MAX_HEADER_SIZE: usize = 768;
 
     /// Parse preamble directly into `out` from a little-endian byte slice.
     pub fn parse_into(buf: &[u8], out: &mut Self) -> Result<(), ()> {

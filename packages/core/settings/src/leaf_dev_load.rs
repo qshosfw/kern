@@ -1,58 +1,20 @@
-//! P0 Leaf 8: Load Device Identity (`/pref/system.cfg`) & Active Asset Names into `SharedState`.
+//! P0 Leaf 9: Load Device Identity (`/pref/system.cfg`), stage active `lang_path` into
+//! `bp_tail[0..32]`, and tail-chain to `LEAF_BOOT_ASSETS`. Zero stack buffers.
 #![no_std]
 #![no_main]
 
 mod shared;
 
-use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry};
+use kern_sdk::{KRX_LEAF_KIND_CALL_LEAF, KrxApiTable, KrxLeafContext, KrxSysInfo, krx_entry};
 use shared::{
-    SharedState, byte_at, copy_bytes, cstr_slice, fill_bytes, set_byte, subslice, subslice_mut,
+    LEAF_BOOT_ASSETS, SharedState, byte_at, copy_bytes, copy_trimmed, cstr_slice, fill_bytes,
+    format_u32_into, set_byte, subslice,
 };
 
-fn short_name(path: &[u8], active: bool, out: &mut [u8; 12]) {
-    fill_bytes(out, 0);
-    if !active || path.is_empty() {
-        copy_bytes(out, 0, b"Off");
-        return;
-    }
-    let mut s = path.len();
-    while s > 0 && byte_at(path, s - 1) != b'/' {
-        s -= 1;
-    }
-    let tail = subslice(path, s, path.len());
-    let mut dot = tail.len();
-    while dot > 0 && byte_at(tail, dot - 1) != b'.' {
-        dot -= 1;
-    }
-    let base = if dot > 0 { subslice(tail, 0, dot - 1) } else { tail };
-    let mut d = 0usize;
-    while d < base.len() && byte_at(base, d) >= b'0' && byte_at(base, d) <= b'9' {
-        d += 1;
-    }
-    let clean = if d > 0 && d < base.len() && (byte_at(base, d) == b'_' || byte_at(base, d) == b'-') {
-        subslice(base, d + 1, base.len())
-    } else {
-        base
-    };
-    let mut o = 0usize;
-    let mut cap = true;
-    let mut i = 0usize;
-    while i < clean.len() && o < 11 {
-        let b = byte_at(clean, i);
-        let ch = if b == b'_' || b == b'-' {
-            cap = true;
-            b' '
-        } else if cap && b >= b'a' && b <= b'z' {
-            cap = false;
-            b - 32
-        } else {
-            cap = false;
-            b
-        };
-        set_byte(out, o, ch);
-        o += 1;
-        i += 1;
-    }
+#[inline(always)]
+fn hex_nib(v: u8) -> u8 {
+    let n = v & 0x0F;
+    if n < 10 { b'0' + n } else { b'A' + (n - 10) }
 }
 
 fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
@@ -61,41 +23,67 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    // Reuse `st.sheet_buf[..80]` in SharedState SRAM instead of allocating 80 B on the M0+ stack.
     let buf = unsafe { core::slice::from_raw_parts_mut(st.sheet_buf.as_mut_ptr(), 80) };
+    let lang_stage = unsafe { core::slice::from_raw_parts_mut(st.detail_sc.bp_tail.as_mut_ptr(), 32) };
+    fill_bytes(lang_stage, 0);
+    fill_bytes(&mut st.str_fields[3], 0);
+    copy_bytes(&mut st.str_fields[3], 0, b"English");
 
     if api.read_file(b"/pref/system.cfg", buf) >= 80 {
         st.dev_model_idx = byte_at(buf, 1);
-        st.dev_radio_id = u32::from_le_bytes([
+        let radio_id = u32::from_le_bytes([
             byte_at(buf, 4),
             byte_at(buf, 5),
             byte_at(buf, 6),
             byte_at(buf, 7),
         ]);
-        copy_bytes(&mut st.dev_owner, 0, subslice(buf, 8, 20));
-        copy_bytes(&mut st.dev_tag, 0, subslice(buf, 20, 28));
-        fill_bytes(&mut st.dev_model, 0);
+        fill_bytes(&mut st.str_fields[7], 0);
+        let _ = format_u32_into(api, radio_id, &mut st.str_fields[7]);
+        copy_trimmed(&mut st.str_fields[5], subslice(buf, 8, 20));
+
+        let tag_raw = subslice(buf, 20, 28);
+        let mut all_def = true;
+        let mut ti = 0usize;
+        while ti < 8 {
+            let b = byte_at(tag_raw, ti);
+            if b != 0 && b != b' ' && b != b'0' {
+                all_def = false;
+                break;
+            }
+            ti += 1;
+        }
+        if all_def {
+            fill_bytes(&mut st.str_fields[6], 0);
+        } else {
+            copy_trimmed(&mut st.str_fields[6], tag_raw);
+        }
         let msrc: &[u8] = match st.dev_model_idx {
             0 => b"UV-K1",
             1 => b"UV-K5 V3",
             _ => subslice(buf, 28, 40),
         };
-        copy_bytes(&mut st.dev_model, 0, msrc);
+        copy_trimmed(&mut st.str_fields[4], msrc);
+
         if byte_at(buf, 40) != 0 {
-            short_name(cstr_slice(subslice(buf, 44, 76)), true, &mut st.lang_name);
-        } else {
-            fill_bytes(&mut st.lang_name, 0);
-            copy_bytes(&mut st.lang_name, 0, b"English");
+            let lp = cstr_slice(subslice(buf, 44, 76));
+            copy_bytes(lang_stage, 0, lp);
+        }
+
+        if all_def {
+            let info = unsafe { &mut *(st.sheet_buf.as_mut_ptr() as *mut KrxSysInfo) };
+            if api.sys_info(info) {
+                let b4 = info.mac[4];
+                let b5 = info.mac[5];
+                set_byte(&mut st.str_fields[6], 0, hex_nib(b4 >> 4));
+                set_byte(&mut st.str_fields[6], 1, hex_nib(b4));
+                set_byte(&mut st.str_fields[6], 2, hex_nib(b5 >> 4));
+                set_byte(&mut st.str_fields[6], 3, hex_nib(b5));
+            }
         }
     }
-    if api.read_file(b"/pref/display.cfg", subslice_mut(buf, 0, 48)) >= 48 {
-        short_name(cstr_slice(subslice(buf, 12, 44)), byte_at(buf, 7) != 0, &mut st.splash_name);
-    }
-    if api.read_file(b"/pref/audio.cfg", buf) >= 80 {
-        short_name(cstr_slice(subslice(buf, 9, 41)), byte_at(buf, 4) != 0, &mut st.roger_name);
-        short_name(cstr_slice(subslice(buf, 41, 73)), byte_at(buf, 7) != 0, &mut st.jingle_name);
-    }
-    ctx.continuation.kind = KRX_LEAF_KIND_DONE;
+    ctx.continuation.kind = KRX_LEAF_KIND_CALL_LEAF;
+    ctx.continuation.target_or_code = LEAF_BOOT_ASSETS;
+    ctx.continuation.payload = ctx.arg;
     0
 }
 

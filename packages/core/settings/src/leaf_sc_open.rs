@@ -1,16 +1,14 @@
 //! P0 Leaf 5: Open Native OptionSheet for Shortcut Scope or Target Slot.
+//! Zero stack buffers & zero SPI Flash I/O: uses cached `SharedState::sc()` app list.
 #![no_std]
 #![no_main]
 
 mod shared;
 
-use core::mem::MaybeUninit;
-use kern_sdk::{
-    KRX_LEAF_KIND_DONE, KrxApiTable, KrxDirEntry, KrxLeafContext, krx_entry, nth_packed_slice,
-};
+use kern_sdk::{KRX_LEAF_KIND_DONE, KrxApiTable, KrxLeafContext, krx_entry, nth_packed_slice};
 use shared::{
-    MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, SharedState, copy_bytes, cstr_slice, set_byte,
-    strip_apps_prefix, subslice,
+    MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, SharedState, copy_bytes, cstr_slice,
+    get_slot_action, set_byte, subslice,
 };
 
 const SLOT_LABELS: &[u8] =
@@ -27,28 +25,45 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     if st.sc_sel == 0 {
         let len = copy_bytes(&mut st.sheet_buf, 0, CTX_NAMES);
         let tlen = copy_bytes(&mut st.sheet_title, 0, b"Scope");
-        api.show_sheet(MODAL_SHORTCUT_SCOPE, subslice(&st.sheet_title, 0, tlen), subslice(&st.sheet_buf, 0, len), st.sc_scope, true);
+        api.show_sheet(
+            MODAL_SHORTCUT_SCOPE,
+            subslice(&st.sheet_title, 0, tlen),
+            subslice(&st.sheet_buf, 0, len),
+            st.sc_scope,
+            true,
+        );
     } else if st.sc_sel >= 2 {
         let slot = st.sc_sel - 2;
         st.sc_slot = slot;
+        let sc = unsafe { &*(core::ptr::addr_of!(st.detail_sc.sc)) };
+        let cur_act = get_slot_action(&sc.keys_cfg, slot, st.sc_scope);
+        let mut sel = if cur_act < 6 { cur_act as u8 } else { 0u8 };
         let mut pos = copy_bytes(&mut st.sheet_buf, 0, BUILTIN_NAMES);
+        let app_n = (sc.app_n as usize).min(6);
+        let mut i = 0usize;
         let mut tcnt = 6usize;
-        let mut raw_e = MaybeUninit::<KrxDirEntry>::uninit();
-        let ent = unsafe { &mut *raw_e.as_mut_ptr() };
-        let mut off = 0u32;
-        while api.list_dir_page(b"/apps", off, core::slice::from_mut(ent)) > 0 {
-            off += 1;
-            let short = strip_apps_prefix(cstr_slice(&ent.name));
-            if pos + short.len() + 1 < st.sheet_buf.len() {
-                pos = copy_bytes(&mut st.sheet_buf, pos, short);
+        while i < app_n {
+            let name = cstr_slice(&sc.app_names[i]);
+            if !name.is_empty() && pos + name.len() + 1 < st.sheet_buf.len() {
+                if sc.app_hashes[i] == cur_act {
+                    sel = tcnt as u8;
+                }
+                pos = copy_bytes(&mut st.sheet_buf, pos, name);
                 set_byte(&mut st.sheet_buf, pos, 0);
                 pos += 1;
                 tcnt += 1;
             }
+            i += 1;
         }
-        st.sc_target_count = tcnt.min(255) as u8;
+        st.sc_target_count = tcnt as u8;
         let tlen = copy_bytes(&mut st.sheet_title, 0, nth_packed_slice(SLOT_LABELS, slot));
-        api.show_sheet(MODAL_SHORTCUT_PICK, subslice(&st.sheet_title, 0, tlen), subslice(&st.sheet_buf, 0, pos), 0, true);
+        api.show_sheet(
+            MODAL_SHORTCUT_PICK,
+            subslice(&st.sheet_title, 0, tlen),
+            subslice(&st.sheet_buf, 0, pos),
+            sel,
+            true,
+        );
     }
     ctx.continuation.kind = KRX_LEAF_KIND_DONE;
     0

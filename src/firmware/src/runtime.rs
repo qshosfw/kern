@@ -40,6 +40,11 @@ pub fn read_krx_summary_in_scratch(
     const HDR_RESERVE: usize = kernel::runtime::KrxPreamble::MAX_HEADER_SIZE;
     const SUMMARY_RESERVE: usize =
         (core::mem::size_of::<kernel::runtime::KrxSummary<'static>>() + 7) & !7;
+    const _: () = assert!(
+        HDR_RESERVE + SUMMARY_RESERVE
+            <= crate::data::arena::TRANSIENT_ARENA_BYTES
+                - crate::data::arena::TRANSIENT_SCRATCH_OFFSET
+    );
     let tail = crate::data::arena::scratch_tail_bytes_mut();
     let tail_len = tail.len();
     let (pre_hdr, hdr_buf) = tail.split_at_mut(tail_len - HDR_RESERVE);

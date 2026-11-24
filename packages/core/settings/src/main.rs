@@ -1,7 +1,8 @@
 //! Kern OS Settings — External P0-Paged Native `.krx` Application (Resident Root).
 //!
-//! Coordinates 7 full categories, submenus, kinetic scrolling, long-press repeat,
-//! native OS `OptionSheet` pickers, and dispatches heavy views/editors to 11 `1 KB` P0 leaves.
+//! Coordinates 9 declarative categories (with dynamic Security visibility), submenus,
+//! stateful windowed kinetic scrolling, K1/K5-aware range editing & long-press repeat,
+//! native OS `OptionSheet` pickers, and zero-stack-buffer `1 KB` P0 leaf overlays.
 #![no_std]
 #![no_main]
 
@@ -9,36 +10,72 @@ mod schema;
 mod shared;
 mod ui;
 
+use core::mem::offset_of;
 use kern_sdk::{
     KRX_EV_ENCODER, KRX_EV_KEY, KRX_EV_MODAL, KRX_EV_TICK, KRX_OP_EVENT, KRX_OP_EXIT,
     KRX_OP_RENDER, KRX_OP_START, KrxApiTable, KrxEvent, MODAL_RESULT_CONFIRMED,
-    MODAL_RESULT_SHEET_SELECTED, MODAL_RESULT_TEXT_DONE, format_u16_into, key, krx_entry, prop,
+    MODAL_RESULT_SHEET_SELECTED, MODAL_RESULT_TEXT_DONE, Op, SEC_FLAG_AVAILABLE, SEC_FLAG_IS_SET,
+    format_u16_into, key, krx_entry, prop,
 };
 
 use schema::{
-    ACT_ASSET_JINGLE, ACT_ASSET_LANG, ACT_ASSET_ROGER, ACT_ASSET_SPLASH, ACT_BANDPLANS,
-    ACT_DEV_MODEL, ACT_DEV_OWNER, ACT_DEV_RADIO_ID, ACT_DEV_TAG, ACT_INSTALLED_APPS,
-    ACT_REBOOT_RADIO, ACT_RESET_SETTINGS, ACT_SHORTCUTS, ACT_SUB_BATT_INFO,
-    ACT_SUB_BATT_TWEAKS, ACT_SUB_BTN_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO, ACT_SYS_MODULES,
-    CAT_COUNT, CH_BATT_K1, Kind, SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START,
-    SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START, SUB_SPLASH_COUNT, SUB_SPLASH_START,
-    batt_idx_to_type, batt_type_to_idx, cat_name, category, choice_options, format_value,
-    item_at_slice, item_label,
+    ACT_ASSET_SPLASH, ACT_DEV_RADIO_ID, ACT_RESET_SETTINGS, ACT_SEC_DIGITS, ACT_SEC_EXPOSE,
+    ACT_SEC_MAX_TRIES, ACT_SEC_PASSCODE, ACT_SUB_BATT_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO,
+    ACT_SYS_STORAGE, CAT_COUNT, CAT_LANGUAGE, CAT_SECURITY, CH_BATT_K1, Kind, PROP_BATT_TWEAK,
+    SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START, SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START,
+    SUB_SPLASH_COUNT, SUB_SPLASH_START, batt_idx_to_type, cat_name, category, choice_options,
+    format_value, item_at_slice, item_label, prop_bounds, resolve_choice,
 };
 use shared::{
     CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH, CMD_APPS_REQ_DEL, CMD_BP_LOAD,
-    CMD_BP_RENDER, CMD_BP_TOGGLE_TX, CMD_DEV_MODEL_PICK, CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY,
-    CMD_DEV_TEXT_PROMPT, CMD_INFO_BATT, CMD_INFO_SYS, CMD_SC_APPLY_PICK, CMD_SC_LOAD,
-    CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER, CMD_SYS_DO_RESET, CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET,
-    LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER, LEAF_ASSET_APPLY,
-    LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
-    LEAF_INFO_RENDER, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SYS_OPS,
-    MODAL_ASSET_PICK, MODAL_CHOICE, MODAL_DELETE_APP, MODAL_MODEL_PICK, MODAL_REBOOT_RADIO,
-    MODAL_RESET_SETTINGS, MODAL_SHORTCUT_PICK, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL,
-    MODAL_TEXT_OWNER, MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice, subslice,
-    trimmed_slice,
+    CMD_BP_RENDER, CMD_BP_TOGGLE_TX, CMD_DEV_BATT_TWEAK_SAVE, CMD_DEV_MODEL_PICK,
+    CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY, CMD_DEV_TEXT_PROMPT, CMD_LANG_OPEN,
+    CMD_SC_APPLY_PICK, CMD_SC_LOAD, CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER, CMD_SEC_ACTION,
+    CMD_SEC_OPEN, CMD_SEC_VERIFY, CMD_SYS_DO_RESET, CMD_SYS_LAUNCH_MOD, CMD_SYS_REQ_REBOOT,
+    CMD_SYS_REQ_RESET, CMD_SYS_SEC_TOGGLE, CMD_SYS_SEC_TRIES_OPEN, CMD_SYS_SEC_TRIES_PICK,
+    LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER, LEAF_APPS_SCAN,
+    LEAF_ASSET_APPLY, LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD,
+    LEAF_DEV_PROMPT, LEAF_INFO_RENDER, LEAF_LANG_APPLY, LEAF_LANG_OPEN, LEAF_SC_APPLY,
+    LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SEC, LEAF_SEC_PIN, LEAF_SYS_INFO, LEAF_SYS_OPS,
+    MODAL_ASSET_PICK, MODAL_CHOICE, MODAL_DELETE_APP, MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS, MODAL_SEC_ACTION,
+    MODAL_SEC_CONFIRM_PIN, MODAL_SEC_VERIFY, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL,
+    MODAL_TEXT_OWNER, MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice,
 };
 use ui::KineticScroll;
+
+/// Pack `(leaf: 1..=31, cmd: 0..=7)` into a single Thumb-1 `movs #imm8` byte!
+#[inline(always)]
+const fn lc(leaf: u8, cmd: u8) -> u8 {
+    (leaf & 31) | ((cmd & 7) << 5)
+}
+
+#[inline(never)]
+fn pget(api: &KrxApiTable, id: u8) -> u8 {
+    api.prop_get(id)
+}
+
+#[inline(never)]
+fn pset(api: &KrxApiTable, id: u8, val: u8) -> bool {
+    api.pref_set(id, val)
+}
+
+/// Map navigation key to `-1` (up / left `<`), `+1` (down / right `>`), or `0`.
+/// Matches resident `gfx::gui::modules::menu::{get_list_nav_dir, get_edit_change_dir}`:
+/// - K1 (`nav == 0`): `UP`/`KEY2`/`KEY4` -> `-1`, `DOWN`/`KEY8`/`KEY6` -> `+1`.
+/// - K5 (`nav != 0`): in edit mode `UP`/`KEY2`/`KEY6` -> `+1`, `DOWN`/`KEY8`/`KEY4` -> `-1`.
+#[inline(never)]
+fn key_dir(k: u8, nav: u8, editing: bool) -> i8 {
+    let flip = editing && nav != 0;
+    if k == key::UP || k == key::KEY2 {
+        if flip { 1 } else { -1 }
+    } else if k == key::DOWN || k == key::KEY8 {
+        if flip { -1 } else { 1 }
+    } else if editing || nav == 0 {
+        if k == key::KEY4 { -1 } else if k == key::KEY6 { 1 } else { 0 }
+    } else {
+        0
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -54,20 +91,29 @@ enum View {
     Bandplans = 8,
 }
 
+#[repr(C, align(4))]
 struct SettingsState {
-    view: View,
+    // 0..4: aligned 4-byte zero block in `on_start`
     cat_sel: u8,
+    cat_top: u8,
     item_sel: u8,
+    item_top: u8,
+    // 4..8: aligned 4-byte zero block in `on_start`
+    editing: bool,
+    dirty: bool,
+    batt_tweak_dirty: bool,
+    /// `0` = no key held; otherwise `key_code + 1` (keeps `STATE` 100% zero-init `.bss`).
+    held_key_p1: u8,
+    // 8..16: other hot u8 scalars
+    view: View,
     sub_start: u8,
     sub_count: u8,
     sub_sel: u8,
     sub_kind: u8,
-    editing: bool,
-    dirty: bool,
-    held_key: u8,
     repeat_steps: u8,
-    repeat_ms: u16,
     tick_ctr: u8,
+    slide_x: i8,
+    repeat_ms: u16,
     scroller: KineticScroll,
     sh: SharedState,
 }
@@ -77,190 +123,277 @@ impl SettingsState {
         Self {
             view: View::Home,
             cat_sel: 0,
+            cat_top: 0,
             item_sel: 0,
+            item_top: 0,
             sub_start: 0,
             sub_count: 0,
             sub_sel: 0,
             sub_kind: 0,
             editing: false,
             dirty: false,
-            held_key: 0xFF,
+            batt_tweak_dirty: false,
+            held_key_p1: 0,
             repeat_steps: 0,
             repeat_ms: 0,
             tick_ctr: 0,
+            slide_x: 0,
             scroller: KineticScroll::new(),
             sh: SharedState::new(),
         }
     }
 
     #[inline(never)]
-    fn hold_delay_ms(api: &KrxApiTable) -> u16 {
-        let shift = (api.prop_get(prop::HOLD_DELAY) & 3) * 8;
-        (((0x4B32_2319u32 >> shift) & 0xFF) as u16) * 10
-    }
-
-    #[inline(never)]
-    fn next_repeat_ms(&self, api: &KrxApiTable) -> u16 {
-        let shift = (api.prop_get(prop::REPEAT_RATE) & 3) * 8;
-        let rate = ((0x7850_321Eu32 >> shift) & 0xFF) as u16;
-        if api.prop_get(prop::FAST_SCROLL) != 0 && self.repeat_steps > 6 {
-            rate.min(45)
-        } else {
-            rate
+    fn repeat_delay(&self, api: &KrxApiTable, initial: bool) -> u16 {
+        const DELAYS_CS: [u8; 8] = [30, 50, 70, 100, 5, 8, 12, 16];
+        let pid = if initial { prop::HOLD_DELAY } else { prop::REPEAT_RATE };
+        let idx = ((pget(api, pid) & 3) + if initial { 0 } else { 4 }) as usize;
+        let mut ms = (unsafe { *DELAYS_CS.get_unchecked(idx) } as u16) * 10;
+        if !initial && self.repeat_steps > 6 && pget(api, prop::FAST_SCROLL) != 0 {
+            ms = ms.min(45);
         }
-    }
-
-    #[inline(never)]
-    fn call_leaf(&mut self, api: &KrxApiTable, leaf_id: u8, cmd: u8, arg0: u8) {
-        self.sh.cmd = cmd;
-        self.sh.arg0 = arg0;
-        self.sh.scroll_y = self.scroller.cur_y;
-        let ptr = &mut self.sh as *mut SharedState as u32;
-        let _ = api.call_leaf(leaf_id, ptr);
+        ms
     }
 
     #[inline(always)]
-    fn current_slice(&self) -> (u8, u8, u8) {
-        if self.view == View::Submenu {
-            (self.sub_start, self.sub_count, self.sub_sel)
+    fn visible_cat_count(&self) -> u8 {
+        if (self.sh.sec_status & SEC_FLAG_AVAILABLE) != 0 {
+            CAT_COUNT as u8
         } else {
-            let c = category(self.cat_sel);
-            (c.start, c.count, self.item_sel)
+            (CAT_COUNT - 1) as u8
         }
     }
 
-    fn sync_status_bar(&self, api: &KrxApiTable) {
-        const VT: &[u8] = b"Settings\0\0Tweaks\0Installed Apps\0\0Shortcuts\0Battery Info\0System Info\0Bandplans\0Modules\0Boot Splash\0";
-        let title: &[u8] = match self.view {
-            View::Category => cat_name(self.cat_sel),
-            View::AppDetail => subslice(&self.sh.meta().name, 0, self.sh.meta().name_len as usize),
-            View::Submenu if self.sub_kind == ACT_SUB_SPLASH => kern_sdk::nth_packed_slice(VT, 10),
-            View::InstalledApps if self.sh.modules_only != 0 => kern_sdk::nth_packed_slice(VT, 9),
-            v => kern_sdk::nth_packed_slice(VT, v as u8),
-        };
-        ui::set_title(api, title);
+    #[inline(never)]
+    fn cat_item_count(&self, cat: u8) -> u8 {
+        if cat == CAT_SECURITY {
+            if (self.sh.sec_status & SEC_FLAG_IS_SET) != 0 { 5 } else { 1 }
+        } else {
+            category(cat).count
+        }
     }
 
+    #[inline(never)]
+    fn view_sel_ptr(&mut self, v: View) -> *mut u8 {
+        const OFF: [u16; 9] = [
+            offset_of!(SettingsState, cat_sel) as u16,
+            offset_of!(SettingsState, item_sel) as u16,
+            offset_of!(SettingsState, sub_sel) as u16,
+            offset_of!(SettingsState, sh.app_sel) as u16,
+            offset_of!(SettingsState, sh.detail_btn) as u16,
+            offset_of!(SettingsState, sh.sc_sel) as u16,
+            offset_of!(SettingsState, sh.info_sel) as u16,
+            offset_of!(SettingsState, sh.info_sel) as u16,
+            offset_of!(SettingsState, sh.bp_sel) as u16,
+        ];
+        unsafe { (self as *mut Self as *mut u8).add(*OFF.get_unchecked(v as usize) as usize) }
+    }
+
+    #[inline(never)]
+    fn view_count(&self, v: View) -> u8 {
+        match v {
+            View::Home => self.visible_cat_count(),
+            View::Category => self.cat_item_count(self.cat_sel),
+            View::Submenu => self.sub_count,
+            View::InstalledApps => self.sh.app_count,
+            View::Shortcuts => 21,
+            View::BattInfo | View::SysInfo => 5,
+            View::Bandplans => self.sh.bp_count,
+            View::AppDetail => 1,
+        }
+    }
+
+    #[inline(never)]
+    fn call_leaf(&mut self, api: &KrxApiTable, leaf_cmd: u8, arg0: u8) {
+        self.sh.cmd = leaf_cmd >> 5;
+        self.sh.arg0 = arg0;
+        self.sh.scroll_y = self.scroller.cur_y;
+        let _ = api.call_leaf(leaf_cmd & 31, &mut self.sh as *mut SharedState as u32);
+    }
+
+    #[inline(always)]
+    fn current_slice(&self) -> (u8, u8) {
+        if self.view == View::Submenu {
+            (self.sub_start, self.sub_sel)
+        } else {
+            (category(self.cat_sel).start, self.item_sel)
+        }
+    }
+
+    #[inline(never)]
+    fn sync_status_bar(&mut self, api: &KrxApiTable) {
+        const VIEW_LBL: [u8; 9] = [0, 0, 19, 31, 0, 14, 23, 37, 29];
+        let (ptr, len): (*const u8, usize) = match self.view {
+            View::Home => (b"Settings".as_ptr(), 8),
+            View::Category => {
+                let s = cat_name(self.cat_sel);
+                (s.as_ptr(), s.len())
+            }
+            View::AppDetail => {
+                let m = self.sh.meta();
+                (m.name.as_ptr(), (m.name_len as usize).min(20))
+            }
+            v => {
+                let lbl = if v == View::Submenu && self.sub_kind == ACT_SUB_SPLASH {
+                    30
+                } else if v == View::InstalledApps && self.sh.modules_only != 0 {
+                    40
+                } else {
+                    unsafe { *VIEW_LBL.get_unchecked(v as usize) }
+                };
+                let s = item_label(lbl);
+                (s.as_ptr(), s.len())
+            }
+        };
+        ui::set_title(api, &mut self.sh.sheet_buf, unsafe {
+            core::slice::from_raw_parts(ptr, len)
+        });
+    }
+
+    #[inline(never)]
     fn flush_if_dirty(&mut self, api: &KrxApiTable) {
+        if self.batt_tweak_dirty {
+            self.call_leaf(api, lc(LEAF_DEV_PROMPT, CMD_DEV_BATT_TWEAK_SAVE), 0);
+            self.batt_tweak_dirty = false;
+        }
         if self.dirty {
             let _ = api.flush();
             self.dirty = false;
         }
     }
 
+    #[inline(never)]
     fn on_start(&mut self, api: &KrxApiTable) {
-        self.view = View::Home;
         self.cat_sel = 0;
+        self.cat_top = 0;
         self.item_sel = 0;
-        self.sub_sel = 0;
-        self.sh.info_sel = 0;
+        self.item_top = 0;
         self.editing = false;
         self.dirty = false;
-        self.held_key = 0xFF;
-        self.repeat_steps = 0;
-        self.repeat_ms = 0;
-        self.tick_ctr = 0;
-        self.scroller.jump_to_row(0);
-        self.call_leaf(api, LEAF_DEV_LOAD, 0, 0);
-        self.sync_status_bar(api);
+        self.batt_tweak_dirty = false;
+        self.held_key_p1 = 0;
+        self.sh.sec_status = api.sec_status();
+        self.call_leaf(api, lc(LEAF_DEV_LOAD, 0), 0);
+        self.view = View::Home;
+        self.enter_view(api, View::Home, 0);
     }
 
     #[inline(never)]
-    fn step_cursor(&mut self, api: &KrxApiTable, up: bool, is_repeat: bool) {
+    fn step_dir(&mut self, api: &KrxApiTable, dir: i8, is_repeat: bool) {
+        if dir == 0 {
+            return;
+        }
         if self.view == View::AppDetail {
-            let max_s: i16 = 34;
-            if up {
-                if self.sh.detail_scroll > 0 {
-                    self.sh.detail_scroll = (self.sh.detail_scroll - 10).max(0);
-                } else {
-                    self.sh.detail_btn ^= 1;
-                }
-            } else if self.sh.detail_scroll < max_s {
-                self.sh.detail_scroll = (self.sh.detail_scroll + 10).min(max_s);
+            let s = self.sh.detail_scroll;
+            if dir < 0 && s > 0 {
+                self.sh.detail_scroll = (s - 10).max(0);
+            } else if dir > 0 && s < 34 {
+                self.sh.detail_scroll = (s + 10).min(34);
             } else {
                 self.sh.detail_btn ^= 1;
             }
             return;
         }
 
+        let mut moved = false;
         if (self.view == View::Category || self.view == View::Submenu) && self.editing {
-            let (st, _, row) = self.current_slice();
+            let (st, row) = self.current_slice();
             let item = item_at_slice(st, row);
-            if let Some((min, max, step)) = prop::lookup_bounds(item.prop_id) {
-                let cur = api.prop_get(item.prop_id);
-                let next = if up {
-                    if cur >= max { if is_repeat { max } else { min } } else { cur.saturating_add(step).min(max) }
-                } else if cur <= min {
-                    if is_repeat { min } else { max }
+            if item.prop_id == PROP_BATT_TWEAK {
+                let next = (self.sh.batt_tweak_mv + if dir > 0 { 10 } else { -10 }).clamp(-500, 500);
+                if next != self.sh.batt_tweak_mv {
+                    self.sh.batt_tweak_mv = next;
+                    self.batt_tweak_dirty = true;
+                    moved = true;
+                }
+            } else if let Some((min, max, step)) = prop_bounds(item.prop_id) {
+                let cur = pget(api, item.prop_id);
+                let next = if dir > 0 {
+                    cur.saturating_add(step).min(max)
                 } else {
                     cur.saturating_sub(step).max(min)
                 };
-                if next != cur && api.pref_set(item.prop_id, next) {
+                if next != cur && pset(api, item.prop_id, next) {
                     self.dirty = true;
-                    if is_repeat && api.prop_get(prop::KEY_BEEP) != 0 {
-                        api.play_beep(5);
+                    moved = true;
+                }
+            }
+        } else {
+            let count = self.view_count(self.view);
+            if count > 0 {
+                let sel = unsafe { &mut *self.view_sel_ptr(self.view) };
+                let prev = *sel;
+                let wrapped = if dir < 0 {
+                    if *sel > 0 { *sel -= 1; false } else { *sel = count - 1; true }
+                } else if *sel + 1 < count {
+                    *sel += 1; false
+                } else {
+                    *sel = 0; true
+                };
+                if *sel != prev {
+                    moved = true;
+                    let new_sel = *sel;
+                    self.scroller.adjust(new_sel, count, !wrapped && pget(api, prop::UI_ANIMATIONS) != 0);
+                    if wrapped && is_repeat {
+                        self.repeat_ms = self.repeat_delay(api, true);
                     }
                 }
             }
-            return;
         }
-
-        let (sel, count): (&mut u8, u8) = match self.view {
-            View::Home => (&mut self.cat_sel, CAT_COUNT as u8),
-            View::Category => (&mut self.item_sel, category(self.cat_sel).count),
-            View::Submenu => (&mut self.sub_sel, self.sub_count),
-            View::InstalledApps => (&mut self.sh.app_sel, self.sh.app_count),
-            View::Shortcuts => (&mut self.sh.sc_sel, 21),
-            View::BattInfo | View::SysInfo => (&mut self.sh.info_sel, 5),
-            View::Bandplans => (&mut self.sh.bp_sel, self.sh.bp_count),
-            View::AppDetail => return,
-        };
-        if count == 0 {
-            return;
-        }
-        let prev = *sel;
-        let wrapped = if up {
-            if *sel > 0 { *sel -= 1; false } else { *sel = count - 1; true }
-        } else if *sel + 1 < count {
-            *sel += 1; false
-        } else {
-            *sel = 0; true
-        };
-        if *sel != prev {
-            let anim = !wrapped && api.prop_get(prop::UI_ANIMATIONS) != 0;
-            self.scroller.set_target_row(ui::scroll_top(*sel), anim);
-            if wrapped && is_repeat {
-                self.repeat_ms = Self::hold_delay_ms(api);
-            }
-            if is_repeat && api.prop_get(prop::KEY_BEEP) != 0 {
-                api.play_beep(5);
-            }
+        if moved && is_repeat && pget(api, prop::KEY_BEEP) != 0 {
+            api.play_beep(5);
         }
     }
 
     #[inline(never)]
-    fn enter_view(&mut self, api: &KrxApiTable, v: View, top: u8) {
+    fn enter_view(&mut self, api: &KrxApiTable, v: View, sel_row: u8) {
+        let prev = self.view as u8;
+        let next = v as u8;
+        if prev == 0 && next != 0 {
+            self.cat_top = self.scroller.top_row;
+        } else if prev == 1 && next > 1 {
+            self.item_top = self.scroller.top_row;
+        }
+        let saved_top = if next == 0 {
+            self.cat_top
+        } else if next == 1 && prev > 1 {
+            self.item_top
+        } else {
+            0
+        };
         self.view = v;
-        self.scroller.jump_to_row(top);
+        let total = self.view_count(v);
+        self.scroller.jump(sel_row, total, saved_top);
+        self.slide_x = if prev != next && pget(api, prop::UI_ANIMATIONS) != 0 {
+            if next > prev { 28 } else { -28 }
+        } else {
+            0
+        };
         self.sync_status_bar(api);
     }
 
     #[inline(never)]
     fn on_confirm(&mut self, api: &KrxApiTable) {
-        self.held_key = 0xFF;
+        self.held_key_p1 = 0;
         match self.view {
             View::Home => {
+                if self.cat_sel == CAT_LANGUAGE {
+                    self.call_leaf(api, lc(LEAF_LANG_OPEN, CMD_LANG_OPEN), 0);
+                    return;
+                }
+                if self.cat_sel == CAT_SECURITY {
+                    self.sh.sec_status = api.sec_status();
+                }
                 self.item_sel = 0;
                 self.editing = false;
                 self.enter_view(api, View::Category, 0);
             }
             View::Category | View::Submenu => {
-                let (st, _, row) = self.current_slice();
+                let (st, row) = self.current_slice();
                 let item = item_at_slice(st, row);
                 match item.kind {
                     Kind::Toggle => {
-                        let cur = api.prop_get(item.prop_id);
-                        if api.pref_set(item.prop_id, u8::from(cur == 0)) {
+                        if pset(api, item.prop_id, u8::from(pget(api, item.prop_id) == 0)) {
                             self.dirty = true;
                         }
                     }
@@ -271,174 +404,190 @@ impl SettingsState {
                         }
                     }
                     Kind::Choice => {
-                        let raw = api.prop_get(item.prop_id);
-                        let sel = if item.meta == CH_BATT_K1 { batt_type_to_idx(raw) } else { raw };
-                        api.show_sheet(
-                            MODAL_CHOICE,
-                            item_label(item.label_idx),
-                            choice_options(item.meta),
-                            sel,
-                            true,
-                        );
+                        let raw = pget(api, item.prop_id);
+                        let (tbl, sel) = resolve_choice(item.meta, raw, pget(api, prop::NAV_LAYOUT) == 0);
+                        api.show_sheet(MODAL_CHOICE, item_label(item.label_idx), choice_options(tbl), sel, true);
                     }
-                    Kind::Action => match item.meta {
-                        ACT_INSTALLED_APPS | ACT_SYS_MODULES => {
-                            let mod_only = u8::from(item.meta == ACT_SYS_MODULES);
-                            self.call_leaf(api, LEAF_APPS_OPS, CMD_APPS_REFRESH, mod_only);
-                            self.enter_view(api, View::InstalledApps, ui::scroll_top(self.sh.app_sel));
-                        }
-                        ACT_SYS_INFO | ACT_SUB_BATT_INFO => {
-                            self.sh.info_sel = 0;
-                            self.enter_view(
-                                api,
-                                if item.meta == ACT_SYS_INFO { View::SysInfo } else { View::BattInfo },
-                                0,
-                            );
-                        }
-                        ACT_RESET_SETTINGS | ACT_REBOOT_RADIO => {
-                            let cmd = if item.meta == ACT_RESET_SETTINGS { CMD_SYS_REQ_RESET } else { CMD_SYS_REQ_REBOOT };
-                            self.call_leaf(api, LEAF_SYS_OPS, cmd, 0);
-                        }
-                        ACT_SUB_SPLASH | ACT_SUB_BTN_TWEAKS | ACT_SUB_BATT_TWEAKS => {
+                    Kind::Action => {
+                        let m = item.meta;
+                        if m >= ACT_RESET_SETTINGS {
+                            const fn p(leaf: u8, cmd: u8, arg: u8) -> u16 {
+                                (lc(leaf, cmd) as u16) | ((arg as u16) << 8)
+                            }
+                            const LEAF_ACTS: [u16; 18] = [
+                                p(LEAF_SYS_OPS, CMD_SYS_REQ_RESET, 0),
+                                p(LEAF_SYS_OPS, CMD_SYS_REQ_REBOOT, 0),
+                                p(LEAF_ASSET_OPEN, 0, 0),
+                                p(LEAF_ASSET_OPEN, 0, 1),
+                                p(LEAF_ASSET_OPEN, 0, 2),
+                                p(LEAF_LANG_OPEN, CMD_LANG_OPEN, 0),
+                                p(LEAF_DEV_PROMPT, CMD_DEV_MODEL_SHEET, 0),
+                                p(LEAF_DEV_PROMPT, CMD_DEV_TEXT_PROMPT, MODAL_TEXT_OWNER),
+                                p(LEAF_DEV_PROMPT, CMD_DEV_TEXT_PROMPT, MODAL_TEXT_TAG),
+                                p(LEAF_DEV_PROMPT, CMD_DEV_TEXT_PROMPT, MODAL_TEXT_RADIO_ID),
+                                p(LEAF_SEC, CMD_SEC_OPEN, 0),
+                                p(LEAF_SYS_OPS, CMD_SYS_SEC_TOGGLE, 1),
+                                p(LEAF_SYS_OPS, CMD_SYS_SEC_TOGGLE, 2),
+                                p(LEAF_SYS_OPS, CMD_SYS_SEC_TOGGLE, 3),
+                                p(LEAF_SYS_OPS, CMD_SYS_SEC_TRIES_OPEN, 0),
+                                p(LEAF_SYS_OPS, CMD_SYS_LAUNCH_MOD, 1),
+                                p(LEAF_SYS_OPS, CMD_SYS_LAUNCH_MOD, 2),
+                                p(LEAF_SYS_OPS, CMD_SYS_LAUNCH_MOD, 3),
+                            ];
+                            let v = unsafe {
+                                *LEAF_ACTS.get_unchecked(((m - ACT_RESET_SETTINGS) as usize).min(17))
+                            };
+                            self.call_leaf(api, v as u8, (v >> 8) as u8);
+                        } else if m >= ACT_SUB_SPLASH && m <= ACT_SUB_BATT_TWEAKS {
                             const SUBS: [(u8, u8); 3] = [
                                 (SUB_SPLASH_START, SUB_SPLASH_COUNT),
                                 (SUB_BTN_TWEAKS_START, SUB_BTN_TWEAKS_COUNT),
                                 (SUB_BATT_TWEAKS_START, SUB_BATT_TWEAKS_COUNT),
                             ];
-                            let idx = if item.meta == ACT_SUB_SPLASH {
-                                0
-                            } else if item.meta == ACT_SUB_BTN_TWEAKS {
-                                1
-                            } else {
-                                2
-                            };
-                            let (s, c) = unsafe { *SUBS.get_unchecked(idx) };
-                            self.sub_kind = item.meta;
+                            let (s, c) = unsafe { *SUBS.get_unchecked((m - ACT_SUB_SPLASH) as usize) };
+                            self.sub_kind = m;
                             self.sub_start = s;
                             self.sub_count = c;
                             self.sub_sel = 0;
                             self.enter_view(api, View::Submenu, 0);
+                        } else if m >= 1 && m <= ACT_SYS_INFO {
+                            const DRILL: [(u8, u8, View); 6] = [
+                                (lc(LEAF_APPS_SCAN, CMD_APPS_REFRESH), 0, View::InstalledApps),
+                                (lc(LEAF_APPS_SCAN, CMD_APPS_REFRESH), 1, View::InstalledApps),
+                                (lc(LEAF_SC_APPLY, CMD_SC_LOAD), 0, View::Shortcuts),
+                                (lc(LEAF_BANDPLANS, CMD_BP_LOAD), 0, View::Bandplans),
+                                (0, 0, View::BattInfo),
+                                (lc(LEAF_SYS_OPS, CMD_SYS_LAUNCH_MOD), 0, View::SysInfo),
+                            ];
+                            let (lcmd, arg, v) = unsafe { *DRILL.get_unchecked((m - 1) as usize) };
+                            if lcmd != 0 {
+                                self.call_leaf(api, lcmd, arg);
+                                if m == ACT_SYS_INFO && self.sh.result != 0 {
+                                    return;
+                                }
+                            }
+                            let sel_ptr = self.view_sel_ptr(v);
+                            if m == 3 || m >= 5 {
+                                unsafe { *sel_ptr = 0; }
+                            }
+                            let sel = unsafe { *sel_ptr };
+                            self.enter_view(api, v, sel);
                         }
-                        ACT_SHORTCUTS => {
-                            self.sh.sc_sel = 0;
-                            self.call_leaf(api, LEAF_SC_APPLY, CMD_SC_LOAD, 0);
-                            self.enter_view(api, View::Shortcuts, 0);
-                        }
-                        ACT_BANDPLANS => {
-                            self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_LOAD, 0);
-                            self.enter_view(api, View::Bandplans, ui::scroll_top(self.sh.bp_sel));
-                        }
-                        ACT_ASSET_SPLASH..=ACT_ASSET_LANG => {
-                            self.call_leaf(api, LEAF_ASSET_OPEN, 0, item.meta - ACT_ASSET_SPLASH);
-                        }
-                        ACT_DEV_MODEL => self.call_leaf(api, LEAF_DEV_PROMPT, CMD_DEV_MODEL_SHEET, 0),
-                        ACT_DEV_OWNER..=ACT_DEV_RADIO_ID => {
-                            self.call_leaf(api, LEAF_DEV_PROMPT, CMD_DEV_TEXT_PROMPT, MODAL_TEXT_OWNER + (item.meta - ACT_DEV_OWNER));
-                        }
-                        _ => {}
-                    },
+                    }
                 }
             }
-            View::InstalledApps => {
-                if self.sh.app_count == 0 {
-                    return;
-                }
+            View::InstalledApps if self.sh.app_count > 0 => {
                 if self.sh.modules_only != 0 {
-                    self.call_leaf(api, LEAF_APPS_OPS, CMD_APPS_LAUNCH, 0);
+                    self.call_leaf(api, lc(LEAF_APPS_OPS, CMD_APPS_LAUNCH), 0);
                 } else {
                     self.sh.detail_scroll = 0;
                     self.sh.detail_btn = 0;
-                    self.call_leaf(api, LEAF_APP_LOAD, 0, 0);
+                    self.call_leaf(api, lc(LEAF_APP_LOAD, 0), 0);
                     self.enter_view(api, View::AppDetail, 0);
                 }
             }
             View::AppDetail => {
                 let cmd = if self.sh.detail_btn == 0 { CMD_APPS_LAUNCH } else { CMD_APPS_REQ_DEL };
-                self.call_leaf(api, LEAF_APPS_OPS, cmd, 0);
+                self.call_leaf(api, lc(LEAF_APPS_OPS, cmd), 0);
             }
             View::Shortcuts => {
-                if self.sh.sc_sel == 1 {
-                    self.call_leaf(api, LEAF_SC_APPLY, CMD_SC_TOGGLE_DRAWER, 0);
-                } else {
-                    self.call_leaf(api, LEAF_SC_OPEN, 0, 0);
-                }
+                let target = if self.sh.sc_sel == 1 { lc(LEAF_SC_APPLY, CMD_SC_TOGGLE_DRAWER) } else { lc(LEAF_SC_OPEN, 0) };
+                self.call_leaf(api, target, 0);
             }
-            View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_TOGGLE_TX, 0),
-            View::BattInfo | View::SysInfo => {}
+            View::Bandplans => self.call_leaf(api, lc(LEAF_BANDPLANS, CMD_BP_TOGGLE_TX), 0),
+            _ => {}
         }
     }
 
     #[inline(never)]
     fn on_back(&mut self, api: &KrxApiTable) -> bool {
-        self.held_key = 0xFF;
+        self.held_key_p1 = 0;
+        self.flush_if_dirty(api);
         if self.editing {
             self.editing = false;
-            self.flush_if_dirty(api);
             return true;
         }
         match self.view {
-            View::Home => {
-                self.flush_if_dirty(api);
-                false
-            }
+            View::Home => false,
             View::Category => {
-                self.flush_if_dirty(api);
-                self.enter_view(api, View::Home, ui::scroll_top(self.cat_sel));
+                self.enter_view(api, View::Home, self.cat_sel);
                 true
             }
             View::AppDetail => {
-                self.enter_view(api, View::InstalledApps, ui::scroll_top(self.sh.app_sel));
+                self.call_leaf(api, lc(LEAF_APPS_SCAN, CMD_APPS_REFRESH), self.sh.modules_only);
+                self.enter_view(api, View::InstalledApps, self.sh.app_sel);
                 true
             }
             _ => {
-                self.flush_if_dirty(api);
-                self.enter_view(api, View::Category, ui::scroll_top(self.item_sel));
+                self.enter_view(api, View::Category, self.item_sel);
                 true
             }
         }
     }
 
+    #[inline(never)]
     fn on_modal(&mut self, api: &KrxApiTable, ev: &KrxEvent) {
-        self.held_key = 0xFF;
+        self.held_key_p1 = 0;
+        let k = ev.key;
+        let idx = ev.payload as u8;
         match ev.flags {
             MODAL_RESULT_SHEET_SELECTED => {
-                let idx = ev.payload as u8;
-                match ev.key {
-                    MODAL_CHOICE => {
-                        let (st, _, row) = self.current_slice();
-                        let item = item_at_slice(st, row);
-                        let val = if item.meta == CH_BATT_K1 { batt_idx_to_type(idx) } else { idx };
-                        if api.pref_set(item.prop_id, val) {
-                            self.dirty = true;
-                            self.flush_if_dirty(api);
+                if k == MODAL_CHOICE {
+                    let (st, row) = self.current_slice();
+                    let item = item_at_slice(st, row);
+                    let val = if item.meta == CH_BATT_K1 {
+                        batt_idx_to_type(idx, pget(api, prop::NAV_LAYOUT) == 0)
+                    } else {
+                        idx
+                    };
+                    if pset(api, item.prop_id, val) {
+                        self.dirty = true;
+                        self.flush_if_dirty(api);
+                        if item.prop_id == prop::KEY_BEEP && val != 0 {
+                            api.play_beep(val);
                         }
                     }
-                    MODAL_ASSET_PICK => self.call_leaf(api, LEAF_ASSET_APPLY, 0, idx),
-                    MODAL_MODEL_PICK => self.call_leaf(api, LEAF_DEV_APPLY, CMD_DEV_MODEL_PICK, idx),
-                    MODAL_SHORTCUT_SCOPE => self.sh.sc_scope = idx.min(4),
-                    MODAL_SHORTCUT_PICK => self.call_leaf(api, LEAF_SC_APPLY, CMD_SC_APPLY_PICK, idx),
-                    _ => {}
+                } else if k == MODAL_SHORTCUT_SCOPE {
+                    self.sh.sc_scope = idx.min(4);
+                } else if k >= MODAL_ASSET_PICK && k <= MODAL_SEC_ACTION {
+                    const SHEET_LEAVES: [u8; 6] = [
+                        lc(LEAF_ASSET_APPLY, 0),
+                        lc(LEAF_LANG_APPLY, 0),
+                        lc(LEAF_DEV_APPLY, CMD_DEV_MODEL_PICK),
+                        lc(LEAF_SC_APPLY, CMD_SC_APPLY_PICK),
+                        lc(LEAF_SYS_OPS, CMD_SYS_SEC_TRIES_PICK),
+                        lc(LEAF_SEC, CMD_SEC_ACTION),
+                    ];
+                    let target = unsafe { *SHEET_LEAVES.get_unchecked((k - MODAL_ASSET_PICK) as usize) };
+                    self.call_leaf(api, target, idx);
+                    if k == MODAL_SEC_ACTION && self.sh.result != 0 {
+                        self.item_sel = 0;
+                        self.scroller.jump(0, self.cat_item_count(self.cat_sel), 0);
+                    }
                 }
             }
             MODAL_RESULT_TEXT_DONE => {
-                if matches!(ev.key, MODAL_TEXT_OWNER | MODAL_TEXT_TAG | MODAL_TEXT_RADIO_ID | MODAL_TEXT_MODEL) {
-                    self.call_leaf(api, LEAF_DEV_APPLY, CMD_DEV_TEXT_APPLY, ev.key);
+                if k >= MODAL_TEXT_OWNER && k <= MODAL_TEXT_MODEL {
+                    self.call_leaf(api, lc(LEAF_DEV_APPLY, CMD_DEV_TEXT_APPLY), k);
+                } else if k >= MODAL_SEC_VERIFY && k <= MODAL_SEC_CONFIRM_PIN {
+                    self.call_leaf(api, lc(LEAF_SEC_PIN, CMD_SEC_VERIFY + (k - MODAL_SEC_VERIFY)), 0);
                 }
             }
-            MODAL_RESULT_CONFIRMED => match ev.key {
-                MODAL_DELETE_APP => {
-                    self.call_leaf(api, LEAF_APPS_OPS, CMD_APPS_DO_DEL, 0);
+            MODAL_RESULT_CONFIRMED => {
+                if k == MODAL_DELETE_APP {
+                    self.call_leaf(api, lc(LEAF_APPS_OPS, CMD_APPS_DO_DEL), 0);
                     if self.sh.result != 0 && self.view == View::AppDetail {
-                        self.enter_view(api, View::InstalledApps, ui::scroll_top(self.sh.app_sel));
+                        self.enter_view(api, View::InstalledApps, self.sh.app_sel);
                     }
-                }
-                MODAL_RESET_SETTINGS => self.call_leaf(api, LEAF_SYS_OPS, CMD_SYS_DO_RESET, 0),
-                MODAL_REBOOT_RADIO => {
-                    let _ = api.flush();
+                } else if k == MODAL_RESET_SETTINGS {
+                    self.call_leaf(api, lc(LEAF_SYS_OPS, CMD_SYS_DO_RESET), 0);
+                    self.call_leaf(api, lc(LEAF_DEV_LOAD, 0), 0);
+                    self.sh.sec_status = api.sec_status();
+                } else if k == MODAL_REBOOT_RADIO {
+                    self.flush_if_dirty(api);
                     api.reboot(0);
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
     }
@@ -453,120 +602,146 @@ impl SettingsState {
             KRX_EV_ENCODER => {
                 let delta = ev.payload as i32;
                 if delta != 0 {
-                    self.step_cursor(api, delta < 0, false);
-                    return 1;
+                    self.step_dir(api, if delta > 0 { 1 } else { -1 }, true);
+                    1
+                } else {
+                    0
                 }
-                0
             }
             KRX_EV_TICK => {
                 self.tick_ctr = self.tick_ctr.wrapping_add(1);
                 let mut dirty_ui = self.scroller.tick();
-                if self.held_key != 0xFF {
-                    let dt = if ev.payload > 0 {
-                        (ev.payload as u16).min(200)
-                    } else {
-                        50
-                    };
+                if self.slide_x != 0 {
+                    self.slide_x += if self.slide_x > 0 { -4 } else { 4 };
+                    dirty_ui = true;
+                }
+                if self.held_key_p1 != 0 {
+                    let dt = if ev.payload > 0 { (ev.payload as u16).min(200) } else { 50 };
                     if self.repeat_ms > dt {
                         self.repeat_ms -= dt;
                     } else {
-                        let up = self.held_key == key::UP || self.held_key == key::KEY2;
+                        let dir = key_dir(self.held_key_p1 - 1, pget(api, prop::NAV_LAYOUT), self.editing);
                         self.repeat_steps = self.repeat_steps.saturating_add(1);
-                        self.repeat_ms = self.next_repeat_ms(api);
-                        self.step_cursor(api, up, true);
+                        self.repeat_ms = self.repeat_delay(api, false);
+                        self.step_dir(api, dir, true);
                         dirty_ui = true;
                     }
                 }
-                let anim = api.prop_get(prop::UI_ANIMATIONS) != 0
-                    && matches!(self.view, View::Home | View::Category | View::Submenu | View::InstalledApps);
-                u32::from(dirty_ui || anim || self.view == View::BattInfo || self.view == View::SysInfo)
+                let v = self.view as u8;
+                let live_telem = (v & !1) == 6 && (self.tick_ctr & 15) == 0;
+                let anim = v <= 3 && (self.tick_ctr & 3) == 0 && pget(api, prop::UI_ANIMATIONS) != 0;
+                u32::from(dirty_ui || anim || live_telem)
             }
             KRX_EV_KEY => {
-                if ev.payload == key::STATE_RELEASED {
-                    if ev.key == self.held_key {
-                        self.held_key = 0xFF;
-                    }
-                    return 0;
-                }
+                let k = ev.key;
                 if ev.payload != key::STATE_PRESSED {
-                    return 0;
+                    if ev.payload == key::STATE_RELEASED && k.wrapping_add(1) == self.held_key_p1 {
+                        self.held_key_p1 = 0;
+                    }
+                    return u32::from(k == key::MENU || k == key::KEY5);
                 }
-                match ev.key {
-                    key::UP | key::KEY2 | key::DOWN | key::KEY8 => {
-                        self.held_key = ev.key;
-                        self.repeat_steps = 0;
-                        self.repeat_ms = Self::hold_delay_ms(api);
-                        self.step_cursor(api, ev.key == key::UP || ev.key == key::KEY2, false);
-                        1
-                    }
-                    key::MENU | key::KEY5 => {
-                        self.on_confirm(api);
-                        1
-                    }
-                    key::EXIT => u32::from(self.on_back(api)),
-                    _ => 0,
+                self.slide_x = 0;
+                let dir = key_dir(k, pget(api, prop::NAV_LAYOUT), self.editing);
+                if dir != 0 {
+                    self.held_key_p1 = k.wrapping_add(1);
+                    self.repeat_steps = 0;
+                    self.repeat_ms = self.repeat_delay(api, true);
+                    self.step_dir(api, dir, false);
+                    return 1;
+                }
+                if k == key::MENU || k == key::KEY5 {
+                    self.on_confirm(api);
+                    1
+                } else if k == key::EXIT {
+                    u32::from(self.on_back(api))
+                } else {
+                    0
                 }
             }
             _ => 0,
         }
     }
 
-    fn render_item_list(&self, api: &KrxApiTable, start: u8, count: u8, sel: u8, sy: i16, anim_tick: u16) {
-        let mut raw = core::mem::MaybeUninit::<[u8; 16]>::uninit();
-        let val_buf = unsafe { &mut *raw.as_mut_ptr() };
+    /// Unified list renderer for `View::Home` (`start == 0xFF`), `View::Category`, and `View::Submenu`.
+    #[inline(never)]
+    fn render_list(&mut self, api: &KrxApiTable, start: u8, count: u8, sel: u8, sy: i16, anim_tick: u16) {
+        let is_k1 = pget(api, prop::NAV_LAYOUT) == 0;
+        let sec = self.sh.sec_status;
         let mut idx = 0u8;
         while idx < count {
             let y = ui::ROW_START_Y + (idx as i16) * ui::ROW_STEP_Y - sy;
-            let item = item_at_slice(start, idx);
-            let is_sel = idx == sel;
-            let val = if item.kind == Kind::Action { 0 } else { api.prop_get(item.prop_id) };
-            let vstr: &[u8] = if item.kind == Kind::Action {
-                match item.meta {
-                    ACT_DEV_MODEL => trimmed_slice(&self.sh.dev_model),
-                    ACT_DEV_OWNER => trimmed_slice(&self.sh.dev_owner),
-                    ACT_DEV_TAG => trimmed_slice(&self.sh.dev_tag),
-                    ACT_DEV_RADIO_ID => format_u16_into(self.sh.dev_radio_id as u16, 0, b"", val_buf),
-                    ACT_ASSET_SPLASH => cstr_slice(&self.sh.splash_name),
-                    ACT_ASSET_ROGER => cstr_slice(&self.sh.roger_name),
-                    ACT_ASSET_JINGLE => cstr_slice(&self.sh.jingle_name),
-                    ACT_ASSET_LANG => cstr_slice(&self.sh.lang_name),
-                    _ => b"",
-                }
-            } else {
-                format_value(item, val, val_buf)
-            };
-            let mut flags = u8::from(is_sel);
-            if self.editing && is_sel {
-                flags |= ui::FLAG_OUTLINE;
-                if item.kind == Kind::Num {
-                    if let Some((min, max, _)) = prop::lookup_bounds(item.prop_id) {
-                        if val > min {
-                            flags |= ui::FLAG_ARROW_LEFT;
+            if y > -ui::ROW_STEP_Y && y < 64 {
+                let is_sel = idx == sel;
+                let mut flags = u8::from(is_sel);
+                let mut row_icon = 0u8;
+                let (lbl, vstr): (&[u8], &[u8]) = if start == 0xFF {
+                    row_icon = category(idx).icon_id;
+                    let v: &[u8] = if idx == CAT_LANGUAGE {
+                        cstr_slice(&self.sh.str_fields[3])
+                    } else {
+                        if is_sel { flags |= ui::FLAG_CHEVRON; }
+                        b""
+                    };
+                    (cat_name(idx), v)
+                } else {
+                    let item = item_at_slice(start, idx);
+                    let fbuf = unsafe { &mut *(self.sh.fmt_buf.as_mut_ptr() as *mut [u8; 16]) };
+                    let vstr: &[u8] = match item.kind {
+                        Kind::Action => {
+                            let m = item.meta;
+                            if m >= ACT_SEC_EXPOSE && m <= ACT_SEC_DIGITS {
+                                let on = (sec & (1u32 << (m - ACT_SEC_PASSCODE))) != 0;
+                                flags |= ui::FLAG_TOGGLE | if on { ui::FLAG_TOGGLE_ON } else { 0 };
+                            } else if is_sel && (m <= ACT_SUB_BATT_TWEAKS || m >= ACT_SYS_STORAGE) {
+                                flags |= ui::FLAG_CHEVRON;
+                            }
+                            if m >= ACT_ASSET_SPLASH && m <= ACT_DEV_RADIO_ID {
+                                cstr_slice(unsafe { self.sh.str_fields.get_unchecked((m - ACT_ASSET_SPLASH) as usize) })
+                            } else if m == ACT_SEC_MAX_TRIES {
+                                format_u16_into(((sec >> 16) & 0xFF) as u16, 0, b"", fbuf)
+                            } else if m == ACT_SEC_PASSCODE {
+                                if (sec & SEC_FLAG_IS_SET) != 0 { b"Set" } else { b"None" }
+                            } else {
+                                b""
+                            }
                         }
-                        if val < max {
-                            flags |= ui::FLAG_ARROW_RIGHT;
+                        Kind::Toggle => {
+                            let on = pget(api, item.prop_id) != 0;
+                            flags |= ui::FLAG_TOGGLE | if on { ui::FLAG_TOGGLE_ON } else { 0 };
+                            b""
                         }
-                    }
-                }
+                        _ => {
+                            let val: i16 = if item.prop_id == PROP_BATT_TWEAK {
+                                self.sh.batt_tweak_mv
+                            } else {
+                                pget(api, item.prop_id) as i16
+                            };
+                            if self.editing && is_sel {
+                                flags |= ui::FLAG_OUTLINE;
+                                let (lo, hi) = if item.prop_id == PROP_BATT_TWEAK {
+                                    (-500i16, 500i16)
+                                } else if let Some((min, max, _)) = prop_bounds(item.prop_id) {
+                                    (min as i16, max as i16)
+                                } else {
+                                    (0, 0)
+                                };
+                                if val > lo { flags |= ui::FLAG_ARROW_LEFT; }
+                                if val < hi { flags |= ui::FLAG_ARROW_RIGHT; }
+                            }
+                            format_value(item, val, is_k1, fbuf)
+                        }
+                    };
+                    (item_label(item.label_idx), vstr)
+                };
+                ui::draw_row(
+                    api,
+                    y,
+                    lbl,
+                    vstr,
+                    (row_icon as u16) | ((flags as u16) << 8),
+                    anim_tick,
+                );
             }
-            match item.kind {
-                Kind::Toggle => {
-                    flags |= ui::FLAG_TOGGLE;
-                    if val != 0 {
-                        flags |= ui::FLAG_TOGGLE_ON;
-                    }
-                }
-                Kind::Action if is_sel && item.meta <= ACT_BANDPLANS => {
-                    flags |= ui::FLAG_CHEVRON;
-                }
-                _ => {}
-            }
-            let row_icon = if item.kind == Kind::Action && item.meta == ACT_ASSET_LANG {
-                abi::icon::GLOBE
-            } else {
-                0
-            };
-            ui::draw_row(api, y, item_label(item.label_idx), vstr, row_icon, flags, anim_tick);
             idx += 1;
         }
         ui::finish_list_frame(api, sy, count);
@@ -576,37 +751,34 @@ impl SettingsState {
     fn render(&mut self, api: &KrxApiTable) {
         api.clear();
         let sy = self.scroller.cur_y;
-        let anim_tick = if api.prop_get(prop::UI_ANIMATIONS) != 0 {
-            (self.tick_ctr as u16) | 1
+        let anim_tick = if pget(api, prop::UI_ANIMATIONS) != 0 {
+            (((self.tick_ctr >> 2) as u16) << 1) | 1
         } else {
             0
         };
         self.sh.anim_tick = anim_tick;
         match self.view {
-            View::Home => {
-                let mut idx = 0u8;
-                while idx < CAT_COUNT as u8 {
-                    let y = ui::ROW_START_Y + (idx as i16) * ui::ROW_STEP_Y - sy;
-                    let c = category(idx);
-                    let flags = if idx == self.cat_sel { ui::FLAG_SEL | ui::FLAG_CHEVRON } else { 0 };
-                    ui::draw_row(api, y, cat_name(idx), b"", c.icon_id, flags, anim_tick);
-                    idx += 1;
-                }
-                ui::finish_list_frame(api, sy, CAT_COUNT as u8);
-            }
+            View::Home => self.render_list(api, 0xFF, self.visible_cat_count(), self.cat_sel, sy, anim_tick),
             View::Category => {
                 let c = category(self.cat_sel);
-                self.render_item_list(api, c.start, c.count, self.item_sel, sy, anim_tick);
+                self.render_list(api, c.start, self.cat_item_count(self.cat_sel), self.item_sel, sy, anim_tick);
             }
-            View::Submenu => {
-                self.render_item_list(api, self.sub_start, self.sub_count, self.sub_sel, sy, anim_tick);
+            View::Submenu => self.render_list(api, self.sub_start, self.sub_count, self.sub_sel, sy, anim_tick),
+            v => {
+                const VIEW_LEAVES: [u8; 6] = [
+                    lc(LEAF_APPS_RENDER, 0),
+                    lc(LEAF_APP_HDR, 0),
+                    lc(LEAF_SC_RENDER, CMD_SC_RENDER),
+                    lc(LEAF_INFO_RENDER, 0),
+                    lc(LEAF_SYS_INFO, 0),
+                    lc(LEAF_BANDPLANS, CMD_BP_RENDER),
+                ];
+                let target = unsafe { *VIEW_LEAVES.get_unchecked((v as usize) - 3) };
+                self.call_leaf(api, target, 0);
             }
-            View::InstalledApps => self.call_leaf(api, LEAF_APPS_RENDER, 0, 0),
-            View::AppDetail => self.call_leaf(api, LEAF_APP_HDR, 0, 0),
-            View::Shortcuts => self.call_leaf(api, LEAF_SC_RENDER, CMD_SC_RENDER, 0),
-            View::BattInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_BATT, 0),
-            View::SysInfo => self.call_leaf(api, LEAF_INFO_RENDER, CMD_INFO_SYS, 0),
-            View::Bandplans => self.call_leaf(api, LEAF_BANDPLANS, CMD_BP_RENDER, 0),
+        }
+        if self.slide_x != 0 {
+            let _ = api.call_op(Op::GfxDraw, abi::sub::gfx_draw::SCROLL as usize, (self.slide_x as u8) as usize, 0);
         }
     }
 }
@@ -633,7 +805,7 @@ fn app_entry(op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         }
         KRX_OP_EXIT => {
             state.flush_if_dirty(api);
-            0
+            1
         }
         _ => 0,
     }

@@ -5,7 +5,6 @@
 
 mod shared;
 
-use core::mem::MaybeUninit;
 use kern_sdk::{
     ALIGN_LEFT, ALIGN_RIGHT, COLOR_FILL, FONT_MUMATRIX, FONT_TOMTHUMB, KRX_LEAF_KIND_CALL_LEAF,
     KrxApiTable, KrxLeafContext, div_rem_10_u16, icon, krx_entry,
@@ -42,12 +41,10 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         return 1;
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
-    let st = unsafe { &*(ctx.arg as *const SharedState) };
-    let m = st.meta();
+    let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
     let hy = 10 - st.detail_scroll;
-
-    let mut raw_b = MaybeUninit::<[u8; 24]>::uninit();
-    let buf = unsafe { &mut *raw_b.as_mut_ptr() };
+    let m = unsafe { &*(&st.detail_sc.app_meta as *const shared::AppMeta) };
+    let buf = shared::subslice_mut(&mut st.sheet_buf, 0, 24);
 
     api.draw_rect(3, hy, 20, 20, COLOR_FILL);
     if m.has_icon16 != 0 {

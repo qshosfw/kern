@@ -10,7 +10,7 @@ use kernel::proc::abi::{
 };
 pub use kernel::proc::service_registry::ServiceRegistry;
 
-pub static mut SERVICE_REGISTRY: ServiceRegistry<4> = ServiceRegistry::new();
+pub static mut SERVICE_REGISTRY: ServiceRegistry<2> = ServiceRegistry::new();
 pub static mut KERNEL_IPC_CHANNEL: IpcChannel<2> = IpcChannel::new();
 
 #[repr(C)]

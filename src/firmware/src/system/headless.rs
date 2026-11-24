@@ -21,6 +21,8 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, Ordering};
 use kernel::boot::BackupCrashTag;
 
 static HEADLESS: AtomicBool = AtomicBool::new(false);
+static HEADLESS_NEEDS_SAVE: AtomicBool = AtomicBool::new(false);
+static HEADLESS_WAKE_RENDER: AtomicBool = AtomicBool::new(false);
 
 /// Deliberate physical escape chord hold duration (`MENU + EXIT` held simultaneously).
 pub const ESCAPE_HOLD_MS: u16 = 3_000;
@@ -138,7 +140,8 @@ pub(super) fn waiting_escape_release(any_key_down: bool) -> bool {
 }
 
 /// Single transition point: latch the mode and drive the panel to match it. Leaving
-/// headless repaints and lights the panel only when `wake_panel` (a live transition).
+/// headless wakes the panel and schedules a top-level frame repaint (`HEADLESS_WAKE_RENDER`)
+/// rather than invoking `hw.render_frame()` inside a deep RigWire / keypad stack frame.
 #[inline(never)]
 fn engage(hw: &mut SystemHardware, enable: bool, wake_panel: bool) {
     latch(enable);
@@ -156,13 +159,18 @@ fn engage(hw: &mut SystemHardware, enable: bool, wake_panel: bool) {
         );
         if wake_panel {
             hw.lcd.exit_sleep();
-            hw.render_frame();
             hw.backlight.wake();
+            HEADLESS_WAKE_RENDER.store(true, Ordering::Release);
         }
     }
 }
 
-/// Enter or leave headless mode at runtime and persist the choice across power loss.
+/// Enter or leave headless mode at runtime.
+///
+/// Warm-reset durability is latched immediately in `BackupCrashTag::FLAG_HEADLESS` (0 stack),
+/// while LittleFS `/pref/keys.cfg` persistence and panel repaint are deferred to the top-level
+/// event loop (`service_deferred`) so entering/leaving headless while inside a KRX app never
+/// stacks filesystem writes or guest `KRX_OP_RENDER` frames onto `dispatch_wire_record`.
 #[inline(never)]
 pub fn set_headless(hw: &mut SystemHardware, enable: bool) {
     let was = is_headless();
@@ -170,10 +178,23 @@ pub fn set_headless(hw: &mut SystemHardware, enable: bool) {
     if cfg.keys.headless != enable as u8 {
         cfg.keys.headless = enable as u8;
         cfg.mark_keys_dirty();
-        let _ = cfg.flush_dirty(hw.filesystem);
+        HEADLESS_NEEDS_SAVE.store(true, Ordering::Release);
     }
     engage(hw, enable, was);
     hw.key_scanner.clear();
+}
+
+/// Execute deferred `/pref/keys.cfg` flush and wake-render flag at top-level main-loop stack depth.
+#[inline(never)]
+pub(super) fn service_deferred(hw: &mut SystemHardware, dirty_render: &mut bool) {
+    if HEADLESS_NEEDS_SAVE.load(Ordering::Acquire) {
+        HEADLESS_NEEDS_SAVE.store(false, Ordering::Release);
+        let _ = crate::master_config().flush_dirty(hw.filesystem);
+    }
+    if HEADLESS_WAKE_RENDER.load(Ordering::Acquire) {
+        HEADLESS_WAKE_RENDER.store(false, Ordering::Release);
+        *dirty_render = true;
+    }
 }
 
 /// Earliest boot stage (storage not yet mounted): honour the warm-reset backup bit so boot
@@ -258,5 +279,17 @@ mod tests {
         // Once all keys are released, normal keypad input resumes.
         assert!(!waiting_escape_release(false));
         assert!(!waiting_escape_release(true));
+    }
+
+    #[test]
+    fn deferred_headless_flags_clear_atomically() {
+        HEADLESS_NEEDS_SAVE.store(true, Ordering::Release);
+        HEADLESS_WAKE_RENDER.store(true, Ordering::Release);
+        assert!(HEADLESS_NEEDS_SAVE.load(Ordering::Acquire));
+        HEADLESS_NEEDS_SAVE.store(false, Ordering::Release);
+        assert!(!HEADLESS_NEEDS_SAVE.load(Ordering::Acquire));
+        assert!(HEADLESS_WAKE_RENDER.load(Ordering::Acquire));
+        HEADLESS_WAKE_RENDER.store(false, Ordering::Release);
+        assert!(!HEADLESS_WAKE_RENDER.load(Ordering::Acquire));
     }
 }
