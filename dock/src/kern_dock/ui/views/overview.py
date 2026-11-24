@@ -72,10 +72,15 @@ class OverviewView:
         demo_b.add_css_class("pill")
         demo_b.add_css_class("suggested-action")
         demo_b.connect("clicked", lambda _b: self.runtime.connect_async("demo"))
-        qemu_b = Gtk.Button(label="Connect QEMU")
+        qemu_b = Gtk.Button(label="QEMU Emulator")
         qemu_b.add_css_class("pill")
-        qemu_b.set_tooltip_text("tcp://127.0.0.1:4446")
-        qemu_b.connect("clicked", lambda _b: self.runtime.connect_async("tcp://127.0.0.1:4446"))
+        qemu_b.set_tooltip_text("Attach to running QEMU or start it automatically (tcp://127.0.0.1:4446)")
+        qemu_b.connect(
+            "clicked",
+            lambda _b: self.runtime.connect_or_start_qemu_async(
+                on_status=lambda m: GLib.idle_add(self._on_toast, m),
+            ),
+        )
         hw_b = Gtk.Button(label="Hardware & SWD")
         hw_b.add_css_class("pill")
         hw_b.set_tooltip_text("SWD probe, USB power & raw serial control (works offline)")

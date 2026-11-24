@@ -1,4 +1,4 @@
-"""Built-in Plugin: Bridges & Local Integrations (HTTP API, WebDAV, IPC, rigctld, KISS, TCP, OpenOCD GDB)."""
+"""Built-in Plugin: Bridges & Local Integrations (KISS TNC, Hamlib rigctld, HTTP API, WebDAV, TCP Console, OpenOCD GDB)."""
 
 from __future__ import annotations
 
@@ -9,13 +9,29 @@ from ...device.hardware import available_hw_tools, discover_swd_probes
 from ..api import PluginContext, PluginManifest
 
 
+def _build_test_aprs_ax25() -> bytes:
+    """Build a valid AX.25 UI beacon frame (NOCALL>APKERN:>Kern Dock KISS TNC test)."""
+
+    def _encode_call(call: str, ssid: int = 0, *, last: bool = False) -> bytes:
+        padded = call.upper().ljust(6)[:6]
+        out = bytearray((ord(ch) << 1) for ch in padded)
+        out.append(((ssid & 0x0F) << 1) | 0x60 | (0x01 if last else 0x00))
+        return bytes(out)
+
+    return (
+        _encode_call("APKERN", 0, last=False)
+        + _encode_call("NOCALL", 0, last=True)
+        + b"\x03\xF0>Kern Dock KISS TNC test frame"
+    )
+
+
 class RadioBridgesPlugin:
     manifest = PluginManifest(
         id="radio-bridges",
         name="Bridges & Integrations",
-        version="2.0.0",
-        description="Local HTTP JSON/LCD API, WebDAV drive, IPC/D-Bus, Hamlib rigctld, KISS TNC, TCP Command & OpenOCD SWD GDB bridges.",
-        capabilities=("ui.page", "radio.read", "radio.control"),
+        version="2.1.0",
+        description="KISS TNC (APRS/Winlink), Hamlib rigctld, Local HTTP JSON/LCD API, KernFS WebDAV, TCP Console & OpenOCD SWD GDB.",
+        capabilities=("events.subscribe", "ui.page", "radio.read", "radio.control"),
         icon="network-server-symbolic",
         builtin=True,
     )
@@ -48,7 +64,7 @@ class RadioBridgesPlugin:
             "network-server-symbolic",
             self._build_page,
             order=46,
-            subtitle="HTTP API, WebDAV, Hamlib rigctld, KISS TNC, TCP & OpenOCD GDB",
+            subtitle="KISS TNC, Hamlib rigctld, HTTP API, WebDAV, TCP Console & OpenOCD GDB",
         )
 
     def deactivate(self) -> None:
@@ -68,6 +84,15 @@ class RadioBridgesPlugin:
         except Exception:
             pass
 
+    def _open_uri(self, uri: str) -> None:
+        try:
+            from gi.repository import Gio
+
+            Gio.AppInfo.launch_default_for_uri(uri, None)
+        except Exception as exc:
+            if self._ctx:
+                self._ctx.toast(f"Could not open {uri}: {exc}")
+
     def _refresh_ui(self) -> None:
         try:
             from gi.repository import GLib
@@ -79,71 +104,166 @@ class RadioBridgesPlugin:
     def _apply_ui(self) -> bool:
         if not self._widgets or self._ctx is None:
             return False
+        from gi.repository import GLib
+
+        esc = GLib.markup_escape_text
         self._updating = True
         try:
-            if self.http_api and "http_row" in self._widgets:
-                r = self._widgets["http_row"]
-                self._widgets["http_sw"].set_active(self.http_api.running)
-                r.set_subtitle(
-                    f"Listening on {self.http_api.base_url} · {self.http_api.request_count} reqs (/api/status, /api/screen.png)"
-                    if self.http_api.running
-                    else "HTTP 127.0.0.1:8085 · OBS screen overlay, Home Assistant & JSON status"
+            if self.kiss and "kiss_row" in self._widgets:
+                on = self.kiss.running
+                self._widgets["kiss_sw"].set_active(on)
+                self._widgets["kiss_port"].set_sensitive(not on)
+                self._widgets["kiss_test_btn"].set_sensitive(on)
+                self._widgets["kiss_row"].set_subtitle(
+                    esc(f"Running on 127.0.0.1:{self.kiss.port} · {self.kiss.client_count} client(s) · TX {self.kiss.tx_count} / RX {self.kiss.rx_count}")
+                    if on
+                    else esc(f"TCP 127.0.0.1:{self.kiss.port} · APRS, Xastir, YAAC, Pat, Winlink")
                 )
+                self._widgets["kiss_cmd"].set_subtitle(esc(f"127.0.0.1:{self.kiss.port}"))
+
+            if self.rigctld and "rig_row" in self._widgets:
+                on = self.rigctld.running
+                self._widgets["rig_sw"].set_active(on)
+                self._widgets["rig_port"].set_sensitive(not on)
+                self._widgets["rig_row"].set_subtitle(
+                    esc(f"Running on 127.0.0.1:{self.rigctld.port} · {self.rigctld.client_count} client(s)")
+                    if on
+                    else esc(f"TCP 127.0.0.1:{self.rigctld.port} · WSJT-X, Gpredict, FLRig, CQRLog, SDR++")
+                )
+                self._widgets["rig_cmd"].set_subtitle(esc(f"rigctl -m 2 -r 127.0.0.1:{self.rigctld.port}"))
+
+            if self.tcp_cmd and "tcp_row" in self._widgets:
+                on = self.tcp_cmd.running
+                self._widgets["tcp_sw"].set_active(on)
+                self._widgets["tcp_port"].set_sensitive(not on)
+                self._widgets["tcp_row"].set_subtitle(
+                    esc(f"Running on 127.0.0.1:{self.tcp_cmd.port} · {self.tcp_cmd.client_count} client(s) · {self.tcp_cmd.command_count} cmds")
+                    if on
+                    else esc(f"TCP 127.0.0.1:{self.tcp_cmd.port} · Line-based RigWire command bridge for netcat & scripts")
+                )
+                self._widgets["tcp_cmd"].set_subtitle(esc(f"nc 127.0.0.1 {self.tcp_cmd.port}"))
+
+            if self.http_api and "http_row" in self._widgets:
+                on = self.http_api.running
+                self._widgets["http_sw"].set_active(on)
+                self._widgets["http_port"].set_sensitive(not on)
+                self._widgets["http_open_btn"].set_sensitive(on)
+                self._widgets["http_row"].set_subtitle(
+                    esc(f"Running on {self.http_api.base_url} · {self.http_api.request_count} requests")
+                    if on
+                    else esc(f"HTTP 127.0.0.1:{self.http_api.port} · OBS LCD overlay, Home Assistant & JSON status")
+                )
+                self._widgets["http_cmd"].set_subtitle(esc(f"http://127.0.0.1:{self.http_api.port}/api/screen.png"))
+
             if "dav_row" in self._widgets:
                 lk = self._ctx.link
                 mounted = lk.dav_server is not None
                 self._widgets["dav_sw"].set_active(mounted)
-                self._widgets["dav_sw"].set_sensitive(lk.connected and lk.link_mode == "rigwire")
+                self._widgets["dav_sw"].set_sensitive(mounted or (lk.connected and lk.link_mode == "rigwire"))
+                self._widgets["dav_open_btn"].set_sensitive(mounted)
+                url = lk.dav_open_target or (f"dav://127.0.0.1:{lk.dav_port}/" if mounted else "Requires connected RigWire radio")
                 self._widgets["dav_row"].set_subtitle(
-                    f"Mounted at {lk.dav_open_target or f'dav://127.0.0.1:{lk.dav_port}/'}"
+                    esc(f"Mounted at {url}")
                     if mounted
-                    else "Expose KernFS (/user, /pref, /apps, /sys) as a local WebDAV drive"
+                    else esc("Expose KernFS (/user, /pref, /apps, /sys) as a local WebDAV drive")
                 )
-            if self.rigctld and "rig_row" in self._widgets:
-                self._widgets["rig_sw"].set_active(self.rigctld.running)
-                self._widgets["rig_row"].set_subtitle(
-                    f"Listening on 127.0.0.1:{self.rigctld.port} · {self.rigctld.client_count} client(s)"
-                    if self.rigctld.running
-                    else "TCP 127.0.0.1:4532 · WSJT-X, Gpredict, FLRig, CQRLog, SDR++"
-                )
-            if self.kiss and "kiss_row" in self._widgets:
-                self._widgets["kiss_sw"].set_active(self.kiss.running)
-                self._widgets["kiss_row"].set_subtitle(
-                    f"Listening on 127.0.0.1:{self.kiss.port} · {self.kiss.client_count} client(s) · TX {self.kiss.tx_count} / RX {self.kiss.rx_count}"
-                    if self.kiss.running
-                    else "TCP 127.0.0.1:8001 · APRS, Xastir, YAAC, Pat, Winlink"
-                )
-            if self.tcp_cmd and "tcp_row" in self._widgets:
-                self._widgets["tcp_sw"].set_active(self.tcp_cmd.running)
-                self._widgets["tcp_row"].set_subtitle(
-                    f"Listening on 127.0.0.1:{self.tcp_cmd.port} · {self.tcp_cmd.client_count} client(s) · {self.tcp_cmd.command_count} cmds"
-                    if self.tcp_cmd.running
-                    else "TCP 127.0.0.1:4447 · Line-based RigWire command bridge for netcat & scripts"
-                )
+                self._widgets["dav_cmd"].set_subtitle(esc(url))
+
             if self.gdb_swd and "gdb_row" in self._widgets:
                 probes = discover_swd_probes()
                 has_ocd = bool(available_hw_tools().get("openocd"))
-                self._widgets["gdb_sw"].set_active(self.gdb_swd.running)
-                self._widgets["gdb_sw"].set_sensitive(self.gdb_swd.running or (bool(probes) and has_ocd))
-                if self.gdb_swd.running:
-                    self._widgets["gdb_row"].set_subtitle(
-                        f"GDB :{self.gdb_swd.gdb_port} · Telnet :{self.gdb_swd.telnet_port} · {self.gdb_swd.active_probe_name}"
-                    )
+                on = self.gdb_swd.running
+                self._widgets["gdb_sw"].set_active(on)
+                self._widgets["gdb_port"].set_sensitive(not on)
+                self._widgets["gdb_sw"].set_sensitive(on or (bool(probes) and has_ocd))
+                if on:
+                    sub = f"Running · GDB :{self.gdb_swd.gdb_port} · Telnet :{self.gdb_swd.telnet_port} · {self.gdb_swd.active_probe_name}"
                 elif not has_ocd:
-                    self._widgets["gdb_row"].set_subtitle("Install openocd to expose an SWD GDB server")
+                    sub = "Install openocd to expose an SWD GDB server"
                 elif not probes:
-                    self._widgets["gdb_row"].set_subtitle("Connect a CMSIS-DAP, ST-Link, or J-Link SWD probe")
+                    sub = "Connect a CMSIS-DAP, ST-Link, or J-Link SWD probe (works offline)"
                 else:
-                    self._widgets["gdb_row"].set_subtitle(f"Ready on {probes[0].name} · TCP 127.0.0.1:3333 (works offline)")
+                    sub = f"Ready on {probes[0].name} · TCP 127.0.0.1:{self.gdb_swd.gdb_port} (works offline)"
+                self._widgets["gdb_row"].set_subtitle(esc(sub))
+                self._widgets["gdb_cmd"].set_subtitle(
+                    esc(f'arm-none-eabi-gdb -ex "target extended-remote :{self.gdb_swd.gdb_port}"')
+                )
         finally:
             self._updating = False
         return False
+
+    def _toggle_kiss(self, active: bool) -> None:
+        if self._updating or self.kiss is None:
+            return
+        try:
+            if active:
+                if "kiss_port" in self._widgets:
+                    self.kiss.port = int(self._widgets["kiss_port"].get_value())
+                p = self.kiss.start()
+                if self._ctx:
+                    self._ctx.toast(f"KISS TNC listening on 127.0.0.1:{p}")
+            else:
+                self.kiss.stop()
+                if self._ctx:
+                    self._ctx.toast("KISS TNC stopped")
+        except Exception as exc:
+            if self._ctx:
+                self._ctx.toast(f"KISS TNC error: {exc}")
+        self._refresh_ui()
+
+    def _send_kiss_test(self) -> None:
+        if self.kiss is None or not self.kiss.running:
+            return
+        self.kiss.publish_rx_frame(_build_test_aprs_ax25())
+        if self._ctx:
+            self._ctx.toast("Sent test APRS AX.25 frame to connected KISS clients")
+        self._refresh_ui()
+
+    def _toggle_rigctld(self, active: bool) -> None:
+        if self._updating or self.rigctld is None:
+            return
+        try:
+            if active:
+                if "rig_port" in self._widgets:
+                    self.rigctld.port = int(self._widgets["rig_port"].get_value())
+                p = self.rigctld.start()
+                if self._ctx:
+                    self._ctx.toast(f"Hamlib rigctld listening on 127.0.0.1:{p}")
+            else:
+                self.rigctld.stop()
+                if self._ctx:
+                    self._ctx.toast("Hamlib rigctld stopped")
+        except Exception as exc:
+            if self._ctx:
+                self._ctx.toast(f"rigctld error: {exc}")
+        self._refresh_ui()
+
+    def _toggle_tcp_cmd(self, active: bool) -> None:
+        if self._updating or self.tcp_cmd is None:
+            return
+        try:
+            if active:
+                if "tcp_port" in self._widgets:
+                    self.tcp_cmd.port = int(self._widgets["tcp_port"].get_value())
+                p = self.tcp_cmd.start()
+                if self._ctx:
+                    self._ctx.toast(f"TCP RigWire Console listening on 127.0.0.1:{p}")
+            else:
+                self.tcp_cmd.stop()
+                if self._ctx:
+                    self._ctx.toast("TCP RigWire Console stopped")
+        except Exception as exc:
+            if self._ctx:
+                self._ctx.toast(f"TCP Console error: {exc}")
+        self._refresh_ui()
 
     def _toggle_http(self, active: bool) -> None:
         if self._updating or self.http_api is None:
             return
         try:
             if active:
+                if "http_port" in self._widgets:
+                    self.http_api.port = int(self._widgets["http_port"].get_value())
                 p = self.http_api.start()
                 if self._ctx:
                     self._ctx.toast(f"HTTP API listening on http://127.0.0.1:{p}/api/status")
@@ -171,57 +291,6 @@ class RadioBridgesPlugin:
             self._ctx.toast(f"WebDAV error: {exc}")
         self._refresh_ui()
 
-    def _toggle_kiss(self, active: bool) -> None:
-        if self._updating or self.kiss is None:
-            return
-        try:
-            if active:
-                p = self.kiss.start()
-                if self._ctx:
-                    self._ctx.toast(f"KISS TNC listening on 127.0.0.1:{p}")
-            else:
-                self.kiss.stop()
-                if self._ctx:
-                    self._ctx.toast("KISS TNC stopped")
-        except Exception as exc:
-            if self._ctx:
-                self._ctx.toast(f"KISS TNC error: {exc}")
-        self._refresh_ui()
-
-    def _toggle_rigctld(self, active: bool) -> None:
-        if self._updating or self.rigctld is None:
-            return
-        try:
-            if active:
-                p = self.rigctld.start()
-                if self._ctx:
-                    self._ctx.toast(f"Hamlib rigctld listening on 127.0.0.1:{p}")
-            else:
-                self.rigctld.stop()
-                if self._ctx:
-                    self._ctx.toast("Hamlib rigctld stopped")
-        except Exception as exc:
-            if self._ctx:
-                self._ctx.toast(f"rigctld error: {exc}")
-        self._refresh_ui()
-
-    def _toggle_tcp_cmd(self, active: bool) -> None:
-        if self._updating or self.tcp_cmd is None:
-            return
-        try:
-            if active:
-                p = self.tcp_cmd.start()
-                if self._ctx:
-                    self._ctx.toast(f"TCP Command bridge listening on 127.0.0.1:{p}")
-            else:
-                self.tcp_cmd.stop()
-                if self._ctx:
-                    self._ctx.toast("TCP Command bridge stopped")
-        except Exception as exc:
-            if self._ctx:
-                self._ctx.toast(f"TCP Command error: {exc}")
-        self._refresh_ui()
-
     def _toggle_gdb(self, active: bool) -> None:
         if self._updating or self.gdb_swd is None:
             return
@@ -230,6 +299,8 @@ class RadioBridgesPlugin:
                 probes = discover_swd_probes()
                 if not probes:
                     raise RuntimeError("No SWD probe detected")
+                if "gdb_port" in self._widgets:
+                    self.gdb_swd.gdb_port = int(self._widgets["gdb_port"].get_value())
                 p = self.gdb_swd.start(probes[0])
                 if self._ctx:
                     self._ctx.toast(f"OpenOCD GDB server listening on 127.0.0.1:{p}")
@@ -247,65 +318,154 @@ class RadioBridgesPlugin:
 
         gi.require_version("Gtk", "4.0")
         gi.require_version("Adw", "1")
-        from gi.repository import Adw, Gtk
+        from gi.repository import Adw, GLib, Gtk
 
         page = Adw.PreferencesPage()
 
-        def _make_service_row(
+        def _make_bridge_expander(
             key: str,
+            icon_name: str,
             title: str,
             subtitle: str,
             on_toggle: Any,
             *,
-            copy_cmd: Any = None,
-            copy_tip: str = "Copy endpoint",
-        ) -> Adw.ActionRow:
-            row = Adw.ActionRow(title=title, subtitle=subtitle)
-            if copy_cmd is not None:
-                cb = Gtk.Button(icon_name="edit-copy-symbolic", valign=Gtk.Align.CENTER, tooltip_text=copy_tip)
-                cb.add_css_class("flat")
-                cb.connect("clicked", lambda _b: copy_cmd())
-                row.add_suffix(cb)
+            port: int | None = None,
+            cmd_title: str = "Endpoint",
+            cmd_value: str = "",
+            copy_label: str = "Copied",
+        ) -> Adw.ExpanderRow:
+            row = Adw.ExpanderRow(title=title, subtitle=GLib.markup_escape_text(subtitle))
+            row.add_prefix(Gtk.Image.new_from_icon_name(icon_name))
             sw = Gtk.Switch(valign=Gtk.Align.CENTER)
             sw.connect("notify::active", lambda w, _p: on_toggle(w.get_active()))
             row.add_suffix(sw)
-            row.set_activatable_widget(sw)
             self._widgets[f"{key}_row"] = row
             self._widgets[f"{key}_sw"] = sw
+
+            if port is not None:
+                p_row = Adw.SpinRow.new_with_range(1024, 65535, 1)
+                p_row.set_title("TCP Port")
+                p_row.set_subtitle("Localhost bind port (127.0.0.1)")
+                p_row.set_value(float(port))
+                row.add_row(p_row)
+                self._widgets[f"{key}_port"] = p_row
+
+            cmd_row = Adw.ActionRow(title=cmd_title, subtitle=GLib.markup_escape_text(cmd_value), subtitle_selectable=True)
+            cmd_row.add_css_class("property")
+            copy_b = Gtk.Button(icon_name="edit-copy-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Copy to clipboard")
+            copy_b.add_css_class("flat")
+            copy_b.connect("clicked", lambda _b, r=cmd_row, lbl=copy_label: self._copy_text(r.get_subtitle() or "", lbl))
+            cmd_row.add_suffix(copy_b)
+            row.add_row(cmd_row)
+            self._widgets[f"{key}_cmd"] = cmd_row
             return row
 
-        # === 1. LOCAL API & DESKTOP INTEGRATIONS ===
+        # === 1. AMATEUR RADIO PROTOCOL BRIDGES ===
+        grp_proto = Adw.PreferencesGroup(
+            title="Radio Protocol Bridges",
+            description="Connect APRS, CAT control, and automation clients over localhost TCP",
+        )
+
+        kiss_exp = _make_bridge_expander(
+            "kiss",
+            "network-wireless-symbolic",
+            "KISS TNC (TCP)",
+            "TCP 127.0.0.1:8001 · APRS, Xastir, YAAC, Pat, Winlink",
+            self._toggle_kiss,
+            port=self.kiss.port if self.kiss else 8001,
+            cmd_title="KISS TCP Host",
+            cmd_value="127.0.0.1:8001",
+            copy_label="Copied KISS endpoint",
+        )
+        test_btn = Gtk.Button(label="Send Test Frame", valign=Gtk.Align.CENTER, sensitive=False)
+        test_btn.connect("clicked", lambda _b: self._send_kiss_test())
+        kiss_test_row = Adw.ActionRow(title="Loopback Verification", subtitle="Broadcast a test AX.25 APRS UI frame to connected KISS clients")
+        kiss_test_row.add_suffix(test_btn)
+        kiss_exp.add_row(kiss_test_row)
+        self._widgets["kiss_test_btn"] = test_btn
+        grp_proto.add(kiss_exp)
+
+        rig_exp = _make_bridge_expander(
+            "rig",
+            "audio-input-microphone-symbolic",
+            "Hamlib rigctld (TCP)",
+            "TCP 127.0.0.1:4532 · WSJT-X, Gpredict, FLRig, CQRLog, SDR++",
+            self._toggle_rigctld,
+            port=self.rigctld.port if self.rigctld else 4532,
+            cmd_title="Hamlib Command",
+            cmd_value="rigctl -m 2 -r 127.0.0.1:4532",
+            copy_label="Copied rigctl command",
+        )
+        grp_proto.add(rig_exp)
+
+        tcp_exp = _make_bridge_expander(
+            "tcp",
+            "utilities-terminal-symbolic",
+            "TCP RigWire Console",
+            "TCP 127.0.0.1:4447 · Line-based RigWire command bridge for netcat & scripts",
+            self._toggle_tcp_cmd,
+            port=self.tcp_cmd.port if self.tcp_cmd else 4447,
+            cmd_title="Connect Command",
+            cmd_value="nc 127.0.0.1 4447",
+            copy_label="Copied netcat command",
+        )
+        grp_proto.add(tcp_exp)
+        page.add(grp_proto)
+
+        # === 2. LOCAL API & DESKTOP SERVICES ===
         grp_api = Adw.PreferencesGroup(
             title="Local API &amp; Desktop Services",
-            description="Expose live radio state, LCD screenshots and KernFS storage to local apps and overlays",
+            description="Expose live radio state, LCD screenshots, and KernFS storage to local apps",
         )
-        grp_api.add(
-            _make_service_row(
-                "http",
-                "HTTP JSON &amp; Live LCD API",
-                "HTTP 127.0.0.1:8085 · OBS screen overlay, Home Assistant &amp; JSON status",
-                self._toggle_http,
-                copy_cmd=lambda: self._copy_text(f"http://127.0.0.1:{self.http_api.port if self.http_api else 8085}/api/screen.png", "Copied LCD URL"),
-                copy_tip="Copy /api/screen.png URL",
-            )
+
+        http_exp = _make_bridge_expander(
+            "http",
+            "network-server-symbolic",
+            "HTTP JSON &amp; Live LCD API",
+            "HTTP 127.0.0.1:8085 · OBS LCD overlay, Home Assistant & JSON status",
+            self._toggle_http,
+            port=self.http_api.port if self.http_api else 8085,
+            cmd_title="Live LCD Image URL",
+            cmd_value="http://127.0.0.1:8085/api/screen.png",
+            copy_label="Copied LCD URL",
         )
-        grp_api.add(
-            _make_service_row(
-                "dav",
-                "KernFS WebDAV Drive",
-                "Expose KernFS (/user, /pref, /apps, /sys) as a local WebDAV drive",
-                self._toggle_dav,
-                copy_cmd=lambda: self._copy_text(
-                    self._ctx.link.dav_open_target or f"dav://127.0.0.1:{self._ctx.link.dav_port}/" if (self._ctx and self._ctx.link.dav_server) else "dav://127.0.0.1/",
-                    "Copied WebDAV URL",
-                ),
-                copy_tip="Copy WebDAV URL",
-            )
+        http_open = Gtk.Button(label="Open Status", valign=Gtk.Align.CENTER, sensitive=False)
+        http_open.connect("clicked", lambda _b: self._open_uri(f"{self.http_api.base_url}/api/status") if self.http_api else None)
+        http_act = Adw.ActionRow(title="Endpoints", subtitle="/api/status · /api/screen.png · /api/key")
+        http_act.add_suffix(http_open)
+        http_exp.add_row(http_act)
+        self._widgets["http_open_btn"] = http_open
+        grp_api.add(http_exp)
+
+        dav_exp = _make_bridge_expander(
+            "dav",
+            "folder-remote-symbolic",
+            "KernFS WebDAV Drive",
+            "Expose KernFS (/user, /pref, /apps, /sys) as a local WebDAV drive",
+            self._toggle_dav,
+            port=None,
+            cmd_title="WebDAV Mount URL",
+            cmd_value="Requires connected RigWire radio",
+            copy_label="Copied WebDAV URL",
         )
+        dav_open = Gtk.Button(label="Open Folder", valign=Gtk.Align.CENTER, sensitive=False)
+        dav_open.connect(
+            "clicked",
+            lambda _b: self._open_uri(self._ctx.link.dav_open_target or f"dav://127.0.0.1:{self._ctx.link.dav_port}/")
+            if (self._ctx and self._ctx.link.dav_server)
+            else None,
+        )
+        dav_act = Adw.ActionRow(title="File Manager", subtitle="Open mounted radio filesystem in Nautilus / Dolphin")
+        dav_act.add_suffix(dav_open)
+        dav_exp.add_row(dav_act)
+        self._widgets["dav_open_btn"] = dav_open
+        grp_api.add(dav_exp)
+
         ipc_row = Adw.ActionRow(
             title="Local IPC &amp; CLI Control",
             subtitle="./kern dock ctl status · org.kernos.Dock D-Bus &amp; Unix socket",
         )
+        ipc_row.add_prefix(Gtk.Image.new_from_icon_name("system-run-symbolic"))
         ipc_copy = Gtk.Button(icon_name="edit-copy-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Copy CLI status command")
         ipc_copy.add_css_class("flat")
         ipc_copy.connect("clicked", lambda _b: self._copy_text("./kern dock ctl status", "Copied CLI"))
@@ -313,58 +473,23 @@ class RadioBridgesPlugin:
         grp_api.add(ipc_row)
         page.add(grp_api)
 
-        # === 2. PROTOCOL BRIDGES ===
-        grp_proto = Adw.PreferencesGroup(
-            title="Protocol Bridges",
-            description="Connect external amateur radio software and automation scripts over localhost TCP",
-        )
-        grp_proto.add(
-            _make_service_row(
-                "rig",
-                "Hamlib rigctld (TCP)",
-                "TCP 127.0.0.1:4532 · WSJT-X, Gpredict, FLRig, CQRLog, SDR++",
-                self._toggle_rigctld,
-                copy_cmd=lambda: self._copy_text(f"rigctl -m 2 -r 127.0.0.1:{self.rigctld.port if self.rigctld else 4532}", "Copied rigctl command"),
-                copy_tip="Copy rigctl command",
-            )
-        )
-        grp_proto.add(
-            _make_service_row(
-                "kiss",
-                "KISS TNC (TCP)",
-                "TCP 127.0.0.1:8001 · APRS, Xastir, YAAC, Pat, Winlink",
-                self._toggle_kiss,
-                copy_cmd=lambda: self._copy_text(f"127.0.0.1:{self.kiss.port if self.kiss else 8001}", "Copied KISS endpoint"),
-                copy_tip="Copy KISS TCP host:port",
-            )
-        )
-        grp_proto.add(
-            _make_service_row(
-                "tcp",
-                "TCP RigWire Console",
-                "TCP 127.0.0.1:4447 · Line-based RigWire command bridge for netcat &amp; scripts",
-                self._toggle_tcp_cmd,
-                copy_cmd=lambda: self._copy_text(f"nc 127.0.0.1 {self.tcp_cmd.port if self.tcp_cmd else 4447}", "Copied netcat command"),
-                copy_tip="Copy netcat command",
-            )
-        )
-        page.add(grp_proto)
-
         # === 3. HARDWARE & DEBUG SERVERS (WORKS OFFLINE) ===
         grp_dbg = Adw.PreferencesGroup(
             title="Hardware &amp; Debug Servers",
             description="SWD debug bridges that run directly against connected probes even when the radio is off",
         )
-        grp_dbg.add(
-            _make_service_row(
-                "gdb",
-                "OpenOCD GDB Server (SWD)",
-                "TCP 127.0.0.1:3333 · Attach arm-none-eabi-gdb or VS Code Cortex-Debug",
-                self._toggle_gdb,
-                copy_cmd=lambda: self._copy_text(f'arm-none-eabi-gdb -ex "target extended-remote :3333"', "Copied GDB command"),
-                copy_tip="Copy GDB attach command",
-            )
+        gdb_exp = _make_bridge_expander(
+            "gdb",
+            "preferences-other-symbolic",
+            "OpenOCD GDB Server (SWD)",
+            "TCP 127.0.0.1:3333 · Attach arm-none-eabi-gdb or VS Code Cortex-Debug",
+            self._toggle_gdb,
+            port=self.gdb_swd.gdb_port if self.gdb_swd else 3333,
+            cmd_title="GDB Attach Command",
+            cmd_value='arm-none-eabi-gdb -ex "target extended-remote :3333"',
+            copy_label="Copied GDB command",
         )
+        grp_dbg.add(gdb_exp)
         page.add(grp_dbg)
 
         page.connect("map", lambda _w: self._apply_ui())

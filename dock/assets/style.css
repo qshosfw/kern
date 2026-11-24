@@ -225,20 +225,6 @@ textview.wire-console text {
     font-size: 12px;
 }
 
-.hex-leg-hdr   { color: #fbbf24; font-weight: 700; }
-.hex-leg-ascii { color: #34d399; }
-.hex-leg-ctrl  { color: #38bdf8; }
-.hex-leg-high  { color: #c084fc; }
-.hex-leg-ff    { color: #f59e0b; }
-.hex-leg-zero  { color: #64748b; }
-
-.hex-ruler {
-    font-family: monospace;
-    font-size: 11px;
-    font-weight: 700;
-    color: #94a3b8;
-}
-
 .timeline-card {
     padding: 8px 10px;
 }

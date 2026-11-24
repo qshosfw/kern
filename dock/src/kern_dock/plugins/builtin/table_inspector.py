@@ -104,7 +104,7 @@ class TableInspectorPlugin:
         name="Table Inspector",
         version="2.0.0",
         description="Inspects KernFS binary storage tables (/user/channels.ch, contacts, zones, bandplans, hits, FM) with search, Hex View and CSV export.",
-        capabilities=("ui.page", "radio.read", "fs.read"),
+        capabilities=("events.subscribe", "ui.page", "radio.read", "fs.read"),
         icon="document-properties-symbolic",
         builtin=True,
     )

@@ -263,6 +263,10 @@ class FsBackend:
     def read_bytes(self, path: str) -> bytes: raise NotImplementedError
     def read_head(self, path: str, max_bytes: int = 512) -> bytes:
         return self.read_bytes(path)[:max_bytes]
+    def read_range(self, path: str, offset: int, length: int) -> tuple[bytes, int]:
+        data = self.read_bytes(path)
+        off = max(0, int(offset))
+        return data[off : off + max(0, int(length))], len(data)
     def write_bytes(self, path: str, data: bytes) -> dict[str, Any]: raise NotImplementedError
     def remove(self, path: str) -> None: raise NotImplementedError
     def mkdir(self, path: str) -> None: raise NotImplementedError
@@ -468,6 +472,50 @@ class RigWireFsBackend(FsBackend):
                 self._head_cache.clear()
             self._head_cache[(path, total_size)] = data
             return data
+
+    def read_range(self, path: str, offset: int, length: int) -> tuple[bytes, int]:
+        """Read only `[offset, offset + length)` over RigWire without downloading the full file."""
+        with self._lock:
+            off = max(0, int(offset))
+            req_total = max(16, int(length))
+            for (p, sz, _crc), full_data in self._data_cache.items():
+                if p == path:
+                    return full_data[off : off + req_total], sz
+
+            path_b = path.encode("utf-8")
+            req_open = struct.pack("<BIHB", rigwire.TRANSFER_MODE_READ, 0, 120, len(path_b)) + path_b
+            resp_open = self._client.send_record(rigwire.SERVICE_DATA, rigwire.OP_TRANSFER_OPEN, req_open)
+            if len(resp_open) < 8:
+                raise RuntimeError("Short TRANSFER_OPEN response")
+            tid, negotiated_chunk, total_size = struct.unpack("<HHI", resp_open[:8])
+
+            chunk_size = max(16, min(negotiated_chunk, 120))
+            end = min(total_size, off + req_total)
+            buf = bytearray()
+            cur = off
+            try:
+                while cur < end:
+                    req_len = min(chunk_size, end - cur)
+                    resp_chunk = self._client.send_record(
+                        rigwire.SERVICE_DATA, rigwire.OP_TRANSFER_CHUNK, struct.pack("<HIH", tid, cur, req_len)
+                    )
+                    if len(resp_chunk) < 8:
+                        raise RuntimeError("Short TRANSFER_CHUNK response")
+                    _, _, rx_len = struct.unpack("<HIH", resp_chunk[:8])
+                    chunk = resp_chunk[8 : 8 + rx_len]
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    cur += len(chunk)
+            finally:
+                try:
+                    self._client.send_record(rigwire.SERVICE_DATA, rigwire.OP_TRANSFER_CLOSE, struct.pack("<HI", tid, 0))
+                except Exception:
+                    try:
+                        self._client._abort_transfer(tid)
+                    except Exception:
+                        pass
+            return bytes(buf), total_size
 
     def write_bytes(self, path: str, data: bytes) -> dict[str, Any]:
         with self._lock:

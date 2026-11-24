@@ -249,6 +249,13 @@ class KernDockApp(Adw.Application):
         self.tab_bar = Adw.TabBar(view=self.tab_view, autohide=False, expand_tabs=False, hexpand=True)
         self.tab_bar.add_css_class("inline")
 
+        # Native '+' New Tab launcher (quick access to Integrations, Tables, Hardware, etc., online or offline)
+        self.new_tab_btn = Gtk.MenuButton(icon_name="tab-new-symbolic", tooltip_text="Open Tool Tab")
+        self.new_tab_btn.add_css_class("flat")
+        self.new_tab_popover = Gtk.Popover()
+        self.new_tab_btn.set_popover(self.new_tab_popover)
+        self.tab_bar.set_end_action_widget(self.new_tab_btn)
+
         # Only the primary hamburger menu + native window controls on the top right
         menu_b = Gtk.MenuButton(icon_name="open-menu-symbolic", primary=True, tooltip_text="Main Menu")
         menu_b.add_css_class("flat")
@@ -367,8 +374,9 @@ class KernDockApp(Adw.Application):
             if pid not in valid_ids and pid != "overview":
                 self.tab_view.close_page(self._open_tabs[pid])
 
-        # Refresh Home tab's Tools launcher grid
+        # Refresh Home tab's Tools launcher list & '+' new-tab popover
         self.overview_view.rebuild_tools()
+        self._rebuild_new_tab_popover()
 
         # Register actions & Ctrl+1..9
         for i, p in enumerate(pages):
@@ -547,20 +555,63 @@ class KernDockApp(Adw.Application):
             demo_row.connect("activated", lambda _r: (self.switcher_popover.popdown(), self.runtime.connect_async("demo")))
         virt_lb.append(demo_row)
 
-        is_qemu = lk.connected and lk.port == "tcp://127.0.0.1:4446"
-        qemu_row = Adw.ActionRow(title="QEMU Emulator", subtitle="tcp://127.0.0.1:4446", activatable=not is_qemu)
+        qst = self.runtime.qemu_status()
+        qurl = qst["wire_url"]
+        is_qemu = lk.connected and lk.port == qurl
+        qsub = (
+            f"Running · {qurl}" if qst["running"]
+            else (f"Auto-start · {qurl}" if qst["can_launch"] else qurl)
+        )
+        qemu_row = Adw.ActionRow(title="QEMU Emulator", subtitle=GLib.markup_escape_text(qsub), activatable=not is_qemu)
         qemu_row.add_prefix(Gtk.Image(icon_name="computer-symbolic"))
+        if qst["running"]:
+            stop_q = Gtk.Button(icon_name="media-playback-stop-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Stop QEMU Emulator")
+            stop_q.add_css_class("flat")
+            stop_q.connect(
+                "clicked",
+                lambda _b: (
+                    self.switcher_popover.popdown(),
+                    self.runtime.stop_qemu_daemon(),
+                    self._toast("QEMU emulator stopped"),
+                ),
+            )
+            qemu_row.add_suffix(stop_q)
         if is_qemu:
             chk = Gtk.Image(icon_name="object-select-symbolic")
             chk.add_css_class("accent")
             qemu_row.add_suffix(chk)
         else:
             qemu_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            qemu_row.connect("activated", lambda _r: (self.switcher_popover.popdown(), self.runtime.connect_async("tcp://127.0.0.1:4446")))
+            qemu_row.connect(
+                "activated",
+                lambda _r: (
+                    self.switcher_popover.popdown(),
+                    self.runtime.connect_or_start_qemu_async(
+                        on_status=lambda m: GLib.idle_add(self._toast, m),
+                    ),
+                ),
+            )
         virt_lb.append(qemu_row)
         root.append(virt_lb)
 
         self.switcher_popover.set_child(root)
+
+    def _rebuild_new_tab_popover(self) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+        lb = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        lb.add_css_class("navigation-sidebar")
+        for spec in self.runtime.pages.ordered():
+            if spec.id == "overview":
+                continue
+            r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=4, margin_bottom=4, margin_start=6, margin_end=8)
+            r.append(Gtk.Image.new_from_icon_name(spec.icon))
+            r.append(Gtk.Label(label=spec.title, xalign=0, hexpand=True))
+            row = Gtk.ListBoxRow(child=r)
+            row._page_id = spec.id  # type: ignore[attr-defined]
+            lb.append(row)
+        lb.connect("row-activated", lambda _lb, row: (self.new_tab_popover.popdown(), self._open_tab(row._page_id)))
+        box.append(lb)
+        self.new_tab_popover.set_child(box)
 
     def _set_handset_visible(self, visible: bool) -> None:
         self._handset_visible = visible

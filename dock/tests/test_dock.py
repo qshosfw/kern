@@ -685,6 +685,75 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
             finally:
                 rt.shutdown()
 
+    def test_lazy_hex_range_and_emu_helpers(self) -> None:
+        import struct
+        import threading
+        import emu
+        import kernfs_mount
+        from kern_dock.ui.widgets.hex_view import _format_page_lines, decode_inspector_values
+
+        # 1. RigWireFsBackend.read_range fetches ONLY requested byte slice (no full download)
+        payload = bytes(range(256)) * 20  # 5120 bytes
+        requested_offsets: list[tuple[int, int]] = []
+
+        class _FakeWire:
+            def send_record(self, svc: int, op: int, data: bytes = b"") -> bytes:
+                if op == rigwire.OP_TRANSFER_OPEN:
+                    return struct.pack("<HHI", 7, 120, len(payload))
+                if op == rigwire.OP_TRANSFER_CHUNK:
+                    _tid, off, req_len = struct.unpack("<HIH", data[:8])
+                    requested_offsets.append((off, req_len))
+                    chunk = payload[off : off + req_len]
+                    return struct.pack("<HIH", 7, off, len(chunk)) + chunk
+                if op == rigwire.OP_TRANSFER_CLOSE:
+                    return b""
+                return b""
+
+        be = kernfs_mount.RigWireFsBackend(_FakeWire(), threading.Lock())
+        chunk, total = be.read_range("/user/big.bin", 2048, 256)
+        self.assertEqual(total, len(payload))
+        self.assertEqual(chunk, payload[2048 : 2048 + 256])
+        self.assertTrue(all(off >= 2048 and off < 2304 for off, _ in requested_offsets))
+        self.assertLessEqual(sum(ln for _, ln in requested_offsets), 256)
+
+        # 2. Hex formatting & inspector decode
+        text = _format_page_lines(b"KERN\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b", 0x100)
+        lines = text.splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("00000100   4B 45 52 4E"))
+        self.assertIn("KERN", lines[0])
+        dec = decode_inspector_values(b"\x34\x12\x00\x00", 0)
+        self.assertEqual(dec["u16"], "4660 (0x1234)")
+
+        # 3. Unified emulator helpers (zero-dep PNG + ASCII preview)
+        fb = make_demo_framebuffer("433.500", "145.500", "EMU")
+        png = emu.encode_fb_png(fb, scale=2)
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        art = emu.render_fb_ascii(fb)
+        self.assertIn("┌", art)
+        self.assertIn("█", art)
+
+        # 4. All built-in plugins (including Integrations / KISS TNC and Tables) must activate cleanly
+        with tempfile.TemporaryDirectory() as td:
+            rt = DockRuntime(
+                DockOptions(no_tray=True, no_ipc=True),
+                config_path=Path(td) / "cfg.toml",
+                persist_config=False,
+                enable_dbus=False,
+            )
+            rt.start_services()
+            try:
+                summary = {p["id"]: p for p in rt.plugins.summary()}
+                for pid in ("radio-bridges", "table-inspector"):
+                    self.assertIn(pid, summary)
+                    self.assertTrue(summary[pid]["loaded"], f"Plugin {pid} failed to load: {summary[pid].get('error')}")
+                    self.assertIsNone(summary[pid]["error"])
+                page_titles = {p.title for p in rt.pages.ordered()}
+                self.assertIn("Integrations", page_titles)
+                self.assertIn("Tables", page_titles)
+            finally:
+                rt.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

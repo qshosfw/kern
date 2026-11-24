@@ -25,7 +25,7 @@ from ...device.packages import (
 )
 from ..runtime import DockRuntime
 from ..widgets.app_icon import inspect_krx_metadata, make_app_icon_widget
-from ..widgets.hex_view import show_hex_viewer_dialog
+from ..widgets.hex_view import show_hex_viewer_dialog, show_remote_hex_viewer_dialog
 from ..widgets.util import fmt_size
 
 
@@ -620,15 +620,7 @@ class AppsView:
         be = self.runtime.link.fs_backend
         if be is None:
             return
-
-        def _w() -> None:
-            try:
-                data = be.read_bytes(remote_path)
-                GLib.idle_add(show_hex_viewer_dialog, self.win, data, name)
-            except Exception as exc:
-                GLib.idle_add(self._on_toast, f"Read failed: {exc}")
-
-        threading.Thread(target=_w, daemon=True).start()
+        show_remote_hex_viewer_dialog(self.win, be, remote_path, name)
 
     def _remove_app(self, remote_path: str) -> None:
         be = self.runtime.link.fs_backend

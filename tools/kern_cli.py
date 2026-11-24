@@ -54,7 +54,7 @@ COMMAND_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
             ("provision", "Provision .krx/.mod package bundles over RigWire"),
             ("mount", "Mount radio KernFS over RigWire via cross-platform WebDAV"),
             ("ports", "List connected USB & serial radio ports (alias: devices)"),
-            ("emu", "Launch QEMU hardware emulator with interactive Web UI"),
+            ("emu", "Hardware QEMU emulator (Dock-ready RigWire TCP, agent CLI & tests)"),
         ],
     ),
     (
@@ -299,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "doctor":
         return _run_doctor(rest)
     if cmd == "emu":
-        return _run_py("emulator_helper.py", rest)
+        return _run_py("emu.py", rest)
     if cmd == "dock":
         dock_src = str(REPO_ROOT / "dock" / "src")
         cur_pp = os.environ.get("PYTHONPATH", "")

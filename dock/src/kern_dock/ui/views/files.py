@@ -16,7 +16,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 import kernfs_mount
 
 from ..runtime import DockRuntime
-from ..widgets.hex_view import show_hex_viewer_dialog
+from ..widgets.hex_view import show_remote_hex_viewer_dialog
 from ..widgets.util import file_icon_name, fmt_size
 
 _PLACES: tuple[tuple[str, str, str], ...] = (
@@ -446,15 +446,7 @@ class FilesView:
         be = self.runtime.link.fs_backend
         if be is None:
             return
-
-        def _w() -> None:
-            try:
-                data = be.read_bytes(remote_path)
-                GLib.idle_add(show_hex_viewer_dialog, self.win, data, filename)
-            except Exception as exc:
-                GLib.idle_add(self._on_toast, f"Read failed: {exc}")
-
-        threading.Thread(target=_w, daemon=True).start()
+        show_remote_hex_viewer_dialog(self.win, be, remote_path, filename)
 
     def _on_download(self, remote_path: str, filename: str) -> None:
         be = self.runtime.link.fs_backend
