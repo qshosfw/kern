@@ -118,12 +118,19 @@ impl View<PopupModel> for PopupView {
         let msg = model.custom_msg.as_str();
         let total_lines = text::count_lines(msg);
 
-        // Short unbadged notifications / alerts (e.g. "Passcode Set", "Wrong Passcode", "Mismatch"):
+        // Short 1-2 line alerts and confirmations render as a compact centered card modal;
+        // multi-line scrollable content and hold-to-confirm bars use the full bottom sheet.
         let anim_p = model.anim.progress();
-        if !has_badges && total_lines <= 2 && msg.len() < 60 {
+        if model.hold.required_ms == 0 && total_lines <= 2 {
             let t = model.title_str();
-            let title_opt = (!t.is_empty()).then_some(t);
-            widgets::draw_modal_popup_materialize(canvas, title_opt, msg, anim_p);
+            widgets::draw_modal_card(
+                canvas,
+                (!t.is_empty()).then_some(t),
+                msg,
+                model.confirm_label.unwrap_or(""),
+                model.cancel_label.unwrap_or(""),
+                anim_p,
+            );
             return;
         }
 
@@ -224,7 +231,10 @@ impl View<PopupModel> for PopupView {
                 if scroll_popup(model, *code) {
                     return true;
                 }
-                return !matches!(code, KeyCode::Ptt | KeyCode::Menu | KeyCode::Exit);
+                return !matches!(
+                    code,
+                    KeyCode::Ptt | KeyCode::Menu | KeyCode::Key5 | KeyCode::Exit
+                );
             }
         }
         false
@@ -234,6 +244,25 @@ impl View<PopupModel> for PopupView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_confirm_renders_compact_card_leaving_status_bar_clear() {
+        let mut model = PopupModel::new().with_badges("OK", "");
+        let _ = model.custom_title.push_str("Radio App");
+        let _ = model
+            .custom_msg
+            .push_str("Not installed.\nSync via Kern Dock.");
+        model.anim.jump_complete();
+
+        let mut canvas = Canvas::new();
+        PopupView::new().render(&mut canvas, &model);
+
+        // Status bar page 0 (Y=0..7) stays untouched by centered card modal
+        assert!(canvas.buffer[0].iter().all(|&b| b == 0));
+        // Card header at Y=11..19 (page 1/2) and [M] OK badge near Y=43..49 (page 5/6) render
+        assert!(canvas.buffer[2][20] != 0);
+        assert!(canvas.buffer[5][10] != 0 || canvas.buffer[6][10] != 0);
+    }
 
     #[test]
     fn hold_confirm_header_omits_countdown_text() {

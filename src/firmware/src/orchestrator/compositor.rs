@@ -115,7 +115,7 @@ impl ModalCompositor {
                 model.cancel_label = Some(cancel);
             }
             let _ = model.custom_title.push_str(title);
-            let _ = model.custom_msg.push_str(message);
+            wrap_alert_str(message, &mut model.custom_msg);
         }
     }
 
@@ -269,7 +269,7 @@ impl ModalCompositor {
                 } = event
                 {
                     match code {
-                        KeyCode::Menu => Some(ModalResult::Confirmed(tag)),
+                        KeyCode::Menu | KeyCode::Key5 => Some(ModalResult::Confirmed(tag)),
                         KeyCode::Exit => Some(ModalResult::Dismissed(tag)),
                         _ => None,
                     }
@@ -373,17 +373,14 @@ pub static mut ACTIVE_MODAL: ModalCompositor = ModalCompositor::new();
 pub const TAG_LOW_BATTERY_POPUP: u8 = 0xFE;
 pub const TAG_SYSTEM_ALERT: u8 = 0xFD;
 
-#[cfg(any(test, not(feature = "passcode")))]
-const MAX_ALERT_LINE_PX: i16 = 116;
+const MAX_ALERT_LINE_PX: i16 = 112;
 
-#[cfg(any(test, not(feature = "passcode")))]
 #[derive(Clone)]
 pub struct SystemAlert {
     pub title: heapless::String<18>,
-    pub message: heapless::String<56>,
+    pub message: heapless::String<88>,
 }
 
-#[cfg(any(test, not(feature = "passcode")))]
 impl SystemAlert {
     pub const fn empty() -> Self {
         Self {
@@ -393,13 +390,11 @@ impl SystemAlert {
     }
 }
 
-#[cfg(any(test, not(feature = "passcode")))]
 struct AlertQueue {
     has_alert: bool,
     slot: SystemAlert,
 }
 
-#[cfg(any(test, not(feature = "passcode")))]
 impl AlertQueue {
     const fn new() -> Self {
         Self {
@@ -408,11 +403,14 @@ impl AlertQueue {
         }
     }
 
-    fn push_alert(&mut self, title: &str, message: &str) {
+    fn push_alert(&mut self, title: &str, message: &str, overwrite: bool) {
+        if self.has_alert && !overwrite {
+            return;
+        }
         self.has_alert = true;
         self.slot.title.clear();
         let _ = self.slot.title.push_str(title);
-        wrap_alert_text(message, &mut self.slot.message);
+        wrap_alert_str(message, &mut self.slot.message);
     }
 
     fn peek(&self) -> Option<&SystemAlert> {
@@ -436,10 +434,8 @@ impl AlertQueue {
     }
 }
 
-#[cfg(any(test, not(feature = "passcode")))]
 static mut SYSTEM_ALERTS: AlertQueue = AlertQueue::new();
 
-#[cfg(any(test, not(feature = "passcode")))]
 #[inline(never)]
 fn wrap_alert_bytes(raw: &str, dst: &mut [u8]) -> usize {
     const SPACE_PX: i16 = 4; // TomThumb ' ' glyph x_advance
@@ -494,8 +490,18 @@ fn wrap_alert_bytes(raw: &str, dst: &mut [u8]) -> usize {
     pos
 }
 
-/// Word-wraps `raw` for TomThumb rendering inside the 116 px bottom-sheet viewport.
-#[cfg(any(test, not(feature = "passcode")))]
+/// Non-generic word-wrapper into `String<88>` so release firmware keeps a single monomorphization.
+#[inline(never)]
+fn wrap_alert_str(raw: &str, out: &mut heapless::String<88>) {
+    let vec = unsafe { out.as_mut_vec() };
+    vec.clear();
+    let _ = vec.resize_default(88);
+    let len = wrap_alert_bytes(raw, vec.as_mut_slice());
+    vec.truncate(len);
+}
+
+/// Word-wraps `raw` for TomThumb rendering inside the modal/sheet viewport.
+#[cfg(test)]
 pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>) {
     let vec = unsafe { out.as_mut_vec() };
     vec.clear();
@@ -505,11 +511,18 @@ pub fn wrap_alert_text<const N: usize>(raw: &str, out: &mut heapless::String<N>)
 }
 
 /// Queues a persistent notification for presentation once the Launcher is active.
-#[cfg(any(test, not(feature = "passcode")))]
 #[inline(never)]
 pub fn queue_system_alert(title: &str, message: &str) {
     unsafe {
-        (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).push_alert(title, message);
+        (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).push_alert(title, message, true);
+    }
+}
+
+/// Queues a low-priority onboarding/welcome notice only when no alert is already pending.
+#[inline(never)]
+pub fn queue_system_alert_if_empty(title: &str, message: &str) {
+    unsafe {
+        (*core::ptr::addr_of_mut!(SYSTEM_ALERTS)).push_alert(title, message, false);
     }
 }
 
@@ -525,8 +538,7 @@ pub fn clear_system_alerts() {
     }
 }
 
-/// Presents the next queued system notification as a persistent modal bottom sheet.
-#[cfg(any(test, not(feature = "passcode")))]
+/// Presents the next queued system notification as a modal dialog.
 pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
     let modal_active = unsafe { (*core::ptr::addr_of!(ACTIVE_MODAL)).is_active() };
     if modal_active {
@@ -551,19 +563,15 @@ pub fn present_next_system_alert(ctx: &mut SysContext) -> bool {
     true
 }
 
-#[cfg(all(not(test), feature = "passcode"))]
-#[inline(always)]
-pub fn present_next_system_alert(_ctx: &mut SysContext) -> bool {
-    false
-}
-
 /// Displays an immediate non-blocking Low Battery alert modal on top of active screen.
 pub fn show_low_battery_popup() {
     unsafe {
-        (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_popup(
+        (*core::ptr::addr_of_mut!(ACTIVE_MODAL)).show_confirm(
             TAG_LOW_BATTERY_POPUP,
             "Low Battery",
-            "Please charge your radio.",
+            "Charge radio soon.",
+            "OK",
+            "",
         );
     }
 }
