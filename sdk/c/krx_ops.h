@@ -2,7 +2,7 @@
 #ifndef KRX_OPS_H
 #define KRX_OPS_H
 
-#define KRX_ABI_VERSION    4u
+#define KRX_ABI_VERSION    5u
 
 /* Domain 0x0: SYS */
 #define OP_SYS_INFO        0x00u
@@ -205,6 +205,7 @@
 #define SUB_UI_MODAL_GET_TEXT      4u
 #define SUB_UI_MODAL_SHOW          5u
 #define SUB_UI_MODAL_TOAST         6u
+#define SUB_UI_MODAL_PROMPT_NUM    7u
 
 /* ui_status */
 #define SUB_UI_STATUS_SET_BAR      0u

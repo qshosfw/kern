@@ -199,6 +199,12 @@ impl KrxApiTable {
         unsafe { (self.call)(op.u32_id(), a0, a1, a2) }
     }
 
+    /// Invokes `op` and decodes the canonical ABI v5 `Status` return (`>= 0` Ok, `< 0` Err).
+    #[inline(always)]
+    pub fn call_result(&self, op: Op, a0: usize, a1: usize, a2: usize) -> Result<usize, crate::Status> {
+        crate::Status::from_raw(self.call_op(op, a0, a1, a2))
+    }
+
     #[inline(always)]
     pub fn prop_get(&self, id: u8) -> u8 {
         self.call_op(Op::PropGet, id as usize, 0, 0) as u8
@@ -480,6 +486,39 @@ impl KrxApiTable {
         let _ = self.call_op(
             Op::UiModal,
             crate::sub::ui_modal::SHOW as usize,
+            &raw const req as usize,
+            0,
+        );
+    }
+
+    #[inline(always)]
+    pub fn prompt_number(
+        &self,
+        tag: u8,
+        title: &[u8],
+        unit: &[u8],
+        value: i32,
+        min: i32,
+        max: i32,
+        step: i32,
+        decimals: u8,
+    ) {
+        let req = KrxNumReq {
+            title: title.as_ptr(),
+            unit: unit.as_ptr(),
+            value,
+            min,
+            max,
+            step,
+            tag,
+            decimals,
+            title_len: title.len().min(255) as u8,
+            unit_len: unit.len().min(255) as u8,
+            _pad: [0; 4],
+        };
+        let _ = self.call_op(
+            Op::UiModal,
+            crate::sub::ui_modal::PROMPT_NUM as usize,
             &raw const req as usize,
             0,
         );
@@ -903,6 +942,23 @@ pub struct KrxModalReq {
     pub _pad: u8,
 }
 
+/// Numeric / frequency prompt request (`Op::UiModal`, sub = `PROMPT_NUM`, `32 B` aligned).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct KrxNumReq {
+    pub title: *const u8,
+    pub unit: *const u8,
+    pub value: i32,
+    pub min: i32,
+    pub max: i32,
+    pub step: i32,
+    pub tag: u8,
+    pub decimals: u8,
+    pub title_len: u8,
+    pub unit_len: u8,
+    pub _pad: [u8; 4],
+}
+
 /// Raw peripheral bus request (`Op::IoBus`, sub = 0 I2C / 1 SPI / 6 flash_read).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -1015,6 +1071,7 @@ pub const KRX_WIDGET_SMALL_DIGIT: u8 = 13;
 pub const KRX_WIDGET_BATTERY: u8 = 14;
 pub const KRX_WIDGET_SIGNAL: u8 = 15;
 pub const KRX_WIDGET_MODAL_BOX: u8 = 16;
+pub const KRX_WIDGET_DETAIL_ROW: u8 = 17;
 
 /// Unified widget / bitmap draw descriptor (`Op::UiWidget`, `Op::GfxCtl` bitmap).
 #[repr(C)]

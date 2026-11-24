@@ -8,7 +8,7 @@
 
 /// ABI major version. Bump on any renumbered or retired operation; the loader
 /// admits only packages built against this exact version.
-pub const VERSION: u16 = 4;
+pub const VERSION: u16 = 5;
 
 mod cap;
 mod ops;
@@ -18,7 +18,7 @@ pub mod status;
 pub mod types;
 
 pub use cap::{Cap, CapIter, CapabilitySet};
-pub use ops::{ArgKind, OP_TABLE, Op, OpDesc, Sig, domain, idx, missing_caps, sub};
+pub use ops::{ArgKind, OP_TABLE, Op, OpDesc, Sig, domain, idx, missing_caps, op_flags, sub};
 pub use pkg::{hash_app_action, icon, scope};
 pub use status::Status;
 pub use types::*;

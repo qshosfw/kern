@@ -100,31 +100,62 @@ pub unsafe fn str_or_default<'a>(ptr: *const u8, len: usize, default: &'a str) -
 
 // ── Single-Entry System Call Dispatcher & API Table ──────────────────────────
 
+type DomainHandler = unsafe fn(u8, usize, usize, usize) -> usize;
+
+static DOMAIN_HANDLERS: [DomainHandler; 9] = [
+    service::dispatch_sys,
+    service::dispatch_proc,
+    service::dispatch_ipc,
+    storage::dispatch_fs,
+    radio::dispatch_rf,
+    audio::dispatch_aud,
+    display::dispatch_gfx,
+    ui::dispatch_ui,
+    io::dispatch_io,
+];
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kern_call(op: u32, a0: usize, a1: usize, a2: usize) -> usize {
-    use ::abi::domain;
     let op_byte = op as u8;
-    let idx = op_byte & 0x0F;
-    // Every operation declares its capability in `abi::OP_TABLE`; an image that did
-    // not import it is refused here, before any domain dispatcher runs.
-    let granted = super::native_runner::active_native_caps().raw();
-    if ::abi::missing_caps(op_byte, granted) != Some(0) {
-        return 0;
-    }
-    unsafe {
-        match op_byte >> 4 {
-            domain::SYS => service::dispatch_sys(idx, a0, a1, a2),
-            domain::PROC => service::dispatch_proc(idx, a0, a1, a2),
-            domain::IPC => service::dispatch_ipc(idx, a0, a1, a2),
-            domain::FS => storage::dispatch_fs(idx, a0, a1, a2),
-            domain::RF => radio::dispatch_rf(idx, a0, a1, a2),
-            domain::AUD => audio::dispatch_aud(idx, a0, a1, a2),
-            domain::GFX => display::dispatch_gfx(idx, a0, a1, a2),
-            domain::UI => ui::dispatch_ui(idx, a0, a1, a2),
-            domain::IO => io::dispatch_io(idx, a0, a1, a2),
-            _ => 0,
+    let Some((_, desc)) = ::abi::Op::lookup(op_byte) else {
+        return ::abi::Status::Unsupported.to_raw();
+    };
+
+    // Pre-flight Cortex-M0+ stack guard at the syscall boundary (no hardware MPU):
+    // catch low stack headroom BEFORE entering deep kernel domains so an overflowing
+    // guest never smashes `NATIVE_SLOT` or `KERN_HW` (`usb`/`wire`) and drops RigWire.
+    #[cfg(all(target_arch = "arm", not(test)))]
+    if super::fault::can_contain_guest_in_thread() {
+        let min_margin = if (desc.flags & ::abi::op_flags::HIGH_STACK) != 0 {
+            304usize
+        } else {
+            176usize
+        };
+        if !kernel::sys::SystemDiagnostics::is_stack_guard_intact()
+            || kernel::sys::SystemDiagnostics::stack_margin_bytes() < min_margin
+        {
+            unsafe {
+                super::fault::unwind_guest_fault(
+                    kernel::runtime::fault::Exception::Stack,
+                    op_byte,
+                );
+            }
         }
     }
+
+    // Centralized capability & pointer gate driven directly from 4-byte `OpDesc`.
+    if let Some(req_cap) = desc.cap {
+        if !super::native_runner::active_native_caps().contains(req_cap) {
+            return ::abi::Status::PermissionDenied.to_raw();
+        }
+    }
+    if !desc.sig.check_ptrs(a0, a1, a2) {
+        return ::abi::Status::InvalidArg.to_raw();
+    }
+
+    let dom = (op_byte >> 4) as usize;
+    let idx = op_byte & 0x0F;
+    unsafe { DOMAIN_HANDLERS[dom](idx, a0, a1, a2) }
 }
 
 pub static NATIVE_API_TABLE: KrxApiTable = KrxApiTable {
@@ -149,11 +180,21 @@ mod tests {
         slot.caps = CapabilitySet::empty().with(Cap::DisplayDirect);
         let api = &NATIVE_API_TABLE;
         let granted = unsafe { api.invoke(Op::IoTime, 0, 0, 0) };
-        // Keypad was not imported: the key state read is refused, uptime is not.
-        assert_eq!(unsafe { api.invoke(Op::IoKey, 0, 0, 0) }, 0);
+        // Keypad was not imported: the key state read is refused with PermissionDenied, uptime is not.
+        assert_eq!(
+            unsafe { api.invoke(Op::IoKey, 0, 0, 0) },
+            ::abi::Status::PermissionDenied.to_raw()
+        );
         slot.caps = CapabilitySet::ALL;
         let _ = granted;
-        assert_eq!(unsafe { kern_call(0xFF, 0, 0, 0) }, 0);
+        assert_eq!(
+            unsafe { kern_call(0xFF, 0, 0, 0) },
+            ::abi::Status::Unsupported.to_raw()
+        );
+        assert_eq!(
+            unsafe { api.invoke(Op::SysInfo, 0, 0, 0) },
+            ::abi::Status::InvalidArg.to_raw()
+        );
         crate::runtime::native_runner::init_native_slot();
     }
 

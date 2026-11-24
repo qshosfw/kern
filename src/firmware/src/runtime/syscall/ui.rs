@@ -162,9 +162,6 @@ unsafe fn draw_menu_item_widget(canvas: &mut gfx::Canvas, d: &KrxWidget, s0: &st
 
 #[inline(never)]
 unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
-    if desc.is_null() {
-        return 1;
-    }
     let d = unsafe { &*desc };
     let canvas = active_canvas_mut();
     let ux = d.x.max(0) as u8;
@@ -225,7 +222,24 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
                 }
             }
         }
-        _ => return 1,
+        KRX_WIDGET_DETAIL_ROW => {
+            let mut parts = raw0.split(|&b| b == 0);
+            let title = parts
+                .next()
+                .and_then(utils::format::ascii_str)
+                .unwrap_or("");
+            let badge_s = parts
+                .next()
+                .and_then(utils::format::ascii_str)
+                .unwrap_or("");
+            let right_s = parts
+                .next()
+                .and_then(utils::format::ascii_str)
+                .unwrap_or("");
+            let sub_s = unsafe { parse_str(d.p1, d.len1 as usize) }.unwrap_or("");
+            gfx::widgets::draw_detail_row(canvas, d.y, (d.a & 1) != 0, badge_s, title, right_s, sub_s);
+        }
+        _ => return ::abi::Status::Unsupported.to_raw(),
     }
     0
 }
@@ -278,7 +292,21 @@ pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                 }
                 0
             }
-            _ => 0,
+            ui_modal::PROMPT_NUM => {
+                let req = a1 as *const ::abi::KrxNumReq;
+                if req.is_null() {
+                    return ::abi::Status::InvalidArg.to_raw();
+                }
+                let r = unsafe { &*req };
+                let title = unsafe { str_or_default(r.title, r.title_len as usize, "Value") };
+                let unit = unsafe { str_or_default(r.unit, r.unit_len as usize, "") };
+                let model = gfx::gui::modules::number_input::NumberInputModel::new(
+                    r.value, r.min, r.max, r.step, r.decimals,
+                );
+                modal_mut().prompt_number(r.tag, title, unit, model);
+                0
+            }
+            _ => ::abi::Status::Unsupported.to_raw(),
         },
         op::UiStatus => match a0 as u8 {
             ui_status::SET_BAR => {

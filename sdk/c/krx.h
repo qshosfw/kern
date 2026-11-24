@@ -107,6 +107,50 @@ typedef struct {
     u16  _pad;
 } KrxSweepReq;
 
+// ── Canonical ABI Status Codes (`0 = Ok`, `-code` on error) ──────────────────
+
+#define KRX_ERR_OK                0u
+#define KRX_ERR_INVALID_ARG       1u
+#define KRX_ERR_BAD_PTR           2u
+#define KRX_ERR_BAD_LENGTH        3u
+#define KRX_ERR_PERMISSION_DENIED 4u
+#define KRX_ERR_BUSY              5u
+#define KRX_ERR_NOT_FOUND         6u
+#define KRX_ERR_ALREADY_EXISTS    7u
+#define KRX_ERR_NO_SPACE          8u
+#define KRX_ERR_CORRUPT_DATA      9u
+#define KRX_ERR_IO_ERROR          10u
+#define KRX_ERR_TIMEOUT           11u
+#define KRX_ERR_LOW_POWER         12u
+#define KRX_ERR_SAFETY_BLOCKED    13u
+#define KRX_ERR_UNSUPPORTED       14u
+#define KRX_ERR_BAD_SESSION       15u
+#define KRX_ERR_INCOMPATIBLE_ABI  16u
+#define KRX_ERR_FAULTED           17u
+#define KRX_ERR_MAX               17u
+
+static inline u8 krx_is_err(u32 raw) {
+    i32 s = (i32)raw;
+    return (u8)(s < 0 && s >= -(i32)KRX_ERR_MAX);
+}
+
+static inline u8 krx_err_code(u32 raw) {
+    return krx_is_err(raw) ? (u8)(-(i32)raw) : KRX_ERR_OK;
+}
+
+typedef struct {
+    const u8* title;
+    const u8* unit;
+    i32 value;
+    i32 min;
+    i32 max;
+    i32 step;
+    u8  tag;
+    u8  title_len;
+    u8  unit_len;
+    u8  decimals;
+} KrxNumReq;
+
 // ── UI Status Bar & Widget Descriptors ───────────────────────────────────────
 
 #define KRX_STATUS_VISIBLE       (1u << 0)
@@ -153,6 +197,7 @@ typedef struct __attribute__((packed)) {
 #define KRX_WIDGET_BATTERY         14u
 #define KRX_WIDGET_SIGNAL          15u
 #define KRX_WIDGET_MODAL_BOX       16u
+#define KRX_WIDGET_DETAIL_ROW      17u
 
 #define KRX_TAB_FLAG_INTEGRATED_86 (1u << 0)
 #define KRX_TAB_FLAG_BOTTOM_BORDER (1u << 1)
@@ -353,6 +398,7 @@ typedef enum {
 #define MODAL_RESULT_TEXT_DONE      2u
 #define MODAL_RESULT_SHEET_SELECTED 3u
 #define MODAL_RESULT_CANCELED       4u
+#define MODAL_RESULT_NUMBER_DONE    5u
 
 #define KRX_SYS_EV_CLOSE_APP        17u
 
@@ -687,6 +733,10 @@ static inline void krx_ui_show_toast(const KrxApiTable* api, const u8* msg, u8 l
     krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_TOAST, (u32)msg, ((u32)len) | (((u32)dur_ms) << 16));
 }
 
+static inline u32 krx_ui_prompt_number(const KrxApiTable* api, const KrxNumReq* req) {
+    return krx_call(api, OP_UI_MODAL, SUB_UI_MODAL_PROMPT_NUM, (u32)req, 0u);
+}
+
 static inline u8 krx_ui_set_status_bar(const KrxApiTable* api, const KrxStatusBar* sb) {
     return (u8)krx_call(api, OP_UI_STATUS, SUB_UI_STATUS_SET_BAR, (u32)sb, 0u);
 }
@@ -870,6 +920,17 @@ static inline void krx_ui_draw_modal_box(const KrxApiTable* api, u8 w, u8 h, u8*
     KrxWidget d;
     d.p0 = (const u8*)out_origin; d.len0 = 0u; d.x = 0; d.y = 0; d.w = w; d.h = h;
     krx_call(api, OP_UI_WIDGET, KRX_WIDGET_MODAL_BOX, (u32)&d, 0u);
+}
+
+/* `title_packed` is `title` or NUL-separated `title\0badge\0right_metric` of length `t_len`. */
+static inline void krx_ui_draw_detail_row(
+    const KrxApiTable* api, i16 y,
+    const u8* title_packed, u16 t_len, const u8* sub, u16 s_len, u8 sel
+) {
+    KrxWidget d;
+    d.p0 = title_packed; d.p1 = sub; d.x = 0; d.y = y; d.len0 = t_len; d.len1 = s_len;
+    d.w = 121u; d.h = 21u; d.a = sel; d.b = 0u; d.extra = 0u;
+    krx_call(api, OP_UI_WIDGET, KRX_WIDGET_DETAIL_ROW, (u32)&d, 0u);
 }
 
 // ── Inline Helpers: IO (Key / Power / Serial / Time) ─────────────────────────

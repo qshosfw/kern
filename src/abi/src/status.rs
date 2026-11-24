@@ -65,6 +65,30 @@ impl Status {
         -(self as u8 as isize)
     }
 
+    /// Encode as a raw `usize` `kern_call` return (`0` for `Ok`, `(-code) as usize` for errors).
+    #[inline(always)]
+    pub const fn to_raw(self) -> usize {
+        self.to_ret() as usize
+    }
+
+    /// True if `raw` lies in the reserved ABI error band `[-MAX_CODE ..= -1]`.
+    #[inline(always)]
+    pub const fn is_err_raw(raw: usize) -> bool {
+        let s = raw as isize;
+        s < 0 && s >= -(Self::MAX_CODE as isize)
+    }
+
+    /// Decode a raw `kern_call` return value into `Ok(value)` or `Err(Status)`.
+    #[inline(always)]
+    pub const fn from_raw(raw: usize) -> Result<usize, Self> {
+        let s = raw as isize;
+        if s < 0 && s >= -(Self::MAX_CODE as isize) {
+            Err(Self::from_code((-s) as u8))
+        } else {
+            Ok(raw)
+        }
+    }
+
     #[inline(always)]
     pub const fn from_code(code: u8) -> Self {
         if code <= Self::MAX_CODE {
@@ -73,5 +97,26 @@ impl Status {
         } else {
             Self::IoError
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_raw_roundtrip() {
+        assert_eq!(Status::Ok.to_raw(), 0);
+        assert_eq!(Status::from_raw(0), Ok(0));
+        assert_eq!(Status::from_raw(42), Ok(42));
+        for code in 1..=Status::MAX_CODE {
+            let st = Status::from_code(code);
+            let raw = st.to_raw();
+            assert!(Status::is_err_raw(raw));
+            assert_eq!(Status::from_raw(raw), Err(st));
+        }
+        // Values outside the reserved negative band are preserved as Ok raw u32 values.
+        assert!(!Status::is_err_raw((-100isize) as usize));
+        assert_eq!(Status::from_raw(0xDEAD_BEEF_u32 as usize), Ok(0xDEAD_BEEF_u32 as usize));
     }
 }

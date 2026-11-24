@@ -161,11 +161,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
     };
     match idx {
         op::FsRead => {
-            let req = a1 as *const KrxFsReq;
-            if req.is_null() {
-                return 0;
-            }
-            let r = unsafe { &*req };
+            let r = unsafe { &*(a1 as *const KrxFsReq) };
             let sub = a0 as u8;
             if sub == fs_read::LIST_DIR {
                 let out = r.buf as *mut KrxDirEntry;
@@ -242,11 +238,7 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
         }
         op::FsWrite => {
-            let req = a1 as *const KrxFsReq;
-            if req.is_null() {
-                return 1;
-            }
-            let r = unsafe { &*req };
+            let r = unsafe { &*(a1 as *const KrxFsReq) };
             match a0 as u8 {
                 fs_write::FILE | fs_write::APPEND => {
                     if let Some(src) = unsafe { ptr_slice(r.buf, r.len as usize) } {
@@ -343,16 +335,13 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             }
         }
         op::FsRename => {
-            let req = a0 as *const KrxFsReq;
-            if !req.is_null() {
-                let r = unsafe { &*req };
-                if let (Some(o_str), Some(n_str)) = (
-                    parse_non_sys_user_path(r.path, r.path_len),
-                    parse_non_sys_user_path(r.buf as *const u8, r.len as u8),
-                ) {
-                    if st.rename(o_str, n_str).is_ok() {
-                        return 0;
-                    }
+            let r = unsafe { &*(a0 as *const KrxFsReq) };
+            if let (Some(o_str), Some(n_str)) = (
+                parse_non_sys_user_path(r.path, r.path_len),
+                parse_non_sys_user_path(r.buf as *const u8, r.len as u8),
+            ) {
+                if st.rename(o_str, n_str).is_ok() {
+                    return 0;
                 }
             }
             1
