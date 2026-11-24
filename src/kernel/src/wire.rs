@@ -1,7 +1,8 @@
-//! High-Assurance Serial & Control Protocol (RigWire Core 0.1).
+//! Universal, Firmware-Agnostic Transceiver Wire Protocol (RigWire v2).
 //!
-//! Provides bounded, language-neutral framing, request/response tracking,
-//! sequence validation, capability discovery, and chunked streaming Data transfers.
+//! Provides naturally aligned 8-byte framing, terminator-only in-place COBS,
+//! canonical `abi::Status` error reporting, declarative `SemanticCap` / `TableDesc`
+//! discovery, universal Resource Handle RPC, and streaming storage transfers.
 
 pub mod header;
 pub mod ops_control;
@@ -10,6 +11,7 @@ pub mod ops_data;
 pub mod ops_events;
 pub mod session;
 
+pub use abi::Status;
 pub use header::*;
 pub use ops_control::*;
 pub use ops_core::*;

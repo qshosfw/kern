@@ -55,7 +55,7 @@ pub(super) fn is_remote_control_active(hw: &SystemHardware, now: u32) -> bool {
     let usb_connected = false;
 
     #[cfg(any(feature = "uart", feature = "usb_cdc"))]
-    let session_id = hw.wire.session.active_session_id;
+    let session_id = hw.wire.session.session_epoch;
     #[cfg(not(any(feature = "uart", feature = "usb_cdc")))]
     let session_id = 0u32;
 

@@ -1,6 +1,6 @@
-//! RigWire Events Domain (0x02) Standard Operations and Event IDs.
+//! RigWire v2 Events Channel (`CH_EVENTS = 0x02`) Opcodes & Event IDs.
 
-use super::header::WireStatus;
+use abi::Status;
 
 pub const OP_EVENTS_SUBSCRIBE: u8 = 0x01;
 pub const OP_EVENTS_UNSUBSCRIBE: u8 = 0x02;
@@ -13,7 +13,6 @@ pub const EVENT_BATTERY_UPDATE: u16 = 0x0003;
 pub const EVENT_KEY_PRESS: u16 = 0x0004;
 pub const EVENT_APP_CHANGED: u16 = 0x0005;
 
-/// EVENTS Subscribe Request Parser
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventSubscribeReq {
     pub component_id: u8,
@@ -22,17 +21,14 @@ pub struct EventSubscribeReq {
 }
 
 impl EventSubscribeReq {
-    pub fn parse(payload: &[u8]) -> Result<Self, WireStatus> {
+    pub fn parse(payload: &[u8]) -> Result<Self, Status> {
         if payload.len() < 7 {
-            return Err(WireStatus::BadLength);
+            return Err(Status::BadLength);
         }
-        let component_id = payload[0];
-        let event_mask = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
-        let initial_credits = u16::from_le_bytes([payload[5], payload[6]]);
         Ok(Self {
-            component_id,
-            event_mask,
-            initial_credits,
+            component_id: payload[0],
+            event_mask: u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]),
+            initial_credits: u16::from_le_bytes([payload[5], payload[6]]),
         })
     }
 }

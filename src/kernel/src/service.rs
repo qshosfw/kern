@@ -262,10 +262,120 @@ pub trait UsbService {
     }
 }
 
+/// Logical serial port identifier for `SerialCore` multi-port routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PortId {
+    UsbCdc = 0,
+    Uart0 = 1,
+    Uart1 = 2,
+    Wireless = 3,
+    Loopback = 4,
+}
+
+impl PortId {
+    #[inline(always)]
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::UsbCdc),
+            1 => Some(Self::Uart0),
+            2 => Some(Self::Uart1),
+            3 => Some(Self::Wireless),
+            4 => Some(Self::Loopback),
+            _ => None,
+        }
+    }
+}
+
+/// Arbitrated operating mode for a logical serial port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PortMode {
+    /// Kernel RigWire v2 COBS framer owns the port (unleased KRX writes are fenced).
+    RigWire = 0,
+    /// Exclusive raw byte stream leased to a runtime package (`owner_pid`).
+    RawLease = 1,
+    /// Dedicated GNSS NMEA/UBX parser feed.
+    GnssFeed = 2,
+    /// Hardware ring forwarder bridged to another `PortId`.
+    Bridge = 3,
+}
+
+/// Compact 4-byte runtime arbitration state for one serial port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct PortLeaseState {
+    pub mode: PortMode,
+    pub owner_pid: u8,
+    pub peer_port: u8,
+    pub flags: u8,
+}
+
+impl PortLeaseState {
+    pub const fn rigwire() -> Self {
+        Self {
+            mode: PortMode::RigWire,
+            owner_pid: 0,
+            peer_port: 0,
+            flags: 0,
+        }
+    }
+}
+
+/// Lightweight multi-port lease & write-fence router (`8 B` SRAM for 2 ports).
+pub struct SerialRouter<const N: usize> {
+    pub ports: [PortLeaseState; N],
+}
+
+impl<const N: usize> SerialRouter<N> {
+    pub const fn new() -> Self {
+        Self {
+            ports: [PortLeaseState::rigwire(); N],
+        }
+    }
+
+    pub fn acquire_raw(&mut self, port: usize, pid: u8) -> abi::Status {
+        let Some(slot) = self.ports.get_mut(port) else {
+            return abi::Status::InvalidArg;
+        };
+        if slot.mode == PortMode::RawLease && slot.owner_pid != pid {
+            return abi::Status::Busy;
+        }
+        slot.mode = PortMode::RawLease;
+        slot.owner_pid = pid;
+        abi::Status::Ok
+    }
+
+    pub fn release_owner(&mut self, pid: u8) {
+        for slot in &mut self.ports {
+            if slot.mode == PortMode::RawLease && slot.owner_pid == pid {
+                *slot = PortLeaseState::rigwire();
+            }
+        }
+    }
+
+    /// True if `pid` is permitted to perform raw serial reads/writes on `port`.
+    /// When `rigwire_session_active` is true on a `RigWire`-mode port, unleased apps
+    /// are write-fenced so COBS frames cannot be corrupted.
+    #[inline(always)]
+    pub fn can_raw_io(&self, port: usize, pid: u8, rigwire_session_active: bool) -> bool {
+        let Some(slot) = self.ports.get(port) else {
+            return false;
+        };
+        match slot.mode {
+            PortMode::RawLease => slot.owner_pid == pid,
+            PortMode::RigWire => !rigwire_session_active,
+            PortMode::GnssFeed | PortMode::Bridge => false,
+        }
+    }
+}
+
 /// Unified streaming byte I/O contract for UART and USB CDC virtual COM ports.
 pub trait SerialPort {
     fn write(&mut self, data: &[u8]);
     fn read(&mut self, buf: &mut [u8]) -> usize;
+    /// Drain TX hardware FIFO / endpoint before baud changes, sleep, or system reset.
+    fn flush(&mut self) {}
 }
 
 /// Declarative interface for UART/Serial communications.
@@ -277,6 +387,9 @@ impl<T: SerialPort + ?Sized> SerialPort for &mut T {
     }
     fn read(&mut self, buf: &mut [u8]) -> usize {
         (**self).read(buf)
+    }
+    fn flush(&mut self) {
+        (**self).flush();
     }
 }
 

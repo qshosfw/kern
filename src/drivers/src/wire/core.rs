@@ -1,47 +1,60 @@
-//! Core Protocol Operations (HELLO, PING, GET_CAPS, REBOOT).
+//! RigWire v2 Core Channel (`0x00`) Dispatcher: HELLO, PING, TIME_SYNC, RUNLEVEL, CAPS & TABLES.
 
 use super::WireDriver;
 use kern_platform_traits::time::TimeSource;
 use kernel::service::SerialPort;
 use kernel::wire::*;
 
-const CAPS_REPLY: [u8; 35] = [
-    1,
-    0,
-    0,
-    0, // generation = 1
-    0xFF,
-    0xFF, // next cursor = 0xFFFF (end)
-    7,    // 7 components
-    1,
-    2,
-    1,
-    COMPONENT_CLASS_RADIO,
-    1,
-    2,
-    2,
-    COMPONENT_CLASS_MCU,
-    1,
-    2,
-    3,
-    COMPONENT_CLASS_DISPLAY,
-    1,
-    2,
-    4,
-    COMPONENT_CLASS_KEYPAD,
-    1,
-    2,
-    5,
-    COMPONENT_CLASS_AUDIO,
-    1,
-    2,
-    6,
-    COMPONENT_CLASS_POWER,
-    1,
-    2,
-    7,
-    COMPONENT_CLASS_STORAGE,
-];
+/// Wire-ready `CORE::CAPS` reply: `[gen: u32, next_cursor: u16, count: u8, SemanticCap[7]]`.
+///
+/// Little-endian packed directly in `.rodata` (`7 + 7*16 = 119 B`, fits in one 128 B frame,
+/// zero runtime serialization loops or stack buffers).
+#[repr(C, packed)]
+struct CapsReplyWire {
+    generation: u32,
+    next_cursor: u16,
+    count: u8,
+    caps: [SemanticCap; 7],
+}
+
+const CAPS_REPLY_WIRE: CapsReplyWire = CapsReplyWire {
+    generation: 1,
+    next_cursor: 0xFFFF,
+    count: 7,
+    caps: [
+        SemanticCap::new(*b"TUNE", *b"BK48", 0, 1, 0x0001, 0x0000_000F),
+        SemanticCap::new(*b"TXPA", *b"BK48", 0, 1, 0x0001, 0x0000_0007),
+        SemanticCap::new(*b"AUDI", *b"PA00", 0, 1, 0x0004, 0x0000_0003),
+        SemanticCap::new(*b"DISP", *b"ST75", 0, 1, 0x0005, 0x0000_0003),
+        SemanticCap::new(*b"INPT", *b"KMAT", 0, 1, 0x0006, 0x0000_0001),
+        SemanticCap::new(*b"POWR", *b"ADC0", 0, 1, 0x0007, 0x0000_0003),
+        SemanticCap::new(*b"STOR", *b"KF21", 0, 1, 0x0009, 0x0000_0003),
+    ],
+};
+
+/// Wire-ready `CORE::TABLES` reply: `[count: u8, TableDesc[6]]` (`1 + 6*12 = 73 B`).
+#[repr(C, packed)]
+struct TablesReplyWire {
+    count: u8,
+    tables: [TableDesc; 6],
+}
+
+const TABLES_REPLY_WIRE: TablesReplyWire = TablesReplyWire {
+    count: 6,
+    tables: [
+        TableDesc::new(*b"CHAN", 64, 512, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
+        TableDesc::new(*b"CONT", 32, 256, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
+        TableDesc::new(*b"BNDP", 32, 64, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
+        TableDesc::new(*b"ZONE", 32, 64, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
+        TableDesc::new(*b"HITS", 32, 128, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
+        TableDesc::new(*b"FMBC", 16, 64, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
+    ],
+};
+
+#[inline(always)]
+const fn as_raw_bytes<T>(val: &'static T) -> &'static [u8] {
+    unsafe { ::core::slice::from_raw_parts(val as *const T as *const u8, ::core::mem::size_of::<T>()) }
+}
 
 impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
     #[inline(never)]
@@ -51,79 +64,46 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
         raw_len: usize,
         uptime_ms: u32,
     ) {
-        let covered = HEADER_LEN + header.payload_len as usize;
+        let covered = HEADER_LEN + header.len as usize;
         if covered > raw_len {
             return;
         }
         let payload = &self.rx_buf[HEADER_LEN..covered];
         let mut words = [0u32; 5];
         let mut override_slice: Option<&[u8]> = None;
-        let mut post_op = 0u8; // 1 = reset session, 2 = reboot
+        let mut reboot_mode: u8 = 0xFF;
 
-        let (status, resp_len) = match header.opcode {
+        let (status, resp_len) = match header.op {
             OP_CORE_HELLO => {
                 if payload.len() < 8 {
-                    (WireStatus::BadLength, 0)
+                    (Status::BadLength, 0)
                 } else {
-                    let host_session =
+                    let epoch =
                         u32::from_le_bytes([payload[2], payload[3], payload[4], payload[5]]);
-                    let req_payload = u16::from_le_bytes([payload[6], payload[7]]);
-
-                    if payload[0] > 1 || payload[1] < 1 || host_session == 0 {
-                        words[0] = (WireStatus::BadVersion.to_u8() as u32) | (1 << 8) | (1 << 16);
-                        post_op = 1;
-                        (WireStatus::BadVersion, 3)
+                    let req_mtu = u16::from_le_bytes([payload[6], payload[7]]);
+                    if epoch == 0 {
+                        (Status::InvalidArg, 0)
                     } else {
-                        self.session
-                            .begin_session(host_session, req_payload.clamp(32, 128));
-                        let max_p = self.session.negotiated_max_payload as u32;
+                        let mtu = req_mtu.clamp(32, 128);
+                        self.session.begin_session(epoch, mtu);
                         let tp = self.transport_profile as u32;
-                        words[0] = 1 | (max_p << 8) | (1 << 24);
+                        words[0] = ((mtu as u32) << 8) | (1 << 24);
                         words[1] = tp << 24;
-                        words[2] = (tp >> 8) | (1 << 8) | (1 << 24);
-                        words[3] = 1 << 24;
-                        (WireStatus::Ok, 17)
+                        words[2] = (tp >> 8) | (1 << 8);
+                        words[3] = 2 << 8;
+                        (Status::Ok, 17)
                     }
                 }
             }
 
             OP_CORE_PING => {
                 if payload.len() < 4 {
-                    return;
+                    (Status::BadLength, 0)
+                } else {
+                    words[0] = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+                    words[1] = uptime_ms;
+                    (Status::Ok, 8)
                 }
-                words[0] = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                words[1] = uptime_ms;
-                (WireStatus::Ok, 8)
-            }
-
-            OP_CORE_GET_CAPS => {
-                override_slice = Some(&CAPS_REPLY);
-                (WireStatus::Ok, CAPS_REPLY.len())
-            }
-
-            OP_CORE_GET_STATUS => {
-                words[0] = 8400u32 << 16; // nominal = 8400 mV
-                words[1] = uptime_ms;
-                (WireStatus::Ok, 8)
-            }
-
-            OP_CORE_GET_RESULT => {
-                words[0] = (WireStatus::Ok.to_u8() as u32) | (header.sequence << 8);
-                words[1] = header.sequence >> 24;
-                (WireStatus::Ok, 5)
-            }
-
-            // State-changing core ops require the established session: a stray byte stream
-            // or an unauthenticated peer on a shared line must never reset a remote node.
-            OP_CORE_REBOOT
-                if self.session.active_session_id == 0
-                    || header.session_id != self.session.active_session_id =>
-            {
-                (WireStatus::BadSession, 0)
-            }
-            OP_CORE_REBOOT => {
-                post_op = 2;
-                (WireStatus::Ok, 0)
             }
 
             OP_CORE_TIME_SYNC => {
@@ -135,26 +115,49 @@ impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {
                 words[1] = self.time.now_us();
                 words[2] = self.time.now_us();
                 words[3] = uptime_ms;
-                (WireStatus::Ok, 16)
+                (Status::Ok, 16)
             }
 
             OP_CORE_GET_TIME => {
                 words[0] = self.time.now_us();
                 words[1] = uptime_ms;
-                (WireStatus::Ok, 8)
+                (Status::Ok, 8)
             }
 
-            _ => (WireStatus::Unsupported, 0),
+            OP_CORE_RUNLEVEL if !self.session.is_active() => (Status::BadSession, 0),
+            OP_CORE_RUNLEVEL => {
+                reboot_mode = payload.first().copied().unwrap_or(0);
+                (Status::Ok, 0)
+            }
+
+            OP_CORE_CAPS => {
+                let s = as_raw_bytes(&CAPS_REPLY_WIRE);
+                override_slice = Some(s);
+                (Status::Ok, s.len())
+            }
+
+            OP_CORE_TABLES => {
+                let s = as_raw_bytes(&TABLES_REPLY_WIRE);
+                override_slice = Some(s);
+                (Status::Ok, s.len())
+            }
+
+            _ => (Status::Unsupported, 0),
         };
 
-        let resp_bytes = unsafe { core::slice::from_raw_parts(words.as_ptr() as *const u8, 20) };
+        let resp_bytes = unsafe { ::core::slice::from_raw_parts(words.as_ptr() as *const u8, 20) };
         let resp_slice = override_slice.unwrap_or(&resp_bytes[..resp_len]);
         let _ = self.send_response(header, status, resp_slice);
 
-        if post_op == 1 {
-            self.session.reset();
-        } else if post_op == 2 {
-            kernel::power::PowerControl::reboot();
+        if reboot_mode != 0xFF {
+            // Drain TX FIFO / USB endpoint before resetting so the host receives the ACK.
+            self.port.flush();
+            let mode = match reboot_mode {
+                1 => kernel::power::RebootMode::Bootloader,
+                2 => kernel::power::RebootMode::SafeRecovery,
+                _ => kernel::power::RebootMode::Firmware,
+            };
+            kernel::power::PowerControl::reboot_with(mode);
         }
     }
 }

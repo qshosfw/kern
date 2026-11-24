@@ -28,16 +28,21 @@ try:
 except ImportError:
     serial = None
 
-# ── WIRE CONSTANTS ────────────────────────────────────────────────────────────
-WIRE_MAGIC = 0x52  # 'R'
-WIRE_MAJOR = 0x01
+# ── WIRE CONSTANTS (RigWire v2) ──────────────────────────────────────────────
+WIRE_IDENT = 0x52  # High nibble 'R' (0x5), protocol rev 2
+WIRE_MAGIC = WIRE_IDENT  # Legacy constant name kept for external scripts
 
-FLAG_RESPONSE = 0x01
-FLAG_EVENT = 0x02
+FLAG_QOS_MASK = 0x03
+FLAG_ENC = 1 << 2
+FLAG_AUTH = 1 << 3
+FLAG_NO_SEQ = 1 << 4
+FLAG_ACK_REQ = 1 << 5
+FLAG_ERR = 1 << 6
+FLAG_RESP = 1 << 7
 
-HEADER_LEN = 15
+HEADER_LEN = 8
 CRC_LEN = 2
-MIN_RECORD_LEN = 17
+MIN_RECORD_LEN = 10
 MAX_WIRE_FILE_SIZE = 262144
 MAX_APP_PATH_LEN = 24
 
@@ -60,15 +65,19 @@ SERVICE_CONTROL = 0x01
 SERVICE_EVENTS = 0x02
 SERVICE_DATA = 0x03
 
-# Core Opcodes (§5 / §8.5)
+# Core Opcodes (RigWire v2)
 OP_CORE_HELLO = 0x01
-OP_CORE_GET_CAPS = 0x02
-OP_CORE_PING = 0x03
-OP_CORE_GET_STATUS = 0x04
-OP_CORE_GET_RESULT = 0x05
-OP_CORE_REBOOT = 0x06
-OP_CORE_TIME_SYNC = 0x07
+OP_CORE_PING = 0x02
+OP_CORE_TIME_SYNC = 0x03
+OP_CORE_AUTH = 0x04
+OP_CORE_LEASE = 0x05
+OP_CORE_PORT_CTRL = 0x06
+OP_CORE_RUNLEVEL = 0x07
 OP_CORE_GET_TIME = 0x08
+OP_CORE_CAPS = 0x09
+OP_CORE_TABLES = 0x0A
+OP_CORE_GET_CAPS = OP_CORE_CAPS
+OP_CORE_REBOOT = OP_CORE_RUNLEVEL
 
 # Universal Handle Opcodes (§8.5)
 OP_HANDLE_GET = 0x01
@@ -194,7 +203,7 @@ KEY_STATES = {
     "released": 2,
 }
 
-# Data Opcodes (§8.5)
+# Data Opcodes (RigWire v2)
 OP_TRANSFER_OPEN = 0x01
 OP_TRANSFER_CHUNK = 0x02
 OP_TRANSFER_CLOSE = 0x03
@@ -202,38 +211,31 @@ OP_TRANSFER_ABORT = 0x04
 OP_TRANSFER_STAT = 0x05
 OP_TRANSFER_LIST = 0x06
 OP_TRANSFER_REMOVE = 0x07
+OP_TRANSFER_SECTOR_HASH = 0x08
 
 TRANSFER_MODE_READ = 0
 TRANSFER_MODE_WRITE = 1
 
-# Wire Status Codes (§6)
+# Canonical Microkernel Status Codes (abi::Status, 0..=17)
 STATUS_NAMES = {
     0: "OK",
-    1: "ACCEPTED",
-    2: "BAD_LENGTH",
-    3: "BAD_RANGE",
-    4: "BAD_VERSION",
-    5: "BAD_FLAGS",
-    6: "BAD_SESSION",
-    7: "STALE_SEQUENCE",
-    8: "DUPLICATE_CONFLICT",
-    9: "UNSUPPORTED",
-    10: "BUSY",
-    11: "STALE_REVISION",
-    12: "STALE_COMPONENT",
-    13: "SAFETY_DENIED",
-    14: "AUTH_REQUIRED",
-    15: "AUTHZ_DENIED",
-    16: "NOT_PERSISTABLE",
-    17: "UNSUPPORTED_ATOMICITY",
-    18: "FAILED",
-    19: "IN_PROGRESS",
-    20: "STALE_CATALOGUE",
-    21: "UNSUPPORTED_FIELD",
-    22: "NOT_FOUND",
-    23: "IO_ERROR",
-    27: "TIMEOUT",
-    28: "INTERNAL",
+    1: "INVALID_ARG",
+    2: "BAD_PTR",
+    3: "BAD_LENGTH",
+    4: "PERMISSION_DENIED",
+    5: "BUSY",
+    6: "NOT_FOUND",
+    7: "ALREADY_EXISTS",
+    8: "NO_SPACE",
+    9: "CORRUPT_DATA",
+    10: "IO_ERROR",
+    11: "TIMEOUT",
+    12: "LOW_POWER",
+    13: "SAFETY_BLOCKED",
+    14: "UNSUPPORTED",
+    15: "BAD_SESSION",
+    16: "INCOMPATIBLE_ABI",
+    17: "FAULTED",
 }
 
 
@@ -603,28 +605,25 @@ class RigWireClient:
                             rx.extend(c2)
 
     def _encode_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
-        is_hello = (service == SERVICE_CORE and opcode == OP_CORE_HELLO)
-        session = 0 if is_hello else self.session_id
-        # Firmware WireSession only advances expected_sequence for non-core services.
         seq = 0 if service == SERVICE_CORE else self.sequence
         if service != SERVICE_CORE:
-            self.sequence = (self.sequence + 1) & 0xFFFFFFFF
+            self.sequence = (self.sequence + 1) & 0xFFFF
+            if self.sequence == 0:
+                self.sequence = 1
 
         header = struct.pack(
-            "<BBBBBIIH",
-            WIRE_MAGIC,
-            WIRE_MAJOR,
-            0,  # flags: request
+            "<BBBBHH",
+            WIRE_IDENT,
+            FLAG_ACK_REQ,
             service,
             opcode,
-            session,
             seq,
             len(payload),
         )
         raw = header + payload
         crc = crc16_ccitt(raw)
         raw += struct.pack("<H", crc)
-        return b"\x00" + cobs_encode(raw) + b"\x00"
+        return cobs_encode(raw) + b"\x00"
 
     def send_record(self, service: int, opcode: int, payload: bytes = b"") -> bytes:
         t0 = time.monotonic()
@@ -666,12 +665,12 @@ class RigWireClient:
                 cand = cobs_decode(raw_frame)
             except Exception:
                 continue
-            if len(cand) < MIN_RECORD_LEN or cand[0] != WIRE_MAGIC or cand[1] != WIRE_MAJOR:
+            if len(cand) < MIN_RECORD_LEN or cand[0] != WIRE_IDENT:
                 continue
-            flags = cand[2]
-            if (flags & FLAG_EVENT) != 0:
+            flags = cand[1]
+            if (flags & FLAG_RESP) == 0:
                 continue
-            if cand[3] != expected_service or cand[4] != expected_opcode:
+            if cand[2] != expected_service or cand[3] != expected_opcode:
                 continue
             decoded = cand
             break
@@ -679,12 +678,10 @@ class RigWireClient:
         if decoded is None:
             raise TimeoutError("No valid response frame received from radio (delimiter timeout)")
 
-        magic, major, flags, service, opcode, session, seq, plen = struct.unpack(
-            "<BBBBBIIH", decoded[:HEADER_LEN]
-        )
+        ident, flags, service, opcode, seq, plen = struct.unpack("<BBBBHH", decoded[:HEADER_LEN])
 
-        if magic != WIRE_MAGIC or major != WIRE_MAJOR:
-            raise ValueError(f"Invalid wire identity: magic={magic:#04x}, major={major:#04x}")
+        if ident != WIRE_IDENT:
+            raise ValueError(f"Invalid wire identity: ident={ident:#04x}")
 
         payload_and_crc = decoded[HEADER_LEN:]
         payload = payload_and_crc[:-CRC_LEN]
@@ -697,21 +694,16 @@ class RigWireClient:
         if len(payload) != plen:
             raise ValueError(f"Payload length discrepancy: header says {plen}, got {len(payload)}")
 
-        if not payload:
-            raise ValueError("Response record missing required status byte")
-
-        status_code = payload[0]
-        status_name = STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
-        app_data = payload[1:]
-
-        if status_code != 0:
+        if (flags & FLAG_ERR) != 0:
+            status_code = payload[0] if payload else 10
+            status_name = STATUS_NAMES.get(status_code, f"UNKNOWN({status_code})")
             raise RigWireError(
                 status_code,
                 status_name,
                 f"Radio responded with status {status_name} ({status_code})",
             )
 
-        return app_data
+        return payload
 
     # ── CORE SERVICE (0x00) ───────────────────────────────────────────────────
 
@@ -758,31 +750,76 @@ class RigWireClient:
         return {"uptime_ms": uptime_ms, "rtt_ms": rtt_ms}
 
     def caps(self) -> list:
-        """Enumerate device capabilities via GET_CAPS (§5.2)."""
+        """Enumerate firmware-agnostic 16-byte SemanticCap descriptors via CORE::CAPS."""
         cursor = 0
-        generation = 0
         records = []
 
         while cursor != 0xFFFF:
-            req = struct.pack("<IH", generation, cursor)
-            resp = self.send_record(SERVICE_CORE, OP_CORE_GET_CAPS, req)
+            req = struct.pack("<H", cursor)
+            resp = self.send_record(SERVICE_CORE, OP_CORE_CAPS, req)
             if len(resp) < 7:
                 break
-            resp_gen, next_cursor, count = struct.unpack("<IHB", resp[:7])
-            generation = resp_gen
+            _gen, next_cursor, count = struct.unpack("<IHB", resp[:7])
             off = 7
             for _ in range(count):
-                if off + 2 > len(resp):
+                if off + 16 > len(resp):
                     break
-                rec_type = resp[off]
-                rec_len = resp[off + 1]
-                data = resp[off + 2:off + 2 + rec_len]
-                off += 2 + rec_len
-                records.append({"type": rec_type, "data": data})
-
+                dom, drv, inst, rev, obj, fl = struct.unpack("<4s4sBBHI", resp[off:off + 16])
+                off += 16
+                records.append({
+                    "domain": dom.decode("ascii", errors="replace"),
+                    "driver": drv.decode("ascii", errors="replace"),
+                    "instance": inst,
+                    "rev": rev,
+                    "object": obj,
+                    "flags": fl,
+                })
             cursor = next_cursor
 
         return records
+
+    def tables(self) -> list:
+        """Enumerate structured binary table descriptors via CORE::TABLES."""
+        resp = self.send_record(SERVICE_CORE, OP_CORE_TABLES)
+        if not resp:
+            return []
+        count = resp[0]
+        out = []
+        off = 1
+        for _ in range(count):
+            if off + 12 > len(resp):
+                break
+            tag, rec_sz, cap, sver, fl, _ = struct.unpack("<4sHHBBH", resp[off:off + 12])
+            off += 12
+            out.append({
+                "tag": tag.decode("ascii", errors="replace"),
+                "record_size": rec_sz,
+                "capacity": cap,
+                "schema_ver": sver,
+                "flags": fl,
+            })
+        return out
+
+    def sector_hashes(self, remote_path: str) -> list[int]:
+        """Fetch FNV-1a 32-bit hashes per 256-byte page for O(delta) table sync."""
+        self._validate_remote_path(remote_path)
+        pb = remote_path.encode("ascii")
+        hashes: list[int] = []
+        page = 0
+        while True:
+            req = struct.pack("<HB", page, len(pb)) + pb
+            resp = self.send_record(SERVICE_DATA, OP_TRANSFER_SECTOR_HASH, req)
+            if len(resp) < 3:
+                break
+            total_pages, count = struct.unpack("<HB", resp[:3])
+            for i in range(count):
+                off = 3 + i * 4
+                if off + 4 <= len(resp):
+                    hashes.append(struct.unpack("<I", resp[off:off + 4])[0])
+            page += count
+            if count == 0 or page >= total_pages:
+                break
+        return hashes
 
     def time_sync(self, host_time_us=None):
         """Execute a single NTP-like microsecond time synchronization round.
@@ -1576,24 +1613,22 @@ def run_protocol_tests():
         assert dec == tv, f"COBS roundtrip mismatch for len {len(tv)}"
     print(f"PASSED ({len(test_vectors)} vectors verified)")
 
-    print("Test 3: Wire Record Header Layout & Struct Packing...", end=" ")
+    print("Test 3: RigWire v2 8-Byte Header Layout & Struct Packing...", end=" ")
     header = struct.pack(
-        "<BBBBBIIH",
-        WIRE_MAGIC,
-        WIRE_MAJOR,
-        0,
+        "<BBBBHH",
+        WIRE_IDENT,
+        FLAG_ACK_REQ,
         SERVICE_DATA,
         OP_TRANSFER_OPEN,
-        0x12345678,
         42,
         64,
     )
-    assert len(header) == HEADER_LEN, f"Header len must be 15, got {len(header)}"
-    unpacked = struct.unpack("<BBBBBIIH", header)
-    assert unpacked[0] == WIRE_MAGIC and unpacked[1] == WIRE_MAJOR
-    assert unpacked[3] == SERVICE_DATA and unpacked[4] == OP_TRANSFER_OPEN
-    assert unpacked[5] == 0x12345678 and unpacked[6] == 42 and unpacked[7] == 64
-    print("PASSED (15-byte little-endian packed format)")
+    assert len(header) == HEADER_LEN, f"Header len must be 8, got {len(header)}"
+    unpacked = struct.unpack("<BBBBHH", header)
+    assert unpacked[0] == WIRE_IDENT and unpacked[1] == FLAG_ACK_REQ
+    assert unpacked[2] == SERVICE_DATA and unpacked[3] == OP_TRANSFER_OPEN
+    assert unpacked[4] == 42 and unpacked[5] == 64
+    print("PASSED (8-byte naturally aligned format)")
 
     print("Test 4: IEEE 802.3 CRC-32 Checksum Engine...", end=" ")
     crc32_val = crc32_ieee(b"123456789")
@@ -1661,7 +1696,7 @@ def run_protocol_tests():
     print(f"PASSED (verified character '{first_char}')")
 
     print("Test 8: KRX Validator & Paginated Dir-List Decoder...", end=" ")
-    sample_krx = os.path.join(os.path.dirname(os.path.dirname(__file__)), "packages", "beacon", "beacon.krx")
+    sample_krx = os.path.join(os.path.dirname(os.path.dirname(__file__)), "packages", "apps", "beacon", "beacon.krx")
     if os.path.exists(sample_krx):
         kinfo = validate_krx_package(open(sample_krx, "rb").read())
         assert kinfo["name"] and kinfo["class_name"] == "Native"

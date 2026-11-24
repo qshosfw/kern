@@ -93,6 +93,17 @@ fn dispatch_io_power(sub: u8, a1: usize) -> usize {
     }
 }
 
+#[cfg(not(test))]
+#[inline(never)]
+fn can_raw_serial(port_idx: usize) -> bool {
+    let pid = super::super::native_runner::slot_ref().pid.0;
+    #[cfg(any(feature = "uart", feature = "usb_cdc"))]
+    let wire_active = crate::kern_hw().wire.session.is_active();
+    #[cfg(not(any(feature = "uart", feature = "usb_cdc")))]
+    let wire_active = false;
+    crate::hardware::serial_router_mut().can_raw_io(port_idx, pid, wire_active)
+}
+
 unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
     use ::abi::sub::io_serial;
     match sub {
@@ -105,11 +116,17 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
             {
                 #[cfg(feature = "usb")]
                 if crate::kern_hw().usb.is_connected() {
+                    if !can_raw_serial(kernel::service::PortId::UsbCdc as usize) {
+                        return 0;
+                    }
                     let _ = crate::kern_hw().usb.cdc_write(slice);
                     return len as usize;
                 }
                 #[cfg(feature = "uart")]
                 {
+                    if !can_raw_serial(kernel::service::PortId::Uart0 as usize) {
+                        return 0;
+                    }
                     let _ = py32_hal::uart::write_bytes(slice);
                     len as usize
                 }
@@ -143,10 +160,16 @@ unsafe fn dispatch_io_serial(sub: u8, a1: usize, a2: usize) -> usize {
             {
                 #[cfg(feature = "usb")]
                 if crate::kern_hw().usb.is_connected() {
+                    if !can_raw_serial(kernel::service::PortId::UsbCdc as usize) {
+                        return 0;
+                    }
                     return crate::kern_hw().usb.cdc_read(slice);
                 }
                 #[cfg(feature = "uart")]
                 {
+                    if !can_raw_serial(kernel::service::PortId::Uart0 as usize) {
+                        return 0;
+                    }
                     crate::kern_hw().uart.read(slice)
                 }
                 #[cfg(not(feature = "uart"))]

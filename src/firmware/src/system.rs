@@ -73,18 +73,18 @@ pub(crate) fn poll_usb_and_wire(hw: &mut SystemHardware, now: u32, dirty_render:
             break;
         };
         note_wire_activity(now);
-        let is_passive_read = header.service == kernel::wire::SERVICE_CONTROL
-            && (header.opcode == kernel::wire::OP_HANDLE_GET
-                || header.opcode == kernel::wire::OP_HANDLE_STREAM);
+        let is_passive_read = header.channel == kernel::wire::CH_CONTROL
+            && (header.op == kernel::wire::OP_HANDLE_GET
+                || header.op == kernel::wire::OP_HANDLE_STREAM);
         if !is_passive_read {
             wake_and_notify_activity(hw);
             *dirty_render = true;
         }
         if !crate::services::wire::dispatch_wire_record(&header, hw, now) {
             enqueue_event(Event::Sys(kernel::ipc::SysEvent {
-                target: header.service,
-                command: header.opcode,
-                arg: header.sequence as u16,
+                target: header.channel,
+                command: header.op,
+                arg: header.seq,
             }));
         }
     }

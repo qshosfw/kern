@@ -28,6 +28,15 @@ impl SystemSerialPort {
     }
 }
 
+/// Global `SerialCore` port lease & write-fence router (`0 = UsbCdc`, `1 = Uart0`).
+pub static mut SERIAL_ROUTER: kernel::service::SerialRouter<2> =
+    kernel::service::SerialRouter::new();
+
+#[inline(always)]
+pub fn serial_router_mut() -> &'static mut kernel::service::SerialRouter<2> {
+    unsafe { &mut *core::ptr::addr_of_mut!(SERIAL_ROUTER) }
+}
+
 impl kernel::service::SerialPort for SystemSerialPort {
     fn write(&mut self, _data: &[u8]) {
         #[cfg(feature = "usb_cdc")]
@@ -72,6 +81,11 @@ impl kernel::service::SerialPort for SystemSerialPort {
         }
 
         0
+    }
+
+    fn flush(&mut self) {
+        #[cfg(feature = "uart")]
+        py32_hal::uart::wait_tx_complete();
     }
 }
 

@@ -1,22 +1,22 @@
-//! Declarative Firmware RigWire Service & Component Dispatcher.
+//! Declarative Firmware RigWire v2 Service & Component Dispatcher.
 //!
-//! Bridges RigWire serial transport with microkernel services, radio control,
-//! display streaming, and hardened KernFS file transfers using a single-context
-//! zero-copy cursor (`WireCtx`) and table-driven opcode dispatch.
+//! Bridges RigWire v2 serial transport with microkernel services, radio control,
+//! display mirroring, structured table sector-hash delta sync, and streaming KernFS
+//! transfers using a single-context zero-copy cursor (`WireCtx`) and `abi::Status`.
 
 use crate::hardware::SystemHardware;
 use crate::services::calibration::CALIB_FILE_PATH;
 use crate::services::primitives;
+use abi::Status;
 use kernel::event::{Event, KeyCode, KeyState};
-use kernel::service::{PowerService, RfFineTuning};
+use kernel::service::{PowerService, RfFineTuning, SerialPort};
 use kernel::wire::*;
 use utils::units::Frequency;
 
 /// Single-indirect KernFS page limit: 8 L1 index pages × 128 pages × 256 B = 256 KiB.
 const MAX_WIRE_FILE_SIZE: usize = 8 * 128 * 256;
 
-/// Active transfer session state. Coalesces writes in the 512 B `staging_buf`
-/// so arbitrary-size files stream straight to KernFS with zero RAM limit.
+/// Active transfer session state coalescing writes in the 512 B `staging_buf`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ActiveTransfer {
@@ -65,16 +65,16 @@ fn transfer_mut() -> &'static mut ActiveTransfer {
 }
 
 #[inline(never)]
-fn active_transfer_mut(transfer_id: u16) -> Result<&'static mut ActiveTransfer, WireStatus> {
+fn active_transfer_mut(transfer_id: u16) -> Result<&'static mut ActiveTransfer, Status> {
     let t = transfer_mut();
     if t.active && t.transfer_id == transfer_id {
         Ok(t)
     } else {
-        Err(WireStatus::BadSession)
+        Err(Status::BadSession)
     }
 }
 
-/// Event streaming subscription state (§8.9).
+/// Event streaming subscription state.
 #[derive(Clone, Copy)]
 pub struct EventSubscription {
     pub active_mask: u32,
@@ -136,9 +136,9 @@ impl<'a, 'b> WireCtx<'a, 'b> {
     }
 
     #[inline(never)]
-    fn take(&mut self, n: usize) -> Result<&'a [u8], WireStatus> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], Status> {
         if self.inp.len() < n {
-            return Err(WireStatus::BadLength);
+            return Err(Status::BadLength);
         }
         let (head, tail) = self.inp.split_at(n);
         self.inp = tail;
@@ -146,7 +146,7 @@ impl<'a, 'b> WireCtx<'a, 'b> {
     }
 
     #[inline(never)]
-    fn rd_le(&mut self, n: usize) -> Result<u32, WireStatus> {
+    fn rd_le(&mut self, n: usize) -> Result<u32, Status> {
         let s = self.take(n)?;
         let mut v = 0u32;
         for &b in s.iter().rev() {
@@ -156,50 +156,53 @@ impl<'a, 'b> WireCtx<'a, 'b> {
     }
 
     #[inline(never)]
-    fn rd_path(&mut self) -> Result<&'a str, WireStatus> {
+    fn rd_path(&mut self) -> Result<&'a str, Status> {
         let len = self.rd_u8()? as usize;
-        utils::format::ascii_str(self.take(len)?).ok_or(WireStatus::BadLength)
+        utils::format::ascii_str(self.take(len)?).ok_or(Status::BadLength)
     }
 
     #[inline(always)]
-    fn rd_u8(&mut self) -> Result<u8, WireStatus> {
+    fn rd_u8(&mut self) -> Result<u8, Status> {
         Ok(self.rd_le(1)? as u8)
     }
 
     #[inline(always)]
-    fn rd_u16(&mut self) -> Result<u16, WireStatus> {
+    fn rd_u16(&mut self) -> Result<u16, Status> {
         Ok(self.rd_le(2)? as u16)
     }
 
     #[inline(always)]
-    fn rd_u32(&mut self) -> Result<u32, WireStatus> {
+    fn rd_u32(&mut self) -> Result<u32, Status> {
         self.rd_le(4)
     }
 
     #[inline(never)]
     fn put(&mut self, data: &[u8]) {
-        let end = (self.pos + data.len()).min(128);
-        let n = end - self.pos;
-        self.out[self.pos..end].copy_from_slice(&data[..n]);
-        self.pos = end;
+        let n = data.len().min(128 - self.pos);
+        unsafe {
+            core::ptr::copy_nonoverlapping(data.as_ptr(), self.out.as_mut_ptr().add(self.pos), n);
+        }
+        self.pos += n;
     }
 
     #[inline(never)]
     fn zeroes(&mut self, len: usize) {
-        let end = (self.pos + len).min(128);
-        self.out[self.pos..end].fill(0);
-        self.pos = end;
+        let n = len.min(128 - self.pos);
+        unsafe {
+            core::ptr::write_bytes(self.out.as_mut_ptr().add(self.pos), 0, n);
+        }
+        self.pos += n;
     }
 
     #[inline(never)]
     fn wr_le(&mut self, mut v: u32, n: usize) {
-        let mut i = 0;
-        while i < n && self.pos < 128 {
-            self.out[self.pos] = v as u8;
-            self.pos += 1;
+        let count = n.min(128 - self.pos);
+        let p = unsafe { self.out.as_mut_ptr().add(self.pos) };
+        for i in 0..count {
+            unsafe { *p.add(i) = v as u8 };
             v >>= 8;
-            i += 1;
         }
+        self.pos += count;
     }
 
     #[inline(always)]
@@ -218,16 +221,14 @@ impl<'a, 'b> WireCtx<'a, 'b> {
     }
 }
 
-/// Main entry point for non-core RigWire records routed from the transport driver.
+/// Main entry point for non-core RigWire v2 records routed from `WireDriver`.
 #[inline(never)]
 pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u32) -> bool {
     let raw = hw.wire.current_payload(header);
     let plen = raw.len().min(128);
-    // Handlers only read `hw.wire.session` and never touch `rx_buf` until `send_response`.
+    // Handlers only read `hw.wire.session` and never mutate `rx_buf` until `send_response`.
     let inp = unsafe { core::slice::from_raw_parts(raw.as_ptr(), plen) };
 
-    // Keep the 128 B response buffer in `.bss` on target (single-threaded Thread mode)
-    // to preserve precious Cortex-M0+ stack headroom during KernFS / control operations.
     #[cfg(not(test))]
     let out: &mut [u8; 128] = unsafe {
         static mut WIRE_OUT_BUF: [u8; 128] = [0u8; 128];
@@ -237,6 +238,7 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
     let mut out_buf = [0u8; 128];
     #[cfg(test)]
     let out = &mut out_buf;
+
     let mut c = WireCtx {
         inp,
         out,
@@ -248,21 +250,46 @@ pub fn dispatch_wire_record(header: &WireHeader, hw: &mut SystemHardware, now: u
         _b: core::marker::PhantomData,
     };
 
-    let res = match header.service {
-        SERVICE_CONTROL => handle_control_service(header.opcode, &mut c),
-        SERVICE_DATA => handle_data_service(header.opcode, &mut c),
-        SERVICE_EVENTS => handle_events_service(header.opcode, &mut c),
+    let res = match header.channel {
+        CH_CONTROL => handle_control_service(header.op, &mut c),
+        CH_DATA => handle_data_service(header.op, &mut c),
+        CH_EVENTS => {
+            let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
+            match header.op {
+                OP_EVENTS_SUBSCRIBE => match c.rd_u32().and_then(|m| Ok((m, c.rd_u16()?))) {
+                    Ok((m, cr)) => {
+                        sub.active_mask = m;
+                        sub.credits = cr;
+                        Some(Status::Ok)
+                    }
+                    Err(e) => Some(e),
+                },
+                OP_EVENTS_UNSUBSCRIBE => {
+                    sub.active_mask = 0;
+                    sub.credits = 0;
+                    Some(Status::Ok)
+                }
+                OP_EVENTS_CREDIT => Some(match c.rd_u16() {
+                    Ok(g) => {
+                        sub.credits = sub.credits.saturating_add(g);
+                        Status::Ok
+                    }
+                    Err(e) => e,
+                }),
+                _ => None,
+            }
+        }
         _ => return false,
     };
     let Some(status) = res else {
         return false;
     };
-    let resp_len = if status == WireStatus::Ok { c.pos } else { 0 };
+    let resp_len = if status.is_ok() { c.pos } else { 0 };
     let _ = hw.wire.send_response(header, status, &out[..resp_len]);
     true
 }
 
-// ── SERVICE_CONTROL (0x01): Universal Handle RPC ────────────────────────────
+// ── CH_CONTROL (0x01): Universal Resource Handle RPC ────────────────────────
 
 #[inline(never)]
 fn active_radio_slot(
@@ -282,17 +309,16 @@ fn active_radio_slot(
 }
 
 #[inline(always)]
-fn config_domain_idx(instance: u8) -> Result<usize, WireStatus> {
-    let idx = instance as usize;
-    if idx > 5 {
-        Err(WireStatus::BadRange)
+fn config_domain_idx(instance: u8) -> Result<usize, Status> {
+    if instance > 5 {
+        Err(Status::InvalidArg)
     } else {
-        Ok(idx)
+        Ok(instance as usize)
     }
 }
 
 #[inline(never)]
-fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     match facet {
         FACET_SYS_IDENTITY => {
             let serial = bsp::uid::get_hardware_serial64();
@@ -321,11 +347,7 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus>
             let app_id = c.hw().orchestrator.active_app_id() as u8;
             let locked = c.hw().orchestrator.is_keypad_locked() as u8;
             let bk_gpio = c.hw().radio.read_gpio_reg();
-            let status_led = if bk_gpio == 0xFFFF {
-                0u8
-            } else {
-                (bk_gpio & 0x0003) as u8
-            };
+            let status_led = if bk_gpio == 0xFFFF { 0 } else { (bk_gpio & 3) as u8 };
             c.put(&[
                 pwr.battery_percentage(),
                 app_id,
@@ -334,11 +356,15 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus>
                 status_led,
             ]);
             c.wr_u16(bk_gpio);
-            c.wr_u8(crate::system::is_headless() as u8);
             let disp = &crate::master_config_ref().display;
             let bl_duty = drivers::backlight::BACKLIGHT_DUTY
                 .load(core::sync::atomic::Ordering::Relaxed);
-            c.put(&[bl_duty, disp.contrast, disp.inverted]);
+            c.put(&[
+                crate::system::is_headless() as u8,
+                bl_duty,
+                disp.contrast,
+                disp.inverted,
+            ]);
         }
         FACET_SYS_CALIBRATION => {
             let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
@@ -351,13 +377,13 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus>
             let n = crate::system::drain_headless_notes(&mut c.out[c.pos..c.pos + rem]);
             c.pos += n;
         }
-        _ => return Err(WireStatus::UnsupportedField),
+        _ => return Err(Status::Unsupported),
     }
     Ok(())
 }
 
 #[inline(never)]
-fn read_radio_facet(facet: u16, instance: u8, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn read_radio_facet(facet: u16, instance: u8, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let (slot, ch) = active_radio_slot(instance);
     let coord = &crate::radio_state_ref().coord;
     match facet {
@@ -381,16 +407,13 @@ fn read_radio_facet(facet: u16, instance: u8, c: &mut WireCtx<'_, '_>) -> Result
             c.put(&[coord.is_slot_tx_active(slot) as u8, ch.power as u8]);
         }
         FACET_RADIO_DIGITAL => c.zeroes(2),
-        _ => return Err(WireStatus::UnsupportedField),
+        _ => return Err(Status::Unsupported),
     }
     Ok(())
 }
 
 #[inline(never)]
-fn on_handle_get(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
-    if handle.domain > DOMAIN_STORAGE {
-        return Err(WireStatus::Unsupported);
-    }
+fn on_handle_get(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     match (handle.domain, handle.facet) {
         (DOMAIN_SYSTEM, facet) => return read_sys_facet(facet, c),
         (DOMAIN_RADIO, facet) => return read_radio_facet(facet, handle.instance, c),
@@ -416,31 +439,24 @@ fn on_handle_get(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), 
         (DOMAIN_STORAGE, _) => {
             let s = c.fs().stats();
             #[repr(C, packed)]
-            struct StatsWire {
-                active: u16,
-                used: u16,
-                free: u16,
-                deleted: u16,
-                wear: u32,
-                total: u16,
-            }
-            let wire = StatsWire {
-                active: s.active_files,
-                used: s.used_sectors,
-                free: s.free_sectors,
-                deleted: s.deleted_sectors,
-                wear: s.wear_cycles,
-                total: s.total_sectors,
-            };
-            c.put(unsafe { core::slice::from_raw_parts(&wire as *const _ as *const u8, 14) });
+            struct StatsWire(u16, u16, u16, u16, u32, u16);
+            let w = StatsWire(
+                s.active_files,
+                s.used_sectors,
+                s.free_sectors,
+                s.deleted_sectors,
+                s.wear_cycles,
+                s.total_sectors,
+            );
+            c.put(unsafe { core::slice::from_raw_parts(&w as *const _ as *const u8, 14) });
         }
-        _ => return Err(WireStatus::UnsupportedField),
+        _ => return Err(Status::Unsupported),
     }
     Ok(())
 }
 
 #[inline(never)]
-fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     if (handle.domain == DOMAIN_SYSTEM && handle.facet == FACET_SYS_METRICS)
         || (handle.domain == DOMAIN_INPUT && handle.facet == FACET_INPUT_LOCK)
     {
@@ -461,7 +477,7 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
                 FACET_RADIO_TUNING => {
                     let freq_hz = c.rd_u32()?;
                     if !(18_000_000..=1_300_000_000).contains(&freq_hz) {
-                        return Err(WireStatus::BadRange);
+                        return Err(Status::InvalidArg);
                     }
                     let freq = Frequency::new(freq_hz);
                     ch.rx_freq = freq;
@@ -476,8 +492,6 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
                     let tx = c.rd_u8()? != 0;
                     let radio = &mut c.hw().radio;
                     if tx {
-                        // Remote keying obeys the same BCLO, time-out, inhibit and
-                        // battery rules as PTT.
                         let token = kernel::service::radio::ClientToken::new(
                             kernel::service::radio::ClientId::SYSTEM,
                             kernel::service::radio::LockTier::FOREGROUND,
@@ -486,10 +500,9 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
                             .check_tx_permission(coord.effective_tx_slot(), token)
                             .is_granted()
                         {
-                            return Err(WireStatus::SafetyDenied);
+                            return Err(Status::SafetyBlocked);
                         }
                         coord.start_tx(radio);
-                        // Armed for the link-loss failsafe: a silent link unkeys the PA.
                         crate::system::set_wire_tx(coord.is_transmitting);
                     } else {
                         coord.stop_tx(radio);
@@ -500,21 +513,22 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
                     let offset_dhz = c.rd_u16()? as i16;
                     c.hw().radio.set_sub_hz_offset(ch.rx_freq.raw(), offset_dhz);
                 }
-                _ => return Err(WireStatus::UnsupportedField),
+                _ => return Err(Status::Unsupported),
             }
             Ok(())
         }
         DOMAIN_INPUT if handle.facet == FACET_INPUT_KEY => {
-            let code = KeyCode::from_u8(c.rd_u8()?).ok_or(WireStatus::BadRange)?;
+            let code = KeyCode::from_u8(c.rd_u8()?).ok_or(Status::InvalidArg)?;
             let state = [KeyState::Pressed, KeyState::Held, KeyState::Released]
                 [c.inp.first().copied().unwrap_or(0).min(2) as usize];
             crate::system::enqueue_event(Event::Key { code, state });
             Ok(())
         }
         DOMAIN_INPUT if handle.facet == FACET_INPUT_TEXT => {
-            let s = gfx::media::utf8_str(c.inp).ok_or(WireStatus::BadRange)?;
-            for ch in s.chars().take(32) {
-                crate::system::enqueue_event(Event::Char(ch));
+            for &b in c.inp.iter().take(32) {
+                if (0x20..=0x7E).contains(&b) {
+                    crate::system::enqueue_event(Event::Char(b as char));
+                }
             }
             Ok(())
         }
@@ -529,13 +543,11 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             let domain_idx = config_domain_idx(handle.instance)?;
             let mcfg = crate::master_config();
             let dest = mcfg.config_bytes_mut(domain_idx);
-            // Whole-block writes only, stamped with the block's own format version; the
-            // CRC is resealed locally and every property is re-clamped before it persists.
             if c.inp.len() != dest.len() {
-                return Err(WireStatus::BadLength);
+                return Err(Status::BadLength);
             }
             if c.inp[0] != crate::config::MasterConfig::domain_version(domain_idx) {
-                return Err(WireStatus::BadVersion);
+                return Err(Status::IncompatibleAbi);
             }
             dest.copy_from_slice(c.inp);
             mcfg.mark_domain_dirty(domain_idx);
@@ -543,16 +555,12 @@ fn handle_resource_set(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Resul
             let _ = mcfg.flush_dirty(c.fs());
             Ok(())
         }
-        DOMAIN_SYSTEM | DOMAIN_INPUT => Err(WireStatus::UnsupportedField),
-        _ => Err(WireStatus::Unsupported),
+        _ => Err(Status::Unsupported),
     }
 }
 
 #[inline(never)]
-fn handle_resource_invoke(
-    handle: ResourceHandle,
-    c: &mut WireCtx<'_, '_>,
-) -> Result<(), WireStatus> {
+fn handle_resource_invoke(handle: ResourceHandle, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let action_id = c.rd_u16()?;
     c.wr_u16(action_id);
     let arg = c.inp.first().copied().unwrap_or(0);
@@ -563,6 +571,7 @@ fn handle_resource_invoke(
                 2 => kernel::power::RebootMode::SafeRecovery,
                 _ => kernel::power::RebootMode::Firmware,
             };
+            c.hw().wire.port.flush();
             kernel::power::PowerControl::reboot_with(mode);
         }
         (DOMAIN_SYSTEM, ACTION_SYS_FLASHLIGHT | ACTION_SYS_HEADLESS) => {
@@ -608,21 +617,21 @@ fn handle_resource_invoke(
         }
         (DOMAIN_APP, ACTION_APP_LAUNCH) => {
             if (arg as usize) >= crate::AppRegistry::app_count() {
-                return Err(WireStatus::BadRange);
+                return Err(Status::InvalidArg);
             }
         }
-        _ => return Err(WireStatus::Unsupported),
+        _ => return Err(Status::Unsupported),
     }
     Ok(())
 }
 
 #[inline(never)]
-fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus> {
+fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<Status> {
     if !(OP_HANDLE_GET..=OP_HANDLE_STREAM).contains(&opcode) {
         return None;
     }
     let Ok(hdr) = c.take(4) else {
-        return Some(WireStatus::BadLength);
+        return Some(Status::BadLength);
     };
     let handle = ResourceHandle {
         domain: hdr[0],
@@ -638,7 +647,7 @@ fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireSta
         OP_HANDLE_STREAM => c.rd_u32().and_then(|offset| {
             let length = c.rd_u16()?;
             if handle.domain != DOMAIN_UI || handle.facet != FACET_UI_SURFACE {
-                return Err(WireStatus::Unsupported);
+                return Err(Status::Unsupported);
             }
             let flat = crate::system_canvas().buffer_flat();
             if (offset & 0x8000_0000) != 0 {
@@ -670,15 +679,17 @@ fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireSta
                         };
                         #[cfg(not(feature = "app_hibernation"))]
                         let (src, slen) = (strip, 64usize);
-                        if c.pos + 1 + slen <= 110 {
+                        if c.pos + 1 + slen <= 116 {
                             c.wr_u8(slen as u8);
                             c.put(src);
                             sent_mask |= 1 << s;
                         }
                     }
                 }
-                c.out[8..10].copy_from_slice(&dirty_mask.to_le_bytes());
-                c.out[10..12].copy_from_slice(&sent_mask.to_le_bytes());
+                c.out[8] = dirty_mask as u8;
+                c.out[9] = (dirty_mask >> 8) as u8;
+                c.out[10] = sent_mask as u8;
+                c.out[11] = (sent_mask >> 8) as u8;
                 return Ok(());
             }
             let off = (offset as usize).min(flat.len());
@@ -690,10 +701,10 @@ fn handle_control_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireSta
         }),
         _ => return None,
     };
-    Some(res.err().unwrap_or(WireStatus::Ok))
+    Some(res.err().unwrap_or(Status::Ok))
 }
 
-// ── SERVICE_DATA (0x03): Hardened KernFS Streaming ─────────────────────────
+// ── CH_DATA (0x03): Hardened KernFS Streaming & Sector Hash Sync ────────────
 
 #[inline(never)]
 fn invalidate_apps_if_needed(path: &str) {
@@ -731,10 +742,10 @@ fn check_regular_file(
     path: &str,
     is_write: bool,
     allow_missing_or_calib: bool,
-) -> Result<u32, WireStatus> {
+) -> Result<u32, Status> {
     let b = path.as_bytes();
     if b.len() > 32 || !utils::path::is_clean_path(b) {
-        return Err(WireStatus::BadRange);
+        return Err(Status::InvalidArg);
     }
     let root = utils::path::root_bit(b);
     if root == 0
@@ -742,13 +753,13 @@ fn check_regular_file(
             && root == utils::path::ROOT_SYS
             && (!allow_missing_or_calib || path != CALIB_FILE_PATH))
     {
-        return Err(WireStatus::SafetyDenied);
+        return Err(Status::SafetyBlocked);
     }
     match fs.stat_info(path) {
-        Ok((_, true)) => Err(WireStatus::BadRange),
+        Ok((_, true)) => Err(Status::InvalidArg),
         Ok((sz, false)) => Ok(sz as u32),
         Err(_) if allow_missing_or_calib => Ok(0),
-        Err(_) => Err(WireStatus::NotFound),
+        Err(_) => Err(Status::NotFound),
     }
 }
 
@@ -757,7 +768,7 @@ fn flush_transfer_buf(
     transfer: &mut ActiveTransfer,
     fs: &mut crate::services::SystemStorage,
     flush_all: bool,
-) -> Result<(), WireStatus> {
+) -> Result<(), Status> {
     let staging = crate::data::arena::staging_buf();
     loop {
         let len = transfer.buf_len as usize;
@@ -773,7 +784,7 @@ fn flush_transfer_buf(
             transfer.buf_offset as usize,
             &staging[..write_len],
         )
-        .map_err(|_| WireStatus::IoError)?;
+        .map_err(|_| Status::IoError)?;
         let rem = len - write_len;
         if rem > 0 {
             let (dst, src) = staging.split_at_mut(write_len);
@@ -804,31 +815,30 @@ fn stream_file_crc32(fs: &mut crate::services::SystemStorage, path: &str, size: 
 }
 
 #[inline(never)]
-fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let mode = c.rd_u8()?;
     let total_size = c.rd_u32()?;
     let req_chunk = c.rd_u16()?;
     let path = c.rd_path()?;
     if mode > TRANSFER_MODE_WRITE {
-        return Err(WireStatus::BadRange);
+        return Err(Status::InvalidArg);
     }
     let is_write = mode == TRANSFER_MODE_WRITE;
     let existing_size = check_regular_file(c.fs(), path, is_write, is_write)?;
     if is_write {
         let req_sz = total_size as usize;
         if req_sz > MAX_WIRE_FILE_SIZE {
-            return Err(WireStatus::BadLength);
+            return Err(Status::BadLength);
         }
         let is_calib = path == CALIB_FILE_PATH;
         if is_calib && req_sz != 512 {
-            return Err(WireStatus::SafetyDenied);
+            return Err(Status::SafetyBlocked);
         }
-        let free_bytes = c.fs().stats().avail_bytes();
-        if req_sz > free_bytes + existing_size as usize {
-            return Err(WireStatus::Failed);
+        if req_sz > c.fs().stats().avail_bytes() + existing_size as usize {
+            return Err(Status::NoSpace);
         }
         if !is_calib && c.fs().write_file(path, &[]).is_err() {
-            return Err(WireStatus::IoError);
+            return Err(Status::IoError);
         }
     }
 
@@ -848,7 +858,9 @@ fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     t.chunk_size = chunk_size;
     t.total_size = total_size;
     t.last_activity_ms = c.now;
-    t.path[..path_bytes.len()].copy_from_slice(path_bytes);
+    unsafe {
+        core::ptr::copy_nonoverlapping(path_bytes.as_ptr(), t.path.as_mut_ptr(), path_bytes.len());
+    }
     t.path_len = path_bytes.len() as u8;
 
     c.wr_u16(tid);
@@ -858,7 +870,7 @@ fn on_transfer_open(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
 }
 
 #[inline(never)]
-fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let tid = c.rd_u16()?;
     let off = c.rd_u32()? as usize;
     let length = c.rd_u16()?;
@@ -869,14 +881,14 @@ fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
     c.wr_u16(tid);
     if transfer.mode == TRANSFER_MODE_WRITE {
         let chunk_len = data.len();
-        let end = off.checked_add(chunk_len).ok_or(WireStatus::BadRange)?;
+        let end = off.checked_add(chunk_len).ok_or(Status::InvalidArg)?;
         if end > MAX_WIRE_FILE_SIZE {
-            return Err(WireStatus::BadLength);
+            return Err(Status::BadLength);
         }
         let staging = crate::data::arena::staging_buf();
         if transfer.path_str() == CALIB_FILE_PATH {
             if end > staging.len() {
-                return Err(WireStatus::BadLength);
+                return Err(Status::BadLength);
             }
             staging[off..end].copy_from_slice(data);
         } else {
@@ -911,7 +923,7 @@ fn on_transfer_chunk(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
 }
 
 #[inline(never)]
-fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let tid = c.rd_u16()?;
     let expected_crc = c.rd_u32()?;
     let transfer = active_transfer_mut(tid)?;
@@ -924,18 +936,18 @@ fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
         if transfer.path_str() == CALIB_FILE_PATH {
             let staging = crate::data::arena::staging_buf();
             if total_len != 512 {
-                return Err(WireStatus::SafetyDenied);
+                return Err(Status::SafetyBlocked);
             }
             let calib = unsafe { &mut *core::ptr::addr_of_mut!(crate::CALIBRATION) };
             calib
                 .commit_slice(c.fs(), staging)
-                .map_err(|_| WireStatus::SafetyDenied)?;
+                .map_err(|_| Status::SafetyBlocked)?;
             let radio = &mut c.hw().radio;
             crate::apply_active_calibration(radio);
             radio.set_xtal_freq_trim(calib.xtal_freq_low());
             actual_crc = crypto::crc::CrcEngine::crc32(staging);
             if expected_crc != 0 && expected_crc != actual_crc {
-                return Err(WireStatus::Failed);
+                return Err(Status::CorruptData);
             }
         } else {
             flush_transfer_buf(transfer, c.fs(), true)?;
@@ -943,7 +955,7 @@ fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
             actual_crc = stream_file_crc32(c.fs(), path, total_len);
             if expected_crc != 0 && expected_crc != actual_crc {
                 let _ = c.fs().remove(path);
-                return Err(WireStatus::Failed);
+                return Err(Status::CorruptData);
             }
         }
         invalidate_apps_if_needed(transfer.path_str());
@@ -955,7 +967,7 @@ fn on_transfer_close(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
 }
 
 #[inline(never)]
-fn on_transfer_abort(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn on_transfer_abort(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let tid = c.rd_u16()?;
     let _reason = c.rd_u8()?;
     if let Ok(transfer) = active_transfer_mut(tid) {
@@ -971,7 +983,7 @@ fn on_transfer_abort(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
 }
 
 #[inline(never)]
-fn on_transfer_stat(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn on_transfer_stat(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let path = c.rd_path()?;
     let Ok((sz, is_dir)) = stat_or_root(c.fs(), path) else {
         c.zeroes(10);
@@ -990,7 +1002,7 @@ fn on_transfer_stat(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
 }
 
 #[inline(never)]
-fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let start = c.rd_u16()?;
     let path = trim_trailing_slash(c.rd_path()?);
 
@@ -999,12 +1011,12 @@ fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
         t.active = false;
     }
     if t.active && t.mode == TRANSFER_MODE_WRITE {
-        return Err(WireStatus::Busy);
+        return Err(Status::Busy);
     }
     match stat_or_root(c.fs(), path) {
         Ok((_, true)) => {}
-        Ok((_, false)) => return Err(WireStatus::BadRange),
-        Err(_) => return Err(WireStatus::NotFound),
+        Ok((_, false)) => return Err(Status::InvalidArg),
+        Err(_) => return Err(Status::NotFound),
     }
 
     let mut idx = 0u16;
@@ -1022,11 +1034,14 @@ fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
                     next_cursor = idx;
                     return;
                 }
-                let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, 128) };
-                out[pos] = is_dir as u8;
-                out[pos + 1..pos + 5].copy_from_slice(&(size as u32).to_le_bytes());
-                out[pos + 5] = name_len as u8;
-                out[pos + 6..pos + 6 + name_len].copy_from_slice(&b[..name_len]);
+                unsafe {
+                    let p = out_ptr.add(pos);
+                    *p = is_dir as u8;
+                    let sz = (size as u32).to_le_bytes();
+                    core::ptr::copy_nonoverlapping(sz.as_ptr(), p.add(1), 4);
+                    *p.add(5) = name_len as u8;
+                    core::ptr::copy_nonoverlapping(b.as_ptr(), p.add(6), name_len);
+                }
                 pos += 6 + name_len;
                 written += 1;
             }
@@ -1034,24 +1049,45 @@ fn on_transfer_list(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
         }
     });
 
-    c.out[0..2].copy_from_slice(&next_cursor.to_le_bytes());
+    c.out[0] = next_cursor as u8;
+    c.out[1] = (next_cursor >> 8) as u8;
     c.out[2] = written;
     c.pos = pos;
     Ok(())
 }
 
 #[inline(never)]
-fn on_transfer_remove(c: &mut WireCtx<'_, '_>) -> Result<(), WireStatus> {
+fn on_transfer_remove(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
     let path = c.rd_path()?;
     check_regular_file(c.fs(), path, true, false)?;
-    c.fs().remove(path).map_err(|_| WireStatus::NotFound)?;
+    c.fs().remove(path).map_err(|_| Status::NotFound)?;
     invalidate_apps_if_needed(path);
     Ok(())
 }
 
+/// Paginated IEEE CRC-32 digest per 256-byte page slice for O(changed pages) delta sync.
+/// Request: `[start_page: u16, path_len: u8, path...]`
+/// Reply:   `[total_pages: u16, count: u8, hashes: [u32; count]]` (up to 30 pages/frame).
 #[inline(never)]
-fn handle_data_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus> {
-    const DATA_OPS: [fn(&mut WireCtx<'_, '_>) -> Result<(), WireStatus>; 7] = [
+fn on_transfer_sector_hash(c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
+    let start_page = c.rd_u16()? as usize;
+    let path = c.rd_path()?;
+    let sz = check_regular_file(c.fs(), path, false, false)? as usize;
+    let total_pages = (sz + 255) >> 8;
+    let count = total_pages.saturating_sub(start_page).min(30);
+    c.wr_u16(total_pages as u16);
+    c.wr_u8(count as u8);
+    let buf = &mut crate::data::arena::staging_buf()[..256];
+    for page in start_page..start_page + count {
+        let n = c.fs().read_file_at(path, page << 8, buf).unwrap_or(0);
+        c.wr_u32(crypto::crc::CrcEngine::crc32(&buf[..n]));
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn handle_data_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<Status> {
+    const DATA_OPS: [fn(&mut WireCtx<'_, '_>) -> Result<(), Status>; 8] = [
         on_transfer_open,
         on_transfer_chunk,
         on_transfer_close,
@@ -1059,32 +1095,8 @@ fn handle_data_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus
         on_transfer_stat,
         on_transfer_list,
         on_transfer_remove,
+        on_transfer_sector_hash,
     ];
     let handler = DATA_OPS.get(opcode.wrapping_sub(1) as usize)?;
-    Some(handler(c).err().unwrap_or(WireStatus::Ok))
-}
-
-// ── SERVICE_EVENTS (0x02) ────────────────────────────────────────────────────
-
-#[inline(never)]
-fn handle_events_service(opcode: u8, c: &mut WireCtx<'_, '_>) -> Option<WireStatus> {
-    let sub = unsafe { &mut *core::ptr::addr_of_mut!(ACTIVE_SUBSCRIPTION) };
-    let res = match opcode {
-        OP_EVENTS_SUBSCRIBE => c.rd_u32().and_then(|mask| {
-            let credits = c.rd_u16()?;
-            sub.active_mask = mask;
-            sub.credits = credits;
-            Ok(())
-        }),
-        OP_EVENTS_UNSUBSCRIBE => {
-            sub.active_mask = 0;
-            sub.credits = 0;
-            Ok(())
-        }
-        OP_EVENTS_CREDIT => c.rd_u16().map(|grant| {
-            sub.credits = sub.credits.saturating_add(grant);
-        }),
-        _ => return None,
-    };
-    Some(res.err().unwrap_or(WireStatus::Ok))
+    Some(handler(c).err().unwrap_or(Status::Ok))
 }
