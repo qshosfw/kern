@@ -117,17 +117,18 @@ pub enum FskSidecarMode {
 
 /// Granular configuration parameters for the background FSK Sidecar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub struct FskSidecarConfig {
-    /// Operational listening mode.
-    pub mode: FskSidecarMode,
     /// Automatically mute speaker audio when FSK sync is detected to prevent loud digital screeching.
     pub mute_audio_on_sync: bool,
+    /// Voice squelch priority override: an incoming voice carrier immediately interrupts idle FSK hold.
+    pub voice_priority_override: bool,
+    /// Operational listening mode.
+    pub mode: FskSidecarMode,
     /// Duration to freeze Dual Watch and lock VFO dwelling when FSK sync/preamble is detected (ms). Default: 2000 ms.
     pub sync_hold_ms: u16,
     /// Post-frame guard time to keep VFO locked waiting for potential ACKs or reply bursts (ms). Default: 500 ms.
     pub post_frame_hold_ms: u16,
-    /// Voice squelch priority override: an incoming voice carrier immediately interrupts idle FSK hold.
-    pub voice_priority_override: bool,
 }
 
 impl FskSidecarConfig {
@@ -190,25 +191,25 @@ pub struct RadioCoordinator {
     pub monitor_active: bool,
     /// True when PTT is latched on in `PttMode::Toggle` or `PttMode::DoublePressLatch`.
     pub ptt_latched: bool,
+    /// Real-time RX Squelch Tail Elimination (STE) controller (2 B, inside 32 B imm5 byte window).
+    pub ste: RxSteController,
+    pub fsk_config: FskSidecarConfig,
 
-    // ── Hot 2-byte scalar fields (offset 20..58: 1-insn ldrh/strh) ─────────
+    // ── Hot 2-byte scalar fields (offset 30..62: 1-insn ldrh/strh) ─────────
     pub dual_watch: DualWatchMode,
     /// Time-Out Timer limit in seconds (0 = disabled).
     pub tot_limit_seconds: u16,
     /// Current transmission elapsed time in 10ms ticks.
     pub tot_elapsed_10ms: u16,
     pub dwell: DwellController,
+    pub audio_routing: AudioRoutingState,
     pub activity_count: [u16; 3],
     pub rssi_moving_avg: [i16; 3],
     /// Timestamp (ms) of the last PTT press for `PttMode::DoublePressLatch` detection.
     pub last_ptt_press_ms: u32,
 
     // ── Sub-controllers and state machines ───────────────────────────────
-    /// Real-time RX Squelch Tail Elimination (STE) controller.
-    pub ste: RxSteController,
-    pub fsk_config: FskSidecarConfig,
     pub arbitrator: RadioArbitrator,
-    pub audio_routing: AudioRoutingState,
     pub vfo_memory_index: [Option<u16>; 3],
     /// Per-VFO dynamic noise-floor estimator for Adaptive Squelch tracking.
     pub adaptive_squelch: [AdaptiveSquelchTracker; 3],

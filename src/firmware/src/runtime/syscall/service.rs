@@ -10,21 +10,30 @@ use kernel::proc::abi::{
 };
 pub use kernel::proc::service_registry::ServiceRegistry;
 
-pub static mut SERVICE_REGISTRY: ServiceRegistry<2> = ServiceRegistry::new();
+pub static mut SERVICE_REGISTRY: ServiceRegistry<4> = ServiceRegistry::new();
 pub static mut KERNEL_IPC_CHANNEL: IpcChannel<2> = IpcChannel::new();
-static mut PENDING_LAUNCH_PATH: [u8; 32] = [0u8; 32];
-static mut PENDING_LAUNCH_LEN: u8 = 0;
+
+#[repr(C)]
+struct PendingLaunch {
+    len: u8,
+    path: [u8; 31],
+}
+
+static mut PENDING_LAUNCH: PendingLaunch = PendingLaunch {
+    len: 0,
+    path: [0u8; 31],
+};
 
 /// Consume a deferred `.krx`/`.mod` package path queued by `PROC_CTL_LAUNCH_PKG`.
 pub fn take_pending_launch_path() -> Option<&'static str> {
     unsafe {
-        let len = PENDING_LAUNCH_LEN as usize;
-        if len == 0 || len > 31 {
+        let p = &mut *core::ptr::addr_of_mut!(PENDING_LAUNCH);
+        let len = p.len as usize;
+        if len == 0 || len > p.path.len() {
             return None;
         }
-        PENDING_LAUNCH_LEN = 0;
-        let slice =
-            core::slice::from_raw_parts(core::ptr::addr_of!(PENDING_LAUNCH_PATH) as *const u8, len);
+        p.len = 0;
+        let slice = core::slice::from_raw_parts(p.path.as_ptr(), len);
         Some(core::str::from_utf8_unchecked(slice))
     }
 }
@@ -446,9 +455,9 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
                     return 1;
                 }
                 unsafe {
-                    let dst = &mut *core::ptr::addr_of_mut!(PENDING_LAUNCH_PATH);
-                    dst[..plen].copy_from_slice(path.as_bytes());
-                    PENDING_LAUNCH_LEN = plen as u8;
+                    let dst = &mut *core::ptr::addr_of_mut!(PENDING_LAUNCH);
+                    dst.path[..plen].copy_from_slice(path.as_bytes());
+                    dst.len = plen as u8;
                 }
                 let ev: kernel::ipc::SysEvent = crate::apps::Shortcut::LaunchPendingPkg.into();
                 post_sys_event(ev.target, ev.command, ev.arg);

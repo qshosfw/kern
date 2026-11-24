@@ -26,29 +26,49 @@ pub fn init_proc_table() {
     crate::runtime::init_native_slot();
 }
 
-static mut LEASE_MGR: kernel::proc::ResourceLeaseManager<2> =
-    kernel::proc::ResourceLeaseManager::new();
+/// Consolidated zero-initialized process bookkeeping anchor (status tray, resource leases,
+/// and active dynamic `.krx` app metadata share one base literal on Thumb-1).
+#[repr(C)]
+pub(crate) struct ProcBookkeeping {
+    pub(crate) tray: kernel::proc::StatusTray<2>,
+    pub(crate) leases: kernel::proc::ResourceLeaseManager<2>,
+    pub(crate) dynamic_app: Option<crate::apps::registry::DynamicAppRecord>,
+}
+
+static mut PROC_BOOK: ProcBookkeeping = ProcBookkeeping {
+    tray: kernel::proc::StatusTray::new(),
+    leases: kernel::proc::ResourceLeaseManager::new(),
+    dynamic_app: None,
+};
+
+#[inline(always)]
+pub(crate) fn proc_book_ref() -> &'static ProcBookkeeping {
+    unsafe { &*core::ptr::addr_of!(PROC_BOOK) }
+}
+
+#[inline(always)]
+pub(crate) fn proc_book_mut() -> &'static mut ProcBookkeeping {
+    unsafe { &mut *core::ptr::addr_of_mut!(PROC_BOOK) }
+}
 
 #[inline(always)]
 pub fn lease_manager() -> &'static kernel::proc::ResourceLeaseManager<2> {
-    unsafe { &*core::ptr::addr_of!(LEASE_MGR) }
+    &proc_book_ref().leases
 }
 
 #[inline(always)]
 pub fn lease_manager_mut() -> &'static mut kernel::proc::ResourceLeaseManager<2> {
-    unsafe { &mut *core::ptr::addr_of_mut!(LEASE_MGR) }
+    &mut proc_book_mut().leases
 }
-
-static mut STATUS_TRAY: kernel::proc::StatusTray<2> = kernel::proc::StatusTray::new();
 
 #[inline(always)]
 pub fn status_tray() -> &'static kernel::proc::StatusTray<2> {
-    unsafe { &*core::ptr::addr_of!(STATUS_TRAY) }
+    &proc_book_ref().tray
 }
 
 #[inline(always)]
 pub fn status_tray_mut() -> &'static mut kernel::proc::StatusTray<2> {
-    unsafe { &mut *core::ptr::addr_of_mut!(STATUS_TRAY) }
+    &mut proc_book_mut().tray
 }
 
 #[inline(never)]

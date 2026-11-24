@@ -12,17 +12,23 @@ use kernel::runtime::KrxClass;
 pub use kernel::runtime::KrxLaunchError;
 
 const DYNAMIC_APP_NAME_CAP: usize = 20;
-static mut DYNAMIC_APP_NAME_BUF: [u8; DYNAMIC_APP_NAME_CAP] = [0u8; DYNAMIC_APP_NAME_CAP];
-static mut DYNAMIC_APP_NAME_LEN: u8 = 0;
+
+#[repr(C)]
+struct DynamicAppName {
+    len: u8,
+    buf: [u8; DYNAMIC_APP_NAME_CAP],
+}
+
+static mut DYNAMIC_APP_NAME: DynamicAppName = DynamicAppName {
+    len: 0,
+    buf: [0u8; DYNAMIC_APP_NAME_CAP],
+};
 
 pub(crate) fn dynamic_app_name() -> &'static str {
     unsafe {
-        let len = (DYNAMIC_APP_NAME_LEN as usize).min(DYNAMIC_APP_NAME_CAP - 1);
-        let bytes = core::slice::from_raw_parts(
-            core::ptr::addr_of!(DYNAMIC_APP_NAME_BUF).cast::<u8>(),
-            len,
-        );
-        core::str::from_utf8_unchecked(bytes)
+        let slot = &*core::ptr::addr_of!(DYNAMIC_APP_NAME);
+        let len = (slot.len as usize).min(DYNAMIC_APP_NAME_CAP - 1);
+        core::str::from_utf8_unchecked(&slot.buf[..len])
     }
 }
 
@@ -33,11 +39,12 @@ fn store_dynamic_app_name(name: &str) -> &'static str {
         len -= 1;
     }
     unsafe {
-        DYNAMIC_APP_NAME_BUF[..len].copy_from_slice(&bytes[..len]);
-        DYNAMIC_APP_NAME_BUF[len] = 0;
-        DYNAMIC_APP_NAME_LEN = len as u8;
+        let slot = &mut *core::ptr::addr_of_mut!(DYNAMIC_APP_NAME);
+        slot.buf[..len].copy_from_slice(&bytes[..len]);
+        slot.buf[len] = 0;
+        slot.len = len as u8;
         // Safety: `name` is valid `&str` and `len` lands on a UTF-8 codepoint boundary.
-        core::str::from_utf8_unchecked(&DYNAMIC_APP_NAME_BUF[..len])
+        core::str::from_utf8_unchecked(&slot.buf[..len])
     }
 }
 

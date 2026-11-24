@@ -438,16 +438,18 @@ fn lookup_font_glyph_dyn(
     if !hdr.is_valid() || hdr.glyph_count == 0 {
         return None;
     }
+    #[repr(C, align(4))]
+    struct Aligned8([u8; 8]);
     let mut lo = 0usize;
     let mut hi = hdr.glyph_count as usize;
-    let mut buf = [0u8; 8];
+    let mut buf = Aligned8([0u8; 8]);
     while lo < hi {
         let mid = (lo + hi) >> 1;
         let off = FontPackHeader::SIZE + (mid << 3);
-        if read_at(off, &mut buf) != 8 {
+        if read_at(off, &mut buf.0) != 8 {
             return None;
         }
-        let entry = FontGlyphEntry::from_bytes(&buf);
+        let entry = FontGlyphEntry::from_bytes(&buf.0);
         if entry.codepoint == codepoint {
             return Some(entry);
         } else if entry.codepoint < codepoint {

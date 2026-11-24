@@ -10,20 +10,25 @@ fn modal_mut() -> &'static mut crate::orchestrator::compositor::ModalCompositor 
 }
 
 #[cfg(feature = "text_input")]
-static mut MODAL_TEXT_BUF: [u8; 32] = [0u8; 32];
+#[repr(C)]
+struct ModalTextBuf {
+    len: u8,
+    buf: [u8; 31],
+}
+
 #[cfg(feature = "text_input")]
-static mut MODAL_TEXT_LEN: u8 = 0;
+static mut MODAL_TEXT: ModalTextBuf = ModalTextBuf {
+    len: 0,
+    buf: [0u8; 31],
+};
 
 pub fn store_modal_text(_text: &str) {
     #[cfg(feature = "text_input")]
     unsafe {
-        let copy_len = _text.len().min(32);
-        core::ptr::copy_nonoverlapping(
-            _text.as_bytes().as_ptr(),
-            core::ptr::addr_of_mut!(MODAL_TEXT_BUF) as *mut u8,
-            copy_len,
-        );
-        MODAL_TEXT_LEN = copy_len as u8;
+        let m = &mut *core::ptr::addr_of_mut!(MODAL_TEXT);
+        let copy_len = _text.len().min(m.buf.len());
+        core::ptr::copy_nonoverlapping(_text.as_bytes().as_ptr(), m.buf.as_mut_ptr(), copy_len);
+        m.len = copy_len as u8;
     }
 }
 
@@ -253,12 +258,9 @@ pub unsafe fn dispatch_ui(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
                         return 0;
                     }
                     unsafe {
-                        let copy_len = (MODAL_TEXT_LEN as usize).min(max_len as usize);
-                        core::ptr::copy_nonoverlapping(
-                            core::ptr::addr_of!(MODAL_TEXT_BUF) as *const u8,
-                            buf,
-                            copy_len,
-                        );
+                        let m = &*core::ptr::addr_of!(MODAL_TEXT);
+                        let copy_len = (m.len as usize).min(max_len as usize);
+                        core::ptr::copy_nonoverlapping(m.buf.as_ptr(), buf, copy_len);
                         copy_len
                     }
                 }

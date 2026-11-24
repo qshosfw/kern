@@ -137,14 +137,15 @@ impl SheetOptions {
 }
 
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct OptionSheet {
+    pub show_radio: bool,
+    pub is_pressed: bool,
+    pub hover: usize,
+    pub selected: usize,
     pub title: &'static str,
     pub options: SheetOptions,
     pub icons: Option<&'static [&'static [u8; 8]]>,
-    pub selected: usize,
-    pub hover: usize,
-    pub show_radio: bool,
-    pub is_pressed: bool,
 }
 
 impl OptionSheet {

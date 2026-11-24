@@ -35,11 +35,12 @@ abc\0123\0ABC\0 \0.,?!'-\0abc\0def\0ghi\0jkl\0mno\0pqrs\0tuv\0wxyz\0\
 /// (e.g. Russian Cyrillic, Japanese Keitai Kana, or Spanish accented characters).
 /// Automatically activates the on-screen 3x3 keypad guide since it differs from the factory Latin silkscreen.
 #[derive(Debug, Clone)]
+#[repr(C)]
 pub struct LocaleKeymap {
     pub active: bool,
     label_len: u8,
-    label_buf: [u8; 8],
     offsets: [u8; 11],
+    label_buf: [u8; 8],
     buf: [u8; 72],
 }
 
@@ -166,9 +167,9 @@ pub struct TextInputModel {
     pub ticks: u32,
     pub exit_press_ticks: u32,
     pub hold_ticks: u32,
-    pub custom_title: String<16>,
     pub buffer: String<32>,
     pub locale_keymap: LocaleKeymap,
+    pub custom_title: String<16>,
 }
 
 impl TextInputModel {

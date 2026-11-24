@@ -22,7 +22,6 @@ pub mod dev;
 pub mod error;
 pub mod event;
 pub mod ipc;
-pub mod macros;
 pub mod mem;
 pub mod nav;
 pub mod power;

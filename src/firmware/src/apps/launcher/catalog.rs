@@ -60,10 +60,11 @@ pub struct PackageCatalogEntry {
     pub exec_type: KrxExecType,
     pub is_valid: bool,
     pub icon_id: u16,
+    /// Self-contained 8x8 monochrome icon bitmap from `SECTION_ASSETS` (`[0; 8]` when absent).
+    /// Placed at offset 4 (4-byte aligned) to avoid Cortex-M0+ `__aeabi_uwrite4` traps.
+    pub icon_8: [u8; 8],
     /// File offset of embedded 16x16 bitmap inside `SECTION_ASSETS` (`0` when absent).
     pub icon_16_off: u16,
-    /// Self-contained 8x8 monochrome icon bitmap from `SECTION_ASSETS` (`[0; 8]` when absent).
-    pub icon_8: [u8; 8],
     pub title: SmallStr<12>,
     pub path: SmallStr<20>,
 }
@@ -88,7 +89,8 @@ impl PackageCatalogEntry {
         if self.has_custom_icon_8() {
             unsafe { &*(&self.icon_8 as *const [u8; 8]) }
         } else {
-            crate::apps::settings::apps::package_icon_8(self.title.as_str(), self.icon_id)
+            gfx::icons::system_icon(u8::try_from(self.icon_id).unwrap_or(::abi::icon::APPS))
+                .unwrap_or(gfx::icons::ICON_APPS)
         }
     }
 

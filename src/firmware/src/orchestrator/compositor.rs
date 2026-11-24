@@ -24,11 +24,11 @@ pub enum ActiveModal {
     #[cfg(feature = "text_input")]
     TextInput(TextInputModel) = 2,
     Sheet(
-        OptionSheet,
-        KeyRepeater,
+        core::cell::Cell<u8>,
         gfx::gui::animation::TransitionProgress,
         gfx::gui::animation::MarqueeScroller,
-        core::cell::Cell<u8>,
+        KeyRepeater,
+        OptionSheet,
     ) = 3,
 }
 
@@ -68,7 +68,7 @@ impl ModalCompositor {
             return true;
         }
         match &self.modal {
-            ActiveModal::Sheet(_, _, anim, marquee, _) => {
+            ActiveModal::Sheet(_, anim, marquee, _, _) => {
                 !anim.is_complete()
                     || (crate::master_config_ref().display.animations_enabled()
                         && marquee.is_active())
@@ -217,11 +217,11 @@ impl ModalCompositor {
             cfg.keys.fast_scroll != 0,
         );
         self.modal = ActiveModal::Sheet(
-            sheet,
-            rep,
+            core::cell::Cell::new(0),
             anim,
             gfx::gui::animation::MarqueeScroller::idle(),
-            core::cell::Cell::new(0),
+            rep,
+            sheet,
         );
     }
 
@@ -270,7 +270,7 @@ impl ModalCompositor {
                     None
                 }
             }
-            ActiveModal::Sheet(sheet, repeater, anim, marquee, hover_ov) => {
+            ActiveModal::Sheet(hover_ov, anim, marquee, repeater, sheet) => {
                 let prev_hover = sheet.hover;
                 if let Event::Tick = event {
                     anim.tick();
@@ -313,7 +313,7 @@ impl ModalCompositor {
             ActiveModal::TextInput(model) => {
                 self.text_view.render(canvas, model);
             }
-            ActiveModal::Sheet(sheet, _, anim, marquee, hover_ov) => {
+            ActiveModal::Sheet(hover_ov, anim, marquee, _, sheet) => {
                 let animated = crate::master_config_ref().display.animations_enabled();
                 let ov = MenuView::render_sheet_slide_up_marquee(
                     canvas,

@@ -56,6 +56,7 @@ pub(crate) struct NativeExecSlot {
     pub(crate) pkg_path_len: u8,
     pub(crate) entry_point: usize,
     pub(crate) got_base: u32,
+    pub(crate) pending_start_arg: u32,
     pub(crate) caps: CapabilitySet,
     pub(crate) pkg_path: [u8; 31],
     pub(crate) overlay: PagedOverlay,
@@ -644,7 +645,7 @@ pub unsafe fn invoke_krx_native(
 }
 
 #[inline(never)]
-unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *const ()) -> u32 {
+unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'_, '_>, param: *const ()) -> u32 {
     let slot = slot_ref();
     if !slot.is_loaded || slot.entry_point == 0 {
         return 0xFFFF_FFFF;
@@ -652,7 +653,7 @@ unsafe fn invoke_guest(op: u32, ctx: *mut SysContext<'static, 'static>, param: *
     unsafe {
         #[cfg(test)]
         {
-            ACTIVE_CTX = ctx;
+            ACTIVE_CTX = ctx as *mut SysContext<'static, 'static>;
         }
         let res = invoke_krx_native(
             slot.entry_point,
@@ -699,22 +700,17 @@ pub unsafe fn invoke_boot_start(param: usize) -> u32 {
     }
 }
 
-static mut PENDING_START_ARG: u32 = 0;
-
 #[inline(always)]
 pub fn set_pending_start_arg(arg: u32) {
-    unsafe {
-        PENDING_START_ARG = arg;
-    }
+    slot_mut().pending_start_arg = arg;
 }
 
 #[inline(always)]
 fn take_pending_start_arg() -> u32 {
-    unsafe {
-        let a = PENDING_START_ARG;
-        PENDING_START_ARG = 0;
-        a
-    }
+    let slot = slot_mut();
+    let a = slot.pending_start_arg;
+    slot.pending_start_arg = 0;
+    a
 }
 
 #[inline(always)]
@@ -725,7 +721,7 @@ pub fn active_pkg_matches(path: &str) -> bool {
 
 pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventResult {
     dispatch_krx_event(
-        ctx as *mut _ as *mut _,
+        ctx as *mut _,
         kernel::proc::abi::KRX_EV_IPC,
         0,
         kernel::proc::abi::KRX_IPC_ACTION_FLAG,
@@ -733,7 +729,7 @@ pub fn dispatch_action(ctx: &mut SysContext<'_, '_>, action_id: u16) -> EventRes
     )
 }
 
-pub unsafe fn native_on_start(ctx: &mut SysContext<'static, 'static>) {
+pub unsafe fn native_on_start(ctx: &mut SysContext<'_, '_>) {
     let arg = take_pending_start_arg();
     let res = unsafe { invoke_guest(KRX_OP_START, ctx as *mut _, arg as usize as *const ()) };
     if res == 0xFFFF_FFFF {
@@ -741,7 +737,7 @@ pub unsafe fn native_on_start(ctx: &mut SysContext<'static, 'static>) {
     }
 }
 
-pub unsafe fn native_on_event(ctx: &mut SysContext<'static, 'static>, ev: &Event) -> EventResult {
+pub unsafe fn native_on_event(ctx: &mut SysContext<'_, '_>, ev: &Event) -> EventResult {
     let (kind, key, flags, payload) = match ev {
         Event::Key { code, state } => {
             let s_val = match state {
@@ -774,7 +770,7 @@ pub unsafe fn native_on_event(ctx: &mut SysContext<'static, 'static>, ev: &Event
 
 #[inline(never)]
 fn dispatch_krx_event(
-    ctx: *mut SysContext<'static, 'static>,
+    ctx: *mut SysContext<'_, '_>,
     kind: u8,
     key: u8,
     flags: u8,
@@ -796,7 +792,7 @@ fn dispatch_krx_event(
 }
 
 pub unsafe fn native_on_modal_result(
-    ctx: &mut SysContext<'static, 'static>,
+    ctx: &mut SysContext<'_, '_>,
     r: &ModalResult<'_>,
 ) -> EventResult {
     let (tag, flags, payload) = match r {
@@ -957,7 +953,7 @@ pub fn get_slot_status_bar(out_sb: *mut kernel::proc::abi::KrxStatusBar) {
 
 pub unsafe fn native_on_render(
     _canvas: &mut Canvas,
-    ctx: &SysContext<'static, 'static>,
+    ctx: &SysContext<'_, '_>,
     status_bar: &mut StatusBarConfig<'_>,
 ) {
     unsafe {
@@ -992,7 +988,7 @@ pub(crate) fn teardown_slot_and_hw(
     super::fault::clear_loaded_pkg();
 }
 
-pub unsafe fn native_on_exit(ctx: &mut SysContext<'static, 'static>) {
+pub unsafe fn native_on_exit(ctx: &mut SysContext<'_, '_>) {
     let slot = slot_mut();
     let pid = slot.pid;
     if slot.is_loaded && slot.entry_point != 0 {
