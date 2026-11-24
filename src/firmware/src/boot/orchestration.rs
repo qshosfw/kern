@@ -264,45 +264,6 @@ fn boot_stage_security_check(
     false
 }
 
-/// Pre-splash check for required core `.krx` packages (IJV-style missing-module guard).
-/// Runs in <1 ms when `/apps/settings.krx` is valid; otherwise pauses on a recovery screen
-/// with USB/keypad active until the user presses MENU to continue anyway.
-#[cfg(all(feature = "filesystem", feature = "krx_native"))]
-#[inline(never)]
-fn boot_stage_core_modules_check(hw: &mut SystemHardware) {
-    let status: &str = match crate::runtime::read_krx_summary_in_scratch(
-        hw.filesystem,
-        "/apps/settings.krx",
-    ) {
-        Ok((_, s)) if s.abi == ::abi::VERSION => return,
-        Ok(_) => "ABI mismatch",
-        Err(kernel::runtime::KrxLaunchError::FileNotFound) => "Missing",
-        Err(_) => "Corrupt",
-    };
-
-    hw.backlight.wake();
-    let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog(canvas, "settings.krx", status, "M: Continue", false);
-    hw.lcd.turn_on();
-    hw.lcd.blit(canvas);
-
-    hw.key_scanner.clear();
-    let mut dummy = false;
-    loop {
-        bsp::Board::wdt_feed();
-        crate::system::poll_usb_and_wire(hw, py32_hal::delay::millis(), &mut dummy);
-        if let Some((
-            kernel::event::KeyCode::Menu | kernel::event::KeyCode::Exit,
-            kernel::event::KeyState::Pressed,
-        )) = hw.key_scanner.scan()
-        {
-            hw.key_scanner.clear();
-            return;
-        }
-        py32_hal::delay::delay_ms(10);
-    }
-}
-
 #[inline(never)]
 pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
     let master_cfg = crate::master_config();
@@ -334,12 +295,6 @@ pub fn boot_orchestration(hw: &mut SystemHardware) -> Adc {
             &mut hw.lcd,
             &mut hw.backlight,
         );
-    }
-
-    // ── STAGE 2.5: Core Modules Verification (IJV-style missing-package guard) ──
-    #[cfg(all(feature = "filesystem", feature = "krx_native"))]
-    if !passcode_state.is_locked {
-        boot_stage_core_modules_check(hw);
     }
 
     // ── STAGE 3: Instant Boot Splash & Concurrent System Bring-up ───

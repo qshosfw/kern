@@ -76,13 +76,24 @@ fn render_boot_screen(
             big_title,
             sub_title,
             "Hold",
-            "Cancel",
+            "Safe",
             progress_percent,
         );
     } else {
         gfx::widgets::draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
     }
     lcd.blit(canvas);
+}
+
+#[cfg(feature = "filesystem")]
+fn is_superblocks_blank(fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>) -> bool {
+    let buf = &mut crate::services::staging_buf()[..64];
+    for addr in [0x0000u32, 0x1000u32] {
+        if fs.dev.read_data(addr, buf).is_err() || buf.iter().any(|&b| b != 0xFF) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(feature = "filesystem")]
@@ -108,12 +119,20 @@ fn has_valid_calib_file(fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>) -> b
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn save_rescued_calibration(
+fn finish_calib_or_warn(
     vfs: &mut SystemStorage,
-    raw_calib: &mut [u8; 512],
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    raw_calib: &[u8; 512],
+    has_hw_calib: bool,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
 ) {
-    crate::services::calibration::persist_calib_bundle(vfs, raw_calib);
+    if has_hw_calib {
+        crate::services::calibration::persist_calib_bundle(vfs, raw_calib);
+    } else {
+        crate::orchestrator::compositor::queue_system_alert(
+            "Default Calib",
+            "Factory calib missing.\nRestore in Kern Dock.",
+        );
+    }
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
@@ -131,7 +150,7 @@ fn wait_keys_released(key_scanner: &mut KeypadScanner) {
 #[inline(never)]
 fn prepare_boot_dialog(
     lcd: &mut St7565<bsp::LcdBus>,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
 ) {
     // Set non-zero PWM duty alongside GPIO high so 20 kHz SysTick PWM does not zero BACKLIGHT.
     drivers::backlight::BACKLIGHT_DUTY.store(10, core::sync::atomic::Ordering::Relaxed);
@@ -142,32 +161,18 @@ fn prepare_boot_dialog(
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn halt_with_boot_dialog(lcd: &mut St7565<bsp::LcdBus>, title: &str, sub: &str, hint: &str) -> ! {
-    let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog(canvas, title, sub, hint, false);
-    lcd.blit(canvas);
-    loop {
-        bsp::Board::wdt_feed();
-        py32_hal::delay::delay_ms(50);
-    }
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
-fn prompt_and_format_storage(
+fn confirm_corrupt_format(
     lcd: &mut St7565<bsp::LcdBus>,
     key_scanner: &mut KeypadScanner,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
-    vfs: &mut SystemStorage,
-) {
-    let raw_calib = crate::services::staging_buf();
-    let calib_sub = if rescue_raw_calibration(&mut vfs.fs, raw_calib) {
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
+    has_hw_calib: bool,
+) -> bool {
+    let calib_sub = if has_hw_calib {
         "Calib safe"
     } else {
-        "No calib"
+        "Default calib"
     };
-
-    render_boot_screen(lcd, "Format Flash?", calib_sub, 0, true);
+    render_boot_screen(lcd, "Storage Corrupt", calib_sub, 0, true);
     prepare_boot_dialog(lcd, radio);
     wait_keys_released(key_scanner);
 
@@ -187,7 +192,9 @@ fn prompt_and_format_storage(
                     hold.active = false;
                 }
                 (KeyCode::Exit, KeyState::Pressed) => {
-                    halt_with_boot_dialog(lcd, "Halted", "Kept", "Power cycle");
+                    wait_keys_released(key_scanner);
+                    radio.set_status_led(bsp::StatusLed::Off);
+                    return false;
                 }
                 _ => {}
             }
@@ -198,44 +205,33 @@ fn prompt_and_format_storage(
         last_ms = now;
         if dt > 0 {
             if hold.advance(dt) {
-                break;
+                return true;
             }
             let pct = hold.percent();
             if pct != last_pct {
                 last_pct = pct;
-                render_boot_screen(lcd, "Format Flash?", calib_sub, pct, true);
+                render_boot_screen(lcd, "Storage Corrupt", calib_sub, pct, true);
             }
         }
         py32_hal::delay::delay_ms(10);
     }
-
-    render_boot_screen(lcd, "Formatting", "Wait...", 40, false);
-    bsp::Board::wdt_feed();
-    if vfs.fs.format(None).is_err() {
-        halt_with_boot_dialog(lcd, "Flash Error", "No reply", "Power cycle");
-    }
-
-    render_boot_screen(lcd, "Restoring", "Calib...", 95, false);
-    save_rescued_calibration(vfs, raw_calib, radio);
 }
 
 #[cfg(feature = "filesystem")]
 fn recover_calibration_to_fs(
     lcd: &mut St7565<bsp::LcdBus>,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
     vfs: &mut SystemStorage,
 ) {
-    render_boot_screen(lcd, "Restoring", "Backup", 50, false);
-    prepare_boot_dialog(lcd, radio);
-
     let raw_calib = crate::services::staging_buf();
     let from_prov = vfs.fs.read_file("/prov/calib.dat", raw_calib) == Ok(512)
         && crate::services::calibration::is_valid_calibration(raw_calib);
-    if !from_prov {
-        rescue_raw_calibration(&mut vfs.fs, raw_calib);
+    let has_hw_calib = from_prov || rescue_raw_calibration(&mut vfs.fs, raw_calib);
+    if has_hw_calib && crate::system::admits_physical_input() {
+        render_boot_screen(lcd, "Restoring", "Calibration...", 80, false);
+        prepare_boot_dialog(lcd, radio);
     }
-
-    save_rescued_calibration(vfs, raw_calib, radio);
+    finish_calib_or_warn(vfs, raw_calib, has_hw_calib, radio);
 }
 
 #[cfg(feature = "filesystem")]
@@ -244,14 +240,38 @@ pub fn mount_or_format<'a>(
     lcd: &mut St7565<bsp::LcdBus>,
     key_scanner: &mut KeypadScanner,
     filesystem: &mut FileSystemDriver<'a, Py25q16FlashDriver<bsp::FlashBus>>,
-    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
 ) {
     if filesystem.fs.mount().is_err() {
-        // An unattended node never blocks on a panel prompt nor erases flash on its own:
-        // it boots unmounted and reports the fault over RigWire for a remote decision.
-        if crate::system::admits_physical_input() {
-            prompt_and_format_storage(lcd, key_scanner, radio, filesystem);
+        let blank = is_superblocks_blank(&mut filesystem.fs);
+        let raw_calib = crate::services::staging_buf();
+        let has_hw_calib = rescue_raw_calibration(&mut filesystem.fs, raw_calib);
+        let do_format = if blank {
+            true
+        } else if crate::system::admits_physical_input() {
+            confirm_corrupt_format(lcd, key_scanner, radio, has_hw_calib)
+        } else {
+            false
+        };
+
+        if do_format {
+            if crate::system::admits_physical_input() {
+                let title = if blank { "First-Time Setup" } else { "Formatting" };
+                render_boot_screen(lcd, title, "Initializing...", 50, false);
+                prepare_boot_dialog(lcd, radio);
+            }
+            bsp::Board::wdt_feed();
+            if filesystem.fs.format(None).is_ok() {
+                finish_calib_or_warn(filesystem, raw_calib, has_hw_calib, radio);
+                return;
+            }
+            radio.set_status_led(bsp::StatusLed::Off);
         }
+
+        crate::orchestrator::compositor::queue_system_alert(
+            "Safe Mode",
+            "Storage unmounted.\nRepair in Kern Dock.",
+        );
     } else if !has_valid_calib_file(&mut filesystem.fs) {
         recover_calibration_to_fs(lcd, radio, filesystem);
     }
@@ -307,7 +327,7 @@ pub fn ensure_default_files(filesystem: &mut SystemStorage) {
 pub fn mount_or_format(
     _lcd: &mut St7565<bsp::LcdBus>,
     _key_scanner: &mut KeypadScanner,
-    _radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
+    _radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus>,
 ) -> crate::services::storage::NoStorage {
     crate::services::storage::NoStorage
 }

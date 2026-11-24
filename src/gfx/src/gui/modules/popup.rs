@@ -118,24 +118,17 @@ impl View<PopupModel> for PopupView {
         let msg = model.custom_msg.as_str();
         let total_lines = text::count_lines(msg);
 
-        // Short 1-2 line alerts and confirmations render as a compact centered card modal;
-        // multi-line scrollable content and hold-to-confirm bars use the full bottom sheet.
         let anim_p = model.anim.progress();
-        if model.hold.required_ms == 0 && total_lines <= 2 {
-            let t = model.title_str();
-            widgets::draw_modal_card(
-                canvas,
-                (!t.is_empty()).then_some(t),
-                msg,
-                model.confirm_label.unwrap_or(""),
-                model.cancel_label.unwrap_or(""),
-                anim_p,
-            );
-            return;
-        }
-
-        // Standard bottom sheet occupies Y=18 to Y=63 (46px high)
-        let sheet_h = 46u8;
+        // Content-adaptive bottom sheet height: compact for 1-2 line notices, full 46px for 3+ lines or hold bars.
+        let sheet_h: u8 = if model.hold.required_ms > 0 || total_lines >= 3 {
+            46
+        } else if total_lines <= 1 {
+            if has_badges { 32 } else { 24 }
+        } else if has_badges {
+            39
+        } else {
+            31
+        };
         let y_offset = model.anim.slide_offset(sheet_h);
         let sheet_y = widgets::draw_sheet_slide_up(canvas, model.title_str(), sheet_h, y_offset);
         if has_badges {
@@ -246,7 +239,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn short_confirm_renders_compact_card_leaving_status_bar_clear() {
+    fn short_confirm_renders_compact_sheet_leaving_upper_screen_clear() {
         let mut model = PopupModel::new().with_badges("OK", "");
         let _ = model.custom_title.push_str("Radio App");
         let _ = model
@@ -257,11 +250,12 @@ mod tests {
         let mut canvas = Canvas::new();
         PopupView::new().render(&mut canvas, &model);
 
-        // Status bar page 0 (Y=0..7) stays untouched by centered card modal
+        // Upper 24px (pages 0..=2, Y=0..23) remain clear above the compact 39px sheet (Y=25..63)
         assert!(canvas.buffer[0].iter().all(|&b| b == 0));
-        // Card header at Y=11..19 (page 1/2) and [M] OK badge near Y=43..49 (page 5/6) render
-        assert!(canvas.buffer[2][20] != 0);
-        assert!(canvas.buffer[5][10] != 0 || canvas.buffer[6][10] != 0);
+        assert!(canvas.buffer[2].iter().all(|&b| b == 0));
+        // Sheet header at Y=25..33 (page 3) and [M] OK badge on page 6/7 render cleanly
+        assert!(canvas.buffer[3][20] != 0);
+        assert!(canvas.buffer[7][6] != 0);
     }
 
     #[test]

@@ -368,7 +368,7 @@ fn read_sys_facet(facet: u16, c: &mut WireCtx<'_, '_>) -> Result<(), Status> {
         }
         FACET_SYS_CALIBRATION => {
             let calib = unsafe { &*core::ptr::addr_of!(crate::CALIBRATION) };
-            c.wr_u8(calib.is_valid() as u8);
+            c.wr_u8((calib.is_valid() && calib.is_bound()) as u8);
             c.wr_u16(calib.xtal_freq_low() as u16);
             c.wr_u16(calib.battery_calib_const());
         }

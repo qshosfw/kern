@@ -490,14 +490,13 @@ fn wrap_alert_bytes(raw: &str, dst: &mut [u8]) -> usize {
     pos
 }
 
-/// Non-generic word-wrapper into `String<88>` so release firmware keeps a single monomorphization.
+/// Non-generic word-wrapper into `String<88>` without `Vec::resize_default` codegen bloat.
 #[inline(never)]
 fn wrap_alert_str(raw: &str, out: &mut heapless::String<88>) {
-    let vec = unsafe { out.as_mut_vec() };
-    vec.clear();
-    let _ = vec.resize_default(88);
-    let len = wrap_alert_bytes(raw, vec.as_mut_slice());
-    vec.truncate(len);
+    let mut buf = [0u8; 88];
+    let len = wrap_alert_bytes(raw, &mut buf);
+    out.clear();
+    let _ = out.push_str(unsafe { core::str::from_utf8_unchecked(&buf[..len]) });
 }
 
 /// Word-wraps `raw` for TomThumb rendering inside the modal/sheet viewport.
@@ -784,6 +783,38 @@ mod tests {
         queue_system_alert("Second", "2");
         assert_eq!(pop_system_alert().unwrap().title.as_str(), "Second");
         assert!(pop_system_alert().is_none());
+
+        // Low-priority welcome notice never overwrites a pending storage/calib warning
+        queue_system_alert("Default Calib", "Factory calib missing.");
+        queue_system_alert_if_empty("Welcome to KERN", "Sync apps in Kern Dock.");
+        assert_eq!(pop_system_alert().unwrap().title.as_str(), "Default Calib");
+    }
+
+    #[test]
+    fn show_confirm_auto_wraps_long_lines_and_accepts_key5() {
+        let mut compositor = ModalCompositor::new();
+        compositor.show_confirm(
+            7,
+            "Settings App",
+            "Package checksum mismatch detected during launch verification.",
+            "OK",
+            "",
+        );
+        if let ActiveModal::Popup(model) = &compositor.modal {
+            assert!(gfx::text::count_lines(model.custom_msg.as_str()) >= 2);
+            for line in gfx::text::lines(model.custom_msg.as_str()) {
+                assert!(gfx::text::str_width(line, &gfx::fonts::tomthumb::FONT) <= MAX_ALERT_LINE_PX);
+            }
+        } else {
+            panic!("expected popup modal");
+        }
+        assert!(matches!(
+            compositor.handle_event(&Event::Key {
+                code: KeyCode::Key5,
+                state: KeyState::Pressed,
+            }),
+            Some(ModalResult::Confirmed(7))
+        ));
     }
 
     #[test]

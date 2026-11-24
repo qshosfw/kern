@@ -279,20 +279,36 @@ fn handoff(hw: &mut SystemHardware) {
     apply_active_calibration(&mut hw.radio);
     system::restore_from_config(hw);
 
-    let startup_app = if master_config_ref().apps.startup_app == 1 {
-        crate::apps::APP_ID_VFO
-    } else {
-        crate::apps::APP_ID_LAUNCHER
-    };
-    hw.orchestrator.set_startup_app(startup_app);
+    hw.orchestrator
+        .set_startup_app(crate::apps::APP_ID_LAUNCHER);
 
     #[cfg(feature = "uart")]
     bsp::Board::uart_set_baud(master_config_ref().system.baud_rate());
 
     #[cfg(feature = "filesystem")]
-    crate::apps::launcher::catalog::get_catalog().scan(hw.filesystem);
+    let launch_vfo = {
+        let cat = crate::apps::launcher::catalog::get_catalog();
+        cat.scan(hw.filesystem);
+        if cat.entries.iter().all(|e| !e.is_valid) {
+            crate::orchestrator::compositor::queue_system_alert_if_empty(
+                "Welcome to KERN",
+                "Sync apps in Kern Dock.",
+            );
+        }
+        master_config_ref().apps.startup_app == 1
+            && cat.entries.iter().any(|e| {
+                e.is_valid && utils::format::ascii_eq_ignore_case(e.path.as_str(), "/apps/vfo.krx")
+            })
+    };
+    #[cfg(not(feature = "filesystem"))]
+    let launch_vfo = false;
 
     hw.init_startup_app();
+    if launch_vfo {
+        crate::system::enqueue_event(kernel::event::Event::Sys(
+            crate::apps::Shortcut::LaunchApp(crate::apps::APP_ID_VFO as u8).into(),
+        ));
+    }
 
     // Re-paint stack watermark after boot provisioning so steady-state introspection is clean
     kernel::sys::SystemDiagnostics::paint_stack();

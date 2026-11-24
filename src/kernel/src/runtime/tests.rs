@@ -127,7 +127,7 @@ fn test_krx_launch_error_diagnostics() {
 
     assert_eq!(
         KrxLaunchError::FileNotFound.describe(),
-        "Not found.\nInstall via RigWire."
+        "Not installed.\nSync via Kern Dock."
     );
     assert_eq!(
         KrxLaunchError::InsufficientRam.describe(),

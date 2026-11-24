@@ -374,14 +374,12 @@ pub fn draw_key_hints(
     }
 }
 
-/// Centered modal card with optional inverted header bar, body text, and `[M]`/`[EXIT]` key badges.
+/// Clean centered modal popup with zoom materialization (progress: 0..=16)
 #[inline(never)]
-pub fn draw_modal_card(
+pub fn draw_modal_popup_materialize(
     canvas: &mut Canvas,
     title: Option<&str>,
     msg: &str,
-    confirm: &str,
-    cancel: &str,
     progress: u8,
 ) {
     if progress == 0 {
@@ -389,22 +387,13 @@ pub fn draw_modal_card(
     }
     let p = progress.min(16);
     let has_title = title.is_some_and(|t| !t.is_empty());
-    let has_badges = !confirm.is_empty() || !cancel.is_empty();
-    let target_h: u8 = match (has_title, has_badges) {
-        (true, true) => 42,
-        (true, false) => 33,
-        (false, true) => 35,
-        (false, false) => 28,
-    };
+    let target_h: u8 = if has_title { 34 } else { 28 };
     let bw = ((122u16 * p as u16) >> 4) as u8;
     let bh = ((target_h as u16 * p as u16) >> 4) as u8;
     let (bx, by) = draw_modal_box(canvas, bw, bh);
-
     if p < 8 || bw < 24 || bh < 16 {
         return;
     }
-
-    let n_lines = crate::text::count_lines(msg);
     if has_title {
         canvas.fill_rect(bx, by, bw, 9, Color::Fill);
         canvas.draw_pixel(bx, by, Color::Clear);
@@ -420,71 +409,33 @@ pub fn draw_modal_card(
             Color::Clear,
             (bx + bw - 4) as i16,
         );
-
-        let mut line_y = (by + if n_lines <= 1 {
-            if has_badges { 20 } else { 22 }
-        } else {
-            16
-        }) as i16;
+        let mut y = (by + if crate::text::count_lines(msg) <= 1 { 22 } else { 17 }) as i16;
         for line in crate::text::lines(msg) {
             text::draw_str_max_x(
                 canvas,
                 (bx + 5) as i16,
-                line_y,
+                y,
                 line,
                 &crate::fonts::tomthumb::FONT,
                 Color::Fill,
                 (bx + bw - 4) as i16,
             );
-            line_y += 8;
+            y += 8;
         }
     } else {
-        let mut line_y = (by + if n_lines <= 1 {
-            if has_badges { 15 } else { 17 }
-        } else {
-            11
-        }) as i16;
-        let mut is_first = true;
+        let mut y = (by + if crate::text::count_lines(msg) <= 1 { 17 } else { 12 }) as i16;
+        let mut first = true;
         for line in crate::text::lines(msg) {
-            let font = if is_first {
+            let font = if first {
                 &crate::fonts::mumatrix_regular::FONT
             } else {
                 &crate::fonts::tomthumb::FONT
             };
-            text::draw_str_align(
-                canvas,
-                64,
-                line_y,
-                line,
-                font,
-                Color::Fill,
-                text::Align::Center,
-            );
-            line_y += 10;
-            is_first = false;
+            text::draw_str_align(canvas, 64, y, line, font, Color::Fill, text::Align::Center);
+            y += 10;
+            first = false;
         }
     }
-
-    if has_badges && p >= 12 {
-        let badge_y = (by + bh).saturating_sub(10) as i16;
-        if !confirm.is_empty() {
-            draw_key_badge(canvas, (bx + 4) as i16, badge_y, "M", confirm);
-        }
-        if !cancel.is_empty() {
-            draw_key_badge_right(canvas, (bx + bw - 4) as i16, badge_y, "EXIT", cancel);
-        }
-    }
-}
-
-/// Clean centered modal popup with zoom materialization (progress: 0..=16)
-#[inline(always)]
-pub fn draw_modal_popup_materialize(
-    canvas: &mut Canvas,
-    title: Option<&str>,
-    msg: &str,
-    progress: u8,
-) {
-    draw_modal_card(canvas, title, msg, "", "", progress);
 }
 
 #[cfg(test)]
