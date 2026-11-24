@@ -506,9 +506,9 @@ fn test_write_at_streaming_large_files_and_gc_promotion() {
     }
     assert_eq!(readback, payload);
 
-    // 3. Reject single-indirect ceiling > 256 KiB cleanly without orphan corruption.
+    // 3. Reject single-indirect ceiling > 384 KiB (12 L1 roots) cleanly without orphan corruption.
     assert_eq!(
-        fs.write_at("/apps/huge_app.krx", 256 * 1024, b"X"),
+        fs.write_at("/apps/huge_app.krx", 384 * 1024, b"X"),
         Err(FsError::CapacityFull)
     );
     assert_eq!(fs.file_size("/apps/huge_app.krx").unwrap(), big_size);

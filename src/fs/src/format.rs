@@ -7,7 +7,6 @@ use crypto::crc::CrcEngine;
 
 pub const FOURCC_SUPER_V2: u32 = 0x3253_464B; // "KFS2"
 pub const FOURCC_BLOCK_V2: u32 = 0x4C42_324B; // "K2BL"
-pub const FILE_ID_V1: u16 = 0x4B46; // "KF" (legacy KernFS v1 ident)
 
 pub const PAGE_SIZE: usize = 256;
 pub const PAGES_PER_BLOCK: usize = 16;
@@ -26,8 +25,10 @@ const _: () = assert!(
     MAX_META_GROUPS.is_power_of_two(),
     "MAX_META_GROUPS must be a power of two for bitmask indexing"
 );
-pub const MAX_NAME_LEN: usize = 24;
-pub const MAX_INLINE_LEN: usize = 16;
+pub const MAX_NAME_LEN: usize = 20;
+/// 24 B inline payload OR 12 × `u16` L1 root pointers (`12 × 128 × 256 B = 393,216 B` max file).
+pub const MAX_INLINE_LEN: usize = 24;
+pub const MAX_L1_ROOTS: usize = MAX_INLINE_LEN / 2;
 pub const RESERVE_BLOCKS: usize = 2;
 
 pub const ROOT_INO: u16 = 1;
@@ -201,7 +202,7 @@ impl PageTag {
     }
 }
 
-/// 64-byte Inode (4 per 256-byte metadata page).
+/// 64-byte KernFS v2.1 Inode (4 per 256-byte metadata page, 12 L1 roots = 384 KiB max file).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Inode {
@@ -209,32 +210,28 @@ pub struct Inode {
     pub flags: u8,
     pub depth: u8,
     pub name_len: u8,
-    pub record_shift: u8,
-    pub owner_pkg: u8,
     pub ino: u16,
     pub parent_ino: u16,
     pub root_page: u16,
+    pub _reserved: u16,
     pub size: u32,
     pub generation: u32,
-    pub type_fourcc: u32,
     pub name: [u8; MAX_NAME_LEN],
     pub inline_data: [u8; MAX_INLINE_LEN],
 }
 
 impl Inode {
     pub const EMPTY: Self = Self {
-        ino: 0,
-        parent_ino: 0,
-        size: 0,
-        generation: 0,
-        root_page: 0,
         perm: 0,
         flags: 0,
         depth: 0,
-        record_shift: 0,
         name_len: 0,
-        owner_pkg: 0,
-        type_fourcc: 0,
+        ino: 0,
+        parent_ino: 0,
+        root_page: 0,
+        _reserved: 0,
+        size: 0,
+        generation: 0,
         name: [0; MAX_NAME_LEN],
         inline_data: [0; MAX_INLINE_LEN],
     };
@@ -256,7 +253,7 @@ impl Inode {
 
     #[inline(always)]
     pub fn l1_page(&self, idx: usize) -> u16 {
-        if idx >= 8 {
+        if idx >= MAX_L1_ROOTS {
             return 0;
         }
         u16::from_le_bytes([self.inline_data[idx * 2], self.inline_data[idx * 2 + 1]])
@@ -264,7 +261,7 @@ impl Inode {
 
     #[inline(always)]
     pub fn set_l1_page(&mut self, idx: usize, page: u16) {
-        if idx < 8 {
+        if idx < MAX_L1_ROOTS {
             let b = page.to_le_bytes();
             self.inline_data[idx * 2] = b[0];
             self.inline_data[idx * 2 + 1] = b[1];
@@ -279,18 +276,12 @@ impl Inode {
 
     pub fn name_str(&self) -> &str {
         let b = self.name_bytes();
-        if b.iter().all(|&c| c < 0x80) {
-            unsafe { core::str::from_utf8_unchecked(b) }
-        } else {
-            ""
+        for &c in b {
+            if c >= 0x80 {
+                return "";
+            }
         }
-    }
-
-    pub fn set_name(&mut self, b: &[u8]) {
-        let l = b.len().min(MAX_NAME_LEN);
-        self.name = [0; MAX_NAME_LEN];
-        self.name[..l].copy_from_slice(&b[..l]);
-        self.name_len = l as u8;
+        unsafe { core::str::from_utf8_unchecked(b) }
     }
 
     #[inline(always)]
@@ -318,36 +309,6 @@ impl Inode {
             );
         }
     }
-}
-
-/// Checks if a 64-byte raw sector header belongs to legacy KernFS v1.
-pub fn is_valid_v1_header(header_buf: &[u8]) -> bool {
-    if header_buf.len() < 64 {
-        return false;
-    }
-    let ident = u16::from_le_bytes([header_buf[0], header_buf[1]]);
-    let ver = header_buf[2];
-    let flags = header_buf[3];
-    let path_len = header_buf[4] as usize;
-    let payload_len = u32::from_le_bytes([
-        header_buf[38],
-        header_buf[39],
-        header_buf[40],
-        header_buf[41],
-    ]) as usize;
-    let stored_crc = u32::from_le_bytes([
-        header_buf[50],
-        header_buf[51],
-        header_buf[52],
-        header_buf[53],
-    ]);
-    ident == FILE_ID_V1
-        && ver == 1
-        && (flags == 0x7F || flags == 0x01)
-        && path_len > 0
-        && path_len <= 32
-        && payload_len <= (4096 - 64)
-        && CrcEngine::crc32(&header_buf[..50]) == stored_crc
 }
 
 /// Read an index entry (`u16` physical page ID) from a 256-byte index page.

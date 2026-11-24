@@ -212,7 +212,7 @@ pub fn draw_dialog(
     big_title: &str,
     sub_title: &str,
     hint: &str,
-    has_btns: bool,
+    _has_btns: bool,
 ) {
     draw_dialog_header(canvas, big_title, sub_title);
     if !hint.is_empty() {
@@ -225,13 +225,10 @@ pub fn draw_dialog(
             Color::Fill,
         );
     }
-    if has_btns {
-        draw_key_badge(canvas, 4, 55, "M", "Format");
-        draw_key_badge_right(canvas, 124, 55, "EXIT", "Cancel");
-    }
 }
 
-/// System dialog with a Hawk5-style progress bar
+/// System dialog with a centered progress bar
+#[inline(never)]
 pub fn draw_dialog_progress(
     canvas: &mut Canvas,
     big_title: &str,
@@ -239,7 +236,7 @@ pub fn draw_dialog_progress(
     progress_percent: u8,
 ) {
     draw_dialog_header(canvas, big_title, sub_title);
-    draw_progress_bar(canvas, 4, 44, 120, 8, progress_percent, true);
+    draw_progress_bar(canvas, 4, 43, 120, 6, progress_percent, true);
 }
 
 /// System hold-to-confirm dialog with progress bar and Hold/Cancel key badges.
@@ -251,8 +248,7 @@ pub fn draw_dialog_hold_prompt(
     cancel_label: &str,
     progress_percent: u8,
 ) {
-    draw_dialog_header(canvas, big_title, sub_title);
-    draw_progress_bar(canvas, 4, 43, 120, 6, progress_percent, true);
+    draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
     draw_key_badge(canvas, 4, 55, "M", confirm_label);
     draw_key_badge_right(canvas, 124, 55, "EXIT", cancel_label);
 }

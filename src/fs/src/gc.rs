@@ -62,14 +62,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     #[inline(never)]
     fn read_block_ec(&mut self, block: usize) -> u32 {
-        let mut hdr_uninit = core::mem::MaybeUninit::<BlockHeader>::uninit();
-        let hdr_bytes =
-            unsafe { core::slice::from_raw_parts_mut(hdr_uninit.as_mut_ptr() as *mut u8, 16) };
-        if self.dev.read(block * D::BLOCK_SIZE, hdr_bytes).is_ok() {
-            let h = unsafe { hdr_uninit.assume_init() };
-            if h.fourcc == FOURCC_BLOCK_V2 && h.kind != BLOCK_KIND_BAD {
-                return h.erase_count;
-            }
+        let mut h = [0u32; 4];
+        let b = unsafe { core::slice::from_raw_parts_mut(h.as_mut_ptr() as *mut u8, 16) };
+        if self.dev.read(block * D::BLOCK_SIZE, b).is_ok()
+            && h[0] == FOURCC_BLOCK_V2
+            && ((h[3] >> 16) as u8) != BLOCK_KIND_BAD
+        {
+            return h[2];
         }
         0
     }
@@ -307,12 +306,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     #[inline(never)]
-    pub(crate) fn write_pages_at(
-        &mut self,
-        offset: usize,
-        data: &[u8],
-        ring_cap: Option<usize>,
-    ) -> Result<(), FsError> {
+    pub(crate) fn write_pages_at(&mut self, offset: usize, data: &[u8]) -> Result<(), FsError> {
         let ino = self.cur_inode.ino;
         if self.cur_inode.is_inline() {
             if self.cur_inode.size > 0 {
@@ -321,6 +315,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 self.page_buf.fill(0);
                 self.page_buf[..ilen].copy_from_slice(&self.cur_inode.inline_data[..ilen]);
                 self.program_page_buf(phys, ino, 0, TAG_KIND_DATA)?;
+                self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
                 self.cur_inode.set_l1_page(0, phys);
             } else {
                 self.cur_inode.inline_data = [0; MAX_INLINE_LEN];
@@ -329,15 +324,15 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             self.cur_inode.depth = DEPTH_DIRECT;
         }
 
-        let cap = ring_cap.unwrap_or(0);
         let mut pos = 0usize;
+        let mut obs_batch = [0u16; 8];
+        let mut obs_cnt = 0usize;
+        let mut batch_block = self.cur_alloc_block;
+
         while pos < data.len() {
-            let mut abs_pos = offset + pos;
-            if cap != 0 && abs_pos >= cap {
-                abs_pos %= cap;
-            }
+            let abs_pos = offset + pos;
             let lpage = (abs_pos >> 8) as u16;
-            if (lpage as usize) >= 8 * INDEX_PTRS_PER_PAGE {
+            if (lpage as usize) >= MAX_L1_ROOTS * INDEX_PTRS_PER_PAGE {
                 return Err(FsError::CapacityFull);
             }
             let in_page = abs_pos & 0xFF;
@@ -355,15 +350,27 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             }
             self.program_page_buf(new_p, ino, lpage, TAG_KIND_DATA)?;
             let new_end = (abs_pos + chunk) as u32;
-            if cap == 0 {
-                if new_end > self.cur_inode.size {
-                    self.cur_inode.size = new_end;
-                }
-            } else {
-                self.cur_inode.size = self.cur_inode.size.max(new_end).min(cap as u32);
+            if new_end > self.cur_inode.size {
+                self.cur_inode.size = new_end;
             }
-            self.cow_update_data_ptr(lpage, new_p)?;
+            let mut pair = self.cow_update_data_ptr(lpage, new_p)?;
+            while pair != 0 {
+                let p = pair as u16;
+                pair >>= 16;
+                if p != 0 {
+                    obs_batch[obs_cnt & 7] = p;
+                    obs_cnt += 1;
+                }
+            }
             pos += chunk;
+            if pos >= data.len() || obs_cnt >= 6 || self.cur_alloc_block != batch_block {
+                self.cur_inode.generation = self.global_gen + 1;
+                let n = obs_cnt.min(8);
+                let slice = unsafe { core::slice::from_raw_parts(obs_batch.as_ptr(), n) };
+                self.commit_cur_inode(slice)?;
+                obs_cnt = 0;
+                batch_block = self.cur_alloc_block;
+            }
         }
         Ok(())
     }
@@ -373,30 +380,29 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         &mut self,
         lpage: u16,
         new_data_p: u16,
-    ) -> Result<(), FsError> {
+    ) -> Result<u32, FsError> {
         let ino = self.cur_inode.ino;
-        let mut obs = [0u16; 2];
+        let mut obs0 = 0u16;
+        let mut obs1 = 0u16;
         let old_d = self.cur_inode.depth;
 
-        if old_d <= DEPTH_DIRECT && lpage < 8 {
+        if old_d <= DEPTH_DIRECT && (lpage as usize) < MAX_L1_ROOTS {
             let old_p = self.cur_inode.l1_page(lpage as usize);
             if old_d == DEPTH_DIRECT && old_p != new_data_p {
-                obs[0] = old_p;
+                obs0 = old_p;
             }
             self.cur_inode.depth = DEPTH_DIRECT;
             self.cur_inode.set_l1_page(lpage as usize, new_data_p);
         } else {
             let l2_idx = (lpage >> 7) as usize;
             let l1_idx = (lpage & 0x7F) as usize;
-            if l2_idx >= 8 {
+            if l2_idx >= MAX_L1_ROOTS {
                 return Err(FsError::CapacityFull);
             }
             if old_d == DEPTH_DIRECT {
                 let l1_0 = self.alloc_page(true)?;
                 self.page_buf.fill(0);
-                for s in 0..8 {
-                    write_idx_u16(&mut self.page_buf, s, self.cur_inode.l1_page(s));
-                }
+                self.page_buf[..MAX_INLINE_LEN].copy_from_slice(&self.cur_inode.inline_data);
                 if l2_idx == 0 {
                     write_idx_u16(&mut self.page_buf, l1_idx, new_data_p);
                 }
@@ -405,7 +411,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                 self.cur_inode.set_l1_page(0, l1_0);
                 self.cur_inode.depth = DEPTH_SINGLE_INDIRECT;
                 if l2_idx != 0 {
-                    // Commit promoted L1 root to flash before a second alloc can trigger GC.
                     self.commit_cur_inode(&[])?;
                 }
             }
@@ -417,17 +422,16 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
                     (new_data_p as u32) | (1 << 16),
                 )?;
                 let prev = (packed >> 16) as u16;
-                obs[0] = old_l1;
+                obs0 = old_l1;
                 if prev != new_data_p {
-                    obs[1] = prev;
+                    obs1 = prev;
                 }
                 self.cur_inode.set_l1_page(l2_idx, packed as u16);
                 self.cur_inode.depth = DEPTH_SINGLE_INDIRECT;
             }
         }
 
-        self.cur_inode.generation = self.global_gen + 1;
-        self.commit_cur_inode(&obs)
+        Ok((obs0 as u32) | ((obs1 as u32) << 16))
     }
 
     #[inline(never)]
@@ -435,7 +439,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         if depth == 0 {
             return;
         }
-        for s in 0..8 {
+        for s in 0..MAX_L1_ROOTS {
             let p = u16::from_le_bytes([ptrs[s * 2], ptrs[s * 2 + 1]]);
             if p != 0 {
                 if depth == DEPTH_SINGLE_INDIRECT && self.load_page(p).is_ok() {
@@ -454,8 +458,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     /// Metadata-only rename across any directories (zero data page copies).
     #[inline(never)]
     pub fn rename(&mut self, src: &str, dst: &str) -> Result<(), FsError> {
-        #[inline(never)]
-        fn trim_slashes(s: &str) -> &str {
+        fn trim_slashes(s: &str) -> &[u8] {
             let mut b = s.as_bytes();
             while let [b'/', rest @ ..] = b {
                 b = rest;
@@ -463,7 +466,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             while let [rest @ .., b'/'] = b {
                 b = rest;
             }
-            unsafe { core::str::from_utf8_unchecked(b) }
+            b
         }
         if src == dst {
             return Ok(());
@@ -474,8 +477,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let dst_t = trim_slashes(dst);
         if src_inode.is_dir()
             && !src_t.is_empty()
-            && let Some(rest) = dst_t.strip_prefix(src_t)
-            && (rest.is_empty() || rest.as_bytes()[0] == b'/')
+            && dst_t.starts_with(src_t)
+            && (dst_t.len() == src_t.len() || dst_t[src_t.len()] == b'/')
         {
             return Err(FsError::InvalidPath);
         }
@@ -562,19 +565,6 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         mut cb: F,
     ) -> Result<usize, FsError> {
         self.list_dir_dyn(dir_path, &mut cb)
-    }
-
-    /// Detect whether blocks 0..16 contain any legacy KernFS v1 headers.
-    pub fn has_v1_volume(dev: &mut D) -> bool {
-        let mut hdr_uninit = core::mem::MaybeUninit::<[u8; 64]>::uninit();
-        let hdr = unsafe { &mut *hdr_uninit.as_mut_ptr() };
-        let limit = D::TOTAL_BLOCKS.min(16);
-        for s in 0..limit {
-            if dev.read(s * D::BLOCK_SIZE, hdr).is_ok() && is_valid_v1_header(hdr) {
-                return true;
-            }
-        }
-        false
     }
 
     #[inline(never)]

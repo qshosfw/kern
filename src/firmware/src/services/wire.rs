@@ -13,8 +13,8 @@ use kernel::service::{PowerService, RfFineTuning, SerialPort};
 use kernel::wire::*;
 use utils::units::Frequency;
 
-/// Single-indirect KernFS page limit: 8 L1 index pages × 128 pages × 256 B = 256 KiB.
-const MAX_WIRE_FILE_SIZE: usize = 8 * 128 * 256;
+/// Single-indirect KernFS v2.1 page limit: 12 L1 index pages × 128 pages × 256 B = 384 KiB.
+const MAX_WIRE_FILE_SIZE: usize = 12 * 128 * 256;
 
 /// Active transfer session state coalescing writes in the 512 B `staging_buf`.
 #[repr(C)]

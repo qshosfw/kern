@@ -65,36 +65,17 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     /// by-value stack copy temporaries during firmware startup.
     pub unsafe fn init_in_place(dst: *mut Self, dev: &'a mut D) {
         unsafe {
+            core::ptr::write_bytes(dst as *mut u8, 0, core::mem::size_of::<Self>());
             core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_alloc_page), 1);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).low_power), false);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).mounted), false);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).in_gc), false);
             core::ptr::write(core::ptr::addr_of_mut!((*dst).block_seq), 1);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_alloc_block), 0);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).hot_ino), 0);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).active_files), 0);
             core::ptr::write(core::ptr::addr_of_mut!((*dst).dev), dev);
             core::ptr::write(core::ptr::addr_of_mut!((*dst).format_epoch), 1);
             core::ptr::write(core::ptr::addr_of_mut!((*dst).super_seq), 1);
             core::ptr::write(core::ptr::addr_of_mut!((*dst).global_gen), 1);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).total_erases), 0);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).hot_hash), 0);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_tag), PageTag::EMPTY);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).cur_inode), Inode::EMPTY);
-            core::ptr::write_bytes(
-                core::ptr::addr_of_mut!((*dst).meta_pages) as *mut u8,
-                0,
-                MAX_META_GROUPS * 2,
-            );
             core::ptr::write_bytes(
                 core::ptr::addr_of_mut!((*dst).block_table) as *mut u8,
                 BLOCK_TBL_ERASED,
                 MAX_BLOCKS,
-            );
-            core::ptr::write_bytes(
-                core::ptr::addr_of_mut!((*dst).page_buf) as *mut u8,
-                0,
-                PAGE_SIZE,
             );
         }
     }
@@ -538,7 +519,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         } else {
             return Ok(0);
         };
-        if s >= 8 {
+        if s >= MAX_L1_ROOTS {
             return Ok(0);
         }
         let mut p = self.cur_inode.l1_page(s);
@@ -572,7 +553,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.read_file_at(path, 0, buf)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     pub fn read_file_at(
         &mut self,
         path: &str,
@@ -580,6 +561,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         buf: &mut [u8],
     ) -> Result<usize, FsError> {
         self.lookup_inode(path)?;
+        self.read_cur_inode_at(offset, buf)
+    }
+
+    #[inline(never)]
+    pub fn read_cur_inode_at(&mut self, offset: usize, buf: &mut [u8]) -> Result<usize, FsError> {
         if self.cur_inode.is_dir() {
             return Err(FsError::InvalidPath);
         }
@@ -650,13 +636,19 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         if data.len() <= MAX_INLINE_LEN {
             self.cur_inode.flags = INODE_FLAG_INLINE;
             self.cur_inode.depth = DEPTH_NONE_OR_INLINE;
-            self.cur_inode.inline_data[..data.len()].copy_from_slice(data);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr(),
+                    self.cur_inode.inline_data.as_mut_ptr(),
+                    data.len(),
+                );
+            }
             self.commit_cur_inode(&[])?;
         } else {
             self.cur_inode.flags = 0;
             self.cur_inode.size = 0;
             self.cur_inode.depth = DEPTH_DIRECT;
-            self.write_pages_at(0, data, None)?;
+            self.write_pages_at(0, data)?;
         }
         self.hot_hash = CrcEngine::crc32(path.as_bytes());
         self.hot_ino = self.cur_inode.ino;
@@ -692,12 +684,18 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let new_end = offset + data.len();
         let new_size = (self.cur_inode.size as usize).max(new_end);
         if new_size <= MAX_INLINE_LEN && self.cur_inode.is_inline() {
-            self.cur_inode.inline_data[offset..offset + data.len()].copy_from_slice(data);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr(),
+                    self.cur_inode.inline_data.as_mut_ptr().add(offset),
+                    data.len(),
+                );
+            }
             self.cur_inode.size = new_size as u32;
             self.cur_inode.generation = self.global_gen + 1;
             return self.commit_cur_inode(&[]);
         }
-        self.write_pages_at(offset, data, None)
+        self.write_pages_at(offset, data)
     }
 
     pub fn append_file(&mut self, path: &str, data: &[u8]) -> Result<(), FsError> {
@@ -730,7 +728,16 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             let next_cursor = (cursor + data.len()) % max_bytes;
             self.cur_inode.flags |= INODE_FLAG_RING;
             self.cur_inode.root_page = next_cursor as u16;
-            self.write_pages_at(cursor, data, Some(max_bytes))
+            let first = (max_bytes - cursor).min(data.len());
+            self.write_pages_at(cursor, &data[..first])?;
+            if first < data.len() {
+                self.write_pages_at(0, &data[first..])?;
+            }
+            if (self.cur_inode.size as usize) > max_bytes {
+                self.cur_inode.size = max_bytes as u32;
+                let _ = self.commit_cur_inode(&[]);
+            }
+            Ok(())
         }
     }
 

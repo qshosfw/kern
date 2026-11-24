@@ -15,6 +15,10 @@ use crypto::ascon::Ascon128;
 
 #[cfg(feature = "secure_fs")]
 const SECURE_NONCE_LEN: usize = 16;
+#[cfg(feature = "secure_fs")]
+const SECURE_TAG_LEN: usize = 16;
+#[cfg(feature = "secure_fs")]
+const SECURE_HDR_LEN: usize = SECURE_NONCE_LEN + SECURE_TAG_LEN;
 
 pub struct FileSystemDriver<'a, D: BlockDevice> {
     pub fs: KernFS<'a, D>,
@@ -116,15 +120,12 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             .map_err(Self::map_error)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn map_error(err: FsError) -> StorageError {
+        // `FsError` discriminants `0,1,2,4,5,7` match `StorageError` 1:1; only `LowPower(8)` maps to `IoError(1)`.
         match err {
-            FsError::NotFound => StorageError::NotFound,
-            FsError::IoError | FsError::LowPower => StorageError::IoError,
-            FsError::CorruptedData => StorageError::CorruptedData,
-            FsError::CapacityFull => StorageError::CapacityFull,
-            FsError::AccessDenied => StorageError::AccessDenied,
-            FsError::InvalidPath => StorageError::InvalidPath,
+            FsError::LowPower => StorageError::IoError,
+            _ => unsafe { core::mem::transmute::<u8, StorageError>(err as u8) },
         }
     }
 
@@ -150,15 +151,18 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         seed[4..8].copy_from_slice(&wear.to_le_bytes());
         let cipher = Ascon128::new(self.enc_key);
         let nonce = cipher.compute_mac(&seed, path.as_bytes(), data);
+        // Authenticated Ascon-128 AEAD tag covering (nonce, path, plaintext).
+        let tag = cipher.compute_mac(&nonce, path.as_bytes(), data);
         let mut ks = cipher.keystream_state(&nonce);
-        // Bounded 80 B stack frame (16 B nonce + 64 B chunk) — zero stack-overflow risk, arbitrary file size.
-        let mut buf = [0u8; SECURE_NONCE_LEN + 64];
+        // Bounded 96 B stack frame (`16 B nonce + 16 B tag + 64 B chunk`).
+        let mut buf = [0u8; SECURE_HDR_LEN + 64];
         buf[..SECURE_NONCE_LEN].copy_from_slice(&nonce);
+        buf[SECURE_NONCE_LEN..SECURE_HDR_LEN].copy_from_slice(&tag);
         let first = data.len().min(64);
-        buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + first].copy_from_slice(&data[..first]);
-        Ascon128::apply_keystream_chunk(&mut ks, &mut buf[SECURE_NONCE_LEN..SECURE_NONCE_LEN + first]);
+        buf[SECURE_HDR_LEN..SECURE_HDR_LEN + first].copy_from_slice(&data[..first]);
+        Ascon128::apply_keystream_chunk(&mut ks, &mut buf[SECURE_HDR_LEN..SECURE_HDR_LEN + first]);
         self.fs
-            .write_file(path, &buf[..SECURE_NONCE_LEN + first])
+            .write_file(path, &buf[..SECURE_HDR_LEN + first])
             .map_err(Self::map_error)?;
         let mut off = first;
         while off < data.len() {
@@ -166,7 +170,7 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
             buf[..n].copy_from_slice(&data[off..off + n]);
             Ascon128::apply_keystream_chunk(&mut ks, &mut buf[..n]);
             self.fs
-                .write_at(path, SECURE_NONCE_LEN + off, &buf[..n])
+                .write_at(path, SECURE_HDR_LEN + off, &buf[..n])
                 .map_err(Self::map_error)?;
             off += n;
         }
@@ -219,20 +223,32 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
                 if !self.session_unlocked {
                     return Err(StorageError::EncryptedNoKey);
                 }
-                let mut nonce = [0u8; SECURE_NONCE_LEN];
+                let mut hdr = [0u8; SECURE_HDR_LEN];
                 if self
                     .fs
-                    .read_file_at(path, 0, &mut nonce)
+                    .read_file_at(path, 0, &mut hdr)
                     .map_err(Self::map_error)?
-                    < SECURE_NONCE_LEN
+                    < SECURE_HDR_LEN
                 {
                     return Err(StorageError::CorruptedData);
                 }
+                let mut nonce = [0u8; SECURE_NONCE_LEN];
+                nonce.copy_from_slice(&hdr[..SECURE_NONCE_LEN]);
                 let n = self
                     .fs
-                    .read_file_at(path, SECURE_NONCE_LEN, buf)
+                    .read_file_at(path, SECURE_HDR_LEN, buf)
                     .map_err(Self::map_error)?;
-                Ascon128::new(self.enc_key).apply_keystream(&nonce, &mut buf[..n]);
+                let cipher = Ascon128::new(self.enc_key);
+                cipher.apply_keystream(&nonce, &mut buf[..n]);
+                let expected = cipher.compute_mac(&nonce, path.as_bytes(), &buf[..n]);
+                let mut diff = 0u8;
+                for i in 0..SECURE_TAG_LEN {
+                    diff |= expected[i] ^ hdr[SECURE_NONCE_LEN + i];
+                }
+                if diff != 0 {
+                    buf[..n].fill(0);
+                    return Err(StorageError::CorruptedData);
+                }
                 return Ok(n);
             }
             self.fs.read_file(path, buf).map_err(Self::map_error)
@@ -250,12 +266,11 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         offset: usize,
         buf: &mut [u8],
     ) -> Result<usize, StorageError> {
-        let perm = self.fs.get_permission(path).unwrap_or(0);
-        if (perm & ATTR_ENCRYPTED) != 0 {
+        if (self.fs.get_permission(path).map_err(Self::map_error)? & ATTR_ENCRYPTED) != 0 {
             return Err(StorageError::EncryptedNoKey);
         }
         self.fs
-            .read_file_at(path, offset, buf)
+            .read_cur_inode_at(offset, buf)
             .map_err(Self::map_error)
     }
 

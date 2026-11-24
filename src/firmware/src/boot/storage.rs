@@ -62,49 +62,40 @@ pub fn flush_crash_log_if_pending(fs: &mut SystemStorage) {
 
 #[cfg(feature = "filesystem")]
 #[inline(never)]
-fn render_progress(
+fn render_boot_screen(
     lcd: &mut St7565<bsp::LcdBus>,
     big_title: &str,
     sub_title: &str,
     progress_percent: u8,
+    hold_prompt: bool,
 ) {
     let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
+    if hold_prompt {
+        gfx::widgets::draw_dialog_hold_prompt(
+            canvas,
+            big_title,
+            sub_title,
+            "Hold",
+            "Cancel",
+            progress_percent,
+        );
+    } else {
+        gfx::widgets::draw_dialog_progress(canvas, big_title, sub_title, progress_percent);
+    }
     lcd.blit(canvas);
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
-fn render_hold_prompt(
-    lcd: &mut St7565<bsp::LcdBus>,
-    big_title: &str,
-    sub_title: &str,
-    progress_percent: u8,
-) {
-    let canvas = crate::system_canvas();
-    gfx::widgets::draw_dialog_hold_prompt(
-        canvas,
-        big_title,
-        sub_title,
-        "Hold",
-        "Cancel",
-        progress_percent,
-    );
-    lcd.blit(canvas);
-}
-
-#[cfg(feature = "filesystem")]
-#[inline(never)]
 fn rescue_raw_calibration(
     fs: &mut KernFS<Py25q16FlashDriver<bsp::FlashBus>>,
     raw_calib: &mut [u8; 512],
 ) -> bool {
-    let valid_at_10k = fs.dev.read_data(0x010000, raw_calib).is_ok()
+    let ok = fs.dev.read_data(0x010000, raw_calib).is_ok()
         && crate::services::calibration::is_valid_calibration(raw_calib);
-    if !valid_at_10k {
+    if !ok {
         crate::services::calibration::fill_default_calibration(raw_calib);
     }
-    valid_at_10k
+    ok
 }
 
 #[cfg(feature = "filesystem")]
@@ -122,15 +113,11 @@ fn save_rescued_calibration(
     raw_calib: &mut [u8; 512],
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
 ) {
-    if !crate::services::calibration::is_valid_calibration(raw_calib) {
-        crate::services::calibration::fill_default_calibration(raw_calib);
-    }
     crate::services::calibration::persist_calib_bundle(vfs, raw_calib);
     radio.set_status_led(bsp::StatusLed::Off);
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 fn wait_keys_released(key_scanner: &mut KeypadScanner) {
     while KeypadScanner::poll_matrix().is_some() {
         bsp::Board::wdt_feed();
@@ -174,18 +161,14 @@ fn prompt_and_format_storage(
     vfs: &mut SystemStorage,
 ) {
     let raw_calib = crate::services::staging_buf();
-    let has_hw_calib = rescue_raw_calibration(&mut vfs.fs, raw_calib);
-    let calib_sub = if has_hw_calib {
+    let calib_sub = if rescue_raw_calibration(&mut vfs.fs, raw_calib) {
         "Calib safe"
     } else {
-        "No calib found"
+        "No calib"
     };
 
-    // Blit initial frame before enabling LCD/backlight to prevent GRAM glitch.
-    render_hold_prompt(lcd, "Format Storage?", calib_sub, 0);
+    render_boot_screen(lcd, "Format Flash?", calib_sub, 0, true);
     prepare_boot_dialog(lcd, radio);
-
-    // Wait for any already-held keys (e.g. Exit held during reset/wake) to be released first.
     wait_keys_released(key_scanner);
 
     let mut hold = gfx::gui::animation::HoldProgress::new();
@@ -204,7 +187,7 @@ fn prompt_and_format_storage(
                     hold.active = false;
                 }
                 (KeyCode::Exit, KeyState::Pressed) => {
-                    halt_with_boot_dialog(lcd, "Halted", "Storage kept", "Power cycle");
+                    halt_with_boot_dialog(lcd, "Halted", "Kept", "Power cycle");
                 }
                 _ => {}
             }
@@ -220,37 +203,29 @@ fn prompt_and_format_storage(
             let pct = hold.percent();
             if pct != last_pct {
                 last_pct = pct;
-                render_hold_prompt(lcd, "Format Storage?", calib_sub, pct);
+                render_boot_screen(lcd, "Format Flash?", calib_sub, pct, true);
             }
         }
         py32_hal::delay::delay_ms(10);
     }
 
-    let mut last_rendered_progress = 0u8;
-    let fmt_res = vfs.fs.format(Some(&mut |progress| {
-        bsp::Board::wdt_feed();
-        if progress >= last_rendered_progress + 5 || progress == 100 {
-            last_rendered_progress = progress;
-            render_progress(lcd, "Formatting", "Keep power on", progress);
-        }
-    }));
-
-    if fmt_res.is_err() {
-        halt_with_boot_dialog(lcd, "Flash Error", "Chip unresponsive", "Power cycle");
+    render_boot_screen(lcd, "Formatting", "Wait...", 40, false);
+    bsp::Board::wdt_feed();
+    if vfs.fs.format(None).is_err() {
+        halt_with_boot_dialog(lcd, "Flash Error", "No reply", "Power cycle");
     }
 
-    render_progress(lcd, "Restoring Calib", "Saving...", 95);
+    render_boot_screen(lcd, "Restoring", "Calib...", 95, false);
     save_rescued_calibration(vfs, raw_calib, radio);
 }
 
 #[cfg(feature = "filesystem")]
-#[inline(never)]
 fn recover_calibration_to_fs(
     lcd: &mut St7565<bsp::LcdBus>,
     radio: &mut drivers::bk4829::Bk4829<'_, bsp::RadioBus, drivers::bk4829::Disabled>,
     vfs: &mut SystemStorage,
 ) {
-    render_progress(lcd, "Restoring Calib", "From backup", 50);
+    render_boot_screen(lcd, "Restoring", "Backup", 50, false);
     prepare_boot_dialog(lcd, radio);
 
     let raw_calib = crate::services::staging_buf();
