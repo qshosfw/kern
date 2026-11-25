@@ -30,7 +30,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    let dir_idx = unsafe { *st.apps().dir_idx.get_unchecked((st.app_sel as usize).min(8)) } as u32;
+    let dir_idx = unsafe { *st.apps().dir_idx.get_unchecked((st.app_sel as usize).min(shared::APPS_MAX - 1)) } as u32;
     let base = st.sheet_buf.as_mut_ptr();
     let ent = unsafe { &mut *(base as *mut KrxDirEntry) };
     if api.list_dir_page(b"/apps", dir_idx, core::slice::from_mut(ent)) == 0 {
@@ -56,6 +56,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     m.profile = 0x12;
     m.caps = 0;
     m.has_icon16 = 0;
+    m.icon_id = 0;
 
     let buf = unsafe { core::slice::from_raw_parts_mut(base, 64) };
     let path = subslice(&m.path, 0, p);
@@ -78,12 +79,16 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
             }
             let blen = (slen - 4).min(64);
             let n = api.read_file_at(path, off + 4, subslice_mut(buf, 0, blen));
-            if sid == 1 && n >= 26 {
+            if sid == 1 && n >= 25 {
                 name_off = rd16(buf, 0) as u32;
                 m.ver_major = byte_at(buf, 2);
                 m.ver_minor = byte_at(buf, 3);
                 m.ver_patch = byte_at(buf, 4);
                 m.author_len = cp(&mut m.author, cstr_slice(subslice(buf, 7, 19)));
+                let ic = rd16(buf, 23);
+                if ic > 0 && ic < 255 {
+                    m.icon_id = ic as u8;
+                }
             } else if sid == 9 && n >= 12 {
                 m.exec_type = byte_at(buf, 0);
                 m.caps = (rd16(buf, 8) as u32) | ((rd16(buf, 10) as u32) << 16);

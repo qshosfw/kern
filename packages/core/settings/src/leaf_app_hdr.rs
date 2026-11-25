@@ -1,13 +1,13 @@
-//! P0 Leaf 2: Render App Detail Header (16x16 Icon Left, Name + Version + Author + Type Badge
-//! Right, Divider, File Path & Size) then chain via P0 continuation to `leaf_app_body`.
+//! P0 Leaf 2: Render Package Detail Hero Header (borderless icon, Title + Type Pill,
+//! Version + Size + Author subtitle, dashed divider) then chain to `leaf_app_body`.
 #![no_std]
 #![no_main]
 
 mod shared;
 
 use kern_sdk::{
-    ALIGN_LEFT, ALIGN_RIGHT, COLOR_FILL, FONT_MUMATRIX, FONT_TOMTHUMB, KRX_LEAF_KIND_CALL_LEAF,
-    KrxApiTable, KrxLeafContext, div_rem_10_u16, icon, krx_entry,
+    ALIGN_LEFT, COLOR_FILL, FONT_MUMATRIX, FONT_TOMTHUMB, KRX_LEAF_KIND_CALL_LEAF, KrxApiTable,
+    KrxLeafContext, div_rem_10_u16, icon, krx_entry,
 };
 use shared::{LEAF_APP_BODY, SharedState, copy_bytes, set_byte, subslice};
 
@@ -42,31 +42,37 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     }
     let ctx = unsafe { &mut *(arg as *mut KrxLeafContext) };
     let st = unsafe { &mut *(ctx.arg as *mut SharedState) };
-    let hy = 10 - st.detail_scroll;
+    let hy = 10i16;
     let m = unsafe { &*(&st.detail_sc.app_meta as *const shared::AppMeta) };
-    let buf = shared::subslice_mut(&mut st.sheet_buf, 0, 24);
+    let buf = shared::subslice_mut(&mut st.sheet_buf, 0, 32);
 
-    api.draw_rect(3, hy, 20, 20, COLOR_FILL);
-    if m.has_icon16 != 0 {
-        api.draw_bitmap(5, hy + 2, 16, 16, &m.icon_16);
+    // Borderless icon (16x16 package asset or native 8x8 icon centered cleanly)
+    let text_x: i16 = if m.has_icon16 != 0 {
+        api.draw_bitmap(4, hy, 16, 16, &m.icon_16);
+        24
     } else {
-        api.draw_icon(9, hy + 6, icon::APPS, COLOR_FILL);
-    }
+        let ic = if m.icon_id != 0 {
+            m.icon_id
+        } else if m.exec_type <= 1 {
+            icon::APPS
+        } else if m.exec_type >= 4 {
+            icon::DEVICE
+        } else {
+            icon::SYSTEM
+        };
+        api.draw_icon(5, hy + 4, ic, COLOR_FILL);
+        17
+    };
 
-    api.draw_text(27, hy + 8, subslice(&m.name, 0, m.name_len as usize), FONT_MUMATRIX, COLOR_FILL, ALIGN_LEFT);
-
-    set_byte(buf, 0, b'v');
-    let mut vp = push_u16(buf, 1, m.ver_major as u16, 0);
-    set_byte(buf, vp, b'.');
-    vp = push_u16(buf, vp + 1, m.ver_minor as u16, 0);
-    set_byte(buf, vp, b'.');
-    vp = push_u16(buf, vp + 1, m.ver_patch as u16, 0);
-    if m.author_len > 0 {
-        set_byte(buf, vp, b' ');
-        vp = copy_bytes(buf, vp + 1, subslice(&m.author, 0, m.author_len as usize));
-    }
-    api.draw_text(27, hy + 18, subslice(buf, 0, vp), FONT_TOMTHUMB, COLOR_FILL, ALIGN_LEFT);
-
+    // Title + compact Type pill on top-right
+    api.draw_text(
+        text_x,
+        hy + 7,
+        subslice(&m.name, 0, m.name_len as usize),
+        FONT_MUMATRIX,
+        COLOR_FILL,
+        ALIGN_LEFT,
+    );
     let tb: &[u8] = match m.exec_type {
         2 => b"SVC",
         3 => b"DMN",
@@ -74,22 +80,37 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
         5 => b"MOD",
         _ => b"APP",
     };
-    api.draw_tag_badge(104, hy + 1, tb, true);
-    api.draw_line(2, hy + 23, 122, hy + 23, COLOR_FILL);
+    api.draw_tag_badge(106, hy, tb, true);
 
-    let y1 = hy + 27;
-    api.draw_icon(3, y1, icon::DEVICE, COLOR_FILL);
-    api.draw_text(14, y1 + 6, subslice(&m.path, 0, m.path_len as usize), FONT_TOMTHUMB, COLOR_FILL, ALIGN_LEFT);
+    // Subtitle: `v1.0.0  27.0K  Author`
+    set_byte(buf, 0, b'v');
+    let mut vp = push_u16(buf, 1, m.ver_major as u16, 0);
+    set_byte(buf, vp, b'.');
+    vp = push_u16(buf, vp + 1, m.ver_minor as u16, 0);
+    set_byte(buf, vp, b'.');
+    vp = push_u16(buf, vp + 1, m.ver_patch as u16, 0);
+    vp = copy_bytes(buf, vp, b"  ");
     let is_b = m.size < 1024;
     let v: u16 = if is_b {
         m.size as u16
     } else {
         ((m.size >> 10) as u16) * 10 + ((((m.size & 1023) * 10) >> 10) as u16)
     };
-    let mut sp = push_u16(buf, 0, v, u8::from(!is_b));
-    set_byte(buf, sp, if is_b { b'B' } else { b'K' });
-    sp += 1;
-    api.draw_text(122, y1 + 6, subslice(buf, 0, sp), FONT_TOMTHUMB, COLOR_FILL, ALIGN_RIGHT);
+    vp = push_u16(buf, vp, v, u8::from(!is_b));
+    set_byte(buf, vp, if is_b { b'B' } else { b'K' });
+    vp += 1;
+    if m.author_len > 0 && vp + 2 < 32 {
+        vp = copy_bytes(buf, vp, b" ");
+        vp = copy_bytes(buf, vp, subslice(&m.author, 0, m.author_len as usize));
+    }
+    api.draw_text(text_x, hy + 15, subslice(buf, 0, vp), FONT_TOMTHUMB, COLOR_FILL, ALIGN_LEFT);
+
+    // Clean dashed horizontal divider
+    let mut x = 4i16;
+    while x < 124 {
+        api.fill_rect(x, hy + 18, 2, 1, COLOR_FILL);
+        x += 4;
+    }
 
     ctx.continuation.kind = KRX_LEAF_KIND_CALL_LEAF;
     ctx.continuation.target_or_code = LEAF_APP_BODY;

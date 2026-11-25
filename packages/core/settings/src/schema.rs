@@ -1,9 +1,10 @@
-//! Declarative Settings Schema: 8 Categories, Submenus & Canonical ABI Choice Pools.
+//! Declarative Settings Schema: 9 Categories, Submenus & Canonical ABI Choice Pools.
 //!
 //! Pulls choice option lists and numeric bounds directly from `abi::prop` at compile time
-//! into a single zero-relocation `.rodata` pool — single source of truth with firmware.
+//! into per-leaf zero-relocation `.rodata` slices — single source of truth with firmware.
+#![allow(dead_code)]
 
-use kern_sdk::{format_u16_into, icon, nth_packed_slice, prop};
+use kern_sdk::{icon, nth_packed_slice, prop};
 
 pub const CAT_COUNT: usize = 9;
 pub const CAT_LANGUAGE: u8 = 6;
@@ -58,29 +59,34 @@ pub const UNIT_MV: u8 = 3;
 /// Synthetic property ID for Battery Calib Tweak (`i16`, `-500..=+500 mV`, step 10).
 pub const PROP_BATT_TWEAK: u8 = 0xFF;
 
+// Choice table indices grouped contiguously to match the 4 category leaves:
+// Group A (0..4): Display & Audio
 pub const CH_BL_TIME: u8 = 0;
 pub const CH_SHADING: u8 = 1;
 pub const CH_KEY_BEEP: u8 = 2;
 pub const CH_AUDIO_PROF: u8 = 3;
-pub const CH_AUTO_LOCK: u8 = 4;
-pub const CH_F_TIMEOUT: u8 = 5;
-pub const CH_HOLD_DELAY: u8 = 6;
-pub const CH_REPEAT: u8 = 7;
-pub const CH_PTT_MODE: u8 = 8;
-pub const CH_BATT_K1: u8 = 9;
-pub const CH_BATT_K5: u8 = 10;
-pub const CH_BATT_FMT: u8 = 11;
-pub const CH_PWR_PROF: u8 = 12;
-pub const CH_AUTO_OFF: u8 = 13;
-pub const CH_LAUNCHER: u8 = 14;
-pub const CH_STARTUP: u8 = 15;
-pub const CH_PAGER: u8 = 16;
-pub const CH_CPU_CLK: u8 = 17;
-pub const CH_UART_BAUD: u8 = 18;
-pub const CH_SPLASH_ANIM: u8 = 19;
-pub const CH_SPLASH_DUR: u8 = 20;
+// Group B (4..11): Buttons & Battery
+pub const CH_PTT_MODE: u8 = 4;
+pub const CH_AUTO_LOCK: u8 = 5;
+pub const CH_F_TIMEOUT: u8 = 6;
+pub const CH_BATT_K1: u8 = 7;
+pub const CH_BATT_K5: u8 = 8;
+pub const CH_BATT_FMT: u8 = 9;
+pub const CH_AUTO_OFF: u8 = 10;
+// Group C (11..16): Device, Apps, System & Security
+pub const CH_LAUNCHER: u8 = 11;
+pub const CH_STARTUP: u8 = 12;
+pub const CH_PAGER: u8 = 13;
+pub const CH_CPU_CLK: u8 = 14;
+pub const CH_UART_BAUD: u8 = 15;
+// Group D (16..21): Submenus
+pub const CH_SPLASH_ANIM: u8 = 16;
+pub const CH_SPLASH_DUR: u8 = 17;
+pub const CH_HOLD_DELAY: u8 = 18;
+pub const CH_REPEAT: u8 = 19;
+pub const CH_PWR_PROF: u8 = 20;
 
-const CHOICE_COUNT: usize = 21;
+pub const CHOICE_COUNT: usize = 21;
 
 /// Compact 4-byte setting descriptor (`align(4)` avoids Cortex-M0+ `__aeabi_uread4`).
 #[derive(Clone, Copy)]
@@ -210,97 +216,63 @@ pub const ITEMS: [Item; 59] = [
     Item::choice(prop::POWER_PROFILE, 58, CH_PWR_PROF),
 ];
 
-const CAT_NAMES: &[u8] = b"Display\0Audio\0Buttons\0Battery\0Device\0Apps\0Language\0System\0Security\0";
+pub const CAT_NAMES: &[u8] = b"Display\0Audio\0Buttons\0Battery\0Device\0Apps\0Language\0System\0Security\0";
 
-const ITEM_LABELS: &[u8] = concat!(
+pub const ITEM_LABELS: [&[u8]; 59] = [
     // Display (0..7)
-    "Backlight Time\0Max Brightness\0Min Brightness\0Contrast\0Invert Pixels\0Shading Mode\0Animations\0",
+    b"Backlight Time", b"Max Brightness", b"Min Brightness", b"Contrast",
+    b"Invert Pixels", b"Shading Mode", b"Animations",
     // Audio (7..14)
-    "AF Gain\0Beep Volume\0Key Beep\0Mic Gain\0Roger Beep\0Boot Jingle\0RX Profile\0",
+    b"AF Gain", b"Beep Volume", b"Key Beep", b"Mic Gain",
+    b"Roger Beep", b"Boot Jingle", b"RX Profile",
     // Buttons (14..20)
-    "Shortcuts\0PTT Mode\0Auto Lock\0Sticky F-Key\0Fast Scroll\0Tweaks\0",
+    b"Shortcuts", b"PTT Mode", b"Auto Lock", b"Sticky F-Key", b"Fast Scroll", b"Tweaks",
     // Battery (20..25)
-    "Capacity\0Status Bar\0Deep Sleep\0Battery Info\0Tweaks\0",
+    b"Capacity", b"Status Bar", b"Deep Sleep", b"Battery Info", b"Tweaks",
     // Device (25..31)
-    "Model\0Owner\0Tag\0Radio ID\0Bandplans\0Boot Splash\0",
+    b"Model", b"Owner", b"Tag", b"Radio ID", b"Bandplans", b"Boot Splash",
     // Apps (31..37)
-    "Installed Apps\0Launcher Style\0Key Badges\0App Titles\0Startup App\0Pager Policy\0",
+    b"Packages", b"Launcher Style", b"Key Badges", b"App Titles",
+    b"Startup App", b"Pager Policy",
     // System (37..46)
-    "System Info\0Storage\0Calibration\0Services\0DFU Update\0CPU Clock\0UART Baud\0Reset Settings\0Restart Radio\0",
+    b"System Info", b"Storage", b"Calibration", b"Services", b"DFU Update",
+    b"CPU Clock", b"UART Baud", b"Reset Settings", b"Restart Radio",
     // Security (46..51)
-    "Passcode\0Show Length\0Only Digits\0Dimmed\0Max Tries\0",
+    b"Passcode", b"Show Length", b"Only Digits", b"Dimmed", b"Max Tries",
     // Submenus (51..59)
-    "Image\0Animation\0Duration\0",
-    "Hold Delay\0Repeat Rate\0",
-    "Calib Tweak\0Charge Detect\0Power Profile\0",
-)
-.as_bytes();
+    b"Image", b"Animation", b"Duration",
+    b"Hold Delay", b"Repeat Rate",
+    b"Calib Tweak", b"Charge Detect", b"Power Profile",
+];
 
-/// Canonical choice option sources pulled directly from `abi::prop::options`.
-const CHOICE_SRCS: [&[u8]; CHOICE_COUNT] = [
+/// Canonical choice option sources pulled directly from `abi::prop::options` (grouped by leaf A..D).
+pub const CHOICE_SRCS: [&[u8]; CHOICE_COUNT] = [
+    // Group A (0..4)
     prop::options::BACKLIGHT_TIME.as_bytes(),
     prop::options::SHADING.as_bytes(),
     prop::options::KEY_BEEP.as_bytes(),
     prop::options::AUDIO_PROFILE.as_bytes(),
+    // Group B (4..11)
+    prop::options::PTT_MODE.as_bytes(),
     prop::options::AUTO_LOCK.as_bytes(),
     prop::options::F_KEY_TIMEOUT.as_bytes(),
-    prop::options::HOLD_DELAY.as_bytes(),
-    prop::options::REPEAT_RATE.as_bytes(),
-    prop::options::PTT_MODE.as_bytes(),
     prop::options::BATTERY_K1.as_bytes(),
     prop::options::BATTERY_K5.as_bytes(),
     prop::options::BATTERY_FORMAT.as_bytes(),
-    prop::options::POWER_PROFILE.as_bytes(),
     prop::options::AUTO_POWER_OFF.as_bytes(),
+    // Group C (11..16)
     prop::options::LAUNCHER_STYLE.as_bytes(),
     prop::options::STARTUP_APP.as_bytes(),
     b"Balanced\0Fast\0Max Cache\0",
     prop::options::CPU_CLOCK_72.as_bytes(),
     prop::options::UART_BAUD.as_bytes(),
+    // Group D (16..21)
     prop::options::BOOT_ANIM.as_bytes(),
     prop::options::SPLASH_TIME.as_bytes(),
+    prop::options::HOLD_DELAY.as_bytes(),
+    prop::options::REPEAT_RATE.as_bytes(),
+    prop::options::POWER_PROFILE.as_bytes(),
 ];
-
-const CHOICE_POOL_LEN: usize = {
-    let mut sum = 0usize;
-    let mut i = 0usize;
-    while i < CHOICE_COUNT {
-        sum += CHOICE_SRCS[i].len();
-        i += 1;
-    }
-    sum
-};
-
-/// Flat zero-relocation byte pool packed at compile time from `abi::prop::options`.
-const CHOICE_POOL: [u8; CHOICE_POOL_LEN] = {
-    let mut out = [0u8; CHOICE_POOL_LEN];
-    let mut cur = 0usize;
-    let mut t = 0usize;
-    while t < CHOICE_COUNT {
-        let src = CHOICE_SRCS[t];
-        let mut j = 0usize;
-        while j < src.len() {
-            out[cur + j] = src[j];
-            j += 1;
-        }
-        cur += src.len();
-        t += 1;
-    }
-    out
-};
-
-const CHOICE_OFFSETS: [u16; CHOICE_COUNT + 1] = {
-    let mut out = [0u16; CHOICE_COUNT + 1];
-    let mut cur = 0usize;
-    let mut t = 0usize;
-    while t < CHOICE_COUNT {
-        out[t] = cur as u16;
-        cur += CHOICE_SRCS[t].len();
-        t += 1;
-    }
-    out[CHOICE_COUNT] = cur as u16;
-    out
-};
 
 /// Compile-time filtered bounds for `Kind::Num` items only — still sourced 100% from
 /// `abi::prop::DEFS` without embedding 37 non-numeric property descriptors in `.rodata`.
@@ -334,14 +306,6 @@ pub fn prop_bounds(id: u8) -> Option<(u8, u8, u8)> {
         i += 1;
     }
     None
-}
-
-#[inline(never)]
-pub fn choice_options(table: u8) -> &'static [u8] {
-    let i = (table as usize).min(CHOICE_COUNT - 1);
-    let s = unsafe { *CHOICE_OFFSETS.get_unchecked(i) } as usize;
-    let e = unsafe { *CHOICE_OFFSETS.get_unchecked(i + 1) } as usize;
-    unsafe { core::slice::from_raw_parts(CHOICE_POOL.as_ptr().add(s), e - s) }
 }
 
 /// Resolve `(choice_table, selected_index)` for `item`, switching K1 vs K5 battery options dynamically.
@@ -381,41 +345,7 @@ pub fn cat_name(idx: u8) -> &'static [u8] {
 }
 
 #[inline(never)]
-pub fn item_label(idx: u8) -> &'static [u8] {
-    nth_packed_slice(ITEM_LABELS, idx)
-}
-
-#[inline(never)]
 pub fn item_at_slice(start: u8, row: u8) -> Item {
     let idx = (start as usize + row as usize).min(ITEMS.len() - 1);
     unsafe { *ITEMS.get_unchecked(idx) }
-}
-
-/// Format an item's current value into `buf` without `core::fmt` or division.
-#[inline(never)]
-pub fn format_value<'a>(item: Item, val: i16, is_k1: bool, buf: &'a mut [u8; 16]) -> &'a [u8] {
-    match item.kind {
-        Kind::Choice => {
-            let (tbl, eff) = resolve_choice(item.meta, val as u8, is_k1);
-            nth_packed_slice(choice_options(tbl), eff)
-        }
-        Kind::Num => {
-            let suffix = nth_packed_slice(b"\0%\0dB\0mV\0", item.meta);
-            let neg = val < 0;
-            let mag = if neg { (-val) as u16 } else { val as u16 };
-            let mut n = format_u16_into(mag, 0, suffix, buf).len();
-            if item.meta == UNIT_MV && val != 0 && n < 16 {
-                let p = buf.as_mut_ptr();
-                let mut i = n;
-                while i > 0 {
-                    unsafe { *p.add(i) = *p.add(i - 1) };
-                    i -= 1;
-                }
-                unsafe { *p = if neg { b'-' } else { b'+' } };
-                n += 1;
-            }
-            unsafe { core::slice::from_raw_parts(buf.as_ptr(), n) }
-        }
-        _ => b"",
-    }
 }

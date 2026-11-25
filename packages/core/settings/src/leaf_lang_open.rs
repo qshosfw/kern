@@ -22,47 +22,57 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
     st.asset_domain = ASSET_LANG;
     let tlen = copy_bytes(&mut st.sheet_title, 0, b"Language");
     let cur = cstr_slice(&st.str_fields[3]);
-    let mut pos = copy_bytes(&mut st.sheet_buf, 0, b"English\0");
     let mut cnt = 0u8;
     let mut sel = 0u8;
     let mut off = 0u32;
 
+    let mut pos = copy_bytes(&mut st.sheet_buf, 0, b"English\0");
     let scratch = unsafe { st.detail_sc.bp_tail.as_mut_ptr() };
-    let ent = unsafe { &mut *(scratch as *mut KrxDirEntry) };
-    let full = unsafe { core::slice::from_raw_parts_mut(scratch.add(32), 32) };
-    let pretty = unsafe { core::slice::from_raw_parts_mut(scratch.add(64), 20) };
-    let lng16 = unsafe { &mut *(scratch.add(84) as *mut [u8; 16]) };
+    let ents = unsafe { core::slice::from_raw_parts_mut(scratch as *mut KrxDirEntry, 2) };
+    let full = unsafe { core::slice::from_raw_parts_mut(scratch.add(64), 32) };
+    let pretty = unsafe { core::slice::from_raw_parts_mut(scratch.add(96), 20) };
+    let lng16 = unsafe { &mut *(scratch.add(116) as *mut [u8; 16]) };
 
-    while api.list_dir_page(b"/user/lang", off, core::slice::from_mut(ent)) > 0 {
-        off += 1;
-        let raw = cstr_slice(&ent.name);
-        if ent.is_dir != 0 || !asset_matches(ASSET_LANG, raw) {
-            continue;
+    const DIR: &[u8] = b"/user/lang/";
+    let _ = copy_bytes(full, 0, DIR);
+    loop {
+        let got = api.list_dir_page(subslice(DIR, 0, 10), off, ents);
+        if got == 0 {
+            break;
         }
-        let fp = copy_bytes(full, 0, b"/user/lang/");
-        let fl = copy_bytes(full, fp, raw);
-        let mut nlen = read_lng_ascii_name(api, subslice(full, 0, fl), lng16, pretty);
-        if nlen == 0 {
-            nlen = copy_bytes(pretty, 0, subslice(raw, 0, raw.len() - 4));
-            let c0 = byte_at(pretty, 0);
-            if c0 >= b'a' && c0 <= b'z' {
-                set_byte(pretty, 0, c0 - 32);
+        off += got as u32;
+        let mut i = 0usize;
+        while i < got {
+            let ent = unsafe { &*ents.as_ptr().add(i) };
+            i += 1;
+            let raw = cstr_slice(&ent.name);
+            if ent.is_dir != 0 || !asset_matches(ASSET_LANG, raw) {
+                continue;
             }
-        }
-        if nlen > 0 && pos + nlen + 1 < 128 {
-            cnt = cnt.saturating_add(1);
-            if sel == 0 && !cur.is_empty() && nlen >= cur.len() {
-                let mut k = 0usize;
-                while k < cur.len() && byte_at(pretty, k) == byte_at(cur, k) {
-                    k += 1;
-                }
-                if k == cur.len() {
-                    sel = cnt;
+            let fl = copy_bytes(full, 11, raw);
+            let mut nlen = read_lng_ascii_name(api, subslice(full, 0, fl), lng16, pretty);
+            if nlen == 0 {
+                nlen = copy_bytes(pretty, 0, subslice(raw, 0, raw.len() - 4));
+                let c0 = byte_at(pretty, 0);
+                if c0 >= b'a' && c0 <= b'z' {
+                    set_byte(pretty, 0, c0 - 32);
                 }
             }
-            pos = copy_bytes(&mut st.sheet_buf, pos, subslice(pretty, 0, nlen));
-            set_byte(&mut st.sheet_buf, pos, 0);
-            pos += 1;
+            if nlen > 0 && pos + nlen + 1 < 128 {
+                cnt += 1;
+                if sel == 0 && !cur.is_empty() && nlen >= cur.len() {
+                    let mut k = 0usize;
+                    while k < cur.len() && byte_at(pretty, k) == byte_at(cur, k) {
+                        k += 1;
+                    }
+                    if k == cur.len() {
+                        sel = cnt;
+                    }
+                }
+                pos = copy_bytes(&mut st.sheet_buf, pos, subslice(pretty, 0, nlen));
+                set_byte(&mut st.sheet_buf, pos, 0);
+                pos += 1;
+            }
         }
     }
     st.asset_count = cnt;

@@ -31,6 +31,13 @@ pub const LEAF_BOOT_ASSETS: u8 = 21;
 pub const LEAF_APPS_SCAN: u8 = 22;
 pub const LEAF_SEC_PIN: u8 = 23;
 pub const LEAF_SYS_INFO: u8 = 24;
+pub const LEAF_LABELS: u8 = 25;
+pub const LEAF_CHOICES_A: u8 = 26;
+pub const LEAF_CHOICES_B: u8 = 27;
+pub const LEAF_CAT_RENDER: u8 = 28;
+
+pub const CMD_CHOICE_HYDRATE: u8 = 0;
+pub const CMD_CHOICE_OPEN: u8 = 1;
 
 // Modal tags shared across root and leaves (31..=36 are contiguous sheet-leaf tags)
 pub const MODAL_CHOICE: u8 = 30;
@@ -120,7 +127,7 @@ pub struct AppMeta {
     pub exec_type: u8,
     pub profile: u8,
     pub has_icon16: u8,
-    pub _pad: u8,
+    pub icon_id: u8,
     pub size: u32,
     pub caps: u32,
     pub icon_16: [u8; 32],
@@ -136,15 +143,18 @@ pub struct ScBuf {
     pub app_n: u8,
 }
 
-/// Cached Installed Apps / Services list for zero-Flash-IO rendering (up to 9 entries, 135 B <= 144 B).
+pub const APPS_MAX: usize = 11;
+
+/// Cached Packages / Services list for zero-Flash-IO rendering (up to 11 entries, exact 144 B).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct AppListCache {
-    pub names: [[u8; 10]; 9],
-    pub sizes: [u16; 9],
-    pub icons: [u8; 9],
-    pub types: [u8; 9],
-    pub dir_idx: [u8; 9],
+    pub names: [[u8; 9]; APPS_MAX],
+    pub sizes: [u8; APPS_MAX],
+    pub icons: [u8; APPS_MAX],
+    pub types: [u8; APPS_MAX],
+    pub dir_idx: [u8; APPS_MAX],
+    pub apps_n: u8,
 }
 
 /// Cached Bandplans list for zero-Flash-IO rendering (up to 8 entries).
@@ -193,13 +203,14 @@ pub struct SharedState {
     pub asset_domain: u8,
     pub asset_count: u8,
     pub dev_model_idx: u8,
-    pub _pad0: u8,
+    pub cat_start: u8,
 
     pub batt_tweak_mv: i16,
     pub scroll_y: i16,
     pub anim_tick: u16,
     pub detail_scroll: i16,
-    pub _pad1: u16,
+    pub cat_count: u8,
+    pub cat_editing: u8,
 
     pub sec_status: u32,
 
@@ -213,6 +224,8 @@ pub struct SharedState {
     /// `4..8` = device fields (model/owner/tag/radio_id).
     pub str_fields: [[u8; 12]; 8],
     pub sheet_title: [u8; 16],
+    /// Resident pointer to `schema::ITEMS` in root SRAM (avoids duplicating 236 B in render leaf).
+    pub items_ptr: *const u8,
 }
 
 const _: () = assert!(
@@ -243,18 +256,20 @@ impl SharedState {
             asset_domain: 0,
             asset_count: 0,
             dev_model_idx: 0,
-            _pad0: 0,
+            cat_start: 0,
             batt_tweak_mv: 0,
             scroll_y: 0,
             anim_tick: 0,
             detail_scroll: 0,
-            _pad1: 0,
+            cat_count: 0,
+            cat_editing: 0,
             sec_status: 0,
             sheet_buf: [0; 128],
             detail_sc: DetailOrSc { bp_tail: [0; 144] },
             fmt_buf: [0; 20],
             str_fields: [[0; 12]; 8],
             sheet_title: [0; 16],
+            items_ptr: core::ptr::null(),
         }
     }
 

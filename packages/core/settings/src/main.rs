@@ -15,31 +15,31 @@ use kern_sdk::{
     KRX_EV_ENCODER, KRX_EV_KEY, KRX_EV_MODAL, KRX_EV_TICK, KRX_OP_EVENT, KRX_OP_EXIT,
     KRX_OP_RENDER, KRX_OP_START, KrxApiTable, KrxEvent, MODAL_RESULT_CONFIRMED,
     MODAL_RESULT_SHEET_SELECTED, MODAL_RESULT_TEXT_DONE, Op, SEC_FLAG_AVAILABLE, SEC_FLAG_IS_SET,
-    format_u16_into, key, krx_entry, prop,
+    key, krx_entry, nth_packed_slice, prop,
 };
 
 use schema::{
-    ACT_ASSET_SPLASH, ACT_DEV_RADIO_ID, ACT_RESET_SETTINGS, ACT_SEC_DIGITS, ACT_SEC_EXPOSE,
-    ACT_SEC_MAX_TRIES, ACT_SEC_PASSCODE, ACT_SUB_BATT_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO,
-    ACT_SYS_STORAGE, CAT_COUNT, CAT_LANGUAGE, CAT_SECURITY, CH_BATT_K1, Kind, PROP_BATT_TWEAK,
-    SUB_BATT_TWEAKS_COUNT, SUB_BATT_TWEAKS_START, SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START,
-    SUB_SPLASH_COUNT, SUB_SPLASH_START, batt_idx_to_type, cat_name, category, choice_options,
-    format_value, item_at_slice, item_label, prop_bounds, resolve_choice,
+    ACT_RESET_SETTINGS, ACT_SUB_BATT_TWEAKS, ACT_SUB_SPLASH, ACT_SYS_INFO, CAT_COUNT,
+    CAT_LANGUAGE, CAT_SECURITY, CH_BATT_K1, Kind, PROP_BATT_TWEAK, SUB_BATT_TWEAKS_COUNT,
+    SUB_BATT_TWEAKS_START, SUB_BTN_TWEAKS_COUNT, SUB_BTN_TWEAKS_START, SUB_SPLASH_COUNT,
+    SUB_SPLASH_START, batt_idx_to_type, cat_name, category, item_at_slice, prop_bounds,
 };
 use shared::{
     CMD_APPS_DO_DEL, CMD_APPS_LAUNCH, CMD_APPS_REFRESH, CMD_APPS_REQ_DEL, CMD_BP_LOAD,
-    CMD_BP_RENDER, CMD_BP_TOGGLE_TX, CMD_DEV_BATT_TWEAK_SAVE, CMD_DEV_MODEL_PICK,
-    CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY, CMD_DEV_TEXT_PROMPT, CMD_LANG_OPEN,
-    CMD_SC_APPLY_PICK, CMD_SC_LOAD, CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER, CMD_SEC_ACTION,
-    CMD_SEC_OPEN, CMD_SEC_VERIFY, CMD_SYS_DO_RESET, CMD_SYS_LAUNCH_MOD, CMD_SYS_REQ_REBOOT,
-    CMD_SYS_REQ_RESET, CMD_SYS_SEC_TOGGLE, CMD_SYS_SEC_TRIES_OPEN, CMD_SYS_SEC_TRIES_PICK,
-    LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER, LEAF_APPS_SCAN,
-    LEAF_ASSET_APPLY, LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_DEV_APPLY, LEAF_DEV_LOAD,
-    LEAF_DEV_PROMPT, LEAF_INFO_RENDER, LEAF_LANG_APPLY, LEAF_LANG_OPEN, LEAF_SC_APPLY,
-    LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SEC, LEAF_SEC_PIN, LEAF_SYS_INFO, LEAF_SYS_OPS,
-    MODAL_ASSET_PICK, MODAL_CHOICE, MODAL_DELETE_APP, MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS, MODAL_SEC_ACTION,
-    MODAL_SEC_CONFIRM_PIN, MODAL_SEC_VERIFY, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL,
-    MODAL_TEXT_OWNER, MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice,
+    CMD_BP_RENDER, CMD_BP_TOGGLE_TX, CMD_CHOICE_HYDRATE, CMD_CHOICE_OPEN, CMD_DEV_BATT_TWEAK_SAVE,
+    CMD_DEV_MODEL_PICK, CMD_DEV_MODEL_SHEET, CMD_DEV_TEXT_APPLY, CMD_DEV_TEXT_PROMPT,
+    CMD_LANG_OPEN, CMD_SC_APPLY_PICK, CMD_SC_LOAD, CMD_SC_RENDER, CMD_SC_TOGGLE_DRAWER,
+    CMD_SEC_ACTION, CMD_SEC_OPEN, CMD_SEC_VERIFY, CMD_SYS_DO_RESET, CMD_SYS_LAUNCH_MOD,
+    CMD_SYS_REQ_REBOOT, CMD_SYS_REQ_RESET, CMD_SYS_SEC_TOGGLE, CMD_SYS_SEC_TRIES_OPEN,
+    CMD_SYS_SEC_TRIES_PICK, LEAF_APP_HDR, LEAF_APP_LOAD, LEAF_APPS_OPS, LEAF_APPS_RENDER,
+    LEAF_APPS_SCAN, LEAF_ASSET_APPLY, LEAF_ASSET_OPEN, LEAF_BANDPLANS, LEAF_CAT_RENDER,
+    LEAF_CHOICES_A, LEAF_CHOICES_B, LEAF_DEV_APPLY, LEAF_DEV_LOAD, LEAF_DEV_PROMPT,
+    LEAF_INFO_RENDER, LEAF_LABELS,
+    LEAF_LANG_APPLY, LEAF_LANG_OPEN, LEAF_SC_APPLY, LEAF_SC_OPEN, LEAF_SC_RENDER, LEAF_SEC,
+    LEAF_SEC_PIN, LEAF_SYS_INFO, LEAF_SYS_OPS, MODAL_ASSET_PICK, MODAL_CHOICE, MODAL_DELETE_APP,
+    MODAL_REBOOT_RADIO, MODAL_RESET_SETTINGS, MODAL_SEC_ACTION, MODAL_SEC_CONFIRM_PIN,
+    MODAL_SEC_VERIFY, MODAL_SHORTCUT_SCOPE, MODAL_TEXT_MODEL, MODAL_TEXT_OWNER,
+    MODAL_TEXT_RADIO_ID, MODAL_TEXT_TAG, SharedState, cstr_slice,
 };
 use ui::KineticScroll;
 
@@ -222,9 +222,9 @@ impl SettingsState {
 
     #[inline(never)]
     fn sync_status_bar(&mut self, api: &KrxApiTable) {
-        const VIEW_LBL: [u8; 9] = [0, 0, 19, 31, 0, 14, 23, 37, 29];
+        const VIEW_TITLES: &[u8] = b"Settings\0Tweaks\0Packages\0Shortcuts\0Battery Info\0System Info\0Bandplans\0Boot Splash\0Services\0";
+        const VIEW_IDX: [u8; 9] = [0, 0, 1, 2, 0, 3, 4, 5, 6];
         let (ptr, len): (*const u8, usize) = match self.view {
-            View::Home => (b"Settings".as_ptr(), 8),
             View::Category => {
                 let s = cat_name(self.cat_sel);
                 (s.as_ptr(), s.len())
@@ -234,14 +234,14 @@ impl SettingsState {
                 (m.name.as_ptr(), (m.name_len as usize).min(20))
             }
             v => {
-                let lbl = if v == View::Submenu && self.sub_kind == ACT_SUB_SPLASH {
-                    30
+                let tidx = if v == View::Submenu && self.sub_kind == ACT_SUB_SPLASH {
+                    7
                 } else if v == View::InstalledApps && self.sh.modules_only != 0 {
-                    40
+                    8
                 } else {
-                    unsafe { *VIEW_LBL.get_unchecked(v as usize) }
+                    unsafe { *VIEW_IDX.get_unchecked(v as usize) }
                 };
-                let s = item_label(lbl);
+                let s = nth_packed_slice(VIEW_TITLES, tidx);
                 (s.as_ptr(), s.len())
             }
         };
@@ -273,6 +273,7 @@ impl SettingsState {
         self.batt_tweak_dirty = false;
         self.held_key_p1 = 0;
         self.sh.sec_status = api.sec_status();
+        self.sh.items_ptr = schema::ITEMS.as_ptr() as *const u8;
         self.call_leaf(api, lc(LEAF_DEV_LOAD, 0), 0);
         self.view = View::Home;
         self.enter_view(api, View::Home, 0);
@@ -284,14 +285,7 @@ impl SettingsState {
             return;
         }
         if self.view == View::AppDetail {
-            let s = self.sh.detail_scroll;
-            if dir < 0 && s > 0 {
-                self.sh.detail_scroll = (s - 10).max(0);
-            } else if dir > 0 && s < 34 {
-                self.sh.detail_scroll = (s + 10).min(34);
-            } else {
-                self.sh.detail_btn ^= 1;
-            }
+            self.sh.detail_btn ^= 1;
             return;
         }
 
@@ -369,6 +363,15 @@ impl SettingsState {
         } else {
             0
         };
+        if v == View::Category || v == View::Submenu {
+            self.sh.cat_start = if v == View::Submenu {
+                self.sub_start
+            } else {
+                category(self.cat_sel).start
+            };
+            self.sh.cat_count = total;
+            self.call_leaf(api, lc(LEAF_LABELS, 0), 0);
+        }
         self.sync_status_bar(api);
     }
 
@@ -404,9 +407,9 @@ impl SettingsState {
                         }
                     }
                     Kind::Choice => {
-                        let raw = pget(api, item.prop_id);
-                        let (tbl, sel) = resolve_choice(item.meta, raw, pget(api, prop::NAV_LAYOUT) == 0);
-                        api.show_sheet(MODAL_CHOICE, item_label(item.label_idx), choice_options(tbl), sel, true);
+                        self.sh.cat_start = st;
+                        let ch_leaf = if st < 25 { LEAF_CHOICES_A } else { LEAF_CHOICES_B };
+                        self.call_leaf(api, lc(ch_leaf, CMD_CHOICE_OPEN), row);
                     }
                     Kind::Action => {
                         let m = item.meta;
@@ -543,6 +546,8 @@ impl SettingsState {
                     if pset(api, item.prop_id, val) {
                         self.dirty = true;
                         self.flush_if_dirty(api);
+                        let ch_leaf = if st < 25 { LEAF_CHOICES_A } else { LEAF_CHOICES_B };
+                        self.call_leaf(api, lc(ch_leaf, CMD_CHOICE_HYDRATE), 0);
                         if item.prop_id == prop::KEY_BEEP && val != 0 {
                             api.play_beep(val);
                         }
@@ -562,7 +567,10 @@ impl SettingsState {
                     self.call_leaf(api, target, idx);
                     if k == MODAL_SEC_ACTION && self.sh.result != 0 {
                         self.item_sel = 0;
-                        self.scroller.jump(0, self.cat_item_count(self.cat_sel), 0);
+                        let cnt = self.cat_item_count(self.cat_sel);
+                        self.sh.cat_count = cnt;
+                        self.scroller.jump(0, cnt, 0);
+                        self.call_leaf(api, lc(LEAF_LABELS, 0), 0);
                     }
                 }
             }
@@ -583,12 +591,19 @@ impl SettingsState {
                     self.call_leaf(api, lc(LEAF_SYS_OPS, CMD_SYS_DO_RESET), 0);
                     self.call_leaf(api, lc(LEAF_DEV_LOAD, 0), 0);
                     self.sh.sec_status = api.sec_status();
+                    if self.view == View::Category || self.view == View::Submenu {
+                        self.call_leaf(api, lc(LEAF_LABELS, 0), 0);
+                    }
                 } else if k == MODAL_REBOOT_RADIO {
                     self.flush_if_dirty(api);
                     api.reboot(0);
                 }
             }
             _ => {}
+        }
+        if k >= MODAL_SEC_VERIFY && k <= MODAL_SEC_CONFIRM_PIN && self.view == View::Category {
+            self.sh.cat_count = self.cat_item_count(self.cat_sel);
+            self.call_leaf(api, lc(LEAF_LABELS, 0), 0);
         }
     }
 
@@ -662,81 +677,28 @@ impl SettingsState {
         }
     }
 
-    /// Unified list renderer for `View::Home` (`start == 0xFF`), `View::Category`, and `View::Submenu`.
+    /// Resident renderer for `View::Home` (zero leaf I/O).
     #[inline(never)]
-    fn render_list(&mut self, api: &KrxApiTable, start: u8, count: u8, sel: u8, sy: i16, anim_tick: u16) {
-        let is_k1 = pget(api, prop::NAV_LAYOUT) == 0;
-        let sec = self.sh.sec_status;
+    fn render_home(&mut self, api: &KrxApiTable, sy: i16, anim_tick: u16) {
+        let count = self.visible_cat_count();
+        let sel = self.cat_sel;
         let mut idx = 0u8;
         while idx < count {
             let y = ui::ROW_START_Y + (idx as i16) * ui::ROW_STEP_Y - sy;
             if y > -ui::ROW_STEP_Y && y < 64 {
                 let is_sel = idx == sel;
                 let mut flags = u8::from(is_sel);
-                let mut row_icon = 0u8;
-                let (lbl, vstr): (&[u8], &[u8]) = if start == 0xFF {
-                    row_icon = category(idx).icon_id;
-                    let v: &[u8] = if idx == CAT_LANGUAGE {
-                        cstr_slice(&self.sh.str_fields[3])
-                    } else {
-                        if is_sel { flags |= ui::FLAG_CHEVRON; }
-                        b""
-                    };
-                    (cat_name(idx), v)
+                let row_icon = category(idx).icon_id;
+                let vstr: &[u8] = if idx == CAT_LANGUAGE {
+                    cstr_slice(&self.sh.str_fields[3])
                 } else {
-                    let item = item_at_slice(start, idx);
-                    let fbuf = unsafe { &mut *(self.sh.fmt_buf.as_mut_ptr() as *mut [u8; 16]) };
-                    let vstr: &[u8] = match item.kind {
-                        Kind::Action => {
-                            let m = item.meta;
-                            if m >= ACT_SEC_EXPOSE && m <= ACT_SEC_DIGITS {
-                                let on = (sec & (1u32 << (m - ACT_SEC_PASSCODE))) != 0;
-                                flags |= ui::FLAG_TOGGLE | if on { ui::FLAG_TOGGLE_ON } else { 0 };
-                            } else if is_sel && (m <= ACT_SUB_BATT_TWEAKS || m >= ACT_SYS_STORAGE) {
-                                flags |= ui::FLAG_CHEVRON;
-                            }
-                            if m >= ACT_ASSET_SPLASH && m <= ACT_DEV_RADIO_ID {
-                                cstr_slice(unsafe { self.sh.str_fields.get_unchecked((m - ACT_ASSET_SPLASH) as usize) })
-                            } else if m == ACT_SEC_MAX_TRIES {
-                                format_u16_into(((sec >> 16) & 0xFF) as u16, 0, b"", fbuf)
-                            } else if m == ACT_SEC_PASSCODE {
-                                if (sec & SEC_FLAG_IS_SET) != 0 { b"Set" } else { b"None" }
-                            } else {
-                                b""
-                            }
-                        }
-                        Kind::Toggle => {
-                            let on = pget(api, item.prop_id) != 0;
-                            flags |= ui::FLAG_TOGGLE | if on { ui::FLAG_TOGGLE_ON } else { 0 };
-                            b""
-                        }
-                        _ => {
-                            let val: i16 = if item.prop_id == PROP_BATT_TWEAK {
-                                self.sh.batt_tweak_mv
-                            } else {
-                                pget(api, item.prop_id) as i16
-                            };
-                            if self.editing && is_sel {
-                                flags |= ui::FLAG_OUTLINE;
-                                let (lo, hi) = if item.prop_id == PROP_BATT_TWEAK {
-                                    (-500i16, 500i16)
-                                } else if let Some((min, max, _)) = prop_bounds(item.prop_id) {
-                                    (min as i16, max as i16)
-                                } else {
-                                    (0, 0)
-                                };
-                                if val > lo { flags |= ui::FLAG_ARROW_LEFT; }
-                                if val < hi { flags |= ui::FLAG_ARROW_RIGHT; }
-                            }
-                            format_value(item, val, is_k1, fbuf)
-                        }
-                    };
-                    (item_label(item.label_idx), vstr)
+                    if is_sel { flags |= ui::FLAG_CHEVRON; }
+                    b""
                 };
                 ui::draw_row(
                     api,
                     y,
-                    lbl,
+                    cat_name(idx),
                     vstr,
                     (row_icon as u16) | ((flags as u16) << 8),
                     anim_tick,
@@ -758,12 +720,27 @@ impl SettingsState {
         };
         self.sh.anim_tick = anim_tick;
         match self.view {
-            View::Home => self.render_list(api, 0xFF, self.visible_cat_count(), self.cat_sel, sy, anim_tick),
-            View::Category => {
-                let c = category(self.cat_sel);
-                self.render_list(api, c.start, self.cat_item_count(self.cat_sel), self.item_sel, sy, anim_tick);
+            View::Home => self.render_home(api, sy, anim_tick),
+            View::Category | View::Submenu => {
+                let (st, row) = self.current_slice();
+                let mut eflags = 0u8;
+                if self.editing {
+                    eflags = ui::FLAG_OUTLINE;
+                    let item = item_at_slice(st, row);
+                    let (val, lo, hi) = if item.prop_id == PROP_BATT_TWEAK {
+                        (self.sh.batt_tweak_mv, -500i16, 500i16)
+                    } else if let Some((min, max, _)) = prop_bounds(item.prop_id) {
+                        (pget(api, item.prop_id) as i16, min as i16, max as i16)
+                    } else {
+                        (0, 0, 0)
+                    };
+                    if val > lo { eflags |= ui::FLAG_ARROW_LEFT; }
+                    if val < hi { eflags |= ui::FLAG_ARROW_RIGHT; }
+                }
+                self.sh.cat_editing = eflags;
+                self.call_leaf(api, lc(LEAF_CAT_RENDER, 0), row);
+                ui::finish_list_frame(api, sy, self.sh.cat_count);
             }
-            View::Submenu => self.render_list(api, self.sub_start, self.sub_count, self.sub_sel, sy, anim_tick),
             v => {
                 const VIEW_LEAVES: [u8; 6] = [
                     lc(LEAF_APPS_RENDER, 0),

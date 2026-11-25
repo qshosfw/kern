@@ -43,7 +43,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
             let m = st.meta();
             copy_bytes(pbuf, 0, subslice(&m.path, 0, (m.path_len as usize).min(32)))
         } else {
-            let dir_i = unsafe { *st.apps().dir_idx.get_unchecked((st.app_sel as usize).min(8)) } as u32;
+            let dir_i = unsafe { *st.apps().dir_idx.get_unchecked((st.app_sel as usize).min(shared::APPS_MAX - 1)) } as u32;
             let ent = unsafe { &mut *(base as *mut KrxDirEntry) };
             if api.list_dir_page(b"/apps", dir_i, core::slice::from_mut(ent)) > 0 {
                 let short = strip_apps_prefix(cstr_slice(&ent.name));
@@ -68,7 +68,7 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
                     } else {
                         api.show_confirm(
                             MODAL_DELETE_APP,
-                            b"Remove App?",
+                            b"Remove Package?",
                             short,
                             b"Hold",
                             b"Cancel",

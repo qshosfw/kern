@@ -30,32 +30,49 @@ fn leaf_entry(_op: u32, api: &KrxApiTable, arg: *const ()) -> u32 {
             copy_bytes(&mut st.str_fields[3], 0, b"English");
         } else if pick - 1 < st.asset_count as usize {
             let target = pick - 1;
-            let ent = unsafe { &mut *(base.add(80) as *mut KrxDirEntry) };
-            let s16 = unsafe { &mut *(st.detail_sc.bp_tail.as_mut_ptr() as *mut [u8; 16]) };
+            let ents = unsafe {
+                core::slice::from_raw_parts_mut(st.detail_sc.bp_tail.as_mut_ptr() as *mut KrxDirEntry, 4)
+            };
+            let s16 = unsafe { &mut *(base.add(80) as *mut [u8; 16]) };
+            const DIR: &[u8] = b"/user/lang/";
             let mut off = 0u32;
             let mut seen = 0usize;
-            while api.list_dir_page(b"/user/lang", off, core::slice::from_mut(ent)) > 0 {
-                off += 1;
-                let raw = cstr_slice(&ent.name);
-                if ent.is_dir == 0 && asset_matches(ASSET_LANG, raw) {
-                    if seen == target {
-                        set_byte(cfg, 40, 1);
-                        let dst = unsafe { core::slice::from_raw_parts_mut(base.add(44), 32) };
-                        fill_bytes(dst, 0);
-                        let p = copy_bytes(dst, 0, b"/user/lang/");
-                        let fl = copy_bytes(dst, p, raw);
-                        let full = subslice(dst, 0, fl);
-                        let out = subslice_mut(&mut st.str_fields[3], 0, 11);
-                        if read_lng_ascii_name(api, full, s16, out) == 0 && fl > 15 {
-                            let _ = copy_bytes(out, 0, subslice(full, 11, fl - 4));
-                            let c0 = byte_at(out, 0);
-                            if c0 >= b'a' && c0 <= b'z' {
-                                set_byte(out, 0, c0 - 32);
+            let mut done = false;
+            while !done {
+                let got = api.list_dir_page(subslice(DIR, 0, 10), off, ents);
+                if got == 0 {
+                    break;
+                }
+                off += got as u32;
+                let mut i = 0usize;
+                while i < got {
+                    let ent = unsafe { &*ents.as_ptr().add(i) };
+                    let raw = cstr_slice(&ent.name);
+                    if ent.is_dir == 0 && asset_matches(ASSET_LANG, raw) {
+                        if seen == target {
+                            set_byte(cfg, 40, 1);
+                            let dst = unsafe { core::slice::from_raw_parts_mut(base.add(44), 32) };
+                            fill_bytes(dst, 0);
+                            let p = copy_bytes(dst, 0, DIR);
+                            let fl = copy_bytes(dst, p, raw);
+                            let full = subslice(dst, 0, fl);
+                            let out = subslice_mut(&mut st.str_fields[3], 0, 11);
+                            if read_lng_ascii_name(api, full, s16, out) == 0 && fl > 15 {
+                                let _ = copy_bytes(out, 0, subslice(full, 11, fl - 4));
+                                let c0 = byte_at(out, 0);
+                                if c0 >= b'a' && c0 <= b'z' {
+                                    set_byte(out, 0, c0 - 32);
+                                }
                             }
+                            done = true;
+                            break;
                         }
-                        break;
+                        seen += 1;
                     }
-                    seen += 1;
+                    i += 1;
+                }
+                if got < 4 {
+                    break;
                 }
             }
         }
