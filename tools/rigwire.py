@@ -519,8 +519,8 @@ def validate_krx_package(data: bytes) -> dict:
             info["exec_payload_size"] = p_sz
             if profile_raw in KRX_PROFILES:
                 info["profile_name"] = KRX_PROFILES[profile_raw]
-            if app_class == 0 and p_sz > 8192:
-                raise ValueError(f"Native resident payload ({p_sz}B) exceeds 8192B arena")
+            if app_class == 0 and p_sz > 6144:
+                raise ValueError(f"Native resident payload ({p_sz}B) exceeds 6144B arena")
             if len(payload) > 0 and app_class in (0, 1) and entry_pt >= len(payload):
                 raise ValueError(f"Entry point 0x{entry_pt:x} outside payload ({len(payload)}B)")
         elif sec_id == 0x0005:  # BlockMap

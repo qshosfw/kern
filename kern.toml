@@ -45,7 +45,7 @@ app_hibernation = true  # 📦 Two-tier KRX app hibernation (Tier-1 RAM RLE + Ti
 
 [features.runtime]
 krx_native = true       # 🚀 Class N0/N1/P0 Thumb-1 Native & Structured-Leaf Execution
-krx_paged = true        # 📄 Class P1 Transparent Demand-Paged Window Cache with sequential prefetch
+krx_paged = false        # 📄 Class P1 Transparent Demand-Paged Window Cache with sequential prefetch
 
 [features.provisioning]
 provision_apps = false        # 📱 Mode B: Embed & provision built-in KRX packages (delivered via RigWire / kern flash --assets)

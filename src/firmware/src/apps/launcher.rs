@@ -40,7 +40,9 @@ impl LauncherEntry {
     #[inline(never)]
     pub fn title_and_icon(&self) -> (&'static str, &'static [u8; 8]) {
         match self.target {
-            LauncherTarget::App(id) if id == APP_ID_VFO as u8 => ("Radio", gfx::icons::ICON_APP_RADIO),
+            LauncherTarget::App(id) if id == APP_ID_VFO as u8 => {
+                ("Radio", gfx::icons::ICON_APP_RADIO)
+            }
             LauncherTarget::App(_) => ("Settings", gfx::icons::ICON_APP_SETTINGS),
             LauncherTarget::Shortcut(_) => ("Torch", gfx::icons::ICON_APP_TORCH),
             LauncherTarget::About => ("About", gfx::icons::ICON_APP_ABOUT),
@@ -83,19 +85,20 @@ pub fn load_entries(
 
         let cat_ref: &'static catalog::PackageCatalog = catalog::get_catalog();
         for (pkg_idx, app) in cat_ref.entries.iter().enumerate() {
+            let fname = app.filename();
             if !app.is_valid
                 || app.exec_type != kernel::runtime::KrxExecType::App
                 || count >= (MAX_LAUNCHER_ENTRIES - 2)
-                || utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/home.krx")
+                || utils::format::ascii_eq_ignore_case(fname, "home.krx")
             {
                 continue;
             }
             let entry = LauncherEntry {
                 target: LauncherTarget::Package(pkg_idx as u8),
             };
-            if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/vfo.krx") {
+            if utils::format::ascii_eq_ignore_case(fname, "vfo.krx") {
                 entries[0] = entry;
-            } else if utils::format::ascii_eq_ignore_case(app.path.as_str(), "/apps/settings.krx") {
+            } else if utils::format::ascii_eq_ignore_case(fname, "settings.krx") {
                 entries[1] = entry;
             } else {
                 entries[count] = entry;
@@ -186,7 +189,13 @@ impl LauncherApp {
     }
 
     #[inline(never)]
-    fn step_selection(&mut self, ctx: &mut SysContext, down: bool, is_tick: bool, beep: bool) -> bool {
+    fn step_selection(
+        &mut self,
+        ctx: &mut SysContext,
+        down: bool,
+        is_tick: bool,
+        beep: bool,
+    ) -> bool {
         let total = self.items.len();
         if total == 0 {
             return false;
@@ -410,7 +419,15 @@ impl<'a> App<crate::services::SysContext<'a, '_>, Canvas> for LauncherApp {
 
         canvas.fill_rect(0, 0, 128, 8, Color::Clear);
         if total > 4 {
-            gfx::widgets::draw_scrollbar(canvas, 125, 9, 52, scroll_y.max(0) as usize, total * 13, 52);
+            gfx::widgets::draw_scrollbar(
+                canvas,
+                125,
+                9,
+                52,
+                scroll_y.max(0) as usize,
+                total * 13,
+                52,
+            );
         }
     }
 

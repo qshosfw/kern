@@ -170,11 +170,17 @@ impl View<PopupModel> for PopupView {
                     }
                 }
             }
-        }
-
-        // Hold-to-confirm balanced 6px sub-pixel progress bar
-        if model.hold.required_ms > 0 && anim_p >= 8 {
-            widgets::draw_progress_bar(canvas, 4, sheet_y + 25, 120, 6, model.hold_percent(), true);
+            if model.hold.required_ms > 0 {
+                widgets::draw_progress_bar(
+                    canvas,
+                    4,
+                    sheet_y + 25,
+                    120,
+                    6,
+                    model.hold_percent(),
+                    true,
+                );
+            }
         }
 
         // Integrated Scrollbar (X=124..125) when total lines exceed viewport

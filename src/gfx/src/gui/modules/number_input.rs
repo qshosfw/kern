@@ -83,12 +83,14 @@ impl NumberInputModel {
 
     #[inline(always)]
     pub fn title_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(&self.title[..self.title_len as usize]) }
+        let n = (self.title_len as usize).min(self.title.len());
+        unsafe { core::str::from_utf8_unchecked(self.title.get_unchecked(..n)) }
     }
 
     #[inline(always)]
     pub fn unit_str(&self) -> &str {
-        unsafe { core::str::from_utf8_unchecked(&self.unit[..self.unit_len as usize]) }
+        let n = (self.unit_len as usize).min(self.unit.len());
+        unsafe { core::str::from_utf8_unchecked(self.unit.get_unchecked(..n)) }
     }
 
     #[inline(never)]

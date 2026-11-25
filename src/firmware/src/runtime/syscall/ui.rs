@@ -166,30 +166,26 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             gfx::widgets::BadgeStyle::Empty
         }
     };
+    let s0 = unsafe { widget_str(d.p0, d.len0) };
     match kind {
         KRX_WIDGET_ROUNDED_BOX => gfx::widgets::draw_rounded_box(canvas, ux, uy, d.w, d.h),
-        KRX_WIDGET_NEGATED_HEADER => {
-            gfx::widgets::draw_negated_header(canvas, d.y, unsafe { widget_str(d.p0, d.len0) })
-        }
+        KRX_WIDGET_NEGATED_HEADER => gfx::widgets::draw_negated_header(canvas, d.y, s0),
         KRX_WIDGET_SHEET_FRAME => {
-            gfx::widgets::draw_sheet_frame(canvas, unsafe { widget_str(d.p0, d.len0) }, d.y, d.h);
+            gfx::widgets::draw_sheet_frame(canvas, s0, d.y, d.h);
         }
         KRX_WIDGET_PROGRESS_BAR => {
             gfx::widgets::draw_progress_bar(canvas, d.x, d.y, d.w, d.h, d.a, d.b != 0);
         }
         KRX_WIDGET_TAG_BADGE => {
-            let s0 = unsafe { widget_str(d.p0, d.len0) };
             if !s0.is_empty() {
                 gfx::widgets::draw_tag_badge(canvas, d.x, d.y, s0, badge(d.a == 1));
             }
         }
         KRX_WIDGET_KEY_BADGE => {
-            let s0 = unsafe { widget_str(d.p0, d.len0) };
             let s1 = unsafe { widget_str(d.p1, d.len1) };
             gfx::widgets::draw_key_badge(canvas, d.x, d.y, s0, s1);
         }
         KRX_WIDGET_CAPSULE_BUTTON => {
-            let s0 = unsafe { widget_str(d.p0, d.len0) };
             gfx::widgets::draw_capsule_button(canvas, d.x, d.y, d.w, d.h, s0, badge(d.a != 0));
         }
         KRX_WIDGET_SCROLLBAR => {
@@ -224,7 +220,15 @@ unsafe fn draw_widget(kind: u8, desc: *const KrxWidget) -> usize {
             let badge_s = utils::format::nth_cstr(raw0, 1);
             let right_s = utils::format::nth_cstr(raw0, 2);
             let sub_s = unsafe { widget_str(d.p1, d.len1) };
-            gfx::widgets::draw_detail_row(canvas, d.y, (d.a & 1) != 0, badge_s, title, right_s, sub_s);
+            gfx::widgets::draw_detail_row(
+                canvas,
+                d.y,
+                (d.a & 1) != 0,
+                badge_s,
+                title,
+                right_s,
+                sub_s,
+            );
         }
         _ => return ::abi::Status::Unsupported.to_raw(),
     }

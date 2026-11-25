@@ -34,26 +34,28 @@ fn proc_read(path: &str, offset: usize, dst: &mut [u8]) -> Option<usize> {
         return None;
     }
     let tag_bytes = crate::boot::backup::read().encode().to_le_bytes();
+    let segs: [(*const u8, usize); 3] = [
+        (
+            crate::panic::BOOT_RECORD.get() as *const kernel::boot::BootRecord as *const u8,
+            260,
+        ),
+        (core::ptr::addr_of!(crate::FAULT_EXTRA) as *const u8, 52),
+        (tag_bytes.as_ptr(), 4),
+    ];
     let mut written = 0usize;
-    let mut seg_start = 0usize;
-    let mut copy_seg = |ptr: *const u8, len: usize| {
-        let cur = offset + written;
-        if cur >= seg_start && cur < seg_start + len && written < dst.len() {
-            let s_off = cur - seg_start;
-            let n = (dst.len() - written).min(len - s_off);
+    let mut rem_off = offset;
+    for (ptr, len) in segs {
+        if rem_off < len {
+            let n = (dst.len() - written).min(len - rem_off);
             unsafe {
-                core::ptr::copy_nonoverlapping(ptr.add(s_off), dst.as_mut_ptr().add(written), n);
+                core::ptr::copy_nonoverlapping(ptr.add(rem_off), dst.as_mut_ptr().add(written), n);
             }
             written += n;
+            rem_off = 0;
+        } else {
+            rem_off -= len;
         }
-        seg_start += len;
-    };
-    copy_seg(
-        crate::panic::BOOT_RECORD.get() as *const kernel::boot::BootRecord as *const u8,
-        260,
-    );
-    copy_seg(core::ptr::addr_of!(crate::FAULT_EXTRA) as *const u8, 52);
-    copy_seg(tag_bytes.as_ptr(), 4);
+    }
     Some(written)
 }
 
@@ -102,15 +104,12 @@ unsafe fn fs_read_extents(
         if let Some(path_str) = unsafe { parse_str(path, path_len as usize) } {
             let mut l1 = [0u16; 8];
             if let Ok((depth, sz)) = st.fs.file_extents(path_str, &mut l1) {
-                dst[..4].fill(0);
-                dst[0] = depth;
-                dst[4..8].copy_from_slice(&sz.to_le_bytes());
+                let p = dst.as_mut_ptr();
                 unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        l1.as_ptr() as *const u8,
-                        dst.as_mut_ptr().add(8),
-                        16,
-                    );
+                    core::ptr::write_bytes(p, 0, 4);
+                    *p = depth;
+                    core::ptr::copy_nonoverlapping(sz.to_le_bytes().as_ptr(), p.add(4), 4);
+                    core::ptr::copy_nonoverlapping(l1.as_ptr() as *const u8, p.add(8), 16);
                 }
                 return 20;
             }
@@ -237,7 +236,9 @@ unsafe fn dispatch_fs_write(
                     if raw_path == crate::services::calibration::CALIB_FILE_PATH
                         && super::has_cap(::abi::Cap::FactoryCalib)
                     {
-                        return usize::from(crate::calibration_mut().commit_slice(st, src).is_err());
+                        return usize::from(
+                            crate::calibration_mut().commit_slice(st, src).is_err(),
+                        );
                     }
                 }
             }
@@ -272,8 +273,14 @@ pub unsafe fn dispatch_fs(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
             let path = a1 as *const u8;
             let plen = a2 as u8;
             match a0 as u8 {
-                fs_meta::SIZE => file_stat_size(st, path, plen).unwrap_or(0) as usize,
-                fs_meta::EXISTS => usize::from(file_stat_size(st, path, plen).is_some()),
+                fs_meta::SIZE | fs_meta::EXISTS => {
+                    let sz = file_stat_size(st, path, plen);
+                    if (a0 as u8) == fs_meta::SIZE {
+                        sz.unwrap_or(0) as usize
+                    } else {
+                        usize::from(sz.is_some())
+                    }
+                }
                 fs_meta::REMOVE | fs_meta::MKDIR => {
                     let create_dir = (a0 as u8) == fs_meta::MKDIR;
                     if !create_dir {

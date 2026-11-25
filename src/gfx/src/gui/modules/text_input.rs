@@ -367,7 +367,11 @@ impl TextInputView {
 
     #[inline(never)]
     fn draw_bottom_badges(canvas: &mut Canvas, model: &TextInputModel, by: i16) {
-        let exit_label = if model.buffer.is_empty() { "Back" } else { "Del" };
+        let exit_label = if model.buffer.is_empty() {
+            "Back"
+        } else {
+            "Del"
+        };
 
         if !model.digits_only {
             widgets::draw_key_badge(canvas, 2, by, "*", model.charset.star_hint());
@@ -487,11 +491,16 @@ impl View<TextInputModel> for TextInputView {
         if !is_passcode {
             let text_x = 5i16;
             let cur_pos = cursor_byte_pos(&model.buffer, model.cursor_from_end);
-            let prefix =
-                unsafe { core::str::from_utf8_unchecked(model.buffer.as_bytes().get_unchecked(..cur_pos)) };
+            let prefix = unsafe {
+                core::str::from_utf8_unchecked(model.buffer.as_bytes().get_unchecked(..cur_pos))
+            };
             let prefix_w = text::str_width(prefix, &MUMATRIX);
             let max_w = 118i16;
-            let scroll_x = if prefix_w > max_w { prefix_w - max_w } else { 0 };
+            let scroll_x = if prefix_w > max_w {
+                prefix_w - max_w
+            } else {
+                0
+            };
 
             text::draw_str_clipped(
                 canvas,
@@ -592,23 +601,17 @@ impl View<TextInputModel> for TextInputView {
         }
 
         if let Event::Key { code, state } = event {
-            let is_pressed = *state == KeyState::Pressed;
-            let is_held = *state == KeyState::Held;
-            let is_released = *state == KeyState::Released;
-
-            // 1. Explicit KeyState::Held handling
-            if is_held {
-                match code {
+            if *code == KeyCode::Menu && *state != KeyState::Released {
+                Self::confirm_current_char(model);
+                model.is_done = true;
+                return true;
+            }
+            match *state {
+                KeyState::Held => match code {
                     KeyCode::Exit => {
                         if !model.exit_pressed || model.exit_press_ticks >= hold_threshold(model) {
                             cancel_input(model);
                         }
-                        return true;
-                    }
-                    KeyCode::Menu => {
-                        Self::confirm_current_char(model);
-                        model.is_done = true;
-                        return true;
                     }
                     _ => {
                         if let Some(digit) = code.to_digit() {
@@ -618,77 +621,64 @@ impl View<TextInputModel> for TextInputView {
                                 }
                                 confirm_and_push(model, b'0' + digit);
                             }
-                            return true;
                         }
                     }
-                }
-            }
-
-            // 2. Key Release for Exit (Backspace ONLY on short tap release, or Back if empty)
-            if is_released && *code == KeyCode::Exit {
-                if model.exit_pressed {
-                    model.exit_pressed = false;
-                    if !model.exit_held {
-                        if model.last_key.is_some() {
-                            Self::confirm_current_char(model);
-                        } else if !model.buffer.is_empty() {
-                            delete_at_cursor(model);
-                        } else {
-                            cancel_input(model);
-                        }
-                    }
-                }
-                model.exit_held = false;
-                model.exit_press_ticks = 0;
-                return true;
-            }
-
-            // 3. Short Press Down (KeyState::Pressed)
-            if is_pressed {
-                if let Some(key_num) = code.to_digit() {
-                    handle_digit_press(model, key_num);
-                    return true;
-                }
-
-                match code {
-                    KeyCode::Up => move_cursor(model, 1),
-                    KeyCode::Down => move_cursor(model, -1),
-                    KeyCode::Exit => {
-                        model.exit_pressed = true;
-                        model.exit_press_ticks = 0;
-                        model.exit_held = false;
-                    }
-
-                    KeyCode::Side2 if !model.digits_only => {
-                        model.show_grid = !model.show_grid;
-                    }
-
-                    KeyCode::Star | KeyCode::KeyF | KeyCode::Hash | KeyCode::Side1
-                        if !model.digits_only =>
-                    {
-                        Self::confirm_current_char(model);
-                        let has_loc = model.locale_keymap.active;
-                        model.charset = match (*code == KeyCode::Star, model.charset) {
-                            (true, Charset::Upper | Charset::Lower) if has_loc => Charset::Locale,
-                            (true, Charset::Upper | Charset::Lower | Charset::Locale) => {
-                                Charset::Numbers
+                },
+                KeyState::Released if *code == KeyCode::Exit => {
+                    if model.exit_pressed {
+                        model.exit_pressed = false;
+                        if !model.exit_held {
+                            if model.last_key.is_some() {
+                                Self::confirm_current_char(model);
+                            } else if !model.buffer.is_empty() {
+                                delete_at_cursor(model);
+                            } else {
+                                cancel_input(model);
                             }
-                            (true, Charset::Numbers) => Charset::Symbols,
-                            (false, Charset::Upper) => Charset::Lower,
-                            (false, Charset::Lower) if has_loc => Charset::Locale,
-                            _ => Charset::Upper,
-                        };
+                        }
                     }
-
-                    KeyCode::Menu => {
-                        Self::confirm_current_char(model);
-                        model.is_done = true;
-                    }
-
-                    _ => {}
+                    model.exit_held = false;
+                    model.exit_press_ticks = 0;
                 }
+                KeyState::Pressed => {
+                    if let Some(key_num) = code.to_digit() {
+                        handle_digit_press(model, key_num);
+                    } else {
+                        match code {
+                            KeyCode::Up => move_cursor(model, 1),
+                            KeyCode::Down => move_cursor(model, -1),
+                            KeyCode::Exit => {
+                                model.exit_pressed = true;
+                                model.exit_press_ticks = 0;
+                                model.exit_held = false;
+                            }
+                            KeyCode::Side2 if !model.digits_only => {
+                                model.show_grid = !model.show_grid;
+                            }
+                            KeyCode::Star | KeyCode::KeyF | KeyCode::Hash | KeyCode::Side1
+                                if !model.digits_only =>
+                            {
+                                Self::confirm_current_char(model);
+                                let has_loc = model.locale_keymap.active;
+                                model.charset = match (*code == KeyCode::Star, model.charset) {
+                                    (true, Charset::Upper | Charset::Lower) if has_loc => {
+                                        Charset::Locale
+                                    }
+                                    (true, Charset::Upper | Charset::Lower | Charset::Locale) => {
+                                        Charset::Numbers
+                                    }
+                                    (true, Charset::Numbers) => Charset::Symbols,
+                                    (false, Charset::Upper) => Charset::Lower,
+                                    (false, Charset::Lower) if has_loc => Charset::Locale,
+                                    _ => Charset::Upper,
+                                };
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
             }
-
             return true;
         }
 

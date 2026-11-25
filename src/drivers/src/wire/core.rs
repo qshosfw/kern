@@ -42,18 +42,56 @@ struct TablesReplyWire {
 const TABLES_REPLY_WIRE: TablesReplyWire = TablesReplyWire {
     count: 6,
     tables: [
-        TableDesc::new(*b"CHAN", 64, 512, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
-        TableDesc::new(*b"CONT", 32, 256, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
-        TableDesc::new(*b"BNDP", 32, 64, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
-        TableDesc::new(*b"ZONE", 32, 64, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
-        TableDesc::new(*b"HITS", 32, 128, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
-        TableDesc::new(*b"FMBC", 16, 64, 1, TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE),
+        TableDesc::new(
+            *b"CHAN",
+            64,
+            512,
+            1,
+            TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE,
+        ),
+        TableDesc::new(
+            *b"CONT",
+            32,
+            256,
+            1,
+            TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE,
+        ),
+        TableDesc::new(
+            *b"BNDP",
+            32,
+            64,
+            1,
+            TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE,
+        ),
+        TableDesc::new(
+            *b"ZONE",
+            32,
+            64,
+            1,
+            TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE,
+        ),
+        TableDesc::new(
+            *b"HITS",
+            32,
+            128,
+            1,
+            TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE,
+        ),
+        TableDesc::new(
+            *b"FMBC",
+            16,
+            64,
+            1,
+            TableDesc::FLAG_WRITABLE | TableDesc::FLAG_HASHABLE,
+        ),
     ],
 };
 
 #[inline(always)]
 const fn as_raw_bytes<T>(val: &'static T) -> &'static [u8] {
-    unsafe { ::core::slice::from_raw_parts(val as *const T as *const u8, ::core::mem::size_of::<T>()) }
+    unsafe {
+        ::core::slice::from_raw_parts(val as *const T as *const u8, ::core::mem::size_of::<T>())
+    }
 }
 
 #[inline(never)]
@@ -61,7 +99,10 @@ fn read_le_u32(buf: &[u8], off: usize) -> u32 {
     if off + 4 > buf.len() {
         return 0;
     }
-    u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
+    unsafe {
+        let p = buf.as_ptr().add(off);
+        u32::from_le_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
+    }
 }
 
 impl<S: SerialPort, T: TimeSource> WireDriver<S, T> {

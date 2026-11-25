@@ -76,13 +76,18 @@ utils::static_bytes!(static PKG_EXTS = b"appsvcdmndrvmodkrx";);
 #[cfg(feature = "filesystem")]
 fn is_package_ext(bytes: &[u8]) -> bool {
     let n = bytes.len();
-    if n <= 4 || bytes[n - 4] != b'.' {
+    if n <= 4 {
         return false;
     }
-    let ext = &bytes[n - 3..];
+    let bp = bytes.as_ptr();
+    if unsafe { *bp.add(n - 4) } != b'.' {
+        return false;
+    }
+    let (e0, e1, e2) = unsafe { (*bp.add(n - 3), *bp.add(n - 2), *bp.add(n - 1)) };
+    let pp = PKG_EXTS.as_ptr();
     let mut i = 0;
     while i + 3 <= PKG_EXTS.len() {
-        if ext[0] == PKG_EXTS[i] && ext[1] == PKG_EXTS[i + 1] && ext[2] == PKG_EXTS[i + 2] {
+        if unsafe { e0 == *pp.add(i) && e1 == *pp.add(i + 1) && e2 == *pp.add(i + 2) } {
             return true;
         }
         i += 3;
@@ -197,7 +202,8 @@ impl PackageCatalog {
         dir: &kernel::proc::abi::KrxDirEntry,
     ) {
         let name_len = gfx::text::find_byte(&dir.name, 0).unwrap_or(24);
-        let raw_name = unsafe { core::str::from_utf8_unchecked(&dir.name[..name_len]) };
+        let raw_name =
+            unsafe { core::str::from_utf8_unchecked(dir.name.get_unchecked(..name_len)) };
         let base_name = extract_filename(raw_name);
         let len = self.entries.len();
         let bytes = base_name.as_bytes();
@@ -217,13 +223,10 @@ impl PackageCatalog {
 
         let is_pkg = is_package_ext(bytes);
 
-        let start = if raw_name.as_bytes().first() == Some(&b'/') {
-            0
-        } else {
-            entry.path.buf[..6].copy_from_slice(b"/apps/");
-            6
-        };
-        entry.path.len = utils::format::copy_trunc_utf8(&mut entry.path.buf, start, raw_name);
+        unsafe {
+            core::ptr::copy_nonoverlapping(b"/apps/".as_ptr(), entry.path.buf.as_mut_ptr(), 6);
+        }
+        entry.path.len = utils::format::copy_trunc_utf8(&mut entry.path.buf, 6, base_name);
 
         let mut title: Option<&str> = None;
         if is_pkg && (size as usize) >= KrxPreamble::SIZE {
@@ -265,7 +268,13 @@ impl PackageCatalog {
                         KrxPreamble::find_icon_asset(hdr_buf, kernel::runtime::ASSET_ICON_8)
                         && ic8.len() >= 8
                     {
-                        entry.icon_8.copy_from_slice(&ic8[..8]);
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                ic8.as_ptr(),
+                                entry.icon_8.as_mut_ptr(),
+                                8,
+                            );
+                        }
                     }
                 }
             }
@@ -276,7 +285,7 @@ impl PackageCatalog {
 
         if entry.title.is_empty() {
             let stem_len = if is_pkg { n - 4 } else { n };
-            let stem = unsafe { core::str::from_utf8_unchecked(&bytes[..stem_len]) };
+            let stem = unsafe { core::str::from_utf8_unchecked(bytes.get_unchecked(..stem_len)) };
             entry.title.set(stem);
         }
     }
@@ -410,7 +419,10 @@ mod tests {
                 .leaf_map
                 .expect("settings.krx must carry SECTION_LEAF_MAP");
             let count = map.len() / kernel::runtime::LeafEntry::SIZE;
-            assert!(count >= 20, "settings.krx should carry its modular leaf set");
+            assert!(
+                count >= 20,
+                "settings.krx should carry its modular leaf set"
+            );
             let tbl_off = (map.as_ptr() as usize - SETTINGS_KRX.as_ptr() as usize) as u32;
             let mut leaves = kernel::runtime::paged::StreamingLeafState::new(0, 1024);
             leaves.configure(0, 1024, tbl_off, count as u8);

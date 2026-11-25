@@ -349,85 +349,72 @@ impl BatteryDriver {
             self.is_charging = false;
             self.charge_counter = 0;
             self.base_mv = sm;
-        } else if periph.tx_active {
-            if !tx_was_active {
-                self.pre_tx_ocv = self.ocv_mv;
-            } else if self.pre_tx_ocv > raw_mv {
-                // Refine internal resistance estimate from measured instantaneous raw step sag during TX
-                let step_sag = self.pre_tx_ocv - raw_mv;
-                if step_sag >= 50 && step_sag <= 600 {
-                    let r_est = match periph.tx_power_level {
-                        0 => step_sag << 1,
-                        1 => step_sag,
-                        _ => (((step_sag as u32) * 171) >> 8) as u16,
-                    };
-                    if r_est >= 100 && r_est <= 500 {
-                        self.internal_res_m_ohm = Self::ema_u16(self.internal_res_m_ohm, r_est, 3);
-                    }
-                }
-            }
-            self.tx_recovery_ticks = 125; // 25s post-TX recovery window (at 200ms ticks)
-            self.charge_counter = 0;
-            self.ocv_mv = self.pre_tx_ocv;
-        } else if self.tx_recovery_ticks > 0 {
-            self.tx_recovery_ticks -= 1;
-            self.charge_counter = 0;
-            self.ocv_mv = self.pre_tx_ocv;
-
-            // If terminal voltage has recovered within 15 mV of resting OCV, end recovery early
-            if sm >= self.pre_tx_ocv.saturating_sub(15) {
-                self.tx_recovery_ticks = 0;
-                self.base_mv = sm;
-            }
-        } else {
-            // Normal operation / discharge / charge detection
-            const CHARGE_START_DELTA_MV: u16 = 35;
-            const CHARGE_STOP_DROP_MV: u16 = 50;
-
-            if !self.is_charging {
-                if sm >= self.base_mv.saturating_add(CHARGE_START_DELTA_MV) {
-                    self.charge_counter = self.charge_counter.saturating_add(1);
-                    if self.charge_counter >= 3 {
-                        self.is_charging = true;
-                        self.base_mv = sm;
-                        self.ocv_mv = sm;
-                    }
-                } else {
-                    self.charge_counter = self.charge_counter.saturating_sub(1);
-                    if sm < self.base_mv {
-                        self.base_mv = sm;
-                    } else {
-                        self.drift_counter = self.drift_counter.saturating_add(1);
-                        if self.drift_counter >= 25 {
-                            self.base_mv = self.base_mv.saturating_add(1);
-                            self.drift_counter = 0;
+        } else if periph.tx_active || self.tx_recovery_ticks > 0 {
+            if periph.tx_active {
+                if !tx_was_active {
+                    self.pre_tx_ocv = self.ocv_mv;
+                } else if self.pre_tx_ocv > raw_mv {
+                    let step_sag = self.pre_tx_ocv - raw_mv;
+                    if step_sag >= 50 && step_sag <= 600 {
+                        let r_est = match periph.tx_power_level {
+                            0 => step_sag << 1,
+                            1 => step_sag,
+                            _ => (((step_sag as u32) * 171) >> 8) as u16,
+                        };
+                        if r_est >= 100 && r_est <= 500 {
+                            self.internal_res_m_ohm =
+                                Self::ema_u16(self.internal_res_m_ohm, r_est, 3);
                         }
                     }
-
-                    // Steady-state normal discharge tracking:
-                    // If load sag is small (<= 25 mV), track OCV downwards (shift 5);
-                    // slight upward thermal drift (< +35 mV) tracks slowly (shift 6).
-                    let shift = if sm <= self.ocv_mv && self.ocv_mv - sm <= 25 {
-                        5
-                    } else if sm > self.ocv_mv && sm < self.base_mv.saturating_add(35) {
-                        6
-                    } else {
-                        0
-                    };
-                    if shift != 0 {
-                        self.ocv_mv = Self::ema_u16(self.ocv_mv, sm, shift);
-                    }
+                }
+                self.tx_recovery_ticks = 125;
+            } else {
+                self.tx_recovery_ticks -= 1;
+                if sm + 15 >= self.pre_tx_ocv {
+                    self.tx_recovery_ticks = 0;
+                    self.base_mv = sm;
+                }
+            }
+            self.charge_counter = 0;
+            self.ocv_mv = self.pre_tx_ocv;
+        } else if !self.is_charging {
+            if sm >= self.base_mv + 35 {
+                self.charge_counter = self.charge_counter.saturating_add(1);
+                if self.charge_counter >= 3 {
+                    self.is_charging = true;
+                    self.base_mv = sm;
+                    self.ocv_mv = sm;
                 }
             } else {
-                // Active charging
-                self.ocv_mv = sm;
-                if sm > self.base_mv {
+                self.charge_counter = self.charge_counter.saturating_sub(1);
+                if sm < self.base_mv {
                     self.base_mv = sm;
-                } else if sm <= self.base_mv.saturating_sub(CHARGE_STOP_DROP_MV) {
-                    self.is_charging = false;
-                    self.charge_counter = 0;
-                    self.base_mv = sm;
+                } else {
+                    self.drift_counter = self.drift_counter.saturating_add(1);
+                    if self.drift_counter >= 25 {
+                        self.base_mv += 1;
+                        self.drift_counter = 0;
+                    }
                 }
+                let shift = if sm <= self.ocv_mv && self.ocv_mv - sm <= 25 {
+                    5
+                } else if sm > self.ocv_mv && sm < self.base_mv + 35 {
+                    6
+                } else {
+                    0
+                };
+                if shift != 0 {
+                    self.ocv_mv = Self::ema_u16(self.ocv_mv, sm, shift);
+                }
+            }
+        } else {
+            self.ocv_mv = sm;
+            if sm > self.base_mv {
+                self.base_mv = sm;
+            } else if sm + 50 <= self.base_mv {
+                self.is_charging = false;
+                self.charge_counter = 0;
+                self.base_mv = sm;
             }
         }
 

@@ -15,9 +15,9 @@ use kernel::app::{EventResult, ModalResult, StatusBarConfig};
 use kernel::event::{Event, KeyState};
 use kernel::proc::abi::*;
 use kernel::proc::memory::{MemoryRegionDescriptor, RegionKind, region_flags};
+use kernel::runtime::paged::StreamingLeafState;
 #[cfg(feature = "krx_paged")]
 use kernel::runtime::paged::{FixedWindowCache, ReturnFrame, ShadowReturnStack};
-use kernel::runtime::paged::StreamingLeafState;
 use kernel::runtime::reloc::apply_relocs;
 use kernel::runtime::{KrxLaunchError, KrxProfile, KrxSummary, SectionExecution};
 
@@ -567,6 +567,7 @@ pub fn load_native_from_storage(
     summary: &KrxSummary<'_>,
     pid: kernel::proc::Pid,
 ) -> Result<(), KrxLaunchError> {
+    #[cfg(feature = "krx_paged")]
     let preamble = &summary.preamble;
     let exec = summary.exec().ok_or(KrxLaunchError::MissingExecution)?;
     let aux = &summary.aux;

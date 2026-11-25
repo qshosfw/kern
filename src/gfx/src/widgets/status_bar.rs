@@ -58,7 +58,7 @@ pub fn draw_status_glyph_rtl(
 /// Dynamically places and renders a built-in status icon flowing right-to-left.
 /// Automatically calculates icon width and applies standard item spacing (`width + 2`).
 /// Returns the updated `right_limit`.
-#[inline]
+#[inline(never)]
 pub fn draw_status_icon(
     canvas: &mut Canvas,
     right_limit: i16,
@@ -368,12 +368,12 @@ impl<'a> StatusRightConfig<'a> {
         let mut dec = 0u8;
         let suf = match self.battery_format {
             1 | 4 => {
-                val = (((self.voltage_mv as u32) * 52429) >> 19) as i32;
+                val = utils::math::div10_u16(self.voltage_mv).0 as i32;
                 dec = 2;
                 "v"
             }
             6 => {
-                val = (((self.voltage_mv as u32) * 5243) >> 19) as i32;
+                val = utils::math::div100_u16(self.voltage_mv).0 as i32;
                 dec = 1;
                 "v"
             }
@@ -382,7 +382,7 @@ impl<'a> StatusRightConfig<'a> {
                 "%"
             }
             8 => {
-                val = (((self.temp_deci_c as u32) * 52429) >> 19) as i32;
+                val = utils::math::div10_u16(self.temp_deci_c.max(0) as u16).0 as i32;
                 "C"
             }
             _ => "",

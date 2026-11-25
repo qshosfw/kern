@@ -194,7 +194,7 @@ def build_package(name: str, pkg_map: dict[str, str] | None = None):
     if profile == pack_krx.PROFILE_P0_PAGED:
         builder.page_size = leaf_max
     if "root" in m:
-        root_limit = m.get("root_max", 8192 - leaf_max if profile == pack_krx.PROFILE_P0_PAGED else None)
+        root_limit = m.get("root_max", 6144 - leaf_max if profile == pack_krx.PROFILE_P0_PAGED else None)
         with open(build_unit(src_dir, out_dir, m["root"], root_limit), "rb") as f:
             builder.set_payload(f.read())
     else:

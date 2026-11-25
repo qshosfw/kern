@@ -185,12 +185,12 @@ pub fn load_or_init_raw(buf: &mut [u8], version: u8, path: &str, storage: &mut S
     let n = buf.len().min(80);
     #[cfg(not(test))]
     let loaded = crate::data::arena::try_staging_buf().is_some_and(|staging| {
-        let tmp = &mut staging[..n];
+        let tmp = unsafe { staging.get_unchecked_mut(..n) };
         let ok = storage
             .read_file(path, tmp)
             .is_ok_and(|len| len >= n && is_raw_valid(tmp, version));
         if ok {
-            buf[..n].copy_from_slice(tmp);
+            unsafe { core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf.as_mut_ptr(), n) };
         }
         ok
     });
@@ -422,8 +422,8 @@ impl MasterConfig {
 
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
             let tweak = self.battery.calib_tweak_mv;
-            if self.config_bytes(i)[0] != meta.version || (i == 4 && !(-500..=500).contains(&tweak))
-            {
+            let ver = unsafe { *self.config_bytes(i).get_unchecked(0) };
+            if ver != meta.version || (i == 4 && !(-500..=500).contains(&tweak)) {
                 decode_default_range(meta.offset as usize, self.config_bytes_mut(i));
                 repaired |= 1u8 << i;
             }
@@ -434,8 +434,12 @@ impl MasterConfig {
             if !p.admits(self.prop_get(p.id)) {
                 let dom = p.domain();
                 let off = p.offset();
-                let def_val = default_config_byte(CONFIG_METAS[dom].offset as usize + off);
-                self.config_bytes_mut(dom)[off] = def_val;
+                let base = unsafe { CONFIG_METAS.get_unchecked(dom).offset as usize };
+                let def_val = default_config_byte(base + off);
+                let blk = self.config_bytes_mut(dom);
+                if off < blk.len() {
+                    unsafe { *blk.get_unchecked_mut(off) = def_val };
+                }
                 repaired |= 1u8 << dom;
             }
         }
@@ -596,11 +600,18 @@ impl MasterConfig {
         let mut tmp = [0u8; 80];
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
             let n = (meta.size as usize).min(tmp.len());
+            let slice = unsafe { tmp.get_unchecked_mut(..n) };
             if storage
-                .read_file(config_path(i), &mut tmp[..n])
-                .is_ok_and(|len| len >= n && is_raw_valid(&tmp[..n], meta.version))
+                .read_file(config_path(i), slice)
+                .is_ok_and(|len| len >= n && is_raw_valid(slice, meta.version))
             {
-                self.config_bytes_mut(i)[..n].copy_from_slice(&tmp[..n]);
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        slice.as_ptr(),
+                        self.config_bytes_mut(i).as_mut_ptr(),
+                        n,
+                    );
+                }
             }
         }
         let _ = self.sanitize();
@@ -659,7 +670,10 @@ impl MasterConfig {
 
     /// Reset all preference domains to factory defaults, reseal CRCs, and persist to `/pref/*.cfg`.
     #[inline(never)]
-    pub fn reset_all_to_defaults(&mut self, storage: &mut SystemStorage) -> Result<(), ConfigError> {
+    pub fn reset_all_to_defaults(
+        &mut self,
+        storage: &mut SystemStorage,
+    ) -> Result<(), ConfigError> {
         let dst = unsafe {
             core::slice::from_raw_parts_mut(self as *mut Self as *mut u8, MASTER_CONFIG_SIZE)
         };

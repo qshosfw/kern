@@ -199,35 +199,31 @@ pub fn draw_str_clipped(
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        let (adv, step) = if b < 0x80 {
-            (
-                draw_char_clipped(canvas, x, y, b as char, font, color, min_x, max_x),
-                1,
-            )
+        let (cp, step) = if b < 0x80 {
+            (b as u32, 1)
         } else {
-            let (cp, step) = decode_utf8_at(bytes, i);
-            let adv = if cp == 0xB0 {
-                draw_char_clipped(canvas, x, y, '°', font, color, min_x, max_x)
-            } else if cp <= u16::MAX as u32
-                && let Some(hook) = unsafe { EXT_GLYPH_DRAW }
-                && let Some(ext_adv) = hook(canvas, x, y, cp as u16, min_x, max_x, color)
-            {
-                ext_adv
-            } else {
-                crate::media::draw_bitmap_clipped(
-                    canvas,
-                    x,
-                    y - 5,
-                    5,
-                    5,
-                    &FALLBACK_BOX_5,
-                    min_x,
-                    max_x,
-                    color,
-                );
-                6
-            };
-            (adv, step)
+            decode_utf8_at(bytes, i)
+        };
+        let adv = if cp < 0x80 || cp == 0xB0 {
+            draw_char_clipped(canvas, x, y, cp as u8 as char, font, color, min_x, max_x)
+        } else if cp <= u16::MAX as u32
+            && let Some(hook) = unsafe { EXT_GLYPH_DRAW }
+            && let Some(ext_adv) = hook(canvas, x, y, cp as u16, min_x, max_x, color)
+        {
+            ext_adv
+        } else {
+            crate::media::draw_bitmap_clipped(
+                canvas,
+                x,
+                y - 5,
+                5,
+                5,
+                &FALLBACK_BOX_5,
+                min_x,
+                max_x,
+                color,
+            );
+            6
         };
         x += adv;
         if x >= max_x {
@@ -253,13 +249,17 @@ pub fn draw_str_ellipsis(
     if avail <= 0 {
         return x;
     }
-    if str_width(text, font) <= avail {
-        return draw_str_clipped(canvas, x, max_x, 0, y, text, font, color);
+    let body_max = if str_width(text, font) <= avail {
+        max_x
+    } else {
+        (max_x - str_width("..", font)).max(x)
+    };
+    let end = draw_str_clipped(canvas, x, body_max, 0, y, text, font, color);
+    if body_max < max_x {
+        draw_str_clipped(canvas, body_max, max_x, 0, y, "..", font, color)
+    } else {
+        end
     }
-    let dots_w = str_width("..", font);
-    let body_max = (max_x - dots_w).max(x);
-    draw_str_clipped(canvas, x, body_max, 0, y, text, font, color);
-    draw_str_clipped(canvas, body_max, max_x, 0, y, "..", font, color)
 }
 
 /// Draw a string onto the canvas using the provided GfxFont.

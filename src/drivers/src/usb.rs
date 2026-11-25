@@ -646,15 +646,17 @@ impl UsbDriver {
     fn ep0_start_string_transfer(&mut self, ascii: &[u8], max_len: u16) {
         let len = ascii.len().min(31);
         let mut desc = core::mem::MaybeUninit::<[u8; 64]>::uninit();
-        let desc = unsafe { &mut *desc.as_mut_ptr() };
+        let p = desc.as_mut_ptr() as *mut u8;
         let total_bytes = 2 + len * 2;
-        desc[0] = total_bytes as u8;
-        desc[1] = DESC_TYPE_STRING;
-        for i in 0..len {
-            desc[2 + i * 2] = ascii[i];
-            desc[2 + i * 2 + 1] = 0;
+        unsafe {
+            *p = total_bytes as u8;
+            *p.add(1) = DESC_TYPE_STRING;
+            for i in 0..len {
+                *p.add(2 + i * 2) = *ascii.get_unchecked(i);
+                *p.add(3 + i * 2) = 0;
+            }
+            self.ep0_start_transfer(core::slice::from_raw_parts(p, total_bytes), max_len);
         }
-        self.ep0_start_transfer(&desc[..total_bytes], max_len);
     }
 
     fn ep0_start_product_transfer(&mut self, max_len: u16) {

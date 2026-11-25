@@ -62,15 +62,7 @@ pub fn draw_bitmap(
     if data.len() < (height as usize).saturating_mul(bytes_per_row) {
         return;
     }
-    for row in 0..height as usize {
-        let row_offset = row * bytes_per_row;
-        let py = y + row as i16;
-        for col in 0..width as usize {
-            if (data[row_offset + (col >> 3)] & (0x80 >> (col & 7))) != 0 {
-                canvas.draw_pixel_i(x + col as i16, py, color);
-            }
-        }
-    }
+    crate::media::draw_bitmap_clipped(canvas, x, y, width, height, data, 0, 128, color);
 }
 
 /// Decompress a 128x64 PackBits RLE page-packed bitmap into `canvas`.

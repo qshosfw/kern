@@ -68,6 +68,12 @@ fn post_sys_event(target: u8, command: u8, arg: u16) {
     }));
 }
 
+#[inline(always)]
+fn post_shortcut(sc: crate::apps::Shortcut) {
+    let ev: kernel::ipc::SysEvent = sc.into();
+    post_sys_event(ev.target, ev.command, ev.arg);
+}
+
 #[inline(never)]
 fn find_proc_by_ptr(name: *const u8, len: u8) -> u8 {
     if let Some(name_str) = unsafe { parse_str(name, (len as usize).min(16)) } {
@@ -97,8 +103,8 @@ fn active_slot_scan(target: u8) -> (u8, Option<&'static kernel::proc::Pcb>) {
 
 #[inline(never)]
 fn copy_cstr(dst: &mut [u8], src: &[u8]) {
-    let n = src.len().min(dst.len() - 1);
-    dst[..n].copy_from_slice(&src[..n]);
+    let n = src.len().min(dst.len().saturating_sub(1));
+    unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), n) };
 }
 
 #[inline(never)]
@@ -179,7 +185,11 @@ unsafe fn dispatch_sys_sec(sub: u8, a1: usize, a2: usize) -> usize {
     #[cfg(not(feature = "passcode"))]
     {
         let _ = (sub, a1, a2);
-        return if sub == ::abi::sub::sys_sec::STATUS { 0 } else { 1 };
+        return if sub == ::abi::sub::sys_sec::STATUS {
+            0
+        } else {
+            1
+        };
     }
     #[cfg(feature = "passcode")]
     {
@@ -248,12 +258,7 @@ unsafe fn dispatch_sys_sec(sub: u8, a1: usize, a2: usize) -> usize {
                 let max_tries = (a2 >> 24) as u8;
                 usize::from(
                     crate::security::passcode::set_passcode(
-                        fs,
-                        ps,
-                        pin,
-                        opt_flags,
-                        max_tries,
-                        progress,
+                        fs, ps, pin, opt_flags, max_tries, progress,
                     )
                     .is_err(),
                 )
@@ -401,8 +406,7 @@ fn proc_kill(pid: u8) -> u8 {
         return 1;
     }
     if is_fg {
-        let ev: kernel::ipc::SysEvent = crate::apps::Shortcut::CloseApp.into();
-        post_sys_event(ev.target, ev.command, ev.arg);
+        post_shortcut(crate::apps::Shortcut::CloseApp);
     }
     0
 }
@@ -506,8 +510,7 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
                 return 1;
             }
             unsafe { (*core::ptr::addr_of_mut!(PENDING_LAUNCH)).set(path) };
-            let ev: kernel::ipc::SysEvent = crate::apps::Shortcut::LaunchPendingPkg.into();
-            post_sys_event(ev.target, ev.command, ev.arg);
+            post_shortcut(crate::apps::Shortcut::LaunchPendingPkg);
             return 0;
         }
         _ => {}
@@ -537,9 +540,7 @@ unsafe fn proc_ctl(op_and_id: u16, arg: u32, buf: *mut u8, len: u16) -> u8 {
             if pcb.app_id >= crate::AppRegistry::app_count() {
                 return 1;
             }
-            let ev: kernel::ipc::SysEvent =
-                crate::apps::Shortcut::LaunchApp(pcb.app_id as u8).into();
-            post_sys_event(ev.target, ev.command, ev.arg);
+            post_shortcut(crate::apps::Shortcut::LaunchApp(pcb.app_id as u8));
         }
         _ => return 1,
     }
@@ -564,7 +565,7 @@ unsafe fn fill_proc_info(index: u8, out_info: *mut KrxProcInfo) -> usize {
         info.memory_bytes = slot.mem_bytes;
         let src = slot.name.as_bytes();
         let len = src.len().min(info.name.len());
-        info.name[..len].copy_from_slice(&src[..len]);
+        core::ptr::copy_nonoverlapping(src.as_ptr(), info.name.as_mut_ptr(), len);
         info.runtime_ticks = slot.ledger.cpu_ticks;
         info.exec_type = slot.exec_type as u8;
 
@@ -609,11 +610,9 @@ pub unsafe fn dispatch_proc(idx: u8, a0: usize, a1: usize, a2: usize) -> usize {
         op::ProcLeaf => super::super::native_runner::krx_leaf_call(a0 as u8, a1 as u32) as usize,
         #[cfg(feature = "krx_paged")]
         op::ProcPaged => match a0 as u8 {
-            proc_paged::CALL => super::super::native_runner::krx_call_paged(
-                a1 as u8,
-                (a1 >> 16) as u16,
-                a2 as u16,
-            ),
+            proc_paged::CALL => {
+                super::super::native_runner::krx_call_paged(a1 as u8, (a1 >> 16) as u16, a2 as u16)
+            }
             proc_paged::RETURN => super::super::native_runner::krx_return_thunk(),
             proc_paged::FAULT => super::super::native_runner::krx_page_fault(a1 as u8, a2 as u16),
             _ => 0,
@@ -850,7 +849,10 @@ mod tests {
         );
         // With Cap::Preferences, missing_caps passes for Op::SysSec
         slot.caps = CapabilitySet::empty().with(Cap::Preferences);
-        assert_eq!(::abi::missing_caps(Op::SysSec.id(), slot.caps.raw()), Some(0));
+        assert_eq!(
+            ::abi::missing_caps(Op::SysSec.id(), slot.caps.raw()),
+            Some(0)
+        );
         crate::runtime::native_runner::init_native_slot();
     }
 }

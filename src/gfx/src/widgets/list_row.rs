@@ -97,7 +97,14 @@ fn draw_row_right_value(
     } else {
         right_edge - 3
     };
-    text::draw_str(canvas, val_right - sw, s.y + text_dy - 1, val_str, &TOMTHUMB, tc);
+    text::draw_str(
+        canvas,
+        val_right - sw,
+        s.y + text_dy - 1,
+        val_str,
+        &TOMTHUMB,
+        tc,
+    );
 }
 #[inline(never)]
 fn draw_shortcut_row(
@@ -163,9 +170,25 @@ fn draw_row_title(
             tc,
         );
     } else if overflow > 0 {
-        text::draw_str_ellipsis(canvas, tx, s.y + text_dy, title_str, &MUMATRIX, tc, title_max);
+        text::draw_str_ellipsis(
+            canvas,
+            tx,
+            s.y + text_dy,
+            title_str,
+            &MUMATRIX,
+            tc,
+            title_max,
+        );
     } else {
-        text::draw_str_max_x(canvas, tx, s.y + text_dy, title_str, &MUMATRIX, tc, title_max);
+        text::draw_str_max_x(
+            canvas,
+            tx,
+            s.y + text_dy,
+            title_str,
+            &MUMATRIX,
+            tc,
+            title_max,
+        );
     }
     overflow
 }
@@ -178,8 +201,6 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
     let is_toggle = (s.flags & ROW_TOGGLE) != 0;
     let toggle_on = (s.flags & ROW_TOGGLE_ON) != 0;
     let has_chevron = (s.flags & ROW_CHEVRON) != 0;
-    let arrow_left = (s.flags & ROW_ARROW_LEFT) != 0;
-    let arrow_right = (s.flags & ROW_ARROW_RIGHT) != 0;
     let is_shortcut = (s.flags & ROW_SHORTCUT) != 0;
 
     let h_i16 = s.h as i16;
@@ -217,12 +238,10 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
         return 0;
     }
 
-    if let Some(bmp) = s.prefix_icon {
-        icons::draw_icon_8(canvas, tx, s.y + icon_dy, bmp, tc);
-        tx += 11;
-    }
-    if let Some(bmp) = s.icon {
-        if !core::ptr::eq(bmp, &icons::ICON_NONE) {
+    for opt in [s.prefix_icon, s.icon] {
+        if let Some(bmp) = opt
+            && !core::ptr::eq(bmp, &icons::ICON_NONE)
+        {
             icons::draw_icon_8(canvas, tx, s.y + icon_dy, bmp, tc);
             tx += 11;
         }
@@ -238,7 +257,7 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
     let title_max = if is_toggle || has_chevron {
         right_edge - 14
     } else if sw > 0 {
-        let pad = if is_outline && (arrow_left || arrow_right) {
+        let pad = if is_outline && (s.flags & (ROW_ARROW_LEFT | ROW_ARROW_RIGHT)) != 0 {
             22
         } else {
             8
@@ -250,23 +269,24 @@ pub fn draw_list_row(canvas: &mut Canvas, s: &ListRowSpec<'_>) -> u8 {
 
     let overflow = draw_row_title(canvas, s, sw > 0, tx, title_max, text_dy, is_sel, tc);
 
-    if is_toggle {
-        let bmp = if toggle_on {
-            icons::CHECKBOX_ON
+    if is_toggle || (sw == 0 && has_chevron) {
+        let (rx, ry, bmp) = if is_toggle {
+            let b = if toggle_on {
+                icons::CHECKBOX_ON
+            } else {
+                icons::CHECKBOX_OFF
+            };
+            (right_edge - 10, s.y + icon_dy, b)
         } else {
-            icons::CHECKBOX_OFF
+            (
+                right_edge - 10 + (s.chevron_dx as i16),
+                s.y + icon_dy + i16::from(comfortable),
+                icons::ARROW_RIGHT,
+            )
         };
-        icons::draw_icon_8(canvas, right_edge - 10, s.y + icon_dy, bmp, tc);
+        icons::draw_icon_8(canvas, rx, ry, bmp, tc);
     } else if sw > 0 {
         draw_row_right_value(canvas, s, right_edge, text_dy, sw, tc);
-    } else if has_chevron {
-        icons::draw_icon_8(
-            canvas,
-            right_edge - 10 + (s.chevron_dx as i16),
-            s.y + icon_dy + i16::from(comfortable),
-            icons::ARROW_RIGHT,
-            tc,
-        );
     }
 
     overflow
@@ -293,14 +313,12 @@ pub fn draw_detail_row(
     if y <= -22 || y >= 64 {
         return;
     }
-    let tc = if selected {
-        canvas.fill_rect_i(2, y, 121, 21, Color::Fill);
+    let bg = if selected { Color::Fill } else { Color::Clear };
+    let tc = if selected { Color::Clear } else { Color::Fill };
+    canvas.fill_rect_i(2, y, 121, 21, bg);
+    if selected {
         canvas.clear_corners_i(2, y, 121, 21);
-        Color::Clear
-    } else {
-        canvas.fill_rect_i(2, y, 121, 21, Color::Clear);
-        Color::Fill
-    };
+    }
 
     let mut tx: i16 = 5;
     if !badge.is_empty() {
@@ -310,16 +328,8 @@ pub fn draw_detail_row(
     let rw = text::str_width(right_metric, &TOMTHUMB);
     let title_max_x = (120 - rw - 4).max(tx + 12);
     text::draw_str_ellipsis(canvas, tx, y + 9, title, &MUMATRIX, tc, title_max_x);
-    if !right_metric.is_empty() {
-        text::draw_str_align(
-            canvas,
-            120,
-            y + 8,
-            right_metric,
-            &TOMTHUMB,
-            tc,
-            text::Align::Right,
-        );
+    if rw > 0 {
+        text::draw_str(canvas, 120 - rw, y + 8, right_metric, &TOMTHUMB, tc);
     }
     if !subtitle.is_empty() {
         text::draw_str_ellipsis(canvas, 5, y + 18, subtitle, &TOMTHUMB, tc, 120);

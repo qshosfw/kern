@@ -64,18 +64,21 @@ pub static mut SWAP_SLOTS: [SwapSlot; MAX_SWAP_SLOTS] =
 
 pub use kernel::runtime::{packbits_compress, packbits_decompress};
 
-#[inline(always)]
-fn hex_nibble(n: u8) -> u8 {
-    if n < 10 { b'0' + n } else { b'a' + (n - 10) }
-}
-
 #[inline(never)]
 fn format_swap_path(app_id: usize, buf: &mut [u8; 17]) -> &str {
-    *buf = *b"/sys/swap/a00.swp";
-    let id = app_id as u8;
-    buf[11] = hex_nibble(id >> 4);
-    buf[12] = hex_nibble(id & 0x0F);
-    unsafe { core::str::from_utf8_unchecked(buf) }
+    let p = buf.as_mut_ptr();
+    unsafe {
+        core::ptr::copy_nonoverlapping(b"/sys/swap/a00.swp".as_ptr(), p, 17);
+        for i in 0..2usize {
+            let nib = ((app_id >> ((1 - i) << 2)) & 0x0F) as u8;
+            *p.add(11 + i) = if nib < 10 {
+                b'0' + nib
+            } else {
+                b'a' + nib - 10
+            };
+        }
+        core::str::from_utf8_unchecked(buf)
+    }
 }
 
 #[inline(never)]
@@ -86,7 +89,7 @@ fn compress_with_header(
     dst_payload: &mut [u8],
 ) -> Result<u16, ()> {
     let comp_len = packbits_compress(src_state, dst_payload)?;
-    let crc = crypto::crc::CrcEngine::crc16_ccitt(&dst_payload[..comp_len]);
+    let crc = crypto::crc::CrcEngine::crc16_ccitt(unsafe { dst_payload.get_unchecked(..comp_len) });
     *dst_hdr = KrxSwapHeader::new(
         app_id as u16,
         src_state.len() as u16,
@@ -107,7 +110,7 @@ fn verify_and_decompress(
     if !hdr.is_valid() || comp_len > comp.len() {
         return Err(());
     }
-    let slice = &comp[..comp_len];
+    let slice = unsafe { comp.get_unchecked(..comp_len) };
     if crypto::crc::CrcEngine::crc16_ccitt(slice) != hdr.crc16 {
         return Err(());
     }
@@ -155,12 +158,7 @@ impl AppSwapManager {
         storage: Option<&mut crate::services::SystemStorage>,
         policy: SwapPolicy,
     ) -> Result<u16, ()> {
-        let slot_opt = if policy != SwapPolicy::FlashOnly {
-            find_slot_mut(app_id, true)
-        } else {
-            None
-        };
-        if let Some(slot) = slot_opt {
+        if let Some(slot) = find_slot_mut(app_id, true) {
             if let Ok(n) =
                 compress_with_header(app_id, src_state, &mut slot.header, &mut slot.payload)
             {
@@ -175,13 +173,20 @@ impl AppSwapManager {
         }
         let vfs = storage.ok_or(())?;
         let stage = crate::data::arena::try_staging_buf().ok_or(())?;
-        let (hdr_bytes, pay_bytes) = stage.split_at_mut(KrxSwapHeader::SIZE);
-        let hdr = unsafe { &mut *(hdr_bytes.as_mut_ptr() as *mut KrxSwapHeader) };
+        let hdr = unsafe { &mut *(stage.as_mut_ptr() as *mut KrxSwapHeader) };
+        let pay_bytes = unsafe {
+            core::slice::from_raw_parts_mut(
+                stage.as_mut_ptr().add(KrxSwapHeader::SIZE),
+                stage.len() - KrxSwapHeader::SIZE,
+            )
+        };
         let comp_len = compress_with_header(app_id, src_state, hdr, pay_bytes)?;
         let total = KrxSwapHeader::SIZE + comp_len as usize;
         let mut pbuf = [0u8; 17];
-        vfs.write_file(format_swap_path(app_id, &mut pbuf), &stage[..total])
-            .map_err(|_| ())?;
+        vfs.write_file(format_swap_path(app_id, &mut pbuf), unsafe {
+            stage.get_unchecked(..total)
+        })
+        .map_err(|_| ())?;
         Ok(comp_len)
     }
 
@@ -212,7 +217,11 @@ impl AppSwapManager {
             return Err(());
         }
         let hdr = unsafe { &*(stage.as_ptr() as *const KrxSwapHeader) };
-        let decomp_len = verify_and_decompress(hdr, &stage[KrxSwapHeader::SIZE..n], dst_state)?;
+        let decomp_len = verify_and_decompress(
+            hdr,
+            unsafe { stage.get_unchecked(KrxSwapHeader::SIZE..n) },
+            dst_state,
+        )?;
         let _ = vfs.remove(path);
         Ok(decomp_len)
     }

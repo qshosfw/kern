@@ -40,11 +40,11 @@ struct HoldSpec {
 
 utils::static_bytes!(
     static HOLD_STRINGS = b"\
-Deep Sleep\0Hold EXIT for sleep\0\
-Close App\0Hold EXIT to close\0\
-Keypad Locked\0Hold to unlock\0\
-Keypad Lock\0Hold to lock\0\
-Keypad\0Keypad Unlocked\0";
+Deep Sleep\0Hold EXIT\0\
+Close App\0Hold EXIT\0\
+Locked\0Hold to unlock\0\
+Lock\0Hold to lock\0\
+Keypad\0Unlocked\0";
 );
 
 static HOLD_SPECS: [HoldSpec; 4] = [
@@ -166,6 +166,7 @@ impl KeypadLockManager {
         }
     }
 
+    #[inline(never)]
     fn show_toast(&mut self, toast: LockToast) {
         self.toast = toast;
         self.toast_remaining_ms = TOAST_DURATION_MS;
@@ -190,11 +191,16 @@ impl KeypadLockManager {
     }
 
     #[inline(never)]
-    pub fn reset_hold_tracking(&mut self) {
+    fn clear_hold_flags(&mut self) {
         self.held_code = None;
         self.delay_elapsed_ms = 0;
         self.held_confirmed = false;
         self.is_long_press_triggered = false;
+    }
+
+    #[inline(never)]
+    pub fn reset_hold_tracking(&mut self) {
+        self.clear_hold_flags();
         self.hold_ui_open = false;
         self.hold.reset();
         self.hold.required_ms = 0;
@@ -207,10 +213,7 @@ impl KeypadLockManager {
     /// Stop advancing hold and let the progress bar springily rewind to 0 before closing.
     #[inline(never)]
     fn release_active_hold(&mut self) {
-        self.held_code = None;
-        self.delay_elapsed_ms = 0;
-        self.held_confirmed = false;
-        self.is_long_press_triggered = false;
+        self.clear_hold_flags();
         self.hold.active = false;
     }
 
@@ -238,10 +241,8 @@ impl KeypadLockManager {
 
     #[inline(never)]
     fn begin_hold(&mut self, code: KeyCode, start_ms: u16, kind: HoldKind) {
+        self.clear_hold_flags();
         self.held_code = Some(code);
-        self.delay_elapsed_ms = 0;
-        self.held_confirmed = false;
-        self.is_long_press_triggered = false;
         self.hold_ui_open = false;
         self.hold_kind = kind;
         self.hold.reset();
@@ -327,17 +328,17 @@ impl KeypadLockManager {
             if self.hold_ui_open {
                 if self.hold.advance(dt) && !self.is_long_press_triggered {
                     self.is_long_press_triggered = true;
-                    if matches!(self.hold_kind, HoldKind::Sleep | HoldKind::CloseApp) {
+                    let is_exit = matches!(self.hold_kind, HoldKind::Sleep | HoldKind::CloseApp);
+                    if is_exit {
                         if self.hold_kind == HoldKind::Sleep {
                             self.sleep_requested = true;
                         } else {
                             self.force_close_requested = true;
                         }
-                        self.clear_hold_overlay(true);
                     } else {
                         self.toggle_lock();
-                        self.clear_hold_overlay(false);
                     }
+                    self.clear_hold_overlay(is_exit);
                     return true;
                 }
 
@@ -526,17 +527,8 @@ impl KeypadLockManager {
 /// Render the bottom hint line: "HOLD [#] TO UNLOCK" with authentic inverted badge centered at center_x
 fn draw_unlock_hint(canvas: &mut Canvas, center_x: i16, base_y: i16) {
     let start_x = center_x - 32;
-
     text::draw_str(canvas, start_x, base_y + 5, "HOLD", &TOMTHUMB, Color::Fill);
-    gfx::widgets::dialog::draw_key_badge(canvas, start_x + 18, base_y, "#", "");
-    text::draw_str(
-        canvas,
-        start_x + 30,
-        base_y + 5,
-        "TO UNLOCK",
-        &TOMTHUMB,
-        Color::Fill,
-    );
+    gfx::widgets::dialog::draw_key_badge(canvas, start_x + 18, base_y, "#", "TO UNLOCK");
 }
 
 #[cfg(test)]

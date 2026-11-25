@@ -954,34 +954,39 @@ impl KrxPreamble {
         let out = unsafe { &mut *ptr };
         out.exec_type = KrxExecType::App;
 
-        let mut rest = &hdr[Self::SIZE..];
+        let mut rest = unsafe { hdr.get_unchecked(Self::SIZE..) };
         while rest.len() >= SectionHeader::SIZE {
-            let sec_id = u16::from_le_bytes([rest[0], rest[1]]);
-            let sec_len = u16::from_le_bytes([rest[2], rest[3]]) as usize;
+            let rp = rest.as_ptr();
+            let sec_id = unsafe { u16::from_le_bytes([*rp, *rp.add(1)]) };
+            let sec_len = unsafe { u16::from_le_bytes([*rp.add(2), *rp.add(3)]) } as usize;
             if sec_len < SectionHeader::SIZE || sec_len > rest.len() {
                 break;
             }
-            let body = &rest[SectionHeader::SIZE..sec_len];
+            let body = unsafe { rest.get_unchecked(SectionHeader::SIZE..sec_len) };
+            let bp = body.as_ptr();
             match sec_id {
-                SECTION_IDENTITY if body.len() >= 25 => {
-                    out.title = Self::read_hdr_str(hdr, u16::from_le_bytes([body[0], body[1]]));
-                    out.version = [body[2], body[3], body[4]];
-                    out.abi = u16::from_le_bytes([body[5], body[6]]);
-                    out.icon_id = u16::from_le_bytes([body[23], body[24]]);
-                }
-                SECTION_TYPE_LIFECYCLE if body.len() >= 12 => {
-                    if let Some(et) = KrxExecType::from_u8(body[0]) {
+                SECTION_IDENTITY if body.len() >= 25 => unsafe {
+                    out.title = Self::read_hdr_str(hdr, u16::from_le_bytes([*bp, *bp.add(1)]));
+                    out.version = [*bp.add(2), *bp.add(3), *bp.add(4)];
+                    out.abi = u16::from_le_bytes([*bp.add(5), *bp.add(6)]);
+                    out.icon_id = u16::from_le_bytes([*bp.add(23), *bp.add(24)]);
+                },
+                SECTION_TYPE_LIFECYCLE if body.len() >= 12 => unsafe {
+                    if let Some(et) = KrxExecType::from_u8(*bp) {
                         out.exec_type = et;
                     }
-                    out.type_flags = body[1];
+                    out.type_flags = *bp.add(1);
                     out.caps = ::abi::CapabilitySet::from_raw(u32::from_le_bytes([
-                        body[8], body[9], body[10], body[11],
+                        *bp.add(8),
+                        *bp.add(9),
+                        *bp.add(10),
+                        *bp.add(11),
                     ]));
-                }
+                },
                 SECTION_EXECUTION if body.len() >= SectionExecution::SIZE => {
                     unsafe {
                         core::ptr::copy_nonoverlapping(
-                            body.as_ptr(),
+                            bp,
                             (&raw mut out.exec_raw).cast::<u8>(),
                             SectionExecution::SIZE,
                         );
@@ -999,7 +1004,7 @@ impl KrxPreamble {
             if step >= rest.len() {
                 break;
             }
-            rest = &rest[step..];
+            rest = unsafe { rest.get_unchecked(step..) };
         }
 
         Ok(out)
@@ -1022,33 +1027,37 @@ impl KrxPreamble {
         let hdr = buf.get(..h_len)?;
         let mut rest = hdr.get(Self::SIZE..)?;
         while rest.len() >= SectionHeader::SIZE {
-            let sec_id = u16::from_le_bytes([rest[0], rest[1]]);
-            let sec_len = u16::from_le_bytes([rest[2], rest[3]]) as usize;
+            let rp = rest.as_ptr();
+            let sec_id = unsafe { u16::from_le_bytes([*rp, *rp.add(1)]) };
+            let sec_len = unsafe { u16::from_le_bytes([*rp.add(2), *rp.add(3)]) } as usize;
             if sec_len < SectionHeader::SIZE || sec_len > rest.len() {
                 break;
             }
             if sec_id == SECTION_ASSETS {
-                let mut assets = &rest[SectionHeader::SIZE..sec_len];
+                let mut assets = unsafe { rest.get_unchecked(SectionHeader::SIZE..sec_len) };
                 while assets.len() >= 4 {
-                    let blen = assets[3] as usize;
+                    let ap = assets.as_ptr();
+                    let blen = unsafe { *ap.add(3) } as usize;
                     if 4 + blen > assets.len() {
                         break;
                     }
-                    if assets[0] == want_kind {
-                        return Some((assets[1], assets[2], &assets[4..4 + blen]));
+                    if unsafe { *ap } == want_kind {
+                        return Some(unsafe {
+                            (*ap.add(1), *ap.add(2), assets.get_unchecked(4..4 + blen))
+                        });
                     }
                     let step = (4 + blen + 3) & !3;
                     if step >= assets.len() {
                         break;
                     }
-                    assets = &assets[step..];
+                    assets = unsafe { assets.get_unchecked(step..) };
                 }
             }
             let step = (sec_len + 3) & !3;
             if step >= rest.len() {
                 break;
             }
-            rest = &rest[step..];
+            rest = unsafe { rest.get_unchecked(step..) };
         }
         None
     }
