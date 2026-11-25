@@ -173,13 +173,18 @@ pub fn set_ctc_usb_sof(enable: bool) {
         let apb1 = rcc_b.byte_add(0x3C);
         let ctc = rcc::CTC_BASE as *mut u32;
         if enable {
-            apb1.write_volatile(apb1.read_volatile() | rcc::APB1ENR_CTC);
+            let en = apb1.read_volatile();
+            let ctl0_mask = rcc::CTC_CTL0_AUTOTRIM | rcc::CTC_CTL0_CNTEN;
+            if (en & rcc::APB1ENR_CTC) != 0 && (ctc.read_volatile() & ctl0_mask) == ctl0_mask {
+                return;
+            }
+            apb1.write_volatile(en | rcc::APB1ENR_CTC);
             let rstr1 = rcc_b.byte_add(0x2C);
             let r = rstr1.read_volatile();
             rstr1.write_volatile(r | rcc::APBRSTR1_CTCRST);
             rstr1.write_volatile(r & !rcc::APBRSTR1_CTCRST);
             ctc.byte_add(0x04).write_volatile(rcc::CTC_CTL1_USB_SOF_48M);
-            ctc.write_volatile(ctc.read_volatile() | rcc::CTC_CTL0_AUTOTRIM | rcc::CTC_CTL0_CNTEN);
+            ctc.write_volatile(ctc.read_volatile() | ctl0_mask);
         } else if (apb1.read_volatile() & rcc::APB1ENR_CTC) != 0 {
             ctc.write_volatile(
                 ctc.read_volatile() & !(rcc::CTC_CTL0_AUTOTRIM | rcc::CTC_CTL0_CNTEN),

@@ -598,6 +598,7 @@ impl MasterConfig {
     #[inline(never)]
     pub fn reload_from_storage(&mut self, storage: &mut SystemStorage) {
         let mut tmp = [0u8; 80];
+        let mut changed = 0u8;
         for (i, meta) in CONFIG_METAS.iter().enumerate() {
             let n = (meta.size as usize).min(tmp.len());
             let slice = unsafe { tmp.get_unchecked_mut(..n) };
@@ -605,18 +606,18 @@ impl MasterConfig {
                 .read_file(config_path(i), slice)
                 .is_ok_and(|len| len >= n && is_raw_valid(slice, meta.version))
             {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        slice.as_ptr(),
-                        self.config_bytes_mut(i).as_mut_ptr(),
-                        n,
-                    );
+                let dst = self.config_bytes_mut(i);
+                if dst != slice {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(slice.as_ptr(), dst.as_mut_ptr(), n);
+                    }
+                    changed |= 1u8 << i;
                 }
             }
         }
         let _ = self.sanitize();
         self.seal_all();
-        self.hw_dirty |= 0x1F;
+        self.hw_dirty |= changed & 0x1F;
     }
 
     pub fn is_dirty(&self) -> bool {
