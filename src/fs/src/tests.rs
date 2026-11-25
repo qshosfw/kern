@@ -572,3 +572,44 @@ fn test_file_extents_indirect_physical_walk() {
         assert_eq!(page_bytes, &payload[off..off + 256]);
     }
 }
+
+#[test]
+fn test_read_ino_at_and_page_cache_coherence() {
+    let mut sflash = SmallFlash::new();
+    let mut fs = KernFS::new(&mut sflash);
+    fs.format(None).unwrap();
+
+    // Create a >3 KiB DEPTH_SINGLE_INDIRECT file (like .lng / .fnt packs)
+    let mut data = [0u8; 4096];
+    for (i, b) in data.iter_mut().enumerate() {
+        *b = ((i * 13) ^ (i >> 5)) as u8;
+    }
+    fs.write_file("/user/ja.lng", &data).unwrap();
+    fs.lookup_inode("/user/ja.lng").unwrap();
+    let ino = fs.cur_ino();
+    assert!(ino >= 2);
+
+    // Repeated 8-byte binary-search-style probes within the same 256B page hit the cache
+    let mut probe = [0u8; 8];
+    for off in [16usize, 64, 128, 240, 1024, 1040, 1048, 3840, 4088] {
+        assert_eq!(fs.read_ino_at(ino, off, &mut probe).unwrap(), 8);
+        assert_eq!(&probe, &data[off..off + 8]);
+    }
+
+    // Partial write_at updates page and invalidates read cache cleanly
+    let patch = *b"PATCHED!";
+    fs.write_at("/user/ja.lng", 1040, &patch).unwrap();
+    assert_eq!(fs.read_ino_at(ino, 1040, &mut probe).unwrap(), 8);
+    assert_eq!(&probe, &patch);
+
+    // Full overwrite preserves inode and reflects new bytes immediately
+    let mut data2 = [0xAAu8; 4096];
+    data2[1040..1048].copy_from_slice(b"UPDATED!");
+    fs.write_file("/user/ja.lng", &data2).unwrap();
+    assert_eq!(fs.read_ino_at(ino, 1040, &mut probe).unwrap(), 8);
+    assert_eq!(&probe, b"UPDATED!");
+
+    // Deleting file invalidates inode cleanly
+    fs.remove("/user/ja.lng").unwrap();
+    assert_eq!(fs.read_ino_at(ino, 0, &mut probe), Err(FsError::NotFound));
+}

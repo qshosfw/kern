@@ -266,11 +266,29 @@ impl<'a, D: BlockDevice> FileSystemDriver<'a, D> {
         offset: usize,
         buf: &mut [u8],
     ) -> Result<usize, StorageError> {
+        let _ = self.lookup_ino(path)?;
+        self.fs
+            .read_cur_inode_at(offset, buf)
+            .map_err(Self::map_error)
+    }
+
+    #[inline(never)]
+    pub fn lookup_ino(&mut self, path: &str) -> Result<u16, StorageError> {
         if (self.fs.get_permission(path).map_err(Self::map_error)? & ATTR_ENCRYPTED) != 0 {
             return Err(StorageError::EncryptedNoKey);
         }
+        Ok(self.fs.cur_ino())
+    }
+
+    #[inline(always)]
+    pub fn read_ino_at(
+        &mut self,
+        ino: u16,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, StorageError> {
         self.fs
-            .read_cur_inode_at(offset, buf)
+            .read_ino_at(ino, offset, buf)
             .map_err(Self::map_error)
     }
 

@@ -47,6 +47,10 @@ pub struct KernFS<'a, D: BlockDevice> {
     pub(crate) cur_alloc_block: u16,
     pub(crate) hot_ino: u16,
     pub(crate) active_files: u16,
+    pub(crate) cur_page: u16,
+    pub(crate) data_ino: u16,
+    pub(crate) data_lpage: u16,
+    pub(crate) data_phys: u16,
     pub dev: &'a mut D,
     pub(crate) format_epoch: u32,
     pub(crate) super_seq: u32,
@@ -88,10 +92,18 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         }
     }
 
+    #[inline(always)]
+    pub(crate) fn invalidate_cache(&mut self) {
+        self.cur_page = 0;
+        self.data_ino = 0;
+    }
+
     #[inline(never)]
     pub(crate) fn reset_tables(&mut self) {
         self.hot_hash = 0;
         self.hot_ino = 0;
+        self.cur_inode.ino = 0;
+        self.invalidate_cache();
         self.active_files = 0;
         self.meta_pages.fill(0);
         self.block_table.fill(BLOCK_TBL_ERASED);
@@ -150,12 +162,17 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     #[inline(never)]
     pub(crate) fn load_page(&mut self, phys_page: u16) -> Result<(), FsError> {
+        if phys_page != 0 && self.cur_page == phys_page {
+            return Ok(());
+        }
+        self.cur_page = 0;
         self.read_tag(phys_page)?;
         self.dev
             .read(page_flash_offset(phys_page), &mut self.page_buf)?;
         if CrcEngine::crc32(&self.page_buf) != self.cur_tag.crc32 {
             return Err(FsError::CorruptedData);
         }
+        self.cur_page = phys_page;
         Ok(())
     }
 
@@ -164,6 +181,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         if phys != 0 {
             self.load_page(phys)
         } else {
+            self.cur_page = 0;
             self.page_buf.fill(0);
             Ok(())
         }
@@ -177,6 +195,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         page_idx: u16,
         kind: u8,
     ) -> Result<u16, FsError> {
+        self.invalidate_cache();
         let (block, slot) = split_phys_page(phys);
         self.global_gen = self.global_gen.wrapping_add(1);
         self.cur_tag = PageTag {
@@ -352,6 +371,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let slot = ((target_ino - 2) & 3) as usize;
         let old_mp = self.meta_pages[g];
         self.load_page_or_zero(old_mp)?;
+        self.invalidate_cache();
         inode
             .unwrap_or(&self.cur_inode)
             .write_slot(&mut self.page_buf, slot);
@@ -453,12 +473,13 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     #[inline(never)]
     pub(crate) fn lookup_inode(&mut self, path: &str) -> Result<(), FsError> {
         let hash = CrcEngine::crc32(path.as_bytes());
-        if self.mounted
-            && self.hot_ino >= 2
-            && self.hot_hash == hash
-            && self.read_inode(self.hot_ino, None).unwrap_or(false)
-        {
-            return Ok(());
+        if self.mounted && self.hot_ino >= 2 && self.hot_hash == hash {
+            if self.cur_inode.ino == self.hot_ino {
+                return Ok(());
+            }
+            if self.read_inode(self.hot_ino, None).unwrap_or(false) {
+                return Ok(());
+            }
         }
         self.resolve_path(path, false)?;
         self.hot_hash = hash;
@@ -480,6 +501,11 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     #[inline(always)]
     pub fn file_size(&mut self, path: &str) -> Result<usize, FsError> {
         self.stat_info(path).map(|(sz, _)| sz)
+    }
+
+    #[inline(always)]
+    pub fn cur_ino(&self) -> u16 {
+        self.cur_inode.ino
     }
 
     #[inline(never)]
@@ -565,6 +591,19 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
     }
 
     #[inline(never)]
+    pub fn read_ino_at(
+        &mut self,
+        ino: u16,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> Result<usize, FsError> {
+        if !self.mounted || (self.cur_inode.ino != ino && !self.read_inode(ino, None)?) {
+            return Err(FsError::NotFound);
+        }
+        self.read_cur_inode_at(offset, buf)
+    }
+
+    #[inline(never)]
     pub fn read_cur_inode_at(&mut self, offset: usize, buf: &mut [u8]) -> Result<usize, FsError> {
         if self.cur_inode.is_dir() {
             return Err(FsError::InvalidPath);
@@ -586,13 +625,22 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             }
             return Ok(n);
         }
+        let ino = self.cur_inode.ino;
         let mut copied = 0usize;
         while copied < to_read {
             let pos = offset + copied;
             let lpage = (pos >> 8) as u16;
             let in_page = pos & 0xFF;
             let take = (to_read - copied).min(PAGE_SIZE - in_page);
-            let phys = self.resolve_data_page(lpage)?;
+            let phys = if self.data_ino == ino && self.data_lpage == lpage {
+                self.data_phys
+            } else {
+                let p = self.resolve_data_page(lpage)?;
+                self.data_ino = ino;
+                self.data_lpage = lpage;
+                self.data_phys = p;
+                p
+            };
             self.load_page_or_zero(phys)?;
             unsafe {
                 core::ptr::copy_nonoverlapping(
@@ -621,6 +669,8 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
         let mut old_depth = 0u8;
         let mut old_ptrs = core::mem::MaybeUninit::<[u8; MAX_INLINE_LEN]>::uninit();
+        self.hot_ino = 0;
+        self.invalidate_cache();
         if has_existing {
             if !self.cur_inode.is_inline() {
                 old_depth = self.cur_inode.depth;

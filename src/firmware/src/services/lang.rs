@@ -28,41 +28,43 @@ const _: () = assert!(core::mem::size_of::<StrCacheSlot>() == 32);
 
 struct LangStrCache<const N: usize> {
     slots: [StrCacheSlot; N],
+    next_evict: u8,
 }
 
 impl<const N: usize> LangStrCache<N> {
     const fn new() -> Self {
-        assert!(N.is_power_of_two());
+        assert!(N.is_power_of_two() && N <= 256);
         Self {
             slots: [StrCacheSlot {
                 key_hash: 0,
                 len: 0,
                 bytes: [0; 27],
             }; N],
-        }
-    }
-
-    #[inline(always)]
-    fn clear(&mut self) {
-        for s in &mut self.slots {
-            s.len = 0;
+            next_evict: 0,
         }
     }
 
     #[inline(never)]
+    fn clear(&mut self) {
+        for s in &mut self.slots {
+            s.len = 0;
+        }
+        self.next_evict = 0;
+    }
+
+    #[inline(never)]
     fn lookup<'a>(&self, h: u32, out: &'a mut [u8]) -> Option<Option<&'a str>> {
-        let s = unsafe { self.slots.get_unchecked((h as usize) & (N - 1)) };
-        if s.len != 0 && s.key_hash == h {
-            if s.len == 0xFF {
-                return Some(None);
-            }
-            let n = s.len as usize;
-            if n <= out.len() {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(s.bytes.as_ptr(), out.as_mut_ptr(), n);
-                    return Some(Some(core::str::from_utf8_unchecked(
-                        out.get_unchecked(..n),
-                    )));
+        for s in &self.slots {
+            if s.len != 0 && s.key_hash == h {
+                if s.len == 0xFF {
+                    return Some(None);
+                }
+                let n = s.len as usize;
+                if n <= out.len() {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(s.bytes.as_ptr(), out.as_mut_ptr(), n);
+                        return Some(Some(core::str::from_utf8_unchecked(out.get_unchecked(..n))));
+                    }
                 }
             }
         }
@@ -71,7 +73,9 @@ impl<const N: usize> LangStrCache<N> {
 
     #[inline(never)]
     fn insert(&mut self, h: u32, val: Option<&str>) {
-        let slot = unsafe { self.slots.get_unchecked_mut((h as usize) & (N - 1)) };
+        let idx = (self.next_evict as usize) & (N - 1);
+        self.next_evict = self.next_evict.wrapping_add(1) & ((N - 1) as u8);
+        let slot = unsafe { self.slots.get_unchecked_mut(idx) };
         slot.key_hash = h;
         match val {
             Some(s) if !s.is_empty() && s.len() <= slot.bytes.len() => {
@@ -91,77 +95,96 @@ impl<const N: usize> LangStrCache<N> {
 }
 
 #[inline(never)]
-fn open_hdr_16(storage: &mut crate::services::SystemStorage, path: &str, out: &mut [u8; 16]) -> u16 {
-    if path.is_empty() {
-        return 0;
+fn open_hdr_16(
+    storage: &mut crate::services::SystemStorage,
+    path: &str,
+    out: &mut [u8; 16],
+) -> u16 {
+    if !path.is_empty()
+        && let Ok(ino) = storage.lookup_ino(path)
+        && ino >= 2
+        && storage.read_ino_at(ino, 0, out).unwrap_or(0) == 16
+    {
+        return ino;
     }
-    let Ok(ino) = storage.lookup_ino(path) else {
-        return 0;
-    };
-    if storage.read_ino_at(ino, 0, out).unwrap_or(0) == 16 {
-        ino
-    } else {
-        0
-    }
+    0
 }
 
 #[inline(never)]
 fn load_lang_hdr(
     storage: &mut crate::services::SystemStorage,
     path: &str,
-) -> (Option<LangPackHeader>, u16) {
+    out_hdr: &mut Option<LangPackHeader>,
+) -> u16 {
+    *out_hdr = None;
     let mut b = [0u8; 16];
     let ino = open_hdr_16(storage, path, &mut b);
-    if ino >= 2 {
+    if ino != 0 {
         let h = LangPackHeader::from_bytes(&b);
         if h.is_valid() {
-            return (Some(h), ino);
+            *out_hdr = Some(h);
+            return ino;
         }
     }
-    (None, 0)
+    0
 }
 
 #[inline(never)]
-fn load_font_hdr(
-    storage: &mut crate::services::SystemStorage,
-    path: &str,
-) -> (Option<FontPackHeader>, u16) {
-    let mut b = [0u8; 16];
-    let ino = open_hdr_16(storage, path, &mut b);
-    if ino >= 2 {
-        let h = FontPackHeader::from_bytes(&b);
-        if h.is_valid() {
-            return (Some(h), ino);
-        }
-    }
-    (None, 0)
-}
-
-#[inline(never)]
-fn join_bytes(out: &mut [u8], parts: &[&[u8]]) -> usize {
-    let mut p = 0usize;
-    for &part in parts {
-        if p + part.len() > out.len() {
-            return 0;
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(part.as_ptr(), out.as_mut_ptr().add(p), part.len());
-        }
-        p += part.len();
-    }
-    p
-}
-
-/// Build `/user/fonts/<cc>.fnt` for data-driven companion script packs (e.g. `ko.fnt`, `he.fnt`).
-fn build_lang_font_path(lang_code: &[u8; 4], out: &mut [u8; 24]) -> usize {
-    let code_len = gfx::text::find_byte(lang_code, 0).unwrap_or(4);
-    if code_len == 0 {
+fn build_lang_path(is_app: bool, stem: &[u8], code: &[u8], out: &mut [u8]) -> usize {
+    let clen = gfx::text::find_byte(code, 0).unwrap_or(code.len());
+    if clen == 0 {
         return 0;
     }
-    join_bytes(out, &[b"/user/fonts/", &lang_code[..code_len], b".fnt"])
+    let (prefix, ext): (&[u8], &[u8]) = if is_app {
+        (b"/user/lang/", b".lng")
+    } else {
+        (b"/user/fonts/", b".fnt")
+    };
+    let sep = usize::from(!stem.is_empty());
+    let total = prefix.len() + stem.len() + sep + clen + ext.len();
+    if total > out.len() {
+        return 0;
+    }
+    let dst = out.as_mut_ptr();
+    let mut p = prefix.len();
+    unsafe {
+        core::ptr::copy_nonoverlapping(prefix.as_ptr(), dst, p);
+        if sep != 0 {
+            core::ptr::copy_nonoverlapping(stem.as_ptr(), dst.add(p), stem.len());
+            p += stem.len();
+            *dst.add(p) = b'_';
+            p += 1;
+        }
+        core::ptr::copy_nonoverlapping(code.as_ptr(), dst.add(p), clen);
+        core::ptr::copy_nonoverlapping(ext.as_ptr(), dst.add(p + clen), ext.len());
+    }
+    total
 }
 
-const TINY5_FONT_PATH: &str = "/user/fonts/tiny5.fnt";
+#[inline(never)]
+fn load_font_stem(
+    storage: &mut crate::services::SystemStorage,
+    stem: &[u8],
+    out_hdr: &mut Option<FontPackHeader>,
+) -> u16 {
+    *out_hdr = None;
+    let mut fbuf = [0u8; 24];
+    let n = build_lang_path(false, b"", stem, &mut fbuf);
+    if n > 0
+        && let Some(fp) = utils::format::ascii_str(&fbuf[..n])
+    {
+        let mut b = [0u8; 16];
+        let ino = open_hdr_16(storage, fp, &mut b);
+        if ino != 0 {
+            let h = FontPackHeader::from_bytes(&b);
+            if h.is_valid() {
+                *out_hdr = Some(h);
+                return ino;
+            }
+        }
+    }
+    0
+}
 
 struct ActiveLang {
     os_hdr: Option<LangPackHeader>,
@@ -172,7 +195,7 @@ struct ActiveLang {
     app_ino: u16,
     base_font_ino: u16,
     extra_font_ino: u16,
-    glyph_cache: FontGlyphCache<16>,
+    glyph_cache: FontGlyphCache<24>,
     str_cache: LangStrCache<16>,
     app_stem: utils::format::InlineStr<12>,
 }
@@ -217,30 +240,10 @@ fn extract_stem(path: &str) -> &str {
 
 /// Build `/user/lang/<stem>_<cc>.lng` into `out`, returning the slice length (0 if too long).
 pub fn build_app_lang_path(stem: &str, lang_code: &[u8; 4], out: &mut [u8; 32]) -> usize {
-    let code_len = gfx::text::find_byte(lang_code, 0).unwrap_or(4);
-    if stem.is_empty() || code_len == 0 {
+    if stem.is_empty() {
         return 0;
     }
-    join_bytes(
-        out,
-        &[b"/user/lang/", stem.as_bytes(), b"_", &lang_code[..code_len], b".lng"],
-    )
-}
-
-#[inline(never)]
-fn try_load_extra_font(
-    storage: &mut crate::services::SystemStorage,
-    st: &mut ActiveLang,
-    path: &str,
-) -> bool {
-    let (hdr, ino) = load_font_hdr(storage, path);
-    if hdr.is_some() {
-        st.extra_font_hdr = hdr;
-        st.extra_font_ino = ino;
-        true
-    } else {
-        false
-    }
+    build_lang_path(true, stem.as_bytes(), lang_code, out)
 }
 
 /// Reload the active OS language pack immediately (zero reboot), mount companion external `.fnt`
@@ -249,42 +252,33 @@ fn try_load_extra_font(
 pub fn reload_os(storage: &mut crate::services::SystemStorage, sys: &crate::config::SystemConfig) {
     let st = state_mut();
     st.glyph_cache.clear();
-    st.str_cache.clear();
-    st.base_font = None;
-    st.base_font_ino = 0;
-    st.extra_font_hdr = None;
-    st.extra_font_ino = 0;
-    let (os_hdr, os_ino) = if sys.lang_active != 0 {
-        load_lang_hdr(storage, sys.lang_path_str())
+    st.os_ino = if sys.lang_active != 0 {
+        load_lang_hdr(storage, sys.lang_path_str(), &mut st.os_hdr)
     } else {
-        (None, 0)
+        st.os_hdr = None;
+        0
     };
-    st.os_hdr = os_hdr;
-    st.os_ino = os_ino;
     let Some(os_hdr) = st.os_hdr else {
+        st.str_cache.clear();
         st.app_hdr = None;
         st.app_ino = 0;
+        st.base_font = None;
+        st.extra_font_hdr = None;
         gfx::text::set_ext_font_hooks(None, None);
         gfx::text::set_localize_hook(None);
         return;
     };
-    let (bf, bf_ino) = load_font_hdr(storage, TINY5_FONT_PATH);
-    st.base_font = bf;
-    st.base_font_ino = bf_ino;
-    let mut fbuf = [0u8; 24];
-    let fn_len = build_lang_font_path(&os_hdr.lang_code, &mut fbuf);
-    let loaded = fn_len > 0
-        && utils::format::ascii_str(&fbuf[..fn_len])
-            .is_some_and(|fp| try_load_extra_font(storage, st, fp));
-    if !loaded {
-        let path = if (os_hdr.font_hint & LANG_FONT_CJK_JA) != 0 {
-            "/user/fonts/cjk_ja.fnt"
+    st.base_font_ino = load_font_stem(storage, b"tiny5", &mut st.base_font);
+    st.extra_font_ino = load_font_stem(storage, &os_hdr.lang_code, &mut st.extra_font_hdr);
+    if st.extra_font_hdr.is_none() {
+        let stem: &[u8] = if (os_hdr.font_hint & LANG_FONT_CJK_JA) != 0 {
+            b"cjk_ja"
         } else if (os_hdr.font_hint & LANG_FONT_CJK_ZH) != 0 {
-            "/user/fonts/cjk_zh.fnt"
+            b"cjk_zh"
         } else {
-            ""
+            b""
         };
-        try_load_extra_font(storage, st, path);
+        st.extra_font_ino = load_font_stem(storage, stem, &mut st.extra_font_hdr);
     }
     if st.base_font.is_some() || st.extra_font_hdr.is_some() {
         gfx::text::set_ext_font_hooks(Some(ext_glyph_draw_hook), Some(ext_glyph_width_hook));
@@ -394,9 +388,7 @@ fn reload_bound_app(storage: &mut crate::services::SystemStorage) {
         if n > 0
             && let Some(p) = utils::format::ascii_str(&pbuf[..n])
         {
-            let (hdr, ino) = load_lang_hdr(storage, p);
-            st.app_hdr = hdr;
-            st.app_ino = ino;
+            st.app_ino = load_lang_hdr(storage, p, &mut st.app_hdr);
         }
     }
 }
@@ -409,7 +401,7 @@ pub fn bind_app(storage: &mut crate::services::SystemStorage, app_path: &str) {
 }
 
 /// Clear any active per-app localization binding on KRX app exit.
-#[inline(always)]
+#[inline(never)]
 pub fn unbind_app() {
     let st = state_mut();
     st.app_stem.clear();
@@ -459,30 +451,15 @@ pub fn translate_opt<'a>(
         return hit;
     }
     let mut found = None;
-    if let Some(app_hdr) = st.app_hdr
-        && st.app_ino >= 2
-    {
-        found = lookup_lang_slot(
-            storage,
-            &app_hdr,
-            st.app_ino,
-            primary_hash,
-            fallback_hash,
-            out,
-        );
-    }
-    if found.is_none()
-        && let Some(os_hdr) = st.os_hdr
-        && st.os_ino >= 2
-    {
-        found = lookup_lang_slot(
-            storage,
-            &os_hdr,
-            st.os_ino,
-            primary_hash,
-            fallback_hash,
-            out,
-        );
+    for (hdr_opt, ino) in [(st.app_hdr, st.app_ino), (st.os_hdr, st.os_ino)] {
+        if let Some(hdr) = hdr_opt
+            && ino >= 2
+        {
+            found = lookup_lang_slot(storage, &hdr, ino, primary_hash, fallback_hash, out);
+            if found.is_some() {
+                break;
+            }
+        }
     }
     st.str_cache.insert(primary_hash, found);
     found
@@ -516,24 +493,20 @@ pub fn load_locale_keymap(
         return;
     }
     let mut buf = [0u8; 24];
-    let Some(lbl) = lookup_lang_slot(
-        storage,
-        &hdr,
-        ino,
-        fnv1a_32(LANG_KEY_KM_LABEL.as_bytes()),
-        None,
-        &mut buf,
-    ) else {
-        return;
-    };
-    km.set_label(lbl);
     let mut any_key = false;
-    for i in 0..10 {
-        let key_bytes = lang_km_key_bytes(i as u8);
-        if let Some(seq) =
-            lookup_lang_slot(storage, &hdr, ino, fnv1a_32(&key_bytes), None, &mut buf)
-        {
-            km.set_key(i, seq);
+    for i in 0..11usize {
+        let kb = lang_km_key_bytes(i.saturating_sub(1) as u8);
+        let key: &[u8] = if i == 0 {
+            LANG_KEY_KM_LABEL.as_bytes()
+        } else {
+            &kb
+        };
+        let res = lookup_lang_slot(storage, &hdr, ino, fnv1a_32(key), None, &mut buf);
+        if i == 0 {
+            let Some(lbl) = res else { return };
+            km.set_label(lbl);
+        } else if let Some(seq) = res {
+            km.set_key(i - 1, seq);
             any_key = true;
         }
     }
@@ -558,22 +531,27 @@ mod tests {
     }
 
     #[test]
-    fn direct_mapped_lang_str_cache_hits_misses_and_evicts() {
-        let mut cache = LangStrCache::<8>::new();
+    fn associative_lang_str_cache_avoids_conflicts_and_evicts_ring() {
+        let mut cache = LangStrCache::<4>::new();
         let mut out = [0u8; 32];
         assert!(cache.lookup(0x1001, &mut out).is_none());
 
+        // Same low bits (`0x1001` and `0x2001`) must coexist without conflict eviction
         cache.insert(0x1001, Some("Settings"));
+        cache.insert(0x2001, Some("Radio"));
         cache.insert(0x1002, None);
+        cache.insert(0x1003, Some("Audio"));
         assert_eq!(cache.lookup(0x1001, &mut out), Some(Some("Settings")));
+        assert_eq!(cache.lookup(0x2001, &mut out), Some(Some("Radio")));
         assert_eq!(cache.lookup(0x1002, &mut out), Some(None));
+        assert_eq!(cache.lookup(0x1003, &mut out), Some(Some("Audio")));
 
-        // Same low 3 bits (`1`) replaces slot 1 cleanly in O(1)
-        cache.insert(0x2009, Some("Radio"));
+        // 5th insert evicts oldest ring slot (`0x1001`)
+        cache.insert(0x1004, Some("Display"));
         assert!(cache.lookup(0x1001, &mut out).is_none());
-        assert_eq!(cache.lookup(0x2009, &mut out), Some(Some("Radio")));
+        assert_eq!(cache.lookup(0x1004, &mut out), Some(Some("Display")));
 
         cache.clear();
-        assert!(cache.lookup(0x2009, &mut out).is_none());
+        assert!(cache.lookup(0x1004, &mut out).is_none());
     }
 }

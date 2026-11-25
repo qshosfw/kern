@@ -213,6 +213,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let new_ptr = new_gc as u16;
         self.load_page_or_zero(old_idx_p)?;
         let prev = read_idx_u16(&self.page_buf, slot);
+        self.invalidate_cache();
         write_idx_u16(&mut self.page_buf, slot, new_ptr);
         let written =
             self.program_page_buf(new_p, ino_l2 as u16, (ino_l2 >> 16) as u16, TAG_KIND_INDEX1)?;
@@ -312,6 +313,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             if self.cur_inode.size > 0 {
                 let phys = self.alloc_page(true)?;
                 let ilen = (self.cur_inode.size as usize).min(MAX_INLINE_LEN);
+                self.invalidate_cache();
                 self.page_buf.fill(0);
                 self.page_buf[..ilen].copy_from_slice(&self.cur_inode.inline_data[..ilen]);
                 self.program_page_buf(phys, ino, 0, TAG_KIND_DATA)?;
@@ -341,6 +343,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             let new_p = self.alloc_page(true)?;
             let old_p = self.resolve_data_page(lpage)?;
             self.load_page_or_zero(old_p)?;
+            self.invalidate_cache();
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     data.as_ptr().add(pos),
@@ -401,6 +404,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
             }
             if old_d == DEPTH_DIRECT {
                 let l1_0 = self.alloc_page(true)?;
+                self.invalidate_cache();
                 self.page_buf.fill(0);
                 self.page_buf[..MAX_INLINE_LEN].copy_from_slice(&self.cur_inode.inline_data);
                 if l2_idx == 0 {
@@ -497,6 +501,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         self.commit_inode(&src_inode, &[])?;
         self.hot_ino = 0;
         self.hot_hash = 0;
+        self.cur_inode.ino = 0;
         Ok(())
     }
 
@@ -569,6 +574,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
 
     #[inline(never)]
     fn load_latest_superblock(&mut self) -> bool {
+        self.invalidate_cache();
         let mut found = false;
         let mut best_seq = 0u32;
         for s in 0..SUPER_BLOCKS {
@@ -657,6 +663,7 @@ impl<'a, D: BlockDevice> KernFS<'a, D> {
         let mut best_active_seq = 0u16;
 
         for b in FIRST_DATA_BLOCK..D::TOTAL_BLOCKS {
+            self.cur_page = 0;
             if self
                 .dev
                 .read(b * D::BLOCK_SIZE, &mut self.page_buf[..16])

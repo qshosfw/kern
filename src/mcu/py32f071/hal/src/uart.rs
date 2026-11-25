@@ -257,6 +257,9 @@ pub fn on_usart1_irq() {
 /// Dynamically update USART1 baud rate (e.g. 115200 or 38400)
 pub fn set_baud(baud: u32) {
     let baud = if baud == 0 { 115_200 } else { baud };
+    if CURRENT_BAUD.load(Ordering::Relaxed) == baud {
+        return;
+    }
     CURRENT_BAUD.store(baud, Ordering::Relaxed);
     resync_clock(rcc::sysclk_hz());
 }

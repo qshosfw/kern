@@ -35,6 +35,17 @@ impl NoStorage {
     ) -> Result<usize, StorageError> {
         Err(StorageError::NotFound)
     }
+    pub fn lookup_ino(&mut self, _path: &str) -> Result<u16, StorageError> {
+        Err(StorageError::NotFound)
+    }
+    pub fn read_ino_at(
+        &mut self,
+        _ino: u16,
+        _offset: usize,
+        _buf: &mut [u8],
+    ) -> Result<usize, StorageError> {
+        Err(StorageError::NotFound)
+    }
     pub fn write_file(&mut self, _path: &str, _data: &[u8]) -> Result<(), StorageError> {
         Err(StorageError::NotFound)
     }

@@ -510,19 +510,20 @@ pub fn draw_bitmap_clipped(
     }
 }
 
-/// Zero-heap direct-mapped SRAM glyph cache (`N` must be a power of two, e.g. `16` or `32`).
-/// Eliminates repeated SPI Flash seeks when rendering UI labels across frames.
+/// Zero-heap 32-byte (`2^5`) glyph cache slot (covers all 1..=22 B UI/CJK bitmaps).
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct CachedGlyphSlot {
-    pub tag: u32, // (pack_id << 16) | codepoint
     pub entry: FontGlyphEntry,
-    pub bmp: [u8; 32],
-    pub valid: u8,
+    pub bmp: [u8; 22],
+    pub pack_id: u8,
+    pub valid: u8, // 0 = empty, 1 = hit, 2 = cached negative miss
 }
+
+const _: () = assert!(core::mem::size_of::<CachedGlyphSlot>() == 32);
 
 impl CachedGlyphSlot {
     pub const EMPTY: Self = Self {
-        tag: 0,
         entry: FontGlyphEntry {
             codepoint: 0,
             bmp_off_lo: 0,
@@ -531,23 +532,25 @@ impl CachedGlyphSlot {
             x_advance: 0,
             xy_offset: 0,
         },
-        bmp: [0; 32],
+        bmp: [0; 22],
+        pack_id: 0,
         valid: 0,
     };
 }
 
+/// Zero-heap fully-associative ring SRAM glyph cache (`1..=256` slots).
+/// Eliminates both SPI Flash seeks AND direct-mapped hash conflict thrashing across Cyrillic/CJK scripts.
 pub struct FontGlyphCache<const N: usize> {
     slots: [CachedGlyphSlot; N],
+    next_evict: u8,
 }
 
 impl<const N: usize> FontGlyphCache<N> {
     pub const fn new() -> Self {
-        assert!(
-            N > 0 && (N & (N - 1)) == 0,
-            "cache size must be a power of two"
-        );
+        assert!(N > 0 && N <= 256, "cache size must be 1..=256");
         Self {
             slots: [CachedGlyphSlot::EMPTY; N],
+            next_evict: 0,
         }
     }
 
@@ -555,11 +558,36 @@ impl<const N: usize> FontGlyphCache<N> {
         for s in &mut self.slots {
             s.valid = 0;
         }
+        self.next_evict = 0;
     }
 
     #[inline(always)]
-    fn slot_idx(pack_id: u8, cp: u16) -> usize {
-        ((cp as usize).wrapping_add((pack_id as usize) * 31)) & (N - 1)
+    fn alloc_slot(&mut self) -> usize {
+        let idx = self.next_evict as usize;
+        self.next_evict = if idx + 1 >= N { 0 } else { (idx + 1) as u8 };
+        idx
+    }
+
+    /// Fully-associative cache probe: `Some(Some(slot))` on hit, `Some(None)` on cached negative miss,
+    /// or `None` when not present in cache (zero conflict misses across Cyrillic/CJK codepoints).
+    #[inline(never)]
+    pub fn peek(&self, pack_id: u8, codepoint: u16) -> Option<Option<&CachedGlyphSlot>> {
+        for s in &self.slots {
+            if s.valid != 0 && s.entry.codepoint == codepoint && s.pack_id == pack_id {
+                return Some(if s.valid == 1 { Some(s) } else { None });
+            }
+        }
+        None
+    }
+
+    /// Record a negative miss for `(pack_id, codepoint)` so missing glyphs never re-scan Flash.
+    #[inline(always)]
+    pub fn put_miss(&mut self, pack_id: u8, codepoint: u16) {
+        let idx = self.alloc_slot();
+        let s = unsafe { self.slots.get_unchecked_mut(idx) };
+        s.entry.codepoint = codepoint;
+        s.pack_id = pack_id;
+        s.valid = 2;
     }
 
     #[inline(never)]
@@ -570,26 +598,25 @@ impl<const N: usize> FontGlyphCache<N> {
         read_at: &mut dyn FnMut(usize, &mut [u8]) -> usize,
         codepoint: u16,
     ) -> Option<&CachedGlyphSlot> {
-        let tag = ((pack_id as u32) << 16) | (codepoint as u32);
-        let idx = Self::slot_idx(pack_id, codepoint);
-        if self.slots[idx].valid != 0 && self.slots[idx].tag == tag {
-            return Some(&self.slots[idx]);
+        if let Some(Some(hit)) = self.peek(pack_id, codepoint) {
+            return Some(unsafe { &*(hit as *const CachedGlyphSlot) });
         }
         let g = lookup_font_glyph_dyn(hdr, read_at, codepoint)?;
         let nbytes = g.bitmap_bytes();
-        if nbytes > 32 {
+        if nbytes > 22 {
             return None;
         }
-        let slot = &mut self.slots[idx];
+        let idx = self.alloc_slot();
+        let slot = unsafe { self.slots.get_unchecked_mut(idx) };
         if nbytes > 0 {
             let off = hdr.bitmap_pool_offset() + g.bitmap_offset();
-            if read_at(off, &mut slot.bmp[..nbytes]) != nbytes {
+            if read_at(off, unsafe { slot.bmp.get_unchecked_mut(..nbytes) }) != nbytes {
                 slot.valid = 0;
                 return None;
             }
         }
-        slot.tag = tag;
         slot.entry = g;
+        slot.pack_id = pack_id;
         slot.valid = 1;
         Some(slot)
     }
@@ -1077,7 +1104,16 @@ pub const LANG_KEY_KM_LABEL: &str = "__KM_LABEL__";
 /// Format a localized keypad key `"__KM_0__"`..`"__KM_9__"` into an 8-byte buffer on the stack.
 #[inline(always)]
 pub const fn lang_km_key_bytes(digit: u8) -> [u8; 8] {
-    [b'_', b'_', b'K', b'M', b'_', b'0' + (digit % 10), b'_', b'_']
+    [
+        b'_',
+        b'_',
+        b'K',
+        b'M',
+        b'_',
+        b'0' + (digit % 10),
+        b'_',
+        b'_',
+    ]
 }
 
 /// Companion font hint bitflags in [`LangPackHeader::font_hint`].

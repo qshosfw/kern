@@ -347,9 +347,20 @@ unsafe fn set_hsi_fs(is_24mhz: bool) {
 /// 2: 32 MHz (HSI 16 MHz * PLL 2X, 1WS) - RF Sweet Spot
 /// 3: 48 MHz (HSI 16 MHz * PLL 3X, 1WS) - Default / USB Full-Speed (CTC SOF-lockable)
 /// 4: 72 MHz (HSI 24 MHz * PLL 3X, 2WS) - High Performance
+static CURRENT_SYSCLK_IDX: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0xFF);
+
 #[inline(never)]
 pub fn set_sysclk_index(idx: u8) {
     let idx = if idx > 4 { 3 } else { idx };
+    if CURRENT_SYSCLK_IDX.load(core::sync::atomic::Ordering::Relaxed) == idx {
+        unsafe {
+            if idx == 3 && (rcc::RCC_APB1ENR.read_volatile() & rcc::APB1ENR_USBD) != 0 {
+                set_ctc_usb_sof(true);
+            }
+        }
+        return;
+    }
+    CURRENT_SYSCLK_IDX.store(idx, core::sync::atomic::Ordering::Relaxed);
     let hsi_24 = idx == 1 || idx == 4;
     let wait_states = if idx < 2 {
         pac::flash::ACR_LATENCY_0WS
