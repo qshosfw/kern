@@ -14,6 +14,7 @@ void _start(void) {
 }
 
 static u8 g_tab = 0;           // 0 = Widgets, 1 = Menu, 2 = Modal
+static u8 g_prev_tab = 0;      // previous tab for smooth header glide
 static u8 g_anim_prog = 16;    // 0..16 kinetic transition progress
 static i8 g_slide_dir = 0;     // -1 left, +1 right, 0 idle
 static u8 g_menu_selected = 0; // 0..5
@@ -75,11 +76,12 @@ static const char MENU_VALS[6][8] = {
 static const u8 MENU_ICONS[6] = { KRX_ICON_AUDIO, KRX_ICON_DEVICE, KRX_ICON_DISPLAY,
                                   KRX_ICON_VFO, KRX_ICON_APPS, KRX_ICON_SECURITY };
 
-static void select_tab(u8 next) {
+static void select_tab(const KrxApiTable* api, u8 next) {
     if (next < 3u && next != g_tab) {
+        g_prev_tab = g_tab;
         g_slide_dir = (next > g_tab) ? 1 : -1;
         g_tab = next;
-        g_anim_prog = 0;
+        g_anim_prog = krx_prop_get(api, KRX_PROP_UI_ANIMATIONS) ? 0u : 16u;
     }
 }
 
@@ -152,6 +154,7 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         uart_log(api, "TOTAL: 48/48 UNIFIED OPS VALIDATED: PASS");
 
         g_tab = 0;
+        g_prev_tab = 0;
         g_anim_prog = 16;
         g_slide_dir = 0;
         g_menu_selected = 0;
@@ -182,11 +185,11 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             if (state != 0u) return 1;
 
             if (key == KEY_EXIT) return 0;
-            if (key == KEY_4 || key == KEY_STAR) { select_tab((g_tab == 0u) ? 2u : (u8)(g_tab - 1u)); return 1; }
-            if (key == KEY_6 || key == KEY_HASH) { select_tab((g_tab == 2u) ? 0u : (u8)(g_tab + 1u)); return 1; }
-            if (key == KEY_1) { select_tab(0u); return 1; }
-            if (key == KEY_2) { select_tab(1u); return 1; }
-            if (key == KEY_3) { select_tab(2u); return 1; }
+            if (key == KEY_4 || key == KEY_STAR) { select_tab(api, (g_tab == 0u) ? 2u : (u8)(g_tab - 1u)); return 1; }
+            if (key == KEY_6 || key == KEY_HASH) { select_tab(api, (g_tab == 2u) ? 0u : (u8)(g_tab + 1u)); return 1; }
+            if (key == KEY_1) { select_tab(api, 0u); return 1; }
+            if (key == KEY_2) { select_tab(api, 1u); return 1; }
+            if (key == KEY_3) { select_tab(api, 2u); return 1; }
 
             if (key == KEY_UP) {
                 if (g_tab == 1u) g_menu_selected = (g_menu_selected == 0u) ? 5u : (u8)(g_menu_selected - 1u);
@@ -254,8 +257,8 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             krx_draw_str_ex(api, (i16)(bx + 4), 46, (const u8*)"Press MENU for Dialog", 21u, 0u, COLOR_FILL);
         }
 
-        krx_draw_tabbed_sheet(
-            api, 0u, 0u, 128u, 53u, g_tab, 3u,
+        krx_draw_tabbed_sheet_anim(
+            api, 0u, 0u, 128u, 53u, g_tab, g_prev_tab, g_anim_prog, 3u,
             KRX_TAB_FLAG_INTEGRATED_86 | KRX_TAB_FLAG_BOTTOM_BORDER,
             TAB_TITLES, (u16)(sizeof(TAB_TITLES) - 1u)
         );

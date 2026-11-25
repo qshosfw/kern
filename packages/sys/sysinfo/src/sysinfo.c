@@ -53,12 +53,22 @@ static const u8 GLYPH_CHECK[5] = { 0x08, 0x10, 0xA0, 0x40, 0x00 };
 static const u8 GLYPH_CROSS[5] = { 0x88, 0x50, 0x20, 0x50, 0x88 };
 
 static u8         g_tab;
+static u8         g_prev_tab;
+static u8         g_anim_prog;
 static u8         g_sel[TAB_COUNT];
 static u8         g_scroll[TAB_COUNT];
 static u32        g_last_sec;
 static KrxSysInfo g_info;
 static char       g_mac_str[18];
 static char       g_chip_id[11];
+
+static void select_tab(const KrxApiTable* api, u8 next) {
+    if (next < TAB_COUNT && next != g_tab) {
+        g_prev_tab = g_tab;
+        g_tab = next;
+        g_anim_prog = krx_prop_get(api, KRX_PROP_UI_ANIMATIONS) ? 0u : 16u;
+    }
+}
 
 static void set_sb(const KrxApiTable* api, u8 enable) {
     if (!enable) {
@@ -297,6 +307,8 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
 
     if (op == KRX_OP_START) {
         g_tab = TAB_SYSTEM;
+        g_prev_tab = TAB_SYSTEM;
+        g_anim_prog = 16u;
         for (u8 i = 0; i < TAB_COUNT; i++) {
             g_sel[i] = 0;
             g_scroll[i] = 0;
@@ -322,12 +334,18 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
         u8 kind = ev[0];
 
         if (kind == KRX_EV_TICK) {
+            u8 dirty = 0;
+            if (g_anim_prog < 16u) {
+                g_anim_prog += 4u;
+                if (g_anim_prog > 16u) g_anim_prog = 16u;
+                dirty = 1;
+            }
             u32 now = krx_uptime_secs(api);
             if (now != g_last_sec) {
                 g_last_sec = now;
-                return (g_tab == TAB_STATUS) ? 1 : 0;
+                if (g_tab == TAB_STATUS) dirty = 1;
             }
-            return 0;
+            return dirty;
         }
 
         if (kind == KRX_EV_POWER) {
@@ -341,15 +359,15 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             if (key == KEY_EXIT && state == 0u) return 0;
             if (state == 0u) {
                 if (key >= KEY_1 && key <= KEY_4) {
-                    g_tab = (u8)(key - KEY_1);
+                    select_tab(api, (u8)(key - KEY_1));
                     return 1;
                 }
                 if (key == KEY_HASH || key == KEY_MENU) {
-                    g_tab = (u8)((g_tab + 1u) % TAB_COUNT);
+                    select_tab(api, (u8)((g_tab + 1u) % TAB_COUNT));
                     return 1;
                 }
                 if (key == KEY_STAR) {
-                    g_tab = (u8)((g_tab + TAB_COUNT - 1u) % TAB_COUNT);
+                    select_tab(api, (u8)((g_tab + TAB_COUNT - 1u) % TAB_COUNT));
                     return 1;
                 }
             }
@@ -392,9 +410,9 @@ int krx_main(u32 op, const KrxApiTable* api, const void* param) {
             render_kv_tab(api, g_tab, 11, 51);
         }
 
-        krx_draw_tabbed_sheet(
+        krx_draw_tabbed_sheet_anim(
             api, 0u, 0u, 128u, 64u,
-            g_tab, TAB_COUNT,
+            g_tab, g_prev_tab, g_anim_prog, TAB_COUNT,
             KRX_TAB_FLAG_INTEGRATED_86 | KRX_TAB_FLAG_BOTTOM_BORDER,
             TAB_TITLES, (u16)sizeof(TAB_TITLES)
         );

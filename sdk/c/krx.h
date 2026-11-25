@@ -745,25 +745,29 @@ static inline u8 krx_ui_set_tray_icon(const KrxApiTable* api, u8 icon_id) {
     return (u8)krx_call(api, OP_UI_STATUS, SUB_UI_STATUS_TRAY_ICON, (u32)icon_id, 0u);
 }
 
-/* Package-side chrome. Titles are a bounded, NUL-separated byte string. */
-static __attribute__((noinline, unused)) u8 krx_draw_tabbed_sheet(
+/* Package-side chrome. Titles are a bounded, NUL-separated byte string.
+ * `anim_prog` in 0..=16 interpolates the active tab pill and merged baseline gap
+ * smoothly from `prev_selected` to `selected` (matching `gfx::TabbedSheet`). */
+static __attribute__((noinline, unused)) u8 krx_draw_tabbed_sheet_anim(
     const KrxApiTable* api, u8 x, u8 y, u8 w, u8 h,
-    u8 selected, u8 tab_count, u8 flags, const char* packed_titles, u16 packed_len
+    u8 selected, u8 prev_selected, u8 anim_prog,
+    u8 tab_count, u8 flags, const char* packed_titles, u16 packed_len
 ) {
     if (!w || h < 9 || !packed_titles) return 1;
     if (!tab_count) tab_count = 1;
     if (tab_count > 8) tab_count = 8;
     if (selected >= tab_count) selected = tab_count - 1;
+    if (prev_selected >= tab_count) prev_selected = selected;
 
-    struct Tab { u16 offset, len; u8 width; } tabs[8];
+    struct Tab { u16 offset; u8 len; u8 width; } tabs[8];
     unsigned pos = 0;
     for (unsigned i = 0; i < tab_count; i++) {
         struct Tab* tab = &tabs[i];
-        tab->offset = pos;
+        tab->offset = (u16)pos;
         while (pos < packed_len && packed_titles[pos]) pos++;
-        tab->len = pos - tab->offset;
-        // Measure only the prefix that could fit on screen.
-        if (tab->len > 128) tab->len = 128;
+        unsigned tlen = pos - tab->offset;
+        if (tlen > 128u) tlen = 128u;
+        tab->len = (u8)tlen;
         int width = 8 + krx_str_width(api, (const u8*)packed_titles + tab->offset, tab->len, 0);
         tab->width = width > 248 ? 248 : width < 12 ? 12 : (u8)width;
         if (pos < packed_len) pos++;
@@ -786,8 +790,26 @@ static __attribute__((noinline, unused)) u8 krx_draw_tabbed_sheet(
         start++;
     }
 
+    int base_tx = x + (start ? 7 : 0);
+    int active_tx = base_tx;
+    int active_tw = tabs[selected].width;
+    int prev_tx = base_tx;
+    int cur_tx = base_tx;
+    for (unsigned i = start; i < end; i++) {
+        if (i == selected) active_tx = cur_tx;
+        if (i == prev_selected) prev_tx = cur_tx;
+        cur_tx += tabs[i].width + 2;
+    }
+
+    if (anim_prog < 16u && prev_selected != selected &&
+        prev_selected >= start && prev_selected < end) {
+        int p = (int)anim_prog;
+        active_tx = prev_tx + (((active_tx - prev_tx) * p) >> 4);
+        active_tw = (int)tabs[prev_selected].width +
+                    (((active_tw - (int)tabs[prev_selected].width) * p) >> 4);
+    }
+
     int baseline = y + 9;
-    int tab_x = x + (start ? 7 : 0);
     krx_draw_line_v(api, x, baseline, h - 9, COLOR_FILL);
     krx_draw_line_v(api, x + w - 1, baseline, h - 9, COLOR_FILL);
     if (flags & KRX_TAB_FLAG_BOTTOM_BORDER) {
@@ -795,25 +817,63 @@ static __attribute__((noinline, unused)) u8 krx_draw_tabbed_sheet(
         krx_draw_pixel(api, x, y + h - 1, COLOR_CLEAR);
         krx_draw_pixel(api, x + w - 1, y + h - 1, COLOR_CLEAR);
     }
-    krx_draw_line_h(api, x, baseline, w, COLOR_FILL);
-    for (unsigned i = start; i < end; i++) {
-        const struct Tab* tab = &tabs[i];
-        int tab_y = y + (i != selected);
-        int stem = i == selected ? 9 : 7;
-        int right = tab_x + tab->width - 1;
-        if (i == selected) krx_draw_line_h(api, tab_x, baseline, tab->width, COLOR_CLEAR);
-        krx_draw_line_h(api, tab_x + 1, tab_y, tab->width - 2, COLOR_FILL);
-        krx_draw_pixel(api, tab_x, tab_y, COLOR_CLEAR);
-        krx_draw_pixel(api, right, tab_y, COLOR_CLEAR);
-        krx_draw_line_v(api, tab_x, tab_y + 1, stem, COLOR_FILL);
-        krx_draw_line_v(api, right, tab_y + 1, stem, COLOR_FILL);
-        krx_draw_str_max(api, tab_x + 4, tab_y + 6, (const u8*)packed_titles + tab->offset,
-                         tab->len, 0, COLOR_FILL, tab->width - 7);
-        tab_x += tab->width + 2;
+
+    // Merged baseline with smoothly gliding active gap.
+    if (active_tx > x) krx_draw_line_h(api, x, baseline, (u8)(active_tx - x), COLOR_FILL);
+    krx_draw_line_h(api, (i16)active_tx, baseline, (u8)active_tw, COLOR_CLEAR);
+    int right_start = active_tx + active_tw;
+    if (right_start < x + w) {
+        krx_draw_line_h(api, (i16)right_start, baseline, (u8)(x + w - right_start), COLOR_FILL);
     }
+
+    // Draw inactive tabs first, then draw the elevated active pill on top for crisp gliding.
+    int tab_x = base_tx;
+    for (unsigned i = start; i < end; i++) {
+        if (i != selected) {
+            const struct Tab* tab = &tabs[i];
+            int tab_y = y + 1;
+            int right = tab_x + tab->width - 1;
+            krx_draw_line_h(api, tab_x + 1, tab_y, tab->width - 2, COLOR_FILL);
+            krx_draw_pixel(api, tab_x, tab_y, COLOR_CLEAR);
+            krx_draw_pixel(api, right, tab_y, COLOR_CLEAR);
+            krx_draw_line_v(api, tab_x, tab_y + 1, 7, COLOR_FILL);
+            krx_draw_line_v(api, right, tab_y + 1, 7, COLOR_FILL);
+            krx_draw_str_max(api, tab_x + 4, tab_y + 6, (const u8*)packed_titles + tab->offset,
+                             tab->len, 0, COLOR_FILL, tab->width - 7);
+        }
+        tab_x += tabs[i].width + 2;
+    }
+
+    {
+        const struct Tab* sel_tab = &tabs[selected];
+        int right = active_tx + active_tw - 1;
+        if (active_tw > 2) {
+            krx_fill_rect(api, (i16)(active_tx + 1), (i16)(y + 1), (u8)(active_tw - 2), 9u, COLOR_CLEAR);
+            krx_draw_line_h(api, (i16)(active_tx + 1), y, (u8)(active_tw - 2), COLOR_FILL);
+        }
+        krx_draw_pixel(api, (i16)active_tx, y, COLOR_CLEAR);
+        krx_draw_pixel(api, (i16)right, y, COLOR_CLEAR);
+        krx_draw_line_v(api, (i16)active_tx, y + 1, 9, COLOR_FILL);
+        krx_draw_line_v(api, (i16)right, y + 1, 9, COLOR_FILL);
+        if (active_tw > 7) {
+            krx_draw_str_max(api, (i16)(active_tx + 4), y + 6,
+                             (const u8*)packed_titles + sel_tab->offset,
+                             sel_tab->len, 0, COLOR_FILL, (u8)(active_tw - 7));
+        }
+    }
+
     if (start) krx_draw_icon(api, x, y + 1, KRX_ICON_ARROW_LEFT, COLOR_FILL);
-    if (end < tab_count) krx_draw_icon(api, tab_x - 1, y + 1, KRX_ICON_ARROW_RIGHT, COLOR_FILL);
+    if (end < tab_count) krx_draw_icon(api, cur_tx - 1, y + 1, KRX_ICON_ARROW_RIGHT, COLOR_FILL);
     return 0;
+}
+
+static inline u8 krx_draw_tabbed_sheet(
+    const KrxApiTable* api, u8 x, u8 y, u8 w, u8 h,
+    u8 selected, u8 tab_count, u8 flags, const char* packed_titles, u16 packed_len
+) {
+    return krx_draw_tabbed_sheet_anim(
+        api, x, y, w, h, selected, selected, 16u, tab_count, flags, packed_titles, packed_len
+    );
 }
 
 static inline u8 krx_draw_rounded_box(const KrxApiTable* api, u8 x, u8 y, u8 w, u8 h) {
