@@ -9,10 +9,12 @@ and optionally flashes the radio.
 import sys
 import os
 import json
+import hashlib
 import shutil
 import subprocess
 import argparse
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -93,6 +95,27 @@ def parse_cargo_size(output):
             except ValueError:
                 pass
     return sections
+
+def git_short_sha(root_dir: Path) -> str:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short=7", "HEAD"],
+            cwd=root_dir,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return out or "nogit"
+    except Exception:
+        return "nogit"
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fp:
+        for chunk in iter(lambda: fp.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
 
 def find_root_dir() -> Path:
     """Finds the root repository directory containing kern.toml or Cargo.toml."""
@@ -367,53 +390,71 @@ def main():
     if args.size:
         return
 
-    # Step 3: Objcopy Raw ARM Cortex-M0+ Binary
-    target_bin = "target/firmware.bin"
-    target_packed = "target/firmware_packed.bin"
+    # Step 3: Resolve Canonical Standard Artifact Naming (`target/dist/kern-<ver>-<target>-<sha>.*`)
+    fw_ver = args.fw_version or (cfg.get("project", {}) if cfg else {}).get("version", "0.1.0")
+    kfw_slug = "uv-k10pro" if device_raw.lower() == "uv-k10pro" else "uv-k1"
+    target_slug = device_raw.lower().replace(" ", "-")
+    git_sha = git_short_sha(root_dir)
+    profile_suffix = "-dev" if args.dev else ""
+    stem = f"kern-{fw_ver}-{target_slug}-{git_sha}{profile_suffix}"
 
-    print(f" {BLUE}{INVERT} BIN   {RESET} Extracting raw ARM Cortex-M0+ binary...")
-    code, stdout, stderr = run_cmd(f"cargo objcopy {profile_flag} -p firmware {std_flags} {feature_flags} -- -O binary {target_bin}".strip())
+    dist_dir = root_dir / "target" / "dist"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    dist_bin = dist_dir / f"{stem}.bin"
+    dist_qs = dist_dir / f"{stem}.qs.bin"
+    dist_kfw = dist_dir / f"{stem}.kfw"
+    dist_elf = dist_dir / f"{stem}.elf"
+    dist_manifest = dist_dir / f"{stem}.manifest.json"
+    dist_sums = dist_dir / "SHA256SUMS"
+
+    # Latest convenience aliases in `target/` for flasher, emu, bloat.py, and release scripts
+    target_bin = root_dir / "target" / "firmware.bin"
+    target_packed = root_dir / "target" / "firmware_packed.bin"
+    target_kfw = root_dir / "target" / "kern.kfw"
+    target_elf = root_dir / "target" / "kern_firmware.elf"
+
+    print(f" {BLUE}{INVERT} BIN   {RESET} Extracting raw ARM Cortex-M0+ binary ({dist_bin.name})...")
+    code, stdout, stderr = run_cmd(f"cargo objcopy {profile_flag} -p firmware {std_flags} {feature_flags} -- -O binary {dist_bin}".strip())
     if code != 0 and elf_path.exists():
         for tool in ("arm-none-eabi-objcopy", "llvm-objcopy"):
             if shutil.which(tool):
-                code, stdout, stderr = run_cmd(f"{tool} -O binary {elf_path} {target_bin}")
+                code, stdout, stderr = run_cmd(f"{tool} -O binary {elf_path} {dist_bin}")
                 if code == 0:
                     break
     if code != 0:
         print(f" {RED}{INVERT} ERROR {RESET} Objcopy failed: {stderr}")
         sys.exit(1)
+    shutil.copy2(dist_bin, target_bin)
 
     # Step 4: Pack Bootloader Image (XOR Obfuscation for Quansheng bootloader)
-    print(f" {BLUE}{INVERT} PACK  {RESET} XOR obfuscating image for bootloader flashing...")
+    print(f" {BLUE}{INVERT} PACK  {RESET} Packing Quansheng bootloader image ({dist_qs.name})...")
     pack_tool = root_dir / "tools" / "pack.py"
     if pack_tool.exists():
-        code, stdout, stderr = run_cmd(f"python3 {pack_tool} {target_bin} {target_packed}")
+        code, stdout, stderr = run_cmd(f"python3 {pack_tool} {dist_bin} {dist_qs}")
         if code != 0:
             print(f" {RED}{INVERT} ERROR {RESET} Packing failed: {stderr}")
             sys.exit(1)
+        shutil.copy2(dist_qs, target_packed)
     else:
         print(f" {YELLOW}{INVERT} SKIP  {RESET} tools/pack.py not found, skipping bootloader packaging.")
 
     # Step 4.05: Pack MCU-OTA .kfw Container (verifiable & flashable on-device from Recovery)
-    target_kfw = "target/kern.kfw"
     kfw_tool = root_dir / "tools" / "kfw.py"
     if kfw_tool.exists():
-        kfw_slug = "uv-k10pro" if device_raw.lower() == "uv-k10pro" else "uv-k1"
-        fw_ver = args.fw_version or (cfg.get("project", {}) if cfg else {}).get("version", "0.1.0")
         lms_key = args.lms_key or os.environ.get("KERN_LMS_KEY")
         mac_key = args.mac_key or os.environ.get("KERN_MAC_KEY")
         if args.require_signed and not (lms_key or mac_key):
             print(f" {RED}{INVERT} ERROR {RESET} --require-signed set, but no --lms-key / --mac-key / KERN_LMS_KEY / KERN_MAC_KEY provided.")
             sys.exit(1)
         signed_note = " + signing" if (lms_key or mac_key) else ""
-        print(f" {BLUE}{INVERT} KFW   {RESET} Packing & verifying MCU-OTA .kfw container ({kfw_slug}{signed_note})...")
+        print(f" {BLUE}{INVERT} KFW   {RESET} Packing & verifying MCU-OTA .kfw container ({dist_kfw.name}{signed_note})...")
         kfw_argv = [
-            sys.executable, str(kfw_tool), "pack", target_kfw,
+            sys.executable, str(kfw_tool), "pack", str(dist_kfw),
             "--kind", "firmware", "--mcu-ota",
             "--name", "Kern OS",
             "--version", str(fw_ver),
             "--sec-cnt", str(args.sec_cnt),
-            "--fw", f"{kfw_slug}:{target_bin}",
+            "--fw", f"{kfw_slug}:{dist_bin}",
         ]
         if lms_key:
             kfw_argv.extend(["--lms-key", lms_key])
@@ -425,7 +466,7 @@ def main():
         if res_kfw.returncode != 0:
             print(f" {RED}{INVERT} ERROR {RESET} KFW packing failed: {res_kfw.stderr or res_kfw.stdout}")
             sys.exit(1)
-        verify_argv = [sys.executable, str(kfw_tool), "verify", target_kfw]
+        verify_argv = [sys.executable, str(kfw_tool), "verify", str(dist_kfw)]
         trust_store = root_dir / "keys" / "trusted-keys.json"
         if trust_store.is_file() and (lms_key or mac_key):
             verify_argv.extend(["--trust-store", str(trust_store)])
@@ -437,26 +478,59 @@ def main():
         if res_ver.returncode != 0:
             print(f" {RED}{INVERT} ERROR {RESET} KFW verification failed: {res_ver.stderr or res_ver.stdout}")
             sys.exit(1)
+        shutil.copy2(dist_kfw, target_kfw)
 
     # Step 4.1: Stage Native ARM ELF for `kern-emu` & GDB/SWD debugging
-    target_elf = root_dir / "target" / "kern_firmware.elf"
     if elf_path.exists():
+        shutil.copy2(elf_path, dist_elf)
         shutil.copy2(elf_path, target_elf)
 
-    print(f"\n {GREEN}{BOLD}✨ Build Artifacts Ready:{RESET}")
-    print(f"   • Raw Binary:    {WHITE}{target_bin}{RESET} ({total_flash:,} bytes)")
-    if Path(target_packed).exists():
-        print(f"   • Packed Binary: {WHITE}{target_packed}{RESET} ({os.path.getsize(target_packed):,} bytes)")
-    if Path(target_kfw).exists():
-        print(f"   • KFW Container: {WHITE}{target_kfw}{RESET} ({os.path.getsize(target_kfw):,} bytes, MCU-OTA verified)")
-    if target_elf.exists():
-        print(f"   • Firmware ELF:  {WHITE}target/kern_firmware.elf{RESET} ({target_elf.stat().st_size:,} bytes)")
+    # Step 4.2: Emit Standard Build Manifest & GNU SHA256SUMS
+    staged = [p for p in (dist_kfw, dist_qs, dist_bin, dist_elf) if p.exists()]
+    artifact_entries = {}
+    sum_lines = []
+    for p in staged:
+        digest = sha256_file(p)
+        artifact_entries[p.name] = {"size": p.stat().st_size, "sha256": digest}
+        sum_lines.append(f"{digest}  {p.name}")
+    manifest = {
+        "schema": "kern-build-manifest/v1",
+        "name": (cfg.get("project", {}) if cfg else {}).get("name", "kern"),
+        "version": str(fw_ver),
+        "target": profile["display"],
+        "target_slug": target_slug,
+        "chip": (cfg.get("project", {}) if cfg else {}).get("chip", "PY32F071xB"),
+        "git_sha": git_sha,
+        "profile": profile_name,
+        "built_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "features": active_features,
+        "memory": {
+            "flash_used": total_flash,
+            "flash_budget": flash_budget,
+            "ram_used": total_ram,
+            "ram_budget": ram_budget,
+        },
+        "artifacts": artifact_entries,
+    }
+    dist_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+    dist_sums.write_text("\n".join(sum_lines) + "\n")
+
+    print(f"\n {GREEN}{BOLD}✨ Build Artifacts Ready ({stem}):{RESET}")
+    if dist_kfw.exists():
+        print(f"   • KFW Container: {WHITE}target/dist/{dist_kfw.name}{RESET} ({dist_kfw.stat().st_size:,} B, MCU-OTA verified)")
+    if dist_qs.exists():
+        print(f"   • Bootloader:    {WHITE}target/dist/{dist_qs.name}{RESET} ({dist_qs.stat().st_size:,} B)")
+    print(f"   • Raw Binary:    {WHITE}target/dist/{dist_bin.name}{RESET} ({total_flash:,} B)")
+    if dist_elf.exists():
+        print(f"   • Debug ELF:     {WHITE}target/dist/{dist_elf.name}{RESET} ({dist_elf.stat().st_size:,} B)")
+    print(f"   • Manifest:      {WHITE}target/dist/{dist_manifest.name}{RESET} + {WHITE}SHA256SUMS{RESET}")
 
     # Step 5: Optional Auto-Flash
     if args.flash:
         print(f"\n {BLUE}{INVERT} FLASH {RESET} Launching radio bootloader flasher...")
         flasher_tool = root_dir / "tools" / "flasher.py"
-        flash_cmd = f"python3 {flasher_tool} {target_packed}"
+        flash_src = dist_kfw if dist_kfw.exists() else dist_qs
+        flash_cmd = f"python3 {flasher_tool} {flash_src}"
         if args.port:
             flash_cmd += f" --port {args.port}"
         os.system(flash_cmd)

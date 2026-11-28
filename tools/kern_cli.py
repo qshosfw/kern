@@ -330,10 +330,13 @@ def main(argv: list[str] | None = None) -> int:
         return _run_exec(["cargo", "objdump", "--release", "-p", "firmware", "--", "-d", "--no-show-raw-insn", *rest])
     if cmd in ("clean", "distclean"):
         rc = _run_exec(["cargo", "clean"])
-        for fname in ("firmware.bin", "firmware_packed.bin", "kern_firmware.elf"):
+        for fname in ("firmware.bin", "firmware_packed.bin", "kern.kfw", "kern_firmware.elf"):
             p = REPO_ROOT / "target" / fname
             if p.exists():
                 p.unlink(missing_ok=True)
+        dist_dir = REPO_ROOT / "target" / "dist"
+        if dist_dir.is_dir():
+            shutil.rmtree(dist_dir, ignore_errors=True)
         if cmd == "distclean":
             for d in (REPO_ROOT / "dock" / "build", REPO_ROOT / "dock" / "dist"):
                 if d.is_dir():

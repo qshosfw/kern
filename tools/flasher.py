@@ -385,12 +385,17 @@ def main():
     # Resolve File
     fw_file = args.file
     if not fw_file:
-        # Priority: target/*.kfw -> target/firmware_packed.bin -> target/firmware.bin
-        kfws = sorted(glob.glob("target/*.kfw") + glob.glob("dist/*.kfw"), key=os.path.getmtime, reverse=True)
+        # Priority: target/dist/*.kfw -> target/*.kfw -> dist/*.kfw -> target/dist/*.qs.bin -> target/firmware_packed.bin -> target/firmware.bin
+        kfws = sorted(
+            glob.glob("target/dist/*.kfw") + glob.glob("target/*.kfw") + glob.glob("dist/*.kfw"),
+            key=os.path.getmtime,
+            reverse=True,
+        )
         if kfws:
             fw_file = kfws[0]
         else:
-            candidates = [
+            qs_bins = sorted(glob.glob("target/dist/*.qs.bin"), key=os.path.getmtime, reverse=True)
+            candidates = qs_bins + [
                 "target/firmware_packed.bin",
                 "target/firmware.bin",
                 "firmware_packed.bin",
