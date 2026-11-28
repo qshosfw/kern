@@ -7,10 +7,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import gi
+try:
+    import gi
 
-gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk  # noqa: E402
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk  # noqa: E402
+except Exception:  # pragma: no cover - headless CI without GTK4
+    gi = None  # type: ignore[assignment]
+    Gtk = None  # type: ignore[assignment]
 
 from ... import REPO_ROOT
 
@@ -77,7 +81,9 @@ def load_kern_pixel_icons() -> tuple[dict[int, tuple[int, int, bytes]], dict[str
                 cur_rows.append(s)
         _flush()
 
-    app_rs = REPO_ROOT / "src" / "gfx" / "src" / "icons" / "app.rs"
+    app_rs = REPO_ROOT / "src" / "gfx" / "src" / "assets" / "icons" / "app.rs"
+    if not app_rs.is_file():
+        app_rs = REPO_ROOT / "src" / "gfx" / "src" / "icons" / "app.rs"
     if not app_rs.is_file():
         app_rs = REPO_ROOT / "crates" / "gfx" / "src" / "icons" / "app.rs"
     if app_rs.is_file():

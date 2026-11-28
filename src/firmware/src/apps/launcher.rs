@@ -717,8 +717,35 @@ mod tests {
         }
     }
 
+    static CATALOG_TEST_LOCK: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+
+    struct CatalogTestGuard;
+    impl CatalogTestGuard {
+        fn lock() -> Self {
+            while CATALOG_TEST_LOCK
+                .compare_exchange_weak(
+                    false,
+                    true,
+                    core::sync::atomic::Ordering::Acquire,
+                    core::sync::atomic::Ordering::Relaxed,
+                )
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            Self
+        }
+    }
+    impl Drop for CatalogTestGuard {
+        fn drop(&mut self) {
+            CATALOG_TEST_LOCK.store(false, core::sync::atomic::Ordering::Release);
+        }
+    }
+
     #[test]
     fn launcher_entries_and_targets_are_compact() {
+        let _guard = CatalogTestGuard::lock();
         assert!(core::mem::size_of::<LauncherTarget>() <= 4);
         assert!(core::mem::size_of::<LauncherEntry>() <= 4);
         catalog::get_catalog().entries.clear();
@@ -741,6 +768,7 @@ mod tests {
 
     #[test]
     fn settings_krx_replaces_builtin_settings_slot_without_duplication() {
+        let _guard = CatalogTestGuard::lock();
         let cat = catalog::get_catalog();
         cat.entries.clear();
         let _ = cat.entries.push(catalog::PackageCatalogEntry {
@@ -781,6 +809,7 @@ mod tests {
 
     #[test]
     fn launcher_preserves_selection_and_scroll_across_exit_and_style_toggle() {
+        let _guard = CatalogTestGuard::lock();
         let mut app = core::mem::MaybeUninit::<LauncherApp>::zeroed();
         unsafe { LauncherApp::init_at(app.as_mut_ptr()) };
         let app = unsafe { app.assume_init_mut() };

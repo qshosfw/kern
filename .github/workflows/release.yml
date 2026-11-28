@@ -69,7 +69,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
-          targets: thumbv6m-none-eabi
+          targets: thumbv6m-none-eabi, x86_64-unknown-linux-gnu
           components: rust-src, llvm-tools-preview
 
       - name: Cache Cargo artifacts

@@ -272,7 +272,7 @@ BUILTIN_TARGETS: dict[str, dict[str, Any]] = {
         "mcu_id": 0x0001,
         "arch_rf": (1 << 4) | 2,
         "transport_disp": (1 << 4) | 1,
-        "flash_base": 0x08002800,
+        "flash_base": 0x08002000,
         "flash_max": 120 * 1024,
         "page_size": 256,
         "sram_kb": 16,
@@ -287,8 +287,7 @@ BUILTIN_TARGETS: dict[str, dict[str, Any]] = {
         "uart_baud": 38400,
         "bl_prefix": b"7.0\x00",
         "protect_ranges": [
-            (BUS_INTERNAL_FLASH, 0x0001, 0x08000000, 0x08002700),
-            (BUS_INTERNAL_FLASH, 0x0003, 0x08002700, 0x08002800),
+            (BUS_INTERNAL_FLASH, 0x0001, 0x08000000, 0x08002000),
         ],
     },
 }

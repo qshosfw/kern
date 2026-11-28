@@ -57,6 +57,9 @@ jobs:
       - name: Run Kern Dock GUI headless selftest
         run: ./kern dock --selftest
 
+      - name: Verify architectural & chip-isolation invariants
+        run: python3 tools/check_firmware_invariants.py
+
       - name: Check firmware (UV-K1 / UV-K5v3, 0 warnings)
         run: ./kern check --deny-warnings
 
@@ -87,15 +90,30 @@ jobs:
       - name: Run workspace unit tests
         run: ./kern test
 
+      - name: Run kern-emu silicon twin unit tests
+        run: cargo test --manifest-path emu/Cargo.toml --target x86_64-unknown-linux-gnu
+
   packages:
     name: Build & Verify KRX Packages
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: thumbv6m-none-eabi, x86_64-unknown-linux-gnu
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: packages
 
       - name: Install ARM GNU Toolchain
         run: |
@@ -165,8 +183,12 @@ jobs:
         with:
           name: kern-firmware-${{ matrix.target }}
           path: |
-            target/firmware.bin
-            target/firmware_packed.bin
+            target/dist/kern-*.kfw
+            target/dist/kern-*.qs.bin
+            target/dist/kern-*.bin
+            target/dist/kern-*.elf
+            target/dist/kern-*.manifest.json
+            target/dist/SHA256SUMS
             target/size-${{ matrix.target }}.json
           if-no-files-found: error
           retention-days: 14

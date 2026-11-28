@@ -780,9 +780,9 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
                 json.dumps(
                     {
                         "pid": os.getpid(),
-                        "wire_url": "tcp://127.0.0.1:4446",
-                        "ctl_port": 4445,
-                        "engine": "py32-emu",
+                        "wire_url": "tcp://127.0.0.1:14446",
+                        "ctl_port": 14445,
+                        "engine": "kern-emu",
                         "elf": "/tmp/kern-firmware.elf",
                         "turbo": True,
                     }
@@ -793,9 +793,9 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
                 json.dumps(
                     {
                         "pid": os.getpid(),
-                        "wire_url": "tcp://127.0.0.1:4456",
-                        "ctl_port": 4455,
-                        "engine": "py32-emu",
+                        "wire_url": "tcp://127.0.0.1:14456",
+                        "ctl_port": 14455,
+                        "engine": "kern-emu",
                         "elf": "/tmp/test-fw.elf",
                         "turbo": False,
                     }
@@ -806,8 +806,8 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
                 json.dumps(
                     {
                         "pid": 99999999,
-                        "wire_url": "tcp://127.0.0.1:4466",
-                        "engine": "py32-emu",
+                        "wire_url": "tcp://127.0.0.1:14466",
+                        "engine": "kern-emu",
                     }
                 ),
                 encoding="utf-8",
@@ -815,14 +815,14 @@ class TestRuntimePluginsAndIpc(unittest.TestCase):
 
             emus = discover_emulators(extra_state_paths=[live_a, live_b, stale], probe_default_tcp=False)
             by_url = {e.wire_url: e for e in emus}
-            self.assertIn("tcp://127.0.0.1:4446", by_url)
-            self.assertIn("tcp://127.0.0.1:4456", by_url)
-            self.assertNotIn("tcp://127.0.0.1:4466", by_url)
-            self.assertEqual(by_url["tcp://127.0.0.1:4446"].name, "Kern Emulator")
-            self.assertEqual(by_url["tcp://127.0.0.1:4456"].name, "Kern Emulator (:4456)")
-            self.assertEqual(by_url["tcp://127.0.0.1:4446"].engine, "py32-emu")
-            self.assertIn("kern-firmware.elf", by_url["tcp://127.0.0.1:4446"].subtitle)
-            self.assertIn("turbo", by_url["tcp://127.0.0.1:4446"].subtitle)
+            self.assertIn("tcp://127.0.0.1:14446", by_url)
+            self.assertIn("tcp://127.0.0.1:14456", by_url)
+            self.assertNotIn("tcp://127.0.0.1:14466", by_url)
+            self.assertEqual(by_url["tcp://127.0.0.1:14446"].name, "Kern Emulator (:14446)")
+            self.assertEqual(by_url["tcp://127.0.0.1:14456"].name, "Kern Emulator (:14456)")
+            self.assertEqual(by_url["tcp://127.0.0.1:14446"].engine, "kern-emu")
+            self.assertIn("kern-firmware.elf", by_url["tcp://127.0.0.1:14446"].subtitle)
+            self.assertIn("turbo", by_url["tcp://127.0.0.1:14446"].subtitle)
 
         # 3. Passive TCP listener detection on an ephemeral local listener (no client socket poked)
         from kern_dock.device.usb import _tcp_port_open
