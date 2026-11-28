@@ -309,8 +309,14 @@ class FilesView:
         total_b = sum(int(e["size"]) for e in shown if not e["is_dir"])
 
         online = self.runtime.link.connected and self.runtime.link.link_mode == "rigwire"
+        hard = self.runtime.security.hardened
         ro = self.runtime.security.policy.read_only
         self.upload_btn.set_sensitive(online and not ro)
+        self.upload_btn.set_tooltip_text(
+            "Disabled in Safe Mode"
+            if hard
+            else ("Disabled in Read-Only mode" if ro else ("Connect a RigWire radio first" if not online else "Upload file to radio"))
+        )
         self.ref_btn.set_sensitive(online)
         self.mount_btn.set_sensitive(online)
         self.up_btn.set_sensitive(online and self.current_dir != "/")
@@ -377,9 +383,14 @@ class FilesView:
                 dl.connect("clicked", lambda _b, p=full, n=name: self._on_download(p, n))
                 line.append(dl)
 
+                rm_tip = (
+                    "Protected system file"
+                    if protected
+                    else ("Disabled in Safe Mode" if hard else ("Disabled in Read-Only mode" if ro else f"Delete {name}"))
+                )
                 rm = Gtk.Button(
                     icon_name="user-trash-symbolic",
-                    tooltip_text="Protected system file" if protected else f"Delete {name}",
+                    tooltip_text=rm_tip,
                     valign=Gtk.Align.CENTER,
                 )
                 rm.add_css_class("flat")

@@ -409,15 +409,20 @@ class AppsView:
 
         lk = self.runtime.link
         hard = self.runtime.security.hardened
-        can_radio = lk.connected and lk.link_mode == "rigwire" and not hard
+        online = lk.connected and lk.link_mode == "rigwire"
+        can_radio = online and not hard
         has_manifest = pkg.get("source_kind") == "manifest" and bool(pkg.get("pkg_id"))
 
         if not built_ok and has_manifest:
             self.prev_install_btn.set_label("Build & Install" if can_radio else "Build")
             self.prev_install_btn.set_sensitive(not self._busy)
+            self.prev_install_btn.set_tooltip_text("Disabled in Safe Mode (build only)" if hard else None)
         else:
             self.prev_install_btn.set_label("Update" if fname in self._installed_names else "Install")
             self.prev_install_btn.set_sensitive(bool(can_radio and built_ok and not self._busy))
+            self.prev_install_btn.set_tooltip_text(
+                "Disabled in Safe Mode" if hard else ("Connect a RigWire radio first" if not online else None)
+            )
 
         self.prev_build_btn.set_visible(bool(has_manifest and built_ok))
         self.prev_build_btn.set_sensitive(not self._busy)
@@ -480,7 +485,9 @@ class AppsView:
             row.add_suffix(hex_b)
 
             if not protected:
-                rm = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, tooltip_text=f"Uninstall {name}")
+                hard = self.runtime.security.hardened
+                rm_tip = "Disabled in Safe Mode" if hard else ("Disabled in Read-Only mode" if ro else f"Uninstall {name}")
+                rm = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER, tooltip_text=rm_tip)
                 rm.add_css_class("flat")
                 rm.set_sensitive(not ro)
                 rm.connect(
@@ -507,7 +514,9 @@ class AppsView:
             return
 
         lk = self.runtime.link
-        can_radio = lk.connected and lk.link_mode == "rigwire" and not self.runtime.security.hardened
+        hard = self.runtime.security.hardened
+        online = lk.connected and lk.link_mode == "rigwire"
+        can_radio = online and not hard
 
         filtered: list[dict[str, Any]] = []
         for p in self._workspace_pkgs:
@@ -552,6 +561,7 @@ class AppsView:
             if built:
                 act_b = Gtk.Button(label="Update" if installed else "Install", valign=Gtk.Align.CENTER)
                 act_b.set_sensitive(bool(can_radio and not self._busy))
+                act_b.set_tooltip_text("Disabled in Safe Mode" if hard else ("Connect a RigWire radio first" if not online else None))
                 act_b.connect("clicked", lambda _b, pkg=p: self._install_package(pkg))
             else:
                 act_b = Gtk.Button(label="Build", valign=Gtk.Align.CENTER)
@@ -579,7 +589,9 @@ class AppsView:
 
         self.bundles_section.set_visible(bool(bundles))
         lk = self.runtime.link
-        can_radio = lk.connected and lk.link_mode == "rigwire" and not self.runtime.security.hardened
+        hard = self.runtime.security.hardened
+        online = lk.connected and lk.link_mode == "rigwire"
+        can_radio = online and not hard
 
         for title, desc, pkgs in bundles:
             built = [p for p in pkgs if p.get("built_exists")]
@@ -591,6 +603,7 @@ class AppsView:
             row.add_prefix(Gtk.Image(icon_name="package-x-generic-symbolic", pixel_size=24))
             btn = Gtk.Button(label=f"Install ({len(built)})", valign=Gtk.Align.CENTER)
             btn.set_sensitive(bool(can_radio and built and not self._busy))
+            btn.set_tooltip_text("Disabled in Safe Mode" if hard else ("Connect a RigWire radio first" if not online else None))
             btn.connect("clicked", lambda _b, t=title, ps=built: self._confirm_install_bundle(t, ps))
             row.add_suffix(btn)
             self.bundles_list.append(row)

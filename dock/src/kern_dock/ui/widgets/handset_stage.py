@@ -107,7 +107,7 @@ class HandsetStage(Gtk.Box):
         self._hold_timers: dict[str, int] = {}
         self._frame_pending = False
         self.alt_hints = False
-        self._sizing = "desktop"
+        self._sizing = ""
         self.on_rec_event: Callable[[], None] | None = None
 
         # --- Full-Scale Interactive 3D Handset DrawingArea ---
@@ -200,7 +200,7 @@ class HandsetStage(Gtk.Box):
         runtime.events.subscribe("handset.changed", lambda _e: self._on_model_changed(), main_thread=True)
         runtime.events.subscribe("lcd.changed", lambda _e: self.queue_redraw(), main_thread=True)
 
-        self.sync_geometry()
+        self.set_sizing("desktop")
         self.refresh_state()
         self._refresh_audio_btns()
 

@@ -483,7 +483,7 @@ class DockRuntime:
         "online": "Connected",
         "tx": "Transmitting",
         "headless": "Headless",
-        "hardened": "Hardened",
+        "hardened": "Safe Mode",
         "dfu": "Bootloader",
     }
 

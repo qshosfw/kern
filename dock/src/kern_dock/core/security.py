@@ -149,14 +149,14 @@ class SecurityController:
                 ) = self._saved_policy
                 self._saved_policy = None
             self._hardened = enabled
-            self._record("system", "hardened_mode", "info", f"{'ENABLED' if enabled else 'DISABLED'} ({reason})")
+            self._record("system", "safe_mode", "info", f"{'ENABLED' if enabled else 'DISABLED'} ({reason})")
         self.events.emit("security.changed", self.snapshot(), source="security")
 
     def set_policy_flag(self, attr: str, value: bool) -> None:
         with self._lock:
             if self._hardened:
-                self._record("fs", f"policy.{attr}", "deny", "Blocked while Hardened Mode is active")
-                raise SecurityError("Policy flags are locked in Hardened Mode")
+                self._record("fs", f"policy.{attr}", "deny", "Blocked while Safe Mode is active")
+                raise SecurityError("Policy flags are locked in Safe Mode")
             if attr not in ("read_only", "validate_formats", "allow_sys_write", "allow_system_mod_delete"):
                 raise ValueError(f"Unknown policy flag {attr!r}")
             setattr(self.policy, attr, bool(value))
@@ -167,8 +167,8 @@ class SecurityController:
         with self._lock:
             armed = bool(armed)
             if armed and self._hardened:
-                self._record("rf", "arm_tx", "deny", "Blocked by Hardened Mode")
-                raise SecurityError("Hardened Mode blocks TX-over-USB arming")
+                self._record("rf", "arm_tx", "deny", "Blocked by Safe Mode")
+                raise SecurityError("Safe Mode blocks TX-over-USB arming")
             self._allow_usb_tx = armed
             self._tx_armed_at = time.monotonic() if armed else 0.0
             self._record("rf", "arm_tx", "allow" if armed else "info", f"TX={'ARMED' if armed else 'LOCKED'} ({reason})")
@@ -193,14 +193,14 @@ class SecurityController:
 
     def check_bootloader_entry(self) -> None:
         if self.hardened:
-            self._record("firmware", "reboot_bootloader", "deny", "Blocked by Hardened Mode")
-            raise SecurityError("Hardened Mode blocks bootloader entry")
+            self._record("firmware", "reboot_bootloader", "deny", "Blocked by Safe Mode")
+            raise SecurityError("Safe Mode blocks bootloader entry")
         self._record("firmware", "reboot_bootloader", "allow", "Permitted")
 
     def check_firmware_flash(self, fw_size: int) -> None:
         if self.hardened:
-            self._record("firmware", "flash", "deny", "Blocked by Hardened Mode")
-            raise SecurityError("Hardened Mode blocks firmware flashing")
+            self._record("firmware", "flash", "deny", "Blocked by Safe Mode")
+            raise SecurityError("Safe Mode blocks firmware flashing")
         if fw_size < 256 or fw_size > MAX_FIRMWARE_BYTES:
             self._record("firmware", "flash", "deny", f"Rejected size {fw_size} B")
             raise SecurityError(f"Firmware image size out of bounds ({fw_size:,} B)")
@@ -208,8 +208,8 @@ class SecurityController:
 
     def check_sideload(self) -> None:
         if self.hardened:
-            self._record("firmware", "sideload", "deny", "Blocked by Hardened Mode")
-            raise SecurityError("Hardened Mode blocks KRX app installs")
+            self._record("firmware", "sideload", "deny", "Blocked by Safe Mode")
+            raise SecurityError("Safe Mode blocks KRX app installs")
 
     def check_write(self, remote_path: str, data: bytes) -> str:
         clean = sanitize_kernfs_path(remote_path)
@@ -236,15 +236,15 @@ class SecurityController:
 
     def check_ipc_command(self, cmd: str, *, mutates: bool) -> None:
         if mutates and not self.ipc_allow_control:
-            self._record("ipc", cmd, "deny", "Mutating IPC command blocked (read-only or Hardened Mode)")
+            self._record("ipc", cmd, "deny", "Mutating IPC command blocked (read-only or Safe Mode)")
             raise SecurityError(f"IPC command '{cmd}' blocked by security policy")
         self._record("ipc", cmd, "allow", "mutating" if mutates else "read-only")
 
     def check_plugin_capability(self, plugin_id: str, cap: str) -> None:
         write_caps = {"radio.control", "fs.write", "firmware.flash", "system.exec"}
         if self.hardened and cap in write_caps:
-            self._record("plugin", f"{plugin_id}:{cap}", "deny", "Blocked by Hardened Mode")
-            raise SecurityError(f"Plugin '{plugin_id}' capability '{cap}' blocked in Hardened Mode")
+            self._record("plugin", f"{plugin_id}:{cap}", "deny", "Blocked by Safe Mode")
+            raise SecurityError(f"Plugin '{plugin_id}' capability '{cap}' blocked in Safe Mode")
 
     def record(self, category: str, action: str, outcome: str, detail: str) -> None:
         with self._lock:

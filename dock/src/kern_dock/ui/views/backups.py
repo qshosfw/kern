@@ -157,14 +157,21 @@ class BackupsView:
         online = lk.connected and lk.link_mode == "rigwire" and lk.fs_backend is not None and not self._busy
         for r in self._online_rows:
             r.set_sensitive(online)
+        hard = self.runtime.security.hardened
+        ro = self.runtime.security.policy.read_only
         can_restore = bool(
             online
             and self._loaded_backup is not None
-            and not self.runtime.security.policy.read_only
-            and not self.runtime.security.hardened
+            and not ro
+            and not hard
             and self._loaded_backup["format"] in ("KFW (Ascon-Hash256)", "ZIP Archive")
         )
         self.restore_btn.set_sensitive(can_restore)
+        self.restore_btn.set_tooltip_text(
+            "Disabled in Safe Mode"
+            if hard
+            else ("Disabled in Read-Only mode" if ro else ("Connect a RigWire radio first" if not online else "Restore backup to radio"))
+        )
 
     def run_backup(self, *, fmt: str, calib_only: bool) -> None:
         if self._busy:

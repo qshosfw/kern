@@ -50,9 +50,9 @@ CONFIG_SCHEMA: tuple[ConfigSpec, ...] = (
     ConfigSpec("os.ipc_enabled", "bool", True, "Local IPC & D-Bus Control", "Expose org.kernos.Dock D-Bus & local socket for CLI/scripts"),
     ConfigSpec("os.terminal_cmd", "str", "auto", "External Terminal", "Preferred OS terminal emulator or 'auto'"),
     # Security & Hardening
-    ConfigSpec("security.hardened", "bool", False, "Hardened Mode", "Lock files read-only, block bootloader/flashing/restores and restrict IPC/plugins"),
+    ConfigSpec("security.hardened", "bool", False, "Safe Mode", "Lock files read-only, block bootloader/flashing/restores and restrict IPC/plugins"),
     ConfigSpec("security.tx_relock_seconds", "int", 120, "TX Auto-Relock (s)", "Automatically disarm TX-over-USB after inactivity (0 disables)", 0, 3600),
-    ConfigSpec("security.ipc_allow_control", "bool", True, "Allow IPC Control Commands", "Permit external CLI/D-Bus clients to send keys or tune (blocked in Hardened Mode)"),
+    ConfigSpec("security.ipc_allow_control", "bool", True, "Allow IPC Control Commands", "Permit external CLI/D-Bus clients to send keys or tune (blocked in Safe Mode)"),
     # Plugins
     ConfigSpec("plugins.disabled", "list", [], "Disabled Plugins", "Plugin IDs disabled by user"),
 )

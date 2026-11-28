@@ -373,6 +373,9 @@ class FirmwareView:
         self.bl_icon.set_css_classes(["success"] if in_bl else ["dim-label"])
         self.bl_btn.set_visible(not in_bl)
         self.bl_btn.set_sensitive(can_enter)
+        self.bl_btn.set_tooltip_text(
+            "Disabled in Safe Mode" if hard else ("Connect a RigWire radio first" if not in_rw else "Restart into Bootloader")
+        )
         self.backup_btn.set_visible(bool(in_rw and self._on_open_tab))
         self.leave_demo_btn.set_visible(bool(in_bl and lk.demo_mode))
 
@@ -431,6 +434,11 @@ class FirmwareView:
         self.img_icon.set_css_classes(["success"] if has_fw else ["dim-label"])
 
         self.flash_row.set_sensitive(bool(in_bl and has_fw and not self.runtime.flashing_active and not hard))
+        self.flash_row.set_tooltip_text(
+            "Disabled in Safe Mode"
+            if hard
+            else ("Enter Bootloader mode first" if not in_bl else ("Select a firmware image first" if not has_fw else None))
+        )
 
         if self._last_flash_summary and not self.runtime.flashing_active:
             self.prog_row.set_visible(True)

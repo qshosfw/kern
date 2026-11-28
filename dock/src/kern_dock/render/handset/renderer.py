@@ -16,6 +16,8 @@ from .parts import (
     draw_k1_keycap,
     draw_k1_side_shroud,
     draw_k5_side_shroud,
+    draw_k10_keycap,
+    draw_k10_logo_led,
     draw_pango_text,
     draw_phillips_screw,
     draw_quansheng_logo,
@@ -1226,7 +1228,7 @@ class HandsetRenderer:
         spec = self._spec
         accent = spec.accent
         bx = self._body_bx
-        is_k1_collar = spec.chassis in ("k1-metal", "k1-clear")
+        is_k1_collar = spec.chassis in ("k1-metal", "k1-clear", "k10-pro")
         is_k5_side = spec.chassis in ("k5v3", "k5-black", "k5-99", "uv5r-plus")
 
         cr.set_source_surface(self._back_surf, 0, 0)
@@ -1349,9 +1351,12 @@ class HandsetRenderer:
         cr.paint()
 
         tx, ty_base, is_compact = self._torch_anchor
-        draw_top_flashlight(cr, tx, ty_base, torch_on, compact=is_compact, bare_led=(spec.chassis == "pcb-r51"))
+        draw_top_flashlight(cr, tx, ty_base, torch_on, compact=is_compact, bare_led=(spec.chassis in ("pcb-r51", "k10-pro")))
         lx_led, ly_led, lw_led, lh_led, rect_led = self._led_anchor
-        draw_frosted_led(cr, lx_led, ly_led, lw_led, lh_led, led_state, rectangular=rect_led)
+        if spec.chassis == "k10-pro":
+            draw_k10_logo_led(cr, lx_led, ly_led, lw_led, led_state)
+        else:
+            draw_frosted_led(cr, lx_led, ly_led, lw_led, lh_led, led_state, rectangular=rect_led)
 
         lx, ly, lw, lh = self._lcd_rect
         paint_fast_lcd(cr, lx, ly, lw, lh, lcd_state, lcd_st, self.lcd_cache)
@@ -1370,6 +1375,12 @@ class HandsetRenderer:
     ) -> None:
         if kstyle == "k1":
             draw_k1_keycap(cr, kx, ky, kw, kh, pri, s1, s2, press_t=pt, hover_t=ht, is_nav=is_nav, homing_pip=nub, accent=spec.accent)
+        elif kstyle.startswith("k10"):
+            corner = kstyle[4:] if len(kstyle) > 4 else ""
+            draw_k10_keycap(
+                cr, kx, ky, kw, kh, pri, s1, s2,
+                press_t=pt, hover_t=ht, is_nav=is_nav, homing_pip=nub, corner=corner, accent=spec.accent,
+            )
         elif kstyle in ("dome", "dome-col"):
             draw_snap_dome(
                 cr, kx + kw * 0.5, ky + kh * 0.5, min(kw, kh) * 0.44, pri,

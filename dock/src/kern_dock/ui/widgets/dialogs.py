@@ -356,6 +356,15 @@ def show_preferences_dialog(win: Any, runtime: DockRuntime, *, on_toast: Callabl
     # Page 4: Safety & Audit Log
     # =========================================================================
     p_sec = Adw.PreferencesPage(title="Safety", icon_name="security-high-symbolic")
+    grp_safe = Adw.PreferencesGroup(title="Safe Mode")
+    sw_safe = Adw.SwitchRow(
+        title="Safe Mode",
+        subtitle="Lock files read-only; block bootloader, flashing, restores, TX &amp; mutating IPC",
+        active=runtime.security.hardened,
+    )
+    grp_safe.add(sw_safe)
+    p_sec.add(grp_safe)
+
     grp_s = Adw.PreferencesGroup(title="RF &amp; IPC Safety")
 
     tx_spin = Adw.SpinRow.new_with_range(0, 600, 15)
@@ -366,8 +375,19 @@ def show_preferences_dialog(win: Any, runtime: DockRuntime, *, on_toast: Callabl
     grp_s.add(tx_spin)
 
     sw_ipc_ctl = Adw.SwitchRow(title="Local IPC Control", subtitle="Allow CLI &amp; D-Bus control", active=bool(runtime.config.get("security.ipc_allow_control", True)))
+    sw_ipc_ctl.set_sensitive(not runtime.security.hardened)
+    sw_ipc_ctl.set_tooltip_text("Disabled in Safe Mode" if runtime.security.hardened else None)
     sw_ipc_ctl.connect("notify::active", lambda w, _p: (runtime.security.set_ipc_allow_control(w.get_active()), runtime.config.set("security.ipc_allow_control", w.get_active())))
     grp_s.add(sw_ipc_ctl)
+
+    def _on_safe_toggled(w: Any, _p: Any) -> None:
+        on = bool(w.get_active())
+        runtime.set_hardened(on)
+        sw_ipc_ctl.set_sensitive(not on)
+        sw_ipc_ctl.set_tooltip_text("Disabled in Safe Mode" if on else None)
+        on_toast("Safe Mode ON" if on else "Safe Mode OFF")
+
+    sw_safe.connect("notify::active", _on_safe_toggled)
     p_sec.add(grp_s)
 
     grp_aud = Adw.PreferencesGroup(title="Recent Security Audit Log")

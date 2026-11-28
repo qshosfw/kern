@@ -25,8 +25,8 @@ K5_99_MATRIX: list[list[tuple[str, str, str, str]]] = [
 
 K10_PRO_MATRIX: list[list[tuple[str, str, str, str]]] = [
     [("menu", "MENU", "", ""), ("up", "_K1_LT_", "", ""), ("down", "_K1_GT_", "", ""), ("exit", "EXIT", "", "")],
-    [("1", "1", "Sql", ".,?"), ("2", "2", "Msg", "abc"), ("3", "3", "Mod", "def"), ("star", "*", "Selc", "Scan")],
-    [("4", "4", "FC", "ghi"), ("5", "5", "Scr", "jkl"), ("6", "6", "WX", "mno"), ("0", "0", "FM", "")],
+    [("1", "1", "Sql", ".,?"), ("2", "2", "Msg", "abc"), ("3", "3", "Mod", "def"), ("star", "*", "selc", "scan")],
+    [("4", "4", "FC", "ghi"), ("5", "5", "Scr", "jkl"), ("6", "6", "WX", "mno"), ("0", "0", "_RADIO_", "")],
     [("7", "7", "H/L", "pqrs"), ("8", "8", "Spec", "tuv"), ("9", "9", "Call", "wxyz"), ("f", "#", "Dial", "lock")],
 ]
 
@@ -167,11 +167,11 @@ MODELS: dict[str, HandsetSpec] = {
         label="UV-K10 Pro",
         chassis="k10-pro",
         palette="K10 Warm",
-        accent=(0.16, 0.72, 0.96),
-        armor_stops=((0.0, (0.48, 0.49, 0.46)), (0.5, (0.36, 0.37, 0.35)), (1.0, (0.28, 0.29, 0.28))),
-        body_tone=(0.20, 0.24, 0.30),
-        size=(356, 588),
-        description="Dual knobs · Warm LCD",
+        accent=(0.12, 0.70, 0.95),
+        armor_stops=((0.0, (0.58, 0.56, 0.51)), (0.5, (0.44, 0.42, 0.39)), (1.0, (0.31, 0.30, 0.28))),
+        body_tone=(0.21, 0.27, 0.36),
+        size=(348, 584),
+        description="Slate blue · Warm LCD",
     ),
     # --- Developer Bench Hardware Views ---
     "k1-naked": HandsetSpec(

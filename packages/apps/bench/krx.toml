@@ -1,6 +1,7 @@
 name = "Bench"
 output = "bench.krx"
-profile = "n1"
+profile = "p1"
+page_size = 2048
 icon = "APP_DIAG"
 caps = [
     "RADIO_RX", "RADIO_TX", "STORAGE_READ", "STORAGE_WRITE", "AUDIO_OUTPUT", "DISPLAY_DIRECT",
@@ -8,6 +9,11 @@ caps = [
     "KEYPAD", "TASK_CONTROL", "SERVICE_REGISTRY",
 ]
 root = "bench.c"
+blocks = [
+    "page_ui.c",
+    "page_rf.c",
+    "page_hw.c",
+]
 
 icon_8 = """
 ########

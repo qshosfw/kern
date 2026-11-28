@@ -20,6 +20,7 @@ from .catalog import K1_MATRIX, K5_99_MATRIX, K5_BOTTOM_MATRIX, K10_PRO_MATRIX
 from .parts import (
     draw_k1_side_shroud,
     draw_k5_side_shroud,
+    draw_k10_logo_badge,
     draw_pango_text,
     draw_quansheng_logo,
 )
@@ -919,187 +920,569 @@ def build_uv5r_plus(
 
 
 # =============================================================================
-# 5. Quansheng UV-K10 Pro (`media_1795271357589` & `media_1795271363050`)
+# 5. Quansheng UV-K10 Pro (Photorealistic front chassis from official hardware photos)
 # =============================================================================
 def build_k10_pro(
     rend: Any, back_cr: Any, cr: Any, W: int, H: int, lcd_st: LcdSettings, spec: HandsetSpec
 ) -> None:
-    """UV-K10 Pro: slate-blue tactical exoskeleton, cyan collar, dual knobs, titanium fascia & A/B V/M Band."""
+    """
+    Quansheng UV-K10 Pro:
+      • Metallic slate-blue sculpted exoskeleton with 3 raised top turret collars
+      • Anodized cyan antenna collar + matte U/V rubber whip base
+      • Center knurled waterproof SMA/HF dust cap with top pull-tab + right diagonally-knurled volume knob
+      • Warm brushed champagne-titanium upper U-fascia terminating cleanly above the black keypad basin
+      • Contoured glossy-black QUANSHENG brow badge with live glowing dual-RF-arc RX/TX status LED
+      • Deep glossy-black beveled LCD lens, tight 3-key [A|B] · V/M · Band bar, recessed slate accent bar
+      • Sculpted 4×4 chamfered-corner matte-black keypad with horizontal divider ribs & cyan '0' FM radio icon
+      • Left flank: cyan-collared tactical PTT, two dotless black side keys, vivid cyan lower APRS button
+    """
     import cairo
 
-    bx, by, bw, bh = 32.0, 58.0, W - 48.0, H - 70.0
+    bx, by, bw, bh = 30.0, 64.0, W - 46.0, H - 76.0
     rend._body_bx = bx
     rend._side_specs = [
-        ("ptt", 9.0, by + 62.0, 26.0, 112.0, True, 0),
-        ("side1", 12.0, by + 186.0, 23.0, 34.0, False, 1),
-        ("side2", 12.0, by + 228.0, 23.0, 34.0, False, 2),
+        ("ptt", 8.0, by + 54.0, 25.0, 102.0, True, 0),
+        ("side1", 11.0, by + 170.0, 22.0, 31.0, False, 0),
+        ("side2", 11.0, by + 206.0, 22.0, 31.0, False, 0),
     ]
     for kn, sx, sy, sw, sh, _p, _d in rend._side_specs:
         rend.hitboxes[kn] = (sx - 3.0, sy, sw + 4.0, sh)
 
-    round_rect(back_cr, bx + 4, by + 10, bw, bh, 18.0)
-    back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.42)
-    back_cr.fill()
-    draw_k1_side_shroud(back_cr, bx, by, bh, rend._side_specs)
-
-    # Signature cyan-blue APRS lower side indicator tab peeking on left flank!
-    round_rect(back_cr, bx - 10.0, by + 286.0, 12.0, 26.0, 4.0)
-    back_cr.set_source_rgb(0.14, 0.72, 0.94)
+    # --- Back layer: drop shadow, tailored upper-left tactical button shroud, cyan SK3 & right port cheek ---
+    round_rect(back_cr, bx + 4.0, by + 10.0, bw, bh, 17.0)
+    back_cr.set_source_rgba(0.0, 0.0, 0.0, 0.44)
     back_cr.fill()
 
-    # Tall antenna with anodized cyan collar + twin top knurled knobs (channel + power/vol)
-    ax = bx + 52.0
-    _draw_tapered_antenna(cr, ax, by, cyan_collar=True)
-    for kx, kw, kh in ((bx + bw * 0.49, 44.0, 29.0), (bx + bw - 68.0, 52.0, 34.0)):
-        ky = by - kh + 5.0
-        round_rect(cr, kx, ky, kw, kh, 6.0)
-        pk = cairo.LinearGradient(kx, 0, kx + kw, 0)
-        pk.add_color_stop_rgb(0.0, 0.08, 0.09, 0.11)
-        pk.add_color_stop_rgb(0.42, 0.28, 0.30, 0.34)
-        pk.add_color_stop_rgb(1.0, 0.06, 0.07, 0.09)
-        cr.set_source(pk)
-        cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.14)
-        cr.set_line_width(0.8)
-        cr.stroke()
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.62)
-        for rx in range(int(kx + 6), int(kx + kw - 4), 7):
-            round_rect(cr, rx, ky + 4.0, 3.0, kh - 10.0, 1.2)
-            cr.fill()
+    # Tailored UV-K10 Pro left side-button shroud: hugs PTT, SK1, SK2 & cyan SK3 then tucks cleanly into the lower rail
+    sh_x = bx - 13.5
+    sh_top = by + 34.0
+    sk3_y = by + 247.0
+    sh_bot = sk3_y + 39.0
+    back_cr.new_path()
+    back_cr.move_to(bx + 4.0, sh_top - 4.0)
+    back_cr.curve_to(bx - 8.0, sh_top - 2.0, sh_x, sh_top + 8.0, sh_x, sh_top + 18.0)
+    back_cr.line_to(sh_x, sh_bot - 14.0)
+    back_cr.curve_to(sh_x, sh_bot - 2.0, bx - 8.0, sh_bot + 4.0, bx + 4.0, sh_bot + 6.0)
+    back_cr.close_path()
+    pat_sh = cairo.LinearGradient(sh_x, 0, bx + 4.0, 0)
+    pat_sh.add_color_stop_rgb(0.0, 0.055, 0.065, 0.08)
+    pat_sh.add_color_stop_rgb(0.35, 0.145, 0.16, 0.185)
+    pat_sh.add_color_stop_rgb(0.75, 0.085, 0.095, 0.11)
+    pat_sh.add_color_stop_rgb(1.0, 0.035, 0.04, 0.048)
+    back_cr.set_source(pat_sh)
+    back_cr.fill_preserve()
+    back_cr.set_source_rgba(1.0, 1.0, 1.0, 0.09)
+    back_cr.set_line_width(0.85)
+    back_cr.stroke()
+    for _kn, sx, sy, sw, sh, is_ptt, _dots in rend._side_specs:
+        round_rect(back_cr, sx + 4.0, sy - 2.4, sw - 2.0, sh + 4.8, 8.0 if is_ptt else 6.0)
+        back_cr.set_source_rgba(0.015, 0.015, 0.02, 0.90)
+        back_cr.fill()
 
-    rend._torch_anchor = (bx + bw * 0.36, by, True)
-    rend.hitboxes["_torch"] = (bx + bw * 0.36 - 16.0, by - 14.0, 32.0, 20.0)
-    rend._led_anchor = (bx + 90.0, by + 6.0, 15.0, 6.0, True)
+    # Vivid cyan-blue lower side key (SK3 / APRS) nestled cleanly in the lower-left side channel
+    round_rect(back_cr, bx - 10.5, sk3_y - 2.0, 14.0, 34.0, 4.5)
+    back_cr.set_source_rgba(0.02, 0.025, 0.035, 0.90)
+    back_cr.fill()
+    round_rect(back_cr, bx - 9.2, sk3_y, 12.0, 30.0, 3.6)
+    pat_sk3 = cairo.LinearGradient(bx - 9.2, sk3_y, bx + 2.8, sk3_y)
+    pat_sk3.add_color_stop_rgb(0.0, 0.09, 0.62, 0.88)
+    pat_sk3.add_color_stop_rgb(0.45, 0.22, 0.82, 0.99)
+    pat_sk3.add_color_stop_rgb(1.0, 0.06, 0.46, 0.72)
+    back_cr.set_source(pat_sk3)
+    back_cr.fill_preserve()
+    back_cr.set_source_rgba(1.0, 1.0, 1.0, 0.28)
+    back_cr.set_line_width(0.75)
+    back_cr.stroke()
 
-    # Rugged chamfered slate-blue tactical exoskeleton
-    cr.new_sub_path()
-    cr.move_to(bx + 18.0, by)
-    cr.line_to(bx + bw - 18.0, by)
-    cr.line_to(bx + bw, by + 18.0)
-    cr.line_to(bx + bw, by + bh - 18.0)
-    cr.line_to(bx + bw - 16.0, by + bh)
-    cr.line_to(bx + 16.0, by + bh)
-    cr.line_to(bx, by + bh - 18.0)
-    cr.line_to(bx, by + 18.0)
+    # Right flank: subtle rubberized Kenwood + USB-C port flap cheek peeking along right edge
+    round_rect(back_cr, bx + bw - 6.0, by + 64.0, 11.5, 198.0, 4.8)
+    pat_rc = cairo.LinearGradient(bx + bw - 6.0, 0, bx + bw + 5.5, 0)
+    pat_rc.add_color_stop_rgb(0.0, 0.05, 0.06, 0.075)
+    pat_rc.add_color_stop_rgb(0.55, 0.16, 0.18, 0.21)
+    pat_rc.add_color_stop_rgb(1.0, 0.07, 0.08, 0.095)
+    back_cr.set_source(pat_rc)
+    back_cr.fill()
+    # Split seam between audio jack flap and USB-C flap on right flank
+    back_cr.set_source_rgba(0.02, 0.02, 0.03, 0.82)
+    back_cr.rectangle(bx + bw - 2.0, by + 178.0, 8.0, 5.0)
+    back_cr.fill()
+
+    # --- Top Hardware: Antenna + cyan collar, Center knurled HF/SMA cap with pull-tab, Right diagonal-knurl knob ---
+    ax = bx + 54.0
+    # Matte black U/V antenna lower boot (slightly tapered upward)
+    pat_ant = cairo.LinearGradient(ax - 23.0, 0, ax + 23.0, 0)
+    pat_ant.add_color_stop_rgb(0.00, 0.06, 0.065, 0.075)
+    pat_ant.add_color_stop_rgb(0.28, 0.26, 0.27, 0.29)
+    pat_ant.add_color_stop_rgb(0.58, 0.15, 0.16, 0.175)
+    pat_ant.add_color_stop_rgb(1.00, 0.045, 0.05, 0.06)
+    cr.set_source(pat_ant)
+    cr.new_path()
+    cr.move_to(ax - 23.0, by - 8.0)
+    cr.line_to(ax - 21.0, 2.0)
+    cr.line_to(ax + 21.0, 2.0)
+    cr.line_to(ax + 23.0, by - 8.0)
     cr.close_path()
-    pb = cairo.LinearGradient(bx, by, bx + bw, by)
-    pb.add_color_stop_rgb(0.00, 0.30, 0.36, 0.45)
-    pb.add_color_stop_rgb(0.08, 0.20, 0.25, 0.33)
-    pb.add_color_stop_rgb(0.50, 0.16, 0.20, 0.27)
-    pb.add_color_stop_rgb(0.92, 0.20, 0.25, 0.33)
-    pb.add_color_stop_rgb(1.00, 0.28, 0.34, 0.43)
-    cr.set_source(pb)
+    cr.fill()
+
+    # Subtle embossed vertical "U/V" text on antenna boot (authentic Quansheng whip detail)
+    cr.save()
+    cr.translate(ax, 23.0)
+    cr.rotate(-math.pi * 0.5)
+    draw_pango_text(cr, "U/V", 0.0, 0.0, font_desc="Adwaita Sans Bold 8.0", rgba=(0.04, 0.045, 0.055, 0.52), halign="center", valign="center")
+    cr.restore()
+
+    # Signature bright anodized cyan-turquoise antenna base collar
+    col_y = by - 19.0
+    round_rect(cr, ax - 23.5, col_y, 47.0, 14.5, 2.2)
+    pat_col = cairo.LinearGradient(ax - 23.5, 0, ax + 23.5, 0)
+    pat_col.add_color_stop_rgb(0.00, 0.04, 0.42, 0.64)
+    pat_col.add_color_stop_rgb(0.28, 0.20, 0.80, 0.98)
+    pat_col.add_color_stop_rgb(0.44, 0.34, 0.89, 1.00)
+    pat_col.add_color_stop_rgb(0.76, 0.09, 0.58, 0.82)
+    pat_col.add_color_stop_rgb(1.00, 0.03, 0.32, 0.52)
+    cr.set_source(pat_col)
     cr.fill_preserve()
-    cr.set_source_rgba(1.0, 1.0, 1.0, 0.18)
-    cr.set_line_width(1.2)
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.24)
+    cr.set_line_width(0.75)
+    cr.stroke()
+    # Thin dark separation groove above and below cyan collar
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.55)
+    cr.set_line_width(1.0)
+    cr.move_to(ax - 23.0, col_y + 0.3)
+    cr.line_to(ax + 23.0, col_y + 0.3)
     cr.stroke()
 
-    # Sculpted brushed warm-titanium inner metallic armor (contoured waist cheeks!)
-    fx_l, fx_r = bx + 11.0, bx + bw - 11.0
-    fy_t, fy_b = by + 12.0, by + bh - 12.0
-    cr.new_sub_path()
-    cr.move_to(fx_l + 10.0, fy_t)
-    cr.line_to(fx_r - 10.0, fy_t)
-    cr.line_to(fx_r, fy_t + 12.0)
-    cr.line_to(fx_r, fy_t + 258.0)
-    cr.line_to(fx_r - 7.0, fy_t + 272.0)
-    cr.line_to(fx_r - 7.0, fy_b - 22.0)
-    cr.line_to(fx_r - 16.0, fy_b)
-    cr.line_to(fx_l + 16.0, fy_b)
-    cr.line_to(fx_l + 7.0, fy_b - 22.0)
-    cr.line_to(fx_l + 7.0, fy_t + 272.0)
-    cr.line_to(fx_l, fy_t + 258.0)
-    cr.line_to(fx_l, fy_t + 12.0)
+    # Center turret: knurled black waterproof HF/SMA dust cap + signature top pull-tab nub
+    cx_m = bx + bw * 0.505
+    cap_w, cap_h = 42.0, 21.0
+    cap_y = by - 29.0
+    # Top pull-tab stem sticking up from center of dust cap
+    pat_tab = cairo.LinearGradient(cx_m - 6.0, 0, cx_m + 6.0, 0)
+    pat_tab.add_color_stop_rgb(0.0, 0.07, 0.08, 0.09)
+    pat_tab.add_color_stop_rgb(0.4, 0.28, 0.30, 0.33)
+    pat_tab.add_color_stop_rgb(1.0, 0.05, 0.06, 0.07)
+    cr.set_source(pat_tab)
+    cr.new_path()
+    cr.move_to(cx_m - 6.0, cap_y + 2.0)
+    cr.line_to(cx_m - 3.8, cap_y - 9.0)
+    cr.line_to(cx_m + 3.8, cap_y - 9.0)
+    cr.line_to(cx_m + 6.0, cap_y + 2.0)
     cr.close_path()
-    pa = cairo.LinearGradient(fx_l, fy_t, fx_r, fy_t)
-    pa.add_color_stop_rgb(0.00, 0.34, 0.35, 0.33)
-    pa.add_color_stop_rgb(0.18, 0.56, 0.57, 0.54)
-    pa.add_color_stop_rgb(0.50, 0.44, 0.45, 0.42)
-    pa.add_color_stop_rgb(0.82, 0.54, 0.55, 0.52)
-    pa.add_color_stop_rgb(1.00, 0.32, 0.33, 0.31)
-    cr.set_source(pa)
+    cr.fill()
+    # Rounded shoulder neck below dust cap
+    round_rect(cr, cx_m - 17.0, cap_y + cap_h - 4.0, 34.0, 12.0, 3.0)
+    cr.set_source_rgb(0.08, 0.09, 0.11)
+    cr.fill()
+    # Main ribbed rubber dust-cap drum
+    round_rect(cr, cx_m - cap_w * 0.5, cap_y, cap_w, cap_h, 6.5)
+    pat_mc = cairo.LinearGradient(cx_m - cap_w * 0.5, 0, cx_m + cap_w * 0.5, 0)
+    pat_mc.add_color_stop_rgb(0.00, 0.06, 0.07, 0.08)
+    pat_mc.add_color_stop_rgb(0.32, 0.27, 0.29, 0.32)
+    pat_mc.add_color_stop_rgb(0.65, 0.14, 0.15, 0.17)
+    pat_mc.add_color_stop_rgb(1.00, 0.05, 0.06, 0.07)
+    cr.set_source(pat_mc)
     cr.fill_preserve()
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.14)
+    cr.set_line_width(0.8)
+    cr.stroke()
+    # Vertical knurling grooves on center cap
+    cr.set_source_rgba(0.02, 0.02, 0.03, 0.72)
+    for dx in (-15.0, -9.0, -3.0, 3.0, 9.0, 15.0):
+        round_rect(cr, cx_m + dx - 1.3, cap_y + 3.5, 2.6, cap_h - 7.0, 1.0)
+        cr.fill()
+
+    # Right turret: larger power/volume rotary knob with iconic slanted/diagonal knurling ridges (///)
+    kx_r = bx + bw - 54.0
+    kw_r, kh_r = 56.0, 29.0
+    ky_r = by - 34.0
+    round_rect(cr, kx_r - kw_r * 0.5, ky_r, kw_r, kh_r, 6.0)
+    pat_rk = cairo.LinearGradient(kx_r - kw_r * 0.5, 0, kx_r + kw_r * 0.5, 0)
+    pat_rk.add_color_stop_rgb(0.00, 0.06, 0.065, 0.075)
+    pat_rk.add_color_stop_rgb(0.28, 0.28, 0.30, 0.33)
+    pat_rk.add_color_stop_rgb(0.58, 0.15, 0.16, 0.18)
+    pat_rk.add_color_stop_rgb(1.00, 0.045, 0.05, 0.06)
+    cr.set_source(pat_rk)
+    cr.fill_preserve()
+    # Clipped diagonal knurling grooves leaning top-right to bottom-left
     cr.save()
     cr.clip_preserve()
-    paint_brushed_metal_grain(cr, fx_l, fy_t, fx_r - fx_l, fy_b - fy_t, vertical=False, alpha=0.032)
+    for dx in range(-32, 36, 8):
+        cr.set_source_rgba(0.02, 0.02, 0.03, 0.72)
+        cr.set_line_width(3.0)
+        cr.move_to(kx_r + dx + 5.5, ky_r + 4.0)
+        cr.line_to(kx_r + dx - 2.5, ky_r + kh_r - 3.0)
+        cr.stroke()
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.10)
+        cr.set_line_width(0.8)
+        cr.move_to(kx_r + dx + 7.2, ky_r + 4.0)
+        cr.line_to(kx_r + dx - 0.8, ky_r + kh_r - 3.0)
+        cr.stroke()
+    # Chamfered top bevel band on volume knob
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.12)
+    cr.rectangle(kx_r - kw_r * 0.5, ky_r, kw_r, 3.8)
+    cr.fill()
     cr.restore()
-    cr.set_source_rgba(1.0, 0.99, 0.96, 0.26)
-    cr.set_line_width(1.0)
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.16)
+    cr.set_line_width(0.85)
     cr.stroke()
 
-    # Authentic dark-ink QUANSHENG wordmark directly on the brushed titanium brow!
-    draw_quansheng_logo(cr, bx + bw * 0.50, by + 27.0, scale=0.88, dark=True)
-
-    # Proper 1.46:1 warm 1.44" display inside bold matte-black chamfered bezel
-    lz_w = 220
-    lz_h = int(round(lz_w / 1.43))  # 154px -> inner 208x142
-    lz_x = int(bx + (bw - lz_w) * 0.5)
-    lz_y = int(by + 44)
-    rend._lcd_rect = _draw_lcd_bezel(cr, lz_x, lz_y, lz_w, lz_h, lcd_st, radius=7.0, chamfer=5.5, glow_alpha=0.18)
-
-    # Dedicated UV-K10 Pro 3-key metallic-rimmed quick bar (`[A|B]`, `V/M`, `Band`)
-    qk_y = lz_y + lz_h + 16.0
-    qk_w = (bw - 64.0) / 3.0
-    round_rect(cr, bx + 20.0, qk_y - 3.0, bw - 40.0, 32.0, 7.0)
-    cr.set_source_rgb(0.05, 0.055, 0.065)
-    cr.fill()
-    for qi, qtxt in enumerate(("A/B", "V/M", "Band")):
-        qx = bx + 24.0 + qi * (qk_w + 8.0)
-        round_rect(cr, qx, qk_y, qk_w, 26.0, 5.0)
-        pq = cairo.LinearGradient(qx, qk_y, qx, qk_y + 26.0)
-        pq.add_color_stop_rgb(0.0, 0.24, 0.26, 0.29)
-        pq.add_color_stop_rgb(1.0, 0.11, 0.12, 0.14)
-        cr.set_source(pq)
+    # Raised slate-blue cylindrical turret bosses seamlessly joining the 3 top controls to the top deck
+    def _draw_slate_boss(cx_b: float, w_b: float, y_top: float, h_b: float) -> None:
+        round_rect(cr, cx_b - w_b * 0.5, y_top, w_b, h_b, 8.0)
+        pat_sb = cairo.LinearGradient(cx_b - w_b * 0.5, y_top, cx_b + w_b * 0.5, y_top)
+        pat_sb.add_color_stop_rgb(0.00, 0.14, 0.19, 0.27)
+        pat_sb.add_color_stop_rgb(0.28, 0.34, 0.42, 0.54)
+        pat_sb.add_color_stop_rgb(0.55, 0.22, 0.28, 0.38)
+        pat_sb.add_color_stop_rgb(1.00, 0.11, 0.15, 0.22)
+        cr.set_source(pat_sb)
         cr.fill_preserve()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.20)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.18)
         cr.set_line_width(0.85)
         cr.stroke()
-        if qtxt == "A/B":
-            # Authentic UV-K10 Pro split white [A] / dark [B] badge!
-            bw_b = 30.0
-            bx_b = qx + (qk_w - bw_b) * 0.5
-            by_b = qk_y + 5.0
-            round_rect(cr, bx_b, by_b, bw_b, 16.0, 2.5)
-            cr.set_source_rgb(0.95, 0.96, 0.98)
-            cr.fill_preserve()
-            cr.set_source_rgba(0.95, 0.96, 0.98, 0.95)
-            cr.set_line_width(1.0)
-            cr.stroke()
-            cr.rectangle(bx_b + bw_b * 0.5, by_b + 1.0, bw_b * 0.5 - 1.0, 14.0)
-            cr.set_source_rgb(0.10, 0.11, 0.13)
-            cr.fill()
-            draw_pango_text(cr, "A", bx_b + bw_b * 0.25, by_b + 8.0, font_desc="Adwaita Sans Bold 7.8", rgba=(0.08, 0.09, 0.11, 0.98), halign="center", valign="center")
-            draw_pango_text(cr, "B", bx_b + bw_b * 0.75, by_b + 8.0, font_desc="Adwaita Sans Bold 7.8", rgba=(0.95, 0.97, 0.99, 0.98), halign="center", valign="center")
-        else:
-            col = (0.38, 0.84, 0.99, 0.96) if qtxt == "Band" else (0.94, 0.96, 0.98, 0.95)
-            draw_pango_text(cr, qtxt, qx + qk_w * 0.5, qk_y + 13.0, font_desc="Adwaita Sans Bold 8.2", rgba=col, halign="center", valign="center")
 
-    # Twin milled horizontal speaker slots in the brushed titanium bridge
-    for sy in (qk_y + 34.0, qk_y + 46.0):
-        round_rect(cr, bx + 26.0, sy, bw - 52.0, 6.0, 3.0)
-        cr.set_source_rgb(0.035, 0.04, 0.048)
-        cr.fill()
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.22)
-        cr.set_line_width(0.65)
-        cr.move_to(bx + 29.0, sy + 6.6)
-        cr.line_to(bx + bw - 29.0, sy + 6.6)
-        cr.stroke()
+    _draw_slate_boss(ax, 58.0, by - 7.0, 20.0)
+    _draw_slate_boss(cx_m, 44.0, by - 9.0, 22.0)
+    _draw_slate_boss(kx_r, 64.0, by - 9.0, 22.0)
 
-    # Sunken chamfered matte-black 4×4 keypad tray (`Sql`, `Msg`, `Mod`, `Selc`, `Dial/lock`)
-    kp_x, kp_y, kp_w = bx + 24.0, qk_y + 62.0, bw - 48.0
-    gap_c, gap_r, kh = 6.5, 8.5, 35.5
-    kw = (kp_w - gap_c * 3.0) / 4.0
-    dish_h = 4 * kh + 3 * gap_r + 14.0
-    round_rect(cr, kp_x - 6.0, kp_y - 7.0, kp_w + 12.0, dish_h, 8.0)
-    cr.set_source_rgb(0.055, 0.06, 0.07)
+    # Invisible top-center torch beam anchor (emits beam when torch_on without adding a fake grey block)
+    rend._torch_anchor = (cx_m, by - 2.0, True)
+    rend.hitboxes["_torch"] = (cx_m - 20.0, by - 28.0, 40.0, 26.0)
+
+    # --- Sculpted Metallic Slate-Blue Outer Exoskeleton ---
+    def _body_path() -> None:
+        cr.new_sub_path()
+        cr.move_to(bx + 14.0, by)
+        cr.line_to(bx + bw - 14.0, by)
+        cr.curve_to(bx + bw - 3.0, by, bx + bw, by + 5.0, bx + bw, by + 16.0)
+        cr.line_to(bx + bw, by + bh - 14.0)
+        cr.curve_to(bx + bw, by + bh - 4.0, bx + bw - 5.0, by + bh, bx + bw - 14.0, by + bh)
+        cr.line_to(bx + 14.0, by + bh)
+        cr.curve_to(bx + 5.0, by + bh, bx, by + bh - 4.0, bx, by + bh - 14.0)
+        cr.line_to(bx, by + 16.0)
+        cr.curve_to(bx, by + 5.0, bx + 3.0, by, bx + 14.0, by)
+        cr.close_path()
+
+    _body_path()
+    pb = cairo.LinearGradient(bx, by, bx + bw, by)
+    pb.add_color_stop_rgb(0.00, 0.18, 0.24, 0.34)
+    pb.add_color_stop_rgb(0.05, 0.34, 0.42, 0.54)
+    pb.add_color_stop_rgb(0.14, 0.22, 0.28, 0.38)
+    pb.add_color_stop_rgb(0.50, 0.18, 0.23, 0.32)
+    pb.add_color_stop_rgb(0.86, 0.22, 0.28, 0.38)
+    pb.add_color_stop_rgb(0.95, 0.32, 0.40, 0.52)
+    pb.add_color_stop_rgb(1.00, 0.16, 0.21, 0.30)
+    cr.set_source(pb)
     cr.fill_preserve()
-    cr.set_source_rgba(1.0, 1.0, 1.0, 0.18)
+
+    # Subtle vertical sheen across upper deck & bottom chin of slate-blue shell
+    cr.save()
+    cr.clip_preserve()
+    pat_v = cairo.LinearGradient(0, by, 0, by + 26.0)
+    pat_v.add_color_stop_rgba(0.0, 0.72, 0.84, 1.0, 0.22)
+    pat_v.add_color_stop_rgba(0.6, 0.50, 0.62, 0.78, 0.05)
+    pat_v.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.0)
+    cr.set_source(pat_v)
+    cr.rectangle(bx, by, bw, 26.0)
+    cr.fill()
+
+    # Subtle horizontal sculpted chin bevel step at bottom of blue exoskeleton
+    pat_chin = cairo.LinearGradient(0, by + bh - 18.0, 0, by + bh)
+    pat_chin.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.18)
+    pat_chin.add_color_stop_rgba(0.55, 0.75, 0.86, 1.0, 0.14)
+    pat_chin.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.36)
+    cr.set_source(pat_chin)
+    cr.rectangle(bx, by + bh - 18.0, bw, 18.0)
+    cr.fill()
+    cr.restore()
+
+    cr.set_source_rgba(0.82, 0.90, 1.0, 0.22)
+    cr.set_line_width(1.1)
+    cr.stroke()
+
+    # Recessed dark inner framing perimeter around the lower half (keypad basin rim)
+    rail = 11.5
+    lower_y = by + 286.0
+    round_rect(cr, bx + rail - 1.5, lower_y, bw - (rail - 1.5) * 2.0, by + bh - lower_y - 12.0, 13.0)
+    cr.set_source_rgb(0.045, 0.05, 0.062)
+    cr.fill_preserve()
+    cr.set_source_rgba(0.75, 0.85, 0.98, 0.16)
+    cr.set_line_width(0.85)
+    cr.stroke()
+
+    # --- Sculpted Warm Brushed Champagne-Titanium Upper/Middle U-Fascia (stops cleanly above keypad!) ---
+    fx_l, fx_r = bx + rail, bx + bw - rail
+    fy_top_outer = by + 13.0
+    fy_top_mid = by + 18.0
+    fy_bridge_bot = by + 310.0
+
+    def _titanium_fascia_path() -> None:
+        cr.new_sub_path()
+        # Winged upper brow flaring right out to the outer top shoulders like the real UV-K10 Pro
+        cr.move_to(bx + 1.5, fy_top_outer + 3.0)
+        cr.curve_to(bx + 1.5, fy_top_outer, bx + 8.0, fy_top_outer, fx_l + 24.0, fy_top_outer + 2.5)
+        cr.line_to(bx + bw * 0.50 - 62.0, fy_top_mid)
+        cr.line_to(bx + bw * 0.50 + 62.0, fy_top_mid)
+        cr.line_to(fx_r - 24.0, fy_top_outer + 2.5)
+        cr.curve_to(bx + bw - 8.0, fy_top_outer, bx + bw - 1.5, fy_top_outer, bx + bw - 1.5, fy_top_outer + 3.0)
+        # Stepped shoulder wings tapering smoothly inward along the slate-blue side rails
+        cr.line_to(bx + bw - 1.5, fy_top_outer + 19.0)
+        cr.line_to(fx_r, fy_top_outer + 31.0)
+        cr.line_to(fx_r, fy_bridge_bot - 16.0)
+        cr.curve_to(fx_r, fy_bridge_bot - 4.0, fx_r - 5.0, fy_bridge_bot, fx_r - 16.0, fy_bridge_bot)
+        cr.line_to(fx_l + 16.0, fy_bridge_bot)
+        cr.curve_to(fx_l + 5.0, fy_bridge_bot, fx_l, fy_bridge_bot - 4.0, fx_l, fy_bridge_bot - 16.0)
+        cr.line_to(fx_l, fy_top_outer + 31.0)
+        cr.line_to(bx + 1.5, fy_top_outer + 19.0)
+        cr.close_path()
+
+    # Cast shadow of titanium armor onto the dark keypad basin below
+    cr.save()
+    cr.translate(0.0, 2.5)
+    _titanium_fascia_path()
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.55)
+    cr.fill()
+    cr.restore()
+
+    _titanium_fascia_path()
+    pa = cairo.LinearGradient(fx_l, fy_top_outer, fx_r, fy_top_outer)
+    pa.add_color_stop_rgb(0.00, 0.30, 0.29, 0.26)
+    pa.add_color_stop_rgb(0.08, 0.58, 0.56, 0.51)
+    pa.add_color_stop_rgb(0.24, 0.50, 0.48, 0.44)
+    pa.add_color_stop_rgb(0.50, 0.42, 0.40, 0.37)
+    pa.add_color_stop_rgb(0.76, 0.50, 0.48, 0.44)
+    pa.add_color_stop_rgb(0.92, 0.56, 0.54, 0.49)
+    pa.add_color_stop_rgb(1.00, 0.28, 0.27, 0.25)
+    cr.set_source(pa)
+    cr.fill_preserve()
+
+    cr.save()
+    cr.clip_preserve()
+    paint_brushed_metal_grain(cr, fx_l - 4.0, fy_top_outer, (fx_r - fx_l) + 8.0, fy_bridge_bot - fy_top_outer, vertical=False, alpha=0.030)
+    # Soft top metallic brow highlight
+    pat_brow = cairo.LinearGradient(0, fy_top_outer, 0, fy_top_outer + 32.0)
+    pat_brow.add_color_stop_rgba(0.0, 1.0, 0.98, 0.92, 0.26)
+    pat_brow.add_color_stop_rgba(1.0, 1.0, 0.98, 0.92, 0.0)
+    cr.set_source(pat_brow)
+    cr.rectangle(fx_l - 4.0, fy_top_outer, (fx_r - fx_l) + 8.0, 32.0)
+    cr.fill()
+    # Sculpted lower metallic bevel shading right above the keypad
+    pat_lip = cairo.LinearGradient(0, fy_bridge_bot - 12.0, 0, fy_bridge_bot)
+    pat_lip.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0)
+    pat_lip.add_color_stop_rgba(0.65, 0.0, 0.0, 0.0, 0.28)
+    pat_lip.add_color_stop_rgba(1.0, 1.0, 0.98, 0.92, 0.14)
+    cr.set_source(pat_lip)
+    cr.rectangle(fx_l, fy_bridge_bot - 12.0, fx_r - fx_l, 12.0)
+    cr.fill()
+    cr.restore()
+
+    cr.set_source_rgba(1.0, 0.98, 0.92, 0.30)
     cr.set_line_width(0.95)
     cr.stroke()
 
+    # --- Contoured Glossy-Black QUANSHENG Brow Badge + Dynamic RF-Arc LED Anchor ---
+    arc_ox, arc_oy, logo_sc = draw_k10_logo_badge(cr, bx + bw * 0.51, by + 23.5, scale=0.90)
+    rend._led_anchor = (arc_ox, arc_oy, logo_sc, 0.0, False)
+
+    # --- Deep Chamfered Titanium Rim + Glossy-Black LCD Lens Window ---
+    lz_w = 216
+    lz_h = 154
+    lz_x = int(bx + (bw - lz_w) * 0.5)
+    lz_y = int(by + 48)
+
+    # Outer 3D sloped titanium chamfer framing the screen
+    round_rect(cr, lz_x - 7.5, lz_y - 7.5, lz_w + 15.0, lz_h + 15.0, 14.0)
+    pat_ch = cairo.LinearGradient(lz_x, lz_y - 7.5, lz_x, lz_y + lz_h + 7.5)
+    pat_ch.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.56)
+    pat_ch.add_color_stop_rgba(0.45, 0.0, 0.0, 0.0, 0.18)
+    pat_ch.add_color_stop_rgba(0.88, 1.0, 0.98, 0.92, 0.24)
+    pat_ch.add_color_stop_rgba(1.0, 1.0, 0.98, 0.92, 0.40)
+    cr.set_source(pat_ch)
+    cr.fill()
+
+    # Deep glossy-black bezel lens (generous black glass border like real UV-K10 Pro photos)
+    round_rect(cr, lz_x, lz_y, lz_w, lz_h, 9.5)
+    pat_lens = cairo.LinearGradient(lz_x, lz_y, lz_x + lz_w * 0.6, lz_y + lz_h)
+    pat_lens.add_color_stop_rgb(0.0, 0.09, 0.095, 0.11)
+    pat_lens.add_color_stop_rgb(0.35, 0.04, 0.045, 0.052)
+    pat_lens.add_color_stop_rgb(1.0, 0.025, 0.028, 0.035)
+    cr.set_source(pat_lens)
+    cr.fill_preserve()
+
+    # Subtle diagonal glass sheen across the upper-left corner of the glossy black bezel
+    cr.save()
+    cr.clip_preserve()
+    cr.new_sub_path()
+    cr.move_to(lz_x, lz_y)
+    cr.line_to(lz_x + lz_w * 0.52, lz_y)
+    cr.line_to(lz_x + lz_w * 0.22, lz_y + lz_h)
+    cr.line_to(lz_x, lz_y + lz_h)
+    cr.close_path()
+    pat_gl = cairo.LinearGradient(lz_x, lz_y, lz_x + lz_w * 0.35, lz_y + lz_h)
+    pat_gl.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.09)
+    pat_gl.add_color_stop_rgba(0.55, 1.0, 1.0, 1.0, 0.02)
+    pat_gl.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0)
+    cr.set_source(pat_gl)
+    cr.fill()
+    cr.restore()
+
+    cr.set_source_rgba(1.0, 0.99, 0.96, 0.20)
+    cr.set_line_width(1.0)
+    cr.stroke()
+
+    # Inner recessed LCD active glass aperture (authentic thick glossy black border around active LCD)
+    pad_x, pad_y = 14, 14
+    act_x, act_y, act_w, act_h = lz_x + pad_x, lz_y + pad_y, lz_w - pad_x * 2, lz_h - pad_y * 2
+    if lcd_st.backlight_glow and lcd_st.backlight > 0:
+        bg_c, _, _, _ = _lcd_colors_norm(lcd_st)
+        cr.set_source_rgba(bg_c[0], bg_c[1], bg_c[2], 0.16)
+        round_rect(cr, act_x - 2.0, act_y - 2.0, act_w + 4.0, act_h + 4.0, 4.0)
+        cr.set_line_width(2.4)
+        cr.stroke()
+    rend._lcd_rect = (act_x, act_y, act_w, act_h)
+
+    # --- Integrated 3-Key Metallic-Rimmed Quick Bar (`[A|B]`, `V/M`, `Band`) ---
+    qk_y = lz_y + lz_h + 15.0
+    bar_x = fx_l + 15.0
+    bar_w = (fx_r - fx_l) - 30.0
+    bar_h = 31.0
+
+    # Deeply beveled recessed pill pocket holding the 3 closely abutted quick keys
+    round_rect(cr, bar_x - 3.5, qk_y - 3.5, bar_w + 7.0, bar_h + 7.0, 9.5)
+    pat_qp = cairo.LinearGradient(0, qk_y - 3.5, 0, qk_y + bar_h + 3.5)
+    pat_qp.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.62)
+    pat_qp.add_color_stop_rgba(0.85, 0.0, 0.0, 0.0, 0.25)
+    pat_qp.add_color_stop_rgba(1.0, 1.0, 0.98, 0.92, 0.30)
+    cr.set_source(pat_qp)
+    cr.fill()
+
+    round_rect(cr, bar_x - 1.5, qk_y - 1.5, bar_w + 3.0, bar_h + 3.0, 7.5)
+    cr.set_source_rgb(0.035, 0.04, 0.048)
+    cr.fill()
+
+    q_gap = 4.0
+    qk_w = (bar_w - q_gap * 2.0) / 3.0
+    for qi, qtxt in enumerate(("A/B", "V/M", "Band")):
+        qx = bar_x + qi * (qk_w + q_gap)
+        qy = qk_y + 1.0
+        qh = bar_h - 2.0
+        # Outer keys curve cleanly with the pill well; inner edges stay crisp
+        r_l = 6.0 if qi == 0 else 2.2
+        r_r = 6.0 if qi == 2 else 2.2
+        cr.new_sub_path()
+        cr.move_to(qx + r_l, qy)
+        cr.line_to(qx + qk_w - r_r, qy)
+        cr.arc(qx + qk_w - r_r, qy + r_r, r_r, -math.pi * 0.5, 0.0)
+        cr.line_to(qx + qk_w, qy + qh - r_r)
+        cr.arc(qx + qk_w - r_r, qy + qh - r_r, r_r, 0.0, math.pi * 0.5)
+        cr.line_to(qx + r_l, qy + qh)
+        cr.arc(qx + r_l, qy + qh - r_l, r_l, math.pi * 0.5, math.pi)
+        cr.line_to(qx, qy + r_l)
+        cr.arc(qx + r_l, qy + r_l, r_l, math.pi, math.pi * 1.5)
+        cr.close_path()
+
+        pq = cairo.LinearGradient(qx, qy, qx, qy + qh)
+        pq.add_color_stop_rgb(0.00, 0.25, 0.265, 0.295)
+        pq.add_color_stop_rgb(0.32, 0.16, 0.17, 0.19)
+        pq.add_color_stop_rgb(1.00, 0.095, 0.105, 0.12)
+        cr.set_source(pq)
+        cr.fill_preserve()
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.18)
+        cr.set_line_width(0.8)
+        cr.stroke()
+
+        if qtxt == "A/B":
+            # Authentic UV-K10 Pro split white [A] / black [B] badge
+            bw_b, bh_b = 31.0, 16.0
+            bx_b = qx + (qk_w - bw_b) * 0.5
+            by_b = qy + (qh - bh_b) * 0.5
+            round_rect(cr, bx_b, by_b, bw_b, bh_b, 2.5)
+            cr.set_source_rgb(0.94, 0.96, 0.98)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.94, 0.96, 0.98, 0.95)
+            cr.set_line_width(1.1)
+            cr.stroke()
+            cr.rectangle(bx_b + bw_b * 0.5, by_b + 1.1, bw_b * 0.5 - 1.1, bh_b - 2.2)
+            cr.set_source_rgb(0.09, 0.10, 0.12)
+            cr.fill()
+            draw_pango_text(cr, "A", bx_b + bw_b * 0.25, by_b + bh_b * 0.5, font_desc="Adwaita Sans Bold 8.0", rgba=(0.07, 0.08, 0.10, 0.98), halign="center", valign="center")
+            draw_pango_text(cr, "B", bx_b + bw_b * 0.75, by_b + bh_b * 0.5, font_desc="Adwaita Sans Bold 8.0", rgba=(0.95, 0.97, 0.99, 0.98), halign="center", valign="center")
+        else:
+            col = (0.44, 0.80, 0.98, 0.96) if qtxt == "Band" else (0.90, 0.93, 0.97, 0.96)
+            draw_pango_text(cr, qtxt, qx + qk_w * 0.5, qy + qh * 0.5, font_desc="Adwaita Sans Bold 8.4", rgba=col, halign="center", valign="center")
+
+    # --- Sculpted Recessed Horizontal Body-Color Accent / Acoustic Bridge (exact match to real UV-K10 Pro!) ---
+    acc_y = qk_y + bar_h + 12.0
+    acc_x = bar_x - 1.0
+    acc_w = bar_w + 2.0
+    acc_h = 16.5
+
+    # Deep recessed shadow channel around the sculpted horizontal pill bar
+    round_rect(cr, acc_x - 2.0, acc_y - 2.5, acc_w + 4.0, acc_h + 5.0, 9.5)
+    cr.set_source_rgb(0.035, 0.04, 0.048)
+    cr.fill()
+    # Bottom metallic lip catchlight under channel
+    cr.set_source_rgba(1.0, 0.98, 0.92, 0.26)
+    cr.set_line_width(0.8)
+    cr.move_to(acc_x + 8.0, acc_y + acc_h + 3.0)
+    cr.line_to(acc_x + acc_w - 8.0, acc_y + acc_h + 3.0)
+    cr.stroke()
+
+    # Raised beveled slate-blue/gunmetal horizontal bar inside the acoustic channel
+    round_rect(cr, acc_x + 1.5, acc_y + 1.5, acc_w - 3.0, acc_h - 3.0, 6.5)
+    pat_bar = cairo.LinearGradient(acc_x, acc_y, acc_x, acc_y + acc_h)
+    pat_bar.add_color_stop_rgb(0.00, 0.34, 0.41, 0.52)
+    pat_bar.add_color_stop_rgb(0.45, 0.22, 0.27, 0.36)
+    pat_bar.add_color_stop_rgb(1.00, 0.13, 0.17, 0.24)
+    cr.set_source(pat_bar)
+    cr.fill_preserve()
+    cr.set_source_rgba(0.82, 0.90, 1.0, 0.24)
+    cr.set_line_width(0.8)
+    cr.stroke()
+
+    # Subtle recessed acoustic micro-slot line below the pill bar
+    round_rect(cr, acc_x + 10.0, acc_y + acc_h - 0.5, acc_w - 20.0, 2.2, 1.0)
+    cr.set_source_rgba(0.02, 0.025, 0.03, 0.85)
+    cr.fill()
+
+    # --- Sculpted Matte-Black 4×4 Keypad Tray (extends cleanly down to the bottom slate-blue rim!) ---
+    kp_x = fx_l + 9.0
+    kp_y = fy_bridge_bot + 10.0
+    kp_w = (fx_r - fx_l) - 18.0
+    gap_c = 4.5
+    gap_r = 6.5
+    kw = (kp_w - gap_c * 3.0) / 4.0
+    kh_nav = 29.5
+    kh_num = 36.0
+    total_kp_h = kh_nav + 3.0 * kh_num + 3.0 * gap_r
+
+    # Chamfered matte-black keypad surround tray
+    round_rect(cr, kp_x - 5.5, kp_y - 5.5, kp_w + 11.0, total_kp_h + 11.0, 11.0)
+    pat_tray = cairo.LinearGradient(0, kp_y - 5.5, 0, kp_y + total_kp_h + 5.5)
+    pat_tray.add_color_stop_rgb(0.0, 0.075, 0.08, 0.095)
+    pat_tray.add_color_stop_rgb(1.0, 0.045, 0.05, 0.06)
+    cr.set_source(pat_tray)
+    cr.fill_preserve()
+    cr.set_source_rgba(0.80, 0.88, 1.0, 0.14)
+    cr.set_line_width(0.85)
+    cr.stroke()
+
+    # Crisp horizontal metallic-charcoal divider ribs between keypad rows (signature UV-K10 Pro tactile strips!)
+    for r_i in range(3):
+        ry_bar = kp_y + (kh_nav if r_i == 0 else kh_nav + r_i * (kh_num + gap_r)) + 2.0
+        round_rect(cr, kp_x + 2.0, ry_bar, kp_w - 4.0, 2.4, 1.0)
+        pat_div = cairo.LinearGradient(kp_x, ry_bar, kp_x + kp_w, ry_bar)
+        pat_div.add_color_stop_rgb(0.0, 0.12, 0.14, 0.17)
+        pat_div.add_color_stop_rgb(0.5, 0.24, 0.27, 0.32)
+        pat_div.add_color_stop_rgb(1.0, 0.12, 0.14, 0.17)
+        cr.set_source(pat_div)
+        cr.fill()
+
+    corner_map = {(0, 0): "k10-tl", (0, 3): "k10-tr", (3, 0): "k10-bl", (3, 3): "k10-br"}
     for r_i, row_keys in enumerate(K10_PRO_MATRIX):
-        ky = kp_y + r_i * (kh + gap_r)
+        ky = kp_y + (0.0 if r_i == 0 else (kh_nav + gap_r + (r_i - 1) * (kh_num + gap_r)))
+        kh = kh_nav if r_i == 0 else kh_num
         for c_i, (kn, pri, s1, s2) in enumerate(row_keys):
             kx = kp_x + c_i * (kw + gap_c)
             rend.hitboxes[kn] = (kx, ky, kw, kh)
-            rend._key_specs.append((kn, kx, ky, kw, kh, pri, s1, s2, 4.0, r_i == 0, kn == "5", "k1"))
+            kstyle = corner_map.get((r_i, c_i), "k10")
+            rend._key_specs.append((kn, kx, ky, kw, kh, pri, s1, s2, 3.2, r_i == 0, kn == "5", kstyle))

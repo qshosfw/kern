@@ -131,6 +131,156 @@ def draw_quansheng_logo(cr: Any, cx: float, cy: float, scale: float = 1.0, *, da
     cr.restore()
 
 
+def draw_k10_logo_badge(cr: Any, cx: float, cy: float, scale: float = 1.0) -> tuple[float, float, float]:
+    """
+    Authentic UV-K10 Pro contoured glossy-black QUANSHENG brow emblem:
+      • Custom rounded-teardrop black bezel hugging the dual RF arcs on the left
+        and the italicized QUANSHENG wordmark pill on the right.
+      • Returns (arc_ox, arc_oy, scale) so live RX/TX LED arcs paint directly inside it.
+    """
+    import cairo
+
+    cr.save()
+    cr.translate(cx, cy)
+    cr.scale(scale, scale)
+
+    font_str = "Adwaita Sans Heavy Italic 12.2"
+    w_scale = 1.06
+    icon_w = 22.0
+    if _ensure_pango():
+        layout = _PANGOCAIRO_MOD.create_layout(cr)
+        layout.set_font_description(_PANGO_MOD.FontDescription.from_string(font_str))
+        layout.set_text("QUANSHENG", -1)
+        tw, th = layout.get_pixel_size()
+        text_w = tw * w_scale
+    else:
+        cr.select_font_face("Sans", cairo.FONT_SLANT_ITALIC, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(14.0)
+        ext = cr.text_extents("QUANSHENG")
+        text_w, th = float(ext.width), float(ext.height)
+        layout = None
+
+    total_w = icon_w + text_w
+    x0 = -total_w * 0.5
+    tx = x0 + icon_w
+    arc_ox = tx + 3.5
+    arc_oy = 4.6
+
+    # Contoured glossy black emblem frame (soft cast shadow + sculpted black shell + rim catchlight)
+    def _badge_outline() -> None:
+        # Left bulbous arc lobe merged cleanly with right pill housing
+        pill_x = x0 + 16.5
+        pill_y = -th * 0.49 - 2.4
+        pill_w = text_w + 13.5
+        pill_h = th + 4.6
+        round_rect(cr, pill_x, pill_y, pill_w, pill_h, 6.2)
+        cr.new_sub_path()
+        cr.arc(arc_ox - 10.0, arc_oy - 8.4, 13.2, 0, 2 * math.pi)
+        cr.new_sub_path()
+        cr.arc(arc_ox - 4.2, arc_oy - 3.6, 8.8, 0, 2 * math.pi)
+
+    cr.save()
+    cr.translate(0.0, 1.4)
+    _badge_outline()
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.45)
+    cr.fill()
+    cr.restore()
+
+    _badge_outline()
+    pat_bg = cairo.LinearGradient(0, -16.0, 0, 12.0)
+    pat_bg.add_color_stop_rgb(0.0, 0.15, 0.16, 0.18)
+    pat_bg.add_color_stop_rgb(0.45, 0.06, 0.065, 0.075)
+    pat_bg.add_color_stop_rgb(1.0, 0.03, 0.035, 0.045)
+    cr.set_source(pat_bg)
+    cr.fill()
+
+    # Subtle top-edge specular sheen along the right wordmark pill (no vertical seam behind 'Q')
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.16)
+    cr.set_line_width(0.85)
+    cr.new_path()
+    cr.move_to(tx + 6.0, -th * 0.49 - 1.7)
+    cr.line_to(x0 + 16.5 + text_w + 8.5, -th * 0.49 - 1.7)
+    cr.stroke()
+
+    # Crisp white QUANSHENG italic lettering
+    if layout is not None:
+        cr.save()
+        cr.translate(tx, -th * 0.47)
+        cr.scale(w_scale, 1.0)
+        cr.set_source_rgba(0.95, 0.96, 0.98, 0.98)
+        _PANGOCAIRO_MOD.show_layout(cr, layout)
+        cr.restore()
+    else:
+        cr.set_source_rgba(0.95, 0.96, 0.98, 0.98)
+        cr.move_to(tx, th * 0.36)
+        cr.show_text("QUANSHENG")
+
+    cr.restore()
+    return cx + arc_ox * scale, cy + arc_oy * scale, scale
+
+
+def draw_k10_logo_led(cr: Any, arc_ox: float, arc_oy: float, scale: float, state: str) -> None:
+    """
+    Dynamic illuminated dual RF signal arcs integrated directly into the UV-K10 Pro QUANSHENG badge:
+      • Idle/off: translucent frosted white/silver arcs
+      • RX (green): glowing emerald-green arcs + soft bloom (exact real hardware behavior)
+      • TX (red): glowing red-orange arcs + soft bloom
+      • DFU (orange): glowing amber arcs + soft bloom
+    """
+    import cairo
+
+    if state in ("rx", "green"):
+        col = (0.18, 0.98, 0.38)
+        core = (0.82, 1.0, 0.86)
+        lit = True
+    elif state in ("tx", "red"):
+        col = (0.98, 0.24, 0.14)
+        core = (1.0, 0.84, 0.78)
+        lit = True
+    elif state in ("dfu", "orange"):
+        col = (0.98, 0.64, 0.10)
+        core = (1.0, 0.94, 0.76)
+        lit = True
+    else:
+        col = (0.86, 0.89, 0.93)
+        core = (0.96, 0.97, 0.99)
+        lit = False
+
+    cr.save()
+    cr.translate(arc_ox, arc_oy)
+    cr.scale(scale, scale)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+
+    if lit:
+        bloom = cairo.RadialGradient(-10.5, -8.5, 1.5, -10.5, -8.5, 25.0)
+        bloom.add_color_stop_rgba(0.0, col[0], col[1], col[2], 0.64)
+        bloom.add_color_stop_rgba(0.45, col[0], col[1], col[2], 0.22)
+        bloom.add_color_stop_rgba(1.0, col[0], col[1], col[2], 0.0)
+        cr.set_source(bloom)
+        cr.new_path()
+        cr.arc(-10.5, -8.5, 25.0, 0, 2 * math.pi)
+        cr.fill()
+
+    # Outer & inner RF arcs (wider saturated pass + crisp bright core)
+    for r, lw_out, lw_in, a0, a1 in (
+        (11.0, 3.3, 1.6, math.pi * 1.08, math.pi * 1.44),
+        (16.4, 3.8, 1.9, math.pi * 1.03, math.pi * 1.47),
+    ):
+        cr.set_source_rgba(col[0], col[1], col[2], 0.98 if lit else 0.92)
+        cr.set_line_width(lw_out)
+        cr.new_path()
+        cr.arc(0.0, 0.0, r, a0, a1)
+        cr.stroke()
+
+        cr.set_source_rgba(core[0], core[1], core[2], 0.88 if lit else 0.55)
+        cr.set_line_width(lw_in)
+        cr.new_path()
+        cr.arc(0.0, 0.0, r, a0 + 0.03, a1 - 0.03)
+        cr.stroke()
+
+    cr.restore()
+
+
 def draw_phillips_screw(cr: Any, cx: float, cy: float, r: float = 7.0) -> None:
     """Machined silver Phillips pan-head PCB mounting screw with crisp cross-slot."""
     import cairo
@@ -487,6 +637,204 @@ def draw_k1_keycap(
                 draw_pango_text(cr, sub2, sx, iy + ih * 0.68, font_desc="Adwaita Sans 6.0", rgba=sub2_ink, halign="left", valign="center")
         elif sub1:
             draw_pango_text(cr, sub1, sx, iy + ih * 0.50, font_desc="Adwaita Sans Medium 7.2", rgba=sub1_ink, halign="left", valign="center")
+
+
+def _draw_fm_radio_glyph(cr: Any, cx: float, cy: float, rgba: tuple[float, float, float, float]) -> None:
+    """Compact miniature FM broadcast radio icon matching the factory UV-K10 Pro '0' key."""
+    import cairo
+
+    cr.save()
+    cr.set_source_rgba(*rgba)
+    cr.set_line_width(1.1)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    w, h = 11.5, 7.6
+    x0, y0 = cx - w * 0.5, cy - h * 0.5 + 1.2
+    # Diagonal whip antenna sprouting from top-left
+    cr.new_path()
+    cr.move_to(x0 + 2.2, y0)
+    cr.line_to(x0 + 8.6, y0 - 3.0)
+    cr.stroke()
+    # Rounded radio casing
+    round_rect(cr, x0, y0, w, h, 1.8)
+    cr.stroke()
+    # Tiny speaker grille circle (left) & dial lines (right)
+    cr.new_path()
+    cr.arc(x0 + 3.4, y0 + h * 0.52, 1.8, 0, 2 * math.pi)
+    cr.stroke()
+    cr.new_path()
+    cr.move_to(x0 + 6.8, y0 + 2.6)
+    cr.line_to(x0 + 9.6, y0 + 2.6)
+    cr.move_to(x0 + 6.8, y0 + 5.0)
+    cr.line_to(x0 + 9.6, y0 + 5.0)
+    cr.stroke()
+    cr.restore()
+
+
+def _chamfered_key_path(cr: Any, x: float, y: float, w: float, h: float, r: float, corner: str) -> None:
+    """Rounded rectangle with an optional sculpted outer corner cut matching the UV-K10 Pro keypad contour."""
+    c = 9.0
+    tl = c if corner == "tl" else r
+    tr = c if corner == "tr" else r
+    br = c if corner == "br" else r
+    bl = c if corner == "bl" else r
+
+    cr.new_sub_path()
+    cr.move_to(x + tl, y)
+    cr.line_to(x + w - tr, y)
+    if corner == "tr":
+        cr.curve_to(x + w - tr * 0.35, y, x + w, y + tr * 0.35, x + w, y + tr)
+    else:
+        cr.arc(x + w - tr, y + tr, tr, -math.pi * 0.5, 0.0)
+    cr.line_to(x + w, y + h - br)
+    if corner == "br":
+        cr.curve_to(x + w, y + h - br * 0.35, x + w - br * 0.35, y + h, x + w - br, y + h)
+    else:
+        cr.arc(x + w - br, y + h - br, br, 0.0, math.pi * 0.5)
+    cr.line_to(x + bl, y + h)
+    if corner == "bl":
+        cr.curve_to(x + bl * 0.35, y + h, x, y + h - bl * 0.35, x, y + h - bl)
+    else:
+        cr.arc(x + bl, y + h - bl, bl, math.pi * 0.5, math.pi)
+    cr.line_to(x, y + tl)
+    if corner == "tl":
+        cr.curve_to(x, y + tl * 0.35, x + tl * 0.35, y, x + tl, y)
+    else:
+        cr.arc(x + tl, y + tl, tl, math.pi, math.pi * 1.5)
+    cr.close_path()
+
+
+def draw_k10_keycap(
+    cr: Any,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    primary: str,
+    sub1: str,
+    sub2: str,
+    *,
+    press_t: float,
+    hover_t: float,
+    is_nav: bool = False,
+    homing_pip: bool = False,
+    corner: str = "",
+    accent: tuple[float, float, float] = (0.12, 0.70, 0.95),
+) -> None:
+    """
+    Authentic Quansheng UV-K10 Pro sculpted tactical rubber keycap:
+      • Contoured outer-corner chamfers on MENU / EXIT / 7 / #
+      • Convex beveled satin-charcoal dome with crisp top specular catchlight
+      • Crisp white primary digits + cool ice-blue/silver secondary legends & FM radio icon on '0'
+    """
+    import cairo
+
+    p = clamp1(press_t)
+    hv = clamp1(hover_t)
+    rad = 3.2
+
+    # Tight dark recessed pocket
+    _chamfered_key_path(cr, x - 0.6, y - 0.6, w + 1.2, h + 1.2, rad + 0.6, corner)
+    cr.set_source_rgb(0.025, 0.028, 0.034)
+    cr.fill()
+
+    if p > 0.02:
+        _chamfered_key_path(cr, x - 1.1, y - 1.1, w + 2.2, h + 2.2, rad + 1.1, corner)
+        cr.set_source_rgba(accent[0], accent[1], accent[2], 0.38 * p)
+        cr.fill()
+
+    inset = 1.0
+    dy = 1.3 * p
+    ix = x + inset + 0.2 * p
+    iy = y + inset + dy - 0.3 * (1.0 - p)
+    iw = w - inset * 2.0 - 0.4 * p
+    ih = h - inset * 2.0 - 0.25 * p
+    ir = max(2.2, rad - 0.6)
+
+    if p < 0.95:
+        _chamfered_key_path(cr, ix, iy + 1.5 * (1.0 - p), iw, ih, ir, corner)
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.72 * (1.0 - p))
+        cr.fill()
+
+    # Convex satin-charcoal keycap dome (brighter upper chamfer, rich dark lower slope)
+    _chamfered_key_path(cr, ix, iy, iw, ih, ir, corner)
+    top_v = 0.235 + 0.055 * hv - 0.07 * p
+    mid_v = 0.155 + 0.040 * hv - 0.045 * p
+    bot_v = 0.105 + 0.025 * hv - 0.025 * p
+    pat = cairo.LinearGradient(ix, iy, ix, iy + ih)
+    pat.add_color_stop_rgb(0.0, top_v, top_v + 0.005, top_v + 0.015)
+    pat.add_color_stop_rgb(0.28, mid_v, mid_v + 0.004, mid_v + 0.012)
+    pat.add_color_stop_rgb(0.86, bot_v, bot_v + 0.003, bot_v + 0.010)
+    pat.add_color_stop_rgb(1.0, bot_v * 0.82, bot_v * 0.84, bot_v * 0.90)
+    cr.set_source(pat)
+    cr.fill_preserve()
+
+    # Subtle inner horizontal pillow highlight
+    cr.save()
+    cr.clip_preserve()
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.09 + 0.05 * hv - 0.04 * p)
+    cr.rectangle(ix, iy, iw, 2.2)
+    cr.fill()
+    cr.restore()
+
+    if p > 0.02:
+        cr.set_source_rgba(accent[0], accent[1], accent[2], 0.94 * p)
+        cr.set_line_width(1.25)
+    else:
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.15 + 0.10 * hv)
+        cr.set_line_width(0.75)
+    cr.stroke()
+
+    # Molded tactile homing ridge on '5' (cleanly tucked at bottom edge below 'jkl')
+    if homing_pip:
+        round_rect(cr, ix + iw * 0.5 - 3.5, iy + ih - 2.1, 7.0, 1.2, 0.6)
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.30)
+        cr.fill()
+
+    ink = (0.96, 0.97, 0.99, 0.98)
+    cyan_ink = (0.50, 0.82, 0.98, 0.96)
+    sub1_ink = (0.76, 0.88, 0.96, 0.94)
+    sub2_ink = (0.78, 0.82, 0.87, 0.86)
+
+    if primary in ("_K1_LT_", "_K1_GT_"):
+        cr.save()
+        cr.set_source_rgba(*cyan_ink)
+        cr.set_line_width(1.85)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cx, cy = ix + iw * 0.5, iy + ih * 0.5
+        if primary == "_K1_LT_":
+            cr.move_to(cx + 4.2, cy - 5.6)
+            cr.line_to(cx - 3.8, cy)
+            cr.line_to(cx + 4.2, cy + 5.6)
+        else:
+            cr.move_to(cx - 4.2, cy - 5.6)
+            cr.line_to(cx + 3.8, cy)
+            cr.line_to(cx - 4.2, cy + 5.6)
+        cr.stroke()
+        cr.restore()
+    elif is_nav or (not sub1 and not sub2):
+        draw_pango_text(
+            cr, primary, ix + iw * 0.5, iy + ih * 0.5,
+            font_desc="Adwaita Sans Bold 7.8", rgba=ink, halign="center", valign="center",
+        )
+    else:
+        p_size = "14.4" if primary == "*" else "12.8"
+        p_x = ix + 5.2
+        p_y = iy + ih * (0.56 if primary == "*" else 0.50)
+        draw_pango_text(
+            cr, primary, p_x, p_y, font_desc=f"Adwaita Sans Medium {p_size}", rgba=ink, halign="left", valign="center"
+        )
+        sx = ix + iw * 0.44
+
+        if sub1 == "_RADIO_":
+            _draw_fm_radio_glyph(cr, ix + iw * 0.68, iy + ih * 0.50, cyan_ink)
+        elif sub1 and sub2:
+            top_col = cyan_ink if primary in ("*", "#") else sub1_ink
+            draw_pango_text(cr, sub1, sx, iy + ih * 0.30, font_desc="Adwaita Sans Medium 6.0", rgba=top_col, halign="left", valign="center")
+            draw_pango_text(cr, sub2, sx, iy + ih * 0.64, font_desc="Adwaita Sans 5.6", rgba=sub2_ink, halign="left", valign="center")
+        elif sub1:
+            draw_pango_text(cr, sub1, sx, iy + ih * 0.50, font_desc="Adwaita Sans Medium 6.8", rgba=sub1_ink, halign="left", valign="center")
 
 
 def draw_3d_keycap(

@@ -215,6 +215,14 @@ class OverviewView:
 
         # Safety & Power
         self.sec_group = Adw.PreferencesGroup(title="Safety &amp; Power")
+        self.sw_safe = Adw.SwitchRow(
+            title="Safe Mode",
+            subtitle="Lock files read-only; block TX, flashing &amp; bootloader",
+            active=self.runtime.security.hardened,
+        )
+        self.sw_safe.connect("notify::active", lambda w, _p: None if self._updating else self._toggle_hardened(w.get_active()))
+        self.sec_group.add(self.sw_safe)
+
         self.sw_tx = Adw.SwitchRow(title="Allow USB TX", subtitle="Unlock PTT over USB")
         self.sw_tx.connect("notify::active", lambda w, _p: None if self._updating else self._toggle_tx(w.get_active()))
         self.sec_group.add(self.sw_tx)
@@ -274,7 +282,7 @@ class OverviewView:
 
     def _toggle_hardened(self, on: bool) -> None:
         self.runtime.set_hardened(on)
-        self._on_toast("Hardened Mode ON" if on else "Hardened Mode OFF")
+        self._on_toast("Safe Mode ON" if on else "Safe Mode OFF")
 
     def _toggle_tx(self, on: bool) -> None:
         try:
@@ -387,17 +395,28 @@ class OverviewView:
         sec = self.runtime.security
         hard = sec.hardened
         self._updating = True
+        self.sw_safe.set_active(hard)
         self.sw_tx.set_active(sec.allow_usb_tx)
         for attr, row in self._policy_rows.items():
             row.set_active(bool(getattr(sec.policy, attr)))
         self._updating = False
+        self.sw_tx.set_sensitive(not hard)
+        self.sw_tx.set_tooltip_text("Disabled in Safe Mode" if hard else None)
+        self.policy_exp.set_tooltip_text("Locked in Safe Mode" if hard else None)
+        for row in self._policy_rows.values():
+            row.set_sensitive(not hard)
+            row.set_tooltip_text("Disabled in Safe Mode" if hard else None)
         bits = ["Read-only" if sec.policy.read_only else "Read &amp; write"]
         if sec.policy.allow_sys_write:
             bits.append("/sys writable")
         if not sec.policy.validate_formats:
             bits.append("no validation")
         self.policy_exp.set_subtitle(" · ".join(bits))
-        self._reboot_btns[REBOOT_BOOTLOADER].set_sensitive(not hard)
+        bl_btn = self._reboot_btns[REBOOT_BOOTLOADER]
+        bl_btn.set_sensitive(not hard)
+        bl_btn.set_tooltip_text("Disabled in Safe Mode" if hard else "Restart into Bootloader")
+        if self.runtime.link.connected:
+            self.refresh_telemetry()
 
     def refresh_telemetry(self) -> None:
         lk = self.runtime.link
@@ -431,7 +450,7 @@ class OverviewView:
         usub.set_text("Power on" if up_ms is not None else "Session")
 
         if self.runtime.security.hardened:
-            set_pill(self.state_pill, "Hardened", "hardened")
+            set_pill(self.state_pill, "Safe Mode", "hardened")
         elif lk.is_emulated:
             set_pill(self.state_pill, "Emulated · Headless" if lk.headless else "Emulated", "emu")
         elif lk.demo_mode:

@@ -23,8 +23,8 @@ typedef unsigned long long u64;
 #define COLOR_DARK_GRAY  3u
 #define COLOR_LIGHT_GRAY 4u
 
-#define KRX_FONT_MUMATRIX 0u
-#define KRX_FONT_TOMTHUMB 1u
+#define KRX_FONT_TOMTHUMB 0u
+#define KRX_FONT_MUMATRIX 1u
 #define KRX_ALIGN_LEFT    0u
 #define KRX_ALIGN_CENTER  1u
 #define KRX_ALIGN_RIGHT   2u
@@ -989,14 +989,17 @@ static inline void krx_ui_draw_tag_badge(
     const KrxApiTable* api, i16 x, i16 y, const u8* text, u8 len, u8 style
 ) {
     if (!text || !len) return;
-    i16 tw = krx_str_width(api, text, len, KRX_FONT_TOMTHUMB) + 4;
-    if (tw < 6) tw = 6;
+    i16 tw = krx_str_width(api, text, len, KRX_FONT_TOMTHUMB) + 6;
+    if (tw < 8) tw = 8;
     if (style == 1u) {
-        krx_fill_rect(api, x, y, (u8)tw, 7u, COLOR_FILL);
-        krx_draw_str_ex(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
+        krx_fill_rect(api, x, y, (u8)tw, 9u, COLOR_FILL);
+        krx_clear_corners(api, x, y, (u8)tw, 9u);
+        krx_draw_str_ex(api, (i16)(x + 3), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
     } else {
-        krx_draw_rect(api, x, y, (u8)tw, 7u, COLOR_FILL);
-        krx_draw_str_ex(api, (i16)(x + 2), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_FILL);
+        krx_fill_rect(api, x, y, (u8)tw, 9u, COLOR_CLEAR);
+        krx_draw_rect(api, x, y, (u8)tw, 9u, COLOR_FILL);
+        krx_clear_corners(api, x, y, (u8)tw, 9u);
+        krx_draw_str_ex(api, (i16)(x + 3), (i16)(y + 6), text, len, KRX_FONT_TOMTHUMB, COLOR_FILL);
     }
 }
 
@@ -1007,10 +1010,9 @@ static inline void krx_ui_draw_key_badge(
     i16 kw = krx_str_width(api, key_s, k_len, KRX_FONT_TOMTHUMB) + 4;
     if (kw < 5) kw = 5;
     krx_fill_rect(api, x, y, (u8)kw, 7u, COLOR_FILL);
-    krx_clear_corners(api, x, y, (u8)kw, 7u);
-    krx_draw_str_ex(api, (i16)(x + 2), (i16)(y + 6), key_s, k_len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
+    krx_draw_str_ex(api, (i16)(x + 2), (i16)(y + 5), key_s, k_len, KRX_FONT_TOMTHUMB, COLOR_CLEAR);
     if (lbl && l_len) {
-        krx_draw_str_ex(api, (i16)(x + kw + 2), (i16)(y + 6), lbl, l_len, KRX_FONT_TOMTHUMB, COLOR_FILL);
+        krx_draw_str_ex(api, (i16)(x + kw + 2), (i16)(y + 5), lbl, l_len, KRX_FONT_TOMTHUMB, COLOR_FILL);
     }
 }
 

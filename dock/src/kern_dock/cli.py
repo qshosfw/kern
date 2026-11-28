@@ -34,7 +34,7 @@ def _run_ctl(args: list[str]) -> int:
     if not args or args[0] in ("-h", "--help", "help"):
         print(
             "Usage: kern dock ctl <method> [args...]\n\n"
-            "Read-only methods (allowed even in Hardened Mode):\n"
+            "Read-only methods (allowed even in Safe Mode):\n"
             "  ping | version | status | ports | models | plugins | actions | audit | desktop-status\n\n"
             "Control methods:\n"
             "  connect <port|demo> | disconnect | show | hide | toggle-mini\n"
@@ -203,10 +203,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--demo", action="store_true", help="Launch immediately in offline demo mode")
     ap.add_argument("--headless", action="store_true", help="Enable battery-saving headless mode on radio upon connect")
     ap.add_argument("--mini", action="store_true", help="Launch in compact floating Mini-Dock mode")
-    ap.add_argument("--hardened", action="store_true", help="Launch directly in Hardened Mode")
+    ap.add_argument("--safe", "--hardened", dest="hardened", action="store_true", help="Launch directly in Safe Mode")
     ap.add_argument("--no-tray", action="store_true", help="Disable OS system tray StatusNotifierItem")
     ap.add_argument("--no-ipc", action="store_true", help="Disable local Unix socket & Session D-Bus IPC")
-    ap.add_argument("--no-plugins", action="store_true", help="Safe mode: disable plugin loading")
+    ap.add_argument("--no-plugins", action="store_true", help="Disable plugin loading")
     ap.add_argument("--start-hidden", action="store_true", help="Start minimized in the OS system tray")
     ap.add_argument("--selftest", action="store_true", help="Run headless automated test suite & benchmark")
     args = ap.parse_args(raw)

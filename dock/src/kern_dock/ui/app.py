@@ -490,6 +490,7 @@ class KernDockApp(Adw.Application):
             ("reboot", "Restart Radio", "Hardware", "system-reboot-symbolic", lambda: self._confirm_reboot(REBOOT_FIRMWARE), True),
             ("reboot-recovery", "Restart into Safe Recovery", "Hardware", "applications-engineering-symbolic", lambda: self._confirm_reboot(REBOOT_RECOVERY), True),
             ("reboot-bootloader", "Restart into Bootloader", "Hardware", "application-x-firmware-symbolic", lambda: self._confirm_reboot(REBOOT_BOOTLOADER), True),
+            ("toggle-safe-mode", "Toggle Safe Mode", "Safety", "security-high-symbolic", self._toggle_safe_mode, False),
             ("about", "About Kern Dock", "Application", "help-about-symbolic", lambda: show_about_dialog(self.win), False),
         ]
         for aid, title, cat, icon, fn, mut in extra_actions:
@@ -957,7 +958,7 @@ class KernDockApp(Adw.Application):
             self._toast("Connect a RigWire radio first")
             return
         if mode == REBOOT_BOOTLOADER and self.runtime.security.hardened:
-            self._toast("Hardened Mode blocks bootloader entry")
+            self._toast("Safe Mode blocks bootloader entry")
             return
         heading, body, verb = {
             REBOOT_FIRMWARE: ("Restart Radio?", "The radio restarts and Dock reconnects once USB re-enumerates.", "Restart"),
@@ -990,6 +991,11 @@ class KernDockApp(Adw.Application):
 
     def _leave_demo_bootloader(self) -> None:
         self.runtime.link.demo_power_cycle()
+
+    def _toggle_safe_mode(self) -> None:
+        on = not self.runtime.security.hardened
+        self.runtime.set_hardened(on)
+        self._toast("Safe Mode ON" if on else "Safe Mode OFF")
 
     def _toggle_mount_from_palette(self) -> None:
         self._open_tab("files")
